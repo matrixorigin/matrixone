@@ -113,11 +113,7 @@ func DeepCopyNode(node *plan.Node) *plan.Node {
 					Size:      col.Typ.Size,
 					Scale:     col.Typ.Scale,
 				},
-				Default: &plan.Default{
-					NullAbility:  col.Default.NullAbility,
-					Expr:         DeepCopyExpr(col.Default.Expr),
-					OriginString: col.Default.String(),
-				},
+				Default: DeepCopyDefault(col.Default),
 				Primary: col.Primary,
 				Pkidx:   col.Pkidx,
 			}
@@ -189,32 +185,44 @@ func DeepCopyNode(node *plan.Node) *plan.Node {
 	return newNode
 }
 
+func DeepCopyDefault(def *plan.Default) *plan.Default {
+	if def == nil {
+		return nil
+	}
+	return &plan.Default{
+		NullAbility:  def.NullAbility,
+		Expr:         DeepCopyExpr(def.Expr),
+		OriginString: def.OriginString,
+	}
+}
+
+func DeepCopyColDef(col *plan.ColDef) *plan.ColDef {
+	return &plan.ColDef{
+		Name: col.Name,
+		Alg:  col.Alg,
+		Typ: &plan.Type{
+			Id:        col.Typ.Id,
+			Nullable:  col.Typ.Nullable,
+			Width:     col.Typ.Width,
+			Precision: col.Typ.Precision,
+			Size:      col.Typ.Size,
+			Scale:     col.Typ.Scale,
+		},
+		Default: DeepCopyDefault(col.Default),
+		Primary: col.Primary,
+		Pkidx:   col.Pkidx,
+	}
+}
+
 func DeepCopyTableDef(table *plan.TableDef) *plan.TableDef {
 	newTable := &plan.TableDef{
 		Name: table.Name,
 		Cols: make([]*plan.ColDef, len(table.Cols)),
 		Defs: make([]*plan.TableDef_DefType, len(table.Defs)),
 	}
+
 	for idx, col := range table.Cols {
-		newTable.Cols[idx] = &plan.ColDef{
-			Name: col.Name,
-			Alg:  col.Alg,
-			Typ: &plan.Type{
-				Id:        col.Typ.Id,
-				Nullable:  col.Typ.Nullable,
-				Width:     col.Typ.Width,
-				Precision: col.Typ.Precision,
-				Size:      col.Typ.Size,
-				Scale:     col.Typ.Scale,
-			},
-			Default: &plan.Default{
-				NullAbility:  col.Default.NullAbility,
-				Expr:         DeepCopyExpr(col.Default.Expr),
-				OriginString: col.Default.OriginString,
-			},
-			Primary: col.Primary,
-			Pkidx:   col.Pkidx,
-		}
+		newTable.Cols[idx] = DeepCopyColDef(col)
 	}
 	// FIX ME: don't support now
 	// for idx, def := range table.Defs {
@@ -259,4 +267,52 @@ func DeepCopyQuery(qry *plan.Query) *plan.Query {
 		newQry.Nodes[idx] = DeepCopyNode(node)
 	}
 	return newQry
+}
+
+func DeepCopyInsertValues(insert *plan.InsertValues) *plan.InsertValues {
+	newInsert := &plan.InsertValues{
+		DbName:       insert.DbName,
+		TblName:      insert.TblName,
+		ExplicitCols: make([]*plan.ColDef, len(insert.ExplicitCols)),
+		OtherCols:    make([]*plan.ColDef, len(insert.OtherCols)),
+		Columns:      make([]*plan.Column, len(insert.Columns)),
+	}
+
+	for idx, col := range insert.ExplicitCols {
+		newInsert.ExplicitCols[idx] = DeepCopyColDef(col)
+	}
+	for idx, col := range insert.OtherCols {
+		newInsert.OtherCols[idx] = DeepCopyColDef(col)
+	}
+	copy(newInsert.OrderAttrs, insert.OrderAttrs)
+	for idx, column := range insert.Columns {
+		newExprs := make([]*Expr, len(column.Column))
+		for i, expr := range column.Column {
+			newExprs[i] = DeepCopyExpr(expr)
+		}
+		newInsert.Columns[idx] = &plan.Column{
+			Column: newExprs,
+		}
+	}
+	return newInsert
+}
+
+func DeepCopyPlan(pl *Plan) *Plan {
+	switch pl := pl.Plan.(type) {
+	case *Plan_Query:
+		return &Plan{
+			Plan: &plan.Plan_Query{
+				Query: DeepCopyQuery(pl.Query),
+			},
+		}
+	case *plan.Plan_Ins:
+		return &Plan{
+			Plan: &plan.Plan_Ins{
+				Ins: DeepCopyInsertValues(pl.Ins),
+			},
+		}
+	default:
+		// only support query/insert plan now
+		return nil
+	}
 }

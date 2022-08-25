@@ -15,14 +15,13 @@
 package txnengine
 
 import (
-	"bytes"
 	"encoding/gob"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
 )
 
 const (
@@ -47,17 +46,10 @@ const (
 	OpCloseTableIter
 )
 
-func mustEncodePayload(o any) []byte {
-	buf := new(bytes.Buffer)
-	if err := gob.NewEncoder(buf).Encode(o); err != nil {
-		panic(err)
-	}
-	return buf.Bytes()
-}
-
 func init() {
 
 	// register TableDef types
+	gob.Register(new(engine.ViewDef))
 	gob.Register(new(engine.CommentDef))
 	gob.Register(new(engine.AttributeDef))
 	gob.Register(new(engine.IndexTableDef))
@@ -83,6 +75,31 @@ func init() {
 	gob.Register([]types.Timestamp{})
 	gob.Register([]types.Decimal64{})
 	gob.Register([]types.Decimal128{})
+
+	// plan types
+	gob.Register(&plan.Expr_C{})
+	gob.Register(&plan.Expr_P{})
+	gob.Register(&plan.Expr_V{})
+	gob.Register(&plan.Expr_Col{})
+	gob.Register(&plan.Expr_F{})
+	gob.Register(&plan.Expr_Sub{})
+	gob.Register(&plan.Expr_Corr{})
+	gob.Register(&plan.Expr_T{})
+	gob.Register(&plan.Expr_List{})
+	gob.Register(&plan.Const_Ival{})
+	gob.Register(&plan.Const_Dval{})
+	gob.Register(&plan.Const_Sval{})
+	gob.Register(&plan.Const_Bval{})
+	gob.Register(&plan.Const_Uval{})
+	gob.Register(&plan.Const_Fval{})
+	gob.Register(&plan.Const_Dateval{})
+	gob.Register(&plan.Const_Datetimeval{})
+	gob.Register(&plan.Const_Decimal64Val{})
+	gob.Register(&plan.Const_Decimal128Val{})
+	gob.Register(&plan.Const_Timestampval{})
+	gob.Register(&plan.Const_Jsonval{})
+	gob.Register(&plan.Const_Defaultval{})
+
 }
 
 type CreateDatabaseReq struct {
@@ -90,7 +107,7 @@ type CreateDatabaseReq struct {
 }
 
 type CreateDatabaseResp struct {
-	ErrExisted bool
+	ErrExisted ErrExisted
 }
 
 type OpenDatabaseReq struct {
@@ -99,7 +116,7 @@ type OpenDatabaseReq struct {
 
 type OpenDatabaseResp struct {
 	ID          string
-	ErrNotFound bool
+	ErrNotFound ErrDatabaseNotFound
 }
 
 type GetDatabasesReq struct {
@@ -114,7 +131,7 @@ type DeleteDatabaseReq struct {
 }
 
 type DeleteDatabaseResp struct {
-	ErrNotFound bool
+	ErrNotFound ErrDatabaseNotFound
 }
 
 type CreateRelationReq struct {
@@ -125,7 +142,7 @@ type CreateRelationReq struct {
 }
 
 type CreateRelationResp struct {
-	ErrExisted bool
+	ErrExisted ErrExisted
 }
 
 type DeleteRelationReq struct {
@@ -134,7 +151,7 @@ type DeleteRelationReq struct {
 }
 
 type DeleteRelationResp struct {
-	ErrNotFound bool
+	ErrNotFound ErrRelationNotFound
 }
 
 type OpenRelationReq struct {
@@ -145,7 +162,7 @@ type OpenRelationReq struct {
 type OpenRelationResp struct {
 	ID          string
 	Type        RelationType
-	ErrNotFound bool
+	ErrNotFound ErrRelationNotFound
 }
 
 type GetRelationsReq struct {
@@ -162,9 +179,9 @@ type AddTableDefReq struct {
 }
 
 type AddTableDefResp struct {
-	ErrTableNotFound  bool
-	ErrExisted        bool
-	ErrColumnNotFound string
+	ErrTableNotFound  ErrRelationNotFound
+	ErrExisted        ErrExisted
+	ErrColumnNotFound ErrColumnNotFound
 }
 
 type DelTableDefReq struct {
@@ -173,8 +190,8 @@ type DelTableDefReq struct {
 }
 
 type DelTableDefResp struct {
-	ErrTableNotFound bool
-	ErrDefNotFound   bool
+	ErrTableNotFound ErrRelationNotFound
+	ErrDefNotFound   ErrDefNotFound
 }
 
 type DeleteReq struct {
@@ -183,7 +200,7 @@ type DeleteReq struct {
 }
 
 type DeleteResp struct {
-	ErrTableNotFound bool
+	ErrTableNotFound ErrRelationNotFound
 }
 
 type GetPrimaryKeysReq struct {
@@ -192,7 +209,7 @@ type GetPrimaryKeysReq struct {
 
 type GetPrimaryKeysResp struct {
 	Attrs            []*engine.Attribute
-	ErrTableNotFound bool
+	ErrTableNotFound ErrRelationNotFound
 }
 
 type GetTableDefsReq struct {
@@ -201,7 +218,7 @@ type GetTableDefsReq struct {
 
 type GetTableDefsResp struct {
 	Defs             []engine.TableDef
-	ErrTableNotFound bool
+	ErrTableNotFound ErrRelationNotFound
 }
 
 type TruncateReq struct {
@@ -210,7 +227,7 @@ type TruncateReq struct {
 
 type TruncateResp struct {
 	AffectedRows     int64
-	ErrTableNotFound bool
+	ErrTableNotFound ErrRelationNotFound
 }
 
 type UpdateReq struct {
@@ -219,7 +236,7 @@ type UpdateReq struct {
 }
 
 type UpdateResp struct {
-	ErrTableNotFound bool
+	ErrTableNotFound ErrRelationNotFound
 }
 
 type WriteReq struct {
@@ -228,7 +245,7 @@ type WriteReq struct {
 }
 
 type WriteResp struct {
-	ErrTableNotFound bool
+	ErrTableNotFound ErrRelationNotFound
 }
 
 type NewTableIterReq struct {
@@ -239,7 +256,7 @@ type NewTableIterReq struct {
 
 type NewTableIterResp struct {
 	IterID           string
-	ErrTableNotFound bool
+	ErrTableNotFound ErrRelationNotFound
 }
 
 type ReadReq struct {
@@ -249,8 +266,8 @@ type ReadReq struct {
 
 type ReadResp struct {
 	Batch             *batch.Batch
-	ErrIterNotFound   bool
-	ErrColumnNotFound string
+	ErrIterNotFound   ErrIterNotFound
+	ErrColumnNotFound ErrColumnNotFound
 }
 
 type CloseTableIterReq struct {
@@ -258,5 +275,5 @@ type CloseTableIterReq struct {
 }
 
 type CloseTableIterResp struct {
-	ErrIterNotFound bool
+	ErrIterNotFound ErrIterNotFound
 }

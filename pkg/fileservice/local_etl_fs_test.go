@@ -25,7 +25,16 @@ func TestLocalETLFS(t *testing.T) {
 	t.Run("file service", func(t *testing.T) {
 		testFileService(t, func() FileService {
 			dir := t.TempDir()
-			fs, err := NewLocalETLFS(dir)
+			fs, err := NewLocalETLFS("etl", dir)
+			assert.Nil(t, err)
+			return fs
+		})
+	})
+
+	t.Run("mutable file service", func(t *testing.T) {
+		testMutableFileService(t, func() MutableFileService {
+			dir := t.TempDir()
+			fs, err := NewLocalETLFS("etl", dir)
 			assert.Nil(t, err)
 			return fs
 		})

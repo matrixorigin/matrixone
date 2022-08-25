@@ -17,9 +17,11 @@ package plan
 import (
 	"errors"
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 )
 
 type tableInfo struct {
@@ -52,6 +54,11 @@ func buildUpdate(stmt *tree.Update, ctx CompilerContext) (*Plan, error) {
 		objRef, tblRef := ctx.Resolve(tf.dbNames[i], tf.tableNames[i])
 		if tblRef == nil {
 			return nil, fmt.Errorf("cannot find update table: %s.%s", tf.dbNames[i], tf.tableNames[i])
+		}
+		if tblRef.TableType == catalog.SystemExternalRel {
+			return nil, fmt.Errorf("the external table is not support update operation")
+		} else if tblRef.TableType == catalog.SystemViewRel {
+			return nil, fmt.Errorf("view is not support update operation")
 		}
 		objRefs = append(objRefs, objRef)
 		tblRefs = append(tblRefs, tblRef)

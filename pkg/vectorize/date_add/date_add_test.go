@@ -14,8 +14,10 @@
 package date_add
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"testing"
+	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/stretchr/testify/require"
@@ -195,11 +197,11 @@ func TestTimeStampAdd(t *testing.T) {
 			success: true,
 		},
 		{
-			args1:   []types.Timestamp{types.TimestampMaxValue},
+			args1:   []types.Timestamp{types.FromClockUTC(2038, 1, 19, 3, 14, 7, 999999)},
 			args2:   []int64{1},
 			args3:   []int64{int64(types.MicroSecond)},
-			want:    []types.Timestamp{0},
-			success: false,
+			want:    []types.Timestamp{types.FromClockUTC(2038, 1, 19, 3, 14, 8, 0)},
+			success: true,
 		},
 	}
 
@@ -209,7 +211,7 @@ func TestTimeStampAdd(t *testing.T) {
 			xnu := &nulls.Nulls{}
 			ynu := &nulls.Nulls{}
 			rnu := &nulls.Nulls{}
-			rs, err := timestampAdd(c.args1, c.args2, c.args3, xnu, ynu, rnu, got)
+			rs, err := timestampAdd(time.Local, c.args1, c.args2, c.args3, xnu, ynu, rnu, got)
 			require.Equal(t, c.want, rs)
 			if c.success {
 				require.Equal(t, err, nil)

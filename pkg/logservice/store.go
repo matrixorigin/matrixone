@@ -24,6 +24,7 @@ import (
 	"github.com/lni/dragonboat/v4"
 	cli "github.com/lni/dragonboat/v4/client"
 	"github.com/lni/dragonboat/v4/config"
+	"github.com/lni/dragonboat/v4/plugin/tan"
 	"github.com/lni/dragonboat/v4/plugin/tee"
 	"github.com/lni/dragonboat/v4/raftpb"
 	sm "github.com/lni/dragonboat/v4/statemachine"
@@ -69,6 +70,17 @@ func getNodeHostConfig(cfg Config) config.NodeHostConfig {
 	meta := storeMeta{
 		serviceAddress: cfg.ServiceAddress,
 	}
+	if cfg.GossipProbeInterval.Duration == 0 {
+		panic("cfg.GossipProbeInterval.Duration is 0")
+	}
+	logdb := config.GetTinyMemLogDBConfig()
+	logdb.KVWriteBufferSize = cfg.LogDBBufferSize
+	logdbFactory := (config.LogDBFactory)(nil)
+	logdbFactory = tan.Factory
+	if cfg.UseTeeLogDB {
+		plog.Warningf("using tee based logdb backed by pebble and tan, for testing purposes only")
+		logdbFactory = tee.TanPebbleLogDBFactory
+	}
 	return config.NodeHostConfig{
 		DeploymentID:        cfg.DeploymentID,
 		NodeHostID:          cfg.UUID,
@@ -79,10 +91,11 @@ func getNodeHostConfig(cfg Config) config.NodeHostConfig {
 		ListenAddress:       cfg.RaftListenAddress,
 		Expert: config.ExpertConfig{
 			FS:           cfg.FS,
-			LogDBFactory: tee.TanPebbleLogDBFactory,
+			LogDBFactory: logdbFactory,
 			// FIXME: dragonboat need to be updated to make this field a first class
 			// citizen
-			TestGossipProbeInterval: 50 * time.Millisecond,
+			TestGossipProbeInterval: cfg.GossipProbeInterval.Duration,
+			LogDB:                   logdb,
 		},
 		Gossip: config.GossipConfig{
 			BindAddress:      cfg.GossipListenAddress,
@@ -132,8 +145,8 @@ func newLogStore(cfg Config) (*store, error) {
 		return nil, err
 	}
 	hakeeperConfig := cfg.GetHAKeeperConfig()
-	plog.Infof("HAKeeper LogStoreTimeout: %s, DnStoreTimeout: %s",
-		hakeeperConfig.LogStoreTimeout, hakeeperConfig.DnStoreTimeout)
+	plog.Infof("HAKeeper LogStoreTimeout: %s, DNStoreTimeout: %s",
+		hakeeperConfig.LogStoreTimeout, hakeeperConfig.DNStoreTimeout)
 	ls := &store{
 		cfg:           cfg,
 		nh:            nh,

@@ -32,7 +32,7 @@ type TxnClientCreateOption func(*txnClient)
 type TxnClient interface {
 	// New returns a TxnOperator to handle read and write operation for a
 	// transaction.
-	New(options ...TxnOption) TxnOperator
+	New(options ...TxnOption) (TxnOperator, error)
 	// NewWithSnapshot create a txn operator from a snapshot. The snapshot must
 	// be from a CN coordinator txn operator.
 	NewWithSnapshot(snapshot []byte) (TxnOperator, error)
@@ -45,6 +45,8 @@ type TxnClient interface {
 // to check if it is a moerr.ErrDNShardNotFound error, if so, the DN information
 // held is out of date and needs to be reloaded by HAKeeper.
 type TxnOperator interface {
+	// Txn returns the current txn metadata
+	Txn() txn.TxnMeta
 	// Snapshot a snapshot of the transaction handle that can be passed around the
 	// network. In some scenarios, operations of a transaction are executed on multiple
 	// CN nodes for performance acceleration. But with only one CN coordinator, Snapshot

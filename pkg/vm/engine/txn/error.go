@@ -15,29 +15,66 @@
 package txnengine
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/pb/txn"
+	"fmt"
 )
 
-type Error struct {
-	txnError *txn.TxnError
+type ErrExisted bool
+
+var _ error = ErrExisted(true)
+
+func (e ErrExisted) Error() string {
+	return "existed"
 }
 
-var _ error = Error{}
-
-func (e Error) Error() string {
-	if e.txnError != nil {
-		return e.txnError.DebugString()
-	}
-	panic("impossible")
+type ErrDatabaseNotFound struct {
+	ID   string
+	Name string
 }
 
-func errorFromTxnResponses(resps []txn.TxnResponse) error {
-	for _, resp := range resps {
-		if resp.TxnError != nil {
-			return Error{
-				txnError: resp.TxnError,
-			}
-		}
-	}
-	return nil
+var _ error = ErrDatabaseNotFound{}
+
+func (e ErrDatabaseNotFound) Error() string {
+	return fmt.Sprintf("database not found: [%s] [%s]", e.Name, e.ID)
+}
+
+type ErrRelationNotFound struct {
+	ID   string
+	Name string
+}
+
+var _ error = ErrRelationNotFound{}
+
+func (e ErrRelationNotFound) Error() string {
+	return fmt.Sprintf("relation not found: [%s] [%s]", e.Name, e.ID)
+}
+
+type ErrDefNotFound struct {
+	ID   string
+	Name string
+}
+
+var _ error = ErrDefNotFound{}
+
+func (e ErrDefNotFound) Error() string {
+	return fmt.Sprintf("definition not found: [%s] [%s]", e.Name, e.ID)
+}
+
+type ErrIterNotFound struct {
+	ID string
+}
+
+var _ error = ErrIterNotFound{}
+
+func (e ErrIterNotFound) Error() string {
+	return fmt.Sprintf("iter not found: %s", e.ID)
+}
+
+type ErrColumnNotFound struct {
+	Name string
+}
+
+var _ error = ErrColumnNotFound{}
+
+func (e ErrColumnNotFound) Error() string {
+	return fmt.Sprintf("column not found: %s", e.Name)
 }

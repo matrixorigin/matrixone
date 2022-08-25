@@ -25,9 +25,9 @@ import (
 var _ IBuffer2SqlItem = &StatementInfo{}
 
 type StatementInfo struct {
-	StatementID          uint64              `json:"statement_id"`
-	TransactionID        uint64              `json:"transaction_id"`
-	SessionID            uint64              `jons:"session_id"`
+	StatementID          [16]byte            `json:"statement_id"`
+	TransactionID        [16]byte            `json:"transaction_id"`
+	SessionID            [16]byte            `jons:"session_id"`
 	Account              string              `json:"account"`
 	User                 string              `json:"user"`
 	Host                 string              `json:"host"`
@@ -80,5 +80,8 @@ type StatementOption interface {
 type StatementOptionFunc func(*StatementInfo)
 
 func ReportStatement(ctx context.Context, s *StatementInfo) error {
+	if !gTracerProvider.IsEnable() {
+		return nil
+	}
 	return export.GetGlobalBatchProcessor().Collect(ctx, s)
 }

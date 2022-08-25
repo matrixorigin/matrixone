@@ -146,12 +146,16 @@ result
 null
 SELECT LPAD('a', 0, 'x') AS result;
 result
+
 SELECT LPAD('a', 0, '') AS result;
 result
+
 SELECT LPAD('', 0, 'x') AS result;
 result
+
 SELECT LPAD('', 0, '') AS result;
 result
+
 SELECT LPAD('a', -1, 'x');
 LPAD('a', -1, 'x')
 null
@@ -178,12 +182,16 @@ result
 null
 SELECT RPAD('a', 0, 'x') AS result;
 result
+
 SELECT RPAD('a', 0, '') AS result;
 result
+
 SELECT RPAD('', 0, 'x') AS result;
 result
+
 SELECT RPAD('', 0, '') AS result;
 result
+
 SELECT RPAD('a', -1, 'x');
 RPAD('a', -1, 'x')
 null

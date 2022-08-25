@@ -16,6 +16,7 @@ package trace
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"strings"
 	"sync"
@@ -28,6 +29,8 @@ import (
 	bp "github.com/matrixorigin/matrixone/pkg/util/batchpipe"
 	"github.com/matrixorigin/matrixone/pkg/util/errors"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
+
+	"github.com/google/uuid"
 )
 
 var errorFormatter atomic.Value
@@ -86,7 +89,7 @@ func (t batchSqlHandler) NewItemBuffer(name string) bp.ItemBuffer[bp.HasName, an
 }
 
 // NewItemBatchHandler implement batchpipe.PipeImpl
-func (t batchSqlHandler) NewItemBatchHandler() func(batch any) {
+func (t batchSqlHandler) NewItemBatchHandler(ctx context.Context) func(batch any) {
 	var f = func(b any) {}
 	if gTracerProvider.sqlExecutor == nil {
 		// fixme: handle error situation, should panic
@@ -109,11 +112,11 @@ func (t batchSqlHandler) NewItemBatchHandler() func(batch any) {
 			logutil.Warnf("meet empty sql")
 			return
 		}
-		if err := exec.Exec(batch, ie.NewOptsBuilder().Finish()); err != nil {
+		if err := exec.Exec(ctx, batch, ie.NewOptsBuilder().Finish()); err != nil {
 			// fixme: error -> log -> exec.Exec -> ... cycle
 			// fixme: handle error situation re-try
-			logutil.Error(fmt.Sprintf("[Trace] faield to insert. sql: %s", batch), NoReportFiled())
-			logutil.Error(fmt.Sprintf("[Trace] faield to insert. err: %v", err), NoReportFiled())
+			logutil.Error(fmt.Sprintf("[Trace] faield to insert. sql: %s", batch), logutil.NoReportFiled())
+			logutil.Error(fmt.Sprintf("[Trace] faield to insert. err: %v", err), logutil.NoReportFiled())
 		}
 	}
 	return f
@@ -148,7 +151,7 @@ func genSpanBatchSql(in []IBuffer2SqlItem, buf *bytes.Buffer) any {
 	buf.WriteString("`span_id`")
 	buf.WriteString(", `statement_id`")
 	buf.WriteString(", `parent_span_id`")
-	buf.WriteString(", `node_id`")
+	buf.WriteString(", `node_uuid`")
 	buf.WriteString(", `node_type`")
 	buf.WriteString(", `resource`")
 	buf.WriteString(", `name`")
@@ -165,10 +168,10 @@ func genSpanBatchSql(in []IBuffer2SqlItem, buf *bytes.Buffer) any {
 			panic("Not MOSpan")
 		}
 		buf.WriteString("(")
-		buf.WriteString(fmt.Sprintf("%d", s.SpanID))
-		buf.WriteString(fmt.Sprintf(", %d", s.TraceID))
-		buf.WriteString(fmt.Sprintf(", %d", s.parent.SpanContext().SpanID))
-		buf.WriteString(fmt.Sprintf(", %d", moNode.NodeID))                                //node_d
+		buf.WriteString(fmt.Sprintf(`"%s"`, s.SpanID.String()))
+		buf.WriteString(fmt.Sprintf(`, "%s"`, s.TraceID.String()))
+		buf.WriteString(fmt.Sprintf(`, "%s"`, s.parent.SpanContext().SpanID.String()))
+		buf.WriteString(fmt.Sprintf(`, "%s"`, moNode.NodeUuid))                            // node_uuid
 		buf.WriteString(fmt.Sprintf(`, "%s"`, moNode.NodeType.String()))                   // node_type
 		buf.WriteString(fmt.Sprintf(`, "%s"`, quote(s.tracer.provider.resource.String()))) // resource
 		buf.WriteString(fmt.Sprintf(`, "%s"`, quote(s.Name.String())))                     // Name
@@ -193,7 +196,7 @@ func genLogBatchSql(in []IBuffer2SqlItem, buf *bytes.Buffer) any {
 	buf.WriteString("(")
 	buf.WriteString("`span_id`")
 	buf.WriteString(", `statement_id`")
-	buf.WriteString(", `node_id`")
+	buf.WriteString(", `node_uuid`")
 	buf.WriteString(", `node_type`")
 	buf.WriteString(", `timestamp`")
 	buf.WriteString(", `name`")
@@ -211,9 +214,9 @@ func genLogBatchSql(in []IBuffer2SqlItem, buf *bytes.Buffer) any {
 			panic("Not MOLog")
 		}
 		buf.WriteString("(")
-		buf.WriteString(fmt.Sprintf("%d", s.SpanId))
-		buf.WriteString(fmt.Sprintf(", %d", s.StatementId))
-		buf.WriteString(fmt.Sprintf(", %d", moNode.NodeID))                                                     // node_id
+		buf.WriteString(fmt.Sprintf(`"%s"`, s.SpanID.String()))
+		buf.WriteString(fmt.Sprintf(`, "%s"`, s.TraceID.String()))
+		buf.WriteString(fmt.Sprintf(`, "%s"`, moNode.NodeUuid))                                                 // node_uuid
 		buf.WriteString(fmt.Sprintf(`, "%s"`, moNode.NodeType.String()))                                        // node_type
 		buf.WriteString(fmt.Sprintf(`, "%s"`, nanoSec2DatetimeString(s.Timestamp)))                             // timestamp
 		buf.WriteString(fmt.Sprintf(`, "%s"`, quote(s.Name)))                                                   // log level
@@ -237,7 +240,7 @@ func genZapLogBatchSql(in []IBuffer2SqlItem, buf *bytes.Buffer) any {
 	buf.WriteString("(")
 	buf.WriteString("`span_id`")
 	buf.WriteString(", `statement_id`")
-	buf.WriteString(", `node_id`")
+	buf.WriteString(", `node_uuid`")
 	buf.WriteString(", `node_type`")
 	buf.WriteString(", `timestamp`")
 	buf.WriteString(", `name`")
@@ -256,9 +259,9 @@ func genZapLogBatchSql(in []IBuffer2SqlItem, buf *bytes.Buffer) any {
 		}
 
 		buf.WriteString("(")
-		buf.WriteString(fmt.Sprintf("%d", s.SpanContext.SpanID))
-		buf.WriteString(fmt.Sprintf(", %d", s.SpanContext.TraceID))
-		buf.WriteString(fmt.Sprintf(", %d", moNode.NodeID))                                      // node_id
+		buf.WriteString(fmt.Sprintf(`"%s"`, s.SpanContext.SpanID.String()))
+		buf.WriteString(fmt.Sprintf(`, "%s"`, s.SpanContext.TraceID.String()))
+		buf.WriteString(fmt.Sprintf(`, "%s"`, moNode.NodeUuid))                                  // node_uuid
 		buf.WriteString(fmt.Sprintf(`, "%s"`, moNode.NodeType.String()))                         // node_type
 		buf.WriteString(fmt.Sprintf(`, "%s"`, s.Timestamp.Format("2006-01-02 15:04:05.000000"))) // timestamp
 		buf.WriteString(fmt.Sprintf(`, "%s"`, s.LoggerName))                                     // name
@@ -290,7 +293,7 @@ func genStatementBatchSql(in []IBuffer2SqlItem, buf *bytes.Buffer) any {
 	buf.WriteString(", `statement`")
 	buf.WriteString(", `statement_tag`")
 	buf.WriteString(", `statement_fingerprint`")
-	buf.WriteString(", `node_id`")
+	buf.WriteString(", `node_uuid`")
 	buf.WriteString(", `node_type`")
 	buf.WriteString(", `request_at`")
 	buf.WriteString(", `status`")
@@ -305,9 +308,9 @@ func genStatementBatchSql(in []IBuffer2SqlItem, buf *bytes.Buffer) any {
 			panic("Not StatementInfo")
 		}
 		buf.WriteString("(")
-		buf.WriteString(fmt.Sprintf("%d", s.StatementID))
-		buf.WriteString(fmt.Sprintf(", %d", s.TransactionID))
-		buf.WriteString(fmt.Sprintf(", %d", s.SessionID))
+		buf.WriteString(fmt.Sprintf(`"%s"`, uuid.UUID(s.StatementID).String()))
+		buf.WriteString(fmt.Sprintf(`, "%s"`, uuid.UUID(s.TransactionID).String()))
+		buf.WriteString(fmt.Sprintf(`, "%s"`, uuid.UUID(s.SessionID).String()))
 		buf.WriteString(fmt.Sprintf(`, "%s"`, quote(s.Account)))
 		buf.WriteString(fmt.Sprintf(`, "%s"`, quote(s.User)))
 		buf.WriteString(fmt.Sprintf(`, "%s"`, quote(s.Host)))
@@ -315,7 +318,7 @@ func genStatementBatchSql(in []IBuffer2SqlItem, buf *bytes.Buffer) any {
 		buf.WriteString(fmt.Sprintf(`, "%s"`, quote(s.Statement)))
 		buf.WriteString(fmt.Sprintf(`, "%s"`, quote(s.StatementFingerprint)))
 		buf.WriteString(fmt.Sprintf(`, "%s"`, quote(s.StatementTag)))
-		buf.WriteString(fmt.Sprintf(", %d", moNode.NodeID))
+		buf.WriteString(fmt.Sprintf(`, "%s"`, moNode.NodeUuid))
 		buf.WriteString(fmt.Sprintf(`, "%s"`, moNode.NodeType.String()))
 		buf.WriteString(fmt.Sprintf(`, "%s"`, nanoSec2DatetimeString(s.RequestAt)))
 		buf.WriteString(fmt.Sprintf(`, "%s"`, quote(s.Status.String())))
@@ -336,7 +339,7 @@ func genErrorBatchSql(in []IBuffer2SqlItem, buf *bytes.Buffer) any {
 	buf.WriteString("(")
 	buf.WriteString("`statement_id`")
 	buf.WriteString(", `span_id`")
-	buf.WriteString(", `node_id`")
+	buf.WriteString(", `node_uuid`")
 	buf.WriteString(", `node_type`")
 	buf.WriteString(", `err_code`")
 	buf.WriteString(", `stack`")
@@ -357,9 +360,9 @@ func genErrorBatchSql(in []IBuffer2SqlItem, buf *bytes.Buffer) any {
 			span = SpanFromContext(DefaultContext())
 		}
 		buf.WriteString("(")
-		buf.WriteString(fmt.Sprintf("%d", span.SpanContext().TraceID))
-		buf.WriteString(fmt.Sprintf(", %d", span.SpanContext().SpanID))
-		buf.WriteString(fmt.Sprintf(", %d", moNode.NodeID))
+		buf.WriteString(fmt.Sprintf(`"%s"`, span.SpanContext().TraceID.String()))
+		buf.WriteString(fmt.Sprintf(`, "%s"`, span.SpanContext().SpanID.String()))
+		buf.WriteString(fmt.Sprintf(`, "%s"`, moNode.NodeUuid))
 		buf.WriteString(fmt.Sprintf(`, "%s"`, moNode.NodeType.String()))
 		buf.WriteString(fmt.Sprintf(`, "%s"`, quote(s.Error.Error())))
 		buf.WriteString(fmt.Sprintf(`, "%s"`, quote(fmt.Sprintf(errorFormatter.Load().(string), s.Error))))

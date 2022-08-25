@@ -41,7 +41,7 @@ func TestReportLog(t *testing.T) {
 			name:         "close",
 			enableTracer: false,
 			args: args{
-				ctx:       ContextWithSpanContext(context.Background(), SpanContextWithIDs(0, 0)),
+				ctx:       ContextWithSpanContext(context.Background(), SpanContextWithIDs(nilTraceID, nilSpanID)),
 				level:     zapcore.InfoLevel,
 				depth:     3,
 				formatter: "info message",
@@ -52,7 +52,7 @@ func TestReportLog(t *testing.T) {
 			name:         "collect",
 			enableTracer: true,
 			args: args{
-				ctx:       ContextWithSpanContext(context.Background(), SpanContextWithIDs(0, 0)),
+				ctx:       ContextWithSpanContext(context.Background(), SpanContextWithIDs(nilTraceID, nilSpanID)),
 				level:     zapcore.InfoLevel,
 				depth:     3,
 				formatter: "info message",
@@ -61,7 +61,7 @@ func TestReportLog(t *testing.T) {
 		},
 	}
 	for _, tt := range tests {
-		gTracerProvider.enableTracer = tt.enableTracer
+		gTracerProvider.EnableTracer(tt.enableTracer)
 		t.Run(tt.name, func(t *testing.T) {
 			ReportLog(tt.args.ctx, tt.args.level, tt.args.depth, tt.args.formatter, tt.args.args...)
 		})

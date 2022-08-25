@@ -27,6 +27,7 @@ import (
 
 // LocalETLFS is a FileService implementation backed by local file system and suitable for ETL operations
 type LocalETLFS struct {
+	name     string
 	rootPath string
 
 	sync.RWMutex
@@ -37,11 +38,16 @@ type LocalETLFS struct {
 
 var _ FileService = new(LocalETLFS)
 
-func NewLocalETLFS(rootPath string) (*LocalETLFS, error) {
+func NewLocalETLFS(name string, rootPath string) (*LocalETLFS, error) {
 	return &LocalETLFS{
+		name:     name,
 		rootPath: rootPath,
 		dirFiles: make(map[string]*os.File),
 	}, nil
+}
+
+func (l *LocalETLFS) Name() string {
+	return l.name
 }
 
 func (l *LocalETLFS) ensureTempDir() (err error) {
@@ -52,10 +58,14 @@ func (l *LocalETLFS) ensureTempDir() (err error) {
 }
 
 func (l *LocalETLFS) Write(ctx context.Context, vector IOVector) error {
-	nativePath := l.toNativeFilePath(vector.FilePath)
+	_, path, err := splitPath(l.name, vector.FilePath)
+	if err != nil {
+		return err
+	}
+	nativePath := l.toNativeFilePath(path)
 
 	// check existence
-	_, err := os.Stat(nativePath)
+	_, err = os.Stat(nativePath)
 	if err == nil {
 		// existed
 		return ErrFileExisted
@@ -65,8 +75,11 @@ func (l *LocalETLFS) Write(ctx context.Context, vector IOVector) error {
 }
 
 func (l *LocalETLFS) write(ctx context.Context, vector IOVector) error {
-
-	nativePath := l.toNativeFilePath(vector.FilePath)
+	_, path, err := splitPath(l.name, vector.FilePath)
+	if err != nil {
+		return err
+	}
+	nativePath := l.toNativeFilePath(path)
 
 	// sort
 	sort.Slice(vector.Entries, func(i, j int) bool {
@@ -127,8 +140,13 @@ func (l *LocalETLFS) Read(ctx context.Context, vector *IOVector) error {
 		return ErrEmptyVector
 	}
 
-	nativePath := l.toNativeFilePath(vector.FilePath)
-	_, err := os.Stat(nativePath)
+	_, path, err := splitPath(l.name, vector.FilePath)
+	if err != nil {
+		return err
+	}
+	nativePath := l.toNativeFilePath(path)
+
+	_, err = os.Stat(nativePath)
 	if os.IsNotExist(err) {
 		return ErrFileNotFound
 	}
@@ -238,9 +256,11 @@ func (l *LocalETLFS) Read(ctx context.Context, vector *IOVector) error {
 			}
 			defer f.Close()
 
-			_, err = f.Seek(int64(entry.Offset), io.SeekStart)
-			if err != nil {
-				return err
+			if entry.Offset > 0 {
+				_, err = f.Seek(int64(entry.Offset), io.SeekStart)
+				if err != nil {
+					return err
+				}
 			}
 			r := (io.Reader)(f)
 			if entry.Size > 0 {
@@ -282,7 +302,12 @@ func (l *LocalETLFS) Read(ctx context.Context, vector *IOVector) error {
 
 func (l *LocalETLFS) List(ctx context.Context, dirPath string) (ret []DirEntry, err error) {
 
-	nativePath := l.toNativeFilePath(dirPath)
+	_, path, err := splitPath(l.name, dirPath)
+	if err != nil {
+		return nil, err
+	}
+	nativePath := l.toNativeFilePath(path)
+
 	f, err := os.Open(nativePath)
 	if os.IsNotExist(err) {
 		err = nil
@@ -322,23 +347,31 @@ func (l *LocalETLFS) List(ctx context.Context, dirPath string) (ret []DirEntry, 
 }
 
 func (l *LocalETLFS) Delete(ctx context.Context, filePath string) error {
-	nativePath := l.toNativeFilePath(filePath)
-	_, err := os.Stat(nativePath)
+	_, path, err := splitPath(l.name, filePath)
+	if err != nil {
+		return err
+	}
+	nativePath := l.toNativeFilePath(path)
+
+	_, err = os.Stat(nativePath)
 	if os.IsNotExist(err) {
 		return ErrFileNotFound
 	}
 	if err != nil {
 		return err
 	}
+
 	err = os.Remove(nativePath)
 	if err != nil {
 		return err
 	}
+
 	parentDir, _ := filepath.Split(nativePath)
 	err = l.syncDir(parentDir)
 	if err != nil {
 		return err
 	}
+
 	return nil
 }
 
@@ -419,3 +452,73 @@ func (l *LocalETLFS) toNativeFilePath(filePath string) string {
 var _ ETLFileService = new(LocalETLFS)
 
 func (l *LocalETLFS) ETLCompatible() {}
+
+var _ MutableFileService = new(LocalETLFS)
+
+func (l *LocalETLFS) NewMutator(filePath string) (Mutator, error) {
+	_, path, err := splitPath(l.name, filePath)
+	if err != nil {
+		return nil, err
+	}
+	nativePath := l.toNativeFilePath(path)
+	f, err := os.OpenFile(nativePath, os.O_RDWR, 0644)
+	if os.IsNotExist(err) {
+		return nil, ErrFileNotFound
+	}
+	return &_LocalETLFSMutator{
+		osFile: f,
+	}, nil
+}
+
+type _LocalETLFSMutator struct {
+	osFile *os.File
+}
+
+func (l *_LocalETLFSMutator) Mutate(ctx context.Context, entries ...IOEntry) error {
+
+	// write
+	for _, entry := range entries {
+
+		if entry.ReaderForWrite != nil {
+			// seek and copy
+			_, err := l.osFile.Seek(int64(entry.Offset), 0)
+			if err != nil {
+				return err
+			}
+			n, err := io.Copy(l.osFile, entry.ReaderForWrite)
+			if err != nil {
+				return err
+			}
+			if int(n) != entry.Size {
+				return ErrSizeNotMatch
+			}
+
+		} else {
+			// WriteAt
+			n, err := l.osFile.WriteAt(entry.Data, int64(entry.Offset))
+			if err != nil {
+				return err
+			}
+			if int(n) != entry.Size {
+				return ErrSizeNotMatch
+			}
+		}
+
+	}
+
+	return nil
+}
+
+func (l *_LocalETLFSMutator) Close() error {
+	// sync
+	if err := l.osFile.Sync(); err != nil {
+		return err
+	}
+
+	// close
+	if err := l.osFile.Close(); err != nil {
+		return err
+	}
+
+	return nil
+}

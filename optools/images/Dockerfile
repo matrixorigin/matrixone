@@ -1,4 +1,4 @@
-FROM golang:1.18-buster as builder
+FROM golang:1.19-buster as builder
 
 RUN mkdir -p /go/src/github.com/matrixorigin/matrixone
 
@@ -13,15 +13,15 @@ RUN go mod download
 
 COPY . .
 
-RUN make config && make build
+RUN make build
 
 FROM ubuntu:latest
 
-COPY --from=builder /go/src/github.com/matrixorigin/matrixone/mo-server /mo-server
-COPY --from=builder /go/src/github.com/matrixorigin/matrixone/system_vars_config.toml /system_vars_config.toml
+COPY --from=builder /go/src/github.com/matrixorigin/matrixone/mo-service /mo-service
+COPY --from=builder /go/src/github.com/matrixorigin/matrixone/etc/cn-standalone-test.toml  /cn-standalone-test.toml
 
 WORKDIR /
 
 EXPOSE 6001
 
-ENTRYPOINT [ "/mo-server", "/system_vars_config.toml"]
+ENTRYPOINT [ "/mo-service", "-cfg", "/cn-standalone-test.toml"]

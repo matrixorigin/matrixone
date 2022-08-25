@@ -15,28 +15,30 @@
 package plan
 
 import (
+	"testing"
+
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/stretchr/testify/require"
-	"testing"
 )
 
 func Test_rewriteDecimalTypeIfNecessary(t *testing.T) {
 	t1 := rewriteDecimalTypeIfNecessary(&plan.Type{
-		Id: plan.Type_DECIMAL64,
+		Id: int32(types.T_decimal64),
 	})
 	require.Equal(t, []int32{t1.Scale, t1.Width, t1.Size}, []int32{2, 6, 8})
 	t2 := rewriteDecimalTypeIfNecessary(&plan.Type{
-		Id: plan.Type_DECIMAL128,
+		Id: int32(types.T_decimal128),
 	})
 	require.Equal(t, []int32{t2.Scale, t2.Width, t2.Size}, []int32{10, 38, 16})
 	t3 := rewriteDecimalTypeIfNecessary(&plan.Type{
-		Id:    plan.Type_DECIMAL64,
+		Id:    int32(types.T_decimal64),
 		Scale: 10,
 		Size:  8,
 	})
 	require.Equal(t, []int32{t3.Scale, t3.Width, t3.Size}, []int32{10, 0, 8})
 	t4 := rewriteDecimalTypeIfNecessary(&plan.Type{
-		Id:    plan.Type_DECIMAL128,
+		Id:    int32(types.T_decimal128),
 		Width: 18,
 		Size:  16,
 	})

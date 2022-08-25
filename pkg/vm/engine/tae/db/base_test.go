@@ -20,6 +20,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/mockio"
@@ -41,8 +42,9 @@ const (
 
 type testEngine struct {
 	*DB
-	t      *testing.T
-	schema *catalog.Schema
+	t        *testing.T
+	schema   *catalog.Schema
+	tenantID uint32 // for almost tests, userID and roleID is not important
 }
 
 func newTestEngine(t *testing.T, opts *options.Options) *testEngine {
@@ -54,6 +56,7 @@ func newTestEngine(t *testing.T, opts *options.Options) *testEngine {
 }
 
 func (e *testEngine) bindSchema(schema *catalog.Schema) { e.schema = schema }
+func (e *testEngine) bindTenantID(tenantID uint32)      { e.tenantID = tenantID }
 
 func (e *testEngine) restart() {
 	_ = e.DB.Close()
@@ -67,7 +70,7 @@ func (e *testEngine) Close() error {
 }
 
 func (e *testEngine) createRelAndAppend(bat *containers.Batch, createDB bool) (handle.Database, handle.Relation) {
-	return createRelationAndAppend(e.t, e.DB, defaultTestDB, e.schema, bat, createDB)
+	return createRelationAndAppend(e.t, e.tenantID, e.DB, defaultTestDB, e.schema, bat, createDB)
 }
 
 // func (e *testEngine) getRows() int {
@@ -84,7 +87,7 @@ func (e *testEngine) checkRowsByScan(exp int, applyDelete bool) {
 }
 
 func (e *testEngine) getRelation() (txn txnif.AsyncTxn, rel handle.Relation) {
-	return getDefaultRelation(e.t, e.DB, e.schema.Name)
+	return getRelation(e.t, e.tenantID, e.DB, defaultTestDB, e.schema.Name)
 }
 
 func (e *testEngine) checkpointCatalog() {
@@ -93,23 +96,28 @@ func (e *testEngine) checkpointCatalog() {
 }
 
 func (e *testEngine) compactABlocks(skipConflict bool) {
-	forceCompactABlocks(e.t, e.DB, defaultTestDB, e.schema, skipConflict)
+	forceCompactABlocks(e.t, e.tenantID, e.DB, defaultTestDB, e.schema, skipConflict)
 }
 
 func (e *testEngine) compactBlocks(skipConflict bool) {
-	compactBlocks(e.t, e.DB, defaultTestDB, e.schema, skipConflict)
+	compactBlocks(e.t, e.tenantID, e.DB, defaultTestDB, e.schema, skipConflict)
 }
 
 func (e *testEngine) mergeBlocks(skipConflict bool) {
-	mergeBlocks(e.t, e.DB, defaultTestDB, e.schema, skipConflict)
+	mergeBlocks(e.t, e.tenantID, e.DB, defaultTestDB, e.schema, skipConflict)
 }
 
-func (e *testEngine) getDB() (txn txnif.AsyncTxn, db handle.Database) {
+func (e *testEngine) getDB(name string) (txn txnif.AsyncTxn, db handle.Database) {
 	txn, err := e.DB.StartTxn(nil)
+	txn.BindAccessInfo(e.tenantID, 0, 0)
 	assert.NoError(e.t, err)
-	db, err = txn.GetDatabase(defaultTestDB)
+	db, err = txn.GetDatabase(name)
 	assert.NoError(e.t, err)
 	return
+}
+
+func (e *testEngine) getTestDB() (txn txnif.AsyncTxn, db handle.Database) {
+	return e.getDB(defaultTestDB)
 }
 
 func (e *testEngine) doAppend(bat *containers.Batch) {
@@ -121,6 +129,7 @@ func (e *testEngine) doAppend(bat *containers.Batch) {
 
 func (e *testEngine) tryAppend(bat *containers.Batch) {
 	txn, err := e.DB.StartTxn(nil)
+	txn.BindAccessInfo(e.tenantID, 0, 0)
 	assert.NoError(e.t, err)
 	db, err := txn.GetDatabase(defaultTestDB)
 	assert.NoError(e.t, err)
@@ -160,7 +169,7 @@ func (e *testEngine) deleteAll(skipConflict bool) error {
 }
 
 func (e *testEngine) truncate() {
-	txn, db := e.getDB()
+	txn, db := e.getTestDB()
 	_, err := db.TruncateByName(e.schema.Name)
 	assert.NoError(e.t, err)
 	assert.NoError(e.t, txn.Commit())
@@ -269,12 +278,14 @@ func createRelationNoCommit(t *testing.T, e *DB, dbName string, schema *catalog.
 
 func createRelationAndAppend(
 	t *testing.T,
+	tenantID uint32,
 	e *DB,
 	dbName string,
 	schema *catalog.Schema,
 	bat *containers.Batch,
 	createDB bool) (db handle.Database, rel handle.Relation) {
 	txn, err := e.StartTxn(nil)
+	txn.BindAccessInfo(tenantID, 0, 0)
 	assert.NoError(t, err)
 	if createDB {
 		db, err = txn.CreateDatabase(dbName)
@@ -291,9 +302,11 @@ func createRelationAndAppend(
 	return
 }
 
-func getRelation(t *testing.T, e *DB, dbName, tblName string) (txn txnif.AsyncTxn, rel handle.Relation) {
+func getRelation(t *testing.T, tenantID uint32, e *DB, dbName, tblName string) (txn txnif.AsyncTxn, rel handle.Relation) {
 	txn, err := e.StartTxn(nil)
+	txn.BindAccessInfo(tenantID, 0, 0)
 	assert.NoError(t, err)
+	logutil.Infof("lalala get db %v at %v", dbName, txn.GetStartTS())
 	db, err := txn.GetDatabase(dbName)
 	assert.NoError(t, err)
 	rel, err = db.GetRelationByName(tblName)
@@ -302,7 +315,7 @@ func getRelation(t *testing.T, e *DB, dbName, tblName string) (txn txnif.AsyncTx
 }
 
 func getDefaultRelation(t *testing.T, e *DB, name string) (txn txnif.AsyncTxn, rel handle.Relation) {
-	return getRelation(t, e, defaultTestDB, name)
+	return getRelation(t, 0, e, defaultTestDB, name)
 }
 
 func getOneBlock(rel handle.Relation) handle.Block {
@@ -410,8 +423,8 @@ func tryAppendClosure(t *testing.T, data *containers.Batch, name string, e *DB, 
 		_ = txn.Commit()
 	}
 }
-func forceCompactABlocks(t *testing.T, e *DB, dbName string, schema *catalog.Schema, skipConflict bool) {
-	txn, rel := getRelation(t, e, dbName, schema.Name)
+func forceCompactABlocks(t *testing.T, tenantID uint32, e *DB, dbName string, schema *catalog.Schema, skipConflict bool) {
+	txn, rel := getRelation(t, tenantID, e, dbName, schema.Name)
 
 	var metas []*catalog.BlockEntry
 	it := rel.MakeBlockIt()
@@ -435,8 +448,8 @@ func forceCompactABlocks(t *testing.T, e *DB, dbName string, schema *catalog.Sch
 	}
 }
 
-func compactBlocks(t *testing.T, e *DB, dbName string, schema *catalog.Schema, skipConflict bool) {
-	txn, rel := getRelation(t, e, dbName, schema.Name)
+func compactBlocks(t *testing.T, tenantID uint32, e *DB, dbName string, schema *catalog.Schema, skipConflict bool) {
+	txn, rel := getRelation(t, tenantID, e, dbName, schema.Name)
 
 	var metas []*catalog.BlockEntry
 	it := rel.MakeBlockIt()
@@ -452,7 +465,7 @@ func compactBlocks(t *testing.T, e *DB, dbName string, schema *catalog.Schema, s
 	}
 	_ = txn.Commit()
 	for _, meta := range metas {
-		txn, _ := getRelation(t, e, dbName, schema.Name)
+		txn, _ := getRelation(t, tenantID, e, dbName, schema.Name)
 		task, err := jobs.NewCompactBlockTask(nil, txn, meta, e.Scheduler)
 		if skipConflict && err != nil {
 			_ = txn.Rollback()
@@ -473,8 +486,9 @@ func compactBlocks(t *testing.T, e *DB, dbName string, schema *catalog.Schema, s
 	}
 }
 
-func mergeBlocks(t *testing.T, e *DB, dbName string, schema *catalog.Schema, skipConflict bool) {
+func mergeBlocks(t *testing.T, tenantID uint32, e *DB, dbName string, schema *catalog.Schema, skipConflict bool) {
 	txn, _ := e.StartTxn(nil)
+	txn.BindAccessInfo(tenantID, 0, 0)
 	db, _ := txn.GetDatabase(dbName)
 	rel, _ := db.GetRelationByName(schema.Name)
 
@@ -490,6 +504,7 @@ func mergeBlocks(t *testing.T, e *DB, dbName string, schema *catalog.Schema, ski
 	_ = txn.Commit()
 	for _, seg := range segs {
 		txn, _ = e.StartTxn(nil)
+		txn.BindAccessInfo(tenantID, 0, 0)
 		db, _ = txn.GetDatabase(dbName)
 		rel, _ = db.GetRelationByName(schema.Name)
 		segHandle, err := rel.GetSegment(seg.ID)

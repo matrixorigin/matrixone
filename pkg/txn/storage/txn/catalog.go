@@ -44,6 +44,7 @@ func (r RelationRow) PrimaryKey() Text {
 type AttributeRow struct {
 	ID         string
 	RelationID string
+	Order      int
 	engine.Attribute
 }
 

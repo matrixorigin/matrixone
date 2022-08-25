@@ -16,6 +16,7 @@ package batchpipe
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"sort"
@@ -104,7 +105,7 @@ func (b *posBuf) Reset() { b.posList = b.posList[:0]; b.RemindReset() }
 
 func (b *posBuf) IsEmpty() bool {
 	select {
-	case b.wakeupCh <- time.Now():
+	case b.wakeupCh <- time.Now(): // when the reminder fires, it will check IsEmpty
 	default:
 	}
 	return len(b.posList) == 0
@@ -149,7 +150,7 @@ func (c *testCollector) NewItemBuffer(name string) ItemBuffer[*TestItem, string]
 
 // BatchHandler handle the StoreBatch from a ItemBuffer, for example, execute inster sql
 // this handle may be running on multiple gorutine
-func (c *testCollector) NewItemBatchHandler() func(batch string) {
+func (c *testCollector) NewItemBatchHandler(ctx context.Context) func(batch string) {
 	return func(batch string) {
 		c.Lock()
 		defer c.Unlock()
@@ -178,8 +179,8 @@ func newTestCollector(opts ...BaseBatchPipeOpt) *testCollector {
 
 func TestBaseCollector(t *testing.T) {
 	collector := newTestCollector(PipeWithBatchWorkerNum(1))
-	require.True(t, collector.Start())
-	require.False(t, collector.Start())
+	require.True(t, collector.Start(context.TODO()))
+	require.False(t, collector.Start(context.TODO()))
 	err := collector.SendItem(
 		&TestItem{name: T_INT, intval: 32},
 		&TestItem{name: T_POS, posval: &Pos{line: 1, linepos: 12, docpos: 12}},
@@ -203,9 +204,9 @@ func TestBaseCollector(t *testing.T) {
 	require.Equal(t, 2, len(collector.Received()))
 }
 
-func TestBaseCollectorReminder(t *testing.T) {
+func TestBaseCollectorReminderBackOff(t *testing.T) {
 	collector := newTestCollector(PipeWithBatchWorkerNum(1))
-	require.True(t, collector.Start())
+	require.True(t, collector.Start(context.TODO()))
 	err := collector.SendItem(
 		&TestItem{name: T_POS, posval: &Pos{line: 1, linepos: 12, docpos: 12}},
 	)
@@ -221,7 +222,7 @@ func TestBaseCollectorReminder(t *testing.T) {
 			goOn = true
 			prev = element
 		} else {
-			goOn = assert.InDelta(t, gap, element.Sub(prev).Milliseconds(), 10)
+			goOn = assert.InDelta(t, gap, element.Sub(prev).Milliseconds(), 30)
 			prev = element
 			gap *= 2
 		}
@@ -254,7 +255,7 @@ func TestBaseCollectorGracefulStop(t *testing.T) {
 	}
 	collector := newTestCollector(PipeWithBatchWorkerNum(2), PipeWithBufferWorkerNum(1))
 	collector.notify4Batch = notifyFun
-	collector.Start()
+	collector.Start(context.TODO())
 
 	notify.Add(1)
 	err := collector.SendItem(

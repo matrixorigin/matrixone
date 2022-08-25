@@ -28,6 +28,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 )
 
@@ -36,7 +37,11 @@ func runClientTest(t *testing.T,
 	defer leaktest.AfterTest(t)()
 	cfg := getServiceTestConfig()
 	defer vfs.ReportLeakedFD(cfg.FS, t)
-	service, err := NewService(cfg)
+	service, err := NewService(cfg,
+		WithBackendFilter(func(msg morpc.Message, backendAddr string) bool {
+			return true
+		}),
+	)
 	require.NoError(t, err)
 	defer func() {
 		assert.NoError(t, service.Close())
@@ -119,7 +124,11 @@ func TestClientCanBeConnectedByReverseProxy(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 	cfg := getServiceTestConfig()
 	defer vfs.ReportLeakedFD(cfg.FS, t)
-	service, err := NewService(cfg)
+	service, err := NewService(cfg,
+		WithBackendFilter(func(msg morpc.Message, backendAddr string) bool {
+			return true
+		}),
+	)
 	require.NoError(t, err)
 	defer func() {
 		assert.NoError(t, service.Close())

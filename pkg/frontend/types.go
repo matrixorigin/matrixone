@@ -15,12 +15,21 @@
 package frontend
 
 import (
+	"context"
 	"fmt"
+	"strings"
+
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
-	"strings"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
+)
+
+type (
+	TxnOperator = client.TxnOperator
+	TxnClient   = client.TxnClient
+	TxnOption   = client.TxnOption
 )
 
 type ComputationRunner interface {
@@ -38,7 +47,9 @@ type ComputationWrapper interface {
 
 	GetAffectedRows() uint64
 
-	Compile(u interface{}, fill func(interface{}, *batch.Batch) error) (interface{}, error)
+	Compile(requestCtx context.Context, u interface{}, fill func(interface{}, *batch.Batch) error) (interface{}, error)
+
+	GetUUID() []byte
 }
 
 type ColumnInfo interface {
@@ -70,6 +81,7 @@ type PrepareStmt struct {
 	Name        string
 	PreparePlan *plan.Plan
 	PrepareStmt tree.Statement
+	ParamTypes  []byte
 }
 
 /*

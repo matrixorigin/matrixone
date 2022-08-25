@@ -18,29 +18,19 @@ import (
 	"context"
 	goErrors "errors"
 	"sync/atomic"
-	"time"
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/logutil/logutil2"
-	"github.com/matrixorigin/matrixone/pkg/util/batchpipe"
 	"github.com/matrixorigin/matrixone/pkg/util/errors"
 	"github.com/matrixorigin/matrixone/pkg/util/export"
 
 	"go.uber.org/zap"
 )
 
-const (
-	InternalExecutor = "InternalExecutor"
-	FileService      = "FileService"
-)
-
-type TraceID uint64
-type SpanID uint64
-
 var gTracerProvider *MOTracerProvider
 var gTracer Tracer
-var gTraceContext context.Context = context.Background()
+var gTraceContext = context.Background()
 var gSpanContext atomic.Value
 
 func Init(ctx context.Context, opts ...TracerProviderOption) (context.Context, error) {
@@ -56,25 +46,25 @@ func Init(ctx context.Context, opts ...TracerProviderOption) (context.Context, e
 	config := &gTracerProvider.tracerProviderConfig
 
 	// init Tracer
-	gTracer = gTracerProvider.Tracer("MatrixOrigin",
-		WithReminder(batchpipe.NewConstantClock(5*time.Second)),
-	)
+	gTracer = gTracerProvider.Tracer("MatrixOrigin")
 
 	// init Node DefaultContext
-	sc := SpanContextWithIDs(TraceID(0), SpanID(config.getNodeResource().NodeID))
+	var spanId SpanID
+	spanId.SetByUUID(config.getNodeResource().NodeUuid)
+	sc := SpanContextWithIDs(nilTraceID, spanId)
 	gSpanContext.Store(&sc)
 	gTraceContext = ContextWithSpanContext(ctx, sc)
 
-	initExport(config)
+	initExport(ctx, config)
 
 	errors.WithContext(DefaultContext(), goErrors.New("finish trace init"))
 
 	return gTraceContext, nil
 }
 
-func initExport(config *tracerProviderConfig) {
-	if !config.enableTracer {
-		logutil2.Infof(context.TODO(), "initExport pass.")
+func initExport(ctx context.Context, config *tracerProviderConfig) {
+	if !config.IsEnable() {
+		logutil.Info("initExport pass.")
 		return
 	}
 	var p export.BatchProcessor
@@ -82,7 +72,7 @@ func initExport(config *tracerProviderConfig) {
 	switch {
 	case config.batchProcessMode == InternalExecutor:
 		// init schema
-		InitSchemaByInnerExecutor(config.sqlExecutor)
+		InitSchemaByInnerExecutor(ctx, config.sqlExecutor)
 		// register buffer pipe implements
 		export.Register(&MOSpan{}, NewBufferPipe2SqlWorker(
 			bufferWithSizeThreshold(MB),
@@ -101,17 +91,17 @@ func initExport(config *tracerProviderConfig) {
 	}
 	if p != nil {
 		config.spanProcessors = append(config.spanProcessors, NewBatchSpanProcessor(p))
-		logutil2.Infof(context.TODO(), "trace span processor")
-		logutil2.Info(context.TODO(), "[Debug]", zap.String("operation", "value1"), zap.String("operation_1", "value2"))
+		logutil.Info("trace span processor")
+		logutil.Info("[Debug]", zap.String("operation", "value1"), zap.String("operation_1", "value2"))
 	}
 }
 
 func Shutdown(ctx context.Context) error {
-	if !gTracerProvider.enableTracer {
+	if !gTracerProvider.IsEnable() {
 		return nil
 	}
 
-	gTracerProvider.enableTracer = false
+	gTracerProvider.EnableTracer(false)
 	tracer := noopTracer{}
 	_ = atomic.SwapPointer((*unsafe.Pointer)(unsafe.Pointer(gTracer.(*MOTracer))), unsafe.Pointer(&tracer))
 

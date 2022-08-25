@@ -26,31 +26,28 @@ import (
 )
 
 func (s *Scope) CreateDatabase(c *Compile) error {
-	snapshot := engine.Snapshot(c.proc.Snapshot)
 	dbName := s.Plan.GetDdl().GetCreateDatabase().GetDatabase()
-	if _, err := c.e.Database(c.ctx, dbName, snapshot); err == nil {
+	if _, err := c.e.Database(c.ctx, dbName, c.proc.TxnOperator); err == nil {
 		if s.Plan.GetDdl().GetCreateDatabase().GetIfNotExists() {
 			return nil
 		}
 		return errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("database %s already exists", dbName))
 	}
-	return c.e.Create(c.ctx, dbName, snapshot)
+	return c.e.Create(c.ctx, dbName, c.proc.TxnOperator)
 }
 
 func (s *Scope) DropDatabase(c *Compile) error {
-	snapshot := engine.Snapshot(c.proc.Snapshot)
 	dbName := s.Plan.GetDdl().GetDropDatabase().GetDatabase()
-	if _, err := c.e.Database(c.ctx, dbName, snapshot); err != nil {
+	if _, err := c.e.Database(c.ctx, dbName, c.proc.TxnOperator); err != nil {
 		if s.Plan.GetDdl().GetDropDatabase().GetIfExists() {
 			return nil
 		}
 		return err
 	}
-	return c.e.Delete(c.ctx, dbName, snapshot)
+	return c.e.Delete(c.ctx, dbName, c.proc.TxnOperator)
 }
 
 func (s *Scope) CreateTable(c *Compile) error {
-	snapshot := engine.Snapshot(c.proc.Snapshot)
 	qry := s.Plan.GetDdl().GetCreateTable()
 	// convert the plan's cols to the execution's cols
 	planCols := qry.GetTableDef().GetCols()
@@ -64,7 +61,7 @@ func (s *Scope) CreateTable(c *Compile) error {
 	if qry.GetDatabase() != "" {
 		dbName = qry.GetDatabase()
 	}
-	dbSource, err := c.e.Database(c.ctx, dbName, snapshot)
+	dbSource, err := c.e.Database(c.ctx, dbName, c.proc.TxnOperator)
 	if err != nil {
 		return err
 	}
@@ -79,11 +76,10 @@ func (s *Scope) CreateTable(c *Compile) error {
 }
 
 func (s *Scope) DropTable(c *Compile) error {
-	snapshot := engine.Snapshot(c.proc.Snapshot)
 	qry := s.Plan.GetDdl().GetDropTable()
 
 	dbName := qry.GetDatabase()
-	dbSource, err := c.e.Database(c.ctx, dbName, snapshot)
+	dbSource, err := c.e.Database(c.ctx, dbName, c.proc.TxnOperator)
 	if err != nil {
 		if qry.GetIfExists() {
 			return nil
@@ -123,6 +119,10 @@ func planDefsToExeDefs(planDefs []*plan.TableDef_DefType) []engine.TableDef {
 			}
 			exeDefs[i] = &engine.PropertiesDef{
 				Properties: properties,
+			}
+		case *plan.TableDef_DefType_View:
+			exeDefs[i] = &engine.ViewDef{
+				View: defVal.View.View,
 			}
 		}
 	}

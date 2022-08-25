@@ -27,10 +27,9 @@ import (
 	"sync"
 )
 
-//TODO parallel read and write
-
 // LocalFS is a FileService implementation backed by local file system
 type LocalFS struct {
+	name     string
 	rootPath string
 
 	sync.RWMutex
@@ -42,6 +41,7 @@ type LocalFS struct {
 var _ FileService = new(LocalFS)
 
 func NewLocalFS(
+	name string,
 	rootPath string,
 	memCacheCapacity int,
 ) (*LocalFS, error) {
@@ -93,6 +93,7 @@ func NewLocalFS(
 	}
 
 	fs := &LocalFS{
+		name:     name,
 		rootPath: rootPath,
 		dirFiles: make(map[string]*os.File),
 	}
@@ -103,11 +104,19 @@ func NewLocalFS(
 	return fs, nil
 }
 
+func (l *LocalFS) Name() string {
+	return l.name
+}
+
 func (l *LocalFS) Write(ctx context.Context, vector IOVector) error {
-	nativePath := l.toNativeFilePath(vector.FilePath)
+	_, path, err := splitPath(l.name, vector.FilePath)
+	if err != nil {
+		return err
+	}
+	nativePath := l.toNativeFilePath(path)
 
 	// check existence
-	_, err := os.Stat(nativePath)
+	_, err = os.Stat(nativePath)
 	if err == nil {
 		// existed
 		return ErrFileExisted
@@ -117,7 +126,11 @@ func (l *LocalFS) Write(ctx context.Context, vector IOVector) error {
 }
 
 func (l *LocalFS) write(ctx context.Context, vector IOVector) error {
-	nativePath := l.toNativeFilePath(vector.FilePath)
+	_, path, err := splitPath(l.name, vector.FilePath)
+	if err != nil {
+		return err
+	}
+	nativePath := l.toNativeFilePath(path)
 
 	// sort
 	sort.Slice(vector.Entries, func(i, j int) bool {
@@ -139,12 +152,16 @@ func (l *LocalFS) write(ctx context.Context, vector IOVector) error {
 	if err != nil {
 		return err
 	}
-	n, err := io.Copy(f, newIOEntriesReader(vector.Entries))
+	fileWithChecksum := NewFileWithChecksum(f, _BlockContentSize)
+	n, err := io.Copy(fileWithChecksum, newIOEntriesReader(vector.Entries))
 	if err != nil {
 		return err
 	}
 	if n != size {
 		return ErrSizeNotMatch
+	}
+	if err := f.Sync(); err != nil {
+		return err
 	}
 	if err := f.Close(); err != nil {
 		return err
@@ -189,85 +206,155 @@ func (l *LocalFS) Read(ctx context.Context, vector *IOVector) error {
 
 func (l *LocalFS) read(ctx context.Context, vector *IOVector) error {
 
-	nativePath := l.toNativeFilePath(vector.FilePath)
-	f, err := os.Open(nativePath)
+	_, path, err := splitPath(l.name, vector.FilePath)
+	if err != nil {
+		return err
+	}
+	nativePath := l.toNativeFilePath(path)
+
+	file, err := os.Open(nativePath)
 	if os.IsNotExist(err) {
 		return ErrFileNotFound
 	}
 	if err != nil {
 		return nil
 	}
-	defer f.Close()
-
-	min, max, readToEnd := vector.offsetRange()
-	if readToEnd {
-		stat, err := f.Stat()
-		if err != nil {
-			return err
-		}
-		max = int(stat.Size())
-	}
-	readLen := max - min
-
-	_, err = f.Seek(int64(min), io.SeekStart)
-	if err != nil {
-		return err
-	}
-	//TODO use multiple ReadAt
-	content, err := io.ReadAll(io.LimitReader(f, int64(readLen)))
-	if err != nil {
-		return err
-	}
+	defer file.Close()
 
 	for i, entry := range vector.Entries {
+		if entry.Size == 0 {
+			return ErrEmptyRange
+		}
+
 		if entry.ignore {
 			continue
 		}
 
-		start := entry.Offset - min
-		if start >= len(content) {
-			return ErrEmptyRange
-		}
-		if entry.Size < 0 {
-			entry.Size = max
-		}
-		end := start + entry.Size
-		if end > len(content) {
-			return ErrUnexpectedEOF
-		}
-		data := content[start:end]
-		if len(data) == 0 {
-			return ErrEmptyRange
-		}
+		if entry.WriterForRead != nil {
+			fileWithChecksum := NewFileWithChecksum(file, _BlockContentSize)
 
-		setData := true
+			if entry.Offset > 0 {
+				_, err := fileWithChecksum.Seek(int64(entry.Offset), io.SeekStart)
+				if err != nil {
+					return err
+				}
+			}
+			r := (io.Reader)(fileWithChecksum)
+			if entry.Size > 0 {
+				r = io.LimitReader(r, int64(entry.Size))
+			}
 
-		if w := vector.Entries[i].WriterForRead; w != nil {
-			setData = false
-			_, err := w.Write(data)
+			if entry.ToObject != nil {
+				r = io.TeeReader(r, entry.WriterForRead)
+				cr := &countingReader{
+					R: r,
+				}
+				obj, size, err := entry.ToObject(cr)
+				if err != nil {
+					return err
+				}
+				vector.Entries[i].Object = obj
+				vector.Entries[i].ObjectSize = size
+				if cr.N != entry.Size {
+					return ErrUnexpectedEOF
+				}
+
+			} else {
+				n, err := io.Copy(entry.WriterForRead, r)
+				if err != nil {
+					return err
+				}
+				if n != int64(entry.Size) {
+					return ErrUnexpectedEOF
+				}
+			}
+
+		} else if entry.ReadCloserForRead != nil {
+			file, err := os.Open(nativePath)
+			if os.IsNotExist(err) {
+				return ErrFileNotFound
+			}
 			if err != nil {
+				return nil
+			}
+			fileWithChecksum := NewFileWithChecksum(file, _BlockContentSize)
+
+			if entry.Offset > 0 {
+				_, err := fileWithChecksum.Seek(int64(entry.Offset), io.SeekStart)
+				if err != nil {
+					return err
+				}
+			}
+			r := (io.Reader)(fileWithChecksum)
+			if entry.Size > 0 {
+				r = io.LimitReader(r, int64(entry.Size))
+			}
+
+			if entry.ToObject == nil {
+				*entry.ReadCloserForRead = &readCloser{
+					r:         r,
+					closeFunc: file.Close,
+				}
+
+			} else {
+				buf := new(bytes.Buffer)
+				*entry.ReadCloserForRead = &readCloser{
+					r: io.TeeReader(r, buf),
+					closeFunc: func() error {
+						defer file.Close()
+						obj, size, err := entry.ToObject(buf)
+						if err != nil {
+							return err
+						}
+						vector.Entries[i].Object = obj
+						vector.Entries[i].ObjectSize = size
+						return nil
+					},
+				}
+			}
+
+		} else {
+			fileWithChecksum := NewFileWithChecksum(file, _BlockContentSize)
+
+			if entry.Offset > 0 {
+				_, err := fileWithChecksum.Seek(int64(entry.Offset), io.SeekStart)
+				if err != nil {
+					return err
+				}
+			}
+			r := (io.Reader)(fileWithChecksum)
+			if entry.Size > 0 {
+				r = io.LimitReader(r, int64(entry.Size))
+			}
+
+			if entry.Size < 0 {
+				data, err := io.ReadAll(r)
+				if err != nil {
+					return err
+				}
+				entry.Data = data
+
+			} else {
+				if len(entry.Data) < entry.Size {
+					entry.Data = make([]byte, entry.Size)
+				}
+				n, err := io.ReadFull(r, entry.Data)
+				if err != nil {
+					return err
+				}
+				if n != entry.Size {
+					return ErrUnexpectedEOF
+				}
+			}
+
+			if err := entry.setObjectFromData(); err != nil {
 				return err
 			}
+
+			vector.Entries[i] = entry
+
 		}
 
-		if ptr := vector.Entries[i].ReadCloserForRead; ptr != nil {
-			setData = false
-			*ptr = io.NopCloser(bytes.NewReader(data))
-		}
-
-		if setData {
-			if len(entry.Data) < entry.Size {
-				entry.Data = data
-			} else {
-				copy(entry.Data, data)
-			}
-		}
-
-		if err := entry.setObjectFromData(); err != nil {
-			return err
-		}
-
-		vector.Entries[i] = entry
 	}
 
 	return nil
@@ -276,7 +363,12 @@ func (l *LocalFS) read(ctx context.Context, vector *IOVector) error {
 
 func (l *LocalFS) List(ctx context.Context, dirPath string) (ret []DirEntry, err error) {
 
-	nativePath := l.toNativeFilePath(dirPath)
+	_, path, err := splitPath(l.name, dirPath)
+	if err != nil {
+		return nil, err
+	}
+	nativePath := l.toNativeFilePath(path)
+
 	f, err := os.Open(nativePath)
 	if os.IsNotExist(err) {
 		err = nil
@@ -316,23 +408,31 @@ func (l *LocalFS) List(ctx context.Context, dirPath string) (ret []DirEntry, err
 }
 
 func (l *LocalFS) Delete(ctx context.Context, filePath string) error {
-	nativePath := l.toNativeFilePath(filePath)
-	_, err := os.Stat(nativePath)
+	_, path, err := splitPath(l.name, filePath)
+	if err != nil {
+		return err
+	}
+	nativePath := l.toNativeFilePath(path)
+
+	_, err = os.Stat(nativePath)
 	if os.IsNotExist(err) {
 		return ErrFileNotFound
 	}
 	if err != nil {
 		return err
 	}
+
 	err = os.Remove(nativePath)
 	if err != nil {
 		return err
 	}
+
 	parentDir, _ := filepath.Split(nativePath)
 	err = l.syncDir(parentDir)
 	if err != nil {
 		return err
 	}
+
 	return nil
 }
 
@@ -415,19 +515,24 @@ func (l *LocalFS) toNativeFilePath(filePath string) string {
 var _ MutableFileService = new(LocalFS)
 
 func (l *LocalFS) NewMutator(filePath string) (Mutator, error) {
-	// open
-	nativePath := l.toNativeFilePath(filePath)
+	_, path, err := splitPath(l.name, filePath)
+	if err != nil {
+		return nil, err
+	}
+	nativePath := l.toNativeFilePath(path)
 	f, err := os.OpenFile(nativePath, os.O_RDWR, 0644)
 	if os.IsNotExist(err) {
 		return nil, ErrFileNotFound
 	}
 	return &_LocalFSMutator{
-		file: f,
+		osFile:           f,
+		fileWithChecksum: NewFileWithChecksum(f, _BlockContentSize),
 	}, nil
 }
 
 type _LocalFSMutator struct {
-	file *os.File
+	osFile           *os.File
+	fileWithChecksum *FileWithChecksum[*os.File]
 }
 
 func (l *_LocalFSMutator) Mutate(ctx context.Context, entries ...IOEntry) error {
@@ -437,11 +542,11 @@ func (l *_LocalFSMutator) Mutate(ctx context.Context, entries ...IOEntry) error 
 
 		if entry.ReaderForWrite != nil {
 			// seek and copy
-			_, err := l.file.Seek(int64(entry.Offset), 0)
+			_, err := l.fileWithChecksum.Seek(int64(entry.Offset), 0)
 			if err != nil {
 				return err
 			}
-			n, err := io.Copy(l.file, entry.ReaderForWrite)
+			n, err := io.Copy(l.fileWithChecksum, entry.ReaderForWrite)
 			if err != nil {
 				return err
 			}
@@ -451,7 +556,7 @@ func (l *_LocalFSMutator) Mutate(ctx context.Context, entries ...IOEntry) error 
 
 		} else {
 			// WriteAt
-			n, err := l.file.WriteAt(entry.Data, int64(entry.Offset))
+			n, err := l.fileWithChecksum.WriteAt(entry.Data, int64(entry.Offset))
 			if err != nil {
 				return err
 			}
@@ -467,12 +572,12 @@ func (l *_LocalFSMutator) Mutate(ctx context.Context, entries ...IOEntry) error 
 
 func (l *_LocalFSMutator) Close() error {
 	// sync
-	if err := l.file.Sync(); err != nil {
+	if err := l.osFile.Sync(); err != nil {
 		return err
 	}
 
 	// close
-	if err := l.file.Close(); err != nil {
+	if err := l.osFile.Close(); err != nil {
 		return err
 	}
 

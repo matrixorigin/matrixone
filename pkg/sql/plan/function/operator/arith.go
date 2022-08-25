@@ -24,7 +24,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/encoding"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/add"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -68,7 +67,7 @@ func Arith[T1 arithT, T2 arithT](vectors []*vector.Vector, proc *process.Process
 		return nil, err
 	}
 
-	resultValues := encoding.DecodeFixedSlice[T2](resultVector.Data, resultElementSize)
+	resultValues := types.DecodeFixedSlice[T2](resultVector.Data, resultElementSize)
 	nulls.Or(left.Nsp, right.Nsp, resultVector.Nsp)
 	vector.SetCol(resultVector, resultValues)
 	if err = afn(left, right, resultVector); err != nil {
@@ -168,15 +167,11 @@ func DivFloat[T constraints.Float](args []*vector.Vector, proc *process.Process)
 	return Arith[T, T](args, proc, args[0].GetType(), div.NumericDivFloat[T])
 }
 func DivDecimal64(args []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	lv := args[0]
-	resultScale := lv.Typ.Scale
-	resultTyp := types.Type{Oid: types.T_decimal128, Size: types.DECIMAL128_NBYTES, Width: types.DECIMAL128_WIDTH, Scale: resultScale}
+	resultTyp := types.Type{Oid: types.T_decimal128, Size: types.DECIMAL128_NBYTES, Width: types.DECIMAL128_WIDTH, Scale: types.MYSQL_DEFAULT_SCALE}
 	return Arith[types.Decimal64, types.Decimal128](args, proc, resultTyp, div.Decimal64VecDiv)
 }
 func DivDecimal128(args []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	lv := args[0]
-	resultScale := lv.Typ.Scale
-	resultTyp := types.Type{Oid: types.T_decimal128, Size: types.DECIMAL128_NBYTES, Width: types.DECIMAL128_WIDTH, Scale: resultScale}
+	resultTyp := types.Type{Oid: types.T_decimal128, Size: types.DECIMAL128_NBYTES, Width: types.DECIMAL128_WIDTH, Scale: types.MYSQL_DEFAULT_SCALE}
 	return Arith[types.Decimal128, types.Decimal128](args, proc, resultTyp, div.Decimal128VecDiv)
 }
 

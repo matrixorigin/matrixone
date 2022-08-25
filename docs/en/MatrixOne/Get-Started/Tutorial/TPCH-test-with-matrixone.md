@@ -4,7 +4,7 @@ The TPC-H is a decision support benchmark. It consists of a suite of business or
 
 By walking through this tutorial, you'll learn how to complete a TPC-H Test with MatrixOne.
 
-## **Before you begin**
+## **Before you start**
 
 Make sure you have already [installed MatrixOne](../install-standalone-matrixone.md) and [connected to MatrixOne Server](../connect-to-matrixone-server.md).
 

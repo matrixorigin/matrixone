@@ -169,6 +169,10 @@ func (tc *txnOperator) adjust() {
 	}
 }
 
+func (tc *txnOperator) Txn() txn.TxnMeta {
+	return tc.getTxnMeta(false)
+}
+
 func (tc *txnOperator) Snapshot() ([]byte, error) {
 	tc.mu.Lock()
 	defer tc.mu.Unlock()
@@ -367,7 +371,7 @@ func (tc *txnOperator) checkStatus(locked bool) error {
 	}
 
 	if tc.mu.closed {
-		return errTxnClosed
+		return moerr.New(moerr.ErrTxnClosed)
 	}
 	return nil
 }
@@ -475,22 +479,22 @@ func (tc *txnOperator) handleError(result *rpc.SendResult, err error) (*rpc.Send
 func (tc *txnOperator) handleErrorResponse(resp txn.TxnResponse) error {
 	switch resp.Method {
 	case txn.TxnMethod_Read:
-		if err := tc.checkResponseTxnStatusForReadWrite(resp.Txn); err != nil {
+		if err := tc.checkResponseTxnStatusForReadWrite(resp); err != nil {
 			return err
 		}
 		return tc.checkTxnError(resp.TxnError, readTxnErrors)
 	case txn.TxnMethod_Write:
-		if err := tc.checkResponseTxnStatusForReadWrite(resp.Txn); err != nil {
+		if err := tc.checkResponseTxnStatusForReadWrite(resp); err != nil {
 			return err
 		}
 		return tc.checkTxnError(resp.TxnError, writeTxnErrors)
 	case txn.TxnMethod_Commit:
-		if err := tc.checkResponseTxnStatusForCommit(resp.Txn); err != nil {
+		if err := tc.checkResponseTxnStatusForCommit(resp); err != nil {
 			return err
 		}
 		return tc.checkTxnError(resp.TxnError, commitTxnErrors)
 	case txn.TxnMethod_Rollback:
-		if err := tc.checkResponseTxnStatusForRollback(resp.Txn); err != nil {
+		if err := tc.checkResponseTxnStatusForRollback(resp); err != nil {
 			return err
 		}
 		return tc.checkTxnError(resp.TxnError, rollbackTxnErrors)
@@ -501,9 +505,14 @@ func (tc *txnOperator) handleErrorResponse(resp txn.TxnResponse) error {
 	return nil
 }
 
-func (tc *txnOperator) checkResponseTxnStatusForReadWrite(txnMeta *txn.TxnMeta) error {
+func (tc *txnOperator) checkResponseTxnStatusForReadWrite(resp txn.TxnResponse) error {
+	if resp.TxnError != nil {
+		return nil
+	}
+
+	txnMeta := resp.Txn
 	if txnMeta == nil {
-		return errTxnClosed
+		return moerr.New(moerr.ErrTxnClosed)
 	}
 
 	switch txnMeta.Status {
@@ -511,7 +520,7 @@ func (tc *txnOperator) checkResponseTxnStatusForReadWrite(txnMeta *txn.TxnMeta) 
 		return nil
 	case txn.TxnStatus_Aborted, txn.TxnStatus_Aborting,
 		txn.TxnStatus_Committed, txn.TxnStatus_Committing:
-		return errTxnClosed
+		return moerr.New(moerr.ErrTxnClosed)
 	default:
 		tc.logger.Fatal("invalid response status for read or write",
 			util.TxnField(*txnMeta))
@@ -537,9 +546,14 @@ func (tc *txnOperator) checkTxnError(txnError *txn.TxnError, possibleErrorMap ma
 	return nil
 }
 
-func (tc *txnOperator) checkResponseTxnStatusForCommit(txnMeta *txn.TxnMeta) error {
+func (tc *txnOperator) checkResponseTxnStatusForCommit(resp txn.TxnResponse) error {
+	if resp.TxnError != nil {
+		return nil
+	}
+
+	txnMeta := resp.Txn
 	if txnMeta == nil {
-		return errTxnClosed
+		return moerr.New(moerr.ErrTxnClosed)
 	}
 
 	switch txnMeta.Status {
@@ -552,9 +566,14 @@ func (tc *txnOperator) checkResponseTxnStatusForCommit(txnMeta *txn.TxnMeta) err
 	return nil
 }
 
-func (tc *txnOperator) checkResponseTxnStatusForRollback(txnMeta *txn.TxnMeta) error {
+func (tc *txnOperator) checkResponseTxnStatusForRollback(resp txn.TxnResponse) error {
+	if resp.TxnError != nil {
+		return nil
+	}
+
+	txnMeta := resp.Txn
 	if txnMeta == nil {
-		return errTxnClosed
+		return moerr.New(moerr.ErrTxnClosed)
 	}
 
 	switch txnMeta.Status {

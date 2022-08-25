@@ -258,7 +258,9 @@ func testFileService(
 		assert.Equal(t, entries[3].Size, 0)
 		assert.Equal(t, entries[10].IsDir, false)
 		assert.Equal(t, entries[10].Name, "7")
-		assert.Equal(t, entries[10].Size, 7)
+		if _, ok := fs.(ETLFileService); ok {
+			assert.Equal(t, entries[10].Size, 7)
+		}
 
 		entries, err = fs.List(ctx, "abc")
 		assert.Nil(t, err)
@@ -438,6 +440,35 @@ func testFileService(
 
 		assert.Nil(t, vec.Entries[0].Data)
 		assert.Equal(t, []byte("foo"), vec.Entries[1].Data)
+
+	})
+
+	t.Run("named path", func(t *testing.T) {
+		ctx := context.Background()
+		fs := newFS()
+
+		err := fs.Write(ctx, IOVector{
+			FilePath: fs.Name() + ":foo",
+			Entries: []IOEntry{
+				{
+					Size: 4,
+					Data: []byte("1234"),
+				},
+			},
+		})
+		assert.Nil(t, err)
+
+		vec := IOVector{
+			FilePath: "foo",
+			Entries: []IOEntry{
+				{
+					Size: -1,
+				},
+			},
+		}
+		err = fs.Read(ctx, &vec)
+		assert.Nil(t, err)
+		assert.Equal(t, []byte("1234"), vec.Entries[0].Data)
 
 	})
 

@@ -23,8 +23,8 @@ type WrappedService struct {
 	svc *Service
 }
 
-func NewWrappedService(c Config) (*WrappedService, error) {
-	svc, err := NewService(c)
+func NewWrappedService(c Config, opts ...Option) (*WrappedService, error) {
+	svc, err := NewService(c, opts...)
 	if err != nil {
 		return nil, err
 	}

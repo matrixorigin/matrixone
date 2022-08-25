@@ -31,11 +31,11 @@ var _ ie.InternalExecutor = &logOutputExecutor{}
 
 type logOutputExecutor struct{}
 
-func (l logOutputExecutor) Exec(s string, s2 ie.SessionOverrideOptions) error {
+func (l logOutputExecutor) Exec(ctx context.Context, s string, s2 ie.SessionOverrideOptions) error {
 	logutil.Info(s)
 	return nil
 }
-func (l logOutputExecutor) Query(s string, _ ie.SessionOverrideOptions) ie.InternalExecResult {
+func (l logOutputExecutor) Query(ctx context.Context, s string, _ ie.SessionOverrideOptions) ie.InternalExecResult {
 	logutil.Info(s)
 	return nil
 }
@@ -47,7 +47,7 @@ func bootstrap(ctx context.Context) (context.Context, error) {
 	return trace.Init(ctx,
 		trace.WithMOVersion("v0.6.0"),
 		// nodeType like CN/DN/LogService; id maybe in config.
-		trace.WithNode(0, trace.NodeTypeNode),
+		trace.WithNode("node_uuid", trace.NodeTypeNode),
 		// config[enableTrace], default: true
 		trace.EnableTracer(true),
 		// config[traceBatchProcessor], distributed node should use "FileService" in system_vars_config.toml
@@ -153,38 +153,62 @@ func errorUsage(ctx context.Context) {
 
 }
 
+type FunctionRequest struct {
+	trace.SpanContext
+}
+
 type rpcRequest struct {
-	TraceId trace.TraceID
-	SpanId  trace.SpanID
+	message []byte
 }
 type rpcResponse struct {
 	message string
 }
 type rpcServer struct {
 }
-
-func rpcUsage(ctx context.Context) {
-	traceId, spanId := trace.SpanFromContext(ctx).SpanContext().GetIDs()
-	req := &rpcRequest{
-		TraceId: traceId,
-		SpanId:  spanId,
-	}
-	_ = remoteCallFunction(ctx, req)
+type rpcClient struct {
 }
 
-func remoteCallFunction(ctx context.Context, req *rpcRequest) error {
-	s := &rpcServer{}
-	resp, err := s.Function(ctx, req)
+var gServer = &rpcServer{}
+
+func rpcUsage(ctx context.Context) {
+	newCtx, span := trace.Start(ctx, "rpcUsage", trace.WithNewRoot(true))
+	defer span.End()
+	req := &FunctionRequest{
+		SpanContext: trace.SpanFromContext(newCtx).SpanContext(),
+	}
+	logutil2.Info(newCtx, "client call Function")
+	_ = callFunction(newCtx, req)
+}
+
+func callFunction(ctx context.Context, req *FunctionRequest) error {
+	rpcReq := &rpcRequest{message: make([]byte, 16)}
+	if _, err := req.SpanContext.MarshalTo(rpcReq.message); err != nil {
+		logutil.Errorf("callFunction: %v", err)
+		return err
+	}
+
+	client := &rpcClient{}
+	resp, err := client.Function(ctx, rpcReq)
 	logutil2.Infof(ctx, "resp: %s", resp.message)
 	return err
 }
 
+func (s *rpcClient) Function(ctx context.Context, req *rpcRequest) (*rpcResponse, error) {
+	return gServer.Function(ctx, req)
+}
+
 func (s *rpcServer) Function(ctx context.Context, req *rpcRequest) (*rpcResponse, error) {
-	rootCtx := trace.ContextWithSpanContext(ctx, trace.SpanContextWithIDs(req.TraceId, req.SpanId))
+
+	var sc trace.SpanContext
+	if err := sc.Unmarshal(req.message); err != nil {
+		return &rpcResponse{message: "error"}, err
+	}
+	rootCtx := trace.ContextWithSpanContext(ctx, sc)
+	logutil2.Info(rootCtx, "server accept request")
 	newCtx, span := trace.Start(rootCtx, "Function")
 	defer span.End()
 
-	logutil2.Info(newCtx, "do Function")
+	logutil2.Info(newCtx, "server do Function, have same TraceId from client.")
 	return &rpcResponse{message: "success"}, nil
 }
 

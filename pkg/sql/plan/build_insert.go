@@ -16,12 +16,14 @@ package plan
 
 import (
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/errno"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/errors"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 )
 
 func buildInsert(stmt *tree.Insert, ctx CompilerContext) (p *Plan, err error) {
@@ -50,6 +52,11 @@ func buildInsertValues(stmt *tree.Insert, ctx CompilerContext) (p *Plan, err err
 	_, tblRef := ctx.Resolve(dbName, tblName)
 	if tblRef == nil {
 		return nil, errors.New("", fmt.Sprintf("Invalid table name: %s", tree.String(stmt.Table, dialect.MYSQL)))
+	}
+	if tblRef.TableType == catalog.SystemExternalRel {
+		return nil, fmt.Errorf("the external table '%s' is not support insert operation", tblName)
+	} else if tblRef.TableType == catalog.SystemViewRel {
+		return nil, fmt.Errorf("view is not support insert operation")
 	}
 
 	// build columns
@@ -218,6 +225,12 @@ func buildInsertSelect(stmt *tree.Insert, ctx CompilerContext) (p *Plan, err err
 	if err != nil {
 		return nil, err
 	}
+	if tableDef.TableType == catalog.SystemExternalRel {
+		return nil, fmt.Errorf("the external table is not support insert operation")
+	} else if tableDef.TableType == catalog.SystemViewRel {
+		return nil, fmt.Errorf("view is not support insert operation")
+	}
+
 	valueCount := len(stmt.Columns)
 	if len(stmt.Columns) == 0 {
 		valueCount = len(tableDef.Cols)

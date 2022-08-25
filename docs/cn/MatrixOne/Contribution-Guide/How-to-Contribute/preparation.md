@@ -15,8 +15,8 @@
 
 ### 建设情况
 
-目前，MatrixOne v0.3.0 已经发布了，您可以通过[版本发布指南](./../../Release-Notes/v0.3.0.md)来了解最新的发布信息，其中包含了最新的修改与优化。
-同时，我们当前正在开发 v0.4.0和 v0.5.0版本，对应的工作任务在GitHub的milestone[0.4.0](https://github.com/matrixorigin/matrixone/milestone/5)中列出。
+目前，MatrixOne v0.5.1 已经发布了，您可以通过[版本发布指南](./../../Release-Notes/v0.5.1.md)来了解最新的发布信息，其中包含了最新的修改与优化。
+同时，我们当前正在开发 v0.6.0 版本，对应的工作任务在GitHub的milestone[0.6.0](https://github.com/matrixorigin/matrixone/milestone/8)中列出。
 关于长期的项目规划，请参阅[MatrixOne roadmap](https://github.com/matrixorigin/matrixone/issues/613)。
 
 ## **你可以做些什么？**

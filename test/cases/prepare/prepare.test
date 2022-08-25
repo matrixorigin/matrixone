@@ -14,6 +14,33 @@ delete from t1 where a > 3;
 execute stmt1 using @a_var;
 deallocate prepare stmt1;
 execute stmt1 using @a_var;
+
+prepare stmt1 from 'update t1 set a=999 where b = ?';
+set @b_var = 33;
+execute stmt1 using @b_var;
+select * from t1;
+deallocate prepare stmt1;
+
+prepare stmt1 from 'delete from t1 where b = ?';
+execute stmt1 using @b_var;
+select * from t1;
+deallocate prepare stmt1;
+
+prepare stmt1 from "insert into t1 values (?, ?), (?, 99)";
+set @a_var=5;
+set @b_var=55;
+set @c_var=9;
+execute stmt1 using @a_var, @b_var, @c_var;
+select * from t1;
+deallocate prepare stmt1;
+
+drop table t1;
+
+create table t1(a timestamp);
+prepare stmt1 from "insert into t1 values (current_timestamp())";
+execute stmt1;
+execute stmt1;
+select count(*) from (select distinct a from t1) t;
 drop table t1;
 
 prepare stmt2 from 'select @var_t1';

@@ -17,7 +17,7 @@ package db
 import (
 	"bytes"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"os"
 
 	"path"
@@ -69,7 +69,7 @@ func (replayer *Replayer) PreReplayWal() {
 			return catalog.ErrStopCurrRecur
 		}
 		dropCommit := entry.TreeMaxDropCommitEntry()
-		if dropCommit != nil && dropCommit.LogIndex.LSN <= replayer.db.Wal.GetCheckpointed() {
+		if dropCommit != nil && dropCommit.GetLogIndex()[0].LSN <= replayer.db.Wal.GetCheckpointed() {
 			return catalog.ErrStopCurrRecur
 		}
 		entry.InitData(replayer.DataFactory)
@@ -119,7 +119,7 @@ func (replayer *Replayer) PostReplayWal() {
 		if entry.IsActive() {
 			return
 		}
-		if entry.GetLogIndex().LSN > replayer.db.Wal.GetCheckpointed() {
+		if entry.GetLogIndex()[0].LSN > replayer.db.Wal.GetCheckpointed() {
 			return
 		}
 		if err = entry.GetCatalog().RemoveEntry(entry); err != nil {
@@ -132,7 +132,7 @@ func (replayer *Replayer) PostReplayWal() {
 		if entry.IsActive() {
 			return
 		}
-		if entry.GetLogIndex().LSN > replayer.db.Wal.GetCheckpointed() {
+		if entry.GetLogIndex()[0].LSN > replayer.db.Wal.GetCheckpointed() {
 			return
 		}
 		if err = entry.GetDB().RemoveEntry(entry); err != nil {
@@ -148,7 +148,7 @@ func (replayer *Replayer) PostReplayWal() {
 			}
 			return
 		}
-		if entry.GetLogIndex().LSN > replayer.db.Wal.GetCheckpointed() {
+		if entry.GetLogIndex()[0].LSN > replayer.db.Wal.GetCheckpointed() {
 			if !entry.GetTable().IsVirtual() {
 				activeSegs[entry.ID] = entry
 			}
@@ -164,7 +164,7 @@ func (replayer *Replayer) PostReplayWal() {
 		if entry.IsActive() {
 			return
 		}
-		if entry.GetLogIndex().LSN > replayer.db.Wal.GetCheckpointed() {
+		if entry.GetLogIndex()[0].LSN > replayer.db.Wal.GetCheckpointed() {
 			return
 		}
 		if err = gcBlockClosure(entry, GCType_Block)(); err != nil {

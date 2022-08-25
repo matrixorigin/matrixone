@@ -16,9 +16,10 @@ package updates
 
 import (
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
 	"sync"
 	"sync/atomic"
+
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -31,7 +32,7 @@ import (
 
 type DeleteChain struct {
 	*sync.RWMutex
-	*common.Link
+	*common.SortedDList
 	mvcc *MVCCHandle
 	cnt  uint32
 }
@@ -41,9 +42,9 @@ func NewDeleteChain(rwlocker *sync.RWMutex, mvcc *MVCCHandle) *DeleteChain {
 		rwlocker = new(sync.RWMutex)
 	}
 	chain := &DeleteChain{
-		RWMutex: rwlocker,
-		Link:    new(common.Link),
-		mvcc:    mvcc,
+		RWMutex:     rwlocker,
+		SortedDList: new(common.SortedDList),
+		mvcc:        mvcc,
 	}
 	return chain
 }
@@ -150,7 +151,7 @@ func (chain *DeleteChain) RemoveNodeLocked(node txnif.DeleteNode) {
 	chain.Delete(node.(*DeleteNode).DLNode)
 }
 
-func (chain *DeleteChain) DepthLocked() int { return chain.Link.Depth() }
+func (chain *DeleteChain) DepthLocked() int { return chain.SortedDList.Depth() }
 
 func (chain *DeleteChain) AddNodeLocked(txn txnif.AsyncTxn, deleteType handle.DeleteType) txnif.DeleteNode {
 	node := NewDeleteNode(txn, deleteType)

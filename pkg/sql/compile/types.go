@@ -16,15 +16,21 @@ package compile
 
 import (
 	"context"
+	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+)
+
+type (
+	TxnOperator = client.TxnOperator
 )
 
 // type of scope
@@ -44,13 +50,6 @@ const (
 	Update
 	InsertValues
 )
-
-type EncodeSource struct {
-	SchemaName   string
-	RelationName string
-	Attributes   []string
-	Bat          *batch.Batch
-}
 
 // Source contains information of a relation which will be used in execution,
 type Source struct {
@@ -76,6 +75,9 @@ type Scope struct {
 	// 2 -  execution unit that requires remote call.
 	Magic int
 
+	// IsEnd means the pipeline is join
+	IsJoin bool
+
 	// IsEnd means the pipeline is end
 	IsEnd bool
 
@@ -100,6 +102,12 @@ type anaylze struct {
 	curr      int
 	qry       *plan.Query
 	analInfos []*process.AnalyzeInfo
+}
+
+type Server struct {
+	sync.Mutex
+	curr uint64
+	mp   map[uint64]*process.WaitRegister
 }
 
 // Compile contains all the information needed for compilation.

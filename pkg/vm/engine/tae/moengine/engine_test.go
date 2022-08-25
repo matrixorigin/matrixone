@@ -16,14 +16,15 @@ package moengine
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+
 	mobat "github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
@@ -57,11 +58,12 @@ func TestEngine(t *testing.T) {
 	e := NewEngine(tae)
 	txn, err := e.StartTxn(nil)
 	assert.Nil(t, err)
-	err = e.Create(ctx, "db", engine.Snapshot(txn.GetCtx()))
+	txnOperator := TxnToTxnOperator(txn)
+	err = e.Create(ctx, "db", txnOperator)
 	assert.Nil(t, err)
-	names, _ := e.Databases(ctx, engine.Snapshot(txn.GetCtx()))
+	names, _ := e.Databases(ctx, txnOperator)
 	assert.Equal(t, 2, len(names))
-	dbase, err := e.Database(ctx, "db", engine.Snapshot(txn.GetCtx()))
+	dbase, err := e.Database(ctx, "db", txnOperator)
 	assert.Nil(t, err)
 
 	schema := catalog.MockSchema(13, 12)
@@ -103,7 +105,7 @@ func TestEngine(t *testing.T) {
 	rel, err := dbase.Relation(ctx, schema.Name)
 	assert.Nil(t, err)
 	rDefs, _ := rel.TableDefs(ctx)
-	assert.Equal(t, 14, len(rDefs))
+	assert.Equal(t, 15, len(rDefs))
 	rAttr := rDefs[5].(*engine.AttributeDef).Attr
 	assert.Equal(t, true, rAttr.Default.NullAbility)
 	rAttr = rDefs[6].(*engine.AttributeDef).Attr
@@ -119,7 +121,8 @@ func TestEngine(t *testing.T) {
 	assert.Nil(t, txn.Commit())
 	txn, err = e.StartTxn(nil)
 	assert.Nil(t, err)
-	dbase, err = e.Database(ctx, "db", engine.Snapshot(txn.GetCtx()))
+	txnOperator = TxnToTxnOperator(txn)
+	dbase, err = e.Database(ctx, "db", txnOperator)
 	assert.Nil(t, err)
 	rel, err = dbase.Relation(ctx, schema.Name)
 	assert.Nil(t, err)
@@ -135,7 +138,8 @@ func TestEngine(t *testing.T) {
 
 	txn, err = e.StartTxn(nil)
 	assert.Nil(t, err)
-	dbase, err = e.Database(ctx, "db", engine.Snapshot(txn.GetCtx()))
+	txnOperator = TxnToTxnOperator(txn)
+	dbase, err = e.Database(ctx, "db", txnOperator)
 	assert.Nil(t, err)
 	rel, err = dbase.Relation(ctx, schema.Name)
 	assert.Nil(t, err)
@@ -159,11 +163,12 @@ func TestEngineAllType(t *testing.T) {
 	e := NewEngine(tae)
 	txn, err := e.StartTxn(nil)
 	assert.Nil(t, err)
-	err = e.Create(ctx, "db", engine.Snapshot(txn.GetCtx()))
+	txnOperator := TxnToTxnOperator(txn)
+	err = e.Create(ctx, "db", txnOperator)
 	assert.Nil(t, err)
-	names, _ := e.Databases(ctx, engine.Snapshot(txn.GetCtx()))
+	names, _ := e.Databases(ctx, txnOperator)
 	assert.Equal(t, 2, len(names))
-	dbase, err := e.Database(ctx, "db", engine.Snapshot(txn.GetCtx()))
+	dbase, err := e.Database(ctx, "db", txnOperator)
 	assert.Nil(t, err)
 
 	schema := catalog.MockSchemaAll(18, 12)
@@ -205,7 +210,7 @@ func TestEngineAllType(t *testing.T) {
 	rel, err := dbase.Relation(ctx, schema.Name)
 	assert.Nil(t, err)
 	rDefs, _ := rel.TableDefs(ctx)
-	assert.Equal(t, 19, len(rDefs))
+	assert.Equal(t, 20, len(rDefs))
 	rAttr := rDefs[5].(*engine.AttributeDef).Attr
 	assert.Equal(t, true, rAttr.Default.NullAbility)
 	rAttr = rDefs[6].(*engine.AttributeDef).Attr
@@ -220,7 +225,8 @@ func TestEngineAllType(t *testing.T) {
 	assert.Nil(t, txn.Commit())
 	txn, err = e.StartTxn(nil)
 	assert.Nil(t, err)
-	dbase, err = e.Database(ctx, "db", engine.Snapshot(txn.GetCtx()))
+	txnOperator = TxnToTxnOperator(txn)
+	dbase, err = e.Database(ctx, "db", txnOperator)
 	assert.Nil(t, err)
 	rel, err = dbase.Relation(ctx, schema.Name)
 	assert.Nil(t, err)
@@ -236,7 +242,8 @@ func TestEngineAllType(t *testing.T) {
 
 	txn, err = e.StartTxn(nil)
 	assert.Nil(t, err)
-	dbase, err = e.Database(ctx, "db", engine.Snapshot(txn.GetCtx()))
+	txnOperator = TxnToTxnOperator(txn)
+	dbase, err = e.Database(ctx, "db", txnOperator)
 	assert.Nil(t, err)
 	rel, err = dbase.Relation(ctx, schema.Name)
 	assert.Nil(t, err)
@@ -258,7 +265,8 @@ func TestEngineAllType(t *testing.T) {
 	assert.Nil(t, txn.Commit())
 	txn, err = e.StartTxn(nil)
 	assert.Nil(t, err)
-	dbase, err = e.Database(ctx, "db", engine.Snapshot(txn.GetCtx()))
+	txnOperator = TxnToTxnOperator(txn)
+	dbase, err = e.Database(ctx, "db", txnOperator)
 	assert.Nil(t, err)
 	rel, err = dbase.Relation(ctx, schema.Name)
 	assert.Nil(t, err)
@@ -275,11 +283,12 @@ func TestTxnRelation_GetHideKey(t *testing.T) {
 	e := NewEngine(tae)
 	txn, err := e.StartTxn(nil)
 	assert.Nil(t, err)
-	err = e.Create(ctx, "db", engine.Snapshot(txn.GetCtx()))
+	txnOperator := TxnToTxnOperator(txn)
+	err = e.Create(ctx, "db", txnOperator)
 	assert.Nil(t, err)
-	names, _ := e.Databases(ctx, engine.Snapshot(txn.GetCtx()))
+	names, _ := e.Databases(ctx, txnOperator)
 	assert.Equal(t, 2, len(names))
-	dbase, err := e.Database(ctx, "db", engine.Snapshot(txn.GetCtx()))
+	dbase, err := e.Database(ctx, "db", txnOperator)
 	assert.Nil(t, err)
 
 	schema := catalog.MockSchema(13, 15)
@@ -302,7 +311,8 @@ func TestTxnRelation_GetHideKey(t *testing.T) {
 	assert.Nil(t, txn.Commit())
 	txn, err = e.StartTxn(nil)
 	assert.Nil(t, err)
-	dbase, err = e.Database(ctx, "db", engine.Snapshot(txn.GetCtx()))
+	txnOperator = TxnToTxnOperator(txn)
+	dbase, err = e.Database(ctx, "db", txnOperator)
 	assert.Nil(t, err)
 	rel, err = dbase.Relation(ctx, schema.Name)
 	assert.Nil(t, err)
@@ -320,7 +330,8 @@ func TestTxnRelation_GetHideKey(t *testing.T) {
 	}
 	txn, err = e.StartTxn(nil)
 	assert.Nil(t, err)
-	dbase, err = e.Database(ctx, "db", engine.Snapshot(txn.GetCtx()))
+	txnOperator = TxnToTxnOperator(txn)
+	dbase, err = e.Database(ctx, "db", txnOperator)
 	assert.Nil(t, err)
 	rel, err = dbase.Relation(ctx, schema.Name)
 	assert.Nil(t, err)
@@ -333,7 +344,8 @@ func TestTxnRelation_GetHideKey(t *testing.T) {
 	assert.Nil(t, txn.Commit())
 	txn, err = e.StartTxn(nil)
 	assert.Nil(t, err)
-	dbase, err = e.Database(ctx, "db", engine.Snapshot(txn.GetCtx()))
+	txnOperator = TxnToTxnOperator(txn)
+	dbase, err = e.Database(ctx, "db", txnOperator)
 	assert.Nil(t, err)
 	rel, err = dbase.Relation(ctx, schema.Name)
 	assert.Nil(t, err)
@@ -358,11 +370,12 @@ func TestTxnRelation_Update(t *testing.T) {
 	e := NewEngine(tae)
 	txn, err := e.StartTxn(nil)
 	assert.Nil(t, err)
-	err = e.Create(ctx, "db", engine.Snapshot(txn.GetCtx()))
+	txnOperator := TxnToTxnOperator(txn)
+	err = e.Create(ctx, "db", txnOperator)
 	assert.Nil(t, err)
-	names, _ := e.Databases(ctx, engine.Snapshot(txn.GetCtx()))
+	names, _ := e.Databases(ctx, txnOperator)
 	assert.Equal(t, 2, len(names))
-	dbase, err := e.Database(ctx, "db", engine.Snapshot(txn.GetCtx()))
+	dbase, err := e.Database(ctx, "db", txnOperator)
 	assert.Nil(t, err)
 
 	schema := catalog.MockSchema(13, 2)
@@ -370,7 +383,7 @@ func TestTxnRelation_Update(t *testing.T) {
 	assert.NoError(t, err)
 	err = dbase.Create(ctx, schema.Name, defs)
 	assert.Nil(t, err)
-	dbase, err = e.Database(ctx, "db", engine.Snapshot(txn.GetCtx()))
+	dbase, err = e.Database(ctx, "db", txnOperator)
 	assert.Nil(t, err)
 	rel, err := dbase.Relation(ctx, schema.Name)
 	assert.Nil(t, err)
@@ -384,7 +397,8 @@ func TestTxnRelation_Update(t *testing.T) {
 	assert.Nil(t, txn.Commit())
 	txn, err = e.StartTxn(nil)
 	assert.Nil(t, err)
-	dbase, err = e.Database(ctx, "db", engine.Snapshot(txn.GetCtx()))
+	txnOperator = TxnToTxnOperator(txn)
+	dbase, err = e.Database(ctx, "db", txnOperator)
 	assert.Nil(t, err)
 	rel, err = dbase.Relation(ctx, schema.Name)
 	assert.Nil(t, err)
@@ -411,7 +425,8 @@ func TestTxnRelation_Update(t *testing.T) {
 	update.Vecs[2].Col.([]int32)[1] = 10
 	txn, err = e.StartTxn(nil)
 	assert.Nil(t, err)
-	dbase, err = e.Database(ctx, "db", engine.Snapshot(txn.GetCtx()))
+	txnOperator = TxnToTxnOperator(txn)
+	dbase, err = e.Database(ctx, "db", txnOperator)
 	assert.Nil(t, err)
 	rel, err = dbase.Relation(ctx, schema.Name)
 	assert.Nil(t, err)
@@ -421,7 +436,8 @@ func TestTxnRelation_Update(t *testing.T) {
 
 	txn, err = e.StartTxn(nil)
 	assert.Nil(t, err)
-	dbase, err = e.Database(ctx, "db", engine.Snapshot(txn.GetCtx()))
+	txnOperator = TxnToTxnOperator(txn)
+	dbase, err = e.Database(ctx, "db", txnOperator)
 	assert.Nil(t, err)
 	rel, err = dbase.Relation(ctx, schema.Name)
 	assert.Nil(t, err)
@@ -449,7 +465,8 @@ func TestTxnRelation_Update(t *testing.T) {
 	e = NewEngine(tae)
 	txn, err = e.StartTxn(nil)
 	assert.Nil(t, err)
-	dbase, err = e.Database(ctx, "db", engine.Snapshot(txn.GetCtx()))
+	txnOperator = TxnToTxnOperator(txn)
+	dbase, err = e.Database(ctx, "db", txnOperator)
 	assert.Nil(t, err)
 	rel, err = dbase.Relation(ctx, schema.Name)
 	assert.Nil(t, err)
@@ -476,7 +493,8 @@ func TestTxnRelation_Update(t *testing.T) {
 	updatePK.Vecs[2].Col.([]int32)[0] = 20
 	txn, err = e.StartTxn(nil)
 	assert.Nil(t, err)
-	dbase, err = e.Database(ctx, "db", engine.Snapshot(txn.GetCtx()))
+	txnOperator = TxnToTxnOperator(txn)
+	dbase, err = e.Database(ctx, "db", txnOperator)
 	assert.Nil(t, err)
 	rel, err = dbase.Relation(ctx, schema.Name)
 	assert.Nil(t, err)
@@ -487,7 +505,7 @@ func TestTxnRelation_Update(t *testing.T) {
 
 func TestCopy1(t *testing.T) {
 	testutils.EnsureNoLeak(t)
-	t1 := types.Type_VARCHAR.ToType()
+	t1 := types.T_varchar.ToType()
 	v1 := containers.MockVector(t1, 10, false, true, nil)
 	defer v1.Close()
 	v1.Update(5, types.Null{})
@@ -496,7 +514,7 @@ func TestCopy1(t *testing.T) {
 		assert.Equal(t, v1.Get(i), GetValue(mv1, uint32(i)))
 	}
 
-	t2 := types.Type_DATE.ToType()
+	t2 := types.T_date.ToType()
 	v2 := containers.MockVector(t2, 20, false, true, nil)
 	defer v2.Close()
 	v2.Update(6, types.Null{})
@@ -583,11 +601,12 @@ func TestSysRelation(t *testing.T) {
 	e := NewEngine(tae)
 	txn, err := e.StartTxn(nil)
 	assert.Nil(t, err)
-	err = e.Create(ctx, catalog.SystemTable_DB_Name, engine.Snapshot(txn.GetCtx()))
+	txnOperator := TxnToTxnOperator(txn)
+	err = e.Create(ctx, catalog.SystemTable_DB_Name, txnOperator)
 	assert.Nil(t, err)
-	names, _ := e.Databases(ctx, engine.Snapshot(txn.GetCtx()))
+	names, _ := e.Databases(ctx, txnOperator)
 	assert.Equal(t, 2, len(names))
-	dbase, err := e.Database(ctx, catalog.SystemTable_DB_Name, engine.Snapshot(txn.GetCtx()))
+	dbase, err := e.Database(ctx, catalog.SystemTable_DB_Name, txnOperator)
 	assert.Nil(t, err)
 	schema := catalog.MockSchema(13, 12)
 	checkSysTable(t, catalog.SystemTable_DB_Name, dbase, txn, 1, schema)

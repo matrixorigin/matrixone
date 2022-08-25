@@ -34,15 +34,15 @@ const (
 	defaultServiceAddress = "0.0.0.0:32000"
 	defaultRaftAddress    = "0.0.0.0:32001"
 	defaultGossipAddress  = "0.0.0.0:32002"
+
+	defaultGossipProbeInterval = 50 * time.Millisecond
+	defaultHeartbeatInterval   = time.Second
+	defaultLogDBBufferSize     = 768 * 1024
 )
 
 var (
 	ErrInvalidBootstrapConfig = moerr.NewError(moerr.BAD_CONFIGURATION, "invalid bootstrap configuration")
 	ErrInvalidConfig          = moerr.NewError(moerr.BAD_CONFIGURATION, "invalid log configuration")
-)
-
-const (
-	defaultHeartbeatInterval = time.Second
 )
 
 // Config defines the Configurations supported by the Log Service.
@@ -71,6 +71,12 @@ type Config struct {
 	RaftAddress string `toml:"raft-address"`
 	// RaftListenAddress is the local listen address of the RaftAddress.
 	RaftListenAddress string `toml:"raft-listen-address"`
+	// UseTeeLogDB enables the log service to use tee based LogDB which is backed
+	// by both a pebble and a tan based LogDB. This field should only be set to
+	// true during testing.
+	UseTeeLogDB bool `toml:"use-tee-logdb"`
+	// LogDBBufferSize is the size of the logdb buffer in bytes.
+	LogDBBufferSize uint64 `toml:"logdb-buffer-size"`
 	// GossipAddress is the address used for accepting gossip communication.
 	GossipAddress string `toml:"gossip-address"`
 	// GossipListenAddress is the local listen address of the GossipAddress
@@ -78,6 +84,8 @@ type Config struct {
 	// GossipSeedAddresses is list of seed addresses that are used for
 	// introducing the local node into the gossip network.
 	GossipSeedAddresses []string `toml:"gossip-seed-addresses"`
+	// GossipProbeInternval how often gossip nodes probe each other.
+	GossipProbeInterval toml.Duration `toml:"gossip-probe-interval"`
 	// HeartbeatInterval is the interval of how often log service node should be
 	// sending heartbeat message to the HAKeeper.
 	HeartbeatInterval toml.Duration `toml:"logservice-heartbeat-interval"`
@@ -133,10 +141,10 @@ type Config struct {
 		// If HAKeeper does not receive two heartbeat within LogStoreTimeout,
 		// it regards the log store as down.
 		LogStoreTimeout toml.Duration `toml:"log-store-timeout"`
-		// DnStoreTimeout is the actual time limit between a dn store's heartbeat.
-		// If HAKeeper does not receive two heartbeat within DnStoreTimeout,
+		// DNStoreTimeout is the actual time limit between a dn store's heartbeat.
+		// If HAKeeper does not receive two heartbeat within DNStoreTimeout,
 		// it regards the dn store as down.
-		DnStoreTimeout toml.Duration `toml:"dn-store-timeout"`
+		DNStoreTimeout toml.Duration `toml:"dn-store-timeout"`
 	}
 
 	// HAKeeperClientConfig is the config for HAKeeperClient
@@ -150,7 +158,7 @@ func (c *Config) GetHAKeeperConfig() hakeeper.Config {
 	return hakeeper.Config{
 		TickPerSecond:   c.HAKeeperConfig.TickPerSecond,
 		LogStoreTimeout: c.HAKeeperConfig.LogStoreTimeout.Duration,
-		DnStoreTimeout:  c.HAKeeperConfig.DnStoreTimeout.Duration,
+		DNStoreTimeout:  c.HAKeeperConfig.DNStoreTimeout.Duration,
 	}
 }
 
@@ -227,6 +235,9 @@ func (c *Config) Validate() error {
 	if len(c.RaftAddress) == 0 && len(c.RaftListenAddress) != 0 {
 		return errors.Wrapf(ErrInvalidConfig, "RaftAddress not set")
 	}
+	if c.LogDBBufferSize == 0 {
+		return errors.Wrapf(ErrInvalidConfig, "LogDBBufferSize not set")
+	}
 	if len(c.GossipAddress) == 0 && len(c.GossipListenAddress) != 0 {
 		return errors.Wrapf(ErrInvalidConfig, "GossipAddress not set")
 	}
@@ -239,8 +250,11 @@ func (c *Config) Validate() error {
 	if c.HAKeeperConfig.LogStoreTimeout.Duration == 0 {
 		return errors.Wrapf(ErrInvalidConfig, "LogStoreTimeout not set")
 	}
-	if c.HAKeeperConfig.DnStoreTimeout.Duration == 0 {
-		return errors.Wrapf(ErrInvalidConfig, "DnStoreTimeout not set")
+	if c.HAKeeperConfig.DNStoreTimeout.Duration == 0 {
+		return errors.Wrapf(ErrInvalidConfig, "DNStoreTimeout not set")
+	}
+	if c.GossipProbeInterval.Duration == 0 {
+		return errors.Wrapf(ErrInvalidConfig, "GossipProbeInterval not set")
 	}
 	// validate BootstrapConfig
 	if c.BootstrapConfig.BootstrapCluster {
@@ -293,6 +307,9 @@ func (c *Config) Fill() {
 	} else if len(c.RaftAddress) != 0 && len(c.RaftListenAddress) == 0 {
 		c.RaftListenAddress = c.RaftAddress
 	}
+	if c.LogDBBufferSize == 0 {
+		c.LogDBBufferSize = defaultLogDBBufferSize
+	}
 	if len(c.GossipAddress) == 0 {
 		c.GossipAddress = defaultGossipAddress
 		c.GossipListenAddress = defaultGossipAddress
@@ -305,8 +322,8 @@ func (c *Config) Fill() {
 	if c.HAKeeperConfig.LogStoreTimeout.Duration == 0 {
 		c.HAKeeperConfig.LogStoreTimeout.Duration = hakeeper.DefaultLogStoreTimeout
 	}
-	if c.HAKeeperConfig.DnStoreTimeout.Duration == 0 {
-		c.HAKeeperConfig.DnStoreTimeout.Duration = hakeeper.DefaultDnStoreTimeout
+	if c.HAKeeperConfig.DNStoreTimeout.Duration == 0 {
+		c.HAKeeperConfig.DNStoreTimeout.Duration = hakeeper.DefaultDNStoreTimeout
 	}
 	if c.HeartbeatInterval.Duration == 0 {
 		c.HeartbeatInterval.Duration = defaultHeartbeatInterval
@@ -317,7 +334,9 @@ func (c *Config) Fill() {
 	if c.HAKeeperCheckInterval.Duration == 0 {
 		c.HAKeeperCheckInterval.Duration = hakeeper.CheckDuration
 	}
-
+	if c.GossipProbeInterval.Duration == 0 {
+		c.GossipProbeInterval.Duration = defaultGossipProbeInterval
+	}
 }
 
 // HAKeeperClientConfig is the config for HAKeeper clients.

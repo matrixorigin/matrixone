@@ -29,6 +29,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 )
@@ -188,16 +189,16 @@ func TestHAKeeperClientSendCNHeartbeat(t *testing.T) {
 
 		cd, err := c1.GetClusterDetails(ctx)
 		require.NoError(t, err)
-		cn := pb.CNNode{
+		cn := pb.CNStore{
 			UUID:           s.ID(),
 			ServiceAddress: "addr1",
 		}
-		dn := pb.DNNode{
+		dn := pb.DNStore{
 			UUID:           s.ID(),
 			ServiceAddress: "addr2",
 		}
-		assert.Equal(t, []pb.CNNode{cn}, cd.CNNodes)
-		assert.Equal(t, []pb.DNNode{dn}, cd.DNNodes)
+		assert.Equal(t, []pb.CNStore{cn}, cd.CNStores)
+		assert.Equal(t, []pb.DNStore{dn}, cd.DNStores)
 	}
 	runServiceTest(t, true, true, fn)
 }
@@ -303,13 +304,21 @@ func testNotHAKeeperErrorIsHandled(t *testing.T, fn func(*testing.T, *managedHAK
 		DisableWorkers:      true,
 	}
 	cfg1.Fill()
-	service1, err := NewService(cfg1)
+	service1, err := NewService(cfg1,
+		WithBackendFilter(func(msg morpc.Message, backendAddr string) bool {
+			return true
+		}),
+	)
 	require.NoError(t, err)
 	defer func() {
 		assert.NoError(t, service1.Close())
 	}()
 	cfg2.Fill()
-	service2, err := NewService(cfg2)
+	service2, err := NewService(cfg2,
+		WithBackendFilter(func(msg morpc.Message, backendAddr string) bool {
+			return true
+		}),
+	)
 	require.NoError(t, err)
 	defer func() {
 		assert.NoError(t, service2.Close())

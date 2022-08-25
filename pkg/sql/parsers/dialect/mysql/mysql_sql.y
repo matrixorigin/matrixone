@@ -48,6 +48,8 @@ import (
     rowFormatType tree.RowFormatType
     matchType tree.MatchType
     attributeReference *tree.AttributeReference
+    loadParam *tree.ExternParam
+    tailParam *tree.TailParameter
 
     from *tree.From
     where *tree.Where
@@ -241,7 +243,7 @@ import (
 %token <str> DYNAMIC COMPRESSED REDUNDANT COMPACT FIXED COLUMN_FORMAT AUTO_RANDOM
 %token <str> RESTRICT CASCADE ACTION PARTIAL SIMPLE CHECK ENFORCED
 %token <str> RANGE LIST ALGORITHM LINEAR PARTITIONS SUBPARTITION SUBPARTITIONS
-%token <str> TYPE ANY SOME
+%token <str> TYPE ANY SOME EXTERNAL LOCALFILE URL S3OPTION
 %token <str> PREPARE DEALLOCATE
 
 // MO table option
@@ -324,7 +326,7 @@ import (
 %type <statements> stmt_list
 %type <statement> create_stmt insert_stmt delete_stmt drop_stmt alter_stmt
 %type <statement> delete_without_using_stmt delete_with_using_stmt
-%type <statement> drop_ddl_stmt drop_database_stmt drop_table_stmt drop_index_stmt drop_prepare_stmt
+%type <statement> drop_ddl_stmt drop_database_stmt drop_table_stmt drop_index_stmt drop_prepare_stmt drop_view_stmt
 %type <statement> drop_account_stmt drop_role_stmt drop_user_stmt
 %type <statement> create_account_stmt create_user_stmt create_role_stmt
 %type <statement> create_ddl_stmt create_table_stmt create_database_stmt create_index_stmt create_view_stmt
@@ -340,6 +342,8 @@ import (
 %type <statement> analyze_stmt
 %type <statement> prepare_stmt prepareable_stmt deallocate_stmt execute_stmt
 %type <exportParm> export_data_param_opt
+%type <loadParam> load_param_opt load_param_opt_2
+%type <tailParam> tail_param_opt
 
 %type <select> select_stmt select_no_parens
 %type <selectStatement> simple_select select_with_parens simple_select_clause
@@ -390,7 +394,7 @@ import (
 %type <funcExpr> function_call_json
 
 %type <unresolvedName> column_name column_name_unresolved
-%type <strs> enum_values force_quote_opt force_quote_list
+%type <strs> enum_values force_quote_opt force_quote_list s3param s3params
 %type <str> sql_id charset_keyword db_name
 %type <str> not_keyword func_not_keyword
 %type <str> reserved_keyword non_reserved_keyword
@@ -575,19 +579,15 @@ stmt:
     }
 
 load_data_stmt:
-    LOAD DATA local_opt INFILE STRING duplicate_opt INTO TABLE table_name load_fields load_lines ignore_lines columns_or_variable_list_opt load_set_spec_opt
+    LOAD DATA local_opt load_param_opt duplicate_opt INTO TABLE table_name tail_param_opt
     {
         $$ = &tree.Load{
             Local: $3,
-            File: $5,
-            DuplicateHandling: $6,
-            Table: $9,
-            Fields: $10,
-            Lines: $11,
-            IgnoredLines: uint64($12),
-            ColumnList: $13,
-            Assignments: $14,
+            Param: $4,
+            DuplicateHandling: $5,
+            Table: $8,
         }
+        $$.(*tree.Load).Param.Tail = $9
     }
 
 load_set_spec_opt:
@@ -2118,6 +2118,11 @@ show_create_stmt:
     {
         $$ = &tree.ShowCreateTable{Name: $4}
     }
+| 
+    SHOW CREATE VIEW table_name_unresolved
+    {
+        $$ = &tree.ShowCreateView{Name: $4}
+    }
 |   SHOW CREATE DATABASE not_exists_opt db_name
     {
         $$ = &tree.ShowCreateDatabase{IfNotExists: $4, Name: $5}
@@ -2157,6 +2162,7 @@ drop_ddl_stmt:
     drop_database_stmt
 |   drop_prepare_stmt
 |   drop_table_stmt
+|   drop_view_stmt
 |   drop_index_stmt
 |   drop_role_stmt
 |   drop_user_stmt
@@ -2222,6 +2228,12 @@ drop_table_stmt:
     DROP TABLE exists_opt table_name_list
     {
         $$ = &tree.DropTable{IfExists: $3, Names: $4}
+    }
+
+drop_view_stmt:
+    DROP VIEW exists_opt table_name_list
+    {
+        $$ = &tree.DropView{IfExists: $3, Names: $4}
     }
 
 drop_database_stmt:
@@ -3875,6 +3887,95 @@ create_table_stmt:
             Options: $9,
             PartitionOption: $10,
         }
+    }
+|   CREATE EXTERNAL TABLE not_exists_opt table_name '(' table_elem_list_opt ')' load_param_opt_2
+    {
+        $$ = &tree.CreateTable {
+            IfNotExists: $4,
+            Table: *$5,
+            Defs: $7,
+            Param: $9,
+        }
+    }
+
+load_param_opt_2:
+    load_param_opt tail_param_opt
+    {
+        $$ = $1
+        $$.Tail = $2
+    }
+
+load_param_opt:
+    INFILE STRING
+    {
+        $$ = &tree.ExternParam{
+            Filepath: $2,
+            ScanType: tree.LOCAL,
+            CompressType: tree.AUTO,
+        }
+    }
+|   INFILE '{' STRING '=' STRING '}'
+    {
+        if strings.ToLower($3) != "filepath" {
+                yylex.Error(fmt.Sprintf("can not recognize the '%s'", $3))
+                return 1
+            }
+        $$ = &tree.ExternParam{
+            Filepath: $5,
+            ScanType: tree.LOCAL,
+            CompressType: tree.AUTO,
+        }
+    }
+|   INFILE '{' STRING '=' STRING ',' STRING '=' STRING '}'
+    {
+        if strings.ToLower($3) != "filepath" || strings.ToLower($7) != "compression" {
+                yylex.Error(fmt.Sprintf("can not recognize the '%s' or '%s' ", $3, $7))
+                return 1
+            }
+        $$ = &tree.ExternParam{
+            Filepath: $5,
+            ScanType: tree.LOCAL,
+            CompressType: $9,
+        }
+    }
+|   URL S3OPTION '{' s3params '}'
+    {
+        $$ = &tree.ExternParam{
+            ScanType: tree.S3,
+            S3option: $4,
+        }
+    }
+
+tail_param_opt:
+    load_fields load_lines ignore_lines columns_or_variable_list_opt load_set_spec_opt
+    {
+        $$ = &tree.TailParameter{
+            Fields: $1,
+            Lines: $2,
+            IgnoredLines: uint64($3),
+            ColumnList: $4,
+            Assignments: $5,
+        }
+    }
+
+s3params:
+    s3param
+    {
+        $$ = $1
+    }
+|   s3params ',' s3param
+    {
+        $$ = append($1, $3...)
+    }
+
+s3param:
+    {
+        $$ = []string{}
+    }
+|   STRING '=' STRING
+    {
+        $$ = append($$, $1)
+        $$ = append($$, $3)
     }
 
 temporary_opt:
@@ -5955,7 +6056,7 @@ literal:
 	}
 |   VALUE_ARG
     {
-        $$ = tree.NewParamExpr(yyp)
+        $$ = tree.NewParamExpr(yylex.(*Lexer).GetParamIndex())
     }
 
 column_type:
@@ -6820,7 +6921,6 @@ reserved_keyword:
 |   SHOW
 |   STRAIGHT_JOIN
 |   TABLE
-|   TABLES
 |   THEN
 |   TO
 |   TRUE
@@ -7043,6 +7143,10 @@ non_reserved_keyword:
 |	SOME
 |   TIMESTAMP %prec LOWER_THAN_STRING
 |   DATE %prec LOWER_THAN_STRING
+|   TABLES
+|   EXTERNAL
+|   URL
+|   S3OPTION
 
 func_not_keyword:
 	DATE_ADD

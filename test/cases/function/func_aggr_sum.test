@@ -26,12 +26,10 @@ drop table t1;
 drop table t2;
 
 #HAVING
--- @bvt:issue#3588
 CREATE TABLE t1 (name char(1) default NULL, val int default NULL);
 INSERT INTO t1 VALUES ('a',1),  ('a',2),  ('a',2),  ('a',2),  ('a',3),  ('a',6), ('a',7), ('a',11), ('a',11), ('a',12), ('a',13), ('a',13), ('a',20), ('b',2), ('b',3), ('b',4), ('b',5);
 SELECT s.name, AVG(s.val) AS median FROM (SELECT x.name, x.val FROM t1 x, t1 y WHERE x.name=y.name GROUP BY x.name, x.val HAVING SUM(y.val <= x.val) >= COUNT(*)/2 AND SUM(y.val >= x.val) >= COUNT(*)/2) AS s GROUP BY s.name;
 drop table t1;
--- @bvt:issue
 
 #DISTINCT
 create table t1 (a integer, b integer);
@@ -89,9 +87,7 @@ INSERT INTO t1 VALUES('innfj', 2, 2, 2, 2);
 #SELECT SUM( DISTINCT c ) FROM t1 GROUP BY c HAVING c IN ( AVG( 1 ), 1 + c);
 #SELECT SUM( DISTINCT d ) FROM t1 GROUP BY d HAVING d IN ( AVG( 1 ), 1 + d);
 #SELECT SUM( DISTINCT e ) FROM t1 GROUP BY e HAVING e IN ( AVG( 1 ), 1 + e);
--- @bvt:issue#3376
 SELECT  SUM(  a ) FROM t1 GROUP BY a HAVING a IN ( AVG( 1 ), 1 + a);
--- @bvt:issue
 SELECT  SUM(  b ) FROM t1 GROUP BY b HAVING b IN ( AVG( 1 ), 1 + b);
 SELECT  SUM(  c ) FROM t1 GROUP BY c HAVING c IN ( AVG( 1 ), 1 + c);
 
@@ -112,9 +108,7 @@ create table t1(a bigint, b float, c double, d double, e varchar(1000));
 #insert into t1 values(21474836471, 12412490231412.124124124124, 124141231249124124.1241241243124123, 12421512141241241241241241849912840129402.1241124124241241, space(1000));
 insert into t1 select 21474836471, 12412490231412.124124124124, 124141231249124124.1241241243124123, 12421512141241241241241241849912840129402.1241124124241241, space(1000);
 insert into t1 select 21474836471, 12412490231412.124124124124, 124141231249124124.1241241243124123, 12421512141241241241241241849912840129402.1241124124241241, space(1000);
--- @bvt:issue#3376
 select sum(a), sum(b),sum(c),sum(d),sum(e) from t1;
--- @bvt:issue
 select sum(a), sum(b),sum(c),sum(d) from t1;
 drop table t1;
 
@@ -139,10 +133,8 @@ create table t1 (df decimal(5,1));
 insert into t1 values(1.1);
 insert into t1 values(2.2);
 
--- @bvt:issue#3588
 select cast(sum( df) as signed) from t1;
 select cast(min(df) as signed) from t1;
--- @bvt:issue
 select 1e8 * sum( df) from t1;
 select 1e8 * min(df) from t1;
 

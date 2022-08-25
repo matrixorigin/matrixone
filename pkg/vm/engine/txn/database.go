@@ -16,6 +16,8 @@ package txnengine
 
 import (
 	"context"
+	"fmt"
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -32,15 +34,16 @@ var _ engine.Database = new(Database)
 
 func (d *Database) Create(ctx context.Context, relName string, defs []engine.TableDef) error {
 
-	_, err := doTxnRequest[CreateDatabaseResp](
+	_, err := engine.DoTxnRequest[CreateDatabaseResp](
 		ctx,
 		d.engine,
 		d.txnOperator.Write,
-		allNodes,
+		d.engine.allNodesShards,
 		OpCreateRelation,
 		CreateRelationReq{
 			DatabaseID: d.id,
-			Name:       relName,
+			Type:       RelationTable,
+			Name:       strings.ToLower(relName),
 			Defs:       defs,
 		},
 	)
@@ -53,15 +56,15 @@ func (d *Database) Create(ctx context.Context, relName string, defs []engine.Tab
 
 func (d *Database) Delete(ctx context.Context, relName string) error {
 
-	_, err := doTxnRequest[DeleteRelationResp](
+	_, err := engine.DoTxnRequest[DeleteRelationResp](
 		ctx,
 		d.engine,
 		d.txnOperator.Write,
-		allNodes,
+		d.engine.allNodesShards,
 		OpDeleteRelation,
 		DeleteRelationReq{
 			DatabaseID: d.id,
-			Name:       relName,
+			Name:       strings.ToLower(relName),
 		},
 	)
 	if err != nil {
@@ -73,15 +76,15 @@ func (d *Database) Delete(ctx context.Context, relName string) error {
 
 func (d *Database) Relation(ctx context.Context, relName string) (engine.Relation, error) {
 
-	resps, err := doTxnRequest[OpenRelationResp](
+	resps, err := engine.DoTxnRequest[OpenRelationResp](
 		ctx,
 		d.engine,
 		d.txnOperator.Read,
-		firstNode,
+		d.engine.firstNodeShard,
 		OpOpenRelation,
 		OpenRelationReq{
 			DatabaseID: d.id,
-			Name:       relName,
+			Name:       strings.ToLower(relName),
 		},
 	)
 	if err != nil {
@@ -101,18 +104,18 @@ func (d *Database) Relation(ctx context.Context, relName string) (engine.Relatio
 		return table, nil
 
 	default:
-		panic("unknown type")
+		panic(fmt.Errorf("unknown type: %+v", resp))
 	}
 
 }
 
 func (d *Database) Relations(ctx context.Context) ([]string, error) {
 
-	resps, err := doTxnRequest[GetRelationsResp](
+	resps, err := engine.DoTxnRequest[GetRelationsResp](
 		ctx,
 		d.engine,
 		d.txnOperator.Read,
-		firstNode,
+		d.engine.firstNodeShard,
 		OpGetRelations,
 		GetRelationsReq{
 			DatabaseID: d.id,

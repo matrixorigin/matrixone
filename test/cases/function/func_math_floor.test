@@ -7,11 +7,9 @@ select floor(1.1e5);
 select floor(cast(-2 as unsigned)), floor(18446744073709551614), floor(-2);
 SELECT floor(ceil(12345678901234567890));
 
--- @bvt:issue#3588
 SELECT floor(18446744073709551616);
 SELECT floor(floor(18446744073709551616));
 SELECT floor(floor(floor(18446744073709551616)));
--- @bvt:issue
 
 #数据类型
 CREATE TABLE t1(a BIGINT UNSIGNED);
@@ -22,14 +20,8 @@ DROP TABLE t1;
 #EXTREME VALUE
 
 select floor(999999999999999999);
-
--- @bvt:issue#3588
 select floor(9999999999999999999999);
--- @bvt:issue
-
--- @bvt:issue#3579
 select floor(9.999999999999999999999);
--- @bvt:issue
 
 
 select floor(-9.999999999999999999999);

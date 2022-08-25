@@ -15,7 +15,10 @@
 package morpc
 
 import (
+	"context"
+	"io"
 	"testing"
+	"time"
 
 	"github.com/fagongzi/goetty/v2/buf"
 	"github.com/stretchr/testify/assert"
@@ -25,28 +28,135 @@ func TestEncodeAndDecode(t *testing.T) {
 	codec := newTestCodec()
 	buf := buf.NewByteBuf(32)
 
-	msg := newTestMessage(1)
+	ctx, cancel := context.WithTimeout(context.TODO(), time.Hour*10)
+	defer cancel()
+
+	msg := RPCMessage{Ctx: ctx, Message: newTestMessage(1)}
 	err := codec.Encode(msg, buf, nil)
 	assert.NoError(t, err)
 
 	v, ok, err := codec.Decode(buf)
 	assert.True(t, ok)
-	assert.Equal(t, msg, v)
+	assert.Equal(t, msg.Message, v.(RPCMessage).Message)
 	assert.NoError(t, err)
+	assert.NotNil(t, v.(RPCMessage).Ctx)
+	assert.NotNil(t, v.(RPCMessage).cancel)
+}
+
+func TestEncodeAndDecodeAndChecksum(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.TODO(), time.Hour*10)
+	defer cancel()
+
+	codec := newTestCodecWithChecksum()
+	buf1 := buf.NewByteBuf(32)
+
+	msg := newTestMessage(1)
+	err := codec.Encode(RPCMessage{Ctx: ctx, Message: msg}, buf1, nil)
+	assert.NoError(t, err)
+
+	buf.Uint64ToBytesTo(0, buf1.RawSlice(5, 5+8))
+	_, ok, err := codec.Decode(buf1)
+	assert.False(t, ok)
+	assert.Error(t, err)
+}
+
+func TestEncodeAndDecodeAndChecksumMismatch(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.TODO(), time.Hour*10)
+	defer cancel()
+
+	codec := newTestCodecWithChecksum()
+	buf1 := buf.NewByteBuf(32)
+
+	msg := RPCMessage{Ctx: ctx, Message: newTestMessage(1)}
+	err := codec.Encode(msg, buf1, nil)
+	assert.NoError(t, err)
+
+	buf.Uint64ToBytesTo(0, buf1.RawSlice(5, 5+8))
+
+	v, ok, err := codec.Decode(buf1)
+	assert.False(t, ok)
+	assert.Error(t, err)
+	assert.Nil(t, v)
 }
 
 func TestEncodeAndDecodeWithPayload(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.TODO(), time.Hour*10)
+	defer cancel()
+
 	codec := newTestCodec()
 	buf1 := buf.NewByteBuf(32)
 	buf2 := buf.NewByteBuf(32)
 
-	msg := newTestMessage(1)
-	msg.payload = []byte("payload")
+	msg := RPCMessage{Ctx: ctx, Message: newTestMessage(1)}
+	msg.Message.(*testMessage).payload = []byte("payload")
 	err := codec.Encode(msg, buf1, buf2)
 	assert.NoError(t, err)
 
 	v, ok, err := codec.Decode(buf2)
 	assert.True(t, ok)
-	assert.Equal(t, msg, v)
+	assert.Equal(t, msg.Message, v.(RPCMessage).Message)
 	assert.NoError(t, err)
+	assert.NotNil(t, v.(RPCMessage).Ctx)
+	assert.NotNil(t, v.(RPCMessage).cancel)
+}
+
+func TestEncodeAndDecodeWithPayloadAndChecksum(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.TODO(), time.Hour*10)
+	defer cancel()
+
+	codec := newTestCodecWithChecksum()
+	buf1 := buf.NewByteBuf(32)
+	buf2 := buf.NewByteBuf(32)
+
+	msg := RPCMessage{Ctx: ctx, Message: newTestMessage(1)}
+	msg.Message.(*testMessage).payload = []byte("payload")
+	err := codec.Encode(msg, buf1, buf2)
+	assert.NoError(t, err)
+
+	v, ok, err := codec.Decode(buf2)
+	assert.True(t, ok)
+	assert.Equal(t, msg.Message, v.(RPCMessage).Message)
+	assert.NoError(t, err)
+	assert.NotNil(t, v.(RPCMessage).Ctx)
+	assert.NotNil(t, v.(RPCMessage).cancel)
+}
+
+func TestEncodeAndDecodeWithEmptyPayloadAndChecksum(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.TODO(), time.Hour*10)
+	defer cancel()
+
+	codec := newTestCodecWithChecksum()
+	buf1 := buf.NewByteBuf(32)
+	buf2 := buf.NewByteBuf(32)
+
+	msg := RPCMessage{Ctx: ctx, Message: newTestMessage(1)}
+	err := codec.Encode(msg, buf1, buf2)
+	assert.NoError(t, err)
+	io.Copy(buf2, buf1)
+
+	v, ok, err := codec.Decode(buf2)
+	assert.True(t, ok)
+	assert.Equal(t, msg.Message, v.(RPCMessage).Message)
+	assert.NoError(t, err)
+	assert.NotNil(t, v.(RPCMessage).Ctx)
+	assert.NotNil(t, v.(RPCMessage).cancel)
+}
+
+func TestEncodeAndDecodeWithEmptyPayloadAndChecksumMismatch(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.TODO(), time.Hour*10)
+	defer cancel()
+
+	codec := newTestCodecWithChecksum()
+	buf1 := buf.NewByteBuf(32)
+	buf2 := buf.NewByteBuf(32)
+
+	msg := RPCMessage{Ctx: ctx, Message: newTestMessage(1)}
+	err := codec.Encode(msg, buf1, buf2)
+	assert.NoError(t, err)
+	io.Copy(buf2, buf1)
+
+	buf.Uint64ToBytesTo(0, buf2.RawSlice(5, 5+8))
+	_, ok, err := codec.Decode(buf2)
+	assert.False(t, ok)
+	assert.Error(t, err)
 }

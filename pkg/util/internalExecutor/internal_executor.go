@@ -14,6 +14,8 @@
 
 package internalExecutor
 
+import "context"
+
 /*
 Define InternalExecutor interface here to avoid cycle dependency
 
@@ -67,10 +69,10 @@ type InternalExecResult interface {
 }
 
 type InternalExecutor interface {
-	// Exec sql without returning results set
-	Exec(string, SessionOverrideOptions) error
-	// Query exec sql and return results set
-	Query(string, SessionOverrideOptions) InternalExecResult
-	// ApplySessionOverride override session for the executor scope
+	// exec sql without returning results set
+	Exec(context.Context, string, SessionOverrideOptions) error
+	// exec sql and return results set
+	Query(context.Context, string, SessionOverrideOptions) InternalExecResult
+	// override session for the executor scope
 	ApplySessionOverride(SessionOverrideOptions)
 }

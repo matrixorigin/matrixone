@@ -21,7 +21,6 @@ import (
 	"runtime"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/metric"
 	bp "github.com/matrixorigin/matrixone/pkg/util/batchpipe"
@@ -32,7 +31,7 @@ const CHAN_CAPACITY = 10000
 
 type MetricCollector interface {
 	SendMetrics(context.Context, []*pb.MetricFamily) error
-	Start() bool
+	Start(context.Context) bool
 	Stop(graceful bool) (<-chan struct{}, bool)
 }
 
@@ -116,11 +115,11 @@ func (c *metricCollector) SendMetrics(ctx context.Context, mfs []*pb.MetricFamil
 	return nil
 }
 
-func (c *metricCollector) NewItemBatchHandler() func(batch string) {
+func (c *metricCollector) NewItemBatchHandler(ctx context.Context) func(batch string) {
 	exec := c.ieFactory()
-	exec.ApplySessionOverride(ie.NewOptsBuilder().Database(metricDBConst).Internal(true).Finish())
+	exec.ApplySessionOverride(ie.NewOptsBuilder().Database(MetricDBConst).Internal(true).Finish())
 	return func(batch string) {
-		if err := exec.Exec(batch, ie.NewOptsBuilder().Finish()); err != nil {
+		if err := exec.Exec(ctx, batch, ie.NewOptsBuilder().Finish()); err != nil {
 			logutil.Errorf("[Trace] insert error. sql: %s; err: %v", batch, err)
 		}
 	}
@@ -184,7 +183,7 @@ func (s *mfset) IsEmpty() bool {
 // used to mitigate memory allocation
 func (s *mfset) GetBatch(buf *bytes.Buffer) string {
 	buf.Reset()
-	buf.WriteString(fmt.Sprintf("insert into %s.%s values ", metricDBConst, s.mfs[0].GetName()))
+	buf.WriteString(fmt.Sprintf("insert into %s.%s values ", MetricDBConst, s.mfs[0].GetName()))
 	lblsBuf := new(bytes.Buffer)
 	writeValues := func(t string, v float64, lbls string) {
 		buf.WriteString("(")
@@ -228,9 +227,6 @@ func (s *mfset) GetBatch(buf *bytes.Buffer) string {
 	return sql
 }
 
-var _, localOffset = time.Now().Zone()
-
-// temp timezone workaround, fix it in 0.6 version
-func localTimeStr(time int64) string {
-	return types.Datetime((time>>20 + int64(localOffset)) << 20).String()
+func localTimeStr(value int64) string {
+	return time.UnixMicro(value).In(time.Local).Format("2006-01-02 15:04:05.000000")
 }

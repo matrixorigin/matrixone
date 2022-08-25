@@ -20,6 +20,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net/url"
 	"path"
 	"sort"
@@ -34,6 +35,7 @@ import (
 
 // S3FS is a FileService implementation backed by S3
 type S3FS struct {
+	name      string
 	client    *s3.Client
 	bucket    string
 	keyPrefix string
@@ -47,6 +49,8 @@ type S3FS struct {
 var _ FileService = new(S3FS)
 
 func NewS3FS(
+	sharedConfigProfile string,
+	name string,
 	endpoint string,
 	bucket string,
 	keyPrefix string,
@@ -63,6 +67,8 @@ func NewS3FS(
 	endpoint = u.String()
 
 	return newS3FS(
+		sharedConfigProfile,
+		name,
 		endpoint,
 		bucket,
 		keyPrefix,
@@ -76,6 +82,8 @@ func NewS3FS(
 // NewS3FSOnMinio creates S3FS on minio server
 // this is needed because the URL scheme of minio server does not compatible with AWS'
 func NewS3FSOnMinio(
+	sharedConfigProfile string,
+	name string,
 	endpoint string,
 	bucket string,
 	keyPrefix string,
@@ -92,6 +100,8 @@ func NewS3FSOnMinio(
 	endpoint = u.String()
 
 	return newS3FS(
+		sharedConfigProfile,
+		name,
 		endpoint,
 		bucket,
 		keyPrefix,
@@ -114,9 +124,12 @@ func NewS3FSOnMinio(
 			),
 		),
 	)
+
 }
 
 func newS3FS(
+	sharedConfigProfile string,
+	name string,
 	endpoint string,
 	bucket string,
 	keyPrefix string,
@@ -126,7 +139,10 @@ func newS3FS(
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*7)
 	defer cancel()
-	cfg, err := config.LoadDefaultConfig(ctx)
+
+	cfg, err := config.LoadDefaultConfig(ctx,
+		config.WithSharedConfigProfile(sharedConfigProfile),
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -148,13 +164,22 @@ func newS3FS(
 	return fs, nil
 }
 
+func (s *S3FS) Name() string {
+	return s.name
+}
+
 func (s *S3FS) List(ctx context.Context, dirPath string) (entries []DirEntry, err error) {
 
-	var cont *string
-	prefix := s.pathToKey(dirPath)
+	_, p, err := splitPath(s.name, dirPath)
+	if err != nil {
+		return nil, err
+	}
+	prefix := s.pathToKey(p)
 	if prefix != "" {
 		prefix += "/"
 	}
+	var cont *string
+
 	for {
 		output, err := s.client.ListObjectsV2(
 			ctx,
@@ -202,7 +227,11 @@ func (s *S3FS) List(ctx context.Context, dirPath string) (entries []DirEntry, er
 func (s *S3FS) Write(ctx context.Context, vector IOVector) error {
 
 	// check existence
-	key := s.pathToKey(vector.FilePath)
+	_, path, err := splitPath(s.name, vector.FilePath)
+	if err != nil {
+		return err
+	}
+	key := s.pathToKey(path)
 	output, err := s.client.HeadObject(
 		ctx,
 		&s3.HeadObjectInput{
@@ -228,7 +257,11 @@ func (s *S3FS) Write(ctx context.Context, vector IOVector) error {
 }
 
 func (s *S3FS) write(ctx context.Context, vector IOVector) error {
-	key := s.pathToKey(vector.FilePath)
+	_, path, err := splitPath(s.name, vector.FilePath)
+	if err != nil {
+		return err
+	}
+	key := s.pathToKey(path)
 
 	// sort
 	sort.Slice(vector.Entries, func(i, j int) bool {
@@ -282,8 +315,29 @@ func (s *S3FS) Read(ctx context.Context, vector *IOVector) error {
 }
 
 func (s *S3FS) read(ctx context.Context, vector *IOVector) error {
+	_, path, err := splitPath(s.name, vector.FilePath)
+	if err != nil {
+		return err
+	}
 
-	min, max, readToEnd := vector.offsetRange()
+	min := math.MaxInt
+	max := 0
+	readToEnd := false
+	for _, entry := range vector.Entries {
+		if entry.ignore {
+			continue
+		}
+		if entry.Offset < min {
+			min = entry.Offset
+		}
+		if entry.Size < 0 {
+			entry.Size = 0
+			readToEnd = true
+		}
+		if end := entry.Offset + entry.Size; end > max {
+			max = end
+		}
+	}
 
 	var content []byte
 
@@ -293,7 +347,7 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector) error {
 			ctx,
 			&s3.GetObjectInput{
 				Bucket: ptrTo(s.bucket),
-				Key:    ptrTo(s.pathToKey(vector.FilePath)),
+				Key:    ptrTo(s.pathToKey(path)),
 				Range:  ptrTo(rang),
 			},
 		)
@@ -314,7 +368,7 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector) error {
 			ctx,
 			&s3.GetObjectInput{
 				Bucket: ptrTo(s.bucket),
-				Key:    ptrTo(s.pathToKey(vector.FilePath)),
+				Key:    ptrTo(s.pathToKey(path)),
 				Range:  ptrTo(rang),
 			},
 		)
@@ -390,11 +444,15 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector) error {
 
 func (s *S3FS) Delete(ctx context.Context, filePath string) error {
 
-	_, err := s.client.DeleteObject(
+	_, path, err := splitPath(s.name, filePath)
+	if err != nil {
+		return err
+	}
+	_, err = s.client.DeleteObject(
 		ctx,
 		&s3.DeleteObjectInput{
 			Bucket: ptrTo(s.bucket),
-			Key:    ptrTo(s.pathToKey(filePath)),
+			Key:    ptrTo(s.pathToKey(path)),
 		},
 	)
 	if err != nil {

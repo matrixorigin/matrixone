@@ -16,10 +16,11 @@ package testutil
 
 import (
 	"fmt"
+	"time"
+
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/encoding"
 	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
@@ -152,7 +153,7 @@ var (
 			}
 			ds[i] = d
 		}
-		vec.Data = encoding.EncodeDateSlice(ds)
+		vec.Data = types.EncodeDateSlice(ds)
 		vec.Col = ds
 		return vec
 	}
@@ -173,7 +174,7 @@ var (
 			}
 			ds[i] = d
 		}
-		vec.Data = encoding.EncodeDatetimeSlice(ds)
+		vec.Data = types.EncodeDatetimeSlice(ds)
 		vec.Col = ds
 		return vec
 	}
@@ -188,13 +189,13 @@ var (
 			if nulls.Contains(vec.Nsp, uint64(i)) {
 				continue
 			}
-			d, err := types.ParseTimestamp(s, 6)
+			d, err := types.ParseTimestamp(time.Local, s, 6)
 			if err != nil {
 				panic(err)
 			}
 			ds[i] = d
 		}
-		vec.Data = encoding.EncodeTimestampSlice(ds)
+		vec.Data = types.EncodeTimestampSlice(ds)
 		vec.Col = ds
 		return vec
 	}
@@ -289,7 +290,7 @@ var (
 	MakeScalarTimeStamp = func(value string, length int) *vector.Vector {
 		vec := NewProc().AllocScalarVector(timestampType)
 		vec.Length = length
-		d, err := types.ParseTimestamp(value, 6)
+		d, err := types.ParseTimestamp(time.Local, value, 6)
 		if err != nil {
 			panic(err)
 		}
@@ -334,12 +335,14 @@ type vecType interface {
 }
 
 func NewProc() *process.Process {
-	return process.New(mheap.New(guest.New(1<<20, host.New(1<<20))))
+	proc := process.New(mheap.New(guest.New(1<<20, host.New(1<<20))))
+	proc.SessionInfo.TimeZone = time.Local
+	return proc
 }
 
 func makeVector[T vecType](values []T, nsp []uint64, typ types.Type) *vector.Vector {
 	vec := vector.New(typ)
-	vec.Data = encoding.EncodeFixedSlice(values, typ.TypeSize())
+	vec.Data = types.EncodeFixedSlice(values, typ.TypeSize())
 	vec.Col = values
 	for _, n := range nsp {
 		nulls.Add(vec.Nsp, n)

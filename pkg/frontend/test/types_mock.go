@@ -5,6 +5,8 @@
 package mock_frontend
 
 import (
+	"context"
+	"github.com/google/uuid"
 	reflect "reflect"
 
 	gomock "github.com/golang/mock/gomock"
@@ -72,8 +74,20 @@ func (m *MockComputationWrapper) EXPECT() *MockComputationWrapperMockRecorder {
 	return m.recorder
 }
 
+func (m *MockComputationWrapper) GetUUID() []byte {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetUUID")
+	ret0, _ := ret[0].(uuid.UUID)
+	return ret0[:]
+}
+
+func (mr *MockComputationWrapperMockRecorder) GetUUID() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetUUID", reflect.TypeOf((*MockComputationWrapper)(nil).GetUUID))
+}
+
 // Compile mocks base method.
-func (m *MockComputationWrapper) Compile(u interface{}, fill func(interface{}, *batch.Batch) error) (interface{}, error) {
+func (m *MockComputationWrapper) Compile(requestCtx context.Context, u interface{}, fill func(interface{}, *batch.Batch) error) (interface{}, error) {
 	m.ctrl.T.Helper()
 	ret := m.ctrl.Call(m, "Compile", u, fill)
 	ret0, _ := ret[0].(interface{})

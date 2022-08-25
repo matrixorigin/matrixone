@@ -39,6 +39,7 @@ const (
 	DECIMAL128_ZSTR_LEN = 43
 	DECIMAL128_WIDTH    = 34
 	DECIMAL128_NBYTES   = 16
+	MYSQL_DEFAULT_SCALE = 4
 )
 
 func dec64PtrToC(p *Decimal64) *C.int64_t {
@@ -147,7 +148,7 @@ func Decimal64_FromString(s string) (Decimal64, error) {
 	buf := zstr(s)
 	rc := C.Decimal64_FromString(dec64PtrToC(&d), bytesPtrToC(buf))
 	if rc == moerr.DATA_TRUNCATED {
-		return d, moerr.NewError(moerr.DATA_TRUNCATED, "decimal64 data truncated")
+		return d, moerr.New(moerr.DATA_TRUNCATED, "decimal64")
 	} else if rc != 0 {
 		return d, moerr.NewError(moerr.INVALID_ARGUMENT, "invalid input for decimal64")
 	}

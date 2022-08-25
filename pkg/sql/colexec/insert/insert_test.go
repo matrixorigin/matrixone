@@ -40,8 +40,8 @@ func (e *mockRelation) Write(_ context.Context, b *batch.Batch) error {
 }
 
 var (
-	i64typ     = &plan.Type{Id: plan.Type_INT64}
-	varchartyp = &plan.Type{Id: plan.Type_VARCHAR}
+	i64typ     = &plan.Type{Id: int32(types.T_int64)}
+	varchartyp = &plan.Type{Id: int32(types.T_varchar)}
 )
 
 func TestInsertOperator(t *testing.T) {

@@ -42,6 +42,7 @@ func TestNodeHostConfig(t *testing.T) {
 		DeploymentID: 1234,
 		DataDir:      "lalala",
 	}
+	cfg.Fill()
 	nhConfig := getNodeHostConfig(cfg)
 	assert.Equal(t, cfg.DeploymentID, nhConfig.DeploymentID)
 	assert.Equal(t, cfg.DataDir, nhConfig.NodeHostDir)
@@ -58,9 +59,11 @@ func getStoreTestConfig() Config {
 	cfg := Config{
 		UUID:                uuid.New().String(),
 		RTTMillisecond:      10,
-		GossipSeedAddresses: []string{"127.0.0.1:9000"},
+		GossipAddress:       testGossipAddress,
+		GossipSeedAddresses: []string{testGossipAddress, dummyGossipSeedAddress},
 		DeploymentID:        1,
 		FS:                  vfs.NewStrictMem(),
+		UseTeeLogDB:         true,
 	}
 	cfg.Fill()
 	return cfg

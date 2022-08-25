@@ -130,9 +130,14 @@ func (ls *logService) StartHAKeeperReplica(
 	return ls.svc.StartHAKeeperReplica(replicaID, initialReplicas, join)
 }
 
+// logOptions is options for a log service.
+type logOptions []logservice.Option
+
 // newLogService constructs an instance of `LogService`.
-func newLogService(cfg logservice.Config) (LogService, error) {
-	svc, err := logservice.NewWrappedService(cfg)
+func newLogService(
+	cfg logservice.Config, opts logOptions,
+) (LogService, error) {
+	svc, err := logservice.NewWrappedService(cfg, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -140,7 +145,9 @@ func newLogService(cfg logservice.Config) (LogService, error) {
 }
 
 // buildLogConfig builds configuration for a log service.
-func buildLogConfig(index int, opt Options, address serviceAddress) logservice.Config {
+func buildLogConfig(
+	index int, opt Options, address serviceAddresses,
+) logservice.Config {
 	cfg := logservice.Config{
 		UUID:                uuid.New().String(),
 		FS:                  vfs.NewStrictMem(),
@@ -155,15 +162,24 @@ func buildLogConfig(index int, opt Options, address serviceAddress) logservice.C
 	cfg.HeartbeatInterval.Duration = opt.log.heartbeatInterval
 	cfg.HAKeeperCheckInterval.Duration = opt.hakeeper.checkInterval
 	cfg.HAKeeperClientConfig.ServiceAddresses = address.listHAKeeperListenAddresses()
-
 	// setting hakeeper configuration
 	cfg.HAKeeperConfig.TickPerSecond = opt.hakeeper.tickPerSecond
 	cfg.HAKeeperConfig.LogStoreTimeout.Duration = opt.hakeeper.logStoreTimeout
-	cfg.HAKeeperConfig.DnStoreTimeout.Duration = opt.hakeeper.dnStoreTimeout
+	cfg.HAKeeperConfig.DNStoreTimeout.Duration = opt.hakeeper.dnStoreTimeout
 
 	// we must invoke Fill in order to setting default configruation value.
 	cfg.Fill()
+
 	return cfg
+}
+
+// buildLogOptions builds options for a log service.
+//
+// NB: We need the filled version of logservice.Config.
+func buildLogOptions(cfg logservice.Config, filter FilterFunc) logOptions {
+	return []logservice.Option{
+		logservice.WithBackendFilter(filter),
+	}
 }
 
 // buildLogDataDir generates data directory for a log service.

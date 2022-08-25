@@ -4,7 +4,7 @@
 
 * **部署MatrixOne所需的操作系统版本是什么？**
 
-- 单机推荐配置： MatrixOne 0.5.0 支持下表中操作系统。
+- 单机推荐配置： MatrixOne 当前支持下表中操作系统。
 
 | Linux OS                 | 版本                   |
 | :----------------------- | :------------------------ |
@@ -23,7 +23,7 @@
 
 * **MatrixOne对部署硬件的配置要求如何？**
 
-单机安装情况下，MatrixOne 0.5.0 可以运行在 Intel x86-64 架构的 64 位通用硬件服务器平台上。
+单机安装情况下，MatrixOne 当前可以运行在 Intel x86-64 架构的 64 位通用硬件服务器平台上。
 
 对于开发、测试和生产环境的服务器硬件配置要求和建议如下：
 
@@ -46,6 +46,14 @@ ARM 架构的 Macbook M1/M2 也适合开发环境。
 * **安装时需要更改什么设置吗？**
 
 通常情况下，安装时，你无需更改任何设置。`system_vars_config.toml` 默认设置完全可以直接运行 MatrixOne。但是如果你需要自定义监听端口、IP 地址、存储数据文件路径，你可以修改相应的 `system_vars_config.toml` 记录。
+
+* **当我安装完成 MySQL 客户端后，打开终端运行 `mysql` 产生报错 `command not found: mysql`，我该如何解决？**
+
+产生这个报错是环境变量未设置的原因，可以执行以下命令：
+
+```
+export PATH=${PATH}:/usr/local/mysql/bin
+```
 
 * **当我安装选择从源代码安装构建 MatrixOne时，产生了以下错误或构建失败提示，我该如何继续？**
 
@@ -76,3 +84,53 @@ ulimit -n 65536
 * 对于 Linux 系统，请参考详细的[指南](https://www.linuxtechi.com/set-ulimit-file-descriptors-limit-linux-servers/)，将 *ulimit* 设置为100000。
 
 设置完成后，将不会出现 `too many open files` 错误。
+
+* **我的 PC 是 M1 芯片，当我进行 SSB 测试时，发现无法编译成功 ssb-dbgen**
+
+硬件配置为 M1 芯片的 PC 在编译 `ssb-dbgen` 之前，还需要进行如下配置：
+
+1. 下载并安装 [GCC11](https://gcc.gnu.org/install/)。
+
+2. 输入命令，确认 gcc-11 是否成功：
+
+   ```
+   gcc-11 -v
+   ```
+
+   如下结果，表示成功：
+
+   ```
+   Using built-in specs.
+   COLLECT_GCC=gcc-11
+   COLLECT_LTO_WRAPPER=/opt/homebrew/Cellar/gcc@11/11.3.0/bin/../libexec/gcc/aarch64-apple-darwin21/11/lto-wrapper
+   Target: aarch64-apple-darwin21
+   Configured with: ../configure --prefix=/opt/homebrew/opt/gcc@11 --libdir=/opt/homebrew/opt/gcc@11/lib/gcc/11 --disable-nls --enable-checking=release --with-gcc-major-version-only --enable-languages=c,c++,objc,obj-c++,fortran --program-suffix=-11 --with-gmp=/opt/homebrew/opt/gmp --with-mpfr=/opt/homebrew/opt/mpfr --with-mpc=/opt/homebrew/opt/libmpc --with-isl=/opt/homebrew/opt/isl --with-zstd=/opt/homebrew/opt/zstd --with-pkgversion='Homebrew GCC 11.3.0' --with-bugurl=https://github.com/Homebrew/homebrew-core/issues --build=aarch64-apple-darwin21 --with-system-zlib --with-sysroot=/Library/Developer/CommandLineTools/SDKs/MacOSX12.sdk
+   Thread model: posix
+   Supported LTO compression algorithms: zlib zstd
+   gcc version 11.3.0 (Homebrew GCC 11.3.0)
+   ```
+
+3. 手动修改 *ssb-dbgen* 目录下的 *bm_utils.c* 配置文件：
+
+   - 将第41行的 `#include <malloc.h>` 修改为 `#include <sys/malloc.h>`
+
+   - 将第398行的 `open(fullpath, ((*mode == 'r')?O_RDONLY:O_WRONLY)|O_CREAT|O_LARGEFILE,0644);` 修改为 `open(fullpath, ((*mode == 'r')?O_RDONLY:O_WRONLY)|O_CREAT,0644);`
+
+4. 手动修改 *ssb-dbgen* 目录下的 *varsub.c* 配置文件：
+
+   - 将第5行的 `#include <malloc.h>` 修改为 `#include <sys/malloc.h>`
+
+5.
+
+5. 手动修改 *ssb-dbgen* 目录下的 *makefile* 配置文件：
+
+   - 将第5行的 `CC      = gcc` 修改为 `CC      = gcc-11`
+
+6. 再次进入 *ssb-dbgen* 目录，进行编译：
+
+   ```
+   cd ssb-dbgen
+   make
+   ```
+
+7. 查看 *ssb-dbgen* 目录，生成 *dbgen* 可执行文件，表示编译成功。

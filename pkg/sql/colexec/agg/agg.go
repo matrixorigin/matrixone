@@ -20,22 +20,23 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/encoding"
 	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 )
 
 func NewUnaryAgg[T1, T2 any](priv any, isCount bool, ityp, otyp types.Type, grows func(int),
 	eval func([]T2) []T2, merge func(int64, int64, T2, T2, bool, bool, any) (T2, bool),
-	fill func(int64, T1, T2, int64, bool, bool) (T2, bool)) Agg[*UnaryAgg[T1, T2]] {
+	fill func(int64, T1, T2, int64, bool, bool) (T2, bool),
+	batchFill func(any, any, int64, int64, []uint64, []int64, *nulls.Nulls) error) Agg[*UnaryAgg[T1, T2]] {
 	return &UnaryAgg[T1, T2]{
-		priv:    priv,
-		otyp:    otyp,
-		eval:    eval,
-		fill:    fill,
-		merge:   merge,
-		grows:   grows,
-		isCount: isCount,
-		ityps:   []types.Type{ityp},
+		priv:      priv,
+		otyp:      otyp,
+		eval:      eval,
+		fill:      fill,
+		merge:     merge,
+		grows:     grows,
+		batchFill: batchFill,
+		isCount:   isCount,
+		ityps:     []types.Type{ityp},
 	}
 }
 
@@ -96,7 +97,7 @@ func (a *UnaryAgg[T1, T2]) Grows(size int, m *mheap.Mheap) error {
 		}
 		a.da = data
 		a.es = make([]bool, 0, size)
-		a.vs = encoding.DecodeSlice[T2](a.da, sz)
+		a.vs = types.DecodeSlice[T2](a.da, sz)
 	} else if n+size >= cap(a.vs) {
 		a.da = a.da[:n*sz]
 		data, err := m.Grow(a.da, int64(n+size)*int64(sz))
@@ -105,7 +106,7 @@ func (a *UnaryAgg[T1, T2]) Grows(size int, m *mheap.Mheap) error {
 		}
 		m.Free(a.da)
 		a.da = data
-		a.vs = encoding.DecodeSlice[T2](a.da, sz)
+		a.vs = types.DecodeSlice[T2](a.da, sz)
 	}
 	a.vs = a.vs[:n+size]
 	a.da = a.da[:(n+size)*sz]
@@ -141,6 +142,30 @@ func (a *UnaryAgg[T1, T2]) BatchFill(start int64, os []uint8, vps []uint64, zs [
 		return nil
 	}
 	vs := vector.GetColumn[T1](vec)
+	if a.batchFill != nil {
+		if err := a.batchFill(a.vs, vs, start, int64(len(os)), vps, zs, vec.GetNulls()); err != nil {
+			return err
+		}
+		nsp := vec.GetNulls()
+		if nsp.Any() {
+			for i := range os {
+				if !nsp.Contains(uint64(i) + uint64(start)) {
+					if vps[i] == 0 {
+						continue
+					}
+					a.es[vps[i]-1] = false
+				}
+			}
+		} else {
+			for i := range os {
+				if vps[i] == 0 {
+					continue
+				}
+				a.es[vps[i]-1] = false
+			}
+		}
+		return nil
+	}
 	for i := range os {
 		hasNull := vec.GetNulls().Contains(uint64(i) + uint64(start))
 		if vps[i] == 0 {

@@ -16,6 +16,7 @@ package frontend
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"testing"
 
@@ -41,7 +42,7 @@ type miniExec struct {
 	sess *Session
 }
 
-func (e *miniExec) doComQuery(string) error {
+func (e *miniExec) doComQuery(context.Context, string) error {
 	_ = e.sess.GetMysqlProtocol()
 	return nil
 }
@@ -50,21 +51,22 @@ func (e *miniExec) PrepareSessionBeforeExecRequest(sess *Session) {
 }
 
 func TestIe(t *testing.T) {
-	pu := config.NewParameterUnit(&config.GlobalSystemVariables, config.HostMmu, config.Mempool, config.StorageEngine, config.ClusterNodes)
+	ctx := context.TODO()
+	pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil, nil, nil)
 	executor := newIe(pu, &miniExec{})
 	executor.ApplySessionOverride(ie.NewOptsBuilder().Username("dump").Finish())
-	sess := executor.newCmdSession(ie.NewOptsBuilder().Database("mo_catalog").Internal(true).Finish())
+	sess := executor.newCmdSession(ctx, ie.NewOptsBuilder().Database("mo_catalog").Internal(true).Finish())
 	assert.Equal(t, "dump", sess.GetMysqlProtocol().GetUserName())
 
-	err := executor.Exec("whatever", ie.NewOptsBuilder().Finish())
+	err := executor.Exec(ctx, "whatever", ie.NewOptsBuilder().Finish())
 	assert.NoError(t, err)
-	res := executor.Query("whatever", ie.NewOptsBuilder().Finish())
+	res := executor.Query(ctx, "whatever", ie.NewOptsBuilder().Finish())
 	assert.NoError(t, err)
 	assert.Equal(t, uint64(0), res.RowCount())
 }
 
 func TestIeProto(t *testing.T) {
-	pu := config.NewParameterUnit(&config.GlobalSystemVariables, config.HostMmu, config.Mempool, config.StorageEngine, config.ClusterNodes)
+	pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil, nil, nil)
 	executor := NewInternalExecutor(pu)
 	p := executor.proto
 	assert.True(t, p.IsEstablished())

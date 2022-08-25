@@ -32,6 +32,7 @@ const (
 	Projection
 	Anti
 	Single
+	Mark
 
 	LoopJoin
 	LoopLeft
@@ -48,9 +49,13 @@ const (
 	Deletion
 	Insert
 	Update
+	External
 
-	Union
 	Minus
+	Intersect
+	IntersectAll
+
+	HashBuild
 )
 
 // Instruction contains relational algebra

@@ -17,7 +17,6 @@ package trace
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/util/export"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -27,7 +26,8 @@ import (
 
 func Test_initExport(t *testing.T) {
 	type args struct {
-		config *tracerProviderConfig
+		enableTracer bool
+		config       *tracerProviderConfig
 	}
 	ch := make(chan string, 10)
 	tests := []struct {
@@ -38,25 +38,25 @@ func Test_initExport(t *testing.T) {
 		{
 			name: "disable",
 			args: args{
-				config: &tracerProviderConfig{enableTracer: false},
+				enableTracer: false,
+				config:       &tracerProviderConfig{enableTracer: 0},
 			},
 			empty: true,
 		},
 		{
 			name: "enable_InternalExecutor",
 			args: args{
+				enableTracer: true,
 				config: &tracerProviderConfig{
-					enableTracer: true, batchProcessMode: InternalExecutor, sqlExecutor: newExecutorFactory(ch),
+					enableTracer: 1, batchProcessMode: InternalExecutor, sqlExecutor: newExecutorFactory(ch),
 				}},
 			empty: false,
 		},
 	}
-	sysVar := &config.GlobalSystemVariables
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			sysVar.SetEnableTrace(tt.args.config.enableTracer)
 			export.ResetGlobalBatchProcessor()
-			initExport(tt.args.config)
+			initExport(context.TODO(), tt.args.config)
 			if tt.empty {
 				require.Equal(t, "*export.noopBatchProcessor", fmt.Sprintf("%v", reflect.ValueOf(export.GetGlobalBatchProcessor()).Type()))
 			} else {
@@ -74,7 +74,7 @@ func TestDefaultContext(t *testing.T) {
 	}{
 		{
 			name: "normal",
-			want: ContextWithSpanContext(context.Background(), SpanContextWithIDs(0, 0)),
+			want: ContextWithSpanContext(context.Background(), SpanContextWithIDs(nilTraceID, nilSpanID)),
 		},
 	}
 	for _, tt := range tests {
@@ -85,7 +85,7 @@ func TestDefaultContext(t *testing.T) {
 }
 
 func TestDefaultSpanContext(t *testing.T) {
-	sc := SpanContextWithIDs(0, 0)
+	sc := SpanContextWithIDs(nilTraceID, nilSpanID)
 	tests := []struct {
 		name string
 		want *SpanContext
@@ -109,7 +109,7 @@ func TestGetNodeResource(t *testing.T) {
 	}{
 		{
 			name: "normal",
-			want: &MONodeResource{0, NodeTypeNode},
+			want: &MONodeResource{"node_uuid", NodeTypeNode},
 		},
 	}
 	for _, tt := range tests {

@@ -33,7 +33,7 @@ drop table t2;
 CREATE TABLE t1 (name char(1) default NULL, val int default NULL);
 INSERT INTO t1 VALUES ('a',1),  ('a',2),  ('a',2),  ('a',2),  ('a',3),  ('a',6), ('a',7), ('a',11), ('a',11), ('a',12), ('a',13), ('a',13), ('a',20), ('b',2), ('b',3), ('b',4), ('b',5);
 SELECT s.name, AVG(s.val) AS median FROM (SELECT x.name, x.val FROM t1 x, t1 y WHERE x.name=y.name GROUP BY x.name, x.val HAVING SUM(y.val <= x.val) >= COUNT(*)/2 AND SUM(y.val >= x.val) >= COUNT(*)/2) AS s GROUP BY s.name;
-[42883]unsupported parameter types [BOOL] for function 'sum'
+Aggregate function of 'sum' do not support implicit conversions for param of [BOOL]
 drop table t1;
 create table t1 (a integer, b integer);
 insert into t1 values (1,4), (2,2),(2,2), (4,1),(4,1),(4,1),(4,1);
@@ -100,7 +100,7 @@ CREATE TABLE t1(a varchar(255), b INT, c INT UNSIGNED, d DECIMAL(12,2), e REAL);
 INSERT INTO t1 VALUES('iynfj', 1, 1, 1, 1);
 INSERT INTO t1 VALUES('innfj', 2, 2, 2, 2);
 SELECT  SUM(  a ) FROM t1 GROUP BY a HAVING a IN ( AVG( 1 ), 1 + a);
-SUM(  a )
+Aggregate function of 'sum' do not support implicit conversions for param of [VARCHAR]
 SELECT  SUM(  b ) FROM t1 GROUP BY b HAVING b IN ( AVG( 1 ), 1 + b);
 SUM(  b )
 1
@@ -124,8 +124,7 @@ create table t1(a bigint, b float, c double, d double, e varchar(1000));
 insert into t1 select 21474836471, 12412490231412.124124124124, 124141231249124124.1241241243124123, 12421512141241241241241241849912840129402.1241124124241241, space(1000);
 insert into t1 select 21474836471, 12412490231412.124124124124, 124141231249124124.1241241243124123, 12421512141241241241241241849912840129402.1241124124241241, space(1000);
 select sum(a), sum(b),sum(c),sum(d),sum(e) from t1;
-sum(a)	sum(b)	sum(c)	sum(d)	sum(e)
-42949672942	2.4824980176896E13	2.48282462498248256E17	2.484302428248248E40	0.0
+Aggregate function of 'sum' do not support implicit conversions for param of [VARCHAR]
 select sum(a), sum(b),sum(c),sum(d) from t1;
 sum(a)	sum(b)	sum(c)	sum(d)
 42949672942	2.4824980176896E13	2.48282462498248256E17	2.484302428248248E40

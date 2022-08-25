@@ -15,11 +15,11 @@
 package frontend
 
 import (
+	"context"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/mempool"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
-	"sync"
 	"time"
 )
 
@@ -40,10 +40,8 @@ type Routine struct {
 	//channel of request
 	requestChan chan *Request
 
-	//channel of notify
-	notifyChan chan interface{}
-
-	onceCloseNotifyChan sync.Once
+	cancelRoutineCtx  context.Context
+	cancelRoutineFunc context.CancelFunc
 
 	routineMgr *RoutineManager
 
@@ -81,7 +79,7 @@ func (routine *Routine) GetSession() *Session {
 /*
 After the handshake with the client is done, the routine goes into processing loop.
 */
-func (routine *Routine) Loop() {
+func (routine *Routine) Loop(routineCtx context.Context) {
 	var req *Request = nil
 	var err error
 	var resp *Response
@@ -90,8 +88,8 @@ func (routine *Routine) Loop() {
 	for {
 		quit := false
 		select {
-		case <-routine.notifyChan:
-			logutil.Infof("-----routine quit")
+		case <-routineCtx.Done():
+			logutil.Infof("-----cancel routine")
 			quit = true
 		case req = <-routine.requestChan:
 		}
@@ -107,9 +105,13 @@ func (routine *Routine) Loop() {
 		mpi := routine.protocol.(*MysqlProtocolImpl)
 		mpi.sequenceId = req.seq
 
+		cancelRequestCtx, cancelRequestFunc := context.WithCancel(routineCtx)
+		routine.executor.(*MysqlCmdExecutor).setCancelRequestFunc(cancelRequestFunc)
+		ses := routine.GetSession()
+		ses.SetRequestContext(cancelRequestCtx)
 		routine.executor.PrepareSessionBeforeExecRequest(routine.GetSession())
 
-		if resp, err = routine.executor.ExecRequest(req); err != nil {
+		if resp, err = routine.executor.ExecRequest(cancelRequestCtx, req); err != nil {
 			logutil.Errorf("routine execute request failed. error:%v \n", err)
 		}
 
@@ -119,9 +121,11 @@ func (routine *Routine) Loop() {
 			}
 		}
 
-		if mgr.getParameterUnit().SV.GetRecordTimeElapsedOfSqlRequest() {
+		if !mgr.getParameterUnit().SV.DisableRecordTimeElapsedOfSqlRequest {
 			logutil.Infof("connection id %d , the time of handling the request %s", routine.getConnID(), time.Since(reqBegin).String())
 		}
+
+		cancelRequestFunc()
 	}
 }
 
@@ -131,10 +135,9 @@ When the io is closed, the Quit will be called.
 func (routine *Routine) Quit() {
 	routine.notifyClose()
 
-	routine.onceCloseNotifyChan.Do(func() {
-		//logutil.Infof("---------notify close")
-		close(routine.notifyChan)
-	})
+	if routine.cancelRoutineFunc != nil {
+		routine.cancelRoutineFunc()
+	}
 
 	if routine.protocol != nil {
 		routine.protocol.Quit()
@@ -150,18 +153,20 @@ func (routine *Routine) notifyClose() {
 	}
 }
 
-func NewRoutine(protocol MysqlProtocol, executor CmdExecutor, pu *config.ParameterUnit) *Routine {
+func NewRoutine(ctx context.Context, protocol MysqlProtocol, executor CmdExecutor, pu *config.ParameterUnit) *Routine {
+	cancelRoutineCtx, cancelRoutineFunc := context.WithCancel(ctx)
 	ri := &Routine{
-		protocol:    protocol,
-		executor:    executor,
-		requestChan: make(chan *Request, 1),
-		notifyChan:  make(chan interface{}),
-		guestMmu:    guest.New(pu.SV.GetGuestMmuLimitation(), pu.HostMmu),
-		mempool:     pu.Mempool,
+		protocol:          protocol,
+		executor:          executor,
+		requestChan:       make(chan *Request, 1),
+		guestMmu:          guest.New(pu.SV.GuestMmuLimitation, pu.HostMmu),
+		mempool:           pu.Mempool,
+		cancelRoutineCtx:  cancelRoutineCtx,
+		cancelRoutineFunc: cancelRoutineFunc,
 	}
 
 	//async process request
-	go ri.Loop()
+	go ri.Loop(cancelRoutineCtx)
 
 	return ri
 }

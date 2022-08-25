@@ -95,11 +95,16 @@ func (p *Pipeline) ConstRun(bat *batch.Batch, proc *process.Process) (bool, erro
 	}
 	bat.Cnt = 1
 	// processing the batch according to the instructions
-	proc.Reg.InputBatch = bat
-	end, err = vm.Run(p.instructions, proc)
-	proc.Reg.InputBatch = nil
-	_, _ = vm.Run(p.instructions, proc)
-	return end, err
+	for {
+		proc.Reg.InputBatch = bat
+		if end, err = vm.Run(p.instructions, proc); err != nil || end {
+			return end, err
+		}
+		proc.Reg.InputBatch = nil
+		if end, err = vm.Run(p.instructions, proc); err != nil || end {
+			return end, err
+		}
+	}
 }
 
 func (p *Pipeline) MergeRun(proc *process.Process) (bool, error) {

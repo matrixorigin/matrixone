@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/errors"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 )
 
 func buildDelete(stmt *tree.Delete, ctx CompilerContext) (*Plan, error) {
@@ -68,6 +69,11 @@ func buildDeleteSingleTable(stmt *tree.Delete, ctx CompilerContext) (*Plan, erro
 	objRef, tableDef := ctx.Resolve(tf.dbNames[0], tf.tableNames[0])
 	if tableDef == nil {
 		return nil, errors.New(errno.FeatureNotSupported, "cannot find delete table")
+	}
+	if tableDef.TableType == catalog.SystemExternalRel {
+		return nil, fmt.Errorf("the external table is not support delete operation")
+	} else if tableDef.TableType == catalog.SystemViewRel {
+		return nil, fmt.Errorf("view is not support delete operation")
 	}
 
 	// optimize to truncate,
@@ -172,6 +178,11 @@ func buildDeleteMultipleTable(stmt *tree.Delete, ctx CompilerContext) (*Plan, er
 		objRefs[i], tblDefs[i] = ctx.Resolve(dbName, tblName)
 		if tblDefs[i] == nil {
 			return nil, errors.New(errno.FeatureNotSupported, fmt.Sprintf("cannot find delete table: %s.%s", dbName, string(t.ObjectName)))
+		}
+		if tblDefs[i].TableType == catalog.SystemExternalRel {
+			return nil, fmt.Errorf("the external table is not support delete operation")
+		} else if tblDefs[i].TableType == catalog.SystemViewRel {
+			return nil, fmt.Errorf("view is not support delete operation")
 		}
 	}
 	tf.baseNameMap = reverseMap(tf.baseNameMap)
