@@ -86,7 +86,7 @@ func (s *Scope) InsertValues(c *Compile, stmt *tree.Insert) (uint64, error) {
 	}
 	batch.Reorder(bat, p.OrderAttrs)
 
-	if err = y.UpdateInsertValueBatch(c.e, c.ctx, c.proc, s.Plan.GetIns(), bat); err != nil {
+	if err = colexec.UpdateInsertValueBatch(c.e, c.ctx, c.proc, p, bat); err != nil {
 		return 0, err
 	}
 	if err := relation.Write(c.ctx, bat); err != nil {

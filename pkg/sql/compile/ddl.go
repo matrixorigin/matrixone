@@ -21,8 +21,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/errno"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/errors"
-	y "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
@@ -34,7 +34,11 @@ func (s *Scope) CreateDatabase(c *Compile) error {
 		}
 		return errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("database %s already exists", dbName))
 	}
-	return c.e.Create(c.ctx, dbName, c.proc.TxnOperator)
+	err := c.e.Create(c.ctx, dbName, c.proc.TxnOperator)
+	if err != nil {
+		return err
+	}
+	return colexec.CreateAutoIncrTable(c.e, c.ctx, c.proc, dbName)
 }
 
 func (s *Scope) DropDatabase(c *Compile) error {
@@ -76,7 +80,7 @@ func (s *Scope) CreateTable(c *Compile) error {
 	if err := dbSource.Create(c.ctx, tblName, append(exeCols, exeDefs...)); err != nil {
 		return err
 	}
-	return y.CreateAutoIncrCol(c.e, c.ctx, c.proc, planCols, dbName+"_"+tblName+"_")
+	return colexec.CreateAutoIncrCol(dbSource, c.ctx, c.proc, planCols, tblName+"_")
 }
 
 func (s *Scope) DropTable(c *Compile) error {
@@ -101,7 +105,7 @@ func (s *Scope) DropTable(c *Compile) error {
 	if err := dbSource.Delete(c.ctx, tblName); err != nil {
 		return err
 	}
-	return y.DeleteAutoIncrCol(rel, c.e, c.ctx, c.proc, dbName+"_"+tblName+"_")
+	return colexec.DeleteAutoIncrCol(rel, dbSource, c.ctx, c.proc, tblName+"_")
 }
 
 func planDefsToExeDefs(planDefs []*plan.TableDef_DefType) []engine.TableDef {

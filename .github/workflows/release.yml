@@ -16,12 +16,12 @@ jobs:
       - name: Use Golang
         uses: actions/setup-go@v1
         with:
-          go-version: "1.18"
+          go-version: "1.19"
       - name: Build normal
         run: |
           make config
           make build
-          zip mo-server-linux-amd64.zip mo-server system_vars_config.toml
+          zip mo-linux-amd64.zip mo-service ./etc/cn-standalone-test.toml
       - name: Get release
         id: get_release
         uses: bruceadams/get-release@v1.2.3
@@ -33,8 +33,8 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.TOKEN_ACTION }}
         with:
           upload_url: ${{ steps.get_release.outputs.upload_url }}
-          asset_path: ./mo-server-linux-amd64.zip
-          asset_name: mo-server-${{ steps.get_release.outputs.tag_name }}-linux-amd64.zip
+          asset_path: ./mo-linux-amd64.zip
+          asset_name: mo-${{ steps.get_release.outputs.tag_name }}-linux-amd64.zip
           asset_content_type: application/zip
 
   darwin-build-job:
@@ -45,7 +45,7 @@ jobs:
       - name: Use Golang
         uses: actions/setup-go@v1
         with:
-          go-version: "1.18"
+          go-version: "1.19"
       - name: Build normal
         run: |
           make config
@@ -70,7 +70,7 @@ jobs:
           cd ./mo-macos11
           spctl -a -vvv -t install mo-server
           codesign --test-requirement="=notarized" -vv mo-server
-          zip mo-server-darwin-x86_64.zip mo-server system_vars_config.toml
+          zip mo-darwin-x86_64.zip mo-service ./etc/cn-standalone-test.toml
       - name: Get release
         id: get_release
         uses: bruceadams/get-release@v1.2.3
@@ -82,6 +82,6 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.TOKEN_ACTION }}
         with:
           upload_url: ${{ steps.get_release.outputs.upload_url }}
-          asset_path: ./mo-macos11/mo-server-darwin-x86_64.zip
-          asset_name: mo-server-${{ steps.get_release.outputs.tag_name }}-darwin-x86_64.zip
+          asset_path: ./mo-macos11/mo-darwin-x86_64.zip
+          asset_name: mo-${{ steps.get_release.outputs.tag_name }}-darwin-x86_64.zip
           asset_content_type: application/zip

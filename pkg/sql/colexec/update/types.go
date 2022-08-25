@@ -25,6 +25,7 @@ type Argument struct {
 	UpdateCtxs   []*UpdateCtx
 	TableDefVec  []*plan.TableDef
 	Engine       engine.Engine
+	DB           []engine.Database
 	NamePre      []string
 }
 

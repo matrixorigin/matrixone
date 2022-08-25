@@ -57,6 +57,8 @@ func buildUpdate(stmt *tree.Update, ctx CompilerContext) (*Plan, error) {
 		}
 		if tblRef.TableType == catalog.SystemExternalRel {
 			return nil, fmt.Errorf("the external table is not support update operation")
+		} else if tblRef.TableType == catalog.SystemViewRel {
+			return nil, fmt.Errorf("view is not support update operation")
 		}
 		objRefs = append(objRefs, objRef)
 		tblRefs = append(tblRefs, tblRef)

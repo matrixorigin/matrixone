@@ -24,11 +24,17 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/storage"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage/mem"
 	taestorage "github.com/matrixorigin/matrixone/pkg/txn/storage/tae"
+	txnstorage "github.com/matrixorigin/matrixone/pkg/txn/storage/txn"
+	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
+	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
+	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
+	"go.uber.org/zap"
 )
 
 const (
-	memStorageBackend = "MEM"
-	taeStorageBackend = "TAE"
+	memStorageBackend   = "MEM"
+	memKVStorageBackend = "MEMKV"
+	taeStorageBackend   = "TAE"
 
 	localClockBackend = "LOCAL"
 	hlcClockBackend   = "HLC"
@@ -63,15 +69,32 @@ func (s *store) createTxnStorage(shard metadata.DNShard) (storage.TxnStorage, er
 	if err != nil {
 		return nil, err
 	}
+	closeLogClient := func() {
+		if err := logClient.Close(); err != nil {
+			s.logger.Error("close log client failed",
+				zap.Error(err))
+		}
+	}
 
 	switch s.cfg.Txn.Storage.Backend {
-
 	case memStorageBackend:
-		return s.newMemTxnStorage(shard, logClient)
+		ts, err := s.newMemTxnStorage(shard, logClient)
+		if err != nil {
+			closeLogClient()
+			return nil, err
+		}
+		return ts, nil
+
+	case memKVStorageBackend:
+		return s.newMemKVStorage(shard, logClient)
 
 	case taeStorageBackend:
-		return s.newTAEStorage(shard, logClient)
-
+		ts, err := s.newTAEStorage(shard, logClient)
+		if err != nil {
+			closeLogClient()
+			return nil, err
+		}
+		return ts, nil
 	default:
 		return nil, fmt.Errorf("not implment for %s", s.cfg.Txn.Storage.Backend)
 	}
@@ -100,6 +123,14 @@ func (s *store) newLocalClock() clock.Clock {
 }
 
 func (s *store) newMemTxnStorage(shard metadata.DNShard, logClient logservice.Client) (storage.TxnStorage, error) {
+	hm := host.New(1 << 30)
+	gm := guest.New(1<<30, hm)
+	return txnstorage.New(
+		txnstorage.NewMemHandler(mheap.New(gm), txnstorage.SnapshotIsolation),
+	)
+}
+
+func (s *store) newMemKVStorage(shard metadata.DNShard, logClient logservice.Client) (storage.TxnStorage, error) {
 	return mem.NewKVTxnStorage(0, logClient, s.clock), nil
 }
 

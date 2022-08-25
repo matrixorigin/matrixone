@@ -85,6 +85,7 @@ func newDiskFileService(cfg Config) (FileService, error) {
 
 func newMinioFileService(cfg Config) (FileService, error) {
 	fs, err := NewS3FSOnMinio(
+		cfg.S3.SharedConfigProfile,
 		cfg.Name,
 		cfg.S3.Endpoint,
 		cfg.S3.Bucket,
@@ -99,6 +100,7 @@ func newMinioFileService(cfg Config) (FileService, error) {
 
 func newS3FileService(cfg Config) (FileService, error) {
 	fs, err := NewS3FS(
+		cfg.S3.SharedConfigProfile,
 		cfg.Name,
 		cfg.S3.Endpoint,
 		cfg.S3.Bucket,

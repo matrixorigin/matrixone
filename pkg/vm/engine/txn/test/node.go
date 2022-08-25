@@ -46,7 +46,9 @@ func (t *testEnv) NewNode(id uint64) *Node {
 	}
 
 	storage, err := txnstorage.New(
-		txnstorage.NewMemHandler(testutil.NewMheap()),
+		txnstorage.NewMemHandler(testutil.NewMheap(), txnstorage.IsolationPolicy{
+			Read: txnstorage.ReadCommitted,
+		}),
 	)
 	if err != nil {
 		panic(err)

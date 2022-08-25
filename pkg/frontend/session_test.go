@@ -135,7 +135,11 @@ func TestSession_TxnBegin(t *testing.T) {
 		ioses := mock_frontend.NewMockIOSession(ctrl)
 		ioses.EXPECT().OutBuf().Return(buf.NewByteBuf(1024)).AnyTimes()
 		ioses.EXPECT().Write(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
-		proto := NewMysqlClientProtocol(0, ioses, 1024, nil)
+		sv, err := getSystemVariables("test/system_vars_config.toml")
+		if err != nil {
+			t.Error(err)
+		}
+		proto := NewMysqlClientProtocol(0, ioses, 1024, sv)
 		txnClient := mock_frontend.NewMockTxnClient(ctrl)
 		txnClient.EXPECT().New().AnyTimes()
 		return NewSession(proto, nil, nil, config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil, txnClient, nil), gSysVars)
@@ -173,7 +177,11 @@ func TestVariables(t *testing.T) {
 		ioses := mock_frontend.NewMockIOSession(ctrl)
 		ioses.EXPECT().OutBuf().Return(buf.NewByteBuf(1024)).AnyTimes()
 		ioses.EXPECT().Write(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
-		proto := NewMysqlClientProtocol(0, ioses, 1024, nil)
+		sv, err := getSystemVariables("test/system_vars_config.toml")
+		if err != nil {
+			t.Error(err)
+		}
+		proto := NewMysqlClientProtocol(0, ioses, 1024, sv)
 		txnClient := mock_frontend.NewMockTxnClient(ctrl)
 		txnClient.EXPECT().New().AnyTimes()
 		return NewSession(proto, nil, nil, config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil, txnClient, nil), gSysVars)
@@ -442,7 +450,12 @@ func TestSession_TxnCompilerContext(t *testing.T) {
 		ioses := mock_frontend.NewMockIOSession(ctrl)
 		ioses.EXPECT().OutBuf().Return(buf.NewByteBuf(1024)).AnyTimes()
 		ioses.EXPECT().Write(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
-		proto := NewMysqlClientProtocol(0, ioses, 1024, nil)
+
+		sv, err := getSystemVariables("test/system_vars_config.toml")
+		if err != nil {
+			t.Error(err)
+		}
+		proto := NewMysqlClientProtocol(0, ioses, 1024, sv)
 		return NewSession(proto, nil, nil, pu, gSysVars)
 	}
 

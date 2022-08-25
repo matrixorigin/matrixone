@@ -369,7 +369,20 @@ c0
 null
 
 drop table if exists t1;
+create table if not exists t1(a tinyint auto_increment);
+the auto_incr column is only support int32 and int64 type now
+create table if not exists t1(a smallint auto_increment);
+the auto_incr column is only support int32 and int64 type now
 create table if not exists t1(a int auto_increment);
 select * from t1;
 a
+show columns from t1;
+Field    Type    Null    Key    Default    Comment
+a    INT    YES        NULL
+drop table if exists t1;
+create table if not exists t1(a bigint auto_increment);
+select * from t1;
+a
+drop table if exists t1;
+create table if not exists t1(a int auto_increment primary key);
 drop table if exists t1;

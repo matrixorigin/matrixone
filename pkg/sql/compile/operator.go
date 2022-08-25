@@ -265,20 +265,23 @@ func constructInsert(n *plan.Node, eg engine.Engine, txnOperator TxnOperator) (*
 		TargetTable:   relation,
 		TargetColDefs: n.TableDef.Cols,
 		Engine:        eg,
-		NamePre:       n.ObjRef.SchemaName + "_" + n.TableDef.Name + "_",
+		DB:            db,
+		NamePre:       n.TableDef.Name + "_",
 	}, nil
 }
 
 func constructUpdate(n *plan.Node, eg engine.Engine, txnOperator TxnOperator) (*update.Argument, error) {
 	ctx := context.TODO()
 	us := make([]*update.UpdateCtx, len(n.UpdateCtxs))
-	var namePre []string
+	namePre := make([]string, len(n.UpdateCtxs))
+	db := make([]engine.Database, len(n.UpdateCtxs))
 	for i, updateCtx := range n.UpdateCtxs {
 		dbSource, err := eg.Database(ctx, updateCtx.DbName, txnOperator)
 		if err != nil {
 			return nil, err
 		}
-		namePre = append(namePre, updateCtx.DbName+"_"+updateCtx.TblName+"_")
+		namePre[i] = updateCtx.TblName + "_"
+		db[i] = dbSource
 		relation, err := dbSource.Relation(ctx, updateCtx.TblName)
 		if err != nil {
 			return nil, err
@@ -303,6 +306,7 @@ func constructUpdate(n *plan.Node, eg engine.Engine, txnOperator TxnOperator) (*
 	return &update.Argument{
 		UpdateCtxs:  us,
 		Engine:      eg,
+		DB:          db,
 		NamePre:     namePre,
 		TableDefVec: n.TableDefVec,
 	}, nil
