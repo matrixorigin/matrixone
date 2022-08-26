@@ -75,6 +75,7 @@ func SchemaToDefs(schema *catalog.Schema) (defs []engine.TableDef, err error) {
 				Name:    col.Name,
 				Type:    col.Type,
 				Primary: col.IsPrimary(),
+				Comment: col.Comment,
 				Default: &plan.Default{
 					NullAbility:  col.Default.NullAbility,
 					OriginString: col.Default.OriginString,

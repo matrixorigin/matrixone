@@ -15,6 +15,7 @@
 package txnstorage
 
 import (
+	"database/sql"
 	"fmt"
 	"io"
 	"sync"
@@ -64,7 +65,7 @@ func (m *MVCC[T]) Read(tx *Transaction, readTime Timestamp) (*T, error) {
 		}
 	}
 
-	return nil, nil
+	return nil, sql.ErrNoRows
 }
 
 func (m *MVCC[T]) Visible(tx *Transaction, readTime Timestamp) bool {
@@ -129,11 +130,31 @@ func (m *MVCC[T]) Insert(tx *Transaction, writeTime Timestamp, value T) error {
 
 	m.Lock()
 	defer m.Unlock()
+
+	for i := len(m.Values) - 1; i >= 0; i-- {
+		value := m.Values[i]
+		if value.Visible(tx.ID, writeTime) {
+			if value.LockTx != nil {
+				return &ErrWriteConflict{
+					WritingTx: tx,
+					Locked:    value.LockTx,
+				}
+			}
+			if value.BornTx != tx && value.BornTime.Greater(tx.BeginTime) {
+				return &ErrWriteConflict{
+					WritingTx: tx,
+					Stale:     value.BornTx,
+				}
+			}
+		}
+	}
+
 	m.Values = append(m.Values, &MVCCValue[T]{
 		BornTx:   tx,
 		BornTime: writeTime,
 		Value:    &value,
 	})
+
 	return nil
 }
 
@@ -166,7 +187,7 @@ func (m *MVCC[T]) Delete(tx *Transaction, writeTime Timestamp) error {
 		}
 	}
 
-	panic("no value")
+	return sql.ErrNoRows
 }
 
 func (m *MVCC[T]) Update(tx *Transaction, writeTime Timestamp, newValue T) error {
@@ -203,7 +224,7 @@ func (m *MVCC[T]) Update(tx *Transaction, writeTime Timestamp, newValue T) error
 		}
 	}
 
-	panic("no value")
+	return sql.ErrNoRows
 }
 
 func (m *MVCC[T]) dump(w io.Writer) {

@@ -118,3 +118,7 @@ func (rel *baseRelation) NewReader(_ context.Context, num int, _ *plan.Expr, _ [
 	}
 	return rds, nil
 }
+
+func (rel *baseRelation) GetTableID(_ context.Context) uint64 {
+	return rel.handle.ID()
+}

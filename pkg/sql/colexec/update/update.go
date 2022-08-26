@@ -80,7 +80,7 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 			}
 
 			batch.Reorder(tmpBat, updateCtx.OrderAttrs)
-			if err := colexec.UpdateInsertBatch(p.Engine, p.DB[i], ctx, proc, p.TableDefVec[i].Cols, tmpBat, p.NamePre[i]); err != nil {
+			if err := colexec.UpdateInsertBatch(p.Engine, p.DB[i], ctx, proc, p.TableDefVec[i].Cols, tmpBat, p.TableID[i]); err != nil {
 				return false, err
 			}
 			err = updateCtx.TableSource.Write(ctx, tmpBat)
@@ -113,7 +113,7 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 			tmpBat.Attrs = append(tmpBat.Attrs, updateCtx.OtherAttrs...)
 
 			batch.Reorder(tmpBat, updateCtx.OrderAttrs)
-			if err := colexec.UpdateInsertBatch(p.Engine, p.DB[i], ctx, proc, p.TableDefVec[i].Cols, tmpBat, p.NamePre[i]); err != nil {
+			if err := colexec.UpdateInsertBatch(p.Engine, p.DB[i], ctx, proc, p.TableDefVec[i].Cols, tmpBat, p.TableID[i]); err != nil {
 				return false, err
 			}
 			err = updateCtx.TableSource.Write(ctx, tmpBat)

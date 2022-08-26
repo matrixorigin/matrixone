@@ -16,6 +16,7 @@ package colexec
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
@@ -29,7 +30,7 @@ import (
 )
 
 var AUTO_INCR_TABLE = "mo_increment_columns"
-var AUTO_INCR_TABLE_COLNAME []string = []string{"name", "num", "step"}
+var AUTO_INCR_TABLE_COLNAME []string = []string{"name", "offset", "step", "PADDR"}
 
 type AutoIncrParam struct {
 	eg      engine.Engine
@@ -40,7 +41,7 @@ type AutoIncrParam struct {
 	colDefs []*plan.ColDef
 }
 
-func UpdateInsertBatch(e engine.Engine, db engine.Database, ctx context.Context, proc *process.Process, ColDefs []*plan.ColDef, bat *batch.Batch, namePre string) error {
+func UpdateInsertBatch(e engine.Engine, db engine.Database, ctx context.Context, proc *process.Process, ColDefs []*plan.ColDef, bat *batch.Batch, tableID uint64) error {
 	incrParam := &AutoIncrParam{
 		eg:      e,
 		db:      db,
@@ -48,90 +49,92 @@ func UpdateInsertBatch(e engine.Engine, db engine.Database, ctx context.Context,
 		proc:    proc,
 		colDefs: ColDefs,
 	}
+	fmt.Println("wangjian sql is", db)
 
-	incrNum, err := GetRangeFromAutoIncrTable(incrParam, bat, namePre)
+	offset, step, err := GetRangeFromAutoIncrTable(incrParam, bat, tableID)
 	if err != nil {
 		return err
 	}
 
-	if err = UpdateBatchImpl(ColDefs, bat, incrNum); err != nil {
+	if err = UpdateBatchImpl(ColDefs, bat, offset, step); err != nil {
 		return err
 	}
 	return nil
 }
 
 func UpdateInsertValueBatch(e engine.Engine, ctx context.Context, proc *process.Process, p *plan.InsertValues, bat *batch.Batch) error {
-	namePre := p.TblName + "_"
 	ColDefs := p.ExplicitCols
 	OrderColDefs(p.OrderAttrs, ColDefs)
 	db, err := e.Database(ctx, p.DbName, proc.TxnOperator)
 	if err != nil {
 		return err
 	}
-	return UpdateInsertBatch(e, db, ctx, proc, ColDefs, bat, namePre)
+	rel, err := db.Relation(ctx, p.TblName)
+	if err != nil {
+		return err
+	}
+	return UpdateInsertBatch(e, db, ctx, proc, ColDefs, bat, rel.GetTableID(ctx))
 }
 
-func GetRangeFromAutoIncrTable(param *AutoIncrParam, bat *batch.Batch, namePre string) ([]int64, error) {
-	taeEngine, ok := param.eg.(moengine.TxnEngine)
-	if !ok {
-		return nil, errors.New("", "the engine is not tae")
-	}
-
-	rel, err := param.db.Relation(param.ctx, AUTO_INCR_TABLE)
-	if err != nil {
-		return nil, err
-	}
-
-	var incrNum []int64
-
-	txnCtx, err := taeEngine.StartTxn(nil)
-	if err != nil {
-		return nil, err
-	}
-
+func GetRangeFromAutoIncrTable(param *AutoIncrParam, bat *batch.Batch, tableID uint64) ([]int64, []int64, error) {
+	var offset, step []int64
+	var err error
 	for i, col := range param.colDefs {
 		if !col.AutoIncrement {
 			continue
 		}
-		var d int64
-		param.rel = rel
-		if d, err = GetOneColRangeFromAutoIncrTable(param, bat, namePre+col.Name, i); err != nil {
-			if err2 := txnCtx.Rollback(); err2 != nil {
-				return nil, err2
-			}
-			return nil, err
+		var d, s int64
+		param.rel, err = param.db.Relation(param.ctx, AUTO_INCR_TABLE)
+		if err != nil {
+			return nil, nil, err
 		}
-		incrNum = append(incrNum, d)
+		if d, s, err = GetOneColRangeFromAutoIncrTable(param, bat, fmt.Sprintf("%d", tableID)+"_"+col.Name, i); err != nil {
+			return nil, nil, err
+		}
+		offset = append(offset, d)
+		step = append(step, s)
 	}
-	if err = txnCtx.Commit(); err != nil {
-		return nil, err
-	}
-	return incrNum, nil
+	return offset, step, nil
 }
 
-func GetOneColRangeFromAutoIncrTable(param *AutoIncrParam, bat *batch.Batch, name string, pos int) (int64, error) {
-	var oriNum, maxNum, nullNum int64
-	oriNum = GetCurrentIndex(param, name)
+func GetOneColRangeFromAutoIncrTable(param *AutoIncrParam, bat *batch.Batch, name string, pos int) (int64, int64, error) {
+	taeEngine, ok := param.eg.(moengine.TxnEngine)
+	if !ok {
+		return 0, 0, errors.New("", "the engine is not tae")
+	}
+
+	txnCtx, err := taeEngine.StartTxn(nil)
+	if err != nil {
+		return 0, 0, err
+	}
+
+	oriNum, step := GetCurrentIndex(param, name)
 	if oriNum < 0 {
-		return 0, errors.New("", "GetIndex from auto_increment table fail")
+		if err2 := txnCtx.Rollback(); err2 != nil {
+			return 0, 0, err2
+		}
+		return 0, 0, errors.New("", "GetIndex from auto_increment table fail")
 	}
 
 	vec := bat.Vecs[pos]
-	nullNum = int64(nulls.Length(vec.Nsp))
+	nullNum := int64(nulls.Length(vec.Nsp))
 	if nullNum == int64(bat.Length()) {
 		if err := UpdateAutoIncrTable(param, oriNum+nullNum, name); err != nil {
-			return 0, err
+			if err2 := txnCtx.Rollback(); err2 != nil {
+				return 0, 0, err2
+			}
+			return 0, 0, err
 		}
-		return oriNum, nil
+		return oriNum, step, nil
 	}
 
-	maxNum = oriNum
+	maxNum := oriNum
 	switch vec.Typ.Oid {
 	case types.T_int32:
 		vs := vec.Col.([]int32)
 		for rowIndex := 0; rowIndex < bat.Length(); rowIndex++ {
 			if nulls.Contains(vec.Nsp, uint64(rowIndex)) {
-				maxNum++
+				maxNum += step
 			} else {
 				if int64(vs[rowIndex]) > maxNum {
 					maxNum = int64(vs[rowIndex])
@@ -142,7 +145,7 @@ func GetOneColRangeFromAutoIncrTable(param *AutoIncrParam, bat *batch.Batch, nam
 		vs := vec.Col.([]int64)
 		for rowIndex := 0; rowIndex < bat.Length(); rowIndex++ {
 			if nulls.Contains(vec.Nsp, uint64(rowIndex)) {
-				maxNum++
+				maxNum += step
 			} else {
 				if vs[rowIndex] > maxNum {
 					maxNum = vs[rowIndex]
@@ -152,19 +155,27 @@ func GetOneColRangeFromAutoIncrTable(param *AutoIncrParam, bat *batch.Batch, nam
 	}
 
 	if err := UpdateAutoIncrTable(param, maxNum, name); err != nil {
-		return 0, err
+		if err2 := txnCtx.Rollback(); err2 != nil {
+			return 0, 0, err2
+		}
+		return 0, 0, err
 	}
-	return oriNum, nil
+	err = txnCtx.Commit()
+	if err != nil {
+		return 0, 0, err
+	}
+	return oriNum, step, nil
 }
 
-func UpdateBatchImpl(ColDefs []*plan.ColDef, bat *batch.Batch, incrNum []int64) error {
+func UpdateBatchImpl(ColDefs []*plan.ColDef, bat *batch.Batch, offset, step []int64) error {
 	pos := 0
 	for i, col := range ColDefs {
 		if !col.AutoIncrement {
 			continue
 		}
 		vec := bat.Vecs[i]
-		curNum := incrNum[pos]
+		curNum := offset[pos]
+		stepNum := step[pos]
 		pos++
 		switch vec.Typ.Oid {
 		case types.T_int32:
@@ -172,7 +183,7 @@ func UpdateBatchImpl(ColDefs []*plan.ColDef, bat *batch.Batch, incrNum []int64) 
 			for rowIndex := 0; rowIndex < bat.Length(); rowIndex++ {
 				if nulls.Contains(vec.Nsp, uint64(rowIndex)) {
 					nulls.Del(vec.Nsp, uint64(rowIndex))
-					curNum++
+					curNum += stepNum
 					vs[rowIndex] = int32(curNum)
 				} else if vs[rowIndex] >= int32(curNum) {
 					curNum = int64(vs[rowIndex])
@@ -183,7 +194,7 @@ func UpdateBatchImpl(ColDefs []*plan.ColDef, bat *batch.Batch, incrNum []int64) 
 			for rowIndex := 0; rowIndex < bat.Length(); rowIndex++ {
 				if nulls.Contains(vec.Nsp, uint64(rowIndex)) {
 					nulls.Del(vec.Nsp, uint64(rowIndex))
-					curNum++
+					curNum += stepNum
 					vs[rowIndex] = curNum
 				} else if vs[rowIndex] >= curNum {
 					curNum = int64(vs[rowIndex])
@@ -196,18 +207,19 @@ func UpdateBatchImpl(ColDefs []*plan.ColDef, bat *batch.Batch, incrNum []int64) 
 	return nil
 }
 
-func GetCurrentIndex(param *AutoIncrParam, colName string) int64 {
+func GetCurrentIndex(param *AutoIncrParam, colName string) (int64, int64) {
 	rds, _ := param.rel.NewReader(param.ctx, 1, nil, nil)
 	for {
 		bat, err := rds[0].Read(AUTO_INCR_TABLE_COLNAME, nil, param.proc.Mp)
 		if err != nil || bat == nil {
-			return -1
+			return -1, 0
 		}
 		if len(bat.Vecs) < 2 {
 			panic(errors.New("", "the mo_increment_columns col num is not two"))
 		}
 		vs := bat.Vecs[0].Col.(*types.Bytes)
 		vs2 := bat.Vecs[1].Col.([]int64)
+		vs3 := bat.Vecs[2].Col.([]int64)
 		var rowIndex int64
 		for rowIndex = 0; rowIndex < int64(bat.Length()); rowIndex++ {
 			str := string(vs.Get(rowIndex))
@@ -216,7 +228,7 @@ func GetCurrentIndex(param *AutoIncrParam, colName string) int64 {
 			}
 		}
 		if rowIndex < int64(bat.Length()) {
-			return vs2[rowIndex]
+			return vs2[rowIndex], vs3[rowIndex]
 		}
 	}
 }
@@ -288,9 +300,14 @@ func CreateAutoIncrTable(e engine.Engine, ctx context.Context, proc *process.Pro
 }
 
 // for create table operation, add col in mo_increment_columns table
-func CreateAutoIncrCol(db engine.Database, ctx context.Context, proc *process.Process, cols []*plan.ColDef, namePre string) error {
-	rel, err := db.Relation(ctx, AUTO_INCR_TABLE)
+func CreateAutoIncrCol(db engine.Database, ctx context.Context, proc *process.Process, cols []*plan.ColDef, tblName string) error {
+	rel, err := db.Relation(ctx, tblName)
 	if err != nil {
+		return err
+	}
+	name := fmt.Sprintf("%d", rel.GetTableID(ctx)) + "_"
+
+	if rel, err = db.Relation(ctx, AUTO_INCR_TABLE); err != nil {
 		return err
 	}
 
@@ -298,7 +315,7 @@ func CreateAutoIncrCol(db engine.Database, ctx context.Context, proc *process.Pr
 		if !attr.AutoIncrement {
 			continue
 		}
-		bat := makeAutoIncrBatch(namePre+attr.Name, 0, 1)
+		bat := makeAutoIncrBatch(name+attr.Name, 0, 1)
 		if err = rel.Write(ctx, bat); err != nil {
 			return err
 		}
@@ -307,7 +324,7 @@ func CreateAutoIncrCol(db engine.Database, ctx context.Context, proc *process.Pr
 }
 
 // for delete table operation, delete col in mo_increment_columns table
-func DeleteAutoIncrCol(rel engine.Relation, db engine.Database, ctx context.Context, proc *process.Process, namePre string) error {
+func DeleteAutoIncrCol(rel engine.Relation, db engine.Database, ctx context.Context, proc *process.Process, tableID uint64) error {
 	rel2, err := db.Relation(ctx, AUTO_INCR_TABLE)
 	if err != nil {
 		return err
@@ -324,7 +341,7 @@ func DeleteAutoIncrCol(rel engine.Relation, db engine.Database, ctx context.Cont
 			if !d.Attr.AutoIncrement {
 				continue
 			}
-			bat := makeAutoIncrBatch(namePre+d.Attr.Name, 0, 1)
+			bat := makeAutoIncrBatch(fmt.Sprintf("%d", tableID)+"_"+d.Attr.Name, 0, 1)
 			if err = rel2.Delete(ctx, bat.GetVector(0), AUTO_INCR_TABLE_COLNAME[0]); err != nil {
 				return err
 			}
@@ -349,7 +366,7 @@ func GetAutoIncrTableDef() []engine.TableDef {
 		| Attribute |     Type     | Primary Key |             Note         |
 		| -------   | ------------ | ----------- | ------------------------ |
 		|   name    | varchar(770) |             | Name of the db_table_col |
-		|   num     |    int64     |             |   current index number   |
+		|  offset   |    int64     |             |   current index number   |
 		|   step    |    int64     |             |   every increase step    |
 	*/
 
