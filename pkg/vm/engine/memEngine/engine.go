@@ -17,6 +17,7 @@ package memEngine
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
@@ -110,4 +111,9 @@ func (e *MemEngine) Cost(_ *plan.ObjectRef, _ *plan.Expr) *plan.Cost {
 
 func (e *MemEngine) GetRootSql() string {
 	return ""
+}
+
+func (e *MemEngine) Hints() (h engine.Hints) {
+	h.CommitOrRollbackTimeout = time.Second
+	return
 }
