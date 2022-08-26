@@ -147,7 +147,7 @@ var errorMsgRefer = map[int32]moErrorMsgItem{
 	ErrPartitionSubpartition:               {26003, 1482, "It is only possible to mix RANGE/LIST partitioning with HASH/KEY partitioning for subpartitioning"},
 	ErrWrongExprInPartitionFunc:            {26004, 1486, "Constant, random or timezone-dependent expressions in (sub)partitioning function are not allowed"},
 	ErrFieldTypeNotAllowedAsPartitionField: {26005, 1659, "Field '%-.192s' is of a not allowed type for this type of partitioning"},
-	ErrSameNamePartition:                   {26006, 1517, "Duplicate partition field name '%-.192s'"},
+	ErrSameNamePartition:                   {26006, 1517, "Duplicate partition name %-.192s"},
 	ErrSameNamePartitionField:              {26007, 1652, "Duplicate partition field name '%-.192s'"},
 	ErrTooManyPartitions:                   {26008, 1499, "Too many partitions (including subpartitions) were defined"},
 	ErrPartitionMaxvalue:                   {26009, 1481, "MAXVALUE can only be used in last partition definition"},
