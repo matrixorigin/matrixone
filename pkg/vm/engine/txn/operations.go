@@ -107,7 +107,8 @@ type CreateDatabaseReq struct {
 }
 
 type CreateDatabaseResp struct {
-	ErrExisted ErrExisted
+	ErrReadOnly ErrReadOnly
+	ErrExisted  ErrExisted
 }
 
 type OpenDatabaseReq struct {
@@ -131,6 +132,7 @@ type DeleteDatabaseReq struct {
 }
 
 type DeleteDatabaseResp struct {
+	ErrReadOnly ErrReadOnly
 	ErrNotFound ErrDatabaseNotFound
 }
 
@@ -142,7 +144,9 @@ type CreateRelationReq struct {
 }
 
 type CreateRelationResp struct {
-	ErrExisted ErrExisted
+	ErrReadOnly         ErrReadOnly
+	ErrDatabaseNotFound ErrDatabaseNotFound
+	ErrExisted          ErrExisted
 }
 
 type DeleteRelationReq struct {
@@ -151,6 +155,7 @@ type DeleteRelationReq struct {
 }
 
 type DeleteRelationResp struct {
+	ErrReadOnly ErrReadOnly
 	ErrNotFound ErrRelationNotFound
 }
 
@@ -179,6 +184,7 @@ type AddTableDefReq struct {
 }
 
 type AddTableDefResp struct {
+	ErrReadOnly       ErrReadOnly
 	ErrTableNotFound  ErrRelationNotFound
 	ErrExisted        ErrExisted
 	ErrColumnNotFound ErrColumnNotFound
@@ -190,6 +196,7 @@ type DelTableDefReq struct {
 }
 
 type DelTableDefResp struct {
+	ErrReadOnly      ErrReadOnly
 	ErrTableNotFound ErrRelationNotFound
 	ErrDefNotFound   ErrDefNotFound
 }
@@ -200,6 +207,7 @@ type DeleteReq struct {
 }
 
 type DeleteResp struct {
+	ErrReadOnly      ErrReadOnly
 	ErrTableNotFound ErrRelationNotFound
 }
 
@@ -226,6 +234,7 @@ type TruncateReq struct {
 }
 
 type TruncateResp struct {
+	ErrReadOnly      ErrReadOnly
 	AffectedRows     int64
 	ErrTableNotFound ErrRelationNotFound
 }
@@ -236,6 +245,7 @@ type UpdateReq struct {
 }
 
 type UpdateResp struct {
+	ErrReadOnly      ErrReadOnly
 	ErrTableNotFound ErrRelationNotFound
 }
 
@@ -245,6 +255,7 @@ type WriteReq struct {
 }
 
 type WriteResp struct {
+	ErrReadOnly      ErrReadOnly
 	ErrTableNotFound ErrRelationNotFound
 }
 

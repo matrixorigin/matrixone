@@ -14,11 +14,15 @@
 
 package fileservice
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+)
 
 func Get[T any](fs FileService, name string) (res T, err error) {
+	lowerName := strings.ToLower(name)
 	if fs, ok := fs.(*FileServices); ok {
-		f, ok := fs.mappings[name]
+		f, ok := fs.mappings[lowerName]
 		if !ok {
 			err = fmt.Errorf("file service not found: %s", name)
 			return
@@ -36,7 +40,7 @@ func Get[T any](fs FileService, name string) (res T, err error) {
 		err = fmt.Errorf("%T does not implement %T", fs, res)
 		return
 	}
-	if fs.Name() != name {
+	if !strings.EqualFold(fs.Name(), lowerName) {
 		err = fmt.Errorf("file service name not match, expecting %s, got %s", name, fs.Name())
 		return
 	}

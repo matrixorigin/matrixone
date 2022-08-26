@@ -1,4 +1,4 @@
-# **CHAR_LENGTH**
+# **CHAR_LENGTH()**
 
 ## **Description**
 
