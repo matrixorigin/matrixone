@@ -14,7 +14,20 @@
 
 package compile
 
-/*
+import (
+	"context"
+	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/memEngine"
+	"github.com/stretchr/testify/require"
+	"testing"
+)
+
 func TestScopeSerialization(t *testing.T) {
 	testCases := []string{
 		"select 1",
@@ -29,7 +42,7 @@ func TestScopeSerialization(t *testing.T) {
 	for i, sourceScope := range sourceScopes {
 		data, errEncode := encodeScope(sourceScope)
 		require.NoError(t, errEncode)
-		targetScope, errDecode := decodeScope(data)
+		targetScope, errDecode := decodeScope(data, sourceScope.Proc)
 		require.NoError(t, errDecode)
 		fmt.Println(fmt.Sprintf("number is %d", i))
 		fmt.Println(fmt.Sprintf("sourceScope : %v", sourceScope))
@@ -41,6 +54,16 @@ func TestScopeSerialization(t *testing.T) {
 		for j := 0; j < len(sourceScope.Instructions); j++ {
 			require.Equal(t, sourceScope.Instructions[j].Op, targetScope.Instructions[j].Op)
 		}
+		if sourceScope.DataSource == nil {
+			require.Nil(t, targetScope.DataSource)
+		} else {
+			require.Equal(t, sourceScope.DataSource.SchemaName, targetScope.DataSource.SchemaName)
+			require.Equal(t, sourceScope.DataSource.RelationName, targetScope.DataSource.RelationName)
+			require.Equal(t, sourceScope.DataSource.PushdownId, targetScope.DataSource.PushdownId)
+			require.Equal(t, sourceScope.DataSource.PushdownAddr, targetScope.DataSource.PushdownAddr)
+		}
+		require.Equal(t, sourceScope.NodeInfo.Addr, targetScope.NodeInfo.Addr)
+		require.Equal(t, sourceScope.NodeInfo.Id, targetScope.NodeInfo.Id)
 	}
 
 }
@@ -73,4 +96,3 @@ func generateScopeCases(t *testing.T, testCases []string) []*Scope {
 	}
 	return result
 }
-*/
