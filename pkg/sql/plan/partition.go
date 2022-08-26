@@ -81,7 +81,7 @@ func buildHashPartition(partitionBinder *PartitionBinder, partitionOp *tree.Part
 	return nil
 }
 
-//  buildKeyPartition handle KEY Partitioning
+// buildKeyPartition handle KEY Partitioning
 func buildKeyPartition(partitionBinder *PartitionBinder, partitionOp *tree.PartitionOption, tableDef *TableDef) error {
 	if partitionOp.SubPartBy != nil {
 		return moerr.New(moerr.ErrPartitionSubpartition)
@@ -137,7 +137,7 @@ func buildKeyPartition(partitionBinder *PartitionBinder, partitionOp *tree.Parti
 	return nil
 }
 
-//  buildRangePartition handle Range Partitioning and Range columns partitioning
+// buildRangePartition handle Range Partitioning and Range columns partitioning
 func buildRangePartition(partitionBinder *PartitionBinder, partitionOp *tree.PartitionOption, tableDef *TableDef) error {
 	partitionType := partitionOp.PartBy.PType.(*tree.RangeType)
 
@@ -186,7 +186,7 @@ func buildRangePartition(partitionBinder *PartitionBinder, partitionOp *tree.Par
 	return nil
 }
 
-//  buildListPartitiion handle List Partitioning and List columns partitioning
+// buildListPartitiion handle List Partitioning and List columns partitioning
 func buildListPartitiion(partitionBinder *PartitionBinder, partitionOp *tree.PartitionOption, tableDef *TableDef) error {
 	partitionType := partitionOp.PartBy.PType.(*tree.ListType)
 
@@ -233,7 +233,7 @@ func buildListPartitiion(partitionBinder *PartitionBinder, partitionOp *tree.Par
 	return nil
 }
 
-//  buildPartitionColumns COLUMNS partitioning enables the use of multiple columns in partitioning keys
+// buildPartitionColumns COLUMNS partitioning enables the use of multiple columns in partitioning keys
 func buildPartitionColumns(partitionBinder *PartitionBinder, partitionInfo *plan.PartitionInfo, columnList []*tree.UnresolvedName) error {
 	columnsExpr := make([]*plan.Expr, len(columnList))
 	partitionColumns := make([]string, len(columnList))
@@ -257,7 +257,7 @@ func buildPartitionColumns(partitionBinder *PartitionBinder, partitionInfo *plan
 	return nil
 }
 
-//  buildPartitionExpr expr partitioning is an expression using one or more table columns.
+// buildPartitionExpr expr partitioning is an expression using one or more table columns.
 func buildPartitionExpr(partitionBinder *PartitionBinder, partitionInfo *plan.PartitionInfo, expr tree.Expr) error {
 	planExpr, err := partitionBinder.BindExpr(expr, 0, true)
 	if err != nil {
@@ -400,7 +400,7 @@ func checkColumnsPartitionType(partitionBinder *PartitionBinder, partitionInfo *
 	return nil
 }
 
-//  checkTableDefPartition Perform integrity constraint check on partitions of create table statement
+// checkTableDefPartition Perform integrity constraint check on partitions of create table statement
 func checkTableDefPartition(partitionBinder *PartitionBinder, tableDef *TableDef, partitionInfo *plan.PartitionInfo) error {
 	if err := checkPartitionFuncType(partitionBinder, tableDef, partitionInfo); err != nil {
 		return err
@@ -502,7 +502,7 @@ func checkPartitionDefinitionConstraints(partitionBinder *PartitionBinder, parti
 	return err
 }
 
-//  checkPartitionColumnsUnique check partition columns for duplicate columns
+// checkPartitionColumnsUnique check partition columns for duplicate columns
 func checkPartitionColumnsUnique(partitionInfo *plan.PartitionInfo) error {
 	if len(partitionInfo.PartitionColumns) <= 1 {
 		return nil
@@ -556,7 +556,7 @@ func extractColFromExpr(partitionBinder *PartitionBinder, expr *Expr) []string {
 	return result
 }
 
-//  extractColFromFunc extract column names from function expression
+// extractColFromFunc extract column names from function expression
 func extractColFromFunc(partitionBinder *PartitionBinder, funcExpr *plan.Expr_F) []string {
 	result := make([]string, 0)
 	for _, arg := range funcExpr.F.Args {
