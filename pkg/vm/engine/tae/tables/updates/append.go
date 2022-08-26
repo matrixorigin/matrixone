@@ -30,13 +30,14 @@ import (
 
 type AppendNode struct {
 	sync.RWMutex
-	commitTs types.TS
-	txn      txnif.AsyncTxn
-	logIndex *wal.Index
-	startRow uint32
-	maxRow   uint32
-	mvcc     *MVCCHandle
-	id       *common.ID
+	commitTs  types.TS
+	prepareTs types.TS
+	txn       txnif.AsyncTxn
+	logIndex  *wal.Index
+	startRow  uint32
+	maxRow    uint32
+	mvcc      *MVCCHandle
+	id        *common.ID
 }
 
 func MockAppendNode(ts types.TS, startRow, maxRow uint32, mvcc *MVCCHandle) *AppendNode {
@@ -63,7 +64,6 @@ func NewAppendNode(
 	txn txnif.AsyncTxn,
 	startRow, maxRow uint32,
 	mvcc *MVCCHandle) *AppendNode {
-	//ts := uint64(0)
 	var ts types.TS
 	if txn != nil {
 		ts = txn.GetCommitTS()
@@ -106,9 +106,18 @@ func (node *AppendNode) GetStartRow() uint32  { return node.startRow }
 func (node *AppendNode) GetMaxRow() uint32    { return node.maxRow }
 func (node *AppendNode) SetMaxRow(row uint32) { node.maxRow = row }
 
+func (node *AppendNode) Prepare2PCPrepare() error {
+	node.Lock()
+	defer node.Unlock()
+	node.prepareTs = node.txn.GetPrepareTS()
+	node.commitTs = node.txn.GetPrepareTS()
+	return nil
+}
+
 func (node *AppendNode) PrepareCommit() error {
 	node.Lock()
 	defer node.Unlock()
+	node.prepareTs = node.txn.GetCommitTS()
 	node.commitTs = node.txn.GetCommitTS()
 	return nil
 }
@@ -131,6 +140,13 @@ func (node *AppendNode) ApplyCommit(index *wal.Index) error {
 		return nil
 	}
 	return listener(node)
+}
+
+func (node *AppendNode) ApplyRollback(index *wal.Index) (err error) {
+	node.Lock()
+	defer node.Unlock()
+	node.logIndex = index
+	return
 }
 
 func (node *AppendNode) WriteTo(w io.Writer) (n int64, err error) {
@@ -183,7 +199,6 @@ func (node *AppendNode) PrepareRollback() (err error) {
 	node.mvcc.DeleteAppendNodeLocked(node)
 	return
 }
-func (node *AppendNode) ApplyRollback() (err error) { return }
 func (node *AppendNode) MakeCommand(id uint32) (cmd txnif.TxnCmd, err error) {
 	cmd = NewAppendCmd(id, node)
 	return

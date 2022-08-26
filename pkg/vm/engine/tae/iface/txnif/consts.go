@@ -16,10 +16,6 @@ package txnif
 
 import "github.com/matrixorigin/matrixone/pkg/container/types"
 
-const (
-// UncommitTS = ^uint64(0)
-)
-
 var UncommitTS types.TS
 
 func init() {
@@ -30,11 +26,28 @@ type TxnState int32
 
 const (
 	TxnStateActive TxnState = iota
+	//TxnStateCommitting only for 1PC
 	TxnStateCommitting
+	//TxnStatePreparing only for 2PC
+	TxnStatePreparing
+	//TxnStatePrepared only for 2PC
+	TxnStatePrepared
+	//TxnStateCommittingFinished only for 2PC
+	TxnStateCommittingFinished
 	TxnStateRollbacking
 	TxnStateCommitted
 	TxnStateRollbacked
 	TxnStateUnknown
+)
+
+type TxnStatus int32
+
+const (
+// TxnStatusActive TxnStatus = iota
+// TxnStatusPrepared
+// TxnStatusCommittingFinished
+// TxnStatusCommitted
+// TxnStatusRollbacked
 )
 
 func TxnStrState(state TxnState) string {
@@ -43,6 +56,10 @@ func TxnStrState(state TxnState) string {
 		return "Active"
 	case TxnStateCommitting:
 		return "Committing"
+	case TxnStatePrepared:
+		return "Prepared"
+	case TxnStateCommittingFinished:
+		return "CommittingFinished"
 	case TxnStateRollbacking:
 		return "Rollbacking"
 	case TxnStateCommitted:
