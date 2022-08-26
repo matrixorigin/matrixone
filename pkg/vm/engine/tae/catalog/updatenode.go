@@ -195,7 +195,19 @@ func (e *UpdateNode) ApplyCommit(index *wal.Index) (err error) {
 	return
 }
 
-func (e *UpdateNode) ApplyRollback() (err error) {
+func (e *UpdateNode) ApplyRollback(index *wal.Index) (err error) {
+	e.AddLogIndex(index)
+	return
+}
+
+func (e *UpdateNode) Prepare2PCPrepare() (err error) {
+	if e.CreatedAt.IsEmpty() {
+		e.CreatedAt = e.Txn.GetPrepareTS()
+	}
+	if e.Deleted {
+		e.DeletedAt = e.Txn.GetPrepareTS()
+	}
+	e.End = e.Txn.GetPrepareTS()
 	return
 }
 
