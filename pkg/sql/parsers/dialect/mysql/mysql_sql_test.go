@@ -26,8 +26,8 @@ var (
 		input  string
 		output string
 	}{
-		//input:  `create table table10 (a int primary key, b varchar(10)) checksum=0 COMMENT="asdf"`,
-		//output: "create table table10 (a int primary key, b varchar(10)) checksum = 0 comment = asdf",
+		input:  `create table table10 (a int primary key, b varchar(10)) checksum=0 COMMENT="asdf"`,
+		output: "create table table10 (a int primary key, b varchar(10)) checksum = 0 comment = asdf",
 	}
 )
 
