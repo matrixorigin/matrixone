@@ -639,6 +639,11 @@ func (th *TxnHandler) CommitTxn() error {
 	if ctx == nil {
 		panic("context should not be nil")
 	}
+	ctx, cancel := context.WithTimeout(
+		ctx,
+		th.storage.Hints().CommitOrRollbackTimeout,
+	)
+	defer cancel()
 	err := th.txn.Commit(ctx)
 	th.SetInvalid()
 	return err
@@ -652,6 +657,11 @@ func (th *TxnHandler) RollbackTxn() error {
 	if ctx == nil {
 		panic("context should not be nil")
 	}
+	ctx, cancel := context.WithTimeout(
+		ctx,
+		th.storage.Hints().CommitOrRollbackTimeout,
+	)
+	defer cancel()
 	err := th.txn.Rollback(ctx)
 	th.SetInvalid()
 	return err

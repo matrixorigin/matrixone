@@ -152,50 +152,62 @@ For more details, you can checkout [MatrixOne Architecture](https://docs.matrixo
 
 ## ⚡️ <a id="quick-start">Quick start</a>
 
-
 ### ⚙️ Install MatrixOne
 MatrixOne supports Linux and MacOS. You can install MatrixOne either by [building from source](#building-from-source) or [using docker](#using-docker).
 For other installation types, please refer to [MatrixOne installation](https://docs.matrixorigin.io/0.5.1/MatrixOne/Get-Started/install-standalone-matrixone/) for more details.
 #### **Building from source**
 
-1. Install Go (version 1.19 is required).
+**Step 1. Install Go (version 1.19 is required).**
 
-2. Get the MatrixOne code: Depending on your needs, choose whether you want to keep your code up to date, or if you want to get the latest stable version of the code.
+**Step 2. Get the MatrixOne code to build MatrixOne**
 
-- *Option 1*: Get the MatrixOne(Preview Version) code
+Depending on your needs, choose whether you want to keep your code up to date, or if you want to get the latest stable version of the code.
+
+- *Option 1*: Get the MatrixOne(Preview Version) code, build MatrixOne
 
 The **main** branch is the default branch, the code on the main branch is always up-to-date but not stable enough.
 
-```
-$ git clone https://github.com/matrixorigin/matrixone.git
-$ cd matrixone
-```
+1. Get the MatrixOne(Preview Version) code:
 
-- *Option 2*: Get the MatrixOne(Stable Version) code
+    ```
+    git clone https://github.com/matrixorigin/matrixone.git
+    cd matrixone
+    ```
 
-If you want to get the latest stable version code released by MatrixOne, please switch to the branch of version **0.5.1** first.
+2. You can run `make debug`, `make clean`, or anything else our Makefile offers.
 
-```
-$ git clone https://github.com/matrixorigin/matrixone.git
-$ git checkout 0.5.1
-$ cd matrixone
-```
+    ```
+    make build
+    ```
 
-3. Run make:
+3. Launch MatrixOne server：
 
-You can run `make debug`, `make clean`, or anything else our Makefile offers.
+    ```
+    ./mo-service -cfg ./etc/cn-standalone-test.toml
+    ```
 
-```
-$ make config
-$ make build
-```
+- *Option 2*: Get the MatrixOne(Stable Version) code, build MatrixOne
 
-4. Boot MatrixOne server:
+1. If you want to get the latest stable version code released by MatrixOne, please switch to the branch of version **0.5.1** first.
 
-```
-$ ./mo-server system_vars_config.toml
-```
+    ```
+    git clone https://github.com/matrixorigin/matrixone.git
+    git checkout 0.5.1
+    cd matrixone
+    ```
 
+2. You can run `make debug`, `make clean`, or anything else our Makefile offers.
+
+    ```
+    make config
+    make build
+    ```
+
+3. Launch MatrixOne server：
+
+    ```
+    ./mo-server system_vars_config.toml
+    ```
 
 #### **Using docker**
 1. Make sure Docker is installed, verify Docker daemon is running in the background:

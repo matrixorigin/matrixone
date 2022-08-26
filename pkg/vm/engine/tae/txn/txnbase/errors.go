@@ -24,4 +24,11 @@ var (
 	ErrTxnCannotRollback   = errors.New("tae: txn cannot txn rollback")
 
 	ErrDDLDropCreated = errors.New("tae: DDL cannot drop created in a txn")
+
+	ErrTxnStateNotActive   = errors.New("tae: txn is not in TxnStateActive")
+	ErrTxnStateNotPrepared = errors.New("tae: txn is not in TxnStatePrepared")
+	ErrTxnNotFound         = errors.New("tae: txn is not found in txn manager")
+
+	ErrTxnStateCannotRollback = errors.New("tae: txn is not in right state,can not rollback")
+	ErrTxnStateCannotCommit   = errors.New("tae: txn is not is right state, can not Commit")
 )

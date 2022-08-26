@@ -10,6 +10,10 @@ The basic idea is that we track the P/E (Price-to-Earnings) and P/B (Price-to-Bo
 
 Every day after the market closes, we compare the P/E and P/B values with the historical lowest P/E and P/B. If the current P/E or P/B is even lower than the historical lowest, the stock is very likely underestimated. We can further investigate its reason for falling and judge if it's a good time to buy it.
 
+### Source Code
+
+You can find the source code of this demo at [matrix_one_app](https://github.com/matrixorigin/matrixone_python_app).
+
 ## **Before you start**
 
 Before you start, you need to have a Tushare account and get an API token. If you haven't signed up for Tushare, you can sign up for it at [https://tushare.pro/](https://tushare.pro/) and you can find your API token at [https://tushare.pro/user/token#](https://tushare.pro/user/token#).
@@ -24,9 +28,14 @@ Besides the data source account, you need to at least have this two basic softwa
 
 You may refer to [Python 3 installation tutorial](https://realpython.com/installing-python/) and [MatrixOne installation](../Get-Started/install-standalone-matrixone.md) for more details.
 
-Moreover, we need to install dependent `Tushare` and `pymysql` python libraries to use Tushare and access MatrixOne.
+Moreover, we need to install dependents to use Tushare and access MatrixOne:
+
+- [pymysql](https://github.com/PyMySQL/PyMySQL) python libraries
+
+- `Tushare`: Download [matrix_one_app](https://github.com/matrixorigin/matrixone_python_app) and install dependent in the path *matrixone_python_app/stock_analysis*
 
 ```bash
+cd matrixone_python_app/stock_analysis
 pip3 install -r requirements.txt
 ```
 
@@ -213,7 +222,3 @@ if df.empty == False:
             cursor.executemany(" insert into pe (ts_code, trade_date,pe,pb) values (%s, %s,%s,%s)", val_to_insert)
 
 ```
-
-## Source Code
-
-You can find the source code of this demo at [matrix_one_app](https://github.com/matrixorigin/matrixone_python_app).

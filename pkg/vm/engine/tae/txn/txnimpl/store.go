@@ -349,8 +349,27 @@ func (store *txnStore) SoftDeleteSegment(dbId uint64, id *common.ID) (err error)
 }
 
 func (store *txnStore) ApplyRollback() (err error) {
+	if store.cmdMgr.GetCSN() == 0 {
+		return
+	}
 	for _, db := range store.dbs {
 		if err = db.ApplyRollback(); err != nil {
+			break
+		}
+	}
+	return
+}
+
+// ApplyPrepare apply preparing for a 2PC distributed transaction
+func (store *txnStore) Apply2PCPrepare() (err error) {
+	for _, e := range store.logs {
+		if err = e.WaitDone(); err != nil {
+			return
+		}
+		e.Free()
+	}
+	for _, db := range store.dbs {
+		if err = db.Apply2PCPrepare(); err != nil {
 			break
 		}
 	}
@@ -372,9 +391,9 @@ func (store *txnStore) ApplyCommit() (err error) {
 	return
 }
 
-func (store *txnStore) PreCommit() (err error) {
+func (store *txnStore) PreCommitOr2PCPrepare() (err error) {
 	for _, db := range store.dbs {
-		if err = db.PreCommit(); err != nil {
+		if err = db.PreCommitOr2PCPrepare(); err != nil {
 			return
 		}
 	}
@@ -389,6 +408,21 @@ func (store *txnStore) PrepareCommit() (err error) {
 	}
 	for _, db := range store.dbs {
 		if err = db.PrepareCommit(); err != nil {
+			break
+		}
+	}
+
+	return
+}
+
+func (store *txnStore) Prepare2PCPrepare() (err error) {
+	if store.warChecker != nil {
+		if err = store.warChecker.check(); err != nil {
+			return err
+		}
+	}
+	for _, db := range store.dbs {
+		if err = db.Prepare2PCPrepare(); err != nil {
 			break
 		}
 	}
@@ -411,6 +445,33 @@ func (store *txnStore) PreApplyCommit() (err error) {
 		return
 	}
 
+	logEntry, err := store.cmdMgr.ApplyTxnRecord(store.txn.GetID())
+	if err != nil {
+		return
+	}
+	if logEntry != nil {
+		store.logs = append(store.logs, logEntry)
+	}
+	logutil.Debugf("Txn-%d PrepareCommit Takes %s", store.txn.GetID(), time.Since(now))
+	return
+}
+
+func (store *txnStore) PreApply2PCPrepare() (err error) {
+	now := time.Now()
+	for _, db := range store.dbs {
+		if err = db.PreApply2PCPrepare(); err != nil {
+			return
+		}
+	}
+	if err = store.CollectCmd(); err != nil {
+		return
+	}
+
+	if store.cmdMgr.GetCSN() == 0 {
+		return
+	}
+	//TODO:How to distinguish prepare log of 2PC entry from commit log entry of 1PC?
+	//logEntry, err := store.cmdMgr.ApplyTxnRecord(store.txn.GetID(), type)
 	logEntry, err := store.cmdMgr.ApplyTxnRecord(store.txn.GetID())
 	if err != nil {
 		return
