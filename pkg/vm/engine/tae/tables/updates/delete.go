@@ -46,6 +46,7 @@ type DeleteNode struct {
 	mask       *roaring.Bitmap
 	startTs    types.TS
 	commitTs   types.TS
+	prepareTs  types.TS
 	nt         NodeType
 	id         *common.ID
 	dt         handle.DeleteType
@@ -164,6 +165,18 @@ func (node *DeleteNode) RangeDeleteLocked(start, end uint32) {
 }
 func (node *DeleteNode) GetCardinalityLocked() uint32 { return uint32(node.mask.GetCardinality()) }
 
+func (node *DeleteNode) Prepare2PCPrepare() (err error) {
+	node.chain.mvcc.Lock()
+	defer node.chain.mvcc.Unlock()
+	if node.commitTs != txnif.UncommitTS {
+		return
+	}
+	node.commitTs = node.txn.GetPrepareTS()
+	node.prepareTs = node.txn.GetPrepareTS()
+	node.chain.UpdateLocked(node)
+	return
+}
+
 func (node *DeleteNode) PrepareCommit() (err error) {
 	node.chain.mvcc.Lock()
 	defer node.chain.mvcc.Unlock()
@@ -171,6 +184,7 @@ func (node *DeleteNode) PrepareCommit() (err error) {
 		return
 	}
 	node.commitTs = node.txn.GetCommitTS()
+	node.prepareTs = node.txn.GetCommitTS()
 	node.chain.UpdateLocked(node)
 	return
 }
@@ -189,6 +203,15 @@ func (node *DeleteNode) ApplyCommit(index *wal.Index) (err error) {
 	node.chain.mvcc.IncChangeNodeCnt()
 	node.Unlock()
 	return node.OnApply()
+}
+
+func (node *DeleteNode) ApplyRollback(index *wal.Index) (err error) {
+	node.Lock()
+	if node.txn == nil {
+		panic("DeleteNode | ApplyCommit | LogicErr")
+	}
+	node.logIndex = index
+	return
 }
 
 func (node *DeleteNode) GeneralString() string {
@@ -287,8 +310,6 @@ func (node *DeleteNode) PrepareRollback() (err error) {
 	node.chain.RemoveNodeLocked(node)
 	return
 }
-
-func (node *DeleteNode) ApplyRollback() (err error) { return }
 
 func (node *DeleteNode) OnApply() (err error) {
 	if node.dt == handle.DT_Normal {

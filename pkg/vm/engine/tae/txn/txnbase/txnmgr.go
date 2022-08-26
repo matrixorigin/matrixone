@@ -34,7 +34,10 @@ type TxnFactory = func(*TxnManager, txnif.TxnStore, uint64, types.TS, []byte) tx
 type TxnManager struct {
 	sync.RWMutex
 	common.ClosedState
-	sm.StateMachine
+	PreparingSM sm.StateMachine
+	//Notice that prepared transactions would be enqueued into
+	//the receiveQueue of CommittingSM at run time or replay time.
+	CommittingSM    sm.StateMachine
 	IDMap           map[uint64]txnif.AsyncTxn
 	IdAlloc         *common.IdAlloctor
 	TsAlloc         *types.TsAlloctor
@@ -59,8 +62,12 @@ func NewTxnManager(txnStoreFactory TxnStoreFactory, txnFactory TxnFactory, clock
 		}),
 		Exception: new(atomic.Value)}
 	pqueue := sm.NewSafeQueue(20000, 1000, mgr.onPreparing)
-	cqueue := sm.NewSafeQueue(20000, 1000, mgr.onCommit)
-	mgr.StateMachine = sm.NewStateMachine(new(sync.WaitGroup), mgr, pqueue, cqueue)
+	fqueue := sm.NewSafeQueue(20000, 1000, mgr.onFlushing)
+	mgr.PreparingSM = sm.NewStateMachine(new(sync.WaitGroup), mgr, pqueue, fqueue)
+
+	cqueue := sm.NewSafeQueue(20000, 1000, mgr.onCommitting)
+	cfqueue := sm.NewSafeQueue(20000, 1000, mgr.onCFlushing)
+	mgr.CommittingSM = sm.NewStateMachine(new(sync.WaitGroup), mgr, cqueue, cfqueue)
 	return mgr
 }
 
@@ -115,7 +122,6 @@ func (mgr *TxnManager) DeleteTxn(id uint64) {
 	defer mgr.Unlock()
 	txn := mgr.IDMap[id]
 	delete(mgr.IDMap, id)
-	//mgr.ActiveMask.Remove(txn.GetStartTS())
 	mgr.Active.Delete(txn.GetStartTS())
 }
 
@@ -129,19 +135,38 @@ func (mgr *TxnManager) GetTxn(id uint64) txnif.AsyncTxn {
 	return mgr.IDMap[id]
 }
 
-func (mgr *TxnManager) OnOpTxn(op *OpTxn) (err error) {
-	_, err = mgr.EnqueueRecevied(op)
+func (mgr *TxnManager) EnqueueFlushing(op any) (err error) {
+	_, err = mgr.PreparingSM.EnqueueCheckpoint(op)
 	return
 }
 
-func (mgr *TxnManager) onPreCommit(txn txnif.AsyncTxn) {
+func (mgr *TxnManager) EnqueueCommitting(op any) (err error) {
+	_, err = mgr.CommittingSM.EnqueueRecevied(op)
+	return
+}
+
+func (mgr *TxnManager) EnqueueCFlushing(op any) (err error) {
+	_, err = mgr.CommittingSM.EnqueueCheckpoint(op)
+	return
+}
+
+func (mgr *TxnManager) OnOpTxn(op *OpTxn) (err error) {
+	_, err = mgr.PreparingSM.EnqueueRecevied(op)
+	return
+}
+
+func (mgr *TxnManager) onPreCommitOr2PCPrepare(txn txnif.AsyncTxn) {
 	now := time.Now()
-	txn.SetError(txn.PreCommit())
+	txn.SetError(txn.PreCommitOr2PCPrepare())
 	logutil.Debug("[PreCommit]", TxnField(txn), common.DurationField(time.Since(now)))
 }
 
 func (mgr *TxnManager) onPreparCommit(txn txnif.AsyncTxn) {
 	txn.SetError(txn.PrepareCommit())
+}
+
+func (mgr *TxnManager) onPrepar2PCPrepare(txn txnif.AsyncTxn) {
+	txn.SetError(txn.Prepare2PCPrepare())
 }
 
 func (mgr *TxnManager) onPreApplyCommit(txn txnif.AsyncTxn) {
@@ -151,18 +176,31 @@ func (mgr *TxnManager) onPreApplyCommit(txn txnif.AsyncTxn) {
 	}
 }
 
+func (mgr *TxnManager) onPreApply2PCPrepare(txn txnif.AsyncTxn) {
+	if err := txn.PreApply2PCPrepare(); err != nil {
+		txn.SetError(err)
+		mgr.OnException(err)
+	}
+}
+
 func (mgr *TxnManager) onPreparRollback(txn txnif.AsyncTxn) {
 	_ = txn.PrepareRollback()
 }
 
-// TODO
+// onPreparing the commit of 1PC txn and prepare of 2PC txn
+// must both enter into this queue for conflict check.
+// OpCommit : the commit of 1PC txn
+// OpPrepare: the prepare of 2PC txn
+// OPRollback:the rollback of 2PC or 1PC
 func (mgr *TxnManager) onPreparing(items ...any) {
 	now := time.Now()
 	for _, item := range items {
 		op := item.(*OpTxn)
-		if op.Op == OpCommit {
-			mgr.onPreCommit(op.Txn)
+		if op.Op == OpCommit || op.Op == OpPrepare {
+			//Mainly do conflict check for 1PC Commit or 2PC Prepare
+			mgr.onPreCommitOr2PCPrepare(op.Txn)
 		}
+		//Before this moment, all mvcc nodes of a txn has been pushed into the MVCCHandle.
 		mgr.Lock()
 		ts := mgr.TsAlloc.Alloc()
 		op.Txn.Lock()
@@ -175,9 +213,12 @@ func (mgr *TxnManager) onPreparing(items ...any) {
 		} else if op.Op == OpRollback {
 			// Should not fail here
 			_ = op.Txn.ToRollbackingLocked(ts)
+		} else if op.Op == OpPrepare {
+			_ = op.Txn.ToPreparingLocked(ts)
 		}
 		op.Txn.Unlock()
 		mgr.Unlock()
+		//for 1PC Commit
 		if op.Op == OpCommit {
 			mgr.onPreparCommit(op.Txn)
 			if op.Txn.GetError() != nil {
@@ -188,43 +229,150 @@ func (mgr *TxnManager) onPreparing(items ...any) {
 				op.Txn.Unlock()
 				mgr.onPreparRollback(op.Txn)
 			} else {
+				//1.  Appending the data into appendableNode of block
+				// 2. Collect redo log,append into WalDriver
+				//TODO::need to handle the error,instead of panic for simplicity
 				mgr.onPreApplyCommit(op.Txn)
+				if op.Txn.GetError() != nil {
+					panic(op.Txn.GetID())
+				}
+			}
+			//for 2PC Prepare
+		} else if op.Op == OpPrepare {
+			mgr.onPrepar2PCPrepare(op.Txn)
+			if op.Txn.GetError() != nil {
+				op.Op = OpRollback
+				op.Txn.Lock()
+				// Should not fail here
+				_ = op.Txn.ToRollbackingLocked(ts)
+				op.Txn.Unlock()
+				mgr.onPreparRollback(op.Txn)
+			} else {
+				//1.Appending the data into appendableNode of block
+				// 2. Collect redo log,append into WalDriver
+				//TODO::need to handle the error,instead of panic for simplicity
+				mgr.onPreApply2PCPrepare(op.Txn)
+				if op.Txn.GetError() != nil {
+					panic(op.Txn.GetID())
+				}
 			}
 		} else {
+			//for 1PC or 2PC Rollback
 			mgr.onPreparRollback(op.Txn)
 		}
-		if _, err := mgr.EnqueueCheckpoint(op); err != nil {
+		if err := mgr.EnqueueFlushing(op); err != nil {
 			panic(err)
 		}
 	}
-	logutil.Debug("[PrepareCommit]",
+	logutil.Debug("[onPreparing]",
 		common.NameSpaceField("txns"),
 		common.DurationField(time.Since(now)),
 		common.CountField(len(items)))
 }
 
-// TODO
-func (mgr *TxnManager) onCommit(items ...any) {
+func (mgr *TxnManager) onFlushing(items ...any) {
 	var err error
 	now := time.Now()
 	for _, item := range items {
 		op := item.(*OpTxn)
 		switch op.Op {
+		//for 1PC Commit
 		case OpCommit:
 			if err = op.Txn.ApplyCommit(); err != nil {
-				mgr.OnException(err)
-				logutil.Warn("[ApplyCommit]", TxnField(op.Txn), common.ErrorField(err))
+				panic(err)
 			}
+		//for 2PC Prepare
+		case OpPrepare:
+			//wait for redo log synced.
+			if err = op.Txn.Apply2PCPrepare(); err != nil {
+				panic(err)
+			}
+			err = mgr.EnqueueCommitting(&OpTxn{
+				Txn: op.Txn,
+				Op:  OpInvalid,
+			})
+			if err != nil {
+				panic(err)
+			}
+		//for 1PC or 2PC Rollback
 		case OpRollback:
 			if err = op.Txn.ApplyRollback(); err != nil {
 				mgr.OnException(err)
 				logutil.Warn("[ApplyRollback]", TxnField(op.Txn), common.ErrorField(err))
 			}
 		}
-		// Here only wait the txn to be done. The err returned can be access via op.Txn.GetError()
+		// Here only notify the user txn have been done with err.
+		// The err returned can be access via op.Txn.GetError()
 		_ = op.Txn.WaitDone(err)
 	}
-	logutil.Debug("[Commit]",
+	logutil.Debug("[onFlushing]",
+		common.NameSpaceField("txns"),
+		common.CountField(len(items)),
+		common.DurationField(time.Since(now)))
+}
+
+// wait for committing, commit, rollback events of 2PC distributed transactions
+func (mgr *TxnManager) onCommitting(items ...any) {
+	var err error
+	now := time.Now()
+	for _, item := range items {
+		op := item.(OpTxn)
+		ev := op.Txn.Event()
+		switch ev {
+		//TODO:1. Set the commit ts passed by the Coordinator.
+		//     2. Apply Commit and append a committing log.
+		case EventCommitting:
+			//txn.LogTxnEntry()
+
+			op.Op = OpCommitting
+		//TODO:1. Set the commit ts passed by the Coordinator.
+		//     2. Apply Commit and append a commit log
+		case EventCommit:
+			//txn.LogTxnEntry
+			op.Op = OpCommit
+		case EventRollback:
+			pts := op.Txn.GetPrepareTS()
+			op.Txn.Lock()
+			//FIXME::set commit ts of a rollbacking transaction to its prepare ts?
+			_ = op.Txn.ToRollbackingLocked(pts)
+			op.Txn.Unlock()
+			op.Op = OpRollback
+			//_ = op.Txn.ApplyRollback()
+			//_ = op.Txn.WaitDone(err)
+
+		}
+		err = mgr.EnqueueCFlushing(op)
+		if err != nil {
+			panic(err)
+		}
+	}
+	logutil.Debug("[onCommitting]",
+		common.NameSpaceField("txns"),
+		common.CountField(len(items)),
+		common.DurationField(time.Since(now)))
+}
+
+func (mgr *TxnManager) onCFlushing(items ...any) {
+	var err error
+	now := time.Now()
+	for _, item := range items {
+		op := item.(OpTxn)
+		switch op.Op {
+		//TODO::wait for commit log synced
+		case OpCommit:
+
+		//TODO:wait for committing log synced.
+		case OpCommitting:
+
+		case OpRollback:
+			//Notice that can't call op.Txn.PrepareRollback here,
+			//since data had been appended into the appendableNode of block
+			//_ = op.Txn.PrepareRollback()
+			_ = op.Txn.ApplyRollback()
+		}
+		_ = op.Txn.WaitDone(err)
+	}
+	logutil.Debug("[onCFlushing]",
 		common.NameSpaceField("txns"),
 		common.CountField(len(items)),
 		common.DurationField(time.Since(now)))
@@ -240,8 +388,14 @@ func (mgr *TxnManager) OnException(new error) {
 	}
 }
 
+func (mgr *TxnManager) Start() {
+	mgr.CommittingSM.Start()
+	mgr.PreparingSM.Start()
+}
+
 func (mgr *TxnManager) Stop() {
-	mgr.StateMachine.Stop()
+	mgr.PreparingSM.Stop()
+	mgr.CommittingSM.Stop()
 	mgr.OnException(common.ErrClose)
 	logutil.Info("[Stop]", TxnMgrField(mgr))
 }
