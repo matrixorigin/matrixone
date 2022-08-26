@@ -14,19 +14,18 @@
 
 package txnstorage
 
-import (
-	"testing"
+import "github.com/matrixorigin/matrixone/pkg/vm/mheap"
 
-	"github.com/matrixorigin/matrixone/pkg/testutil"
-)
-
-func TestMemHandler(t *testing.T) {
-	testDatabase(t, func() (*Storage, error) {
-		return New(
+func NewMemoryStorage(
+	mheap *mheap.Mheap,
+	defaultIsolationPolicy IsolationPolicy,
+) (*Storage, error) {
+	return New(
+		NewCatalogHandler(
 			NewMemHandler(
-				testutil.NewMheap(),
-				Serializable,
+				mheap,
+				defaultIsolationPolicy,
 			),
-		)
-	})
+		),
+	)
 }

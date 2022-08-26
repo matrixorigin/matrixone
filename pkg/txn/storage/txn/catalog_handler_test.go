@@ -15,18 +15,30 @@
 package txnstorage
 
 import (
+	"context"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/stretchr/testify/assert"
 )
 
-func TestMemHandler(t *testing.T) {
-	testDatabase(t, func() (*Storage, error) {
-		return New(
+func TestCatalogHandler(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	storage, err := New(
+		NewCatalogHandler(
 			NewMemHandler(
 				testutil.NewMheap(),
 				Serializable,
 			),
-		)
-	})
+		),
+	)
+	assert.Nil(t, err)
+
+	defer func() {
+		err := storage.Close(ctx)
+		assert.Nil(t, err)
+	}()
+
 }
