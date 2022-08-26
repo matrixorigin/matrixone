@@ -177,7 +177,7 @@ func (mgr *TxnManager) onPreApplyCommit(txn txnif.AsyncTxn) {
 }
 
 func (mgr *TxnManager) onPreApply2PCPrepare(txn txnif.AsyncTxn) {
-	if err := txn.PreApplyCommit(); err != nil {
+	if err := txn.PreApply2PCPrepare(); err != nil {
 		txn.SetError(err)
 		mgr.OnException(err)
 	}
