@@ -187,19 +187,19 @@ func (be *BaseEntry) GetUpdateNodeLocked() *UpdateNode {
 }
 
 func (be *BaseEntry) GetCommittedNode() (node *UpdateNode) {
-	be.MVCC.Loop((func(n *common.DLNode) bool {
+	be.MVCC.Loop(func(n *common.DLNode) bool {
 		un := n.GetPayload().(*UpdateNode)
 		if !un.IsActive() {
 			node = un
 			return false
 		}
 		return true
-	}), false)
+	}, false)
 	return
 }
 
 func (be *BaseEntry) GetNodeToRead(startts types.TS) (node *UpdateNode) {
-	be.MVCC.Loop((func(n *common.DLNode) bool {
+	be.MVCC.Loop(func(n *common.DLNode) bool {
 		un := n.GetPayload().(*UpdateNode)
 		if un.IsActive() {
 			if un.IsSameTxn(startts) {
@@ -213,7 +213,7 @@ func (be *BaseEntry) GetNodeToRead(startts types.TS) (node *UpdateNode) {
 			return false
 		}
 		return true
-	}), false)
+	}, false)
 	return
 }
 func (be *BaseEntry) DeleteBefore(ts types.TS) bool {
@@ -379,8 +379,11 @@ func (be *BaseEntry) IsEmpty() bool {
 	head := be.MVCC.GetHead()
 	return head == nil
 }
-func (be *BaseEntry) ApplyRollback() error {
-	return nil
+func (be *BaseEntry) ApplyRollback(index *wal.Index) error {
+	be.Lock()
+	defer be.Unlock()
+	return be.GetUpdateNodeLocked().ApplyRollback(index)
+
 }
 
 func (be *BaseEntry) ApplyCommit(index *wal.Index) error {
@@ -482,6 +485,12 @@ func (be *BaseEntry) IsCommitting() bool {
 
 func (be *BaseEntry) GetDeleted() bool {
 	return be.GetUpdateNodeLocked().Deleted
+}
+
+func (be *BaseEntry) Prepare2PCPrepare() error {
+	be.Lock()
+	defer be.Unlock()
+	return be.GetUpdateNodeLocked().Prepare2PCPrepare()
 }
 
 func (be *BaseEntry) PrepareCommit() error {
