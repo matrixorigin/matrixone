@@ -388,8 +388,12 @@ func buildDropTable(stmt *tree.DropTable, ctx CompilerContext) (*Plan, error) {
 				break
 			}
 		}
-		if isView {
+		if isView && !dropTable.IfExists {
+			// drop table v0, v0 is view
 			return nil, errors.New("", fmt.Sprintf("table %s is not exists", dropTable.Table))
+		} else if isView {
+			// drop table if exists v0, v0 is view
+			dropTable.Table = ""
 		}
 	}
 
