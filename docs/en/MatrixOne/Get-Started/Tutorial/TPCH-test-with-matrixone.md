@@ -14,7 +14,7 @@ The tpch dbgen utility generates, by default, a set of flat files suitable for l
 
 ```
 git clone https://github.com/electrum/tpch-dbgen.git
-cd ssb-dbgen
+cd tpch-dbgen
 make
 ```
 
