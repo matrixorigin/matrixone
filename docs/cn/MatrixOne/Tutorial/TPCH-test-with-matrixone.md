@@ -1,16 +1,18 @@
-# **Complete a TPCH Test with MatrixOne**
+# **完成 TPCH 测试**
 
-The TPC-H is a decision support benchmark. It consists of a suite of business oriented ad-hoc queries and concurrent data modifications. The queries and the data populating the database have been chosen to have broad industry-wide relevance. This benchmark illustrates decision support systems that examine large volumes of data, execute queries with a high degree of complexity, and give answers to critical business questions. TPC-H is a widely used benchmark for OLAP databases. 
+TPC Benchmark™H（TPC-H）是决策支持基准。它由一套面向业务的即时查询（ad-hoc）和并发数据修改组成。选择查询和填充数据库的数据具有广泛的行业相关性。该基准测试解释说明了决策支持系统，该系统可检查大量数据，执行高度复杂的查询并为关键业务问题提供答案。TPC-H 是 OLAP 数据库广泛使用的基准测试。
 
-By walking through this tutorial, you'll learn how to complete a TPC-H Test with MatrixOne.
+通过阅读本教程，您将学习如何使用 MatrixOne 完成 TPC-H 测试。
 
-## **Before you start**
+## **准备工作**
 
-Make sure you have already [installed MatrixOne](../install-standalone-matrixone.md) and [connected to MatrixOne Server](../connect-to-matrixone-server.md).
+确保你已经安装了[单机版MatrixOne](../install-standalone-matrixone.md)并[连接到MatrixOne服务](../connect-to-matrixone-server.md).
 
-## **1. Compile TPCH dbgen**
+## **1. 编译dbgen**
 
-The tpch dbgen utility generates, by default, a set of flat files suitable for loading into the tpch schema with the size based on the “Scale Factor” argument. A scale factor of 1 produces a complete data set of approximately 1 GB, a scale factor of 10 produces a data set of approximately 10 GB etc.
+默认情况下，tpch dbgen 实用程序是用来生成测试数据集表格的工具，它根据比例因子 Scale Factor（SF)的大小确定数据集的大小，并生成一组平面文件（Flat File)，这些文件适合加载到 tpch 模式中。
+
+当使用 `-s 1` 时 `dbgen` 命令会产生 1GB 的完整数据集，当使用`-s 10`时会产生大约 10GB 的数据集，以此类推。
 
 ```
 git clone https://github.com/electrum/tpch-dbgen.git
@@ -18,15 +20,15 @@ cd tpch-dbgen
 make
 ```
 
-## **2. Generate data**
+## **2. 生成数据**
 
-Run dbgen for the appropriate database size factor (1GB in the sample).
+运行 `dbgen`，获得适当的数据库大小因子(在示例中为 1GB)。
 
 ```
 ./dbgen -s 1
 ```
 
-Generation may take a while. When completed, you can see the resulting files.
+生成完整数据集可能需要一段时间。完成后，您可以看到结果文件。
 
 ```
 total 2150000
@@ -40,23 +42,24 @@ total 2150000
 -rw-r--r--  1 deister  staff    1409184 13 may 12:05 supplier.tbl
 ```
 
-We have also prepared a 1GB dataset for downloading.  You can get the data files directly:
+我们同时也准备了 1GB 的数据集供您下载。您可以在以下链接中直接获取数据文件:
 
 ```
 https://community-shared-data-1308875761.cos.ap-beijing.myqcloud.com/tpch/tpch-1g.zip
 ```
 
-## **3. Create tables in MatrixOne**
+## **3. 在MatrixOne中建表**
 
-As MatrixOne doesn't support composite primary key nor partition yet, we slightly modified the `PARTSUPP` and `LINEITEM` table creation. 
+MatrixOne 暂不支持复合主键和分区，`PARTSUPP` 和 `LINEITEM` 表的创建代码有以下修改：
 
-* The composite primary key of `PARTSUPP` and `LINEITEM` tables are removed.
-* `PARTITION BY KEY()` is removed for `LINEITEM` table.
+- 移除了 `PARTSUPP` 和 `LINEITEM` 表的复合主键。
+
+- 移除了 `LINEITEM` 表的 `PARTITION BY KEY()`。
 
 ```
 drop database if exists TPCH;
 create database if not exists TPCH;
-use TPCH;
+use tpch;
 CREATE TABLE NATION(
 N_NATIONKEY  INTEGER NOT NULL,
 N_NAME       CHAR(25) NOT NULL,
@@ -149,9 +152,9 @@ L_COMMENT      VARCHAR(44) NOT NULL
 );
 ```
 
-## **4. Load data into the created tables**
+## **4. 导入数据**
 
-Load data into related tables with this command in MatrixOne.
+在 MatrixOne 中使用以下命令将数据加载到相关的表中。
 
 ```
 load data infile '/YOUR_TPCH_DATA_PATH/nation.tbl' into table NATION FIELDS TERMINATED BY '|' OPTIONALLY ENCLOSED BY '"' LINES TERMINATED BY '\n';
@@ -171,9 +174,9 @@ load data infile '/YOUR_TPCH_DATA_PATH/customer.tbl' into table CUSTOMER FIELDS 
 load data infile '/YOUR_TPCH_DATA_PATH/lineitem.tbl' into table LINEITEM FIELDS TERMINATED BY '|' OPTIONALLY ENCLOSED BY '"' LINES TERMINATED BY '\n';
 ```
 
-Then you can query data in MatrixOne with the created table. 
+加载完成后，可以使用创建的表查询 MatrixOne 中的数据。
 
-## **5. Run TPCH Queries**
+## **5. 运行 TPCH 测试命令**
 
 ```sql
 --Q1
@@ -883,13 +886,11 @@ order by
 
 ```
 
-## **6. Expected Results**
+## **6. 运行预期结果**
 
-Below are the expected results for the 22 TPCH queries. Q16's result is too long to print, please refer to the complete result in this  link：
+以下为22个 TPCH 查询的预期结果。
 
-```
-https://community-shared-data-1308875761.cos.ap-beijing.myqcloud.com/tpch/tpch1g_result_matrixone.md
-```
+说明：由于 Q16 的结果段落过长，无法在下文展示，请参阅此连结的完整结果：[Q16运行预期结果](https://community-shared-data-1308875761.cos.ap-beijing.myqcloud.com/tpch/tpch1g_result_matrixone.md)
 
 ```
 Q1
@@ -2951,6 +2952,6 @@ Q22
 | 26        |     861 | 6404695.86 |
 | 27        |     877 | 6565078.99 |
 +-----------+---------+------------+
-7 rows in set 
+7 rows in set
 
 ```

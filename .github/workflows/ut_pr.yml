@@ -1,44 +1,47 @@
 name: PR Unit Test Coverage
 on:
   pull_request_target:
-    types: [ opened, synchronize,reopened ]
+    types: [ opened, synchronize ]
+
+concurrency: 
+  group: ${{ github.event.pull_request.head.repo.full_name}}/${{ github.event.pull_request.head.ref }}/${{ github.workflow }}
+  cancel-in-progress: true
 
 jobs:
-  test-name:
+  ut_coverage:
     runs-on: ubuntu-latest
     name: PR Unit Test Coverage
 
     steps:
-      - name: Get PR Changed Paths
-        uses: guguducken/change-paths-action@v0.0.5
-        id: ut-pr
-        with:
-          github-token: ${{ secrets.TOKEN_ACTION }}
-          ignore: "/,etc/,optools/,LICENSES/,cgo/,cmd/,docs/,proto/,test/,.github/"
-
       - uses: actions/checkout@v2
-        if: ${{ steps.ut-pr.outputs.paths != '' }}
         with:
           fetch-depth: '3'
           path: ./matrixone
-          repository: ${{ steps.ut-pr.outputs.resource }}
-          ref: ${{ steps.ut-pr.outputs.branch }}
+          repository: ${{ github.event.pull_request.head.repo.full_name }}
+          ref: ${{ github.event.pull_request.head.ref }}
 
       - name: Set Variables
-        if: ${{ steps.ut-pr.outputs.paths != '' }}
         run: |
           echo "raw_ut_coverage='ut_coverage.raw'" >> $GITHUB_ENV
           echo "ut_report='UT-Report.out'" >> $GITHUB_ENV
 
       - name: Set up Go
-        if: ${{ steps.ut-pr.outputs.paths != '' }}
         uses: ./matrixone/.github/actions/setup_env
 
       - name: Build MatrixOne
-        if: ${{ steps.ut-pr.outputs.paths != '' }}
         run: |
           cd $GITHUB_WORKSPACE/matrixone && make clean && make config && make build
-
+          echo "test_scope=$(go list ./... | grep -v 'driver\|engine/aoe\|engine/memEngine\|pkg/catalog' | xargs)" >> $GITHUB_ENV
+          echo ${{ env.test_scope }}
+          
+      - name: Get Changed Paths
+        uses: guguducken/change-paths-action@v0.0.6
+        id: ut-pr 
+        with:
+          github-token: ${{ secrets.TOKEN_ACTION }}
+          ignore: "/,etc/,optools/,LICENSES/,cgo/,cmd/,docs/,proto/,test/,.github/"
+          source-path: ${{ env.test_scope }}
+      
       - name: PR Unit Test
         if: ${{ steps.ut-pr.outputs.paths != '' }}
         timeout-minutes: 60

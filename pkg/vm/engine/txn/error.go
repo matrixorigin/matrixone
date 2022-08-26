@@ -15,7 +15,9 @@
 package txnengine
 
 import (
+	"errors"
 	"fmt"
+	"strings"
 )
 
 type ErrExisted bool
@@ -77,4 +79,38 @@ var _ error = ErrColumnNotFound{}
 
 func (e ErrColumnNotFound) Error() string {
 	return fmt.Sprintf("column not found: %s", e.Name)
+}
+
+type ErrReadOnly struct {
+	Why string
+}
+
+var _ error = ErrReadOnly{}
+
+func (e ErrReadOnly) Error() string {
+	return "read only, not modifiable: " + e.Why
+}
+
+type Errors []error
+
+var _ error = Errors{}
+
+func (e Errors) Error() string {
+	buf := new(strings.Builder)
+	for i, err := range e {
+		if i > 0 {
+			buf.WriteRune('\n')
+		}
+		buf.WriteString(err.Error())
+	}
+	return buf.String()
+}
+
+func (e Errors) As(target any) bool {
+	for _, err := range e {
+		if errors.As(err, target) {
+			return true
+		}
+	}
+	return false
 }
