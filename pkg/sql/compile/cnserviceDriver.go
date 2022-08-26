@@ -466,6 +466,8 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 			PipelineId:     ctx0.id,
 			ConnectorIndex: idx, // receiver
 		}
+	default:
+		return -1, nil, moerr.New(moerr.INTERNAL_ERROR, "unexpected operator: %v", opr.Op)
 	}
 	return ctxId, in, nil
 }

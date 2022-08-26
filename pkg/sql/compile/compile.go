@@ -17,6 +17,7 @@ package compile
 import (
 	"context"
 	"fmt"
+	"runtime"
 	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -41,9 +42,6 @@ import (
 // New is used to new an object of compile
 func New(db string, sql string, uid string, ctx context.Context,
 	e engine.Engine, proc *process.Process, stmt tree.Statement) *Compile {
-	{
-		fmt.Printf("sql: %s\n", sql)
-	}
 	return &Compile{
 		e:    e,
 		db:   db,
@@ -90,7 +88,7 @@ func (c *Compile) Run(_ uint64) (err error) {
 		return nil
 	}
 
-	//	PrintScope(nil, []*Scope{c.scope})
+	PrintScope(nil, []*Scope{c.scope})
 
 	switch c.scope.Magic {
 	case Normal:
@@ -555,33 +553,31 @@ func (c *Compile) compileProjection(n *plan.Node, ss []*Scope) []*Scope {
 
 func (c *Compile) compileUnion(n *plan.Node, ss []*Scope, children []*Scope, ns []*plan.Node) []*Scope {
 	ss = append(ss, children...)
-	rs := c.newScopeList(validScopeCount(ss))
-	j := 0
-	for i := range ss {
-		if !ss[i].IsEnd {
-			ss[i].appendInstruction(vm.Instruction{
-				Op:  vm.Dispatch,
-				Arg: constructDispatch(true, extraRegisters(rs, j)),
-			})
-			j++
-			ss[i].IsEnd = true
-		}
-	}
+	rs := c.newScopeList(1)
 	gn := new(plan.Node)
 	gn.GroupBy = make([]*plan.Expr, len(n.ProjectList))
 	copy(gn.GroupBy, n.ProjectList)
 	for i := range rs {
+		ch := c.newMergeScope(dupScopeList(ss))
+		ch.appendInstruction(vm.Instruction{
+			Op: vm.Connector,
+			Arg: &connector.Argument{
+				Reg: rs[i].Proc.Reg.MergeReceivers[0],
+			},
+		})
+		ch.IsEnd = true
+		rs[i].PreScopes = []*Scope{ch}
 		rs[i].Instructions = append(rs[i].Instructions, vm.Instruction{
 			Op:  vm.Group,
 			Idx: c.anal.curr,
 			Arg: constructGroup(gn, n, i, len(rs), true),
 		})
 	}
-	return []*Scope{c.newMergeScope(append(rs, ss...))}
+	return rs
 }
 
 func (c *Compile) compileMinusAndIntersect(n *plan.Node, ss []*Scope, children []*Scope, nodeType plan.Node_NodeType) []*Scope {
-	rs, left, right := c.newJoinScopeListWithBucket(c.newScopeList(2), ss, children)
+	rs := c.newJoinScopeListWithBucket(c.newScopeList(2), ss, children)
 	switch nodeType {
 	case plan.Node_MINUS:
 		for i := range rs {
@@ -609,8 +605,7 @@ func (c *Compile) compileMinusAndIntersect(n *plan.Node, ss []*Scope, children [
 		}
 
 	}
-
-	return []*Scope{c.newMergeScope(append(append(rs, left), right))}
+	return rs
 }
 
 func (c *Compile) compileUnionAll(n *plan.Node, ss []*Scope, children []*Scope) []*Scope {
@@ -704,20 +699,12 @@ func (c *Compile) compileJoin(n, right *plan.Node, ss []*Scope, children []*Scop
 	case plan.Node_ANTI:
 		_, conds := extraJoinConditions(n.OnList)
 		for i := range rs {
-			if isEq {
-				if len(conds) > 1 {
-					rs[i].appendInstruction(vm.Instruction{
-						Op:  vm.Mark,
-						Idx: c.anal.curr,
-						Arg: constructMark(n, typs, c.proc, n.OnList),
-					})
-				} else {
-					rs[i].appendInstruction(vm.Instruction{
-						Op:  vm.Anti,
-						Idx: c.anal.curr,
-						Arg: constructAnti(n, typs, c.proc),
-					})
-				}
+			if isEq && len(conds) == 1 {
+				rs[i].appendInstruction(vm.Instruction{
+					Op:  vm.Anti,
+					Idx: c.anal.curr,
+					Arg: constructAnti(n, typs, c.proc),
+				})
 			} else {
 				rs[i].appendInstruction(vm.Instruction{
 					Op:  vm.LoopAnti,
@@ -909,22 +896,27 @@ func (c *Compile) newScopeListWithNode(mcpu, childrenCount int) []*Scope {
 	return ss
 }
 
-func (c *Compile) newJoinScopeListWithBucket(rs, ss, children []*Scope) ([]*Scope, *Scope, *Scope) {
-	left := c.newMergeScope(ss)
-	right := c.newMergeScope(children)
-	leftRegs := extraRegisters(rs, 0)
-	left.appendInstruction(vm.Instruction{
-		Op:  vm.Dispatch,
-		Arg: constructDispatch(true, leftRegs),
-	})
-	rightRegs := extraRegisters(rs, 1)
-	right.appendInstruction(vm.Instruction{
-		Op:  vm.Dispatch,
-		Arg: constructDispatch(true, rightRegs),
-	})
-	left.IsEnd = true
-	right.IsEnd = true
-	return rs, left, right
+func (c *Compile) newJoinScopeListWithBucket(rs, ss, children []*Scope) []*Scope {
+	for i := range rs {
+		left := c.newMergeScope(dupScopeList(ss))
+		right := c.newMergeScope(dupScopeList(children))
+		rs[i].PreScopes = []*Scope{left, right}
+		left.appendInstruction(vm.Instruction{
+			Op: vm.Connector,
+			Arg: &connector.Argument{
+				Reg: rs[i].Proc.Reg.MergeReceivers[0],
+			},
+		})
+		right.appendInstruction(vm.Instruction{
+			Op: vm.Connector,
+			Arg: &connector.Argument{
+				Reg: rs[i].Proc.Reg.MergeReceivers[1],
+			},
+		})
+		left.IsEnd = true
+		right.IsEnd = true
+	}
+	return rs
 }
 
 func (c *Compile) newJoinScopeList(ss []*Scope, children []*Scope) []*Scope {
@@ -934,7 +926,7 @@ func (c *Compile) newJoinScopeList(ss []*Scope, children []*Scope) []*Scope {
 			rs[i] = ss[i]
 			continue
 		}
-		chp := c.newMergeScope(children)
+		chp := c.newMergeScope(dupScopeList(children))
 		rs[i] = new(Scope)
 		rs[i].Magic = Remote
 		rs[i].IsJoin = true
@@ -997,9 +989,7 @@ func (c *Compile) newRightScope(s *Scope, ss []*Scope) *Scope {
 
 // Number of cpu's available on the current machine
 func (c *Compile) NumCPU() int {
-	return 4
-	//return runtime.NumCPU()
-	//return 1
+	return runtime.NumCPU()
 }
 
 func (c *Compile) initAnalyze(qry *plan.Query) {

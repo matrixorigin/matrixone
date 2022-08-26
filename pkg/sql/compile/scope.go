@@ -145,10 +145,6 @@ func (s *Scope) RemoteRun(c *Compile) error {
 		return err
 	}
 	rs.Instructions = append(rs.Instructions, in)
-	{
-		fmt.Printf("+++rs remote run: %p, %p: %v\n", rs, rs.Proc, rs.Instructions)
-		defer fmt.Printf("+++remote run end: %p\n", rs)
-	}
 	return rs.ParallelRun(c)
 }
 
@@ -401,4 +397,24 @@ func (s *Scope) appendInstruction(in vm.Instruction) {
 	if !s.IsEnd {
 		s.Instructions = append(s.Instructions, in)
 	}
+}
+
+func dupScope(s *Scope) *Scope {
+	data, err := encodeScope(s)
+	if err != nil {
+		return nil
+	}
+	rs, err := decodeScope(data, s.Proc)
+	if err != nil {
+		return nil
+	}
+	return rs
+}
+
+func dupScopeList(ss []*Scope) []*Scope {
+	rs := make([]*Scope, len(ss))
+	for i := range rs {
+		rs[i] = dupScope(ss[i])
+	}
+	return rs
 }
