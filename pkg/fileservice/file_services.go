@@ -17,6 +17,7 @@ package fileservice
 import (
 	"context"
 	"fmt"
+	"strings"
 )
 
 type FileServices struct {
@@ -24,19 +25,19 @@ type FileServices struct {
 	mappings    map[string]FileService
 }
 
-func NewFileServices(defaultName string, fss ...FileService) *FileServices {
+func NewFileServices(defaultName string, fss ...FileService) (*FileServices, error) {
 	f := &FileServices{
 		defaultName: defaultName,
 		mappings:    make(map[string]FileService),
 	}
 	for _, fs := range fss {
-		name := fs.Name()
+		name := strings.ToLower(fs.Name())
 		if _, ok := f.mappings[name]; ok {
-			panic(fmt.Errorf("duplicated file service name: %s", name))
+			return nil, fmt.Errorf("%w: %s", ErrDuplicatedName, name)
 		}
 		f.mappings[name] = fs
 	}
-	return f
+	return f, nil
 }
 
 var _ FileService = &FileServices{}
