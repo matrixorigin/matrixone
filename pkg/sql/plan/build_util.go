@@ -16,7 +16,6 @@ package plan
 
 import (
 	"fmt"
-
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -135,6 +134,10 @@ func buildDefaultExpr(col *tree.ColumnTableDef, typ *plan.Type) (*plan.Default, 
 			Expr:         nil,
 			OriginString: "",
 		}, nil
+	}
+
+	if typ.GetId() == int32(types.T_blob) {
+		return nil, errors.New(errno.InvalidColumnDefinition, fmt.Sprintf("Type text don't support default value"))
 	}
 
 	binder := NewDefaultBinder(nil, nil, typ)
