@@ -1483,41 +1483,29 @@ func (mce *MysqlCmdExecutor) handleDeallocate(st *tree.Deallocate) error {
 // handleCreateAccount creates a new user-level tenant in the context of the tenant SYS
 // which has been initialized.
 func (mce *MysqlCmdExecutor) handleCreateAccount(ctx context.Context, ca *tree.CreateAccount) error {
-	var err error
 	ses := mce.GetSession()
 	tenant := ses.GetTenantInfo()
-	proto := ses.GetMysqlProtocol()
 
 	//step1 : create new account.
-	err = InitGeneralTenant(ctx, tenant, ca)
-	if err != nil {
-		return err
-	}
-	resp := NewOkResponse(0, 0, 0, 0, int(COM_QUERY), "")
-	if err = proto.SendResponse(resp); err != nil {
-		return fmt.Errorf("routine send response failed. error:%v ", err)
-	}
-	return err
+	return InitGeneralTenant(ctx, tenant, ca)
 }
 
 // handleCreateUser creates the user for the tenant
 func (mce *MysqlCmdExecutor) handleCreateUser(ctx context.Context, cu *tree.CreateUser) error {
-	var err error
 	ses := mce.GetSession()
 	tenant := ses.GetTenantInfo()
-	proto := ses.GetMysqlProtocol()
 
 	//step1 : create the account
-	err = InitUser(ctx, tenant, cu)
-	if err != nil {
-		return err
-	}
+	return InitUser(ctx, tenant, cu)
+}
 
-	resp := NewOkResponse(0, 0, 0, 0, int(COM_QUERY), "")
-	if err = proto.SendResponse(resp); err != nil {
-		return fmt.Errorf("routine send response failed. error:%v ", err)
-	}
-	return err
+// handleCreateRole creates the new role
+func (mce *MysqlCmdExecutor) handleCreateRole(ctx context.Context, cr *tree.CreateRole) error {
+	ses := mce.GetSession()
+	tenant := ses.GetTenantInfo()
+
+	//step1 : create the account
+	return nil
 }
 
 func GetExplainColumns(explainColName string) ([]interface{}, error) {
@@ -2001,6 +1989,8 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			if err = mce.handleCreateUser(requestCtx, st); err != nil {
 				goto handleFailed
 			}
+		case *tree.CreateRole:
+
 		}
 
 		if selfHandle {
@@ -2164,6 +2154,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			case *tree.CreateTable, *tree.DropTable, *tree.CreateDatabase, *tree.DropDatabase,
 				*tree.CreateIndex, *tree.DropIndex, *tree.Insert, *tree.Update,
 				*tree.CreateView, *tree.DropView, *tree.Load,
+				*tree.CreateAccount, *tree.DropAccount, *tree.AlterAccount,
 				*tree.CreateUser, *tree.DropUser, *tree.AlterUser,
 				*tree.CreateRole, *tree.DropRole, *tree.Revoke, *tree.Grant,
 				*tree.SetDefaultRole, *tree.SetRole, *tree.SetPassword, *tree.Delete,

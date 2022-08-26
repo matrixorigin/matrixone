@@ -2231,8 +2231,8 @@ type CreateUser struct {
 	statementImpl
 	IfNotExists bool
 	Users       []*User
-	Role        Role
-	MiscOpts    []UserMiscOption
+	Role        *Role
+	MiscOpt     UserMiscOption
 	// comment or attribute
 	CommentOrAttribute AccountCommentOrAttribute
 }
@@ -2250,25 +2250,27 @@ func (node *CreateUser) Format(ctx *FmtCtx) {
 			prefix = ", "
 		}
 	}
-	ctx.WriteString(" default role")
-	ctx.WriteString(" ")
-	node.Role.Format(ctx)
-	if len(node.MiscOpts) != 0 {
-		for _, opt := range node.MiscOpts {
-			ctx.WriteString(" ")
-			opt.Format(ctx)
-		}
+
+	if node.Role != nil {
+		ctx.WriteString(" default role")
+		ctx.WriteString(" ")
+		node.Role.Format(ctx)
+	}
+
+	if node.MiscOpt != nil {
+		ctx.WriteString(" ")
+		node.MiscOpt.Format(ctx)
 	}
 
 	node.CommentOrAttribute.Format(ctx)
 }
 
-func NewCreateUser(ife bool, u []*User, r Role, misc []UserMiscOption) *CreateUser {
+func NewCreateUser(ife bool, u []*User, r *Role, misc UserMiscOption) *CreateUser {
 	return &CreateUser{
 		IfNotExists: ife,
 		Users:       u,
 		Role:        r,
-		MiscOpts:    misc,
+		MiscOpt:     misc,
 	}
 }
 

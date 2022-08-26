@@ -181,11 +181,14 @@ const (
 	accountAdminRoleComment = "account admin role"
 
 	//user
+	userStatusLock   = "lock"
+	userStatusUnlock = "unlock"
+
 	rootID            = 0
 	rootHost          = "NULL"
 	rootName          = "root"
 	rootPassword      = "111"
-	rootStatus        = "open"
+	rootStatus        = userStatusUnlock
 	rootExpiredTime   = "NULL"
 	rootLoginType     = "PASSWORD"
 	rootCreatorID     = rootID
@@ -196,7 +199,7 @@ const (
 	dumpHost          = "NULL"
 	dumpName          = "dump"
 	dumpPassword      = "111"
-	dumpStatus        = "open"
+	dumpStatus        = userStatusUnlock
 	dumpExpiredTime   = "NULL"
 	dumpLoginType     = "PASSWORD"
 	dumpCreatorID     = rootID
@@ -521,13 +524,13 @@ var (
     		);`,
 	}
 
-	initMoAccountFormat = `insert into mo_account(
+	initMoAccountFormat = `insert into mo_catalog.mo_account(
 				account_id,
 				account_name,
 				status,
 				created_time,
 				comments) values (%d,"%s","%s","%s","%s");`
-	initMoRoleFormat = `insert into mo_role(
+	initMoRoleFormat = `insert into mo_catalog.mo_role(
 				role_id,
 				role_name,
 				creator,
@@ -548,7 +551,7 @@ var (
 				owner,
 				default_role
     		) values(%d,%s,"%s","%s","%s","%s",%s,"%s",%d,%d,%d);`
-	initMoRolePrivFormat = `insert into mo_role_priv(
+	initMoRolePrivFormat = `insert into mo_catalog.mo_role_priv(
 				role_id,
 				role_name,
 				obj_type,
@@ -560,7 +563,7 @@ var (
 				granted_time,
 				with_grant_option
 			) values(%d,"%s","%s",%d,%d,"%s","%s",%d,"%s",%v);`
-	initMoUserGrantFormat = `insert into mo_user_grant(
+	initMoUserGrantFormat = `insert into mo_catalog.mo_user_grant(
             	role_id,
 				user_id,
 				granted_time,
@@ -576,6 +579,8 @@ var (
 
 	checkRoleExistsFormat = `select role_id from mo_catalog.mo_role where role_id = %d and role_name = "%s";`
 
+	roleIdOfRoleFormat = `select role_id from mo_catalog.mo_role where role_name = "%s";`
+
 	getRoleOfUserFormat = `select r.role_id from  mo_catalog.mo_role r, mo_catalog.mo_user_grant ug where ug.role_id = r.role_id and ug.user_id = %d and r.role_name = "%s";`
 )
 
@@ -589,6 +594,10 @@ func getSqlForPasswordOfUser(user string) string {
 
 func getSqlForCheckRoleExists(roleID int, roleName string) string {
 	return fmt.Sprintf(checkRoleExistsFormat, roleID, roleName)
+}
+
+func getSqlForRoleIdOfRole(roleName string) string {
+	return fmt.Sprintf(roleIdOfRoleFormat, roleName)
 }
 
 func getSqlForRoleOfUser(userID int, roleName string) string {
@@ -1186,15 +1195,43 @@ func InitUser(ctx context.Context, tenant *TenantInfo, cu *tree.CreateUser) erro
 	var exists bool
 	pu := config.GetParameterUnit(ctx)
 
-	//check the count of user is equal to the count of password_lock_option or not
-	if len(cu.Users) != len(cu.MiscOpts) {
-		return moerr.NewInternalError("the count of user is not equal to the count of password_option | lock_option")
-	}
-
 	var initUserSqls []string
 
 	appendSql := func(sql string) {
 		initUserSqls = append(initUserSqls, sql)
+	}
+
+	guestMMu := guest.New(pu.SV.GuestMmuLimitation, pu.HostMmu)
+	bh := NewBackgroundHandler(ctx, guestMMu, pu.Mempool, pu)
+	defer bh.Close()
+
+	//TODO: get role and the id of role
+	newRoleId := publicRoleID
+	if cu.Role != nil {
+		if strings.ToLower(cu.Role.UserName) != publicRoleName {
+			sqlForRoleIdOfRole := getSqlForRoleIdOfRole(cu.Role.UserName)
+			err = bh.Exec(nil, sqlForRoleIdOfRole)
+			if err != nil {
+				return err
+			}
+			rsset := bh.ses.GetAllMysqlResultSet()
+			if len(rsset) < 1 || rsset[0].GetRowCount() < 1 {
+				return moerr.NewInternalError("there is no role %s", cu.Role.UserName)
+			}
+			roleId, err := rsset[0].GetInt64(0, 0)
+			if err != nil {
+				return err
+			}
+			newRoleId = int(roleId)
+		}
+	}
+
+	//TODO: get password_option or lock_option. there is no field in mo_user to store it.
+	status := userStatusUnlock
+	if cu.MiscOpt != nil {
+		if _, ok := cu.MiscOpt.(*tree.UserMiscOptionAccountLock); ok {
+			status = userStatusLock
+		}
 	}
 
 	appendSql("begin;")
@@ -1209,7 +1246,7 @@ func InitUser(ctx context.Context, tenant *TenantInfo, cu *tree.CreateUser) erro
 			if cu.IfNotExists { //do nothing
 				continue
 			}
-			return moerr.NewInternalError("the tenant %s exists", user.Username)
+			return moerr.NewInternalError("the user %s exists", user.Username)
 		}
 
 		if user.AuthOption == nil {
@@ -1225,25 +1262,96 @@ func InitUser(ctx context.Context, tenant *TenantInfo, cu *tree.CreateUser) erro
 			return moerr.NewInternalError("password is empty string")
 		}
 
-		//TODO: get role and the id of role
-		//TODO: get password_option or lock_option
-		//TODO: get comment or attribute
-
+		//TODO: get comment or attribute. there is no field in mo_user to store it.
+		//TODO: to get the user id from the auto_increment table
 		newUserId := rand.Uint32()
-		initMoUser1 := fmt.Sprintf(initMoUserFormat, newUserId, rootHost, user.Username, password, rootStatus,
+		initMoUser1 := fmt.Sprintf(initMoUserFormat, newUserId, rootHost, user.Username, password, status,
 			types.CurrentTimestamp().String2(time.UTC, 0), rootExpiredTime, rootLoginType,
-			tenant.GetUserID(), tenant.GetDefaultRoleID(), publicRoleID)
+			tenant.GetUserID(), tenant.GetDefaultRoleID(), newRoleId)
 
 		appendSql(initMoUser1)
+
+		initMoUserGrant1 := fmt.Sprintf(initMoUserGrantFormat, newRoleId, newUserId, types.CurrentTimestamp().String2(time.UTC, 0), true)
+		appendSql(initMoUserGrant1)
+
+		//if it is not public role, just insert the record for public
+		if newRoleId != publicRoleID {
+			initMoUserGrant2 := fmt.Sprintf(initMoUserGrantFormat, publicRoleID, newUserId, types.CurrentTimestamp().String2(time.UTC, 0), true)
+			appendSql(initMoUserGrant2)
+		}
 	}
 
 	appendSql("commit;")
 
 	//fill the mo_user
+	for _, sql := range initUserSqls {
+		err = bh.Exec(nil, sql)
+		if err != nil {
+			goto handleFailed
+		}
+	}
+
+	return err
+
+handleFailed:
+	//ROLLBACK the transaction
+	rbErr := bh.Exec(nil, "rollback;")
+	if rbErr != nil {
+		return rbErr
+	}
+	return err
+}
+
+// InitRole creates the new role
+func InitRole(ctx context.Context, tenant *TenantInfo, cr *tree.CreateRole) error {
+	var err error
+	var exists bool
+	pu := config.GetParameterUnit(ctx)
+
+	var initRoleSqls []string
+
+	appendSql := func(sql string) {
+		initRoleSqls = append(initRoleSqls, sql)
+	}
+
 	guestMMu := guest.New(pu.SV.GuestMmuLimitation, pu.HostMmu)
 	bh := NewBackgroundHandler(ctx, guestMMu, pu.Mempool, pu)
 	defer bh.Close()
-	for _, sql := range initUserSqls {
+
+	appendSql("begin;")
+
+	for _, r := range cr.Roles {
+		if strings.ToLower(r.UserName) == publicRoleName {
+			exists = true
+		} else {
+			sqlForRoleIdOfRole := getSqlForRoleIdOfRole(r.UserName)
+			err = bh.Exec(nil, sqlForRoleIdOfRole)
+			if err != nil {
+				return err
+			}
+			rsset := bh.ses.GetAllMysqlResultSet()
+			if len(rsset) >= 1 && rsset[0].GetRowCount() >= 1 {
+				exists = true
+			}
+		}
+
+		if exists {
+			if cr.IfNotExists {
+				continue
+			}
+			return moerr.NewInternalError("the role %s exists", r.UserName)
+		}
+
+		newRoleId := rand.Uint32()
+		initMoRole := fmt.Sprintf(initMoRoleFormat, newRoleId, r.UserName, tenant.GetUserID(), tenant.GetDefaultRoleID(),
+			types.CurrentTimestamp().String2(time.UTC, 0), "")
+		appendSql(initMoRole)
+	}
+
+	appendSql("commit;")
+
+	//fill the mo_user
+	for _, sql := range initRoleSqls {
 		err = bh.Exec(nil, sql)
 		if err != nil {
 			goto handleFailed
