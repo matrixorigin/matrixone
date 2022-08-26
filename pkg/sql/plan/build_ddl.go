@@ -251,8 +251,8 @@ func buildCreateTable(stmt *tree.CreateTable, ctx CompilerContext) (*Plan, error
 	}, nil
 }
 
-//  buildPartitionByClause build partition by clause info and semantic check.
-//  Currently, sub partition and partition value verification are not supported
+// buildPartitionByClause build partition by clause info and semantic check.
+// Currently, sub partition and partition value verification are not supported
 func buildPartitionByClause(partitionBinder *PartitionBinder, partitionOp *tree.PartitionOption, tableDef *TableDef) (err error) {
 	switch partitionOp.PartBy.PType.(type) {
 	case *tree.HashType:

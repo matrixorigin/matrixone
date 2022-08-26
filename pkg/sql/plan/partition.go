@@ -31,7 +31,7 @@ const (
 	PartitionNumberLimit = 8192
 )
 
-//  buildHashPartition handle Hash Partitioning
+// buildHashPartition handle Hash Partitioning
 func buildHashPartition(partitionBinder *PartitionBinder, partitionOp *tree.PartitionOption, tableDef *TableDef) error {
 	if partitionOp.SubPartBy != nil {
 		return moerr.New(moerr.ErrPartitionSubpartition)
