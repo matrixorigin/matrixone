@@ -182,9 +182,13 @@ func (s *store) handleWithRetry(ctx context.Context,
 }
 
 func (s *store) maybeRetry(ctx context.Context, request *txn.TxnRequest, response *txn.TxnResponse) bool {
-	if request.Options != nil &&
-		len(request.Options.RetryCodes) == 0 ||
-		response.TxnError == nil {
+	if response.TxnError == nil {
+		return false
+	}
+	if request.Options == nil {
+		return false
+	}
+	if len(request.Options.RetryCodes) == 0 {
 		return false
 	}
 
