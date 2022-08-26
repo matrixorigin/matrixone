@@ -553,17 +553,16 @@ Once the aggregation function is ready, we can compile and run MatrixOne to see 
 Step1: Run `make config` and `make build` to compile the MatrixOne project and build binary file.
 
 ```
-make config
 make build
 ```
 
 !!! info
     `make config` generates a new configuration file. In this tutorial you only need to run it once. If you modify some code and want to recompile, you only have to run `make build`.  
 
-Step2: Run `./mo-server system_vars_config.toml` to launch MatrixOne, the MatrixOne server will start to listen for client connecting.
+Step2: Run `./mo-service -cfg ./etc/cn-standalone-test.toml` to launch MatrixOne, the MatrixOne server will start to listen for client connecting.
 
 ```
-./mo-server system_vars_config.toml
+./mo-service -cfg ./etc/cn-standalone-test.toml
 ```
 
 !!! info
