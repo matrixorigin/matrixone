@@ -151,45 +151,55 @@ MatrixOne目前支持Linux及MacOS系统，您可以通过源码安装或者dock
 
 **步骤 1.** 搭建Go语言环境（至少需要1.19版本）。
 
-**步骤 2.** 获取MatrixOne源码
+**步骤 2.** 获取MatrixOne源码，搭建MatrixOne
 
 根据您的需要，选择您所获取的代码永远保持最新，还是获得稳定版本的代码。
 
-- *选项 1*：获取 MatrixOne(预览版本) 代码
+- *选项 1*：获取 MatrixOne(预览版本) 代码，搭建MatrixOne
 
 **main** 分支是默认分支，主分支上的代码总是最新的，但不够稳定。
 
-获取 MatrixOne(预览版本) 代码方法如下：
+1. 获取 MatrixOne(预览版本) 代码方法如下：
 
-```
-$ git clone https://github.com/matrixorigin/matrixone.git
-$ cd matrixone
-```
+    ```shell
+    git clone https://github.com/matrixorigin/matrixone.git
+    cd matrixone
+    ```
 
-- *选项 2*：获取 MatrixOne(稳定版本) 代码
+2. 运行编译文件：你可以运行`make debug`与`make clean`或者其他任何`Makefile`支持的命令。
 
-如果您想获得 MatrixOne 发布的最新稳定版本代码，请先从 **main** 切换选择至 **0.5.1** 版本分支。
+    ```
+    make build
+    ```
 
-```
-$ git clone https://github.com/matrixorigin/matrixone.git
-$ git checkout 0.5.1
-$ cd matrixone
-```
+3. 启动 MatrixOne 服务：
 
-**3.** 运行编译文件
+    ```
+    ./mo-service -cfg ./etc/cn-standalone-test.toml
+    ```
 
-你可以运行`make debug`与`make clean`或者其他任何Makefile命令。
+- *选项 2*：获取 MatrixOne(稳定版本) 代码，搭建MatrixOne
 
-```
-$ make config
-$ make build
-```
+1. 如果您想获得 MatrixOne 发布的最新稳定版本代码，请先从 **main** 切换选择至 **0.5.1** 版本分支。
 
-**4.** 启动MatrixOne服务
+    ```
+    git clone https://github.com/matrixorigin/matrixone.git
+    git checkout 0.5.1
+    cd matrixone
+    ```
 
-```
-$ ./mo-server system_vars_config.toml
-```
+2. 运行编译文件：你可以运行`make debug`与`make clean`或者其他任何`Makefile`支持的命令。
+
+    ```
+    make config
+    make build
+    ```
+
+3. 启动 MatrixOne 服务：
+
+    ```
+    ./mo-server system_vars_config.toml
+    ```
 
 #### 使用docker
 
