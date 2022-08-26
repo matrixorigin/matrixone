@@ -8,6 +8,10 @@ on:
 
   workflow_dispatch:
 
+concurrency: 
+  group: ${{ github.event.pull_request.head.repo.full_name}}/${{ github.event.pull_request.head.ref }}/${{ github.workflow }}
+  cancel-in-progress: true
+
 jobs:
 
   ut-linux-x86:
@@ -28,7 +32,7 @@ jobs:
           make ut
 
       - uses: actions/upload-artifact@v2
-        if: ${{ always() }}
+        if: ${{ always() && !cancelled() }}
         continue-on-error: true
         with:
           name: ut_linux_x86_reports
@@ -54,7 +58,7 @@ jobs:
           make ut
 
       - uses: actions/upload-artifact@v2
-        if: ${{ always() }}
+        if: ${{ always() && !cancelled() }}
         continue-on-error: true
         with:
           name: ut_darwin_x86_reports
@@ -80,7 +84,7 @@ jobs:
           make ut
 
       - uses: actions/upload-artifact@v2
-        if: ${{ always() }}
+        if: ${{ always() && !cancelled() }}
         continue-on-error: true
         with:
           name: ut_linux_arm_reports
@@ -152,7 +156,7 @@ jobs:
           rm -rf ./mo-tester/lib
 
       - uses: actions/upload-artifact@v2
-        if: ${{ always() }}
+        if: ${{ always() && !cancelled() }}
         continue-on-error: true
         with:
           name: linux_x86_ci_reports
@@ -224,7 +228,7 @@ jobs:
           rm -rf ./mo-tester/lib
 
       - uses: actions/upload-artifact@v2
-        if: ${{ always() }}
+        if: ${{ always() && !cancelled() }}
         continue-on-error: true
         with:
           name: ci_linux_arm_reports
@@ -294,7 +298,7 @@ jobs:
           rm -rf ./mo-tester/lib
 
       - uses: actions/upload-artifact@v2
-        if: ${{ always() }}
+        if: ${{ always() && !cancelled() }}
         continue-on-error: true
         with:
           name: ci_darwin_x86_reports
@@ -329,6 +333,4 @@ jobs:
         run: |
           cd $GITHUB_WORKSPACE
           make static-check
-          
-      
           
