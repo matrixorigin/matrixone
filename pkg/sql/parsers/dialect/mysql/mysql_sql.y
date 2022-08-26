@@ -6832,8 +6832,7 @@ reserved_table_id:
 |   reserved_keyword
 
 reserved_keyword:
-    ACCOUNT
-|   ADD
+    ADD
 |   ALL
 |   AND
 |   AS
@@ -6995,7 +6994,8 @@ reserved_keyword:
 |   SECONDARY
 
 non_reserved_keyword:
-    AGAINST
+    ACCOUNT
+|   AGAINST
 |   AVG_ROW_LENGTH
 |   AUTO_RANDOM
 |   ACTION
