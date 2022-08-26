@@ -56,15 +56,6 @@ func (h *tableHandle) GetAppender() (appender data.BlockAppender, err error) {
 			return
 		}
 		blkEntry := segEntry.LastAppendableBlock()
-		if blkEntry == nil {
-			if segEntry.GetBlockCnt() >= int(segEntry.GetTable().GetSchema().SegmentMaxBlocks) {
-				err = data.ErrAppendableSegmentNotFound
-			} else {
-				err = data.ErrAppendableBlockNotFound
-				appender = setAppender(&common.ID{SegmentID: segEntry.ID})
-			}
-			return
-		}
 		h.block = blkEntry.GetBlockData().(*dataBlock)
 		h.appender, err = h.block.MakeAppender()
 		if err != nil {
@@ -85,5 +76,6 @@ func (h *tableHandle) GetAppender() (appender data.BlockAppender, err error) {
 		return
 	}
 	appender = h.appender
+	appender.Ref()
 	return
 }

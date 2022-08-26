@@ -137,7 +137,17 @@ func newBlock(meta *catalog.BlockEntry, segFile file.Segment, bufMgr base.INodeM
 
 func (blk *dataBlock) GetMeta() any                 { return blk.meta }
 func (blk *dataBlock) GetBufMgr() base.INodeManager { return blk.bufMgr }
-func (blk *dataBlock) SetNotAppendable()            { blk.state = BS_NotAppendable }
+func (blk *dataBlock) SetNotAppendable() {
+	blk.Lock()
+	defer blk.Unlock()
+	blk.state = BS_NotAppendable
+}
+
+func (blk *dataBlock) GetBlockState() BlockState {
+	blk.RLock()
+	defer blk.RUnlock()
+	return blk.state
+}
 
 func (blk *dataBlock) SetMaxCheckpointTS(ts types.TS) {
 	blk.ckpTs.Store(ts)
@@ -297,15 +307,15 @@ func (blk *dataBlock) BuildCompactionTaskFactory() (
 	taskType tasks.TaskType,
 	scopes []common.ID,
 	err error) {
-	if blk.RefCount() > 0 {
-		logutil.Infof("blk.RefCount() > 0 : %d", blk.meta.ID)
-		return
-	}
 	blk.meta.RLock()
 	dropped := blk.meta.IsDroppedCommitted()
 	inTxn := blk.meta.InTxnOrRollbacked()
 	blk.meta.RUnlock()
 	if dropped || inTxn {
+		return
+	}
+	if blk.RefCount() > 0 {
+		logutil.Infof("blk.RefCount() > 0 : %d", blk.meta.ID)
 		return
 	}
 	factory = jobs.CompactBlockTaskFactory(blk.meta, blk.scheduler)
@@ -319,7 +329,7 @@ func (blk *dataBlock) IsAppendable() bool {
 		return false
 	}
 
-	if blk.state == BS_NotAppendable {
+	if blk.GetBlockState() == BS_NotAppendable {
 		return false
 	}
 

@@ -535,11 +535,6 @@ func TestReplay2(t *testing.T) {
 	assert.Nil(t, err)
 	assert.Nil(t, txn.Commit())
 
-	testutils.WaitExpect(4000, func() bool {
-		return tae3.Wal.GetPenddingCnt() == 0
-	})
-	assert.Equal(t, uint64(0), tae3.Wal.GetPenddingCnt())
-
 	tae3.Close()
 
 	tae4, err := Open(tae.Dir, nil)
@@ -658,11 +653,6 @@ func TestReplay3(t *testing.T) {
 	err = tae.Catalog.Checkpoint(txn.GetStartTS())
 	assert.NoError(t, err)
 	assert.NoError(t, txn.Commit())
-
-	testutils.WaitExpect(4000, func() bool {
-		return tae.Wal.GetPenddingCnt() == 0
-	})
-	assert.Equal(t, uint64(0), tae.Wal.GetPenddingCnt())
 }
 
 // append, delete, compact, mergeblocks, ckp
@@ -746,11 +736,6 @@ func TestReplayTableRows(t *testing.T) {
 	err = tae2.Catalog.Checkpoint(txn.GetStartTS())
 	assert.Nil(t, err)
 	assert.Nil(t, txn.Commit())
-	testutils.WaitExpect(4000, func() bool {
-		return tae2.Wal.GetPenddingCnt() == 0
-	})
-	assert.Equal(t, uint64(0), tae2.Wal.GetPenddingCnt())
-
 	err = tae2.Close()
 	assert.Nil(t, err)
 
