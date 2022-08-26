@@ -18,9 +18,12 @@ import (
 	"bytes"
 	"context"
 	"encoding/gob"
+	"fmt"
 
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	txnengine "github.com/matrixorigin/matrixone/pkg/vm/engine/txn"
+	"go.uber.org/zap"
 )
 
 func (s *Storage) Write(ctx context.Context, txnMeta txn.TxnMeta, op uint32, payload []byte) (result []byte, err error) {
@@ -115,8 +118,21 @@ func handleWrite[
 	if err := gob.NewDecoder(bytes.NewReader(payload)).Decode(&req); err != nil {
 		return nil, err
 	}
+	logutil.Debug("memengine: write on DN",
+		zap.String("type", fmt.Sprintf("%T", req)),
+		zap.Any("txn", meta),
+		zap.Any("data", req),
+	)
 
 	var resp Resp
+	defer func() {
+		logutil.Debug("memengine: write result on DN",
+			zap.String("type", fmt.Sprintf("%T", resp)),
+			zap.Any("txn", meta),
+			zap.Any("data", resp),
+			zap.Any("error", err),
+		)
+	}()
 	err = fn(meta, req, &resp)
 	if err != nil {
 		return nil, err

@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/fagongzi/goetty/v2/buf"
 	"github.com/golang/mock/gomock"
@@ -49,6 +50,9 @@ func Test_mce(t *testing.T) {
 		defer ctrl.Finish()
 
 		eng := mock_frontend.NewMockEngine(ctrl)
+		eng.EXPECT().Hints().Return(engine.Hints{
+			CommitOrRollbackTimeout: time.Second,
+		}).AnyTimes()
 		txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
 		eng.EXPECT().Database(ctx, gomock.Any(), txnOperator).Return(nil, nil).AnyTimes()
 
@@ -264,6 +268,9 @@ func Test_mce_selfhandle(t *testing.T) {
 		defer ctrl.Finish()
 
 		eng := mock_frontend.NewMockEngine(ctrl)
+		eng.EXPECT().Hints().Return(engine.Hints{
+			CommitOrRollbackTimeout: time.Second,
+		}).AnyTimes()
 		cnt := 0
 		eng.EXPECT().Database(ctx, gomock.Any(), gomock.Any()).DoAndReturn(
 			func(ctx2 context.Context, db string, dump interface{}) (engine.Database, error) {
@@ -772,78 +779,6 @@ func Test_GetComputationWrapper(t *testing.T) {
 	})
 }
 
-func Test_handleShowCreateTable(t *testing.T) {
-	ctx := context.TODO()
-	convey.Convey("handleShowCreateTable succ", t, func() {
-		ctrl := gomock.NewController(t)
-		defer ctrl.Finish()
-		ioses := mock_frontend.NewMockIOSession(ctrl)
-		ioses.EXPECT().OutBuf().Return(buf.NewByteBuf(1024)).AnyTimes()
-		ioses.EXPECT().Write(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
-
-		eng := mock_frontend.NewMockEngine(ctrl)
-		txnClient := mock_frontend.NewMockTxnClient(ctrl)
-		pu, err := getParameterUnit("test/system_vars_config.toml", eng, txnClient)
-		if err != nil {
-			t.Error(err)
-		}
-		proto := NewMysqlClientProtocol(0, ioses, 1024, pu.SV)
-		guestMmu := guest.New(pu.SV.GuestMmuLimitation, pu.HostMmu)
-		var gSys GlobalSystemVariables
-		InitGlobalSystemVariables(&gSys)
-		ses := NewSession(proto, guestMmu, pu.Mempool, pu, &gSys)
-		ses.SetRequestContext(ctx)
-		ses.Data = make([][]interface{}, 1)
-		ses.Data[0] = make([]interface{}, showCreateTableAttrCount)
-		ses.Data[0][tableNamePos] = []byte("tableName")
-		ses.Data[0][tableCommentPos] = []byte("table comment")
-		ses.Data[0][attrNamePos] = []byte("col1")
-		ses.Data[0][attrTypPos] = int32(1)
-		ses.Data[0][charWidthPos] = int32(1)
-		ses.Data[0][nullablePos] = int8(1)
-		ses.Data[0][primaryKeyPos] = []byte("p")
-		ses.Data[0][attrCommentPos] = []byte("column comment")
-
-		ses.Mrs = &MysqlResultSet{}
-		err = handleShowCreateTable(ses)
-		convey.So(err, convey.ShouldBeNil)
-	})
-}
-
-func Test_handleShowCreateDatabase(t *testing.T) {
-	ctx := context.TODO()
-	convey.Convey("handleShowCreateDatabase succ", t, func() {
-		ctrl := gomock.NewController(t)
-		defer ctrl.Finish()
-		ioses := mock_frontend.NewMockIOSession(ctrl)
-		ioses.EXPECT().OutBuf().Return(buf.NewByteBuf(1024)).AnyTimes()
-		ioses.EXPECT().Write(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
-
-		eng := mock_frontend.NewMockEngine(ctrl)
-		txnClient := mock_frontend.NewMockTxnClient(ctrl)
-		pu, err := getParameterUnit("test/system_vars_config.toml", eng, txnClient)
-		if err != nil {
-			t.Error(err)
-		}
-		proto := NewMysqlClientProtocol(0, ioses, 1024, pu.SV)
-		guestMmu := guest.New(pu.SV.GuestMmuLimitation, pu.HostMmu)
-		var gSys GlobalSystemVariables
-		InitGlobalSystemVariables(&gSys)
-		ses := NewSession(proto, guestMmu, pu.Mempool, pu, &gSys)
-		ses.SetRequestContext(ctx)
-
-		ses.Mrs = &MysqlResultSet{}
-		ses.Mrs.Name2Index = make(map[string]uint64)
-		ses.Mrs.Name2Index["Database"] = 1
-		ses.Mrs.Name2Index["Create Database"] = 2
-		ses.Data = make([][]interface{}, 1)
-		ses.Data[0] = make([]interface{}, 3)
-
-		err = handleShowCreateDatabase(ses)
-		convey.So(err, convey.ShouldBeNil)
-	})
-}
-
 func Test_handleShowColumns(t *testing.T) {
 	ctx := context.TODO()
 	convey.Convey("handleShowColumns succ", t, func() {
@@ -964,6 +899,9 @@ func Test_CMD_FIELD_LIST(t *testing.T) {
 
 		table.EXPECT().TableDefs(ctx).Return(defs, nil).AnyTimes()
 		eng.EXPECT().Database(ctx, gomock.Any(), nil).Return(db, nil).AnyTimes()
+		eng.EXPECT().Hints().Return(engine.Hints{
+			CommitOrRollbackTimeout: time.Second,
+		}).AnyTimes()
 
 		txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
 		txnOperator.EXPECT().Commit(ctx).Return(nil).AnyTimes()

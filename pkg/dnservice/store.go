@@ -394,7 +394,10 @@ func (s *store) initFileService() error {
 		return err
 	}
 
-	s.fs = fileservice.NewFileServices(localFileServiceName, localFS, s3FS)
+	s.fs, err = fileservice.NewFileServices(localFileServiceName, localFS, s3FS)
+	if err != nil {
+		return err
+	}
 	s.metadataFS = rfs
 
 	return nil

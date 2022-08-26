@@ -42,10 +42,8 @@ const MaxPrepareNumberInOneSession = 64
 type ShowStatementType int
 
 const (
-	NotShowStatement   ShowStatementType = 0
-	ShowCreateDatabase ShowStatementType = 1
-	ShowCreateTable    ShowStatementType = 2
-	ShowColumns        ShowStatementType = 3
+	NotShowStatement ShowStatementType = 0
+	ShowColumns      ShowStatementType = 1
 )
 
 type TxnHandler struct {
@@ -641,6 +639,11 @@ func (th *TxnHandler) CommitTxn() error {
 	if ctx == nil {
 		panic("context should not be nil")
 	}
+	ctx, cancel := context.WithTimeout(
+		ctx,
+		th.storage.Hints().CommitOrRollbackTimeout,
+	)
+	defer cancel()
 	err := th.txn.Commit(ctx)
 	th.SetInvalid()
 	return err
@@ -654,6 +657,11 @@ func (th *TxnHandler) RollbackTxn() error {
 	if ctx == nil {
 		panic("context should not be nil")
 	}
+	ctx, cancel := context.WithTimeout(
+		ctx,
+		th.storage.Hints().CommitOrRollbackTimeout,
+	)
+	defer cancel()
 	err := th.txn.Rollback(ctx)
 	th.SetInvalid()
 	return err
@@ -785,6 +793,7 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string) (*plan2.
 
 	var cols []*plan2.ColDef
 	var defs []*plan2.TableDefType
+	var properties []*plan2.Property
 	var TableType, Createsql string
 	for _, def := range engineDefs {
 		if attr, ok := def.(*engine.AttributeDef); ok {
@@ -798,10 +807,10 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string) (*plan2.
 				},
 				Primary: attr.Attr.Primary,
 				Default: attr.Attr.Default,
+				Comment: attr.Attr.Comment,
 			})
 		} else if pro, ok := def.(*engine.PropertiesDef); ok {
-			properties := make([]*plan2.Property, len(pro.Properties))
-			for i, p := range pro.Properties {
+			for _, p := range pro.Properties {
 				switch p.Key {
 				case catalog.SystemRelAttr_Kind:
 					TableType = p.Value
@@ -809,18 +818,11 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string) (*plan2.
 					Createsql = p.Value
 				default:
 				}
-				properties[i] = &plan2.Property{
+				properties = append(properties, &plan2.Property{
 					Key:   p.Key,
 					Value: p.Value,
-				}
+				})
 			}
-			defs = append(defs, &plan2.TableDefType{
-				Def: &plan2.TableDef_DefType_Properties{
-					Properties: &plan2.PropertiesDef{
-						Properties: properties,
-					},
-				},
-			})
 		} else if viewDef, ok := def.(*engine.ViewDef); ok {
 			defs = append(defs, &plan2.TableDefType{
 				Def: &plan2.TableDef_DefType_View{
@@ -829,8 +831,23 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string) (*plan2.
 					},
 				},
 			})
+		} else if commnetDef, ok := def.(*engine.CommentDef); ok {
+			properties = append(properties, &plan2.Property{
+				Key:   catalog.SystemRelAttr_Comment,
+				Value: commnetDef.Comment,
+			})
 		}
 	}
+	if len(properties) > 0 {
+		defs = append(defs, &plan2.TableDefType{
+			Def: &plan2.TableDef_DefType_Properties{
+				Properties: &plan2.PropertiesDef{
+					Properties: properties,
+				},
+			},
+		})
+	}
+
 	if tcc.QryTyp != TXN_DEFAULT {
 		hideKeys, err := table.GetHideKeys(ctx)
 		if err != nil {
