@@ -343,20 +343,14 @@ func buildListPartitionDefinitions(partitionBinder *PartitionBinder, defs []*tre
 
 		if valuesIn, ok := partition.Values.(*tree.ValuesIn); ok {
 			binder := NewPartitionBinder(nil, nil)
-			inValues := make([]*plan.InValue, len(valuesIn.ValueList))
+			inValues := make([]*plan.Expr, len(valuesIn.ValueList))
 
-			for j, invalue := range valuesIn.ValueList {
-				values := make([]*plan.Expr, len(invalue))
-				for k, value := range invalue {
-					expr, err := binder.BindExpr(value, 0, false)
-					if err != nil {
-						return err
-					}
-					values[k] = expr
+			for j, value := range valuesIn.ValueList {
+				tuple, err := binder.BindExpr(value, 0, false)
+				if err != nil {
+					return err
 				}
-				inValues[j] = &plan.InValue{
-					Value: values,
-				}
+				inValues[j] = tuple
 			}
 			partitionItem.InValues = inValues
 			partitionItem.Description = tree.String(valuesIn, dialect.MYSQL)

@@ -817,7 +817,7 @@ var (
 					PARTITION r2 VALUES IN (3, 7, 11, 15, 19, 23),
 					PARTITION r3 VALUES IN (4, 8, 12, 16, 20, 24)
 				);`,
-			output: `create table tp15 (id int primary key, name varchar(35), age int unsigned) partition by list(id) (partition r0 values in (1,5,9,13,17,21), partition r1 values in (2,6,10,14,18,22), partition r2 values in (3,7,11,15,19,23), partition r3 values in (4,8,12,16,20,24))`,
+			output: `create table tp15 (id int primary key, name varchar(35), age int unsigned) partition by list(id) (partition r0 values in (1, 5, 9, 13, 17, 21), partition r1 values in (2, 6, 10, 14, 18, 22), partition r2 values in (3, 7, 11, 15, 19, 23), partition r3 values in (4, 8, 12, 16, 20, 24))`,
 		},
 		{
 			input: `CREATE TABLE tp16 (
@@ -830,7 +830,7 @@ var (
 					PARTITION p2 VALUES IN( (1,0), (2,0), (2,1), (3,0), (3,1) ),
 					PARTITION p3 VALUES IN( (1,3), (2,2), (2,3), (3,2), (3,3) )
 				)`,
-			output: `create table tp16 (a int null, b int null) partition by list columns (a, b) (partition p0 values in ((0, 0),(null, null)), partition p1 values in ((0, 1),(0, 2),(0, 3),(1, 1),(1, 2)), partition p2 values in ((1, 0),(2, 0),(2, 1),(3, 0),(3, 1)), partition p3 values in ((1, 3),(2, 2),(2, 3),(3, 2),(3, 3)))`,
+			output: `create table tp16 (a int null, b int null) partition by list columns (a, b) (partition p0 values in ((0, 0), (null, null)), partition p1 values in ((0, 1), (0, 2), (0, 3), (1, 1), (1, 2)), partition p2 values in ((1, 0), (2, 0), (2, 1), (3, 0), (3, 1)), partition p3 values in ((1, 3), (2, 2), (2, 3), (3, 2), (3, 3)))`,
 		},
 		{
 			input: `CREATE TABLE tp17 (

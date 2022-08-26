@@ -253,11 +253,7 @@ message PartitionItem {
 	string description = 3;
 	string comment = 4;
 	repeated Expr lessThan = 5;
-	repeated InValue inValues = 6;
-}
-
-message InValue {
-	repeated Expr value = 1;
+	repeated Expr inValues = 6;
 }
 
 message ViewDef {
