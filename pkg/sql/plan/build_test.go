@@ -760,6 +760,7 @@ func TestShow(t *testing.T) {
 		"show columns from nation from tpch",
 		"show columns from nation where `Field` like '%ff' or `Type` = 1 or `Null` = 0",
 		"show create view v1",
+		"show create table v1",
 	}
 	runTestShouldPass(mock, t, sqls, false, false)
 

@@ -21,5 +21,6 @@ create view v1 as select "a";
 show create view v1;
 create view v2 as select 'a';
 show create view v2;
+show create table v2;
 drop view v1;
 drop view v2;
