@@ -125,7 +125,7 @@ mkdirRetry:
 		},
 	}); err == nil {
 		w.offset += n
-	} else if (err == fileservice.ErrFileExisted || strings.Index(err.Error(), "file exists") > -1) && !mkdirTried {
+	} else if (err == fileservice.ErrFileExisted || strings.Contains(err.Error(), "file exists")) && !mkdirTried {
 		// like "mkdir xxx/xxx: file exists"
 		mkdirTried = true
 		goto mkdirRetry

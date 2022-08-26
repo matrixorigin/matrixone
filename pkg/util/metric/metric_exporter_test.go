@@ -44,7 +44,7 @@ func (e *dummyCollect) sendCnt() int {
 }
 
 func TestExporterCommonInfo(t *testing.T) {
-	exp := newMetricExporter(nil, nil, 42, "monolithic").(*metricExporter)
+	exp := newMetricExporter(nil, nil, "node_uuid_42", "monolithic").(*metricExporter)
 	mfs := []*pb.MetricFamily{
 		{Metric: []*pb.Metric{{}}},
 		{Metric: []*pb.Metric{{Label: []*pb.LabelPair{{Name: "color", Value: "blue"}}}}},
@@ -71,7 +71,7 @@ func TestExporterCommonInfo(t *testing.T) {
 	names := []string{"color", "zaxis", "env"}
 	lblCnt := 0
 	for i, mf := range mfs {
-		assert.Equal(t, mf.GetNode(), int32(42))
+		assert.Equal(t, mf.GetNode(), "node_uuid_42")
 		assert.Equal(t, mf.GetRole(), "monolithic")
 		name := names[:lblCnt]
 		for _, m := range mf.Metric {
@@ -101,7 +101,7 @@ func TestExporter(t *testing.T) {
 		defer setRawHistBufLimit(setRawHistBufLimit(5))
 		defer setExportToProm(setExportToProm(false))
 		reg := prom.NewRegistry()
-		iexp := newMetricExporter(reg, dumCollect, 0, "monolithic")
+		iexp := newMetricExporter(reg, dumCollect, "node_uuid", "monolithic")
 		exp = iexp.(*metricExporter)
 		exp.Start(context.TODO())
 		defer exp.Stop(false)

@@ -251,7 +251,7 @@ func (s *mfset) GetBatch(buf *bytes.Buffer) string {
 	for _, mf := range s.mfs {
 		for _, metric := range mf.Metric {
 			// reserved labels
-			lblsBuf.WriteString(fmt.Sprintf(",%d,%q", mf.GetNode(), mf.GetRole()))
+			lblsBuf.WriteString(fmt.Sprintf(",%q,%q", mf.GetNode(), mf.GetRole()))
 			// custom labels
 			for _, lbl := range metric.Label {
 				lblsBuf.WriteString(",\"")
@@ -326,7 +326,7 @@ func (s *mfsetCSV) GetBatch(buf *bytes.Buffer) *trace.CSVRequest {
 
 			var lbls []string
 			// reserved labels
-			lbls = append(lbls, fmt.Sprintf("%d", mf.GetNode()))
+			lbls = append(lbls, mf.GetNode())
 			lbls = append(lbls, mf.GetRole())
 			// custom labels
 			for _, lbl := range metric.Label {

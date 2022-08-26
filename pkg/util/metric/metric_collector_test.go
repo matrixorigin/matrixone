@@ -78,7 +78,7 @@ func TestCollector(t *testing.T) {
 	collector.Start(context.TODO())
 	defer collector.Stop(false)
 	names := []string{"m1", "m2"}
-	nodes := []int32{1, 2}
+	nodes := []string{"e669d136-24f3-11ed-ba8c-d6aee46d73fa", "e9b89520-24f3-11ed-ba8c-d6aee46d73fa"}
 	roles := []string{"ping", "pong"}
 	ts := time.Now().UnixMicro()
 	go func() {
@@ -161,7 +161,7 @@ func TestCsvFSCollector(t *testing.T) {
 	collector.Start(context.TODO())
 	defer collector.Stop(false)
 	names := []string{"m1", "m2"}
-	nodes := []int32{1, 2}
+	nodes := []string{"e669d136-24f3-11ed-ba8c-d6aee46d73fa", "e9b89520-24f3-11ed-ba8c-d6aee46d73fa"}
 	roles := []string{"ping", "pong"}
 	ts := time.Now().UnixMicro()
 	go func() {
