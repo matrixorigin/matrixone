@@ -122,6 +122,21 @@ message SingleJoin {
     repeated plan.Expr right_cond = 8;
 }
 
+message MarkJoin {
+    uint64 ibucket = 1;
+    uint64 nbucket = 2;
+    repeated int32 result = 3;
+    repeated plan.Expr left_cond = 4;
+    repeated plan.Expr right_cond = 5;
+    repeated plan.Type types = 6;
+    plan.Expr cond = 7;
+    repeated plan.Expr on_list = 8;
+    bool output_null = 9;
+    bool output_mark = 10;
+    bool output_anyway = 11;
+    bool mark_meaning = 12;
+}
+
 message Product {
     repeated int32 rel_list = 1;
     repeated int32 col_list = 2;
@@ -141,13 +156,14 @@ message Instruction{
     LeftJoin  left_join = 8;
     SemiJoin  semi_join = 9;
     SingleJoin single_join = 10;
-    Join    join = 11;
-    Product    product = 12;
-	repeated plan.OrderBySpec order_by = 13;
-    repeated plan.Expr    project_list = 14;
-    plan.Expr    filter = 15;
-    uint64    limit = 16;
-    uint64    offset = 17;
+    MarkJoin    mark_join = 11;
+    Join    join = 12;
+    Product    product = 13;
+	  repeated plan.OrderBySpec order_by = 14;
+    repeated plan.Expr    project_list = 15;
+    plan.Expr    filter = 16;
+    uint64    limit = 17;
+    uint64    offset = 18;
 }
 
 message AnalysisList {

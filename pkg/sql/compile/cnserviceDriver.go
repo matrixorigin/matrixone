@@ -19,6 +19,8 @@ import (
 	"errors"
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/intersectall"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mark"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/output"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -499,6 +501,11 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 			Ibucket: t.IBucket,
 			Nbucket: t.NBucket,
 		}
+	case *intersectall.Argument:
+		in.Anti = &pipeline.AntiJoin{
+			Ibucket: t.IBucket,
+			Nbucket: t.NBucket,
+		}
 	// may useless.
 	case *merge.Argument:
 	case *mergegroup.Argument:
@@ -525,6 +532,21 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 		in.Connect = &pipeline.Connector{
 			PipelineId:     ctx0.id,
 			ConnectorIndex: idx, // receiver
+		}
+	case *mark.Argument:
+		in.MarkJoin = &pipeline.MarkJoin{
+			Ibucket:      t.Ibucket,
+			Nbucket:      t.Nbucket,
+			Result:       t.Result,
+			LeftCond:     t.Conditions[0],
+			RightCond:    t.Conditions[1],
+			Types:        convertToPlanTypes(t.Typs),
+			Cond:         t.Cond,
+			OnList:       t.OnList,
+			OutputNull:   t.OutputNull,
+			OutputMark:   t.OutputMark,
+			OutputAnyway: t.OutputAnyway,
+			MarkMeaning:  t.MarkMeaning,
 		}
 	default:
 		return -1, nil, moerr.New(moerr.INTERNAL_ERROR, "unexpected operator: %v", opr.Op)
@@ -659,6 +681,21 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext) (vm.In
 			Typs:       convertToTypes(t.Types),
 			Conditions: [][]*plan.Expr{t.LeftCond, t.RightCond},
 		}
+	case vm.Mark:
+		t := opr.GetMarkJoin()
+		v.Arg = &mark.Argument{
+			Ibucket:      t.Ibucket,
+			Nbucket:      t.Nbucket,
+			Result:       t.Result,
+			Conditions:   [][]*plan.Expr{t.LeftCond, t.RightCond},
+			Typs:         convertToTypes(t.Types),
+			Cond:         t.Cond,
+			OnList:       t.OnList,
+			OutputNull:   t.OutputNull,
+			OutputMark:   t.OutputMark,
+			OutputAnyway: t.OutputAnyway,
+			MarkMeaning:  t.MarkMeaning,
+		}
 	case vm.Top:
 		v.Arg = &top.Argument{
 			Limit: int64(opr.Limit),
@@ -668,6 +705,12 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext) (vm.In
 	case vm.Intersect:
 		t := opr.GetAnti()
 		v.Arg = &intersect.Argument{
+			IBucket: t.Ibucket,
+			NBucket: t.Nbucket,
+		}
+	case vm.IntersectAll:
+		t := opr.GetAnti()
+		v.Arg = &intersectall.Argument{
 			IBucket: t.Ibucket,
 			NBucket: t.Nbucket,
 		}
