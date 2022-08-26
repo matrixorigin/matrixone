@@ -71,13 +71,13 @@ func createMOServer(inputCtx context.Context, pu *config.ParameterUnit) {
 	mo = frontend.NewMOServer(moServerCtx, address, pu)
 	var fs fileservice.FileService
 	var cfg export.FSConfig
-	var fsFactory export.FSWriterFactory
+	var writerFactory export.FSWriterFactory
 	var err error
 	if !pu.SV.DisableTrace || !pu.SV.DisableMetric {
 		if fs, cfg, err = export.ParseFileService(moServerCtx, fileservice.Config{Name: "local", Backend: "DISK", DataDir: pu.SV.StorePath}); err != nil {
 			panic(err)
 		}
-		fsFactory = export.GetFSWriterFactory(fs, "node_uuid", trace.NodeTypeNode.String())
+		writerFactory = export.GetFSWriterFactory(fs, "node_uuid", trace.NodeTypeNode.String())
 	}
 	// init trace/log/error framework
 	if err := util.SetUUIDNodeID(nil); err != nil {
@@ -88,7 +88,7 @@ func createMOServer(inputCtx context.Context, pu *config.ParameterUnit) {
 		trace.EnableTracer(!pu.SV.DisableTrace),
 		trace.WithBatchProcessMode(pu.SV.TraceBatchProcessor),
 		trace.DebugMode(pu.SV.EnableTraceDebug),
-		trace.WithFSWriterFactory(fsFactory),
+		trace.WithFSWriterFactory(writerFactory),
 		trace.WithFSConfig(&cfg),
 		trace.WithSQLExecutor(func() ie.InternalExecutor {
 			return frontend.NewInternalExecutor(pu)
@@ -101,7 +101,8 @@ func createMOServer(inputCtx context.Context, pu *config.ParameterUnit) {
 		ieFactory := func() ie.InternalExecutor {
 			return frontend.NewInternalExecutor(pu)
 		}
-		metric.InitMetric(moServerCtx, ieFactory, pu.SV, 0, metric.ALL_IN_ONE_MODE, metric.WithFileService(fsFactory, &cfg))
+		metric.InitMetric(moServerCtx, ieFactory, pu.SV, pu.SV.NodeUUID, metric.ALL_IN_ONE_MODE,
+			metric.WithWriterFactory(writerFactory), metric.WithFSConfig(&cfg), metric.WithInitAction(true))
 	}
 	frontend.InitServerVersion(MoVersion)
 }

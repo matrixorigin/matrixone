@@ -491,7 +491,7 @@ func genCsvData(in []IBuffer2SqlItem, buf *bytes.Buffer) any {
 	}
 	opts := i.CsvOptions()
 
-	writer := gTracerProvider.fsFactory(DefaultContext(), StatsDatabase, i)
+	writer := gTracerProvider.writerFactory(DefaultContext(), StatsDatabase, i)
 
 	for _, i := range in {
 		item, ok := i.(CsvFields)

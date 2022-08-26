@@ -172,7 +172,7 @@ func (s *service) createMOServer(inputCtx context.Context, pu *config.ParameterU
 	// init trace/log/error framework
 	var fs fileservice.FileService
 	var cfg export.FSConfig
-	var fsFactory export.FSWriterFactory
+	var writerFactory export.FSWriterFactory
 	var err error
 	// validate node_uuid
 	var nodeUUID uuid.UUID
@@ -184,7 +184,7 @@ func (s *service) createMOServer(inputCtx context.Context, pu *config.ParameterU
 		if fs, cfg, err = export.ParseFileService(moServerCtx, *pu.FileService); err != nil {
 			return nil, err
 		}
-		fsFactory = export.GetFSWriterFactory(fs, pu.SV.NodeUUID, trace.NodeTypeCN.String())
+		writerFactory = export.GetFSWriterFactory(fs, pu.SV.NodeUUID, trace.NodeTypeCN.String())
 	}
 	if err = util.SetUUIDNodeID(nodeUUID[:]); err != nil {
 		return nil, moerr.NewPanicError(err)
@@ -193,7 +193,7 @@ func (s *service) createMOServer(inputCtx context.Context, pu *config.ParameterU
 		trace.WithNode(pu.SV.NodeUUID, trace.NodeTypeCN),
 		trace.EnableTracer(!pu.SV.DisableTrace),
 		trace.WithBatchProcessMode(pu.SV.TraceBatchProcessor),
-		trace.WithFSWriterFactory(fsFactory),
+		trace.WithFSWriterFactory(writerFactory),
 		trace.WithFSConfig(&cfg),
 		trace.DebugMode(pu.SV.EnableTraceDebug),
 		trace.WithSQLExecutor(func() ie.InternalExecutor {
@@ -207,8 +207,8 @@ func (s *service) createMOServer(inputCtx context.Context, pu *config.ParameterU
 		ieFactory := func() ie.InternalExecutor {
 			return frontend.NewInternalExecutor(pu)
 		}
-		metric.InitMetric(moServerCtx, ieFactory, pu.SV, 0, metric.ALL_IN_ONE_MODE,
-			metric.WithFileService(fsFactory, &cfg))
+		metric.InitMetric(moServerCtx, ieFactory, pu.SV, pu.SV.NodeUUID, metric.ALL_IN_ONE_MODE,
+			metric.WithWriterFactory(writerFactory), metric.WithFSConfig(&cfg), metric.WithInitAction(true))
 	}
 	frontend.InitServerVersion(pu.SV.MoVersion)
 	return moServerCtx, nil

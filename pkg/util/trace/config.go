@@ -71,8 +71,10 @@ type tracerProviderConfig struct {
 
 	batchProcessMode string // see WithBatchProcessMode
 
-	fsConfig  FSConfig               // see WithFSConfig
-	fsFactory export.FSWriterFactory // see WithFSWriterFactory, default: export.GetFSWriterFactory
+	// fsConfig for schema init
+	fsConfig FSConfig // see WithFSConfig
+	// writerFactory gen writer for CSV output
+	writerFactory export.FSWriterFactory // see WithFSWriterFactory, default: export.GetFSWriterFactory
 
 	sqlExecutor func() ie.InternalExecutor // see WithSQLExecutor
 
@@ -146,7 +148,7 @@ func WithFSConfig(fsConfig FSConfig) tracerProviderOptionFunc {
 
 func WithFSWriterFactory(f export.FSWriterFactory) tracerProviderOptionFunc {
 	return tracerProviderOptionFunc(func(cfg *tracerProviderConfig) {
-		cfg.fsFactory = f
+		cfg.writerFactory = f
 	})
 }
 

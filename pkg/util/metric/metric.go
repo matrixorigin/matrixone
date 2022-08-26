@@ -75,7 +75,7 @@ var moExporter MetricExporter
 var moCollector MetricCollector
 var statusSvr *statusServer
 
-func InitMetric(ctx context.Context, ieFactory func() ie.InternalExecutor, SV *config.FrontendParameters, nodeId int, role string, opts ...InitOption) {
+func InitMetric(ctx context.Context, ieFactory func() ie.InternalExecutor, SV *config.FrontendParameters, nodeUUID, role string, opts ...InitOption) {
 	var initOpts InitOptions
 	for _, opt := range opts {
 		opt.ApplyTo(&initOpts)
@@ -83,12 +83,12 @@ func InitMetric(ctx context.Context, ieFactory func() ie.InternalExecutor, SV *c
 	// init global variables
 	initConfigByParamaterUnit(SV)
 	registry = prom.NewRegistry()
-	if initOpts.fsFactory == nil {
-		moCollector = newMetricCollector(ieFactory)
+	if initOpts.writerFactory != nil {
+		moCollector = newMetricFSCollector(initOpts.writerFactory)
 	} else {
-		moCollector = newMetricFSCollector(initOpts.fsFactory)
+		moCollector = newMetricCollector(ieFactory)
 	}
-	moExporter = newMetricExporter(registry, moCollector, int32(nodeId), role)
+	moExporter = newMetricExporter(registry, moCollector, nodeUUID, role)
 
 	// register metrics and create tables
 	registerAllMetrics()
@@ -246,8 +246,10 @@ func mustValidLbls(name string, consts prom.Labels, vars []string) {
 }
 
 type InitOptions struct {
-	fsFactory export.FSWriterFactory
-	fsConfig  *export.FSConfig
+	writerFactory export.FSWriterFactory // see WithWriterFactory
+	fsConfig      *export.FSConfig       // see WithFSConfig
+	// initSchema control do the initTables
+	initSchema bool
 }
 
 type InitOption func(*InitOptions)
@@ -256,9 +258,20 @@ func (f InitOption) ApplyTo(opts *InitOptions) {
 	f(opts)
 }
 
-func WithFileService(factory export.FSWriterFactory, config *export.FSConfig) InitOption {
+func WithWriterFactory(factory export.FSWriterFactory) InitOption {
 	return InitOption(func(options *InitOptions) {
-		options.fsFactory = factory
+		options.writerFactory = factory
+	})
+}
+
+func WithFSConfig(config *export.FSConfig) InitOption {
+	return InitOption(func(options *InitOptions) {
 		options.fsConfig = config
+	})
+}
+
+func WithInitAction(init bool) InitOption {
+	return InitOption(func(options *InitOptions) {
+		options.initSchema = init
 	})
 }

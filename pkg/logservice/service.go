@@ -392,9 +392,13 @@ const s3FileServiceName = "S3" // same as dnservice/factory.go s3FileServiceName
 func (s *Service) initTraceMetric(ctx context.Context) (context.Context, error) {
 	SV := &s.cfg.Frontend
 	var fs fileservice.FileService
+	var writerFactory export.FSWriterFactory
 	var err error
-	if fs, err = s.cfg.FSFactory(s3FileServiceName); err != nil {
-		return nil, err
+	if !SV.DisableTrace || !SV.DisableMetric {
+		if fs, err = s.cfg.FSFactory(s3FileServiceName); err != nil {
+			return nil, err
+		}
+		writerFactory = export.GetFSWriterFactory(fs, SV.NodeUUID, trace.NodeTypeDN.String())
 	}
 	if SV.DisableTrace {
 		logutil.Warnf("trace is disable")
@@ -403,7 +407,7 @@ func (s *Service) initTraceMetric(ctx context.Context) (context.Context, error) 
 		trace.WithNode(SV.NodeUUID, trace.NodeTypeLogService),
 		trace.EnableTracer(!SV.DisableTrace),
 		trace.WithBatchProcessMode(SV.TraceBatchProcessor),
-		trace.WithFSWriterFactory(export.GetFSWriterFactory(fs, SV.NodeUUID, trace.NodeTypeLogService.String())),
+		trace.WithFSWriterFactory(writerFactory),
 		trace.WithFSConfig(nil),
 		trace.DebugMode(SV.EnableTraceDebug),
 		trace.WithSQLExecutor(nil),
@@ -414,7 +418,7 @@ func (s *Service) initTraceMetric(ctx context.Context) (context.Context, error) 
 		ieFactory := func() ie.InternalExecutor {
 			return nil
 		}
-		metric.InitMetric(ctx, ieFactory, SV, 0, metric.ALL_IN_ONE_MODE)
+		metric.InitMetric(ctx, ieFactory, SV, SV.NodeUUID, metric.ALL_IN_ONE_MODE, metric.WithWriterFactory(writerFactory))
 	}
 	return ctx, nil
 }
