@@ -92,7 +92,7 @@ func ReportLog(ctx context.Context, level zapcore.Level, depth int, formatter st
 	if !logLevelEnabler.Load().(zapcore.LevelEnabler).Enabled(level) {
 		return
 	}
-	if !gTracerProvider.IsEnable() {
+	if !GetTracerProvider().IsEnable() {
 		return
 	}
 	_, newSpan := Start(DefaultContext(), "ReportLog")
@@ -169,7 +169,7 @@ func (m MOZap) CsvFields() []string {
 
 func ReportZap(jsonEncoder zapcore.Encoder, entry zapcore.Entry, fields []zapcore.Field) (*buffer.Buffer, error) {
 	var needReport = true
-	if !gTracerProvider.IsEnable() {
+	if !GetTracerProvider().IsEnable() {
 		return jsonEncoder.EncodeEntry(entry, []zap.Field{})
 	}
 	log := newMOZap()

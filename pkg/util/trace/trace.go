@@ -1,4 +1,4 @@
-// Copyright 2022 Matrix Origin
+// Copyright The OpenTelemetry Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -11,6 +11,13 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
+
+// Portions of this file are additionally subject to the following
+// copyright.
+//
+// Copyright (C) 2022 Matrix Origin.
+//
+// Modified the behavior and the interface of the step.
 
 package trace
 
@@ -26,10 +33,15 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/export"
 )
 
-var gTracerProvider *MOTracerProvider
+var gTracerProvider atomic.Value
 var gTracer Tracer
-var gTraceContext = context.Background()
+var gTraceContext atomic.Value
 var gSpanContext atomic.Value
+
+func init() {
+	SetDefaultContext(context.Background())
+	SetTracerProvider(newMOTracerProvider(EnableTracer(false)))
+}
 
 func Init(ctx context.Context, opts ...TracerProviderOption) (context.Context, error) {
 
@@ -40,24 +52,24 @@ func Init(ctx context.Context, opts ...TracerProviderOption) (context.Context, e
 	export.SetDefaultContextFunc(DefaultContext)
 
 	// init TraceProvider
-	gTracerProvider = newMOTracerProvider(opts...)
-	config := &gTracerProvider.tracerProviderConfig
+	SetTracerProvider(newMOTracerProvider(opts...))
+	config := &GetTracerProvider().tracerProviderConfig
 
 	// init Tracer
-	gTracer = gTracerProvider.Tracer("MatrixOrigin")
+	gTracer = GetTracerProvider().Tracer("MatrixOrigin")
 
 	// init Node DefaultContext
 	var spanId SpanID
 	spanId.SetByUUID(config.getNodeResource().NodeUuid)
 	sc := SpanContextWithIDs(nilTraceID, spanId)
 	gSpanContext.Store(&sc)
-	gTraceContext = ContextWithSpanContext(ctx, sc)
+	SetDefaultContext(ContextWithSpanContext(ctx, sc))
 
 	if err := initExport(ctx, config); err != nil {
 		return nil, err
 	}
 
-	return gTraceContext, nil
+	return DefaultContext(), nil
 }
 
 func initExport(ctx context.Context, config *tracerProviderConfig) error {
@@ -109,11 +121,11 @@ func initExport(ctx context.Context, config *tracerProviderConfig) error {
 }
 
 func Shutdown(ctx context.Context) error {
-	if !gTracerProvider.IsEnable() {
+	if !GetTracerProvider().IsEnable() {
 		return nil
 	}
 
-	gTracerProvider.EnableTracer(false)
+	GetTracerProvider().EnableTracer(false)
 	tracer := noopTracer{}
 	_ = atomic.SwapPointer((*unsafe.Pointer)(unsafe.Pointer(gTracer.(*MOTracer))), unsafe.Pointer(&tracer))
 
@@ -125,8 +137,16 @@ func Start(ctx context.Context, spanName string, opts ...SpanOption) (context.Co
 	return gTracer.Start(ctx, spanName, opts...)
 }
 
+type contextHolder struct {
+	ctx context.Context
+}
+
+func SetDefaultContext(ctx context.Context) {
+	gTraceContext.Store(&contextHolder{ctx})
+}
+
 func DefaultContext() context.Context {
-	return gTraceContext
+	return gTraceContext.Load().(*contextHolder).ctx
 }
 
 func DefaultSpanContext() *SpanContext {
@@ -134,5 +154,12 @@ func DefaultSpanContext() *SpanContext {
 }
 
 func GetNodeResource() *MONodeResource {
-	return gTracerProvider.getNodeResource()
+	return GetTracerProvider().getNodeResource()
+}
+
+func SetTracerProvider(p *MOTracerProvider) {
+	gTracerProvider.Store(p)
+}
+func GetTracerProvider() *MOTracerProvider {
+	return gTracerProvider.Load().(*MOTracerProvider)
 }

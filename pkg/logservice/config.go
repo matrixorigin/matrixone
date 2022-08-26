@@ -158,7 +158,7 @@ type Config struct {
 	// Frontend parameters for the frontend, assign by mo-service's Config
 	Frontend config.FrontendParameters
 
-	FSFactory fileservice.FileServiceFactory
+	ETLFSFactory fileservice.FileServiceFactory
 }
 
 func (c *Config) GetHAKeeperConfig() hakeeper.Config {

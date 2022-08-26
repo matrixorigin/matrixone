@@ -93,12 +93,12 @@ func (t batchSqlHandler) NewItemBuffer(name string) bp.ItemBuffer[bp.HasName, an
 // NewItemBatchHandler implement batchpipe.PipeImpl
 func (t batchSqlHandler) NewItemBatchHandler(ctx context.Context) func(batch any) {
 	var f = func(b any) {}
-	if gTracerProvider.sqlExecutor == nil {
+	if GetTracerProvider().sqlExecutor == nil {
 		// fixme: handle error situation, should panic
 		logutil.Errorf("[Trace] no SQL Executor.")
 		return f
 	}
-	exec := gTracerProvider.sqlExecutor()
+	exec := GetTracerProvider().sqlExecutor()
 	if exec == nil {
 		// fixme: handle error situation, should panic
 		logutil.Errorf("[Trace] no SQL Executor.")
@@ -491,7 +491,7 @@ func genCsvData(in []IBuffer2SqlItem, buf *bytes.Buffer) any {
 	}
 	opts := i.CsvOptions()
 
-	writer := gTracerProvider.writerFactory(DefaultContext(), StatsDatabase, i)
+	writer := GetTracerProvider().writerFactory(DefaultContext(), StatsDatabase, i)
 
 	for _, i := range in {
 		item, ok := i.(CsvFields)

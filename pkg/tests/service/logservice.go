@@ -25,6 +25,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"go.uber.org/zap"
 
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	logpb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 )
@@ -166,6 +167,12 @@ func buildLogConfig(
 	cfg.HAKeeperConfig.TickPerSecond = opt.hakeeper.tickPerSecond
 	cfg.HAKeeperConfig.LogStoreTimeout.Duration = opt.hakeeper.logStoreTimeout
 	cfg.HAKeeperConfig.DNStoreTimeout.Duration = opt.hakeeper.dnStoreTimeout
+	cfg.Frontend.SetDefaultValues()
+	cfg.Frontend.DisableMetric = true
+	cfg.Frontend.DisableTrace = true
+	cfg.ETLFSFactory = func(name string) (fileservice.FileService, error) {
+		return fileservice.NewLocalETLFS("local", "path_to_file")
+	}
 
 	// we must invoke Fill in order to setting default configruation value.
 	cfg.Fill()

@@ -17,9 +17,12 @@ package export
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
+	"path"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/util/batchpipe"
@@ -37,12 +40,13 @@ func TestLocalFSWriter(t *testing.T) {
 	ex, err := os.Executable()
 	require.Equal(t, nil, err)
 	t.Logf("executor: %s", ex)
-	path, err := filepath.Abs(".")
+	selfDir, err := filepath.Abs(".")
 	require.Equal(t, nil, err)
-	t.Logf("whereami: %s", path)
-	err = os.RemoveAll("store/")
+	t.Logf("whereami: %s", selfDir)
+	basedir := fmt.Sprintf("store.%d", time.Now().Unix())
+	err = os.RemoveAll(basedir)
 	require.Equal(t, nil, err)
-	fs, err := fileservice.NewLocalFS("test", "store/system", MB)
+	fs, err := fileservice.NewLocalFS("test", path.Join(basedir, "system"), MB)
 	require.Equal(t, nil, err)
 	ctx := context.Background()
 	// fs_writer_test.go:23: whereami: /private/var/folders/lw/05zz3bq12djbnhv1wyzk2jgh0000gn/T/GoLand
@@ -90,6 +94,7 @@ func TestLocalFSWriter(t *testing.T) {
 		},
 	})
 	t.Logf("write span file error: %v", err)
+	os.RemoveAll(basedir)
 }
 
 func TestLocalETLFSWriter(t *testing.T) {
@@ -101,7 +106,8 @@ func TestLocalETLFSWriter(t *testing.T) {
 	t.Logf("whereami: %s", path)
 	//err = os.RemoveAll("store/")
 	//require.Equal(t, nil, err)
-	fs, err := fileservice.NewLocalETLFS("etl", "store")
+	basedir := fmt.Sprintf("store.%d", time.Now().Unix())
+	fs, err := fileservice.NewLocalETLFS("etl", basedir)
 	require.Equal(t, nil, err)
 	ctx := context.Background()
 	// fs_writer_test.go:23: whereami: /private/var/folders/lw/05zz3bq12djbnhv1wyzk2jgh0000gn/T/GoLand
@@ -149,6 +155,7 @@ func TestLocalETLFSWriter(t *testing.T) {
 		},
 	})
 	t.Logf("write span file error: %v", err)
+	os.RemoveAll(basedir)
 }
 
 func TestFSWriter_Write(t *testing.T) {
@@ -164,12 +171,13 @@ func TestFSWriter_Write(t *testing.T) {
 		p []byte
 	}
 
-	os.RemoveAll("store/")
+	basedir := fmt.Sprintf("store.%d", time.Now().Unix())
+	os.RemoveAll(basedir)
 	path, err := filepath.Abs(".")
 	require.Equal(t, nil, err)
 	t.Logf("path: %s", path)
 
-	localFs, err := fileservice.NewLocalFS("test", "store/", MB) // db root dir.
+	localFs, err := fileservice.NewLocalFS("test", basedir, MB) // db root dir.
 	require.Equal(t, nil, err)
 	tests := []struct {
 		name    string
@@ -214,6 +222,7 @@ func TestFSWriter_Write(t *testing.T) {
 			}
 		})
 	}
+	os.RemoveAll(basedir)
 }
 
 func TestParseFileService(t *testing.T) {
@@ -221,7 +230,9 @@ func TestParseFileService(t *testing.T) {
 		ctx      context.Context
 		fsConfig fileservice.Config
 	}
-	localETLFS, err := fileservice.NewLocalETLFS("localETL", "store")
+	basedir := fmt.Sprintf("store.%d", time.Now().Unix())
+	os.RemoveAll(basedir)
+	localETLFS, err := fileservice.NewLocalETLFS("localETL", basedir)
 	require.Equal(t, nil, err)
 	tests := []struct {
 		name    string
@@ -239,11 +250,11 @@ func TestParseFileService(t *testing.T) {
 					Backend:               DiskFSBackend,
 					CacheMemCapacityBytes: 0,
 					S3:                    fileservice.S3Config{},
-					DataDir:               "store",
+					DataDir:               basedir,
 				},
 			},
 			wantFs:  localETLFS,
-			wantCfg: FSConfig{backend: DiskFSBackend, baseDir: "store"},
+			wantCfg: FSConfig{backend: DiskFSBackend, baseDir: basedir},
 			wantErr: false,
 		},
 		{
@@ -258,7 +269,7 @@ func TestParseFileService(t *testing.T) {
 						SharedConfigProfile: "", /* in running env, shoule be 'default' */
 						Endpoint:            "s3.us-west-2.amazonaws.com",
 						Bucket:              "xzxiong2208",
-						KeyPrefix:           "store",
+						KeyPrefix:           basedir,
 					},
 					DataDir: "store",
 				},
@@ -266,7 +277,7 @@ func TestParseFileService(t *testing.T) {
 			wantFs: localETLFS,
 			wantCfg: FSConfig{
 				backend:         S3FSBackend,
-				baseDir:         "store",
+				baseDir:         basedir,
 				endpoint:        "s3.us-west-2.amazonaws.com",
 				accessKeyID:     "key_id_2",
 				secretAccessKey: "access_key_3",
@@ -297,4 +308,5 @@ func TestParseFileService(t *testing.T) {
 			}
 		})
 	}
+	os.RemoveAll(basedir)
 }

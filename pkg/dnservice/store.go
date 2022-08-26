@@ -144,7 +144,7 @@ func NewService(cfg *Config,
 	if err := s.initMetadata(); err != nil {
 		return nil, err
 	}
-	if err := s.initTraceMetric(); err != nil {
+	if err := s.initTraceMetric(context.TODO()); err != nil {
 		return nil, err
 	}
 	return s, nil
@@ -179,6 +179,7 @@ func (s *store) Close() error {
 		}
 		return true
 	})
+	_ = trace.Shutdown(context.TODO())
 	return err
 }
 
@@ -406,14 +407,13 @@ func (s *store) initFileService() error {
 	return nil
 }
 
-func (s *store) initTraceMetric() error {
+func (s *store) initTraceMetric(ctx context.Context) error {
 	var fs fileservice.FileService
 	var writerFactory export.FSWriterFactory
 	var err error
-	ctx := context.Background()
 	SV := &s.cfg.Frontend
 	if !SV.DisableTrace || !SV.DisableMetric {
-		if fs, err = s.fsFactory(s3FileServiceName); err != nil {
+		if fs, err = s.cfg.ETLFSFactory(s3FileServiceName); err != nil {
 			return err
 		}
 		writerFactory = export.GetFSWriterFactory(fs, SV.NodeUUID, trace.NodeTypeDN.String())

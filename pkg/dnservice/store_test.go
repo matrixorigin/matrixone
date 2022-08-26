@@ -207,6 +207,8 @@ func newTestStore(
 		ListenAddress: testDNStoreAddr,
 	}
 	c.Txn.Clock.MaxClockOffset.Duration = time.Duration(math.MaxInt64)
+	c.Frontend.SetDefaultValues()
+	c.Frontend.DisableMetricToProm = true
 	s, err := NewService(c, fsFactory, options...)
 	assert.NoError(t, err)
 	return s.(*store)

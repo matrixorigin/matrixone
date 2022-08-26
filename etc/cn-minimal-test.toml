@@ -18,6 +18,7 @@ service-addresses = [
 type = "tae"
 
 [cn.fileservice]
+name = "s3"
 backend = "DISK"
 data-dir = "store"
 

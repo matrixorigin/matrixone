@@ -31,9 +31,7 @@ import (
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/util/export"
-	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 )
@@ -148,14 +146,14 @@ func NewService(cfg Config, opts ...Option) (*Service, error) {
 			return nil, err
 		}
 	}
-	// init trace & metric
-	if _, err = service.initTraceMetric(context.TODO()); err != nil {
-		return nil, err
-	}
 	return service, nil
 }
 
 func (s *Service) Start() error {
+	// init trace & metric
+	if _, err := s.initTraceMetric(context.TODO()); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -168,6 +166,7 @@ func (s *Service) Close() (err error) {
 	if s.store != nil {
 		err = firstError(err, s.store.close())
 	}
+	_ = trace.Shutdown(context.TODO())
 	return err
 }
 
@@ -395,14 +394,12 @@ func (s *Service) initTraceMetric(ctx context.Context) (context.Context, error) 
 	var writerFactory export.FSWriterFactory
 	var err error
 	if !SV.DisableTrace || !SV.DisableMetric {
-		if fs, err = s.cfg.FSFactory(s3FileServiceName); err != nil {
+		if fs, err = s.cfg.ETLFSFactory(s3FileServiceName); err != nil {
 			return nil, err
 		}
 		writerFactory = export.GetFSWriterFactory(fs, SV.NodeUUID, trace.NodeTypeDN.String())
 	}
-	if SV.DisableTrace {
-		logutil.Warnf("trace is disable")
-	} else if ctx, err = trace.Init(ctx,
+	if ctx, err = trace.Init(ctx,
 		trace.WithMOVersion(SV.MoVersion),
 		trace.WithNode(SV.NodeUUID, trace.NodeTypeLogService),
 		trace.EnableTracer(!SV.DisableTrace),
@@ -415,10 +412,7 @@ func (s *Service) initTraceMetric(ctx context.Context) (context.Context, error) 
 		return nil, err
 	}
 	if !SV.DisableMetric {
-		ieFactory := func() ie.InternalExecutor {
-			return nil
-		}
-		metric.InitMetric(ctx, ieFactory, SV, SV.NodeUUID, metric.ALL_IN_ONE_MODE, metric.WithWriterFactory(writerFactory))
+		metric.InitMetric(ctx, nil, SV, SV.NodeUUID, metric.ALL_IN_ONE_MODE, metric.WithWriterFactory(writerFactory))
 	}
 	return ctx, nil
 }

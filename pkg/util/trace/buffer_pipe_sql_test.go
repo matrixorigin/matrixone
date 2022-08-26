@@ -789,7 +789,7 @@ func Test_batchSqlHandler_NewItemBatchHandler(t1 *testing.T) {
 	}
 	for _, tt := range tests {
 		t1.Run(tt.name, func(t1 *testing.T) {
-			WithSQLExecutor(newDummyExecutorFactory(tt.fields.ch)).apply(&gTracerProvider.tracerProviderConfig)
+			WithSQLExecutor(newDummyExecutorFactory(tt.fields.ch)).apply(&GetTracerProvider().tracerProviderConfig)
 			t := batchSqlHandler{
 				defaultOpts: tt.fields.defaultOpts,
 			}
@@ -818,7 +818,7 @@ func Test_batchSqlHandler_NewItemBatchHandler(t1 *testing.T) {
 			wg.Wait()
 		})
 	}
-	WithSQLExecutor(func() internalExecutor.InternalExecutor { return nil }).apply(&gTracerProvider.tracerProviderConfig)
+	WithSQLExecutor(func() internalExecutor.InternalExecutor { return nil }).apply(&GetTracerProvider().tracerProviderConfig)
 }
 
 func Test_genCsvData(t *testing.T) {

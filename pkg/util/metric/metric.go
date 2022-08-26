@@ -92,7 +92,9 @@ func InitMetric(ctx context.Context, ieFactory func() ie.InternalExecutor, SV *c
 
 	// register metrics and create tables
 	registerAllMetrics()
-	initTables(ctx, ieFactory, initOpts.fsConfig)
+	if initOpts.needInitTable {
+		initTables(ctx, ieFactory, initOpts.fsConfig)
+	}
 
 	// start the data flow
 	moCollector.Start(ctx)
@@ -248,8 +250,8 @@ func mustValidLbls(name string, consts prom.Labels, vars []string) {
 type InitOptions struct {
 	writerFactory export.FSWriterFactory // see WithWriterFactory
 	fsConfig      *export.FSConfig       // see WithFSConfig
-	// initSchema control do the initTables
-	initSchema bool
+	// needInitTable control to do the initTables
+	needInitTable bool // see WithInitAction
 }
 
 type InitOption func(*InitOptions)
@@ -272,6 +274,6 @@ func WithFSConfig(config *export.FSConfig) InitOption {
 
 func WithInitAction(init bool) InitOption {
 	return InitOption(func(options *InitOptions) {
-		options.initSchema = init
+		options.needInitTable = init
 	})
 }

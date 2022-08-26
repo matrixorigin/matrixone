@@ -152,6 +152,12 @@ func buildDnConfig(
 	cfg.HAKeeper.HeatbeatDuration.Duration = opt.dn.heartbeatInterval
 	// FIXME: support different storage, consult @reusee
 	cfg.Txn.Storage.Backend = opt.dn.txnStorageBackend
+	cfg.Frontend.SetDefaultValues()
+	cfg.Frontend.DisableMetric = true
+	cfg.Frontend.DisableTrace = true
+	cfg.ETLFSFactory = func(name string) (fileservice.FileService, error) {
+		return fileservice.NewLocalETLFS("local", "path_to_file")
+	}
 
 	// We need the filled version of configuration.
 	// It's necessary when building dnservice.Option.

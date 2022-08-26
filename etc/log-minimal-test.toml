@@ -27,6 +27,10 @@ service-addresses = [
   "127.0.0.1:32000",
 ]
 
+[[fileservice]]
+name = "s3"
+backend = "DISK"
+data-dir = "store"
+
 [frontend]
-disableMetric = true
-disableTrace  = true
+disableMetricToProm = true

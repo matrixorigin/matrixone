@@ -28,6 +28,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/util/export"
+	"github.com/matrixorigin/matrixone/pkg/util/trace"
 )
 
 const (
@@ -111,12 +113,22 @@ func (c *Config) createFileService(name string) (fileservice.FileService, error)
 	return nil, fmt.Errorf("file service named %s not set", name)
 }
 
+func (c *Config) createETLFileService(name string) (fileservice.FileService, error) {
+	for _, cfg := range c.FileServices {
+		if strings.EqualFold(cfg.Name, name) {
+			fs, _, err := export.ParseFileService(trace.DefaultContext(), cfg)
+			return fs, err
+		}
+	}
+	return nil, fmt.Errorf("file service named %s not set", name)
+}
+
 func (c *Config) getLogServiceConfig() logservice.Config {
 	cfg := c.LogService
 	fmt.Printf("hakeeper client cfg: %v", c.HAKeeperClient)
 	cfg.HAKeeperClientConfig = c.HAKeeperClient
 	cfg.Frontend = c.getFrontendConfig()
-	cfg.FSFactory = c.createFileService
+	cfg.ETLFSFactory = c.createETLFileService
 	if len(cfg.UUID) != 0 {
 		cfg.Frontend.NodeUUID = cfg.UUID
 	}
@@ -127,6 +139,7 @@ func (c *Config) getDNServiceConfig() dnservice.Config {
 	cfg := c.DN
 	cfg.HAKeeper.ClientConfig = c.HAKeeperClient
 	cfg.Frontend = c.getFrontendConfig()
+	cfg.ETLFSFactory = c.createETLFileService
 	if len(cfg.UUID) != 0 {
 		cfg.Frontend.NodeUUID = cfg.UUID
 	}

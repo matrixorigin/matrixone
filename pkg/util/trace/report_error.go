@@ -80,7 +80,7 @@ func ReportError(ctx context.Context, err error) {
 
 // HandleError api for pkg/util/errors as errorReporter
 func HandleError(ctx context.Context, err error, depth int) {
-	if !gTracerProvider.IsEnable() {
+	if !GetTracerProvider().IsEnable() {
 		return
 	}
 	if ctx == nil {

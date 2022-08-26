@@ -38,5 +38,4 @@ uuid = "dn uuid"
 backend = "MEM"
 
 [frontend]
-disableMetric = true
-disableTrace  = true
+disableMetricToProm = true

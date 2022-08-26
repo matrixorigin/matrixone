@@ -86,6 +86,7 @@ func (s *service) Close() error {
 		return err
 	}
 	s.cancelMoServerFunc()
+	_ = trace.Shutdown(context.TODO())
 	return s.server.Close()
 }
 

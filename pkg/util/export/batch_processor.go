@@ -327,9 +327,11 @@ func (c *MOCollector) Stop(graceful bool) error {
 			logutil.Debugf("doCollect left %d job", len(c.awakeCollect), logutil.NoReportFiled())
 			time.Sleep(250 * time.Second)
 		}
+		c.mux.Lock()
 		for _, buffer := range c.buffers {
 			_ = buffer.StopTrigger()
 		}
+		c.mux.Unlock()
 		close(c.stopCh)
 		c.stopWait.Wait()
 		for _, buffer := range c.buffers {
