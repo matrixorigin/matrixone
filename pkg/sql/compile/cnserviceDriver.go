@@ -151,6 +151,34 @@ func (s *Scope) remoteRun(c *Compile) error {
 	return nil
 }
 
+func encodeScope(s *Scope) ([]byte, error) {
+	p, err := fillPipeline(s)
+	if err != nil {
+		return nil, err
+	}
+	return p.Marshal()
+}
+
+func decodeScope(data []byte, proc *process.Process) (*Scope, error) {
+	// unmarshal to pipeline
+	p := &pipeline.Pipeline{}
+	err := p.Unmarshal(data)
+	if err != nil {
+		return nil, err
+	}
+	ctx := &scopeContext{
+		parent: nil,
+		id:     p.PipelineId,
+		regs:   make(map[*process.WaitRegister]int32),
+	}
+	ctx.root = ctx
+	s, err := generateScope(proc, p, ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	return s, fillInstructionsForScope(s, ctx, p)
+}
+
 func refactorScope(ctx context.Context, s *Scope, cs morpc.ClientSession) {
 	// refactor the scope
 	s.Instructions[len(s.Instructions)-1] = vm.Instruction{
@@ -328,6 +356,7 @@ func generateScope(proc *process.Process, p *pipeline.Pipeline, ctx *scopeContex
 	return s, nil
 }
 
+// fillInstructionsForScope fills scope's instructions.
 func fillInstructionsForScope(s *Scope, ctx *scopeContext, p *pipeline.Pipeline) error {
 	var err error
 
@@ -753,34 +782,6 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext) (vm.In
 		return v, moerr.New(moerr.INTERNAL_ERROR, "unexpected operator: %v", opr.Op)
 	}
 	return v, nil
-}
-
-func encodeScope(s *Scope) ([]byte, error) {
-	p, err := fillPipeline(s)
-	if err != nil {
-		return nil, err
-	}
-	return p.Marshal()
-}
-
-func decodeScope(data []byte, proc *process.Process) (*Scope, error) {
-	// unmarshal to pipeline
-	p := &pipeline.Pipeline{}
-	err := p.Unmarshal(data)
-	if err != nil {
-		return nil, err
-	}
-	ctx := &scopeContext{
-		parent: nil,
-		id:     p.PipelineId,
-		regs:   make(map[*process.WaitRegister]int32),
-	}
-	ctx.root = ctx
-	s, err := generateScope(proc, p, ctx, nil)
-	if err != nil {
-		return nil, err
-	}
-	return s, fillInstructionsForScope(s, ctx, p)
 }
 
 func newCompile(ctx context.Context) *Compile {
