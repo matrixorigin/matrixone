@@ -17,7 +17,6 @@ package compile
 import (
 	"context"
 	"errors"
-
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/output"
@@ -94,6 +93,62 @@ func PipelineMessageHandle(ctx context.Context, message morpc.Message, cs morpc.
 	return nil, nil
 }
 
+// remoteRun will send a scope to another node, run it at remote, and wait to receive the back message.
+func (s *Scope) remoteRun(c *Compile) error {
+	// encode the scope
+	sData, errEncode := encodeScope(s)
+	if errEncode != nil {
+		return errEncode
+	}
+
+	// send encoded message
+	message := &pipeline.Message{Data: sData}
+	r, errSend := cnclient.Client.Send(c.ctx, s.NodeInfo.Addr, message)
+	defer r.Close()
+	if errSend != nil {
+		return errSend
+	}
+
+	// range to receive.
+	arg := s.Instructions[len(s.Instructions)-1].Arg.(*connector.Argument)
+	for {
+		val, errReceive := r.Get()
+		if errReceive != nil {
+			return errReceive
+		}
+		m := val.(*pipeline.Message)
+
+		errMessage := m.GetCode()
+		if len(errMessage) > 0 {
+			return errors.New(string(errMessage))
+		}
+
+		sid := m.GetID()
+		if sid == pipeline.MessageEnd {
+			// get analyse information
+			anaData := m.GetAnalyse()
+			if len(anaData) > 0 {
+				// decode analyse
+				ana := new(pipeline.AnalysisList)
+				err := ana.Unmarshal(anaData)
+				if err != nil {
+					return err
+				}
+				mergeAnalyseInfo(c.anal, ana)
+			}
+			break
+		}
+		// decoded message
+		bat, errBatch := decodeBatch(c.proc, m)
+		if errBatch != nil {
+			return errBatch
+		}
+		sendToConnectOperator(arg, bat)
+	}
+
+	return nil
+}
+
 func refactorScope(ctx context.Context, s *Scope, cs morpc.ClientSession) {
 	// refactor the scope
 	s.Instructions[len(s.Instructions)-1] = vm.Instruction{
@@ -109,6 +164,7 @@ func refactorScope(ctx context.Context, s *Scope, cs morpc.ClientSession) {
 	}
 }
 
+// fillPipeline convert the scope to pipeline.Pipeline structure through 2 iterations.
 func fillPipeline(s *Scope) (*pipeline.Pipeline, error) {
 	ctx := &scopeContext{
 		id:     0,
@@ -126,6 +182,8 @@ func fillPipeline(s *Scope) (*pipeline.Pipeline, error) {
 	return p, nil
 }
 
+// generatePipeline generate a base pipeline.Pipeline structure without instructions
+// according to source scope.
 func generatePipeline(s *Scope, ctx *scopeContext, ctxId int32) (*pipeline.Pipeline, int32, error) {
 	var err error
 
@@ -191,6 +249,7 @@ func generatePipeline(s *Scope, ctx *scopeContext, ctxId int32) (*pipeline.Pipel
 	return p, ctxId, nil
 }
 
+// fillInstructionsForPipeline fills pipeline's instructions.
 func fillInstructionsForPipeline(s *Scope, ctx *scopeContext, p *pipeline.Pipeline, ctxId int32) (int32, error) {
 	var err error
 
@@ -209,6 +268,7 @@ func fillInstructionsForPipeline(s *Scope, ctx *scopeContext, p *pipeline.Pipeli
 	return ctxId, nil
 }
 
+// generateScope generate a scope according to scope context and pipeline.
 func generateScope(proc *process.Process, p *pipeline.Pipeline, ctx *scopeContext, analNodes []*process.AnalyzeInfo) (*Scope, error) {
 	var err error
 
@@ -693,61 +753,6 @@ func newCompile(ctx context.Context) *Compile {
 	//	stream.Send()
 	//}
 	return c
-}
-
-func (s *Scope) remoteRun(c *Compile) error {
-	// encode the scope
-	sData, errEncode := encodeScope(s)
-	if errEncode != nil {
-		return errEncode
-	}
-
-	// send encoded message
-	message := &pipeline.Message{Data: sData}
-	r, errSend := cnclient.Client.Send(c.ctx, s.NodeInfo.Addr, message)
-	defer r.Close()
-	if errSend != nil {
-		return errSend
-	}
-
-	// range to receive.
-	arg := s.Instructions[len(s.Instructions)-1].Arg.(*connector.Argument)
-	for {
-		val, errReceive := r.Get()
-		if errReceive != nil {
-			return errReceive
-		}
-		m := val.(*pipeline.Message)
-
-		errMessage := m.GetCode()
-		if len(errMessage) > 0 {
-			return errors.New(string(errMessage))
-		}
-
-		sid := m.GetID()
-		if sid == pipeline.MessageEnd {
-			// get analyse information
-			anaData := m.GetAnalyse()
-			if len(anaData) > 0 {
-				// decode analyse
-				ana := new(pipeline.AnalysisList)
-				err := ana.Unmarshal(anaData)
-				if err != nil {
-					return err
-				}
-				mergeAnalyseInfo(c.anal, ana)
-			}
-			break
-		}
-		// decoded message
-		bat, errBatch := decodeBatch(c.proc, m)
-		if errBatch != nil {
-			return errBatch
-		}
-		sendToConnectOperator(arg, bat)
-	}
-
-	return nil
 }
 
 func mergeAnalyseInfo(target *anaylze, ana *pipeline.AnalysisList) {

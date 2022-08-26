@@ -100,6 +100,7 @@ type Scope struct {
 	Reg *process.WaitRegister
 }
 
+// scopeContext contextual information to assist in the generation of pipeline.Pipeline.
 type scopeContext struct {
 	id       int32
 	scope    *Scope
