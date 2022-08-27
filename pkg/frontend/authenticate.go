@@ -282,25 +282,34 @@ const (
 
 func (ps PrivilegeScope) String() string {
 	sb := strings.Builder{}
+	first := true
 	for i := 0; i < 8; i++ {
-		if i != 0 {
-			sb.WriteString(",")
-		}
+		var s string
 		switch ps & (1 << i) {
 		case PrivilegeScopeSys:
-			sb.WriteString("sys")
+			s = "sys"
 		case PrivilegeScopeAccount:
-			sb.WriteString("account")
+			s = "account"
 		case PrivilegeScopeUser:
-			sb.WriteString("user")
+			s = "user"
 		case PrivilegeScopeRole:
-			sb.WriteString("role")
+			s = "role"
 		case PrivilegeScopeDatabase:
-			sb.WriteString("database")
+			s = "database"
 		case PrivilegeScopeTable:
-			sb.WriteString("table")
+			s = "table"
 		case PrivilegeScopeRoutine:
-			sb.WriteString("routine")
+			s = "routine"
+		default:
+			s = ""
+		}
+		if len(s) != 0 {
+			if !first {
+				sb.WriteString(",")
+			} else {
+				first = false
+			}
+			sb.WriteString(s)
 		}
 	}
 	return sb.String()
