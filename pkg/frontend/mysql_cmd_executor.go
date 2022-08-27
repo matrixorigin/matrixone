@@ -1495,7 +1495,7 @@ func (mce *MysqlCmdExecutor) handleCreateUser(ctx context.Context, cu *tree.Crea
 	ses := mce.GetSession()
 	tenant := ses.GetTenantInfo()
 
-	//step1 : create the account
+	//step1 : create the user
 	return InitUser(ctx, tenant, cu)
 }
 
@@ -1504,8 +1504,8 @@ func (mce *MysqlCmdExecutor) handleCreateRole(ctx context.Context, cr *tree.Crea
 	ses := mce.GetSession()
 	tenant := ses.GetTenantInfo()
 
-	//step1 : create the account
-	return nil
+	//step1 : create the role
+	return InitRole(ctx, tenant, cr)
 }
 
 func GetExplainColumns(explainColName string) ([]interface{}, error) {
@@ -1990,7 +1990,10 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 				goto handleFailed
 			}
 		case *tree.CreateRole:
-
+			selfHandle = true
+			if err = mce.handleCreateRole(requestCtx, st); err != nil {
+				goto handleFailed
+			}
 		}
 
 		if selfHandle {

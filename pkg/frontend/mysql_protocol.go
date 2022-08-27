@@ -963,23 +963,38 @@ func (mp *MysqlProtocolImpl) authenticateUser(authResponse []byte) error {
 	//TODO:get the user's password
 	var psw []byte
 	var err error
-	//if mp.username == mp.SV.DumpUser { //the user dump for test
-	//	psw = []byte(mp.SV.DumpPassword)
-	//}
 
 	if !mp.GetSkipCheckUser() {
 		psw, err = mp.ses.AuthenticateUser(mp.username)
 		if err != nil {
 			return err
 		}
+
+		//TO Check password
+		if mp.checkPassword(psw, mp.salt, authResponse) {
+			logutil.Infof("check password succeeded\n")
+		} else {
+			return fmt.Errorf("check password failed")
+		}
+	} else {
+		//Get tenant info
+		tenant, err := GetTenantInfo(mp.username)
+		if err != nil {
+			return err
+		}
+
+		if mp.ses != nil {
+			mp.ses.SetTenantInfo(tenant)
+
+			//TO Check password
+			if len(psw) == 0 || mp.checkPassword(psw, mp.salt, authResponse) {
+				logutil.Infof("check password succeeded\n")
+			} else {
+				return fmt.Errorf("check password failed")
+			}
+		}
 	}
 
-	//TO Check password
-	if mp.checkPassword(psw, mp.salt, authResponse) {
-		logutil.Infof("check password succeeded\n")
-	} else {
-		return fmt.Errorf("check password failed")
-	}
 	return nil
 }
 

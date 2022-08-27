@@ -27,15 +27,15 @@ func TestGetTenantInfo(t *testing.T) {
 			wantErr bool
 		}
 		args := []input{
-			{"u1", "sys:u1:public", false},
-			{"tenant1:u1", "tenant1:u1:public", false},
-			{"tenant1:u1:r1", "tenant1:u1:r1", false},
-			{":u1:r1", "tenant1:u1:r1", true},
-			{"tenant1:u1:", "tenant1:u1:r1", true},
-			{"tenant1::r1", "tenant1::r1", true},
-			{"tenant1:    :r1", "tenant1::r1", true},
-			{"     : :r1", "tenant1::r1", true},
-			{"   tenant1   :   u1   :   r1    ", "tenant1:u1:r1", false},
+			{"u1", "{tenantInfo sys:u1:public -- 0:0:0}", false},
+			{"tenant1:u1", "{tenantInfo tenant1:u1:public -- 0:0:0}", false},
+			{"tenant1:u1:r1", "{tenantInfo tenant1:u1:r1 -- 0:0:0}", false},
+			{":u1:r1", "{tenantInfo tenant1:u1:r1 -- 0:0:0}", true},
+			{"tenant1:u1:", "{tenantInfo tenant1:u1:r1 -- 0:0:0}", true},
+			{"tenant1::r1", "{tenantInfo tenant1::r1 -- 0:0:0}", true},
+			{"tenant1:    :r1", "{tenantInfo tenant1::r1 -- 0:0:0}", true},
+			{"     : :r1", "{tenantInfo tenant1::r1 -- 0:0:0}", true},
+			{"   tenant1   :   u1   :   r1    ", "{tenantInfo tenant1:u1:r1 -- 0:0:0}", false},
 		}
 
 		for _, arg := range args {

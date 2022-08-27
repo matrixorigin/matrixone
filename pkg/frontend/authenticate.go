@@ -765,10 +765,19 @@ func checkSysExistsOrNot(ctx context.Context, pu *config.ParameterUnit) (bool, e
 
 // InitSysTenant initializes the tenant SYS before any tenants and accepting any requests
 // during the system is booting.
-func InitSysTenant(ctx context.Context, tenant *TenantInfo) error {
+func InitSysTenant(ctx context.Context) error {
 	var err error
 	var exists bool
 	pu := config.GetParameterUnit(ctx)
+
+	tenant := &TenantInfo{
+		Tenant:        sysAccountName,
+		User:          rootName,
+		DefaultRole:   moAdminRoleName,
+		TenantID:      sysAccountID,
+		UserID:        rootID,
+		DefaultRoleID: moAdminRoleID,
+	}
 
 	ctx = context.WithValue(ctx, moengine.TenantIDKey{}, uint32(sysAccountID))
 	ctx = context.WithValue(ctx, moengine.UserIDKey{}, uint32(rootID))
@@ -875,6 +884,8 @@ func createTablesInMoCatalog(ctx context.Context, tenant *TenantInfo, pu *config
 		initMoUserGrant2 := fmt.Sprintf(initMoUserGrantFormat, publicRoleID, rootID, types.CurrentTimestamp().String2(time.UTC, 0), true)
 		addSqlIntoSet(initMoUserGrant1)
 		addSqlIntoSet(initMoUserGrant2)
+		initMoUserGrant4 := fmt.Sprintf(initMoUserGrantFormat, publicRoleID, dumpID, types.CurrentTimestamp().String2(time.UTC, 0), true)
+		addSqlIntoSet(initMoUserGrant4)
 	}
 
 	addSqlIntoSet("commit;")

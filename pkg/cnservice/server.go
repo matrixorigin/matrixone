@@ -183,11 +183,7 @@ func (s *service) createMOServer(inputCtx context.Context, pu *config.ParameterU
 		metric.InitMetric(moServerCtx, ieFactory, pu, 0, metric.ALL_IN_ONE_MODE)
 	}
 	frontend.InitServerVersion(pu.SV.MoVersion)
-	err := frontend.InitSysTenant(moServerCtx, &frontend.TenantInfo{
-		Tenant:      "sys",
-		User:        "root",
-		DefaultRole: "moadmin",
-	})
+	err := frontend.InitSysTenant(moServerCtx)
 	if err != nil {
 		panic(err)
 	}
