@@ -212,6 +212,7 @@ jobs:
           ./run.sh -n -g -p $GITHUB_WORKSPACE/head/test/cases 2>&1
 
       - name: Check mo-service Status
+        if: ${{ always() && !cancelled() }}
         run: |
           if [ "$(ps -ef | grep 'mo-service' | grep -v "grep" | wc -l)" -gt 0 ]; then pkill -9 mo-service; else echo 'current mo-service has already crashed'; exit 1; fi
         
@@ -280,6 +281,7 @@ jobs:
           ./run.sh -n -g -p $GITHUB_WORKSPACE/head/test/cases 2>&1
 
       - name: Check MO-Service Status
+        if: ${{ always() && !cancelled() }}
         run: |
           if [ "$(ps -ef | grep 'mo-service' | grep -v "grep" | wc -l)" -gt 0 ]; then pkill -9 mo-service; else echo 'current mo-service has already crashed'; exit 1; fi
         
