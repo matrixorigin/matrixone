@@ -17,17 +17,17 @@ package tables
 import (
 	"bytes"
 	"fmt"
+	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"sync"
-	"sync/atomic"
-
-	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/stl"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
+	"sync"
+	"sync/atomic"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/indexwrapper"
@@ -56,6 +56,12 @@ const (
 	BS_NotAppendable
 	ES_Frozen
 )
+const Intervals = 3 * 60 * 1000 * time.Millisecond
+
+type statBlock struct {
+	rows      uint32
+	startTime time.Time
+}
 
 type dataBlock struct {
 	common.RefHelper
@@ -70,6 +76,7 @@ type dataBlock struct {
 	index     indexwrapper.Index
 	mvcc      *updates.MVCCHandle
 	nice      uint32
+	score     *statBlock
 	ckpTs     atomic.Value
 	prefix    []byte
 	state     BlockState
@@ -208,12 +215,8 @@ func (blk *dataBlock) GetBlockFile() file.Block {
 
 func (blk *dataBlock) GetID() *common.ID { return blk.meta.AsCommonID() }
 
-func (blk *dataBlock) RunCalibration() {
-	score := blk.estimateRawScore()
-	if score == 0 {
-		return
-	}
-	atomic.AddUint32(&blk.nice, uint32(1))
+func (blk *dataBlock) RunCalibration() int {
+	return blk.estimateRawScore()
 }
 
 func (blk *dataBlock) resetNice() {
@@ -231,31 +234,7 @@ func (blk *dataBlock) estimateRawScore() int {
 		blk.mvcc.LoadMaxVisible().LessEq(blk.GetMaxCheckpointTS()) {
 		return 0
 	}
-	ret := 0
-	cols := 0
-	rows := blk.Rows(nil, true)
-	factor := float64(0)
-	for i := range blk.meta.GetSchema().ColDefs {
-		cols++
-		cnt := blk.mvcc.GetColumnUpdateCnt(uint16(i))
-		colFactor := float64(cnt) / float64(rows)
-		if colFactor < 0.005 {
-			colFactor *= 10
-		} else if colFactor >= 0.005 && colFactor < 0.10 {
-			colFactor *= 20
-		} else if colFactor >= 0.10 {
-			colFactor *= 40
-		}
-		factor += colFactor
-	}
-	factor = factor / float64(cols)
-	deleteCnt := blk.mvcc.GetDeleteCnt()
-	factor += float64(deleteCnt) / float64(rows) * 50
-	ret += int(factor * 100)
-	if ret == 0 {
-		ret += 1
-	}
-	return ret
+	return 1
 }
 
 func (blk *dataBlock) MutationInfo() string {
@@ -294,11 +273,25 @@ func (blk *dataBlock) EstimateScore() int {
 	}
 
 	score := blk.estimateRawScore()
-	if score == 0 {
-		blk.resetNice()
+	if score > 1 {
+		return score
+	}
+	rows := uint32(blk.Rows(nil, true)) - blk.mvcc.GetDeleteCnt()
+	if blk.score == nil {
+		blk.score = &statBlock{
+			rows:      rows,
+			startTime: time.Now(),
+		}
 		return 0
 	}
-	score += int(atomic.LoadUint32(&blk.nice))
+	if blk.score.rows != rows {
+		s := time.Since(blk.score.startTime).Milliseconds()
+		if s > int64(Intervals) {
+			return 100
+		}
+		blk.score.rows = rows
+		blk.score.startTime = time.Now()
+	}
 	return score
 }
 

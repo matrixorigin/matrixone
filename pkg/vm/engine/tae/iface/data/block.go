@@ -32,7 +32,7 @@ import (
 
 type CheckpointUnit interface {
 	MutationInfo() string
-	RunCalibration()
+	RunCalibration() int
 	EstimateScore() int
 	BuildCompactionTaskFactory() (tasks.TxnTaskFactory, tasks.TaskType, []common.ID, error)
 }
