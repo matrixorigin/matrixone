@@ -17,6 +17,7 @@ package logservice
 import (
 	"fmt"
 	"reflect"
+	"sort"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 )
@@ -155,52 +156,44 @@ func (s *LogState) updateShards(hb LogStoreHeartbeat) {
 
 // LogString returns "ServiceType/ConfigChangeType UUID RepUuid:RepShardID:RepID InitialMembers"
 func (m *ScheduleCommand) LogString() string {
-	var serviceType = map[ServiceType]string{
-		LogService: "L",
-		DnService:  "D",
+	c := func(s string) string {
+		if len(s) > 6 {
+			return s[:6]
+		}
+		return s
 	}
 
-	var configChangeType = map[ConfigChangeType]string{
+	serviceType := map[ServiceType]string{
+		LogService: "L",
+		DnService:  "D",
+	}[m.ServiceType]
+
+	target := c(m.UUID)
+	if m.ConfigChange == nil {
+		return fmt.Sprintf("%s/shutdown %s", serviceType, target)
+	}
+
+	configChangeType := map[ConfigChangeType]string{
 		AddReplica:    "Add",
 		RemoveReplica: "Remove",
 		StartReplica:  "Start",
 		StopReplica:   "Stop",
 		KillZombie:    "Kill",
-	}
-	scheUuid := m.UUID
-	if len(m.UUID) > 6 {
-		scheUuid = scheUuid[:6]
-	}
+	}[m.ConfigChange.ChangeType]
 
-	if m.ConfigChange == nil {
-		return fmt.Sprintf("%s/shutdown %s", serviceType[m.ServiceType], scheUuid)
-	}
+	replica := c(m.ConfigChange.Replica.UUID)
+	s := fmt.Sprintf("%s/%s %s %s:%d:%d:%d",
+		serviceType, configChangeType, target, replica,
+		m.ConfigChange.Replica.ShardID,
+		m.ConfigChange.Replica.ReplicaID,
+		m.ConfigChange.Replica.Epoch)
 
-	repUuid := m.ConfigChange.Replica.UUID
-	if len(repUuid) > 6 {
-		repUuid = repUuid[:6]
-	}
-
-	var initMembers map[uint64]string
-	if len(m.ConfigChange.InitialMembers) == 0 {
-		initMembers = nil
-	} else {
-		initMembers = make(map[uint64]string)
+	if len(m.ConfigChange.InitialMembers) != 0 {
+		initMembers := make([]string, 0, len(m.ConfigChange.InitialMembers))
 		for repId, uuid := range m.ConfigChange.InitialMembers {
-			if len(uuid) > 6 {
-				initMembers[repId] = uuid[:6]
-			} else {
-				initMembers[repId] = uuid
-			}
+			initMembers = append(initMembers, fmt.Sprintf("%d:%s", repId, c(uuid)))
 		}
-	}
-
-	s := fmt.Sprintf("%s/%s %s %s:%d:%d:%d", serviceType[m.ServiceType],
-		configChangeType[m.ConfigChange.ChangeType], scheUuid,
-		repUuid, m.ConfigChange.Replica.ShardID,
-		m.ConfigChange.Replica.ReplicaID, m.ConfigChange.Replica.Epoch)
-
-	if initMembers != nil {
+		sort.Strings(initMembers)
 		s += fmt.Sprintf(" %v", initMembers)
 	}
 
