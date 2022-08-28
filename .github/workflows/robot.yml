@@ -77,8 +77,6 @@ jobs:
           echo "ut_excluded_pkg='pkg/pb\|pkg/sql/parsers/goyacc'" >> $GITHUB_ENV
           echo "bvt_excluded_pkg='pkg/pb'" >> $GITHUB_ENV
 
-      
-
       - name: Clone test-tool repository
         if: ${{ env.Job-Status }} == 2
         uses: actions/checkout@v2
@@ -118,7 +116,7 @@ jobs:
         run: |
           cd $GITHUB_WORKSPACE/matrixone
           ps aux|grep 'service_test' | grep -v 'grep' | awk '{print $2}'
-          ps aux|grep 'TestMOService' | grep -v 'grep' | awk '{print $2}' | xargs kill -2
+          ps aux|grep 'service_test' | grep -v 'grep' | awk '{print $2}' | xargs kill -s SIGINT
           sleep 3
           cat ${{ env.raw_bvt_coverage }} | grep -v ${{ env.bvt_excluded_pkg }} > ${{ env.bvt_coverage }}
           echo "bvt_coverage finished"
