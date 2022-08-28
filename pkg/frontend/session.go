@@ -33,6 +33,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/moengine"
 	"github.com/matrixorigin/matrixone/pkg/vm/mempool"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
+
+	"github.com/google/uuid"
 )
 
 const MaxPrepareNumberInOneSession = 64
@@ -40,10 +42,8 @@ const MaxPrepareNumberInOneSession = 64
 type ShowStatementType int
 
 const (
-	NotShowStatement   ShowStatementType = 0
-	ShowCreateDatabase ShowStatementType = 1
-	ShowCreateTable    ShowStatementType = 2
-	ShowColumns        ShowStatementType = 3
+	NotShowStatement ShowStatementType = 0
+	ShowColumns      ShowStatementType = 1
 )
 
 type TxnHandler struct {
@@ -110,6 +110,8 @@ type Session struct {
 
 	tenant *TenantInfo
 
+	uuid uuid.UUID
+
 	timeZone *time.Location
 }
 
@@ -140,6 +142,7 @@ func NewSession(proto Protocol, gm *guest.Mmu, mp *mempool.Mempool, PU *config.P
 		outputCallback: getDataFromPipeline,
 		timeZone:       time.Local,
 	}
+	ses.uuid, _ = uuid.NewUUID()
 	ses.SetOptionBits(OPTION_AUTOCOMMIT)
 	ses.txnCompileCtx.SetSession(ses)
 	ses.txnHandler.SetSession(ses)
@@ -213,6 +216,10 @@ func (ses *Session) GetAllMysqlResultSet() []*MysqlResultSet {
 
 func (ses *Session) GetTenantInfo() *TenantInfo {
 	return ses.tenant
+}
+
+func (ses *Session) GetUUID() []byte {
+	return ses.uuid[:]
 }
 
 func (ses *Session) SetTenantInfo(ti *TenantInfo) {
@@ -628,12 +635,15 @@ func (th *TxnHandler) CommitTxn() error {
 	if !th.IsValidTxn() {
 		return nil
 	}
-	var ctx context.Context
-	if th.ses != nil {
-		ctx = th.ses.GetRequestContext()
-	} else {
-		ctx = context.Background()
+	ctx := th.ses.GetRequestContext()
+	if ctx == nil {
+		panic("context should not be nil")
 	}
+	ctx, cancel := context.WithTimeout(
+		ctx,
+		th.storage.Hints().CommitOrRollbackTimeout,
+	)
+	defer cancel()
 	err := th.txn.Commit(ctx)
 	th.SetInvalid()
 	return err
@@ -643,12 +653,15 @@ func (th *TxnHandler) RollbackTxn() error {
 	if !th.IsValidTxn() {
 		return nil
 	}
-	var ctx context.Context
-	if th.ses != nil {
-		ctx = th.ses.GetRequestContext()
-	} else {
-		ctx = context.Background()
+	ctx := th.ses.GetRequestContext()
+	if ctx == nil {
+		panic("context should not be nil")
 	}
+	ctx, cancel := context.WithTimeout(
+		ctx,
+		th.storage.Hints().CommitOrRollbackTimeout,
+	)
+	defer cancel()
 	err := th.txn.Rollback(ctx)
 	th.SetInvalid()
 	return err
@@ -780,6 +793,7 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string) (*plan2.
 
 	var cols []*plan2.ColDef
 	var defs []*plan2.TableDefType
+	var properties []*plan2.Property
 	var TableType, Createsql string
 	for _, def := range engineDefs {
 		if attr, ok := def.(*engine.AttributeDef); ok {
@@ -793,10 +807,10 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string) (*plan2.
 				},
 				Primary: attr.Attr.Primary,
 				Default: attr.Attr.Default,
+				Comment: attr.Attr.Comment,
 			})
 		} else if pro, ok := def.(*engine.PropertiesDef); ok {
-			properties := make([]*plan2.Property, len(pro.Properties))
-			for i, p := range pro.Properties {
+			for _, p := range pro.Properties {
 				switch p.Key {
 				case catalog.SystemRelAttr_Kind:
 					TableType = p.Value
@@ -804,18 +818,11 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string) (*plan2.
 					Createsql = p.Value
 				default:
 				}
-				properties[i] = &plan2.Property{
+				properties = append(properties, &plan2.Property{
 					Key:   p.Key,
 					Value: p.Value,
-				}
+				})
 			}
-			defs = append(defs, &plan2.TableDefType{
-				Def: &plan2.TableDef_DefType_Properties{
-					Properties: &plan2.PropertiesDef{
-						Properties: properties,
-					},
-				},
-			})
 		} else if viewDef, ok := def.(*engine.ViewDef); ok {
 			defs = append(defs, &plan2.TableDefType{
 				Def: &plan2.TableDef_DefType_View{
@@ -824,8 +831,23 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string) (*plan2.
 					},
 				},
 			})
+		} else if commnetDef, ok := def.(*engine.CommentDef); ok {
+			properties = append(properties, &plan2.Property{
+				Key:   catalog.SystemRelAttr_Comment,
+				Value: commnetDef.Comment,
+			})
 		}
 	}
+	if len(properties) > 0 {
+		defs = append(defs, &plan2.TableDefType{
+			Def: &plan2.TableDef_DefType_Properties{
+				Properties: &plan2.PropertiesDef{
+					Properties: properties,
+				},
+			},
+		})
+	}
+
 	if tcc.QryTyp != TXN_DEFAULT {
 		hideKeys, err := table.GetHideKeys(ctx)
 		if err != nil {

@@ -28,7 +28,6 @@ import (
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
-	txnengine "github.com/matrixorigin/matrixone/pkg/vm/engine/txn"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
 
 	"github.com/fagongzi/goetty/v2"
@@ -38,6 +37,10 @@ import (
 )
 
 func NewService(cfg *Config, ctx context.Context) (Service, error) {
+
+	if err := cfg.Validate(); err != nil {
+		return nil, err
+	}
 
 	srv := &service{cfg: cfg}
 	srv.logger = logutil.Adjust(srv.logger)
@@ -127,26 +130,14 @@ func (s *service) initEngine(
 		}
 
 	case EngineDistributedTAE:
-		//TODO
+		if err := s.initDistributedTAE(cancelMoServerCtx, pu); err != nil {
+			return err
+		}
 
 	case EngineMemory:
-		client, err := s.getTxnClient()
-		if err != nil {
+		if err := s.initMemoryEngine(cancelMoServerCtx, pu); err != nil {
 			return err
 		}
-		pu.TxnClient = client
-		hakeeper, err := s.getHAKeeperClient()
-		if err != nil {
-			return err
-		}
-		pu.StorageEngine = txnengine.New(
-			ctx,
-			new(txnengine.ShardToSingleStatic), //TODO use hashing shard policy
-			txnengine.GetClusterDetailsFromHAKeeper(
-				ctx,
-				hakeeper,
-			),
-		)
 
 	default:
 		return fmt.Errorf("unknown engine type: %s", s.cfg.Engine.Type)
@@ -164,7 +155,7 @@ func (s *service) createMOServer(inputCtx context.Context, pu *config.ParameterU
 		// init trace/log/error framework
 		if _, err := trace.Init(moServerCtx,
 			trace.WithMOVersion(pu.SV.MoVersion),
-			trace.WithNode(0, trace.NodeTypeNode),
+			trace.WithNode("node_uuid", trace.NodeTypeCN),
 			trace.EnableTracer(!pu.SV.DisableTrace),
 			trace.WithBatchProcessMode(pu.SV.TraceBatchProcessor),
 			trace.DebugMode(pu.SV.EnableTraceDebug),

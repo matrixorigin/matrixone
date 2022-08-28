@@ -24,12 +24,17 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/storage"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage/mem"
 	taestorage "github.com/matrixorigin/matrixone/pkg/txn/storage/tae"
+	txnstorage "github.com/matrixorigin/matrixone/pkg/txn/storage/txn"
+	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
+	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
+	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
 	"go.uber.org/zap"
 )
 
 const (
-	memStorageBackend = "MEM"
-	taeStorageBackend = "TAE"
+	memStorageBackend   = "MEM"
+	memKVStorageBackend = "MEMKV"
+	taeStorageBackend   = "TAE"
 
 	localClockBackend = "LOCAL"
 	hlcClockBackend   = "HLC"
@@ -79,6 +84,10 @@ func (s *store) createTxnStorage(shard metadata.DNShard) (storage.TxnStorage, er
 			return nil, err
 		}
 		return ts, nil
+
+	case memKVStorageBackend:
+		return s.newMemKVStorage(shard, logClient)
+
 	case taeStorageBackend:
 		ts, err := s.newTAEStorage(shard, logClient)
 		if err != nil {
@@ -114,6 +123,14 @@ func (s *store) newLocalClock() clock.Clock {
 }
 
 func (s *store) newMemTxnStorage(shard metadata.DNShard, logClient logservice.Client) (storage.TxnStorage, error) {
+	hm := host.New(1 << 30)
+	gm := guest.New(1<<30, hm)
+	return txnstorage.New(
+		txnstorage.NewMemHandler(mheap.New(gm), txnstorage.SnapshotIsolation),
+	)
+}
+
+func (s *store) newMemKVStorage(shard metadata.DNShard, logClient logservice.Client) (storage.TxnStorage, error) {
 	return mem.NewKVTxnStorage(0, logClient, s.clock), nil
 }
 

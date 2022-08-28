@@ -2118,6 +2118,11 @@ show_create_stmt:
     {
         $$ = &tree.ShowCreateTable{Name: $4}
     }
+| 
+    SHOW CREATE VIEW table_name_unresolved
+    {
+        $$ = &tree.ShowCreateView{Name: $4}
+    }
 |   SHOW CREATE DATABASE not_exists_opt db_name
     {
         $$ = &tree.ShowCreateDatabase{IfNotExists: $4, Name: $5}
@@ -6814,8 +6819,7 @@ reserved_table_id:
 |   reserved_keyword
 
 reserved_keyword:
-    ACCOUNT
-|   ADD
+    ADD
 |   ALL
 |   AND
 |   AS
@@ -6977,7 +6981,8 @@ reserved_keyword:
 |   SECONDARY
 
 non_reserved_keyword:
-    AGAINST
+    ACCOUNT
+|   AGAINST
 |   AVG_ROW_LENGTH
 |   AUTO_RANDOM
 |   ACTION

@@ -13,4 +13,5 @@ create table table16 (1a20 int,1e int);
 create table $table18 (a$1 int, $b int, c$ int);
 create table table19$ (a int);
 create table table17 (`index` int);
+create table account(a int);
 show tables;

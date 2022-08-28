@@ -22,6 +22,11 @@ import (
 
 func TestMemHandler(t *testing.T) {
 	testDatabase(t, func() (*Storage, error) {
-		return New(NewMemHandler(testutil.NewMheap()))
+		return New(
+			NewMemHandler(
+				testutil.NewMheap(),
+				Serializable,
+			),
+		)
 	})
 }

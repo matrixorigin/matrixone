@@ -59,7 +59,10 @@ func (entry *compactBlockEntry) PrepareRollback() (err error) {
 	// TODO: remove block file? (should be scheduled and executed async)
 	return
 }
-func (entry *compactBlockEntry) ApplyRollback() (err error) { return }
+func (entry *compactBlockEntry) ApplyRollback(index *wal.Index) (err error) {
+	//TODO:?
+	return
+}
 func (entry *compactBlockEntry) ApplyCommit(index *wal.Index) (err error) {
 	if err = entry.scheduler.Checkpoint([]*wal.Index{index}); err != nil {
 		// TODO:
@@ -83,6 +86,10 @@ func (entry *compactBlockEntry) PostCommit() (err error) {
 }
 func (entry *compactBlockEntry) MakeCommand(csn uint32) (cmd txnif.TxnCmd, err error) {
 	cmd = newCompactBlockCmd((*common.ID)(entry.from.Fingerprint()), (*common.ID)(entry.to.Fingerprint()), entry.txn, csn)
+	return
+}
+
+func (entry *compactBlockEntry) Prepare2PCPrepare() (err error) {
 	return
 }
 

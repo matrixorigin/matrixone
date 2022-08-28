@@ -18,9 +18,11 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 
 	"github.com/fagongzi/goetty/v2/buf"
 	"github.com/golang/mock/gomock"
@@ -36,7 +38,7 @@ func TestTxnHandler_NewTxn(t *testing.T) {
 
 		ctx := context.TODO()
 		txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
-		txnOperator.EXPECT().Commit(ctx).Return(nil).AnyTimes()
+		txnOperator.EXPECT().Commit(gomock.Any()).Return(nil).AnyTimes()
 		txnClient := mock_frontend.NewMockTxnClient(ctrl)
 		cnt := 0
 		txnClient.EXPECT().New().DoAndReturn(
@@ -49,8 +51,14 @@ func TestTxnHandler_NewTxn(t *testing.T) {
 				}
 			}).AnyTimes()
 		eng := mock_frontend.NewMockEngine(ctrl)
+		eng.EXPECT().Hints().Return(engine.Hints{
+			CommitOrRollbackTimeout: time.Second,
+		}).AnyTimes()
 
 		txn := InitTxnHandler(eng, txnClient)
+		txn.ses = &Session{
+			requestCtx: ctx,
+		}
 		err := txn.NewTxn()
 		convey.So(err, convey.ShouldBeNil)
 		err = txn.NewTxn()
@@ -68,7 +76,7 @@ func TestTxnHandler_CommitTxn(t *testing.T) {
 		ctx := context.TODO()
 		txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
 		cnt := 0
-		txnOperator.EXPECT().Commit(ctx).DoAndReturn(
+		txnOperator.EXPECT().Commit(gomock.Any()).DoAndReturn(
 			func(context.Context) error {
 				cnt++
 				if cnt%2 != 0 {
@@ -80,10 +88,16 @@ func TestTxnHandler_CommitTxn(t *testing.T) {
 
 		txnClient := mock_frontend.NewMockTxnClient(ctrl)
 		eng := mock_frontend.NewMockEngine(ctrl)
+		eng.EXPECT().Hints().Return(engine.Hints{
+			CommitOrRollbackTimeout: time.Second,
+		}).AnyTimes()
 
 		txnClient.EXPECT().New().Return(txnOperator, nil).AnyTimes()
 
 		txn := InitTxnHandler(eng, txnClient)
+		txn.ses = &Session{
+			requestCtx: ctx,
+		}
 		err := txn.NewTxn()
 		convey.So(err, convey.ShouldBeNil)
 		err = txn.CommitTxn()
@@ -103,7 +117,7 @@ func TestTxnHandler_RollbackTxn(t *testing.T) {
 		ctx := context.TODO()
 		txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
 		cnt := 0
-		txnOperator.EXPECT().Rollback(ctx).DoAndReturn(
+		txnOperator.EXPECT().Rollback(gomock.Any()).DoAndReturn(
 			func(ctc context.Context) error {
 				cnt++
 				if cnt%2 != 0 {
@@ -115,10 +129,16 @@ func TestTxnHandler_RollbackTxn(t *testing.T) {
 
 		txnClient := mock_frontend.NewMockTxnClient(ctrl)
 		eng := mock_frontend.NewMockEngine(ctrl)
+		eng.EXPECT().Hints().Return(engine.Hints{
+			CommitOrRollbackTimeout: time.Second,
+		}).AnyTimes()
 
 		txnClient.EXPECT().New().Return(txnOperator, nil).AnyTimes()
 
 		txn := InitTxnHandler(eng, txnClient)
+		txn.ses = &Session{
+			requestCtx: ctx,
+		}
 		err := txn.NewTxn()
 		convey.So(err, convey.ShouldBeNil)
 		err = txn.RollbackTxn()
@@ -135,10 +155,16 @@ func TestSession_TxnBegin(t *testing.T) {
 		ioses := mock_frontend.NewMockIOSession(ctrl)
 		ioses.EXPECT().OutBuf().Return(buf.NewByteBuf(1024)).AnyTimes()
 		ioses.EXPECT().Write(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
-		proto := NewMysqlClientProtocol(0, ioses, 1024, nil)
+		sv, err := getSystemVariables("test/system_vars_config.toml")
+		if err != nil {
+			t.Error(err)
+		}
+		proto := NewMysqlClientProtocol(0, ioses, 1024, sv)
 		txnClient := mock_frontend.NewMockTxnClient(ctrl)
 		txnClient.EXPECT().New().AnyTimes()
-		return NewSession(proto, nil, nil, config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil, txnClient, nil), gSysVars)
+		session := NewSession(proto, nil, nil, config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil, txnClient, nil), gSysVars)
+		session.SetRequestContext(context.Background())
+		return session
 	}
 	convey.Convey("new session", t, func() {
 		ctrl := gomock.NewController(t)
@@ -173,10 +199,16 @@ func TestVariables(t *testing.T) {
 		ioses := mock_frontend.NewMockIOSession(ctrl)
 		ioses.EXPECT().OutBuf().Return(buf.NewByteBuf(1024)).AnyTimes()
 		ioses.EXPECT().Write(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
-		proto := NewMysqlClientProtocol(0, ioses, 1024, nil)
+		sv, err := getSystemVariables("test/system_vars_config.toml")
+		if err != nil {
+			t.Error(err)
+		}
+		proto := NewMysqlClientProtocol(0, ioses, 1024, sv)
 		txnClient := mock_frontend.NewMockTxnClient(ctrl)
 		txnClient.EXPECT().New().AnyTimes()
-		return NewSession(proto, nil, nil, config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil, txnClient, nil), gSysVars)
+		session := NewSession(proto, nil, nil, config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil, txnClient, nil), gSysVars)
+		session.SetRequestContext(context.Background())
+		return session
 	}
 
 	checkWant := func(ses, existSes, newSesAfterSession *Session,
@@ -442,8 +474,15 @@ func TestSession_TxnCompilerContext(t *testing.T) {
 		ioses := mock_frontend.NewMockIOSession(ctrl)
 		ioses.EXPECT().OutBuf().Return(buf.NewByteBuf(1024)).AnyTimes()
 		ioses.EXPECT().Write(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
-		proto := NewMysqlClientProtocol(0, ioses, 1024, nil)
-		return NewSession(proto, nil, nil, pu, gSysVars)
+
+		sv, err := getSystemVariables("test/system_vars_config.toml")
+		if err != nil {
+			t.Error(err)
+		}
+		proto := NewMysqlClientProtocol(0, ioses, 1024, sv)
+		session := NewSession(proto, nil, nil, pu, gSysVars)
+		session.SetRequestContext(context.Background())
+		return session
 	}
 
 	convey.Convey("test", t, func() {
@@ -457,6 +496,9 @@ func TestSession_TxnCompilerContext(t *testing.T) {
 		txnClient := mock_frontend.NewMockTxnClient(ctrl)
 		txnClient.EXPECT().New().Return(txnOperator, nil).AnyTimes()
 		eng := mock_frontend.NewMockEngine(ctrl)
+		eng.EXPECT().Hints().Return(engine.Hints{
+			CommitOrRollbackTimeout: time.Second,
+		}).AnyTimes()
 
 		db := mock_frontend.NewMockDatabase(ctrl)
 		db.EXPECT().Relations(gomock.Any()).Return(nil, nil).AnyTimes()

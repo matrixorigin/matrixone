@@ -15,12 +15,14 @@
 package plan
 
 import (
+	"encoding/json"
 	"errors"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 )
 
 type MockCompilerContext struct {
@@ -188,6 +190,12 @@ func NewMockCompilerContext() *MockCompilerContext {
 		},
 		card: SF * 6e5,
 	}
+	// it's a view
+	tpchSchema["v1"] = &Schema{
+		cols: []col{
+			{"n_name", types.T_varchar, false, 50, 0},
+		},
+	}
 
 	moSchema["mo_database"] = &Schema{
 		cols: []col{
@@ -248,10 +256,38 @@ func NewMockCompilerContext() *MockCompilerContext {
 				ObjName:    tableName,
 			}
 
-			tables[tableName] = &TableDef{
+			tableDef := &TableDef{
 				Name: tableName,
 				Cols: colDefs,
 			}
+			if tableName == "v1" {
+				tableDef.TableType = catalog.SystemViewRel
+				viewData, _ := json.Marshal(ViewData{
+					Stmt:            "select n_name from nation where n_nationkey > ?",
+					DefaultDatabase: "tpch",
+				})
+				tableDef.Defs = append(tableDef.Defs, &plan.TableDef_DefType{
+					Def: &plan.TableDef_DefType_View{
+						View: &plan.ViewDef{
+							View: string(viewData),
+						},
+					},
+				})
+				properties := []*plan.Property{
+					{
+						Key:   catalog.SystemRelAttr_Kind,
+						Value: catalog.SystemViewRel,
+					},
+				}
+				tableDef.Defs = append(tableDef.Defs, &plan.TableDef_DefType{
+					Def: &plan.TableDef_DefType_Properties{
+						Properties: &plan.PropertiesDef{
+							Properties: properties,
+						},
+					},
+				})
+			}
+			tables[tableName] = tableDef
 			tableIdx++
 
 			if table.card == 0 {

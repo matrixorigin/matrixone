@@ -34,19 +34,24 @@ import (
 )
 
 const (
-	testServiceAddress = "127.0.0.1:9000"
+	testServiceAddress     = "127.0.0.1:9000"
+	testGossipAddress      = "127.0.0.1:9010"
+	dummyGossipSeedAddress = "127.0.0.1:9100"
 )
 
 func getServiceTestConfig() Config {
 	c := Config{
 		UUID:                 uuid.New().String(),
 		RTTMillisecond:       10,
-		GossipSeedAddresses:  []string{"127.0.0.1:9000"},
+		GossipAddress:        testGossipAddress,
+		GossipListenAddress:  testGossipAddress,
+		GossipSeedAddresses:  []string{testGossipAddress, dummyGossipSeedAddress},
 		DeploymentID:         1,
 		FS:                   vfs.NewStrictMem(),
 		ServiceListenAddress: testServiceAddress,
 		ServiceAddress:       testServiceAddress,
 		DisableWorkers:       true,
+		UseTeeLogDB:          true,
 	}
 	c.Fill()
 	return c
