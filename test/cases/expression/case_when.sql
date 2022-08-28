@@ -9,15 +9,15 @@ select CASE "c" when "a" then 1 when "b" then 2 ELSE 3 END;
 select CASE when 1=0 then "true" else "false" END;
 select CASE 1 when 1 then "one" WHEN 2 then "two" ELSE "more" END;
 select CASE 2.0 when 1 then "one" WHEN 2.0 then "two" ELSE "more" END;
--- @bvt:issue#3294
+
 select (CASE "two" when "one" then "1" WHEN "two" then "2" END) | 0;
--- @bvt:issue
+
 select (CASE "two" when "one" then 1.00 WHEN "two" then 2.00 END) +0.0;
 select case 1/0 when "a" then "true" else "false" END;
 select case 1/0 when "a" then "true" END;
--- @bvt:issue#3294
+
 select (case 1/0 when "a" then "true" END) | 0;
--- @bvt:issue
+
 select (case 1/0 when "a" then "true" END) + 0.0;
 select case when 1>0 then "TRUE" else "FALSE" END;
 select case when 1<0 then "TRUE" else "FALSE" END;
