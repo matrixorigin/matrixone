@@ -56,7 +56,7 @@ const (
 	BS_NotAppendable
 	ES_Frozen
 )
-const Intervals = 3 * 60 * 1000 * time.Millisecond
+const Intervals = 5 * time.Microsecond
 
 type statBlock struct {
 	rows      uint32
@@ -216,6 +216,15 @@ func (blk *dataBlock) GetBlockFile() file.Block {
 func (blk *dataBlock) GetID() *common.ID { return blk.meta.AsCommonID() }
 
 func (blk *dataBlock) RunCalibration() int {
+	if blk.meta.IsAppendable() && blk.Rows(nil, true) == int(blk.meta.GetSchema().BlockMaxRows) {
+		blk.meta.RLock()
+		if blk.meta.HasDropped() {
+			blk.meta.RUnlock()
+			return 0
+		}
+		blk.meta.RUnlock()
+		return 100
+	}
 	return blk.estimateRawScore()
 }
 
@@ -285,14 +294,15 @@ func (blk *dataBlock) EstimateScore() int {
 		return 0
 	}
 	if blk.score.rows != rows {
-		s := time.Since(blk.score.startTime).Milliseconds()
+		blk.score.rows = rows
+		blk.score.startTime = time.Now()
+	} else {
+		s := time.Since(blk.score.startTime).Microseconds()
 		if s > int64(Intervals) {
 			return 100
 		}
-		blk.score.rows = rows
-		blk.score.startTime = time.Now()
 	}
-	return score
+	return 0
 }
 
 func (blk *dataBlock) BuildCompactionTaskFactory() (
@@ -300,6 +310,7 @@ func (blk *dataBlock) BuildCompactionTaskFactory() (
 	taskType tasks.TaskType,
 	scopes []common.ID,
 	err error) {
+	blk.SetNotAppendable()
 	blk.meta.RLock()
 	dropped := blk.meta.IsDroppedCommitted()
 	inTxn := blk.meta.InTxnOrRollbacked()
