@@ -303,6 +303,24 @@ func TestLogString(t *testing.T) {
 			},
 			expected: "L/Kill storeA storeA:1:0:0",
 		},
+		{
+			desc: "bootstrapping",
+			command: ScheduleCommand{
+				UUID:          "storeA",
+				Bootstrapping: true,
+				ConfigChange: &ConfigChange{
+					Replica: Replica{
+						UUID:      "storeA",
+						ShardID:   1,
+						ReplicaID: 1,
+					},
+					ChangeType:     StartReplica,
+					InitialMembers: map[uint64]string{1: "storeA123", 2: "storeB", 3: "storeC"},
+				},
+				ServiceType: LogService,
+			},
+			expected: "L/Start storeA storeA:1:1:0 [1:storeA 2:storeB 3:storeC]",
+		},
 	}
 
 	for _, c := range cases {
