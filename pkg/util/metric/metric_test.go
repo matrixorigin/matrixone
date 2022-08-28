@@ -132,13 +132,13 @@ func TestCreateTable(t *testing.T) {
 	name := "sql_test_counter"
 	sql := createTableSqlFromMetricFamily(prom.NewDesc(name, "", []string{"zzz", "aaa"}, nil), buf, dummyOptionsFactory)
 	assert.Equal(t, sql, fmt.Sprintf(
-		"create table if not exists %s.%s (`%s` datetime, `%s` double, `%s` int, `%s` varchar(20), `aaa` varchar(20), `zzz` varchar(20))",
+		"create table if not exists %s.%s (`%s` datetime, `%s` double, `%s` varchar(36), `%s` varchar(20), `aaa` varchar(20), `zzz` varchar(20))",
 		MetricDBConst, name, lblTimeConst, lblValueConst, lblNodeConst, lblRoleConst,
 	))
 
 	sql = createTableSqlFromMetricFamily(prom.NewDesc(name, "", nil, nil), buf, dummyOptionsFactory)
 	assert.Equal(t, sql, fmt.Sprintf(
-		"create table if not exists %s.%s (`%s` datetime, `%s` double, `%s` int, `%s` varchar(20))",
+		"create table if not exists %s.%s (`%s` datetime, `%s` double, `%s` varchar(36), `%s` varchar(20))",
 		MetricDBConst, name, lblTimeConst, lblValueConst, lblNodeConst, lblRoleConst,
 	))
 }

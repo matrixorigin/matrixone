@@ -203,7 +203,7 @@ func createTableSqlFromMetricFamily(desc *prom.Desc, buf *bytes.Buffer, optionsF
 	buf.WriteString("create ")
 	buf.WriteString(opts.GetCreateOptions())
 	buf.WriteString(fmt.Sprintf(
-		"table if not exists %s.%s (`%s` datetime, `%s` double, `%s` int, `%s` varchar(20)",
+		"table if not exists %s.%s (`%s` datetime, `%s` double, `%s` varchar(36), `%s` varchar(20)",
 		MetricDBConst, extra.fqName, lblTimeConst, lblValueConst, lblNodeConst, lblRoleConst,
 	))
 	for _, lbl := range extra.labels {
