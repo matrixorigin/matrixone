@@ -26,8 +26,6 @@ import (
 
 	"github.com/BurntSushi/toml"
 
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -321,24 +319,6 @@ func getParameterUnit(configFile string, eng engine.Engine, txnClient TxnClient)
 	pu := mo_config.NewParameterUnit(sv, hostMmu, mempool, eng, txnClient, engine.Nodes{})
 
 	return pu, nil
-}
-
-func ConvertCatalogSchemaToEngineFormat(mcs *CatalogSchema) []*engine.AttributeDef {
-	genAttr := func(attr *CatalogSchemaAttribute) *engine.AttributeDef {
-		return &engine.AttributeDef{
-			Attr: engine.Attribute{
-				Name:    attr.AttributeName,
-				Alg:     0,
-				Type:    attr.AttributeType,
-				Default: &plan.Default{},
-			}}
-	}
-
-	attrs := make([]*engine.AttributeDef, 0, mcs.Length())
-	for _, attr := range mcs.GetAttributes() {
-		attrs = append(attrs, genAttr(attr))
-	}
-	return attrs
 }
 
 func toTypesType(t types.T) types.Type {

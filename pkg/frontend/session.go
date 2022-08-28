@@ -17,6 +17,7 @@ package frontend
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"strings"
 	"time"
 
@@ -1078,16 +1079,28 @@ func fakeDataSetFetcher(handle interface{}, dataSet *batch.Batch) error {
 	return nil
 }
 
+func convertIntoResultSet(values []interface{}) ([]ExecResult, error) {
+	rsset := make([]ExecResult, len(values))
+	for i, value := range values {
+		if er, ok := value.(ExecResult); ok {
+			rsset[i] = er
+		} else {
+			return nil, moerr.NewInternalError("it is not the type of result set")
+		}
+	}
+	return rsset, nil
+}
+
 // executeSQLInBackgroundSession executes the sql in an independent session and transaction.
 // It sends nothing to the client.
-func executeSQLInBackgroundSession(ctx context.Context, gm *guest.Mmu, mp *mempool.Mempool, pu *config.ParameterUnit, sql string) ([]*MysqlResultSet, error) {
+func executeSQLInBackgroundSession(ctx context.Context, gm *guest.Mmu, mp *mempool.Mempool, pu *config.ParameterUnit, sql string) ([]ExecResult, error) {
 	bh := NewBackgroundHandler(ctx, gm, mp, pu)
 	defer bh.Close()
 	err := bh.Exec(ctx, sql)
 	if err != nil {
 		return nil, err
 	}
-	rsset := bh.ses.GetAllMysqlResultSet()
+	rsset := bh.GetExecResultSet()
 	//get the result set
 	//TODO: debug further
 	//mrsArray := ses.GetAllMysqlResultSet()
@@ -1101,7 +1114,7 @@ func executeSQLInBackgroundSession(ctx context.Context, gm *guest.Mmu, mp *mempo
 	//	}
 	//}
 
-	return rsset, nil
+	return convertIntoResultSet(rsset)
 }
 
 type BackgroundHandler struct {
@@ -1109,7 +1122,7 @@ type BackgroundHandler struct {
 	ses *BackgroundSession
 }
 
-func NewBackgroundHandler(ctx context.Context, gm *guest.Mmu, mp *mempool.Mempool, pu *config.ParameterUnit) *BackgroundHandler {
+var NewBackgroundHandler = func(ctx context.Context, gm *guest.Mmu, mp *mempool.Mempool, pu *config.ParameterUnit) BackgroundExec {
 	bh := &BackgroundHandler{
 		mce: NewMysqlCmdExecutor(),
 		ses: NewBackgroundSession(ctx, gm, mp, pu, gSysVariables),
@@ -1132,4 +1145,17 @@ func (bh *BackgroundHandler) Exec(ctx context.Context, sql string) error {
 		return err
 	}
 	return err
+}
+
+func (bh *BackgroundHandler) GetExecResultSet() []interface{} {
+	mrs := bh.ses.GetAllMysqlResultSet()
+	ret := make([]interface{}, len(mrs))
+	for i, mr := range mrs {
+		ret[i] = mr
+	}
+	return ret
+}
+
+func (bh *BackgroundHandler) ClearExecResultSet() {
+	bh.ses.ClearAllMysqlResultSet()
 }

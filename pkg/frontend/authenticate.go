@@ -706,6 +706,7 @@ func checkSysExistsOrNot(ctx context.Context, pu *config.ParameterUnit) (bool, e
 	guestMMu := guest.New(pu.SV.GuestMmuLimitation, pu.HostMmu)
 	bh := NewBackgroundHandler(ctx, guestMMu, pu.Mempool, pu)
 	defer bh.Close()
+	var rsset []ExecResult
 
 	dbSql := "show databases;"
 	err := bh.Exec(nil, dbSql)
@@ -713,9 +714,14 @@ func checkSysExistsOrNot(ctx context.Context, pu *config.ParameterUnit) (bool, e
 		return false, err
 	}
 
-	rsset := bh.ses.GetAllMysqlResultSet()
-	if len(rsset) != 1 {
+	results := bh.GetExecResultSet()
+	if len(results) != 1 {
 		panic("it must have result set")
+	}
+
+	rsset, err = convertIntoResultSet(results)
+	if err != nil {
+		return false, err
 	}
 
 	dbNames := []string{}
@@ -737,7 +743,7 @@ func checkSysExistsOrNot(ctx context.Context, pu *config.ParameterUnit) (bool, e
 		return false, nil
 	}
 
-	bh.ses.ClearAllMysqlResultSet()
+	bh.ClearExecResultSet()
 
 	sql := "show tables from mo_catalog;"
 	err = bh.Exec(nil, sql)
@@ -745,9 +751,14 @@ func checkSysExistsOrNot(ctx context.Context, pu *config.ParameterUnit) (bool, e
 		return false, err
 	}
 
-	rsset = bh.ses.GetAllMysqlResultSet()
-	if len(rsset) != 1 {
+	results = bh.GetExecResultSet()
+	if len(results) != 1 {
 		panic("it must have result set")
+	}
+
+	rsset, err = convertIntoResultSet(results)
+	if err != nil {
+		return false, err
 	}
 
 	tableNames := []string{}
@@ -818,7 +829,9 @@ func createTablesInMoCatalog(ctx context.Context, tenant *TenantInfo, pu *config
 	var err error
 	var initMoAccount string
 	var initDataSqls []string
-	isSys := tenant.IsSysTenant()
+	if !tenant.IsSysTenant() {
+		return moerr.NewInternalError("only sys tenant can execute the function")
+	}
 
 	addSqlIntoSet := func(sql string) {
 		initDataSqls = append(initDataSqls, sql)
@@ -831,71 +844,59 @@ func createTablesInMoCatalog(ctx context.Context, tenant *TenantInfo, pu *config
 	addSqlIntoSet("begin;")
 
 	//create tables for the tenant
-	for i, sql := range createSqls {
-		if !isSys && i == createMoAccountIndex {
-			continue
-		}
+	for _, sql := range createSqls {
 		addSqlIntoSet(sql)
 	}
 
 	//initialize the default data of tables for the tenant
 	//step 1: add new tenant entry to the mo_account
-	if isSys {
-		initMoAccount = fmt.Sprintf(initMoAccountFormat, sysAccountID, sysAccountName, sysAccountStatus, types.CurrentTimestamp().String2(time.UTC, 0), sysAccountComments)
-	} else {
-		//TODO: use auto increment
-		initMoAccount = fmt.Sprintf(initMoAccountFormat, rand.Int(), tenant.GetTenant(), sysAccountStatus, types.CurrentTimestamp().String2(time.UTC, 0), "")
-	}
+	initMoAccount = fmt.Sprintf(initMoAccountFormat, sysAccountID, sysAccountName, sysAccountStatus, types.CurrentTimestamp().String2(time.UTC, 0), sysAccountComments)
 	addSqlIntoSet(initMoAccount)
 
 	//step 2:add new role entries to the mo_role
-	if isSys {
-		initMoRole1 := fmt.Sprintf(initMoRoleFormat, moAdminRoleID, moAdminRoleName, rootID, moAdminRoleID, types.CurrentTimestamp().String2(time.UTC, 0), moAdminRoleComment)
-		initMoRole2 := fmt.Sprintf(initMoRoleFormat, publicRoleID, publicRoleName, rootID, moAdminRoleID, types.CurrentTimestamp().String2(time.UTC, 0), publicRoleComment)
-		addSqlIntoSet(initMoRole1)
-		addSqlIntoSet(initMoRole2)
-	}
+
+	initMoRole1 := fmt.Sprintf(initMoRoleFormat, moAdminRoleID, moAdminRoleName, rootID, moAdminRoleID, types.CurrentTimestamp().String2(time.UTC, 0), moAdminRoleComment)
+	initMoRole2 := fmt.Sprintf(initMoRoleFormat, publicRoleID, publicRoleName, rootID, moAdminRoleID, types.CurrentTimestamp().String2(time.UTC, 0), publicRoleComment)
+	addSqlIntoSet(initMoRole1)
+	addSqlIntoSet(initMoRole2)
 
 	//step 3:add new user entry to the mo_user
-	if isSys {
-		initMoUser1 := fmt.Sprintf(initMoUserFormat, rootID, rootHost, rootName, rootPassword, rootStatus, types.CurrentTimestamp().String2(time.UTC, 0), rootExpiredTime, rootLoginType, rootCreatorID, rootOwnerRoleID, rootDefaultRoleID)
-		initMoUser2 := fmt.Sprintf(initMoUserFormat, dumpID, dumpHost, dumpName, dumpPassword, dumpStatus, types.CurrentTimestamp().String2(time.UTC, 0), dumpExpiredTime, dumpLoginType, dumpCreatorID, dumpOwnerRoleID, dumpDefaultRoleID)
-		addSqlIntoSet(initMoUser1)
-		addSqlIntoSet(initMoUser2)
-	}
+
+	initMoUser1 := fmt.Sprintf(initMoUserFormat, rootID, rootHost, rootName, rootPassword, rootStatus, types.CurrentTimestamp().String2(time.UTC, 0), rootExpiredTime, rootLoginType, rootCreatorID, rootOwnerRoleID, rootDefaultRoleID)
+	initMoUser2 := fmt.Sprintf(initMoUserFormat, dumpID, dumpHost, dumpName, dumpPassword, dumpStatus, types.CurrentTimestamp().String2(time.UTC, 0), dumpExpiredTime, dumpLoginType, dumpCreatorID, dumpOwnerRoleID, dumpDefaultRoleID)
+	addSqlIntoSet(initMoUser1)
+	addSqlIntoSet(initMoUser2)
 
 	//step4: add new entries to the mo_role_priv
-	if isSys {
-		for i := 0; i < len(sysRoles); i++ {
-			for j := 0; j < len(sysObjects); j++ {
-				for k := 0; k < len(sysPrivileges); k++ {
-					r := sysRoles[i]
-					o := sysObjects[j]
-					p := sysPrivileges[k]
-					if r.id == publicRoleID && p.id != PrivilegeTypeConnect {
-						continue
-					}
-					initMoRolePriv := fmt.Sprintf(initMoRolePrivFormat,
-						r.id, r.name,
-						o.typ, o.id,
-						p.id, p.id.String(), p.level,
-						rootID, types.CurrentTimestamp().String2(time.UTC, 0),
-						p.withGrantOption)
-					addSqlIntoSet(initMoRolePriv)
+
+	for i := 0; i < len(sysRoles); i++ {
+		for j := 0; j < len(sysObjects); j++ {
+			for k := 0; k < len(sysPrivileges); k++ {
+				r := sysRoles[i]
+				o := sysObjects[j]
+				p := sysPrivileges[k]
+				if r.id == publicRoleID && p.id != PrivilegeTypeConnect {
+					continue
 				}
+				initMoRolePriv := fmt.Sprintf(initMoRolePrivFormat,
+					r.id, r.name,
+					o.typ, o.id,
+					p.id, p.id.String(), p.level,
+					rootID, types.CurrentTimestamp().String2(time.UTC, 0),
+					p.withGrantOption)
+				addSqlIntoSet(initMoRolePriv)
 			}
 		}
 	}
 
 	//step5: add new entries to the mo_user_grant
-	if isSys {
-		initMoUserGrant1 := fmt.Sprintf(initMoUserGrantFormat, moAdminRoleID, rootID, types.CurrentTimestamp().String2(time.UTC, 0), false)
-		initMoUserGrant2 := fmt.Sprintf(initMoUserGrantFormat, publicRoleID, rootID, types.CurrentTimestamp().String2(time.UTC, 0), true)
-		addSqlIntoSet(initMoUserGrant1)
-		addSqlIntoSet(initMoUserGrant2)
-		initMoUserGrant4 := fmt.Sprintf(initMoUserGrantFormat, publicRoleID, dumpID, types.CurrentTimestamp().String2(time.UTC, 0), true)
-		addSqlIntoSet(initMoUserGrant4)
-	}
+
+	initMoUserGrant1 := fmt.Sprintf(initMoUserGrantFormat, moAdminRoleID, rootID, types.CurrentTimestamp().String2(time.UTC, 0), false)
+	initMoUserGrant2 := fmt.Sprintf(initMoUserGrantFormat, publicRoleID, rootID, types.CurrentTimestamp().String2(time.UTC, 0), true)
+	addSqlIntoSet(initMoUserGrant1)
+	addSqlIntoSet(initMoUserGrant2)
+	initMoUserGrant4 := fmt.Sprintf(initMoUserGrantFormat, publicRoleID, dumpID, types.CurrentTimestamp().String2(time.UTC, 0), true)
+	addSqlIntoSet(initMoUserGrant4)
 
 	addSqlIntoSet("commit;")
 
@@ -994,7 +995,6 @@ func createTablesInMoCatalogOfGeneralTenant(ctx context.Context, tenant *TenantI
 	var err error
 	var initMoAccount string
 	var initDataSqls []string
-	isSys := false
 
 	addSqlIntoSet := func(sql string) {
 		initDataSqls = append(initDataSqls, sql)
@@ -1010,24 +1010,22 @@ func createTablesInMoCatalogOfGeneralTenant(ctx context.Context, tenant *TenantI
 	// Other operations with a new context with new tenant info
 	//step 1: add new tenant entry to the mo_account
 	newTenantID := uint32(sysAccountID)
-	if isSys {
-		initMoAccount = fmt.Sprintf(initMoAccountFormat, newTenantID, sysAccountName, sysAccountStatus, types.CurrentTimestamp().String2(time.UTC, 0), sysAccountComments)
-	} else {
-		//TODO: use auto increment
-		comment := ""
-		if ca.Comment.Exist {
-			comment = ca.Comment.Comment
-		}
-		newTenantID = rand.Uint32()
-		initMoAccount = fmt.Sprintf(initMoAccountFormat, newTenantID, ca.Name, sysAccountStatus, types.CurrentTimestamp().String2(time.UTC, 0), comment)
+
+	//TODO: use auto increment
+	comment := ""
+	if ca.Comment.Exist {
+		comment = ca.Comment.Comment
 	}
+	newTenantID = rand.Uint32()
+	initMoAccount = fmt.Sprintf(initMoAccountFormat, newTenantID, ca.Name, sysAccountStatus, types.CurrentTimestamp().String2(time.UTC, 0), comment)
+
 	insertIntoMoAccountSqlIdx := len(initDataSqls)
 	addSqlIntoSet(initMoAccount)
 
 	//create tables for the tenant
 	for i, sql := range createSqls {
 		//only the SYS tenant has the table mo_account
-		if !isSys && i == createMoAccountIndex {
+		if i == createMoAccountIndex {
 			continue
 		}
 		addSqlIntoSet(sql)
@@ -1036,103 +1034,63 @@ func createTablesInMoCatalogOfGeneralTenant(ctx context.Context, tenant *TenantI
 	//initialize the default data of tables for the tenant
 
 	//step 2:add new role entries to the mo_role
-	if isSys {
-		initMoRole1 := fmt.Sprintf(initMoRoleFormat, moAdminRoleID, moAdminRoleName, rootID, moAdminRoleID, types.CurrentTimestamp().String2(time.UTC, 0), moAdminRoleComment)
-		initMoRole2 := fmt.Sprintf(initMoRoleFormat, publicRoleID, publicRoleName, rootID, moAdminRoleID, types.CurrentTimestamp().String2(time.UTC, 0), publicRoleComment)
-		addSqlIntoSet(initMoRole1)
-		addSqlIntoSet(initMoRole2)
-	} else {
-		initMoRole1 := fmt.Sprintf(initMoRoleFormat, accountAdminRoleID, accountAdminRoleName, tenant.GetUserID(), tenant.GetDefaultRoleID(), types.CurrentTimestamp().String2(time.UTC, 0), accountAdminRoleComment)
-		initMoRole2 := fmt.Sprintf(initMoRoleFormat, publicRoleID, publicRoleName, tenant.GetUserID(), tenant.GetDefaultRoleID(), types.CurrentTimestamp().String2(time.UTC, 0), publicRoleComment)
-		addSqlIntoSet(initMoRole1)
-		addSqlIntoSet(initMoRole2)
-	}
+
+	initMoRole1 := fmt.Sprintf(initMoRoleFormat, accountAdminRoleID, accountAdminRoleName, tenant.GetUserID(), tenant.GetDefaultRoleID(), types.CurrentTimestamp().String2(time.UTC, 0), accountAdminRoleComment)
+	initMoRole2 := fmt.Sprintf(initMoRoleFormat, publicRoleID, publicRoleName, tenant.GetUserID(), tenant.GetDefaultRoleID(), types.CurrentTimestamp().String2(time.UTC, 0), publicRoleComment)
+	addSqlIntoSet(initMoRole1)
+	addSqlIntoSet(initMoRole2)
 
 	//step 3:add new user entry to the mo_user
 	newUserId := uint32(rootID)
-	if isSys {
-		initMoUser1 := fmt.Sprintf(initMoUserFormat, rootID, rootHost, rootName, rootPassword, rootStatus, types.CurrentTimestamp().String2(time.UTC, 0), rootExpiredTime, rootLoginType, rootCreatorID, rootOwnerRoleID, rootDefaultRoleID)
-		initMoUser2 := fmt.Sprintf(initMoUserFormat, dumpID, dumpHost, dumpName, dumpPassword, dumpStatus, types.CurrentTimestamp().String2(time.UTC, 0), dumpExpiredTime, dumpLoginType, dumpCreatorID, dumpOwnerRoleID, dumpDefaultRoleID)
-		addSqlIntoSet(initMoUser1)
-		addSqlIntoSet(initMoUser2)
-	} else {
-		//TODO:use auto_increment column for the userid
-		if ca.AuthOption.IdentifiedType.Typ != tree.AccountIdentifiedByPassword {
-			return nil, moerr.NewInternalError("only support password verification now")
-		}
-		name := ca.AuthOption.AdminName
-		password := ca.AuthOption.IdentifiedType.Str
-		if len(password) == 0 {
-			return nil, moerr.NewInternalError("password is empty string")
-		}
-		status := rootStatus
-		//TODO: fix the status of user or account
-		if ca.StatusOption.Exist {
-			if ca.StatusOption.Option == tree.AccountStatusSuspend {
-				status = "suspend"
-			}
-		}
-		newUserId = rand.Uint32()
-		initMoUser1 := fmt.Sprintf(initMoUserFormat, newUserId, rootHost, name, password, status,
-			types.CurrentTimestamp().String2(time.UTC, 0), rootExpiredTime, rootLoginType,
-			tenant.GetUserID(), tenant.GetDefaultRoleID(), publicRoleID)
-		addSqlIntoSet(initMoUser1)
+
+	//TODO:use auto_increment column for the userid
+	if ca.AuthOption.IdentifiedType.Typ != tree.AccountIdentifiedByPassword {
+		return nil, moerr.NewInternalError("only support password verification now")
 	}
+	name := ca.AuthOption.AdminName
+	password := ca.AuthOption.IdentifiedType.Str
+	if len(password) == 0 {
+		return nil, moerr.NewInternalError("password is empty string")
+	}
+	status := rootStatus
+	//TODO: fix the status of user or account
+	if ca.StatusOption.Exist {
+		if ca.StatusOption.Option == tree.AccountStatusSuspend {
+			status = "suspend"
+		}
+	}
+	newUserId = rand.Uint32()
+	initMoUser1 := fmt.Sprintf(initMoUserFormat, newUserId, rootHost, name, password, status,
+		types.CurrentTimestamp().String2(time.UTC, 0), rootExpiredTime, rootLoginType,
+		tenant.GetUserID(), tenant.GetDefaultRoleID(), publicRoleID)
+	addSqlIntoSet(initMoUser1)
 
 	//step4: add new entries to the mo_role_priv
-	if isSys {
-		for i := 0; i < len(sysRoles); i++ {
-			for j := 0; j < len(sysObjects); j++ {
-				for k := 0; k < len(sysPrivileges); k++ {
-					r := sysRoles[i]
-					o := sysObjects[j]
-					p := sysPrivileges[k]
-					if r.id == publicRoleID && p.id != PrivilegeTypeConnect {
-						continue
-					}
-					initMoRolePriv := fmt.Sprintf(initMoRolePrivFormat,
-						r.id, r.name,
-						o.typ, o.id,
-						p.id, p.id.String(), p.level,
-						rootID, types.CurrentTimestamp().String2(time.UTC, 0),
-						p.withGrantOption)
-					addSqlIntoSet(initMoRolePriv)
+
+	for i := 0; i < len(applicationLevelRoles); i++ {
+		for j := 0; j < len(applicationLevelObjects); j++ {
+			for k := 0; k < len(applicationLevelPrivileges); k++ {
+				r := applicationLevelRoles[i]
+				o := applicationLevelObjects[j]
+				p := applicationLevelPrivileges[k]
+				if r.id == publicRoleID && p.id != PrivilegeTypeConnect {
+					continue
 				}
-			}
-		}
-	} else {
-		for i := 0; i < len(applicationLevelRoles); i++ {
-			for j := 0; j < len(applicationLevelObjects); j++ {
-				for k := 0; k < len(applicationLevelPrivileges); k++ {
-					r := applicationLevelRoles[i]
-					o := applicationLevelObjects[j]
-					p := applicationLevelPrivileges[k]
-					if r.id == publicRoleID && p.id != PrivilegeTypeConnect {
-						continue
-					}
-					initMoRolePriv := fmt.Sprintf(initMoRolePrivFormat,
-						r.id, r.name,
-						o.typ, o.id,
-						p.id, p.id.String(), p.level,
-						tenant.GetUserID(), types.CurrentTimestamp().String2(time.UTC, 0),
-						p.withGrantOption)
-					addSqlIntoSet(initMoRolePriv)
-				}
+				initMoRolePriv := fmt.Sprintf(initMoRolePrivFormat,
+					r.id, r.name,
+					o.typ, o.id,
+					p.id, p.id.String(), p.level,
+					tenant.GetUserID(), types.CurrentTimestamp().String2(time.UTC, 0),
+					p.withGrantOption)
+				addSqlIntoSet(initMoRolePriv)
 			}
 		}
 	}
 
 	//step5: add new entries to the mo_user_grant
-	if isSys {
-		initMoUserGrant1 := fmt.Sprintf(initMoUserGrantFormat, moAdminRoleID, rootID, types.CurrentTimestamp().String2(time.UTC, 0), false)
-		initMoUserGrant2 := fmt.Sprintf(initMoUserGrantFormat, publicRoleID, rootID, types.CurrentTimestamp().String2(time.UTC, 0), true)
-		addSqlIntoSet(initMoUserGrant1)
-		addSqlIntoSet(initMoUserGrant2)
-	} else {
-		initMoUserGrant2 := fmt.Sprintf(initMoUserGrantFormat, publicRoleID, newUserId, types.CurrentTimestamp().String2(time.UTC, 0), true)
-		addSqlIntoSet(initMoUserGrant2)
-	}
 
+	initMoUserGrant2 := fmt.Sprintf(initMoUserGrantFormat, publicRoleID, newUserId, types.CurrentTimestamp().String2(time.UTC, 0), true)
+	addSqlIntoSet(initMoUserGrant2)
 	addSqlIntoSet("commit;")
 
 	//with new tenant
@@ -1213,6 +1171,7 @@ func checkUserExistsOrNot(ctx context.Context, pu *config.ParameterUnit, tenantN
 func InitUser(ctx context.Context, tenant *TenantInfo, cu *tree.CreateUser) error {
 	var err error
 	var exists bool
+	var rsset []ExecResult
 	pu := config.GetParameterUnit(ctx)
 
 	var initUserSqls []string
@@ -1234,7 +1193,11 @@ func InitUser(ctx context.Context, tenant *TenantInfo, cu *tree.CreateUser) erro
 			if err != nil {
 				return err
 			}
-			rsset := bh.ses.GetAllMysqlResultSet()
+			values := bh.GetExecResultSet()
+			rsset, err = convertIntoResultSet(values)
+			if err != nil {
+				return err
+			}
 			if len(rsset) < 1 || rsset[0].GetRowCount() < 1 {
 				return moerr.NewInternalError("there is no role %s", cu.Role.UserName)
 			}
@@ -1326,6 +1289,7 @@ handleFailed:
 func InitRole(ctx context.Context, tenant *TenantInfo, cr *tree.CreateRole) error {
 	var err error
 	var exists bool
+	var rsset []ExecResult
 	pu := config.GetParameterUnit(ctx)
 
 	var initRoleSqls []string
@@ -1349,7 +1313,11 @@ func InitRole(ctx context.Context, tenant *TenantInfo, cr *tree.CreateRole) erro
 			if err != nil {
 				return err
 			}
-			rsset := bh.ses.GetAllMysqlResultSet()
+			values := bh.GetExecResultSet()
+			rsset, err = convertIntoResultSet(values)
+			if err != nil {
+				return err
+			}
 			if len(rsset) >= 1 && rsset[0].GetRowCount() >= 1 {
 				exists = true
 			}
