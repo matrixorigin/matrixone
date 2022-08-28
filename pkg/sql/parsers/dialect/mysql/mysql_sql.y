@@ -7007,7 +7007,8 @@ reserved_keyword:
 |   SECONDARY
 
 non_reserved_keyword:
-    AGAINST
+    ACCOUNT
+|   AGAINST
 |   AVG_ROW_LENGTH
 |   AUTO_RANDOM
 |   ACTION

@@ -37,5 +37,14 @@ create view v2 as select 'a';
 show create view v2;
 View    Create View
 v2    create view v2 as select 'a';
+show create table v2;
+View    Create View
+v2    create view v2 as select 'a';
 drop view v1;
 drop view v2;
+
+create table tt(a int);
+create view vv as select * from tt;
+drop table if exists tt;
+drop table if exists vv;
+drop view vv;

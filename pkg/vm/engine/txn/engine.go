@@ -17,6 +17,7 @@ package txnengine
 import (
 	"context"
 	"strings"
+	"time"
 
 	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
@@ -150,4 +151,9 @@ func (e *Engine) Nodes() (engine.Nodes, error) {
 	}
 
 	return nodes, nil
+}
+
+func (e *Engine) Hints() (h engine.Hints) {
+	h.CommitOrRollbackTimeout = time.Minute * 5
+	return
 }

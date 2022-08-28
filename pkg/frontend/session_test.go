@@ -18,9 +18,11 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 
 	"github.com/fagongzi/goetty/v2/buf"
 	"github.com/golang/mock/gomock"
@@ -49,6 +51,9 @@ func TestTxnHandler_NewTxn(t *testing.T) {
 				}
 			}).AnyTimes()
 		eng := mock_frontend.NewMockEngine(ctrl)
+		eng.EXPECT().Hints().Return(engine.Hints{
+			CommitOrRollbackTimeout: time.Second,
+		}).AnyTimes()
 
 		txn := InitTxnHandler(eng, txnClient)
 		txn.ses = &Session{
@@ -83,6 +88,9 @@ func TestTxnHandler_CommitTxn(t *testing.T) {
 
 		txnClient := mock_frontend.NewMockTxnClient(ctrl)
 		eng := mock_frontend.NewMockEngine(ctrl)
+		eng.EXPECT().Hints().Return(engine.Hints{
+			CommitOrRollbackTimeout: time.Second,
+		}).AnyTimes()
 
 		txnClient.EXPECT().New().Return(txnOperator, nil).AnyTimes()
 
@@ -121,6 +129,9 @@ func TestTxnHandler_RollbackTxn(t *testing.T) {
 
 		txnClient := mock_frontend.NewMockTxnClient(ctrl)
 		eng := mock_frontend.NewMockEngine(ctrl)
+		eng.EXPECT().Hints().Return(engine.Hints{
+			CommitOrRollbackTimeout: time.Second,
+		}).AnyTimes()
 
 		txnClient.EXPECT().New().Return(txnOperator, nil).AnyTimes()
 
@@ -485,6 +496,9 @@ func TestSession_TxnCompilerContext(t *testing.T) {
 		txnClient := mock_frontend.NewMockTxnClient(ctrl)
 		txnClient.EXPECT().New().Return(txnOperator, nil).AnyTimes()
 		eng := mock_frontend.NewMockEngine(ctrl)
+		eng.EXPECT().Hints().Return(engine.Hints{
+			CommitOrRollbackTimeout: time.Second,
+		}).AnyTimes()
 
 		db := mock_frontend.NewMockDatabase(ctrl)
 		db.EXPECT().Relations(gomock.Any()).Return(nil, nil).AnyTimes()
