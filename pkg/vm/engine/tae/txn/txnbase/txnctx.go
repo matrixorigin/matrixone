@@ -36,12 +36,13 @@ func IDCtxToID(buf []byte) uint64 {
 
 type TxnCtx struct {
 	sync.RWMutex
-	DoneCond          sync.Cond
-	ID                uint64
-	IDCtx             []byte
-	StartTS, CommitTS types.TS
-	Info              []byte
-	State             txnif.TxnState
+	DoneCond                     sync.Cond
+	ID                           uint64
+	IDCtx                        []byte
+	StartTS, CommitTS, PrepareTS types.TS
+	Info                         []byte
+	State                        txnif.TxnState
+	Is2PC                        bool
 }
 
 func NewTxnCtx(id uint64, start types.TS, info []byte) *TxnCtx {
@@ -83,6 +84,11 @@ func (ctx *TxnCtx) GetCommitTS() types.TS {
 	ctx.RLock()
 	defer ctx.RUnlock()
 	return ctx.CommitTS
+}
+func (ctx *TxnCtx) GetPrepareTS() types.TS {
+	ctx.RLock()
+	defer ctx.RUnlock()
+	return ctx.PrepareTS
 }
 
 // Atomically returns the current txn state
@@ -134,6 +140,19 @@ func (ctx *TxnCtx) IsActiveLocked() bool {
 	return ctx.CommitTS == txnif.UncommitTS
 }
 
+func (ctx *TxnCtx) ToPreparingLocked(ts types.TS) error {
+	if ts.LessEq(ctx.StartTS) {
+		panic(fmt.Sprintf("start ts %d should be less than commit ts %d", ctx.StartTS, ts))
+	}
+	if !ctx.CommitTS.Equal(txnif.UncommitTS) {
+		return ErrTxnNotActive
+	}
+	ctx.PrepareTS = ts
+	ctx.CommitTS = ts
+	ctx.State = txnif.TxnStatePreparing
+	return nil
+}
+
 func (ctx *TxnCtx) ToCommittingLocked(ts types.TS) error {
 	if ts.LessEq(ctx.StartTS) {
 		panic(fmt.Sprintf("start ts %d should be less than commit ts %d", ctx.StartTS, ts))
@@ -142,6 +161,7 @@ func (ctx *TxnCtx) ToCommittingLocked(ts types.TS) error {
 		return ErrTxnNotActive
 	}
 	ctx.CommitTS = ts
+	ctx.PrepareTS = ts
 	ctx.State = txnif.TxnStateCommitting
 	return nil
 }
@@ -162,6 +182,7 @@ func (ctx *TxnCtx) ToRollbackingLocked(ts types.TS) error {
 		return ErrTxnCannotRollback
 	}
 	ctx.CommitTS = ts
+	ctx.PrepareTS = ts
 	ctx.State = txnif.TxnStateRollbacking
 	return nil
 }

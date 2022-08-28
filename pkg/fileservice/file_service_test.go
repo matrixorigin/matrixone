@@ -448,7 +448,7 @@ func testFileService(
 		fs := newFS()
 
 		err := fs.Write(ctx, IOVector{
-			FilePath: fs.Name() + ":foo",
+			FilePath: joinPath(fs.Name(), "foo"),
 			Entries: []IOEntry{
 				{
 					Size: 4,
@@ -460,6 +460,30 @@ func testFileService(
 
 		vec := IOVector{
 			FilePath: "foo",
+			Entries: []IOEntry{
+				{
+					Size: -1,
+				},
+			},
+		}
+		err = fs.Read(ctx, &vec)
+		assert.Nil(t, err)
+		assert.Equal(t, []byte("1234"), vec.Entries[0].Data)
+
+		vec = IOVector{
+			FilePath: joinPath(strings.ToLower(fs.Name()), "foo"),
+			Entries: []IOEntry{
+				{
+					Size: -1,
+				},
+			},
+		}
+		err = fs.Read(ctx, &vec)
+		assert.Nil(t, err)
+		assert.Equal(t, []byte("1234"), vec.Entries[0].Data)
+
+		vec = IOVector{
+			FilePath: joinPath(strings.ToUpper(fs.Name()), "foo"),
 			Entries: []IOEntry{
 				{
 					Size: -1,

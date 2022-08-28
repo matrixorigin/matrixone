@@ -37,12 +37,13 @@ type ColumnUpdateNode struct {
 	mask *roaring.Bitmap
 	vals map[uint32]any
 	// nulls    *roaring.Bitmap
-	chain    *ColumnChain
-	startTs  types.TS
-	commitTs types.TS
-	txn      txnif.AsyncTxn
-	logIndex *wal.Index
-	id       *common.ID
+	chain     *ColumnChain
+	startTs   types.TS
+	commitTs  types.TS
+	prepareTs types.TS
+	txn       txnif.AsyncTxn
+	logIndex  *wal.Index
+	id        *common.ID
 }
 
 func NewSimpleColumnUpdateNode() *ColumnUpdateNode {
@@ -330,6 +331,22 @@ func (node *ColumnUpdateNode) StringLocked() string {
 	return s
 }
 
+func (node *ColumnUpdateNode) Prepare2PCPrepare() (err error) {
+	node.chain.Lock()
+	defer node.chain.Unlock()
+	if node.commitTs != txnif.UncommitTS {
+		return
+	}
+	// if node.commitTs != txnif.UncommitTS {
+	// 	panic("logic error")
+	// }
+	node.commitTs = node.txn.GetPrepareTS()
+	node.prepareTs = node.txn.GetPrepareTS()
+	node.chain.UpdateLocked(node)
+	// TODO: merge updates
+	return
+}
+
 func (node *ColumnUpdateNode) PrepareCommit() (err error) {
 	node.chain.Lock()
 	defer node.chain.Unlock()
@@ -340,6 +357,7 @@ func (node *ColumnUpdateNode) PrepareCommit() (err error) {
 	// 	panic("logic error")
 	// }
 	node.commitTs = node.txn.GetCommitTS()
+	node.prepareTs = node.txn.GetCommitTS()
 	node.chain.UpdateLocked(node)
 	// TODO: merge updates
 	return
@@ -363,4 +381,13 @@ func (node *ColumnUpdateNode) PrepareRollback() (err error) {
 	return
 }
 
-func (node *ColumnUpdateNode) ApplyRollback() (err error) { return }
+func (node *ColumnUpdateNode) ApplyRollback(index *wal.Index) (err error) {
+	node.Lock()
+	defer node.Unlock()
+	if node.txn == nil {
+		panic("ColumnUpdateNode | ApplyCommit | LogicErr")
+	}
+	node.logIndex = index
+	return
+
+}

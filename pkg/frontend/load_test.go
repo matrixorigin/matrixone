@@ -43,6 +43,9 @@ func Test_readTextFile(t *testing.T) {
 		defer ctrl.Finish()
 
 		eng := mock_frontend.NewMockTxnEngine(ctrl)
+    eng.EXPECT().Hints().Return(engine.Hints{
+      CommitOrRollbackTimeout: time.Second,
+    }).AnyTimes()
 		txn := mock_frontend.NewMockTxn(ctrl)
 		txn.EXPECT().GetCtx().Return(nil).AnyTimes()
 		txn.EXPECT().Commit().Return(nil).AnyTimes()
@@ -133,6 +136,7 @@ func Test_readTextFile(t *testing.T) {
 			config.StorageEngine = nil
 		}()
 		ses := NewSession(proto, guestMmu, pu.Mempool, pu, gSysVariables)
+    ses.SetRequestContext(ctx)
 
 		mce := NewMysqlCmdExecutor()
 
@@ -155,6 +159,9 @@ func Test_readTextFile(t *testing.T) {
 		defer ctrl.Finish()
 
 		eng := mock_frontend.NewMockTxnEngine(ctrl)
+    eng.EXPECT().Hints().Return(engine.Hints{
+      CommitOrRollbackTimeout: time.Second,
+    }).AnyTimes()
 		txn := mock_frontend.NewMockTxn(ctrl)
 		txn.EXPECT().GetCtx().Return(nil).AnyTimes()
 		txn.EXPECT().GetID().Return(uint64(0)).AnyTimes()
@@ -317,6 +324,7 @@ func Test_readTextFile(t *testing.T) {
 
 		guestMmu := guest.New(pu.SV.GuestMmuLimitation, pu.HostMmu)
 		ses := NewSession(proto, guestMmu, pu.Mempool, pu, gSysVariables)
+    ses.SetRequestContext(ctx)
 
 		mce := NewMysqlCmdExecutor()
 
@@ -337,6 +345,9 @@ func Test_readTextFile(t *testing.T) {
 		defer ctrl.Finish()
 
 		eng := mock_frontend.NewMockTxnEngine(ctrl)
+    eng.EXPECT().Hints().Return(engine.Hints{
+      CommitOrRollbackTimeout: time.Second,
+    }).AnyTimes()
 		txn := mock_frontend.NewMockTxn(ctrl)
 		txn.EXPECT().GetCtx().Return(nil).AnyTimes()
 		txn.EXPECT().Commit().Return(nil).AnyTimes()
@@ -515,6 +526,7 @@ func Test_readTextFile(t *testing.T) {
 		guestMmu := guest.New(pu.SV.GuestMmuLimitation, pu.HostMmu)
 
 		ses := NewSession(proto, guestMmu, pu.Mempool, pu, gSysVariables)
+    ses.SetRequestContext(ctx)
 
 		mce := NewMysqlCmdExecutor()
 
