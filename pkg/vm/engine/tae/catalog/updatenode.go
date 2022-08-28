@@ -110,7 +110,7 @@ func (e *UpdateNode) IsCommitting() bool {
 	if e.Txn == nil {
 		return false
 	}
-	return e.Txn.GetTxnState(false) == txnif.TxnStateCommitting
+	return e.Txn.GetTxnState(false) != txnif.TxnStateActive
 }
 
 func (e *UpdateNode) GetTxn() txnif.TxnReader {

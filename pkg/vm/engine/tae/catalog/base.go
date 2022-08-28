@@ -239,14 +239,18 @@ func (be *BaseEntry) GetExactUpdateNode(startts types.TS) (node *UpdateNode) {
 }
 
 func (be *BaseEntry) NeedWaitCommitting(startTS types.TS) (bool, txnif.TxnReader) {
-	un := be.GetUpdateNodeLocked()
+	un := be.GetCommittedNode()
+	if un != nil && un.End.GreaterEq(startTS) {
+		return false, nil
+	}
+	un = be.GetUpdateNodeLocked()
 	if un == nil {
 		return false, nil
 	}
 	if !un.IsCommitting() {
 		return false, nil
 	}
-	if un.Txn.GetStartTS().Equal(startTS) {
+	if un.Txn.GetStartTS().GreaterEq(startTS) {
 		return false, nil
 	}
 	return true, un.Txn

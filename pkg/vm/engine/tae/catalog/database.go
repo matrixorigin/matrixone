@@ -245,12 +245,6 @@ func (e *DBEntry) DropTableEntry(name string, txnCtx txnif.AsyncTxn) (deleted *T
 	entry := dn.GetPayload().(*TableEntry)
 	entry.Lock()
 	defer entry.Unlock()
-	needWait, txn := entry.NeedWaitCommitting(txnCtx.GetStartTS())
-	if needWait {
-		entry.Unlock()
-		txn.GetTxnState(true)
-		entry.Lock()
-	}
 	err = entry.DropEntryLocked(txnCtx)
 	if err == nil {
 		deleted = entry
