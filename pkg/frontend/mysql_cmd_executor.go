@@ -2227,7 +2227,7 @@ func (mce *MysqlCmdExecutor) Close() {
 		cancelRequestFunc()
 	}
 
-	fmt.Println("----close mce")
+	logutil.Info("----close mce")
 	ses := mce.GetSession()
 	if ses != nil {
 		err := ses.TxnRollback()

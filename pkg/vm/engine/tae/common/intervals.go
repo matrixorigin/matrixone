@@ -16,9 +16,10 @@ package common
 
 import (
 	"encoding/binary"
-	"fmt"
 	"io"
 	"sort"
+
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 )
 
 // "errors"
@@ -193,12 +194,12 @@ func (intervals *ClosedIntervals) ReadFrom(r io.Reader) (n int64, err error) {
 // Equal is for test
 func (intervals *ClosedIntervals) Equal(o *ClosedIntervals) bool {
 	if len(intervals.Intervals) != len(o.Intervals) {
-		fmt.Printf("%v\n%v\n", intervals.Intervals, o.Intervals)
+		logutil.Infof("%v\n%v", intervals.Intervals, o.Intervals)
 		return false
 	}
 	for i, interval := range intervals.Intervals {
 		if interval.Start != o.Intervals[i].Start || interval.End != o.Intervals[i].End {
-			fmt.Printf("%v\n%v\n", intervals.Intervals, o.Intervals)
+			logutil.Infof("%v\n%v", intervals.Intervals, o.Intervals)
 			return false
 		}
 	}
