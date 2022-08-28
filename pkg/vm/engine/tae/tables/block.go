@@ -55,6 +55,7 @@ const (
 	BS_NotAppendable
 )
 const Intervals = 3 * 60 * 1000 * time.Millisecond
+const ForTestName = "@TestCompaction"
 
 type statBlock struct {
 	rows      uint32
@@ -296,6 +297,9 @@ func (blk *dataBlock) EstimateScore() int {
 		blk.score.startTime = time.Now()
 	} else {
 		s := time.Since(blk.score.startTime).Milliseconds()
+		if blk.meta.GetSchema().Name == ForTestName {
+			return 100
+		}
 		if s > int64(Intervals) {
 			return 100
 		}
