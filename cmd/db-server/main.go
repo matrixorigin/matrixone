@@ -114,7 +114,7 @@ func waitSignal() {
 }
 
 func cleanup() {
-	fmt.Println("\rBye!")
+	logutil.Info("\rBye!")
 }
 
 func recreateDir(dir string) (err error) {
@@ -176,7 +176,7 @@ func main() {
 	handleDebugFlags()
 
 	if len(args) < 1 {
-		fmt.Printf("Usage: %s configFile\n", os.Args[0])
+		logutil.Infof("Usage: %s configFile", os.Args[0])
 		flag.PrintDefaults()
 		os.Exit(-1)
 	}
@@ -209,14 +209,14 @@ func main() {
 
 	//just initialize the tae after configuration has been loaded
 	if len(args) == 2 && args[1] == "initdb" {
-		fmt.Println("Initialize the TAE engine ...")
+		logutil.Info("Initialize the TAE engine ...")
 		taeWrapper := initTae(pu)
 		err := frontend.InitDB(cancelMoServerCtx, taeWrapper.eng)
 		if err != nil {
 			logutil.Infof("Initialize catalog failed. error:%v", err)
 			os.Exit(InitCatalogExit)
 		}
-		fmt.Println("Initialize the TAE engine Done")
+		logutil.Info("Initialize the TAE engine Done")
 		closeTae(taeWrapper)
 		os.Exit(0)
 	}
@@ -234,14 +234,14 @@ func main() {
 	pu.HostMmu = host.New(params.HostMmuLimitation)
 
 	var tae *taeHandler
-	fmt.Println("Initialize the TAE engine ...")
+	logutil.Info("Initialize the TAE engine ...")
 	tae = initTae(pu)
 	err = frontend.InitDB(cancelMoServerCtx, tae.eng)
 	if err != nil {
 		logutil.Infof("Initialize catalog failed. error:%v", err)
 		os.Exit(InitCatalogExit)
 	}
-	fmt.Println("Initialize the TAE engine Done")
+	logutil.Info("Initialize the TAE engine Done")
 
 	if err := agent.Listen(agent.Options{}); err != nil {
 		logutil.Errorf("listen gops agent failed: %s", err)
