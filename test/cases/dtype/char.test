@@ -58,7 +58,7 @@ select concat_ws(LastName,FirstName) as fullname from Demochar where Age > 40 or
 select concat_ws(LastName,FirstName),Gender,Age from Demochar where Gender='F' order by Age asc;
 select cast(Age as char) as cAge from Demochar where cast(Age as char) like '2_';
 -- @bvt:issue#3252
-select cast(Age as char) and Age as cAge from Demochar where Age>=50 order by cAge;
+select cast(Age as char) and Age as cAge from Demochar where Age>=50 order by cAge asc;
 -- @bvt:issue
 CREATE TABLE employees (
   employeeNumber int(11) NOT NULL,
@@ -90,7 +90,7 @@ insert  into employees(employeeNumber,lastName,firstName,extension,email,officeC
 (1501,'Bott','Larry','x2311','lbott@classicmodelcars.com','7',1102,'Sales Rep'),
 (1504,'Jones','Barry','x102','bjones@classicmodelcars.com','7',1102,'Sales Rep'),                                                                                                        
 (1611,'Fixter','Andy','x101','afixter@classicmodelcars.com','6',1088,'Sales Rep');
-select officeCode,count(officeCode) from employees group by officeCode having count(officeCode)>2;
+select officeCode,count(officeCode) from employees group by officeCode having count(officeCode)>2 order by 1 asc,2 desc;
 select lastName,firstName from employees where cast(officeCode as unsigned)>5 limit 2 offset 1;
 select max(lastName),min(lastName) from employees;
 select max(lastName),min(lastName),JobTitle from employees group by JobTitle;

@@ -64,7 +64,10 @@ func (entry *mergeBlocksEntry) PrepareRollback() (err error) {
 	// TODO: remove block file? (should be scheduled and executed async)
 	return
 }
-func (entry *mergeBlocksEntry) ApplyRollback() (err error) { return }
+func (entry *mergeBlocksEntry) ApplyRollback(index *wal.Index) (err error) {
+	//TODO::?
+	return
+}
 func (entry *mergeBlocksEntry) ApplyCommit(index *wal.Index) (err error) {
 	if err = entry.scheduler.Checkpoint([]*wal.Index{index}); err != nil {
 		// TODO:
@@ -138,6 +141,10 @@ func (entry *mergeBlocksEntry) resolveAddr(fromPos int, fromOffset uint32) (toPo
 	// logutil.Infof("fromAddr=%v", entry.fromAddr)
 	// logutil.Infof("toAddr=%v", entry.toAddr)
 	// logutil.Infof("toPos=%d, toOffset=%d", toPos, toOffset)
+	return
+}
+
+func (entry *mergeBlocksEntry) Prepare2PCPrepare() (err error) {
 	return
 }
 

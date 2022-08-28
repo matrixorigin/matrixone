@@ -306,6 +306,9 @@ func (n *MVCCHandle) GetTotalRow() uint32 {
 	return n.appends[len(n.appends)-1].maxRow - delets
 }
 
+// TODO::it will be rewritten in V0.6,since maxVisible of MVCC handel
+//
+//	would not be increased monotonically.
 func (n *MVCCHandle) getMaxVisibleRowLocked(ts types.TS) (int, uint32, bool, error) {
 	if len(n.appends) == 0 {
 		return 0, 0, false, nil

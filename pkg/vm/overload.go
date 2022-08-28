@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/intersect"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopanti"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mark"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/minus"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopsingle"
@@ -78,6 +79,7 @@ var stringFunc = [...]func(any, *bytes.Buffer){
 	Connector:  connector.String,
 	Projection: projection.String,
 	Anti:       anti.String,
+	Mark:       mark.String,
 
 	LoopJoin:   loopjoin.String,
 	LoopLeft:   loopleft.String,
@@ -121,6 +123,7 @@ var prepareFunc = [...]func(*process.Process, any) error{
 	Connector:  connector.Prepare,
 	Projection: projection.Prepare,
 	Anti:       anti.Prepare,
+	Mark:       mark.Prepare,
 
 	LoopJoin:   loopjoin.Prepare,
 	LoopLeft:   loopleft.Prepare,
@@ -164,7 +167,7 @@ var execFunc = [...]func(int, *process.Process, any) (bool, error){
 	Connector:  connector.Call,
 	Projection: projection.Call,
 	Anti:       anti.Call,
-
+	Mark:       mark.Call,
 	LoopJoin:   loopjoin.Call,
 	LoopLeft:   loopleft.Call,
 	LoopSingle: loopsingle.Call,
