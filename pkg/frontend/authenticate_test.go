@@ -310,7 +310,7 @@ func Test_createTablesInMoCatalogOfGeneralTenant(t *testing.T) {
 			IfNotExists: true,
 			AuthOption: tree.AccountAuthOption{
 				AdminName:      "test_root",
-				IdentifiedType: tree.AccountIdentified{tree.AccountIdentifiedByPassword, "123"}},
+				IdentifiedType: tree.AccountIdentified{Typ: tree.AccountIdentifiedByPassword, Str: "123"}},
 			Comment: tree.AccountComment{Exist: true, Comment: "test acccount"},
 		}
 

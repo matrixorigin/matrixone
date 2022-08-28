@@ -60,7 +60,7 @@ func TestSystemVariable(t *testing.T) {
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(btrt, convey.ShouldBeNil)
 
-		btrt, err = nt.Convert("string")
+		_, err = nt.Convert("string")
 		convey.So(err, convey.ShouldNotBeNil)
 
 		_, err = bt.Convert(0)

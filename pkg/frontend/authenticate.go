@@ -154,12 +154,12 @@ func GetTenantInfo(userInput string) (*TenantInfo, error) {
 }
 
 const (
-	createMoUserIndex      = 0
-	createMoAccountIndex   = 1
-	createMoRoleIndex      = 2
-	createMoUserGrantIndex = 3
-	createMoRoleGrantIndex = 4
-	createMoRolePrivIndex  = 5
+	//	createMoUserIndex      = 0
+	createMoAccountIndex = 1
+	//createMoRoleIndex      = 2
+	//createMoUserGrantIndex = 3
+	//createMoRoleGrantIndex = 4
+	//createMoRolePrivIndex  = 5
 )
 
 const (
@@ -221,15 +221,15 @@ const (
 	//*
 	privilegeLevelStar = "*"
 	//*.*
-	privilegeLevelStarStar = "**"
+	//privilegeLevelStarStar = "**"
 	//db_name.*
 	privilegeLevelDatabaseStar = "_*"
 	//db_name.tbl_name
-	privilegeLevelDatabaseTable = "d_t"
+	//privilegeLevelDatabaseTable = "d_t"
 	//tbl_name
 	privilegeLevelTable = "t"
 	//db_name.routine_name
-	privilegeLevelRoutine = "r"
+	//privilegeLevelRoutine = "r"
 )
 
 type PrivilegeType int
@@ -272,12 +272,12 @@ type PrivilegeScope uint8
 
 const (
 	PrivilegeScopeSys      PrivilegeScope = 1
-	PrivilegeScopeAccount                 = 2
-	PrivilegeScopeUser                    = 4
-	PrivilegeScopeRole                    = 8
-	PrivilegeScopeDatabase                = 16
-	PrivilegeScopeTable                   = 32
-	PrivilegeScopeRoutine                 = 64
+	PrivilegeScopeAccount  PrivilegeScope = 2
+	PrivilegeScopeUser     PrivilegeScope = 4
+	PrivilegeScopeRole     PrivilegeScope = 8
+	PrivilegeScopeDatabase PrivilegeScope = 16
+	PrivilegeScopeTable    PrivilegeScope = 32
+	PrivilegeScopeRoutine  PrivilegeScope = 64
 )
 
 func (ps PrivilegeScope) String() string {
@@ -709,7 +709,7 @@ func checkSysExistsOrNot(ctx context.Context, pu *config.ParameterUnit) (bool, e
 	var rsset []ExecResult
 
 	dbSql := "show databases;"
-	err := bh.Exec(nil, dbSql)
+	err := bh.Exec(ctx, dbSql)
 	if err != nil {
 		return false, err
 	}
@@ -746,7 +746,7 @@ func checkSysExistsOrNot(ctx context.Context, pu *config.ParameterUnit) (bool, e
 	bh.ClearExecResultSet()
 
 	sql := "show tables from mo_catalog;"
-	err = bh.Exec(nil, sql)
+	err = bh.Exec(ctx, sql)
 	if err != nil {
 		return false, err
 	}
@@ -905,7 +905,7 @@ func createTablesInMoCatalog(ctx context.Context, tenant *TenantInfo, pu *config
 	bh := NewBackgroundHandler(ctx, guestMMu, pu.Mempool, pu)
 	defer bh.Close()
 	for _, sql := range initDataSqls {
-		err = bh.Exec(nil, sql)
+		err = bh.Exec(ctx, sql)
 		if err != nil {
 			goto handleFailed
 		}
@@ -915,7 +915,7 @@ func createTablesInMoCatalog(ctx context.Context, tenant *TenantInfo, pu *config
 
 handleFailed:
 	//ROLLBACK the transaction
-	rbErr := bh.Exec(nil, "rollback;")
+	rbErr := bh.Exec(ctx, "rollback;")
 	if rbErr != nil {
 		return rbErr
 	}
@@ -927,7 +927,7 @@ func createTablesInInformationSchema(ctx context.Context, tenant *TenantInfo, pu
 	guestMMu := guest.New(pu.SV.GuestMmuLimitation, pu.HostMmu)
 	bh := NewBackgroundHandler(ctx, guestMMu, pu.Mempool, pu)
 	defer bh.Close()
-	err := bh.Exec(nil, "create database information_schema;")
+	err := bh.Exec(ctx, "create database information_schema;")
 	if err != nil {
 		return err
 	}
@@ -1009,14 +1009,12 @@ func createTablesInMoCatalogOfGeneralTenant(ctx context.Context, tenant *TenantI
 	//!!!NOTE : Insert into mo_account with original context.
 	// Other operations with a new context with new tenant info
 	//step 1: add new tenant entry to the mo_account
-	newTenantID := uint32(sysAccountID)
-
 	//TODO: use auto increment
 	comment := ""
 	if ca.Comment.Exist {
 		comment = ca.Comment.Comment
 	}
-	newTenantID = rand.Uint32()
+	newTenantID := rand.Uint32()
 	initMoAccount = fmt.Sprintf(initMoAccountFormat, newTenantID, ca.Name, sysAccountStatus, types.CurrentTimestamp().String2(time.UTC, 0), comment)
 
 	insertIntoMoAccountSqlIdx := len(initDataSqls)
@@ -1041,8 +1039,6 @@ func createTablesInMoCatalogOfGeneralTenant(ctx context.Context, tenant *TenantI
 	addSqlIntoSet(initMoRole2)
 
 	//step 3:add new user entry to the mo_user
-	newUserId := uint32(rootID)
-
 	//TODO:use auto_increment column for the userid
 	if ca.AuthOption.IdentifiedType.Typ != tree.AccountIdentifiedByPassword {
 		return nil, moerr.NewInternalError("only support password verification now")
@@ -1059,7 +1055,7 @@ func createTablesInMoCatalogOfGeneralTenant(ctx context.Context, tenant *TenantI
 			status = "suspend"
 		}
 	}
-	newUserId = rand.Uint32()
+	newUserId := rand.Uint32()
 	initMoUser1 := fmt.Sprintf(initMoUserFormat, newUserId, rootHost, name, password, status,
 		types.CurrentTimestamp().String2(time.UTC, 0), rootExpiredTime, rootLoginType,
 		tenant.GetUserID(), tenant.GetDefaultRoleID(), publicRoleID)
@@ -1127,7 +1123,7 @@ func createTablesInMoCatalogOfGeneralTenant(ctx context.Context, tenant *TenantI
 
 handleFailed:
 	//ROLLBACK the transaction
-	rbErr := bh.Exec(nil, "rollback;")
+	rbErr := bh.Exec(ctx, "rollback;")
 	if rbErr != nil {
 		return nil, rbErr
 	}
@@ -1144,7 +1140,7 @@ func createTablesInInformationSchemaOfGeneralTenant(ctx context.Context, tenant 
 	ctx = context.WithValue(ctx, moengine.RoleIDKey{}, uint32(newTenant.GetDefaultRoleID()))
 	bh := NewBackgroundHandler(ctx, guestMMu, pu.Mempool, pu)
 	defer bh.Close()
-	err := bh.Exec(nil, "create database information_schema;")
+	err := bh.Exec(ctx, "create database information_schema;")
 	if err != nil {
 		return err
 	}
@@ -1189,7 +1185,7 @@ func InitUser(ctx context.Context, tenant *TenantInfo, cu *tree.CreateUser) erro
 	if cu.Role != nil {
 		if strings.ToLower(cu.Role.UserName) != publicRoleName {
 			sqlForRoleIdOfRole := getSqlForRoleIdOfRole(cu.Role.UserName)
-			err = bh.Exec(nil, sqlForRoleIdOfRole)
+			err = bh.Exec(ctx, sqlForRoleIdOfRole)
 			if err != nil {
 				return err
 			}
@@ -1268,7 +1264,7 @@ func InitUser(ctx context.Context, tenant *TenantInfo, cu *tree.CreateUser) erro
 
 	//fill the mo_user
 	for _, sql := range initUserSqls {
-		err = bh.Exec(nil, sql)
+		err = bh.Exec(ctx, sql)
 		if err != nil {
 			goto handleFailed
 		}
@@ -1278,7 +1274,7 @@ func InitUser(ctx context.Context, tenant *TenantInfo, cu *tree.CreateUser) erro
 
 handleFailed:
 	//ROLLBACK the transaction
-	rbErr := bh.Exec(nil, "rollback;")
+	rbErr := bh.Exec(ctx, "rollback;")
 	if rbErr != nil {
 		return rbErr
 	}
@@ -1309,7 +1305,7 @@ func InitRole(ctx context.Context, tenant *TenantInfo, cr *tree.CreateRole) erro
 			exists = true
 		} else {
 			sqlForRoleIdOfRole := getSqlForRoleIdOfRole(r.UserName)
-			err = bh.Exec(nil, sqlForRoleIdOfRole)
+			err = bh.Exec(ctx, sqlForRoleIdOfRole)
 			if err != nil {
 				return err
 			}
@@ -1340,7 +1336,7 @@ func InitRole(ctx context.Context, tenant *TenantInfo, cr *tree.CreateRole) erro
 
 	//fill the mo_user
 	for _, sql := range initRoleSqls {
-		err = bh.Exec(nil, sql)
+		err = bh.Exec(ctx, sql)
 		if err != nil {
 			goto handleFailed
 		}
@@ -1350,7 +1346,7 @@ func InitRole(ctx context.Context, tenant *TenantInfo, cr *tree.CreateRole) erro
 
 handleFailed:
 	//ROLLBACK the transaction
-	rbErr := bh.Exec(nil, "rollback;")
+	rbErr := bh.Exec(ctx, "rollback;")
 	if rbErr != nil {
 		return rbErr
 	}
