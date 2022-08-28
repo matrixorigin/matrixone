@@ -178,10 +178,12 @@ jobs:
           done
           cat bvt_tmp.txt | sort -k 1 -k 2n >> coverage_report.txt
           zip -r code_quality_reports.zip ${{ env.bvt_html_coverage }} ${{ env.ut_html_coverage }} coverage_report.txt lint.out UT-Report.out
+
       - name: Generate Notice Content
         run: |
           echo "Today=$(date -d now +%Y-%m-%d)" >> $GITHUB_ENV
           echo "Url=${{ github.event.repository.html_url }}/actions/runs/${{ github.run_id }}" >> $GITHUB_ENV
+
       - name: WeChat Work notification
         id: notification
         uses: chf007/action-wechat-work@master
@@ -193,10 +195,10 @@ jobs:
           content: "<font color=\"warning\">Nightly Code Quality - ${{ env.Today }} </font>\nNumber of files failed static checks:<font color=\"warning\">${{ env.FAILED_FILES_NUM }}</font>\nUT Coverage Summary:<font color=\"warning\">${{ env.UT_CODE_COVERAGE }}</font>\nBVT Coverage Summary:<font color=\"warning\">${{ env.BVT_CODE_COVERAGE }}</font>\nGeneral Coverage Summary:<font color=\"warning\">${{ env.GENERAL_CODE_COVERAGE }}</font>\nFor details, please visit [Action Run](${{ env.Url }})\n"
 
       - uses: actions/upload-artifact@v2
-        if: ${{ always() }}
+        if: ${{ failure() }}
         continue-on-error: true
         with:
           name: test_reports
           path: |
-            ${{ github.workspace }}/matrixone/code_quality_reports.zip
+            ${{ github.workspace }}/matrixone
           retention-days: 7
