@@ -19,7 +19,6 @@ import (
 	"fmt"
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
@@ -54,9 +53,8 @@ type BlockState int8
 const (
 	BS_Appendable BlockState = iota
 	BS_NotAppendable
-	ES_Frozen
 )
-const Intervals = 5 * time.Microsecond
+const Intervals = 3 * 60 * 1000 * time.Millisecond
 
 type statBlock struct {
 	rows      uint32
@@ -291,18 +289,18 @@ func (blk *dataBlock) EstimateScore() int {
 			rows:      rows,
 			startTime: time.Now(),
 		}
-		return 0
+		return 1
 	}
 	if blk.score.rows != rows {
 		blk.score.rows = rows
 		blk.score.startTime = time.Now()
 	} else {
-		s := time.Since(blk.score.startTime).Microseconds()
+		s := time.Since(blk.score.startTime).Milliseconds()
 		if s > int64(Intervals) {
 			return 100
 		}
 	}
-	return 0
+	return 1
 }
 
 func (blk *dataBlock) BuildCompactionTaskFactory() (
@@ -319,7 +317,6 @@ func (blk *dataBlock) BuildCompactionTaskFactory() (
 		return
 	}
 	if blk.RefCount() > 0 {
-		logutil.Infof("blk.RefCount() > 0 : %d", blk.meta.ID)
 		return
 	}
 	factory = jobs.CompactBlockTaskFactory(blk.meta, blk.scheduler)

@@ -697,3 +697,43 @@ func TestMergeBlocks2(t *testing.T) {
 	t.Logf("PendingCnt: %d", tae.Wal.GetPenddingCnt())
 	tae.Close()
 }
+
+func TestCompaction1(t *testing.T) {
+	testutils.EnsureNoLeak(t)
+	db := initDB(t, nil)
+	defer db.Close()
+
+	schema := catalog.MockSchemaAll(4, 2)
+	schema.BlockMaxRows = 20
+	schema.SegmentMaxBlocks = 4
+	cnt := uint32(10)
+	rows := schema.BlockMaxRows / 2 * cnt
+	bat := catalog.MockBatch(schema, int(rows))
+	defer bat.Close()
+	bats := bat.Split(int(cnt))
+	{
+		txn, _ := db.StartTxn(nil)
+		database, _ := txn.CreateDatabase("db")
+		rel, _ := database.CreateRelation(schema)
+		err := rel.Append(bats[0])
+		assert.Nil(t, err)
+		assert.Nil(t, txn.Commit())
+	}
+	{
+		txn, _ := db.StartTxn(nil)
+		database, _ := txn.GetDatabase("db")
+		rel, _ := database.GetRelationByName(schema.Name)
+		it := rel.MakeBlockIt()
+		for it.Valid() {
+			blk := it.GetBlock()
+			view, _ := blk.GetColumnDataById(3, nil)
+			assert.NotNil(t, view)
+			defer view.Close()
+			if view.DeleteMask != nil {
+				t.Log(view.DeleteMask.String())
+			}
+			assert.True(t, blk.GetMeta().(*catalog.BlockEntry).GetBlockData().IsAppendable())
+			it.Next()
+		}
+	}
+}
