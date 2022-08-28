@@ -103,7 +103,10 @@ func (e *UpdateNode) IsSameTxn(startTs types.TS) bool {
 }
 
 func (e *UpdateNode) IsActive() bool {
-	return e.Txn != nil
+	if e.Txn == nil {
+		return false
+	}
+	return e.Txn.GetTxnState(false) == txnif.TxnStateActive
 }
 
 func (e *UpdateNode) IsCommitting() bool {
