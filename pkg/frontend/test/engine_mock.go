@@ -471,61 +471,75 @@ func (m *MockEngine) EXPECT() *MockEngineMockRecorder {
 }
 
 // Create mocks base method.
-func (m *MockEngine) Create(arg0 context.Context, arg1 string, arg2 client.TxnOperator) error {
+func (m *MockEngine) Create(ctx context.Context, databaseName string, op client.TxnOperator) error {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "Create", arg0, arg1, arg2)
+	ret := m.ctrl.Call(m, "Create", ctx, databaseName, op)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
 // Create indicates an expected call of Create.
-func (mr *MockEngineMockRecorder) Create(arg0, arg1, arg2 interface{}) *gomock.Call {
+func (mr *MockEngineMockRecorder) Create(ctx, databaseName, op interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Create", reflect.TypeOf((*MockEngine)(nil).Create), arg0, arg1, arg2)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Create", reflect.TypeOf((*MockEngine)(nil).Create), ctx, databaseName, op)
 }
 
 // Database mocks base method.
-func (m *MockEngine) Database(arg0 context.Context, arg1 string, arg2 client.TxnOperator) (engine.Database, error) {
+func (m *MockEngine) Database(ctx context.Context, databaseName string, op client.TxnOperator) (engine.Database, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "Database", arg0, arg1, arg2)
+	ret := m.ctrl.Call(m, "Database", ctx, databaseName, op)
 	ret0, _ := ret[0].(engine.Database)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // Database indicates an expected call of Database.
-func (mr *MockEngineMockRecorder) Database(arg0, arg1, arg2 interface{}) *gomock.Call {
+func (mr *MockEngineMockRecorder) Database(ctx, databaseName, op interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Database", reflect.TypeOf((*MockEngine)(nil).Database), arg0, arg1, arg2)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Database", reflect.TypeOf((*MockEngine)(nil).Database), ctx, databaseName, op)
 }
 
 // Databases mocks base method.
-func (m *MockEngine) Databases(arg0 context.Context, arg1 client.TxnOperator) ([]string, error) {
+func (m *MockEngine) Databases(ctx context.Context, op client.TxnOperator) ([]string, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "Databases", arg0, arg1)
+	ret := m.ctrl.Call(m, "Databases", ctx, op)
 	ret0, _ := ret[0].([]string)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // Databases indicates an expected call of Databases.
-func (mr *MockEngineMockRecorder) Databases(arg0, arg1 interface{}) *gomock.Call {
+func (mr *MockEngineMockRecorder) Databases(ctx, op interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Databases", reflect.TypeOf((*MockEngine)(nil).Databases), arg0, arg1)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Databases", reflect.TypeOf((*MockEngine)(nil).Databases), ctx, op)
 }
 
 // Delete mocks base method.
-func (m *MockEngine) Delete(arg0 context.Context, arg1 string, arg2 client.TxnOperator) error {
+func (m *MockEngine) Delete(ctx context.Context, databaseName string, op client.TxnOperator) error {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "Delete", arg0, arg1, arg2)
+	ret := m.ctrl.Call(m, "Delete", ctx, databaseName, op)
 	ret0, _ := ret[0].(error)
 	return ret0
 }
 
 // Delete indicates an expected call of Delete.
-func (mr *MockEngineMockRecorder) Delete(arg0, arg1, arg2 interface{}) *gomock.Call {
+func (mr *MockEngineMockRecorder) Delete(ctx, databaseName, op interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Delete", reflect.TypeOf((*MockEngine)(nil).Delete), arg0, arg1, arg2)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Delete", reflect.TypeOf((*MockEngine)(nil).Delete), ctx, databaseName, op)
+}
+
+// Hints mocks base method.
+func (m *MockEngine) Hints() engine.Hints {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "Hints")
+	ret0, _ := ret[0].(engine.Hints)
+	return ret0
+}
+
+// Hints indicates an expected call of Hints.
+func (mr *MockEngineMockRecorder) Hints() *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Hints", reflect.TypeOf((*MockEngine)(nil).Hints))
 }
 
 // Nodes mocks base method.
