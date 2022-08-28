@@ -24,32 +24,32 @@ import (
 
 func Debug(ctx context.Context, msg string, fields ...zap.Field) {
 	fields = append(fields, ContextField(ctx))
-	logutil.GetGlobalLogger().WithOptions(zap.AddCallerSkip(1)).Debug(msg, fields...)
+	logutil.GetSkip1Logger().Debug(msg, fields...)
 }
 
 func Info(ctx context.Context, msg string, fields ...zap.Field) {
 	fields = append(fields, ContextField(ctx))
-	logutil.GetGlobalLogger().WithOptions(zap.AddCallerSkip(1)).Info(msg, fields...)
+	logutil.GetSkip1Logger().Info(msg, fields...)
 }
 
 func Warn(ctx context.Context, msg string, fields ...zap.Field) {
 	fields = append(fields, ContextField(ctx))
-	logutil.GetGlobalLogger().WithOptions(zap.AddCallerSkip(1)).Warn(msg, fields...)
+	logutil.GetSkip1Logger().Warn(msg, fields...)
 }
 
 func Error(ctx context.Context, msg string, fields ...zap.Field) {
 	fields = append(fields, ContextField(ctx))
-	logutil.GetGlobalLogger().WithOptions(zap.AddCallerSkip(1)).Error(msg, fields...)
+	logutil.GetSkip1Logger().Error(msg, fields...)
 }
 
 func Panic(ctx context.Context, msg string, fields ...zap.Field) {
 	fields = append(fields, ContextField(ctx))
-	logutil.GetGlobalLogger().WithOptions(zap.AddCallerSkip(1)).Panic(msg, fields...)
+	logutil.GetSkip1Logger().Panic(msg, fields...)
 }
 
 func Fatal(ctx context.Context, msg string, fields ...zap.Field) {
 	fields = append(fields, ContextField(ctx))
-	logutil.GetGlobalLogger().WithOptions(zap.AddCallerSkip(1)).Fatal(msg, fields...)
+	logutil.GetSkip1Logger().Fatal(msg, fields...)
 }
 
 // Debugf only use in develop mode
@@ -81,11 +81,10 @@ func Warnf(ctx context.Context, msg string, fields ...interface{}) {
 
 // Errorf only use in develop mode
 func Errorf(ctx context.Context, msg string, fields ...interface{}) {
-	l := logutil.GetGlobalLogger().WithOptions(zap.AddCallerSkip(1), ContextFieldsOption(ctx), zap.AddStacktrace(zap.ErrorLevel))
 	if len(fields) == 0 {
-		l.Error(msg, ContextField(ctx))
+		logutil.GetErrorLogger().Error(msg, ContextField(ctx))
 	} else {
-		l.Error(fmt.Sprintf(msg, fields...), ContextField(ctx))
+		logutil.GetErrorLogger().Error(fmt.Sprintf(msg, fields...), ContextField(ctx))
 	}
 }
 
