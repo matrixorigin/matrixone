@@ -112,7 +112,8 @@ jobs:
         run: |
           cd $GITHUB_WORKSPACE/matrixone
           if  [ -d  "./store"  ]; then rm -rf ./store; fi
-          go test -c -tags service_test -covermode=count -coverpkg=./pkg/... ./cmd/mo-service/ -o service_test
+          go test -c -tags service_test -cover -covermode=count -coverpkg=./pkg/... ./cmd/mo-service/ -o service_test
+          cp ./etc/cn-standalone-test.toml ./mo.toml
           ./service_test -test.coverprofile=${{ env.raw_bvt_coverage }} &>service.log &
           
       - name: Start BVT Test
@@ -129,7 +130,7 @@ jobs:
         run: |
           cd $GITHUB_WORKSPACE/matrixone
           ps aux|grep 'service_test' | grep -v 'grep' | awk '{print $2}'
-          ps aux|grep 'service_test' | grep -v 'grep' | awk '{print $2}' | xargs kill
+          ps aux|grep 'TestMOService' | grep -v 'grep' | awk '{print $2}' | xargs kill -s SIGINT
           sleep 3
           cat ${{ env.raw_bvt_coverage }} | grep -v ${{ env.bvt_excluded_pkg }} > ${{ env.bvt_coverage }}
           echo "bvt_coverage finished"

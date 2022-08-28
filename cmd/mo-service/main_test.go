@@ -18,13 +18,9 @@
 package main
 
 import (
-	"os"
 	"testing"
 )
 
 func TestMOService(t *testing.T) {
-	os.Args = make([]string, 3)
-	os.Args[1] = "-cfg"
-	os.Args[2] = "./etc/cn-standalone-test.toml"
 	main()
 }
