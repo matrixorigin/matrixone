@@ -6844,8 +6844,7 @@ reserved_table_id:
 |   reserved_keyword
 
 reserved_keyword:
-    ACCOUNT
-|   ADD
+    ADD
 |   ALL
 |   AND
 |   AS
