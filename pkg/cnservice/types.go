@@ -16,9 +16,11 @@ package cnservice
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/config"
 	"sync"
+	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/config"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
@@ -26,7 +28,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/toml"
 
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
-	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"go.uber.org/zap"
 )
 
@@ -90,6 +91,19 @@ type Config struct {
 
 	// RPC rpc config used to build txn sender
 	RPC rpc.Config `toml:"rpc"`
+}
+
+func (c *Config) Validate() error {
+	if c.HAKeeper.DiscoveryTimeout.Duration == 0 {
+		c.HAKeeper.DiscoveryTimeout.Duration = time.Second * 30
+	}
+	if c.HAKeeper.HeatbeatDuration.Duration == 0 {
+		c.HAKeeper.HeatbeatDuration.Duration = time.Second
+	}
+	if c.HAKeeper.HeatbeatTimeout.Duration == 0 {
+		c.HAKeeper.HeatbeatTimeout.Duration = time.Millisecond * 500
+	}
+	return nil
 }
 
 type service struct {

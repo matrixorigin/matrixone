@@ -25,6 +25,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/entry"
 )
 
@@ -293,7 +294,7 @@ func (rf *rotateFile) commitFile() {
 		panic(err)
 	}
 	rf.Unlock()
-	fmt.Printf("Committed %s\n", f.Name())
+	logutil.Infof("Committed %s", f.Name())
 }
 
 func (rf *rotateFile) Sync() error {

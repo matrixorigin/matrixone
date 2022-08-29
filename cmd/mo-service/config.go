@@ -125,7 +125,7 @@ func (c *Config) createETLFileService(name string) (fileservice.FileService, err
 
 func (c *Config) getLogServiceConfig() logservice.Config {
 	cfg := c.LogService
-	fmt.Printf("hakeeper client cfg: %v", c.HAKeeperClient)
+	logutil.Infof("hakeeper client cfg: %v", c.HAKeeperClient)
 	cfg.HAKeeperClientConfig = c.HAKeeperClient
 	cfg.Frontend = c.getFrontendConfig()
 	cfg.ETLFSFactory = c.createETLFileService

@@ -15,7 +15,7 @@
 package compile
 
 import (
-	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
@@ -44,7 +44,7 @@ func PrintScope(prefix []byte, ss []*Scope) {
 			PrintScope(append(prefix, '\t'), s.PreScopes)
 		}
 		p := pipeline.NewMerge(s.Instructions, nil)
-		fmt.Printf("%s:%v %v\n", prefix, s.Magic, p)
+		logutil.Infof("%s:%v %v", prefix, s.Magic, p)
 	}
 }
 
@@ -165,8 +165,10 @@ func (s *Scope) JoinRun(c *Compile) error {
 	if mcpu < 1 {
 		mcpu = 1
 	}
-	chp := s.PreScopes[0]
-	chp.IsEnd = true
+	chp := s.PreScopes
+	for i := range chp {
+		chp[i].IsEnd = true
+	}
 	ss := make([]*Scope, mcpu)
 	for i := 0; i < mcpu; i++ {
 		ss[i] = &Scope{
@@ -177,7 +179,7 @@ func (s *Scope) JoinRun(c *Compile) error {
 	}
 	left, right := c.newLeftScope(s, ss), c.newRightScope(s, ss)
 	s = newParallelScope(c, s, ss)
-	s.PreScopes = append(s.PreScopes, chp)
+	s.PreScopes = append(s.PreScopes, chp...)
 	s.PreScopes = append(s.PreScopes, left)
 	s.PreScopes = append(s.PreScopes, right)
 	return s.MergeRun(c)

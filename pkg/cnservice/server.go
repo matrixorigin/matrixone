@@ -32,7 +32,6 @@ import (
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
-	txnengine "github.com/matrixorigin/matrixone/pkg/vm/engine/txn"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
 
 	"github.com/fagongzi/goetty/v2"
@@ -44,6 +43,10 @@ import (
 )
 
 func NewService(cfg *Config, ctx context.Context) (Service, error) {
+
+	if err := cfg.Validate(); err != nil {
+		return nil, err
+	}
 
 	srv := &service{cfg: cfg}
 	srv.logger = logutil.Adjust(srv.logger)
@@ -109,7 +112,7 @@ func (s *service) initMOServer(ctx context.Context, pu *config.ParameterUnit) er
 
 	pu.HostMmu = host.New(pu.SV.HostMmuLimitation)
 
-	fmt.Println("Initialize the engine ...")
+	logutil.Info("Initialize the engine ...")
 	err = s.initEngine(ctx, cancelMoServerCtx, pu)
 	if err != nil {
 		return err
@@ -136,26 +139,14 @@ func (s *service) initEngine(
 		}
 
 	case EngineDistributedTAE:
-		//TODO
+		if err := s.initDistributedTAE(cancelMoServerCtx, pu); err != nil {
+			return err
+		}
 
 	case EngineMemory:
-		client, err := s.getTxnClient()
-		if err != nil {
+		if err := s.initMemoryEngine(cancelMoServerCtx, pu); err != nil {
 			return err
 		}
-		pu.TxnClient = client
-		hakeeper, err := s.getHAKeeperClient()
-		if err != nil {
-			return err
-		}
-		pu.StorageEngine = txnengine.New(
-			ctx,
-			new(txnengine.ShardToSingleStatic), //TODO use hashing shard policy
-			txnengine.GetClusterDetailsFromHAKeeper(
-				ctx,
-				hakeeper,
-			),
-		)
 
 	default:
 		return fmt.Errorf("unknown engine type: %s", s.cfg.Engine.Type)

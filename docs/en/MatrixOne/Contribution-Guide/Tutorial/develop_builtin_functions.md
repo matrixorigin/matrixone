@@ -2,7 +2,7 @@
 
 ## **Prerequisite**
 
-To develop a built-in function for MatrixOne, you need a basic knowledge of Golang programming. You can go through this excellent [Golang tutorial](https://www.educative.io/blog/golang-tutorial) to learn some basic Golang concepts. 
+To develop a built-in function for MatrixOne, you need a basic knowledge of Golang programming. You can go through this excellent [Golang tutorial](https://www.educative.io/blog/golang-tutorial) to learn some basic Golang concepts.
 
 ## **Preparation**
 
@@ -11,7 +11,7 @@ Please refer to [Preparation](../How-to-Contribute/preparation.md) and [Contribu
 
 ## **What is a built-in function?**
 
-There are two types of functions in a database,  built-in functions  and user-defined functions. Built-in functions are functions that are shipped with the database. In contrast, user-defined functions are customized by the users. Built-in functions can be categorized according to the data types that they operate on i.e. strings, date and numeric built-in functions. 
+There are two types of functions in a database,  built-in functions  and user-defined functions. Built-in functions are functions that are shipped with the database. In contrast, user-defined functions are customized by the users. Built-in functions can be categorized according to the data types that they operate on i.e. strings, date and numeric built-in functions.
 
 An example of a built-in function is `abs()`, which calculates the absolute (non-negative) value of a given number.
 
@@ -45,7 +45,7 @@ const (
 
 In the directory `pkg/builtin/unary`, create a new go file `abs.go`.
 
-!!! info 
+!!! info
     The functions under `unary` directory take only one value as input. The functions under `binary` directory take only two values as input. Other forms of functions are put under `multi` directory.
 
 This `abs.go` file has the following functionalities:
@@ -184,11 +184,11 @@ func Get(proc *Process, size int64, typ types.Type) (*vector.Vector, error)
 
 since we need a float32 vector here, its size should be 4 * len(origVecCol), 4 bytes for each float32.
 
-2.encoding.DecodeFloat32Slice: this is just type casting. 
+2.encoding.DecodeFloat32Slice: this is just type casting.
 
 3.Vector.Nsp: MatrixOne uses bitmaps to store the NULL values in a column, Vector.Nsp is a wrap up struct for this bitmap.
 
-4.the boolean parameter of the Fn: this boolean value is usually used to indicate whether the vector passed in is a constant(it has length 1). Sometimes we could make use of this situation for our function implementation, for example, pkg/sql/colexec/extend/overload/plus.go. 
+4.the boolean parameter of the Fn: this boolean value is usually used to indicate whether the vector passed in is a constant(it has length 1). Sometimes we could make use of this situation for our function implementation, for example, pkg/sql/colexec/extend/overload/plus.go.
 
 Since the result vector has the same type as the original vector, we could use the original vector to store our result when we don't need our original vector anymore in our execution plan(i.e., the reference count of the original vector is 0 or 1).
 
@@ -327,7 +327,7 @@ func absFloat64(xs, rs []float64) []float64 {
 }
 ```
 
-Inside the absFloat32 and absFloat64, we implement our golang version of abs function for float32 and float64 type. The other data types (int8, int16, int32, int64) are more or less the same. 
+Inside the absFloat32 and absFloat64, we implement our golang version of abs function for float32 and float64 type. The other data types (int8, int16, int32, int64) are more or less the same.
 
 ```go
 func absFloat32(xs, rs []float32) []float32 {
@@ -357,32 +357,31 @@ Here we go. Now we can fire up MatrixOne and take our abs function for a little 
 
 ## **Compile and run MatrixOne**
 
-Once the function is ready, we could compile and run MatrixOne to see the function behavior. 
+Once the function is ready, we could compile and run MatrixOne to see the function behavior.
 
-Step1: Run `make config` and `make build` to compile the MatrixOne project and build binary file. 
+Step1: Run `make config` and `make build` to compile the MatrixOne project and build binary file.
 
 ```
-make config
 make build
-``` 
+```
 
-!!! info 
+!!! info
     `make config` generates a new configuration file, in this tutorial, you only need to run it once. If you modify some code and want to recompile, you only have to run `make build`.  
 
-Step2: Run `./mo-server system_vars_config.toml` to launch MatrixOne, the MatrixOne server will start to listen for client connecting. 
+Step2: Run `./mo-service -cfg ./etc/cn-standalone-test.toml` to launch MatrixOne, the MatrixOne server will start to listen for client connecting.
 
 ```
-./mo-server system_vars_config.toml
+./mo-service -cfg ./etc/cn-standalone-test.toml
 ```
 
-!!! info 
+!!! info
 	The logger print level of `system_vars_config.toml` is set to default as `DEBUG`, which will print a lot of information for you. If you only care about what your built-in function will print, you can modify the `system_vars_config.toml` and set `cubeLogLevel` and `level` to `ERROR` level.
-	
+
 	cubeLogLevel = "error"
-	
+
 	level = "error"
 
-!!! info 
+!!! info
 	Sometimes a `port is in use` error at port 50000 will occur. You could checkout what process in occupying port 50000 by `lsof -i:50000`. This command helps you to get the PIDNAME of this process, then you can kill the process by `kill -9 PIDNAME`.
 
 Step3: Connect to MatrixOne server with a MySQL client. Use the built-in test account for example:
@@ -395,7 +394,7 @@ mysql -h 127.0.0.1 -P 6001 -udump -p
 Enter password:
 ```
 
-Step4: Test your function behavior with some data. Below is an example. 
+Step4: Test your function behavior with some data. Below is an example.
 
 ```sql
 mysql> create table abs_test_table(a float, b double);
@@ -423,22 +422,22 @@ mysql> select a, b, abs(a), abs(b) from abs_test_table;
 
 Bingo!
 
-!!! info 
+!!! info
     Except for `abs()`, MatrixOne has already some neat examples for built-in functions, such as `floor()`, `round()`, `year()`. With some minor corresponding changes, the procedure is quite the same as other functions.
 ​
 
 ## **Write a unit Test for your function**
 
-We recommend that you also write a unit test for the new function. 
+We recommend that you also write a unit test for the new function.
 Go has a built-in testing command called `go test` and a package `testing` which combine to give a minimal but complete testing experience. It automates execution of any function of the form.
 
 ```
 func TestXxx(*testing.T)
 ```
 
-To write a new test suite, create a file whose name ends `_test.go` and contains the `TestXxx` functions as described here. Put the file in the same package as the one being tested. The file will be excluded from regular package builds but will be included when the `go test` command is run. 
+To write a new test suite, create a file whose name ends `_test.go` and contains the `TestXxx` functions as described here. Put the file in the same package as the one being tested. The file will be excluded from regular package builds but will be included when the `go test` command is run.
 
-Step1: Create a file named `abs_test.go` under `vectorize/abs/` directory. Import the `testing` framework and the `testify` framework we are going to use for testing mathematical `equal`. 
+Step1: Create a file named `abs_test.go` under `vectorize/abs/` directory. Import the `testing` framework and the `testify` framework we are going to use for testing mathematical `equal`.
 
 ```
 package abs
@@ -501,6 +500,6 @@ go test
 ```
 
 This picks up any files matching packagename_test.go.
-If you are getting a `PASS`, you are passing the unit test. 
+If you are getting a `PASS`, you are passing the unit test.
 
-In MatrixOne, we have a `bvt` test framework which will run all the unit tests defined in the whole package, and each time your code is merged in the code base, the test will automatically run. 
+In MatrixOne, we have a `bvt` test framework which will run all the unit tests defined in the whole package, and each time your code is merged in the code base, the test will automatically run.

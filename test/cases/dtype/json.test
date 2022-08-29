@@ -18,3 +18,19 @@ delete from t1 where b=2;
 select * from t1;
 delete from t1 where b=1;
 select * from t1;
+
+#Test cases of load and export
+drop table if exists t2;
+create table t2 (a json,b int);
+delete from t1;
+insert into t1 values ('{"t1":"a"}',1),('{"t1":"b"}',2);
+select * from t1 into outfile '/tmp/tmp_xadadwhfefef.csv' fields enclosed by '"' force_quote(a);
+load data infile '/tmp/tmp_xadadwhfefef.csv' into table t1 ignore 1 lines;
+load data infile '/tmp/tmp_xadadwhfefef.csv' into table t2 ignore 1 lines;
+select * from t1;
+select * from t2;
+select * from t1 into outfile '/tmp/tmp_daiufwihwidhqiwfhei.csv' fields terminated by '\t';
+load data local infile '/tmp/tmp_daiufwihwidhqiwfhei.csv' into table t1 fields terminated by '\t' ignore 1 lines;
+load data local infile '/tmp/tmp_daiufwihwidhqiwfhei.csv' into table t2 fields terminated by '\t' ignore 1 lines;
+select * from t1;
+select * from t2;

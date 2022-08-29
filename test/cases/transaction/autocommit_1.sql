@@ -258,6 +258,8 @@ SELECT @@session.autocommit;
 commit;
 
 show databases like 'test_xx';
+commit;
+drop database test_xx;
 
 
 -- Test explicit transaction rollback;
@@ -423,7 +425,7 @@ update view_t6 set a=100000 where b=3000;
 select * from view_t6;
 delete from view_t6 where a=10;
 select * from view_t6;
--- @bvt:issue#4598
+-- @bvt:issue
 
 drop database db;
 
