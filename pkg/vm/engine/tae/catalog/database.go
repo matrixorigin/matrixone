@@ -237,6 +237,14 @@ func (e *DBEntry) GetTableEntry(name string, txnCtx txnif.AsyncTxn) (entry *Tabl
 	return
 }
 
+// Catalog entry is dropped in following steps:
+// 1. Locate the record by timestamp
+// 2. Check conflication.
+	// 1. Wait for the related txn if need.
+	// 2. w-w conflict when 1. there's an active txn; or 
+	//                      2. the CommitTS of the latest related txn is larger than StartTS of write txn
+// 3. Check duplicate/not found. 
+	// If the entry has already been dropped, return ErrNotFound.
 func (e *DBEntry) DropTableEntry(name string, txnCtx txnif.AsyncTxn) (deleted *TableEntry, err error) {
 	dn, err := e.txnGetNodeByName(name, txnCtx)
 	if err != nil {
@@ -286,6 +294,16 @@ func (e *DBEntry) RemoveEntry(table *TableEntry) (err error) {
 	return
 }
 
+//Catalog entry is created in following steps:
+// 1. Locate the record. Creating always gets the latest DBEntry.
+// 2.1 If there doesn't exist a DBEntry, add new entry and return.
+// 2.2 If there exists a DBEntry:
+// 2.2.1 Check conflication.
+	// 1. Wait for the related txn if need.
+	// 2. w-w conflict when 1. there's an active txn; or 
+	//                      2. the CommitTS of the latest related txn is larger than StartTS of write txn
+// 2.2.2 Check duplicate/not found. 
+	// If the entry hasn't been dropped, return ErrDuplicate.
 func (e *DBEntry) AddEntryLocked(table *TableEntry, txn txnif.AsyncTxn) (err error) {
 	defer func() {
 		if err == nil {

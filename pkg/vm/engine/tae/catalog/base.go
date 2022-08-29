@@ -173,6 +173,9 @@ func (be *BaseEntry) DeleteLocked(txn txnif.TxnReader, impl INode) (node INode, 
 	return
 }
 
+// GetUpdateNode gets the latest UpdateNode. 
+// It is useful in making command, apply state(e.g. ApplyCommit),
+// check confilct.
 func (be *BaseEntry) GetUpdateNodeLocked() *UpdateNode {
 	head := be.MVCC.GetHead()
 	if head == nil {
@@ -186,6 +189,8 @@ func (be *BaseEntry) GetUpdateNodeLocked() *UpdateNode {
 	return entry
 }
 
+// GetCommittedNode gets the latest committed UpdateNode. 
+// It's useful when check whether the catalog/metadata entry is deleted.
 func (be *BaseEntry) GetCommittedNode() (node *UpdateNode) {
 	be.MVCC.Loop(func(n *common.DLNode) bool {
 		un := n.GetPayload().(*UpdateNode)
@@ -198,6 +203,9 @@ func (be *BaseEntry) GetCommittedNode() (node *UpdateNode) {
 	return
 }
 
+// GetNodeToRead gets UpdateNode according to the timestamp.
+// It returns the UpdateNode in the same txn as the read txn 
+// or returns the latest UpdateNode with commitTS less than the timestamp.
 func (be *BaseEntry) GetNodeToRead(startts types.TS) (node *UpdateNode) {
 	be.MVCC.Loop(func(n *common.DLNode) bool {
 		un := n.GetPayload().(*UpdateNode)
@@ -225,7 +233,8 @@ func (be *BaseEntry) DeleteBefore(ts types.TS) bool {
 	return createAt.Less(ts)
 }
 
-// for replay
+// GetExactUpdateNode gets the exact UpdateNode with the startTs. 
+// It's only used in replay
 func (be *BaseEntry) GetExactUpdateNode(startts types.TS) (node *UpdateNode) {
 	be.MVCC.Loop(func(n *common.DLNode) bool {
 		un := n.GetPayload().(*UpdateNode)
@@ -450,6 +459,7 @@ func (be *BaseEntry) CloneCreateEntry() *BaseEntry {
 	cloned.InsertNode(un)
 	return cloned
 }
+
 func (be *BaseEntry) DropEntryLocked(txnCtx txnif.TxnReader) error {
 	err := be.PrepareWrite(txnCtx)
 	if err != nil {
@@ -464,7 +474,10 @@ func (be *BaseEntry) DropEntryLocked(txnCtx txnif.TxnReader) error {
 	}
 	return nil
 }
-
+//In /Catalog, there're three states: Active, Committing and Committed. 
+//A txn is Active before its CommitTs is allocated. 
+//It's Committed when its state will never change, i.e. TxnStateCommitted and  TxnStateRollbacked.
+//It's Committing when it's in any other state, including TxnStateCommitting, TxnStateRollbacking, TxnStatePrepared and so on. When read or write an entry, if the last txn of the entry is Committing, we wait for it. When write on an Entry, if there's an Active txn, we report w-w conflict. 
 func (be *BaseEntry) IsCommitting() bool {
 	node := be.GetUpdateNodeLocked()
 	if node == nil {
@@ -473,6 +486,8 @@ func (be *BaseEntry) IsCommitting() bool {
 	return node.IsCommitting()
 }
 
+// For metadata, it becomes Committed at TxnStatePrepared in 2PC,
+// because metadata never rollbacks. 
 func (be *BaseEntry) IsMetadataCommitting() bool {
 	node := be.GetUpdateNodeLocked()
 	if node == nil {
