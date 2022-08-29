@@ -880,11 +880,10 @@ func TestCompaction3(t *testing.T) {
 			assert.NotNil(t, view)
 			view.Close()
 			assert.True(t, blk.GetMeta().(*catalog.BlockEntry).IsAppendable())
-			assert.True(t, blk.GetMeta().(*catalog.BlockEntry).GetBlockData().IsAppendable())
 			it.Next()
 		}
 	}
-	time.Sleep(200 * time.Millisecond)
+	time.Sleep(400 * time.Millisecond)
 	{
 		txn, _ := db.StartTxn(nil)
 		database, _ := txn.GetDatabase("db")

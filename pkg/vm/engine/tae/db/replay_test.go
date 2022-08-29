@@ -524,13 +524,6 @@ func TestReplay2(t *testing.T) {
 	assert.Nil(t, err)
 	rel, err = db.GetRelationByName(schema.Name)
 	assert.Nil(t, err)
-	blkIterator = rel.MakeBlockIt()
-	for blkIterator.Valid() {
-		blk := blkIterator.GetBlock()
-		blkdata := blk.GetMeta().(*catalog.BlockEntry).GetBlockData()
-		blkdata.Flush()
-		blkIterator.Next()
-	}
 	err = tae3.Catalog.Checkpoint(txn.GetStartTS())
 	assert.Nil(t, err)
 	assert.Nil(t, txn.Commit())
@@ -643,13 +636,6 @@ func TestReplay3(t *testing.T) {
 	assert.NoError(t, txn.Commit())
 
 	txn, rel = tae.getRelation()
-	blkIterator := rel.MakeBlockIt()
-	for blkIterator.Valid() {
-		blk := blkIterator.GetBlock()
-		blkdata := blk.GetMeta().(*catalog.BlockEntry).GetBlockData()
-		blkdata.Flush()
-		blkIterator.Next()
-	}
 	err = tae.Catalog.Checkpoint(txn.GetStartTS())
 	assert.NoError(t, err)
 	assert.NoError(t, txn.Commit())
@@ -726,13 +712,6 @@ func TestReplayTableRows(t *testing.T) {
 	assert.Nil(t, err)
 	tbl, err = db.GetRelationByName(schema.Name)
 	assert.Nil(t, err)
-	blkIterator = tbl.MakeBlockIt()
-	for blkIterator.Valid() {
-		blk := blkIterator.GetBlock()
-		blkdata := blk.GetMeta().(*catalog.BlockEntry).GetBlockData()
-		blkdata.Flush()
-		blkIterator.Next()
-	}
 	err = tae2.Catalog.Checkpoint(txn.GetStartTS())
 	assert.Nil(t, err)
 	assert.Nil(t, txn.Commit())

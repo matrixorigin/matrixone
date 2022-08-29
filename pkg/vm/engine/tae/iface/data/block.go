@@ -96,6 +96,5 @@ type Block interface {
 	FlushColumnDataClosure(ts types.TS, colIdx int, colData containers.Vector, sync bool) tasks.FuncT
 	Destroy() error
 	ReplayIndex() error
-	Flush()
 	Close()
 }

@@ -381,10 +381,6 @@ func (blk *dataBlock) GetRowsOnReplay() uint64 {
 	return fileRows
 }
 
-// for test
-func (blk *dataBlock) Flush() {
-	blk.node.OnUnload()
-}
 func (blk *dataBlock) PPString(level common.PPLevel, depth int, prefix string) string {
 	s := fmt.Sprintf("%s | [Rows=%d]", blk.meta.PPString(level, depth, prefix), blk.Rows(nil, true))
 	if level >= common.PPL1 {

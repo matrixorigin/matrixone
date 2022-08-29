@@ -95,18 +95,18 @@ func (seg *localSegment) registerInsertNode() {
 
 func (seg *localSegment) ApplyAppend() (err error) {
 	var destOff int
+	// Close the remaining unclosed Appends
+	defer seg.CloseAppends()
 	for _, ctx := range seg.appends {
 		bat, _ := ctx.node.Window(ctx.start, ctx.start+ctx.count)
 		defer bat.Close()
 		if destOff, err = ctx.driver.ApplyAppend(
 			bat,
 			seg.table.store.txn); err != nil {
-			ctx.driver.Close()
 			return
 		}
 		id := ctx.driver.GetID()
 		ctx.node.AddApplyInfo(ctx.start, ctx.count, uint32(destOff), ctx.count, seg.table.entry.GetDB().ID, id)
-		ctx.driver.Close()
 	}
 	if seg.tableHandle != nil {
 		seg.table.entry.GetTableData().ApplyHandle(seg.tableHandle)
@@ -117,6 +117,8 @@ func (seg *localSegment) ApplyAppend() (err error) {
 func (seg *localSegment) PrepareApply() (err error) {
 	for _, node := range seg.nodes {
 		if err = seg.prepareApplyNode(node); err != nil {
+			// Close All unclosed Appends
+			seg.CloseAppends()
 			break
 		}
 	}
@@ -153,7 +155,6 @@ func (seg *localSegment) prepareApplyNode(node InsertNode) (err error) {
 			node.RowsWithoutDeletes()-appended,
 			seg.table.store.txn)
 		if err != nil {
-			appender.Close()
 			return err
 		}
 		toAppendWithDeletes := node.LengthWithDeletes(appended, toAppend)
@@ -178,6 +179,12 @@ func (seg *localSegment) prepareApplyNode(node InsertNode) (err error) {
 		}
 	}
 	return
+}
+
+func (seg *localSegment) CloseAppends() {
+	for _, ctx := range seg.appends {
+		ctx.driver.Close()
+	}
 }
 
 func (seg *localSegment) Append(data *containers.Batch) (err error) {

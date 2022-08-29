@@ -19,7 +19,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/file"
@@ -29,7 +28,6 @@ import (
 )
 
 type appendableNode struct {
-	file      file.Block
 	block     *dataBlock
 	data      *containers.Batch
 	rows      uint32
@@ -40,8 +38,19 @@ func newNode(mgr base.INodeManager, block *dataBlock, file file.Block) *appendab
 	impl := new(appendableNode)
 	impl.exception = new(atomic.Value)
 	impl.block = block
-	impl.file = file
 	impl.rows = file.ReadRows()
+	var err error
+	schema := block.meta.GetSchema()
+	opts := new(containers.Options)
+	opts.Capacity = int(schema.BlockMaxRows)
+	opts.Allocator = ImmutMemAllocator
+	if impl.data, err = file.LoadBatch(
+		schema.AllTypes(),
+		schema.AllNames(),
+		schema.AllNullables(),
+		opts); err != nil {
+		panic(err)
+	}
 	return impl
 }
 
@@ -81,9 +90,6 @@ func (node *appendableNode) GetColumnDataCopy(
 		return
 	}
 	node.block.RLock()
-	if node.data == nil {
-		node.OnLoad()
-	}
 	if buffer != nil {
 		win := node.data.Vecs[colIdx]
 		if maxRow < uint32(node.data.Vecs[colIdx].Length()) {
@@ -95,37 +101,6 @@ func (node *appendableNode) GetColumnDataCopy(
 	}
 	node.block.RUnlock()
 	return
-}
-
-func (node *appendableNode) OnLoad() {
-	if exception := node.exception.Load(); exception != nil {
-		logutil.Error("[Exception]", common.ExceptionField(exception))
-		return
-	}
-	var err error
-	schema := node.block.meta.GetSchema()
-	opts := new(containers.Options)
-	opts.Capacity = int(schema.BlockMaxRows)
-	opts.Allocator = ImmutMemAllocator
-	if node.data, err = node.file.LoadBatch(
-		schema.AllTypes(),
-		schema.AllNames(),
-		schema.AllNullables(),
-		opts); err != nil {
-		node.exception.Store(err)
-	}
-	if node.data.Length() != int(node.rows) {
-		logutil.Fatalf("Load %d rows but %d expected: %s", node.data.Length(), node.rows, node.block.meta.String())
-	}
-}
-
-func (node *appendableNode) OnUnload() {
-	if exception := node.exception.Load(); exception != nil {
-		logutil.Errorf("%v", exception)
-		return
-	}
-	node.data.Close()
-	node.data = nil
 }
 
 func (node *appendableNode) Close() (err error) {
@@ -175,9 +150,6 @@ func (node *appendableNode) ApplyAppend(bat *containers.Batch, txn txnif.AsyncTx
 		return
 	}
 	schema := node.block.meta.GetSchema()
-	if node.data == nil {
-		node.OnLoad()
-	}
 	from = int(node.rows)
 	for srcPos, attr := range bat.Attrs {
 		def := schema.ColDefs[schema.GetColIdx(attr)]
