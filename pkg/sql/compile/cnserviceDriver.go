@@ -171,7 +171,7 @@ func (s *Scope) remoteRun(c *Compile) error {
 	return nil
 }
 
-var _ = Scope.remoteRun
+var _ = new(Scope).remoteRun
 
 // encodeScope generate a pipeline.Pipeline from Scope, encode pipeline, and returns.
 func encodeScope(s *Scope) ([]byte, error) {
