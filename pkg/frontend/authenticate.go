@@ -91,11 +91,11 @@ func (ti *TenantInfo) IsMoAdminRole() bool {
 }
 
 func GetDefaultTenant() string {
-	return "sys"
+	return sysAccountName
 }
 
 func GetDefaultRole() string {
-	return "public"
+	return moAdminRoleName
 }
 
 //GetTenantInfo extract tenant info from the input of the user.
