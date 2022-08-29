@@ -173,11 +173,6 @@ func (entry *SegmentEntry) GetTable() *TableEntry {
 	return entry.table
 }
 
-func (entry *SegmentEntry) Compare(o common.NodePayload) int {
-	oe := o.(*SegmentEntry).BaseEntry
-	return entry.DoCompre(oe)
-}
-
 func (entry *SegmentEntry) GetAppendableBlockCnt() int {
 	cnt := 0
 	it := entry.MakeBlockIt(true)

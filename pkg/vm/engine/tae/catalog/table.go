@@ -196,11 +196,6 @@ func (entry *TableEntry) GetFullName() string {
 	return entry.fullName
 }
 
-func (entry *TableEntry) Compare(o common.NodePayload) int {
-	oe := o.(*TableEntry).BaseEntry
-	return entry.DoCompre(oe)
-}
-
 func (entry *TableEntry) GetDB() *DBEntry {
 	return entry.db
 }

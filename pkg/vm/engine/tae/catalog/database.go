@@ -152,11 +152,6 @@ func (e *DBEntry) CoarseTableCnt() int {
 	return len(e.entries)
 }
 
-func (e *DBEntry) Compare(o common.NodePayload) int {
-	oe := o.(*DBEntry).BaseEntry
-	return e.DoCompre(oe)
-}
-
 func (e *DBEntry) GetTenantID() uint32          { return e.acInfo.TenantID }
 func (e *DBEntry) GetUserID() uint32            { return e.acInfo.UserID }
 func (e *DBEntry) GetRoleID() uint32            { return e.acInfo.RoleID }

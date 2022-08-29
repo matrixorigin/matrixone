@@ -96,11 +96,6 @@ func (entry *BlockEntry) MakeCommand(id uint32) (cmd txnif.TxnCmd, err error) {
 	return newBlockCmd(id, cmdType, entry), nil
 }
 
-func (entry *BlockEntry) Compare(o common.NodePayload) int {
-	oe := o.(*BlockEntry).BaseEntry
-	return entry.DoCompre(oe)
-}
-
 func (entry *BlockEntry) PPString(level common.PPLevel, depth int, prefix string) string {
 	s := fmt.Sprintf("%s%s%s", common.RepeatStr("\t", depth), prefix, entry.StringLocked())
 	return s
