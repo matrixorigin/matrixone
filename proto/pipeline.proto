@@ -30,11 +30,17 @@ message Message {
     uint64  cmd = 2;
     bytes   code = 3;
     bytes   data = 4;
+    bytes   analyse = 5;
+}
+
+message Connector {
+    int32 pipeline_id = 1;
+    int32 connector_index = 2;
 }
 
 message Dispatch {
     bool all = 1;
-    repeated int32 children = 2;
+    repeated Connector connector = 2;
 }
 
 message Aggregate {
@@ -52,12 +58,25 @@ message Group {
     repeated Aggregate  aggs = 6;
 }
 
+message Join {
+    uint64 ibucket = 1;
+    uint64 nbucket = 2;
+    repeated int32 rel_list = 3;
+    repeated int32 col_list = 4;
+    plan.Expr  expr = 5;
+    repeated plan.Type  types = 6;
+    repeated plan.Expr left_cond = 7;
+    repeated plan.Expr right_cond = 8;
+}
+
 message AntiJoin{
     uint64 ibucket = 1;
     uint64 nbucket = 2;
     repeated int32 result = 3;
-    repeated plan.Expr left_cond = 4;
-    repeated plan.Expr right_cond = 5;
+    plan.Expr  expr = 4;
+    repeated plan.Type  types = 5;
+    repeated plan.Expr left_cond = 6;
+    repeated plan.Expr right_cond = 7;
 }
 
 message InnerJoin {
@@ -65,8 +84,10 @@ message InnerJoin {
     uint64 nbucket = 2;
     repeated int32 rel_list = 3;
     repeated int32 col_list = 4;
-    repeated plan.Expr left_cond = 5;
-    repeated plan.Expr right_cond = 6;
+    plan.Expr  expr = 5;
+    repeated plan.Type  types = 6;
+    repeated plan.Expr left_cond = 7;
+    repeated plan.Expr right_cond = 8;
 }
 
 message LeftJoin {
@@ -74,17 +95,20 @@ message LeftJoin {
     uint64 nbucket = 2;
     repeated int32 rel_list = 3;
     repeated int32 col_list = 4;
-    repeated plan.Type  types = 5;
-    repeated plan.Expr left_cond = 6;
-    repeated plan.Expr right_cond = 7;
+    plan.Expr  expr = 5;
+    repeated plan.Type  types = 6;
+    repeated plan.Expr left_cond = 7;
+    repeated plan.Expr right_cond = 8;
 }
 
 message SemiJoin {
     uint64 ibucket = 1;
     uint64 nbucket = 2;
     repeated int32 result = 3;
-    repeated plan.Expr left_cond = 4;
-    repeated plan.Expr right_cond = 5;
+    plan.Expr  expr = 4;
+    repeated plan.Type  types = 5;
+    repeated plan.Expr left_cond = 6;
+    repeated plan.Expr right_cond = 7;
 }
 
 message SingleJoin {
@@ -92,14 +116,31 @@ message SingleJoin {
     uint64 nbucket = 2;
     repeated int32 rel_list = 3;
     repeated int32 col_list = 4;
-    repeated plan.Type  types = 5;
-    repeated plan.Expr left_cond = 6;
-    repeated plan.Expr right_cond = 7;
+    plan.Expr  expr = 5;
+    repeated plan.Type  types = 6;
+    repeated plan.Expr left_cond = 7;
+    repeated plan.Expr right_cond = 8;
+}
+
+message MarkJoin {
+    uint64 ibucket = 1;
+    uint64 nbucket = 2;
+    repeated int32 result = 3;
+    repeated plan.Expr left_cond = 4;
+    repeated plan.Expr right_cond = 5;
+    repeated plan.Type types = 6;
+    plan.Expr cond = 7;
+    repeated plan.Expr on_list = 8;
+    bool output_null = 9;
+    bool output_mark = 10;
+    bool output_anyway = 11;
+    bool mark_meaning = 12;
 }
 
 message Product {
     repeated int32 rel_list = 1;
     repeated int32 col_list = 2;
+    repeated plan.Type  types = 3;
 }
 
 message Instruction{
@@ -108,18 +149,25 @@ message Instruction{
     // Idx specified the anaylze information index.
     int32 idx = 2;
     AntiJoin  anti = 3;
-    Dispatch  dispatch = 4;
-    Group     agg = 5;
-    InnerJoin inner_join = 6;
-    LeftJoin  left_join = 7;
-    SemiJoin  semi_join = 8;
-    SingleJoin single_join = 9;
-    Product    product = 10;
-	repeated plan.OrderBySpec order_by = 11;
-    repeated plan.Expr    project_list = 12;
-    plan.Expr    filter = 13;
-    uint64    limit = 14;
-    uint64    offset = 15;
+    Connector   connect = 4;
+    Dispatch  dispatch = 5;
+    Group     agg = 6;
+    InnerJoin inner_join = 7;
+    LeftJoin  left_join = 8;
+    SemiJoin  semi_join = 9;
+    SingleJoin single_join = 10;
+    MarkJoin    mark_join = 11;
+    Join    join = 12;
+    Product    product = 13;
+	  repeated plan.OrderBySpec order_by = 14;
+    repeated plan.Expr    project_list = 15;
+    plan.Expr    filter = 16;
+    uint64    limit = 17;
+    uint64    offset = 18;
+}
+
+message AnalysisList {
+    repeated plan.AnalyzeInfo list = 1;
 }
 
 message Source {
@@ -127,6 +175,8 @@ message Source {
     string table_name = 2;
     repeated string col_list = 3;
     string    block = 4;
+    uint64    pushdown_id = 5;
+    string    pushdown_addr = 6;
 }
 
 message NodeInfo {
@@ -152,6 +202,8 @@ message Pipeline {
     repeated Instruction instruction_list = 6;
 
     bool is_end = 7;
-    NodeInfo node = 8;
-    int32 push_down_info = 9;
+    bool is_join = 8;
+    NodeInfo node = 9;
+    int32 push_down_info = 10;
+    int32 children_count = 11;
 }
