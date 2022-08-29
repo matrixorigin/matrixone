@@ -19,7 +19,7 @@ type AlterUser struct {
 	IfExists bool
 	Users    []*User
 	Role     *Role
-	MiscOpts []UserMiscOption
+	MiscOpt  UserMiscOption
 	// comment or attribute
 	CommentOrAttribute AccountCommentOrAttribute
 }
@@ -41,23 +41,20 @@ func (node *AlterUser) Format(ctx *FmtCtx) {
 		ctx.WriteString(" default role ")
 		node.Role.Format(ctx)
 	}
-	if node.MiscOpts != nil {
+	if node.MiscOpt != nil {
 		prefix := " "
-		for _, u := range node.MiscOpts {
-			ctx.WriteString(prefix)
-			u.Format(ctx)
-			prefix = " "
-		}
+		ctx.WriteString(prefix)
+		node.MiscOpt.Format(ctx)
 	}
 	node.CommentOrAttribute.Format(ctx)
 }
 
-func NewAlterUser(ife bool, u []*User, r *Role, m []UserMiscOption) *AlterUser {
+func NewAlterUser(ife bool, u []*User, r *Role, m UserMiscOption) *AlterUser {
 	return &AlterUser{
 		IfExists: ife,
 		Users:    u,
 		Role:     r,
-		MiscOpts: m,
+		MiscOpt:  m,
 	}
 }
 

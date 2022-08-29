@@ -109,11 +109,11 @@ func (l *LocalFS) Name() string {
 }
 
 func (l *LocalFS) Write(ctx context.Context, vector IOVector) error {
-	_, path, err := splitPath(l.name, vector.FilePath)
+	path, err := ParsePathAtService(vector.FilePath, l.name)
 	if err != nil {
 		return err
 	}
-	nativePath := l.toNativeFilePath(path)
+	nativePath := l.toNativeFilePath(path.File)
 
 	// check existence
 	_, err = os.Stat(nativePath)
@@ -126,11 +126,11 @@ func (l *LocalFS) Write(ctx context.Context, vector IOVector) error {
 }
 
 func (l *LocalFS) write(ctx context.Context, vector IOVector) error {
-	_, path, err := splitPath(l.name, vector.FilePath)
+	path, err := ParsePathAtService(vector.FilePath, l.name)
 	if err != nil {
 		return err
 	}
-	nativePath := l.toNativeFilePath(path)
+	nativePath := l.toNativeFilePath(path.File)
 
 	// sort
 	sort.Slice(vector.Entries, func(i, j int) bool {
@@ -206,11 +206,11 @@ func (l *LocalFS) Read(ctx context.Context, vector *IOVector) error {
 
 func (l *LocalFS) read(ctx context.Context, vector *IOVector) error {
 
-	_, path, err := splitPath(l.name, vector.FilePath)
+	path, err := ParsePathAtService(vector.FilePath, l.name)
 	if err != nil {
 		return err
 	}
-	nativePath := l.toNativeFilePath(path)
+	nativePath := l.toNativeFilePath(path.File)
 
 	file, err := os.Open(nativePath)
 	if os.IsNotExist(err) {
@@ -363,11 +363,11 @@ func (l *LocalFS) read(ctx context.Context, vector *IOVector) error {
 
 func (l *LocalFS) List(ctx context.Context, dirPath string) (ret []DirEntry, err error) {
 
-	_, path, err := splitPath(l.name, dirPath)
+	path, err := ParsePathAtService(dirPath, l.name)
 	if err != nil {
 		return nil, err
 	}
-	nativePath := l.toNativeFilePath(path)
+	nativePath := l.toNativeFilePath(path.File)
 
 	f, err := os.Open(nativePath)
 	if os.IsNotExist(err) {
@@ -408,11 +408,11 @@ func (l *LocalFS) List(ctx context.Context, dirPath string) (ret []DirEntry, err
 }
 
 func (l *LocalFS) Delete(ctx context.Context, filePath string) error {
-	_, path, err := splitPath(l.name, filePath)
+	path, err := ParsePathAtService(filePath, l.name)
 	if err != nil {
 		return err
 	}
-	nativePath := l.toNativeFilePath(path)
+	nativePath := l.toNativeFilePath(path.File)
 
 	_, err = os.Stat(nativePath)
 	if os.IsNotExist(err) {
@@ -515,11 +515,11 @@ func (l *LocalFS) toNativeFilePath(filePath string) string {
 var _ MutableFileService = new(LocalFS)
 
 func (l *LocalFS) NewMutator(filePath string) (Mutator, error) {
-	_, path, err := splitPath(l.name, filePath)
+	path, err := ParsePathAtService(filePath, l.name)
 	if err != nil {
 		return nil, err
 	}
-	nativePath := l.toNativeFilePath(path)
+	nativePath := l.toNativeFilePath(path.File)
 	f, err := os.OpenFile(nativePath, os.O_RDWR, 0644)
 	if os.IsNotExist(err) {
 		return nil, ErrFileNotFound
