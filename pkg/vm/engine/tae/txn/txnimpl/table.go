@@ -92,7 +92,7 @@ func (tbl *txnTable) WaitSynced() {
 }
 
 func (tbl *txnTable) CollectCmd(cmdMgr *commandManager) (err error) {
-	tbl.csnStart = uint32(cmdMgr.GetCSN())
+	tbl.csnStart = cmdMgr.GetCSN()
 	for i, txnEntry := range tbl.txnEntries {
 		if tbl.createEntry != nil && tbl.dropEntry != nil && i == tbl.createIdx {
 			txnEntry = txnEntry.(*catalog.TableEntry).CloneCreateEntry()
@@ -112,6 +112,10 @@ func (tbl *txnTable) CollectCmd(cmdMgr *commandManager) (err error) {
 		if err = tbl.localSegment.CollectCmd(cmdMgr); err != nil {
 			return
 		}
+	}
+	// table add some commands, set it changed
+	if cmdMgr.GetCSN() > tbl.csnStart {
+		cmdMgr.SetTableChanged(tbl.GetID())
 	}
 	return
 }

@@ -16,6 +16,7 @@ package txnimpl
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
@@ -23,30 +24,42 @@ import (
 )
 
 type commandManager struct {
-	cmd    *txnbase.ComposedCmd
-	lsn    uint64
-	csn    uint32
-	driver wal.Driver
+	cmd         *txnbase.ComposedCmd // record all commands happened in a txn
+	catalogCmds []txnif.TxnCmd       // record creata/drop db/table commands in a txn
+	lsn         uint64               // lsn will be set when flush to wal.Driver
+	csn         uint32               // how many commands
+	driver      wal.Driver           // logstore driver
+	changedTbls map[uint64]struct{}  // changed tables id set
 }
 
 func newCommandManager(driver wal.Driver) *commandManager {
 	return &commandManager{
-		cmd:    txnbase.NewComposedCmd(),
-		driver: driver,
+		cmd:         txnbase.NewComposedCmd(),
+		driver:      driver,
+		changedTbls: make(map[uint64]struct{}),
+		catalogCmds: make([]txnif.TxnCmd, 0),
 	}
+}
+
+// AddInternalCmd accpets splitted CmdAppend type command if a Append operation contains too much data
+func (mgr *commandManager) AddInternalCmd(cmd txnif.TxnCmd) {
+	mgr.cmd.AddCmd(cmd)
+}
+
+func (mgr *commandManager) AddCmd(cmd txnif.TxnCmd) {
+	if typ := cmd.GetType(); typ == catalog.CmdUpdateDatabase || typ == catalog.CmdUpdateTable {
+		mgr.catalogCmds = append(mgr.catalogCmds, cmd)
+	}
+	mgr.cmd.AddCmd(cmd)
+	mgr.csn++
 }
 
 func (mgr *commandManager) GetCSN() uint32 {
 	return mgr.csn
 }
 
-func (mgr *commandManager) AddInternalCmd(cmd txnif.TxnCmd) {
-	mgr.cmd.AddCmd(cmd)
-}
-
-func (mgr *commandManager) AddCmd(cmd txnif.TxnCmd) {
-	mgr.cmd.AddCmd(cmd)
-	mgr.csn++
+func (mgr *commandManager) SetTableChanged(tblID uint64) {
+	mgr.changedTbls[tblID] = struct{}{}
 }
 
 func (mgr *commandManager) MakeLogIndex(csn uint32) *wal.Index {

@@ -512,3 +512,22 @@ func (store *txnStore) PrepareRollback() error {
 }
 
 func (store *txnStore) GetLSN() uint64 { return store.cmdMgr.lsn }
+
+func (store *txnStore) IsTableChanged(tblID uint64) (answer bool) {
+	_, answer = store.cmdMgr.changedTbls[tblID]
+	return
+}
+
+func (store *txnStore) IsCatalogChanged() (answer bool) {
+	return len(store.cmdMgr.catalogCmds) > 0
+}
+
+// For now, GetTableChangeCmds returns all commands happened in the txn, it may contains commands for other tables,
+// so consumer should filter them out.
+func (store *txnStore) GetTableChangeCmds(_ uint64) []txnif.TxnCmd {
+	return store.cmdMgr.cmd.Cmds
+}
+
+func (store *txnStore) GetCatalogChangeCmds() []txnif.TxnCmd {
+	return store.cmdMgr.catalogCmds
+}

@@ -91,3 +91,8 @@ func (store *NoopTxnStore) LogTxnEntry(dbId, tableId uint64, entry txnif.TxnEntr
 
 func (store *NoopTxnStore) IsReadonly() bool      { return false }
 func (store *NoopTxnStore) IncreateWriteCnt() int { return 0 }
+
+func (store *NoopTxnStore) IsTableChanged(tblID uint64) bool               { return false }
+func (store *NoopTxnStore) GetTableChangeCmds(tblID uint64) []txnif.TxnCmd { return nil }
+func (store *NoopTxnStore) IsCatalogChanged() bool                         { return false }
+func (store *NoopTxnStore) GetCatalogChangeCmds() []txnif.TxnCmd           { return nil }

@@ -226,6 +226,15 @@ type TxnStore interface {
 
 	IsReadonly() bool
 	IncreateWriteCnt() int
+
+	// IsTableChanged tells if this txn modified the assigned table.
+	IsTableChanged(tblID uint64) bool
+	// GetTableChangeCmds fetches the commands that modified the assigned table.
+	GetTableChangeCmds(tblID uint64) []TxnCmd
+	// IsCatalogChanged tells if this txn created/dropped databases/tables.
+	IsCatalogChanged() bool
+	// GetCatalogChangeCmds fetches the commands that created/dropped databases/tables.
+	GetCatalogChangeCmds() []TxnCmd
 }
 
 type TxnEntryType int16
