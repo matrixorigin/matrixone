@@ -18,12 +18,8 @@ import (
 	"context"
 	"errors"
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
-	"github.com/matrixorigin/matrixone/pkg/common/morpc"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/intersectall"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mark"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/output"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
@@ -35,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/intersect"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/intersectall"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/join"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/left"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/limit"
@@ -43,6 +40,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopleft"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopsemi"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopsingle"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mark"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergegroup"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergelimit"
@@ -63,7 +61,8 @@ import (
 )
 
 // PipelineMessageHandle deal the message that received at cn-server.
-// return an extra data and error info if error occurs.
+// the message is always *pipeline.Message here. It's a byte array which encoded by method encodeScope.
+// return an extra data (in this case, extra data is Analysis Information) and error info if error occurs.
 func PipelineMessageHandle(ctx context.Context, message morpc.Message, cs morpc.ClientSession) ([]byte, error) {
 	m := message.(*pipeline.Message)
 	s, err := decodeScope(m.GetData(), nil)
@@ -95,7 +94,11 @@ func PipelineMessageHandle(ctx context.Context, message morpc.Message, cs morpc.
 	return nil, nil
 }
 
-// remoteRun will send a scope to another node, run it at remote, and wait to receive the back message.
+// remoteRun sends a scope to a remote node for execution, and wait to receive the back message.
+// the back message is always *pipeline.Message but has three cases.
+// 1. ErrMessage
+// 2. End Message with the result of analysis
+// 3. Batch Message
 func (s *Scope) remoteRun(c *Compile) error {
 	// encode the scope
 	sData, errEncode := encodeScope(s)
@@ -151,6 +154,7 @@ func (s *Scope) remoteRun(c *Compile) error {
 	return nil
 }
 
+// encodeScope generate a pipeline.Pipeline from Scope, encode pipeline, and returns.
 func encodeScope(s *Scope) ([]byte, error) {
 	p, err := fillPipeline(s)
 	if err != nil {
@@ -159,6 +163,7 @@ func encodeScope(s *Scope) ([]byte, error) {
 	return p.Marshal()
 }
 
+// decodeScope decode a pipeline.Pipeline from bytes, and generate a Scope from it.
 func decodeScope(data []byte, proc *process.Process) (*Scope, error) {
 	// unmarshal to pipeline
 	p := &pipeline.Pipeline{}
@@ -179,19 +184,9 @@ func decodeScope(data []byte, proc *process.Process) (*Scope, error) {
 	return s, fillInstructionsForScope(s, ctx, p)
 }
 
-func refactorScope(ctx context.Context, s *Scope, cs morpc.ClientSession) {
+func refactorScope(_ context.Context, _ *Scope, _ morpc.ClientSession) {
 	// refactor the scope
-	s.Instructions[len(s.Instructions)-1] = vm.Instruction{
-		Op: vm.Output,
-		Arg: &output.Argument{
-			// TODO: need fill.
-			Data: nil,
-			Func: func(i interface{}, b *batch.Batch) error {
-				msg := &pipeline.Message{}
-				return cs.Write(ctx, msg)
-			},
-		},
-	}
+	return
 }
 
 // fillPipeline convert the scope to pipeline.Pipeline structure through 2 iterations.
@@ -298,7 +293,7 @@ func fillInstructionsForPipeline(s *Scope, ctx *scopeContext, p *pipeline.Pipeli
 	return ctxId, nil
 }
 
-// generateScope generate a scope according to scope context and pipeline.
+// generateScope generate a scope from scope context and pipeline.
 func generateScope(proc *process.Process, p *pipeline.Pipeline, ctx *scopeContext, analNodes []*process.AnalyzeInfo) (*Scope, error) {
 	var err error
 
@@ -784,8 +779,9 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext) (vm.In
 	return v, nil
 }
 
+// newCompile init a new compile for remote run.
 func newCompile(ctx context.Context) *Compile {
-	// TODO: fill method should send by stream
+	// not implement now, fill method should send by stream
 	c := &Compile{
 		ctx: ctx,
 	}
@@ -815,6 +811,7 @@ func mergeAnalyseInfo(target *anaylze, ana *pipeline.AnalysisList) {
 	}
 }
 
+// convert []types.Type to []*plan.Type
 func convertToPlanTypes(ts []types.Type) []*plan.Type {
 	result := make([]*plan.Type, len(ts))
 	for i, t := range ts {
@@ -829,6 +826,7 @@ func convertToPlanTypes(ts []types.Type) []*plan.Type {
 	return result
 }
 
+// convert []*plan.Type to []types.Type
 func convertToTypes(ts []*plan.Type) []types.Type {
 	result := make([]types.Type, len(ts))
 	for i, t := range ts {
@@ -843,6 +841,7 @@ func convertToTypes(ts []*plan.Type) []types.Type {
 	return result
 }
 
+// convert []aggregate.Aggregate to []*pipeline.Aggregate
 func convertToPipelineAggregates(ags []aggregate.Aggregate) []*pipeline.Aggregate {
 	result := make([]*pipeline.Aggregate, len(ags))
 	for i, a := range ags {
@@ -855,6 +854,7 @@ func convertToPipelineAggregates(ags []aggregate.Aggregate) []*pipeline.Aggregat
 	return result
 }
 
+// convert []*pipeline.Aggregate to []aggregate.Aggregate
 func convertToAggregates(ags []*pipeline.Aggregate) []aggregate.Aggregate {
 	result := make([]aggregate.Aggregate, len(ags))
 	for i, a := range ags {
@@ -867,6 +867,7 @@ func convertToAggregates(ags []*pipeline.Aggregate) []aggregate.Aggregate {
 	return result
 }
 
+// convert []colexec.Field to []*plan.OrderBySpec
 func convertToPlanOrderByList(field []colexec.Field) []*plan.OrderBySpec {
 	// default order direction is ASC.
 	convToPlanOrderFlag := func(source colexec.Direction) plan.OrderBySpec_OrderByFlag {
@@ -886,6 +887,7 @@ func convertToPlanOrderByList(field []colexec.Field) []*plan.OrderBySpec {
 	return res
 }
 
+// convert []*plan.OrderBySpec to []colexec.Field
 func convertToColExecField(list []*plan.OrderBySpec) []colexec.Field {
 	convToColExecDirection := func(source plan.OrderBySpec_OrderByFlag) colexec.Direction {
 		if source == plan.OrderBySpec_ASC {
@@ -901,6 +903,7 @@ func convertToColExecField(list []*plan.OrderBySpec) []colexec.Field {
 	return res
 }
 
+// get relation list and column list from []colexec.ResultPos
 func getRelColList(resultPos []colexec.ResultPos) (relList []int32, colList []int32) {
 	relList = make([]int32, len(resultPos))
 	colList = make([]int32, len(resultPos))
@@ -910,6 +913,7 @@ func getRelColList(resultPos []colexec.ResultPos) (relList []int32, colList []in
 	return
 }
 
+// generate []colexec.ResultPos from relation list and column list
 func convertToResultPos(relList, colList []int32) []colexec.ResultPos {
 	res := make([]colexec.ResultPos, len(relList))
 	for i := range res {
@@ -1004,20 +1008,20 @@ func (ctx *scopeContext) isDescendant(dsc *scopeContext) bool {
 	return false
 }
 
-func (root *scopeContext) isRemote(ctx *scopeContext, depth int) bool {
-	if ctx.scope.Magic != Remote {
+func (ctx *scopeContext) isRemote(targetContext *scopeContext, depth int) bool {
+	if targetContext.scope.Magic != Remote {
 		return false
 	}
-	if root.id == ctx.id && depth == 0 {
+	if ctx.id == targetContext.id && depth == 0 {
 		return true
 	}
-	for i := range root.children {
-		if root.children[i].scope.Magic == Remote {
-			if root.children[i].isRemote(ctx, depth+1) {
+	for i := range ctx.children {
+		if ctx.children[i].scope.Magic == Remote {
+			if ctx.children[i].isRemote(targetContext, depth+1) {
 				return true
 			}
 		} else {
-			if root.children[i].isRemote(ctx, depth) {
+			if ctx.children[i].isRemote(targetContext, depth) {
 				return true
 			}
 		}
