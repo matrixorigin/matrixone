@@ -43,6 +43,7 @@
     |    3 | wederTom  | man  |
     +------+-----------+------+
     ```
+    
 3. 导出表数据到 *~/tmp/docker_export_demo/store/export_datatable.txt*
 
     ```
