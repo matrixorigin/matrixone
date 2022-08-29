@@ -21,17 +21,41 @@ import (
 
 const ServiceNameSeparator = ":"
 
-func splitPath(serviceName string, path string) (string, string, error) {
-	parts := strings.SplitN(path, ServiceNameSeparator, 2)
-	if len(parts) == 2 {
-		if serviceName != "" &&
-			parts[0] != "" &&
-			!strings.EqualFold(parts[0], serviceName) {
-			return "", "", fmt.Errorf("wrong file service name, expecting %s, got %s", serviceName, parts[0])
-		}
-		return parts[0], parts[1], nil
+type Path struct {
+	Full    string
+	Service string
+	File    string
+}
+
+func ParsePath(s string) (path Path, err error) {
+	parts := strings.SplitN(s, ServiceNameSeparator, 2)
+	switch len(parts) {
+	case 1:
+		// no service
+		path.File = parts[0]
+	case 2:
+		// with service
+		path.Service = parts[0]
+		path.File = parts[1]
+	default:
+		panic("impossible")
 	}
-	return "", parts[0], nil
+	path.Full = joinPath(path.Service, path.File)
+	return
+}
+
+func ParsePathAtService(s string, serviceName string) (path Path, err error) {
+	path, err = ParsePath(s)
+	if err != nil {
+		return
+	}
+	if serviceName != "" &&
+		path.Service != "" &&
+		!strings.EqualFold(path.Service, serviceName) {
+		err = fmt.Errorf("wrong file service name, expecting %s, got %s", serviceName, path.Service)
+		return
+	}
+	return
 }
 
 func joinPath(serviceName string, path string) string {
