@@ -110,10 +110,10 @@ func BuildPlan(ctx CompilerContext, stmt tree.Statement) (*Plan, error) {
 		return buildDeallocate(stmt, ctx)
 	case *tree.Load:
 		return buildLoad(stmt, ctx)
-	case tree.Prepare: //Prepare is an interface
+	case *tree.PrepareStmt, *tree.PrepareString:
 		return buildPrepare(stmt, ctx)
 	default:
-		return nil, errors.New(errno.SQLStatementNotYetComplete, fmt.Sprintf("unexpected statement: '%v'", tree.String(stmt, dialect.MYSQL)))
+		return nil, errors.New(errno.SQLStatementNotYetComplete, fmt.Sprintf("unsupported statement: '%v'", tree.String(stmt, dialect.MYSQL)))
 	}
 }
 

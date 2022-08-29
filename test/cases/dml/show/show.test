@@ -23,3 +23,8 @@ show tables from test01;
 -- @label:bvt
 show columns from t1;
 drop database if exists test01;
+
+-- @case
+-- @desc:test for show charset
+-- @label:bvt
+show charset;
