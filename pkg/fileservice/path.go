@@ -19,13 +19,25 @@ import (
 	"strings"
 )
 
+const ServiceNameSeparator = ":"
+
 func splitPath(serviceName string, path string) (string, string, error) {
-	parts := strings.SplitN(path, ":", 2)
+	parts := strings.SplitN(path, ServiceNameSeparator, 2)
 	if len(parts) == 2 {
-		if serviceName != "" && parts[0] != "" && parts[0] != serviceName {
+		if serviceName != "" &&
+			parts[0] != "" &&
+			!strings.EqualFold(parts[0], serviceName) {
 			return "", "", fmt.Errorf("wrong file service name, expecting %s, got %s", serviceName, parts[0])
 		}
 		return parts[0], parts[1], nil
 	}
 	return "", parts[0], nil
+}
+
+func joinPath(serviceName string, path string) string {
+	buf := new(strings.Builder)
+	buf.WriteString(serviceName)
+	buf.WriteString(ServiceNameSeparator)
+	buf.WriteString(path)
+	return buf.String()
 }

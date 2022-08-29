@@ -134,7 +134,7 @@ func startLogService(cfg *Config, stopper *stopper.Stopper) error {
 	}
 	return stopper.RunNamedTask("log-service", func(ctx context.Context) {
 		if cfg.LogService.BootstrapConfig.BootstrapCluster {
-			fmt.Printf("bootstrapping hakeeper...\n")
+			logutil.Infof("bootstrapping hakeeper...")
 			if err := s.BootstrapHAKeeper(ctx, cfg.LogService); err != nil {
 				panic(err)
 			}

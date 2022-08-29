@@ -16,7 +16,7 @@ package cnservice
 
 import (
 	"context"
-	"fmt"
+
 	"os"
 	"syscall"
 
@@ -56,7 +56,7 @@ func initTAE(
 	if err != nil {
 		return err
 	}
-	fmt.Println("Initialize the engine Done")
+	logutil.Info("Initialize the engine Done")
 
 	return nil
 }

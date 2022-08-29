@@ -35,6 +35,37 @@ func TestHandleRead(t *testing.T) {
 	})
 }
 
+func TestHandleReadWithRetry(t *testing.T) {
+	runDNStoreTest(t, func(s *store) {
+		req := service.NewTestReadRequest(1, service.NewTestTxn(1, 1, 1), 1)
+		req.CNRequest.Target.ReplicaID = 2
+		req.Options = &txn.TxnRequestOptions{
+			RetryCodes: []txn.ErrorCode{txn.ErrorCode_DNShardNotFound},
+		}
+		go func() {
+			time.Sleep(time.Second)
+			shard := newTestDNShard(1, 2, 3)
+			assert.NoError(t, s.StartDNReplica(shard))
+		}()
+		assert.NoError(t, s.handleRead(context.Background(), &req, &txn.TxnResponse{}))
+	})
+}
+
+func TestHandleReadWithRetryWithTimeout(t *testing.T) {
+	runDNStoreTest(t, func(s *store) {
+		req := service.NewTestReadRequest(1, service.NewTestTxn(1, 1, 1), 1)
+		req.CNRequest.Target.ReplicaID = 2
+		req.Options = &txn.TxnRequestOptions{
+			RetryCodes: []txn.ErrorCode{txn.ErrorCode_DNShardNotFound},
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		resp := &txn.TxnResponse{}
+		assert.NoError(t, s.handleRead(ctx, &req, resp))
+		assert.Equal(t, txn.ErrorCode_DNShardNotFound, resp.TxnError.Code)
+	})
+}
+
 func TestHandleWrite(t *testing.T) {
 	runDNStoreTest(t, func(s *store) {
 		shard := newTestDNShard(1, 2, 3)

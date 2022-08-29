@@ -278,7 +278,7 @@ import (
 %token <str> FORMAT VERBOSE CONNECTION
 
 // Load
-%token <str> LOAD INFILE TERMINATED OPTIONALLY ENCLOSED ESCAPED STARTING LINES
+%token <str> LOAD INFILE TERMINATED OPTIONALLY ENCLOSED ESCAPED STARTING LINES ROWS
 
 // Supported SHOW tokens
 %token <str> DATABASES TABLES EXTENDED FULL PROCESSLIST FIELDS COLUMNS OPEN ERRORS WARNINGS INDEXES SCHEMAS
@@ -751,6 +751,10 @@ ignore_lines:
         $$ = 0
     }
 |   IGNORE INTEGRAL LINES
+    {
+        $$ = $2.(int64)
+    }
+|   IGNORE INTEGRAL ROWS
     {
         $$ = $2.(int64)
     }
@@ -6819,8 +6823,7 @@ reserved_table_id:
 |   reserved_keyword
 
 reserved_keyword:
-    ACCOUNT
-|   ADD
+    ADD
 |   ALL
 |   AND
 |   AS
@@ -6946,6 +6949,7 @@ reserved_keyword:
 |   ESCAPED
 |   STARTING
 |   LINES
+|   ROWS
 |   INT1
 |   INT2
 |   INT3
@@ -6982,7 +6986,8 @@ reserved_keyword:
 |   SECONDARY
 
 non_reserved_keyword:
-    AGAINST
+    ACCOUNT
+|   AGAINST
 |   AVG_ROW_LENGTH
 |   AUTO_RANDOM
 |   ACTION

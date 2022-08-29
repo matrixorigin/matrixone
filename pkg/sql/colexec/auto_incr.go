@@ -29,7 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-var AUTO_INCR_TABLE = "mo_increment_columns"
+var AUTO_INCR_TABLE = "%!%mo_increment_columns"
 var AUTO_INCR_TABLE_COLNAME []string = []string{"name", "offset", "step", "PADDR"}
 
 type AutoIncrParam struct {
@@ -49,7 +49,6 @@ func UpdateInsertBatch(e engine.Engine, db engine.Database, ctx context.Context,
 		proc:    proc,
 		colDefs: ColDefs,
 	}
-	fmt.Println("wangjian sql is", db)
 
 	offset, step, err := GetRangeFromAutoIncrTable(incrParam, bat, tableID)
 	if err != nil {
@@ -77,7 +76,7 @@ func UpdateInsertValueBatch(e engine.Engine, ctx context.Context, proc *process.
 }
 
 func GetRangeFromAutoIncrTable(param *AutoIncrParam, bat *batch.Batch, tableID uint64) ([]int64, []int64, error) {
-	var offset, step []int64
+	offset, step := make([]int64, 0), make([]int64, 0)
 	var err error
 	for i, col := range param.colDefs {
 		if !col.AutoIncrement {
@@ -117,17 +116,6 @@ func GetOneColRangeFromAutoIncrTable(param *AutoIncrParam, bat *batch.Batch, nam
 	}
 
 	vec := bat.Vecs[pos]
-	nullNum := int64(nulls.Length(vec.Nsp))
-	if nullNum == int64(bat.Length()) {
-		if err := UpdateAutoIncrTable(param, oriNum+nullNum, name); err != nil {
-			if err2 := txnCtx.Rollback(); err2 != nil {
-				return 0, 0, err2
-			}
-			return 0, 0, err
-		}
-		return oriNum, step, nil
-	}
-
 	maxNum := oriNum
 	switch vec.Typ.Oid {
 	case types.T_int32:

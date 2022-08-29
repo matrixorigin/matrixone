@@ -8,6 +8,10 @@ on:
 
   workflow_dispatch:
 
+concurrency: 
+  group: ${{ github.event.pull_request.head.repo.full_name}}/${{ github.event.pull_request.head.ref }}/${{ github.workflow }}
+  cancel-in-progress: true
+
 jobs:
 
   ut-linux-x86:
@@ -28,7 +32,7 @@ jobs:
           make ut
 
       - uses: actions/upload-artifact@v2
-        if: ${{ always() }}
+        if: ${{ failure() }}
         continue-on-error: true
         with:
           name: ut_linux_x86_reports
@@ -54,7 +58,7 @@ jobs:
           make ut
 
       - uses: actions/upload-artifact@v2
-        if: ${{ always() }}
+        if: ${{ failure() }}
         continue-on-error: true
         with:
           name: ut_darwin_x86_reports
@@ -80,7 +84,7 @@ jobs:
           make ut
 
       - uses: actions/upload-artifact@v2
-        if: ${{ always() }}
+        if: ${{ failure() }}
         continue-on-error: true
         with:
           name: ut_linux_arm_reports
@@ -138,12 +142,11 @@ jobs:
           ./run.sh -n -g -p $GITHUB_WORKSPACE/head/test/cases 2>&1
 
       - name: Check mo-service Status
-        if: ${{ always() }}
+        if: ${{ always() && !cancelled() }}
         run: |
           if [ "$(ps -ef | grep 'mo-service' | grep -v "grep" | wc -l)" -gt 0 ]; then pkill -9 mo-service; else echo 'current mo-service has already crashed'; exit 1; fi
         
       - name: remove some files
-        if: ${{ always() }}
         continue-on-error: true
         run: |
           cd $GITHUB_WORKSPACE
@@ -152,7 +155,7 @@ jobs:
           rm -rf ./mo-tester/lib
 
       - uses: actions/upload-artifact@v2
-        if: ${{ always() }}
+        if: ${{ failure() }}
         continue-on-error: true
         with:
           name: linux_x86_ci_reports
@@ -210,12 +213,11 @@ jobs:
           ./run.sh -n -g -p $GITHUB_WORKSPACE/head/test/cases 2>&1
 
       - name: Check mo-service Status
-        if: ${{ always() }}
+        if: ${{ always() && !cancelled() }}
         run: |
           if [ "$(ps -ef | grep 'mo-service' | grep -v "grep" | wc -l)" -gt 0 ]; then pkill -9 mo-service; else echo 'current mo-service has already crashed'; exit 1; fi
         
       - name: remove some files
-        if: ${{ always() }}
         continue-on-error: true
         run: |
           cd $GITHUB_WORKSPACE
@@ -224,7 +226,7 @@ jobs:
           rm -rf ./mo-tester/lib
 
       - uses: actions/upload-artifact@v2
-        if: ${{ always() }}
+        if: ${{ failure() }}
         continue-on-error: true
         with:
           name: ci_linux_arm_reports
@@ -280,12 +282,11 @@ jobs:
           ./run.sh -n -g -p $GITHUB_WORKSPACE/head/test/cases 2>&1
 
       - name: Check MO-Service Status
-        if: ${{ always() }}
+        if: ${{ always() && !cancelled() }}
         run: |
           if [ "$(ps -ef | grep 'mo-service' | grep -v "grep" | wc -l)" -gt 0 ]; then pkill -9 mo-service; else echo 'current mo-service has already crashed'; exit 1; fi
         
       - name: remove some files
-        if: ${{ always() }}
         continue-on-error: true
         run: |
           cd $GITHUB_WORKSPACE
@@ -294,7 +295,7 @@ jobs:
           rm -rf ./mo-tester/lib
 
       - uses: actions/upload-artifact@v2
-        if: ${{ always() }}
+        if: ${{ failure() }}
         continue-on-error: true
         with:
           name: ci_darwin_x86_reports
@@ -329,6 +330,4 @@ jobs:
         run: |
           cd $GITHUB_WORKSPACE
           make static-check
-          
-      
           
