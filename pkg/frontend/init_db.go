@@ -921,15 +921,15 @@ func isWantedTable(ctx context.Context, db engine.Database, txnOperator TxnOpera
 	for i := 0; i < schema.Length(); i++ {
 		fieldNames[i] = schema.GetAttribute(i).GetName()
 	}
-	fmt.Printf("\nTable:%s \n\nAttributes:\n%v \n\n", tableName, fieldNames)
-	fmt.Printf("Datas:\n\n")
+	logutil.Infof("\nTable:%s \n\nAttributes:\n%v \n", tableName, fieldNames)
+	logutil.Infof("Datas:\n")
 	result, err := readers[0].Read(fieldNames, nil, mheap.New(guest.New(1<<20, host.New(1<<20))))
 	if err != nil {
 		return err
 	}
 	for i := 0; i < vector.Length(result.Vecs[0]); i++ {
 		line := FormatLineInBatch(result, i)
-		fmt.Println(line)
+		logutil.Infof("%v", line)
 	}
 	return nil
 }

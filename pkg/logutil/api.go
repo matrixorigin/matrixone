@@ -15,62 +15,67 @@
 package logutil
 
 import (
+	"fmt"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 )
 
 func Debug(msg string, fields ...zap.Field) {
-	GetGlobalLogger().WithOptions(zap.AddCallerSkip(1)).Debug(msg, fields...)
+	GetSkip1Logger().Debug(msg, fields...)
 }
 
 func Info(msg string, fields ...zap.Field) {
-	GetGlobalLogger().WithOptions(zap.AddCallerSkip(1)).Info(msg, fields...)
+	GetSkip1Logger().Info(msg, fields...)
 }
 
 func Warn(msg string, fields ...zap.Field) {
-	GetGlobalLogger().WithOptions(zap.AddCallerSkip(1)).Warn(msg, fields...)
+	GetSkip1Logger().Warn(msg, fields...)
 }
 
 func Error(msg string, fields ...zap.Field) {
-	GetGlobalLogger().WithOptions(zap.AddCallerSkip(1)).Error(msg, fields...)
+	GetSkip1Logger().Error(msg, fields...)
 }
 
 func Panic(msg string, fields ...zap.Field) {
-	GetGlobalLogger().WithOptions(zap.AddCallerSkip(1)).Panic(msg, fields...)
+	GetSkip1Logger().Panic(msg, fields...)
 }
 
 func Fatal(msg string, fields ...zap.Field) {
-	GetGlobalLogger().WithOptions(zap.AddCallerSkip(1)).Fatal(msg, fields...)
+	GetSkip1Logger().Fatal(msg, fields...)
 }
 
 // Debugf only use in develop mode
 func Debugf(msg string, fields ...interface{}) {
-	GetGlobalLogger().WithOptions(zap.AddCallerSkip(1)).Sugar().Debugf(msg, fields...)
+	GetSkip1Logger().Debug(fmt.Sprintf(msg, fields...))
 }
 
 // Infof only use in develop mode
 func Infof(msg string, fields ...interface{}) {
-	GetGlobalLogger().WithOptions(zap.AddCallerSkip(1)).Sugar().Infof(msg, fields...)
+	GetSkip1Logger().Info(fmt.Sprintf(msg, fields...))
 }
 
 // Warnf only use in develop mode
 func Warnf(msg string, fields ...interface{}) {
-	GetGlobalLogger().WithOptions(zap.AddCallerSkip(1)).Sugar().Warnf(msg, fields...)
+	GetSkip1Logger().Warn(fmt.Sprintf(msg, fields...))
 }
 
 // Errorf only use in develop mode
 func Errorf(msg string, fields ...interface{}) {
-	GetGlobalLogger().WithOptions(zap.AddCallerSkip(1), zap.AddStacktrace(zap.ErrorLevel)).Sugar().Errorf(msg, fields...)
+	if len(fields) == 0 {
+		GetErrorLogger().Error(msg)
+	} else {
+		GetErrorLogger().Error(fmt.Sprintf(msg, fields...))
+	}
 }
 
 // Panicf only use in develop mode
 func Panicf(msg string, fields ...interface{}) {
-	GetGlobalLogger().WithOptions(zap.AddCallerSkip(1)).Sugar().Panicf(msg, fields...)
+	GetSkip1Logger().Panic(fmt.Sprintf(msg, fields...))
 }
 
 // Fatalf only use in develop mode
 func Fatalf(msg string, fields ...interface{}) {
-	GetGlobalLogger().WithOptions(zap.AddCallerSkip(1)).Sugar().Fatalf(msg, fields...)
+	GetSkip1Logger().Fatal(fmt.Sprintf(msg, fields...))
 }
 
 // TODO: uncomment the function when changing log level at runtime is required
