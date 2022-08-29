@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/errors"
 
 	"github.com/google/gops/agent"
+	"github.com/prashantv/gostub"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap/zapcore"
 )
@@ -100,7 +101,8 @@ func (s *numBuffer) IsEmpty() bool {
 func (s *numBuffer) ShouldFlush() bool {
 	s.mux.Lock()
 	defer s.mux.Unlock()
-	return len(s.arr) >= 3
+	length := len(s.arr)
+	return length >= 3
 }
 func (s *numBuffer) GetBatch(buf *bytes.Buffer) any {
 	s.mux.Lock()
@@ -264,4 +266,81 @@ func TestNewMOCollector(t *testing.T) {
 		got = <-ch
 		t.Logf("left ch: %s", got)
 	}
+}
+
+func TestMOCollector_HangBug(t *testing.T) {
+	ch := make(chan string, 3)
+	errors.SetErrorReporter(func(ctx context.Context, err error, i int) {
+		t.Logf("TestNewMOCollector::ErrorReport: %+v", err)
+	})
+
+	timeo := 30 * time.Second
+
+	// prepare signalFunc
+	var signalC = make(chan struct{}, 16)
+	var acceptSignal = func() { <-signalC }
+	_stubSignalFunc := gostub.Stub(&signalFunc, func() { signalC <- struct{}{} })
+	defer _stubSignalFunc.Reset()
+	// prepare awakeBuffer
+	var ctrlC = make(chan *bufferHolder, 1)
+	var ctrlTimer = time.NewTimer(timeo)
+	var ctrlTimeoutCnt = 0
+	_stubAwakeBuffer := gostub.Stub(&awakeBuffer, func(c *MOCollector) func(holder *bufferHolder) {
+		return func(holder *bufferHolder) {
+			//c.awakeGenerate <- holder
+			select {
+			case ctrlC <- holder:
+			case <-ctrlTimer.C:
+				ctrlTimeoutCnt += 1
+				ctrlTimer = time.NewTimer(timeo)
+			}
+		}
+	})
+	defer _stubAwakeBuffer.Reset()
+
+	// init Collector, with disabled-trigger
+	Register(newNum(0), &dummyNumPipeImpl{ch: ch, duration: time.Hour})
+	collector := NewMOCollector()
+	collector.Start()
+
+	t.Logf("fill up the buffer")
+	collector.Collect(DefaultContext(), newNum(1))
+	acceptSignal()
+	collector.Collect(DefaultContext(), newNum(2))
+	acceptSignal()
+	t.Logf("trigger ShouldFlush calling")
+	collector.Collect(DefaultContext(), newNum(3))
+	acceptSignal()
+	// fill up the collect channel(awakeCollect) ==> fill up the Batch channel(awakeGenerate)
+	collector.Collect(DefaultContext(), newNum(4))
+	acceptSignal()
+	collector.Collect(DefaultContext(), newNum(5))
+	acceptSignal()
+	collector.Collect(DefaultContext(), newNum(6))
+	t.Logf("length collect channel: %d", len(collector.awakeCollect))
+	t.Logf("length generate channel: %d", len(ctrlC))
+	require.Equal(t, 1, len(collector.awakeCollect))
+	require.Equal(t, 1, len(ctrlC))
+	t.Logf("if Hang, caused by accept one generate req and lock itself")
+
+	timer := time.NewTimer(2 * timeo)
+	buf := new(bytes.Buffer)
+	var jobs = 0
+loop:
+	for {
+		select {
+		case holder := <-ctrlC:
+			holder.StopAndGetBatch(buf)
+			jobs++
+			t.Logf("job done count: %d, timeoutCnt: %d", jobs, ctrlTimeoutCnt)
+			if jobs > 1 && ctrlTimeoutCnt == 0 {
+				break loop
+			}
+		case <-timer.C:
+			require.Equal(t, 0, len(collector.awakeGenerate), "meet timeout, means dead lock")
+			require.Equal(t, 0, ctrlTimeoutCnt, "meet timeout, means dead lock")
+			break loop
+		}
+	}
+
 }

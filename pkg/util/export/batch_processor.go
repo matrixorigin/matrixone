@@ -91,8 +91,8 @@ func (b *bufferHolder) Add(item batchpipe.HasName) {
 		time.Sleep(time.Millisecond)
 		b.mux.RLock()
 	}
-	defer b.mux.RUnlock()
 	b.buffer.Add(item)
+	b.mux.RUnlock()
 	if b.buffer.ShouldFlush() {
 		b.signal(b)
 	}
@@ -254,7 +254,7 @@ loop:
 	logutil.Debugf("doCollect %dth: Done.", idx)
 }
 
-func awakeBuffer(c *MOCollector) func(holder *bufferHolder) {
+var awakeBuffer = func(c *MOCollector) func(holder *bufferHolder) {
 	return func(holder *bufferHolder) {
 		c.awakeGenerate <- holder
 	}
