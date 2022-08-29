@@ -459,16 +459,12 @@ var (
 		"system_metrics":     0,
 	}
 	sysWantedTables = map[string]int8{
-		"mo_database":         0,
-		"mo_tables":           0,
-		"mo_columns":          0,
-		"mo_user":             0,
-		"mo_account":          0,
-		"mo_role":             0,
-		"mo_user_grant":       0,
-		"mo_role_grant":       0,
-		"mo_role_priv":        0,
-		"mo_global_variables": 0,
+		"mo_user":       0,
+		"mo_account":    0,
+		"mo_role":       0,
+		"mo_user_grant": 0,
+		"mo_role_grant": 0,
+		"mo_role_priv":  0,
 	}
 	//the sqls creating many tables for the tenant.
 	//Wrap them in a transaction
@@ -527,10 +523,6 @@ var (
 				granted_time timestamp,
 				with_grant_option bool
 			);`,
-		`create table mo_global_variables(
-    			gv_variable_name varchar(256),
-    			gv_variable_value varchar(1024)
-    		);`,
 	}
 
 	initMoAccountFormat = `insert into mo_catalog.mo_account(
@@ -733,16 +725,6 @@ func checkSysExistsOrNot(ctx context.Context, pu *config.ParameterUnit) (bool, e
 		dbNames = append(dbNames, dbName)
 	}
 
-	for _, name := range dbNames {
-		if _, ok := sysWantedDatabases[name]; !ok {
-			return false, moerr.NewInternalError(fmt.Sprintf("sys tenant does not have the database %s", name))
-		}
-	}
-
-	if len(dbNames) != len(sysWantedDatabases) {
-		return false, nil
-	}
-
 	bh.ClearExecResultSet()
 
 	sql := "show tables from mo_catalog;"
@@ -770,17 +752,14 @@ func checkSysExistsOrNot(ctx context.Context, pu *config.ParameterUnit) (bool, e
 		tableNames = append(tableNames, tableName)
 	}
 
+	//if there is at least one catalog table, it denotes the sys tenant exists.
 	for _, name := range tableNames {
-		if _, ok := sysWantedTables[name]; !ok {
-			return false, moerr.NewInternalError(fmt.Sprintf("sys tenant does not have the table %s", name))
+		if _, ok := sysWantedTables[name]; ok {
+			return true, nil
 		}
 	}
 
-	if len(tableNames) != len(sysWantedTables) {
-		return false, nil
-	}
-
-	return true, nil
+	return false, nil
 }
 
 // InitSysTenant initializes the tenant SYS before any tenants and accepting any requests
