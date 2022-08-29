@@ -766,7 +766,6 @@ func TestCompaction2(t *testing.T) {
 	schema := catalog.MockSchemaAll(4, 2)
 	schema.BlockMaxRows = 21
 	schema.SegmentMaxBlocks = 4
-	schema.Name = tables.ForTestName
 	cnt := uint32(3)
 	rows := schema.BlockMaxRows / 3 * cnt
 	bat := catalog.MockBatch(schema, int(rows))

@@ -118,8 +118,12 @@ func (lunits *LeveledUnits) Scan() {
 		units := level.ConsumeAll()
 		level.UpdateTS()
 		for unit := range units {
-			if lunits.policy.DecideLevel(unit.EstimateScore()) < i {
+			score := unit.EstimateScore()
+			if lunits.policy.DecideLevel(score) < i {
 				lunits.AddUnit(unit)
+				continue
+			}
+			if score < 100 {
 				continue
 			}
 			taskFactory, taskType, scopes, err := unit.BuildCompactionTaskFactory()

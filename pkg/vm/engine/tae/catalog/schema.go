@@ -133,6 +133,10 @@ type Schema struct {
 
 	SortKey    *SortKey
 	PhyAddrKey *ColDef
+	// ForTest is the Schema used by UT, which means that Compacted
+	// is allowed to execute without a time interval.
+	// TODO: The test method needs to be deleted or modified after the test is stable
+	ForTest bool
 }
 
 func NewEmptySchema(name string) *Schema {
@@ -710,6 +714,7 @@ func MockCompoundSchema(colCnt int, pkIdx ...int) *Schema {
 func MockSchema(colCnt int, pkIdx int) *Schema {
 	rand.Seed(time.Now().UnixNano())
 	schema := NewEmptySchema(time.Now().String())
+	schema.ForTest = true
 	prefix := "mock_"
 	for i := 0; i < colCnt; i++ {
 		if pkIdx == i {
@@ -728,6 +733,7 @@ func MockSchemaAll(colCnt int, pkIdx int, from ...int) *Schema {
 	schema := NewEmptySchema(time.Now().String())
 	prefix := "mock_"
 	start := 0
+	schema.ForTest = true
 	if len(from) > 0 {
 		start = from[0]
 	}

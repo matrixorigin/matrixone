@@ -59,11 +59,6 @@ const (
 // Intervals are when the data block has not been updated within 3 minutes, it can be Compacted
 const Intervals = 3 * 60 * 1000 * time.Millisecond
 
-// ForTestName is the Schema.Name used by UT, which means that Compacted
-// is allowed to execute without a time interval.
-// TODO: Test methods need to be deleted or modified after stabilization
-const ForTestName = "@TestCompaction"
-
 // The initial state of the block when scoring
 type statBlock struct {
 	rows      uint32
@@ -303,7 +298,7 @@ func (blk *dataBlock) EstimateScore() int {
 	} else {
 		s := time.Since(blk.score.startTime).Milliseconds()
 		// UT will execute here
-		if blk.meta.GetSchema().Name == ForTestName && s > int64(100*time.Millisecond) {
+		if blk.meta.GetSchema().ForTest {
 			return 100
 		}
 		if s > int64(Intervals) {
