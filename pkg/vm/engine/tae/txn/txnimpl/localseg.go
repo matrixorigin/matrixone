@@ -95,8 +95,12 @@ func (seg *localSegment) registerInsertNode() {
 
 func (seg *localSegment) ApplyAppend() (err error) {
 	var destOff int
-	// Close the remaining unclosed Appends
-	defer seg.CloseAppends()
+	defer func() {
+		if err != nil {
+			// Close All unclosed Appends
+			seg.CloseAppends()
+		}
+	}()
 	for _, ctx := range seg.appends {
 		bat, _ := ctx.node.Window(ctx.start, ctx.start+ctx.count)
 		defer bat.Close()

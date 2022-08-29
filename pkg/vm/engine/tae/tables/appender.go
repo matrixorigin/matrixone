@@ -24,6 +24,7 @@ import (
 )
 
 type blockAppender struct {
+	common.ClosedState
 	node        *appendableNode
 	placeholder uint32
 	rows        uint32
@@ -49,6 +50,9 @@ func (appender *blockAppender) IsAppendable() bool {
 }
 
 func (appender *blockAppender) Close() {
+	if !appender.TryClose() {
+		return
+	}
 	if appender.node.block.meta.GetSchema().Name == ForTestBlockRefName {
 		appender.node.block.UnRefForTest()
 		return

@@ -518,14 +518,6 @@ func TestReplay2(t *testing.T) {
 	assert.NotNil(t, err)
 	assert.Nil(t, txn.Commit())
 
-	txn, err = tae3.StartTxn(nil)
-	assert.Nil(t, err)
-	db, err = txn.GetDatabase("db")
-	assert.Nil(t, err)
-	err = tae3.Catalog.Checkpoint(txn.GetStartTS())
-	assert.Nil(t, err)
-	assert.Nil(t, txn.Commit())
-
 	tae3.Close()
 
 	tae4, err := Open(tae.Dir, nil)
@@ -704,13 +696,6 @@ func TestReplayTableRows(t *testing.T) {
 	assert.Equal(t, rows, tbl.GetMeta().(*catalog.TableEntry).GetRows())
 	assert.Nil(t, txn.Commit())
 
-	txn, err = tae2.StartTxn(nil)
-	assert.Nil(t, err)
-	db, err = txn.GetDatabase("db")
-	assert.Nil(t, err)
-	err = tae2.Catalog.Checkpoint(txn.GetStartTS())
-	assert.Nil(t, err)
-	assert.Nil(t, txn.Commit())
 	err = tae2.Close()
 	assert.Nil(t, err)
 
