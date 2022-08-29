@@ -18,7 +18,6 @@ import (
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
-	"github.com/matrixorigin/matrixone/pkg/txn/client"
 )
 
 type Engine struct {
@@ -33,5 +32,4 @@ type Transaction struct {
 	readOnly    bool
 	statementId [2]uint64
 	meta        txn.TxnMeta
-	operator    client.TxnOperator
 }

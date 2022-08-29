@@ -38,23 +38,27 @@ func New(
 
 var _ engine.Engine = new(Engine)
 
-func (e *Engine) Create(context.Context, string, client.TxnOperator) error {
+func (e *Engine) Create(ctx context.Context, name string, op client.TxnOperator) error {
 	//TODO
+	e.newTransaction(op)
 	panic("unimplemented")
 }
 
-func (e *Engine) Database(context.Context, string, client.TxnOperator) (engine.Database, error) {
+func (e *Engine) Database(ctx context.Context, name string, op client.TxnOperator) (engine.Database, error) {
 	//TODO
+	e.newTransaction(op)
 	panic("unimplemented")
 }
 
-func (e *Engine) Databases(context.Context, client.TxnOperator) ([]string, error) {
+func (e *Engine) Databases(ctx context.Context, op client.TxnOperator) ([]string, error) {
 	//TODO
+	e.newTransaction(op)
 	panic("unimplemented")
 }
 
-func (e *Engine) Delete(context.Context, string, client.TxnOperator) error {
+func (e *Engine) Delete(ctx context.Context, name string, op client.TxnOperator) error {
 	//TODO
+	e.newTransaction(op)
 	panic("unimplemented")
 }
 
@@ -112,7 +116,6 @@ func (e *Engine) newTransaction(op client.TxnOperator) {
 	txn := &Transaction{
 		readOnly: false,
 		meta:     op.Txn(),
-		operator: op,
 	}
 	e.addTransaction(txn)
 }
