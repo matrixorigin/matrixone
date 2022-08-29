@@ -466,6 +466,8 @@ func constructMark(n *plan.Node, typs []types.Type, proc *process.Process, onLis
 	}
 }
 
+var _ = constructMark
+
 func constructOrder(n *plan.Node, proc *process.Process) *order.Argument {
 	fs := make([]colexec.Field, len(n.OrderBy))
 	for i, e := range n.OrderBy {

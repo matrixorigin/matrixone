@@ -101,9 +101,9 @@ func defaultRequestHandler(ctx context.Context, message morpc.Message, cs morpc.
 	return nil
 }
 
-func (s *service) handleRequest(ctx context.Context, req morpc.Message, _ uint64, cs morpc.ClientSession) error {
-	return s.requestHandler(ctx, req, cs)
-}
+//func (s *service) handleRequest(ctx context.Context, req morpc.Message, _ uint64, cs morpc.ClientSession) error {
+//	return s.requestHandler(ctx, req, cs)
+//}
 
 func (s *service) initMOServer(ctx context.Context, pu *config.ParameterUnit) error {
 	var err error

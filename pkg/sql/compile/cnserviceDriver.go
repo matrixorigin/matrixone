@@ -63,8 +63,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-//
-
 // CnServerMessageHandler deal the client message that received at cn-server.
 // the message is always *pipeline.Message here. It's a byte array which encoded by method encodeScope.
 // write back Analysis Information and error info if error occurs to client.
@@ -172,6 +170,8 @@ func (s *Scope) remoteRun(c *Compile) error {
 
 	return nil
 }
+
+var _ = Scope.remoteRun
 
 // encodeScope generate a pipeline.Pipeline from Scope, encode pipeline, and returns.
 func encodeScope(s *Scope) ([]byte, error) {
