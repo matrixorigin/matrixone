@@ -20,6 +20,7 @@ import (
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/config"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
@@ -36,15 +37,28 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 )
 
+const (
+	s3FileServiceName    = "S3"
+	localFileServiceName = "LOCAL"
+)
+
 type Options func(*service)
 
-func NewService(cfg *Config, ctx context.Context, options ...Options) (Service, error) {
+func NewService(
+	cfg *Config,
+	ctx context.Context,
+	newFS fileservice.NewFileServicesFunc,
+	options ...Options,
+) (Service, error) {
 
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
 
-	srv := &service{cfg: cfg}
+	srv := &service{
+		cfg:   cfg,
+		newFS: newFS,
+	}
 	srv.logger = logutil.Adjust(srv.logger)
 	srv.responsePool = &sync.Pool{
 		New: func() any {
@@ -112,6 +126,12 @@ func (s *service) initMOServer(ctx context.Context, pu *config.ParameterUnit) er
 	s.cancelMoServerFunc = cancelMoServerFunc
 
 	pu.HostMmu = host.New(pu.SV.HostMmuLimitation)
+
+	fs, err := s.getFileService()
+	if err != nil {
+		return err
+	}
+	pu.FileService = fs
 
 	logutil.Info("Initialize the engine ...")
 	err = s.initEngine(ctx, cancelMoServerCtx, pu)
@@ -236,7 +256,7 @@ func (s *service) getTxnClient() (c client.TxnClient, err error) {
 		if err != nil {
 			return
 		}
-		c = client.NewTxnClient(sender) //TODO options
+		c = client.NewTxnClient(sender)
 		s._txnClient = c
 	})
 	c = s._txnClient
@@ -247,4 +267,34 @@ func WithMessageHandle(f func(ctx context.Context, message morpc.Message, cs mor
 	return func(s *service) {
 		s.requestHandler = f
 	}
+}
+
+func (s *service) getFileService() (fs fileservice.FileService, err error) {
+	s.initFileServiceOnce.Do(func() {
+
+		// create
+		fs, err = s.newFS(localFileServiceName)
+		if err != nil {
+			return
+		}
+
+		// ensure local exists
+		_, err := fileservice.Get[fileservice.FileService](fs, localFileServiceName)
+		if err != nil {
+			return
+		}
+
+		// ensure s3 exists
+		_, err = fileservice.Get[fileservice.FileService](fs, s3FileServiceName)
+		if err != nil {
+			return
+		}
+
+		// set
+		s._fileService = fs
+
+	})
+
+	fs = s._fileService
+	return
 }

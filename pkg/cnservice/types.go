@@ -54,13 +54,6 @@ type Config struct {
 		Type EngineType `toml:"type"`
 	}
 
-	FileService struct {
-		// Backend file service backend implementation. [Mem|DISK|S3|MINIO]. Default is DISK.
-		Backend string `toml:"backend"`
-		// S3 s3 configuration
-		S3 fileservice.S3Config `toml:"s3"`
-	}
-
 	// parameters for cn-server related buffer.
 	PayLoadCopyBufferSize int
 	ReadBufferSize        int
@@ -126,4 +119,7 @@ type service struct {
 	_txnSender             rpc.TxnSender
 	initTxnClientOnce      sync.Once
 	_txnClient             client.TxnClient
+	initFileServiceOnce    sync.Once
+	_fileService           fileservice.FileService
+	newFS                  fileservice.NewFileServicesFunc
 }

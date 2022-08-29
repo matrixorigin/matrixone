@@ -102,12 +102,6 @@ func NewUpdateExpr(t bool, n []*UnresolvedName, e Expr) *UpdateExpr {
 }
 
 const (
-	LOCAL = iota
-	S3
-	MinIO
-)
-
-const (
 	AUTO       = "auto"
 	NOCOMPRESS = "none"
 	GZIP       = "gzip"
@@ -119,20 +113,10 @@ const (
 )
 
 type ExternParam struct {
-	ScanType     int
 	Filepath     string
 	CompressType string
 	Tail         *TailParameter
-	S3Param      *S3Parameter
-	S3option     []string
-}
-
-type S3Parameter struct {
-	//s3 parameter
-	Config    fileservice.S3Config
-	Region    string
-	APIKey    string
-	APISecret string
+	FileService  fileservice.FileService
 }
 
 type TailParameter struct {
@@ -164,17 +148,12 @@ func (node *Load) Format(ctx *FmtCtx) {
 		ctx.WriteString(" local")
 	}
 
-	if node.Param.ScanType == LOCAL && (node.Param.CompressType == AUTO || node.Param.CompressType == NOCOMPRESS) {
+	if node.Param.CompressType == AUTO || node.Param.CompressType == NOCOMPRESS {
 		ctx.WriteString(" infile ")
 		ctx.WriteString(node.Param.Filepath)
-	} else if node.Param.ScanType == LOCAL {
+	} else {
 		ctx.WriteString(" infile ")
 		ctx.WriteString("{'filepath':'" + node.Param.Filepath + "', 'compression':'" + strings.ToLower(node.Param.CompressType) + "'}")
-	} else {
-		ctx.WriteString(" url s3option ")
-		ctx.WriteString("{'endpoint'='" + node.Param.S3option[0] + "', 'access_key_id'='" + node.Param.S3option[3] +
-			"', 'secret_access_key'='" + node.Param.S3option[5] + "', 'bucket'='" + node.Param.S3option[7] + "', 'filepath'='" +
-			node.Param.S3option[9] + "', 'region'='" + node.Param.S3option[11] + "'}")
 	}
 
 	switch node.DuplicateHandling.(type) {

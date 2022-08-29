@@ -281,7 +281,6 @@ func init() {
 		"force_quote":              FORCE_QUOTE,
 		"external":                 EXTERNAL,
 		"url":                      URL,
-		"s3option":                 S3OPTION,
 		"parser":                   PARSER,
 		"partition":                PARTITION,
 		"partitions":               PARTITIONS,

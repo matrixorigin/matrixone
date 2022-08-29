@@ -15,3 +15,11 @@ service-addresses = [
 [cn.Engine]
 type = "tae"
 
+[[fileservice]]
+name = 'LOCAL'
+backend = 'MEM'
+
+[[fileservice]]
+name = 'S3'
+backend = 'MEM'
+
