@@ -82,7 +82,6 @@ type dataBlock struct {
 	scheduler tasks.TaskScheduler
 	index     indexwrapper.Index
 	mvcc      *updates.MVCCHandle
-	nice      uint32
 	score     *statBlock
 	ckpTs     atomic.Value
 	prefix    []byte
