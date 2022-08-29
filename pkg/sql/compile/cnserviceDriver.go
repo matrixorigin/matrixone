@@ -84,7 +84,8 @@ func pipelineMessageHandle(ctx context.Context, message morpc.Message, cs morpc.
 		panic("unexpected message type for cn-server")
 	}
 	c := newCompile(ctx)
-	s, err := decodeScope(m.GetData(), c.proc)
+	s := &Scope{}
+	s, err = decodeScope(m.GetData(), c.proc)
 	if err != nil {
 		return nil, err
 	}
