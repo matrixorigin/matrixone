@@ -50,13 +50,21 @@ func init() {
 
 type BlockState int8
 
+// BlockState is the state of the data block, which is different from the state of the mate
 const (
 	BS_Appendable BlockState = iota
 	BS_NotAppendable
 )
+
+// Intervals are when the data block has not been updated within 3 minutes, it can be Compacted
 const Intervals = 3 * 60 * 1000 * time.Millisecond
+
+// ForTestName is the Schema.Name used by UT, which means that Compacted
+// is allowed to execute without a time interval.
+// TODO: Test methods need to be deleted or modified after stabilization
 const ForTestName = "@TestCompaction"
 
+// The initial state of the block when scoring
 type statBlock struct {
 	rows      uint32
 	startTime time.Time
@@ -124,6 +132,7 @@ func newBlock(meta *catalog.BlockEntry, segFile file.Segment, bufMgr base.INodeM
 		if meta.GetSchema().HasPK() {
 			block.index = indexwrapper.NewMutableIndex(meta.GetSchema().GetSortKeyType())
 		}
+		block.state = BS_Appendable
 	} else {
 		block.mvcc.SetDeletesListener(block.BlkApplyDelete)
 		block.index = indexwrapper.NewImmutableIndex()
@@ -227,10 +236,6 @@ func (blk *dataBlock) RunCalibration() int {
 	return blk.estimateRawScore()
 }
 
-func (blk *dataBlock) resetNice() {
-	atomic.StoreUint32(&blk.nice, uint32(0))
-}
-
 func (blk *dataBlock) estimateRawScore() int {
 	if blk.Rows(nil, true) == int(blk.meta.GetSchema().BlockMaxRows) && blk.meta.IsAppendable() {
 		return 100
@@ -293,10 +298,12 @@ func (blk *dataBlock) EstimateScore() int {
 		return 1
 	}
 	if blk.score.rows != rows {
+		// When the rows in the data block are modified, reset the statBlock
 		blk.score.rows = rows
 		blk.score.startTime = time.Now()
 	} else {
 		s := time.Since(blk.score.startTime).Milliseconds()
+		// UT will execute here
 		if blk.meta.GetSchema().Name == ForTestName {
 			return 100
 		}

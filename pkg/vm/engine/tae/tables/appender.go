@@ -37,12 +37,6 @@ func newAppender(node *appendableNode) *blockAppender {
 	return appender
 }
 
-func setAppender(id *common.ID) *blockAppender {
-	appender := new(blockAppender)
-	appender.id = id
-	return appender
-}
-
 func (appender *blockAppender) GetMeta() any {
 	return appender.node.block.meta
 }

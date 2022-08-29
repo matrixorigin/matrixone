@@ -225,7 +225,6 @@ func (blk *dataBlock) ABlkFlushData(
 	if err = blk.file.Sync(); err != nil {
 		return
 	}
-	blk.resetNice()
 	logutil.Info("[Done]",
 		common.ReprerField("blk", blk.meta),
 		common.OperationField("flush"),
