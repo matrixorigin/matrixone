@@ -115,10 +115,14 @@ func (seg *localSegment) ApplyAppend() (err error) {
 }
 
 func (seg *localSegment) PrepareApply() (err error) {
-	for _, node := range seg.nodes {
-		if err = seg.prepareApplyNode(node); err != nil {
+	defer func() {
+		if err != nil {
 			// Close All unclosed Appends
 			seg.CloseAppends()
+		}
+	}()
+	for _, node := range seg.nodes {
+		if err = seg.prepareApplyNode(node); err != nil {
 			break
 		}
 	}
