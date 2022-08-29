@@ -835,3 +835,69 @@ func TestCompaction2(t *testing.T) {
 		}
 	}
 }
+
+// TestCompaction3 is a case for testing block refcount,
+// which requires modification of the data block to test.
+func TestCompaction3(t *testing.T) {
+	testutils.EnsureNoLeak(t)
+	opts := config.WithQuickScanAndCKPOpts(nil)
+	db := initDB(t, opts)
+	defer db.Close()
+
+	schema := catalog.MockSchemaAll(4, 2)
+	schema.BlockMaxRows = 21
+	schema.SegmentMaxBlocks = 4
+	schema.Name = tables.ForTestBlockRefName
+	cnt := uint32(3)
+	rows := schema.BlockMaxRows / 3 * cnt
+	bat := catalog.MockBatch(schema, int(rows))
+	defer bat.Close()
+	bats := bat.Split(int(cnt))
+	{
+		txn, _ := db.StartTxn(nil)
+		database, _ := txn.CreateDatabase("db")
+		rel, _ := database.CreateRelation(schema)
+		err := rel.Append(bats[0])
+		assert.Nil(t, err)
+		assert.Nil(t, txn.Commit())
+	}
+	go func() {
+		txn, _ := db.StartTxn(nil)
+		database, _ := txn.GetDatabase("db")
+		rel, _ := database.GetRelationByName(schema.Name)
+		err := rel.Append(bats[1])
+		assert.Nil(t, err)
+		assert.Nil(t, txn.Commit())
+	}()
+	{
+		txn, _ := db.StartTxn(nil)
+		database, _ := txn.GetDatabase("db")
+		rel, _ := database.GetRelationByName(schema.Name)
+		it := rel.MakeBlockIt()
+		for it.Valid() {
+			blk := it.GetBlock()
+			view, _ := blk.GetColumnDataById(3, nil)
+			assert.NotNil(t, view)
+			view.Close()
+			assert.True(t, blk.GetMeta().(*catalog.BlockEntry).IsAppendable())
+			assert.True(t, blk.GetMeta().(*catalog.BlockEntry).GetBlockData().IsAppendable())
+			it.Next()
+		}
+	}
+	time.Sleep(200 * time.Millisecond)
+	{
+		txn, _ := db.StartTxn(nil)
+		database, _ := txn.GetDatabase("db")
+		rel, _ := database.GetRelationByName(schema.Name)
+		it := rel.MakeBlockIt()
+		for it.Valid() {
+			blk := it.GetBlock()
+			view, _ := blk.GetColumnDataById(3, nil)
+			assert.NotNil(t, view)
+			view.Close()
+			assert.False(t, blk.GetMeta().(*catalog.BlockEntry).IsAppendable())
+			assert.False(t, blk.GetMeta().(*catalog.BlockEntry).GetBlockData().IsAppendable())
+			it.Next()
+		}
+	}
+}

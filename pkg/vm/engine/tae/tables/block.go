@@ -59,6 +59,11 @@ const (
 // Intervals are when the data block has not been updated within 3 minutes, it can be Compacted
 const Intervals = 3 * 60 * 1000 * time.Millisecond
 
+// ForTestBlockRefName is the Schema.Name used by UT,
+// which means that block.Unref() needs to be executed with a delay of 100ms.
+// TODO: The test method needs to be deleted or modified after the test is stable
+const ForTestBlockRefName = "@ForTestBlockRefName"
+
 // The initial state of the block when scoring
 type statBlock struct {
 	rows      uint32
@@ -324,8 +329,10 @@ func (blk *dataBlock) BuildCompactionTaskFactory() (
 	}
 	// Make sure no appender use this block to compact
 	if blk.RefCount() > 0 {
+		//logutil.Infof("blk.RefCount() != 0 : %d, rows: %d", blk.meta.ID, blk.node.rows)
 		return
 	}
+	//logutil.Infof("CompactBlockTaskFactory blk: %d, rows: %d", blk.meta.ID, blk.node.rows)
 	factory = jobs.CompactBlockTaskFactory(blk.meta, blk.scheduler)
 	taskType = tasks.DataCompactionTask
 	scopes = append(scopes, *blk.meta.AsCommonID())
@@ -349,6 +356,11 @@ func (blk *dataBlock) IsAppendable() bool {
 
 func (blk *dataBlock) GetTotalChanges() int {
 	return int(blk.mvcc.GetChangeNodeCnt())
+}
+
+func (blk *dataBlock) UnRefForTest() {
+	time.Sleep(100 * time.Millisecond)
+	blk.Unref()
 }
 
 func (blk *dataBlock) Rows(txn txnif.AsyncTxn, coarse bool) int {

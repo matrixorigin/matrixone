@@ -101,12 +101,12 @@ func (seg *localSegment) ApplyAppend() (err error) {
 		if destOff, err = ctx.driver.ApplyAppend(
 			bat,
 			seg.table.store.txn); err != nil {
-			ctx.driver.UnRef()
+			ctx.driver.Close()
 			return
 		}
 		id := ctx.driver.GetID()
 		ctx.node.AddApplyInfo(ctx.start, ctx.count, uint32(destOff), ctx.count, seg.table.entry.GetDB().ID, id)
-		ctx.driver.UnRef()
+		ctx.driver.Close()
 	}
 	if seg.tableHandle != nil {
 		seg.table.entry.GetTableData().ApplyHandle(seg.tableHandle)
@@ -141,7 +141,6 @@ func (seg *localSegment) prepareApplyNode(node InsertNode) (err error) {
 				return err
 			}
 			appender = seg.tableHandle.SetAppender(blk.Fingerprint())
-			appender.Ref()
 		} else if err == data.ErrAppendableBlockNotFound {
 			id := appender.GetID()
 			blk, err := seg.table.CreateBlock(id.SegmentID)
@@ -149,12 +148,12 @@ func (seg *localSegment) prepareApplyNode(node InsertNode) (err error) {
 				return err
 			}
 			appender = seg.tableHandle.SetAppender(blk.Fingerprint())
-			appender.Ref()
 		}
 		anode, created, toAppend, err := appender.PrepareAppend(
 			node.RowsWithoutDeletes()-appended,
 			seg.table.store.txn)
 		if err != nil {
+			appender.Close()
 			return err
 		}
 		toAppendWithDeletes := node.LengthWithDeletes(appended, toAppend)
