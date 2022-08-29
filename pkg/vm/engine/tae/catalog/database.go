@@ -58,8 +58,8 @@ func (ai *accessInfo) ReadFrom(r io.Reader) (n int64, err error) {
 	return 20, nil
 }
 
-func databaseTxnCanGetFn(n *common.DLNode, ts types.TS) (can, dropped bool) {
-	db := n.GetPayload().(*DBEntry)
+func databaseTxnCanGetFn[T *DBEntry](n *common.GenericDLNode[*DBEntry], ts types.TS) (can, dropped bool) {
+	db := n.GetPayload()
 	can, dropped = db.TxnCanGet(ts)
 	return
 }
@@ -72,11 +72,15 @@ type DBEntry struct {
 	fullName string
 	isSys    bool
 
-	entries   map[uint64]*common.DLNode
-	nameNodes map[string]*nodeList
-	link      *common.SortedDList
+	entries   map[uint64]*common.GenericDLNode[*TableEntry]
+	nameNodes map[string]*nodeList[*TableEntry]
+	link      *common.GenericSortedDList[*TableEntry]
 
 	nodesMu sync.RWMutex
+}
+
+func compareTableFn(a, b *TableEntry) int {
+	return a.BaseEntry.DoCompre(b.BaseEntry)
 }
 
 func NewDBEntry(catalog *Catalog, name string, txnCtx txnif.AsyncTxn) *DBEntry {
@@ -86,9 +90,9 @@ func NewDBEntry(catalog *Catalog, name string, txnCtx txnif.AsyncTxn) *DBEntry {
 		BaseEntry: NewBaseEntry(id),
 		catalog:   catalog,
 		name:      name,
-		entries:   make(map[uint64]*common.DLNode),
-		nameNodes: make(map[string]*nodeList),
-		link:      new(common.SortedDList),
+		entries:   make(map[uint64]*common.GenericDLNode[*TableEntry]),
+		nameNodes: make(map[string]*nodeList[*TableEntry]),
+		link:      common.NewGenericSortedDList(compareTableFn),
 	}
 	if txnCtx != nil {
 		// Only in unit test, txnCtx can be nil
@@ -107,9 +111,9 @@ func NewDBEntryByTS(catalog *Catalog, name string, ts types.TS) *DBEntry {
 		BaseEntry: NewBaseEntry(id),
 		catalog:   catalog,
 		name:      name,
-		entries:   make(map[uint64]*common.DLNode),
-		nameNodes: make(map[string]*nodeList),
-		link:      new(common.SortedDList),
+		entries:   make(map[uint64]*common.GenericDLNode[*TableEntry]),
+		nameNodes: make(map[string]*nodeList[*TableEntry]),
+		link:      common.NewGenericSortedDList(compareTableFn),
 	}
 	e.CreateWithTS(ts)
 	e.acInfo.CreateAt = types.CurrentTimestamp()
@@ -122,9 +126,9 @@ func NewSystemDBEntry(catalog *Catalog) *DBEntry {
 		BaseEntry: NewBaseEntry(id),
 		catalog:   catalog,
 		name:      SystemDBName,
-		entries:   make(map[uint64]*common.DLNode),
-		nameNodes: make(map[string]*nodeList),
-		link:      new(common.SortedDList),
+		entries:   make(map[uint64]*common.GenericDLNode[*TableEntry]),
+		nameNodes: make(map[string]*nodeList[*TableEntry]),
+		link:      common.NewGenericSortedDList(compareTableFn),
 		isSys:     true,
 	}
 	entry.CreateWithTS(types.SystemDBTS)
@@ -134,9 +138,9 @@ func NewSystemDBEntry(catalog *Catalog) *DBEntry {
 func NewReplayDBEntry() *DBEntry {
 	entry := &DBEntry{
 		BaseEntry: NewReplayBaseEntry(),
-		entries:   make(map[uint64]*common.DLNode),
-		nameNodes: make(map[string]*nodeList),
-		link:      new(common.SortedDList),
+		entries:   make(map[uint64]*common.GenericDLNode[*TableEntry]),
+		nameNodes: make(map[string]*nodeList[*TableEntry]),
+		link:      common.NewGenericSortedDList(compareTableFn),
 	}
 	return entry
 }
@@ -175,10 +179,10 @@ func (e *DBEntry) StringLocked() string {
 	return fmt.Sprintf("DB%s[name=%s]", e.BaseEntry.StringLocked(), e.GetFullName())
 }
 
-func (e *DBEntry) MakeTableIt(reverse bool) *common.SortedDListIt {
+func (e *DBEntry) MakeTableIt(reverse bool) *common.GenericSortedDListIt[*TableEntry] {
 	e.RLock()
 	defer e.RUnlock()
-	return common.NewSortedDListIt(e.RWMutex, e.link, reverse)
+	return common.NewGenericSortedDListIt(e.RWMutex, e.link, reverse)
 }
 
 func (e *DBEntry) PPString(level common.PPLevel, depth int, prefix string) string {
@@ -189,7 +193,7 @@ func (e *DBEntry) PPString(level common.PPLevel, depth int, prefix string) strin
 	}
 	it := e.MakeTableIt(true)
 	for it.Valid() {
-		table := it.Get().GetPayload().(*TableEntry)
+		table := it.Get().GetPayload()
 		_ = w.WriteByte('\n')
 		_, _ = w.WriteString(table.PPString(level, depth+1, ""))
 		it.Next()
@@ -212,7 +216,7 @@ func (e *DBEntry) GetBlockEntryByID(id *common.ID) (blk *BlockEntry, err error) 
 	return
 }
 
-func (e *DBEntry) GetItemNodeByIDLocked(id uint64) *common.DLNode {
+func (e *DBEntry) GetItemNodeByIDLocked(id uint64) *common.GenericDLNode[*TableEntry] {
 	return e.entries[id]
 }
 
@@ -223,11 +227,12 @@ func (e *DBEntry) GetTableEntryByID(id uint64) (table *TableEntry, err error) {
 	if node == nil {
 		return nil, ErrNotFound
 	}
-	table = node.GetPayload().(*TableEntry)
+	table = node.GetPayload()
 	return
 }
 
-func (e *DBEntry) txnGetNodeByName(name string, txnCtx txnif.AsyncTxn) (*common.DLNode, error) {
+func (e *DBEntry) txnGetNodeByName(name string,
+	txnCtx txnif.AsyncTxn) (*common.GenericDLNode[*TableEntry], error) {
 	e.RLock()
 	defer e.RUnlock()
 	fullName := genTblFullName(txnCtx.GetTenantID(), name)
@@ -243,7 +248,7 @@ func (e *DBEntry) GetTableEntry(name string, txnCtx txnif.AsyncTxn) (entry *Tabl
 	if err != nil {
 		return
 	}
-	entry = n.GetPayload().(*TableEntry)
+	entry = n.GetPayload()
 	return
 }
 
@@ -252,7 +257,7 @@ func (e *DBEntry) DropTableEntry(name string, txnCtx txnif.AsyncTxn) (deleted *T
 	if err != nil {
 		return
 	}
-	entry := dn.GetPayload().(*TableEntry)
+	entry := dn.GetPayload()
 	entry.Lock()
 	defer entry.Unlock()
 	needWait, txn := entry.NeedWaitCommitting(txnCtx.GetStartTS())
@@ -316,7 +321,7 @@ func (e *DBEntry) AddEntryLocked(table *TableEntry, txn txnif.AsyncTxn) (err err
 		e.entries[table.GetID()] = n
 
 		nn := newNodeList(e.GetItemNodeByIDLocked,
-			tableTxnCanGetFn,
+			tableTxnCanGetFn[*TableEntry],
 			&e.nodesMu,
 			fullName)
 		e.nameNodes[fullName] = nn
@@ -324,7 +329,7 @@ func (e *DBEntry) AddEntryLocked(table *TableEntry, txn txnif.AsyncTxn) (err err
 		nn.CreateNode(table.GetID())
 	} else {
 		node := nn.GetNode()
-		record := node.GetPayload().(*TableEntry)
+		record := node.GetPayload()
 		err = record.PrepareAdd(txn)
 		if err != nil {
 			return
@@ -348,7 +353,7 @@ func (e *DBEntry) GetCatalog() *Catalog { return e.catalog }
 func (e *DBEntry) RecurLoop(processor Processor) (err error) {
 	tableIt := e.MakeTableIt(true)
 	for tableIt.Valid() {
-		table := tableIt.Get().GetPayload().(*TableEntry)
+		table := tableIt.Get().GetPayload()
 		if err = processor.OnTable(table); err != nil {
 			if err == ErrStopCurrRecur {
 				err = nil

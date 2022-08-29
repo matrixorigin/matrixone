@@ -77,8 +77,8 @@ func TestCreateDB1(t *testing.T) {
 
 	assert.Equal(t, 2, len(catalog.entries))
 	cnt := 0
-	catalog.link.Loop(func(n *common.DLNode) bool {
-		t.Log(n.GetPayload().(*DBEntry).GetID())
+	catalog.link.Loop(func(n *common.GenericDLNode[*DBEntry]) bool {
+		t.Log(n.GetPayload().GetID())
 		cnt++
 		return true
 	}, true)
@@ -116,7 +116,7 @@ func TestCreateDB1(t *testing.T) {
 	assert.Nil(t, err)
 
 	cnt = 0
-	catalog.link.Loop(func(n *common.DLNode) bool {
+	catalog.link.Loop(func(n *common.GenericDLNode[*DBEntry]) bool {
 		// t.Log(n.payload.(*DBEntry).String())
 		cnt++
 		return true

@@ -119,7 +119,7 @@ func gcDatabaseClosure(entry *catalog.DBEntry) tasks.FuncT {
 		}()
 		it := entry.MakeTableIt(false)
 		for it.Valid() {
-			table := it.Get().GetPayload().(*catalog.TableEntry)
+			table := it.Get().GetPayload()
 			scopes = append(scopes, *table.AsCommonID())
 			if err = gcTableClosure(table, GCType_DB)(); err != nil {
 				return

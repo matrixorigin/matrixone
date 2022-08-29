@@ -57,6 +57,12 @@ type GenericSortedDList[T any] struct {
 	compare func(T, T) int
 }
 
+func NewGenericSortedDList[T any](compare func(T, T) int) *GenericSortedDList[T] {
+	return &GenericSortedDList[T]{
+		compare: compare,
+	}
+}
+
 // Get the head node
 func (l *GenericSortedDList[T]) GetHead() *GenericDLNode[T] {
 	return l.head

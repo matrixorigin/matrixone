@@ -23,19 +23,19 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 )
 
-type nodeList struct {
+type nodeList[T any] struct {
 	common.SSLLNode
-	getter     func(uint64) *common.DLNode
-	txnChecker func(*common.DLNode, types.TS) (bool, bool)
+	getter     func(uint64) *common.GenericDLNode[T]
+	txnChecker func(*common.GenericDLNode[T], types.TS) (bool, bool)
 	rwlocker   *sync.RWMutex
 	name       string
 }
 
-func newNodeList(getter func(uint64) *common.DLNode,
-	txnChecker func(*common.DLNode, types.TS) (bool, bool),
+func newNodeList[T any](getter func(uint64) *common.GenericDLNode[T],
+	txnChecker func(*common.GenericDLNode[T], types.TS) (bool, bool),
 	rwlocker *sync.RWMutex,
-	name string) *nodeList {
-	return &nodeList{
+	name string) *nodeList[T] {
+	return &nodeList[T]{
 		SSLLNode:   *common.NewSSLLNode(),
 		getter:     getter,
 		txnChecker: txnChecker,
@@ -44,15 +44,15 @@ func newNodeList(getter func(uint64) *common.DLNode,
 	}
 }
 
-func (n *nodeList) CreateNode(id uint64) *nameNode {
-	nn := newNameNode(id, n.getter)
+func (n *nodeList[T]) CreateNode(id uint64) *nameNode[T] {
+	nn := newNameNode[T](id, n.getter)
 	n.rwlocker.Lock()
 	defer n.rwlocker.Unlock()
 	n.Insert(nn)
 	return nn
 }
 
-func (n *nodeList) DeleteNode(id uint64) (deleted *nameNode, empty bool) {
+func (n *nodeList[T]) DeleteNode(id uint64) (deleted *nameNode[T], empty bool) {
 	n.rwlocker.Lock()
 	defer n.rwlocker.Unlock()
 	var prev common.ISSLLNode
@@ -60,10 +60,10 @@ func (n *nodeList) DeleteNode(id uint64) (deleted *nameNode, empty bool) {
 	curr := n.GetNext()
 	depth := 0
 	for curr != nil {
-		nid := curr.(*nameNode).id
+		nid := curr.(*nameNode[T]).id
 		if id == nid {
 			prev.ReleaseNextNode()
-			deleted = curr.(*nameNode)
+			deleted = curr.(*nameNode[T])
 			next := curr.GetNext()
 			if next == nil && depth == 0 {
 				empty = true
@@ -77,16 +77,16 @@ func (n *nodeList) DeleteNode(id uint64) (deleted *nameNode, empty bool) {
 	return
 }
 
-func (n *nodeList) ForEachNodes(fn func(*nameNode) bool) {
+func (n *nodeList[T]) ForEachNodes(fn func(*nameNode[T]) bool) {
 	n.rwlocker.RLock()
 	defer n.rwlocker.RUnlock()
 	n.ForEachNodesLocked(fn)
 }
 
-func (n *nodeList) ForEachNodesLocked(fn func(*nameNode) bool) {
+func (n *nodeList[T]) ForEachNodesLocked(fn func(*nameNode[T]) bool) {
 	curr := n.GetNext()
 	for curr != nil {
-		nn := curr.(*nameNode)
+		nn := curr.(*nameNode[T])
 		if ok := fn(nn); !ok {
 			break
 		}
@@ -94,9 +94,9 @@ func (n *nodeList) ForEachNodesLocked(fn func(*nameNode) bool) {
 	}
 }
 
-func (n *nodeList) LengthLocked() int {
+func (n *nodeList[T]) LengthLocked() int {
 	length := 0
-	fn := func(*nameNode) bool {
+	fn := func(*nameNode[T]) bool {
 		length++
 		return true
 	}
@@ -104,16 +104,16 @@ func (n *nodeList) LengthLocked() int {
 	return length
 }
 
-func (n *nodeList) Length() int {
+func (n *nodeList[T]) Length() int {
 	n.rwlocker.RLock()
 	defer n.rwlocker.RUnlock()
 	return n.LengthLocked()
 }
 
-func (n *nodeList) GetNode() *common.DLNode {
+func (n *nodeList[T]) GetNode() *common.GenericDLNode[T] {
 	n.rwlocker.RLock()
 	defer n.rwlocker.RUnlock()
-	return n.GetNext().(*nameNode).GetNode()
+	return n.GetNext().(*nameNode[T]).GetNode()
 }
 
 //	Create                  Deleted
@@ -134,9 +134,9 @@ func (n *nodeList) GetNode() *common.DLNode {
 // 7. Txn3 commit
 // 8. Txn4 can still find "tb1"
 // 9. Txn5 start and cannot find "tb1"
-func (n *nodeList) TxnGetNodeLocked(
-	txn txnif.TxnReader) (dn *common.DLNode, err error) {
-	fn := func(nn *nameNode) bool {
+func (n *nodeList[T]) TxnGetNodeLocked(
+	txn txnif.TxnReader) (dn *common.GenericDLNode[T], err error) {
+	fn := func(nn *nameNode[T]) bool {
 		dlNode := nn.GetNode()
 		can, dropped := n.txnChecker(dlNode, txn.GetStartTS())
 		if !can {
@@ -155,12 +155,12 @@ func (n *nodeList) TxnGetNodeLocked(
 	return
 }
 
-func (n *nodeList) PString(level common.PPLevel) string {
+func (n *nodeList[T]) PString(level common.PPLevel) string {
 	curr := n.GetNext()
 	if curr == nil {
 		return fmt.Sprintf("TableNode[\"%s\"](Len=0)", n.name)
 	}
-	node := curr.(*nameNode)
+	node := curr.(*nameNode[T])
 	s := fmt.Sprintf("TableNode[\"%s\"](Len=%d)->[%d", n.name, n.Length(), node.id)
 	if level == common.PPL0 {
 		s = fmt.Sprintf("%s]", s)
@@ -169,7 +169,7 @@ func (n *nodeList) PString(level common.PPLevel) string {
 
 	curr = curr.GetNext()
 	for curr != nil {
-		node := curr.(*nameNode)
+		node := curr.(*nameNode[T])
 		s = fmt.Sprintf("%s->%d", s, node.id)
 		curr = curr.GetNext()
 	}
@@ -177,21 +177,22 @@ func (n *nodeList) PString(level common.PPLevel) string {
 	return s
 }
 
-type nameNode struct {
+type nameNode[T any] struct {
 	common.SSLLNode
-	getter func(uint64) *common.DLNode
+	getter func(uint64) *common.GenericDLNode[T]
 	id     uint64
 }
 
-func newNameNode(id uint64, getter func(uint64) *common.DLNode) *nameNode {
-	return &nameNode{
+func newNameNode[T any](id uint64,
+	getter func(uint64) *common.GenericDLNode[T]) *nameNode[T] {
+	return &nameNode[T]{
 		SSLLNode: *common.NewSSLLNode(),
 		getter:   getter,
 		id:       id,
 	}
 }
 
-func (n *nameNode) GetNode() *common.DLNode {
+func (n *nameNode[T]) GetNode() *common.GenericDLNode[T] {
 	if n == nil {
 		return nil
 	}
