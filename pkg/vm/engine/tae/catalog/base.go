@@ -205,7 +205,7 @@ func (be *BaseEntry) GetNodeToRead(startts types.TS) (node *UpdateNode) {
 			node = un
 			return false
 		}
-		if un.IsActive() {
+		if un.IsActive() || un.IsCommitting() {
 			return true
 		}
 		if un.End.LessEq(startts) {
@@ -442,7 +442,18 @@ func (be *BaseEntry) DropEntryLocked(txnCtx txnif.TxnReader) error {
 
 func (be *BaseEntry) IsCommitting() bool {
 	node := be.GetUpdateNodeLocked()
-	return node.State == txnif.TxnStateCommitting
+	if node == nil {
+		return false
+	}
+	return node.IsCommitting()
+}
+
+func (be *BaseEntry) IsMetadataCommitting() bool {
+	node := be.GetUpdateNodeLocked()
+	if node == nil {
+		return false
+	}
+	return node.IsMetaDataCommitting()
 }
 
 func (be *BaseEntry) Prepare2PCPrepare() error {
