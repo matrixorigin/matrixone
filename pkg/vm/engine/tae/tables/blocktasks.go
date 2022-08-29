@@ -15,12 +15,10 @@
 package tables
 
 import (
-	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 )
 
@@ -39,17 +37,6 @@ func (blk *dataBlock) SyncBlockDataClosure(ts types.TS, rows uint32) tasks.FuncT
 func (blk *dataBlock) FlushColumnDataClosure(ts types.TS, colIdx int, colData containers.Vector, sync bool) tasks.FuncT {
 	return func() error {
 		return blk.FlushColumnData(ts, colIdx, colData, sync)
-	}
-}
-
-func (blk *dataBlock) ABlkFlushDataClosure(
-	ts types.TS,
-	bat *containers.Batch,
-	masks map[uint16]*roaring.Bitmap,
-	vals map[uint16]map[uint32]any,
-	deletes *roaring.Bitmap) tasks.FuncT {
-	return func() error {
-		return blk.ABlkFlushData(ts, bat, masks, vals, deletes)
 	}
 }
 
@@ -170,65 +157,4 @@ func (blk *dataBlock) SyncBlockData(ts types.TS, rows uint32) (err error) {
 		return
 	}
 	return blk.file.Sync()
-}
-
-func (blk *dataBlock) ForceCompact() (err error) {
-	if !blk.meta.IsAppendable() {
-		panic("todo")
-	}
-	ts := blk.mvcc.LoadMaxVisible()
-	// Why check again? May be a flush was executed in between
-	blk.mvcc.RLock()
-	maxRow, _, err := blk.mvcc.GetMaxVisibleRowLocked(ts)
-	blk.mvcc.RUnlock()
-	if err != nil {
-		return
-	}
-	bat, err := blk.node.GetDataCopy(maxRow)
-	if err != nil {
-		return
-	}
-	defer bat.Close()
-	needCkp := true
-	if err = blk.node.flushData(ts, bat, new(forceCompactOp)); err != nil {
-		if err == data.ErrStaleRequest {
-			err = nil
-			needCkp = false
-		} else {
-			return
-		}
-	}
-	if needCkp {
-		_, err = blk.scheduler.ScheduleScopedFn(nil, tasks.CheckpointTask, blk.meta.AsCommonID(), blk.CheckpointWALClosure(ts))
-	}
-	return
-}
-
-func (blk *dataBlock) ABlkFlushData(
-	ts types.TS,
-	bat *containers.Batch,
-	masks map[uint16]*roaring.Bitmap,
-	vals map[uint16]map[uint32]any,
-	deletes *roaring.Bitmap) (err error) {
-	// ckpTs := blk.GetMaxCheckpointTS()
-	// if ts <= ckpTs {
-	// 	logutil.Info("[Cancelled]",
-	// 		common.ReprerField("blk", blk.meta),
-	// 		common.OperationField("flush"),
-	// 		common.ReasonField("State Request: Already Flushed"))
-	// 	return data.ErrStaleRequest
-	// }
-
-	if err := blk.file.WriteSnapshot(bat, ts, masks, vals, deletes); err != nil {
-		return err
-	}
-	if err = blk.file.Sync(); err != nil {
-		return
-	}
-	logutil.Info("[Done]",
-		common.ReprerField("blk", blk.meta),
-		common.OperationField("flush"),
-		common.AnyField("maxRow", bat.Length()),
-		common.AnyField("maxTs", ts))
-	return
 }

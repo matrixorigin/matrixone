@@ -16,8 +16,6 @@ package tables
 
 import (
 	"bytes"
-	"github.com/RoaringBitmap/roaring"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
@@ -27,8 +25,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/file"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/updates"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 	"sync/atomic"
 )
 
@@ -121,65 +117,6 @@ func (node *appendableNode) OnLoad() {
 	if node.data.Length() != int(node.rows) {
 		logutil.Fatalf("Load %d rows but %d expected: %s", node.data.Length(), node.rows, node.block.meta.String())
 	}
-}
-
-func (node *appendableNode) flushData(ts types.TS, colsData *containers.Batch, opCtx Operation) (err error) {
-	if exception := node.exception.Load(); exception != nil {
-		logutil.Error("[Exception]", common.ExceptionField(exception))
-		err = exception.(error)
-		return
-	}
-	mvcc := node.block.mvcc
-	masks := make(map[uint16]*roaring.Bitmap)
-	vals := make(map[uint16]map[uint32]any)
-	mvcc.RLock()
-	for i := range node.block.meta.GetSchema().ColDefs {
-		chain := mvcc.GetColumnChain(uint16(i))
-
-		chain.RLock()
-		updateMask, updateVals, err := chain.CollectUpdatesLocked(ts)
-		chain.RUnlock()
-		if err != nil {
-			break
-		}
-		if updateMask != nil {
-			masks[uint16(i)] = updateMask
-			vals[uint16(i)] = updateVals
-		}
-	}
-	if err != nil {
-		mvcc.RUnlock()
-		return
-	}
-	deleteChain := mvcc.GetDeleteChain()
-	n, err := deleteChain.CollectDeletesLocked(ts, false, mvcc.RWMutex)
-	mvcc.RUnlock()
-	if err != nil {
-		return
-	}
-	dnode := n.(*updates.DeleteNode)
-	logutil.Info("[Running]", common.OperationField(opCtx.OpName()),
-		common.OperandField(node.block.meta.AsCommonID().String()),
-		common.TimestampField(ts))
-	var deletes *roaring.Bitmap
-	if dnode != nil {
-		deletes = dnode.GetDeleteMaskLocked()
-	}
-	if node.block.scheduler == nil {
-		err = node.block.ABlkFlushDataClosure(ts, colsData, masks, vals, deletes)()
-		return
-	}
-	scope := node.block.meta.AsCommonID()
-	task, err := node.block.scheduler.ScheduleScopedFn(
-		tasks.WaitableCtx,
-		tasks.IOTask,
-		scope,
-		node.block.ABlkFlushDataClosure(ts, colsData, masks, vals, deletes))
-	if err != nil {
-		return
-	}
-	err = task.WaitDone()
-	return
 }
 
 func (node *appendableNode) OnUnload() {

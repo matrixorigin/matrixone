@@ -2185,7 +2185,7 @@ func TestDelete2(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NoError(t, txn.Commit())
 
-	tae.compactABlocks(false)
+	tae.compactBlocks(false)
 }
 
 func TestNull1(t *testing.T) {
@@ -2302,67 +2302,6 @@ func TestNull1(t *testing.T) {
 	uv0_2, err = rel.GetValueByFilter(filter_2, 3)
 	assert.NoError(t, err)
 	assert.True(t, types.IsNull(uv0_2))
-	assert.NoError(t, txn.Commit())
-}
-
-func TestNull2(t *testing.T) {
-	testutils.EnsureNoLeak(t)
-	opts := config.WithLongScanAndCKPOpts(nil)
-	tae := newTestEngine(t, opts)
-	defer tae.Close()
-	schema := catalog.MockSchemaAll(18, 6)
-	schema.BlockMaxRows = 10
-	tae.bindSchema(schema)
-	bat := catalog.MockBatch(schema, int(schema.BlockMaxRows-1))
-	defer bat.Close()
-	tae.createRelAndAppend(bat, true)
-
-	txn, rel := tae.getRelation()
-	v1 := getSingleSortKeyValue(bat, schema, 1)
-	filter1 := handle.NewEQFilter(v1)
-	err := rel.UpdateByFilter(filter1, 2, int32(99))
-	assert.NoError(t, err)
-	assert.NoError(t, txn.Commit())
-	tae.compactABlocks(false)
-	tae.restart()
-
-	txn, rel = tae.getRelation()
-	uv1, err := rel.GetValueByFilter(filter1, 2)
-	assert.NoError(t, err)
-	assert.Equal(t, int32(99), uv1.(int32))
-	err = rel.UpdateByFilter(filter1, 2, types.Null{})
-	assert.NoError(t, err)
-	assert.NoError(t, txn.Commit())
-	tae.compactABlocks(false)
-	tae.restart()
-
-	txn, rel = tae.getRelation()
-	uv1, err = rel.GetValueByFilter(filter1, 2)
-	assert.NoError(t, err)
-	assert.True(t, types.IsNull(uv1))
-	err = rel.UpdateByFilter(filter1, 2, int32(2))
-	assert.NoError(t, err)
-	assert.NoError(t, txn.Commit())
-	tae.compactABlocks(false)
-	tae.restart()
-
-	txn, rel = tae.getRelation()
-	uv1, err = rel.GetValueByFilter(filter1, 2)
-	assert.NoError(t, err)
-	assert.Equal(t, int32(2), uv1.(int32))
-	err = rel.UpdateByFilter(filter1, 2, int32(2))
-	assert.NoError(t, err)
-	assert.NoError(t, txn.Commit())
-
-	tae.compactABlocks(false)
-	tae.restart()
-
-	txn, rel = tae.getRelation()
-	uv1, err = rel.GetValueByFilter(filter1, 2)
-	assert.NoError(t, err)
-	assert.Equal(t, int32(2), uv1.(int32))
-	err = rel.UpdateByFilter(filter1, 2, int32(2))
-	assert.NoError(t, err)
 	assert.NoError(t, txn.Commit())
 }
 

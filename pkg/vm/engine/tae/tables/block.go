@@ -89,6 +89,10 @@ type dataBlock struct {
 	state     BlockState
 }
 
+func (blk *dataBlock) ForceCompact() error {
+	panic("implement me")
+}
+
 func newBlock(meta *catalog.BlockEntry, segFile file.Segment, bufMgr base.INodeManager, scheduler tasks.TaskScheduler) *dataBlock {
 	colCnt := len(meta.GetSchema().ColDefs)
 	indexCnt := make(map[int]int)
