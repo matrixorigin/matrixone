@@ -216,6 +216,7 @@ func (be *BaseEntry) GetNodeToRead(startts types.TS) (node *UpdateNode) {
 	}, false)
 	return
 }
+
 func (be *BaseEntry) DeleteBefore(ts types.TS) bool {
 	createAt := be.GetDeleteAt()
 	if createAt.IsEmpty() {
@@ -244,6 +245,20 @@ func (be *BaseEntry) NeedWaitCommitting(startTS types.TS) (bool, txnif.TxnReader
 		return false, nil
 	}
 	if !un.IsCommitting() {
+		return false, nil
+	}
+	if un.Txn.GetCommitTS().GreaterEq(startTS) {
+		return false, nil
+	}
+	return true, un.Txn
+}
+
+func (be *BaseEntry) NeedWaitCommittingMeta(startTS types.TS) (bool, txnif.TxnReader) {
+	un := be.GetUpdateNodeLocked()
+	if un == nil {
+		return false, nil
+	}
+	if !un.IsMetaDataCommitting() {
 		return false, nil
 	}
 	if un.Txn.GetCommitTS().GreaterEq(startTS) {
@@ -404,6 +419,16 @@ func (be *BaseEntry) GetLogIndex() []*wal.Index {
 }
 
 func (be *BaseEntry) TxnCanRead(txn txnif.AsyncTxn, mu *sync.RWMutex) (canRead bool, err error) {
+	needWait, txnToWait := be.NeedWaitCommitting(txn.GetStartTS())
+	if needWait {
+		mu.RUnlock()
+		txnToWait.GetTxnState(true)
+		mu.RLock()
+	}
+	canRead = be.ExistedForTs(txn.GetStartTS())
+	return
+}
+func (be *BaseEntry) MetaTxnCanRead(txn txnif.AsyncTxn, mu *sync.RWMutex) (canRead bool, err error) {
 	needWait, txnToWait := be.NeedWaitCommitting(txn.GetStartTS())
 	if needWait {
 		mu.RUnlock()
