@@ -716,13 +716,11 @@ func checkSysExistsOrNot(ctx context.Context, pu *config.ParameterUnit) (bool, e
 		return false, err
 	}
 
-	dbNames := []string{}
 	for i := uint64(0); i < rsset[0].GetRowCount(); i++ {
-		dbName, err := rsset[0].GetString(i, 0)
+		_, err := rsset[0].GetString(i, 0)
 		if err != nil {
 			return false, err
 		}
-		dbNames = append(dbNames, dbName)
 	}
 
 	bh.ClearExecResultSet()
