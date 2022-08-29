@@ -21,11 +21,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 )
 
-// Manager used to manage all transactions on a cn
-type Manager struct {
+type Engine struct {
 	sync.Mutex
-	cli  client.TxnClient
-	txns map[string]*Transaction
+	getClusterDetails GetClusterDetailsFunc
+	txns              map[string]*Transaction
 }
 
 // Transaction represents a transaction
@@ -33,7 +32,6 @@ type Transaction struct {
 	// readOnly default value is true, once a write happen, then set to false
 	readOnly    bool
 	statementId [2]uint64
-	mgr         *Manager
 	meta        txn.TxnMeta
 	operator    client.TxnOperator
 }
