@@ -31,8 +31,9 @@ type Manager struct {
 // Transaction represents a transaction
 type Transaction struct {
 	// readOnly default value is true, once a write happen, then set to false
-	readOnly bool
-	mgr      *Manager
-	meta     txn.TxnMeta
-	operator client.TxnOperator
+	readOnly    bool
+	statementId [2]uint64
+	mgr         *Manager
+	meta        txn.TxnMeta
+	operator    client.TxnOperator
 }

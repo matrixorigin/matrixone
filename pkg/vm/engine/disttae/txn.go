@@ -17,6 +17,7 @@ package disttae
 import (
 	"context"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
@@ -85,6 +86,11 @@ func (txn *Transaction) ReadOnly() bool {
 	return txn.readOnly
 }
 
+// use for solving halloween problem
+func (txn *Transaction) SetStatementId(id [2]uint64) {
+	txn.statementId = id
+}
+
 // Write used to write data to the transaction buffer
 // insert/delete/update all use this api
 func (txn *Transaction) WriteBatch(bat *batch.Batch) error {
@@ -131,6 +137,12 @@ func (txn *Transaction) WriteAndCommit(ctx context.Context, ops []txn.TxnRequest
 
 func (txn *Transaction) Commit(ctx context.Context) error {
 	defer txn.mgr.DelTransaction(txn)
+	if txn.readOnly {
+		return nil
+	}
+	if txn.mgr.HasConflict(txn) {
+		return moerr.New(moerr.ErrTxnWriteConflict, "write conflict")
+	}
 	return txn.operator.Commit(ctx)
 }
 
