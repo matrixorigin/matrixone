@@ -89,10 +89,6 @@ type dataBlock struct {
 	state     BlockState
 }
 
-func (blk *dataBlock) ForceCompact() error {
-	panic("implement me")
-}
-
 func newBlock(meta *catalog.BlockEntry, segFile file.Segment, bufMgr base.INodeManager, scheduler tasks.TaskScheduler) *dataBlock {
 	colCnt := len(meta.GetSchema().ColDefs)
 	indexCnt := make(map[int]int)
@@ -433,7 +429,7 @@ func (blk *dataBlock) FillBlockView(colIdx uint16, view *model.BlockView) (err e
 
 func (blk *dataBlock) MakeAppender() (appender data.BlockAppender, err error) {
 	if !blk.meta.IsAppendable() {
-		return
+		panic("can not create appender on non-appendable block")
 	}
 	appender = newAppender(blk.node)
 	return
@@ -451,9 +447,7 @@ func (blk *dataBlock) GetColumnDataById(
 	txn txnif.AsyncTxn,
 	colIdx int,
 	buffer *bytes.Buffer) (view *model.ColumnView, err error) {
-	if blk.meta.IsAppendable() ||
-		(blk.node != nil &&
-			blk.node.Rows(nil, true) < blk.meta.GetSegment().GetTable().GetSchema().BlockMaxRows) {
+	if blk.meta.IsAppendable() {
 		return blk.ResolveABlkColumnMVCCData(txn.GetStartTS(), colIdx, buffer, false)
 	}
 	view, err = blk.ResolveColumnMVCCData(txn.GetStartTS(), colIdx, buffer)

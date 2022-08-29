@@ -95,7 +95,6 @@ type Block interface {
 	CheckpointWALClosure(endTs types.TS) tasks.FuncT
 	SyncBlockDataClosure(ts types.TS, rows uint32) tasks.FuncT
 	FlushColumnDataClosure(ts types.TS, colIdx int, colData containers.Vector, sync bool) tasks.FuncT
-	ForceCompact() error
 	Destroy() error
 	ReplayIndex() error
 	Flush()

@@ -41,9 +41,7 @@ func (blk *dataBlock) FlushColumnDataClosure(ts types.TS, colIdx int, colData co
 }
 
 func (blk *dataBlock) CheckpointWAL(currTs types.TS) (err error) {
-	if blk.meta.IsAppendable() ||
-		(blk.node != nil &&
-			blk.node.Rows(nil, true) < blk.meta.GetSegment().GetTable().GetSchema().BlockMaxRows) {
+	if blk.meta.IsAppendable() {
 		return blk.ABlkCheckpointWAL(currTs)
 	}
 	return blk.BlkCheckpointWAL(currTs)

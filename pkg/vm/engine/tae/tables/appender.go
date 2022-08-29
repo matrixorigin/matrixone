@@ -27,7 +27,6 @@ type blockAppender struct {
 	node        *appendableNode
 	placeholder uint32
 	rows        uint32
-	id          *common.ID
 }
 
 func newAppender(node *appendableNode) *blockAppender {
@@ -42,9 +41,6 @@ func (appender *blockAppender) GetMeta() any {
 }
 
 func (appender *blockAppender) GetID() *common.ID {
-	if appender.node == nil {
-		return appender.id
-	}
 	return appender.node.block.meta.AsCommonID()
 }
 
