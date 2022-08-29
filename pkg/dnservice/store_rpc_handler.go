@@ -17,10 +17,15 @@ package dnservice
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
+)
+
+const (
+	defaultRetryInterval = time.Millisecond * 100
 )
 
 func (s *store) registerRPCHandlers() {
@@ -47,16 +52,25 @@ func (s *store) dispatchLocalRequest(shard metadata.DNShard) rpc.TxnRequestHandl
 }
 
 func (s *store) handleRead(ctx context.Context, request *txn.TxnRequest, response *txn.TxnResponse) error {
+	return s.handleWithRetry(ctx, request, response, s.doRead)
+}
+
+func (s *store) handleWrite(ctx context.Context, request *txn.TxnRequest, response *txn.TxnResponse) error {
+	return s.handleWithRetry(ctx, request, response, s.doWrite)
+}
+
+func (s *store) doRead(ctx context.Context, request *txn.TxnRequest, response *txn.TxnResponse) error {
 	r := s.validDNShard(request, response)
 	if r == nil {
 		return nil
 	}
 	r.waitStarted()
+
 	prepareResponse(request, response)
 	return r.service.Read(ctx, request, response)
 }
 
-func (s *store) handleWrite(ctx context.Context, request *txn.TxnRequest, response *txn.TxnResponse) error {
+func (s *store) doWrite(ctx context.Context, request *txn.TxnRequest, response *txn.TxnResponse) error {
 	r := s.validDNShard(request, response)
 	if r == nil {
 		return nil
@@ -147,4 +161,46 @@ func prepareResponse(request *txn.TxnRequest, response *txn.TxnResponse) {
 	response.Method = request.Method
 	response.Flag = request.Flag
 	response.RequestID = request.RequestID
+}
+
+func (s *store) handleWithRetry(ctx context.Context,
+	request *txn.TxnRequest,
+	response *txn.TxnResponse,
+	delegate rpc.TxnRequestHandleFunc) error {
+	for {
+		response.Reset()
+		err := delegate(ctx, request, response)
+		if err != nil {
+			return err
+		}
+
+		if !s.maybeRetry(ctx, request, response) {
+			return nil
+		}
+	}
+}
+
+func (s *store) maybeRetry(ctx context.Context, request *txn.TxnRequest, response *txn.TxnResponse) bool {
+	if request.Options != nil &&
+		len(request.Options.RetryCodes) == 0 ||
+		response.TxnError == nil {
+		return false
+	}
+
+	select {
+	case <-ctx.Done():
+		return false
+	default:
+		for _, code := range request.Options.RetryCodes {
+			if code == response.TxnError.Code {
+				wait := time.Duration(request.Options.RetryInterval)
+				if wait == 0 {
+					wait = defaultRetryInterval
+				}
+				time.Sleep(wait)
+				return true
+			}
+		}
+		return false
+	}
 }
