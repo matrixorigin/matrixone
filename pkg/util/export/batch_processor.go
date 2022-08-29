@@ -321,7 +321,7 @@ func (c *MOCollector) Stop(graceful bool) error {
 	var buf = new(bytes.Buffer)
 	c.stopOnce.Do(func() {
 		for len(c.awakeCollect) > 0 {
-			logutil.Debugf("doCollect left %d job", len(c.awakeCollect), logutil.NoReportFiled())
+			logutil.Debug(fmt.Sprintf("doCollect left %d job", len(c.awakeCollect)), logutil.NoReportFiled())
 			time.Sleep(250 * time.Second)
 		}
 		for _, buffer := range c.buffers {

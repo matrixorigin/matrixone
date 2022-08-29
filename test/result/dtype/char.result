@@ -108,7 +108,7 @@ Andrea	F	45
 Kelly	F	54
 select cast(Age as char) as cAge from Demochar where cast(Age as char) like '2_';
 cage
-select cast(Age as char) and Age as cAge from Demochar where Age>=50 order by cAge;
+select cast(Age as char) and Age as cAge from Demochar where Age>=50 order by cAge asc;
 cage
 1
 1
@@ -142,7 +142,7 @@ insert  into employees(employeeNumber,lastName,firstName,extension,email,officeC
 (1501,'Bott','Larry','x2311','lbott@classicmodelcars.com','7',1102,'Sales Rep'),
 (1504,'Jones','Barry','x102','bjones@classicmodelcars.com','7',1102,'Sales Rep'),
 (1611,'Fixter','Andy','x101','afixter@classicmodelcars.com','6',1088,'Sales Rep');
-select officeCode,count(officeCode) from employees group by officeCode having count(officeCode)>2;
+select officeCode,count(officeCode) from employees group by officeCode having count(officeCode)>2 order by 1 asc,2 desc;
 officecode	count(officecode)
 1	6
 4	4
