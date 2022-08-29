@@ -1,6 +1,5 @@
 select log(exp(10)),log(-1),log(NULL),log(1,1),log(3,9),log(-1,2),log(NULL,2);
-log(exp(10))	log(-1)	log(null)	log(1, 1)	log(3, 9)	log(-1, 2)	log(null, 2)
-10.0	null	null	null	2.0000000000000004	null	null
+Logarithm function base cannot be 1
 SELECT LOG(2);
 LOG(2)
 0.6931471805599453
