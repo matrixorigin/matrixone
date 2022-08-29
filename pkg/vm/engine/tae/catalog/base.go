@@ -201,11 +201,11 @@ func (be *BaseEntry) GetCommittedNode() (node *UpdateNode) {
 func (be *BaseEntry) GetNodeToRead(startts types.TS) (node *UpdateNode) {
 	be.MVCC.Loop(func(n *common.DLNode) bool {
 		un := n.GetPayload().(*UpdateNode)
+		if un.IsSameTxn(startts) {
+			node = un
+			return false
+		}
 		if un.IsActive() {
-			if un.IsSameTxn(startts) {
-				node = un
-				return false
-			}
 			return true
 		}
 		if un.End.LessEq(startts) {
@@ -239,31 +239,19 @@ func (be *BaseEntry) GetExactUpdateNode(startts types.TS) (node *UpdateNode) {
 }
 
 func (be *BaseEntry) NeedWaitCommitting(startTS types.TS) (bool, txnif.TxnReader) {
-	un := be.GetCommittedNode()
-	if un != nil && un.End.GreaterEq(startTS) {
-		return false, nil
-	}
-	un = be.GetUpdateNodeLocked()
+	un := be.GetUpdateNodeLocked()
 	if un == nil {
 		return false, nil
 	}
 	if !un.IsCommitting() {
 		return false, nil
 	}
-	if un.Txn.GetStartTS().GreaterEq(startTS) {
+	if un.Txn.GetCommitTS().GreaterEq(startTS) {
 		return false, nil
 	}
 	return true, un.Txn
 }
 
-// active -> w-w/same
-// rollbacked/ing -> next
-// committing shouldRead
-
-// get first
-// get committed
-// get same node
-// get to read
 func (be *BaseEntry) InTxnOrRollbacked() bool {
 	un := be.GetUpdateNodeLocked()
 	if un == nil {
@@ -273,17 +261,14 @@ func (be *BaseEntry) InTxnOrRollbacked() bool {
 }
 
 func (be *BaseEntry) IsDroppedCommitted() bool {
-	un := be.GetUpdateNodeLocked()
+	un := be.GetCommittedNode()
 	if un == nil {
-		return false
-	}
-	if un.IsActive() {
 		return false
 	}
 	return un.HasDropped()
 }
 
-func (be *BaseEntry) PrepareWrite(txn txnif.TxnReader, rwlocker *sync.RWMutex) (err error) {
+func (be *BaseEntry) PrepareWrite(txn txnif.TxnReader) (err error) {
 	node := be.GetUpdateNodeLocked()
 	if node.IsActive() {
 		if node.IsSameTxn(txn.GetStartTS()) {
@@ -292,7 +277,7 @@ func (be *BaseEntry) PrepareWrite(txn txnif.TxnReader, rwlocker *sync.RWMutex) (
 		return txnif.ErrTxnWWConflict
 	}
 
-	if node.Start.Greater(txn.GetStartTS()) {
+	if node.End.Greater(txn.GetStartTS()) {
 		return txnif.ErrTxnWWConflict
 	}
 	return
@@ -404,10 +389,7 @@ func (be *BaseEntry) HasDropped() bool {
 	return node.HasDropped()
 }
 func (be *BaseEntry) ExistedForTs(ts types.TS) bool {
-	un := be.GetExactUpdateNode(ts)
-	if un == nil {
-		un = be.GetNodeToRead(ts)
-	}
+	un := be.GetNodeToRead(ts)
 	if un == nil {
 		return false
 	}
@@ -421,10 +403,6 @@ func (be *BaseEntry) GetLogIndex() []*wal.Index {
 	return node.LogIndex
 }
 
-func (be *BaseEntry) OnReplay(node *UpdateNode) error {
-	be.InsertNode(node)
-	return nil
-}
 func (be *BaseEntry) TxnCanRead(txn txnif.AsyncTxn, mu *sync.RWMutex) (canRead bool, err error) {
 	needWait, txnToWait := be.NeedWaitCommitting(txn.GetStartTS())
 	if needWait {
@@ -448,47 +426,23 @@ func (be *BaseEntry) CloneCreateEntry() *BaseEntry {
 	return cloned
 }
 func (be *BaseEntry) DropEntryLocked(txnCtx txnif.TxnReader) error {
-	node := be.GetUpdateNodeLocked()
-	if node.IsActive() && !node.IsSameTxn(txnCtx.GetStartTS()) {
-		return txnif.ErrTxnWWConflict
+	err := be.PrepareWrite(txnCtx)
+	if err != nil {
+		return err
 	}
 	if be.HasDropped() {
 		return ErrNotFound
 	}
-	_, err := be.DeleteLocked(txnCtx, nil)
+	_, err = be.DeleteLocked(txnCtx, nil)
 	if err != nil {
 		return err
 	}
 	return nil
 }
 
-func (be *BaseEntry) SameTxn(o *BaseEntry) bool {
-	id := be.GetTxnID()
-	if id == 0 {
-		return false
-	}
-	return id == o.GetTxnID()
-}
-
-func (be *BaseEntry) GetTxnID() uint64 {
-	node := be.GetUpdateNodeLocked()
-	if node.Txn != nil {
-		return node.Txn.GetID()
-	}
-	return 0
-}
-
-func (be *BaseEntry) IsSameTxn(ctx txnif.TxnReader) bool {
-	return be.GetTxnID() == ctx.GetID()
-}
-
 func (be *BaseEntry) IsCommitting() bool {
 	node := be.GetUpdateNodeLocked()
 	return node.State == txnif.TxnStateCommitting
-}
-
-func (be *BaseEntry) GetDeleted() bool {
-	return be.GetUpdateNodeLocked().Deleted
 }
 
 func (be *BaseEntry) Prepare2PCPrepare() error {
@@ -522,7 +476,7 @@ func (be *BaseEntry) PrepareAdd(txn txnif.TxnReader) (err error) {
 			waitTxn.GetTxnState(true)
 			be.RLock()
 		}
-		err = be.PrepareWrite(txn, be.RWMutex)
+		err = be.PrepareWrite(txn)
 		if err != nil {
 			return
 		}
@@ -546,6 +500,7 @@ func (be *BaseEntry) DeleteAfter(ts types.TS) bool {
 	}
 	return un.DeletedAt.Greater(ts)
 }
+
 func (be *BaseEntry) IsCommitted() bool {
 	un := be.GetUpdateNodeLocked()
 	if un == nil {
