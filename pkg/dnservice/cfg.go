@@ -61,10 +61,8 @@ type Config struct {
 
 	// Frontend parameters for the frontend, assign by mo-service's Config
 	Frontend config.FrontendParameters
-	// ETLFSFactory create FS for CSV output, especial for localETLFS
+	// ETLFSFactory create FS for trace/metric to do CSV output
 	ETLFSFactory fileservice.FileServiceFactory
-
-	FileService fileservice.Config `toml:"fileservice"`
 
 	// LogService log service configuration
 	LogService struct {

@@ -18,7 +18,7 @@ uuid = "5849c262-2444-11ed-ba8c-d6aee46d73fa"
 [cn.Engine]
 type = "tae"
 
-[cn.fileservice]
+[[fileservice]]
 # s3 fileservice instance, used to store data.
 name = "s3"
 # use disk as fileservice backend.

@@ -123,6 +123,16 @@ func (c *Config) createETLFileService(name string) (fileservice.FileService, err
 	return nil, fmt.Errorf("file service named %s not set", name)
 }
 
+func (c *Config) createETLFileServiceAndConfig(name string) (fileservice.FileService, export.FSConfig, error) {
+	for _, cfg := range c.FileServices {
+		if strings.EqualFold(cfg.Name, name) {
+			fs, c, err := export.ParseFileService(trace.DefaultContext(), cfg)
+			return fs, c, err
+		}
+	}
+	return nil, export.FSConfig{}, fmt.Errorf("file service named %s not set", name)
+}
+
 func (c *Config) getLogServiceConfig() logservice.Config {
 	cfg := c.LogService
 	logutil.Infof("hakeeper client cfg: %v", c.HAKeeperClient)
@@ -150,6 +160,7 @@ func (c *Config) getCNServiceConfig() cnservice.Config {
 	cfg := c.CN
 	cfg.HAKeeper.ClientConfig = c.HAKeeperClient
 	cfg.Frontend = c.getFrontendConfig()
+	cfg.ETLFSFactory = c.createETLFileServiceAndConfig
 	if len(cfg.UUID) != 0 {
 		cfg.Frontend.NodeUUID = c.CN.UUID
 	}

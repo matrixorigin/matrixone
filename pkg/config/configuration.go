@@ -16,8 +16,6 @@ package config
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/fileservice"
-
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/toml"
@@ -357,9 +355,6 @@ type ParameterUnit struct {
 
 	//Cluster Nodes
 	ClusterNodes engine.Nodes
-
-	// FSConfig
-	FileService *fileservice.Config
 }
 
 func NewParameterUnit(
@@ -378,10 +373,6 @@ func NewParameterUnit(
 		TxnClient:     txnClient,
 		ClusterNodes:  clusterNodes,
 	}
-}
-
-func (PU *ParameterUnit) SetFileServiceConfig(cfg *fileservice.Config) {
-	PU.FileService = cfg
 }
 
 // GetParameterUnit gets the configuration from the context.

@@ -152,6 +152,9 @@ func GetFSWriterFactory(fs fileservice.FileService, nodeUUID, nodeType string) F
 	}
 }
 
+// FileServiceFactory Simulate fileservice.FileServiceFactory
+type FileServiceFactory func(name string) (fileservice.FileService, FSConfig, error)
+
 type FSConfig struct {
 	// base FileService config
 	backend string
@@ -200,6 +203,7 @@ const (
 	S3FSBackend   = "S3"
 )
 
+// ParseFileService create FS for CSV output, especial for localETLFS
 func ParseFileService(ctx context.Context, fsConfig fileservice.Config) (fs fileservice.FileService, cfg FSConfig, err error) {
 	switch fsConfig.Backend {
 	case DiskFSBackend, MemFSBackend:

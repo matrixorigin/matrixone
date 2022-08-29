@@ -12,12 +12,10 @@ service-addresses = [
     "2"
 ]
 
-[cn]
-
 [cn.Engine]
 type = "tae"
 
-[cn.fileservice]
+[[fileservice]]
 name = "s3"
 backend = "DISK"
 data-dir = "store"

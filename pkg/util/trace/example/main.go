@@ -42,7 +42,7 @@ func (l logOutputExecutor) Query(ctx context.Context, s string, _ ie.SessionOver
 func (l logOutputExecutor) ApplySessionOverride(ie.SessionOverrideOptions) {}
 
 func bootstrap(ctx context.Context) (context.Context, error) {
-	logutil.SetupMOLogger(&logutil.LogConfig{Format: "console", EnableStore: true})
+	logutil.SetupMOLogger(&logutil.LogConfig{Format: "console", DisableStore: false})
 	// init trace/log/error framework & BatchProcessor
 	return trace.Init(ctx,
 		trace.WithMOVersion("v0.6.0"),

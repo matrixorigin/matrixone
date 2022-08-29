@@ -66,7 +66,6 @@ func NewService(cfg *Config, ctx context.Context) (Service, error) {
 	srv.server = server
 
 	pu := config.NewParameterUnit(&cfg.Frontend, nil, nil, nil, nil, nil)
-	pu.SetFileServiceConfig(&cfg.FileService)
 	err = srv.initMOServer(ctx, pu)
 	if err != nil {
 		return nil, err
@@ -156,6 +155,8 @@ func (s *service) initEngine(
 	return nil
 }
 
+const s3FileServiceName = "S3" // same as dnservice/factory.go s3FileServiceName
+
 func (s *service) createMOServer(inputCtx context.Context, pu *config.ParameterUnit) (context.Context, error) {
 	address := fmt.Sprintf("%s:%d", pu.SV.Host, pu.SV.Port)
 	moServerCtx := context.WithValue(inputCtx, config.ParameterUnitKey, pu)
@@ -173,7 +174,7 @@ func (s *service) createMOServer(inputCtx context.Context, pu *config.ParameterU
 		pu.SV.NodeUUID = nodeUUID.String()
 	}
 	if !pu.SV.DisableTrace || !pu.SV.DisableMetric {
-		if fs, cfg, err = export.ParseFileService(moServerCtx, *pu.FileService); err != nil {
+		if fs, cfg, err = s.cfg.ETLFSFactory(s3FileServiceName); err != nil {
 			return nil, err
 		}
 		writerFactory = export.GetFSWriterFactory(fs, pu.SV.NodeUUID, trace.NodeTypeCN.String())

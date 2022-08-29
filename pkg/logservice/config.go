@@ -158,6 +158,7 @@ type Config struct {
 	// Frontend parameters for the frontend, assign by mo-service's Config
 	Frontend config.FrontendParameters
 
+	// ETLFSFactory create FS for CSV output, especial for localETLFS
 	ETLFSFactory fileservice.FileServiceFactory
 }
 
