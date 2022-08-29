@@ -77,7 +77,7 @@ func (s *store) doWrite(ctx context.Context, request *txn.TxnRequest, response *
 	}
 	r.waitStarted()
 	prepareResponse(request, response)
-	return r.service.Read(ctx, request, response)
+	return r.service.Write(ctx, request, response)
 }
 
 func (s *store) handleCommit(ctx context.Context, request *txn.TxnRequest, response *txn.TxnResponse) error {
