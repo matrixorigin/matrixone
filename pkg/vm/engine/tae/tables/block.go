@@ -323,6 +323,7 @@ func (blk *dataBlock) BuildCompactionTaskFactory() (
 	taskType tasks.TaskType,
 	scopes []common.ID,
 	err error) {
+	// If the conditions are met, immediately modify the data block status to NotAppendable
 	blk.SetNotAppendable()
 	blk.meta.RLock()
 	dropped := blk.meta.IsDroppedCommitted()
@@ -331,6 +332,7 @@ func (blk *dataBlock) BuildCompactionTaskFactory() (
 	if dropped || inTxn {
 		return
 	}
+	// Make sure no appender use this block to compact
 	if blk.RefCount() > 0 {
 		return
 	}

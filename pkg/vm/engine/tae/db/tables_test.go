@@ -795,12 +795,18 @@ func TestCompaction2(t *testing.T) {
 			it.Next()
 		}
 		time.Sleep(400 * time.Millisecond)
+	}
+	{
+		txn, _ := db.StartTxn(nil)
+		database, _ := txn.GetDatabase("db")
+		rel, _ := database.GetRelationByName(schema.Name)
+		it := rel.MakeBlockIt()
 		for it.Valid() {
 			blk := it.GetBlock()
 			view, _ := blk.GetColumnDataById(3, nil)
 			assert.NotNil(t, view)
 			view.Close()
-			assert.True(t, blk.GetMeta().(*catalog.BlockEntry).IsAppendable())
+			assert.False(t, blk.GetMeta().(*catalog.BlockEntry).IsAppendable())
 			assert.False(t, blk.GetMeta().(*catalog.BlockEntry).GetBlockData().IsAppendable())
 			it.Next()
 		}
