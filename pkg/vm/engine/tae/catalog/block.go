@@ -28,6 +28,10 @@ import (
 
 type BlockDataFactory = func(meta *BlockEntry) data.Block
 
+func compareBlockFn(a, b *BlockEntry) int {
+	return a.BaseEntry.DoCompre(b.BaseEntry)
+}
+
 type BlockEntry struct {
 	*BaseEntry
 	segment *SegmentEntry
