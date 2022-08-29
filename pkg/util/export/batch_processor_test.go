@@ -57,7 +57,7 @@ var _ batchpipe.PipeImpl[batchpipe.HasName, any] = &dummyPipeImpl{}
 
 type Num int64
 
-func newNum(v int64) *Num {
+func newDummy(v int64) *Num {
 	n := Num(v)
 	return &n
 }
@@ -182,11 +182,11 @@ func Test_newBufferHolder(t *testing.T) {
 		{
 			name: "normal",
 			args: args{
-				name:          newNum(0),
+				name:          newDummy(0),
 				impl:          &dummyPipeImpl{ch: ch, duration: 100 * time.Millisecond},
 				signal:        signal,
-				elems:         []*Num{newNum(1), newNum(2), newNum(3)},
-				elemsReminder: []*Num{newNum(4), newNum(5)},
+				elems:         []*Num{newDummy(1), newDummy(2), newDummy(3)},
+				elemsReminder: []*Num{newDummy(4), newDummy(5)},
 				interval:      100 * time.Millisecond,
 			},
 			want:         `(1),(2),(3)`,
@@ -195,10 +195,10 @@ func Test_newBufferHolder(t *testing.T) {
 		{
 			name: "emptyReminder",
 			args: args{
-				name:          newNum(0),
+				name:          newDummy(0),
 				impl:          &dummyPipeImpl{ch: ch, duration: 100 * time.Millisecond},
 				signal:        signal,
-				elems:         []*Num{newNum(1), newNum(2), newNum(3)},
+				elems:         []*Num{newDummy(1), newDummy(2), newDummy(3)},
 				elemsReminder: []*Num{},
 				interval:      100 * time.Millisecond,
 			},
@@ -242,21 +242,21 @@ func TestNewMOCollector(t *testing.T) {
 	var acceptSignal = func() { <-signalC }
 	signalFunc = func() { signalC <- struct{}{} }
 
-	Register(newNum(0), &dummyPipeImpl{ch: ch, duration: time.Hour})
+	Register(newDummy(0), &dummyPipeImpl{ch: ch, duration: time.Hour})
 	collector := NewMOCollector()
 	collector.Start()
 
-	collector.Collect(DefaultContext(), newNum(1))
+	collector.Collect(DefaultContext(), newDummy(1))
 	acceptSignal()
-	collector.Collect(DefaultContext(), newNum(2))
+	collector.Collect(DefaultContext(), newDummy(2))
 	acceptSignal()
-	collector.Collect(DefaultContext(), newNum(3))
+	collector.Collect(DefaultContext(), newDummy(3))
 	acceptSignal()
 	got := <-ch
 	require.Equal(t, `(1),(2),(3)`, got)
-	collector.Collect(DefaultContext(), newNum(4))
+	collector.Collect(DefaultContext(), newDummy(4))
 	acceptSignal()
-	collector.Collect(DefaultContext(), newNum(5))
+	collector.Collect(DefaultContext(), newDummy(5))
 	acceptSignal()
 	collector.Stop(true)
 	logutil.GetGlobalLogger().Sync()
@@ -299,24 +299,24 @@ func TestMOCollector_HangBug(t *testing.T) {
 	defer _stubAwakeBuffer.Reset()
 
 	// init Collector, with disabled-trigger
-	Register(newNum(0), &dummyPipeImpl{ch: ch, duration: time.Hour})
+	Register(newDummy(0), &dummyPipeImpl{ch: ch, duration: time.Hour})
 	collector := NewMOCollector()
 	collector.Start()
 
 	t.Logf("fill up the buffer")
-	collector.Collect(DefaultContext(), newNum(1))
+	collector.Collect(DefaultContext(), newDummy(1))
 	acceptSignal()
-	collector.Collect(DefaultContext(), newNum(2))
+	collector.Collect(DefaultContext(), newDummy(2))
 	acceptSignal()
 	t.Logf("trigger ShouldFlush calling")
-	collector.Collect(DefaultContext(), newNum(3))
+	collector.Collect(DefaultContext(), newDummy(3))
 	acceptSignal()
 	// fill up the collect channel(awakeCollect) ==> fill up the Batch channel(awakeGenerate)
-	collector.Collect(DefaultContext(), newNum(4))
+	collector.Collect(DefaultContext(), newDummy(4))
 	acceptSignal()
-	collector.Collect(DefaultContext(), newNum(5))
+	collector.Collect(DefaultContext(), newDummy(5))
 	acceptSignal()
-	collector.Collect(DefaultContext(), newNum(6))
+	collector.Collect(DefaultContext(), newDummy(6))
 	t.Logf("length collect channel: %d", len(collector.awakeCollect))
 	t.Logf("length generate channel: %d", len(ctrlC))
 	require.Equal(t, 1, len(collector.awakeCollect))
