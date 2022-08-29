@@ -616,6 +616,9 @@ var aggregates = map[int]Functions{
 				if inputs[0] == types.T_any {
 					return 0, nil
 				}
+				if !operator.IsNumeric(inputs[0]) && !operator.IsDecimal(inputs[0]) {
+					return wrongFuncParamForAgg, nil
+				}
 				_, err := aggregate.ReturnType(aggregate.BitAnd, types.Type{Oid: inputs[0]})
 				if err == nil {
 					return 0, nil
@@ -640,7 +643,7 @@ var aggregates = map[int]Functions{
 				if inputs[0] == types.T_any {
 					return 0, nil
 				}
-				if !operator.IsNumeric(inputs[0]) {
+				if !operator.IsNumeric(inputs[0]) && !operator.IsDecimal(inputs[0]) {
 					return wrongFuncParamForAgg, nil
 				}
 				_, err := aggregate.ReturnType(aggregate.BitOr, types.Type{Oid: inputs[0]})
@@ -667,7 +670,7 @@ var aggregates = map[int]Functions{
 				if inputs[0] == types.T_any {
 					return 0, nil
 				}
-				if !operator.IsNumeric(inputs[0]) {
+				if !operator.IsNumeric(inputs[0]) && !operator.IsDecimal(inputs[0]) {
 					return wrongFuncParamForAgg, nil
 				}
 				_, err := aggregate.ReturnType(aggregate.BitXor, types.Type{Oid: inputs[0]})

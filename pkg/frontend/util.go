@@ -17,6 +17,7 @@ package frontend
 import (
 	"bytes"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"go/constant"
 	"os"
 	"runtime"
@@ -25,8 +26,6 @@ import (
 	"time"
 
 	"github.com/BurntSushi/toml"
-
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 
