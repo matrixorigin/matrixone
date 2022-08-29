@@ -57,6 +57,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/single"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/top"
 	"github.com/matrixorigin/matrixone/pkg/vm"
+	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
+	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
+	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -80,14 +83,14 @@ func pipelineMessageHandle(ctx context.Context, message morpc.Message, cs morpc.
 	if !ok {
 		panic("unexpected message type for cn-server")
 	}
-	s, err := decodeScope(m.GetData(), nil)
+	c := newCompile(ctx)
+	s, err := decodeScope(m.GetData(), c.proc)
 	if err != nil {
 		return nil, err
 	}
 	// refactor the last operator connect to output
 	refactorScope(ctx, s, cs)
 
-	c := newCompile(ctx)
 	err = s.Run(c)
 	if err != nil {
 		return nil, err
@@ -798,7 +801,8 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext) (vm.In
 func newCompile(ctx context.Context) *Compile {
 	// not implement now, fill method should send by stream
 	c := &Compile{
-		ctx: ctx,
+		ctx:  ctx,
+		proc: process.New(mheap.New(guest.New(1<<30, host.New(1<<20)))),
 	}
 	//c.fill = func(a any, b *batch.Batch) error {
 	//	stream, err := CNClient.NewStream("target")
