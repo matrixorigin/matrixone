@@ -43,6 +43,7 @@
     |    3 | wederTom  | man  |
     +------+-----------+------+
     ```
+    
 3. Export the table to your container directory path，for example, *~/tmp/docker_export_demo/store/export_datatable.txt*
 
     ```
