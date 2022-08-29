@@ -124,7 +124,7 @@ func (s *service) initMOServer(ctx context.Context, pu *config.ParameterUnit) er
 
 	pu.HostMmu = host.New(pu.SV.HostMmuLimitation)
 
-	fmt.Println("Initialize the engine ...")
+	logutil.Info("Initialize the engine ...")
 	err = s.initEngine(ctx, cancelMoServerCtx, pu)
 	if err != nil {
 		return err

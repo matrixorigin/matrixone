@@ -438,9 +438,7 @@ execute s4 using @a2_val;
 execute s5 using @min;
 execute s6 using @min;
 
--- @bvt:issue#4528
 execute s7 using @a2_val;
--- @bvt:issue
 
 execute s8 using @min;
 execute s9 using @min;
