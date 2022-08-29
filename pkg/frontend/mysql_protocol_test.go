@@ -2280,7 +2280,7 @@ func Test_handleHandshake(t *testing.T) {
 
 		payload = append(payload, []byte{'c', 'd', 0}...)
 		_, err = mp.handleHandshake(payload)
-		convey.So(err, convey.ShouldNotBeNil)
+		convey.So(err, convey.ShouldBeNil)
 	})
 }
 

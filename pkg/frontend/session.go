@@ -17,6 +17,7 @@ package frontend
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"strings"
 	"time"
 
@@ -212,6 +213,12 @@ func (ses *Session) AppendMysqlResultSetOfBackgroundTask(mrs *MysqlResultSet) {
 
 func (ses *Session) GetAllMysqlResultSet() []*MysqlResultSet {
 	return ses.allResultSet
+}
+
+func (ses *Session) ClearAllMysqlResultSet() {
+	if ses.allResultSet != nil {
+		ses.allResultSet = ses.allResultSet[:0]
+	}
 }
 
 func (ses *Session) GetTenantInfo() *TenantInfo {
@@ -583,18 +590,100 @@ func (ses *Session) SetOutputCallback(callback func(interface{}, *batch.Batch) e
 }
 
 // AuthenticateUser verifies the password of the user.
-func (ses *Session) AuthenticateUser(userInput string) error {
+func (ses *Session) AuthenticateUser(userInput string) ([]byte, error) {
 	//Get tenant info
 	tenant, err := GetTenantInfo(userInput)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	ses.SetTenantInfo(tenant)
 
+	//step1 : check tenant exists or not in SYS tenant context
+	sysTenantCtx := context.WithValue(ses.requestCtx, moengine.TenantIDKey{}, uint32(sysAccountID))
+	sysTenantCtx = context.WithValue(sysTenantCtx, moengine.UserIDKey{}, uint32(rootID))
+	sysTenantCtx = context.WithValue(sysTenantCtx, moengine.RoleIDKey{}, uint32(moAdminRoleID))
+	sqlForCheckTenant := getSqlForCheckTenant(tenant.GetTenant())
+	rsset, err := executeSQLInBackgroundSession(sysTenantCtx, ses.GuestMmu, ses.Mempool, ses.Pu, sqlForCheckTenant)
+	if err != nil {
+		return nil, err
+	}
+	if len(rsset) < 1 || rsset[0].GetRowCount() < 1 {
+		return nil, fmt.Errorf("there is no tenant %s", tenant.GetTenant())
+	}
+
+	tenantID, err := rsset[0].GetInt64(0, 0)
+	if err != nil {
+		return nil, err
+	}
+
+	tenant.SetTenantID(uint32(tenantID))
+	//step2 : check user exists or not in general tenant.
+	//step3 : get the password of the user
+
+	tenantCtx := context.WithValue(ses.requestCtx, moengine.TenantIDKey{}, uint32(tenantID))
+
 	//Get the password of the user in an independent session
-	err = executeSQLInBackgroundSession(ses.requestCtx, ses.GuestMmu, ses.Mempool, ses.Pu, "use mo_catalog; select * from mo_database;")
-	return err
+	sqlForPasswordOfUser := getSqlForPasswordOfUser(tenant.GetUser())
+	rsset, err = executeSQLInBackgroundSession(tenantCtx, ses.GuestMmu, ses.Mempool, ses.Pu, sqlForPasswordOfUser)
+	if err != nil {
+		return nil, err
+	}
+	if len(rsset) < 1 || rsset[0].GetRowCount() < 1 {
+		return nil, fmt.Errorf("there is no user %s", tenant.GetUser())
+	}
+
+	userID, err := rsset[0].GetInt64(0, 0)
+	if err != nil {
+		return nil, err
+	}
+
+	pwd, err := rsset[0].GetString(0, 1)
+	if err != nil {
+		return nil, err
+	}
+
+	defaultRoleID, err := rsset[0].GetInt64(0, 2)
+	if err != nil {
+		return nil, err
+	}
+
+	tenant.SetUserID(uint32(userID))
+	tenant.SetDefaultRoleID(uint32(defaultRoleID))
+
+	//step4 : check role exists or not
+	//step4.1 : check default role exits or not
+	sqlForCheckRoleExists := getSqlForCheckRoleExists(int(defaultRoleID), tenant.GetDefaultRole())
+	rsset, err = executeSQLInBackgroundSession(tenantCtx, ses.GuestMmu, ses.Mempool, ses.Pu, sqlForCheckRoleExists)
+	if err != nil {
+		return nil, err
+	}
+	hasDefaultRole := true
+	if len(rsset) < 1 || rsset[0].GetRowCount() < 1 {
+		hasDefaultRole = false
+	}
+
+	//step4.2 : check the user has the role or not
+	if !hasDefaultRole {
+		sqlForRoleOfUser := getSqlForRoleOfUser(int(userID), tenant.GetDefaultRole())
+		rsset, err = executeSQLInBackgroundSession(tenantCtx, ses.GuestMmu, ses.Mempool, ses.Pu, sqlForRoleOfUser)
+		if err != nil {
+			return nil, err
+		}
+		if len(rsset) < 1 || rsset[0].GetRowCount() < 1 {
+			return nil, fmt.Errorf("there is no role %s of the user %s", tenant.GetDefaultRole(), tenant.GetUser())
+		}
+
+		defaultRoleID, err = rsset[0].GetInt64(0, 0)
+		if err != nil {
+			return nil, err
+		}
+		tenant.SetDefaultRoleID(uint32(defaultRoleID))
+	}
+
+	logutil.Info(tenant.String())
+
+	return []byte(pwd), nil
 }
 
 func (th *TxnHandler) SetSession(ses *Session) {
@@ -1007,18 +1096,28 @@ func fakeDataSetFetcher(handle interface{}, dataSet *batch.Batch) error {
 	return nil
 }
 
+func convertIntoResultSet(values []interface{}) ([]ExecResult, error) {
+	rsset := make([]ExecResult, len(values))
+	for i, value := range values {
+		if er, ok := value.(ExecResult); ok {
+			rsset[i] = er
+		} else {
+			return nil, moerr.NewInternalError("it is not the type of result set")
+		}
+	}
+	return rsset, nil
+}
+
 // executeSQLInBackgroundSession executes the sql in an independent session and transaction.
 // It sends nothing to the client.
-func executeSQLInBackgroundSession(ctx context.Context, gm *guest.Mmu, mp *mempool.Mempool, pu *config.ParameterUnit, sql string) error {
-	mce := NewMysqlCmdExecutor()
-	defer mce.Close()
-	backSess := NewBackgroundSession(ctx, gm, mp, pu, gSysVariables)
-	mce.PrepareSessionBeforeExecRequest(backSess.Session)
-	defer backSess.Close()
-	err := mce.doComQuery(backSess.GetRequestContext(), sql)
+func executeSQLInBackgroundSession(ctx context.Context, gm *guest.Mmu, mp *mempool.Mempool, pu *config.ParameterUnit, sql string) ([]ExecResult, error) {
+	bh := NewBackgroundHandler(ctx, gm, mp, pu)
+	defer bh.Close()
+	err := bh.Exec(ctx, sql)
 	if err != nil {
-		return err
+		return nil, err
 	}
+	rsset := bh.GetExecResultSet()
 	//get the result set
 	//TODO: debug further
 	//mrsArray := ses.GetAllMysqlResultSet()
@@ -1032,5 +1131,48 @@ func executeSQLInBackgroundSession(ctx context.Context, gm *guest.Mmu, mp *mempo
 	//	}
 	//}
 
-	return nil
+	return convertIntoResultSet(rsset)
+}
+
+type BackgroundHandler struct {
+	mce *MysqlCmdExecutor
+	ses *BackgroundSession
+}
+
+var NewBackgroundHandler = func(ctx context.Context, gm *guest.Mmu, mp *mempool.Mempool, pu *config.ParameterUnit) BackgroundExec {
+	bh := &BackgroundHandler{
+		mce: NewMysqlCmdExecutor(),
+		ses: NewBackgroundSession(ctx, gm, mp, pu, gSysVariables),
+	}
+	return bh
+}
+
+func (bh *BackgroundHandler) Close() {
+	bh.mce.Close()
+	bh.ses.Close()
+}
+
+func (bh *BackgroundHandler) Exec(ctx context.Context, sql string) error {
+	bh.mce.PrepareSessionBeforeExecRequest(bh.ses.Session)
+	if ctx == nil {
+		ctx = bh.ses.GetRequestContext()
+	}
+	err := bh.mce.doComQuery(ctx, sql)
+	if err != nil {
+		return err
+	}
+	return err
+}
+
+func (bh *BackgroundHandler) GetExecResultSet() []interface{} {
+	mrs := bh.ses.GetAllMysqlResultSet()
+	ret := make([]interface{}, len(mrs))
+	for i, mr := range mrs {
+		ret[i] = mr
+	}
+	return ret
+}
+
+func (bh *BackgroundHandler) ClearExecResultSet() {
+	bh.ses.ClearAllMysqlResultSet()
 }

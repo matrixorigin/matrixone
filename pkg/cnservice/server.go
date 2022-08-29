@@ -36,7 +36,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 )
 
-func NewService(cfg *Config, ctx context.Context) (Service, error) {
+type Options func(*service)
+
+func NewService(cfg *Config, ctx context.Context, options ...Options) (Service, error) {
 
 	if err := cfg.Validate(); err != nil {
 		return nil, err
@@ -44,26 +46,31 @@ func NewService(cfg *Config, ctx context.Context) (Service, error) {
 
 	srv := &service{cfg: cfg}
 	srv.logger = logutil.Adjust(srv.logger)
-	srv.pool = &sync.Pool{
+	srv.responsePool = &sync.Pool{
 		New: func() any {
 			return &pipeline.Message{}
 		},
 	}
 
+	pu := config.NewParameterUnit(&cfg.Frontend, nil, nil, nil, nil, nil)
+	cfg.Frontend.SetDefaultValues()
+	err := srv.initMOServer(ctx, pu)
+	if err != nil {
+		return nil, err
+	}
+
 	server, err := morpc.NewRPCServer("cn-server", cfg.ListenAddress,
-		morpc.NewMessageCodec(srv.acquireMessage, 16<<20),
-		morpc.WithServerGoettyOptions(goetty.WithSessionRWBUfferSize(1<<20, 1<<20)))
+		morpc.NewMessageCodec(srv.acquireMessage, cfg.PayLoadCopyBufferSize),
+		morpc.WithServerGoettyOptions(goetty.WithSessionRWBUfferSize(cfg.ReadBufferSize, cfg.WriteBufferSize)))
 	if err != nil {
 		return nil, err
 	}
 	server.RegisterRequestHandler(compile.NewServer().HandleRequest)
 	srv.server = server
 
-	pu := config.NewParameterUnit(&cfg.Frontend, nil, nil, nil, nil, nil)
-	cfg.Frontend.SetDefaultValues()
-	err = srv.initMOServer(ctx, pu)
-	if err != nil {
-		return nil, err
+	srv.requestHandler = defaultRequestHandler
+	for _, opt := range options {
+		opt(srv)
 	}
 
 	return srv, nil
@@ -87,15 +94,16 @@ func (s *service) Close() error {
 }
 
 func (s *service) acquireMessage() morpc.Message {
-	return s.pool.Get().(*pipeline.Message)
+	return s.responsePool.Get().(*pipeline.Message)
 }
 
-/*
-func (s *service) releaseMessage(msg *pipeline.Message) {
-	msg.Reset()
-	s.pool.Put(msg)
+func defaultRequestHandler(ctx context.Context, message morpc.Message, cs morpc.ClientSession) error {
+	return nil
 }
-*/
+
+//func (s *service) handleRequest(ctx context.Context, req morpc.Message, _ uint64, cs morpc.ClientSession) error {
+//	return s.requestHandler(ctx, req, cs)
+//}
 
 func (s *service) initMOServer(ctx context.Context, pu *config.ParameterUnit) error {
 	var err error
@@ -174,6 +182,10 @@ func (s *service) createMOServer(inputCtx context.Context, pu *config.ParameterU
 		metric.InitMetric(moServerCtx, ieFactory, pu, 0, metric.ALL_IN_ONE_MODE)
 	}
 	frontend.InitServerVersion(pu.SV.MoVersion)
+	err := frontend.InitSysTenant(moServerCtx)
+	if err != nil {
+		panic(err)
+	}
 }
 
 func (s *service) runMoServer() error {
@@ -229,4 +241,10 @@ func (s *service) getTxnClient() (c client.TxnClient, err error) {
 	})
 	c = s._txnClient
 	return
+}
+
+func WithMessageHandle(f func(ctx context.Context, message morpc.Message, cs morpc.ClientSession) error) Options {
+	return func(s *service) {
+		s.requestHandler = f
+	}
 }
