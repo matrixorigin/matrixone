@@ -186,16 +186,6 @@ func (entry *SegmentEntry) GetAppendableBlockCnt() int {
 	return cnt
 }
 
-func (entry *SegmentEntry) GetBlockCnt() int {
-	cnt := 0
-	it := entry.MakeBlockIt(true)
-	for it.Valid() {
-		cnt++
-		it.Next()
-	}
-	return cnt
-}
-
 func (entry *SegmentEntry) LastAppendableBlock() (blk *BlockEntry) {
 	it := entry.MakeBlockIt(false)
 	for it.Valid() {
