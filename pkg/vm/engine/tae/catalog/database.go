@@ -206,6 +206,10 @@ func (e *DBEntry) GetBlockEntryByID(id *common.ID) (blk *BlockEntry, err error) 
 	return
 }
 
+func (e *DBEntry) GetItemNodeByIDLocked(id uint64) *common.DLNode {
+	return e.entries[id]
+}
+
 func (e *DBEntry) GetTableEntryByID(id uint64) (table *TableEntry, err error) {
 	e.RLock()
 	defer e.RUnlock()
@@ -305,12 +309,14 @@ func (e *DBEntry) AddEntryLocked(table *TableEntry, txn txnif.AsyncTxn) (err err
 		n := e.link.Insert(table)
 		e.entries[table.GetID()] = n
 
-		nn := newNodeList(e, &e.nodesMu, fullName)
+		nn := newNodeList(e.GetItemNodeByIDLocked,
+			&e.nodesMu,
+			fullName)
 		e.nameNodes[fullName] = nn
 
 		nn.CreateNode(table.GetID())
 	} else {
-		node := nn.GetTableNode()
+		node := nn.GetNode()
 		record := node.GetPayload().(*TableEntry)
 		err = record.PrepareAdd(txn)
 		if err != nil {

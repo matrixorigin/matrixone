@@ -24,22 +24,24 @@ import (
 
 type nodeList struct {
 	common.SSLLNode
-	host     any
+	getter   func(uint64) *common.DLNode
 	rwlocker *sync.RWMutex
 	name     string
 }
 
-func newNodeList(host any, rwlocker *sync.RWMutex, name string) *nodeList {
+func newNodeList(getter func(uint64) *common.DLNode,
+	rwlocker *sync.RWMutex,
+	name string) *nodeList {
 	return &nodeList{
 		SSLLNode: *common.NewSSLLNode(),
-		host:     host,
+		getter:   getter,
 		rwlocker: rwlocker,
 		name:     name,
 	}
 }
 
 func (n *nodeList) CreateNode(id uint64) *nameNode {
-	nn := newNameNode(n.host, id)
+	nn := newNameNode(id, n.getter)
 	n.rwlocker.Lock()
 	defer n.rwlocker.Unlock()
 	n.Insert(nn)
@@ -54,7 +56,7 @@ func (n *nodeList) DeleteNode(id uint64) (deleted *nameNode, empty bool) {
 	curr := n.GetNext()
 	depth := 0
 	for curr != nil {
-		nid := curr.(*nameNode).Id
+		nid := curr.(*nameNode).id
 		if id == nid {
 			prev.ReleaseNextNode()
 			deleted = curr.(*nameNode)
@@ -104,21 +106,15 @@ func (n *nodeList) Length() int {
 	return n.LengthLocked()
 }
 
-func (n *nodeList) GetTableNode() *common.DLNode {
+func (n *nodeList) GetNode() *common.DLNode {
 	n.rwlocker.RLock()
 	defer n.rwlocker.RUnlock()
-	return n.GetNext().(*nameNode).GetTableNode()
-}
-
-func (n *nodeList) GetDBNode() *common.DLNode {
-	n.rwlocker.RLock()
-	defer n.rwlocker.RUnlock()
-	return n.GetNext().(*nameNode).GetDBNode()
+	return n.GetNext().(*nameNode).GetNode()
 }
 
 func (n *nodeList) TxnGetTableNodeLocked(txn txnif.TxnReader) (dn *common.DLNode, err error) {
 	getter := func(nn *nameNode) (n *common.DLNode, entry *BaseEntry) {
-		n = nn.GetTableNode()
+		n = nn.GetNode()
 		entry = n.GetPayload().(*TableEntry).BaseEntry
 		return
 	}
@@ -179,7 +175,7 @@ func (n *nodeList) TxnGetNodeLocked(
 
 func (n *nodeList) TxnGetDBNodeLocked(txn txnif.TxnReader) (*common.DLNode, error) {
 	getter := func(nn *nameNode) (n *common.DLNode, entry *BaseEntry) {
-		n = nn.GetDBNode()
+		n = nn.GetNode()
 		entry = n.GetPayload().(*DBEntry).BaseEntry
 		return
 	}
@@ -192,7 +188,7 @@ func (n *nodeList) PString(level common.PPLevel) string {
 		return fmt.Sprintf("TableNode[\"%s\"](Len=0)", n.name)
 	}
 	node := curr.(*nameNode)
-	s := fmt.Sprintf("TableNode[\"%s\"](Len=%d)->[%d", n.name, n.Length(), node.Id)
+	s := fmt.Sprintf("TableNode[\"%s\"](Len=%d)->[%d", n.name, n.Length(), node.id)
 	if level == common.PPL0 {
 		s = fmt.Sprintf("%s]", s)
 		return s
@@ -201,7 +197,7 @@ func (n *nodeList) PString(level common.PPLevel) string {
 	curr = curr.GetNext()
 	for curr != nil {
 		node := curr.(*nameNode)
-		s = fmt.Sprintf("%s->%d", s, node.Id)
+		s = fmt.Sprintf("%s->%d", s, node.id)
 		curr = curr.GetNext()
 	}
 	s = fmt.Sprintf("%s]", s)
@@ -210,28 +206,21 @@ func (n *nodeList) PString(level common.PPLevel) string {
 
 type nameNode struct {
 	common.SSLLNode
-	Id   uint64
-	host any
+	getter func(uint64) *common.DLNode
+	id     uint64
 }
 
-func newNameNode(host any, id uint64) *nameNode {
+func newNameNode(id uint64, getter func(uint64) *common.DLNode) *nameNode {
 	return &nameNode{
-		Id:       id,
 		SSLLNode: *common.NewSSLLNode(),
-		host:     host,
+		getter:   getter,
+		id:       id,
 	}
 }
 
-func (n *nameNode) GetDBNode() *common.DLNode {
+func (n *nameNode) GetNode() *common.DLNode {
 	if n == nil {
 		return nil
 	}
-	return n.host.(*Catalog).entries[n.Id]
-}
-
-func (n *nameNode) GetTableNode() *common.DLNode {
-	if n == nil {
-		return nil
-	}
-	return n.host.(*DBEntry).entries[n.Id]
+	return n.getter(n.id)
 }

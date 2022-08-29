@@ -510,6 +510,10 @@ func (catalog *Catalog) AddColumnCnt(cnt int) {
 	}
 }
 
+func (catalog *Catalog) GetItemNodeByIDLocked(id uint64) *common.DLNode {
+	return catalog.entries[id]
+}
+
 func (catalog *Catalog) GetScheduler() tasks.TaskScheduler { return catalog.scheduler }
 func (catalog *Catalog) GetDatabaseByID(id uint64) (db *DBEntry, err error) {
 	catalog.RLock()
@@ -529,12 +533,14 @@ func (catalog *Catalog) AddEntryLocked(database *DBEntry, txn txnif.TxnReader) e
 		n := catalog.link.Insert(database)
 		catalog.entries[database.GetID()] = n
 
-		nn := newNodeList(catalog, &catalog.nodesMu, database.name)
+		nn := newNodeList(catalog.GetItemNodeByIDLocked,
+			&catalog.nodesMu,
+			database.name)
 		catalog.nameNodes[database.GetFullName()] = nn
 
 		nn.CreateNode(database.GetID())
 	} else {
-		node := nn.GetDBNode()
+		node := nn.GetNode()
 		record := node.GetPayload().(*DBEntry)
 		err := record.PrepareAdd(txn)
 		if err != nil {
