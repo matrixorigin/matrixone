@@ -406,8 +406,8 @@ import (
 %type <comparisionExpr> like_opt
 %type <fullOpt> full_opt
 %type <str> database_name_opt auth_string constraint_keyword_opt constraint_keyword
-%type <userMiscOption> pwd_or_lck
-%type <userMiscOptions> pwd_or_lck_opt pwd_or_lck_list
+%type <userMiscOption> pwd_or_lck pwd_or_lck_opt
+//%type <userMiscOptions> pwd_or_lck_list
 
 %type <expr> literal true_or_false
 %type <expr> predicate
@@ -433,8 +433,8 @@ import (
 %type <role> role_spec
 %type <str> role_name
 %type <usernameRecord> user_name
-%type <user> user_spec drop_user_spec
-%type <users> user_spec_list drop_user_spec_list
+%type <user> user_spec drop_user_spec user_spec_with_identified
+%type <users> user_spec_list drop_user_spec_list user_spec_list_of_create_user
 //%type <tlsOptions> require_clause_opt require_clause require_list
 //%type <tlsOption> require_elem
 //%type <resourceOptions> conn_option_list conn_options
@@ -526,7 +526,7 @@ import (
 %type <accountStatus> account_status_option
 %type <accountComment> account_comment_opt
 %type <accountCommentOrAttribute> user_comment_or_attribute_opt
-%type <userIdentified> user_identified_opt
+%type <userIdentified> user_identified user_identified_opt
 %type <accountRole> default_role_opt
 
 %start start_command
@@ -1798,13 +1798,13 @@ alter_account_stmt:
     }
 
 alter_user_stmt:
-    ALTER USER exists_opt user_spec_list default_role_opt pwd_or_lck_opt user_comment_or_attribute_opt
+    ALTER USER exists_opt user_spec_list_of_create_user default_role_opt pwd_or_lck_opt user_comment_or_attribute_opt
     {
         $$ = &tree.AlterUser{
             IfExists: $3,
             Users: $4,
             Role: $5,
-            MiscOpts: $6,
+            MiscOpt: $6,
             CommentOrAttribute: $7,
         }
     }
@@ -1831,20 +1831,20 @@ pwd_or_lck_opt:
     {
         $$ = nil
     }
-|   pwd_or_lck_list
+|   pwd_or_lck
     {
         $$ = $1
     }
 
-pwd_or_lck_list:
-    pwd_or_lck
-    {
-        $$ = []tree.UserMiscOption{$1}
-    }
-|   pwd_or_lck_list pwd_or_lck
-    {
-        $$ = append($1, $2)
-    }
+//pwd_or_lck_list:
+//    pwd_or_lck
+//    {
+//        $$ = []tree.UserMiscOption{$1}
+//    }
+//|   pwd_or_lck_list pwd_or_lck
+//    {
+//        $$ = append($1, $2)
+//    }
 
 pwd_or_lck:
     UNLOCK
@@ -3447,14 +3447,14 @@ account_comment_opt:
     }
 
 create_user_stmt:
-    CREATE USER not_exists_opt user_spec_list DEFAULT ROLE account_role_name pwd_or_lck_opt user_comment_or_attribute_opt
+    CREATE USER not_exists_opt user_spec_list_of_create_user default_role_opt pwd_or_lck_opt user_comment_or_attribute_opt
     {
         $$ = &tree.CreateUser{
             IfNotExists: $3,
             Users: $4,
-            Role: tree.Role{UserName:$7},
-            MiscOpts: $8,
-            CommentOrAttribute: $9,
+            Role: $5,
+            MiscOpt: $6,
+            CommentOrAttribute: $7,
         }
     }
 
@@ -3583,6 +3583,25 @@ user_comment_or_attribute_opt:
 //    {
 //        $$ = &tree.TlsOptionSan{San: $2}
 //    }
+user_spec_list_of_create_user:
+    user_spec_with_identified
+    {
+        $$ = []*tree.User{$1}
+    }
+|   user_spec_list_of_create_user ',' user_spec_with_identified
+    {
+        $$ = append($1, $3)
+    }
+
+user_spec_with_identified:
+    user_name user_identified
+    {
+        $$ = &tree.User{
+            Username: $1.Username,
+            Hostname: $1.Hostname,
+            AuthOption: $2,
+        }
+    }
 
 user_spec_list:
     user_spec
@@ -3622,7 +3641,13 @@ user_identified_opt:
     {
         $$ = nil
     }
-|   IDENTIFIED BY STRING
+|   user_identified
+    {
+    	$$ = $1
+    }
+
+user_identified:
+    IDENTIFIED BY STRING
     {
 	$$ = &tree.AccountIdentified{
 		Typ: tree.AccountIdentifiedByPassword,

@@ -1,0 +1,13 @@
+create role r1,r2,r3;
+create role if not exists r1,r2,r3;
+select role_name from mo_catalog.mo_role;
+role_name
+moadmin
+public
+r1
+r2
+r3
+create role r1;
+Internal error: the role r1 exists
+create role public;
+Internal error: the role public exists

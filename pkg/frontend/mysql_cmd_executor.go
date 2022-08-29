@@ -1395,6 +1395,34 @@ func (mce *MysqlCmdExecutor) handleDeallocate(st *tree.Deallocate) error {
 	return nil
 }
 
+// handleCreateAccount creates a new user-level tenant in the context of the tenant SYS
+// which has been initialized.
+func (mce *MysqlCmdExecutor) handleCreateAccount(ctx context.Context, ca *tree.CreateAccount) error {
+	ses := mce.GetSession()
+	tenant := ses.GetTenantInfo()
+
+	//step1 : create new account.
+	return InitGeneralTenant(ctx, tenant, ca)
+}
+
+// handleCreateUser creates the user for the tenant
+func (mce *MysqlCmdExecutor) handleCreateUser(ctx context.Context, cu *tree.CreateUser) error {
+	ses := mce.GetSession()
+	tenant := ses.GetTenantInfo()
+
+	//step1 : create the user
+	return InitUser(ctx, tenant, cu)
+}
+
+// handleCreateRole creates the new role
+func (mce *MysqlCmdExecutor) handleCreateRole(ctx context.Context, cr *tree.CreateRole) error {
+	ses := mce.GetSession()
+	tenant := ses.GetTenantInfo()
+
+	//step1 : create the role
+	return InitRole(ctx, tenant, cr)
+}
+
 func GetExplainColumns(explainColName string) ([]interface{}, error) {
 	cols := []*plan2.ColDef{
 		{Typ: &plan2.Type{Id: int32(types.T_varchar)}, Name: explainColName},
@@ -1855,6 +1883,21 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			if err = mce.handleCmdFieldList(requestCtx, st); err != nil {
 				goto handleFailed
 			}
+		case *tree.CreateAccount:
+			selfHandle = true
+			if err = mce.handleCreateAccount(requestCtx, st); err != nil {
+				goto handleFailed
+			}
+		case *tree.CreateUser:
+			selfHandle = true
+			if err = mce.handleCreateUser(requestCtx, st); err != nil {
+				goto handleFailed
+			}
+		case *tree.CreateRole:
+			selfHandle = true
+			if err = mce.handleCreateRole(requestCtx, st); err != nil {
+				goto handleFailed
+			}
 		}
 
 		if selfHandle {
@@ -2010,6 +2053,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			case *tree.CreateTable, *tree.DropTable, *tree.CreateDatabase, *tree.DropDatabase,
 				*tree.CreateIndex, *tree.DropIndex, *tree.Insert, *tree.Update,
 				*tree.CreateView, *tree.DropView, *tree.Load,
+				*tree.CreateAccount, *tree.DropAccount, *tree.AlterAccount,
 				*tree.CreateUser, *tree.DropUser, *tree.AlterUser,
 				*tree.CreateRole, *tree.DropRole, *tree.Revoke, *tree.Grant,
 				*tree.SetDefaultRole, *tree.SetRole, *tree.SetPassword, *tree.Delete,
