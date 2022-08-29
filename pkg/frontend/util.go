@@ -17,6 +17,7 @@ package frontend
 import (
 	"bytes"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"go/constant"
 	"os"
 	"runtime"
@@ -25,8 +26,6 @@ import (
 	"time"
 
 	"github.com/BurntSushi/toml"
-
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 
@@ -176,13 +175,13 @@ func (dc *DebugCounter) DCRoutine() {
 	for dc.Cf.IsOpened() {
 		for i := 0; i < dc.length; i++ {
 			if i != 0 && i%8 == 0 {
-				fmt.Printf("\n")
+				logutil.Infof("")
 			}
 			v := dc.Get(i)
-			fmt.Printf("[%4d %4d]", i, v)
+			logutil.Infof("[%4d %4d]", i, v)
 			dc.Set(i, 0)
 		}
-		fmt.Printf("\n")
+		logutil.Infof("")
 		time.Sleep(5 * time.Second)
 	}
 }
@@ -316,7 +315,7 @@ func getParameterUnit(configFile string, eng engine.Engine, txnClient TxnClient)
 	hostMmu := host.New(sv.HostMmuLimitation)
 	mempool := mempool.New( /*int(sv.GetMempoolMaxSize()), int(sv.GetMempoolFactor())*/ )
 
-	fmt.Println("Using Dump Storage Engine and Cluster Nodes.")
+	logutil.Info("Using Dump Storage Engine and Cluster Nodes.")
 
 	pu := mo_config.NewParameterUnit(sv, hostMmu, mempool, eng, txnClient, engine.Nodes{})
 

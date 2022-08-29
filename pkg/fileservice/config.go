@@ -22,10 +22,11 @@ import (
 )
 
 const (
-	memFileServiceBackend   = "MEM"
-	diskFileServiceBackend  = "DISK"
-	s3FileServiceBackend    = "S3"
-	minioFileServiceBackend = "MINIO"
+	memFileServiceBackend     = "MEM"
+	diskFileServiceBackend    = "DISK"
+	diskETLFileServiceBackend = "DISK-ETL"
+	s3FileServiceBackend      = "S3"
+	minioFileServiceBackend   = "MINIO"
 )
 
 // Config fileService config
@@ -42,10 +43,8 @@ type Config struct {
 	DataDir string `toml:"data-dir"`
 }
 
-// FileServiceFactory returns an instance of fileservice by name. When starting a MO node, multiple
-// FileServiceConfig configurations are specified in the configuration file for use in specific scenarios.
-// The corresponding instance is obtained according to Name.
-type FileServiceFactory func(name string) (FileService, error)
+// NewFileServicesFunc creates a new *FileServices
+type NewFileServicesFunc = func(defaultName string) (*FileServices, error)
 
 // NewFileService create file service from config
 func NewFileService(cfg Config) (FileService, error) {
@@ -54,6 +53,8 @@ func NewFileService(cfg Config) (FileService, error) {
 		return newMemFileService(cfg)
 	case diskFileServiceBackend:
 		return newDiskFileService(cfg)
+	case diskETLFileServiceBackend:
+		return newDiskETLFileService(cfg)
 	case minioFileServiceBackend:
 		return newMinioFileService(cfg)
 	case s3FileServiceBackend:
@@ -76,6 +77,17 @@ func newDiskFileService(cfg Config) (FileService, error) {
 		cfg.Name,
 		cfg.DataDir,
 		int(cfg.CacheMemCapacityBytes),
+	)
+	if err != nil {
+		return nil, err
+	}
+	return fs, nil
+}
+
+func newDiskETLFileService(cfg Config) (FileService, error) {
+	fs, err := NewLocalETLFS(
+		cfg.Name,
+		cfg.DataDir,
 	)
 	if err != nil {
 		return nil, err
