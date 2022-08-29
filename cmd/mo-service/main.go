@@ -90,7 +90,7 @@ func startService(cfg *Config, stopper *stopper.Stopper) error {
 func startCNService(cfg *Config, stopper *stopper.Stopper) error {
 	return stopper.RunNamedTask("cn-service", func(ctx context.Context) {
 		c := cfg.getCNServiceConfig()
-		s, err := cnservice.NewService(&c, ctx, cnservice.WithMessageHandle(compile.CnServerMessageHandle))
+		s, err := cnservice.NewService(&c, ctx, cnservice.WithMessageHandle(compile.CnServerMessageHandler))
 		if err != nil {
 			panic(err)
 		}

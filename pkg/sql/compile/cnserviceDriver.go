@@ -62,20 +62,20 @@ import (
 
 //
 
-// CnServerMessageHandle deal the client message that received at cn-server.
+// CnServerMessageHandler deal the client message that received at cn-server.
 // the message is always *pipeline.Message here. It's a byte array which encoded by method encodeScope.
 // write back Analysis Information and error info if error occurs to client.
-func CnServerMessageHandle(ctx context.Context, message morpc.Message, cs morpc.ClientSession) error {
+func CnServerMessageHandler(ctx context.Context, message morpc.Message, cs morpc.ClientSession) error {
 	var errCode []byte = nil
 	// decode message and run it, get final analysis information and err info.
-	analysis, err := cnServerMessageHandle(ctx, message, cs)
+	analysis, err := pipelineMessageHandle(ctx, message, cs)
 	if err != nil {
 		errCode = []byte(err.Error())
 	}
 	return cs.Write(ctx, &pipeline.Message{Sid: pipeline.MessageEnd, Code: errCode, Analyse: analysis})
 }
 
-func cnServerMessageHandle(ctx context.Context, message morpc.Message, cs morpc.ClientSession) (anaData []byte, err error) {
+func pipelineMessageHandle(ctx context.Context, message morpc.Message, cs morpc.ClientSession) (anaData []byte, err error) {
 	m, ok := message.(*pipeline.Message)
 	if !ok {
 		panic("unexpected message type for cn-server")
