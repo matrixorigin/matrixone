@@ -597,3 +597,24 @@ func (be *BaseEntry) GetDeleteAt() types.TS {
 	}
 	return un.DeletedAt
 }
+
+func (be *BaseEntry) TxnCanGet(ts types.TS) (can, dropped bool) {
+	be.RLock()
+	defer be.RUnlock()
+	needWait, txnToWait := be.NeedWaitCommitting(ts)
+	if needWait {
+		be.RUnlock()
+		txnToWait.GetTxnState(true)
+		be.RLock()
+	}
+	un := be.GetNodeToRead(ts)
+	if un == nil {
+		return
+	}
+	if un.HasDropped() {
+		can, dropped = true, true
+		return
+	}
+	can, dropped = true, false
+	return
+}

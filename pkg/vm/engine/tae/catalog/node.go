@@ -18,25 +18,29 @@ import (
 	"fmt"
 	"sync"
 
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 )
 
 type nodeList struct {
 	common.SSLLNode
-	getter   func(uint64) *common.DLNode
-	rwlocker *sync.RWMutex
-	name     string
+	getter     func(uint64) *common.DLNode
+	txnChecker func(*common.DLNode, types.TS) (bool, bool)
+	rwlocker   *sync.RWMutex
+	name       string
 }
 
 func newNodeList(getter func(uint64) *common.DLNode,
+	txnChecker func(*common.DLNode, types.TS) (bool, bool),
 	rwlocker *sync.RWMutex,
 	name string) *nodeList {
 	return &nodeList{
-		SSLLNode: *common.NewSSLLNode(),
-		getter:   getter,
-		rwlocker: rwlocker,
-		name:     name,
+		SSLLNode:   *common.NewSSLLNode(),
+		getter:     getter,
+		txnChecker: txnChecker,
+		rwlocker:   rwlocker,
+		name:       name,
 	}
 }
 
@@ -112,15 +116,6 @@ func (n *nodeList) GetNode() *common.DLNode {
 	return n.GetNext().(*nameNode).GetNode()
 }
 
-func (n *nodeList) TxnGetTableNodeLocked(txn txnif.TxnReader) (dn *common.DLNode, err error) {
-	getter := func(nn *nameNode) (n *common.DLNode, entry *BaseEntry) {
-		n = nn.GetNode()
-		entry = n.GetPayload().(*TableEntry).BaseEntry
-		return
-	}
-	return n.TxnGetNodeLocked(txn, getter)
-}
-
 //	Create                  Deleted
 //	  |                        |
 //
@@ -140,29 +135,16 @@ func (n *nodeList) TxnGetTableNodeLocked(txn txnif.TxnReader) (dn *common.DLNode
 // 8. Txn4 can still find "tb1"
 // 9. Txn5 start and cannot find "tb1"
 func (n *nodeList) TxnGetNodeLocked(
-	txn txnif.TxnReader,
-	getter func(*nameNode) (*common.DLNode, *BaseEntry,
-	)) (dn *common.DLNode, err error) {
-	fn := func(nn *nameNode) (goNext bool) {
-		dlNode, entry := getter(nn)
-		entry.RLock()
-		goNext = true
-		needWait, txnToWait := entry.NeedWaitCommitting(txn.GetStartTS())
-		if needWait {
-			entry.RUnlock()
-			txnToWait.GetTxnState(true)
-			entry.RLock()
-		}
-		un := entry.GetNodeToRead(txn.GetStartTS())
-		if un == nil {
-			entry.RUnlock()
+	txn txnif.TxnReader) (dn *common.DLNode, err error) {
+	fn := func(nn *nameNode) bool {
+		dlNode := nn.GetNode()
+		can, dropped := n.txnChecker(dlNode, txn.GetStartTS())
+		if !can {
 			return true
 		}
-		if un.HasDropped() {
-			entry.RUnlock()
+		if dropped {
 			return false
 		}
-		entry.RUnlock()
 		dn = dlNode
 		return true
 	}
@@ -171,15 +153,6 @@ func (n *nodeList) TxnGetNodeLocked(
 		err = ErrNotFound
 	}
 	return
-}
-
-func (n *nodeList) TxnGetDBNodeLocked(txn txnif.TxnReader) (*common.DLNode, error) {
-	getter := func(nn *nameNode) (n *common.DLNode, entry *BaseEntry) {
-		n = nn.GetNode()
-		entry = n.GetPayload().(*DBEntry).BaseEntry
-		return
-	}
-	return n.TxnGetNodeLocked(txn, getter)
 }
 
 func (n *nodeList) PString(level common.PPLevel) string {

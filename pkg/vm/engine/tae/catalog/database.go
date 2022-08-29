@@ -58,6 +58,12 @@ func (ai *accessInfo) ReadFrom(r io.Reader) (n int64, err error) {
 	return 20, nil
 }
 
+func databaseTxnCanGetFn(n *common.DLNode, ts types.TS) (can, dropped bool) {
+	db := n.GetPayload().(*DBEntry)
+	can, dropped = db.TxnCanGet(ts)
+	return
+}
+
 type DBEntry struct {
 	*BaseEntry
 	catalog  *Catalog
@@ -229,7 +235,7 @@ func (e *DBEntry) txnGetNodeByName(name string, txnCtx txnif.AsyncTxn) (*common.
 	if node == nil {
 		return nil, ErrNotFound
 	}
-	return node.TxnGetTableNodeLocked(txnCtx)
+	return node.TxnGetNodeLocked(txnCtx)
 }
 
 func (e *DBEntry) GetTableEntry(name string, txnCtx txnif.AsyncTxn) (entry *TableEntry, err error) {
@@ -310,6 +316,7 @@ func (e *DBEntry) AddEntryLocked(table *TableEntry, txn txnif.AsyncTxn) (err err
 		e.entries[table.GetID()] = n
 
 		nn := newNodeList(e.GetItemNodeByIDLocked,
+			tableTxnCanGetFn,
 			&e.nodesMu,
 			fullName)
 		e.nameNodes[fullName] = nn

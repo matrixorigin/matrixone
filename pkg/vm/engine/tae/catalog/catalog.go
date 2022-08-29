@@ -534,6 +534,7 @@ func (catalog *Catalog) AddEntryLocked(database *DBEntry, txn txnif.TxnReader) e
 		catalog.entries[database.GetID()] = n
 
 		nn := newNodeList(catalog.GetItemNodeByIDLocked,
+			databaseTxnCanGetFn,
 			&catalog.nodesMu,
 			database.name)
 		catalog.nameNodes[database.GetFullName()] = nn
@@ -618,7 +619,7 @@ func (catalog *Catalog) txnGetNodeByNameLocked(name string, txnCtx txnif.AsyncTx
 	if node == nil {
 		return nil, ErrNotFound
 	}
-	return node.TxnGetDBNodeLocked(txnCtx)
+	return node.TxnGetNodeLocked(txnCtx)
 }
 
 func (catalog *Catalog) GetDBEntry(name string, txnCtx txnif.AsyncTxn) (*DBEntry, error) {

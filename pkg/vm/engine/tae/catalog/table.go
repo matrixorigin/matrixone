@@ -29,6 +29,12 @@ import (
 
 type TableDataFactory = func(meta *TableEntry) data.Table
 
+func tableTxnCanGetFn(n *common.DLNode, ts types.TS) (can, dropped bool) {
+	table := n.GetPayload().(*TableEntry)
+	can, dropped = table.TxnCanGet(ts)
+	return
+}
+
 type TableEntry struct {
 	*BaseEntry
 	db        *DBEntry
