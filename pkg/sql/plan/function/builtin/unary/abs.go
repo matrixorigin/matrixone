@@ -102,3 +102,29 @@ func AbsFloat64(vectors []*vector.Vector, proc *process.Process) (*vector.Vector
 		return resultVector, nil
 	}
 }
+
+func AbsDecimal128(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	inputVector := vectors[0]
+	resultType := types.Type{Oid: types.T_decimal128, Size: 16, Scale: inputVector.Typ.Scale}
+	resultElementSize := int(resultType.Size)
+	inputValues := vector.MustTCols[types.Decimal128](inputVector)
+	if inputVector.IsScalar() {
+		if inputVector.ConstVectorIsNull() {
+			return proc.AllocScalarNullVector(resultType), nil
+		}
+		resultVector := vector.NewConst(resultType, 1)
+		resultValues := make([]types.Decimal128, 1)
+		vector.SetCol(resultVector, abs.AbsDecimal128(inputValues, resultValues))
+		return resultVector, nil
+	} else {
+		resultVector, err := proc.AllocVector(resultType, int64(resultElementSize*len(inputValues)))
+		if err != nil {
+			return nil, err
+		}
+		resultValues := types.DecodeDecimal128Slice(resultVector.Data)
+		resultValues = resultValues[:len(inputValues)]
+		nulls.Set(resultVector.Nsp, inputVector.Nsp)
+		vector.SetCol(resultVector, abs.AbsDecimal128(inputValues, resultValues))
+		return resultVector, nil
+	}
+}

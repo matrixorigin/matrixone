@@ -206,7 +206,7 @@ func FloorDecimal128(vecs []*vector.Vector, proc *process.Process) (*vector.Vect
 		vec := proc.AllocScalarVector(types.Type{Oid: types.T_decimal128, Size: 16})
 		rs := make([]types.Decimal128, 1)
 		nulls.Set(vec.Nsp, vecs[0].Nsp)
-		vector.SetCol(vec, floor.FloorDecimal128(vs, rs, digits))
+		vector.SetCol(vec, floor.FloorDecimal128(vecs[0].Typ.Scale, vs, rs, digits))
 		return vec, nil
 	} else {
 		vec, err := proc.AllocVector(types.Type{Oid: types.T_decimal128, Size: 16}, 16*int64(len(vs)))
@@ -216,7 +216,7 @@ func FloorDecimal128(vecs []*vector.Vector, proc *process.Process) (*vector.Vect
 		rs := types.DecodeDecimal128Slice(vec.Data)
 		rs = rs[:len(vs)]
 		nulls.Set(vec.Nsp, vecs[0].Nsp)
-		vector.SetCol(vec, floor.FloorDecimal128(vs, rs, digits))
+		vector.SetCol(vec, floor.FloorDecimal128(vecs[0].Typ.Scale, vs, rs, digits))
 		return vec, nil
 	}
 }
