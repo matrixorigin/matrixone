@@ -19,6 +19,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 )
 
@@ -46,16 +47,11 @@ type container struct {
 	mp *hashmap.JoinMap
 }
 
-type ResultPos struct {
-	Rel int32
-	Pos int32
-}
-
 type Argument struct {
 	ctr        *container
 	Ibucket    uint64
 	Nbucket    uint64
-	Result     []ResultPos
+	Result     []colexec.ResultPos
 	Typs       []types.Type
 	Cond       *plan.Expr
 	Conditions [][]*plan.Expr
