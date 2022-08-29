@@ -44,9 +44,6 @@ func TestScopeSerialization(t *testing.T) {
 		require.NoError(t, errEncode)
 		targetScope, errDecode := decodeScope(data, sourceScope.Proc)
 		require.NoError(t, errDecode)
-		fmt.Println(fmt.Sprintf("number is %d", i))
-		fmt.Println(fmt.Sprintf("sourceScope : %v", sourceScope))
-		fmt.Println(fmt.Sprintf("targetScope : %v", targetScope))
 
 		// Just do simple check
 		require.Equal(t, len(sourceScope.PreScopes), len(targetScope.PreScopes), fmt.Sprintf("related SQL is '%s'", testCases[i]))
