@@ -18,6 +18,7 @@ import (
 	"context"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/moengine"
 	"github.com/matrixorigin/matrixone/pkg/vm/mempool"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
 	"time"
@@ -108,10 +109,14 @@ func (routine *Routine) Loop(routineCtx context.Context) {
 		cancelRequestCtx, cancelRequestFunc := context.WithCancel(routineCtx)
 		routine.executor.(*MysqlCmdExecutor).setCancelRequestFunc(cancelRequestFunc)
 		ses := routine.GetSession()
-		ses.SetRequestContext(cancelRequestCtx)
+		tenant := ses.GetTenantInfo()
+		tenantCtx := context.WithValue(cancelRequestCtx, moengine.TenantIDKey{}, tenant.GetTenantID())
+		tenantCtx = context.WithValue(tenantCtx, moengine.UserIDKey{}, tenant.GetUserID())
+		tenantCtx = context.WithValue(tenantCtx, moengine.RoleIDKey{}, tenant.GetDefaultRoleID())
+		ses.SetRequestContext(tenantCtx)
 		routine.executor.PrepareSessionBeforeExecRequest(routine.GetSession())
 
-		if resp, err = routine.executor.ExecRequest(cancelRequestCtx, req); err != nil {
+		if resp, err = routine.executor.ExecRequest(tenantCtx, req); err != nil {
 			logutil.Errorf("routine execute request failed. error:%v \n", err)
 		}
 

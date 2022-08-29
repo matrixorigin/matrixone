@@ -295,13 +295,12 @@ func CreateAutoIncrCol(db engine.Database, ctx context.Context, proc *process.Pr
 	}
 	name := fmt.Sprintf("%d", rel.GetTableID(ctx)) + "_"
 
-	if rel, err = db.Relation(ctx, AUTO_INCR_TABLE); err != nil {
-		return err
-	}
-
 	for _, attr := range cols {
 		if !attr.AutoIncrement {
 			continue
+		}
+		if rel, err = db.Relation(ctx, AUTO_INCR_TABLE); err != nil {
+			return err
 		}
 		bat := makeAutoIncrBatch(name+attr.Name, 0, 1)
 		if err = rel.Write(ctx, bat); err != nil {
