@@ -308,7 +308,7 @@ func (blk *dataBlock) EstimateScore() int {
 	} else {
 		s := time.Since(blk.score.startTime).Milliseconds()
 		// UT will execute here
-		if blk.meta.GetSchema().Name == ForTestName {
+		if blk.meta.GetSchema().Name == ForTestName && s > int64(100*time.Millisecond) {
 			return 100
 		}
 		if s > int64(Intervals) {

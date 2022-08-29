@@ -812,7 +812,7 @@ func TestCompaction2(t *testing.T) {
 		err := rel.Append(bats[1])
 		assert.Nil(t, err)
 		assert.Nil(t, txn.Commit())
-		time.Sleep(200 * time.Millisecond)
+		time.Sleep(400 * time.Millisecond)
 	}
 	{
 		txn, _ := db.StartTxn(nil)
