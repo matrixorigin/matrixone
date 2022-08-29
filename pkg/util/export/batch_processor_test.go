@@ -52,8 +52,8 @@ func init() {
 const NumType = "Num"
 
 var _ batchpipe.HasName = (*Num)(nil)
-var _ batchpipe.ItemBuffer[batchpipe.HasName, any] = &numBuffer{}
-var _ batchpipe.PipeImpl[batchpipe.HasName, any] = &dummyNumPipeImpl{}
+var _ batchpipe.ItemBuffer[batchpipe.HasName, any] = &dummyBuffer{}
+var _ batchpipe.PipeImpl[batchpipe.HasName, any] = &dummyPipeImpl{}
 
 type Num int64
 
@@ -66,14 +66,14 @@ func (n Num) GetName() string { return NumType }
 
 var signalFunc = func() {}
 
-type numBuffer struct {
+type dummyBuffer struct {
 	batchpipe.Reminder
 	arr    []batchpipe.HasName
 	mux    sync.Mutex
 	signal func()
 }
 
-func (s *numBuffer) Add(item batchpipe.HasName) {
+func (s *dummyBuffer) Add(item batchpipe.HasName) {
 	s.mux.Lock()
 	defer s.mux.Unlock()
 	s.arr = append(s.arr, item)
@@ -87,24 +87,24 @@ func (s *numBuffer) Add(item batchpipe.HasName) {
 		s.signal()
 	}
 }
-func (s *numBuffer) Reset() {
+func (s *dummyBuffer) Reset() {
 	s.mux.Lock()
 	defer s.mux.Unlock()
 	logutil.Infof("buffer reset, stack: %+v", util.Callers(0))
 	s.arr = s.arr[0:0]
 }
-func (s *numBuffer) IsEmpty() bool {
+func (s *dummyBuffer) IsEmpty() bool {
 	s.mux.Lock()
 	defer s.mux.Unlock()
 	return len(s.arr) == 0
 }
-func (s *numBuffer) ShouldFlush() bool {
+func (s *dummyBuffer) ShouldFlush() bool {
 	s.mux.Lock()
 	defer s.mux.Unlock()
 	length := len(s.arr)
 	return length >= 3
 }
-func (s *numBuffer) GetBatch(buf *bytes.Buffer) any {
+func (s *dummyBuffer) GetBatch(buf *bytes.Buffer) any {
 	s.mux.Lock()
 	defer s.mux.Unlock()
 	if len(s.arr) == 0 {
@@ -126,16 +126,16 @@ func (s *numBuffer) GetBatch(buf *bytes.Buffer) any {
 	return string(buf.Next(buf.Len() - 1))
 }
 
-type dummyNumPipeImpl struct {
+type dummyPipeImpl struct {
 	ch       chan string
 	duration time.Duration
 }
 
-func (n *dummyNumPipeImpl) NewItemBuffer(string) batchpipe.ItemBuffer[batchpipe.HasName, any] {
-	return &numBuffer{Reminder: batchpipe.NewConstantClock(n.duration), signal: signalFunc}
+func (n *dummyPipeImpl) NewItemBuffer(string) batchpipe.ItemBuffer[batchpipe.HasName, any] {
+	return &dummyBuffer{Reminder: batchpipe.NewConstantClock(n.duration), signal: signalFunc}
 }
 
-func (n *dummyNumPipeImpl) NewItemBatchHandler(ctx context.Context) func(any) {
+func (n *dummyPipeImpl) NewItemBatchHandler(ctx context.Context) func(any) {
 	return func(batch any) {
 		n.ch <- batch.(string)
 	}
@@ -183,7 +183,7 @@ func Test_newBufferHolder(t *testing.T) {
 			name: "normal",
 			args: args{
 				name:          newNum(0),
-				impl:          &dummyNumPipeImpl{ch: ch, duration: 100 * time.Millisecond},
+				impl:          &dummyPipeImpl{ch: ch, duration: 100 * time.Millisecond},
 				signal:        signal,
 				elems:         []*Num{newNum(1), newNum(2), newNum(3)},
 				elemsReminder: []*Num{newNum(4), newNum(5)},
@@ -196,7 +196,7 @@ func Test_newBufferHolder(t *testing.T) {
 			name: "emptyReminder",
 			args: args{
 				name:          newNum(0),
-				impl:          &dummyNumPipeImpl{ch: ch, duration: 100 * time.Millisecond},
+				impl:          &dummyPipeImpl{ch: ch, duration: 100 * time.Millisecond},
 				signal:        signal,
 				elems:         []*Num{newNum(1), newNum(2), newNum(3)},
 				elemsReminder: []*Num{},
@@ -242,7 +242,7 @@ func TestNewMOCollector(t *testing.T) {
 	var acceptSignal = func() { <-signalC }
 	signalFunc = func() { signalC <- struct{}{} }
 
-	Register(newNum(0), &dummyNumPipeImpl{ch: ch, duration: time.Hour})
+	Register(newNum(0), &dummyPipeImpl{ch: ch, duration: time.Hour})
 	collector := NewMOCollector()
 	collector.Start()
 
@@ -299,7 +299,7 @@ func TestMOCollector_HangBug(t *testing.T) {
 	defer _stubAwakeBuffer.Reset()
 
 	// init Collector, with disabled-trigger
-	Register(newNum(0), &dummyNumPipeImpl{ch: ch, duration: time.Hour})
+	Register(newNum(0), &dummyPipeImpl{ch: ch, duration: time.Hour})
 	collector := NewMOCollector()
 	collector.Start()
 
