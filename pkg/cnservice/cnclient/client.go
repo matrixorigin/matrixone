@@ -28,8 +28,8 @@ type CNClient struct {
 	config *ClientConfig
 	client morpc.RPCClient
 
-	requestPool  *sync.Pool
-	responsePool *sync.Pool
+	// pool for send message
+	requestPool *sync.Pool
 }
 
 func (c *CNClient) Send(ctx context.Context, backend string, request morpc.Message) (*morpc.Future, error) {
@@ -66,7 +66,6 @@ func NewCNClient(cfg *ClientConfig) error {
 	cfg.Fill()
 	Client = &CNClient{config: cfg}
 	Client.requestPool = &sync.Pool{New: func() any { return &pipeline.Message{} }}
-	Client.responsePool = &sync.Pool{New: func() any { return &pipeline.Message{} }}
 
 	codec := morpc.NewMessageCodec(Client.acquireMessage, cfg.PayLoadCopyBufferSize)
 	factory := morpc.NewGoettyBasedBackendFactory(codec,

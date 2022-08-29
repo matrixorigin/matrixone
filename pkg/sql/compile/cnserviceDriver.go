@@ -60,11 +60,26 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-// PipelineMessageHandle deal the message that received at cn-server.
+//
+
+// CnServerMessageHandle deal the client message that received at cn-server.
 // the message is always *pipeline.Message here. It's a byte array which encoded by method encodeScope.
-// return an extra data (in this case, extra data is Analysis Information) and error info if error occurs.
-func PipelineMessageHandle(ctx context.Context, message morpc.Message, cs morpc.ClientSession) ([]byte, error) {
-	m := message.(*pipeline.Message)
+// write back Analysis Information and error info if error occurs to client.
+func CnServerMessageHandle(ctx context.Context, message morpc.Message, cs morpc.ClientSession) error {
+	var errCode []byte = nil
+	// decode message and run it, get final analysis information and err info.
+	analysis, err := cnServerMessageHandle(ctx, message, cs)
+	if err != nil {
+		errCode = []byte(err.Error())
+	}
+	return cs.Write(ctx, &pipeline.Message{Sid: pipeline.MessageEnd, Code: errCode, Analyse: analysis})
+}
+
+func cnServerMessageHandle(ctx context.Context, message morpc.Message, cs morpc.ClientSession) (anaData []byte, err error) {
+	m, ok := message.(*pipeline.Message)
+	if !ok {
+		panic("unexpected message type for cn-server")
+	}
 	s, err := decodeScope(m.GetData(), nil)
 	if err != nil {
 		return nil, err
@@ -85,9 +100,9 @@ func PipelineMessageHandle(ctx context.Context, message morpc.Message, cs morpc.
 		for i := range anas.List {
 			anas.List[i] = nodes[i].AnalyzeInfo
 		}
-		anaData, errAna := anas.Marshal()
-		if errAna != nil {
-			return nil, errAna
+		anaData, err = anas.Marshal()
+		if err != nil {
+			return nil, err
 		}
 		return anaData, nil
 	}

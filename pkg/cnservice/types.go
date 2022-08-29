@@ -117,7 +117,7 @@ type service struct {
 	responsePool           *sync.Pool
 	logger                 *zap.Logger
 	server                 morpc.RPCServer
-	requestHandler         func(ctx context.Context, message morpc.Message, cs morpc.ClientSession) ([]byte, error)
+	requestHandler         func(ctx context.Context, message morpc.Message, cs morpc.ClientSession) error
 	cancelMoServerFunc     context.CancelFunc
 	mo                     *frontend.MOServer
 	initHakeeperClientOnce sync.Once
