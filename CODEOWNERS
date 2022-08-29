@@ -44,7 +44,7 @@
 /pkg/common/stopper @zhangxu19830126
 
 # other directories under pkg
-/pkg/cnservice @nnsgmsone @reusee
+/pkg/cnservice @nnsgmsone @reusee @daviszhen
 /pkg/compare @nnsgmsone
 /pkg/compress @nnsgmsone
 /pkg/config @daviszhen

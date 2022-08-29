@@ -188,6 +188,17 @@ message TxnRequest {
     TxnRollbackDNShardRequest   RollbackDNShardRequest   = 11;
     // TxnRemoveMetadataRequest  corresponds to TxnMethod.RemoveMetadata
     TxnRemoveMetadataRequest    RemoveMetadata           = 12;
+    // TxnRequestOptions request options
+    TxnRequestOptions           Options                  = 13;
+}
+
+// TxnRequestOptions txn options
+message TxnRequestOptions {
+    // RetryCodes when DN processes TxnRequest and encounters the specified error, it needs to retry
+    // on the server side. Only read and write can retry.
+    repeated ErrorCode RetryCodes    = 1;
+    // RetryInterval retry interval, default is 100ms.
+    int64              RetryInterval = 2;    
 }
 
 // TxnResponse response of TxnRequest.
