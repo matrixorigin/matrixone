@@ -25,6 +25,10 @@ type ResultPos struct {
 	Pos int32
 }
 
+func NewResultPos(rel int32, pos int32) ResultPos {
+	return ResultPos{Rel: rel, Pos: pos}
+}
+
 // Direction for ordering results.
 type Direction int8
 
