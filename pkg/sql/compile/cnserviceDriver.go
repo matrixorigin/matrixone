@@ -84,7 +84,7 @@ func pipelineMessageHandle(ctx context.Context, message morpc.Message, cs morpc.
 		panic("unexpected message type for cn-server")
 	}
 	c := newCompile(ctx)
-	s := &Scope{}
+	var s *Scope
 	s, err = decodeScope(m.GetData(), c.proc)
 	if err != nil {
 		return nil, err
@@ -128,10 +128,10 @@ func (s *Scope) remoteRun(c *Compile) error {
 	// send encoded message
 	message := &pipeline.Message{Data: sData}
 	r, errSend := cnclient.Client.Send(c.ctx, s.NodeInfo.Addr, message)
-	defer r.Close()
 	if errSend != nil {
 		return errSend
 	}
+	defer r.Close()
 
 	// range to receive.
 	arg := s.Instructions[len(s.Instructions)-1].Arg.(*connector.Argument)
@@ -205,7 +205,6 @@ func decodeScope(data []byte, proc *process.Process) (*Scope, error) {
 
 func refactorScope(_ context.Context, _ *Scope, _ morpc.ClientSession) {
 	// refactor the scope
-	return
 }
 
 // fillPipeline convert the scope to pipeline.Pipeline structure through 2 iterations.
