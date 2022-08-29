@@ -2752,7 +2752,12 @@ func UnionNull(v, _ *Vector, m *mheap.Mheap) error {
 		}
 	case types.T_char, types.T_varchar, types.T_json, types.T_blob:
 		vs := v.Col.(*types.Bytes)
-		vs.Offsets = append(vs.Offsets, 0)
+		n := len(vs.Offsets)
+		if n > 0 {
+			vs.Offsets = append(vs.Offsets, vs.Offsets[n-1])
+		} else {
+			vs.Offsets = append(vs.Offsets, 0)
+		}
 		vs.Lengths = append(vs.Lengths, 0)
 		v.Col = vs
 	case types.T_date:

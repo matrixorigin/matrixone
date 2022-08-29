@@ -8,8 +8,7 @@ cast(10  as integer unsigned)
 select CAST('10x' as unsigned integer);
 Can't cast '10x' from VARCHAR type to BIGINT UNSIGNED type.
 select cast(-5 as unsigned) | 1, cast(-5 as unsigned) & -1;
-cast(-5 as unsigned) | 1	cast(-5 as unsigned) & -1
-18446744073709551611	18446744073709551611
+Can't cast '-5' from BIGINT type to BIGINT UNSIGNED type. Reason: overflow
 select cast(-5 as unsigned) -1, cast(-5 as unsigned) + 1;
 Can't cast '-5' from BIGINT type to BIGINT UNSIGNED type. Reason: overflow
 select cast(5 as unsigned) -6.0;
