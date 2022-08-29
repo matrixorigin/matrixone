@@ -133,19 +133,22 @@ func (s *Scope) RemoteRun(c *Compile) error {
 		arg := s.Instructions[len(s.Instructions)-1].Arg.(*connector.Argument)
 		sendToConnectOperator(arg, nil)
 	*/
-	n := len(s.Instructions) - 1
-	in := s.Instructions[n]
-	s.Instructions = s.Instructions[:n]
-	data, err := encodeScope(s)
-	if err != nil {
-		return err
-	}
-	rs, err := decodeScope(data, s.Proc)
-	if err != nil {
-		return err
-	}
-	rs.Instructions = append(rs.Instructions, in)
-	return rs.ParallelRun(c)
+	/*
+		// just for test serialization codes.
+		n := len(s.Instructions) - 1
+		in := s.Instructions[n]
+		s.Instructions = s.Instructions[:n]
+		data, err := encodeScope(s)
+		if err != nil {
+			return err
+		}
+		rs, err := decodeScope(data, s.Proc)
+		if err != nil {
+			return err
+		}
+		rs.Instructions = append(rs.Instructions, in)
+	*/
+	return s.ParallelRun(c)
 }
 
 // ParallelRun try to execute the scope in parallel way.
