@@ -15,14 +15,10 @@
 package tables
 
 import (
-	"time"
-
-	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 )
 
@@ -44,19 +40,10 @@ func (blk *dataBlock) FlushColumnDataClosure(ts types.TS, colIdx int, colData co
 	}
 }
 
-func (blk *dataBlock) ABlkFlushDataClosure(
-	ts types.TS,
-	bat *containers.Batch,
-	masks map[uint16]*roaring.Bitmap,
-	vals map[uint16]map[uint32]any,
-	deletes *roaring.Bitmap) tasks.FuncT {
-	return func() error {
-		return blk.ABlkFlushData(ts, bat, masks, vals, deletes)
-	}
-}
-
 func (blk *dataBlock) CheckpointWAL(currTs types.TS) (err error) {
-	if blk.meta.IsAppendable() {
+	if blk.meta.IsAppendable() ||
+		(blk.node != nil &&
+			blk.node.Rows(nil, true) < blk.meta.GetSegment().GetTable().GetSchema().BlockMaxRows) {
 		return blk.ABlkCheckpointWAL(currTs)
 	}
 	return blk.BlkCheckpointWAL(currTs)
@@ -170,86 +157,4 @@ func (blk *dataBlock) SyncBlockData(ts types.TS, rows uint32) (err error) {
 		return
 	}
 	return blk.file.Sync()
-}
-
-func (blk *dataBlock) ForceCompact() (err error) {
-	if !blk.meta.IsAppendable() {
-		panic("todo")
-	}
-	ts := blk.mvcc.LoadMaxVisible()
-	if blk.node.GetBlockMaxflushTS().GreaterEq(ts) {
-		return
-	}
-	h, err := blk.bufMgr.TryPin(blk.node, time.Second)
-	if err != nil {
-		return
-	}
-	defer h.Close()
-	// Why check again? May be a flush was executed in between
-	if blk.node.GetBlockMaxflushTS().GreaterEq(ts) {
-		return
-	}
-	blk.mvcc.RLock()
-	maxRow, _, err := blk.mvcc.GetMaxVisibleRowLocked(ts)
-	blk.mvcc.RUnlock()
-	if err != nil {
-		return
-	}
-	bat, err := blk.node.GetDataCopy(maxRow)
-	if err != nil {
-		return
-	}
-	defer bat.Close()
-	needCkp := true
-	if err = blk.node.flushData(ts, bat, new(forceCompactOp)); err != nil {
-		if err == data.ErrStaleRequest {
-			err = nil
-			needCkp = false
-		} else {
-			return
-		}
-	}
-	if needCkp {
-		_, err = blk.scheduler.ScheduleScopedFn(nil, tasks.CheckpointTask, blk.meta.AsCommonID(), blk.CheckpointWALClosure(ts))
-	}
-	return
-}
-
-func (blk *dataBlock) ABlkFlushData(
-	ts types.TS,
-	bat *containers.Batch,
-	masks map[uint16]*roaring.Bitmap,
-	vals map[uint16]map[uint32]any,
-	deletes *roaring.Bitmap) (err error) {
-	flushTS := blk.node.GetBlockMaxflushTS()
-	if ts.LessEq(flushTS) {
-		logutil.Info("[Cancelled]",
-			common.ReprerField("blk", blk.meta),
-			common.OperationField("flush"),
-			common.ReasonField("State Request: Already Flushed"))
-		return data.ErrStaleRequest
-	}
-	// ckpTs := blk.GetMaxCheckpointTS()
-	// if ts <= ckpTs {
-	// 	logutil.Info("[Cancelled]",
-	// 		common.ReprerField("blk", blk.meta),
-	// 		common.OperationField("flush"),
-	// 		common.ReasonField("State Request: Already Flushed"))
-	// 	return data.ErrStaleRequest
-	// }
-
-	if err := blk.file.WriteSnapshot(bat, ts, masks, vals, deletes); err != nil {
-		return err
-	}
-	if err = blk.file.Sync(); err != nil {
-		return
-	}
-	blk.node.SetBlockMaxflushTS(ts)
-	blk.resetNice()
-	logutil.Info("[Done]",
-		common.ReprerField("blk", blk.meta),
-		common.OperationField("flush"),
-		common.AnyField("maxRow", bat.Length()),
-		common.AnyField("maxTs", ts))
-	return
 }

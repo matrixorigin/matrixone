@@ -535,11 +535,6 @@ func TestReplay2(t *testing.T) {
 	assert.Nil(t, err)
 	assert.Nil(t, txn.Commit())
 
-	testutils.WaitExpect(4000, func() bool {
-		return tae3.Wal.GetPenddingCnt() == 0
-	})
-	assert.Equal(t, uint64(0), tae3.Wal.GetPenddingCnt())
-
 	tae3.Close()
 
 	tae4, err := Open(tae.Dir, nil)
@@ -658,11 +653,6 @@ func TestReplay3(t *testing.T) {
 	err = tae.Catalog.Checkpoint(txn.GetStartTS())
 	assert.NoError(t, err)
 	assert.NoError(t, txn.Commit())
-
-	testutils.WaitExpect(4000, func() bool {
-		return tae.Wal.GetPenddingCnt() == 0
-	})
-	assert.Equal(t, uint64(0), tae.Wal.GetPenddingCnt())
 }
 
 // append, delete, compact, mergeblocks, ckp
@@ -746,11 +736,6 @@ func TestReplayTableRows(t *testing.T) {
 	err = tae2.Catalog.Checkpoint(txn.GetStartTS())
 	assert.Nil(t, err)
 	assert.Nil(t, txn.Commit())
-	testutils.WaitExpect(4000, func() bool {
-		return tae2.Wal.GetPenddingCnt() == 0
-	})
-	assert.Equal(t, uint64(0), tae2.Wal.GetPenddingCnt())
-
 	err = tae2.Close()
 	assert.Nil(t, err)
 
@@ -892,7 +877,6 @@ func TestReplay5(t *testing.T) {
 	txn, rel := getDefaultRelation(t, tae, schema.Name)
 	checkAllColRowsByScan(t, rel, bats[0].Length(), false)
 	assert.NoError(t, txn.Commit())
-	forceCompactABlocks(t, 0, tae, defaultTestDB, schema, false)
 
 	_ = tae.Close()
 	tae, err := Open(tae.Dir, nil)
@@ -907,8 +891,6 @@ func TestReplay5(t *testing.T) {
 	checkAllColRowsByScan(t, rel, lenOfBats(bats[0:2]), false)
 	assert.NoError(t, txn.Commit())
 	t.Logf("LSN=%d", txn.GetLSN())
-
-	forceCompactABlocks(t, 0, tae, defaultTestDB, schema, false)
 
 	_ = tae.Close()
 	tae, err = Open(tae.Dir, nil)
@@ -956,17 +938,16 @@ func TestReplay5(t *testing.T) {
 	tae, err = Open(tae.Dir, nil)
 	assert.NoError(t, err)
 
-	forceCompactABlocks(t, 0, tae, defaultTestDB, schema, false)
 	txn, rel = getDefaultRelation(t, tae, schema.Name)
 	checkAllColRowsByScan(t, rel, lenOfBats(bats[:8]), false)
 	err = rel.Append(bats[0])
 	assert.ErrorIs(t, err, data.ErrDuplicate)
 	assert.NoError(t, txn.Commit())
 	testutils.WaitExpect(3000, func() bool {
-		return tae.Wal.GetCheckpointed() == tae.Wal.GetCurrSeqNum()
+		return tae.Wal.GetCheckpointed() == tae.Wal.GetCurrSeqNum()/2
 	})
 	printCheckpointStats(t, tae)
-	assert.Equal(t, tae.Wal.GetCurrSeqNum(), tae.Wal.GetCheckpointed())
+	assert.Equal(t, tae.Wal.GetCurrSeqNum()/2, tae.Wal.GetCheckpointed())
 	mergeBlocks(t, 0, tae, defaultTestDB, schema, false)
 
 	_ = tae.Close()
@@ -1115,9 +1096,6 @@ func TestReplay8(t *testing.T) {
 	assert.NoError(t, err)
 	_ = txn.Rollback()
 
-	// Flush the appendable block
-	forceCompactABlocks(t, 0, tae.DB, defaultTestDB, schema, false)
-
 	txn, rel = getDefaultRelation(t, tae.DB, schema.Name)
 	checkAllColRowsByScan(t, rel, bats[0].Length()-1, true)
 	assert.NoError(t, txn.Commit())
@@ -1205,7 +1183,7 @@ func TestReplay8(t *testing.T) {
 	checkAllColRowsByScan(t, rel, bat.Length(), true)
 	_ = txn.Rollback()
 
-	tae.compactABlocks(false)
+	tae.compactBlocks(false)
 	tae.checkpointCatalog()
 	tae.restart()
 
@@ -1253,7 +1231,7 @@ func TestReplay9(t *testing.T) {
 	checkAllColRowsByScan(t, rel, bats[0].Length(), false)
 	assert.NoError(t, txn.Commit())
 
-	tae.compactABlocks(false)
+	tae.compactBlocks(false)
 
 	tae.restart()
 	txn, rel = tae.getRelation()
