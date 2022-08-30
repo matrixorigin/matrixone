@@ -25,6 +25,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"go.uber.org/zap"
 
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	logpb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 )
@@ -135,9 +136,11 @@ type logOptions []logservice.Option
 
 // newLogService constructs an instance of `LogService`.
 func newLogService(
-	cfg logservice.Config, opts logOptions,
+	cfg logservice.Config,
+	fs fileservice.FileService,
+	opts logOptions,
 ) (LogService, error) {
-	svc, err := logservice.NewWrappedService(cfg, opts...)
+	svc, err := logservice.NewWrappedService(cfg, fs, opts...)
 	if err != nil {
 		return nil, err
 	}

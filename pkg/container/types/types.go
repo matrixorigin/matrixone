@@ -496,3 +496,58 @@ func (t T) FixedLength() int {
 	}
 	panic(moerr.NewInternalError("Unknow type %s", t))
 }
+
+// isUnsignedInt: return true if the types.T is UnSigned integer type
+func isUnsignedInt(t T) bool {
+	if t == T_uint8 || t == T_uint16 || t == T_uint32 || t == T_uint64 {
+		return true
+	}
+	return false
+}
+
+// isSignedInt: return true if the types.T is Signed integer type
+func isSignedInt(t T) bool {
+	if t == T_int8 || t == T_int16 || t == T_int32 || t == T_int64 {
+		return true
+	}
+	return false
+}
+
+// if expr type is integer return true,else return false
+func IsInteger(t T) bool {
+	if isUnsignedInt(t) || isSignedInt(t) {
+		return true
+	}
+	return false
+}
+
+// IsFloat: return true if the types.T is floating Point Types
+func IsFloat(t T) bool {
+	if t == T_float32 || t == T_float64 {
+		return true
+	}
+	return false
+}
+
+// isString: return true if the types.T is string type
+func IsString(t T) bool {
+	if t == T_char || t == T_varchar || t == T_blob {
+		return true
+	}
+	return false
+}
+
+func IsDateRelate(t T) bool {
+	if t == T_date || t == T_datetime || t == T_timestamp {
+		return true
+	}
+	return false
+}
+
+// IsDecimal: return true if the types.T is decimal64 or decimal128
+func IsDecimal(t T) bool {
+	if t == T_decimal64 || t == T_decimal128 {
+		return true
+	}
+	return false
+}

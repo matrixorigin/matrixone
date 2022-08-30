@@ -16,6 +16,8 @@ package colexec
 
 import (
 	"context"
+	"fmt"
+	"math"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
@@ -29,7 +31,7 @@ import (
 )
 
 var AUTO_INCR_TABLE = "%!%mo_increment_columns"
-var AUTO_INCR_TABLE_COLNAME []string = []string{"name", "offset", "step", "PADDR"}
+var AUTO_INCR_TABLE_COLNAME []string = []string{"name", "offset", "step"}
 
 type AutoIncrParam struct {
 	eg      engine.Engine
@@ -49,12 +51,12 @@ func UpdateInsertBatch(e engine.Engine, db engine.Database, ctx context.Context,
 		colDefs: ColDefs,
 	}
 
-	offset, step, err := GetRangeFromAutoIncrTable(incrParam, bat, tableID)
+	offset, step, err := getRangeFromAutoIncrTable(incrParam, bat, tableID)
 	if err != nil {
 		return err
 	}
 
-	if err = UpdateBatchImpl(ColDefs, bat, offset, step); err != nil {
+	if err = updateBatchImpl(ColDefs, bat, offset, step); err != nil {
 		return err
 	}
 	return nil
@@ -62,7 +64,7 @@ func UpdateInsertBatch(e engine.Engine, db engine.Database, ctx context.Context,
 
 func UpdateInsertValueBatch(e engine.Engine, ctx context.Context, proc *process.Process, p *plan.InsertValues, bat *batch.Batch) error {
 	ColDefs := p.ExplicitCols
-	OrderColDefs(p.OrderAttrs, ColDefs)
+	orderColDefs(p.OrderAttrs, ColDefs)
 	db, err := e.Database(ctx, p.DbName, proc.TxnOperator)
 	if err != nil {
 		return err
@@ -74,7 +76,7 @@ func UpdateInsertValueBatch(e engine.Engine, ctx context.Context, proc *process.
 	return UpdateInsertBatch(e, db, ctx, proc, ColDefs, bat, rel.GetTableID(ctx))
 }
 
-func GetRangeFromAutoIncrTable(param *AutoIncrParam, bat *batch.Batch, tableID string) ([]int64, []int64, error) {
+func getRangeFromAutoIncrTable(param *AutoIncrParam, bat *batch.Batch, tableID string) ([]int64, []int64, error) {
 	offset, step := make([]int64, 0), make([]int64, 0)
 	var err error
 	for i, col := range param.colDefs {
@@ -86,7 +88,7 @@ func GetRangeFromAutoIncrTable(param *AutoIncrParam, bat *batch.Batch, tableID s
 		if err != nil {
 			return nil, nil, err
 		}
-		if d, s, err = GetOneColRangeFromAutoIncrTable(param, bat, tableID+"_"+col.Name, i); err != nil {
+		if d, s, err = getOneColRangeFromAutoIncrTable(param, bat, tableID+"_"+col.Name, i); err != nil {
 			return nil, nil, err
 		}
 		offset = append(offset, d)
@@ -95,7 +97,7 @@ func GetRangeFromAutoIncrTable(param *AutoIncrParam, bat *batch.Batch, tableID s
 	return offset, step, nil
 }
 
-func GetOneColRangeFromAutoIncrTable(param *AutoIncrParam, bat *batch.Batch, name string, pos int) (int64, int64, error) {
+func getOneColRangeFromAutoIncrTable(param *AutoIncrParam, bat *batch.Batch, name string, pos int) (int64, int64, error) {
 	taeEngine, ok := param.eg.(moengine.TxnEngine)
 	if !ok {
 		return 0, 0, errors.New("", "the engine is not tae")
@@ -106,7 +108,7 @@ func GetOneColRangeFromAutoIncrTable(param *AutoIncrParam, bat *batch.Batch, nam
 		return 0, 0, err
 	}
 
-	oriNum, step := GetCurrentIndex(param, name)
+	oriNum, step := getCurrentIndex(param, name)
 	if oriNum < 0 {
 		if err2 := txnCtx.Rollback(); err2 != nil {
 			return 0, 0, err2
@@ -141,7 +143,10 @@ func GetOneColRangeFromAutoIncrTable(param *AutoIncrParam, bat *batch.Batch, nam
 		}
 	}
 
-	if err := UpdateAutoIncrTable(param, maxNum, name); err != nil {
+	if maxNum < 0 {
+		return 0, 0, errors.New("", "auto_incrment column constant value overflows bigint")
+	}
+	if err := updateAutoIncrTable(param, maxNum, name); err != nil {
 		if err2 := txnCtx.Rollback(); err2 != nil {
 			return 0, 0, err2
 		}
@@ -154,7 +159,7 @@ func GetOneColRangeFromAutoIncrTable(param *AutoIncrParam, bat *batch.Batch, nam
 	return oriNum, step, nil
 }
 
-func UpdateBatchImpl(ColDefs []*plan.ColDef, bat *batch.Batch, offset, step []int64) error {
+func updateBatchImpl(ColDefs []*plan.ColDef, bat *batch.Batch, offset, step []int64) error {
 	pos := 0
 	for i, col := range ColDefs {
 		if !col.AutoIncrement {
@@ -171,6 +176,9 @@ func UpdateBatchImpl(ColDefs []*plan.ColDef, bat *batch.Batch, offset, step []in
 				if nulls.Contains(vec.Nsp, uint64(rowIndex)) {
 					nulls.Del(vec.Nsp, uint64(rowIndex))
 					curNum += stepNum
+					if curNum > math.MaxInt32 {
+						return fmt.Errorf("auto_incrment column '%s' constant value %d overflows int", col.Name, curNum)
+					}
 					vs[rowIndex] = int32(curNum)
 				} else if vs[rowIndex] >= int32(curNum) {
 					curNum = int64(vs[rowIndex])
@@ -194,7 +202,7 @@ func UpdateBatchImpl(ColDefs []*plan.ColDef, bat *batch.Batch, offset, step []in
 	return nil
 }
 
-func GetCurrentIndex(param *AutoIncrParam, colName string) (int64, int64) {
+func getCurrentIndex(param *AutoIncrParam, colName string) (int64, int64) {
 	rds, _ := param.rel.NewReader(param.ctx, 1, nil, nil)
 	for {
 		bat, err := rds[0].Read(AUTO_INCR_TABLE_COLNAME, nil, param.proc.Mp)
@@ -220,7 +228,7 @@ func GetCurrentIndex(param *AutoIncrParam, colName string) (int64, int64) {
 	}
 }
 
-func UpdateAutoIncrTable(param *AutoIncrParam, curNum int64, name string) error {
+func updateAutoIncrTable(param *AutoIncrParam, curNum int64, name string) error {
 	bat := makeAutoIncrBatch(name, curNum, 1)
 	err := param.rel.Delete(param.ctx, bat.GetVector(0), AUTO_INCR_TABLE_COLNAME[0])
 	if err != nil {
@@ -246,6 +254,7 @@ func makeAutoIncrBatch(name string, num, step int64) *batch.Batch {
 		Nsp:  &nulls.Nulls{},
 	}
 
+	vec.Data = append(vec.Data, name...)
 	vBytes.Offsets[0] = uint32(0)
 	vBytes.Data = append(vBytes.Data, name...)
 	vBytes.Lengths[0] = uint32(len(name))
@@ -279,10 +288,9 @@ func CreateAutoIncrTable(e engine.Engine, ctx context.Context, proc *process.Pro
 	if err != nil {
 		return err
 	}
-	if err = dbSource.Create(ctx, AUTO_INCR_TABLE, GetAutoIncrTableDef()); err != nil {
+	if err = dbSource.Create(ctx, AUTO_INCR_TABLE, getAutoIncrTableDef()); err != nil {
 		return err
 	}
-
 	return nil
 }
 
@@ -292,8 +300,8 @@ func CreateAutoIncrCol(db engine.Database, ctx context.Context, proc *process.Pr
 	if err != nil {
 		return err
 	}
-	name := rel.GetTableID(ctx) + "_"
 
+	name := rel.GetTableID(ctx) + "_"
 	for _, attr := range cols {
 		if !attr.AutoIncrement {
 			continue
@@ -336,7 +344,7 @@ func DeleteAutoIncrCol(rel engine.Relation, db engine.Database, ctx context.Cont
 	return nil
 }
 
-func OrderColDefs(attrs []string, ColDefs []*plan.ColDef) {
+func orderColDefs(attrs []string, ColDefs []*plan.ColDef) {
 	for i, name := range attrs {
 		for j, def := range ColDefs {
 			if name == def.Name {
@@ -346,7 +354,7 @@ func OrderColDefs(attrs []string, ColDefs []*plan.ColDef) {
 	}
 }
 
-func GetAutoIncrTableDef() []engine.TableDef {
+func getAutoIncrTableDef() []engine.TableDef {
 	/*
 		mo_increment_columns schema
 		| Attribute |     Type     | Primary Key |             Note         |

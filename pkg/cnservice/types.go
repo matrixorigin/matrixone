@@ -119,7 +119,5 @@ type service struct {
 	_txnSender             rpc.TxnSender
 	initTxnClientOnce      sync.Once
 	_txnClient             client.TxnClient
-	initFileServiceOnce    sync.Once
-	_fileService           fileservice.FileService
-	newFS                  fileservice.NewFileServicesFunc
+	fileService            fileservice.FileService
 }
