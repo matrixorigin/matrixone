@@ -10,23 +10,23 @@ insert into t1 values(71, 1, 2, 34, 5, 5.5, 341.13, 15.314, "2012-03-22", "2013-
 insert into t1 values(1, 1, 21, 4, 54, 53.5, 431.13, 14.394, "2011-03-12", "2015-03-12 10:03:12", "2002-03-12 13:03:12", "afbc", "dct5f");
 insert into t1 values(1, 71, 2, 34, 5, 5.5, 31.313, 124.314, "2012-01-12", "2019-03-12 10:03:12", "2013-03-12 13:03:12", "3abd1c", "dcvf");
 select dayofyear(a),dayofyear(b),dayofyear(c),dayofyear(d),dayofyear(e),dayofyear(f) from t1;
-[42883]unsupported parameter types [TINYINT] for function 'dayofyear'
+Function 'dayofyear' with parameters [TINYINT] is not supported.
 select dayofyear(g),dayofyear(h),dayofyear(i),dayofyear(k),dayofyear(l),dayofyear(m),dayofyear(n) from t1;
-[42883]unsupported parameter types [DOUBLE] for function 'dayofyear'
+Function 'dayofyear' with parameters [DOUBLE] is not supported.
 drop table t1;
 SELECT dayofyear("2015-09-03") as dayofyear;
 dayofyear
 246
 SELECT dayofyear(20150904) as dayofyear;
-[42883]unsupported parameter types [BIGINT] for function 'dayofyear'
+Function 'dayofyear' with parameters [BIGINT] is not supported.
 SELECT dayofyear(1340124) as dayofyear;
-[42883]unsupported parameter types [BIGINT] for function 'dayofyear'
+Function 'dayofyear' with parameters [BIGINT] is not supported.
 SELECT dayofyear(0.45133) as dayofyear;
-[42883]unsupported parameter types [DOUBLE] for function 'dayofyear'
+Function 'dayofyear' with parameters [DECIMAL128] is not supported.
 SELECT dayofyear(10) as dayofyear;
-[42883]unsupported parameter types [BIGINT] for function 'dayofyear'
+Function 'dayofyear' with parameters [BIGINT] is not supported.
 SELECT dayofyear(1=1) as dayofyear;
-[42883]unsupported parameter types [BOOL] for function 'dayofyear'
+Function 'dayofyear' with parameters [BOOL] is not supported.
 SELECT dayofyear('2015-09.30') as dayofyear;
 dayofyear
 273

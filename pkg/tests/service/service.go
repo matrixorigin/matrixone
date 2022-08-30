@@ -17,7 +17,6 @@ package service
 import (
 	"context"
 	"fmt"
-	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -998,16 +997,13 @@ func (c *testCluster) initDNServices(fileservices *fileServices) []DNService {
 	for i := 0; i < batch; i++ {
 		cfg := c.dn.cfgs[i]
 		opt := c.dn.opts[i]
-		fsFactory := func(name string) (fileservice.FileService, error) {
+		fsFactory := func(name string) (*fileservice.FileServices, error) {
 			index := i
-			switch strings.ToUpper(name) {
-			case "LOCAL":
-				return fileservices.getLocalFileService(index), nil
-			case "S3":
-				return fileservices.getS3FileService(), nil
-			default:
-				return nil, ErrInvalidFSName
-			}
+			return fileservice.NewFileServices(
+				"LOCAL",
+				fileservices.getLocalFileService(index),
+				fileservices.getS3FileService(),
+			)
 		}
 
 		ds, err := newDNService(cfg, fsFactory, opt)

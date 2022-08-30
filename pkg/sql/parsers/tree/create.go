@@ -171,17 +171,12 @@ func (node *CreateTable) Format(ctx *FmtCtx) {
 	}
 
 	if node.Param != nil {
-		if node.Param.ScanType == LOCAL && (node.Param.CompressType == AUTO || node.Param.CompressType == NOCOMPRESS) {
+		if node.Param.CompressType == AUTO || node.Param.CompressType == NOCOMPRESS {
 			ctx.WriteString(" infile ")
 			ctx.WriteString("'" + node.Param.Filepath + "'")
-		} else if node.Param.ScanType == LOCAL {
+		} else {
 			ctx.WriteString(" infile ")
 			ctx.WriteString("{'filepath':'" + node.Param.Filepath + "', 'compression':'" + strings.ToLower(node.Param.CompressType) + "'}")
-		} else {
-			ctx.WriteString(" url s3option ")
-			ctx.WriteString("{'endpoint'='" + node.Param.S3option[0] + "', 'access_key_id'='" + node.Param.S3option[3] +
-				"', 'secret_access_key'='" + node.Param.S3option[5] + "', 'bucket'='" + node.Param.S3option[7] + "', 'filepath'='" + node.Param.S3option[9] + "', 'region'='" + node.Param.S3option[11] + "'}")
-
 		}
 		if node.Param.Tail.Fields != nil {
 			ctx.WriteByte(' ')
@@ -2237,8 +2232,8 @@ type CreateUser struct {
 	statementImpl
 	IfNotExists bool
 	Users       []*User
-	Role        Role
-	MiscOpts    []UserMiscOption
+	Role        *Role
+	MiscOpt     UserMiscOption
 	// comment or attribute
 	CommentOrAttribute AccountCommentOrAttribute
 }
@@ -2256,25 +2251,27 @@ func (node *CreateUser) Format(ctx *FmtCtx) {
 			prefix = ", "
 		}
 	}
-	ctx.WriteString(" default role")
-	ctx.WriteString(" ")
-	node.Role.Format(ctx)
-	if len(node.MiscOpts) != 0 {
-		for _, opt := range node.MiscOpts {
-			ctx.WriteString(" ")
-			opt.Format(ctx)
-		}
+
+	if node.Role != nil {
+		ctx.WriteString(" default role")
+		ctx.WriteString(" ")
+		node.Role.Format(ctx)
+	}
+
+	if node.MiscOpt != nil {
+		ctx.WriteString(" ")
+		node.MiscOpt.Format(ctx)
 	}
 
 	node.CommentOrAttribute.Format(ctx)
 }
 
-func NewCreateUser(ife bool, u []*User, r Role, misc []UserMiscOption) *CreateUser {
+func NewCreateUser(ife bool, u []*User, r *Role, misc UserMiscOption) *CreateUser {
 	return &CreateUser{
 		IfNotExists: ife,
 		Users:       u,
 		Role:        r,
-		MiscOpts:    misc,
+		MiscOpt:     misc,
 	}
 }
 

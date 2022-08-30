@@ -16,12 +16,12 @@ package cnservice
 
 import (
 	"context"
+	"fmt"
 
 	"os"
 	"syscall"
 
 	"github.com/matrixorigin/matrixone/pkg/config"
-	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/moengine"
@@ -51,12 +51,7 @@ func initTAE(
 	eng := moengine.NewEngine(tae)
 	pu.StorageEngine = eng
 	pu.TxnClient = moengine.EngineToTxnClient(eng)
-
-	err = frontend.InitDB(cancelMoServerCtx, eng)
-	if err != nil {
-		return err
-	}
-	logutil.Info("Initialize the engine Done")
+	fmt.Println("Initialize the engine Done")
 
 	return nil
 }
