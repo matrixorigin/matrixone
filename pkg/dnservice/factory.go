@@ -133,5 +133,5 @@ func (s *store) newMemKVStorage(shard metadata.DNShard, logClient logservice.Cli
 }
 
 func (s *store) newTAEStorage(shard metadata.DNShard, logClient logservice.Client) (storage.TxnStorage, error) {
-	return taestorage.New(shard, logClient, s.fs, s.clock)
+	return taestorage.New(shard, logClient, s.fileService, s.clock)
 }

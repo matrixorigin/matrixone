@@ -14,7 +14,7 @@
 
 %{
 package mysql
-    
+
 import (
 	"fmt"
     "strings"
@@ -243,7 +243,7 @@ import (
 %token <str> DYNAMIC COMPRESSED REDUNDANT COMPACT FIXED COLUMN_FORMAT AUTO_RANDOM
 %token <str> RESTRICT CASCADE ACTION PARTIAL SIMPLE CHECK ENFORCED
 %token <str> RANGE LIST ALGORITHM LINEAR PARTITIONS SUBPARTITION SUBPARTITIONS
-%token <str> TYPE ANY SOME EXTERNAL LOCALFILE URL 
+%token <str> TYPE ANY SOME EXTERNAL LOCALFILE URL
 %token <str> PREPARE DEALLOCATE
 
 // MO table option
@@ -394,7 +394,7 @@ import (
 %type <funcExpr> function_call_json
 
 %type <unresolvedName> column_name column_name_unresolved
-%type <strs> enum_values force_quote_opt force_quote_list 
+%type <strs> enum_values force_quote_opt force_quote_list
 %type <str> sql_id charset_keyword db_name
 %type <str> not_keyword func_not_keyword
 %type <str> reserved_keyword non_reserved_keyword
@@ -798,7 +798,7 @@ load_fields:
         for _, f := range $2 {
             if f.Terminated != "" {
                 res.Terminated = f.Terminated
-            } 
+            }
             if f.Optionally {
                 res.Optionally = f.Optionally
             }
@@ -1445,7 +1445,7 @@ set_expr:
     }
 
 equal_or_assignment:
-    '=' 
+    '='
     {
         $$ = string($1)
     }
@@ -1775,7 +1775,7 @@ utility_option_arg:
 
 
 analyze_stmt:
-    ANALYZE TABLE table_name '(' column_list ')' 
+    ANALYZE TABLE table_name '(' column_list ')'
     {
         $$ = tree.NewAnalyzeStmt($3, $5)
     }
@@ -2118,7 +2118,7 @@ show_create_stmt:
     {
         $$ = &tree.ShowCreateTable{Name: $4}
     }
-| 
+|
     SHOW CREATE VIEW table_name_unresolved
     {
         $$ = &tree.ShowCreateView{Name: $4}
@@ -2212,7 +2212,7 @@ drop_role_stmt:
             IfExists: $3,
             Roles: $4,
         }
-    } 
+    }
 
 drop_index_stmt:
     DROP INDEX exists_opt ident ON table_name
@@ -2868,7 +2868,7 @@ union_op:
         $$ = &tree.UnionTypeRecord{
             Type: tree.UNION,
             All: true,
-            Distinct: false, 
+            Distinct: false,
         }
     }
 |   UNION DISTINCT
@@ -2879,7 +2879,7 @@ union_op:
             Distinct: true,
         }
     }
-| 
+|
     EXCEPT
     {
         $$ = &tree.UnionTypeRecord{
@@ -2893,7 +2893,7 @@ union_op:
         $$ = &tree.UnionTypeRecord{
             Type: tree.EXCEPT,
             All: true,
-            Distinct: false, 
+            Distinct: false,
         }
     }
 |   EXCEPT DISTINCT
@@ -3223,7 +3223,7 @@ column_list:
         $$ = append($1, tree.Identifier($3))
     }
 
-table_factor:   
+table_factor:
     aliased_table_name
     {
         $$ = $1
@@ -4097,9 +4097,18 @@ values_opt:
     {
         $$ = nil
     }
+|   VALUES LESS THAN MAXVALUE
+    {
+    	expr := tree.NewMaxValue()
+    	$$ = &tree.ValuesLessThan{ValueList: tree.Exprs{expr}}
+    }
 |   VALUES LESS THAN '(' expression_list ')'
     {
         $$ = &tree.ValuesLessThan{ValueList: $5}
+    }
+|   VALUES IN '(' expression_list ')'
+    {
+	$$ = &tree.ValuesIn{ValueList: $4}
     }
 
 sub_partition_num_opt:
@@ -4188,7 +4197,7 @@ sub_partition_method:
 
 algorithm_opt:
     {
-        $$ = 0
+        $$ = 2
     }
 |   ALGORITHM '=' INTEGRAL
     {
@@ -4598,7 +4607,7 @@ index_name:
 |	ident
 
 column_def:
-    column_name column_type column_attribute_list_opt 
+    column_name column_type column_attribute_list_opt
     {
         $$ = tree.NewColumnTableDef($1, $2, $3)
     }
@@ -4742,7 +4751,7 @@ constraint_keyword:
         $$ = $2
     }
 
-references_def:    
+references_def:
     REFERENCES table_name index_column_list_opt match_opt on_delete_update_opt
     {
         $$ = &tree.AttributeReference{
@@ -5001,7 +5010,7 @@ simple_expr:
     {
         $$ = tree.NewCastExpr($3, $5)
     }
-|   CONVERT '(' expression USING charset_name ')' 
+|   CONVERT '(' expression USING charset_name ')'
     {
         name := tree.SetUnresolvedName("convert")
         es := tree.NewNumValWithType(constant.MakeString($5), $5, false, tree.P_char)
@@ -5812,6 +5821,10 @@ expression:
 |   NOT expression %prec NOT
     {
         $$ = tree.NewNotExpr($2)
+    }
+|   MAXVALUE
+    {
+    	$$ = tree.NewMaxValue()
     }
 |   boolean_primary IS true_or_false %prec IS
 	{

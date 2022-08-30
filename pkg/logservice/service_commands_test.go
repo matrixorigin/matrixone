@@ -27,6 +27,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 )
 
 func TestBackgroundTickAndHeartbeat(t *testing.T) {
@@ -48,6 +49,7 @@ func TestBackgroundTickAndHeartbeat(t *testing.T) {
 	cfg.HAKeeperClientConfig.ServiceAddresses = []string{"127.0.0.1:9002"}
 	cfg.Fill()
 	service, err := NewService(cfg,
+		testutil.NewFS(),
 		WithBackendFilter(func(msg morpc.Message, backendAddr string) bool {
 			return true
 		}),
