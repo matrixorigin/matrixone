@@ -28,11 +28,12 @@ import (
 
 func TestLoadFile(t *testing.T) {
 	dir := t.TempDir()
-	fs, err := fileservice.NewLocalETLFS("etl", dir)
-	assert.Nil(t, err)
+	proc := testutil.NewProc()
+	fs := proc.FileService
+	// fs := testutil.NewFS()
 	ctx := context.Background()
 	filepath := dir + "test"
-	err = fs.Write(ctx, fileservice.IOVector{
+	err := fs.Write(ctx, fileservice.IOVector{
 		FilePath: filepath,
 		Entries: []fileservice.IOEntry{
 			{
@@ -64,8 +65,7 @@ func TestLoadFile(t *testing.T) {
 			inStrs = append(inStrs, k.filename)
 		}
 		inVector := testutil.MakeVarcharVector(inStrs, nil)
-		proc := testutil.NewProc()
-		res, err := LoadFile([]*vector.Vector{inVector}, proc, fs)
+		res, err := LoadFile([]*vector.Vector{inVector}, proc)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -112,8 +112,7 @@ func TestLoadFile(t *testing.T) {
 			inStrs = append(inStrs, k.filename)
 		}
 		inVector := testutil.MakeVarcharVector(inStrs, nil)
-		proc := testutil.NewProc()
-		_, err := LoadFile([]*vector.Vector{inVector}, proc, fs)
+		_, err := LoadFile([]*vector.Vector{inVector}, proc)
 		convey.So(err, convey.ShouldNotBeNil)
 	})
 

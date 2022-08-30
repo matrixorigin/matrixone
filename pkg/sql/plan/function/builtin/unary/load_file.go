@@ -25,12 +25,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func LoadFile(vectors []*vector.Vector, proc *process.Process, fs fileservice.FileService) (*vector.Vector, error) {
+func LoadFile(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	inputVector := vectors[0]
 	resultType := types.New(types.T_varchar, 0, 0, 0)
 	vec := vector.New(resultType)
 	const blobsize = 65536 // 2^16-1
 	Filepath := vector.GetStrColumn(inputVector).GetString(0)
+	fs := proc.FileService
 	r, err := ReadFromFile(Filepath, fs)
 	if err != nil {
 		return nil, err
