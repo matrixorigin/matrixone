@@ -760,11 +760,6 @@ func (th *TxnHandler) GetStorage() engine.Engine {
 	return th.storage
 }
 
-func (th *TxnHandler) IsTaeEngine() bool {
-	_, ok := th.storage.(moengine.TxnEngine)
-	return ok
-}
-
 func (th *TxnHandler) GetTxn() TxnOperator {
 	err := th.ses.TxnStart()
 	if err != nil {
