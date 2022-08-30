@@ -245,6 +245,7 @@ message PartitionInfo {
 	repeated PartitionItem partitions = 7;
 	int64 algorithm = 8;
 	bool isSubPartition = 9;
+	string partitionMsg = 10;
 }
 
 message PartitionItem {

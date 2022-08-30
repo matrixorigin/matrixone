@@ -107,6 +107,10 @@ type CommentDef struct {
 	Comment string
 }
 
+type PartitionDef struct {
+	Partition string
+}
+
 type ViewDef struct {
 	View string
 }
@@ -116,6 +120,7 @@ type TableDef interface {
 }
 
 func (*CommentDef) tableDef()      {}
+func (*PartitionDef) tableDef()    {}
 func (*ViewDef) tableDef()         {}
 func (*AttributeDef) tableDef()    {}
 func (*IndexTableDef) tableDef()   {}

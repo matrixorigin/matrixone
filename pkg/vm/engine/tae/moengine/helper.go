@@ -145,6 +145,9 @@ func DefsToSchema(name string, defs []engine.TableDef) (schema *catalog.Schema, 
 				}
 			}
 
+		case *engine.PartitionDef:
+			schema.Partition = defVal.Partition
+
 		case *engine.ViewDef:
 			schema.View = defVal.View
 

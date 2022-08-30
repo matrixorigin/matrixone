@@ -127,6 +127,7 @@ type Schema struct {
 	BlockMaxRows     uint32
 	SegmentMaxBlocks uint16
 	Comment          string
+	Partition        string
 	Relkind          string
 	Createsql        string
 	View             string

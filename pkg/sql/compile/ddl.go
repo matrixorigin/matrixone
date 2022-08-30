@@ -124,6 +124,10 @@ func planDefsToExeDefs(planDefs []*plan.TableDef_DefType) []engine.TableDef {
 			exeDefs[i] = &engine.ViewDef{
 				View: defVal.View.View,
 			}
+		case *plan.TableDef_DefType_Partition:
+			exeDefs[i] = &engine.PartitionDef{
+				Partition: defVal.Partition.PartitionMsg,
+			}
 		}
 	}
 	return exeDefs

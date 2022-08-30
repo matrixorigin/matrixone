@@ -925,6 +925,14 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string) (*plan2.
 				Key:   catalog.SystemRelAttr_Comment,
 				Value: commnetDef.Comment,
 			})
+		} else if partitionDef, ok := def.(*engine.PartitionDef); ok {
+			defs = append(defs, &plan2.TableDefType{
+				Def: &plan2.TableDef_DefType_Partition{
+					Partition: &plan2.PartitionInfo{
+						PartitionMsg: partitionDef.Partition,
+					},
+				},
+			})
 		}
 	}
 	if len(properties) > 0 {
