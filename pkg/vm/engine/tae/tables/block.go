@@ -329,7 +329,7 @@ func (blk *dataBlock) BuildCompactionTaskFactory() (
 	}
 	// Make sure no appender use this block to compact
 	if blk.RefCount() > 0 {
-		//logutil.Infof("blk.RefCount() != 0 : %d, rows: %d", blk.meta.ID, blk.node.rows)
+		// logutil.Infof("blk.RefCount() != 0 : %v, rows: %d", blk.meta.String(), blk.node.rows)
 		return
 	}
 	//logutil.Infof("CompactBlockTaskFactory blk: %d, rows: %d", blk.meta.ID, blk.node.rows)

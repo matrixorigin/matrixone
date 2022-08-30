@@ -96,10 +96,8 @@ func (seg *localSegment) registerInsertNode() {
 func (seg *localSegment) ApplyAppend() (err error) {
 	var destOff int
 	defer func() {
-		if err != nil {
-			// Close All unclosed Appends
-			seg.CloseAppends()
-		}
+		// Close All unclosed Appends
+		seg.CloseAppends()
 	}()
 	for _, ctx := range seg.appends {
 		bat, _ := ctx.node.Window(ctx.start, ctx.start+ctx.count)
@@ -111,7 +109,6 @@ func (seg *localSegment) ApplyAppend() (err error) {
 		}
 		id := ctx.driver.GetID()
 		ctx.node.AddApplyInfo(ctx.start, ctx.count, uint32(destOff), ctx.count, seg.table.entry.GetDB().ID, id)
-		ctx.driver.Close()
 	}
 	if seg.tableHandle != nil {
 		seg.table.entry.GetTableData().ApplyHandle(seg.tableHandle)

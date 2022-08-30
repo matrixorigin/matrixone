@@ -44,6 +44,7 @@ func (h *tableHandle) SetAppender(id *common.ID) (appender data.BlockAppender) {
 	h.block = blkMeta.GetBlockData().(*dataBlock)
 	h.appender, _ = h.block.MakeAppender()
 	h.block.Ref()
+	// logutil.Infof("GetAppender: %d-%v", h.block.RefCount(), h.block.meta.String())
 
 	return h.appender
 }
@@ -77,6 +78,7 @@ func (h *tableHandle) GetAppender() (appender data.BlockAppender, err error) {
 		return
 	}
 	h.block.Ref()
+	// logutil.Infof("GetAppender: %d-%v", h.block.RefCount(), h.block.meta.String())
 	appender = h.appender
 	return
 }
