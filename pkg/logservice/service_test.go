@@ -31,6 +31,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 )
 
 const (
@@ -63,6 +64,7 @@ func runServiceTest(t *testing.T,
 	cfg := getServiceTestConfig()
 	defer vfs.ReportLeakedFD(cfg.FS, t)
 	service, err := NewService(cfg,
+		testutil.NewFS(),
 		WithBackendFilter(func(msg morpc.Message, backendAddr string) bool {
 			return true
 		}),
@@ -90,6 +92,7 @@ func TestNewService(t *testing.T) {
 	cfg := getServiceTestConfig()
 	defer vfs.ReportLeakedFD(cfg.FS, t)
 	service, err := NewService(cfg,
+		testutil.NewFS(),
 		WithBackendFilter(func(msg morpc.Message, backendAddr string) bool {
 			return true
 		}),
@@ -537,6 +540,7 @@ func TestShardInfoCanBeQueried(t *testing.T) {
 	}
 	cfg1.Fill()
 	service1, err := NewService(cfg1,
+		testutil.NewFS(),
 		WithBackendFilter(func(msg morpc.Message, backendAddr string) bool {
 			return true
 		}),
@@ -550,6 +554,7 @@ func TestShardInfoCanBeQueried(t *testing.T) {
 	assert.NoError(t, service1.store.startReplica(1, 1, peers1, false))
 	cfg2.Fill()
 	service2, err := NewService(cfg2,
+		testutil.NewFS(),
 		WithBackendFilter(func(msg morpc.Message, backendAddr string) bool {
 			return true
 		}),
@@ -666,6 +671,7 @@ func TestGossipInSimulatedCluster(t *testing.T) {
 		cfg.GossipProbeInterval.Duration = 350 * time.Millisecond
 		configs = append(configs, cfg)
 		service, err := NewService(cfg,
+			testutil.NewFS(),
 			WithBackendFilter(func(msg morpc.Message, backendAddr string) bool {
 				return true
 			}),
@@ -773,6 +779,7 @@ func TestGossipInSimulatedCluster(t *testing.T) {
 	services[12] = nil
 	time.Sleep(2 * time.Second)
 	service, err := NewService(configs[12],
+		testutil.NewFS(),
 		WithBackendFilter(func(msg morpc.Message, backendAddr string) bool {
 			return true
 		}),
