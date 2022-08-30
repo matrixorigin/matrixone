@@ -1027,9 +1027,6 @@ func (b *baseBinder) bindNumVal(astExpr *tree.NumVal, typ *Type) (*Expr, error) 
 	case tree.P_bit:
 		return returnDecimalExpr(astExpr.String())
 	case tree.P_char:
-		if typ != nil && typ.Id != int32(types.T_char) && typ.Id != int32(types.T_varchar) {
-			return appendCastBeforeExpr(getStringExpr(astExpr.String()), typ)
-		}
 		expr := getStringExpr(astExpr.String())
 		return expr, nil
 	default:

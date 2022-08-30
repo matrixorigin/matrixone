@@ -544,7 +544,7 @@ func (blk *dataBlock) updateWithFineLock(
 		chain.Lock()
 		node = chain.AddNodeLocked(txn)
 		if err = chain.TryUpdateNodeLocked(row, v, node); err != nil {
-			chain.DeleteNodeLocked(node.GetDLNode())
+			chain.DeleteNodeLocked(node.(*updates.ColumnUpdateNode))
 		}
 		chain.Unlock()
 	}

@@ -143,6 +143,9 @@ func coalesceGeneral[T NormalType](vs []*vector.Vector, proc *process.Process, t
 
 	for i := startIdx; i < len(vs); i++ {
 		input := vs[i]
+		if input.Typ.Oid != types.T_any {
+			rs.Typ = input.Typ
+		}
 		cols := vector.MustTCols[T](input)
 		if input.IsScalar() {
 			if input.IsScalarNull() {

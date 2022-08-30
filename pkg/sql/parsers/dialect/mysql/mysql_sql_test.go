@@ -52,6 +52,9 @@ var (
 		input  string
 		output string
 	}{{
+		input:  "commit work",
+		output: "commit",
+	}, {
 		input: "select * from tables",
 	}, {
 		input: "update t1 set a = default",

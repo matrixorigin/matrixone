@@ -1486,6 +1486,10 @@ completion_type:
     {
         $$ = tree.COMPLETION_TYPE_NO_CHAIN
     }
+|	WORK
+    {
+        $$ = tree.COMPLETION_TYPE_NO_CHAIN
+    }
 |   AND CHAIN NO RELEASE
     {
         $$ = tree.COMPLETION_TYPE_CHAIN
