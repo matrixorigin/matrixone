@@ -16,12 +16,14 @@ package frontend
 
 import (
 	"context"
+	"sync"
+	"time"
+
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/moengine"
 	"github.com/matrixorigin/matrixone/pkg/vm/mempool"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
-	"time"
 )
 
 // Routine handles requests.
@@ -47,6 +49,11 @@ type Routine struct {
 	routineMgr *RoutineManager
 
 	ses *Session
+	// TODO: The current protocol and mysql access code, designed to be
+	// confusing, will lead to multiple calls to Quit, here the use of
+	// sync.Once also just to solve the problem of multiple closures, the
+	// code needs to be refactored
+	closeOnce sync.Once
 }
 
 func (routine *Routine) GetClientProtocol() Protocol {
@@ -138,15 +145,17 @@ func (routine *Routine) Loop(routineCtx context.Context) {
 When the io is closed, the Quit will be called.
 */
 func (routine *Routine) Quit() {
-	routine.notifyClose()
+	routine.closeOnce.Do(func() {
+		routine.notifyClose()
 
-	if routine.cancelRoutineFunc != nil {
-		routine.cancelRoutineFunc()
-	}
+		if routine.cancelRoutineFunc != nil {
+			routine.cancelRoutineFunc()
+		}
 
-	if routine.protocol != nil {
-		routine.protocol.Quit()
-	}
+		if routine.protocol != nil {
+			routine.protocol.Quit()
+		}
+	})
 }
 
 /*

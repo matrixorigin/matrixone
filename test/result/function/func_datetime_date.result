@@ -1,11 +1,9 @@
 SELECT DATE(0.0124);
-DATE(0.0124)
-null
+Operator 'cast' with parameters [DECIMAL128 DATE] is not supported.
 SELECT DATE("2112123");
 Incorrect date format
 SELECT DATE(1231241.4513);
-DATE(1231241.4513)
-null
+Operator 'cast' with parameters [DECIMAL128 DATE] is not supported.
 SELECT DATE("2017-06-15");
 DATE("2017-06-15")
 2017-06-15
@@ -27,19 +25,13 @@ CREATE TABLE t1 (d1 datetime);
 INSERT INTO t1(d1) VALUES ('2007-07-19 08:30:00'), (NULL),
 ('2007-07-19 08:34:00'), (NULL), ('2007-07-19 08:36:00');
 SELECT cast(date(d1) as signed) FROM t1;
-cast(date(d1) as signed)
-20070719
-null
-20070719
-null
-20070719
+Operator 'cast' with parameters [DATE BIGINT] is not supported.
 drop table t1;
 CREATE TABLE t1 (d1 datetime);
 INSERT INTO t1(d1) VALUES ('2007-07-19 08:30:00'), (NULL),
 ('2007-07-19 08:34:00'), (NULL), ('2007-07-19 08:36:00');
 SELECT sum(date(d1)) FROM t1;
-sum(date(d1))
-60212157
+Aggregate function of 'sum' do not support implicit conversions for param of [DATE]
 drop table t1;
 select date("1997-12-31 23:59:59.000001");
 date("1997-12-31 23:59:59.000001")
@@ -47,8 +39,7 @@ date("1997-12-31 23:59:59.000001")
 select date("1997-13-31 23:59:59.000001");
 Incorrect date format
 SELECT DATE(20110512154559.6 + 0e0);
-DATE(20110512154559.6 + 0e0)
-2011-05-12
+Operator 'cast' with parameters [DOUBLE DATE] is not supported.
 SELECT DATE(concat_ws('a', 0));
 Incorrect date format
 CREATE TABLE t1 (a timestamp);
@@ -68,8 +59,7 @@ dt	exp
 2013-10-13 00:00:00	false
 DROP TABLE t1;
 SELECT DATE(20110512154559.616), DATE(FLOOR(20110512154559.616));
-DATE(20110512154559.616)	DATE(FLOOR(20110512154559.616))
-2011-05-12	2011-05-12
+Operator 'cast' with parameters [DECIMAL128 DATE] is not supported.
 DROP TABLE IF EXISTS t3;
 CREATE TABLE t3(c1 DATE NOT NULL);
 INSERT INTO t3 VALUES('2000-01-01');

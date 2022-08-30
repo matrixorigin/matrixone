@@ -213,7 +213,7 @@ func (entry *SegmentEntry) DropBlockEntry(id uint64, txn txnif.AsyncTxn) (delete
 	}
 	blk.Lock()
 	defer blk.Unlock()
-	needWait, waitTxn := blk.NeedWaitCommitting(txn.GetStartTS())
+	needWait, waitTxn := blk.NeedWaitCommittingMeta(txn.GetStartTS())
 	if needWait {
 		blk.Unlock()
 		waitTxn.GetTxnState(true)

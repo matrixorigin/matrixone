@@ -1,11 +1,7 @@
 #各种数据类型
--- @bvt:issue#3588
 SELECT DATE(0.0124);
--- @bvt:issue
 SELECT DATE("2112123");
--- @bvt:issue#3588
 SELECT DATE(1231241.4513);
--- @bvt:issue
 SELECT DATE("2017-06-15");
 
 
@@ -27,9 +23,7 @@ select date(NULL);
 CREATE TABLE t1 (d1 datetime);
 INSERT INTO t1(d1) VALUES ('2007-07-19 08:30:00'), (NULL),
 ('2007-07-19 08:34:00'), (NULL), ('2007-07-19 08:36:00');
--- @bvt:issue#3588
 SELECT cast(date(d1) as signed) FROM t1;
--- @bvt:issue
 drop table t1;
 
 
@@ -38,9 +32,7 @@ drop table t1;
 CREATE TABLE t1 (d1 datetime);
 INSERT INTO t1(d1) VALUES ('2007-07-19 08:30:00'), (NULL),
 ('2007-07-19 08:34:00'), (NULL), ('2007-07-19 08:36:00');
--- @bvt:issue#3588
 SELECT sum(date(d1)) FROM t1;
--- @bvt:issue
 drop table t1;
 
 
@@ -61,9 +53,7 @@ select date("1997-12-31 23:59:59.000001");
 
 
 select date("1997-13-31 23:59:59.000001");
--- @bvt:issue#3588
 SELECT DATE(20110512154559.6 + 0e0);
--- @bvt:issue
 
 SELECT DATE(concat_ws('a', 0));
 
@@ -89,9 +79,7 @@ DROP TABLE t1;
 
 
 #EXTREME VALUES
--- @bvt:issue#3588
 SELECT DATE(20110512154559.616), DATE(FLOOR(20110512154559.616));
--- @bvt:issue
 
 #各种数据类型
 DROP TABLE IF EXISTS t3;
