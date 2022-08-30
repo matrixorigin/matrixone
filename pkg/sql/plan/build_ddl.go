@@ -278,6 +278,7 @@ func buildTableDefs(defs tree.TableDefs, ctx CompilerContext, tableDef *TableDef
 
 			var pks []string
 			var comment string
+			var auto_incr bool
 			for _, attr := range def.Attributes {
 				if _, ok := attr.(*tree.AttributePrimaryKey); ok {
 					if colType.GetId() == int32(types.T_blob) {
@@ -291,6 +292,13 @@ func buildTableDefs(defs tree.TableDefs, ctx CompilerContext, tableDef *TableDef
 					if getNumOfCharacters(comment) > maxLengthOfColumnComment {
 						errmsg := fmt.Sprintf("Comment for field '%s' is too long (max = %d)", def.Name.Parts[0], maxLengthOfColumnComment)
 						return errors.New(errno.InvalidOptionValue, errmsg)
+					}
+				}
+
+				if _, ok := attr.(*tree.AttributeAutoIncrement); ok {
+					auto_incr = true
+					if colType.GetId() != int32(types.T_int32) && colType.GetId() != int32(types.T_int64) {
+						return errors.New(errno.InvalidColumnDefinition, "the auto_incr column is only support int32 and int64 type now")
 					}
 				}
 			}
@@ -307,11 +315,12 @@ func buildTableDefs(defs tree.TableDefs, ctx CompilerContext, tableDef *TableDef
 			}
 
 			col := &ColDef{
-				Name:    def.Name.Parts[0],
-				Alg:     plan.CompressType_Lz4,
-				Typ:     colType,
-				Default: defaultValue,
-				Comment: comment,
+				Name:          def.Name.Parts[0],
+				Alg:           plan.CompressType_Lz4,
+				Typ:           colType,
+				Default:       defaultValue,
+				Comment:       comment,
+				AutoIncrement: auto_incr,
 			}
 			colNameMap[col.Name] = col.Typ.GetId()
 			tableDef.Cols = append(tableDef.Cols, col)
