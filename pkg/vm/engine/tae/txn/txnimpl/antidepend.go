@@ -90,6 +90,7 @@ func (checker *warChecker) check() (err error) {
 	for key := range checker.symTable {
 		keyt, did, tid, sid, bid := txnbase.KeyEncoder.Decode([]byte(key))
 		db, err := checker.catalog.GetDatabaseByID(did)
+		isMeta := false
 		if err != nil {
 			panic(err)
 		}
@@ -112,6 +113,7 @@ func (checker *warChecker) check() (err error) {
 				panic(err)
 			}
 			entry = seg.BaseEntry
+			isMeta = true
 		case txnbase.KeyT_BlockEntry:
 			tb, err := db.GetTableEntryByID(tid)
 			if err != nil {
@@ -126,14 +128,22 @@ func (checker *warChecker) check() (err error) {
 				panic(err)
 			}
 			entry = blk.BaseEntry
+			isMeta = true
 		}
 		if entry != nil {
 			commitTs := checker.txn.GetCommitTS()
 			entry.RLock()
 			if entry.DeleteBefore(commitTs) {
-				if !entry.IsCommitting() {
-					entry.RUnlock()
-					return txnif.ErrTxnRWConflict
+				if isMeta {
+					if !entry.IsMetadataCommitting() {
+						entry.RUnlock()
+						return txnif.ErrTxnRWConflict
+					}
+				} else {
+					if !entry.IsCommitting() {
+						entry.RUnlock()
+						return txnif.ErrTxnRWConflict
+					}
 				}
 				eTxn := entry.GetTxn()
 				entry.RUnlock()

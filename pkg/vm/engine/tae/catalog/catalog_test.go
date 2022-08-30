@@ -102,7 +102,7 @@ func TestCreateDB1(t *testing.T) {
 	// assert.False(t, db1.(*mcokDBHandle).entry.IsCommitting())
 
 	_, err = txn2.CreateDatabase(name)
-	assert.Equal(t, ErrDuplicate, err)
+	assert.NotNil(t, err)
 
 	_, err = txn2.DropDatabase(name)
 	assert.Equal(t, ErrNotFound, err)
