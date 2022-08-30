@@ -12,18 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//go:build server_test
-// +build server_test
+//go:build service_test
+// +build service_test
 
 package main
 
 import (
-	"os"
 	"testing"
 )
 
-func TestMOServer(t *testing.T) {
-	os.Args = make([]string, 2)
-	os.Args[1] = "./system_vars_config.toml"
+func TestMOService(t *testing.T) {
 	main()
 }

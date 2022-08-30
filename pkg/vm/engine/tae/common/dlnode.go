@@ -24,17 +24,16 @@ type Row struct {
 	id int
 }
 
-func (r *Row) Compare(o *Row) int {
-	or := o.(*Row)
-	if r.id > ir.id {
+func compare(a, b *Row) int {
+	if a.id > b.id {
 		return 1
-	} else if r.id < ir.id {
+	} else if a.id < b.id {
 		return -1
 	}
 	return 0
 }
 
-dlist := new(SortedDList)
+dlist := NewGenericSortedDList[*Row](compare)
 n1 := dlist.Insert(&Row{id: 10}) // [10]
 n2 := dlist.Insert(&Row{id: 5})  // [10]<->[5]
 n3 := dlist.Insert(&Row{id: 13}) // [13]<->[10]<->[5]
@@ -42,7 +41,7 @@ n3.id = 8
 dlist.Update(n3)                 // [10]<->[8]<->[5]
 dlist.Delete(n1)                 // [8]<->[5]
 
-it := NewSortedDListIt(nil, dlist,true)
+it := NewGenericSortedDListIt(nil, dlist,true)
 for it.Valid() {
 	n := it.GetPayload()
 	// n.xxx
@@ -51,18 +50,25 @@ for it.Valid() {
 */
 
 // Sorted doubly linked-list
-type SortedDList struct {
-	head *DLNode
-	tail *DLNode
+type GenericSortedDList[T any] struct {
+	head    *GenericDLNode[T]
+	tail    *GenericDLNode[T]
+	compare func(T, T) int
+}
+
+func NewGenericSortedDList[T any](compare func(T, T) int) *GenericSortedDList[T] {
+	return &GenericSortedDList[T]{
+		compare: compare,
+	}
 }
 
 // Get the head node
-func (l *SortedDList) GetHead() *DLNode {
+func (l *GenericSortedDList[T]) GetHead() *GenericDLNode[T] {
 	return l.head
 }
 
 // Get the tail node
-func (l *SortedDList) GetTail() *DLNode {
+func (l *GenericSortedDList[T]) GetTail() *GenericDLNode[T] {
 	return l.tail
 }
 
@@ -77,8 +83,8 @@ func (l *SortedDList) GetTail() *DLNode {
 // --------- UPDATE [10,x10] TO [2, x10]--------------
 //
 // [List] [1,x1] <-> [2,x10] <-> [3,x3] <-> [20,x20]
-func (l *SortedDList) Update(n *DLNode) {
-	nhead, ntail := n.KeepSorted()
+func (l *GenericSortedDList[T]) Update(n *GenericDLNode[T]) {
+	nhead, ntail := n.KeepSorted(l.compare)
 	if nhead != nil {
 		l.head = nhead
 	}
@@ -88,26 +94,26 @@ func (l *SortedDList) Update(n *DLNode) {
 }
 
 // Get the length of the list
-func (l *SortedDList) Depth() int {
+func (l *GenericSortedDList[T]) Depth() int {
 	depth := 0
-	l.Loop(func(_ *DLNode) bool {
+	l.Loop(func(_ *GenericDLNode[T]) bool {
 		depth++
 		return true
 	}, false)
 	return depth
 }
 
-// Insert a object and wrap it as DLNode into the list
+// Insert a object and wrap it as GenericDLNode into the list
 // The inserted object must be instance of interface NodePayload
 // [List]: [1,x1] <-> [5,x5] <-> [10,x10]
 // Insert a node [7,x7]
 // [List]: [1,x1] <-> [5,x5] <-> [7,x7] <-> [10,x10]
-func (l *SortedDList) Insert(payload NodePayload) *DLNode {
+func (l *GenericSortedDList[T]) Insert(payload T) *GenericDLNode[T] {
 	var (
-		n    *DLNode
-		tail *DLNode
+		n    *GenericDLNode[T]
+		tail *GenericDLNode[T]
 	)
-	n, l.head, tail = InsertDLNode(payload, l.head)
+	n, l.head, tail = InsertGenericDLNode(payload, l.head, l.compare)
 	if tail != nil {
 		l.tail = tail
 	}
@@ -119,7 +125,7 @@ func (l *SortedDList) Insert(payload NodePayload) *DLNode {
 //	Delete [node]
 //
 // [prev node] <-> [node] <-> [next node] =============> [prev node] <-> [next node]
-func (l *SortedDList) Delete(n *DLNode) {
+func (l *GenericSortedDList[T]) Delete(n *GenericDLNode[T]) {
 	prev := n.prev
 	next := n.next
 	if prev != nil && next != nil {
@@ -138,40 +144,31 @@ func (l *SortedDList) Delete(n *DLNode) {
 }
 
 // Loop the list and apply fn on each node
-func (l *SortedDList) Loop(fn func(n *DLNode) bool, reverse bool) {
+func (l *GenericSortedDList[T]) Loop(fn func(n *GenericDLNode[T]) bool, reverse bool) {
 	if reverse {
-		LoopSortedDList(l.tail, fn, reverse)
+		LoopGenericSortedDList[T](l.tail, fn, reverse)
 	} else {
-		LoopSortedDList(l.head, fn, reverse)
+		LoopGenericSortedDList[T](l.head, fn, reverse)
 	}
 }
 
-// wrapped object type by a DLNode
-type NodePayload interface {
-	Compare(NodePayload) int
-}
-
 // Doubly sorted linked-list node
-type DLNode struct {
-	prev, next *DLNode
-	payload    NodePayload
+type GenericDLNode[T any] struct {
+	prev, next *GenericDLNode[T]
+	payload    T
 }
 
-func (l *DLNode) Compare(o *DLNode) int {
-	return l.payload.Compare(o.payload)
-}
-
-func (l *DLNode) GetPayload() NodePayload { return l.payload }
-func (l *DLNode) GetPrev() *DLNode        { return l.prev }
-func (l *DLNode) GetNext() *DLNode        { return l.next }
+func (l *GenericDLNode[T]) GetPayload() T              { return l.payload }
+func (l *GenericDLNode[T]) GetPrev() *GenericDLNode[T] { return l.prev }
+func (l *GenericDLNode[T]) GetNext() *GenericDLNode[T] { return l.next }
 
 // Keep node be sorted in the list
-func (l *DLNode) KeepSorted() (head *DLNode, tail *DLNode) {
+func (l *GenericDLNode[T]) KeepSorted(compare func(T, T) int) (head, tail *GenericDLNode[T]) {
 	curr := l
 	head = curr
 	prev := l.prev
 	next := l.next
-	for (curr != nil && next != nil) && (curr.Compare(next) < 0) {
+	for (curr != nil && next != nil) && (compare(curr.payload, next.payload) < 0) {
 		if head == curr {
 			head = next
 		}
@@ -205,8 +202,10 @@ func (l *DLNode) KeepSorted() (head *DLNode, tail *DLNode) {
 // nhead is the new head node
 // ntail is the new tail node.
 // If ntail is not nil, tail is updated. Else tail is not updated
-func InsertDLNode(payload NodePayload, head *DLNode) (node, nhead, ntail *DLNode) {
-	node = &DLNode{
+func InsertGenericDLNode[T any](payload T,
+	head *GenericDLNode[T],
+	compare func(T, T) int) (node, nhead, ntail *GenericDLNode[T]) {
+	node = &GenericDLNode[T]{
 		payload: payload,
 	}
 	if head == nil {
@@ -217,17 +216,8 @@ func InsertDLNode(payload NodePayload, head *DLNode) (node, nhead, ntail *DLNode
 
 	node.next = head
 	head.prev = node
-	nhead, ntail = node.KeepSorted()
+	nhead, ntail = node.KeepSorted(compare)
 	return
-}
-
-// Given a node of a dlist list, find the head node
-func FindHead(n *DLNode) *DLNode {
-	head := n
-	for head.prev != nil {
-		head = head.prev
-	}
-	return head
 }
 
 // Loop the list and apply fn on each node
@@ -235,7 +225,9 @@ func FindHead(n *DLNode) *DLNode {
 // fn is operation applied to each node during iterating.
 // if fn(node) returns false, stop iterating.
 // reverse is true to loop in reversed way.
-func LoopSortedDList(head *DLNode, fn func(node *DLNode) bool, reverse bool) {
+func LoopGenericSortedDList[T any](head *GenericDLNode[T],
+	fn func(node *GenericDLNode[T]) bool,
+	reverse bool) {
 	curr := head
 	for curr != nil {
 		goNext := fn(curr)
@@ -251,24 +243,26 @@ func LoopSortedDList(head *DLNode, fn func(node *DLNode) bool, reverse bool) {
 }
 
 // Sorted doubly linked-list iterator
-type SortedDListIt struct {
+type GenericSortedDListIt[T any] struct {
 	linkLocker *sync.RWMutex
-	curr       *DLNode
-	nextFunc   func(*DLNode) *DLNode
+	curr       *GenericDLNode[T]
+	nextFunc   func(*GenericDLNode[T]) *GenericDLNode[T]
 }
 
 // linkLocker is the outer locker to guard dlist access
-func NewSortedDListIt(linkLocker *sync.RWMutex, dlist *SortedDList, reverse bool) *SortedDListIt {
-	it := &SortedDListIt{
+func NewGenericSortedDListIt[T any](linkLocker *sync.RWMutex,
+	dlist *GenericSortedDList[T],
+	reverse bool) *GenericSortedDListIt[T] {
+	it := &GenericSortedDListIt[T]{
 		linkLocker: linkLocker,
 	}
 	if reverse {
-		it.nextFunc = func(n *DLNode) *DLNode {
+		it.nextFunc = func(n *GenericDLNode[T]) *GenericDLNode[T] {
 			return n.prev
 		}
 		it.curr = dlist.tail
 	} else {
-		it.nextFunc = func(n *DLNode) *DLNode {
+		it.nextFunc = func(n *GenericDLNode[T]) *GenericDLNode[T] {
 			return n.next
 		}
 		it.curr = dlist.head
@@ -276,11 +270,11 @@ func NewSortedDListIt(linkLocker *sync.RWMutex, dlist *SortedDList, reverse bool
 	return it
 }
 
-func (it *SortedDListIt) Valid() bool {
+func (it *GenericSortedDListIt[T]) Valid() bool {
 	return it.curr != nil
 }
 
-func (it *SortedDListIt) Next() {
+func (it *GenericSortedDListIt[T]) Next() {
 	if it.linkLocker == nil {
 		it.curr = it.nextFunc(it.curr)
 		return
@@ -290,6 +284,6 @@ func (it *SortedDListIt) Next() {
 	it.linkLocker.RUnlock()
 }
 
-func (it *SortedDListIt) Get() *DLNode {
+func (it *GenericSortedDListIt[T]) Get() *GenericDLNode[T] {
 	return it.curr
 }

@@ -34,6 +34,9 @@ const (
 	dnServiceType         = "DN"
 	logServiceType        = "LOG"
 	standaloneServiceType = "STANDALONE"
+
+	s3FileServiceName    = "S3"
+	localFileServiceName = "LOCAL"
 )
 
 var ErrInvalidConfig = moerr.NewError(moerr.BAD_CONFIGURATION, "invalid log configuration")
@@ -98,14 +101,45 @@ func (c *Config) validate() error {
 	return nil
 }
 
-// FIXME: fileservice created by a config instance is very strange at best
-func (c *Config) createFileService(name string) (fileservice.FileService, error) {
-	for _, cfg := range c.FileServices {
-		if strings.EqualFold(cfg.Name, name) {
-			return fileservice.NewFileService(cfg)
+func (c *Config) createFileService(defaultName string) (*fileservice.FileServices, error) {
+	// create all services
+	services := make([]fileservice.FileService, 0, len(c.FileServices))
+	for _, config := range c.FileServices {
+		service, err := fileservice.NewFileService(config)
+		if err != nil {
+			return nil, err
 		}
+		services = append(services, service)
 	}
-	return nil, fmt.Errorf("file service named %s not set", name)
+
+	// create FileServices
+	fs, err := fileservice.NewFileServices(
+		defaultName,
+		services...,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	// validate default name
+	_, err = fileservice.Get[fileservice.FileService](fs, defaultName)
+	if err != nil {
+		return nil, err
+	}
+
+	// ensure local exists
+	_, err = fileservice.Get[fileservice.FileService](fs, localFileServiceName)
+	if err != nil {
+		return nil, err
+	}
+
+	// ensure s3 exists
+	_, err = fileservice.Get[fileservice.FileService](fs, s3FileServiceName)
+	if err != nil {
+		return nil, err
+	}
+
+	return fs, nil
 }
 
 func (c *Config) getLogServiceConfig() logservice.Config {

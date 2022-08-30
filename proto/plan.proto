@@ -84,6 +84,10 @@ message ExprList {
 	repeated Expr list = 1;
 }
 
+message MaxValue {
+	string value = 1;
+}
+
 // TargetType used in cast function as target type
 message TargetType {
 	Type typ = 1;
@@ -161,6 +165,7 @@ message Expr {
 		CorrColRef	corr	= 8;
 		TargetType  t		= 9;
 		ExprList	list	= 10;
+		MaxValue max = 11;
 	}
 }
 
@@ -182,10 +187,11 @@ message ColDef {
 	string name 		= 1;
 	CompressType alg 	= 2;
 	Type typ			= 3;
-	Default default = 4;
+	Default default 	= 4;
 	bool primary        = 5;
-	int32 pkidx 		= 6;
-	string comment	=7;
+	bool auto_increment = 6;
+	int32 pkidx 		= 7;
+	string comment		= 8;
 }
 
 message Default {
@@ -218,6 +224,39 @@ message PropertiesDef {
 	repeated Property properties 	= 1;
 }
 
+
+enum PartitionType {
+	KEY = 0;
+	LINEAR_KEY = 1;
+	HASH = 2;
+	LINEAR_HASH = 3;
+	RANGE = 4;
+	RANGE_COLUMNS = 5;
+	LIST = 6;
+	LIST_COLUMNS = 7;
+}
+
+message PartitionInfo {
+	PartitionType type = 1;
+	Expr Expr = 2;
+	string partitionExpression = 3;
+	repeated Expr Columns = 4;
+	repeated string partitionColumns = 5;
+	uint64 partitionNum = 6;
+	repeated PartitionItem partitions = 7;
+	int64 algorithm = 8;
+	bool isSubPartition = 9;
+}
+
+message PartitionItem {
+	string partitionName = 1;
+	uint32 ordinalPosition = 2;
+	string description = 3;
+	string comment = 4;
+	repeated Expr lessThan = 5;
+	repeated Expr inValues = 6;
+}
+
 message ViewDef {
 	string view  = 1;
 }
@@ -229,6 +268,7 @@ message TableDef {
 			IndexDef idx				= 2;
 			PropertiesDef properties	= 3;
 			ViewDef view				= 4;
+			PartitionInfo partition				= 5;
 		}
 	}
 	string name				= 1;
@@ -405,14 +445,15 @@ message Node {
 	Expr limit = 15;
 	Expr offset = 16;
 	TableDef table_def = 17;
-	ObjectRef obj_ref = 18;
-	RowsetData rowset_data = 19;
-	string extra_options = 20;
-	repeated DeleteTableCtx deleteTablesCtx = 21;
+	repeated TableDef table_def_vec = 18;
+	ObjectRef obj_ref = 19;
+	RowsetData rowset_data = 20;
+	string extra_options = 21;
+	repeated DeleteTableCtx deleteTablesCtx = 22;
 
-	repeated int32 binding_tags = 22;
+	repeated int32 binding_tags = 23;
 
-    AnalyzeInfo analyze_info = 23;
+    AnalyzeInfo analyze_info = 24;
 }
 
 message DeleteTableCtx {
