@@ -36,6 +36,7 @@ type ObjectRef = plan.ObjectRef
 type ColRef = plan.ColRef
 type Cost = plan.Cost
 type Const = plan.Const
+type MaxValue = plan.MaxValue
 type Expr = plan.Expr
 type Node = plan.Node
 type RowsetData = plan.RowsetData
@@ -233,12 +234,17 @@ type LimitBinder struct {
 	baseBinder
 }
 
+type PartitionBinder struct {
+	baseBinder
+}
+
 var _ Binder = (*TableBinder)(nil)
 var _ Binder = (*WhereBinder)(nil)
 var _ Binder = (*GroupBinder)(nil)
 var _ Binder = (*HavingBinder)(nil)
 var _ Binder = (*ProjectionBinder)(nil)
 var _ Binder = (*LimitBinder)(nil)
+var _ Binder = (*PartitionBinder)(nil)
 
 const (
 	NotFound      int32 = math.MaxInt32

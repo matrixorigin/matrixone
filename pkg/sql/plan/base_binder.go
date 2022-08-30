@@ -150,8 +150,13 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (
 			},
 		}, nil
 	case *tree.MaxValue:
-		err = errors.New("", fmt.Sprintf("expr max'%v' is not supported now", exprImpl))
-
+		return &Expr{
+			Expr: &plan.Expr_Max{
+				Max: &MaxValue{
+					Value: "maxvalue",
+				},
+			},
+		}, nil
 	case *tree.VarExpr:
 		expr, err = b.baseBindVar(exprImpl, depth, isRoot)
 
