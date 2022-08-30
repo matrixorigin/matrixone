@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
@@ -44,7 +45,28 @@ func NewProcess() *process.Process {
 	proc.Lim.BatchRows = 1 << 20
 	proc.Lim.BatchSize = 1 << 20
 	proc.Lim.ReaderSize = 1 << 20
+	proc.FileService = NewFS()
 	return proc
+}
+
+func NewFS() *fileservice.FileServices {
+	local, err := fileservice.NewMemoryFS("local")
+	if err != nil {
+		panic(err)
+	}
+	s3, err := fileservice.NewMemoryFS("s3")
+	if err != nil {
+		panic(err)
+	}
+	fs, err := fileservice.NewFileServices(
+		"local",
+		local,
+		s3,
+	)
+	if err != nil {
+		panic(err)
+	}
+	return fs
 }
 
 func NewBatch(ts []types.Type, random bool, n int, m *mheap.Mheap) *batch.Batch {

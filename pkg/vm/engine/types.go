@@ -146,7 +146,7 @@ type Relation interface {
 	AddTableDef(context.Context, TableDef) error
 	DelTableDef(context.Context, TableDef) error
 
-	GetTableID(context.Context) uint64
+	GetTableID(context.Context) string
 
 	// second argument is the number of reader, third argument is the filter extend, foruth parameter is the payload required by the engine
 	NewReader(context.Context, int, *plan.Expr, [][]byte) ([]Reader, error)

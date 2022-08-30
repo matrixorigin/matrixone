@@ -37,7 +37,7 @@ type Argument struct {
 	Affected      uint64
 	Engine        engine.Engine
 	DB            engine.Database
-	TableID       uint64
+	TableID       string
 }
 
 func String(_ any, buf *bytes.Buffer) {

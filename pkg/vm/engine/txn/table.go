@@ -275,6 +275,7 @@ func (t *Table) GetHideKeys(ctx context.Context) (attrs []*engine.Attribute, err
 	return
 }
 
-func (t *Table) GetTableID(ctx context.Context) uint64 {
-	return 0
+func (t *Table) GetTableID(ctx context.Context) string {
+	//TODO
+	return "0"
 }

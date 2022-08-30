@@ -16,7 +16,6 @@ package colexec
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
@@ -41,7 +40,7 @@ type AutoIncrParam struct {
 	colDefs []*plan.ColDef
 }
 
-func UpdateInsertBatch(e engine.Engine, db engine.Database, ctx context.Context, proc *process.Process, ColDefs []*plan.ColDef, bat *batch.Batch, tableID uint64) error {
+func UpdateInsertBatch(e engine.Engine, db engine.Database, ctx context.Context, proc *process.Process, ColDefs []*plan.ColDef, bat *batch.Batch, tableID string) error {
 	incrParam := &AutoIncrParam{
 		eg:      e,
 		db:      db,
@@ -75,7 +74,7 @@ func UpdateInsertValueBatch(e engine.Engine, ctx context.Context, proc *process.
 	return UpdateInsertBatch(e, db, ctx, proc, ColDefs, bat, rel.GetTableID(ctx))
 }
 
-func GetRangeFromAutoIncrTable(param *AutoIncrParam, bat *batch.Batch, tableID uint64) ([]int64, []int64, error) {
+func GetRangeFromAutoIncrTable(param *AutoIncrParam, bat *batch.Batch, tableID string) ([]int64, []int64, error) {
 	offset, step := make([]int64, 0), make([]int64, 0)
 	var err error
 	for i, col := range param.colDefs {
@@ -87,7 +86,7 @@ func GetRangeFromAutoIncrTable(param *AutoIncrParam, bat *batch.Batch, tableID u
 		if err != nil {
 			return nil, nil, err
 		}
-		if d, s, err = GetOneColRangeFromAutoIncrTable(param, bat, fmt.Sprintf("%d", tableID)+"_"+col.Name, i); err != nil {
+		if d, s, err = GetOneColRangeFromAutoIncrTable(param, bat, tableID+"_"+col.Name, i); err != nil {
 			return nil, nil, err
 		}
 		offset = append(offset, d)
@@ -293,7 +292,7 @@ func CreateAutoIncrCol(db engine.Database, ctx context.Context, proc *process.Pr
 	if err != nil {
 		return err
 	}
-	name := fmt.Sprintf("%d", rel.GetTableID(ctx)) + "_"
+	name := rel.GetTableID(ctx) + "_"
 
 	for _, attr := range cols {
 		if !attr.AutoIncrement {
@@ -311,7 +310,7 @@ func CreateAutoIncrCol(db engine.Database, ctx context.Context, proc *process.Pr
 }
 
 // for delete table operation, delete col in mo_increment_columns table
-func DeleteAutoIncrCol(rel engine.Relation, db engine.Database, ctx context.Context, proc *process.Process, tableID uint64) error {
+func DeleteAutoIncrCol(rel engine.Relation, db engine.Database, ctx context.Context, proc *process.Process, tableID string) error {
 	rel2, err := db.Relation(ctx, AUTO_INCR_TABLE)
 	if err != nil {
 		return err
@@ -328,7 +327,7 @@ func DeleteAutoIncrCol(rel engine.Relation, db engine.Database, ctx context.Cont
 			if !d.Attr.AutoIncrement {
 				continue
 			}
-			bat := makeAutoIncrBatch(fmt.Sprintf("%d", tableID)+"_"+d.Attr.Name, 0, 1)
+			bat := makeAutoIncrBatch(tableID+"_"+d.Attr.Name, 0, 1)
 			if err = rel2.Delete(ctx, bat.GetVector(0), AUTO_INCR_TABLE_COLNAME[0]); err != nil {
 				return err
 			}
