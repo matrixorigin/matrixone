@@ -4,6 +4,7 @@ MatrixOne now supports the following client connections to the MatrixOne server:
 
 - MySQL Shell
 - Navicat
+- DBeaver<!--潇哥-->
 
 ## Before you start
 
@@ -59,6 +60,35 @@ For more information on deployment, see [Deployment FAQs](../../FAQs/deployment-
     - **Password**: 111
     - **Save password**：Yes
 
-3. Click **Save**, save the configuration。
+3. Click **Save**, save the configuration.
 
 4. To connect to the MatrixOne server, double-click **MatrixOne** in the database directory on the left.
+
+## Connect to the MatrixOne Server through DBeaver
+
+1. Download and install [DBeaver](https://dbeaver.io/download/).
+
+2. Open DBeaver, click **Connection**, select **MySQL**, then click **Next**, and fill in the following parameters in the pop-up window:
+
+    - **Host**: 127.0.0.1
+    - **Port**: 6001
+    - **Connction Name**: MatrixOne
+    - **User Name**: dump
+    - **Password**: 111
+    - **Save password**：Yes
+
+3. Click **Save**, save the configuration.
+
+4. Right-click **MatrixOne** in database navigation on the left select **Edit link**, modify the configuration in the **Driver Attribute** area of the **Connection Settings**:
+
+    - characterSetResults: "utf8"
+    - continueBatchOnError: "false"
+    - useServerPrepStmts: "true"
+    - alwaysSendSetIsolation: "false"
+    - useLocalSessionState: "true"
+    - zeroDateTimeBehavior: "CONVERT_TO_NULL"
+    - failoverReadOnly: "false"
+    - serverTimezone: "Asia/Shanghai"
+    - socketTimeout: 30000
+
+5. To connect to the MatrixOne server, double-click **MatrixOne** in the database navigation on the left.
