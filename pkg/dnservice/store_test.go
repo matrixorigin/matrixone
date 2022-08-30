@@ -56,6 +56,7 @@ func TestAddReplica(t *testing.T) {
 func TestStartWithReplicas(t *testing.T) {
 	localFS, err := fileservice.NewMemoryFS(localFileServiceName)
 	assert.NoError(t, err)
+
 	factory := func(name string) (*fileservice.FileServices, error) {
 		s3fs, err := fileservice.NewMemoryFS(s3FileServiceName)
 		if err != nil {
@@ -228,7 +229,9 @@ func newTestStore(
 		ListenAddress: testDNStoreAddr,
 	}
 	c.Txn.Clock.MaxClockOffset.Duration = time.Duration(math.MaxInt64)
-	s, err := NewService(c, fsFactory, options...)
+	fs, err := fsFactory(localFileServiceName)
+	assert.Nil(t, err)
+	s, err := NewService(c, fs, options...)
 	assert.NoError(t, err)
 	return s.(*store)
 }
