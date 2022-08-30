@@ -50,8 +50,11 @@ func Hex(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error
 }
 
 func HexEncode(xs *types.Bytes, rs []string) []string {
-	s := xs.GetString(0)
-	dst := hex.EncodeToString([]byte(s))
-	rs[0] = dst
+	for i := range xs.Lengths {
+		s := xs.Get(int64(i))
+		dst := hex.EncodeToString(s)
+		rs[i] = dst
+	}
+
 	return rs
 }

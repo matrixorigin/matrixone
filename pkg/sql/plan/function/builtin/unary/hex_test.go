@@ -17,6 +17,7 @@ package unary
 import (
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
@@ -33,11 +34,11 @@ func TestHex(t *testing.T) {
 		isScalar bool
 	}{
 		{
-			name:     "Empty string",
+			name:     "Normal test",
 			proc:     procs,
-			inputstr: []string{""},
-			expected: []string{""},
-			isScalar: false,
+			inputstr: []string{"a"},
+			expected: []string{"61"},
+			isScalar: true,
 		},
 		{
 			name:     "Scalar empty string",
@@ -67,9 +68,21 @@ func TestHex(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			col := result.Col.([]uint8)
+			col := result.Col.([]string)
 			require.Equal(t, c.expected, col)
 			require.Equal(t, c.isScalar, result.IsScalar())
 		})
 	}
+}
+
+func makeEmptyTestVectors(data []string, nsp []uint64, isScalar bool) []*vector.Vector {
+	vec := make([]*vector.Vector, 1)
+	if data != nil {
+		vec[0] = testutil.MakeCharVector(data, nsp)
+		vec[0].IsConst = isScalar
+	} else {
+		vec[0] = testutil.MakeScalarNull(0)
+	}
+
+	return vec
 }
