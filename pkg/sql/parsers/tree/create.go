@@ -171,17 +171,12 @@ func (node *CreateTable) Format(ctx *FmtCtx) {
 	}
 
 	if node.Param != nil {
-		if node.Param.ScanType == LOCAL && (node.Param.CompressType == AUTO || node.Param.CompressType == NOCOMPRESS) {
+		if node.Param.CompressType == AUTO || node.Param.CompressType == NOCOMPRESS {
 			ctx.WriteString(" infile ")
 			ctx.WriteString("'" + node.Param.Filepath + "'")
-		} else if node.Param.ScanType == LOCAL {
+		} else {
 			ctx.WriteString(" infile ")
 			ctx.WriteString("{'filepath':'" + node.Param.Filepath + "', 'compression':'" + strings.ToLower(node.Param.CompressType) + "'}")
-		} else {
-			ctx.WriteString(" url s3option ")
-			ctx.WriteString("{'endpoint'='" + node.Param.S3option[0] + "', 'access_key_id'='" + node.Param.S3option[3] +
-				"', 'secret_access_key'='" + node.Param.S3option[5] + "', 'bucket'='" + node.Param.S3option[7] + "', 'filepath'='" + node.Param.S3option[9] + "', 'region'='" + node.Param.S3option[11] + "'}")
-
 		}
 		if node.Param.Tail.Fields != nil {
 			ctx.WriteByte(' ')

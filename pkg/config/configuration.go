@@ -17,6 +17,7 @@ package config
 import (
 	"context"
 
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/toml"
@@ -355,6 +356,9 @@ type ParameterUnit struct {
 
 	//Cluster Nodes
 	ClusterNodes engine.Nodes
+
+	// FileService
+	FileService fileservice.FileService
 }
 
 func NewParameterUnit(

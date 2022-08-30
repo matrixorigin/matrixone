@@ -66,14 +66,11 @@ select bit_and(h) from t1;
 bit_and(h)
 12
 select bit_and(i) from t1;
-bit_and(i)
-20054528
+Aggregate function of 'bit_and' do not support implicit conversions for param of [DATE]
 select bit_and(k) from t1;
-bit_and(k)
-20068234691032
+Aggregate function of 'bit_and' do not support implicit conversions for param of [DATETIME]
 select bit_and(l) from t1;
-bit_and(l)
-19791209300744
+Aggregate function of 'bit_and' do not support implicit conversions for param of [TIMESTAMP]
 select bit_and(m) from t1;
 bit_and(m)
 0
@@ -111,14 +108,11 @@ select bit_or(h) from t1;
 bit_or(h)
 127
 select bit_or(i) from t1;
-bit_or(i)
-20175870
+Aggregate function of 'bit_or' do not support implicit conversions for param of [DATE]
 select bit_or(k) from t1;
-bit_or(k)
-20203467439576
+Aggregate function of 'bit_or' do not support implicit conversions for param of [DATETIME]
 select bit_or(l) from t1;
-bit_or(l)
-20340965113708
+Aggregate function of 'bit_or' do not support implicit conversions for param of [TIMESTAMP]
 select bit_or(m) from t1;
 bit_or(m)
 3
@@ -156,14 +150,11 @@ select bit_xor(h) from t1;
 bit_xor(h)
 115
 select bit_xor(i) from t1;
-bit_xor(i)
-120876
+Aggregate function of 'bit_xor' do not support implicit conversions for param of [DATE]
 select bit_xor(k) from t1;
-bit_xor(k)
-56443059200
+Aggregate function of 'bit_xor' do not support implicit conversions for param of [DATETIME]
 select bit_xor(l) from t1;
-bit_xor(l)
-427281392740
+Aggregate function of 'bit_xor' do not support implicit conversions for param of [TIMESTAMP]
 select bit_xor(m) from t1;
 bit_xor(m)
 3
@@ -172,7 +163,8 @@ bit_xor(n)
 3
 drop table t1;
 select BIT_AND(99999999999999999.99999), BIT_OR(99999999999999999.99999), BIT_XOR(99999999999999999.99999);
-Function 'bit_and' with parameters [DECIMAL128] will be implemented in future version.
+bit_and(99999999999999999.99999)	bit_or(99999999999999999.99999)	bit_xor(99999999999999999.99999)
+100000000000000000	100000000000000000	100000000000000000
 select BIT_AND(999999999999999933193939.99999),BIT_OR(999999999999999933193939.99999),BIT_XOR(999999999999999933193939.99999);
 bit_and(999999999999999933193939.99999)	bit_or(999999999999999933193939.99999)	bit_xor(999999999999999933193939.99999)
 18446744073709551615	18446744073709551615	18446744073709551615

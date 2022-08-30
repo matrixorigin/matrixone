@@ -214,7 +214,6 @@ select b from t1 group by b having (date_add(t1.b, INTERVAL 1 day)-date_add(t1.b
 drop table t1;
 -- @bvt:issue
 
--- @bvt:issue#3588
 SELECT
 DATE_SUB('2007-08-03', INTERVAL 1 MINUTE) AS field_str1,
 DATE_SUB('2007-08-03 17:33:00', INTERVAL 1 MINUTE) AS field1_str2,
@@ -226,7 +225,6 @@ OCT(DATE_SUB('2007-08-03', INTERVAL 1 MINUTE)) AS field_str1,
 OCT(DATE_SUB('2007-08-03 17:33:00', INTERVAL 1 MINUTE)) AS field1_str2,
 OCT(DATE_SUB(DATE('2007-08-03'), INTERVAL 1 DAY)) AS field_date,
 OCT(DATE_SUB(CAST('2007-08-03 17:33:00' AS DATETIME), INTERVAL 1 MINUTE)) AS field_datetime;
--- @bvt:issue
 
 
 select date_sub("1998-01-01 00:00:00.000001",INTERVAL "1 1:1:1.000002" DAY_MICROSECOND);
