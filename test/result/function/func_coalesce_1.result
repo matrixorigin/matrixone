@@ -82,9 +82,9 @@ coalesce(b, 2022-10-01)
 select coalesce(b, '2022-10-01 10:10:10.999999') from t2;
 coalesce(b, 2022-10-01 10:10:10.999999)
 2022-02-20 10:10:11
-2022-10-01 10:10:10
+2022-10-01 10:10:10.999999000
 2023-04-03 22:10:30
-2022-10-01 10:10:10
+2022-10-01 10:10:10.999999000
 select coalesce(b, '2022') from t2;
 Can't cast '2022' from VARCHAR type to DATETIME type.
 select coalesce(b, '2022/10/01') from t2;
