@@ -20,7 +20,6 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/mockio"
@@ -306,7 +305,6 @@ func getRelation(t *testing.T, tenantID uint32, e *DB, dbName, tblName string) (
 	txn, err := e.StartTxn(nil)
 	txn.BindAccessInfo(tenantID, 0, 0)
 	assert.NoError(t, err)
-	logutil.Infof("lalala get db %v at %v", dbName, txn.GetStartTS())
 	db, err := txn.GetDatabase(dbName)
 	assert.NoError(t, err)
 	rel, err = db.GetRelationByName(tblName)
