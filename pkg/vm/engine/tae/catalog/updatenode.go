@@ -22,7 +22,6 @@ import (
 	"io"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 )
@@ -43,7 +42,7 @@ type UpdateNode struct {
 	MetaLoc   string
 	DeltaLoc  string
 
-	State      txnif.TxnState
+	// State      txnif.TxnState
 	Start, End types.TS
 	Txn        txnif.TxnReader
 	LogIndex   []*wal.Index
@@ -56,7 +55,7 @@ func NewEmptyUpdateNode() *UpdateNode {
 
 func (e UpdateNode) CloneAll() *UpdateNode {
 	n := e.CloneData()
-	n.State = e.State
+	// n.State = e.State
 	n.Start = e.Start
 	n.End = e.End
 	n.Deleted = e.Deleted
@@ -103,14 +102,25 @@ func (e *UpdateNode) IsSameTxn(startTs types.TS) bool {
 }
 
 func (e *UpdateNode) IsActive() bool {
-	return e.Txn != nil
+	if e.Txn == nil {
+		return false
+	}
+	return e.Txn.GetTxnState(false) == txnif.TxnStateActive
 }
 
 func (e *UpdateNode) IsCommitting() bool {
 	if e.Txn == nil {
 		return false
 	}
-	return e.Txn.GetTxnState(false) == txnif.TxnStateCommitting
+	return e.Txn.GetTxnState(false) != txnif.TxnStateActive
+}
+
+func (e *UpdateNode) IsMetaDataCommitting() bool {
+	if e.Txn == nil {
+		return false
+	}
+	state := e.Txn.GetTxnState(false)
+	return state == txnif.TxnStateCommitting || state == txnif.TxnStatePreparing
 }
 
 func (e *UpdateNode) GetTxn() txnif.TxnReader {
@@ -120,12 +130,12 @@ func (e *UpdateNode) GetTxn() txnif.TxnReader {
 func (e *UpdateNode) String() string {
 	var w bytes.Buffer
 	_, _ = w.WriteString(
-		fmt.Sprintf("[%v,%v][C=%v,D=%v][%v][Loc1=%s,Loc2=%s][Deleted?%v][logIndex=%v]",
+		fmt.Sprintf("[%v,%v][C=%v,D=%v][Loc1=%s,Loc2=%s][Deleted?%v][logIndex=%v]",
 			e.Start,
 			e.End,
 			e.CreatedAt,
 			e.DeletedAt,
-			e.State,
+			// e.State,
 			e.MetaLoc,
 			e.DeltaLoc,
 			e.Deleted,
@@ -167,7 +177,7 @@ func (e *UpdateNode) ApplyDelete() (err error) {
 	return
 }
 
-func (e *UpdateNode) DoCompre(o *UpdateNode) int {
+func compareUpdateNode(e, o *UpdateNode) int {
 	if e.Start.Less(o.Start) {
 		return -1
 	}
@@ -175,11 +185,7 @@ func (e *UpdateNode) DoCompre(o *UpdateNode) int {
 		return 0
 	}
 	return 1
-}
 
-func (e *UpdateNode) Compare(o common.NodePayload) int {
-	oe := o.(*UpdateNode)
-	return e.DoCompre(oe)
 }
 func (e *UpdateNode) AddLogIndex(idx *wal.Index) {
 	if e.LogIndex == nil {
@@ -191,7 +197,7 @@ func (e *UpdateNode) AddLogIndex(idx *wal.Index) {
 func (e *UpdateNode) ApplyCommit(index *wal.Index) (err error) {
 	e.Txn = nil
 	e.AddLogIndex(index)
-	e.State = txnif.TxnStateCommitted
+	// e.State = txnif.TxnStateCommitted
 	return
 }
 

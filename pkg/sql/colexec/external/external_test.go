@@ -22,7 +22,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -46,7 +46,8 @@ var (
 )
 
 func newTestCase(gm *guest.Mmu, all bool) externalTestCase {
-	proc := process.New(mheap.New(gm))
+	proc := testutil.NewProcess()
+	proc.FileService = testutil.NewFS()
 	ctx, cancel := context.WithCancel(context.Background())
 	return externalTestCase{
 		proc: proc,
@@ -83,10 +84,10 @@ func Test_Prepare(t *testing.T) {
 
 		extern := &tree.ExternParam{
 			Filepath: "",
-			ScanType: tree.LOCAL,
 			Tail: &tree.TailParameter{
 				IgnoredLines: 0,
 			},
+			FileService: tcs.proc.FileService,
 		}
 		json_byte, err := json.Marshal(extern)
 		if err != nil {
@@ -98,7 +99,6 @@ func Test_Prepare(t *testing.T) {
 		convey.So(param.FileList, convey.ShouldBeNil)
 		convey.So(param.FileCnt, convey.ShouldEqual, 0)
 
-		extern.ScanType = tree.S3
 		json_byte, err = json.Marshal(extern)
 		if err != nil {
 			panic(err)
@@ -116,10 +116,10 @@ func Test_Call(t *testing.T) {
 		param := tcs.arg.Es
 		extern := &tree.ExternParam{
 			Filepath: "",
-			ScanType: tree.LOCAL,
 			Tail: &tree.TailParameter{
 				IgnoredLines: 0,
 			},
+			FileService: tcs.proc.FileService,
 		}
 		param.extern = extern
 		param.End = false
@@ -128,8 +128,6 @@ func Test_Call(t *testing.T) {
 		convey.So(err, convey.ShouldNotBeNil)
 		convey.So(end, convey.ShouldBeFalse)
 
-		extern.ScanType = tree.S3
-		extern.S3Param = &tree.S3Parameter{}
 		param.End = false
 		end, err = Call(1, tcs.proc, tcs.arg)
 		convey.So(err, convey.ShouldNotBeNil)
