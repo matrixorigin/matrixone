@@ -34,6 +34,9 @@ const (
 	dnServiceType         = "DN"
 	logServiceType        = "LOG"
 	standaloneServiceType = "STANDALONE"
+
+	s3FileServiceName    = "S3"
+	localFileServiceName = "LOCAL"
 )
 
 var ErrInvalidConfig = moerr.NewError(moerr.BAD_CONFIGURATION, "invalid log configuration")
@@ -110,7 +113,7 @@ func (c *Config) createFileService(defaultName string) (*fileservice.FileService
 	}
 
 	// create FileServices
-	s, err := fileservice.NewFileServices(
+	fs, err := fileservice.NewFileServices(
 		defaultName,
 		services...,
 	)
@@ -119,12 +122,24 @@ func (c *Config) createFileService(defaultName string) (*fileservice.FileService
 	}
 
 	// validate default name
-	_, err = fileservice.Get[fileservice.FileService](s, defaultName)
+	_, err = fileservice.Get[fileservice.FileService](fs, defaultName)
 	if err != nil {
 		return nil, err
 	}
 
-	return s, nil
+	// ensure local exists
+	_, err = fileservice.Get[fileservice.FileService](fs, localFileServiceName)
+	if err != nil {
+		return nil, err
+	}
+
+	// ensure s3 exists
+	_, err = fileservice.Get[fileservice.FileService](fs, s3FileServiceName)
+	if err != nil {
+		return nil, err
+	}
+
+	return fs, nil
 }
 
 func (c *Config) getLogServiceConfig() logservice.Config {
