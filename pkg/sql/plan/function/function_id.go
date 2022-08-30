@@ -207,8 +207,6 @@ const (
 	DATE_SUB              // DATE_SUB
 	APPROX_COUNT_DISTINCT // APPROX_COUNT_DISTINCT, special aggregate
 
-	LOAD_FILE // LOAD_FILE
-
 	//information functions
 	//Reference to : https://dev.mysql.com/doc/refman/8.0/en/information-functions.html
 	DATABASE
@@ -383,7 +381,6 @@ var functionIdRegister = map[string]int32{
 	"remove_fault_point":      REMOVE_FAULT_POINT,
 	"trigger_fault_point":     TRIGGER_FAULT_POINT,
 	"uuid":                    UUID,
-	"load_file":               LOAD_FILE,
 }
 
 func GetFunctionIsWinfunByName(name string) bool {
