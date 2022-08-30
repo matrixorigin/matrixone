@@ -23,10 +23,7 @@ Can't cast '-2' from BIGINT type to BIGINT UNSIGNED type. Reason: overflow
 CREATE TABLE t(u TINYINT UNSIGNED NOT NULL);
 INSERT INTO t VALUES (0), (3), (255);
 SELECT * FROM t WHERE ABS(u=256)=0;
-u
-0
-3
-255
+Function 'abs' with parameters [BOOL] is not supported.
 DROP TABLE t;
 create table t1(a int, b int, c int);
 insert into t1 values(100,1,2),(200,1,1),(300,2,1),(400,2,2);
