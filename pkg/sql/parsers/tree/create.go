@@ -1655,10 +1655,16 @@ func NewValuesLessThan(vl Exprs) *ValuesLessThan {
 
 type ValuesIn struct {
 	valuesImpl
-	ValueList []Exprs
+	ValueList Exprs
 }
 
-func NewValuesIn(vl []Exprs) *ValuesIn {
+func (node *ValuesIn) Format(ctx *FmtCtx) {
+	ctx.WriteString("values in (")
+	node.ValueList.Format(ctx)
+	ctx.WriteByte(')')
+}
+
+func NewValuesIn(vl Exprs) *ValuesIn {
 	return &ValuesIn{
 		ValueList: vl,
 	}
