@@ -22,7 +22,6 @@ import (
 	"io"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 )
@@ -167,7 +166,7 @@ func (e *UpdateNode) ApplyDelete() (err error) {
 	return
 }
 
-func (e *UpdateNode) DoCompre(o *UpdateNode) int {
+func compareUpdateNode(e, o *UpdateNode) int {
 	if e.Start.Less(o.Start) {
 		return -1
 	}
@@ -175,11 +174,7 @@ func (e *UpdateNode) DoCompre(o *UpdateNode) int {
 		return 0
 	}
 	return 1
-}
 
-func (e *UpdateNode) Compare(o common.NodePayload) int {
-	oe := o.(*UpdateNode)
-	return e.DoCompre(oe)
 }
 func (e *UpdateNode) AddLogIndex(idx *wal.Index) {
 	if e.LogIndex == nil {
