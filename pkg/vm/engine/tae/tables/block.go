@@ -56,8 +56,8 @@ const (
 	BS_NotAppendable
 )
 
-// Intervals are when the data block has not been updated within 3 minutes, it can be Compacted
-const Intervals = 3 * 60 * 1000 * time.Millisecond
+// IntervalsMS are when the data block has not been updated within 3 minutes, it can be Compacted
+const IntervalsMS = 3 * 60 * 1000
 
 // ForTestBlockRefName is the Schema.Name used by UT,
 // which means that block.Unref() needs to be executed with a delay of 100ms.
@@ -306,7 +306,7 @@ func (blk *dataBlock) EstimateScore() int {
 		if blk.meta.GetSchema().ForTest {
 			return 100
 		}
-		if s > int64(Intervals) {
+		if s > int64(IntervalsMS) {
 			return 100
 		}
 	}
