@@ -43,6 +43,8 @@ func (h *tableHandle) SetAppender(id *common.ID) (appender data.BlockAppender) {
 	blkMeta, _ := segMeta.GetBlockEntryByID(id.BlockID)
 	h.block = blkMeta.GetBlockData().(*dataBlock)
 	h.appender, _ = h.block.MakeAppender()
+	h.block.Ref()
+	// logutil.Infof("GetAppender: %d-%v", h.block.RefCount(), h.block.meta.String())
 
 	return h.appender
 }
@@ -62,20 +64,21 @@ func (h *tableHandle) GetAppender() (appender data.BlockAppender, err error) {
 			panic(err)
 		}
 	}
-	if !h.appender.IsAppendable() {
+	if !h.appender.IsAppendable() || !h.block.IsAppendable() {
 		id := h.appender.GetID()
 		segEntry, _ = h.table.meta.GetSegmentByID(id.SegmentID)
 		if segEntry.GetAppendableBlockCnt() >= int(segEntry.GetTable().GetSchema().SegmentMaxBlocks) {
 			err = data.ErrAppendableSegmentNotFound
 		} else {
 			err = data.ErrAppendableBlockNotFound
-
 			appender = h.appender
 		}
 		h.block = nil
 		h.appender = nil
 		return
 	}
+	h.block.Ref()
+	// logutil.Infof("GetAppender: %d-%v", h.block.RefCount(), h.block.meta.String())
 	appender = h.appender
 	return
 }

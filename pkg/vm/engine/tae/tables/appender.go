@@ -48,6 +48,13 @@ func (appender *blockAppender) IsAppendable() bool {
 	return appender.rows+appender.placeholder < appender.node.block.meta.GetSchema().BlockMaxRows
 }
 
+func (appender *blockAppender) Close() {
+	if appender.node.block.meta.GetSchema().Name == ForTestBlockRefName {
+		appender.node.block.UnRefForTest()
+		return
+	}
+	appender.node.block.Unref()
+}
 func (appender *blockAppender) PrepareAppend(
 	rows uint32,
 	txn txnif.AsyncTxn) (node txnif.AppendNode, created bool, n uint32, err error) {
@@ -71,72 +78,58 @@ func (appender *blockAppender) PrepareAppend(
 	return
 }
 func (appender *blockAppender) ReplayAppend(bat *containers.Batch) (err error) {
-	err = appender.node.DoWithPin(func() (err error) {
-		var from int
-		err = appender.node.Expand(0, func() error {
-			var err error
-			from, err = appender.node.ApplyAppend(bat, nil)
-			return err
-		})
-		schema := appender.node.block.meta.GetSchema()
-		if schema.HasPK() {
-			keysCtx := new(index.KeysCtx)
-			if schema.IsSinglePK() {
-				keysCtx.Keys = bat.Vecs[appender.node.block.meta.GetSchema().GetSingleSortKeyIdx()]
-			} else {
-				cols := appender.node.block.GetSortColumns(schema, bat)
-				keysCtx.Keys = model.EncodeCompoundColumn(cols...)
-				defer keysCtx.Keys.Close()
-			}
-			keysCtx.Start = 0
-			keysCtx.Count = bat.Length()
-			// logutil.Infof("Append into %d: %s", appender.node.meta.GetID(), pks.String())
-
-			//_, err = appender.node.block.index.BatchUpsert(keysCtx, from, 0)
-			var zeroV types.TS
-			_, err = appender.node.block.index.BatchUpsert(keysCtx, from, zeroV)
-			if err != nil {
-				panic(err)
-			}
+	var from int
+	from, err = appender.node.ApplyAppend(bat, nil)
+	schema := appender.node.block.meta.GetSchema()
+	if schema.HasPK() {
+		keysCtx := new(index.KeysCtx)
+		if schema.IsSinglePK() {
+			keysCtx.Keys = bat.Vecs[appender.node.block.meta.GetSchema().GetSingleSortKeyIdx()]
+		} else {
+			cols := appender.node.block.GetSortColumns(schema, bat)
+			keysCtx.Keys = model.EncodeCompoundColumn(cols...)
+			defer keysCtx.Keys.Close()
 		}
-		appender.node.block.meta.GetSegment().GetTable().AddRows(uint64(bat.Length()))
+		keysCtx.Start = 0
+		keysCtx.Count = bat.Length()
+		// logutil.Infof("Append into %d: %s", appender.node.meta.GetID(), pks.String())
 
-		return
-	})
+		//_, err = appender.node.block.index.BatchUpsert(keysCtx, from, 0)
+		var zeroV types.TS
+		_, err = appender.node.block.index.BatchUpsert(keysCtx, from, zeroV)
+		if err != nil {
+			panic(err)
+		}
+	}
+	appender.node.block.meta.GetSegment().GetTable().AddRows(uint64(bat.Length()))
+
 	return
 }
 func (appender *blockAppender) ApplyAppend(
 	bat *containers.Batch,
 	txn txnif.AsyncTxn) (from int, err error) {
-	err = appender.node.DoWithPin(func() (err error) {
-		appender.node.block.mvcc.Lock()
-		defer appender.node.block.mvcc.Unlock()
-		err = appender.node.Expand(0, func() error {
-			var err error
-			from, err = appender.node.ApplyAppend(bat, txn)
-			return err
-		})
+	appender.node.block.mvcc.Lock()
+	defer appender.node.block.mvcc.Unlock()
+	from, err = appender.node.ApplyAppend(bat, txn)
 
-		schema := appender.node.block.meta.GetSchema()
-		if schema.HasPK() {
-			keysCtx := new(index.KeysCtx)
+	schema := appender.node.block.meta.GetSchema()
+	if schema.HasPK() {
+		keysCtx := new(index.KeysCtx)
 
-			if schema.IsSinglePK() {
-				keysCtx.Keys = bat.Vecs[appender.node.block.meta.GetSchema().GetSingleSortKeyIdx()]
-			} else {
-				cols := appender.node.block.GetSortColumns(schema, bat)
-				keysCtx.Keys = model.EncodeCompoundColumn(cols...)
-				defer keysCtx.Keys.Close()
-			}
-			keysCtx.Start = 0
-			keysCtx.Count = bat.Length()
-			// logutil.Infof("Append into %s: %s", appender.node.block.meta.Repr(), keysCtx.Keys.String())
-			_, err = appender.node.block.index.BatchUpsert(keysCtx, from, txn.GetStartTS())
-			if err != nil {
-				panic(err)
-			}
+		if schema.IsSinglePK() {
+			keysCtx.Keys = bat.Vecs[appender.node.block.meta.GetSchema().GetSingleSortKeyIdx()]
+		} else {
+			cols := appender.node.block.GetSortColumns(schema, bat)
+			keysCtx.Keys = model.EncodeCompoundColumn(cols...)
+			defer keysCtx.Keys.Close()
 		}
-		return
-	})
+		keysCtx.Start = 0
+		keysCtx.Count = bat.Length()
+		// logutil.Infof("Append into %s: %s", appender.node.block.meta.Repr(), keysCtx.Keys.String())
+		_, err = appender.node.block.index.BatchUpsert(keysCtx, from, txn.GetStartTS())
+		if err != nil {
+			panic(err)
+		}
+	}
 	return
 }
