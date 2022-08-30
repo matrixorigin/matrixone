@@ -46,7 +46,7 @@ type bufferHolder struct {
 	// trigger handle Reminder strategy
 	trigger *time.Timer
 
-	mux      sync.RWMutex
+	mux      sync.Mutex
 	readonly uint32
 
 	batch *any
@@ -83,16 +83,16 @@ func newBufferHolder(name batchpipe.HasName, impl batchpipe.PipeImpl[batchpipe.H
 	return b
 }
 
-// Add directly call buffer.Add(), while bufferHolder is NOT readonly
+// Add call buffer.Add(), while bufferHolder is NOT readonly
 func (b *bufferHolder) Add(item batchpipe.HasName) {
-	b.mux.RLock()
+	b.mux.Lock()
 	for b.readonly == READONLY {
-		b.mux.RUnlock()
+		b.mux.Unlock()
 		time.Sleep(time.Millisecond)
-		b.mux.RLock()
+		b.mux.Lock()
 	}
 	b.buffer.Add(item)
-	b.mux.RUnlock()
+	b.mux.Unlock()
 	if b.buffer.ShouldFlush() {
 		b.signal(b)
 	}
