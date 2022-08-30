@@ -17,7 +17,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"io"
 	"net/http"
 	"strings"
@@ -25,10 +24,13 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/config"
+	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	prom "github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+const InternalExecutor = "InternalExecutor"
 
 func TestMetric(t *testing.T) {
 	sqlch := make(chan string, 100)
@@ -39,6 +41,7 @@ func TestMetric(t *testing.T) {
 		pu.SV.Host = "0.0.0.0"
 		pu.SV.StatusPort = 7001
 		pu.SV.DisableMetricToProm = false
+		pu.SV.TraceBatchProcessor = InternalExecutor
 		defer setGatherInterval(setGatherInterval(30 * time.Millisecond))
 		defer setRawHistBufLimit(setRawHistBufLimit(5))
 		InitMetric(context.TODO(), factory, pu.SV, "node_uuid", "test", WithInitAction(true))
@@ -91,6 +94,7 @@ func TestMetricNoProm(t *testing.T) {
 		pu.SV.Host = "0.0.0.0"
 		pu.SV.StatusPort = 7001
 		pu.SV.DisableMetricToProm = true
+		pu.SV.TraceBatchProcessor = InternalExecutor
 
 		defer setGatherInterval(setGatherInterval(30 * time.Millisecond))
 		defer setRawHistBufLimit(setRawHistBufLimit(5))

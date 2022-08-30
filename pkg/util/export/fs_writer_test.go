@@ -211,6 +211,7 @@ func TestFSWriter_Write(t *testing.T) {
 				WithPrefix(tt.fields.prefix),
 				WithDir(tt.fields.dir),
 				WithNode(tt.fields.nodeUUID, tt.fields.nodeType),
+				WithFileServiceName(""),
 			)
 			gotN, err := w.Write(tt.args.p)
 			if (err != nil) != tt.wantErr {
@@ -219,92 +220,6 @@ func TestFSWriter_Write(t *testing.T) {
 			}
 			if gotN != tt.wantN {
 				t.Errorf("Write() gotN = %v, want %v", gotN, tt.wantN)
-			}
-		})
-	}
-	os.RemoveAll(basedir)
-}
-
-func TestParseFileService(t *testing.T) {
-	type args struct {
-		ctx      context.Context
-		fsConfig fileservice.Config
-	}
-	basedir := fmt.Sprintf("store.%d", time.Now().Unix())
-	os.RemoveAll(basedir)
-	localETLFS, err := fileservice.NewLocalETLFS("localETL", basedir)
-	require.Equal(t, nil, err)
-	tests := []struct {
-		name    string
-		args    args
-		wantFs  fileservice.FileService
-		wantCfg FSConfig
-		wantErr bool
-	}{
-		{
-			name: "disk",
-			args: args{
-				ctx: context.Background(),
-				fsConfig: fileservice.Config{
-					Name:                  "local",
-					Backend:               DiskFSBackend,
-					CacheMemCapacityBytes: 0,
-					S3:                    fileservice.S3Config{},
-					DataDir:               basedir,
-				},
-			},
-			wantFs:  localETLFS,
-			wantCfg: FSConfig{backend: DiskFSBackend, baseDir: basedir},
-			wantErr: false,
-		},
-		{
-			name: "s3",
-			args: args{
-				ctx: context.Background(),
-				fsConfig: fileservice.Config{
-					Name:                  "s3",
-					Backend:               S3FSBackend,
-					CacheMemCapacityBytes: 0,
-					S3: fileservice.S3Config{
-						SharedConfigProfile: "", /* in running env, shoule be 'default' */
-						Endpoint:            "s3.us-west-2.amazonaws.com",
-						Bucket:              "xzxiong2208",
-						KeyPrefix:           basedir,
-					},
-					DataDir: "store",
-				},
-			},
-			wantFs: localETLFS,
-			wantCfg: FSConfig{
-				backend:         S3FSBackend,
-				baseDir:         basedir,
-				endpoint:        "s3.us-west-2.amazonaws.com",
-				accessKeyID:     "key_id_2",
-				secretAccessKey: "access_key_3",
-				bucket:          "xzxiong2208",
-				region:          "region_1",
-			},
-			wantErr: false,
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Setenv("AWS_REGION", tt.wantCfg.region)
-			t.Setenv("AWS_ACCESS_KEY_ID", tt.wantCfg.accessKeyID)
-			t.Setenv("AWS_SECRET_ACCESS_KEY", tt.wantCfg.secretAccessKey)
-			gotFs, gotCfg, err := ParseFileService(tt.args.ctx, tt.args.fsConfig)
-			if (err != nil) != tt.wantErr {
-				t.Errorf("ParseFileService() error = %v, wantErr %v", err, tt.wantErr)
-				return
-			}
-			switch _type := gotFs.(type) {
-			case *fileservice.LocalETLFS:
-				require.Equal(t, tt.wantCfg, gotCfg)
-				require.Equal(t, tt.wantFs, gotFs)
-			case *fileservice.S3FS:
-				require.Equal(t, tt.wantCfg, gotCfg)
-			default:
-				t.Errorf("unknown type: %v", _type)
 			}
 		})
 	}

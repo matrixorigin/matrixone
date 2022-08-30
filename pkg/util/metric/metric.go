@@ -39,6 +39,8 @@ const (
 	sqlCreateDBConst = "create database if not exists " + MetricDBConst
 	sqlDropDBConst   = "drop database if exists " + MetricDBConst
 	ALL_IN_ONE_MODE  = "monolithic"
+
+	FileServiceBatchProcessor = "FileService"
 )
 
 var (
@@ -93,7 +95,7 @@ func InitMetric(ctx context.Context, ieFactory func() ie.InternalExecutor, SV *c
 	// register metrics and create tables
 	registerAllMetrics()
 	if initOpts.needInitTable {
-		initTables(ctx, ieFactory, initOpts.fsConfig)
+		initTables(ctx, ieFactory, SV.TraceBatchProcessor)
 	}
 
 	// start the data flow
@@ -154,7 +156,7 @@ func mustRegister(collector Collector) {
 }
 
 // initTables gathers all metrics and extract metadata to format create table sql
-func initTables(ctx context.Context, ieFactory func() ie.InternalExecutor, cfg *export.FSConfig) {
+func initTables(ctx context.Context, ieFactory func() ie.InternalExecutor, batchProcessMode string) {
 	exec := ieFactory()
 	exec.ApplySessionOverride(ie.NewOptsBuilder().Database(MetricDBConst).Internal(true).Finish())
 	mustExec := func(sql string) {
@@ -183,7 +185,7 @@ func initTables(ctx context.Context, ieFactory func() ie.InternalExecutor, cfg *
 		close(descChan)
 	}()
 
-	optFactory := trace.GetOptionFactory(cfg)
+	optFactory := trace.GetOptionFactory(batchProcessMode)
 	buf := new(bytes.Buffer)
 	for desc := range descChan {
 		sql := createTableSqlFromMetricFamily(desc, buf, optFactory)
@@ -249,7 +251,6 @@ func mustValidLbls(name string, consts prom.Labels, vars []string) {
 
 type InitOptions struct {
 	writerFactory export.FSWriterFactory // see WithWriterFactory
-	fsConfig      *export.FSConfig       // see WithFSConfig
 	// needInitTable control to do the initTables
 	needInitTable bool // see WithInitAction
 }
@@ -263,12 +264,6 @@ func (f InitOption) ApplyTo(opts *InitOptions) {
 func WithWriterFactory(factory export.FSWriterFactory) InitOption {
 	return InitOption(func(options *InitOptions) {
 		options.writerFactory = factory
-	})
-}
-
-func WithFSConfig(config *export.FSConfig) InitOption {
-	return InitOption(func(options *InitOptions) {
-		options.fsConfig = config
 	})
 }
 

@@ -31,7 +31,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 
-	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/util/export"
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
@@ -393,18 +392,12 @@ func (s *Service) getClientOptions() []morpc.ClientOption {
 	return nil
 }
 
-const s3FileServiceName = "S3" // same as dnservice/factory.go s3FileServiceName
-
 func (s *Service) initTraceMetric(ctx context.Context) (context.Context, error) {
 	SV := &s.cfg.Frontend
-	var fs fileservice.FileService
 	var writerFactory export.FSWriterFactory
 	var err error
 	if !SV.DisableTrace || !SV.DisableMetric {
-		if fs, err = s.cfg.ETLFSFactory(s3FileServiceName); err != nil {
-			return nil, err
-		}
-		writerFactory = export.GetFSWriterFactory(fs, SV.NodeUUID, trace.NodeTypeDN.String())
+		writerFactory = export.GetFSWriterFactory(s.fileService, SV.NodeUUID, trace.NodeTypeLogService.String())
 	}
 	if ctx, err = trace.Init(ctx,
 		trace.WithMOVersion(SV.MoVersion),
@@ -412,7 +405,6 @@ func (s *Service) initTraceMetric(ctx context.Context) (context.Context, error) 
 		trace.EnableTracer(!SV.DisableTrace),
 		trace.WithBatchProcessMode(SV.TraceBatchProcessor),
 		trace.WithFSWriterFactory(writerFactory),
-		trace.WithFSConfig(nil),
 		trace.DebugMode(SV.EnableTraceDebug),
 		trace.WithSQLExecutor(nil),
 	); err != nil {

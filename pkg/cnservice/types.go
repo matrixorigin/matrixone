@@ -16,11 +16,11 @@ package cnservice
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/util/export"
 	"sync"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/config"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
@@ -77,8 +77,6 @@ type Config struct {
 
 	// Frontend parameters for the frontend, assign by mo-service's Config
 	Frontend config.FrontendParameters
-	// ETLFSFactory create FS for trace/metric to do CSV output
-	ETLFSFactory export.FileServiceFactory
 
 	// HAKeeper configuration
 	HAKeeper struct {

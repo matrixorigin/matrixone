@@ -90,19 +90,19 @@ func initExport(ctx context.Context, config *tracerProviderConfig) error {
 			bufferWithSizeThreshold(MB),
 		))
 		export.Register(&MOLog{}, NewBufferPipe2SqlWorker())
-		export.Register(&MOZap{}, NewBufferPipe2SqlWorker())
+		export.Register(&MOZapLog{}, NewBufferPipe2SqlWorker())
 		export.Register(&StatementInfo{}, NewBufferPipe2SqlWorker())
 		export.Register(&MOErrorHolder{}, NewBufferPipe2SqlWorker())
 	case config.batchProcessMode == FileService:
 		if GetNodeResource().NodeType == NodeTypeNode || GetNodeResource().NodeType == NodeTypeCN {
 			// only in standalone mode or CN node can init schema
-			if err := InitExternalTblSchema(ctx, config.sqlExecutor, config.fsConfig); err != nil {
+			if err := InitExternalTblSchema(ctx, config.sqlExecutor); err != nil {
 				return err
 			}
 		}
 		export.Register(&MOSpan{}, NewBufferPipe2CSVWorker())
 		export.Register(&MOLog{}, NewBufferPipe2CSVWorker())
-		export.Register(&MOZap{}, NewBufferPipe2CSVWorker())
+		export.Register(&MOZapLog{}, NewBufferPipe2CSVWorker())
 		export.Register(&StatementInfo{}, NewBufferPipe2CSVWorker())
 		export.Register(&MOErrorHolder{}, NewBufferPipe2CSVWorker())
 	default:

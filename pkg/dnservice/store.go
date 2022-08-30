@@ -394,9 +394,6 @@ func (s *store) initTraceMetric(ctx context.Context) error {
 	var err error
 	SV := &s.cfg.Frontend
 	if !SV.DisableTrace || !SV.DisableMetric {
-		if fs, err = s.cfg.ETLFSFactory(s3FileServiceName); err != nil {
-			return err
-		}
 		writerFactory = export.GetFSWriterFactory(fs, SV.NodeUUID, trace.NodeTypeDN.String())
 	}
 	if ctx, err = trace.Init(ctx,
@@ -405,7 +402,6 @@ func (s *store) initTraceMetric(ctx context.Context) error {
 		trace.EnableTracer(!SV.DisableTrace),
 		trace.WithBatchProcessMode(SV.TraceBatchProcessor),
 		trace.WithFSWriterFactory(writerFactory),
-		trace.WithFSConfig(nil),
 		trace.DebugMode(SV.EnableTraceDebug),
 		trace.WithSQLExecutor(nil),
 	); err != nil {

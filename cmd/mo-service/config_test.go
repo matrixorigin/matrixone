@@ -83,6 +83,10 @@ func TestFileServiceFactory(t *testing.T) {
 		Name:    s3FileServiceName,
 		Backend: "MEM",
 	})
+	c.FileServices = append(c.FileServices, fileservice.Config{
+		Name:    etlFileServiceName,
+		Backend: "DISK-ETL",
+	})
 
 	fs, err := c.createFileService("A")
 	assert.NoError(t, err)

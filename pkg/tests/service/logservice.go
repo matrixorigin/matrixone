@@ -172,9 +172,6 @@ func buildLogConfig(
 	cfg.Frontend.SetDefaultValues()
 	cfg.Frontend.DisableMetric = true
 	cfg.Frontend.DisableTrace = true
-	cfg.ETLFSFactory = func(name string) (fileservice.FileService, error) {
-		return fileservice.NewLocalETLFS("local", "path_to_file")
-	}
 
 	// we must invoke Fill in order to setting default configruation value.
 	cfg.Fill()

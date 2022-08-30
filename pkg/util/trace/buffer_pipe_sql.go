@@ -36,6 +36,8 @@ import (
 	"github.com/google/uuid"
 )
 
+const defaultClock = 15 * time.Second
+
 var errorFormatter atomic.Value
 var insertSQLPrefix []string
 
@@ -73,9 +75,9 @@ func (t batchSqlHandler) NewItemBuffer(name string) bp.ItemBuffer[bp.HasName, an
 	switch name {
 	case MOSpanType:
 		f = genSpanBatchSql
-	case MOLogType:
+	case MORawLogType:
 		f = genLogBatchSql
-	case MOZapType:
+	case MOLogType:
 		f = genZapLogBatchSql
 	case MOStatementType:
 		f = genStatementBatchSql
@@ -255,9 +257,9 @@ func genZapLogBatchSql(in []IBuffer2SqlItem, buf *bytes.Buffer) any {
 	moNode := GetNodeResource()
 
 	for _, item := range in {
-		s, ok := item.(*MOZap)
+		s, ok := item.(*MOZapLog)
 		if !ok {
-			panic("Not MOZap")
+			panic("Not MOZapLog")
 		}
 
 		buf.WriteString("(")
@@ -391,8 +393,8 @@ func (t batchCSVHandler) NewItemBuffer(name string) bp.ItemBuffer[bp.HasName, an
 	logutil.Debugf("NewItemBuffer name: %s", name)
 	switch name {
 	case MOSpanType:
+	case MORawLogType:
 	case MOLogType:
-	case MOZapType:
 	case MOStatementType:
 		opts = append(opts, bufferWithFilterItemFunc(filterTraceInsertSql))
 	case MOErrorType:
@@ -440,18 +442,6 @@ func (t batchCSVHandler) NewItemBatchHandler(ctx context.Context) func(b any) {
 		}
 	}
 	return f
-}
-
-type CsvOptions struct {
-	FieldTerminator rune // like: ','
-	EncloseRune     rune // like: '"'
-	Terminator      rune // like: '\n'
-}
-
-var CommonCsvOptions = &CsvOptions{
-	FieldTerminator: ',',
-	EncloseRune:     '"',
-	Terminator:      '\n',
 }
 
 type CsvFields interface {
@@ -549,7 +539,7 @@ var noopGenBatchSQL = genBatchFunc(func([]IBuffer2SqlItem, *bytes.Buffer) any { 
 
 func newBuffer2Sql(opts ...buffer2SqlOption) *buffer2Sql {
 	b := &buffer2Sql{
-		Reminder:       bp.NewConstantClock(5 * time.Second),
+		Reminder:       bp.NewConstantClock(defaultClock),
 		buf:            make([]IBuffer2SqlItem, 0, 10240),
 		sizeThreshold:  1 * MB,
 		filterItemFunc: noopFilterItemFunc,

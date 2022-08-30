@@ -23,7 +23,10 @@ import (
 	"testing"
 )
 
-var dummmyGetDefaultHardwareAddr = func() (net.HardwareAddr, error) {
+var dummyRealHardwareAddr = func() (net.HardwareAddr, error) {
+	return net.ParseMAC("3e:bf:9f:39:60:c8")
+}
+var dummyDockerHardwareAdder = func() (net.HardwareAddr, error) {
 	return net.ParseMAC("02:42:ac:11:00:02")
 }
 
@@ -42,10 +45,10 @@ func TestSetUUIDNodeID(t *testing.T) {
 		wantErr bool
 	}{
 		{
-			name: "node_uuid_with_mock",
+			name: "normal",
 			fields: fields{
 				prepare: func() *gostub.Stubs {
-					return gostub.Stub(&getDefaultHardwareAddr, dummmyGetDefaultHardwareAddr)
+					return gostub.Stub(&getDefaultHardwareAddr, dummyRealHardwareAddr)
 				},
 			},
 			args: args{
@@ -54,10 +57,26 @@ func TestSetUUIDNodeID(t *testing.T) {
 			wantErr: false,
 		},
 		{
-			name:   "node_uuid",
-			fields: fields{},
+			name: "normal_use_nodeUUID",
+			fields: fields{
+				prepare: func() *gostub.Stubs {
+					return gostub.Stub(&getDefaultHardwareAddr, dummyDockerHardwareAdder)
+				},
+			},
 			args: args{
 				nodeUuid: nodeUUID[:],
+			},
+			wantErr: false,
+		},
+		{
+			name: "random",
+			fields: fields{
+				prepare: func() *gostub.Stubs {
+					return gostub.Stub(&getDefaultHardwareAddr, dummyDockerHardwareAdder)
+				},
+			},
+			args: args{
+				nodeUuid: nodeUUID[:3],
 			},
 			wantErr: false,
 		},
@@ -73,7 +92,7 @@ func TestSetUUIDNodeID(t *testing.T) {
 			name: "non-node_uuid-with_mock",
 			fields: fields{
 				prepare: func() *gostub.Stubs {
-					return gostub.Stub(&getDefaultHardwareAddr, dummmyGetDefaultHardwareAddr)
+					return gostub.Stub(&getDefaultHardwareAddr, dummyDockerHardwareAdder)
 				},
 			},
 			args: args{
@@ -92,7 +111,7 @@ func TestSetUUIDNodeID(t *testing.T) {
 				t.Errorf("SetUUIDNodeID() error = %v, wantErr %v", err, tt.wantErr)
 			}
 			localMac, _ := getDefaultHardwareAddr()
-			mockMac, _ := dummmyGetDefaultHardwareAddr()
+			mockMac, _ := dummyDockerHardwareAdder()
 			t.Logf("local mac: %s", localMac)
 			t.Logf("mock  mac: %s", mockMac)
 			t.Logf("nodeUUID : %x", tt.args.nodeUuid)

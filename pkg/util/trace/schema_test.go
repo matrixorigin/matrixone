@@ -16,7 +16,6 @@ package trace
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 	"github.com/stretchr/testify/require"
 	"strings"
@@ -104,13 +103,9 @@ func TestInitExternalTblSchema(t *testing.T) {
 	type args struct {
 		ctx       context.Context
 		ieFactory func() ie.InternalExecutor
-		fs        fileservice.FileService
-		cfg       FSConfig
+		mode      string
 	}
 	c := make(chan string, 10)
-	cfg := fileservice.Config{Name: "DISK", Backend: "DISK", CacheMemCapacityBytes: 0, DataDir: "store"}
-	fs, err := fileservice.NewLocalETLFS(cfg.Name, cfg.DataDir)
-	require.Equal(t, nil, err)
 	tests := []struct {
 		name string
 		args args
@@ -120,19 +115,25 @@ func TestInitExternalTblSchema(t *testing.T) {
 			args: args{
 				ctx:       context.Background(),
 				ieFactory: newDummyExecutorFactory(c),
-				fs:        fs,
-				cfg:       &dummyFSConfig{},
+				mode:      FileService,
+			},
+		},
+		{
+			name: "dummyS3",
+			args: args{
+				ctx:       context.Background(),
+				ieFactory: newDummyExecutorFactory(c),
+				mode:      FileService,
 			},
 		},
 	}
 
 	wg := sync.WaitGroup{}
-	// 1+ 1 + 4 + 1
-	// 1: gorountine started
+	// (1 + 4) * n + 1
 	// 1: create database ...
 	// 4: create EXTERNAL table
 	// 1: close
-	wg.Add(6)
+	wg.Add(1)
 	go func() {
 	loop:
 		for {
@@ -154,7 +155,8 @@ func TestInitExternalTblSchema(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := InitExternalTblSchema(tt.args.ctx, tt.args.ieFactory, tt.args.cfg)
+			wg.Add(5)
+			err := InitExternalTblSchema(tt.args.ctx, tt.args.ieFactory)
 			require.Equal(t, nil, err)
 		})
 	}

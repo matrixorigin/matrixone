@@ -28,8 +28,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/util/export"
-	"github.com/matrixorigin/matrixone/pkg/util/trace"
 )
 
 const (
@@ -40,6 +38,7 @@ const (
 
 	s3FileServiceName    = "S3"
 	localFileServiceName = "LOCAL"
+	etlFileServiceName   = "ETL"
 )
 
 var ErrInvalidConfig = moerr.NewError(moerr.BAD_CONFIGURATION, "invalid log configuration")
@@ -144,27 +143,15 @@ func (c *Config) createFileService(defaultName string) (*fileservice.FileService
 		return nil, err
 	}
 
+	// ensure etl exists, for trace & metric
+	if !c.Frontend.DisableMetric || !c.Frontend.DisableTrace {
+		_, err = fileservice.Get[fileservice.FileService](fs, etlFileServiceName)
+		if err != nil {
+			return nil, moerr.NewPanicError(err)
+		}
+	}
+
 	return fs, nil
-}
-
-func (c *Config) createETLFileService(name string) (fileservice.FileService, error) {
-	for _, cfg := range c.FileServices {
-		if strings.EqualFold(cfg.Name, name) {
-			fs, _, err := export.ParseFileService(trace.DefaultContext(), cfg)
-			return fs, err
-		}
-	}
-	return nil, fmt.Errorf("file service named %s not set", name)
-}
-
-func (c *Config) createETLFileServiceAndConfig(name string) (fileservice.FileService, export.FSConfig, error) {
-	for _, cfg := range c.FileServices {
-		if strings.EqualFold(cfg.Name, name) {
-			fs, c, err := export.ParseFileService(trace.DefaultContext(), cfg)
-			return fs, c, err
-		}
-	}
-	return nil, export.FSConfig{}, fmt.Errorf("file service named %s not set", name)
 }
 
 func (c *Config) getLogServiceConfig() logservice.Config {
@@ -172,7 +159,6 @@ func (c *Config) getLogServiceConfig() logservice.Config {
 	logutil.Infof("hakeeper client cfg: %v", c.HAKeeperClient)
 	cfg.HAKeeperClientConfig = c.HAKeeperClient
 	cfg.Frontend = c.getFrontendConfig()
-	cfg.ETLFSFactory = c.createETLFileService
 	if len(cfg.UUID) != 0 {
 		cfg.Frontend.NodeUUID = cfg.UUID
 	}
@@ -183,7 +169,6 @@ func (c *Config) getDNServiceConfig() dnservice.Config {
 	cfg := c.DN
 	cfg.HAKeeper.ClientConfig = c.HAKeeperClient
 	cfg.Frontend = c.getFrontendConfig()
-	cfg.ETLFSFactory = c.createETLFileService
 	if len(cfg.UUID) != 0 {
 		cfg.Frontend.NodeUUID = cfg.UUID
 	}
@@ -194,7 +179,6 @@ func (c *Config) getCNServiceConfig() cnservice.Config {
 	cfg := c.CN
 	cfg.HAKeeper.ClientConfig = c.HAKeeperClient
 	cfg.Frontend = c.getFrontendConfig()
-	cfg.ETLFSFactory = c.createETLFileServiceAndConfig
 	if len(cfg.UUID) != 0 {
 		cfg.Frontend.NodeUUID = c.CN.UUID
 	}

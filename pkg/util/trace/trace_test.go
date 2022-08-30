@@ -66,7 +66,6 @@ func Test_initExport(t *testing.T) {
 				enableTracer: true,
 				config: &tracerProviderConfig{
 					enableTracer: 1, batchProcessMode: FileService, sqlExecutor: newDummyExecutorFactory(ch),
-					fsConfig: &dummyFSConfig{},
 				}},
 			empty: false,
 		},

@@ -31,6 +31,12 @@ endpoint = "s3 endpoint"
 bucket = "s3 bucket"
 key-prefix = "s3 key preifx"
 
+[[fileservice]]
+name = "ETL"
+# val in [DISK-ETL, S3]. if backend = S3, this config should be mirror of above fileservice(S3) config
+backend = "DISK-ETL"
+data-dir = "data dir"
+
 [dn]
 uuid = "dn uuid"
 

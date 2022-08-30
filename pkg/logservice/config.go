@@ -16,7 +16,6 @@ package logservice
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/config"
-	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"strconv"
 	"strings"
 	"time"
@@ -157,9 +156,6 @@ type Config struct {
 
 	// Frontend parameters for the frontend, assign by mo-service's Config
 	Frontend config.FrontendParameters
-
-	// ETLFSFactory create FS for CSV output, especial for localETLFS
-	ETLFSFactory fileservice.FileServiceFactory
 }
 
 func (c *Config) GetHAKeeperConfig() hakeeper.Config {

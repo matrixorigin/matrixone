@@ -37,8 +37,8 @@ const (
 const (
 	MOStatementType = "statement"
 	MOSpanType      = "span"
+	MORawLogType    = "raw_log"
 	MOLogType       = "log"
-	MOZapType       = "zap"
 	MOErrorType     = "error"
 )
 
@@ -71,8 +71,6 @@ type tracerProviderConfig struct {
 
 	batchProcessMode string // see WithBatchProcessMode
 
-	// fsConfig for schema init
-	fsConfig FSConfig // see WithFSConfig
 	// writerFactory gen writer for CSV output
 	writerFactory export.FSWriterFactory // see WithFSWriterFactory, default: export.GetFSWriterFactory
 
@@ -138,12 +136,6 @@ func EnableTracer(enable bool) tracerProviderOptionFunc {
 	return func(cfg *tracerProviderConfig) {
 		cfg.EnableTracer(enable)
 	}
-}
-
-func WithFSConfig(fsConfig FSConfig) tracerProviderOptionFunc {
-	return tracerProviderOptionFunc(func(cfg *tracerProviderConfig) {
-		cfg.fsConfig = fsConfig
-	})
 }
 
 func WithFSWriterFactory(f export.FSWriterFactory) tracerProviderOptionFunc {
@@ -419,19 +411,4 @@ func (t NodeType) String() string {
 type MONodeResource struct {
 	NodeUuid string   `json:"node_uuid"`
 	NodeType NodeType `json:"node_type"`
-}
-
-const (
-	diskFSBackend = export.DiskFSBackend
-	s3FSBackend   = export.S3FSBackend
-)
-
-type FSConfig interface {
-	Backend() string
-	BaseDir() string
-	Endpoint() string
-	AccessKeyID() string
-	SecretAccessKey() string
-	Bucket() string
-	Region() string
 }

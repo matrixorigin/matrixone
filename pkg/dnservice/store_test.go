@@ -231,9 +231,6 @@ func newTestStore(
 	c.Txn.Clock.MaxClockOffset.Duration = time.Duration(math.MaxInt64)
 	c.Frontend.SetDefaultValues()
 	c.Frontend.DisableMetricToProm = true
-	c.ETLFSFactory = func(name string) (fileservice.FileService, error) {
-		return fileservice.NewLocalETLFS("local", "path_to_file")
-	}
 	fs, err := fsFactory(localFileServiceName)
 	assert.Nil(t, err)
 	s, err := NewService(c, fs, options...)

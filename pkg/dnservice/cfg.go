@@ -17,7 +17,6 @@ package dnservice
 import (
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/config"
-	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"strings"
 	"time"
 
@@ -61,8 +60,6 @@ type Config struct {
 
 	// Frontend parameters for the frontend, assign by mo-service's Config
 	Frontend config.FrontendParameters
-	// ETLFSFactory create FS for trace/metric to do CSV output
-	ETLFSFactory fileservice.FileServiceFactory
 
 	// LogService log service configuration
 	LogService struct {

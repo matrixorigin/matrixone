@@ -20,7 +20,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil/logutil2"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
-	"reflect"
 	"strings"
 	"time"
 )
@@ -131,7 +130,7 @@ func InitSchemaByInnerExecutor(ctx context.Context, ieFactory func() ie.Internal
 }
 
 // InitExternalTblSchema for FileService
-func InitExternalTblSchema(ctx context.Context, ieFactory func() ie.InternalExecutor, cfg FSConfig) error {
+func InitExternalTblSchema(ctx context.Context, ieFactory func() ie.InternalExecutor) error {
 	exec := ieFactory()
 	if exec == nil {
 		return nil
@@ -144,7 +143,7 @@ func InitExternalTblSchema(ctx context.Context, ieFactory func() ie.InternalExec
 		return nil
 	}
 
-	optFactory := GetOptionFactory(cfg)
+	optFactory := GetOptionFactory(FileService)
 
 	if err := mustExec(sqlCreateDBConst); err != nil {
 		return err
@@ -161,7 +160,7 @@ func InitExternalTblSchema(ctx context.Context, ieFactory func() ie.InternalExec
 	var initDDLs = []struct{ sqlPrefix, filePrefix string }{
 		{getExternalTableDDLPrefix(sqlCreateStatementInfoTable), MOStatementType},
 		{getExternalTableDDLPrefix(sqlCreateSpanInfoTable), MOSpanType},
-		{getExternalTableDDLPrefix(sqlCreateLogInfoTable), MOZapType},
+		{getExternalTableDDLPrefix(sqlCreateLogInfoTable), MOLogType},
 		{getExternalTableDDLPrefix(sqlCreateErrorInfoTable), MOErrorType},
 	}
 	for _, ddl := range initDDLs {
@@ -209,28 +208,29 @@ type noopTableOptions struct{}
 func (o noopTableOptions) GetCreateOptions() string { return "" }
 func (o noopTableOptions) GetTableOptions() string  { return "" }
 
-func GetOptionFactory(cfg FSConfig) func(db, tbl string) TableOptions {
-	if reflect.ValueOf(cfg).IsNil() {
+func GetOptionFactory(mode string) func(db, tbl string) TableOptions {
+	switch mode {
+	case InternalExecutor:
 		return func(_, _ string) TableOptions { return noopTableOptions{} }
-	}
-	var infileFormatter string
-	switch cfg.Backend() {
-	case diskFSBackend:
-		infileFormatter = fmt.Sprintf(` infile{"filepath"="%s/%%s/%%s_*.csv","compression"="none"}`+
-			` FIELDS TERMINATED BY ',' ENCLOSED BY '"' LINES TERMINATED BY '\n' IGNORE 0 lines`,
-			cfg.BaseDir())
-	case s3FSBackend:
-		infileFormatter = fmt.Sprintf(` URL s3option {`+
-			`"endpoint"="%s", "access_key_id"="%s", "secret_access_key"="%s",`+
-			`"bucket"="%s", "region"="%s", "filepath"="%s/%%s/%%s_*.csv"}`+
-			` FIELDS TERMINATED BY ',' ENCLOSED BY '"' LINES TERMINATED BY '\n' IGNORE 0 lines`,
-			cfg.Endpoint(), cfg.AccessKeyID(), cfg.SecretAccessKey(),
-			cfg.Bucket(), cfg.Region(), cfg.BaseDir())
+	case FileService:
+		var infileFormatter = ` infile{"filepath"="etl:%s/%s_*.csv","compression"="none"}` +
+			` FIELDS TERMINATED BY ',' ENCLOSED BY '"' LINES TERMINATED BY '\n' IGNORE 0 lines`
+		return func(db, tbl string) TableOptions {
+			return &CsvTableOptions{formatter: infileFormatter, dbName: db, tblName: tbl}
+		}
 	default:
-		panic(moerr.NewPanicError(fmt.Errorf("unsupport csv, fileservice: %v", cfg.Bucket())))
+		panic(moerr.NewPanicError(fmt.Errorf("unknown batch process mode: %s", mode)))
 	}
+}
 
-	return func(db, tbl string) TableOptions {
-		return &CsvTableOptions{formatter: infileFormatter, dbName: db, tblName: tbl}
-	}
+type CsvOptions struct {
+	FieldTerminator rune // like: ','
+	EncloseRune     rune // like: '"'
+	Terminator      rune // like: '\n'
+}
+
+var CommonCsvOptions = &CsvOptions{
+	FieldTerminator: ',',
+	EncloseRune:     '"',
+	Terminator:      '\n',
 }

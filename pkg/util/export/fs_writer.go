@@ -23,16 +23,13 @@ import (
 	"sync"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/batchpipe"
 	"github.com/matrixorigin/matrixone/pkg/util/errors"
-
-	"github.com/aws/aws-sdk-go-v2/aws"
-	"github.com/aws/aws-sdk-go-v2/config"
 )
 
+const etlFileServiceName = "ETL"
 const csvExtension = ".csv"
 
 var _ stringWriter = (*FSWriter)(nil)
@@ -57,6 +54,8 @@ type FSWriter struct {
 	nodeType string // see WithNode
 	filename string // see GetNewFileName, auto generated
 
+	fileServiceName string // see WithFileServiceName
+
 	offset int // see Write, should not have size bigger than 2GB
 }
 
@@ -72,6 +71,8 @@ func NewFSWriter(ctx context.Context, fs fileservice.FileService, opts ...FSWrit
 		dir:      "",
 		nodeUUID: "00000000-0000-0000-0000-000000000000",
 		nodeType: "standalone",
+
+		fileServiceName: etlFileServiceName,
 	}
 	for _, o := range opts {
 		o.Apply(w)
@@ -103,6 +104,12 @@ func WithNode(uuid, nodeType string) fsWriterOptionFunc {
 	})
 }
 
+func WithFileServiceName(serviceName string) fsWriterOptionFunc {
+	return fsWriterOptionFunc(func(w *FSWriter) {
+		w.fileServiceName = serviceName
+	})
+}
+
 func (w *FSWriter) GetNewFileName(ts time.Time) string {
 	return fmt.Sprintf(`%s_%s_%s_%s`, w.prefix, w.nodeUUID, w.nodeType, ts.Format("20060102.150405.000000"))
 }
@@ -115,7 +122,8 @@ func (w *FSWriter) Write(p []byte) (n int, err error) {
 	mkdirTried := false
 mkdirRetry:
 	if err = w.fs.Write(w.ctx, fileservice.IOVector{
-		FilePath: path.Join(w.dir, w.filename) + csvExtension,
+		// like: etl:store/system/filename.csv
+		FilePath: w.fileServiceName + fileservice.ServiceNameSeparator + path.Join(w.dir, w.filename) + csvExtension,
 		Entries: []fileservice.IOEntry{
 			{
 				Offset: w.offset,
@@ -150,90 +158,4 @@ func GetFSWriterFactory(fs fileservice.FileService, nodeUUID, nodeType string) F
 			WithNode(nodeUUID, nodeType),
 		)
 	}
-}
-
-// FileServiceFactory Simulate fileservice.FileServiceFactory
-type FileServiceFactory func(name string) (fileservice.FileService, FSConfig, error)
-
-type FSConfig struct {
-	// base FileService config
-	backend string
-	baseDir string
-	// for S3
-	endpoint        string
-	accessKeyID     string
-	secretAccessKey string
-	bucket          string
-	region          string
-}
-
-func (c *FSConfig) Backend() string {
-	return c.backend
-}
-
-func (c *FSConfig) BaseDir() string {
-	return c.baseDir
-}
-
-func (c *FSConfig) Endpoint() string {
-	return c.endpoint
-}
-
-func (c *FSConfig) AccessKeyID() string {
-	return c.accessKeyID
-}
-
-func (c *FSConfig) SecretAccessKey() string {
-	return c.secretAccessKey
-}
-
-func (c *FSConfig) Bucket() string {
-	return c.bucket
-}
-
-func (c *FSConfig) Region() string {
-	return c.region
-}
-
-const (
-	// fixme: just use fileservice/config.go const value
-
-	MemFSBackend  = "MEM"
-	DiskFSBackend = "DISK"
-	S3FSBackend   = "S3"
-)
-
-// ParseFileService create FS for CSV output, especial for localETLFS
-func ParseFileService(ctx context.Context, fsConfig fileservice.Config) (fs fileservice.FileService, cfg FSConfig, err error) {
-	switch fsConfig.Backend {
-	case DiskFSBackend, MemFSBackend:
-		if fs, err = fileservice.NewLocalETLFS(fsConfig.Name+"ETL", fsConfig.DataDir); err != nil {
-			err = moerr.NewPanicError(err)
-			return
-		}
-		cfg.backend = DiskFSBackend
-		cfg.baseDir = fsConfig.DataDir
-	default:
-		if fs, err = fileservice.NewFileService(fsConfig); err != nil {
-			err = moerr.NewPanicError(err)
-			return
-		}
-		cfg.backend = S3FSBackend
-		cfg.baseDir = fsConfig.S3.KeyPrefix
-		cfg.endpoint = fsConfig.S3.Endpoint
-		cfg.bucket = fsConfig.S3.Bucket
-		var S3Cfg aws.Config
-		var credentials aws.Credentials
-		if S3Cfg, err = config.LoadDefaultConfig(ctx, config.WithSharedConfigProfile(fsConfig.S3.SharedConfigProfile)); err != nil {
-			err = moerr.NewPanicError(err)
-			return
-		} else if credentials, err = S3Cfg.Credentials.Retrieve(ctx); err != nil {
-			err = moerr.NewPanicError(err)
-			return
-		}
-		cfg.accessKeyID = credentials.AccessKeyID
-		cfg.secretAccessKey = credentials.SecretAccessKey
-		cfg.region = S3Cfg.Region
-	}
-	return
 }

@@ -54,7 +54,7 @@ func newMOLog() *MOLog {
 }
 
 func (MOLog) GetName() string {
-	return MOLogType
+	return MORawLogType
 }
 
 func (l MOLog) Size() int64 {
@@ -119,11 +119,11 @@ func ContextField(ctx context.Context) zap.Field {
 	return SpanField(SpanFromContext(ctx).SpanContext())
 }
 
-var _ batchpipe.HasName = (*MOZap)(nil)
-var _ IBuffer2SqlItem = (*MOZap)(nil)
-var _ CsvFields = (*MOZap)(nil)
+var _ batchpipe.HasName = (*MOZapLog)(nil)
+var _ IBuffer2SqlItem = (*MOZapLog)(nil)
+var _ CsvFields = (*MOZapLog)(nil)
 
-type MOZap struct {
+type MOZapLog struct {
 	Level       zapcore.Level `json:"Level"`
 	SpanContext *SpanContext  `json:"span"`
 	Timestamp   time.Time     `json:"timestamp"`
@@ -133,26 +133,26 @@ type MOZap struct {
 	Extra       string `json:"extra"` // like json text
 }
 
-func newMOZap() *MOZap {
-	return &MOZap{}
+func newMOZap() *MOZapLog {
+	return &MOZapLog{}
 }
 
-func (m MOZap) GetName() string {
-	return MOZapType
+func (m MOZapLog) GetName() string {
+	return MOLogType
 }
 
 // Size 计算近似值
-func (m MOZap) Size() int64 {
+func (m MOZapLog) Size() int64 {
 	return int64(unsafe.Sizeof(m) + unsafe.Sizeof(len(m.LoggerName)+len(m.Caller)+len(m.Message)+len(m.Extra)))
 }
 
-func (m MOZap) Free() {}
+func (m MOZapLog) Free() {}
 
-func (m MOZap) CsvOptions() *CsvOptions {
+func (m MOZapLog) CsvOptions() *CsvOptions {
 	return CommonCsvOptions
 }
 
-func (m MOZap) CsvFields() []string {
+func (m MOZapLog) CsvFields() []string {
 	var result []string
 	result = append(result, m.SpanContext.TraceID.String())
 	result = append(result, m.SpanContext.SpanID.String())

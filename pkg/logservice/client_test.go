@@ -29,7 +29,6 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
-	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 )
@@ -39,9 +38,6 @@ func runClientTest(t *testing.T,
 	defer leaktest.AfterTest(t)()
 	cfg := getServiceTestConfig()
 	cfg.Frontend.SetDefaultValues()
-	cfg.ETLFSFactory = func(name string) (fileservice.FileService, error) {
-		return fileservice.NewLocalETLFS("local", "path_to_file")
-	}
 	defer vfs.ReportLeakedFD(cfg.FS, t)
 	service, err := NewService(cfg,
 		testutil.NewFS(),

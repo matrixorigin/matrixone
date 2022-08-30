@@ -174,31 +174,24 @@ func (s *service) initEngine(
 	return nil
 }
 
-const s3FileServiceName = "S3" // same as dnservice/factory.go s3FileServiceName
-
 func (s *service) createMOServer(inputCtx context.Context, pu *config.ParameterUnit) (context.Context, error) {
 	address := fmt.Sprintf("%s:%d", pu.SV.Host, pu.SV.Port)
 	moServerCtx := context.WithValue(inputCtx, config.ParameterUnitKey, pu)
 	s.mo = frontend.NewMOServer(moServerCtx, address, pu)
 
 	// init trace/log/error framework
-	var fs fileservice.FileService
-	var cfg export.FSConfig
 	var writerFactory export.FSWriterFactory
-	var err error
 	// validate node_uuid
+	var uuidErr error
 	var nodeUUID uuid.UUID
-	if nodeUUID, err = uuid.Parse(pu.SV.NodeUUID); err != nil {
+	if nodeUUID, uuidErr = uuid.Parse(pu.SV.NodeUUID); uuidErr != nil {
 		nodeUUID = uuid.New()
 		pu.SV.NodeUUID = nodeUUID.String()
 	}
 	if !pu.SV.DisableTrace || !pu.SV.DisableMetric {
-		if fs, cfg, err = s.cfg.ETLFSFactory(s3FileServiceName); err != nil {
-			return nil, err
-		}
-		writerFactory = export.GetFSWriterFactory(fs, pu.SV.NodeUUID, trace.NodeTypeCN.String())
+		writerFactory = export.GetFSWriterFactory(s.fileService, pu.SV.NodeUUID, trace.NodeTypeCN.String())
 	}
-	if err = util.SetUUIDNodeID(nodeUUID[:]); err != nil {
+	if err := util.SetUUIDNodeID(nodeUUID[:]); err != nil {
 		return nil, moerr.NewPanicError(err)
 	} else if moServerCtx, err = trace.Init(moServerCtx,
 		trace.WithMOVersion(pu.SV.MoVersion),
@@ -206,7 +199,6 @@ func (s *service) createMOServer(inputCtx context.Context, pu *config.ParameterU
 		trace.EnableTracer(!pu.SV.DisableTrace),
 		trace.WithBatchProcessMode(pu.SV.TraceBatchProcessor),
 		trace.WithFSWriterFactory(writerFactory),
-		trace.WithFSConfig(&cfg),
 		trace.DebugMode(pu.SV.EnableTraceDebug),
 		trace.WithSQLExecutor(func() ie.InternalExecutor {
 			return frontend.NewInternalExecutor(pu)
@@ -220,7 +212,7 @@ func (s *service) createMOServer(inputCtx context.Context, pu *config.ParameterU
 			return frontend.NewInternalExecutor(pu)
 		}
 		metric.InitMetric(moServerCtx, ieFactory, pu.SV, pu.SV.NodeUUID, metric.ALL_IN_ONE_MODE,
-			metric.WithWriterFactory(writerFactory), metric.WithFSConfig(&cfg), metric.WithInitAction(true))
+			metric.WithWriterFactory(writerFactory), metric.WithInitAction(true))
 	}
 	frontend.InitServerVersion(pu.SV.MoVersion)
 	err := frontend.InitSysTenant(moServerCtx)

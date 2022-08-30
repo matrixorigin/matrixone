@@ -135,7 +135,7 @@ func (b *bufferHolder) FlushAndReset() bool {
 		var flush = b.impl.NewItemBatchHandler(context.TODO())
 		flush(*b.batch)
 	} else {
-		logutil.Debugf("batch is nil")
+		logutil.Debugf("batch is nil, item: %s", b.name)
 	}
 	b.resetTrigger()
 	b.buffer.Reset()

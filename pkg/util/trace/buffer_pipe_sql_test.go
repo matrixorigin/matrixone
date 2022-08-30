@@ -48,31 +48,13 @@ var traceIDSpanIDCsvStr string
 func noopReportLog(context.Context, zapcore.Level, int, string, ...any) {}
 func noopReportError(context.Context, error, int)                       {}
 
-var _ FSConfig = (*dummyFSConfig)(nil)
-
-type dummyFSConfig struct {
-}
-
-func (d dummyFSConfig) Backend() string         { return diskFSBackend }
-func (d dummyFSConfig) BaseDir() string         { return "store" }
-func (d dummyFSConfig) Endpoint() string        { return "" }
-func (d dummyFSConfig) AccessKeyID() string     { return "" }
-func (d dummyFSConfig) SecretAccessKey() string { return "" }
-func (d dummyFSConfig) Bucket() string          { return "" }
-func (d dummyFSConfig) Region() string          { return "" }
-
 func init() {
-	setup()
-}
-
-func setup() {
 	if _, err := Init(
 		context.Background(),
 		EnableTracer(true),
 		WithMOVersion("v0.test.0"),
 		WithNode("node_uuid", NodeTypeNode),
 		WithBatchProcessMode(InternalExecutor),
-		WithFSConfig(&dummyFSConfig{}),
 		WithFSWriterFactory(func(ctx context.Context, dir string, name batchpipe.HasName) io.StringWriter {
 			return os.Stdout
 		}),
@@ -149,7 +131,7 @@ func Test_batchSqlHandler_NewItemBuffer_Check_genBatchFunc(t1 *testing.T) {
 		want genBatchFunc
 	}{
 		{name: "span_type", args: args{opt: opts, name: MOSpanType}, want: genSpanBatchSql},
-		{name: "log_type", args: args{opt: opts, name: MOLogType}, want: genLogBatchSql},
+		{name: "log_type", args: args{opt: opts, name: MORawLogType}, want: genLogBatchSql},
 		{name: "statement_type", args: args{opt: opts, name: MOStatementType},
 			want: genStatementBatchSql},
 		{name: "error_type", args: args{opt: opts, name: MOErrorType},
@@ -401,7 +383,7 @@ func Test_buffer2Sql_GetBatch_AllType(t *testing.T) {
 			fields: defaultFields,
 			args: args{
 				in: []IBuffer2SqlItem{
-					&MOZap{
+					&MOZapLog{
 						Level:       zapcore.InfoLevel,
 						SpanContext: &sc,
 						Timestamp:   time.Unix(0, 0),
@@ -422,7 +404,7 @@ func Test_buffer2Sql_GetBatch_AllType(t *testing.T) {
 			fields: defaultFields,
 			args: args{
 				in: []IBuffer2SqlItem{
-					&MOZap{
+					&MOZapLog{
 						Level:       zapcore.InfoLevel,
 						SpanContext: &sc,
 						Timestamp:   time.Unix(0, 0),
@@ -430,7 +412,7 @@ func Test_buffer2Sql_GetBatch_AllType(t *testing.T) {
 						Message:     "info message",
 						Extra:       "{}",
 					},
-					&MOZap{
+					&MOZapLog{
 						Level:       zapcore.DebugLevel,
 						SpanContext: &sc,
 						Timestamp:   time.Unix(0, int64(time.Microsecond+time.Millisecond)),
@@ -932,7 +914,7 @@ func Test_genCsvData(t *testing.T) {
 			name: "single_zap",
 			args: args{
 				in: []IBuffer2SqlItem{
-					&MOZap{
+					&MOZapLog{
 						Level:       zapcore.InfoLevel,
 						SpanContext: &sc,
 						Timestamp:   time.Unix(0, 0),
@@ -950,7 +932,7 @@ func Test_genCsvData(t *testing.T) {
 			name: "multi_zap",
 			args: args{
 				in: []IBuffer2SqlItem{
-					&MOZap{
+					&MOZapLog{
 						Level:       zapcore.InfoLevel,
 						SpanContext: &sc,
 						Timestamp:   time.Unix(0, 0),
@@ -958,7 +940,7 @@ func Test_genCsvData(t *testing.T) {
 						Message:     "info message",
 						Extra:       "{}",
 					},
-					&MOZap{
+					&MOZapLog{
 						Level:       zapcore.DebugLevel,
 						SpanContext: &sc,
 						Timestamp:   time.Unix(0, int64(time.Microsecond+time.Millisecond)),
