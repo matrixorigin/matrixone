@@ -78,17 +78,16 @@ func WithLogServiceClientFactory(factory func(metadata.DNShard) (logservice.Clie
 }
 
 type store struct {
-	cfg            *Config
-	logger         *zap.Logger
-	clock          clock.Clock
-	sender         rpc.TxnSender
-	server         rpc.TxnServer
-	hakeeperClient logservice.DNHAKeeperClient
-	fsFactory      fileservice.FileServiceFactory
-	fs             fileservice.FileService
-	metadataFS     fileservice.ReplaceableFileService
-	replicas       *sync.Map
-	stopper        *stopper.Stopper
+	cfg                 *Config
+	logger              *zap.Logger
+	clock               clock.Clock
+	sender              rpc.TxnSender
+	server              rpc.TxnServer
+	hakeeperClient      logservice.DNHAKeeperClient
+	fileService         fileservice.FileService
+	metadataFileService fileservice.ReplaceableFileService
+	replicas            *sync.Map
+	stopper             *stopper.Stopper
 
 	options struct {
 		logServiceClientFactory func(metadata.DNShard) (logservice.Client, error)
@@ -105,15 +104,22 @@ type store struct {
 
 // NewService create DN Service
 func NewService(cfg *Config,
-	fsFactory fileservice.FileServiceFactory,
+	fileService fileservice.FileService,
 	opts ...Option) (Service, error) {
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
 
+	// get metadata fs
+	metadataFS, err := fileservice.Get[fileservice.ReplaceableFileService](fileService, localFileServiceName)
+	if err != nil {
+		return nil, err
+	}
+
 	s := &store{
-		cfg:       cfg,
-		fsFactory: fsFactory,
+		cfg:                 cfg,
+		fileService:         fileService,
+		metadataFileService: metadataFS,
 	}
 	for _, opt := range opts {
 		opt(s)
@@ -136,9 +142,6 @@ func NewService(cfg *Config,
 		return nil, err
 	}
 	if err := s.initTxnServer(); err != nil {
-		return nil, err
-	}
-	if err := s.initFileService(); err != nil {
 		return nil, err
 	}
 	if err := s.initMetadata(); err != nil {
@@ -382,31 +385,6 @@ func (s *store) initHAKeeperClient() error {
 		return err
 	}
 	s.hakeeperClient = client
-	return nil
-}
-
-func (s *store) initFileService() error {
-	localFS, err := s.fsFactory(localFileServiceName)
-	if err != nil {
-		return err
-	}
-	rfs, err := fileservice.Get[fileservice.ReplaceableFileService](
-		localFS, localFileServiceName)
-	if err != nil {
-		return err
-	}
-
-	s3FS, err := s.fsFactory(s3FileServiceName)
-	if err != nil {
-		return err
-	}
-
-	s.fs, err = fileservice.NewFileServices(localFileServiceName, localFS, s3FS)
-	if err != nil {
-		return err
-	}
-	s.metadataFS = rfs
-
 	return nil
 }
 

@@ -189,7 +189,7 @@ SELECT CAST(0 AS date) BETWEEN 0 AND -1;
 CAST(0 AS date) BETWEEN 0 AND -1
 NULL
 SELECT CAST(10000101 as date) BETWEEN '1000-01-01' and '1000-01-02';
-Operator 'cast' with parameters [BIGINT DATE] will be implemented in future version.
+Operator 'cast' with parameters [BIGINT DATE] is not supported.
 drop table if exists t1;
 drop table if exists t2;
 drop table if exists t3;

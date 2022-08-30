@@ -15,7 +15,10 @@
 package ceil
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"math"
+	"strconv"
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/vectorize/floor"
 )
@@ -26,16 +29,17 @@ ceil(1.23, 1) -----> 1.3
 ceil(12.34, -1) ---- > 20.0*/
 
 var (
-	CeilUint8   func([]uint8, []uint8, int64) []uint8
-	CeilUint16  func([]uint16, []uint16, int64) []uint16
-	CeilUint32  func([]uint32, []uint32, int64) []uint32
-	CeilUint64  func([]uint64, []uint64, int64) []uint64
-	CeilInt8    func([]int8, []int8, int64) []int8
-	CeilInt16   func([]int16, []int16, int64) []int16
-	CeilInt32   func([]int32, []int32, int64) []int32
-	CeilInt64   func([]int64, []int64, int64) []int64
-	CeilFloat32 func([]float32, []float32, int64) []float32
-	CeilFloat64 func([]float64, []float64, int64) []float64
+	CeilUint8      func([]uint8, []uint8, int64) []uint8
+	CeilUint16     func([]uint16, []uint16, int64) []uint16
+	CeilUint32     func([]uint32, []uint32, int64) []uint32
+	CeilUint64     func([]uint64, []uint64, int64) []uint64
+	CeilInt8       func([]int8, []int8, int64) []int8
+	CeilInt16      func([]int16, []int16, int64) []int16
+	CeilInt32      func([]int32, []int32, int64) []int32
+	CeilInt64      func([]int64, []int64, int64) []int64
+	CeilFloat32    func([]float32, []float32, int64) []float32
+	CeilFloat64    func([]float64, []float64, int64) []float64
+	CeilDecimal128 func(int32, []types.Decimal128, []types.Decimal128, int64) []types.Decimal128
 )
 
 func init() {
@@ -49,6 +53,7 @@ func init() {
 	CeilInt64 = ceilInt64
 	CeilFloat32 = ceilFloat32
 	CeilFloat64 = ceilFloat64
+	CeilDecimal128 = ceilDecimal128
 }
 
 func ceilUint8(xs, rs []uint8, digits int64) []uint8 {
@@ -286,6 +291,24 @@ func ceilFloat64(xs, rs []float64, digits int64) []float64 {
 			value := xs[i] * scale
 			rs[i] = math.Ceil(value) / scale
 		}
+	}
+	return rs
+}
+
+func ceilDecimal128(scale int32, xs, rs []types.Decimal128, _ int64) []types.Decimal128 {
+	for i := range xs {
+		strs := strings.Split(xs[i].ToStringWithScale(scale), ".")
+		x, _ := types.Decimal128_FromString(strs[0])
+		if strs[0][0] == '-' || len(strs) == 1 {
+			rs[i] = x
+			continue
+		}
+
+		v, _ := strconv.ParseFloat(strs[1], 64)
+		if v > float64(0) {
+			x = x.AddInt64(1)
+		}
+		rs[i] = x
 	}
 	return rs
 }

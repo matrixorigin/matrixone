@@ -28,6 +28,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -62,13 +63,14 @@ func firstError(err1 error, err2 error) error {
 // clients owned by DN nodes and the HAKeeper service via network, it can
 // be considered as the interface layer of the LogService.
 type Service struct {
-	cfg      Config
-	store    *store
-	server   morpc.RPCServer
-	pool     *sync.Pool
-	respPool *sync.Pool
-	stopper  *stopper.Stopper
-	haClient LogHAKeeperClient
+	cfg         Config
+	store       *store
+	server      morpc.RPCServer
+	pool        *sync.Pool
+	respPool    *sync.Pool
+	stopper     *stopper.Stopper
+	haClient    LogHAKeeperClient
+	fileService fileservice.FileService
 
 	options struct {
 		// morpc client would filter remote backend via this
@@ -76,7 +78,11 @@ type Service struct {
 	}
 }
 
-func NewService(cfg Config, opts ...Option) (*Service, error) {
+func NewService(
+	cfg Config,
+	fileService fileservice.FileService,
+	opts ...Option,
+) (*Service, error) {
 	cfg.Fill()
 	if err := cfg.Validate(); err != nil {
 		return nil, err
@@ -113,12 +119,13 @@ func NewService(cfg Config, opts ...Option) (*Service, error) {
 		return nil, err
 	}
 	service := &Service{
-		cfg:      cfg,
-		store:    store,
-		server:   server,
-		pool:     pool,
-		respPool: respPool,
-		stopper:  stopper.NewStopper("log-service"),
+		cfg:         cfg,
+		store:       store,
+		server:      server,
+		pool:        pool,
+		respPool:    respPool,
+		stopper:     stopper.NewStopper("log-service"),
+		fileService: fileService,
 	}
 	for _, opt := range opts {
 		opt(service)

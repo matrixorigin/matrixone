@@ -12,20 +12,21 @@ service-addresses = [
     "2"
 ]
 
-[cn]
-uuid = "5849c262-2444-11ed-ba8c-d6aee46d73fa"
+[[fileservice]]
+name = "LOCAL"
+backend = "MEM"
+
+[[fileservice]]
+name = "S3"
+backend = "MEM"
+
+[[fileservice]]
+name = "etl"
+backend = "DISK-ETL"
+data-dir = "store"
 
 [cn.Engine]
 type = "tae"
-
-[[fileservice]]
-# s3 fileservice instance, used to store data.
-name = "s3"
-# use disk as fileservice backend.
-backend = "DISK"
-# set the directory used by DISK backend. There must has a file named "thisisalocalfileservicedir"
-# in the data dir
-data-dir = "store"
 
 # you can move your vars in system_vars_config.toml to here. empty for default value
 # log vars in system_vars_config.toml was removed. use [log] to set log vars

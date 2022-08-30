@@ -32,9 +32,7 @@ INSERT INTO source VALUES
 (1,0,0,-9223372036854775808), (1,0,18446744073709551615,9223372036854775807);
 SELECT IF(bt,i8u,i8s) AS u, IF(bf,i8u,i8s) AS s
 FROM source;
-u	s
-0	-9223372036854775808
-18446744073709551615	9223372036854775807
+Can't cast column from BIGINT UNSIGNED type to BIGINT type because of one or more values in that column. Reason: overflow
 DROP TABLE source;
 create table t1 (num  double(12,2));
 insert into t1 values (144.54);
@@ -99,8 +97,7 @@ a
 2
 DROP TABLE t1;
 select IF(0,"ERROR","this"),IF(1,"is","ERROR"),IF(NULL,"ERROR","a"),IF(1,2,3)|0,IF(1,2.0,3.0)+0 ;
-IF(0,"ERROR","this")	IF(1,"is","ERROR")	IF(NULL,"ERROR","a")	IF(1,2,3)|0	IF(1,2.0,3.0)+0
-this	is	a	2	2.0
+Function 'if' with parameters [ANY VARCHAR VARCHAR] is not supported.
 CREATE TABLE t1 (st varchar(255) NOT NULL, u int(11) NOT NULL);
 INSERT INTO t1 VALUES ('a',1),('A',1),('aa',1),('AA',1),('a',1),('aaa',0),('BBB',0);
 select if(1,st,st) s from t1 order by s;
@@ -188,8 +185,7 @@ DROP TABLE t1;
 CREATE TABLE t1 (c varchar(255));
 INSERT INTO t1 VALUES(1), (2), (3), (4), ('12345678901234567890');
 SELECT * FROM (SELECT MAX(IF(1, CAST(c AS UNSIGNED), 0)) FROM t1) AS te;
-MAX(IF(1, CAST(c AS UNSIGNED), 0))
-12345678901234567890
+Can't cast column from BIGINT UNSIGNED type to BIGINT type because of one or more values in that column. Reason: overflow
 DROP TABLE t1;
 CREATE TABLE t1 (a int, b DOUBLE);
 INSERT INTO t1 VALUES (NULL, 0), (NULL, 1);

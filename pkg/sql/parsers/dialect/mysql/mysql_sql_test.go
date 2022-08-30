@@ -26,7 +26,8 @@ var (
 		input  string
 		output string
 	}{
-		input: "select * from tables",
+		input:  `create table table10 (a int primary key, b varchar(10)) checksum=0 COMMENT="asdf"`,
+		output: "create table table10 (a int primary key, b varchar(10)) checksum = 0 comment = asdf",
 	}
 )
 
@@ -466,9 +467,6 @@ var (
 		input:  "create external table t (a int) infile 'data.txt' FIELDS TERMINATED BY '' OPTIONALLY ENCLOSED BY '' LINES TERMINATED BY ''",
 		output: "create external table t (a int) infile 'data.txt' fields terminated by \t optionally enclosed by \u0000 lines",
 	}, {
-		input:  "create external table t (a int) URL s3option{'endpoint'='s3.us-west-2.amazonaws.com', 'access_key_id'='XXX', 'secret_access_key'='XXX', 'bucket'='test', 'filepath'='*.txt', 'region'='us-west-2'}",
-		output: "create external table t (a int) url s3option {'endpoint'='endpoint', 'access_key_id'='XXX', 'secret_access_key'='XXX', 'bucket'='test', 'filepath'='*.txt', 'region'='us-west-2'}",
-	}, {
 		input:  "SET NAMES 'utf8mb4' COLLATE 'utf8mb4_general_ci'",
 		output: "set names = utf8mb4 utf8mb4_general_ci",
 	}, {
@@ -538,9 +536,6 @@ var (
 	}, {
 		input:  "load data infile {'filepath'='data.txt', 'compression'='LZ4'} into table db.a",
 		output: "load data infile {'filepath':'data.txt', 'compression':'lz4'} into table db.a",
-	}, {
-		input:  "LOAD DATA URL s3option{'endpoint'='s3.us-west-2.amazonaws.com', 'access_key_id'='XXX', 'secret_access_key'='XXX', 'bucket'='test', 'filepath'='*.txt', 'region'='us-west-2'} into table db.a",
-		output: "load data url s3option {'endpoint'='endpoint', 'access_key_id'='XXX', 'secret_access_key'='XXX', 'bucket'='test', 'filepath'='*.txt', 'region'='us-west-2'} into table db.a",
 	}, {
 		input:  "show tables from test01 where tables_in_test01 like '%t2%'",
 		output: "show tables from test01 where tables_in_test01 like %t2%",
@@ -689,16 +684,20 @@ var (
 	}, {
 		input: "select t.a from sa.t",
 	}, {
-		input: "create table a (a int) partition by key (a, b, db.t.c) (partition xx (subpartition s1, subpartition s3 max_rows = 1000 min_rows = 100))",
+		input:  "create table a (a int) partition by key (a, b, db.t.c) (partition xx (subpartition s1, subpartition s3 max_rows = 1000 min_rows = 100))",
+		output: "create table a (a int) partition by key algorithm = 2 (a, b, db.t.c) (partition xx (subpartition s1, subpartition s3 max_rows = 1000 min_rows = 100))",
 	}, {
-		input: "create table a (a int) partition by key (a, b, db.t.c) (partition xx row_format = dynamic max_rows = 1000 min_rows = 100)",
+		input:  "create table a (a int) partition by key (a, b, db.t.c) (partition xx row_format = dynamic max_rows = 1000 min_rows = 100)",
+		output: "create table a (a int) partition by key algorithm = 2 (a, b, db.t.c) (partition xx row_format = dynamic max_rows = 1000 min_rows = 100)",
 	}, {
 		input:  "create table a (a int) engine = 'innodb' row_format = dynamic comment = 'table A' compression = 'lz4' data directory = '/data' index directory = '/index' max_rows = 1000 min_rows = 100",
 		output: "create table a (a int) engine = innodb row_format = dynamic comment = table A compression = lz4 data directory = /data index directory = /index max_rows = 1000 min_rows = 100",
 	}, {
-		input: "create table a (a int) partition by linear key algorithm = 3221 (a, b, db.t.c) (partition xx values less than (1, 2, 323), partition yy)",
+		input:  "create table a (a int) partition by linear key algorithm = 3221 (a, b, db.t.c) (partition xx values less than (1, 2, 323), partition yy)",
+		output: "create table a (a int) partition by linear key algorithm = 3221 (a, b, db.t.c) (partition xx values less than (1, 2, 323), partition yy)",
 	}, {
-		input: "create table a (a int) partition by linear key algorithm = 3221 (a, b, db.t.c) partitions 10 subpartition by key (a, b, db.t.c) subpartitions 10",
+		input:  "create table a (a int) partition by linear key algorithm = 3221 (a, b, db.t.c) partitions 10 subpartition by key (a, b, db.t.c) subpartitions 10",
+		output: "create table a (a int) partition by linear key algorithm = 3221 (a, b, db.t.c) partitions 10 subpartition by key algorithm = 2 (a, b, db.t.c) subpartitions 10",
 	}, {
 		input: "create table a (a int) partition by linear key algorithm = 3221 (a, b, db.t.c) partitions 10",
 	}, {
@@ -706,7 +705,8 @@ var (
 	}, {
 		input: "create table a (a int) partition by linear key algorithm = 31 (a, b, db.t.c)",
 	}, {
-		input: "create table a (a int) partition by linear key (a, b, db.t.c)",
+		input:  "create table a (a int) partition by linear key (a, b, db.t.c)",
+		output: "create table a (a int) partition by linear key algorithm = 2 (a, b, db.t.c)",
 	}, {
 		input: "create table a (a int) partition by list columns (a, b, db.t.c)",
 	}, {
@@ -723,13 +723,130 @@ var (
 		input: "create table a (a int storage disk, b int)",
 	}, {
 		input: "create table a (a int not null default 1 auto_increment unique primary key collate utf8_bin storage disk)",
-	}, {
-		input: "grant all, all(a, b), create(a, b), select(a, b), super(a, b, c) on table db.a to u1, u2 with grant option",
-	}, {
-		input: "grant proxy on u1 to u2, u3, u4 with grant option",
-	}, {
-		input: "grant proxy on u1 to u2, u3, u4",
 	},
+		{
+			input:  `CREATE TABLE tp1 (col1 INT, col2 CHAR(5), col3 DATE) PARTITION BY KEY(col3) PARTITIONS 4`,
+			output: `create table tp1 (col1 int, col2 char(5), col3 date) partition by key algorithm = 2 (col3) partitions 4`,
+		},
+		{
+			input:  `CREATE TABLE tp2 (col1 INT, col2 CHAR(5), col3 DATE) PARTITION BY KEY(col3)`,
+			output: `create table tp2 (col1 int, col2 char(5), col3 date) partition by key algorithm = 2 (col3)`,
+		},
+		{
+			input:  `CREATE TABLE tp3 (col1 INT, col2 CHAR(5), col3 DATE) PARTITION BY LINEAR KEY(col3) PARTITIONS 5`,
+			output: `create table tp3 (col1 int, col2 char(5), col3 date) partition by linear key algorithm = 2 (col3) partitions 5`,
+		},
+		{
+			input:  `CREATE TABLE tp4 (col1 INT, col2 CHAR(5), col3 DATE) PARTITION BY KEY ALGORITHM = 1 (col3)`,
+			output: `create table tp4 (col1 int, col2 char(5), col3 date) partition by key algorithm = 1 (col3)`,
+		},
+		{
+			input:  `CREATE TABLE tp5 (col1 INT, col2 CHAR(5), col3 DATE) PARTITION BY LINEAR KEY ALGORITHM = 1 (col3) PARTITIONS 5;`,
+			output: `create table tp5 (col1 int, col2 char(5), col3 date) partition by linear key algorithm = 1 (col3) partitions 5`,
+		},
+		{
+			input:  `CREATE TABLE tp6 (col1 INT, col2 CHAR(5), col3 DATE) PARTITION BY KEY(col1, col2) PARTITIONS 4`,
+			output: `create table tp6 (col1 int, col2 char(5), col3 date) partition by key algorithm = 2 (col1, col2) partitions 4`,
+		},
+		{
+			input:  `CREATE TABLE tp7 (col1 INT NOT NULL, col2 DATE NOT NULL, col3 INT NOT NULL, col4 INT NOT NULL, PRIMARY KEY (col1, col2)) PARTITION BY KEY(col1) PARTITIONS 4`,
+			output: `create table tp7 (col1 int not null, col2 date not null, col3 int not null, col4 int not null, primary key (col1, col2)) partition by key algorithm = 2 (col1) partitions 4`,
+		},
+		{
+			input:  `CREATE TABLE tp9 (col1 INT, col2 CHAR(5)) PARTITION BY HASH(col1) PARTITIONS 4`,
+			output: `create table tp9 (col1 int, col2 char(5)) partition by hash (col1) partitions 4`,
+		},
+		{
+			input:  `CREATE TABLE tp10 (col1 INT, col2 CHAR(5), col3 DATETIME) PARTITION BY HASH (YEAR(col3));`,
+			output: `create table tp10 (col1 int, col2 char(5), col3 datetime(26)) partition by hash (year(col3))`,
+		},
+		{
+			input:  `CREATE TABLE tp11 (col1 INT, col2 CHAR(5), col3 DATE) PARTITION BY LINEAR HASH( YEAR(col3)) PARTITIONS 6`,
+			output: `create table tp11 (col1 int, col2 char(5), col3 date) partition by linear hash (year(col3)) partitions 6`,
+		},
+		{
+			input:  `CREATE TABLE tp12 (col1 INT NOT NULL, col2 DATE NOT NULL, col3 INT NOT NULL, col4 INT NOT NULL, PRIMARY KEY (col1, col2)) PARTITION BY HASH(col1) PARTITIONS 4`,
+			output: `create table tp12 (col1 int not null, col2 date not null, col3 int not null, col4 int not null, primary key (col1, col2)) partition by hash (col1) partitions 4`,
+		},
+		{
+			input: `CREATE TABLE tp13 (
+					id INT NOT NULL,
+					fname VARCHAR(30),
+					lname VARCHAR(30),
+					hired DATE NOT NULL DEFAULT '1970-01-01',
+					separated DATE NOT NULL DEFAULT '9999-12-31',
+					job_code INT,
+					store_id INT
+				)
+				PARTITION BY RANGE ( YEAR(separated) ) (
+					PARTITION p0 VALUES LESS THAN (1991),
+					PARTITION p1 VALUES LESS THAN (1996),
+					PARTITION p2 VALUES LESS THAN (2001),
+					PARTITION p3 VALUES LESS THAN MAXVALUE
+				);`,
+			output: `create table tp13 (id int not null, fname varchar(30), lname varchar(30), hired date not null default 1970-01-01, separated date not null default 9999-12-31, job_code int, store_id int) partition by range(year(separated)) (partition p0 values less than (1991), partition p1 values less than (1996), partition p2 values less than (2001), partition p3 values less than (MAXVALUE))`,
+		},
+		{
+			input: `CREATE TABLE tp14 (
+					a INT NOT NULL,
+					b INT NOT NULL
+				)
+				PARTITION BY RANGE COLUMNS(a,b) PARTITIONS 4 (
+					PARTITION p0 VALUES LESS THAN (10,5),
+					PARTITION p1 VALUES LESS THAN (20,10),
+					PARTITION p2 VALUES LESS THAN (50,20),
+					PARTITION p3 VALUES LESS THAN (65,30)
+				)`,
+			output: `create table tp14 (a int not null, b int not null) partition by range columns (a, b) partitions 4 (partition p0 values less than (10, 5), partition p1 values less than (20, 10), partition p2 values less than (50, 20), partition p3 values less than (65, 30))`,
+		},
+		{
+			input: `CREATE TABLE tp15 (
+					id   INT PRIMARY KEY,
+					name VARCHAR(35),
+					age INT unsigned
+				)
+				PARTITION BY LIST (id) (
+					PARTITION r0 VALUES IN (1, 5, 9, 13, 17, 21),
+					PARTITION r1 VALUES IN (2, 6, 10, 14, 18, 22),
+					PARTITION r2 VALUES IN (3, 7, 11, 15, 19, 23),
+					PARTITION r3 VALUES IN (4, 8, 12, 16, 20, 24)
+				);`,
+			output: `create table tp15 (id int primary key, name varchar(35), age int unsigned) partition by list(id) (partition r0 values in (1, 5, 9, 13, 17, 21), partition r1 values in (2, 6, 10, 14, 18, 22), partition r2 values in (3, 7, 11, 15, 19, 23), partition r3 values in (4, 8, 12, 16, 20, 24))`,
+		},
+		{
+			input: `CREATE TABLE tp16 (
+					a INT NULL,
+					b INT NULL
+				)
+				PARTITION BY LIST COLUMNS(a,b) (
+					PARTITION p0 VALUES IN( (0,0), (NULL,NULL) ),
+					PARTITION p1 VALUES IN( (0,1), (0,2), (0,3), (1,1), (1,2) ),
+					PARTITION p2 VALUES IN( (1,0), (2,0), (2,1), (3,0), (3,1) ),
+					PARTITION p3 VALUES IN( (1,3), (2,2), (2,3), (3,2), (3,3) )
+				)`,
+			output: `create table tp16 (a int null, b int null) partition by list columns (a, b) (partition p0 values in ((0, 0), (null, null)), partition p1 values in ((0, 1), (0, 2), (0, 3), (1, 1), (1, 2)), partition p2 values in ((1, 0), (2, 0), (2, 1), (3, 0), (3, 1)), partition p3 values in ((1, 3), (2, 2), (2, 3), (3, 2), (3, 3)))`,
+		},
+		{
+			input: `CREATE TABLE tp17 (
+					id INT NOT NULL PRIMARY KEY,
+					fname VARCHAR(30),
+					lname VARCHAR(30)
+				)
+				PARTITION BY RANGE (id) (
+					PARTITION p0 VALUES LESS THAN (6),
+					PARTITION p1 VALUES LESS THAN (11),
+					PARTITION p2 VALUES LESS THAN (16),
+					PARTITION p3 VALUES LESS THAN (21)
+				);`,
+			output: `create table tp17 (id int not null primary key, fname varchar(30), lname varchar(30)) partition by range(id) (partition p0 values less than (6), partition p1 values less than (11), partition p2 values less than (16), partition p3 values less than (21))`,
+		},
+		{
+			input: "grant all, all(a, b), create(a, b), select(a, b), super(a, b, c) on table db.a to u1, u2 with grant option",
+		}, {
+			input: "grant proxy on u1 to u2, u3, u4 with grant option",
+		}, {
+			input: "grant proxy on u1 to u2, u3, u4",
+		},
 		{
 			input: "grant r1, r2, r3 to u1, u1, u3",
 		}, {
@@ -1112,43 +1229,25 @@ var (
 		}, {
 			input: "alter account nihao admin_name 'admin' identified with '123'",
 		}, {
-			input: "create user if not exists abc1 identified by '123', abc2 identified by '234', abc3 default role de_role " +
-				"lock " +
-				"unlock " +
+			input: "create user if not exists abc1 identified by '123', abc2 identified by '234', abc3 identified by '111' default role def_role " +
 				"password expire " +
-				"password expire interval 3 day " +
-				"password history 4 " +
-				"password reuse interval 5 day " +
-				"password require current " +
-				"password require current default " +
-				"failed_login_attempts 6 " +
-				"password_lock_time 7 " +
 				"comment 'new comment'",
 		}, {
-			input: "create user if not exists abc1 identified by '123', abc2 identified by '234', abc3 default role de_role " +
+			input: "create user if not exists abc1 identified by '123', abc2 identified by '234', abc3 identified by '111' default role de_role " +
 				"lock " +
-				"unlock " +
-				"password expire " +
-				"password expire interval 3 day " +
-				"password history 4 " +
-				"password reuse interval 5 day " +
-				"password require current " +
-				"password require current default " +
-				"failed_login_attempts 6 " +
-				"password_lock_time 7 " +
 				"attribute 'new attribute'",
 		}, {
-			input: "create user if not exists abc1 identified by '123', abc2 identified by '234', abc3, " +
+			input: "create user if not exists abc1 identified by '123', abc2 identified by '234', abc3 identified by '111', " +
 				"abc4 identified by random password, " +
 				"abc5 identified with '345' " +
 				"default role de_role " +
 				"attribute 'new attribute'",
 		}, {
-			input: "create user if not exists abc1 " +
+			input: "create user if not exists abc1 identified by '111' " +
 				"default role de_role " +
 				"comment 'new comment'",
 		}, {
-			input: "create user if not exists abc1 " +
+			input: "create user if not exists abc1 identified by '111' " +
 				"default role de_role",
 		}, {
 			input: "create user if not exists abc1 identified by '123' " +
@@ -1160,8 +1259,10 @@ var (
 			input: "create user abc1 identified by '123' " +
 				"default role de_role",
 		}, {
-			input: "create user abc1 " +
+			input: "create user abc1 identified by '111' " +
 				"default role de_role",
+		}, {
+			input: "create user abc1 identified by 'a111'",
 		}, {
 			input: "drop user if exists abc1, abc2, abc3",
 		}, {
@@ -1169,58 +1270,33 @@ var (
 		}, {
 			input: "drop user abc1",
 		}, {
-			input: "alter user if exists abc1 identified by '123', abc2 identified by '234', abc3 " +
+			input: "alter user if exists abc1 identified by '123', abc2 identified by '234', abc3 identified by '123' " +
 				"default role de_role " +
 				"lock " +
-				"unlock " +
-				"password expire " +
-				"password expire interval 3 day " +
-				"password history 4 " +
-				"password reuse interval 5 day " +
-				"password require current " +
-				"password require current default " +
-				"failed_login_attempts 6 " +
-				"password_lock_time 7 " +
 				"comment 'new comment'",
 		}, {
-			input: "alter user if exists abc1 identified by '123', abc2 identified by '234', abc3 " +
-				"lock " +
+			input: "alter user if exists abc1 identified by '123', abc2 identified by '234', abc3 identified by '123' " +
+				"default role de_role " +
 				"unlock " +
-				"password expire " +
-				"password expire interval 3 day " +
-				"password history 4 " +
-				"password reuse interval 5 day " +
-				"password require current " +
-				"password require current default " +
-				"failed_login_attempts 6 " +
-				"password_lock_time 7 " +
 				"comment 'new comment'",
 		}, {
-			input: "alter user if exists abc1 identified by '123', abc2 identified by '234', abc3 " +
-				"lock " +
-				"unlock " +
+			input: "alter user if exists abc1 identified by '123', abc2 identified by '234', abc3 identified by '123' " +
+				"default role de_role " +
 				"password expire " +
-				"password expire interval 3 day " +
-				"password history 4 " +
-				"password reuse interval 5 day " +
-				"password require current " +
-				"password require current default " +
-				"failed_login_attempts 6 " +
-				"password_lock_time 7 " +
 				"attribute 'new attribute'",
 		}, {
-			input: "alter user if exists abc1 identified by '123', abc2 identified by '234', abc3 " +
+			input: "alter user if exists abc1 identified by '123', abc2 identified by '234', abc3 identified by '123' " +
 				"attribute 'new attribute'",
 		}, {
-			input: "alter user if exists abc1 identified by '123', abc2 identified by '234', abc3",
+			input: "alter user if exists abc1 identified by '123', abc2 identified by '234', abc3 identified by '123'",
 		}, {
 			input: "alter user if exists abc1 identified by '123', abc2 identified with '234', abc3 identified with 'SSL'",
 		}, {
 			input: "alter user if exists abc1 identified by '123'",
 		}, {
-			input: "alter user if exists abc1",
+			input: "alter user if exists abc1 identified by '123'",
 		}, {
-			input: "alter user abc1",
+			input: "alter user abc1 identified by '123'",
 		}, {
 			input: "create role if not exists role1, role2, role2",
 		}, {

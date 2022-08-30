@@ -16,6 +16,7 @@ package logservice
 
 import (
 	"github.com/lni/dragonboat/v4"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 )
 
@@ -23,8 +24,12 @@ type WrappedService struct {
 	svc *Service
 }
 
-func NewWrappedService(c Config, opts ...Option) (*WrappedService, error) {
-	svc, err := NewService(c, opts...)
+func NewWrappedService(
+	c Config,
+	fileService fileservice.FileService,
+	opts ...Option,
+) (*WrappedService, error) {
+	svc, err := NewService(c, fileService, opts...)
 	if err != nil {
 		return nil, err
 	}

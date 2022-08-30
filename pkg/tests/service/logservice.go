@@ -136,9 +136,11 @@ type logOptions []logservice.Option
 
 // newLogService constructs an instance of `LogService`.
 func newLogService(
-	cfg logservice.Config, opts logOptions,
+	cfg logservice.Config,
+	fs fileservice.FileService,
+	opts logOptions,
 ) (LogService, error) {
-	svc, err := logservice.NewWrappedService(cfg, opts...)
+	svc, err := logservice.NewWrappedService(cfg, fs, opts...)
 	if err != nil {
 		return nil, err
 	}

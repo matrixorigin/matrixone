@@ -16,7 +16,14 @@ service-addresses = [
 type = "tae"
 
 [[fileservice]]
-name = "s3"
-backend = "DISK"
-data-dir = "store"
+name = 'LOCAL'
+backend = 'MEM'
 
+[[fileservice]]
+name = 'S3'
+backend = 'MEM'
+
+[[fileservice]]
+name = "etl"
+backend = "DISK-ETL"
+data-dir = "store"
