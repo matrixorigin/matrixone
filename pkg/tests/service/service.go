@@ -34,6 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	logpb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 )
 
 var (
@@ -997,16 +998,16 @@ func (c *testCluster) initDNServices(fileservices *fileServices) []DNService {
 	for i := 0; i < batch; i++ {
 		cfg := c.dn.cfgs[i]
 		opt := c.dn.opts[i]
-		fsFactory := func(name string) (*fileservice.FileServices, error) {
-			index := i
-			return fileservice.NewFileServices(
-				"LOCAL",
-				fileservices.getLocalFileService(index),
-				fileservices.getS3FileService(),
-			)
+		fs, err := fileservice.NewFileServices(
+			"LOCAL",
+			fileservices.getLocalFileService(i),
+			fileservices.getS3FileService(),
+		)
+		if err != nil {
+			panic(err)
 		}
 
-		ds, err := newDNService(cfg, fsFactory, opt)
+		ds, err := newDNService(cfg, fs, opt)
 		require.NoError(c.t, err)
 
 		c.logger.Info(
@@ -1031,7 +1032,7 @@ func (c *testCluster) initLogServices() []LogService {
 	for i := 0; i < batch; i++ {
 		cfg := c.log.cfgs[i]
 		opt := c.log.opts[i]
-		ls, err := newLogService(cfg, opt)
+		ls, err := newLogService(cfg, testutil.NewFS(), opt)
 		require.NoError(c.t, err)
 
 		c.logger.Info(
