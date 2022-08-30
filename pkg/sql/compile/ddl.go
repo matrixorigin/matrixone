@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/errno"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/errors"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
@@ -33,7 +34,11 @@ func (s *Scope) CreateDatabase(c *Compile) error {
 		}
 		return errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("database %s already exists", dbName))
 	}
-	return c.e.Create(c.ctx, dbName, c.proc.TxnOperator)
+	err := c.e.Create(c.ctx, dbName, c.proc.TxnOperator)
+	if err != nil {
+		return err
+	}
+	return colexec.CreateAutoIncrTable(c.e, c.ctx, c.proc, dbName)
 }
 
 func (s *Scope) DropDatabase(c *Compile) error {
@@ -72,7 +77,10 @@ func (s *Scope) CreateTable(c *Compile) error {
 		}
 		return errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("table '%s' already exists", tblName))
 	}
-	return dbSource.Create(c.ctx, tblName, append(exeCols, exeDefs...))
+	if err := dbSource.Create(c.ctx, tblName, append(exeCols, exeDefs...)); err != nil {
+		return err
+	}
+	return colexec.CreateAutoIncrCol(dbSource, c.ctx, c.proc, planCols, tblName)
 }
 
 func (s *Scope) DropTable(c *Compile) error {
@@ -87,13 +95,17 @@ func (s *Scope) DropTable(c *Compile) error {
 		return err
 	}
 	tblName := qry.GetTable()
-	if _, err := dbSource.Relation(c.ctx, tblName); err != nil {
+	var rel engine.Relation
+	if rel, err = dbSource.Relation(c.ctx, tblName); err != nil {
 		if qry.GetIfExists() {
 			return nil
 		}
 		return err
 	}
-	return dbSource.Delete(c.ctx, tblName)
+	if err := dbSource.Delete(c.ctx, tblName); err != nil {
+		return err
+	}
+	return colexec.DeleteAutoIncrCol(rel, dbSource, c.ctx, c.proc, rel.GetTableID(c.ctx))
 }
 
 func planDefsToExeDefs(planDefs []*plan.TableDef_DefType) []engine.TableDef {
@@ -151,9 +163,10 @@ func planColsToExeCols(planCols []*plan.ColDef) []engine.TableDef {
 					Scale:     colTyp.GetScale(),
 					Size:      colTyp.GetSize(),
 				},
-				Default: planCols[i].GetDefault(),
-				Primary: col.GetPrimary(),
-				Comment: col.GetComment(),
+				Default:       planCols[i].GetDefault(),
+				Primary:       col.GetPrimary(),
+				Comment:       col.GetComment(),
+				AutoIncrement: col.GetAutoIncrement(),
 			},
 		}
 	}
