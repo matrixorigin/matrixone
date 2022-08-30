@@ -88,7 +88,7 @@ func (c *Compile) Run(_ uint64) (err error) {
 		return nil
 	}
 
-	//PrintScope(nil, []*Scope{c.scope})
+	PrintScope(nil, []*Scope{c.scope})
 
 	switch c.scope.Magic {
 	case Normal:
@@ -553,33 +553,31 @@ func (c *Compile) compileProjection(n *plan.Node, ss []*Scope) []*Scope {
 
 func (c *Compile) compileUnion(n *plan.Node, ss []*Scope, children []*Scope, ns []*plan.Node) []*Scope {
 	ss = append(ss, children...)
-	rs := c.newScopeList(validScopeCount(ss))
-	j := 0
-	for i := range ss {
-		if !ss[i].IsEnd {
-			ss[i].appendInstruction(vm.Instruction{
-				Op:  vm.Dispatch,
-				Arg: constructDispatch(true, extraRegisters(rs, j)),
-			})
-			j++
-			ss[i].IsEnd = true
-		}
-	}
+	rs := c.newScopeList(1)
 	gn := new(plan.Node)
 	gn.GroupBy = make([]*plan.Expr, len(n.ProjectList))
 	copy(gn.GroupBy, n.ProjectList)
 	for i := range rs {
+		ch := c.newMergeScope(dupScopeList(ss))
+		ch.appendInstruction(vm.Instruction{
+			Op: vm.Connector,
+			Arg: &connector.Argument{
+				Reg: rs[i].Proc.Reg.MergeReceivers[0],
+			},
+		})
+		ch.IsEnd = true
+		rs[i].PreScopes = []*Scope{ch}
 		rs[i].Instructions = append(rs[i].Instructions, vm.Instruction{
 			Op:  vm.Group,
 			Idx: c.anal.curr,
 			Arg: constructGroup(gn, n, i, len(rs), true),
 		})
 	}
-	return []*Scope{c.newMergeScope(append(rs, ss...))}
+	return rs
 }
 
 func (c *Compile) compileMinusAndIntersect(n *plan.Node, ss []*Scope, children []*Scope, nodeType plan.Node_NodeType) []*Scope {
-	rs, left, right := c.newJoinScopeListWithBucket(c.newScopeList(2), ss, children)
+	rs := c.newJoinScopeListWithBucket(c.newScopeList(2), ss, children)
 	switch nodeType {
 	case plan.Node_MINUS:
 		for i := range rs {
@@ -607,8 +605,7 @@ func (c *Compile) compileMinusAndIntersect(n *plan.Node, ss []*Scope, children [
 		}
 
 	}
-
-	return []*Scope{c.newMergeScope(append(append(rs, left), right))}
+	return rs
 }
 
 func (c *Compile) compileUnionAll(n *plan.Node, ss []*Scope, children []*Scope) []*Scope {
@@ -618,7 +615,7 @@ func (c *Compile) compileUnionAll(n *plan.Node, ss []*Scope, children []*Scope) 
 }
 
 func (c *Compile) compileJoin(n, right *plan.Node, ss []*Scope, children []*Scope, joinTyp plan.Node_JoinFlag) []*Scope {
-	rs, chp := c.newJoinScopeList(ss, children)
+	rs := c.newJoinScopeList(ss, children)
 	isEq := isEquiJoin(n.OnList)
 	typs := make([]types.Type, len(right.ProjectList))
 	for i, expr := range right.ProjectList {
@@ -719,7 +716,7 @@ func (c *Compile) compileJoin(n, right *plan.Node, ss []*Scope, children []*Scop
 	default:
 		panic(errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("join typ '%v' not support now", n.JoinType)))
 	}
-	return append(rs, chp)
+	return rs
 }
 
 func (c *Compile) compileSort(n *plan.Node, ss []*Scope) []*Scope {
@@ -899,38 +896,42 @@ func (c *Compile) newScopeListWithNode(mcpu, childrenCount int) []*Scope {
 	return ss
 }
 
-func (c *Compile) newJoinScopeListWithBucket(rs, ss, children []*Scope) ([]*Scope, *Scope, *Scope) {
-	left := c.newMergeScope(ss)
-	right := c.newMergeScope(children)
-	leftRegs := extraRegisters(rs, 0)
-	left.appendInstruction(vm.Instruction{
-		Op:  vm.Dispatch,
-		Arg: constructDispatch(true, leftRegs),
-	})
-	rightRegs := extraRegisters(rs, 1)
-	right.appendInstruction(vm.Instruction{
-		Op:  vm.Dispatch,
-		Arg: constructDispatch(true, rightRegs),
-	})
-	left.IsEnd = true
-	right.IsEnd = true
-	return rs, left, right
+func (c *Compile) newJoinScopeListWithBucket(rs, ss, children []*Scope) []*Scope {
+	for i := range rs {
+		left := c.newMergeScope(dupScopeList(ss))
+		right := c.newMergeScope(dupScopeList(children))
+		rs[i].PreScopes = []*Scope{left, right}
+		left.appendInstruction(vm.Instruction{
+			Op: vm.Connector,
+			Arg: &connector.Argument{
+				Reg: rs[i].Proc.Reg.MergeReceivers[0],
+			},
+		})
+		right.appendInstruction(vm.Instruction{
+			Op: vm.Connector,
+			Arg: &connector.Argument{
+				Reg: rs[i].Proc.Reg.MergeReceivers[1],
+			},
+		})
+		left.IsEnd = true
+		right.IsEnd = true
+	}
+	return rs
 }
 
-func (c *Compile) newJoinScopeList(ss []*Scope, children []*Scope) ([]*Scope, *Scope) {
-	chp := c.newMergeScope(children)
-	chp.IsEnd = true
+func (c *Compile) newJoinScopeList(ss []*Scope, children []*Scope) []*Scope {
 	rs := make([]*Scope, len(ss))
 	for i := range ss {
 		if ss[i].IsEnd {
 			rs[i] = ss[i]
 			continue
 		}
+		chp := c.newMergeScope(dupScopeList(children))
 		rs[i] = new(Scope)
 		rs[i].Magic = Remote
 		rs[i].IsJoin = true
 		rs[i].NodeInfo = ss[i].NodeInfo
-		rs[i].PreScopes = []*Scope{ss[i]}
+		rs[i].PreScopes = []*Scope{ss[i], chp}
 		rs[i].Proc = process.NewWithAnalyze(c.proc, c.ctx, 2, c.anal.Nodes())
 		ss[i].appendInstruction(vm.Instruction{
 			Op: vm.Connector,
@@ -938,12 +939,15 @@ func (c *Compile) newJoinScopeList(ss []*Scope, children []*Scope) ([]*Scope, *S
 				Reg: rs[i].Proc.Reg.MergeReceivers[0],
 			},
 		})
+		chp.appendInstruction(vm.Instruction{
+			Op: vm.Connector,
+			Arg: &connector.Argument{
+				Reg: rs[i].Proc.Reg.MergeReceivers[1],
+			},
+		})
+		chp.IsEnd = true
 	}
-	chp.Instructions = append(chp.Instructions, vm.Instruction{
-		Op:  vm.Dispatch,
-		Arg: constructDispatch(true, extraRegisters(rs, 1)),
-	})
-	return rs, chp
+	return rs
 }
 
 func (c *Compile) newLeftScope(s *Scope, ss []*Scope) *Scope {
@@ -1076,6 +1080,8 @@ func joinType(n *plan.Node, ns []*plan.Node) (bool, plan.Node_JoinFlag) {
 		return true, plan.Node_LEFT
 	case plan.Node_SINGLE:
 		return false, plan.Node_SINGLE
+	case plan.Node_MARK:
+		return false, plan.Node_MARK
 	default:
 		panic(errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("join typ '%v' not support now", n.JoinType)))
 	}

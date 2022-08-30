@@ -35,9 +35,7 @@ DEALLOCATE PREPARE s1;
 
 PREPARE s2 FROM 'SELECT * FROM numbers WHERE si=?';
 EXECUTE s2 USING @ui_min;
--- @bvt:issue#3588
 EXECUTE s2 USING @ui_max;
--- @bvt:issue
 EXECUTE s2 USING @si_min;
 EXECUTE s2 USING @si_max;
 
@@ -438,9 +436,7 @@ execute s4 using @a2_val;
 execute s5 using @min;
 execute s6 using @min;
 
--- @bvt:issue#4528
 execute s7 using @a2_val;
--- @bvt:issue
 
 execute s8 using @min;
 execute s9 using @min;
@@ -494,9 +490,7 @@ DEALLOCATE PREPARE s;
 
 PREPARE s FROM 'SELECT 0 + ?';
 
--- @bvt:issue#3588
 EXECUTE s USING @maxint;
--- @bvt:issue
 DEALLOCATE PREPARE s;
 
 PREPARE s FROM 'SELECT concat(?,"")';

@@ -61,12 +61,12 @@ a	big
 1	18446744073709551613
 1	18446744073709551614
 1	18446744073709551615
-select * from t1 order by big limit 1,3;
+select * from t1 order by 1,2 asc limit 1,3;
 a	big
 1	18446744073709551612
 1	18446744073709551613
 1	18446744073709551614
-select * from t1 order by big limit 3 offset 1;
+select * from t1 order by big asc limit 3 offset 1;
 a	big
 1	18446744073709551612
 1	18446744073709551613
@@ -119,7 +119,7 @@ drop table if exists t1;
 drop table if exists t2;
 create table t1 (sint64 bigint not null);
 insert into t1 values (-9223372036854775808);
-select * from t1 order by abs(1);
+select * from t1 order by abs(1) desc;
 sint64
 -9223372036854775808
 drop table t1;

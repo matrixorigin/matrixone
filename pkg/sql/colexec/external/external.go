@@ -26,8 +26,8 @@ import (
 	"fmt"
 	"io"
 	"math"
-	"os"
 	"path"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -50,7 +50,7 @@ func String(arg any, buf *bytes.Buffer) {
 	buf.WriteString("sql output")
 }
 
-func Prepare(_ *process.Process, arg any) error {
+func Prepare(proc *process.Process, arg any) error {
 	param := arg.(*Argument).Es
 	param.batchSize = 40000
 	param.extern = &tree.ExternParam{}
@@ -59,9 +59,10 @@ func Prepare(_ *process.Process, arg any) error {
 		param.End = true
 		return err
 	}
+	param.extern.FileService = proc.FileService
 	param.IgnoreLineTag = int(param.extern.Tail.IgnoredLines)
 	param.IgnoreLine = param.IgnoreLineTag
-	fileList, err := getFileDataList(param.extern)
+	fileList, err := ReadDir(param.extern)
 	if err != nil {
 		param.End = true
 		return err
@@ -92,82 +93,76 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 	return false, nil
 }
 
-func ReadFromS3(param *tree.ExternParam) ([]string, error) {
-	var config fileservice.S3Config
-	config.Bucket = param.S3Param.Config.Bucket
-	config.Endpoint = param.S3Param.Config.Endpoint
+func ReadDir(param *tree.ExternParam) (fileList []string, err error) {
+	dir, pattern := path.Split(param.Filepath)
 
-	if param.S3Param.APIKey != "" {
-		os.Setenv("AWS_REGION", param.S3Param.Region)
-		os.Setenv("AWS_ACCESS_KEY_ID", param.S3Param.APIKey)
-		os.Setenv("AWS_SECRET_ACCESS_KEY", param.S3Param.APISecret)
-	}
-
-	fs, err := fileservice.NewS3FS(
-		"",
-		"s3",
-		config.Endpoint,
-		config.Bucket,
-		config.KeyPrefix,
-		128*1024,
-	)
+	var fs fileservice.ETLFileService
+	var readPath string
+	fsPath, err := fileservice.ParsePath(dir)
 	if err != nil {
 		return nil, err
 	}
-
-	index := strings.LastIndex(param.Filepath, "/")
-	dir, file := "", param.Filepath
-	if index != -1 {
-		dir = string([]byte(param.Filepath)[0:index])
-		file = string([]byte(param.Filepath)[index+1:])
-	}
-
-	ctx := context.Background()
-	DirEntry, err := fs.List(ctx, dir)
-	if err != nil {
-		return nil, err
-	}
-
-	var fileList []string
-	for _, entry := range DirEntry {
-		matched, _ := path.Match(file, entry.Name)
-		if matched {
-			if dir != "" {
-				fileList = append(fileList, dir+"/"+entry.Name)
-			} else {
-				fileList = append(fileList, entry.Name)
-			}
+	if fsPath.Service == "" {
+		// no service, create ETL fs
+		fs, err = fileservice.NewLocalETLFS("etl", dir)
+		if err != nil {
+			return nil, err
 		}
+		readPath = ""
+	} else {
+		// get etl fs
+		fs, err = fileservice.Get[fileservice.ETLFileService](param.FileService, fsPath.Service)
+		if err != nil {
+			return nil, err
+		}
+		readPath = dir
 	}
-	return fileList, nil
+
+	ctx := context.TODO()
+	entries, err := fs.List(ctx, readPath)
+	if err != nil {
+		return nil, err
+	}
+
+	for _, entry := range entries {
+		matched, _ := path.Match(pattern, entry.Name)
+		if !matched {
+			continue
+		}
+		fileList = append(fileList, path.Join(dir, entry.Name))
+	}
+
+	return
 }
 
-func ReadFromS3File(param *tree.ExternParam) (io.ReadCloser, error) {
-	var config fileservice.S3Config
-	config.Bucket = param.S3Param.Config.Bucket
-	config.Endpoint = param.S3Param.Config.Endpoint
+func ReadFile(param *tree.ExternParam) (io.ReadCloser, error) {
 
-	if param.S3Param.APIKey != "" {
-		os.Setenv("AWS_REGION", param.S3Param.Region)
-		os.Setenv("AWS_ACCESS_KEY_ID", param.S3Param.APIKey)
-		os.Setenv("AWS_SECRET_ACCESS_KEY", param.S3Param.APISecret)
-	}
-
-	fs, err := fileservice.NewS3FS(
-		"",
-		"s3",
-		config.Endpoint,
-		config.Bucket,
-		config.KeyPrefix,
-		128*1024,
-	)
+	var fs fileservice.ETLFileService
+	var readPath string
+	fsPath, err := fileservice.ParsePath(param.Filepath)
 	if err != nil {
 		return nil, err
+	}
+	if fsPath.Service == "" {
+		// no service, create ETL fs
+		dir, file := filepath.Split(param.Filepath)
+		fs, err = fileservice.NewLocalETLFS("etl", dir)
+		if err != nil {
+			return nil, err
+		}
+		readPath = file
+	} else {
+		// get etl fs
+		fs, err = fileservice.Get[fileservice.ETLFileService](param.FileService, fsPath.Service)
+		if err != nil {
+			return nil, err
+		}
+		readPath = fsPath.Full
 	}
 
 	var r io.ReadCloser
 	vec := fileservice.IOVector{
-		FilePath: param.Filepath,
+		FilePath: readPath,
 		Entries: []fileservice.IOEntry{
 			0: {
 				Offset:            0,
@@ -176,139 +171,12 @@ func ReadFromS3File(param *tree.ExternParam) (io.ReadCloser, error) {
 			},
 		},
 	}
-	ctx := context.Background()
+	ctx := context.TODO()
 	err = fs.Read(ctx, &vec)
 	if err != nil {
 		return nil, err
 	}
 	return r, nil
-}
-
-func ReadFromLocal(param *tree.ExternParam) ([]string, error) {
-	index := strings.LastIndex(param.Filepath, "/")
-	dir, file := "", param.Filepath
-	if index != -1 {
-		dir = string([]byte(param.Filepath)[0:index])
-		file = string([]byte(param.Filepath)[index+1:])
-	}
-
-	fs, err := fileservice.NewLocalETLFS("etl", dir)
-	if err != nil {
-		return nil, err
-	}
-
-	ctx := context.Background()
-	DirEntry, err := fs.List(ctx, "")
-	if err != nil {
-		return nil, err
-	}
-
-	var fileList []string
-	for _, entry := range DirEntry {
-		matched, _ := path.Match(file, entry.Name)
-		if matched {
-			fileList = append(fileList, dir+"/"+entry.Name)
-		}
-	}
-	return fileList, nil
-}
-
-func ReadFromLocalFile(param *tree.ExternParam) (io.ReadCloser, error) {
-	var r io.ReadCloser
-	index := strings.LastIndex(param.Filepath, "/")
-	dir, file := "", param.Filepath
-	if index != -1 {
-		dir = string([]byte(param.Filepath)[0:index])
-		file = string([]byte(param.Filepath)[index+1:])
-	}
-
-	fs, err := fileservice.NewLocalETLFS("etl", dir)
-	if err != nil {
-		return nil, err
-	}
-	ctx := context.Background()
-	vec := fileservice.IOVector{
-		FilePath: file,
-		Entries: []fileservice.IOEntry{
-			0: {
-				Offset:            0,
-				Size:              -1,
-				ReadCloserForRead: &r,
-			},
-		},
-	}
-	err = fs.Read(ctx, &vec)
-	if err != nil {
-		return nil, err
-	}
-	return r, nil
-}
-
-func InitS3Param(param *tree.ExternParam) error {
-	param.S3Param = &tree.S3Parameter{}
-	for i := 0; i < len(param.S3option); i += 2 {
-		switch strings.ToLower(param.S3option[i]) {
-		case "endpoint":
-			param.S3Param.Config.Endpoint = param.S3option[i+1]
-		case "region":
-			param.S3Param.Region = param.S3option[i+1]
-		case "access_key_id":
-			param.S3Param.APIKey = param.S3option[i+1]
-		case "secret_access_key":
-			param.S3Param.APISecret = param.S3option[i+1]
-		case "bucket":
-			param.S3Param.Config.Bucket = param.S3option[i+1]
-		case "filepath":
-			param.Filepath = param.S3option[i+1]
-		case "compression":
-			param.CompressType = param.S3option[i+1]
-		default:
-			return fmt.Errorf("the keyword '%s' is not support", strings.ToLower(param.S3option[i]))
-		}
-	}
-	return nil
-}
-
-func getFileDataList(param *tree.ExternParam) ([]string, error) {
-	switch param.ScanType {
-	case tree.LOCAL:
-		fileList, err := ReadFromLocal(param)
-		if err != nil {
-			return nil, err
-		}
-		return fileList, nil
-	case tree.S3, tree.MinIO:
-		err := InitS3Param(param)
-		if err != nil {
-			return nil, err
-		}
-		fileList, err := ReadFromS3(param)
-		if err != nil {
-			return nil, err
-		}
-		return fileList, nil
-	default:
-		return nil, errors.New("the extern file type is not support now")
-	}
-}
-
-func getFileDataReader(param *tree.ExternParam) (io.ReadCloser, error) {
-	switch param.ScanType {
-	case tree.LOCAL:
-		reader, err := ReadFromLocalFile(param)
-		if err != nil {
-			return nil, err
-		}
-		return reader, nil
-	case tree.S3, tree.MinIO:
-		reader, err := ReadFromS3File(param)
-		if err != nil {
-			return nil, err
-		}
-		return reader, nil
-	default:
-		return nil, errors.New("the extern file type is not support now")
-	}
 }
 
 func getCompressType(param *tree.ExternParam) string {
@@ -452,7 +320,7 @@ func GetBatchData(param *ExternalParam, plh *ParseLineHandler, proc *process.Pro
 	for rowIdx := 0; rowIdx < plh.batchSize; rowIdx++ {
 		Line = plh.simdCsvLineArray[rowIdx]
 		if len(Line) < len(param.Attrs) {
-			return nil, errors.New("the table colnum is larger than input data colnum")
+			return nil, errors.New("the table column is larger than input data column")
 		}
 		for colIdx := range param.Attrs {
 			field := Line[param.Name2ColIndex[param.Attrs[colIdx]]]
@@ -475,7 +343,7 @@ func GetBatchData(param *ExternalParam, plh *ParseLineHandler, proc *process.Pro
 					} else if field == "false" || field == "0" {
 						cols[rowIdx] = false
 					} else {
-						return nil, fmt.Errorf("the input value '%s' is not bool type for colnum %d", field, colIdx)
+						return nil, fmt.Errorf("the input value '%s' is not bool type for column %d", field, colIdx)
 					}
 				}
 			case types.T_int8:
@@ -487,14 +355,14 @@ func GetBatchData(param *ExternalParam, plh *ParseLineHandler, proc *process.Pro
 						d, err := strconv.ParseInt(field, 10, 8)
 						if err != nil {
 							logutil.Errorf("parse field[%v] err:%v", field, err)
-							return nil, fmt.Errorf("the input value '%v' is not int8 type for colnum %d", field, colIdx)
+							return nil, fmt.Errorf("the input value '%v' is not int8 type for column %d", field, colIdx)
 						}
 						cols[rowIdx] = int8(d)
 					} else {
 						d, err := strconv.ParseFloat(field, 64)
 						if err != nil || d < math.MinInt8 || d > math.MaxInt8 {
 							logutil.Errorf("parse field[%v] err:%v", field, err)
-							return nil, fmt.Errorf("the input value '%v' is not int8 type for colnum %d", field, colIdx)
+							return nil, fmt.Errorf("the input value '%v' is not int8 type for column %d", field, colIdx)
 						}
 						cols[rowIdx] = int8(d)
 					}
@@ -508,14 +376,14 @@ func GetBatchData(param *ExternalParam, plh *ParseLineHandler, proc *process.Pro
 						d, err := strconv.ParseInt(field, 10, 16)
 						if err != nil {
 							logutil.Errorf("parse field[%v] err:%v", field, err)
-							return nil, fmt.Errorf("the input value '%v' is not int16 type for colnum %d", field, colIdx)
+							return nil, fmt.Errorf("the input value '%v' is not int16 type for column %d", field, colIdx)
 						}
 						cols[rowIdx] = int16(d)
 					} else {
 						d, err := strconv.ParseFloat(field, 64)
 						if err != nil || d < math.MinInt16 || d > math.MaxInt16 {
 							logutil.Errorf("parse field[%v] err:%v", field, err)
-							return nil, fmt.Errorf("the input value '%v' is not int16 type for colnum %d", field, colIdx)
+							return nil, fmt.Errorf("the input value '%v' is not int16 type for column %d", field, colIdx)
 						}
 						cols[rowIdx] = int16(d)
 					}
@@ -529,14 +397,14 @@ func GetBatchData(param *ExternalParam, plh *ParseLineHandler, proc *process.Pro
 						d, err := strconv.ParseInt(field, 10, 32)
 						if err != nil {
 							logutil.Errorf("parse field[%v] err:%v", field, err)
-							return nil, fmt.Errorf("the input value '%v' is not int32 type for colnum %d", field, colIdx)
+							return nil, fmt.Errorf("the input value '%v' is not int32 type for column %d", field, colIdx)
 						}
 						cols[rowIdx] = int32(d)
 					} else {
 						d, err := strconv.ParseFloat(field, 64)
 						if err != nil || d < math.MinInt32 || d > math.MaxInt32 {
 							logutil.Errorf("parse field[%v] err:%v", field, err)
-							return nil, fmt.Errorf("the input value '%v' is not int32 type for colnum %d", field, colIdx)
+							return nil, fmt.Errorf("the input value '%v' is not int32 type for column %d", field, colIdx)
 						}
 						cols[rowIdx] = int32(d)
 					}
@@ -550,14 +418,14 @@ func GetBatchData(param *ExternalParam, plh *ParseLineHandler, proc *process.Pro
 						d, err := strconv.ParseInt(field, 10, 64)
 						if err != nil {
 							logutil.Errorf("parse field[%v] err:%v", field, err)
-							return nil, fmt.Errorf("the input value '%v' is not int64 type for colnum %d", field, colIdx)
+							return nil, fmt.Errorf("the input value '%v' is not int64 type for column %d", field, colIdx)
 						}
 						cols[rowIdx] = d
 					} else {
 						d, err := strconv.ParseFloat(field, 64)
 						if err != nil || d < math.MinInt64 || d > math.MaxInt64 {
 							logutil.Errorf("parse field[%v] err:%v", field, err)
-							return nil, fmt.Errorf("the input value '%v' is not int64 type for colnum %d", field, colIdx)
+							return nil, fmt.Errorf("the input value '%v' is not int64 type for column %d", field, colIdx)
 						}
 						cols[rowIdx] = int64(d)
 					}
@@ -571,14 +439,14 @@ func GetBatchData(param *ExternalParam, plh *ParseLineHandler, proc *process.Pro
 						d, err := strconv.ParseUint(field, 10, 8)
 						if err != nil {
 							logutil.Errorf("parse field[%v] err:%v", field, err)
-							return nil, fmt.Errorf("the input value '%v' is not uint8 type for colnum %d", field, colIdx)
+							return nil, fmt.Errorf("the input value '%v' is not uint8 type for column %d", field, colIdx)
 						}
 						cols[rowIdx] = uint8(d)
 					} else {
 						d, err := strconv.ParseFloat(field, 64)
 						if err != nil || d < 0 || d > math.MaxUint8 {
 							logutil.Errorf("parse field[%v] err:%v", field, err)
-							return nil, fmt.Errorf("the input value '%v' is not uint8 type for colnum %d", field, colIdx)
+							return nil, fmt.Errorf("the input value '%v' is not uint8 type for column %d", field, colIdx)
 						}
 						cols[rowIdx] = uint8(d)
 					}
@@ -592,14 +460,14 @@ func GetBatchData(param *ExternalParam, plh *ParseLineHandler, proc *process.Pro
 						d, err := strconv.ParseUint(field, 10, 16)
 						if err != nil {
 							logutil.Errorf("parse field[%v] err:%v", field, err)
-							return nil, fmt.Errorf("the input value '%v' is not uint16 type for colnum %d", field, colIdx)
+							return nil, fmt.Errorf("the input value '%v' is not uint16 type for column %d", field, colIdx)
 						}
 						cols[rowIdx] = uint16(d)
 					} else {
 						d, err := strconv.ParseFloat(field, 64)
 						if err != nil || d < 0 || d > math.MaxUint16 {
 							logutil.Errorf("parse field[%v] err:%v", field, err)
-							return nil, fmt.Errorf("the input value '%v' is not uint16 type for colnum %d", field, colIdx)
+							return nil, fmt.Errorf("the input value '%v' is not uint16 type for column %d", field, colIdx)
 						}
 						cols[rowIdx] = uint16(d)
 					}
@@ -613,14 +481,14 @@ func GetBatchData(param *ExternalParam, plh *ParseLineHandler, proc *process.Pro
 						d, err := strconv.ParseUint(field, 10, 32)
 						if err != nil {
 							logutil.Errorf("parse field[%v] err:%v", field, err)
-							return nil, fmt.Errorf("the input value '%v' is not uint32 type for colnum %d", field, colIdx)
+							return nil, fmt.Errorf("the input value '%v' is not uint32 type for column %d", field, colIdx)
 						}
 						cols[rowIdx] = uint32(d)
 					} else {
 						d, err := strconv.ParseFloat(field, 64)
 						if err != nil || d < 0 || d > math.MaxUint32 {
 							logutil.Errorf("parse field[%v] err:%v", field, err)
-							return nil, fmt.Errorf("the input value '%v' is not uint32 type for colnum %d", field, colIdx)
+							return nil, fmt.Errorf("the input value '%v' is not uint32 type for column %d", field, colIdx)
 						}
 						cols[rowIdx] = uint32(d)
 					}
@@ -634,14 +502,14 @@ func GetBatchData(param *ExternalParam, plh *ParseLineHandler, proc *process.Pro
 						d, err := strconv.ParseUint(field, 10, 64)
 						if err != nil {
 							logutil.Errorf("parse field[%v] err:%v", field, err)
-							return nil, fmt.Errorf("the input value '%v' is not uint64 type for colnum %d", field, colIdx)
+							return nil, fmt.Errorf("the input value '%v' is not uint64 type for column %d", field, colIdx)
 						}
 						cols[rowIdx] = d
 					} else {
 						d, err := strconv.ParseFloat(field, 64)
 						if err != nil || d < 0 || d > math.MaxUint64 {
 							logutil.Errorf("parse field[%v] err:%v", field, err)
-							return nil, fmt.Errorf("the input value '%v' is not uint64 type for colnum %d", field, colIdx)
+							return nil, fmt.Errorf("the input value '%v' is not uint64 type for column %d", field, colIdx)
 						}
 						cols[rowIdx] = uint64(d)
 					}
@@ -654,7 +522,7 @@ func GetBatchData(param *ExternalParam, plh *ParseLineHandler, proc *process.Pro
 					d, err := strconv.ParseFloat(field, 32)
 					if err != nil {
 						logutil.Errorf("parse field[%v] err:%v", field, err)
-						return nil, fmt.Errorf("the input value '%v' is not float32 type for colnum %d", field, colIdx)
+						return nil, fmt.Errorf("the input value '%v' is not float32 type for column %d", field, colIdx)
 					}
 					cols[rowIdx] = float32(d)
 				}
@@ -666,11 +534,11 @@ func GetBatchData(param *ExternalParam, plh *ParseLineHandler, proc *process.Pro
 					d, err := strconv.ParseFloat(field, 32)
 					if err != nil {
 						logutil.Errorf("parse field[%v] err:%v", field, err)
-						return nil, fmt.Errorf("the input value '%v' is not float64 type for colnum %d", field, colIdx)
+						return nil, fmt.Errorf("the input value '%v' is not float64 type for column %d", field, colIdx)
 					}
 					cols[rowIdx] = d
 				}
-			case types.T_char, types.T_varchar, types.T_json:
+			case types.T_char, types.T_varchar:
 				vBytes := vec.Col.(*types.Bytes)
 				if isNullOrEmpty {
 					nulls.Add(vec.Nsp, uint64(rowIdx))
@@ -678,6 +546,27 @@ func GetBatchData(param *ExternalParam, plh *ParseLineHandler, proc *process.Pro
 					vBytes.Offsets[rowIdx] = uint32(len(vBytes.Data))
 					vBytes.Data = append(vBytes.Data, field...)
 					vBytes.Lengths[rowIdx] = uint32(len(field))
+				}
+			case types.T_json:
+				vBytes := vec.Col.(*types.Bytes)
+				if isNullOrEmpty {
+					nulls.Add(vec.Nsp, uint64(rowIdx))
+					vBytes.Offsets[rowIdx] = uint32(len(vBytes.Data))
+					vBytes.Lengths[rowIdx] = uint32(len(field))
+				} else {
+					vBytes.Offsets[rowIdx] = uint32(len(vBytes.Data))
+					byteJson, err := types.ParseStringToByteJson(field)
+					if err != nil {
+						logutil.Errorf("parse field[%v] err:%v", field, err)
+						return nil, fmt.Errorf("the input value '%v' is not json type for column %d", field, colIdx)
+					}
+					jsonBytes, err := types.EncodeJson(byteJson)
+					if err != nil {
+						logutil.Errorf("encode json[%v] err:%v", field, err)
+						return nil, fmt.Errorf("the input value '%v' is not json type for column %d", field, colIdx)
+					}
+					vBytes.Data = append(vBytes.Data, jsonBytes...)
+					vBytes.Lengths[rowIdx] = uint32(len(jsonBytes))
 				}
 			case types.T_date:
 				cols := vec.Col.([]types.Date)
@@ -687,7 +576,7 @@ func GetBatchData(param *ExternalParam, plh *ParseLineHandler, proc *process.Pro
 					d, err := types.ParseDate(field)
 					if err != nil {
 						logutil.Errorf("parse field[%v] err:%v", field, err)
-						return nil, fmt.Errorf("the input value '%v' is not Date type for colnum %d", field, colIdx)
+						return nil, fmt.Errorf("the input value '%v' is not Date type for column %d", field, colIdx)
 					}
 					cols[rowIdx] = d
 				}
@@ -699,7 +588,7 @@ func GetBatchData(param *ExternalParam, plh *ParseLineHandler, proc *process.Pro
 					d, err := types.ParseDatetime(field, vec.Typ.Precision)
 					if err != nil {
 						logutil.Errorf("parse field[%v] err:%v", field, err)
-						return nil, fmt.Errorf("the input value '%v' is not Datetime type for colnum %d", field, colIdx)
+						return nil, fmt.Errorf("the input value '%v' is not Datetime type for column %d", field, colIdx)
 					}
 					cols[rowIdx] = d
 				}
@@ -713,7 +602,7 @@ func GetBatchData(param *ExternalParam, plh *ParseLineHandler, proc *process.Pro
 						// we tolerate loss of digits.
 						if !moerr.IsMoErrCode(err, moerr.DATA_TRUNCATED) {
 							logutil.Errorf("parse field[%v] err:%v", field, err)
-							return nil, fmt.Errorf("the input value '%v' is not Decimal64 type for colnum %d", field, colIdx)
+							return nil, fmt.Errorf("the input value '%v' is not Decimal64 type for column %d", field, colIdx)
 						}
 					}
 					cols[rowIdx] = d
@@ -728,7 +617,7 @@ func GetBatchData(param *ExternalParam, plh *ParseLineHandler, proc *process.Pro
 						// we tolerate loss of digits.
 						if !moerr.IsMoErrCode(err, moerr.DATA_TRUNCATED) {
 							logutil.Errorf("parse field[%v] err:%v", field, err)
-							return nil, fmt.Errorf("the input value '%v' is not Decimal128 type for colnum %d", field, colIdx)
+							return nil, fmt.Errorf("the input value '%v' is not Decimal128 type for column %d", field, colIdx)
 						}
 					}
 					cols[rowIdx] = d
@@ -741,7 +630,7 @@ func GetBatchData(param *ExternalParam, plh *ParseLineHandler, proc *process.Pro
 					d, err := types.ParseTimestamp(time.UTC, field, vec.Typ.Precision)
 					if err != nil {
 						logutil.Errorf("parse field[%v] err:%v", field, err)
-						return nil, fmt.Errorf("the input value '%v' is not Timestamp type for colnum %d", field, colIdx)
+						return nil, fmt.Errorf("the input value '%v' is not Timestamp type for column %d", field, colIdx)
 					}
 					cols[rowIdx] = d
 				}
@@ -767,7 +656,7 @@ func GetBatchData(param *ExternalParam, plh *ParseLineHandler, proc *process.Pro
 // get file reader from external file
 func GetSimdcsvReader(param *ExternalParam) (*ParseLineHandler, error) {
 	var err error
-	param.reader, err = getFileDataReader(param.extern)
+	param.reader, err = ReadFile(param.extern)
 	if err != nil {
 		return nil, err
 	}

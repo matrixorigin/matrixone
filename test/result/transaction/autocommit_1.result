@@ -106,13 +106,15 @@ select * from view_tab1;
 a	b
 100000	3000
 insert into view_tab1 values (200, 300);
+view is not support insert operation
 insert into view_tab1 values (10, 10);
+view is not support insert operation
 commit;
 select * from view_tab1;
 a	b
 100000	3000
 update view_tab1 set a=100000 where b=3000;
-missing FROM-clause entry for table "view_tab1"
+view is not support update operation
 select * from view_tab1;
 a	b
 100000	3000
@@ -121,19 +123,19 @@ select * from view_tab1;
 a	b
 100000	3000
 update view_tab1 set a=100000 where b=3000;
-missing FROM-clause entry for table "view_tab1"
+view is not support update operation
 commit;
 select * from view_tab1;
 a	b
 100000	3000
 delete from view_tab1 where a=10;
-missing FROM-clause entry for table "view_tab1"
+view is not support delete operation
 rollback;
 select * from view_tab1;
 a	b
 100000	3000
 delete from view_tab1 where a=10;
-missing FROM-clause entry for table "view_tab1"
+view is not support delete operation
 commit;
 select * from view_tab1;
 a	b
@@ -303,6 +305,8 @@ commit;
 show databases like 'test_xx';
 Database
 test_xx
+commit;
+drop database test_xx;
 drop database if exists db;
 begin;
 create database db;

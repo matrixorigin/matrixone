@@ -81,7 +81,7 @@ type store struct {
 	sender         rpc.TxnSender
 	server         rpc.TxnServer
 	hakeeperClient logservice.DNHAKeeperClient
-	fsFactory      fileservice.FileServiceFactory
+	newFS          fileservice.NewFileServicesFunc
 	fs             fileservice.FileService
 	metadataFS     fileservice.ReplaceableFileService
 	replicas       *sync.Map
@@ -102,15 +102,15 @@ type store struct {
 
 // NewService create DN Service
 func NewService(cfg *Config,
-	fsFactory fileservice.FileServiceFactory,
+	newFS fileservice.NewFileServicesFunc,
 	opts ...Option) (Service, error) {
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
 
 	s := &store{
-		cfg:       cfg,
-		fsFactory: fsFactory,
+		cfg:   cfg,
+		newFS: newFS,
 	}
 	for _, opt := range opts {
 		opt(s)
@@ -379,23 +379,33 @@ func (s *store) initHAKeeperClient() error {
 }
 
 func (s *store) initFileService() error {
-	localFS, err := s.fsFactory(localFileServiceName)
-	if err != nil {
-		return err
-	}
-	rfs, err := fileservice.Get[fileservice.ReplaceableFileService](
-		localFS, localFileServiceName)
+	// create
+	fs, err := s.newFS(localFileServiceName)
 	if err != nil {
 		return err
 	}
 
-	s3FS, err := s.fsFactory(s3FileServiceName)
+	// ensure local exists
+	localFS, err := fileservice.Get[fileservice.FileService](fs, localFileServiceName)
 	if err != nil {
 		return err
 	}
 
-	s.fs = fileservice.NewFileServices(localFileServiceName, localFS, s3FS)
-	s.metadataFS = rfs
+	// ensure s3 exists
+	_, err = fileservice.Get[fileservice.FileService](fs, s3FileServiceName)
+	if err != nil {
+		return err
+	}
+
+	// get metadata fs
+	metadataFS, err := fileservice.Get[fileservice.ReplaceableFileService](localFS, localFileServiceName)
+	if err != nil {
+		return err
+	}
+
+	// set
+	s.fs = fs
+	s.metadataFS = metadataFS
 
 	return nil
 }

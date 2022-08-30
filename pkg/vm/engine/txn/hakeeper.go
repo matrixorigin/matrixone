@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/logservice"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 )
 
@@ -34,17 +35,19 @@ func GetClusterDetailsFromHAKeeper(
 	var detailsError error
 	var details logservicepb.ClusterDetails
 
-	go func() {
+	update := func() {
+		ctx, cancel := context.WithTimeout(ctx, time.Second*17)
+		defer cancel()
+		ret, err := client.GetClusterDetails(ctx)
+		lock.Lock()
+		defer lock.Unlock()
+		detailsError = err
+		details = ret
+		logutil.Info("txnengine: cluster details updated")
+	}
+	update()
 
-		update := func() {
-			ctx, cancel := context.WithTimeout(ctx, time.Second*17)
-			defer cancel()
-			ret, err := client.GetClusterDetails(ctx)
-			lock.Lock()
-			defer lock.Unlock()
-			detailsError = err
-			details = ret
-		}
+	go func() {
 
 		ticker := time.NewTicker(time.Second * 17)
 		for {

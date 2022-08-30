@@ -17,7 +17,6 @@ package plan
 import (
 	"encoding/json"
 	"fmt"
-	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/errno"
@@ -78,6 +77,19 @@ func buildCreateView(stmt *tree.CreateView, ctx CompilerContext) (*Plan, error) 
 		Def: &plan.TableDef_DefType_View{
 			View: &plan.ViewDef{
 				View: string(viewData),
+			},
+		},
+	})
+	properties := []*plan.Property{
+		{
+			Key:   catalog.SystemRelAttr_Kind,
+			Value: catalog.SystemViewRel,
+		},
+	}
+	createTable.TableDef.Defs = append(createTable.TableDef.Defs, &plan.TableDef_DefType{
+		Def: &plan.TableDef_DefType_Properties{
+			Properties: &plan.PropertiesDef{
+				Properties: properties,
 			},
 		},
 	})
@@ -171,13 +183,6 @@ func buildCreateTable(stmt *tree.CreateTable, ctx CompilerContext) (*Plan, error
 	}
 
 	if stmt.Param != nil {
-		for i := 0; i < len(stmt.Param.S3option); i += 2 {
-			switch strings.ToLower(stmt.Param.S3option[i]) {
-			case "endpoint", "region", "access_key_id", "secret_access_key", "bucket", "filepath", "compression":
-			default:
-				return nil, fmt.Errorf("the keyword '%s' is not support", strings.ToLower(stmt.Param.S3option[i]))
-			}
-		}
 		json_byte, err := json.Marshal(stmt.Param)
 		if err != nil {
 			return nil, err
@@ -375,8 +380,12 @@ func buildDropTable(stmt *tree.DropTable, ctx CompilerContext) (*Plan, error) {
 				break
 			}
 		}
-		if isView {
+		if isView && !dropTable.IfExists {
+			// drop table v0, v0 is view
 			return nil, errors.New("", fmt.Sprintf("table %s is not exists", dropTable.Table))
+		} else if isView {
+			// drop table if exists v0, v0 is view
+			dropTable.Table = ""
 		}
 	}
 

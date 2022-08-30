@@ -265,7 +265,7 @@ func (o *outputQueue) flush() error {
 		}
 	} else {
 		//send group of row
-		if o.showStmtType == ShowCreateTable || o.showStmtType == ShowCreateDatabase || o.showStmtType == ShowColumns {
+		if o.showStmtType == ShowColumns {
 			o.rowIdx = 0
 			return nil
 		}
@@ -303,116 +303,31 @@ func (foq *fakeOutputQueue) flush() error {
 }
 
 const (
-	tableNamePos    = 1
-	tableCommentPos = 6
-
-	attrNamePos    = 17
-	attrTypPos     = 18
-	charWidthPos   = 20
-	nullablePos    = 21
-	primaryKeyPos  = 25
-	attrCommentPos = 28
-
-	showCreateTableAttrCount = 30
+	primaryKeyPos = 25
 )
-
-/*
-handle show create table in plan2 and tae
-*/
-func handleShowCreateTable(ses *Session) error {
-	tableName := string(ses.Data[0][tableNamePos].([]byte))
-	createStr := fmt.Sprintf("CREATE TABLE `%s` (", tableName)
-	rowCount := 0
-	var pkDefs []string
-	for _, d := range ses.Data {
-		colName := string(d[attrNamePos].([]byte))
-		if colName == "PADDR" {
-			continue
-		}
-		nullOrNot := "NOT NULL"
-		if d[nullablePos].(int8) == 1 {
-			nullOrNot = "DEFAULT NULL"
-		}
-
-		var hasAttrComment string
-		attrComment := string(d[attrCommentPos].([]byte))
-		if attrComment != "" {
-			hasAttrComment = " COMMENT '" + attrComment + "'"
-		}
-
-		if rowCount == 0 {
-			createStr += "\n"
-		} else {
-			createStr += ",\n"
-		}
-		typ := types.Type{Oid: types.T(d[attrTypPos].(int32))}
-		typeStr := typ.String()
-		if typ.Oid == types.T_varchar || typ.Oid == types.T_char {
-			typeStr += fmt.Sprintf("(%d)", d[charWidthPos].(int32))
-		}
-		createStr += fmt.Sprintf("`%s` %s %s%s", colName, typeStr, nullOrNot, hasAttrComment)
-		rowCount++
-		if string(d[primaryKeyPos].([]byte)) == "p" {
-			pkDefs = append(pkDefs, colName)
-		}
-	}
-	if len(pkDefs) != 0 {
-		pkStr := "PRIMARY KEY ("
-		for _, def := range pkDefs {
-			pkStr += fmt.Sprintf("`%s`", def)
-		}
-		pkStr += ")"
-		if rowCount != 0 {
-			createStr += ",\n"
-		}
-		createStr += pkStr
-	}
-
-	if rowCount != 0 {
-		createStr += "\n"
-	}
-	createStr += ")"
-
-	tableComment := string(ses.Data[0][tableCommentPos].([]byte))
-	if tableComment != "" {
-		createStr += " COMMENT='" + tableComment + "',"
-	}
-
-	row := make([]interface{}, 2)
-	row[0] = tableName
-	row[1] = createStr
-
-	ses.Mrs.AddRow(row)
-
-	if err := ses.GetMysqlProtocol().SendResultSetTextBatchRowSpeedup(ses.Mrs, 1); err != nil {
-		logutil.Errorf("handleShowCreateTable error %v \n", err)
-		return err
-	}
-	return nil
-}
 
 /*
 handle show create database in plan2 and tae
 */
-func handleShowCreateDatabase(ses *Session) error {
-	dbNameIndex := ses.Mrs.Name2Index["Database"]
-	dbsqlIndex := ses.Mrs.Name2Index["Create Database"]
-	firstRow := ses.Data[0]
-	dbName := firstRow[dbNameIndex]
-	createDBSql := fmt.Sprintf("CREATE DATABASE `%s`", dbName)
-	firstRow[dbsqlIndex] = createDBSql
+// func handleShowCreateDatabase(ses *Session) error {
+// 	dbNameIndex := ses.Mrs.Name2Index["Database"]
+// 	dbsqlIndex := ses.Mrs.Name2Index["Create Database"]
+// 	firstRow := ses.Data[0]
+// 	dbName := firstRow[dbNameIndex]
+// 	createDBSql := fmt.Sprintf("CREATE DATABASE `%s`", dbName)
+// 	firstRow[dbsqlIndex] = createDBSql
 
-	row := make([]interface{}, 2)
-	row[0] = dbName
-	row[1] = createDBSql
+// 	row := make([]interface{}, 2)
+// 	row[0] = dbName
+// 	row[1] = createDBSql
 
-	ses.Mrs.AddRow(row)
-	if err := ses.GetMysqlProtocol().SendResultSetTextBatchRowSpeedup(ses.Mrs, 1); err != nil {
-		logutil.Errorf("handleShowCreateDatabase error %v \n", err)
-		return err
-	}
-	return nil
-}
+// 	ses.Mrs.AddRow(row)
+// 	if err := ses.GetMysqlProtocol().SendResultSetTextBatchRowSpeedup(ses.Mrs, 1); err != nil {
+// 		logutil.Errorf("handleShowCreateDatabase error %v \n", err)
+// 		return err
+// 	}
+// 	return nil
+// }
 
 /*
 handle show columns from table in plan2 and tae
@@ -524,7 +439,7 @@ func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 		if err != nil {
 			return err
 		}
-		if oq.showStmtType == ShowCreateDatabase || oq.showStmtType == ShowCreateTable || oq.showStmtType == ShowColumns {
+		if oq.showStmtType == ShowColumns {
 			row2 := make([]interface{}, len(row))
 			copy(row2, row)
 			ses.Data = append(ses.Data, row2)
@@ -1480,6 +1395,34 @@ func (mce *MysqlCmdExecutor) handleDeallocate(st *tree.Deallocate) error {
 	return nil
 }
 
+// handleCreateAccount creates a new user-level tenant in the context of the tenant SYS
+// which has been initialized.
+func (mce *MysqlCmdExecutor) handleCreateAccount(ctx context.Context, ca *tree.CreateAccount) error {
+	ses := mce.GetSession()
+	tenant := ses.GetTenantInfo()
+
+	//step1 : create new account.
+	return InitGeneralTenant(ctx, tenant, ca)
+}
+
+// handleCreateUser creates the user for the tenant
+func (mce *MysqlCmdExecutor) handleCreateUser(ctx context.Context, cu *tree.CreateUser) error {
+	ses := mce.GetSession()
+	tenant := ses.GetTenantInfo()
+
+	//step1 : create the user
+	return InitUser(ctx, tenant, cu)
+}
+
+// handleCreateRole creates the new role
+func (mce *MysqlCmdExecutor) handleCreateRole(ctx context.Context, cr *tree.CreateRole) error {
+	ses := mce.GetSession()
+	tenant := ses.GetTenantInfo()
+
+	//step1 : create the role
+	return InitRole(ctx, tenant, cr)
+}
+
 func GetExplainColumns(explainColName string) ([]interface{}, error) {
 	cols := []*plan2.ColDef{
 		{Typ: &plan2.Type{Id: int32(types.T_varchar)}, Name: explainColName},
@@ -1554,11 +1497,6 @@ func (cwft *TxnComputationWrapper) GetColumns() ([]interface{}, error) {
 	var err error
 	cols := plan2.GetResultColumnsFromPlan(cwft.plan)
 	switch cwft.GetAst().(type) {
-	case *tree.ShowCreateTable:
-		cols = []*plan2.ColDef{
-			{Typ: &plan2.Type{Id: int32(types.T_char)}, Name: "Table"},
-			{Typ: &plan2.Type{Id: int32(types.T_char)}, Name: "Create Table"},
-		}
 	case *tree.ShowColumns:
 		cols = []*plan2.ColDef{
 			{Typ: &plan2.Type{Id: int32(types.T_char)}, Name: "Field"},
@@ -1636,6 +1574,7 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 	cwft.proc.UnixTime = time.Now().UnixNano()
 	txnHandler := cwft.ses.GetTxnHandler()
 	cwft.proc.TxnOperator = txnHandler.GetTxn()
+	cwft.proc.FileService = cwft.ses.Pu.FileService
 	cwft.compile = compile.New(cwft.ses.GetDatabaseName(), cwft.ses.GetSql(), cwft.ses.GetUserName(), requestCtx, cwft.ses.GetStorage(), cwft.proc, cwft.stmt)
 	err = cwft.compile.Compile(cwft.plan, cwft.ses, fill)
 	if err != nil {
@@ -1770,6 +1709,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		Version:      serverVersion,
 		TimeZone:     ses.timeZone,
 	}
+	proc.FileService = ses.Pu.FileService
 
 	cws, err := GetComputationWrapper(ses.GetDatabaseName(),
 		sql,
@@ -1936,12 +1876,6 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		case *tree.ShowColumns:
 			ses.showStmtType = ShowColumns
 			ses.Data = nil
-		case *tree.ShowCreateDatabase:
-			ses.showStmtType = ShowCreateDatabase
-			ses.Data = nil
-		case *tree.ShowCreateTable:
-			ses.showStmtType = ShowCreateTable
-			ses.Data = nil
 		case *tree.Delete:
 			ses.GetTxnCompileCtx().SetQueryType(TXN_DELETE)
 		case *tree.Update:
@@ -1949,6 +1883,21 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		case *InternalCmdFieldList:
 			selfHandle = true
 			if err = mce.handleCmdFieldList(requestCtx, st); err != nil {
+				goto handleFailed
+			}
+		case *tree.CreateAccount:
+			selfHandle = true
+			if err = mce.handleCreateAccount(requestCtx, st); err != nil {
+				goto handleFailed
+			}
+		case *tree.CreateUser:
+			selfHandle = true
+			if err = mce.handleCreateUser(requestCtx, st); err != nil {
+				goto handleFailed
+			}
+		case *tree.CreateRole:
+			selfHandle = true
+			if err = mce.handleCreateRole(requestCtx, st); err != nil {
 				goto handleFailed
 			}
 		}
@@ -1978,7 +1927,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		case *tree.Select,
 			*tree.ShowCreateTable, *tree.ShowCreateDatabase, *tree.ShowTables, *tree.ShowDatabases, *tree.ShowColumns,
 			*tree.ShowProcessList, *tree.ShowErrors, *tree.ShowWarnings, *tree.ShowVariables, *tree.ShowStatus,
-			*tree.ShowIndex,
+			*tree.ShowIndex, *tree.ShowCreateView,
 			*tree.ExplainFor, *tree.ExplainAnalyze, *tree.ExplainStmt:
 			columns, err2 := cw.GetColumns()
 			if err2 != nil {
@@ -2036,15 +1985,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			if err = runner.Run(0); err != nil {
 				goto handleFailed
 			}
-			if ses.showStmtType == ShowCreateTable {
-				if err = handleShowCreateTable(ses); err != nil {
-					goto handleFailed
-				}
-			} else if ses.showStmtType == ShowCreateDatabase {
-				if err = handleShowCreateDatabase(ses); err != nil {
-					goto handleFailed
-				}
-			} else if ses.showStmtType == ShowColumns {
+			if ses.showStmtType == ShowColumns {
 				if err = handleShowColumns(ses); err != nil {
 					goto handleFailed
 				}
@@ -2114,6 +2055,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			case *tree.CreateTable, *tree.DropTable, *tree.CreateDatabase, *tree.DropDatabase,
 				*tree.CreateIndex, *tree.DropIndex, *tree.Insert, *tree.Update,
 				*tree.CreateView, *tree.DropView, *tree.Load,
+				*tree.CreateAccount, *tree.DropAccount, *tree.AlterAccount,
 				*tree.CreateUser, *tree.DropUser, *tree.AlterUser,
 				*tree.CreateRole, *tree.DropRole, *tree.Revoke, *tree.Grant,
 				*tree.SetDefaultRole, *tree.SetRole, *tree.SetPassword, *tree.Delete,
@@ -2331,7 +2273,7 @@ func (mce *MysqlCmdExecutor) Close() {
 		cancelRequestFunc()
 	}
 
-	fmt.Println("----close mce")
+	logutil.Info("----close mce")
 	ses := mce.GetSession()
 	if ses != nil {
 		err := ses.TxnRollback()

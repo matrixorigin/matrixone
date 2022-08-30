@@ -130,3 +130,28 @@ func CeilFloat64(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, 
 		return vec, nil
 	}
 }
+
+func CeilDecimal128(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	digits := int64(0)
+	vs := vector.MustTCols[types.Decimal128](vecs[0])
+	if vecs[0].IsScalar() {
+		if vecs[0].IsScalarNull() {
+			return proc.AllocScalarNullVector(types.Type{Oid: types.T_decimal128, Size: 16}), nil
+		}
+		vec := proc.AllocScalarVector(types.Type{Oid: types.T_decimal128, Size: 16})
+		rs := make([]types.Decimal128, 1)
+		nulls.Set(vec.Nsp, vecs[0].Nsp)
+		vector.SetCol(vec, ceil.CeilDecimal128(vecs[0].Typ.Scale, vs, rs, digits))
+		return vec, nil
+	} else {
+		vec, err := proc.AllocVector(types.Type{Oid: types.T_decimal128, Size: 16}, 16*int64(len(vs)))
+		if err != nil {
+			return nil, err
+		}
+		rs := types.DecodeDecimal128Slice(vec.Data)
+		rs = rs[:len(vs)]
+		nulls.Set(vec.Nsp, vecs[0].Nsp)
+		vector.SetCol(vec, ceil.CeilDecimal128(vecs[0].Typ.Scale, vs, rs, digits))
+		return vec, nil
+	}
+}

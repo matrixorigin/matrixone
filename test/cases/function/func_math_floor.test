@@ -125,9 +125,7 @@ DROP TABLE t1;
 #DROP TABLE t1;
 
 #嵌套
--- @bvt:issue#3588
 SELECT DATE(FLOOR(20110512154559.616));
--- @bvt:issue
 
 #INSERT INTO, distinct
 CREATE table t1(a int, b float);

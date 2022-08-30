@@ -20,7 +20,6 @@ drop table t;
 
 
 #SELECT, 嵌套，DATATYPE， EXTREME VALUE
--- @bvt:issue#3588
 create table t(a decimal(19,0));
 insert into t select (CEILING(CAST(1844674407370955161 AS DECIMAL(19, 0))));
 insert into t select (FLOOR(CAST(1844674407370955161 AS DECIMAL(19, 0))));
@@ -41,7 +40,6 @@ insert into t select (CEILING(CAST(-922337203685477580 AS DECIMAL(18, 0))));
 insert into t select (FLOOR(CAST(-922337203685477580 AS DECIMAL(18, 0))));
 SELECT * FROM t;
 DROP TABLE t;
--- @bvt:issue
 #0.5MO不支持CREATE SELECT
 #CREATE TABLE t AS
 #SELECT CEILING(CAST(99999999999999999.9 AS DECIMAL(18, 1))) AS c,
