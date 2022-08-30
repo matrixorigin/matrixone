@@ -24,17 +24,16 @@ type Row struct {
 	id int
 }
 
-func (r *Row) Compare(o *Row) int {
-	or := o.(*Row)
-	if r.id > ir.id {
+func compare(a, b *Row) int {
+	if a.id > b.id {
 		return 1
-	} else if r.id < ir.id {
+	} else if a.id < b.id {
 		return -1
 	}
 	return 0
 }
 
-dlist := new(GenericSortedDList)
+dlist := NewGenericSortedDList[*Row](compare)
 n1 := dlist.Insert(&Row{id: 10}) // [10]
 n2 := dlist.Insert(&Row{id: 5})  // [10]<->[5]
 n3 := dlist.Insert(&Row{id: 13}) // [13]<->[10]<->[5]
