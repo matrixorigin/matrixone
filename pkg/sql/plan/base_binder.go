@@ -150,8 +150,13 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (
 			},
 		}, nil
 	case *tree.MaxValue:
-		err = errors.New("", fmt.Sprintf("expr max'%v' is not supported now", exprImpl))
-
+		return &Expr{
+			Expr: &plan.Expr_Max{
+				Max: &MaxValue{
+					Value: "maxvalue",
+				},
+			},
+		}, nil
 	case *tree.VarExpr:
 		expr, err = b.baseBindVar(exprImpl, depth, isRoot)
 
@@ -804,7 +809,7 @@ func bindFuncExprImplByPlanExpr(name string, args []*Expr) (*plan.Expr, error) {
 				return nil, err
 			}
 		}
-	case "variance", "oct", "stddev_pop", "std":
+	case "variance", "oct", "stddev_pop", "std", "bit_and", "bit_or", "bit_xor":
 		if args[0].Typ.Id == int32(types.T_decimal128) || args[0].Typ.Id == int32(types.T_decimal64) {
 			args[0], err = appendCastBeforeExpr(args[0], &plan.Type{
 				Id:       int32(types.T_float64),
@@ -1022,9 +1027,6 @@ func (b *baseBinder) bindNumVal(astExpr *tree.NumVal, typ *Type) (*Expr, error) 
 	case tree.P_bit:
 		return returnDecimalExpr(astExpr.String())
 	case tree.P_char:
-		if typ != nil && typ.Id != int32(types.T_char) && typ.Id != int32(types.T_varchar) {
-			return appendCastBeforeExpr(getStringExpr(astExpr.String()), typ)
-		}
 		expr := getStringExpr(astExpr.String())
 		return expr, nil
 	default:

@@ -20,6 +20,7 @@ import (
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/config"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
@@ -38,13 +39,21 @@ import (
 
 type Options func(*service)
 
-func NewService(cfg *Config, ctx context.Context, options ...Options) (Service, error) {
+func NewService(
+	cfg *Config,
+	ctx context.Context,
+	fileService fileservice.FileService,
+	options ...Options,
+) (Service, error) {
 
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
 
-	srv := &service{cfg: cfg}
+	srv := &service{
+		cfg:         cfg,
+		fileService: fileService,
+	}
 	srv.logger = logutil.Adjust(srv.logger)
 	srv.responsePool = &sync.Pool{
 		New: func() any {
@@ -112,6 +121,8 @@ func (s *service) initMOServer(ctx context.Context, pu *config.ParameterUnit) er
 	s.cancelMoServerFunc = cancelMoServerFunc
 
 	pu.HostMmu = host.New(pu.SV.HostMmuLimitation)
+
+	pu.FileService = s.fileService
 
 	logutil.Info("Initialize the engine ...")
 	err = s.initEngine(ctx, cancelMoServerCtx, pu)
@@ -236,7 +247,7 @@ func (s *service) getTxnClient() (c client.TxnClient, err error) {
 		if err != nil {
 			return
 		}
-		c = client.NewTxnClient(sender) //TODO options
+		c = client.NewTxnClient(sender)
 		s._txnClient = c
 	})
 	c = s._txnClient
