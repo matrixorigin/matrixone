@@ -243,7 +243,7 @@ import (
 %token <str> DYNAMIC COMPRESSED REDUNDANT COMPACT FIXED COLUMN_FORMAT AUTO_RANDOM
 %token <str> RESTRICT CASCADE ACTION PARTIAL SIMPLE CHECK ENFORCED
 %token <str> RANGE LIST ALGORITHM LINEAR PARTITIONS SUBPARTITION SUBPARTITIONS
-%token <str> TYPE ANY SOME EXTERNAL LOCALFILE URL 
+%token <str> TYPE ANY SOME EXTERNAL LOCALFILE URL
 %token <str> PREPARE DEALLOCATE
 
 // MO table option
@@ -394,7 +394,7 @@ import (
 %type <funcExpr> function_call_json
 
 %type <unresolvedName> column_name column_name_unresolved
-%type <strs> enum_values force_quote_opt force_quote_list 
+%type <strs> enum_values force_quote_opt force_quote_list
 %type <str> sql_id charset_keyword db_name
 %type <str> not_keyword func_not_keyword
 %type <str> reserved_keyword non_reserved_keyword
