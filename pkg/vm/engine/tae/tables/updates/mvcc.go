@@ -16,9 +16,10 @@ package updates
 
 import (
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"sync"
 	"sync/atomic"
+
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
@@ -181,7 +182,7 @@ func (n *MVCCHandle) CreateUpdateNode(colIdx uint16, txn txnif.AsyncTxn) txnif.U
 
 func (n *MVCCHandle) DropUpdateNode(colIdx uint16, node txnif.UpdateNode) {
 	chain := n.columns[colIdx]
-	chain.DeleteNodeLocked(node.GetDLNode())
+	chain.DeleteNodeLocked(node.(*ColumnUpdateNode))
 }
 
 func (n *MVCCHandle) PrepareUpdate(row uint32, colIdx uint16, update txnif.UpdateNode) error {

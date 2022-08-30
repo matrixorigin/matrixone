@@ -84,6 +84,10 @@ message ExprList {
 	repeated Expr list = 1;
 }
 
+message MaxValue {
+	string value = 1;
+}
+
 // TargetType used in cast function as target type
 message TargetType {
 	Type typ = 1;
@@ -161,6 +165,7 @@ message Expr {
 		CorrColRef	corr	= 8;
 		TargetType  t		= 9;
 		ExprList	list	= 10;
+		MaxValue max = 11;
 	}
 }
 
@@ -218,6 +223,39 @@ message PropertiesDef {
 	repeated Property properties 	= 1;
 }
 
+
+enum PartitionType {
+	KEY = 0;
+	LINEAR_KEY = 1;
+	HASH = 2;
+	LINEAR_HASH = 3;
+	RANGE = 4;
+	RANGE_COLUMNS = 5;
+	LIST = 6;
+	LIST_COLUMNS = 7;
+}
+
+message PartitionInfo {
+	PartitionType type = 1;
+	Expr Expr = 2;
+	string partitionExpression = 3;
+	repeated Expr Columns = 4;
+	repeated string partitionColumns = 5;
+	uint64 partitionNum = 6;
+	repeated PartitionItem partitions = 7;
+	int64 algorithm = 8;
+	bool isSubPartition = 9;
+}
+
+message PartitionItem {
+	string partitionName = 1;
+	uint32 ordinalPosition = 2;
+	string description = 3;
+	string comment = 4;
+	repeated Expr lessThan = 5;
+	repeated Expr inValues = 6;
+}
+
 message ViewDef {
 	string view  = 1;
 }
@@ -229,6 +267,7 @@ message TableDef {
 			IndexDef idx				= 2;
 			PropertiesDef properties	= 3;
 			ViewDef view				= 4;
+			PartitionInfo partition				= 5;
 		}
 	}
 	string name				= 1;
