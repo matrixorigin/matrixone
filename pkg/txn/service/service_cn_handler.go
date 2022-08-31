@@ -331,8 +331,9 @@ func (s *service) Rollback(ctx context.Context, request *txn.TxnRequest, respons
 
 	response.Txn = &newTxn
 	newTxn.DNShards = request.Txn.DNShards
-
 	s.startAsyncRollbackTask(newTxn)
+
+	response.Txn.Status = txn.TxnStatus_Aborted
 	return nil
 }
 
