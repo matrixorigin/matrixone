@@ -90,7 +90,7 @@ func NewLeveledUnits(scheduler tasks.TaskScheduler, policy LeveledPolicy) *Level
 }
 
 func (lunits *LeveledUnits) AddUnit(unit data.CheckpointUnit) {
-	score := unit.EstimateScore()
+	score := unit.EstimateScore(lunits.policy.GetFlushInterval())
 	if score == 0 {
 		return
 	}
@@ -118,7 +118,7 @@ func (lunits *LeveledUnits) Scan() {
 		units := level.ConsumeAll()
 		level.UpdateTS()
 		for unit := range units {
-			score := unit.EstimateScore()
+			score := unit.EstimateScore(lunits.policy.GetFlushInterval())
 			if lunits.policy.DecideLevel(score) < i {
 				lunits.AddUnit(unit)
 				continue

@@ -56,9 +56,6 @@ const (
 	BS_NotAppendable
 )
 
-// IntervalsMS are when the data block has not been updated within 3 minutes, it can be Compacted
-const IntervalsMS = 3 * 60 * 1000
-
 // ForTestBlockRefName is the Schema.Name used by UT,
 // which means that block.Unref() needs to be executed with a delay of 100ms.
 // TODO: The test method needs to be deleted or modified after the test is stable
@@ -273,7 +270,7 @@ func (blk *dataBlock) MutationInfo() string {
 	return s
 }
 
-func (blk *dataBlock) EstimateScore() int {
+func (blk *dataBlock) EstimateScore(interval int64) int {
 	if blk.meta.IsAppendable() && blk.Rows(nil, true) == int(blk.meta.GetSchema().BlockMaxRows) {
 		blk.meta.RLock()
 		if blk.meta.HasDropped() {
@@ -302,11 +299,7 @@ func (blk *dataBlock) EstimateScore() int {
 		blk.score.startTime = time.Now()
 	} else {
 		s := time.Since(blk.score.startTime).Milliseconds()
-		// UT will execute here
-		if blk.meta.GetSchema().ForTest {
-			return 100
-		}
-		if s > int64(IntervalsMS) {
+		if s > interval {
 			return 100
 		}
 	}
