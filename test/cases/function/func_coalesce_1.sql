@@ -17,9 +17,7 @@ select coalesce(a, 1) from t1;
 -- echo error
 select coalesce(b, 1) from t1;
 
--- @bvt:issue#4744
 select coalesce(b, '1') from t1;
--- @bvt:issue
 
 drop table t1;
 
@@ -39,11 +37,9 @@ select * from t2;
 select coalesce(a, 1.0) from t2;
 select coalesce(a, 1) from t2;
 
--- @bvt:issue#4744
 select coalesce(b, 2022-01-01) from t2;
 select coalesce(b, 2022) from t2;
 select coalesce(b, 2) from t2;
--- @bvt:issue
 
 
 select coalesce(b, '2022-10-01') from t2;
@@ -76,10 +72,8 @@ select coalesce(a, 0) from t3;
 -- echo error
 select coalesce(a, 200) from t3;
 
--- @bvt:issue#4744
 select coalesce(b, '1') from t3;
 select coalesce(b, 'bull') from t3;
--- @bvt:issue
 
 drop table t3;
 

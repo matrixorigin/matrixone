@@ -75,14 +75,18 @@ func TestFileServiceFactory(t *testing.T) {
 		Name:    "a",
 		Backend: "MEM",
 	})
+	c.FileServices = append(c.FileServices, fileservice.Config{
+		Name:    localFileServiceName,
+		Backend: "MEM",
+	})
+	c.FileServices = append(c.FileServices, fileservice.Config{
+		Name:    s3FileServiceName,
+		Backend: "MEM",
+	})
 
 	fs, err := c.createFileService("A")
 	assert.NoError(t, err)
 	assert.NotNil(t, fs)
-
-	fs, err = c.createFileService("B")
-	assert.Error(t, err)
-	assert.Nil(t, fs)
 }
 
 func TestResolveGossipSeedAddresses(t *testing.T) {

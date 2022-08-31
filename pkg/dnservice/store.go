@@ -75,17 +75,16 @@ func WithLogServiceClientFactory(factory func(metadata.DNShard) (logservice.Clie
 }
 
 type store struct {
-	cfg            *Config
-	logger         *zap.Logger
-	clock          clock.Clock
-	sender         rpc.TxnSender
-	server         rpc.TxnServer
-	hakeeperClient logservice.DNHAKeeperClient
-	newFS          fileservice.NewFileServicesFunc
-	fs             fileservice.FileService
-	metadataFS     fileservice.ReplaceableFileService
-	replicas       *sync.Map
-	stopper        *stopper.Stopper
+	cfg                 *Config
+	logger              *zap.Logger
+	clock               clock.Clock
+	sender              rpc.TxnSender
+	server              rpc.TxnServer
+	hakeeperClient      logservice.DNHAKeeperClient
+	fileService         fileservice.FileService
+	metadataFileService fileservice.ReplaceableFileService
+	replicas            *sync.Map
+	stopper             *stopper.Stopper
 
 	options struct {
 		logServiceClientFactory func(metadata.DNShard) (logservice.Client, error)
@@ -102,15 +101,22 @@ type store struct {
 
 // NewService create DN Service
 func NewService(cfg *Config,
-	newFS fileservice.NewFileServicesFunc,
+	fileService fileservice.FileService,
 	opts ...Option) (Service, error) {
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
 
+	// get metadata fs
+	metadataFS, err := fileservice.Get[fileservice.ReplaceableFileService](fileService, localFileServiceName)
+	if err != nil {
+		return nil, err
+	}
+
 	s := &store{
-		cfg:   cfg,
-		newFS: newFS,
+		cfg:                 cfg,
+		fileService:         fileService,
+		metadataFileService: metadataFS,
 	}
 	for _, opt := range opts {
 		opt(s)
@@ -133,9 +139,6 @@ func NewService(cfg *Config,
 		return nil, err
 	}
 	if err := s.initTxnServer(); err != nil {
-		return nil, err
-	}
-	if err := s.initFileService(); err != nil {
 		return nil, err
 	}
 	if err := s.initMetadata(); err != nil {
@@ -235,6 +238,9 @@ func (s *store) heartbeatTask(ctx context.Context) {
 			}
 
 			for _, cmd := range commands.Commands {
+				s.logger.Debug("received hakeeper command",
+					zap.String("cmd", cmd.LogString()))
+
 				if cmd.ServiceType != logservicepb.DnService {
 					s.logger.Fatal("receive invalid schedule command",
 						zap.String("type", cmd.ServiceType.String()))
@@ -267,8 +273,11 @@ func (s *store) heartbeatTask(ctx context.Context) {
 
 func (s *store) createReplica(shard metadata.DNShard) error {
 	r := newReplica(shard, s.logger.With(util.TxnDNShardField(shard)))
-	_, ok := s.replicas.LoadOrStore(shard.ShardID, r)
+	v, ok := s.replicas.LoadOrStore(shard.ShardID, r)
 	if ok {
+		s.logger.Debug("DNShard already created",
+			zap.String("new", shard.DebugString()),
+			zap.String("exist", v.(*replica).shard.DebugString()))
 		return nil
 	}
 
@@ -375,37 +384,5 @@ func (s *store) initHAKeeperClient() error {
 		return err
 	}
 	s.hakeeperClient = client
-	return nil
-}
-
-func (s *store) initFileService() error {
-	// create
-	fs, err := s.newFS(localFileServiceName)
-	if err != nil {
-		return err
-	}
-
-	// ensure local exists
-	localFS, err := fileservice.Get[fileservice.FileService](fs, localFileServiceName)
-	if err != nil {
-		return err
-	}
-
-	// ensure s3 exists
-	_, err = fileservice.Get[fileservice.FileService](fs, s3FileServiceName)
-	if err != nil {
-		return err
-	}
-
-	// get metadata fs
-	metadataFS, err := fileservice.Get[fileservice.ReplaceableFileService](localFS, localFileServiceName)
-	if err != nil {
-		return err
-	}
-
-	// set
-	s.fs = fs
-	s.metadataFS = metadataFS
-
 	return nil
 }

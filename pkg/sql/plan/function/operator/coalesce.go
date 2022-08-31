@@ -143,6 +143,9 @@ func coalesceGeneral[T NormalType](vs []*vector.Vector, proc *process.Process, t
 
 	for i := startIdx; i < len(vs); i++ {
 		input := vs[i]
+		if input.Typ.Oid != types.T_any {
+			rs.Typ = input.Typ
+		}
 		cols := vector.MustTCols[T](input)
 		if input.IsScalar() {
 			if input.IsScalarNull() {
@@ -242,7 +245,7 @@ func coalesceString(vs []*vector.Vector, proc *process.Process, typ types.Type) 
 
 			for j := 0; j < vecLen; j++ {
 				if rs.Nsp.Contains(uint64(j)) {
-					copy(dataVec[j], cols.Data)
+					dataVec[j] = append(dataVec[j], cols.Data...)
 				}
 			}
 			rs.Nsp.Np = nil
