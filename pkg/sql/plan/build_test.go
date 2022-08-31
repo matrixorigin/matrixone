@@ -17,6 +17,7 @@ package plan
 import (
 	"bytes"
 	"encoding/json"
+	"github.com/golang/protobuf/proto"
 	"os"
 	"strings"
 	"testing"
@@ -863,6 +864,8 @@ func outPutPlan(logicPlan *Plan, toFile bool, t *testing.T) {
 		json = getJSON(logicPlan.GetTcl(), t)
 	case *plan.Plan_Ddl:
 		json = getJSON(logicPlan.GetDdl(), t)
+		t.Log("-----------------------------------println table partition message:")
+		outPutPartition(logicPlan.GetDdl(), t)
 	case *plan.Plan_Dcl:
 		json = getJSON(logicPlan.GetDcl(), t)
 	}
@@ -873,6 +876,29 @@ func outPutPlan(logicPlan *Plan, toFile bool, t *testing.T) {
 		}
 	} else {
 		t.Logf(string(json))
+	}
+}
+
+func outPutPartition(ddl *plan.DataDefinition, t *testing.T) {
+	if ddl.DdlType == plan.DataDefinition_CREATE_TABLE {
+		if createTable, ok := ddl.Definition.(*plan.DataDefinition_CreateTable); ok {
+			tableDef := createTable.CreateTable.TableDef
+			for _, def := range tableDef.Defs {
+				if partition, ok2 := def.Def.(*plan.TableDef_DefType_Partition); ok2 {
+					marshal, err := proto.Marshal(partition.Partition)
+					if err != nil {
+						t.Error(err)
+					}
+
+					t.Log("-----------------------------------serialize-------------------------------------------")
+					t.Logf(string(marshal))
+					t.Log("-----------------------------------deserialize-------------------------------------------")
+					info := &plan.PartitionInfo{}
+					proto.Unmarshal(marshal, info)
+					t.Log(info)
+				}
+			}
+		}
 	}
 }
 

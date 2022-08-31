@@ -56,7 +56,7 @@ func TestSingleDDLPartition(t *testing.T) {
 	if err != nil {
 		t.Fatalf("%+v", err)
 	}
-	outPutPlan(logicPlan, true, t)
+	outPutPlan(logicPlan, false, t)
 }
 
 // ---------------------------------- Key Partition ----------------------------------

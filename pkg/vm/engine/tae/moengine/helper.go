@@ -51,6 +51,12 @@ func SchemaToDefs(schema *catalog.Schema) (defs []engine.TableDef, err error) {
 		defs = append(defs, commentDef)
 	}
 
+	if schema.Partition != "" {
+		partitionDef := new(engine.PartitionDef)
+		partitionDef.Partition = schema.Partition
+		defs = append(defs, partitionDef)
+	}
+
 	if schema.View != "" {
 		viewDef := new(engine.ViewDef)
 		viewDef.View = schema.View
