@@ -38,7 +38,7 @@ type DBBaseEntry struct {
 func NewReplayDBBaseEntry() *DBBaseEntry {
 	be := &DBBaseEntry{
 		RWMutex: &sync.RWMutex{},
-		MVCC:    common.NewGenericSortedDList[*DBUpdateNode](compareDBUpdateNode),
+		MVCC:    common.NewGenericSortedDList(compareDBUpdateNode),
 	}
 	return be
 }
@@ -46,7 +46,7 @@ func NewReplayDBBaseEntry() *DBBaseEntry {
 func NewDBBaseEntry(id uint64) *DBBaseEntry {
 	return &DBBaseEntry{
 		ID:      id,
-		MVCC:    common.NewGenericSortedDList[*DBUpdateNode](compareDBUpdateNode),
+		MVCC:    common.NewGenericSortedDList(compareDBUpdateNode),
 		RWMutex: &sync.RWMutex{},
 	}
 }
@@ -82,10 +82,11 @@ func (be *DBBaseEntry) GetTs() types.TS {
 func (be *DBBaseEntry) GetTxn() txnif.TxnReader { return be.getUpdateNodeLocked().Txn }
 
 func (be *DBBaseEntry) TryGetTerminatedTS(waitIfcommitting bool) (terminated bool, TS types.TS) {
-	node := be.GetCommittedNode().(*DBUpdateNode)
-	if node == nil {
+	vnode := be.GetCommittedNode()
+	if vnode == nil {
 		return
 	}
+	node := vnode.(*DBUpdateNode)
 	if node.Deleted {
 		return true, node.DeletedAt
 	}
@@ -108,9 +109,13 @@ func (be *DBBaseEntry) InsertNode(vun UpdateNodeIf) {
 }
 func (be *DBBaseEntry) CreateWithTS(ts types.TS) {
 	node := &DBUpdateNode{
-		CreatedAt: ts,
-		Start:     ts,
-		End:       ts,
+		EntryUpdateNode: &EntryUpdateNode{
+			CreatedAt: ts,
+		},
+		VisibleUpdateNode: &VisibleUpdateNode{
+			Start: ts,
+			End:   ts,
+		},
 	}
 	be.InsertNode(node)
 }
@@ -120,8 +125,11 @@ func (be *DBBaseEntry) CreateWithTxn(txn txnif.AsyncTxn) {
 		startTS = txn.GetStartTS()
 	}
 	node := &DBUpdateNode{
-		Start: startTS,
-		Txn:   txn,
+		EntryUpdateNode: &EntryUpdateNode{},
+		VisibleUpdateNode: &VisibleUpdateNode{
+			Start: startTS,
+			Txn:   txn,
+		},
 	}
 	be.InsertNode(node)
 }
@@ -441,7 +449,7 @@ func (be *DBBaseEntry) MetaTxnCanRead(txn txnif.AsyncTxn, mu *sync.RWMutex) (can
 }
 func (be *DBBaseEntry) CloneCreateEntry() BaseEntryIf {
 	cloned := &DBBaseEntry{
-		MVCC:    common.NewGenericSortedDList[*DBUpdateNode](compareDBUpdateNode),
+		MVCC:    common.NewGenericSortedDList(compareDBUpdateNode),
 		RWMutex: &sync.RWMutex{},
 		ID:      be.ID,
 	}

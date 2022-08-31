@@ -537,7 +537,7 @@ func (catalog *Catalog) AddEntryLocked(database *DBEntry, txn txnif.TxnReader) e
 		n := catalog.link.Insert(database)
 		catalog.entries[database.GetID()] = n
 
-		nn := newNodeList[*DBEntry](catalog.GetItemNodeByIDLocked,
+		nn := newNodeList(catalog.GetItemNodeByIDLocked,
 			databaseTxnCanGetFn[*DBEntry],
 			&catalog.nodesMu,
 			database.name)
@@ -561,7 +561,7 @@ func (catalog *Catalog) AddEntryLocked(database *DBEntry, txn txnif.TxnReader) e
 func (catalog *Catalog) MakeDBIt(reverse bool) *common.GenericSortedDListIt[*DBEntry] {
 	catalog.RLock()
 	defer catalog.RUnlock()
-	return common.NewGenericSortedDListIt[*DBEntry](catalog.RWMutex, catalog.link, reverse)
+	return common.NewGenericSortedDListIt(catalog.RWMutex, catalog.link, reverse)
 }
 
 func (catalog *Catalog) SimplePPString(level common.PPLevel) string {

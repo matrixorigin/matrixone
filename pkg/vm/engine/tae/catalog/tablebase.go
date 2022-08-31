@@ -38,7 +38,7 @@ type TableBaseEntry struct {
 func NewReplayTableBaseEntry() *TableBaseEntry {
 	be := &TableBaseEntry{
 		RWMutex: &sync.RWMutex{},
-		MVCC:    common.NewGenericSortedDList[*TableUpdateNode](compareTableUpdateNode),
+		MVCC:    common.NewGenericSortedDList(compareTableUpdateNode),
 	}
 	return be
 }
@@ -46,7 +46,7 @@ func NewReplayTableBaseEntry() *TableBaseEntry {
 func NewTableBaseEntry(id uint64) *TableBaseEntry {
 	return &TableBaseEntry{
 		ID:      id,
-		MVCC:    common.NewGenericSortedDList[*TableUpdateNode](compareTableUpdateNode),
+		MVCC:    common.NewGenericSortedDList(compareTableUpdateNode),
 		RWMutex: &sync.RWMutex{},
 	}
 }
@@ -82,10 +82,11 @@ func (be *TableBaseEntry) GetTs() types.TS {
 func (be *TableBaseEntry) GetTxn() txnif.TxnReader { return be.getUpdateNodeLocked().Txn }
 
 func (be *TableBaseEntry) TryGetTerminatedTS(waitIfcommitting bool) (terminated bool, TS types.TS) {
-	node := be.GetCommittedNode().(*TableUpdateNode)
-	if node == nil {
+	vnode := be.GetCommittedNode()
+	if vnode == nil {
 		return
 	}
+	node := vnode.(*TableUpdateNode)
 	if node.Deleted {
 		return true, node.DeletedAt
 	}
@@ -108,9 +109,13 @@ func (be *TableBaseEntry) InsertNode(vun UpdateNodeIf) {
 }
 func (be *TableBaseEntry) CreateWithTS(ts types.TS) {
 	node := &TableUpdateNode{
-		CreatedAt: ts,
-		Start:     ts,
-		End:       ts,
+		EntryUpdateNode: &EntryUpdateNode{
+			CreatedAt: ts,
+		},
+		VisibleUpdateNode: &VisibleUpdateNode{
+			Start: ts,
+			End:   ts,
+		},
 	}
 	be.InsertNode(node)
 }
@@ -120,8 +125,11 @@ func (be *TableBaseEntry) CreateWithTxn(txn txnif.AsyncTxn) {
 		startTS = txn.GetStartTS()
 	}
 	node := &TableUpdateNode{
-		Start: startTS,
-		Txn:   txn,
+		EntryUpdateNode: &EntryUpdateNode{},
+		VisibleUpdateNode: &VisibleUpdateNode{
+			Start: startTS,
+			Txn:   txn,
+		},
 	}
 	be.InsertNode(node)
 }
@@ -151,7 +159,7 @@ func (be *TableBaseEntry) DeleteLocked(txn txnif.TxnReader, impl INode) (node IN
 			err = ErrNotFound
 			return
 		}
-		nbe := entry.CloneData().(*TableUpdateNode)
+		nbe := entry.cloneData()
 		nbe.Start = txn.GetStartTS()
 		nbe.End = types.TS{}
 		nbe.Txn = txn
@@ -441,7 +449,7 @@ func (be *TableBaseEntry) MetaTxnCanRead(txn txnif.AsyncTxn, mu *sync.RWMutex) (
 }
 func (be *TableBaseEntry) CloneCreateEntry() BaseEntryIf {
 	cloned := &TableBaseEntry{
-		MVCC:    common.NewGenericSortedDList[*TableUpdateNode](compareTableUpdateNode),
+		MVCC:    common.NewGenericSortedDList(compareTableUpdateNode),
 		RWMutex: &sync.RWMutex{},
 		ID:      be.ID,
 	}

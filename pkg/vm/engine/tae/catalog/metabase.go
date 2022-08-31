@@ -38,7 +38,7 @@ type MetaBaseEntry struct {
 func NewReplayMetaBaseEntry() *MetaBaseEntry {
 	be := &MetaBaseEntry{
 		RWMutex: &sync.RWMutex{},
-		MVCC:    common.NewGenericSortedDList[*MetaUpdateNode](compareMetaUpdateNode),
+		MVCC:    common.NewGenericSortedDList(compareMetaUpdateNode),
 	}
 	return be
 }
@@ -46,7 +46,7 @@ func NewReplayMetaBaseEntry() *MetaBaseEntry {
 func NewMetaBaseEntry(id uint64) *MetaBaseEntry {
 	return &MetaBaseEntry{
 		ID:      id,
-		MVCC:    common.NewGenericSortedDList[*MetaUpdateNode](compareMetaUpdateNode),
+		MVCC:    common.NewGenericSortedDList(compareMetaUpdateNode),
 		RWMutex: &sync.RWMutex{},
 	}
 }
@@ -108,9 +108,13 @@ func (be *MetaBaseEntry) InsertNode(vun UpdateNodeIf) {
 }
 func (be *MetaBaseEntry) CreateWithTS(ts types.TS) {
 	node := &MetaUpdateNode{
-		CreatedAt: ts,
-		Start:     ts,
-		End:       ts,
+		EntryUpdateNode: &EntryUpdateNode{
+			CreatedAt: ts,
+		},
+		VisibleUpdateNode: &VisibleUpdateNode{
+			Start: ts,
+			End:   ts,
+		},
 	}
 	be.InsertNode(node)
 }
@@ -120,8 +124,11 @@ func (be *MetaBaseEntry) CreateWithTxn(txn txnif.AsyncTxn) {
 		startTS = txn.GetStartTS()
 	}
 	node := &MetaUpdateNode{
-		Start: startTS,
-		Txn:   txn,
+		EntryUpdateNode: &EntryUpdateNode{},
+		VisibleUpdateNode: &VisibleUpdateNode{
+			Start: startTS,
+			Txn:   txn,
+		},
 	}
 	be.InsertNode(node)
 }
@@ -444,7 +451,7 @@ func (be *MetaBaseEntry) MetaTxnCanRead(txn txnif.AsyncTxn, mu *sync.RWMutex) (c
 }
 func (be *MetaBaseEntry) CloneCreateEntry() BaseEntryIf {
 	cloned := &MetaBaseEntry{
-		MVCC:    common.NewGenericSortedDList[*MetaUpdateNode](compareMetaUpdateNode),
+		MVCC:    common.NewGenericSortedDList(compareMetaUpdateNode),
 		RWMutex: &sync.RWMutex{},
 		ID:      be.ID,
 	}

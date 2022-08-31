@@ -163,15 +163,7 @@ func (cmd *EntryCommand) GetLogIndex() []*wal.Index {
 }
 
 func (cmd *EntryCommand) GetTs() types.TS {
-	ts := types.TS{}
-	switch cmd.cmdType {
-	case CmdUpdateBlock, CmdUpdateDatabase, CmdUpdateTable, CmdUpdateSegment:
-		ts = cmd.entry.GetUpdateNodeLocked().GetEnd()
-	case CmdLogDatabase:
-	case CmdLogTable:
-	case CmdLogSegment:
-	case CmdLogBlock:
-	}
+	ts := cmd.entry.GetUpdateNodeLocked().GetEnd()
 	return ts
 }
 func (cmd *EntryCommand) IDString() string {

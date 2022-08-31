@@ -34,28 +34,49 @@ type BaseEntryIf interface {
 
 	GetTs() types.TS //for replay
 	GetTxn() txnif.TxnReader
-	TryGetTerminatedTS(waitIfcommitting bool) (terminated bool, TS types.TS)
 	GetID() uint64
-	GetIndexes() []*wal.Index                       //for checkpoint
-	InsertNode(un UpdateNodeIf)                     // replay and in baseentry
-	CreateWithTS(ts types.TS)                       //base create
-	CreateWithTxn(txn txnif.AsyncTxn)               //base create
-	ExistUpdate(minTs, MaxTs types.TS) (exist bool) //ckp
-	DeleteLocked(txn txnif.TxnReader, impl INode) (node INode, err error)
+	GetIndexes() []*wal.Index //for checkpoint
+	IsCommitted() bool
+	GetCurrOp() OpT
+	GetCreatedAt() types.TS
+	GetDeleteAt() types.TS
+	GetLogIndex() []*wal.Index
+	DoCompre(oe BaseEntryIf) int
+
+	InsertNode(un UpdateNodeIf)       // replay and in baseentry
+	CreateWithTS(ts types.TS)         //base create
+	CreateWithTxn(txn txnif.AsyncTxn) //base create
+	IsEmpty() bool
+
 	GetUpdateNodeLocked() UpdateNodeIf //
 	GetCommittedNode() (node UpdateNodeIf)
 	GetNodeToRead(startts types.TS) (node UpdateNodeIf)
-	DeleteBefore(ts types.TS) bool
+
 	NeedWaitCommitting(startTS types.TS) (bool, txnif.TxnReader)
-	InTxnOrRollbacked() bool
-	IsDroppedCommitted() bool
+	DropEntryLocked(txnCtx txnif.TxnReader) error
+	PrepareAdd(txn txnif.TxnReader) (err error)
 	PrepareWrite(txn txnif.TxnReader) (err error)
+	DeleteLocked(txn txnif.TxnReader, impl INode) (node INode, err error)
+	TxnCanRead(txn txnif.AsyncTxn, mu *sync.RWMutex) (canRead bool, err error) //wait + existedforts
+
+	ExistUpdate(minTs, MaxTs types.TS) (exist bool) //all
+	TxnCanGet(ts types.TS) (can, dropped bool)      //wait+nodetoread+hasdropped
+
+	InTxnOrRollbacked() bool                                                 //1st
+	IsCommitting() bool                                                      //1st
+	IsDroppedCommitted() bool                                                //ced
+	DeleteAfter(ts types.TS) bool                                            //1st
+	DeleteBefore(ts types.TS) bool                                           //1st
+	HasDropped() bool                                                        //ced
+	ExistedForTs(ts types.TS) bool                                           // node to read
+	TryGetTerminatedTS(waitIfcommitting bool) (terminated bool, TS types.TS) //ced
+
 	WriteOneNodeTo(w io.Writer) (n int64, err error)
 	WriteAllTo(w io.Writer) (n int64, err error)
 	ReadOneNodeFrom(r io.Reader) (n int64, err error)
 	ReadAllFrom(r io.Reader) (n int64, err error)
-	IsEmpty() bool
-	DoCompre(oe BaseEntryIf) int
+	CloneCommittedInRange(start, end types.TS) (ret BaseEntryIf)
+	CloneCreateEntry() BaseEntryIf
 
 	//txn
 	PrepareCommit() error
@@ -63,23 +84,6 @@ type BaseEntryIf interface {
 	PrepareRollback() (bool, error)
 	ApplyCommit(index *wal.Index) error
 	ApplyRollback(index *wal.Index) error
-
-	//checkpoint
-	HasDropped() bool
-	ExistedForTs(ts types.TS) bool
-	GetLogIndex() []*wal.Index
-	TxnCanRead(txn txnif.AsyncTxn, mu *sync.RWMutex) (canRead bool, err error)
-	CloneCreateEntry() BaseEntryIf
-	DropEntryLocked(txnCtx txnif.TxnReader) error
-	IsCommitting() bool
-	PrepareAdd(txn txnif.TxnReader) (err error)
-	DeleteAfter(ts types.TS) bool
-	IsCommitted() bool
-	CloneCommittedInRange(start, end types.TS) (ret BaseEntryIf)
-	GetCurrOp() OpT
-	GetCreatedAt() types.TS
-	GetDeleteAt() types.TS
-	TxnCanGet(ts types.TS) (can, dropped bool)
 }
 
 func CompareUint64(left, right uint64) int {

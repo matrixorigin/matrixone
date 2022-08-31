@@ -28,21 +28,24 @@ import (
 
 type UpdateNodeIf interface {
 	CloneAll() UpdateNodeIf
-	CloneData() UpdateNodeIf
-	UpdateNode(UpdateNodeIf) //ApplyDelete()error
-	HasDropped() bool
-	IsSameTxn(types.TS) bool
-	IsActive() bool
-	IsCommitting() bool
+	// CloneData() UpdateNodeIf
+	UpdateNode(UpdateNodeIf)
 	GetTxn() txnif.TxnReader
-	GetEnd() types.TS
-	GetStart() types.TS
+	GetEnd() types.TS   //
+	GetStart() types.TS //
 	GetLogIndex() []*wal.Index
 	String() string
 	AddLogIndex(*wal.Index)
+
+	HasDropped() bool
+
+	IsSameTxn(types.TS) bool
+	IsActive() bool
+	IsCommitting() bool
+
 	PrepareCommit() error
 	Prepare2PCPrepare() error
-	// PrepareRollback() error
+	// PrepareRollback() error // In BaseEntry
 	ApplyCommit(index *wal.Index) error
 	ApplyRollback(index *wal.Index) error
 	ReadFrom(io.Reader) (int64, error)
