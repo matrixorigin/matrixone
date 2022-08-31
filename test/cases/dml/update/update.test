@@ -119,4 +119,14 @@ update t1 join t2 on t1.a = t2.a set t1.b = default, t2.a = default;
 select * from t1;
 select * from t2;
 
+drop table if exists t1;
+create table t1(a int auto_increment, b int auto_increment);
+insert into t1 values(null, null), (null, null);
+select * from t1;
+insert into t1 values(100, 200), (null, null);
+select * from t1;
+update t1 set a=null;
+select * from t1;
+update t1 set b=null;
+select * from t1;
 drop database if exists db1;

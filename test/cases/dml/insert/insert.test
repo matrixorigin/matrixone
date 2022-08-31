@@ -80,3 +80,14 @@ drop table if exists t1;
 create table t1 (a date default DATE("2017-06-15 09:34:21"));
 insert into t1 (a) values (default), (default), (default);
 select * from t1;
+
+drop table if exists t1;
+create table t1(a int auto_increment, b int);
+insert into t1 values(null, 2), (3, null), (null, null);
+select * from t1;
+drop table if exists t1;
+create table t1(a int auto_increment, b bigint auto_increment);
+insert into t1 values(null, 2), (3, null), (null, null);
+select * from t1;
+insert into t1 values(100, 2), (null, null), (null, null);
+select * from t1;
