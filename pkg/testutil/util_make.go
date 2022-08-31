@@ -337,6 +337,7 @@ type vecType interface {
 func NewProc() *process.Process {
 	proc := process.New(mheap.New(guest.New(1<<20, host.New(1<<20))))
 	proc.SessionInfo.TimeZone = time.Local
+	proc.FileService = NewFS()
 	return proc
 }
 

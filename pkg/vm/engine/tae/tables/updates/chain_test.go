@@ -78,7 +78,7 @@ func TestColumnChain1(t *testing.T) {
 	}
 	t.Log(chain.StringLocked())
 	assert.Equal(t, cnt1+cnt2+cnt3+cnt4, chain.DepthLocked())
-	t.Log(chain.GetHead().GetPayload().(*ColumnUpdateNode).StringLocked())
+	t.Log(chain.GetHead().GetPayload().StringLocked())
 }
 
 func TestColumnChain2(t *testing.T) {
@@ -234,7 +234,7 @@ func TestColumnChain3(t *testing.T) {
 	// t.Log(chain.StringLocked())
 	assert.Equal(t, ncnt, chain.DepthLocked())
 
-	node := chain.GetHead().GetPayload().(*ColumnUpdateNode)
+	node := chain.GetHead().GetPayload()
 	cmd, err := node.MakeCommand(1)
 	assert.Nil(t, err)
 	defer cmd.Close()

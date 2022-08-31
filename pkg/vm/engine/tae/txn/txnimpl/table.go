@@ -558,13 +558,13 @@ func (tbl *txnTable) PreCommitOr2PCPrepareDedup() (err error) {
 func (tbl *txnTable) DoDedup(pks containers.Vector, preCommit bool) (err error) {
 	segIt := tbl.entry.MakeSegmentIt(false)
 	for segIt.Valid() {
-		seg := segIt.Get().GetPayload().(*catalog.SegmentEntry)
+		seg := segIt.Get().GetPayload()
 		if preCommit && seg.GetID() < tbl.maxSegId {
 			return
 		}
 		{
 			seg.RLock()
-			needwait, txnToWait := seg.NeedWaitCommitting(tbl.store.txn.GetStartTS())
+			needwait, txnToWait := seg.NeedWaitCommittingMeta(tbl.store.txn.GetStartTS())
 			if needwait {
 				seg.RUnlock()
 				txnToWait.GetTxnState(true)
@@ -589,7 +589,7 @@ func (tbl *txnTable) DoDedup(pks containers.Vector, preCommit bool) (err error) 
 		err = nil
 		blkIt := seg.MakeBlockIt(false)
 		for blkIt.Valid() {
-			blk := blkIt.Get().GetPayload().(*catalog.BlockEntry)
+			blk := blkIt.Get().GetPayload()
 			if preCommit && blk.GetID() < tbl.maxBlkId {
 				return
 			}

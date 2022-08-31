@@ -1574,6 +1574,7 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 	cwft.proc.UnixTime = time.Now().UnixNano()
 	txnHandler := cwft.ses.GetTxnHandler()
 	cwft.proc.TxnOperator = txnHandler.GetTxn()
+	cwft.proc.FileService = cwft.ses.Pu.FileService
 	cwft.compile = compile.New(cwft.ses.GetDatabaseName(), cwft.ses.GetSql(), cwft.ses.GetUserName(), requestCtx, cwft.ses.GetStorage(), cwft.proc, cwft.stmt)
 	err = cwft.compile.Compile(cwft.plan, cwft.ses, fill)
 	if err != nil {
@@ -1708,6 +1709,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		Version:      serverVersion,
 		TimeZone:     ses.timeZone,
 	}
+	proc.FileService = ses.Pu.FileService
 
 	cws, err := GetComputationWrapper(ses.GetDatabaseName(),
 		sql,
@@ -2078,6 +2080,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		}
 		goto handleNext
 	handleFailed:
+		logutil.Error(err.Error())
 		if !fromLoadData {
 			txnErr = ses.TxnRollbackSingleStatement(stmt)
 			if txnErr != nil {

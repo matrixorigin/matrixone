@@ -26,7 +26,6 @@ import (
 	"fmt"
 	"io"
 	"math"
-	"os"
 	"path"
 	"strconv"
 	"strings"
@@ -50,7 +49,7 @@ func String(arg any, buf *bytes.Buffer) {
 	buf.WriteString("sql output")
 }
 
-func Prepare(_ *process.Process, arg any) error {
+func Prepare(proc *process.Process, arg any) error {
 	param := arg.(*Argument).Es
 	param.batchSize = 40000
 	param.extern = &tree.ExternParam{}
@@ -59,9 +58,10 @@ func Prepare(_ *process.Process, arg any) error {
 		param.End = true
 		return err
 	}
+	param.extern.FileService = proc.FileService
 	param.IgnoreLineTag = int(param.extern.Tail.IgnoredLines)
 	param.IgnoreLine = param.IgnoreLineTag
-	fileList, err := getFileDataList(param.extern)
+	fileList, err := ReadDir(param.extern)
 	if err != nil {
 		param.End = true
 		return err
@@ -92,82 +92,35 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 	return false, nil
 }
 
-func ReadFromS3(param *tree.ExternParam) ([]string, error) {
-	var config fileservice.S3Config
-	config.Bucket = param.S3Param.Config.Bucket
-	config.Endpoint = param.S3Param.Config.Endpoint
-
-	if param.S3Param.APIKey != "" {
-		os.Setenv("AWS_REGION", param.S3Param.Region)
-		os.Setenv("AWS_ACCESS_KEY_ID", param.S3Param.APIKey)
-		os.Setenv("AWS_SECRET_ACCESS_KEY", param.S3Param.APISecret)
-	}
-
-	fs, err := fileservice.NewS3FS(
-		"",
-		"s3",
-		config.Endpoint,
-		config.Bucket,
-		config.KeyPrefix,
-		128*1024,
-	)
+func ReadDir(param *tree.ExternParam) (fileList []string, err error) {
+	dir, pattern := path.Split(param.Filepath)
+	fs, readPath, err := fileservice.GetForETL(param.FileService, dir+"/")
 	if err != nil {
 		return nil, err
 	}
-
-	index := strings.LastIndex(param.Filepath, "/")
-	dir, file := "", param.Filepath
-	if index != -1 {
-		dir = string([]byte(param.Filepath)[0:index])
-		file = string([]byte(param.Filepath)[index+1:])
-	}
-
-	ctx := context.Background()
-	DirEntry, err := fs.List(ctx, dir)
+	ctx := context.TODO()
+	entries, err := fs.List(ctx, readPath)
 	if err != nil {
 		return nil, err
 	}
-
-	var fileList []string
-	for _, entry := range DirEntry {
-		matched, _ := path.Match(file, entry.Name)
-		if matched {
-			if dir != "" {
-				fileList = append(fileList, dir+"/"+entry.Name)
-			} else {
-				fileList = append(fileList, entry.Name)
-			}
+	for _, entry := range entries {
+		matched, _ := path.Match(pattern, entry.Name)
+		if !matched {
+			continue
 		}
+		fileList = append(fileList, path.Join(dir, entry.Name))
 	}
-	return fileList, nil
+	return
 }
 
-func ReadFromS3File(param *tree.ExternParam) (io.ReadCloser, error) {
-	var config fileservice.S3Config
-	config.Bucket = param.S3Param.Config.Bucket
-	config.Endpoint = param.S3Param.Config.Endpoint
-
-	if param.S3Param.APIKey != "" {
-		os.Setenv("AWS_REGION", param.S3Param.Region)
-		os.Setenv("AWS_ACCESS_KEY_ID", param.S3Param.APIKey)
-		os.Setenv("AWS_SECRET_ACCESS_KEY", param.S3Param.APISecret)
-	}
-
-	fs, err := fileservice.NewS3FS(
-		"",
-		"s3",
-		config.Endpoint,
-		config.Bucket,
-		config.KeyPrefix,
-		128*1024,
-	)
+func ReadFile(param *tree.ExternParam) (io.ReadCloser, error) {
+	fs, readPath, err := fileservice.GetForETL(param.FileService, param.Filepath)
 	if err != nil {
 		return nil, err
 	}
-
 	var r io.ReadCloser
 	vec := fileservice.IOVector{
-		FilePath: param.Filepath,
+		FilePath: readPath,
 		Entries: []fileservice.IOEntry{
 			0: {
 				Offset:            0,
@@ -176,139 +129,12 @@ func ReadFromS3File(param *tree.ExternParam) (io.ReadCloser, error) {
 			},
 		},
 	}
-	ctx := context.Background()
+	ctx := context.TODO()
 	err = fs.Read(ctx, &vec)
 	if err != nil {
 		return nil, err
 	}
 	return r, nil
-}
-
-func ReadFromLocal(param *tree.ExternParam) ([]string, error) {
-	index := strings.LastIndex(param.Filepath, "/")
-	dir, file := "", param.Filepath
-	if index != -1 {
-		dir = string([]byte(param.Filepath)[0:index])
-		file = string([]byte(param.Filepath)[index+1:])
-	}
-
-	fs, err := fileservice.NewLocalETLFS("etl", dir)
-	if err != nil {
-		return nil, err
-	}
-
-	ctx := context.Background()
-	DirEntry, err := fs.List(ctx, "")
-	if err != nil {
-		return nil, err
-	}
-
-	var fileList []string
-	for _, entry := range DirEntry {
-		matched, _ := path.Match(file, entry.Name)
-		if matched {
-			fileList = append(fileList, dir+"/"+entry.Name)
-		}
-	}
-	return fileList, nil
-}
-
-func ReadFromLocalFile(param *tree.ExternParam) (io.ReadCloser, error) {
-	var r io.ReadCloser
-	index := strings.LastIndex(param.Filepath, "/")
-	dir, file := "", param.Filepath
-	if index != -1 {
-		dir = string([]byte(param.Filepath)[0:index])
-		file = string([]byte(param.Filepath)[index+1:])
-	}
-
-	fs, err := fileservice.NewLocalETLFS("etl", dir)
-	if err != nil {
-		return nil, err
-	}
-	ctx := context.Background()
-	vec := fileservice.IOVector{
-		FilePath: file,
-		Entries: []fileservice.IOEntry{
-			0: {
-				Offset:            0,
-				Size:              -1,
-				ReadCloserForRead: &r,
-			},
-		},
-	}
-	err = fs.Read(ctx, &vec)
-	if err != nil {
-		return nil, err
-	}
-	return r, nil
-}
-
-func InitS3Param(param *tree.ExternParam) error {
-	param.S3Param = &tree.S3Parameter{}
-	for i := 0; i < len(param.S3option); i += 2 {
-		switch strings.ToLower(param.S3option[i]) {
-		case "endpoint":
-			param.S3Param.Config.Endpoint = param.S3option[i+1]
-		case "region":
-			param.S3Param.Region = param.S3option[i+1]
-		case "access_key_id":
-			param.S3Param.APIKey = param.S3option[i+1]
-		case "secret_access_key":
-			param.S3Param.APISecret = param.S3option[i+1]
-		case "bucket":
-			param.S3Param.Config.Bucket = param.S3option[i+1]
-		case "filepath":
-			param.Filepath = param.S3option[i+1]
-		case "compression":
-			param.CompressType = param.S3option[i+1]
-		default:
-			return fmt.Errorf("the keyword '%s' is not support", strings.ToLower(param.S3option[i]))
-		}
-	}
-	return nil
-}
-
-func getFileDataList(param *tree.ExternParam) ([]string, error) {
-	switch param.ScanType {
-	case tree.LOCAL:
-		fileList, err := ReadFromLocal(param)
-		if err != nil {
-			return nil, err
-		}
-		return fileList, nil
-	case tree.S3, tree.MinIO:
-		err := InitS3Param(param)
-		if err != nil {
-			return nil, err
-		}
-		fileList, err := ReadFromS3(param)
-		if err != nil {
-			return nil, err
-		}
-		return fileList, nil
-	default:
-		return nil, errors.New("the extern file type is not support now")
-	}
-}
-
-func getFileDataReader(param *tree.ExternParam) (io.ReadCloser, error) {
-	switch param.ScanType {
-	case tree.LOCAL:
-		reader, err := ReadFromLocalFile(param)
-		if err != nil {
-			return nil, err
-		}
-		return reader, nil
-	case tree.S3, tree.MinIO:
-		reader, err := ReadFromS3File(param)
-		if err != nil {
-			return nil, err
-		}
-		return reader, nil
-	default:
-		return nil, errors.New("the extern file type is not support now")
-	}
 }
 
 func getCompressType(param *tree.ExternParam) string {
@@ -788,7 +614,7 @@ func GetBatchData(param *ExternalParam, plh *ParseLineHandler, proc *process.Pro
 // get file reader from external file
 func GetSimdcsvReader(param *ExternalParam) (*ParseLineHandler, error) {
 	var err error
-	param.reader, err = getFileDataReader(param.extern)
+	param.reader, err = ReadFile(param.extern)
 	if err != nil {
 		return nil, err
 	}
