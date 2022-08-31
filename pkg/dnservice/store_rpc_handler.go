@@ -143,7 +143,8 @@ func (s *store) handleGetStatus(ctx context.Context, request *txn.TxnRequest, re
 func (s *store) validDNShard(request *txn.TxnRequest, response *txn.TxnResponse) *replica {
 	shard := request.GetTargetDN()
 	r := s.getReplica(shard.ShardID)
-	if r == nil {
+	if r == nil ||
+		r.shard.GetReplicaID() != shard.GetReplicaID() {
 		s.mu.RLock()
 		defer s.mu.RUnlock()
 		response.TxnError = &txn.TxnError{
