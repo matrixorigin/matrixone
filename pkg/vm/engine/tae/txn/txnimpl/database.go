@@ -28,7 +28,7 @@ import (
 type txnDBIt struct {
 	*sync.RWMutex
 	txn    txnif.AsyncTxn
-	linkIt *common.SortedDListIt
+	linkIt *common.GenericSortedDListIt[*catalog.DBEntry]
 	itered bool // linkIt has no dummy head, use this to avoid duplicate filter logic for the very first entry
 	curr   *catalog.DBEntry
 	err    error
@@ -66,7 +66,7 @@ func (it *txnDBIt) Next() {
 			it.curr = nil
 			break
 		}
-		curr := node.GetPayload().(*catalog.DBEntry)
+		curr := node.GetPayload()
 		curr.RLock()
 		if curr.GetTenantID() == it.txn.GetTenantID() || isSysSharedDB(curr.GetName()) {
 			valid, err = curr.TxnCanRead(it.txn, curr.RWMutex)

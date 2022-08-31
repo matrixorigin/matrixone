@@ -279,23 +279,29 @@ func constructInsert(n *plan.Node, eg engine.Engine, txnOperator TxnOperator) (*
 	return &insert.Argument{
 		TargetTable:   relation,
 		TargetColDefs: n.TableDef.Cols,
+		Engine:        eg,
+		DB:            db,
+		TableID:       relation.GetTableID(ctx),
 	}, nil
 }
 
 func constructUpdate(n *plan.Node, eg engine.Engine, txnOperator TxnOperator) (*update.Argument, error) {
 	ctx := context.TODO()
 	us := make([]*update.UpdateCtx, len(n.UpdateCtxs))
+	tableID := make([]string, len(n.UpdateCtxs))
+	db := make([]engine.Database, len(n.UpdateCtxs))
 	for i, updateCtx := range n.UpdateCtxs {
-
 		dbSource, err := eg.Database(ctx, updateCtx.DbName, txnOperator)
 		if err != nil {
 			return nil, err
 		}
+		db[i] = dbSource
 		relation, err := dbSource.Relation(ctx, updateCtx.TblName)
 		if err != nil {
 			return nil, err
 		}
 
+		tableID[i] = relation.GetTableID(ctx)
 		colNames := make([]string, 0, len(updateCtx.UpdateCols))
 		for _, col := range updateCtx.UpdateCols {
 			colNames = append(colNames, col.Name)
@@ -313,7 +319,11 @@ func constructUpdate(n *plan.Node, eg engine.Engine, txnOperator TxnOperator) (*
 		}
 	}
 	return &update.Argument{
-		UpdateCtxs: us,
+		UpdateCtxs:  us,
+		Engine:      eg,
+		DB:          db,
+		TableID:     tableID,
+		TableDefVec: n.TableDefVec,
 	}, nil
 }
 

@@ -245,6 +245,9 @@ func (s *store) heartbeatTask(ctx context.Context) {
 			}
 
 			for _, cmd := range commands.Commands {
+				s.logger.Debug("received hakeeper command",
+					zap.String("cmd", cmd.LogString()))
+
 				if cmd.ServiceType != logservicepb.DnService {
 					s.logger.Fatal("receive invalid schedule command",
 						zap.String("type", cmd.ServiceType.String()))
@@ -277,8 +280,11 @@ func (s *store) heartbeatTask(ctx context.Context) {
 
 func (s *store) createReplica(shard metadata.DNShard) error {
 	r := newReplica(shard, s.logger.With(util.TxnDNShardField(shard)))
-	_, ok := s.replicas.LoadOrStore(shard.ShardID, r)
+	v, ok := s.replicas.LoadOrStore(shard.ShardID, r)
 	if ok {
+		s.logger.Debug("DNShard already created",
+			zap.String("new", shard.DebugString()),
+			zap.String("exist", v.(*replica).shard.DebugString()))
 		return nil
 	}
 

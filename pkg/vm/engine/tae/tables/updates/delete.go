@@ -17,9 +17,10 @@ package updates
 import (
 	"encoding/binary"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"io"
 	"sync"
+
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -36,9 +37,30 @@ const (
 	NT_Merge
 )
 
+func compareDeleteNode(a, b *DeleteNode) int {
+	a.RLock()
+	defer a.RUnlock()
+	b.RLock()
+	defer b.RUnlock()
+	if a.commitTs == b.commitTs {
+		if a.startTs.Less(b.startTs) {
+			return -1
+		} else if a.startTs.Greater(b.startTs) {
+			return 1
+		}
+		return 0
+	}
+	if a.commitTs.Equal(txnif.UncommitTS) {
+		return 1
+	} else if b.commitTs.Equal(txnif.UncommitTS) {
+		return -1
+	}
+	return 0
+}
+
 type DeleteNode struct {
 	*sync.RWMutex
-	*common.DLNode
+	*common.GenericDLNode[*DeleteNode]
 	chain      *DeleteChain
 	txn        txnif.AsyncTxn
 	logIndex   *wal.Index
@@ -96,29 +118,7 @@ func (node *DeleteNode) AddLogIndexLocked(index *wal.Index) {
 func (node *DeleteNode) IsMerged() bool { return node.nt == NT_Merge }
 func (node *DeleteNode) AttachTo(chain *DeleteChain) {
 	node.chain = chain
-	node.DLNode = chain.Insert(node)
-}
-
-func (node *DeleteNode) Compare(o common.NodePayload) int {
-	op := o.(*DeleteNode)
-	node.RLock()
-	defer node.RUnlock()
-	op.RLock()
-	defer op.RUnlock()
-	if node.commitTs == op.commitTs {
-		if node.startTs.Less(op.startTs) {
-			return -1
-		} else if node.startTs.Greater(op.startTs) {
-			return 1
-		}
-		return 0
-	}
-	if node.commitTs.Equal(txnif.UncommitTS) {
-		return 1
-	} else if op.commitTs.Equal(txnif.UncommitTS) {
-		return -1
-	}
-	return 0
+	node.GenericDLNode = chain.Insert(node)
 }
 
 func (node *DeleteNode) GetChain() txnif.DeleteChain          { return node.chain }

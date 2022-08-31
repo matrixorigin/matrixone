@@ -86,8 +86,8 @@ func TestRegister(t *testing.T) {
 		{
 			name: "normal",
 			args: args{
-				name: newNum(1),
-				impl: &dummyNumPipeImpl{},
+				name: newDummy(1),
+				impl: &dummyPipeImpl{},
 			},
 		},
 	}
