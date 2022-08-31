@@ -56,7 +56,6 @@ jobs:
           
       - name: Coverage Calculate
         if: ${{ steps.ut-pr.outputs.paths != '' }}
-        continue-on-error: true
         run: |
           cd $GITHUB_WORKSPACE/matrixone
           echo "--------------------ut_coverage start--------------------"
