@@ -16,6 +16,7 @@ package fileservice
 
 import (
 	"fmt"
+	"path/filepath"
 	"strings"
 )
 
@@ -43,6 +44,30 @@ func Get[T any](fs FileService, name string) (res T, err error) {
 	if !strings.EqualFold(fs.Name(), lowerName) {
 		err = fmt.Errorf("file service name not match, expecting %s, got %s", name, fs.Name())
 		return
+	}
+	return
+}
+
+func GetForETL(fs FileService, path string) (res ETLFileService, readPath string, err error) {
+	fsPath, err := ParsePath(path)
+	if err != nil {
+		return nil, "", err
+	}
+	if fsPath.Service == "" {
+		// no service, create local ETL fs
+		dir, file := filepath.Split(path)
+		res, err = NewLocalETLFS("etl", dir)
+		if err != nil {
+			return nil, "", err
+		}
+		readPath = file
+	} else {
+		// get etl fs
+		res, err = Get[ETLFileService](fs, fsPath.Service)
+		if err != nil {
+			return nil, "", err
+		}
+		readPath = fsPath.Full
 	}
 	return
 }
