@@ -894,9 +894,10 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string) (*plan2.
 					Precision: attr.Attr.Type.Precision,
 					Scale:     attr.Attr.Type.Scale,
 				},
-				Primary: attr.Attr.Primary,
-				Default: attr.Attr.Default,
-				Comment: attr.Attr.Comment,
+				Primary:       attr.Attr.Primary,
+				Default:       attr.Attr.Default,
+				Comment:       attr.Attr.Comment,
+				AutoIncrement: attr.Attr.AutoIncrement,
 			})
 		} else if pro, ok := def.(*engine.PropertiesDef); ok {
 			for _, p := range pro.Properties {
