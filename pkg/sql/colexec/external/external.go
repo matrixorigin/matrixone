@@ -27,7 +27,6 @@ import (
 	"io"
 	"math"
 	"path"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -95,35 +94,15 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 
 func ReadDir(param *tree.ExternParam) (fileList []string, err error) {
 	dir, pattern := path.Split(param.Filepath)
-
-	var fs fileservice.ETLFileService
-	var readPath string
-	fsPath, err := fileservice.ParsePath(dir)
+	fs, readPath, err := fileservice.GetForETL(param.FileService, dir+"/")
 	if err != nil {
 		return nil, err
 	}
-	if fsPath.Service == "" {
-		// no service, create ETL fs
-		fs, err = fileservice.NewLocalETLFS("etl", dir)
-		if err != nil {
-			return nil, err
-		}
-		readPath = ""
-	} else {
-		// get etl fs
-		fs, err = fileservice.Get[fileservice.ETLFileService](param.FileService, fsPath.Service)
-		if err != nil {
-			return nil, err
-		}
-		readPath = dir
-	}
-
 	ctx := context.TODO()
 	entries, err := fs.List(ctx, readPath)
 	if err != nil {
 		return nil, err
 	}
-
 	for _, entry := range entries {
 		matched, _ := path.Match(pattern, entry.Name)
 		if !matched {
@@ -131,35 +110,14 @@ func ReadDir(param *tree.ExternParam) (fileList []string, err error) {
 		}
 		fileList = append(fileList, path.Join(dir, entry.Name))
 	}
-
 	return
 }
 
 func ReadFile(param *tree.ExternParam) (io.ReadCloser, error) {
-
-	var fs fileservice.ETLFileService
-	var readPath string
-	fsPath, err := fileservice.ParsePath(param.Filepath)
+	fs, readPath, err := fileservice.GetForETL(param.FileService, param.Filepath)
 	if err != nil {
 		return nil, err
 	}
-	if fsPath.Service == "" {
-		// no service, create ETL fs
-		dir, file := filepath.Split(param.Filepath)
-		fs, err = fileservice.NewLocalETLFS("etl", dir)
-		if err != nil {
-			return nil, err
-		}
-		readPath = file
-	} else {
-		// get etl fs
-		fs, err = fileservice.Get[fileservice.ETLFileService](param.FileService, fsPath.Service)
-		if err != nil {
-			return nil, err
-		}
-		readPath = fsPath.Full
-	}
-
 	var r io.ReadCloser
 	vec := fileservice.IOVector{
 		FilePath: readPath,
