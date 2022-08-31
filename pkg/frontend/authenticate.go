@@ -228,7 +228,7 @@ const (
 	//tbl_name
 	privilegeLevelTable = "t"
 	//db_name.routine_name
-	//privilegeLevelRoutine = "r"
+	privilegeLevelRoutine = "r"
 )
 
 type PrivilegeType int
@@ -248,8 +248,10 @@ const (
 	PrivilegeTypeShowDatabases
 	PrivilegeTypeConnect
 	PrivilegeTypeManageGrants
-	PrivilegeTypeAll
-	PrivilegeTypeOwnership
+	PrivilegeTypeAccountAll
+	PrivilegeTypeAccountOwnership
+	PrivilegeTypeUserOwnership
+	PrivilegeTypeRoleOwnership
 	PrivilegeTypeShowTables
 	PrivilegeTypeCreateTable
 	PrivilegeTypeCreateView
@@ -257,6 +259,8 @@ const (
 	PrivilegeTypeDropView
 	PrivilegeTypeAlterTable
 	PrivilegeTypeAlterView
+	PrivilegeTypeDatabaseAll
+	PrivilegeTypeDatabaseOwnership
 	PrivilegeTypeSelect
 	PrivilegeTypeInsert
 	PrivilegeTypeUpdate
@@ -264,6 +268,8 @@ const (
 	PrivilegeTypeDelete
 	PrivilegeTypeReference
 	PrivilegeTypeIndex //include create/alter/drop index
+	PrivilegeTypeTableAll
+	PrivilegeTypeTableOwnership
 	PrivilegeTypeExecute
 )
 
@@ -344,10 +350,10 @@ func (pt PrivilegeType) String() string {
 		return "connect"
 	case PrivilegeTypeManageGrants:
 		return "manage grants"
-	case PrivilegeTypeAll:
-		return "all"
-	case PrivilegeTypeOwnership:
-		return "ownership"
+	case PrivilegeTypeAccountAll:
+		return "account all"
+	case PrivilegeTypeAccountOwnership:
+		return "account ownership"
 	case PrivilegeTypeShowTables:
 		return "show tables"
 	case PrivilegeTypeCreateTable:
@@ -412,9 +418,9 @@ func (pt PrivilegeType) Scope() PrivilegeScope {
 		return PrivilegeScopeAccount
 	case PrivilegeTypeManageGrants:
 		return PrivilegeScopeAccount
-	case PrivilegeTypeAll:
+	case PrivilegeTypeAccountAll:
 		return PrivilegeScopeAccount | PrivilegeScopeDatabase | PrivilegeScopeTable
-	case PrivilegeTypeOwnership:
+	case PrivilegeTypeAccountOwnership:
 		return PrivilegeScopeAccount | PrivilegeScopeUser | PrivilegeScopeRole | PrivilegeScopeDatabase | PrivilegeScopeTable
 	case PrivilegeTypeShowTables:
 		return PrivilegeScopeDatabase
@@ -463,7 +469,7 @@ var (
 		"mo_role":       0,
 		"mo_user_grant": 0,
 		"mo_role_grant": 0,
-		"mo_role_priv":  0,
+		"mo_role_privs": 0,
 	}
 	//the sqls creating many tables for the tenant.
 	//Wrap them in a transaction
@@ -510,7 +516,7 @@ var (
 				granted_time timestamp,
 				with_grant_option bool
 			);`,
-		`create table mo_role_priv(
+		`create table mo_role_privs(
 				role_id int,
 				role_name  varchar(100),
 				obj_type  varchar(16),
@@ -551,7 +557,7 @@ var (
 				owner,
 				default_role
     		) values(%d,%s,"%s","%s","%s","%s",%s,"%s",%d,%d,%d);`
-	initMoRolePrivFormat = `insert into mo_catalog.mo_role_priv(
+	initMoRolePrivFormat = `insert into mo_catalog.mo_role_privs(
 				role_id,
 				role_name,
 				obj_type,
@@ -620,75 +626,154 @@ type privilege struct {
 	withGrantOption bool
 }
 
+// privilegeEntry denotes the entry of the privilege that appears in the table mo_role_privs
+type privilegeEntry struct {
+	privilegeId     PrivilegeType
+	privilegeLevel  string
+	objType         string
+	objId           int
+	withGrantOption bool
+}
+
 var (
-	//the content to fill the table mo_role_priv
-	sysRoles = []role{
-		{moAdminRoleID, moAdminRoleName},
-		{publicRoleID, publicRoleName},
+	//initial privilege entries
+	privilegeEntriesMap = map[PrivilegeType]privilegeEntry{
+		PrivilegeTypeCreateAccount:     {PrivilegeTypeCreateAccount, privilegeLevelStar, objectTypeAccount, objectIDAll, false},
+		PrivilegeTypeDropAccount:       {PrivilegeTypeDropAccount, privilegeLevelStar, objectTypeAccount, objectIDAll, false},
+		PrivilegeTypeAlterAccount:      {PrivilegeTypeAlterAccount, privilegeLevelStar, objectTypeAccount, objectIDAll, false},
+		PrivilegeTypeCreateUser:        {PrivilegeTypeCreateUser, privilegeLevelStar, objectTypeAccount, objectIDAll, true},
+		PrivilegeTypeDropUser:          {PrivilegeTypeDropUser, privilegeLevelStar, objectTypeAccount, objectIDAll, true},
+		PrivilegeTypeAlterUser:         {PrivilegeTypeAlterUser, privilegeLevelStar, objectTypeAccount, objectIDAll, true},
+		PrivilegeTypeCreateRole:        {PrivilegeTypeCreateRole, privilegeLevelStar, objectTypeAccount, objectIDAll, true},
+		PrivilegeTypeDropRole:          {PrivilegeTypeDropRole, privilegeLevelStar, objectTypeAccount, objectIDAll, true},
+		PrivilegeTypeAlterRole:         {PrivilegeTypeAlterRole, privilegeLevelStar, objectTypeAccount, objectIDAll, true},
+		PrivilegeTypeCreateDatabase:    {PrivilegeTypeCreateDatabase, privilegeLevelStar, objectTypeAccount, objectIDAll, true},
+		PrivilegeTypeDropDatabase:      {PrivilegeTypeDropDatabase, privilegeLevelStar, objectTypeAccount, objectIDAll, true},
+		PrivilegeTypeShowDatabases:     {PrivilegeTypeShowDatabases, privilegeLevelStar, objectTypeAccount, objectIDAll, true},
+		PrivilegeTypeConnect:           {PrivilegeTypeConnect, privilegeLevelStar, objectTypeAccount, objectIDAll, true},
+		PrivilegeTypeManageGrants:      {PrivilegeTypeManageGrants, privilegeLevelStar, objectTypeAccount, objectIDAll, true},
+		PrivilegeTypeAccountAll:        {PrivilegeTypeAccountAll, privilegeLevelStar, objectTypeAccount, objectIDAll, true},
+		PrivilegeTypeAccountOwnership:  {PrivilegeTypeAccountOwnership, privilegeLevelStar, objectTypeAccount, objectIDAll, true},
+		PrivilegeTypeUserOwnership:     {PrivilegeTypeUserOwnership, privilegeLevelStar, objectTypeAccount, objectIDAll, true},
+		PrivilegeTypeRoleOwnership:     {PrivilegeTypeRoleOwnership, privilegeLevelStar, objectTypeAccount, objectIDAll, true},
+		PrivilegeTypeShowTables:        {PrivilegeTypeShowTables, privilegeLevelDatabaseStar, objectTypeDatabase, objectIDAll, true},
+		PrivilegeTypeCreateTable:       {PrivilegeTypeCreateTable, privilegeLevelDatabaseStar, objectTypeDatabase, objectIDAll, true},
+		PrivilegeTypeCreateView:        {PrivilegeTypeCreateView, privilegeLevelDatabaseStar, objectTypeDatabase, objectIDAll, true},
+		PrivilegeTypeDropTable:         {PrivilegeTypeDropTable, privilegeLevelDatabaseStar, objectTypeDatabase, objectIDAll, true},
+		PrivilegeTypeDropView:          {PrivilegeTypeDropView, privilegeLevelDatabaseStar, objectTypeDatabase, objectIDAll, true},
+		PrivilegeTypeAlterTable:        {PrivilegeTypeAlterTable, privilegeLevelDatabaseStar, objectTypeDatabase, objectIDAll, true},
+		PrivilegeTypeAlterView:         {PrivilegeTypeAlterView, privilegeLevelDatabaseStar, objectTypeDatabase, objectIDAll, true},
+		PrivilegeTypeDatabaseAll:       {PrivilegeTypeDatabaseAll, privilegeLevelStar, objectTypeAccount, objectIDAll, true},
+		PrivilegeTypeDatabaseOwnership: {PrivilegeTypeDatabaseOwnership, privilegeLevelStar, objectTypeAccount, objectIDAll, true},
+		PrivilegeTypeSelect:            {PrivilegeTypeSelect, privilegeLevelTable, objectTypeTable, objectIDAll, true},
+		PrivilegeTypeInsert:            {PrivilegeTypeInsert, privilegeLevelTable, objectTypeTable, objectIDAll, true},
+		PrivilegeTypeUpdate:            {PrivilegeTypeUpdate, privilegeLevelTable, objectTypeTable, objectIDAll, true},
+		PrivilegeTypeTruncate:          {PrivilegeTypeTruncate, privilegeLevelTable, objectTypeTable, objectIDAll, true},
+		PrivilegeTypeDelete:            {PrivilegeTypeDelete, privilegeLevelTable, objectTypeTable, objectIDAll, true},
+		PrivilegeTypeReference:         {PrivilegeTypeReference, privilegeLevelTable, objectTypeTable, objectIDAll, true},
+		PrivilegeTypeIndex:             {PrivilegeTypeIndex, privilegeLevelTable, objectTypeTable, objectIDAll, true},
+		PrivilegeTypeTableAll:          {PrivilegeTypeTableAll, privilegeLevelStar, objectTypeAccount, objectIDAll, true},
+		PrivilegeTypeTableOwnership:    {PrivilegeTypeTableOwnership, privilegeLevelStar, objectTypeAccount, objectIDAll, true},
+		PrivilegeTypeExecute:           {PrivilegeTypeExecute, privilegeLevelRoutine, objectTypeFunction, objectIDAll, true},
 	}
 
-	sysObjects = []object{
-		{objectTypeDatabase, objectIDAll},
-		{objectTypeTable, objectIDAll},
-		{objectTypeAccount, objectIDAll},
-		{objectTypeFunction, objectIDAll},
+	//the initial entries of mo_role_privs for the role 'moadmin'
+	entriesOfMoAdminForMoRolePrivsFor = []PrivilegeType{
+		PrivilegeTypeCreateAccount,
+		PrivilegeTypeDropAccount,
+		PrivilegeTypeAlterAccount,
+		PrivilegeTypeCreateUser,
+		PrivilegeTypeDropUser,
+		PrivilegeTypeAlterUser,
+		PrivilegeTypeCreateRole,
+		PrivilegeTypeDropRole,
+		PrivilegeTypeAlterRole,
+		PrivilegeTypeCreateDatabase,
+		PrivilegeTypeDropDatabase,
+		PrivilegeTypeShowDatabases,
+		PrivilegeTypeConnect,
+		PrivilegeTypeManageGrants,
+		PrivilegeTypeAccountAll,
+		PrivilegeTypeAccountOwnership,
+		PrivilegeTypeUserOwnership,
+		PrivilegeTypeRoleOwnership,
+		PrivilegeTypeShowTables,
+		PrivilegeTypeCreateTable,
+		PrivilegeTypeCreateView,
+		PrivilegeTypeDropTable,
+		PrivilegeTypeDropView,
+		PrivilegeTypeAlterTable,
+		PrivilegeTypeAlterView,
+		PrivilegeTypeDatabaseAll,
+		PrivilegeTypeDatabaseOwnership,
+		PrivilegeTypeSelect,
+		PrivilegeTypeInsert,
+		PrivilegeTypeUpdate,
+		PrivilegeTypeTruncate,
+		PrivilegeTypeDelete,
+		PrivilegeTypeReference,
+		PrivilegeTypeIndex,
+		PrivilegeTypeTableAll,
+		PrivilegeTypeTableOwnership,
+		PrivilegeTypeExecute,
 	}
 
-	sysPrivileges = []privilege{
-		{PrivilegeTypeCreateAccount, privilegeLevelStar, false},
-		{PrivilegeTypeDropAccount, privilegeLevelStar, false},
-		{PrivilegeTypeAlterAccount, privilegeLevelStar, false},
-		{PrivilegeTypeCreateUser, privilegeLevelStar, true},
-		{PrivilegeTypeDropUser, privilegeLevelStar, true},
-		{PrivilegeTypeAlterUser, privilegeLevelStar, true},
-		{PrivilegeTypeCreateRole, privilegeLevelStar, true},
-		{PrivilegeTypeDropRole, privilegeLevelStar, true},
-		{PrivilegeTypeAlterRole, privilegeLevelStar, true},
-		{PrivilegeTypeCreateDatabase, privilegeLevelStar, true},
-		{PrivilegeTypeDropDatabase, privilegeLevelStar, true},
-		{PrivilegeTypeShowDatabases, privilegeLevelStar, true},
-		{PrivilegeTypeConnect, privilegeLevelStar, true},
-		{PrivilegeTypeManageGrants, privilegeLevelStar, true},
-		{PrivilegeTypeAll, privilegeLevelStar, true},
-		{PrivilegeTypeAll, privilegeLevelDatabaseStar, true},
-		{PrivilegeTypeAll, privilegeLevelTable, true},
-		{PrivilegeTypeOwnership, privilegeLevelStar, true},         //multiple
-		{PrivilegeTypeOwnership, privilegeLevelStar, true},         //multiple
-		{PrivilegeTypeOwnership, privilegeLevelStar, true},         //multiple
-		{PrivilegeTypeOwnership, privilegeLevelDatabaseStar, true}, //multiple
-		{PrivilegeTypeOwnership, privilegeLevelTable, true},        //multiple
-		{PrivilegeTypeShowTables, privilegeLevelDatabaseStar, true},
-		{PrivilegeTypeCreateTable, privilegeLevelDatabaseStar, true},
-		{PrivilegeTypeDropTable, privilegeLevelDatabaseStar, true},
-		{PrivilegeTypeAlterTable, privilegeLevelDatabaseStar, true},
-		{PrivilegeTypeSelect, privilegeLevelTable, true},
-		{PrivilegeTypeInsert, privilegeLevelTable, true},
-		{PrivilegeTypeUpdate, privilegeLevelTable, true},
-		{PrivilegeTypeTruncate, privilegeLevelTable, true},
-		{PrivilegeTypeDelete, privilegeLevelTable, true},
-		{PrivilegeTypeReference, privilegeLevelTable, true},
-		{PrivilegeTypeCreateView, privilegeLevelTable, true},
-		{PrivilegeTypeDropView, privilegeLevelTable, true},
-		{PrivilegeTypeAlterView, privilegeLevelTable, true},
-		{PrivilegeTypeIndex, privilegeLevelTable, true},
-		{PrivilegeTypeExecute, privilegeLevelTable, true},
+	//the initial entries of mo_role_privs for the role 'accountadmin'
+	entriesOfAccountAdminForMoRolePrivsFor = []PrivilegeType{
+		PrivilegeTypeCreateUser,
+		PrivilegeTypeDropUser,
+		PrivilegeTypeAlterUser,
+		PrivilegeTypeCreateRole,
+		PrivilegeTypeDropRole,
+		PrivilegeTypeAlterRole,
+		PrivilegeTypeCreateDatabase,
+		PrivilegeTypeDropDatabase,
+		PrivilegeTypeShowDatabases,
+		PrivilegeTypeConnect,
+		PrivilegeTypeManageGrants,
+		PrivilegeTypeAccountAll,
+		PrivilegeTypeAccountOwnership,
+		PrivilegeTypeUserOwnership,
+		PrivilegeTypeRoleOwnership,
+		PrivilegeTypeShowTables,
+		PrivilegeTypeCreateTable,
+		PrivilegeTypeCreateView,
+		PrivilegeTypeDropTable,
+		PrivilegeTypeDropView,
+		PrivilegeTypeAlterTable,
+		PrivilegeTypeAlterView,
+		PrivilegeTypeDatabaseAll,
+		PrivilegeTypeDatabaseOwnership,
+		PrivilegeTypeSelect,
+		PrivilegeTypeInsert,
+		PrivilegeTypeUpdate,
+		PrivilegeTypeTruncate,
+		PrivilegeTypeDelete,
+		PrivilegeTypeReference,
+		PrivilegeTypeIndex,
+		PrivilegeTypeTableAll,
+		PrivilegeTypeTableOwnership,
+		PrivilegeTypeExecute,
 	}
 
-	applicationLevelRoles = []role{
-		{publicRoleID, publicRoleName},
-	}
-
-	applicationLevelObjects = []object{
-		{objectTypeDatabase, objectIDAll},
-		{objectTypeTable, objectIDAll},
-		{objectTypeAccount, objectIDAll},
-		{objectTypeFunction, objectIDAll},
-	}
-
-	applicationLevelPrivileges = []privilege{
-		{PrivilegeTypeConnect, privilegeLevelStar, true},
+	//the initial entries of mo_role_privs for the role 'public'
+	entriesOfPublicForMoRolePrivsFor = []PrivilegeType{
+		PrivilegeTypeConnect,
 	}
 )
+
+// getPrivilegeEntryOfAst decides the privilege of the statement
+func getPrivilegeEntryOfAst(stmt tree.Statement) privilegeEntry {
+	var typ PrivilegeType
+	switch stmt.(type) {
+	case *tree.CreateAccount:
+		typ = PrivilegeTypeCreateAccount
+	default:
+		panic("unsupported stmt")
+	}
+
+	return privilegeEntriesMap[typ]
+}
 
 // checkSysExistsOrNot checks the SYS tenant exists or not.
 func checkSysExistsOrNot(ctx context.Context, pu *config.ParameterUnit) (bool, error) {
@@ -841,26 +926,29 @@ func createTablesInMoCatalog(ctx context.Context, tenant *TenantInfo, pu *config
 	addSqlIntoSet(initMoUser1)
 	addSqlIntoSet(initMoUser2)
 
-	//step4: add new entries to the mo_role_priv
+	//step4: add new entries to the mo_role_privs
+	//moadmin role
+	for _, t := range entriesOfMoAdminForMoRolePrivsFor {
+		entry := privilegeEntriesMap[t]
+		initMoRolePriv := fmt.Sprintf(initMoRolePrivFormat,
+			moAdminRoleID, moAdminRoleName,
+			entry.objType, entry.objId,
+			entry.privilegeId, entry.privilegeId.String(), entry.privilegeLevel,
+			rootID, types.CurrentTimestamp().String2(time.UTC, 0),
+			entry.withGrantOption)
+		addSqlIntoSet(initMoRolePriv)
+	}
 
-	for i := 0; i < len(sysRoles); i++ {
-		for j := 0; j < len(sysObjects); j++ {
-			for k := 0; k < len(sysPrivileges); k++ {
-				r := sysRoles[i]
-				o := sysObjects[j]
-				p := sysPrivileges[k]
-				if r.id == publicRoleID && p.id != PrivilegeTypeConnect {
-					continue
-				}
-				initMoRolePriv := fmt.Sprintf(initMoRolePrivFormat,
-					r.id, r.name,
-					o.typ, o.id,
-					p.id, p.id.String(), p.level,
-					rootID, types.CurrentTimestamp().String2(time.UTC, 0),
-					p.withGrantOption)
-				addSqlIntoSet(initMoRolePriv)
-			}
-		}
+	//public role
+	for _, t := range entriesOfPublicForMoRolePrivsFor {
+		entry := privilegeEntriesMap[t]
+		initMoRolePriv := fmt.Sprintf(initMoRolePrivFormat,
+			publicRoleID, publicRoleName,
+			entry.objType, entry.objId,
+			entry.privilegeId, entry.privilegeId.String(), entry.privilegeLevel,
+			rootID, types.CurrentTimestamp().String2(time.UTC, 0),
+			entry.withGrantOption)
+		addSqlIntoSet(initMoRolePriv)
 	}
 
 	//step5: add new entries to the mo_user_grant
@@ -874,7 +962,7 @@ func createTablesInMoCatalog(ctx context.Context, tenant *TenantInfo, pu *config
 
 	addSqlIntoSet("commit;")
 
-	//fill the mo_account, mo_role, mo_user, mo_role_priv, mo_user_grant
+	//fill the mo_account, mo_role, mo_user, mo_role_privs, mo_user_grant
 	guestMMu := guest.New(pu.SV.GuestMmuLimitation, pu.HostMmu)
 	bh := NewBackgroundHandler(ctx, guestMMu, pu.Mempool, pu)
 	defer bh.Close()
@@ -1035,26 +1123,29 @@ func createTablesInMoCatalogOfGeneralTenant(ctx context.Context, tenant *TenantI
 		tenant.GetUserID(), tenant.GetDefaultRoleID(), publicRoleID)
 	addSqlIntoSet(initMoUser1)
 
-	//step4: add new entries to the mo_role_priv
+	//step4: add new entries to the mo_role_privs
+	//accountadmin role
+	for _, t := range entriesOfAccountAdminForMoRolePrivsFor {
+		entry := privilegeEntriesMap[t]
+		initMoRolePriv := fmt.Sprintf(initMoRolePrivFormat,
+			accountAdminRoleID, accountAdminRoleName,
+			entry.objType, entry.objId,
+			entry.privilegeId, entry.privilegeId.String(), entry.privilegeLevel,
+			tenant.GetUserID(), types.CurrentTimestamp().String2(time.UTC, 0),
+			entry.withGrantOption)
+		addSqlIntoSet(initMoRolePriv)
+	}
 
-	for i := 0; i < len(applicationLevelRoles); i++ {
-		for j := 0; j < len(applicationLevelObjects); j++ {
-			for k := 0; k < len(applicationLevelPrivileges); k++ {
-				r := applicationLevelRoles[i]
-				o := applicationLevelObjects[j]
-				p := applicationLevelPrivileges[k]
-				if r.id == publicRoleID && p.id != PrivilegeTypeConnect {
-					continue
-				}
-				initMoRolePriv := fmt.Sprintf(initMoRolePrivFormat,
-					r.id, r.name,
-					o.typ, o.id,
-					p.id, p.id.String(), p.level,
-					tenant.GetUserID(), types.CurrentTimestamp().String2(time.UTC, 0),
-					p.withGrantOption)
-				addSqlIntoSet(initMoRolePriv)
-			}
-		}
+	//public role
+	for _, t := range entriesOfPublicForMoRolePrivsFor {
+		entry := privilegeEntriesMap[t]
+		initMoRolePriv := fmt.Sprintf(initMoRolePrivFormat,
+			publicRoleID, publicRoleName,
+			entry.objType, entry.objId,
+			entry.privilegeId, entry.privilegeId.String(), entry.privilegeLevel,
+			tenant.GetUserID(), types.CurrentTimestamp().String2(time.UTC, 0),
+			entry.withGrantOption)
+		addSqlIntoSet(initMoRolePriv)
 	}
 
 	//step5: add new entries to the mo_user_grant
@@ -1078,7 +1169,7 @@ func createTablesInMoCatalogOfGeneralTenant(ctx context.Context, tenant *TenantI
 		DefaultRoleID: publicRoleID,
 	}
 
-	//fill the mo_account, mo_role, mo_user, mo_role_priv, mo_user_grant
+	//fill the mo_account, mo_role, mo_user, mo_role_privs, mo_user_grant
 	guestMMu := guest.New(pu.SV.GuestMmuLimitation, pu.HostMmu)
 	bh := NewBackgroundHandler(ctx, guestMMu, pu.Mempool, pu)
 	defer bh.Close()
