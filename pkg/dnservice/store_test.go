@@ -147,6 +147,9 @@ func runDNStoreTest(
 		s3, err := fileservice.NewMemoryFS(
 			s3FileServiceName,
 		)
+		if err != nil {
+			return nil, err
+		}
 		etl, err := fileservice.NewMemoryFS(
 			etlFileServiceName,
 		)
