@@ -98,19 +98,15 @@ create view view_t3 as select coalesce(f2,f2) as f4 from t4;
 desc view_t3;
 drop view view_t3;
 
--- @bvt:issue#4755
 drop view if exists view_t4;
 create view view_t4 as select coalesce(f1,f3) as f4 from t4;
 desc view_t4;
 drop view view_t4;
--- @bvt:issue
 
--- @bvt:issue#4755
 drop view if exists view_t5;
 create view view_t5 as select coalesce(f2,f3) as f4 from t4;
 desc view_t5;
 drop view view_t5;
--- @bvt:issue
 
 drop table t4;
 
