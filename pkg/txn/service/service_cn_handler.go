@@ -44,7 +44,10 @@ func (s *service) Read(ctx context.Context, request *txn.TxnRequest, response *t
 
 	response.CNOpResponse = &txn.CNOpResponse{}
 	s.checkCNRequest(request)
-	s.validDNShard(request.GetTargetDN())
+	if !s.validDNShard(request.GetTargetDN()) {
+		response.TxnError = newDNShardFoundError()
+		return nil
+	}
 
 	s.waitClockTo(request.Txn.SnapshotTS)
 
@@ -119,7 +122,10 @@ func (s *service) Write(ctx context.Context, request *txn.TxnRequest, response *
 
 	response.CNOpResponse = &txn.CNOpResponse{}
 	s.checkCNRequest(request)
-	s.validDNShard(request.GetTargetDN())
+	if !s.validDNShard(request.GetTargetDN()) {
+		response.TxnError = newDNShardFoundError()
+		return nil
+	}
 
 	txnID := request.Txn.ID
 	txnCtx, _ := s.maybeAddTxn(request.Txn)
@@ -164,7 +170,11 @@ func (s *service) Commit(ctx context.Context, request *txn.TxnRequest, response 
 	defer util.LogTxnHandleResult(s.logger, response)
 
 	response.CommitResponse = &txn.TxnCommitResponse{}
-	s.validDNShard(request.GetTargetDN())
+	if !s.validDNShard(request.GetTargetDN()) {
+		response.TxnError = newDNShardFoundError()
+		return nil
+	}
+
 	if len(request.Txn.DNShards) == 0 {
 		s.logger.Fatal("commit with empty dn shards")
 	}
@@ -306,7 +316,11 @@ func (s *service) Rollback(ctx context.Context, request *txn.TxnRequest, respons
 	defer util.LogTxnHandleResult(s.logger, response)
 
 	response.RollbackResponse = &txn.TxnRollbackResponse{}
-	s.validDNShard(request.GetTargetDN())
+	if !s.validDNShard(request.GetTargetDN()) {
+		response.TxnError = newDNShardFoundError()
+		return nil
+	}
+
 	if len(request.Txn.DNShards) == 0 {
 		s.logger.Fatal("rollback with empty dn shards")
 	}
@@ -331,8 +345,9 @@ func (s *service) Rollback(ctx context.Context, request *txn.TxnRequest, respons
 
 	response.Txn = &newTxn
 	newTxn.DNShards = request.Txn.DNShards
-
 	s.startAsyncRollbackTask(newTxn)
+
+	response.Txn.Status = txn.TxnStatus_Aborted
 	return nil
 }
 

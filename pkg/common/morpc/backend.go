@@ -739,6 +739,9 @@ func (s *stream) Send(ctx context.Context, request Message) error {
 	if s.id != request.GetID() {
 		panic("request.id != stream.id")
 	}
+	if _, ok := ctx.Deadline(); !ok {
+		panic("deadline not set in context")
+	}
 	s.activeFunc()
 	s.mu.RLock()
 	defer s.mu.RUnlock()

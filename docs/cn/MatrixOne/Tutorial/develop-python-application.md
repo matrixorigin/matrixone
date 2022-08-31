@@ -30,7 +30,7 @@
    + Python 3.x
    + MatrixOne
 
-  更多详细信息，参见[Python 3 installation tutorial](https://realpython.com/installing-python/) and [MatrixOne installation](../Get-Started/install-standalone-matrixone.md)。
+  更多详细信息，参见[Python 3 installation tutorial](https://realpython.com/installing-python/) and [MatrixOne 安装](../Get-Started/install-standalone-matrixone.md)。
 
 ### 准备 3：安装依赖
 
