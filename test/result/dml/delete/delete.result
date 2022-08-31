@@ -131,4 +131,36 @@ select * from t2;
 b
 2
 3
+drop table if exists t1;
+create table t1(a int auto_increment, b bigint auto_increment);
+insert into t1 values(null, 2), (3, null), (null, null);
+select * from t1;
+a    b
+1    2
+3    3
+4    4
+insert into t1 values(100, 2), (null, null), (null, null);
+select * from t1;
+a    b
+1    2
+3    3
+4    4
+100    2
+101    5
+102    6
+delete from t1 where a >= 100;
+select * from t1;
+a    b
+1    2
+3    3
+4    4
+insert into t1 values(null, null), (null, null), (null, null);
+select * from t1;
+a    b
+1    2
+3    3
+4    4
+103    7
+104    8
+105    9
 drop database if exists db1;

@@ -111,6 +111,9 @@ func checkReportedState(
 			)
 		}
 	}
+
+	log.Infof("construct %d operator for reported dn shards", len(ops))
+
 	return ops
 }
 
@@ -150,6 +153,9 @@ func checkInitatingShards(
 			)
 		}
 	}
+
+	log.Infof("construct %d operator for initating dn shards", len(ops))
+
 	return ops
 }
 

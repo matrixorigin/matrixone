@@ -79,11 +79,12 @@ type ColDef struct {
 func (def *ColDef) GetName() string     { return def.Name }
 func (def *ColDef) GetType() types.Type { return def.Type }
 
-func (def *ColDef) Nullable() bool  { return def.NullAbility }
-func (def *ColDef) IsHidden() bool  { return def.Hidden }
-func (def *ColDef) IsPhyAddr() bool { return def.PhyAddr }
-func (def *ColDef) IsPrimary() bool { return def.Primary }
-func (def *ColDef) IsSortKey() bool { return def.SortKey }
+func (def *ColDef) Nullable() bool        { return def.NullAbility }
+func (def *ColDef) IsHidden() bool        { return def.Hidden }
+func (def *ColDef) IsPhyAddr() bool       { return def.PhyAddr }
+func (def *ColDef) IsPrimary() bool       { return def.Primary }
+func (def *ColDef) IsAutoIncrement() bool { return def.AutoIncrement }
+func (def *ColDef) IsSortKey() bool       { return def.SortKey }
 
 type SortKey struct {
 	Defs      []*ColDef
@@ -464,14 +465,15 @@ func (s *Schema) AppendPKColWithAttribute(attr engine.Attribute, idx int) error 
 		OriginString: attr.Default.OriginString,
 	}
 	def := &ColDef{
-		Name:    attr.Name,
-		Type:    attr.Type,
-		SortIdx: int8(idx),
-		Hidden:  attr.IsHidden,
-		SortKey: true,
-		Primary: true,
-		Comment: attr.Comment,
-		Default: attrDefault,
+		Name:          attr.Name,
+		Type:          attr.Type,
+		SortIdx:       int8(idx),
+		Hidden:        attr.IsHidden,
+		SortKey:       true,
+		Primary:       true,
+		Comment:       attr.Comment,
+		Default:       attrDefault,
+		AutoIncrement: attr.AutoIncrement,
 	}
 	return s.AppendColDef(def)
 }
@@ -510,12 +512,13 @@ func (s *Schema) AppendColWithAttribute(attr engine.Attribute) error {
 		OriginString: attr.Default.OriginString,
 	}
 	def := &ColDef{
-		Name:    attr.Name,
-		Type:    attr.Type,
-		Hidden:  attr.IsHidden,
-		SortIdx: -1,
-		Comment: attr.Comment,
-		Default: attrDefault,
+		Name:          attr.Name,
+		Type:          attr.Type,
+		Hidden:        attr.IsHidden,
+		SortIdx:       -1,
+		Comment:       attr.Comment,
+		Default:       attrDefault,
+		AutoIncrement: attr.AutoIncrement,
 	}
 	return s.AppendColDef(def)
 }

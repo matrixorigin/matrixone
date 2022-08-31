@@ -16,6 +16,7 @@ package moengine
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -117,4 +118,8 @@ func (rel *baseRelation) NewReader(_ context.Context, num int, _ *plan.Expr, _ [
 		rds = append(rds, reader)
 	}
 	return rds, nil
+}
+
+func (rel *baseRelation) GetTableID(_ context.Context) string {
+	return fmt.Sprintf("%d", rel.handle.ID())
 }
