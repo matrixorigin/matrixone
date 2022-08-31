@@ -4,7 +4,7 @@ SSB 星型模式基准测试是 OLAP 数据库性能测试的常用场景，通�
 
 ## **准备工作**
 
-确保你已经安装了[单机版MatrixOne](../../Get-Starten/install-standalone-matrixone.md)并[连接到MatrixOne服务](../../Get-Starten/connect-to-matrixone-server.md).
+确保你已经安装了[单机版MatrixOne](../Get-Started/install-standalone-matrixone.md)并[连接到MatrixOne服务](../../Get-Started/connect-to-matrixone-server.md).
 
 ## **1. 编译dbgen**
 
