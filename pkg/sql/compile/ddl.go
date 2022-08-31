@@ -55,7 +55,10 @@ func (s *Scope) CreateTable(c *Compile) error {
 
 	// convert the plan's defs to the execution's defs
 	planDefs := qry.GetTableDef().GetDefs()
-	exeDefs := planDefsToExeDefs(planDefs)
+	exeDefs, err := planDefsToExeDefs(planDefs)
+	if err != nil {
+		return err
+	}
 
 	dbName := c.db
 	if qry.GetDatabase() != "" {
@@ -96,7 +99,7 @@ func (s *Scope) DropTable(c *Compile) error {
 	return dbSource.Delete(c.ctx, tblName)
 }
 
-func planDefsToExeDefs(planDefs []*plan.TableDef_DefType) []engine.TableDef {
+func planDefsToExeDefs(planDefs []*plan.TableDef_DefType) ([]engine.TableDef, error) {
 	exeDefs := make([]engine.TableDef, len(planDefs))
 	for i, def := range planDefs {
 		switch defVal := def.GetDef().(type) {
@@ -125,12 +128,16 @@ func planDefsToExeDefs(planDefs []*plan.TableDef_DefType) []engine.TableDef {
 				View: defVal.View.View,
 			}
 		case *plan.TableDef_DefType_Partition:
+			bytes, err := defVal.Partition.MarshalPartitionInfo()
+			if err != nil {
+				return nil, err
+			}
 			exeDefs[i] = &engine.PartitionDef{
-				Partition: defVal.Partition.PartitionMsg,
+				Partition: string(bytes),
 			}
 		}
 	}
-	return exeDefs
+	return exeDefs, nil
 }
 
 func planColsToExeCols(planCols []*plan.ColDef) []engine.TableDef {

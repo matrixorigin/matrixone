@@ -133,7 +133,6 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 		if proDef, ok := def.Def.(*plan.TableDef_DefType_Properties); ok {
 			for _, kv := range proDef.Properties.Properties {
 				if kv.Key == catalog.SystemRelAttr_Comment {
-					//createStr += " COMMENT='" + kv.Value + "',"
 					comment = " COMMENT='" + kv.Value + "'"
 				}
 			}
@@ -141,7 +140,6 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 
 		if partDef, ok := def.Def.(*plan.TableDef_DefType_Partition); ok {
 			if len(partDef.Partition.PartitionMsg) != 0 {
-				//createStr += `/* ` + partDef.Partition.PartitionMsg + `*/`
 				partition = ` /* ` + partDef.Partition.PartitionMsg + `*/`
 			}
 		}

@@ -256,7 +256,7 @@ func init() {
 	t = types.Type{
 		Oid:   types.T_varchar,
 		Size:  24,
-		Width: 2048,
+		Width: 65535,
 	}
 	if err = SystemTableSchema.AppendCol(SystemRelAttr_Partition, t); err != nil {
 		panic(err)
