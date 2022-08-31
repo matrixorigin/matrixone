@@ -17,14 +17,21 @@ package dnservice
 import (
 	"sort"
 
+	"github.com/lni/dragonboat/v4/logger"
+
 	"github.com/matrixorigin/matrixone/pkg/hakeeper"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper/checkers/util"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper/operator"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 )
 
-// waitingShards makes check logic stateful.
-var waitingShards *initialShards
+var (
+	// waitingShards makes check logic stateful.
+	waitingShards *initialShards
+
+	// logger for dnservice checker
+	log = logger.GetLogger("dnchecker")
+)
 
 func init() {
 	waitingShards = newInitialShards()
@@ -42,7 +49,7 @@ func Check(
 ) []*operator.Operator {
 	stores, reportedShards := parseDnState(cfg, dnState, currTick)
 	if len(stores.WorkingStores()) < 1 {
-		// warning with no working store
+		log.Warningf("no working dn stores")
 		return nil
 	}
 
@@ -77,41 +84,47 @@ func checkShard(
 	case 0: // need add replica
 		newReplicaID, ok := idAlloc.Next()
 		if !ok {
-			// temporary failure when allocate replica ID
+			log.Warningf("fail to allocate replica ID")
 			return nil
 		}
 
 		target, err := consumeLeastSpareStore(workingStores)
 		if err != nil {
-			// no working dn stores
+			log.Warningf("no working dn stores")
 			return nil
 		}
 
 		logShardID, err := mapper.getLogShardID(shard.shardID)
 		if err != nil {
-			// warning with un-recorded shard
+			log.Warningf("shard not registerd: %d", shard.shardID)
 			return nil
 		}
 
-		return []operator.OpStep{
-			newAddStep(target, shard.shardID, newReplicaID, logShardID),
-		}
+		s := newAddStep(
+			target, shard.shardID, newReplicaID, logShardID,
+		)
+		log.Infof(s.String())
+		return []operator.OpStep{s}
+
 	case 1: // ignore expired replicas
 		return nil
+
 	default: // remove extra working replicas
 		replicas := extraWorkingReplicas(shard)
 		steps := make([]operator.OpStep, 0, len(replicas))
 
 		logShardID, err := mapper.getLogShardID(shard.shardID)
 		if err != nil {
-			// warning with un-recorded shard
+			log.Warningf("shard not registerd: %d", shard.shardID)
 			return nil
 		}
 
 		for _, r := range replicas {
-			steps = append(steps,
-				newRemoveStep(r.storeID, r.shardID, r.replicaID, logShardID),
+			s := newRemoveStep(
+				r.storeID, r.shardID, r.replicaID, logShardID,
 			)
+			log.Infof(s.String())
+			steps = append(steps, s)
 		}
 		return steps
 	}
