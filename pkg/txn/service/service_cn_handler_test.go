@@ -561,7 +561,11 @@ func TestRollback(t *testing.T) {
 	w2 := addTestWaiter(t, s2, wTxn, txn.TxnStatus_Aborted)
 	defer w2.close()
 
-	checkResponses(t, rollbackWriteData(t, sender, wTxn))
+	responses := rollbackWriteData(t, sender, wTxn)
+	checkResponses(t, responses)
+	for _, resp := range responses {
+		assert.Equal(t, txn.TxnStatus_Aborted, resp.Txn.Status)
+	}
 
 	checkWaiter(t, w1, txn.TxnStatus_Aborted)
 	checkWaiter(t, w2, txn.TxnStatus_Aborted)
