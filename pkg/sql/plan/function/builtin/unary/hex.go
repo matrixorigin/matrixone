@@ -16,7 +16,7 @@ package unary
 
 import (
 	"encoding/hex"
-	"fmt"
+	// "fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -30,8 +30,7 @@ func Hex(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error
 		return proc.AllocScalarNullVector(resultType), nil
 	}
 	resultVector := vector.New(resultType)
-	fmt.Println(inputVector.Length)
-	for i := 0; i < inputVector.Length; i++ {
+	for i := 0; i < vector.Length(inputVector); i++ {
 		inputValue := vector.GetStrColumn(inputVector).Get(int64(i))
 		ctx := HexEncode(inputValue)
 		if err := resultVector.Append(ctx, proc.GetMheap()); err != nil {
