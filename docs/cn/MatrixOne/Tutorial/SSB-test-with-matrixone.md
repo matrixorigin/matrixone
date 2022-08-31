@@ -15,7 +15,7 @@ make
 ```
 
 !!! note
-    如果你的硬件配置为 M1 芯片，编译 dbgen 仍需进行其他配置，参见[部署常见问题](../../FAQs/deployment-faqs.md)。
+    如果你的硬件配置为 M1 芯片，编译 dbgen 仍需进行其他配置，参见[部署常见问题](../FAQs/deployment-faqs.md)。
 
 ## **2. 生成数据**
 

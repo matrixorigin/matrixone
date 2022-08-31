@@ -84,7 +84,7 @@ PRIMARY KEY (role_id)
 
 ## 方式二：MySQL Client 中使用 Load data 命令导入数据
 
-这里将以示例的形式介绍 *MMySQL Client 中使用 Load data 命令导入数据*。
+这里将以示例的形式介绍 *MySQL Client 中使用 Load data 命令导入数据*。
 
 - **适用场景**：将 *.csv** 格式的外部数据导入到 MatrixOne
 - **场景描述**：在 MySQL Client 中使用 Load data 命令将外部数据文件导入，但目前只支持 *.csv* 格式的文件导入。
