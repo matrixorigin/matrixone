@@ -53,6 +53,16 @@ func firstError(err1 error, err2 error) error {
 	return err2
 }
 
+var initLoggerDone uint32
+
+// initLogger avoid multi call logger.SetLoggerFactory in UT
+func initLogger() {
+	if !atomic.CompareAndSwapUint32(&initLoggerDone, 0, 1) {
+		return
+	}
+	logger.SetLoggerFactory(logutil.DragonboatFactory)
+}
+
 // Service is the top layer component of a log service node. It manages the
 // underlying log store which in turn manages all log shards including the
 // HAKeeper shard. The Log Service component communicates with LogService
@@ -79,7 +89,7 @@ func NewService(
 	fileService fileservice.FileService,
 	opts ...Option,
 ) (*Service, error) {
-	logger.SetLoggerFactory(logutil.DragonboatFactory)
+	initLogger()
 	cfg.Fill()
 	if err := cfg.Validate(); err != nil {
 		return nil, err
