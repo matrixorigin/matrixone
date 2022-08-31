@@ -32,6 +32,10 @@ type CNClient struct {
 	requestPool *sync.Pool
 }
 
+func (c *CNClient) Ready() bool {
+	return c != nil && c.config != nil
+}
+
 func (c *CNClient) Send(ctx context.Context, backend string, request morpc.Message) (*morpc.Future, error) {
 	return c.client.Send(ctx, backend, request)
 }

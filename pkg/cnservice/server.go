@@ -23,7 +23,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
-	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
@@ -72,6 +71,7 @@ func NewService(
 	if err != nil {
 		return nil, err
 	}
+	srv.cfg.ListenAddress = "127.0.0.1:1234"
 
 	server, err := morpc.NewRPCServer("cn-server", cfg.ListenAddress,
 		morpc.NewMessageCodec(srv.acquireMessage, cfg.PayLoadCopyBufferSize),
@@ -79,7 +79,7 @@ func NewService(
 	if err != nil {
 		return nil, err
 	}
-	server.RegisterRequestHandler(compile.NewServer().HandleRequest)
+	server.RegisterRequestHandler(srv.handleRequest)
 	srv.server = server
 
 	srv.requestHandler = defaultRequestHandler
@@ -115,9 +115,9 @@ func defaultRequestHandler(ctx context.Context, message morpc.Message, cs morpc.
 	return nil
 }
 
-//func (s *service) handleRequest(ctx context.Context, req morpc.Message, _ uint64, cs morpc.ClientSession) error {
-//	return s.requestHandler(ctx, req, cs)
-//}
+func (s *service) handleRequest(ctx context.Context, req morpc.Message, _ uint64, cs morpc.ClientSession) error {
+	return s.requestHandler(ctx, req, cs)
+}
 
 func (s *service) initMOServer(ctx context.Context, pu *config.ParameterUnit) error {
 	var err error

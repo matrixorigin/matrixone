@@ -23,11 +23,11 @@ func (m *Message) Size() int {
 }
 
 func (m *Message) GetID() uint64 {
-	return m.Sid
+	return m.Id
 }
 
 func (m *Message) SetID(id uint64) {
-	m.Sid = id
+	m.Id = id
 }
 
 func (m *Message) DebugString() string {

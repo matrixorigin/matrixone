@@ -15,8 +15,8 @@
 package compile
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
 
@@ -124,15 +124,17 @@ func (s *Scope) MergeRun(c *Compile) error {
 func (s *Scope) RemoteRun(c *Compile) error {
 	// if address itself, just run it parallel at local.
 	//	return s.ParallelRun(c)
-	/*
-		if len(s.NodeInfo.Addr) == 0 {
-			return s.ParallelRun(c)
-		}
-		err := s.remoteRun(c)
-		// tell to connect operator that it's over
-		arg := s.Instructions[len(s.Instructions)-1].Arg.(*connector.Argument)
-		sendToConnectOperator(arg, nil)
-	*/
+	if len(s.NodeInfo.Addr) == 0 {
+		s.NodeInfo.Addr = "127.0.0.1:1234"
+	}
+	if !cnclient.Client.Ready() {
+		return s.ParallelRun(c)
+	}
+	err := s.remoteRun(c)
+	// tell to connect operator that it's over
+	arg := s.Instructions[len(s.Instructions)-1].Arg.(*connector.Argument)
+	sendToConnectOperator(arg, nil)
+	return err
 	/*
 		// just for test serialization codes.
 		n := len(s.Instructions) - 1
@@ -148,7 +150,7 @@ func (s *Scope) RemoteRun(c *Compile) error {
 		}
 		rs.Instructions = append(rs.Instructions, in)
 	*/
-	return s.ParallelRun(c)
+	// return s.ParallelRun(c)
 }
 
 // ParallelRun try to execute the scope in parallel way.

@@ -111,6 +111,9 @@ func startCNService(cfg *Config, stopper *stopper.Stopper) error {
 		if err := s.Close(); err != nil {
 			panic(err)
 		}
+		if err := cnclient.Client.Close(); err != nil {
+			panic(err)
+		}
 	})
 }
 

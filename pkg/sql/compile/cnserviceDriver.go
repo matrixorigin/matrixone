@@ -68,29 +68,34 @@ import (
 // write back Analysis Information and error info if error occurs to client.
 func CnServerMessageHandler(ctx context.Context, message morpc.Message, cs morpc.ClientSession) error {
 	var errCode []byte = nil
+	println("cms : receive succeed")
 	// decode message and run it, get final analysis information and err info.
 	analysis, err := pipelineMessageHandle(ctx, message, cs)
 	if err != nil {
 		errCode = []byte(err.Error())
 	}
-	return cs.Write(ctx, &pipeline.Message{Sid: pipeline.MessageEnd, Code: errCode, Analyse: analysis})
+	return cs.Write(ctx, &pipeline.Message{Id: message.GetID(), Sid: pipeline.MessageEnd, Code: errCode, Analyse: analysis})
 }
 
 func pipelineMessageHandle(ctx context.Context, message morpc.Message, cs morpc.ClientSession) (anaData []byte, err error) {
+	var c *Compile
+	var s *Scope
+
 	m, ok := message.(*pipeline.Message)
 	if !ok {
 		panic("unexpected message type for cn-server")
 	}
-	c := newCompile(ctx)
-	var s *Scope
+
+	c = newCompile(ctx, message, cs)
 	s, err = decodeScope(m.GetData(), c.proc)
 	if err != nil {
 		return nil, err
 	}
 	// refactor the last operator connect to output
-	refactorScope(ctx, s, cs)
+	refactorScope(ctx, s)
+	c.scope = s
 
-	err = s.Run(c)
+	err = s.MergeRun(c)
 	if err != nil {
 		return nil, err
 	}
@@ -123,29 +128,39 @@ func (s *Scope) remoteRun(c *Compile) error {
 		return errEncode
 	}
 
+	// new the stream sender
+	streamSender, errStream := cnclient.Client.NewStream(s.NodeInfo.Addr)
+	if errStream != nil {
+		return errStream
+	}
+	defer func(streamSender morpc.Stream) {
+		_ = streamSender.Close()
+	}(streamSender)
+
 	// send encoded message
-	message := &pipeline.Message{Data: sData}
-	r, errSend := cnclient.Client.Send(c.ctx, s.NodeInfo.Addr, message)
+	message := &pipeline.Message{Id: streamSender.ID(), Data: sData}
+	errSend := streamSender.Send(c.ctx, message)
 	if errSend != nil {
 		return errSend
 	}
-	defer r.Close()
+	println("cms : send succeed")
 
 	// range to receive.
 	arg := s.Instructions[len(s.Instructions)-1].Arg.(*connector.Argument)
-	for {
-		val, errReceive := r.Get()
-		if errReceive != nil {
-			return errReceive
-		}
+	messagesReceive, errReceive := streamSender.Receive()
+	if errReceive != nil {
+		return errReceive
+	}
+	for val := range messagesReceive {
 		m := val.(*pipeline.Message)
+		println("cms : get message back succeed")
 
 		errMessage := m.GetCode()
 		if len(errMessage) > 0 {
 			return errors.New(string(errMessage))
 		}
 
-		sid := m.GetID()
+		sid := m.GetSid()
 		if sid == pipeline.MessageEnd {
 			// get analyse information
 			anaData := m.GetAnalyse()
@@ -203,7 +218,7 @@ func decodeScope(data []byte, proc *process.Process) (*Scope, error) {
 	return s, fillInstructionsForScope(s, ctx, p)
 }
 
-func refactorScope(_ context.Context, _ *Scope, _ morpc.ClientSession) {
+func refactorScope(_ context.Context, _ *Scope) {
 	// refactor the scope
 }
 
@@ -565,16 +580,18 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 		in.OrderBy = convertToPlanOrderByList(t.Fs)
 	case *connector.Argument:
 		idx, ctx0 := ctx.root.findRegister(t.Reg)
-		if ctx0.root.isRemote(ctx0, 0) && !ctx0.isDescendant(ctx) {
-			id := srv.RegistConnector(t.Reg)
-			if ctxId, err = ctx0.addSubPipeline(id, idx, ctxId); err != nil {
-				return ctxId, nil, err
+		arg := &pipeline.Connector{}
+		if idx != -1 { // root scope
+			if ctx0.root.isRemote(ctx0, 0) && !ctx0.isDescendant(ctx) {
+				id := srv.RegistConnector(t.Reg)
+				if ctxId, err = ctx0.addSubPipeline(id, idx, ctxId); err != nil {
+					return ctxId, nil, err
+				}
 			}
+			arg.PipelineId = ctx0.id
 		}
-		in.Connect = &pipeline.Connector{
-			PipelineId:     ctx0.id,
-			ConnectorIndex: idx, // receiver
-		}
+		arg.ConnectorIndex = idx
+		in.Connect = arg
 	case *mark.Argument:
 		in.MarkJoin = &pipeline.MarkJoin{
 			Ibucket:      t.Ibucket,
@@ -764,9 +781,11 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext) (vm.In
 		}
 	case vm.Connector:
 		t := opr.GetConnect()
-		v.Arg = &connector.Argument{
-			Reg: ctx.root.getRegister(t.PipelineId, t.ConnectorIndex),
+		arg := &connector.Argument{}
+		if t.ConnectorIndex != -1 {
+			arg.Reg = ctx.root.getRegister(t.PipelineId, t.ConnectorIndex)
 		}
+		v.Arg = arg
 	// may useless
 	case vm.Merge:
 		v.Arg = &merge.Argument{}
@@ -798,19 +817,19 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext) (vm.In
 }
 
 // newCompile init a new compile for remote run.
-func newCompile(ctx context.Context) *Compile {
-	// not implement now, fill method should send by stream
+func newCompile(ctx context.Context, message morpc.Message, cs morpc.ClientSession) *Compile {
 	c := &Compile{
 		ctx:  ctx,
 		proc: process.New(mheap.New(guest.New(1<<30, host.New(1<<20)))),
 	}
-	//c.fill = func(a any, b *batch.Batch) error {
-	//	stream, err := CNClient.NewStream("target")
-	//	if err != nil {
-	//		return err
-	//	}
-	//	stream.Send()
-	//}
+
+	c.fill = func(a any, b *batch.Batch) error {
+		encodeData, errEncode := types.Encode(b)
+		if errEncode != nil {
+			return errEncode
+		}
+		return cs.Write(ctx, &pipeline.Message{Id: message.GetID(), Data: encodeData})
+	}
 	return c
 }
 
