@@ -59,6 +59,6 @@ jobs:
         run: |
           cd $GITHUB_WORKSPACE/matrixone
           echo "--------------------ut_coverage start--------------------"
-          awk -F '[ %\t]+' 'BEGIN{flag=1}{if($1=="ok"){if($5 == "[no"){print "Warning: please move/create test code file to `"$2"`";flag=0} else if($5 < 75) {print "Error: the code coverage of `"$2"` is "$5"% which is below 75%";flag=0} else {print "Output: The code coverage of `"$2"` is "$5"%, this is up to standard -- 75%"}} else if($1 == "?"){print "Error: There are no test files in this path -- `"$2"`";flag=0} else if($1 == "FAIL"){print "Error: The `"$2"` failed to run the test";falg=0}} END{if(flag==0){exit 1;}}'
+          awk -F '[ %\t]+' 'BEGIN{flag=1}{if($1=="ok"){if($5 == "[no"){print "Warning: please move/create test code file to `"$2"`";flag=0} else if($5 < 75) {print "Error: the code coverage of `"$2"` is "$5"% which is below 75%";flag=0} else {print "Output: The code coverage of `"$2"` is "$5"%, this is up to standard -- 75%"}} else if($1 == "?"){print "Error: There are no test files in this path -- `"$2"`";flag=0} else if($1 == "FAIL"){print "Error: The `"$2"` failed to run the test";falg=0}} END{if(flag==0){exit 1;}}' ${{ env.raw_ut_coverage }}
           rm -rf ${{ env.raw_ut_coverage }} ${{ env.ut_report }}
           echo "--------------------ut_coverage finished--------------------"
