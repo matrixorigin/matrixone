@@ -17,7 +17,6 @@ package unary
 import (
 	"encoding/hex"
 
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -25,36 +24,21 @@ import (
 
 func Hex(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	inputVector := vectors[0]
-	resultType := types.Type{Oid: types.T_varchar, Size: 24}
-	resultElementSize := int(resultType.Size)
-	inputValues := vector.MustBytesCols(inputVector)
-	if inputVector.IsScalar() {
-		if inputVector.ConstVectorIsNull() {
-			return proc.AllocScalarNullVector(resultType), nil
-		}
-		resultVector := vector.New(resultType)
-		resultValues := make([]string, 1)
-		vector.SetCol(resultVector, HexEncode(inputValues, resultValues))
-		return resultVector, nil
-	} else {
-		resultVector, err := proc.AllocVector(resultType, int64(resultElementSize*len(inputValues.Lengths)))
-		if err != nil {
-			return nil, err
-		}
-		resultValues := types.DecodeStringSlice(resultVector.Data)
-		resultValues = resultValues[:len(inputValues.Lengths)]
-		nulls.Set(resultVector.Nsp, inputVector.Nsp)
-		vector.SetCol(resultVector, HexEncode(inputValues, resultValues))
-		return resultVector, nil
+	resultType := types.New(types.T_varchar, 0, 0, 0)
+	inputValue := vector.GetStrColumn(inputVector).Get(0)
+	if inputVector.ConstVectorIsNull() {
+		return proc.AllocScalarNullVector(resultType), nil
 	}
+	ctx := HexEncode(inputValue)
+	resultVector := vector.New(resultType)
+	if err := resultVector.Append(ctx, proc.GetMheap()); err != nil {
+		return nil, err
+	}
+	return resultVector, nil
 }
 
-func HexEncode(xs *types.Bytes, rs []string) []string {
-	for i := range xs.Lengths {
-		s := xs.Get(int64(i))
-		dst := hex.EncodeToString(s)
-		rs[i] = dst
-	}
-
-	return rs
+func HexEncode(src []byte) []byte {
+	dst := make([]byte, hex.EncodedLen(len(src)))
+	hex.Encode(dst, src)
+	return dst
 }

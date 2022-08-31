@@ -17,6 +17,7 @@ package unary
 import (
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -68,7 +69,7 @@ func TestHex(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			col := result.Col.([]string)
+			col := result.Col.(*types.Bytes)
 			require.Equal(t, c.expected, col)
 			require.Equal(t, c.isScalar, result.IsScalar())
 		})
