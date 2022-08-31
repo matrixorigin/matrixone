@@ -55,11 +55,11 @@ func TestS3FS(t *testing.T) {
 	t.Setenv("AWS_SECRET_ACCESS_KEY", config.APISecret)
 
 	t.Run("file service", func(t *testing.T) {
-		testFileService(t, func() FileService {
+		testFileService(t, func(name string) FileService {
 
 			fs, err := NewS3FS(
 				"",
-				"s3",
+				name,
 				config.Endpoint,
 				config.Bucket,
 				time.Now().Format("2006-01-02.15:04:05.000000"),
@@ -169,11 +169,11 @@ func TestS3FSMinioServer(t *testing.T) {
 
 	// run test
 	t.Run("file service", func(t *testing.T) {
-		testFileService(t, func() FileService {
+		testFileService(t, func(name string) FileService {
 
 			fs, err := NewS3FSOnMinio(
 				"",
-				"s3",
+				name,
 				endpoint,
 				"test",
 				time.Now().Format("2006-01-02.15:04:05.000000"),
