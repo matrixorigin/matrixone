@@ -73,6 +73,8 @@ func Prepare(proc *process.Process, arg any) error {
 	}
 	param.FileList = fileList
 	param.FileCnt = len(fileList)
+	param.first = true
+	param.memPool = make([][]byte, len(param.Attrs))
 	return nil
 }
 
@@ -203,72 +205,142 @@ func makeBatch(param *ExternalParam, plh *ParseLineHandler) *batch.Batch {
 	batchData := batch.New(true, param.Attrs)
 	batchSize := plh.batchSize
 	//alloc space for vector
+	pos := 0
 	for i := 0; i < len(param.Attrs); i++ {
 		typ := types.New(types.T(param.Cols[i].Typ.Id), param.Cols[i].Typ.Width, param.Cols[i].Typ.Scale, param.Cols[i].Typ.Precision)
 		vec := vector.New(typ)
 		vec.Or = true
 		switch vec.Typ.Oid {
 		case types.T_bool:
-			vec.Data = make([]byte, batchSize)
+			if param.first {
+				param.memPool[pos] = make([]byte, batchSize)
+			}
+			vec.Data = param.memPool[pos][:batchSize]
 			vec.Col = types.DecodeBoolSlice(vec.Data)
+			pos++
 		case types.T_int8:
-			vec.Data = make([]byte, batchSize)
+			if param.first {
+				param.memPool[pos] = make([]byte, batchSize)
+			}
+			vec.Data = param.memPool[pos][:batchSize]
 			vec.Col = types.DecodeInt8Slice(vec.Data)
+			pos++
 		case types.T_int16:
-			vec.Data = make([]byte, 2*batchSize)
+			if param.first {
+				param.memPool[pos] = make([]byte, 2*batchSize)
+			}
+			vec.Data = param.memPool[pos][:2*batchSize]
 			vec.Col = types.DecodeInt16Slice(vec.Data)
+			pos++
 		case types.T_int32:
-			vec.Data = make([]byte, 4*batchSize)
+			if param.first {
+				param.memPool[pos] = make([]byte, 4*batchSize)
+			}
+			vec.Data = param.memPool[pos][:4*batchSize]
 			vec.Col = types.DecodeInt32Slice(vec.Data)
+			pos++
 		case types.T_int64:
-			vec.Data = make([]byte, 8*batchSize)
+			if param.first {
+				param.memPool[pos] = make([]byte, 8*batchSize)
+			}
+			vec.Data = param.memPool[pos][:8*batchSize]
 			vec.Col = types.DecodeInt64Slice(vec.Data)
+			pos++
 		case types.T_uint8:
-			vec.Data = make([]byte, batchSize)
+			if param.first {
+				param.memPool[pos] = make([]byte, batchSize)
+			}
+			vec.Data = param.memPool[pos][:batchSize]
 			vec.Col = types.DecodeUint8Slice(vec.Data)
+			pos++
 		case types.T_uint16:
-			vec.Data = make([]byte, 2*batchSize)
+			if param.first {
+				param.memPool[pos] = make([]byte, 2*batchSize)
+			}
+			vec.Data = param.memPool[pos][:2*batchSize]
 			vec.Col = types.DecodeUint16Slice(vec.Data)
+			pos++
 		case types.T_uint32:
-			vec.Data = make([]byte, 4*batchSize)
+			if param.first {
+				param.memPool[pos] = make([]byte, 4*batchSize)
+			}
+			vec.Data = param.memPool[pos][:4*batchSize]
 			vec.Col = types.DecodeUint32Slice(vec.Data)
+			pos++
 		case types.T_uint64:
-			vec.Data = make([]byte, 8*batchSize)
+			if param.first {
+				param.memPool[pos] = make([]byte, 8*batchSize)
+			}
+			vec.Data = param.memPool[pos][:8*batchSize]
 			vec.Col = types.DecodeUint64Slice(vec.Data)
+			pos++
 		case types.T_float32:
-			vec.Data = make([]byte, 4*batchSize)
+			if param.first {
+				param.memPool[pos] = make([]byte, 4*batchSize)
+			}
+			vec.Data = param.memPool[pos][:4*batchSize]
 			vec.Col = types.DecodeFloat32Slice(vec.Data)
+			pos++
 		case types.T_float64:
-			vec.Data = make([]byte, 8*batchSize)
+			if param.first {
+				param.memPool[pos] = make([]byte, 8*batchSize)
+			}
+			vec.Data = param.memPool[pos][:8*batchSize]
 			vec.Col = types.DecodeFloat64Slice(vec.Data)
+			pos++
 		case types.T_char, types.T_varchar, types.T_json:
+			if param.first {
+				param.memPool[pos] = make([]byte, batchSize)
+			}
 			vBytes := &types.Bytes{
 				Offsets: make([]uint32, batchSize),
 				Lengths: make([]uint32, batchSize),
 				Data:    nil,
 			}
 			vec.Col = vBytes
-			vec.Data = make([]byte, batchSize)
+			vec.Data = param.memPool[pos][:batchSize]
+			pos++
 		case types.T_date:
-			vec.Data = make([]byte, 4*batchSize)
+			if param.first {
+				param.memPool[pos] = make([]byte, 4*batchSize)
+			}
+			vec.Data = param.memPool[pos][:4*batchSize]
 			vec.Col = types.DecodeDateSlice(vec.Data)
+			pos++
 		case types.T_datetime:
-			vec.Data = make([]byte, 8*batchSize)
+			if param.first {
+				param.memPool[pos] = make([]byte, 8*batchSize)
+			}
+			vec.Data = param.memPool[pos][:8*batchSize]
 			vec.Col = types.DecodeDatetimeSlice(vec.Data)
+			pos++
 		case types.T_decimal64:
-			vec.Data = make([]byte, 8*batchSize)
+			if param.first {
+				param.memPool[pos] = make([]byte, 8*batchSize)
+			}
+			vec.Data = param.memPool[pos][:8*batchSize]
 			vec.Col = types.DecodeDecimal64Slice(vec.Data)
+			pos++
 		case types.T_decimal128:
-			vec.Data = make([]byte, 16*batchSize)
+			if param.first {
+				param.memPool[pos] = make([]byte, 16*batchSize)
+			}
+			vec.Data = param.memPool[pos][:16*batchSize]
 			vec.Col = types.DecodeDecimal128Slice(vec.Data)
+			pos++
 		case types.T_timestamp:
-			vec.Data = make([]byte, 8*batchSize)
+			if param.first {
+				param.memPool[pos] = make([]byte, 8*batchSize)
+			}
+			vec.Data = param.memPool[pos][:8*batchSize]
 			vec.Col = types.DecodeTimestampSlice(vec.Data)
+			pos++
 		default:
 			panic("unsupported vector type")
 		}
 		batchData.Vecs[i] = vec
 	}
+	param.first = false
 	return batchData
 }
 

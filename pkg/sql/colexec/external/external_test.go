@@ -134,3 +134,10 @@ func Test_Call(t *testing.T) {
 		convey.So(end, convey.ShouldBeFalse)
 	})
 }
+
+func Test_makeBatch(t *testing.T) {
+	convey.Convey("makeBatch succ", t, func() {
+		
+
+	})
+}
