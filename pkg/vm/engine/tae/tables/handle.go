@@ -48,9 +48,9 @@ func (h *tableHandle) SetAppender(id *common.ID) (appender data.BlockAppender) {
 	return h.appender
 }
 
-func (h *tableHandle) ThrowAppenderAndErr(segEntry *catalog.SegmentEntry) (appender data.BlockAppender, err error) {
+func (h *tableHandle) ThrowAppenderAndErr() (appender data.BlockAppender, err error) {
 	id := h.appender.GetID()
-	segEntry, _ = h.table.meta.GetSegmentByID(id.SegmentID)
+	segEntry, _ := h.table.meta.GetSegmentByID(id.SegmentID)
 	if segEntry.GetAppendableBlockCnt() >= int(segEntry.GetTable().GetSchema().SegmentMaxBlocks) {
 		err = data.ErrAppendableSegmentNotFound
 	} else {
@@ -78,13 +78,13 @@ func (h *tableHandle) GetAppender() (appender data.BlockAppender, err error) {
 		}
 	}
 	if !h.appender.IsAppendable() || !h.block.IsAppendable() {
-		return h.ThrowAppenderAndErr(segEntry)
+		return h.ThrowAppenderAndErr()
 	}
 	h.block.Ref()
 	// Similar to optimistic locking
 	if !h.appender.IsAppendable() || !h.block.IsAppendable() {
 		h.block.Unref()
-		return h.ThrowAppenderAndErr(segEntry)
+		return h.ThrowAppenderAndErr()
 	}
 	appender = h.appender
 	return
