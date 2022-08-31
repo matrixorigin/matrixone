@@ -23,10 +23,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/moengine"
 	txnengine "github.com/matrixorigin/matrixone/pkg/vm/engine/txn"
 )
 
@@ -56,66 +57,84 @@ func NewCatalogHandler(upstream *MemHandler) *CatalogHandler {
 	// database
 	handler.database = &DatabaseRow{
 		ID:   uuid.NewString(),
-		Name: "mo_catalog", // hardcoded in frontend package
+		Name: catalog.SystemDBName, // hardcoded in frontend package
 	}
 
 	// relations
 	databasesRelRow := &RelationRow{
 		ID:         uuid.NewString(),
 		DatabaseID: handler.database.ID,
-		Name:       "mo_database", // hardcoded in frontend package
+		Name:       catalog.SystemTable_DB_Name, // hardcoded in frontend package
 		Type:       txnengine.RelationTable,
 	}
 	handler.relations[databasesRelRow.ID] = databasesRelRow
 	tablesRelRow := &RelationRow{
 		ID:         uuid.NewString(),
 		DatabaseID: handler.database.ID,
-		Name:       "mo_tables", // hardcoded in frontend package
+		Name:       catalog.SystemTable_Table_Name, // hardcoded in frontend package
 		Type:       txnengine.RelationTable,
 	}
 	handler.relations[tablesRelRow.ID] = tablesRelRow
 	attributesRelRow := &RelationRow{
 		ID:         uuid.NewString(),
 		DatabaseID: handler.database.ID,
-		Name:       "mo_columns", // hardcoded in frontend package
+		Name:       catalog.SystemTable_Columns_Name, // hardcoded in frontend package
 		Type:       txnengine.RelationTable,
 	}
 	handler.relations[attributesRelRow.ID] = attributesRelRow
 
 	// attributes
 	// databases
-	for i, def := range frontend.ConvertCatalogSchemaToEngineFormat(
-		frontend.DefineSchemaForMoDatabase(),
-	) {
+	defs, err := moengine.SchemaToDefs(catalog.SystemDBSchema)
+	if err != nil {
+		panic(err)
+	}
+	for i, def := range defs {
+		attr, ok := def.(*engine.AttributeDef)
+		if !ok {
+			continue
+		}
 		row := &AttributeRow{
 			ID:         uuid.NewString(),
 			RelationID: databasesRelRow.ID,
 			Order:      i,
-			Attribute:  def.Attr,
+			Attribute:  attr.Attr,
 		}
 		handler.attributes[row.ID] = row
 	}
 	// relations
-	for i, def := range frontend.ConvertCatalogSchemaToEngineFormat(
-		frontend.DefineSchemaForMoTables(),
-	) {
+	defs, err = moengine.SchemaToDefs(catalog.SystemTableSchema)
+	if err != nil {
+		panic(err)
+	}
+	for i, def := range defs {
+		attr, ok := def.(*engine.AttributeDef)
+		if !ok {
+			continue
+		}
 		row := &AttributeRow{
 			ID:         uuid.NewString(),
 			RelationID: tablesRelRow.ID,
 			Order:      i,
-			Attribute:  def.Attr,
+			Attribute:  attr.Attr,
 		}
 		handler.attributes[row.ID] = row
 	}
 	// attributes
-	for i, def := range frontend.ConvertCatalogSchemaToEngineFormat(
-		frontend.DefineSchemaForMoColumns(),
-	) {
+	defs, err = moengine.SchemaToDefs(catalog.SystemColumnSchema)
+	if err != nil {
+		panic(err)
+	}
+	for i, def := range defs {
+		attr, ok := def.(*engine.AttributeDef)
+		if !ok {
+			continue
+		}
 		row := &AttributeRow{
 			ID:         uuid.NewString(),
 			RelationID: attributesRelRow.ID,
 			Order:      i,
-			Attribute:  def.Attr,
+			Attribute:  attr.Attr,
 		}
 		handler.attributes[row.ID] = row
 	}
@@ -327,17 +346,17 @@ func (c *CatalogHandler) HandleNewTableIter(meta txn.TxnMeta, req txnengine.NewT
 
 		var iter any
 		switch rel.Name {
-		case "mo_database":
+		case catalog.SystemTable_DB_Name:
 			iter = &Iter[Text, DatabaseRow]{
 				TableIter: c.upstream.databases.NewIter(tx),
 				AttrsMap:  attrsMap,
 			}
-		case "mo_tables":
+		case catalog.SystemTable_Table_Name:
 			iter = &Iter[Text, RelationRow]{
 				TableIter: c.upstream.relations.NewIter(tx),
 				AttrsMap:  attrsMap,
 			}
-		case "mo_columns":
+		case catalog.SystemTable_Columns_Name:
 			iter = &Iter[Text, AttributeRow]{
 				TableIter: c.upstream.attributes.NewIter(tx),
 				AttrsMap:  attrsMap,
@@ -386,6 +405,7 @@ func (c *CatalogHandler) HandlePrepare(meta txn.TxnMeta) (timestamp.Timestamp, e
 }
 
 func (c *CatalogHandler) HandleRead(meta txn.TxnMeta, req txnengine.ReadReq, resp *txnengine.ReadResp) error {
+	tx := c.upstream.getTx(meta)
 
 	c.iterators.Lock()
 	v, ok := c.iterators.Map[req.IterID]
@@ -417,11 +437,11 @@ func (c *CatalogHandler) HandleRead(meta txn.TxnMeta, req txnengine.ReadReq, res
 					var value any
 
 					switch name {
-					case "datname":
+					case catalog.SystemDBAttr_Name:
 						value = row.Name
-					case "dat_catalog_name":
+					case catalog.SystemDBAttr_CatalogName:
 						value = ""
-					case "dat_createsql":
+					case catalog.SystemDBAttr_CreateSQL:
 						value = ""
 					default:
 						resp.ErrColumnNotFound.Name = name
@@ -456,17 +476,21 @@ func (c *CatalogHandler) HandleRead(meta txn.TxnMeta, req txnengine.ReadReq, res
 					var value any
 
 					switch name {
-					case "relname":
+					case catalog.SystemRelAttr_Name:
 						value = row.Name
-					case "reldatabase":
-						value = c.database.Name
-					case "relpersistence":
+					case catalog.SystemRelAttr_DBName:
+						dbRow, err := c.upstream.databases.Get(tx, Text(row.DatabaseID))
+						if err != nil {
+							return nil
+						}
+						value = dbRow.Name
+					case catalog.SystemRelAttr_Persistence:
 						value = true
-					case "relkind":
+					case catalog.SystemRelAttr_Kind:
 						value = "r"
-					case "rel_comment":
+					case catalog.SystemRelAttr_Comment:
 						value = row.Comments
-					case "rel_createsql":
+					case catalog.SystemRelAttr_CreateSQL:
 						value = ""
 					default:
 						resp.ErrColumnNotFound.Name = name
@@ -501,44 +525,55 @@ func (c *CatalogHandler) HandleRead(meta txn.TxnMeta, req txnengine.ReadReq, res
 					var value any
 
 					switch name {
-					case "att_database":
-						value = c.database.Name
-					case "att_relname":
-						rel := c.relations[row.RelationID]
-						value = rel.Name
-					case "attname":
+					case catalog.SystemColAttr_DBName:
+						relRow, err := c.upstream.relations.Get(tx, Text(row.RelationID))
+						if err != nil {
+							return err
+						}
+						dbRow, err := c.upstream.databases.Get(tx, Text(relRow.DatabaseID))
+						if err != nil {
+							return err
+						}
+						value = dbRow.Name
+					case catalog.SystemColAttr_RelName:
+						relRow, err := c.upstream.relations.Get(tx, Text(row.RelationID))
+						if err != nil {
+							return err
+						}
+						value = relRow.Name
+					case catalog.SystemColAttr_Name:
 						value = row.Name
-					case "atttyp":
+					case catalog.SystemColAttr_Type:
 						value = row.Type.Oid
-					case "attnum":
+					case catalog.SystemColAttr_Num:
 						value = row.Order
-					case "att_length":
+					case catalog.SystemColAttr_Length:
 						value = row.Type.Size
-					case "attnotnull":
+					case catalog.SystemColAttr_NullAbility:
 						value = row.Default.NullAbility
-					case "atthasdef":
+					case catalog.SystemColAttr_HasExpr:
 						value = row.Default.Expr != nil
-					case "att_default":
+					case catalog.SystemColAttr_DefaultExpr:
 						value = row.Default.Expr.String()
-					case "attisdropped":
+					case catalog.SystemColAttr_IsDropped:
 						value = false
-					case "att_constraint_type":
+					case catalog.SystemColAttr_ConstraintType:
 						if row.Primary {
 							value = "p"
 						} else {
 							value = "n"
 						}
-					case "att_is_unsigned":
+					case catalog.SystemColAttr_IsUnsigned:
 						value = row.Type.Oid == types.T_uint8 ||
 							row.Type.Oid == types.T_uint16 ||
 							row.Type.Oid == types.T_uint32 ||
 							row.Type.Oid == types.T_uint64 ||
 							row.Type.Oid == types.T_uint128
-					case "att_is_auto_increment":
-						value = false
-					case "att_comment":
+					case catalog.SystemColAttr_IsAutoIncrement:
+						value = false //TODO
+					case catalog.SystemColAttr_Comment:
 						value = row.Comment
-					case "att_is_hidden":
+					case catalog.SystemColAttr_IsHidden:
 						value = row.IsHidden
 					default:
 						resp.ErrColumnNotFound.Name = name
