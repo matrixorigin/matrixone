@@ -211,8 +211,7 @@ const (
 	objectTypeDatabase = "database"
 	objectTypeTable    = "table"
 	objectTypeFunction = "function"
-	objectTypeView     = "view"
-	objectTypeIndex    = "index"
+	objectTypeAccount  = "account"
 
 	objectIDAll = 0 //denotes all objects in the object type
 )
@@ -631,8 +630,7 @@ var (
 	sysObjects = []object{
 		{objectTypeDatabase, objectIDAll},
 		{objectTypeTable, objectIDAll},
-		{objectTypeView, objectIDAll},
-		{objectTypeIndex, objectIDAll},
+		{objectTypeAccount, objectIDAll},
 		{objectTypeFunction, objectIDAll},
 	}
 
@@ -683,8 +681,7 @@ var (
 	applicationLevelObjects = []object{
 		{objectTypeDatabase, objectIDAll},
 		{objectTypeTable, objectIDAll},
-		{objectTypeView, objectIDAll},
-		{objectTypeIndex, objectIDAll},
+		{objectTypeAccount, objectIDAll},
 		{objectTypeFunction, objectIDAll},
 	}
 
