@@ -87,6 +87,7 @@ func SchemaToDefs(schema *catalog.Schema) (defs []engine.TableDef, err error) {
 					OriginString: col.Default.OriginString,
 					Expr:         expr,
 				},
+				AutoIncrement: col.IsAutoIncrement(),
 			},
 		}
 		defs = append(defs, def)

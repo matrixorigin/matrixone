@@ -31,11 +31,15 @@ import (
 
 type SegmentDataFactory = func(meta *SegmentEntry) data.Segment
 
+func compareSegmentFn(a, b *SegmentEntry) int {
+	return a.BaseEntry.DoCompre(b.BaseEntry)
+}
+
 type SegmentEntry struct {
 	*BaseEntry
 	table   *TableEntry
-	entries map[uint64]*common.DLNode
-	link    *common.SortedDList
+	entries map[uint64]*common.GenericDLNode[*BlockEntry]
+	link    *common.GenericSortedDList[*BlockEntry]
 	state   EntryState
 	segData data.Segment
 }
@@ -45,8 +49,8 @@ func NewSegmentEntry(table *TableEntry, txn txnif.AsyncTxn, state EntryState, da
 	e := &SegmentEntry{
 		BaseEntry: NewBaseEntry(id),
 		table:     table,
-		link:      new(common.SortedDList),
-		entries:   make(map[uint64]*common.DLNode),
+		link:      common.NewGenericSortedDList(compareBlockFn),
+		entries:   make(map[uint64]*common.GenericDLNode[*BlockEntry]),
 		state:     state,
 	}
 	e.CreateWithTxn(txn)
@@ -59,8 +63,8 @@ func NewSegmentEntry(table *TableEntry, txn txnif.AsyncTxn, state EntryState, da
 func NewReplaySegmentEntry() *SegmentEntry {
 	e := &SegmentEntry{
 		BaseEntry: NewReplayBaseEntry(),
-		link:      new(common.SortedDList),
-		entries:   make(map[uint64]*common.DLNode),
+		link:      common.NewGenericSortedDList(compareBlockFn),
+		entries:   make(map[uint64]*common.GenericDLNode[*BlockEntry]),
 	}
 	return e
 }
@@ -69,8 +73,8 @@ func NewStandaloneSegment(table *TableEntry, id uint64, ts types.TS) *SegmentEnt
 	e := &SegmentEntry{
 		BaseEntry: NewBaseEntry(id),
 		table:     table,
-		link:      new(common.SortedDList),
-		entries:   make(map[uint64]*common.DLNode),
+		link:      common.NewGenericSortedDList(compareBlockFn),
+		entries:   make(map[uint64]*common.GenericDLNode[*BlockEntry]),
 		state:     ES_Appendable,
 	}
 	e.CreateWithTS(ts)
@@ -81,8 +85,8 @@ func NewSysSegmentEntry(table *TableEntry, id uint64) *SegmentEntry {
 	e := &SegmentEntry{
 		BaseEntry: NewBaseEntry(id),
 		table:     table,
-		link:      new(common.SortedDList),
-		entries:   make(map[uint64]*common.DLNode),
+		link:      common.NewGenericSortedDList(compareBlockFn),
+		entries:   make(map[uint64]*common.GenericDLNode[*BlockEntry]),
 		state:     ES_Appendable,
 	}
 	e.CreateWithTS(types.SystemDBTS)
@@ -113,7 +117,7 @@ func (entry *SegmentEntry) GetBlockEntryByIDLocked(id uint64) (blk *BlockEntry, 
 		err = ErrNotFound
 		return
 	}
-	blk = node.GetPayload().(*BlockEntry)
+	blk = node.GetPayload()
 	return
 }
 
@@ -132,7 +136,7 @@ func (entry *SegmentEntry) PPString(level common.PPLevel, depth int, prefix stri
 	}
 	it := entry.MakeBlockIt(true)
 	for it.Valid() {
-		block := it.Get().GetPayload().(*BlockEntry)
+		block := it.Get().GetPayload()
 		block.RLock()
 		_ = w.WriteByte('\n')
 		_, _ = w.WriteString(block.PPString(level, depth+1, prefix))
@@ -169,16 +173,11 @@ func (entry *SegmentEntry) GetTable() *TableEntry {
 	return entry.table
 }
 
-func (entry *SegmentEntry) Compare(o common.NodePayload) int {
-	oe := o.(*SegmentEntry).BaseEntry
-	return entry.DoCompre(oe)
-}
-
 func (entry *SegmentEntry) GetAppendableBlockCnt() int {
 	cnt := 0
 	it := entry.MakeBlockIt(true)
 	for it.Valid() {
-		if it.Get().GetPayload().(*BlockEntry).IsAppendable() {
+		if it.Get().GetPayload().IsAppendable() {
 			cnt++
 		}
 		it.Next()
@@ -189,7 +188,7 @@ func (entry *SegmentEntry) GetAppendableBlockCnt() int {
 func (entry *SegmentEntry) LastAppendableBlock() (blk *BlockEntry) {
 	it := entry.MakeBlockIt(false)
 	for it.Valid() {
-		itBlk := it.Get().GetPayload().(*BlockEntry)
+		itBlk := it.Get().GetPayload()
 		if itBlk.IsAppendable() {
 			blk = itBlk
 			break
@@ -227,10 +226,10 @@ func (entry *SegmentEntry) DropBlockEntry(id uint64, txn txnif.AsyncTxn) (delete
 	return
 }
 
-func (entry *SegmentEntry) MakeBlockIt(reverse bool) *common.SortedDListIt {
+func (entry *SegmentEntry) MakeBlockIt(reverse bool) *common.GenericSortedDListIt[*BlockEntry] {
 	entry.RLock()
 	defer entry.RUnlock()
-	return common.NewSortedDListIt(entry.RWMutex, entry.link, reverse)
+	return common.NewGenericSortedDListIt(entry.RWMutex, entry.link, reverse)
 }
 
 func (entry *SegmentEntry) AddEntryLocked(block *BlockEntry) {
@@ -338,7 +337,7 @@ func (entry *SegmentEntry) CollectBlockEntries(commitFilter func(be *BaseEntry) 
 	blks := make([]*BlockEntry, 0)
 	blkIt := entry.MakeBlockIt(true)
 	for blkIt.Valid() {
-		blk := blkIt.Get().GetPayload().(*BlockEntry)
+		blk := blkIt.Get().GetPayload()
 		blk.RLock()
 		if commitFilter != nil && blockFilter != nil {
 			if commitFilter(blk.BaseEntry) && blockFilter(blk) {

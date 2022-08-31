@@ -28,6 +28,10 @@ import (
 
 type BlockDataFactory = func(meta *BlockEntry) data.Block
 
+func compareBlockFn(a, b *BlockEntry) int {
+	return a.BaseEntry.DoCompre(b.BaseEntry)
+}
+
 type BlockEntry struct {
 	*BaseEntry
 	segment *SegmentEntry
@@ -90,11 +94,6 @@ func (entry *BlockEntry) MakeCommand(id uint32) (cmd txnif.TxnCmd, err error) {
 	entry.RLock()
 	defer entry.RUnlock()
 	return newBlockCmd(id, cmdType, entry), nil
-}
-
-func (entry *BlockEntry) Compare(o common.NodePayload) int {
-	oe := o.(*BlockEntry).BaseEntry
-	return entry.DoCompre(oe)
 }
 
 func (entry *BlockEntry) PPString(level common.PPLevel, depth int, prefix string) string {

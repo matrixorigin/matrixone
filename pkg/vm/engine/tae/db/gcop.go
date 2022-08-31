@@ -70,7 +70,7 @@ func gcSegmentClosure(entry *catalog.SegmentEntry, gct GCType) tasks.FuncT {
 		table := entry.GetTable()
 		it := entry.MakeBlockIt(false)
 		for it.Valid() {
-			blk := it.Get().GetPayload().(*catalog.BlockEntry)
+			blk := it.Get().GetPayload()
 			scopes = append(scopes, *blk.AsCommonID())
 			err = gcBlockClosure(blk, gct)()
 			if err != nil {
@@ -97,7 +97,7 @@ func gcTableClosure(entry *catalog.TableEntry, gct GCType) tasks.FuncT {
 		dbEntry := entry.GetDB()
 		it := entry.MakeSegmentIt(false)
 		for it.Valid() {
-			seg := it.Get().GetPayload().(*catalog.SegmentEntry)
+			seg := it.Get().GetPayload()
 			scopes = append(scopes, *seg.AsCommonID())
 			if err = gcSegmentClosure(seg, gct)(); err != nil {
 				return
@@ -119,7 +119,7 @@ func gcDatabaseClosure(entry *catalog.DBEntry) tasks.FuncT {
 		}()
 		it := entry.MakeTableIt(false)
 		for it.Valid() {
-			table := it.Get().GetPayload().(*catalog.TableEntry)
+			table := it.Get().GetPayload()
 			scopes = append(scopes, *table.AsCommonID())
 			if err = gcTableClosure(table, GCType_DB)(); err != nil {
 				return
