@@ -59,6 +59,9 @@ func (s *store) initMetadata() error {
 			zap.String("disk-store", v.UUID))
 	}
 	s.mu.metadata = *v
+
+	s.logger.Info("local DNShard loaded",
+		zap.String("metadata", s.mu.metadata.DebugString()))
 	return nil
 }
 
