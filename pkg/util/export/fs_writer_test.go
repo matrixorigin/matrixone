@@ -191,7 +191,7 @@ func TestFSWriter_Write(t *testing.T) {
 			fields: fields{
 				ctx:      context.Background(),
 				fs:       localFs,
-				prefix:   newNum(1),
+				prefix:   newDummy(1),
 				dir:      "system", // database name
 				nodeUUID: "node_uuid",
 				nodeType: "standalone",
