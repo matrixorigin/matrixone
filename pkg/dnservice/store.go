@@ -389,12 +389,11 @@ func (s *store) initHAKeeperClient() error {
 }
 
 func (s *store) initTraceMetric(ctx context.Context) error {
-	var fs fileservice.FileService
 	var writerFactory export.FSWriterFactory
 	var err error
 	SV := &s.cfg.Frontend
 	if !SV.DisableTrace || !SV.DisableMetric {
-		writerFactory = export.GetFSWriterFactory(fs, SV.NodeUUID, trace.NodeTypeDN.String())
+		writerFactory = export.GetFSWriterFactory(s.fileService, SV.NodeUUID, trace.NodeTypeDN.String())
 	}
 	if ctx, err = trace.Init(ctx,
 		trace.WithMOVersion(SV.MoVersion),

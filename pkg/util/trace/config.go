@@ -72,7 +72,7 @@ type tracerProviderConfig struct {
 	batchProcessMode string // see WithBatchProcessMode
 
 	// writerFactory gen writer for CSV output
-	writerFactory export.FSWriterFactory // see WithFSWriterFactory, default: export.GetFSWriterFactory
+	writerFactory export.FSWriterFactory // see WithFSWriterFactory, default from export.GetFSWriterFactory result
 
 	sqlExecutor func() ie.InternalExecutor // see WithSQLExecutor
 
