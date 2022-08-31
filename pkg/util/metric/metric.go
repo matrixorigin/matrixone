@@ -21,6 +21,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/config"
@@ -77,7 +78,13 @@ var moExporter MetricExporter
 var moCollector MetricCollector
 var statusSvr *statusServer
 
+var inited uint32
+
 func InitMetric(ctx context.Context, ieFactory func() ie.InternalExecutor, SV *config.FrontendParameters, nodeUUID, role string, opts ...InitOption) {
+	// fix multi-init in standalone
+	if !atomic.CompareAndSwapUint32(&inited, 0, 1) {
+		return
+	}
 	var initOpts InitOptions
 	for _, opt := range opts {
 		opt.ApplyTo(&initOpts)

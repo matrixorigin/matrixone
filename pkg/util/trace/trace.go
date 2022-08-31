@@ -43,7 +43,13 @@ func init() {
 	SetTracerProvider(newMOTracerProvider(EnableTracer(false)))
 }
 
+var inited uint32
+
 func Init(ctx context.Context, opts ...TracerProviderOption) (context.Context, error) {
+	// fix multi-init in standalone
+	if !atomic.CompareAndSwapUint32(&inited, 0, 1) {
+		return ContextWithSpanContext(ctx, *DefaultSpanContext()), nil
+	}
 
 	// init tool dependence
 	logutil.SetLogReporter(&logutil.TraceReporter{ReportLog: ReportLog, ReportZap: ReportZap, LevelSignal: SetLogLevel, ContextField: ContextField})
