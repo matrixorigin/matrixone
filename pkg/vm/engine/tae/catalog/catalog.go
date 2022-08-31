@@ -72,7 +72,7 @@ func genDBFullName(tenantID uint32, name string) string {
 }
 
 func compareDBFn(a, b *DBEntry) int {
-	return a.BaseEntry.DoCompre(b.BaseEntry)
+	return a.DBBaseEntry.DoCompre(b.DBBaseEntry)
 }
 
 func MockCatalog(dir, name string, cfg *batchstoredriver.StoreCfg, scheduler tasks.TaskScheduler) *Catalog {
@@ -182,7 +182,7 @@ func (catalog *Catalog) onReplayUpdateDatabase(cmd *EntryCommand, idx *wal.Index
 	}
 	var err error
 
-	db, err := catalog.GetDatabaseByID(cmd.entry.ID)
+	db, err := catalog.GetDatabaseByID(cmd.entry.GetID())
 	if err != nil {
 		cmd.DB.RWMutex = new(sync.RWMutex)
 		cmd.DB.catalog = catalog

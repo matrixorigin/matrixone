@@ -36,7 +36,7 @@ func tableTxnCanGetFn[T *TableEntry](n *common.GenericDLNode[*TableEntry], ts ty
 }
 
 type TableEntry struct {
-	*BaseEntry
+	*TableBaseEntry
 	db        *DBEntry
 	schema    *Schema
 	entries   map[uint64]*common.GenericDLNode[*SegmentEntry]
@@ -63,11 +63,11 @@ func NewTableEntry(db *DBEntry, schema *Schema, txnCtx txnif.AsyncTxn, dataFacto
 	}
 	schema.AcInfo.CreateAt = types.CurrentTimestamp()
 	e := &TableEntry{
-		BaseEntry: NewBaseEntry(id),
-		db:        db,
-		schema:    schema,
-		link:      common.NewGenericSortedDList(compareSegmentFn),
-		entries:   make(map[uint64]*common.GenericDLNode[*SegmentEntry]),
+		TableBaseEntry: NewTableBaseEntry(id),
+		db:             db,
+		schema:         schema,
+		link:           common.NewGenericSortedDList(compareSegmentFn),
+		entries:        make(map[uint64]*common.GenericDLNode[*SegmentEntry]),
 	}
 	if dataFactory != nil {
 		e.tableData = dataFactory(e)
@@ -78,11 +78,11 @@ func NewTableEntry(db *DBEntry, schema *Schema, txnCtx txnif.AsyncTxn, dataFacto
 
 func NewSystemTableEntry(db *DBEntry, id uint64, schema *Schema) *TableEntry {
 	e := &TableEntry{
-		BaseEntry: NewBaseEntry(id),
-		db:        db,
-		schema:    schema,
-		link:      common.NewGenericSortedDList(compareSegmentFn),
-		entries:   make(map[uint64]*common.GenericDLNode[*SegmentEntry]),
+		TableBaseEntry: NewTableBaseEntry(id),
+		db:             db,
+		schema:         schema,
+		link:           common.NewGenericSortedDList(compareSegmentFn),
+		entries:        make(map[uint64]*common.GenericDLNode[*SegmentEntry]),
 	}
 	e.CreateWithTS(types.SystemDBTS)
 	var sid uint64
@@ -102,19 +102,19 @@ func NewSystemTableEntry(db *DBEntry, id uint64, schema *Schema) *TableEntry {
 
 func NewReplayTableEntry() *TableEntry {
 	e := &TableEntry{
-		BaseEntry: NewReplayBaseEntry(),
-		link:      common.NewGenericSortedDList(compareSegmentFn),
-		entries:   make(map[uint64]*common.GenericDLNode[*SegmentEntry]),
+		TableBaseEntry: NewReplayTableBaseEntry(),
+		link:           common.NewGenericSortedDList(compareSegmentFn),
+		entries:        make(map[uint64]*common.GenericDLNode[*SegmentEntry]),
 	}
 	return e
 }
 
 func MockStaloneTableEntry(id uint64, schema *Schema) *TableEntry {
 	return &TableEntry{
-		BaseEntry: NewBaseEntry(id),
-		schema:    schema,
-		link:      common.NewGenericSortedDList(compareSegmentFn),
-		entries:   make(map[uint64]*common.GenericDLNode[*SegmentEntry]),
+		TableBaseEntry: NewTableBaseEntry(id),
+		schema:         schema,
+		link:           common.NewGenericSortedDList(compareSegmentFn),
+		entries:        make(map[uint64]*common.GenericDLNode[*SegmentEntry]),
 	}
 }
 
@@ -223,7 +223,7 @@ func (entry *TableEntry) String() string {
 }
 
 func (entry *TableEntry) StringLocked() string {
-	return fmt.Sprintf("TABLE%s[name=%s]", entry.BaseEntry.StringLocked(), entry.schema.Name)
+	return fmt.Sprintf("TABLE%s[name=%s]", entry.TableBaseEntry.StringLocked(), entry.schema.Name)
 }
 
 func (entry *TableEntry) GetCatalog() *Catalog { return entry.db.catalog }
@@ -315,7 +315,7 @@ func (entry *TableEntry) RemoveEntry(segment *SegmentEntry) (err error) {
 
 func (entry *TableEntry) PrepareRollback() (err error) {
 	var isEmpty bool
-	isEmpty, err = entry.BaseEntry.PrepareRollback()
+	isEmpty, err = entry.TableBaseEntry.PrepareRollback()
 	if err != nil {
 		return
 	}
@@ -329,7 +329,7 @@ func (entry *TableEntry) PrepareRollback() (err error) {
 }
 
 func (entry *TableEntry) WriteTo(w io.Writer) (n int64, err error) {
-	if n, err = entry.BaseEntry.WriteAllTo(w); err != nil {
+	if n, err = entry.TableBaseEntry.WriteAllTo(w); err != nil {
 		return
 	}
 	buf, err := entry.schema.Marshal()
@@ -343,7 +343,7 @@ func (entry *TableEntry) WriteTo(w io.Writer) (n int64, err error) {
 }
 
 func (entry *TableEntry) ReadFrom(r io.Reader) (n int64, err error) {
-	if n, err = entry.BaseEntry.ReadAllFrom(r); err != nil {
+	if n, err = entry.TableBaseEntry.ReadAllFrom(r); err != nil {
 		return
 	}
 	if entry.schema == nil {
@@ -365,17 +365,17 @@ func (entry *TableEntry) GetCheckpointItems(start, end types.TS) CheckpointItems
 		return nil
 	}
 	return &TableEntry{
-		BaseEntry: ret,
-		schema:    entry.schema,
-		db:        entry.db,
+		TableBaseEntry: ret.(*TableBaseEntry),
+		schema:         entry.schema,
+		db:             entry.db,
 	}
 }
 
 func (entry *TableEntry) CloneCreateEntry() *TableEntry {
 	return &TableEntry{
-		BaseEntry: entry.BaseEntry.CloneCreateEntry(),
-		db:        entry.db,
-		schema:    entry.schema,
+		TableBaseEntry: entry.TableBaseEntry.CloneCreateEntry().(*TableBaseEntry),
+		db:             entry.db,
+		schema:         entry.schema,
 	}
 }
 

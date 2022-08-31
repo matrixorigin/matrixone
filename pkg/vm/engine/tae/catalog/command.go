@@ -83,7 +83,7 @@ func init() {
 type EntryCommand struct {
 	*txnbase.BaseCustomizedCmd
 	cmdType   int16
-	entry     *BaseEntry
+	entry     BaseEntryIf
 	DBID      uint64
 	TableID   uint64
 	SegmentID uint64
@@ -109,7 +109,7 @@ func newBlockCmd(id uint32, cmdType int16, entry *BlockEntry) *EntryCommand {
 		Segment: entry.GetSegment(),
 		Block:   entry,
 		cmdType: cmdType,
-		entry:   entry.BaseEntry,
+		entry:   entry.MetaBaseEntry,
 	}
 	impl.BaseCustomizedCmd = txnbase.NewBaseCustomizedCmd(id, impl)
 	return impl
@@ -121,7 +121,7 @@ func newSegmentCmd(id uint32, cmdType int16, entry *SegmentEntry) *EntryCommand 
 		Table:   entry.GetTable(),
 		Segment: entry,
 		cmdType: cmdType,
-		entry:   entry.BaseEntry,
+		entry:   entry.MetaBaseEntry,
 	}
 	impl.BaseCustomizedCmd = txnbase.NewBaseCustomizedCmd(id, impl)
 	return impl
@@ -132,7 +132,7 @@ func newTableCmd(id uint32, cmdType int16, entry *TableEntry) *EntryCommand {
 		DB:      entry.GetDB(),
 		Table:   entry,
 		cmdType: cmdType,
-		entry:   entry.BaseEntry,
+		entry:   entry.TableBaseEntry,
 	}
 	impl.BaseCustomizedCmd = txnbase.NewBaseCustomizedCmd(id, impl)
 	return impl
@@ -144,7 +144,7 @@ func newDBCmd(id uint32, cmdType int16, entry *DBEntry) *EntryCommand {
 		cmdType: cmdType,
 	}
 	if entry != nil {
-		impl.entry = entry.BaseEntry
+		impl.entry = entry.DBBaseEntry
 	}
 	impl.BaseCustomizedCmd = txnbase.NewBaseCustomizedCmd(id, impl)
 	return impl
@@ -194,20 +194,20 @@ func (cmd *EntryCommand) GetID() (uint64, *common.ID) {
 	dbid := uint64(0)
 	switch cmd.cmdType {
 	case CmdUpdateDatabase:
-		dbid = cmd.entry.ID
+		dbid = cmd.entry.GetID()
 	case CmdUpdateTable:
 		if cmd.DBID != 0 {
 			dbid = cmd.DBID
 			id.TableID = cmd.Table.ID
 		} else {
 			dbid = cmd.Table.db.ID
-			id.TableID = cmd.entry.ID
+			id.TableID = cmd.entry.GetID()
 		}
 	case CmdUpdateSegment:
 		if cmd.DBID != 0 {
 			dbid = cmd.DBID
 			id.TableID = cmd.TableID
-			id.SegmentID = cmd.entry.ID
+			id.SegmentID = cmd.entry.GetID()
 		} else {
 			dbid = cmd.DB.ID
 			id.TableID = cmd.Table.ID
@@ -218,12 +218,12 @@ func (cmd *EntryCommand) GetID() (uint64, *common.ID) {
 			dbid = cmd.DBID
 			id.TableID = cmd.TableID
 			id.SegmentID = cmd.SegmentID
-			id.BlockID = cmd.entry.ID
+			id.BlockID = cmd.entry.GetID()
 		} else {
 			dbid = cmd.DB.ID
 			id.TableID = cmd.Table.ID
 			id.SegmentID = cmd.Segment.ID
-			id.BlockID = cmd.entry.ID
+			id.BlockID = cmd.entry.GetID()
 		}
 	case CmdLogDatabase:
 		dbid = cmd.DB.ID
@@ -477,14 +477,15 @@ func (cmd *EntryCommand) ReadFrom(r io.Reader) (n int64, err error) {
 		return
 	}
 
-	cmd.entry = NewReplayBaseEntry()
-	if err = binary.Read(r, binary.BigEndian, &cmd.entry.ID); err != nil {
-		return
-	}
 	var sn int64
-	n += 8
 	switch cmd.GetType() {
 	case CmdUpdateDatabase:
+		entry := NewReplayDBBaseEntry()
+		if err = binary.Read(r, binary.BigEndian, &entry.ID); err != nil {
+			return
+		}
+		n += 8
+		cmd.entry = entry
 		cmd.DB = NewReplayDBEntry()
 		if cmd.DB.name, sn, err = common.ReadString(r); err != nil {
 			return
@@ -498,8 +499,14 @@ func (cmd *EntryCommand) ReadFrom(r io.Reader) (n int64, err error) {
 			return
 		}
 		n += sn
-		cmd.DB.BaseEntry = cmd.entry
+		cmd.DB.DBBaseEntry = cmd.entry.(*DBBaseEntry)
 	case CmdUpdateTable:
+		entry := NewReplayTableBaseEntry()
+		if err = binary.Read(r, binary.BigEndian, &entry.ID); err != nil {
+			return
+		}
+		n += 8
+		cmd.entry = entry
 		if err = binary.Read(r, binary.BigEndian, &cmd.DBID); err != nil {
 			return
 		}
@@ -510,13 +517,19 @@ func (cmd *EntryCommand) ReadFrom(r io.Reader) (n int64, err error) {
 		}
 		n += sn
 		cmd.Table = NewReplayTableEntry()
-		cmd.Table.BaseEntry = cmd.entry
+		cmd.Table.TableBaseEntry = cmd.entry.(*TableBaseEntry)
 		cmd.Table.schema = NewEmptySchema("")
 		if sn, err = cmd.Table.schema.ReadFrom(r); err != nil {
 			return
 		}
 		n += sn
 	case CmdUpdateSegment:
+		entry := NewReplayMetaBaseEntry()
+		if err = binary.Read(r, binary.BigEndian, &entry.ID); err != nil {
+			return
+		}
+		n += 8
+		cmd.entry = entry
 		if err = binary.Read(r, binary.BigEndian, &cmd.DBID); err != nil {
 			return
 		}
@@ -535,9 +548,15 @@ func (cmd *EntryCommand) ReadFrom(r io.Reader) (n int64, err error) {
 		}
 		n += sn
 		cmd.Segment = NewReplaySegmentEntry()
-		cmd.Segment.BaseEntry = cmd.entry
+		cmd.Segment.MetaBaseEntry = cmd.entry.(*MetaBaseEntry)
 		cmd.Segment.state = state
 	case CmdUpdateBlock:
+		entry := NewReplayMetaBaseEntry()
+		if err = binary.Read(r, binary.BigEndian, &entry.ID); err != nil {
+			return
+		}
+		n += 8
+		cmd.entry = entry
 		if err = binary.Read(r, binary.BigEndian, &cmd.DBID); err != nil {
 			return
 		}
@@ -551,7 +570,6 @@ func (cmd *EntryCommand) ReadFrom(r io.Reader) (n int64, err error) {
 		if err = binary.Read(r, binary.BigEndian, &state); err != nil {
 			return
 		}
-		cmd.entry = NewReplayBaseEntry()
 		var n2 int64
 		n2, err = cmd.entry.ReadOneNodeFrom(r)
 		if err != nil {
@@ -559,7 +577,7 @@ func (cmd *EntryCommand) ReadFrom(r io.Reader) (n int64, err error) {
 		}
 		n += n2
 		cmd.Block = NewReplayBlockEntry()
-		cmd.Block.BaseEntry = cmd.entry
+		cmd.Block.MetaBaseEntry = cmd.entry.(*MetaBaseEntry)
 		cmd.Block.state = state
 	}
 	return

@@ -17,7 +17,6 @@ package catalog
 import (
 	"bytes"
 	"encoding/binary"
-	"errors"
 	"fmt"
 	"io"
 
@@ -26,37 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 )
 
-type UpdateNodeIf interface {
-	CloneAll() UpdateNodeIf
-	CloneData() UpdateNodeIf
-	UpdateNode(UpdateNodeIf) //ApplyDelete()error
-	HasDropped() bool
-	IsSameTxn(types.TS) bool
-	IsActive() bool
-	IsCommitting() bool
-	GetTxn() txnif.TxnReader
-	String() string
-	AddLogIndex(*wal.Index)
-	PrepareCommit() error
-	Prepare2PCPrepare() error
-	PrepareRollback() error
-	ApplyCommit(index *wal.Index) error
-	ApplyRollback(index *wal.Index) error
-	ReadFrom(io.Reader) (int64, error)
-	WriteTo(io.Writer) (int64, error)
-}
-
-var ErrTxnActive = errors.New("txn is active")
-
-type INode interface {
-	txnif.TxnEntry
-	ApplyUpdate(*UpdateNode) error
-	ApplyDelete() error
-	GetUpdateNode() *UpdateNode
-	String() string
-}
-
-type UpdateNode struct {
+type MetaUpdateNode struct {
 	CreatedAt types.TS
 	DeletedAt types.TS
 	MetaLoc   string
@@ -69,11 +38,11 @@ type UpdateNode struct {
 	Deleted    bool
 }
 
-func NewEmptyUpdateNode() *UpdateNode {
+func NewEmptyMetaUpdateNode() *UpdateNode {
 	return &UpdateNode{}
 }
 
-func (e UpdateNode) CloneAll() *UpdateNode {
+func (e MetaUpdateNode) CloneAll() *UpdateNode {
 	n := e.CloneData()
 	// n.State = e.State
 	n.Start = e.Start
@@ -88,7 +57,7 @@ func (e UpdateNode) CloneAll() *UpdateNode {
 	return n
 }
 
-func (e *UpdateNode) CloneData() *UpdateNode {
+func (e *MetaUpdateNode) CloneData() *UpdateNode {
 	return &UpdateNode{
 		CreatedAt: e.CreatedAt,
 		DeletedAt: e.DeletedAt,
@@ -98,7 +67,7 @@ func (e *UpdateNode) CloneData() *UpdateNode {
 }
 
 // for create drop in one txn
-func (e *UpdateNode) UpdateNode(un *UpdateNode) {
+func (e *MetaUpdateNode) UpdateNode(un *UpdateNode) {
 	if e.Start != un.Start {
 		panic("logic err")
 	}
@@ -110,32 +79,32 @@ func (e *UpdateNode) UpdateNode(un *UpdateNode) {
 	e.AddLogIndex(un.LogIndex[0])
 }
 
-func (e *UpdateNode) HasDropped() bool {
+func (e *MetaUpdateNode) HasDropped() bool {
 	return e.Deleted
 }
 
-func (e *UpdateNode) IsSameTxn(startTs types.TS) bool {
+func (e *MetaUpdateNode) IsSameTxn(startTs types.TS) bool {
 	if e.Txn == nil {
 		return false
 	}
 	return e.Txn.GetStartTS().Equal(startTs)
 }
 
-func (e *UpdateNode) IsActive() bool {
+func (e *MetaUpdateNode) IsActive() bool {
 	if e.Txn == nil {
 		return false
 	}
 	return e.Txn.GetTxnState(false) == txnif.TxnStateActive
 }
 
-func (e *UpdateNode) IsCommitting() bool {
+func (e *MetaUpdateNode) IsCommitting() bool {
 	if e.Txn == nil {
 		return false
 	}
 	return e.Txn.GetTxnState(false) != txnif.TxnStateActive
 }
 
-func (e *UpdateNode) IsMetaDataCommitting() bool {
+func (e *MetaUpdateNode) IsMetaDataCommitting() bool {
 	if e.Txn == nil {
 		return false
 	}
@@ -143,11 +112,11 @@ func (e *UpdateNode) IsMetaDataCommitting() bool {
 	return state == txnif.TxnStateCommitting || state == txnif.TxnStatePreparing
 }
 
-func (e *UpdateNode) GetTxn() txnif.TxnReader {
+func (e *MetaUpdateNode) GetTxn() txnif.TxnReader {
 	return e.Txn
 }
 
-func (e *UpdateNode) String() string {
+func (e *MetaUpdateNode) String() string {
 	var w bytes.Buffer
 	_, _ = w.WriteString(
 		fmt.Sprintf("[%v,%v][C=%v,D=%v][Loc1=%s,Loc2=%s][Deleted?%v][logIndex=%v]",
@@ -163,17 +132,17 @@ func (e *UpdateNode) String() string {
 	return w.String()
 }
 
-func (e *UpdateNode) UpdateMetaLoc(loc string) (err error) {
+func (e *MetaUpdateNode) UpdateMetaLoc(loc string) (err error) {
 	e.MetaLoc = loc
 	return
 }
 
-func (e *UpdateNode) UpdateDeltaLoc(loc string) (err error) {
+func (e *MetaUpdateNode) UpdateDeltaLoc(loc string) (err error) {
 	e.DeltaLoc = loc
 	return
 }
 
-func (e *UpdateNode) ApplyUpdate(be *UpdateNode) (err error) {
+func (e *MetaUpdateNode) ApplyUpdate(be *MetaUpdateNode) (err error) {
 	// if e.Deleted {
 	// 	// TODO
 	// }
@@ -184,7 +153,7 @@ func (e *UpdateNode) ApplyUpdate(be *UpdateNode) (err error) {
 	return
 }
 
-func (e *UpdateNode) ApplyDeleteLocked() (err error) {
+func (e *MetaUpdateNode) ApplyDeleteLocked() (err error) {
 	if e.Deleted {
 		panic("cannot apply delete to deleted node")
 	}
@@ -192,12 +161,12 @@ func (e *UpdateNode) ApplyDeleteLocked() (err error) {
 	return
 }
 
-func (e *UpdateNode) ApplyDelete() (err error) {
+func (e *MetaUpdateNode) ApplyDelete() (err error) {
 	err = e.ApplyDeleteLocked()
 	return
 }
 
-func compareUpdateNode(e, o *UpdateNode) int {
+func compareMetaUpdateNode(e, o *MetaUpdateNode) int {
 	if e.Start.Less(o.Start) {
 		return -1
 	}
@@ -207,26 +176,26 @@ func compareUpdateNode(e, o *UpdateNode) int {
 	return 1
 
 }
-func (e *UpdateNode) AddLogIndex(idx *wal.Index) {
+func (e *MetaUpdateNode) AddLogIndex(idx *wal.Index) {
 	if e.LogIndex == nil {
 		e.LogIndex = make([]*wal.Index, 0)
 	}
 	e.LogIndex = append(e.LogIndex, idx)
 
 }
-func (e *UpdateNode) ApplyCommit(index *wal.Index) (err error) {
+func (e *MetaUpdateNode) ApplyCommit(index *wal.Index) (err error) {
 	e.Txn = nil
 	e.AddLogIndex(index)
 	// e.State = txnif.TxnStateCommitted
 	return
 }
 
-func (e *UpdateNode) ApplyRollback(index *wal.Index) (err error) {
+func (e *MetaUpdateNode) ApplyRollback(index *wal.Index) (err error) {
 	e.AddLogIndex(index)
 	return
 }
 
-func (e *UpdateNode) Prepare2PCPrepare() (err error) {
+func (e *MetaUpdateNode) Prepare2PCPrepare() (err error) {
 	if e.CreatedAt.IsEmpty() {
 		e.CreatedAt = e.Txn.GetPrepareTS()
 	}
@@ -237,7 +206,7 @@ func (e *UpdateNode) Prepare2PCPrepare() (err error) {
 	return
 }
 
-func (e *UpdateNode) PrepareCommit() (err error) {
+func (e *MetaUpdateNode) PrepareCommit() (err error) {
 	if e.CreatedAt.IsEmpty() {
 		e.CreatedAt = e.Txn.GetCommitTS()
 	}
@@ -251,7 +220,7 @@ func (e *UpdateNode) PrepareCommit() (err error) {
 //	func (e *UpdateNode) MakeCommand(id uint32) (cmd txnif.TxnCmd, err error) {
 //		return
 //	}
-func (e *UpdateNode) WriteTo(w io.Writer) (n int64, err error) {
+func (e *MetaUpdateNode) WriteTo(w io.Writer) (n int64, err error) {
 	if err = binary.Write(w, binary.BigEndian, e.Start); err != nil {
 		return
 	}
@@ -311,7 +280,7 @@ func (e *UpdateNode) WriteTo(w io.Writer) (n int64, err error) {
 	return
 }
 
-func (e *UpdateNode) ReadFrom(r io.Reader) (n int64, err error) {
+func (e *MetaUpdateNode) ReadFrom(r io.Reader) (n int64, err error) {
 	if err = binary.Read(r, binary.BigEndian, &e.Start); err != nil {
 		return
 	}
