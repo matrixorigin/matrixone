@@ -5159,11 +5159,27 @@ var operators = map[int]Functions{
 				Volatile:  true,
 				Flag:      plan.Function_NONE,
 				Layout:    STANDARD_FUNCTION,
+				ReturnTyp: types.T_varchar,
+				Fn:        operator.CoalesceVarchar,
+			},
+			{
+				Index:     1,
+				Volatile:  true,
+				Flag:      plan.Function_NONE,
+				Layout:    STANDARD_FUNCTION,
+				ReturnTyp: types.T_char,
+				Fn:        operator.CoalesceChar,
+			},
+			{
+				Index:     2,
+				Volatile:  true,
+				Flag:      plan.Function_NONE,
+				Layout:    STANDARD_FUNCTION,
 				ReturnTyp: types.T_int8,
 				Fn:        operator.CoalesceInt8,
 			},
 			{
-				Index:     1,
+				Index:     3,
 				Volatile:  true,
 				Flag:      plan.Function_NONE,
 				Layout:    STANDARD_FUNCTION,
@@ -5171,7 +5187,7 @@ var operators = map[int]Functions{
 				Fn:        operator.CoalesceInt16,
 			},
 			{
-				Index:     2,
+				Index:     4,
 				Volatile:  true,
 				Flag:      plan.Function_NONE,
 				Layout:    STANDARD_FUNCTION,
@@ -5179,7 +5195,7 @@ var operators = map[int]Functions{
 				Fn:        operator.CoalesceInt32,
 			},
 			{
-				Index:     3,
+				Index:     5,
 				Volatile:  true,
 				Flag:      plan.Function_NONE,
 				Layout:    STANDARD_FUNCTION,
@@ -5187,7 +5203,7 @@ var operators = map[int]Functions{
 				Fn:        operator.CoalesceInt64,
 			},
 			{
-				Index:     4,
+				Index:     6,
 				Volatile:  true,
 				Flag:      plan.Function_NONE,
 				Layout:    STANDARD_FUNCTION,
@@ -5195,7 +5211,7 @@ var operators = map[int]Functions{
 				Fn:        operator.CoalesceUint8,
 			},
 			{
-				Index:     5,
+				Index:     7,
 				Volatile:  true,
 				Flag:      plan.Function_NONE,
 				Layout:    STANDARD_FUNCTION,
@@ -5203,7 +5219,7 @@ var operators = map[int]Functions{
 				Fn:        operator.CoalesceUint16,
 			},
 			{
-				Index:     6,
+				Index:     8,
 				Volatile:  true,
 				Flag:      plan.Function_NONE,
 				Layout:    STANDARD_FUNCTION,
@@ -5211,7 +5227,7 @@ var operators = map[int]Functions{
 				Fn:        operator.CoalesceUint32,
 			},
 			{
-				Index:     7,
+				Index:     9,
 				Volatile:  true,
 				Flag:      plan.Function_NONE,
 				Layout:    STANDARD_FUNCTION,
@@ -5219,7 +5235,7 @@ var operators = map[int]Functions{
 				Fn:        operator.CoalesceUint64,
 			},
 			{
-				Index:     8,
+				Index:     10,
 				Volatile:  true,
 				Flag:      plan.Function_NONE,
 				Layout:    STANDARD_FUNCTION,
@@ -5227,7 +5243,7 @@ var operators = map[int]Functions{
 				Fn:        operator.CoalesceFloat32,
 			},
 			{
-				Index:     9,
+				Index:     11,
 				Volatile:  true,
 				Flag:      plan.Function_NONE,
 				Layout:    STANDARD_FUNCTION,
@@ -5235,7 +5251,7 @@ var operators = map[int]Functions{
 				Fn:        operator.CoalesceFloat64,
 			},
 			{
-				Index:     10,
+				Index:     12,
 				Volatile:  true,
 				Flag:      plan.Function_NONE,
 				Layout:    STANDARD_FUNCTION,
@@ -5243,7 +5259,7 @@ var operators = map[int]Functions{
 				Fn:        operator.CoalesceBool,
 			},
 			{
-				Index:     11,
+				Index:     13,
 				Volatile:  true,
 				Flag:      plan.Function_NONE,
 				Layout:    STANDARD_FUNCTION,
@@ -5251,28 +5267,12 @@ var operators = map[int]Functions{
 				Fn:        operator.CoalesceDate,
 			},
 			{
-				Index:     12,
+				Index:     14,
 				Volatile:  true,
 				Flag:      plan.Function_NONE,
 				Layout:    STANDARD_FUNCTION,
 				ReturnTyp: types.T_datetime,
 				Fn:        operator.CoalesceDateTime,
-			},
-			{
-				Index:     13,
-				Volatile:  true,
-				Flag:      plan.Function_NONE,
-				Layout:    STANDARD_FUNCTION,
-				ReturnTyp: types.T_varchar,
-				Fn:        operator.CoalesceVarchar,
-			},
-			{
-				Index:     14,
-				Volatile:  true,
-				Flag:      plan.Function_NONE,
-				Layout:    STANDARD_FUNCTION,
-				ReturnTyp: types.T_char,
-				Fn:        operator.CoalesceChar,
 			},
 			{
 				Index:     15,
