@@ -30,7 +30,6 @@ func TestHex(t *testing.T) {
 		name     string
 		proc     *process.Process
 		inputstr []string
-		inputNsp []uint64
 		expected []string
 		isScalar bool
 	}{
@@ -49,10 +48,10 @@ func TestHex(t *testing.T) {
 			isScalar: true,
 		},
 		{
-			name:     "Non-empty scalar string",
+			name:     "multi row test",
 			proc:     procs,
-			inputstr: []string{"hello"},
-			expected: []string{"68656c6c6f"},
+			inputstr: []string{"Hello", "Gopher!"},
+			expected: []string{"48656c6c6f", "476f7068657221"},
 			isScalar: false,
 		},
 		{
@@ -64,26 +63,15 @@ func TestHex(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			vecs := makeEmptyTestVectors(c.inputstr, c.inputNsp, c.isScalar)
-			result, err := Hex(vecs, c.proc)
+			inVector := testutil.MakeVarcharVector(c.inputstr, nil)
+			result, err := Hex([]*vector.Vector{inVector}, c.proc)
 			if err != nil {
 				t.Fatal(err)
 			}
 			col := result.Col.(*types.Bytes)
-			require.Equal(t, c.expected, col)
+			s := string(col.Data)
+			require.Equal(t, c.expected, s)
 			require.Equal(t, c.isScalar, result.IsScalar())
 		})
 	}
-}
-
-func makeEmptyTestVectors(data []string, nsp []uint64, isScalar bool) []*vector.Vector {
-	vec := make([]*vector.Vector, 1)
-	if data != nil {
-		vec[0] = testutil.MakeCharVector(data, nsp)
-		vec[0].IsConst = isScalar
-	} else {
-		vec[0] = testutil.MakeScalarNull(0)
-	}
-
-	return vec
 }
