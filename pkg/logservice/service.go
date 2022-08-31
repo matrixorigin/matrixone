@@ -29,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 )
 
@@ -78,6 +79,7 @@ func NewService(
 	fileService fileservice.FileService,
 	opts ...Option,
 ) (*Service, error) {
+	logger.SetLoggerFactory(logutil.DragonboatFactory)
 	cfg.Fill()
 	if err := cfg.Validate(); err != nil {
 		return nil, err
