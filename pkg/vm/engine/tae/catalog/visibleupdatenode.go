@@ -81,8 +81,8 @@ func (un *VisibleUpdateNode) AddLogIndex(idx *wal.Index) {
 	un.LogIndex = append(un.LogIndex, idx)
 
 }
-func (e *VisibleUpdateNode) GetLogIndex() []*wal.Index {
-	return e.LogIndex
+func (un *VisibleUpdateNode) GetLogIndex() []*wal.Index {
+	return un.LogIndex
 }
 func (un *VisibleUpdateNode) ApplyCommit(index *wal.Index) (err error) {
 	un.Txn = nil
