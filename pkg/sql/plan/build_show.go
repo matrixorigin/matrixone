@@ -15,6 +15,7 @@
 package plan
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -138,7 +139,14 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 	}
 
 	sql := "select \"%s\" as `Table`, \"%s\" as `Create Table`"
-	sql = fmt.Sprintf(sql, tblName, createStr)
+	var buf bytes.Buffer
+	for _, ch := range createStr {
+		if ch == '"' {
+			buf.WriteRune('"')
+		}
+		buf.WriteRune(ch)
+	}
+	sql = fmt.Sprintf(sql, tblName, buf.String())
 
 	return returnByRewriteSQL(ctx, sql, plan.DataDefinition_SHOW_CREATETABLE)
 }
