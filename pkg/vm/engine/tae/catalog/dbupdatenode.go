@@ -38,12 +38,21 @@ type DBUpdateNode struct {
 	Deleted    bool
 }
 
-func NewEmptyDBUpdateNode() *UpdateNode {
-	return &UpdateNode{}
+func NewEmptyDBUpdateNode() *DBUpdateNode {
+	return &DBUpdateNode{}
 }
 
-func (e DBUpdateNode) CloneAll() *UpdateNode {
-	n := e.CloneData()
+func (e *DBUpdateNode) GetEnd() types.TS {
+	return e.End
+}
+func (e *DBUpdateNode) GetStart() types.TS {
+	return e.Start
+}
+func (e *DBUpdateNode) GetLogIndex() []*wal.Index {
+	return e.LogIndex
+}
+func (e *DBUpdateNode) CloneAll() UpdateNodeIf {
+	n := e.CloneData().(*DBUpdateNode)
 	// n.State = e.State
 	n.Start = e.Start
 	n.End = e.End
@@ -57,8 +66,17 @@ func (e DBUpdateNode) CloneAll() *UpdateNode {
 	return n
 }
 
-func (e *DBUpdateNode) CloneData() *UpdateNode {
-	return &UpdateNode{
+func (e *DBUpdateNode) CloneData() UpdateNodeIf {
+	return &DBUpdateNode{
+		CreatedAt: e.CreatedAt,
+		DeletedAt: e.DeletedAt,
+		MetaLoc:   e.MetaLoc,
+		DeltaLoc:  e.DeltaLoc,
+	}
+}
+
+func (e *DBUpdateNode) cloneData() *DBUpdateNode {
+	return &DBUpdateNode{
 		CreatedAt: e.CreatedAt,
 		DeletedAt: e.DeletedAt,
 		MetaLoc:   e.MetaLoc,
@@ -67,7 +85,8 @@ func (e *DBUpdateNode) CloneData() *UpdateNode {
 }
 
 // for create drop in one txn
-func (e *DBUpdateNode) UpdateNode(un *UpdateNode) {
+func (e *DBUpdateNode) UpdateNode(vun UpdateNodeIf) {
+	un := vun.(*DBUpdateNode)
 	if e.Start != un.Start {
 		panic("logic err")
 	}

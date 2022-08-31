@@ -38,12 +38,21 @@ type MetaUpdateNode struct {
 	Deleted    bool
 }
 
-func NewEmptyMetaUpdateNode() *UpdateNode {
-	return &UpdateNode{}
+func NewEmptyMetaUpdateNode() *MetaUpdateNode {
+	return &MetaUpdateNode{}
 }
 
-func (e MetaUpdateNode) CloneAll() *UpdateNode {
-	n := e.CloneData()
+func (e *MetaUpdateNode) GetEnd() types.TS {
+	return e.End
+}
+func (e *MetaUpdateNode) GetStart() types.TS {
+	return e.Start
+}
+func (e *MetaUpdateNode) GetLogIndex() []*wal.Index {
+	return e.LogIndex
+}
+func (e MetaUpdateNode) CloneAll() UpdateNodeIf {
+	n := e.CloneData().(*MetaUpdateNode)
 	// n.State = e.State
 	n.Start = e.Start
 	n.End = e.End
@@ -57,8 +66,17 @@ func (e MetaUpdateNode) CloneAll() *UpdateNode {
 	return n
 }
 
-func (e *MetaUpdateNode) CloneData() *UpdateNode {
-	return &UpdateNode{
+func (e *MetaUpdateNode) CloneData() UpdateNodeIf {
+	return &MetaUpdateNode{
+		CreatedAt: e.CreatedAt,
+		DeletedAt: e.DeletedAt,
+		MetaLoc:   e.MetaLoc,
+		DeltaLoc:  e.DeltaLoc,
+	}
+}
+
+func (e *MetaUpdateNode) cloneData() *MetaUpdateNode {
+	return &MetaUpdateNode{
 		CreatedAt: e.CreatedAt,
 		DeletedAt: e.DeletedAt,
 		MetaLoc:   e.MetaLoc,
@@ -67,7 +85,8 @@ func (e *MetaUpdateNode) CloneData() *UpdateNode {
 }
 
 // for create drop in one txn
-func (e *MetaUpdateNode) UpdateNode(un *UpdateNode) {
+func (e *MetaUpdateNode) UpdateNode(vun UpdateNodeIf) {
+	un := vun.(*MetaUpdateNode)
 	if e.Start != un.Start {
 		panic("logic err")
 	}

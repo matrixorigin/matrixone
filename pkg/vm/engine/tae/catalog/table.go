@@ -292,7 +292,7 @@ func (entry *TableEntry) DropSegmentEntry(id uint64, txn txnif.AsyncTxn) (delete
 	}
 	seg.Lock()
 	defer seg.Unlock()
-	needWait, waitTxn := seg.NeedWaitCommittingMeta(txn.GetStartTS())
+	needWait, waitTxn := seg.NeedWaitCommitting(txn.GetStartTS())
 	if needWait {
 		seg.Unlock()
 		waitTxn.GetTxnState(true)

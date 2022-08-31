@@ -159,14 +159,14 @@ func (cmd *EntryCommand) GetLogIndex() []*wal.Index {
 	if cmd.entry == nil {
 		return nil
 	}
-	return cmd.entry.GetUpdateNodeLocked().LogIndex
+	return cmd.entry.GetUpdateNodeLocked().GetLogIndex()
 }
 
 func (cmd *EntryCommand) GetTs() types.TS {
 	ts := types.TS{}
 	switch cmd.cmdType {
 	case CmdUpdateBlock, CmdUpdateDatabase, CmdUpdateTable, CmdUpdateSegment:
-		ts = cmd.entry.GetUpdateNodeLocked().End
+		ts = cmd.entry.GetUpdateNodeLocked().GetEnd()
 	case CmdLogDatabase:
 	case CmdLogTable:
 	case CmdLogSegment:

@@ -37,14 +37,14 @@ type BaseEntryIf interface {
 	TryGetTerminatedTS(waitIfcommitting bool) (terminated bool, TS types.TS)
 	GetID() uint64
 	GetIndexes() []*wal.Index                       //for checkpoint
-	InsertNode(un *UpdateNode)                      // replay and in baseentry
+	InsertNode(un UpdateNodeIf)                     // replay and in baseentry
 	CreateWithTS(ts types.TS)                       //base create
 	CreateWithTxn(txn txnif.AsyncTxn)               //base create
 	ExistUpdate(minTs, MaxTs types.TS) (exist bool) //ckp
 	DeleteLocked(txn txnif.TxnReader, impl INode) (node INode, err error)
-	GetUpdateNodeLocked() *UpdateNode //
-	GetCommittedNode() (node *UpdateNode)
-	GetNodeToRead(startts types.TS) (node *UpdateNode)
+	GetUpdateNodeLocked() UpdateNodeIf //
+	GetCommittedNode() (node UpdateNodeIf)
+	GetNodeToRead(startts types.TS) (node UpdateNodeIf)
 	DeleteBefore(ts types.TS) bool
 	NeedWaitCommitting(startTS types.TS) (bool, txnif.TxnReader)
 	InTxnOrRollbacked() bool

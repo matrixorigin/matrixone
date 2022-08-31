@@ -38,12 +38,21 @@ type TableUpdateNode struct {
 	Deleted    bool
 }
 
-func NewEmptyTableUpdateNode() *UpdateNode {
-	return &UpdateNode{}
+func NewEmptyTableUpdateNode() *TableUpdateNode {
+	return &TableUpdateNode{}
 }
 
-func (e *TableUpdateNode) CloneAll() *UpdateNode {
-	n := e.CloneData()
+func (e *TableUpdateNode) GetEnd() types.TS {
+	return e.End
+}
+func (e *TableUpdateNode) GetStart() types.TS {
+	return e.Start
+}
+func (e *TableUpdateNode) GetLogIndex() []*wal.Index {
+	return e.LogIndex
+}
+func (e *TableUpdateNode) CloneAll() UpdateNodeIf {
+	n := e.CloneData().(*TableUpdateNode)
 	// n.State = e.State
 	n.Start = e.Start
 	n.End = e.End
@@ -57,8 +66,17 @@ func (e *TableUpdateNode) CloneAll() *UpdateNode {
 	return n
 }
 
-func (e *TableUpdateNode) CloneData() *UpdateNode {
-	return &UpdateNode{
+func (e *TableUpdateNode) CloneData() UpdateNodeIf {
+	return &TableUpdateNode{
+		CreatedAt: e.CreatedAt,
+		DeletedAt: e.DeletedAt,
+		MetaLoc:   e.MetaLoc,
+		DeltaLoc:  e.DeltaLoc,
+	}
+}
+
+func (e *TableUpdateNode) cloneData() *TableUpdateNode {
+	return &TableUpdateNode{
 		CreatedAt: e.CreatedAt,
 		DeletedAt: e.DeletedAt,
 		MetaLoc:   e.MetaLoc,
@@ -67,7 +85,8 @@ func (e *TableUpdateNode) CloneData() *UpdateNode {
 }
 
 // for create drop in one txn
-func (e *TableUpdateNode) UpdateNode(un *UpdateNode) {
+func (e *TableUpdateNode) UpdateNode(vun UpdateNodeIf) {
+	un := vun.(*TableUpdateNode)
 	if e.Start != un.Start {
 		panic("logic err")
 	}
