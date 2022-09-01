@@ -116,38 +116,17 @@ func (ctr *container) emptyProbe(bat *batch.Batch, ap *Argument, proc *process.P
 	defer bat.Clean(proc.GetMheap())
 	anal.Input(bat)
 	rbat := batch.NewWithSize(len(ap.Result))
-	rbat.Zs = proc.GetMheap().GetSels()
+	count := bat.Length()
 	for i, rp := range ap.Result {
 		if rp.Rel == 0 {
-			rbat.Vecs[i] = vector.New(bat.Vecs[rp.Pos].Typ)
+			rbat.Vecs[i] = bat.Vecs[rp.Pos]
+			bat.Vecs[rp.Pos] = nil
 		} else {
-			rbat.Vecs[i] = vector.New(ctr.bat.Vecs[rp.Pos].Typ)
+			rbat.Vecs[i] = vector.NewConstNull(ctr.bat.Vecs[rp.Pos].Typ, count)
 		}
 	}
-	count := bat.Length()
-	for i := 0; i < count; i += hashmap.UnitLimit {
-		n := count - i
-		if n > hashmap.UnitLimit {
-			n = hashmap.UnitLimit
-		}
-		for k := 0; k < n; k++ {
-			for j, rp := range ap.Result {
-				if rp.Rel == 0 {
-					if err := vector.UnionOne(rbat.Vecs[j], bat.Vecs[rp.Pos], int64(i+k), proc.GetMheap()); err != nil {
-						rbat.Clean(proc.GetMheap())
-						return err
-					}
-				} else {
-					if err := vector.UnionNull(rbat.Vecs[j], nil, proc.GetMheap()); err != nil {
-						rbat.Clean(proc.GetMheap())
-						return err
-					}
-				}
-			}
-			rbat.Zs = append(rbat.Zs, bat.Zs[i+k])
-		}
-	}
-	rbat.ExpandNulls()
+	rbat.Zs = bat.Zs
+	bat.Zs = nil
 	anal.Output(rbat)
 	proc.SetInputBatch(rbat)
 	return nil
@@ -201,22 +180,22 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 				continue
 			}
 			sels := mSels[vals[k]-1]
-			flg := true
+			matched := false
 			for _, sel := range sels {
-				for j, rp := range ap.Result {
-					if ap.Cond != nil {
-						vec, err := colexec.JoinFilterEvalExprInBucket(bat, ctr.bat, i+k, int(sel), proc, ap.Cond)
-						if err != nil {
-							return err
-						}
-						bs := vec.Col.([]bool)
-						if !bs[0] {
-							vec.Free(proc.Mp)
-							continue
-						}
-						vec.Free(proc.Mp)
+				if ap.Cond != nil {
+					vec, err := colexec.JoinFilterEvalExprInBucket(bat, ctr.bat, i+k, int(sel), proc, ap.Cond)
+					if err != nil {
+						return err
 					}
-					flg = false
+					bs := vec.Col.([]bool)
+					if !bs[0] {
+						vec.Free(proc.Mp)
+						continue
+					}
+					vec.Free(proc.Mp)
+				}
+				matched = true
+				for j, rp := range ap.Result {
 					if rp.Rel == 0 {
 						if err := vector.UnionOne(rbat.Vecs[j], bat.Vecs[rp.Pos], int64(i+k), proc.GetMheap()); err != nil {
 							rbat.Clean(proc.GetMheap())
@@ -231,7 +210,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 				}
 				rbat.Zs = append(rbat.Zs, ctr.bat.Zs[sel])
 			}
-			if flg {
+			if !matched {
 				for j, rp := range ap.Result {
 					if rp.Rel == 0 {
 						if err := vector.UnionOne(rbat.Vecs[j], bat.Vecs[rp.Pos], int64(i+k), proc.GetMheap()); err != nil {
