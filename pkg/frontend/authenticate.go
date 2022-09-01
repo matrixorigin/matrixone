@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/moengine"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
+	"github.com/tidwall/btree"
 	"math/rand"
 	"strings"
 	"time"
@@ -253,12 +254,9 @@ const (
 	PrivilegeTypeUserOwnership
 	PrivilegeTypeRoleOwnership
 	PrivilegeTypeShowTables
-	PrivilegeTypeCreateTable
-	PrivilegeTypeCreateView
-	PrivilegeTypeDropTable
-	PrivilegeTypeDropView
-	PrivilegeTypeAlterTable
-	PrivilegeTypeAlterView
+	PrivilegeTypeCreateObject //includes: table, view, stream, sequence, function, dblink,etc
+	PrivilegeTypeDropObject
+	PrivilegeTypeAlterObject
 	PrivilegeTypeDatabaseAll
 	PrivilegeTypeDatabaseOwnership
 	PrivilegeTypeSelect
@@ -356,18 +354,12 @@ func (pt PrivilegeType) String() string {
 		return "account ownership"
 	case PrivilegeTypeShowTables:
 		return "show tables"
-	case PrivilegeTypeCreateTable:
-		return "create table"
-	case PrivilegeTypeCreateView:
-		return "create view"
-	case PrivilegeTypeDropTable:
-		return "drop table"
-	case PrivilegeTypeDropView:
-		return "drop view"
-	case PrivilegeTypeAlterTable:
-		return "alter table"
-	case PrivilegeTypeAlterView:
-		return "alter view"
+	case PrivilegeTypeCreateObject:
+		return "create object"
+	case PrivilegeTypeDropObject:
+		return "drop object"
+	case PrivilegeTypeAlterObject:
+		return "alter object"
 	case PrivilegeTypeSelect:
 		return "select"
 	case PrivilegeTypeInsert:
@@ -424,18 +416,12 @@ func (pt PrivilegeType) Scope() PrivilegeScope {
 		return PrivilegeScopeAccount | PrivilegeScopeUser | PrivilegeScopeRole | PrivilegeScopeDatabase | PrivilegeScopeTable
 	case PrivilegeTypeShowTables:
 		return PrivilegeScopeDatabase
-	case PrivilegeTypeCreateTable:
+	case PrivilegeTypeCreateObject:
 		return PrivilegeScopeDatabase
-	case PrivilegeTypeCreateView:
-		return PrivilegeScopeTable
-	case PrivilegeTypeDropTable:
+	case PrivilegeTypeDropObject:
 		return PrivilegeScopeDatabase
-	case PrivilegeTypeDropView:
-		return PrivilegeScopeTable
-	case PrivilegeTypeAlterTable:
+	case PrivilegeTypeAlterObject:
 		return PrivilegeScopeDatabase
-	case PrivilegeTypeAlterView:
-		return PrivilegeScopeTable
 	case PrivilegeTypeSelect:
 		return PrivilegeScopeTable
 	case PrivilegeTypeInsert:
@@ -588,6 +574,10 @@ var (
 	roleIdOfRoleFormat = `select role_id from mo_catalog.mo_role where role_name = "%s";`
 
 	getRoleOfUserFormat = `select r.role_id from  mo_catalog.mo_role r, mo_catalog.mo_user_grant ug where ug.role_id = r.role_id and ug.user_id = %d and r.role_name = "%s";`
+
+	getRoleIdOfUserIdFormat = `select role_id from mo_catalog.mo_user_grant where user_id = %d;`
+
+	getInheritedRoleIdOfRoleIdFormat = `select granted_id from mo_catalog.mo_role_grant where grantee_id = %d;`
 )
 
 func getSqlForCheckTenant(tenant string) string {
@@ -610,20 +600,36 @@ func getSqlForRoleOfUser(userID int, roleName string) string {
 	return fmt.Sprintf(getRoleOfUserFormat, userID, roleName)
 }
 
-type role struct {
-	id   int
-	name string
+func getSqlForRoleIdOfUserId(userId int) string {
+	return fmt.Sprintf(getRoleIdOfUserIdFormat, userId)
 }
 
-type object struct {
-	typ string
-	id  int
+func getSqlForInheritedRoleIdOfRoleId(roleId int) string {
+	return fmt.Sprintf(getInheritedRoleIdOfRoleIdFormat, roleId)
 }
+
+type specialTag int
+
+const (
+	specialTagNone            specialTag = 0
+	specialTagAdmin           specialTag = 1
+	specialTagWithGrantOption specialTag = 2
+	specialTagOwnerOfObject   specialTag = 4
+)
+
+type privilegeKind int
+
+const (
+	privilegeKindGeneral privilegeKind = iota //as same as definition in the privilegeEntriesMap
+	privilegeKindInherit                      //General + with_grant_option
+	privilegeKindSpecial                      //no obj_type,obj_id,privilege_level. only needs (MOADMIN / ACCOUNTADMIN, with_grant_option, owner of object)
+	privilegeKindNone                         //does not need any privilege
+)
 
 type privilege struct {
-	id              PrivilegeType
-	level           string
-	withGrantOption bool
+	Kind    privilegeKind
+	entries []privilegeEntry
+	special specialTag
 }
 
 // privilegeEntry denotes the entry of the privilege that appears in the table mo_role_privs
@@ -657,12 +663,9 @@ var (
 		PrivilegeTypeUserOwnership:     {PrivilegeTypeUserOwnership, privilegeLevelStar, objectTypeAccount, objectIDAll, true},
 		PrivilegeTypeRoleOwnership:     {PrivilegeTypeRoleOwnership, privilegeLevelStar, objectTypeAccount, objectIDAll, true},
 		PrivilegeTypeShowTables:        {PrivilegeTypeShowTables, privilegeLevelDatabaseStar, objectTypeDatabase, objectIDAll, true},
-		PrivilegeTypeCreateTable:       {PrivilegeTypeCreateTable, privilegeLevelDatabaseStar, objectTypeDatabase, objectIDAll, true},
-		PrivilegeTypeCreateView:        {PrivilegeTypeCreateView, privilegeLevelDatabaseStar, objectTypeDatabase, objectIDAll, true},
-		PrivilegeTypeDropTable:         {PrivilegeTypeDropTable, privilegeLevelDatabaseStar, objectTypeDatabase, objectIDAll, true},
-		PrivilegeTypeDropView:          {PrivilegeTypeDropView, privilegeLevelDatabaseStar, objectTypeDatabase, objectIDAll, true},
-		PrivilegeTypeAlterTable:        {PrivilegeTypeAlterTable, privilegeLevelDatabaseStar, objectTypeDatabase, objectIDAll, true},
-		PrivilegeTypeAlterView:         {PrivilegeTypeAlterView, privilegeLevelDatabaseStar, objectTypeDatabase, objectIDAll, true},
+		PrivilegeTypeCreateObject:      {PrivilegeTypeCreateObject, privilegeLevelDatabaseStar, objectTypeDatabase, objectIDAll, true},
+		PrivilegeTypeDropObject:        {PrivilegeTypeDropObject, privilegeLevelDatabaseStar, objectTypeDatabase, objectIDAll, true},
+		PrivilegeTypeAlterObject:       {PrivilegeTypeAlterObject, privilegeLevelDatabaseStar, objectTypeDatabase, objectIDAll, true},
 		PrivilegeTypeDatabaseAll:       {PrivilegeTypeDatabaseAll, privilegeLevelStar, objectTypeAccount, objectIDAll, true},
 		PrivilegeTypeDatabaseOwnership: {PrivilegeTypeDatabaseOwnership, privilegeLevelStar, objectTypeAccount, objectIDAll, true},
 		PrivilegeTypeSelect:            {PrivilegeTypeSelect, privilegeLevelTable, objectTypeTable, objectIDAll, true},
@@ -698,12 +701,9 @@ var (
 		PrivilegeTypeUserOwnership,
 		PrivilegeTypeRoleOwnership,
 		PrivilegeTypeShowTables,
-		PrivilegeTypeCreateTable,
-		PrivilegeTypeCreateView,
-		PrivilegeTypeDropTable,
-		PrivilegeTypeDropView,
-		PrivilegeTypeAlterTable,
-		PrivilegeTypeAlterView,
+		PrivilegeTypeCreateObject,
+		PrivilegeTypeDropObject,
+		PrivilegeTypeAlterObject,
 		PrivilegeTypeDatabaseAll,
 		PrivilegeTypeDatabaseOwnership,
 		PrivilegeTypeSelect,
@@ -736,12 +736,9 @@ var (
 		PrivilegeTypeUserOwnership,
 		PrivilegeTypeRoleOwnership,
 		PrivilegeTypeShowTables,
-		PrivilegeTypeCreateTable,
-		PrivilegeTypeCreateView,
-		PrivilegeTypeDropTable,
-		PrivilegeTypeDropView,
-		PrivilegeTypeAlterTable,
-		PrivilegeTypeAlterView,
+		PrivilegeTypeCreateObject,
+		PrivilegeTypeDropObject,
+		PrivilegeTypeAlterObject,
 		PrivilegeTypeDatabaseAll,
 		PrivilegeTypeDatabaseOwnership,
 		PrivilegeTypeSelect,
@@ -762,17 +759,150 @@ var (
 	}
 )
 
-// getPrivilegeEntryOfAst decides the privilege of the statement
-func getPrivilegeEntryOfAst(stmt tree.Statement) privilegeEntry {
-	var typ PrivilegeType
+// determinePrivilegeSetOfStatement decides the privileges that the statement needs before running it.
+// That is the Set P for the privilege Set .
+func determinePrivilegeSetOfStatement(stmt tree.Statement) (privilege, error) {
+	typs := make([]PrivilegeType, 5)
+	kind := privilegeKindGeneral
+	special := specialTagNone
 	switch stmt.(type) {
 	case *tree.CreateAccount:
-		typ = PrivilegeTypeCreateAccount
+		typs = append(typs, PrivilegeTypeCreateAccount)
+	case *tree.DropAccount:
+		typs = append(typs, PrivilegeTypeDropAccount)
+	case *tree.AlterAccount:
+		typs = append(typs, PrivilegeTypeAlterAccount)
+	case *tree.CreateUser:
+		typs = append(typs, PrivilegeTypeCreateUser, PrivilegeTypeAccountAll, PrivilegeTypeAccountOwnership)
+	case *tree.DropUser:
+		typs = append(typs, PrivilegeTypeDropUser, PrivilegeTypeAccountAll, PrivilegeTypeAccountOwnership, PrivilegeTypeUserOwnership)
+	case *tree.AlterUser:
+		typs = append(typs, PrivilegeTypeAlterUser, PrivilegeTypeAccountAll, PrivilegeTypeAccountOwnership, PrivilegeTypeUserOwnership)
+	case *tree.CreateRole:
+		typs = append(typs, PrivilegeTypeCreateRole, PrivilegeTypeAccountAll, PrivilegeTypeAccountOwnership)
+	case *tree.DropRole:
+		typs = append(typs, PrivilegeTypeDropRole, PrivilegeTypeAccountAll, PrivilegeTypeAccountOwnership, PrivilegeTypeRoleOwnership)
+	case *tree.GrantRole:
+		kind = privilegeKindInherit
+		typs = append(typs, PrivilegeTypeManageGrants, PrivilegeTypeAccountAll, PrivilegeTypeAccountOwnership, PrivilegeTypeRoleOwnership)
+	case *tree.RevokeRole:
+		typs = append(typs, PrivilegeTypeManageGrants, PrivilegeTypeAccountAll, PrivilegeTypeAccountOwnership, PrivilegeTypeRoleOwnership)
+	case *tree.GrantPrivilege:
+		kind = privilegeKindSpecial
+		special = specialTagAdmin | specialTagWithGrantOption | specialTagOwnerOfObject
+	case *tree.RevokePrivilege:
+		kind = privilegeKindSpecial
+		special = specialTagAdmin
+	case *tree.CreateDatabase:
+		typs = append(typs, PrivilegeTypeCreateDatabase, PrivilegeTypeAccountAll, PrivilegeTypeAccountOwnership)
+	case *tree.DropDatabase:
+		typs = append(typs, PrivilegeTypeDropDatabase, PrivilegeTypeAccountAll, PrivilegeTypeAccountOwnership)
+	case *tree.ShowDatabases, *tree.ShowCreateDatabase:
+		typs = append(typs, PrivilegeTypeShowDatabases, PrivilegeTypeAccountAll, PrivilegeTypeAccountOwnership)
+	case *tree.Use:
+		kind = privilegeKindNone
+	case *tree.ShowTables, *tree.ShowCreateTable, *tree.ShowColumns, *tree.ShowCreateView:
+		typs = append(typs, PrivilegeTypeShowTables, PrivilegeTypeDatabaseAll, PrivilegeTypeDatabaseOwnership)
+	case *tree.CreateTable, *tree.CreateView:
+		typs = append(typs, PrivilegeTypeCreateObject, PrivilegeTypeDatabaseAll, PrivilegeTypeDatabaseOwnership)
+	case *tree.DropTable, *tree.DropView:
+		typs = append(typs, PrivilegeTypeDropObject, PrivilegeTypeDatabaseAll, PrivilegeTypeDatabaseOwnership)
+	case *tree.Select:
+		typs = append(typs, PrivilegeTypeSelect, PrivilegeTypeTableAll, PrivilegeTypeTableOwnership)
+	case *tree.Insert, *tree.Load:
+		typs = append(typs, PrivilegeTypeInsert, PrivilegeTypeTableAll, PrivilegeTypeTableOwnership)
+	case *tree.Update:
+		typs = append(typs, PrivilegeTypeUpdate, PrivilegeTypeTableAll, PrivilegeTypeTableOwnership)
+	case *tree.Delete:
+		typs = append(typs, PrivilegeTypeDelete, PrivilegeTypeTableAll, PrivilegeTypeTableOwnership)
+	case *tree.CreateIndex, *tree.DropIndex, *tree.ShowIndex:
+		typs = append(typs, PrivilegeTypeIndex)
+	case *tree.ShowProcessList, *tree.ShowErrors, *tree.ShowWarnings, *tree.ShowVariables, *tree.ShowStatus:
+		kind = privilegeKindNone
+	case *tree.ExplainFor, *tree.ExplainAnalyze, *tree.ExplainStmt:
+		kind = privilegeKindNone
+	case *tree.BeginTransaction, *tree.CommitTransaction, *tree.RollbackTransaction, *tree.SetVar:
+		kind = privilegeKindNone
+	case *tree.SetDefaultRole, *tree.SetRole, *tree.SetPassword:
+		kind = privilegeKindNone
+	case *tree.PrepareStmt, *tree.PrepareString, *tree.Deallocate:
+		kind = privilegeKindNone
 	default:
-		panic("unsupported stmt")
+		return privilege{}, moerr.NewInternalError("does not have the privilege definition of the statement %s", stmt)
 	}
 
-	return privilegeEntriesMap[typ]
+	entries := make([]privilegeEntry, len(typs))
+	for i, typ := range typs {
+		entries[i] = privilegeEntriesMap[typ]
+	}
+	return privilege{kind, entries, special}, nil
+}
+
+// determineRoleSetOfUser decides the roles that the user has.
+// That is the Set R for the role set.
+func determineRoleSetOfUser(tenant *TenantInfo) TenantInfo {
+	return *tenant
+}
+
+// determineRoleSetSatisfyPrivilegeSet decides the privileges of role set can satisfy the requirement of the privilege set.
+// The algorithm 2.
+func determineRoleSetSatisfyPrivilegeSet() (bool, error) {
+	return true, nil
+}
+
+// determinePrivilegesOfUserSatisfyPrivilegeSet decides the privileges of user can satisfy the requirement of the privilege set
+// The algorithm 3.
+func determinePrivilegesOfUserSatisfyPrivilegeSet(ctx context.Context, pu *config.ParameterUnit, tenant *TenantInfo, priv privilege) (bool, error) {
+	//TODO: check the special case that the user has satisfied.
+	var setR btree.Set[int64]
+
+	//step 1: The Set R1 {default role id}
+	setR.Insert((int64)(tenant.GetDefaultRoleID()))
+	//TODO: call the algorithm 2.
+	//step 2: The Set R2 {the roleid granted to the userid}
+	guestMMu := guest.New(pu.SV.GuestMmuLimitation, pu.HostMmu)
+	bh := NewBackgroundHandler(ctx, guestMMu, pu.Mempool, pu)
+	defer bh.Close()
+	var rsset []ExecResult
+
+	sqlForRoleIdOfUserId := getSqlForRoleIdOfUserId(int(tenant.GetUserID()))
+	err := bh.Exec(ctx, sqlForRoleIdOfUserId)
+	if err != nil {
+		return false, err
+	}
+
+	results := bh.GetExecResultSet()
+	rsset, err = convertIntoResultSet(results)
+	if err != nil {
+		return false, err
+	}
+
+	for i := uint64(0); i < rsset[0].GetRowCount(); i++ {
+		roleId, err := rsset[0].GetInt64(i, 0)
+		if err != nil {
+			return false, err
+		}
+		setR.Insert(roleId)
+	}
+	//TODO: call the algorithm 2.
+	/*
+		step 3: !!!NOTE all roleid in setR has been processed with the algorithm 2.
+		setH is the set of all roleid that has been processed.
+		For roleA in setR {
+			Find the peer roleB in the table mo_role_grant(granted_id,grantee_id) with grantee_id = roleA;
+			Add roleB into setR';
+
+			If setR' is empty, Then return false;
+			//TODO: call the algorithm 2.
+			If the result of the algorithm 2 is true, Then return true;
+
+			setH = setH + setR;
+			setR = setR' - setH;
+			If setR is empty, Then return false;
+			setR' = {};
+		}
+	*/
+	return false, nil
 }
 
 // checkSysExistsOrNot checks the SYS tenant exists or not.
