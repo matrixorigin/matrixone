@@ -15,7 +15,7 @@
 package compile
 
 import (
-	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
@@ -37,14 +37,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-// PrintScope Print is to format scope list
 func PrintScope(prefix []byte, ss []*Scope) {
 	for _, s := range ss {
-		if s.Magic == Merge || s.Magic == Remote {
-			PrintScope(append(prefix, '\t'), s.PreScopes)
-		}
+		PrintScope(append(prefix, '\t'), s.PreScopes)
 		p := pipeline.NewMerge(s.Instructions, nil)
-		fmt.Printf("%s:%v %v\n", prefix, s.Magic, p)
+		logutil.Infof("%s:%v %v", prefix, s.Magic, p)
 	}
 }
 
@@ -100,13 +97,20 @@ func (s *Scope) MergeRun(c *Compile) error {
 				}()
 				err = cs.ParallelRun(c)
 			}(s.PreScopes[i])
+		case Pushdown:
+			go func(cs *Scope) {
+				var err error
+				defer func() {
+					errChan <- err
+				}()
+				err = cs.PushdownRun(c)
+			}(s.PreScopes[i])
 		}
 	}
 	p := pipeline.NewMerge(s.Instructions, s.Reg)
 	if _, err := p.MergeRun(s.Proc); err != nil {
 		return err
 	}
-
 	// check sub-goroutine's error
 	for i := 0; i < len(s.PreScopes); i++ {
 		if err := <-errChan; err != nil {
@@ -118,6 +122,32 @@ func (s *Scope) MergeRun(c *Compile) error {
 
 // RemoteRun send the scope to a remote node (if target node is itself, it is same to function ParallelRun) and run it.
 func (s *Scope) RemoteRun(c *Compile) error {
+	// if address itself, just run it parallel at local.
+	//	return s.ParallelRun(c)
+	/*
+		if len(s.NodeInfo.Addr) == 0 {
+			return s.ParallelRun(c)
+		}
+		err := s.remoteRun(c)
+		// tell to connect operator that it's over
+		arg := s.Instructions[len(s.Instructions)-1].Arg.(*connector.Argument)
+		sendToConnectOperator(arg, nil)
+	*/
+	/*
+		// just for test serialization codes.
+		n := len(s.Instructions) - 1
+		in := s.Instructions[n]
+		s.Instructions = s.Instructions[:n]
+		data, err := encodeScope(s)
+		if err != nil {
+			return err
+		}
+		rs, err := decodeScope(data, s.Proc)
+		if err != nil {
+			return err
+		}
+		rs.Instructions = append(rs.Instructions, in)
+	*/
 	return s.ParallelRun(c)
 }
 
@@ -160,13 +190,38 @@ func (s *Scope) ParallelRun(c *Compile) error {
 	return s.MergeRun(c)
 }
 
+func (s *Scope) PushdownRun(c *Compile) error {
+	var end bool // exist flag
+	var err error
+
+	reg := srv.GetConnector(s.DataSource.PushdownId)
+	for {
+		bat := <-reg.Ch
+		if bat == nil {
+			s.Proc.Reg.InputBatch = bat
+			_, err = vm.Run(s.Instructions, s.Proc)
+			s.Proc.Cancel()
+			return err
+		}
+		if bat.Length() == 0 {
+			continue
+		}
+		s.Proc.Reg.InputBatch = bat
+		if end, err = vm.Run(s.Instructions, s.Proc); err != nil || end {
+			return err
+		}
+	}
+}
+
 func (s *Scope) JoinRun(c *Compile) error {
 	mcpu := s.NodeInfo.Mcpu
 	if mcpu < 1 {
 		mcpu = 1
 	}
-	chp := s.PreScopes[0]
-	chp.IsEnd = true
+	chp := s.PreScopes
+	for i := range chp {
+		chp[i].IsEnd = true
+	}
 	ss := make([]*Scope, mcpu)
 	for i := 0; i < mcpu; i++ {
 		ss[i] = &Scope{
@@ -177,7 +232,7 @@ func (s *Scope) JoinRun(c *Compile) error {
 	}
 	left, right := c.newLeftScope(s, ss), c.newRightScope(s, ss)
 	s = newParallelScope(c, s, ss)
-	s.PreScopes = append(s.PreScopes, chp)
+	s.PreScopes = append(s.PreScopes, chp...)
 	s.PreScopes = append(s.PreScopes, left)
 	s.PreScopes = append(s.PreScopes, right)
 	return s.MergeRun(c)
@@ -345,4 +400,24 @@ func (s *Scope) appendInstruction(in vm.Instruction) {
 	if !s.IsEnd {
 		s.Instructions = append(s.Instructions, in)
 	}
+}
+
+func dupScope(s *Scope) *Scope {
+	data, err := encodeScope(s)
+	if err != nil {
+		return nil
+	}
+	rs, err := decodeScope(data, s.Proc)
+	if err != nil {
+		return nil
+	}
+	return rs
+}
+
+func dupScopeList(ss []*Scope) []*Scope {
+	rs := make([]*Scope, len(ss))
+	for i := range rs {
+		rs[i] = dupScope(ss[i])
+	}
+	return rs
 }

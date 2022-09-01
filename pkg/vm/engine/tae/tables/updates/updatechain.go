@@ -15,9 +15,10 @@
 package updates
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"sync"
 	"sync/atomic"
+
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
@@ -27,7 +28,7 @@ import (
 )
 
 type ColumnChain struct {
-	*common.Link
+	*common.GenericSortedDList[*ColumnUpdateNode]
 	*sync.RWMutex
 	id   *common.ID
 	view *ColumnView
@@ -37,9 +38,9 @@ type ColumnChain struct {
 
 func MockColumnUpdateChain() *ColumnChain {
 	chain := &ColumnChain{
-		Link:    new(common.Link),
-		RWMutex: new(sync.RWMutex),
-		id:      &common.ID{},
+		GenericSortedDList: common.NewGenericSortedDList(compareUpdateNode),
+		RWMutex:            new(sync.RWMutex),
+		id:                 &common.ID{},
 	}
 	chain.view = NewColumnView()
 	return chain
@@ -52,10 +53,10 @@ func NewColumnChain(rwlocker *sync.RWMutex, colIdx uint16, mvcc *MVCCHandle) *Co
 	id := *mvcc.GetID()
 	id.Idx = colIdx
 	chain := &ColumnChain{
-		Link:    new(common.Link),
-		RWMutex: rwlocker,
-		mvcc:    mvcc,
-		id:      &id,
+		GenericSortedDList: common.NewGenericSortedDList(compareUpdateNode),
+		RWMutex:            rwlocker,
+		mvcc:               mvcc,
+		id:                 &id,
 	}
 	chain.view = NewColumnView()
 	return chain
@@ -109,18 +110,17 @@ func (chain *ColumnChain) AddNodeLocked(txn txnif.AsyncTxn) txnif.UpdateNode {
 	return node
 }
 
-func (chain *ColumnChain) DeleteNode(node *common.DLNode) {
+func (chain *ColumnChain) DeleteNode(n *ColumnUpdateNode) {
 	chain.Lock()
 	defer chain.Unlock()
-	chain.DeleteNodeLocked(node)
+	chain.DeleteNodeLocked(n)
 }
 
-func (chain *ColumnChain) DeleteNodeLocked(node *common.DLNode) {
-	n := node.GetPayload().(*ColumnUpdateNode)
+func (chain *ColumnChain) DeleteNodeLocked(n *ColumnUpdateNode) {
 	for row := range n.vals {
 		_ = chain.view.Delete(row, n)
 	}
-	chain.Delete(node)
+	chain.Delete(n.GenericDLNode)
 	chain.SetUpdateCnt(uint32(chain.view.mask.GetCardinality()))
 }
 
@@ -133,8 +133,8 @@ func (chain *ColumnChain) AddNode(txn txnif.AsyncTxn) txnif.UpdateNode {
 }
 
 func (chain *ColumnChain) LoopChainLocked(fn func(col *ColumnUpdateNode) bool, reverse bool) {
-	wrapped := func(node *common.DLNode) bool {
-		col := node.GetPayload().(*ColumnUpdateNode)
+	wrapped := func(node *common.GenericDLNode[*ColumnUpdateNode]) bool {
+		col := node.GetPayload()
 		return fn(col)
 	}
 	chain.Loop(wrapped, reverse)
@@ -158,7 +158,7 @@ func (chain *ColumnChain) PrepareUpdate(row uint32, n txnif.UpdateNode) error {
 }
 
 func (chain *ColumnChain) UpdateLocked(node *ColumnUpdateNode) {
-	chain.Update(node.DLNode)
+	chain.Update(node.GenericDLNode)
 }
 
 func (chain *ColumnChain) StringLocked() string {

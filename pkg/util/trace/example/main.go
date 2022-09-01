@@ -42,12 +42,12 @@ func (l logOutputExecutor) Query(ctx context.Context, s string, _ ie.SessionOver
 func (l logOutputExecutor) ApplySessionOverride(ie.SessionOverrideOptions) {}
 
 func bootstrap(ctx context.Context) (context.Context, error) {
-	logutil.SetupMOLogger(&logutil.LogConfig{Format: "console"})
+	logutil.SetupMOLogger(&logutil.LogConfig{Format: "console", EnableStore: true})
 	// init trace/log/error framework & BatchProcessor
 	return trace.Init(ctx,
 		trace.WithMOVersion("v0.6.0"),
 		// nodeType like CN/DN/LogService; id maybe in config.
-		trace.WithNode(0, trace.NodeTypeNode),
+		trace.WithNode("node_uuid", trace.NodeTypeNode),
 		// config[enableTrace], default: true
 		trace.EnableTracer(true),
 		// config[traceBatchProcessor], distributed node should use "FileService" in system_vars_config.toml

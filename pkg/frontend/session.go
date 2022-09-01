@@ -17,6 +17,7 @@ package frontend
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"strings"
 	"time"
 
@@ -33,6 +34,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/moengine"
 	"github.com/matrixorigin/matrixone/pkg/vm/mempool"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
+
+	"github.com/google/uuid"
 )
 
 const MaxPrepareNumberInOneSession = 64
@@ -40,10 +43,8 @@ const MaxPrepareNumberInOneSession = 64
 type ShowStatementType int
 
 const (
-	NotShowStatement   ShowStatementType = 0
-	ShowCreateDatabase ShowStatementType = 1
-	ShowCreateTable    ShowStatementType = 2
-	ShowColumns        ShowStatementType = 3
+	NotShowStatement ShowStatementType = 0
+	ShowColumns      ShowStatementType = 1
 )
 
 type TxnHandler struct {
@@ -110,6 +111,8 @@ type Session struct {
 
 	tenant *TenantInfo
 
+	uuid uuid.UUID
+
 	timeZone *time.Location
 }
 
@@ -140,6 +143,7 @@ func NewSession(proto Protocol, gm *guest.Mmu, mp *mempool.Mempool, PU *config.P
 		outputCallback: getDataFromPipeline,
 		timeZone:       time.Local,
 	}
+	ses.uuid, _ = uuid.NewUUID()
 	ses.SetOptionBits(OPTION_AUTOCOMMIT)
 	ses.txnCompileCtx.SetSession(ses)
 	ses.txnHandler.SetSession(ses)
@@ -211,8 +215,18 @@ func (ses *Session) GetAllMysqlResultSet() []*MysqlResultSet {
 	return ses.allResultSet
 }
 
+func (ses *Session) ClearAllMysqlResultSet() {
+	if ses.allResultSet != nil {
+		ses.allResultSet = ses.allResultSet[:0]
+	}
+}
+
 func (ses *Session) GetTenantInfo() *TenantInfo {
 	return ses.tenant
+}
+
+func (ses *Session) GetUUID() []byte {
+	return ses.uuid[:]
 }
 
 func (ses *Session) SetTenantInfo(ti *TenantInfo) {
@@ -576,18 +590,100 @@ func (ses *Session) SetOutputCallback(callback func(interface{}, *batch.Batch) e
 }
 
 // AuthenticateUser verifies the password of the user.
-func (ses *Session) AuthenticateUser(userInput string) error {
+func (ses *Session) AuthenticateUser(userInput string) ([]byte, error) {
 	//Get tenant info
 	tenant, err := GetTenantInfo(userInput)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	ses.SetTenantInfo(tenant)
 
+	//step1 : check tenant exists or not in SYS tenant context
+	sysTenantCtx := context.WithValue(ses.requestCtx, moengine.TenantIDKey{}, uint32(sysAccountID))
+	sysTenantCtx = context.WithValue(sysTenantCtx, moengine.UserIDKey{}, uint32(rootID))
+	sysTenantCtx = context.WithValue(sysTenantCtx, moengine.RoleIDKey{}, uint32(moAdminRoleID))
+	sqlForCheckTenant := getSqlForCheckTenant(tenant.GetTenant())
+	rsset, err := executeSQLInBackgroundSession(sysTenantCtx, ses.GuestMmu, ses.Mempool, ses.Pu, sqlForCheckTenant)
+	if err != nil {
+		return nil, err
+	}
+	if len(rsset) < 1 || rsset[0].GetRowCount() < 1 {
+		return nil, fmt.Errorf("there is no tenant %s", tenant.GetTenant())
+	}
+
+	tenantID, err := rsset[0].GetInt64(0, 0)
+	if err != nil {
+		return nil, err
+	}
+
+	tenant.SetTenantID(uint32(tenantID))
+	//step2 : check user exists or not in general tenant.
+	//step3 : get the password of the user
+
+	tenantCtx := context.WithValue(ses.requestCtx, moengine.TenantIDKey{}, uint32(tenantID))
+
 	//Get the password of the user in an independent session
-	err = executeSQLInBackgroundSession(ses.requestCtx, ses.GuestMmu, ses.Mempool, ses.Pu, "use mo_catalog; select * from mo_database;")
-	return err
+	sqlForPasswordOfUser := getSqlForPasswordOfUser(tenant.GetUser())
+	rsset, err = executeSQLInBackgroundSession(tenantCtx, ses.GuestMmu, ses.Mempool, ses.Pu, sqlForPasswordOfUser)
+	if err != nil {
+		return nil, err
+	}
+	if len(rsset) < 1 || rsset[0].GetRowCount() < 1 {
+		return nil, fmt.Errorf("there is no user %s", tenant.GetUser())
+	}
+
+	userID, err := rsset[0].GetInt64(0, 0)
+	if err != nil {
+		return nil, err
+	}
+
+	pwd, err := rsset[0].GetString(0, 1)
+	if err != nil {
+		return nil, err
+	}
+
+	defaultRoleID, err := rsset[0].GetInt64(0, 2)
+	if err != nil {
+		return nil, err
+	}
+
+	tenant.SetUserID(uint32(userID))
+	tenant.SetDefaultRoleID(uint32(defaultRoleID))
+
+	//step4 : check role exists or not
+	//step4.1 : check default role exits or not
+	sqlForCheckRoleExists := getSqlForCheckRoleExists(int(defaultRoleID), tenant.GetDefaultRole())
+	rsset, err = executeSQLInBackgroundSession(tenantCtx, ses.GuestMmu, ses.Mempool, ses.Pu, sqlForCheckRoleExists)
+	if err != nil {
+		return nil, err
+	}
+	hasDefaultRole := true
+	if len(rsset) < 1 || rsset[0].GetRowCount() < 1 {
+		hasDefaultRole = false
+	}
+
+	//step4.2 : check the user has the role or not
+	if !hasDefaultRole {
+		sqlForRoleOfUser := getSqlForRoleOfUser(int(userID), tenant.GetDefaultRole())
+		rsset, err = executeSQLInBackgroundSession(tenantCtx, ses.GuestMmu, ses.Mempool, ses.Pu, sqlForRoleOfUser)
+		if err != nil {
+			return nil, err
+		}
+		if len(rsset) < 1 || rsset[0].GetRowCount() < 1 {
+			return nil, fmt.Errorf("there is no role %s of the user %s", tenant.GetDefaultRole(), tenant.GetUser())
+		}
+
+		defaultRoleID, err = rsset[0].GetInt64(0, 0)
+		if err != nil {
+			return nil, err
+		}
+		tenant.SetDefaultRoleID(uint32(defaultRoleID))
+	}
+
+	logutil.Info(tenant.String())
+
+	return []byte(pwd), nil
 }
 
 func (th *TxnHandler) SetSession(ses *Session) {
@@ -628,12 +724,15 @@ func (th *TxnHandler) CommitTxn() error {
 	if !th.IsValidTxn() {
 		return nil
 	}
-	var ctx context.Context
-	if th.ses != nil {
-		ctx = th.ses.GetRequestContext()
-	} else {
-		ctx = context.Background()
+	ctx := th.ses.GetRequestContext()
+	if ctx == nil {
+		panic("context should not be nil")
 	}
+	ctx, cancel := context.WithTimeout(
+		ctx,
+		th.storage.Hints().CommitOrRollbackTimeout,
+	)
+	defer cancel()
 	err := th.txn.Commit(ctx)
 	th.SetInvalid()
 	return err
@@ -643,12 +742,15 @@ func (th *TxnHandler) RollbackTxn() error {
 	if !th.IsValidTxn() {
 		return nil
 	}
-	var ctx context.Context
-	if th.ses != nil {
-		ctx = th.ses.GetRequestContext()
-	} else {
-		ctx = context.Background()
+	ctx := th.ses.GetRequestContext()
+	if ctx == nil {
+		panic("context should not be nil")
 	}
+	ctx, cancel := context.WithTimeout(
+		ctx,
+		th.storage.Hints().CommitOrRollbackTimeout,
+	)
+	defer cancel()
 	err := th.txn.Rollback(ctx)
 	th.SetInvalid()
 	return err
@@ -656,11 +758,6 @@ func (th *TxnHandler) RollbackTxn() error {
 
 func (th *TxnHandler) GetStorage() engine.Engine {
 	return th.storage
-}
-
-func (th *TxnHandler) IsTaeEngine() bool {
-	_, ok := th.storage.(moengine.TxnEngine)
-	return ok
 }
 
 func (th *TxnHandler) GetTxn() TxnOperator {
@@ -780,6 +877,7 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string) (*plan2.
 
 	var cols []*plan2.ColDef
 	var defs []*plan2.TableDefType
+	var properties []*plan2.Property
 	var TableType, Createsql string
 	for _, def := range engineDefs {
 		if attr, ok := def.(*engine.AttributeDef); ok {
@@ -791,12 +889,13 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string) (*plan2.
 					Precision: attr.Attr.Type.Precision,
 					Scale:     attr.Attr.Type.Scale,
 				},
-				Primary: attr.Attr.Primary,
-				Default: attr.Attr.Default,
+				Primary:       attr.Attr.Primary,
+				Default:       attr.Attr.Default,
+				Comment:       attr.Attr.Comment,
+				AutoIncrement: attr.Attr.AutoIncrement,
 			})
 		} else if pro, ok := def.(*engine.PropertiesDef); ok {
-			properties := make([]*plan2.Property, len(pro.Properties))
-			for i, p := range pro.Properties {
+			for _, p := range pro.Properties {
 				switch p.Key {
 				case catalog.SystemRelAttr_Kind:
 					TableType = p.Value
@@ -804,18 +903,11 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string) (*plan2.
 					Createsql = p.Value
 				default:
 				}
-				properties[i] = &plan2.Property{
+				properties = append(properties, &plan2.Property{
 					Key:   p.Key,
 					Value: p.Value,
-				}
+				})
 			}
-			defs = append(defs, &plan2.TableDefType{
-				Def: &plan2.TableDef_DefType_Properties{
-					Properties: &plan2.PropertiesDef{
-						Properties: properties,
-					},
-				},
-			})
 		} else if viewDef, ok := def.(*engine.ViewDef); ok {
 			defs = append(defs, &plan2.TableDefType{
 				Def: &plan2.TableDef_DefType_View{
@@ -824,8 +916,34 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string) (*plan2.
 					},
 				},
 			})
+		} else if commnetDef, ok := def.(*engine.CommentDef); ok {
+			properties = append(properties, &plan2.Property{
+				Key:   catalog.SystemRelAttr_Comment,
+				Value: commnetDef.Comment,
+			})
+		} else if partitionDef, ok := def.(*engine.PartitionDef); ok {
+			p := &plan2.PartitionInfo{}
+			err = p.UnMarshalPartitionInfo(([]byte)(partitionDef.Partition))
+			if err != nil {
+				return nil, nil
+			}
+			defs = append(defs, &plan2.TableDefType{
+				Def: &plan2.TableDef_DefType_Partition{
+					Partition: p,
+				},
+			})
 		}
 	}
+	if len(properties) > 0 {
+		defs = append(defs, &plan2.TableDefType{
+			Def: &plan2.TableDef_DefType_Properties{
+				Properties: &plan2.PropertiesDef{
+					Properties: properties,
+				},
+			},
+		})
+	}
+
 	if tcc.QryTyp != TXN_DEFAULT {
 		hideKeys, err := table.GetHideKeys(ctx)
 		if err != nil {
@@ -985,18 +1103,28 @@ func fakeDataSetFetcher(handle interface{}, dataSet *batch.Batch) error {
 	return nil
 }
 
+func convertIntoResultSet(values []interface{}) ([]ExecResult, error) {
+	rsset := make([]ExecResult, len(values))
+	for i, value := range values {
+		if er, ok := value.(ExecResult); ok {
+			rsset[i] = er
+		} else {
+			return nil, moerr.NewInternalError("it is not the type of result set")
+		}
+	}
+	return rsset, nil
+}
+
 // executeSQLInBackgroundSession executes the sql in an independent session and transaction.
 // It sends nothing to the client.
-func executeSQLInBackgroundSession(ctx context.Context, gm *guest.Mmu, mp *mempool.Mempool, pu *config.ParameterUnit, sql string) error {
-	mce := NewMysqlCmdExecutor()
-	defer mce.Close()
-	backSess := NewBackgroundSession(ctx, gm, mp, pu, gSysVariables)
-	mce.PrepareSessionBeforeExecRequest(backSess.Session)
-	defer backSess.Close()
-	err := mce.doComQuery(backSess.GetRequestContext(), sql)
+func executeSQLInBackgroundSession(ctx context.Context, gm *guest.Mmu, mp *mempool.Mempool, pu *config.ParameterUnit, sql string) ([]ExecResult, error) {
+	bh := NewBackgroundHandler(ctx, gm, mp, pu)
+	defer bh.Close()
+	err := bh.Exec(ctx, sql)
 	if err != nil {
-		return err
+		return nil, err
 	}
+	rsset := bh.GetExecResultSet()
 	//get the result set
 	//TODO: debug further
 	//mrsArray := ses.GetAllMysqlResultSet()
@@ -1010,5 +1138,48 @@ func executeSQLInBackgroundSession(ctx context.Context, gm *guest.Mmu, mp *mempo
 	//	}
 	//}
 
-	return nil
+	return convertIntoResultSet(rsset)
+}
+
+type BackgroundHandler struct {
+	mce *MysqlCmdExecutor
+	ses *BackgroundSession
+}
+
+var NewBackgroundHandler = func(ctx context.Context, gm *guest.Mmu, mp *mempool.Mempool, pu *config.ParameterUnit) BackgroundExec {
+	bh := &BackgroundHandler{
+		mce: NewMysqlCmdExecutor(),
+		ses: NewBackgroundSession(ctx, gm, mp, pu, gSysVariables),
+	}
+	return bh
+}
+
+func (bh *BackgroundHandler) Close() {
+	bh.mce.Close()
+	bh.ses.Close()
+}
+
+func (bh *BackgroundHandler) Exec(ctx context.Context, sql string) error {
+	bh.mce.PrepareSessionBeforeExecRequest(bh.ses.Session)
+	if ctx == nil {
+		ctx = bh.ses.GetRequestContext()
+	}
+	err := bh.mce.doComQuery(ctx, sql)
+	if err != nil {
+		return err
+	}
+	return err
+}
+
+func (bh *BackgroundHandler) GetExecResultSet() []interface{} {
+	mrs := bh.ses.GetAllMysqlResultSet()
+	ret := make([]interface{}, len(mrs))
+	for i, mr := range mrs {
+		ret[i] = mr
+	}
+	return ret
+}
+
+func (bh *BackgroundHandler) ClearExecResultSet() {
+	bh.ses.ClearAllMysqlResultSet()
 }

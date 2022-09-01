@@ -167,11 +167,23 @@ func DivFloat[T constraints.Float](args []*vector.Vector, proc *process.Process)
 	return Arith[T, T](args, proc, args[0].GetType(), div.NumericDivFloat[T])
 }
 func DivDecimal64(args []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	resultTyp := types.Type{Oid: types.T_decimal128, Size: types.DECIMAL128_NBYTES, Width: types.DECIMAL128_WIDTH, Scale: types.MYSQL_DEFAULT_SCALE}
+	var scale int32
+	if args[0].Typ.Scale == 0 {
+		scale = types.MYSQL_DEFAULT_SCALE
+	} else {
+		scale = types.MYSQL_DEFAULT_SCALE + args[0].Typ.Scale
+	}
+	resultTyp := types.Type{Oid: types.T_decimal128, Size: types.DECIMAL128_NBYTES, Width: types.DECIMAL128_WIDTH, Scale: scale}
 	return Arith[types.Decimal64, types.Decimal128](args, proc, resultTyp, div.Decimal64VecDiv)
 }
 func DivDecimal128(args []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	resultTyp := types.Type{Oid: types.T_decimal128, Size: types.DECIMAL128_NBYTES, Width: types.DECIMAL128_WIDTH, Scale: types.MYSQL_DEFAULT_SCALE}
+	var scale int32
+	if args[0].Typ.Scale == 0 {
+		scale = types.MYSQL_DEFAULT_SCALE
+	} else {
+		scale = types.MYSQL_DEFAULT_SCALE + args[0].Typ.Scale
+	}
+	resultTyp := types.Type{Oid: types.T_decimal128, Size: types.DECIMAL128_NBYTES, Width: types.DECIMAL128_WIDTH, Scale: scale}
 	return Arith[types.Decimal128, types.Decimal128](args, proc, resultTyp, div.Decimal128VecDiv)
 }
 

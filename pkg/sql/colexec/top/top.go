@@ -63,6 +63,12 @@ func Call(idx int, proc *process.Process, arg any) (bool, error) {
 			if len(bat.Zs) == 0 {
 				return false, nil
 			}
+			if ap.Limit == 0 {
+				ctr.state = End
+				bat.Clean(proc.GetMheap())
+				proc.Reg.InputBatch = nil
+				return true, nil
+			}
 			return false, ctr.build(ap, bat, proc)
 		case Eval:
 			ctr.state = End
@@ -110,7 +116,7 @@ func (ctr *Container) build(ap *Argument, bat *batch.Batch, proc *process.Proces
 		ctr.cmps = make([]compare.Compare, len(bat.Vecs))
 		for i := range ctr.cmps {
 			if pos, ok := mp[i]; ok {
-				ctr.cmps[i] = compare.New(bat.Vecs[i].Typ, ap.Fs[pos].Type == Descending)
+				ctr.cmps[i] = compare.New(bat.Vecs[i].Typ, ap.Fs[pos].Type == colexec.Descending)
 			} else {
 				ctr.cmps[i] = compare.New(bat.Vecs[i].Typ, true)
 			}

@@ -18,33 +18,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-
-	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 )
-
-type TxnError struct {
-	txnError *txn.TxnError
-}
-
-var _ error = TxnError{}
-
-func (e TxnError) Error() string {
-	if e.txnError != nil {
-		return e.txnError.DebugString()
-	}
-	panic("impossible")
-}
-
-func errorFromTxnResponses(resps []txn.TxnResponse) error {
-	for _, resp := range resps {
-		if resp.TxnError != nil {
-			return TxnError{
-				txnError: resp.TxnError,
-			}
-		}
-	}
-	return nil
-}
 
 type ErrExisted bool
 
@@ -105,6 +79,16 @@ var _ error = ErrColumnNotFound{}
 
 func (e ErrColumnNotFound) Error() string {
 	return fmt.Sprintf("column not found: %s", e.Name)
+}
+
+type ErrReadOnly struct {
+	Why string
+}
+
+var _ error = ErrReadOnly{}
+
+func (e ErrReadOnly) Error() string {
+	return "read only, not modifiable: " + e.Why
 }
 
 type Errors []error

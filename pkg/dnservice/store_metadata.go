@@ -41,7 +41,7 @@ func (s *store) initMetadata() error {
 			},
 		},
 	}
-	if err := s.metadataFS.Read(ctx, vec); err != nil {
+	if err := s.metadataFileService.Read(ctx, vec); err != nil {
 		if err == fileservice.ErrFileNotFound {
 			return nil
 		}
@@ -59,6 +59,9 @@ func (s *store) initMetadata() error {
 			zap.String("disk-store", v.UUID))
 	}
 	s.mu.metadata = *v
+
+	s.logger.Info("local DNShard loaded",
+		zap.String("metadata", s.mu.metadata.DebugString()))
 	return nil
 }
 
@@ -100,7 +103,7 @@ func (s *store) mustUpdateMetadataLocked() {
 			},
 		},
 	}
-	if err := s.metadataFS.Replace(ctx, vec); err != nil {
+	if err := s.metadataFileService.Replace(ctx, vec); err != nil {
 		s.logger.Fatal("update metadata to local file failed",
 			zap.Error(err))
 	}

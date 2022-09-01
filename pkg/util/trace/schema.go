@@ -36,10 +36,10 @@ const (
 	sqlCreateDBConst = `create database if not exists ` + statsDatabase
 
 	sqlCreateSpanInfoTable = `CREATE TABLE IF NOT EXISTS span_info(
- span_id BIGINT UNSIGNED,
- statement_id BIGINT UNSIGNED,
- parent_span_id BIGINT UNSIGNED,
- node_id BIGINT COMMENT "node uuid in MO",
+ span_id varchar(16),
+ statement_id varchar(36),
+ parent_span_id varchar(16),
+ node_uuid varchar(36) COMMENT "node uuid in MO, which node accept this request",
  node_type varchar(64) COMMENT "node type in MO, enum: DN, CN, LogService;",
  name varchar(1024) COMMENT "span name, for example: step name of execution plan, function name in code, ...",
  start_time datetime,
@@ -48,9 +48,9 @@ const (
  resource varchar(4096) COMMENT "json, static resource informations /*should by json type*/"
 )`
 	sqlCreateLogInfoTable = `CREATE TABLE IF NOT EXISTS log_info(
- statement_id BIGINT UNSIGNED,
- span_id BIGINT UNSIGNED,
- node_id BIGINT COMMENT "node uuid in MO",
+ statement_id varchar(36),
+ span_id varchar(16),
+ node_uuid varchar(36) COMMENT "node uuid in MO, which node accept this request",
  node_type varchar(64) COMMENT "node type in MO, enum: DN, CN, LogService;",
  timestamp datetime COMMENT "log timestamp",
  name varchar(1024) COMMENT "logger name",
@@ -60,9 +60,9 @@ const (
  extra varchar(4096) COMMENT "log extra fields, json"
 )`
 	sqlCreateStatementInfoTable = `CREATE TABLE IF NOT EXISTS statement_info(
- statement_id BIGINT UNSIGNED,
- transaction_id BIGINT UNSIGNED,
- session_id BIGINT UNSIGNED,
+ statement_id varchar(36),
+ transaction_id varchar(36),
+ session_id varchar(36),
  ` + "`account`" + ` varchar(1024) COMMENT 'account name',
  user varchar(1024) COMMENT 'user name',
  host varchar(1024) COMMENT 'user client ip',
@@ -70,16 +70,16 @@ const (
  statement varchar(10240) COMMENT 'sql statement/*TODO: should by TEXT, or BLOB */',
  statement_tag varchar(1024),
  statement_fingerprint varchar(40960) COMMENT 'sql statement fingerprint/*TYPE should by TEXT, longer*/',
- node_id BIGINT COMMENT "node uuid in MO, which node accept this request",
+ node_uuid varchar(36) COMMENT "node uuid in MO, which node accept this request",
  node_type varchar(64) COMMENT "node type in MO, enum: DN, CN, LogService;",
  request_at datetime,
  status varchar(1024) COMMENT 'sql statement running status, enum: Running, Success, Failed',
  exec_plan varchar(4096) COMMENT "sql execution plan; /*TODO: 应为JSON 类型*/"
 )`
 	sqlCreateErrorInfoTable = `CREATE TABLE IF NOT EXISTS error_info(
- statement_id BIGINT UNSIGNED,
- span_id BIGINT UNSIGNED,
- node_id BIGINT COMMENT "node uuid in MO, which node accept this request",
+ statement_id varchar(36),
+ span_id varchar(16),
+ node_uuid varchar(36) COMMENT "node uuid in MO, which node accept this request",
  node_type varchar(64) COMMENT "node type in MO, enum: DN, CN, LogService;",
  err_code varchar(1024),
  stack varchar(4096),
@@ -97,7 +97,7 @@ func InitSchemaByInnerExecutor(ctx context.Context, ieFactory func() ie.Internal
 	exec.ApplySessionOverride(ie.NewOptsBuilder().Database(statsDatabase).Internal(true).Finish())
 	mustExec := func(sql string) {
 		if err := exec.Exec(ctx, sql, ie.NewOptsBuilder().Finish()); err != nil {
-			panic(fmt.Sprintf("[Metric] init metric tables error: %v, sql: %s", err, sql))
+			panic(fmt.Errorf("[Metric] init metric tables error: %v, sql: %s", err, sql))
 		}
 	}
 

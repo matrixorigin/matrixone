@@ -17,8 +17,10 @@ package cnservice
 import (
 	"context"
 	"sync"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/config"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
@@ -26,7 +28,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/toml"
 
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
-	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"go.uber.org/zap"
 )
 
@@ -53,12 +54,10 @@ type Config struct {
 		Type EngineType `toml:"type"`
 	}
 
-	FileService struct {
-		// Backend file service backend implementation. [Mem|DISK|S3|MINIO]. Default is DISK.
-		Backend string `toml:"backend"`
-		// S3 s3 configuration
-		S3 fileservice.S3Config `toml:"s3"`
-	}
+	// parameters for cn-server related buffer.
+	PayLoadCopyBufferSize int
+	ReadBufferSize        int
+	WriteBufferSize       int
 
 	// Pipeline configuration
 	Pipeline struct {
@@ -93,11 +92,25 @@ type Config struct {
 	RPC rpc.Config `toml:"rpc"`
 }
 
+func (c *Config) Validate() error {
+	if c.HAKeeper.DiscoveryTimeout.Duration == 0 {
+		c.HAKeeper.DiscoveryTimeout.Duration = time.Second * 30
+	}
+	if c.HAKeeper.HeatbeatDuration.Duration == 0 {
+		c.HAKeeper.HeatbeatDuration.Duration = time.Second
+	}
+	if c.HAKeeper.HeatbeatTimeout.Duration == 0 {
+		c.HAKeeper.HeatbeatTimeout.Duration = time.Millisecond * 500
+	}
+	return nil
+}
+
 type service struct {
 	cfg                    *Config
-	pool                   *sync.Pool
+	responsePool           *sync.Pool
 	logger                 *zap.Logger
 	server                 morpc.RPCServer
+	requestHandler         func(ctx context.Context, message morpc.Message, cs morpc.ClientSession) error
 	cancelMoServerFunc     context.CancelFunc
 	mo                     *frontend.MOServer
 	initHakeeperClientOnce sync.Once
@@ -106,4 +119,5 @@ type service struct {
 	_txnSender             rpc.TxnSender
 	initTxnClientOnce      sync.Once
 	_txnClient             client.TxnClient
+	fileService            fileservice.FileService
 }

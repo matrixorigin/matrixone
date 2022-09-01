@@ -17,9 +17,10 @@ package updates
 import (
 	"encoding/binary"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"io"
 	"sync"
+
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -36,9 +37,30 @@ const (
 	NT_Merge
 )
 
+func compareDeleteNode(a, b *DeleteNode) int {
+	a.RLock()
+	defer a.RUnlock()
+	b.RLock()
+	defer b.RUnlock()
+	if a.commitTs == b.commitTs {
+		if a.startTs.Less(b.startTs) {
+			return -1
+		} else if a.startTs.Greater(b.startTs) {
+			return 1
+		}
+		return 0
+	}
+	if a.commitTs.Equal(txnif.UncommitTS) {
+		return 1
+	} else if b.commitTs.Equal(txnif.UncommitTS) {
+		return -1
+	}
+	return 0
+}
+
 type DeleteNode struct {
 	*sync.RWMutex
-	*common.DLNode
+	*common.GenericDLNode[*DeleteNode]
 	chain      *DeleteChain
 	txn        txnif.AsyncTxn
 	logIndex   *wal.Index
@@ -46,6 +68,7 @@ type DeleteNode struct {
 	mask       *roaring.Bitmap
 	startTs    types.TS
 	commitTs   types.TS
+	prepareTs  types.TS
 	nt         NodeType
 	id         *common.ID
 	dt         handle.DeleteType
@@ -95,29 +118,7 @@ func (node *DeleteNode) AddLogIndexLocked(index *wal.Index) {
 func (node *DeleteNode) IsMerged() bool { return node.nt == NT_Merge }
 func (node *DeleteNode) AttachTo(chain *DeleteChain) {
 	node.chain = chain
-	node.DLNode = chain.Insert(node)
-}
-
-func (node *DeleteNode) Compare(o common.NodePayload) int {
-	op := o.(*DeleteNode)
-	node.RLock()
-	defer node.RUnlock()
-	op.RLock()
-	defer op.RUnlock()
-	if node.commitTs == op.commitTs {
-		if node.startTs.Less(op.startTs) {
-			return -1
-		} else if node.startTs.Greater(op.startTs) {
-			return 1
-		}
-		return 0
-	}
-	if node.commitTs.Equal(txnif.UncommitTS) {
-		return 1
-	} else if op.commitTs.Equal(txnif.UncommitTS) {
-		return -1
-	}
-	return 0
+	node.GenericDLNode = chain.Insert(node)
 }
 
 func (node *DeleteNode) GetChain() txnif.DeleteChain          { return node.chain }
@@ -164,6 +165,18 @@ func (node *DeleteNode) RangeDeleteLocked(start, end uint32) {
 }
 func (node *DeleteNode) GetCardinalityLocked() uint32 { return uint32(node.mask.GetCardinality()) }
 
+func (node *DeleteNode) Prepare2PCPrepare() (err error) {
+	node.chain.mvcc.Lock()
+	defer node.chain.mvcc.Unlock()
+	if node.commitTs != txnif.UncommitTS {
+		return
+	}
+	node.commitTs = node.txn.GetPrepareTS()
+	node.prepareTs = node.txn.GetPrepareTS()
+	node.chain.UpdateLocked(node)
+	return
+}
+
 func (node *DeleteNode) PrepareCommit() (err error) {
 	node.chain.mvcc.Lock()
 	defer node.chain.mvcc.Unlock()
@@ -171,6 +184,7 @@ func (node *DeleteNode) PrepareCommit() (err error) {
 		return
 	}
 	node.commitTs = node.txn.GetCommitTS()
+	node.prepareTs = node.txn.GetCommitTS()
 	node.chain.UpdateLocked(node)
 	return
 }
@@ -189,6 +203,15 @@ func (node *DeleteNode) ApplyCommit(index *wal.Index) (err error) {
 	node.chain.mvcc.IncChangeNodeCnt()
 	node.Unlock()
 	return node.OnApply()
+}
+
+func (node *DeleteNode) ApplyRollback(index *wal.Index) (err error) {
+	node.Lock()
+	if node.txn == nil {
+		panic("DeleteNode | ApplyCommit | LogicErr")
+	}
+	node.logIndex = index
+	return
 }
 
 func (node *DeleteNode) GeneralString() string {
@@ -287,8 +310,6 @@ func (node *DeleteNode) PrepareRollback() (err error) {
 	node.chain.RemoveNodeLocked(node)
 	return
 }
-
-func (node *DeleteNode) ApplyRollback() (err error) { return }
 
 func (node *DeleteNode) OnApply() (err error) {
 	if node.dt == handle.DT_Normal {

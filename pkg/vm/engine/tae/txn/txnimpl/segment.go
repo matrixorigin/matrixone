@@ -32,7 +32,7 @@ type txnSegment struct {
 
 type segmentIt struct {
 	sync.RWMutex
-	linkIt *common.LinkIt
+	linkIt *common.GenericSortedDListIt[*catalog.SegmentEntry]
 	curr   *catalog.SegmentEntry
 	table  *txnTable
 	err    error
@@ -51,7 +51,7 @@ func newSegmentIt(table *txnTable) handle.SegmentIt {
 	var err error
 	var ok bool
 	for it.linkIt.Valid() {
-		curr := it.linkIt.Get().GetPayload().(*catalog.SegmentEntry)
+		curr := it.linkIt.Get().GetPayload()
 		curr.RLock()
 		ok, err = curr.TxnCanRead(it.table.store.txn, curr.RWMutex)
 		if err != nil {
@@ -97,7 +97,7 @@ func (it *segmentIt) Next() {
 			it.curr = nil
 			break
 		}
-		entry := node.GetPayload().(*catalog.SegmentEntry)
+		entry := node.GetPayload()
 		entry.RLock()
 		valid, err = entry.TxnCanRead(it.table.store.txn, entry.RWMutex)
 		entry.RUnlock()

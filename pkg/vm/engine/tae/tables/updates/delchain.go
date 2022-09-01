@@ -16,9 +16,10 @@ package updates
 
 import (
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"sync"
 	"sync/atomic"
+
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -31,7 +32,7 @@ import (
 
 type DeleteChain struct {
 	*sync.RWMutex
-	*common.Link
+	*common.GenericSortedDList[*DeleteNode]
 	mvcc *MVCCHandle
 	cnt  uint32
 }
@@ -41,9 +42,9 @@ func NewDeleteChain(rwlocker *sync.RWMutex, mvcc *MVCCHandle) *DeleteChain {
 		rwlocker = new(sync.RWMutex)
 	}
 	chain := &DeleteChain{
-		RWMutex: rwlocker,
-		Link:    new(common.Link),
-		mvcc:    mvcc,
+		RWMutex:            rwlocker,
+		GenericSortedDList: common.NewGenericSortedDList(compareDeleteNode),
+		mvcc:               mvcc,
 	}
 	return chain
 }
@@ -72,8 +73,8 @@ func (chain *DeleteChain) StringLocked() string {
 func (chain *DeleteChain) GetController() *MVCCHandle { return chain.mvcc }
 
 func (chain *DeleteChain) LoopChainLocked(fn func(node *DeleteNode) bool, reverse bool) {
-	wrapped := func(n *common.DLNode) bool {
-		dnode := n.GetPayload().(*DeleteNode)
+	wrapped := func(n *common.GenericDLNode[*DeleteNode]) bool {
+		dnode := n.GetPayload()
 		return fn(dnode)
 	}
 	chain.Loop(wrapped, reverse)
@@ -143,14 +144,14 @@ func (chain *DeleteChain) PrepareRangeDelete(start, end uint32, ts types.TS) (er
 }
 
 func (chain *DeleteChain) UpdateLocked(node *DeleteNode) {
-	chain.Update(node.DLNode)
+	chain.Update(node.GenericDLNode)
 }
 
 func (chain *DeleteChain) RemoveNodeLocked(node txnif.DeleteNode) {
-	chain.Delete(node.(*DeleteNode).DLNode)
+	chain.Delete(node.(*DeleteNode).GenericDLNode)
 }
 
-func (chain *DeleteChain) DepthLocked() int { return chain.Link.Depth() }
+func (chain *DeleteChain) DepthLocked() int { return chain.GenericSortedDList.Depth() }
 
 func (chain *DeleteChain) AddNodeLocked(txn txnif.AsyncTxn, deleteType handle.DeleteType) txnif.DeleteNode {
 	node := NewDeleteNode(txn, deleteType)

@@ -17,6 +17,7 @@ package compile
 import (
 	"context"
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/intersectall"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/anti"
@@ -24,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/intersect"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopanti"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mark"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/minus"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopjoin"
@@ -137,6 +139,20 @@ func dupInstruction(in vm.Instruction) vm.Instruction {
 			Cond:       arg.Cond,
 			Result:     arg.Result,
 			Conditions: arg.Conditions,
+		}
+	case *mark.Argument:
+		{
+			rin.Arg = &mark.Argument{
+				Typs:         arg.Typs,
+				Cond:         arg.Cond,
+				Result:       arg.Result,
+				Conditions:   arg.Conditions,
+				OutputNull:   arg.OutputNull,
+				OutputMark:   arg.OutputMark,
+				MarkMeaning:  arg.MarkMeaning,
+				OutputAnyway: arg.OutputAnyway,
+				OnList:       arg.OnList,
+			}
 		}
 	case *offset.Argument:
 		rin.Arg = &offset.Argument{
@@ -263,23 +279,29 @@ func constructInsert(n *plan.Node, eg engine.Engine, txnOperator TxnOperator) (*
 	return &insert.Argument{
 		TargetTable:   relation,
 		TargetColDefs: n.TableDef.Cols,
+		Engine:        eg,
+		DB:            db,
+		TableID:       relation.GetTableID(ctx),
 	}, nil
 }
 
 func constructUpdate(n *plan.Node, eg engine.Engine, txnOperator TxnOperator) (*update.Argument, error) {
 	ctx := context.TODO()
 	us := make([]*update.UpdateCtx, len(n.UpdateCtxs))
+	tableID := make([]string, len(n.UpdateCtxs))
+	db := make([]engine.Database, len(n.UpdateCtxs))
 	for i, updateCtx := range n.UpdateCtxs {
-
 		dbSource, err := eg.Database(ctx, updateCtx.DbName, txnOperator)
 		if err != nil {
 			return nil, err
 		}
+		db[i] = dbSource
 		relation, err := dbSource.Relation(ctx, updateCtx.TblName)
 		if err != nil {
 			return nil, err
 		}
 
+		tableID[i] = relation.GetTableID(ctx)
 		colNames := make([]string, 0, len(updateCtx.UpdateCols))
 		for _, col := range updateCtx.UpdateCols {
 			colNames = append(colNames, col.Name)
@@ -297,7 +319,11 @@ func constructUpdate(n *plan.Node, eg engine.Engine, txnOperator TxnOperator) (*
 		}
 	}
 	return &update.Argument{
-		UpdateCtxs: us,
+		UpdateCtxs:  us,
+		Engine:      eg,
+		DB:          db,
+		TableID:     tableID,
+		TableDefVec: n.TableDefVec,
 	}, nil
 }
 
@@ -328,11 +354,11 @@ func constructTop(n *plan.Node, proc *process.Process) *top.Argument {
 	if err != nil {
 		panic(err)
 	}
-	fs := make([]top.Field, len(n.OrderBy))
+	fs := make([]colexec.Field, len(n.OrderBy))
 	for i, e := range n.OrderBy {
 		fs[i].E = e.Expr
 		if e.Flag == plan.OrderBySpec_DESC {
-			fs[i].Type = top.Descending
+			fs[i].Type = colexec.Descending
 		}
 	}
 	return &top.Argument{
@@ -342,7 +368,7 @@ func constructTop(n *plan.Node, proc *process.Process) *top.Argument {
 }
 
 func constructJoin(n *plan.Node, typs []types.Type, proc *process.Process) *join.Argument {
-	result := make([]join.ResultPos, len(n.ProjectList))
+	result := make([]colexec.ResultPos, len(n.ProjectList))
 	for i, expr := range n.ProjectList {
 		result[i].Rel, result[i].Pos = constructJoinResult(expr)
 	}
@@ -374,7 +400,7 @@ func constructSemi(n *plan.Node, typs []types.Type, proc *process.Process) *semi
 }
 
 func constructLeft(n *plan.Node, typs []types.Type, proc *process.Process) *left.Argument {
-	result := make([]left.ResultPos, len(n.ProjectList))
+	result := make([]colexec.ResultPos, len(n.ProjectList))
 	for i, expr := range n.ProjectList {
 		result[i].Rel, result[i].Pos = constructJoinResult(expr)
 	}
@@ -388,7 +414,7 @@ func constructLeft(n *plan.Node, typs []types.Type, proc *process.Process) *left
 }
 
 func constructSingle(n *plan.Node, typs []types.Type, proc *process.Process) *single.Argument {
-	result := make([]single.ResultPos, len(n.ProjectList))
+	result := make([]colexec.ResultPos, len(n.ProjectList))
 	for i, expr := range n.ProjectList {
 		result[i].Rel, result[i].Pos = constructJoinResult(expr)
 	}
@@ -402,7 +428,7 @@ func constructSingle(n *plan.Node, typs []types.Type, proc *process.Process) *si
 }
 
 func constructProduct(n *plan.Node, typs []types.Type, proc *process.Process) *product.Argument {
-	result := make([]product.ResultPos, len(n.ProjectList))
+	result := make([]colexec.ResultPos, len(n.ProjectList))
 	for i, expr := range n.ProjectList {
 		result[i].Rel, result[i].Pos = constructJoinResult(expr)
 	}
@@ -427,12 +453,37 @@ func constructAnti(n *plan.Node, typs []types.Type, proc *process.Process) *anti
 	}
 }
 
+func constructMark(n *plan.Node, typs []types.Type, proc *process.Process, onList []*plan.Expr) *mark.Argument {
+	result := make([]int32, len(n.ProjectList))
+	for i, expr := range n.ProjectList {
+		rel, pos := constructJoinResult(expr)
+		if rel != 0 {
+			panic(errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("mark result '%s' not support now", expr)))
+		}
+		result[i] = pos
+	}
+	cond, conds := extraJoinConditions(n.OnList)
+	return &mark.Argument{
+		Typs:         typs,
+		Result:       result,
+		Cond:         cond,
+		Conditions:   constructJoinConditions(conds),
+		OutputMark:   false,
+		OutputNull:   false,
+		MarkMeaning:  false,
+		OutputAnyway: false,
+		OnList:       onList,
+	}
+}
+
+var _ = constructMark
+
 func constructOrder(n *plan.Node, proc *process.Process) *order.Argument {
-	fs := make([]order.Field, len(n.OrderBy))
+	fs := make([]colexec.Field, len(n.OrderBy))
 	for i, e := range n.OrderBy {
 		fs[i].E = e.Expr
 		if e.Flag == plan.OrderBySpec_DESC {
-			fs[i].Type = order.Descending
+			fs[i].Type = colexec.Descending
 		}
 	}
 	return &order.Argument{
@@ -539,11 +590,11 @@ func constructMergeTop(n *plan.Node, proc *process.Process) *mergetop.Argument {
 	if err != nil {
 		panic(err)
 	}
-	fs := make([]top.Field, len(n.OrderBy))
+	fs := make([]colexec.Field, len(n.OrderBy))
 	for i, e := range n.OrderBy {
 		fs[i].E = e.Expr
 		if e.Flag == plan.OrderBySpec_DESC {
-			fs[i].Type = top.Descending
+			fs[i].Type = colexec.Descending
 		}
 	}
 	return &mergetop.Argument{
@@ -573,11 +624,11 @@ func constructMergeLimit(n *plan.Node, proc *process.Process) *mergelimit.Argume
 }
 
 func constructMergeOrder(n *plan.Node, proc *process.Process) *mergeorder.Argument {
-	fs := make([]order.Field, len(n.OrderBy))
+	fs := make([]colexec.Field, len(n.OrderBy))
 	for i, e := range n.OrderBy {
 		fs[i].E = e.Expr
 		if e.Flag == plan.OrderBySpec_DESC {
-			fs[i].Type = order.Descending
+			fs[i].Type = colexec.Descending
 		}
 	}
 	return &mergeorder.Argument{
@@ -586,7 +637,7 @@ func constructMergeOrder(n *plan.Node, proc *process.Process) *mergeorder.Argume
 }
 
 func constructLoopJoin(n *plan.Node, typs []types.Type, proc *process.Process) *loopjoin.Argument {
-	result := make([]loopjoin.ResultPos, len(n.ProjectList))
+	result := make([]colexec.ResultPos, len(n.ProjectList))
 	for i, expr := range n.ProjectList {
 		result[i].Rel, result[i].Pos = constructJoinResult(expr)
 	}
@@ -614,7 +665,7 @@ func constructLoopSemi(n *plan.Node, typs []types.Type, proc *process.Process) *
 }
 
 func constructLoopLeft(n *plan.Node, typs []types.Type, proc *process.Process) *loopleft.Argument {
-	result := make([]loopleft.ResultPos, len(n.ProjectList))
+	result := make([]colexec.ResultPos, len(n.ProjectList))
 	for i, expr := range n.ProjectList {
 		result[i].Rel, result[i].Pos = constructJoinResult(expr)
 	}
@@ -626,7 +677,7 @@ func constructLoopLeft(n *plan.Node, typs []types.Type, proc *process.Process) *
 }
 
 func constructLoopSingle(n *plan.Node, typs []types.Type, proc *process.Process) *loopsingle.Argument {
-	result := make([]loopsingle.ResultPos, len(n.ProjectList))
+	result := make([]colexec.ResultPos, len(n.ProjectList))
 	for i, expr := range n.ProjectList {
 		result[i].Rel, result[i].Pos = constructJoinResult(expr)
 	}
@@ -656,6 +707,13 @@ func constructHashBuild(in vm.Instruction) *hashbuild.Argument {
 	switch in.Op {
 	case vm.Anti:
 		arg := in.Arg.(*anti.Argument)
+		return &hashbuild.Argument{
+			NeedHashMap: true,
+			Typs:        arg.Typs,
+			Conditions:  arg.Conditions[1],
+		}
+	case vm.Mark:
+		arg := in.Arg.(*mark.Argument)
 		return &hashbuild.Argument{
 			NeedHashMap: true,
 			Typs:        arg.Typs,
@@ -725,6 +783,7 @@ func constructHashBuild(in vm.Instruction) *hashbuild.Argument {
 			NeedHashMap: false,
 			Typs:        arg.Typs,
 		}
+
 	default:
 		panic(errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("unsupport join type '%v'", in.Op)))
 	}

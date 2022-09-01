@@ -17,6 +17,7 @@ package fileservice
 import (
 	"context"
 	"fmt"
+	"strings"
 )
 
 type FileServices struct {
@@ -24,51 +25,51 @@ type FileServices struct {
 	mappings    map[string]FileService
 }
 
-func NewFileServices(defaultName string, fss ...FileService) *FileServices {
+func NewFileServices(defaultName string, fss ...FileService) (*FileServices, error) {
 	f := &FileServices{
 		defaultName: defaultName,
 		mappings:    make(map[string]FileService),
 	}
 	for _, fs := range fss {
-		name := fs.Name()
+		name := strings.ToLower(fs.Name())
 		if _, ok := f.mappings[name]; ok {
-			panic(fmt.Errorf("duplicated file service name: %s", name))
+			return nil, fmt.Errorf("%w: %s", ErrDuplicatedName, name)
 		}
 		f.mappings[name] = fs
 	}
-	return f
+	return f, nil
 }
 
 var _ FileService = &FileServices{}
 
 func (f *FileServices) Delete(ctx context.Context, filePath string) error {
-	name, path, err := splitPath("", filePath)
+	path, err := ParsePathAtService(filePath, "")
 	if err != nil {
 		return err
 	}
-	if name == "" {
-		name = f.defaultName
+	if path.Service == "" {
+		path.Service = f.defaultName
 	}
-	fs, err := Get[FileService](f, name)
+	fs, err := Get[FileService](f, path.Service)
 	if err != nil {
 		return err
 	}
-	return fs.Delete(ctx, path)
+	return fs.Delete(ctx, path.Full)
 }
 
 func (f *FileServices) List(ctx context.Context, dirPath string) ([]DirEntry, error) {
-	name, path, err := splitPath("", dirPath)
+	path, err := ParsePathAtService(dirPath, "")
 	if err != nil {
 		return nil, err
 	}
-	if name == "" {
-		name = f.defaultName
+	if path.Service == "" {
+		path.Service = f.defaultName
 	}
-	fs, err := Get[FileService](f, name)
+	fs, err := Get[FileService](f, path.Service)
 	if err != nil {
 		return nil, err
 	}
-	return fs.List(ctx, path)
+	return fs.List(ctx, path.Full)
 }
 
 func (f *FileServices) Name() string {
@@ -76,14 +77,14 @@ func (f *FileServices) Name() string {
 }
 
 func (f *FileServices) Read(ctx context.Context, vector *IOVector) error {
-	name, _, err := splitPath("", vector.FilePath)
+	path, err := ParsePathAtService(vector.FilePath, "")
 	if err != nil {
 		return err
 	}
-	if name == "" {
-		name = f.defaultName
+	if path.Service == "" {
+		path.Service = f.defaultName
 	}
-	fs, err := Get[FileService](f, name)
+	fs, err := Get[FileService](f, path.Service)
 	if err != nil {
 		return err
 	}
@@ -91,14 +92,14 @@ func (f *FileServices) Read(ctx context.Context, vector *IOVector) error {
 }
 
 func (f *FileServices) Write(ctx context.Context, vector IOVector) error {
-	name, _, err := splitPath("", vector.FilePath)
+	path, err := ParsePathAtService(vector.FilePath, "")
 	if err != nil {
 		return err
 	}
-	if name == "" {
-		name = f.defaultName
+	if path.Service == "" {
+		path.Service = f.defaultName
 	}
-	fs, err := Get[FileService](f, name)
+	fs, err := Get[FileService](f, path.Service)
 	if err != nil {
 		return err
 	}

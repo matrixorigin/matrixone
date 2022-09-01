@@ -52,7 +52,7 @@ func TestDecodeContext(t *testing.T) {
 func TestEncodeAndDecodeTrace(t *testing.T) {
 	hc := &traceCodec{}
 	out := buf.NewByteBuf(8)
-	span := trace.SpanContextWithID(trace.TraceID(1))
+	span := trace.SpanContextWithIDs(trace.TraceID{}, trace.SpanID{})
 	n, err := hc.Encode(&RPCMessage{Ctx: trace.ContextWithSpanContext(context.Background(), span)}, out)
 	assert.Equal(t, 1+span.Size(), n)
 	assert.NoError(t, err)

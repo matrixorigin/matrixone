@@ -48,6 +48,8 @@ type ComputationWrapper interface {
 	GetAffectedRows() uint64
 
 	Compile(requestCtx context.Context, u interface{}, fill func(interface{}, *batch.Batch) error) (interface{}, error)
+
+	GetUUID() []byte
 }
 
 type ColumnInfo interface {
@@ -132,3 +134,24 @@ func (icfl *InternalCmdFieldList) String() string {
 func (icfl *InternalCmdFieldList) Format(ctx *tree.FmtCtx) {
 	ctx.WriteString(makeCmdFieldListSql(icfl.tableName))
 }
+
+// ExecResult is the result interface of the execution
+type ExecResult interface {
+	GetRowCount() uint64
+
+	GetString(rindex, cindex uint64) (string, error)
+
+	GetUint64(rindex, cindex uint64) (uint64, error)
+
+	GetInt64(rindex, cindex uint64) (int64, error)
+}
+
+// BackgroundExec executes the sql in background session without network output.
+type BackgroundExec interface {
+	Close()
+	Exec(context.Context, string) error
+	GetExecResultSet() []interface{}
+	ClearExecResultSet()
+}
+
+var _ BackgroundExec = &BackgroundHandler{}

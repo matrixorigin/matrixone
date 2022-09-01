@@ -51,6 +51,12 @@ func SchemaToDefs(schema *catalog.Schema) (defs []engine.TableDef, err error) {
 		defs = append(defs, commentDef)
 	}
 
+	if schema.Partition != "" {
+		partitionDef := new(engine.PartitionDef)
+		partitionDef.Partition = schema.Partition
+		defs = append(defs, partitionDef)
+	}
+
 	if schema.View != "" {
 		viewDef := new(engine.ViewDef)
 		viewDef.View = schema.View
@@ -75,11 +81,13 @@ func SchemaToDefs(schema *catalog.Schema) (defs []engine.TableDef, err error) {
 				Name:    col.Name,
 				Type:    col.Type,
 				Primary: col.IsPrimary(),
+				Comment: col.Comment,
 				Default: &plan.Default{
 					NullAbility:  col.Default.NullAbility,
 					OriginString: col.Default.OriginString,
 					Expr:         expr,
 				},
+				AutoIncrement: col.IsAutoIncrement(),
 			},
 		}
 		defs = append(defs, def)
@@ -143,6 +151,9 @@ func DefsToSchema(name string, defs []engine.TableDef) (schema *catalog.Schema, 
 				default:
 				}
 			}
+
+		case *engine.PartitionDef:
+			schema.Partition = defVal.Partition
 
 		case *engine.ViewDef:
 			schema.View = defVal.View

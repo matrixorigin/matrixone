@@ -16,6 +16,7 @@ package updates
 
 import (
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 
 	"github.com/RoaringBitmap/roaring"
@@ -26,14 +27,14 @@ import (
 )
 
 type ColumnView struct {
-	links map[uint32]*common.Link
+	links map[uint32]*common.GenericSortedDList[*ColumnUpdateNode]
 	mask  *roaring.Bitmap
 }
 
 func NewColumnView() *ColumnView {
 	// func NewColumnView(chain *ColumnChain) *ColumnView {
 	return &ColumnView{
-		links: make(map[uint32]*common.Link),
+		links: make(map[uint32]*common.GenericSortedDList[*ColumnUpdateNode]),
 		mask:  roaring.New(),
 	}
 }
@@ -68,7 +69,7 @@ func (view *ColumnView) GetValue(key uint32, startTs types.TS) (v any, err error
 	}
 	head := link.GetHead()
 	for head != nil {
-		node := head.GetPayload().(*ColumnUpdateNode)
+		node := head.GetPayload()
 		if node.GetStartTS().Less(startTs) {
 			node.RLock()
 			//        |
@@ -129,12 +130,12 @@ func (view *ColumnView) GetValue(key uint32, startTs types.TS) (v any, err error
 
 func (view *ColumnView) PrepapreInsert(key uint32, ts types.TS) (err error) {
 	// First update to key
-	var link *common.Link
+	var link *common.GenericSortedDList[*ColumnUpdateNode]
 	if link = view.links[key]; link == nil {
 		return
 	}
 
-	node := link.GetHead().GetPayload().(*ColumnUpdateNode)
+	node := link.GetHead().GetPayload()
 	node.RLock()
 	// 1. The specified row has committed update
 	if node.txn == nil {
@@ -163,16 +164,16 @@ func (view *ColumnView) PrepapreInsert(key uint32, ts types.TS) (err error) {
 func (view *ColumnView) Insert(key uint32, un txnif.UpdateNode) (err error) {
 	n := un.(*ColumnUpdateNode)
 	// First update to key
-	var link *common.Link
+	var link *common.GenericSortedDList[*ColumnUpdateNode]
 	if link = view.links[key]; link == nil {
-		link = new(common.Link)
+		link = common.NewGenericSortedDList[*ColumnUpdateNode](compareUpdateNode)
 		link.Insert(n)
 		view.mask.Add(key)
 		view.links[key] = link
 		return
 	}
 
-	node := link.GetHead().GetPayload().(*ColumnUpdateNode)
+	node := link.GetHead().GetPayload()
 	node.RLock()
 	// 1. The specified row has committed update
 	if node.txn == nil {
@@ -202,9 +203,9 @@ func (view *ColumnView) Insert(key uint32, un txnif.UpdateNode) (err error) {
 
 func (view *ColumnView) Delete(key uint32, n *ColumnUpdateNode) (err error) {
 	link := view.links[key]
-	var target *common.DLNode
-	link.Loop(func(dlnode *common.DLNode) bool {
-		node := dlnode.GetPayload().(*ColumnUpdateNode)
+	var target *common.GenericDLNode[*ColumnUpdateNode]
+	link.Loop(func(dlnode *common.GenericDLNode[*ColumnUpdateNode]) bool {
+		node := dlnode.GetPayload()
 		if node.GetStartTS() == n.GetStartTS() {
 			target = dlnode
 			return false
@@ -221,10 +222,11 @@ func (view *ColumnView) Delete(key uint32, n *ColumnUpdateNode) (err error) {
 	return
 }
 
-func (view *ColumnView) RowStringLocked(row uint32, link *common.Link) string {
+func (view *ColumnView) RowStringLocked(row uint32,
+	link *common.GenericSortedDList[*ColumnUpdateNode]) string {
 	s := fmt.Sprintf("[ROW=%d]:", row)
-	link.Loop(func(dlnode *common.DLNode) bool {
-		n := dlnode.GetPayload().(*ColumnUpdateNode)
+	link.Loop(func(dlnode *common.GenericDLNode[*ColumnUpdateNode]) bool {
+		n := dlnode.GetPayload()
 		n.RLock()
 		s = fmt.Sprintf("%s\n%s", s, n.StringLocked())
 		n.RUnlock()

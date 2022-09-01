@@ -85,6 +85,7 @@ const (
 	SystemRelAttr_Persistence = "relpersistence"
 	SystemRelAttr_Kind        = "relkind"
 	SystemRelAttr_Comment     = "rel_comment"
+	SystemRelAttr_Partition   = "rel_partition"
 	SystemRelAttr_CreateSQL   = "rel_createsql"
 	SystemRelAttr_Owner       = "owner"
 	SystemRelAttr_Creator     = "creator"
@@ -250,6 +251,14 @@ func init() {
 		Width: 100,
 	}
 	if err = SystemTableSchema.AppendCol(SystemRelAttr_Comment, t); err != nil {
+		panic(err)
+	}
+	t = types.Type{
+		Oid:   types.T_varchar,
+		Size:  24,
+		Width: 65535,
+	}
+	if err = SystemTableSchema.AppendCol(SystemRelAttr_Partition, t); err != nil {
 		panic(err)
 	}
 	t = types.Type{

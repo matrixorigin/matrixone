@@ -16,6 +16,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"math/rand"
@@ -24,6 +25,10 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 
 	"github.com/matrixorigin/matrixone/pkg/cnservice"
 
@@ -69,29 +74,47 @@ func waitSignalToStop(stopper *stopper.Stopper) {
 }
 
 func startService(cfg *Config, stopper *stopper.Stopper) error {
-	// TODO: start other service
+
+	fs, err := cfg.createFileService(localFileServiceName)
+	if err != nil {
+		return err
+	}
+
 	switch strings.ToUpper(cfg.ServiceType) {
 	case cnServiceType:
-		return startCNService(cfg, stopper)
+		return startCNService(cfg, stopper, fs)
 	case dnServiceType:
-		return startDNService(cfg, stopper)
+		return startDNService(cfg, stopper, fs)
 	case logServiceType:
-		return startLogService(cfg, stopper)
+		return startLogService(cfg, stopper, fs)
 	case standaloneServiceType:
-		panic("not implemented")
+		return startStandalone(cfg, stopper, fs)
 	default:
 		panic("unknown service type")
 	}
 }
 
-func startCNService(cfg *Config, stopper *stopper.Stopper) error {
+func startCNService(
+	cfg *Config,
+	stopper *stopper.Stopper,
+	fileService fileservice.FileService,
+) error {
 	return stopper.RunNamedTask("cn-service", func(ctx context.Context) {
 		c := cfg.getCNServiceConfig()
-		s, err := cnservice.NewService(&c, ctx)
+		s, err := cnservice.NewService(
+			&c,
+			ctx,
+			fileService,
+			cnservice.WithMessageHandle(compile.CnServerMessageHandler),
+		)
 		if err != nil {
 			panic(err)
 		}
 		if err := s.Start(); err != nil {
+			panic(err)
+		}
+		err = cnclient.NewCNClient(&cnclient.ClientConfig{})
+		if err != nil {
 			panic(err)
 		}
 
@@ -102,11 +125,16 @@ func startCNService(cfg *Config, stopper *stopper.Stopper) error {
 	})
 }
 
-func startDNService(cfg *Config, stopper *stopper.Stopper) error {
+func startDNService(
+	cfg *Config,
+	stopper *stopper.Stopper,
+	fileService fileservice.FileService,
+) error {
 	return stopper.RunNamedTask("dn-service", func(ctx context.Context) {
 		c := cfg.getDNServiceConfig()
-		s, err := dnservice.NewService(&c,
-			cfg.createFileService,
+		s, err := dnservice.NewService(
+			&c,
+			fileService,
 			dnservice.WithLogger(logutil.GetGlobalLogger().Named("dn-service")))
 		if err != nil {
 			panic(err)
@@ -122,9 +150,13 @@ func startDNService(cfg *Config, stopper *stopper.Stopper) error {
 	})
 }
 
-func startLogService(cfg *Config, stopper *stopper.Stopper) error {
+func startLogService(
+	cfg *Config,
+	stopper *stopper.Stopper,
+	fileService fileservice.FileService,
+) error {
 	lscfg := cfg.getLogServiceConfig()
-	s, err := logservice.NewService(lscfg)
+	s, err := logservice.NewService(lscfg, fileService)
 	if err != nil {
 		panic(err)
 	}
@@ -133,7 +165,7 @@ func startLogService(cfg *Config, stopper *stopper.Stopper) error {
 	}
 	return stopper.RunNamedTask("log-service", func(ctx context.Context) {
 		if cfg.LogService.BootstrapConfig.BootstrapCluster {
-			fmt.Printf("bootstrapping hakeeper...\n")
+			logutil.Infof("bootstrapping hakeeper...")
 			if err := s.BootstrapHAKeeper(ctx, cfg.LogService); err != nil {
 				panic(err)
 			}
@@ -144,4 +176,70 @@ func startLogService(cfg *Config, stopper *stopper.Stopper) error {
 			panic(err)
 		}
 	})
+}
+
+func startStandalone(
+	cfg *Config,
+	stopper *stopper.Stopper,
+	fileService fileservice.FileService,
+) error {
+
+	// start log service
+	if err := startLogService(cfg, stopper, fileService); err != nil {
+		return err
+	}
+
+	// wait hakeeper ready
+	ctx, cancel := context.WithTimeout(context.TODO(), time.Second*30)
+	defer cancel()
+	var client logservice.CNHAKeeperClient
+	for {
+		var err error
+		client, err = logservice.NewCNHAKeeperClient(ctx, cfg.HAKeeperClient)
+		if errors.Is(err, logservice.ErrNotHAKeeper) {
+			// not ready
+			logutil.Info("hakeeper not ready, retry")
+			time.Sleep(time.Second)
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		break
+	}
+
+	// start DN
+	if err := startDNService(cfg, stopper, fileService); err != nil {
+		return err
+	}
+
+	// wait shard ready
+	for {
+		if ok, err := func() (bool, error) {
+			details, err := client.GetClusterDetails(ctx)
+			if err != nil {
+				return false, err
+			}
+			for _, store := range details.DNStores {
+				if len(store.Shards) > 0 {
+					return true, nil
+				}
+			}
+			logutil.Info("shard not ready")
+			return false, nil
+		}(); err != nil {
+			return err
+		} else if ok {
+			logutil.Info("shard ready")
+			break
+		}
+		time.Sleep(time.Second)
+	}
+
+	// start CN
+	if err := startCNService(cfg, stopper, fileService); err != nil {
+		return err
+	}
+
+	return nil
 }

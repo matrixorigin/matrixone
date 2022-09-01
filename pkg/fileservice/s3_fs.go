@@ -22,7 +22,7 @@ import (
 	"io"
 	"math"
 	"net/url"
-	"path"
+	pathpkg "path"
 	"sort"
 	"strings"
 	"time"
@@ -137,7 +137,14 @@ func newS3FS(
 	options ...func(*s3.Options),
 ) (*S3FS, error) {
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second*7)
+	if endpoint == "" {
+		return nil, fmt.Errorf("%w: empty endpoint", ErrBadS3Config)
+	}
+	if bucket == "" {
+		return nil, fmt.Errorf("%w: empty bucket", ErrBadS3Config)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*17)
 	defer cancel()
 
 	cfg, err := config.LoadDefaultConfig(ctx,
@@ -152,7 +159,16 @@ func newS3FS(
 		options...,
 	)
 
+	// head bucket to validate config
+	_, err = client.HeadBucket(ctx, &s3.HeadBucketInput{
+		Bucket: ptrTo(bucket),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("bad s3 config: %w", err)
+	}
+
 	fs := &S3FS{
+		name:      name,
 		client:    client,
 		bucket:    bucket,
 		keyPrefix: keyPrefix,
@@ -170,11 +186,11 @@ func (s *S3FS) Name() string {
 
 func (s *S3FS) List(ctx context.Context, dirPath string) (entries []DirEntry, err error) {
 
-	_, p, err := splitPath(s.name, dirPath)
+	path, err := ParsePathAtService(dirPath, s.name)
 	if err != nil {
 		return nil, err
 	}
-	prefix := s.pathToKey(p)
+	prefix := s.pathToKey(path.File)
 	if prefix != "" {
 		prefix += "/"
 	}
@@ -197,7 +213,7 @@ func (s *S3FS) List(ctx context.Context, dirPath string) (entries []DirEntry, er
 		for _, obj := range output.Contents {
 			filePath := s.keyToPath(*obj.Key)
 			filePath = strings.TrimRight(filePath, "/")
-			_, name := path.Split(filePath)
+			_, name := pathpkg.Split(filePath)
 			entries = append(entries, DirEntry{
 				Name:  name,
 				IsDir: false,
@@ -227,11 +243,11 @@ func (s *S3FS) List(ctx context.Context, dirPath string) (entries []DirEntry, er
 func (s *S3FS) Write(ctx context.Context, vector IOVector) error {
 
 	// check existence
-	_, path, err := splitPath(s.name, vector.FilePath)
+	path, err := ParsePathAtService(vector.FilePath, s.name)
 	if err != nil {
 		return err
 	}
-	key := s.pathToKey(path)
+	key := s.pathToKey(path.File)
 	output, err := s.client.HeadObject(
 		ctx,
 		&s3.HeadObjectInput{
@@ -257,11 +273,11 @@ func (s *S3FS) Write(ctx context.Context, vector IOVector) error {
 }
 
 func (s *S3FS) write(ctx context.Context, vector IOVector) error {
-	_, path, err := splitPath(s.name, vector.FilePath)
+	path, err := ParsePathAtService(vector.FilePath, s.name)
 	if err != nil {
 		return err
 	}
-	key := s.pathToKey(path)
+	key := s.pathToKey(path.File)
 
 	// sort
 	sort.Slice(vector.Entries, func(i, j int) bool {
@@ -315,7 +331,7 @@ func (s *S3FS) Read(ctx context.Context, vector *IOVector) error {
 }
 
 func (s *S3FS) read(ctx context.Context, vector *IOVector) error {
-	_, path, err := splitPath(s.name, vector.FilePath)
+	path, err := ParsePathAtService(vector.FilePath, s.name)
 	if err != nil {
 		return err
 	}
@@ -347,7 +363,7 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector) error {
 			ctx,
 			&s3.GetObjectInput{
 				Bucket: ptrTo(s.bucket),
-				Key:    ptrTo(s.pathToKey(path)),
+				Key:    ptrTo(s.pathToKey(path.File)),
 				Range:  ptrTo(rang),
 			},
 		)
@@ -368,7 +384,7 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector) error {
 			ctx,
 			&s3.GetObjectInput{
 				Bucket: ptrTo(s.bucket),
-				Key:    ptrTo(s.pathToKey(path)),
+				Key:    ptrTo(s.pathToKey(path.File)),
 				Range:  ptrTo(rang),
 			},
 		)
@@ -444,7 +460,7 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector) error {
 
 func (s *S3FS) Delete(ctx context.Context, filePath string) error {
 
-	_, path, err := splitPath(s.name, filePath)
+	path, err := ParsePathAtService(filePath, s.name)
 	if err != nil {
 		return err
 	}
@@ -452,7 +468,7 @@ func (s *S3FS) Delete(ctx context.Context, filePath string) error {
 		ctx,
 		&s3.DeleteObjectInput{
 			Bucket: ptrTo(s.bucket),
-			Key:    ptrTo(s.pathToKey(path)),
+			Key:    ptrTo(s.pathToKey(path.File)),
 		},
 	)
 	if err != nil {
@@ -463,7 +479,7 @@ func (s *S3FS) Delete(ctx context.Context, filePath string) error {
 }
 
 func (s *S3FS) pathToKey(filePath string) string {
-	return path.Join(s.keyPrefix, filePath)
+	return pathpkg.Join(s.keyPrefix, filePath)
 }
 
 func (s *S3FS) keyToPath(key string) string {

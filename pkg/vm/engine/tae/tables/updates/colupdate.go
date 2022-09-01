@@ -31,18 +31,40 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 )
 
+func compareUpdateNode(a, b *ColumnUpdateNode) int {
+	a.RLock()
+	defer a.RUnlock()
+	b.RLock()
+	defer b.RUnlock()
+	if a.commitTs == b.commitTs {
+		if a.startTs.Less(b.startTs) {
+			return -1
+		} else if a.startTs.Greater(b.startTs) {
+			return 1
+		}
+		return 0
+	}
+	if a.commitTs == txnif.UncommitTS {
+		return 1
+	} else if b.commitTs == txnif.UncommitTS {
+		return -1
+	}
+	return 0
+}
+
 type ColumnUpdateNode struct {
-	*common.DLNode
+	*common.GenericDLNode[*ColumnUpdateNode]
 	*sync.RWMutex
 	mask *roaring.Bitmap
 	vals map[uint32]any
 	// nulls    *roaring.Bitmap
-	chain    *ColumnChain
-	startTs  types.TS
-	commitTs types.TS
-	txn      txnif.AsyncTxn
-	logIndex *wal.Index
-	id       *common.ID
+	chain     *ColumnChain
+	startTs   types.TS
+	commitTs  types.TS
+	prepareTs types.TS
+	txn       txnif.AsyncTxn
+	logIndex  *wal.Index
+	id        *common.ID
 }
 
 func NewSimpleColumnUpdateNode() *ColumnUpdateNode {
@@ -91,7 +113,7 @@ func (node *ColumnUpdateNode) MakeCommand(id uint32) (cmd txnif.TxnCmd, err erro
 
 func (node *ColumnUpdateNode) AttachTo(chain *ColumnChain) {
 	node.chain = chain
-	node.DLNode = chain.Insert(node)
+	node.GenericDLNode = chain.Insert(node)
 }
 
 func (node *ColumnUpdateNode) GetID() *common.ID {
@@ -106,9 +128,9 @@ func (node *ColumnUpdateNode) GetChain() txnif.UpdateChain {
 	return node.chain
 }
 
-func (node *ColumnUpdateNode) GetDLNode() *common.DLNode {
-	return node.DLNode
-}
+// func (node *ColumnUpdateNode) GetDLNode() *common.DLNode {
+// 	return node.GenericDLNode
+// }
 
 func (node *ColumnUpdateNode) SetMask(mask *roaring.Bitmap) { node.mask = mask }
 
@@ -118,27 +140,6 @@ func (node *ColumnUpdateNode) GetMask() *roaring.Bitmap {
 func (node *ColumnUpdateNode) SetValues(vals map[uint32]any) { node.vals = vals }
 func (node *ColumnUpdateNode) GetValues() map[uint32]any {
 	return node.vals
-}
-func (node *ColumnUpdateNode) Compare(o common.NodePayload) int {
-	op := o.(*ColumnUpdateNode)
-	node.RLock()
-	defer node.RUnlock()
-	op.RLock()
-	defer op.RUnlock()
-	if node.commitTs == op.commitTs {
-		if node.startTs.Less(op.startTs) {
-			return -1
-		} else if node.startTs.Greater(op.startTs) {
-			return 1
-		}
-		return 0
-	}
-	if node.commitTs == txnif.UncommitTS {
-		return 1
-	} else if op.commitTs == txnif.UncommitTS {
-		return -1
-	}
-	return 0
 }
 
 func (node *ColumnUpdateNode) GetValueLocked(row uint32) (v any, err error) {
@@ -330,6 +331,22 @@ func (node *ColumnUpdateNode) StringLocked() string {
 	return s
 }
 
+func (node *ColumnUpdateNode) Prepare2PCPrepare() (err error) {
+	node.chain.Lock()
+	defer node.chain.Unlock()
+	if node.commitTs != txnif.UncommitTS {
+		return
+	}
+	// if node.commitTs != txnif.UncommitTS {
+	// 	panic("logic error")
+	// }
+	node.commitTs = node.txn.GetPrepareTS()
+	node.prepareTs = node.txn.GetPrepareTS()
+	node.chain.UpdateLocked(node)
+	// TODO: merge updates
+	return
+}
+
 func (node *ColumnUpdateNode) PrepareCommit() (err error) {
 	node.chain.Lock()
 	defer node.chain.Unlock()
@@ -340,6 +357,7 @@ func (node *ColumnUpdateNode) PrepareCommit() (err error) {
 	// 	panic("logic error")
 	// }
 	node.commitTs = node.txn.GetCommitTS()
+	node.prepareTs = node.txn.GetCommitTS()
 	node.chain.UpdateLocked(node)
 	// TODO: merge updates
 	return
@@ -359,8 +377,17 @@ func (node *ColumnUpdateNode) ApplyCommit(index *wal.Index) (err error) {
 }
 
 func (node *ColumnUpdateNode) PrepareRollback() (err error) {
-	node.chain.DeleteNode(node.DLNode)
+	node.chain.DeleteNode(node)
 	return
 }
 
-func (node *ColumnUpdateNode) ApplyRollback() (err error) { return }
+func (node *ColumnUpdateNode) ApplyRollback(index *wal.Index) (err error) {
+	node.Lock()
+	defer node.Unlock()
+	if node.txn == nil {
+		panic("ColumnUpdateNode | ApplyCommit | LogicErr")
+	}
+	node.logIndex = index
+	return
+
+}

@@ -16,7 +16,7 @@ package frontend
 
 import (
 	"context"
-	"fmt"
+
 	"sync/atomic"
 
 	"github.com/fagongzi/goetty/v2"
@@ -35,19 +35,19 @@ type MOServer struct {
 }
 
 func (mo *MOServer) Start() error {
-	fmt.Printf("++++++++++++++++++++++++++++++++++++++++++++++++\n")
-	fmt.Printf("++++++++++++++++++++++++++++++++++++++++++++++++\n")
-	fmt.Printf("++++++++++++++++++++++++++++++++++++++++++++++++\n")
-	fmt.Printf("++++++++++++++++++++++++++++++++++++++++++++++++\n")
-	fmt.Printf("++++++++++++++++++++++++++++++++++++++++++++++++\n")
-	fmt.Printf("++++++++++++++++++++++++++++++++++++++++++++++++\n")
-	fmt.Printf("Server Listening on : %s \n", mo.addr)
-	fmt.Printf("++++++++++++++++++++++++++++++++++++++++++++++++\n")
-	fmt.Printf("++++++++++++++++++++++++++++++++++++++++++++++++\n")
-	fmt.Printf("++++++++++++++++++++++++++++++++++++++++++++++++\n")
-	fmt.Printf("++++++++++++++++++++++++++++++++++++++++++++++++\n")
-	fmt.Printf("++++++++++++++++++++++++++++++++++++++++++++++++\n")
-	fmt.Printf("++++++++++++++++++++++++++++++++++++++++++++++++\n")
+	logutil.Infof("++++++++++++++++++++++++++++++++++++++++++++++++")
+	logutil.Infof("++++++++++++++++++++++++++++++++++++++++++++++++")
+	logutil.Infof("++++++++++++++++++++++++++++++++++++++++++++++++")
+	logutil.Infof("++++++++++++++++++++++++++++++++++++++++++++++++")
+	logutil.Infof("++++++++++++++++++++++++++++++++++++++++++++++++")
+	logutil.Infof("++++++++++++++++++++++++++++++++++++++++++++++++")
+	logutil.Infof("Server Listening on : %s ", mo.addr)
+	logutil.Infof("++++++++++++++++++++++++++++++++++++++++++++++++")
+	logutil.Infof("++++++++++++++++++++++++++++++++++++++++++++++++")
+	logutil.Infof("++++++++++++++++++++++++++++++++++++++++++++++++")
+	logutil.Infof("++++++++++++++++++++++++++++++++++++++++++++++++")
+	logutil.Infof("++++++++++++++++++++++++++++++++++++++++++++++++")
+	logutil.Infof("++++++++++++++++++++++++++++++++++++++++++++++++")
 	return mo.app.Start()
 }
 
@@ -61,7 +61,10 @@ func nextConnectionID() uint32 {
 
 func NewMOServer(ctx context.Context, addr string, pu *config.ParameterUnit) *MOServer {
 	codec := NewSqlCodec()
-	rm := NewRoutineManager(ctx, pu)
+	rm, err := NewRoutineManager(ctx, pu)
+	if err != nil {
+		logutil.Panicf("start server failed with %+v", err)
+	}
 	// TODO asyncFlushBatch
 	app, err := goetty.NewApplication(addr, rm.Handler,
 		goetty.WithAppLogger(logutil.GetGlobalLogger()),

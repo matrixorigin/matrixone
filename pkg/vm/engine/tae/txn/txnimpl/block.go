@@ -37,7 +37,7 @@ type txnBlock struct {
 
 type blockIt struct {
 	sync.RWMutex
-	linkIt *common.LinkIt
+	linkIt *common.GenericSortedDListIt[*catalog.BlockEntry]
 	curr   *catalog.BlockEntry
 	table  *txnTable
 	err    error
@@ -59,7 +59,7 @@ func newBlockIt(table *txnTable, meta *catalog.SegmentEntry) *blockIt {
 	var ok bool
 	var err error
 	for it.linkIt.Valid() {
-		curr := it.linkIt.Get().GetPayload().(*catalog.BlockEntry)
+		curr := it.linkIt.Get().GetPayload()
 		curr.RLock()
 		ok, err = curr.TxnCanRead(it.table.store.txn, curr.RWMutex)
 		if err != nil {
@@ -97,7 +97,7 @@ func (it *blockIt) Next() {
 			it.curr = nil
 			break
 		}
-		entry := node.GetPayload().(*catalog.BlockEntry)
+		entry := node.GetPayload()
 		entry.RLock()
 		valid, err = entry.TxnCanRead(it.table.store.txn, entry.RWMutex)
 		entry.RUnlock()

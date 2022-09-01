@@ -57,7 +57,7 @@ func TestGCBlock1(t *testing.T) {
 	err = meta.GetSegment().RemoveEntry(meta)
 	assert.Nil(t, err)
 	blkData := meta.GetBlockData()
-	assert.Equal(t, 3, tae.MTBufMgr.Count())
+	assert.Equal(t, 2, tae.MTBufMgr.Count())
 	err = blkData.Destroy()
 	assert.Nil(t, err)
 	assert.Equal(t, 2, tae.MTBufMgr.Count())
@@ -146,6 +146,10 @@ func TestGCTable(t *testing.T) {
 	// 3. Create a table and append 7 rows
 	db, _ = createRelationAndAppend(t, 0, tae, "db", schema, bats[0], false)
 
+	testutils.WaitExpect(2000, func() bool {
+		names := getSegmentFileNames(tae)
+		return len(names) == 1
+	})
 	names := getSegmentFileNames(tae)
 	assert.Equal(t, 1, len(names))
 
@@ -165,6 +169,10 @@ func TestGCTable(t *testing.T) {
 
 	// 5. Create a table and append 3 block
 	createRelationAndAppend(t, 0, tae, "db", schema, bat, false)
+	testutils.WaitExpect(2000, func() bool {
+		names = getSegmentFileNames(tae)
+		return len(names) == 2
+	})
 	names = getSegmentFileNames(tae)
 	t.Log(names)
 	assert.Equal(t, 2, len(names))

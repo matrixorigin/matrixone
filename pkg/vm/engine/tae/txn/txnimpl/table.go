@@ -540,7 +540,8 @@ func (tbl *txnTable) UncommittedRows() uint32 {
 	return tbl.localSegment.Rows()
 }
 
-func (tbl *txnTable) PreCommitDedup() (err error) {
+// PreCommitOr2PCPrepareDedup do deduplication check for 1PC Commit or 2PC Prepare
+func (tbl *txnTable) PreCommitOr2PCPrepareDedup() (err error) {
 	if tbl.localSegment == nil || !tbl.schema.HasPK() {
 		return
 	}
@@ -553,12 +554,18 @@ func (tbl *txnTable) PreCommitDedup() (err error) {
 func (tbl *txnTable) DoDedup(pks containers.Vector, preCommit bool) (err error) {
 	segIt := tbl.entry.MakeSegmentIt(false)
 	for segIt.Valid() {
-		seg := segIt.Get().GetPayload().(*catalog.SegmentEntry)
+		seg := segIt.Get().GetPayload()
 		if preCommit && seg.GetID() < tbl.maxSegId {
 			return
 		}
 		{
 			seg.RLock()
+			needwait, txnToWait := seg.NeedWaitCommitting(tbl.store.txn.GetStartTS())
+			if needwait {
+				seg.RUnlock()
+				txnToWait.GetTxnState(true)
+				seg.RLock()
+			}
 			invalid := seg.IsDroppedCommitted() || seg.InTxnOrRollbacked()
 			seg.RUnlock()
 			if invalid {
@@ -578,7 +585,7 @@ func (tbl *txnTable) DoDedup(pks containers.Vector, preCommit bool) (err error) 
 		err = nil
 		blkIt := seg.MakeBlockIt(false)
 		for blkIt.Valid() {
-			blk := blkIt.Get().GetPayload().(*catalog.BlockEntry)
+			blk := blkIt.Get().GetPayload()
 			if preCommit && blk.GetID() < tbl.maxBlkId {
 				return
 			}
@@ -663,7 +670,7 @@ func (tbl *txnTable) ApplyAppend() (err error) {
 	return
 }
 
-func (tbl *txnTable) PreCommit() (err error) {
+func (tbl *txnTable) PreCommitOr2PCPrepare() (err error) {
 	if tbl.localSegment != nil {
 		err = tbl.localSegment.PrepareApply()
 	}
@@ -679,7 +686,20 @@ func (tbl *txnTable) PrepareCommit() (err error) {
 	return
 }
 
+func (tbl *txnTable) Prepare2PCPrepare() (err error) {
+	for _, node := range tbl.txnEntries {
+		if err = node.Prepare2PCPrepare(); err != nil {
+			break
+		}
+	}
+	return
+}
+
 func (tbl *txnTable) PreApplyCommit() (err error) {
+	return tbl.ApplyAppend()
+}
+
+func (tbl *txnTable) PreApply2PCPrepare() (err error) {
 	return tbl.ApplyAppend()
 }
 
@@ -695,10 +715,12 @@ func (tbl *txnTable) ApplyCommit() (err error) {
 }
 
 func (tbl *txnTable) ApplyRollback() (err error) {
+	csn := tbl.csnStart
 	for _, node := range tbl.txnEntries {
-		if err = node.ApplyRollback(); err != nil {
+		if err = node.ApplyRollback(tbl.store.cmdMgr.MakeLogIndex(csn)); err != nil {
 			break
 		}
+		csn++
 	}
 	return
 }

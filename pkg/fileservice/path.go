@@ -19,13 +19,66 @@ import (
 	"strings"
 )
 
-func splitPath(serviceName string, path string) (string, string, error) {
-	parts := strings.SplitN(path, ":", 2)
-	if len(parts) == 2 {
-		if serviceName != "" && parts[0] != "" && parts[0] != serviceName {
-			return "", "", fmt.Errorf("wrong file service name, expecting %s, got %s", serviceName, parts[0])
-		}
-		return parts[0], parts[1], nil
+const ServiceNameSeparator = ":"
+
+type Path struct {
+	Full    string
+	Service string
+	File    string
+}
+
+func ParsePath(s string) (path Path, err error) {
+	// split
+	parts := strings.SplitN(s, ServiceNameSeparator, 2)
+	switch len(parts) {
+	case 1:
+		// no service
+		path.File = parts[0]
+	case 2:
+		// with service
+		path.Service = parts[0]
+		path.File = parts[1]
 	}
-	return "", parts[0], nil
+
+	// validate
+	for _, r := range path.File {
+		// most common patterns first
+		if r >= '0' && r <= '9' ||
+			r >= 'a' && r <= 'z' ||
+			r >= 'A' && r <= 'Z' ||
+			r == '/' {
+			continue
+		}
+		switch r {
+		case '!', '-', '_', '.', '*', '\'', '(', ')':
+			continue
+		}
+		err = fmt.Errorf("%w: invalid file path %s", ErrInvalidPath, path.File)
+		return
+	}
+
+	path.Full = joinPath(path.Service, path.File)
+	return
+}
+
+func ParsePathAtService(s string, serviceName string) (path Path, err error) {
+	path, err = ParsePath(s)
+	if err != nil {
+		return
+	}
+	if serviceName != "" &&
+		path.Service != "" &&
+		!strings.EqualFold(path.Service, serviceName) {
+		err = fmt.Errorf("%w: expecting %s, got %s", ErrWrongService, serviceName, path.Service)
+		return
+	}
+	return
+}
+
+func joinPath(serviceName string, path string) string {
+	buf := new(strings.Builder)
+	buf.WriteString(serviceName)
+	buf.WriteString(ServiceNameSeparator)
+	buf.WriteString(path)
+	return buf.String()
 }

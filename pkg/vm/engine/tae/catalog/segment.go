@@ -18,9 +18,9 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"io"
-	"sync"
+
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -31,11 +31,15 @@ import (
 
 type SegmentDataFactory = func(meta *SegmentEntry) data.Segment
 
+func compareSegmentFn(a, b *SegmentEntry) int {
+	return a.MetaBaseEntry.DoCompre(b.MetaBaseEntry)
+}
+
 type SegmentEntry struct {
-	*BaseEntry
+	*MetaBaseEntry
 	table   *TableEntry
-	entries map[uint64]*common.DLNode
-	link    *common.Link
+	entries map[uint64]*common.GenericDLNode[*BlockEntry]
+	link    *common.GenericSortedDList[*BlockEntry]
 	state   EntryState
 	segData data.Segment
 }
@@ -43,19 +47,13 @@ type SegmentEntry struct {
 func NewSegmentEntry(table *TableEntry, txn txnif.AsyncTxn, state EntryState, dataFactory SegmentDataFactory) *SegmentEntry {
 	id := table.GetDB().catalog.NextSegment()
 	e := &SegmentEntry{
-		BaseEntry: &BaseEntry{
-			CommitInfo: CommitInfo{
-				Txn:    txn,
-				CurrOp: OpCreate,
-			},
-			RWMutex: new(sync.RWMutex),
-			ID:      id,
-		},
-		table:   table,
-		link:    new(common.Link),
-		entries: make(map[uint64]*common.DLNode),
-		state:   state,
+		MetaBaseEntry: NewMetaBaseEntry(id),
+		table:         table,
+		link:          common.NewGenericSortedDList(compareBlockFn),
+		entries:       make(map[uint64]*common.GenericDLNode[*BlockEntry]),
+		state:         state,
 	}
+	e.CreateWithTxn(txn)
 	if dataFactory != nil {
 		e.segData = dataFactory(e)
 	}
@@ -64,46 +62,34 @@ func NewSegmentEntry(table *TableEntry, txn txnif.AsyncTxn, state EntryState, da
 
 func NewReplaySegmentEntry() *SegmentEntry {
 	e := &SegmentEntry{
-		BaseEntry: new(BaseEntry),
-		link:      new(common.Link),
-		entries:   make(map[uint64]*common.DLNode),
+		MetaBaseEntry: NewReplayMetaBaseEntry(),
+		link:          common.NewGenericSortedDList(compareBlockFn),
+		entries:       make(map[uint64]*common.GenericDLNode[*BlockEntry]),
 	}
 	return e
 }
 
 func NewStandaloneSegment(table *TableEntry, id uint64, ts types.TS) *SegmentEntry {
 	e := &SegmentEntry{
-		BaseEntry: &BaseEntry{
-			CommitInfo: CommitInfo{
-				CurrOp: OpCreate,
-			},
-			RWMutex:  new(sync.RWMutex),
-			ID:       id,
-			CreateAt: ts,
-		},
-		table:   table,
-		link:    new(common.Link),
-		entries: make(map[uint64]*common.DLNode),
-		state:   ES_Appendable,
+		MetaBaseEntry: NewMetaBaseEntry(id),
+		table:         table,
+		link:          common.NewGenericSortedDList(compareBlockFn),
+		entries:       make(map[uint64]*common.GenericDLNode[*BlockEntry]),
+		state:         ES_Appendable,
 	}
+	e.CreateWithTS(ts)
 	return e
 }
 
 func NewSysSegmentEntry(table *TableEntry, id uint64) *SegmentEntry {
 	e := &SegmentEntry{
-		BaseEntry: &BaseEntry{
-			CommitInfo: CommitInfo{
-				CurrOp: OpCreate,
-			},
-			RWMutex:  new(sync.RWMutex),
-			ID:       id,
-			CreateAt: types.SystemDBTS,
-		},
-		table:   table,
-		link:    new(common.Link),
-		entries: make(map[uint64]*common.DLNode),
-		state:   ES_Appendable,
+		MetaBaseEntry: NewMetaBaseEntry(id),
+		table:         table,
+		link:          common.NewGenericSortedDList(compareBlockFn),
+		entries:       make(map[uint64]*common.GenericDLNode[*BlockEntry]),
+		state:         ES_Appendable,
 	}
+	e.CreateWithTS(types.SystemDBTS)
 	var bid uint64
 	if table.schema.Name == SystemTableSchema.Name {
 		bid = SystemBlock_Table_ID
@@ -131,17 +117,14 @@ func (entry *SegmentEntry) GetBlockEntryByIDLocked(id uint64) (blk *BlockEntry, 
 		err = ErrNotFound
 		return
 	}
-	blk = node.GetPayload().(*BlockEntry)
+	blk = node.GetPayload()
 	return
 }
 
 func (entry *SegmentEntry) MakeCommand(id uint32) (cmd txnif.TxnCmd, err error) {
-	cmdType := CmdCreateSegment
+	cmdType := CmdUpdateSegment
 	entry.RLock()
 	defer entry.RUnlock()
-	if entry.CurrOp == OpSoftDelete {
-		cmdType = CmdDropSegment
-	}
 	return newSegmentCmd(id, cmdType, entry), nil
 }
 
@@ -153,7 +136,7 @@ func (entry *SegmentEntry) PPString(level common.PPLevel, depth int, prefix stri
 	}
 	it := entry.MakeBlockIt(true)
 	for it.Valid() {
-		block := it.Get().GetPayload().(*BlockEntry)
+		block := it.Get().GetPayload()
 		block.RLock()
 		_ = w.WriteByte('\n')
 		_, _ = w.WriteString(block.PPString(level, depth+1, prefix))
@@ -164,7 +147,7 @@ func (entry *SegmentEntry) PPString(level common.PPLevel, depth int, prefix stri
 }
 
 func (entry *SegmentEntry) StringLocked() string {
-	return fmt.Sprintf("[%s]SEGMENT%s", entry.state.Repr(), entry.BaseEntry.String())
+	return fmt.Sprintf("[%s]SEGMENT%s", entry.state.Repr(), entry.MetaBaseEntry.StringLocked())
 }
 
 func (entry *SegmentEntry) Repr() string {
@@ -190,16 +173,11 @@ func (entry *SegmentEntry) GetTable() *TableEntry {
 	return entry.table
 }
 
-func (entry *SegmentEntry) Compare(o common.NodePayload) int {
-	oe := o.(*SegmentEntry).BaseEntry
-	return entry.DoCompre(oe)
-}
-
 func (entry *SegmentEntry) GetAppendableBlockCnt() int {
 	cnt := 0
 	it := entry.MakeBlockIt(true)
 	for it.Valid() {
-		if it.Get().GetPayload().(*BlockEntry).IsAppendable() {
+		if it.Get().GetPayload().IsAppendable() {
 			cnt++
 		}
 		it.Next()
@@ -210,7 +188,7 @@ func (entry *SegmentEntry) GetAppendableBlockCnt() int {
 func (entry *SegmentEntry) LastAppendableBlock() (blk *BlockEntry) {
 	it := entry.MakeBlockIt(false)
 	for it.Valid() {
-		itBlk := it.Get().GetPayload().(*BlockEntry)
+		itBlk := it.Get().GetPayload()
 		if itBlk.IsAppendable() {
 			blk = itBlk
 			break
@@ -235,6 +213,12 @@ func (entry *SegmentEntry) DropBlockEntry(id uint64, txn txnif.AsyncTxn) (delete
 	}
 	blk.Lock()
 	defer blk.Unlock()
+	needWait, waitTxn := blk.NeedWaitCommitting(txn.GetStartTS())
+	if needWait {
+		blk.Unlock()
+		waitTxn.GetTxnState(true)
+		blk.Lock()
+	}
 	err = blk.DropEntryLocked(txn)
 	if err == nil {
 		deleted = blk
@@ -242,10 +226,10 @@ func (entry *SegmentEntry) DropBlockEntry(id uint64, txn txnif.AsyncTxn) (delete
 	return
 }
 
-func (entry *SegmentEntry) MakeBlockIt(reverse bool) *common.LinkIt {
+func (entry *SegmentEntry) MakeBlockIt(reverse bool) *common.GenericSortedDListIt[*BlockEntry] {
 	entry.RLock()
 	defer entry.RUnlock()
-	return common.NewLinkIt(entry.RWMutex, entry.link, reverse)
+	return common.NewGenericSortedDListIt(entry.RWMutex, entry.link, reverse)
 }
 
 func (entry *SegmentEntry) AddEntryLocked(block *BlockEntry) {
@@ -290,11 +274,11 @@ func (entry *SegmentEntry) RemoveEntry(block *BlockEntry) (err error) {
 }
 
 func (entry *SegmentEntry) PrepareRollback() (err error) {
-	entry.RLock()
-	currOp := entry.CurrOp
-	logutil.Infof("PrepareRollback %s", entry.StringLocked())
-	entry.RUnlock()
-	if currOp == OpCreate {
+	var isEmpty bool
+	if isEmpty, err = entry.MetaBaseEntry.PrepareRollback(); err != nil {
+		return
+	}
+	if isEmpty {
 		if err = entry.GetTable().RemoveEntry(entry); err != nil {
 			return
 		}
@@ -305,15 +289,12 @@ func (entry *SegmentEntry) PrepareRollback() (err error) {
 			return
 		}
 	}
-	if err = entry.BaseEntry.PrepareRollback(); err != nil {
-		return
-	}
 	return
 }
 
 func (entry *SegmentEntry) WriteTo(w io.Writer) (n int64, err error) {
 	sn := int64(0)
-	if sn, err = entry.BaseEntry.WriteTo(w); err != nil {
+	if sn, err = entry.MetaBaseEntry.WriteAllTo(w); err != nil {
 		return
 	}
 	if err = binary.Write(w, binary.BigEndian, entry.state); err != nil {
@@ -324,7 +305,7 @@ func (entry *SegmentEntry) WriteTo(w io.Writer) (n int64, err error) {
 }
 
 func (entry *SegmentEntry) ReadFrom(r io.Reader) (n int64, err error) {
-	if n, err = entry.BaseEntry.ReadFrom(r); err != nil {
+	if n, err = entry.MetaBaseEntry.ReadAllFrom(r); err != nil {
 		return
 	}
 	err = binary.Read(r, binary.BigEndian, &entry.state)
@@ -336,36 +317,30 @@ func (entry *SegmentEntry) MakeLogEntry() *EntryCommand {
 	return newSegmentCmd(0, CmdLogSegment, entry)
 }
 
-func (entry *SegmentEntry) Clone() CheckpointItem {
-	cloned := &SegmentEntry{
-		BaseEntry: entry.BaseEntry.Clone(),
-		state:     entry.state,
-		table:     entry.table,
+func (entry *SegmentEntry) GetCheckpointItems(start, end types.TS) CheckpointItems {
+	ret := entry.CloneCommittedInRange(start, end)
+	if ret == nil {
+		return nil
 	}
-	return cloned
-}
-
-func (entry *SegmentEntry) CloneCreate() CheckpointItem {
-	cloned := &SegmentEntry{
-		BaseEntry: entry.BaseEntry.CloneCreate(),
-		state:     entry.state,
-		table:     entry.table,
+	return &SegmentEntry{
+		MetaBaseEntry: ret.(*MetaBaseEntry),
+		state:         entry.state,
+		table:         entry.table,
 	}
-	return cloned
 }
 
 func (entry *SegmentEntry) GetScheduler() tasks.TaskScheduler {
 	return entry.GetTable().GetCatalog().GetScheduler()
 }
 
-func (entry *SegmentEntry) CollectBlockEntries(commitFilter func(be *BaseEntry) bool, blockFilter func(be *BlockEntry) bool) []*BlockEntry {
+func (entry *SegmentEntry) CollectBlockEntries(commitFilter func(be *MetaBaseEntry) bool, blockFilter func(be *BlockEntry) bool) []*BlockEntry {
 	blks := make([]*BlockEntry, 0)
 	blkIt := entry.MakeBlockIt(true)
 	for blkIt.Valid() {
-		blk := blkIt.Get().GetPayload().(*BlockEntry)
+		blk := blkIt.Get().GetPayload()
 		blk.RLock()
 		if commitFilter != nil && blockFilter != nil {
-			if commitFilter(blk.BaseEntry) && blockFilter(blk) {
+			if commitFilter(blk.MetaBaseEntry) && blockFilter(blk) {
 				blks = append(blks, blk)
 			}
 		} else if blockFilter != nil {
@@ -373,7 +348,7 @@ func (entry *SegmentEntry) CollectBlockEntries(commitFilter func(be *BaseEntry) 
 				blks = append(blks, blk)
 			}
 		} else if commitFilter != nil {
-			if commitFilter(blk.BaseEntry) {
+			if commitFilter(blk.MetaBaseEntry) {
 				blks = append(blks, blk)
 			}
 		}
@@ -402,17 +377,17 @@ func (entry *SegmentEntry) IsActive() bool {
 	return !dropped
 }
 
-func (entry *SegmentEntry) TreeMaxDropCommitEntry() *BaseEntry {
+func (entry *SegmentEntry) TreeMaxDropCommitEntry() BaseEntryIf {
 	table := entry.GetTable()
 	db := table.GetDB()
 	if db.IsDroppedCommitted() {
-		return db.BaseEntry
+		return db.DBBaseEntry
 	}
 	if table.IsDroppedCommitted() {
-		return table.BaseEntry
+		return table.TableBaseEntry
 	}
 	if entry.IsDroppedCommitted() {
-		return entry.BaseEntry
+		return entry.MetaBaseEntry
 	}
 	return nil
 }

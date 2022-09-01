@@ -18,7 +18,6 @@ import (
 	"bytes"
 	"fmt"
 	"io"
-	"sync"
 	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -30,14 +29,29 @@ import (
 
 type TableDataFactory = func(meta *TableEntry) data.Table
 
+func tableTxnCanGetFn[T *TableEntry](n *common.GenericDLNode[*TableEntry], ts types.TS) (can, dropped bool) {
+	table := n.GetPayload()
+	can, dropped = table.TxnCanGet(ts)
+	return
+}
+
 type TableEntry struct {
-	*BaseEntry
+	*TableBaseEntry
 	db        *DBEntry
 	schema    *Schema
-	entries   map[uint64]*common.DLNode
-	link      *common.Link
+	entries   map[uint64]*common.GenericDLNode[*SegmentEntry]
+	link      *common.GenericSortedDList[*SegmentEntry]
 	tableData data.Table
 	rows      uint64
+	// fullname is format as 'tenantID-tableName', the tenantID prefix is only used 'mo_catalog' database
+	fullName string
+}
+
+func genTblFullName(tenantID uint32, name string) string {
+	if name == SystemTable_DB_Name || name == SystemTable_Table_Name || name == SystemTable_Columns_Name {
+		tenantID = 0
+	}
+	return fmt.Sprintf("%d-%s", tenantID, name)
 }
 
 func NewTableEntry(db *DBEntry, schema *Schema, txnCtx txnif.AsyncTxn, dataFactory TableDataFactory) *TableEntry {
@@ -49,40 +63,28 @@ func NewTableEntry(db *DBEntry, schema *Schema, txnCtx txnif.AsyncTxn, dataFacto
 	}
 	schema.AcInfo.CreateAt = types.CurrentTimestamp()
 	e := &TableEntry{
-		BaseEntry: &BaseEntry{
-			CommitInfo: CommitInfo{
-				Txn:    txnCtx,
-				CurrOp: OpCreate,
-			},
-			RWMutex: new(sync.RWMutex),
-			ID:      id,
-		},
-		db:      db,
-		schema:  schema,
-		link:    new(common.Link),
-		entries: make(map[uint64]*common.DLNode),
+		TableBaseEntry: NewTableBaseEntry(id),
+		db:             db,
+		schema:         schema,
+		link:           common.NewGenericSortedDList(compareSegmentFn),
+		entries:        make(map[uint64]*common.GenericDLNode[*SegmentEntry]),
 	}
 	if dataFactory != nil {
 		e.tableData = dataFactory(e)
 	}
+	e.CreateWithTxn(txnCtx)
 	return e
 }
 
 func NewSystemTableEntry(db *DBEntry, id uint64, schema *Schema) *TableEntry {
 	e := &TableEntry{
-		BaseEntry: &BaseEntry{
-			CommitInfo: CommitInfo{
-				CurrOp: OpCreate,
-			},
-			RWMutex:  new(sync.RWMutex),
-			ID:       id,
-			CreateAt: types.SystemDBTS,
-		},
-		db:      db,
-		schema:  schema,
-		link:    new(common.Link),
-		entries: make(map[uint64]*common.DLNode),
+		TableBaseEntry: NewTableBaseEntry(id),
+		db:             db,
+		schema:         schema,
+		link:           common.NewGenericSortedDList(compareSegmentFn),
+		entries:        make(map[uint64]*common.GenericDLNode[*SegmentEntry]),
 	}
+	e.CreateWithTS(types.SystemDBTS)
 	var sid uint64
 	if schema.Name == SystemTableSchema.Name {
 		sid = SystemSegment_Table_ID
@@ -100,22 +102,19 @@ func NewSystemTableEntry(db *DBEntry, id uint64, schema *Schema) *TableEntry {
 
 func NewReplayTableEntry() *TableEntry {
 	e := &TableEntry{
-		BaseEntry: new(BaseEntry),
-		link:      new(common.Link),
-		entries:   make(map[uint64]*common.DLNode),
+		TableBaseEntry: NewReplayTableBaseEntry(),
+		link:           common.NewGenericSortedDList(compareSegmentFn),
+		entries:        make(map[uint64]*common.GenericDLNode[*SegmentEntry]),
 	}
 	return e
 }
 
 func MockStaloneTableEntry(id uint64, schema *Schema) *TableEntry {
 	return &TableEntry{
-		BaseEntry: &BaseEntry{
-			RWMutex: new(sync.RWMutex),
-			ID:      id,
-		},
-		schema:  schema,
-		link:    new(common.Link),
-		entries: make(map[uint64]*common.DLNode),
+		TableBaseEntry: NewTableBaseEntry(id),
+		schema:         schema,
+		link:           common.NewGenericSortedDList(compareSegmentFn),
+		entries:        make(map[uint64]*common.GenericDLNode[*SegmentEntry]),
 	}
 }
 
@@ -147,13 +146,13 @@ func (entry *TableEntry) GetSegmentByID(id uint64) (seg *SegmentEntry, err error
 	if node == nil {
 		return nil, ErrNotFound
 	}
-	return node.GetPayload().(*SegmentEntry), nil
+	return node.GetPayload(), nil
 }
 
-func (entry *TableEntry) MakeSegmentIt(reverse bool) *common.LinkIt {
+func (entry *TableEntry) MakeSegmentIt(reverse bool) *common.GenericSortedDListIt[*SegmentEntry] {
 	entry.RLock()
 	defer entry.RUnlock()
-	return common.NewLinkIt(entry.RWMutex, entry.link, reverse)
+	return common.NewGenericSortedDListIt(entry.RWMutex, entry.link, reverse)
 }
 
 func (entry *TableEntry) CreateSegment(txn txnif.AsyncTxn, state EntryState, dataFactory SegmentDataFactory) (created *SegmentEntry, err error) {
@@ -165,12 +164,9 @@ func (entry *TableEntry) CreateSegment(txn txnif.AsyncTxn, state EntryState, dat
 }
 
 func (entry *TableEntry) MakeCommand(id uint32) (cmd txnif.TxnCmd, err error) {
-	cmdType := CmdCreateTable
+	cmdType := CmdUpdateTable
 	entry.RLock()
 	defer entry.RUnlock()
-	if entry.CurrOp == OpSoftDelete {
-		cmdType = CmdDropTable
-	}
 	return newTableCmd(id, cmdType, entry), nil
 }
 
@@ -193,9 +189,11 @@ func (entry *TableEntry) GetSchema() *Schema {
 	return entry.schema
 }
 
-func (entry *TableEntry) Compare(o common.NodePayload) int {
-	oe := o.(*TableEntry).BaseEntry
-	return entry.DoCompre(oe)
+func (entry *TableEntry) GetFullName() string {
+	if len(entry.fullName) == 0 {
+		entry.fullName = genTblFullName(entry.schema.AcInfo.TenantID, entry.schema.Name)
+	}
+	return entry.fullName
 }
 
 func (entry *TableEntry) GetDB() *DBEntry {
@@ -210,7 +208,7 @@ func (entry *TableEntry) PPString(level common.PPLevel, depth int, prefix string
 	}
 	it := entry.MakeSegmentIt(true)
 	for it.Valid() {
-		segment := it.Get().GetPayload().(*SegmentEntry)
+		segment := it.Get().GetPayload()
 		_ = w.WriteByte('\n')
 		_, _ = w.WriteString(segment.PPString(level, depth+1, prefix))
 		it.Next()
@@ -225,7 +223,7 @@ func (entry *TableEntry) String() string {
 }
 
 func (entry *TableEntry) StringLocked() string {
-	return fmt.Sprintf("TABLE%s[name=%s]", entry.BaseEntry.String(), entry.schema.Name)
+	return fmt.Sprintf("TABLE%s[name=%s]", entry.TableBaseEntry.StringLocked(), entry.schema.Name)
 }
 
 func (entry *TableEntry) GetCatalog() *Catalog { return entry.db.catalog }
@@ -235,7 +233,7 @@ func (entry *TableEntry) GetTableData() data.Table { return entry.tableData }
 func (entry *TableEntry) LastAppendableSegmemt() (seg *SegmentEntry) {
 	it := entry.MakeSegmentIt(false)
 	for it.Valid() {
-		itSeg := it.Get().GetPayload().(*SegmentEntry)
+		itSeg := it.Get().GetPayload()
 		if itSeg.IsAppendable() {
 			seg = itSeg
 			break
@@ -254,7 +252,7 @@ func (entry *TableEntry) AsCommonID() *common.ID {
 func (entry *TableEntry) RecurLoop(processor Processor) (err error) {
 	segIt := entry.MakeSegmentIt(true)
 	for segIt.Valid() {
-		segment := segIt.Get().GetPayload().(*SegmentEntry)
+		segment := segIt.Get().GetPayload()
 		if err = processor.OnSegment(segment); err != nil {
 			if err == ErrStopCurrRecur {
 				err = nil
@@ -265,7 +263,7 @@ func (entry *TableEntry) RecurLoop(processor Processor) (err error) {
 		}
 		blkIt := segment.MakeBlockIt(true)
 		for blkIt.Valid() {
-			block := blkIt.Get().GetPayload().(*BlockEntry)
+			block := blkIt.Get().GetPayload()
 			if err = processor.OnBlock(block); err != nil {
 				if err == ErrStopCurrRecur {
 					err = nil
@@ -294,6 +292,12 @@ func (entry *TableEntry) DropSegmentEntry(id uint64, txn txnif.AsyncTxn) (delete
 	}
 	seg.Lock()
 	defer seg.Unlock()
+	needWait, waitTxn := seg.NeedWaitCommitting(txn.GetStartTS())
+	if needWait {
+		seg.Unlock()
+		waitTxn.GetTxnState(true)
+		seg.Lock()
+	}
 	err = seg.DropEntryLocked(txn)
 	if err == nil {
 		deleted = seg
@@ -310,22 +314,22 @@ func (entry *TableEntry) RemoveEntry(segment *SegmentEntry) (err error) {
 }
 
 func (entry *TableEntry) PrepareRollback() (err error) {
-	entry.RLock()
-	currOp := entry.CurrOp
-	entry.RUnlock()
-	if currOp == OpCreate {
-		if err = entry.GetDB().RemoveEntry(entry); err != nil {
+	var isEmpty bool
+	isEmpty, err = entry.TableBaseEntry.PrepareRollback()
+	if err != nil {
+		return
+	}
+	if isEmpty {
+		err = entry.GetDB().RemoveEntry(entry)
+		if err != nil {
 			return
 		}
-	}
-	if err = entry.BaseEntry.PrepareRollback(); err != nil {
-		return
 	}
 	return
 }
 
 func (entry *TableEntry) WriteTo(w io.Writer) (n int64, err error) {
-	if n, err = entry.BaseEntry.WriteTo(w); err != nil {
+	if n, err = entry.TableBaseEntry.WriteAllTo(w); err != nil {
 		return
 	}
 	buf, err := entry.schema.Marshal()
@@ -339,7 +343,7 @@ func (entry *TableEntry) WriteTo(w io.Writer) (n int64, err error) {
 }
 
 func (entry *TableEntry) ReadFrom(r io.Reader) (n int64, err error) {
-	if n, err = entry.BaseEntry.ReadFrom(r); err != nil {
+	if n, err = entry.TableBaseEntry.ReadAllFrom(r); err != nil {
 		return
 	}
 	if entry.schema == nil {
@@ -355,34 +359,24 @@ func (entry *TableEntry) MakeLogEntry() *EntryCommand {
 	return newTableCmd(0, CmdLogTable, entry)
 }
 
-func (entry *TableEntry) Clone() CheckpointItem {
-	cloned := &TableEntry{
-		BaseEntry: entry.BaseEntry.Clone(),
-		schema:    entry.schema,
-		db:        entry.db,
+func (entry *TableEntry) GetCheckpointItems(start, end types.TS) CheckpointItems {
+	ret := entry.CloneCommittedInRange(start, end)
+	if ret == nil {
+		return nil
 	}
-	return cloned
+	return &TableEntry{
+		TableBaseEntry: ret.(*TableBaseEntry),
+		schema:         entry.schema,
+		db:             entry.db,
+	}
 }
 
-func (entry *TableEntry) CloneCreate() CheckpointItem {
-	cloned := &TableEntry{
-		BaseEntry: entry.BaseEntry.CloneCreate(),
-		schema:    entry.schema,
-		db:        entry.db,
-	}
-	return cloned
-}
-
-// CloneCreateEntry is for collect commands
 func (entry *TableEntry) CloneCreateEntry() *TableEntry {
-	cloned := &TableEntry{
-		BaseEntry: entry.BaseEntry.Clone(),
-		schema:    entry.schema,
-		db:        entry.db,
+	return &TableEntry{
+		TableBaseEntry: entry.TableBaseEntry.CloneCreateEntry().(*TableBaseEntry),
+		db:             entry.db,
+		schema:         entry.schema,
 	}
-	cloned.CurrOp = OpCreate
-	cloned.RWMutex = &sync.RWMutex{}
-	return cloned
 }
 
 // IsActive is coarse API: no consistency check

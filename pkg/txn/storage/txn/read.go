@@ -109,6 +109,8 @@ func handleRead[Req any, Resp any](
 	}
 
 	var resp Resp
+	defer logReq("read", req, txnMeta, &resp, &err)()
+
 	err = fn(txnMeta, req, &resp)
 	if err != nil {
 		return nil, err

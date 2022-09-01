@@ -344,22 +344,24 @@ func (mp *MysqlProtocolImpl) SetSession(ses *Session) {
 
 // handshake response 41
 type response41 struct {
-	capabilities     uint32
-	maxPacketSize    uint32
-	collationID      uint8
-	username         string
-	authResponse     []byte
-	database         string
-	clientPluginName string
+	capabilities      uint32
+	maxPacketSize     uint32
+	collationID       uint8
+	username          string
+	authResponse      []byte
+	database          string
+	clientPluginName  string
+	isAskForTlsHeader bool
 }
 
 // handshake response 320
 type response320 struct {
-	capabilities  uint32
-	maxPacketSize uint32
-	username      string
-	authResponse  []byte
-	database      string
+	capabilities      uint32
+	maxPacketSize     uint32
+	username          string
+	authResponse      []byte
+	database          string
+	isAskForTlsHeader bool
 }
 
 func (mp *MysqlProtocolImpl) SendPrepareResponse(stmt *PrepareStmt) error {
@@ -909,9 +911,9 @@ func (mp *MysqlProtocolImpl) writeZeros(data []byte, pos int, count int) int {
 // and judges it with the authentication data from the client.
 // Algorithm: SHA1( password ) XOR SHA1( slat + SHA1( SHA1( password ) ) )
 func (mp *MysqlProtocolImpl) checkPassword(password, salt, auth []byte) bool {
-	if len(password) == 0 {
-		return false
-	}
+	//if len(password) == 0 {
+	//	return false
+	//}
 	//hash1 = SHA1(password)
 	sha := sha1.New()
 	_, err := sha.Write(password)
@@ -960,23 +962,39 @@ func (mp *MysqlProtocolImpl) authenticateUser(authResponse []byte) error {
 	//TODO:check the user and the connection
 	//TODO:get the user's password
 	var psw []byte
-	if mp.username == mp.SV.DumpUser { //the user dump for test
-		psw = []byte(mp.SV.DumpPassword)
-	}
+	var err error
 
 	if !mp.GetSkipCheckUser() {
-		err := mp.ses.AuthenticateUser(mp.username)
+		psw, err = mp.ses.AuthenticateUser(mp.username)
 		if err != nil {
 			return err
 		}
+
+		//TO Check password
+		if mp.checkPassword(psw, mp.salt, authResponse) {
+			logutil.Infof("check password succeeded\n")
+		} else {
+			return fmt.Errorf("check password failed")
+		}
+	} else {
+		//Get tenant info
+		tenant, err := GetTenantInfo(mp.username)
+		if err != nil {
+			return err
+		}
+
+		if mp.ses != nil {
+			mp.ses.SetTenantInfo(tenant)
+
+			//TO Check password
+			if len(psw) == 0 || mp.checkPassword(psw, mp.salt, authResponse) {
+				logutil.Infof("check password succeeded\n")
+			} else {
+				return fmt.Errorf("check password failed")
+			}
+		}
 	}
 
-	//TO Check password
-	if mp.checkPassword(psw, mp.salt, authResponse) {
-		logutil.Infof("check password succeeded\n")
-	} else {
-		return fmt.Errorf("check password failed")
-	}
 	return nil
 }
 
@@ -984,27 +1002,32 @@ func (mp *MysqlProtocolImpl) setSequenceID(value uint8) {
 	mp.sequenceId = value
 }
 
-func (mp *MysqlProtocolImpl) handleHandshake(payload []byte) error {
+func (mp *MysqlProtocolImpl) handleHandshake(payload []byte) (bool, error) {
 	if len(payload) < 2 {
-		return fmt.Errorf("received a broken response packet")
+		return false, fmt.Errorf("received a broken response packet")
 	}
 
 	var authResponse []byte
 	if capabilities, _, ok := mp.io.ReadUint16(payload, 0); !ok {
-		return fmt.Errorf("read capabilities from response packet failed")
+		return false, fmt.Errorf("read capabilities from response packet failed")
 	} else if uint32(capabilities)&CLIENT_PROTOCOL_41 != 0 {
 		var resp41 response41
 		var ok bool
 		var err error
 		if ok, resp41, err = mp.analyseHandshakeResponse41(payload); !ok {
-			return err
+			return false, err
+		}
+
+		// client ask server to upgradeTls
+		if resp41.isAskForTlsHeader {
+			return true, nil
 		}
 
 		authResponse = resp41.authResponse
-		mp.capability = DefaultCapability & resp41.capabilities
+		mp.capability = mp.capability & resp41.capabilities
 
 		if nameAndCharset, ok := collationID2CharsetAndName[int(resp41.collationID)]; !ok {
-			return fmt.Errorf("get collationName and charset failed")
+			return false, fmt.Errorf("get collationName and charset failed")
 		} else {
 			mp.collationID = int(resp41.collationID)
 			mp.collationName = nameAndCharset.collationName
@@ -1019,11 +1042,16 @@ func (mp *MysqlProtocolImpl) handleHandshake(payload []byte) error {
 		var ok bool
 		var err error
 		if ok, resp320, err = mp.analyseHandshakeResponse320(payload); !ok {
-			return err
+			return false, err
+		}
+
+		// client ask server to upgradeTls
+		if resp320.isAskForTlsHeader {
+			return true, nil
 		}
 
 		authResponse = resp320.authResponse
-		mp.capability = DefaultCapability & resp320.capabilities
+		mp.capability = mp.capability & resp320.capabilities
 		mp.collationID = int(Utf8mb4CollationID)
 		mp.collationName = "utf8mb4_general_ci"
 		mp.charset = "utf8mb4"
@@ -1036,14 +1064,14 @@ func (mp *MysqlProtocolImpl) handleHandshake(payload []byte) error {
 	if err := mp.authenticateUser(authResponse); err != nil {
 		fail := errorMsgRefer[ER_ACCESS_DENIED_ERROR]
 		_ = mp.sendErrPacket(fail.errorCode, fail.sqlStates[0], "Access denied for user")
-		return err
+		return false, err
 	}
 
 	err := mp.sendOKPacket(0, 0, 0, 0, "")
 	if err != nil {
-		return err
+		return false, err
 	}
-	return nil
+	return false, nil
 }
 
 // the server makes a handshake v10 packet
@@ -1067,7 +1095,7 @@ func (mp *MysqlProtocolImpl) makeHandshakeV10Payload() []byte {
 	pos = mp.io.WriteUint8(data, pos, 0)
 
 	//int<2>              capabilities flags (lower 2 bytes)
-	pos = mp.io.WriteUint16(data, pos, uint16(DefaultCapability&0xFFFF))
+	pos = mp.io.WriteUint16(data, pos, uint16(mp.capability&0xFFFF))
 
 	//int<1>              character set
 	pos = mp.io.WriteUint8(data, pos, utf8mb4BinCollationID)
@@ -1142,6 +1170,12 @@ func (mp *MysqlProtocolImpl) analyseHandshakeResponse41(data []byte) (bool, resp
 	//string[23]         reserved (all [0])
 	//just skip it
 	pos += 23
+
+	// if client reply for upgradeTls, then data will contains header only.
+	if pos == len(data) && (info.capabilities&CLIENT_SSL) != 0 {
+		info.isAskForTlsHeader = true
+		return true, info, nil
+	}
 
 	//string[NUL]        username
 	info.username, pos, ok = mp.readStringNUL(data, pos)
@@ -1273,6 +1307,12 @@ func (mp *MysqlProtocolImpl) analyseHandshakeResponse320(data []byte) (bool, res
 	//max size of a command packet that the client wants to send to the server
 	info.maxPacketSize = uint32(data[pos]) | uint32(data[pos+1])<<8 | uint32(data[pos+2])<<16
 	pos += 3
+
+	// if client reply for upgradeTls, then data will contains header only.
+	if pos == len(data) && (info.capabilities&CLIENT_SSL) != 0 {
+		info.isAskForTlsHeader = true
+		return true, info, nil
+	}
 
 	//string[NUL]        username
 	info.username, pos, ok = mp.readStringNUL(data, pos)
@@ -1764,7 +1804,7 @@ func (mp *MysqlProtocolImpl) SendResultSetTextBatchRowSpeedup(mrs *MysqlResultSe
 // open a new row of the resultset
 func (mp *MysqlProtocolImpl) openRow(_ []byte) error {
 	if mp.enableLog {
-		fmt.Println("openRow")
+		logutil.Info("openRow")
 	}
 	return mp.openPacket()
 }
@@ -1772,7 +1812,7 @@ func (mp *MysqlProtocolImpl) openRow(_ []byte) error {
 // close a finished row of the resultset
 func (mp *MysqlProtocolImpl) closeRow(_ []byte) error {
 	if mp.enableLog {
-		fmt.Println("closeRow")
+		logutil.Info("closeRow")
 	}
 
 	err := mp.closePacket(true)
@@ -1790,7 +1830,7 @@ func (mp *MysqlProtocolImpl) closeRow(_ []byte) error {
 // flushOutBuffer the data in the outbuf into the network
 func (mp *MysqlProtocolImpl) flushOutBuffer() error {
 	if mp.enableLog {
-		fmt.Println("flush")
+		logutil.Info("flush")
 	}
 
 	if mp.bytesInOutBuffer >= mp.untilBytesInOutbufToFlush {
@@ -1809,7 +1849,7 @@ func (mp *MysqlProtocolImpl) flushOutBuffer() error {
 // open a new mysql protocol packet
 func (mp *MysqlProtocolImpl) openPacket() error {
 	if mp.enableLog {
-		fmt.Println("openPacket")
+		logutil.Info("openPacket")
 	}
 
 	outbuf := mp.tcpConn.OutBuf()
@@ -1885,7 +1925,7 @@ func (mp *MysqlProtocolImpl) fillPacket(elems ...byte) error {
 // close a mysql protocol packet
 func (mp *MysqlProtocolImpl) closePacket(appendZeroPacket bool) error {
 	if mp.enableLog {
-		fmt.Println("closePacket")
+		logutil.Info("closePacket")
 	}
 	if !mp.isInPacket() {
 		return nil
@@ -2162,6 +2202,10 @@ func NewMysqlClientProtocol(connectionID uint32, tcp goetty.IOSession, maxBytesT
 			enableLog:                 false,
 		},
 		SV: SV,
+	}
+
+	if SV.EnableTls {
+		mysql.capability = mysql.capability | CLIENT_SSL
 	}
 
 	mysql.resetPacket()
