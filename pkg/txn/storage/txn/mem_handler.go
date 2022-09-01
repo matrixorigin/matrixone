@@ -810,6 +810,10 @@ func (m *MemHandler) HandleRead(meta txn.TxnMeta, req txnengine.ReadReq, resp *t
 				resp.ErrColumnNotFound.Name = name
 				return nil
 			}
+			str, ok := value.(string)
+			if ok {
+				value = []byte(str)
+			}
 			b.Vecs[i].Append(value, m.mheap)
 		}
 		rows++
