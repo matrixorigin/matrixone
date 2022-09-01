@@ -137,7 +137,14 @@ func newS3FS(
 	options ...func(*s3.Options),
 ) (*S3FS, error) {
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second*7)
+	if endpoint == "" {
+		return nil, fmt.Errorf("%w: empty endpoint", ErrBadS3Config)
+	}
+	if bucket == "" {
+		return nil, fmt.Errorf("%w: empty bucket", ErrBadS3Config)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*17)
 	defer cancel()
 
 	cfg, err := config.LoadDefaultConfig(ctx,
@@ -151,6 +158,14 @@ func newS3FS(
 		cfg,
 		options...,
 	)
+
+	// head bucket to validate config
+	_, err = client.HeadBucket(ctx, &s3.HeadBucketInput{
+		Bucket: ptrTo(bucket),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("bad s3 config: %w", err)
+	}
 
 	fs := &S3FS{
 		name:      name,
