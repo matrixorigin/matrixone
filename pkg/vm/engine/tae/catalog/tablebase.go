@@ -79,7 +79,8 @@ func (be *TableBaseEntry) PPString(level common.PPLevel, depth int, prefix strin
 func (be *TableBaseEntry) GetTs() types.TS {
 	return be.GetUpdateNodeLocked().(*TableMVCCNode).End
 }
-func (be *TableBaseEntry) GetTxn() txnif.TxnReader { return be.getUpdateNodeLocked().Txn }
+
+func (be *TableBaseEntry) GetTxn() txnif.TxnReader { return be.getUpdateNodeLocked().GetTxn() }
 
 func (be *TableBaseEntry) TryGetTerminatedTS(waitIfcommitting bool) (terminated bool, TS types.TS) {
 	vnode := be.GetCommittedNode()
@@ -92,6 +93,7 @@ func (be *TableBaseEntry) TryGetTerminatedTS(waitIfcommitting bool) (terminated 
 	}
 	return
 }
+
 func (be *TableBaseEntry) GetID() uint64 { return be.ID }
 
 func (be *TableBaseEntry) GetIndexes() []*wal.Index {
@@ -103,10 +105,12 @@ func (be *TableBaseEntry) GetIndexes() []*wal.Index {
 	}, true)
 	return ret
 }
+
 func (be *TableBaseEntry) InsertNode(vun MVCCNodeIf) {
 	un := vun.(*TableMVCCNode)
 	be.MVCC.Insert(un)
 }
+
 func (be *TableBaseEntry) CreateWithTS(ts types.TS) {
 	node := &TableMVCCNode{
 		EntryMVCCNode: &EntryMVCCNode{
@@ -119,6 +123,7 @@ func (be *TableBaseEntry) CreateWithTS(ts types.TS) {
 	}
 	be.InsertNode(node)
 }
+
 func (be *TableBaseEntry) CreateWithTxn(txn txnif.AsyncTxn) {
 	var startTS types.TS
 	if txn != nil {
@@ -133,20 +138,19 @@ func (be *TableBaseEntry) CreateWithTxn(txn txnif.AsyncTxn) {
 	}
 	be.InsertNode(node)
 }
-func (be *TableBaseEntry) ExistUpdate(minTs, MaxTs types.TS) (exist bool) {
-	be.MVCC.Loop(func(n *common.GenericDLNode[*TableMVCCNode]) bool {
+
+func (be *TableBaseEntry) ExistUpdate(minTs, maxTs types.TS) (exist bool) {
+	be.MVCC.Loop(func(n *common.GenericDLNode[*TableMVCCNode]) (gonext bool) {
 		un := n.GetPayload()
-		if un.End.IsEmpty() {
+		compare := un.CompareTS(minTs, maxTs)
+		if compare > 0 {
 			return true
 		}
-		if un.End.Less(minTs) {
-			return false
-		}
-		if un.End.GreaterEq(minTs) && un.End.LessEq(MaxTs) {
+		if compare == 0 {
 			exist = true
 			return false
 		}
-		return true
+		return false
 	}, false)
 	return
 }
@@ -160,9 +164,7 @@ func (be *TableBaseEntry) DeleteLocked(txn txnif.TxnReader, impl INode) (node IN
 			return
 		}
 		nbe := entry.cloneData()
-		nbe.Start = txn.GetStartTS()
-		nbe.End = types.TS{}
-		nbe.Txn = txn
+		nbe.TxnMVCCNode = NewTxnMVCCNodeWithTxn(txn)
 		be.InsertNode(nbe)
 		node = impl
 		err = nbe.ApplyDeleteLocked()
@@ -177,16 +179,7 @@ func (be *TableBaseEntry) DeleteLocked(txn txnif.TxnReader, impl INode) (node IN
 // It is useful in making command, apply state(e.g. ApplyCommit),
 // check confilct.
 func (be *TableBaseEntry) GetUpdateNodeLocked() MVCCNodeIf {
-	head := be.MVCC.GetHead()
-	if head == nil {
-		return nil
-	}
-	payload := head.GetPayload()
-	if payload == nil {
-		return nil
-	}
-	entry := payload
-	return entry
+	return be.getUpdateNodeLocked()
 }
 
 func (be *TableBaseEntry) getUpdateNodeLocked() *TableMVCCNode {
@@ -220,20 +213,14 @@ func (be *TableBaseEntry) GetCommittedNode() (node MVCCNodeIf) {
 // It returns the UpdateNode in the same txn as the read txn
 // or returns the latest UpdateNode with commitTS less than the timestamp.
 func (be *TableBaseEntry) GetNodeToRead(startts types.TS) (node MVCCNodeIf) {
-	be.MVCC.Loop(func(n *common.GenericDLNode[*TableMVCCNode]) bool {
+	be.MVCC.Loop(func(n *common.GenericDLNode[*TableMVCCNode]) (goNext bool) {
 		un := n.GetPayload()
-		if un.IsSameTxn(startts) {
+		var canRead bool
+		canRead, goNext = un.TxnCanRead(startts)
+		if canRead {
 			node = un
-			return false
 		}
-		if un.IsActive() || un.IsCommitting() {
-			return true
-		}
-		if un.End.LessEq(startts) {
-			node = un
-			return false
-		}
-		return true
+		return
 	}, false)
 	return
 }
@@ -251,7 +238,7 @@ func (be *TableBaseEntry) DeleteBefore(ts types.TS) bool {
 func (be *TableBaseEntry) GetExactUpdateNode(startts types.TS) (node MVCCNodeIf) {
 	be.MVCC.Loop(func(n *common.GenericDLNode[*TableMVCCNode]) bool {
 		un := n.GetPayload()
-		if un.Start == startts {
+		if un.IsSameStartTs(startts) {
 			node = un
 			return false
 		}
@@ -262,21 +249,15 @@ func (be *TableBaseEntry) GetExactUpdateNode(startts types.TS) (node MVCCNodeIf)
 }
 
 func (be *TableBaseEntry) NeedWaitCommitting(startTS types.TS) (bool, txnif.TxnReader) {
-	un := be.GetUpdateNodeLocked().(*TableMVCCNode)
+	un := be.getUpdateNodeLocked()
 	if un == nil {
 		return false, nil
 	}
-	if !un.IsCommitting() {
-		return false, nil
-	}
-	if un.Txn.GetCommitTS().GreaterEq(startTS) {
-		return false, nil
-	}
-	return true, un.Txn
+	return un.NeedWaitCommitting(startTS)
 }
 
 func (be *TableBaseEntry) InTxnOrRollbacked() bool {
-	un := be.GetUpdateNodeLocked()
+	un := be.getUpdateNodeLocked()
 	if un == nil {
 		return true
 	}
@@ -292,18 +273,8 @@ func (be *TableBaseEntry) IsDroppedCommitted() bool {
 }
 
 func (be *TableBaseEntry) PrepareWrite(txn txnif.TxnReader) (err error) {
-	node := be.GetUpdateNodeLocked().(*TableMVCCNode)
-	if node.IsActive() {
-		if node.IsSameTxn(txn.GetStartTS()) {
-			return
-		}
-		return txnif.ErrTxnWWConflict
-	}
-
-	if node.End.Greater(txn.GetStartTS()) {
-		return txnif.ErrTxnWWConflict
-	}
-	return
+	node := be.getUpdateNodeLocked()
+	return node.PrepareWrite(txn.GetStartTS())
 }
 
 func (be *TableBaseEntry) WriteOneNodeTo(w io.Writer) (n int64, err error) {
@@ -424,7 +395,7 @@ func (be *TableBaseEntry) GetLogIndex() []*wal.Index {
 	if node == nil {
 		return nil
 	}
-	return node.LogIndex
+	return node.GetLogIndex()
 }
 
 func (be *TableBaseEntry) TxnCanRead(txn txnif.AsyncTxn, mu *sync.RWMutex) (canRead bool, err error) {
@@ -437,16 +408,7 @@ func (be *TableBaseEntry) TxnCanRead(txn txnif.AsyncTxn, mu *sync.RWMutex) (canR
 	canRead = be.ExistedForTs(txn.GetStartTS())
 	return
 }
-func (be *TableBaseEntry) MetaTxnCanRead(txn txnif.AsyncTxn, mu *sync.RWMutex) (canRead bool, err error) {
-	needWait, txnToWait := be.NeedWaitCommitting(txn.GetStartTS())
-	if needWait {
-		mu.RUnlock()
-		txnToWait.GetTxnState(true)
-		mu.RLock()
-	}
-	canRead = be.ExistedForTs(txn.GetStartTS())
-	return
-}
+
 func (be *TableBaseEntry) CloneCreateEntry() BaseEntryIf {
 	cloned := &TableBaseEntry{
 		MVCC:    common.NewGenericSortedDList(compareTableMVCCNode),
@@ -480,7 +442,7 @@ func (be *TableBaseEntry) DropEntryLocked(txnCtx txnif.TxnReader) error {
 // It's Committed when its state will never change, i.e. TxnStateCommitted and  TxnStateRollbacked.
 // It's Committing when it's in any other state, including TxnStateCommitting, TxnStateRollbacking, TxnStatePrepared and so on. When read or write an entry, if the last txn of the entry is Committing, we wait for it. When write on an Entry, if there's an Active txn, we report w-w conflict.
 func (be *TableBaseEntry) IsCommitting() bool {
-	node := be.GetUpdateNodeLocked()
+	node := be.getUpdateNodeLocked()
 	if node == nil {
 		return false
 	}
@@ -554,17 +516,14 @@ func (be *TableBaseEntry) IsCommitted() bool {
 func (be *TableBaseEntry) CloneCommittedInRange(start, end types.TS) (ret BaseEntryIf) {
 	be.MVCC.Loop(func(n *common.GenericDLNode[*TableMVCCNode]) bool {
 		un := n.GetPayload()
-		if un.IsActive() {
-			return true
-		}
-		// 1. Committed
-		if un.End.GreaterEq(start) && un.End.LessEq(end) {
+		compare := un.CompareTS(start, end)
+		if compare == 0 {
 			if ret == nil {
 				ret = NewTableBaseEntry(be.ID)
 			}
 			ret.InsertNode(un.CloneAll())
 			ret.(*TableBaseEntry).length++
-		} else if un.End.Greater(end) {
+		} else if compare > 0 {
 			return false
 		}
 		return true

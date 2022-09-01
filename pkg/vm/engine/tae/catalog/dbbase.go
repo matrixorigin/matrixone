@@ -133,20 +133,18 @@ func (be *DBBaseEntry) CreateWithTxn(txn txnif.AsyncTxn) {
 	}
 	be.InsertNode(node)
 }
-func (be *DBBaseEntry) ExistUpdate(minTs, MaxTs types.TS) (exist bool) {
+func (be *DBBaseEntry) ExistUpdate(minTs, maxTs types.TS) (exist bool) {
 	be.MVCC.Loop(func(n *common.GenericDLNode[*DBMVCCNode]) bool {
 		un := n.GetPayload()
-		if un.End.IsEmpty() {
+		compare := un.CompareTS(minTs, maxTs)
+		if compare > 0 {
 			return true
 		}
-		if un.End.Less(minTs) {
-			return false
-		}
-		if un.End.GreaterEq(minTs) && un.End.LessEq(MaxTs) {
+		if compare == 0 {
 			exist = true
 			return false
 		}
-		return true
+		return false
 	}, false)
 	return
 }
@@ -160,9 +158,7 @@ func (be *DBBaseEntry) DeleteLocked(txn txnif.TxnReader, impl INode) (node INode
 			return
 		}
 		nbe := entry.cloneData()
-		nbe.Start = txn.GetStartTS()
-		nbe.End = types.TS{}
-		nbe.Txn = txn
+		nbe.TxnMVCCNode = NewTxnMVCCNodeWithTxn(txn)
 		be.InsertNode(nbe)
 		node = impl
 		err = nbe.ApplyDeleteLocked()
@@ -177,16 +173,7 @@ func (be *DBBaseEntry) DeleteLocked(txn txnif.TxnReader, impl INode) (node INode
 // It is useful in making command, apply state(e.g. ApplyCommit),
 // check confilct.
 func (be *DBBaseEntry) GetUpdateNodeLocked() MVCCNodeIf {
-	head := be.MVCC.GetHead()
-	if head == nil {
-		return nil
-	}
-	payload := head.GetPayload()
-	if payload == nil {
-		return nil
-	}
-	entry := payload
-	return entry
+	return be.getUpdateNodeLocked()
 }
 
 func (be *DBBaseEntry) getUpdateNodeLocked() *DBMVCCNode {
@@ -220,20 +207,14 @@ func (be *DBBaseEntry) GetCommittedNode() (node MVCCNodeIf) {
 // It returns the UpdateNode in the same txn as the read txn
 // or returns the latest UpdateNode with commitTS less than the timestamp.
 func (be *DBBaseEntry) GetNodeToRead(startts types.TS) (node MVCCNodeIf) {
-	be.MVCC.Loop(func(n *common.GenericDLNode[*DBMVCCNode]) bool {
+	be.MVCC.Loop(func(n *common.GenericDLNode[*DBMVCCNode]) (goNext bool) {
 		un := n.GetPayload()
-		if un.IsSameTxn(startts) {
+		var canRead bool
+		canRead, goNext = un.TxnCanRead(startts)
+		if canRead {
 			node = un
-			return false
 		}
-		if un.IsActive() || un.IsCommitting() {
-			return true
-		}
-		if un.End.LessEq(startts) {
-			node = un
-			return false
-		}
-		return true
+		return
 	}, false)
 	return
 }
@@ -276,7 +257,7 @@ func (be *DBBaseEntry) NeedWaitCommitting(startTS types.TS) (bool, txnif.TxnRead
 }
 
 func (be *DBBaseEntry) InTxnOrRollbacked() bool {
-	un := be.GetUpdateNodeLocked()
+	un := be.getUpdateNodeLocked()
 	if un == nil {
 		return true
 	}
@@ -293,17 +274,7 @@ func (be *DBBaseEntry) IsDroppedCommitted() bool {
 
 func (be *DBBaseEntry) PrepareWrite(txn txnif.TxnReader) (err error) {
 	node := be.getUpdateNodeLocked()
-	if node.IsActive() {
-		if node.IsSameTxn(txn.GetStartTS()) {
-			return
-		}
-		return txnif.ErrTxnWWConflict
-	}
-
-	if node.End.Greater(txn.GetStartTS()) {
-		return txnif.ErrTxnWWConflict
-	}
-	return
+	return node.PrepareWrite(txn.GetStartTS())
 }
 
 func (be *DBBaseEntry) WriteOneNodeTo(w io.Writer) (n int64, err error) {
@@ -424,7 +395,7 @@ func (be *DBBaseEntry) GetLogIndex() []*wal.Index {
 	if node == nil {
 		return nil
 	}
-	return node.LogIndex
+	return node.GetLogIndex()
 }
 
 func (be *DBBaseEntry) TxnCanRead(txn txnif.AsyncTxn, mu *sync.RWMutex) (canRead bool, err error) {
@@ -437,16 +408,7 @@ func (be *DBBaseEntry) TxnCanRead(txn txnif.AsyncTxn, mu *sync.RWMutex) (canRead
 	canRead = be.ExistedForTs(txn.GetStartTS())
 	return
 }
-func (be *DBBaseEntry) MetaTxnCanRead(txn txnif.AsyncTxn, mu *sync.RWMutex) (canRead bool, err error) {
-	needWait, txnToWait := be.NeedWaitCommitting(txn.GetStartTS())
-	if needWait {
-		mu.RUnlock()
-		txnToWait.GetTxnState(true)
-		mu.RLock()
-	}
-	canRead = be.ExistedForTs(txn.GetStartTS())
-	return
-}
+
 func (be *DBBaseEntry) CloneCreateEntry() BaseEntryIf {
 	cloned := &DBBaseEntry{
 		MVCC:    common.NewGenericSortedDList(compareDBMVCCNode),
@@ -480,7 +442,7 @@ func (be *DBBaseEntry) DropEntryLocked(txnCtx txnif.TxnReader) error {
 // It's Committed when its state will never change, i.e. TxnStateCommitted and  TxnStateRollbacked.
 // It's Committing when it's in any other state, including TxnStateCommitting, TxnStateRollbacking, TxnStatePrepared and so on. When read or write an entry, if the last txn of the entry is Committing, we wait for it. When write on an Entry, if there's an Active txn, we report w-w conflict.
 func (be *DBBaseEntry) IsCommitting() bool {
-	node := be.GetUpdateNodeLocked()
+	node := be.getUpdateNodeLocked()
 	if node == nil {
 		return false
 	}
@@ -554,17 +516,14 @@ func (be *DBBaseEntry) IsCommitted() bool {
 func (be *DBBaseEntry) CloneCommittedInRange(start, end types.TS) (ret BaseEntryIf) {
 	be.MVCC.Loop(func(n *common.GenericDLNode[*DBMVCCNode]) bool {
 		un := n.GetPayload()
-		if un.IsActive() {
-			return true
-		}
-		// 1. Committed
-		if un.End.GreaterEq(start) && un.End.LessEq(end) {
+		compare := un.CompareTS(start, end)
+		if compare == 0 {
 			if ret == nil {
 				ret = NewDBBaseEntry(be.ID)
 			}
 			ret.InsertNode(un.CloneAll())
 			ret.(*DBBaseEntry).length++
-		} else if un.End.Greater(end) {
+		} else if compare > 0 {
 			return false
 		}
 		return true

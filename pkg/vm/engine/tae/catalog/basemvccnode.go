@@ -31,6 +31,68 @@ type TxnMVCCNode struct {
 	LogIndex []*wal.Index
 }
 
+func NewTxnMVCCNodeWithTxn(txn txnif.TxnReader) *TxnMVCCNode {
+	return &TxnMVCCNode{
+		Start: txn.GetStartTS(),
+		Txn:   txn,
+	}
+}
+
+// Check w-w confilct
+func (un *TxnMVCCNode) PrepareWrite(startTS types.TS) error {
+	if un.IsActive() {
+		if un.IsSameTxn(startTS) {
+			return nil
+		}
+		return txnif.ErrTxnWWConflict
+	}
+	if un.End.Greater(startTS) {
+		return txnif.ErrTxnWWConflict
+	}
+	return nil
+}
+
+func (un *TxnMVCCNode) IsSameStartTs(startTS types.TS) bool {
+	return un.Start.Equal(startTS)
+}
+
+func (un *TxnMVCCNode) TxnCanRead(startTS types.TS) (canRead, goNext bool) {
+	if un.IsSameTxn(startTS) {
+		return true, false
+	}
+	if un.IsActive() || un.IsCommitting() {
+		return false, true
+	}
+	if un.End.LessEq(startTS) {
+		return true, false
+	}
+	return false, true
+
+}
+
+func (un *TxnMVCCNode) CompareTS(minTS, maxTS types.TS) int {
+	if un.End.IsEmpty() {
+		return 1
+	}
+	if un.End.Less(minTS) {
+		return -1
+	}
+	if un.End.GreaterEq(minTS) && un.End.LessEq(maxTS) {
+		return 0
+	}
+	return 1
+}
+
+func (un *TxnMVCCNode) NeedWaitCommitting(startTS types.TS) (bool, txnif.TxnReader) {
+	if !un.IsCommitting() {
+		return false, nil
+	}
+	if un.Txn.GetCommitTS().GreaterEq(startTS) {
+		return false, nil
+	}
+	return true, un.Txn
+}
+
 func (un *TxnMVCCNode) IsSameTxn(startTS types.TS) bool {
 	if un.Txn == nil {
 		return false

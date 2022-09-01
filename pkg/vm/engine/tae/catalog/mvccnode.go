@@ -15,10 +15,7 @@
 package catalog
 
 import (
-	// "bytes"
-	// "encoding/binary"
 	"errors"
-	// "fmt"
 	"io"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -26,6 +23,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 )
 
+// JXM: TODO
+// Remove MVCCNodeIf after go 1.19.1 release
 type MVCCNodeIf interface {
 	UpdateNode(MVCCNodeIf)
 	GetTxn() txnif.TxnReader

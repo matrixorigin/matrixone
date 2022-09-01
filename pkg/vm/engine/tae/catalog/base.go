@@ -25,7 +25,7 @@ import (
 )
 
 // JXM TODO:
-// Generic BaseEntry can't work in go 1.19 because of golang bug:
+// Generic BaseEntry can't work in go 1.19 because of compiler bug:
 // https://github.com/golang/go/issues/54671
 // Refactor catalog and use generic BaseEntry after go 1.19.1 release.
 type BaseEntryIf interface {
