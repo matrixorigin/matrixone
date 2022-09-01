@@ -22,11 +22,11 @@ import (
 
 func TestFileServices(t *testing.T) {
 	t.Run("file service", func(t *testing.T) {
-		testFileService(t, func() FileService {
+		testFileService(t, func(name string) FileService {
 			dir := t.TempDir()
-			fs, err := NewLocalFS("local", dir, 0)
+			fs, err := NewLocalFS(name, dir, 0)
 			assert.Nil(t, err)
-			fs2, err := NewFileServices("local", fs)
+			fs2, err := NewFileServices(name, fs)
 			assert.Nil(t, err)
 			return fs2
 		})
