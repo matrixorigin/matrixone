@@ -4,7 +4,7 @@ MatrixOne now supports the following client connections to the MatrixOne server:
 
 - MySQL Shell
 - Navicat
-- DBeaver<!--潇哥-->
+- DBeaver
 
 ## Before you start
 
