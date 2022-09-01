@@ -242,3 +242,8 @@ func (m *MemoryFS) Replace(ctx context.Context, vector IOVector) error {
 	defer m.Unlock()
 	return m.write(ctx, vector)
 }
+
+// mark MemoryFS as ETL-compatible to use it as ETL fs in testing
+var _ ETLFileService = new(MemoryFS)
+
+func (m *MemoryFS) ETLCompatible() {}
