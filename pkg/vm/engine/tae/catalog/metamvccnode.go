@@ -23,22 +23,22 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 )
 
-type MetaUpdateNode struct {
-	*EntryUpdateNode
+type MetadataMVCCNode struct {
+	*EntryMVCCNode
 	MetaLoc  string
 	DeltaLoc string
 
-	*VisibleUpdateNode
+	*TxnMVCCNode
 }
 
-func NewEmptyMetaUpdateNode() *MetaUpdateNode {
-	return &MetaUpdateNode{
-		VisibleUpdateNode: &VisibleUpdateNode{},
-		EntryUpdateNode:   &EntryUpdateNode{},
+func NewEmptyMetadataMVCCNode() *MetadataMVCCNode {
+	return &MetadataMVCCNode{
+		TxnMVCCNode:   &TxnMVCCNode{},
+		EntryMVCCNode: &EntryMVCCNode{},
 	}
 }
 
-func (e MetaUpdateNode) CloneAll() UpdateNodeIf {
+func (e MetadataMVCCNode) CloneAll() MVCCNodeIf {
 	n := e.cloneData()
 	// n.State = e.State
 	n.Start = e.Start
@@ -53,16 +53,16 @@ func (e MetaUpdateNode) CloneAll() UpdateNodeIf {
 	return n
 }
 
-func (e *MetaUpdateNode) cloneData() *MetaUpdateNode {
-	return &MetaUpdateNode{
-		EntryUpdateNode:   e.EntryUpdateNode.Clone(),
-		VisibleUpdateNode: &VisibleUpdateNode{},
-		MetaLoc:           e.MetaLoc,
-		DeltaLoc:          e.DeltaLoc,
+func (e *MetadataMVCCNode) cloneData() *MetadataMVCCNode {
+	return &MetadataMVCCNode{
+		EntryMVCCNode: e.EntryMVCCNode.Clone(),
+		TxnMVCCNode:   &TxnMVCCNode{},
+		MetaLoc:       e.MetaLoc,
+		DeltaLoc:      e.DeltaLoc,
 	}
 }
 
-func (e *MetaUpdateNode) String() string {
+func (e *MetadataMVCCNode) String() string {
 	var w bytes.Buffer
 	_, _ = w.WriteString(
 		fmt.Sprintf("[%v,%v][C=%v,D=%v][Loc1=%s,Loc2=%s][Deleted?%v][logIndex=%v]",
@@ -79,8 +79,8 @@ func (e *MetaUpdateNode) String() string {
 }
 
 // for create drop in one txn
-func (e *MetaUpdateNode) UpdateNode(vun UpdateNodeIf) {
-	un := vun.(*MetaUpdateNode)
+func (e *MetadataMVCCNode) UpdateNode(vun MVCCNodeIf) {
+	un := vun.(*MetadataMVCCNode)
 	if e.Start != un.Start {
 		panic("logic err")
 	}
@@ -92,26 +92,26 @@ func (e *MetaUpdateNode) UpdateNode(vun UpdateNodeIf) {
 	e.AddLogIndex(un.LogIndex[0])
 }
 
-func (e *MetaUpdateNode) ApplyUpdate(be *MetaUpdateNode) (err error) {
+func (e *MetadataMVCCNode) ApplyUpdate(be *MetadataMVCCNode) (err error) {
 	// if e.Deleted {
 	// 	// TODO
 	// }
-	e.EntryUpdateNode = be.EntryUpdateNode.Clone()
+	e.EntryMVCCNode = be.EntryMVCCNode.Clone()
 	e.MetaLoc = be.MetaLoc
 	e.DeltaLoc = be.DeltaLoc
 	return
 }
 
-func (e *MetaUpdateNode) ApplyDelete() (err error) {
+func (e *MetadataMVCCNode) ApplyDelete() (err error) {
 	err = e.ApplyDeleteLocked()
 	return
 }
 
-func compareMetaUpdateNode(e, o *MetaUpdateNode) int {
-	return e.Compare(o.VisibleUpdateNode)
+func compareMetadataMVCCNode(e, o *MetadataMVCCNode) int {
+	return e.Compare(o.TxnMVCCNode)
 }
 
-func (e *MetaUpdateNode) Prepare2PCPrepare() (err error) {
+func (e *MetadataMVCCNode) Prepare2PCPrepare() (err error) {
 	if e.CreatedAt.IsEmpty() {
 		e.CreatedAt = e.Txn.GetPrepareTS()
 	}
@@ -122,7 +122,7 @@ func (e *MetaUpdateNode) Prepare2PCPrepare() (err error) {
 	return
 }
 
-func (e *MetaUpdateNode) PrepareCommit() (err error) {
+func (e *MetadataMVCCNode) PrepareCommit() (err error) {
 	if e.CreatedAt.IsEmpty() {
 		e.CreatedAt = e.Txn.GetCommitTS()
 	}
@@ -133,14 +133,14 @@ func (e *MetaUpdateNode) PrepareCommit() (err error) {
 	return
 }
 
-func (e *MetaUpdateNode) WriteTo(w io.Writer) (n int64, err error) {
+func (e *MetadataMVCCNode) WriteTo(w io.Writer) (n int64, err error) {
 	var sn int64
-	sn, err = e.EntryUpdateNode.WriteTo(w)
+	sn, err = e.EntryMVCCNode.WriteTo(w)
 	if err != nil {
 		return
 	}
 	n += sn
-	sn, err = e.VisibleUpdateNode.WriteTo(w)
+	sn, err = e.TxnMVCCNode.WriteTo(w)
 	if err != nil {
 		return
 	}
@@ -176,14 +176,14 @@ func (e *MetaUpdateNode) WriteTo(w io.Writer) (n int64, err error) {
 	return
 }
 
-func (e *MetaUpdateNode) ReadFrom(r io.Reader) (n int64, err error) {
+func (e *MetadataMVCCNode) ReadFrom(r io.Reader) (n int64, err error) {
 	var sn int64
-	sn, err = e.EntryUpdateNode.ReadFrom(r)
+	sn, err = e.EntryMVCCNode.ReadFrom(r)
 	if err != nil {
 		return
 	}
 	n += sn
-	sn, err = e.VisibleUpdateNode.ReadFrom(r)
+	sn, err = e.TxnMVCCNode.ReadFrom(r)
 	if err != nil {
 		return
 	}

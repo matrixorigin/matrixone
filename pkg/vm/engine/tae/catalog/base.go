@@ -39,9 +39,9 @@ type BaseEntryIf interface {
 	GetCurrOp() OpT
 	GetLogIndex() []*wal.Index
 
-	InsertNode(un UpdateNodeIf)
+	InsertNode(un MVCCNodeIf)
 
-	GetUpdateNodeLocked() UpdateNodeIf
+	GetUpdateNodeLocked() MVCCNodeIf
 	TxnCanRead(txn txnif.AsyncTxn, mu *sync.RWMutex) (canRead bool, err error)
 
 	ExistUpdate(minTs, MaxTs types.TS) (exist bool)

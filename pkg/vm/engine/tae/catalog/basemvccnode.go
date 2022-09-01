@@ -23,7 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 )
 
-type VisibleUpdateNode struct {
+type TxnMVCCNode struct {
 	Start, End types.TS
 	Txn        txnif.TxnReader
 	//Aborted bool
@@ -31,40 +31,40 @@ type VisibleUpdateNode struct {
 	LogIndex []*wal.Index
 }
 
-func (un *VisibleUpdateNode) IsSameTxn(startTS types.TS) bool {
+func (un *TxnMVCCNode) IsSameTxn(startTS types.TS) bool {
 	if un.Txn == nil {
 		return false
 	}
 	return un.Txn.GetStartTS().Equal(startTS)
 }
 
-func (un *VisibleUpdateNode) IsActive() bool {
+func (un *TxnMVCCNode) IsActive() bool {
 	if un.Txn == nil {
 		return false
 	}
 	return un.Txn.GetTxnState(false) == txnif.TxnStateActive
 }
 
-func (un *VisibleUpdateNode) IsCommitting() bool {
+func (un *TxnMVCCNode) IsCommitting() bool {
 	if un.Txn == nil {
 		return false
 	}
 	return un.Txn.GetTxnState(false) != txnif.TxnStateActive
 }
 
-func (un *VisibleUpdateNode) GetStart() types.TS {
+func (un *TxnMVCCNode) GetStart() types.TS {
 	return un.Start
 }
 
-func (un *VisibleUpdateNode) GetEnd() types.TS {
+func (un *TxnMVCCNode) GetEnd() types.TS {
 	return un.End
 }
 
-func (un *VisibleUpdateNode) GetTxn() txnif.TxnReader {
+func (un *TxnMVCCNode) GetTxn() txnif.TxnReader {
 	return un.Txn
 }
 
-func (un *VisibleUpdateNode) Compare(o *VisibleUpdateNode) int {
+func (un *TxnMVCCNode) Compare(o *TxnMVCCNode) int {
 	if un.Start.Less(o.Start) {
 		return -1
 	}
@@ -74,28 +74,28 @@ func (un *VisibleUpdateNode) Compare(o *VisibleUpdateNode) int {
 	return 1
 }
 
-func (un *VisibleUpdateNode) AddLogIndex(idx *wal.Index) {
+func (un *TxnMVCCNode) AddLogIndex(idx *wal.Index) {
 	if un.LogIndex == nil {
 		un.LogIndex = make([]*wal.Index, 0)
 	}
 	un.LogIndex = append(un.LogIndex, idx)
 
 }
-func (un *VisibleUpdateNode) GetLogIndex() []*wal.Index {
+func (un *TxnMVCCNode) GetLogIndex() []*wal.Index {
 	return un.LogIndex
 }
-func (un *VisibleUpdateNode) ApplyCommit(index *wal.Index) (err error) {
+func (un *TxnMVCCNode) ApplyCommit(index *wal.Index) (err error) {
 	un.Txn = nil
 	un.AddLogIndex(index)
 	return
 }
 
-func (un *VisibleUpdateNode) ApplyRollback(index *wal.Index) (err error) {
+func (un *TxnMVCCNode) ApplyRollback(index *wal.Index) (err error) {
 	un.AddLogIndex(index)
 	return
 }
 
-func (un *VisibleUpdateNode) WriteTo(w io.Writer) (n int64, err error) {
+func (un *TxnMVCCNode) WriteTo(w io.Writer) (n int64, err error) {
 	if err = binary.Write(w, binary.BigEndian, un.Start); err != nil {
 		return
 	}
@@ -120,7 +120,7 @@ func (un *VisibleUpdateNode) WriteTo(w io.Writer) (n int64, err error) {
 	return
 }
 
-func (un *VisibleUpdateNode) ReadFrom(r io.Reader) (n int64, err error) {
+func (un *TxnMVCCNode) ReadFrom(r io.Reader) (n int64, err error) {
 	if err = binary.Read(r, binary.BigEndian, &un.Start); err != nil {
 		return
 	}
@@ -151,44 +151,44 @@ func (un *VisibleUpdateNode) ReadFrom(r io.Reader) (n int64, err error) {
 	return
 }
 
-// func (un *VisibleUpdateNode) Clone() *VisibleUpdateNode{
-// 	return &VisibleUpdateNode{
+// func (un *TxnMVCCNode) Clone() *TxnMVCCNode{
+// 	return &TxnMVCCNode{
 // 		Start: un.Start,
 // 		End: un.End,
 // 	}
 // }
 
-func (un *VisibleUpdateNode) OnCommit() {
+func (un *TxnMVCCNode) OnCommit() {
 	un.End = un.Txn.GetCommitTS()
 	un.Txn = nil
 }
 
-type EntryUpdateNode struct {
+type EntryMVCCNode struct {
 	CreatedAt, DeletedAt types.TS
 	Deleted              bool
 }
 
-func (un *EntryUpdateNode) HasDropped() bool {
+func (un *EntryMVCCNode) HasDropped() bool {
 	return un.Deleted
 }
 
-func (un *EntryUpdateNode) GetCreatedAt() types.TS {
+func (un *EntryMVCCNode) GetCreatedAt() types.TS {
 	return un.CreatedAt
 }
 
-func (un *EntryUpdateNode) GetDeletedAt() types.TS {
+func (un *EntryMVCCNode) GetDeletedAt() types.TS {
 	return un.DeletedAt
 }
 
-func (un *EntryUpdateNode) Clone() *EntryUpdateNode {
-	return &EntryUpdateNode{
+func (un *EntryMVCCNode) Clone() *EntryMVCCNode {
+	return &EntryMVCCNode{
 		CreatedAt: un.CreatedAt,
 		DeletedAt: un.DeletedAt,
 		Deleted:   un.Deleted,
 	}
 }
 
-func (un *EntryUpdateNode) ApplyDeleteLocked() (err error) {
+func (un *EntryMVCCNode) ApplyDeleteLocked() (err error) {
 	if un.Deleted {
 		panic("cannot apply delete to deleted node")
 	}
@@ -196,7 +196,7 @@ func (un *EntryUpdateNode) ApplyDeleteLocked() (err error) {
 	return
 }
 
-func (un *EntryUpdateNode) ReadFrom(r io.Reader) (n int64, err error) {
+func (un *EntryMVCCNode) ReadFrom(r io.Reader) (n int64, err error) {
 	if err = binary.Read(r, binary.BigEndian, &un.CreatedAt); err != nil {
 		return
 	}
@@ -210,7 +210,7 @@ func (un *EntryUpdateNode) ReadFrom(r io.Reader) (n int64, err error) {
 	}
 	return
 }
-func (un *EntryUpdateNode) WriteTo(w io.Writer) (n int64, err error) {
+func (un *EntryMVCCNode) WriteTo(w io.Writer) (n int64, err error) {
 	if err = binary.Write(w, binary.BigEndian, un.CreatedAt); err != nil {
 		return
 	}

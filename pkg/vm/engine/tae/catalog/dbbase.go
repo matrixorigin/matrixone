@@ -29,7 +29,7 @@ import (
 
 type DBBaseEntry struct {
 	*sync.RWMutex
-	MVCC   *common.GenericSortedDList[*DBUpdateNode]
+	MVCC   *common.GenericSortedDList[*DBMVCCNode]
 	length uint64
 	// meta *
 	ID uint64
@@ -38,7 +38,7 @@ type DBBaseEntry struct {
 func NewReplayDBBaseEntry() *DBBaseEntry {
 	be := &DBBaseEntry{
 		RWMutex: &sync.RWMutex{},
-		MVCC:    common.NewGenericSortedDList(compareDBUpdateNode),
+		MVCC:    common.NewGenericSortedDList(compareDBMVCCNode),
 	}
 	return be
 }
@@ -46,7 +46,7 @@ func NewReplayDBBaseEntry() *DBBaseEntry {
 func NewDBBaseEntry(id uint64) *DBBaseEntry {
 	return &DBBaseEntry{
 		ID:      id,
-		MVCC:    common.NewGenericSortedDList(compareDBUpdateNode),
+		MVCC:    common.NewGenericSortedDList(compareDBMVCCNode),
 		RWMutex: &sync.RWMutex{},
 	}
 }
@@ -86,7 +86,7 @@ func (be *DBBaseEntry) TryGetTerminatedTS(waitIfcommitting bool) (terminated boo
 	if vnode == nil {
 		return
 	}
-	node := vnode.(*DBUpdateNode)
+	node := vnode.(*DBMVCCNode)
 	if node.Deleted {
 		return true, node.DeletedAt
 	}
@@ -96,23 +96,23 @@ func (be *DBBaseEntry) GetID() uint64 { return be.ID }
 
 func (be *DBBaseEntry) GetIndexes() []*wal.Index {
 	ret := make([]*wal.Index, 0)
-	be.MVCC.Loop(func(n *common.GenericDLNode[*DBUpdateNode]) bool {
+	be.MVCC.Loop(func(n *common.GenericDLNode[*DBMVCCNode]) bool {
 		un := n.GetPayload()
 		ret = append(ret, un.LogIndex...)
 		return true
 	}, true)
 	return ret
 }
-func (be *DBBaseEntry) InsertNode(vun UpdateNodeIf) {
-	un := vun.(*DBUpdateNode)
+func (be *DBBaseEntry) InsertNode(vun MVCCNodeIf) {
+	un := vun.(*DBMVCCNode)
 	be.MVCC.Insert(un)
 }
 func (be *DBBaseEntry) CreateWithTS(ts types.TS) {
-	node := &DBUpdateNode{
-		EntryUpdateNode: &EntryUpdateNode{
+	node := &DBMVCCNode{
+		EntryMVCCNode: &EntryMVCCNode{
 			CreatedAt: ts,
 		},
-		VisibleUpdateNode: &VisibleUpdateNode{
+		TxnMVCCNode: &TxnMVCCNode{
 			Start: ts,
 			End:   ts,
 		},
@@ -124,9 +124,9 @@ func (be *DBBaseEntry) CreateWithTxn(txn txnif.AsyncTxn) {
 	if txn != nil {
 		startTS = txn.GetStartTS()
 	}
-	node := &DBUpdateNode{
-		EntryUpdateNode: &EntryUpdateNode{},
-		VisibleUpdateNode: &VisibleUpdateNode{
+	node := &DBMVCCNode{
+		EntryMVCCNode: &EntryMVCCNode{},
+		TxnMVCCNode: &TxnMVCCNode{
 			Start: startTS,
 			Txn:   txn,
 		},
@@ -134,7 +134,7 @@ func (be *DBBaseEntry) CreateWithTxn(txn txnif.AsyncTxn) {
 	be.InsertNode(node)
 }
 func (be *DBBaseEntry) ExistUpdate(minTs, MaxTs types.TS) (exist bool) {
-	be.MVCC.Loop(func(n *common.GenericDLNode[*DBUpdateNode]) bool {
+	be.MVCC.Loop(func(n *common.GenericDLNode[*DBMVCCNode]) bool {
 		un := n.GetPayload()
 		if un.End.IsEmpty() {
 			return true
@@ -176,7 +176,7 @@ func (be *DBBaseEntry) DeleteLocked(txn txnif.TxnReader, impl INode) (node INode
 // GetUpdateNode gets the latest UpdateNode.
 // It is useful in making command, apply state(e.g. ApplyCommit),
 // check confilct.
-func (be *DBBaseEntry) GetUpdateNodeLocked() UpdateNodeIf {
+func (be *DBBaseEntry) GetUpdateNodeLocked() MVCCNodeIf {
 	head := be.MVCC.GetHead()
 	if head == nil {
 		return nil
@@ -189,7 +189,7 @@ func (be *DBBaseEntry) GetUpdateNodeLocked() UpdateNodeIf {
 	return entry
 }
 
-func (be *DBBaseEntry) getUpdateNodeLocked() *DBUpdateNode {
+func (be *DBBaseEntry) getUpdateNodeLocked() *DBMVCCNode {
 	head := be.MVCC.GetHead()
 	if head == nil {
 		return nil
@@ -204,8 +204,8 @@ func (be *DBBaseEntry) getUpdateNodeLocked() *DBUpdateNode {
 
 // GetCommittedNode gets the latest committed UpdateNode.
 // It's useful when check whether the catalog/metadata entry is deleted.
-func (be *DBBaseEntry) GetCommittedNode() (node UpdateNodeIf) {
-	be.MVCC.Loop(func(n *common.GenericDLNode[*DBUpdateNode]) bool {
+func (be *DBBaseEntry) GetCommittedNode() (node MVCCNodeIf) {
+	be.MVCC.Loop(func(n *common.GenericDLNode[*DBMVCCNode]) bool {
 		un := n.GetPayload()
 		if !un.IsActive() {
 			node = un
@@ -219,8 +219,8 @@ func (be *DBBaseEntry) GetCommittedNode() (node UpdateNodeIf) {
 // GetNodeToRead gets UpdateNode according to the timestamp.
 // It returns the UpdateNode in the same txn as the read txn
 // or returns the latest UpdateNode with commitTS less than the timestamp.
-func (be *DBBaseEntry) GetNodeToRead(startts types.TS) (node UpdateNodeIf) {
-	be.MVCC.Loop(func(n *common.GenericDLNode[*DBUpdateNode]) bool {
+func (be *DBBaseEntry) GetNodeToRead(startts types.TS) (node MVCCNodeIf) {
+	be.MVCC.Loop(func(n *common.GenericDLNode[*DBMVCCNode]) bool {
 		un := n.GetPayload()
 		if un.IsSameTxn(startts) {
 			node = un
@@ -248,8 +248,8 @@ func (be *DBBaseEntry) DeleteBefore(ts types.TS) bool {
 
 // GetExactUpdateNode gets the exact UpdateNode with the startTs.
 // It's only used in replay
-func (be *DBBaseEntry) GetExactUpdateNode(startts types.TS) (node UpdateNodeIf) {
-	be.MVCC.Loop(func(n *common.GenericDLNode[*DBUpdateNode]) bool {
+func (be *DBBaseEntry) GetExactUpdateNode(startts types.TS) (node MVCCNodeIf) {
+	be.MVCC.Loop(func(n *common.GenericDLNode[*DBMVCCNode]) bool {
 		un := n.GetPayload()
 		if un.Start == startts {
 			node = un
@@ -329,7 +329,7 @@ func (be *DBBaseEntry) WriteAllTo(w io.Writer) (n int64, err error) {
 		return
 	}
 	n += 8
-	be.MVCC.Loop(func(node *common.GenericDLNode[*DBUpdateNode]) bool {
+	be.MVCC.Loop(func(node *common.GenericDLNode[*DBMVCCNode]) bool {
 		var n2 int64
 		n2, err = node.GetPayload().WriteTo(w)
 		if err != nil {
@@ -346,7 +346,7 @@ func (be *DBBaseEntry) ReadOneNodeFrom(r io.Reader) (n int64, err error) {
 		return
 	}
 	var n2 int64
-	un := NewEmptyDBUpdateNode()
+	un := NewEmptyDBMVCCNode()
 	n2, err = un.ReadFrom(r)
 	if err != nil {
 		return
@@ -367,7 +367,7 @@ func (be *DBBaseEntry) ReadAllFrom(r io.Reader) (n int64, err error) {
 	n += 8
 	for i := 0; i < int(be.length); i++ {
 		var n2 int64
-		un := NewEmptyDBUpdateNode()
+		un := NewEmptyDBMVCCNode()
 		n2, err = un.ReadFrom(r)
 		if err != nil {
 			return
@@ -449,7 +449,7 @@ func (be *DBBaseEntry) MetaTxnCanRead(txn txnif.AsyncTxn, mu *sync.RWMutex) (can
 }
 func (be *DBBaseEntry) CloneCreateEntry() BaseEntryIf {
 	cloned := &DBBaseEntry{
-		MVCC:    common.NewGenericSortedDList(compareDBUpdateNode),
+		MVCC:    common.NewGenericSortedDList(compareDBMVCCNode),
 		RWMutex: &sync.RWMutex{},
 		ID:      be.ID,
 	}
@@ -552,7 +552,7 @@ func (be *DBBaseEntry) IsCommitted() bool {
 }
 
 func (be *DBBaseEntry) CloneCommittedInRange(start, end types.TS) (ret BaseEntryIf) {
-	be.MVCC.Loop(func(n *common.GenericDLNode[*DBUpdateNode]) bool {
+	be.MVCC.Loop(func(n *common.GenericDLNode[*DBMVCCNode]) bool {
 		un := n.GetPayload()
 		if un.IsActive() {
 			return true

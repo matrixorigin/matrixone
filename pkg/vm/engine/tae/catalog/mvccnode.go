@@ -26,8 +26,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 )
 
-type UpdateNodeIf interface {
-	UpdateNode(UpdateNodeIf)
+type MVCCNodeIf interface {
+	UpdateNode(MVCCNodeIf)
 	GetTxn() txnif.TxnReader
 	GetEnd() types.TS
 	GetStart() types.TS
@@ -53,8 +53,8 @@ var ErrTxnActive = errors.New("txn is active")
 
 type INode interface {
 	txnif.TxnEntry
-	ApplyUpdate(UpdateNodeIf) error
+	ApplyUpdate(MVCCNodeIf) error
 	ApplyDelete() error
-	GetUpdateNode() UpdateNodeIf
+	GetUpdateNode() MVCCNodeIf
 	String() string
 }
