@@ -24,20 +24,37 @@ func (txn *Transaction) ReadOnly() bool {
 }
 
 // use for solving halloween problem
-func (txn *Transaction) SetStatementId(id [2]uint64) {
-	txn.statementId = id
+func (txn *Transaction) IncStatementId() {
+	txn.statementId++
+	txn.writes = append(txn.writes, make([]Entry, 0, 1))
 }
 
 // Write used to write data to the transaction buffer
 // insert/delete/update all use this api
-func (txn *Transaction) WriteBatch(bat *batch.Batch) error {
+func (txn *Transaction) WriteBatch(databaseName, tableName string, bat *batch.Batch) error {
 	txn.readOnly = true
+	txn.writes[txn.statementId] = append(txn.writes[txn.statementId], Entry{
+		bat:          bat,
+		tableName:    tableName,
+		databaseName: databaseName,
+	})
 	return nil
+}
+
+func (txn *Transaction) RegisterFile(fileName string) {
+	txn.fileMap[fileName] = txn.blockId
+	txn.blockId++
 }
 
 // WriteFile used to add a s3 file information to the transaction buffer
 // insert/delete/update all use this api
-func (txn *Transaction) WriteFile(file string) error {
+func (txn *Transaction) WriteFile(databaseName, tableName string, fileName string) error {
 	txn.readOnly = true
+	txn.writes[txn.statementId] = append(txn.writes[txn.statementId], Entry{
+		tableName:    tableName,
+		databaseName: databaseName,
+		fileName:     fileName,
+		blockId:      txn.fileMap[fileName],
+	})
 	return nil
 }
