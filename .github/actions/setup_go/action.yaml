@@ -1,0 +1,18 @@
+name: setup_go
+description: "setup build environment"
+inputs:
+  go-version:
+    description: 'version of golang'
+    required: false
+    default: "1.19"
+
+runs:
+  using: "composite"
+
+  steps:
+    - name: Set up Go
+      uses: actions/setup-go@v3
+      with:
+        go-version: ${{ inputs.go-version }}
+        # https://github.com/actions/setup-go#caching-dependency-files-and-build-outputs
+        cache: true

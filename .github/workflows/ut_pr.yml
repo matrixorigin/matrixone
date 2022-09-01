@@ -32,7 +32,7 @@ jobs:
 
       - name: Set up Go
         if: ${{ steps.ut-pr.outputs.paths != '' }}
-        uses: ./matrixone/.github/actions/setup_env
+        uses: ./matrixone/.github/actions/setup_go
 
       - name: Build MatrixOne
         if: ${{ steps.ut-pr.outputs.paths != '' }}

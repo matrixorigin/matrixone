@@ -1,0 +1,41 @@
+name: setup_tester
+description: "prepare java env"
+inputs:
+  java-version:
+    description: "version of java"
+    required: false
+    default: "8"
+  distribution:
+    description: "java distribution"
+    required: false
+    default: "adopt"
+  architecture:
+    description: "java architecture"
+    required: false
+    default: x64
+  cache:
+    # options: maven, gradle, sbt
+    description: "cache type"
+    required: false
+    default: "maven"
+
+runs:
+  using: "composite"
+
+  steps:
+    - name: Set up JDK 8 for x64
+      uses: actions/setup-java@v3
+      with:
+        java-version: ${{ inputs.java-version }}
+        distribution: ${{ inputs.distribution }}
+        architecture: ${{ inputs.architecture }}
+        https://github:
+          com/actions/setup-java#caching-maven-dependencies:
+        cache: ${{ inputs.cache }}
+
+    - name: Clone test-tool repository
+      uses: actions/checkout@v3
+      with:
+        repository: matrixorigin/mo-tester
+        path: ./mo-tester
+        ref: main
