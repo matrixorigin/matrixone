@@ -159,9 +159,7 @@ func (c *Config) getLogServiceConfig() logservice.Config {
 	logutil.Infof("hakeeper client cfg: %v", c.HAKeeperClient)
 	cfg.HAKeeperClientConfig = c.HAKeeperClient
 	cfg.Frontend = c.getFrontendConfig()
-	if len(cfg.UUID) != 0 {
-		cfg.Frontend.NodeUUID = cfg.UUID
-	}
+	cfg.Frontend.NodeUUID = cfg.UUID
 	return cfg
 }
 
@@ -169,9 +167,7 @@ func (c *Config) getDNServiceConfig() dnservice.Config {
 	cfg := c.DN
 	cfg.HAKeeper.ClientConfig = c.HAKeeperClient
 	cfg.Frontend = c.getFrontendConfig()
-	if len(cfg.UUID) != 0 {
-		cfg.Frontend.NodeUUID = cfg.UUID
-	}
+	cfg.Frontend.NodeUUID = cfg.UUID
 	return cfg
 }
 
@@ -179,9 +175,7 @@ func (c *Config) getCNServiceConfig() cnservice.Config {
 	cfg := c.CN
 	cfg.HAKeeper.ClientConfig = c.HAKeeperClient
 	cfg.Frontend = c.getFrontendConfig()
-	if len(cfg.UUID) != 0 {
-		cfg.Frontend.NodeUUID = c.CN.UUID
-	}
+	cfg.Frontend.NodeUUID = cfg.UUID
 	return cfg
 }
 

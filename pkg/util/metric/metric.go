@@ -40,8 +40,6 @@ const (
 	sqlCreateDBConst = "create database if not exists " + MetricDBConst
 	sqlDropDBConst   = "drop database if exists " + MetricDBConst
 	ALL_IN_ONE_MODE  = "monolithic"
-
-	FileServiceBatchProcessor = "FileService"
 )
 
 var (

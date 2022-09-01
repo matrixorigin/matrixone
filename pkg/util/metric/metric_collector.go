@@ -18,8 +18,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/util/export"
 	"runtime"
 	"strings"
 	"time"
@@ -29,6 +27,8 @@ import (
 	bp "github.com/matrixorigin/matrixone/pkg/util/batchpipe"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/util/export"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 )
 
@@ -140,56 +140,6 @@ func (c *metricCollector) NewItemBuffer(_ string) bp.ItemBuffer[*pb.MetricFamily
 	}
 }
 
-var _ MetricCollector = (*metricFSCollector)(nil)
-
-type metricFSCollector struct {
-	*bp.BaseBatchPipe[*pb.MetricFamily, *trace.CSVRequest]
-	fsFactory export.FSWriterFactory
-	opts      collectorOpts
-}
-
-func (c *metricFSCollector) SendMetrics(ctx context.Context, mfs []*pb.MetricFamily) error {
-	for _, mf := range mfs {
-		if err := c.SendItem(mf); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func newMetricFSCollector(fsFactory export.FSWriterFactory, opts ...collectorOpt) MetricCollector {
-	initOpts := defaultCollectorOpts()
-	for _, o := range opts {
-		o.ApplyTo(&initOpts)
-	}
-	c := &metricFSCollector{
-		fsFactory: fsFactory,
-		opts:      initOpts,
-	}
-	base := bp.NewBaseBatchPipe[*pb.MetricFamily, *trace.CSVRequest](c, bp.PipeWithBatchWorkerNum(c.opts.sqlWorkerNum))
-	c.BaseBatchPipe = base
-	return c
-}
-
-func (c *metricFSCollector) NewItemBatchHandler(ctx context.Context) func(batch *trace.CSVRequest) {
-	return func(batch *trace.CSVRequest) {
-		if _, err := batch.Handle(); err != nil {
-			logutil.Error(fmt.Sprintf("[Metric] faield to write csv: %s, err: %v", batch.Content(), err))
-		}
-	}
-}
-
-func (c *metricFSCollector) NewItemBuffer(_ string) bp.ItemBuffer[*pb.MetricFamily, *trace.CSVRequest] {
-	return &mfsetCSV{
-		mfset: mfset{
-			Reminder:        bp.NewConstantClock(c.opts.flushInterval),
-			metricThreshold: c.opts.metricThreshold,
-			sampleThreshold: c.opts.sampleThreshold,
-		},
-		fsFactory: c.fsFactory,
-	}
-}
-
 type mfset struct {
 	bp.Reminder
 	mfs             []*pb.MetricFamily
@@ -284,9 +234,59 @@ func (s *mfset) GetBatch(buf *bytes.Buffer) string {
 	return sql
 }
 
+var _ MetricCollector = (*metricFSCollector)(nil)
+
+type metricFSCollector struct {
+	*bp.BaseBatchPipe[*pb.MetricFamily, *trace.CSVRequest]
+	writerFactory export.FSWriterFactory
+	opts          collectorOpts
+}
+
+func (c *metricFSCollector) SendMetrics(ctx context.Context, mfs []*pb.MetricFamily) error {
+	for _, mf := range mfs {
+		if err := c.SendItem(mf); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func newMetricFSCollector(writerFactory export.FSWriterFactory, opts ...collectorOpt) MetricCollector {
+	initOpts := defaultCollectorOpts()
+	for _, o := range opts {
+		o.ApplyTo(&initOpts)
+	}
+	c := &metricFSCollector{
+		writerFactory: writerFactory,
+		opts:          initOpts,
+	}
+	base := bp.NewBaseBatchPipe[*pb.MetricFamily, *trace.CSVRequest](c, bp.PipeWithBatchWorkerNum(c.opts.sqlWorkerNum))
+	c.BaseBatchPipe = base
+	return c
+}
+
+func (c *metricFSCollector) NewItemBatchHandler(ctx context.Context) func(batch *trace.CSVRequest) {
+	return func(batch *trace.CSVRequest) {
+		if _, err := batch.Handle(); err != nil {
+			logutil.Error(fmt.Sprintf("[Metric] faield to write csv: %s, err: %v", batch.Content(), err))
+		}
+	}
+}
+
+func (c *metricFSCollector) NewItemBuffer(_ string) bp.ItemBuffer[*pb.MetricFamily, *trace.CSVRequest] {
+	return &mfsetCSV{
+		mfset: mfset{
+			Reminder:        bp.NewConstantClock(c.opts.flushInterval),
+			metricThreshold: c.opts.metricThreshold,
+			sampleThreshold: c.opts.sampleThreshold,
+		},
+		writerFactory: c.writerFactory,
+	}
+}
+
 type mfsetCSV struct {
 	mfset
-	fsFactory export.FSWriterFactory
+	writerFactory export.FSWriterFactory
 }
 
 func (s *mfsetCSV) writeCsvOneLine(buf *bytes.Buffer, fields []string) {
@@ -310,7 +310,7 @@ func (s *mfsetCSV) GetBatch(buf *bytes.Buffer) *trace.CSVRequest {
 
 	buf.Reset()
 
-	writer := s.fsFactory(trace.DefaultContext(), MetricDBConst, s.mfs[0])
+	writer := s.writerFactory(trace.DefaultContext(), MetricDBConst, s.mfs[0])
 
 	//buf.WriteString(fmt.Sprintf("insert into %s.%s values ", MetricDBConst, s.mfs[0].GetName()))
 	writeValues := func(t string, v float64, lbls ...string) {

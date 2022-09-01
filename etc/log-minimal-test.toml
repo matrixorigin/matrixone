@@ -42,5 +42,3 @@ name = "ETL"
 backend = "DISK-ETL"
 data-dir = "store"
 
-[frontend]
-disableMetricToProm = true

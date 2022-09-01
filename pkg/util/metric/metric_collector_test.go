@@ -16,14 +16,14 @@ package metric
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/util/batchpipe"
-	"github.com/matrixorigin/matrixone/pkg/util/export"
 	"io"
 	"regexp"
 	"testing"
 	"time"
 
 	pb "github.com/matrixorigin/matrixone/pkg/pb/metric"
+	"github.com/matrixorigin/matrixone/pkg/util/batchpipe"
+	"github.com/matrixorigin/matrixone/pkg/util/export"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 )
 
@@ -136,27 +136,27 @@ func TestCollector(t *testing.T) {
 	}
 }
 
-type channelStringWriter struct {
+type dummyStringWriter struct {
 	name string
 	ch   chan string
 }
 
-func (w *channelStringWriter) WriteString(s string) (n int, err error) {
+func (w *dummyStringWriter) WriteString(s string) (n int, err error) {
 	n = len(s)
 	w.ch <- w.name
 	w.ch <- s
 	return n, nil
 }
 
-func newFSWriterFactory(csvCh chan string) export.FSWriterFactory {
+func newDummyFSWriterFactory(csvCh chan string) export.FSWriterFactory {
 	return export.FSWriterFactory(func(_ context.Context, dir string, name batchpipe.HasName) io.StringWriter {
-		return &channelStringWriter{name: name.GetName(), ch: csvCh}
+		return &dummyStringWriter{name: name.GetName(), ch: csvCh}
 	})
 }
 
 func TestCsvFSCollector(t *testing.T) {
 	csvCh := make(chan string, 100)
-	factory := newFSWriterFactory(csvCh)
+	factory := newDummyFSWriterFactory(csvCh)
 	collector := newMetricFSCollector(factory, WithFlushInterval(200*time.Millisecond), WithMetricThreshold(2))
 	collector.Start(context.TODO())
 	defer collector.Stop(false)

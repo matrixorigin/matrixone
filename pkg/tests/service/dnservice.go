@@ -153,8 +153,6 @@ func buildDnConfig(
 	// FIXME: support different storage, consult @reusee
 	cfg.Txn.Storage.Backend = opt.dn.txnStorageBackend
 	cfg.Frontend.SetDefaultValues()
-	cfg.Frontend.DisableMetric = true
-	cfg.Frontend.DisableTrace = true
 
 	// We need the filled version of configuration.
 	// It's necessary when building dnservice.Option.

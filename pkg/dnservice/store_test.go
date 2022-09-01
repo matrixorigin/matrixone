@@ -236,7 +236,6 @@ func newTestStore(
 	}
 	c.Txn.Clock.MaxClockOffset.Duration = time.Duration(math.MaxInt64)
 	c.Frontend.SetDefaultValues()
-	c.Frontend.DisableMetricToProm = true
 	fs, err := fsFactory(localFileServiceName)
 	assert.Nil(t, err)
 	s, err := NewService(c, fs, options...)

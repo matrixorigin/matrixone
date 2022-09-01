@@ -170,8 +170,6 @@ func buildLogConfig(
 	cfg.HAKeeperConfig.LogStoreTimeout.Duration = opt.hakeeper.logStoreTimeout
 	cfg.HAKeeperConfig.DNStoreTimeout.Duration = opt.hakeeper.dnStoreTimeout
 	cfg.Frontend.SetDefaultValues()
-	cfg.Frontend.DisableMetric = true
-	cfg.Frontend.DisableTrace = true
 
 	// we must invoke Fill in order to setting default configruation value.
 	cfg.Fill()

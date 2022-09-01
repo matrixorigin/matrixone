@@ -16,11 +16,12 @@ package export
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/util/batchpipe"
 	"io"
 	"reflect"
 	"sync/atomic"
 	"unsafe"
+
+	"github.com/matrixorigin/matrixone/pkg/util/batchpipe"
 )
 
 func init() {
@@ -56,14 +57,6 @@ func SetGlobalBatchProcessor(p BatchProcessor) {
 func GetGlobalBatchProcessor() BatchProcessor {
 	return gBatchProcessor.Load().(*processorHolder).p
 }
-
-/*
-var gFileService atomic.Value
-
-func SetDefaultFileService(fs fileservice.FileService) {
-	gFileService.Store(fs)
-}
-*/
 
 type getContextFunc func() context.Context
 
