@@ -8,6 +8,14 @@ on:
 
   workflow_dispatch:
 
+env:
+  Endpoint: ${{ secrets.S3ENDPOINT }}
+  Region: ${{ secrets.S3REGION }}
+  APIKey: ${{ secrets.S3APIKEY }}
+  APISecret: ${{ secrets.S3APISECRET }}
+  Bucket: ${{ secrets.S3BUCKET }}
+  KeyPrefix: ${{ secrets.S3KEYPREFIX }}
+  
 concurrency: 
   group: ${{ github.event.pull_request.head.repo.full_name}}/${{ github.event.pull_request.head.ref }}/${{ github.workflow }}
   cancel-in-progress: true
