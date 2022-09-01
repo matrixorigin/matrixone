@@ -838,7 +838,7 @@ func TestCompaction2(t *testing.T) {
 
 // TestCompaction3 is a case for testing block refcount,
 // which requires modification of the data block to test.
-func TestCompaction3(t *testing.T) {
+/*func TestCompaction3(t *testing.T) {
 	testutils.EnsureNoLeak(t)
 	opts := config.WithQuickScanAndCKPOpts(nil)
 	db := initDB(t, opts)
@@ -847,7 +847,7 @@ func TestCompaction3(t *testing.T) {
 	schema := catalog.MockSchemaAll(4, 2)
 	schema.BlockMaxRows = 21
 	schema.SegmentMaxBlocks = 4
-	schema.Name = tables.ForTestBlockRefName
+    schema.Name = tables.ForTestBlockRefName
 	cnt := uint32(3)
 	rows := schema.BlockMaxRows / 3 * cnt
 	bat := catalog.MockBatch(schema, int(rows))
@@ -899,4 +899,4 @@ func TestCompaction3(t *testing.T) {
 			it.Next()
 		}
 	}
-}
+}*/

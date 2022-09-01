@@ -49,10 +49,6 @@ func (appender *blockAppender) IsAppendable() bool {
 }
 
 func (appender *blockAppender) Close() {
-	if appender.node.block.meta.GetSchema().Name == ForTestBlockRefName {
-		appender.node.block.UnRefForTest()
-		return
-	}
 	appender.node.block.Unref()
 }
 func (appender *blockAppender) PrepareAppend(

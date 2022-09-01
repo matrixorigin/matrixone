@@ -56,11 +56,6 @@ const (
 	BS_NotAppendable
 )
 
-// ForTestBlockRefName is the Schema.Name used by UT,
-// which means that block.Unref() needs to be executed with a delay of 100ms.
-// TODO: The test method needs to be deleted or modified after the test is stable
-const ForTestBlockRefName = "@ForTestBlockRefName"
-
 // The initial state of the block when scoring
 type statBlock struct {
 	rows      uint32
@@ -349,11 +344,6 @@ func (blk *dataBlock) IsAppendable() bool {
 
 func (blk *dataBlock) GetTotalChanges() int {
 	return int(blk.mvcc.GetChangeNodeCnt())
-}
-
-func (blk *dataBlock) UnRefForTest() {
-	time.Sleep(100 * time.Millisecond)
-	blk.Unref()
 }
 
 func (blk *dataBlock) Rows(txn txnif.AsyncTxn, coarse bool) int {
