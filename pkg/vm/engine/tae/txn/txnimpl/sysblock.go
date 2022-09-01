@@ -259,6 +259,8 @@ func (blk *txnSysBlock) getRelTableData(colIdx int) (view *model.ColumnView, err
 			colData.Append(table.GetDB().GetID())
 		case catalog.SystemRelAttr_Comment:
 			colData.Append([]byte(table.GetSchema().Comment))
+		case catalog.SystemRelAttr_Partition:
+			colData.Append([]byte(table.GetSchema().Partition))
 		case catalog.SystemRelAttr_Persistence:
 			colData.Append([]byte(catalog.SystemPersistRel))
 		case catalog.SystemRelAttr_Kind:

@@ -29,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 
 	"github.com/matrixorigin/matrixone/pkg/util/export"
@@ -54,6 +55,11 @@ func firstError(err1 error, err2 error) error {
 		return err1
 	}
 	return err2
+}
+
+func init() {
+	// avoid multi call logger.SetLoggerFactory in UT
+	logger.SetLoggerFactory(logutil.DragonboatFactory)
 }
 
 // Service is the top layer component of a log service node. It manages the

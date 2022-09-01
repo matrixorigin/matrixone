@@ -128,15 +128,25 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 	}
 	createStr += ")"
 
+	var comment string
+	var partition string
 	for _, def := range tableDef.Defs {
 		if proDef, ok := def.Def.(*plan.TableDef_DefType_Properties); ok {
 			for _, kv := range proDef.Properties.Properties {
 				if kv.Key == catalog.SystemRelAttr_Comment {
-					createStr += " COMMENT='" + kv.Value + "',"
+					comment = " COMMENT='" + kv.Value + "'"
 				}
 			}
 		}
+
+		if partDef, ok := def.Def.(*plan.TableDef_DefType_Partition); ok {
+			if len(partDef.Partition.PartitionMsg) != 0 {
+				partition = ` ` + partDef.Partition.PartitionMsg
+			}
+		}
 	}
+	createStr += comment
+	createStr += partition
 
 	sql := "select \"%s\" as `Table`, \"%s\" as `Create Table`"
 	var buf bytes.Buffer
