@@ -17,6 +17,8 @@ package cnservice
 import (
 	"context"
 	"fmt"
+	"github.com/fagongzi/goetty/v2"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/config"
@@ -30,7 +32,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
 
-	"github.com/fagongzi/goetty/v2"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
@@ -81,6 +82,7 @@ func NewService(
 	}
 	server.RegisterRequestHandler(srv.handleRequest)
 	srv.server = server
+	srv.storeEngine = pu.StorageEngine
 
 	srv.requestHandler = defaultRequestHandler
 	for _, opt := range options {
@@ -111,12 +113,12 @@ func (s *service) acquireMessage() morpc.Message {
 	return s.responsePool.Get().(*pipeline.Message)
 }
 
-func defaultRequestHandler(ctx context.Context, message morpc.Message, cs morpc.ClientSession) error {
+func defaultRequestHandler(ctx context.Context, message morpc.Message, cs morpc.ClientSession, e engine.Engine) error {
 	return nil
 }
 
 func (s *service) handleRequest(ctx context.Context, req morpc.Message, _ uint64, cs morpc.ClientSession) error {
-	return s.requestHandler(ctx, req, cs)
+	return s.requestHandler(ctx, req, cs, s.storeEngine)
 }
 
 func (s *service) initMOServer(ctx context.Context, pu *config.ParameterUnit) error {
@@ -263,7 +265,7 @@ func (s *service) getTxnClient() (c client.TxnClient, err error) {
 	return
 }
 
-func WithMessageHandle(f func(ctx context.Context, message morpc.Message, cs morpc.ClientSession) error) Options {
+func WithMessageHandle(f func(ctx context.Context, message morpc.Message, cs morpc.ClientSession, engine engine.Engine) error) Options {
 	return func(s *service) {
 		s.requestHandler = f
 	}

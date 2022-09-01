@@ -16,6 +16,7 @@ package cnservice
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"sync"
 	"time"
 
@@ -110,7 +111,7 @@ type service struct {
 	responsePool           *sync.Pool
 	logger                 *zap.Logger
 	server                 morpc.RPCServer
-	requestHandler         func(ctx context.Context, message morpc.Message, cs morpc.ClientSession) error
+	requestHandler         func(ctx context.Context, message morpc.Message, cs morpc.ClientSession, engine engine.Engine) error
 	cancelMoServerFunc     context.CancelFunc
 	mo                     *frontend.MOServer
 	initHakeeperClientOnce sync.Once
@@ -122,4 +123,5 @@ type service struct {
 	initFileServiceOnce    sync.Once
 	_fileService           fileservice.FileService
 	newFS                  fileservice.NewFileServicesFunc
+	storeEngine            engine.Engine
 }
