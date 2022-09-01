@@ -153,6 +153,7 @@ func newS3FS(
 	)
 
 	fs := &S3FS{
+		name:      name,
 		client:    client,
 		bucket:    bucket,
 		keyPrefix: keyPrefix,
