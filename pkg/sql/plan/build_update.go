@@ -459,6 +459,9 @@ func buildUpdateColumns(exprs tree.UpdateExprs, objRefs []*ObjectRef, tblRefs []
 					}
 				}
 			}
+			if ctx.tblName == "" {
+				return nil, fmt.Errorf("the target column %s is not exists", columnName)
+			}
 		}
 		updateCols = append(updateCols, ctx)
 	}

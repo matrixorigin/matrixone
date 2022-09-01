@@ -94,10 +94,6 @@ func (e *testEngine) checkpointCatalog() {
 	assert.NoError(e.t, err)
 }
 
-func (e *testEngine) compactABlocks(skipConflict bool) {
-	forceCompactABlocks(e.t, e.tenantID, e.DB, defaultTestDB, e.schema, skipConflict)
-}
-
 func (e *testEngine) compactBlocks(skipConflict bool) {
 	compactBlocks(e.t, e.tenantID, e.DB, defaultTestDB, e.schema, skipConflict)
 }
@@ -419,30 +415,6 @@ func tryAppendClosure(t *testing.T, data *containers.Batch, name string, e *DB, 
 			return
 		}
 		_ = txn.Commit()
-	}
-}
-func forceCompactABlocks(t *testing.T, tenantID uint32, e *DB, dbName string, schema *catalog.Schema, skipConflict bool) {
-	txn, rel := getRelation(t, tenantID, e, dbName, schema.Name)
-
-	var metas []*catalog.BlockEntry
-	it := rel.MakeBlockIt()
-	for it.Valid() {
-		blk := it.GetBlock()
-		meta := blk.GetMeta().(*catalog.BlockEntry)
-		// if blk.Rows() >= int(schema.BlockMaxRows) {
-		if !meta.IsAppendable() {
-			it.Next()
-			continue
-		}
-		metas = append(metas, meta)
-		it.Next()
-	}
-	_ = txn.Commit()
-	for _, meta := range metas {
-		err := meta.GetBlockData().ForceCompact()
-		if !skipConflict {
-			assert.NoError(t, err)
-		}
 	}
 }
 

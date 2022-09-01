@@ -96,10 +96,8 @@ CREATE TABLE t7 (a VARCHAR(400));
 INSERT INTO t7 (a) VALUES ("A"), ("a"), ("a "), ("a   "),
                           ("B"), ("b"), ("b "), ("b   ");
 
--- @bvt:issue#4809
 select * from t7;
 SELECT COUNT(DISTINCT a) FROM t7;
--- @bvt:issue
 
 DROP TABLE t7;
 

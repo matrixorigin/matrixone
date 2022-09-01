@@ -32,8 +32,8 @@ import (
 
 type CheckpointUnit interface {
 	MutationInfo() string
-	RunCalibration()
-	EstimateScore() int
+	RunCalibration() int
+	EstimateScore(int64) int
 	BuildCompactionTaskFactory() (tasks.TxnTaskFactory, tasks.TaskType, []common.ID, error)
 }
 
@@ -48,6 +48,7 @@ type BlockAppender interface {
 	) (int, error)
 	IsAppendable() bool
 	ReplayAppend(bat *containers.Batch) error
+	Close()
 }
 
 type BlockReplayer interface {
@@ -64,6 +65,8 @@ type Block interface {
 	GetRowsOnReplay() uint64
 	GetID() *common.ID
 	IsAppendable() bool
+	SetNotAppendable()
+
 	Rows(txn txnif.AsyncTxn, coarse bool) int
 	GetColumnDataByName(txn txnif.AsyncTxn, attr string, buffer *bytes.Buffer) (*model.ColumnView, error)
 	GetColumnDataById(txn txnif.AsyncTxn, colIdx int, buffer *bytes.Buffer) (*model.ColumnView, error)
@@ -91,9 +94,7 @@ type Block interface {
 	CheckpointWALClosure(endTs types.TS) tasks.FuncT
 	SyncBlockDataClosure(ts types.TS, rows uint32) tasks.FuncT
 	FlushColumnDataClosure(ts types.TS, colIdx int, colData containers.Vector, sync bool) tasks.FuncT
-	ForceCompact() error
 	Destroy() error
 	ReplayIndex() error
-	Flush()
 	Close()
 }
