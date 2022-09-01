@@ -71,6 +71,14 @@ type messageHandleHelper struct {
 	storeEngine engine.Engine
 }
 
+// processHelper a structure records information about source process. and to help
+// rebuild the process in the remote node.
+type processHelper struct {
+	id       string
+	lim      process.Limitation
+	unixTime int64
+}
+
 // CnServerMessageHandler deal the client message that received at cn-server.
 // the message is always *pipeline.Message here. It's a byte array which encoded by method encodeScope.
 // write back Analysis Information and error info if error occurs to client.
@@ -87,16 +95,24 @@ func CnServerMessageHandler(ctx context.Context, message morpc.Message, cs morpc
 	return cs.Write(ctx, &pipeline.Message{Id: message.GetID(), Sid: pipeline.MessageEnd, Code: errCode, Analyse: analysis})
 }
 
-func pipelineMessageHandle(ctx context.Context, message morpc.Message, cs morpc.ClientSession, helper *messageHandleHelper) (anaData []byte, err error) {
+func pipelineMessageHandle(ctx context.Context, message morpc.Message, cs morpc.ClientSession, messageHelper *messageHandleHelper) (anaData []byte, err error) {
 	var c *Compile
 	var s *Scope
+	var procHelper *processHelper
 
 	m, ok := message.(*pipeline.Message)
 	if !ok {
 		panic("unexpected message type for cn-server")
 	}
 
-	c = newCompile(ctx, message, helper.storeEngine, cs)
+	// get processHelper and rebuild the process and Compile
+	procHelper, err = generateProcessHelper(m.GetProcInfoData())
+	if err != nil {
+		return nil, err
+	}
+	c = newCompile(ctx, message, procHelper, messageHelper, cs)
+
+	// decode the scope
 	s, err = decodeScope(m.GetData(), c.proc)
 	if err != nil {
 		return nil, err
@@ -148,6 +164,12 @@ func (s *Scope) remoteRun(c *Compile) error {
 	// restore the pipeline's instructions.
 	s.Instructions = append(s.Instructions, con)
 
+	// encode the process related information
+	pData, errEncodeProc := encodeProcessInfo(c.proc)
+	if errEncodeProc != nil {
+		return errEncodeProc
+	}
+
 	// new the stream sender
 	streamSender, errStream := cnclient.Client.NewStream(s.NodeInfo.Addr)
 	if errStream != nil {
@@ -165,7 +187,7 @@ func (s *Scope) remoteRun(c *Compile) error {
 		_ = cancel
 	}
 
-	message := &pipeline.Message{Id: streamSender.ID(), Data: sData}
+	message := &pipeline.Message{Id: streamSender.ID(), Data: sData, ProcInfoData: pData}
 	errSend := streamSender.Send(c.ctx, message)
 	if errSend != nil {
 		return errSend
@@ -239,6 +261,30 @@ func decodeScope(data []byte, proc *process.Process) (*Scope, error) {
 		return nil, err
 	}
 	return s, fillInstructionsForScope(s, ctx, p)
+}
+
+func encodeProcessInfo(proc *process.Process) ([]byte, error) {
+	procInfo := &pipeline.ProcessInfo{}
+	{
+		procInfo.Id = proc.Id
+		procInfo.Lim = convertToPipelineLimitation(proc.Lim)
+		procInfo.UnixTime = proc.UnixTime
+	}
+	return procInfo.Marshal()
+}
+
+func generateProcessHelper(data []byte) (*processHelper, error) {
+	result := &processHelper{}
+
+	procInfo := &pipeline.ProcessInfo{}
+	err := procInfo.Unmarshal(data)
+	if err != nil {
+		return result, err
+	}
+	result.id = procInfo.Id
+	result.lim = convertToProcessLimitation(procInfo.Lim)
+	result.unixTime = procInfo.UnixTime
+	return result, nil
 }
 
 func refactorScope(c *Compile, _ context.Context, s *Scope) {
@@ -840,16 +886,19 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext) (vm.In
 	return v, nil
 }
 
-// newCompile init a new compile for remote run.
-func newCompile(ctx context.Context, message morpc.Message, engine engine.Engine, cs morpc.ClientSession) *Compile {
+// newCompile generates a new compile for remote run.
+func newCompile(ctx context.Context, message morpc.Message, pHelper *processHelper, mHelper *messageHandleHelper, cs morpc.ClientSession) *Compile {
 	// TODO: this process is just an temporary solution. And process's properties need to be refined.
 	proc := process.New(mheap.New(guest.New(1<<30, host.New(1<<20))))
 	proc.Ctx = ctx
+	proc.UnixTime = pHelper.unixTime
+	proc.Id = pHelper.id
+	proc.Lim = pHelper.lim
 
 	c := &Compile{
 		ctx:  ctx,
 		proc: proc,
-		e:    engine,
+		e:    mHelper.storeEngine,
 	}
 
 	c.fill = func(a any, b *batch.Batch) error {
@@ -987,6 +1036,28 @@ func convertToResultPos(relList, colList []int32) []colexec.ResultPos {
 		res[i].Rel, res[i].Pos = relList[i], colList[i]
 	}
 	return res
+}
+
+// convert process.Limitation to pipeline.ProcessLimitation
+func convertToPipelineLimitation(lim process.Limitation) *pipeline.ProcessLimitation {
+	return &pipeline.ProcessLimitation{
+		Size:          lim.Size,
+		BatchRows:     lim.BatchRows,
+		BatchSize:     lim.BatchSize,
+		PartitionRows: lim.PartitionRows,
+		ReaderSize:    lim.ReaderSize,
+	}
+}
+
+// convert pipeline.ProcessLimitation to process.Limitation
+func convertToProcessLimitation(lim *pipeline.ProcessLimitation) process.Limitation {
+	return process.Limitation{
+		Size:          lim.Size,
+		BatchRows:     lim.BatchRows,
+		BatchSize:     lim.BatchSize,
+		PartitionRows: lim.PartitionRows,
+		ReaderSize:    lim.ReaderSize,
+	}
 }
 
 func decodeBatch(_ *process.Process, msg *pipeline.Message) (*batch.Batch, error) {
