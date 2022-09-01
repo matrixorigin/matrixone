@@ -23,8 +23,8 @@ import (
 func TestMemoryFS(t *testing.T) {
 
 	t.Run("file service", func(t *testing.T) {
-		testFileService(t, func() FileService {
-			fs, err := NewMemoryFS("memory")
+		testFileService(t, func(name string) FileService {
+			fs, err := NewMemoryFS(name)
 			assert.Nil(t, err)
 			return fs
 		})
