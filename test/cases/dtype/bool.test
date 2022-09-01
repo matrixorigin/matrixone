@@ -43,9 +43,9 @@ select b,max(b) from t1 where b is not NULL group by b order by b;
 select * from t1 where a<=b and a is not NULL;
 
 #Test cases of multi tables 
--- @bvt:issue#3289
+
 select t1.a,t2.b from t1 join t2 on t1.a=t2.a order by t1.a desc, 2 desc;
--- @bvt:issue
+
 select a,count(a) from t1 group by a having count(a)>1; 
 select a,any_value(b) from t1 where isnotnull(a) group by a order by a asc;
 select a,b from t1 where a in (0,1);
