@@ -44,7 +44,7 @@ func (e *Engine) Create(ctx context.Context, name string, op client.TxnOperator)
 	if err != nil {
 		return err
 	}
-	if err := txn.WriteBatch(MO_CATALOG, MO_DATABASE, generateCreateDatabaseTuple(name)); err != nil {
+	if err := txn.WriteBatch(INSERT, MO_CATALOG, MO_DATABASE, generateCreateDatabaseTuple(name)); err != nil {
 		return err
 	}
 	return nil
@@ -65,7 +65,7 @@ func (e *Engine) Delete(ctx context.Context, name string, op client.TxnOperator)
 	if err != nil {
 		return err
 	}
-	if err := txn.WriteBatch(MO_CATALOG, MO_DATABASE, generateDropDatabaseTuple(name)); err != nil {
+	if err := txn.WriteBatch(DELETE, MO_CATALOG, MO_DATABASE, generateDropDatabaseTuple(name)); err != nil {
 		return err
 	}
 	return nil
@@ -135,10 +135,10 @@ func (e *Engine) getOrAddTransaction(op client.TxnOperator, getClusterDetails Ge
 			readOnly: false,
 			meta:     op.Txn(),
 			dnStores: cluster.DNStores,
+			fileMap:  make(map[string]uint64),
 		}
-		txn.fileMap = make(map[string]uint64)
 		txn.writes = append(txn.writes, make([]Entry, 0, 1))
-		e.txns[string(txn.meta.ID)] = txn
+		e.txns[id] = txn
 	}
 	return txn, nil
 }
@@ -156,11 +156,9 @@ func (e *Engine) delTransaction(txn *Transaction) {
 }
 
 func generateCreateDatabaseTuple(name string) *batch.Batch {
-	// TODO
-	panic("unimplemented")
+	return &batch.Batch{}
 }
 
 func generateDropDatabaseTuple(name string) *batch.Batch {
-	// TODO
-	panic("unimplemented")
+	return &batch.Batch{}
 }
