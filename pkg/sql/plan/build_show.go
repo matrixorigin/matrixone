@@ -141,7 +141,7 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 
 		if partDef, ok := def.Def.(*plan.TableDef_DefType_Partition); ok {
 			if len(partDef.Partition.PartitionMsg) != 0 {
-				partition = ` /* ` + partDef.Partition.PartitionMsg + `*/`
+				partition = ` ` + partDef.Partition.PartitionMsg
 			}
 		}
 	}
