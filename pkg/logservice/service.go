@@ -53,13 +53,8 @@ func firstError(err1 error, err2 error) error {
 	return err2
 }
 
-var initLoggerDone uint32
-
-// initLogger avoid multi call logger.SetLoggerFactory in UT
-func initLogger() {
-	if !atomic.CompareAndSwapUint32(&initLoggerDone, 0, 1) {
-		return
-	}
+func init() {
+	// avoid multi call logger.SetLoggerFactory in UT
 	logger.SetLoggerFactory(logutil.DragonboatFactory)
 }
 
@@ -89,7 +84,6 @@ func NewService(
 	fileService fileservice.FileService,
 	opts ...Option,
 ) (*Service, error) {
-	initLogger()
 	cfg.Fill()
 	if err := cfg.Validate(); err != nil {
 		return nil, err
