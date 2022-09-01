@@ -12,32 +12,39 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package fileservice
+package txnstorage
 
 import (
-	"testing"
+	"fmt"
 
-	"github.com/stretchr/testify/assert"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/pb/txn"
+	"go.uber.org/zap"
 )
 
-func TestLocalETLFS(t *testing.T) {
-
-	t.Run("file service", func(t *testing.T) {
-		testFileService(t, func(name string) FileService {
-			dir := t.TempDir()
-			fs, err := NewLocalETLFS(name, dir)
-			assert.Nil(t, err)
-			return fs
-		})
-	})
-
-	t.Run("mutable file service", func(t *testing.T) {
-		testMutableFileService(t, func() MutableFileService {
-			dir := t.TempDir()
-			fs, err := NewLocalETLFS("etl", dir)
-			assert.Nil(t, err)
-			return fs
-		})
-	})
-
+func logReq[
+	Req any,
+	Resp any,
+](
+	msg string,
+	req Req,
+	meta txn.TxnMeta,
+	resp *Resp,
+	err *error,
+) (
+	deferFunc func(),
+) {
+	logutil.Debug("engine: DN "+msg,
+		zap.String("type", fmt.Sprintf("%T", req)),
+		zap.Any("txn", meta),
+		zap.Any("data", req),
+	)
+	return func() {
+		logutil.Debug("engine: DN "+msg+" result",
+			zap.String("type", fmt.Sprintf("%T", *resp)),
+			zap.Any("txn", meta),
+			zap.Any("data", *resp),
+			zap.Any("error", *err),
+		)
+	}
 }

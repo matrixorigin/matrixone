@@ -24,7 +24,7 @@ sum(distinct a)
 333
 select avg(distinct a) from t1;
 avg(distinct a)
-55.5000
+55.5
 select min(distinct a) from t1;
 min(distinct a)
 0
@@ -57,8 +57,8 @@ a    b
 1    a
 2    null
 null    b
-null
-3
+null    
+3    
 null    null
 drop table t2;
 drop table if exists t3;
@@ -69,9 +69,7 @@ i    count(distinct j)
 1    2
 2    2
 select i+0.0 as i2, count(distinct j) from t3 group by i2;
-i2    count(distinct j)
-1.0    2
-2.0    2
+Column 'i2' does not exist
 select i+0.0 as i2, count(distinct j) from t3 group by i;
 i2    count(distinct j)
 1.0    2
@@ -83,7 +81,7 @@ INSERT INTO t4 VALUES (1,1),(1,2),(2,3);
 SELECT (SELECT COUNT(DISTINCT t4.b)) FROM t4 GROUP BY t4.a;
 correlated columns in aggregate function not yet supported
 SELECT (SELECT COUNT(DISTINCT 12)) FROM t4 GROUP BY t4.a;
-(SELECT COUNT(DISTINCT t4.b))
+(select count(distinct 12))
 1
 1
 drop table t4;
@@ -91,16 +89,16 @@ drop table if exists t5;
 create table t5 (ff double);
 insert into t5 values (2.2);
 select cast(sum(distinct ff) as decimal(5,2)) from t5;
-cast(sum(distinct ff) as decimal(5,2))
+cast(sum(distinct ff) as decimal(5, 2))
 2.20
 select cast(sum(distinct ff) as signed) from t5;
-cast(sum(distinct ff) as signed)
+cast(sum(distinct ff) as ff)
 2
 select cast(variance(ff) as decimal(10,3)) from t5;
-cast(variance(ff) as decimal(10,3))
+cast(variance(ff) as decimal(10, 3))
 0.000
 select cast(min(ff) as decimal(5,2)) from t5;
-cast(min(ff) as decimal(5,2))
+cast(min(ff) as decimal(5, 2))
 2.20
 drop table t5;
 drop table if exists t6;
@@ -108,10 +106,10 @@ create table t6 (df decimal(5,1));
 insert into t6 values(1.1);
 insert into t6 values(2.2);
 select cast(sum(distinct df) as signed) from t6;
-cast(sum(distinct df) as signed)
+cast(sum(distinct df) as df)
 3
 select cast(min(df) as signed) from t6;
-cast(min(df) as signed)
+cast(min(df) as df)
 1
 select 1e8 * sum(distinct df) from t6;
 1e8 * sum(distinct df)
@@ -128,15 +126,15 @@ select * from t7;
 a
 A
 a
-a
-a
+a 
+a   
 B
 b
-b
-b
+b 
+b   
 SELECT COUNT(DISTINCT a) FROM t7;
-COUNT(DISTINCT a)
-6
+count(distinct a)
+8
 DROP TABLE t7;
 drop table if exists t8;
 CREATE TABLE t8 (a INT, b INT);
@@ -172,12 +170,12 @@ drop table if exists t10;
 CREATE TABLE t10 (col_int_nokey int(11));
 INSERT INTO t10 VALUES (7),(8),(NULL);
 SELECT AVG(DISTINCT col_int_nokey) FROM t10;
-AVG(DISTINCT col_int_nokey)
-7.5000
+avg(distinct col_int_nokey)
+7.5
 SELECT AVG(DISTINCT outr.col_int_nokey) FROM t10 AS outr LEFT JOIN t10 AS outr2 ON
 outr.col_int_nokey = outr2.col_int_nokey;
-AVG(DISTINCT outr.col_int_nokey)
-7.5000
+avg(distinct outr.col_int_nokey)
+7.5
 DROP TABLE t10;
 drop table if exists t11;
 CREATE TABLE t11(c1 CHAR(30));
@@ -225,11 +223,10 @@ pk
 drop view v1;
 drop table t12;
 SELECT AVG(2), BIT_AND(2), BIT_OR(2), BIT_XOR(2);
-AVG(2)    BIT_AND(2)    BIT_OR(2)    BIT_XOR(2)
-2.0000    2    2    2
+avg(2)    bit_and(2)    bit_or(2)    bit_xor(2)
+2.0    2    2    2
 select count(*);
-count(*)
-1
+can not find any column when rewrite count(*) to starcount(col)
 select COUNT(12), COUNT(DISTINCT 12), MIN(2),MAX(2),STD(2), VARIANCE(2),SUM(2);
-COUNT(12)    COUNT(DISTINCT 12)    MIN(2)    MAX(2)    STD(2)    VARIANCE(2)    SUM(2)
+count(12)    count(distinct 12)    min(2)    max(2)    std(2)    variance(2)    sum(2)
 1    1    2    2    0.0    0.0    2
