@@ -10,36 +10,24 @@ insert into t1 values(71, 1, 2, 34, 5, 5.5, 341.13, 15.314, "2012-03-22", "2013-
 insert into t1 values(1, 1, 21, 4, 54, 53.5, 431.13, 14.394, "2011-03-12", "2015-03-12 10:03:12", "2002-03-12 13:03:12", "afbc", "dct5f");
 insert into t1 values(1, 71, 2, 34, 5, 5.5, 31.313, 124.314, "2012-01-12", "2019-03-12 10:03:12", "2013-03-12 13:03:12", "3abd1c", "dcvf");
 select weekday(a),weekday(b),weekday(c),weekday(d),weekday(e),weekday(f) from t1;
-weekday(a)	weekday(b)	weekday(c)	weekday(d)	weekday(e)	weekday(f)
-null	null	null	null	null	null
-null	null	null	null	null	null
-null	null	null	null	null	null
-null	null	null	null	null	null
+Function 'weekday' with parameters [TINYINT] is not supported.
 select weekday(g),weekday(h),weekday(i),weekday(k),weekday(l),weekday(m),weekday(n) from t1;
-weekday(g)	weekday(h)	weekday(i)	weekday(k)	weekday(l)	weekday(m)	weekday(n)
-null	null	5	0	5	null	null
-null	null	3	1	4	null	null
-null	null	5	3	1	null	null
-null	0	3	1	1	null	null
+Function 'weekday' with parameters [DOUBLE] is not supported.
 drop table t1;
 SELECT weekday("2015-09-03") as weekday;
 weekday
 3
-SELECT weekday(20150904) as weekday;
+SELECT weekday('20150904') as weekday;
 weekday
 4
 SELECT weekday(1340124) as weekday;
-weekday
-null
+Function 'weekday' with parameters [BIGINT] is not supported.
 SELECT weekday(0.45133) as weekday;
-weekday
-null
+Function 'weekday' with parameters [DECIMAL128] is not supported.
 SELECT weekday(10) as weekday;
-weekday
-null
+Function 'weekday' with parameters [BIGINT] is not supported.
 SELECT weekday(1=1) as weekday;
-weekday
-null
+Function 'weekday' with parameters [BOOL] is not supported.
 SELECT weekday('2015-09.30') as weekday;
 weekday
 2

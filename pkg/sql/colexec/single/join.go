@@ -117,38 +117,17 @@ func (ctr *container) emptyProbe(bat *batch.Batch, ap *Argument, proc *process.P
 	defer bat.Clean(proc.GetMheap())
 	anal.Input(bat)
 	rbat := batch.NewWithSize(len(ap.Result))
-	rbat.Zs = proc.GetMheap().GetSels()
+	count := bat.Length()
 	for i, rp := range ap.Result {
 		if rp.Rel == 0 {
-			rbat.Vecs[i] = vector.New(bat.Vecs[rp.Pos].Typ)
+			rbat.Vecs[i] = bat.Vecs[rp.Pos]
+			bat.Vecs[rp.Pos] = nil
 		} else {
-			rbat.Vecs[i] = vector.New(ctr.bat.Vecs[rp.Pos].Typ)
+			rbat.Vecs[i] = vector.NewConstNull(ctr.bat.Vecs[rp.Pos].Typ, count)
 		}
 	}
-	count := bat.Length()
-	for i := 0; i < count; i += hashmap.UnitLimit {
-		n := count - i
-		if n > hashmap.UnitLimit {
-			n = hashmap.UnitLimit
-		}
-		for k := 0; k < n; k++ {
-			for j, rp := range ap.Result {
-				if rp.Rel == 0 {
-					if err := vector.UnionOne(rbat.Vecs[j], bat.Vecs[rp.Pos], int64(i+k), proc.GetMheap()); err != nil {
-						rbat.Clean(proc.GetMheap())
-						return err
-					}
-				} else {
-					if err := vector.UnionNull(rbat.Vecs[j], nil, proc.GetMheap()); err != nil {
-						rbat.Clean(proc.GetMheap())
-						return err
-					}
-				}
-			}
-			rbat.Zs = append(rbat.Zs, bat.Zs[i+k])
-		}
-	}
-	rbat.ExpandNulls()
+	rbat.Zs = bat.Zs
+	bat.Zs = nil
 	anal.Output(rbat)
 	proc.SetInputBatch(rbat)
 	return nil
@@ -158,11 +137,8 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 	defer bat.Clean(proc.GetMheap())
 	anal.Input(bat)
 	rbat := batch.NewWithSize(len(ap.Result))
-	rbat.Zs = proc.GetMheap().GetSels()
 	for i, rp := range ap.Result {
-		if rp.Rel == 0 {
-			rbat.Vecs[i] = vector.New(bat.Vecs[rp.Pos].Typ)
-		} else {
+		if rp.Rel != 0 {
 			rbat.Vecs[i] = vector.New(ctr.bat.Vecs[rp.Pos].Typ)
 		}
 	}
@@ -186,23 +162,17 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 			}
 			if zvals[k] == 0 || vals[k] == 0 {
 				for j, rp := range ap.Result {
-					if rp.Rel == 0 {
-						if err := vector.UnionOne(rbat.Vecs[j], bat.Vecs[rp.Pos], int64(i+k), proc.GetMheap()); err != nil {
-							rbat.Clean(proc.GetMheap())
-							return err
-						}
-					} else {
+					if rp.Rel != 0 {
 						if err := vector.UnionNull(rbat.Vecs[j], ctr.bat.Vecs[rp.Pos], proc.GetMheap()); err != nil {
 							rbat.Clean(proc.GetMheap())
 							return err
 						}
 					}
 				}
-				rbat.Zs = append(rbat.Zs, bat.Zs[i+k])
 				continue
 			}
 			idx := 0
-			cnt := 0
+			matched := false
 			sels := mSels[vals[k]-1]
 			if ap.Cond != nil {
 				for j, sel := range sels {
@@ -212,49 +182,47 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 					}
 					bs := vec.Col.([]bool)
 					if bs[0] {
-						cnt++
+						if matched {
+							return errors.New("scalar subquery returns more than 1 row")
+						}
+						matched = true
 						idx = j
 					}
 					vec.Free(proc.Mp)
 				}
-			}
-			if (ap.Cond != nil && cnt > 1) || (ap.Cond == nil && len(sels) > 1) {
+			} else if len(sels) > 1 {
 				return errors.New("scalar subquery returns more than 1 row")
 			}
-			if ap.Cond != nil && cnt == 0 {
+			if ap.Cond != nil && !matched {
 				for j, rp := range ap.Result {
-					if rp.Rel == 0 {
-						if err := vector.UnionOne(rbat.Vecs[j], bat.Vecs[rp.Pos], int64(i+k), proc.GetMheap()); err != nil {
-							rbat.Clean(proc.GetMheap())
-							return err
-						}
-					} else {
+					if rp.Rel != 0 {
 						if err := vector.UnionNull(rbat.Vecs[j], ctr.bat.Vecs[rp.Pos], proc.GetMheap()); err != nil {
 							rbat.Clean(proc.GetMheap())
 							return err
 						}
 					}
 				}
-				rbat.Zs = append(rbat.Zs, bat.Zs[i+k])
 				continue
 			}
 			sel := sels[idx]
 			for j, rp := range ap.Result {
-				if rp.Rel == 0 {
-					if err := vector.UnionOne(rbat.Vecs[j], bat.Vecs[rp.Pos], int64(i+k), proc.GetMheap()); err != nil {
-						rbat.Clean(proc.GetMheap())
-						return err
-					}
-				} else {
+				if rp.Rel != 0 {
 					if err := vector.UnionOne(rbat.Vecs[j], ctr.bat.Vecs[rp.Pos], sel, proc.GetMheap()); err != nil {
 						rbat.Clean(proc.GetMheap())
 						return err
 					}
 				}
 			}
-			rbat.Zs = append(rbat.Zs, ctr.bat.Zs[sel])
 		}
 	}
+	for i, rp := range ap.Result {
+		if rp.Rel == 0 {
+			rbat.Vecs[i] = bat.Vecs[rp.Pos]
+			bat.Vecs[rp.Pos] = nil
+		}
+	}
+	rbat.Zs = bat.Zs
+	bat.Zs = nil
 	rbat.ExpandNulls()
 	anal.Output(rbat)
 	proc.SetInputBatch(rbat)

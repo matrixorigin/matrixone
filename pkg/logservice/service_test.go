@@ -30,18 +30,24 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
+	hapkg "github.com/matrixorigin/matrixone/pkg/hakeeper"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 )
 
 const (
-	testServiceAddress = "127.0.0.1:9000"
+	testServiceAddress     = "127.0.0.1:9000"
+	testGossipAddress      = "127.0.0.1:9010"
+	dummyGossipSeedAddress = "127.0.0.1:9100"
 )
 
 func getServiceTestConfig() Config {
 	c := Config{
 		UUID:                 uuid.New().String(),
 		RTTMillisecond:       10,
-		GossipSeedAddresses:  []string{"127.0.0.1:9000"},
+		GossipAddress:        testGossipAddress,
+		GossipListenAddress:  testGossipAddress,
+		GossipSeedAddresses:  []string{testGossipAddress, dummyGossipSeedAddress},
 		DeploymentID:         1,
 		FS:                   vfs.NewStrictMem(),
 		ServiceListenAddress: testServiceAddress,
@@ -59,25 +65,41 @@ func runServiceTest(t *testing.T,
 	cfg := getServiceTestConfig()
 	defer vfs.ReportLeakedFD(cfg.FS, t)
 	service, err := NewService(cfg,
+		testutil.NewFS(),
 		WithBackendFilter(func(msg morpc.Message, backendAddr string) bool {
 			return true
 		}),
 	)
 	require.NoError(t, err)
-	peers := make(map[uint64]dragonboat.Target)
-	peers[1] = service.ID()
+	defer func() {
+		assert.NoError(t, service.Close())
+	}()
+
 	if startReplica {
+		shardID := hapkg.DefaultHAKeeperShardID
 		peers := make(map[uint64]dragonboat.Target)
 		peers[1] = service.ID()
 		if hakeeper {
 			require.NoError(t, service.store.startHAKeeperReplica(1, peers, false))
 		} else {
+			shardID = 1
 			require.NoError(t, service.store.startReplica(1, 1, peers, false))
 		}
+
+		// wait for leader to be elected
+		done := false
+		for i := 0; i < 1000; i++ {
+			_, _, ok, err := service.store.nh.GetLeaderID(shardID)
+			require.NoError(t, err)
+			if ok {
+				done = true
+				break
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+		require.True(t, done)
 	}
-	defer func() {
-		assert.NoError(t, service.Close())
-	}()
+
 	fn(t, service)
 }
 
@@ -86,6 +108,7 @@ func TestNewService(t *testing.T) {
 	cfg := getServiceTestConfig()
 	defer vfs.ReportLeakedFD(cfg.FS, t)
 	service, err := NewService(cfg,
+		testutil.NewFS(),
 		WithBackendFilter(func(msg morpc.Message, backendAddr string) bool {
 			return true
 		}),
@@ -533,6 +556,7 @@ func TestShardInfoCanBeQueried(t *testing.T) {
 	}
 	cfg1.Fill()
 	service1, err := NewService(cfg1,
+		testutil.NewFS(),
 		WithBackendFilter(func(msg morpc.Message, backendAddr string) bool {
 			return true
 		}),
@@ -546,6 +570,7 @@ func TestShardInfoCanBeQueried(t *testing.T) {
 	assert.NoError(t, service1.store.startReplica(1, 1, peers1, false))
 	cfg2.Fill()
 	service2, err := NewService(cfg2,
+		testutil.NewFS(),
 		WithBackendFilter(func(msg morpc.Message, backendAddr string) bool {
 			return true
 		}),
@@ -662,6 +687,7 @@ func TestGossipInSimulatedCluster(t *testing.T) {
 		cfg.GossipProbeInterval.Duration = 350 * time.Millisecond
 		configs = append(configs, cfg)
 		service, err := NewService(cfg,
+			testutil.NewFS(),
 			WithBackendFilter(func(msg morpc.Message, backendAddr string) bool {
 				return true
 			}),
@@ -769,6 +795,7 @@ func TestGossipInSimulatedCluster(t *testing.T) {
 	services[12] = nil
 	time.Sleep(2 * time.Second)
 	service, err := NewService(configs[12],
+		testutil.NewFS(),
 		WithBackendFilter(func(msg morpc.Message, backendAddr string) bool {
 			return true
 		}),

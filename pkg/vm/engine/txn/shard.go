@@ -77,12 +77,14 @@ type ShardToSingleStatic struct {
 
 func (s *ShardToSingleStatic) setShard(nodes []logservicepb.DNStore) {
 	s.setOnce.Do(func() {
-		info := nodes[0].Shards[0]
+		node := nodes[0]
+		info := node.Shards[0]
 		s.shard = Shard{
 			DNShardRecord: metadata.DNShardRecord{
 				ShardID: info.ShardID,
 			},
 			ReplicaID: info.ReplicaID,
+			Address:   node.ServiceAddress,
 		}
 	})
 }
@@ -127,6 +129,7 @@ func (s *ShardToSingleStatic) Stores(stores []logservicepb.DNStore) (shards []Sh
 				ShardID: info.ShardID,
 			},
 			ReplicaID: info.ReplicaID,
+			Address:   store.ServiceAddress,
 		})
 	}
 	return

@@ -281,6 +281,16 @@ func (m *MemHandler) HandleCreateDatabase(meta txn.TxnMeta, req txnengine.Create
 func (m *MemHandler) HandleCreateRelation(meta txn.TxnMeta, req txnengine.CreateRelationReq, resp *txnengine.CreateRelationResp) error {
 	tx := m.getTx(meta)
 
+	// validate database id
+	_, err := m.databases.Get(tx, Text(req.DatabaseID))
+	if errors.Is(err, sql.ErrNoRows) {
+		resp.ErrDatabaseNotFound.ID = req.DatabaseID
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+
 	// check existence
 	iter := m.relations.NewIter(tx)
 	defer iter.Close()
@@ -773,8 +783,6 @@ func (m *MemHandler) HandleRead(meta txn.TxnMeta, req txnengine.ReadReq, resp *t
 	}
 	m.iterators.Unlock()
 
-	//TODO handle system tables
-
 	b := batch.New(false, req.ColNames)
 
 	for i, name := range req.ColNames {
@@ -801,6 +809,10 @@ func (m *MemHandler) HandleRead(meta txn.TxnMeta, req txnengine.ReadReq, resp *t
 			if !ok {
 				resp.ErrColumnNotFound.Name = name
 				return nil
+			}
+			str, ok := value.(string)
+			if ok {
+				value = []byte(str)
 			}
 			b.Vecs[i].Append(value, m.mheap)
 		}

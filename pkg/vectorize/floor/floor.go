@@ -36,6 +36,7 @@ N >= 0, floor to the Nth placeholder after decimal point
 import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"math"
+	"strconv"
 	"strings"
 )
 
@@ -50,7 +51,7 @@ var (
 	FloorInt64      func([]int64, []int64, int64) []int64
 	FloorFloat32    func([]float32, []float32, int64) []float32
 	FloorFloat64    func([]float64, []float64, int64) []float64
-	FloorDecimal128 func([]types.Decimal128, []types.Decimal128, int64) []types.Decimal128
+	FloorDecimal128 func(int32, []types.Decimal128, []types.Decimal128, int64) []types.Decimal128
 )
 
 var MaxUint8digits = numOfDigits(math.MaxUint8)
@@ -292,15 +293,19 @@ func floorFloat64(xs, rs []float64, digits int64) []float64 {
 	return rs
 }
 
-func floorDecimal128(xs, rs []types.Decimal128, _ int64) []types.Decimal128 {
+func floorDecimal128(scale int32, xs, rs []types.Decimal128, _ int64) []types.Decimal128 {
 	for i := range xs {
-		str := strings.Split(xs[i].String(), ".")[0]
-		x, _ := types.Decimal128_FromString(str)
-		if str[0] != '-' {
+		strs := strings.Split(xs[i].ToStringWithScale(scale), ".")
+		x, _ := types.Decimal128_FromString(strs[0])
+		if strs[0][0] != '-' || len(strs) == 1 {
 			rs[i] = x
 			continue
 		}
-		rs[i] = x.AddInt64(-1)
+		v, _ := strconv.ParseFloat(strs[1], 64)
+		if v > float64(0) {
+			x = x.AddInt64(-1)
+		}
+		rs[i] = x
 	}
 	return rs
 }

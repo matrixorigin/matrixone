@@ -30,7 +30,6 @@ func (s *service) Prepare(ctx context.Context, request *txn.TxnRequest, response
 	defer util.LogTxnHandleResult(s.logger, response)
 
 	response.PrepareResponse = &txn.TxnPrepareResponse{}
-	s.validDNShard(request.GetTargetDN())
 
 	txnID := request.Txn.ID
 	txnCtx := s.getTxnContext(txnID)
@@ -85,7 +84,6 @@ func (s *service) GetStatus(ctx context.Context, request *txn.TxnRequest, respon
 	defer util.LogTxnHandleResult(s.logger, response)
 
 	response.GetStatusResponse = &txn.TxnGetStatusResponse{}
-	s.validDNShard(request.GetTargetDN())
 
 	txnID := request.Txn.ID
 	txnCtx := s.getTxnContext(txnID)
@@ -111,7 +109,6 @@ func (s *service) CommitDNShard(ctx context.Context, request *txn.TxnRequest, re
 	defer util.LogTxnHandleResult(s.logger, response)
 
 	response.CommitDNShardResponse = &txn.TxnCommitDNShardResponse{}
-	s.validDNShard(request.GetTargetDN())
 
 	txnID := request.Txn.ID
 	txnCtx := s.getTxnContext(txnID)
@@ -167,7 +164,6 @@ func (s *service) RollbackDNShard(ctx context.Context, request *txn.TxnRequest, 
 	defer util.LogTxnHandleResult(s.logger, response)
 
 	response.RollbackDNShardResponse = &txn.TxnRollbackDNShardResponse{}
-	s.validDNShard(request.GetTargetDN())
 
 	txnID := request.Txn.ID
 	txnCtx := s.getTxnContext(txnID)

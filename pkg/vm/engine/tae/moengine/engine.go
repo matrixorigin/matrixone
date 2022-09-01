@@ -16,6 +16,7 @@ package moengine
 
 import (
 	"context"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -86,4 +87,9 @@ func (e *txnEngine) Nodes() (engine.Nodes, error) {
 
 func (e *txnEngine) StartTxn(info []byte) (txn Txn, err error) {
 	return e.impl.StartTxn(info)
+}
+
+func (e *txnEngine) Hints() (h engine.Hints) {
+	h.CommitOrRollbackTimeout = time.Minute
+	return
 }

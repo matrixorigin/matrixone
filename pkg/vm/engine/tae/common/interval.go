@@ -17,6 +17,7 @@ package common
 import (
 	"errors"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"sync/atomic"
 )
 
@@ -40,7 +41,7 @@ func (i *ClosedInterval) Append(id uint64) error {
 		return nil
 	}
 	if id != i.End+1 {
-		fmt.Printf("invalid interval %v %v\n", i, id)
+		logutil.Infof("invalid interval %v %v", i, id)
 		return ErrIntervalInvalid
 	}
 	i.End = id

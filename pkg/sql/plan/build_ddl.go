@@ -17,7 +17,6 @@ package plan
 import (
 	"encoding/json"
 	"fmt"
-	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/errno"
@@ -183,14 +182,8 @@ func buildCreateTable(stmt *tree.CreateTable, ctx CompilerContext) (*Plan, error
 		}
 	}
 
+	// After handleTableOptions, so begin the partitions processing depend on TableDef
 	if stmt.Param != nil {
-		for i := 0; i < len(stmt.Param.S3option); i += 2 {
-			switch strings.ToLower(stmt.Param.S3option[i]) {
-			case "endpoint", "region", "access_key_id", "secret_access_key", "bucket", "filepath", "compression":
-			default:
-				return nil, fmt.Errorf("the keyword '%s' is not support", strings.ToLower(stmt.Param.S3option[i]))
-			}
-		}
 		json_byte, err := json.Marshal(stmt.Param)
 		if err != nil {
 			return nil, err
@@ -213,9 +206,29 @@ func buildCreateTable(stmt *tree.CreateTable, ctx CompilerContext) (*Plan, error
 			},
 		})
 	}
+
+	builder := NewQueryBuilder(plan.Query_SELECT, ctx)
+	bindContext := NewBindContext(builder, nil)
+
 	// set partition(unsupport now)
 	if stmt.PartitionOption != nil {
-		return nil, errors.New(errno.SQLStatementNotYetComplete, fmt.Sprintf("partition unsupport now; statement: '%v'", tree.String(stmt, dialect.MYSQL)))
+		nodeID := builder.appendNode(&plan.Node{
+			NodeType:    plan.Node_TABLE_SCAN,
+			Cost:        nil,
+			ObjRef:      nil,
+			TableDef:    createTable.TableDef,
+			BindingTags: []int32{builder.genNewTag()},
+		}, bindContext)
+
+		err = builder.addBinding(nodeID, tree.AliasClause{}, bindContext)
+		if err != nil {
+			return nil, err
+		}
+		partitionBinder := NewPartitionBinder(builder, bindContext)
+		err = buildPartitionByClause(partitionBinder, stmt.PartitionOption, createTable.TableDef)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	return &Plan{
@@ -228,6 +241,22 @@ func buildCreateTable(stmt *tree.CreateTable, ctx CompilerContext) (*Plan, error
 			},
 		},
 	}, nil
+}
+
+// buildPartitionByClause build partition by clause info and semantic check.
+// Currently, sub partition and partition value verification are not supported
+func buildPartitionByClause(partitionBinder *PartitionBinder, partitionOp *tree.PartitionOption, tableDef *TableDef) (err error) {
+	switch partitionOp.PartBy.PType.(type) {
+	case *tree.HashType:
+		err = buildHashPartition(partitionBinder, partitionOp, tableDef)
+	case *tree.KeyType:
+		err = buildKeyPartition(partitionBinder, partitionOp, tableDef)
+	case *tree.RangeType:
+		err = buildRangePartition(partitionBinder, partitionOp, tableDef)
+	case *tree.ListType:
+		err = buildListPartitiion(partitionBinder, partitionOp, tableDef)
+	}
+	return err
 }
 
 func buildTableDefs(defs tree.TableDefs, ctx CompilerContext, tableDef *TableDef) error {
@@ -249,6 +278,7 @@ func buildTableDefs(defs tree.TableDefs, ctx CompilerContext, tableDef *TableDef
 
 			var pks []string
 			var comment string
+			var auto_incr bool
 			for _, attr := range def.Attributes {
 				if _, ok := attr.(*tree.AttributePrimaryKey); ok {
 					if colType.GetId() == int32(types.T_blob) {
@@ -262,6 +292,13 @@ func buildTableDefs(defs tree.TableDefs, ctx CompilerContext, tableDef *TableDef
 					if getNumOfCharacters(comment) > maxLengthOfColumnComment {
 						errmsg := fmt.Sprintf("Comment for field '%s' is too long (max = %d)", def.Name.Parts[0], maxLengthOfColumnComment)
 						return errors.New(errno.InvalidOptionValue, errmsg)
+					}
+				}
+
+				if _, ok := attr.(*tree.AttributeAutoIncrement); ok {
+					auto_incr = true
+					if colType.GetId() != int32(types.T_int32) && colType.GetId() != int32(types.T_int64) {
+						return errors.New(errno.InvalidColumnDefinition, "the auto_incr column is only support int32 and int64 type now")
 					}
 				}
 			}
@@ -278,11 +315,12 @@ func buildTableDefs(defs tree.TableDefs, ctx CompilerContext, tableDef *TableDef
 			}
 
 			col := &ColDef{
-				Name:    def.Name.Parts[0],
-				Alg:     plan.CompressType_Lz4,
-				Typ:     colType,
-				Default: defaultValue,
-				Comment: comment,
+				Name:          def.Name.Parts[0],
+				Alg:           plan.CompressType_Lz4,
+				Typ:           colType,
+				Default:       defaultValue,
+				Comment:       comment,
+				AutoIncrement: auto_incr,
 			}
 			colNameMap[col.Name] = col.Typ.GetId()
 			tableDef.Cols = append(tableDef.Cols, col)
@@ -388,8 +426,12 @@ func buildDropTable(stmt *tree.DropTable, ctx CompilerContext) (*Plan, error) {
 				break
 			}
 		}
-		if isView {
+		if isView && !dropTable.IfExists {
+			// drop table v0, v0 is view
 			return nil, errors.New("", fmt.Sprintf("table %s is not exists", dropTable.Table))
+		} else if isView {
+			// drop table if exists v0, v0 is view
+			dropTable.Table = ""
 		}
 	}
 

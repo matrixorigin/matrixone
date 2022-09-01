@@ -91,6 +91,7 @@ func NewTestSpecClock(fn func() int64) clock.Clock {
 // TestSender test TxnSender for sending messages between TxnServices
 type TestSender struct {
 	router map[string]rpc.TxnRequestHandleFunc
+	filter func(*txn.TxnRequest) bool
 
 	mu struct {
 		sync.Mutex
@@ -121,6 +122,10 @@ func (s *TestSender) AddTxnService(ts TxnService) {
 	s.router[s.getRouteKey(txn.TxnMethod_RollbackDNShard, ts.Shard())] = ts.RollbackDNShard
 }
 
+func (s *TestSender) setFilter(filter func(*txn.TxnRequest) bool) {
+	s.filter = filter
+}
+
 // Send TxnSender send
 func (s *TestSender) Send(ctx context.Context, requests []txn.TxnRequest) (*rpc.SendResult, error) {
 	ctx, cancel := context.WithTimeout(ctx, time.Minute)
@@ -130,6 +135,10 @@ func (s *TestSender) Send(ctx context.Context, requests []txn.TxnRequest) (*rpc.
 
 	responses := make([]txn.TxnResponse, 0, len(requests))
 	for _, req := range requests {
+		if s.filter != nil && !s.filter(&req) {
+			continue
+		}
+
 		resp := txn.TxnResponse{}
 		h := s.router[s.getRouteKey(req.Method, req.GetTargetDN())]
 		if err := h(ctx, &req, &resp); err != nil {

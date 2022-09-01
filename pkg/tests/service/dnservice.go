@@ -126,10 +126,10 @@ type dnOptions []dnservice.Option
 // newDNService initializes an instance of `DNService`.
 func newDNService(
 	cfg *dnservice.Config,
-	factory fileservice.FileServiceFactory,
+	fs fileservice.FileService,
 	opts dnOptions,
 ) (DNService, error) {
-	svc, err := dnservice.NewService(cfg, factory, opts...)
+	svc, err := dnservice.NewService(cfg, fs, opts...)
 	if err != nil {
 		return nil, err
 	}

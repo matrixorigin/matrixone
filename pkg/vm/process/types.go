@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 )
@@ -115,6 +116,8 @@ type Process struct {
 	Ctx context.Context
 
 	Cancel context.CancelFunc
+
+	FileService fileservice.FileService
 }
 
 type analyze struct {

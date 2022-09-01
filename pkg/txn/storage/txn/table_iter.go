@@ -55,8 +55,9 @@ func (t *TableIter[K, R]) Next() bool {
 		if ok := t.iter.Next(); !ok {
 			return false
 		}
-		// skip invisible values
-		if !t.iter.Item().Values.Visible(t.tx, t.tx.CurrentTime) {
+		// skip unreadable values
+		value, _ := t.iter.Item().Values.Read(t.tx, t.readTime)
+		if value == nil {
 			continue
 		}
 		return true
@@ -68,8 +69,9 @@ func (t *TableIter[K, R]) First() bool {
 		return false
 	}
 	for {
-		// skip invisible values
-		if !t.iter.Item().Values.Visible(t.tx, t.tx.CurrentTime) {
+		// skip unreadable values
+		value, _ := t.iter.Item().Values.Read(t.tx, t.readTime)
+		if value == nil {
 			if ok := t.iter.Next(); !ok {
 				return false
 			}

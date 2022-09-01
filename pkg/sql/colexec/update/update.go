@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -42,6 +43,7 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 	if bat == nil || len(bat.Zs) == 0 {
 		return false, nil
 	}
+
 	defer bat.Clean(proc.Mp)
 	var affectedRows uint64 = 0
 	batLen := batch.Length(bat)
@@ -51,7 +53,7 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 	}
 
 	ctx := context.TODO()
-	for _, updateCtx := range p.UpdateCtxs {
+	for i, updateCtx := range p.UpdateCtxs {
 
 		tmpBat := &batch.Batch{}
 
@@ -61,6 +63,7 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 			tmpBat.Vecs = bat.Vecs[int(idx)+1 : int(idx)+len(updateCtx.OrderAttrs)+1]
 			tmpBat.Attrs = append(tmpBat.Attrs, updateCtx.UpdateAttrs...)
 			tmpBat.Attrs = append(tmpBat.Attrs, updateCtx.OtherAttrs...)
+			tmpBat.Zs = bat.Zs
 
 			for i := range tmpBat.Vecs {
 				if tmpBat.Vecs[i].IsScalarNull() {
@@ -77,6 +80,9 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 			}
 
 			batch.Reorder(tmpBat, updateCtx.OrderAttrs)
+			if err := colexec.UpdateInsertBatch(p.Engine, p.DB[i], ctx, proc, p.TableDefVec[i].Cols, tmpBat, p.TableID[i]); err != nil {
+				return false, err
+			}
 			err = updateCtx.TableSource.Write(ctx, tmpBat)
 			if err != nil {
 				return false, err
@@ -107,6 +113,9 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 			tmpBat.Attrs = append(tmpBat.Attrs, updateCtx.OtherAttrs...)
 
 			batch.Reorder(tmpBat, updateCtx.OrderAttrs)
+			if err := colexec.UpdateInsertBatch(p.Engine, p.DB[i], ctx, proc, p.TableDefVec[i].Cols, tmpBat, p.TableID[i]); err != nil {
+				return false, err
+			}
 			err = updateCtx.TableSource.Write(ctx, tmpBat)
 			if err != nil {
 				tmpBat.Clean(proc.Mp)
@@ -156,6 +165,7 @@ func FilterBatch(bat *batch.Batch, batLen int, proc *process.Process) (*batch.Ba
 			}
 		}
 	}
+	newBat.Zs = make([]int64, batLen)
 	return newBat, cnt
 }
 

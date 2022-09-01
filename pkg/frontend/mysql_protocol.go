@@ -911,9 +911,9 @@ func (mp *MysqlProtocolImpl) writeZeros(data []byte, pos int, count int) int {
 // and judges it with the authentication data from the client.
 // Algorithm: SHA1( password ) XOR SHA1( slat + SHA1( SHA1( password ) ) )
 func (mp *MysqlProtocolImpl) checkPassword(password, salt, auth []byte) bool {
-	if len(password) == 0 {
-		return false
-	}
+	//if len(password) == 0 {
+	//	return false
+	//}
 	//hash1 = SHA1(password)
 	sha := sha1.New()
 	_, err := sha.Write(password)
@@ -962,23 +962,39 @@ func (mp *MysqlProtocolImpl) authenticateUser(authResponse []byte) error {
 	//TODO:check the user and the connection
 	//TODO:get the user's password
 	var psw []byte
-	if mp.username == mp.SV.DumpUser { //the user dump for test
-		psw = []byte(mp.SV.DumpPassword)
-	}
+	var err error
 
 	if !mp.GetSkipCheckUser() {
-		err := mp.ses.AuthenticateUser(mp.username)
+		psw, err = mp.ses.AuthenticateUser(mp.username)
 		if err != nil {
 			return err
 		}
+
+		//TO Check password
+		if mp.checkPassword(psw, mp.salt, authResponse) {
+			logutil.Infof("check password succeeded\n")
+		} else {
+			return fmt.Errorf("check password failed")
+		}
+	} else {
+		//Get tenant info
+		tenant, err := GetTenantInfo(mp.username)
+		if err != nil {
+			return err
+		}
+
+		if mp.ses != nil {
+			mp.ses.SetTenantInfo(tenant)
+
+			//TO Check password
+			if len(psw) == 0 || mp.checkPassword(psw, mp.salt, authResponse) {
+				logutil.Infof("check password succeeded\n")
+			} else {
+				return fmt.Errorf("check password failed")
+			}
+		}
 	}
 
-	//TO Check password
-	if mp.checkPassword(psw, mp.salt, authResponse) {
-		logutil.Infof("check password succeeded\n")
-	} else {
-		return fmt.Errorf("check password failed")
-	}
 	return nil
 }
 
@@ -1788,7 +1804,7 @@ func (mp *MysqlProtocolImpl) SendResultSetTextBatchRowSpeedup(mrs *MysqlResultSe
 // open a new row of the resultset
 func (mp *MysqlProtocolImpl) openRow(_ []byte) error {
 	if mp.enableLog {
-		fmt.Println("openRow")
+		logutil.Info("openRow")
 	}
 	return mp.openPacket()
 }
@@ -1796,7 +1812,7 @@ func (mp *MysqlProtocolImpl) openRow(_ []byte) error {
 // close a finished row of the resultset
 func (mp *MysqlProtocolImpl) closeRow(_ []byte) error {
 	if mp.enableLog {
-		fmt.Println("closeRow")
+		logutil.Info("closeRow")
 	}
 
 	err := mp.closePacket(true)
@@ -1814,7 +1830,7 @@ func (mp *MysqlProtocolImpl) closeRow(_ []byte) error {
 // flushOutBuffer the data in the outbuf into the network
 func (mp *MysqlProtocolImpl) flushOutBuffer() error {
 	if mp.enableLog {
-		fmt.Println("flush")
+		logutil.Info("flush")
 	}
 
 	if mp.bytesInOutBuffer >= mp.untilBytesInOutbufToFlush {
@@ -1833,7 +1849,7 @@ func (mp *MysqlProtocolImpl) flushOutBuffer() error {
 // open a new mysql protocol packet
 func (mp *MysqlProtocolImpl) openPacket() error {
 	if mp.enableLog {
-		fmt.Println("openPacket")
+		logutil.Info("openPacket")
 	}
 
 	outbuf := mp.tcpConn.OutBuf()
@@ -1909,7 +1925,7 @@ func (mp *MysqlProtocolImpl) fillPacket(elems ...byte) error {
 // close a mysql protocol packet
 func (mp *MysqlProtocolImpl) closePacket(appendZeroPacket bool) error {
 	if mp.enableLog {
-		fmt.Println("closePacket")
+		logutil.Info("closePacket")
 	}
 	if !mp.isInPacket() {
 		return nil

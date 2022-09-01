@@ -17,7 +17,6 @@ package loopanti
 import (
 	"bytes"
 
-	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -94,27 +93,12 @@ func (ctr *container) emptyProbe(bat *batch.Batch, ap *Argument, proc *process.P
 	defer bat.Clean(proc.GetMheap())
 	anal.Input(bat)
 	rbat := batch.NewWithSize(len(ap.Result))
-	rbat.Zs = proc.GetMheap().GetSels()
 	for i, pos := range ap.Result {
-		rbat.Vecs[i] = vector.New(bat.Vecs[pos].Typ)
+		rbat.Vecs[i] = bat.Vecs[pos]
+		bat.Vecs[pos] = nil
 	}
-	count := bat.Length()
-	for i := 0; i < count; i += hashmap.UnitLimit {
-		n := count - i
-		if n > hashmap.UnitLimit {
-			n = hashmap.UnitLimit
-		}
-		for k := 0; k < n; k++ {
-			for j, pos := range ap.Result {
-				if err := vector.UnionOne(rbat.Vecs[j], bat.Vecs[pos], int64(i+k), proc.GetMheap()); err != nil {
-					rbat.Clean(proc.GetMheap())
-					return err
-				}
-			}
-			rbat.Zs = append(rbat.Zs, bat.Zs[i+k])
-		}
-	}
-	rbat.ExpandNulls()
+	rbat.Zs = bat.Zs
+	bat.Zs = nil
 	anal.Output(rbat)
 	proc.SetInputBatch(rbat)
 	return nil
@@ -130,7 +114,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 	}
 	count := bat.Length()
 	for i := 0; i < count; i++ {
-		flg := true
+		matched := false
 		vec, err := colexec.JoinFilterEvalExpr(bat, ctr.bat, i, proc, ap.Cond)
 		if err != nil {
 			return err
@@ -138,11 +122,12 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 		bs := vec.Col.([]bool)
 		for _, b := range bs {
 			if b {
-				flg = false
+				matched = true
+				break
 			}
 		}
-		vec.Free(proc.GetMheap())
-		if flg && !nulls.Any(vec.Nsp) {
+		defer vec.Free(proc.GetMheap())
+		if !matched && !nulls.Any(vec.Nsp) {
 			for k, pos := range ap.Result {
 				if err := vector.UnionOne(rbat.Vecs[k], bat.Vecs[pos], int64(i), proc.GetMheap()); err != nil {
 					rbat.Clean(proc.GetMheap())

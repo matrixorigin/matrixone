@@ -19,6 +19,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/gob"
+	"errors"
 	"fmt"
 	"io"
 	mrand "math/rand"
@@ -26,18 +27,24 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"testing/iotest"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 )
 
 func testFileService(
 	t *testing.T,
-	newFS func() FileService,
+	newFS func(name string) FileService,
 ) {
+
+	fsName := time.Now().Format("fs-2006-01-02-15-04-05")
 
 	t.Run("basic", func(t *testing.T) {
 		ctx := context.Background()
-		fs := newFS()
+		fs := newFS(fsName)
+
+		assert.Equal(t, fsName, fs.Name())
 
 		err := fs.Write(ctx, IOVector{
 			FilePath: "foo",
@@ -141,12 +148,10 @@ func testFileService(
 		})
 		assert.Nil(t, err)
 
-		// invalid path TODO
-
 	})
 
 	t.Run("random", func(t *testing.T) {
-		fs := newFS()
+		fs := newFS(fsName)
 		ctx := context.Background()
 
 		for i := 0; i < 8; i++ {
@@ -211,7 +216,7 @@ func testFileService(
 	})
 
 	t.Run("tree", func(t *testing.T) {
-		fs := newFS()
+		fs := newFS(fsName)
 		ctx := context.Background()
 
 		for _, dir := range []string{
@@ -293,7 +298,7 @@ func testFileService(
 	})
 
 	t.Run("errors", func(t *testing.T) {
-		fs := newFS()
+		fs := newFS(fsName)
 		ctx := context.Background()
 
 		err := fs.Read(ctx, &IOVector{
@@ -358,10 +363,35 @@ func testFileService(
 		})
 		assert.ErrorIs(t, err, ErrSizeNotMatch)
 
+		err = fs.Write(ctx, IOVector{
+			FilePath: "foo",
+			Entries: []IOEntry{
+				{
+					ReaderForWrite: iotest.ErrReader(io.ErrNoProgress),
+				},
+			},
+		})
+		assert.Error(t, err, io.ErrNoProgress)
+
+		vector := IOVector{
+			FilePath: joinPath(fsName, "a:b:c"),
+			Entries: []IOEntry{
+				{Size: 1, Data: []byte("a")},
+			},
+		}
+		err = fs.Write(ctx, vector)
+		assert.ErrorIs(t, err, ErrInvalidPath)
+		err = fs.Read(ctx, &vector)
+		assert.ErrorIs(t, err, ErrInvalidPath)
+		_, err = fs.List(ctx, vector.FilePath)
+		assert.ErrorIs(t, err, ErrInvalidPath)
+		err = fs.Delete(ctx, vector.FilePath)
+		assert.ErrorIs(t, err, ErrInvalidPath)
+
 	})
 
 	t.Run("object", func(t *testing.T) {
-		fs := newFS()
+		fs := newFS(fsName)
 		ctx := context.Background()
 
 		buf := new(bytes.Buffer)
@@ -408,7 +438,7 @@ func testFileService(
 	})
 
 	t.Run("ignore", func(t *testing.T) {
-		fs := newFS()
+		fs := newFS(fsName)
 		ctx := context.Background()
 
 		data := []byte("foo")
@@ -445,10 +475,11 @@ func testFileService(
 
 	t.Run("named path", func(t *testing.T) {
 		ctx := context.Background()
-		fs := newFS()
+		fs := newFS(fsName)
 
+		// write
 		err := fs.Write(ctx, IOVector{
-			FilePath: fs.Name() + ":foo",
+			FilePath: joinPath(fs.Name(), "foo"),
 			Entries: []IOEntry{
 				{
 					Size: 4,
@@ -458,6 +489,7 @@ func testFileService(
 		})
 		assert.Nil(t, err)
 
+		// read
 		vec := IOVector{
 			FilePath: "foo",
 			Entries: []IOEntry{
@@ -469,6 +501,41 @@ func testFileService(
 		err = fs.Read(ctx, &vec)
 		assert.Nil(t, err)
 		assert.Equal(t, []byte("1234"), vec.Entries[0].Data)
+
+		// read with lower named path
+		vec = IOVector{
+			FilePath: joinPath(strings.ToLower(fs.Name()), "foo"),
+			Entries: []IOEntry{
+				{
+					Size: -1,
+				},
+			},
+		}
+		err = fs.Read(ctx, &vec)
+		assert.Nil(t, err)
+		assert.Equal(t, []byte("1234"), vec.Entries[0].Data)
+
+		// read with upper named path
+		vec = IOVector{
+			FilePath: joinPath(strings.ToUpper(fs.Name()), "foo"),
+			Entries: []IOEntry{
+				{
+					Size: -1,
+				},
+			},
+		}
+		err = fs.Read(ctx, &vec)
+		assert.Nil(t, err)
+		assert.Equal(t, []byte("1234"), vec.Entries[0].Data)
+
+		// bad name
+		vec.FilePath = joinPath(fs.Name()+"abc", "foo")
+		err = fs.Read(ctx, &vec)
+		assert.True(t, errors.Is(err, ErrWrongService) || errors.Is(err, ErrServiceNotFound))
+		err = fs.Write(ctx, vec)
+		assert.True(t, errors.Is(err, ErrWrongService) || errors.Is(err, ErrServiceNotFound))
+		err = fs.Delete(ctx, vec.FilePath)
+		assert.True(t, errors.Is(err, ErrWrongService) || errors.Is(err, ErrServiceNotFound))
 
 	})
 

@@ -31,7 +31,8 @@ func TestSingleSQL(t *testing.T) {
 	// sql := "SELECT nation2.* FROM nation2 natural join region"
 	// sql := `select n_name, avg(N_REGIONKEY) t from NATION where n_name != 'a' group by n_name having avg(N_REGIONKEY) > 10 order by t limit 20`
 	// sql := `select date_add('1997-12-31 23:59:59',INTERVAL 100000 SECOND)`
-	sql := "create view v1 as select * from nation"
+	//sql := "create view v1 as select * from nation"
+	sql := "select n_name,N_REGIONKEY from NATION"
 	// sql := "explain a"
 	// sql := "select 18446744073709551500"
 	// stmts, err := mysql.Parse(sql)
@@ -443,6 +444,13 @@ func TestSingleTableSQLBuilder(t *testing.T) {
 		"execute stmt1 using @str_var, @@global.int_var",
 		"deallocate prepare stmt1",
 		"drop prepare stmt1",
+		"select count(n_name) from nation",
+		"select l_shipdate + interval '1' day from lineitem",
+		"select interval '1' day + l_shipdate  from lineitem",
+		"select interval '1' day + cast('2022-02-02 00:00:00' as datetime)",
+		"select cast('2022-02-02 00:00:00' as datetime) + interval '1' day",
+		"delete from nation",
+		"delete nation, nation2 from nation join nation2 on nation.n_name = nation2.n_name",
 	}
 	runTestShouldPass(mock, t, sqls, false, false)
 
@@ -588,8 +596,8 @@ func TestInsert(t *testing.T) {
 	mock := NewMockOptimizer()
 	// should pass
 	sqls := []string{
-		//"INSERT NATION VALUES (1, 'NAME1',21, 'COMMENT1'), (2, 'NAME2', 22, 'COMMENT2')",
-		//"INSERT NATION (N_NATIONKEY, N_REGIONKEY, N_NAME) VALUES (1, 21, 'NAME1'), (2, 22, 'NAME2')",
+		"INSERT INTO NATION VALUES (1, 'NAME1',21, 'COMMENT1'), (2, 'NAME2', 22, 'COMMENT2')",
+		"INSERT INTO NATION (N_NATIONKEY, N_REGIONKEY, N_NAME, N_COMMENT) VALUES (1, 21, 'NAME1','comment1'), (2, 22, 'NAME2', 'comment2')",
 		"INSERT INTO NATION SELECT * FROM NATION2",
 	}
 	runTestShouldPass(mock, t, sqls, false, false)
@@ -614,16 +622,17 @@ func TestUpdate(t *testing.T) {
 	mock := NewMockOptimizer()
 	// should pass
 	sqls := []string{
-		//"UPDATE NATION SET N_NAME ='U1', N_REGIONKEY=2",
-		//"UPDATE NATION SET N_NAME ='U1', N_REGIONKEY=2 WHERE N_NATIONKEY > 10 LIMIT 20",
-		//"UPDATE NATION SET N_NAME ='U1', N_REGIONKEY=N_REGIONKEY+2 WHERE N_NATIONKEY > 10 LIMIT 20",
+		"UPDATE NATION SET N_NAME ='U1', N_REGIONKEY=2",
+		"UPDATE NATION SET N_NAME ='U1', N_REGIONKEY=2 WHERE N_NATIONKEY > 10 LIMIT 20",
+		"UPDATE NATION SET N_NAME ='U1', N_REGIONKEY=N_REGIONKEY+2 WHERE N_NATIONKEY > 10 LIMIT 20",
+		"update NATION a join NATION2 b on a.N_REGIONKEY = b.R_REGIONKEY set a.N_NAME = 'aa'",
 	}
 	runTestShouldPass(mock, t, sqls, false, false)
 
 	// should error
 	sqls = []string{
-		//"UPDATE NATION SET N_NAME2 ='U1', N_REGIONKEY=2",    // column not exist
-		//"UPDATE NATION2222 SET N_NAME ='U1', N_REGIONKEY=2", // table not exist
+		"UPDATE NATION SET N_NAME2 ='U1', N_REGIONKEY=2", // column not exist
+		// "UPDATE NATION2222 SET N_NAME ='U1', N_REGIONKEY=2", // table not exist
 		// "UPDATE NATION SET N_NAME = 2, N_REGIONKEY=2",       // column type not match
 		// "UPDATE NATION SET N_NAME = 'U1', N_REGIONKEY=2.2",  // column type not match
 	}
@@ -653,6 +662,9 @@ func TestSubQuery(t *testing.T) {
 	// should pass
 	sqls := []string{
 		"SELECT * FROM NATION where N_REGIONKEY > (select max(R_REGIONKEY) from REGION)",                                 // unrelated
+		"SELECT * FROM NATION where N_REGIONKEY in (select max(R_REGIONKEY) from REGION)",                                // unrelated
+		"SELECT * FROM NATION where N_REGIONKEY not in (select max(R_REGIONKEY) from REGION)",                            // unrelated
+		"SELECT * FROM NATION where exists (select max(R_REGIONKEY) from REGION)",                                        // unrelated
 		"SELECT * FROM NATION where N_REGIONKEY > (select max(R_REGIONKEY) from REGION where R_REGIONKEY = N_REGIONKEY)", // related
 		"SELECT * FROM NATION where N_REGIONKEY > (select max(R_REGIONKEY) from REGION where R_REGIONKEY < N_REGIONKEY)", // related
 		//"DELETE FROM NATION WHERE N_NATIONKEY > 10",
@@ -711,16 +723,19 @@ func TestDdl(t *testing.T) {
 		"create database if not exists tpch",    //db exists and pass
 		"drop database if exists db_name",       //db not exists but pass
 		"drop database tpch",                    //db exists, pass
+		"create view v1 as select * from nation",
 
-		"create table tbl_name (t bool(20), b int unsigned, c char(20), d varchar(20), primary key(b), index idx_t(c)) comment 'test comment'",
+		"create table tbl_name (t bool(20) comment 'dd', b int unsigned, c char(20), d varchar(20), primary key(b), index idx_t(c)) comment 'test comment'",
 		"create table if not exists tbl_name (b int default 20 primary key, c char(20) default 'ss', d varchar(20) default 'kkk')",
 		"create table if not exists nation (t bool(20), b int, c char(20), d varchar(20))",
+		"load data infile 'test/loadfile5' ignore INTO TABLE nation FIELDS TERMINATED BY  ',' (@,@,n_name,n_comment)",
 		"drop table if exists tbl_name",
 		"drop table if exists nation",
 		"drop table nation",
 		"drop table tpch.nation",
 		"drop table if exists tpch.tbl_not_exist",
 		"drop table if exists db_not_exist.tbl",
+		"drop view v1",
 	}
 	runTestShouldPass(mock, t, sqls, false, false)
 
@@ -759,6 +774,8 @@ func TestShow(t *testing.T) {
 		"show columns from nation",
 		"show columns from nation from tpch",
 		"show columns from nation where `Field` like '%ff' or `Type` = 1 or `Null` = 0",
+		"show create view v1",
+		"show create table v1",
 	}
 	runTestShouldPass(mock, t, sqls, false, false)
 
@@ -766,6 +783,7 @@ func TestShow(t *testing.T) {
 	sqls = []string{
 		"show create database db_not_exist",                    //db no exist
 		"show create table tpch.nation22",                      //table not exist
+		"show create view vvv",                                 //view not exist
 		"show databases where d ='a'",                          //Column not exist,  show databases only have one column named 'Database'
 		"show databases where `Databaseddddd` = '11'",          //column not exist
 		"show tables from tpch22222",                           //database not exist
@@ -783,6 +801,28 @@ func TestShow(t *testing.T) {
 	runTestShouldError(mock, t, sqls)
 }
 
+func TestDeepCopy(t *testing.T) {
+	mock := NewMockOptimizer()
+	getPlan := func(sql string) *plan.Plan {
+		logicPlan, err := runOneStmt(mock, t, sql)
+		if err != nil {
+			t.Fatalf("sql %s build plan error:%+v", sql, err)
+		}
+		return logicPlan
+	}
+	sqls := []string{
+		"select * from nation where n_name like 'aa' limit 20",
+	}
+
+	for _, sql := range sqls {
+		pl := getPlan(sql)
+		newPl := DeepCopyPlan(pl)
+		if newPl == nil {
+			t.Fatalf("deep copy error")
+		}
+	}
+}
+
 func TestResultColumns(t *testing.T) {
 	mock := NewMockOptimizer()
 	getColumns := func(sql string) []*ColDef {
@@ -797,9 +837,9 @@ func TestResultColumns(t *testing.T) {
 		"begin",
 		"commit",
 		"rollback",
-		//"INSERT NATION VALUES (1, 'NAME1',21, 'COMMENT1'), (2, 'NAME2', 22, 'COMMENT2')",
-		//"UPDATE NATION SET N_NAME ='U1', N_REGIONKEY=2",
-		//"DELETE FROM NATION",
+		"INSERT NATION VALUES (1, 'NAME1',21, 'COMMENT1'), (2, 'NAME2', 22, 'COMMENT2')",
+		"UPDATE NATION SET N_NAME ='U1', N_REGIONKEY=2",
+		"DELETE FROM NATION",
 		"create database db_name",
 		"drop database tpch",
 		"create table tbl_name (b int unsigned, c char(20))",
@@ -815,12 +855,12 @@ func TestResultColumns(t *testing.T) {
 	returnColumnsSQL := map[string]string{
 		"SELECT N_NAME, N_REGIONKEY a FROM NATION WHERE N_REGIONKEY > 0 ORDER BY a DESC":            "N_NAME,a",
 		"select n_nationkey, sum(n_regionkey) from (select * from nation) sub group by n_nationkey": "n_nationkey,sum(n_regionkey)",
-		"show variables": "Variable_name,Value",
-		// "show create database tpch": "Database,Create Database",
-		// "show create table nation":  "Table,Create Table",
-		"show databases":           "Database",
-		"show tables":              "Tables_in_tpch",
-		"show columns from nation": "Field,Type,Null,Key,Default,Comment",
+		"show variables":            "Variable_name,Value",
+		"show create database tpch": "Database,Create Database",
+		"show create table nation":  "Table,Create Table",
+		"show databases":            "Database",
+		"show tables":               "Tables_in_tpch",
+		"show columns from nation":  "Field,Type,Null,Key,Default,Comment",
 	}
 	for sql, colsStr := range returnColumnsSQL {
 		cols := strings.Split(colsStr, ",")

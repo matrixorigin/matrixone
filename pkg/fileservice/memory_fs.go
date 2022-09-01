@@ -51,7 +51,7 @@ func (m *MemoryFS) List(ctx context.Context, dirPath string) (entries []DirEntry
 	m.RLock()
 	defer m.RUnlock()
 
-	_, dirPath, err = splitPath(m.name, dirPath)
+	path, err := ParsePathAtService(dirPath, m.name)
 	if err != nil {
 		return nil, err
 	}
@@ -60,15 +60,15 @@ func (m *MemoryFS) List(ctx context.Context, dirPath string) (entries []DirEntry
 	defer iter.Release()
 
 	pivot := &_MemFSEntry{
-		FilePath: dirPath,
+		FilePath: path.File,
 	}
 	for ok := iter.Seek(pivot); ok; ok = iter.Next() {
 		item := iter.Item()
-		if !strings.HasPrefix(item.FilePath, dirPath) {
+		if !strings.HasPrefix(item.FilePath, path.File) {
 			break
 		}
 
-		relPath := strings.TrimPrefix(item.FilePath, dirPath)
+		relPath := strings.TrimPrefix(item.FilePath, path.File)
 		relPath = strings.Trim(relPath, "/")
 		parts := strings.Split(relPath, "/")
 		isDir := len(parts) > 1
@@ -90,13 +90,13 @@ func (m *MemoryFS) Write(ctx context.Context, vector IOVector) error {
 	m.Lock()
 	defer m.Unlock()
 
-	_, path, err := splitPath(m.name, vector.FilePath)
+	path, err := ParsePathAtService(vector.FilePath, m.name)
 	if err != nil {
 		return err
 	}
 
 	pivot := &_MemFSEntry{
-		FilePath: path,
+		FilePath: path.File,
 	}
 	_, ok := m.tree.Get(pivot)
 	if ok {
@@ -108,7 +108,7 @@ func (m *MemoryFS) Write(ctx context.Context, vector IOVector) error {
 
 func (m *MemoryFS) write(ctx context.Context, vector IOVector) error {
 
-	_, path, err := splitPath(m.name, vector.FilePath)
+	path, err := ParsePathAtService(vector.FilePath, m.name)
 	if err != nil {
 		return err
 	}
@@ -133,7 +133,7 @@ func (m *MemoryFS) write(ctx context.Context, vector IOVector) error {
 		return err
 	}
 	entry := &_MemFSEntry{
-		FilePath: path,
+		FilePath: path.File,
 		Data:     data,
 	}
 	m.tree.Set(entry)
@@ -143,7 +143,7 @@ func (m *MemoryFS) write(ctx context.Context, vector IOVector) error {
 
 func (m *MemoryFS) Read(ctx context.Context, vector *IOVector) error {
 
-	_, path, err := splitPath(m.name, vector.FilePath)
+	path, err := ParsePathAtService(vector.FilePath, m.name)
 	if err != nil {
 		return err
 	}
@@ -156,7 +156,7 @@ func (m *MemoryFS) Read(ctx context.Context, vector *IOVector) error {
 	defer m.RUnlock()
 
 	pivot := &_MemFSEntry{
-		FilePath: path,
+		FilePath: path.File,
 	}
 
 	fsEntry, ok := m.tree.Get(pivot)
@@ -217,13 +217,13 @@ func (m *MemoryFS) Delete(ctx context.Context, filePath string) error {
 	m.Lock()
 	defer m.Unlock()
 
-	_, path, err := splitPath(m.name, filePath)
+	path, err := ParsePathAtService(filePath, m.name)
 	if err != nil {
 		return err
 	}
 
 	pivot := &_MemFSEntry{
-		FilePath: path,
+		FilePath: path.File,
 	}
 	m.tree.Delete(pivot)
 
@@ -242,3 +242,8 @@ func (m *MemoryFS) Replace(ctx context.Context, vector IOVector) error {
 	defer m.Unlock()
 	return m.write(ctx, vector)
 }
+
+// mark MemoryFS as ETL-compatible to use it as ETL fs in testing
+var _ ETLFileService = new(MemoryFS)
+
+func (m *MemoryFS) ETLCompatible() {}

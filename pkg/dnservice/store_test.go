@@ -56,11 +56,17 @@ func TestAddReplica(t *testing.T) {
 func TestStartWithReplicas(t *testing.T) {
 	localFS, err := fileservice.NewMemoryFS(localFileServiceName)
 	assert.NoError(t, err)
-	factory := func(name string) (fileservice.FileService, error) {
-		if name == localFileServiceName {
-			return localFS, nil
+
+	factory := func(name string) (*fileservice.FileServices, error) {
+		s3fs, err := fileservice.NewMemoryFS(s3FileServiceName)
+		if err != nil {
+			return nil, err
 		}
-		return fileservice.NewMemoryFS(name)
+		return fileservice.NewFileServices(
+			localFileServiceName,
+			s3fs,
+			localFS,
+		)
 	}
 
 	runDNStoreTestWithFileServiceFactory(t, func(s *store) {
@@ -131,15 +137,27 @@ func runDNStoreTest(
 	t *testing.T,
 	testFn func(*store),
 	opts ...Option) {
-	runDNStoreTestWithFileServiceFactory(t, testFn, func(name string) (fileservice.FileService, error) {
-		return fileservice.NewMemoryFS(name)
+	runDNStoreTestWithFileServiceFactory(t, testFn, func(name string) (*fileservice.FileServices, error) {
+		local, err := fileservice.NewMemoryFS(
+			localFileServiceName,
+		)
+		if err != nil {
+			return nil, err
+		}
+		s3, err := fileservice.NewMemoryFS(
+			s3FileServiceName,
+		)
+		if err != nil {
+			return nil, err
+		}
+		return fileservice.NewFileServices(name, local, s3)
 	}, opts...)
 }
 
 func runDNStoreTestWithFileServiceFactory(
 	t *testing.T,
 	testFn func(*store),
-	fsFactory fileservice.FileServiceFactory,
+	fsFactory fileservice.NewFileServicesFunc,
 	opts ...Option) {
 	thc := newTestHAKeeperClient()
 	opts = append(opts,
@@ -155,8 +173,12 @@ func runDNStoreTestWithFileServiceFactory(
 		}))
 
 	if fsFactory == nil {
-		fsFactory = func(name string) (fileservice.FileService, error) {
-			return fileservice.NewMemoryFS(name)
+		fsFactory = func(name string) (*fileservice.FileServices, error) {
+			fs, err := fileservice.NewMemoryFS(name)
+			if err != nil {
+				return nil, err
+			}
+			return fileservice.NewFileServices(name, fs)
 		}
 	}
 	s := newTestStore(t, "u1", fsFactory, opts...)
@@ -199,7 +221,7 @@ func addTestReplica(t *testing.T, s *store, shardID, replicaID, logShardID uint6
 func newTestStore(
 	t *testing.T,
 	uuid string,
-	fsFactory fileservice.FileServiceFactory,
+	fsFactory fileservice.NewFileServicesFunc,
 	options ...Option) *store {
 	assert.NoError(t, os.RemoveAll(testDNStoreAddr[7:]))
 	c := &Config{
@@ -207,7 +229,9 @@ func newTestStore(
 		ListenAddress: testDNStoreAddr,
 	}
 	c.Txn.Clock.MaxClockOffset.Duration = time.Duration(math.MaxInt64)
-	s, err := NewService(c, fsFactory, options...)
+	fs, err := fsFactory(localFileServiceName)
+	assert.Nil(t, err)
+	s, err := NewService(c, fs, options...)
 	assert.NoError(t, err)
 	return s.(*store)
 }

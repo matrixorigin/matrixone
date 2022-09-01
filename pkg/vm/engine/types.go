@@ -16,6 +16,7 @@ package engine
 
 import (
 	"context"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/compress"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -53,6 +54,8 @@ type Attribute struct {
 	Primary bool
 	// Comment of attribute
 	Comment string
+	// AutoIncrement is auto incr or not
+	AutoIncrement bool
 }
 
 type PrimaryIndexDef struct {
@@ -106,6 +109,10 @@ type CommentDef struct {
 	Comment string
 }
 
+type PartitionDef struct {
+	Partition string
+}
+
 type ViewDef struct {
 	View string
 }
@@ -115,6 +122,7 @@ type TableDef interface {
 }
 
 func (*CommentDef) tableDef()      {}
+func (*PartitionDef) tableDef()    {}
 func (*ViewDef) tableDef()         {}
 func (*AttributeDef) tableDef()    {}
 func (*IndexTableDef) tableDef()   {}
@@ -143,6 +151,8 @@ type Relation interface {
 	AddTableDef(context.Context, TableDef) error
 	DelTableDef(context.Context, TableDef) error
 
+	GetTableID(context.Context) string
+
 	// second argument is the number of reader, third argument is the filter extend, foruth parameter is the payload required by the engine
 	NewReader(context.Context, int, *plan.Expr, [][]byte) ([]Reader, error)
 }
@@ -161,12 +171,27 @@ type Database interface {
 }
 
 type Engine interface {
-	Delete(context.Context, string, client.TxnOperator) error
+	// Delete deletes a database
+	Delete(ctx context.Context, databaseName string, op client.TxnOperator) error
 
-	Create(context.Context, string, client.TxnOperator) error // Create Database - (name, engine type)
+	// Create creates a database
+	Create(ctx context.Context, databaseName string, op client.TxnOperator) error
 
-	Databases(context.Context, client.TxnOperator) ([]string, error)
-	Database(context.Context, string, client.TxnOperator) (Database, error)
+	// Databases returns all database names
+	Databases(ctx context.Context, op client.TxnOperator) (databaseNames []string, err error)
 
-	Nodes() (Nodes, error)
+	// Database creates a handle for a database
+	Database(ctx context.Context, databaseName string, op client.TxnOperator) (Database, error)
+
+	// Nodes returns all nodes for worker jobs
+	Nodes() (cnNodes Nodes, err error)
+
+	// Hints returns hints of engine features
+	// return value should not be cached
+	// since implementations may update hints after engine had initialized
+	Hints() Hints
+}
+
+type Hints struct {
+	CommitOrRollbackTimeout time.Duration
 }

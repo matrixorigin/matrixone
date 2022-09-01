@@ -80,3 +80,10 @@ func newWaitTxnError(err error) *txn.TxnError {
 		Message: err.Error(),
 	}
 }
+
+func newDNShardFoundError() *txn.TxnError {
+	return &txn.TxnError{
+		Code:    txn.ErrorCode_DNShardNotFound,
+		Message: "DNShard not match, need to fetch latest DNShards from hakeeper, and retry again",
+	}
+}

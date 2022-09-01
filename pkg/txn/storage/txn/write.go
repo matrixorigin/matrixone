@@ -117,6 +117,8 @@ func handleWrite[
 	}
 
 	var resp Resp
+	defer logReq("write", req, meta, &resp, &err)()
+
 	err = fn(meta, req, &resp)
 	if err != nil {
 		return nil, err

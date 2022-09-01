@@ -20,7 +20,9 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/logservice"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
+	"go.uber.org/zap"
 )
 
 func GetClusterDetailsFromHAKeeper(
@@ -34,17 +36,21 @@ func GetClusterDetailsFromHAKeeper(
 	var detailsError error
 	var details logservicepb.ClusterDetails
 
-	go func() {
+	update := func() {
+		ctx, cancel := context.WithTimeout(ctx, time.Second*17)
+		defer cancel()
+		ret, err := client.GetClusterDetails(ctx)
+		lock.Lock()
+		defer lock.Unlock()
+		detailsError = err
+		details = ret
+		logutil.Debug("engine: CN cluster details update",
+			zap.Any("cluster", details),
+		)
+	}
+	update()
 
-		update := func() {
-			ctx, cancel := context.WithTimeout(ctx, time.Second*17)
-			defer cancel()
-			ret, err := client.GetClusterDetails(ctx)
-			lock.Lock()
-			defer lock.Unlock()
-			detailsError = err
-			details = ret
-		}
+	go func() {
 
 		ticker := time.NewTicker(time.Second * 17)
 		for {

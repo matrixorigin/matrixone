@@ -14,7 +14,7 @@
 
 %{
 package mysql
-    
+
 import (
 	"fmt"
     "strings"
@@ -243,7 +243,7 @@ import (
 %token <str> DYNAMIC COMPRESSED REDUNDANT COMPACT FIXED COLUMN_FORMAT AUTO_RANDOM
 %token <str> RESTRICT CASCADE ACTION PARTIAL SIMPLE CHECK ENFORCED
 %token <str> RANGE LIST ALGORITHM LINEAR PARTITIONS SUBPARTITION SUBPARTITIONS
-%token <str> TYPE ANY SOME EXTERNAL LOCALFILE URL S3OPTION
+%token <str> TYPE ANY SOME EXTERNAL LOCALFILE URL
 %token <str> PREPARE DEALLOCATE
 
 // MO table option
@@ -278,7 +278,7 @@ import (
 %token <str> FORMAT VERBOSE CONNECTION
 
 // Load
-%token <str> LOAD INFILE TERMINATED OPTIONALLY ENCLOSED ESCAPED STARTING LINES
+%token <str> LOAD INFILE TERMINATED OPTIONALLY ENCLOSED ESCAPED STARTING LINES ROWS
 
 // Supported SHOW tokens
 %token <str> DATABASES TABLES EXTENDED FULL PROCESSLIST FIELDS COLUMNS OPEN ERRORS WARNINGS INDEXES SCHEMAS
@@ -394,7 +394,7 @@ import (
 %type <funcExpr> function_call_json
 
 %type <unresolvedName> column_name column_name_unresolved
-%type <strs> enum_values force_quote_opt force_quote_list s3param s3params
+%type <strs> enum_values force_quote_opt force_quote_list
 %type <str> sql_id charset_keyword db_name
 %type <str> not_keyword func_not_keyword
 %type <str> reserved_keyword non_reserved_keyword
@@ -406,8 +406,8 @@ import (
 %type <comparisionExpr> like_opt
 %type <fullOpt> full_opt
 %type <str> database_name_opt auth_string constraint_keyword_opt constraint_keyword
-%type <userMiscOption> pwd_or_lck
-%type <userMiscOptions> pwd_or_lck_opt pwd_or_lck_list
+%type <userMiscOption> pwd_or_lck pwd_or_lck_opt
+//%type <userMiscOptions> pwd_or_lck_list
 
 %type <expr> literal true_or_false
 %type <expr> predicate
@@ -433,8 +433,8 @@ import (
 %type <role> role_spec
 %type <str> role_name
 %type <usernameRecord> user_name
-%type <user> user_spec drop_user_spec
-%type <users> user_spec_list drop_user_spec_list
+%type <user> user_spec drop_user_spec user_spec_with_identified
+%type <users> user_spec_list drop_user_spec_list user_spec_list_of_create_user
 //%type <tlsOptions> require_clause_opt require_clause require_list
 //%type <tlsOption> require_elem
 //%type <resourceOptions> conn_option_list conn_options
@@ -526,7 +526,7 @@ import (
 %type <accountStatus> account_status_option
 %type <accountComment> account_comment_opt
 %type <accountCommentOrAttribute> user_comment_or_attribute_opt
-%type <userIdentified> user_identified_opt
+%type <userIdentified> user_identified user_identified_opt
 %type <accountRole> default_role_opt
 
 %start start_command
@@ -754,6 +754,10 @@ ignore_lines:
     {
         $$ = $2.(int64)
     }
+|   IGNORE INTEGRAL ROWS
+    {
+        $$ = $2.(int64)
+    }
 
 load_lines:
     {
@@ -798,7 +802,7 @@ load_fields:
         for _, f := range $2 {
             if f.Terminated != "" {
                 res.Terminated = f.Terminated
-            } 
+            }
             if f.Optionally {
                 res.Optionally = f.Optionally
             }
@@ -1445,7 +1449,7 @@ set_expr:
     }
 
 equal_or_assignment:
-    '=' 
+    '='
     {
         $$ = string($1)
     }
@@ -1479,6 +1483,10 @@ commit_stmt:
     }
 
 completion_type:
+    {
+        $$ = tree.COMPLETION_TYPE_NO_CHAIN
+    }
+|	WORK
     {
         $$ = tree.COMPLETION_TYPE_NO_CHAIN
     }
@@ -1775,7 +1783,7 @@ utility_option_arg:
 
 
 analyze_stmt:
-    ANALYZE TABLE table_name '(' column_list ')' 
+    ANALYZE TABLE table_name '(' column_list ')'
     {
         $$ = tree.NewAnalyzeStmt($3, $5)
     }
@@ -1798,13 +1806,13 @@ alter_account_stmt:
     }
 
 alter_user_stmt:
-    ALTER USER exists_opt user_spec_list default_role_opt pwd_or_lck_opt user_comment_or_attribute_opt
+    ALTER USER exists_opt user_spec_list_of_create_user default_role_opt pwd_or_lck_opt user_comment_or_attribute_opt
     {
         $$ = &tree.AlterUser{
             IfExists: $3,
             Users: $4,
             Role: $5,
-            MiscOpts: $6,
+            MiscOpt: $6,
             CommentOrAttribute: $7,
         }
     }
@@ -1831,20 +1839,20 @@ pwd_or_lck_opt:
     {
         $$ = nil
     }
-|   pwd_or_lck_list
+|   pwd_or_lck
     {
         $$ = $1
     }
 
-pwd_or_lck_list:
-    pwd_or_lck
-    {
-        $$ = []tree.UserMiscOption{$1}
-    }
-|   pwd_or_lck_list pwd_or_lck
-    {
-        $$ = append($1, $2)
-    }
+//pwd_or_lck_list:
+//    pwd_or_lck
+//    {
+//        $$ = []tree.UserMiscOption{$1}
+//    }
+//|   pwd_or_lck_list pwd_or_lck
+//    {
+//        $$ = append($1, $2)
+//    }
 
 pwd_or_lck:
     UNLOCK
@@ -2118,6 +2126,11 @@ show_create_stmt:
     {
         $$ = &tree.ShowCreateTable{Name: $4}
     }
+|
+    SHOW CREATE VIEW table_name_unresolved
+    {
+        $$ = &tree.ShowCreateView{Name: $4}
+    }
 |   SHOW CREATE DATABASE not_exists_opt db_name
     {
         $$ = &tree.ShowCreateDatabase{IfNotExists: $4, Name: $5}
@@ -2207,7 +2220,7 @@ drop_role_stmt:
             IfExists: $3,
             Roles: $4,
         }
-    } 
+    }
 
 drop_index_stmt:
     DROP INDEX exists_opt ident ON table_name
@@ -2863,7 +2876,7 @@ union_op:
         $$ = &tree.UnionTypeRecord{
             Type: tree.UNION,
             All: true,
-            Distinct: false, 
+            Distinct: false,
         }
     }
 |   UNION DISTINCT
@@ -2874,7 +2887,7 @@ union_op:
             Distinct: true,
         }
     }
-| 
+|
     EXCEPT
     {
         $$ = &tree.UnionTypeRecord{
@@ -2888,7 +2901,7 @@ union_op:
         $$ = &tree.UnionTypeRecord{
             Type: tree.EXCEPT,
             All: true,
-            Distinct: false, 
+            Distinct: false,
         }
     }
 |   EXCEPT DISTINCT
@@ -3218,7 +3231,7 @@ column_list:
         $$ = append($1, tree.Identifier($3))
     }
 
-table_factor:   
+table_factor:
     aliased_table_name
     {
         $$ = $1
@@ -3442,14 +3455,14 @@ account_comment_opt:
     }
 
 create_user_stmt:
-    CREATE USER not_exists_opt user_spec_list DEFAULT ROLE account_role_name pwd_or_lck_opt user_comment_or_attribute_opt
+    CREATE USER not_exists_opt user_spec_list_of_create_user default_role_opt pwd_or_lck_opt user_comment_or_attribute_opt
     {
         $$ = &tree.CreateUser{
             IfNotExists: $3,
             Users: $4,
-            Role: tree.Role{UserName:$7},
-            MiscOpts: $8,
-            CommentOrAttribute: $9,
+            Role: $5,
+            MiscOpt: $6,
+            CommentOrAttribute: $7,
         }
     }
 
@@ -3578,6 +3591,25 @@ user_comment_or_attribute_opt:
 //    {
 //        $$ = &tree.TlsOptionSan{San: $2}
 //    }
+user_spec_list_of_create_user:
+    user_spec_with_identified
+    {
+        $$ = []*tree.User{$1}
+    }
+|   user_spec_list_of_create_user ',' user_spec_with_identified
+    {
+        $$ = append($1, $3)
+    }
+
+user_spec_with_identified:
+    user_name user_identified
+    {
+        $$ = &tree.User{
+            Username: $1.Username,
+            Hostname: $1.Hostname,
+            AuthOption: $2,
+        }
+    }
 
 user_spec_list:
     user_spec
@@ -3617,7 +3649,13 @@ user_identified_opt:
     {
         $$ = nil
     }
-|   IDENTIFIED BY STRING
+|   user_identified
+    {
+    	$$ = $1
+    }
+
+user_identified:
+    IDENTIFIED BY STRING
     {
 	$$ = &tree.AccountIdentified{
 		Typ: tree.AccountIdentifiedByPassword,
@@ -3905,7 +3943,6 @@ load_param_opt:
     {
         $$ = &tree.ExternParam{
             Filepath: $2,
-            ScanType: tree.LOCAL,
             CompressType: tree.AUTO,
         }
     }
@@ -3917,7 +3954,6 @@ load_param_opt:
             }
         $$ = &tree.ExternParam{
             Filepath: $5,
-            ScanType: tree.LOCAL,
             CompressType: tree.AUTO,
         }
     }
@@ -3929,15 +3965,7 @@ load_param_opt:
             }
         $$ = &tree.ExternParam{
             Filepath: $5,
-            ScanType: tree.LOCAL,
             CompressType: $9,
-        }
-    }
-|   URL S3OPTION '{' s3params '}'
-    {
-        $$ = &tree.ExternParam{
-            ScanType: tree.S3,
-            S3option: $4,
         }
     }
 
@@ -3951,26 +3979,6 @@ tail_param_opt:
             ColumnList: $4,
             Assignments: $5,
         }
-    }
-
-s3params:
-    s3param
-    {
-        $$ = $1
-    }
-|   s3params ',' s3param
-    {
-        $$ = append($1, $3...)
-    }
-
-s3param:
-    {
-        $$ = []string{}
-    }
-|   STRING '=' STRING
-    {
-        $$ = append($$, $1)
-        $$ = append($$, $3)
     }
 
 temporary_opt:
@@ -4097,9 +4105,18 @@ values_opt:
     {
         $$ = nil
     }
+|   VALUES LESS THAN MAXVALUE
+    {
+    	expr := tree.NewMaxValue()
+    	$$ = &tree.ValuesLessThan{ValueList: tree.Exprs{expr}}
+    }
 |   VALUES LESS THAN '(' expression_list ')'
     {
         $$ = &tree.ValuesLessThan{ValueList: $5}
+    }
+|   VALUES IN '(' expression_list ')'
+    {
+	$$ = &tree.ValuesIn{ValueList: $4}
     }
 
 sub_partition_num_opt:
@@ -4188,7 +4205,7 @@ sub_partition_method:
 
 algorithm_opt:
     {
-        $$ = 0
+        $$ = 2
     }
 |   ALGORITHM '=' INTEGRAL
     {
@@ -4598,7 +4615,7 @@ index_name:
 |	ident
 
 column_def:
-    column_name column_type column_attribute_list_opt 
+    column_name column_type column_attribute_list_opt
     {
         $$ = tree.NewColumnTableDef($1, $2, $3)
     }
@@ -4742,7 +4759,7 @@ constraint_keyword:
         $$ = $2
     }
 
-references_def:    
+references_def:
     REFERENCES table_name index_column_list_opt match_opt on_delete_update_opt
     {
         $$ = &tree.AttributeReference{
@@ -5001,7 +5018,7 @@ simple_expr:
     {
         $$ = tree.NewCastExpr($3, $5)
     }
-|   CONVERT '(' expression USING charset_name ')' 
+|   CONVERT '(' expression USING charset_name ')'
     {
         name := tree.SetUnresolvedName("convert")
         es := tree.NewNumValWithType(constant.MakeString($5), $5, false, tree.P_char)
@@ -5812,6 +5829,10 @@ expression:
 |   NOT expression %prec NOT
     {
         $$ = tree.NewNotExpr($2)
+    }
+|   MAXVALUE
+    {
+    	$$ = tree.NewMaxValue()
     }
 |   boolean_primary IS true_or_false %prec IS
 	{
@@ -6814,8 +6835,7 @@ reserved_table_id:
 |   reserved_keyword
 
 reserved_keyword:
-    ACCOUNT
-|   ADD
+    ADD
 |   ALL
 |   AND
 |   AS
@@ -6941,6 +6961,7 @@ reserved_keyword:
 |   ESCAPED
 |   STARTING
 |   LINES
+|   ROWS
 |   INT1
 |   INT2
 |   INT3
@@ -6977,7 +6998,8 @@ reserved_keyword:
 |   SECONDARY
 
 non_reserved_keyword:
-    AGAINST
+    ACCOUNT
+|   AGAINST
 |   AVG_ROW_LENGTH
 |   AUTO_RANDOM
 |   ACTION
@@ -7141,7 +7163,6 @@ non_reserved_keyword:
 |   TABLES
 |   EXTERNAL
 |   URL
-|   S3OPTION
 
 func_not_keyword:
 	DATE_ADD

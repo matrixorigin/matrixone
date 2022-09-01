@@ -125,9 +125,7 @@ func (s *store) newLocalClock() clock.Clock {
 func (s *store) newMemTxnStorage(shard metadata.DNShard, logClient logservice.Client) (storage.TxnStorage, error) {
 	hm := host.New(1 << 30)
 	gm := guest.New(1<<30, hm)
-	return txnstorage.New(
-		txnstorage.NewMemHandler(mheap.New(gm), txnstorage.SnapshotIsolation),
-	)
+	return txnstorage.NewMemoryStorage(mheap.New(gm), txnstorage.SnapshotIsolation)
 }
 
 func (s *store) newMemKVStorage(shard metadata.DNShard, logClient logservice.Client) (storage.TxnStorage, error) {
@@ -135,5 +133,5 @@ func (s *store) newMemKVStorage(shard metadata.DNShard, logClient logservice.Cli
 }
 
 func (s *store) newTAEStorage(shard metadata.DNShard, logClient logservice.Client) (storage.TxnStorage, error) {
-	return taestorage.New(shard, logClient, s.fs, s.clock)
+	return taestorage.New(shard, logClient, s.fileService, s.clock)
 }
