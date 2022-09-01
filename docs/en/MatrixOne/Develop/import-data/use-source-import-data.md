@@ -89,16 +89,16 @@ The appropriate raw data to import into MatrixOne is the form type, or the *.csv
 
 1. The MySQL Client export statement is as follows:
 
-```
-mysql> SELECT * FROM xxxx
-INTO OUTFILE "/tmp/xxx.csv"
-FIELDS TERMINATED BY ',' OPTIONALLY ENCLOSED BY '"' LINES TERMINATED BY "\r\n";
-```
+    ```
+    mysql> SELECT * FROM xxxx
+    INTO OUTFILE "/tmp/xxx.csv"
+    FIELDS TERMINATED BY ',' OPTIONALLY ENCLOSED BY '"' LINES TERMINATED BY "\r\n";
+    ```
 
 2. In MatrixOne, you need to build the corresponding table first, and then import data through `LOAD DATA`:
 
-```
-mysql> LOAD DATA INFILE '/tmp/xxx.csv'
-INTO TABLE xxxxxx
-FIELDS TERMINATED BY ',' OPTIONALLY ENCLOSED BY '"' LINES TERMINATED BY "\r\n";
-```
+    ```
+    mysql> LOAD DATA INFILE '/tmp/xxx.csv'
+    INTO TABLE xxxxxx
+    FIELDS TERMINATED BY ',' OPTIONALLY ENCLOSED BY '"' LINES TERMINATED BY "\r\n";
+    ```

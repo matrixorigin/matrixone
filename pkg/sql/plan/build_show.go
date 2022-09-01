@@ -15,6 +15,7 @@
 package plan
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -127,18 +128,35 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 	}
 	createStr += ")"
 
+	var comment string
+	var partition string
 	for _, def := range tableDef.Defs {
 		if proDef, ok := def.Def.(*plan.TableDef_DefType_Properties); ok {
 			for _, kv := range proDef.Properties.Properties {
 				if kv.Key == catalog.SystemRelAttr_Comment {
-					createStr += " COMMENT='" + kv.Value + "',"
+					comment = " COMMENT='" + kv.Value + "'"
 				}
 			}
 		}
+
+		if partDef, ok := def.Def.(*plan.TableDef_DefType_Partition); ok {
+			if len(partDef.Partition.PartitionMsg) != 0 {
+				partition = ` ` + partDef.Partition.PartitionMsg
+			}
+		}
 	}
+	createStr += comment
+	createStr += partition
 
 	sql := "select \"%s\" as `Table`, \"%s\" as `Create Table`"
-	sql = fmt.Sprintf(sql, tblName, createStr)
+	var buf bytes.Buffer
+	for _, ch := range createStr {
+		if ch == '"' {
+			buf.WriteRune('"')
+		}
+		buf.WriteRune(ch)
+	}
+	sql = fmt.Sprintf(sql, tblName, buf.String())
 
 	return returnByRewriteSQL(ctx, sql, plan.DataDefinition_SHOW_CREATETABLE)
 }
@@ -219,7 +237,7 @@ func buildShowTables(stmt *tree.ShowTables, ctx CompilerContext) (*Plan, error) 
 	}
 
 	ddlType := plan.DataDefinition_SHOW_TABLES
-	sql := fmt.Sprintf("SELECT relname as Tables_in_%s FROM %s.mo_tables WHERE reldatabase = '%s'", dbName, MO_CATALOG_DB_NAME, dbName)
+	sql := fmt.Sprintf("SELECT relname as Tables_in_%s FROM %s.mo_tables WHERE reldatabase = '%s' and relname != '%s'", dbName, MO_CATALOG_DB_NAME, dbName, "%!%mo_increment_columns")
 
 	if stmt.Where != nil {
 		return returnByWhereAndBaseSQL(ctx, sql, stmt.Where, ddlType)

@@ -43,6 +43,7 @@ func DeepCopyNode(node *plan.Node) *plan.Node {
 		OrderBy:         make([]*plan.OrderBySpec, len(node.OrderBy)),
 		DeleteTablesCtx: make([]*plan.DeleteTableCtx, len(node.DeleteTablesCtx)),
 		UpdateCtxs:      make([]*plan.UpdateCtx, len(node.UpdateCtxs)),
+		TableDefVec:     make([]*plan.TableDef, len(node.TableDefVec)),
 	}
 
 	copy(newNode.Children, node.Children)
@@ -120,6 +121,10 @@ func DeepCopyNode(node *plan.Node) *plan.Node {
 		}
 		copy(newNode.UpdateCtxs[i].OtherAttrs, updateCtx.OtherAttrs)
 		copy(newNode.UpdateCtxs[i].OrderAttrs, updateCtx.OrderAttrs)
+	}
+
+	for i, tbl := range node.TableDefVec {
+		newNode.TableDefVec[i] = DeepCopyTableDef(tbl)
 	}
 
 	if node.Cost != nil {

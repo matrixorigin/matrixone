@@ -19,14 +19,16 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
-	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	"math/rand"
 	"os"
 	"os/signal"
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 
 	"github.com/matrixorigin/matrixone/pkg/cnservice"
 
@@ -72,28 +74,37 @@ func waitSignalToStop(stopper *stopper.Stopper) {
 }
 
 func startService(cfg *Config, stopper *stopper.Stopper) error {
-	// TODO: start other service
+
+	fs, err := cfg.createFileService(localFileServiceName)
+	if err != nil {
+		return err
+	}
+
 	switch strings.ToUpper(cfg.ServiceType) {
 	case cnServiceType:
-		return startCNService(cfg, stopper)
+		return startCNService(cfg, stopper, fs)
 	case dnServiceType:
-		return startDNService(cfg, stopper)
+		return startDNService(cfg, stopper, fs)
 	case logServiceType:
-		return startLogService(cfg, stopper)
+		return startLogService(cfg, stopper, fs)
 	case standaloneServiceType:
-		return startStandalone(cfg, stopper)
+		return startStandalone(cfg, stopper, fs)
 	default:
 		panic("unknown service type")
 	}
 }
 
-func startCNService(cfg *Config, stopper *stopper.Stopper) error {
+func startCNService(
+	cfg *Config,
+	stopper *stopper.Stopper,
+	fileService fileservice.FileService,
+) error {
 	return stopper.RunNamedTask("cn-service", func(ctx context.Context) {
 		c := cfg.getCNServiceConfig()
 		s, err := cnservice.NewService(
 			&c,
 			ctx,
-			cfg.createFileService,
+			fileService,
 			cnservice.WithMessageHandle(compile.CnServerMessageHandler),
 		)
 		if err != nil {
@@ -117,11 +128,16 @@ func startCNService(cfg *Config, stopper *stopper.Stopper) error {
 	})
 }
 
-func startDNService(cfg *Config, stopper *stopper.Stopper) error {
+func startDNService(
+	cfg *Config,
+	stopper *stopper.Stopper,
+	fileService fileservice.FileService,
+) error {
 	return stopper.RunNamedTask("dn-service", func(ctx context.Context) {
 		c := cfg.getDNServiceConfig()
-		s, err := dnservice.NewService(&c,
-			cfg.createFileService,
+		s, err := dnservice.NewService(
+			&c,
+			fileService,
 			dnservice.WithLogger(logutil.GetGlobalLogger().Named("dn-service")))
 		if err != nil {
 			panic(err)
@@ -137,9 +153,13 @@ func startDNService(cfg *Config, stopper *stopper.Stopper) error {
 	})
 }
 
-func startLogService(cfg *Config, stopper *stopper.Stopper) error {
+func startLogService(
+	cfg *Config,
+	stopper *stopper.Stopper,
+	fileService fileservice.FileService,
+) error {
 	lscfg := cfg.getLogServiceConfig()
-	s, err := logservice.NewService(lscfg)
+	s, err := logservice.NewService(lscfg, fileService)
 	if err != nil {
 		panic(err)
 	}
@@ -161,10 +181,14 @@ func startLogService(cfg *Config, stopper *stopper.Stopper) error {
 	})
 }
 
-func startStandalone(cfg *Config, stopper *stopper.Stopper) error {
+func startStandalone(
+	cfg *Config,
+	stopper *stopper.Stopper,
+	fileService fileservice.FileService,
+) error {
 
 	// start log service
-	if err := startLogService(cfg, stopper); err != nil {
+	if err := startLogService(cfg, stopper, fileService); err != nil {
 		return err
 	}
 
@@ -188,7 +212,7 @@ func startStandalone(cfg *Config, stopper *stopper.Stopper) error {
 	}
 
 	// start DN
-	if err := startDNService(cfg, stopper); err != nil {
+	if err := startDNService(cfg, stopper, fileService); err != nil {
 		return err
 	}
 
@@ -216,7 +240,7 @@ func startStandalone(cfg *Config, stopper *stopper.Stopper) error {
 	}
 
 	// start CN
-	if err := startCNService(cfg, stopper); err != nil {
+	if err := startCNService(cfg, stopper, fileService); err != nil {
 		return err
 	}
 

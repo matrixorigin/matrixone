@@ -124,4 +124,5 @@ type service struct {
 	_fileService           fileservice.FileService
 	newFS                  fileservice.NewFileServicesFunc
 	storeEngine            engine.Engine
+	fileService            fileservice.FileService
 }

@@ -55,32 +55,17 @@ func (m *MVCC[T]) Read(tx *Transaction, readTime Timestamp) (*T, error) {
 				}
 			case ReadNoStale:
 				if value.BornTx != tx && value.BornTime.Greater(tx.BeginTime) {
-					return nil, &ErrReadConflict{
+					return value.Value, &ErrReadConflict{
 						ReadingTx: tx,
 						Stale:     value.BornTx,
 					}
 				}
 			}
-			return m.Values[i].Value, nil
+			return value.Value, nil
 		}
 	}
 
 	return nil, sql.ErrNoRows
-}
-
-func (m *MVCC[T]) Visible(tx *Transaction, readTime Timestamp) bool {
-	if tx.State.Load() != Active {
-		panic("should not call Visible")
-	}
-
-	m.RLock()
-	defer m.RUnlock()
-	for i := len(m.Values) - 1; i >= 0; i-- {
-		if m.Values[i].Visible(tx.ID, readTime) {
-			return true
-		}
-	}
-	return false
 }
 
 func (m *MVCCValue[T]) Visible(txID string, readTime Timestamp) bool {

@@ -2080,6 +2080,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		}
 		goto handleNext
 	handleFailed:
+		logutil.Error(err.Error())
 		if !fromLoadData {
 			txnErr = ses.TxnRollbackSingleStatement(stmt)
 			if txnErr != nil {

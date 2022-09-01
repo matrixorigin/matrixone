@@ -218,6 +218,7 @@ func init() {
 		"limit":                    LIMIT,
 		"linear":                   LINEAR,
 		"lines":                    LINES,
+		"rows":                     ROWS,
 		"linestring":               LINESTRING,
 		"load":                     LOAD,
 		"localtime":                LOCALTIME,

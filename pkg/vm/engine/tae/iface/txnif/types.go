@@ -128,8 +128,8 @@ type UpdateChain interface {
 	RUnlock()
 	GetID() *common.ID
 
-	DeleteNode(*common.DLNode)
-	DeleteNodeLocked(*common.DLNode)
+	// DeleteNode(*common.DLNode)
+	// DeleteNodeLocked(*common.DLNode)
 
 	AddNode(txn AsyncTxn) UpdateNode
 	AddNodeLocked(txn AsyncTxn) UpdateNode
@@ -178,7 +178,7 @@ type UpdateNode interface {
 	GetID() *common.ID
 	String() string
 	GetChain() UpdateChain
-	GetDLNode() *common.DLNode
+	// GetDLNode() *common.DLNode
 	GetMask() *roaring.Bitmap
 	GetValues() map[uint32]interface{}
 

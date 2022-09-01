@@ -20,7 +20,6 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/mockio"
@@ -93,10 +92,6 @@ func (e *testEngine) getRelation() (txn txnif.AsyncTxn, rel handle.Relation) {
 func (e *testEngine) checkpointCatalog() {
 	err := e.DB.Catalog.Checkpoint(e.DB.TxnMgr.StatSafeTS())
 	assert.NoError(e.t, err)
-}
-
-func (e *testEngine) compactABlocks(skipConflict bool) {
-	forceCompactABlocks(e.t, e.tenantID, e.DB, defaultTestDB, e.schema, skipConflict)
 }
 
 func (e *testEngine) compactBlocks(skipConflict bool) {
@@ -306,7 +301,6 @@ func getRelation(t *testing.T, tenantID uint32, e *DB, dbName, tblName string) (
 	txn, err := e.StartTxn(nil)
 	txn.BindAccessInfo(tenantID, 0, 0)
 	assert.NoError(t, err)
-	logutil.Infof("lalala get db %v at %v", dbName, txn.GetStartTS())
 	db, err := txn.GetDatabase(dbName)
 	assert.NoError(t, err)
 	rel, err = db.GetRelationByName(tblName)
@@ -421,30 +415,6 @@ func tryAppendClosure(t *testing.T, data *containers.Batch, name string, e *DB, 
 			return
 		}
 		_ = txn.Commit()
-	}
-}
-func forceCompactABlocks(t *testing.T, tenantID uint32, e *DB, dbName string, schema *catalog.Schema, skipConflict bool) {
-	txn, rel := getRelation(t, tenantID, e, dbName, schema.Name)
-
-	var metas []*catalog.BlockEntry
-	it := rel.MakeBlockIt()
-	for it.Valid() {
-		blk := it.GetBlock()
-		meta := blk.GetMeta().(*catalog.BlockEntry)
-		// if blk.Rows() >= int(schema.BlockMaxRows) {
-		if !meta.IsAppendable() {
-			it.Next()
-			continue
-		}
-		metas = append(metas, meta)
-		it.Next()
-	}
-	_ = txn.Commit()
-	for _, meta := range metas {
-		err := meta.GetBlockData().ForceCompact()
-		if !skipConflict {
-			assert.NoError(t, err)
-		}
 	}
 }
 
