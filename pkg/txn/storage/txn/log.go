@@ -12,23 +12,39 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package fileservice
+package txnstorage
 
 import (
-	"errors"
-	"io"
+	"fmt"
+
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/pb/txn"
+	"go.uber.org/zap"
 )
 
-var (
-	ErrFileNotFound    = errors.New("file not found")
-	ErrFileExisted     = errors.New("file existed")
-	ErrUnexpectedEOF   = io.ErrUnexpectedEOF
-	ErrSizeNotMatch    = errors.New("size not match")
-	ErrEmptyRange      = errors.New("empty range")
-	ErrEmptyVector     = errors.New("empty vector")
-	ErrDuplicatedName  = errors.New("duplicated name")
-	ErrWrongService    = errors.New("wrong service")
-	ErrServiceNotFound = errors.New("service not found")
-	ErrInvalidPath     = errors.New("invalid path")
-	ErrBadS3Config     = errors.New("bad s3 config")
-)
+func logReq[
+	Req any,
+	Resp any,
+](
+	msg string,
+	req Req,
+	meta txn.TxnMeta,
+	resp *Resp,
+	err *error,
+) (
+	deferFunc func(),
+) {
+	logutil.Debug("engine: DN "+msg,
+		zap.String("type", fmt.Sprintf("%T", req)),
+		zap.Any("txn", meta),
+		zap.Any("data", req),
+	)
+	return func() {
+		logutil.Debug("engine: DN "+msg+" result",
+			zap.String("type", fmt.Sprintf("%T", *resp)),
+			zap.Any("txn", meta),
+			zap.Any("data", *resp),
+			zap.Any("error", *err),
+		)
+	}
+}

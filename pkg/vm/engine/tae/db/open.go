@@ -87,6 +87,7 @@ func Open(dirname string, opts *options.Options) (db *DB, err error) {
 	policyCfg := new(checkpoint.PolicyCfg)
 	policyCfg.Levels = int(opts.CheckpointCfg.ExecutionLevels)
 	policyCfg.Interval = opts.CheckpointCfg.ExecutionInterval
+	policyCfg.FlushInterval = opts.CheckpointCfg.FlushInterval
 	db.CKPDriver = checkpoint.NewDriver(db.Scheduler, policyCfg)
 
 	// Init timed scanner
