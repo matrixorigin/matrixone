@@ -16,6 +16,7 @@ package db
 
 import (
 	"bytes"
+	"os"
 	"reflect"
 	"sync"
 	"sync/atomic"
@@ -24,6 +25,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/mockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils/config"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
@@ -2879,5 +2881,44 @@ func TestMultiTenantMoCatalogOps(t *testing.T) {
 		// [mo_database(8), mo_tables(12), mo_columns(18), 'mo_accounts'(1+1)]
 		checkAllColRowsByScan(t, sysColTbl, 40, true)
 	}
+}
 
+func BenchmarkConcurrentTxn(b *testing.B) {
+	mockio.ResetFS()
+	dir := "/tmp/benchCTxn2jf1"
+	os.RemoveAll(dir)
+	os.MkdirAll(dir, os.FileMode(0755))
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae, _ := Open(dir, opts)
+	defer tae.Close()
+	schema := catalog.MockSchemaAll(3, -1) // no pk
+	schema.Name = "test"
+	txn, _ := tae.StartTxn(nil)
+	db, _ := txn.CreateDatabase("db")
+	db.CreateRelation(schema)
+	txn.Commit()
+	oneLineBat := catalog.MockBatch(schema, 1)
+	C := func(b *testing.B, cnt int) {
+		for i := 0; i < b.N; i++ {
+			wg := &sync.WaitGroup{}
+			for i := 0; i < cnt; i++ {
+				wg.Add(1)
+				go func() {
+					txn, _ := tae.StartTxn(nil)
+					db, _ := txn.GetDatabase("db")
+					rel, _ := db.GetRelationByName("test")
+					rel.Append(oneLineBat)
+					txn.Commit()
+					wg.Done()
+				}()
+			}
+			wg.Wait()
+		}
+	}
+
+	b.Run("50", func(b *testing.B) { C(b, 50) })
+	b.Run("100", func(b *testing.B) { C(b, 100) })
+	b.Run("500", func(b *testing.B) { C(b, 500) })
+	b.Run("1000", func(b *testing.B) { C(b, 1000) })
+	b.Run("5000", func(b *testing.B) { C(b, 5000) })
 }
