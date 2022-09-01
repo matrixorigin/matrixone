@@ -65,7 +65,7 @@ func databaseTxnCanGetFn[T *DBEntry](n *common.GenericDLNode[*DBEntry], ts types
 }
 
 type DBEntry struct {
-	*BaseEntry
+	*DBBaseEntry
 	catalog  *Catalog
 	acInfo   accessInfo
 	name     string
@@ -80,19 +80,19 @@ type DBEntry struct {
 }
 
 func compareTableFn(a, b *TableEntry) int {
-	return a.BaseEntry.DoCompre(b.BaseEntry)
+	return a.TableBaseEntry.DoCompre(b.TableBaseEntry)
 }
 
 func NewDBEntry(catalog *Catalog, name string, txnCtx txnif.AsyncTxn) *DBEntry {
 	id := catalog.NextDB()
 
 	e := &DBEntry{
-		BaseEntry: NewBaseEntry(id),
-		catalog:   catalog,
-		name:      name,
-		entries:   make(map[uint64]*common.GenericDLNode[*TableEntry]),
-		nameNodes: make(map[string]*nodeList[*TableEntry]),
-		link:      common.NewGenericSortedDList(compareTableFn),
+		DBBaseEntry: NewDBBaseEntry(id),
+		catalog:     catalog,
+		name:        name,
+		entries:     make(map[uint64]*common.GenericDLNode[*TableEntry]),
+		nameNodes:   make(map[string]*nodeList[*TableEntry]),
+		link:        common.NewGenericSortedDList(compareTableFn),
 	}
 	if txnCtx != nil {
 		// Only in unit test, txnCtx can be nil
@@ -108,12 +108,12 @@ func NewDBEntryByTS(catalog *Catalog, name string, ts types.TS) *DBEntry {
 	id := catalog.NextDB()
 
 	e := &DBEntry{
-		BaseEntry: NewBaseEntry(id),
-		catalog:   catalog,
-		name:      name,
-		entries:   make(map[uint64]*common.GenericDLNode[*TableEntry]),
-		nameNodes: make(map[string]*nodeList[*TableEntry]),
-		link:      common.NewGenericSortedDList(compareTableFn),
+		DBBaseEntry: NewDBBaseEntry(id),
+		catalog:     catalog,
+		name:        name,
+		entries:     make(map[uint64]*common.GenericDLNode[*TableEntry]),
+		nameNodes:   make(map[string]*nodeList[*TableEntry]),
+		link:        common.NewGenericSortedDList(compareTableFn),
 	}
 	e.CreateWithTS(ts)
 	e.acInfo.CreateAt = types.CurrentTimestamp()
@@ -123,13 +123,13 @@ func NewDBEntryByTS(catalog *Catalog, name string, ts types.TS) *DBEntry {
 func NewSystemDBEntry(catalog *Catalog) *DBEntry {
 	id := SystemDBID
 	entry := &DBEntry{
-		BaseEntry: NewBaseEntry(id),
-		catalog:   catalog,
-		name:      SystemDBName,
-		entries:   make(map[uint64]*common.GenericDLNode[*TableEntry]),
-		nameNodes: make(map[string]*nodeList[*TableEntry]),
-		link:      common.NewGenericSortedDList(compareTableFn),
-		isSys:     true,
+		DBBaseEntry: NewDBBaseEntry(id),
+		catalog:     catalog,
+		name:        SystemDBName,
+		entries:     make(map[uint64]*common.GenericDLNode[*TableEntry]),
+		nameNodes:   make(map[string]*nodeList[*TableEntry]),
+		link:        common.NewGenericSortedDList(compareTableFn),
+		isSys:       true,
 	}
 	entry.CreateWithTS(types.SystemDBTS)
 	return entry
@@ -137,10 +137,10 @@ func NewSystemDBEntry(catalog *Catalog) *DBEntry {
 
 func NewReplayDBEntry() *DBEntry {
 	entry := &DBEntry{
-		BaseEntry: NewReplayBaseEntry(),
-		entries:   make(map[uint64]*common.GenericDLNode[*TableEntry]),
-		nameNodes: make(map[string]*nodeList[*TableEntry]),
-		link:      common.NewGenericSortedDList(compareTableFn),
+		DBBaseEntry: NewReplayDBBaseEntry(),
+		entries:     make(map[uint64]*common.GenericDLNode[*TableEntry]),
+		nameNodes:   make(map[string]*nodeList[*TableEntry]),
+		link:        common.NewGenericSortedDList(compareTableFn),
 	}
 	return entry
 }
@@ -171,7 +171,7 @@ func (e *DBEntry) String() string {
 }
 
 func (e *DBEntry) StringLocked() string {
-	return fmt.Sprintf("DB%s[name=%s]", e.BaseEntry.StringLocked(), e.GetFullName())
+	return fmt.Sprintf("DB%s[name=%s]", e.DBBaseEntry.StringLocked(), e.GetFullName())
 }
 
 func (e *DBEntry) MakeTableIt(reverse bool) *common.GenericSortedDListIt[*TableEntry] {
@@ -384,7 +384,7 @@ func (e *DBEntry) RecurLoop(processor Processor) (err error) {
 
 func (e *DBEntry) PrepareRollback() (err error) {
 	var isEmpty bool
-	if isEmpty, err = e.BaseEntry.PrepareRollback(); err != nil {
+	if isEmpty, err = e.DBBaseEntry.PrepareRollback(); err != nil {
 		return
 	}
 	if isEmpty {
@@ -396,7 +396,7 @@ func (e *DBEntry) PrepareRollback() (err error) {
 }
 
 func (e *DBEntry) WriteTo(w io.Writer) (n int64, err error) {
-	if n, err = e.BaseEntry.WriteAllTo(w); err != nil {
+	if n, err = e.DBBaseEntry.WriteAllTo(w); err != nil {
 		return
 	}
 	x, err := e.acInfo.WriteTo(w)
@@ -414,7 +414,7 @@ func (e *DBEntry) WriteTo(w io.Writer) (n int64, err error) {
 }
 
 func (e *DBEntry) ReadFrom(r io.Reader) (n int64, err error) {
-	if n, err = e.BaseEntry.ReadAllFrom(r); err != nil {
+	if n, err = e.DBBaseEntry.ReadAllFrom(r); err != nil {
 		return
 	}
 	x, err := e.acInfo.ReadFrom(r)
@@ -446,18 +446,18 @@ func (e *DBEntry) GetCheckpointItems(start, end types.TS) CheckpointItems {
 		return nil
 	}
 	return &DBEntry{
-		BaseEntry: ret,
-		acInfo:    e.acInfo,
-		name:      e.name,
-		catalog:   e.catalog,
+		DBBaseEntry: ret.(*DBBaseEntry),
+		acInfo:      e.acInfo,
+		name:        e.name,
+		catalog:     e.catalog,
 	}
 }
 
 func (e *DBEntry) CloneCreateEntry() *DBEntry {
 	return &DBEntry{
-		acInfo:    e.acInfo,
-		BaseEntry: e.BaseEntry.CloneCreateEntry(),
-		name:      e.name,
+		acInfo:      e.acInfo,
+		DBBaseEntry: e.DBBaseEntry.CloneCreateEntry().(*DBBaseEntry),
+		name:        e.name,
 	}
 }
 
