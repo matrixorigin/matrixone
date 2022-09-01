@@ -63,9 +63,6 @@ type Driver struct {
 }
 
 func (s *Driver) Init(name string) (err error) {
-	var (
-		sbuffer bytes.Buffer
-	)
 	s.super = SuperBlock{
 		version:   1,
 		blockSize: BLOCK_SIZE,
@@ -79,11 +76,18 @@ func (s *Driver) Init(name string) (err error) {
 	}
 	s.name = name
 	s.super.lognode = log
-	segmentFile, err := os.Create(name)
+	return
+}
+
+func (s *Driver) createFile() (err error) {
+	var (
+		sbuffer bytes.Buffer
+	)
+	segmentFile, err := os.Create(s.name)
 	if err != nil {
 		return
 	}
-	logFile, err := os.Create(s.EncodeLogName(name))
+	logFile, err := os.Create(s.EncodeLogName(s.name))
 	if err != nil {
 		return
 	}
@@ -170,7 +174,7 @@ func (s *Driver) Mount() {
 	s.log.logFile = logFile
 	s.log.offset = LOG_START + s.log.logFile.snode.size
 	s.log.seq = seq + 1
-	s.log.name = s.logFile.Name()
+	s.log.name = s.EncodeLogName(s.name)
 	s.nodes[logFile.name] = s.log.logFile
 	s.allocator = NewBitmapAllocator(DATA_SIZE, s.GetPageSize())
 	s.log.allocator = NewBitmapAllocator(LOG_SIZE, s.GetInodeSize())
@@ -184,6 +188,9 @@ func (s *Driver) Unmount() {
 func (s *Driver) Destroy() {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
+	if s.segFile == nil {
+		return
+	}
 	err := s.segFile.Close()
 	if err != nil {
 		panic(any(err.Error()))
@@ -243,6 +250,12 @@ func (s *Driver) NewBlockFile(fname string) *DriverFile {
 }
 
 func (s *Driver) Append(fd *DriverFile, pl []byte) (err error) {
+	if s.segFile == nil {
+		err = s.createFile()
+		if err != nil {
+			return
+		}
+	}
 	buf := pl
 	if fd.snode.algo == compress.Lz4 {
 		colSize := len(pl)

@@ -28,6 +28,7 @@ type StorageCfg struct {
 type CheckpointCfg struct {
 	ScannerInterval    int64 `toml:"scanner-inerterval"`
 	ExecutionInterval  int64 `toml:"execution-inerterval"`
+	FlushInterval      int64 `toml:"flush-inerterval"`
 	ExecutionLevels    int16 `toml:"execution-levels"`
 	CatalogUnCkpLimit  int64 `toml:"catalog-unckp-limit"`
 	CatalogCkpInterval int64 `toml:"catalog-ckp-interval"`
