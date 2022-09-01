@@ -17,13 +17,6 @@ jobs:
   ut-linux-x86:
     runs-on: ubuntu-latest
     name: UT Test on Ubuntu/x64
-    env:
-      Endpoint: ${{ secrets.S3ENDPOINT }}
-      Region: ${{ secrets.S3REGION }}
-      APIKey: ${{ secrets.S3APIKEY }}
-      APISecret: ${{ secrets.S3APISECRET }}
-      Bucket: ${{ secrets.S3BUCKET }}
-      KeyPrefix: ${{ secrets.S3KEYPREFIX }}
       
     steps:
       - uses: actions/checkout@v2
@@ -34,6 +27,13 @@ jobs:
         uses: ./.github/actions/setup_env
 
       - name: Unit Testing
+        env:
+          Endpoint: ${{ secrets.S3ENDPOINT }}
+          Region: ${{ secrets.S3REGION }}
+          APIKey: ${{ secrets.S3APIKEY }}
+          APISecret: ${{ secrets.S3APISECRET }}
+          Bucket: ${{ secrets.S3BUCKET }}
+          KeyPrefix: ${{ secrets.S3KEYPREFIX }}
         run: |
           cd $GITHUB_WORKSPACE && make clean && make config
           make ut
