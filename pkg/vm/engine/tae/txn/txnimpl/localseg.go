@@ -95,6 +95,10 @@ func (seg *localSegment) registerInsertNode() {
 
 func (seg *localSegment) ApplyAppend() (err error) {
 	var destOff int
+	defer func() {
+		// Close All unclosed Appends
+		seg.CloseAppends()
+	}()
 	for _, ctx := range seg.appends {
 		bat, _ := ctx.node.Window(ctx.start, ctx.start+ctx.count)
 		defer bat.Close()
@@ -113,6 +117,12 @@ func (seg *localSegment) ApplyAppend() (err error) {
 }
 
 func (seg *localSegment) PrepareApply() (err error) {
+	defer func() {
+		if err != nil {
+			// Close All unclosed Appends
+			seg.CloseAppends()
+		}
+	}()
 	for _, node := range seg.nodes {
 		if err = seg.prepareApplyNode(node); err != nil {
 			break
@@ -175,6 +185,12 @@ func (seg *localSegment) prepareApplyNode(node InsertNode) (err error) {
 		}
 	}
 	return
+}
+
+func (seg *localSegment) CloseAppends() {
+	for _, ctx := range seg.appends {
+		ctx.driver.Close()
+	}
 }
 
 func (seg *localSegment) Append(data *containers.Batch) (err error) {
