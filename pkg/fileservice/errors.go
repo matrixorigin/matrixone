@@ -20,11 +20,14 @@ import (
 )
 
 var (
-	ErrFileNotFound   = errors.New("file not found")
-	ErrFileExisted    = errors.New("file existed")
-	ErrUnexpectedEOF  = io.ErrUnexpectedEOF
-	ErrSizeNotMatch   = errors.New("size not match")
-	ErrEmptyRange     = errors.New("empty range")
-	ErrEmptyVector    = errors.New("empty vector")
-	ErrDuplicatedName = errors.New("duplicated name")
+	ErrFileNotFound    = errors.New("file not found")
+	ErrFileExisted     = errors.New("file existed")
+	ErrUnexpectedEOF   = io.ErrUnexpectedEOF
+	ErrSizeNotMatch    = errors.New("size not match")
+	ErrEmptyRange      = errors.New("empty range")
+	ErrEmptyVector     = errors.New("empty vector")
+	ErrDuplicatedName  = errors.New("duplicated name")
+	ErrWrongService    = errors.New("wrong service")
+	ErrServiceNotFound = errors.New("service not found")
+	ErrInvalidPath     = errors.New("invalid path")
 )
