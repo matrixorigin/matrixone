@@ -717,49 +717,71 @@ func CastDecimal64ToString(lv, rv *vector.Vector, proc *process.Process) (*vecto
 	var err error
 
 	lvs := vector.MustTCols[types.Decimal64](lv)
-	col := &types.Bytes{
-		Data:    make([]byte, 0, len(lvs)),
+	if lv.IsScalar() {
+		vec := proc.AllocScalarVector(rv.Typ)
+		rs := &types.Bytes{
+			Data:    []byte{},
+			Offsets: make([]uint32, 0, 1),
+			Lengths: make([]uint32, 0, 1),
+		}
+		if _, err = binary.Decimal64ToBytes(lvs, rs, lv.Typ.Scale); err != nil {
+			return nil, err
+		}
+		nulls.Set(vec.Nsp, lv.Nsp)
+		vector.SetCol(vec, rs)
+		return vec, nil
+	}
+
+	vec, err := proc.AllocVector(rv.Typ, int64(rv.Typ.Size)*int64(len(lvs)))
+	if err != nil {
+		return nil, err
+	}
+	rs := &types.Bytes{
+		Data:    []byte{},
 		Offsets: make([]uint32, 0, len(lvs)),
 		Lengths: make([]uint32, 0, len(lvs)),
 	}
-	if col, err = binary.Decimal64ToBytes(lvs, col, lv.Typ.Scale); err != nil {
+	if _, err := binary.Decimal64ToBytes(lvs, rs, lv.Typ.Scale); err != nil {
 		return nil, err
 	}
-	if err = proc.Mp.Gm.Alloc(int64(cap(col.Data))); err != nil {
-		return nil, err
-	}
-	vec := vector.New(rv.Typ)
-	if lv.IsScalar() {
-		vec.IsConst = true
-	}
-	vec.Data = col.Data
 	nulls.Set(vec.Nsp, lv.Nsp)
-	vector.SetCol(vec, col)
+	vector.SetCol(vec, rs)
 	return vec, nil
 }
 
 func CastDecimal128ToString(lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	var err error
+
 	lvs := vector.MustTCols[types.Decimal128](lv)
-	col := &types.Bytes{
-		Data:    make([]byte, 0, len(lvs)),
+	if lv.IsScalar() {
+		vec := proc.AllocScalarVector(rv.Typ)
+		rs := &types.Bytes{
+			Data:    []byte{},
+			Offsets: make([]uint32, 0, 1),
+			Lengths: make([]uint32, 0, 1),
+		}
+		if _, err = binary.Decimal128ToBytes(lvs, rs, lv.Typ.Scale); err != nil {
+			return nil, err
+		}
+		nulls.Set(vec.Nsp, lv.Nsp)
+		vector.SetCol(vec, rs)
+		return vec, nil
+	}
+
+	vec, err := proc.AllocVector(rv.Typ, int64(rv.Typ.Size)*int64(len(lvs)))
+	if err != nil {
+		return nil, err
+	}
+	rs := &types.Bytes{
+		Data:    []byte{},
 		Offsets: make([]uint32, 0, len(lvs)),
 		Lengths: make([]uint32, 0, len(lvs)),
 	}
-
-	if col, err = binary.Decimal128ToBytes(lvs, col, lv.Typ.Scale); err != nil {
+	if _, err := binary.Decimal128ToBytes(lvs, rs, lv.Typ.Scale); err != nil {
 		return nil, err
 	}
-	if err = proc.Mp.Gm.Alloc(int64(cap(col.Data))); err != nil {
-		return nil, err
-	}
-	vec := vector.New(rv.Typ)
-	if lv.IsScalar() {
-		vec.IsConst = true
-	}
-	vec.Data = col.Data
 	nulls.Set(vec.Nsp, lv.Nsp)
-	vector.SetCol(vec, col)
+	vector.SetCol(vec, rs)
 	return vec, nil
 }
 
@@ -1063,49 +1085,73 @@ func CastSpecials1Float[T constraints.Float](lv, rv *vector.Vector, proc *proces
 // (int8 /int16/int32/int64) -> (char / varhcar / text)
 func CastSpecials2Int[T constraints.Signed](lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	var err error
+
 	lvs := vector.MustTCols[T](lv)
-	col := &types.Bytes{
-		Data:    make([]byte, 0, len(lvs)),
+	if lv.IsScalar() {
+		vec := proc.AllocScalarVector(rv.Typ)
+		rs := &types.Bytes{
+			Data:    []byte{},
+			Offsets: make([]uint32, 0, 1),
+			Lengths: make([]uint32, 0, 1),
+		}
+		if _, err = binary.IntToBytes(lvs, rs); err != nil {
+			return nil, err
+		}
+		nulls.Set(vec.Nsp, lv.Nsp)
+		vector.SetCol(vec, rs)
+		return vec, nil
+	}
+
+	vec, err := proc.AllocVector(rv.Typ, int64(rv.Typ.Size)*int64(len(lvs)))
+	if err != nil {
+		return nil, err
+	}
+	rs := &types.Bytes{
+		Data:    []byte{},
 		Offsets: make([]uint32, 0, len(lvs)),
 		Lengths: make([]uint32, 0, len(lvs)),
 	}
-	if col, err = binary.IntToBytes(lvs, col); err != nil {
+	if _, err := binary.IntToBytes(lvs, rs); err != nil {
 		return nil, err
 	}
-	if err = proc.Mp.Gm.Alloc(int64(cap(col.Data))); err != nil {
-		return nil, err
-	}
-	vec := vector.New(rv.Typ)
-	if lv.IsScalar() {
-		vec.IsConst = true
-	}
-	vec.Data = col.Data
 	nulls.Set(vec.Nsp, lv.Nsp)
-	vector.SetCol(vec, col)
+	vector.SetCol(vec, rs)
 	return vec, nil
 }
 
 func CastSpecials2Uint[T constraints.Unsigned](lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	var err error
+
 	lvs := vector.MustTCols[T](lv)
-	col := &types.Bytes{
-		Data:    make([]byte, 0, len(lvs)),
+	if lv.IsScalar() {
+		vec := proc.AllocScalarVector(rv.Typ)
+		rs := &types.Bytes{
+			Data:    []byte{},
+			Offsets: make([]uint32, 0, 1),
+			Lengths: make([]uint32, 0, 1),
+		}
+		if _, err = binary.UintToBytes(lvs, rs); err != nil {
+			return nil, err
+		}
+		nulls.Set(vec.Nsp, lv.Nsp)
+		vector.SetCol(vec, rs)
+		return vec, nil
+	}
+
+	vec, err := proc.AllocVector(rv.Typ, int64(rv.Typ.Size)*int64(len(lvs)))
+	if err != nil {
+		return nil, err
+	}
+	rs := &types.Bytes{
+		Data:    []byte{},
 		Offsets: make([]uint32, 0, len(lvs)),
 		Lengths: make([]uint32, 0, len(lvs)),
 	}
-	if col, err = binary.UintToBytes(lvs, col); err != nil {
+	if _, err := binary.UintToBytes(lvs, rs); err != nil {
 		return nil, err
 	}
-	if err = proc.Mp.Gm.Alloc(int64(cap(col.Data))); err != nil {
-		return nil, err
-	}
-	vec := vector.New(rv.Typ)
-	if lv.IsScalar() {
-		vec.IsConst = true
-	}
-	vec.Data = col.Data
 	nulls.Set(vec.Nsp, lv.Nsp)
-	vector.SetCol(vec, col)
+	vector.SetCol(vec, rs)
 	return vec, nil
 }
 
@@ -1113,25 +1159,37 @@ func CastSpecials2Uint[T constraints.Unsigned](lv, rv *vector.Vector, proc *proc
 // (float32/float64) -> (char / varhcar)
 func CastSpecials2Float[T constraints.Float](lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	var err error
+
 	lvs := vector.MustTCols[T](lv)
-	col := &types.Bytes{
-		Data:    make([]byte, 0, len(lvs)),
+	if lv.IsScalar() {
+		vec := proc.AllocScalarVector(rv.Typ)
+		rs := &types.Bytes{
+			Data:    []byte{},
+			Offsets: make([]uint32, 0, 1),
+			Lengths: make([]uint32, 0, 1),
+		}
+		if _, err = binary.FloatToBytes(lvs, rs); err != nil {
+			return nil, err
+		}
+		nulls.Set(vec.Nsp, lv.Nsp)
+		vector.SetCol(vec, rs)
+		return vec, nil
+	}
+
+	vec, err := proc.AllocVector(rv.Typ, int64(rv.Typ.Size)*int64(len(lvs)))
+	if err != nil {
+		return nil, err
+	}
+	rs := &types.Bytes{
+		Data:    []byte{},
 		Offsets: make([]uint32, 0, len(lvs)),
 		Lengths: make([]uint32, 0, len(lvs)),
 	}
-	if col, err = binary.FloatToBytes(lvs, col); err != nil {
+	if _, err := binary.FloatToBytes(lvs, rs); err != nil {
 		return nil, err
 	}
-	if err = proc.Mp.Gm.Alloc(int64(cap(col.Data))); err != nil {
-		return nil, err
-	}
-	vec := vector.New(rv.Typ)
-	if lv.IsScalar() {
-		vec.IsConst = true
-	}
-	vec.Data = col.Data
 	nulls.Set(vec.Nsp, lv.Nsp)
-	vector.SetCol(vec, col)
+	vector.SetCol(vec, rs)
 	return vec, nil
 }
 
@@ -1172,9 +1230,6 @@ func CastSpecials2Float[T constraints.Float](lv, rv *vector.Vector, proc *proces
 func CastSpecials3(lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	source := vector.MustBytesCols(lv)
 	if lv.IsScalar() {
-		if lv.IsScalarNull() {
-			return proc.AllocScalarNullVector(rv.Typ), nil
-		}
 		vec := proc.AllocScalarVector(rv.Typ)
 		vec.Col = &types.Bytes{
 			Data:    make([]byte, len(source.Data)),
@@ -1611,14 +1666,11 @@ func castTimestampAsVarchar(lv, rv *vector.Vector, proc *process.Process) (*vect
 	resultElementSize := int(resultType.Size)
 	precision := lv.Typ.Precision
 	if lv.IsScalar() {
-		if lv.IsScalarNull() {
-			return proc.AllocScalarNullVector(resultType), nil
-		}
 		vec := proc.AllocScalarVector(resultType)
 		rs := &types.Bytes{
 			Data:    []byte{},
-			Offsets: make([]uint32, 1),
-			Lengths: make([]uint32, 1),
+			Offsets: make([]uint32, 0, 1),
+			Lengths: make([]uint32, 0, 1),
 		}
 		if _, err := binary.TimestampToVarchar(proc.SessionInfo.TimeZone, lvs, rs, precision); err != nil {
 			return nil, err
@@ -1634,8 +1686,8 @@ func castTimestampAsVarchar(lv, rv *vector.Vector, proc *process.Process) (*vect
 	}
 	rs := &types.Bytes{
 		Data:    []byte{},
-		Offsets: make([]uint32, len(lvs)),
-		Lengths: make([]uint32, len(lvs)),
+		Offsets: make([]uint32, 0, len(lvs)),
+		Lengths: make([]uint32, 0, len(lvs)),
 	}
 	if _, err := binary.TimestampToVarchar(proc.SessionInfo.TimeZone, lvs, rs, precision); err != nil {
 		return nil, err
@@ -1688,49 +1740,73 @@ func CastStringAsDecimal64(lv, rv *vector.Vector, proc *process.Process) (*vecto
 
 func CastBoolToString(lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	var err error
+
 	lvs := vector.MustTCols[bool](lv)
-	col := &types.Bytes{
-		Data:    make([]byte, 0, len(lvs)),
+	if lv.IsScalar() {
+		vec := proc.AllocScalarVector(rv.Typ)
+		rs := &types.Bytes{
+			Data:    []byte{},
+			Offsets: make([]uint32, 0, 1),
+			Lengths: make([]uint32, 0, 1),
+		}
+		if _, err = binary.BoolToBytes(lvs, rs); err != nil {
+			return nil, err
+		}
+		nulls.Set(vec.Nsp, lv.Nsp)
+		vector.SetCol(vec, rs)
+		return vec, nil
+	}
+
+	vec, err := proc.AllocVector(rv.Typ, int64(rv.Typ.Size)*int64(len(lvs)))
+	if err != nil {
+		return nil, err
+	}
+	rs := &types.Bytes{
+		Data:    []byte{},
 		Offsets: make([]uint32, 0, len(lvs)),
 		Lengths: make([]uint32, 0, len(lvs)),
 	}
-	if col, err = binary.BoolToBytes(lvs, col); err != nil {
+	if _, err := binary.BoolToBytes(lvs, rs); err != nil {
 		return nil, err
 	}
-	if err = proc.Mp.Gm.Alloc(int64(cap(col.Data))); err != nil {
-		return nil, err
-	}
-	vec := vector.New(rv.Typ)
-	if lv.IsScalar() {
-		vec.IsConst = true
-	}
-	vec.Data = col.Data
 	nulls.Set(vec.Nsp, lv.Nsp)
-	vector.SetCol(vec, col)
+	vector.SetCol(vec, rs)
 	return vec, nil
 }
 
 func CastDateAsString(lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	var err error
+
 	lvs := vector.MustTCols[types.Date](lv)
-	col := &types.Bytes{
-		Data:    make([]byte, 0, len(lvs)),
+	if lv.IsScalar() {
+		vec := proc.AllocScalarVector(rv.Typ)
+		rs := &types.Bytes{
+			Data:    []byte{},
+			Offsets: make([]uint32, 0, 1),
+			Lengths: make([]uint32, 0, 1),
+		}
+		if _, err = binary.DateToBytes(lvs, rs); err != nil {
+			return nil, err
+		}
+		nulls.Set(vec.Nsp, lv.Nsp)
+		vector.SetCol(vec, rs)
+		return vec, nil
+	}
+
+	vec, err := proc.AllocVector(rv.Typ, int64(rv.Typ.Size)*int64(len(lvs)))
+	if err != nil {
+		return nil, err
+	}
+	rs := &types.Bytes{
+		Data:    []byte{},
 		Offsets: make([]uint32, 0, len(lvs)),
 		Lengths: make([]uint32, 0, len(lvs)),
 	}
-	if col, err = binary.DateToBytes(lvs, col); err != nil {
+	if _, err := binary.DateToBytes(lvs, rs); err != nil {
 		return nil, err
 	}
-	if err = proc.Mp.Gm.Alloc(int64(cap(col.Data))); err != nil {
-		return nil, err
-	}
-	vec := vector.New(rv.Typ)
-	if lv.IsScalar() {
-		vec.IsConst = true
-	}
-	vec.Data = col.Data
 	nulls.Set(vec.Nsp, lv.Nsp)
-	vector.SetCol(vec, col)
+	vector.SetCol(vec, rs)
 	return vec, nil
 }
 
@@ -1853,25 +1929,37 @@ func CastDateAsTimeStamp(lv, rv *vector.Vector, proc *process.Process) (*vector.
 
 func CastDatetimeAsString(lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	var err error
+
 	lvs := vector.MustTCols[types.Datetime](lv)
-	col := &types.Bytes{
-		Data:    make([]byte, 0, len(lvs)),
+	if lv.IsScalar() {
+		vec := proc.AllocScalarVector(rv.Typ)
+		rs := &types.Bytes{
+			Data:    []byte{},
+			Offsets: make([]uint32, 0, 1),
+			Lengths: make([]uint32, 0, 1),
+		}
+		if _, err = binary.DatetimeToBytes(lvs, rs, lv.Typ.Precision); err != nil {
+			return nil, err
+		}
+		nulls.Set(vec.Nsp, lv.Nsp)
+		vector.SetCol(vec, rs)
+		return vec, nil
+	}
+
+	vec, err := proc.AllocVector(rv.Typ, int64(rv.Typ.Size)*int64(len(lvs)))
+	if err != nil {
+		return nil, err
+	}
+	rs := &types.Bytes{
+		Data:    []byte{},
 		Offsets: make([]uint32, 0, len(lvs)),
 		Lengths: make([]uint32, 0, len(lvs)),
 	}
-	if col, err = binary.DateTimeToBytes(lvs, col, lv.Typ.Precision); err != nil {
+	if _, err := binary.DatetimeToBytes(lvs, rs, lv.Typ.Precision); err != nil {
 		return nil, err
 	}
-	if err = proc.Mp.Gm.Alloc(int64(cap(col.Data))); err != nil {
-		return nil, err
-	}
-	vec := vector.New(rv.Typ)
-	if lv.IsScalar() {
-		vec.IsConst = true
-	}
-	vec.Data = col.Data
 	nulls.Set(vec.Nsp, lv.Nsp)
-	vector.SetCol(vec, col)
+	vector.SetCol(vec, rs)
 	return vec, nil
 }
 
@@ -1883,7 +1971,7 @@ func CastDatetimeAsDate(lv, rv *vector.Vector, proc *process.Process) (*vector.V
 	if lv.IsScalar() {
 		vec := proc.AllocScalarVector(rv.Typ)
 		rs := make([]types.Date, 1)
-		if _, err := binary.DateTimeToDate(lvs, rs); err != nil {
+		if _, err := binary.DatetimeToDate(lvs, rs); err != nil {
 			return nil, err
 		}
 		nulls.Set(vec.Nsp, lv.Nsp)
@@ -1896,7 +1984,7 @@ func CastDatetimeAsDate(lv, rv *vector.Vector, proc *process.Process) (*vector.V
 	}
 	rs := types.DecodeDateSlice(vec.Data)
 	rs = rs[:len(lvs)]
-	if _, err := binary.DateTimeToDate(lvs, rs); err != nil {
+	if _, err := binary.DatetimeToDate(lvs, rs); err != nil {
 		return nil, err
 	}
 	nulls.Set(vec.Nsp, lv.Nsp)
