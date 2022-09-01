@@ -34,15 +34,6 @@ const csvExtension = ".csv"
 
 var _ stringWriter = (*FSWriter)(nil)
 
-var _, _ = getLocalFS()
-
-func getLocalFS() (fileservice.FileService, error) {
-	//dir := t.TempDir()
-	dir := "path_to_file"
-	fs, err := fileservice.NewLocalFS("test", dir, 0)
-	return fs, err
-}
-
 type FSWriter struct {
 	ctx context.Context         // New args
 	fs  fileservice.FileService // New args

@@ -17,12 +17,10 @@ package export
 import (
 	"context"
 	"errors"
-	"fmt"
 	"os"
 	"path"
 	"path/filepath"
 	"testing"
-	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/util/batchpipe"
@@ -42,9 +40,9 @@ func TestLocalFSWriter(t *testing.T) {
 	t.Logf("executor: %s", ex)
 	selfDir, err := filepath.Abs(".")
 	require.Equal(t, nil, err)
-	t.Logf("whereami: %s", selfDir)
-	basedir := fmt.Sprintf("store.%d", time.Now().Unix())
-	err = os.RemoveAll(basedir)
+	basedir := t.TempDir()
+	t.Logf("whereami: %s, %s", selfDir, basedir)
+
 	require.Equal(t, nil, err)
 	fs, err := fileservice.NewLocalFS("test", path.Join(basedir, "system"), MB)
 	require.Equal(t, nil, err)
@@ -52,7 +50,7 @@ func TestLocalFSWriter(t *testing.T) {
 	// fs_writer_test.go:23: whereami: /private/var/folders/lw/05zz3bq12djbnhv1wyzk2jgh0000gn/T/GoLand
 	// fs_writer_test.go:40: write statement file error: size not match
 	// fs_writer_test.go:50: write span file error: file existed
-	// file result: (has prefix)
+	// file result: (has checksum)
 	// 9a80 8760 3132 3334 3536 3738 0a         ...`12345678.
 	err = fs.Write(ctx, fileservice.IOVector{ // write-once-read-multi
 		FilePath: "statement_node_uuid_20220818_000000_123456",
@@ -82,7 +80,7 @@ func TestLocalFSWriter(t *testing.T) {
 	})
 	t.Logf("write statement file error: %v", err)
 	require.Equal(t, errors.New("file existed"), err)
-	// file result: (has prefix)
+	// file result: (has checksum)
 	// 3f3f 3a3f 3132 3334 0a                   ??:?1234.
 	err = fs.Write(ctx, fileservice.IOVector{
 		FilePath: "span_node_uuid_20220818_000000_123456", // each file is only can open-write for one time.
@@ -94,27 +92,15 @@ func TestLocalFSWriter(t *testing.T) {
 		},
 	})
 	t.Logf("write span file error: %v", err)
-	os.RemoveAll(basedir)
 }
 
 func TestLocalETLFSWriter(t *testing.T) {
-	ex, err := os.Executable()
-	require.Equal(t, nil, err)
-	t.Logf("executor: %s", ex)
-	path, err := filepath.Abs(".")
-	require.Equal(t, nil, err)
-	t.Logf("whereami: %s", path)
-	//err = os.RemoveAll("store/")
-	//require.Equal(t, nil, err)
-	basedir := fmt.Sprintf("store.%d", time.Now().Unix())
+	basedir := t.TempDir()
 	fs, err := fileservice.NewLocalETLFS("etl", basedir)
 	require.Equal(t, nil, err)
+
+	// file result: (without checksum)
 	ctx := context.Background()
-	// fs_writer_test.go:23: whereami: /private/var/folders/lw/05zz3bq12djbnhv1wyzk2jgh0000gn/T/GoLand
-	// fs_writer_test.go:40: write statement file error: size not match
-	// fs_writer_test.go:50: write span file error: file existed
-	// file result: (has prefix)
-	// 9a80 8760 3132 3334 3536 3738 0a         ...`12345678.
 	err = fs.Write(ctx, fileservice.IOVector{ // write-once-read-multi
 		FilePath: "statement_node_uuid_20220818_000000_123456",
 		Entries: []fileservice.IOEntry{
@@ -131,6 +117,7 @@ func TestLocalETLFSWriter(t *testing.T) {
 	})
 	t.Logf("write statement file error: %v", err)
 	require.Equal(t, nil, err)
+
 	err = fs.Write(ctx, fileservice.IOVector{
 		FilePath: "statement_node_uuid_20220818_000000_123456",
 		Entries: []fileservice.IOEntry{
@@ -143,8 +130,7 @@ func TestLocalETLFSWriter(t *testing.T) {
 	})
 	t.Logf("write statement file error: %v", err)
 	require.Equal(t, errors.New("file existed"), err)
-	// file result: (has prefix)
-	// 3f3f 3a3f 3132 3334 0a                   ??:?1234.
+
 	err = fs.Write(ctx, fileservice.IOVector{
 		FilePath: "span_node_uuid_20220818_000000_123456", // each file is only can open-write for one time.
 		Entries: []fileservice.IOEntry{
@@ -155,7 +141,6 @@ func TestLocalETLFSWriter(t *testing.T) {
 		},
 	})
 	t.Logf("write span file error: %v", err)
-	os.RemoveAll(basedir)
 }
 
 func TestFSWriter_Write(t *testing.T) {
@@ -171,8 +156,7 @@ func TestFSWriter_Write(t *testing.T) {
 		p []byte
 	}
 
-	basedir := fmt.Sprintf("store.%d", time.Now().Unix())
-	os.RemoveAll(basedir)
+	basedir := t.TempDir()
 	path, err := filepath.Abs(".")
 	require.Equal(t, nil, err)
 	t.Logf("path: %s", path)
@@ -223,5 +207,4 @@ func TestFSWriter_Write(t *testing.T) {
 			}
 		})
 	}
-	os.RemoveAll(basedir)
 }
