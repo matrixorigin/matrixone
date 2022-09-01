@@ -30,36 +30,67 @@ import (
 )
 
 type _TestS3Config struct {
-	Endpoint  string
-	Region    string
-	APIKey    string
-	APISecret string
-	Bucket    string
-	KeyPrefix string
+	Endpoint  string `json:"s3-test-endpoint"`
+	Region    string `json:"s3-test-region"`
+	APIKey    string `json:"s3-test-key"`
+	APISecret string `json:"s3-test-secret"`
+	Bucket    string `json:"s3-test-bucket"`
+}
+
+func loadS3TestConfig() (config _TestS3Config, err error) {
+
+	// load from s3.json
+	content, err := os.ReadFile("s3.json")
+	if err != nil {
+		if os.IsNotExist(err) {
+			err = nil
+		} else {
+			return config, err
+		}
+	}
+	if len(content) > 0 {
+		err := json.Unmarshal(content, &config)
+		if err != nil {
+			return config, err
+		}
+	}
+
+	// load from env
+	loadEnv := func(name string, ptr *string) {
+		if *ptr != "" {
+			return
+		}
+		if value := os.Getenv(name); value != "" {
+			*ptr = value
+		}
+	}
+	loadEnv("s3-test-endpoint", &config.Endpoint)
+	loadEnv("s3-test-region", &config.Region)
+	loadEnv("s3-test-key", &config.APIKey)
+	loadEnv("s3-test-secret", &config.APISecret)
+	loadEnv("s3-test-bucket", &config.Bucket)
+
+	return
 }
 
 func TestS3FS(t *testing.T) {
-
-	var config _TestS3Config
-	content, err := os.ReadFile("s3.json")
-	if os.IsNotExist(err) {
-		// no s3.json, skip tests
-		return
+	config, err := loadS3TestConfig()
+	assert.Nil(t, err)
+	if config.Endpoint == "" {
+		// no config
+		t.Skip()
 	}
-	assert.Nil(t, err)
-	err = json.Unmarshal(content, &config)
-	assert.Nil(t, err)
 
 	t.Setenv("AWS_REGION", config.Region)
 	t.Setenv("AWS_ACCESS_KEY_ID", config.APIKey)
 	t.Setenv("AWS_SECRET_ACCESS_KEY", config.APISecret)
 
 	t.Run("file service", func(t *testing.T) {
-		testFileService(t, func() FileService {
+		testFileService(t, func(name string) FileService {
 
 			fs, err := NewS3FS(
 				"",
-				"s3",
+				name,
 				config.Endpoint,
 				config.Bucket,
 				time.Now().Format("2006-01-02.15:04:05.000000"),
@@ -169,11 +200,11 @@ func TestS3FSMinioServer(t *testing.T) {
 
 	// run test
 	t.Run("file service", func(t *testing.T) {
-		testFileService(t, func() FileService {
+		testFileService(t, func(name string) FileService {
 
 			fs, err := NewS3FSOnMinio(
 				"",
-				"s3",
+				name,
 				endpoint,
 				"test",
 				time.Now().Format("2006-01-02.15:04:05.000000"),
@@ -188,16 +219,12 @@ func TestS3FSMinioServer(t *testing.T) {
 }
 
 func BenchmarkS3FS(b *testing.B) {
-
-	var config _TestS3Config
-	content, err := os.ReadFile("s3.json")
-	if os.IsNotExist(err) {
-		// no s3.json, skip
-		return
+	config, err := loadS3TestConfig()
+	assert.Nil(b, err)
+	if config.Endpoint == "" {
+		// no config
+		b.Skip()
 	}
-	assert.Nil(b, err)
-	err = json.Unmarshal(content, &config)
-	assert.Nil(b, err)
 
 	b.Setenv("AWS_REGION", config.Region)
 	b.Setenv("AWS_ACCESS_KEY_ID", config.APIKey)

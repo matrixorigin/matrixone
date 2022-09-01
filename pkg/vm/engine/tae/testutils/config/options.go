@@ -105,6 +105,7 @@ func WithQuickScanAndCKPOpts(in *options.Options) (opts *options.Options) {
 	opts.CheckpointCfg.ScannerInterval = 10
 	opts.CheckpointCfg.ExecutionLevels = 5
 	opts.CheckpointCfg.ExecutionInterval = 1
+	opts.CheckpointCfg.FlushInterval = 10
 	opts.CheckpointCfg.CatalogCkpInterval = 5
 	opts.CheckpointCfg.CatalogUnCkpLimit = 1
 	return opts

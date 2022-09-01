@@ -159,7 +159,8 @@ func testMVCC(
 	case ReadNoStale:
 		res, err = m.Read(tx2, now)
 		assert.NotNil(t, err)
-		assert.Nil(t, res)
+		assert.NotNil(t, res)
+		assert.Equal(t, 5, *res)
 		conflict, ok := err.(*ErrReadConflict)
 		assert.True(t, ok)
 		assert.Equal(t, tx2, conflict.ReadingTx)
