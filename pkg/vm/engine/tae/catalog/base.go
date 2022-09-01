@@ -24,6 +24,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 )
 
+// JXM TODO:
+// Generic BaseEntry can't work in go 1.19 because of golang bug:
+// https://github.com/golang/go/issues/54671
+// Refactor catalog and use generic BaseEntry after go 1.19.1 release.
 type BaseEntryIf interface {
 	RLock()
 	RUnlock()
