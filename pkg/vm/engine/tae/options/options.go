@@ -42,6 +42,7 @@ func (o *Options) FillDefaults(dirname string) *Options {
 		o.CheckpointCfg = &CheckpointCfg{
 			ScannerInterval:    DefaultScannerInterval,
 			ExecutionInterval:  DefaultExecutionInterval,
+			FlushInterval:      DefaultFlushInterval,
 			ExecutionLevels:    DefaultExecutionLevels,
 			CatalogCkpInterval: DefaultCatalogCkpInterval,
 			CatalogUnCkpLimit:  DefaultCatalogUnCkpLimit,

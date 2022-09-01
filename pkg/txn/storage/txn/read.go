@@ -18,13 +18,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/gob"
-	"fmt"
 
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage"
 	txnengine "github.com/matrixorigin/matrixone/pkg/vm/engine/txn"
-	"go.uber.org/zap"
 )
 
 func (s *Storage) Read(ctx context.Context, txnMeta txn.TxnMeta, op uint32, payload []byte) (res storage.ReadResult, err error) {
@@ -110,21 +107,10 @@ func handleRead[Req any, Resp any](
 	if err := gob.NewDecoder(bytes.NewReader(payload)).Decode(&req); err != nil {
 		return nil, err
 	}
-	logutil.Debug("memengine: read on DN",
-		zap.String("type", fmt.Sprintf("%T", req)),
-		zap.Any("txn", txnMeta),
-		zap.Any("data", req),
-	)
 
 	var resp Resp
-	defer func() {
-		logutil.Debug("memengine: read result on DN",
-			zap.String("type", fmt.Sprintf("%T", resp)),
-			zap.Any("txn", txnMeta),
-			zap.Any("data", resp),
-			zap.Any("error", err),
-		)
-	}()
+	defer logReq("read", req, txnMeta, &resp, &err)()
+
 	err = fn(txnMeta, req, &resp)
 	if err != nil {
 		return nil, err

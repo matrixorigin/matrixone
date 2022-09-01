@@ -30,6 +30,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
+	hapkg "github.com/matrixorigin/matrixone/pkg/hakeeper"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 )
@@ -70,20 +71,35 @@ func runServiceTest(t *testing.T,
 		}),
 	)
 	require.NoError(t, err)
-	peers := make(map[uint64]dragonboat.Target)
-	peers[1] = service.ID()
+	defer func() {
+		assert.NoError(t, service.Close())
+	}()
+
 	if startReplica {
+		shardID := hapkg.DefaultHAKeeperShardID
 		peers := make(map[uint64]dragonboat.Target)
 		peers[1] = service.ID()
 		if hakeeper {
 			require.NoError(t, service.store.startHAKeeperReplica(1, peers, false))
 		} else {
+			shardID = 1
 			require.NoError(t, service.store.startReplica(1, 1, peers, false))
 		}
+
+		// wait for leader to be elected
+		done := false
+		for i := 0; i < 1000; i++ {
+			_, _, ok, err := service.store.nh.GetLeaderID(shardID)
+			require.NoError(t, err)
+			if ok {
+				done = true
+				break
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+		require.True(t, done)
 	}
-	defer func() {
-		assert.NoError(t, service.Close())
-	}()
+
 	fn(t, service)
 }
 
