@@ -70,17 +70,17 @@ func (un *TxnMVCCNode) TxnCanRead(startTS types.TS) (canRead, goNext bool) {
 
 }
 
-func (un *TxnMVCCNode) CompareTS(minTS, maxTS types.TS) int {
+func (un *TxnMVCCNode) CommittedIn(minTS, maxTS types.TS) (committedIn, commitBeforeMinTS bool) {
 	if un.End.IsEmpty() {
-		return 1
+		return false, false
 	}
 	if un.End.Less(minTS) {
-		return -1
+		return false, true
 	}
 	if un.End.GreaterEq(minTS) && un.End.LessEq(maxTS) {
-		return 0
+		return true, false
 	}
-	return 1
+	return false, false
 }
 
 func (un *TxnMVCCNode) NeedWaitCommitting(startTS types.TS) (bool, txnif.TxnReader) {

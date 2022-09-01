@@ -135,13 +135,13 @@ func (be *MetaBaseEntry) CreateWithTxn(txn txnif.AsyncTxn) {
 func (be *MetaBaseEntry) ExistUpdate(minTs, maxTs types.TS) (exist bool) {
 	be.MVCC.Loop(func(n *common.GenericDLNode[*MetadataMVCCNode]) bool {
 		un := n.GetPayload()
-		compare := un.CompareTS(minTs, maxTs)
-		if compare > 0 {
-			return true
-		}
-		if compare == 0 {
+		committedIn, commitBeforeMinTS := un.CommittedIn(minTs, maxTs)
+		if committedIn {
 			exist = true
 			return false
+		}
+		if !commitBeforeMinTS {
+			return true
 		}
 		return false
 	}, false)
@@ -528,14 +528,14 @@ func (be *MetaBaseEntry) IsCommitted() bool {
 func (be *MetaBaseEntry) CloneCommittedInRange(start, end types.TS) (ret BaseEntryIf) {
 	be.MVCC.Loop(func(n *common.GenericDLNode[*MetadataMVCCNode]) bool {
 		un := n.GetPayload()
-		compare := un.CompareTS(start, end)
-		if compare == 0 {
+		committedIn, commitBeforeMinTs := un.CommittedIn(start, end)
+		if committedIn {
 			if ret == nil {
 				ret = NewMetaBaseEntry(be.ID)
 			}
 			ret.InsertNode(un.CloneAll())
 			ret.(*MetaBaseEntry).length++
-		} else if compare > 0 {
+		} else if !commitBeforeMinTs {
 			return false
 		}
 		return true

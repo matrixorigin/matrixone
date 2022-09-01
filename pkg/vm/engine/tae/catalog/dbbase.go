@@ -136,13 +136,13 @@ func (be *DBBaseEntry) CreateWithTxn(txn txnif.AsyncTxn) {
 func (be *DBBaseEntry) ExistUpdate(minTs, maxTs types.TS) (exist bool) {
 	be.MVCC.Loop(func(n *common.GenericDLNode[*DBMVCCNode]) bool {
 		un := n.GetPayload()
-		compare := un.CompareTS(minTs, maxTs)
-		if compare > 0 {
-			return true
-		}
-		if compare == 0 {
+		committedIn, commitBeforeMinTS := un.CommittedIn(minTs, maxTs)
+		if committedIn {
 			exist = true
 			return false
+		}
+		if !commitBeforeMinTS {
+			return true
 		}
 		return false
 	}, false)
@@ -516,14 +516,14 @@ func (be *DBBaseEntry) IsCommitted() bool {
 func (be *DBBaseEntry) CloneCommittedInRange(start, end types.TS) (ret BaseEntryIf) {
 	be.MVCC.Loop(func(n *common.GenericDLNode[*DBMVCCNode]) bool {
 		un := n.GetPayload()
-		compare := un.CompareTS(start, end)
-		if compare == 0 {
+		committedIn, commitBeforeMinTs := un.CommittedIn(start, end)
+		if committedIn {
 			if ret == nil {
 				ret = NewDBBaseEntry(be.ID)
 			}
 			ret.InsertNode(un.CloneAll())
 			ret.(*DBBaseEntry).length++
-		} else if compare > 0 {
+		} else if !commitBeforeMinTs {
 			return false
 		}
 		return true
