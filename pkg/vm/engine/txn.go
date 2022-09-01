@@ -49,19 +49,19 @@ func DoTxnRequest[
 	err error,
 ) {
 
-	logutil.Debug("memengine: request on CN",
+	logutil.Debug("engine: CN request",
 		zap.String("type", fmt.Sprintf("%T", req)),
 		zap.Any("data", req),
 	)
 	defer func() {
 		for _, resp := range resps {
-			logutil.Debug("memengine: response on CN",
+			logutil.Debug("engine: CN response",
 				zap.String("type", fmt.Sprintf("%T", resp)),
 				zap.Any("data", resp),
 			)
 		}
 		if err != nil {
-			logutil.Debug("memengine: response on CN",
+			logutil.Debug("engine: CN error",
 				zap.Any("error", err),
 			)
 		}
@@ -87,7 +87,17 @@ func DoTxnRequest[
 				Payload: buf.Bytes(),
 				Target:  shard,
 			},
+			Options: &txn.TxnRequestOptions{
+				RetryCodes: []txn.ErrorCode{
+					// dn shard not found
+					txn.ErrorCode_DNShardNotFound,
+				},
+				RetryInterval: int64(time.Second),
+			},
 		})
+		logutil.Debug("engine: CN target shard",
+			zap.Any("shard", shard),
+		)
 	}
 
 	ctx, cancel := context.WithTimeout(ctx, time.Minute) //TODO get from config or argument
