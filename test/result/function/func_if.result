@@ -1,3 +1,4 @@
+set time_zone="+00:00";
 SELECT IF(NULL AND 1, 1, 2), IF(1 AND NULL, 1, 2);
 IF(NULL AND 1, 1, 2)	IF(1 AND NULL, 1, 2)
 2	2
@@ -153,12 +154,12 @@ INSERT INTO t1 VALUES (1,1110000000,'Day 1'),(2,1111000000,'Day 2'),(3,111200000
 SELECT id, IF(date IS NULL, '-', FROM_UNIXTIME(date, '%d-%m-%Y')) AS date_ord, text FROM t1 ORDER BY date_ord ASC;
 id	date_ord	text
 1	05-03-2005	Day 1
-2	17-03-2005	Day 2
+2	16-03-2005	Day 2
 3	28-03-2005	Day 3
 SELECT id, IF(date IS NULL, '-', FROM_UNIXTIME(date, '%d-%m-%Y')) AS date_ord, text FROM t1 ORDER BY date_ord DESC;
 id	date_ord	text
 3	28-03-2005	Day 3
-2	17-03-2005	Day 2
+2	16-03-2005	Day 2
 1	05-03-2005	Day 1
 DROP TABLE t1;
 create table t1 (f1 int, f2 int);
