@@ -115,3 +115,28 @@ a
 2017-06-15
 2017-06-15
 2017-06-15
+drop table if exists t1;
+create table t1(a int auto_increment, b int);
+insert into t1 values(null, 2), (3, null), (null, null);
+select * from t1;
+a    b
+1    2
+3    null
+4    null
+drop table if exists t1;
+create table t1(a int auto_increment, b bigint auto_increment);
+insert into t1 values(null, 2), (3, null), (null, null);
+select * from t1;
+a    b
+1    2
+3    3
+4    4
+insert into t1 values(100, 2), (null, null), (null, null);
+select * from t1;
+a    b
+1    2
+3    3
+4    4
+100     2
+101     5
+102     6

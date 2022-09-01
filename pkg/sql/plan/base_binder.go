@@ -827,6 +827,16 @@ func bindFuncExprImplByPlanExpr(name string, args []*Expr) (*plan.Expr, error) {
 		if args[1].Typ.Id == int32(types.T_any) {
 			args[1].Typ.Id = int32(types.T_varchar)
 		}
+	// rewrite from_unixtime(a, b) to date_format(from_unixtime(a), b)
+	case "from_unixtime":
+		if len(args) == 2 {
+			newExpr, err := bindFuncExprImplByPlanExpr("from_unixtime", []*plan.Expr{args[0]})
+			if err != nil {
+				return nil, err
+			}
+			name = "date_format"
+			args = []*plan.Expr{newExpr, args[1]}
+		}
 	}
 
 	// get args(exprs) & types
@@ -1027,9 +1037,6 @@ func (b *baseBinder) bindNumVal(astExpr *tree.NumVal, typ *Type) (*Expr, error) 
 	case tree.P_bit:
 		return returnDecimalExpr(astExpr.String())
 	case tree.P_char:
-		if typ != nil && typ.Id != int32(types.T_char) && typ.Id != int32(types.T_varchar) {
-			return appendCastBeforeExpr(getStringExpr(astExpr.String()), typ)
-		}
 		expr := getStringExpr(astExpr.String())
 		return expr, nil
 	default:

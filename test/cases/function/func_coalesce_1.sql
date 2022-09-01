@@ -17,9 +17,7 @@ select coalesce(a, 1) from t1;
 -- echo error
 select coalesce(b, 1) from t1;
 
--- @bvt:issue#4744
 select coalesce(b, '1') from t1;
--- @bvt:issue
 
 drop table t1;
 
@@ -39,11 +37,9 @@ select * from t2;
 select coalesce(a, 1.0) from t2;
 select coalesce(a, 1) from t2;
 
--- @bvt:issue#4744
 select coalesce(b, 2022-01-01) from t2;
 select coalesce(b, 2022) from t2;
 select coalesce(b, 2) from t2;
--- @bvt:issue
 
 
 select coalesce(b, '2022-10-01') from t2;
@@ -76,10 +72,8 @@ select coalesce(a, 0) from t3;
 -- echo error
 select coalesce(a, 200) from t3;
 
--- @bvt:issue#4744
 select coalesce(b, '1') from t3;
 select coalesce(b, 'bull') from t3;
--- @bvt:issue
 
 drop table t3;
 
@@ -104,19 +98,15 @@ create view view_t3 as select coalesce(f2,f2) as f4 from t4;
 desc view_t3;
 drop view view_t3;
 
--- @bvt:issue#4755
 drop view if exists view_t4;
 create view view_t4 as select coalesce(f1,f3) as f4 from t4;
 desc view_t4;
 drop view view_t4;
--- @bvt:issue
 
--- @bvt:issue#4755
 drop view if exists view_t5;
 create view view_t5 as select coalesce(f2,f3) as f4 from t4;
 desc view_t5;
 drop view view_t5;
--- @bvt:issue
 
 drop table t4;
 

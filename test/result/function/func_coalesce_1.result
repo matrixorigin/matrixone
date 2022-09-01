@@ -24,8 +24,8 @@ Can't cast column from VARCHAR type to BIGINT type because of one or more values
 select coalesce(b, '1') from t1;
 coalesce(b, 1)
 a
-
-
+1
+1
 b
 drop table t1;
 drop table if exists t2;
@@ -58,37 +58,45 @@ coalesce(a, 1)
 select coalesce(b, 2022-01-01) from t2;
 coalesce(b, 2022 - 1 - 1)
 2022-02-20 10:10:11
-
+2020
 2023-04-03 22:10:30
-
+2020
 select coalesce(b, 2022) from t2;
 coalesce(b, 2022)
 2022-02-20 10:10:11
-
+2022
 2023-04-03 22:10:30
-
+2022
 select coalesce(b, 2) from t2;
 coalesce(b, 2)
 2022-02-20 10:10:11
-
+2
 2023-04-03 22:10:30
-
+2
 select coalesce(b, '2022-10-01') from t2;
 coalesce(b, 2022-10-01)
 2022-02-20 10:10:11
-2022-10-01 00:00:00
+2022-10-01
 2023-04-03 22:10:30
-2022-10-01 00:00:00
+2022-10-01
 select coalesce(b, '2022-10-01 10:10:10.999999') from t2;
 coalesce(b, 2022-10-01 10:10:10.999999)
 2022-02-20 10:10:11
-2022-10-01 10:10:10
+2022-10-01 10:10:10.999999
 2023-04-03 22:10:30
-2022-10-01 10:10:10
+2022-10-01 10:10:10.999999
 select coalesce(b, '2022') from t2;
-Can't cast '2022' from VARCHAR type to DATETIME type.
+coalesce(b, 2022)
+2022-02-20 10:10:11
+2022
+2023-04-03 22:10:30
+2022
 select coalesce(b, '2022/10/01') from t2;
-Can't cast '2022/10/01' from VARCHAR type to DATETIME type.
+coalesce(b, 2022/10/01)
+2022-02-20 10:10:11
+2022/10/01
+2023-04-03 22:10:30
+2022/10/01
 drop table t2;
 drop table if exists t3;
 create table t3(
@@ -128,15 +136,15 @@ coalesce(b, 1)
 a
 b
 c
-
-
+1
+1
 select coalesce(b, 'bull') from t3;
 coalesce(b, bull)
 a
 b
 c
-
-
+bull
+bull
 drop table t3;
 drop table if exists t4;
 create table t4 (f1 date, f2 datetime, f3 varchar(20));
@@ -162,13 +170,13 @@ drop view if exists view_t4;
 create view view_t4 as select coalesce(f1,f3) as f4 from t4;
 desc view_t4;
 Field    Type    Null    Key    Default    Comment
-f4    DATE    YES        NULL
+f4    VARCHAR    YES        NULL
 drop view view_t4;
 drop view if exists view_t5;
 create view view_t5 as select coalesce(f2,f3) as f4 from t4;
 desc view_t5;
 Field    Type    Null    Key    Default    Comment
-f4    DATETIME    YES        NULL
+f4    VARCHAR    YES        NULL
 drop view view_t5;
 drop table t4;
 drop table if exists t5;
