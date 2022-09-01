@@ -21,7 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"github.com/stretchr/testify/require"
+	"github.com/smartystreets/goconvey/convey"
 )
 
 func TestHex(t *testing.T) {
@@ -38,13 +38,20 @@ func TestHex(t *testing.T) {
 			proc:     procs,
 			inputstr: []string{"a"},
 			expected: []string{"61"},
-			isScalar: true,
+			isScalar: false,
 		},
 		{
 			name:     "Scalar empty string",
 			proc:     procs,
 			inputstr: []string{""},
 			expected: []string{""},
+			isScalar: true,
+		},
+		{
+			name:     "Number test",
+			proc:     procs,
+			inputstr: []string{"255"},
+			expected: []string{"323535"},
 			isScalar: true,
 		},
 		{
@@ -62,18 +69,51 @@ func TestHex(t *testing.T) {
 		},
 	}
 	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
+		convey.Convey(c.name, t, func() {
 			inVector := testutil.MakeVarcharVector(c.inputstr, nil)
-			result, err := Hex([]*vector.Vector{inVector}, c.proc)
-			if err != nil {
-				t.Fatal(err)
-			}
+			result, err := HexString([]*vector.Vector{inVector}, c.proc)
+			convey.So(err, convey.ShouldBeNil)
 			col := result.Col.(*types.Bytes)
 			s := BytesToString(col)
-			require.Equal(t, c.expected, s)
-			// require.Equal(t, c.isScalar, result.IsScalar())
+			convey.So(s, convey.ShouldResemble, c.expected)
+			convey.So(result.IsScalar(), convey.ShouldEqual, c.isScalar)
 		})
 	}
+
+	// procs = testutil.NewProc()
+	cases2 := []struct {
+		name     string
+		proc     *process.Process
+		inputnum []int64
+		expected []string
+		isScalar bool
+	}{
+		{
+			name:     "Number test",
+			proc:     procs,
+			inputnum: []int64{255},
+			expected: []string{"FF"},
+			isScalar: false,
+		}, {
+			name:     "Number test",
+			proc:     procs,
+			inputnum: []int64{231323423423421},
+			expected: []string{"FF"},
+			isScalar: false,
+		},
+	}
+	for _, c := range cases2 {
+		convey.Convey(c.name, t, func() {
+			inVector := testutil.MakeInt64Vector(c.inputnum, nil)
+			result, err := HexInt64([]*vector.Vector{inVector}, c.proc)
+			convey.So(err, convey.ShouldBeNil)
+			col := result.Col.(*types.Bytes)
+			s := BytesToString(col)
+			convey.So(s, convey.ShouldResemble, c.expected)
+			convey.So(result.IsScalar(), convey.ShouldEqual, c.isScalar)
+		})
+	}
+
 }
 
 func BytesToString(src *types.Bytes) []string {
