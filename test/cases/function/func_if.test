@@ -1,3 +1,5 @@
+
+set time_zone="+00:00";
 SELECT IF(NULL AND 1, 1, 2), IF(1 AND NULL, 1, 2);
 
 
@@ -109,7 +111,6 @@ insert t1 values (1),(2);
 select if(1>2,a,avg(a)) from t1;
 drop table t1;
 
--- @bvt:issue#3600
 CREATE TABLE `t1` (
   `id` int(11) NOT NULL ,
   `date` int(10) default NULL,
@@ -119,7 +120,6 @@ INSERT INTO t1 VALUES (1,1110000000,'Day 1'),(2,1111000000,'Day 2'),(3,111200000
 SELECT id, IF(date IS NULL, '-', FROM_UNIXTIME(date, '%d-%m-%Y')) AS date_ord, text FROM t1 ORDER BY date_ord ASC;
 SELECT id, IF(date IS NULL, '-', FROM_UNIXTIME(date, '%d-%m-%Y')) AS date_ord, text FROM t1 ORDER BY date_ord DESC;
 DROP TABLE t1;
--- @bvt:issue
 
 
 create table t1 (f1 int, f2 int);
