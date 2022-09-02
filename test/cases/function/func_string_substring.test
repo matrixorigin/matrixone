@@ -1,5 +1,5 @@
 #SELECT, EXTREME VALUE
--- @bvt:issue#4540
+
 SELECT SUBSTRING('Quadratically',5);
 SELECT SUBSTRING('foobarbar' FROM 4);
 SELECT SUBSTRING('Quadratically',5,6);
@@ -17,7 +17,6 @@ select SUBSTR('abcdefg',0,0);
 select SUBSTR('abcdefg',-1,-1);
 select SUBSTR('abcdefg',1,-1);
 select substring('hello', 2, -1);
--- @bvt:issue
 
 select substring('hello', -1, 1);
 select substring('hello', -2, 1);
