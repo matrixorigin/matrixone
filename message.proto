@@ -1,0 +1,513 @@
+/* 
+ * Copyright 2021 Matrix Origin
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+ 
+syntax = "proto3";
+package message;
+
+import "github.com/gogo/protobuf/gogoproto/gogo.proto";
+import "timestamp.proto";
+import "plan.proto";
+
+
+option go_package = "github.com/matrixorigin/matrixone/pkg/pb/message";
+option (gogoproto.sizer_all) = false;
+option (gogoproto.protosizer_all) = true;
+
+//types.type
+enum TypeID {
+    T_any   = 0;
+    T_star  = 1;
+
+    // bool family
+    T_bool  = 10;
+
+    // numeric/integer family
+    T_int8     = 20;
+    T_int16    = 21;
+    T_int32    = 22;
+    T_int64    = 23;
+    T_int128   = 24;
+    T_uint8    = 25;
+    T_uint16   = 26;
+    T_uint32   = 27;
+    T_uint64   = 28;
+    T_uint128  = 29;
+
+    // numeric/float family
+    T_float32  = 30;
+    T_float64  = 31;
+
+    // numeric/decimals
+    T_decimal64   = 32;
+    T_decimal128  = 33;
+
+    // pseudo numerics, not used
+
+    // date and time
+    T_date       = 50;
+    T_time       = 51;
+    T_datetime   = 52;
+    T_timestamp  = 53;
+    T_interval   = 54;
+
+    // string family
+    T_char     = 60;
+    T_varchar  = 61;
+    T_json     = 62;
+
+    // blobs
+    T_blob  = 70;
+
+    // Transaction TS
+    T_TS  = 100;
+
+    // system family
+    T_sel    = 200;
+    T_tuple  = 201;
+}
+
+message Type {
+	TypeID	id           = 1;
+	bool 	nullable		= 2;
+	int32 	width			= 3;
+	int32 	precision		= 4;
+	int32 	size 			= 5;
+	int32 	scale 		= 6;
+};
+
+
+message DBInfo {
+    string name         =1;
+    bool   is_sys        =2;
+};
+
+message DatabaseCmd {
+    uint64 db_id  = 1;
+    uint64 mask  = 2;
+    //creating database 
+    DBInfo create = 3;
+    map<uint64, TableCmd> table_cmds = 4;
+    bool drop = 5;
+};
+
+message Location {
+    string key = 1;
+    uint32 offset = 2;
+    uint32 len = 3;
+    uint32 olen = 4;
+};
+message ZoneMap {
+    TypeID typ = 1;
+    plan.Const min = 2;
+    plan.Const max = 3;
+};
+
+message ColumnMeta {
+    uint32 idx = 1;
+    ZoneMap zm = 2;
+    Location bf_location = 3;
+    Location data_location = 4;
+};
+
+message BlockMeta {
+    uint32 colunm_cnt = 1;
+    uint32 alog      = 2;
+};
+
+message BlockInfo {
+    BlockMeta block_meta = 1;
+    repeated ColumnMeta columns_meta = 2;
+};
+
+message Vector {
+    //FIXME:: []byte --->string
+    string data = 1;
+    Type  type = 2;
+    bool  nullable = 3;
+    //FIXME::[]byte?
+    string nsp = 4;
+    bool is_const = 5;
+};
+
+message AppendInfo {
+    //[]string
+    repeated string attrs = 1;
+    //[]Vector
+    repeated Vector vecs  = 2;
+};
+
+message RowRange {
+    uint32 start = 1;
+    uint32 end = 2;
+};
+
+message DeleteInfo {
+    message DefType {
+		oneof def {
+            RowRange range = 1;                       
+            //bitmap
+            string   rows = 2;
+		}
+	}
+    DefType range_rows = 1; 
+    //RowRange range = 1;
+    //bitmap
+    //[]byte? too expensive ?
+    //string rows = 2;
+}
+
+message BlockCmd {
+    uint64 id = 1;
+    //bitmap
+    uint32 mask = 2;
+    BlockInfo create = 3;
+    AppendInfo append = 4;
+    DeleteInfo delete = 5;
+    bool drop = 6;
+};
+
+message AccessInfo {
+    uint32 tenant_id = 1;
+    uint32 user_id  = 2;
+    uint32 role_id  = 3;
+    timestamp.Timestamp create_at = 4;
+};
+
+message ColDef {
+    string name = 1;
+    int32    idx  = 2;
+    Type   type = 3;
+    bool   hidden = 4;
+    bool   phy_addr = 5;
+    bool   null_ability = 6;
+    bool   auto_increment = 7;
+    bool   primary  = 8;
+    int32  sort_idx = 9;
+    bool   sort_key = 10;
+    string comment = 11;
+    plan.Default default = 12;
+
+};
+
+message TableDef {
+    AccessInfo ac_info = 1;
+    string     name = 2;
+    //[]ColDef?
+    repeated ColDef cols_def = 3;
+    map<string, int32> name_index = 4;
+    string comment = 5;
+    string rel_kind = 6;
+    string create_sql = 7;
+    string view = 8;
+};
+
+message TableCmd {
+    uint64 tid = 1;
+    //bitmap
+    uint64 mask = 2;
+    TableDef create = 3;
+	//FIXME::transient block id is unique in CN's workspace.
+    map<uint64, BlockCmd> block_cmds = 4;
+    bool drop = 5;
+};
+
+
+// CN precommit the write command  
+message PrecommitWriteCmd {
+    map<uint64, DatabaseCmd> db_cmds = 1;
+};
+
+message DatabaseID {
+    uint64 id = 1;
+};
+
+message TableID {
+    uint64 tab_id = 1;
+    DatabaseID db_id = 2;
+};
+
+message SegmentID {
+    uint64 seg_id = 1;
+    TableID tab_id = 2;
+};
+
+message BlockID {
+    uint64  block_id = 1;
+    SegmentID seg_id = 2;
+};
+
+message TSRange {
+    timestamp.Timestamp from = 1;
+    timestamp.Timestamp to   = 2;
+};
+
+message ScopeDesc {
+    bool all = 1;
+    //[]TableID?
+    repeated TableID tables = 2;
+};
+
+
+// CN pull the tail of redo logs from DN.
+message SyncLogTailReq {
+    timestamp.Timestamp checkpoint_ts = 1;
+    TSRange   range = 2;
+    //[]TableID
+    repeated TableID tables = 3;
+    bool all = 4;
+};
+
+enum CmdType {
+    CmdBatch = 0;
+	CmdAppend = 1;
+	CmdMvccUpdate = 2;
+	CmdMetaEntry = 3;
+	CmdComposed = 4;
+	CmdCompactBlock = 5;
+	CmdMergeBlocks = 6;
+};
+
+message Batch {
+    //[]string?
+    repeated string attrs = 1;
+    //[]Vector?
+    repeated Vector vecs = 2;
+    //bitmap --->string
+    //[]byte
+    string deletes = 3;
+};
+
+message AppendCtx {
+    //reserved?
+    uint32 seq = 1;
+    uint32 src_off = 2;
+    uint32 src_len = 3;
+    uint64 db_id = 4;
+    BlockID dest = 5;
+
+    uint32 dest_off = 6;
+    uint32 dest_len = 7;
+
+};
+
+//message BatchCmd {
+    //CmdBatch
+ //   uint32 cmdType = 1;
+  //  Batch bat = 2;
+//};
+
+//Append batch of data which comes from localsegment of table into multiple blocks.
+message AppendCmd {
+    //CmdAppend
+    CmdType cmd_type = 1;
+    //sub cmd sequence number in LSN entry.
+    uint32  csn = 2;
+    Batch  bat = 3;
+    //one batch could be appended into multiple blocks
+    //[]AppendCtx
+    repeated AppendCtx ctxs = 4;
+    timestamp.Timestamp ts = 5;
+};
+
+message AppendNode {
+    BlockID block_id = 1;
+    uint32  start_row = 2;
+    uint32  max_row   = 3;
+    timestamp.Timestamp commit_ts = 4;
+};
+
+message DeleteNode {
+    BlockID block_id = 1;
+    //rows bitmap,[]byte, too expensive?
+    string mask = 2;
+    timestamp.Timestamp commit_ts = 3;
+};
+
+message ColumnID {
+    BlockID block_id = 1;
+    uint32  col_index = 2;
+};
+
+message ColunmUpdateNode {
+ //   ColumnID colId = 1;
+  //  bytes mask = 2;
+   // map<uint32, Any> vals = 3;
+};
+
+//update the mvcc info for a block
+message MvccUpdateCmd {
+    message MvccNodeType {
+		oneof def {
+            AppendNode append_node = 1;
+            DeleteNode delete_node = 2;
+            //ColumnUpdateNode colupdate_node = 3;
+		}
+	}
+    //CmdMvccUpdate
+    CmdType cmd_type = 1;
+    uint32  csn = 2;
+    uint64  db_id = 3;
+    BlockID block_id = 4;
+    //bitmap
+    //uint32  mask = 4;
+    //AppendNode append = 5;
+    //DeleteNode del = 6;
+   // ColumnUpdateNode update = 7;
+   repeated MvccNodeType mvcc_node = 5;
+};
+
+
+//updating commands for catalog.
+//enum CmdUpdateMeta {
+ //   CmdUpdateDatabase = 1;
+//	CmdUpdateTable =  2;
+	//CmdUpdateSegment = 3;
+	//CmdUpdateBlock = 4;
+//};
+
+enum EntryState {
+    ES_Appendable = 0;
+	ES_NotAppendable = 1;
+	ES_Frozen  = 2;
+};
+//FIXME::need to slim down ?
+message UpdateNode {
+    timestamp.Timestamp created_at = 1;
+    timestamp.Timestamp deleted_at = 2;
+    string    meta_loc = 3;
+    string    delta_loc = 4;
+    timestamp.Timestamp start = 5;
+    timestamp.Timestamp  end= 6;
+};
+
+message BaseEntry {
+    UpdateNode node = 1;
+   // sorted list of mvcc node.
+   //repeated UpdateNode nodes = 1;
+};
+
+message BlockEntry {
+    BaseEntry be = 1;
+    BlockID block_id = 2;
+    EntryState block_state = 3;
+};
+
+message SegmentEntry {
+    BaseEntry be = 1;
+    SegmentID seg_id = 2;
+    EntryState seg_state = 3;
+};
+
+message TableEntry {
+    BaseEntry be = 1;
+    TableID   tab_id = 2;
+    TableDef  tab_def = 3;
+};
+
+message DatabaseEntry {
+    BaseEntry be = 1;
+    string    name = 2;
+    DatabaseID db_id = 3;
+    AccessInfo ac_info  = 4;
+};
+
+message EntryCmd {
+    message EntryType {
+		oneof def {
+            BlockEntry block_entry = 1;
+            SegmentEntry seg_entry = 2;
+            TableEntry   tab_entry = 3;
+            DatabaseEntry db_entry = 4;
+		}
+	}
+    //CmdMetaEntry
+    CmdType cmd_type = 1;
+    uint32  csn = 2;
+    //bitmask
+    //uint32 mask = 2;
+    EntryType entry = 3;
+    //BlcokEntry block_entry = 3;
+    //SegmentEntry seg_entry = 4;
+    //TableEntry   tab_entry = 5;
+    //DatabaseEntry db_entry = 6;
+};
+
+//commands for compaction and merge
+message CompactBlockCmd {
+    CmdType cmd_type = 1;
+    uint32  csn = 2;
+    BlockID from = 3;
+    BlockID to = 4;
+};
+
+
+message MergeBlocksCmd {
+    CmdType cmd_type = 1;
+    uint32  csn = 2;
+    //[]SegmentID
+    repeated SegmentID dropped_segs = 3;
+    repeated SegmentID created_segs = 4;
+    repeated BlockID   dropped_blks = 5;
+    repeated BlockID   created_blks = 6;
+    //[]uint32
+    repeated uint32 mapping = 7;
+    repeated uint32 from_addr = 8;
+    repeated uint32 to_addr = 9;
+};
+
+message ComposedCmd {
+    message SubCmdType {
+		oneof def {
+            EntryCmd        entry_cmd = 1;
+            AppendCmd       append_cmd = 2;
+            MvccUpdateCmd   mvcc_cmd = 3;
+            CompactBlockCmd compact_cmd = 4;
+            MergeBlocksCmd  mergeblks_cmd = 5;
+		}
+	}
+    //CmdComposed
+    CmdType cmd_type = 1;
+    // Notice: 1. LSN is the Log sequence number of redo-log entry for one transaction.
+    //         2. a redo-log entry is also a composed command ,it contains multiple sub commands.
+    uint32  LSN = 2;
+    repeated SubCmdType cmds = 3;
+
+
+    //FIXME:: use oneof ,instead of mask ?
+    //uint32 mask = 2;
+    //FIXME:: the order of these sub commands? use csn ?
+    //repeated AppendCmd append_cmds = 3;
+    //repeated MvccUpdateCmd update_cmds = 4;
+    //repeated EntryCmd  entry_cmds = 5;
+    //CompactBlockCmd  compact_cmd = 6;
+    //MergeBlocksCmd  mergeblks_cmd = 7;
+}
+
+message BatchCommands {
+    TSRange desc = 1;
+    ScopeDesc scope = 2;
+    //[]composedCmd
+    //FIXME::the order of the ComposedCmd? use lsn ?
+    repeated ComposedCmd commands = 3;
+};
+
+message SyncLogTailResp {
+    //FIXME::??
+    timestamp.Timestamp checkpoint_ts = 1;
+    //[]Timestamp
+    repeated timestamp.Timestamp new_checkpoints = 2;
+    BatchCommands commands = 3;
+};
