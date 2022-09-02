@@ -29,15 +29,15 @@ type MVCC[T any] struct {
 
 type MVCCValue[T any] struct {
 	BornTx   *Transaction
-	BornTime Timestamp
+	BornTime Time
 	LockTx   *Transaction
-	LockTime Timestamp
+	LockTime Time
 	Value    *T
 }
 
 // Read reads the visible value from Values
 // readTime's logical time should be monotonically increasing in one transaction to reflect commands order
-func (m *MVCC[T]) Read(tx *Transaction, readTime Timestamp) (*T, error) {
+func (m *MVCC[T]) Read(tx *Transaction, readTime Time) (*T, error) {
 	if tx.State.Load() != Active {
 		panic("should not call Read")
 	}
@@ -50,11 +50,11 @@ func (m *MVCC[T]) Read(tx *Transaction, readTime Timestamp) (*T, error) {
 			switch tx.IsolationPolicy.Read {
 			case ReadCommitted:
 			case ReadSnapshot:
-				if value.BornTx != tx && value.BornTime.Greater(tx.BeginTime) {
+				if value.BornTx != tx && value.BornTime.After(tx.BeginTime) {
 					continue
 				}
 			case ReadNoStale:
-				if value.BornTx != tx && value.BornTime.Greater(tx.BeginTime) {
+				if value.BornTx != tx && value.BornTime.After(tx.BeginTime) {
 					return value.Value, &ErrReadConflict{
 						ReadingTx: tx,
 						Stale:     value.BornTx,
@@ -68,7 +68,7 @@ func (m *MVCC[T]) Read(tx *Transaction, readTime Timestamp) (*T, error) {
 	return nil, sql.ErrNoRows
 }
 
-func (m *MVCCValue[T]) Visible(txID string, readTime Timestamp) bool {
+func (m *MVCCValue[T]) Visible(txID string, readTime Time) bool {
 
 	// the following algorithm is from https://momjian.us/main/writings/pgsql/mvcc.pdf
 	// "[Mike Olson] says 17 march 1993: the tests in this routine are correct; if you think they’re not, you’re wrongand you should think about it again. i know, it happened to me."
@@ -76,13 +76,13 @@ func (m *MVCCValue[T]) Visible(txID string, readTime Timestamp) bool {
 	// inserted by current tx
 	if m.BornTx.ID == txID {
 		// inserted before the read time
-		if m.BornTime.Less(readTime) {
+		if m.BornTime.Before(readTime) {
 			// not been deleted
 			if m.LockTx == nil {
 				return true
 			}
 			// deleted by current tx after the read time
-			if m.LockTx.ID == txID && m.LockTime.Greater(readTime) {
+			if m.LockTx.ID == txID && m.LockTime.After(readTime) {
 				return true
 			}
 		}
@@ -96,7 +96,7 @@ func (m *MVCCValue[T]) Visible(txID string, readTime Timestamp) bool {
 			return true
 		}
 		// being deleted by current tx after the read time
-		if m.LockTx.ID == txID && m.LockTime.Greater(readTime) {
+		if m.LockTx.ID == txID && m.LockTime.After(readTime) {
 			return true
 		}
 		// deleted by another tx but not committed
@@ -108,7 +108,7 @@ func (m *MVCCValue[T]) Visible(txID string, readTime Timestamp) bool {
 	return false
 }
 
-func (m *MVCC[T]) Insert(tx *Transaction, writeTime Timestamp, value T) error {
+func (m *MVCC[T]) Insert(tx *Transaction, writeTime Time, value T) error {
 	if tx.State.Load() != Active {
 		panic("should not call Insert")
 	}
@@ -125,7 +125,7 @@ func (m *MVCC[T]) Insert(tx *Transaction, writeTime Timestamp, value T) error {
 					Locked:    value.LockTx,
 				}
 			}
-			if value.BornTx != tx && value.BornTime.Greater(tx.BeginTime) {
+			if value.BornTx != tx && value.BornTime.After(tx.BeginTime) {
 				return &ErrWriteConflict{
 					WritingTx: tx,
 					Stale:     value.BornTx,
@@ -143,7 +143,7 @@ func (m *MVCC[T]) Insert(tx *Transaction, writeTime Timestamp, value T) error {
 	return nil
 }
 
-func (m *MVCC[T]) Delete(tx *Transaction, writeTime Timestamp) error {
+func (m *MVCC[T]) Delete(tx *Transaction, writeTime Time) error {
 	if tx.State.Load() != Active {
 		panic("should not call Delete")
 	}
@@ -160,7 +160,7 @@ func (m *MVCC[T]) Delete(tx *Transaction, writeTime Timestamp) error {
 					Locked:    value.LockTx,
 				}
 			}
-			if value.BornTx != tx && value.BornTime.Greater(tx.BeginTime) {
+			if value.BornTx != tx && value.BornTime.After(tx.BeginTime) {
 				return &ErrWriteConflict{
 					WritingTx: tx,
 					Stale:     value.BornTx,
@@ -175,7 +175,7 @@ func (m *MVCC[T]) Delete(tx *Transaction, writeTime Timestamp) error {
 	return sql.ErrNoRows
 }
 
-func (m *MVCC[T]) Update(tx *Transaction, writeTime Timestamp, newValue T) error {
+func (m *MVCC[T]) Update(tx *Transaction, writeTime Time, newValue T) error {
 	if tx.State.Load() != Active {
 		panic("should not call Update")
 	}
@@ -192,7 +192,7 @@ func (m *MVCC[T]) Update(tx *Transaction, writeTime Timestamp, newValue T) error
 					Locked:    value.LockTx,
 				}
 			}
-			if value.BornTx != tx && value.BornTime.Greater(tx.BeginTime) {
+			if value.BornTx != tx && value.BornTime.After(tx.BeginTime) {
 				return &ErrWriteConflict{
 					WritingTx: tx,
 					Stale:     value.BornTx,
