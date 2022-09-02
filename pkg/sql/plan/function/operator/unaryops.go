@@ -50,7 +50,7 @@ func UnaryTilde[T constraints.Integer](vectors []*vector.Vector, proc *process.P
 		resValues := types.DecodeFixedSlice[uint64](resVector.Data, resultElementSize)
 		nulls.Set(resVector.Nsp, srcVector.Nsp)
 
-		var i uint64 = 0
+		var i uint64
 		if nulls.Any(resVector.Nsp) {
 			for i = 0; i < uint64(len(resValues)); i++ {
 				if !nulls.Contains(resVector.Nsp, i) {
