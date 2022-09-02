@@ -98,6 +98,63 @@ JSON binary format is a binary format for storing JSON data.
 6. The value of string type is stored as a sequence of data-length and utf8-data, data-length which is stored as a
    variable size encoding is the length of the utf8-data, utf8-data is the utf8-encoded string.
 
+### **Example**
+
+```sql
+drop table if exists t;
+create table t
+(
+    a json,
+    b int
+);
+
+insert into t(a, b)
+values ('{"a": [1, "2", {"aa": "bb"}]}', 1),
+       ('[1, 2, 3]', 2),
+       ('null', 3),
+       ('true', 4),
+       ('false', 5),
+       ('1', 6),
+       ('1.1', 7),
+       ('"a"', 8);
+
+select *
+from t;
++-------------------------------------+---+
+| a                                   | b |
++-------------------------------------+---+
+| {"a": [1, "2", {"aa": "bb"}]}       | 1 |
+| [1, 2, 3]                           | 2 |
+| null                                | 3 |
+| true                                | 4 |
+| false                               | 5 |
+| 1                                   | 6 |
+| 1.1                                 | 7 |
+| "a"                                 | 8 |
++-------------------------------------+---+
+
+delete
+from t
+where b = 3;
+
+update t
+set a = '{"a": 1}'
+where b = 1;
+
+select *
+from t;
++-------------------------------------+---+
+| a                                   | b |
++-------------------------------------+---+
+| {"a": 1}                            | 1 |
+| [1, 2, 3]                           | 2 |
+| true                                | 4 |
+| false                               | 5 |
+| 1                                   | 6 |
+| 1.1                                 | 7 |
+| "a"                                 | 8 |
+```
+
 ## **JSON Path Syntax**
 
 Reference: <https://dev.mysql.com/doc/refman/8.0/en/json.html#json-path-syntax>
@@ -174,7 +231,7 @@ json_extract is a JSON query function that can be used to query JSON documents.
 ### **Syntax**
 
 ```sql
-select json_extract(jsonDoc, pathExpression)
+select json_extract(jsonDoc, pathExpression);
 ```
 
 *jsonDoc is the JSON document to be queried,which can be a JSON text string or a JSON column in a table.*
@@ -242,8 +299,10 @@ create table t
 (
     a json
 );
+
 insert into t
 values ('{"a":1,"b":2,"c":3}');
+
 select json_extract(a, '$.a')
 from t;
 +----------------------+
@@ -251,6 +310,7 @@ from t;
 +----------------------+
 | 1                    |
 +----------------------+
+
 insert into t values ('{"a":5,"b":6,"c":7}');
 select json_extract(a, '$.a')
 from t;
