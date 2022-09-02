@@ -26,27 +26,45 @@ import (
 func UnaryTilde[T constraints.Integer](vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	srcVector := vectors[0]
 	srcValues := vector.MustTCols[T](srcVector)
-	resultElementSize := srcVector.Typ.Oid.TypeLen()
+	returnType := types.Type{
+		Oid:  types.T_uint64,
+		Size: types.T_uint64.ToType().Size,
+	}
+	resultElementSize := returnType.Oid.TypeLen()
 
 	if srcVector.IsScalar() {
 		if srcVector.IsScalarNull() {
-			return proc.AllocScalarNullVector(srcVector.Typ), nil
+			return proc.AllocScalarNullVector(returnType), nil
 		}
-		resVector := proc.AllocScalarVector(srcVector.Typ)
-		// resValues := make([]T, 1)
+		resVector := proc.AllocScalarVector(returnType)
+		resValues := make([]uint64, 1)
 		nulls.Set(resVector.Nsp, srcVector.Nsp)
-		// vector.SetCol(resVector, neg.NumericNeg(srcValues, resValues))
+		vector.SetCol(resVector, funcBitInversion(srcValues, resValues))
 		return resVector, nil
 	} else {
-		resVector, err := proc.AllocVector(srcVector.Typ, int64(resultElementSize*len(srcValues)))
+		resVector, err := proc.AllocVector(returnType, int64(resultElementSize*len(srcValues)))
 		if err != nil {
 			return nil, err
 		}
-		// resValues := types.DecodeFixedSlice[T](resVector.Data, resultElementSize)
+		resValues := types.DecodeFixedSlice[uint64](resVector.Data, resultElementSize)
 		nulls.Set(resVector.Nsp, srcVector.Nsp)
-		// vector.SetCol(resVector, neg.NumericNeg(srcValues, resValues))
+		vector.SetCol(resVector, funcBitInversion(srcValues, resValues))
 		return resVector, nil
 	}
+}
+
+func funcBitInversion[T constraints.Integer](xs []T, rs []uint64) []uint64 {
+	var n uint64
+	for i, x := range xs {
+		if x > 0 {
+			n = uint64(x)
+			rs[i] = ^n
+		} else {
+			n = uint64(^x)
+			rs[i] = n
+		}
+	}
+	return rs
 }
 
 func UnaryMinus[T constraints.Signed | constraints.Float](vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {

@@ -709,6 +709,194 @@ var operators = map[int]Functions{
 		},
 	},
 
+	OP_BIT_SHIFT_RIGHT: {
+		Id: OP_BIT_SHIFT_RIGHT,
+		Overloads: []Function{
+			{
+				Index:  0,
+				Flag:   plan.Function_STRICT,
+				Layout: COMPARISON_OPERATOR,
+				Args: []types.T{
+					types.T_uint8,
+					types.T_uint8,
+				},
+				ReturnTyp: types.T_uint8,
+				Fn:        operator.OpBitRightShiftFun[uint8],
+			},
+			{
+				Index:  1,
+				Flag:   plan.Function_STRICT,
+				Layout: COMPARISON_OPERATOR,
+				Args: []types.T{
+					types.T_int8,
+					types.T_int8,
+				},
+				ReturnTyp: types.T_int8,
+				Fn:        operator.OpBitRightShiftFun[int8],
+			},
+			{
+				Index:  2,
+				Flag:   plan.Function_STRICT,
+				Layout: COMPARISON_OPERATOR,
+				Args: []types.T{
+					types.T_uint16,
+					types.T_uint16,
+				},
+				ReturnTyp: types.T_uint16,
+				Fn:        operator.OpBitRightShiftFun[uint16],
+			},
+			{
+				Index:  3,
+				Flag:   plan.Function_STRICT,
+				Layout: COMPARISON_OPERATOR,
+				Args: []types.T{
+					types.T_int16,
+					types.T_int16,
+				},
+				ReturnTyp: types.T_int16,
+				Fn:        operator.OpBitRightShiftFun[int16],
+			},
+			{
+				Index:  4,
+				Flag:   plan.Function_STRICT,
+				Layout: COMPARISON_OPERATOR,
+				Args: []types.T{
+					types.T_uint32,
+					types.T_uint32,
+				},
+				ReturnTyp: types.T_uint32,
+				Fn:        operator.OpBitRightShiftFun[uint32],
+			},
+			{
+				Index:  5,
+				Flag:   plan.Function_STRICT,
+				Layout: COMPARISON_OPERATOR,
+				Args: []types.T{
+					types.T_int32,
+					types.T_int32,
+				},
+				ReturnTyp: types.T_int32,
+				Fn:        operator.OpBitRightShiftFun[int32],
+			},
+			{
+				Index:  6,
+				Flag:   plan.Function_STRICT,
+				Layout: COMPARISON_OPERATOR,
+				Args: []types.T{
+					types.T_uint64,
+					types.T_uint64,
+				},
+				ReturnTyp: types.T_uint64,
+				Fn:        operator.OpBitRightShiftFun[uint64],
+			},
+			{
+				Index:  7,
+				Flag:   plan.Function_STRICT,
+				Layout: COMPARISON_OPERATOR,
+				Args: []types.T{
+					types.T_int64,
+					types.T_int64,
+				},
+				ReturnTyp: types.T_int64,
+				Fn:        operator.OpBitRightShiftFun[int64],
+			},
+		},
+	},
+
+	OP_BIT_SHIFT_LEFT: {
+		Id: OP_BIT_SHIFT_LEFT,
+		Overloads: []Function{
+			{
+				Index:  0,
+				Flag:   plan.Function_STRICT,
+				Layout: COMPARISON_OPERATOR,
+				Args: []types.T{
+					types.T_uint8,
+					types.T_uint8,
+				},
+				ReturnTyp: types.T_uint8,
+				Fn:        operator.OpBitLeftShiftFun[uint8],
+			},
+			{
+				Index:  1,
+				Flag:   plan.Function_STRICT,
+				Layout: COMPARISON_OPERATOR,
+				Args: []types.T{
+					types.T_int8,
+					types.T_int8,
+				},
+				ReturnTyp: types.T_int8,
+				Fn:        operator.OpBitLeftShiftFun[int8],
+			},
+			{
+				Index:  2,
+				Flag:   plan.Function_STRICT,
+				Layout: COMPARISON_OPERATOR,
+				Args: []types.T{
+					types.T_uint16,
+					types.T_uint16,
+				},
+				ReturnTyp: types.T_uint16,
+				Fn:        operator.OpBitLeftShiftFun[uint16],
+			},
+			{
+				Index:  3,
+				Flag:   plan.Function_STRICT,
+				Layout: COMPARISON_OPERATOR,
+				Args: []types.T{
+					types.T_int16,
+					types.T_int16,
+				},
+				ReturnTyp: types.T_int16,
+				Fn:        operator.OpBitLeftShiftFun[int16],
+			},
+			{
+				Index:  4,
+				Flag:   plan.Function_STRICT,
+				Layout: COMPARISON_OPERATOR,
+				Args: []types.T{
+					types.T_uint32,
+					types.T_uint32,
+				},
+				ReturnTyp: types.T_uint32,
+				Fn:        operator.OpBitLeftShiftFun[uint32],
+			},
+			{
+				Index:  5,
+				Flag:   plan.Function_STRICT,
+				Layout: COMPARISON_OPERATOR,
+				Args: []types.T{
+					types.T_int32,
+					types.T_int32,
+				},
+				ReturnTyp: types.T_int32,
+				Fn:        operator.OpBitLeftShiftFun[int32],
+			},
+			{
+				Index:  6,
+				Flag:   plan.Function_STRICT,
+				Layout: COMPARISON_OPERATOR,
+				Args: []types.T{
+					types.T_uint64,
+					types.T_uint64,
+				},
+				ReturnTyp: types.T_uint64,
+				Fn:        operator.OpBitLeftShiftFun[uint64],
+			},
+			{
+				Index:  7,
+				Flag:   plan.Function_STRICT,
+				Layout: COMPARISON_OPERATOR,
+				Args: []types.T{
+					types.T_int64,
+					types.T_int64,
+				},
+				ReturnTyp: types.T_int64,
+				Fn:        operator.OpBitLeftShiftFun[int64],
+			},
+		},
+	},
+
 	ISNOT: {
 		Id: ISNOT,
 		Overloads: []Function{
@@ -2971,7 +3159,7 @@ var operators = map[int]Functions{
 				Flag:      plan.Function_STRICT,
 				Layout:    UNARY_ARITHMETIC_OPERATOR,
 				Args:      []types.T{types.T_int8},
-				ReturnTyp: types.T_int64,
+				ReturnTyp: types.T_uint64,
 				Fn:        operator.UnaryTilde[int8],
 			},
 			{
@@ -2979,7 +3167,7 @@ var operators = map[int]Functions{
 				Flag:      plan.Function_STRICT,
 				Layout:    UNARY_ARITHMETIC_OPERATOR,
 				Args:      []types.T{types.T_int16},
-				ReturnTyp: types.T_int64,
+				ReturnTyp: types.T_uint64,
 				Fn:        operator.UnaryTilde[int16],
 			},
 			{
@@ -2987,7 +3175,7 @@ var operators = map[int]Functions{
 				Flag:      plan.Function_STRICT,
 				Layout:    UNARY_ARITHMETIC_OPERATOR,
 				Args:      []types.T{types.T_int32},
-				ReturnTyp: types.T_int64,
+				ReturnTyp: types.T_uint64,
 				Fn:        operator.UnaryTilde[int32],
 			},
 			{
@@ -2995,7 +3183,7 @@ var operators = map[int]Functions{
 				Flag:      plan.Function_STRICT,
 				Layout:    UNARY_ARITHMETIC_OPERATOR,
 				Args:      []types.T{types.T_int64},
-				ReturnTyp: types.T_int64,
+				ReturnTyp: types.T_uint64,
 				Fn:        operator.UnaryTilde[int64],
 			},
 			{
@@ -3003,7 +3191,7 @@ var operators = map[int]Functions{
 				Flag:      plan.Function_STRICT,
 				Layout:    UNARY_ARITHMETIC_OPERATOR,
 				Args:      []types.T{types.T_uint8},
-				ReturnTyp: types.T_int64,
+				ReturnTyp: types.T_uint64,
 				Fn:        operator.UnaryTilde[uint8],
 			},
 			{
@@ -3011,7 +3199,7 @@ var operators = map[int]Functions{
 				Flag:      plan.Function_STRICT,
 				Layout:    UNARY_ARITHMETIC_OPERATOR,
 				Args:      []types.T{types.T_uint16},
-				ReturnTyp: types.T_int64,
+				ReturnTyp: types.T_uint64,
 				Fn:        operator.UnaryTilde[uint16],
 			},
 			{
@@ -3019,7 +3207,7 @@ var operators = map[int]Functions{
 				Flag:      plan.Function_STRICT,
 				Layout:    UNARY_ARITHMETIC_OPERATOR,
 				Args:      []types.T{types.T_uint32},
-				ReturnTyp: types.T_int64,
+				ReturnTyp: types.T_uint64,
 				Fn:        operator.UnaryTilde[uint32],
 			},
 			{
@@ -3027,7 +3215,7 @@ var operators = map[int]Functions{
 				Flag:      plan.Function_STRICT,
 				Layout:    UNARY_ARITHMETIC_OPERATOR,
 				Args:      []types.T{types.T_uint64},
-				ReturnTyp: types.T_int64,
+				ReturnTyp: types.T_uint64,
 				Fn:        operator.UnaryTilde[uint64],
 			},
 		},

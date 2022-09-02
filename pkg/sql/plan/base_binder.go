@@ -420,6 +420,10 @@ func (b *baseBinder) bindBinaryExpr(astExpr *tree.BinaryExpr, depth int32, isRoo
 		return b.bindFuncExprImplByAstExpr("|", []tree.Expr{astExpr.Left, astExpr.Right}, depth)
 	case tree.BIT_AND:
 		return b.bindFuncExprImplByAstExpr("&", []tree.Expr{astExpr.Left, astExpr.Right}, depth)
+	case tree.LEFT_SHIFT:
+		return b.bindFuncExprImplByAstExpr("<<", []tree.Expr{astExpr.Left, astExpr.Right}, depth)
+	case tree.RIGHT_SHIFT:
+		return b.bindFuncExprImplByAstExpr(">>", []tree.Expr{astExpr.Left, astExpr.Right}, depth)
 	}
 	return nil, errors.New("", fmt.Sprintf("'%v' operator is not supported now", astExpr.Op.ToString()))
 }
