@@ -75,7 +75,6 @@ func TestSubstringFromLeftConstOffsetUnbounded(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			out := &types.Bytes{
-				Data:    make([]byte, len(c.args1.Data)),
 				Lengths: make([]uint32, len(c.args1.Lengths)),
 				Offsets: make([]uint32, len(c.args1.Offsets)),
 			}
@@ -140,7 +139,6 @@ func TestSubstringFromRightConstOffsetUnbounded(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			out := &types.Bytes{
-				Data:    make([]byte, len(c.args1.Data)),
 				Lengths: make([]uint32, len(c.args1.Lengths)),
 				Offsets: make([]uint32, len(c.args1.Offsets)),
 			}
@@ -191,7 +189,6 @@ func TestSubstringFromZeroConstOffsetUnbounded(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			out := &types.Bytes{
-				Data:    make([]byte, len(c.args1.Data)),
 				Lengths: make([]uint32, len(c.args1.Lengths)),
 				Offsets: make([]uint32, len(c.args1.Offsets)),
 			}
@@ -365,7 +362,7 @@ func TestSubstringDynamicOffsetUnbounded(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			out := &types.Bytes{
-				Data:    make([]byte, len(c.srcArgs.Data)),
+				// Data:    make([]byte, len(c.srcArgs.Data)),
 				Lengths: make([]uint32, len(c.srcArgs.Lengths)),
 				Offsets: make([]uint32, len(c.srcArgs.Offsets)),
 			}
@@ -482,7 +479,6 @@ func TestSubstringFromLeftConstOffsetBounded(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			out := &types.Bytes{
-				Data:    make([]byte, len(c.args.Data)),
 				Lengths: make([]uint32, len(c.args.Lengths)),
 				Offsets: make([]uint32, len(c.args.Offsets)),
 			}
@@ -670,7 +666,6 @@ func TestSubstringFromRightConstOffsetBounded(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			out := &types.Bytes{
-				Data:    make([]byte, len(c.args.Data)),
 				Lengths: make([]uint32, len(c.args.Lengths)),
 				Offsets: make([]uint32, len(c.args.Offsets)),
 			}
@@ -1039,7 +1034,6 @@ func TestSubstringDynamicOffsetBounded(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			out := &types.Bytes{
-				Data:    make([]byte, len(c.srcArgs.Data)),
 				Lengths: make([]uint32, len(c.srcArgs.Lengths)),
 				Offsets: make([]uint32, len(c.srcArgs.Offsets)),
 			}
