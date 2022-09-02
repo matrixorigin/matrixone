@@ -54,7 +54,7 @@ type DB struct {
 type Transaction struct {
 	// readOnly default value is true, once a write happen, then set to false
 	readOnly bool
-	//	db       *DB
+	// db       *DB
 	// blockId starts at 0 and keeps incrementing,
 	// this is used to name the file on s3 and then give it to tae to use
 	blockId uint64
@@ -72,6 +72,8 @@ type Transaction struct {
 // Entry represents a delete/insert
 type Entry struct {
 	typ          int
+	tableId      uint64
+	databaseId   uint64
 	tableName    string
 	databaseName string
 	fileName     string       // blockName for s3 file
