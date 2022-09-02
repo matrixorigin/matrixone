@@ -21,16 +21,16 @@ import (
 )
 
 var (
-	ByVarchar func(*types.Bytes, *types.Bytes, *types.Bytes) (*types.Bytes, error)
-	ByJson    func(*types.Bytes, *types.Bytes, *types.Bytes) (*types.Bytes, error)
+	QueryByString func(*types.Bytes, *types.Bytes, *types.Bytes) (*types.Bytes, error)
+	QueryByJson   func(*types.Bytes, *types.Bytes, *types.Bytes) (*types.Bytes, error)
 )
 
 func init() {
-	ByVarchar = qVarchar
-	ByJson = qJson
+	QueryByString = byString
+	QueryByJson = byJson
 }
 
-func qJson(json *types.Bytes, path *types.Bytes, result *types.Bytes) (*types.Bytes, error) {
+func byJson(json *types.Bytes, path *types.Bytes, result *types.Bytes) (*types.Bytes, error) {
 	pData := path.Data
 	pStar, err := types.ParseStringToPath(string(pData))
 	if err != nil {
@@ -39,7 +39,7 @@ func qJson(json *types.Bytes, path *types.Bytes, result *types.Bytes) (*types.By
 	}
 	for i := range json.Offsets {
 		jOff, jLen := json.Offsets[i], json.Lengths[i]
-		ret, err := qJsonOne(json.Data[jOff:jOff+jLen], &pStar)
+		ret, err := byJsonOne(json.Data[jOff:jOff+jLen], &pStar)
 		if err != nil {
 			logutil.Infof("json qj: error:%v", err)
 			return nil, err
@@ -49,13 +49,13 @@ func qJson(json *types.Bytes, path *types.Bytes, result *types.Bytes) (*types.By
 	return result, nil
 }
 
-func qJsonOne(json []byte, path *bytejson.Path) ([]byte, error) {
+func byJsonOne(json []byte, path *bytejson.Path) ([]byte, error) {
 	//TODO check here
 	bj := types.DecodeJson(json)
 	return []byte(bj.Query(*path).String()), nil
 }
 
-func qVarchar(json *types.Bytes, path *types.Bytes, result *types.Bytes) (*types.Bytes, error) {
+func byString(json *types.Bytes, path *types.Bytes, result *types.Bytes) (*types.Bytes, error) {
 	pData := path.Data
 	pStar, err := types.ParseStringToPath(string(pData))
 	if err != nil {
@@ -64,7 +64,7 @@ func qVarchar(json *types.Bytes, path *types.Bytes, result *types.Bytes) (*types
 	}
 	for i := range json.Offsets {
 		jOff, jLen := json.Offsets[i], json.Lengths[i]
-		ret, err := qVarcharOne(json.Data[jOff:jOff+jLen], &pStar)
+		ret, err := byStringOne(json.Data[jOff:jOff+jLen], &pStar)
 		if err != nil {
 			logutil.Infof("json qv: error:%v", err)
 			return nil, err
@@ -73,7 +73,7 @@ func qVarchar(json *types.Bytes, path *types.Bytes, result *types.Bytes) (*types
 	}
 	return result, nil
 }
-func qVarcharOne(json []byte, path *bytejson.Path) ([]byte, error) {
+func byStringOne(json []byte, path *bytejson.Path) ([]byte, error) {
 	bj, err := types.ParseSliceToByteJson(json)
 	if err != nil {
 		logutil.Debugf("json qvOne : error:%v", err)

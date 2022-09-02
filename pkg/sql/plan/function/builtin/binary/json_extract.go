@@ -33,7 +33,7 @@ func JsonExtractByString(vectors []*vector.Vector, proc *process.Process) (*vect
 		return nil, err
 	}
 	resultValues := resultVector.Col.(*types.Bytes)
-	out, err := json_extract.ByVarchar(json, path, resultValues)
+	out, err := json_extract.QueryByString(json, path, resultValues)
 	if err != nil {
 		logutil.Infof("json_extract: err:%v", err)
 		return nil, err
@@ -53,7 +53,7 @@ func JsonExtractByJson(vectors []*vector.Vector, proc *process.Process) (*vector
 		return nil, err
 	}
 	resultValues := resultVector.Col.(*types.Bytes)
-	out, err := json_extract.ByJson(json, path, resultValues)
+	out, err := json_extract.QueryByJson(json, path, resultValues)
 	if err != nil {
 		logutil.Infof("json_extract: err:%v", err)
 		return nil, err

@@ -22,19 +22,32 @@ import (
 
 var (
 	kases = []struct {
-		json string
-		path string
-		want string
+		json    string
+		path    string
+		want    string
+		jsonErr bool
+		pathErr bool
 	}{
 		{
-			json: `{"a":1,"b":2,"c":3}`,
-			path: `$.a`,
-			want: `1`,
+			json:    `{"a":1,"b":2,"c":3`,
+			path:    `$.a`,
+			want:    ``,
+			jsonErr: true,
+			pathErr: false,
 		},
 		{
-			json: `{"a":1,"b":2,"c":3}`,
-			path: `$.b`,
-			want: `2`,
+			json:    `{"a":1,"b":2,"c":3}`,
+			path:    `$.`,
+			want:    ``,
+			jsonErr: false,
+			pathErr: true,
+		},
+		{
+			json:    `{"a":1,"b":2,"c":3}`,
+			path:    `$.b`,
+			want:    `2`,
+			jsonErr: false,
+			pathErr: false,
 		},
 		{
 			json: `{"a":{"q":[1,2,3]}}`,
@@ -89,44 +102,104 @@ var (
 	}
 )
 
-func testVarcharOne(idx int, t *testing.T) {
-	kase := kases[idx]
-	ph, err := types.ParseStringToPath(kase.path)
-	require.Nil(t, err)
-	q, err := qVarcharOne([]byte(kase.json), &ph)
-	require.Nil(t, err)
-	require.JSONEq(t, kase.want, string(q))
-}
-
-func testJsonOne(idx int, t *testing.T) {
-	kase := kases[idx]
-	byteJson, err := types.ParseStringToByteJson(kase.json)
-	require.Nil(t, err)
-	json, err := byteJson.Marshal()
-	require.Nil(t, err)
-	ph, err := types.ParseStringToPath(kase.path)
-	require.Nil(t, err)
-	q, err := qJsonOne(json, &ph)
-	require.Nil(t, err)
-	require.JSONEq(t, kase.want, string(q))
-}
-
-func TestQVarcharOne(t *testing.T) {
-	testVarcharOne(0, t)
-}
-
-func TestQVarchar(t *testing.T) {
-	for idx := range kases {
-		testVarcharOne(idx, t)
+func TestByStringOne(t *testing.T) {
+	for _, kase := range kases {
+		ph, err := types.ParseStringToPath(kase.path)
+		if kase.pathErr {
+			require.NotNil(t, err)
+			continue
+		}
+		require.Nil(t, err)
+		q, err := byStringOne([]byte(kase.json), &ph)
+		if kase.jsonErr {
+			require.NotNil(t, err)
+			continue
+		}
+		require.Nil(t, err)
+		require.JSONEq(t, kase.want, string(q))
 	}
 }
 
-func TestQJsonOne(t *testing.T) {
-	testJsonOne(0, t)
+func TestByString(t *testing.T) {
+	for _, kase := range kases {
+		jBytes := &types.Bytes{
+			Offsets: []uint32{0},
+			Lengths: []uint32{uint32(len(kase.json))},
+			Data:    []byte(kase.json),
+		}
+		pBytes := &types.Bytes{
+			Offsets: []uint32{0},
+			Lengths: []uint32{uint32(len(kase.path))},
+			Data:    []byte(kase.path),
+		}
+		result := &types.Bytes{
+			Offsets: nil,
+			Lengths: nil,
+			Data:    nil,
+		}
+		result, err := byString(jBytes, pBytes, result)
+		if kase.pathErr || kase.jsonErr {
+			require.NotNil(t, err)
+			continue
+		}
+		require.Nil(t, err)
+		require.JSONEq(t, kase.want, string(result.Data))
+	}
 }
 
-func TestQJson(t *testing.T) {
-	for idx := range kases {
-		testJsonOne(idx, t)
+func TestByJsonOne(t *testing.T) {
+	for _, kase := range kases {
+		byteJson, err := types.ParseStringToByteJson(kase.json)
+		if kase.jsonErr {
+			require.NotNil(t, err)
+			continue
+		}
+		require.Nil(t, err)
+		json, err := byteJson.Marshal()
+		require.Nil(t, err)
+		ph, err := types.ParseStringToPath(kase.path)
+		if kase.pathErr {
+			require.NotNil(t, err)
+			continue
+		}
+		require.Nil(t, err)
+		q, err := byJsonOne(json, &ph)
+		require.Nil(t, err)
+		require.JSONEq(t, kase.want, string(q))
+	}
+}
+
+func TestByJson(t *testing.T) {
+	for _, kase := range kases {
+		json, err := types.ParseStringToByteJson(kase.json)
+		if kase.jsonErr {
+			require.NotNil(t, err)
+			continue
+		}
+		require.Nil(t, err)
+		jsonBytes, err := types.EncodeJson(json)
+		require.Nil(t, err)
+		jBytes := &types.Bytes{
+			Offsets: []uint32{0},
+			Lengths: []uint32{uint32(len(jsonBytes))},
+			Data:    jsonBytes,
+		}
+		pBytes := &types.Bytes{
+			Offsets: []uint32{0},
+			Lengths: []uint32{uint32(len(kase.path))},
+			Data:    []byte(kase.path),
+		}
+		result := &types.Bytes{
+			Offsets: nil,
+			Lengths: nil,
+			Data:    nil,
+		}
+		result, err = byJson(jBytes, pBytes, result)
+		if kase.pathErr {
+			require.NotNil(t, err)
+			continue
+		}
+		require.Nil(t, err)
+		require.JSONEq(t, kase.want, string(result.Data))
 	}
 }
