@@ -1987,8 +1987,8 @@ var builtins = map[int]Functions{
 			},
 		},
 	},
-	JQ: {
-		Id: JQ,
+	JSON_EXTRACT: {
+		Id: JSON_EXTRACT,
 		Overloads: []Function{
 			{
 				Index:     0,
@@ -1997,7 +1997,7 @@ var builtins = map[int]Functions{
 				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_varchar, types.T_varchar},
 				ReturnTyp: types.T_varchar,
-				Fn:        binary.JQ_VARCHAR,
+				Fn:        binary.JsonExtractByString,
 			},
 			{
 				Index:     1,
@@ -2006,7 +2006,7 @@ var builtins = map[int]Functions{
 				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_json, types.T_varchar},
 				ReturnTyp: types.T_varchar,
-				Fn:        binary.JQ_JSON,
+				Fn:        binary.JsonExtractByJson,
 			},
 		},
 	},

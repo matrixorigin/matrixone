@@ -165,16 +165,16 @@ $**.a -> represents values of the document keys which ends with 'a', such as 'a'
 $.a**.b -> represents values of the document keys which starts with 'a' and ends with 'b', such as 'a.b', 'a.x.b', 'a.x.y.b', etc.
 ```
 
-## **JQ Function**
+## **JSON EXTREACT**
 
 ### **Description**
 
-JQ is a JSON query function that can be used to query JSON documents.
+json_extract is a JSON query function that can be used to query JSON documents.
 
 ### **Syntax**
 
 ```sql
-select jq(jsonDoc, pathExpression)
+select json_extract(jsonDoc, pathExpression)
 ```
 
 *jsonDoc is the JSON document to be queried,which can be a JSON text string or a JSON column in a table.*
@@ -202,37 +202,37 @@ select jq(jsonDoc, pathExpression)
 ### **Examples**
 
 ```sql
-select jq('[1,2,3]', '$[*]');
+select json_extract('[1,2,3]', '$[*]');
 +-----------------------+
-| jq('[1,2,3]', '$[*]') |
+| json_extract('[1,2,3]', '$[*]') |
 +-----------------------+
 | [1,2,3]               |
 +-----------------------+
 
-select jq('[1,2,3]', '$[0]');
+select json_extract('[1,2,3]', '$[0]');
 +------------------+
-| jq([1,2,3],$[0]) |
+| json_extract([1,2,3],$[0]) |
 +------------------+
 | 1                |
 +------------------+
 
-select jq('{"a":1,"b":2,"c":3}', '$.*');
+select json_extract('{"a":1,"b":2,"c":3}', '$.*');
 +-----------------------------+
-| jq({"a":1,"b":2,"c":3},$.*) |
+| json_extract({"a":1,"b":2,"c":3},$.*) |
 +-----------------------------+
 | [1, 2, 3]                   |
 +-----------------------------+
 
-select jq('{"a":1,"b":2,"c":3}', '$.a');
+select json_extract('{"a":1,"b":2,"c":3}', '$.a');
 +-----------------------------+
-| jq({"a":1,"b":2,"c":3},$.a) |
+| json_extract({"a":1,"b":2,"c":3},$.a) |
 +-----------------------------+
 | 1                           |
 +-----------------------------+
 
-select jq('{"a":1,"b":2,"c":3,"d":{"a":"x"}}', '$**.a');
+select json_extract('{"a":1,"b":2,"c":3,"d":{"a":"x"}}', '$**.a');
 +---------------------------------------------+
-| jq({"a":1,"b":2,"c":3,"d":{"a":"x"}},$**.a) |
+| json_extract({"a":1,"b":2,"c":3,"d":{"a":"x"}},$**.a) |
 +---------------------------------------------+
 | [1, "x"]                                    |
 +---------------------------------------------+
@@ -244,18 +244,18 @@ create table t
 );
 insert into t
 values ('{"a":1,"b":2,"c":3}');
-select jq(a, '$.a')
+select json_extract(a, '$.a')
 from t;
 +----------------------+
-| jq(a,$.a)            |
+| json_extract(a,$.a)            |
 +----------------------+
 | 1                    |
 +----------------------+
 insert into t values ('{"a":5,"b":6,"c":7}');
-select jq(a, '$.a')
+select json_extract(a, '$.a')
 from t;
 +----------------------+
-| jq(a,$.a)            |
+| json_extract(a,$.a)            |
 +----------------------+
 | 1                    |
 | 5                    |
