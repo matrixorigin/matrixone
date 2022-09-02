@@ -16,11 +16,14 @@ package txnstorage
 
 import (
 	"context"
+	"math"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	txnengine "github.com/matrixorigin/matrixone/pkg/vm/engine/txn"
 	"github.com/stretchr/testify/assert"
@@ -36,6 +39,9 @@ func TestCatalogHandler(t *testing.T) {
 			NewMemHandler(
 				testutil.NewMheap(),
 				Serializable,
+				clock.NewHLCClock(func() int64 {
+					return time.Now().UnixNano()
+				}, math.MaxInt64),
 			),
 		),
 	)

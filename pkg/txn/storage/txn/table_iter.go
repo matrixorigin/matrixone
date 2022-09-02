@@ -24,7 +24,7 @@ type TableIter[
 ] struct {
 	tx       *Transaction
 	iter     btree.GenericIter[*PhysicalRow[K, R]]
-	readTime Timestamp
+	readTime Time
 }
 
 func (t *Table[K, R]) NewIter(
