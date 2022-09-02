@@ -29,7 +29,7 @@ func HexString(vectors []*vector.Vector, proc *process.Process) (*vector.Vector,
 	resultType := types.New(types.T_varchar, 0, 0, 0)
 	if inputVector.IsScalar() {
 		if inputVector.ConstVectorIsNull() {
-			return proc.AllocScalarNullVector(resultType), nil
+			return vector.NewConst(resultType, 1), nil
 		}
 		resultVector := vector.New(resultType)
 		for i := 0; i < vector.Length(inputVector); i++ {
