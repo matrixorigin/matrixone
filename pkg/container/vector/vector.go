@@ -158,6 +158,8 @@ func (v *Vector) FillDefaultValue() {
 		fillDefaultValue[types.Decimal64](v)
 	case types.T_decimal128:
 		fillDefaultValue[types.Decimal128](v)
+	case types.T_uuid:
+		fillDefaultValue[types.Uuid](v)
 	case types.T_char, types.T_varchar, types.T_json, types.T_blob:
 		col := v.Col.(*types.Bytes)
 		rows := v.Nsp.Np.ToArray()
@@ -556,6 +558,8 @@ func (v *Vector) initConst(typ types.Type) {
 			Lengths: []uint32{},
 			Data:    []byte{},
 		}
+	case types.T_uuid:
+		v.Col = make([]types.Uuid, 1)
 	}
 }
 

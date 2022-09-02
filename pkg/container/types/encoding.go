@@ -33,6 +33,7 @@ var DatetimeSize int
 var TimestampSize int
 var Decimal64Size int
 var Decimal128Size int
+var UuidSize int
 
 func init() {
 	TSize = int(unsafe.Sizeof(Type{}))
@@ -41,6 +42,7 @@ func init() {
 	TimestampSize = int(unsafe.Sizeof(Timestamp(0)))
 	Decimal64Size = int(unsafe.Sizeof(Decimal64{}))
 	Decimal128Size = int(unsafe.Sizeof(Decimal128{}))
+	UuidSize = int(unsafe.Sizeof(Uuid{}))
 }
 
 func EncodeSlice[T any](v []T, sz int) (ret []byte) {
@@ -349,6 +351,14 @@ func EncodeDateSlice(v []Date) []byte {
 
 func DecodeDateSlice(v []byte) []Date {
 	return DecodeFixedSlice[Date](v, DateSize)
+}
+
+func EncodeUuidSlice(v []Uuid) []byte {
+	return EncodeFixedSlice(v, UuidSize)
+}
+
+func DecodeUuidSlice(v []byte) []Uuid {
+	return DecodeFixedSlice[Uuid](v, UuidSize)
 }
 
 func EncodeDatetimeSlice(v []Datetime) []byte {

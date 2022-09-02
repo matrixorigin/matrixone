@@ -2425,6 +2425,15 @@ func CastStringToBool(lv, rv *vector.Vector, proc *process.Process) (*vector.Vec
 	return vec, nil
 }
 
+// ---------------------------------------------uuid cast------------------------------------------
+func CastStringToUuid(lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	return nil, nil
+}
+
+func CastUuidToString(lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	return nil, nil
+}
+
 // IsInteger return true if the types.T is integer type
 func IsInteger(t types.T) bool {
 	if t == types.T_int8 || t == types.T_int16 || t == types.T_int32 || t == types.T_int64 ||

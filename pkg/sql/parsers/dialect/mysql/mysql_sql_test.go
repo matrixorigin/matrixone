@@ -1357,7 +1357,14 @@ var (
 			input: "use secondary role all",
 		}, {
 			input: "use secondary role none",
-		}}
+		}, {
+			input: `create table t1 (a int, b uuid)`,
+		}, {
+			input: `create table t2 (a uuid primary key, b varchar(10))`,
+		}, {
+			input: `create table t3 (a int, b uuid, primary key idx (a, b))`,
+		},
+	}
 )
 
 func TestValid(t *testing.T) {
