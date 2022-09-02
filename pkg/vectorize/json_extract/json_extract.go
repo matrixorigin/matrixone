@@ -31,18 +31,17 @@ func init() {
 }
 
 func qJson(json *types.Bytes, path *types.Bytes, result *types.Bytes) (*types.Bytes, error) {
-	logutil.Debugf("json qj: json=%s, path=%s, result=%s", json, path, result)
 	pData := path.Data
 	pStar, err := types.ParseStringToPath(string(pData))
 	if err != nil {
-		logutil.Debugf("json qj: error:%v", err)
+		logutil.Infof("json qj: error:%v", err)
 		return nil, err
 	}
 	for i := range json.Offsets {
 		jOff, jLen := json.Offsets[i], json.Lengths[i]
 		ret, err := qJsonOne(json.Data[jOff:jOff+jLen], &pStar)
 		if err != nil {
-			logutil.Debugf("json qj: error:%v", err)
+			logutil.Infof("json qj: error:%v", err)
 			return nil, err
 		}
 		result.AppendOnce(ret)
@@ -57,18 +56,17 @@ func qJsonOne(json []byte, path *bytejson.Path) ([]byte, error) {
 }
 
 func qVarchar(json *types.Bytes, path *types.Bytes, result *types.Bytes) (*types.Bytes, error) {
-	logutil.Debugf("json qv: json=%s, path=%s, result=%s", json, path, result)
 	pData := path.Data
 	pStar, err := types.ParseStringToPath(string(pData))
 	if err != nil {
-		logutil.Debugf("json qv: error:%v", err)
+		logutil.Infof("json qv: error:%v", err)
 		return nil, err
 	}
 	for i := range json.Offsets {
 		jOff, jLen := json.Offsets[i], json.Lengths[i]
 		ret, err := qVarcharOne(json.Data[jOff:jOff+jLen], &pStar)
 		if err != nil {
-			logutil.Debugf("json qv: error:%v", err)
+			logutil.Infof("json qv: error:%v", err)
 			return nil, err
 		}
 		result.AppendOnce(ret)

@@ -24,7 +24,6 @@ import (
 
 func JsonExtractByString(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	jsonBytes, pathBytes := vectors[0], vectors[1]
-	logutil.Infof("json json_extract: jsonBytes=%s, pathBytes=%s,typeJ:%T,typeP:%T", jsonBytes, pathBytes, jsonBytes.Col, pathBytes.Col)
 	//TODO size maybe not fit
 	resultType := types.Type{Oid: types.T_varchar, Size: 256}
 	json, path := vector.MustBytesCols(jsonBytes), vector.MustBytesCols(pathBytes)
@@ -36,17 +35,15 @@ func JsonExtractByString(vectors []*vector.Vector, proc *process.Process) (*vect
 	resultValues := resultVector.Col.(*types.Bytes)
 	out, err := json_extract.ByVarchar(json, path, resultValues)
 	if err != nil {
-		logutil.Infof("json json_extract: err:%v", err)
+		logutil.Infof("json_extract: err:%v", err)
 		return nil, err
 	}
 	vector.SetCol(resultVector, out)
-	logutil.Infof("json json_extract: resultVector=%s,type:%T", resultVector, resultVector.Col)
 	return resultVector, nil
 }
 
 func JsonExtractByJson(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	jsonBytes, pathBytes := vectors[0], vectors[1]
-	logutil.Infof("json json_extract: jsonBytes=%s, pathBytes=%s,typeJ:%T,typeP:%T", jsonBytes, pathBytes, jsonBytes.Col, pathBytes.Col)
 	//TODO size maybe not fit
 	resultType := types.Type{Oid: types.T_varchar, Size: 256}
 	json, path := vector.MustBytesCols(jsonBytes), vector.MustBytesCols(pathBytes)
@@ -58,10 +55,9 @@ func JsonExtractByJson(vectors []*vector.Vector, proc *process.Process) (*vector
 	resultValues := resultVector.Col.(*types.Bytes)
 	out, err := json_extract.ByJson(json, path, resultValues)
 	if err != nil {
-		logutil.Infof("json json_extract: err:%v", err)
+		logutil.Infof("json_extract: err:%v", err)
 		return nil, err
 	}
 	vector.SetCol(resultVector, out)
-	logutil.Infof("json json_extract: resultVector=%s,type:%T", resultVector, resultVector.Col)
 	return resultVector, nil
 }
