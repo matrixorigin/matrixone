@@ -23,6 +23,32 @@ import (
 	"golang.org/x/exp/constraints"
 )
 
+func UnaryTilde[T constraints.Integer](vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	srcVector := vectors[0]
+	srcValues := vector.MustTCols[T](srcVector)
+	resultElementSize := srcVector.Typ.Oid.TypeLen()
+
+	if srcVector.IsScalar() {
+		if srcVector.IsScalarNull() {
+			return proc.AllocScalarNullVector(srcVector.Typ), nil
+		}
+		resVector := proc.AllocScalarVector(srcVector.Typ)
+		// resValues := make([]T, 1)
+		nulls.Set(resVector.Nsp, srcVector.Nsp)
+		// vector.SetCol(resVector, neg.NumericNeg(srcValues, resValues))
+		return resVector, nil
+	} else {
+		resVector, err := proc.AllocVector(srcVector.Typ, int64(resultElementSize*len(srcValues)))
+		if err != nil {
+			return nil, err
+		}
+		// resValues := types.DecodeFixedSlice[T](resVector.Data, resultElementSize)
+		nulls.Set(resVector.Nsp, srcVector.Nsp)
+		// vector.SetCol(resVector, neg.NumericNeg(srcValues, resValues))
+		return resVector, nil
+	}
+}
+
 func UnaryMinus[T constraints.Signed | constraints.Float](vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	srcVector := vectors[0]
 	srcValues := vector.MustTCols[T](srcVector)

@@ -30,8 +30,9 @@ const (
 	LESS_THAN              // <
 	LESS_EQUAL             // <=
 	BETWEEN                // BETWEEN
-	UNARY_PLUS             // UNARY_PLUS
-	UNARY_MINUS            // UNARY_MINUS
+	UNARY_PLUS             // UNARY_PLUS +
+	UNARY_MINUS            // UNARY_MINUS -
+	UNARY_TILDE            // UNARY_TILDE ~
 	PLUS                   // +
 	MINUS                  // -
 	MULTI                  // *
@@ -265,6 +266,7 @@ var functionIdRegister = map[string]int32{
 	"mod":         MOD,
 	"unary_plus":  UNARY_PLUS,
 	"unary_minus": UNARY_MINUS,
+	"unary_tilde": UNARY_TILDE,
 	"case":        CASE,
 	"coalesce":    COALESCE,
 	"cast":        CAST,

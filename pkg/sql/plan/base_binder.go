@@ -393,7 +393,7 @@ func (b *baseBinder) bindUnaryExpr(astExpr *tree.UnaryExpr, depth int32, isRoot 
 	case tree.UNARY_PLUS:
 		return b.bindFuncExprImplByAstExpr("unary_plus", []tree.Expr{astExpr.Expr}, depth)
 	case tree.UNARY_TILDE:
-		return nil, errors.New("", fmt.Sprintf("'%v' is not supported now", astExpr))
+		return b.bindFuncExprImplByAstExpr("unary_tilde", []tree.Expr{astExpr.Expr}, depth)
 	case tree.UNARY_MARK:
 		return nil, errors.New("", fmt.Sprintf("'%v' is not supported now", astExpr))
 	}

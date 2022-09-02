@@ -2962,6 +2962,77 @@ var operators = map[int]Functions{
 			},
 		},
 	},
+
+	UNARY_TILDE: {
+		Id: UNARY_TILDE,
+		Overloads: []Function{
+			{
+				Index:     0,
+				Flag:      plan.Function_STRICT,
+				Layout:    UNARY_ARITHMETIC_OPERATOR,
+				Args:      []types.T{types.T_int8},
+				ReturnTyp: types.T_int64,
+				Fn:        operator.UnaryTilde[int8],
+			},
+			{
+				Index:     1,
+				Flag:      plan.Function_STRICT,
+				Layout:    UNARY_ARITHMETIC_OPERATOR,
+				Args:      []types.T{types.T_int16},
+				ReturnTyp: types.T_int64,
+				Fn:        operator.UnaryTilde[int16],
+			},
+			{
+				Index:     2,
+				Flag:      plan.Function_STRICT,
+				Layout:    UNARY_ARITHMETIC_OPERATOR,
+				Args:      []types.T{types.T_int32},
+				ReturnTyp: types.T_int64,
+				Fn:        operator.UnaryTilde[int32],
+			},
+			{
+				Index:     3,
+				Flag:      plan.Function_STRICT,
+				Layout:    UNARY_ARITHMETIC_OPERATOR,
+				Args:      []types.T{types.T_int64},
+				ReturnTyp: types.T_int64,
+				Fn:        operator.UnaryTilde[int64],
+			},
+			{
+				Index:     4,
+				Flag:      plan.Function_STRICT,
+				Layout:    UNARY_ARITHMETIC_OPERATOR,
+				Args:      []types.T{types.T_uint8},
+				ReturnTyp: types.T_int64,
+				Fn:        operator.UnaryTilde[uint8],
+			},
+			{
+				Index:     5,
+				Flag:      plan.Function_STRICT,
+				Layout:    UNARY_ARITHMETIC_OPERATOR,
+				Args:      []types.T{types.T_uint16},
+				ReturnTyp: types.T_int64,
+				Fn:        operator.UnaryTilde[uint16],
+			},
+			{
+				Index:     6,
+				Flag:      plan.Function_STRICT,
+				Layout:    UNARY_ARITHMETIC_OPERATOR,
+				Args:      []types.T{types.T_uint32},
+				ReturnTyp: types.T_int64,
+				Fn:        operator.UnaryTilde[uint32],
+			},
+			{
+				Index:     7,
+				Flag:      plan.Function_STRICT,
+				Layout:    UNARY_ARITHMETIC_OPERATOR,
+				Args:      []types.T{types.T_uint64},
+				ReturnTyp: types.T_int64,
+				Fn:        operator.UnaryTilde[uint64],
+			},
+		},
+	},
+
 	// others
 	CAST: {
 		Id: CAST,
