@@ -15,6 +15,7 @@
 package txnstorage
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	txnengine "github.com/matrixorigin/matrixone/pkg/vm/engine/txn"
 )
@@ -35,7 +36,7 @@ type Handler interface {
 	HandlePrepare(
 		meta txn.TxnMeta,
 	) (
-		Timestamp,
+		timestamp.Timestamp,
 		error,
 	)
 
