@@ -52,8 +52,10 @@ func NewCatalogHandler(upstream *MemHandler) *CatalogHandler {
 	}
 	handler.iterators.Map = make(map[string]any)
 
-	tx := NewTransaction(uuid.NewString(), Timestamp{
-		PhysicalTime: math.MinInt,
+	tx := NewTransaction(uuid.NewString(), Time{
+		Timestamp: timestamp.Timestamp{
+			PhysicalTime: math.MinInt,
+		},
 	}, SnapshotIsolation)
 	defer tx.State.Store(Committed)
 
