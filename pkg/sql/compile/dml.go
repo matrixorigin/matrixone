@@ -452,11 +452,11 @@ func makeInsertBatch(p *plan.InsertValues) *batch.Batch {
 	bat := batch.New(true, attrs)
 	idx := 0
 	for _, col := range p.ExplicitCols {
-		bat.Vecs[idx] = vector.New(types.Type{Oid: types.T(col.Typ.GetId())})
+		bat.Vecs[idx] = vector.New(types.Type{Oid: types.T(col.Typ.GetId()), Scale: col.Typ.Scale, Width: col.Typ.Width})
 		idx++
 	}
 	for _, col := range p.OtherCols {
-		bat.Vecs[idx] = vector.New(types.Type{Oid: types.T(col.Typ.GetId())})
+		bat.Vecs[idx] = vector.New(types.Type{Oid: types.T(col.Typ.GetId()), Scale: col.Typ.Scale, Width: col.Typ.Width})
 		idx++
 	}
 

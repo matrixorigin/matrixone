@@ -15,9 +15,11 @@
 package types
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/smartystreets/goconvey/convey"
 	"github.com/stretchr/testify/require"
 )
 
@@ -97,4 +99,36 @@ func TestBits(t *testing.T) {
 
 	require.Equal(t, d1.ToInt64(), d2.ToInt64())
 	require.Equal(t, Decimal64ToInt64Raw(d1), Decimal64ToInt64Raw(d2))
+}
+
+func Test_ParseStringToDecimal64(t *testing.T) {
+	convey.Convey("ParseStringToDecimal64 succ", t, func() {
+		M := 15
+		for i := 1; i <= M; i++ {
+			for j := 0; j <= i; j++ {
+				str := strings.Repeat("9", i-j) + "." + strings.Repeat("9", j)
+				_, err := ParseStringToDecimal64(str+"4", int32(i), int32(j))
+				convey.So(err, convey.ShouldBeNil)
+
+				_, err = ParseStringToDecimal64(str+"5", int32(i), int32(j))
+				convey.So(err, convey.ShouldNotBeNil)
+			}
+		}
+	})
+}
+
+func Test_ParseStringToDecimal128(t *testing.T) {
+	convey.Convey("ParseStringToDecimal64 succ", t, func() {
+		M := 33
+		for i := 16; i <= M; i++ {
+			for j := 0; j <= i && j <= 33; j++ {
+				str := strings.Repeat("9", i-j) + "." + strings.Repeat("9", j)
+				_, err := ParseStringToDecimal128(str+"4", int32(i), int32(j))
+				convey.So(err, convey.ShouldBeNil)
+
+				_, err = ParseStringToDecimal128(str+"5", int32(i), int32(j))
+				convey.So(err, convey.ShouldNotBeNil)
+			}
+		}
+	})
 }

@@ -2204,7 +2204,7 @@ func TestCastFloatAsDecimal(t *testing.T) {
 			name:      "TEST01",
 			vecs:      makeTempVectors([]float32{123.0}, leftType, rightType),
 			proc:      makeProcess(),
-			wantBytes: []types.Decimal64{types.Decimal64FromFloat64(123.0)},
+			wantBytes: []types.Decimal64{types.Decimal64FromFloat64(123.0, 5, 1)},
 		},
 	}
 
