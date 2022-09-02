@@ -39,7 +39,8 @@ func UnaryTilde[T constraints.Integer](vectors []*vector.Vector, proc *process.P
 		resVector := proc.AllocScalarVector(returnType)
 		resValues := make([]uint64, 1)
 		nulls.Set(resVector.Nsp, srcVector.Nsp)
-		vector.SetCol(resVector, funcBitInversion(srcValues, resValues))
+		resValues[0] = funcBitInversion(srcValues[0])
+		vector.SetCol(resVector, resValues)
 		return resVector, nil
 	} else {
 		resVector, err := proc.AllocVector(returnType, int64(resultElementSize*len(srcValues)))
@@ -48,23 +49,33 @@ func UnaryTilde[T constraints.Integer](vectors []*vector.Vector, proc *process.P
 		}
 		resValues := types.DecodeFixedSlice[uint64](resVector.Data, resultElementSize)
 		nulls.Set(resVector.Nsp, srcVector.Nsp)
-		vector.SetCol(resVector, funcBitInversion(srcValues, resValues))
+
+		var i uint64 = 0
+		if nulls.Any(resVector.Nsp) {
+			for i = 0; i < uint64(len(resValues)); i++ {
+				if !nulls.Contains(resVector.Nsp, i) {
+					resValues[i] = funcBitInversion(srcValues[i])
+				} else {
+					resValues[i] = 0
+				}
+			}
+		} else {
+			for i = 0; i < uint64(len(resValues)); i++ {
+				resValues[i] = funcBitInversion(srcValues[i])
+			}
+		}
+		vector.SetCol(resVector, resValues)
 		return resVector, nil
 	}
 }
 
-func funcBitInversion[T constraints.Integer](xs []T, rs []uint64) []uint64 {
-	var n uint64
-	for i, x := range xs {
-		if x > 0 {
-			n = uint64(x)
-			rs[i] = ^n
-		} else {
-			n = uint64(^x)
-			rs[i] = n
-		}
+func funcBitInversion[T constraints.Integer](x T) uint64 {
+	if x > 0 {
+		n := uint64(x)
+		return ^n
+	} else {
+		return uint64(^x)
 	}
-	return rs
 }
 
 func UnaryMinus[T constraints.Signed | constraints.Float](vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
