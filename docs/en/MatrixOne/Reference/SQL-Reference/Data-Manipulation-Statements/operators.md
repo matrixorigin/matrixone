@@ -45,6 +45,8 @@
 | [NOT BETWEEN ... AND ...](operators/comparison-functions-and-operators/not-between.md) | Whether a value is not within a range of values |
 | [NOT LIKE](operators/comparison-functions-and-operators/not-like.md) | Negation of simple pattern matching |
 
+<!--|[COALESCE()](operators/comparison-functions-and-operators/coalesce.md)|Return the first non-NULL argument|-->
+
 ## [**Flow Control Functions**](operators/flow-control-functions/flow-control-functions-overview.md)
 
 | Name | Description|

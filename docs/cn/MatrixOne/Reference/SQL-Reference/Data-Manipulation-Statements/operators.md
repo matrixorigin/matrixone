@@ -45,6 +45,8 @@
 | [NOT BETWEEN ... AND ...](operators/comparison-functions-and-operators/not-between.md) | 不在两值之间 |
 | [NOT LIKE](operators/comparison-functions-and-operators/not-like.md) | 模糊匹配，Like的否定用法 |
 
+<!--|[COALESCE()](operators/comparison-functions-and-operators/coalesce.md)|Return the first non-NULL argument|-->
+
 ## [**控制流函数**](operators/flow-control-functions/flow-control-functions-overview.md)
 
 | 名称 | 描述|

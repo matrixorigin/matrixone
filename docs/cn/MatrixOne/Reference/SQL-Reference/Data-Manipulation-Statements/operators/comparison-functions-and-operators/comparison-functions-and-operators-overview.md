@@ -18,6 +18,8 @@
 | [NOT BETWEEN ... AND ...](not-between.md) | 不在两值之间 |
 | [NOT LIKE](not-like.md) | N模糊匹配，Like的否定用法 |
 
+<!--|[COALESCE()](coalesce.md)|Return the first non-NULL argument|-->
+
 比较运算的结果为 `TRUE`、`FALSE` 或 `NULL`。这些运算对数字和字符串均有效。字符串可以自动转换为数字，数字根据需要自动转换为字符串。
 
 以下比较运算符不仅可以用于比较标量运算数，也可以用于比较行运算数:
