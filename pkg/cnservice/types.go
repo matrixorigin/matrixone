@@ -16,9 +16,10 @@ package cnservice
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"sync"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -111,7 +112,7 @@ type service struct {
 	responsePool           *sync.Pool
 	logger                 *zap.Logger
 	server                 morpc.RPCServer
-	requestHandler         func(ctx context.Context, message morpc.Message, cs morpc.ClientSession, engine engine.Engine) error
+	requestHandler         func(ctx context.Context, message morpc.Message, cs morpc.ClientSession, engine engine.Engine, cli client.TxnClient) error
 	cancelMoServerFunc     context.CancelFunc
 	mo                     *frontend.MOServer
 	initHakeeperClientOnce sync.Once

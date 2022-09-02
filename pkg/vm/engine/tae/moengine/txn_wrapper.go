@@ -82,8 +82,8 @@ func (w *wrappedTx) Rollback(ctx context.Context) error {
 	return w.tx.Rollback()
 }
 
-func (*wrappedTx) Snapshot() ([]byte, error) {
-	panic("should not call")
+func (w *wrappedTx) Snapshot() ([]byte, error) {
+	return w.tx.GetCtx(), nil
 }
 
 func (*wrappedTx) Write(ctx context.Context, ops []txn.TxnRequest) (*rpc.SendResult, error) {

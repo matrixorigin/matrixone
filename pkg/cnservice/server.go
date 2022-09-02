@@ -17,9 +17,10 @@ package cnservice
 import (
 	"context"
 	"fmt"
+	"sync"
+
 	"github.com/fagongzi/goetty/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -78,6 +79,7 @@ func NewService(
 	server.RegisterRequestHandler(srv.handleRequest)
 	srv.server = server
 	srv.storeEngine = pu.StorageEngine
+	srv._txnClient = pu.TxnClient
 
 	srv.requestHandler = defaultRequestHandler
 	for _, opt := range options {
@@ -108,12 +110,12 @@ func (s *service) acquireMessage() morpc.Message {
 	return s.responsePool.Get().(*pipeline.Message)
 }
 
-func defaultRequestHandler(ctx context.Context, message morpc.Message, cs morpc.ClientSession, e engine.Engine) error {
+func defaultRequestHandler(ctx context.Context, message morpc.Message, cs morpc.ClientSession, e engine.Engine, cli client.TxnClient) error {
 	return nil
 }
 
 func (s *service) handleRequest(ctx context.Context, req morpc.Message, _ uint64, cs morpc.ClientSession) error {
-	return s.requestHandler(ctx, req, cs, s.storeEngine)
+	return s.requestHandler(ctx, req, cs, s.storeEngine, s._txnClient)
 }
 
 func (s *service) initMOServer(ctx context.Context, pu *config.ParameterUnit) error {
@@ -256,7 +258,7 @@ func (s *service) getTxnClient() (c client.TxnClient, err error) {
 	return
 }
 
-func WithMessageHandle(f func(ctx context.Context, message morpc.Message, cs morpc.ClientSession, engine engine.Engine) error) Options {
+func WithMessageHandle(f func(ctx context.Context, message morpc.Message, cs morpc.ClientSession, engine engine.Engine, cli client.TxnClient) error) Options {
 	return func(s *service) {
 		s.requestHandler = f
 	}

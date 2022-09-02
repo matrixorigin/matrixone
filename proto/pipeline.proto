@@ -200,6 +200,7 @@ message ProcessInfo {
     string id = 1;
     ProcessLimitation lim = 2;
     int64 unix_time = 3;
+    string snapshot = 4;
 }
 
 message Pipeline {

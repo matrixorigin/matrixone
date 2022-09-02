@@ -17,6 +17,8 @@ package compile
 import (
 	"context"
 	"errors"
+	"time"
+
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
@@ -57,13 +59,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/semi"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/single"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/top"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"time"
 )
 
 // messageHandleHelper a structure records some elements to help handle messages.
@@ -74,28 +76,29 @@ type messageHandleHelper struct {
 // processHelper a structure records information about source process. and to help
 // rebuild the process in the remote node.
 type processHelper struct {
-	id       string
-	lim      process.Limitation
-	unixTime int64
+	id          string
+	lim         process.Limitation
+	unixTime    int64
+	txnOperator client.TxnOperator
 }
 
 // CnServerMessageHandler deal the client message that received at cn-server.
 // the message is always *pipeline.Message here. It's a byte array which encoded by method encodeScope.
 // write back Analysis Information and error info if error occurs to client.
-func CnServerMessageHandler(ctx context.Context, message morpc.Message, cs morpc.ClientSession, storeEngine engine.Engine) error {
+func CnServerMessageHandler(ctx context.Context, message morpc.Message, cs morpc.ClientSession, storeEngine engine.Engine, cli client.TxnClient) error {
 	var errCode []byte = nil
 	helper := &messageHandleHelper{
 		storeEngine: storeEngine,
 	}
 	// decode message and run it, get final analysis information and err info.
-	analysis, err := pipelineMessageHandle(ctx, message, cs, helper)
+	analysis, err := pipelineMessageHandle(ctx, message, cs, helper, cli)
 	if err != nil {
 		errCode = []byte(err.Error())
 	}
 	return cs.Write(ctx, &pipeline.Message{Id: message.GetID(), Sid: pipeline.MessageEnd, Code: errCode, Analyse: analysis})
 }
 
-func pipelineMessageHandle(ctx context.Context, message morpc.Message, cs morpc.ClientSession, messageHelper *messageHandleHelper) (anaData []byte, err error) {
+func pipelineMessageHandle(ctx context.Context, message morpc.Message, cs morpc.ClientSession, messageHelper *messageHandleHelper, cli client.TxnClient) (anaData []byte, err error) {
 	var c *Compile
 	var s *Scope
 	var procHelper *processHelper
@@ -106,7 +109,7 @@ func pipelineMessageHandle(ctx context.Context, message morpc.Message, cs morpc.
 	}
 
 	// get processHelper and rebuild the process and Compile
-	procHelper, err = generateProcessHelper(m.GetProcInfoData())
+	procHelper, err = generateProcessHelper(m.GetProcInfoData(), cli)
 	if err != nil {
 		return nil, err
 	}
@@ -220,6 +223,7 @@ func (s *Scope) remoteRun(c *Compile) error {
 				}
 				mergeAnalyseInfo(c.anal, ana)
 			}
+			sendToConnectOperator(arg, nil)
 			break
 		}
 		// decoded message
@@ -269,11 +273,16 @@ func encodeProcessInfo(proc *process.Process) ([]byte, error) {
 		procInfo.Id = proc.Id
 		procInfo.Lim = convertToPipelineLimitation(proc.Lim)
 		procInfo.UnixTime = proc.UnixTime
+		snapshot, err := proc.TxnOperator.Snapshot()
+		if err != nil {
+			return nil, err
+		}
+		procInfo.Snapshot = string(snapshot)
 	}
 	return procInfo.Marshal()
 }
 
-func generateProcessHelper(data []byte) (*processHelper, error) {
+func generateProcessHelper(data []byte, cli client.TxnClient) (*processHelper, error) {
 	result := &processHelper{}
 
 	procInfo := &pipeline.ProcessInfo{}
@@ -284,6 +293,10 @@ func generateProcessHelper(data []byte) (*processHelper, error) {
 	result.id = procInfo.Id
 	result.lim = convertToProcessLimitation(procInfo.Lim)
 	result.unixTime = procInfo.UnixTime
+	result.txnOperator, err = cli.NewWithSnapshot([]byte(procInfo.Snapshot))
+	if err != nil {
+		return nil, err
+	}
 	return result, nil
 }
 
@@ -894,11 +907,13 @@ func newCompile(ctx context.Context, message morpc.Message, pHelper *processHelp
 	proc.UnixTime = pHelper.unixTime
 	proc.Id = pHelper.id
 	proc.Lim = pHelper.lim
+	proc.TxnOperator = pHelper.txnOperator
 
 	c := &Compile{
 		ctx:  ctx,
 		proc: proc,
 		e:    mHelper.storeEngine,
+		anal: &anaylze{},
 	}
 
 	c.fill = func(a any, b *batch.Batch) error {
