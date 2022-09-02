@@ -640,7 +640,6 @@ drop table t1;
 
 
 #SELECT CAST(IFNULL(NULL, NULL) AS DECIMAL);
-
 select if(1, cast(1111111111111111111 as unsigned), 1) i, case when 1 then cast(1111111111111111111 as unsigned) else 1 end c, coalesce(cast(1111111111111111111 as unsigned), 1) co;
 
 #CREATE TABLE t1 (f1 int,
