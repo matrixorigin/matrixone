@@ -74,6 +74,7 @@ type Iter[
 ] struct {
 	TableIter   *TableIter[K, R]
 	AttrsMap    map[string]*AttributeRow
+	Expr        *plan.Expr
 	FirstCalled bool
 }
 
@@ -724,6 +725,7 @@ func (m *MemHandler) HandleNewTableIter(meta txn.TxnMeta, req txnengine.NewTable
 	iter := &Iter[AnyKey, *AnyRow]{
 		TableIter: tableIter,
 		AttrsMap:  attrsMap,
+		Expr:      req.Expr,
 	}
 
 	m.iterators.Lock()
@@ -802,6 +804,11 @@ func (m *MemHandler) HandleRead(meta txn.TxnMeta, req txnengine.ReadReq, resp *t
 		_, row, err := iter.TableIter.Read()
 		if err != nil {
 			return err
+		}
+
+		//TODO handle iter.Expr
+		if iter.Expr != nil {
+			panic(iter.Expr)
 		}
 
 		for i, name := range req.ColNames {
