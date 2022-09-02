@@ -756,9 +756,14 @@ func bindFuncExprImplByPlanExpr(name string, args []*Expr) (*plan.Expr, error) {
 			name = "date_sub"
 		}
 	case "+":
-		// rewrite "date '2001' + interval '1 day'" to date_add(date '2001', 1, day(unit))
 		if len(args) != 2 {
 			return nil, errors.New("", "operator function need two args")
+		}
+		if isNullExpr(args[0]) {
+			return args[0], nil
+		}
+		if isNullExpr(args[1]) {
+			return args[1], nil
 		}
 		if args[0].Typ.Id == int32(types.T_date) && args[1].Typ.Id == int32(types.T_interval) {
 			name = "date_add"
@@ -785,6 +790,15 @@ func bindFuncExprImplByPlanExpr(name string, args []*Expr) (*plan.Expr, error) {
 			return nil, err
 		}
 	case "-":
+		if len(args) != 2 {
+			return nil, errors.New("", "operator function need two args")
+		}
+		if isNullExpr(args[0]) {
+			return args[0], nil
+		}
+		if isNullExpr(args[1]) {
+			return args[1], nil
+		}
 		// rewrite "date '2001' - interval '1 day'" to date_sub(date '2001', 1, day(unit))
 		if args[0].Typ.Id == int32(types.T_date) && args[1].Typ.Id == int32(types.T_interval) {
 			name = "date_sub"
@@ -798,6 +812,16 @@ func bindFuncExprImplByPlanExpr(name string, args []*Expr) (*plan.Expr, error) {
 		}
 		if err != nil {
 			return nil, err
+		}
+	case "*", "/", "%":
+		if len(args) != 2 {
+			return nil, errors.New("", "operator function need two args")
+		}
+		if isNullExpr(args[0]) {
+			return args[0], nil
+		}
+		if isNullExpr(args[1]) {
+			return args[1], nil
 		}
 	case "unary_minus":
 		if args[0].Typ.Id == int32(types.T_uint64) {

@@ -73,6 +73,7 @@ func buildHashPartition(partitionBinder *PartitionBinder, partitionOp *tree.Part
 		return err
 	}
 
+	partitionInfo.PartitionMsg = tree.String(partitionOp, dialect.MYSQL)
 	tableDef.Defs = append(tableDef.Defs, &plan.TableDef_DefType{
 		Def: &plan.TableDef_DefType_Partition{
 			Partition: partitionInfo,
@@ -129,6 +130,7 @@ func buildKeyPartition(partitionBinder *PartitionBinder, partitionOp *tree.Parti
 		return err
 	}
 
+	partitionInfo.PartitionMsg = tree.String(partitionOp, dialect.MYSQL)
 	tableDef.Defs = append(tableDef.Defs, &plan.TableDef_DefType{
 		Def: &plan.TableDef_DefType_Partition{
 			Partition: partitionInfo,
@@ -178,6 +180,7 @@ func buildRangePartition(partitionBinder *PartitionBinder, partitionOp *tree.Par
 		return err
 	}
 
+	partitionInfo.PartitionMsg = tree.String(partitionOp, dialect.MYSQL)
 	tableDef.Defs = append(tableDef.Defs, &plan.TableDef_DefType{
 		Def: &plan.TableDef_DefType_Partition{
 			Partition: partitionInfo,
@@ -225,6 +228,7 @@ func buildListPartitiion(partitionBinder *PartitionBinder, partitionOp *tree.Par
 		return err
 	}
 
+	partitionInfo.PartitionMsg = tree.String(partitionOp, dialect.MYSQL)
 	tableDef.Defs = append(tableDef.Defs, &plan.TableDef_DefType{
 		Def: &plan.TableDef_DefType_Partition{
 			Partition: partitionInfo,

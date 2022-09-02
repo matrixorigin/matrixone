@@ -12,24 +12,33 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package plan
+package logutil
 
-func (p *Plan) MarshalBinary() ([]byte, error) {
-	data := make([]byte, p.ProtoSize())
-	_, err := p.MarshalTo(data)
-	return data, err
-}
+import (
+	"go.uber.org/zap"
+	"testing"
+)
 
-func (p *Plan) UnmarshalBinary(data []byte) error {
-	return p.Unmarshal(data)
-}
-
-func (p *PartitionInfo) MarshalPartitionInfo() ([]byte, error) {
-	data := make([]byte, p.ProtoSize())
-	_, err := p.MarshalTo(data)
-	return data, err
-}
-
-func (p *PartitionInfo) UnMarshalPartitionInfo(data []byte) error {
-	return p.Unmarshal(data)
+func TestInfo(t *testing.T) {
+	type args struct {
+		msg    string
+		fields []zap.Field
+	}
+	tests := []struct {
+		name string
+		args args
+	}{
+		{
+			name: "normal",
+			args: args{
+				msg:    "test",
+				fields: []zap.Field{zap.Int("int", 0), zap.String("string", "")},
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			Info(tt.args.msg, tt.args.fields...)
+		})
+	}
 }
