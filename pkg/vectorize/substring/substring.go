@@ -15,8 +15,9 @@
 package substring
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"math"
+
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
 /*
@@ -108,7 +109,7 @@ func getSliceFromRightWithLength(bytes []byte, offset int64, length int64) ([]by
 
 // The length parameter is not bound. Cut the string from the left
 func substringFromLeftConstOffsetUnbounded(src *types.Bytes, res *types.Bytes, start int64) *types.Bytes {
-	var retCursor uint32 = 0
+	// var retCursor uint32 = 0
 	for idx, offset := range src.Offsets {
 		cursor := offset
 		curLen := src.Lengths[idx]
@@ -116,10 +117,7 @@ func substringFromLeftConstOffsetUnbounded(src *types.Bytes, res *types.Bytes, s
 		bytes := src.Data[cursor : cursor+curLen]
 
 		slice, size := getSliceFromLeft(bytes, start)
-		for _, b := range slice {
-			res.Data[retCursor] = b
-			retCursor++
-		}
+		res.Data = slice
 		if idx != 0 {
 			res.Offsets[idx] = res.Offsets[idx-1] + res.Lengths[idx-1]
 		} else {
@@ -132,17 +130,13 @@ func substringFromLeftConstOffsetUnbounded(src *types.Bytes, res *types.Bytes, s
 
 // The length parameter is not bound. Cut the string from the right
 func substringFromRightConstOffsetUnbounded(src *types.Bytes, res *types.Bytes, start int64) *types.Bytes {
-	var retCursor uint32 = 0
 	for idx, offset := range src.Offsets {
 		cursor := offset
 		curLen := src.Lengths[idx]
 
 		bytes := src.Data[cursor : cursor+curLen]
 		slice, size := getSliceFromRight(bytes, start)
-		for _, b := range slice {
-			res.Data[retCursor] = b
-			retCursor++
-		}
+		res.Data = slice
 		if idx != 0 {
 			res.Offsets[idx] = res.Offsets[idx-1] + res.Lengths[idx-1]
 		} else {
