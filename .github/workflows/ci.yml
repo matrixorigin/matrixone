@@ -2,12 +2,12 @@
 name: MatrixOne CI
 
 on:
-  pull_request:
+  pull_request_target:
     types: [ opened, synchronize, reopened ]
     branches: [ main ]
 
   workflow_dispatch:
-
+  
 concurrency: 
   group: ${{ github.event.pull_request.head.repo.full_name}}/${{ github.event.pull_request.head.ref }}/${{ github.workflow }}
   cancel-in-progress: true
@@ -17,14 +17,24 @@ jobs:
   ut-linux-x86:
     runs-on: ubuntu-latest
     name: UT Test on Ubuntu/x64
-
+      
     steps:
       - uses: actions/checkout@v2
         with:
           fetch-depth: '3'
+          repository: ${{ github.event.pull_request.head.repo.full_name }}
+          ref: ${{ github.event.pull_request.head.ref }}
 
       - name: Set up Go
         uses: ./.github/actions/setup_env
+        
+      - name: Set env
+        run: |
+          echo "endpoint=${{ secrets.S3ENDPOINT }}" >> $GITHUB_ENV
+          echo "region=${{ secrets.S3REGION }}" >> $GITHUB_ENV
+          echo "apikey=${{ secrets.S3APIKEY }}" >> $GITHUB_ENV
+          echo "apisecret=${{ secrets.S3APISECRET }}" >> $GITHUB_ENV
+          echo "bucket=${{ secrets.S3BUCKET }}" >> $GITHUB_ENV
 
       - name: Unit Testing
         run: |
@@ -48,6 +58,8 @@ jobs:
       - uses: actions/checkout@v2
         with:
           fetch-depth: '3'
+          repository: ${{ github.event.pull_request.head.repo.full_name }}
+          ref: ${{ github.event.pull_request.head.ref }}
 
       - name: Set up Go
         uses: ./.github/actions/setup_env
@@ -74,6 +86,8 @@ jobs:
       - uses: actions/checkout@v2
         with:
           fetch-depth: '3'
+          repository: ${{ github.event.pull_request.head.repo.full_name }}
+          ref: ${{ github.event.pull_request.head.ref }}
 
       - name: Set up Go
         uses: ./.github/actions/setup_env
@@ -103,6 +117,8 @@ jobs:
         with:
           fetch-depth: '3'
           path: ./head
+          repository: ${{ github.event.pull_request.head.repo.full_name }}
+          ref: ${{ github.event.pull_request.head.ref }}
 
       - name: Set up Go
         uses: ./head/.github/actions/setup_env
@@ -174,6 +190,8 @@ jobs:
         with:
           fetch-depth: '3'
           path: ./head
+          repository: ${{ github.event.pull_request.head.repo.full_name }}
+          ref: ${{ github.event.pull_request.head.ref }}
 
       - name: Set up Go
         uses: ./head/.github/actions/setup_env
@@ -245,6 +263,8 @@ jobs:
         with:
           fetch-depth: '3'
           path: ./head
+          repository: ${{ github.event.pull_request.head.repo.full_name }}
+          ref: ${{ github.event.pull_request.head.ref }}
 
       - name: Set up Go
         uses: ./head/.github/actions/setup_env
@@ -317,6 +337,8 @@ jobs:
       - uses: actions/checkout@v2
         with:
           fetch-depth: '3'
+          repository: ${{ github.event.pull_request.head.repo.full_name }}
+          ref: ${{ github.event.pull_request.head.ref }}
 
       - name: Set up Go
         uses: ./.github/actions/setup_env
