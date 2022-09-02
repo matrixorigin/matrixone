@@ -109,7 +109,6 @@ func getSliceFromRightWithLength(bytes []byte, offset int64, length int64) ([]by
 
 // The length parameter is not bound. Cut the string from the left
 func substringFromLeftConstOffsetUnbounded(src *types.Bytes, res *types.Bytes, start int64) *types.Bytes {
-	// var retCursor uint32 = 0
 	for idx, offset := range src.Offsets {
 		cursor := offset
 		curLen := src.Lengths[idx]
@@ -117,7 +116,7 @@ func substringFromLeftConstOffsetUnbounded(src *types.Bytes, res *types.Bytes, s
 		bytes := src.Data[cursor : cursor+curLen]
 
 		slice, size := getSliceFromLeft(bytes, start)
-		res.Data = slice
+		res.Data = append(res.Data, slice...)
 		if idx != 0 {
 			res.Offsets[idx] = res.Offsets[idx-1] + res.Lengths[idx-1]
 		} else {
@@ -136,7 +135,7 @@ func substringFromRightConstOffsetUnbounded(src *types.Bytes, res *types.Bytes, 
 
 		bytes := src.Data[cursor : cursor+curLen]
 		slice, size := getSliceFromRight(bytes, start)
-		res.Data = slice
+		res.Data = append(res.Data, slice...)
 		if idx != 0 {
 			res.Offsets[idx] = res.Offsets[idx-1] + res.Lengths[idx-1]
 		} else {
@@ -175,7 +174,6 @@ func substringFromZeroConstOffsetBounded(src *types.Bytes, res *types.Bytes) *ty
 
 // Without binding the length parameter, dynamically cut the string
 func substringDynamicOffsetUnbounded(src *types.Bytes, res *types.Bytes, startColumn interface{}, startColumnType types.T) *types.Bytes {
-	var retCursor uint32
 	for idx, offset := range src.Offsets {
 		cursor := offset
 		curLen := src.Lengths[idx]
@@ -216,10 +214,7 @@ func substringDynamicOffsetUnbounded(src *types.Bytes, res *types.Bytes, startCo
 
 		if startValue > 0 {
 			slice, size := getSliceFromLeft(bytes, startValue-1)
-			for _, b := range slice {
-				res.Data[retCursor] = b
-				retCursor++
-			}
+			res.Data = append(res.Data, slice...)
 			if idx != 0 {
 				res.Offsets[idx] = res.Offsets[idx-1] + res.Lengths[idx-1]
 			} else {
@@ -228,10 +223,7 @@ func substringDynamicOffsetUnbounded(src *types.Bytes, res *types.Bytes, startCo
 			res.Lengths[idx] = uint32(size)
 		} else if startValue < 0 {
 			slice, size := getSliceFromRight(bytes, -startValue)
-			for _, b := range slice {
-				res.Data[retCursor] = b
-				retCursor++
-			}
+			res.Data = append(res.Data, slice...)
 			if idx != 0 {
 				res.Offsets[idx] = res.Offsets[idx-1] + res.Lengths[idx-1]
 			} else {
@@ -252,17 +244,13 @@ func substringDynamicOffsetUnbounded(src *types.Bytes, res *types.Bytes, startCo
 
 // bound length parameter. Cut the string from left
 func substringFromLeftConstOffsetBounded(src *types.Bytes, res *types.Bytes, start int64, length int64) *types.Bytes {
-	var retCursor uint32 = 0
 	for idx, offset := range src.Offsets {
 		cursor := offset
 		curLen := src.Lengths[idx]
 
 		bytes := src.Data[cursor : cursor+curLen]
 		slice, size := getSliceFromLeftWithLength(bytes, start, length)
-		for _, b := range slice {
-			res.Data[retCursor] = b
-			retCursor++
-		}
+		res.Data = append(res.Data, slice...)
 		if idx != 0 {
 			res.Offsets[idx] = res.Offsets[idx-1] + res.Lengths[idx-1]
 		} else {
@@ -275,17 +263,13 @@ func substringFromLeftConstOffsetBounded(src *types.Bytes, res *types.Bytes, sta
 
 // bound length parameter. Cut the string from right
 func substringFromRightConstOffsetBounded(src *types.Bytes, res *types.Bytes, start int64, length int64) *types.Bytes {
-	var retCursor uint32 = 0
 	for idx, offset := range src.Offsets {
 		cursor := offset
 		curLen := src.Lengths[idx]
 
 		bytes := src.Data[cursor : cursor+curLen]
 		slice, size := getSliceFromRightWithLength(bytes, start, length)
-		for _, b := range slice {
-			res.Data[retCursor] = b
-			retCursor++
-		}
+		res.Data = append(res.Data, slice...)
 		if idx != 0 {
 			res.Offsets[idx] = res.Offsets[idx-1] + res.Lengths[idx-1]
 		} else {
@@ -299,7 +283,6 @@ func substringFromRightConstOffsetBounded(src *types.Bytes, res *types.Bytes, st
 // bound the length parameter, dynamically cut the string
 func substringDynamicOffsetBounded(src *types.Bytes, res *types.Bytes, startColumn interface{}, startColumnType types.T,
 	lengthColumn interface{}, lengthColumnType types.T, cs []bool) *types.Bytes {
-	var retCursor uint32
 	for idx := range res.Offsets {
 		var cursor uint32
 		var curLen uint32
@@ -337,10 +320,7 @@ func substringDynamicOffsetBounded(src *types.Bytes, res *types.Bytes, startColu
 			} else {
 				slice, size = getSliceFromRightWithLength(bytes, -startValue, lengthValue)
 			}
-			for _, b := range slice {
-				res.Data[retCursor] = b
-				retCursor++
-			}
+			res.Data = append(res.Data, slice...)
 			if idx != 0 {
 				res.Offsets[idx] = res.Offsets[idx-1] + res.Lengths[idx-1]
 			} else {

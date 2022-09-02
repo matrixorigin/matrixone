@@ -58,7 +58,6 @@ func substrSrcConst(inputVecs []*vector.Vector, proc *process.Process) (*vector.
 	rows := calcResultVectorRows(inputVecs)
 	resultVec := proc.AllocScalarVector(srcVector.Typ)
 	results := &types.Bytes{
-		Data:    make([]byte, int64(len(columnSrcCol.Data)*rows)),
 		Offsets: make([]uint32, rows),
 		Lengths: make([]uint32, rows),
 	}
@@ -147,7 +146,6 @@ func substrSrcCol(inputVecs []*vector.Vector, proc *process.Process) (*vector.Ve
 		return nil, err
 	}
 	results := &types.Bytes{
-		Data:    resultVec.Data,
 		Offsets: make([]uint32, len(columnSrcCol.Offsets)),
 		Lengths: make([]uint32, len(columnSrcCol.Lengths)),
 	}

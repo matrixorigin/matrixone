@@ -19,7 +19,6 @@ select SUBSTR('abcdefg',1,-1);
 select substring('hello', 2, -1);
 -- @bvt:issue
 
--- @bvt:issue#4540
 select substring('hello', -1, 1);
 select substring('hello', -2, 1);
 select substring('hello', -4294967295, 1);
@@ -28,8 +27,7 @@ select substring('hello', -4294967296, 1);
 select substring('hello', 4294967296, 1);
 select substring('hello', -4294967297, 1);
 select substring('hello', 4294967297, 1);
--- @bvt:issue
--- @bvt:issue#4540
+
 select substring('hello', -18446744073709551615, 1);
 select substring('hello', 18446744073709551615, 1);
 
@@ -41,13 +39,10 @@ select substring('hello', 18446744073709551617, 1);
 select substring('hello', 1, -1);
 
 select substring('hello', 1, -4294967295);
--- @bvt:issue
+
 select substring('hello', 1, 4294967295);
--- @bvt:issue#4540
 select substring('hello', 1, -4294967296);
--- @bvt:issue
 select substring('hello', 1, 4294967296);
--- @bvt:issue#4540
 select substring('hello', 1, -4294967297);
 
 select substring('hello', 1, 4294967297);
@@ -82,7 +77,6 @@ SELECT SUBSTR('w3resource',4,3);
 
 #嵌套
 select substring('abc', cast(2 as unsigned int));
--- @bvt:issue
 #数据类型
 create table t1(f1 varchar(255));
 insert into t1 values ("123"),("456");
