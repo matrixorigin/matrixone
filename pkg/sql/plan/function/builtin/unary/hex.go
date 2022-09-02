@@ -44,7 +44,7 @@ func HexString(vectors []*vector.Vector, proc *process.Process) (*vector.Vector,
 		resultVector := vector.New(resultType)
 		for i := 0; i < vector.Length(inputVector); i++ {
 			if nulls.Contains(inputVector.Nsp, uint64(i)) {
-				nulls.Add(inputVector.Nsp, uint64(i))
+				nulls.Add(resultVector.Nsp, uint64(i))
 			}
 			inputValue := vector.GetStrColumn(inputVector).Get(int64(i))
 			ctx := HexEncodeString(inputValue)
@@ -75,7 +75,7 @@ func HexInt64(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, 
 		resultVector := vector.New(resultType)
 		for i := 0; i < vector.Length(inputVector); i++ {
 			if nulls.Contains(inputVector.Nsp, uint64(i)) {
-				nulls.Add(inputVector.Nsp, uint64(i))
+				nulls.Add(resultVector.Nsp, uint64(i))
 			}
 			inputValue := vector.GetColumn[int64](inputVector)[i]
 			ctx := HexEncodeInt64(inputValue)
