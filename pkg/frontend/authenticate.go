@@ -91,6 +91,10 @@ func (ti *TenantInfo) IsMoAdminRole() bool {
 	return ti.GetDefaultRole() == moAdminRoleName
 }
 
+func (ti *TenantInfo) IsAdminRole() bool {
+	return ti.GetDefaultRoleID() == moAdminRoleID || ti.GetDefaultRoleID() == accountAdminRoleID
+}
+
 func GetDefaultTenant() string {
 	return sysAccountName
 }
@@ -213,6 +217,7 @@ const (
 	objectTypeTable    = "table"
 	objectTypeFunction = "function"
 	objectTypeAccount  = "account"
+	objectTypeNone     = "none"
 
 	objectIDAll = 0 //denotes all objects in the object type
 )
@@ -352,6 +357,10 @@ func (pt PrivilegeType) String() string {
 		return "account all"
 	case PrivilegeTypeAccountOwnership:
 		return "account ownership"
+	case PrivilegeTypeUserOwnership:
+		return "user ownership"
+	case PrivilegeTypeRoleOwnership:
+		return "role ownership"
 	case PrivilegeTypeShowTables:
 		return "show tables"
 	case PrivilegeTypeCreateObject:
@@ -360,6 +369,10 @@ func (pt PrivilegeType) String() string {
 		return "drop object"
 	case PrivilegeTypeAlterObject:
 		return "alter object"
+	case PrivilegeTypeDatabaseAll:
+		return "database all"
+	case PrivilegeTypeDatabaseOwnership:
+		return "database ownership"
 	case PrivilegeTypeSelect:
 		return "select"
 	case PrivilegeTypeInsert:
@@ -374,6 +387,10 @@ func (pt PrivilegeType) String() string {
 		return "reference"
 	case PrivilegeTypeIndex:
 		return "create/alter/drop index"
+	case PrivilegeTypeTableAll:
+		return "table all"
+	case PrivilegeTypeTableOwnership:
+		return "table ownership"
 	case PrivilegeTypeExecute:
 		return "execute"
 	}
@@ -411,9 +428,13 @@ func (pt PrivilegeType) Scope() PrivilegeScope {
 	case PrivilegeTypeManageGrants:
 		return PrivilegeScopeAccount
 	case PrivilegeTypeAccountAll:
-		return PrivilegeScopeAccount | PrivilegeScopeDatabase | PrivilegeScopeTable
+		return PrivilegeScopeAccount
 	case PrivilegeTypeAccountOwnership:
-		return PrivilegeScopeAccount | PrivilegeScopeUser | PrivilegeScopeRole | PrivilegeScopeDatabase | PrivilegeScopeTable
+		return PrivilegeScopeAccount
+	case PrivilegeTypeUserOwnership:
+		return PrivilegeScopeUser
+	case PrivilegeTypeRoleOwnership:
+		return PrivilegeScopeRole
 	case PrivilegeTypeShowTables:
 		return PrivilegeScopeDatabase
 	case PrivilegeTypeCreateObject:
@@ -421,6 +442,10 @@ func (pt PrivilegeType) Scope() PrivilegeScope {
 	case PrivilegeTypeDropObject:
 		return PrivilegeScopeDatabase
 	case PrivilegeTypeAlterObject:
+		return PrivilegeScopeDatabase
+	case PrivilegeTypeDatabaseAll:
+		return PrivilegeScopeDatabase
+	case PrivilegeTypeDatabaseOwnership:
 		return PrivilegeScopeDatabase
 	case PrivilegeTypeSelect:
 		return PrivilegeScopeTable
@@ -435,6 +460,10 @@ func (pt PrivilegeType) Scope() PrivilegeScope {
 	case PrivilegeTypeReference:
 		return PrivilegeScopeTable
 	case PrivilegeTypeIndex:
+		return PrivilegeScopeTable
+	case PrivilegeTypeTableAll:
+		return PrivilegeScopeTable
+	case PrivilegeTypeTableOwnership:
 		return PrivilegeScopeTable
 	case PrivilegeTypeExecute:
 		return PrivilegeScopeTable
@@ -575,9 +604,11 @@ var (
 
 	getRoleOfUserFormat = `select r.role_id from  mo_catalog.mo_role r, mo_catalog.mo_user_grant ug where ug.role_id = r.role_id and ug.user_id = %d and r.role_name = "%s";`
 
-	getRoleIdOfUserIdFormat = `select role_id from mo_catalog.mo_user_grant where user_id = %d;`
+	getRoleIdOfUserIdFormat = `select role_id,with_grant_option from mo_catalog.mo_user_grant where user_id = %d;`
 
-	getInheritedRoleIdOfRoleIdFormat = `select granted_id from mo_catalog.mo_role_grant where grantee_id = %d;`
+	getInheritedRoleIdOfRoleIdFormat = `select granted_id,with_grant_option from mo_catalog.mo_role_grant where grantee_id = %d;`
+
+	checkRoleHasPrivilegeFormat = `select role_id,with_grant_option from mo_catalog.mo_role_privs where role_id = %d and obj_type = "%s" and obj_id = %d and privilege_id = %d`
 )
 
 func getSqlForCheckTenant(tenant string) string {
@@ -604,8 +635,12 @@ func getSqlForRoleIdOfUserId(userId int) string {
 	return fmt.Sprintf(getRoleIdOfUserIdFormat, userId)
 }
 
-func getSqlForInheritedRoleIdOfRoleId(roleId int) string {
+func getSqlForInheritedRoleIdOfRoleId(roleId int64) string {
 	return fmt.Sprintf(getInheritedRoleIdOfRoleIdFormat, roleId)
+}
+
+func getSqlForCheckRoleHasPrivilege(roleId int64, objType string, objId, privilegeId int64) string {
+	return fmt.Sprintf(checkRoleHasPrivilegeFormat, roleId, objType, objId, privilegeId)
 }
 
 type specialTag int
@@ -626,10 +661,23 @@ const (
 	privilegeKindNone                         //does not need any privilege
 )
 
+type withGrantOptionKind int
+
+const (
+	withGrantOptionKindNone      withGrantOptionKind = iota //no with_grant_option
+	withGrantOptionKindRole                                 //with_grant_option in mo_user_grant or mo_role_grant
+	withGrantOptionKindPrivilege                            //with_grant_option in mo_role_privs
+)
+
 type privilege struct {
-	Kind    privilegeKind
-	entries []privilegeEntry
-	special specialTag
+	kind privilegeKind
+	//account: the privilege can be defined before constructing the plan.
+	//database: (do not need the database_id) the privilege can be defined before constructing the plan.
+	//table: need table id. the privilege can be defined after constructing the plan.
+	//function: need function id ?
+	objectType string
+	entries    []privilegeEntry
+	special    specialTag
 }
 
 // privilegeEntry denotes the entry of the privilege that appears in the table mo_role_privs
@@ -761,10 +809,11 @@ var (
 
 // determinePrivilegeSetOfStatement decides the privileges that the statement needs before running it.
 // That is the Set P for the privilege Set .
-func determinePrivilegeSetOfStatement(stmt tree.Statement) (privilege, error) {
-	typs := make([]PrivilegeType, 5)
+func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
+	typs := make([]PrivilegeType, 0, 5)
 	kind := privilegeKindGeneral
 	special := specialTagNone
+	objectType := objectTypeAccount
 	switch stmt.(type) {
 	case *tree.CreateAccount:
 		typs = append(typs, PrivilegeTypeCreateAccount)
@@ -802,20 +851,28 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) (privilege, error) {
 	case *tree.Use:
 		kind = privilegeKindNone
 	case *tree.ShowTables, *tree.ShowCreateTable, *tree.ShowColumns, *tree.ShowCreateView:
+		objectType = objectTypeDatabase
 		typs = append(typs, PrivilegeTypeShowTables, PrivilegeTypeDatabaseAll, PrivilegeTypeDatabaseOwnership)
 	case *tree.CreateTable, *tree.CreateView:
+		objectType = objectTypeDatabase
 		typs = append(typs, PrivilegeTypeCreateObject, PrivilegeTypeDatabaseAll, PrivilegeTypeDatabaseOwnership)
 	case *tree.DropTable, *tree.DropView:
+		objectType = objectTypeDatabase
 		typs = append(typs, PrivilegeTypeDropObject, PrivilegeTypeDatabaseAll, PrivilegeTypeDatabaseOwnership)
 	case *tree.Select:
+		objectType = objectTypeTable
 		typs = append(typs, PrivilegeTypeSelect, PrivilegeTypeTableAll, PrivilegeTypeTableOwnership)
 	case *tree.Insert, *tree.Load:
+		objectType = objectTypeTable
 		typs = append(typs, PrivilegeTypeInsert, PrivilegeTypeTableAll, PrivilegeTypeTableOwnership)
 	case *tree.Update:
+		objectType = objectTypeTable
 		typs = append(typs, PrivilegeTypeUpdate, PrivilegeTypeTableAll, PrivilegeTypeTableOwnership)
 	case *tree.Delete:
+		objectType = objectTypeTable
 		typs = append(typs, PrivilegeTypeDelete, PrivilegeTypeTableAll, PrivilegeTypeTableOwnership)
 	case *tree.CreateIndex, *tree.DropIndex, *tree.ShowIndex:
+		objectType = objectTypeTable
 		typs = append(typs, PrivilegeTypeIndex)
 	case *tree.ShowProcessList, *tree.ShowErrors, *tree.ShowWarnings, *tree.ShowVariables, *tree.ShowStatus:
 		kind = privilegeKindNone
@@ -828,14 +885,14 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) (privilege, error) {
 	case *tree.PrepareStmt, *tree.PrepareString, *tree.Deallocate:
 		kind = privilegeKindNone
 	default:
-		return privilege{}, moerr.NewInternalError("does not have the privilege definition of the statement %s", stmt)
+		panic(fmt.Sprintf("does not have the privilege definition of the statement %s", stmt))
 	}
 
 	entries := make([]privilegeEntry, len(typs))
 	for i, typ := range typs {
 		entries[i] = privilegeEntriesMap[typ]
 	}
-	return privilege{kind, entries, special}, nil
+	return &privilege{kind, objectType, entries, special}
 }
 
 // determineRoleSetOfUser decides the roles that the user has.
@@ -846,15 +903,36 @@ func determineRoleSetOfUser(tenant *TenantInfo) TenantInfo {
 
 // determineRoleSetSatisfyPrivilegeSet decides the privileges of role set can satisfy the requirement of the privilege set.
 // The algorithm 2.
-func determineRoleSetSatisfyPrivilegeSet() (bool, error) {
-	return true, nil
+func determineRoleSetSatisfyPrivilegeSet(ctx context.Context, bh BackgroundExec, roleIds []int64, entries []privilegeEntry) (bool, error) {
+	var rsset []ExecResult
+	for _, roleId := range roleIds {
+		for _, entry := range entries {
+			sqlForCheckRoleHasPrivilege := getSqlForCheckRoleHasPrivilege(roleId, entry.objType, int64(entry.objId), int64(entry.privilegeId))
+			err := bh.Exec(ctx, sqlForCheckRoleHasPrivilege)
+			if err != nil {
+				return false, err
+			}
+			results := bh.GetExecResultSet()
+			rsset, err = convertIntoResultSet(results)
+			if err != nil {
+				return false, err
+			}
+
+			if len(rsset) != 0 && rsset[0].GetRowCount() != 0 {
+				return true, nil
+			}
+		}
+
+	}
+	return false, nil
 }
 
 // determinePrivilegesOfUserSatisfyPrivilegeSet decides the privileges of user can satisfy the requirement of the privilege set
-// The algorithm 3.
-func determinePrivilegesOfUserSatisfyPrivilegeSet(ctx context.Context, pu *config.ParameterUnit, tenant *TenantInfo, priv privilege) (bool, error) {
-	//TODO: check the special case that the user has satisfied.
-	var setR btree.Set[int64]
+// The algorithm 1.
+func determinePrivilegesOfUserSatisfyPrivilegeSet(ctx context.Context, ses *Session, priv *privilege) (bool, error) {
+	setR := &btree.Set[int64]{}
+	tenant := ses.GetTenantInfo()
+	pu := ses.Pu
 
 	//step 1: The Set R1 {default role id}
 	setR.Insert((int64)(tenant.GetDefaultRoleID()))
@@ -877,31 +955,139 @@ func determinePrivilegesOfUserSatisfyPrivilegeSet(ctx context.Context, pu *confi
 		return false, err
 	}
 
-	for i := uint64(0); i < rsset[0].GetRowCount(); i++ {
-		roleId, err := rsset[0].GetInt64(i, 0)
-		if err != nil {
-			return false, err
+	if len(rsset) != 0 && rsset[0].GetRowCount() != 0 {
+		for i := uint64(0); i < rsset[0].GetRowCount(); i++ {
+			roleId, err := rsset[0].GetInt64(i, 0)
+			if err != nil {
+				return false, err
+			}
+			setR.Insert(roleId)
 		}
-		setR.Insert(roleId)
 	}
+
+	setVisited := &btree.Set[int64]{}
+	setRList := make([]int64, 0, setR.Len())
+	//init setVisited = setR
+	setR.Scan(func(roleId int64) bool {
+		setVisited.Insert(roleId)
+		setRList = append(setRList, roleId)
+		return true
+	})
 	//TODO: call the algorithm 2.
+	//If the result of the algorithm 2 is true, Then return true;
+	yes, err := determineRoleSetSatisfyPrivilegeSet(ctx, bh, setRList, priv.entries)
+	if err != nil {
+		return false, err
+	}
+	if yes {
+		return true, nil
+	}
 	/*
-		step 3: !!!NOTE all roleid in setR has been processed with the algorithm 2.
-		setH is the set of all roleid that has been processed.
-		For roleA in setR {
-			Find the peer roleB in the table mo_role_grant(granted_id,grantee_id) with grantee_id = roleA;
-			Add roleB into setR';
+		step 3: !!!NOTE all roleid in setR has been processed by the algorithm 2.
+		setVisited is the set of all roleid that has been processed.
+		setVisited = setR;
+		For {
+			For roleA in setR {
+				Find the peer roleB in the table mo_role_grant(granted_id,grantee_id) with grantee_id = roleA;
+				If roleB is not in setVisited, Then add roleB into setR';
+					add roleB into setVisited;
+			}
 
 			If setR' is empty, Then return false;
 			//TODO: call the algorithm 2.
 			If the result of the algorithm 2 is true, Then return true;
-
-			setH = setH + setR;
-			setR = setR' - setH;
-			If setR is empty, Then return false;
+			setR = setR';
 			setR' = {};
 		}
 	*/
+	for {
+		setRPlus := make([]int64, 0, len(setRList))
+		quit := false
+		select {
+		case <-ctx.Done():
+			quit = true
+		default:
+		}
+		if quit {
+			break
+		}
+
+		//get roleB of roleA
+		for _, roleA := range setRList {
+			sqlForInheritedRoleIdOfRoleId := getSqlForInheritedRoleIdOfRoleId(roleA)
+			err = bh.Exec(ctx, sqlForInheritedRoleIdOfRoleId)
+			if err != nil {
+				return false, moerr.NewInternalError("get inherited role id of the role id. error:%v", err)
+			}
+
+			results = bh.GetExecResultSet()
+			rsset, err = convertIntoResultSet(results)
+			if err != nil {
+				return false, err
+			}
+
+			if len(rsset) != 0 && rsset[0].GetRowCount() != 0 {
+				for i := uint64(0); i < rsset[0].GetRowCount(); i++ {
+					roleB, err := rsset[0].GetInt64(i, 0)
+					if err != nil {
+						return false, err
+					}
+
+					if !setVisited.Contains(roleB) {
+						setVisited.Insert(roleB)
+						setRPlus = append(setRPlus, roleB)
+					}
+				}
+			}
+		}
+
+		//no more roleB, it is done
+		if len(setRPlus) == 0 {
+			return false, nil
+		}
+
+		//TODO: call the algorithm 2.
+		//If the result of the algorithm 2 is true, Then return true;
+		yes, err := determineRoleSetSatisfyPrivilegeSet(ctx, bh, setRPlus, priv.entries)
+		if err != nil {
+			return false, err
+		}
+		if yes {
+			return true, nil
+		}
+		setRList = setRPlus
+	}
+
+	return false, nil
+}
+
+// authenticatePrivilege decides the user has the privilege of executing the statement.
+func authenticatePrivilege(ctx context.Context, ses *Session, priv *privilege, stmt tree.Statement) (bool, error) {
+	switch priv.kind {
+	case privilegeKindInherit: //for the GrantRole
+		//TODO: need databaseid for object_type = database
+		//TODO: need tableid for object_type = table
+		//TODO: check with_grant_option
+		//Check with_grant_option first.
+		//TODO:
+		fallthrough
+	case privilegeKindGeneral:
+		//TODO: need databaseid for object_type = database
+		//TODO: need tableid for object_type = table
+		ok, err := determinePrivilegesOfUserSatisfyPrivilegeSet(ctx, ses, priv)
+		if err != nil {
+			return false, err
+		}
+		if ok {
+			return ok, nil
+		}
+
+	case privilegeKindSpecial: //for the Grant/Revoke Privilege
+		//TODO: check MOADMIN / ACCOUNTADMIN, with_grant_option, owner of object
+	case privilegeKindNone:
+		return true, nil
+	}
+
 	return false, nil
 }
 

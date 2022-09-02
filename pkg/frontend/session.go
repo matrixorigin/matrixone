@@ -114,6 +114,8 @@ type Session struct {
 	uuid uuid.UUID
 
 	timeZone *time.Location
+
+	priv *privilege
 }
 
 func NewSession(proto Protocol, gm *guest.Mmu, mp *mempool.Mempool, PU *config.ParameterUnit, gSysVars *GlobalSystemVariables) *Session {

@@ -470,3 +470,78 @@ func Test_initRole(t *testing.T) {
 		convey.So(err, convey.ShouldBeNil)
 	})
 }
+
+func Test_determinePrivilegeSetOfStatement(t *testing.T) {
+	convey.Convey("privilege of statement", t, func() {
+		type arg struct {
+			stmt tree.Statement
+			priv privilege
+		}
+
+		args := []arg{
+			{stmt: &tree.CreateAccount{}},
+			{stmt: &tree.DropAccount{}},
+			{stmt: &tree.AlterAccount{}},
+			{stmt: &tree.CreateUser{}},
+			{stmt: &tree.DropUser{}},
+			{stmt: &tree.AlterUser{}},
+			{stmt: &tree.CreateRole{}},
+			{stmt: &tree.DropRole{}},
+			{stmt: &tree.GrantRole{}},
+			{stmt: &tree.RevokeRole{}},
+			{stmt: &tree.GrantPrivilege{}},
+			{stmt: &tree.RevokePrivilege{}},
+			{stmt: &tree.CreateDatabase{}},
+			{stmt: &tree.DropDatabase{}},
+			{stmt: &tree.ShowDatabases{}},
+			{stmt: &tree.ShowCreateDatabase{}},
+			{stmt: &tree.Use{}},
+			{stmt: &tree.ShowTables{}},
+			{stmt: &tree.ShowCreateTable{}},
+			{stmt: &tree.ShowColumns{}},
+			{stmt: &tree.ShowCreateView{}},
+			{stmt: &tree.CreateTable{}},
+			{stmt: &tree.CreateView{}},
+			{stmt: &tree.DropTable{}},
+			{stmt: &tree.DropView{}},
+			{stmt: &tree.Select{}},
+			{stmt: &tree.Insert{}},
+			{stmt: &tree.Load{}},
+			{stmt: &tree.Update{}},
+			{stmt: &tree.Delete{}},
+			{stmt: &tree.CreateIndex{}},
+			{stmt: &tree.DropIndex{}},
+			{stmt: &tree.ShowIndex{}},
+			{stmt: &tree.ShowProcessList{}},
+			{stmt: &tree.ShowErrors{}},
+			{stmt: &tree.ShowWarnings{}},
+			{stmt: &tree.ShowVariables{}},
+			{stmt: &tree.ShowStatus{}},
+			{stmt: &tree.ExplainFor{}},
+			{stmt: &tree.ExplainAnalyze{}},
+			{stmt: &tree.ExplainStmt{}},
+			{stmt: &tree.BeginTransaction{}},
+			{stmt: &tree.CommitTransaction{}},
+			{stmt: &tree.RollbackTransaction{}},
+			{stmt: &tree.SetVar{}},
+			{stmt: &tree.SetDefaultRole{}},
+			{stmt: &tree.SetRole{}},
+			{stmt: &tree.SetPassword{}},
+			{stmt: &tree.PrepareStmt{}},
+			{stmt: &tree.PrepareString{}},
+			{stmt: &tree.Deallocate{}},
+		}
+
+		var err error
+		for i := 0; i < len(args); i++ {
+			args[i].priv, err = determinePrivilegeSetOfStatement(args[i].stmt)
+			convey.So(err, convey.ShouldBeNil)
+		}
+		for i := 0; i < len(args); i++ {
+			var priv privilege
+			priv, err = determinePrivilegeSetOfStatement(args[i].stmt)
+			convey.So(err, convey.ShouldBeNil)
+			convey.So(priv, convey.ShouldResemble, args[i].priv)
+		}
+	})
+}

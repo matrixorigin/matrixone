@@ -1770,6 +1770,10 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			}
 		}
 
+		if ses.GetTenantInfo() != nil {
+			ses.priv = determinePrivilegeSetOfStatement(stmt)
+		}
+
 		//check transaction states
 		switch stmt.(type) {
 		case *tree.BeginTransaction:
