@@ -20,6 +20,7 @@ import (
 	"io"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -33,9 +34,11 @@ func testMVCC(
 	m.dump(io.Discard)
 
 	// time
-	now := Timestamp{
-		PhysicalTime: 1,
-		LogicalTime:  0,
+	now := Time{
+		Timestamp: timestamp.Timestamp{
+			PhysicalTime: 1,
+			LogicalTime:  0,
+		},
 	}
 
 	// tx
@@ -49,7 +52,7 @@ func testMVCC(
 	assert.Equal(t, tx1, m.Values[0].BornTx)
 	assert.Equal(t, now, m.Values[0].BornTime)
 	assert.Nil(t, m.Values[0].LockTx)
-	assert.True(t, m.Values[0].LockTime.IsEmpty())
+	assert.True(t, m.Values[0].LockTime.IsZero())
 
 	err = m.Insert(tx2, now, 2)
 	assert.Nil(t, err)
@@ -57,7 +60,7 @@ func testMVCC(
 	assert.Equal(t, tx2, m.Values[1].BornTx)
 	assert.Equal(t, now, m.Values[1].BornTime)
 	assert.Nil(t, m.Values[1].LockTx)
-	assert.True(t, m.Values[1].LockTime.IsEmpty())
+	assert.True(t, m.Values[1].LockTime.IsZero())
 
 	// not readable now
 	res, err := m.Read(tx1, now)
@@ -118,7 +121,7 @@ func testMVCC(
 	assert.Equal(t, tx1, m.Values[2].BornTx)
 	assert.Equal(t, now, m.Values[2].BornTime)
 	assert.Nil(t, m.Values[2].LockTx)
-	assert.True(t, m.Values[2].LockTime.IsEmpty())
+	assert.True(t, m.Values[2].LockTime.IsZero())
 
 	err = m.Insert(tx2, now, 4)
 	assert.Nil(t, err)
@@ -126,7 +129,7 @@ func testMVCC(
 	assert.Equal(t, tx2, m.Values[3].BornTx)
 	assert.Equal(t, now, m.Values[3].BornTime)
 	assert.Nil(t, m.Values[3].LockTx)
-	assert.True(t, m.Values[3].LockTime.IsEmpty())
+	assert.True(t, m.Values[3].LockTime.IsZero())
 
 	now = now.Next()
 
@@ -139,7 +142,7 @@ func testMVCC(
 	assert.Equal(t, tx1, m.Values[4].BornTx)
 	assert.Equal(t, now, m.Values[4].BornTime)
 	assert.Nil(t, m.Values[4].LockTx)
-	assert.True(t, m.Values[4].LockTime.IsEmpty())
+	assert.True(t, m.Values[4].LockTime.IsZero())
 
 	// commit tx1
 	tx1.State.Store(Committed)
