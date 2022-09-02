@@ -80,7 +80,7 @@ func TestHex(t *testing.T) {
 		})
 	}
 
-	// procs = testutil.NewProc()
+	procs = testutil.NewProc()
 	cases2 := []struct {
 		name     string
 		proc     *process.Process
@@ -98,8 +98,19 @@ func TestHex(t *testing.T) {
 			name:     "Number test",
 			proc:     procs,
 			inputnum: []int64{231323423423421},
-			expected: []string{"FF"},
+			expected: []string{"D2632E7B3BBD"},
 			isScalar: false,
+		}, {
+			name:     "Number test",
+			proc:     procs,
+			inputnum: []int64{123, 234, 345},
+			expected: []string{"7B", "EA", "159"},
+			isScalar: false,
+		}, {
+			name:     "Null",
+			proc:     procs,
+			expected: []string(nil),
+			isScalar: true,
 		},
 	}
 	for _, c := range cases2 {
