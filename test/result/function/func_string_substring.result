@@ -46,7 +46,6 @@ SUBSTR('abcdefg',1,-1)
 select substring('hello', 2, -1);
 substring('hello', 2, -1)
 
-
 select substring('hello', -1, 1);
 substring('hello', -1, 1)
 o
