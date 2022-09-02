@@ -89,26 +89,44 @@ var (
 	}
 )
 
+func testVarcharOne(idx int, t *testing.T) {
+	kase := kases[idx]
+	ph, err := types.ParseStringToPath(kase.path)
+	require.Nil(t, err)
+	q, err := qVarcharOne([]byte(kase.json), &ph)
+	require.Nil(t, err)
+	require.JSONEq(t, kase.want, string(q))
+}
+
+func testJsonOne(idx int, t *testing.T) {
+	kase := kases[idx]
+	byteJson, err := types.ParseStringToByteJson(kase.json)
+	require.Nil(t, err)
+	json, err := byteJson.Marshal()
+	require.Nil(t, err)
+	ph, err := types.ParseStringToPath(kase.path)
+	require.Nil(t, err)
+	q, err := qJsonOne(json, &ph)
+	require.Nil(t, err)
+	require.JSONEq(t, kase.want, string(q))
+}
+
+func TestQVarcharOne(t *testing.T) {
+	testVarcharOne(0, t)
+}
+
 func TestQVarchar(t *testing.T) {
-	for _, kase := range kases {
-		ph, err := types.ParseStringToPath(kase.path)
-		require.Nil(t, err)
-		q, err := qVarcharOne([]byte(kase.json), &ph)
-		require.Nil(t, err)
-		require.JSONEq(t, kase.want, string(q))
+	for idx := range kases {
+		testVarcharOne(idx, t)
 	}
 }
 
+func TestQJsonOne(t *testing.T) {
+	testJsonOne(0, t)
+}
+
 func TestQJson(t *testing.T) {
-	for _, kase := range kases {
-		byteJson, err := types.ParseStringToByteJson(kase.json)
-		require.Nil(t, err)
-		json, err := byteJson.Marshal()
-		require.Nil(t, err)
-		ph, err := types.ParseStringToPath(kase.path)
-		require.Nil(t, err)
-		q, err := qJsonOne(json, &ph)
-		require.Nil(t, err)
-		require.JSONEq(t, kase.want, string(q))
+	for idx := range kases {
+		testJsonOne(idx, t)
 	}
 }
