@@ -70,11 +70,11 @@ func TestTransaction(t *testing.T) {
 	txn.writes = append(txn.writes, make([]Entry, 0, 1))
 	ro := txn.ReadOnly()
 	require.Equal(t, false, ro)
-	err := txn.WriteBatch(INSERT, "test", "test", new(batch.Batch))
+	err := txn.WriteBatch(INSERT, 0, 0, "test", "test", new(batch.Batch))
 	require.NoError(t, err)
 	txn.IncStatementId()
 	txn.RegisterFile("test")
-	err = txn.WriteFile(DELETE, "test", "test", "test")
+	err = txn.WriteFile(DELETE, 0, 0, "test", "test", "test")
 	require.NoError(t, err)
 }
 

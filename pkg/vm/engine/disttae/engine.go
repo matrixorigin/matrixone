@@ -44,7 +44,7 @@ func (e *Engine) Create(ctx context.Context, name string, op client.TxnOperator)
 	if err != nil {
 		return err
 	}
-	if err := txn.WriteBatch(INSERT, MO_CATALOG, MO_DATABASE, generateCreateDatabaseTuple(name)); err != nil {
+	if err := txn.WriteBatch(INSERT, MO_CATALOG_ID, MO_DATABASE_ID, MO_CATALOG, MO_DATABASE, generateCreateDatabaseTuple(name)); err != nil {
 		return err
 	}
 	return nil
@@ -65,7 +65,7 @@ func (e *Engine) Delete(ctx context.Context, name string, op client.TxnOperator)
 	if err != nil {
 		return err
 	}
-	if err := txn.WriteBatch(DELETE, MO_CATALOG, MO_DATABASE, generateDropDatabaseTuple(name)); err != nil {
+	if err := txn.WriteBatch(DELETE, MO_CATALOG_ID, MO_DATABASE_ID, MO_CATALOG, MO_DATABASE, generateDropDatabaseTuple(name)); err != nil {
 		return err
 	}
 	return nil

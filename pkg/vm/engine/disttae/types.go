@@ -36,6 +36,14 @@ const (
 	MO_COLUMNS  = "mo_columns"
 )
 
+const (
+	// default database id for catalog
+	MO_CATALOG_ID  = 0
+	MO_DATABASE_ID = 1
+	MO_TABLES_ID   = 2
+	MO_COLUMNS_ID  = 3
+)
+
 type Reader interface {
 }
 
