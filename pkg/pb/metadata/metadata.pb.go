@@ -403,7 +403,7 @@ func (m *LogStore) GetShards() []LogShard {
 
 // CNStore cn store metadata
 type CNStore struct {
-	// UUID DNStore uuid id
+	// UUID CNStore uuid id
 	UUID string `protobuf:"bytes,1,opt,name=UUID,proto3" json:"UUID,omitempty"`
 	// Role CN role
 	Role                 CNRole   `protobuf:"varint,2,opt,name=Role,proto3,enum=metadata.CNRole" json:"Role,omitempty"`

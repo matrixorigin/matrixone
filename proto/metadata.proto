@@ -86,7 +86,7 @@ enum CNRole {
 
 // CNStore cn store metadata
 message CNStore {
-  // UUID DNStore uuid id
+  // UUID CNStore uuid id
   string UUID = 1;
   // Role CN role
   CNRole Role  = 2;
