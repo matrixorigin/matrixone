@@ -31,11 +31,13 @@ func (txn *Transaction) IncStatementId() {
 
 // Write used to write data to the transaction buffer
 // insert/delete/update all use this api
-func (txn *Transaction) WriteBatch(typ int, databaseName, tableName string, bat *batch.Batch) error {
+func (txn *Transaction) WriteBatch(typ int, databaseId, tableId uint64, databaseName, tableName string, bat *batch.Batch) error {
 	txn.readOnly = true
 	txn.writes[txn.statementId] = append(txn.writes[txn.statementId], Entry{
 		typ:          typ,
 		bat:          bat,
+		tableId:      tableId,
+		databaseId:   databaseId,
 		tableName:    tableName,
 		databaseName: databaseName,
 	})
@@ -49,10 +51,12 @@ func (txn *Transaction) RegisterFile(fileName string) {
 
 // WriteFile used to add a s3 file information to the transaction buffer
 // insert/delete/update all use this api
-func (txn *Transaction) WriteFile(typ int, databaseName, tableName string, fileName string) error {
+func (txn *Transaction) WriteFile(typ int, databaseId, tableId uint64, databaseName, tableName string, fileName string) error {
 	txn.readOnly = true
 	txn.writes[txn.statementId] = append(txn.writes[txn.statementId], Entry{
 		typ:          typ,
+		tableId:      tableId,
+		databaseId:   databaseId,
 		tableName:    tableName,
 		databaseName: databaseName,
 		fileName:     fileName,
