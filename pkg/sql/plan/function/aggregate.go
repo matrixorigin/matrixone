@@ -697,13 +697,17 @@ var aggregates = map[int]Functions{
 				if inputs[0] == types.T_any {
 					return 0, nil
 				}
-				if !operator.IsNumeric(inputs[0]) {
+				if !operator.IsNumeric(inputs[0]) && !operator.IsDecimal(inputs[0]) {
 					return wrongFuncParamForAgg, nil
 				}
-				_, err := aggregate.ReturnType(aggregate.Variance, types.Type{Oid: inputs[0]})
-				if err == nil {
-					return 0, nil
+				t, err := aggregate.ReturnType(aggregate.Variance, types.Type{Oid: inputs[0]})
+				if err != nil {
+					return wrongFunctionParameters, nil
 				}
+				if t.Oid == types.T_decimal128 {
+					return 1, nil
+				}
+				return 0, nil
 			}
 			return wrongFunctionParameters, nil
 		},
@@ -715,6 +719,13 @@ var aggregates = map[int]Functions{
 				ReturnTyp:     types.T_float64,
 				AggregateInfo: aggregate.Variance,
 			},
+			{
+				Index:         1,
+				Flag:          plan.Function_AGG,
+				Layout:        STANDARD_FUNCTION,
+				ReturnTyp:     types.T_decimal128,
+				AggregateInfo: aggregate.Variance,
+			},
 		},
 	},
 	STDDEV_POP: {
@@ -724,13 +735,17 @@ var aggregates = map[int]Functions{
 				if inputs[0] == types.T_any {
 					return 0, nil
 				}
-				if !operator.IsNumeric(inputs[0]) {
+				if !operator.IsNumeric(inputs[0]) && !operator.IsDecimal(inputs[0]) {
 					return wrongFuncParamForAgg, nil
 				}
-				_, err := aggregate.ReturnType(aggregate.StdDevPop, types.Type{Oid: inputs[0]})
-				if err == nil {
-					return 0, nil
+				t, err := aggregate.ReturnType(aggregate.StdDevPop, types.Type{Oid: inputs[0]})
+				if err != nil {
+					return wrongFunctionParameters, nil
 				}
+				if t.Oid == types.T_decimal128 {
+					return 1, nil
+				}
+				return 0, nil
 			}
 			return wrongFunctionParameters, nil
 		},
@@ -740,6 +755,13 @@ var aggregates = map[int]Functions{
 				Flag:          plan.Function_AGG,
 				Layout:        STANDARD_FUNCTION,
 				ReturnTyp:     types.T_float64,
+				AggregateInfo: aggregate.StdDevPop,
+			},
+			{
+				Index:         1,
+				Flag:          plan.Function_AGG,
+				Layout:        STANDARD_FUNCTION,
+				ReturnTyp:     types.T_decimal128,
 				AggregateInfo: aggregate.StdDevPop,
 			},
 		},

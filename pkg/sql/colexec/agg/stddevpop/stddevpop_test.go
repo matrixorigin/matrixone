@@ -133,13 +133,14 @@ func TestDist(t *testing.T) {
 
 func TestDecimalDist(t *testing.T) {
 	inputType := types.New(types.T_decimal64, 0, 0, 0)
-	sdp1 := New2()
-	sdp2 := New2()
-	sdp3 := New2()
+	outputType := types.New(types.T_decimal128, 0, 0, 0)
+	sdp1 := NewStdD64()
+	sdp2 := NewStdD64()
+	sdp3 := NewStdD64()
 	m := mheap.New(guest.New(1<<30, host.New(1<<30)))
 	vec := testutil.NewVector(Rows, inputType, m, false, nil)
 	{
-		agg := agg.NewUnaryDistAgg(true, inputType, types.New(types.T_float64, 0, 0, 0), sdp1.Grows, sdp1.Eval, sdp1.Merge, sdp1.Fill)
+		agg := agg.NewUnaryDistAgg(true, inputType, outputType, sdp1.Grows, sdp1.Eval, sdp1.Merge, sdp1.Fill)
 		err := agg.Grows(1, m)
 		require.NoError(t, err)
 		for i := 0; i < Rows; i++ {
@@ -147,17 +148,17 @@ func TestDecimalDist(t *testing.T) {
 		}
 		v, err := agg.Eval(m)
 		require.NoError(t, err)
-		require.Equal(t, []float64{2.8722813232690143}, vector.GetColumn[float64](v))
+		require.Equal(t, []types.Decimal128{types.Decimal128_FromFloat64(2.8722813232690143)}, vector.GetColumn[types.Decimal128](v))
 		v.Free(m)
 	}
 	{
-		agg0 := agg.NewUnaryDistAgg(true, inputType, types.New(types.T_float64, 0, 0, 0), sdp2.Grows, sdp2.Eval, sdp2.Merge, sdp2.Fill)
+		agg0 := agg.NewUnaryDistAgg(true, inputType, outputType, sdp2.Grows, sdp2.Eval, sdp2.Merge, sdp2.Fill)
 		err := agg0.Grows(1, m)
 		require.NoError(t, err)
 		for i := 0; i < Rows; i++ {
 			agg0.Fill(0, int64(i), 1, []*vector.Vector{vec})
 		}
-		agg1 := agg.NewUnaryDistAgg(true, inputType, types.New(types.T_float64, 0, 0, 0), sdp3.Grows, sdp3.Eval, sdp3.Merge, sdp3.Fill)
+		agg1 := agg.NewUnaryDistAgg(true, inputType, outputType, sdp3.Grows, sdp3.Eval, sdp3.Merge, sdp3.Fill)
 		err = agg1.Grows(1, m)
 		require.NoError(t, err)
 		for i := 0; i < Rows; i++ {
@@ -167,13 +168,13 @@ func TestDecimalDist(t *testing.T) {
 		{
 			v, err := agg0.Eval(m)
 			require.NoError(t, err)
-			require.Equal(t, []float64{2.8722813232690143}, vector.GetColumn[float64](v))
+			require.Equal(t, []types.Decimal128{types.Decimal128_FromFloat64(2.8722813232690143)}, vector.GetColumn[types.Decimal128](v))
 			v.Free(m)
 		}
 		{
 			v, err := agg1.Eval(m)
 			require.NoError(t, err)
-			require.Equal(t, []float64{2.8722813232690143}, vector.GetColumn[float64](v))
+			require.Equal(t, []types.Decimal128{types.Decimal128_FromFloat64(2.8722813232690143)}, vector.GetColumn[types.Decimal128](v))
 			v.Free(m)
 		}
 	}

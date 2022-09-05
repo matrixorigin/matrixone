@@ -632,6 +632,27 @@ func doCast(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) 
 		}
 	}
 
+	if lv.Typ.Oid == types.T_bool && IsNumeric(rv.Typ.Oid) {
+		switch rv.Typ.Oid {
+		case types.T_int8:
+			return CastBoolToNumeric[int8](lv, rv, proc)
+		case types.T_int16:
+			return CastBoolToNumeric[int16](lv, rv, proc)
+		case types.T_int32:
+			return CastBoolToNumeric[int32](lv, rv, proc)
+		case types.T_int64:
+			return CastBoolToNumeric[int64](lv, rv, proc)
+		case types.T_uint8:
+			return CastBoolToNumeric[uint8](lv, rv, proc)
+		case types.T_uint16:
+			return CastBoolToNumeric[uint16](lv, rv, proc)
+		case types.T_uint32:
+			return CastBoolToNumeric[uint32](lv, rv, proc)
+		case types.T_uint64:
+			return CastBoolToNumeric[uint64](lv, rv, proc)
+		}
+	}
+
 	if isString(lv.Typ.Oid) && rv.Typ.Oid == types.T_bool {
 		return CastStringToBool(lv, rv, proc)
 	}
@@ -2410,6 +2431,33 @@ func CastNumValToBool[T constraints.Integer | constraints.Float](lv, rv *vector.
 	rs := types.DecodeBoolSlice(vec.Data)
 	rs = rs[:len(lvs)]
 	if _, err := binary.NumericToBool(lvs, rs); err != nil {
+		return nil, err
+	}
+	nulls.Set(vec.Nsp, lv.Nsp)
+	vector.SetCol(vec, rs)
+	return vec, nil
+}
+
+func CastBoolToNumeric[T constraints.Integer](lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	rtl := 8
+	lvs := vector.MustTCols[bool](lv)
+	if lv.IsScalar() {
+		vec := proc.AllocScalarVector(rv.Typ)
+		rs := make([]T, 1)
+		if _, err := binary.BoolToNumeric(lvs, rs); err != nil {
+			return nil, err
+		}
+		nulls.Set(vec.Nsp, lv.Nsp)
+		vector.SetCol(vec, rs)
+		return vec, nil
+	}
+	vec, err := proc.AllocVector(rv.Typ, int64(len(lvs)*rtl))
+	if err != nil {
+		return nil, err
+	}
+	rs := types.DecodeFixedSlice[T](vec.Data, rv.Typ.Oid.TypeLen())
+	rs = rs[:len(lvs)]
+	if _, err := binary.BoolToNumeric(lvs, rs); err != nil {
 		return nil, err
 	}
 	nulls.Set(vec.Nsp, lv.Nsp)
