@@ -12,6 +12,9 @@ service-addresses = [
     "2"
 ]
 
+[cn]
+uuid = "cn1"
+
 [cn.Engine]
 type = "tae"
 
