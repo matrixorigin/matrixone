@@ -48,6 +48,29 @@ func TestReadBasic(t *testing.T) {
 	checkReadResponses(t, resp, "")
 }
 
+func TestReadWithDNShardNotMatch(t *testing.T) {
+	sender := NewTestSender()
+	defer func() {
+		assert.NoError(t, sender.Close())
+	}()
+	sender.setFilter(func(req *txn.TxnRequest) bool {
+		req.CNRequest.Target.ReplicaID = 0
+		return true
+	})
+
+	s := NewTestTxnService(t, 1, sender, NewTestClock(0))
+	assert.NoError(t, s.Start())
+	defer func() {
+		assert.NoError(t, s.Close(false))
+	}()
+
+	sender.AddTxnService(s)
+
+	rTxn := NewTestTxn(1, 1)
+	resp := readTestData(t, sender, 1, rTxn, 1)
+	checkResponses(t, resp, newDNShardFoundError())
+}
+
 func TestReadWithSelfWrite(t *testing.T) {
 	sender := NewTestSender()
 	defer func() {
@@ -394,6 +417,28 @@ func TestWriteBasic(t *testing.T) {
 	assert.Equal(t, GetTestValue(1, wTxn), v)
 }
 
+func TestWriteWithDNShardNotMatch(t *testing.T) {
+	sender := NewTestSender()
+	defer func() {
+		assert.NoError(t, sender.Close())
+	}()
+	sender.setFilter(func(req *txn.TxnRequest) bool {
+		req.CNRequest.Target.ReplicaID = 0
+		return true
+	})
+
+	s := NewTestTxnService(t, 1, sender, NewTestClock(0)).(*service)
+	assert.NoError(t, s.Start())
+	defer func() {
+		assert.NoError(t, s.Close(false))
+	}()
+
+	sender.AddTxnService(s)
+
+	wTxn := NewTestTxn(1, 1)
+	checkResponses(t, writeTestData(t, sender, 1, wTxn, 1), newDNShardFoundError())
+}
+
 func TestWriteWithWWConflict(t *testing.T) {
 	sender := NewTestSender()
 	defer func() {
@@ -449,6 +494,34 @@ func TestCommitWithSingleDNShard(t *testing.T) {
 		assert.Equal(t, [][]byte{GetTestValue(i, wTxn)}, values)
 		assert.Equal(t, []timestamp.Timestamp{NewTestTimestamp(2)}, timestamps)
 	}
+}
+
+func TestCommitWithDNShardNotMatch(t *testing.T) {
+	sender := NewTestSender()
+	defer func() {
+		assert.NoError(t, sender.Close())
+	}()
+	sender.setFilter(func(req *txn.TxnRequest) bool {
+		if req.CommitRequest != nil {
+			req.Txn.DNShards[0].ReplicaID = 0
+		}
+		return true
+	})
+
+	s := NewTestTxnService(t, 1, sender, NewTestClock(1)).(*service)
+	assert.NoError(t, s.Start())
+	defer func() {
+		assert.NoError(t, s.Close(false))
+	}()
+
+	sender.AddTxnService(s)
+
+	n := byte(10)
+	wTxn := NewTestTxn(1, 1, 1)
+	for i := byte(0); i < n; i++ {
+		checkResponses(t, writeTestData(t, sender, 1, wTxn, i))
+	}
+	checkResponses(t, commitWriteData(t, sender, wTxn), newDNShardFoundError())
 }
 
 func TestCommitWithMultiDNShards(t *testing.T) {
@@ -561,13 +634,52 @@ func TestRollback(t *testing.T) {
 	w2 := addTestWaiter(t, s2, wTxn, txn.TxnStatus_Aborted)
 	defer w2.close()
 
-	checkResponses(t, rollbackWriteData(t, sender, wTxn))
+	responses := rollbackWriteData(t, sender, wTxn)
+	checkResponses(t, responses)
+	for _, resp := range responses {
+		assert.Equal(t, txn.TxnStatus_Aborted, resp.Txn.Status)
+	}
 
 	checkWaiter(t, w1, txn.TxnStatus_Aborted)
 	checkWaiter(t, w2, txn.TxnStatus_Aborted)
 
 	checkData(t, wTxn, s1, 2, 0, false)
 	checkData(t, wTxn, s2, 2, 0, false)
+}
+
+func TestRollbackWithDNShardNotFound(t *testing.T) {
+	sender := NewTestSender()
+	defer func() {
+		assert.NoError(t, sender.Close())
+	}()
+
+	sender.setFilter(func(req *txn.TxnRequest) bool {
+		if req.RollbackRequest != nil {
+			req.Txn.DNShards[0].ReplicaID = 0
+		}
+		return true
+	})
+
+	s1 := NewTestTxnService(t, 1, sender, NewTestClock(1)).(*service)
+	assert.NoError(t, s1.Start())
+	defer func() {
+		assert.NoError(t, s1.Close(false))
+	}()
+	s2 := NewTestTxnService(t, 2, sender, NewTestClock(1)).(*service)
+	assert.NoError(t, s2.Start())
+	defer func() {
+		assert.NoError(t, s2.Close(false))
+	}()
+
+	sender.AddTxnService(s1)
+	sender.AddTxnService(s2)
+
+	wTxn := NewTestTxn(1, 1, 1)
+	checkResponses(t, writeTestData(t, sender, 1, wTxn, 1))
+	wTxn.DNShards = append(wTxn.DNShards, NewTestDNShard(2))
+	checkResponses(t, writeTestData(t, sender, 2, wTxn, 2))
+
+	checkResponses(t, rollbackWriteData(t, sender, wTxn), newDNShardFoundError())
 }
 
 func writeTestData(t *testing.T, sender rpc.TxnSender, toShard uint64, wTxn txn.TxnMeta, keys ...byte) []txn.TxnResponse {

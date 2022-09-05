@@ -16,6 +16,7 @@ package fileservice
 
 import (
 	"fmt"
+	"path/filepath"
 	"strings"
 )
 
@@ -24,12 +25,12 @@ func Get[T any](fs FileService, name string) (res T, err error) {
 	if fs, ok := fs.(*FileServices); ok {
 		f, ok := fs.mappings[lowerName]
 		if !ok {
-			err = fmt.Errorf("file service not found: %s", name)
+			err = fmt.Errorf("%w: %s", ErrServiceNotFound, name)
 			return
 		}
 		res, ok = f.(T)
 		if !ok {
-			err = fmt.Errorf("%T does not implement %T", f, res)
+			err = fmt.Errorf("%w: %T does not implement %T", ErrWrongService, f, res)
 			return
 		}
 		return
@@ -37,12 +38,36 @@ func Get[T any](fs FileService, name string) (res T, err error) {
 	var ok bool
 	res, ok = fs.(T)
 	if !ok {
-		err = fmt.Errorf("%T does not implement %T", fs, res)
+		err = fmt.Errorf("%w: %T does not implement %T", ErrWrongService, fs, res)
 		return
 	}
 	if !strings.EqualFold(fs.Name(), lowerName) {
-		err = fmt.Errorf("file service name not match, expecting %s, got %s", name, fs.Name())
+		err = fmt.Errorf("%w: expecting %s, got %s", ErrWrongService, name, fs.Name())
 		return
+	}
+	return
+}
+
+func GetForETL(fs FileService, path string) (res ETLFileService, readPath string, err error) {
+	fsPath, err := ParsePath(path)
+	if err != nil {
+		return nil, "", err
+	}
+	if fsPath.Service == "" {
+		// no service, create local ETL fs
+		dir, file := filepath.Split(path)
+		res, err = NewLocalETLFS("etl", dir)
+		if err != nil {
+			return nil, "", err
+		}
+		readPath = file
+	} else {
+		// get etl fs
+		res, err = Get[ETLFileService](fs, fsPath.Service)
+		if err != nil {
+			return nil, "", err
+		}
+		readPath = fsPath.Full
 	}
 	return
 }

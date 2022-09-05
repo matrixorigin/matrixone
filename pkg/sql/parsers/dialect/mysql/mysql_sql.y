@@ -278,7 +278,7 @@ import (
 %token <str> FORMAT VERBOSE CONNECTION
 
 // Load
-%token <str> LOAD INFILE TERMINATED OPTIONALLY ENCLOSED ESCAPED STARTING LINES
+%token <str> LOAD INFILE TERMINATED OPTIONALLY ENCLOSED ESCAPED STARTING LINES ROWS
 
 // Supported SHOW tokens
 %token <str> DATABASES TABLES EXTENDED FULL PROCESSLIST FIELDS COLUMNS OPEN ERRORS WARNINGS INDEXES SCHEMAS
@@ -751,6 +751,10 @@ ignore_lines:
         $$ = 0
     }
 |   IGNORE INTEGRAL LINES
+    {
+        $$ = $2.(int64)
+    }
+|   IGNORE INTEGRAL ROWS
     {
         $$ = $2.(int64)
     }
@@ -1479,6 +1483,10 @@ commit_stmt:
     }
 
 completion_type:
+    {
+        $$ = tree.COMPLETION_TYPE_NO_CHAIN
+    }
+|	WORK
     {
         $$ = tree.COMPLETION_TYPE_NO_CHAIN
     }
@@ -6953,6 +6961,7 @@ reserved_keyword:
 |   ESCAPED
 |   STARTING
 |   LINES
+|   ROWS
 |   INT1
 |   INT2
 |   INT3

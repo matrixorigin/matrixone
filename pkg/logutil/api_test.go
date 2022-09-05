@@ -12,12 +12,33 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package txnstorage
+package logutil
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"go.uber.org/zap"
+	"testing"
 )
 
-type (
-	Timestamp = timestamp.Timestamp
-)
+func TestInfo(t *testing.T) {
+	type args struct {
+		msg    string
+		fields []zap.Field
+	}
+	tests := []struct {
+		name string
+		args args
+	}{
+		{
+			name: "normal",
+			args: args{
+				msg:    "test",
+				fields: []zap.Field{zap.Int("int", 0), zap.String("string", "")},
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			Info(tt.args.msg, tt.args.fields...)
+		})
+	}
+}

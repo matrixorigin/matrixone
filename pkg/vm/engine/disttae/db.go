@@ -4,7 +4,7 @@
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-// http://www.apache.org/licenses/LICENSE-2.0
+//      http://www.apache.org/licenses/LICENSE-2.0
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -12,21 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package tables
+package disttae
 
-type Operation interface {
-	OpName() string
+import (
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+)
+
+func (db *DB) NewReader(databaseName, tableName string, expr *plan.Expr) Reader {
+	return nil
 }
-
-type forceCompactOp struct{}
-
-func (op *forceCompactOp) OpName() string { return "ForceCompactOp" }
-
-type unloadOp struct{}
-
-func (op *unloadOp) OpName() string { return "UnloadOp" }
-
-// loadOp is unused
-// type loadOp struct{}
-
-// func (op *loadOp) OpName() string { return "LoadOp" }

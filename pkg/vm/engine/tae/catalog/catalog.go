@@ -54,9 +54,9 @@ type Catalog struct {
 	ckpmu       sync.RWMutex
 	checkpoints []*Checkpoint
 
-	entries   map[uint64]*common.DLNode
-	nameNodes map[string]*nodeList
-	link      *common.SortedDList
+	entries   map[uint64]*common.GenericDLNode[*DBEntry]
+	nameNodes map[string]*nodeList[*DBEntry]
+	link      *common.GenericSortedDList[*DBEntry]
 
 	nodesMu sync.RWMutex
 
@@ -71,15 +71,19 @@ func genDBFullName(tenantID uint32, name string) string {
 	return fmt.Sprintf("%d-%s", tenantID, name)
 }
 
+func compareDBFn(a, b *DBEntry) int {
+	return a.DBBaseEntry.DoCompre(b.DBBaseEntry)
+}
+
 func MockCatalog(dir, name string, cfg *batchstoredriver.StoreCfg, scheduler tasks.TaskScheduler) *Catalog {
 	driver := store.NewStoreWithBatchStoreDriver(dir, name, cfg)
 	catalog := &Catalog{
 		RWMutex:     new(sync.RWMutex),
 		IDAlloctor:  NewIDAllocator(),
 		store:       driver,
-		entries:     make(map[uint64]*common.DLNode),
-		nameNodes:   make(map[string]*nodeList),
-		link:        new(common.SortedDList),
+		entries:     make(map[uint64]*common.GenericDLNode[*DBEntry]),
+		nameNodes:   make(map[string]*nodeList[*DBEntry]),
+		link:        common.NewGenericSortedDList(compareDBFn),
 		checkpoints: make([]*Checkpoint, 0),
 		scheduler:   scheduler,
 	}
@@ -93,9 +97,9 @@ func OpenCatalog(dir, name string, cfg *batchstoredriver.StoreCfg, scheduler tas
 		RWMutex:     new(sync.RWMutex),
 		IDAlloctor:  NewIDAllocator(),
 		store:       driver,
-		entries:     make(map[uint64]*common.DLNode),
-		nameNodes:   make(map[string]*nodeList),
-		link:        new(common.SortedDList),
+		entries:     make(map[uint64]*common.GenericDLNode[*DBEntry]),
+		nameNodes:   make(map[string]*nodeList[*DBEntry]),
+		link:        common.NewGenericSortedDList(compareDBFn),
 		checkpoints: make([]*Checkpoint, 0),
 		scheduler:   scheduler,
 	}
@@ -178,7 +182,7 @@ func (catalog *Catalog) onReplayUpdateDatabase(cmd *EntryCommand, idx *wal.Index
 	}
 	var err error
 
-	db, err := catalog.GetDatabaseByID(cmd.entry.ID)
+	db, err := catalog.GetDatabaseByID(cmd.entry.GetID())
 	if err != nil {
 		cmd.DB.RWMutex = new(sync.RWMutex)
 		cmd.DB.catalog = catalog
@@ -195,7 +199,7 @@ func (catalog *Catalog) onReplayUpdateDatabase(cmd *EntryCommand, idx *wal.Index
 
 	un := cmd.entry.GetUpdateNodeLocked()
 	un.AddLogIndex(idx)
-	dbun := db.GetExactUpdateNode(un.Start)
+	dbun := db.GetExactUpdateNode(un.GetStart())
 	if dbun == nil {
 		db.InsertNode(un) //TODO isvalid
 	} else {
@@ -221,8 +225,8 @@ func (catalog *Catalog) onReplayDatabase(cmd *EntryCommand) {
 		return
 	}
 
-	cmd.DB.MVCC.Loop(func(n *common.DLNode) bool {
-		un := n.GetPayload().(*UpdateNode)
+	cmd.DB.MVCC.Loop(func(n *common.GenericDLNode[*DBMVCCNode]) bool {
+		un := n.GetPayload()
 		dbun := db.GetExactUpdateNode(un.Start)
 		if dbun == nil {
 			db.InsertNode(un) //TODO isvalid
@@ -261,7 +265,7 @@ func (catalog *Catalog) onReplayUpdateTable(cmd *EntryCommand, dataFactory DataF
 	}
 
 	un := cmd.entry.GetUpdateNodeLocked()
-	tblun := tbl.GetExactUpdateNode(un.Start)
+	tblun := tbl.GetExactUpdateNode(un.GetStart())
 	un.AddLogIndex(idx)
 	if tblun == nil {
 		tbl.InsertNode(un) //TODO isvalid
@@ -289,8 +293,8 @@ func (catalog *Catalog) onReplayTable(cmd *EntryCommand, dataFactory DataFactory
 			panic(err)
 		}
 	} else {
-		cmd.Table.MVCC.Loop(func(n *common.DLNode) bool {
-			un := n.GetPayload().(*UpdateNode)
+		cmd.Table.MVCC.Loop(func(n *common.GenericDLNode[*TableMVCCNode]) bool {
+			un := n.GetPayload()
 			node := rel.GetExactUpdateNode(un.Start)
 			if node == nil {
 				rel.InsertNode(un)
@@ -327,7 +331,7 @@ func (catalog *Catalog) onReplayUpdateSegment(cmd *EntryCommand, dataFactory Dat
 		tbl.AddEntryLocked(cmd.Segment)
 	} else {
 		un := cmd.entry.GetUpdateNodeLocked()
-		node := seg.GetExactUpdateNode(un.Start)
+		node := seg.GetExactUpdateNode(un.GetStart())
 		if node == nil {
 			seg.InsertNode(un)
 		} else {
@@ -354,8 +358,8 @@ func (catalog *Catalog) onReplaySegment(cmd *EntryCommand, dataFactory DataFacto
 		cmd.Segment.table = rel
 		rel.AddEntryLocked(cmd.Segment)
 	} else {
-		cmd.Segment.MVCC.Loop(func(n *common.DLNode) bool {
-			un := n.GetPayload().(*UpdateNode)
+		cmd.Segment.MVCC.Loop(func(n *common.GenericDLNode[*MetadataMVCCNode]) bool {
+			un := n.GetPayload()
 			segun := seg.GetExactUpdateNode(un.Start)
 			if segun != nil {
 				segun.UpdateNode(un)
@@ -391,13 +395,13 @@ func (catalog *Catalog) onReplayUpdateBlock(cmd *EntryCommand, dataFactory DataF
 	un := cmd.entry.GetUpdateNodeLocked()
 	un.AddLogIndex(idx)
 	if err == nil {
-		blkun := blk.GetExactUpdateNode(un.Start)
+		blkun := blk.GetExactUpdateNode(un.GetStart())
 		if blkun != nil {
 			blkun.UpdateNode(un)
 		} else {
 			blk.InsertNode(un)
 			if observer != nil {
-				observer.OnTimeStamp(un.End)
+				observer.OnTimeStamp(un.GetEnd())
 			}
 		}
 		return
@@ -412,7 +416,7 @@ func (catalog *Catalog) onReplayUpdateBlock(cmd *EntryCommand, dataFactory DataF
 	un.AddLogIndex(idx)
 	seg.AddEntryLocked(cmd.Block)
 	if observer != nil {
-		observer.OnTimeStamp(un.End)
+		observer.OnTimeStamp(un.GetEnd())
 	}
 }
 
@@ -435,8 +439,8 @@ func (catalog *Catalog) onReplayBlock(cmd *EntryCommand, dataFactory DataFactory
 		cmd.Block.segment = seg
 		seg.AddEntryLocked(cmd.Block)
 	} else {
-		cmd.Block.MVCC.Loop(func(n *common.DLNode) bool {
-			un := n.GetPayload().(*UpdateNode)
+		cmd.Block.MVCC.Loop(func(n *common.GenericDLNode[*MetadataMVCCNode]) bool {
+			un := n.GetPayload()
 			blkun := blk.GetExactUpdateNode(un.Start)
 			if blkun != nil {
 				blkun.UpdateNode(un)
@@ -510,6 +514,10 @@ func (catalog *Catalog) AddColumnCnt(cnt int) {
 	}
 }
 
+func (catalog *Catalog) GetItemNodeByIDLocked(id uint64) *common.GenericDLNode[*DBEntry] {
+	return catalog.entries[id]
+}
+
 func (catalog *Catalog) GetScheduler() tasks.TaskScheduler { return catalog.scheduler }
 func (catalog *Catalog) GetDatabaseByID(id uint64) (db *DBEntry, err error) {
 	catalog.RLock()
@@ -519,7 +527,7 @@ func (catalog *Catalog) GetDatabaseByID(id uint64) (db *DBEntry, err error) {
 		err = ErrNotFound
 		return
 	}
-	db = node.GetPayload().(*DBEntry)
+	db = node.GetPayload()
 	return
 }
 
@@ -529,13 +537,16 @@ func (catalog *Catalog) AddEntryLocked(database *DBEntry, txn txnif.TxnReader) e
 		n := catalog.link.Insert(database)
 		catalog.entries[database.GetID()] = n
 
-		nn := newNodeList(catalog, &catalog.nodesMu, database.name)
+		nn := newNodeList(catalog.GetItemNodeByIDLocked,
+			databaseTxnCanGetFn[*DBEntry],
+			&catalog.nodesMu,
+			database.name)
 		catalog.nameNodes[database.GetFullName()] = nn
 
 		nn.CreateNode(database.GetID())
 	} else {
-		node := nn.GetDBNode()
-		record := node.GetPayload().(*DBEntry)
+		node := nn.GetNode()
+		record := node.GetPayload()
 		err := record.PrepareAdd(txn)
 		if err != nil {
 			return err
@@ -547,10 +558,10 @@ func (catalog *Catalog) AddEntryLocked(database *DBEntry, txn txnif.TxnReader) e
 	return nil
 }
 
-func (catalog *Catalog) MakeDBIt(reverse bool) *common.SortedDListIt {
+func (catalog *Catalog) MakeDBIt(reverse bool) *common.GenericSortedDListIt[*DBEntry] {
 	catalog.RLock()
 	defer catalog.RUnlock()
-	return common.NewSortedDListIt(catalog.RWMutex, catalog.link, reverse)
+	return common.NewGenericSortedDListIt(catalog.RWMutex, catalog.link, reverse)
 }
 
 func (catalog *Catalog) SimplePPString(level common.PPLevel) string {
@@ -563,7 +574,7 @@ func (catalog *Catalog) PPString(level common.PPLevel, depth int, prefix string)
 	it := catalog.MakeDBIt(true)
 	for it.Valid() {
 		cnt++
-		entry := it.Get().GetPayload().(*DBEntry)
+		entry := it.Get().GetPayload()
 		_ = w.WriteByte('\n')
 		_, _ = w.WriteString(entry.PPString(level, depth+1, ""))
 		it.Next()
@@ -604,7 +615,7 @@ func (catalog *Catalog) RemoveEntry(database *DBEntry) error {
 	return nil
 }
 
-func (catalog *Catalog) txnGetNodeByNameLocked(name string, txnCtx txnif.AsyncTxn) (*common.DLNode, error) {
+func (catalog *Catalog) txnGetNodeByNameLocked(name string, txnCtx txnif.AsyncTxn) (*common.GenericDLNode[*DBEntry], error) {
 	catalog.RLock()
 	defer catalog.RUnlock()
 	fullName := genDBFullName(txnCtx.GetTenantID(), name)
@@ -612,7 +623,7 @@ func (catalog *Catalog) txnGetNodeByNameLocked(name string, txnCtx txnif.AsyncTx
 	if node == nil {
 		return nil, ErrNotFound
 	}
-	return node.TxnGetDBNodeLocked(txnCtx)
+	return node.TxnGetNodeLocked(txnCtx)
 }
 
 func (catalog *Catalog) GetDBEntry(name string, txnCtx txnif.AsyncTxn) (*DBEntry, error) {
@@ -620,7 +631,7 @@ func (catalog *Catalog) GetDBEntry(name string, txnCtx txnif.AsyncTxn) (*DBEntry
 	if err != nil {
 		return nil, err
 	}
-	return n.GetPayload().(*DBEntry), nil
+	return n.GetPayload(), nil
 }
 
 func (catalog *Catalog) DropDBEntry(name string, txnCtx txnif.AsyncTxn) (deleted *DBEntry, err error) {
@@ -632,7 +643,7 @@ func (catalog *Catalog) DropDBEntry(name string, txnCtx txnif.AsyncTxn) (deleted
 	if err != nil {
 		return
 	}
-	entry := dn.GetPayload().(*DBEntry)
+	entry := dn.GetPayload()
 	entry.Lock()
 	defer entry.Unlock()
 	err = entry.DropEntryLocked(txnCtx)
@@ -661,7 +672,7 @@ func (catalog *Catalog) CreateDBEntryByTS(name string, ts types.TS) (*DBEntry, e
 func (catalog *Catalog) RecurLoop(processor Processor) (err error) {
 	dbIt := catalog.MakeDBIt(true)
 	for dbIt.Valid() {
-		dbEntry := dbIt.Get().GetPayload().(*DBEntry)
+		dbEntry := dbIt.Get().GetPayload()
 		if err = processor.OnDatabase(dbEntry); err != nil {
 			if err == ErrStopCurrRecur {
 				err = nil

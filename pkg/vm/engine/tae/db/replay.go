@@ -16,7 +16,7 @@ package db
 
 import (
 	"bytes"
-	"fmt"
+	//"fmt"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"os"
 
@@ -178,7 +178,8 @@ func (replayer *Replayer) PostReplayWal() {
 	for id := range activeSegs {
 		_, ok := files[id]
 		if !ok {
-			panic(fmt.Errorf("cannot find segment file for: %d", id))
+			//panic(fmt.Errorf("cannot find segment file for: %d", id))
+			continue
 		}
 		delete(files, id)
 	}

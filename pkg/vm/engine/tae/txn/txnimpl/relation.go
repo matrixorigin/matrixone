@@ -32,7 +32,7 @@ var _ handle.RelationIt = (*txnRelationIt)(nil)
 type txnRelationIt struct {
 	*sync.RWMutex
 	txnDB  *txnDB
-	linkIt *common.SortedDListIt
+	linkIt *common.GenericSortedDListIt[*catalog.TableEntry]
 	itered bool // linkIt has no dummy head, use this to avoid duplicate filter logic for the very first entry
 	curr   *catalog.TableEntry
 	err    error
@@ -72,7 +72,7 @@ func (it *txnRelationIt) Next() {
 			it.curr = nil
 			break
 		}
-		entry := node.GetPayload().(*catalog.TableEntry)
+		entry := node.GetPayload()
 		entry.RLock()
 		// SystemDB can hold table created by different tenant, filter needed.
 		// while the 3 shared tables are not affected

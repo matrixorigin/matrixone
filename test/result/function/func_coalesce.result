@@ -32,15 +32,14 @@ Can't cast column from BIGINT type to BIGINT UNSIGNED type because of one or mor
 SELECT * FROM t0 WHERE CAST(IFNULL(t0.c0, -1) AS UNSIGNED);
 Can't cast column from BIGINT type to BIGINT UNSIGNED type because of one or more values in that column. Reason: overflow
 SELECT CAST(COALESCE(t0.c0, -1) AS UNSIGNED) IS TRUE FROM t0;
-Operator '=' with parameters [BIGINT UNSIGNED BOOL] will be implemented in future version.
+Can't cast column from BIGINT type to BIGINT UNSIGNED type because of one or more values in that column. Reason: overflow
 SELECT CAST(COALESCE(t0.c0, -1) AS UNSIGNED) FROM t0;
 Can't cast column from BIGINT type to BIGINT UNSIGNED type because of one or more values in that column. Reason: overflow
 DROP TABLE t0;
 CREATE TABLE t1 (a char(10), b INT);
 INSERT INTO t1 VALUES ('', 0);
 SELECT COALESCE(a) = COALESCE(b) FROM t1;
-COALESCE(a) = COALESCE(b)
-1
+Can't cast column from CHAR type to INT type because of one or more values in that column.
 DROP TABLE t1;
 CREATE TABLE t1 ( a INTEGER, b varchar(255) );
 INSERT INTO t1 VALUES (1,'z');

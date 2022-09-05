@@ -200,4 +200,33 @@ select * from t2;
 a	b
 null	1
 null	2
+drop table if exists t1;
+create table t1(a int auto_increment, b int auto_increment);
+insert into t1 values(null, null), (null, null);
+select * from t1;
+a    b
+1    1
+2    2
+insert into t1 values(100, 200), (null, null);
+select * from t1;
+a    b
+1    1
+2    2
+100    200
+101    201
+update t1 set a=null;
+select * from t1;
+a    b
+102    1
+103    2
+104    200
+105    201
+update t1 set b=null;
+select * from t1;
+a    b
+102    202
+103    203
+104    204
+105    205
 drop database if exists db1;
+
