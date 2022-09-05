@@ -45,7 +45,7 @@ func newNodeList[T any](getter func(uint64) *common.GenericDLNode[T],
 }
 
 func (n *nodeList[T]) CreateNode(id uint64) *nameNode[T] {
-	nn := newNameNode[T](id, n.getter)
+	nn := newNameNode(id, n.getter)
 	n.rwlocker.Lock()
 	defer n.rwlocker.Unlock()
 	n.Insert(nn)

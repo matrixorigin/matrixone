@@ -39,7 +39,7 @@ func compareTestNode(n, on *testNode) int {
 }
 
 func TestDLNode(t *testing.T) {
-	link := common.NewGenericSortedDList[*testNode](compareTestNode)
+	link := common.NewGenericSortedDList(compareTestNode)
 	now := time.Now()
 	var node *common.GenericDLNode[*testNode]
 	nodeCnt := 10

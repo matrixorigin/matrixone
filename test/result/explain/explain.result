@@ -298,13 +298,13 @@ QUERY PLAN
 Project(cost=0.00..0.00 card=9.00 ndv=0.00 rowsize=0)
   ->  Project(cost=0.00..0.00 card=9.00 ndv=0.00 rowsize=0)
         ->  Table Scan on explain.t1(cost=0.00..0.00 card=9.00 ndv=0.00 rowsize=0)
-              Filter Cond: (CAST(t1.dl AS DOUBLE) <> CAST(4 AS DOUBLE))
+              Filter Cond: (CAST(t1.dl AS DOUBLE) <> 4)
 explain select * from (select ti as t,fl as f from t1 where dl <> 4) sub;
 QUERY PLAN
 Project(cost=0.00..0.00 card=9.00 ndv=0.00 rowsize=0)
   ->  Project(cost=0.00..0.00 card=9.00 ndv=0.00 rowsize=0)
         ->  Table Scan on explain.t1(cost=0.00..0.00 card=9.00 ndv=0.00 rowsize=0)
-              Filter Cond: (CAST(t1.dl AS DOUBLE) <> CAST(4 AS DOUBLE))
+              Filter Cond: (CAST(t1.dl AS DOUBLE) <> 4)
 explain select id,min(ti) from (select * from t1) sub group by id;
 QUERY PLAN
 Project(cost=0.00..0.00 card=4.33 ndv=0.00 rowsize=0)
@@ -395,7 +395,7 @@ Project(cost=0.00..0.00 card=9.00 ndv=0.00 rowsize=0)
               ->  Project(cost=0.00..0.00 card=9.00 ndv=0.00 rowsize=0)
                     ->  Project(cost=0.00..0.00 card=9.00 ndv=0.00 rowsize=0)
                           ->  Table Scan on explain.t1(cost=0.00..0.00 card=9.00 ndv=0.00 rowsize=0)
-                                Filter Cond: (CAST(t1.id AS BIGINT) > 4), (CAST(t1.id AS BIGINT) > 2), (CAST(t1.ti AS BIGINT) > 1), (CAST(t1.fl AS DOUBLE) <> CAST(CAST('4.5' AS DECIMAL128) AS DOUBLE))
+                                Filter Cond: (CAST(t1.id AS BIGINT) > 4), (CAST(t1.id AS BIGINT) > 2), (CAST(t1.ti AS BIGINT) > 1), (CAST(t1.fl AS DOUBLE) <> 4.5)
 explain select * from (select * from t1 where id > 100) sub ;
 QUERY PLAN
 Project(cost=0.00..0.00 card=9.00 ndv=0.00 rowsize=0)
