@@ -270,6 +270,7 @@ message SyncLogTailReq {
     bool all = 4;
 };
 
+
 enum CmdType {
     CmdBatch = 0;
 	CmdAppend = 1;
@@ -290,219 +291,100 @@ message Batch {
     //bytes deletes = 3;
 };
 
-message AppendCtx {
-    //reserved?
-    uint32 seq = 1;
-    uint32 src_off = 2;
-    uint32 src_len = 3;
-    uint64 db_id = 4;
-    BlockID dest = 5;
-
-    uint32 dest_off = 6;
-    uint32 dest_len = 7;
-
-};
-
-//message BatchCmd {
-    //CmdBatch
- //   uint32 cmdType = 1;
-  //  Batch bat = 2;
-//};
 
 //Append batch of data which comes from localsegment of table into multiple blocks.
-message AppendCmd {
-    //CmdAppend
-    CmdType cmd_type = 1;
-    //sub cmd sequence number in LSN entry.
-    uint32  csn = 2;
-    Batch  bat = 3;
-    //one batch could be appended into multiple blocks
-    //[]AppendCtx
-    repeated AppendCtx ctxs = 4;
-    timestamp.Timestamp ts = 5;
-};
 
-message AppendNode {
-    BlockID block_id = 1;
-    uint32  start_row = 2;
-    uint32  max_row   = 3;
-    timestamp.Timestamp commit_ts = 4;
-};
+//// Append batch of data into table : 
+//      Entry {
+//          entry_type = Insert
+//          table_id =  tid
+//          database_id = dbId
+//          table_name =  xxx
+//          database_name = xxx
+//          file_name = "" 
+//          block_id = 0
+//          block.attrs = {"rowid", "commit timestamp", "primary column data",  "column1 data", ...}
+//      }
 
-message DeleteNode {
-    BlockID block_id = 1;
-    //rows bitmap,[]byte, too expensive?
-    string mask = 2;
-    timestamp.Timestamp commit_ts = 3;
-};
+//// delete a batch of data from a block : 
+//      Entry {
+//          entry_type = Delte
+//          table_id =  tid
+//          database_id = dbId
+//          table_name =  xxx
+//          database_name = xxx
+//          file_name = "" 
+//          FIXME:: transient block id when bulk loading.
+//          block_id = 0
+//          block.attrs = {"rowid", "commit timestamp"}
+//      }
 
-message ColumnID {
-    BlockID block_id = 1;
-    uint32  col_index = 2;
-};
+// create block : 
+//      Entry {
+//          entry_type = Insert
+//          table_id = tid
+//          database_id = dbId
+//          table_name =  xxx
+//          database_name = xxx
+//          file_name = "" 
+//          block_id = 0
+//          FIXME:: what's the type? hardencoded?
+//          block.attrs = {"BlockId", "EntryState", "CreatedAt", "DeletedAt",
+//                            "Start", "End", "MetaLoc", "DeltaLoc"}
+//      }
 
-message ColunmUpdateNode {
- //   ColumnID colId = 1;
-  //  bytes mask = 2;
-   // map<uint32, Any> vals = 3;
-};
+// delete block : 
+//      Entry {
+//          entry_type = Delete
+//          table_id = tid
+//          database_id = dbId
+//          table_name =  xxx
+//          database_name = xxx
+//          file_name = "" 
+//          block_id = 0
+//          block.attrs = {"BlockId", "EntryState", "CreatedAt", "DeletedAt",
+//                         "Start", "End", "MetaLoc", "DeltaLoc"}
+//      }
 
-//update the mvcc info for a block
-message MvccUpdateCmd {
-    message MvccNodeType {
-		oneof def {
-            AppendNode append_node = 1;
-            DeleteNode delete_node = 2;
-            //ColumnUpdateNode colupdate_node = 3;
-		}
-	}
-    //CmdMvccUpdate
-    CmdType cmd_type = 1;
-    uint32  csn = 2;
-    uint64  db_id = 3;
-    BlockID block_id = 4;
-    //bitmap
-    //uint32  mask = 4;
-    //AppendNode append = 5;
-    //DeleteNode del = 6;
-   // ColumnUpdateNode update = 7;
-   repeated MvccNodeType mvcc_node = 5;
-};
+// create segment:
 
 
-//updating commands for catalog.
-//enum CmdUpdateMeta {
- //   CmdUpdateDatabase = 1;
-//	CmdUpdateTable =  2;
-	//CmdUpdateSegment = 3;
-	//CmdUpdateBlock = 4;
-//};
-
-enum EntryState {
-    ES_Appendable = 0;
-	ES_NotAppendable = 1;
-	ES_Frozen  = 2;
-};
-//FIXME::need to slim down ?
-message UpdateNode {
-    timestamp.Timestamp created_at = 1;
-    timestamp.Timestamp deleted_at = 2;
-    string    meta_loc = 3;
-    string    delta_loc = 4;
-    timestamp.Timestamp start = 5;
-    timestamp.Timestamp  end= 6;
-};
-
-message BaseEntry {
-    UpdateNode node = 1;
-   // sorted list of mvcc node.
-   //repeated UpdateNode nodes = 1;
-};
-
-message BlockEntry {
-    BaseEntry be = 1;
-    BlockID block_id = 2;
-    EntryState block_state = 3;
-};
-
-message SegmentEntry {
-    BaseEntry be = 1;
-    SegmentID seg_id = 2;
-    EntryState seg_state = 3;
-};
-
-message TableEntry {
-    BaseEntry be = 1;
-    TableID   tab_id = 2;
-    TableDef  tab_def = 3;
-};
-
-message DatabaseEntry {
-    BaseEntry be = 1;
-    string    name = 2;
-    DatabaseID db_id = 3;
-    AccessInfo ac_info  = 4;
-};
-
-message EntryCmd {
-    message EntryType {
-		oneof def {
-            BlockEntry block_entry = 1;
-            SegmentEntry seg_entry = 2;
-            TableEntry   tab_entry = 3;
-            DatabaseEntry db_entry = 4;
-		}
-	}
-    //CmdMetaEntry
-    CmdType cmd_type = 1;
-    uint32  csn = 2;
-    //bitmask
-    //uint32 mask = 2;
-    EntryType entry = 3;
-    //BlcokEntry block_entry = 3;
-    //SegmentEntry seg_entry = 4;
-    //TableEntry   tab_entry = 5;
-    //DatabaseEntry db_entry = 6;
-};
-
-//commands for compaction and merge
-message CompactBlockCmd {
-    CmdType cmd_type = 1;
-    uint32  csn = 2;
-    BlockID from = 3;
-    BlockID to = 4;
-};
+// delete segment:
 
 
-message MergeBlocksCmd {
-    CmdType cmd_type = 1;
-    uint32  csn = 2;
-    //[]SegmentID
-    repeated SegmentID dropped_segs = 3;
-    repeated SegmentID created_segs = 4;
-    repeated BlockID   dropped_blks = 5;
-    repeated BlockID   created_blks = 6;
-    //[]uint32
-    repeated uint32 mapping = 7;
-    repeated uint32 from_addr = 8;
-    repeated uint32 to_addr = 9;
-};
 
-message ComposedCmd {
-    message SubCmdType {
-		oneof def {
-            EntryCmd        entry_cmd = 1;
-            AppendCmd       append_cmd = 2;
-            MvccUpdateCmd   mvcc_cmd = 3;
-            CompactBlockCmd compact_cmd = 4;
-            MergeBlocksCmd  mergeblks_cmd = 5;
-		}
-	}
-    //CmdComposed
-    CmdType cmd_type = 1;
-    // Notice: 1. LSN is the Log sequence number of redo-log entry for one transaction.
-    //         2. a redo-log entry is also a composed command ,it contains multiple sub commands.
-    uint32  LSN = 2;
-    repeated SubCmdType cmds = 3;
+// create a user table: 
+//      Entry {
+//          entry_type = Insert
+//          table_id = 1
+//          database_id =  0
+//          table_name =  mo_tables
+//          database_name = mo_catalog
+//          file_name = "" 
+//          block_id = 0
+//          block.attrs = {"TableName", "Tid", "Column1Name", "Colunm1Type", ...
+//                      "CreatedAt", "DeletedAt", "Start", "End", "MetaLoc", "DeltaLoc"}
+//      }
 
+// drop table: 
+//      Entry {
+//          entry_type = delete
+//          table_id = 1
+//          database_id = 0
+//          table_name =  mo_tables
+//          database_name = mo_catalog
+//          file_name = "" 
+//          block_id = 0
+//          block.attrs = {"TableName", "Tid"}
+//      }
 
-    //FIXME:: use oneof ,instead of mask ?
-    //uint32 mask = 2;
-    //FIXME:: the order of these sub commands? use csn ?
-    //repeated AppendCmd append_cmds = 3;
-    //repeated MvccUpdateCmd update_cmds = 4;
-    //repeated EntryCmd  entry_cmds = 5;
-    //CompactBlockCmd  compact_cmd = 6;
-    //MergeBlocksCmd  mergeblks_cmd = 7;
-}
 
 message BatchCommands {
     TSRange desc = 1;
     ScopeDesc scope = 2;
-    //[]composedCmd
-    //FIXME::the order of the ComposedCmd? use lsn ?
-    repeated ComposedCmd commands = 3;
+    repeated  Entry commands = 3;
 };
+
 
 message SyncLogTailResp {
     //FIXME::??
