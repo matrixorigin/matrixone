@@ -22,8 +22,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
-func ReturnType(_ []types.Type) types.Type {
-	return types.New(types.T_float64, 0, 0, 0)
+func ReturnType(typs []types.Type) types.Type {
+	switch typs[0].Oid {
+	case types.T_decimal64, types.T_decimal128:
+		return types.New(types.T_decimal128, 0, typs[0].Scale, typs[0].Precision)
+	default:
+		return types.New(types.T_float64, 0, 0, 0)
+	}
 }
 
 func String(b []byte) (s string) {
@@ -37,18 +42,6 @@ func String(b []byte) (s string) {
 // New1 is used to Created a Variance which supports float,int,uint
 func New1[T1 types.Floats | types.Ints | types.UInts]() *Variance[T1] {
 	return &Variance[T1]{}
-}
-
-// New2 is used to Created a Variance which supports decimal64
-// if is decimal,you need to give pricision
-func New2() *Variance2 {
-	return &Variance2{inputType: types.New(types.T_decimal64, 0, 0, 0)}
-}
-
-// New2 is used to Created a Variance which supports decimal64
-// if is decimal,you need to give pricision
-func New3() *Variance3 {
-	return &Variance3{inputType: types.New(types.T_decimal64, 0, 0, 0)}
 }
 
 func (variance *Variance[T1]) Grows(count int) {
@@ -104,107 +97,97 @@ func (variance *Variance[T1]) Fill(groupIndex int64, v1 T1, v2 float64, z int64,
 	return f2 + math.Pow(f1, 2)*float64(z), false
 }
 
-func (variance *Variance2) Grows(count int) {
-	if len(variance.sum) == 0 {
-		variance.sum = make([]float64, count)
-		variance.count = make([]float64, count)
-	} else {
-		for i := 0; i < count; i++ {
-			variance.sum = append(variance.sum, 0)
-			variance.count = append(variance.count, 0)
-		}
+func NewVD64() *VD64 {
+	return &VD64{}
+}
+
+func (v *VD64) Grows(cnt int) {
+	for i := 0; i < cnt; i++ {
+		v.sum = append(v.sum, types.Decimal128_FromInt64(0))
+		v.counts = append(v.counts, 0)
 	}
 }
 
-func (variance *Variance2) Eval(vs []float64) []float64 {
-	for i, v := range vs {
-		avg := (variance.sum[i]) / (variance.count[i])
-		vs[i] = (v)/(variance.count[i]) - math.Pow(float64(avg), 2)
+func (v *VD64) Eval(vs []types.Decimal128) []types.Decimal128 {
+	for i, k := range vs {
+		a := types.Decimal128Int64Div(v.sum[i], v.counts[i])
+		a2 := types.Decimal128Decimal128Mul(a, a)
+		d := types.Decimal128Int64Div(k, v.counts[i])
+		vs[i] = d.Sub(a2)
 	}
 	return vs
 }
 
-func (variance *Variance2) Merge(groupIndex1, groupIndex2 int64, x, y float64, IsEmpty1 bool, IsEmpty2 bool, agg any) (float64, bool) {
-	variance2 := agg.(*Variance2)
-	if IsEmpty1 && !IsEmpty2 {
-		variance.sum[groupIndex1] = variance2.sum[groupIndex2]
-		variance.count[groupIndex1] = variance2.count[groupIndex2]
-		return y, false
-	} else if IsEmpty2 && !IsEmpty1 {
-		return x, false
-	} else if IsEmpty1 && IsEmpty2 {
-		return x, true
-	} else {
-		variance.count[groupIndex1] += variance2.count[groupIndex2]
-		variance.sum[groupIndex1] += variance2.sum[groupIndex2]
-		return (x + y), false
-	}
-}
-
-func (variance *Variance2) Fill(groupIndex int64, v1 types.Decimal64, v2 float64, z int64, IsEmpty bool, hasNull bool) (float64, bool) {
-	if hasNull {
-		return v2, IsEmpty
-	} else if IsEmpty {
-		f1 := v1.ToFloat64()
-		variance.sum[groupIndex] = f1 * float64(z)
-		variance.count[groupIndex] += float64(z)
-		return math.Pow(f1, 2) * float64(z), false
-	}
-	f1 := v1.ToFloat64()
-	variance.sum[groupIndex] = float64(variance.sum[groupIndex]) + f1*float64(z)
-	variance.count[groupIndex] += float64(z)
-	return v2 + math.Pow(f1, 2)*float64(z), false
-}
-
-func (variance *Variance3) Grows(count int) {
-	if len(variance.sum) == 0 {
-		variance.sum = make([]float64, count)
-		variance.count = make([]float64, count)
-	} else {
-		for i := 0; i < count; i++ {
-			var a float64
-			variance.sum = append(variance.sum, a)
-			variance.count = append(variance.count, 0)
+func (v *VD64) Merge(xIndex, yIndex int64, x types.Decimal128, y types.Decimal128, xEmpty bool, yEmpty bool, agg any) (types.Decimal128, bool) {
+	if !yEmpty {
+		vd := agg.(*VD64)
+		v.counts[xIndex] += vd.counts[yIndex]
+		v.sum[xIndex] = v.sum[xIndex].Add(vd.sum[yIndex])
+		if !xEmpty {
+			return x.Add(y), false
 		}
+		return y, false
+	}
+	return x, xEmpty
+}
+
+func (v *VD64) Fill(i int64, v1 types.Decimal64, v2 types.Decimal128, z int64, isEmpty bool, isNull bool) (types.Decimal128, bool) {
+	if isNull {
+		return v2, isEmpty
+	}
+	x := types.Decimal128_FromDecimal64(v1)
+	v.counts[i] += z
+	if isEmpty {
+		v.sum[i] = types.Decimal128Int64Mul(x, z)
+		return types.Decimal128Int64Mul(types.Decimal128Decimal128Mul(x, x), z), false
+	}
+	v.sum[i] = v.sum[i].Add(types.Decimal128Int64Mul(x, z))
+	return v2.Add(types.Decimal128Int64Mul(types.Decimal128Decimal128Mul(x, x), z)), false
+}
+
+func NewVD128() *VD128 {
+	return &VD128{}
+}
+
+func (v *VD128) Grows(cnt int) {
+	for i := 0; i < cnt; i++ {
+		v.sum = append(v.sum, types.Decimal128_FromInt64(0))
+		v.counts = append(v.counts, 0)
 	}
 }
 
-func (variance *Variance3) Eval(vs []float64) []float64 {
-	for i, v := range vs {
-		avg := (variance.sum[i]) / (variance.count[i])
-		vs[i] = (v)/(variance.count[i]) - math.Pow(float64(avg), 2)
+func (v *VD128) Eval(vs []types.Decimal128) []types.Decimal128 {
+	for i, k := range vs {
+		a := types.Decimal128Int64Div(v.sum[i], v.counts[i])
+		a2 := types.Decimal128Decimal128Mul(a, a)
+		d := types.Decimal128Int64Div(k, v.counts[i])
+		vs[i] = d.Sub(a2)
 	}
 	return vs
 }
 
-func (variance *Variance3) Merge(groupIndex1, groupIndex2 int64, x, y float64, IsEmpty1 bool, IsEmpty2 bool, agg any) (float64, bool) {
-	variance2 := agg.(*Variance2)
-	if IsEmpty1 && !IsEmpty2 {
-		variance.sum[groupIndex1] = variance2.sum[groupIndex2]
-		variance.count[groupIndex1] = variance2.count[groupIndex2]
+func (v *VD128) Merge(xIndex, yIndex int64, x types.Decimal128, y types.Decimal128, xEmpty bool, yEmpty bool, agg any) (types.Decimal128, bool) {
+	if !yEmpty {
+		vd := agg.(*VD128)
+		v.counts[xIndex] += vd.counts[yIndex]
+		v.sum[xIndex] = v.sum[xIndex].Add(vd.sum[yIndex])
+		if !xEmpty {
+			return x.Add(y), false
+		}
 		return y, false
-	} else if IsEmpty2 && !IsEmpty1 {
-		return x, false
-	} else if IsEmpty1 && IsEmpty2 {
-		return x, true
-	} else {
-		variance.count[groupIndex1] += variance2.count[groupIndex2]
-		variance.sum[groupIndex1] += variance2.sum[groupIndex2]
-		return (x + y), false
 	}
+	return x, xEmpty
 }
 
-func (variance *Variance3) Fill(groupIndex int64, v1 types.Decimal128, v2 float64, z int64, IsEmpty bool, hasNull bool) (float64, bool) {
-	if hasNull {
-		return v2, IsEmpty
-	} else if IsEmpty {
-		f1 := v1.ToFloat64()
-		variance.sum[groupIndex] = f1 * float64(z)
-		variance.count[groupIndex] += float64(z)
-		return math.Pow(f1, 2) * float64(z), false
+func (v *VD128) Fill(i int64, v1 types.Decimal128, v2 types.Decimal128, z int64, isEmpty bool, isNull bool) (types.Decimal128, bool) {
+	if isNull {
+		return v2, isEmpty
 	}
-	f1 := v1.ToFloat64()
-	variance.sum[groupIndex] = float64(variance.sum[groupIndex]) + f1*float64(z)
-	variance.count[groupIndex] += float64(z)
-	return v2 + math.Pow(f1, 2)*float64(z), false
+	v.counts[i] += z
+	if isEmpty {
+		v.sum[i] = types.Decimal128Int64Mul(v1, z)
+		return types.Decimal128Int64Mul(types.Decimal128Decimal128Mul(v1, v1), z), false
+	}
+	v.sum[i] = v.sum[i].Add(types.Decimal128Int64Mul(v1, z))
+	return v2.Add(types.Decimal128Int64Mul(types.Decimal128Decimal128Mul(v1, v1), z)), false
 }
