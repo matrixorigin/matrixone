@@ -163,8 +163,8 @@ message SyncLogTailResp {
 //          database_name = xxx
 //          file_name = "" 
 //          block_id = 0
-//          FIXME:: what's the type? hardencoded?
-//          bat.attrs = {"BlockId", "EntryState", "CreatedAt", "DeletedAt",
+//          FIXME:: "Start" is the latest txn's start timestamp, "End" is the latest txn's commit timestamp
+//          bat.attrs = {"BlockId", "EntryState", "CreatedAt", 
 //                            "Start", "End", "MetaLoc", "DeltaLoc"}
 //      }
 
@@ -177,13 +177,13 @@ message SyncLogTailResp {
 //          database_name = xxx
 //          file_name = "" 
 //          block_id = 0
-//          bat.attrs = {"BlockId", "EntryState", "CreatedAt", "DeletedAt",
+//          bat.attrs = {"BlockId", "EntryState", "DeletedAt",
 //                         "Start", "End", "MetaLoc", "DeltaLoc"}
 //      }
 
-// create segment:
+// create segment: pls refer to "create block"
 
-// delete segment:
+// delete segment: pls refer to "delete block"
 
 
 // create a user table: 
@@ -196,8 +196,7 @@ message SyncLogTailResp {
 //          database_name = mo_catalog
 //          file_name = "" 
 //          block_id = 0
-//          bat.attrs = {"relid", "relname", "reldatabase",  ...
-//                       "CreatedAt", "DeletedAt", "Start", "End"} 
+//          bat.attrs = {"relid", "relname", ..., "CreatedAt", "Start", "End"} 
 //                        
 //      }
 
@@ -211,7 +210,7 @@ message SyncLogTailResp {
 //          database_name = mo_catalog
 //          file_name = "" 
 //          block_id = 0
-//          bat.attrs = {"relid", "relname"}
+//          bat.attrs = {"relid", "relname", ... , "DeletedAt", "Start", "End"}
 //      }
 
 
@@ -268,7 +267,7 @@ message Message {
 //      }
 
 // drop table: 
-//  delete entry from mo_tables;
+//  delete entry from mo_tables and ...;
 //      Entry {
 //          entry_type = delete
 //          table_id = 1
@@ -289,10 +288,10 @@ message Message {
 //          table_name =  xxx
 //          database_name = xxx
 //          file_name = "s3 file name" 
-//          FIXME::transient block id;
+//          //transient block id;
 //          block_id = "xxx" 
 
-//          //block meta info
+//          //block meta info and colunm meta info
 //          bat.attrs = {"clounm index", "min", "max", "bf location", "data location",...}
 //      }
 
@@ -306,7 +305,7 @@ message Message {
     //          database_name = xxx
     //          file_name = "" 
     //          block_id = 0
-    //          bat.attrs = {"rowid", "primary column value",  "column1 value", ...}
+    //          bat.attrs = {"primary column value",  "column1 value", ...}
     //      }
 
 //  delete batch of data from table;
