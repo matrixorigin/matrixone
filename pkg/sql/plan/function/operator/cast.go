@@ -2455,7 +2455,7 @@ func CastBoolToNumeric[T constraints.Integer](lv, rv *vector.Vector, proc *proce
 	if err != nil {
 		return nil, err
 	}
-	rs := types.DecodeFixedSlice[T](vec.Data, lv.Typ.Oid.TypeLen())
+	rs := types.DecodeFixedSlice[T](vec.Data, rv.Typ.Oid.TypeLen())
 	rs = rs[:len(lvs)]
 	if _, err := binary.BoolToNumeric(lvs, rs); err != nil {
 		return nil, err
