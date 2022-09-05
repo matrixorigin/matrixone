@@ -33,6 +33,7 @@ import (
 
 	"github.com/fagongzi/goetty/v2"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
+	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
@@ -66,6 +67,8 @@ func NewService(
 		metadataFS:  fs,
 		fileService: fileService,
 	}
+	srv.stopper = stopper.NewStopper("cn-service", stopper.WithLogger(srv.logger))
+
 	if err := srv.initMetadata(); err != nil {
 		return nil, err
 	}
@@ -102,6 +105,9 @@ func NewService(
 func (s *service) Start() error {
 	err := s.runMoServer()
 	if err != nil {
+		return err
+	}
+	if err := s.startCNStoreHeartbeat(); err != nil {
 		return err
 	}
 	return s.server.Start()
