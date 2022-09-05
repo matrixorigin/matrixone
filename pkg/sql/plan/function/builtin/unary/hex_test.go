@@ -34,7 +34,7 @@ func TestHex(t *testing.T) {
 		isScalar bool
 	}{
 		{
-			name:     "Normal test",
+			name:     "String test",
 			proc:     procs,
 			inputstr: []string{"a"},
 			expected: []string{"61"},
@@ -44,7 +44,7 @@ func TestHex(t *testing.T) {
 			name:     "Scalar empty string",
 			proc:     procs,
 			inputstr: []string{""},
-			expected: []string{""},
+			expected: []string(nil),
 			isScalar: true,
 		},
 		{
@@ -52,7 +52,7 @@ func TestHex(t *testing.T) {
 			proc:     procs,
 			inputstr: []string{"255"},
 			expected: []string{"323535"},
-			isScalar: true,
+			isScalar: false,
 		},
 		{
 			name:     "multi row test",
@@ -64,13 +64,19 @@ func TestHex(t *testing.T) {
 		{
 			name:     "Null",
 			proc:     procs,
-			expected: []string(nil),
+			expected: []string{""},
 			isScalar: true,
 		},
 	}
 	for _, c := range cases {
 		convey.Convey(c.name, t, func() {
-			inVector := testutil.MakeVarcharVector(c.inputstr, nil)
+			var inVector *vector.Vector
+			if c.inputstr != nil {
+				inVector = testutil.MakeVarcharVector(c.inputstr, nil)
+				inVector.IsConst = c.isScalar
+			} else {
+				inVector = testutil.MakeScalarNull(0)
+			}
 			result, err := HexString([]*vector.Vector{inVector}, c.proc)
 			convey.So(err, convey.ShouldBeNil)
 			col := result.Col.(*types.Bytes)
@@ -89,6 +95,12 @@ func TestHex(t *testing.T) {
 		isScalar bool
 	}{
 		{
+			name:     "Non-empty scalar int",
+			proc:     procs,
+			inputnum: []int64{255},
+			expected: []string{"FF"},
+			isScalar: true,
+		}, {
 			name:     "Number test",
 			proc:     procs,
 			inputnum: []int64{255},
@@ -109,13 +121,19 @@ func TestHex(t *testing.T) {
 		}, {
 			name:     "Null",
 			proc:     procs,
-			expected: []string(nil),
+			expected: []string{""},
 			isScalar: true,
 		},
 	}
 	for _, c := range cases2 {
 		convey.Convey(c.name, t, func() {
-			inVector := testutil.MakeInt64Vector(c.inputnum, nil)
+			var inVector *vector.Vector
+			if c.inputnum != nil {
+				inVector = testutil.MakeInt64Vector(c.inputnum, nil)
+				inVector.IsConst = c.isScalar
+			} else {
+				inVector = testutil.MakeScalarNull(0)
+			}
 			result, err := HexInt64([]*vector.Vector{inVector}, c.proc)
 			convey.So(err, convey.ShouldBeNil)
 			col := result.Col.(*types.Bytes)
