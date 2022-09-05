@@ -14,7 +14,7 @@ func TestDict_InsertBatchFixedLen(t *testing.T) {
 	hm := host.New(1 << 30)
 	gm := guest.New(1<<30, hm)
 	m := mheap.New(gm)
-	dict, err := New(m, types.Type{Oid: types.T_int64})
+	dict, err := New(types.Type{Oid: types.T_int64}, m)
 	require.Nil(t, err)
 
 	v0 := vector.New(types.Type{Oid: types.T_int64})
@@ -46,7 +46,7 @@ func TestDict_FindBatchFixedLen(t *testing.T) {
 	hm := host.New(1 << 30)
 	gm := guest.New(1<<30, hm)
 	m := mheap.New(gm)
-	dict, err := New(m, types.Type{Oid: types.T_int16})
+	dict, err := New(types.Type{Oid: types.T_int16}, m)
 	require.Nil(t, err)
 
 	v0 := vector.New(types.Type{Oid: types.T_int16})
@@ -80,7 +80,7 @@ func TestDict_FindDataFixedLen(t *testing.T) {
 	hm := host.New(1 << 30)
 	gm := guest.New(1<<30, hm)
 	m := mheap.New(gm)
-	dict, err := New(m, types.Type{Oid: types.T_int32})
+	dict, err := New(types.Type{Oid: types.T_int32}, m)
 	require.Nil(t, err)
 
 	v0 := vector.New(types.Type{Oid: types.T_int32})
@@ -113,7 +113,7 @@ func TestDict_InsertBatchVarLen(t *testing.T) {
 	hm := host.New(1 << 30)
 	gm := guest.New(1<<30, hm)
 	m := mheap.New(gm)
-	dict, err := New(m, types.Type{Oid: types.T_varchar})
+	dict, err := New(types.Type{Oid: types.T_varchar}, m)
 	require.Nil(t, err)
 
 	v0 := vector.New(types.Type{Oid: types.T_varchar})
@@ -152,7 +152,7 @@ func TestDict_FindBatchVarLen(t *testing.T) {
 	hm := host.New(1 << 30)
 	gm := guest.New(1<<30, hm)
 	m := mheap.New(gm)
-	dict, err := New(m, types.Type{Oid: types.T_varchar})
+	dict, err := New(types.Type{Oid: types.T_varchar}, m)
 	require.Nil(t, err)
 
 	v0 := vector.New(types.Type{Oid: types.T_varchar})
@@ -192,7 +192,7 @@ func TestDict_FindDataVarLen(t *testing.T) {
 	hm := host.New(1 << 30)
 	gm := guest.New(1<<30, hm)
 	m := mheap.New(gm)
-	dict, err := New(m, types.Type{Oid: types.T_varchar})
+	dict, err := New(types.Type{Oid: types.T_varchar}, m)
 	require.Nil(t, err)
 
 	v0 := vector.New(types.Type{Oid: types.T_varchar})

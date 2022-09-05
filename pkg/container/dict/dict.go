@@ -12,17 +12,18 @@ var (
 )
 
 type Dict struct {
+	typ types.Type
+
 	m      *mheap.Mheap
-	typ    types.Type
-	unique *vector.Vector
 	idx    reverseIndex
+	unique *vector.Vector
 }
 
-func New(m *mheap.Mheap, typ types.Type) (*Dict, error) {
+func New(typ types.Type, m *mheap.Mheap) (*Dict, error) {
 	// typ cannot be `T_decimal128`, `T_json`
 	d := &Dict{
-		m:   m,
 		typ: typ,
+		m:   m,
 	}
 
 	var idx reverseIndex
@@ -45,6 +46,8 @@ func New(m *mheap.Mheap, typ types.Type) (*Dict, error) {
 }
 
 func (d *Dict) Typ() types.Type { return d.typ }
+
+func (d *Dict) GetUnique() *vector.Vector { return d.unique }
 
 func (d *Dict) InsertBatch(data *vector.Vector) ([]uint64, error) {
 	if d.Typ().Oid != data.Typ.Oid {
@@ -133,10 +136,10 @@ func (d *Dict) encodeFixedData(data *vector.Vector) []uint64 {
 }
 
 func (d *Dict) encodeVarData(data *vector.Vector) [][]byte {
-	var bs [][]byte
+	bs := make([][]byte, data.Count())
 	for i := 0; i < data.Count(); i++ {
 		col := data.Col.(*types.Bytes)
-		bs = append(bs, col.Data[col.Offsets[i]:col.Offsets[i]+col.Lengths[i]])
+		bs[i] = col.Data[col.Offsets[i] : col.Offsets[i]+col.Lengths[i]]
 	}
 	return bs
 }
