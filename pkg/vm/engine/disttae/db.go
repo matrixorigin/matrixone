@@ -12,12 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package txnstorage
+package disttae
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
 
-type (
-	Timestamp = timestamp.Timestamp
-)
+func (db *DB) NewReader(databaseName, tableName string, expr *plan.Expr) Reader {
+	return nil
+}

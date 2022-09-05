@@ -34,6 +34,7 @@ import (
 	"github.com/fagongzi/goetty/v2"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 )
 
@@ -45,16 +46,30 @@ func NewService(
 	fileService fileservice.FileService,
 	options ...Options,
 ) (Service, error) {
-
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
 
+	// get metadata fs
+	fs, err := fileservice.Get[fileservice.ReplaceableFileService](fileService, "LOCAL")
+	if err != nil {
+		return nil, err
+	}
+
 	srv := &service{
+		logger: logutil.GetGlobalLogger().Named("cnservice"),
+		metadata: metadata.CNStore{
+			UUID: cfg.UUID,
+			Role: metadata.MustParseCNRole(cfg.Role),
+		},
 		cfg:         cfg,
+		metadataFS:  fs,
 		fileService: fileService,
 	}
-	srv.logger = logutil.Adjust(srv.logger)
+	if err := srv.initMetadata(); err != nil {
+		return nil, err
+	}
+
 	srv.responsePool = &sync.Pool{
 		New: func() any {
 			return &pipeline.Message{}
@@ -63,8 +78,7 @@ func NewService(
 
 	pu := config.NewParameterUnit(&cfg.Frontend, nil, nil, nil, nil, nil)
 	cfg.Frontend.SetDefaultValues()
-	err := srv.initMOServer(ctx, pu)
-	if err != nil {
+	if err = srv.initMOServer(ctx, pu); err != nil {
 		return nil, err
 	}
 
