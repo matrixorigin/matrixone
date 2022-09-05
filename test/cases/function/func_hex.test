@@ -1,0 +1,11 @@
+#NULL
+SELECT hex(NULL)
+
+#Number
+SELECT hex(5.5)
+SELECT hex(9223372036854775807)
+SELECT hex(-9223372036854775808)
+
+#String
+SELECT hex("你好")
+SELECT hex("abc")
