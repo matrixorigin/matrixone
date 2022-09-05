@@ -224,9 +224,11 @@ message TableCmd {
 
 
 // CN precommit the write command  
+/*
 message PrecommitWriteCmd {
     map<uint64, DatabaseCmd> db_cmds = 1;
 };
+*/
 
 message DatabaseID {
     uint64 id = 1;
@@ -510,6 +512,10 @@ message SyncLogTailResp {
     BatchCommands commands = 3;
 };
 
+
+message PrecommitWriteCmd {
+    repeated Entry entry_list = 1;
+};
 
 message Entry {
     enum EntryType {
