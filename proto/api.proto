@@ -512,8 +512,12 @@ message SyncLogTailResp {
     BatchCommands commands = 3;
 };
 
-
 message PrecommitWriteCmd {
+    repeated Entry entry_list = 1;
+};
+
+// cn->dn or dn->cn
+message Message {
     repeated Entry entry_list = 1;
 };
 
