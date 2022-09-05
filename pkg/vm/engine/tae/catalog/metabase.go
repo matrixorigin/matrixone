@@ -249,13 +249,7 @@ func (be *MetaBaseEntry) NeedWaitCommitting(startTS types.TS) (bool, txnif.TxnRe
 	if un == nil {
 		return false, nil
 	}
-	if !un.IsCommitting() {
-		return false, nil
-	}
-	if un.Txn.GetCommitTS().GreaterEq(startTS) {
-		return false, nil
-	}
-	return true, un.Txn
+	return un.NeedWaitCommitting(startTS)
 }
 
 func (be *MetaBaseEntry) InTxnOrRollbacked() bool {
@@ -526,6 +520,12 @@ func (be *MetaBaseEntry) IsCommitted() bool {
 }
 
 func (be *MetaBaseEntry) CloneCommittedInRange(start, end types.TS) (ret BaseEntryIf) {
+	needWait, txn := be.NeedWaitCommitting(end)
+	if needWait {
+		be.RUnlock()
+		txn.GetTxnState(true)
+		be.RLock()
+	}
 	be.MVCC.Loop(func(n *common.GenericDLNode[*MetadataMVCCNode]) bool {
 		un := n.GetPayload()
 		committedIn, commitBeforeMinTs := un.CommittedIn(start, end)

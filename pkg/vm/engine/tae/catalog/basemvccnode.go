@@ -87,7 +87,7 @@ func (un *TxnMVCCNode) NeedWaitCommitting(startTS types.TS) (bool, txnif.TxnRead
 	if !un.IsCommitting() {
 		return false, nil
 	}
-	if un.Txn.GetCommitTS().GreaterEq(startTS) {
+	if un.Txn.GetCommitTS().Greater(startTS) {
 		return false, nil
 	}
 	return true, un.Txn

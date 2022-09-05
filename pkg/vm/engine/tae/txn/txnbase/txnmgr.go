@@ -93,6 +93,7 @@ func (mgr *TxnManager) StatSafeTS() (ts types.TS) {
 		//ts = mgr.TsAlloc.Get()
 		ts = mgr.TsAlloc.Alloc()
 	}
+	ts= mgr.TsAlloc.Get()
 	mgr.RUnlock()
 	return
 }

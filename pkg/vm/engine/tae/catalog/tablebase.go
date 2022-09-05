@@ -514,6 +514,12 @@ func (be *TableBaseEntry) IsCommitted() bool {
 }
 
 func (be *TableBaseEntry) CloneCommittedInRange(start, end types.TS) (ret BaseEntryIf) {
+	needWait,txn:=be.NeedWaitCommitting(end)
+	if needWait{
+		be.RUnlock()
+		txn.GetTxnState(true)
+		be.RLock()
+	}
 	be.MVCC.Loop(func(n *common.GenericDLNode[*TableMVCCNode]) bool {
 		un := n.GetPayload()
 		committedIn, commitBeforeMinTs := un.CommittedIn(start, end)

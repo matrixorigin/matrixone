@@ -247,13 +247,7 @@ func (be *DBBaseEntry) NeedWaitCommitting(startTS types.TS) (bool, txnif.TxnRead
 	if un == nil {
 		return false, nil
 	}
-	if !un.IsCommitting() {
-		return false, nil
-	}
-	if un.Txn.GetCommitTS().GreaterEq(startTS) {
-		return false, nil
-	}
-	return true, un.Txn
+	return un.NeedWaitCommitting(startTS)
 }
 
 func (be *DBBaseEntry) InTxnOrRollbacked() bool {
@@ -514,6 +508,12 @@ func (be *DBBaseEntry) IsCommitted() bool {
 }
 
 func (be *DBBaseEntry) CloneCommittedInRange(start, end types.TS) (ret BaseEntryIf) {
+	needWait,txn:=be.NeedWaitCommitting(end)
+	if needWait{
+		be.RUnlock()
+		txn.GetTxnState(true)
+		be.RLock()
+	}
 	be.MVCC.Loop(func(n *common.GenericDLNode[*DBMVCCNode]) bool {
 		un := n.GetPayload()
 		committedIn, commitBeforeMinTs := un.CommittedIn(start, end)
