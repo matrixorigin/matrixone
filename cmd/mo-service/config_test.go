@@ -15,6 +15,7 @@
 package main
 
 import (
+	"reflect"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -111,8 +112,8 @@ func TestResolveGossipSeedAddresses(t *testing.T) {
 			nil,
 		},
 		{
+			[]string{"localhost:32001", "of-course-no-such-address42033.io:32001"},
 			[]string{"127.0.0.1:32001", "of-course-no-such-address42033.io:32001"},
-			[]string{"127.0.0.1:32001"},
 			nil,
 		},
 	}
@@ -126,6 +127,9 @@ func TestResolveGossipSeedAddresses(t *testing.T) {
 		err := cfg.resolveGossipSeedAddresses()
 		if err != tt.err {
 			t.Errorf("expected %v, got %v", tt.err, err)
+		}
+		if got := cfg.LogService.GossipSeedAddresses; !reflect.DeepEqual(got, tt.results) {
+			t.Errorf("expected %v, got %v", tt.results, got)
 		}
 	}
 }

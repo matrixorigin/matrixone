@@ -17,6 +17,7 @@ package metadata
 import (
 	"bytes"
 	"fmt"
+	"strings"
 )
 
 // IsEmpty return true if is a empty DNShard
@@ -50,4 +51,17 @@ func (m DNStore) DebugString() string {
 	}
 	buf.WriteString("]")
 	return buf.String()
+}
+
+// DebugString returns debug string
+func (m CNStore) DebugString() string {
+	return fmt.Sprintf("%s/%s", m.UUID, m.Role.String())
+}
+
+// MustParseCNRole parse CN Role from role string
+func MustParseCNRole(role string) CNRole {
+	if v, ok := CNRole_value[strings.ToUpper(role)]; ok {
+		return CNRole(v)
+	}
+	panic(fmt.Sprintf("invalid CN Role %s", role))
 }
