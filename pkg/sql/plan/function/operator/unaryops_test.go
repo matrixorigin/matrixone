@@ -23,6 +23,24 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestUnary(t *testing.T) {
+	input := testutil.MakeInt64Vector([]int64{5, -5, 0}, []uint64{2})
+	testProc := testutil.NewProc()
+	output, err := UnaryTilde[int64]([]*vector.Vector{input}, testProc)
+	require.NoError(t, err)
+	expected := testutil.MakeUint64Vector([]uint64{18446744073709551610, 4, 0}, []uint64{2})
+	require.True(t, testutil.CompareVectors(expected, output), "got vector is different with expected")
+}
+
+func TestUnaryMinus(t *testing.T) {
+	input := testutil.MakeInt64Vector([]int64{123, 234, 345, 0}, []uint64{3})
+	testProc := testutil.NewProc()
+	output, err := UnaryMinus[int64]([]*vector.Vector{input}, testProc)
+	require.NoError(t, err)
+	expected := testutil.MakeInt64Vector([]int64{-123, -234, -345, 0}, []uint64{3})
+	require.True(t, testutil.CompareVectors(expected, output), "got vector is different with expected")
+}
+
 func TestUnaryMinusDecimal64(t *testing.T) {
 	input := testutil.MakeDecimal64Vector([]int64{123, 234, 345, 0}, []uint64{3}, testutil.MakeDecimal64Type(6, 2))
 	testProc := testutil.NewProc()

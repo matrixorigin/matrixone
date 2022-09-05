@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -39,32 +40,40 @@ func New(
 var _ engine.Engine = new(Engine)
 
 func (e *Engine) Create(ctx context.Context, name string, op client.TxnOperator) error {
-	//TODO
-	e.newTransaction(op)
-	panic("unimplemented")
+	txn, err := e.getOrAddTransaction(op, e.getClusterDetails)
+	if err != nil {
+		return err
+	}
+	if err := txn.WriteBatch(INSERT, MO_CATALOG_ID, MO_DATABASE_ID, MO_CATALOG, MO_DATABASE, generateCreateDatabaseTuple(name)); err != nil {
+		return err
+	}
+	return nil
 }
 
 func (e *Engine) Database(ctx context.Context, name string, op client.TxnOperator) (engine.Database, error) {
 	//TODO
-	e.newTransaction(op)
 	panic("unimplemented")
 }
 
 func (e *Engine) Databases(ctx context.Context, op client.TxnOperator) ([]string, error) {
 	//TODO
-	e.newTransaction(op)
 	panic("unimplemented")
 }
 
 func (e *Engine) Delete(ctx context.Context, name string, op client.TxnOperator) error {
-	//TODO
-	e.newTransaction(op)
-	panic("unimplemented")
+	txn, err := e.getOrAddTransaction(op, e.getClusterDetails)
+	if err != nil {
+		return err
+	}
+	if err := txn.WriteBatch(DELETE, MO_CATALOG_ID, MO_DATABASE_ID, MO_CATALOG, MO_DATABASE, generateDropDatabaseTuple(name)); err != nil {
+		return err
+	}
+	return nil
 }
 
 // hasConflict used to detect if a transaction on a cn is in conflict,
 // currently an empty implementation, assuming all transactions on a cn are conflict free
-func (e *Engine) HasConflict(txn *Transaction) bool {
+func (e *Engine) hasConflict(txn *Transaction) bool {
 	return false
 }
 
@@ -74,7 +83,7 @@ func (e *Engine) PreCommit(ctx context.Context, op client.TxnOperator) error {
 		return moerr.New(moerr.ErrTxnClosed, "the transaction has been committed or aborted")
 	}
 	defer e.delTransaction(txn)
-	if e.HasConflict(txn) {
+	if e.hasConflict(txn) {
 		return moerr.New(moerr.ErrTxnWriteConflict, "write conflict")
 	}
 	return nil
@@ -112,30 +121,44 @@ func (e *Engine) Hints() (h engine.Hints) {
 	return
 }
 
-func (e *Engine) newTransaction(op client.TxnOperator) {
-	txn := &Transaction{
-		readOnly: false,
-		meta:     op.Txn(),
+func (e *Engine) getOrAddTransaction(op client.TxnOperator, getClusterDetails GetClusterDetailsFunc) (*Transaction, error) {
+	id := string(op.Txn().ID)
+	e.Lock()
+	defer e.Unlock()
+	txn, ok := e.txns[id]
+	if !ok {
+		cluster, err := getClusterDetails()
+		if err != nil {
+			return nil, err
+		}
+		txn = &Transaction{
+			readOnly: false,
+			meta:     op.Txn(),
+			dnStores: cluster.DNStores,
+			fileMap:  make(map[string]uint64),
+		}
+		txn.writes = append(txn.writes, make([]Entry, 0, 1))
+		e.txns[id] = txn
 	}
-	e.addTransaction(txn)
+	return txn, nil
 }
 
 func (e *Engine) getTransaction(op client.TxnOperator) *Transaction {
-	e.Lock()
-	defer e.Unlock()
+	e.RLock()
+	defer e.RUnlock()
 	return e.txns[string(op.Txn().ID)]
-}
-
-func (e *Engine) addTransaction(txn *Transaction) {
-	e.Lock()
-	defer e.Unlock()
-	if _, ok := e.txns[string(txn.meta.ID)]; !ok {
-		e.txns[string(txn.meta.ID)] = txn
-	}
 }
 
 func (e *Engine) delTransaction(txn *Transaction) {
 	e.Lock()
 	defer e.Unlock()
 	delete(e.txns, string(txn.meta.ID))
+}
+
+func generateCreateDatabaseTuple(name string) *batch.Batch {
+	return &batch.Batch{}
+}
+
+func generateDropDatabaseTuple(name string) *batch.Batch {
+	return &batch.Batch{}
 }

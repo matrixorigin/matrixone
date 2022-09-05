@@ -191,15 +191,18 @@ func (c *Config) resolveGossipSeedAddresses() error {
 		if err != nil {
 			return err
 		}
-		addrs, err := net.LookupHost(host)
+		ips, err := net.LookupIP(host)
 		if err != nil {
+			// the configured member may be failed currently, keep the host name anyway since
+			// memberlist would try to resolve it again
+			result = append(result, addr)
 			continue
 		}
 		// only keep IPv4 addresses
 		filtered := make([]string, 0)
-		for _, cur := range addrs {
-			if net.ParseIP(cur).To4() != nil {
-				filtered = append(filtered, cur)
+		for _, ip := range ips {
+			if ip.To4() != nil {
+				filtered = append(filtered, ip.String())
 			}
 		}
 		if len(filtered) != 1 {
