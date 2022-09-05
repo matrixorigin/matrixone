@@ -29,7 +29,7 @@ func HexString(vectors []*vector.Vector, proc *process.Process) (*vector.Vector,
 	resultType := types.New(types.T_varchar, 0, 0, 0)
 	if inputVector.IsScalar() {
 		if inputVector.ConstVectorIsNull() {
-			return vector.NewConst(resultType, 1), nil
+			return vector.NewConstNull(resultType, 1), nil
 		}
 		resultVector := vector.NewConst(resultType, 1)
 		inputValue := HexEncodeString(vector.GetStrColumn(inputVector).Get(0))
@@ -61,7 +61,7 @@ func HexInt64(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, 
 	resultType := types.New(types.T_varchar, 0, 0, 0)
 	if inputVector.IsScalar() {
 		if inputVector.ConstVectorIsNull() {
-			return vector.NewConst(resultType, 1), nil
+			return vector.NewConstNull(resultType, 1), nil
 		}
 		resultVector := vector.NewConst(resultType, 1)
 		inputValue := HexEncodeInt64(vector.GetColumn[int64](inputVector)[0])
