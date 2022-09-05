@@ -6682,7 +6682,7 @@ char_type:
 	   	FamilyString: $1,
 		Width:  128,
 		Locale: &locale,
-		Oid:    uint32(defines.MYSQL_TYPE_LONG),
+		Oid:    uint32(defines.MYSQL_TYPE_UUID),
 	},
     }
 }

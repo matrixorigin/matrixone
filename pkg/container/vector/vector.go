@@ -207,6 +207,8 @@ func (v *Vector) ToConst(row int) *Vector {
 		return toConstVector[types.Decimal64](v, row)
 	case types.T_decimal128:
 		return toConstVector[types.Decimal128](v, row)
+	case types.T_uuid:
+		return toConstVector[types.Uuid](v, row)
 	case types.T_char, types.T_varchar, types.T_json, types.T_blob:
 		col := v.Col.(*types.Bytes)
 		src := col.Data[col.Offsets[row] : col.Offsets[row]+col.Lengths[row]]
@@ -272,6 +274,8 @@ func (v *Vector) ConstExpand(m *mheap.Mheap) *Vector {
 		expandVector[types.Decimal64](v, 8, m)
 	case types.T_decimal128:
 		expandVector[types.Decimal128](v, 16, m)
+	case types.T_uuid:
+		expandVector[types.Uuid](v, 16, m)
 	case types.T_char, types.T_varchar, types.T_json, types.T_blob:
 		col := v.Col.(*types.Bytes)
 		if nulls.Any(v.Nsp) {
@@ -490,6 +494,12 @@ func New(typ types.Type) *Vector {
 			Col: []types.Decimal128{},
 			Nsp: &nulls.Nulls{},
 		}
+	case types.T_uuid:
+		return &Vector{
+			Typ: typ,
+			Col: []types.Uuid{},
+			Nsp: &nulls.Nulls{},
+		}
 	default:
 		panic(fmt.Sprintf("unexpect type %s for function vector.New", typ))
 	}
@@ -628,6 +638,8 @@ func (v *Vector) Realloc(size int, m *mheap.Mheap) error {
 		v.Col = types.DecodeSlice[types.Decimal64](v.Data[:len(data)], size)[:oldLen/size]
 	case types.T_decimal128:
 		v.Col = types.DecodeSlice[types.Decimal128](v.Data[:len(data)], size)[:oldLen/size]
+	case types.T_uuid:
+		v.Col = types.DecodeSlice[types.Uuid](v.Data[:len(data)], size)[:oldLen/size]
 	}
 	return nil
 }
@@ -842,6 +854,19 @@ func (v *Vector) Append(w any, m *mheap.Mheap) error {
 		col = append(col, wv)
 		v.Col = col
 		v.Data = v.Data[:(n+1)*16]
+	case types.T_uuid:
+		wv := w.(types.Uuid)
+		col := v.Col.([]types.Uuid)
+		n := len(col)
+		if n+1 > cap(col) {
+			if err := v.Realloc(16, m); err != nil {
+				return err
+			}
+			col = v.Col.([]types.Uuid)
+		}
+		col = append(col, wv)
+		v.Col = col
+		v.Data = v.Data[:(n+1)*16]
 	case types.T_char, types.T_varchar, types.T_json, types.T_blob:
 		wv := w.([]byte)
 		n := len(v.Data)
@@ -990,6 +1015,13 @@ func PreAlloc(v, w *Vector, rows int, m *mheap.Mheap) {
 		}
 		v.Data = data
 		v.Col = types.DecodeTimestampSlice(v.Data)[:0]
+	case types.T_uuid:
+		data, err := mheap.Alloc(m, int64(rows*16))
+		if err != nil {
+			return
+		}
+		v.Data = data
+		v.Col = types.DecodeUuidSlice(v.Data)[:0]
 	case types.T_char, types.T_varchar, types.T_blob, types.T_json:
 		vs, ws := v.Col.(*types.Bytes), w.Col.(*types.Bytes)
 		data, err := mheap.Alloc(m, int64(rows*len(ws.Data)/len(ws.Offsets)))
@@ -1083,7 +1115,9 @@ func SetVectorLength(v *Vector, n int) {
 	case types.T_decimal128:
 		v.Data = v.Data[:n*16]
 		setLengthFixed[types.Decimal128](v, n)
-
+	case types.T_uuid:
+		v.Data = v.Data[:n*16]
+		setLengthFixed[types.Uuid](v, n)
 	case types.T_sel:
 		vs := v.Col.([]int64)
 		m := len(vs)
@@ -1398,6 +1432,22 @@ func Dup(v *Vector, m *mheap.Mheap) (*Vector, error) {
 			Ref:  v.Ref,
 			Link: v.Link,
 		}, nil
+	case types.T_uuid:
+		vs := v.Col.([]types.Uuid)
+		data, err := mheap.Alloc(m, int64(len(vs)*16))
+		if err != nil {
+			return nil, err
+		}
+		ws := types.DecodeUuidSlice(data)
+		copy(ws, vs)
+		return &Vector{
+			Col:  ws,
+			Data: data,
+			Typ:  v.Typ,
+			Nsp:  v.Nsp,
+			Ref:  v.Ref,
+			Link: v.Link,
+		}, nil
 	}
 	return nil, fmt.Errorf("unsupport type %v", v.Typ)
 }
@@ -1462,6 +1512,9 @@ func Window(v *Vector, start, end int, w *Vector) *Vector {
 	case types.T_decimal128:
 		w.Col = v.Col.([]types.Decimal128)[start:end]
 		w.Nsp = nulls.Range(v.Nsp, uint64(start), uint64(end), w.Nsp)
+	case types.T_uuid:
+		w.Col = v.Col.([]types.Uuid)[start:end]
+		w.Nsp = nulls.Range(v.Nsp, uint64(start), uint64(end), w.Nsp)
 	default:
 		panic(fmt.Sprintf("unexpect type %s for function vector.Window", v.Typ))
 	}
@@ -1524,6 +1577,9 @@ func Append(v *Vector, arg interface{}) error {
 	case types.T_decimal128:
 		v.Col = append(v.Col.([]types.Decimal128), arg.([]types.Decimal128)...)
 		v.Data = types.EncodeFixedSlice(v.Col.([]types.Decimal128), 16)
+	case types.T_uuid:
+		v.Col = append(v.Col.([]types.Uuid), arg.([]types.Uuid)...)
+		v.Data = types.EncodeFixedSlice(v.Col.([]types.Uuid), 16)
 	default:
 		return fmt.Errorf("unexpect type %s for function vector.Append", v.Typ)
 	}
@@ -1687,6 +1743,14 @@ func Shrink(v *Vector, sels []int64) {
 		v.Nsp = nulls.Filter(v.Nsp, sels)
 	case types.T_decimal128:
 		vs := v.Col.([]types.Decimal128)
+		for i, sel := range sels {
+			vs[i] = vs[sel]
+		}
+		v.Col = vs[:len(sels)]
+		v.Data = v.Data[:len(sels)*16]
+		v.Nsp = nulls.Filter(v.Nsp, sels)
+	case types.T_uuid:
+		vs := v.Col.([]types.Uuid)
 		for i, sel := range sels {
 			vs[i] = vs[sel]
 		}
@@ -1913,6 +1977,17 @@ func Shuffle(v *Vector, sels []int64, m *mheap.Mheap) error {
 		}
 		ws := types.DecodeDecimal128Slice(data)
 		v.Col = shuffle.Decimal128Shuffle(vs, ws, sels)
+		v.Nsp = nulls.Filter(v.Nsp, sels)
+		v.Data = v.Data[:len(sels)*1]
+		mheap.Free(m, data)
+	case types.T_uuid:
+		vs := v.Col.([]types.Uuid)
+		data, err := mheap.Alloc(m, int64(len(vs)*16))
+		if err != nil {
+			return err
+		}
+		ws := types.DecodeUuidSlice(data)
+		v.Col = shuffle.UuidShuffle(vs, ws, sels)
 		v.Nsp = nulls.Filter(v.Nsp, sels)
 		v.Data = v.Data[:len(sels)*1]
 		mheap.Free(m, data)
@@ -2451,6 +2526,34 @@ func UnionOne(v, w *Vector, sel int64, m *mheap.Mheap) error {
 			v.Col = vs
 			v.Data = v.Data[:len(vs)*16]
 		}
+	case types.T_uuid:
+		if len(v.Data) == 0 {
+			data, err := mheap.Alloc(m, 16*8)
+			if err != nil {
+				return err
+			}
+			v.Ref = w.Ref
+			vs := types.DecodeUuidSlice(data)
+			vs[0] = w.Col.([]types.Uuid)[sel]
+			v.Col = vs[:1]
+			v.Data = data
+		} else {
+			vs := v.Col.([]types.Uuid)
+			if n := len(vs); n+1 >= cap(vs) {
+				data, err := mheap.Grow(m, v.Data[:n*16], int64(n+1)*16)
+				if err != nil {
+					return err
+				}
+				mheap.Free(m, v.Data)
+				vs = types.DecodeUuidSlice(data)
+				vs = vs[:n]
+				v.Col = vs
+				v.Data = data
+			}
+			vs = append(vs, w.Col.([]types.Uuid)[sel])
+			v.Col = vs
+			v.Data = v.Data[:len(vs)*16]
+		}
 	}
 	if nulls.Any(w.Nsp) && nulls.Contains(w.Nsp, uint64(sel)) {
 		nulls.Add(v.Nsp, uint64(Length(v)-1))
@@ -2886,6 +2989,32 @@ func UnionNull(v, _ *Vector, m *mheap.Mheap) error {
 				}
 				mheap.Free(m, v.Data)
 				vs = types.DecodeDecimal128Slice(data)
+				vs = vs[:n]
+				v.Col = vs
+				v.Data = data
+			}
+			vs = append(vs, vs[0])
+			v.Col = vs
+			v.Data = v.Data[:len(vs)*16]
+		}
+	case types.T_uuid:
+		if len(v.Data) == 0 {
+			data, err := mheap.Alloc(m, 16*8)
+			if err != nil {
+				return err
+			}
+			vs := types.DecodeUuidSlice(data)
+			v.Col = vs[:1]
+			v.Data = data
+		} else {
+			vs := v.Col.([]types.Uuid)
+			if n := len(vs); n+1 >= cap(vs) {
+				data, err := mheap.Grow(m, v.Data[:n*16], int64(n+1)*16)
+				if err != nil {
+					return err
+				}
+				mheap.Free(m, v.Data)
+				vs = types.DecodeUuidSlice(data)
 				vs = vs[:n]
 				v.Col = vs
 				v.Data = data

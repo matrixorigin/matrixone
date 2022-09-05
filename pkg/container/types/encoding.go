@@ -229,6 +229,14 @@ func DecodeDecimal128(v []byte) Decimal128 {
 	return *(*Decimal128)(unsafe.Pointer(&v[0]))
 }
 
+func EncodeUuid(v Uuid) []byte {
+	return unsafe.Slice((*byte)(unsafe.Pointer(&v)), UuidSize)
+}
+
+func DecodeUuid(v []byte) Uuid {
+	return *(*Uuid)(unsafe.Pointer(&v[0]))
+}
+
 func EncodeFixedSlice[T any](v []T, sz int) (ret []byte) {
 	if len(v) > 0 {
 		ret = unsafe.Slice((*byte)(unsafe.Pointer(&v[0])), cap(v)*sz)[:len(v)*sz]

@@ -322,6 +322,8 @@ func makeBatch(handler *ParseLineHandler, id int) *PoolElement {
 			vec.Col = make([]types.Decimal64, batchSize)
 		case types.T_decimal128:
 			vec.Col = make([]types.Decimal128, batchSize)
+		case types.T_uuid:
+			vec.Col = make([]types.Uuid, batchSize)
 		case types.T_timestamp:
 			vec.Col = make([]types.Timestamp, batchSize)
 		default:

@@ -41,13 +41,15 @@ var (
 	DatetimeShuffle  = fixedLengthShuffle[types.Datetime]
 	TimestampShuffle = fixedLengthShuffle[types.Timestamp]
 
+	UuidShuffle = fixedLengthShuffle[types.Uuid]
+
 	TupleShuffle = tupleShuffle
 
 	StrShuffle = strShuffle
 )
 
 type fixedLength interface {
-	constraints.Integer | constraints.Float | types.Decimal64 | types.Decimal128 | bool
+	constraints.Integer | constraints.Float | types.Decimal64 | types.Decimal128 | types.Uuid | bool
 }
 
 func fixedLengthShuffle[T fixedLength](vs, ws []T, sels []int64) []T {
