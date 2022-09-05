@@ -393,7 +393,7 @@ func (b *baseBinder) bindUnaryExpr(astExpr *tree.UnaryExpr, depth int32, isRoot 
 	case tree.UNARY_PLUS:
 		return b.bindFuncExprImplByAstExpr("unary_plus", []tree.Expr{astExpr.Expr}, depth)
 	case tree.UNARY_TILDE:
-		return nil, errors.New("", fmt.Sprintf("'%v' is not supported now", astExpr))
+		return b.bindFuncExprImplByAstExpr("unary_tilde", []tree.Expr{astExpr.Expr}, depth)
 	case tree.UNARY_MARK:
 		return nil, errors.New("", fmt.Sprintf("'%v' is not supported now", astExpr))
 	}
@@ -420,6 +420,10 @@ func (b *baseBinder) bindBinaryExpr(astExpr *tree.BinaryExpr, depth int32, isRoo
 		return b.bindFuncExprImplByAstExpr("|", []tree.Expr{astExpr.Left, astExpr.Right}, depth)
 	case tree.BIT_AND:
 		return b.bindFuncExprImplByAstExpr("&", []tree.Expr{astExpr.Left, astExpr.Right}, depth)
+	case tree.LEFT_SHIFT:
+		return b.bindFuncExprImplByAstExpr("<<", []tree.Expr{astExpr.Left, astExpr.Right}, depth)
+	case tree.RIGHT_SHIFT:
+		return b.bindFuncExprImplByAstExpr(">>", []tree.Expr{astExpr.Left, astExpr.Right}, depth)
 	}
 	return nil, errors.New("", fmt.Sprintf("'%v' operator is not supported now", astExpr.Op.ToString()))
 }
@@ -833,7 +837,7 @@ func bindFuncExprImplByPlanExpr(name string, args []*Expr) (*plan.Expr, error) {
 				return nil, err
 			}
 		}
-	case "variance", "oct", "stddev_pop", "std", "bit_and", "bit_or", "bit_xor":
+	case "oct", "bit_and", "bit_or", "bit_xor":
 		if args[0].Typ.Id == int32(types.T_decimal128) || args[0].Typ.Id == int32(types.T_decimal64) {
 			args[0], err = appendCastBeforeExpr(args[0], &plan.Type{
 				Id:       int32(types.T_float64),

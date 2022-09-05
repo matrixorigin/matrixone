@@ -15,9 +15,12 @@
 package txnstorage
 
 import (
+	"math"
 	"testing"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 )
 
 func TestMemHandler(t *testing.T) {
@@ -26,6 +29,9 @@ func TestMemHandler(t *testing.T) {
 			NewMemHandler(
 				testutil.NewMheap(),
 				Serializable,
+				clock.NewHLCClock(func() int64 {
+					return time.Now().UnixNano()
+				}, math.MaxInt64),
 			),
 		)
 	})
