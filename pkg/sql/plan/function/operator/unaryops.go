@@ -23,6 +23,61 @@ import (
 	"golang.org/x/exp/constraints"
 )
 
+func UnaryTilde[T constraints.Integer](vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	srcVector := vectors[0]
+	srcValues := vector.MustTCols[T](srcVector)
+	returnType := types.Type{
+		Oid:  types.T_uint64,
+		Size: types.T_uint64.ToType().Size,
+	}
+	resultElementSize := returnType.Oid.TypeLen()
+
+	if srcVector.IsScalar() {
+		if srcVector.IsScalarNull() {
+			return proc.AllocScalarNullVector(returnType), nil
+		}
+		resVector := proc.AllocScalarVector(returnType)
+		resValues := make([]uint64, 1)
+		nulls.Set(resVector.Nsp, srcVector.Nsp)
+		resValues[0] = funcBitInversion(srcValues[0])
+		vector.SetCol(resVector, resValues)
+		return resVector, nil
+	} else {
+		resVector, err := proc.AllocVector(returnType, int64(resultElementSize*len(srcValues)))
+		if err != nil {
+			return nil, err
+		}
+		resValues := types.DecodeFixedSlice[uint64](resVector.Data, resultElementSize)
+		nulls.Set(resVector.Nsp, srcVector.Nsp)
+
+		var i uint64
+		if nulls.Any(resVector.Nsp) {
+			for i = 0; i < uint64(len(resValues)); i++ {
+				if !nulls.Contains(resVector.Nsp, i) {
+					resValues[i] = funcBitInversion(srcValues[i])
+				} else {
+					resValues[i] = 0
+				}
+			}
+		} else {
+			for i = 0; i < uint64(len(resValues)); i++ {
+				resValues[i] = funcBitInversion(srcValues[i])
+			}
+		}
+		vector.SetCol(resVector, resValues)
+		return resVector, nil
+	}
+}
+
+func funcBitInversion[T constraints.Integer](x T) uint64 {
+	if x > 0 {
+		n := uint64(x)
+		return ^n
+	} else {
+		return uint64(^x)
+	}
+}
+
 func UnaryMinus[T constraints.Signed | constraints.Float](vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	srcVector := vectors[0]
 	srcValues := vector.MustTCols[T](srcVector)
