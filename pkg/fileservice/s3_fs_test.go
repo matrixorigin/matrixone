@@ -64,11 +64,11 @@ func loadS3TestConfig() (config _TestS3Config, err error) {
 			*ptr = value
 		}
 	}
-	loadEnv("s3-test-endpoint", &config.Endpoint)
-	loadEnv("s3-test-region", &config.Region)
-	loadEnv("s3-test-key", &config.APIKey)
-	loadEnv("s3-test-secret", &config.APISecret)
-	loadEnv("s3-test-bucket", &config.Bucket)
+	loadEnv("endpoint", &config.Endpoint)
+	loadEnv("region", &config.Region)
+	loadEnv("apikey", &config.APIKey)
+	loadEnv("apisecret", &config.APISecret)
+	loadEnv("bucket", &config.Bucket)
 
 	return
 }

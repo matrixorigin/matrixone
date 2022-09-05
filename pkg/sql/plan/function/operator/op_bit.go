@@ -39,6 +39,14 @@ func opBitAnd[T opBitT](v1, v2 T) T {
 	return v1 & v2
 }
 
+func opBitRightShift[T opBitT](v1, v2 T) T {
+	return v1 >> v2
+}
+
+func opBitLeftShift[T opBitT](v1, v2 T) T {
+	return v1 << v2
+}
+
 func OpBitAndFun[T opBitT](args []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	return Arith[T, T](args, proc, args[0].GetType(), func(xs, ys, rs *vector.Vector) error {
 		return goOpBitGeneral(xs, ys, rs, opBitAnd[T])
@@ -54,6 +62,18 @@ func OpBitOrFun[T opBitT](args []*vector.Vector, proc *process.Process) (*vector
 func OpBitXorFun[T opBitT](args []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	return Arith[T, T](args, proc, args[0].GetType(), func(xs, ys, rs *vector.Vector) error {
 		return goOpBitGeneral(xs, ys, rs, opBitXor[T])
+	})
+}
+
+func OpBitRightShiftFun[T opBitT](args []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	return Arith[T, T](args, proc, args[0].GetType(), func(xs, ys, rs *vector.Vector) error {
+		return goOpBitGeneral(xs, ys, rs, opBitRightShift[T])
+	})
+}
+
+func OpBitLeftShiftFun[T opBitT](args []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	return Arith[T, T](args, proc, args[0].GetType(), func(xs, ys, rs *vector.Vector) error {
+		return goOpBitGeneral(xs, ys, rs, opBitLeftShift[T])
 	})
 }
 

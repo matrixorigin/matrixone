@@ -29,13 +29,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
+	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	txnengine "github.com/matrixorigin/matrixone/pkg/vm/engine/txn"
 	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 )
 
 type MemHandler struct {
-	defaultIsolationPolicy IsolationPolicy
 
 	// catalog
 	databases  *Table[Text, DatabaseRow]
@@ -65,7 +65,9 @@ type MemHandler struct {
 	}
 
 	// misc
-	mheap *mheap.Mheap
+	mheap                  *mheap.Mheap
+	defaultIsolationPolicy IsolationPolicy
+	clock                  clock.Clock
 }
 
 type Iter[
@@ -74,23 +76,27 @@ type Iter[
 ] struct {
 	TableIter   *TableIter[K, R]
 	AttrsMap    map[string]*AttributeRow
+	Expr        *plan.Expr
 	FirstCalled bool
 }
 
 func NewMemHandler(
 	mheap *mheap.Mheap,
 	defaultIsolationPolicy IsolationPolicy,
+	clock clock.Clock,
 ) *MemHandler {
-	h := &MemHandler{}
+	h := &MemHandler{
+		databases:              NewTable[Text, DatabaseRow](),
+		relations:              NewTable[Text, RelationRow](),
+		attributes:             NewTable[Text, AttributeRow](),
+		indexes:                NewTable[Text, IndexRow](),
+		mheap:                  mheap,
+		defaultIsolationPolicy: defaultIsolationPolicy,
+		clock:                  clock,
+	}
 	h.transactions.Map = make(map[string]*Transaction)
 	h.tables.Map = make(map[string]*Table[AnyKey, *AnyRow])
 	h.iterators.Map = make(map[string]*Iter[AnyKey, *AnyRow])
-	h.databases = NewTable[Text, DatabaseRow]()
-	h.relations = NewTable[Text, RelationRow]()
-	h.attributes = NewTable[Text, AttributeRow]()
-	h.indexes = NewTable[Text, IndexRow]()
-	h.mheap = mheap
-	h.defaultIsolationPolicy = defaultIsolationPolicy
 	return h
 }
 
@@ -724,6 +730,7 @@ func (m *MemHandler) HandleNewTableIter(meta txn.TxnMeta, req txnengine.NewTable
 	iter := &Iter[AnyKey, *AnyRow]{
 		TableIter: tableIter,
 		AttrsMap:  attrsMap,
+		Expr:      req.Expr,
 	}
 
 	m.iterators.Lock()
@@ -802,6 +809,11 @@ func (m *MemHandler) HandleRead(meta txn.TxnMeta, req txnengine.ReadReq, resp *t
 		_, row, err := iter.TableIter.Read()
 		if err != nil {
 			return err
+		}
+
+		//TODO handle iter.Expr
+		if iter.Expr != nil {
+			panic(iter.Expr)
 		}
 
 		for i, name := range req.ColNames {
@@ -975,7 +987,13 @@ func (m *MemHandler) getTx(meta txn.TxnMeta) *Transaction {
 	defer m.transactions.Unlock()
 	tx, ok := m.transactions.Map[id]
 	if !ok {
-		tx = NewTransaction(id, meta.SnapshotTS, m.defaultIsolationPolicy)
+		tx = NewTransaction(
+			id,
+			Time{
+				Timestamp: meta.SnapshotTS,
+			},
+			m.defaultIsolationPolicy,
+		)
 		m.transactions.Map[id] = tx
 	}
 	return tx
@@ -996,14 +1014,15 @@ func (m *MemHandler) HandleCommitting(meta txn.TxnMeta) error {
 }
 
 func (m *MemHandler) HandleDestroy() error {
-	*m = *NewMemHandler(m.mheap, m.defaultIsolationPolicy)
+	*m = *NewMemHandler(m.mheap, m.defaultIsolationPolicy, m.clock)
 	return nil
 }
 
 func (m *MemHandler) HandlePrepare(meta txn.TxnMeta) (timestamp.Timestamp, error) {
 	tx := m.getTx(meta)
 	tx.Tick()
-	return tx.CurrentTime, nil
+	now, _ := m.clock.Now()
+	return now, nil
 }
 
 func (m *MemHandler) HandleRollback(meta txn.TxnMeta) error {
