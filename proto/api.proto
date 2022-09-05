@@ -89,49 +89,6 @@ message Type {
 };
 
 
-message DBInfo {
-    string name         =1;
-    bool   is_sys        =2;
-};
-
-message DatabaseCmd {
-    uint64 db_id  = 1;
-    uint64 mask  = 2;
-    //creating database 
-    DBInfo create = 3;
-    map<uint64, TableCmd> table_cmds = 4;
-    bool drop = 5;
-};
-
-message Location {
-    string key = 1;
-    uint32 offset = 2;
-    uint32 len = 3;
-    uint32 olen = 4;
-};
-message ZoneMap {
-    TypeID typ = 1;
-    plan.Const min = 2;
-    plan.Const max = 3;
-};
-
-message ColumnMeta {
-    uint32 idx = 1;
-    ZoneMap zm = 2;
-    Location bf_location = 3;
-    Location data_location = 4;
-};
-
-message BlockMeta {
-    uint32 colunm_cnt = 1;
-    uint32 alog      = 2;
-};
-
-message BlockInfo {
-    BlockMeta block_meta = 1;
-    repeated ColumnMeta columns_meta = 2;
-};
-
 message Vector {
     bytes data = 1;
     Type  type = 2;
@@ -140,158 +97,36 @@ message Vector {
     bool is_const = 5;
 };
 
-message AppendInfo {
-    //[]string
-    repeated string attrs = 1;
-    //[]Vector
-    repeated Vector vecs  = 2;
-};
-
-message RowRange {
-    uint32 start = 1;
-    uint32 end = 2;
-};
-
-message DeleteInfo {
-    message DefType {
-		oneof def {
-            RowRange range = 1;                       
-            //bitmap
-            string   rows = 2;
-		}
-	}
-    DefType range_rows = 1; 
-    //RowRange range = 1;
-    //bitmap
-    //[]byte? too expensive ?
-    //string rows = 2;
-}
-
-message BlockCmd {
-    uint64 id = 1;
-    //bitmap
-    uint32 mask = 2;
-    BlockInfo create = 3;
-    AppendInfo append = 4;
-    DeleteInfo delete = 5;
-    bool drop = 6;
-};
-
-message AccessInfo {
-    uint32 tenant_id = 1;
-    uint32 user_id  = 2;
-    uint32 role_id  = 3;
-    timestamp.Timestamp create_at = 4;
-};
-
-message ColDef {
-    string name = 1;
-    int32    idx  = 2;
-    Type   type = 3;
-    bool   hidden = 4;
-    bool   phy_addr = 5;
-    bool   null_ability = 6;
-    bool   auto_increment = 7;
-    bool   primary  = 8;
-    int32  sort_idx = 9;
-    bool   sort_key = 10;
-    string comment = 11;
-    plan.Default default = 12;
-
-};
-
-message TableDef {
-    AccessInfo ac_info = 1;
-    string     name = 2;
-    //[]ColDef?
-    repeated ColDef cols_def = 3;
-    map<string, int32> name_index = 4;
-    string comment = 5;
-    string rel_kind = 6;
-    string create_sql = 7;
-    string view = 8;
-};
-
-message TableCmd {
-    uint64 tid = 1;
-    //bitmap
-    uint64 mask = 2;
-    TableDef create = 3;
-	//FIXME::transient block id is unique in CN's workspace.
-    map<uint64, BlockCmd> block_cmds = 4;
-    bool drop = 5;
-};
-
-
-// CN precommit the write command  
-/*
-message PrecommitWriteCmd {
-    map<uint64, DatabaseCmd> db_cmds = 1;
-};
-*/
-
-message DatabaseID {
-    uint64 id = 1;
-};
-
-message TableID {
-    uint64 tab_id = 1;
-    DatabaseID db_id = 2;
-};
-
-message SegmentID {
-    uint64 seg_id = 1;
-    TableID tab_id = 2;
-};
-
-message BlockID {
-    uint64  block_id = 1;
-    SegmentID seg_id = 2;
-};
-
 message TSRange {
     timestamp.Timestamp from = 1;
     timestamp.Timestamp to   = 2;
 };
 
-message ScopeDesc {
-    bool all = 1;
-    //[]TableID?
-    repeated TableID tables = 2;
+message Batch {
+    repeated string attrs = 1;
+    repeated Vector vecs = 2;
 };
 
+message TableID {
+    uint64 db_id  = 1; 
+    uint64 tb_id  = 2;
+}
 
 // CN pull the tail of redo logs from DN.
 message SyncLogTailReq {
     timestamp.Timestamp checkpoint_ts = 1;
     TSRange   range = 2;
-    //[]TableID
     repeated TableID tables = 3;
     bool all = 4;
 };
 
-
-enum CmdType {
-    CmdBatch = 0;
-	CmdAppend = 1;
-	CmdMvccUpdate = 2;
-	CmdMetaEntry = 3;
-	CmdComposed = 4;
-	CmdCompactBlock = 5;
-	CmdMergeBlocks = 6;
+message SyncLogTailResp {
+    timestamp.Timestamp checkpoint_ts = 1;
+    repeated timestamp.Timestamp new_checkpoints = 2;
+    repeated Entry commands = 3;
 };
 
-message Batch {
-    //[]string?
-    repeated string attrs = 1;
-    //[]Vector?
-    repeated Vector vecs = 2;
-    //bitmap --->string
-    //[]byte
-    //bytes deletes = 3;
-};
-
-
+//DN--->CN: DML
 //Append batch of data which comes from localsegment of table into multiple blocks.
 
 //// Append batch of data into table : 
@@ -303,7 +138,7 @@ message Batch {
 //          database_name = xxx
 //          file_name = "" 
 //          block_id = 0
-//          block.attrs = {"rowid", "commit timestamp", "primary column data",  "column1 data", ...}
+//          bat.attrs = {"rowid", "commit timestamp", "primary column value",  "column1 value", ...}
 //      }
 
 //// delete a batch of data from a block : 
@@ -316,9 +151,9 @@ message Batch {
 //          file_name = "" 
 //          FIXME:: transient block id when bulk loading.
 //          block_id = 0
-//          block.attrs = {"rowid", "commit timestamp"}
+//          bat.attrs = {"rowid", "commit timestamp"}
 //      }
-
+// DDL:
 // create block : 
 //      Entry {
 //          entry_type = Insert
@@ -329,7 +164,7 @@ message Batch {
 //          file_name = "" 
 //          block_id = 0
 //          FIXME:: what's the type? hardencoded?
-//          block.attrs = {"BlockId", "EntryState", "CreatedAt", "DeletedAt",
+//          bat.attrs = {"BlockId", "EntryState", "CreatedAt", "DeletedAt",
 //                            "Start", "End", "MetaLoc", "DeltaLoc"}
 //      }
 
@@ -342,18 +177,17 @@ message Batch {
 //          database_name = xxx
 //          file_name = "" 
 //          block_id = 0
-//          block.attrs = {"BlockId", "EntryState", "CreatedAt", "DeletedAt",
+//          bat.attrs = {"BlockId", "EntryState", "CreatedAt", "DeletedAt",
 //                         "Start", "End", "MetaLoc", "DeltaLoc"}
 //      }
 
 // create segment:
 
-
 // delete segment:
 
 
-
 // create a user table: 
+//   insert entry into mo_tables and ...
 //      Entry {
 //          entry_type = Insert
 //          table_id = 1
@@ -362,11 +196,13 @@ message Batch {
 //          database_name = mo_catalog
 //          file_name = "" 
 //          block_id = 0
-//          block.attrs = {"TableName", "Tid", "Column1Name", "Colunm1Type", ...
-//                      "CreatedAt", "DeletedAt", "Start", "End", "MetaLoc", "DeltaLoc"}
+//          bat.attrs = {"relid", "relname", "reldatabase",  ...
+//                       "CreatedAt", "DeletedAt", "Start", "End"} 
+//                        
 //      }
 
 // drop table: 
+//  drop entries from mo_tables and ...
 //      Entry {
 //          entry_type = delete
 //          table_id = 1
@@ -375,24 +211,15 @@ message Batch {
 //          database_name = mo_catalog
 //          file_name = "" 
 //          block_id = 0
-//          block.attrs = {"TableName", "Tid"}
+//          bat.attrs = {"relid", "relname"}
 //      }
 
 
-message BatchCommands {
-    TSRange desc = 1;
-    ScopeDesc scope = 2;
-    repeated  Entry commands = 3;
-};
-
-
-message SyncLogTailResp {
-    //FIXME::??
-    timestamp.Timestamp checkpoint_ts = 1;
-    //[]Timestamp
-    repeated timestamp.Timestamp new_checkpoints = 2;
-    BatchCommands commands = 3;
-};
+//message BatchCommands {
+//    TSRange desc = 1;
+ //   ScopeDesc scope = 2;
+  //  repeated  Entry commands = 3;
+//};
 
 message PrecommitWriteCmd {
     repeated Entry entry_list = 1;
@@ -403,6 +230,7 @@ message Message {
     repeated Entry entry_list = 1;
 };
 
+// CN--->DN, DDL
 // create database test: 
 //      Entry {
 //          entry_type = Insert
@@ -412,7 +240,7 @@ message Message {
 //          database_name = mo_catalog
 //          file_name = "" 
 //          block_id = 0
-//          block = "test, 0, ..." 
+//          bat = "test, 0, ..." 
 //      }
 // drop database test:
 //      Entry {
@@ -423,8 +251,77 @@ message Message {
 //          database_name = mo_catalog
 //          file_name = "" 
 //          block_id = 0
-//          block = "test, 0, ..." 
+//          bat= "test, 0, ..." 
 //      }
+
+// create a user table: 
+//  insert entry into mo_tables and ...;
+//      Entry {
+//          entry_type = Insert
+//          table_id = 1
+//          database_id =  0
+//          table_name =  mo_tables
+//          database_name = mo_catalog
+//          file_name = "" 
+//          block_id = 0
+//          bat.attrs = {"relid", "relname", "reldatabase", ...}
+//      }
+
+// drop table: 
+//  delete entry from mo_tables;
+//      Entry {
+//          entry_type = delete
+//          table_id = 1
+//          database_id = 0
+//          table_name =  mo_tables
+//          database_name = mo_catalog
+//          file_name = "" 
+//          block_id = 0
+//          bat.attrs = {"relid", "relname",...}
+//      }
+
+//  bulk load:
+// bulk loads a block into S3.
+//      Entry {
+//          entry_type = Insert
+//          table_id = tid
+//          database_id = dbId
+//          table_name =  xxx
+//          database_name = xxx
+//          file_name = "s3 file name" 
+//          FIXME::transient block id;
+//          block_id = "xxx" 
+
+//          //block meta info
+//          bat.attrs = {"clounm index", "min", "max", "bf location", "data location",...}
+//      }
+
+//  DML:
+// append a batch of data into table;
+//            Entry {
+    //          entry_type = Insert
+    //          table_id =  tid
+    //          database_id = dbId
+    //          table_name =  xxx
+    //          database_name = xxx
+    //          file_name = "" 
+    //          block_id = 0
+    //          bat.attrs = {"rowid", "primary column value",  "column1 value", ...}
+    //      }
+
+//  delete batch of data from table;
+//            Entry {
+    //          entry_type = Insert
+    //          table_id =  tid
+    //          database_id = dbId
+    //          table_name =  xxx
+    //          database_name = xxx
+    //          file_name = "" 
+    //          block_id = 0
+    //          bat.attrs = {"rowid", "primary column value",  "column1 value", ...}
+    //      }
+
+
 message Entry {
     enum EntryType {
         Insert = 0;
@@ -437,5 +334,5 @@ message Entry {
     string    database_name = 5;
     string    file_name = 6;
     uint64    block_id = 7;
-    Batch     block = 8;
+    Batch     bat = 8;
 };
