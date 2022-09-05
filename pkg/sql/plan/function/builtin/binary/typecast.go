@@ -622,3 +622,14 @@ func NumericToBool[T constraints.Integer | constraints.Float](xs []T, rs []bool)
 	}
 	return rs, nil
 }
+
+func BoolToNumeric[T constraints.Integer | constraints.Float](xs []bool, rs []T) ([]T, error) {
+	for i, x := range xs {
+		if x {
+			rs[i] = 1
+		} else {
+			rs[i] = 0
+		}
+	}
+	return rs, nil
+}
