@@ -75,3 +75,19 @@ message LogStore {
   // Shards is for Log shards metadata.
   repeated LogShard Shards = 2 [(gogoproto.nullable) = false];
 }
+
+// CNRole cn node role
+enum CNRole {
+  // TP tp node
+  TP = 0;
+  // AP ap node
+  AP = 1;
+}
+
+// CNStore cn store metadata
+message CNStore {
+  // UUID CNStore uuid id
+  string UUID = 1;
+  // Role CN role
+  CNRole Role  = 2;
+}
