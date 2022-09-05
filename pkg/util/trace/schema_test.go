@@ -129,12 +129,10 @@ func TestInitExternalTblSchema(t *testing.T) {
 	}
 
 	wg := sync.WaitGroup{}
-	// (1 + 4) * n + 1
-	// 1: create database ...
-	// 4: create EXTERNAL table
-	// 1: close
+	// 1: want goroutine started
 	wg.Add(1)
 	go func() {
+		wg.Done() // started
 	loop:
 		for {
 			sql, ok := <-c
@@ -152,7 +150,13 @@ func TestInitExternalTblSchema(t *testing.T) {
 			}
 		}
 	}()
+	wg.Wait()
 
+	// (1 + 4) * n + 1
+	// 1: create database ...
+	// 4: create EXTERNAL table
+	// 1: close
+	wg.Add(1)
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			wg.Add(5)
