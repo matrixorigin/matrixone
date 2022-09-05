@@ -49,7 +49,7 @@ func (c *CNClient) Close() error {
 }
 
 const (
-	dfMaxSenderNumber       = 10
+	dfMaxSenderNumber       = 1000
 	dfClientReadBufferSize  = 1 << 10
 	dfClientWriteBufferSize = 1 << 10
 	dfPayLoadCopyBufferSize = 1 << 20

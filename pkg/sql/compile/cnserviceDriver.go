@@ -123,6 +123,9 @@ func pipelineMessageHandle(ctx context.Context, message morpc.Message, cs morpc.
 	refactorScope(c, c.ctx, s)
 	s.Magic = Parallel
 	c.scope = s
+	c.proc = s.Proc
+
+	println(ShowScopes([]*Scope{s}))
 
 	err = s.ParallelRun(c)
 	if err != nil {
@@ -1076,8 +1079,13 @@ func convertToProcessLimitation(lim *pipeline.ProcessLimitation) process.Limitat
 }
 
 func decodeBatch(_ *process.Process, msg *pipeline.Message) (*batch.Batch, error) {
-	bat := new(batch.Batch) // TODO: allocate the memory from process may suitable.
+	// TODO: allocate the memory from process may suitable.
+	bat := new(batch.Batch)
 	err := types.Decode(msg.GetData(), bat)
+	// set all vectors to be origin, and they can be freed by process.
+	for i := range bat.Vecs {
+		bat.Vecs[i].Or = true
+	}
 	return bat, err
 }
 
