@@ -30,7 +30,6 @@ func TestLoadFile(t *testing.T) {
 	dir := t.TempDir()
 	proc := testutil.NewProc()
 	fs := proc.FileService
-	// fs := testutil.NewFS()
 	ctx := context.Background()
 	filepath := dir + "test"
 	err := fs.Write(ctx, fileservice.IOVector{
@@ -50,29 +49,63 @@ func TestLoadFile(t *testing.T) {
 	})
 	assert.Nil(t, err)
 
-	convey.Convey("FileCase", t, func() {
-		cases := []struct {
-			filename string
-			want     []byte
-		}{
-			{
-				filename: filepath,
-				want:     []byte("12345678"),
-			},
-		}
-		var inStrs []string
-		for _, k := range cases {
-			inStrs = append(inStrs, k.filename)
-		}
-		inVector := testutil.MakeVarcharVector(inStrs, nil)
-		res, err := LoadFile([]*vector.Vector{inVector}, proc)
-		if err != nil {
-			t.Fatal(err)
-		}
-		convey.So(err, convey.ShouldBeNil)
-		convey.So(res.Data, convey.ShouldResemble, []byte("12345678"))
+	cases1 := []struct {
+		name     string
+		filename string
+		want     []byte
+	}{
+		{
+			name:     "File Case",
+			filename: filepath,
+			want:     []byte("12345678"),
+		},
+	}
+	for _, c := range cases1 {
+		convey.Convey(c.name, t, func() {
+			var inStrs []string
+			inStrs = append(inStrs, c.filename)
+			inVector := testutil.MakeVarcharVector(inStrs, nil)
+			res, err := LoadFile([]*vector.Vector{inVector}, proc)
+			convey.So(err, convey.ShouldBeNil)
+			convey.So(res.Data, convey.ShouldResemble, c.want)
+		})
+	}
 
+	//Test empty file
+	filepath = dir + "emptyfile"
+	err = fs.Write(ctx, fileservice.IOVector{
+		FilePath: filepath,
+		Entries: []fileservice.IOEntry{
+			{
+				Offset: 0,
+				Size:   0,
+				Data:   []byte(""),
+			},
+		},
 	})
+	assert.Nil(t, err)
+
+	cases2 := []struct {
+		name     string
+		filename string
+		want     []byte
+	}{
+		{
+			name:     "Empty File Case",
+			filename: filepath,
+			want:     []byte(nil),
+		},
+	}
+	for _, c := range cases2 {
+		convey.Convey(c.name, t, func() {
+			var inStrs []string
+			inStrs = append(inStrs, c.filename)
+			inVector := testutil.MakeVarcharVector(inStrs, nil)
+			res, err := LoadFile([]*vector.Vector{inVector}, proc)
+			convey.So(err, convey.ShouldBeNil)
+			convey.So(res.Data, convey.ShouldResemble, c.want)
+		})
+	}
 
 	// Test Error
 	size := 1024 * 1024 * 1
@@ -97,23 +130,25 @@ func TestLoadFile(t *testing.T) {
 	// if err := bigf.Truncate(size); err != nil {
 	// 	t.Fatal(err)
 	// }
-	convey.Convey("ErrorCase", t, func() {
-		cases := []struct {
-			filename string
-			want     error
-		}{
-			{
-				filename: filepath,
-				want:     errors.New("Data too long for blob"),
-			},
-		}
-		var inStrs []string
-		for _, k := range cases {
-			inStrs = append(inStrs, k.filename)
-		}
-		inVector := testutil.MakeVarcharVector(inStrs, nil)
-		_, err := LoadFile([]*vector.Vector{inVector}, proc)
-		convey.So(err, convey.ShouldNotBeNil)
-	})
-
+	cases3 := []struct {
+		name     string
+		filename string
+		want     error
+	}{
+		{
+			name:     "Error Case",
+			filename: filepath,
+			want:     errors.New("Data too long for blob"),
+		},
+	}
+	for _, c := range cases3 {
+		convey.Convey(c.name, t, func() {
+			var inStrs []string
+			inStrs = append(inStrs, c.filename)
+			inVector := testutil.MakeVarcharVector(inStrs, nil)
+			_, err := LoadFile([]*vector.Vector{inVector}, proc)
+			convey.So(err, convey.ShouldNotBeNil)
+			convey.So(err, convey.ShouldResemble, c.want)
+		})
+	}
 }

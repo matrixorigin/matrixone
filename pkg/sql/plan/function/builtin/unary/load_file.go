@@ -29,6 +29,9 @@ func LoadFile(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, 
 	inputVector := vectors[0]
 	resultType := types.New(types.T_varchar, 0, 0, 0)
 	vec := vector.New(resultType)
+	if inputVector.ConstVectorIsNull() {
+		return vector.NewConstNull(resultType, 1), nil
+	}
 	const blobsize = 65536 // 2^16-1
 	Filepath := vector.GetStrColumn(inputVector).GetString(0)
 	fs := proc.FileService
@@ -38,6 +41,9 @@ func LoadFile(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, 
 	}
 	ctx, err := io.ReadAll(r)
 	defer r.Close()
+	if len(ctx) == 0 {
+		return vector.NewConstNull(resultType, 1), nil
+	}
 	if len(ctx) > blobsize {
 		return nil, errors.New("Data too long for blob")
 	}
