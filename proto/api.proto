@@ -521,6 +521,28 @@ message Message {
     repeated Entry entry_list = 1;
 };
 
+// create database test: 
+//      Entry {
+//          entry_type = Insert
+//          table_id = 0
+//          database_id = 0
+//          table_name = mo_database
+//          database_name = mo_catalog
+//          file_name = "" 
+//          block_id = 0
+//          block = "test, 0, ..." 
+//      }
+// drop database test:
+//      Entry {
+//          entry_type = Delete
+//          table_id = 0
+//          database_id = 0
+//          table_name = mo_database
+//          database_name = mo_catalog
+//          file_name = "" 
+//          block_id = 0
+//          block = "test, 0, ..." 
+//      }
 message Entry {
     enum EntryType {
         Insert = 0;
