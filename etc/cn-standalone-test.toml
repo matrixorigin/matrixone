@@ -25,6 +25,9 @@ name = "ETL"
 backend = "DISK-ETL"
 data-dir = "store"
 
+[cn]
+uuid = "cn1"
+
 [cn.Engine]
 type = "tae"
 
