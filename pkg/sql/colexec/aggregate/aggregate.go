@@ -543,13 +543,13 @@ func NewVariance(typ types.Type, dist bool) agg.Agg[any] {
 	case types.T_float64:
 		return newGenericVariance[float64](typ, dist)
 	case types.T_decimal64:
-		aggPriv := variance.New2()
+		aggPriv := variance.NewVD64()
 		if dist {
 			return agg.NewUnaryDistAgg(false, typ, variance.ReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
 		}
 		return agg.NewUnaryAgg(aggPriv, false, typ, variance.ReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
 	case types.T_decimal128:
-		aggPriv := variance.New3()
+		aggPriv := variance.NewVD128()
 		if dist {
 			return agg.NewUnaryDistAgg(false, typ, variance.ReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
 		}
@@ -582,13 +582,13 @@ func NewStdDevPop(typ types.Type, dist bool) agg.Agg[any] {
 	case types.T_float64:
 		return newGenericStdDevPop[float64](typ, dist)
 	case types.T_decimal64:
-		aggPriv := stddevpop.New2()
+		aggPriv := stddevpop.NewStdD64()
 		if dist {
 			return agg.NewUnaryDistAgg(false, typ, stddevpop.ReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
 		}
 		return agg.NewUnaryAgg(aggPriv, false, typ, stddevpop.ReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
 	case types.T_decimal128:
-		aggPriv := stddevpop.New3()
+		aggPriv := stddevpop.NewStdD128()
 		if dist {
 			return agg.NewUnaryDistAgg(false, typ, stddevpop.ReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
 		}
