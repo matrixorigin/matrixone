@@ -44,7 +44,7 @@ func TestHex(t *testing.T) {
 			name:     "Scalar empty string",
 			proc:     procs,
 			inputstr: []string{""},
-			expected: []string(nil),
+			expected: []string{""},
 			isScalar: true,
 		},
 		{
@@ -79,8 +79,7 @@ func TestHex(t *testing.T) {
 			}
 			result, err := HexString([]*vector.Vector{inVector}, c.proc)
 			convey.So(err, convey.ShouldBeNil)
-			col := result.Col.(*types.Bytes)
-			s := BytesToString(col)
+			s := BytesToString(result)
 			convey.So(s, convey.ShouldResemble, c.expected)
 			convey.So(result.IsScalar(), convey.ShouldEqual, c.isScalar)
 		})
@@ -136,8 +135,7 @@ func TestHex(t *testing.T) {
 			}
 			result, err := HexInt64([]*vector.Vector{inVector}, c.proc)
 			convey.So(err, convey.ShouldBeNil)
-			col := result.Col.(*types.Bytes)
-			s := BytesToString(col)
+			s := BytesToString(result)
 			convey.So(s, convey.ShouldResemble, c.expected)
 			convey.So(result.IsScalar(), convey.ShouldEqual, c.isScalar)
 		})
@@ -145,10 +143,15 @@ func TestHex(t *testing.T) {
 
 }
 
-func BytesToString(src *types.Bytes) []string {
+func BytesToString(result *vector.Vector) []string {
 	var s []string
-	for i := 0; i < int(len(src.Lengths)); i++ {
-		s = append(s, string(src.Data[src.Offsets[i]:src.Offsets[i]+src.Lengths[i]]))
+	col := result.Col.(*types.Bytes)
+	for i := 0; i < int(len(col.Lengths)); i++ {
+		if result.Nsp.Contains(uint64(i)) {
+			s = append(s, "")
+		} else {
+			s = append(s, string(col.Data[col.Offsets[i]:col.Offsets[i]+col.Lengths[i]]))
+		}
 	}
 	return s
 }

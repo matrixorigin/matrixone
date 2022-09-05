@@ -31,14 +31,14 @@ func HexString(vectors []*vector.Vector, proc *process.Process) (*vector.Vector,
 		if inputVector.ConstVectorIsNull() {
 			return vector.NewConst(resultType, 1), nil
 		}
-		resultVector := vector.New(resultType)
-		for i := 0; i < vector.Length(inputVector); i++ {
-			inputValue := vector.GetStrColumn(inputVector).Get(int64(i))
-			ctx := HexEncodeString(inputValue)
-			if err := resultVector.Append(ctx, proc.GetMheap()); err != nil {
-				return nil, err
-			}
+		resultVector := vector.NewConst(resultType, 1)
+		inputValue := HexEncodeString(vector.GetStrColumn(inputVector).Get(0))
+		resultValue := &types.Bytes{
+			Data:    inputValue,
+			Offsets: []uint32{0},
+			Lengths: []uint32{uint32(len(inputValue))},
 		}
+		vector.SetCol(resultVector, resultValue)
 		return resultVector, nil
 	} else {
 		resultVector := vector.New(resultType)
@@ -55,6 +55,7 @@ func HexString(vectors []*vector.Vector, proc *process.Process) (*vector.Vector,
 		return resultVector, nil
 	}
 }
+
 func HexInt64(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	inputVector := vectors[0]
 	resultType := types.New(types.T_varchar, 0, 0, 0)
@@ -62,14 +63,14 @@ func HexInt64(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, 
 		if inputVector.ConstVectorIsNull() {
 			return vector.NewConst(resultType, 1), nil
 		}
-		resultVector := vector.New(resultType)
-		for i := 0; i < vector.Length(inputVector); i++ {
-			inputValue := vector.GetColumn[int64](inputVector)[i]
-			ctx := HexEncodeInt64(inputValue)
-			if err := resultVector.Append(ctx, proc.GetMheap()); err != nil {
-				return nil, err
-			}
+		resultVector := vector.NewConst(resultType, 1)
+		inputValue := HexEncodeInt64(vector.GetColumn[int64](inputVector)[0])
+		resultValue := &types.Bytes{
+			Data:    inputValue,
+			Offsets: []uint32{0},
+			Lengths: []uint32{uint32(len(inputValue))},
 		}
+		vector.SetCol(resultVector, resultValue)
 		return resultVector, nil
 	} else {
 		resultVector := vector.New(resultType)
@@ -86,11 +87,13 @@ func HexInt64(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, 
 		return resultVector, nil
 	}
 }
+
 func HexEncodeString(src []byte) []byte {
 	dst := make([]byte, hex.EncodedLen(len(src)))
 	hex.Encode(dst, src)
 	return dst
 }
+
 func HexEncodeInt64(src int64) []byte {
 	r := fmt.Sprintf("%X", src)
 	return []byte(r)
