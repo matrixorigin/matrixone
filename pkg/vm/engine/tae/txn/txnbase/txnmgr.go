@@ -93,7 +93,13 @@ func (mgr *TxnManager) StatSafeTS() (ts types.TS) {
 		//ts = mgr.TsAlloc.Get()
 		ts = mgr.TsAlloc.Alloc()
 	}
-	ts= mgr.TsAlloc.Get()
+	mgr.RUnlock()
+	return
+}
+
+func (mgr *TxnManager) StatMaxTS() (ts types.TS) {
+	mgr.RLock()
+	ts = mgr.TsAlloc.Get()
 	mgr.RUnlock()
 	return
 }

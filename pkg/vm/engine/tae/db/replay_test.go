@@ -69,7 +69,7 @@ func TestReplayCatalog1(t *testing.T) {
 			}
 			assert.Nil(t, txn.Commit())
 			if forceCkp || rand.Intn(100) > 80 {
-				err := tae.Catalog.Checkpoint(tae.Scheduler.GetSafeTS())
+				err := tae.Catalog.Checkpoint(tae.Scheduler.GetCheckpointTS())
 				assert.Nil(t, err)
 			}
 		}
@@ -171,7 +171,7 @@ func TestReplayCatalog2(t *testing.T) {
 	t.Log(tae.Catalog.SimplePPString(common.PPL1))
 	err = tae.Catalog.Checkpoint(ts)
 	assert.Nil(t, err)
-	err = tae.Catalog.Checkpoint(tae.Scheduler.GetSafeTS())
+	err = tae.Catalog.Checkpoint(tae.Scheduler.GetCheckpointTS())
 	assert.Nil(t, err)
 	tae.Close()
 
@@ -869,7 +869,7 @@ func TestReplay5(t *testing.T) {
 	assert.NoError(t, txn.Commit())
 
 	compactBlocks(t, 0, tae, defaultTestDB, schema, false)
-	err = tae.Catalog.Checkpoint(tae.TxnMgr.StatSafeTS())
+	err = tae.Catalog.Checkpoint(tae.TxnMgr.StatMaxTS())
 	assert.NoError(t, err)
 	txn, rel = getDefaultRelation(t, tae, schema.Name)
 	checkAllColRowsByScan(t, rel, lenOfBats(bats[:4]), false)
@@ -889,7 +889,7 @@ func TestReplay5(t *testing.T) {
 	}
 	assert.NoError(t, txn.Commit())
 	compactBlocks(t, 0, tae, defaultTestDB, schema, false)
-	err = tae.Catalog.Checkpoint(tae.TxnMgr.StatSafeTS())
+	err = tae.Catalog.Checkpoint(tae.TxnMgr.StatMaxTS())
 	assert.NoError(t, err)
 
 	t.Log(tae.Catalog.SimplePPString(common.PPL1))
@@ -920,7 +920,7 @@ func TestReplay5(t *testing.T) {
 	assert.ErrorIs(t, err, data.ErrDuplicate)
 	assert.NoError(t, txn.Commit())
 
-	err = tae.Catalog.Checkpoint(tae.TxnMgr.StatSafeTS())
+	err = tae.Catalog.Checkpoint(tae.TxnMgr.StatMaxTS())
 	assert.NoError(t, err)
 	testutils.WaitExpect(3000, func() bool {
 		return tae.Wal.GetCheckpointed() == tae.Wal.GetCurrSeqNum()
@@ -972,7 +972,7 @@ func TestReplay6(t *testing.T) {
 	assert.NoError(t, txn.Commit())
 	compactBlocks(t, 0, tae, defaultTestDB, schema, false)
 	mergeBlocks(t, 0, tae, defaultTestDB, schema, false)
-	err = tae.Catalog.Checkpoint(tae.TxnMgr.StatSafeTS())
+	err = tae.Catalog.Checkpoint(tae.TxnMgr.StatMaxTS())
 	assert.NoError(t, err)
 
 	_ = tae.Close()
@@ -1312,7 +1312,7 @@ func TestReplaySnapshots(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NoError(t, txn.Commit())
 
-	tae.Catalog.Checkpoint(tae.Scheduler.GetSafeTS())
+	tae.Catalog.Checkpoint(tae.Scheduler.GetCheckpointTS())
 
 	txn, err = tae.StartTxn(nil)
 	assert.NoError(t, err)
@@ -1324,7 +1324,7 @@ func TestReplaySnapshots(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NoError(t, txn.Commit())
 
-	tae.Catalog.Checkpoint(tae.Scheduler.GetSafeTS())
+	tae.Catalog.Checkpoint(tae.Scheduler.GetCheckpointTS())
 	t.Log(tae.Catalog.SimplePPString(3))
 
 	tae.restart()

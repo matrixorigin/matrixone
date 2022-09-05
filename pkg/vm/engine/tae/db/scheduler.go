@@ -109,8 +109,12 @@ func (s *taskScheduler) Checkpoint(indexes []*wal.Index) (err error) {
 	return
 }
 
-func (s *taskScheduler) GetSafeTS() types.TS {
+func (s *taskScheduler) GetGCTS() types.TS {
 	return s.db.TxnMgr.StatSafeTS()
+}
+
+func (s *taskScheduler) GetCheckpointTS() types.TS {
+	return s.db.TxnMgr.StatMaxTS()
 }
 
 func (s *taskScheduler) GetPenddingLSNCnt() uint64 {

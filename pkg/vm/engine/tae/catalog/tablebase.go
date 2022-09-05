@@ -514,8 +514,8 @@ func (be *TableBaseEntry) IsCommitted() bool {
 }
 
 func (be *TableBaseEntry) CloneCommittedInRange(start, end types.TS) (ret BaseEntryIf) {
-	needWait,txn:=be.NeedWaitCommitting(end)
-	if needWait{
+	needWait, txn := be.NeedWaitCommitting(end)
+	if needWait {
 		be.RUnlock()
 		txn.GetTxnState(true)
 		be.RLock()

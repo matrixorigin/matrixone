@@ -90,7 +90,7 @@ func (e *testEngine) getRelation() (txn txnif.AsyncTxn, rel handle.Relation) {
 }
 
 func (e *testEngine) checkpointCatalog() {
-	err := e.DB.Catalog.Checkpoint(e.DB.TxnMgr.StatSafeTS())
+	err := e.DB.Catalog.Checkpoint(e.DB.TxnMgr.StatMaxTS())
 	assert.NoError(e.t, err)
 }
 
