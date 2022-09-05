@@ -399,15 +399,15 @@ func (s *Service) getClientOptions() []morpc.ClientOption {
 }
 
 func (s *Service) initTraceMetric(ctx context.Context) (context.Context, error) {
-	SV := &s.cfg.Frontend
+	SV := &s.cfg.Observability
 	var writerFactory export.FSWriterFactory
 	var err error
 	if !SV.DisableTrace || !SV.DisableMetric {
-		writerFactory = export.GetFSWriterFactory(s.fileService, SV.NodeUUID, trace.NodeTypeLogService.String())
+		writerFactory = export.GetFSWriterFactory(s.fileService, s.cfg.UUID, trace.NodeTypeLogService.String())
 	}
 	if ctx, err = trace.Init(ctx,
 		trace.WithMOVersion(SV.MoVersion),
-		trace.WithNode(SV.NodeUUID, trace.NodeTypeLogService),
+		trace.WithNode(s.cfg.UUID, trace.NodeTypeLogService),
 		trace.EnableTracer(!SV.DisableTrace),
 		trace.WithBatchProcessMode(SV.TraceBatchProcessor),
 		trace.WithFSWriterFactory(writerFactory),
@@ -417,7 +417,7 @@ func (s *Service) initTraceMetric(ctx context.Context) (context.Context, error) 
 		return nil, err
 	}
 	if !SV.DisableMetric {
-		metric.InitMetric(ctx, nil, SV, SV.NodeUUID, metric.ALL_IN_ONE_MODE, metric.WithWriterFactory(writerFactory))
+		metric.InitMetric(ctx, nil, SV, s.cfg.UUID, metric.ALL_IN_ONE_MODE, metric.WithWriterFactory(writerFactory))
 	}
 	return ctx, nil
 }

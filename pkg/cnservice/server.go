@@ -136,7 +136,7 @@ func (s *service) initMOServer(ctx context.Context, pu *config.ParameterUnit) er
 		return err
 	}
 
-	if _, err = s.createMOServer(cancelMoServerCtx, pu); err != nil {
+	if _, err = s.createMOServer(cancelMoServerCtx, pu, &s.cfg.Observability); err != nil {
 		return err
 	}
 
@@ -174,44 +174,46 @@ func (s *service) initEngine(
 	return nil
 }
 
-func (s *service) createMOServer(inputCtx context.Context, pu *config.ParameterUnit) (context.Context, error) {
+func (s *service) createMOServer(inputCtx context.Context, pu *config.ParameterUnit, op *config.ObservabilityParameters) (context.Context, error) {
 	address := fmt.Sprintf("%s:%d", pu.SV.Host, pu.SV.Port)
 	moServerCtx := context.WithValue(inputCtx, config.ParameterUnitKey, pu)
 	s.mo = frontend.NewMOServer(moServerCtx, address, pu)
 
-	// init trace/log/error framework
-	var writerFactory export.FSWriterFactory
 	// validate node_uuid
 	var uuidErr error
 	var nodeUUID uuid.UUID
-	if nodeUUID, uuidErr = uuid.Parse(pu.SV.NodeUUID); uuidErr != nil {
+	if nodeUUID, uuidErr = uuid.Parse(s.cfg.UUID); uuidErr != nil {
 		nodeUUID = uuid.New()
-		pu.SV.NodeUUID = nodeUUID.String()
-	}
-	if !pu.SV.DisableTrace || !pu.SV.DisableMetric {
-		writerFactory = export.GetFSWriterFactory(s.fileService, pu.SV.NodeUUID, trace.NodeTypeCN.String())
 	}
 	if err := util.SetUUIDNodeID(nodeUUID[:]); err != nil {
 		return nil, moerr.NewPanicError(err)
-	} else if moServerCtx, err = trace.Init(moServerCtx,
-		trace.WithMOVersion(pu.SV.MoVersion),
-		trace.WithNode(pu.SV.NodeUUID, trace.NodeTypeCN),
-		trace.EnableTracer(!pu.SV.DisableTrace),
-		trace.WithBatchProcessMode(pu.SV.TraceBatchProcessor),
+	}
+
+	// init trace/log/error framework
+	var writerFactory export.FSWriterFactory
+	var initErr error
+	if !op.DisableTrace || !op.DisableMetric {
+		writerFactory = export.GetFSWriterFactory(s.fileService, s.cfg.UUID, trace.NodeTypeCN.String())
+	}
+	if moServerCtx, initErr = trace.Init(moServerCtx,
+		trace.WithMOVersion(op.MoVersion),
+		trace.WithNode(s.cfg.UUID, trace.NodeTypeCN),
+		trace.EnableTracer(!op.DisableTrace),
+		trace.WithBatchProcessMode(op.TraceBatchProcessor),
 		trace.WithFSWriterFactory(writerFactory),
-		trace.DebugMode(pu.SV.EnableTraceDebug),
+		trace.DebugMode(op.EnableTraceDebug),
 		trace.WithSQLExecutor(func() ie.InternalExecutor {
 			return frontend.NewInternalExecutor(pu)
 		}),
-	); err != nil {
-		return nil, err
+	); initErr != nil {
+		return nil, initErr
 	}
 
-	if !pu.SV.DisableMetric {
+	if !op.DisableMetric {
 		ieFactory := func() ie.InternalExecutor {
 			return frontend.NewInternalExecutor(pu)
 		}
-		metric.InitMetric(moServerCtx, ieFactory, pu.SV, pu.SV.NodeUUID, metric.ALL_IN_ONE_MODE,
+		metric.InitMetric(moServerCtx, ieFactory, op, s.cfg.UUID, metric.ALL_IN_ONE_MODE,
 			metric.WithWriterFactory(writerFactory), metric.WithInitAction(true))
 	}
 	frontend.InitServerVersion(pu.SV.MoVersion)

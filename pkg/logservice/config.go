@@ -154,8 +154,8 @@ type Config struct {
 	// Never set this field to true in production
 	DisableWorkers bool
 
-	// Frontend parameters for the frontend, assign by mo-service's Config
-	Frontend config.FrontendParameters
+	// Observability parameters for the observability, assign by mo-service's Config
+	Observability config.ObservabilityParameters
 }
 
 func (c *Config) GetHAKeeperConfig() hakeeper.Config {

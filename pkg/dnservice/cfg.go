@@ -58,8 +58,8 @@ type Config struct {
 		ClientConfig logservice.HAKeeperClientConfig
 	}
 
-	// Frontend parameters for the frontend, assign by mo-service's Config
-	Frontend config.FrontendParameters
+	// Observability parameters for the observability, assign by mo-service's Config
+	Observability config.ObservabilityParameters
 
 	// LogService log service configuration
 	LogService struct {

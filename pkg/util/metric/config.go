@@ -33,7 +33,7 @@ var (
 	configForceReinit     int32 = envOrDefaultBool("MO_METRIC_DROP_AND_INIT", 0) // TODO: find a better way to init metrics and remove this one
 )
 
-func initConfigByParamaterUnit(SV *config.FrontendParameters) {
+func initConfigByParamaterUnit(SV *config.ObservabilityParameters) {
 	setExportToProm(!SV.DisableMetricToProm)
 }
 

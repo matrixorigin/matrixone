@@ -75,8 +75,11 @@ type Config struct {
 		BatchSize int64 `toml:"batch-size"`
 	}
 
-	// Frontend parameters for the frontend, assign by mo-service's Config
-	Frontend config.FrontendParameters
+	// Frontend parameters for the frontend
+	Frontend config.FrontendParameters `toml:"frontend"`
+
+	// Observability parameters for the observability, assign by mo-service's Config
+	Observability config.ObservabilityParameters
 
 	// HAKeeper configuration
 	HAKeeper struct {

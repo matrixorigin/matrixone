@@ -78,7 +78,7 @@ var statusSvr *statusServer
 
 var inited uint32
 
-func InitMetric(ctx context.Context, ieFactory func() ie.InternalExecutor, SV *config.FrontendParameters, nodeUUID, role string, opts ...InitOption) {
+func InitMetric(ctx context.Context, ieFactory func() ie.InternalExecutor, SV *config.ObservabilityParameters, nodeUUID, role string, opts ...InitOption) {
 	// fix multi-init in standalone
 	if !atomic.CompareAndSwapUint32(&inited, 0, 1) {
 		return

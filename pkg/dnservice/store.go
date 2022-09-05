@@ -397,13 +397,13 @@ func (s *store) initHAKeeperClient() error {
 func (s *store) initTraceMetric(ctx context.Context) error {
 	var writerFactory export.FSWriterFactory
 	var err error
-	SV := &s.cfg.Frontend
+	SV := &s.cfg.Observability
 	if !SV.DisableTrace || !SV.DisableMetric {
-		writerFactory = export.GetFSWriterFactory(s.fileService, SV.NodeUUID, trace.NodeTypeDN.String())
+		writerFactory = export.GetFSWriterFactory(s.fileService, s.cfg.UUID, trace.NodeTypeDN.String())
 	}
 	if ctx, err = trace.Init(ctx,
 		trace.WithMOVersion(SV.MoVersion),
-		trace.WithNode(SV.NodeUUID, trace.NodeTypeDN),
+		trace.WithNode(s.cfg.UUID, trace.NodeTypeDN),
 		trace.EnableTracer(!SV.DisableTrace),
 		trace.WithBatchProcessMode(SV.TraceBatchProcessor),
 		trace.WithFSWriterFactory(writerFactory),
@@ -413,7 +413,7 @@ func (s *store) initTraceMetric(ctx context.Context) error {
 		return err
 	}
 	if !SV.DisableMetric {
-		metric.InitMetric(ctx, nil, SV, SV.NodeUUID, metric.ALL_IN_ONE_MODE, metric.WithWriterFactory(writerFactory))
+		metric.InitMetric(ctx, nil, SV, s.cfg.UUID, metric.ALL_IN_ONE_MODE, metric.WithWriterFactory(writerFactory))
 	}
 	return nil
 }

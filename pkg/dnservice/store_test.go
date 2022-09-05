@@ -235,7 +235,7 @@ func newTestStore(
 		ListenAddress: testDNStoreAddr,
 	}
 	c.Txn.Clock.MaxClockOffset.Duration = time.Duration(math.MaxInt64)
-	c.Frontend.SetDefaultValues()
+	c.Observability.SetDefaultValues("test")
 	fs, err := fsFactory(localFileServiceName)
 	assert.Nil(t, err)
 	s, err := NewService(c, fs, options...)

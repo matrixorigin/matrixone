@@ -169,7 +169,7 @@ func buildLogConfig(
 	cfg.HAKeeperConfig.TickPerSecond = opt.hakeeper.tickPerSecond
 	cfg.HAKeeperConfig.LogStoreTimeout.Duration = opt.hakeeper.logStoreTimeout
 	cfg.HAKeeperConfig.DNStoreTimeout.Duration = opt.hakeeper.dnStoreTimeout
-	cfg.Frontend.SetDefaultValues()
+	cfg.Observability.SetDefaultValues("test")
 
 	// we must invoke Fill in order to setting default configruation value.
 	cfg.Fill()

@@ -37,14 +37,15 @@ func TestMetric(t *testing.T) {
 	factory := newExecutorFactory(sqlch)
 
 	withModifiedConfig(func() {
-		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil, nil, nil)
-		pu.SV.Host = "0.0.0.0"
-		pu.SV.StatusPort = 7001
-		pu.SV.DisableMetricToProm = false
-		pu.SV.TraceBatchProcessor = InternalExecutor
+		SV := &config.ObservabilityParameters{}
+		SV.SetDefaultValues("test")
+		SV.Host = "0.0.0.0"
+		SV.StatusPort = 7001
+		SV.DisableMetricToProm = false
+		SV.TraceBatchProcessor = InternalExecutor
 		defer setGatherInterval(setGatherInterval(30 * time.Millisecond))
 		defer setRawHistBufLimit(setRawHistBufLimit(5))
-		InitMetric(context.TODO(), factory, pu.SV, "node_uuid", "test", WithInitAction(true))
+		InitMetric(context.TODO(), factory, SV, "node_uuid", "test", WithInitAction(true))
 		defer StopMetricSync()
 
 		const (
@@ -90,15 +91,15 @@ func TestMetricNoProm(t *testing.T) {
 	factory := newExecutorFactory(sqlch)
 
 	withModifiedConfig(func() {
-		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil, nil, nil)
-		pu.SV.Host = "0.0.0.0"
-		pu.SV.StatusPort = 7001
-		pu.SV.DisableMetricToProm = true
-		pu.SV.TraceBatchProcessor = InternalExecutor
+		SV := &config.ObservabilityParameters{}
+		SV.Host = "0.0.0.0"
+		SV.StatusPort = 7001
+		SV.DisableMetricToProm = true
+		SV.TraceBatchProcessor = InternalExecutor
 
 		defer setGatherInterval(setGatherInterval(30 * time.Millisecond))
 		defer setRawHistBufLimit(setRawHistBufLimit(5))
-		InitMetric(context.TODO(), factory, pu.SV, "node_uuid", "test", WithInitAction(true))
+		InitMetric(context.TODO(), factory, SV, "node_uuid", "test", WithInitAction(true))
 		defer StopMetricSync()
 
 		client := http.Client{
@@ -109,7 +110,7 @@ func TestMetricNoProm(t *testing.T) {
 		require.Contains(t, err.Error(), "connection refused")
 
 		// make static-check(errcheck) happay
-		pu.SV.DisableMetricToProm = false
+		SV.DisableMetricToProm = false
 	})
 }
 

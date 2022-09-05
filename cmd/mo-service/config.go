@@ -69,8 +69,8 @@ type Config struct {
 	LogService logservice.Config `toml:"logservice"`
 	// CN cn service config
 	CN cnservice.Config `toml:"cn"`
-	// Frontend parameters for the frontend
-	Frontend config.FrontendParameters `toml:"frontend"`
+	// Observability parameters for the metric/trace
+	Observability config.ObservabilityParameters `toml:"observability"`
 }
 
 func parseConfigFromFile(file string) (*Config, error) {
@@ -144,7 +144,7 @@ func (c *Config) createFileService(defaultName string) (*fileservice.FileService
 	}
 
 	// ensure etl exists, for trace & metric
-	if !c.Frontend.DisableMetric || !c.Frontend.DisableTrace {
+	if !c.Observability.DisableMetric || !c.Observability.DisableTrace {
 		_, err = fileservice.Get[fileservice.FileService](fs, etlFileServiceName)
 		if err != nil {
 			return nil, moerr.NewPanicError(err)
@@ -158,31 +158,28 @@ func (c *Config) getLogServiceConfig() logservice.Config {
 	cfg := c.LogService
 	logutil.Infof("hakeeper client cfg: %v", c.HAKeeperClient)
 	cfg.HAKeeperClientConfig = c.HAKeeperClient
-	cfg.Frontend = c.getFrontendConfig()
-	cfg.Frontend.NodeUUID = cfg.UUID
+	cfg.Observability = c.getObservabilityConfig()
 	return cfg
 }
 
 func (c *Config) getDNServiceConfig() dnservice.Config {
 	cfg := c.DN
 	cfg.HAKeeper.ClientConfig = c.HAKeeperClient
-	cfg.Frontend = c.getFrontendConfig()
-	cfg.Frontend.NodeUUID = cfg.UUID
+	cfg.Observability = c.getObservabilityConfig()
 	return cfg
 }
 
 func (c *Config) getCNServiceConfig() cnservice.Config {
 	cfg := c.CN
 	cfg.HAKeeper.ClientConfig = c.HAKeeperClient
-	cfg.Frontend = c.getFrontendConfig()
-	cfg.Frontend.NodeUUID = cfg.UUID
+	cfg.Frontend.SetLogAndVersion(&c.Log, Version)
+	cfg.Observability = c.getObservabilityConfig()
 	return cfg
 }
 
-func (c *Config) getFrontendConfig() config.FrontendParameters {
-	cfg := c.Frontend
-	cfg.SetLogAndVersion(&c.Log, Version)
-	cfg.SetDefaultValues()
+func (c *Config) getObservabilityConfig() config.ObservabilityParameters {
+	cfg := c.Observability
+	cfg.SetDefaultValues(Version)
 	return cfg
 }
 
