@@ -19,6 +19,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"strings"
 )
 
 var instructionNames = map[int]string{
@@ -114,6 +115,14 @@ func showInstruction(instruction vm.Instruction, mp map[*process.WaitRegister]in
 	return "unknown"
 }
 
+func getDataSource(source *Source) string {
+	if source == nil {
+		return "nil"
+	}
+	s := fmt.Sprintf("%s.%s%s", source.SchemaName, source.RelationName, source.Attributes)
+	return strings.TrimLeft(s, ".")
+}
+
 func generateReceiverMap(s *Scope, mp map[*process.WaitRegister]int) {
 	for i := range s.PreScopes {
 		generateReceiverMap(s.PreScopes[i], mp)
@@ -170,6 +179,10 @@ func showScopes(ss []*Scope, gap int, rmp map[*process.WaitRegister]int) string 
 			str += showInstruction(instruction, rmp)
 		}
 		str += "]"
+		if ss[i].DataSource != nil {
+			str += gapNextLine()
+			str += fmt.Sprintf("DataSource: %s,", getDataSource(ss[i].DataSource))
+		}
 		if len(ss[i].PreScopes) > 0 {
 			str += gapNextLine()
 			str += "  PreScopes: {"
