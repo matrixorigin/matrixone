@@ -92,9 +92,9 @@ func TestAdd(t *testing.T) {
 }
 
 func TestBits(t *testing.T) {
-	d1, err := Decimal64_FromStringWithScale("9.2234", 5)
+	d1, err := Decimal64_FromStringWithScale("9.2234", 5, 4)
 	require.True(t, err == nil)
-	d2, err := Decimal64_FromStringWithScale("9.22337777675788773437747747747347377", 4)
+	d2, err := Decimal64_FromStringWithScale("9.22337777675788773437747747747347377", 5, 4)
 	require.True(t, err == nil)
 
 	require.Equal(t, d1.ToInt64(), d2.ToInt64())

@@ -476,7 +476,8 @@ func NewDecimal64Vector(n int, typ types.Type, m *mheap.Mheap, random bool, vs [
 		if random {
 			v = rand.Int()
 		}
-		if err := vec.Append(types.InitDecimal64(int64(v)), m); err != nil {
+		d, _ := types.InitDecimal64(int64(v), 64)
+		if err := vec.Append(d, m); err != nil {
 
 			vec.Free(m)
 			return nil
@@ -501,7 +502,8 @@ func NewDecimal128Vector(n int, typ types.Type, m *mheap.Mheap, random bool, vs 
 		if random {
 			v = rand.Int()
 		}
-		if err := vec.Append(types.InitDecimal128(int64(v)), m); err != nil {
+		d, _ := types.InitDecimal128(int64(v), 64)
+		if err := vec.Append(d, m); err != nil {
 			vec.Free(m)
 			return nil
 		}

@@ -30,4 +30,5 @@ var (
 	ErrWrongService    = errors.New("wrong service")
 	ErrServiceNotFound = errors.New("service not found")
 	ErrInvalidPath     = errors.New("invalid path")
+	ErrBadS3Config     = errors.New("bad s3 config")
 )

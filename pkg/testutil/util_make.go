@@ -96,7 +96,7 @@ var (
 		cols := make([]types.Decimal64, len(values))
 		if nsp == nil {
 			for i, v := range values {
-				cols[i] = types.Decimal64_FromInt64(v)
+				cols[i], _ = types.Decimal64_FromInt64(v, 64)
 			}
 		} else {
 			for _, n := range nsp {
@@ -106,7 +106,7 @@ var (
 				if nulls.Contains(vec.Nsp, uint64(i)) {
 					continue
 				}
-				cols[i] = types.Decimal64_FromInt64(v)
+				cols[i], _ = types.Decimal64_FromInt64(v, 64)
 			}
 		}
 		vec.Col = cols
@@ -118,7 +118,7 @@ var (
 		cols := make([]types.Decimal128, len(values))
 		if nsp == nil {
 			for i, v := range values {
-				d := types.InitDecimal128(v)
+				d, _ := types.InitDecimal128(v, 64)
 				cols[i] = d
 			}
 		} else {
@@ -129,7 +129,7 @@ var (
 				if nulls.Contains(vec.Nsp, uint64(i)) {
 					continue
 				}
-				d := types.InitDecimal128(v)
+				d, _ := types.InitDecimal128(v, 64)
 				cols[i] = d
 			}
 		}
@@ -301,14 +301,16 @@ var (
 	MakeScalarDecimal64 = func(v int64, length int, _ types.Type) *vector.Vector {
 		vec := NewProc().AllocScalarVector(decimal64Type)
 		vec.Length = length
-		vec.Col = []types.Decimal64{types.InitDecimal64(v)}
+		d, _ := types.InitDecimal64(v, 64)
+		vec.Col = []types.Decimal64{d}
 		return vec
 	}
 
 	MakeScalarDecimal128 = func(v uint64, length int, _ types.Type) *vector.Vector {
 		vec := NewProc().AllocScalarVector(decimal128Type)
 		vec.Length = length
-		vec.Col = []types.Decimal128{types.InitDecimal128UsingUint(v)}
+		d, _ := types.InitDecimal128UsingUint(v, 64)
+		vec.Col = []types.Decimal128{d}
 		return vec
 	}
 

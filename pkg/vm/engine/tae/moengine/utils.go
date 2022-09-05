@@ -111,13 +111,15 @@ func MockVec(typ types.Type, rows int, offset int) *vector.Vector {
 	case types.T_decimal64:
 		data := make([]types.Decimal64, 0)
 		for i := 0; i < rows; i++ {
-			data = append(data, types.InitDecimal64(int64(i+offset)))
+			d, _ := types.InitDecimal64(int64(i+offset), 64)
+			data = append(data, d)
 		}
 		_ = vector.Append(vec, data)
 	case types.T_decimal128:
 		data := make([]types.Decimal128, 0)
 		for i := 0; i < rows; i++ {
-			data = append(data, types.InitDecimal128(int64(i+offset)))
+			d, _ := types.InitDecimal128(int64(i+offset), 64)
+			data = append(data, d)
 		}
 		_ = vector.Append(vec, data)
 	case types.T_timestamp:
