@@ -26,9 +26,8 @@ func JsonExtractByString(vectors []*vector.Vector, proc *process.Process) (*vect
 	jsonBytes, pathBytes := vectors[0], vectors[1]
 	resultType := types.T_varchar.ToType()
 	json, path := vector.MustBytesCols(jsonBytes), vector.MustBytesCols(pathBytes)
-	resultValues := make([][]byte, len(json))
 	// XXX BUG: the function only handles path is a constant.
-	_, err := json_extract.QueryByString(json, path, resultValues)
+	resultValues, err := json_extract.QueryByString(json, path, nil)
 	if err != nil {
 		logutil.Infof("json_extract: err:%v", err)
 		return nil, err
@@ -41,9 +40,8 @@ func JsonExtractByJson(vectors []*vector.Vector, proc *process.Process) (*vector
 	jsonBytes, pathBytes := vectors[0], vectors[1]
 	resultType := types.T_varchar.ToType()
 	json, path := vector.MustBytesCols(jsonBytes), vector.MustBytesCols(pathBytes)
-	resultValues := make([][]byte, len(json))
 	// XXX BUG: the function only handles if path is constant.
-	_, err := json_extract.QueryByJson(json, path, resultValues)
+	resultValues, err := json_extract.QueryByJson(json, path, nil)
 	if err != nil {
 		logutil.Infof("json_extract: err:%v", err)
 		return nil, err
