@@ -34,11 +34,6 @@ message Vector {
     bool is_const = 5;
 };
 
-message TSRange {
-    timestamp.Timestamp from = 1;
-    timestamp.Timestamp to   = 2;
-};
-
 message Batch {
     repeated string attrs = 1;
     repeated Vector vecs = 2;
@@ -52,15 +47,14 @@ message TableID {
 // CN pull the tail of redo logs from DN.
 message SyncLogTailReq {
     //timestamp.Timestamp checkpoint_ts = 1;
-    //TSRange   range = 2;
     timestamp.Timestamp cn_have = 1;
     timestamp.Timestamp cn_want = 2;
-    repeated TableID tables = 3;
-    bool all = 4;
+    TableID   table = 3;
 };
 
 message SyncLogTailResp {
-    timestamp.Timestamp checkpoint_ts = 1;
+    // location of catalog or metadata checkpoint.
+    string     ckp_location = 1;
     //repeated timestamp.Timestamp new_checkpoints = 2;
     repeated Entry commands = 2;
 };
@@ -263,3 +257,58 @@ message Entry {
     uint64    block_id = 7;
     Batch     bat = 8;
 };
+
+// Checkpint is a snapshot at a timestamp for catalog and block info, 
+// it contains CatalogCkp and MetadataCkp.
+
+// CatalogCkp contains information about database and tables in the system,and
+// MetadataCkp contains information about blocks.
+message Checkpoint {
+    timestamp.Timestamp min_ts = 1;
+    timestamp.Timestamp max_ts = 2;
+    Batch      bat   = 3;
+
+};
+// catalog checkpoint:
+// one Batch represents a table, such as : mo_databases, mo_tables, mo_columns,... etc.
+
+//message CatalogCkp {
+ //   timestamp.Timestamp min_ts = 1;
+  //  timestamp.Timestamp max_ts = 2;
+   // Batch      bat   = 3;
+//};
+
+//metadata checkpoint:
+// Batch is a batch of block metadata for a table,  
+// one row of Batch represents a block metadata.
+
+// block meta data :
+// type BlockMeta struct {
+//    ID                    uint64
+//    SegmentID             uint64
+//    TableID               uint64
+//    DbID                  uint64
+//    CreatedAt, DeletedAt  timestamp.Timestamp
+//    MetaLoc, DeltaLoc     string
+//    StartTS, PrepareTS    timestamp.Timestamp
+//    CommitTS             timestamp.Timestamp
+//    Aborted               bool
+//    LogIndex              []byte
+//    Flag                  uint8
+//};
+
+//message MetadataCkp {
+ //   timestamp.Timestamp min_ts = 1;
+  //  timestamp.Timestamp max_ts = 2;
+    //block metadata for a table;
+   // Batch      bat = 3;
+//};
+
+
+
+
+
+
+
+
+
