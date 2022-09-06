@@ -34,7 +34,7 @@ type MetricExporter interface {
 
 type metricExporter struct {
 	localCollector MetricCollector
-	nodeid         int32
+	nodeUUID       string
 	role           string
 	gather         prom.Gatherer
 	isRunning      int32
@@ -45,10 +45,10 @@ type metricExporter struct {
 	now          func() int64
 }
 
-func newMetricExporter(gather prom.Gatherer, collector MetricCollector, node int32, role string) MetricExporter {
+func newMetricExporter(gather prom.Gatherer, collector MetricCollector, node, role string) MetricExporter {
 	m := &metricExporter{
 		localCollector: collector,
-		nodeid:         node,
+		nodeUUID:       node,
 		role:           role,
 		gather:         gather,
 		now:            func() int64 { return time.Now().UnixMicro() },
@@ -117,7 +117,7 @@ func (e *metricExporter) addCommonInfo(mfs []*pb.MetricFamily) {
 	now := e.now()
 	for _, mf := range mfs {
 		mf.Role = e.role
-		mf.Node = e.nodeid
+		mf.Node = e.nodeUUID
 		for _, m := range mf.Metric {
 			m.Collecttime = now
 		}

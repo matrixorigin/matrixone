@@ -26,3 +26,4 @@ node-*-data/
 pkg/catalog/test/
 pkg/config/system_vars.go
 pkg/config/system_vars_test.go
+path_to_file
