@@ -72,6 +72,8 @@ func TestLogConfig_getter(t *testing.T) {
 				MaxSize:    tt.fields.MaxSize,
 				MaxDays:    tt.fields.MaxDays,
 				MaxBackups: tt.fields.MaxBackups,
+
+				DisableStore: true,
 			}
 			require.Equal(t, tt.wantLevel, cfg.getLevel())
 			require.Equal(t, len(tt.wantOpts), len(cfg.getOptions()))
@@ -101,6 +103,8 @@ func TestSetupMOLogger(t *testing.T) {
 				MaxSize:    512,
 				MaxDays:    0,
 				MaxBackups: 0,
+
+				DisableStore: true,
 			}},
 		},
 		{
@@ -112,6 +116,8 @@ func TestSetupMOLogger(t *testing.T) {
 				MaxSize:    512,
 				MaxDays:    0,
 				MaxBackups: 0,
+
+				DisableStore: true,
 			}},
 		},
 		{
@@ -123,6 +129,8 @@ func TestSetupMOLogger(t *testing.T) {
 				MaxSize:    0,
 				MaxDays:    0,
 				MaxBackups: 0,
+
+				DisableStore: true,
 			}},
 		},
 	}
@@ -240,6 +248,8 @@ func TestSetupMOLogger_panicDir(t *testing.T) {
 				MaxSize:    512,
 				MaxDays:    0,
 				MaxBackups: 0,
+
+				DisableStore: true,
 			}},
 		},
 	}

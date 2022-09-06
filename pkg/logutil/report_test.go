@@ -84,8 +84,6 @@ func TestReport(t *testing.T) {
 				MaxSize:    tt.fields.MaxSize,
 				MaxDays:    tt.fields.MaxDays,
 				MaxBackups: tt.fields.MaxBackups,
-
-				EnableStore: true,
 			}
 			require.Equal(t, tt.wantLevel, cfg.getLevel())
 			require.Equal(t, len(tt.wantOpts), len(cfg.getOptions()))
@@ -97,7 +95,7 @@ func TestReport(t *testing.T) {
 			SetupMOLogger(cfg)
 
 			gotCfg := getGlobalLogConfig()
-			require.Equal(t, cfg.EnableStore, gotCfg.EnableStore)
+			require.Equal(t, cfg.DisableStore, gotCfg.DisableStore)
 
 			Info("hello", GetContextFieldFunc()(context.Background()), zap.Int("int", 0))
 			Info("hello, noop", NoReportFiled())
