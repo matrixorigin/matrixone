@@ -22,10 +22,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func JsonExtract(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+func JsonExtractByString(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	jsonBytes, pathBytes := vectors[0], vectors[1]
-	logutil.Infof("JsonExtract: jsonBytes=%s, pathBytes=%s,typeJ:%T,typeP:%T", jsonBytes, pathBytes, jsonBytes.Col, pathBytes.Col)
-	resultType := types.Type{Oid: types.T_varchar, Size: 30}
+	//TODO size maybe not fit
+	resultType := types.Type{Oid: types.T_varchar, Size: 256}
 	json, path := vector.MustBytesCols(jsonBytes), vector.MustBytesCols(pathBytes)
 	resultElementSize := int(resultType.Size)
 	resultVector, err := proc.AllocVector(resultType, int64((resultElementSize)*len(json.Lengths)))
@@ -33,14 +33,31 @@ func JsonExtract(vectors []*vector.Vector, proc *process.Process) (*vector.Vecto
 		return nil, err
 	}
 	resultValues := resultVector.Col.(*types.Bytes)
-	//change string to types.Bytes
-	//outBytes := &types.Bytes{
-	//	Data:    make([]byte, 10),
-	//	Lengths: []uint32{10},
-	//	Offsets: []uint32{0},
-	//}
-	//outBytes.Data = []byte("hello,json")
-	vector.SetCol(resultVector, json_extract.JsonExtract(json, path, resultValues))
-	logutil.Infof("JsonExtract: resultVector=%s,type:%T", resultVector, resultVector.Col)
+	out, err := json_extract.QueryByString(json, path, resultValues)
+	if err != nil {
+		logutil.Infof("json_extract: err:%v", err)
+		return nil, err
+	}
+	vector.SetCol(resultVector, out)
+	return resultVector, nil
+}
+
+func JsonExtractByJson(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	jsonBytes, pathBytes := vectors[0], vectors[1]
+	//TODO size maybe not fit
+	resultType := types.Type{Oid: types.T_varchar, Size: 256}
+	json, path := vector.MustBytesCols(jsonBytes), vector.MustBytesCols(pathBytes)
+	resultElementSize := int(resultType.Size)
+	resultVector, err := proc.AllocVector(resultType, int64((resultElementSize)*len(json.Lengths)))
+	if err != nil {
+		return nil, err
+	}
+	resultValues := resultVector.Col.(*types.Bytes)
+	out, err := json_extract.QueryByJson(json, path, resultValues)
+	if err != nil {
+		logutil.Infof("json_extract: err:%v", err)
+		return nil, err
+	}
+	vector.SetCol(resultVector, out)
 	return resultVector, nil
 }

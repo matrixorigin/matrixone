@@ -13,3 +13,193 @@
 // limitations under the License.
 
 package json_extract
+
+import (
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/stretchr/testify/require"
+	"testing"
+)
+
+var (
+	kases = []struct {
+		json    string
+		path    string
+		want    string
+		jsonErr bool
+		pathErr bool
+	}{
+		{
+			json:    `{"a":1,"b":2,"c":3`,
+			path:    `$.a`,
+			want:    ``,
+			jsonErr: true,
+			pathErr: false,
+		},
+		{
+			json:    `{"a":1,"b":2,"c":3}`,
+			path:    `$.`,
+			want:    ``,
+			jsonErr: false,
+			pathErr: true,
+		},
+		{
+			json:    `{"a":1,"b":2,"c":3}`,
+			path:    `$.b`,
+			want:    `2`,
+			jsonErr: false,
+			pathErr: false,
+		},
+		{
+			json: `{"a":{"q":[1,2,3]}}`,
+			path: `$.a.q[1]`,
+			want: `2`,
+		},
+		{
+			json: `[{"a":1,"b":2,"c":3},{"a":4,"b":5,"c":6}]`,
+			path: `$[1].a`,
+			want: `4`,
+		},
+		{
+			json: `{"a":{"q":[{"a":1},{"a":2},{"a":3}]}}`,
+			path: `$.a.q[1]`,
+			want: `{"a":2}`,
+		},
+		{
+			json: `{"a":{"q":[{"a":1},{"a":2},{"a":3}]}}`,
+			path: `$.a.q`,
+			want: `[{"a":1},{"a":2},{"a":3}]`,
+		},
+		{
+			json: `[1,2,3]`,
+			path: "$[*]",
+			want: "[1,2,3]",
+		},
+		{
+			json: `{"a":[1,2,3,{"b":4}]}`,
+			path: "$.a[3].b",
+			want: "4",
+		},
+		{
+			json: `{"a":[1,2,3,{"b":4}]}`,
+			path: "$.a[3].c",
+			want: "null",
+		},
+		{
+			json: `{"a":[1,2,3,{"b":4}],"c":5}`,
+			path: "$.*",
+			want: `[[1,2,3,{"b":4}],5]`,
+		},
+		{
+			json: `{"a":[1,2,3,{"a":4}]}`,
+			path: "$**.a",
+			want: `[[1,2,3,{"a":4}],4]`,
+		},
+		{
+			json: `{"a":[1,2,3,{"a":4}]}`,
+			path: "$.a[*].a",
+			want: `4`,
+		},
+	}
+)
+
+func TestByStringOne(t *testing.T) {
+	for _, kase := range kases {
+		ph, err := types.ParseStringToPath(kase.path)
+		if kase.pathErr {
+			require.NotNil(t, err)
+			continue
+		}
+		require.Nil(t, err)
+		q, err := byStringOne([]byte(kase.json), &ph)
+		if kase.jsonErr {
+			require.NotNil(t, err)
+			continue
+		}
+		require.Nil(t, err)
+		require.JSONEq(t, kase.want, string(q))
+	}
+}
+
+func TestByString(t *testing.T) {
+	for _, kase := range kases {
+		jBytes := &types.Bytes{
+			Offsets: []uint32{0},
+			Lengths: []uint32{uint32(len(kase.json))},
+			Data:    []byte(kase.json),
+		}
+		pBytes := &types.Bytes{
+			Offsets: []uint32{0},
+			Lengths: []uint32{uint32(len(kase.path))},
+			Data:    []byte(kase.path),
+		}
+		result := &types.Bytes{
+			Offsets: nil,
+			Lengths: nil,
+			Data:    nil,
+		}
+		result, err := byString(jBytes, pBytes, result)
+		if kase.pathErr || kase.jsonErr {
+			require.NotNil(t, err)
+			continue
+		}
+		require.Nil(t, err)
+		require.JSONEq(t, kase.want, string(result.Data))
+	}
+}
+
+func TestByJsonOne(t *testing.T) {
+	for _, kase := range kases {
+		byteJson, err := types.ParseStringToByteJson(kase.json)
+		if kase.jsonErr {
+			require.NotNil(t, err)
+			continue
+		}
+		require.Nil(t, err)
+		json, err := byteJson.Marshal()
+		require.Nil(t, err)
+		ph, err := types.ParseStringToPath(kase.path)
+		if kase.pathErr {
+			require.NotNil(t, err)
+			continue
+		}
+		require.Nil(t, err)
+		q, err := byJsonOne(json, &ph)
+		require.Nil(t, err)
+		require.JSONEq(t, kase.want, string(q))
+	}
+}
+
+func TestByJson(t *testing.T) {
+	for _, kase := range kases {
+		json, err := types.ParseStringToByteJson(kase.json)
+		if kase.jsonErr {
+			require.NotNil(t, err)
+			continue
+		}
+		require.Nil(t, err)
+		jsonBytes, err := types.EncodeJson(json)
+		require.Nil(t, err)
+		jBytes := &types.Bytes{
+			Offsets: []uint32{0},
+			Lengths: []uint32{uint32(len(jsonBytes))},
+			Data:    jsonBytes,
+		}
+		pBytes := &types.Bytes{
+			Offsets: []uint32{0},
+			Lengths: []uint32{uint32(len(kase.path))},
+			Data:    []byte(kase.path),
+		}
+		result := &types.Bytes{
+			Offsets: nil,
+			Lengths: nil,
+			Data:    nil,
+		}
+		result, err = byJson(jBytes, pBytes, result)
+		if kase.pathErr {
+			require.NotNil(t, err)
+			continue
+		}
+		require.Nil(t, err)
+		require.JSONEq(t, kase.want, string(result.Data))
+	}
+}

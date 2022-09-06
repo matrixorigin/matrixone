@@ -15,32 +15,69 @@
 package json_extract
 
 import (
-	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 )
 
 var (
-	JsonExtract func(*types.Bytes, *types.Bytes, *types.Bytes) *types.Bytes
+	QueryByString func(*types.Bytes, *types.Bytes, *types.Bytes) (*types.Bytes, error)
+	QueryByJson   func(*types.Bytes, *types.Bytes, *types.Bytes) (*types.Bytes, error)
 )
 
 func init() {
-	JsonExtract = jsonExtract
+	QueryByString = byString
+	QueryByJson = byJson
 }
 
-func jsonExtract(json *types.Bytes, path *types.Bytes, result *types.Bytes) *types.Bytes {
-	logutil.Debugf("jsonExtract: json=%s, path=%s, result=%s", json, path, result)
+func byJson(json *types.Bytes, path *types.Bytes, result *types.Bytes) (*types.Bytes, error) {
+	pData := path.Data
+	pStar, err := types.ParseStringToPath(string(pData))
+	if err != nil {
+		logutil.Infof("json qj: error:%v", err)
+		return nil, err
+	}
 	for i := range json.Offsets {
 		jOff, jLen := json.Offsets[i], json.Lengths[i]
-		pOff, pLen := path.Offsets[i], path.Lengths[i]
-		result.AppendOnce(jsonExtractOne(json.Data[jOff:jOff+jLen], path.Data[pOff:pOff+pLen]))
+		ret, err := byJsonOne(json.Data[jOff:jOff+jLen], &pStar)
+		if err != nil {
+			logutil.Infof("json qj: error:%v", err)
+			return nil, err
+		}
+		result.AppendOnce(ret)
 	}
-	return result
+	return result, nil
 }
-func jsonExtractOne(jbytes, pbytes []byte) []byte {
-	bj, err := types.ParseSliceToByteJson(jbytes)
+
+func byJsonOne(json []byte, path *bytejson.Path) ([]byte, error) {
+	//TODO check here
+	bj := types.DecodeJson(json)
+	return []byte(bj.Query(*path).String()), nil
+}
+
+func byString(json *types.Bytes, path *types.Bytes, result *types.Bytes) (*types.Bytes, error) {
+	pData := path.Data
+	pStar, err := types.ParseStringToPath(string(pData))
 	if err != nil {
-		logutil.Debugf("jsonExtractOne: error:%v", err)
+		logutil.Infof("json qv: error:%v", err)
+		return nil, err
 	}
-	return []byte(fmt.Sprintf("%s: %s", bj.String(), string(pbytes)))
+	for i := range json.Offsets {
+		jOff, jLen := json.Offsets[i], json.Lengths[i]
+		ret, err := byStringOne(json.Data[jOff:jOff+jLen], &pStar)
+		if err != nil {
+			logutil.Infof("json qv: error:%v", err)
+			return nil, err
+		}
+		result.AppendOnce(ret)
+	}
+	return result, nil
+}
+func byStringOne(json []byte, path *bytejson.Path) ([]byte, error) {
+	bj, err := types.ParseSliceToByteJson(json)
+	if err != nil {
+		logutil.Debugf("json qvOne : error:%v", err)
+		return nil, err
+	}
+	return []byte(bj.Query(*path).String()), nil
 }
