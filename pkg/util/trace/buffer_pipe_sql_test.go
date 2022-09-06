@@ -53,7 +53,7 @@ func init() {
 		context.Background(),
 		EnableTracer(true),
 		WithMOVersion("v0.test.0"),
-		WithNode("node_uuid", NodeTypeNode),
+		WithNode("node_uuid", NodeTypeStandalone),
 		WithBatchProcessMode(InternalExecutor),
 		WithFSWriterFactory(func(ctx context.Context, dir string, name batchpipe.HasName) io.StringWriter {
 			return os.Stdout
@@ -274,7 +274,7 @@ func Test_buffer2Sql_GetBatch_AllType(t *testing.T) {
 			wantFunc: genSpanBatchSql,
 			want: `insert into system.span_info (` +
 				"`span_id`, `statement_id`, `parent_span_id`, `node_uuid`, `node_type`, `resource`, `name`, `start_time`, `end_time`, `duration`" +
-				`) values ("0000000000000001", "00000000-0000-0000-0000-000000000001", "0000000000000000", "node_uuid", "Standalone", "{\"Node\":{\"node_uuid\":\"node_uuid\",\"node_type\":0},\"version\":\"v0.test.0\"}", "span1", "1970-01-01 00:00:00.000000", "1970-01-01 00:00:00.000001", 1000)`,
+				`) values ("0000000000000001", "00000000-0000-0000-0000-000000000001", "0000000000000000", "node_uuid", "Standalone", "{\"Node\":{\"node_uuid\":\"node_uuid\",\"node_type\":\"Standalone\"},\"version\":\"v0.test.0\"}", "span1", "1970-01-01 00:00:00.000000", "1970-01-01 00:00:00.000001", 1000)`,
 		},
 		{
 			name:   "multi_span",
@@ -303,8 +303,8 @@ func Test_buffer2Sql_GetBatch_AllType(t *testing.T) {
 			wantFunc: genSpanBatchSql,
 			want: `insert into system.span_info (` +
 				"`span_id`, `statement_id`, `parent_span_id`, `node_uuid`, `node_type`, `resource`, `name`, `start_time`, `end_time`, `duration`" +
-				`) values ("0000000000000001", "00000000-0000-0000-0000-000000000001", "0000000000000000", "node_uuid", "Standalone", "{\"Node\":{\"node_uuid\":\"node_uuid\",\"node_type\":0},\"version\":\"v0.test.0\"}", "span1", "1970-01-01 00:00:00.000000", "1970-01-01 00:00:00.000001", 1000)` +
-				`,("0000000000000002", "00000000-0000-0000-0000-000000000001", "0000000000000000", "node_uuid", "Standalone", "{\"Node\":{\"node_uuid\":\"node_uuid\",\"node_type\":0},\"version\":\"v0.test.0\"}", "span2", "1970-01-01 00:00:00.000001", "1970-01-01 00:00:00.001000", 999000)`,
+				`) values ("0000000000000001", "00000000-0000-0000-0000-000000000001", "0000000000000000", "node_uuid", "Standalone", "{\"Node\":{\"node_uuid\":\"node_uuid\",\"node_type\":\"Standalone\"},\"version\":\"v0.test.0\"}", "span1", "1970-01-01 00:00:00.000000", "1970-01-01 00:00:00.000001", 1000)` +
+				`,("0000000000000002", "00000000-0000-0000-0000-000000000001", "0000000000000000", "node_uuid", "Standalone", "{\"Node\":{\"node_uuid\":\"node_uuid\",\"node_type\":\"Standalone\"},\"version\":\"v0.test.0\"}", "span2", "1970-01-01 00:00:00.000001", "1970-01-01 00:00:00.001000", 999000)`,
 		},
 		{
 			name:   "single_statement",
@@ -832,7 +832,7 @@ func Test_genCsvData(t *testing.T) {
 				},
 				buf: buf,
 			},
-			want: `0000000000000001,00000000-0000-0000-0000-000000000001,0000000000000000,node_uuid,Standalone,span1,1970-01-01 00:00:00.000000,1970-01-01 00:00:00.000001,1000,"{""Node"":{""node_uuid"":""node_uuid"",""node_type"":0},""version"":""v0.test.0""}"
+			want: `0000000000000001,00000000-0000-0000-0000-000000000001,0000000000000000,node_uuid,Standalone,span1,1970-01-01 00:00:00.000000,1970-01-01 00:00:00.000001,1000,"{""Node"":{""node_uuid"":""node_uuid"",""node_type"":""Standalone""},""version"":""v0.test.0""}"
 `,
 		},
 		{
@@ -858,8 +858,8 @@ func Test_genCsvData(t *testing.T) {
 				},
 				buf: buf,
 			},
-			want: `0000000000000001,00000000-0000-0000-0000-000000000001,0000000000000000,node_uuid,Standalone,span1,1970-01-01 00:00:00.000000,1970-01-01 00:00:00.000001,1000,"{""Node"":{""node_uuid"":""node_uuid"",""node_type"":0},""version"":""v0.test.0""}"
-0000000000000002,00000000-0000-0000-0000-000000000001,0000000000000000,node_uuid,Standalone,span2,1970-01-01 00:00:00.000001,1970-01-01 00:00:00.001000,999000,"{""Node"":{""node_uuid"":""node_uuid"",""node_type"":0},""version"":""v0.test.0""}"
+			want: `0000000000000001,00000000-0000-0000-0000-000000000001,0000000000000000,node_uuid,Standalone,span1,1970-01-01 00:00:00.000000,1970-01-01 00:00:00.000001,1000,"{""Node"":{""node_uuid"":""node_uuid"",""node_type"":""Standalone""},""version"":""v0.test.0""}"
+0000000000000002,00000000-0000-0000-0000-000000000001,0000000000000000,node_uuid,Standalone,span2,1970-01-01 00:00:00.000001,1970-01-01 00:00:00.001000,999000,"{""Node"":{""node_uuid"":""node_uuid"",""node_type"":""Standalone""},""version"":""v0.test.0""}"
 `,
 		},
 		{

@@ -75,6 +75,8 @@ type tracerProviderConfig struct {
 	writerFactory export.FSWriterFactory // see WithFSWriterFactory, default from export.GetFSWriterFactory result
 
 	sqlExecutor func() ie.InternalExecutor // see WithSQLExecutor
+	// needInit control table schema create
+	needInit bool // see WithInitAction
 
 	mux sync.RWMutex
 }
@@ -123,7 +125,7 @@ func WithMOVersion(v string) tracerProviderOptionFunc {
 }
 
 // WithNode give id as NodeId, t as NodeType
-func WithNode(uuid string, t NodeType) tracerProviderOptionFunc {
+func WithNode(uuid string, t string) tracerProviderOptionFunc {
 	return func(cfg *tracerProviderConfig) {
 		cfg.resource.Put("Node", &MONodeResource{
 			NodeUuid: uuid,
@@ -159,6 +161,12 @@ func WithBatchProcessMode(mode string) tracerProviderOptionFunc {
 func WithSQLExecutor(f func() ie.InternalExecutor) tracerProviderOptionFunc {
 	return func(cfg *tracerProviderConfig) {
 		cfg.sqlExecutor = f
+	}
+}
+
+func WithInitAction(needInit bool) tracerProviderOptionFunc {
+	return func(cfg *tracerProviderConfig) {
+		cfg.needInit = needInit
 	}
 }
 
@@ -384,31 +392,9 @@ func (r *Resource) String() string {
 
 }
 
-type NodeType int
-
-const (
-	NodeTypeNode NodeType = iota
-	NodeTypeCN
-	NodeTypeDN
-	NodeTypeLogService
-)
-
-func (t NodeType) String() string {
-	switch t {
-	case NodeTypeNode:
-		return "Standalone"
-	case NodeTypeCN:
-		return "CN"
-	case NodeTypeDN:
-		return "DN"
-	case NodeTypeLogService:
-		return "LogService"
-	default:
-		return "Unknown"
-	}
-}
+const NodeTypeStandalone = "Standalone"
 
 type MONodeResource struct {
-	NodeUuid string   `json:"node_uuid"`
-	NodeType NodeType `json:"node_type"`
+	NodeUuid string `json:"node_uuid"`
+	NodeType string `json:"node_type"`
 }

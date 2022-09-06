@@ -146,6 +146,10 @@ func NoReportFiled() zap.Field {
 	return zap.Bool(MOInternalFiledKeyNoopReport, false)
 }
 
+func ErrorField(err error) zap.Field {
+	return zap.Error(err)
+}
+
 func newTraceLogEncoder() *TraceLogEncoder {
 	// default like zap.NewProductionEncoderConfig(), but clean core-elems ENCODE
 	e := &TraceLogEncoder{

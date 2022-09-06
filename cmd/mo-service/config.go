@@ -158,14 +158,12 @@ func (c *Config) getLogServiceConfig() logservice.Config {
 	cfg := c.LogService
 	logutil.Infof("hakeeper client cfg: %v", c.HAKeeperClient)
 	cfg.HAKeeperClientConfig = c.HAKeeperClient
-	cfg.Observability = c.getObservabilityConfig()
 	return cfg
 }
 
 func (c *Config) getDNServiceConfig() dnservice.Config {
 	cfg := c.DN
 	cfg.HAKeeper.ClientConfig = c.HAKeeperClient
-	cfg.Observability = c.getObservabilityConfig()
 	return cfg
 }
 
@@ -173,7 +171,6 @@ func (c *Config) getCNServiceConfig() cnservice.Config {
 	cfg := c.CN
 	cfg.HAKeeper.ClientConfig = c.HAKeeperClient
 	cfg.Frontend.SetLogAndVersion(&c.Log, Version)
-	cfg.Observability = c.getObservabilityConfig()
 	return cfg
 }
 

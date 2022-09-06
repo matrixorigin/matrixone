@@ -60,7 +60,7 @@ func (h MOErrorHolder) CsvFields() []string {
 	result = append(result, span.SpanContext().TraceID.String())
 	result = append(result, span.SpanContext().SpanID.String())
 	result = append(result, GetNodeResource().NodeUuid)
-	result = append(result, GetNodeResource().NodeType.String())
+	result = append(result, GetNodeResource().NodeType)
 	result = append(result, h.Error.Error())
 	result = append(result, fmt.Sprintf(errorFormatter.Load().(string), h.Error))
 	result = append(result, nanoSec2DatetimeString(h.Timestamp))

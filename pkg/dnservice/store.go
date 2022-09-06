@@ -31,9 +31,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/matrixorigin/matrixone/pkg/txn/service"
 	"github.com/matrixorigin/matrixone/pkg/txn/util"
-	"github.com/matrixorigin/matrixone/pkg/util/export"
-	"github.com/matrixorigin/matrixone/pkg/util/metric"
-	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"go.uber.org/multierr"
 	"go.uber.org/zap"
 )
@@ -147,9 +144,6 @@ func NewService(cfg *Config,
 	if err := s.initMetadata(); err != nil {
 		return nil, err
 	}
-	if err := s.initTraceMetric(context.TODO()); err != nil {
-		return nil, err
-	}
 	return s, nil
 }
 
@@ -182,7 +176,6 @@ func (s *store) Close() error {
 		}
 		return true
 	})
-	_ = trace.Shutdown(context.TODO())
 	return err
 }
 
@@ -391,29 +384,5 @@ func (s *store) initHAKeeperClient() error {
 		return err
 	}
 	s.hakeeperClient = client
-	return nil
-}
-
-func (s *store) initTraceMetric(ctx context.Context) error {
-	var writerFactory export.FSWriterFactory
-	var err error
-	SV := &s.cfg.Observability
-	if !SV.DisableTrace || !SV.DisableMetric {
-		writerFactory = export.GetFSWriterFactory(s.fileService, s.cfg.UUID, trace.NodeTypeDN.String())
-	}
-	if ctx, err = trace.Init(ctx,
-		trace.WithMOVersion(SV.MoVersion),
-		trace.WithNode(s.cfg.UUID, trace.NodeTypeDN),
-		trace.EnableTracer(!SV.DisableTrace),
-		trace.WithBatchProcessMode(SV.TraceBatchProcessor),
-		trace.WithFSWriterFactory(writerFactory),
-		trace.DebugMode(SV.EnableTraceDebug),
-		trace.WithSQLExecutor(nil),
-	); err != nil {
-		return err
-	}
-	if !SV.DisableMetric {
-		metric.InitMetric(ctx, nil, SV, s.cfg.UUID, metric.ALL_IN_ONE_MODE, metric.WithWriterFactory(writerFactory))
-	}
 	return nil
 }

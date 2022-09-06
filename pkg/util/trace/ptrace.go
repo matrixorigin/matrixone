@@ -36,7 +36,7 @@ func defaultMOTracerProvider() *MOTracerProvider {
 			batchProcessMode: InternalExecutor,
 		},
 	}
-	WithNode("node_uuid", NodeTypeNode).apply(&pTracer.tracerProviderConfig)
+	WithNode("node_uuid", NodeTypeStandalone).apply(&pTracer.tracerProviderConfig)
 	WithMOVersion("MatrixOne").apply(&pTracer.tracerProviderConfig)
 	return pTracer
 }

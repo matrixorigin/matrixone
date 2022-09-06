@@ -161,7 +161,7 @@ func (s *MOSpan) CsvFields() []string {
 	result = append(result, s.TraceID.String())
 	result = append(result, s.parent.SpanContext().SpanID.String())
 	result = append(result, GetNodeResource().NodeUuid)
-	result = append(result, GetNodeResource().NodeType.String())
+	result = append(result, GetNodeResource().NodeType)
 	result = append(result, s.Name.String())
 	result = append(result, nanoSec2DatetimeString(s.StartTimeNS))
 	result = append(result, nanoSec2DatetimeString(s.EndTimeNS))

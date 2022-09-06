@@ -126,7 +126,7 @@ func TestGetNodeResource(t *testing.T) {
 	}{
 		{
 			name: "normal",
-			want: &MONodeResource{"node_uuid", NodeTypeNode},
+			want: &MONodeResource{"node_uuid", NodeTypeStandalone},
 		},
 	}
 	for _, tt := range tests {

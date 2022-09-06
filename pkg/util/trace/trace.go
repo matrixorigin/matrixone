@@ -100,8 +100,8 @@ func initExport(ctx context.Context, config *tracerProviderConfig) error {
 		export.Register(&StatementInfo{}, NewBufferPipe2SqlWorker())
 		export.Register(&MOErrorHolder{}, NewBufferPipe2SqlWorker())
 	case config.batchProcessMode == FileService:
-		if GetNodeResource().NodeType == NodeTypeNode || GetNodeResource().NodeType == NodeTypeCN {
-			// only in standalone mode or CN node can init schema
+		if config.needInit {
+			// PS: only in standalone mode or CN node can init schema
 			if err := InitExternalTblSchema(ctx, config.sqlExecutor); err != nil {
 				return err
 			}

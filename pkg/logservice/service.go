@@ -31,10 +31,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
-
-	"github.com/matrixorigin/matrixone/pkg/util/export"
-	"github.com/matrixorigin/matrixone/pkg/util/metric"
-	"github.com/matrixorigin/matrixone/pkg/util/trace"
 )
 
 var (
@@ -162,10 +158,6 @@ func NewService(
 }
 
 func (s *Service) Start() error {
-	// init trace & metric
-	if _, err := s.initTraceMetric(context.TODO()); err != nil {
-		return err
-	}
 	return nil
 }
 
@@ -178,7 +170,6 @@ func (s *Service) Close() (err error) {
 	if s.store != nil {
 		err = firstError(err, s.store.close())
 	}
-	_ = trace.Shutdown(context.TODO())
 	return err
 }
 
@@ -396,28 +387,4 @@ func (s *Service) getBackendOptions() []morpc.BackendOption {
 // NB: leave an empty method for future extension.
 func (s *Service) getClientOptions() []morpc.ClientOption {
 	return nil
-}
-
-func (s *Service) initTraceMetric(ctx context.Context) (context.Context, error) {
-	SV := &s.cfg.Observability
-	var writerFactory export.FSWriterFactory
-	var err error
-	if !SV.DisableTrace || !SV.DisableMetric {
-		writerFactory = export.GetFSWriterFactory(s.fileService, s.cfg.UUID, trace.NodeTypeLogService.String())
-	}
-	if ctx, err = trace.Init(ctx,
-		trace.WithMOVersion(SV.MoVersion),
-		trace.WithNode(s.cfg.UUID, trace.NodeTypeLogService),
-		trace.EnableTracer(!SV.DisableTrace),
-		trace.WithBatchProcessMode(SV.TraceBatchProcessor),
-		trace.WithFSWriterFactory(writerFactory),
-		trace.DebugMode(SV.EnableTraceDebug),
-		trace.WithSQLExecutor(nil),
-	); err != nil {
-		return nil, err
-	}
-	if !SV.DisableMetric {
-		metric.InitMetric(ctx, nil, SV, s.cfg.UUID, metric.ALL_IN_ONE_MODE, metric.WithWriterFactory(writerFactory))
-	}
-	return ctx, nil
 }

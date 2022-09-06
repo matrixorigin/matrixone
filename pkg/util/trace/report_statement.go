@@ -79,7 +79,7 @@ func (s StatementInfo) CsvFields() []string {
 	result = append(result, s.StatementTag)
 	result = append(result, s.StatementFingerprint)
 	result = append(result, GetNodeResource().NodeUuid)
-	result = append(result, GetNodeResource().NodeType.String())
+	result = append(result, GetNodeResource().NodeType)
 	result = append(result, nanoSec2DatetimeString(s.RequestAt))
 	result = append(result, s.ExecPlan)
 	return result
