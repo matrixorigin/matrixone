@@ -21,9 +21,9 @@ type ObjectAllocator struct {
 	available uint32
 }
 
-func NewObjectAllocator(capacity uint32, pageSize uint32) *ObjectAllocator {
+func NewObjectAllocator() *ObjectAllocator {
 	allocator := &ObjectAllocator{
-		available: capacity,
+		available: 0,
 	}
 	return allocator
 }

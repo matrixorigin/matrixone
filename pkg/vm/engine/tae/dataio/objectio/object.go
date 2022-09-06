@@ -2,7 +2,7 @@ package objectio
 
 const Magic = 0xFFFFFFFF
 const Version = 1
-const ObjectSize = 2 << 31
+const ObjectSize = 2 << 30
 
 type Object struct {
 	oFile     ObjectFile
@@ -13,7 +13,7 @@ type Object struct {
 func NewObject(path string) (*Object, error) {
 	var err error
 	object := &Object{
-		allocator: NewObjectAllocator(ObjectSize, 0),
+		allocator: NewObjectAllocator(),
 	}
 	object.oFile, err = NewLocalFile(path)
 	if err != nil {

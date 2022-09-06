@@ -31,6 +31,7 @@ type Header struct {
 }
 
 type Footer struct {
-	metas []*Extent
+	alg   uint8
+	metas []Extent
 	magic uint64
 }
