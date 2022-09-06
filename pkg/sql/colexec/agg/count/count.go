@@ -22,7 +22,7 @@ type Decimal128AndString interface {
 	types.Decimal | []byte | bool
 }
 
-type Count[T1 types.Generic | Decimal128AndString] struct {
+type Count[T1 types.OrderedT | Decimal128AndString] struct {
 	// isStar is true: count(*)
 	isStar bool
 }
@@ -31,7 +31,7 @@ func ReturnType(_ []types.Type) types.Type {
 	return types.New(types.T_int64, 0, 0, 0)
 }
 
-func New[T1 types.Generic | Decimal128AndString](isStar bool) *Count[T1] {
+func New[T1 types.OrderedT | Decimal128AndString](isStar bool) *Count[T1] {
 	return &Count[T1]{isStar: isStar}
 }
 

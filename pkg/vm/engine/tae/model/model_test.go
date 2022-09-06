@@ -35,7 +35,7 @@ func TestPrepareHiddenData(t *testing.T) {
 	assert.Equal(t, 20, data.Length())
 	for i := 0; i < data.Length(); i++ {
 		v := data.Get(i)
-		sid, bid, off := DecodePhyAddrKey(types.EncodeFixed(v.(types.Decimal128)))
+		sid, bid, off := DecodePhyAddrKey(v.(types.Rowid))
 		assert.Equal(t, sid, id.SegmentID)
 		assert.Equal(t, bid, id.BlockID)
 		assert.Equal(t, off, uint32(i))
