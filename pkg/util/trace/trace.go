@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/util/errors"
 	"github.com/matrixorigin/matrixone/pkg/util/export"
+	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 )
 
 var gTracerProvider atomic.Value
@@ -88,8 +89,10 @@ func initExport(ctx context.Context, config *tracerProviderConfig) error {
 	switch {
 	case config.batchProcessMode == InternalExecutor:
 		// init schema
-		if err := InitSchemaByInnerExecutor(ctx, config.sqlExecutor); err != nil {
-			return err
+		if config.needInit {
+			if err := InitSchemaByInnerExecutor(ctx, config.sqlExecutor); err != nil {
+				return err
+			}
 		}
 		// register buffer pipe implements
 		export.Register(&MOSpan{}, NewBufferPipe2SqlWorker(
@@ -123,6 +126,24 @@ func initExport(ctx context.Context, config *tracerProviderConfig) error {
 	}
 	config.spanProcessors = append(config.spanProcessors, NewBatchSpanProcessor(p))
 	logutil.Info("init trace span processor")
+	return nil
+}
+
+func InitSchema(ctx context.Context, sqlExecutor func() ie.InternalExecutor) error {
+	config := &GetTracerProvider().tracerProviderConfig
+	switch {
+	case config.batchProcessMode == InternalExecutor:
+		if err := InitSchemaByInnerExecutor(ctx, sqlExecutor); err != nil {
+			return err
+		}
+	case config.batchProcessMode == FileService:
+		// PS: only in standalone mode or CN node can init schema
+		if err := InitExternalTblSchema(ctx, sqlExecutor); err != nil {
+			return err
+		}
+	default:
+		return moerr.NewPanicError(fmt.Errorf("unknown batchProcessMode: %s", config.batchProcessMode))
+	}
 	return nil
 }
 

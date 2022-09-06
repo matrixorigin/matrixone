@@ -160,6 +160,11 @@ func mustRegister(collector Collector) {
 	}
 }
 
+func InitSchema(ctx context.Context, ieFactory func() ie.InternalExecutor) error {
+	initTables(ctx, ieFactory, trace.FileService)
+	return nil
+}
+
 // initTables gathers all metrics and extract metadata to format create table sql
 func initTables(ctx context.Context, ieFactory func() ie.InternalExecutor, batchProcessMode string) {
 	exec := ieFactory()

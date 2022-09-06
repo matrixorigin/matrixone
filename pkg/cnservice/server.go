@@ -33,6 +33,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
+
+	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
+	"github.com/matrixorigin/matrixone/pkg/util/metric"
+	"github.com/matrixorigin/matrixone/pkg/util/trace"
 )
 
 type Options func(*service)
@@ -141,7 +145,7 @@ func (s *service) initMOServer(ctx context.Context, pu *config.ParameterUnit) er
 		return err
 	}
 
-	if _, err = s.createMOServer(cancelMoServerCtx, pu); err != nil {
+	if err = s.createMOServer(cancelMoServerCtx, pu); err != nil {
 		return err
 	}
 
@@ -179,17 +183,26 @@ func (s *service) initEngine(
 	return nil
 }
 
-func (s *service) createMOServer(inputCtx context.Context, pu *config.ParameterUnit) (context.Context, error) {
+func (s *service) createMOServer(inputCtx context.Context, pu *config.ParameterUnit) error {
 	address := fmt.Sprintf("%s:%d", pu.SV.Host, pu.SV.Port)
 	moServerCtx := context.WithValue(inputCtx, config.ParameterUnitKey, pu)
 	s.mo = frontend.NewMOServer(moServerCtx, address, pu)
 
+	ieFactory := func() ie.InternalExecutor {
+		return frontend.NewInternalExecutor(pu)
+	}
+	if err := trace.InitSchema(moServerCtx, ieFactory); err != nil {
+		panic(err)
+	}
+	if err := metric.InitSchema(moServerCtx, ieFactory); err != nil {
+		panic(err)
+	}
 	frontend.InitServerVersion(pu.SV.MoVersion)
 	err := frontend.InitSysTenant(moServerCtx)
 	if err != nil {
 		panic(err)
 	}
-	return moServerCtx, nil
+	return nil
 }
 
 func (s *service) runMoServer() error {
