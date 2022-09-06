@@ -25,7 +25,7 @@ func (ht *StringHashMap) InsertStringBatchInBucket(states [][3]uint64, keys [][]
 		return err
 	}
 
-	AesBytesBatchGenHashStates(&keys[0], &states[0], len(keys))
+	BytesBatchGenHashStates(&keys[0], &states[0], len(keys))
 
 	for i := range keys {
 		if states[i][0]%nbucket != ibucket {
@@ -107,7 +107,7 @@ func (ht *StringHashMap) InsertStringBatchWithRingInBucket(zValues []int64, stat
 		return err
 	}
 
-	AesBytesBatchGenHashStates(&keys[0], &states[0], len(keys))
+	BytesBatchGenHashStates(&keys[0], &states[0], len(keys))
 
 	for i := range keys {
 		if zValues[i] == 0 {
@@ -201,7 +201,7 @@ func (ht *StringHashMap) InsertString40BatchWithRingInBucket(zValues []int64, st
 */
 
 func (ht *StringHashMap) FindStringBatchInBucket(states [][3]uint64, keys [][]byte, values []uint64, inBuckets []uint8, ibucket, nbucket uint64) {
-	AesBytesBatchGenHashStates(&keys[0], &states[0], len(keys))
+	BytesBatchGenHashStates(&keys[0], &states[0], len(keys))
 
 	for i := range keys {
 		if states[i][0]%nbucket != ibucket {
@@ -214,7 +214,7 @@ func (ht *StringHashMap) FindStringBatchInBucket(states [][3]uint64, keys [][]by
 }
 
 func (ht *StringHashMap) FindStringBatchWithRingInBucket(states [][3]uint64, zValues []int64, keys [][]byte, values []uint64, inBuckets []uint8, ibucket, nbucket uint64) {
-	AesBytesBatchGenHashStates(&keys[0], &states[0], len(keys))
+	BytesBatchGenHashStates(&keys[0], &states[0], len(keys))
 
 	for i := range keys {
 		if states[i][0]%nbucket != ibucket {
@@ -236,7 +236,7 @@ func (ht *Int64HashMap) InsertBatchInBucket(n int, hashes []uint64, keysPtr unsa
 	}
 
 	if hashes[0] == 0 {
-		Crc32Int64BatchHash(keysPtr, &hashes[0], n)
+		Int64BatchHash(keysPtr, &hashes[0], n)
 	}
 
 	keys := unsafe.Slice((*uint64)(keysPtr), n)
@@ -263,7 +263,7 @@ func (ht *Int64HashMap) InsertBatchWithRingInBucket(n int, zValues []int64, hash
 	}
 
 	if hashes[0] == 0 {
-		Crc32Int64BatchHash(keysPtr, &hashes[0], n)
+		Int64BatchHash(keysPtr, &hashes[0], n)
 	}
 
 	keys := unsafe.Slice((*uint64)(keysPtr), n)
@@ -288,7 +288,7 @@ func (ht *Int64HashMap) InsertBatchWithRingInBucket(n int, zValues []int64, hash
 
 func (ht *Int64HashMap) FindBatchInBucket(n int, hashes []uint64, keysPtr unsafe.Pointer, values []uint64, inBuckets []uint8, ibucket, nbucket uint64) {
 	if hashes[0] == 0 {
-		Crc32Int64BatchHash(keysPtr, &hashes[0], n)
+		Int64BatchHash(keysPtr, &hashes[0], n)
 	}
 
 	keys := unsafe.Slice((*uint64)(keysPtr), n)
@@ -304,7 +304,7 @@ func (ht *Int64HashMap) FindBatchInBucket(n int, hashes []uint64, keysPtr unsafe
 
 func (ht *Int64HashMap) FindBatchWithRingInBucket(n int, zValues []int64, hashes []uint64, keysPtr unsafe.Pointer, values []uint64, inBuckets []uint8, ibucket, nbucket uint64) {
 	if hashes[0] == 0 {
-		Crc32Int64BatchHash(keysPtr, &hashes[0], n)
+		Int64BatchHash(keysPtr, &hashes[0], n)
 	}
 
 	keys := unsafe.Slice((*uint64)(keysPtr), n)
