@@ -153,6 +153,7 @@ func (un *TxnMVCCNode) ApplyCommit(index *wal.Index) (err error) {
 }
 
 func (un *TxnMVCCNode) ApplyRollback(index *wal.Index) (err error) {
+	un.Txn = nil
 	un.AddLogIndex(index)
 	return
 }

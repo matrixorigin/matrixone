@@ -200,7 +200,7 @@ func (be *TableBaseEntry) getUpdateNodeLocked() *TableMVCCNode {
 func (be *TableBaseEntry) GetCommittedNode() (node MVCCNode) {
 	be.MVCC.Loop(func(n *common.GenericDLNode[*TableMVCCNode]) bool {
 		un := n.GetPayload()
-		if !un.IsActive() {
+		if !un.IsActive() && !un.IsCommitting() {
 			node = un
 			return false
 		}

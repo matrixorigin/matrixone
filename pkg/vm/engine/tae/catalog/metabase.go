@@ -196,7 +196,7 @@ func (be *MetaBaseEntry) getUpdateNodeLocked() *MetadataMVCCNode {
 func (be *MetaBaseEntry) GetCommittedNode() (node MVCCNode) {
 	be.MVCC.Loop(func(n *common.GenericDLNode[*MetadataMVCCNode]) bool {
 		un := n.GetPayload()
-		if !un.IsActive() {
+		if !un.IsActive() && !un.IsCommitting() {
 			node = un
 			return false
 		}
@@ -369,6 +369,7 @@ func (be *MetaBaseEntry) IsEmpty() bool {
 	head := be.MVCC.GetHead()
 	return head == nil
 }
+
 func (be *MetaBaseEntry) ApplyRollback(index *wal.Index) error {
 	be.Lock()
 	defer be.Unlock()
