@@ -102,10 +102,6 @@ func (ts TS) Next() TS {
 	}
 	return buildTS(p, l+1)
 }
-func (ts TS) Add(delta int64) TS {
-	p, _ := ts.physical(), ts.logical()
-	return buildTS(p+delta, 0)
-}
 
 func (ts TS) ToString() string {
 	return fmt.Sprintf("%d-%d", ts.physical(), ts.logical())

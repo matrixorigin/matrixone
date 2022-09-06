@@ -115,8 +115,6 @@ type catalogStatsMonitor struct {
 	unCheckpointedCnt  int64
 	minTs              types.TS
 	maxTs              types.TS
-	unCkpCnt           int64
-	isToCkp            bool
 	gcTs               types.TS
 	lastScheduleTime   time.Time
 	cntLimit           int64
@@ -151,26 +149,8 @@ func (monitor *catalogStatsMonitor) PreExecute() error {
 	monitor.unCheckpointedCnt = 0
 	monitor.minTs = monitor.db.Catalog.GetCheckpointed().MaxTS.Next()
 	monitor.maxTs = monitor.db.Scheduler.GetCheckpointTS()
-	monitor.isToCkp = monitor.IsToCheckpoint()
 	monitor.gcTs = monitor.db.Scheduler.GetGCTS()
 	return nil
-}
-
-func (monitor *catalogStatsMonitor) IsToCheckpoint() bool {
-	if monitor.maxTs.LessEq(monitor.minTs) {
-		return false
-	}
-	if monitor.unCkpCnt > 10 {
-		monitor.unCkpCnt = 0
-		return true
-	}
-	ts := monitor.minTs.Add(50)
-	if monitor.maxTs.Greater(ts) {
-		monitor.unCkpCnt = 0
-		return true
-	}
-	monitor.unCkpCnt++
-	return false
 }
 
 func (monitor *catalogStatsMonitor) PostExecute() error {
@@ -195,7 +175,7 @@ func (monitor *catalogStatsMonitor) PostExecute() error {
 }
 
 func (monitor *catalogStatsMonitor) onBlock(entry *catalog.BlockEntry) (err error) {
-	if monitor.isToCkp && catalog.CheckpointSelectOp(entry.MetaBaseEntry, monitor.minTs, monitor.maxTs) {
+	if monitor.minTs.LessEq(monitor.maxTs) && catalog.CheckpointSelectOp(entry.MetaBaseEntry, monitor.minTs, monitor.maxTs) {
 		monitor.unCheckpointedCnt++
 		return
 	}
@@ -235,7 +215,7 @@ func (monitor *catalogStatsMonitor) onBlock(entry *catalog.BlockEntry) (err erro
 }
 
 func (monitor *catalogStatsMonitor) onSegment(entry *catalog.SegmentEntry) (err error) {
-	if monitor.isToCkp && catalog.CheckpointSelectOp(entry.MetaBaseEntry, monitor.minTs, monitor.maxTs) {
+	if monitor.minTs.LessEq(monitor.maxTs) && catalog.CheckpointSelectOp(entry.MetaBaseEntry, monitor.minTs, monitor.maxTs) {
 		monitor.unCheckpointedCnt++
 		return
 	}
@@ -266,7 +246,7 @@ func (monitor *catalogStatsMonitor) onSegment(entry *catalog.SegmentEntry) (err 
 }
 
 func (monitor *catalogStatsMonitor) onTable(entry *catalog.TableEntry) (err error) {
-	if monitor.isToCkp && catalog.CheckpointSelectOp(entry.TableBaseEntry, monitor.minTs, monitor.maxTs) {
+	if monitor.minTs.LessEq(monitor.maxTs) && catalog.CheckpointSelectOp(entry.TableBaseEntry, monitor.minTs, monitor.maxTs) {
 		monitor.unCheckpointedCnt++
 		return
 	}
@@ -296,7 +276,7 @@ func (monitor *catalogStatsMonitor) onTable(entry *catalog.TableEntry) (err erro
 }
 
 func (monitor *catalogStatsMonitor) onDatabase(entry *catalog.DBEntry) (err error) {
-	if monitor.isToCkp && catalog.CheckpointSelectOp(entry.DBBaseEntry, monitor.minTs, monitor.maxTs) {
+	if monitor.minTs.LessEq(monitor.maxTs) && catalog.CheckpointSelectOp(entry.DBBaseEntry, monitor.minTs, monitor.maxTs) {
 		monitor.unCheckpointedCnt++
 		return
 	}
