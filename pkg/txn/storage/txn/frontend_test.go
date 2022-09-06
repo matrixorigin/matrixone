@@ -26,7 +26,6 @@ import (
 	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
-	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	txnengine "github.com/matrixorigin/matrixone/pkg/vm/engine/txn"
 	"github.com/matrixorigin/matrixone/pkg/vm/mempool"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
@@ -47,7 +46,6 @@ func TestFrontend(t *testing.T) {
 		RootPassword: "111",
 		DumpUser:     "dump",
 		DumpPassword: "111",
-		DisableTrace: true,
 	}
 	frontendParameters.SetDefaultValues()
 
@@ -102,9 +100,6 @@ func TestFrontend(t *testing.T) {
 		FileService:   testutil.NewFS(),
 	}
 	ctx = context.WithValue(ctx, config.ParameterUnitKey, pu)
-
-	ctx, err = trace.Init(ctx)
-	assert.Nil(t, err)
 
 	err = frontend.InitSysTenant(ctx)
 	assert.Nil(t, err)

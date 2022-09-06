@@ -57,6 +57,6 @@ message MetricFamily {
     string help            = 2;
     MetricType type        = 3;
     repeated Metric metric = 4;
-    int32 node             = 5;
+    string node            = 5;
     string role            = 6;
 }
