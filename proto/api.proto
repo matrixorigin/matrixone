@@ -51,16 +51,18 @@ message TableID {
 
 // CN pull the tail of redo logs from DN.
 message SyncLogTailReq {
-    timestamp.Timestamp checkpoint_ts = 1;
-    TSRange   range = 2;
+    //timestamp.Timestamp checkpoint_ts = 1;
+    //TSRange   range = 2;
+    timestamp.Timestamp cn_have = 1;
+    timestamp.Timestamp cn_want = 2;
     repeated TableID tables = 3;
     bool all = 4;
 };
 
 message SyncLogTailResp {
     timestamp.Timestamp checkpoint_ts = 1;
-    repeated timestamp.Timestamp new_checkpoints = 2;
-    repeated Entry commands = 3;
+    //repeated timestamp.Timestamp new_checkpoints = 2;
+    repeated Entry commands = 2;
 };
 
 //DN--->CN: DML
@@ -151,18 +153,7 @@ message SyncLogTailResp {
 //      }
 
 
-//message BatchCommands {
-//    TSRange desc = 1;
- //   ScopeDesc scope = 2;
-  //  repeated  Entry commands = 3;
-//};
-
 message PrecommitWriteCmd {
-    repeated Entry entry_list = 1;
-};
-
-// cn->dn or dn->cn
-message Message {
     repeated Entry entry_list = 1;
 };
 
