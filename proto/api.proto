@@ -32,6 +32,7 @@ message Vector {
     bool  nullable = 3;
     bytes nsp = 4;
     bool is_const = 5;
+    uint32 len = 6;
 };
 
 message Batch {
