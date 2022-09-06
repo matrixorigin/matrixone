@@ -241,7 +241,7 @@ func makeBatch(param *ExternalParam, plh *ParseLineHandler) *batch.Batch {
 		case types.T_float64:
 			vec.Data = make([]byte, 8*batchSize)
 			vec.Col = types.DecodeFloat64Slice(vec.Data)
-		case types.T_char, types.T_varchar, types.T_json:
+		case types.T_char, types.T_varchar, types.T_json, types.T_blob:
 			vBytes := &types.Bytes{
 				Offsets: make([]uint32, batchSize),
 				Lengths: make([]uint32, batchSize),
@@ -265,7 +265,7 @@ func makeBatch(param *ExternalParam, plh *ParseLineHandler) *batch.Batch {
 			vec.Data = make([]byte, 8*batchSize)
 			vec.Col = types.DecodeTimestampSlice(vec.Data)
 		default:
-			panic("unsupported vector type")
+			panic("unsupported vector type Oid")
 		}
 		batchData.Vecs[i] = vec
 	}
@@ -496,7 +496,7 @@ func GetBatchData(param *ExternalParam, plh *ParseLineHandler, proc *process.Pro
 					}
 					cols[rowIdx] = d
 				}
-			case types.T_char, types.T_varchar:
+			case types.T_char, types.T_varchar, types.T_blob:
 				vBytes := vec.Col.(*types.Bytes)
 				if isNullOrEmpty {
 					nulls.Add(vec.Nsp, uint64(rowIdx))
