@@ -212,15 +212,33 @@ const (
 	dumpDefaultRoleID = moAdminRoleID
 )
 
+type objectType int
+
 const (
-	objectTypeDatabase = "database"
-	objectTypeTable    = "table"
-	objectTypeFunction = "function"
-	objectTypeAccount  = "account"
-	objectTypeNone     = "none"
+	objectTypeDatabase objectType = iota
+	objectTypeTable
+	objectTypeFunction
+	objectTypeAccount
+	objectTypeNone
 
 	objectIDAll = 0 //denotes all objects in the object type
 )
+
+func (ot objectType) String() string {
+	switch ot {
+	case objectTypeDatabase:
+		return "database"
+	case objectTypeTable:
+		return "table"
+	case objectTypeFunction:
+		return "function"
+	case objectTypeAccount:
+		return "account"
+	case objectTypeNone:
+		return "none"
+	}
+	panic("unsupported object type")
+}
 
 const (
 	//*
@@ -639,7 +657,7 @@ func getSqlForInheritedRoleIdOfRoleId(roleId int64) string {
 	return fmt.Sprintf(getInheritedRoleIdOfRoleIdFormat, roleId)
 }
 
-func getSqlForCheckRoleHasPrivilege(roleId int64, objType string, objId, privilegeId int64) string {
+func getSqlForCheckRoleHasPrivilege(roleId int64, objType objectType, objId, privilegeId int64) string {
 	return fmt.Sprintf(checkRoleHasPrivilegeFormat, roleId, objType, objId, privilegeId)
 }
 
@@ -675,16 +693,20 @@ type privilege struct {
 	//database: (do not need the database_id) the privilege can be defined before constructing the plan.
 	//table: need table id. the privilege can be defined after constructing the plan.
 	//function: need function id ?
-	objectType string
-	entries    []privilegeEntry
-	special    specialTag
+	objType objectType
+	entries []privilegeEntry
+	special specialTag
+}
+
+func (p *privilege) objectType() objectType {
+	return p.objType
 }
 
 // privilegeEntry denotes the entry of the privilege that appears in the table mo_role_privs
 type privilegeEntry struct {
 	privilegeId     PrivilegeType
 	privilegeLevel  string
-	objType         string
+	objType         objectType
 	objId           int
 	withGrantOption bool
 }
@@ -813,7 +835,7 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 	typs := make([]PrivilegeType, 0, 5)
 	kind := privilegeKindGeneral
 	special := specialTagNone
-	objectType := objectTypeAccount
+	objType := objectTypeAccount
 	switch stmt.(type) {
 	case *tree.CreateAccount:
 		typs = append(typs, PrivilegeTypeCreateAccount)
@@ -822,20 +844,20 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 	case *tree.AlterAccount:
 		typs = append(typs, PrivilegeTypeAlterAccount)
 	case *tree.CreateUser:
-		typs = append(typs, PrivilegeTypeCreateUser, PrivilegeTypeAccountAll, PrivilegeTypeAccountOwnership)
+		typs = append(typs, PrivilegeTypeCreateUser, PrivilegeTypeAccountAll /*, PrivilegeTypeAccountOwnership*/)
 	case *tree.DropUser:
-		typs = append(typs, PrivilegeTypeDropUser, PrivilegeTypeAccountAll, PrivilegeTypeAccountOwnership, PrivilegeTypeUserOwnership)
+		typs = append(typs, PrivilegeTypeDropUser, PrivilegeTypeAccountAll /*, PrivilegeTypeAccountOwnership, PrivilegeTypeUserOwnership*/)
 	case *tree.AlterUser:
-		typs = append(typs, PrivilegeTypeAlterUser, PrivilegeTypeAccountAll, PrivilegeTypeAccountOwnership, PrivilegeTypeUserOwnership)
+		typs = append(typs, PrivilegeTypeAlterUser, PrivilegeTypeAccountAll /*, PrivilegeTypeAccountOwnership, PrivilegeTypeUserOwnership*/)
 	case *tree.CreateRole:
-		typs = append(typs, PrivilegeTypeCreateRole, PrivilegeTypeAccountAll, PrivilegeTypeAccountOwnership)
+		typs = append(typs, PrivilegeTypeCreateRole, PrivilegeTypeAccountAll /*, PrivilegeTypeAccountOwnership*/)
 	case *tree.DropRole:
-		typs = append(typs, PrivilegeTypeDropRole, PrivilegeTypeAccountAll, PrivilegeTypeAccountOwnership, PrivilegeTypeRoleOwnership)
+		typs = append(typs, PrivilegeTypeDropRole, PrivilegeTypeAccountAll /*, PrivilegeTypeAccountOwnership, PrivilegeTypeRoleOwnership*/)
 	case *tree.GrantRole:
 		kind = privilegeKindInherit
-		typs = append(typs, PrivilegeTypeManageGrants, PrivilegeTypeAccountAll, PrivilegeTypeAccountOwnership, PrivilegeTypeRoleOwnership)
+		typs = append(typs, PrivilegeTypeManageGrants, PrivilegeTypeAccountAll /*, PrivilegeTypeAccountOwnership, PrivilegeTypeRoleOwnership*/)
 	case *tree.RevokeRole:
-		typs = append(typs, PrivilegeTypeManageGrants, PrivilegeTypeAccountAll, PrivilegeTypeAccountOwnership, PrivilegeTypeRoleOwnership)
+		typs = append(typs, PrivilegeTypeManageGrants, PrivilegeTypeAccountAll /*, PrivilegeTypeAccountOwnership, PrivilegeTypeRoleOwnership*/)
 	case *tree.GrantPrivilege:
 		kind = privilegeKindSpecial
 		special = specialTagAdmin | specialTagWithGrantOption | specialTagOwnerOfObject
@@ -843,36 +865,36 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		kind = privilegeKindSpecial
 		special = specialTagAdmin
 	case *tree.CreateDatabase:
-		typs = append(typs, PrivilegeTypeCreateDatabase, PrivilegeTypeAccountAll, PrivilegeTypeAccountOwnership)
+		typs = append(typs, PrivilegeTypeCreateDatabase, PrivilegeTypeAccountAll /*, PrivilegeTypeAccountOwnership*/)
 	case *tree.DropDatabase:
-		typs = append(typs, PrivilegeTypeDropDatabase, PrivilegeTypeAccountAll, PrivilegeTypeAccountOwnership)
+		typs = append(typs, PrivilegeTypeDropDatabase, PrivilegeTypeAccountAll /*, PrivilegeTypeAccountOwnership*/)
 	case *tree.ShowDatabases, *tree.ShowCreateDatabase:
-		typs = append(typs, PrivilegeTypeShowDatabases, PrivilegeTypeAccountAll, PrivilegeTypeAccountOwnership)
+		typs = append(typs, PrivilegeTypeShowDatabases, PrivilegeTypeAccountAll /*, PrivilegeTypeAccountOwnership*/)
 	case *tree.Use:
 		kind = privilegeKindNone
 	case *tree.ShowTables, *tree.ShowCreateTable, *tree.ShowColumns, *tree.ShowCreateView:
-		objectType = objectTypeDatabase
+		objType = objectTypeDatabase
 		typs = append(typs, PrivilegeTypeShowTables, PrivilegeTypeDatabaseAll, PrivilegeTypeDatabaseOwnership)
 	case *tree.CreateTable, *tree.CreateView:
-		objectType = objectTypeDatabase
+		objType = objectTypeDatabase
 		typs = append(typs, PrivilegeTypeCreateObject, PrivilegeTypeDatabaseAll, PrivilegeTypeDatabaseOwnership)
 	case *tree.DropTable, *tree.DropView:
-		objectType = objectTypeDatabase
+		objType = objectTypeDatabase
 		typs = append(typs, PrivilegeTypeDropObject, PrivilegeTypeDatabaseAll, PrivilegeTypeDatabaseOwnership)
 	case *tree.Select:
-		objectType = objectTypeTable
+		objType = objectTypeTable
 		typs = append(typs, PrivilegeTypeSelect, PrivilegeTypeTableAll, PrivilegeTypeTableOwnership)
 	case *tree.Insert, *tree.Load:
-		objectType = objectTypeTable
+		objType = objectTypeTable
 		typs = append(typs, PrivilegeTypeInsert, PrivilegeTypeTableAll, PrivilegeTypeTableOwnership)
 	case *tree.Update:
-		objectType = objectTypeTable
+		objType = objectTypeTable
 		typs = append(typs, PrivilegeTypeUpdate, PrivilegeTypeTableAll, PrivilegeTypeTableOwnership)
 	case *tree.Delete:
-		objectType = objectTypeTable
+		objType = objectTypeTable
 		typs = append(typs, PrivilegeTypeDelete, PrivilegeTypeTableAll, PrivilegeTypeTableOwnership)
 	case *tree.CreateIndex, *tree.DropIndex, *tree.ShowIndex:
-		objectType = objectTypeTable
+		objType = objectTypeTable
 		typs = append(typs, PrivilegeTypeIndex)
 	case *tree.ShowProcessList, *tree.ShowErrors, *tree.ShowWarnings, *tree.ShowVariables, *tree.ShowStatus:
 		kind = privilegeKindNone
@@ -892,7 +914,7 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 	for i, typ := range typs {
 		entries[i] = privilegeEntriesMap[typ]
 	}
-	return &privilege{kind, objectType, entries, special}
+	return &privilege{kind, objType, entries, special}
 }
 
 // determineRoleSetOfUser decides the roles that the user has.
@@ -907,6 +929,12 @@ func determineRoleSetSatisfyPrivilegeSet(ctx context.Context, bh BackgroundExec,
 	var rsset []ExecResult
 	for _, roleId := range roleIds {
 		for _, entry := range entries {
+			if entry.privilegeId == PrivilegeTypeAccountOwnership || entry.privilegeId == PrivilegeTypeUserOwnership {
+				if roleId == moAdminRoleID || roleId == accountAdminRoleID {
+					//in the version 0.6, only the moAdmin and accountAdmin have the owner right.
+					return true, nil
+				}
+			}
 			sqlForCheckRoleHasPrivilege := getSqlForCheckRoleHasPrivilege(roleId, entry.objType, int64(entry.objId), int64(entry.privilegeId))
 			err := bh.Exec(ctx, sqlForCheckRoleHasPrivilege)
 			if err != nil {
@@ -929,7 +957,7 @@ func determineRoleSetSatisfyPrivilegeSet(ctx context.Context, bh BackgroundExec,
 
 // determinePrivilegesOfUserSatisfyPrivilegeSet decides the privileges of user can satisfy the requirement of the privilege set
 // The algorithm 1.
-func determinePrivilegesOfUserSatisfyPrivilegeSet(ctx context.Context, ses *Session, priv *privilege) (bool, error) {
+func determinePrivilegesOfUserSatisfyPrivilegeSet(ctx context.Context, ses *Session, priv *privilege, stmt tree.Statement) (bool, error) {
 	setR := &btree.Set[int64]{}
 	tenant := ses.GetTenantInfo()
 	pu := ses.Pu
@@ -1061,6 +1089,96 @@ func determinePrivilegesOfUserSatisfyPrivilegeSet(ctx context.Context, ses *Sess
 	return false, nil
 }
 
+// determineRoleHasWithGrantOption decides the roleIds have the with_grant_option = true
+func determineRoleHasWithGrantOption(ctx context.Context, ses *Session, roleIds []int) (bool, error) {
+	//TODO:
+	dedup := &btree.Map[int64, int64]{}
+	for _, id := range roleIds {
+		dedup.Set(int64(id), 0)
+	}
+
+	tenant := ses.GetTenantInfo()
+	pu := ses.Pu
+
+	guestMMu := guest.New(pu.SV.GuestMmuLimitation, pu.HostMmu)
+	bh := NewBackgroundHandler(ctx, guestMMu, pu.Mempool, pu)
+	defer bh.Close()
+	var rsset []ExecResult
+
+	//step1 : get all role id the user has.
+	sqlForRoleIdOfUserId := getSqlForRoleIdOfUserId(int(tenant.GetUserID()))
+	err := bh.Exec(ctx, sqlForRoleIdOfUserId)
+	if err != nil {
+		return false, err
+	}
+
+	results := bh.GetExecResultSet()
+	rsset, err = convertIntoResultSet(results)
+	if err != nil {
+		return false, err
+	}
+
+	if len(rsset) != 0 && rsset[0].GetRowCount() != 0 {
+		for i := uint64(0); i < rsset[0].GetRowCount(); i++ {
+			roleId, err := rsset[0].GetInt64(i, 0)
+			if err != nil {
+				return false, err
+			}
+
+			grantOpt, err := rsset[0].GetInt64(i, 1)
+			if err != nil {
+				return false, err
+			}
+
+			if grantOpt != 0 { //with_grant_option = true
+				if _, exists := dedup.Get(roleId); exists {
+					dedup.Set(roleId, grantOpt)
+				}
+			}
+
+		}
+	}
+
+	all := true
+	//if all roleId have the with_grant_option = true, it is done
+	dedup.Scan(func(k, v int64) bool {
+		if v == 0 {
+			all = false
+			return false
+		}
+		return true
+	})
+
+	if all {
+		return all, nil
+	}
+
+	//step2 : check mo_role_grant
+	//TODO:
+	return false, nil
+}
+
+// authenticatePrivilegeOfStatementWithObjectTypeAccount decides the user has the privilege of executing the statement with object type account
+func authenticatePrivilegeOfStatementWithObjectTypeAccount(ctx context.Context, ses *Session, stmt tree.Statement) (bool, error) {
+	priv := ses.GetPrivilege()
+	if priv.objectType() != objectTypeAccount { //do nothing
+		return true, nil
+	}
+	ok, err := determinePrivilegesOfUserSatisfyPrivilegeSet(ctx, ses, priv, stmt)
+	if err != nil {
+		return false, err
+	}
+
+	//for GrantRole statement, check with_grant_option
+	if !ok && priv.kind == privilegeKindInherit {
+		//grantRole := stmt.(*tree.GrantRole)
+		//for i, role := range grantRole.Roles {
+		//
+		//}
+	}
+	return ok, nil
+}
+
 // authenticatePrivilege decides the user has the privilege of executing the statement.
 func authenticatePrivilege(ctx context.Context, ses *Session, priv *privilege, stmt tree.Statement) (bool, error) {
 	switch priv.kind {
@@ -1074,7 +1192,7 @@ func authenticatePrivilege(ctx context.Context, ses *Session, priv *privilege, s
 	case privilegeKindGeneral:
 		//TODO: need databaseid for object_type = database
 		//TODO: need tableid for object_type = table
-		ok, err := determinePrivilegesOfUserSatisfyPrivilegeSet(ctx, ses, priv)
+		ok, err := determinePrivilegesOfUserSatisfyPrivilegeSet(ctx, ses, priv, stmt)
 		if err != nil {
 			return false, err
 		}

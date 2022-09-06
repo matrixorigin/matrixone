@@ -688,6 +688,10 @@ func (ses *Session) AuthenticateUser(userInput string) ([]byte, error) {
 	return []byte(pwd), nil
 }
 
+func (ses *Session) GetPrivilege() *privilege {
+	return ses.priv
+}
+
 func (th *TxnHandler) SetSession(ses *Session) {
 	th.ses = ses
 }

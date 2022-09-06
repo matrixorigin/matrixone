@@ -1741,6 +1741,18 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		stmt := cw.GetAst()
 		ctx := mce.RecordStatement(requestCtx, ses, proc, cw, beginInstant)
 
+		if ses.GetTenantInfo() != nil {
+			ses.priv = determinePrivilegeSetOfStatement(stmt)
+			havePrivilege, err := authenticatePrivilegeOfStatementWithObjectTypeAccount(requestCtx, ses, stmt)
+			if err != nil {
+				return err
+			}
+
+			if !havePrivilege {
+				return moerr.NewInternalError("do not have privilege to execute the statement")
+			}
+		}
+
 		/*
 				if it is in an active or multi-statement transaction, we check the type of the statement.
 				Then we decide that if we can execute the statement.
@@ -1768,10 +1780,6 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 					return errorUnclassifiedStatement
 				}
 			}
-		}
-
-		if ses.GetTenantInfo() != nil {
-			ses.priv = determinePrivilegeSetOfStatement(stmt)
 		}
 
 		//check transaction states
