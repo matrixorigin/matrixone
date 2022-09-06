@@ -185,7 +185,7 @@ func TestFSWriter_Write(t *testing.T) {
 0000000000000002,00000000-0000-0000-0000-000000000001,0000000000000000,node_uuid,Node,span2,1970-01-01 00:00:00.000001,1970-01-01 00:00:00.001000,999000,"{""Node"":{""node_uuid"":""node_uuid"",""node_type"":""Standalone""},""version"":""v0.test.0""}"
 `,
 				)},
-			wantN:   474,
+			wantN:   500,
 			wantErr: false,
 		},
 	}
