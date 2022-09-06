@@ -30,6 +30,22 @@ var (
 type QueryOption func(*queryOptions)
 
 type queryOptions struct {
+	limit   int
+	afterID uint64
+}
+
+// WithLimit set query result limit
+func WithLimit(limit int) QueryOption {
+	return func(qo *queryOptions) {
+		qo.limit = limit
+	}
+}
+
+// WithQueryAfter query tasks after id
+func WithQueryAfter(id uint64) QueryOption {
+	return func(qo *queryOptions) {
+		qo.afterID = id
+	}
 }
 
 // TaskService Asynchronous Task Service, which provides scheduling execution and management of
@@ -44,9 +60,11 @@ type TaskService interface {
 	// described using a Cron expression.
 	CreateCronTask(ctx context.Context, task task.TaskMetadata, cronExpr string) error
 	// QueryTask search tasks according to conditions.
-	QueryTask(...QueryOption) ([]task.Task, error)
+	QueryTask(context.Context, ...QueryOption) ([]task.Task, error)
+	// TaskDone task done.
+	TaskDone(context.Context, task.Task) error
 	// CronTasks returns all created cron tasks
-	CronTasks() ([]task.CronTask, error)
+	CronTasks(context.Context) ([]task.CronTask, error)
 	// Heartbeat sending a heartbeat tells the scheduler that the specified task is running normally.
 	// If the scheduler does not receive the heartbeat for a long time, it will reassign the task executor
 	// to execute the task. Returning `ErrInvalidTask` means that the Task has been reassigned or has

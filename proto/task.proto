@@ -41,15 +41,15 @@ message TaskMetadata {
     // Context context needed to run the task
     bytes       Context  = 3;
     // Options options for execute task
-    TaskOptions Options  = 4;
+    TaskOptions Options  = 4 [(gogoproto.nullable) = false];
 }
 
 // TaskOptions task options
 message TaskOptions {
-    // DisableRetry disable retry if task execute failed.
-    bool   DisableRetry  = 1;
-    // MaxRetryTimes 0 means ulimited
-    uint32 MaxRetryTimes = 2;
+    // MaxRetryTimes 0 means disable retry
+    uint32 MaxRetryTimes = 1;
+    // RetryInterval retry interval
+    int64  RetryInterval = 2;
     // DelayDuration delay duration. Controls how long a task is delayed before it is scheduled for 
     // execution.
     int64  DelayDuration = 3;
@@ -73,28 +73,29 @@ message ExecuteResult {
 
 // Task task execute info.
 message Task {
+    uint64        ID            = 1;
     // TaskMetadata task metadata
-    TaskMetadata  Metadata      = 1 [(gogoproto.nullable) = false];
+    TaskMetadata  Metadata      = 2 [(gogoproto.nullable) = false];
     // ParentTaskID used to record the parent task of the current task
-    string        ParentTaskID  = 2;
+    string        ParentTaskID  = 3;
     // TaskStatus task status
-    TaskStatus    Status        = 3;
+    TaskStatus    Status        = 4;
     // TaskRunner is the UUID of the CN node which the task run is assigned to
-    string        TaskRunner    = 4;
+    string        TaskRunner    = 5;
     // Epoch indicates how many times the current task is scheduled, the first time it is scheduled 
     // is 1. Each time it is scheduled, Epoch++.
-    uint32        Epoch         = 5;
+    uint32        Epoch         = 6;
     // ScheduleAfter unix timestamp in ms used to controls when scheduler can assigned a TaskRunner 
     // to this task.
-    int64         ScheduleAfter = 6;
+    int64         ScheduleAfter = 7;
     // LastHeartbeat time of the last heartbeat reported by TaskRunner. Unix timestamp in ms
-    int64         LastHeartbeat = 7;
+    int64         LastHeartbeat = 8;
     // CreateAt time of the task created. Unix timestamp in ms
-    int64         CreateAt      = 8;
+    int64         CreateAt      = 9;
     // CompletedAt time of the task completed. Unix timestamp in ms
-    int64         CompletedAt   = 9;
+    int64         CompletedAt   = 10;
     // ExecuteResult execute result
-    ExecuteResult ExecuteResult = 10;
+    ExecuteResult ExecuteResult = 11;
 }
 
 // CronTask task execute info.
