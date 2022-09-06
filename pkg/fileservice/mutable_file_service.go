@@ -29,6 +29,11 @@ type Mutator interface {
 	// Mutate mutates file contents
 	Mutate(ctx context.Context, entries ...IOEntry) error
 
+	// Append appends data to file
+	// all IOEntry.Offset is base on the end of file position
+	// for example, passing IOEntry{Offset: 0, Len:1, Data: []byte("a")} will append "a" to the end of file
+	Append(ctx context.Context, entries ...IOEntry) error
+
 	// Close closes the mutator
 	// Must be called after finishing mutation
 	Close() error
