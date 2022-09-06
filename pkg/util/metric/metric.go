@@ -100,7 +100,7 @@ func InitMetric(ctx context.Context, ieFactory func() ie.InternalExecutor, SV *c
 	// register metrics and create tables
 	registerAllMetrics()
 	if initOpts.needInitTable {
-		initTables(ctx, ieFactory, SV.TraceBatchProcessor)
+		initTables(ctx, ieFactory, SV.BatchProcessor)
 	}
 
 	// start the data flow

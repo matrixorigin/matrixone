@@ -164,9 +164,9 @@ func WithSQLExecutor(f func() ie.InternalExecutor) tracerProviderOptionFunc {
 	}
 }
 
-func WithInitAction(needInit bool) tracerProviderOptionFunc {
+func WithInitAction(init bool) tracerProviderOptionFunc {
 	return func(cfg *tracerProviderConfig) {
-		cfg.needInit = needInit
+		cfg.needInit = init
 	}
 }
 

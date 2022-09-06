@@ -42,7 +42,7 @@ func TestMetric(t *testing.T) {
 		SV.Host = "0.0.0.0"
 		SV.StatusPort = 7001
 		SV.DisableMetricToProm = false
-		SV.TraceBatchProcessor = InternalExecutor
+		SV.BatchProcessor = InternalExecutor
 		defer setGatherInterval(setGatherInterval(30 * time.Millisecond))
 		defer setRawHistBufLimit(setRawHistBufLimit(5))
 		InitMetric(context.TODO(), factory, SV, "node_uuid", "test", WithInitAction(true))
@@ -95,7 +95,7 @@ func TestMetricNoProm(t *testing.T) {
 		SV.Host = "0.0.0.0"
 		SV.StatusPort = 7001
 		SV.DisableMetricToProm = true
-		SV.TraceBatchProcessor = InternalExecutor
+		SV.BatchProcessor = InternalExecutor
 
 		defer setGatherInterval(setGatherInterval(30 * time.Millisecond))
 		defer setRawHistBufLimit(setRawHistBufLimit(5))

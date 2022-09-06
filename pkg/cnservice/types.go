@@ -82,9 +82,6 @@ type Config struct {
 	// Frontend parameters for the frontend
 	Frontend config.FrontendParameters `toml:"frontend"`
 
-	// Observability parameters for the observability, assign by mo-service's Config
-	Observability config.ObservabilityParameters
-
 	// HAKeeper configuration
 	HAKeeper struct {
 		// HeatbeatDuration heartbeat duration to send message to hakeeper. Default is 1s

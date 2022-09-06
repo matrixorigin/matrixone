@@ -145,9 +145,7 @@ func (s *service) initMOServer(ctx context.Context, pu *config.ParameterUnit) er
 		return err
 	}
 
-	if err = s.createMOServer(cancelMoServerCtx, pu); err != nil {
-		return err
-	}
+	s.createMOServer(cancelMoServerCtx, pu)
 
 	return nil
 }
@@ -183,7 +181,7 @@ func (s *service) initEngine(
 	return nil
 }
 
-func (s *service) createMOServer(inputCtx context.Context, pu *config.ParameterUnit) error {
+func (s *service) createMOServer(inputCtx context.Context, pu *config.ParameterUnit) {
 	address := fmt.Sprintf("%s:%d", pu.SV.Host, pu.SV.Port)
 	moServerCtx := context.WithValue(inputCtx, config.ParameterUnitKey, pu)
 	s.mo = frontend.NewMOServer(moServerCtx, address, pu)
@@ -202,7 +200,6 @@ func (s *service) createMOServer(inputCtx context.Context, pu *config.ParameterU
 	if err != nil {
 		panic(err)
 	}
-	return nil
 }
 
 func (s *service) runMoServer() error {

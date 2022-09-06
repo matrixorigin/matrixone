@@ -291,7 +291,7 @@ func initTraceMetric(ctx context.Context, cfg *Config, stopper *stopper.Stopper,
 				trace.WithMOVersion(SV.MoVersion),
 				trace.WithNode(UUID, ServerType),
 				trace.EnableTracer(!SV.DisableTrace),
-				trace.WithBatchProcessMode(SV.TraceBatchProcessor),
+				trace.WithBatchProcessMode(SV.BatchProcessor),
 				trace.WithFSWriterFactory(writerFactory),
 				trace.DebugMode(SV.EnableTraceDebug),
 				trace.WithSQLExecutor(nil),
@@ -307,8 +307,7 @@ func initTraceMetric(ctx context.Context, cfg *Config, stopper *stopper.Stopper,
 		})
 	}
 	if !SV.DisableMetric {
-		metric.InitMetric(ctx, nil, &SV, UUID, metric.ALL_IN_ONE_MODE,
-			metric.WithWriterFactory(writerFactory))
+		metric.InitMetric(ctx, nil, &SV, UUID, metric.ALL_IN_ONE_MODE, metric.WithWriterFactory(writerFactory))
 	}
 	return nil
 }

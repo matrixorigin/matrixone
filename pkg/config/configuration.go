@@ -100,7 +100,7 @@ var (
 	defaultStatusPort = 7001
 
 	//default is InternalExecutor. if InternalExecutor, use internal sql executor, FileService will implement soon.
-	defaultTraceBatchProcessor = "FileService"
+	defaultBatchProcessor = "FileService"
 )
 
 // FrontendParameters of the frontend
@@ -334,7 +334,7 @@ type ObservabilityParameters struct {
 	DisableTrace bool `toml:"disableTrace"`
 
 	//default is InternalExecutor. if InternalExecutor, use internal sql executor, FileService will implement soon.
-	TraceBatchProcessor string `toml:"traceBatchProcessor"`
+	BatchProcessor string `toml:"batchProcessor"`
 
 	//default is false. With true, system will check all the children span is ended, which belong to the closing span.
 	EnableTraceDebug bool `toml:"enableTraceDebug"`
@@ -351,8 +351,8 @@ func (op *ObservabilityParameters) SetDefaultValues(version string) {
 		op.StatusPort = int64(defaultStatusPort)
 	}
 
-	if op.TraceBatchProcessor == "" {
-		op.TraceBatchProcessor = defaultTraceBatchProcessor
+	if op.BatchProcessor == "" {
+		op.BatchProcessor = defaultBatchProcessor
 	}
 }
 
