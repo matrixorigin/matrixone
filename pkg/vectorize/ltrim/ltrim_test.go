@@ -38,6 +38,7 @@ func TestLtrim(t *testing.T) {
 	Ltrim(multiStrings, rs)
 	for i, s := range multiStrings {
 		// TrimLeft of only space " " char.
-		require.Equal(t, rs[i], strings.TrimLeft(s, " \u3000"))
+		// require.Equal(t, rs[i], strings.TrimLeft(s, " \u3000"))
+		require.Equal(t, rs[i], strings.TrimLeft(s, " "))
 	}
 }

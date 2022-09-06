@@ -32,7 +32,7 @@ func TestRtrim(t *testing.T) {
 		" a  ",
 		"  a ",
 		" 你好 ",
-		"a　", // fullwidth space
+		"a", // fullwidth space
 	}
 	rs := make([]string, len(multiStrings))
 
