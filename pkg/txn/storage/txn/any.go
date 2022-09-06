@@ -14,7 +14,10 @@
 
 package txnstorage
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+)
 
 type AnyKey []any
 
@@ -71,6 +74,17 @@ type AnyRow struct {
 
 func (a *AnyRow) PrimaryKey() AnyKey {
 	return a.primaryKey
+}
+
+func (a *AnyRow) String() string {
+	buf := new(strings.Builder)
+	buf.WriteString("AnyRow{")
+	buf.WriteString(fmt.Sprintf("key: %+v", a.primaryKey))
+	for key, value := range a.attributes {
+		buf.WriteString(fmt.Sprintf(", %s: %v", key, value))
+	}
+	buf.WriteString("}")
+	return buf.String()
 }
 
 func NewAnyRow() *AnyRow {

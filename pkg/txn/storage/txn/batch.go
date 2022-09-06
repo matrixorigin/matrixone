@@ -139,7 +139,7 @@ func NewBatchIter(b *batch.Batch) BatchIter {
 			case types.T_char, types.T_varchar, types.T_json, types.T_blob:
 				info := vec.Col.(*types.Bytes)
 				if i < len(info.Offsets) {
-					str := vec.Data[info.Offsets[i] : info.Offsets[i]+info.Lengths[i]]
+					str := info.Data[info.Offsets[i] : info.Offsets[i]+info.Lengths[i]]
 					tuple = append(tuple, str)
 				} else {
 					return
@@ -240,7 +240,7 @@ func vectorAt(vec *vector.Vector, i int) any {
 
 	case types.T_char, types.T_varchar, types.T_json, types.T_blob:
 		info := vec.Col.(*types.Bytes)
-		str := vec.Data[info.Offsets[i] : info.Offsets[i]+info.Lengths[i]]
+		str := info.Data[info.Offsets[i] : info.Offsets[i]+info.Lengths[i]]
 		return str
 
 	case types.T_date:
