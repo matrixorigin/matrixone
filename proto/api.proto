@@ -26,72 +26,9 @@ option go_package = "github.com/matrixorigin/matrixone/pkg/pb/api";
 option (gogoproto.sizer_all) = false;
 option (gogoproto.protosizer_all) = true;
 
-//types.type
-enum TypeID {
-    T_any   = 0;
-    T_star  = 1;
-
-    // bool family
-    T_bool  = 10;
-
-    // numeric/integer family
-    T_int8     = 20;
-    T_int16    = 21;
-    T_int32    = 22;
-    T_int64    = 23;
-    T_int128   = 24;
-    T_uint8    = 25;
-    T_uint16   = 26;
-    T_uint32   = 27;
-    T_uint64   = 28;
-    T_uint128  = 29;
-
-    // numeric/float family
-    T_float32  = 30;
-    T_float64  = 31;
-
-    // numeric/decimals
-    T_decimal64   = 32;
-    T_decimal128  = 33;
-
-    // pseudo numerics, not used
-
-    // date and time
-    T_date       = 50;
-    T_time       = 51;
-    T_datetime   = 52;
-    T_timestamp  = 53;
-    T_interval   = 54;
-
-    // string family
-    T_char     = 60;
-    T_varchar  = 61;
-    T_json     = 62;
-
-    // blobs
-    T_blob  = 70;
-
-    // Transaction TS
-    T_TS  = 100;
-
-    // system family
-    T_sel    = 200;
-    T_tuple  = 201;
-}
-
-message Type {
-	TypeID	id           = 1;
-	bool 	nullable		= 2;
-	int32 	width			= 3;
-	int32 	precision		= 4;
-	int32 	size 			= 5;
-	int32 	scale 		= 6;
-};
-
-
 message Vector {
     bytes data = 1;
-    Type  type = 2;
+    plan.Type  type = 2;
     bool  nullable = 3;
     bytes nsp = 4;
     bool is_const = 5;
