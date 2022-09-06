@@ -250,7 +250,7 @@ func (be *DBBaseEntry) NeedWaitCommitting(startTS types.TS) (bool, txnif.TxnRead
 	return un.NeedWaitCommitting(startTS)
 }
 
-func (be *DBBaseEntry) InTxnOrRollbacked() bool {
+func (be *DBBaseEntry) IsCreating() bool {
 	un := be.getUpdateNodeLocked()
 	if un == nil {
 		return true

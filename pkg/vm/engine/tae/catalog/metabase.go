@@ -252,7 +252,7 @@ func (be *MetaBaseEntry) NeedWaitCommitting(startTS types.TS) (bool, txnif.TxnRe
 	return un.NeedWaitCommitting(startTS)
 }
 
-func (be *MetaBaseEntry) InTxnOrRollbacked() bool {
+func (be *MetaBaseEntry) IsCreating() bool {
 	un := be.getUpdateNodeLocked()
 	if un == nil {
 		return true

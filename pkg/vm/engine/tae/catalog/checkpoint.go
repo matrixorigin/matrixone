@@ -44,9 +44,6 @@ type CheckpointItem interface {
 func CheckpointSelectOp(entry BaseEntryIf, minTs, maxTs types.TS) bool {
 	entry.RLock()
 	defer entry.RUnlock()
-	if entry.InTxnOrRollbacked() {
-		return false
-	}
 	return entry.ExistUpdate(minTs, maxTs)
 }
 

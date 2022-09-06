@@ -49,7 +49,7 @@ type BaseEntryIf interface {
 	TxnCanRead(txn txnif.AsyncTxn, mu *sync.RWMutex) (canRead bool, err error)
 
 	ExistUpdate(minTs, MaxTs types.TS) (exist bool)
-	InTxnOrRollbacked() bool
+	IsCreating() bool
 	IsCommitting() bool
 	DeleteBefore(ts types.TS) bool
 

@@ -242,6 +242,10 @@ func (un *EntryMVCCNode) GetDeletedAt() types.TS {
 	return un.DeletedAt
 }
 
+func (un *EntryMVCCNode) IsCreating() bool {
+	return un.CreatedAt.IsEmpty()
+}
+
 func (un *EntryMVCCNode) Clone() *EntryMVCCNode {
 	return &EntryMVCCNode{
 		CreatedAt: un.CreatedAt,

@@ -256,12 +256,12 @@ func (be *TableBaseEntry) NeedWaitCommitting(startTS types.TS) (bool, txnif.TxnR
 	return un.NeedWaitCommitting(startTS)
 }
 
-func (be *TableBaseEntry) InTxnOrRollbacked() bool {
+func (be *TableBaseEntry) IsCreating() bool {
 	un := be.getUpdateNodeLocked()
 	if un == nil {
 		return true
 	}
-	return un.IsActive()
+	return un.IsCreating()
 }
 
 func (be *TableBaseEntry) IsDroppedCommitted() bool {
