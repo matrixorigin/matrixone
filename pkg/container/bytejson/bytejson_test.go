@@ -112,3 +112,65 @@ func TestArray(t *testing.T) {
 		}
 	}
 }
+
+func TestQuery(t *testing.T) {
+	kases := []struct {
+		jsonStr string
+		pathStr string
+		outStr  string
+	}{
+		{
+			jsonStr: `{"a": "1", "b": "2", "c": "3"}`,
+			pathStr: "$.a",
+			outStr:  "\"1\"",
+		},
+		{
+			jsonStr: `{"a": "1", "b": "2", "c": "3"}`,
+			pathStr: "$.b",
+			outStr:  "\"2\"",
+		},
+		{
+			jsonStr: `[1,2,3]`,
+			pathStr: "$[0]",
+			outStr:  "1",
+		},
+		{
+			jsonStr: `[1,2,3]`,
+			pathStr: "$[2]",
+			outStr:  "3",
+		},
+		{
+			jsonStr: `[1,2,3]`,
+			pathStr: "$[*]",
+			outStr:  "[1,2,3]",
+		},
+		{
+			jsonStr: `{"a":[1,2,3,{"b":4}]}`,
+			pathStr: "$.a[3].b",
+			outStr:  "4",
+		},
+		{
+			jsonStr: `{"a":[1,2,3,{"b":4}]}`,
+			pathStr: "$.a[3].c",
+			outStr:  "null",
+		},
+		{
+			jsonStr: `{"a":[1,2,3,{"b":4}],"c":5}`,
+			pathStr: "$.*",
+			outStr:  `[[1,2,3,{"b":4}],5]`,
+		},
+		{
+			jsonStr: `{"a":[1,2,3,{"a":4}]}`,
+			pathStr: "$**.a",
+			outStr:  `[[1,2,3,{"a":4}],4]`,
+		},
+	}
+	for _, kase := range kases {
+		bj, err := ParseFromString(kase.jsonStr)
+		require.Nil(t, err)
+		path, err := ParseJsonPath(kase.pathStr)
+		require.Nil(t, err)
+		out := bj.Query(path)
+		require.JSONEq(t, kase.outStr, out.String())
+	}
+}
