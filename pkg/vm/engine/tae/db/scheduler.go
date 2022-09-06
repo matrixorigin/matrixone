@@ -114,7 +114,7 @@ func (s *taskScheduler) GetGCTS() types.TS {
 }
 
 func (s *taskScheduler) GetCheckpointTS() types.TS {
-	return s.db.TxnMgr.StatMaxTS()
+	return s.db.TxnMgr.StatMaxCommitTS()
 }
 
 func (s *taskScheduler) GetPenddingLSNCnt() uint64 {

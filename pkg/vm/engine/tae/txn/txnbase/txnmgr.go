@@ -43,6 +43,7 @@ type TxnManager struct {
 	TsAlloc         *types.TsAlloctor
 	TxnStoreFactory TxnStoreFactory
 	TxnFactory      TxnFactory
+	MaxCommitTs     types.TS
 	Active          *btree.Generic[types.TS]
 	Exception       *atomic.Value
 }
@@ -57,6 +58,7 @@ func NewTxnManager(txnStoreFactory TxnStoreFactory, txnFactory TxnFactory, clock
 		TsAlloc:         types.NewTsAlloctor(clock),
 		TxnStoreFactory: txnStoreFactory,
 		TxnFactory:      txnFactory,
+		MaxCommitTs:     types.TS{},
 		Active: btree.NewGeneric[types.TS](func(a, b types.TS) bool {
 			return a.Less(b)
 		}),
@@ -97,9 +99,9 @@ func (mgr *TxnManager) StatSafeTS() (ts types.TS) {
 	return
 }
 
-func (mgr *TxnManager) StatMaxTS() (ts types.TS) {
+func (mgr *TxnManager) StatMaxCommitTS() (ts types.TS) {
 	mgr.RLock()
-	ts = mgr.TsAlloc.Get()
+	ts = mgr.MaxCommitTs
 	mgr.RUnlock()
 	return
 }
@@ -224,6 +226,7 @@ func (mgr *TxnManager) onPreparing(items ...any) {
 			_ = op.Txn.ToPreparingLocked(ts)
 		}
 		op.Txn.Unlock()
+		mgr.MaxCommitTs = ts
 		mgr.Unlock()
 		//for 1PC Commit
 		if op.Op == OpCommit {
