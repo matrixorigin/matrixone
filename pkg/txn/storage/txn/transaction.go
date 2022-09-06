@@ -21,13 +21,13 @@ import (
 
 type Transaction struct {
 	ID              string
-	BeginTime       Timestamp
-	CurrentTime     Timestamp
+	BeginTime       Time
+	CurrentTime     Time
 	State           *Atomic[TransactionState]
 	IsolationPolicy IsolationPolicy
 }
 
-func NewTransaction(id string, t Timestamp, isolationPolicy IsolationPolicy) *Transaction {
+func NewTransaction(id string, t Time, isolationPolicy IsolationPolicy) *Transaction {
 	return &Transaction{
 		ID:              id,
 		BeginTime:       t,

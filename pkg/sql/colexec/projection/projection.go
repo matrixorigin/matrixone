@@ -61,10 +61,10 @@ func Call(idx int, proc *process.Process, arg any) (bool, error) {
 		}
 		rbat.Vecs[i] = vec
 	}
-	for _, vec := range rbat.Vecs {
-		for k := 0; k < len(bat.Vecs); k++ {
-			if vec == bat.Vecs[k] {
-				bat.Vecs = append(bat.Vecs[:k], bat.Vecs[k+1:]...)
+	for i, vec := range bat.Vecs {
+		for _, rVec := range rbat.Vecs {
+			if vec == rVec {
+				bat.Vecs[i] = nil
 				break
 			}
 		}

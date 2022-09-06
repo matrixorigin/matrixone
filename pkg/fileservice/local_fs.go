@@ -524,25 +524,37 @@ func (l *LocalFS) NewMutator(filePath string) (Mutator, error) {
 	if os.IsNotExist(err) {
 		return nil, ErrFileNotFound
 	}
-	return &_LocalFSMutator{
+	return &LocalFSMutator{
 		osFile:           f,
 		fileWithChecksum: NewFileWithChecksum(f, _BlockContentSize),
 	}, nil
 }
 
-type _LocalFSMutator struct {
+type LocalFSMutator struct {
 	osFile           *os.File
 	fileWithChecksum *FileWithChecksum[*os.File]
 }
 
-func (l *_LocalFSMutator) Mutate(ctx context.Context, entries ...IOEntry) error {
+func (l *LocalFSMutator) Mutate(ctx context.Context, entries ...IOEntry) error {
+	return l.mutate(ctx, 0, entries...)
+}
+
+func (l *LocalFSMutator) Append(ctx context.Context, entries ...IOEntry) error {
+	offset, err := l.fileWithChecksum.Seek(0, io.SeekEnd)
+	if err != nil {
+		return err
+	}
+	return l.mutate(ctx, int(offset), entries...)
+}
+
+func (l *LocalFSMutator) mutate(ctx context.Context, baseOffset int, entries ...IOEntry) error {
 
 	// write
 	for _, entry := range entries {
 
 		if entry.ReaderForWrite != nil {
 			// seek and copy
-			_, err := l.fileWithChecksum.Seek(int64(entry.Offset), 0)
+			_, err := l.fileWithChecksum.Seek(int64(entry.Offset+baseOffset), 0)
 			if err != nil {
 				return err
 			}
@@ -556,7 +568,7 @@ func (l *_LocalFSMutator) Mutate(ctx context.Context, entries ...IOEntry) error 
 
 		} else {
 			// WriteAt
-			n, err := l.fileWithChecksum.WriteAt(entry.Data, int64(entry.Offset))
+			n, err := l.fileWithChecksum.WriteAt(entry.Data, int64(entry.Offset+baseOffset))
 			if err != nil {
 				return err
 			}
@@ -570,7 +582,7 @@ func (l *_LocalFSMutator) Mutate(ctx context.Context, entries ...IOEntry) error 
 	return nil
 }
 
-func (l *_LocalFSMutator) Close() error {
+func (l *LocalFSMutator) Close() error {
 	// sync
 	if err := l.osFile.Sync(); err != nil {
 		return err

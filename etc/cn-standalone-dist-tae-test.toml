@@ -10,6 +10,9 @@ service-addresses = [
   "127.0.0.1:32000",
 ]
 
+[cn]
+uuid = "cn1"
+
 [cn.Engine]
 type = "distributed-tae"
 

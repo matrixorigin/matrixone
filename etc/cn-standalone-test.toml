@@ -20,6 +20,9 @@ backend = "MEM"
 name = "S3"
 backend = "MEM"
 
+[cn]
+uuid = "cn1"
+
 [cn.Engine]
 type = "tae"
 

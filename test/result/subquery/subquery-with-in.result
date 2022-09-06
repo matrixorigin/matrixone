@@ -1490,7 +1490,7 @@ SELECT NULL IN (SELECT 1 FROM t1);
 NULL IN (SELECT 1 FROM t1)
 null
 SELECT (NULL AND 1) IN (SELECT 1 FROM t1);
-Operator '=' with parameters [BOOL BIGINT] will be implemented in future version.
+non-scalar subquery in SELECT clause will be supported in future version.
 SELECT (NULL, 1) IN (SELECT 1,1 FROM t1);
 (NULL, 1) IN (SELECT 1,1 FROM t1)
 null
@@ -1500,13 +1500,13 @@ null
 SELECT (NULL OR 1) IN (SELECT 1 FROM t1);
 Operator '=' with parameters [BOOL BIGINT] will be implemented in future version.
 SELECT (NULL IS NULL) IN  (SELECT 1 FROM t1);
-Operator '=' with parameters [BOOL BIGINT] will be implemented in future version.
+non-scalar subquery in SELECT clause will be supported in future version.
 DELETE FROM t1;
 SELECT NULL IN (SELECT 1 FROM t1);
 NULL IN (SELECT 1 FROM t1)
 0
 SELECT (NULL AND 1) IN (SELECT 1 FROM t1);
-Operator '=' with parameters [BOOL BIGINT] will be implemented in future version.
+non-scalar subquery in SELECT clause will be supported in future version.
 SELECT (NULL, 1) IN (SELECT 1,1 FROM t1);
 (NULL, 1) IN (SELECT 1,1 FROM t1)
 0
@@ -1514,9 +1514,9 @@ SELECT (NULL, NULL) IN (SELECT 1,1 FROM t1);
 (NULL, NULL) IN (SELECT 1,1 FROM t1)
 0
 SELECT (NULL OR 1) IN (SELECT 1 FROM t1);
-Operator '=' with parameters [BOOL BIGINT] will be implemented in future version.
+non-scalar subquery in SELECT clause will be supported in future version.
 SELECT (NULL IS NULL) IN  (SELECT 1 FROM t1);
-Operator '=' with parameters [BOOL BIGINT] will be implemented in future version.
+non-scalar subquery in SELECT clause will be supported in future version.
 DROP TABLE IF EXISTS t1;
 CREATE TABLE t1 (a INTEGER);
 INSERT INTO t1 VALUES (1), (2), (3);

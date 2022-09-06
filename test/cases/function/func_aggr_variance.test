@@ -15,12 +15,10 @@ select variance(e) from t1;
 select variance(f) from t1;
 select variance(g) from t1;
 
--- @bvt:issue#4691
 select variance(h) from t1;
 select variance(i) from t1;
 select variance(k) from t1;
 select variance(l) from t1;
--- @bvt:issue
 select variance(m) from t1;
 select variance(n) from t1;
 drop table t1;
