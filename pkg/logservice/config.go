@@ -25,7 +25,6 @@ import (
 	"github.com/lni/vfs"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper"
 	"github.com/matrixorigin/matrixone/pkg/util/toml"
 )
@@ -153,9 +152,6 @@ type Config struct {
 	// DisableWorkers disables the HAKeeper ticker and HAKeeper client in tests.
 	// Never set this field to true in production
 	DisableWorkers bool
-
-	// Observability parameters for the observability, assign by mo-service's Config
-	Observability config.ObservabilityParameters
 }
 
 func (c *Config) GetHAKeeperConfig() hakeeper.Config {

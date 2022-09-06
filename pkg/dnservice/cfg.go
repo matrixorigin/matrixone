@@ -19,7 +19,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/matrixorigin/matrixone/pkg/util/toml"
@@ -57,9 +56,6 @@ type Config struct {
 		// ClientConfig hakeeper client configuration
 		ClientConfig logservice.HAKeeperClientConfig
 	}
-
-	// Observability parameters for the observability, assign by mo-service's Config
-	Observability config.ObservabilityParameters
 
 	// LogService log service configuration
 	LogService struct {

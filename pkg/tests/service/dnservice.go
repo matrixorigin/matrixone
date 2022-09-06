@@ -152,7 +152,6 @@ func buildDnConfig(
 	cfg.HAKeeper.HeatbeatDuration.Duration = opt.dn.heartbeatInterval
 	// FIXME: support different storage, consult @reusee
 	cfg.Txn.Storage.Backend = opt.dn.txnStorageBackend
-	cfg.Observability.SetDefaultValues("test")
 
 	// We need the filled version of configuration.
 	// It's necessary when building dnservice.Option.

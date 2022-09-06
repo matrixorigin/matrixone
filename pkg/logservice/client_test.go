@@ -37,7 +37,6 @@ func runClientTest(t *testing.T,
 	readOnly bool, fn func(*testing.T, *Service, ClientConfig, Client)) {
 	defer leaktest.AfterTest(t)()
 	cfg := getServiceTestConfig()
-	cfg.Observability.SetDefaultValues("test")
 	defer vfs.ReportLeakedFD(cfg.FS, t)
 	service, err := NewService(cfg,
 		testutil.NewFS(),
