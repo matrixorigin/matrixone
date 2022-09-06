@@ -15,7 +15,8 @@
 package binary
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
+	"testing"
+
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -25,7 +26,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/smartystreets/goconvey/convey"
 	"github.com/stretchr/testify/require"
-	"testing"
 )
 
 // Batch multi line test date_format() function
@@ -341,11 +341,11 @@ func TestDateFormat(t *testing.T) {
 			},
 			{
 				datestr: "2012-12-21 23:12:34.123456",
-				expect:  "2012-12-21 23:12:34 ",
+				expect:  "2012-12-21 23:12:34",
 			},
 			{
 				datestr: "0001-01-01 00:00:00.123456",
-				expect:  `0001-01-01 00:00:00 `,
+				expect:  `0001-01-01 00:00:00`,
 			},
 			{
 				datestr: "2016-09-3 00:59:59.123456",
@@ -353,7 +353,7 @@ func TestDateFormat(t *testing.T) {
 			},
 			{
 				datestr: "2012-10-01 00:00:00",
-				expect:  `2016-09-03 00:59:59`,
+				expect:  `2012-10-01 00:00:00`,
 			},
 			{
 				datestr: "2009-10-04 22:23:00",
@@ -414,7 +414,7 @@ func TestDateFormat(t *testing.T) {
 			},
 			{
 				datestr: "0001-01-01 00:00:00.123456",
-				expect:  `001-01-01`,
+				expect:  `0001-01-01`,
 			},
 			{
 				datestr: "2016-09-3 00:59:59.123456",
@@ -442,7 +442,7 @@ func TestDateFormat(t *testing.T) {
 			},
 			{
 				datestr: "2006-06-01",
-				expect:  `1997-10-04`,
+				expect:  `2006-06-01`,
 			},
 			{
 				datestr: "1997-10-04 22:23:00",
@@ -555,26 +555,8 @@ func TestDateFormatWithScalar(t *testing.T) {
 			panic(err)
 		}
 
-		vec[0] = &vector.Vector{
-			Col:     []types.Datetime{datetime},
-			Typ:     types.T_datetime.ToType(),
-			Nsp:     &nulls.Nulls{},
-			IsConst: true,
-			Length:  1,
-		}
-		srcBytes := &types.Bytes{
-			Data:    []byte(format),
-			Offsets: []uint32{0},
-			Lengths: []uint32{uint32(len(format))},
-		}
-
-		vec[1] = &vector.Vector{
-			Col:     srcBytes,
-			Nsp:     &nulls.Nulls{},
-			Typ:     types.T_varchar.ToType(),
-			IsConst: true,
-			Length:  1,
-		}
+		vec[0] = vector.NewConstFixed(types.T_datetime.ToType(), 1, datetime)
+		vec[1] = vector.NewConstString(types.T_varchar.ToType(), 1, format)
 		return vec
 	}
 
@@ -687,11 +669,7 @@ func TestDateFormatWithScalar(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			col := formatVec.Col.(*types.Bytes)
-			offset := col.Offsets[0]
-			length := col.Lengths[0]
-			resBytes := col.Data[offset:length]
-			require.Equal(t, []byte(c.expect), resBytes)
+			require.Equal(t, []byte(c.expect), formatVec.GetBytes(0))
 		})
 	}
 }

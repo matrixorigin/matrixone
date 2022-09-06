@@ -15,7 +15,6 @@
 package sort
 
 import (
-	"bytes"
 	"math/bits"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -34,124 +33,129 @@ type sortedHint int // hint for pdqsort when choosing the pivot
 func Sort(desc bool, os []int64, vec *vector.Vector) {
 	switch vec.Typ.Oid {
 	case types.T_bool:
-		col := vector.GenericVectorValues[bool](vec)
+		col := vector.GetFixedVectorValues[bool](vec)
 		if !desc {
 			genericSort(col, os, boolLess[bool])
 		} else {
 			genericSort(col, os, boolGreater[bool])
 		}
 	case types.T_int8:
-		col := vector.GenericVectorValues[int8](vec)
+		col := vector.GetFixedVectorValues[int8](vec)
 		if !desc {
 			genericSort(col, os, genericLess[int8])
 		} else {
 			genericSort(col, os, genericGreater[int8])
 		}
 	case types.T_int16:
-		col := vector.GenericVectorValues[int16](vec)
+		col := vector.GetFixedVectorValues[int16](vec)
 		if !desc {
 			genericSort(col, os, genericLess[int16])
 		} else {
 			genericSort(col, os, genericGreater[int16])
 		}
 	case types.T_int32:
-		col := vector.GenericVectorValues[int32](vec)
+		col := vector.GetFixedVectorValues[int32](vec)
 		if !desc {
 			genericSort(col, os, genericLess[int32])
 		} else {
 			genericSort(col, os, genericGreater[int32])
 		}
 	case types.T_int64:
-		col := vector.GenericVectorValues[int64](vec)
+		col := vector.GetFixedVectorValues[int64](vec)
 		if !desc {
 			genericSort(col, os, genericLess[int64])
 		} else {
 			genericSort(col, os, genericGreater[int64])
 		}
 	case types.T_uint8:
-		col := vector.GenericVectorValues[uint8](vec)
+		col := vector.GetFixedVectorValues[uint8](vec)
 		if !desc {
 			genericSort(col, os, genericLess[uint8])
 		} else {
 			genericSort(col, os, genericGreater[uint8])
 		}
 	case types.T_uint16:
-		col := vector.GenericVectorValues[uint16](vec)
+		col := vector.GetFixedVectorValues[uint16](vec)
 		if !desc {
 			genericSort(col, os, genericLess[uint16])
 		} else {
 			genericSort(col, os, genericGreater[uint16])
 		}
 	case types.T_uint32:
-		col := vector.GenericVectorValues[uint32](vec)
+		col := vector.GetFixedVectorValues[uint32](vec)
 		if !desc {
 			genericSort(col, os, genericLess[uint32])
 		} else {
 			genericSort(col, os, genericGreater[uint32])
 		}
 	case types.T_uint64:
-		col := vector.GenericVectorValues[uint64](vec)
+		col := vector.GetFixedVectorValues[uint64](vec)
 		if !desc {
 			genericSort(col, os, genericLess[uint64])
 		} else {
 			genericSort(col, os, genericGreater[uint64])
 		}
 	case types.T_float32:
-		col := vector.GenericVectorValues[float32](vec)
+		col := vector.GetFixedVectorValues[float32](vec)
 		if !desc {
 			genericSort(col, os, genericLess[float32])
 		} else {
 			genericSort(col, os, genericGreater[float32])
 		}
 	case types.T_float64:
-		col := vector.GenericVectorValues[float64](vec)
+		col := vector.GetFixedVectorValues[float64](vec)
 		if !desc {
 			genericSort(col, os, genericLess[float64])
 		} else {
 			genericSort(col, os, genericGreater[float64])
 		}
 	case types.T_date:
-		col := vector.GenericVectorValues[types.Date](vec)
+		col := vector.GetFixedVectorValues[types.Date](vec)
 		if !desc {
 			genericSort(col, os, genericLess[types.Date])
 		} else {
 			genericSort(col, os, genericGreater[types.Date])
 		}
 	case types.T_datetime:
-		col := vector.GenericVectorValues[types.Datetime](vec)
+		col := vector.GetFixedVectorValues[types.Datetime](vec)
 		if !desc {
 			genericSort(col, os, genericLess[types.Datetime])
 		} else {
 			genericSort(col, os, genericGreater[types.Datetime])
 		}
 	case types.T_timestamp:
-		col := vector.GenericVectorValues[types.Timestamp](vec)
+		col := vector.GetFixedVectorValues[types.Timestamp](vec)
 		if !desc {
 			genericSort(col, os, genericLess[types.Timestamp])
 		} else {
 			genericSort(col, os, genericGreater[types.Timestamp])
 		}
 	case types.T_decimal64:
-		col := vector.GenericVectorValues[types.Decimal64](vec)
+		col := vector.GetFixedVectorValues[types.Decimal64](vec)
 		if !desc {
 			genericSort(col, os, decimal64Less)
 		} else {
 			genericSort(col, os, decimal64Greater)
 		}
 	case types.T_decimal128:
-		col := vector.GenericVectorValues[types.Decimal128](vec)
+		col := vector.GetFixedVectorValues[types.Decimal128](vec)
 		if !desc {
 			genericSort(col, os, decimal128Less)
 		} else {
 			genericSort(col, os, decimal128Greater)
 		}
 	case types.T_char, types.T_varchar, types.T_blob:
-		col := vec.Col.(*types.Bytes)
-		if !desc {
-			genericSort([]types.String{col}, os, stringLess[types.String])
-		} else {
-			genericSort([]types.String{col}, os, stringGreater[types.String])
+		col := vector.GetFixedVectorValues[types.Varlena](vec)
+		varlenaCmp := func(data []types.Varlena, i, j int64) bool {
+			si := vec.GetString(i)
+			sj := vec.GetString(j)
+			if desc {
+				return si > sj
+			} else {
+				return si < sj
+			}
 		}
+		genericSort(col, os, varlenaCmp)
 	}
 }
 
@@ -161,14 +165,6 @@ func boolLess[T bool](data []T, i, j int64) bool {
 
 func boolGreater[T bool](data []T, i, j int64) bool {
 	return bool(data[i] && !data[j])
-}
-
-func stringLess[T types.String](data []T, i, j int64) bool {
-	return bytes.Compare(data[0].Get(i), data[0].Get(j)) < 0
-}
-
-func stringGreater[T types.String](data []T, i, j int64) bool {
-	return bytes.Compare(data[0].Get(i), data[0].Get(j)) > 0
 }
 
 func decimal64Less(data []types.Decimal64, i, j int64) bool {

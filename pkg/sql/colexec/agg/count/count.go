@@ -18,6 +18,15 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
+type Decimal128AndString interface {
+	types.Decimal | []byte | bool
+}
+
+type Count[T1 types.Generic | Decimal128AndString] struct {
+	// isStar is true: count(*)
+	isStar bool
+}
+
 func ReturnType(_ []types.Type) types.Type {
 	return types.New(types.T_int64, 0, 0, 0)
 }

@@ -15,7 +15,8 @@
 package operator
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
+	"testing"
+
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
@@ -23,10 +24,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
-	"testing"
 )
 
-func TestLpadVarchar(t *testing.T) {
+func TestLikeVarchar(t *testing.T) {
 	cases := []struct {
 		name      string
 		vecs      []*vector.Vector
@@ -88,7 +88,7 @@ func TestLpadVarchar(t *testing.T) {
 	}
 }
 
-func TestLpadVarchar2(t *testing.T) {
+func TestLikeVarchar2(t *testing.T) {
 	procs := makeProcess()
 	cases := []struct {
 		name       string
@@ -166,33 +166,17 @@ func makeProcess() *process.Process {
 	return process.New(mheap.New(gm))
 }
 
-func makeLikeVectors(src string, patten string, isSrcConst bool, isPattenConst bool) []*vector.Vector {
+func makeStrVec(s string, isConst bool, n int) *vector.Vector {
+	if isConst {
+		return vector.NewConstString(types.T_varchar.ToType(), n, s)
+	} else {
+		return vector.NewWithStrings(types.T_varchar.ToType(), []string{s}, nil, nil)
+	}
+}
+
+func makeLikeVectors(src string, pat string, isSrcConst bool, isPatConst bool) []*vector.Vector {
 	resVectors := make([]*vector.Vector, 2)
-	srcBytes := &types.Bytes{
-		Data:    []byte(src),
-		Offsets: []uint32{0},
-		Lengths: []uint32{uint32(len(src))},
-	}
-	pattenBytes := &types.Bytes{
-		Data:    []byte(patten),
-		Offsets: []uint32{0},
-		Lengths: []uint32{uint32(len(patten))},
-	}
-
-	resVectors[0] = &vector.Vector{
-		Col:     srcBytes,
-		Nsp:     &nulls.Nulls{},
-		Typ:     types.Type{Oid: types.T_varchar, Size: 24},
-		IsConst: isSrcConst,
-		Length:  10,
-	}
-
-	resVectors[1] = &vector.Vector{
-		Col:     pattenBytes,
-		Nsp:     &nulls.Nulls{},
-		Typ:     types.Type{Oid: types.T_varchar, Size: 24},
-		IsConst: isPattenConst,
-		Length:  10,
-	}
+	resVectors[0] = makeStrVec(src, isSrcConst, 10)
+	resVectors[1] = makeStrVec(pat, isPatConst, 10)
 	return resVectors
 }

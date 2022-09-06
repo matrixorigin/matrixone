@@ -15,14 +15,12 @@
 package multi
 
 import (
-	"errors"
 	"log"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/stretchr/testify/require"
 
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
@@ -80,16 +78,12 @@ func Test_varchar1(t *testing.T) {
 		if err != nil {
 			log.Fatal(err)
 		}
-		data, ok := vec.Col.(*types.Bytes)
-		if !ok {
-			log.Fatal(errors.New("the Rpad function return value type is not types.Bytes"))
-		}
+		data := vector.GetStrVectorValues(vec)
 		compVec = []string{"", "", "", "", "", "", "a-1-", "a161", "", "a-1-1-1-", "a1616161",
 			"", "", "", "", "", "", "", "", "", "", "-1-1", "1616", "", "-1-1-1-1", "16161616", "", "",
 			"", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", ""}
-		for i := 0; i < len(data.Lengths); i++ {
-			str := string(data.Data[data.Offsets[i] : data.Offsets[i]+data.Lengths[i]])
-			convey.So(str, convey.ShouldEqual, compVec[i])
+		for i := 0; i < len(data); i++ {
+			convey.So(data[i], convey.ShouldEqual, compVec[i])
 		}
 		j := 0
 		for i := 0; i < len(compVec); i++ {
@@ -138,15 +132,11 @@ func Test_varchar2(t *testing.T) {
 		if err != nil {
 			log.Fatal(err)
 		}
-		data, ok := vec.Col.(*types.Bytes)
-		if !ok {
-			log.Fatal(errors.New("the Rpad function return value type is not types.Bytes"))
-		}
+		data := vector.GetStrVectorValues(vec)
 		compVec = []string{"", "", "", "", "", "", "a000", "a161", "", "a0000000", "a1616161", "", "", "", "", "", "", "", "", "",
 			"", "0000", "1616", "", "00000000", "16161616", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", ""}
-		for i := 0; i < len(data.Lengths); i++ {
-			str := string(data.Data[data.Offsets[i] : data.Offsets[i]+data.Lengths[i]])
-			convey.So(str, convey.ShouldEqual, compVec[i])
+		for i := 0; i < len(data); i++ {
+			convey.So(data[i], convey.ShouldEqual, compVec[i])
 		}
 		j := 0
 		for i := 0; i < len(compVec); i++ {
@@ -195,15 +185,11 @@ func Test_varchar3(t *testing.T) {
 		if err != nil {
 			log.Fatal(err)
 		}
-		data, ok := vec.Col.(*types.Bytes)
-		if !ok {
-			log.Fatal(errors.New("the Rpad function return value type is not types.Bytes"))
-		}
+		data := vector.GetStrVectorValues(vec)
 		compVec = []string{"", "", "", "", "", "", "a0.0", "a2.3", "", "a0.010.0", "a2.32.32", "", "", "", "", "", "", "", "", "", "",
 			"0.01", "2.32", "", "0.010.01", "2.32.32.", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", ""}
-		for i := 0; i < len(data.Lengths); i++ {
-			str := string(data.Data[data.Offsets[i] : data.Offsets[i]+data.Lengths[i]])
-			convey.So(str, convey.ShouldEqual, compVec[i])
+		for i := 0; i < len(data); i++ {
+			convey.So(data[i], convey.ShouldEqual, compVec[i])
 		}
 		j := 0
 		for i := 0; i < len(compVec); i++ {
@@ -252,15 +238,11 @@ func Test_varchar4(t *testing.T) {
 		if err != nil {
 			log.Fatal(err)
 		}
-		data, ok := vec.Col.(*types.Bytes)
-		if !ok {
-			log.Fatal(errors.New("the Rpad function return value type is not types.Bytes"))
-		}
+		data := vector.GetStrVectorValues(vec)
 		compVec = []string{"", "", "", "", "", "", "aaaa", "a121", "", "aaaaaaaa", "a1212121", "", "", "", "", "", "", "", "", "", "",
 			"aaaa", "1212", "", "aaaaaaaa", "12121212", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", ""}
-		for i := 0; i < len(data.Lengths); i++ {
-			str := string(data.Data[data.Offsets[i] : data.Offsets[i]+data.Lengths[i]])
-			convey.So(str, convey.ShouldEqual, compVec[i])
+		for i := 0; i < len(data); i++ {
+			convey.So(data[i], convey.ShouldEqual, compVec[i])
 		}
 		j := 0
 		for i := 0; i < len(compVec); i++ {
@@ -309,16 +291,12 @@ func Test_varchar5(t *testing.T) {
 		if err != nil {
 			log.Fatal(err)
 		}
-		data, ok := vec.Col.(*types.Bytes)
-		if !ok {
-			log.Fatal(errors.New("the Rpad function return value type is not types.Bytes"))
-		}
+		data := vector.GetStrVectorValues(vec)
 		compVec = []string{"", "", "", "a", "a", "", "a-1-", "a161", "", "a-1-1-1-1-1-1-1-", "a161616161616161", "", "", "", "", "",
 			"", "", "-", "1", "", "-1-1", "1616", "", "-1-1-1-1-1-1-1-1", "1616161616161616", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", ""}
 		compNsp = []int64{2, 5, 8, 11, 12, 13, 14, 17, 20, 23, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44}
-		for i := 0; i < len(data.Lengths); i++ {
-			str := string(data.Data[data.Offsets[i] : data.Offsets[i]+data.Lengths[i]])
-			convey.So(str, convey.ShouldEqual, compVec[i])
+		for i := 0; i < len(data); i++ {
+			convey.So(data[i], convey.ShouldEqual, compVec[i])
 		}
 		j := 0
 		for i := 0; i < len(compVec); i++ {
@@ -367,16 +345,12 @@ func Test_varchar6(t *testing.T) {
 		if err != nil {
 			log.Fatal(err)
 		}
-		data, ok := vec.Col.(*types.Bytes)
-		if !ok {
-			log.Fatal(errors.New("the Rpad function return value type is not types.Bytes"))
-		}
+		data := vector.GetStrVectorValues(vec)
 		compVec = []string{"", "", "", "a", "a", "", "a000", "a161", "", "a000000000000000", "a161616161616161", "", "", "", "", "", "", "",
 			"0", "1", "", "0000", "1616", "", "0000000000000000", "1616161616161616", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", ""}
 		compNsp = []int64{2, 5, 8, 11, 12, 13, 14, 17, 20, 23, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44}
-		for i := 0; i < len(data.Lengths); i++ {
-			str := string(data.Data[data.Offsets[i] : data.Offsets[i]+data.Lengths[i]])
-			convey.So(str, convey.ShouldEqual, compVec[i])
+		for i := 0; i < len(data); i++ {
+			convey.So(data[i], convey.ShouldEqual, compVec[i])
 		}
 		j := 0
 		for i := 0; i < len(compVec); i++ {
@@ -425,16 +399,12 @@ func Test_varchar7(t *testing.T) {
 		if err != nil {
 			log.Fatal(err)
 		}
-		data, ok := vec.Col.(*types.Bytes)
-		if !ok {
-			log.Fatal(errors.New("the Rpad function return value type is not types.Bytes"))
-		}
+		data := vector.GetStrVectorValues(vec)
 		compVec = []string{"", "", "", "a", "a", "", "a0.0", "a2.3", "", "a0.010.010.010.0", "a2.32.32.32.32.3", "", "", "", "", "",
 			"", "", "0", "2", "", "0.01", "2.32", "", "0.010.010.010.01", "2.32.32.32.32.32", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", ""}
 		compNsp = []int64{2, 5, 8, 11, 12, 13, 14, 17, 20, 23, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44}
-		for i := 0; i < len(data.Lengths); i++ {
-			str := string(data.Data[data.Offsets[i] : data.Offsets[i]+data.Lengths[i]])
-			convey.So(str, convey.ShouldEqual, compVec[i])
+		for i := 0; i < len(data); i++ {
+			convey.So(data[i], convey.ShouldEqual, compVec[i])
 		}
 		j := 0
 		for i := 0; i < len(compVec); i++ {
@@ -483,16 +453,12 @@ func Test_varchar8(t *testing.T) {
 		if err != nil {
 			log.Fatal(err)
 		}
-		data, ok := vec.Col.(*types.Bytes)
-		if !ok {
-			log.Fatal(errors.New("the Rpad function return value type is not types.Bytes"))
-		}
+		data := vector.GetStrVectorValues(vec)
 		compVec = []string{"", "", "", "a", "a", "", "aaaa", "a121", "", "aaaaaaaaaaaaaaaa", "a121212121212121", "", "", "", "", "", "", "",
 			"a", "1", "", "aaaa", "1212", "", "aaaaaaaaaaaaaaaa", "1212121212121212", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", ""}
 		compNsp = []int64{2, 5, 8, 11, 12, 13, 14, 17, 20, 23, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44}
-		for i := 0; i < len(data.Lengths); i++ {
-			str := string(data.Data[data.Offsets[i] : data.Offsets[i]+data.Lengths[i]])
-			convey.So(str, convey.ShouldEqual, compVec[i])
+		for i := 0; i < len(data); i++ {
+			convey.So(data[i], convey.ShouldEqual, compVec[i])
 		}
 		j := 0
 		for i := 0; i < len(compVec); i++ {
@@ -541,16 +507,12 @@ func Test_varchar9(t *testing.T) {
 		if err != nil {
 			log.Fatal(err)
 		}
-		data, ok := vec.Col.(*types.Bytes)
-		if !ok {
-			log.Fatal(errors.New("the Rpad function return value type is not types.Bytes"))
-		}
+		data := vector.GetStrVectorValues(vec)
 		compVec = []string{"", "", "", "", "", "", "a-1-", "a161", "", "a-1-1-1-", "a1616161", "", "", "", "", "", "", "", "", "", "", "-1-1",
 			"1616", "", "-1-1-1-1", "16161616", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", ""}
 		compNsp = []int64{0, 1, 2, 5, 8, 11, 12, 13, 14, 15, 16, 17, 20, 23, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44}
-		for i := 0; i < len(data.Lengths); i++ {
-			str := string(data.Data[data.Offsets[i] : data.Offsets[i]+data.Lengths[i]])
-			convey.So(str, convey.ShouldEqual, compVec[i])
+		for i := 0; i < len(data); i++ {
+			convey.So(data[i], convey.ShouldEqual, compVec[i])
 		}
 		j := 0
 		for i := 0; i < len(compVec); i++ {
@@ -599,16 +561,12 @@ func Test_varchar10(t *testing.T) {
 		if err != nil {
 			log.Fatal(err)
 		}
-		data, ok := vec.Col.(*types.Bytes)
-		if !ok {
-			log.Fatal(errors.New("the Rpad function return value type is not types.Bytes"))
-		}
+		data := vector.GetStrVectorValues(vec)
 		compVec = []string{"", "", "", "", "", "", "a000", "a161", "", "a0000000", "a1616161", "", "", "", "", "", "", "", "", "", "", "0000", "1616", "",
 			"00000000", "16161616", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", ""}
 		compNsp = []int64{0, 1, 2, 5, 8, 11, 12, 13, 14, 15, 16, 17, 20, 23, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44}
-		for i := 0; i < len(data.Lengths); i++ {
-			str := string(data.Data[data.Offsets[i] : data.Offsets[i]+data.Lengths[i]])
-			convey.So(str, convey.ShouldEqual, compVec[i])
+		for i := 0; i < len(data); i++ {
+			convey.So(data[i], convey.ShouldEqual, compVec[i])
 		}
 		j := 0
 		for i := 0; i < len(compVec); i++ {
@@ -657,16 +615,12 @@ func Test_varchar11(t *testing.T) {
 		if err != nil {
 			log.Fatal(err)
 		}
-		data, ok := vec.Col.(*types.Bytes)
-		if !ok {
-			log.Fatal(errors.New("the Rpad function return value type is not types.Bytes"))
-		}
+		data := vector.GetStrVectorValues(vec)
 		compVec = []string{"", "", "", "", "", "", "a0.0", "a2.3", "", "a0.010.0", "a2.32.32", "", "", "", "", "", "", "", "", "", "",
 			"0.01", "2.32", "", "0.010.01", "2.32.32.", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", ""}
 		compNsp = []int64{0, 1, 2, 5, 8, 11, 12, 13, 14, 15, 16, 17, 20, 23, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44}
-		for i := 0; i < len(data.Lengths); i++ {
-			str := string(data.Data[data.Offsets[i] : data.Offsets[i]+data.Lengths[i]])
-			convey.So(str, convey.ShouldEqual, compVec[i])
+		for i := 0; i < len(data); i++ {
+			convey.So(data[i], convey.ShouldEqual, compVec[i])
 		}
 		j := 0
 		for i := 0; i < len(compVec); i++ {
@@ -715,16 +669,12 @@ func Test_varchar12(t *testing.T) {
 		if err != nil {
 			log.Fatal(err)
 		}
-		data, ok := vec.Col.(*types.Bytes)
-		if !ok {
-			log.Fatal(errors.New("the Rpad function return value type is not types.Bytes"))
-		}
+		data := vector.GetStrVectorValues(vec)
 		compVec = []string{"", "", "", "", "", "", "aaaa", "a121", "", "aaaaaaaa", "a1212121", "", "", "", "", "", "", "", "", "", "",
 			"aaaa", "1212", "", "aaaaaaaa", "12121212", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", ""}
 		compNsp = []int64{0, 1, 2, 5, 8, 11, 12, 13, 14, 15, 16, 17, 20, 23, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44}
-		for i := 0; i < len(data.Lengths); i++ {
-			str := string(data.Data[data.Offsets[i] : data.Offsets[i]+data.Lengths[i]])
-			convey.So(str, convey.ShouldEqual, compVec[i])
+		for i := 0; i < len(data); i++ {
+			convey.So(data[i], convey.ShouldEqual, compVec[i])
 		}
 		j := 0
 		for i := 0; i < len(compVec); i++ {
@@ -743,14 +693,8 @@ func Test_varchar12(t *testing.T) {
 }
 
 // getBytes converts a string slice to a *types.Bytes
-func getBytes(s ...string) *types.Bytes {
-	result := &types.Bytes{}
-	for i, v := range s {
-		result.Offsets = append(result.Offsets, uint32(len(result.Data)))
-		result.Data = append(result.Data, []byte(v)...)
-		result.Lengths = append(result.Lengths, uint32(len(result.Data))-result.Offsets[i])
-	}
-	return result
+func getBytes(s ...string) []string {
+	return s
 }
 
 func TestRpadInt(t *testing.T) {
@@ -776,7 +720,7 @@ func TestRpadInt(t *testing.T) {
 	sizes = []int16{3}
 	padstrs = getBytes("111")
 	expectedStrs = getBytes("hel", "hel", "hel", "hel", "hel", "hel", "hel")
-	actualStrs, actualNsp, _ = rpad(len(strs.Lengths), strs, sizes, padstrs, isConst, oriNsps)
+	actualStrs, actualNsp, _ = rpad(len(strs), strs, sizes, padstrs, isConst, oriNsps)
 	require.Equal(t, expectedStrs, actualStrs)
 	require.Equal(t, expectedNsp, actualNsp)
 
@@ -803,7 +747,7 @@ func TestRpadInt(t *testing.T) {
 
 	expectedStrs = getBytes("", "", "", "")
 	expectedNsp = new(nulls.Nulls)
-	for i := 0; i < len(strs.Lengths); i++ {
+	for i := 0; i < len(strs); i++ {
 		nulls.Add(expectedNsp, uint64(i)) // all strings are NULLs
 
 	}
@@ -860,7 +804,7 @@ func TestRpadUint(t *testing.T) {
 	sizes = []uint32{3}
 	padstrs = getBytes("111")
 	expectedStrs = getBytes("hel", "hel", "hel", "hel", "hel", "hel", "hel")
-	actualStrs, actualNsp, _ = rpad(len(strs.Lengths), strs, sizes, padstrs, isConst, oriNsps)
+	actualStrs, actualNsp, _ = rpad(len(strs), strs, sizes, padstrs, isConst, oriNsps)
 	require.Equal(t, expectedStrs, actualStrs)
 	require.Equal(t, expectedNsp, actualNsp)
 
@@ -886,7 +830,7 @@ func TestRpadUint(t *testing.T) {
 
 	expectedStrs = getBytes("", "", "")
 	expectedNsp = new(nulls.Nulls)
-	for i := 0; i < len(strs.Lengths); i++ {
+	for i := 0; i < len(strs); i++ {
 		nulls.Add(expectedNsp, uint64(i)) // all strings are NULLs
 
 	}
@@ -909,7 +853,7 @@ func TestTypes(t *testing.T) {
 	// nulls.Add(expectedNsp, 0)
 	expectedStrs := getBytes("", "")
 
-	actualStrs, actualNsp, _ := rpad(len(strs.Lengths), strs, sizes, padstrs, isConst, oriNsps)
+	actualStrs, actualNsp, _ := rpad(len(strs), strs, sizes, padstrs, isConst, oriNsps)
 	require.Equal(t, expectedStrs, actualStrs)
 	require.Equal(t, expectedNsp, actualNsp)
 

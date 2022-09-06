@@ -78,8 +78,8 @@ func (ts TS) GreaterEq(rhs TS) bool {
 }
 
 func buildTS(p int64, l uint32) (ret TS) {
-	copy(ret[4:12], EncodeInt64(p))
-	copy(ret[:4], EncodeUint32(l))
+	copy(ret[4:12], EncodeInt64(&p))
+	copy(ret[:4], EncodeUint32(&l))
 	return
 }
 
@@ -184,8 +184,8 @@ func NewTsAlloctor(clock clock.Clock) *TsAlloctor {
 func (alloc *TsAlloctor) Alloc() TS {
 	now, _ := alloc.clock.Now()
 	var ts TS
-	copy(ts[4:12], EncodeInt64(now.PhysicalTime))
-	copy(ts[:4], EncodeUint32(now.LogicalTime))
+	copy(ts[4:12], EncodeInt64(&now.PhysicalTime))
+	copy(ts[:4], EncodeUint32(&now.LogicalTime))
 	return ts
 }
 
@@ -193,7 +193,8 @@ func (alloc *TsAlloctor) Alloc() TS {
 func (alloc *TsAlloctor) Get() TS {
 	if mockClock, ok := alloc.clock.(*MockHLCClock); ok {
 		var ts TS
-		copy(ts[4:12], EncodeInt64(mockClock.Get().PhysicalTime))
+		i64 := mockClock.Get().PhysicalTime
+		copy(ts[4:12], EncodeInt64(&i64))
 		//copy(ts[:4], EncodeUint32(mockClock.Get().LogicalTime))
 		return ts
 	}

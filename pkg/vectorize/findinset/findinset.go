@@ -16,8 +16,6 @@ package findinset
 
 import (
 	"strings"
-
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
 func findInStrList(str, strlist string) uint64 {
@@ -29,36 +27,28 @@ func findInStrList(str, strlist string) uint64 {
 	return 0
 }
 
-func FindInSet(lv, rv *types.Bytes, rs []uint64) []uint64 {
-	for i := range lv.Offsets {
-		strlist := string(rv.Data[rv.Offsets[i] : rv.Offsets[i]+rv.Lengths[i]])
-		target := string(lv.Data[lv.Offsets[i] : lv.Offsets[i]+lv.Lengths[i]])
-		rs[i] = findInStrList(target, strlist)
+func FindInSet(lv, rv []string, rs []uint64) []uint64 {
+	for i := range lv {
+		rs[i] = findInStrList(lv[i], rv[i])
 	}
 	return rs
 }
 
-func FindInSetWithLeftConst(lv, rv *types.Bytes, rs []uint64) []uint64 {
-	target := string(lv.Data[lv.Offsets[0] : lv.Offsets[0]+lv.Lengths[0]])
-	for i := range rv.Offsets {
-		strlist := string(rv.Data[rv.Offsets[i] : rv.Offsets[i]+rv.Lengths[i]])
-		rs[i] = findInStrList(target, strlist)
+func FindInSetWithLeftConst(lv string, rv []string, rs []uint64) []uint64 {
+	for i := range rv {
+		rs[i] = findInStrList(lv, rv[i])
 	}
 	return rs
 }
 
-func FindInSetWithRightConst(lv, rv *types.Bytes, rs []uint64) []uint64 {
-	strlist := string(rv.Data[rv.Offsets[0] : rv.Offsets[0]+rv.Lengths[0]])
-	for i := range lv.Offsets {
-		target := string(lv.Data[lv.Offsets[i] : lv.Offsets[i]+lv.Lengths[i]])
-		rs[i] = findInStrList(target, strlist)
+func FindInSetWithRightConst(lv []string, rv string, rs []uint64) []uint64 {
+	for i := range lv {
+		rs[i] = findInStrList(lv[i], rv)
 	}
 	return rs
 }
 
-func FindInSetWithAllConst(lv, rv *types.Bytes, rs []uint64) []uint64 {
-	target := string(lv.Data[lv.Offsets[0] : lv.Offsets[0]+lv.Lengths[0]])
-	strlist := string(rv.Data[rv.Offsets[0] : rv.Offsets[0]+rv.Lengths[0]])
-	rs[0] = findInStrList(target, strlist)
+func FindInSetWithAllConst(lv, rv string, rs []uint64) []uint64 {
+	rs[0] = findInStrList(lv, rv)
 	return rs
 }

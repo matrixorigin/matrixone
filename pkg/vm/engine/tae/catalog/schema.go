@@ -382,7 +382,7 @@ func (s *Schema) Marshal() (buf []byte, err error) {
 		return
 	}
 	for _, def := range s.ColDefs {
-		if _, err = w.Write(types.EncodeType(def.Type)); err != nil {
+		if _, err = w.Write(types.EncodeType(&def.Type)); err != nil {
 			return
 		}
 		if _, err = common.WriteString(def.Name, &w); err != nil {

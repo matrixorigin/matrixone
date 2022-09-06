@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
@@ -50,12 +51,12 @@ func TestOpXorGeneral(t *testing.T) {
 		{
 			info: "null ^ 2", proc: testutil.NewProc(),
 			vs: []*vector.Vector{
-				testutil.MakeScalarNull(1),
+				testutil.MakeScalarNull(types.T_int64, 1),
 				testutil.MakeScalarInt64(2, 1),
 			},
 			match:  true,
 			err:    false,
-			expect: testutil.MakeScalarNull(1),
+			expect: testutil.MakeScalarNull(types.T_int64, 1),
 		},
 
 		{
@@ -121,12 +122,12 @@ func TestOpOrGeneral(t *testing.T) {
 		{
 			info: "null | 2", proc: testutil.NewProc(),
 			vs: []*vector.Vector{
-				testutil.MakeScalarNull(1),
+				testutil.MakeScalarNull(types.T_int64, 1),
 				testutil.MakeScalarInt64(2, 1),
 			},
 			match:  true,
 			err:    false,
-			expect: testutil.MakeScalarNull(1),
+			expect: testutil.MakeScalarNull(types.T_int64, 1),
 		},
 
 		{
@@ -192,12 +193,12 @@ func TestOpAndGeneral(t *testing.T) {
 		{
 			info: "null & 2", proc: testutil.NewProc(),
 			vs: []*vector.Vector{
-				testutil.MakeScalarNull(1),
+				testutil.MakeScalarNull(types.T_int64, 1),
 				testutil.MakeScalarInt64(2, 1),
 			},
 			match:  true,
 			err:    false,
-			expect: testutil.MakeScalarNull(1),
+			expect: testutil.MakeScalarNull(types.T_int64, 1),
 		},
 
 		{
@@ -263,12 +264,12 @@ func TestOpRightShiftGeneral(t *testing.T) {
 		{
 			info: "null >> 2", proc: testutil.NewProc(),
 			vs: []*vector.Vector{
-				testutil.MakeScalarNull(1),
+				testutil.MakeScalarNull(types.T_any, 1),
 				testutil.MakeScalarInt64(2, 1),
 			},
 			match:  true,
 			err:    false,
-			expect: testutil.MakeScalarNull(1),
+			expect: testutil.MakeScalarNull(types.T_any, 1),
 		},
 
 		{
@@ -334,12 +335,12 @@ func TestOpLeftShiftGeneral(t *testing.T) {
 		{
 			info: "null << 2", proc: testutil.NewProc(),
 			vs: []*vector.Vector{
-				testutil.MakeScalarNull(1),
+				testutil.MakeScalarNull(types.T_any, 1),
 				testutil.MakeScalarInt64(2, 1),
 			},
 			match:  true,
 			err:    false,
-			expect: testutil.MakeScalarNull(1),
+			expect: testutil.MakeScalarNull(types.T_any, 1),
 		},
 
 		{

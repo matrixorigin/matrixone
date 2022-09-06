@@ -60,7 +60,7 @@ func TestInsert(t *testing.T) {
 	require.Equal(t, int64(0), m.Size())
 }
 
-func TestInertValue(t *testing.T) {
+func TestInsertValue(t *testing.T) {
 	hm := host.New(1 << 30)
 	gm := guest.New(1<<30, hm)
 	m := mheap.New(gm)
@@ -271,7 +271,7 @@ func newInt8Vector(n int, typ types.Type, m *mheap.Mheap, random bool, vs []int8
 	vec := vector.New(typ)
 	if vs != nil {
 		for i := range vs {
-			if err := vec.Append(vs[i], m); err != nil {
+			if err := vec.Append(vs[i], false, m); err != nil {
 				vec.Free(m)
 				return nil
 			}
@@ -283,7 +283,7 @@ func newInt8Vector(n int, typ types.Type, m *mheap.Mheap, random bool, vs []int8
 		if random {
 			v = rand.Int()
 		}
-		if err := vec.Append(int8(v), m); err != nil {
+		if err := vec.Append(int8(v), false, m); err != nil {
 			vec.Free(m)
 			return nil
 		}
@@ -295,7 +295,7 @@ func newInt16Vector(n int, typ types.Type, m *mheap.Mheap, random bool, vs []int
 	vec := vector.New(typ)
 	if vs != nil {
 		for i := range vs {
-			if err := vec.Append(vs[i], m); err != nil {
+			if err := vec.Append(vs[i], false, m); err != nil {
 				vec.Free(m)
 				return nil
 			}
@@ -307,7 +307,7 @@ func newInt16Vector(n int, typ types.Type, m *mheap.Mheap, random bool, vs []int
 		if random {
 			v = rand.Int()
 		}
-		if err := vec.Append(int16(v), m); err != nil {
+		if err := vec.Append(int16(v), false, m); err != nil {
 			vec.Free(m)
 			return nil
 		}
@@ -319,7 +319,7 @@ func newInt32Vector(n int, typ types.Type, m *mheap.Mheap, random bool, vs []int
 	vec := vector.New(typ)
 	if vs != nil {
 		for i := range vs {
-			if err := vec.Append(vs[i], m); err != nil {
+			if err := vec.Append(vs[i], false, m); err != nil {
 				vec.Free(m)
 				return nil
 			}
@@ -331,7 +331,7 @@ func newInt32Vector(n int, typ types.Type, m *mheap.Mheap, random bool, vs []int
 		if random {
 			v = rand.Int()
 		}
-		if err := vec.Append(int32(v), m); err != nil {
+		if err := vec.Append(int32(v), false, m); err != nil {
 			vec.Free(m)
 			return nil
 		}
@@ -343,7 +343,7 @@ func newInt64Vector(n int, typ types.Type, m *mheap.Mheap, random bool, vs []int
 	vec := vector.New(typ)
 	if vs != nil {
 		for i := range vs {
-			if err := vec.Append(vs[i], m); err != nil {
+			if err := vec.Append(vs[i], false, m); err != nil {
 				vec.Free(m)
 				return nil
 			}
@@ -355,7 +355,7 @@ func newInt64Vector(n int, typ types.Type, m *mheap.Mheap, random bool, vs []int
 		if random {
 			v = rand.Int()
 		}
-		if err := vec.Append(int64(v), m); err != nil {
+		if err := vec.Append(int64(v), false, m); err != nil {
 			vec.Free(m)
 			return nil
 		}
@@ -367,7 +367,7 @@ func newUInt32Vector(n int, typ types.Type, m *mheap.Mheap, random bool, vs []ui
 	vec := vector.New(typ)
 	if vs != nil {
 		for i := range vs {
-			if err := vec.Append(vs[i], m); err != nil {
+			if err := vec.Append(vs[i], false, m); err != nil {
 				vec.Free(m)
 				return nil
 			}
@@ -379,7 +379,7 @@ func newUInt32Vector(n int, typ types.Type, m *mheap.Mheap, random bool, vs []ui
 		if random {
 			v = rand.Int()
 		}
-		if err := vec.Append(uint32(v), m); err != nil {
+		if err := vec.Append(uint32(v), false, m); err != nil {
 			vec.Free(m)
 			return nil
 		}
@@ -391,7 +391,7 @@ func newDecimal64Vector(n int, typ types.Type, m *mheap.Mheap, random bool, vs [
 	vec := vector.New(typ)
 	if vs != nil {
 		for i := range vs {
-			if err := vec.Append(vs[i], m); err != nil {
+			if err := vec.Append(vs[i], false, m); err != nil {
 				vec.Free(m)
 				return nil
 			}
@@ -403,7 +403,7 @@ func newDecimal64Vector(n int, typ types.Type, m *mheap.Mheap, random bool, vs [
 		if random {
 			v = rand.Int()
 		}
-		if err := vec.Append(types.InitDecimal64(int64(v)), m); err != nil {
+		if err := vec.Append(types.InitDecimal64(int64(v)), false, m); err != nil {
 
 			vec.Free(m)
 			return nil
@@ -416,7 +416,7 @@ func newDecimal128Vector(n int, typ types.Type, m *mheap.Mheap, random bool, vs 
 	vec := vector.New(typ)
 	if vs != nil {
 		for i := range vs {
-			if err := vec.Append(vs[i], m); err != nil {
+			if err := vec.Append(vs[i], false, m); err != nil {
 				vec.Free(m)
 				return nil
 			}
@@ -428,7 +428,7 @@ func newDecimal128Vector(n int, typ types.Type, m *mheap.Mheap, random bool, vs 
 		if random {
 			v = rand.Int()
 		}
-		if err := vec.Append(types.InitDecimal128(int64(v)), m); err != nil {
+		if err := vec.Append(types.InitDecimal128(int64(v)), false, m); err != nil {
 			vec.Free(m)
 			return nil
 		}
@@ -440,7 +440,7 @@ func newStringVector(n int, typ types.Type, m *mheap.Mheap, random bool, vs []st
 	vec := vector.New(typ)
 	if vs != nil {
 		for i := range vs {
-			if err := vec.Append([]byte(vs[i]), m); err != nil {
+			if err := vec.Append([]byte(vs[i]), false, m); err != nil {
 				vec.Free(m)
 				return nil
 			}
@@ -452,7 +452,7 @@ func newStringVector(n int, typ types.Type, m *mheap.Mheap, random bool, vs []st
 		if random {
 			v = rand.Int()
 		}
-		if err := vec.Append([]byte(strconv.Itoa(v)), m); err != nil {
+		if err := vec.Append([]byte(strconv.Itoa(v)), false, m); err != nil {
 			vec.Free(m)
 			return nil
 		}

@@ -102,11 +102,9 @@ select ceil(-123.342124124214, -100);
 ceil(-123.342124124214, -100)
 -0.0
 select ceil(123.342, null);
-ceil(123.342, null)
-null
+the second argument of the ceil function must be an int64 constant
 select ceil(null, 1);
 ceil(null, 1)
 null
 select ceil(null, null);
-ceil(null, null)
-null
+the second argument of the ceil function must be an int64 constant

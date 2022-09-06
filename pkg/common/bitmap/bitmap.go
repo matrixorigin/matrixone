@@ -306,8 +306,10 @@ func (n *Bitmap) ToArray() []uint64 {
 func (n *Bitmap) Marshal() []byte {
 	var buf bytes.Buffer
 
-	buf.Write(types.EncodeUint64(uint64(n.len)))
-	buf.Write(types.EncodeUint64(uint64(len(n.data) * 8)))
+	u1 := uint64(n.len)
+	u2 := uint64(len(n.data) * 8)
+	buf.Write(types.EncodeUint64(&u1))
+	buf.Write(types.EncodeUint64(&u2))
 	buf.Write(types.EncodeFixedSlice(n.data, 8))
 	return buf.Bytes()
 }

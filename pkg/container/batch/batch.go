@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/errno"
 	"github.com/matrixorigin/matrixone/pkg/sql/errors"
+	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/shuffle"
 	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 )
@@ -207,6 +208,11 @@ func (bat *Batch) Append(mh *mheap.Mheap, b *Batch) (*Batch, error) {
 	if len(bat.Vecs) == 0 {
 		return bat, nil
 	}
+
+	// XXX Here is a good place to trigger an panic for fault injection.
+	// fault.AddFaultPoint("panic_in_batch_append", ":::", "PANIC", 0, "")
+	fault.TriggerFault("panic_in_batch_append")
+
 	flags := make([]uint8, vector.Length(b.Vecs[0]))
 	for i := range flags {
 		flags[i]++
