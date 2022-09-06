@@ -41,6 +41,7 @@ const (
 
 	s3FileServiceName    = "S3"
 	localFileServiceName = "LOCAL"
+	etlFileServiceName   = "ETL"
 )
 
 var (

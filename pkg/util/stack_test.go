@@ -17,6 +17,8 @@ package util
 import (
 	"fmt"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
 func TestCaller(t *testing.T) {
@@ -28,7 +30,7 @@ func TestCaller(t *testing.T) {
 		args args
 		want string
 	}{
-		{name: "depth_0", args: args{depth: 0}, want: "stack_test.go:35"},
+		{name: "depth_0", args: args{depth: 0}, want: "stack_test.go:37"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -57,6 +59,7 @@ func TestCallers(t *testing.T) {
 			t.Logf("Callers(%%+s) = %+s", got)
 			t.Logf("Callers(%%v) = %v", got)
 			t.Logf("Callers(%%+v) = %+v", got)
+			require.Equal(t, fmt.Sprintf("%+v", got.StackTrace()), fmt.Sprintf("%+v", got))
 		})
 	}
 }

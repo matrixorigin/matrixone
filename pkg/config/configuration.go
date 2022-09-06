@@ -100,7 +100,7 @@ var (
 	defaultStatusPort = 7001
 
 	//default is InternalExecutor. if InternalExecutor, use internal sql executor, FileService will implement soon.
-	defaultTraceBatchProcessor = "InternalExecutor"
+	defaultBatchProcessor = "FileService"
 )
 
 // FrontendParameters of the frontend
@@ -185,24 +185,6 @@ type FrontendParameters struct {
 
 	//default is false. false : one txn for an independent batch true : only one txn during loading data
 	DisableOneTxnPerBatchDuringLoad bool `toml:"DisableOneTxnPerBatchDuringLoad"`
-
-	//statusPort defines which port the mo status server (for metric etc.) listens on and clients connect to
-	StatusPort int64 `toml:"statusPort"`
-
-	//default is false. if false, metrics can be scraped through host:status/metrics endpoint
-	DisableMetricToProm bool `toml:"disableMetricToProm"`
-
-	//default is false. if false, enable metric at booting
-	DisableMetric bool `toml:"disableMetric"`
-
-	//default is false. if false, enable trace at booting
-	DisableTrace bool `toml:"disableTrace"`
-
-	//default is InternalExecutor. if InternalExecutor, use internal sql executor, FileService will implement soon.
-	TraceBatchProcessor string `toml:"traceBatchProcessor"`
-
-	//default is false. With true, system will check all the children span is ended, which belong to the closing span.
-	EnableTraceDebug bool `toml:"enableTraceDebug"`
 
 	//default is 'debug'. the level of log.
 	LogLevel string `toml:"logLevel"`
@@ -319,14 +301,6 @@ func (fp *FrontendParameters) SetDefaultValues() {
 	if fp.PortOfRpcServerInComputationEngine == 0 {
 		fp.PortOfRpcServerInComputationEngine = int64(defaultPortOfRpcServerInComputationEngine)
 	}
-
-	if fp.StatusPort == 0 {
-		fp.StatusPort = int64(defaultStatusPort)
-	}
-
-	if fp.TraceBatchProcessor == "" {
-		fp.TraceBatchProcessor = defaultTraceBatchProcessor
-	}
 }
 
 func (fp *FrontendParameters) SetLogAndVersion(log *logutil.LogConfig, version string) {
@@ -337,6 +311,49 @@ func (fp *FrontendParameters) SetLogAndVersion(log *logutil.LogConfig, version s
 	fp.LogMaxDays = int64(log.MaxDays)
 	fp.LogMaxBackups = int64(log.MaxBackups)
 	fp.MoVersion = version
+}
+
+// ObservabilityParameters hold metric/trace switch
+type ObservabilityParameters struct {
+	// MoVersion, see SetDefaultValues
+	MoVersion string
+
+	//listening ip. normally same as FrontendParameters.Host
+	Host string `toml:"host"`
+
+	//statusPort defines which port the mo status server (for metric etc.) listens on and clients connect to
+	StatusPort int64 `toml:"statusPort"`
+
+	//default is false. if false, metrics can be scraped through host:status/metrics endpoint
+	DisableMetricToProm bool `toml:"disableMetricToProm"`
+
+	//default is false. if false, enable metric at booting
+	DisableMetric bool `toml:"disableMetric"`
+
+	//default is false. if false, enable trace at booting
+	DisableTrace bool `toml:"disableTrace"`
+
+	//default is InternalExecutor. if InternalExecutor, use internal sql executor, FileService will implement soon.
+	BatchProcessor string `toml:"batchProcessor"`
+
+	//default is false. With true, system will check all the children span is ended, which belong to the closing span.
+	EnableTraceDebug bool `toml:"enableTraceDebug"`
+}
+
+func (op *ObservabilityParameters) SetDefaultValues(version string) {
+	op.MoVersion = version
+
+	if op.Host == "" {
+		op.Host = defaultHost
+	}
+
+	if op.StatusPort == 0 {
+		op.StatusPort = int64(defaultStatusPort)
+	}
+
+	if op.BatchProcessor == "" {
+		op.BatchProcessor = defaultBatchProcessor
+	}
 }
 
 type ParameterUnit struct {
