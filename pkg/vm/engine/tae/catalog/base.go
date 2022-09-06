@@ -28,7 +28,7 @@ import (
 // Generic BaseEntry can't work in go 1.19 because of compiler bug:
 // https://github.com/golang/go/issues/54671
 // Refactor catalog and use generic BaseEntry after go 1.19.1 release.
-type BaseEntryIf interface {
+type BaseEntry interface {
 	RLock()
 	RUnlock()
 
@@ -43,9 +43,9 @@ type BaseEntryIf interface {
 	GetCurrOp() OpT
 	GetLogIndex() []*wal.Index
 
-	InsertNode(un MVCCNodeIf)
+	InsertNode(un MVCCNode)
 
-	GetUpdateNodeLocked() MVCCNodeIf
+	GetUpdateNodeLocked() MVCCNode
 	TxnCanRead(txn txnif.AsyncTxn, mu *sync.RWMutex) (canRead bool, err error)
 
 	ExistUpdate(minTs, MaxTs types.TS) (exist bool)
@@ -55,7 +55,7 @@ type BaseEntryIf interface {
 
 	WriteOneNodeTo(w io.Writer) (n int64, err error)
 	ReadOneNodeFrom(r io.Reader) (n int64, err error)
-	CloneCommittedInRange(start, end types.TS) (ret BaseEntryIf)
+	CloneCommittedInRange(start, end types.TS) (ret BaseEntry)
 
 	PrepareCommit() error
 	Prepare2PCPrepare() error
