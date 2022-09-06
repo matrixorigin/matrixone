@@ -120,7 +120,7 @@ func (ctx *TxnCtx) GetTxnState(waitIfcommitting bool) (state txnif.TxnState) {
 	// Quick get the current txn state
 	// If waitIfcommitting is false, return the state
 	// If state is not txnif.TxnStateCommitting, return the state
-	if state = ctx.getTxnState(); !waitIfcommitting || state == txnif.TxnStateActive || state == txnif.TxnStateCommitted || state == txnif.TxnStateRollbacked {
+	if state = ctx.getTxnState(); !waitIfcommitting || state != txnif.TxnStateCommitting {
 		return state
 	}
 
