@@ -174,3 +174,251 @@ func TestQuery(t *testing.T) {
 		require.JSONEq(t, kase.outStr, out.String())
 	}
 }
+func TestUnnest(t *testing.T) {
+	kases := []struct {
+		jsonStr   string
+		pathStr   string
+		mode      string
+		recursive bool
+		outer     bool
+		outStr    []string
+		valid     bool
+	}{
+		{
+			jsonStr: `{"a": "1", "b": "2", "c": "3"}`,
+			mode:    "other",
+			valid:   false,
+		},
+		{
+			jsonStr: `{"a": "1", "b": "2", "c": "3"}`,
+			mode:    "both",
+			pathStr: "$",
+			outStr: []string{
+				`key: a, path: $.a, index: , value: "1", this: {"a": "1", "b": "2", "c": "3"}`,
+				`key: b, path: $.b, index: , value: "2", this: {"a": "1", "b": "2", "c": "3"}`,
+				`key: c, path: $.c, index: , value: "3", this: {"a": "1", "b": "2", "c": "3"}`,
+			},
+			valid: true,
+		},
+		{
+			jsonStr: `{"a": "1", "b": "2", "c": "3"}`,
+			pathStr: "$.a",
+			mode:    "both",
+			valid:   true,
+		},
+		{
+			jsonStr: `{"a": "1", "b": "2", "c": "3"}`,
+			mode:    "object",
+			outStr: []string{
+				`key: a, path: $.a, index: , value: "1", this: {"a": "1", "b": "2", "c": "3"}`,
+				`key: b, path: $.b, index: , value: "2", this: {"a": "1", "b": "2", "c": "3"}`,
+				`key: c, path: $.c, index: , value: "3", this: {"a": "1", "b": "2", "c": "3"}`,
+			},
+			valid: true,
+		},
+		{
+			jsonStr: `{"a": "1", "b": "2", "c": "3"}`,
+			mode:    "array",
+			valid:   true,
+		},
+		{
+			jsonStr: `[1,2,3]`,
+			mode:    "array",
+			outStr: []string{
+				`key: , path: $[0], index: 0, value: 1, this: [1, 2, 3]`,
+				`key: , path: $[1], index: 1, value: 2, this: [1, 2, 3]`,
+				`key: , path: $[2], index: 2, value: 3, this: [1, 2, 3]`,
+			},
+			valid: true,
+		},
+		{
+			jsonStr: `[1,2,3]`,
+			mode:    "object",
+			valid:   true,
+		},
+		{
+			jsonStr: `[1,2,3]`,
+			mode:    "both",
+			outStr: []string{
+				`key: , path: $[0], index: 0, value: 1, this: [1, 2, 3]`,
+				`key: , path: $[1], index: 1, value: 2, this: [1, 2, 3]`,
+				`key: , path: $[2], index: 2, value: 3, this: [1, 2, 3]`,
+			},
+			valid: true,
+		},
+		{
+			jsonStr: `{"a": [1,2,3], "b": {"c": 4, "d": [5, 6, 7]}}`,
+			mode:    "both",
+			outStr: []string{
+				`key: a, path: $.a, index: , value: [1, 2, 3], this: {"a": [1, 2, 3], "b": {"c": 4, "d": [5, 6, 7]}}`,
+				`key: b, path: $.b, index: , value: {"c": 4, "d": [5, 6, 7]}, this: {"a": [1, 2, 3], "b": {"c": 4, "d": [5, 6, 7]}}`,
+			},
+			valid: true,
+		},
+		{
+			jsonStr: `{"a": [1,2,3], "b": {"c": 4, "d": [5, 6, 7]}}`,
+			mode:    "object",
+			outStr: []string{
+				`key: a, path: $.a, index: , value: [1, 2, 3], this: {"a": [1, 2, 3], "b": {"c": 4, "d": [5, 6, 7]}}`,
+				`key: b, path: $.b, index: , value: {"c": 4, "d": [5, 6, 7]}, this: {"a": [1, 2, 3], "b": {"c": 4, "d": [5, 6, 7]}}`,
+			},
+			valid: true,
+		},
+		{
+			jsonStr: `{"a": [1,2,3], "b": {"c": 4, "d": [5, 6, 7]}}`,
+			mode:    "array",
+			outer:   true,
+			outStr: []string{
+				`key: , path: $, index: , value: , this: {"a": [1, 2, 3], "b": {"c": 4, "d": [5, 6, 7]}}`,
+			},
+			valid: true,
+		},
+		{
+			jsonStr:   `{"a": [1,2,3], "b": {"c": 4, "d": [5, 6, 7]}}`,
+			mode:      "both",
+			recursive: true,
+			outStr: []string{
+				`key: a, path: $.a, index: , value: [1, 2, 3], this: {"a": [1, 2, 3], "b": {"c": 4, "d": [5, 6, 7]}}`,
+				`key: , path: $.a[0], index: 0, value: 1, this: [1, 2, 3]`,
+				`key: , path: $.a[1], index: 1, value: 2, this: [1, 2, 3]`,
+				`key: , path: $.a[2], index: 2, value: 3, this: [1, 2, 3]`,
+				`key: b, path: $.b, index: , value: {"c": 4, "d": [5, 6, 7]}, this: {"a": [1, 2, 3], "b": {"c": 4, "d": [5, 6, 7]}}`,
+				`key: c, path: $.b.c, index: , value: 4, this: {"c": 4, "d": [5, 6, 7]}`,
+				`key: d, path: $.b.d, index: , value: [5, 6, 7], this: {"c": 4, "d": [5, 6, 7]}`,
+				`key: , path: $.b.d[0], index: 0, value: 5, this: [5, 6, 7]`,
+				`key: , path: $.b.d[1], index: 1, value: 6, this: [5, 6, 7]`,
+				`key: , path: $.b.d[2], index: 2, value: 7, this: [5, 6, 7]`,
+			},
+			valid: true,
+		},
+		{
+			jsonStr:   `{"a": [1,2,3], "b": {"c": 4, "d": [5, 6, 7]}}`,
+			mode:      "object",
+			recursive: true,
+			outStr: []string{
+				`key: a, path: $.a, index: , value: [1, 2, 3], this: {"a": [1, 2, 3], "b": {"c": 4, "d": [5, 6, 7]}}`,
+				`key: b, path: $.b, index: , value: {"c": 4, "d": [5, 6, 7]}, this: {"a": [1, 2, 3], "b": {"c": 4, "d": [5, 6, 7]}}`,
+				`key: c, path: $.b.c, index: , value: 4, this: {"c": 4, "d": [5, 6, 7]}`,
+				`key: d, path: $.b.d, index: , value: [5, 6, 7], this: {"c": 4, "d": [5, 6, 7]}`,
+			},
+			valid: true,
+		},
+		{
+			jsonStr:   `{"a": [1,2,3], "b": {"c": 4, "d": [5, 6, 7]}}`,
+			mode:      "array",
+			recursive: true,
+			pathStr:   "$.a",
+			outStr: []string{
+				`key: , path: $.a[0], index: 0, value: 1, this: [1, 2, 3]`,
+				`key: , path: $.a[1], index: 1, value: 2, this: [1, 2, 3]`,
+				`key: , path: $.a[2], index: 2, value: 3, this: [1, 2, 3]`,
+			},
+			valid: true,
+		},
+		{
+			jsonStr: `{"a": [1,2,3], "b": {"c": 4, "d": [5, 6, 7]}}`,
+			mode:    "array",
+			pathStr: "$.b",
+			valid:   true,
+			outer:   true,
+			outStr: []string{
+				`key: , path: $.b, index: , value: , this: {"c": 4, "d": [5, 6, 7]}`,
+			},
+		},
+		{
+			jsonStr: `{"a": [1,2,3], "b": {"c": 4, "d": [5, 6, 7]}}`,
+			mode:    "array",
+			pathStr: "$.b.d",
+			outStr: []string{
+				`key: , path: $.b.d[0], index: 0, value: 5, this: [5, 6, 7]`,
+				`key: , path: $.b.d[1], index: 1, value: 6, this: [5, 6, 7]`,
+				`key: , path: $.b.d[2], index: 2, value: 7, this: [5, 6, 7]`,
+			},
+			valid: true,
+		},
+		{
+			jsonStr:   `{"a": [1,2,3], "b": {"c": 4, "d": [5, 6, 7]}}`,
+			mode:      "object",
+			pathStr:   "$.b",
+			recursive: true,
+			outStr: []string{
+				`key: c, path: $.b.c, index: , value: 4, this: {"c": 4, "d": [5, 6, 7]}`,
+				`key: d, path: $.b.d, index: , value: [5, 6, 7], this: {"c": 4, "d": [5, 6, 7]}`,
+			},
+			valid: true,
+		},
+		{
+			jsonStr:   `{"a": [1,2,3], "b": {"c": 4, "d": [5, 6, 7]}}`,
+			mode:      "both",
+			pathStr:   "$.*",
+			recursive: true,
+			outStr: []string{
+				`key: , path: $.a[0], index: 0, value: 1, this: [1, 2, 3]`,
+				`key: , path: $.a[1], index: 1, value: 2, this: [1, 2, 3]`,
+				`key: , path: $.a[2], index: 2, value: 3, this: [1, 2, 3]`,
+				`key: c, path: $.b.c, index: , value: 4, this: {"c": 4, "d": [5, 6, 7]}`,
+				`key: d, path: $.b.d, index: , value: [5, 6, 7], this: {"c": 4, "d": [5, 6, 7]}`,
+				`key: , path: $.b.d[0], index: 0, value: 5, this: [5, 6, 7]`,
+				`key: , path: $.b.d[1], index: 1, value: 6, this: [5, 6, 7]`,
+				`key: , path: $.b.d[2], index: 2, value: 7, this: [5, 6, 7]`,
+			},
+			valid: true,
+		},
+		{
+			jsonStr: `{"a": [1,2,3], "b": {"a": {"b": 1}, "c": 4, "d": [5, 6, 7]}}`,
+			mode:    "object",
+			pathStr: "$.a**.a",
+			outStr: []string{
+				`key: b, path: $.a[0].a.b, index: , value: 1, this: {"b": 1}`,
+			},
+			valid: true,
+		},
+		{
+			jsonStr: `{"a": [1,2,3,{"b":4}], "b": {"a": {"b": 1}, "c": 4, "d": [5, 6, 7]}}`,
+			mode:    "both",
+			pathStr: "$**.a",
+			outStr: []string{
+				`key: , path: $.a[0], index: 0, value: 1, this: [1, 2, 3, {"b": 4}]`,
+				`key: , path: $.a[1], index: 1, value: 2, this: [1, 2, 3, {"b": 4}]`,
+				`key: , path: $.a[2], index: 2, value: 3, this: [1, 2, 3, {"b": 4}]`,
+				`key: , path: $.a[3], index: 3, value: {"b": 4}, this: [1, 2, 3, {"b": 4}]`,
+				`key: b, path: $.b.a.b, index: , value: 1, this: {"b": 1}`,
+			},
+			valid: true,
+		},
+		{
+			jsonStr:   `{"a": [1,2,3,{"b":4}], "b": {"a": {"b": 1}, "c": 4, "d": [5, 6, 7]}}`,
+			mode:      "both",
+			pathStr:   "$**.a",
+			recursive: true,
+			outStr: []string{
+				`key: , path: $.a[0], index: 0, value: 1, this: [1, 2, 3, {"b": 4}]`,
+				`key: , path: $.a[1], index: 1, value: 2, this: [1, 2, 3, {"b": 4}]`,
+				`key: , path: $.a[2], index: 2, value: 3, this: [1, 2, 3, {"b": 4}]`,
+				`key: , path: $.a[3], index: 3, value: {"b": 4}, this: [1, 2, 3, {"b": 4}]`,
+				`key: b, path: $.a[3].b, index: , value: 4, this: {"b": 4}`,
+				`key: b, path: $.b.a.b, index: , value: 1, this: {"b": 1}`,
+			},
+			valid: true,
+		},
+	}
+	for _, kase := range kases {
+		bj, err := ParseFromString(kase.jsonStr)
+		require.Nil(t, err)
+		var path Path
+		if len(kase.pathStr) > 0 {
+			path, err = ParseJsonPath(kase.pathStr)
+			require.Nil(t, err)
+		}
+		out, err := bj.Unnest(path, kase.outer, kase.recursive, kase.mode)
+		if !kase.valid {
+			require.NotNil(t, err)
+			continue
+		}
+		require.Nil(t, err)
+		for i, o := range out {
+			require.Equal(t, kase.outStr[i], o.String())
+		}
+	}
+
+}

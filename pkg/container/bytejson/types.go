@@ -41,6 +41,14 @@ type Path struct {
 	flag  pathFlag
 }
 
+type UnnestResult struct {
+	Key   string
+	Path  string
+	Index string
+	Value string
+	This  string
+}
+
 const subPathIdxALL = -1
 
 const (

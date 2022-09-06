@@ -387,3 +387,26 @@ func mergeToArray(origin []ByteJson) ByteJson {
 	buf = addByteElem(buf, headerSize, origin)
 	return ByteJson{Type: TpCodeArray, Data: buf}
 }
+
+// check unnest mode
+func checkMode(mode string) bool {
+	if mode == "both" || mode == "array" || mode == "object" {
+		return true
+	}
+	return false
+}
+
+func genIndexOrKey(pathStr string) (string, string) {
+	if pathStr[len(pathStr)-1] == ']' {
+		// find last '['
+		idx := strings.LastIndex(pathStr, "[")
+		return pathStr[idx : len(pathStr)-1], ""
+	}
+	// find last '.'
+	idx := strings.LastIndex(pathStr, ".")
+	return "", pathStr[idx+1:]
+}
+
+func (r UnnestResult) String() string {
+	return fmt.Sprintf("key: %s, path: %s, index: %s, value: %s, this: %s", r.Key, r.Path, r.Index, r.Value, r.This)
+}

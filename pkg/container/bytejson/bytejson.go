@@ -301,3 +301,159 @@ func (bj ByteJson) Query(path Path) ByteJson {
 	}
 	return mergeToArray(out)
 }
+
+func (bj ByteJson) canUnnest() bool {
+	return bj.Type == TpCodeArray || bj.Type == TpCodeObject
+}
+
+func (bj ByteJson) queryWithSubPath(keys []string, vals []ByteJson, path Path, pathStr string) ([]string, []ByteJson) {
+	if path.empty() {
+		keys = append(keys, pathStr)
+		vals = append(vals, bj)
+		return keys, vals
+	}
+	sub, nPath := path.remove()
+	if sub.tp == subPathIdx && bj.Type == TpCodeArray {
+		cnt := bj.GetElemCnt()
+		if sub.idx < subPathIdxALL || sub.idx >= cnt { // idx is out of range
+			tmp := ByteJson{Type: TpCodeLiteral, Data: []byte{LiteralNull}}
+			newPathStr := fmt.Sprintf("%s[%d]", pathStr, sub.idx)
+			keys = append(keys, newPathStr)
+			vals = append(vals, tmp)
+			return keys, vals
+		}
+		if sub.idx == subPathIdxALL {
+			for i := 0; i < cnt; i++ {
+				newPathStr := fmt.Sprintf("%s[%d]", pathStr, i)
+				keys, vals = bj.getArrayElem(i).queryWithSubPath(keys, vals, nPath, newPathStr)
+			}
+		} else {
+			newPathStr := fmt.Sprintf("%s[%d]", pathStr, sub.idx)
+			keys, vals = bj.getArrayElem(sub.idx).queryWithSubPath(keys, vals, nPath, newPathStr)
+		}
+	}
+	if sub.tp == subPathKey && bj.Type == TpCodeObject {
+		cnt := bj.GetElemCnt()
+		if sub.key == "*" {
+			for i := 0; i < cnt; i++ {
+				newPathStr := fmt.Sprintf("%s.%s", pathStr, bj.getObjectKey(i))
+				keys, vals = bj.getObjectVal(i).queryWithSubPath(keys, vals, nPath, newPathStr)
+			}
+		} else {
+			tmp := bj.queryValByKey(string2Slice(sub.key))
+			newPathStr := fmt.Sprintf("%s.%s", pathStr, sub.key)
+			keys, vals = tmp.queryWithSubPath(keys, vals, nPath, newPathStr)
+		}
+	}
+	if sub.tp == subPathDoubleStar {
+		keys, vals = bj.queryWithSubPath(keys, vals, nPath, pathStr)
+		if bj.Type == TpCodeObject {
+			cnt := bj.GetElemCnt()
+			for i := 0; i < cnt; i++ {
+				newPathStr := fmt.Sprintf("%s.%s", pathStr, bj.getObjectKey(i))
+				keys, vals = bj.getObjectVal(i).queryWithSubPath(keys, vals, path, newPathStr) // take care here, the argument is path,not nPath
+			}
+		} else if bj.Type == TpCodeArray {
+			cnt := bj.GetElemCnt()
+			for i := 0; i < cnt; i++ {
+				newPathStr := fmt.Sprintf("%s[%d]", pathStr, i)
+				keys, vals = bj.getArrayElem(i).queryWithSubPath(keys, vals, path, newPathStr) // take care here, the argument is path,not nPath
+			}
+		}
+	}
+	return keys, vals
+}
+
+func (bj ByteJson) unnestWithParams(out []UnnestResult, outer, recursive bool, mode string, pathStr string, this *ByteJson) ([]UnnestResult, error) {
+	if !bj.canUnnest() {
+		index, key := genIndexOrKey(pathStr)
+		out = append(out, UnnestResult{
+			Path:  pathStr,
+			Value: bj.String(),
+			Index: index,
+			Key:   key,
+			This:  this.String(),
+		})
+		return out, nil
+	}
+	if bj.Type == TpCodeObject && mode != "array" {
+		cnt := bj.GetElemCnt()
+		for i := 0; i < cnt; i++ {
+			key := bj.getObjectKey(i)
+			val := bj.getObjectVal(i)
+			newPathStr := fmt.Sprintf("%s.%s", pathStr, key)
+			out = append(out, UnnestResult{
+				Path:  newPathStr,
+				Value: val.String(),
+				Key:   string(key),
+				This:  this.String(),
+			})
+			if val.canUnnest() && recursive {
+				var err error
+				out, err = val.unnestWithParams(out, outer, recursive, mode, newPathStr, &val)
+				if err != nil {
+					return nil, err
+				}
+			}
+
+		}
+	}
+	if bj.Type == TpCodeArray && mode != "object" {
+		cnt := bj.GetElemCnt()
+		for i := 0; i < cnt; i++ {
+			val := bj.getArrayElem(i)
+			newPathStr := fmt.Sprintf("%s[%d]", pathStr, i)
+			out = append(out, UnnestResult{
+				Path:  newPathStr,
+				Value: val.String(),
+				Index: fmt.Sprintf("%d", i),
+				This:  this.String(),
+			})
+			if val.canUnnest() && recursive {
+				var err error
+				out, err = val.unnestWithParams(out, outer, recursive, mode, newPathStr, &val)
+				if err != nil {
+					return nil, err
+				}
+			}
+		}
+	}
+	return out, nil
+}
+
+func (bj ByteJson) unnest(out []UnnestResult, path Path, outer, recursive bool, mode string) ([]UnnestResult, error) {
+
+	keys := make([]string, 0, 1)
+	vals := make([]ByteJson, 0, 1)
+	keys, vals = bj.queryWithSubPath(keys, vals, path, "$")
+	if len(keys) != len(vals) {
+		return nil, errors.New("keys and vals are not equal", "")
+	}
+	for i := 0; i < len(keys); i++ {
+		var err error
+		if vals[i].canUnnest() {
+			out, err = vals[i].unnestWithParams(out, outer, recursive, mode, keys[i], &vals[i])
+			if err != nil {
+				return nil, err
+			}
+		}
+	}
+	if len(out) == 0 && outer {
+		for i := 0; i < len(keys); i++ {
+			out = append(out, UnnestResult{
+				Path: keys[i],
+				This: vals[i].String(),
+			})
+		}
+	}
+	return out, nil
+}
+
+func (bj ByteJson) Unnest(path Path, outer, recursive bool, mode string) ([]UnnestResult, error) {
+	if !checkMode(mode) {
+		return nil, errors.New(errno.InvalidUnnestMode, fmt.Sprintf("invalid unnest mode %s", mode))
+	}
+	out := make([]UnnestResult, 0, 1)
+	out, err := bj.unnest(out, path, outer, recursive, mode)
+	return out, err
+}

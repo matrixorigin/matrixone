@@ -105,4 +105,5 @@ const (
 	InvalidJsonKeyTooLong                   = "the JSON key is too long"
 	UnSupportedJsonType                     = "the JSON data type is not supported"
 	InvalidJsonPath                         = "the JSON path is not valid"
+	InvalidUnnestMode                       = "the unnest mode is not valid, only support 'array', 'object' and 'both'"
 )
