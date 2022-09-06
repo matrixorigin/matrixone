@@ -116,6 +116,6 @@ func newTestCase(desc bool, m *mheap.Mheap, typ types.Type) testCase {
 	return testCase{
 		desc: desc,
 		vecs: vecs,
-		proc: process.New(m),
+		proc: testutil.NewProcessWithMheap(m),
 	}
 }

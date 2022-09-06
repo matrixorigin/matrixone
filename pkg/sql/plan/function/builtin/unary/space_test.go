@@ -20,20 +20,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
-	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
-	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
 )
-
-func NewTestProc() *process.Process {
-	mmu := host.New(1024 * 1024)
-	gm := guest.New(1024*1024, mmu)
-	mp := mheap.New(gm)
-	proc := process.New(mp)
-	return proc
-}
 
 func makeInt64Vector(values []int64, nsp []uint64) *vector.Vector {
 	ns := nulls.Build(len(values), nsp...)
@@ -55,7 +44,7 @@ func makeFloat64Vector(values []float64, nsp []uint64) *vector.Vector {
 
 func TestSpaceUint64(t *testing.T) {
 	inputVector := makeUint64Vector([]uint64{1, 2, 3, 0, 8000}, []uint64{4})
-	proc := NewTestProc()
+	proc := testutil.NewProc()
 	output, err := SpaceNumber[uint64]([]*vector.Vector{inputVector}, proc)
 	require.NoError(t, err)
 	require.Equal(t, output.GetString(0), " ")
@@ -67,7 +56,7 @@ func TestSpaceUint64(t *testing.T) {
 
 func TestSpaceInt64(t *testing.T) {
 	inputVector := makeInt64Vector([]int64{1, 2, 3, 0, -1, 8000}, []uint64{4})
-	proc := NewTestProc()
+	proc := testutil.NewProc()
 	output, err := SpaceNumber[int64]([]*vector.Vector{inputVector}, proc)
 	require.NoError(t, err)
 	require.Equal(t, output.GetString(0), " ")
@@ -80,7 +69,7 @@ func TestSpaceInt64(t *testing.T) {
 
 func TestSpaceFloat64(t *testing.T) {
 	inputVector := makeFloat64Vector([]float64{1.4, 1.6, 3.3, 0, -1, 8000}, []uint64{4})
-	proc := NewTestProc()
+	proc := testutil.NewProc()
 	output, err := SpaceNumber[float64]([]*vector.Vector{inputVector}, proc)
 	require.NoError(t, err)
 	require.Equal(t, output.GetString(0), " ")

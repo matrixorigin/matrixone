@@ -19,9 +19,8 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
-	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
-	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
@@ -36,43 +35,43 @@ func TestLikeVarchar(t *testing.T) {
 		{
 			name:      "TEST01",
 			vecs:      makeLikeVectors("RUNOOB.COM", "%COM", true, true),
-			proc:      process.New(mheap.New(nil)),
+			proc:      testutil.NewProcessWithMheap(mheap.New(nil)),
 			wantBytes: []bool{true},
 		},
 		{
 			name:      "TEST02",
 			vecs:      makeLikeVectors("aaa", "aaa", true, true),
-			proc:      process.New(mheap.New(nil)),
+			proc:      testutil.NewProcessWithMheap(mheap.New(nil)),
 			wantBytes: []bool{true},
 		},
 		{
 			name:      "TEST03",
 			vecs:      makeLikeVectors("123", "1%", true, true),
-			proc:      process.New(mheap.New(nil)),
+			proc:      testutil.NewProcessWithMheap(mheap.New(nil)),
 			wantBytes: []bool{true},
 		},
 		{
 			name:      "TEST04",
 			vecs:      makeLikeVectors("SALESMAN", "%SAL%", true, true),
-			proc:      process.New(mheap.New(nil)),
+			proc:      testutil.NewProcessWithMheap(mheap.New(nil)),
 			wantBytes: []bool{true},
 		},
 		{
 			name:      "TEST05",
 			vecs:      makeLikeVectors("MANAGER@@@", "MAN_", true, true),
-			proc:      process.New(mheap.New(nil)),
+			proc:      testutil.NewProcessWithMheap(mheap.New(nil)),
 			wantBytes: []bool{false},
 		},
 		{
 			name:      "TEST06",
 			vecs:      makeLikeVectors("MANAGER@@@", "_", true, true),
-			proc:      process.New(mheap.New(nil)),
+			proc:      testutil.NewProcessWithMheap(mheap.New(nil)),
 			wantBytes: []bool{false},
 		},
 		{
 			name:      "TEST07",
 			vecs:      makeLikeVectors("hello@world", "hello_world", true, true),
-			proc:      process.New(mheap.New(nil)),
+			proc:      testutil.NewProcessWithMheap(mheap.New(nil)),
 			wantBytes: []bool{true},
 		},
 	}
@@ -89,7 +88,7 @@ func TestLikeVarchar(t *testing.T) {
 }
 
 func TestLikeVarchar2(t *testing.T) {
-	procs := makeProcess()
+	procs := testutil.NewProc()
 	cases := []struct {
 		name       string
 		vecs       []*vector.Vector
@@ -158,12 +157,6 @@ func TestLikeVarchar2(t *testing.T) {
 			require.Equal(t, c.wantScalar, likeRes.IsScalar())
 		})
 	}
-}
-
-func makeProcess() *process.Process {
-	hm := host.New(1 << 40)
-	gm := guest.New(1<<40, hm)
-	return process.New(mheap.New(gm))
 }
 
 func makeStrVec(s string, isConst bool, n int) *vector.Vector {

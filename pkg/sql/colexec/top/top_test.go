@@ -121,7 +121,7 @@ func BenchmarkTop(b *testing.B) {
 func newTestCase(m *mheap.Mheap, ts []types.Type, limit int64, fs []colexec.Field) topTestCase {
 	return topTestCase{
 		types: ts,
-		proc:  process.New(m),
+		proc:  testutil.NewProcessWithMheap(m),
 		arg: &Argument{
 			Fs:    fs,
 			Limit: limit,
