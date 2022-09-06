@@ -34,8 +34,9 @@ func init() {
 	SetLogLevel(zapcore.DebugLevel)
 }
 
-var _ batchpipe.HasName = &MOLog{}
-var _ IBuffer2SqlItem = &MOLog{}
+var _ batchpipe.HasName = (*MOLog)(nil)
+var _ IBuffer2SqlItem = (*MOLog)(nil)
+var _ CsvFields = (*MOLog)(nil)
 
 type MOLog struct {
 	TraceID   TraceID       `json:"trace_id"`
@@ -53,7 +54,7 @@ func newMOLog() *MOLog {
 }
 
 func (MOLog) GetName() string {
-	return MOLogType
+	return MORawLogType
 }
 
 func (l MOLog) Size() int64 {
@@ -61,6 +62,25 @@ func (l MOLog) Size() int64 {
 }
 
 func (l MOLog) Free() {}
+
+func (l MOLog) CsvOptions() *CsvOptions {
+	return CommonCsvOptions
+}
+
+func (l MOLog) CsvFields() []string {
+	var result []string
+	result = append(result, l.TraceID.String())
+	result = append(result, l.SpanID.String())
+	result = append(result, GetNodeResource().NodeUuid)
+	result = append(result, GetNodeResource().NodeType)
+	result = append(result, nanoSec2DatetimeString(l.Timestamp))
+	result = append(result, l.Name)
+	result = append(result, l.Level.String())
+	result = append(result, fmt.Sprintf(logStackFormatter.Load().(string), l.Caller))
+	result = append(result, l.Message)
+	result = append(result, l.Extra)
+	return result
+}
 
 var logLevelEnabler atomic.Value
 
@@ -72,7 +92,7 @@ func ReportLog(ctx context.Context, level zapcore.Level, depth int, formatter st
 	if !logLevelEnabler.Load().(zapcore.LevelEnabler).Enabled(level) {
 		return
 	}
-	if !gTracerProvider.IsEnable() {
+	if !GetTracerProvider().IsEnable() {
 		return
 	}
 	_, newSpan := Start(DefaultContext(), "ReportLog")
@@ -99,10 +119,11 @@ func ContextField(ctx context.Context) zap.Field {
 	return SpanField(SpanFromContext(ctx).SpanContext())
 }
 
-var _ batchpipe.HasName = &MOZap{}
-var _ IBuffer2SqlItem = &MOZap{}
+var _ batchpipe.HasName = (*MOZapLog)(nil)
+var _ IBuffer2SqlItem = (*MOZapLog)(nil)
+var _ CsvFields = (*MOZapLog)(nil)
 
-type MOZap struct {
+type MOZapLog struct {
 	Level       zapcore.Level `json:"Level"`
 	SpanContext *SpanContext  `json:"span"`
 	Timestamp   time.Time     `json:"timestamp"`
@@ -112,24 +133,43 @@ type MOZap struct {
 	Extra       string `json:"extra"` // like json text
 }
 
-func newMOZap() *MOZap {
-	return &MOZap{}
+func newMOZap() *MOZapLog {
+	return &MOZapLog{}
 }
 
-func (m MOZap) GetName() string {
-	return MOZapType
+func (m MOZapLog) GetName() string {
+	return MOLogType
 }
 
 // Size 计算近似值
-func (m MOZap) Size() int64 {
+func (m MOZapLog) Size() int64 {
 	return int64(unsafe.Sizeof(m) + unsafe.Sizeof(len(m.LoggerName)+len(m.Caller)+len(m.Message)+len(m.Extra)))
 }
 
-func (m MOZap) Free() {}
+func (m MOZapLog) Free() {}
+
+func (m MOZapLog) CsvOptions() *CsvOptions {
+	return CommonCsvOptions
+}
+
+func (m MOZapLog) CsvFields() []string {
+	var result []string
+	result = append(result, m.SpanContext.TraceID.String())
+	result = append(result, m.SpanContext.SpanID.String())
+	result = append(result, GetNodeResource().NodeUuid)
+	result = append(result, GetNodeResource().NodeType)
+	result = append(result, time2DatetimeString(m.Timestamp))
+	result = append(result, m.LoggerName)
+	result = append(result, m.Level.String())
+	result = append(result, m.Caller)
+	result = append(result, m.Message)
+	result = append(result, m.Extra)
+	return result
+}
 
 func ReportZap(jsonEncoder zapcore.Encoder, entry zapcore.Entry, fields []zapcore.Field) (*buffer.Buffer, error) {
 	var needReport = true
-	if !gTracerProvider.IsEnable() {
+	if !GetTracerProvider().IsEnable() {
 		return jsonEncoder.EncodeEntry(entry, []zap.Field{})
 	}
 	log := newMOZap()

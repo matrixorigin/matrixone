@@ -150,7 +150,13 @@ func runDNStoreTest(
 		if err != nil {
 			return nil, err
 		}
-		return fileservice.NewFileServices(name, local, s3)
+		etl, err := fileservice.NewMemoryFS(
+			etlFileServiceName,
+		)
+		if err != nil {
+			return nil, err
+		}
+		return fileservice.NewFileServices(name, local, s3, etl)
 	}, opts...)
 }
 

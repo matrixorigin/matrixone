@@ -20,6 +20,11 @@ backend = "MEM"
 name = "S3"
 backend = "MEM"
 
+[[fileservice]]
+name = "ETL"
+backend = "DISK-ETL"
+data-dir = "store"
+
 [cn]
 uuid = "cn1"
 

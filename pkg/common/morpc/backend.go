@@ -531,14 +531,15 @@ func (rb *remoteBackend) stopWriteLoop() {
 }
 
 func (rb *remoteBackend) requestDone(response Message) {
-	rb.mu.Lock()
-	defer rb.mu.Unlock()
-
 	id := response.GetID()
+
+	rb.mu.Lock()
 	if f, ok := rb.mu.futures[id]; ok {
 		delete(rb.mu.futures, id)
+		rb.mu.Unlock()
 		f.done(response)
 	} else if st, ok := rb.mu.activeStreams[id]; ok {
+		rb.mu.Unlock()
 		st.done(response)
 	}
 }

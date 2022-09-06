@@ -36,6 +36,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/dnservice"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/util"
+	"github.com/matrixorigin/matrixone/pkg/util/export"
+	"github.com/matrixorigin/matrixone/pkg/util/metric"
+	"github.com/matrixorigin/matrixone/pkg/util/trace"
+
+	"github.com/google/uuid"
 )
 
 var (
@@ -77,6 +85,10 @@ func startService(cfg *Config, stopper *stopper.Stopper) error {
 
 	fs, err := cfg.createFileService(localFileServiceName)
 	if err != nil {
+		return err
+	}
+
+	if err = initTraceMetric(context.Background(), cfg, stopper, fs); err != nil {
 		return err
 	}
 
@@ -244,5 +256,61 @@ func startStandalone(
 		return err
 	}
 
+	return nil
+}
+
+func initTraceMetric(ctx context.Context, cfg *Config, stopper *stopper.Stopper, fs fileservice.FileService) error {
+	var writerFactory export.FSWriterFactory
+	var err error
+	var UUID string
+	SV := cfg.getObservabilityConfig()
+
+	ServerType := strings.ToUpper(cfg.ServiceType)
+	switch ServerType {
+	case cnServiceType, standaloneServiceType:
+		// validate node_uuid
+		var uuidErr error
+		var nodeUUID uuid.UUID
+		if nodeUUID, uuidErr = uuid.Parse(cfg.CN.UUID); uuidErr != nil {
+			nodeUUID = uuid.New()
+		}
+		if err := util.SetUUIDNodeID(nodeUUID[:]); err != nil {
+			return moerr.NewPanicError(err)
+		}
+		UUID = nodeUUID.String()
+	case dnServiceType:
+		UUID = cfg.DN.UUID
+	case logServiceType:
+		UUID = cfg.LogService.UUID
+	}
+	UUID = strings.ReplaceAll(UUID, " ", "_") // remove space in UUID for filename
+
+	if !SV.DisableTrace || !SV.DisableMetric {
+		writerFactory = export.GetFSWriterFactory(fs, UUID, ServerType)
+	}
+	if !SV.DisableTrace {
+		stopper.RunNamedTask("trace", func(ctx context.Context) {
+			if ctx, err = trace.Init(ctx,
+				trace.WithMOVersion(SV.MoVersion),
+				trace.WithNode(UUID, ServerType),
+				trace.EnableTracer(!SV.DisableTrace),
+				trace.WithBatchProcessMode(SV.BatchProcessor),
+				trace.WithFSWriterFactory(writerFactory),
+				trace.DebugMode(SV.EnableTraceDebug),
+				trace.WithSQLExecutor(nil),
+			); err != nil {
+				panic(err)
+			}
+			<-ctx.Done()
+			// flush trace/log/error framework
+			if err = trace.Shutdown(trace.DefaultContext()); err != nil {
+				logutil.Error("Shutdown trace", logutil.ErrorField(err), logutil.NoReportFiled())
+				panic(err)
+			}
+		})
+	}
+	if !SV.DisableMetric {
+		metric.InitMetric(ctx, nil, &SV, UUID, metric.ALL_IN_ONE_MODE, metric.WithWriterFactory(writerFactory))
+	}
 	return nil
 }
