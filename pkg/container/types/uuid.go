@@ -16,12 +16,7 @@ package types
 
 import (
 	"github.com/google/uuid"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
-
-func ParseNumValToUuid(num *tree.NumVal) (Uuid, error) {
-	return Uuid{}, nil
-}
 
 func ParseUuid(str string) (Uuid, error) {
 	gUuid, err := uuid.Parse(str)

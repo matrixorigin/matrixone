@@ -21,7 +21,7 @@ import (
 
 type ref interface {
 	constraints.Integer | constraints.Float | bool |
-		types.Date | types.Datetime | types.Timestamp | types.Decimal64 | types.Decimal128
+		types.Date | types.Datetime | types.Timestamp | types.Decimal64 | types.Decimal128 | types.Uuid
 }
 
 func MustTCols[T ref](v *Vector) []T {

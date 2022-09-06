@@ -252,3 +252,97 @@ func GtString(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error
 func NeString(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	return CompareString(vs, CompareBytesNe, proc)
 }
+
+// uuid compare
+type compUuidFn func(v1, v2 [16]byte) bool
+
+func CompareUuidEq(v1, v2 [16]byte) bool {
+	return types.EqualUuid(v1, v2)
+}
+func CompareUuidLe(v1, v2 [16]byte) bool {
+	return types.CompareUuid(v1, v2) <= 0
+}
+func CompareUuidLt(v1, v2 [16]byte) bool {
+	return types.CompareUuid(v1, v2) < 0
+}
+func CompareUuidGe(v1, v2 [16]byte) bool {
+	return types.CompareUuid(v1, v2) >= 0
+}
+func CompareUuidGt(v1, v2 [16]byte) bool {
+	return types.CompareUuid(v1, v2) > 0
+}
+func CompareUuidNe(v1, v2 [16]byte) bool {
+	return !types.EqualUuid(v1, v2)
+}
+
+func CompareUuid(vs []*vector.Vector, fn compUuidFn, proc *process.Process) (*vector.Vector, error) {
+	v1, v2 := vs[0], vs[1]
+	//col1, col2 := vector.MustBytesCols(v1), vector.MustBytesCols(v2)
+	col1, col2 := vector.MustTCols[types.Uuid](v1), vector.MustTCols[types.Uuid](v2)
+	if v1.IsScalarNull() || v2.IsScalarNull() {
+		return handleScalarNull(v1, v2, proc)
+	}
+
+	if v1.IsScalar() && v2.IsScalar() {
+		vec := proc.AllocScalarVector(boolType)
+		vec.Col = make([]bool, 1)
+		vec.Col.([]bool)[0] = fn(col1[0], col2[0])
+		return vec, nil
+	}
+
+	if v1.IsScalar() {
+		length := vector.Length(v2)
+		vec := allocateBoolVector(length, proc)
+		veccol := vec.Col.([]bool)
+		for i := range veccol {
+			veccol[i] = fn(col1[0], col2[i])
+		}
+		nulls.Or(v2.Nsp, nil, vec.Nsp)
+		return vec, nil
+	}
+
+	if v2.IsScalar() {
+		length := vector.Length(v1)
+		vec := allocateBoolVector(length, proc)
+		veccol := vec.Col.([]bool)
+		for i := range veccol {
+			veccol[i] = fn(col1[i], col2[0])
+		}
+		nulls.Or(v1.Nsp, nil, vec.Nsp)
+		return vec, nil
+	}
+
+	// Vec Vec
+	length := vector.Length(v1)
+	vec := allocateBoolVector(length, proc)
+	veccol := vec.Col.([]bool)
+	for i := range veccol {
+		veccol[i] = fn(col1[i], col2[i])
+	}
+	nulls.Or(v1.Nsp, v2.Nsp, vec.Nsp)
+	return vec, nil
+}
+
+func EqUuid(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	return CompareUuid(vs, CompareUuidEq, proc)
+}
+
+func LeUuid(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	return CompareUuid(vs, CompareUuidLe, proc)
+}
+
+func LtUuid(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	return CompareUuid(vs, CompareUuidLt, proc)
+}
+
+func GeUuid(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	return CompareUuid(vs, CompareUuidGe, proc)
+}
+
+func GtUuid(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	return CompareUuid(vs, CompareUuidGt, proc)
+}
+
+func NeUuid(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	return CompareUuid(vs, CompareUuidNe, proc)
+}

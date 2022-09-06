@@ -122,6 +122,24 @@ func fillBatch(bat *batch.Batch, p *plan.InsertValues, rows []tree.Exprs, proc *
 			if err := vector.Append(v, vs); err != nil {
 				return err
 			}
+		case types.T_uuid:
+			vs := make([]types.Uuid, rowCount)
+			{
+				for j, expr := range p.Columns[i].Column {
+					vec, err := colexec.EvalExpr(tmpBat, proc, expr)
+					if err != nil {
+						return y.MakeInsertError(v.Typ.Oid, p.ExplicitCols[i], rows, i, j)
+					}
+					if nulls.Any(vec.Nsp) {
+						nulls.Add(v.Nsp, uint64(j))
+					} else {
+						vs[j] = vec.Col.([]types.Uuid)[0]
+					}
+				}
+			}
+			if err := vector.Append(v, vs); err != nil {
+				return err
+			}
 		case types.T_bool:
 			vs := make([]bool, rowCount)
 			{

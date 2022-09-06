@@ -4485,6 +4485,103 @@ func TestCastDatetimeAsDateAndString(t *testing.T) {
 
 }
 
+// cast uuid to string
+func TestCastUuidAsString(t *testing.T) {
+	// White box test
+	convey.Convey("test cast uuid to string", t, func() {
+		cases := []struct {
+			uuid types.Uuid
+			str  string
+		}{
+			{
+				uuid: [16]byte{13, 86, 135, 218, 42, 103, 17, 237, 153, 224, 0, 12, 41, 132, 121, 4},
+				str:  "0d5687da-2a67-11ed-99e0-000c29847904",
+			},
+			{
+				uuid: [16]byte{97, 25, 223, 253, 42, 107, 17, 237, 153, 224, 0, 12, 41, 132, 121, 4},
+				str:  "6119dffd-2a6b-11ed-99e0-000c29847904",
+			},
+			{
+				uuid: [16]byte{62, 53, 10, 92, 34, 42, 17, 235, 171, 239, 2, 66, 172, 17, 0, 2},
+				str:  "3e350a5c-222a-11eb-abef-0242ac110002",
+			},
+			{
+				uuid: [16]byte{62, 53, 10, 92, 34, 42, 17, 235, 171, 239, 2, 66, 172, 17, 0, 2},
+				str:  "3e350a5c222a11ebabef0242ac110002",
+			},
+		}
+
+		var uuids []types.Uuid
+		var expects []string
+		for _, c := range cases {
+			uuids = append(uuids, c.uuid)
+			expects = append(expects, c.str)
+		}
+
+		srcVector := testutil.MakeUuidVector(uuids, nil)
+		destVector := testutil.MakeVarcharVector(nil, nil)
+
+		wantVec := testutil.MakeVarcharVector(expects, nil)
+		proc := testutil.NewProc()
+		res, err := Cast([]*vector.Vector{srcVector, destVector}, proc)
+		convey.ShouldBeNil(err)
+		compare := testutil.CompareVectors(wantVec, res)
+		convey.ShouldBeTrue(compare)
+	})
+
+}
+
+// cast string to uuid
+func TestCastStringToUuid(t *testing.T) {
+	// White box test
+	convey.Convey("test cast to uuid case", t, func() {
+		cases := []struct {
+			str  string
+			uuid string
+		}{
+			{
+				str:  "0d5687da-2a67-11ed-99e0-000c29847904",
+				uuid: "0d5687da-2a67-11ed-99e0-000c29847904",
+				//uuid: [16]byte{13, 86, 135, 218, 42, 103, 17, 237, 153, 224, 0, 12, 41, 132, 121, 4},
+			},
+			{
+				str:  "6119dffd-2a6b-11ed-99e0-000c29847904",
+				uuid: "6119dffd-2a6b-11ed-99e0-000c29847904",
+				//uuid: [16]byte{97, 25, 223, 253, 42, 107, 17, 237, 153, 224, 0, 12, 41, 132, 121, 4},
+			},
+			{
+				str:  "3e350a5c-222a-11eb-abef-0242ac110002",
+				uuid: "3e350a5c-222a-11eb-abef-0242ac110002",
+				//uuid: [16]byte{62, 53, 10, 92, 34, 42, 17, 235, 171, 239, 2, 66, 172, 17, 0, 2},
+			},
+			{
+				str:  "3e350a5c222a11ebabef0242ac110002",
+				uuid: "3e350a5c-222a-11eb-abef-0242ac110002",
+				//uuid: [16]byte{62, 53, 10, 92, 34, 42, 17, 235, 171, 239, 2, 66, 172, 17, 0, 2},
+			},
+		}
+
+		var srcstrs []string
+		var expects []string
+		for _, c := range cases {
+			srcstrs = append(srcstrs, c.str)
+			expects = append(expects, c.uuid)
+		}
+
+		srcVector := testutil.MakeVarcharVector(srcstrs, nil)
+		destVector := testutil.MakeUuidVector(nil, nil)
+
+		wantVec := testutil.MakeUuidVectorByString(expects, nil)
+		proc := testutil.NewProc()
+		res, err := Cast([]*vector.Vector{srcVector, destVector}, proc)
+		convey.ShouldBeNil(err)
+		compare := testutil.CompareVectors(wantVec, res)
+		convey.ShouldBeTrue(compare)
+	})
+
+	// tolerance test
+}
+
 func makeTypeVector(t types.T) *vector.Vector {
 	return &vector.Vector{
 		Col:     nil,

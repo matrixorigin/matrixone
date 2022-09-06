@@ -199,6 +199,46 @@ var (
 		vec.Col = ds
 		return vec
 	}
+
+	MakeUuidVector = func(values []types.Uuid, nsp []uint64) *vector.Vector {
+		vec := vector.New(uuidType)
+		uuids := make([]types.Uuid, len(values))
+		for _, n := range nsp {
+			nulls.Add(vec.Nsp, n)
+		}
+		for i, value := range values {
+			if nulls.Contains(vec.Nsp, uint64(i)) {
+				continue
+			}
+			uuids[i] = value
+		}
+
+		vec.Data = types.EncodeFixedSlice(uuids, uuidType.TypeSize())
+		vec.Col = uuids
+		return vec
+	}
+
+	MakeUuidVectorByString = func(values []string, nsp []uint64) *vector.Vector {
+		vec := vector.New(uuidType)
+		uuids := make([]types.Uuid, len(values))
+		for _, n := range nsp {
+			nulls.Add(vec.Nsp, n)
+		}
+		for i, value := range values {
+			if nulls.Contains(vec.Nsp, uint64(i)) {
+				continue
+			}
+			uuid, err := types.ParseUuid(value)
+			if err != nil {
+				panic(err)
+			}
+			uuids[i] = uuid
+		}
+
+		vec.Data = types.EncodeFixedSlice(uuids, uuidType.TypeSize())
+		vec.Col = uuids
+		return vec
+	}
 )
 
 // functions to make a scalar vector for test.

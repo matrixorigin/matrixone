@@ -271,6 +271,8 @@ func AppendValue(vec *vector.Vector, v any) {
 		AppendFixedValue[types.Timestamp](vec, v)
 	case types.T_datetime:
 		AppendFixedValue[types.Datetime](vec, v)
+	case types.T_uuid:
+		AppendFixedValue[types.Uuid](vec, v)
 	case types.T_char, types.T_varchar, types.T_json, types.T_blob:
 		vvals := vec.Col.(*types.Bytes)
 		offset := len(vvals.Data)
@@ -327,6 +329,9 @@ func GetValue(col *vector.Vector, row uint32) any {
 		return data[row]
 	case types.T_decimal128:
 		data := vals.([]types.Decimal128)
+		return data[row]
+	case types.T_uuid:
+		data := vals.([]types.Uuid)
 		return data[row]
 	case types.T_float32:
 		data := vals.([]float32)
@@ -389,6 +394,8 @@ func UpdateValue(col *vector.Vector, row uint32, val any) {
 		GenericUpdateFixedValue[types.Datetime](col, row, val)
 	case types.T_timestamp:
 		GenericUpdateFixedValue[types.Timestamp](col, row, val)
+	case types.T_uuid:
+		GenericUpdateFixedValue[types.Uuid](col, row, val)
 	case types.T_varchar, types.T_char, types.T_json, types.T_blob:
 		v := val.([]byte)
 		data := col.Col.(*types.Bytes)
@@ -512,7 +519,7 @@ func ApplyDeleteToVector(vec *vector.Vector, deletes *roaring.Bitmap) *vector.Ve
 	switch vec.Typ.Oid {
 	case types.T_bool, types.T_int8, types.T_int16, types.T_int32, types.T_int64,
 		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
-		types.T_decimal64, types.T_decimal128, types.T_float32, types.T_float64,
+		types.T_decimal64, types.T_decimal128, types.T_float32, types.T_float64, types.T_uuid,
 		types.T_date, types.T_datetime, types.T_timestamp:
 		vec.Col = compute.InplaceDeleteRows(vec.Col, deletesIterator)
 		deletesIterator = deletes.Iterator()
@@ -608,7 +615,7 @@ func ApplyUpdateToVector(vec *vector.Vector, mask *roaring.Bitmap, vals map[uint
 	switch vec.Typ.Oid {
 	case types.T_bool, types.T_int8, types.T_int16, types.T_int32, types.T_int64,
 		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
-		types.T_decimal64, types.T_decimal128, types.T_float32, types.T_float64,
+		types.T_decimal64, types.T_decimal128, types.T_float32, types.T_float64, types.T_uuid,
 		types.T_date, types.T_datetime, types.T_timestamp:
 		for iterator.HasNext() {
 			row := iterator.Next()
@@ -673,6 +680,8 @@ func MOToVector(v *vector.Vector, nullable bool) containers.Vector {
 		bs.Data = types.EncodeFixedSlice(v.Col.([]types.Decimal64), 8)
 	case types.T_decimal128:
 		bs.Data = types.EncodeFixedSlice(v.Col.([]types.Decimal128), 16)
+	case types.T_uuid:
+		bs.Data = types.EncodeFixedSlice(v.Col.([]types.Uuid), 16)
 	case types.T_char, types.T_varchar, types.T_json, types.T_blob:
 		vbs := v.Col.(*types.Bytes)
 		bs.Data = vbs.Data
@@ -735,6 +744,14 @@ func MOToVectorTmp(v *vector.Vector, nullable bool) containers.Vector {
 				common.OperandField("Col length is 0"))
 		} else {
 			bs.Data = types.EncodeFixedSlice(v.Col.([]int64), 8)
+		}
+	case types.T_uuid:
+		if v.Col == nil || len(v.Col.([]types.Uuid)) == 0 {
+			bs.Data = make([]byte, v.Length*16)
+			logutil.Warn("[Moengine]", common.OperationField("MOToVector"),
+				common.OperandField("Col length is 0"))
+		} else {
+			bs.Data = types.EncodeFixedSlice(v.Col.([]types.Uuid), 16)
 		}
 	case types.T_uint8:
 		if v.Col == nil || len(v.Col.([]uint8)) == 0 {
@@ -924,6 +941,8 @@ func VectorsToMO(vec containers.Vector) *vector.Vector {
 		mov.Col = types.DecodeDecimal64Slice(data)
 	case types.T_decimal128:
 		mov.Col = types.DecodeDecimal128Slice(data)
+	case types.T_uuid:
+		mov.Col = types.DecodeUuidSlice(data)
 	case types.T_tuple:
 		cnt := types.DecodeInt32(data)
 		if cnt == 0 {

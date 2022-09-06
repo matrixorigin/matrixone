@@ -52,6 +52,7 @@ func TestParseUuid(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			uuid, err := ParseUuid(c.str)
+			t.Log(uuid.ToString())
 			if err != nil {
 				t.Error(err)
 			}
@@ -169,9 +170,15 @@ func TestCompareUuid(t *testing.T) {
 		},
 		{
 			name:   "test03",
-			left:   "04ddf3f8-2a8a-11ed-99e0-000c29847904",
+			left:   "6d1b1fd5-2dbf-11ed-940f-000c29847904",
 			right:  "0d568802-2a67-11ed-99e0-000c29847904",
 			expect: 1,
+		},
+		{
+			name:   "test04",
+			left:   "04ddf3f8-2a8a-11ed-99e0-000c29847904",
+			right:  "0d568802-2a67-11ed-99e0-000c29847904",
+			expect: -1,
 		},
 	}
 
