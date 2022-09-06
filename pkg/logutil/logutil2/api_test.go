@@ -1,4 +1,4 @@
-// Copyright 2022 Matrix Origin
+// Copyright 2021 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,18 +12,19 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package logutil
+package logutil2
 
 import (
+	"context"
 	"fmt"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
-	"reflect"
 	"testing"
 )
 
 func TestLog(t *testing.T) {
 	type args struct {
+		ctx    context.Context
 		msg    string
 		fields []zap.Field
 	}
@@ -34,6 +35,7 @@ func TestLog(t *testing.T) {
 		{
 			name: "normal",
 			args: args{
+				ctx:    context.Background(),
 				msg:    "test",
 				fields: []zap.Field{zap.Int("int", 0), zap.String("string", "")},
 			},
@@ -41,39 +43,30 @@ func TestLog(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			Debug(tt.args.msg, tt.args.fields...)
-			Info(tt.args.msg, tt.args.fields...)
-			Warn(tt.args.msg, tt.args.fields...)
-			Error(tt.args.msg, tt.args.fields...)
+			Debug(tt.args.ctx, tt.args.msg, tt.args.fields...)
+			Info(tt.args.ctx, tt.args.msg, tt.args.fields...)
+			Warn(tt.args.ctx, tt.args.msg, tt.args.fields...)
+			Error(tt.args.ctx, tt.args.msg, tt.args.fields...)
 		})
 	}
 }
-
 func TestLog_panic(t *testing.T) {
 	type args struct {
+		ctx    context.Context
 		msg    string
 		fields []zap.Field
 	}
 	tests := []struct {
-		name   string
-		args   args
-		printf bool
+		name string
+		args args
 	}{
 		{
-			name: "panic",
+			name: "normal",
 			args: args{
+				ctx:    context.Background(),
 				msg:    "test",
 				fields: []zap.Field{zap.Int("int", 0), zap.String("string", "")},
 			},
-			printf: false,
-		},
-		{
-			name: "panicF",
-			args: args{
-				msg:    "test",
-				fields: []zap.Field{zap.Int("int", 0), zap.String("string", "")},
-			},
-			printf: true,
 		},
 	}
 	for _, tt := range tests {
@@ -82,17 +75,14 @@ func TestLog_panic(t *testing.T) {
 				err := recover()
 				require.Equal(t, tt.args.msg, fmt.Sprintf("%s", err))
 			}()
-			if tt.printf {
-				Panicf(tt.args.msg)
-			} else {
-				Panic(tt.args.msg, tt.args.fields...)
-			}
+			Panic(tt.args.ctx, tt.args.msg, tt.args.fields...)
 		})
 	}
 }
 
 func TestLogf(t *testing.T) {
 	type args struct {
+		ctx    context.Context
 		msg    string
 		fields []any
 	}
@@ -101,52 +91,66 @@ func TestLogf(t *testing.T) {
 		args args
 	}{
 		{
-			name: "normal",
+			name: "empty",
 			args: args{
+				ctx:    context.Background(),
 				msg:    "test",
 				fields: []any{},
 			},
 		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			Debugf(tt.args.msg, tt.args.fields...)
-			Infof(tt.args.msg, tt.args.fields...)
-			Warnf(tt.args.msg, tt.args.fields...)
-			Errorf(tt.args.msg, tt.args.fields...)
-			gl := GoettyLogger{}
-			gl.Debugf(tt.args.msg, tt.args.fields...)
-			gl.Infof(tt.args.msg, tt.args.fields...)
-			gl.Errorf(tt.args.msg, tt.args.fields...)
-			//gl.Fatalf(tt.args.msg, tt.args.fields...)
-		})
-	}
-}
-
-func TestAdjust(t *testing.T) {
-	type args struct {
-		logger  *zap.Logger
-		options []zap.Option
-	}
-	tests := []struct {
-		name string
-		args args
-		want *zap.Logger
-	}{
 		{
 			name: "normal",
 			args: args{
-				logger:  GetGlobalLogger(),
-				options: nil,
+				ctx:    context.Background(),
+				msg:    "hello %s",
+				fields: []any{"world"},
 			},
-			want: GetGlobalLogger(),
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := Adjust(tt.args.logger, tt.args.options...); !reflect.DeepEqual(got, tt.want) {
-				t.Errorf("Adjust() = %v, want %v", got, tt.want)
-			}
+			Debugf(tt.args.ctx, tt.args.msg, tt.args.fields...)
+			Infof(tt.args.ctx, tt.args.msg, tt.args.fields...)
+			Warnf(tt.args.ctx, tt.args.msg, tt.args.fields...)
+			Errorf(tt.args.ctx, tt.args.msg, tt.args.fields...)
+		})
+	}
+}
+
+func TestLogf_panic(t *testing.T) {
+	type args struct {
+		ctx    context.Context
+		msg    string
+		fields []any
+	}
+	tests := []struct {
+		name string
+		args args
+	}{
+		{
+			name: "empty",
+			args: args{
+				ctx:    context.Background(),
+				msg:    "test",
+				fields: []any{},
+			},
+		},
+		{
+			name: "normal",
+			args: args{
+				ctx:    context.Background(),
+				msg:    "hello %s",
+				fields: []any{"world"},
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			defer func() {
+				err := recover()
+				require.Equal(t, fmt.Sprintf(tt.args.msg, tt.args.fields...), fmt.Sprintf("%s", err))
+			}()
+			Panicf(tt.args.ctx, tt.args.msg, tt.args.fields...)
 		})
 	}
 }
