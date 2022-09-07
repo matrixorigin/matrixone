@@ -34,7 +34,7 @@ func NewEmptyDBMVCCNode() *DBMVCCNode {
 	}
 }
 
-func (e *DBMVCCNode) CloneAll() MVCCNodeIf {
+func (e *DBMVCCNode) CloneAll() MVCCNode {
 	n := e.cloneData()
 	// n.State = e.State
 	n.Start = e.Start
@@ -71,7 +71,7 @@ func (e *DBMVCCNode) String() string {
 }
 
 // for create drop in one txn
-func (e *DBMVCCNode) UpdateNode(vun MVCCNodeIf) {
+func (e *DBMVCCNode) UpdateNode(vun MVCCNode) {
 	un := vun.(*DBMVCCNode)
 	if e.Start != un.Start {
 		panic("logic err")
