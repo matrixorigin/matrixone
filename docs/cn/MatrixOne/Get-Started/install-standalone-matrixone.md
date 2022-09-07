@@ -37,6 +37,9 @@ Go 语言需要升级到 1.19 版本。
 
 3. 启动 MatrixOne 服务：
 
+    !!! note
+         注意，MatrixOne(预览版本) 的启动配置文件与 MatrixOne(稳定版本) 的启动配置文件不同，MatrixOne(预览版本) 的启动配置文件代码如下：
+
     ```
     ./mo-service -cfg ./etc/cn-standalone-test.toml
     ```
@@ -59,6 +62,9 @@ Go 语言需要升级到 1.19 版本。
     ```
 
 3. 启动 MatrixOne 服务：
+
+    !!! note
+         注意，MatrixOne(稳定版本) 的启动配置文件与 MatrixOne(预览版本) 的启动配置文件不同，MatrixOne(稳定版本) 的启动配置文件代码如下：
 
     ```
     ./mo-server system_vars_config.toml
