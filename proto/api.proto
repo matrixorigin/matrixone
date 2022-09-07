@@ -265,23 +265,31 @@ message Entry {
 // CatalogCkp contains information about database and tables in the system,and
 // MetadataCkp contains information about blocks.
 message Checkpoint {
+    //min_ts is the last checkpoint timestamp.
     timestamp.Timestamp min_ts = 1;
+    // max_ts is a checkpoint timestamp, namely it is the snapshot timestamp 
+    // at which a transaction dose a checkpoint for a table.
     timestamp.Timestamp max_ts = 2;
     Batch      bat   = 3;
 
 };
 // catalog checkpoint:
 // one Batch represents a table, such as : mo_databases, mo_tables, mo_columns,... etc.
-
-//message CatalogCkp {
- //   timestamp.Timestamp min_ts = 1;
-  //  timestamp.Timestamp max_ts = 2;
-   // Batch      bat   = 3;
-//};
+message CatalogCkp {
+   timestamp.Timestamp min_ts = 1;
+   timestamp.Timestamp max_ts = 2;
+    Batch      bat   = 3;
+};
 
 //metadata checkpoint:
 // Batch is a batch of block metadata for a table,  
 // one row of Batch represents a block metadata.
+message MetadataCkp {
+    timestamp.Timestamp min_ts = 1;
+    timestamp.Timestamp max_ts = 2;
+    //block metadata for a table;
+    Batch      bat = 3;
+};
 
 // block meta data :
 // type BlockMeta struct {
@@ -290,6 +298,7 @@ message Checkpoint {
 //    TableID               uint64
 //    DbID                  uint64
 //    CreatedAt, DeletedAt  timestamp.Timestamp
+//    MetaLoc points to BlockMetadata below; Deltaloc points to DeleteInfo below.
 //    MetaLoc, DeltaLoc     string
 //    StartTS, PrepareTS    timestamp.Timestamp
 //    CommitTS             timestamp.Timestamp
@@ -298,18 +307,35 @@ message Checkpoint {
 //    Flag                  uint8
 //};
 
-//message MetadataCkp {
- //   timestamp.Timestamp min_ts = 1;
-  //  timestamp.Timestamp max_ts = 2;
-    //block metadata for a table;
-   // Batch      bat = 3;
+// BlockMetadata is a detailed meta info for block.
+//type BlockMetadata struct {
+	//header  *BlockHeader
+	//columns []*ColumnMeta
+//}
+
+//type ColumnMeta struct {
+	//typ         uint8
+	//idx         uint16
+	//alg         uint8
+	//location    *Extent
+	//zoneMap     *index.ZoneMap
+	//bloomFilter *Extent
+	//checksum    uint32
+//}
+
+//type BlockHeader struct {
+	//tableId     uint64
+	//segmentId   uint64
+	//blockId     uint64
+	//columnCount uint16
+	//checksum    uint32
+//}
+
+//Deletes info for rows 
+// bat.attrs = {"rowid", "DeletedAt",...}
+// type DeleteInfo struct {
+//      bat batch.Batch
 //};
-
-
-
-
-
-
 
 
 
