@@ -5754,6 +5754,7 @@ name_confict:
 |   USER
 |   WEEK
 |   YEAR
+|   UUID
 
 interval_expr:
     INTERVAL expression time_unit

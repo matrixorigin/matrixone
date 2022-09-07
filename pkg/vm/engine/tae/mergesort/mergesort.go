@@ -16,6 +16,7 @@ package mergesort
 
 import (
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort/uuids"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -62,6 +63,8 @@ func SortBlockColumns(cols []containers.Vector, pk int) ([]uint32, error) {
 		decimal128s.Sort(cols[pk], sortedIdx)
 	case types.T_timestamp:
 		numerics.Sort[types.Timestamp](cols[pk], sortedIdx)
+	case types.T_uuid:
+		uuids.Sort(cols[pk], sortedIdx)
 	case types.T_char, types.T_json, types.T_varchar, types.T_blob:
 		varchar.Sort(cols[pk], sortedIdx)
 	default:
@@ -109,6 +112,8 @@ func MergeSortedColumn(column []containers.Vector, sortedIdx *[]uint32, fromLayo
 		ret, mapping = decimal64s.Merge(column, sortedIdx, fromLayout, toLayout)
 	case types.T_decimal128:
 		ret, mapping = decimal128s.Merge(column, sortedIdx, fromLayout, toLayout)
+	case types.T_uuid:
+		ret, mapping = uuids.Merge(column, sortedIdx, fromLayout, toLayout)
 	case types.T_timestamp:
 		ret, mapping = numerics.Merge[types.Timestamp](column, sortedIdx, fromLayout, toLayout)
 	case types.T_char, types.T_json, types.T_varchar, types.T_blob:
