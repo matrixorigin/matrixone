@@ -86,7 +86,9 @@ func makeIsAndIsNotTestVectors(left []bool, right bool, isScalar bool) []*vector
 	vec := make([]*vector.Vector, 2)
 	if left != nil {
 		vec[0] = testutil.MakeBoolVector(left)
-		vec[0].IsConst = isScalar
+		if isScalar {
+			vec[0].MakeScalar(1)
+		}
 	} else {
 		vec[0] = testutil.MakeScalarNull(types.T_bool, 0)
 	}
