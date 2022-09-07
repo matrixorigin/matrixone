@@ -15,7 +15,7 @@
 package catalog
 
 func ActiveWithNoTxnFilter(be *MetaBaseEntry) bool {
-	return !be.IsDroppedCommitted() && !be.InTxnOrRollbacked()
+	return !be.IsDroppedCommitted() && !be.IsCreating()
 }
 
 func AppendableBlkFilter(be *BlockEntry) bool {
