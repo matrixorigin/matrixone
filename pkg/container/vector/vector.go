@@ -48,7 +48,7 @@ type Vector struct {
 	area []byte
 
 	// some attributes for const vector (a vector with a lot of rows of a same const value)
-	IsConst bool
+	isConst bool
 	length  int
 }
 
@@ -57,14 +57,14 @@ func (v *Vector) Length() int {
 }
 
 func (v *Vector) ScalarLength() int {
-	if !v.IsConst {
+	if !v.isConst {
 		panic("Getting scalar length of non const vector.")
 	}
 	return v.length
 }
 
 func (v *Vector) SetScalarLength(length int) {
-	if !v.IsConst {
+	if !v.isConst {
 		panic("Setting length to non const vector.")
 	}
 	v.length = length
@@ -77,7 +77,7 @@ func DecodeFixedCol[T types.FixedSizeT](v *Vector, sz int) []T {
 // GetFixedVector decode data and return decoded []T.
 // For const/scalar vector we expand and return newly allocated slice.
 func GetFixedVectorValues[T types.FixedSizeT](v *Vector) []T {
-	if v.IsConst {
+	if v.isConst {
 		cols := MustTCols[T](v)
 		vs := make([]T, v.Length())
 		for i := range vs {
@@ -89,7 +89,7 @@ func GetFixedVectorValues[T types.FixedSizeT](v *Vector) []T {
 }
 
 func GetStrVectorValues(v *Vector) []string {
-	if v.IsConst {
+	if v.isConst {
 		cols := MustTCols[types.Varlena](v)
 		ss := cols[0].GetString(v.area)
 		vs := make([]string, v.Length())
@@ -102,7 +102,7 @@ func GetStrVectorValues(v *Vector) []string {
 }
 
 func GetBytesVectorValues(v *Vector) [][]byte {
-	if v.IsConst {
+	if v.isConst {
 		cols := MustTCols[types.Varlena](v)
 		ss := cols[0].GetByteSlice(v.area)
 		vs := make([][]byte, v.Length())
@@ -167,7 +167,7 @@ func (v *Vector) getRawValueAt(idx int64) []byte {
 func (v *Vector) MarshalBinary() ([]byte, error) {
 	var buf bytes.Buffer
 
-	if v.IsConst {
+	if v.isConst {
 		i64 := int64(v.ScalarLength())
 		buf.WriteByte(1)
 		buf.Write(types.EncodeInt64(&i64))
@@ -187,7 +187,7 @@ func (v *Vector) MarshalBinary() ([]byte, error) {
 
 func (v *Vector) UnmarshalBinary(data []byte) error {
 	if data[0] == 1 {
-		v.IsConst = true
+		v.isConst = true
 		data = data[1:]
 		v.SetScalarLength(int(types.DecodeInt64(data[:8])))
 		data = data[8:]
@@ -273,7 +273,7 @@ func (v *Vector) FillDefaultValue() {
 }
 
 func (v *Vector) ToConst(row int) *Vector {
-	if v.IsConst {
+	if v.isConst {
 		return v
 	}
 	switch v.Typ.Oid {
@@ -317,32 +317,14 @@ func (v *Vector) ToConst(row int) *Vector {
 		if nulls.Contains(v.Nsp, uint64(row)) {
 			return NewConstNull(v.GetType(), 1)
 		}
-
-		vcol := v.Col.([]types.Varlena)
-		if vcol[row].IsSmall() {
-			return &Vector{
-				Nsp:     nil,
-				IsConst: true,
-				Typ:     v.Typ,
-				Col:     []types.Varlena{vcol[row]},
-			}
-		} else {
-			bs := vcol[row].GetByteSlice(v.Data)
-			va, area, _ := types.BuildVarlena(bs, nil, nil)
-			return &Vector{
-				Nsp:     nil,
-				IsConst: true,
-				Typ:     v.Typ,
-				Col:     []types.Varlena{va},
-				area:    area,
-			}
-		}
+		bs := v.GetBytes(int64(row))
+		return NewConstBytes(v.Typ, 1, bs)
 	}
 	return nil
 }
 
 func (v *Vector) ConstExpand(m *mheap.Mheap) *Vector {
-	if !v.IsConst {
+	if !v.isConst {
 		return v
 	}
 	if v.IsScalarNull() {
@@ -391,7 +373,7 @@ func (v *Vector) ConstExpand(m *mheap.Mheap) *Vector {
 	case types.T_char, types.T_varchar, types.T_json, types.T_blob:
 		expandVector[types.Varlena](v, types.VarlenaSize, m)
 	}
-	v.IsConst = false
+	v.isConst = false
 	return v
 }
 
@@ -409,16 +391,12 @@ func fillDefaultValue[T types.FixedSizeT](v *Vector) {
 	v.Col = col
 }
 
-func toConstVector[T any](v *Vector, row int) *Vector {
-	nsp := new(nulls.Nulls)
+func toConstVector[T types.FixedSizeT](v *Vector, row int) *Vector {
 	if nulls.Contains(v.Nsp, uint64(row)) {
-		nulls.Add(nsp, 0)
-	}
-	return &Vector{
-		Nsp:     nsp,
-		IsConst: true,
-		Typ:     v.Typ,
-		Col:     []T{v.Col.([]T)[row]},
+		return NewConstNull(v.Typ, 1)
+	} else {
+		val := GetValueAt[T](v, int64(row))
+		return NewConstFixed(v.Typ, 1, val)
 	}
 }
 
@@ -488,7 +466,7 @@ func NewWithNspSize(typ types.Type, n int64) *Vector {
 
 func NewConst(typ types.Type, length int) *Vector {
 	v := New(typ)
-	v.IsConst = true
+	v.isConst = true
 	v.initConst(typ)
 	v.length = length
 	return v
@@ -496,7 +474,7 @@ func NewConst(typ types.Type, length int) *Vector {
 
 func NewConstNull(typ types.Type, length int) *Vector {
 	v := New(typ)
-	v.IsConst = true
+	v.isConst = true
 	v.initConst(typ)
 	nulls.Add(v.Nsp, 0)
 	v.length = length
@@ -572,7 +550,24 @@ func (v *Vector) initConst(typ types.Type) {
 //
 //	a + 1, and 1's vector will return true
 func (v *Vector) IsScalar() bool {
-	return v.IsConst
+	return v.isConst
+}
+
+// Scalar and Const are synonym.
+func (v *Vector) IsConst() bool {
+	return v.isConst
+}
+
+func (v *Vector) MakeScalar(length int) {
+	if v.isConst {
+		v.length = length
+	} else {
+		if v.Length() != 1 {
+			panic("make scalar called on a vec")
+		}
+		v.isConst = true
+		v.length = length
+	}
 }
 
 // IsScalarNull return true if the vector means a scalar Null.
@@ -580,7 +575,7 @@ func (v *Vector) IsScalar() bool {
 //
 //	a + Null, and the vector of right part will return true
 func (v *Vector) IsScalarNull() bool {
-	return v.IsConst && v.Nsp != nil && nulls.Contains(v.Nsp, 0)
+	return v.isConst && v.Nsp != nil && nulls.Contains(v.Nsp, 0)
 }
 
 // XXX aliases ...
@@ -739,7 +734,7 @@ func PreAllocType(t types.Type, rows, cap int, m *mheap.Mheap) *Vector {
 
 // XXX Confusing as hell.
 func Length(v *Vector) int {
-	if !v.IsConst {
+	if !v.isConst {
 		return reflect.ValueOf(v.Col).Len()
 	}
 	return v.ScalarLength()
