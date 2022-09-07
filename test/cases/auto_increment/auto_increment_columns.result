@@ -1,0 +1,599 @@
+drop table if exists t1;
+create table t1(
+a bigint primary key auto_increment,
+b varchar(10)
+);
+show create table t1;
+Table    Create Table
+t1    CREATE TABLE `t1` (\n`a` BIGINT DEFAULT NULL,\n`b` VARCHAR(10) DEFAULT NULL,\nPRIMARY KEY (`a`)\n)
+insert into t1(b) values ('bbb');
+insert into t1 values (1, 'ccc');
+tae data: duplicate
+insert into t1 values (3, 'ccc');
+insert into t1(b) values ('bbb1111');
+select * from t1 order by a;
+a    b
+1    bbb
+3    ccc
+4    bbb1111
+insert into t1 values (2, 'aaaa1111');
+select * from t1 order by a;
+a    b
+1    bbb
+2    aaaa1111
+3    ccc
+4    bbb1111
+insert into t1(b) values ('aaaa1111');
+select * from t1 order by a;
+a    b
+1    bbb
+2    aaaa1111
+3    ccc
+4    bbb1111
+5    aaaa1111
+insert into t1 values (100, 'xxxx');
+insert into t1(b) values ('xxxx');
+select * from t1 order by a;
+a    b
+1    bbb
+2    aaaa1111
+3    ccc
+4    bbb1111
+5    aaaa1111
+100    xxxx
+101    xxxx
+insert into t1 values (0, 'xxxx');
+insert into t1(b) values ('xxxx');
+insert into t1 values (-1000, 'yyy');
+select * from t1 order by a;
+a    b
+-1000    yyy
+0    xxxx
+1    bbb
+2    aaaa1111
+3    ccc
+4    bbb1111
+5    aaaa1111
+100    xxxx
+101    xxxx
+102    xxxx
+insert into t1 values ('-2000', 'yyy');
+insert into t1 values ('200', 'yyy');
+insert into t1 values ('0', 'yyy');
+tae data: duplicate
+select * from t1;
+a    b
+1    bbb
+3    ccc
+4    bbb1111
+2    aaaa1111
+5    aaaa1111
+100    xxxx
+101    xxxx
+0    xxxx
+102    xxxx
+-1000    yyy
+-2000    yyy
+200    yyy
+insert into t1 values (NULL, 'yyy')
+select * from t4 order by a;
+You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at position 43 near 'select'; 
+update t1 set a=0 where b='ccc';
+tae data: duplicate
+update t1 set a='200' where b='ccc';
+tae data: duplicate
+insert into t1(b) values ('xefrsdfgds');
+select * from t1 order by a;
+a    b
+-2000    yyy
+-1000    yyy
+0    xxxx
+1    bbb
+2    aaaa1111
+3    ccc
+4    bbb1111
+5    aaaa1111
+100    xxxx
+101    xxxx
+102    xxxx
+200    yyy
+201    xefrsdfgds
+insert into t1 values (-9223372036854775808,'xefrsdfgds');
+insert into t1 values (-9223372036854775809,'xefrsdfgds');
+Data truncation: Incorrect BIGINT value: '-9223372036854775809' for column 'a' at row 0
+insert into t1 values (9223372036854775807,'xefrsdfgds');
+insert into t1 values (9223372036854775808,'xefrsdfgds');
+Data truncation: Incorrect BIGINT value: '9223372036854775808' for column 'a' at row 0
+insert into t1(b) values ('eeeee');
+auto_incrment column constant value overflows bigint
+drop table t1;
+drop table if exists t2;
+create table t2 (
+c int primary key auto_increment,
+d varchar(10)
+);
+insert into t2 values (-2147483648, 'aaa');
+select * from t2 order by c;
+c    d
+-2147483648    aaa
+insert into t2 values (-2147483649, 'aaa');
+insert into t2(d) values ('1111');
+auto_incrment column 'c' constant value 2147483648 overflows int
+select * from t2 order by c;
+c    d
+-2147483648    aaa
+2147483647    aaa
+insert into t2 values(2147483647, 'bbb');
+insert into t2 values(2147483648, 'bbb');
+tae data: duplicate
+insert into t2(d) values ('22222');
+auto_incrment column 'c' constant value 2147483648 overflows int
+select * from t2 order by c;
+c    d
+-2147483648    aaa
+2147483647    bbb
+drop table t2;
+drop table if exists t3;
+create table t3(
+a int primary key auto_increment,
+b varchar(10)
+);
+insert into t3 values (-19, 'aaa');
+insert into t3(b) values ('bbb');
+select * from t3 order by a;
+a    b
+-19    aaa
+1    bbb
+delete from t3 where b='bbb';
+insert into t3(b) values ('bbb');
+select * from t3 order by a;
+a    b
+-19    aaa
+2    bbb
+insert into t3 values (1, 'aaa');
+update t3 set a=10 where b='aaa';
+tae data: duplicate
+update t3 set a=10 where b='bbb';
+select * from t3 order by a;
+a    b
+-19    aaa
+1    aaa
+10    bbb
+insert into t3 values (2,'ccc');
+select * from t3 order by a;
+a    b
+-19    aaa
+1    aaa
+2    ccc
+10    bbb
+delete from t3;
+insert into t3(b) values ('bbb');
+GetIndex from auto_increment table fail
+select * from t3 order by a;
+a    b
+drop table t3;
+drop table if exists t4;
+create table t4(
+a bigint  auto_increment,
+b varchar(10)
+);
+insert into t4(b) values ('bbb');
+insert into t4 values (1, 'ccc');
+insert into t4 values (3, 'ccc');
+insert into t4(b) values ('bbb1111');
+select * from t4 order by a;
+a    b
+1    bbb
+1    ccc
+3    ccc
+4    bbb1111
+insert into t4 values (2, 'aaaa1111');
+select * from t4 order by a;
+a    b
+1    bbb
+1    ccc
+2    aaaa1111
+3    ccc
+4    bbb1111
+insert into t4(b) values ('aaaa1111');
+select * from t4 order by a;
+a    b
+1    bbb
+1    ccc
+2    aaaa1111
+3    ccc
+4    bbb1111
+5    aaaa1111
+insert into t4 values (100, 'xxxx');
+insert into t4(b) values ('xxxx');
+select * from t4 order by a;
+a    b
+1    bbb
+1    ccc
+2    aaaa1111
+3    ccc
+4    bbb1111
+5    aaaa1111
+100    xxxx
+101    xxxx
+insert into t4 values (0, 'xxxx');
+insert into t4(b) values ('xxxx');
+insert into t4 values (-1000, 'yyy');
+select * from t4 order by a;
+a    b
+-1000    yyy
+0    xxxx
+1    bbb
+1    ccc
+2    aaaa1111
+3    ccc
+4    bbb1111
+5    aaaa1111
+100    xxxx
+101    xxxx
+102    xxxx
+insert into t4 values ('-2000', 'yyy');
+insert into t4 values ('200', 'yyy');
+insert into t4 values ('0', 'yyy');
+select * from t4 order by a;
+a    b
+-2000    yyy
+-1000    yyy
+0    yyy
+0    xxxx
+1    ccc
+1    bbb
+2    aaaa1111
+3    ccc
+4    bbb1111
+5    aaaa1111
+100    xxxx
+101    xxxx
+102    xxxx
+200    yyy
+insert into t4 values (NULL, 'yyy');
+select * from t4 order by a;
+a    b
+-2000    yyy
+-1000    yyy
+0    yyy
+0    xxxx
+1    ccc
+1    bbb
+2    aaaa1111
+3    ccc
+4    bbb1111
+5    aaaa1111
+100    xxxx
+101    xxxx
+102    xxxx
+200    yyy
+201    yyy
+update t4 set a=0 where b='ccc';
+update t4 set a='200' where b='ccc';
+insert into t4(b) values ('xefrsdfgds');
+select * from t4 order by a;
+a    b
+-2000    yyy
+-1000    yyy
+0    xxxx
+0    yyy
+1    bbb
+2    aaaa1111
+4    bbb1111
+5    aaaa1111
+100    xxxx
+101    xxxx
+102    xxxx
+200    yyy
+200    ccc
+200    ccc
+201    xefrsdfgds
+insert into t4 values (-9223372036854775808,'xefrsdfgds');
+insert into t4 values (-9223372036854775809,'xefrsdfgds');
+insert into t4 values (9223372036854775807,'xefrsdfgds');
+insert into t4 values (9223372036854775808,'xefrsdfgds');
+Data truncation: Incorrect BIGINT value: '9223372036854775808' for column 'a' at row 0
+insert into t4(b) values ('eeeee');
+auto_incrment column constant value overflows bigint
+drop table t4;
+drop table if exists t5;
+create table t5 (
+c int auto_increment,
+d varchar(10)
+);
+insert into t5 values (-2147483648, 'aaa');
+select * from t5 order by c;
+c    d
+-2147483648    aaa
+insert into t5 values (-2147483649, 'aaa');
+insert into t5(d) values ('1111');
+auto_incrment column 'c' constant value 2147483648 overflows int
+select * from t5 order by c;
+c    d
+-2147483648    aaa
+2147483647    aaa
+insert into t5 values(2147483647, 'bbb');
+insert into t5 values(2147483648, 'bbb');
+select * from t5 order by c;
+c    d
+-2147483648    aaa
+2147483647    bbb
+insert into t5(d) values ('22222');
+auto_incrment column 'c' constant value 2147483648 overflows int
+select * from t5 order by c;
+c    d
+-2147483648    aaa
+2147483647    bbb
+drop table t5;
+drop table if exists t6;
+create table t6(
+a int primary key auto_increment,
+b bigint auto_increment,
+c int auto_increment,
+d int auto_increment,
+e bigint auto_increment
+);
+show create table t1;
+table 't1' doesn't exist
+insert into t6 values (),(),(),();
+select * from t6 order by a;
+a    b    c    d    e
+1    1    1    1    1
+2    2    2    2    2
+3    3    3    3    3
+4    4    4    4    4
+insert into t6 values (NULL, NULL, NULL, NULL, NULL);
+select * from t6 order by a;
+a    b    c    d    e
+1    1    1    1    1
+2    2    2    2    2
+3    3    3    3    3
+4    4    4    4    4
+5    5    5    5    5
+insert into t6(b,c,d) values (NULL,NULL,NULL);
+select * from t6 order by a;
+a    b    c    d    e
+1    1    1    1    1
+2    2    2    2    2
+3    3    3    3    3
+4    4    4    4    4
+5    5    5    5    5
+6    6    6    6    6
+insert into t6(a,b) values (100, 400);
+select * from t6 order by a;
+a    b    c    d    e
+1    1    1    1    1
+2    2    2    2    2
+3    3    3    3    3
+4    4    4    4    4
+5    5    5    5    5
+6    6    6    6    6
+100    400    7    7    7
+insert into t6(c,d,e) values (200, 200, 200);
+select * from t6;
+a    b    c    d    e
+1    1    1    1    1
+2    2    2    2    2
+3    3    3    3    3
+4    4    4    4    4
+5    5    5    5    5
+6    6    6    6    6
+100    400    7    7    7
+101    401    200    200    200
+insert into t6(c,d,e) values (200, 400, 600);
+select * from t6;
+a    b    c    d    e
+1    1    1    1    1
+2    2    2    2    2
+3    3    3    3    3
+4    4    4    4    4
+5    5    5    5    5
+6    6    6    6    6
+100    400    7    7    7
+101    401    200    200    200
+102    402    200    400    600
+insert into t6(a,b) values (100, 400);
+tae data: duplicate
+select * from t6 order by a;
+a    b    c    d    e
+1    1    1    1    1
+2    2    2    2    2
+3    3    3    3    3
+4    4    4    4    4
+5    5    5    5    5
+6    6    6    6    6
+100    400    7    7    7
+101    401    200    200    200
+102    402    200    400    600
+insert into t6 values ('0','0','0','0','0');
+select * from t6 order by a;
+a    b    c    d    e
+0    0    0    0    0
+1    1    1    1    1
+2    2    2    2    2
+3    3    3    3    3
+4    4    4    4    4
+5    5    5    5    5
+6    6    6    6    6
+100    400    7    7    7
+101    401    200    200    200
+102    402    200    400    600
+insert into t6 values ('a','a','a','a','a');
+Data truncation: Incorrect INT value: 'a' for column 'a' at row 0
+select * from t6 order by a;
+a    b    c    d    e
+0    0    0    0    0
+1    1    1    1    1
+2    2    2    2    2
+3    3    3    3    3
+4    4    4    4    4
+5    5    5    5    5
+6    6    6    6    6
+100    400    7    7    7
+101    401    200    200    200
+102    402    200    400    600
+insert into t6 values ('-1',0,0,0,0);
+select * from t6 order by a;
+a    b    c    d    e
+-1    0    0    0    0
+0    0    0    0    0
+1    1    1    1    1
+2    2    2    2    2
+3    3    3    3    3
+4    4    4    4    4
+5    5    5    5    5
+6    6    6    6    6
+100    400    7    7    7
+101    401    200    200    200
+102    402    200    400    600
+drop table t6;
+drop table if exists t8;
+create table t8(
+a int auto_increment primary key,
+b int auto_increment
+);
+drop table if exists t9;
+create table t9(
+c int auto_increment primary key,
+d int auto_increment
+);
+insert into t8 values (),();
+select * from t8 order by a;
+a    b
+1    1
+2    2
+insert into t9 values (),();
+select * from t9 order by c;
+c    d
+1    1
+2    2
+insert into t8(a) values (19);
+select * from t8 order by a;
+a    b
+1    1
+2    2
+19    3
+insert into t9 (c) values (19);
+select * from t9 order by c;
+c    d
+1    1
+2    2
+19    3
+insert into t8 values (),();
+select * from t8 order by a;
+a    b
+1    1
+2    2
+19    3
+20    4
+21    5
+insert into t9 values (),();
+select * from t9 order by c;
+c    d
+1    1
+2    2
+19    3
+20    4
+21    5
+insert into t8(b) values (1);
+select * from t8 order by a;
+a    b
+1    1
+2    2
+19    3
+20    4
+21    5
+22    1
+insert into t9 (d) values (1);
+select * from t9 order by c;
+c    d
+1    1
+2    2
+19    3
+20    4
+21    5
+22    1
+insert into t8(a) values (1);
+tae data: duplicate
+select * from t8 order by a;
+a    b
+1    1
+2    2
+19    3
+20    4
+21    5
+22    1
+insert into t9 (c) values (1);
+tae data: duplicate
+select * from t9 order by c;
+c    d
+1    1
+2    2
+19    3
+20    4
+21    5
+22    1
+drop table t8;
+drop table t9;
+drop table if exists t10;
+create table t10(
+a int auto_increment primary key,
+b int auto_increment
+);
+insert into t10 values (10, 10);
+insert into t10 values (),(),();
+select * from t10 order by a;
+a    b
+10    10
+11    11
+12    12
+13    13
+truncate table t10;
+You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at position 9 near 'truncate'; 
+insert into t10 values ();
+select * from t10 order by a;
+a    b
+10    10
+11    11
+12    12
+13    13
+14    14
+drop table t10;
+drop table if exists t11;
+create table t11(
+a int primary key auto_increment,
+b bigint auto_increment,
+c varchar(25)
+);
+load data infile '$resources/auto_increment_columns/auto_increment_1.csv' into table t11;
+Column 'a' cannot be null
+select * from t11 order by a;
+a    b    c
+drop table t11;
+drop table if exists t12;
+create table t12(
+a int primary key auto_increment,
+b bigint auto_increment,
+c varchar(25)
+);
+load data infile '$resources/auto_increment_columns/auto_increment_2.csv' into table t12;
+Column 'a' cannot be null
+select * from t12 order by a;
+a    b    c
+drop table t12;
+drop table if exists t13;
+create table t13(
+a int primary key auto_increment,
+b bigint auto_increment,
+c varchar(25)
+);
+load data infile '$resources/auto_increment_columns/auto_increment_3.csv' into table t13;
+select * from t13 order by a;
+a    b    c
+1    1    '你好'
+2    3    'hello'
+4    4    'world'
+5    5    'ccc'
+6    6    '%%'
+drop table t13;

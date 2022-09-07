@@ -29,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/toml"
 
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
+	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"go.uber.org/zap"
 )
 
@@ -79,7 +80,7 @@ type Config struct {
 		BatchSize int64 `toml:"batch-size"`
 	}
 
-	//parameters for the frontend
+	// Frontend parameters for the frontend
 	Frontend config.FrontendParameters `toml:"frontend"`
 
 	// HAKeeper configuration
@@ -134,4 +135,5 @@ type service struct {
 	_txnClient             client.TxnClient
 	metadataFS             fileservice.ReplaceableFileService
 	fileService            fileservice.FileService
+	stopper                *stopper.Stopper
 }

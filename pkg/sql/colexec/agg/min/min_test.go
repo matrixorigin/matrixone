@@ -415,25 +415,13 @@ func TestDiscincStrlMin(t *testing.T) {
 func MakeDecimal128Arr(input []int64) []types.Decimal128 {
 	ret := make([]types.Decimal128, len(input))
 	for i, v := range input {
-		ret[i] = types.InitDecimal128(v)
+		d, _ := types.InitDecimal128(v, 64)
+		ret[i] = d
 	}
 
 	return ret
 }
-func makeBytes(values []string) *types.Bytes {
-	next := uint32(0)
-	bs := &types.Bytes{
-		Lengths: make([]uint32, len(values)),
-		Offsets: make([]uint32, len(values)),
-	}
-	for i := range values {
-		s := values[i]
-		l := uint32(len(s))
-		bs.Data = append(bs.Data, []byte(s)...)
-		bs.Lengths[i] = l
-		bs.Offsets[i] = next
-		next += l
-	}
 
-	return bs
+func makeBytes(values []string) []string {
+	return values
 }

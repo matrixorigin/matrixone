@@ -133,13 +133,14 @@ func TestDist(t *testing.T) {
 
 func TestDecimalDist(t *testing.T) {
 	inputType := types.New(types.T_decimal64, 0, 0, 0)
-	variance1 := New2()
-	variance2 := New2()
-	variance3 := New2()
+	outputType := types.New(types.T_decimal128, 0, 0, 0)
+	variance1 := NewVD64()
+	variance2 := NewVD64()
+	variance3 := NewVD64()
 	m := mheap.New(guest.New(1<<30, host.New(1<<30)))
 	vec := testutil.NewVector(Rows, inputType, m, false, nil)
 	{
-		agg := agg.NewUnaryDistAgg(true, types.New(types.T_decimal64, 0, 0, 0), types.New(types.T_float64, 0, 0, 0), variance1.Grows, variance1.Eval, variance1.Merge, variance1.Fill)
+		agg := agg.NewUnaryDistAgg(true, inputType, outputType, variance1.Grows, variance1.Eval, variance1.Merge, variance1.Fill)
 		err := agg.Grows(1, m)
 		require.NoError(t, err)
 		for i := 0; i < Rows; i++ {
@@ -147,17 +148,18 @@ func TestDecimalDist(t *testing.T) {
 		}
 		v, err := agg.Eval(m)
 		require.NoError(t, err)
-		require.Equal(t, []float64{8.25}, vector.GetColumn[float64](v))
+		d, _ := types.Decimal128_FromFloat64(8.25, 64, 4)
+		require.Equal(t, []types.Decimal128{d}, vector.GetColumn[types.Decimal128](v))
 		v.Free(m)
 	}
 	{
-		agg0 := agg.NewUnaryDistAgg(true, types.New(types.T_decimal64, 0, 0, 0), types.New(types.T_float64, 0, 0, 0), variance2.Grows, variance2.Eval, variance2.Merge, variance2.Fill)
+		agg0 := agg.NewUnaryDistAgg(true, inputType, outputType, variance2.Grows, variance2.Eval, variance2.Merge, variance2.Fill)
 		err := agg0.Grows(1, m)
 		require.NoError(t, err)
 		for i := 0; i < Rows; i++ {
 			agg0.Fill(0, int64(i), 1, []*vector.Vector{vec})
 		}
-		agg1 := agg.NewUnaryDistAgg(true, types.New(types.T_decimal64, 0, 0, 0), types.New(types.T_float64, 0, 0, 0), variance3.Grows, variance3.Eval, variance3.Merge, variance3.Fill)
+		agg1 := agg.NewUnaryDistAgg(true, inputType, outputType, variance3.Grows, variance3.Eval, variance3.Merge, variance3.Fill)
 		err = agg1.Grows(1, m)
 		require.NoError(t, err)
 		for i := 0; i < Rows; i++ {
@@ -167,13 +169,15 @@ func TestDecimalDist(t *testing.T) {
 		{
 			v, err := agg0.Eval(m)
 			require.NoError(t, err)
-			require.Equal(t, []float64{8.25}, vector.GetColumn[float64](v))
+			d, _ := types.Decimal128_FromFloat64(8.25, 64, 4)
+			require.Equal(t, []types.Decimal128{d}, vector.GetColumn[types.Decimal128](v))
 			v.Free(m)
 		}
 		{
 			v, err := agg1.Eval(m)
 			require.NoError(t, err)
-			require.Equal(t, []float64{8.25}, vector.GetColumn[float64](v))
+			d, _ := types.Decimal128_FromFloat64(8.25, 64, 4)
+			require.Equal(t, []types.Decimal128{d}, vector.GetColumn[types.Decimal128](v))
 			v.Free(m)
 		}
 	}

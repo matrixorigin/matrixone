@@ -17,6 +17,7 @@ package unary
 import (
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/smartystreets/goconvey/convey"
@@ -81,8 +82,8 @@ func TestYearFunction(t *testing.T) {
 	})
 
 	convey.Convey("DateToYearCaseScalarNull", t, func() {
-		inVector := testutil.MakeScalarNull(10)
-		wantVector := testutil.MakeScalarNull(10)
+		inVector := testutil.MakeScalarNull(types.T_date, 10)
+		wantVector := testutil.MakeScalarNull(types.T_int64, 10)
 		proc := testutil.NewProc()
 		res, err := DateToYear([]*vector.Vector{inVector}, proc)
 		convey.So(err, convey.ShouldBeNil)
@@ -147,8 +148,8 @@ func TestYearFunction(t *testing.T) {
 	})
 
 	convey.Convey("DatetimeToYearCaseScalarNull", t, func() {
-		inVector := testutil.MakeScalarNull(10)
-		wantVector := testutil.MakeScalarNull(10)
+		inVector := testutil.MakeScalarNull(types.T_datetime, 10)
+		wantVector := testutil.MakeScalarNull(types.T_int64, 10)
 		proc := testutil.NewProc()
 		res, err := DatetimeToYear([]*vector.Vector{inVector}, proc)
 		convey.So(err, convey.ShouldBeNil)
@@ -189,7 +190,6 @@ func TestYearFunction(t *testing.T) {
 		}
 
 		inVector := testutil.MakeVarcharVector(inStrs, nil)
-		inVector.Length = 4
 		wantVector := testutil.MakeInt64Vector(wantInt64, nil)
 		proc := testutil.NewProc()
 		res, err := DateStringToYear([]*vector.Vector{inVector}, proc)
@@ -219,8 +219,8 @@ func TestYearFunction(t *testing.T) {
 	})
 
 	convey.Convey("DateStringToYearCaseScalarNull", t, func() {
-		inVector := testutil.MakeScalarNull(10)
-		wantVector := testutil.MakeScalarNull(10)
+		inVector := testutil.MakeScalarNull(types.T_char, 10)
+		wantVector := testutil.MakeScalarNull(types.T_int64, 10)
 		proc := testutil.NewProc()
 		res, err := DateStringToYear([]*vector.Vector{inVector}, proc)
 		convey.So(err, convey.ShouldBeNil)

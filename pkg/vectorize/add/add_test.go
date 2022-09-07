@@ -79,7 +79,8 @@ func TestDec64(t *testing.T) {
 
 	res := vector.MustTCols[types.Decimal64](cv)
 	for i := 0; i < 10; i++ {
-		if !res[i].Eq(types.Decimal64_FromInt64(as[i] + bs[i])) {
+		d, _ := types.Decimal64_FromInt64(as[i]+bs[i], 64)
+		if !res[i].Eq(d) {
 			t.Fatalf("decimal64 add wrong result")
 		}
 	}
@@ -105,7 +106,8 @@ func TestDec128(t *testing.T) {
 
 	res := vector.MustTCols[types.Decimal128](cv)
 	for i := 0; i < 10; i++ {
-		if !res[i].Eq(types.Decimal128_FromInt64(as[i] + bs[i])) {
+		d, _ := types.Decimal128_FromInt64(as[i]+bs[i], 64)
+		if !res[i].Eq(d) {
 			t.Fatalf("decimal128 add wrong result")
 		}
 	}
@@ -131,7 +133,8 @@ func TestDec64OfOppNumber(t *testing.T) {
 
 	res := vector.MustTCols[types.Decimal64](cv)
 	for i := 0; i < 10; i++ {
-		if !res[i].Eq(types.Decimal64_FromInt64(as[i] + bs[i])) {
+		d, _ := types.Decimal64_FromInt64(as[i]+bs[i], 64)
+		if !res[i].Eq(d) {
 			t.Fatalf("decimal64 add wrong result")
 		}
 	}
@@ -157,7 +160,8 @@ func TestDec128OfOppNumber(t *testing.T) {
 
 	res := vector.MustTCols[types.Decimal128](cv)
 	for i := 0; i < 10; i++ {
-		if !res[i].Eq(types.Decimal128_FromInt64(as[i] + bs[i])) {
+		d, _ := types.Decimal128_FromInt64(as[i]+bs[i], 64)
+		if !res[i].Eq(d) {
 			t.Fatalf("decimal128 add wrong result")
 		}
 	}

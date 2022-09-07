@@ -199,14 +199,23 @@ func MockVector(t types.Type, rows int, unique, nullable bool, provider Vector) 
 		}
 	case types.T_decimal64:
 		for i := int32(1); i <= int32(rows); i++ {
-			d, _ := types.InitDecimal64UsingUint(common.NextGlobalSeqNum(), 64)
+			d, _ := types.InitDecimal64UsingUint(common.NextGlobalSeqNum(), 64, 0)
 			vec.Append(d)
 		}
 	case types.T_decimal128:
 		for i := int32(1); i <= int32(rows); i++ {
-			d, _ := types.InitDecimal128UsingUint(common.NextGlobalSeqNum(), 64)
+			d, _ := types.InitDecimal128UsingUint(common.NextGlobalSeqNum(), 64, 0)
 			vec.Append(d)
 		}
+	case types.T_TS:
+		for i := int32(1); i <= int32(rows); i++ {
+			vec.Append(types.BuildTS(int64(i+1), uint32(i%16)))
+		}
+	case types.T_Rowid:
+		for i := int32(1); i <= int32(rows); i++ {
+			vec.Append(types.BuildRowid(int64(i+1), int64(i)))
+		}
+
 	default:
 		panic("not supported")
 	}
@@ -266,12 +275,12 @@ func MockVector2(typ types.Type, rows int, offset int) Vector {
 		}
 	case types.T_decimal64:
 		for i := 0; i < rows; i++ {
-			d, _ := types.InitDecimal64(int64(i + offset), 64)
+			d, _ := types.InitDecimal64(int64(i+offset), 64, 0)
 			vec.Append(d)
 		}
 	case types.T_decimal128:
 		for i := 0; i < rows; i++ {
-			d, _ := types.InitDecimal128(int64(i + offset), 64)
+			d, _ := types.InitDecimal128(int64(i+offset), 64, 0)
 			vec.Append(d)
 		}
 	case types.T_timestamp:

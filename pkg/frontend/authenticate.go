@@ -17,15 +17,16 @@ package frontend
 import (
 	"context"
 	"fmt"
+	"math/rand"
+	"strings"
+	"time"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/moengine"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
-	"math/rand"
-	"strings"
-	"time"
 )
 
 type TenantInfo struct {
@@ -991,7 +992,7 @@ func createTablesInMoCatalogOfGeneralTenant(ctx context.Context, tenant *TenantI
 	if ca.Comment.Exist {
 		comment = ca.Comment.Comment
 	}
-	newTenantID := rand.Uint32()
+	newTenantID := uint32(rand.Int31())
 	initMoAccount = fmt.Sprintf(initMoAccountFormat, newTenantID, ca.Name, sysAccountStatus, types.CurrentTimestamp().String2(time.UTC, 0), comment)
 
 	insertIntoMoAccountSqlIdx := len(initDataSqls)
@@ -1032,7 +1033,7 @@ func createTablesInMoCatalogOfGeneralTenant(ctx context.Context, tenant *TenantI
 			status = "suspend"
 		}
 	}
-	newUserId := rand.Uint32()
+	newUserId := uint32(rand.Int31())
 	initMoUser1 := fmt.Sprintf(initMoUserFormat, newUserId, rootHost, name, password, status,
 		types.CurrentTimestamp().String2(time.UTC, 0), rootExpiredTime, rootLoginType,
 		tenant.GetUserID(), tenant.GetDefaultRoleID(), publicRoleID)
@@ -1220,7 +1221,7 @@ func InitUser(ctx context.Context, tenant *TenantInfo, cu *tree.CreateUser) erro
 
 		//TODO: get comment or attribute. there is no field in mo_user to store it.
 		//TODO: to get the user id from the auto_increment table
-		newUserId := rand.Uint32()
+		newUserId := rand.Int31()
 		initMoUser1 := fmt.Sprintf(initMoUserFormat, newUserId, rootHost, user.Username, password, status,
 			types.CurrentTimestamp().String2(time.UTC, 0), rootExpiredTime, rootLoginType,
 			tenant.GetUserID(), tenant.GetDefaultRoleID(), newRoleId)
@@ -1303,7 +1304,7 @@ func InitRole(ctx context.Context, tenant *TenantInfo, cr *tree.CreateRole) erro
 			return moerr.NewInternalError("the role %s exists", r.UserName)
 		}
 
-		newRoleId := rand.Uint32()
+		newRoleId := rand.Int31()
 		initMoRole := fmt.Sprintf(initMoRoleFormat, newRoleId, r.UserName, tenant.GetUserID(), tenant.GetDefaultRoleID(),
 			types.CurrentTimestamp().String2(time.UTC, 0), "")
 		appendSql(initMoRole)

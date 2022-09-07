@@ -85,7 +85,7 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 }
 
 func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Process, anal process.Analyze) error {
-	defer bat.Clean(proc.Mp)
+	defer bat.Clean(proc.Mp())
 	anal.Input(bat)
 	rbat := batch.NewWithSize(len(ap.Result))
 	rbat.Zs = proc.GetMheap().GetSels()
@@ -112,7 +112,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 				break
 			}
 		}
-		vector.Clean(vec, proc.Mp)
+		vector.Clean(vec, proc.Mp())
 	}
 	rbat.ExpandNulls()
 	anal.Output(rbat)

@@ -1357,7 +1357,14 @@ var (
 			input: "use secondary role all",
 		}, {
 			input: "use secondary role none",
-		}}
+		}, {
+			input:  `select json_extract('{"a":1,"b":2}', '$.b')`,
+			output: `select json_extract({"a":1,"b":2}, $.b)`,
+		}, {
+			input:  `select json_extract(a, '$.b') from t`,
+			output: `select json_extract(a, $.b) from t`,
+		},
+	}
 )
 
 func TestValid(t *testing.T) {

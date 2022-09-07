@@ -46,8 +46,8 @@ int32_t Decimal128_FromInt64(int64_t *r, int64_t v, int32_t range);
 int32_t Decimal64_FromUint64(int64_t *r, uint64_t v, int32_t range);
 int32_t Decimal128_FromUint64(int64_t *r, uint64_t v, int32_t range);
 
-int32_t Decimal64_FromFloat64(int64_t *r, double v);
-int32_t Decimal128_FromFloat64(int64_t *r, double v);
+int32_t Decimal64_FromFloat64(int64_t *r, double v, int32_t width, int32_t scale);
+int32_t Decimal128_FromFloat64(int64_t *r, double v, int32_t width, int32_t scale);
 
 int32_t Decimal64_FromString(int64_t *r, char* s);
 int32_t Decimal128_FromString(int64_t *r, char* s);
@@ -69,6 +69,9 @@ int32_t Decimal128_ToStringWithScale(char *s, int64_t *d, int32_t scale);
 
 int32_t Decimal64_ToDecimal128(int64_t *d128, int64_t *d64);
 int32_t Decimal128_ToDecimal64(int64_t *d64, int64_t *d128);
+int32_t Decimal64_ToDecimal128WithScale(int64_t *d128, int64_t *d64, int32_t width, int32_t scale);
+int32_t Decimal128_ToDecimal64WithScale(int64_t *d64, int64_t *d128, int32_t width, int32_t scale);
+
 
 int32_t Decimal64_Add(int64_t *r, int64_t *a, int64_t *b);
 int32_t Decimal64_AddInt64(int64_t *r, int64_t *a, int64_t b);

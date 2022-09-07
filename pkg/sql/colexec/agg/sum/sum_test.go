@@ -192,7 +192,8 @@ func TestDistincSum(t *testing.T) {
 func MakeDecimal128Arr(input []int64) []types.Decimal128 {
 	ret := make([]types.Decimal128, len(input))
 	for i, v := range input {
-		ret[i] = types.InitDecimal128(v)
+		d, _ := types.InitDecimal128(v, 64)
+		ret[i] = d
 	}
 
 	return ret

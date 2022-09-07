@@ -16,86 +16,41 @@ package reverse
 import (
 	"testing"
 
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/stretchr/testify/require"
 )
 
 func TestReverse(t *testing.T) {
 	cases := []struct {
 		name string
-		args *types.Bytes
-		want *types.Bytes
+		args []string
+		want []string
 	}{
 		{
 			name: "English",
-			args: &types.Bytes{
-				Data:    []byte("HelloWorld"),
-				Lengths: []uint32{uint32(len("HelloWorld"))},
-				Offsets: []uint32{0},
-			},
-			want: &types.Bytes{
-				Data:    []byte("dlroWolleH"),
-				Lengths: []uint32{uint32(len("HelloWorld"))},
-				Offsets: []uint32{0},
-			},
+			args: []string{"HelloWorld"},
+			want: []string{"dlroWolleH"},
 		},
 		{
 			name: "Chinese",
-			args: &types.Bytes{
-				Data:    []byte("你好世界"),
-				Lengths: []uint32{uint32(len("你好世界"))},
-				Offsets: []uint32{0},
-			},
-			want: &types.Bytes{
-				Data:    []byte("界世好你"),
-				Lengths: []uint32{uint32(len("界世好你"))},
-				Offsets: []uint32{0},
-			},
+			args: []string{"你好世界"},
+			want: []string{"界世好你"},
 		},
 		{
 			name: "Englist + Chinese",
-			args: &types.Bytes{
-				Data:    []byte("Hello 世界"),
-				Lengths: []uint32{uint32(len("Hello 世界"))},
-				Offsets: []uint32{0},
-			},
-			want: &types.Bytes{
-				Data:    []byte("界世 olleH"),
-				Lengths: []uint32{uint32(len("界世 olleH"))},
-				Offsets: []uint32{0},
-			},
+			args: []string{"Hello 世界"},
+			want: []string{"界世 olleH"},
 		},
 		{
 			name: "three strings",
-			args: &types.Bytes{
-				Data: []byte("Hello 世界"),
-				Lengths: []uint32{
-					uint32(len("Hello")),
-					uint32(len(" ")),
-					uint32(len("世界")),
-				},
-				Offsets: []uint32{0, 5, 6},
-			},
-			want: &types.Bytes{
-				Data: []byte("olleH 界世"),
-				Lengths: []uint32{
-					uint32(len("olleH")),
-					uint32(len(" ")),
-					uint32(len("界世")),
-				},
-				Offsets: []uint32{0, 5, 6},
-			},
+			args: []string{"Hello", " ", "世界"},
+			want: []string{"olleH", " ", "界世"},
 		},
 	}
 
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			out := &types.Bytes{
-				Data:    make([]byte, len(c.args.Data)),
-				Lengths: make([]uint32, len(c.args.Lengths)),
-				Offsets: make([]uint32, len(c.args.Offsets)),
-			}
-			got := reverse(c.args, out)
+			out := make([]string, len(c.args))
+			got := Reverse(c.args, out)
 			require.Equal(t, c.want, got)
 		})
 	}

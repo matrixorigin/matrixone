@@ -21,10 +21,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
-	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
-	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"golang.org/x/exp/constraints"
 )
 
@@ -96,7 +92,7 @@ var (
 		cols := make([]types.Decimal64, len(values))
 		if nsp == nil {
 			for i, v := range values {
-				cols[i], _ = types.Decimal64_FromInt64(v, 64)
+				cols[i], _ = types.Decimal64_FromInt64(v, 64, 0)
 			}
 		} else {
 			for _, n := range nsp {
@@ -106,7 +102,7 @@ var (
 				if nulls.Contains(vec.Nsp, uint64(i)) {
 					continue
 				}
-				cols[i], _ = types.Decimal64_FromInt64(v, 64)
+				cols[i], _ = types.Decimal64_FromInt64(v, 64, 0)
 			}
 		}
 		vec.Col = cols
@@ -118,7 +114,7 @@ var (
 		cols := make([]types.Decimal128, len(values))
 		if nsp == nil {
 			for i, v := range values {
-				d, _ := types.InitDecimal128(v, 64)
+				d, _ := types.InitDecimal128(v, 64, 0)
 				cols[i] = d
 			}
 		} else {
@@ -129,7 +125,7 @@ var (
 				if nulls.Contains(vec.Nsp, uint64(i)) {
 					continue
 				}
-				d, _ := types.InitDecimal128(v, 64)
+				d, _ := types.InitDecimal128(v, 64, 0)
 				cols[i] = d
 			}
 		}
@@ -203,9 +199,8 @@ var (
 
 // functions to make a scalar vector for test.
 var (
-	MakeScalarNull = func(length int) *vector.Vector {
-		vec := NewProc().AllocScalarNullVector(types.Type{Oid: types.T_any})
-		vec.Length = length
+	MakeScalarNull = func(typ types.T, length int) *vector.Vector {
+		vec := NewProc().AllocConstNullVector(typ.ToType(), length)
 		return vec
 	}
 
@@ -266,52 +261,37 @@ var (
 	}
 
 	MakeScalarDate = func(value string, length int) *vector.Vector {
-		vec := NewProc().AllocScalarVector(dateType)
-		vec.Length = length
 		d, err := types.ParseDate(value)
 		if err != nil {
 			panic(err)
 		}
-		vec.Col = []types.Date{d}
-		return vec
+		return vector.NewConstFixed(dateType, length, d)
 	}
 
 	MakeScalarDateTime = func(value string, length int) *vector.Vector {
-		vec := NewProc().AllocScalarVector(datetimeType)
-		vec.Length = length
 		d, err := types.ParseDatetime(value, 6)
 		if err != nil {
 			panic(err)
 		}
-		vec.Col = []types.Datetime{d}
-		return vec
+		return vector.NewConstFixed(datetimeType, length, d)
 	}
 
 	MakeScalarTimeStamp = func(value string, length int) *vector.Vector {
-		vec := NewProc().AllocScalarVector(timestampType)
-		vec.Length = length
 		d, err := types.ParseTimestamp(time.Local, value, 6)
 		if err != nil {
 			panic(err)
 		}
-		vec.Col = []types.Timestamp{d}
-		return vec
+		return vector.NewConstFixed(timestampType, length, d)
 	}
 
 	MakeScalarDecimal64 = func(v int64, length int, _ types.Type) *vector.Vector {
-		vec := NewProc().AllocScalarVector(decimal64Type)
-		vec.Length = length
-		d, _ := types.InitDecimal64(v, 64)
-		vec.Col = []types.Decimal64{d}
-		return vec
+		d, _ := types.InitDecimal64(v, 64, 0)
+		return vector.NewConstFixed(decimal64Type, length, d)
 	}
 
 	MakeScalarDecimal128 = func(v uint64, length int, _ types.Type) *vector.Vector {
-		vec := NewProc().AllocScalarVector(decimal128Type)
-		vec.Length = length
-		d, _ := types.InitDecimal128UsingUint(v, 64)
-		vec.Col = []types.Decimal128{d}
-		return vec
+		d, _ := types.InitDecimal128UsingUint(v, 64, 0)
+		return vector.NewConstFixed(decimal64Type, length, d)
 	}
 
 	MakeScalarDecimal128ByFloat64 = func(v float64, length int, _ types.Type) *vector.Vector {
@@ -320,27 +300,16 @@ var (
 		if err != nil {
 			panic(err)
 		}
-
-		vec := NewProc().AllocScalarVector(decimal128Type)
-		vec.Length = length
 		dec128Val, err := types.ParseStringToDecimal128(val, 34, scale)
 		if err != nil {
 			panic(err)
 		}
-		vec.Col = []types.Decimal128{dec128Val}
-		return vec
+		return vector.NewConstFixed(decimal128Type, length, dec128Val)
 	}
 )
 
 type vecType interface {
 	constraints.Integer | constraints.Float | bool
-}
-
-func NewProc() *process.Process {
-	proc := process.New(mheap.New(guest.New(1<<20, host.New(1<<20))))
-	proc.SessionInfo.TimeZone = time.Local
-	proc.FileService = NewFS()
-	return proc
 }
 
 func makeVector[T vecType](values []T, nsp []uint64, typ types.Type) *vector.Vector {
@@ -354,56 +323,18 @@ func makeVector[T vecType](values []T, nsp []uint64, typ types.Type) *vector.Vec
 }
 
 func makeStringVector(values []string, nsp []uint64, typ types.Type) *vector.Vector {
-	vec := vector.New(typ)
-	bs := &types.Bytes{
-		Lengths: make([]uint32, len(values)),
-		Offsets: make([]uint32, len(values)),
-	}
-	next := uint32(0)
 	if nsp == nil {
-		for i, s := range values {
-			l := uint32(len(s))
-			bs.Data = append(bs.Data, []byte(s)...)
-			bs.Lengths[i] = l
-			bs.Offsets[i] = next
-			next += l
-		}
+		return vector.NewWithStrings(typ, values, nil, nil)
 	} else {
-		for _, n := range nsp {
-			nulls.Add(vec.Nsp, n)
-		}
-		for i := range values {
-			if nulls.Contains(vec.Nsp, uint64(i)) {
-				continue
-			}
-			s := values[i]
-			l := uint32(len(s))
-			bs.Data = append(bs.Data, []byte(s)...)
-			bs.Lengths[i] = l
-			bs.Offsets[i] = next
-			next += l
-		}
+		vnsp := nulls.Build(len(values), nsp...)
+		return vector.NewWithStrings(typ, values, vnsp, nil)
 	}
-	vec.Col = bs
-	return vec
 }
 
 func makeScalar[T vecType](value T, length int, typ types.Type) *vector.Vector {
-	vec := NewProc().AllocScalarVector(typ)
-	vec.Length = length
-	vec.Col = []T{value}
-	return vec
+	return vector.NewConstFixed(typ, length, value)
 }
 
 func makeScalarString(value string, length int, typ types.Type) *vector.Vector {
-	vec := NewProc().AllocScalarVector(typ)
-	vec.Length = length
-	l := uint32(len(value))
-	vec.Col = &types.Bytes{
-		Data:    []byte(value),
-		Offsets: []uint32{0},
-		Lengths: []uint32{l},
-	}
-	vec.Data = vec.Col.(*types.Bytes).Data
-	return vec
+	return vector.NewConstString(typ, length, value)
 }

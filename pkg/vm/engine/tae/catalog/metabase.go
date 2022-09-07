@@ -102,7 +102,7 @@ func (be *MetaBaseEntry) GetIndexes() []*wal.Index {
 	}, true)
 	return ret
 }
-func (be *MetaBaseEntry) InsertNode(vun MVCCNodeIf) {
+func (be *MetaBaseEntry) InsertNode(vun MVCCNode) {
 	un := vun.(*MetadataMVCCNode)
 	be.MVCC.Insert(un)
 }
@@ -171,7 +171,7 @@ func (be *MetaBaseEntry) DeleteLocked(txn txnif.TxnReader, impl INode) (node INo
 // GetUpdateNode gets the latest UpdateNode.
 // It is useful in making command, apply state(e.g. ApplyCommit),
 // check confilct.
-func (be *MetaBaseEntry) GetUpdateNodeLocked() MVCCNodeIf {
+func (be *MetaBaseEntry) GetUpdateNodeLocked() MVCCNode {
 	return be.getUpdateNodeLocked()
 }
 
@@ -193,10 +193,10 @@ func (be *MetaBaseEntry) getUpdateNodeLocked() *MetadataMVCCNode {
 
 // GetCommittedNode gets the latest committed UpdateNode.
 // It's useful when check whether the catalog/metadata entry is deleted.
-func (be *MetaBaseEntry) GetCommittedNode() (node MVCCNodeIf) {
+func (be *MetaBaseEntry) GetCommittedNode() (node MVCCNode) {
 	be.MVCC.Loop(func(n *common.GenericDLNode[*MetadataMVCCNode]) bool {
 		un := n.GetPayload()
-		if !un.IsActive() {
+		if !un.IsActive() && !un.IsCommitting() {
 			node = un
 			return false
 		}
@@ -208,7 +208,7 @@ func (be *MetaBaseEntry) GetCommittedNode() (node MVCCNodeIf) {
 // GetNodeToRead gets UpdateNode according to the timestamp.
 // It returns the UpdateNode in the same txn as the read txn
 // or returns the latest UpdateNode with commitTS less than the timestamp.
-func (be *MetaBaseEntry) GetNodeToRead(startts types.TS) (node MVCCNodeIf) {
+func (be *MetaBaseEntry) GetNodeToRead(startts types.TS) (node MVCCNode) {
 	be.MVCC.Loop(func(n *common.GenericDLNode[*MetadataMVCCNode]) (goNext bool) {
 		un := n.GetPayload()
 		var canRead bool
@@ -231,7 +231,7 @@ func (be *MetaBaseEntry) DeleteBefore(ts types.TS) bool {
 
 // GetExactUpdateNode gets the exact UpdateNode with the startTs.
 // It's only used in replay
-func (be *MetaBaseEntry) GetExactUpdateNode(startts types.TS) (node MVCCNodeIf) {
+func (be *MetaBaseEntry) GetExactUpdateNode(startts types.TS) (node MVCCNode) {
 	be.MVCC.Loop(func(n *common.GenericDLNode[*MetadataMVCCNode]) bool {
 		un := n.GetPayload()
 		if un.Start == startts {
@@ -249,16 +249,10 @@ func (be *MetaBaseEntry) NeedWaitCommitting(startTS types.TS) (bool, txnif.TxnRe
 	if un == nil {
 		return false, nil
 	}
-	if !un.IsCommitting() {
-		return false, nil
-	}
-	if un.Txn.GetCommitTS().GreaterEq(startTS) {
-		return false, nil
-	}
-	return true, un.Txn
+	return un.NeedWaitCommitting(startTS)
 }
 
-func (be *MetaBaseEntry) InTxnOrRollbacked() bool {
+func (be *MetaBaseEntry) IsCreating() bool {
 	un := be.getUpdateNodeLocked()
 	if un == nil {
 		return true
@@ -361,7 +355,7 @@ func (be *MetaBaseEntry) ReadAllFrom(r io.Reader) (n int64, err error) {
 	return
 }
 
-func (be *MetaBaseEntry) DoCompre(voe BaseEntryIf) int {
+func (be *MetaBaseEntry) DoCompre(voe BaseEntry) int {
 	oe := voe.(*MetaBaseEntry)
 	be.RLock()
 	defer be.RUnlock()
@@ -375,6 +369,7 @@ func (be *MetaBaseEntry) IsEmpty() bool {
 	head := be.MVCC.GetHead()
 	return head == nil
 }
+
 func (be *MetaBaseEntry) ApplyRollback(index *wal.Index) error {
 	be.Lock()
 	defer be.Unlock()
@@ -396,12 +391,26 @@ func (be *MetaBaseEntry) HasDropped() bool {
 	return node.HasDropped()
 }
 func (be *MetaBaseEntry) ExistedForTs(ts types.TS) bool {
-	un := be.GetNodeToRead(ts)
-	if un == nil {
+	can, dropped := be.TsCanGet(ts)
+	if !can {
 		return false
 	}
-	return !un.HasDropped()
+	return !dropped
 }
+
+func (be *MetaBaseEntry) TsCanGet(ts types.TS) (can, dropped bool) {
+	un := be.GetNodeToRead(ts)
+	if un == nil {
+		return
+	}
+	if un.HasDropped() {
+		can, dropped = true, true
+		return
+	}
+	can, dropped = true, false
+	return
+}
+
 func (be *MetaBaseEntry) GetLogIndex() []*wal.Index {
 	node := be.getUpdateNodeLocked()
 	if node == nil {
@@ -421,7 +430,7 @@ func (be *MetaBaseEntry) TxnCanRead(txn txnif.AsyncTxn, mu *sync.RWMutex) (canRe
 	return
 }
 
-func (be *MetaBaseEntry) CloneCreateEntry() BaseEntryIf {
+func (be *MetaBaseEntry) CloneCreateEntry() BaseEntry {
 	cloned := &MetaBaseEntry{
 		MVCC:    common.NewGenericSortedDList(compareMetadataMVCCNode),
 		RWMutex: &sync.RWMutex{},
@@ -525,7 +534,13 @@ func (be *MetaBaseEntry) IsCommitted() bool {
 	return un.Txn == nil
 }
 
-func (be *MetaBaseEntry) CloneCommittedInRange(start, end types.TS) (ret BaseEntryIf) {
+func (be *MetaBaseEntry) CloneCommittedInRange(start, end types.TS) (ret BaseEntry) {
+	needWait, txn := be.NeedWaitCommitting(end.Next())
+	if needWait {
+		be.RUnlock()
+		txn.GetTxnState(true)
+		be.RLock()
+	}
 	be.MVCC.Loop(func(n *common.GenericDLNode[*MetadataMVCCNode]) bool {
 		un := n.GetPayload()
 		committedIn, commitBeforeMinTs := un.CommittedIn(start, end)
@@ -583,10 +598,5 @@ func (be *MetaBaseEntry) TxnCanGet(ts types.TS) (can, dropped bool) {
 	if un == nil {
 		return
 	}
-	if un.HasDropped() {
-		can, dropped = true, true
-		return
-	}
-	can, dropped = true, false
-	return
+	return be.TsCanGet(ts)
 }

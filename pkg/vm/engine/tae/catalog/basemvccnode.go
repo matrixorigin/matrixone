@@ -153,6 +153,7 @@ func (un *TxnMVCCNode) ApplyCommit(index *wal.Index) (err error) {
 }
 
 func (un *TxnMVCCNode) ApplyRollback(index *wal.Index) (err error) {
+	un.Txn = nil
 	un.AddLogIndex(index)
 	return
 }
@@ -240,6 +241,10 @@ func (un *EntryMVCCNode) GetCreatedAt() types.TS {
 
 func (un *EntryMVCCNode) GetDeletedAt() types.TS {
 	return un.DeletedAt
+}
+
+func (un *EntryMVCCNode) IsCreating() bool {
+	return un.CreatedAt.IsEmpty()
 }
 
 func (un *EntryMVCCNode) Clone() *EntryMVCCNode {

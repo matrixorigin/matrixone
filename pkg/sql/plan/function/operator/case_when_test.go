@@ -16,12 +16,13 @@ package operator
 
 import (
 	"fmt"
+	"testing"
+
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
-	"testing"
 )
 
 type arg struct {
@@ -56,7 +57,7 @@ func TestCwFn1(t *testing.T) {
 				testutil.MakeScalarInt64(1, 4),                              // 1
 				testutil.MakeBoolVector([]bool{true, false, false, false}),  // a = 2
 				testutil.MakeScalarInt64(2, 4),                              // 2
-				testutil.MakeScalarNull(4),
+				testutil.MakeScalarNull(types.T_int64, 4),
 			},
 			match:  true,
 			err:    false,
@@ -136,7 +137,7 @@ func TestCwFn1(t *testing.T) {
 				testutil.MakeInt64Vector([]int64{1, 2, 3, 4}, nil), // 1, 2, 3, 4
 				testutil.MakeScalarBool(false, 4),
 				testutil.MakeInt64Vector([]int64{4, 3, 2, 1}, nil),
-				testutil.MakeScalarNull(4),
+				testutil.MakeScalarNull(types.T_int64, 4),
 			},
 			match:  true,
 			err:    false,
@@ -150,7 +151,7 @@ func TestCwFn1(t *testing.T) {
 				testutil.MakeScalarInt64(1, 4),
 				testutil.MakeScalarBool(false, 4),
 				testutil.MakeScalarInt64(2, 4),
-				testutil.MakeScalarNull(4),
+				testutil.MakeScalarNull(types.T_int64, 4),
 			},
 			match:  true,
 			err:    false,
@@ -164,7 +165,7 @@ func TestCwFn1(t *testing.T) {
 				testutil.MakeScalarInt64(10, 4),
 				testutil.MakeBoolVector([]bool{false, false, false, false}),
 				testutil.MakeScalarBool(true, 4),
-				testutil.MakeScalarNull(4),
+				testutil.MakeScalarNull(types.T_bool, 4),
 			},
 			match: false,
 		},
@@ -177,7 +178,7 @@ func TestCwFn1(t *testing.T) {
 				testutil.MakeScalarInt64(1, 4),
 				testutil.MakeBoolVector([]bool{false, true, true, false}),
 				testutil.MakeScalarInt64(2, 4),
-				testutil.MakeScalarNull(4),
+				testutil.MakeScalarNull(types.T_int64, 4),
 			},
 			match:  true,
 			err:    false,
@@ -189,12 +190,12 @@ func TestCwFn1(t *testing.T) {
 			info: "when true then null else null", proc: testutil.NewProc(),
 			vs: []*vector.Vector{
 				testutil.MakeScalarBool(true, 5),
-				testutil.MakeScalarNull(5),
-				testutil.MakeScalarNull(5),
+				testutil.MakeScalarNull(types.T_any, 5),
+				testutil.MakeScalarNull(types.T_any, 5),
 			},
 			match:  true,
 			err:    false,
-			expect: testutil.MakeScalarNull(5),
+			expect: testutil.MakeScalarNull(types.T_any, 5),
 		},
 	}
 

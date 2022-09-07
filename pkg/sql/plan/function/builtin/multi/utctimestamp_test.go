@@ -15,21 +15,13 @@
 package multi
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
-	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
-	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"testing"
+
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 )
 
 func TestUTCTimestamp(t *testing.T) {
-	proc := func() *process.Process {
-		hm := host.New(1 << 40)
-		gm := guest.New(1<<40, hm)
-		return process.New(mheap.New(gm))
-	}
-
-	_, err := UTCTimestamp(nil, proc())
+	_, err := UTCTimestamp(nil, testutil.NewProc())
 	if err != nil {
 		t.Fatal(err)
 	}

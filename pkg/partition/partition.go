@@ -15,7 +15,6 @@
 package partition
 
 import (
-	"bytes"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -315,17 +314,16 @@ func Partition(sels []int64, diffs []bool, partitions []int64, vec *vector.Vecto
 		}
 	case types.T_char, types.T_varchar, types.T_json:
 		var n bool
-		var v []byte
-
-		vs := vec.Col.(*types.Bytes)
+		var v string
+		vs := vector.GetStrVectorValues(vec)
 		if nulls.Any(vec.Nsp) {
 			for i, sel := range sels {
-				w := vs.Get(sel)
+				w := vs[sel]
 				isNull := nulls.Contains(vec.Nsp, uint64(sel))
 				if n != isNull {
 					diffs[i] = true
 				} else {
-					diffs[i] = diffs[i] || !bytes.Equal(v, w)
+					diffs[i] = diffs[i] || (v != w)
 				}
 				n = isNull
 				v = w
@@ -333,8 +331,8 @@ func Partition(sels []int64, diffs []bool, partitions []int64, vec *vector.Vecto
 			break
 		}
 		for i, sel := range sels {
-			w := vs.Get(sel)
-			diffs[i] = diffs[i] || !bytes.Equal(v, w)
+			w := vs[sel]
+			diffs[i] = diffs[i] || (v != w)
 			v = w
 		}
 	}

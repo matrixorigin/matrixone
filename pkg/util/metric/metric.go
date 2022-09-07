@@ -21,11 +21,14 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/util/export"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
+	"github.com/matrixorigin/matrixone/pkg/util/trace"
 
 	prom "github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -73,16 +76,32 @@ var moExporter MetricExporter
 var moCollector MetricCollector
 var statusSvr *statusServer
 
-func InitMetric(ctx context.Context, ieFactory func() ie.InternalExecutor, pu *config.ParameterUnit, nodeId int, role string) {
+var inited uint32
+
+func InitMetric(ctx context.Context, ieFactory func() ie.InternalExecutor, SV *config.ObservabilityParameters, nodeUUID, role string, opts ...InitOption) {
+	// fix multi-init in standalone
+	if !atomic.CompareAndSwapUint32(&inited, 0, 1) {
+		return
+	}
+	var initOpts InitOptions
+	for _, opt := range opts {
+		opt.ApplyTo(&initOpts)
+	}
 	// init global variables
-	initConfigByParamaterUnit(pu)
+	initConfigByParamaterUnit(SV)
 	registry = prom.NewRegistry()
-	moCollector = newMetricCollector(ieFactory)
-	moExporter = newMetricExporter(registry, moCollector, int32(nodeId), role)
+	if initOpts.writerFactory != nil {
+		moCollector = newMetricFSCollector(initOpts.writerFactory)
+	} else {
+		moCollector = newMetricCollector(ieFactory)
+	}
+	moExporter = newMetricExporter(registry, moCollector, nodeUUID, role)
 
 	// register metrics and create tables
 	registerAllMetrics()
-	initTables(ctx, ieFactory)
+	if initOpts.needInitTable {
+		initTables(ctx, ieFactory, SV.BatchProcessor)
+	}
 
 	// start the data flow
 	moCollector.Start(ctx)
@@ -92,7 +111,7 @@ func InitMetric(ctx context.Context, ieFactory func() ie.InternalExecutor, pu *c
 		// http.HandleFunc("/query", makeDebugHandleFunc(ieFactory))
 		mux := http.NewServeMux()
 		mux.Handle("/metrics", promhttp.HandlerFor(prom.DefaultGatherer, promhttp.HandlerOpts{}))
-		addr := fmt.Sprintf("%s:%d", pu.SV.Host, pu.SV.StatusPort)
+		addr := fmt.Sprintf("%s:%d", SV.Host, SV.StatusPort)
 		statusSvr = &statusServer{Server: &http.Server{Addr: addr, Handler: mux}}
 		statusSvr.Add(1)
 		go func() {
@@ -141,8 +160,13 @@ func mustRegister(collector Collector) {
 	}
 }
 
+func InitSchema(ctx context.Context, ieFactory func() ie.InternalExecutor) error {
+	initTables(ctx, ieFactory, trace.FileService)
+	return nil
+}
+
 // initTables gathers all metrics and extract metadata to format create table sql
-func initTables(ctx context.Context, ieFactory func() ie.InternalExecutor) {
+func initTables(ctx context.Context, ieFactory func() ie.InternalExecutor, batchProcessMode string) {
 	exec := ieFactory()
 	exec.ApplySessionOverride(ie.NewOptsBuilder().Database(MetricDBConst).Internal(true).Finish())
 	mustExec := func(sql string) {
@@ -171,21 +195,27 @@ func initTables(ctx context.Context, ieFactory func() ie.InternalExecutor) {
 		close(descChan)
 	}()
 
+	optFactory := trace.GetOptionFactory(batchProcessMode)
 	buf := new(bytes.Buffer)
 	for desc := range descChan {
-		sql := createTableSqlFromMetricFamily(desc, buf)
+		sql := createTableSqlFromMetricFamily(desc, buf, optFactory)
 		mustExec(sql)
 	}
 
 	createCost = time.Since(instant)
 }
 
+type optionsFactory func(db, tbl string) trace.TableOptions
+
 // instead MetricFamily, Desc is used to create tables because we don't want collect errors come into the picture.
-func createTableSqlFromMetricFamily(desc *prom.Desc, buf *bytes.Buffer) string {
+func createTableSqlFromMetricFamily(desc *prom.Desc, buf *bytes.Buffer, optionsFactory optionsFactory) string {
 	buf.Reset()
 	extra := newDescExtra(desc)
+	opts := optionsFactory(MetricDBConst, extra.fqName)
+	buf.WriteString("create ")
+	buf.WriteString(opts.GetCreateOptions())
 	buf.WriteString(fmt.Sprintf(
-		"create table if not exists %s.%s (`%s` datetime, `%s` double, `%s` int, `%s` varchar(20)",
+		"table if not exists %s.%s (`%s` datetime, `%s` double, `%s` varchar(36), `%s` varchar(20)",
 		MetricDBConst, extra.fqName, lblTimeConst, lblValueConst, lblNodeConst, lblRoleConst,
 	))
 	for _, lbl := range extra.labels {
@@ -194,6 +224,7 @@ func createTableSqlFromMetricFamily(desc *prom.Desc, buf *bytes.Buffer) string {
 		buf.WriteString("` varchar(20)")
 	}
 	buf.WriteRune(')')
+	buf.WriteString(opts.GetTableOptions())
 	return buf.String()
 }
 
@@ -226,4 +257,28 @@ func mustValidLbls(name string, consts prom.Labels, vars []string) {
 	for _, v := range vars {
 		mustNotOccupied(v)
 	}
+}
+
+type InitOptions struct {
+	writerFactory export.FSWriterFactory // see WithWriterFactory
+	// needInitTable control to do the initTables
+	needInitTable bool // see WithInitAction
+}
+
+type InitOption func(*InitOptions)
+
+func (f InitOption) ApplyTo(opts *InitOptions) {
+	f(opts)
+}
+
+func WithWriterFactory(factory export.FSWriterFactory) InitOption {
+	return InitOption(func(options *InitOptions) {
+		options.writerFactory = factory
+	})
+}
+
+func WithInitAction(init bool) InitOption {
+	return InitOption(func(options *InitOptions) {
+		options.needInitTable = init
+	})
 }

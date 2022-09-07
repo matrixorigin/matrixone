@@ -15,7 +15,6 @@
 package unary
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/rtrim"
@@ -24,39 +23,19 @@ import (
 
 func Rtrim(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	inputVector := vectors[0]
-	resultType := types.Type{Oid: types.T_varchar, Size: 24}
-	inputValues := vector.MustBytesCols(inputVector)
+	resultType := types.T_varchar.ToType()
+	inputValues := vector.MustStrCols(inputVector)
 
 	if inputVector.IsScalar() {
 		if inputVector.ConstVectorIsNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
-		// totalCount - spaceCount is the total bytes need for the ltrim-ed string
-		spaceCount := rtrim.CountSpacesFromRight(inputValues)
-		totalCount := int32(len(inputValues.Data))
-		resultVector := vector.NewConst(resultType, 1)
-		resultValues := &types.Bytes{
-			Data:    make([]byte, totalCount-spaceCount),
-			Offsets: make([]uint32, 1),
-			Lengths: make([]uint32, 1),
-		}
-		vector.SetCol(resultVector, rtrim.RtrimChar(inputValues, resultValues))
-		return resultVector, nil
+		resultValues := make([]string, 1)
+		rtrim.Rtrim(inputValues, resultValues)
+		return vector.NewConstString(resultType, inputVector.Length(), resultValues[0]), nil
 	} else {
-		// totalCount - spaceCount is the total bytes need for the ltrim-ed string
-		spaceCount := rtrim.CountSpacesFromRight(inputValues)
-		totalCount := int32(len(inputValues.Data))
-		resultVector, err := proc.AllocVector(resultType, int64(totalCount-spaceCount))
-		if err != nil {
-			return nil, err
-		}
-		resultValues := &types.Bytes{
-			Data:    resultVector.Data,
-			Offsets: make([]uint32, len(inputValues.Offsets)),
-			Lengths: make([]uint32, len(inputValues.Lengths)),
-		}
-		nulls.Set(resultVector.Nsp, inputVector.Nsp)
-		vector.SetCol(resultVector, rtrim.RtrimChar(inputValues, resultValues))
-		return resultVector, nil
+		resultValues := make([]string, len(inputValues))
+		rtrim.Rtrim(inputValues, resultValues)
+		return vector.NewWithStrings(resultType, resultValues, inputVector.Nsp, proc.Mp()), nil
 	}
 }
