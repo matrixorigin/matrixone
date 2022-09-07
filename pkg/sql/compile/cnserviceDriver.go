@@ -87,6 +87,7 @@ type processHelper struct {
 // write back Analysis Information and error info if error occurs to client.
 func CnServerMessageHandler(ctx context.Context, message morpc.Message, cs morpc.ClientSession, storeEngine engine.Engine, cli client.TxnClient) error {
 	var errCode []byte = nil
+	// structure to help handle the message.
 	helper := &messageHandleHelper{
 		storeEngine: storeEngine,
 	}
@@ -108,30 +109,27 @@ func pipelineMessageHandle(ctx context.Context, message morpc.Message, cs morpc.
 		panic("unexpected message type for cn-server")
 	}
 
-	// get processHelper and rebuild the process and Compile
+	// generate Compile-structure to run scope.
 	procHelper, err = generateProcessHelper(m.GetProcInfoData(), cli)
 	if err != nil {
 		return nil, err
 	}
 	c = newCompile(ctx, message, procHelper, messageHelper, cs)
 
-	// decode the scope
+	// decode and run the scope.
 	s, err = decodeScope(m.GetData(), c.proc)
 	if err != nil {
 		return nil, err
 	}
 	refactorScope(c, c.ctx, s)
-	s.Magic = Parallel
-	c.scope = s
-	c.proc = s.Proc
 
+	// just test.
 	println(ShowScopes([]*Scope{s}))
-
 	err = s.ParallelRun(c)
 	if err != nil {
 		return nil, err
 	}
-	// get analyse related information
+	// if it's a query sql, get analyse related information
 	if query, ok := s.Plan.Plan.(*plan.Plan_Query); ok {
 		nodes := query.Query.GetNodes()
 		anas := &pipeline.AnalysisList{
@@ -149,25 +147,22 @@ func pipelineMessageHandle(ctx context.Context, message morpc.Message, cs morpc.
 	return nil, nil
 }
 
-// remoteRun sends a scope to a remote node for execution, and wait to receive the back message.
-// the back message is always *pipeline.Message but has three cases.
+// remoteRun sends a scope to remote node for execution, and wait to receive the back message.
+// the back message is always *pipeline.Message but contains three cases.
 // 1. ErrMessage
 // 2. End Message with the result of analysis
 // 3. Batch Message
 func (s *Scope) remoteRun(c *Compile) error {
-	// the last instruction of remote-run scope must be `connect`
-	// and it doesn't need serialization work.
+	// encode the scope
+	// the last instruction of remote-run scope must be `connect`, it doesn't need serialization work.
+	// just ignore this instruction when doing serialization work and recover at the end in order to receive the returned batch.
 	n := len(s.Instructions) - 1
 	con := s.Instructions[n]
 	s.Instructions = s.Instructions[:n]
-
-	// encode the scope
-	s.Plan = c.scope.Plan
 	sData, errEncode := encodeScope(s)
 	if errEncode != nil {
 		return errEncode
 	}
-	// restore the pipeline's instructions.
 	s.Instructions = append(s.Instructions, con)
 
 	// encode the process related information
@@ -176,7 +171,7 @@ func (s *Scope) remoteRun(c *Compile) error {
 		return errEncodeProc
 	}
 
-	// new the stream sender
+	// get the stream-sender
 	streamSender, errStream := cnclient.Client.NewStream(s.NodeInfo.Addr)
 	if errStream != nil {
 		return errStream
@@ -186,7 +181,8 @@ func (s *Scope) remoteRun(c *Compile) error {
 	}(streamSender)
 
 	// send encoded message
-	// mo-rpc send message requires ctx has its own timeout. // TODO: move it to front-end, get dead time from config file.
+	// mo-rpc send message requires ctx has its own timeout.
+	// TODO: move these code to front-end, get dead time from config file may suitable.
 	if _, ok := c.ctx.Deadline(); !ok {
 		var cancel context.CancelFunc
 		c.ctx, cancel = context.WithTimeout(c.ctx, time.Second*100)
@@ -214,6 +210,7 @@ func (s *Scope) remoteRun(c *Compile) error {
 		}
 
 		sid := m.GetSid()
+		// check if it's the last message
 		if sid == pipeline.MessageEnd {
 			// get analyse information
 			anaData := m.GetAnalyse()
@@ -304,12 +301,16 @@ func generateProcessHelper(data []byte, cli client.TxnClient) (*processHelper, e
 }
 
 func refactorScope(c *Compile, _ context.Context, s *Scope) {
+	// adjust Remote to Parallel
+	s.Magic = Parallel
 	// refactor the scope, set an output instruction at the last of scope.
 	s.Instructions = append(s.Instructions, vm.Instruction{
 		Op:  vm.Output,
 		Idx: -1, // useless
 		Arg: &output.Argument{Data: nil, Func: c.fill},
 	})
+	c.proc = s.Proc
+	c.scope = s
 }
 
 // fillPipeline convert the scope to pipeline.Pipeline structure through 2 iterations.
