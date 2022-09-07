@@ -15,6 +15,8 @@
 package multi
 
 import (
+	"math"
+
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -32,7 +34,12 @@ func castConstAsInt64(vec *vector.Vector, idx int64) int64 {
 	case types.T_uint32:
 		return int64(vector.GetValueAt[uint32](vec, idx))
 	case types.T_uint64:
-		return int64(vector.GetValueAt[uint64](vec, idx))
+		val := vector.GetValueAt[uint64](vec, idx)
+		if val > math.MaxInt64 {
+			// this function only used in substr, so we use maxInt64 to avoid overflow. I known that's weird.
+			return math.MaxInt64
+		}
+		return int64(val)
 	case types.T_int8:
 		return int64(vector.GetValueAt[int8](vec, idx))
 	case types.T_int16:

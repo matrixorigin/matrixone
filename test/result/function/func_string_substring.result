@@ -46,7 +46,6 @@ SUBSTR('abcdefg',1,-1)
 select substring('hello', 2, -1);
 substring('hello', 2, -1)
 
-
 select substring('hello', -1, 1);
 substring('hello', -1, 1)
 o
@@ -166,6 +165,7 @@ substring('hello', -18446744073709551617, -18446744073709551617)
 
 select substring('hello', 18446744073709551617, 18446744073709551617);
 substring('hello', 18446744073709551617, 18446744073709551617)
+
 SELECT SUBSTRING('Sakila' FROM -4 FOR 2);
 SUBSTRING('Sakila' FROM -4 FOR 2)
 ki
