@@ -115,8 +115,7 @@ select substring('hello', 1, -18446744073709551616);
 substring('hello', 1, -18446744073709551616)
 
 select substring('hello', 1, 18446744073709551616);
-substring('hello', 1, 18446744073709551616)
-hello
+in function substring(str, start, lenth); start or length is overflow
 select substring('hello', 1, -18446744073709551617);
 substring('hello', 1, -18446744073709551617)
 
