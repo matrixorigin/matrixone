@@ -317,6 +317,18 @@ func (zm *ZoneMap) Unmarshal(buf []byte) error {
 
 		zm.isInf = is32BytesMax(maxBuf)
 		return nil
+
+	case types.T_TS:
+		zm.min = buf[:types.TxnTsSize]
+		buf = buf[32:]
+		zm.max = buf[:types.TxnTsSize]
+		return nil
+	case types.T_Rowid:
+		zm.min = buf[:types.RowidSize]
+		buf = buf[32:]
+		zm.max = buf[:types.RowidSize]
+		return nil
+
 	default:
 		panic("unsupported type")
 	}

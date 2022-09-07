@@ -143,6 +143,20 @@ func MockVec(typ types.Type, rows int, offset int) *vector.Vector {
 			data = append(data, []byte(strconv.Itoa(i+offset)))
 		}
 		_ = vector.AppendBytes(vec, data, nil)
+	case types.T_TS:
+		data := make([]types.TS, 0)
+		for i := 0; i < rows; i++ {
+			data = append(data, types.BuildTS(int64(i+1), uint32(i%16)))
+		}
+		_ = vector.AppendFixed(vec, data, nil)
+
+	case types.T_Rowid:
+		data := make([]types.Rowid, 0)
+		for i := 0; i < rows; i++ {
+			data = append(data, types.BuildRowid(int64(i+1), int64(i%16)))
+		}
+		_ = vector.AppendFixed(vec, data, nil)
+
 	default:
 		panic("not support")
 	}
@@ -226,6 +240,10 @@ func AppendValue(vec *vector.Vector, v any) {
 		AppendFixedValue[types.Timestamp](vec, v)
 	case types.T_datetime:
 		AppendFixedValue[types.Datetime](vec, v)
+	case types.T_TS:
+		AppendFixedValue[types.TS](vec, v)
+	case types.T_Rowid:
+		AppendFixedValue[types.Rowid](vec, v)
 	case types.T_char, types.T_varchar, types.T_json, types.T_blob:
 		AppendBytes(vec, v)
 	default:
@@ -270,6 +288,10 @@ func GetValue(col *vector.Vector, row uint32) any {
 		return vector.GetValueAt[types.Datetime](col, int64(row))
 	case types.T_timestamp:
 		return vector.GetValueAt[types.Timestamp](col, int64(row))
+	case types.T_TS:
+		return vector.GetValueAt[types.TS](col, int64(row))
+	case types.T_Rowid:
+		return vector.GetValueAt[types.Rowid](col, int64(row))
 	case types.T_char, types.T_varchar, types.T_json, types.T_blob:
 		return col.GetBytes(int64(row))
 	default:
@@ -312,6 +334,11 @@ func UpdateValue(col *vector.Vector, row uint32, val any) {
 		GenericUpdateFixedValue[types.Datetime](col, row, val)
 	case types.T_timestamp:
 		GenericUpdateFixedValue[types.Timestamp](col, row, val)
+	case types.T_TS:
+		GenericUpdateFixedValue[types.TS](col, row, val)
+	case types.T_Rowid:
+		GenericUpdateFixedValue[types.Rowid](col, row, val)
+
 	case types.T_varchar, types.T_char, types.T_json, types.T_blob:
 		GenericUpdateBytes(col, row, val)
 	default:
@@ -498,6 +525,11 @@ func MOToVector(v *vector.Vector, nullable bool) containers.Vector {
 			bs.Data = types.EncodeFixedSlice(v.Col.([]types.Decimal64), 8)
 		case types.T_decimal128:
 			bs.Data = types.EncodeFixedSlice(v.Col.([]types.Decimal128), 16)
+		case types.T_TS:
+			bs.Data = types.EncodeFixedSlice(v.Col.([]types.TS), types.TxnTsSize)
+		case types.T_Rowid:
+			bs.Data = types.EncodeFixedSlice(v.Col.([]types.Rowid), types.RowidSize)
+
 		default:
 			panic(any(fmt.Errorf("%s not supported", v.Typ.String())))
 		}
@@ -644,6 +676,22 @@ func MOToVectorTmp(v *vector.Vector, nullable bool) containers.Vector {
 				common.OperandField("Col length is 0"))
 		} else {
 			bs.Data = types.EncodeFixedSlice(v.Col.([]types.Decimal128), 16)
+		}
+	case types.T_TS:
+		if v.Col == nil || len(v.Col.([]types.TS)) == 0 {
+			bs.Data = make([]byte, v.Length()*types.TxnTsSize)
+			logutil.Warn("[Moengine]", common.OperationField("MOToVector"),
+				common.OperandField("Col length is 0"))
+		} else {
+			bs.Data = types.EncodeFixedSlice(v.Col.([]types.TS), types.TxnTsSize)
+		}
+	case types.T_Rowid:
+		if v.Col == nil || len(v.Col.([]types.Rowid)) == 0 {
+			bs.Data = make([]byte, v.Length()*types.RowidSize)
+			logutil.Warn("[Moengine]", common.OperationField("MOToVector"),
+				common.OperandField("Col length is 0"))
+		} else {
+			bs.Data = types.EncodeFixedSlice(v.Col.([]types.Rowid), types.RowidSize)
 		}
 	case types.T_char, types.T_varchar, types.T_json, types.T_blob:
 		if v.Col == nil {
