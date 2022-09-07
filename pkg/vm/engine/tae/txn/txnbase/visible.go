@@ -16,6 +16,7 @@ package txnbase
 
 import (
 	"encoding/binary"
+	"fmt"
 	"io"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -29,6 +30,8 @@ type TxnMVCCNode struct {
 	//Aborted bool
 	//State txnif.TxnState
 	LogIndex []*wal.Index
+
+	Attr txnif.Attr
 }
 
 func NewTxnMVCCNodeWithTxn(txn txnif.TxnReader) *TxnMVCCNode {
@@ -36,6 +39,14 @@ func NewTxnMVCCNodeWithTxn(txn txnif.TxnReader) *TxnMVCCNode {
 		Start: txn.GetStartTS(),
 		Txn:   txn,
 	}
+}
+
+func (un *TxnMVCCNode) SetAttr(attr txnif.Attr) {
+	un.Attr = attr
+}
+
+func (un *TxnMVCCNode) GetAttr() txnif.Attr {
+	return un.Attr
 }
 
 // Check w-w confilct
@@ -180,6 +191,15 @@ func (un *TxnMVCCNode) WriteTo(w io.Writer) (n int64, err error) {
 		}
 		n += sn
 	}
+	if err = binary.Write(w, binary.BigEndian, un.Attr.GetType()); err != nil {
+		return
+	}
+	n += 2
+	sn, err = un.Attr.WriteTo(w)
+	if err != nil {
+		return
+	}
+	n += sn
 	return
 }
 
@@ -211,17 +231,80 @@ func (un *TxnMVCCNode) ReadFrom(r io.Reader) (n int64, err error) {
 		n += sn
 		un.LogIndex = append(un.LogIndex, idx)
 	}
+	t := int16(0)
+	if err = binary.Read(r, binary.BigEndian, &t); err != nil {
+		return
+	}
+	n += 2
+	un.Attr = txnif.GetAttrFactory(t)()
+	sn, err = un.Attr.ReadFrom(r)
+	if err != nil {
+		return
+	}
+	n += sn
 	return
 }
 
-// func (un *TxnMVCCNode) Clone() *TxnMVCCNode{
-// 	return &TxnMVCCNode{
-// 		Start: un.Start,
-// 		End: un.End,
-// 	}
-// }
+func CompareTxnMVCCNode(e, o *TxnMVCCNode) int {
+	return e.Compare(o)
+}
+
+func (un *TxnMVCCNode) UpdateNode(o *TxnMVCCNode) {
+	if !un.Start.Equal(o.Start) {
+		panic("logic err")
+	}
+	if !un.End.Equal(o.End) {
+		panic("logic err")
+	}
+	un.Attr.UpdateNode(o.Attr)
+	un.AddLogIndex(o.LogIndex[0])
+}
+
+func (un *TxnMVCCNode) CloneData(o *TxnMVCCNode) {
+	un.Attr = o.Attr.Clone()
+}
+
+func (un *TxnMVCCNode) CloneAll() *TxnMVCCNode {
+	n := &TxnMVCCNode{}
+	n.CloneData(un)
+	n.Start = un.Start
+	n.End = un.End
+	if len(un.LogIndex) != 0 {
+		n.LogIndex = make([]*wal.Index, 0)
+		for _, idx := range un.LogIndex {
+			n.LogIndex = append(n.LogIndex, idx.Clone())
+		}
+	}
+	return n
+}
+
+func (un *TxnMVCCNode) String() string {
+	return fmt.Sprintf("[%v,%v]%s[logIndex=%v]",
+		un.Start,
+		un.End,
+		un.Attr.String(),
+		un.LogIndex)
+}
 
 func (un *TxnMVCCNode) OnCommit() {
 	un.End = un.Txn.GetCommitTS()
 	un.Txn = nil
+}
+
+func (e *TxnMVCCNode) Prepare2PCPrepare() (err error) {
+	err = e.Attr.Prepare2PCPrepare(e.Txn.GetPrepareTS())
+	if err != nil {
+		return
+	}
+	e.End = e.Txn.GetPrepareTS()
+	return
+}
+
+func (e *TxnMVCCNode) PrepareCommit() (err error) {
+	err = e.Attr.PrepareCommit(e.Txn.GetCommitTS())
+	if err != nil {
+		return
+	}
+	e.End = e.Txn.GetCommitTS()
+	return
 }

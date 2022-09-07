@@ -16,36 +16,36 @@ package catalog
 
 import (
 	"errors"
-	"io"
+	// "io"
 
-	"github.com/matrixorigin/matrixone/pkg/container/types"
+	// "github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
+	// "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 )
 
 // JXM: TODO
 // Remove MVCCNodeIf after go 1.19.1 release
 type MVCCNode interface {
-	UpdateNode(MVCCNode)
-	GetTxn() txnif.TxnReader
-	GetEnd() types.TS
-	GetStart() types.TS
-	GetLogIndex() []*wal.Index
-	String() string
-	AddLogIndex(*wal.Index)
+	// UpdateNode(MVCCNode)
+	// GetTxn() txnif.TxnReader
+	// GetEnd() types.TS
+	// GetStart() types.TS
+	// GetLogIndex() []*wal.Index
+	// String() string
+	// AddLogIndex(*wal.Index)
 
-	HasDropped() bool
+	// HasDropped() bool
 
-	IsSameTxn(types.TS) bool
-	IsActive() bool
-	IsCommitting() bool
+	// IsSameTxn(types.TS) bool
+	// IsActive() bool
+	// IsCommitting() bool
 
-	PrepareCommit() error
-	Prepare2PCPrepare() error
-	ApplyCommit(index *wal.Index) error
-	ApplyRollback(index *wal.Index) error
-	ReadFrom(io.Reader) (int64, error)
-	WriteTo(io.Writer) (int64, error)
+	// PrepareCommit() error
+	// Prepare2PCPrepare() error
+	// ApplyCommit(index *wal.Index) error
+	// ApplyRollback(index *wal.Index) error
+	// ReadFrom(io.Reader) (int64, error)
+	// WriteTo(io.Writer) (int64, error)
 }
 
 var ErrTxnActive = errors.New("txn is active")

@@ -15,74 +15,70 @@
 package catalog
 
 import (
-	"bytes"
 	"fmt"
 	"io"
 
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 )
+
+const (
+	AttrMetadata int16 = iota
+	AttrTable
+	AttrDB
+)
+
+func init() {
+	txnif.RegisterAttrFactory(AttrMetadata, func() txnif.Attr {
+		return NewEmptyMetadataMVCCNode()
+	})
+	txnif.RegisterAttrFactory(AttrTable, func() txnif.Attr {
+		return NewEmptyTableMVCCNode()
+	})
+	txnif.RegisterAttrFactory(AttrDB, func() txnif.Attr {
+		return NewEmptyDBMVCCNode()
+	})
+}
+
+func (e *TableMVCCNode) GetType() int16 {
+	return AttrTable
+}
+func (e *MetadataMVCCNode) GetType() int16 {
+	return AttrMetadata
+}
+func (e *DBMVCCNode) GetType() int16 {
+	return AttrDB
+}
 
 type TableMVCCNode struct {
 	*EntryMVCCNode
-	*txnbase.TxnMVCCNode
 }
 
 func NewEmptyTableMVCCNode() *TableMVCCNode {
 	return &TableMVCCNode{
-		TxnMVCCNode:   &txnbase.TxnMVCCNode{},
 		EntryMVCCNode: &EntryMVCCNode{},
 	}
 }
 
-func (e *TableMVCCNode) CloneAll() MVCCNode {
-	n := e.cloneData()
-	// n.State = e.State
-	n.Start = e.Start
-	n.End = e.End
-	n.Deleted = e.Deleted
-	if len(e.LogIndex) != 0 {
-		n.LogIndex = make([]*wal.Index, 0)
-		for _, idx := range e.LogIndex {
-			n.LogIndex = append(n.LogIndex, idx.Clone())
-		}
-	}
-	return n
-}
-
-func (e *TableMVCCNode) cloneData() *TableMVCCNode {
+func (e *TableMVCCNode) Clone() txnif.Attr {
 	return &TableMVCCNode{
 		EntryMVCCNode: e.EntryMVCCNode.Clone(),
-		TxnMVCCNode:   &txnbase.TxnMVCCNode{},
 	}
 }
 
 func (e *TableMVCCNode) String() string {
-	var w bytes.Buffer
-	_, _ = w.WriteString(
-		fmt.Sprintf("[%v,%v][C=%v,D=%v][Deleted?%v][logIndex=%v]",
-			e.Start,
-			e.End,
-			e.CreatedAt,
-			e.DeletedAt,
-			// e.State,
-			e.Deleted,
-			e.LogIndex))
-	return w.String()
+	return fmt.Sprintf("[C=%v,D=%v][Deleted?%v]",
+		e.CreatedAt,
+		e.DeletedAt,
+		e.Deleted,
+	)
 }
 
 // for create drop in one txn
-func (e *TableMVCCNode) UpdateNode(vun MVCCNode) {
+func (e *TableMVCCNode) UpdateNode(vun txnif.Attr) {
 	un := vun.(*TableMVCCNode)
-	if e.Start != un.Start {
-		panic("logic err")
-	}
-	if e.End != un.End {
-		panic("logic err")
-	}
 	e.DeletedAt = un.DeletedAt
 	e.Deleted = true
-	e.AddLogIndex(un.LogIndex[0])
 }
 
 func (e *TableMVCCNode) ApplyUpdate(be *TableMVCCNode) (err error) {
@@ -95,29 +91,23 @@ func (e *TableMVCCNode) ApplyDelete() (err error) {
 	return
 }
 
-func compareTableMVCCNode(e, o *TableMVCCNode) int {
-	return e.Compare(o.TxnMVCCNode)
-}
-
-func (e *TableMVCCNode) Prepare2PCPrepare() (err error) {
+func (e *TableMVCCNode) Prepare2PCPrepare(ts types.TS) (err error) {
 	if e.CreatedAt.IsEmpty() {
-		e.CreatedAt = e.Txn.GetPrepareTS()
+		e.CreatedAt = ts
 	}
 	if e.Deleted {
-		e.DeletedAt = e.Txn.GetPrepareTS()
+		e.DeletedAt = ts
 	}
-	e.End = e.Txn.GetPrepareTS()
 	return
 }
 
-func (e *TableMVCCNode) PrepareCommit() (err error) {
+func (e *TableMVCCNode) PrepareCommit(ts types.TS) (err error) {
 	if e.CreatedAt.IsEmpty() {
-		e.CreatedAt = e.Txn.GetCommitTS()
+		e.CreatedAt = ts
 	}
 	if e.Deleted {
-		e.DeletedAt = e.Txn.GetCommitTS()
+		e.DeletedAt = ts
 	}
-	e.End = e.Txn.GetCommitTS()
 	return
 }
 
@@ -128,22 +118,12 @@ func (e *TableMVCCNode) WriteTo(w io.Writer) (n int64, err error) {
 		return
 	}
 	n += sn
-	sn, err = e.TxnMVCCNode.WriteTo(w)
-	if err != nil {
-		return
-	}
-	n += sn
 	return
 }
 
 func (e *TableMVCCNode) ReadFrom(r io.Reader) (n int64, err error) {
 	var sn int64
 	sn, err = e.EntryMVCCNode.ReadFrom(r)
-	if err != nil {
-		return
-	}
-	n += sn
-	sn, err = e.TxnMVCCNode.ReadFrom(r)
 	if err != nil {
 		return
 	}
