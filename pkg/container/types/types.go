@@ -307,6 +307,9 @@ func (t T) ToType() Type {
 		typ.Size = RowidSize
 	case T_char, T_varchar, T_json, T_blob:
 		typ.Size = VarlenaSize
+	case T_any:
+		// XXX I don't know about this one ...
+		typ.Size = 0
 	default:
 		panic("Unknown type")
 	}
@@ -530,6 +533,10 @@ func (t T) FixedLength() int {
 		return 8
 	case T_decimal128:
 		return 16
+	case T_TS:
+		return TxnTsSize
+	case T_Rowid:
+		return RowidSize
 	case T_char, T_varchar, T_blob, T_json:
 		return -24
 	}

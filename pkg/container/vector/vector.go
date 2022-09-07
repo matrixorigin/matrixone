@@ -261,6 +261,10 @@ func (v *Vector) FillDefaultValue() {
 		fillDefaultValue[types.Decimal64](v)
 	case types.T_decimal128:
 		fillDefaultValue[types.Decimal128](v)
+	case types.T_TS:
+		fillDefaultValue[types.TS](v)
+	case types.T_Rowid:
+		fillDefaultValue[types.Rowid](v)
 	case types.T_char, types.T_varchar, types.T_json, types.T_blob:
 		fillDefaultValue[types.Varlena](v)
 	default:
@@ -305,6 +309,10 @@ func (v *Vector) ToConst(row int) *Vector {
 		return toConstVector[types.Decimal64](v, row)
 	case types.T_decimal128:
 		return toConstVector[types.Decimal128](v, row)
+	case types.T_TS:
+		return toConstVector[types.TS](v, row)
+	case types.T_Rowid:
+		return toConstVector[types.Rowid](v, row)
 	case types.T_char, types.T_varchar, types.T_json, types.T_blob:
 		if nulls.Contains(v.Nsp, uint64(row)) {
 			return NewConstNull(v.GetType(), 1)
@@ -376,6 +384,10 @@ func (v *Vector) ConstExpand(m *mheap.Mheap) *Vector {
 		expandVector[types.Decimal64](v, 8, m)
 	case types.T_decimal128:
 		expandVector[types.Decimal128](v, 16, m)
+	case types.T_TS:
+		expandVector[types.TS](v, types.TxnTsSize, m)
+	case types.T_Rowid:
+		expandVector[types.Rowid](v, types.RowidSize, m)
 	case types.T_char, types.T_varchar, types.T_json, types.T_blob:
 		expandVector[types.Varlena](v, types.VarlenaSize, m)
 	}
@@ -546,6 +558,10 @@ func (v *Vector) initConst(typ types.Type) {
 		v.Col = make([]types.Decimal64, 1)
 	case types.T_decimal128:
 		v.Col = make([]types.Decimal128, 1)
+	case types.T_TS:
+		v.Col = make([]types.TS, 1)
+	case types.T_Rowid:
+		v.Col = make([]types.Rowid, 1)
 	case types.T_char, types.T_varchar, types.T_blob, types.T_json:
 		v.Col = make([]types.Varlena, 1)
 	}
@@ -646,6 +662,10 @@ func (v *Vector) Append(w any, isNull bool, m *mheap.Mheap) error {
 		return appendOne(v, w.(types.Decimal64), isNull, m)
 	case types.T_decimal128:
 		return appendOne(v, w.(types.Decimal128), isNull, m)
+	case types.T_TS:
+		return appendOne(v, w.(types.TS), isNull, m)
+	case types.T_Rowid:
+		return appendOne(v, w.(types.Rowid), isNull, m)
 	case types.T_char, types.T_varchar, types.T_json, types.T_blob:
 		if isNull {
 			return appendOneBytes(v, nil, true, m)
@@ -896,6 +916,10 @@ func Shrink(v *Vector, sels []int64) {
 		ShrinkFixed[types.Decimal64](v, sels)
 	case types.T_decimal128:
 		ShrinkFixed[types.Decimal128](v, sels)
+	case types.T_TS:
+		ShrinkFixed[types.TS](v, sels)
+	case types.T_Rowid:
+		ShrinkFixed[types.Rowid](v, sels)
 	case types.T_tuple:
 		vs := v.Col.([][]interface{})
 		for i, sel := range sels {
@@ -966,6 +990,10 @@ func Shuffle(v *Vector, sels []int64, m *mheap.Mheap) error {
 		ShuffleFixed[types.Decimal64](v, sels, m)
 	case types.T_decimal128:
 		ShuffleFixed[types.Decimal128](v, sels, m)
+	case types.T_TS:
+		ShuffleFixed[types.TS](v, sels, m)
+	case types.T_Rowid:
+		ShuffleFixed[types.Rowid](v, sels, m)
 	case types.T_tuple:
 		vs := v.Col.([][]interface{})
 		ws := make([][]interface{}, len(vs))
@@ -1322,7 +1350,10 @@ func (v *Vector) String() string {
 		return VecToString[types.Decimal64](v)
 	case types.T_decimal128:
 		return VecToString[types.Decimal128](v)
-
+	case types.T_TS:
+		return VecToString[types.TS](v)
+	case types.T_Rowid:
+		return VecToString[types.Rowid](v)
 	case types.T_char, types.T_varchar, types.T_json, types.T_blob:
 		col := MustStrCols(v)
 		if len(col) == 1 {
@@ -1337,479 +1368,4 @@ func (v *Vector) String() string {
 	default:
 		panic("vec to string unknown types.")
 	}
-}
-
-// GetColumnData get whole column from a vector
-func (v *Vector) GetColumnData(selectIndexs []int64, occurCounts []int64, rs []string) error {
-	const nullStr = "null"
-	typ := v.Typ
-	rows := len(rs)
-	allData := !nulls.Any(v.Nsp)
-	ifSel := len(selectIndexs) != 0
-
-	switch typ.Oid {
-	case types.T_bool:
-		vs := v.Col.([]bool)
-		for i := 0; i < rows; i++ {
-			index := i
-			count := occurCounts[i]
-			if count <= 0 {
-				i--
-				continue
-			}
-			if ifSel {
-				index = int(selectIndexs[i])
-			}
-			if allData {
-				rs[i] = fmt.Sprintf("%v", vs[index])
-			} else {
-				if nulls.Contains(v.Nsp, uint64(index)) {
-					rs[i] = nullStr
-				} else {
-					rs[i] = fmt.Sprintf("%v", vs[index])
-				}
-			}
-			for count > 1 {
-				count--
-				i++
-				rs[i] = rs[i-1]
-			}
-		}
-	case types.T_int8:
-		vs := v.Col.([]int8)
-		for i := 0; i < rows; i++ {
-			index := i
-			count := occurCounts[i]
-			if count <= 0 {
-				i--
-				continue
-			}
-			if ifSel {
-				index = int(selectIndexs[i])
-			}
-			if allData {
-				rs[i] = fmt.Sprintf("%d", vs[index])
-			} else {
-				if nulls.Contains(v.Nsp, uint64(index)) {
-					rs[i] = nullStr
-				} else {
-					rs[i] = fmt.Sprintf("%d", vs[index])
-				}
-			}
-			for count > 1 {
-				count--
-				i++
-				rs[i] = rs[i-1]
-			}
-		}
-	case types.T_int16:
-		vs := v.Col.([]int16)
-		for i := 0; i < rows; i++ {
-			index := i
-			count := occurCounts[i]
-			if count <= 0 {
-				i--
-				continue
-			}
-			if ifSel {
-				index = int(selectIndexs[i])
-			}
-			if allData {
-				rs[i] = fmt.Sprintf("%d", vs[index])
-			} else {
-				if nulls.Contains(v.Nsp, uint64(index)) {
-					rs[i] = nullStr
-				} else {
-					rs[i] = fmt.Sprintf("%d", vs[index])
-				}
-			}
-			for count > 1 {
-				count--
-				i++
-				rs[i] = rs[i-1]
-			}
-		}
-	case types.T_int32:
-		vs := v.Col.([]int32)
-		for i := 0; i < rows; i++ {
-			index := i
-			count := occurCounts[i]
-			if count <= 0 {
-				i--
-				continue
-			}
-			if ifSel {
-				index = int(selectIndexs[i])
-			}
-			if allData {
-				rs[i] = fmt.Sprintf("%d", vs[index])
-			} else {
-				if nulls.Contains(v.Nsp, uint64(index)) {
-					rs[i] = nullStr
-				} else {
-					rs[i] = fmt.Sprintf("%d", vs[index])
-				}
-			}
-			for count > 1 {
-				count--
-				i++
-				rs[i] = rs[i-1]
-			}
-		}
-	case types.T_int64:
-		vs := v.Col.([]int64)
-		for i := 0; i < rows; i++ {
-			index := i
-			count := occurCounts[i]
-			if count <= 0 {
-				i--
-				continue
-			}
-			if ifSel {
-				index = int(selectIndexs[i])
-			}
-			if allData {
-				rs[i] = fmt.Sprintf("%d", vs[index])
-			} else {
-				if nulls.Contains(v.Nsp, uint64(index)) {
-					rs[i] = nullStr
-				} else {
-					rs[i] = fmt.Sprintf("%d", vs[index])
-				}
-			}
-			for count > 1 {
-				count--
-				i++
-				rs[i] = rs[i-1]
-			}
-		}
-	case types.T_uint8:
-		vs := v.Col.([]uint8)
-		for i := 0; i < rows; i++ {
-			index := i
-			count := occurCounts[i]
-			if count <= 0 {
-				i--
-				continue
-			}
-			if ifSel {
-				index = int(selectIndexs[i])
-			}
-			if allData {
-				rs[i] = fmt.Sprintf("%d", vs[index])
-			} else {
-				if nulls.Contains(v.Nsp, uint64(index)) {
-					rs[i] = nullStr
-				} else {
-					rs[i] = fmt.Sprintf("%d", vs[index])
-				}
-			}
-			for count > 1 {
-				count--
-				i++
-				rs[i] = rs[i-1]
-			}
-		}
-	case types.T_uint16:
-		vs := v.Col.([]uint16)
-		for i := 0; i < rows; i++ {
-			index := i
-			count := occurCounts[i]
-			if count <= 0 {
-				i--
-				continue
-			}
-			if ifSel {
-				index = int(selectIndexs[i])
-			}
-			if allData {
-				rs[i] = fmt.Sprintf("%d", vs[index])
-			} else {
-				if nulls.Contains(v.Nsp, uint64(index)) {
-					rs[i] = nullStr
-				} else {
-					rs[i] = fmt.Sprintf("%d", vs[index])
-				}
-			}
-			for count > 1 {
-				count--
-				i++
-				rs[i] = rs[i-1]
-			}
-		}
-	case types.T_uint32:
-		vs := v.Col.([]uint32)
-		for i := 0; i < rows; i++ {
-			index := i
-			count := occurCounts[i]
-			if count <= 0 {
-				i--
-				continue
-			}
-			if ifSel {
-				index = int(selectIndexs[i])
-			}
-			if allData {
-				rs[i] = fmt.Sprintf("%d", vs[index])
-			} else {
-				if nulls.Contains(v.Nsp, uint64(index)) {
-					rs[i] = nullStr
-				} else {
-					rs[i] = fmt.Sprintf("%d", vs[index])
-				}
-			}
-			for count > 1 {
-				count--
-				i++
-				rs[i] = rs[i-1]
-			}
-		}
-	case types.T_uint64:
-		vs := v.Col.([]uint64)
-		for i := 0; i < rows; i++ {
-			index := i
-			count := occurCounts[i]
-			if count <= 0 {
-				i--
-				continue
-			}
-			if ifSel {
-				index = int(selectIndexs[i])
-			}
-			if allData {
-				rs[i] = fmt.Sprintf("%d", vs[index])
-			} else {
-				if nulls.Contains(v.Nsp, uint64(index)) {
-					rs[i] = nullStr
-				} else {
-					rs[i] = fmt.Sprintf("%d", vs[index])
-				}
-			}
-			for count > 1 {
-				count--
-				i++
-				rs[i] = rs[i-1]
-			}
-		}
-	case types.T_float32:
-		vs := v.Col.([]float32)
-		for i := 0; i < rows; i++ {
-			index := i
-			count := occurCounts[i]
-			if count <= 0 {
-				i--
-				continue
-			}
-			if ifSel {
-				index = int(selectIndexs[i])
-			}
-			if allData {
-				rs[i] = fmt.Sprintf("%f", vs[index])
-			} else {
-				if nulls.Contains(v.Nsp, uint64(index)) {
-					rs[i] = nullStr
-				} else {
-					rs[i] = fmt.Sprintf("%f", vs[index])
-				}
-			}
-			for count > 1 {
-				count--
-				i++
-				rs[i] = rs[i-1]
-			}
-		}
-	case types.T_float64:
-		vs := v.Col.([]float64)
-		for i := 0; i < rows; i++ {
-			index := i
-			count := occurCounts[i]
-			if count <= 0 {
-				i--
-				continue
-			}
-			if ifSel {
-				index = int(selectIndexs[i])
-			}
-			if allData {
-				rs[i] = fmt.Sprintf("%f", vs[index])
-			} else {
-				if nulls.Contains(v.Nsp, uint64(index)) {
-					rs[i] = nullStr
-				} else {
-					rs[i] = fmt.Sprintf("%f", vs[index])
-				}
-			}
-			for count > 1 {
-				count--
-				i++
-				rs[i] = rs[i-1]
-			}
-		}
-	case types.T_char, types.T_varchar, types.T_blob, types.T_json:
-		vs := v.Col.([]types.Varlena)
-		var i int64
-		for i = 0; i < int64(rows); i++ {
-			index := i
-			count := occurCounts[i]
-			if count <= 0 {
-				i--
-				continue
-			}
-			if ifSel {
-				index = selectIndexs[i]
-			}
-			if allData {
-				rs[i] = string(vs[index].GetString(v.area))
-			} else {
-				if nulls.Contains(v.Nsp, uint64(index)) {
-					rs[i] = nullStr
-				} else {
-					rs[i] = string(vs[index].GetString(v.area))
-				}
-			}
-			for count > 1 {
-				count--
-				i++
-				rs[i] = rs[i-1]
-			}
-		}
-	case types.T_date:
-		vs := v.Col.([]types.Date)
-		for i := 0; i < rows; i++ {
-			index := i
-			count := occurCounts[i]
-			if count <= 0 {
-				i--
-				continue
-			}
-			if ifSel {
-				index = int(selectIndexs[i])
-			}
-			if allData {
-				rs[i] = vs[index].String()
-			} else {
-				if nulls.Contains(v.Nsp, uint64(index)) {
-					rs[i] = nullStr
-				} else {
-					rs[i] = vs[index].String()
-				}
-			}
-			for count > 1 {
-				count--
-				i++
-				rs[i] = rs[i-1]
-			}
-		}
-	case types.T_datetime:
-		vs := v.Col.([]types.Datetime)
-		for i := 0; i < rows; i++ {
-			index := i
-			count := occurCounts[i]
-			if count <= 0 {
-				i--
-				continue
-			}
-			if ifSel {
-				index = int(selectIndexs[i])
-			}
-			if allData {
-				rs[i] = vs[index].String()
-			} else {
-				if nulls.Contains(v.Nsp, uint64(index)) {
-					rs[i] = nullStr
-				} else {
-					rs[i] = vs[index].String()
-				}
-			}
-			for count > 1 {
-				count--
-				i++
-				rs[i] = rs[i-1]
-			}
-		}
-	case types.T_timestamp:
-		vs := v.Col.([]types.Timestamp)
-		for i := 0; i < rows; i++ {
-			index := i
-			count := occurCounts[i]
-			if count <= 0 {
-				i--
-				continue
-			}
-			if ifSel {
-				index = int(selectIndexs[i])
-			}
-			if allData {
-				rs[i] = vs[index].String()
-			} else {
-				if nulls.Contains(v.Nsp, uint64(index)) {
-					rs[i] = nullStr
-				} else {
-					rs[i] = vs[index].String()
-				}
-			}
-			for count > 1 {
-				count--
-				i++
-				rs[i] = rs[i-1]
-			}
-		}
-	case types.T_decimal64:
-		vs := v.Col.([]types.Decimal64)
-		for i := 0; i < rows; i++ {
-			index := i
-			count := occurCounts[i]
-			if count <= 0 {
-				i--
-				continue
-			}
-			if ifSel {
-				index = int(selectIndexs[i])
-			}
-			if allData {
-				rs[i] = fmt.Sprintf("%d", vs[index])
-			} else {
-				if nulls.Contains(v.Nsp, uint64(index)) {
-					rs[i] = nullStr
-				} else {
-					rs[i] = fmt.Sprintf("%d", vs[index])
-				}
-			}
-			for count > 1 {
-				count--
-				i++
-				rs[i] = rs[i-1]
-			}
-		}
-	case types.T_decimal128:
-		vs := v.Col.([]types.Decimal128)
-		for i := 0; i < rows; i++ {
-			index := i
-			count := occurCounts[i]
-			if count <= 0 {
-				i--
-				continue
-			}
-			if ifSel {
-				index = int(selectIndexs[i])
-			}
-			if allData {
-				rs[i] = fmt.Sprintf("%d", vs[index])
-			} else {
-				if nulls.Contains(v.Nsp, uint64(index)) {
-					rs[i] = nullStr
-				} else {
-					rs[i] = fmt.Sprintf("%d", vs[index])
-				}
-			}
-			for count > 1 {
-				count--
-				i++
-				rs[i] = rs[i-1]
-			}
-		}
-	default:
-		return fmt.Errorf("unexpect type %v for function vector.GetColumnData", typ)
-	}
-	return nil
 }

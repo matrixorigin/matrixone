@@ -23,7 +23,7 @@ import (
 )
 
 func TestPrepareHiddenData(t *testing.T) {
-	typ := types.T_decimal128.ToType()
+	typ := types.T_Rowid.ToType()
 	id := common.ID{
 		TableID:   1,
 		SegmentID: 2,
