@@ -145,7 +145,7 @@ func BenchmarkTop(b *testing.B) {
 }
 
 func newTestCase(m *mheap.Mheap, ds []bool, ts []types.Type, limit int64, fs []colexec.Field) topTestCase {
-	proc := process.New(m)
+	proc := testutil.NewProcessWithMheap(m)
 	proc.Reg.MergeReceivers = make([]*process.WaitRegister, 2)
 	ctx, cancel := context.WithCancel(context.Background())
 	proc.Reg.MergeReceivers[0] = &process.WaitRegister{

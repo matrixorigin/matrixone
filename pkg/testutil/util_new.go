@@ -15,6 +15,7 @@
 package testutil
 
 import (
+	"context"
 	"fmt"
 	"math/rand"
 	"strconv"
@@ -38,16 +39,25 @@ func NewMheap() *mheap.Mheap {
 }
 
 func NewProcess() *process.Process {
-	hm := host.New(1 << 30)
-	gm := guest.New(1<<30, hm)
-	proc := process.New(mheap.New(gm))
+	return NewProcessWithMheap(NewMheap())
+}
+
+func NewProcessWithMheap(heap *mheap.Mheap) *process.Process {
+	proc := process.New(
+		context.Background(),
+		heap,
+		nil,
+		NewFS(),
+	)
 	proc.Lim.Size = 1 << 20
 	proc.Lim.BatchRows = 1 << 20
 	proc.Lim.BatchSize = 1 << 20
 	proc.Lim.ReaderSize = 1 << 20
-	proc.FileService = NewFS()
+	proc.SessionInfo.TimeZone = time.Local
 	return proc
 }
+
+var NewProc = NewProcess
 
 func NewFS() *fileservice.FileServices {
 	local, err := fileservice.NewMemoryFS("local")

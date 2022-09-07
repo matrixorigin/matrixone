@@ -100,7 +100,7 @@ func TestConnector(t *testing.T) {
 }
 
 func newTestCase(gm *guest.Mmu) connectorTestCase {
-	proc := process.New(mheap.New(gm))
+	proc := testutil.NewProcessWithMheap(mheap.New(gm))
 	proc.Reg.MergeReceivers = make([]*process.WaitRegister, 2)
 	ctx, cancel := context.WithCancel(context.Background())
 	return connectorTestCase{

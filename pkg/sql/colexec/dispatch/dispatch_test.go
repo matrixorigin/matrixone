@@ -101,7 +101,7 @@ func TestDispatch(t *testing.T) {
 }
 
 func newTestCase(gm *guest.Mmu, all bool) dispatchTestCase {
-	proc := process.New(mheap.New(gm))
+	proc := testutil.NewProcessWithMheap(mheap.New(gm))
 	proc.Reg.MergeReceivers = make([]*process.WaitRegister, 2)
 	ctx, cancel := context.WithCancel(context.Background())
 	reg := &process.WaitRegister{Ctx: ctx, Ch: make(chan *batch.Batch, 3)}
