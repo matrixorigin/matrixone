@@ -183,11 +183,11 @@ func decimal128Greater(data []types.Decimal128, i, j int64) bool {
 	return data[i].Compare(data[j]) > 0
 }
 
-func genericLess[T types.Generic](data []T, i, j int64) bool {
+func genericLess[T types.OrderedT](data []T, i, j int64) bool {
 	return data[i] < data[j]
 }
 
-func genericGreater[T types.Generic](data []T, i, j int64) bool {
+func genericGreater[T types.OrderedT](data []T, i, j int64) bool {
 	return data[i] > data[j]
 }
 

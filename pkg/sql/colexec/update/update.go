@@ -139,7 +139,7 @@ func FilterBatch(bat *batch.Batch, batLen int, proc *process.Process) (*batch.Ba
 		newBat.Vecs = append(newBat.Vecs, v)
 	}
 
-	rows := bat.Vecs[0].Col.([]types.Decimal128)
+	rows := bat.Vecs[0].Col.([]types.Rowid)
 	for idx, row := range rows {
 		if _, ok := m[row]; ok {
 			continue
@@ -264,6 +264,20 @@ func getIndexValue(idx int, v *vector.Vector, isNull bool) any {
 			return types.Decimal128([16]byte{})
 		}
 		col := v.Col.([]types.Decimal128)
+		return col[idx]
+	case types.T_TS:
+		if isNull {
+			var ts types.TS
+			return ts
+		}
+		col := v.Col.([]types.TS)
+		return col[idx]
+	case types.T_Rowid:
+		if isNull {
+			var z types.Rowid
+			return z
+		}
+		col := v.Col.([]types.Rowid)
 		return col[idx]
 	case types.T_char, types.T_varchar, types.T_blob, types.T_json:
 		if isNull {

@@ -97,6 +97,10 @@ func typeConv(v any) any {
 		return Bytes(v[:])
 	case types.Decimal128:
 		return Bytes(v[:])
+	case types.TS:
+		return Bytes(v[:])
+	case types.Rowid:
+		return Bytes(v[:])
 	default:
 		panic(fmt.Errorf("unknown type: %T", v))
 	}
