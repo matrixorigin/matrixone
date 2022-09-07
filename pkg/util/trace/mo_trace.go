@@ -1,4 +1,4 @@
-// Copyright 2022 Matrix Origin
+// Copyright The OpenTelemetry Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,12 +12,20 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+// Portions of this file are additionally subject to the following
+// copyright.
+//
+// Copyright (C) 2022 Matrix Origin.
+//
+// Modified the behavior and the interface of the step.
+
 package trace
 
 import (
 	"bytes"
 	"context"
 	"encoding/hex"
+	"fmt"
 	"sync"
 	"unsafe"
 
@@ -98,6 +106,7 @@ func (t *MOTracer) Start(ctx context.Context, name string, opts ...SpanOption) (
 
 var _ Span = &MOSpan{}
 var _ IBuffer2SqlItem = &MOSpan{}
+var _ CsvFields = (*MOSpan)(nil)
 
 type MOSpan struct {
 	SpanConfig
@@ -142,6 +151,25 @@ func (s *MOSpan) GetName() string {
 	return MOSpanType
 }
 
+func (s *MOSpan) CsvOptions() *CsvOptions {
+	return CommonCsvOptions
+}
+
+func (s *MOSpan) CsvFields() []string {
+	var result []string
+	result = append(result, s.SpanID.String())
+	result = append(result, s.TraceID.String())
+	result = append(result, s.parent.SpanContext().SpanID.String())
+	result = append(result, GetNodeResource().NodeUuid)
+	result = append(result, GetNodeResource().NodeType)
+	result = append(result, s.Name.String())
+	result = append(result, nanoSec2DatetimeString(s.StartTimeNS))
+	result = append(result, nanoSec2DatetimeString(s.EndTimeNS))
+	result = append(result, fmt.Sprintf("%d", s.Duration)) // Duration
+	result = append(result, s.tracer.provider.resource.String())
+	return result
+}
+
 func (s *MOSpan) End(options ...SpanEndOption) {
 	s.EndTimeNS = util.NowNS()
 	s.Duration = s.EndTimeNS - s.StartTimeNS
@@ -157,8 +185,4 @@ func (s *MOSpan) SpanContext() SpanContext {
 
 func (s *MOSpan) ParentSpanContext() SpanContext {
 	return s.SpanConfig.parent.SpanContext()
-}
-
-func (s MOSpan) GetItemType() string {
-	return "MOSpan"
 }

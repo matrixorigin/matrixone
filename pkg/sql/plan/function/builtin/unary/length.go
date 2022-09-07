@@ -15,7 +15,6 @@
 package unary
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -27,32 +26,24 @@ func Length(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, er
 	if inputVector.IsScalarNull() {
 		return proc.AllocScalarNullVector(resultType), nil
 	}
-	resultElementSize := int(resultType.Size)
-	inputValues := vector.MustBytesCols(inputVector)
+	inputValues := vector.MustStrCols(inputVector)
 	if inputVector.IsScalar() {
-		if inputVector.ConstVectorIsNull() {
-			return proc.AllocScalarNullVector(resultType), nil
-		}
-		resultVector := vector.NewConst(resultType, 1)
-		resultValues := make([]int64, 1)
-		vector.SetCol(resultVector, strLength(inputValues, resultValues))
-		return resultVector, nil
+		ret := vector.NewConstFixed(resultType, inputVector.Length(), int64(len(inputValues[0])))
+		return ret, nil
 	} else {
-		resultVector, err := proc.AllocVector(resultType, int64(resultElementSize*len(inputValues.Lengths)))
+		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(inputValues)), inputVector.Nsp)
 		if err != nil {
 			return nil, err
 		}
-		resultValues := types.DecodeInt64Slice(resultVector.Data)
-		resultValues = resultValues[:len(inputValues.Lengths)]
-		nulls.Set(resultVector.Nsp, inputVector.Nsp)
-		vector.SetCol(resultVector, strLength(inputValues, resultValues))
+		resultValues := vector.MustTCols[int64](resultVector)
+		strLength(inputValues, resultValues)
 		return resultVector, nil
 	}
 }
 
-func strLength(xs *types.Bytes, rs []int64) []int64 {
-	for i, n := range xs.Lengths {
-		rs[i] = int64(n)
+func strLength(xs []string, rs []int64) []int64 {
+	for i, s := range xs {
+		rs[i] = int64(len(s))
 	}
 	return rs
 }

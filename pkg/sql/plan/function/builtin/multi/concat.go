@@ -15,7 +15,6 @@
 package multi
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -41,58 +40,32 @@ func Concat(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, er
 }
 
 func concatWithAllConst(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	vct := proc.AllocScalarVector(types.Type{Oid: types.T_varchar, Size: 24})
-	val := &types.Bytes{
-		Data:    make([]byte, 0),
-		Offsets: make([]uint32, 1),
-		Lengths: make([]uint32, 1),
-	}
-	length := uint32(0)
+	length := vector.Length(vectors[0])
+	vct := types.T_varchar.ToType()
+	res := ""
 	for i := range vectors {
-		col := vector.MustBytesCols(vectors[i])
-		val.Data = append(val.Data, col.Get(0)...)
-		length += col.Lengths[0]
+		res += vectors[i].GetString(0)
 	}
-	val.Lengths[0] = length
-	vector.SetCol(vct, val)
-	return vct, nil
+	return vector.NewConstString(vct, length, res), nil
 }
 
 func concatWithSomeCols(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	length := vector.Length(vectors[0])
-	vct, err := proc.AllocVector(types.Type{Oid: types.T_varchar, Size: 24}, 0)
-	if err != nil {
-		return nil, moerr.NewError(moerr.INTERNAL_ERROR, "out of memory")
-	}
+	vct := types.T_varchar.ToType()
 	nsp := new(nulls.Nulls)
-	val := &types.Bytes{
-		Data:    make([]byte, 0),
-		Offsets: make([]uint32, length),
-		Lengths: make([]uint32, length),
-	}
-	offset := uint32(0)
+	val := make([]string, length)
 	for i := 0; i < length; i++ {
-		rowLen := uint32(0)
 		for j := range vectors {
 			if nulls.Contains(vectors[j].Nsp, uint64(i)) {
 				nulls.Add(nsp, uint64(i))
-				rowLen = 0
 				break
 			}
-			col := vector.MustBytesCols(vectors[j])
 			if vectors[j].IsScalar() {
-				val.Data = append(val.Data, col.Get(0)...)
-				rowLen += col.Lengths[0]
+				val[i] += vectors[j].GetString(int64(0))
 			} else {
-				val.Data = append(val.Data, col.Get(int64(i))...)
-				rowLen += col.Lengths[i]
+				val[i] += vectors[j].GetString(int64(i))
 			}
 		}
-		val.Offsets[i] = offset
-		val.Lengths[i] = rowLen
-		offset += rowLen
 	}
-	nulls.Set(vct.Nsp, nsp)
-	vector.SetCol(vct, val)
-	return vct, nil
+	return vector.NewWithStrings(vct, val, nsp, proc.Mp()), nil
 }

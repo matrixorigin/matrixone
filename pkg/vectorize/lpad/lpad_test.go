@@ -17,35 +17,25 @@ package lpad
 import (
 	"testing"
 
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/stretchr/testify/require"
 )
 
 func TestLpadVarchar(t *testing.T) {
-	//Test values
-	// origins := []string{"hi", "hi","hishjajsa","hish&sa*(#jsa","hish&sa*(#jsa","hishjajsa"}
-
-	origins := &types.Bytes{
-		Data:    []byte("hihihishjajsahish&sa*(#jsahish&sa*(#jsahishjajsaabc"),
-		Offsets: []uint32{0, 2, 4, 13, 26, 39, 48},
-		Lengths: []uint32{2, 2, 9, 13, 13, 9, 3},
-	}
-
+	origins := []string{"hi", "hi", "hishjajsa",
+		"hish&sa*(#jsa", "hish&sa*(#jsa", "hishjajsa", "abc"}
 	originsInt64 := []int64{22}
 
-	// originsPadd := []string{"??", "??", "??saso","?^^%$so","?^^%$so","^%so"}
-	originsPadd := &types.Bytes{
-		Data:    []byte("??so"),
-		Offsets: []uint32{0},
-		Lengths: []uint32{4},
-	}
+	originsPadd := []string{"??so"}
+
 	//Predefined Correct Values
-	results := []string{"??so??so??so??so??sohi", "??so??so??so??so??sohi", "??so??so??so?hishjajsa",
-		"??so??so?hish&sa*(#jsa", "??so??so?hish&sa*(#jsa", "??so??so??so?hishjajsa", "??so??so??so??so??sabc"}
+	results := []string{"??so??so??so??so??sohi", "??so??so??so??so??sohi",
+		"??so??so??so?hishjajsa", "??so??so?hish&sa*(#jsa",
+		"??so??so?hish&sa*(#jsa", "??so??so??so?hishjajsa",
+		"??so??so??so??so??sabc"}
 
 	or := LpadVarchar(origins, originsInt64, originsPadd)
 
-	for i := range results {
-		require.Equal(t, []byte(results[i]), or.Data[or.Offsets[i]:or.Offsets[i]+or.Lengths[i]])
+	for i, r := range results {
+		require.Equal(t, or[i], r)
 	}
 }

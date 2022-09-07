@@ -16,8 +16,12 @@ package export
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/util/batchpipe"
+	"io"
+	"reflect"
 	"sync/atomic"
+	"unsafe"
+
+	"github.com/matrixorigin/matrixone/pkg/util/batchpipe"
 )
 
 func init() {
@@ -63,4 +67,21 @@ func SetDefaultContextFunc(f getContextFunc) {
 }
 func DefaultContext() context.Context {
 	return defaultContext.Load().(getContextFunc)()
+}
+
+// stringWriter same as io.stringWriter
+type stringWriter interface {
+	io.Writer
+	io.StringWriter
+	//WriteRune(rune) (int, error)
+}
+
+func String2Bytes(s string) (ret []byte) {
+	sliceHead := (*reflect.SliceHeader)(unsafe.Pointer(&ret))
+	strHead := (*reflect.StringHeader)(unsafe.Pointer(&s))
+
+	sliceHead.Data = strHead.Data
+	sliceHead.Len = strHead.Len
+	sliceHead.Cap = strHead.Len
+	return
 }

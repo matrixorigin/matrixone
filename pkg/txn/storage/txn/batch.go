@@ -120,14 +120,6 @@ func NewBatchIter(b *batch.Batch) BatchIter {
 					return
 				}
 
-			case types.T_sel:
-				col := vec.Col.([]int64)
-				if i < len(col) {
-					tuple = append(tuple, col[i])
-				} else {
-					return
-				}
-
 			case types.T_tuple:
 				col := vec.Col.([][]any)
 				if i < len(col) {
@@ -137,10 +129,8 @@ func NewBatchIter(b *batch.Batch) BatchIter {
 				}
 
 			case types.T_char, types.T_varchar, types.T_json, types.T_blob:
-				info := vec.Col.(*types.Bytes)
-				if i < len(info.Offsets) {
-					str := vec.Data[info.Offsets[i] : info.Offsets[i]+info.Lengths[i]]
-					tuple = append(tuple, str)
+				if i < vec.Length() {
+					tuple = append(tuple, vec.GetBytes(int64(i)))
 				} else {
 					return
 				}
@@ -232,16 +222,11 @@ func vectorAt(vec *vector.Vector, i int) any {
 	case types.T_float64:
 		return vec.Col.([]float64)[i]
 
-	case types.T_sel:
-		return vec.Col.([]int64)[i]
-
 	case types.T_tuple:
 		return vec.Col.([][]any)[i]
 
 	case types.T_char, types.T_varchar, types.T_json, types.T_blob:
-		info := vec.Col.(*types.Bytes)
-		str := vec.Data[info.Offsets[i] : info.Offsets[i]+info.Lengths[i]]
-		return str
+		return vec.GetBytes(int64(i))
 
 	case types.T_date:
 		return vec.Col.([]types.Date)[i]

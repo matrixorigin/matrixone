@@ -26,6 +26,14 @@ func ParseUuid(str string) (Uuid, error) {
 	return Uuid(gUuid), nil
 }
 
+func BuildUuid() (Uuid, error) {
+	gUuid, err := uuid.NewUUID()
+	if err != nil {
+		return Uuid{}, err
+	}
+	return Uuid(gUuid), nil
+}
+
 func UuidToString(muuid Uuid) (string, error) {
 	return uuid.UUID(muuid).String(), nil
 }
@@ -34,7 +42,7 @@ func EqualUuid(src Uuid, dest Uuid) bool {
 	return src == dest
 }
 
-func CompareUuid(left Uuid, right Uuid) int8 {
+func CompareUuid(left Uuid, right Uuid) int64 {
 	for i := 0; i < 16; i++ {
 		if left[i] == right[i] {
 			continue

@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/errno"
 	"github.com/matrixorigin/matrixone/pkg/sql/errors"
 	"math"
+	"sort"
 	"strconv"
 )
 
@@ -223,4 +224,80 @@ func (bj ByteJson) getValEntry(off int) ByteJson {
 	}
 	dataBytes := endian.Uint32(bj.Data[valOff+docSizeOff:])
 	return ByteJson{Type: TpCode(tpCode), Data: bj.Data[valOff : valOff+dataBytes]}
+}
+
+func (bj ByteJson) queryValByKey(key []byte) ByteJson {
+	cnt := bj.GetElemCnt()
+	idx := sort.Search(cnt, func(i int) bool {
+		return bytes.Compare(bj.getObjectKey(i), key) >= 0
+	})
+	if idx >= cnt || !bytes.Equal(bj.getObjectKey(idx), key) {
+		dt := make([]byte, 1)
+		dt[0] = LiteralNull
+		return ByteJson{
+			Type: TpCodeLiteral,
+			Data: dt,
+		}
+	}
+	return bj.getObjectVal(idx)
+}
+
+func (bj ByteJson) query(cur []ByteJson, path Path) []ByteJson {
+	if path.empty() {
+		cur = append(cur, bj)
+		return cur
+	}
+	sub, nPath := path.remove()
+	if sub.tp == subPathIdx && bj.Type == TpCodeArray {
+		cnt := bj.GetElemCnt()
+		if sub.idx < subPathIdxALL || sub.idx >= cnt { // idx is out of range
+			tmp := ByteJson{Type: TpCodeLiteral, Data: []byte{LiteralNull}}
+			cur = append(cur, tmp)
+			return cur
+		}
+		if sub.idx == subPathIdxALL {
+			for i := 0; i < cnt; i++ {
+				cur = bj.getArrayElem(i).query(cur, nPath)
+			}
+		} else {
+			cur = bj.getArrayElem(sub.idx).query(cur, nPath)
+		}
+	}
+	if sub.tp == subPathKey && bj.Type == TpCodeObject {
+		cnt := bj.GetElemCnt()
+		if sub.key == "*" {
+			for i := 0; i < cnt; i++ {
+				cur = bj.getObjectVal(i).query(cur, nPath)
+			}
+		} else {
+			tmp := bj.queryValByKey(string2Slice(sub.key))
+			cur = tmp.query(cur, nPath)
+		}
+	}
+	if sub.tp == subPathDoubleStar {
+		cur = bj.query(cur, nPath)
+		if bj.Type == TpCodeObject {
+			cnt := bj.GetElemCnt()
+			for i := 0; i < cnt; i++ {
+				cur = bj.getObjectVal(i).query(cur, path) // take care here, the argument is path,not nPath
+			}
+		} else if bj.Type == TpCodeArray {
+			cnt := bj.GetElemCnt()
+			for i := 0; i < cnt; i++ {
+				cur = bj.getArrayElem(i).query(cur, path) // take care here, the argument is path,not nPath
+			}
+		}
+	}
+	return cur
+}
+func (bj ByteJson) Query(path Path) ByteJson {
+	out := make([]ByteJson, 0, 1)
+	out = bj.query(out, path)
+	if len(out) == 0 {
+		return ByteJson{Type: TpCodeLiteral, Data: []byte{LiteralNull}}
+	}
+	if len(out) == 1 {
+		return out[0]
+	}
+	return mergeToArray(out)
 }

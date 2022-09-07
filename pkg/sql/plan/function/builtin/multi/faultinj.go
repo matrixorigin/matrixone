@@ -39,11 +39,11 @@ func AddFaultPoint(vecs []*vector.Vector, proc *process.Process) (*vector.Vector
 		}
 	}
 
-	name := vector.MustBytesCols(vecs[0]).GetString(0)
-	freq := vector.MustBytesCols(vecs[1]).GetString(0)
-	action := vector.MustBytesCols(vecs[2]).GetString(0)
-	iarg := vector.MustTCols[int64](vecs[3])[0]
-	sarg := vector.MustBytesCols(vecs[4]).GetString(0)
+	name := vecs[0].GetString(0)
+	freq := vecs[1].GetString(0)
+	action := vecs[2].GetString(0)
+	iarg := vector.GetValueAt[int64](vecs[3], 0)
+	sarg := vecs[4].GetString(0)
 
 	if err := fault.AddFaultPoint(name, freq, action, iarg, sarg); err != nil {
 		return nil, err
@@ -57,7 +57,7 @@ func RemoveFaultPoint(vecs []*vector.Vector, proc *process.Process) (*vector.Vec
 		return nil, moerr.NewError(moerr.INVALID_ARGUMENT, "RemoveFaultPoint can only take scalar args")
 	}
 
-	name := vector.MustBytesCols(vecs[0]).GetString(0)
+	name := vecs[0].GetString(0)
 	if err := fault.RemoveFaultPoint(name); err != nil {
 		return nil, err
 	}
@@ -69,7 +69,7 @@ func TriggerFaultPoint(vecs []*vector.Vector, proc *process.Process) (*vector.Ve
 		return nil, moerr.NewError(moerr.INVALID_ARGUMENT, "TriggerFaultPoint can only take scalar args")
 	}
 
-	name := vector.MustBytesCols(vecs[0]).GetString(0)
+	name := vecs[0].GetString(0)
 	iv, ok := fault.TriggerFault(name)
 	if !ok {
 		return proc.AllocScalarNullVector(types.T_int64.ToType()), nil

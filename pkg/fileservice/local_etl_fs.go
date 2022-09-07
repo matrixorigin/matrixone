@@ -465,23 +465,35 @@ func (l *LocalETLFS) NewMutator(filePath string) (Mutator, error) {
 	if os.IsNotExist(err) {
 		return nil, ErrFileNotFound
 	}
-	return &_LocalETLFSMutator{
+	return &LocalETLFSMutator{
 		osFile: f,
 	}, nil
 }
 
-type _LocalETLFSMutator struct {
+type LocalETLFSMutator struct {
 	osFile *os.File
 }
 
-func (l *_LocalETLFSMutator) Mutate(ctx context.Context, entries ...IOEntry) error {
+func (l *LocalETLFSMutator) Mutate(ctx context.Context, entries ...IOEntry) error {
+	return l.mutate(ctx, 0, entries...)
+}
+
+func (l *LocalETLFSMutator) Append(ctx context.Context, entries ...IOEntry) error {
+	offset, err := l.osFile.Seek(0, io.SeekEnd)
+	if err != nil {
+		return err
+	}
+	return l.mutate(ctx, int(offset), entries...)
+}
+
+func (l *LocalETLFSMutator) mutate(ctx context.Context, baseOffset int, entries ...IOEntry) error {
 
 	// write
 	for _, entry := range entries {
 
 		if entry.ReaderForWrite != nil {
 			// seek and copy
-			_, err := l.osFile.Seek(int64(entry.Offset), 0)
+			_, err := l.osFile.Seek(int64(entry.Offset+baseOffset), 0)
 			if err != nil {
 				return err
 			}
@@ -495,7 +507,7 @@ func (l *_LocalETLFSMutator) Mutate(ctx context.Context, entries ...IOEntry) err
 
 		} else {
 			// WriteAt
-			n, err := l.osFile.WriteAt(entry.Data, int64(entry.Offset))
+			n, err := l.osFile.WriteAt(entry.Data, int64(entry.Offset+baseOffset))
 			if err != nil {
 				return err
 			}
@@ -509,7 +521,7 @@ func (l *_LocalETLFSMutator) Mutate(ctx context.Context, entries ...IOEntry) err
 	return nil
 }
 
-func (l *_LocalETLFSMutator) Close() error {
+func (l *LocalETLFSMutator) Close() error {
 	// sync
 	if err := l.osFile.Sync(); err != nil {
 		return err

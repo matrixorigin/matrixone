@@ -26,9 +26,9 @@ import (
 	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
-	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	txnengine "github.com/matrixorigin/matrixone/pkg/vm/engine/txn"
 	"github.com/matrixorigin/matrixone/pkg/vm/mempool"
+	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
 	"github.com/stretchr/testify/assert"
 )
@@ -46,26 +46,28 @@ func TestFrontend(t *testing.T) {
 		RootPassword: "111",
 		DumpUser:     "dump",
 		DumpPassword: "111",
-		DisableTrace: true,
 	}
 	frontendParameters.SetDefaultValues()
 
+	shard := logservicepb.DNShardInfo{
+		ShardID:   2,
+		ReplicaID: 2,
+	}
+	shards := []logservicepb.DNShardInfo{
+		shard,
+	}
+	dnStore := logservicepb.DNStore{
+		UUID:           uuid.NewString(),
+		ServiceAddress: "1",
+		Shards:         shards,
+	}
 	engine := txnengine.New(
 		ctx,
 		new(txnengine.ShardToSingleStatic),
 		func() (logservicepb.ClusterDetails, error) {
 			return logservicepb.ClusterDetails{
 				DNStores: []logservicepb.DNStore{
-					{
-						UUID:           uuid.NewString(),
-						ServiceAddress: "1",
-						Shards: []logservicepb.DNShardInfo{
-							{
-								ShardID:   2,
-								ReplicaID: 2,
-							},
-						},
-					},
+					dnStore,
 				},
 			}, nil
 		},
@@ -85,19 +87,41 @@ func TestFrontend(t *testing.T) {
 		storage: storage,
 	}
 
+	hostMMU := host.New(frontendParameters.HostMmuLimitation)
+	guestMMU := guest.New(frontendParameters.GuestMmuLimitation, hostMMU)
+	memoryPool := mempool.New()
+
 	pu := &config.ParameterUnit{
 		SV:            frontendParameters,
-		HostMmu:       host.New(frontendParameters.HostMmuLimitation),
-		Mempool:       mempool.New(),
+		HostMmu:       hostMMU,
+		Mempool:       memoryPool,
 		StorageEngine: engine,
 		TxnClient:     txnClient,
 		FileService:   testutil.NewFS(),
 	}
 	ctx = context.WithValue(ctx, config.ParameterUnitKey, pu)
 
-	ctx, err = trace.Init(ctx)
-	assert.Nil(t, err)
-
 	err = frontend.InitSysTenant(ctx)
 	assert.Nil(t, err)
+
+	globalVars := new(frontend.GlobalSystemVariables)
+	frontend.InitGlobalSystemVariables(globalVars)
+
+	session := frontend.NewSession(
+		frontend.NewMysqlClientProtocol(
+			0,
+			nil, // goetty IOSession
+			1024,
+			frontendParameters,
+		),
+		guestMMU,
+		memoryPool,
+		pu,
+		globalVars,
+	)
+	session.SetRequestContext(ctx)
+
+	_, err = session.AuthenticateUser("root")
+	assert.Nil(t, err)
+
 }

@@ -45,7 +45,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
@@ -522,24 +521,12 @@ func extractRowFromVector(ses *Session, vec *vector.Vector, i int, row []interfa
 	switch vec.Typ.Oid { //get col
 	case types.T_json:
 		if !nulls.Any(vec.Nsp) {
-			bytes := vec.Col.(*types.Bytes)
-			vs := make([]bytejson.ByteJson, 0, len(bytes.Lengths))
-			for i, length := range bytes.Lengths {
-				off := bytes.Offsets[i]
-				vs = append(vs, types.DecodeJson(bytes.Data[off:off+length]))
-			}
-			row[i] = vs[rowIndex]
+			row[i] = types.DecodeJson(vec.GetBytes(rowIndex))
 		} else {
 			if nulls.Contains(vec.Nsp, uint64(rowIndex)) {
 				row[i] = nil
 			} else {
-				bytes := vec.Col.(*types.Bytes)
-				vs := make([]bytejson.ByteJson, 0, len(bytes.Lengths))
-				for i, length := range bytes.Lengths {
-					off := bytes.Offsets[i]
-					vs = append(vs, types.DecodeJson(bytes.Data[off:off+length]))
-				}
-				row[i] = vs[rowIndex]
+				row[i] = types.DecodeJson(vec.GetBytes(rowIndex))
 			}
 		}
 	case types.T_bool:
@@ -674,28 +661,14 @@ func extractRowFromVector(ses *Session, vec *vector.Vector, i int, row []interfa
 				row[i] = vs[rowIndex]
 			}
 		}
-	case types.T_char:
+	case types.T_char, types.T_varchar, types.T_blob:
 		if !nulls.Any(vec.Nsp) { //all data in this column are not null
-			vs := vec.Col.(*types.Bytes)
-			row[i] = vs.Get(rowIndex)
+			row[i] = vec.GetBytes(rowIndex)
 		} else {
 			if nulls.Contains(vec.Nsp, uint64(rowIndex)) { //is null
 				row[i] = nil
 			} else {
-				vs := vec.Col.(*types.Bytes)
-				row[i] = vs.Get(rowIndex)
-			}
-		}
-	case types.T_varchar:
-		if !nulls.Any(vec.Nsp) { //all data in this column are not null
-			vs := vec.Col.(*types.Bytes)
-			row[i] = vs.Get(rowIndex)
-		} else {
-			if nulls.Contains(vec.Nsp, uint64(rowIndex)) { //is null
-				row[i] = nil
-			} else {
-				vs := vec.Col.(*types.Bytes)
-				row[i] = vs.Get(rowIndex)
+				row[i] = vec.GetBytes(rowIndex)
 			}
 		}
 	case types.T_date:
@@ -772,18 +745,6 @@ func extractRowFromVector(ses *Session, vec *vector.Vector, i int, row []interfa
 			} else {
 				vs := vec.Col.([]types.Uuid)
 				row[i] = vs[rowIndex].ToString()
-			}
-		}
-	case types.T_blob:
-		if !nulls.Any(vec.Nsp) { //all data in this column are not null
-			vs := vec.Col.(*types.Bytes)
-			row[i] = vs.Get(rowIndex)
-		} else {
-			if nulls.Contains(vec.Nsp, uint64(rowIndex)) { //is null
-				row[i] = nil
-			} else {
-				vs := vec.Col.(*types.Bytes)
-				row[i] = vs.Get(rowIndex)
 			}
 		}
 	default:
@@ -1466,7 +1427,8 @@ func buildMoExplainQuery(explainColName string, buffer *explain.ExplainDataBuffe
 	}
 	vs = vs[:count]
 	vec := vector.New(types.T_varchar.ToType())
-	if err := vector.Append(vec, vs); err != nil {
+	// XXX Memory accounting or not.
+	if err := vector.AppendBytes(vec, vs, nil); err != nil {
 		return err
 	}
 	bat.Vecs[0] = vec
@@ -2110,8 +2072,13 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 func (mce *MysqlCmdExecutor) ExecRequest(requestCtx context.Context, req *Request) (resp *Response, err error) {
 	defer func() {
 		if e := recover(); e != nil {
-			err = moerr.NewPanicError(e)
-			resp = NewGeneralErrorResponse(COM_QUERY, err)
+			moe, ok := e.(*moerr.Error)
+			if !ok {
+				err = moerr.NewPanicError(e)
+				resp = NewGeneralErrorResponse(COM_QUERY, err)
+			} else {
+				resp = NewGeneralErrorResponse(COM_QUERY, moe)
+			}
 		}
 	}()
 

@@ -31,43 +31,29 @@ func ToDate(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, er
 	if !vectors[1].IsScalar() {
 		return nil, moerr.NewError(moerr.ERROR_FUNCTION_PARAMETER, "the second parameter of function to_date must be char/varchar constant\n"+usage)
 	}
-	inputBytes0 := vector.MustBytesCols(vectors[0])
-	inputBytes1 := vector.MustBytesCols(vectors[1])
+	inputBytes0 := vector.MustStrCols(vectors[0])
+	inputBytes1 := vector.MustStrCols(vectors[1])
 	resultType := types.Type{Oid: types.T_varchar, Size: 24}
 	if vectors[0].IsScalar() && vectors[1].IsScalar() {
-		resultVector := vector.NewConst(resultType, 1)
-		results := &types.Bytes{
-			Data:    make([]byte, 0),
-			Offsets: make([]uint32, 1),
-			Lengths: make([]uint32, 1),
-		}
-		format := string(inputBytes1.Data)
+		results := make([]string, 1)
+		format := inputBytes1[0]
 		inputNsp := vectors[0].Nsp
 		result, resultNsp, err := ToDateInputBytes(inputBytes0, format, inputNsp, results)
 		if err != nil {
 			return nil, err
 		}
+		resultVector := vector.NewConstString(resultType, 1, result[0])
 		nulls.Set(resultVector.Nsp, resultNsp)
-		vector.SetCol(resultVector, result)
 		return resultVector, nil
 	} else {
-		resultVector, err := proc.AllocVector(resultType, 0) // I think we can calculate the bytes needed ahead and get rid of append though
-		if err != nil {
-			return nil, err
-		}
-		results := &types.Bytes{
-			Data:    make([]byte, 0),
-			Offsets: make([]uint32, len(inputBytes0.Lengths)),
-			Lengths: make([]uint32, len(inputBytes0.Lengths)),
-		}
-		format := string(inputBytes1.Data)
+		results := make([]string, len(inputBytes0))
+		format := inputBytes1[0]
 		inputNsp := vectors[0].Nsp
-		result, resultNsp, err := ToDateInputBytes(inputBytes0, format, inputNsp, results)
+		results, resultNsp, err := ToDateInputBytes(inputBytes0, format, inputNsp, results)
 		if err != nil {
 			return nil, err
 		}
-		nulls.Set(resultVector.Nsp, resultNsp)
-		vector.SetCol(resultVector, result)
+		resultVector := vector.NewWithStrings(resultType, results, resultNsp, proc.Mp())
 		return resultVector, nil
 	}
 }
@@ -82,41 +68,27 @@ var otherFormats = map[string]string{
 	"YYYYMMDD HHMMSS": "20060102 15:04:05",
 }
 
-func ToDateInputBytes(inputBytes *types.Bytes, format string, inputNsp *nulls.Nulls, resultBytes *types.Bytes) (*types.Bytes, *nulls.Nulls, error) {
-	resultValueLen := uint32(len("2006-01-02"))
-	resultOffset := uint32(0)
+func ToDateInputBytes(inputs []string, format string, inputNsp *nulls.Nulls, result []string) ([]string, *nulls.Nulls, error) {
 	resultNsp := new(nulls.Nulls)
-	for i := range inputBytes.Lengths {
+	for i := range inputs {
 		if nulls.Contains(inputNsp, uint64(i)) {
-			resultBytes.Offsets[i] = resultOffset
-			resultBytes.Lengths[i] = 0
 			nulls.Add(resultNsp, uint64(i))
 			continue
 		}
-		offset := inputBytes.Offsets[i]
-		length := inputBytes.Lengths[i]
-		inputValue := inputBytes.Data[offset : offset+length]
 		if val, ok := otherFormats[format]; ok {
-			t, err := time.Parse(val, string(inputValue))
+			t, err := time.Parse(val, inputs[i])
 			if err != nil {
-				return nil, nil, moerr.NewError(moerr.ERROR_FUNCTION_PARAMETER, string(inputValue)+"is not is a valid "+format+" format.")
+				return nil, nil, moerr.NewError(moerr.ERROR_FUNCTION_PARAMETER, inputs[i]+"is not is a valid "+format+" format.")
 			}
-			resultValue := []byte(t.Format("2006-01-02")) // this is our output format
-			resultBytes.Data = append(resultBytes.Data, resultValue...)
-			resultBytes.Offsets[i] = resultOffset
-			resultBytes.Lengths[i] = resultValueLen
-			resultOffset += resultValueLen
+			result[i] = t.Format("2006-01-02") // this is our output format
 		} else {
-			t, err := time.Parse(val, string(inputValue))
+			//  XXX the only diff from if branch is error message.  Is this really correct?
+			t, err := time.Parse(val, inputs[i])
 			if err != nil {
-				return nil, nil, moerr.NewError(moerr.ERROR_FUNCTION_PARAMETER, "invalid inputs for function 'to_date()'"+string(inputValue)+" "+format)
+				return nil, nil, moerr.NewError(moerr.ERROR_FUNCTION_PARAMETER, "invalid inputs for function 'to_date()'"+inputs[i]+" "+format)
 			}
-			resultValue := []byte(t.Format("2006-01-02")) // this is our output format
-			resultBytes.Data = append(resultBytes.Data, resultValue...)
-			resultBytes.Offsets[i] = resultOffset
-			resultBytes.Lengths[i] = resultValueLen
-			resultOffset += resultValueLen
+			result[i] = t.Format("2006-01-02") // this is our output format
 		}
 	}
-	return resultBytes, resultNsp, nil
+	return result, resultNsp, nil
 }

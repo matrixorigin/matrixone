@@ -15,10 +15,11 @@
 package txnstorage
 
 import (
+	"crypto/rand"
 	"database/sql"
+	"encoding/binary"
 	"errors"
 	"fmt"
-	"math/rand"
 	"sort"
 	"sync"
 
@@ -515,7 +516,8 @@ func (m *MemHandler) HandleDelete(meta txn.TxnMeta, req txnengine.DeleteReq, res
 	}
 
 	tx := m.getTx(meta)
-	for i := 0; i < req.Vector.Length; i++ {
+	reqVecLen := req.Vector.Length()
+	for i := 0; i < reqVecLen; i++ {
 		primaryKey := AnyKey{
 			typeConv(vectorAt(req.Vector, i)),
 		}
@@ -826,7 +828,7 @@ func (m *MemHandler) HandleRead(meta txn.TxnMeta, req txnengine.ReadReq, resp *t
 			if ok {
 				value = []byte(str)
 			}
-			b.Vecs[i].Append(value, m.mheap)
+			b.Vecs[i].Append(value, false, m.mheap)
 		}
 		rows++
 
@@ -967,10 +969,19 @@ func (m *MemHandler) rangeBatchPhysicalRows(
 		}
 
 		// add version
-		a := rand.Int63()
-		b := rand.Int63()
-		version := types.Decimal128FromInt64Raw(a, b)
+		//TODO use [16]byte
+		var a int64
+		err := binary.Read(rand.Reader, binary.LittleEndian, &a)
+		if err != nil {
+			return err
+		}
+		version := types.MustDecimal128FromString(fmt.Sprintf("%d", a))
 		physicalRow.attributes[nameToAttrs[rowVersionColumnName].ID] = version
+
+		// use version as primary key if no primary key is provided
+		if len(physicalRow.primaryKey) == 0 {
+			physicalRow.primaryKey = append(physicalRow.primaryKey, typeConv(version))
+		}
 
 		if err := fn(table, physicalRow); err != nil {
 			return err

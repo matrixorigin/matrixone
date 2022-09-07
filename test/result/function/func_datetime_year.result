@@ -2,41 +2,30 @@ SELECT YEAR(date_add("2021-09-30", interval 200 day)) AS year;
 year
 2022
 SELECT YEAR("10000-12-21") as year;
-year
-null
+incorrect date format
 SELECT YEAR("-1234-12-21") as year;
-year
-null
+incorrect date format
 SELECT YEAR("12415141412-12-21") as year;
-year
-null
+incorrect date format
 SELECT YEAR("0000-00-00") as year;
-year
-null
+incorrect date format
 SELECT YEAR("2049-14-34") as year;
-year
-null
+incorrect date format
 SELECT YEAR("2015-09") as year;
-year
-null
+incorrect date format
 SELECT YEAR(2015) as year;
-year
-null
+incorrect date format
 SELECT YEAR(1340124) as year;
-year
-null
+incorrect date format
 SELECT YEAR(0.45133) as year;
-year
-null
+incorrect date format
 SELECT YEAR(1=1) as year;
-year
-null
+incorrect date format
 SELECT YEAR('2015-09.30') as year;
 year
 2015
 SELECT YEAR('2015-0') as year;
-year
-null
+incorrect date format
 SELECT YEAR('2015-09.30 12') as year;
 year
 2015

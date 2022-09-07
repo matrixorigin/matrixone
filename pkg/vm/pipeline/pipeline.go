@@ -65,7 +65,7 @@ func (p *Pipeline) Run(r engine.Reader, proc *process.Process) (bool, error) {
 	}
 	for {
 		// read data from storage engine
-		if bat, err = r.Read(p.attrs, nil, proc.Mp); err != nil {
+		if bat, err = r.Read(p.attrs, nil, proc.Mp()); err != nil {
 			return false, err
 		}
 		if bat != nil {
@@ -111,13 +111,23 @@ func (p *Pipeline) MergeRun(proc *process.Process) (bool, error) {
 	var end bool
 	var err error
 
+	// XXX Here is the big problem.   In side defer, we call cleanup
+	// which in turn can calls Run.   Using defer to trigger normal
+	// execution flow is simply WRONG.   Calling Run in cleanup, at
+	// best is extremely bad naming.
+	//
+	// I have observed a panic within, calls defer, calls cleanup,
+	// calls Run, may create a deadlock.
+	//
+	// Will try to repro it with fault inj.
+	//
 	defer func() {
 		cleanup(p, proc)
 		for i := 0; i < len(proc.Reg.MergeReceivers); i++ { // simulating the end of a pipeline
 			for len(proc.Reg.MergeReceivers[i].Ch) > 0 {
 				bat := <-proc.Reg.MergeReceivers[i].Ch
 				if bat != nil {
-					bat.Clean(proc.Mp)
+					bat.Clean(proc.Mp())
 				}
 			}
 		}
