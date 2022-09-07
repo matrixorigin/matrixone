@@ -12,24 +12,4 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package task
-
-import (
-	"fmt"
-	"time"
-)
-
-// IsDelayTask returns true if the task is a delay task
-func (m Task) IsDelayTask() bool {
-	return m.Metadata.Options.DelayDuration > 0
-}
-
-// GetDelayDuration returns delay duration
-func (m Task) GetDelayDuration() time.Duration {
-	return time.Duration(m.Metadata.Options.DelayDuration)
-}
-
-// DebugString returns the debug string
-func (m Task) DebugString() string {
-	return fmt.Sprintf("%s/%d", m.Metadata.ID, m.Metadata.Executor)
-}
+package taskservice

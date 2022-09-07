@@ -85,25 +85,27 @@ message Task {
     // Epoch indicates how many times the current task is scheduled, the first time it is scheduled 
     // is 1. Each time it is scheduled, Epoch++.
     uint32        Epoch         = 6;
-    // ScheduleAfter unix timestamp in ms used to controls when scheduler can assigned a TaskRunner 
-    // to this task.
-    int64         ScheduleAfter = 7;
     // LastHeartbeat time of the last heartbeat reported by TaskRunner. Unix timestamp in ms
-    int64         LastHeartbeat = 8;
+    int64         LastHeartbeat = 7;
     // CreateAt time of the task created. Unix timestamp in ms
-    int64         CreateAt      = 9;
+    int64         CreateAt      = 8;
     // CompletedAt time of the task completed. Unix timestamp in ms
-    int64         CompletedAt   = 10;
+    int64         CompletedAt   = 9;
     // ExecuteResult execute result
-    ExecuteResult ExecuteResult = 11;
+    ExecuteResult ExecuteResult = 10;
 }
 
 // CronTask task execute info.
 message CronTask {
+    uint64        ID            = 1;
     // TaskMetadata task metadata
-    TaskMetadata  Metadata      = 1 [(gogoproto.nullable) = false];
+    TaskMetadata  Metadata      = 2 [(gogoproto.nullable) = false];
     // CronExpr cron expr
-    string        CronExpr      = 2;
+    string        CronExpr      = 3;
     // NextTime the next time it should be scheduled for execution. Unix timestamp in ms
-    int64         NextTime      = 3;
+    int64         NextTime      = 4;
+    // CreateAt time of the cron task created. Unix timestamp in ms
+    int64         CreateAt      = 5;
+    // CreateAt time of the cron task created. Unix timestamp in ms
+    int64         UpdateAt      = 6;
 }

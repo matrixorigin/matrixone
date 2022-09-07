@@ -29,6 +29,56 @@ import (
 // RunnerOption option for create task runner
 type RunnerOption func(*taskRunner)
 
+// WithRunnerFetchLimit set fetch tasks limit
+func WithRunnerFetchLimit(limit int) RunnerOption {
+	return func(r *taskRunner) {
+		r.options.queryLimit = limit
+	}
+}
+
+// WithRunnerParallelism set the parallelism for execute tasks.
+func WithRunnerParallelism(parallelism int) RunnerOption {
+	return func(r *taskRunner) {
+		r.options.parallelism = parallelism
+	}
+}
+
+// WithRunnerMaxWaitTasks set the maximum number of tasks waiting to be executed, more than that
+// will block fetching tasks.
+func WithRunnerMaxWaitTasks(maxWaitTasks int) RunnerOption {
+	return func(r *taskRunner) {
+		r.options.maxWaitTasks = maxWaitTasks
+	}
+}
+
+// WithRunnerFetchInterval set fetch tasks interval duration
+func WithRunnerFetchInterval(interval time.Duration) RunnerOption {
+	return func(r *taskRunner) {
+		r.options.fetchInterval = interval
+	}
+}
+
+// WithRunnerFetchTimeout set fetch timeout
+func WithRunnerFetchTimeout(timeout time.Duration) RunnerOption {
+	return func(r *taskRunner) {
+		r.options.fetchTimeout = timeout
+	}
+}
+
+// WithRunnerHeartbeatInterval set heartbeat duration
+func WithRunnerHeartbeatInterval(interval time.Duration) RunnerOption {
+	return func(r *taskRunner) {
+		r.options.heartbeatInterval = interval
+	}
+}
+
+// WithRunnerRetryInterval set retry interval duration for operation
+func WithRunnerRetryInterval(interval time.Duration) RunnerOption {
+	return func(r *taskRunner) {
+		r.options.retryInterval = interval
+	}
+}
+
 type taskRunner struct {
 	logger       *zap.Logger
 	runnerID     string
@@ -47,12 +97,13 @@ type taskRunner struct {
 	}
 
 	options struct {
-		queryLimit    int
-		parallelism   int
-		maxWaitTasks  int
-		fetchInterval time.Duration
-		fetchTimeout  time.Duration
-		retryInterval time.Duration
+		queryLimit        int
+		parallelism       int
+		maxWaitTasks      int
+		fetchInterval     time.Duration
+		fetchTimeout      time.Duration
+		retryInterval     time.Duration
+		heartbeatInterval time.Duration
 	}
 }
 
@@ -88,11 +139,17 @@ func (r *taskRunner) adjust() {
 	if r.options.fetchTimeout == 0 {
 		r.options.fetchTimeout = time.Second * 5
 	}
+	if r.options.heartbeatInterval == 0 {
+		r.options.heartbeatInterval = time.Second * 5
+	}
 	if r.options.maxWaitTasks == 0 {
 		r.options.maxWaitTasks = 256
 	}
 	if r.options.queryLimit == 0 {
 		r.options.queryLimit = r.options.parallelism
+	}
+	if r.options.retryInterval == 0 {
+		r.options.retryInterval = time.Second
 	}
 }
 
@@ -176,7 +233,7 @@ func (r *taskRunner) fetch(ctx context.Context) {
 func (r *taskRunner) doFetch() ([]task.Task, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), r.options.fetchTimeout)
 	tasks, err := r.service.QueryTask(ctx,
-		WithQueryAfter(r.lastTaskID),
+		WithTaskID(GT, r.lastTaskID),
 		WithLimit(r.options.queryLimit))
 	cancel()
 	if err != nil {
@@ -287,7 +344,7 @@ func (r *taskRunner) doTaskDone(ctx context.Context, rt runningTask) bool {
 		case <-ctx.Done():
 			return false
 		default:
-			err := r.service.TaskDone(rt.ctx, rt.task)
+			err := r.service.Complete(rt.ctx, r.runnerID, rt.task)
 			if err == nil {
 				r.removeRunningTask(rt.task.ID)
 				return true
@@ -303,15 +360,31 @@ func (r *taskRunner) doTaskDone(ctx context.Context, rt runningTask) bool {
 
 func (r *taskRunner) heartbeat(ctx context.Context) {
 	r.logger.Info("heartbeat task started")
+	timer := time.NewTimer(r.options.heartbeatInterval)
+	defer timer.Stop()
 
 	for {
 		select {
 		case <-ctx.Done():
 			r.logger.Info("heartbeat task stopped")
 			return
-		case task := <-r.doneC:
-			r.doTaskDone(ctx, task)
+		case <-timer.C:
+			r.doHeartbeat(ctx)
 		}
+		timer.Reset(r.options.heartbeatInterval)
+	}
+}
+
+func (r *taskRunner) doHeartbeat(ctx context.Context) {
+	var tasks []task.Task
+	r.mu.RLock()
+	for _, rt := range r.mu.runningTasks {
+		tasks = append(tasks, rt.task)
+	}
+	r.mu.RUnlock()
+
+	if err := r.service.Heartbeat(ctx, r.runnerID, tasks...); err != nil {
+		r.logger.Error("task heartbeat failed", zap.Error(err))
 	}
 }
 
