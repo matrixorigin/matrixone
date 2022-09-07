@@ -98,9 +98,9 @@ func TestMark(t *testing.T) {
 			if ok, err := Call(0, tc.proc, tc.arg); ok || err != nil {
 				break
 			}
-			tc.proc.Reg.InputBatch.Clean(tc.proc.Mp)
+			tc.proc.Reg.InputBatch.Clean(tc.proc.Mp())
 		}
-		require.Equal(t, int64(0), mheap.Size(tc.proc.Mp))
+		require.Equal(t, int64(0), mheap.Size(tc.proc.Mp()))
 	}
 	for _, tc := range tcs {
 		err := Prepare(tc.proc, tc.arg)
@@ -116,9 +116,9 @@ func TestMark(t *testing.T) {
 			if ok, err := Call(0, tc.proc, tc.arg); ok || err != nil {
 				break
 			}
-			tc.proc.Reg.InputBatch.Clean(tc.proc.Mp)
+			tc.proc.Reg.InputBatch.Clean(tc.proc.Mp())
 		}
-		require.Equal(t, int64(0), mheap.Size(tc.proc.Mp))
+		require.Equal(t, int64(0), mheap.Size(tc.proc.Mp()))
 	}
 }
 
@@ -169,7 +169,7 @@ func BenchmarkMark(b *testing.B) {
 				if ok, err := Call(0, tc.proc, tc.arg); ok || err != nil {
 					break
 				}
-				tc.proc.Reg.InputBatch.Clean(tc.proc.Mp)
+				tc.proc.Reg.InputBatch.Clean(tc.proc.Mp())
 			}
 		}
 	}
@@ -276,5 +276,5 @@ func hashBuild(t *testing.T, tc markTestCase) *batch.Batch {
 
 // create a new block based on the type information, flgs[i] == ture: has null
 func newBatch(t *testing.T, flgs []bool, ts []types.Type, proc *process.Process, rows int64) *batch.Batch {
-	return testutil.NewBatch(ts, true, int(rows), proc.Mp)
+	return testutil.NewBatch(ts, true, int(rows), proc.Mp())
 }

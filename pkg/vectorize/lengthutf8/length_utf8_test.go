@@ -15,10 +15,9 @@
 package lengthutf8
 
 import (
-	"bytes"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/stretchr/testify/require"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
 func TestLengthUTF8(t *testing.T) {
@@ -33,7 +32,7 @@ func TestLengthUTF8(t *testing.T) {
 	}
 
 	for input, expected := range cases {
-		xs := MakeBytes([]string{input})
+		xs := []string{input}
 		re := make([]uint64, 1)
 		actual := StrLengthUTF8(xs, re)[0]
 		require.Equal(t, expected, actual)
@@ -41,28 +40,9 @@ func TestLengthUTF8(t *testing.T) {
 }
 
 func TestLengthUTF8WithMultiString(t *testing.T) {
-	xs := MakeBytes([]string{"你好", "中国", "abc", " ", "", "abc😄哈"})
+	xs := []string{"你好", "中国", "abc", " ", "", "abc😄哈"}
 	re := make([]uint64, 6)
 	expected := []uint64{2, 2, 3, 1, 0, 5}
 	actual := StrLengthUTF8(xs, re)
 	require.Equal(t, expected, actual)
-}
-
-func MakeBytes(strs []string) *types.Bytes {
-	result := &types.Bytes{
-		Lengths: make([]uint32, len(strs)),
-		Offsets: make([]uint32, len(strs)),
-	}
-
-	cursor := 0
-	var buf bytes.Buffer
-	for i, str := range strs {
-		buf.WriteString(str)
-		result.Lengths[i] = uint32(len(str))
-		result.Offsets[i] = uint32(cursor)
-		cursor += len(str)
-	}
-	result.Data = buf.Bytes()
-
-	return result
 }

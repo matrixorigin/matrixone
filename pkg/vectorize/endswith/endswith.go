@@ -16,65 +16,38 @@ package endswith
 
 import (
 	"bytes"
-
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
-var (
-	EndsWith           func(*types.Bytes, *types.Bytes, []uint8) []uint8
-	EndsWithRightConst func(*types.Bytes, *types.Bytes, []uint8) []uint8
-	EndsWithLeftConst  func(*types.Bytes, *types.Bytes, []uint8) []uint8
-	EndsWithAllConst   func(*types.Bytes, *types.Bytes, []uint8) []uint8
-)
-
-func init() {
-	EndsWith = endsWith
-	EndsWithRightConst = endsWithRightConst
-	EndsWithLeftConst = endsWithLeftConst
-	EndsWithAllConst = endsWithAllConst
-}
-
-func isEqualSuffix(b1, b2 []byte, offset1, offset2 uint32, len1, len2 uint32) uint8 {
-	if len1 >= len2 && bytes.Equal(b1[offset1+len1-len2:offset1+len1], b2[offset2:offset2+len2]) {
+func isEqualSuffix(b1, b2 string) uint8 {
+	if len(b1) >= len(b2) && bytes.Equal([]byte(b1)[len(b1)-len(b2):], []byte(b2)) {
 		return 1
 	}
 	return 0
 }
 
-func endsWith(lv, rv *types.Bytes, rs []uint8) []uint8 {
-	for i := range lv.Offsets {
-		lvCursor, lvLen := lv.Offsets[i], lv.Lengths[i]
-		rvCursor, rvLen := rv.Offsets[i], rv.Lengths[i]
-		rs[i] = isEqualSuffix(lv.Data, rv.Data, lvCursor, rvCursor, lvLen, rvLen)
+func EndsWith(lv, rv []string, rs []uint8) []uint8 {
+	for i := range lv {
+		rs[i] = isEqualSuffix(lv[i], rv[i])
+	}
+	return rs
+}
+
+func EndsWithRightConst(lv, rv []string, rs []uint8) []uint8 {
+	for i := range lv {
+		rs[i] = isEqualSuffix(lv[i], rv[0])
+	}
+	return rs
+}
+
+func EndsWithLeftConst(lv, rv []string, rs []uint8) []uint8 {
+	for i := range rv {
+		rs[i] = isEqualSuffix(lv[0], rv[i])
 	}
 
 	return rs
 }
 
-func endsWithRightConst(lv, rv *types.Bytes, rs []uint8) []uint8 {
-	rvCursor, rvLen := rv.Offsets[0], rv.Lengths[0]
-	for i := range lv.Offsets {
-		lvCursor, lvLen := lv.Offsets[i], lv.Lengths[i]
-		rs[i] = isEqualSuffix(lv.Data, rv.Data, lvCursor, rvCursor, lvLen, rvLen)
-	}
-
-	return rs
-}
-
-func endsWithLeftConst(lv, rv *types.Bytes, rs []uint8) []uint8 {
-	lvCursor, lvLen := lv.Offsets[0], lv.Lengths[0]
-	for i := range rv.Offsets {
-		rvCursor, rvLen := rv.Offsets[i], rv.Lengths[i]
-		rs[i] = isEqualSuffix(lv.Data, rv.Data, lvCursor, rvCursor, lvLen, rvLen)
-	}
-
-	return rs
-}
-
-func endsWithAllConst(lv, rv *types.Bytes, rs []uint8) []uint8 {
-	lvCursor, lvLen := lv.Offsets[0], lv.Lengths[0]
-	rvCursor, rvLen := rv.Offsets[0], rv.Lengths[0]
-	rs[0] = isEqualSuffix(lv.Data, rv.Data, lvCursor, rvCursor, lvLen, rvLen)
-
+func EndsWithAllConst(lv, rv []string, rs []uint8) []uint8 {
+	rs[0] = isEqualSuffix(lv[0], rv[0])
 	return rs
 }

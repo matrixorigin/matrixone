@@ -17,6 +17,7 @@ package operator
 import (
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 )
@@ -31,17 +32,17 @@ func TestIsNotNullNormal(t *testing.T) {
 	expected3 := []bool{true, true, true, true}
 
 	t.Run("isnotnull test - normal", func(t *testing.T) {
-		result, err := IsNotNull[int32](vecs1, procs)
+		result, err := IsNotNull(vecs1, procs)
 		if err != nil {
 			t.Fatal(err)
 		}
 		checkIsNullResult(t, result, expected1, false)
-		result, err = IsStringNotNull(vecs2, procs)
+		result, err = IsNotNull(vecs2, procs)
 		if err != nil {
 			t.Fatal(err)
 		}
 		checkIsNullResult(t, result, expected2, false)
-		result, err = IsStringNotNull(vecs3, procs)
+		result, err = IsNotNull(vecs3, procs)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -59,17 +60,17 @@ func TestIsNotNullNormalWithNull(t *testing.T) {
 	expected3 := []bool{true, true, false, false}
 
 	t.Run("isnotnull test - normal with null", func(t *testing.T) {
-		result, err := IsNotNull[float64](vecs1, procs)
+		result, err := IsNotNull(vecs1, procs)
 		if err != nil {
 			t.Fatal(err)
 		}
 		checkIsNullResult(t, result, expected1, false)
-		result, err = IsStringNotNull(vecs2, procs)
+		result, err = IsNotNull(vecs2, procs)
 		if err != nil {
 			t.Fatal(err)
 		}
 		checkIsNullResult(t, result, expected2, false)
-		result, err = IsStringNotNull(vecs3, procs)
+		result, err = IsNotNull(vecs3, procs)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -85,12 +86,12 @@ func TestIsNotNullScalar(t *testing.T) {
 	expected2 := []bool{true}
 
 	t.Run("isnotnull test - not null scalar", func(t *testing.T) {
-		result, err := IsNotNull[int32](vecs1, procs)
+		result, err := IsNotNull(vecs1, procs)
 		if err != nil {
 			t.Fatal(err)
 		}
 		checkIsNullResult(t, result, expected1, true)
-		result, err = IsStringNotNull(vecs2, procs)
+		result, err = IsNotNull(vecs2, procs)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -100,18 +101,18 @@ func TestIsNotNullScalar(t *testing.T) {
 
 func TestIsNotNullScalarNull(t *testing.T) {
 	procs := testutil.NewProc()
-	vecs1 := []*vector.Vector{testutil.MakeScalarNull(1)}
+	vecs1 := []*vector.Vector{testutil.MakeScalarNull(types.T_bool, 1)}
 	expected1 := []bool{false}
-	vecs2 := []*vector.Vector{testutil.MakeScalarNull(1)}
+	vecs2 := []*vector.Vector{testutil.MakeScalarNull(types.T_bool, 1)}
 	expected2 := []bool{false}
 
 	t.Run("isnotnull test - scalar null", func(t *testing.T) {
-		result, err := IsNotNull[int32](vecs1, procs)
+		result, err := IsNotNull(vecs1, procs)
 		if err != nil {
 			t.Fatal(err)
 		}
 		checkIsNullResult(t, result, expected1, true)
-		result, err = IsStringNotNull(vecs2, procs)
+		result, err = IsNotNull(vecs2, procs)
 		if err != nil {
 			t.Fatal(err)
 		}

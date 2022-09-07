@@ -15,73 +15,13 @@
 package rtrim
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"strings"
 )
 
-var (
-	RtrimChar    func(*types.Bytes, *types.Bytes) *types.Bytes
-	RtrimVarChar func(*types.Bytes, *types.Bytes) *types.Bytes
-)
-
-func init() {
-	RtrimChar = rtrim
-	RtrimVarChar = rtrim
-}
-
-func CountSpacesFromRight(xs *types.Bytes) int32 {
-	var (
-		spaceCount int32
-	)
-
-	for i, offset := range xs.Offsets {
-		if xs.Lengths[i] == 0 {
-			continue
-		}
-
-		cursor := offset + xs.Lengths[i] - 1
-		//cursor >= offset >=0
-		for ; cursor > offset && xs.Data[cursor] == ' '; cursor-- {
-			spaceCount++
-		}
-
-		if cursor == offset && xs.Data[cursor] == ' ' {
-			spaceCount++
-		}
+func Rtrim(xs []string, rs []string) []string {
+	for i, str := range xs {
+		// rs[i] = strings.TrimRight(str, " \u3000")
+		rs[i] = strings.TrimRight(str, " ")
 	}
-
-	return spaceCount
-}
-
-func rtrim(xs *types.Bytes, rs *types.Bytes) *types.Bytes {
-	var resultCursor uint32 = 0
-
-	for i, offset := range xs.Offsets {
-		if xs.Lengths[i] == 0 {
-			rs.Lengths[i] = 0
-			rs.Offsets[i] = resultCursor
-
-			continue
-		}
-
-		cursor := offset + xs.Lengths[i] - 1
-		//cursor >= offset >=0
-		// ignore the tailing spaces
-		for ; cursor > offset && xs.Data[cursor] == ' '; cursor-- {
-			continue
-		}
-
-		length := uint32(0)
-		//cursor == offset :all spaces
-		if cursor > offset {
-			// copy the non-space characters
-			length = cursor - offset + 1
-			copy(rs.Data[resultCursor:resultCursor+length], xs.Data[offset:offset+length])
-		}
-
-		rs.Lengths[i] = length
-		rs.Offsets[i] = resultCursor
-		resultCursor += length
-	}
-
 	return rs
 }

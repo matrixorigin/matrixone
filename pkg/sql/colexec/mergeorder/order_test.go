@@ -88,7 +88,7 @@ func TestOrder(t *testing.T) {
 		for {
 			if ok, err := Call(0, tc.proc, tc.arg); ok || err != nil {
 				if tc.proc.Reg.InputBatch != nil {
-					tc.proc.Reg.InputBatch.Clean(tc.proc.Mp)
+					tc.proc.Reg.InputBatch.Clean(tc.proc.Mp())
 				}
 				break
 			}
@@ -97,11 +97,11 @@ func TestOrder(t *testing.T) {
 			for len(tc.proc.Reg.MergeReceivers[i].Ch) > 0 {
 				bat := <-tc.proc.Reg.MergeReceivers[i].Ch
 				if bat != nil {
-					bat.Clean(tc.proc.Mp)
+					bat.Clean(tc.proc.Mp())
 				}
 			}
 		}
-		require.Equal(t, mheap.Size(tc.proc.Mp), int64(0))
+		require.Equal(t, mheap.Size(tc.proc.Mp()), int64(0))
 	}
 }
 
@@ -126,7 +126,7 @@ func BenchmarkOrder(b *testing.B) {
 			for {
 				if ok, err := Call(0, tc.proc, tc.arg); ok || err != nil {
 					if tc.proc.Reg.InputBatch != nil {
-						tc.proc.Reg.InputBatch.Clean(tc.proc.Mp)
+						tc.proc.Reg.InputBatch.Clean(tc.proc.Mp())
 					}
 					break
 				}
@@ -135,7 +135,7 @@ func BenchmarkOrder(b *testing.B) {
 				for len(tc.proc.Reg.MergeReceivers[i].Ch) > 0 {
 					bat := <-tc.proc.Reg.MergeReceivers[i].Ch
 					if bat != nil {
-						bat.Clean(tc.proc.Mp)
+						bat.Clean(tc.proc.Mp())
 					}
 				}
 			}
@@ -178,5 +178,5 @@ func newExpression(pos int32) *plan.Expr {
 
 // create a new block based on the type information, ds[i] == true: in descending order
 func newBatch(t *testing.T, ds []bool, ts []types.Type, proc *process.Process, rows int64) *batch.Batch {
-	return testutil.NewBatch(ts, false, int(rows), proc.Mp)
+	return testutil.NewBatch(ts, false, int(rows), proc.Mp())
 }

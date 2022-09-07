@@ -109,7 +109,7 @@ func TestGroup(t *testing.T) {
 		for {
 			if ok, err := Call(0, tc.proc, tc.arg); ok || err != nil {
 				if tc.proc.Reg.InputBatch != nil {
-					tc.proc.Reg.InputBatch.Clean(tc.proc.Mp)
+					tc.proc.Reg.InputBatch.Clean(tc.proc.Mp())
 				}
 				break
 			}
@@ -118,11 +118,11 @@ func TestGroup(t *testing.T) {
 			for len(tc.proc.Reg.MergeReceivers[i].Ch) > 0 {
 				bat := <-tc.proc.Reg.MergeReceivers[i].Ch
 				if bat != nil {
-					bat.Clean(tc.proc.Mp)
+					bat.Clean(tc.proc.Mp())
 				}
 			}
 		}
-		require.Equal(t, int64(0), mheap.Size(tc.proc.Mp))
+		require.Equal(t, int64(0), mheap.Size(tc.proc.Mp()))
 	}
 }
 
@@ -145,7 +145,7 @@ func BenchmarkGroup(b *testing.B) {
 			for {
 				if ok, err := Call(0, tc.proc, tc.arg); ok || err != nil {
 					if tc.proc.Reg.InputBatch != nil {
-						tc.proc.Reg.InputBatch.Clean(tc.proc.Mp)
+						tc.proc.Reg.InputBatch.Clean(tc.proc.Mp())
 					}
 					break
 				}
@@ -154,7 +154,7 @@ func BenchmarkGroup(b *testing.B) {
 				for len(tc.proc.Reg.MergeReceivers[i].Ch) > 0 {
 					bat := <-tc.proc.Reg.MergeReceivers[i].Ch
 					if bat != nil {
-						bat.Clean(tc.proc.Mp)
+						bat.Clean(tc.proc.Mp())
 					}
 				}
 			}
@@ -185,5 +185,5 @@ func newTestCase(m *mheap.Mheap, flgs []bool, needEval bool, ts []types.Type) gr
 
 // create a new block based on the type information, flgs[i] == ture: has null
 func newBatch(t *testing.T, flgs []bool, ts []types.Type, proc *process.Process, rows int64) *batch.Batch {
-	return testutil.NewBatch(ts, false, int(rows), proc.Mp)
+	return testutil.NewBatch(ts, false, int(rows), proc.Mp())
 }

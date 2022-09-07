@@ -16,6 +16,8 @@ package minus
 
 import (
 	"context"
+	"testing"
+
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -23,7 +25,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
-	"testing"
 )
 
 type minusTestCase struct {
@@ -46,29 +47,29 @@ func TestMinus(t *testing.T) {
 		[]*batch.Batch{
 			testutil.NewBatchWithVectors(
 				[]*vector.Vector{
-					testutil.NewVector(2, types.T_int64.ToType(), proc.Mp, false, []int64{1, 1}),
-					testutil.NewVector(2, types.T_int64.ToType(), proc.Mp, false, []int64{2, 2}),
-					testutil.NewVector(2, types.T_int64.ToType(), proc.Mp, false, []int64{3, 3}),
+					testutil.NewVector(2, types.T_int64.ToType(), proc.Mp(), false, []int64{1, 1}),
+					testutil.NewVector(2, types.T_int64.ToType(), proc.Mp(), false, []int64{2, 2}),
+					testutil.NewVector(2, types.T_int64.ToType(), proc.Mp(), false, []int64{3, 3}),
 				}, nil),
 			testutil.NewBatchWithVectors(
 				[]*vector.Vector{
-					testutil.NewVector(2, types.T_int64.ToType(), proc.Mp, false, []int64{3, 3}),
-					testutil.NewVector(2, types.T_int64.ToType(), proc.Mp, false, []int64{4, 4}),
-					testutil.NewVector(2, types.T_int64.ToType(), proc.Mp, false, []int64{5, 5}),
+					testutil.NewVector(2, types.T_int64.ToType(), proc.Mp(), false, []int64{3, 3}),
+					testutil.NewVector(2, types.T_int64.ToType(), proc.Mp(), false, []int64{4, 4}),
+					testutil.NewVector(2, types.T_int64.ToType(), proc.Mp(), false, []int64{5, 5}),
 				}, nil),
 		},
 		[]*batch.Batch{
 			testutil.NewBatchWithVectors(
 				[]*vector.Vector{
-					testutil.NewVector(1, types.T_int64.ToType(), proc.Mp, false, []int64{1}),
-					testutil.NewVector(1, types.T_int64.ToType(), proc.Mp, false, []int64{2}),
-					testutil.NewVector(1, types.T_int64.ToType(), proc.Mp, false, []int64{3}),
+					testutil.NewVector(1, types.T_int64.ToType(), proc.Mp(), false, []int64{1}),
+					testutil.NewVector(1, types.T_int64.ToType(), proc.Mp(), false, []int64{2}),
+					testutil.NewVector(1, types.T_int64.ToType(), proc.Mp(), false, []int64{3}),
 				}, nil),
 			testutil.NewBatchWithVectors(
 				[]*vector.Vector{
-					testutil.NewVector(1, types.T_int64.ToType(), proc.Mp, false, []int64{4}),
-					testutil.NewVector(1, types.T_int64.ToType(), proc.Mp, false, []int64{5}),
-					testutil.NewVector(1, types.T_int64.ToType(), proc.Mp, false, []int64{6}),
+					testutil.NewVector(1, types.T_int64.ToType(), proc.Mp(), false, []int64{4}),
+					testutil.NewVector(1, types.T_int64.ToType(), proc.Mp(), false, []int64{5}),
+					testutil.NewVector(1, types.T_int64.ToType(), proc.Mp(), false, []int64{6}),
 				}, nil),
 		},
 	)
@@ -87,11 +88,11 @@ func TestMinus(t *testing.T) {
 		if result != nil && len(result.Zs) != 0 {
 			cnt += result.Length()
 			require.Equal(t, 3, len(result.Vecs))
-			c.proc.InputBatch().Clean(c.proc.Mp)
+			c.proc.InputBatch().Clean(c.proc.Mp())
 		}
 	}
 	require.Equal(t, 1, cnt) // 1 row
-	require.Equal(t, int64(0), mheap.Size(c.proc.Mp))
+	require.Equal(t, int64(0), mheap.Size(c.proc.Mp()))
 }
 
 func newMinusTestCase(proc *process.Process, leftBatches, rightBatches []*batch.Batch) minusTestCase {

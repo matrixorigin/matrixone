@@ -420,20 +420,6 @@ func MakeDecimal128Arr(input []int64) []types.Decimal128 {
 	return ret
 }
 
-func makeBytes(values []string) *types.Bytes {
-	next := uint32(0)
-	bs := &types.Bytes{
-		Lengths: make([]uint32, len(values)),
-		Offsets: make([]uint32, len(values)),
-	}
-	for i := range values {
-		s := values[i]
-		l := uint32(len(s))
-		bs.Data = append(bs.Data, []byte(s)...)
-		bs.Lengths[i] = l
-		bs.Offsets[i] = next
-		next += l
-	}
-
-	return bs
+func makeBytes(values []string) []string {
+	return values
 }

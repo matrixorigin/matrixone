@@ -80,7 +80,7 @@ type Config struct {
 		BatchSize int64 `toml:"batch-size"`
 	}
 
-	//parameters for the frontend
+	// Frontend parameters for the frontend
 	Frontend config.FrontendParameters `toml:"frontend"`
 
 	// HAKeeper configuration

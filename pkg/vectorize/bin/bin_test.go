@@ -15,13 +15,10 @@
 package bin
 
 import (
-	"bytes"
 	"math"
-	"math/bits"
 	"strconv"
 	"testing"
 
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/stretchr/testify/require"
 )
 
@@ -61,88 +58,29 @@ func TestCountBitLenForFloat(t *testing.T) {
 
 func TestUnsignedIntToBinary(t *testing.T) {
 	cases := []uint64{0, 1, 2, 3, 127, 128}
-	var buf bytes.Buffer
-	for _, x := range cases {
-		buf.WriteString(strconv.FormatUint(x, 2))
-	}
-
-	bytesNeed := Uint64BitLen(cases)
-	ret := &types.Bytes{
-		Data:    make([]byte, bytesNeed),
-		Lengths: make([]uint32, len(cases)),
-		Offsets: make([]uint32, len(cases)),
-	}
+	ret := make([]string, len(cases))
 	ret = Uint64ToBinary(cases, ret)
-	var (
-		len, offset int
-	)
-	for i, x := range cases {
-		len = bits.Len64(x)
-		if x == 0 {
-			len = 1
-		}
-		require.Equal(t, uint32(len), ret.Lengths[i])
-		require.Equal(t, uint32(offset), ret.Offsets[i])
-		offset += len
+	for i, c := range cases {
+		require.Equal(t, strconv.FormatUint(c, 2), ret[i])
 	}
-
-	require.Equal(t, buf.Bytes(), ret.Data)
 }
 
 func TestIntToBinary(t *testing.T) {
 	cases := []int64{-1, 127, -128, 1e9, 1e7, -1e9}
-	var buf bytes.Buffer
-	for _, x := range cases {
-		buf.WriteString(strconv.FormatUint(uint64(x), 2))
-	}
-
-	bytesNeed := Int64BitLen(cases)
-	ret := &types.Bytes{
-		Data:    make([]byte, bytesNeed),
-		Lengths: make([]uint32, len(cases)),
-		Offsets: make([]uint32, len(cases)),
-	}
+	ret := make([]string, len(cases))
 	ret = Int64ToBinary(cases, ret)
-
-	var (
-		len, offset int
-	)
-	for i, x := range cases {
-		len = bits.Len64(uint64(x))
-		require.Equal(t, uint32(len), ret.Lengths[i])
-		require.Equal(t, uint32(offset), ret.Offsets[i])
-		offset += len
+	for i, c := range cases {
+		require.Equal(t, strconv.FormatUint(uint64(c), 2), ret[i])
 	}
-
-	require.Equal(t, buf.Bytes(), ret.Data)
 }
 
 func TestFloatToBinary(t *testing.T) {
 	cases := []float64{float64(math.Phi), float64(math.E), float64(math.Pi)}
-	var buf bytes.Buffer
-	for _, x := range cases {
-		buf.WriteString(strconv.FormatUint(uint64(x), 2))
-	}
-
-	bytesNeed := Float64BitLen(cases)
-	ret := &types.Bytes{
-		Data:    make([]byte, bytesNeed),
-		Lengths: make([]uint32, len(cases)),
-		Offsets: make([]uint32, len(cases)),
-	}
+	ret := make([]string, len(cases))
 	ret = Float64ToBinary(cases, ret)
-
-	var (
-		length, offset int
-	)
-	for i, x := range cases {
-		length = bits.Len64(uint64(x))
-		require.Equal(t, uint32(length), ret.Lengths[i])
-		require.Equal(t, uint32(offset), ret.Offsets[i])
-		offset += length
+	for i, c := range cases {
+		require.Equal(t, strconv.FormatUint(uint64(c), 2), ret[i])
 	}
-
-	require.Equal(t, buf.Bytes(), ret.Data)
 }
 
 func TestFormatUintToBinary(t *testing.T) {

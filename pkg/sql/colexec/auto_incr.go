@@ -205,19 +205,18 @@ func updateBatchImpl(ColDefs []*plan.ColDef, bat *batch.Batch, offset, step []in
 func getCurrentIndex(param *AutoIncrParam, colName string) (int64, int64) {
 	rds, _ := param.rel.NewReader(param.ctx, 1, nil, nil)
 	for {
-		bat, err := rds[0].Read(AUTO_INCR_TABLE_COLNAME, nil, param.proc.Mp)
+		bat, err := rds[0].Read(AUTO_INCR_TABLE_COLNAME, nil, param.proc.Mp())
 		if err != nil || bat == nil {
 			return -1, 0
 		}
 		if len(bat.Vecs) < 2 {
 			panic(errors.New("", "the mo_increment_columns col num is not two"))
 		}
-		vs := bat.Vecs[0].Col.(*types.Bytes)
-		vs2 := bat.Vecs[1].Col.([]int64)
-		vs3 := bat.Vecs[2].Col.([]int64)
+		vs2 := vector.MustTCols[int64](bat.Vecs[1])
+		vs3 := vector.MustTCols[int64](bat.Vecs[2])
 		var rowIndex int64
 		for rowIndex = 0; rowIndex < int64(bat.Length()); rowIndex++ {
-			str := string(vs.Get(rowIndex))
+			str := bat.Vecs[0].GetString(rowIndex)
 			if str == colName {
 				break
 			}
@@ -242,39 +241,9 @@ func updateAutoIncrTable(param *AutoIncrParam, curNum int64, name string) error 
 }
 
 func makeAutoIncrBatch(name string, num, step int64) *batch.Batch {
-	vBytes := &types.Bytes{
-		Offsets: make([]uint32, 1),
-		Lengths: make([]uint32, 1),
-		Data:    nil,
-	}
-	vec := &vector.Vector{
-		Typ:  types.T_varchar.ToType(),
-		Col:  vBytes,
-		Data: make([]byte, 0),
-		Nsp:  &nulls.Nulls{},
-	}
-
-	vec.Data = append(vec.Data, name...)
-	vBytes.Offsets[0] = uint32(0)
-	vBytes.Data = append(vBytes.Data, name...)
-	vBytes.Lengths[0] = uint32(len(name))
-
-	vec2 := &vector.Vector{
-		Typ: types.T_int64.ToType(),
-		Nsp: &nulls.Nulls{},
-	}
-	vec2.Data = make([]byte, 8)
-	vec2.Col = types.DecodeInt64Slice(vec2.Data)
-	vec2.Col.([]int64)[0] = num
-
-	vec3 := &vector.Vector{
-		Typ: types.T_int64.ToType(),
-		Nsp: &nulls.Nulls{},
-	}
-	vec3.Data = make([]byte, 8)
-	vec3.Col = types.DecodeInt64Slice(vec3.Data)
-	vec3.Col.([]int64)[0] = step
-
+	vec := vector.NewWithStrings(types.T_varchar.ToType(), []string{name}, nil, nil)
+	vec2 := vector.NewWithFixed(types.T_int64.ToType(), []int64{num}, nil, nil)
+	vec3 := vector.NewWithFixed(types.T_int64.ToType(), []int64{step}, nil, nil)
 	bat := &batch.Batch{
 		Attrs: AUTO_INCR_TABLE_COLNAME,
 		Vecs:  []*vector.Vector{vec, vec2, vec3},

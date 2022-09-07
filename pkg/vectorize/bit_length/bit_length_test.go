@@ -15,46 +15,35 @@
 package bit_length
 
 import (
-	"bytes"
 	"testing"
 
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/stretchr/testify/require"
 )
 
-func MakeBytes(strs []string) *types.Bytes {
-	ret := &types.Bytes{
-		Lengths: make([]uint32, len(strs)),
-		Offsets: make([]uint32, len(strs)),
-	}
-	cur := 0
-	var buf bytes.Buffer
+func makeBytes(strs []string) [][]byte {
+	ret := make([][]byte, len(strs))
 	for i, s := range strs {
-		buf.WriteString(s)
-		ret.Lengths[i] = uint32(len(s))
-		ret.Offsets[i] = uint32(cur)
-		cur += len(s)
+		ret[i] = []byte(s)
 	}
-	ret.Data = buf.Bytes()
 	return ret
 }
 
 func TestEmpty(t *testing.T) {
 	tt := []struct {
 		name string
-		xs   *types.Bytes
+		xs   [][]byte
 		rs   []int64
 		want []int64
 	}{
 		{
 			name: "Empty",
-			xs:   MakeBytes([]string{""}),
+			xs:   makeBytes([]string{""}),
 			rs:   make([]int64, 1),
 			want: []int64{0},
 		},
 		{
 			name: "Simple condition",
-			xs:   MakeBytes([]string{"a", "boy", " ", "\t", "\n", "dead"}),
+			xs:   makeBytes([]string{"a", "boy", " ", "\t", "\n", "dead"}),
 			rs:   make([]int64, 6),
 			want: []int64{8, 24, 8, 8, 8, 32},
 		},
