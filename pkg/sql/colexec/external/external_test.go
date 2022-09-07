@@ -339,7 +339,7 @@ func Test_GetBatchData(t *testing.T) {
 			Limit: math.MaxInt64,
 			Mmu:   &host.Mmu{},
 		}
-		proc := process.New(mheap.New(mmu))
+		proc := process.New(context.TODO(), mheap.New(mmu), nil, nil)
 		_, err := GetBatchData(param, plh, proc)
 		convey.So(err, convey.ShouldBeNil)
 

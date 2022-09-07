@@ -25,8 +25,8 @@ import (
 
 // JXM: TODO
 // Remove MVCCNodeIf after go 1.19.1 release
-type MVCCNodeIf interface {
-	UpdateNode(MVCCNodeIf)
+type MVCCNode interface {
+	UpdateNode(MVCCNode)
 	GetTxn() txnif.TxnReader
 	GetEnd() types.TS
 	GetStart() types.TS
@@ -52,8 +52,8 @@ var ErrTxnActive = errors.New("txn is active")
 
 type INode interface {
 	txnif.TxnEntry
-	ApplyUpdate(MVCCNodeIf) error
+	ApplyUpdate(MVCCNode) error
 	ApplyDelete() error
-	GetUpdateNode() MVCCNodeIf
+	GetUpdateNode() MVCCNode
 	String() string
 }

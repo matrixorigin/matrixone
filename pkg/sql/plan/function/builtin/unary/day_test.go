@@ -69,7 +69,9 @@ func TestDateToDayFunc(t *testing.T) {
 			vecs := make([]*vector.Vector, 1)
 			if c.inputstr != nil {
 				vecs[0] = testutil.MakeDateVector(c.inputstr, c.inputNsp)
-				vecs[0].IsConst = c.isScalar
+				if c.isScalar {
+					vecs[0].MakeScalar(1)
+				}
 			} else {
 				vecs[0] = testutil.MakeScalarNull(types.T_date, 0)
 			}
@@ -130,7 +132,9 @@ func TestDatetimeToDayFunc(t *testing.T) {
 			vecs := make([]*vector.Vector, 1)
 			if c.inputstr != nil {
 				vecs[0] = testutil.MakeDateTimeVector(c.inputstr, c.inputNsp)
-				vecs[0].IsConst = c.isScalar
+				if c.isScalar {
+					vecs[0].MakeScalar(1)
+				}
 			} else {
 				vecs[0] = testutil.MakeScalarNull(types.T_datetime, 0)
 			}

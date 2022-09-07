@@ -798,11 +798,18 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext) (vm.In
 }
 
 // newCompile init a new compile for remote run.
-func newCompile(ctx context.Context) *Compile {
+func newCompile(
+	ctx context.Context,
+) *Compile {
 	// not implement now, fill method should send by stream
 	c := &Compile{
-		ctx:  ctx,
-		proc: process.New(mheap.New(guest.New(1<<30, host.New(1<<20)))),
+		ctx: ctx,
+		proc: process.New(
+			ctx,
+			mheap.New(guest.New(1<<30, host.New(1<<20))),
+			nil, //TODO must set txn operator
+			nil, //TODO must set file service
+		),
 	}
 	//c.fill = func(a any, b *batch.Batch) error {
 	//	stream, err := CNClient.NewStream("target")

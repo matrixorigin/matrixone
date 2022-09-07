@@ -158,7 +158,7 @@ func newTestCase(m *mheap.Mheap, flgs []bool, ts []types.Type, exprs []*plan.Exp
 	return groupTestCase{
 		types: ts,
 		flgs:  flgs,
-		proc:  process.New(m),
+		proc:  testutil.NewProcessWithMheap(m),
 		arg: &Argument{
 			Aggs:  aggs,
 			Exprs: exprs,
