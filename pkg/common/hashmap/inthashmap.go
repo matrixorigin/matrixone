@@ -18,6 +18,7 @@ import (
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/container/hashtable"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 )
@@ -97,20 +98,21 @@ func (m *IntHashMap) encodeHashKeys(vecs []*vector.Vector, start, count int) {
 	}
 }
 
-func fillKeys[T any](m *IntHashMap, vec *vector.Vector, size uint32, start int, n int) {
-	vs := vector.GetFixedVectorValues[T](vec, int(size))
+func fillKeys[T types.FixedSizeT](m *IntHashMap, vec *vector.Vector, size uint32, start int, n int) {
 	keys := m.keys
 	keyOffs := m.keyOffs
 	if !vec.GetNulls().Any() {
 		if m.hasNull {
 			for i := 0; i < n; i++ {
 				*(*int8)(unsafe.Add(unsafe.Pointer(&keys[i]), keyOffs[i])) = 0
-				*(*T)(unsafe.Add(unsafe.Pointer(&keys[i]), keyOffs[i]+1)) = vs[i+start]
+				ptr := (*T)(vector.GetPtrAt(vec, int64(i+start)))
+				*(*T)(unsafe.Add(unsafe.Pointer(&keys[i]), keyOffs[i]+1)) = *ptr
 			}
 			uint32AddScalar(1+size, keyOffs[:n], keyOffs[:n])
 		} else {
 			for i := 0; i < n; i++ {
-				*(*T)(unsafe.Add(unsafe.Pointer(&keys[i]), keyOffs[i])) = vs[i+start]
+				ptr := (*T)(vector.GetPtrAt(vec, int64(i+start)))
+				*(*T)(unsafe.Add(unsafe.Pointer(&keys[i]), keyOffs[i])) = *ptr
 			}
 			uint32AddScalar(size, keyOffs[:n], keyOffs[:n])
 		}
@@ -123,7 +125,8 @@ func fillKeys[T any](m *IntHashMap, vec *vector.Vector, size uint32, start int, 
 					keyOffs[i]++
 				} else {
 					*(*int8)(unsafe.Add(unsafe.Pointer(&keys[i]), keyOffs[i])) = 0
-					*(*T)(unsafe.Add(unsafe.Pointer(&keys[i]), keyOffs[i]+1)) = vs[i+start]
+					ptr := (*T)(vector.GetPtrAt(vec, int64(i+start)))
+					*(*T)(unsafe.Add(unsafe.Pointer(&keys[i]), keyOffs[i]+1)) = *ptr
 					keyOffs[i] += 1 + size
 				}
 			}
@@ -133,7 +136,8 @@ func fillKeys[T any](m *IntHashMap, vec *vector.Vector, size uint32, start int, 
 					m.zValues[i] = 0
 					continue
 				}
-				*(*T)(unsafe.Add(unsafe.Pointer(&keys[i]), keyOffs[i])) = vs[i+start]
+				ptr := (*T)(vector.GetPtrAt(vec, int64(i+start)))
+				*(*T)(unsafe.Add(unsafe.Pointer(&keys[i]), keyOffs[i])) = *ptr
 				keyOffs[i] += size
 			}
 		}
@@ -141,20 +145,20 @@ func fillKeys[T any](m *IntHashMap, vec *vector.Vector, size uint32, start int, 
 }
 
 func fillStrKey(m *IntHashMap, vec *vector.Vector, start int, n int) {
-	vData, vOff, vLen := vector.GetStrVectorValues(vec)
+	bvs := vector.GetBytesVectorValues(vec)
 	keys := m.keys
 	keyOffs := m.keyOffs
 	if !vec.GetNulls().Any() {
 		if m.hasNull {
 			for i := 0; i < n; i++ {
 				*(*int8)(unsafe.Add(unsafe.Pointer(&keys[i]), keyOffs[i])) = 0
-				copy(unsafe.Slice((*byte)(unsafe.Pointer(&keys[i])), 8)[m.keyOffs[i]+1:], vData[vOff[i+start]:vOff[i+start]+vLen[i+start]])
-				m.keyOffs[i] += vLen[i+start] + 1
+				copy(unsafe.Slice((*byte)(unsafe.Pointer(&keys[i])), 8)[m.keyOffs[i]+1:], bvs[i+start])
+				m.keyOffs[i] += uint32(len(bvs[i+start]) + 1)
 			}
 		} else {
 			for i := 0; i < n; i++ {
-				copy(unsafe.Slice((*byte)(unsafe.Pointer(&keys[i])), 8)[m.keyOffs[i]:], vData[vOff[i+start]:vOff[i+start]+vLen[i+start]])
-				m.keyOffs[i] += vLen[i+start]
+				copy(unsafe.Slice((*byte)(unsafe.Pointer(&keys[i])), 8)[m.keyOffs[i]:], bvs[i+start])
+				m.keyOffs[i] += uint32(len(bvs[i+start]))
 			}
 		}
 	} else {
@@ -166,8 +170,8 @@ func fillStrKey(m *IntHashMap, vec *vector.Vector, start int, n int) {
 					keyOffs[i]++
 				} else {
 					*(*int8)(unsafe.Add(unsafe.Pointer(&keys[i]), keyOffs[i])) = 0
-					copy(unsafe.Slice((*byte)(unsafe.Pointer(&keys[i])), 8)[m.keyOffs[i]+1:], vData[vOff[i+start]:vOff[i+start]+vLen[i+start]])
-					m.keyOffs[i] += vLen[i+start] + 1
+					copy(unsafe.Slice((*byte)(unsafe.Pointer(&keys[i])), 8)[m.keyOffs[i]+1:], bvs[i+start])
+					m.keyOffs[i] += uint32(len(bvs[i+start]) + 1)
 				}
 			}
 		} else {
@@ -176,8 +180,8 @@ func fillStrKey(m *IntHashMap, vec *vector.Vector, start int, n int) {
 					m.zValues[i] = 0
 					continue
 				}
-				copy(unsafe.Slice((*byte)(unsafe.Pointer(&keys[i])), 8)[m.keyOffs[i]:], vData[vOff[i+start]:vOff[i+start]+vLen[i+start]])
-				m.keyOffs[i] += vLen[i+start]
+				copy(unsafe.Slice((*byte)(unsafe.Pointer(&keys[i])), 8)[m.keyOffs[i]:], bvs[i+start])
+				m.keyOffs[i] += uint32(len(bvs[i+start]))
 			}
 		}
 	}

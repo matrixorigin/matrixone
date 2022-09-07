@@ -183,3 +183,24 @@ select count(*);
 
 select COUNT(12), COUNT(DISTINCT 12), MIN(2),MAX(2),STD(2), VARIANCE(2),SUM(2);
 
+drop table if exists t13;
+CREATE TABLE t13(product VARCHAR(32),country_id INTEGER NOT NULL,year INTEGER,profit INTEGER);
+INSERT INTO t13 VALUES ( 'Computer', 2,2000, 1200),
+( 'TV', 1, 1999, 150),
+( 'Calculator', 1, 1999,50),
+( 'Computer', 1, 1999,1500),
+( 'Computer', 1, 2000,1500),
+( 'TV', 1, 2000, 150),
+( 'TV', 2, 2000, 100),
+( 'TV', 2, 2000, 100),
+( 'Calculator', 1, 2000,75),
+( 'Calculator', 2, 2000,75),
+( 'TV', 1, 1999, 100),
+( 'Computer', 1, 1999,1200),
+( 'Computer', 2, 2000,1500),
+( 'Calculator', 2, 2000,75),
+( 'Phone', 3, 2003,10);
+
+SELECT product, country_id, COUNT(*), COUNT(distinct year) FROM t13 GROUP BY product, country_id order by product;
+
+drop table t13;

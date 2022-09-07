@@ -149,7 +149,7 @@ func ParseTimestamp(loc *time.Location, s string, precision int32) (Timestamp, e
 }
 
 type unsafeLoc struct {
-	name String
+	name string
 	zone []struct {
 		name   string
 		offset int

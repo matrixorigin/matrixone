@@ -19,37 +19,25 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
-var (
-	DateToMonth       func([]types.Date, []uint8) []uint8
-	DatetimeToMonth   func([]types.Datetime, []uint8) []uint8
-	DateStringToMonth func(*types.Bytes, *nulls.Nulls, []uint8) []uint8
-)
-
-func init() {
-	DateToMonth = dataToMonth
-	DatetimeToMonth = datetimeToMonth
-	DateStringToMonth = dateStringToMonth
-}
-
-func dataToMonth(xs []types.Date, rs []uint8) []uint8 {
+func DateToMonth(xs []types.Date, rs []uint8) []uint8 {
 	for i, x := range xs {
 		rs[i] = x.Month()
 	}
 	return rs
 }
 
-func datetimeToMonth(xs []types.Datetime, rs []uint8) []uint8 {
+func DatetimeToMonth(xs []types.Datetime, rs []uint8) []uint8 {
 	for i, x := range xs {
 		rs[i] = x.Month()
 	}
 	return rs
 }
 
-func dateStringToMonth(xs *types.Bytes, ns *nulls.Nulls, rs []uint8) []uint8 {
-	for i := range xs.Lengths {
-		str := string(xs.Get(int64(i)))
+func DateStringToMonth(xs []string, ns *nulls.Nulls, rs []uint8) []uint8 {
+	for i, str := range xs {
 		d, e := types.ParseDateCast(str)
 		if e != nil {
+			// XXX FUBAR should raise instead of intruducting nulls.
 			// set null
 			nulls.Add(ns, uint64(i))
 			rs[i] = 0

@@ -100,7 +100,7 @@ func CreateR(db engine.Database) {
 				for i := 0; i < 10; i++ {
 					vs[i] = []byte(fmt.Sprintf("%v", i))
 				}
-				if err := vector.Append(vec, vs); err != nil {
+				if err := vector.AppendBytes(vec, vs, nil); err != nil {
 					log.Fatal(err)
 				}
 				bat.Vecs[0] = vec
@@ -114,7 +114,7 @@ func CreateR(db engine.Database) {
 				for i := 0; i < 10; i++ {
 					vs[i] = uint32(i % 4)
 				}
-				if err := vector.Append(vec, vs); err != nil {
+				if err := vector.AppendFixed(vec, vs, nil); err != nil {
 					log.Fatal(err)
 				}
 				bat.Vecs[1] = vec
@@ -128,7 +128,7 @@ func CreateR(db engine.Database) {
 				for i := 0; i < 10; i++ {
 					vs[i] = float64(i)
 				}
-				if err := vector.Append(vec, vs); err != nil {
+				if err := vector.AppendFixed(vec, vs, nil); err != nil {
 					log.Fatal(err)
 				}
 				bat.Vecs[2] = vec
@@ -149,7 +149,7 @@ func CreateR(db engine.Database) {
 			for i := 10; i < 20; i++ {
 				vs[i-10] = []byte(fmt.Sprintf("%v", i))
 			}
-			if err := vector.Append(vec, vs); err != nil {
+			if err := vector.AppendBytes(vec, vs, nil); err != nil {
 				log.Fatal(err)
 			}
 			bat.Vecs[0] = vec
@@ -163,7 +163,7 @@ func CreateR(db engine.Database) {
 			for i := 10; i < 20; i++ {
 				vs[i-10] = uint32(i % 4)
 			}
-			if err := vector.Append(vec, vs); err != nil {
+			if err := vector.AppendFixed(vec, vs, nil); err != nil {
 				log.Fatal(err)
 			}
 			bat.Vecs[1] = vec
@@ -177,7 +177,7 @@ func CreateR(db engine.Database) {
 			for i := 10; i < 20; i++ {
 				vs[i-10] = float64(i)
 			}
-			if err := vector.Append(vec, vs); err != nil {
+			if err := vector.AppendFixed(vec, vs, nil); err != nil {
 				log.Fatal(err)
 			}
 			bat.Vecs[2] = vec
@@ -243,7 +243,7 @@ func CreateS(db engine.Database) {
 				for i := 0; i < 10; i++ {
 					vs[i] = []byte(fmt.Sprintf("%v", i*2))
 				}
-				if err := vector.Append(vec, vs); err != nil {
+				if err := vector.AppendBytes(vec, vs, nil); err != nil {
 					log.Fatal(err)
 				}
 				bat.Vecs[0] = vec
@@ -257,7 +257,7 @@ func CreateS(db engine.Database) {
 				for i := 0; i < 10; i++ {
 					vs[i] = uint32(i % 2)
 				}
-				if err := vector.Append(vec, vs); err != nil {
+				if err := vector.AppendFixed(vec, vs, nil); err != nil {
 					log.Fatal(err)
 				}
 				bat.Vecs[1] = vec
@@ -271,7 +271,7 @@ func CreateS(db engine.Database) {
 				for i := 0; i < 10; i++ {
 					vs[i] = float64(i)
 				}
-				if err := vector.Append(vec, vs); err != nil {
+				if err := vector.AppendFixed(vec, vs, nil); err != nil {
 					log.Fatal(err)
 				}
 				bat.Vecs[2] = vec
@@ -292,7 +292,7 @@ func CreateS(db engine.Database) {
 			for i := 10; i < 20; i++ {
 				vs[i-10] = []byte(fmt.Sprintf("%v", i*2))
 			}
-			if err := vector.Append(vec, vs); err != nil {
+			if err := vector.AppendBytes(vec, vs, nil); err != nil {
 				log.Fatal(err)
 			}
 			bat.Vecs[0] = vec
@@ -306,7 +306,7 @@ func CreateS(db engine.Database) {
 			for i := 10; i < 20; i++ {
 				vs[i-10] = uint32(i % 2)
 			}
-			if err := vector.Append(vec, vs); err != nil {
+			if err := vector.AppendFixed(vec, vs, nil); err != nil {
 				log.Fatal(err)
 			}
 			bat.Vecs[1] = vec
@@ -320,7 +320,7 @@ func CreateS(db engine.Database) {
 			for i := 10; i < 20; i++ {
 				vs[i-10] = float64(i)
 			}
-			if err := vector.Append(vec, vs); err != nil {
+			if err := vector.AppendFixed(vec, vs, nil); err != nil {
 				log.Fatal(err)
 			}
 			bat.Vecs[2] = vec
@@ -400,7 +400,7 @@ func CreateT1(db engine.Database) {
 			vs[2] = 2
 			vs[3] = 3
 			vs[4] = 1
-			if err := vector.Append(vec, vs); err != nil {
+			if err := vector.AppendFixed(vec, vs, nil); err != nil {
 				log.Fatal(err)
 			}
 			bat.Vecs[0] = vec
@@ -413,7 +413,7 @@ func CreateT1(db engine.Database) {
 			vs[2] = 1
 			vs[3] = 3
 			vs[4] = 1
-			if err := vector.Append(vec, vs); err != nil {
+			if err := vector.AppendFixed(vec, vs, nil); err != nil {
 				log.Fatal(err)
 			}
 			bat.Vecs[1] = vec
@@ -426,7 +426,7 @@ func CreateT1(db engine.Database) {
 			vs[2] = 4
 			vs[3] = 3
 			vs[4] = 5
-			if err := vector.Append(vec, vs); err != nil {
+			if err := vector.AppendFixed(vec, vs, nil); err != nil {
 				log.Fatal(err)
 			}
 			bat.Vecs[2] = vec
@@ -442,7 +442,7 @@ func CreateT1(db engine.Database) {
 			vs := make([]int32, 2)
 			vs[0] = 4
 			vs[1] = 5
-			if err := vector.Append(vec, vs); err != nil {
+			if err := vector.AppendFixed(vec, vs, nil); err != nil {
 				log.Fatal(err)
 			}
 			bat.Vecs[0] = vec
@@ -452,7 +452,7 @@ func CreateT1(db engine.Database) {
 			vs := make([]int32, 2)
 			vs[0] = 6
 			vs[1] = 11
-			if err := vector.Append(vec, vs); err != nil {
+			if err := vector.AppendFixed(vec, vs, nil); err != nil {
 				log.Fatal(err)
 			}
 			bat.Vecs[1] = vec
@@ -462,7 +462,7 @@ func CreateT1(db engine.Database) {
 			vs := make([]int8, 2)
 			vs[0] = 10
 			vs[1] = 99
-			if err := vector.Append(vec, vs); err != nil {
+			if err := vector.AppendFixed(vec, vs, nil); err != nil {
 				log.Fatal(err)
 			}
 			bat.Vecs[2] = vec

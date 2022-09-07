@@ -15,137 +15,31 @@
 package unary
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/space"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"golang.org/x/exp/constraints"
 )
 
-// the function registeration for generics functions may have some problem now, change this to generics later
-func SpaceInt64(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+func SpaceNumber[T types.BuiltinNumber](vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	inputVector := vectors[0]
-	resultType := types.Type{Oid: types.T_varchar, Size: 24}
-	inputValues := vector.MustTCols[int64](inputVector)
-	if inputVector.IsScalar() {
-		if inputVector.ConstVectorIsNull() {
-			return proc.AllocScalarNullVector(resultType), nil
-		}
-		resultVector := vector.NewConst(resultType, 1)
-		bytesNeed, err := space.CountSpacesSigned(inputValues)
-		if err != nil {
-			return nil, err
-		}
-		results := &types.Bytes{
-			Data:    make([]byte, bytesNeed),
-			Offsets: make([]uint32, 1),
-			Lengths: make([]uint32, 1),
-		}
-		result := space.FillSpacesSigned(inputValues, results)
-		nulls.Or(inputVector.Nsp, result.Nsp, resultVector.Nsp)
-		vector.SetCol(resultVector, result.Result)
-		return resultVector, nil
-	}
-	bytesNeed, err := space.CountSpacesSigned(inputValues)
-	if err != nil {
-		return nil, err
-	}
-	resultVector, err := proc.AllocVector(resultType, bytesNeed)
-	if err != nil {
-		return nil, err
-	}
-	resultValues := &types.Bytes{
-		Data:    resultVector.Data,
-		Offsets: make([]uint32, len(inputValues)),
-		Lengths: make([]uint32, len(inputValues)),
-	}
-	result := space.FillSpacesSigned(inputValues, resultValues)
-	nulls.Or(inputVector.Nsp, result.Nsp, resultVector.Nsp)
-	vector.SetCol(resultVector, result.Result)
-	return resultVector, nil
-}
-
-func SpaceUint64(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	inputVector := vectors[0]
-	resultType := types.Type{Oid: types.T_varchar, Size: 24}
-	inputValues := vector.MustTCols[uint64](inputVector)
-	if inputVector.IsScalar() {
-		if inputVector.ConstVectorIsNull() {
-			return proc.AllocScalarNullVector(resultType), nil
-		}
-		resultVector := vector.NewConst(resultType, 1)
-		bytesNeed, err := space.CountSpacesUnsigned(inputValues)
-		if err != nil {
-			return nil, err
-		}
-		results := &types.Bytes{
-			Data:    make([]byte, bytesNeed),
-			Offsets: make([]uint32, 1),
-			Lengths: make([]uint32, 1),
-		}
-		result := space.FillSpacesUnsigned(inputValues, results)
-		nulls.Or(inputVector.Nsp, result.Nsp, resultVector.Nsp)
-		vector.SetCol(resultVector, result.Result)
-		return resultVector, nil
-	}
-	bytesNeed, err := space.CountSpacesUnsigned(inputValues)
-	if err != nil {
-		return nil, err
-	}
-	resultVector, err := proc.AllocVector(resultType, bytesNeed)
-	if err != nil {
-		return nil, err
-	}
-	resultValues := &types.Bytes{
-		Data:    resultVector.Data,
-		Offsets: make([]uint32, len(inputValues)),
-		Lengths: make([]uint32, len(inputValues)),
-	}
-	result := space.FillSpacesUnsigned(inputValues, resultValues)
-	nulls.Or(inputVector.Nsp, result.Nsp, resultVector.Nsp)
-	vector.SetCol(resultVector, result.Result)
-	return resultVector, nil
-}
-
-func SpaceFloat[T constraints.Float](vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	inputVector := vectors[0]
-	resultType := types.Type{Oid: types.T_varchar, Size: 24}
+	resultType := types.T_varchar.ToType()
 	inputValues := vector.MustTCols[T](inputVector)
 	if inputVector.IsScalar() {
 		if inputVector.ConstVectorIsNull() {
-			return proc.AllocScalarNullVector(resultType), nil
+			return proc.AllocConstNullVector(resultType, inputVector.Length()), nil
 		}
-		resultVector := vector.NewConst(resultType, 1)
-		bytesNeed, err := space.CountSpacesFloat(inputValues)
+		results := make([]string, 1)
+		_, err := space.FillSpacesNumber(inputValues, results)
 		if err != nil {
 			return nil, err
 		}
-		results := &types.Bytes{
-			Data:    make([]byte, bytesNeed),
-			Offsets: make([]uint32, 1),
-			Lengths: make([]uint32, 1),
-		}
-		result := space.FillSpacesFloat(inputValues, results)
-		nulls.Or(inputVector.Nsp, result.Nsp, resultVector.Nsp)
-		vector.SetCol(resultVector, result.Result)
-		return resultVector, nil
+		return vector.NewConstString(resultType, inputVector.Length(), results[0]), nil
 	}
-	bytesNeed, err := space.CountSpacesFloat(inputValues)
-	if err != nil {
+
+	results := make([]string, len(inputValues))
+	if _, err := space.FillSpacesNumber(inputValues, results); err != nil {
 		return nil, err
 	}
-	resultVector, err := proc.AllocVector(resultType, bytesNeed)
-	if err != nil {
-		return nil, err
-	}
-	resultValues := &types.Bytes{
-		Data:    resultVector.Data,
-		Offsets: make([]uint32, len(inputValues)),
-		Lengths: make([]uint32, len(inputValues)),
-	}
-	result := space.FillSpacesFloat(inputValues, resultValues)
-	nulls.Or(inputVector.Nsp, result.Nsp, resultVector.Nsp)
-	vector.SetCol(resultVector, result.Result)
-	return resultVector, nil
+	return vector.NewWithStrings(resultType, results, inputVector.Nsp, proc.Mp()), nil
 }

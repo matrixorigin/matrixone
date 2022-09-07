@@ -15,10 +15,12 @@
 package unary
 
 import (
+	"testing"
+
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/smartystreets/goconvey/convey"
-	"testing"
 )
 
 func TestDayOfYear(t *testing.T) {
@@ -76,8 +78,8 @@ func TestDayOfYear(t *testing.T) {
 	})
 
 	convey.Convey("NullCase", t, func() {
-		inVector := testutil.MakeScalarNull(10)
-		wantVec := testutil.MakeScalarNull(10)
+		inVector := testutil.MakeScalarNull(types.T_date, 10)
+		wantVec := testutil.MakeScalarNull(types.T_uint16, 10)
 		proc := testutil.NewProc()
 		res, err := DayOfYear([]*vector.Vector{inVector}, proc)
 		convey.So(err, convey.ShouldBeNil)

@@ -158,7 +158,7 @@ func (a *UnaryDistAgg[T1, T2]) Fill(i int64, sel, z int64, vecs []*vector.Vector
 		return nil
 	}
 	if vec.Typ.IsString() {
-		v = (any)(vec.GetString(sel)).(T1)
+		v = (any)(vec.GetBytes(sel)).(T1)
 	} else {
 		v = vector.GetColumn[T1](vec)[sel]
 	}
@@ -221,7 +221,7 @@ func (a *UnaryDistAgg[T1, T2]) BulkFill(i int64, zs []int64, vecs []*vector.Vect
 
 	vec := vecs[0]
 	if vec.GetType().IsString() {
-		len := vec.Count()
+		len := vec.Length()
 		for j := 0; j < len; j++ {
 			if ok, err = a.maps[i].Insert(vecs, j); err != nil {
 				return err
@@ -231,7 +231,7 @@ func (a *UnaryDistAgg[T1, T2]) BulkFill(i int64, zs []int64, vecs []*vector.Vect
 				if hasNull {
 					continue
 				}
-				v := (any)(vec.GetString(int64(j))).(T1)
+				v := (any)(vec.GetBytes(int64(j))).(T1)
 				a.srcs[i] = append(a.srcs[i], v)
 				a.vs[i], a.es[i] = a.fill(i, v, a.vs[i], zs[j], a.es[i], hasNull)
 			}
@@ -331,7 +331,7 @@ func (a *UnaryDistAgg[T1, T2]) Eval(m *mheap.Mheap) (*vector.Vector, error) {
 		a.vs = a.eval(a.vs)
 		vs := (any)(a.vs).([][]byte)
 		for _, v := range vs {
-			if err := vec.Append(v, m); err != nil {
+			if err := vec.Append(v, false, m); err != nil {
 				vec.Free(m)
 				return nil, err
 			}

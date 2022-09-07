@@ -106,8 +106,10 @@ Carole	F	29
 Abigail	F	38
 Andrea	F	45
 Kelly	F	54
-select cast(Age as char) as cAge from Demochar where cast(Age as char) like '2_';
+select cast(Age as char) as cAge from Demochar where cast(Age as char) like '2_' order by 1;
 cage
+27
+29
 select cast(Age as char) and Age as cAge from Demochar where Age>=50 order by cAge asc;
 cage
 1

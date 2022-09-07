@@ -15,11 +15,12 @@
 package binary
 
 import (
+	"testing"
+
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
-	"testing"
 )
 
 var (
@@ -97,11 +98,11 @@ func makeTestVector1(json, path string) []*vector.Vector {
 	//TODO size may not fit
 	vec[0] = vector.New(types.Type{Oid: types.T_varchar, Size: -1})
 	vec[1] = vector.New(types.Type{Oid: types.T_varchar, Size: -1})
-	err := vec[0].Append([]byte(json), procs.Mp)
+	err := vec[0].Append([]byte(json), false, procs.Mp())
 	if err != nil {
 		panic(err)
 	}
-	err = vec[1].Append([]byte(path), procs.Mp)
+	err = vec[1].Append([]byte(path), false, procs.Mp())
 	if err != nil {
 		panic(err)
 	}
@@ -120,11 +121,11 @@ func makeTestVector2(json, path string) []*vector.Vector {
 	if err != nil {
 		panic(err)
 	}
-	err = vec[0].Append(bjsonSlice, procs.Mp)
+	err = vec[0].Append(bjsonSlice, false, procs.Mp())
 	if err != nil {
 		panic(err)
 	}
-	err = vec[1].Append([]byte(path), procs.Mp)
+	err = vec[1].Append([]byte(path), false, procs.Mp())
 	if err != nil {
 		panic(err)
 	}
@@ -136,20 +137,18 @@ func TestJsonExtractByString(t *testing.T) {
 	for _, kase := range kases {
 		t.Run(kase.path, func(t *testing.T) {
 			vec := makeTestVector1(kase.json, kase.path)
-			got, err := JsonExtractByString(vec, procs)
+			gotvec, err := JsonExtractByString(vec, procs)
 			require.Nil(t, err)
-			bytes := vector.MustBytesCols(got)
+			got := vector.GetBytesVectorValues(gotvec)
 			switch value := kase.want.(type) {
 			case []string:
 				for i := range value {
-					off := bytes.Offsets[i]
-					length := bytes.Lengths[i]
-					bjson, err := types.ParseSliceToByteJson(bytes.Data[off : off+length])
+					bjson, err := types.ParseSliceToByteJson(got[i])
 					require.Nil(t, err)
 					require.JSONEq(t, value[i], bjson.String())
 				}
 			default:
-				bjson, err := types.ParseSliceToByteJson(bytes.Data)
+				bjson, err := types.ParseSliceToByteJson(got[0])
 				require.Nil(t, err)
 				require.JSONEq(t, kase.want.(string), bjson.String())
 			}
@@ -167,14 +166,12 @@ func TestJsonExtractByJson(t *testing.T) {
 			switch value := kase.want.(type) {
 			case []string:
 				for i := range value {
-					off := bytes.Offsets[i]
-					length := bytes.Lengths[i]
-					bjson, err := types.ParseSliceToByteJson(bytes.Data[off : off+length])
+					bjson, err := types.ParseSliceToByteJson(bytes[i])
 					require.Nil(t, err)
 					require.JSONEq(t, value[i], bjson.String())
 				}
 			default:
-				bjson, err := types.ParseSliceToByteJson(bytes.Data)
+				bjson, err := types.ParseSliceToByteJson(bytes[0])
 				require.Nil(t, err)
 				require.JSONEq(t, kase.want.(string), bjson.String())
 			}

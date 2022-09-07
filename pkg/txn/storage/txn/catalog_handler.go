@@ -387,7 +387,7 @@ func (c *CatalogHandler) HandleRead(meta txn.TxnMeta, req txnengine.ReadReq, res
 					if ok {
 						value = []byte(str)
 					}
-					b.Vecs[i].Append(value, c.upstream.mheap)
+					b.Vecs[i].Append(value, false, c.upstream.mheap)
 				}
 
 				rows++
@@ -451,7 +451,7 @@ func (c *CatalogHandler) HandleRead(meta txn.TxnMeta, req txnengine.ReadReq, res
 					if ok {
 						value = []byte(str)
 					}
-					b.Vecs[i].Append(value, c.upstream.mheap)
+					b.Vecs[i].Append(value, false, c.upstream.mheap)
 				}
 
 				rows++
@@ -549,7 +549,7 @@ func (c *CatalogHandler) HandleRead(meta txn.TxnMeta, req txnengine.ReadReq, res
 					if ok {
 						value = []byte(str)
 					}
-					b.Vecs[i].Append(value, c.upstream.mheap)
+					b.Vecs[i].Append(value, false, c.upstream.mheap)
 				}
 
 				rows++
