@@ -207,7 +207,7 @@ var builtins = map[int]Functions{
 				Layout:        STANDARD_FUNCTION,
 				Volatile:      true,
 				AppendHideArg: true,
-				ReturnTyp:     types.T_uuid,
+				ReturnTyp:     types.T_varchar,
 				Fn:            multi.UUID,
 			},
 		},

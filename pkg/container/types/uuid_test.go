@@ -196,3 +196,35 @@ func TestCompareUuid(t *testing.T) {
 		})
 	}
 }
+
+func TestCompareLeUuid(t *testing.T) {
+	cases := []struct {
+		name   string
+		left   string
+		right  string
+		expect bool
+	}{
+		{
+			name:   "test01",
+			left:   "16355110-2d0c-11ed-940f-000c29847904",
+			right:  "f6355110-2d0c-11ed-940f-000c29847904",
+			expect: true,
+		},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			left, err := ParseUuid(c.left)
+			if err != nil {
+				t.Error(err)
+			}
+			t.Logf("left [16]byte: %+v\n", left)
+			right, err := ParseUuid(c.right)
+			if err != nil {
+				t.Error(err)
+			}
+			t.Logf("right [16]byte: %+v\n", right)
+			require.Equal(t, left.Lt(right), c.expect)
+		})
+	}
+}
