@@ -15,31 +15,10 @@
 package findinset
 
 import (
-	"bytes"
 	"testing"
 
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/stretchr/testify/require"
 )
-
-func MakeBytes(strs []string) *types.Bytes {
-	result := &types.Bytes{
-		Lengths: make([]uint32, len(strs)),
-		Offsets: make([]uint32, len(strs)),
-	}
-
-	cursor := 0
-	var buf bytes.Buffer
-	for i, str := range strs {
-		buf.WriteString(str)
-		result.Lengths[i] = uint32(len(str))
-		result.Offsets[i] = uint32(cursor)
-		cursor += len(str)
-	}
-	result.Data = buf.Bytes()
-
-	return result
-}
 
 func TestFindInSet(t *testing.T) {
 	tt := []struct {
@@ -70,8 +49,8 @@ func TestFindInSet(t *testing.T) {
 		want[i] = uint64(tc.idx)
 	}
 
-	lv := MakeBytes(strs)
-	rv := MakeBytes(strlists)
+	lv := strs
+	rv := strlists
 	got := make([]uint64, len(tt))
 	got = FindInSet(lv, rv, got)
 	require.Equal(t, want, got)
@@ -93,8 +72,8 @@ func TestFindInSetWithLeftConst(t *testing.T) {
 	}
 
 	for _, tc := range tt {
-		lv := MakeBytes([]string{tc.str})
-		rv := MakeBytes(tc.strlists)
+		lv := tc.str
+		rv := tc.strlists
 		got := FindInSetWithLeftConst(lv, rv, tc.got)
 		require.Equal(t, tc.want, got)
 	}
@@ -116,8 +95,8 @@ func TestFindInSetWithRightConst(t *testing.T) {
 	}
 
 	for _, tc := range tt {
-		lv := MakeBytes(tc.str)
-		rv := MakeBytes([]string{tc.strlists})
+		lv := tc.str
+		rv := tc.strlists
 		got := FindInSetWithRightConst(lv, rv, tc.got)
 		require.Equal(t, tc.want, got)
 	}

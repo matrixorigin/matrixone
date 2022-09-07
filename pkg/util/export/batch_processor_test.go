@@ -35,13 +35,14 @@ import (
 
 func init() {
 	logutil.SetupMOLogger(&logutil.LogConfig{
-		Level:       zapcore.DebugLevel.String(),
-		Format:      "console",
-		Filename:    "",
-		MaxSize:     512,
-		MaxDays:     0,
-		MaxBackups:  0,
-		EnableStore: false,
+		Level:      zapcore.DebugLevel.String(),
+		Format:     "console",
+		Filename:   "",
+		MaxSize:    512,
+		MaxDays:    0,
+		MaxBackups: 0,
+
+		DisableStore: true,
 	})
 	if err := agent.Listen(agent.Options{}); err != nil {
 		logutil.Errorf("listen gops agent failed: %s", err)

@@ -15,10 +15,12 @@
 package unary
 
 import (
+	"testing"
+
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/smartystreets/goconvey/convey"
-	"testing"
 )
 
 func TestReverse(t *testing.T) {
@@ -71,8 +73,8 @@ func TestReverse(t *testing.T) {
 	})
 
 	convey.Convey("null", t, func() {
-		ivec := testutil.MakeScalarNull(10)
-		wantvec := testutil.MakeScalarNull(10)
+		ivec := testutil.MakeScalarNull(types.T_char, 10)
+		wantvec := testutil.MakeScalarNull(types.T_char, 10)
 		proc := testutil.NewProc()
 		ovec, err := Reverse([]*vector.Vector{ivec}, proc)
 		convey.So(err, convey.ShouldBeNil)

@@ -47,7 +47,7 @@ func Call(idx int, proc *process.Process, arg any) (bool, error) {
 	anal.Input(bat)
 	if ap.Seen >= ap.Limit {
 		proc.Reg.InputBatch = nil
-		bat.Clean(proc.Mp)
+		bat.Clean(proc.Mp())
 		return true, nil
 	}
 	length := bat.Length()

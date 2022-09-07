@@ -15,11 +15,14 @@
 package logutil
 
 import (
+	"fmt"
+	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
+	"reflect"
 	"testing"
 )
 
-func TestInfo(t *testing.T) {
+func TestLog(t *testing.T) {
 	type args struct {
 		msg    string
 		fields []zap.Field
@@ -38,7 +41,112 @@ func TestInfo(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			Debug(tt.args.msg, tt.args.fields...)
 			Info(tt.args.msg, tt.args.fields...)
+			Warn(tt.args.msg, tt.args.fields...)
+			Error(tt.args.msg, tt.args.fields...)
+		})
+	}
+}
+
+func TestLog_panic(t *testing.T) {
+	type args struct {
+		msg    string
+		fields []zap.Field
+	}
+	tests := []struct {
+		name   string
+		args   args
+		printf bool
+	}{
+		{
+			name: "panic",
+			args: args{
+				msg:    "test",
+				fields: []zap.Field{zap.Int("int", 0), zap.String("string", "")},
+			},
+			printf: false,
+		},
+		{
+			name: "panicF",
+			args: args{
+				msg:    "test",
+				fields: []zap.Field{zap.Int("int", 0), zap.String("string", "")},
+			},
+			printf: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			defer func() {
+				err := recover()
+				require.Equal(t, tt.args.msg, fmt.Sprintf("%s", err))
+			}()
+			if tt.printf {
+				Panicf(tt.args.msg)
+			} else {
+				Panic(tt.args.msg, tt.args.fields...)
+			}
+		})
+	}
+}
+
+func TestLogf(t *testing.T) {
+	type args struct {
+		msg    string
+		fields []any
+	}
+	tests := []struct {
+		name string
+		args args
+	}{
+		{
+			name: "normal",
+			args: args{
+				msg:    "test",
+				fields: []any{},
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			Debugf(tt.args.msg, tt.args.fields...)
+			Infof(tt.args.msg, tt.args.fields...)
+			Warnf(tt.args.msg, tt.args.fields...)
+			Errorf(tt.args.msg, tt.args.fields...)
+			gl := GoettyLogger{}
+			gl.Debugf(tt.args.msg, tt.args.fields...)
+			gl.Infof(tt.args.msg, tt.args.fields...)
+			gl.Errorf(tt.args.msg, tt.args.fields...)
+			//gl.Fatalf(tt.args.msg, tt.args.fields...)
+		})
+	}
+}
+
+func TestAdjust(t *testing.T) {
+	type args struct {
+		logger  *zap.Logger
+		options []zap.Option
+	}
+	tests := []struct {
+		name string
+		args args
+		want *zap.Logger
+	}{
+		{
+			name: "normal",
+			args: args{
+				logger:  GetGlobalLogger(),
+				options: nil,
+			},
+			want: GetGlobalLogger(),
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := Adjust(tt.args.logger, tt.args.options...); !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("Adjust() = %v, want %v", got, tt.want)
+			}
 		})
 	}
 }

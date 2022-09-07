@@ -31,7 +31,7 @@ func Prepare(proc *process.Process, argument any) error {
 	var err error
 	arg := argument.(*Argument)
 	arg.ctr.btc = nil
-	arg.ctr.hashTable, err = hashmap.NewStrMap(true, arg.IBucket, arg.NBucket, proc.Mp)
+	arg.ctr.hashTable, err = hashmap.NewStrMap(true, arg.IBucket, arg.NBucket, proc.Mp())
 	if err != nil {
 		return err
 	}
@@ -106,7 +106,7 @@ func (c *container) buildHashTable(proc *process.Process, analyse process.Analyz
 
 			vs, zs, err := itr.Insert(i, n, btc.Vecs)
 			if err != nil {
-				btc.Clean(proc.Mp)
+				btc.Clean(proc.Mp())
 				return err
 			}
 
@@ -122,7 +122,7 @@ func (c *container) buildHashTable(proc *process.Process, analyse process.Analyz
 				}
 			}
 		}
-		btc.Clean(proc.Mp)
+		btc.Clean(proc.Mp())
 	}
 	return nil
 }
@@ -142,7 +142,7 @@ func (c *container) probeHashTable(proc *process.Process, analyze process.Analyz
 		}
 
 		analyze.Input(btc)
-		defer btc.Clean(proc.Mp)
+		defer btc.Clean(proc.Mp())
 
 		c.btc = batch.NewWithSize(len(btc.Vecs))
 		for i := range btc.Vecs {
@@ -193,7 +193,7 @@ func (c *container) probeHashTable(proc *process.Process, analyze process.Analyz
 
 			if insertcnt > 0 {
 				for pos := range btc.Vecs {
-					if err := vector.UnionBatch(c.btc.Vecs[pos], btc.Vecs[pos], int64(i), insertcnt, needInsert, proc.Mp); err != nil {
+					if err := vector.UnionBatch(c.btc.Vecs[pos], btc.Vecs[pos], int64(i), insertcnt, needInsert, proc.Mp()); err != nil {
 						return false, err
 					}
 				}

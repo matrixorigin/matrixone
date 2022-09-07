@@ -25,51 +25,45 @@ import (
 func Startswith(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	left, right := vectors[0], vectors[1]
 	resultType := types.Type{Oid: types.T_uint8, Size: 1}
-	resultElementSize := int(resultType.Size)
-	leftValues, rightValues := vector.MustBytesCols(left), vector.MustBytesCols(right)
+	leftValues, rightValues := vector.MustStrCols(left), vector.MustStrCols(right)
 	switch {
 	case left.IsScalar() && right.IsScalar():
 		if left.ConstVectorIsNull() || right.ConstVectorIsNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
 		resultVector := vector.NewConst(resultType, 1)
-		resultValues := make([]uint8, 1)
-		vector.SetCol(resultVector, startswith.StartsWithAllConst(leftValues, rightValues, resultValues))
+		resultValues := vector.MustTCols[uint8](resultVector)
+		startswith.StartsWithAllConst(leftValues[0], rightValues[0], resultValues)
 		return resultVector, nil
 	case left.IsConst && !right.IsConst:
 		if left.ConstVectorIsNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
-		resultVector, err := proc.AllocVector(resultType, int64(resultElementSize*len(rightValues.Lengths)))
+		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(rightValues)), right.Nsp)
 		if err != nil {
 			return nil, err
 		}
-		resultValues := types.DecodeUint8Slice(resultVector.Data)
-		resultValues = resultValues[:len(rightValues.Lengths)]
-		nulls.Set(resultVector.Nsp, right.Nsp)
-		vector.SetCol(resultVector, startswith.StartsWithLeftConst(leftValues, rightValues, resultValues))
+		resultValues := vector.MustTCols[uint8](resultVector)
+		startswith.StartsWithLeftConst(leftValues[0], rightValues, resultValues)
 		return resultVector, nil
 	case !left.IsConst && right.IsConst:
 		if right.ConstVectorIsNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
-		resultVector, err := proc.AllocVector(resultType, int64(resultElementSize*len(leftValues.Lengths)))
+		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(leftValues)), left.Nsp)
 		if err != nil {
 			return nil, err
 		}
-		resultValues := types.DecodeUint8Slice(resultVector.Data)
-		resultValues = resultValues[:len(leftValues.Lengths)]
-		nulls.Set(resultVector.Nsp, left.Nsp)
-		vector.SetCol(resultVector, startswith.StartsWithRightConst(leftValues, rightValues, resultValues))
+		resultValues := vector.MustTCols[uint8](resultVector)
+		startswith.StartsWithRightConst(leftValues, rightValues[0], resultValues)
 		return resultVector, nil
 	}
-	resultVector, err := proc.AllocVector(resultType, int64(resultElementSize*len(rightValues.Lengths)))
+	resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(leftValues)), nil)
 	if err != nil {
 		return nil, err
 	}
-	resultValues := types.DecodeUint8Slice(resultVector.Data)
-	resultValues = resultValues[:len(rightValues.Lengths)]
+	resultValues := vector.MustTCols[uint8](resultVector)
 	nulls.Or(left.Nsp, right.Nsp, resultVector.Nsp)
-	vector.SetCol(resultVector, startswith.StartsWith(leftValues, rightValues, resultValues))
+	startswith.StartsWith(leftValues, rightValues, resultValues)
 	return resultVector, nil
 }

@@ -277,3 +277,113 @@ func calStrLen(buf []byte) (int, int) {
 	}
 	return int(strLen), lenLen
 }
+
+func isBlank(c rune) bool {
+	if c == ' ' || c == '\t' || c == '\n' || c == '\r' {
+		return true
+	}
+	return false
+}
+
+func ParseJsonPath(path string) (p Path, err error) {
+	flagIdx := strings.Index(path, "$")
+	if flagIdx < 0 {
+		err = errors.New(errno.InvalidJsonPath, "no $ found in path")
+		return
+	}
+	for i := 0; i < flagIdx; i++ {
+		if !isBlank(rune(path[i])) {
+			err = errors.New(errno.InvalidJsonPath, "path cannot start with non-blank character")
+			return
+		}
+	}
+
+	pathExpr := strings.TrimFunc(path[flagIdx+1:], isBlank)
+	indices := jsonSubPathRe.FindAllStringIndex(pathExpr, -1)
+	if len(indices) == 0 && len(pathExpr) != 0 {
+		err = errors.New(errno.InvalidJsonPath, "path is not a valid JSON-Pointer")
+		return
+	}
+
+	subPaths := make([]subPath, 0, len(indices))
+
+	lastEnd := 0
+	for _, indice := range indices {
+		start, end := indice[0], indice[1]
+
+		// Check all characters between two subPath are blank.
+		for i := lastEnd; i < start; i++ {
+			if !isBlank(rune(pathExpr[i])) {
+				err = errors.New(errno.InvalidJsonPath, "path cannot contain non-blank characters between two subPaths")
+				return
+			}
+		}
+		lastEnd = end
+
+		if pathExpr[start] == '[' {
+			// The subPath is an index of a JSON array.
+			var sub = strings.TrimFunc(pathExpr[start+1:end], isBlank)
+			var idxStr = strings.TrimFunc(sub[0:len(sub)-1], isBlank)
+			var idx int
+			if len(idxStr) == 1 && idxStr[0] == '*' {
+				idx = subPathIdxALL
+			} else {
+				if idx, err = strconv.Atoi(idxStr); err != nil {
+					err = errors.New(errno.InvalidJsonPath, err.Error())
+					return
+				}
+			}
+			subPaths = append(subPaths, subPath{tp: subPathIdx, idx: idx})
+		} else if pathExpr[start] == '.' {
+			// The subPath is a key of a JSON object.
+			var key = strings.TrimFunc(pathExpr[start+1:end], isBlank)
+			if key[0] == '"' {
+				// TODO check here is ok
+				if key, err = strconv.Unquote(key); err != nil {
+					err = errors.New(errno.InvalidJsonPath, err.Error())
+					return
+				}
+			}
+			subPaths = append(subPaths, subPath{tp: subPathKey, key: key})
+		} else {
+			// '**'
+			subPaths = append(subPaths, subPath{tp: subPathDoubleStar})
+		}
+	}
+	if len(subPaths) > 0 {
+		// The last subPath of a path expression cannot be '**'.
+		if subPaths[len(subPaths)-1].tp == subPathDoubleStar {
+			err = errors.New(errno.InvalidJsonPath, "the last subPath of a path expression cannot be '**'")
+			return
+		}
+	}
+	p.init(subPaths)
+	return
+}
+
+func addByteElem(buf []byte, entryStart int, elems []ByteJson) []byte {
+	for i, elem := range elems {
+		buf[entryStart+i*valEntrySize] = byte(elem.Type)
+		if elem.Type == TpCodeLiteral {
+			buf[entryStart+i*valEntrySize+valTypeSize] = elem.Data[0]
+		} else {
+			endian.PutUint32(buf[entryStart+i*valEntrySize+valTypeSize:], uint32(len(buf)))
+			buf = append(buf, elem.Data...)
+		}
+	}
+	return buf
+}
+
+func mergeToArray(origin []ByteJson) ByteJson {
+	totalSize := headerSize + len(origin)*valEntrySize
+	for _, el := range origin {
+		if el.Type != TpCodeLiteral {
+			totalSize += len(el.Data)
+		}
+	}
+	buf := make([]byte, headerSize+len(origin)*valEntrySize, totalSize)
+	endian.PutUint32(buf, uint32(len(origin)))
+	endian.PutUint32(buf[docSizeOff:], uint32(totalSize))
+	buf = addByteElem(buf, headerSize, origin)
+	return ByteJson{Type: TpCodeArray, Data: buf}
+}

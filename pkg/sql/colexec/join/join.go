@@ -130,20 +130,20 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 					}
 					bs := vec.Col.([]bool)
 					if !bs[0] {
-						vec.Free(proc.Mp)
+						vec.Free(proc.Mp())
 						continue
 					}
-					vec.Free(proc.Mp)
+					vec.Free(proc.Mp())
 				}
 				for j, rp := range ap.Result {
 					if rp.Rel == 0 {
-						if err := vector.UnionOne(rbat.Vecs[j], bat.Vecs[rp.Pos], int64(i+k), proc.Mp); err != nil {
-							rbat.Clean(proc.Mp)
+						if err := vector.UnionOne(rbat.Vecs[j], bat.Vecs[rp.Pos], int64(i+k), proc.Mp()); err != nil {
+							rbat.Clean(proc.Mp())
 							return err
 						}
 					} else {
-						if err := vector.UnionOne(rbat.Vecs[j], ctr.bat.Vecs[rp.Pos], sel, proc.Mp); err != nil {
-							rbat.Clean(proc.Mp)
+						if err := vector.UnionOne(rbat.Vecs[j], ctr.bat.Vecs[rp.Pos], sel, proc.Mp()); err != nil {
+							rbat.Clean(proc.Mp())
 							return err
 						}
 					}
