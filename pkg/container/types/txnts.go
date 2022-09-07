@@ -15,6 +15,7 @@
 package types
 
 import (
+	"bytes"
 	"fmt"
 	"math"
 	"strconv"
@@ -77,30 +78,30 @@ func (ts TS) GreaterEq(rhs TS) bool {
 	return ts.Compare(rhs) >= 0
 }
 
-func buildTS(p int64, l uint32) (ret TS) {
+func BuildTS(p int64, l uint32) (ret TS) {
 	copy(ret[4:12], EncodeInt64(&p))
 	copy(ret[:4], EncodeUint32(&l))
 	return
 }
 
 func MaxTs() TS {
-	return buildTS(math.MaxInt64, math.MaxUint32)
+	return BuildTS(math.MaxInt64, math.MaxUint32)
 }
 
 // Who use this function?
 func (ts TS) Prev() TS {
 	p, l := ts.physical(), ts.logical()
 	if l == 0 {
-		return buildTS(p-1, math.MaxUint32)
+		return BuildTS(p-1, math.MaxUint32)
 	}
-	return buildTS(p, l-1)
+	return BuildTS(p, l-1)
 }
 func (ts TS) Next() TS {
 	p, l := ts.physical(), ts.logical()
 	if l == math.MaxUint32 {
-		return buildTS(p+1, 0)
+		return BuildTS(p+1, 0)
 	}
-	return buildTS(p, l+1)
+	return BuildTS(p, l+1)
 }
 
 func (ts TS) ToString() string {
@@ -122,7 +123,7 @@ func StringToTS(s string) (ts TS) {
 	if err != nil {
 		panic("format of ts must be physical-logical, logical is not an uint32")
 	}
-	return buildTS(pTime, uint32(lTime))
+	return BuildTS(pTime, uint32(lTime))
 }
 
 // XXX
@@ -138,7 +139,7 @@ func init() {
 	CompoundKeyType = T_varchar.ToType()
 	CompoundKeyType.Width = 100
 
-	SystemDBTS = buildTS(1, 0)
+	SystemDBTS = BuildTS(1, 0)
 }
 
 // Very opinioned code, almost surely a bug, but there you go.
@@ -357,4 +358,18 @@ func MockColTypes(colCnt int) (ct []Type) {
 		ct = append(ct, typ)
 	}
 	return
+}
+
+func BuildRowid(a, b int64) (ret Rowid) {
+	copy(ret[0:8], EncodeInt64(&a))
+	copy(ret[0:8], EncodeInt64(&b))
+	return
+}
+
+func CompareTSTSAligned(a, b TS) int64 {
+	return int64(bytes.Compare(a[:], b[:]))
+}
+
+func CompareRowidRowidAligned(a, b Rowid) int64 {
+	return int64(bytes.Compare(a[:], b[:]))
 }
