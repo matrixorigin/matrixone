@@ -15,9 +15,10 @@
 package json_extract
 
 import (
+	"testing"
+
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/stretchr/testify/require"
-	"testing"
 )
 
 var (
@@ -122,28 +123,15 @@ func TestByStringOne(t *testing.T) {
 
 func TestByString(t *testing.T) {
 	for _, kase := range kases {
-		jBytes := &types.Bytes{
-			Offsets: []uint32{0},
-			Lengths: []uint32{uint32(len(kase.json))},
-			Data:    []byte(kase.json),
-		}
-		pBytes := &types.Bytes{
-			Offsets: []uint32{0},
-			Lengths: []uint32{uint32(len(kase.path))},
-			Data:    []byte(kase.path),
-		}
-		result := &types.Bytes{
-			Offsets: nil,
-			Lengths: nil,
-			Data:    nil,
-		}
-		result, err := byString(jBytes, pBytes, result)
+		jBytes := [][]byte{[]byte(kase.json)}
+		pBytes := [][]byte{[]byte(kase.path)}
+		result, err := byString(jBytes, pBytes, nil)
 		if kase.pathErr || kase.jsonErr {
 			require.NotNil(t, err)
 			continue
 		}
 		require.Nil(t, err)
-		require.JSONEq(t, kase.want, string(result.Data))
+		require.JSONEq(t, kase.want, string(result[0]))
 	}
 }
 
@@ -179,27 +167,14 @@ func TestByJson(t *testing.T) {
 		require.Nil(t, err)
 		jsonBytes, err := types.EncodeJson(json)
 		require.Nil(t, err)
-		jBytes := &types.Bytes{
-			Offsets: []uint32{0},
-			Lengths: []uint32{uint32(len(jsonBytes))},
-			Data:    jsonBytes,
-		}
-		pBytes := &types.Bytes{
-			Offsets: []uint32{0},
-			Lengths: []uint32{uint32(len(kase.path))},
-			Data:    []byte(kase.path),
-		}
-		result := &types.Bytes{
-			Offsets: nil,
-			Lengths: nil,
-			Data:    nil,
-		}
-		result, err = byJson(jBytes, pBytes, result)
+		jBytes := [][]byte{jsonBytes}
+		pBytes := [][]byte{[]byte(kase.path)}
+		result, err := byJson(jBytes, pBytes, nil)
 		if kase.pathErr {
 			require.NotNil(t, err)
 			continue
 		}
 		require.Nil(t, err)
-		require.JSONEq(t, kase.want, string(result.Data))
+		require.JSONEq(t, kase.want, string(result[0]))
 	}
 }

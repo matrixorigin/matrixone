@@ -15,40 +15,27 @@
 package unary
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
+	"testing"
+
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
-	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
-	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
-	"testing"
 )
 
 func TestLength(t *testing.T) {
 	makeTempVector := func(src string, t types.T, srcIsScalar bool) []*vector.Vector {
 		vectors := make([]*vector.Vector, 1)
-		vectors[0] = &vector.Vector{
-			Col: &types.Bytes{
-				Data:    []byte(src),
-				Offsets: []uint32{0},
-				Lengths: []uint32{uint32(len(src))},
-			},
-			Nsp:     &nulls.Nulls{},
-			Typ:     types.Type{Oid: t, Size: 24},
-			IsConst: srcIsScalar,
-			Length:  1,
+		if srcIsScalar {
+			vectors[0] = vector.NewConstString(t.ToType(), 1, src)
+		} else {
+			vectors[0] = vector.NewWithStrings(t.ToType(), []string{src}, nil, nil)
 		}
 		return vectors
 	}
 
-	makeProcess := func() *process.Process {
-		hm := host.New(1 << 40)
-		gm := guest.New(1<<40, hm)
-		return process.New(mheap.New(gm))
-	}
-	procs := makeProcess()
+	procs := testutil.NewProcess()
 
 	cases := []struct {
 		name       string

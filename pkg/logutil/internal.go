@@ -15,6 +15,7 @@
 package logutil
 
 import (
+	"fmt"
 	"os"
 	"sync/atomic"
 	"time"
@@ -161,7 +162,7 @@ func getLoggerEncoder(format string) zapcore.Encoder {
 	case "console":
 		return zapcore.NewConsoleEncoder(encoderConfig)
 	default:
-		panic("unsupported log format")
+		panic(fmt.Errorf("unsupported log format: %s", format))
 	}
 }
 

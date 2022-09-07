@@ -129,7 +129,7 @@ func getConstantValue(vec *vector.Vector) *plan.Const {
 	case types.T_varchar:
 		return &plan.Const{
 			Value: &plan.Const_Sval{
-				Sval: string(vec.Col.(*types.Bytes).Data),
+				Sval: vec.GetString(0),
 			},
 		}
 	default:

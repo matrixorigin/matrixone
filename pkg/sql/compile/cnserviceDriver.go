@@ -17,6 +17,7 @@ package compile
 import (
 	"context"
 	"errors"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
@@ -71,6 +72,7 @@ import (
 // messageHandleHelper a structure records some elements to help handle messages.
 type messageHandleHelper struct {
 	storeEngine engine.Engine
+	fileService fileservice.FileService
 }
 
 // processHelper a structure records information about source process. and to help
@@ -85,11 +87,14 @@ type processHelper struct {
 // CnServerMessageHandler deal the client message that received at cn-server.
 // the message is always *pipeline.Message here. It's a byte array which encoded by method encodeScope.
 // write back Analysis Information and error info if error occurs to client.
-func CnServerMessageHandler(ctx context.Context, message morpc.Message, cs morpc.ClientSession, storeEngine engine.Engine, cli client.TxnClient) error {
+func CnServerMessageHandler(ctx context.Context, message morpc.Message,
+	cs morpc.ClientSession,
+	storeEngine engine.Engine, fileService fileservice.FileService, cli client.TxnClient) error {
 	var errCode []byte = nil
 	// structure to help handle the message.
 	helper := &messageHandleHelper{
 		storeEngine: storeEngine,
+		fileService: fileService,
 	}
 	// decode message and run it, get final analysis information and err info.
 	analysis, err := pipelineMessageHandle(ctx, message, cs, helper, cli)
@@ -906,12 +911,15 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext) (vm.In
 // newCompile generates a new compile for remote run.
 func newCompile(ctx context.Context, message morpc.Message, pHelper *processHelper, mHelper *messageHandleHelper, cs morpc.ClientSession) *Compile {
 	// TODO: this process is just an temporary solution. And process's properties need to be refined.
-	proc := process.New(mheap.New(guest.New(1<<30, host.New(1<<20))))
-	proc.Ctx = ctx
+	proc := process.New(
+		ctx,
+		mheap.New(guest.New(1<<30, host.New(1<<20))),
+		pHelper.txnOperator,
+		mHelper.fileService,
+	)
 	proc.UnixTime = pHelper.unixTime
 	proc.Id = pHelper.id
 	proc.Lim = pHelper.lim
-	proc.TxnOperator = pHelper.txnOperator
 
 	c := &Compile{
 		ctx:  ctx,

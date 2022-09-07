@@ -97,6 +97,13 @@ func (mgr *TxnManager) StatSafeTS() (ts types.TS) {
 	return
 }
 
+func (mgr *TxnManager) StatMaxCommitTS() (ts types.TS) {
+	mgr.RLock()
+	ts = mgr.TsAlloc.Alloc()
+	mgr.RUnlock()
+	return
+}
+
 func (mgr *TxnManager) StartTxn(info []byte) (txn txnif.AsyncTxn, err error) {
 	if exp := mgr.Exception.Load(); exp != nil {
 		err = exp.(error)

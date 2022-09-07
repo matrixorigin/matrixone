@@ -17,6 +17,7 @@ package binary
 import (
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -123,17 +124,23 @@ func TestFindInSetLength(t *testing.T) {
 func makeFindInSetTestVectors(left []string, right []string, isScalarL bool, isScalarR bool) []*vector.Vector {
 	vec := make([]*vector.Vector, 2)
 	if left != nil {
-		vec[0] = testutil.MakeVarcharVector(left, nil)
-		vec[0].IsConst = isScalarL
+		if isScalarL {
+			vec[0] = vector.NewConstString(types.T_varchar.ToType(), 1, left[0])
+		} else {
+			vec[0] = testutil.MakeVarcharVector(left, nil)
+		}
 	} else {
-		vec[0] = testutil.MakeScalarNull(0)
+		vec[0] = testutil.MakeScalarNull(types.T_varchar, 0)
 	}
 
 	if right != nil {
-		vec[1] = testutil.MakeVarcharVector(right, nil)
-		vec[1].IsConst = isScalarR
+		if isScalarR {
+			vec[1] = vector.NewConstString(types.T_varchar.ToType(), 1, right[0])
+		} else {
+			vec[1] = testutil.MakeVarcharVector(right, nil)
+		}
 	} else {
-		vec[1] = testutil.MakeScalarNull(0)
+		vec[1] = testutil.MakeScalarNull(types.T_varchar, 0)
 	}
 
 	return vec

@@ -638,7 +638,7 @@ func newGenericMin[T max.Compare](typ types.Type, dist bool) agg.Agg[any] {
 	return agg.NewUnaryAgg(aggPriv, false, typ, min.ReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
 }
 
-func newGenericCount[T types.Generic | count.Decimal128AndString](typ types.Type, dist bool, isStar bool) agg.Agg[any] {
+func newGenericCount[T types.OrderedT | count.Decimal128AndString](typ types.Type, dist bool, isStar bool) agg.Agg[any] {
 	aggPriv := count.New[T](isStar)
 	if dist {
 		return agg.NewUnaryDistAgg(true, typ, count.ReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)

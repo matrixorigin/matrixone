@@ -34,6 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
 
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
+	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
@@ -67,6 +68,8 @@ func NewService(
 		metadataFS:  fs,
 		fileService: fileService,
 	}
+	srv.stopper = stopper.NewStopper("cn-service", stopper.WithLogger(srv.logger))
+
 	if err := srv.initMetadata(); err != nil {
 		return nil, err
 	}
@@ -95,7 +98,9 @@ func NewService(
 	srv.storeEngine = pu.StorageEngine
 	srv._txnClient = pu.TxnClient
 
-	srv.requestHandler = defaultRequestHandler
+	srv.requestHandler = func(ctx context.Context, message morpc.Message, cs morpc.ClientSession, engine engine.Engine, fService fileservice.FileService, cli client.TxnClient) error {
+		return nil
+	}
 	for _, opt := range options {
 		opt(srv)
 	}
@@ -106,6 +111,9 @@ func NewService(
 func (s *service) Start() error {
 	err := s.runMoServer()
 	if err != nil {
+		return err
+	}
+	if err := s.startCNStoreHeartbeat(); err != nil {
 		return err
 	}
 	return s.server.Start()
@@ -124,12 +132,8 @@ func (s *service) acquireMessage() morpc.Message {
 	return s.responsePool.Get().(*pipeline.Message)
 }
 
-func defaultRequestHandler(ctx context.Context, message morpc.Message, cs morpc.ClientSession, e engine.Engine, cli client.TxnClient) error {
-	return nil
-}
-
 func (s *service) handleRequest(ctx context.Context, req morpc.Message, _ uint64, cs morpc.ClientSession) error {
-	return s.requestHandler(ctx, req, cs, s.storeEngine, s._txnClient)
+	return s.requestHandler(ctx, req, cs, s.storeEngine, s.fileService, s._txnClient)
 }
 
 func (s *service) initMOServer(ctx context.Context, pu *config.ParameterUnit) error {
@@ -256,7 +260,7 @@ func (s *service) getTxnClient() (c client.TxnClient, err error) {
 	return
 }
 
-func WithMessageHandle(f func(ctx context.Context, message morpc.Message, cs morpc.ClientSession, engine engine.Engine, cli client.TxnClient) error) Options {
+func WithMessageHandle(f func(ctx context.Context, message morpc.Message, cs morpc.ClientSession, engine engine.Engine, fs fileservice.FileService, cli client.TxnClient) error) Options {
 	return func(s *service) {
 		s.requestHandler = f
 	}

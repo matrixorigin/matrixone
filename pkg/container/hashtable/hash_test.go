@@ -16,7 +16,10 @@ package hashtable
 
 import (
 	//"fmt"
+	"runtime"
 	"testing"
+
+	"golang.org/x/sys/cpu"
 )
 
 var data = [][]byte{
@@ -138,13 +141,26 @@ var golden = [][3]uint64{
 }
 
 func TestHashFn(t *testing.T) {
+	switch runtime.GOARCH {
+	case "amd64":
+		if !cpu.X86.HasAES {
+			return
+		}
+	case "arm64":
+		if !cpu.ARM64.HasAES {
+			return
+		}
+	default:
+		return
+	}
+
 	states := make([][3]uint64, len(data))
 	for i := range data {
 		if l := len(data[i]); l < 16 {
 			data[i] = append(data[i], StrKeyPadding[l:]...)
 		}
 	}
-	AesBytesBatchGenHashStates(&data[0], &states[0], len(data))
+	BytesBatchGenHashStates(&data[0], &states[0], len(data))
 	for i := range data {
 		if states[i] != golden[i] {
 			t.Errorf("AesBytesHashState(%s) = {0x%016x, 0x%016x, 0x%016x} want {0x%016x, 0x%016x, 0x%016x}",

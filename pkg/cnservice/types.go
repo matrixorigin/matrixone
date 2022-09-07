@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/toml"
 
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
+	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"go.uber.org/zap"
 )
 
@@ -125,7 +126,7 @@ type service struct {
 	responsePool           *sync.Pool
 	logger                 *zap.Logger
 	server                 morpc.RPCServer
-	requestHandler         func(ctx context.Context, message morpc.Message, cs morpc.ClientSession, engine engine.Engine, cli client.TxnClient) error
+	requestHandler         func(ctx context.Context, message morpc.Message, cs morpc.ClientSession, engine engine.Engine, fService fileservice.FileService, cli client.TxnClient) error
 	cancelMoServerFunc     context.CancelFunc
 	mo                     *frontend.MOServer
 	initHakeeperClientOnce sync.Once
@@ -140,4 +141,5 @@ type service struct {
 	storeEngine            engine.Engine
 	metadataFS             fileservice.ReplaceableFileService
 	fileService            fileservice.FileService
+	stopper                *stopper.Stopper
 }

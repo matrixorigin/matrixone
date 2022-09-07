@@ -98,6 +98,18 @@ func (win *vectorWindow[T]) Equals(o Vector) bool {
 			if d.Ne(od) {
 				return false
 			}
+		} else if _, ok := any(v).(types.TS); ok {
+			d := win.Get(i).(types.TS)
+			od := win.Get(i).(types.TS)
+			if types.CompareTSTSAligned(d, od) != 0 {
+				return false
+			}
+		} else if _, ok := any(v).(types.Rowid); ok {
+			d := win.Get(i).(types.Rowid)
+			od := win.Get(i).(types.Rowid)
+			if types.CompareRowidRowidAligned(d, od) != 0 {
+				return false
+			}
 		} else {
 			if win.Get(i) != o.Get(i) {
 				return false
