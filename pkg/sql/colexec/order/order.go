@@ -71,7 +71,7 @@ func (ctr *Container) process(ap *Argument, bat *batch.Batch, proc *process.Proc
 		if err != nil {
 			for j := 0; j < i; j++ {
 				if ctr.vecs[j].needFree {
-					vector.Clean(ctr.vecs[j].vec, proc.Mp)
+					vector.Clean(ctr.vecs[j].vec, proc.Mp())
 				}
 			}
 			return false, err
@@ -88,7 +88,7 @@ func (ctr *Container) process(ap *Argument, bat *batch.Batch, proc *process.Proc
 	defer func() {
 		for i := range ctr.vecs {
 			if ctr.vecs[i].needFree {
-				vector.Clean(ctr.vecs[i].vec, proc.Mp)
+				vector.Clean(ctr.vecs[i].vec, proc.Mp())
 			}
 		}
 	}()
@@ -100,7 +100,7 @@ func (ctr *Container) process(ap *Argument, bat *batch.Batch, proc *process.Proc
 	}
 	sort.Sort(ctr.ds[0], sels, ovec)
 	if len(ctr.vecs) == 1 {
-		if err := bat.Shuffle(sels, proc.Mp); err != nil {
+		if err := bat.Shuffle(sels, proc.Mp()); err != nil {
 			panic(err)
 		}
 		return false, nil
@@ -120,7 +120,7 @@ func (ctr *Container) process(ap *Argument, bat *batch.Batch, proc *process.Proc
 		}
 		ovec = vec
 	}
-	if err := bat.Shuffle(sels, proc.Mp); err != nil {
+	if err := bat.Shuffle(sels, proc.Mp()); err != nil {
 		panic(err)
 	}
 	return false, nil

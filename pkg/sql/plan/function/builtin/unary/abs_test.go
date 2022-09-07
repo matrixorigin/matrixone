@@ -21,10 +21,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
-	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
-	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
-	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/smartystreets/goconvey/convey"
 )
 
@@ -33,7 +29,7 @@ func Test_AbsUint64(t *testing.T) {
 		var uint64VecBase = []uint64{1, 0}
 		var nsp1 = []uint64{2}
 		var origVecs = make([]*vector.Vector, 1)
-		var proc = process.New(mheap.New(&guest.Mmu{Mmu: host.New(100000), Limit: 100000}))
+		var proc = testutil.NewProc()
 		origVecs[0] = testutil.MakeUint64Vector(uint64VecBase, nsp1)
 		vec, err := AbsUInt64(origVecs, proc)
 		if err != nil {

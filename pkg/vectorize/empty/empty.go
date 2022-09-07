@@ -13,19 +13,9 @@
 // limitations under the License.
 package empty
 
-import "github.com/matrixorigin/matrixone/pkg/container/types"
-
-var (
-	Empty func(*types.Bytes, []uint8) []uint8
-)
-
-func init() {
-	Empty = empty
-}
-
-func empty(xs *types.Bytes, rs []uint8) []uint8 {
-	for i := range xs.Offsets {
-		if xs.Lengths[i] == 0 {
+func Empty(xs []string, rs []uint8) []uint8 {
+	for i, s := range xs {
+		if len(s) == 0 {
 			rs[i] = 1
 		} else {
 			rs[i] = 0

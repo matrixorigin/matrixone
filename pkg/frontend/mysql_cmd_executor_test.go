@@ -628,42 +628,7 @@ func allocTestBatch(attrName []string, tt []types.Type, batchSize int) *batch.Ba
 
 	//alloc space for vector
 	for i := 0; i < len(attrName); i++ {
-		vec := vector.New(tt[i])
-		switch vec.Typ.Oid {
-		case types.T_int8:
-			vec.Col = make([]int8, batchSize)
-		case types.T_int16:
-			vec.Col = make([]int16, batchSize)
-		case types.T_int32:
-			vec.Col = make([]int32, batchSize)
-		case types.T_int64:
-			vec.Col = make([]int64, batchSize)
-		case types.T_uint8:
-			vec.Col = make([]uint8, batchSize)
-		case types.T_uint16:
-			vec.Col = make([]uint16, batchSize)
-		case types.T_uint32:
-			vec.Col = make([]uint32, batchSize)
-		case types.T_uint64:
-			vec.Col = make([]uint64, batchSize)
-		case types.T_float32:
-			vec.Col = make([]float32, batchSize)
-		case types.T_float64:
-			vec.Col = make([]float64, batchSize)
-		case types.T_char, types.T_varchar, types.T_json:
-			vBytes := &types.Bytes{
-				Offsets: make([]uint32, batchSize),
-				Lengths: make([]uint32, batchSize),
-				Data:    nil,
-			}
-			vec.Col = vBytes
-		case types.T_date:
-			vec.Col = make([]types.Date, batchSize)
-		case types.T_datetime:
-			vec.Col = make([]types.Datetime, batchSize)
-		default:
-			panic("unsupported vector type")
-		}
+		vec := vector.PreAllocType(tt[i], batchSize, batchSize, nil)
 		batchData.Vecs[i] = vec
 	}
 

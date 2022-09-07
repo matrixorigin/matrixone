@@ -83,7 +83,7 @@ func init() {
 type EntryCommand struct {
 	*txnbase.BaseCustomizedCmd
 	cmdType   int16
-	entry     BaseEntryIf
+	entry     BaseEntry
 	DBID      uint64
 	TableID   uint64
 	SegmentID uint64

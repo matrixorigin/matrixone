@@ -60,7 +60,7 @@ func Call(idx int, proc *process.Process, arg any) (bool, error) {
 		case Eval:
 			if ctr.bat != nil {
 				for i := ctr.n; i < len(ctr.bat.Vecs); i++ {
-					vector.Clean(ctr.bat.Vecs[i], proc.Mp)
+					vector.Clean(ctr.bat.Vecs[i], proc.Mp())
 				}
 				ctr.bat.Vecs = ctr.bat.Vecs[:ctr.n]
 				ctr.bat.ExpandNulls()
@@ -134,11 +134,11 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 				}
 			} else {
 				if err := ctr.processBatch(bat, proc); err != nil {
-					bat.Clean(proc.Mp)
-					ctr.bat.Clean(proc.Mp)
+					bat.Clean(proc.Mp())
+					ctr.bat.Clean(proc.Mp())
 					return err
 				}
-				bat.Clean(proc.Mp)
+				bat.Clean(proc.Mp())
 			}
 		}
 	}
@@ -170,9 +170,9 @@ func (ctr *container) processBatch(bat2 *batch.Batch, proc *process.Process) err
 		}
 		if compareResult <= 0 { // Weight of item1 is less than or equal to item2
 			for k := 0; k < len(rbat.Vecs); k++ {
-				err := vector.UnionOne(rbat.Vecs[k], bat1.Vecs[k], i, proc.Mp)
+				err := vector.UnionOne(rbat.Vecs[k], bat1.Vecs[k], i, proc.Mp())
 				if err != nil {
-					rbat.Clean(proc.Mp)
+					rbat.Clean(proc.Mp())
 					return err
 				}
 			}
@@ -180,9 +180,9 @@ func (ctr *container) processBatch(bat2 *batch.Batch, proc *process.Process) err
 			i++
 		} else {
 			for k := 0; k < len(rbat.Vecs); k++ {
-				err := vector.UnionOne(rbat.Vecs[k], bat2.Vecs[k], j, proc.Mp)
+				err := vector.UnionOne(rbat.Vecs[k], bat2.Vecs[k], j, proc.Mp())
 				if err != nil {
-					rbat.Clean(proc.Mp)
+					rbat.Clean(proc.Mp())
 					return err
 				}
 			}
@@ -194,9 +194,9 @@ func (ctr *container) processBatch(bat2 *batch.Batch, proc *process.Process) err
 		count := int(l1 - i)
 		// union all bat1 from i to l1
 		for k := 0; k < len(rbat.Vecs); k++ {
-			err := vector.UnionBatch(rbat.Vecs[k], bat1.Vecs[k], i, count, makeFlagsOne(count), proc.Mp)
+			err := vector.UnionBatch(rbat.Vecs[k], bat1.Vecs[k], i, count, makeFlagsOne(count), proc.Mp())
 			if err != nil {
-				rbat.Clean(proc.Mp)
+				rbat.Clean(proc.Mp())
 				return err
 			}
 		}
@@ -206,15 +206,15 @@ func (ctr *container) processBatch(bat2 *batch.Batch, proc *process.Process) err
 		count := int(l2 - j)
 		// union all bat2 from j to l2
 		for k := 0; k < len(rbat.Vecs); k++ {
-			err := vector.UnionBatch(rbat.Vecs[k], bat2.Vecs[k], j, count, makeFlagsOne(count), proc.Mp)
+			err := vector.UnionBatch(rbat.Vecs[k], bat2.Vecs[k], j, count, makeFlagsOne(count), proc.Mp())
 			if err != nil {
-				rbat.Clean(proc.Mp)
+				rbat.Clean(proc.Mp())
 				return err
 			}
 		}
 		rbat.Zs = append(rbat.Zs, bat2.Zs[j:]...)
 	}
-	ctr.bat.Clean(proc.Mp)
+	ctr.bat.Clean(proc.Mp())
 	ctr.bat = rbat
 	return nil
 }

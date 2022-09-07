@@ -17,6 +17,7 @@ package unary
 import (
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -82,7 +83,7 @@ func makeBitLenTestVectors(data []string, nsp []uint64, isScalar bool) []*vector
 		vec[0] = testutil.MakeCharVector(data, nsp)
 		vec[0].IsConst = isScalar
 	} else {
-		vec[0] = testutil.MakeScalarNull(0)
+		vec[0] = testutil.MakeScalarNull(types.T_char, 0)
 	}
 
 	return vec
