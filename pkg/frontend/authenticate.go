@@ -702,6 +702,10 @@ func (p *privilege) objectType() objectType {
 	return p.objType
 }
 
+func (p *privilege) privilegeKind() privilegeKind {
+	return p.kind
+}
+
 // privilegeEntry denotes the entry of the privilege that appears in the table mo_role_privs
 type privilegeEntry struct {
 	privilegeId     PrivilegeType
@@ -859,9 +863,11 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 	case *tree.RevokeRole:
 		typs = append(typs, PrivilegeTypeManageGrants, PrivilegeTypeAccountAll /*, PrivilegeTypeAccountOwnership, PrivilegeTypeRoleOwnership*/)
 	case *tree.GrantPrivilege:
+		objType = objectTypeNone
 		kind = privilegeKindSpecial
 		special = specialTagAdmin | specialTagWithGrantOption | specialTagOwnerOfObject
 	case *tree.RevokePrivilege:
+		objType = objectTypeNone
 		kind = privilegeKindSpecial
 		special = specialTagAdmin
 	case *tree.CreateDatabase:
@@ -871,6 +877,7 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 	case *tree.ShowDatabases, *tree.ShowCreateDatabase:
 		typs = append(typs, PrivilegeTypeShowDatabases, PrivilegeTypeAccountAll /*, PrivilegeTypeAccountOwnership*/)
 	case *tree.Use:
+		objType = objectTypeNone
 		kind = privilegeKindNone
 	case *tree.ShowTables, *tree.ShowCreateTable, *tree.ShowColumns, *tree.ShowCreateView:
 		objType = objectTypeDatabase
@@ -897,14 +904,19 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		objType = objectTypeTable
 		typs = append(typs, PrivilegeTypeIndex)
 	case *tree.ShowProcessList, *tree.ShowErrors, *tree.ShowWarnings, *tree.ShowVariables, *tree.ShowStatus:
+		objType = objectTypeNone
 		kind = privilegeKindNone
 	case *tree.ExplainFor, *tree.ExplainAnalyze, *tree.ExplainStmt:
+		objType = objectTypeNone
 		kind = privilegeKindNone
 	case *tree.BeginTransaction, *tree.CommitTransaction, *tree.RollbackTransaction, *tree.SetVar:
+		objType = objectTypeNone
 		kind = privilegeKindNone
 	case *tree.SetDefaultRole, *tree.SetRole, *tree.SetPassword:
+		objType = objectTypeNone
 		kind = privilegeKindNone
 	case *tree.PrepareStmt, *tree.PrepareString, *tree.Deallocate:
+		objType = objectTypeNone
 		kind = privilegeKindNone
 	default:
 		panic(fmt.Sprintf("does not have the privilege definition of the statement %s", stmt))
@@ -1089,14 +1101,8 @@ func determinePrivilegesOfUserSatisfyPrivilegeSet(ctx context.Context, ses *Sess
 	return false, nil
 }
 
-// determineRoleHasWithGrantOption decides the roleIds have the with_grant_option = true
-func determineRoleHasWithGrantOption(ctx context.Context, ses *Session, roleIds []int) (bool, error) {
-	//TODO:
-	dedup := &btree.Map[int64, int64]{}
-	for _, id := range roleIds {
-		dedup.Set(int64(id), 0)
-	}
-
+// determineRoleHasWithGrantOption decides all roleIds have the with_grant_option = true
+func determineRoleHasWithGrantOption(ctx context.Context, ses *Session, roles []*tree.Role) (bool, error) {
 	tenant := ses.GetTenantInfo()
 	pu := ses.Pu
 
@@ -1105,7 +1111,39 @@ func determineRoleHasWithGrantOption(ctx context.Context, ses *Session, roleIds 
 	defer bh.Close()
 	var rsset []ExecResult
 
-	//step1 : get all role id the user has.
+	//step1 : get roleIds from roleName
+	dedupNames := &btree.Set[string]{}
+	for _, role := range roles {
+		dedupNames.Insert(role.UserName)
+	}
+
+	dedup := &btree.Map[int64, int64]{}
+	for _, name := range dedupNames.Keys() {
+		sql := getSqlForRoleIdOfRole(name)
+		err := bh.Exec(ctx, sql)
+		if err != nil {
+			return false, err
+		}
+
+		results := bh.GetExecResultSet()
+		rsset, err = convertIntoResultSet(results)
+		if err != nil {
+			return false, err
+		}
+
+		if len(rsset) != 0 && rsset[0].GetRowCount() != 0 {
+			for i := uint64(0); i < rsset[0].GetRowCount(); i++ {
+				roleId, err := rsset[0].GetInt64(i, 0)
+				if err != nil {
+					return false, err
+				}
+
+				dedup.Set(roleId, 0)
+			}
+		}
+	}
+
+	//step2 : get all role id the user has.
 	sqlForRoleIdOfUserId := getSqlForRoleIdOfUserId(int(tenant.GetUserID()))
 	err := bh.Exec(ctx, sqlForRoleIdOfUserId)
 	if err != nil {
@@ -1135,7 +1173,6 @@ func determineRoleHasWithGrantOption(ctx context.Context, ses *Session, roleIds 
 					dedup.Set(roleId, grantOpt)
 				}
 			}
-
 		}
 	}
 
@@ -1153,9 +1190,50 @@ func determineRoleHasWithGrantOption(ctx context.Context, ses *Session, roleIds 
 		return all, nil
 	}
 
-	//step2 : check mo_role_grant
-	//TODO:
-	return false, nil
+	//step3 : check mo_role_grant
+	sqlForInherited := getSqlForInheritedRoleIdOfRoleId(int64(tenant.GetDefaultRoleID()))
+	err = bh.Exec(ctx, sqlForInherited)
+	if err != nil {
+		return false, err
+	}
+
+	results = bh.GetExecResultSet()
+	rsset, err = convertIntoResultSet(results)
+	if err != nil {
+		return false, err
+	}
+
+	if len(rsset) != 0 && rsset[0].GetRowCount() != 0 {
+		for i := uint64(0); i < rsset[0].GetRowCount(); i++ {
+			grantedId, err := rsset[0].GetInt64(i, 0)
+			if err != nil {
+				return false, err
+			}
+
+			grantOpt, err := rsset[0].GetInt64(i, 1)
+			if err != nil {
+				return false, err
+			}
+
+			if grantOpt != 0 { //with_grant_option = true
+				if _, exists := dedup.Get(grantedId); exists {
+					dedup.Set(grantedId, grantOpt)
+				}
+			}
+		}
+	}
+
+	all = true
+	//if all roleId have the with_grant_option = true, it is done
+	dedup.Scan(func(k, v int64) bool {
+		if v == 0 {
+			all = false
+			return false
+		}
+		return true
+	})
+
+	return all, nil
 }
 
 // authenticatePrivilegeOfStatementWithObjectTypeAccount decides the user has the privilege of executing the statement with object type account
@@ -1171,12 +1249,88 @@ func authenticatePrivilegeOfStatementWithObjectTypeAccount(ctx context.Context, 
 
 	//for GrantRole statement, check with_grant_option
 	if !ok && priv.kind == privilegeKindInherit {
-		//grantRole := stmt.(*tree.GrantRole)
-		//for i, role := range grantRole.Roles {
-		//
-		//}
+		grantRole := stmt.(*tree.GrantRole)
+		yes, err := determineRoleHasWithGrantOption(ctx, ses, grantRole.Roles)
+		if err != nil {
+			return false, err
+		}
+		if yes {
+			return true, nil
+		}
 	}
 	return ok, nil
+}
+
+// determinePrivilegeHasWithGrantOption decides all privileges have the with_grant_option = true
+func determinePrivilegeHasWithGrantOption(ctx context.Context, ses *Session, privs []*tree.Privilege) (bool, error) {
+}
+
+// authenticatePrivilegeOfStatementWithObjectTypeNone decides the user has the privilege of executing the statement with object type none
+func authenticatePrivilegeOfStatementWithObjectTypeNone(ctx context.Context, ses *Session, stmt tree.Statement) (bool, error) {
+	priv := ses.GetPrivilege()
+	if priv.objectType() != objectTypeNone { //do nothing
+		return true, nil
+	}
+	tenant := ses.GetTenantInfo()
+
+	if priv.privilegeKind() == privilegeKindNone { // do nothing
+		return true, nil
+	} else if priv.privilegeKind() == privilegeKindSpecial { //GrantPrivilege, RevokePrivilege
+		//TODO:
+		switch stmt.(type) {
+		case *tree.GrantPrivilege:
+			//TODO:
+			//in the version 0.6, only the moAdmin and accountAdmin can grant the privilege.
+			if tenant.IsAdminRole() {
+				return true, nil
+			}
+
+			//TODO: check privilege's with_grant_option
+			/*
+				object_type and privilege_level
+					Table :
+						*.* : all tables of all databases
+						db.*
+						db.table
+						table
+					Database:
+						*  : all databases
+						*.* : all objects of all databases
+						db;
+					Function:
+						*.*：all functions of all databases
+						db.routine
+					Account:
+						*: only
+			*/
+			//Fields' source
+			//role_id : tenant.defaultRoleId
+			//obj_type : GrantPrivilege.ObjType
+			//obj_id :
+			//  object_type + privilege_level => obj_id
+			//	Table : mo_database join mo_tables join mo_role_privs
+			//		*.* : => 0
+			//		db.* => 0
+			//		db.table => tableId
+			//		table => tableId
+			//	Database: mo_database join mo_role_privs
+			//		*  : => 0
+			//		*.* : => 0
+			//		db; => databaseId
+			//	Function:
+			//		*.*：=> 0
+			//		db.routine => routineId
+			//	Account:
+			//		*: => 0
+			//privilege_level :GrantPrivilege.privilegeLevel
+
+		case *tree.RevokeRole:
+			//in the version 0.6, only the moAdmin and accountAdmin can revoke the privilege.
+			return tenant.IsAdminRole(), nil
+		}
+	}
+
+	return false, nil
 }
 
 // authenticatePrivilege decides the user has the privilege of executing the statement.
