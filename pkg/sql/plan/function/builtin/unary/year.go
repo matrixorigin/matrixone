@@ -86,7 +86,7 @@ func DateStringToYear(vectors []*vector.Vector, proc *process.Process) (*vector.
 	inputVector := vectors[0]
 	resultType := types.Type{Oid: types.T_int64, Size: 8}
 	inputValues := vector.MustStrCols(inputVector)
-	if inputVector.IsConst {
+	if inputVector.IsConst() {
 		if inputVector.ConstVectorIsNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
@@ -102,35 +102,6 @@ func DateStringToYear(vectors []*vector.Vector, proc *process.Process) (*vector.
 		DateStringToYearPlan2(inputValues, resultVector.Nsp, resultValues)
 		return resultVector, nil
 	}
-}
-
-func dateToYear(xs []types.Date, rs []uint16) []uint16 {
-	for i, x := range xs {
-		rs[i] = x.Year()
-	}
-	return rs
-}
-
-func datetimeToYear(xs []types.Datetime, rs []uint16) []uint16 {
-	for i, x := range xs {
-		rs[i] = x.Year()
-	}
-	return rs
-}
-
-func dateStringToYear(xs []string, ns *nulls.Nulls, rs []uint16) []uint16 {
-	for i, str := range xs {
-		d, e := types.ParseDateCast(str)
-		if e != nil {
-			// XXX this is a bug, should raise error.
-			// set null
-			nulls.Add(ns, uint64(i))
-			rs[i] = 0
-			continue
-		}
-		rs[i] = d.Year()
-	}
-	return rs
 }
 
 func DateToYearPlan2(xs []types.Date, rs []int64) []int64 {
