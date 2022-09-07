@@ -17,6 +17,7 @@ package multi
 import (
 	"math"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -25,33 +26,36 @@ import (
 )
 
 // Cast, cast ...  sigh.
-func castConstAsInt64(vec *vector.Vector, idx int64) int64 {
+func castConstAsInt64(vec *vector.Vector, idx int64) (int64, error) {
 	switch vec.GetType().Oid {
 	case types.T_uint8:
-		return int64(vector.GetValueAt[uint8](vec, idx))
+		return int64(vector.GetValueAt[uint8](vec, idx)), nil
 	case types.T_uint16:
-		return int64(vector.GetValueAt[uint16](vec, idx))
+		return int64(vector.GetValueAt[uint16](vec, idx)), nil
 	case types.T_uint32:
-		return int64(vector.GetValueAt[uint32](vec, idx))
+		return int64(vector.GetValueAt[uint32](vec, idx)), nil
 	case types.T_uint64:
 		val := vector.GetValueAt[uint64](vec, idx)
 		if val > uint64(math.MaxInt64) {
-			// this function only used in substr, so we use maxInt64 to avoid overflow. I known that's weird.
-			return math.MaxInt64
+			return 0, moerr.NewError(moerr.OUT_OF_RANGE, "in function substring(str, start, lenth); start or length is overflow")
 		}
-		return int64(val)
+		return int64(val), nil
 	case types.T_int8:
-		return int64(vector.GetValueAt[int8](vec, idx))
+		return int64(vector.GetValueAt[int8](vec, idx)), nil
 	case types.T_int16:
-		return int64(vector.GetValueAt[int16](vec, idx))
+		return int64(vector.GetValueAt[int16](vec, idx)), nil
 	case types.T_int32:
-		return int64(vector.GetValueAt[int32](vec, idx))
+		return int64(vector.GetValueAt[int32](vec, idx)), nil
 	case types.T_int64:
-		return int64(vector.GetValueAt[int64](vec, idx))
+		return int64(vector.GetValueAt[int64](vec, idx)), nil
 	case types.T_float32:
-		return int64(vector.GetValueAt[float32](vec, idx))
+		return int64(vector.GetValueAt[float32](vec, idx)), nil
 	case types.T_float64:
-		return int64(vector.GetValueAt[float64](vec, idx))
+		val := vector.GetValueAt[float64](vec, idx)
+		if val > float64(math.MaxInt64) {
+			return 0, moerr.NewError(moerr.OUT_OF_RANGE, "in function substring(str, start, lenth); start or length is overflow")
+		}
+		return int64(val), nil
 	default:
 		panic("castConstAsInt64 failed, unknown type")
 	}
@@ -153,7 +157,10 @@ func substrSrcConst(inputVecs []*vector.Vector, proc *process.Process) (*vector.
 	if startVector.IsScalar() {
 		if paramNum == 2 {
 			// get start constant value
-			startValue := castConstAsInt64(startVector, 0)
+			startValue, err := castConstAsInt64(startVector, 0)
+			if err != nil {
+				return nil, err
+			}
 			if startValue > 0 {
 				substring.SubstringFromLeftConstOffsetUnbounded(columnSrcCol, results, startValue-1)
 			} else if startValue < 0 {
@@ -166,9 +173,15 @@ func substrSrcConst(inputVecs []*vector.Vector, proc *process.Process) (*vector.
 			lengthVector := inputVecs[2]
 			if lengthVector.IsScalar() {
 				// get start constant value
-				startValue := castConstAsInt64(startVector, 0)
+				startValue, err := castConstAsInt64(startVector, 0)
+				if err != nil {
+					return nil, err
+				}
 				// get length constant value
-				lengthValue := castConstAsInt64(lengthVector, 0)
+				lengthValue, err := castConstAsInt64(lengthVector, 0)
+				if err != nil {
+					return nil, err
+				}
 
 				if startValue > 0 {
 					substring.SubstringFromLeftConstOffsetBounded(columnSrcCol, results, startValue-1, lengthValue)
@@ -226,7 +239,10 @@ func substrSrcCol(inputVecs []*vector.Vector, proc *process.Process) (*vector.Ve
 	if startVector.IsScalar() {
 		if paramNum == 2 {
 			// get start constant value
-			startValue := castConstAsInt64(startVector, 0)
+			startValue, err := castConstAsInt64(startVector, 0)
+			if err != nil {
+				return nil, err
+			}
 			if startValue > 0 {
 				substring.SubstringFromLeftConstOffsetUnbounded(columnSrcCol, results, startValue-1)
 			} else if startValue < 0 {
@@ -241,9 +257,15 @@ func substrSrcCol(inputVecs []*vector.Vector, proc *process.Process) (*vector.Ve
 			// if length parameter is constant
 			if lengthVector.IsScalar() {
 				// get start constant value
-				startValue := castConstAsInt64(startVector, 0)
+				startValue, err := castConstAsInt64(startVector, 0)
+				if err != nil {
+					return nil, err
+				}
 				// get length constant value
-				lengthValue := castConstAsInt64(lengthVector, 0)
+				lengthValue, err := castConstAsInt64(lengthVector, 0)
+				if err != nil {
+					return nil, err
+				}
 				if startValue > 0 {
 					substring.SubstringFromLeftConstOffsetBounded(columnSrcCol, results, startValue-1, lengthValue)
 				} else if startValue < 0 {

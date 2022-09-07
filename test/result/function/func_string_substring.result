@@ -74,20 +74,17 @@ select substring('hello', -18446744073709551615, 1);
 substring('hello', -18446744073709551615, 1)
 
 select substring('hello', 18446744073709551615, 1);
-substring('hello', 18446744073709551615, 1)
-
+in function substring(str, start, lenth); start or length is overflow
 select substring('hello', -18446744073709551616, 1);
 substring('hello', -18446744073709551616, 1)
 
 select substring('hello', 18446744073709551616, 1);
-substring('hello', 18446744073709551616, 1)
-
+in function substring(str, start, lenth); start or length is overflow
 select substring('hello', -18446744073709551617, 1);
 substring('hello', -18446744073709551617, 1)
 
 select substring('hello', 18446744073709551617, 1);
-substring('hello', 18446744073709551617, 1)
-
+in function substring(str, start, lenth); start or length is overflow
 select substring('hello', 1, -1);
 substring('hello', 1, -1)
 
@@ -113,8 +110,7 @@ select substring('hello', 1, -18446744073709551615);
 substring('hello', 1, -18446744073709551615)
 
 select substring('hello', 1, 18446744073709551615);
-substring('hello', 1, 18446744073709551615)
-hello
+in function substring(str, start, lenth); start or length is overflow
 select substring('hello', 1, -18446744073709551616);
 substring('hello', 1, -18446744073709551616)
 
@@ -125,8 +121,7 @@ select substring('hello', 1, -18446744073709551617);
 substring('hello', 1, -18446744073709551617)
 
 select substring('hello', 1, 18446744073709551617);
-substring('hello', 1, 18446744073709551617)
-hello
+in function substring(str, start, lenth); start or length is overflow
 select substring('hello', -1, -1);
 substring('hello', -1, -1)
 
@@ -152,20 +147,17 @@ select substring('hello', -18446744073709551615, -18446744073709551615);
 substring('hello', -18446744073709551615, -18446744073709551615)
 
 select substring('hello', 18446744073709551615, 18446744073709551615);
-substring('hello', 18446744073709551615, 18446744073709551615)
-
+in function substring(str, start, lenth); start or length is overflow
 select substring('hello', -18446744073709551616, -18446744073709551616);
 substring('hello', -18446744073709551616, -18446744073709551616)
 
 select substring('hello', 18446744073709551616, 18446744073709551616);
-substring('hello', 18446744073709551616, 18446744073709551616)
-
+in function substring(str, start, lenth); start or length is overflow
 select substring('hello', -18446744073709551617, -18446744073709551617);
 substring('hello', -18446744073709551617, -18446744073709551617)
 
 select substring('hello', 18446744073709551617, 18446744073709551617);
-substring('hello', 18446744073709551617, 18446744073709551617)
-
+in function substring(str, start, lenth); start or length is overflow
 SELECT SUBSTRING('Sakila' FROM -4 FOR 2);
 SUBSTRING('Sakila' FROM -4 FOR 2)
 ki
