@@ -20,33 +20,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
-func TestDateToDate(t *testing.T) {
-	testCases := []struct {
-		name string
-		args []types.Date
-		want []types.Date
-	}{
-		{
-			name: "normal test cases",
-			args: []types.Date{types.FromCalendar(2022, 3, 30)},
-			want: []types.Date{types.FromCalendar(2022, 3, 30)},
-		},
-		{
-			name: "unnormal test case",
-			args: []types.Date{types.FromCalendar(2022, 2, 30)},
-			want: []types.Date{types.FromCalendar(2022, 3, 02)},
-		},
-	}
-
-	for _, v := range testCases {
-		reply := make([]types.Date, len(v.args))
-		actual := DateToDate(v.args, reply)
-
-		if !isEqual(actual, v.want) {
-			t.Errorf("expect the %v, but got %v", v.want, actual)
-		}
-	}
-}
 func TestDateTimeToDate(t *testing.T) {
 	testCases := []struct {
 		name string
@@ -61,7 +34,7 @@ func TestDateTimeToDate(t *testing.T) {
 
 	for _, v := range testCases {
 		reply := make([]types.Date, len(v.args))
-		actual := datetimeToDate(v.args, reply)
+		actual := DatetimeToDate(v.args, reply)
 
 		if !isEqual(actual, v.want) {
 			t.Errorf("expect the %v, but got %v", v.want, actual)

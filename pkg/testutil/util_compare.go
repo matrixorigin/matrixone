@@ -15,10 +15,10 @@
 package testutil
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"reflect"
+
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 )
 
 func CompareVectors(expected *vector.Vector, got *vector.Vector) bool {
@@ -29,15 +29,11 @@ func CompareVectors(expected *vector.Vector, got *vector.Vector) bool {
 		if expected.IsScalarNull() {
 			return got.IsScalarNull()
 		} else {
-			switch expected.Typ.Oid {
-			case types.T_char, types.T_varchar, types.T_json:
-				if got.Typ.Oid != expected.Typ.Oid {
-					return false
-				}
-				t1 := expected.Col.(*types.Bytes)
-				t2 := expected.Col.(*types.Bytes)
-				return reflect.DeepEqual(t1.Get(0), t2.Get(0))
-			default:
+			if expected.GetType().IsVarlen() {
+				v1 := vector.GetStrVectorValues(expected)
+				v2 := vector.GetStrVectorValues(got)
+				return reflect.DeepEqual(v1[0], v2[0])
+			} else {
 				return reflect.DeepEqual(expected.Col, got.Col)
 			}
 		}
@@ -64,27 +60,27 @@ func CompareVectors(expected *vector.Vector, got *vector.Vector) bool {
 				}
 			}
 		}
-		switch expected.Typ.Oid {
-		case types.T_char, types.T_varchar, types.T_json:
-			if got.Typ.Oid != expected.Typ.Oid {
-				return false
-			}
-			t1 := expected.Col.(*types.Bytes)
-			t2 := expected.Col.(*types.Bytes)
-			l1, l2 := len(t1.Lengths), len(t2.Lengths)
-			if l1 != l2 {
-				return false
-			}
-			for i := 0; i < l1; i++ {
+
+		if expected.GetType().IsVarlen() {
+			v1 := vector.GetStrVectorValues(expected)
+			v2 := vector.GetStrVectorValues(got)
+			for i, v := range v1 {
 				if nulls.Contains(expected.Nsp, uint64(i)) {
-					continue
-				}
-				if !reflect.DeepEqual(t1.Get(0), t2.Get(0)) {
-					return false
+					if !nulls.Contains(got.Nsp, uint64(i)) {
+						return false
+					}
+				} else {
+					if nulls.Contains(got.Nsp, uint64(i)) {
+						return false
+					}
+					vv := v2[i]
+					if v != vv {
+						return false
+					}
 				}
 			}
 			return true
-		default:
+		} else {
 			return reflect.DeepEqual(expected.Col, got.Col)
 		}
 	}

@@ -207,66 +207,8 @@ func makeBatch(param *ExternalParam, plh *ParseLineHandler) *batch.Batch {
 		typ := types.New(types.T(param.Cols[i].Typ.Id), param.Cols[i].Typ.Width, param.Cols[i].Typ.Scale, param.Cols[i].Typ.Precision)
 		vec := vector.New(typ)
 		vec.Or = true
-		switch vec.Typ.Oid {
-		case types.T_bool:
-			vec.Data = make([]byte, batchSize)
-			vec.Col = types.DecodeBoolSlice(vec.Data)
-		case types.T_int8:
-			vec.Data = make([]byte, batchSize)
-			vec.Col = types.DecodeInt8Slice(vec.Data)
-		case types.T_int16:
-			vec.Data = make([]byte, 2*batchSize)
-			vec.Col = types.DecodeInt16Slice(vec.Data)
-		case types.T_int32:
-			vec.Data = make([]byte, 4*batchSize)
-			vec.Col = types.DecodeInt32Slice(vec.Data)
-		case types.T_int64:
-			vec.Data = make([]byte, 8*batchSize)
-			vec.Col = types.DecodeInt64Slice(vec.Data)
-		case types.T_uint8:
-			vec.Data = make([]byte, batchSize)
-			vec.Col = types.DecodeUint8Slice(vec.Data)
-		case types.T_uint16:
-			vec.Data = make([]byte, 2*batchSize)
-			vec.Col = types.DecodeUint16Slice(vec.Data)
-		case types.T_uint32:
-			vec.Data = make([]byte, 4*batchSize)
-			vec.Col = types.DecodeUint32Slice(vec.Data)
-		case types.T_uint64:
-			vec.Data = make([]byte, 8*batchSize)
-			vec.Col = types.DecodeUint64Slice(vec.Data)
-		case types.T_float32:
-			vec.Data = make([]byte, 4*batchSize)
-			vec.Col = types.DecodeFloat32Slice(vec.Data)
-		case types.T_float64:
-			vec.Data = make([]byte, 8*batchSize)
-			vec.Col = types.DecodeFloat64Slice(vec.Data)
-		case types.T_char, types.T_varchar, types.T_json, types.T_blob:
-			vBytes := &types.Bytes{
-				Offsets: make([]uint32, batchSize),
-				Lengths: make([]uint32, batchSize),
-				Data:    nil,
-			}
-			vec.Col = vBytes
-			vec.Data = make([]byte, batchSize)
-		case types.T_date:
-			vec.Data = make([]byte, 4*batchSize)
-			vec.Col = types.DecodeDateSlice(vec.Data)
-		case types.T_datetime:
-			vec.Data = make([]byte, 8*batchSize)
-			vec.Col = types.DecodeDatetimeSlice(vec.Data)
-		case types.T_decimal64:
-			vec.Data = make([]byte, 8*batchSize)
-			vec.Col = types.DecodeDecimal64Slice(vec.Data)
-		case types.T_decimal128:
-			vec.Data = make([]byte, 16*batchSize)
-			vec.Col = types.DecodeDecimal128Slice(vec.Data)
-		case types.T_timestamp:
-			vec.Data = make([]byte, 8*batchSize)
-			vec.Col = types.DecodeTimestampSlice(vec.Data)
-		default:
-			panic("unsupported vector type Oid")
-		}
+		// XXX memory accouting?
+		vector.PreAlloc(vec, batchSize, batchSize, nil)
 		batchData.Vecs[i] = vec
 	}
 	return batchData
@@ -497,22 +439,16 @@ func GetBatchData(param *ExternalParam, plh *ParseLineHandler, proc *process.Pro
 					cols[rowIdx] = d
 				}
 			case types.T_char, types.T_varchar, types.T_blob:
-				vBytes := vec.Col.(*types.Bytes)
 				if isNullOrEmpty {
 					nulls.Add(vec.Nsp, uint64(rowIdx))
 				} else {
-					vBytes.Offsets[rowIdx] = uint32(len(vBytes.Data))
-					vBytes.Data = append(vBytes.Data, field...)
-					vBytes.Lengths[rowIdx] = uint32(len(field))
+					// XXX Memory accounting?
+					vector.SetStringAt(vec, rowIdx, field, nil)
 				}
 			case types.T_json:
-				vBytes := vec.Col.(*types.Bytes)
 				if isNullOrEmpty {
 					nulls.Add(vec.Nsp, uint64(rowIdx))
-					vBytes.Offsets[rowIdx] = uint32(len(vBytes.Data))
-					vBytes.Lengths[rowIdx] = uint32(len(field))
 				} else {
-					vBytes.Offsets[rowIdx] = uint32(len(vBytes.Data))
 					byteJson, err := types.ParseStringToByteJson(field)
 					if err != nil {
 						logutil.Errorf("parse field[%v] err:%v", field, err)
@@ -523,8 +459,7 @@ func GetBatchData(param *ExternalParam, plh *ParseLineHandler, proc *process.Pro
 						logutil.Errorf("encode json[%v] err:%v", field, err)
 						return nil, fmt.Errorf("the input value '%v' is not json type for column %d", field, colIdx)
 					}
-					vBytes.Data = append(vBytes.Data, jsonBytes...)
-					vBytes.Lengths[rowIdx] = uint32(len(jsonBytes))
+					vector.SetBytesAt(vec, rowIdx, jsonBytes, nil)
 				}
 			case types.T_date:
 				cols := vec.Col.([]types.Date)
@@ -598,9 +533,9 @@ func GetBatchData(param *ExternalParam, plh *ParseLineHandler, proc *process.Pro
 		}
 	}
 	n := vector.Length(bat.Vecs[0])
-	sels := proc.Mp.GetSels()
+	sels := proc.Mp().GetSels()
 	if n > cap(sels) {
-		proc.Mp.PutSels(sels)
+		proc.Mp().PutSels(sels)
 		sels = make([]int64, n)
 	}
 	bat.Zs = sels[:n]

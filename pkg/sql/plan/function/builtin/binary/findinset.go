@@ -25,50 +25,40 @@ import (
 func FindInSet(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	left, right := vectors[0], vectors[1]
 	resultType := types.Type{Oid: types.T_uint64, Size: 8}
-	resultElementSize := int(resultType.Size)
-	leftValues, rightValues := vector.MustBytesCols(left), vector.MustBytesCols(right)
+	leftValues, rightValues := vector.MustStrCols(left), vector.MustStrCols(right)
 	switch {
 	case left.IsScalar() && right.IsScalar():
 		if left.ConstVectorIsNull() || right.ConstVectorIsNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
 		resultVector := vector.NewConst(resultType, 1)
-		resultValues := make([]uint64, 1)
-		vector.SetCol(resultVector, findinset.FindInSetWithAllConst(leftValues, rightValues, resultValues))
+		resultValues := vector.MustTCols[uint64](resultVector)
+		findinset.FindInSetWithAllConst(leftValues[0], rightValues[0], resultValues)
 		return resultVector, nil
 	case left.IsScalar() && !right.IsScalar():
 		if left.ConstVectorIsNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
-		resultVector, err := proc.AllocVector(resultType, int64(resultElementSize*len(rightValues.Lengths)))
-		if err != nil {
-			return nil, err
-		}
-		resultValues := types.DecodeUint64Slice(resultVector.Data)
-		resultValues = resultValues[:len(rightValues.Lengths)]
+		rlen := len(rightValues)
+		resultVector := vector.PreAllocType(resultType, rlen, rlen, proc.Mp())
+		resultValues := vector.MustTCols[uint64](resultVector)
 		nulls.Set(resultVector.Nsp, right.Nsp)
-		vector.SetCol(resultVector, findinset.FindInSetWithLeftConst(leftValues, rightValues, resultValues))
+		findinset.FindInSetWithLeftConst(leftValues[0], rightValues, resultValues)
 		return resultVector, nil
 	case !left.IsScalar() && right.IsScalar():
 		if right.ConstVectorIsNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
-		resultVector, err := proc.AllocVector(resultType, int64(resultElementSize*len(leftValues.Lengths)))
-		if err != nil {
-			return nil, err
-		}
-		resultValues := types.DecodeUint64Slice(resultVector.Data)
-		resultValues = resultValues[:len(leftValues.Lengths)]
+		resLen := len(leftValues)
+		resultVector := vector.PreAllocType(resultType, resLen, resLen, proc.Mp())
+		resultValues := vector.MustTCols[uint64](resultVector)
 		nulls.Set(resultVector.Nsp, left.Nsp)
-		vector.SetCol(resultVector, findinset.FindInSetWithRightConst(leftValues, rightValues, resultValues))
+		findinset.FindInSetWithRightConst(leftValues, rightValues[0], resultValues)
 		return resultVector, nil
 	}
-	resultVector, err := proc.AllocVector(resultType, int64(resultElementSize*len(rightValues.Lengths)))
-	if err != nil {
-		return nil, err
-	}
-	resultValues := types.DecodeUint64Slice(resultVector.Data)
-	resultValues = resultValues[:len(rightValues.Lengths)]
+	resLen := len(leftValues)
+	resultVector := vector.PreAllocType(resultType, resLen, resLen, proc.Mp())
+	resultValues := vector.MustTCols[uint64](resultVector)
 	nulls.Or(left.Nsp, right.Nsp, resultVector.Nsp)
 	vector.SetCol(resultVector, findinset.FindInSet(leftValues, rightValues, resultValues))
 	return resultVector, nil

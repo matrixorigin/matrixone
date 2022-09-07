@@ -17,7 +17,6 @@ package bin
 import (
 	"math/bits"
 
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"golang.org/x/exp/constraints"
 )
 
@@ -64,14 +63,9 @@ func bitLen[T constraints.Integer | constraints.Float](xs []T) int64 {
 	return r
 }
 
-func toBinary[T constraints.Integer | constraints.Float](xs []T, result *types.Bytes) *types.Bytes {
-	offset := 0
+func toBinary[T constraints.Integer | constraints.Float](xs []T, result []string) []string {
 	for i, x := range xs {
-		binStr := uintToBinary(uint64(x))
-		copy(result.Data[offset:], binStr)
-		result.Lengths[i] = uint32(len(binStr))
-		result.Offsets[i] = uint32(offset)
-		offset += len(binStr)
+		result[i] = uintToBinary(uint64(x))
 	}
 	return result
 }

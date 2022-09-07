@@ -102,6 +102,18 @@ func (vec *vector[T]) Equals(o Vector) bool {
 			if d.Ne(od) {
 				return false
 			}
+		} else if _, ok := any(v).(types.TS); ok {
+			d := vec.Get(i).(types.TS)
+			od := vec.Get(i).(types.TS)
+			if types.CompareTSTSAligned(d, od) != 0 {
+				return false
+			}
+		} else if _, ok := any(v).(types.Rowid); ok {
+			d := vec.Get(i).(types.Rowid)
+			od := vec.Get(i).(types.Rowid)
+			if types.CompareRowidRowidAligned(d, od) != 0 {
+				return false
+			}
 		} else {
 			if vec.Get(i) != o.Get(i) {
 				return false
@@ -213,7 +225,8 @@ func (vec *vector[T]) WriteTo(w io.Writer) (n int64, err error) {
 	var nr int
 	var tmpn int64
 	// 1. Vector type
-	if nr, err = w.Write(types.EncodeType(vec.GetType())); err != nil {
+	vt := vec.GetType()
+	if nr, err = w.Write(types.EncodeType(&vt)); err != nil {
 		return
 	}
 	n += int64(nr)

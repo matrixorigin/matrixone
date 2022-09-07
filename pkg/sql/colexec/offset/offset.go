@@ -57,7 +57,7 @@ func Call(idx int, proc *process.Process, arg any) (bool, error) {
 		return false, nil
 	}
 	ap.Seen += uint64(length)
-	bat.Clean(proc.Mp)
+	bat.Clean(proc.Mp())
 	proc.SetInputBatch(&batch.Batch{})
 	return false, nil
 }
