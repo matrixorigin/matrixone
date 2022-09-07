@@ -96,6 +96,7 @@ func (s *Scope) InsertValues(c *Compile, stmt *tree.Insert) (uint64, error) {
 	return uint64(len(p.Columns[0].Column)), nil
 }
 
+// XXX: is this just fill batch with first vec.Col[0]?
 func fillBatch(bat *batch.Batch, p *plan.InsertValues, rows []tree.Exprs, proc *process.Process) error {
 	rowCount := len(p.Columns[0].Column)
 
@@ -104,24 +105,6 @@ func fillBatch(bat *batch.Batch, p *plan.InsertValues, rows []tree.Exprs, proc *
 
 	for i, v := range bat.Vecs {
 		switch v.Typ.Oid {
-		case types.T_json:
-			vs := make([][]byte, rowCount)
-			{
-				for j, expr := range p.Columns[i].Column {
-					vec, err := colexec.EvalExpr(tmpBat, proc, expr)
-					if err != nil {
-						return y.MakeInsertError(v.Typ.Oid, p.ExplicitCols[i], rows, i, j)
-					}
-					if nulls.Any(vec.Nsp) {
-						nulls.Add(v.Nsp, uint64(j))
-					} else {
-						vs[j] = vec.Col.(*types.Bytes).Data
-					}
-				}
-			}
-			if err := vector.Append(v, vs); err != nil {
-				return err
-			}
 		case types.T_bool:
 			vs := make([]bool, rowCount)
 			{
@@ -137,7 +120,7 @@ func fillBatch(bat *batch.Batch, p *plan.InsertValues, rows []tree.Exprs, proc *
 					}
 				}
 			}
-			if err := vector.Append(v, vs); err != nil {
+			if err := vector.AppendFixed(v, vs, proc.Mp()); err != nil {
 				return err
 			}
 		case types.T_int8:
@@ -155,7 +138,7 @@ func fillBatch(bat *batch.Batch, p *plan.InsertValues, rows []tree.Exprs, proc *
 					}
 				}
 			}
-			if err := vector.Append(v, vs); err != nil {
+			if err := vector.AppendFixed(v, vs, proc.Mp()); err != nil {
 				return err
 			}
 		case types.T_int16:
@@ -173,7 +156,7 @@ func fillBatch(bat *batch.Batch, p *plan.InsertValues, rows []tree.Exprs, proc *
 					}
 				}
 			}
-			if err := vector.Append(v, vs); err != nil {
+			if err := vector.AppendFixed(v, vs, proc.Mp()); err != nil {
 				return err
 			}
 		case types.T_int32:
@@ -191,7 +174,7 @@ func fillBatch(bat *batch.Batch, p *plan.InsertValues, rows []tree.Exprs, proc *
 					}
 				}
 			}
-			if err := vector.Append(v, vs); err != nil {
+			if err := vector.AppendFixed(v, vs, proc.Mp()); err != nil {
 				return err
 			}
 		case types.T_int64:
@@ -209,7 +192,7 @@ func fillBatch(bat *batch.Batch, p *plan.InsertValues, rows []tree.Exprs, proc *
 					}
 				}
 			}
-			if err := vector.Append(v, vs); err != nil {
+			if err := vector.AppendFixed(v, vs, proc.Mp()); err != nil {
 				return err
 			}
 		case types.T_uint8:
@@ -227,7 +210,7 @@ func fillBatch(bat *batch.Batch, p *plan.InsertValues, rows []tree.Exprs, proc *
 					}
 				}
 			}
-			if err := vector.Append(v, vs); err != nil {
+			if err := vector.AppendFixed(v, vs, proc.Mp()); err != nil {
 				return err
 			}
 		case types.T_uint16:
@@ -245,7 +228,7 @@ func fillBatch(bat *batch.Batch, p *plan.InsertValues, rows []tree.Exprs, proc *
 					}
 				}
 			}
-			if err := vector.Append(v, vs); err != nil {
+			if err := vector.AppendFixed(v, vs, proc.Mp()); err != nil {
 				return err
 			}
 		case types.T_uint32:
@@ -263,7 +246,7 @@ func fillBatch(bat *batch.Batch, p *plan.InsertValues, rows []tree.Exprs, proc *
 					}
 				}
 			}
-			if err := vector.Append(v, vs); err != nil {
+			if err := vector.AppendFixed(v, vs, proc.Mp()); err != nil {
 				return err
 			}
 		case types.T_uint64:
@@ -281,7 +264,7 @@ func fillBatch(bat *batch.Batch, p *plan.InsertValues, rows []tree.Exprs, proc *
 					}
 				}
 			}
-			if err := vector.Append(v, vs); err != nil {
+			if err := vector.AppendFixed(v, vs, proc.Mp()); err != nil {
 				return err
 			}
 		case types.T_float32:
@@ -299,7 +282,7 @@ func fillBatch(bat *batch.Batch, p *plan.InsertValues, rows []tree.Exprs, proc *
 					}
 				}
 			}
-			if err := vector.Append(v, vs); err != nil {
+			if err := vector.AppendFixed(v, vs, proc.Mp()); err != nil {
 				return err
 			}
 		case types.T_float64:
@@ -317,10 +300,10 @@ func fillBatch(bat *batch.Batch, p *plan.InsertValues, rows []tree.Exprs, proc *
 					}
 				}
 			}
-			if err := vector.Append(v, vs); err != nil {
+			if err := vector.AppendFixed(v, vs, proc.Mp()); err != nil {
 				return err
 			}
-		case types.T_char, types.T_varchar, types.T_blob:
+		case types.T_char, types.T_varchar, types.T_json, types.T_blob:
 			vs := make([][]byte, rowCount)
 			{
 				for j, expr := range p.Columns[i].Column {
@@ -331,11 +314,11 @@ func fillBatch(bat *batch.Batch, p *plan.InsertValues, rows []tree.Exprs, proc *
 					if nulls.Any(vec.Nsp) {
 						nulls.Add(v.Nsp, uint64(j))
 					} else {
-						vs[j] = vec.Col.(*types.Bytes).Data
+						vs[j] = vec.GetBytes(0)
 					}
 				}
 			}
-			if err := vector.Append(v, vs); err != nil {
+			if err := vector.AppendBytes(v, vs, proc.Mp()); err != nil {
 				return err
 			}
 		case types.T_date:
@@ -353,7 +336,7 @@ func fillBatch(bat *batch.Batch, p *plan.InsertValues, rows []tree.Exprs, proc *
 					}
 				}
 			}
-			if err := vector.Append(v, vs); err != nil {
+			if err := vector.AppendFixed(v, vs, proc.Mp()); err != nil {
 				return err
 			}
 		case types.T_datetime:
@@ -371,7 +354,7 @@ func fillBatch(bat *batch.Batch, p *plan.InsertValues, rows []tree.Exprs, proc *
 					}
 				}
 			}
-			if err := vector.Append(v, vs); err != nil {
+			if err := vector.AppendFixed(v, vs, proc.Mp()); err != nil {
 				return err
 			}
 		case types.T_timestamp:
@@ -389,7 +372,7 @@ func fillBatch(bat *batch.Batch, p *plan.InsertValues, rows []tree.Exprs, proc *
 					}
 				}
 			}
-			if err := vector.Append(v, vs); err != nil {
+			if err := vector.AppendFixed(v, vs, proc.Mp()); err != nil {
 				return err
 			}
 		case types.T_decimal64:
@@ -407,7 +390,7 @@ func fillBatch(bat *batch.Batch, p *plan.InsertValues, rows []tree.Exprs, proc *
 					}
 				}
 			}
-			if err := vector.Append(v, vs); err != nil {
+			if err := vector.AppendFixed(v, vs, proc.Mp()); err != nil {
 				return err
 			}
 		case types.T_decimal128:
@@ -425,7 +408,7 @@ func fillBatch(bat *batch.Batch, p *plan.InsertValues, rows []tree.Exprs, proc *
 					}
 				}
 			}
-			if err := vector.Append(v, vs); err != nil {
+			if err := vector.AppendFixed(v, vs, proc.Mp()); err != nil {
 				return err
 			}
 		default:

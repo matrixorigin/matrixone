@@ -22,13 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 )
 
-func WriteValueInto[T any](tool *CodecTool, v T) (n int64, err error) {
-	nr, err := tool.Write(types.EncodeFixed(v))
-	n = int64(nr)
-	return
-}
-
-func GetValueFrom[T any](tool *CodecTool, i int) (v T) {
+func GetValueFrom[T types.FixedSizeT](tool *CodecTool, i int) (v T) {
 	buf := tool.Get(i)
 	v = types.DecodeFixed[T](buf)
 	return

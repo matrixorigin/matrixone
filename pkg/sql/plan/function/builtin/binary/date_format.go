@@ -17,6 +17,9 @@ package binary
 import (
 	"bytes"
 	"fmt"
+	"math"
+	"strconv"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -24,8 +27,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/errno"
 	"github.com/matrixorigin/matrixone/pkg/sql/errors"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"math"
-	"strconv"
 )
 
 // function overview:
@@ -92,61 +93,40 @@ func DateFormat(vectors []*vector.Vector, proc *process.Process) (*vector.Vector
 	formatMask := string(formatVector.GetString(0))
 
 	if dateVector.IsScalar() {
-		resultVector := proc.AllocScalarVector(resultType)
-		resCol := &types.Bytes{
-			Data:    make([]byte, 0, 1),
-			Offsets: make([]uint32, 1),
-			Lengths: make([]uint32, 1),
-		}
-
+		// XXX Null handling maybe broken.
 		datetimes := dateVector.Col.([]types.Datetime)
-		CalcDateFromat(datetimes, formatMask, dateVector.Nsp, resCol)
-		vector.SetCol(resultVector, resCol)
-		return resultVector, nil
-	} else {
-		resultVector, err := proc.AllocVector(resultType, 0)
+		resCol, err := CalcDateFromat(datetimes, formatMask, dateVector.Nsp)
 		if err != nil {
-			return nil, moerr.NewError(moerr.INTERNAL_ERROR, "out of memory")
+			return nil, err
 		}
-
-		rowCount := vector.Length(dateVector)
-		resCol := &types.Bytes{
-			Data:    make([]byte, 0, rowCount),
-			Offsets: make([]uint32, rowCount),
-			Lengths: make([]uint32, rowCount),
-		}
-		resultVector.Nsp = dateVector.Nsp
-
+		return vector.NewConstString(resultType, 1, resCol[0]), nil
+	} else {
 		datetimes := dateVector.Col.([]types.Datetime)
-		CalcDateFromat(datetimes, formatMask, dateVector.Nsp, resCol)
-		vector.SetCol(resultVector, resCol)
+		resCol, err := CalcDateFromat(datetimes, formatMask, dateVector.Nsp)
+		if err != nil {
+			return nil, err
+		}
+		resultVector := vector.New(resultType)
+		resultVector.Nsp = dateVector.Nsp
+		vector.AppendString(resultVector, resCol, proc.Mp())
 		return resultVector, nil
 	}
 }
 
 // CalcDateFromat: DateFromat is used to formating the datetime values according to the format string.
-func CalcDateFromat(datetimes []types.Datetime, format string, ns *nulls.Nulls, res *types.Bytes) error {
+func CalcDateFromat(datetimes []types.Datetime, format string, ns *nulls.Nulls) ([]string, error) {
+	res := make([]string, len(datetimes))
 	for idx, datetime := range datetimes {
 		if nulls.Contains(ns, uint64(idx)) {
 			continue
 		}
 		formatStr, err := datetimeFormat(datetime, format)
 		if err != nil {
-			return err
+			return nil, err
 		}
-
-		strBytes := []byte(formatStr)
-		strBytesLen := len(strBytes)
-
-		res.Data = append(res.Data, strBytes...)
-		res.Lengths[idx] = uint32(strBytesLen)
-		if idx != 0 {
-			res.Offsets[idx] = res.Offsets[idx-1] + res.Lengths[idx-1]
-		} else {
-			res.Offsets[idx] = uint32(0)
-		}
+		res[idx] = formatStr
 	}
-	return nil
+	return res, nil
 }
 
 // datetimeFormat: format the datetime value according to the format string.

@@ -12,15 +12,35 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package count
+package txnts
 
-import "github.com/matrixorigin/matrixone/pkg/container/types"
+import (
+	"bytes"
 
-type Decimal128AndString interface {
-	types.Decimal | []byte | bool
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+)
+
+type sortElem struct {
+	data types.TS
+	idx  uint32
 }
 
-type Count[T1 types.Generic | Decimal128AndString] struct {
-	// isStar is true: count(*)
-	isStar bool
+type sortSlice []sortElem
+
+func (x sortSlice) Less(i, j int) bool {
+	return bytes.Compare(x[i].data[:], x[j].data[:]) < 0
 }
+func (x sortSlice) Swap(i, j int) { x[i], x[j] = x[j], x[i] }
+
+type heapElem struct {
+	data types.TS
+	src  uint32
+	next uint32
+}
+
+type heapSlice []heapElem
+
+func (x heapSlice) Less(i, j int) bool {
+	return bytes.Compare(x[i].data[:], x[j].data[:]) < 0
+}
+func (x heapSlice) Swap(i, j int) { x[i], x[j] = x[j], x[i] }

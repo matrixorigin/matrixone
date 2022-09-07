@@ -61,7 +61,7 @@ func TestDateAdd(t *testing.T) {
 			xnu := &nulls.Nulls{}
 			ynu := &nulls.Nulls{}
 			rnu := &nulls.Nulls{}
-			d, e := dateAdd(c.args1, c.args2, c.args3, xnu, ynu, rnu, got)
+			d, e := DateAdd(c.args1, c.args2, c.args3, xnu, ynu, rnu, got)
 			if c.success {
 				require.Equal(t, e, nil)
 			} else {
@@ -111,7 +111,7 @@ func TestDatetimeAdd(t *testing.T) {
 			xnu := &nulls.Nulls{}
 			ynu := &nulls.Nulls{}
 			rnu := &nulls.Nulls{}
-			d, e := datetimeAdd(c.args1, c.args2, c.args3, xnu, ynu, rnu, got)
+			d, e := DatetimeAdd(c.args1, c.args2, c.args3, xnu, ynu, rnu, got)
 			if c.success {
 				require.Equal(t, e, nil)
 			} else {
@@ -126,35 +126,35 @@ func TestDatetimeAdd(t *testing.T) {
 func TestDateStringAdd(t *testing.T) {
 	testCases := []struct {
 		name    string
-		args1   *types.Bytes
+		args1   []string
 		args2   []int64
 		args3   []int64
 		want    []types.Datetime
 		success bool
 	}{
 		{
-			args1:   &types.Bytes{Data: []byte("2018-01-01"), Offsets: []uint32{0}, Lengths: []uint32{10}},
+			args1:   []string{"2018-01-01"},
 			args2:   []int64{1},
 			args3:   []int64{int64(types.Day)},
 			want:    []types.Datetime{types.FromClock(2018, 1, 2, 0, 0, 0, 0)},
 			success: true,
 		},
 		{
-			args1:   &types.Bytes{Data: []byte("2018-01-01"), Offsets: []uint32{0}, Lengths: []uint32{10}},
+			args1:   []string{"2018-01-01"},
 			args2:   []int64{1},
 			args3:   []int64{int64(types.Second)},
 			want:    []types.Datetime{types.FromClock(2018, 1, 1, 0, 0, 1, 0)},
 			success: true,
 		},
 		{
-			args1:   &types.Bytes{Data: []byte("2018-01-01 00:00:01"), Offsets: []uint32{0}, Lengths: []uint32{19}},
+			args1:   []string{"2018-01-01 00:00:01"},
 			args2:   []int64{1},
 			args3:   []int64{int64(types.Second)},
 			want:    []types.Datetime{types.FromClock(2018, 1, 1, 0, 0, 2, 0)},
 			success: true,
 		},
 		{
-			args1:   &types.Bytes{Data: []byte("xxxx"), Offsets: []uint32{0}, Lengths: []uint32{4}},
+			args1:   []string{"xxxx"},
 			args2:   []int64{1},
 			args3:   []int64{int64(types.Second)},
 			want:    []types.Datetime{types.FromClock(1, 1, 1, 0, 0, 0, 0)},
@@ -164,11 +164,11 @@ func TestDateStringAdd(t *testing.T) {
 
 	for _, c := range testCases {
 		t.Run(c.name, func(t *testing.T) {
-			got := make([]types.Datetime, len(c.args1.Offsets))
+			got := make([]types.Datetime, len(c.args1))
 			xnu := &nulls.Nulls{}
 			ynu := &nulls.Nulls{}
 			rnu := &nulls.Nulls{}
-			d, e := dateStringAdd(c.args1, c.args2, c.args3, xnu, ynu, rnu, got)
+			d, e := DateStringAdd(c.args1, c.args2, c.args3, xnu, ynu, rnu, got)
 			if c.success {
 				require.Equal(t, e, nil)
 			} else {
@@ -211,7 +211,7 @@ func TestTimeStampAdd(t *testing.T) {
 			xnu := &nulls.Nulls{}
 			ynu := &nulls.Nulls{}
 			rnu := &nulls.Nulls{}
-			rs, err := timestampAdd(time.Local, c.args1, c.args2, c.args3, xnu, ynu, rnu, got)
+			rs, err := TimestampAdd(time.Local, c.args1, c.args2, c.args3, xnu, ynu, rnu, got)
 			require.Equal(t, c.want, rs)
 			if c.success {
 				require.Equal(t, err, nil)

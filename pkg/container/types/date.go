@@ -21,8 +21,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/errno"
-	"github.com/matrixorigin/matrixone/pkg/sql/errors"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
 const (
@@ -54,13 +53,13 @@ func (d Weekday) String() string {
 var unixEpoch = int64(FromClock(1970, 1, 1, 0, 0, 0, 0))
 
 var (
-	ErrIncorrectDateValue = errors.New(errno.DataException, "Incorrect date format")
+	ErrIncorrectDateValue = moerr.NewError(moerr.INVALID_INPUT, "incorrect date format")
 
 	leapYearMonthDays = []uint8{31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31}
 	flatYearMonthDays = []uint8{31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31}
 
 	//regDate = regexp.MustCompile(`^(?P<year>[0-9]+)[-](?P<month>[0-9]+)[-](?P<day>[0-9]+)$`)
-	ErrInvalidDateAddInterval = errors.New(errno.DataException, "Beyond the range of date")
+	ErrInvalidDateAddInterval = moerr.NewError(moerr.OUT_OF_RANGE, "beyond the range of date")
 )
 
 const (

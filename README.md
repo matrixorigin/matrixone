@@ -182,6 +182,9 @@ The **main** branch is the default branch, the code on the main branch is always
 
 3. Launch MatrixOne server：
 
+    !!! note
+         The startup-config file of MatrixOne(Preview Version) is different from the startup-config file of MatrixOne(Stable Version). The startup-config file code of MatrixOne(Preview Version) is as below:
+
     ```
     ./mo-service -cfg ./etc/cn-standalone-test.toml
     ```
@@ -204,6 +207,9 @@ The **main** branch is the default branch, the code on the main branch is always
     ```
 
 3. Launch MatrixOne server：
+
+    !!! note
+         The startup-config file of MatrixOne(Stable Version) is different from the startup-config file of MatrixOne(Preview Version). The startup-config file code of MatrixOne(Stable Version) is as below:
 
     ```
     ./mo-server system_vars_config.toml

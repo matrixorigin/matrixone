@@ -58,7 +58,7 @@ func Call(idx int, proc *process.Process, arg any) (bool, error) {
 			if bat == nil {
 				ctr.state = End
 				if ctr.bat != nil {
-					ctr.bat.Clean(proc.Mp)
+					ctr.bat.Clean(proc.Mp())
 				}
 				continue
 			}
@@ -131,7 +131,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 		if err != nil {
 			return err
 		}
-		defer vector.Clean(vec, proc.Mp)
+		defer vector.Clean(vec, proc.Mp())
 		bs := vec.Col.([]bool)
 		if len(bs) == 1 {
 			if bs[0] {

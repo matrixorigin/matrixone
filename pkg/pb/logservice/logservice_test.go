@@ -17,6 +17,7 @@ package logservice
 import (
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -33,31 +34,34 @@ func TestLogRecord(t *testing.T) {
 func TestCNStateUpdate(t *testing.T) {
 	state := CNState{Stores: map[string]CNStoreInfo{}}
 
-	hb1 := CNStoreHeartbeat{UUID: "cn-a", ServiceAddress: "addr-a"}
+	hb1 := CNStoreHeartbeat{UUID: "cn-a", ServiceAddress: "addr-a", Role: metadata.CNRole_AP}
 	tick1 := uint64(100)
 
 	state.Update(hb1, tick1)
 	assert.Equal(t, state.Stores[hb1.UUID], CNStoreInfo{
 		Tick:           tick1,
 		ServiceAddress: hb1.ServiceAddress,
+		Role:           metadata.CNRole_AP,
 	})
 
-	hb2 := CNStoreHeartbeat{UUID: "cn-b", ServiceAddress: "addr-b"}
+	hb2 := CNStoreHeartbeat{UUID: "cn-b", ServiceAddress: "addr-b", Role: metadata.CNRole_TP}
 	tick2 := uint64(200)
 
 	state.Update(hb2, tick2)
 	assert.Equal(t, state.Stores[hb2.UUID], CNStoreInfo{
 		Tick:           tick2,
 		ServiceAddress: hb2.ServiceAddress,
+		Role:           metadata.CNRole_TP,
 	})
 
-	hb3 := CNStoreHeartbeat{UUID: "cn-a", ServiceAddress: "addr-a"}
+	hb3 := CNStoreHeartbeat{UUID: "cn-a", ServiceAddress: "addr-a", Role: metadata.CNRole_TP}
 	tick3 := uint64(300)
 
 	state.Update(hb3, tick3)
 	assert.Equal(t, state.Stores[hb3.UUID], CNStoreInfo{
 		Tick:           tick3,
 		ServiceAddress: hb3.ServiceAddress,
+		Role:           metadata.CNRole_TP,
 	})
 }
 

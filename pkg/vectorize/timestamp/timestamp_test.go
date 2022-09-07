@@ -75,20 +75,20 @@ func TestDatetimeToTimestamp(t *testing.T) {
 func TestDateStringToTimestamp(t *testing.T) {
 	testCases := []struct {
 		name    string
-		args    *types.Bytes
+		args    []string
 		want    []types.Timestamp
 		success bool
 	}{
 		{
 			name:    "normal test cases",
-			args:    &types.Bytes{Data: []byte("2022-03-30 00:00:00"), Offsets: []uint32{0}, Lengths: []uint32{19}},
+			args:    []string{"2022-03-30 00:00:00"},
 			want:    []types.Timestamp{types.FromClockUTC(2022, 3, 30, 0, 0, 0, 0)},
 			success: true,
 		},
 	}
 
 	for _, v := range testCases {
-		reply := make([]types.Timestamp, len(v.args.Lengths))
+		reply := make([]types.Timestamp, len(v.args))
 		ns := &nulls.Nulls{}
 		reply = DateStringToTimestamp(time.UTC, v.args, ns, reply)
 		require.Equal(t, reply, v.want)
