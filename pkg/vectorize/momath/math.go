@@ -100,7 +100,8 @@ func Ln(arg, result *vector.Vector) error {
 	for i, v := range argCol {
 		if !nulls.Contains(arg.Nsp, (uint64)(i)) {
 			if v <= 0 {
-				nulls.Add(result.Nsp, uint64(i))
+				//return error.
+				return errors.New("", "Logarithmic function input cannot be less than 0")
 			} else {
 				resCol[i] = math.Log(v)
 			}
