@@ -93,10 +93,10 @@ type TaskMetadata struct {
 	// Context context needed to run the task
 	Context []byte `protobuf:"bytes,3,opt,name=Context,proto3" json:"Context,omitempty"`
 	// Options options for execute task
-	Options              *TaskOptions `protobuf:"bytes,4,opt,name=Options,proto3" json:"Options,omitempty"`
-	XXX_NoUnkeyedLiteral struct{}     `json:"-"`
-	XXX_unrecognized     []byte       `json:"-"`
-	XXX_sizecache        int32        `json:"-"`
+	Options              TaskOptions `protobuf:"bytes,4,opt,name=Options,proto3" json:"Options"`
+	XXX_NoUnkeyedLiteral struct{}    `json:"-"`
+	XXX_unrecognized     []byte      `json:"-"`
+	XXX_sizecache        int32       `json:"-"`
 }
 
 func (m *TaskMetadata) Reset()         { *m = TaskMetadata{} }
@@ -153,19 +153,19 @@ func (m *TaskMetadata) GetContext() []byte {
 	return nil
 }
 
-func (m *TaskMetadata) GetOptions() *TaskOptions {
+func (m *TaskMetadata) GetOptions() TaskOptions {
 	if m != nil {
 		return m.Options
 	}
-	return nil
+	return TaskOptions{}
 }
 
 // TaskOptions task options
 type TaskOptions struct {
-	// DisableRetry disable retry if task execute failed.
-	DisableRetry bool `protobuf:"varint,1,opt,name=DisableRetry,proto3" json:"DisableRetry,omitempty"`
-	// MaxRetryTimes 0 means ulimited
-	MaxRetryTimes uint32 `protobuf:"varint,2,opt,name=MaxRetryTimes,proto3" json:"MaxRetryTimes,omitempty"`
+	// MaxRetryTimes 0 means disable retry
+	MaxRetryTimes uint32 `protobuf:"varint,1,opt,name=MaxRetryTimes,proto3" json:"MaxRetryTimes,omitempty"`
+	// RetryInterval retry interval
+	RetryInterval int64 `protobuf:"varint,2,opt,name=RetryInterval,proto3" json:"RetryInterval,omitempty"`
 	// DelayDuration delay duration. Controls how long a task is delayed before it is scheduled for
 	// execution.
 	DelayDuration        int64    `protobuf:"varint,3,opt,name=DelayDuration,proto3" json:"DelayDuration,omitempty"`
@@ -207,16 +207,16 @@ func (m *TaskOptions) XXX_DiscardUnknown() {
 
 var xxx_messageInfo_TaskOptions proto.InternalMessageInfo
 
-func (m *TaskOptions) GetDisableRetry() bool {
-	if m != nil {
-		return m.DisableRetry
-	}
-	return false
-}
-
 func (m *TaskOptions) GetMaxRetryTimes() uint32 {
 	if m != nil {
 		return m.MaxRetryTimes
+	}
+	return 0
+}
+
+func (m *TaskOptions) GetRetryInterval() int64 {
+	if m != nil {
+		return m.RetryInterval
 	}
 	return 0
 }
@@ -288,20 +288,18 @@ func (m *ExecuteResult) GetError() string {
 
 // Task task execute info.
 type Task struct {
+	ID uint64 `protobuf:"varint,1,opt,name=ID,proto3" json:"ID,omitempty"`
 	// TaskMetadata task metadata
-	Metadata TaskMetadata `protobuf:"bytes,1,opt,name=Metadata,proto3" json:"Metadata"`
+	Metadata TaskMetadata `protobuf:"bytes,2,opt,name=Metadata,proto3" json:"Metadata"`
 	// ParentTaskID used to record the parent task of the current task
-	ParentTaskID string `protobuf:"bytes,2,opt,name=ParentTaskID,proto3" json:"ParentTaskID,omitempty"`
+	ParentTaskID string `protobuf:"bytes,3,opt,name=ParentTaskID,proto3" json:"ParentTaskID,omitempty"`
 	// TaskStatus task status
-	Status TaskStatus `protobuf:"varint,3,opt,name=Status,proto3,enum=task.TaskStatus" json:"Status,omitempty"`
+	Status TaskStatus `protobuf:"varint,4,opt,name=Status,proto3,enum=task.TaskStatus" json:"Status,omitempty"`
 	// TaskRunner is the UUID of the CN node which the task run is assigned to
-	TaskRunner string `protobuf:"bytes,4,opt,name=TaskRunner,proto3" json:"TaskRunner,omitempty"`
+	TaskRunner string `protobuf:"bytes,5,opt,name=TaskRunner,proto3" json:"TaskRunner,omitempty"`
 	// Epoch indicates how many times the current task is scheduled, the first time it is scheduled
 	// is 1. Each time it is scheduled, Epoch++.
-	Epoch uint32 `protobuf:"varint,5,opt,name=Epoch,proto3" json:"Epoch,omitempty"`
-	// ScheduleAfter unix timestamp in ms used to controls when scheduler can assigned a TaskRunner
-	// to this task.
-	ScheduleAfter int64 `protobuf:"varint,6,opt,name=ScheduleAfter,proto3" json:"ScheduleAfter,omitempty"`
+	Epoch uint32 `protobuf:"varint,6,opt,name=Epoch,proto3" json:"Epoch,omitempty"`
 	// LastHeartbeat time of the last heartbeat reported by TaskRunner. Unix timestamp in ms
 	LastHeartbeat int64 `protobuf:"varint,7,opt,name=LastHeartbeat,proto3" json:"LastHeartbeat,omitempty"`
 	// CreateAt time of the task created. Unix timestamp in ms
@@ -348,6 +346,13 @@ func (m *Task) XXX_DiscardUnknown() {
 
 var xxx_messageInfo_Task proto.InternalMessageInfo
 
+func (m *Task) GetID() uint64 {
+	if m != nil {
+		return m.ID
+	}
+	return 0
+}
+
 func (m *Task) GetMetadata() TaskMetadata {
 	if m != nil {
 		return m.Metadata
@@ -383,13 +388,6 @@ func (m *Task) GetEpoch() uint32 {
 	return 0
 }
 
-func (m *Task) GetScheduleAfter() int64 {
-	if m != nil {
-		return m.ScheduleAfter
-	}
-	return 0
-}
-
 func (m *Task) GetLastHeartbeat() int64 {
 	if m != nil {
 		return m.LastHeartbeat
@@ -420,12 +418,17 @@ func (m *Task) GetExecuteResult() *ExecuteResult {
 
 // CronTask task execute info.
 type CronTask struct {
+	ID uint64 `protobuf:"varint,1,opt,name=ID,proto3" json:"ID,omitempty"`
 	// TaskMetadata task metadata
-	Metadata TaskMetadata `protobuf:"bytes,1,opt,name=Metadata,proto3" json:"Metadata"`
+	Metadata TaskMetadata `protobuf:"bytes,2,opt,name=Metadata,proto3" json:"Metadata"`
 	// CronExpr cron expr
-	CronExpr string `protobuf:"bytes,2,opt,name=CronExpr,proto3" json:"CronExpr,omitempty"`
+	CronExpr string `protobuf:"bytes,3,opt,name=CronExpr,proto3" json:"CronExpr,omitempty"`
 	// NextTime the next time it should be scheduled for execution. Unix timestamp in ms
-	NextTime             int64    `protobuf:"varint,3,opt,name=NextTime,proto3" json:"NextTime,omitempty"`
+	NextTime int64 `protobuf:"varint,4,opt,name=NextTime,proto3" json:"NextTime,omitempty"`
+	// CreateAt time of the cron task created. Unix timestamp in ms
+	CreateAt int64 `protobuf:"varint,5,opt,name=CreateAt,proto3" json:"CreateAt,omitempty"`
+	// CreateAt time of the cron task created. Unix timestamp in ms
+	UpdateAt             int64    `protobuf:"varint,6,opt,name=UpdateAt,proto3" json:"UpdateAt,omitempty"`
 	XXX_NoUnkeyedLiteral struct{} `json:"-"`
 	XXX_unrecognized     []byte   `json:"-"`
 	XXX_sizecache        int32    `json:"-"`
@@ -464,6 +467,13 @@ func (m *CronTask) XXX_DiscardUnknown() {
 
 var xxx_messageInfo_CronTask proto.InternalMessageInfo
 
+func (m *CronTask) GetID() uint64 {
+	if m != nil {
+		return m.ID
+	}
+	return 0
+}
+
 func (m *CronTask) GetMetadata() TaskMetadata {
 	if m != nil {
 		return m.Metadata
@@ -485,6 +495,20 @@ func (m *CronTask) GetNextTime() int64 {
 	return 0
 }
 
+func (m *CronTask) GetCreateAt() int64 {
+	if m != nil {
+		return m.CreateAt
+	}
+	return 0
+}
+
+func (m *CronTask) GetUpdateAt() int64 {
+	if m != nil {
+		return m.UpdateAt
+	}
+	return 0
+}
+
 func init() {
 	proto.RegisterEnum("task.TaskStatus", TaskStatus_name, TaskStatus_value)
 	proto.RegisterEnum("task.ResultCode", ResultCode_name, ResultCode_value)
@@ -498,43 +522,44 @@ func init() {
 func init() { proto.RegisterFile("task.proto", fileDescriptor_ce5d8dd45b4a91ff) }
 
 var fileDescriptor_ce5d8dd45b4a91ff = []byte{
-	// 574 bytes of a gzipped FileDescriptorProto
-	0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0xff, 0xa4, 0x53, 0x4f, 0x6f, 0xd3, 0x3e,
-	0x18, 0x9e, 0xbb, 0xae, 0x7f, 0xde, 0xae, 0x53, 0x7f, 0xfe, 0x71, 0x88, 0x76, 0x28, 0x55, 0x35,
-	0xa4, 0x6a, 0x88, 0x55, 0x1a, 0x70, 0xe0, 0x84, 0xb6, 0x76, 0x88, 0x09, 0x06, 0xc8, 0xdb, 0x89,
-	0x9b, 0xdb, 0xbc, 0xcb, 0xa2, 0xa5, 0x71, 0xe4, 0xbc, 0x91, 0xb2, 0x03, 0x07, 0x0e, 0x7c, 0xb7,
-	0x1d, 0xf7, 0x09, 0x10, 0xf4, 0x93, 0x20, 0xdb, 0x49, 0xd6, 0x70, 0xe5, 0xe6, 0xe7, 0x4f, 0xec,
-	0xf7, 0x79, 0xec, 0x00, 0x90, 0x4c, 0x6f, 0x8f, 0x12, 0xad, 0x48, 0xf1, 0xa6, 0x59, 0xef, 0xbf,
-	0x08, 0x42, 0xba, 0xc9, 0x16, 0x47, 0x4b, 0xb5, 0x9a, 0x06, 0x2a, 0x50, 0x53, 0x2b, 0x2e, 0xb2,
-	0x6b, 0x8b, 0x2c, 0xb0, 0x2b, 0xf7, 0xd1, 0xf8, 0x3b, 0x83, 0xdd, 0x2b, 0x99, 0xde, 0x5e, 0x20,
-	0x49, 0x5f, 0x92, 0xe4, 0x7b, 0xd0, 0x38, 0x9f, 0x7b, 0x6c, 0xc4, 0x26, 0x5d, 0xd1, 0x38, 0x9f,
-	0xf3, 0x7d, 0xe8, 0x9c, 0xe5, 0xb8, 0xcc, 0x48, 0x69, 0xaf, 0x31, 0x62, 0x93, 0xbe, 0xa8, 0x30,
-	0xf7, 0xa0, 0x3d, 0x53, 0x31, 0x61, 0x4e, 0xde, 0xf6, 0x88, 0x4d, 0x76, 0x45, 0x09, 0xf9, 0x73,
-	0x68, 0x7f, 0x4e, 0x28, 0x54, 0x71, 0xea, 0x35, 0x47, 0x6c, 0xd2, 0x3b, 0xfe, 0xef, 0xc8, 0x4e,
-	0x6a, 0x8e, 0x2a, 0x04, 0x51, 0x3a, 0xc6, 0xdf, 0xa0, 0xb7, 0xc1, 0xf3, 0x31, 0xec, 0xce, 0xc3,
-	0x54, 0x2e, 0x22, 0x14, 0x48, 0xfa, 0xce, 0xce, 0xd2, 0x11, 0x35, 0x8e, 0x1f, 0x40, 0xff, 0x42,
-	0xe6, 0x76, 0x7d, 0x15, 0xae, 0x30, 0x2d, 0x46, 0xab, 0x93, 0xc6, 0x35, 0xc7, 0x48, 0xde, 0xcd,
-	0x33, 0x2d, 0xcd, 0xde, 0x76, 0xca, 0x6d, 0x51, 0x27, 0xc7, 0x1f, 0xa0, 0xef, 0x12, 0xa1, 0xc0,
-	0x34, 0x8b, 0x88, 0x1f, 0x40, 0x73, 0xa6, 0x7c, 0xb4, 0x07, 0xef, 0x1d, 0x0f, 0xdc, 0xe4, 0x4e,
-	0x33, 0xbc, 0xb0, 0x2a, 0x7f, 0x02, 0x3b, 0x67, 0x5a, 0x17, 0xad, 0x74, 0x85, 0x03, 0xe3, 0x1f,
-	0xdb, 0xd0, 0x34, 0x61, 0xf8, 0x2b, 0xe8, 0x94, 0x9d, 0xda, 0x8d, 0x7a, 0xc7, 0xfc, 0xb1, 0x82,
-	0x52, 0x39, 0x6d, 0xde, 0xff, 0x7c, 0xba, 0x25, 0x2a, 0xa7, 0xc9, 0xfe, 0x45, 0x6a, 0x8c, 0xc9,
-	0xb8, 0xce, 0xe7, 0xc5, 0xde, 0x35, 0x8e, 0x4f, 0xa0, 0x75, 0x49, 0x92, 0xb2, 0xd4, 0xc6, 0xa9,
-	0x06, 0x34, 0xaa, 0xe3, 0x45, 0xa1, 0xf3, 0x21, 0x80, 0x61, 0x45, 0x16, 0xc7, 0xa8, 0xed, 0x45,
-	0x74, 0xc5, 0x06, 0x63, 0x23, 0x24, 0x6a, 0x79, 0xe3, 0xed, 0xd8, 0xf6, 0x1c, 0x30, 0xad, 0x5d,
-	0x2e, 0x6f, 0xd0, 0xcf, 0x22, 0x3c, 0xb9, 0x26, 0xd4, 0x5e, 0xcb, 0xb5, 0x56, 0x23, 0x8d, 0xeb,
-	0xa3, 0x4c, 0xe9, 0x3d, 0x4a, 0x4d, 0x0b, 0x94, 0xe4, 0xb5, 0x9d, 0xab, 0x46, 0x9a, 0xd7, 0x33,
-	0xd3, 0x28, 0x09, 0x4f, 0xc8, 0xeb, 0x58, 0x43, 0x85, 0xf9, 0x08, 0x7a, 0x33, 0xb5, 0x4a, 0x22,
-	0x24, 0xf4, 0x4f, 0xc8, 0xeb, 0x5a, 0x79, 0x93, 0xe2, 0x6f, 0xfe, 0xba, 0x19, 0x0f, 0x6c, 0x91,
-	0xff, 0xbb, 0xc0, 0x35, 0x49, 0xd4, 0x9d, 0xe3, 0xdc, 0x1c, 0xac, 0xe2, 0x7f, 0xb8, 0x8a, 0x7d,
-	0xb7, 0xc3, 0x59, 0x9e, 0x94, 0x57, 0x5c, 0x61, 0xa3, 0x7d, 0xc2, 0x9c, 0xcc, 0x2b, 0x2b, 0xde,
-	0x54, 0x85, 0x0f, 0x5f, 0xbb, 0xd2, 0x8b, 0x2b, 0xe8, 0x41, 0xdb, 0x05, 0xf6, 0x07, 0x5b, 0x06,
-	0x98, 0xe6, 0xc3, 0x38, 0x18, 0x30, 0xde, 0x87, 0x6e, 0x95, 0x75, 0xd0, 0x38, 0x7c, 0x06, 0xf0,
-	0xf8, 0xc4, 0x8c, 0xf3, 0x32, 0x5b, 0x2e, 0x31, 0x4d, 0x07, 0x5b, 0x1c, 0xa0, 0xf5, 0x4e, 0x86,
-	0x11, 0xfa, 0x03, 0x76, 0xfa, 0xf6, 0xe1, 0xf7, 0x90, 0xdd, 0xaf, 0x87, 0xec, 0x61, 0x3d, 0x64,
-	0xbf, 0xd6, 0x43, 0xf6, 0x75, 0xf3, 0x87, 0x5f, 0x49, 0xd2, 0x61, 0xae, 0x74, 0x18, 0x84, 0x71,
-	0x09, 0x62, 0x9c, 0x26, 0xb7, 0xc1, 0x34, 0x59, 0x4c, 0x4d, 0xe6, 0x45, 0xcb, 0xfe, 0xf7, 0x2f,
-	0xff, 0x04, 0x00, 0x00, 0xff, 0xff, 0x87, 0x7f, 0x43, 0xb7, 0x3a, 0x04, 0x00, 0x00,
+	// 587 bytes of a gzipped FileDescriptorProto
+	0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0xff, 0xac, 0x94, 0x4f, 0x6f, 0xd3, 0x30,
+	0x18, 0xc6, 0xe7, 0x36, 0xeb, 0x9f, 0xb7, 0xeb, 0x14, 0x0c, 0x87, 0xa8, 0x87, 0x52, 0x45, 0x43,
+	0xaa, 0x26, 0xb1, 0x8a, 0x01, 0x07, 0x4e, 0x68, 0x6b, 0x87, 0xa8, 0x60, 0x80, 0xbc, 0x71, 0xe1,
+	0xe6, 0x36, 0x26, 0x8b, 0xd6, 0xc6, 0x91, 0xf3, 0x06, 0x65, 0x27, 0x8e, 0x7c, 0x2d, 0x8e, 0x3b,
+	0xee, 0x13, 0x20, 0xd8, 0x17, 0xe0, 0x2b, 0x20, 0xdb, 0x49, 0xd6, 0xec, 0xcc, 0x2d, 0xcf, 0xf3,
+	0xbc, 0xb6, 0xdf, 0xf7, 0x67, 0x2b, 0x00, 0xc8, 0xd3, 0xcb, 0x83, 0x44, 0x49, 0x94, 0xd4, 0xd1,
+	0xdf, 0x83, 0xa7, 0x61, 0x84, 0x17, 0xd9, 0xe2, 0x60, 0x29, 0xd7, 0x93, 0x50, 0x86, 0x72, 0x62,
+	0xc2, 0x45, 0xf6, 0xd5, 0x28, 0x23, 0xcc, 0x97, 0x5d, 0xe4, 0xff, 0x20, 0xb0, 0x73, 0xce, 0xd3,
+	0xcb, 0x53, 0x81, 0x3c, 0xe0, 0xc8, 0xe9, 0x2e, 0x34, 0xe6, 0x33, 0x8f, 0x8c, 0xc8, 0xb8, 0xcb,
+	0x1a, 0xf3, 0x19, 0x1d, 0x40, 0xe7, 0x24, 0x17, 0xcb, 0x0c, 0xa5, 0xf2, 0x1a, 0x23, 0x32, 0xee,
+	0xb3, 0x4a, 0x53, 0x0f, 0xda, 0x53, 0x19, 0xa3, 0xc8, 0xd1, 0x6b, 0x8e, 0xc8, 0x78, 0x87, 0x95,
+	0x92, 0x3e, 0x83, 0xf6, 0xc7, 0x04, 0x23, 0x19, 0xa7, 0x9e, 0x33, 0x22, 0xe3, 0xde, 0xe1, 0x83,
+	0x03, 0xd3, 0xa9, 0x3e, 0xaa, 0x08, 0x8e, 0x9d, 0xeb, 0x5f, 0x8f, 0xb7, 0x58, 0x59, 0xe7, 0x7f,
+	0x87, 0xde, 0x46, 0x4a, 0xf7, 0xa0, 0x7f, 0xca, 0x73, 0x26, 0x50, 0x5d, 0x9d, 0x47, 0x6b, 0x91,
+	0x9a, 0x96, 0xfa, 0xac, 0x6e, 0xea, 0x2a, 0xa3, 0xe6, 0x31, 0x0a, 0xf5, 0x8d, 0xaf, 0x4c, 0x8b,
+	0x4d, 0x56, 0x37, 0x75, 0xd5, 0x4c, 0xac, 0xf8, 0xd5, 0x2c, 0x53, 0x5c, 0xef, 0x6e, 0xba, 0x6d,
+	0xb2, 0xba, 0xe9, 0xbf, 0x83, 0xbe, 0x9d, 0x4c, 0x30, 0x91, 0x66, 0x2b, 0xa4, 0x7b, 0xe0, 0x4c,
+	0x65, 0x20, 0xcc, 0xc9, 0xbb, 0x87, 0xae, 0x9d, 0xc0, 0x66, 0xda, 0x67, 0x26, 0xa5, 0x8f, 0x60,
+	0xfb, 0x44, 0xa9, 0x82, 0x4e, 0x97, 0x59, 0xe1, 0xff, 0x6d, 0x80, 0xa3, 0xc7, 0xd9, 0xe0, 0xe9,
+	0x18, 0x9e, 0x2f, 0xa0, 0x53, 0xb2, 0x36, 0x2b, 0x7a, 0x87, 0xf4, 0x0e, 0x4d, 0x99, 0x14, 0x6c,
+	0xaa, 0x4a, 0xea, 0xc3, 0xce, 0x27, 0xae, 0x44, 0x8c, 0xba, 0x6a, 0x3e, 0x33, 0x03, 0x74, 0x59,
+	0xcd, 0xa3, 0x63, 0x68, 0x9d, 0x21, 0xc7, 0xcc, 0x22, 0xaf, 0x1a, 0xd6, 0xa9, 0xf5, 0x59, 0x91,
+	0xd3, 0x21, 0x80, 0x76, 0x59, 0x16, 0xc7, 0x42, 0x79, 0xdb, 0x66, 0xaf, 0x0d, 0xc7, 0x8c, 0x94,
+	0xc8, 0xe5, 0x85, 0xd7, 0x32, 0xcc, 0xad, 0xd0, 0x14, 0xdf, 0xf3, 0x14, 0xdf, 0x0a, 0xae, 0x70,
+	0x21, 0x38, 0x7a, 0x6d, 0x4b, 0xb1, 0x66, 0xea, 0xf7, 0x32, 0x55, 0x82, 0xa3, 0x38, 0x42, 0xaf,
+	0x63, 0x0a, 0x2a, 0x4d, 0x47, 0xd0, 0x9b, 0xca, 0x75, 0xb2, 0x12, 0x28, 0x82, 0x23, 0xf4, 0xba,
+	0x26, 0xde, 0xb4, 0xe8, 0xab, 0x7b, 0x77, 0xe0, 0x81, 0x41, 0xf4, 0xd0, 0x8e, 0x52, 0x8b, 0x58,
+	0xbd, 0xd2, 0xff, 0x49, 0xf4, 0xc9, 0x32, 0xfe, 0x8f, 0xd4, 0x07, 0x76, 0xc7, 0x93, 0x3c, 0x51,
+	0x05, 0xf1, 0x4a, 0xeb, 0xec, 0x83, 0xc8, 0x51, 0x3f, 0x43, 0xc3, 0xbb, 0xc9, 0x2a, 0x5d, 0x63,
+	0xb0, 0x7d, 0x8f, 0xc1, 0x00, 0x3a, 0x9f, 0x93, 0xc0, 0x66, 0x2d, 0x9b, 0x95, 0x7a, 0xff, 0xa5,
+	0xbd, 0x97, 0xe2, 0x96, 0x7a, 0xd0, 0xb6, 0xab, 0x02, 0x77, 0x4b, 0x0b, 0x7d, 0x39, 0x51, 0x1c,
+	0xba, 0x84, 0xf6, 0xa1, 0x5b, 0x41, 0x73, 0x1b, 0xfb, 0x4f, 0x00, 0xee, 0x5e, 0xa5, 0xae, 0x3c,
+	0xcb, 0x96, 0x4b, 0x91, 0xa6, 0xee, 0x16, 0x05, 0x68, 0xbd, 0xe1, 0xd1, 0x4a, 0x04, 0x2e, 0x39,
+	0x7e, 0x7d, 0xf3, 0x67, 0x48, 0xae, 0x6f, 0x87, 0xe4, 0xe6, 0x76, 0x48, 0x7e, 0xdf, 0x0e, 0xc9,
+	0x97, 0xcd, 0x7f, 0xc5, 0x9a, 0xa3, 0x8a, 0x72, 0xa9, 0xa2, 0x30, 0x8a, 0x4b, 0x11, 0x8b, 0x49,
+	0x72, 0x19, 0x4e, 0x92, 0xc5, 0x44, 0xb3, 0x5a, 0xb4, 0xcc, 0x2f, 0xe3, 0xf9, 0xbf, 0x00, 0x00,
+	0x00, 0xff, 0xff, 0x31, 0xd5, 0xdd, 0x07, 0x75, 0x04, 0x00, 0x00,
 }
 
 func (m *TaskMetadata) Marshal() (dAtA []byte, err error) {
@@ -561,18 +586,16 @@ func (m *TaskMetadata) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 		i -= len(m.XXX_unrecognized)
 		copy(dAtA[i:], m.XXX_unrecognized)
 	}
-	if m.Options != nil {
-		{
-			size, err := m.Options.MarshalToSizedBuffer(dAtA[:i])
-			if err != nil {
-				return 0, err
-			}
-			i -= size
-			i = encodeVarintTask(dAtA, i, uint64(size))
+	{
+		size, err := m.Options.MarshalToSizedBuffer(dAtA[:i])
+		if err != nil {
+			return 0, err
 		}
-		i--
-		dAtA[i] = 0x22
+		i -= size
+		i = encodeVarintTask(dAtA, i, uint64(size))
 	}
+	i--
+	dAtA[i] = 0x22
 	if len(m.Context) > 0 {
 		i -= len(m.Context)
 		copy(dAtA[i:], m.Context)
@@ -624,18 +647,13 @@ func (m *TaskOptions) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 		i--
 		dAtA[i] = 0x18
 	}
-	if m.MaxRetryTimes != 0 {
-		i = encodeVarintTask(dAtA, i, uint64(m.MaxRetryTimes))
+	if m.RetryInterval != 0 {
+		i = encodeVarintTask(dAtA, i, uint64(m.RetryInterval))
 		i--
 		dAtA[i] = 0x10
 	}
-	if m.DisableRetry {
-		i--
-		if m.DisableRetry {
-			dAtA[i] = 1
-		} else {
-			dAtA[i] = 0
-		}
+	if m.MaxRetryTimes != 0 {
+		i = encodeVarintTask(dAtA, i, uint64(m.MaxRetryTimes))
 		i--
 		dAtA[i] = 0x8
 	}
@@ -732,34 +750,29 @@ func (m *Task) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 		i--
 		dAtA[i] = 0x38
 	}
-	if m.ScheduleAfter != 0 {
-		i = encodeVarintTask(dAtA, i, uint64(m.ScheduleAfter))
-		i--
-		dAtA[i] = 0x30
-	}
 	if m.Epoch != 0 {
 		i = encodeVarintTask(dAtA, i, uint64(m.Epoch))
 		i--
-		dAtA[i] = 0x28
+		dAtA[i] = 0x30
 	}
 	if len(m.TaskRunner) > 0 {
 		i -= len(m.TaskRunner)
 		copy(dAtA[i:], m.TaskRunner)
 		i = encodeVarintTask(dAtA, i, uint64(len(m.TaskRunner)))
 		i--
-		dAtA[i] = 0x22
+		dAtA[i] = 0x2a
 	}
 	if m.Status != 0 {
 		i = encodeVarintTask(dAtA, i, uint64(m.Status))
 		i--
-		dAtA[i] = 0x18
+		dAtA[i] = 0x20
 	}
 	if len(m.ParentTaskID) > 0 {
 		i -= len(m.ParentTaskID)
 		copy(dAtA[i:], m.ParentTaskID)
 		i = encodeVarintTask(dAtA, i, uint64(len(m.ParentTaskID)))
 		i--
-		dAtA[i] = 0x12
+		dAtA[i] = 0x1a
 	}
 	{
 		size, err := m.Metadata.MarshalToSizedBuffer(dAtA[:i])
@@ -770,7 +783,12 @@ func (m *Task) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 		i = encodeVarintTask(dAtA, i, uint64(size))
 	}
 	i--
-	dAtA[i] = 0xa
+	dAtA[i] = 0x12
+	if m.ID != 0 {
+		i = encodeVarintTask(dAtA, i, uint64(m.ID))
+		i--
+		dAtA[i] = 0x8
+	}
 	return len(dAtA) - i, nil
 }
 
@@ -798,17 +816,27 @@ func (m *CronTask) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 		i -= len(m.XXX_unrecognized)
 		copy(dAtA[i:], m.XXX_unrecognized)
 	}
+	if m.UpdateAt != 0 {
+		i = encodeVarintTask(dAtA, i, uint64(m.UpdateAt))
+		i--
+		dAtA[i] = 0x30
+	}
+	if m.CreateAt != 0 {
+		i = encodeVarintTask(dAtA, i, uint64(m.CreateAt))
+		i--
+		dAtA[i] = 0x28
+	}
 	if m.NextTime != 0 {
 		i = encodeVarintTask(dAtA, i, uint64(m.NextTime))
 		i--
-		dAtA[i] = 0x18
+		dAtA[i] = 0x20
 	}
 	if len(m.CronExpr) > 0 {
 		i -= len(m.CronExpr)
 		copy(dAtA[i:], m.CronExpr)
 		i = encodeVarintTask(dAtA, i, uint64(len(m.CronExpr)))
 		i--
-		dAtA[i] = 0x12
+		dAtA[i] = 0x1a
 	}
 	{
 		size, err := m.Metadata.MarshalToSizedBuffer(dAtA[:i])
@@ -819,7 +847,12 @@ func (m *CronTask) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 		i = encodeVarintTask(dAtA, i, uint64(size))
 	}
 	i--
-	dAtA[i] = 0xa
+	dAtA[i] = 0x12
+	if m.ID != 0 {
+		i = encodeVarintTask(dAtA, i, uint64(m.ID))
+		i--
+		dAtA[i] = 0x8
+	}
 	return len(dAtA) - i, nil
 }
 
@@ -851,10 +884,8 @@ func (m *TaskMetadata) Size() (n int) {
 	if l > 0 {
 		n += 1 + l + sovTask(uint64(l))
 	}
-	if m.Options != nil {
-		l = m.Options.Size()
-		n += 1 + l + sovTask(uint64(l))
-	}
+	l = m.Options.Size()
+	n += 1 + l + sovTask(uint64(l))
 	if m.XXX_unrecognized != nil {
 		n += len(m.XXX_unrecognized)
 	}
@@ -867,11 +898,11 @@ func (m *TaskOptions) Size() (n int) {
 	}
 	var l int
 	_ = l
-	if m.DisableRetry {
-		n += 2
-	}
 	if m.MaxRetryTimes != 0 {
 		n += 1 + sovTask(uint64(m.MaxRetryTimes))
+	}
+	if m.RetryInterval != 0 {
+		n += 1 + sovTask(uint64(m.RetryInterval))
 	}
 	if m.DelayDuration != 0 {
 		n += 1 + sovTask(uint64(m.DelayDuration))
@@ -907,6 +938,9 @@ func (m *Task) Size() (n int) {
 	}
 	var l int
 	_ = l
+	if m.ID != 0 {
+		n += 1 + sovTask(uint64(m.ID))
+	}
 	l = m.Metadata.Size()
 	n += 1 + l + sovTask(uint64(l))
 	l = len(m.ParentTaskID)
@@ -922,9 +956,6 @@ func (m *Task) Size() (n int) {
 	}
 	if m.Epoch != 0 {
 		n += 1 + sovTask(uint64(m.Epoch))
-	}
-	if m.ScheduleAfter != 0 {
-		n += 1 + sovTask(uint64(m.ScheduleAfter))
 	}
 	if m.LastHeartbeat != 0 {
 		n += 1 + sovTask(uint64(m.LastHeartbeat))
@@ -951,6 +982,9 @@ func (m *CronTask) Size() (n int) {
 	}
 	var l int
 	_ = l
+	if m.ID != 0 {
+		n += 1 + sovTask(uint64(m.ID))
+	}
 	l = m.Metadata.Size()
 	n += 1 + l + sovTask(uint64(l))
 	l = len(m.CronExpr)
@@ -959,6 +993,12 @@ func (m *CronTask) Size() (n int) {
 	}
 	if m.NextTime != 0 {
 		n += 1 + sovTask(uint64(m.NextTime))
+	}
+	if m.CreateAt != 0 {
+		n += 1 + sovTask(uint64(m.CreateAt))
+	}
+	if m.UpdateAt != 0 {
+		n += 1 + sovTask(uint64(m.UpdateAt))
 	}
 	if m.XXX_unrecognized != nil {
 		n += len(m.XXX_unrecognized)
@@ -1115,9 +1155,6 @@ func (m *TaskMetadata) Unmarshal(dAtA []byte) error {
 			if postIndex > l {
 				return io.ErrUnexpectedEOF
 			}
-			if m.Options == nil {
-				m.Options = &TaskOptions{}
-			}
 			if err := m.Options.Unmarshal(dAtA[iNdEx:postIndex]); err != nil {
 				return err
 			}
@@ -1175,26 +1212,6 @@ func (m *TaskOptions) Unmarshal(dAtA []byte) error {
 		switch fieldNum {
 		case 1:
 			if wireType != 0 {
-				return fmt.Errorf("proto: wrong wireType = %d for field DisableRetry", wireType)
-			}
-			var v int
-			for shift := uint(0); ; shift += 7 {
-				if shift >= 64 {
-					return ErrIntOverflowTask
-				}
-				if iNdEx >= l {
-					return io.ErrUnexpectedEOF
-				}
-				b := dAtA[iNdEx]
-				iNdEx++
-				v |= int(b&0x7F) << shift
-				if b < 0x80 {
-					break
-				}
-			}
-			m.DisableRetry = bool(v != 0)
-		case 2:
-			if wireType != 0 {
 				return fmt.Errorf("proto: wrong wireType = %d for field MaxRetryTimes", wireType)
 			}
 			m.MaxRetryTimes = 0
@@ -1208,6 +1225,25 @@ func (m *TaskOptions) Unmarshal(dAtA []byte) error {
 				b := dAtA[iNdEx]
 				iNdEx++
 				m.MaxRetryTimes |= uint32(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+		case 2:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field RetryInterval", wireType)
+			}
+			m.RetryInterval = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowTask
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.RetryInterval |= int64(b&0x7F) << shift
 				if b < 0x80 {
 					break
 				}
@@ -1385,6 +1421,25 @@ func (m *Task) Unmarshal(dAtA []byte) error {
 		}
 		switch fieldNum {
 		case 1:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field ID", wireType)
+			}
+			m.ID = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowTask
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.ID |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+		case 2:
 			if wireType != 2 {
 				return fmt.Errorf("proto: wrong wireType = %d for field Metadata", wireType)
 			}
@@ -1417,7 +1472,7 @@ func (m *Task) Unmarshal(dAtA []byte) error {
 				return err
 			}
 			iNdEx = postIndex
-		case 2:
+		case 3:
 			if wireType != 2 {
 				return fmt.Errorf("proto: wrong wireType = %d for field ParentTaskID", wireType)
 			}
@@ -1449,7 +1504,7 @@ func (m *Task) Unmarshal(dAtA []byte) error {
 			}
 			m.ParentTaskID = string(dAtA[iNdEx:postIndex])
 			iNdEx = postIndex
-		case 3:
+		case 4:
 			if wireType != 0 {
 				return fmt.Errorf("proto: wrong wireType = %d for field Status", wireType)
 			}
@@ -1468,7 +1523,7 @@ func (m *Task) Unmarshal(dAtA []byte) error {
 					break
 				}
 			}
-		case 4:
+		case 5:
 			if wireType != 2 {
 				return fmt.Errorf("proto: wrong wireType = %d for field TaskRunner", wireType)
 			}
@@ -1500,7 +1555,7 @@ func (m *Task) Unmarshal(dAtA []byte) error {
 			}
 			m.TaskRunner = string(dAtA[iNdEx:postIndex])
 			iNdEx = postIndex
-		case 5:
+		case 6:
 			if wireType != 0 {
 				return fmt.Errorf("proto: wrong wireType = %d for field Epoch", wireType)
 			}
@@ -1515,25 +1570,6 @@ func (m *Task) Unmarshal(dAtA []byte) error {
 				b := dAtA[iNdEx]
 				iNdEx++
 				m.Epoch |= uint32(b&0x7F) << shift
-				if b < 0x80 {
-					break
-				}
-			}
-		case 6:
-			if wireType != 0 {
-				return fmt.Errorf("proto: wrong wireType = %d for field ScheduleAfter", wireType)
-			}
-			m.ScheduleAfter = 0
-			for shift := uint(0); ; shift += 7 {
-				if shift >= 64 {
-					return ErrIntOverflowTask
-				}
-				if iNdEx >= l {
-					return io.ErrUnexpectedEOF
-				}
-				b := dAtA[iNdEx]
-				iNdEx++
-				m.ScheduleAfter |= int64(b&0x7F) << shift
 				if b < 0x80 {
 					break
 				}
@@ -1683,6 +1719,25 @@ func (m *CronTask) Unmarshal(dAtA []byte) error {
 		}
 		switch fieldNum {
 		case 1:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field ID", wireType)
+			}
+			m.ID = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowTask
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.ID |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+		case 2:
 			if wireType != 2 {
 				return fmt.Errorf("proto: wrong wireType = %d for field Metadata", wireType)
 			}
@@ -1715,7 +1770,7 @@ func (m *CronTask) Unmarshal(dAtA []byte) error {
 				return err
 			}
 			iNdEx = postIndex
-		case 2:
+		case 3:
 			if wireType != 2 {
 				return fmt.Errorf("proto: wrong wireType = %d for field CronExpr", wireType)
 			}
@@ -1747,7 +1802,7 @@ func (m *CronTask) Unmarshal(dAtA []byte) error {
 			}
 			m.CronExpr = string(dAtA[iNdEx:postIndex])
 			iNdEx = postIndex
-		case 3:
+		case 4:
 			if wireType != 0 {
 				return fmt.Errorf("proto: wrong wireType = %d for field NextTime", wireType)
 			}
@@ -1762,6 +1817,44 @@ func (m *CronTask) Unmarshal(dAtA []byte) error {
 				b := dAtA[iNdEx]
 				iNdEx++
 				m.NextTime |= int64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+		case 5:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field CreateAt", wireType)
+			}
+			m.CreateAt = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowTask
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.CreateAt |= int64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+		case 6:
+			if wireType != 0 {
+				return fmt.Errorf("proto: wrong wireType = %d for field UpdateAt", wireType)
+			}
+			m.UpdateAt = 0
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowTask
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				m.UpdateAt |= int64(b&0x7F) << shift
 				if b < 0x80 {
 					break
 				}
