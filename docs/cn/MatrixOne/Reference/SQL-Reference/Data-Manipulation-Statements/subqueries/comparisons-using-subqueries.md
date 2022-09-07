@@ -42,4 +42,4 @@ ERROR 1105 (HY000): scalar subquery returns more than 1 row
 
 ## **限制**
 
-MatrixOne 在子查询与比较操作符结合使用时，暂不支持子查询结果为多行的操作。
+MatrixOne 暂不支持选择多列进行子查询。
