@@ -17,21 +17,8 @@ package types
 import (
 	"fmt"
 	"math"
-	"math/rand"
 	"testing"
 )
-
-func TestEncodeType(t *testing.T) {
-	typesConst := []int{0, 1, 2, 3, 5, 6, 7, 9, 10, 11, 12, 13, 15, 18, 20, 21, 32, 200, 201}
-	for _, typeId := range typesConst {
-		typeStruct := T(typeId).ToType()
-		typeStruct.Width = int32(rand.Intn(100))
-		typeStruct.Precision = int32(rand.Intn(100))
-		if DecodeType(EncodeType(&typeStruct)) != typeStruct {
-			t.Fatalf("Type Encoding Error\n")
-		}
-	}
-}
 
 func TestEncodeInt8(t *testing.T) {
 	nums := []int8{math.MinInt8, math.MaxInt8, 0}

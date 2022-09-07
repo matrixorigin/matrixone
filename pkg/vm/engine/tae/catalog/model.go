@@ -131,9 +131,8 @@ const (
 func init() {
 	var err error
 	PhyAddrColumnType = types.Type{
-		Oid:   types.T_decimal128,
-		Size:  16,
-		Width: 128,
+		Oid:  types.T_Rowid,
+		Size: 16,
 	}
 
 	tu32 := types.Type{
