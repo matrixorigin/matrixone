@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 )
 
@@ -111,7 +112,7 @@ func (be *MetaBaseEntry) CreateWithTS(ts types.TS) {
 		EntryMVCCNode: &EntryMVCCNode{
 			CreatedAt: ts,
 		},
-		TxnMVCCNode: &TxnMVCCNode{
+		TxnMVCCNode: &txnbase.TxnMVCCNode{
 			Start: ts,
 			End:   ts,
 		},
@@ -125,7 +126,7 @@ func (be *MetaBaseEntry) CreateWithTxn(txn txnif.AsyncTxn) {
 	}
 	node := &MetadataMVCCNode{
 		EntryMVCCNode: &EntryMVCCNode{},
-		TxnMVCCNode: &TxnMVCCNode{
+		TxnMVCCNode: &txnbase.TxnMVCCNode{
 			Start: startTS,
 			Txn:   txn,
 		},
@@ -157,7 +158,7 @@ func (be *MetaBaseEntry) DeleteLocked(txn txnif.TxnReader, impl INode) (node INo
 			return
 		}
 		nbe := entry.cloneData()
-		nbe.TxnMVCCNode = NewTxnMVCCNodeWithTxn(txn)
+		nbe.TxnMVCCNode = txnbase.NewTxnMVCCNodeWithTxn(txn)
 		be.InsertNode(nbe)
 		node = impl
 		err = nbe.ApplyDeleteLocked()

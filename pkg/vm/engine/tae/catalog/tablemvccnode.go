@@ -19,17 +19,18 @@ import (
 	"fmt"
 	"io"
 
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 )
 
 type TableMVCCNode struct {
 	*EntryMVCCNode
-	*TxnMVCCNode
+	*txnbase.TxnMVCCNode
 }
 
 func NewEmptyTableMVCCNode() *TableMVCCNode {
 	return &TableMVCCNode{
-		TxnMVCCNode:   &TxnMVCCNode{},
+		TxnMVCCNode:   &txnbase.TxnMVCCNode{},
 		EntryMVCCNode: &EntryMVCCNode{},
 	}
 }
@@ -52,7 +53,7 @@ func (e *TableMVCCNode) CloneAll() MVCCNode {
 func (e *TableMVCCNode) cloneData() *TableMVCCNode {
 	return &TableMVCCNode{
 		EntryMVCCNode: e.EntryMVCCNode.Clone(),
-		TxnMVCCNode:   &TxnMVCCNode{},
+		TxnMVCCNode:   &txnbase.TxnMVCCNode{},
 	}
 }
 

@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"io"
 
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 )
 
@@ -28,12 +29,12 @@ type MetadataMVCCNode struct {
 	MetaLoc  string
 	DeltaLoc string
 
-	*TxnMVCCNode
+	*txnbase.TxnMVCCNode
 }
 
 func NewEmptyMetadataMVCCNode() *MetadataMVCCNode {
 	return &MetadataMVCCNode{
-		TxnMVCCNode:   &TxnMVCCNode{},
+		TxnMVCCNode:   &txnbase.TxnMVCCNode{},
 		EntryMVCCNode: &EntryMVCCNode{},
 	}
 }
@@ -56,7 +57,7 @@ func (e MetadataMVCCNode) CloneAll() MVCCNode {
 func (e *MetadataMVCCNode) cloneData() *MetadataMVCCNode {
 	return &MetadataMVCCNode{
 		EntryMVCCNode: e.EntryMVCCNode.Clone(),
-		TxnMVCCNode:   &TxnMVCCNode{},
+		TxnMVCCNode:   &txnbase.TxnMVCCNode{},
 		MetaLoc:       e.MetaLoc,
 		DeltaLoc:      e.DeltaLoc,
 	}
