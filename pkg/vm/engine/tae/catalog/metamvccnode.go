@@ -38,7 +38,7 @@ func NewEmptyMetadataMVCCNode() *MetadataMVCCNode {
 	}
 }
 
-func (e MetadataMVCCNode) CloneAll() MVCCNodeIf {
+func (e MetadataMVCCNode) CloneAll() MVCCNode {
 	n := e.cloneData()
 	// n.State = e.State
 	n.Start = e.Start
@@ -79,7 +79,7 @@ func (e *MetadataMVCCNode) String() string {
 }
 
 // for create drop in one txn
-func (e *MetadataMVCCNode) UpdateNode(vun MVCCNodeIf) {
+func (e *MetadataMVCCNode) UpdateNode(vun MVCCNode) {
 	un := vun.(*MetadataMVCCNode)
 	if e.Start != un.Start {
 		panic("logic err")
