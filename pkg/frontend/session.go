@@ -17,9 +17,10 @@ package frontend
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"strings"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -32,6 +33,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/moengine"
+	tempengine "github.com/matrixorigin/matrixone/pkg/vm/engine/tempEngine"
 	"github.com/matrixorigin/matrixone/pkg/vm/mempool"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
 
@@ -86,6 +88,7 @@ type Session struct {
 	txnHandler    *TxnHandler
 	txnCompileCtx *TxnCompilerContext
 	storage       engine.Engine
+	tempStorage   engine.Engine
 	sql           string
 
 	sysVars         map[string]interface{}
@@ -132,6 +135,7 @@ func NewSession(proto Protocol, gm *guest.Mmu, mp *mempool.Mempool, PU *config.P
 		//TODO:fix database name after the catalog is ready
 		txnCompileCtx:   InitTxnCompilerContext(txnHandler, proto.GetDatabaseName()),
 		storage:         PU.StorageEngine,
+		tempStorage:     tempengine.NewTempEngine(),
 		sysVars:         gSysVars.CopySysVarsToSession(),
 		userDefinedVars: make(map[string]interface{}),
 		gSysVars:        gSysVars,
@@ -828,6 +832,12 @@ func (tcc *TxnCompilerContext) getRelation(dbName string, tableName string) (eng
 	}
 
 	ctx := tcc.ses.GetRequestContext()
+
+	rel, err := tcc.handleGetTempRelation(dbName, tableName, ctx)
+
+	if err == nil {
+		return rel, nil
+	}
 	//open database
 	db, err := tcc.txnHandler.GetStorage().Database(ctx, dbName, tcc.txnHandler.GetTxn())
 	if err != nil {
@@ -848,6 +858,16 @@ func (tcc *TxnCompilerContext) getRelation(dbName string, tableName string) (eng
 		return nil, err
 	}
 	return table, nil
+}
+
+func (tcc *TxnCompilerContext) handleGetTempRelation(dbName string, tableName string, ctx context.Context) (engine.Relation, error) {
+	db, err := tcc.ses.tempStorage.Database(ctx, dbName, tcc.txnHandler.GetTxn())
+	if err != nil {
+		logutil.Errorf("get database %v error %v", dbName, err)
+		return nil, err
+	}
+	table, err := db.Relation(ctx, dbName+"-"+tableName)
+	return table, err
 }
 
 func (tcc *TxnCompilerContext) ensureDatabaseIsNotEmpty(dbName string) (string, error) {

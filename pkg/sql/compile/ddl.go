@@ -54,6 +54,10 @@ func (s *Scope) DropDatabase(c *Compile) error {
 
 func (s *Scope) CreateTable(c *Compile) error {
 	qry := s.Plan.GetDdl().GetCreateTable()
+	// if it's a temporary table, just go ahead
+	// if qry.Temporary {
+	// 	return s.CreateTempTable(c)
+	// }
 	// convert the plan's cols to the execution's cols
 	planCols := qry.GetTableDef().GetCols()
 	exeCols := planColsToExeCols(planCols)
@@ -80,10 +84,61 @@ func (s *Scope) CreateTable(c *Compile) error {
 		}
 		return errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("table '%s' already exists", tblName))
 	}
+	// add the tempEngine logic
+	tempDb, _ := c.tempEngine.Database(c.ctx, dbName, c.proc.TxnOperator)
+	if _, err := tempDb.Relation(c.ctx, dbName+"-"+tblName); err == nil {
+		return errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("temporary table '%s' already exists", tblName))
+	}
 	if err := dbSource.Create(c.ctx, tblName, append(exeCols, exeDefs...)); err != nil {
 		return err
 	}
 	return colexec.CreateAutoIncrCol(dbSource, c.ctx, c.proc, planCols, tblName)
+}
+
+func (s *Scope) CreateTempTable(c *Compile) error {
+	qry := s.Plan.GetDdl().GetCreateTable()
+	// convert the plan's cols to the execution's cols
+	planCols := qry.GetTableDef().GetCols()
+	exeCols := planColsToExeCols(planCols)
+
+	// convert the plan's defs to the execution's defs
+	planDefs := qry.GetTableDef().GetDefs()
+	exeDefs, err := planDefsToExeDefs(planDefs)
+	if err != nil {
+		return err
+	}
+
+	dbName := c.db
+	if qry.GetDatabase() != "" {
+		dbName = qry.GetDatabase()
+	}
+	dbSource1, err := c.tempEngine.Database(c.ctx, dbName, c.proc.TxnOperator)
+	if err != nil {
+		return err
+	}
+	tblName := qry.GetTableDef().GetName()
+	if _, err := dbSource1.Relation(c.ctx, dbName+"-"+tblName); err == nil {
+		if qry.GetIfNotExists() {
+			return nil
+		}
+		return errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("temporary table '%s' already exists", tblName))
+	}
+
+	dbSource2, err := c.e.Database(c.ctx, dbName, c.proc.TxnOperator)
+	if err != nil {
+		return err
+	}
+	if _, err := dbSource2.Relation(c.ctx, tblName); err == nil {
+		if qry.GetIfNotExists() {
+			return nil
+		}
+		return errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("table '%s' already exists", tblName))
+	}
+	if err := dbSource1.Create(c.ctx, dbName+"-"+tblName, append(exeCols, exeDefs...)); err != nil {
+		return err
+	}
+	// TODO: Auto_Incremnet needs to avoid tae
+	return nil
 }
 
 func (s *Scope) DropTable(c *Compile) error {

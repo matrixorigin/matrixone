@@ -1537,7 +1537,7 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 	txnHandler := cwft.ses.GetTxnHandler()
 	cwft.proc.TxnOperator = txnHandler.GetTxn()
 	cwft.proc.FileService = cwft.ses.Pu.FileService
-	cwft.compile = compile.New(cwft.ses.GetDatabaseName(), cwft.ses.GetSql(), cwft.ses.GetUserName(), requestCtx, cwft.ses.GetStorage(), cwft.proc, cwft.stmt)
+	cwft.compile = compile.New(cwft.ses.GetDatabaseName(), cwft.ses.GetSql(), cwft.ses.GetUserName(), requestCtx, cwft.ses.GetStorage(), cwft.ses.tempStorage, cwft.proc, cwft.stmt)
 	err = cwft.compile.Compile(cwft.plan, cwft.ses, fill)
 	if err != nil {
 		return nil, err

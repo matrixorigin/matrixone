@@ -65,7 +65,7 @@ func testPrint(_ interface{}, _ *batch.Batch) error {
 
 func TestCompile(t *testing.T) {
 	for _, tc := range tcs {
-		c := New("test", tc.sql, "", context.TODO(), tc.e, tc.proc, nil)
+		c := New("test", tc.sql, "", context.TODO(), tc.e, nil, tc.proc, nil)
 		err := c.Compile(tc.pn, nil, testPrint)
 		require.NoError(t, err)
 		c.GetAffectedRows()
@@ -79,7 +79,7 @@ func TestCompileWithFaults(t *testing.T) {
 	// fault.Enable()
 	fault.AddFaultPoint("panic_in_batch_append", ":::", "panic", 0, "")
 	tc := newTestCase("select * from R join S on R.uid = S.uid", t)
-	c := New("test", tc.sql, "", context.TODO(), tc.e, tc.proc, nil)
+	c := New("test", tc.sql, "", context.TODO(), tc.e, nil, tc.proc, nil)
 	err := c.Compile(tc.pn, nil, testPrint)
 	require.NoError(t, err)
 	c.GetAffectedRows()

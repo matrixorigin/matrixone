@@ -41,15 +41,16 @@ import (
 
 // New is used to new an object of compile
 func New(db string, sql string, uid string, ctx context.Context,
-	e engine.Engine, proc *process.Process, stmt tree.Statement) *Compile {
+	e engine.Engine, tempEngine engine.Engine, proc *process.Process, stmt tree.Statement) *Compile {
 	return &Compile{
-		e:    e,
-		db:   db,
-		ctx:  ctx,
-		uid:  uid,
-		sql:  sql,
-		proc: proc,
-		stmt: stmt,
+		e:          e,
+		db:         db,
+		ctx:        ctx,
+		uid:        uid,
+		sql:        sql,
+		proc:       proc,
+		stmt:       stmt,
+		tempEngine: tempEngine,
 	}
 }
 
@@ -105,7 +106,12 @@ func (c *Compile) Run(_ uint64) (err error) {
 	case DropDatabase:
 		return c.scope.DropDatabase(c)
 	case CreateTable:
-		return c.scope.CreateTable(c)
+		qry := c.scope.Plan.GetDdl().GetCreateTable()
+		if qry.Temporary {
+			return c.scope.CreateTempTable(c)
+		} else {
+			return c.scope.CreateTable(c)
+		}
 	case DropTable:
 		return c.scope.DropTable(c)
 	case Deletion:

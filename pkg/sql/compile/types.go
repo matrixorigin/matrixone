@@ -146,8 +146,10 @@ type Compile struct {
 
 	anal *anaylze
 	// e db engine instance.
-	e   engine.Engine
-	ctx context.Context
+	e engine.Engine
+	// tempEngine
+	tempEngine engine.Engine
+	ctx        context.Context
 	// proc stores the execution context.
 	proc *process.Process
 
