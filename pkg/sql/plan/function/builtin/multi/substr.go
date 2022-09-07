@@ -35,7 +35,7 @@ func castConstAsInt64(vec *vector.Vector, idx int64) int64 {
 		return int64(vector.GetValueAt[uint32](vec, idx))
 	case types.T_uint64:
 		val := vector.GetValueAt[uint64](vec, idx)
-		if val > math.MaxInt64 {
+		if val > uint64(math.MaxInt64) {
 			// this function only used in substr, so we use maxInt64 to avoid overflow. I known that's weird.
 			return math.MaxInt64
 		}
