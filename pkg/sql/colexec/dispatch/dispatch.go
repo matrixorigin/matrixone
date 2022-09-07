@@ -48,7 +48,7 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 	vecs := ap.vecs[:0]
 	for i := range bat.Vecs {
 		if bat.Vecs[i].Or {
-			vec, err := vector.Dup(bat.Vecs[i], proc.Mp)
+			vec, err := vector.Dup(bat.Vecs[i], proc.Mp())
 			if err != nil {
 				return false, err
 			}

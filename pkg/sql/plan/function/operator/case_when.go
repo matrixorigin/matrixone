@@ -302,118 +302,78 @@ func cwGeneral[T NormalType](vs []*vector.Vector, proc *process.Process, t types
 // cwString is an evaluate function for case-when operator
 // whose return type is char / varchar
 func cwString(vs []*vector.Vector, proc *process.Process, typ types.Type) (*vector.Vector, error) {
-	l := vector.Length(vs[0])
-
-	rs, err := proc.AllocVector(typ, 0)
-	if err != nil {
-		return nil, err
-	}
-	rs.Col = &types.Bytes{
-		Data:    nil,
-		Offsets: make([]uint32, l),
-		Lengths: make([]uint32, l),
-	}
-	rscols := rs.Col.(*types.Bytes)
-
-	var offset uint32 = 0
-	flag := make([]bool, l) // if flag[i] is false, it couldn't adapt to any case
+	nres := vector.Length(vs[0])
+	results := make([]string, nres)
+	nsp := nulls.NewWithSize(nres)
+	flag := make([]bool, nres)
 
 	for i := 0; i < len(vs)-1; i += 2 {
 		whenv := vs[i]
 		thenv := vs[i+1]
 		whencols := vector.MustTCols[bool](whenv)
-		thencols := vector.MustBytesCols(thenv)
+		thencols := vector.MustStrCols(thenv)
 		switch {
 		case whenv.IsScalar() && thenv.IsScalar():
 			if !whenv.IsScalarNull() && whencols[0] {
 				if thenv.IsScalarNull() {
-					return proc.AllocScalarNullVector(typ), nil
-				} else {
-					r := proc.AllocScalarVector(typ)
-					r.Col = &types.Bytes{
-						Data:    make([]byte, thencols.Lengths[0]),
-						Offsets: make([]uint32, 1),
-						Lengths: make([]uint32, 1),
+					for idx := range results {
+						if !flag[idx] {
+							nsp.Np.Add(uint64(idx))
+							flag[idx] = true
+						}
 					}
-					copy(r.Col.(*types.Bytes).Data, thencols.Data)
-					r.Col.(*types.Bytes).Lengths[0] = thencols.Lengths[0]
-					return r, nil
+				} else {
+					for idx := range results {
+						if !flag[idx] {
+							results[idx] = thencols[0]
+							flag[idx] = true
+						}
+					}
 				}
 			}
 		case whenv.IsScalar() && !thenv.IsScalar():
 			if !whenv.IsScalarNull() && whencols[0] {
-				rscols.Data = make([]byte, len(thencols.Data))
-				copy(rscols.Data, thencols.Data)
-				copy(rscols.Offsets, thencols.Offsets)
-				copy(rscols.Lengths, thencols.Lengths)
-				rs.Nsp.Or(thenv.Nsp)
-				return rs, nil
+				for idx := range results {
+					if !flag[idx] {
+						if nulls.Contains(thenv.Nsp, uint64(idx)) {
+							nsp.Np.Add(uint64(idx))
+						} else {
+							results[idx] = thencols[idx]
+						}
+						flag[idx] = true
+					}
+				}
 			}
 		case !whenv.IsScalar() && thenv.IsScalar():
 			if thenv.IsScalarNull() {
-				var j uint64
-				temp := make([]uint64, 0, l)
-				for j = 0; j < uint64(l); j++ {
-					if flag[j] {
-						continue
-					}
-					if whencols[j] {
-						temp = append(temp, j)
-						flag[j] = true
+				for idx := range results {
+					if !flag[idx] {
+						if !nulls.Contains(whenv.Nsp, uint64(idx)) && whencols[idx] {
+							nsp.Np.Add(uint64(idx))
+							flag[idx] = true
+						}
 					}
 				}
-				nulls.Add(rs.Nsp, temp...)
 			} else {
-				for j := 0; j < l; j++ {
-					if flag[j] {
-						continue
-					}
-					if whencols[j] {
-						length := thencols.Lengths[0]
-						rscols.Data = append(rscols.Data, thencols.Data...)
-						rscols.Offsets[j] = offset
-						rscols.Lengths[j] = length
-						offset += length
-						flag[j] = true
+				for idx := range results {
+					if !flag[idx] {
+						if !nulls.Contains(whenv.Nsp, uint64(idx)) && whencols[idx] {
+							results[idx] = thencols[0]
+							flag[idx] = true
+						}
 					}
 				}
 			}
 		case !whenv.IsScalar() && !thenv.IsScalar():
-			if nulls.Any(thenv.Nsp) {
-				var j uint64
-				temp := make([]uint64, 0, l)
-				for j = 0; j < uint64(l); j++ {
-					if whencols[j] {
-						if flag[j] {
-							continue
-						}
-						if nulls.Contains(thenv.Nsp, j) {
-							temp = append(temp, j)
+			for idx := range results {
+				if !flag[idx] {
+					if !nulls.Contains(whenv.Nsp, uint64(idx)) && whencols[idx] {
+						if nulls.Contains(thenv.Nsp, uint64(idx)) {
+							nsp.Np.Add(uint64(idx))
 						} else {
-							length := thencols.Lengths[j]
-							o := thencols.Offsets[j]
-							rscols.Data = append(rscols.Data, thencols.Data[o:o+length]...)
-							rscols.Offsets[j] = offset
-							rscols.Lengths[j] = length
-							offset += length
+							results[idx] = thencols[idx]
 						}
-						flag[j] = true
-					}
-				}
-				nulls.Add(rs.Nsp, temp...)
-			} else {
-				for j := 0; j < l; j++ {
-					if whencols[j] {
-						if flag[j] {
-							continue
-						}
-						length := thencols.Lengths[j]
-						o := thencols.Offsets[j]
-						rscols.Data = append(rscols.Data, thencols.Data[o:o+length]...)
-						rscols.Offsets[j] = offset
-						rscols.Lengths[j] = length
-						offset += length
-						flag[j] = true
+						flag[idx] = true
 					}
 				}
 			}
@@ -422,61 +382,35 @@ func cwString(vs []*vector.Vector, proc *process.Process, typ types.Type) (*vect
 
 	// deal the ELSE part
 	if len(vs)%2 == 0 || vs[len(vs)-1].IsScalarNull() {
-		var i uint64
-		temp := make([]uint64, 0, l)
-		for i = 0; i < uint64(l); i++ {
-			if !flag[i] {
-				temp = append(temp, i)
+		for idx := range results {
+			if !flag[idx] {
+				nulls.Add(nsp, uint64(idx))
+				flag[idx] = true
 			}
 		}
-		nulls.Add(rs.Nsp, temp...)
 	} else {
 		ev := vs[len(vs)-1]
-		ecols := ev.Col.(*types.Bytes)
+		ecols := vector.MustStrCols(ev)
 		if ev.IsScalar() {
-			for i := 0; i < l; i++ {
-				if !flag[i] {
-					length := ecols.Lengths[0]
-					rscols.Data = append(rscols.Data, ecols.Data...)
-					rscols.Offsets[i] = offset
-					rscols.Lengths[i] = length
-					offset += length
-					flag[i] = true
+			for idx := range results {
+				if !flag[idx] {
+					results[idx] = ecols[0]
+					flag[idx] = true
 				}
 			}
 		} else {
-			if nulls.Any(ev.Nsp) {
-				var i uint64
-				temp := make([]uint64, 0, l)
-				for i = 0; i < uint64(l); i++ {
-					if !flag[i] {
-						if nulls.Contains(ev.Nsp, i) {
-							temp = append(temp, i)
-						} else {
-							length := ecols.Lengths[i]
-							o := ecols.Offsets[i]
-							rscols.Data = append(rscols.Data, ecols.Data[o:o+length]...)
-							rscols.Offsets[i] = offset
-							rscols.Lengths[i] = length
-							offset += length
-						}
+			for idx := range results {
+				if !flag[idx] {
+					if nulls.Contains(ev.Nsp, uint64(idx)) {
+						nulls.Add(nsp, uint64(idx))
+					} else {
+						results[idx] = ecols[idx]
 					}
-				}
-				nulls.Add(rs.Nsp, temp...)
-			} else {
-				for i := 0; i < l; i++ {
-					if !flag[i] {
-						length := ecols.Lengths[i]
-						o := ecols.Offsets[i]
-						rscols.Data = append(rscols.Data, ecols.Data[o:o+length]...)
-						rscols.Offsets[i] = offset
-						rscols.Lengths[i] = length
-						offset += length
-					}
+					flag[idx] = true
 				}
 			}
 		}
 	}
-	rs.Data = rscols.Data
-	return rs, nil
+
+	return vector.NewWithStrings(typ, results, nsp, proc.Mp()), nil
 }

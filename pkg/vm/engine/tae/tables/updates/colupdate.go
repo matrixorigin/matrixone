@@ -246,7 +246,7 @@ func (node *ColumnUpdateNode) WriteTo(w io.Writer) (n int64, err error) {
 	n += int64(len(buf))
 
 	def := node.chain.GetMeta().GetSchema().ColDefs[node.chain.id.Idx]
-	if cn, err = w.Write(types.EncodeType(def.Type)); err != nil {
+	if cn, err = w.Write(types.EncodeType(&def.Type)); err != nil {
 		return
 	}
 	n += int64(cn)

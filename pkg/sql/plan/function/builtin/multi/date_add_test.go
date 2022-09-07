@@ -15,12 +15,13 @@
 package multi
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
+	"testing"
+
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
-	"testing"
 )
 
 func TestDateAdd(t *testing.T) {
@@ -33,7 +34,7 @@ func TestDateAdd(t *testing.T) {
 		{
 			name: "TEST01",
 			vecs: makeDateAddVectors("2022-01-01", true, 1, types.Day),
-			proc: makeProcess(),
+			proc: testutil.NewProc(),
 			want: "2022-01-02",
 		},
 	}
@@ -60,7 +61,7 @@ func TestDatetimeAdd(t *testing.T) {
 		{
 			name: "TEST01",
 			vecs: makeDatetimeAddVectors("2022-01-01 00:00:00", true, 1, types.Day),
-			proc: makeProcess(),
+			proc: testutil.NewProc(),
 			want: "2022-01-02 00:00:00",
 		},
 	}
@@ -88,28 +89,28 @@ func TestDateStringAdd(t *testing.T) {
 		{
 			name: "TEST01",
 			vecs: makeDateStringAddVectors("2022-01-01", true, 1, types.Day),
-			proc: makeProcess(),
+			proc: testutil.NewProc(),
 			want: "2022-01-02 00:00:00",
 			err:  nil,
 		},
 		{
 			name: "TEST02",
 			vecs: makeDateStringAddVectors("2022-01-01 00:00:00", true, 1, types.Day),
-			proc: makeProcess(),
+			proc: testutil.NewProc(),
 			want: "2022-01-02 00:00:00",
 			err:  nil,
 		},
 		{
 			name: "TEST03",
 			vecs: makeDateStringAddVectors("2022-01-01", true, 1, types.Second),
-			proc: makeProcess(),
+			proc: testutil.NewProc(),
 			want: "2022-01-01 00:00:01",
 			err:  nil,
 		},
 		{
 			name: "TEST04",
 			vecs: makeDateStringAddVectors("xxxx", true, 1, types.Second),
-			proc: makeProcess(),
+			proc: testutil.NewProc(),
 			want: "0001-01-01 00:00:00",
 			err:  types.ErrIncorrectDatetimeValue,
 		},
@@ -130,29 +131,9 @@ func makeDateAddVectors(str string, isConst bool, num int64, unit types.Interval
 
 	date, _ := types.ParseDate(str)
 
-	vec[0] = &vector.Vector{
-		Col:     []types.Date{date},
-		Nsp:     &nulls.Nulls{},
-		Typ:     types.Type{Oid: types.T_date},
-		IsConst: isConst,
-		Length:  1,
-	}
-
-	vec[1] = &vector.Vector{
-		Col:     []int64{num},
-		Nsp:     &nulls.Nulls{},
-		Typ:     types.Type{Oid: types.T_int64},
-		IsConst: true,
-		Length:  1,
-	}
-
-	vec[2] = &vector.Vector{
-		Col:     []int64{int64(unit)},
-		Nsp:     &nulls.Nulls{},
-		Typ:     types.Type{Oid: types.T_int64},
-		IsConst: true,
-		Length:  1,
-	}
+	vec[0] = vector.NewConstFixed(types.T_date.ToType(), 1, date)
+	vec[1] = vector.NewConstFixed(types.T_int64.ToType(), 1, num)
+	vec[2] = vector.NewConstFixed(types.T_int64.ToType(), 1, int64(unit))
 	return vec
 }
 
@@ -161,63 +142,16 @@ func makeDatetimeAddVectors(str string, isConst bool, num int64, unit types.Inte
 
 	datetime, _ := types.ParseDatetime(str, 0)
 
-	vec[0] = &vector.Vector{
-		Col:     []types.Datetime{datetime},
-		Nsp:     &nulls.Nulls{},
-		Typ:     types.Type{Oid: types.T_datetime},
-		IsConst: isConst,
-		Length:  1,
-	}
-
-	vec[1] = &vector.Vector{
-		Col:     []int64{num},
-		Nsp:     &nulls.Nulls{},
-		Typ:     types.Type{Oid: types.T_int64},
-		IsConst: true,
-		Length:  1,
-	}
-
-	vec[2] = &vector.Vector{
-		Col:     []int64{int64(unit)},
-		Nsp:     &nulls.Nulls{},
-		Typ:     types.Type{Oid: types.T_int64},
-		IsConst: true,
-		Length:  1,
-	}
+	vec[0] = vector.NewConstFixed(types.T_datetime.ToType(), 1, datetime)
+	vec[1] = vector.NewConstFixed(types.T_int64.ToType(), 1, num)
+	vec[2] = vector.NewConstFixed(types.T_int64.ToType(), 1, int64(unit))
 	return vec
 }
 
 func makeDateStringAddVectors(str string, isConst bool, num int64, unit types.IntervalType) []*vector.Vector {
 	vec := make([]*vector.Vector, 3)
-
-	srcBytes := &types.Bytes{
-		Data:    []byte(str),
-		Offsets: []uint32{0},
-		Lengths: []uint32{uint32(len(str))},
-	}
-
-	vec[0] = &vector.Vector{
-		Col:     srcBytes,
-		Nsp:     &nulls.Nulls{},
-		Typ:     types.Type{Oid: types.T_varchar, Size: 26},
-		IsConst: isConst,
-		Length:  1,
-	}
-
-	vec[1] = &vector.Vector{
-		Col:     []int64{num},
-		Nsp:     &nulls.Nulls{},
-		Typ:     types.Type{Oid: types.T_int64},
-		IsConst: true,
-		Length:  1,
-	}
-
-	vec[2] = &vector.Vector{
-		Col:     []int64{int64(unit)},
-		Nsp:     &nulls.Nulls{},
-		Typ:     types.Type{Oid: types.T_int64},
-		IsConst: true,
-		Length:  1,
-	}
+	vec[0] = vector.NewConstString(types.T_varchar.ToType(), 1, str)
+	vec[1] = vector.NewConstFixed(types.T_int64.ToType(), 1, num)
+	vec[2] = vector.NewConstFixed(types.T_int64.ToType(), 1, int64(unit))
 	return vec
 }

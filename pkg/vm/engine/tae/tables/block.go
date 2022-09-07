@@ -310,7 +310,7 @@ func (blk *dataBlock) BuildCompactionTaskFactory() (
 	blk.SetNotAppendable()
 	blk.meta.RLock()
 	dropped := blk.meta.IsDroppedCommitted()
-	inTxn := blk.meta.InTxnOrRollbacked()
+	inTxn := blk.meta.IsCreating()
 	blk.meta.RUnlock()
 	if dropped || inTxn {
 		return

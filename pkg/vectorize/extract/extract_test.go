@@ -69,221 +69,84 @@ func TestExtractFromDateTime(t *testing.T) {
 	inputs := make([]types.Datetime, 2)
 	inputs[0] = a0
 	inputs[1] = a1
-	resultValues := &types.Bytes{
-		Data:    make([]byte, 0),
-		Offsets: make([]uint32, 2),
-		Lengths: make([]uint32, 2),
-	}
+	resultValues := make([]string, 2)
 	output, err := ExtractFromDatetime("microsecond", inputs, resultValues)
 	require.NoError(t, err)
-	require.Equal(t, "123456123456", string(output.Data))
-	require.Equal(t, []uint32{0, 6}, output.Offsets)
-	require.Equal(t, []uint32{6, 6}, output.Lengths)
+	require.Equal(t, []string{"123456", "123456"}, output)
 
-	resultValues = &types.Bytes{
-		Data:    make([]byte, 0),
-		Offsets: make([]uint32, 2),
-		Lengths: make([]uint32, 2),
-	}
 	output, err = ExtractFromDatetime("second", inputs, resultValues)
 	require.NoError(t, err)
-	require.Equal(t, "1313", string(output.Data))
-	require.Equal(t, []uint32{0, 2}, output.Offsets)
-	require.Equal(t, []uint32{2, 2}, output.Lengths)
+	require.Equal(t, []string{"13", "13"}, output)
 
-	resultValues = &types.Bytes{
-		Data:    make([]byte, 0),
-		Offsets: make([]uint32, 2),
-		Lengths: make([]uint32, 2),
-	}
 	output, err = ExtractFromDatetime("minute", inputs, resultValues)
 	require.NoError(t, err)
-	require.Equal(t, "1212", string(output.Data))
-	require.Equal(t, []uint32{0, 2}, output.Offsets)
-	require.Equal(t, []uint32{2, 2}, output.Lengths)
+	require.Equal(t, []string{"12", "12"}, output)
 
-	resultValues = &types.Bytes{
-		Data:    make([]byte, 0),
-		Offsets: make([]uint32, 2),
-		Lengths: make([]uint32, 2),
-	}
 	output, err = ExtractFromDatetime("hour", inputs, resultValues)
 	require.NoError(t, err)
-	require.Equal(t, "1111", string(output.Data))
-	require.Equal(t, []uint32{0, 2}, output.Offsets)
-	require.Equal(t, []uint32{2, 2}, output.Lengths)
+	require.Equal(t, []string{"11", "11"}, output)
 
-	resultValues = &types.Bytes{
-		Data:    make([]byte, 0),
-		Offsets: make([]uint32, 2),
-		Lengths: make([]uint32, 2),
-	}
 	output, err = ExtractFromDatetime("day", inputs, resultValues)
 	require.NoError(t, err)
-	require.Equal(t, "0202", string(output.Data))
-	require.Equal(t, []uint32{0, 2}, output.Offsets)
-	require.Equal(t, []uint32{2, 2}, output.Lengths)
+	require.Equal(t, []string{"02", "02"}, output)
 
-	resultValues = &types.Bytes{
-		Data:    make([]byte, 0),
-		Offsets: make([]uint32, 2),
-		Lengths: make([]uint32, 2),
-	}
 	output, err = ExtractFromDatetime("week", inputs, resultValues)
 	require.NoError(t, err)
-	require.Equal(t, "0101", string(output.Data))
-	require.Equal(t, []uint32{0, 2}, output.Offsets)
-	require.Equal(t, []uint32{2, 2}, output.Lengths)
+	require.Equal(t, []string{"01", "01"}, output)
 
-	resultValues = &types.Bytes{
-		Data:    make([]byte, 0),
-		Offsets: make([]uint32, 2),
-		Lengths: make([]uint32, 2),
-	}
 	output, err = ExtractFromDatetime("month", inputs, resultValues)
 	require.NoError(t, err)
-	require.Equal(t, "0101", string(output.Data))
-	require.Equal(t, []uint32{0, 2}, output.Offsets)
-	require.Equal(t, []uint32{2, 2}, output.Lengths)
+	require.Equal(t, []string{"01", "01"}, output)
 
-	resultValues = &types.Bytes{
-		Data:    make([]byte, 0),
-		Offsets: make([]uint32, 2),
-		Lengths: make([]uint32, 2),
-	}
 	output, err = ExtractFromDatetime("quarter", inputs, resultValues)
 	require.NoError(t, err)
-	require.Equal(t, "11", string(output.Data))
-	require.Equal(t, []uint32{0, 1}, output.Offsets)
-	require.Equal(t, []uint32{1, 1}, output.Lengths)
+	require.Equal(t, []string{"1", "1"}, output)
 
-	resultValues = &types.Bytes{
-		Data:    make([]byte, 0),
-		Offsets: make([]uint32, 2),
-		Lengths: make([]uint32, 2),
-	}
 	output, err = ExtractFromDatetime("year", inputs, resultValues)
 	require.NoError(t, err)
-	require.Equal(t, "20201234", string(output.Data))
+	require.Equal(t, []string{"2020", "1234"}, output)
 
-	resultValues = &types.Bytes{
-		Data:    make([]byte, 0),
-		Offsets: make([]uint32, 2),
-		Lengths: make([]uint32, 2),
-	}
 	output, err = ExtractFromDatetime("second_microsecond", inputs, resultValues)
 	require.NoError(t, err)
-	require.Equal(t, "13.12345613.123456", string(output.Data))
-	require.Equal(t, []uint32{0, 9}, output.Offsets)
-	require.Equal(t, []uint32{9, 9}, output.Lengths)
+	require.Equal(t, []string{"13.123456", "13.123456"}, output)
 
-	resultValues = &types.Bytes{
-		Data:    make([]byte, 0),
-		Offsets: make([]uint32, 2),
-		Lengths: make([]uint32, 2),
-	}
 	output, err = ExtractFromDatetime("minute_microsecond", inputs, resultValues)
 	require.NoError(t, err)
-	require.Equal(t, "12:13.12345612:13.123456", string(output.Data))
-	require.Equal(t, []uint32{0, 12}, output.Offsets)
-	require.Equal(t, []uint32{12, 12}, output.Lengths)
+	require.Equal(t, []string{"12:13.123456", "12:13.123456"}, output)
 
-	resultValues = &types.Bytes{
-		Data:    make([]byte, 0),
-		Offsets: make([]uint32, 2),
-		Lengths: make([]uint32, 2),
-	}
 	output, err = ExtractFromDatetime("minute_second", inputs, resultValues)
 	require.NoError(t, err)
-	require.Equal(t, "12:1312:13", string(output.Data))
-	require.Equal(t, []uint32{0, 5}, output.Offsets)
-	require.Equal(t, []uint32{5, 5}, output.Lengths)
+	require.Equal(t, []string{"12:13", "12:13"}, output)
 
-	resultValues = &types.Bytes{
-		Data:    make([]byte, 0),
-		Offsets: make([]uint32, 2),
-		Lengths: make([]uint32, 2),
-	}
 	output, err = ExtractFromDatetime("hour_microsecond", inputs, resultValues)
 	require.NoError(t, err)
-	require.Equal(t, "11:12:13.12345611:12:13.123456", string(output.Data))
-	require.Equal(t, []uint32{0, 15}, output.Offsets)
-	require.Equal(t, []uint32{15, 15}, output.Lengths)
+	require.Equal(t, []string{"11:12:13.123456", "11:12:13.123456"}, output)
 
-	resultValues = &types.Bytes{
-		Data:    make([]byte, 0),
-		Offsets: make([]uint32, 2),
-		Lengths: make([]uint32, 2),
-	}
 	output, err = ExtractFromDatetime("hour_second", inputs, resultValues)
 	require.NoError(t, err)
-	require.Equal(t, "11:12:1311:12:13", string(output.Data))
-	require.Equal(t, []uint32{0, 8}, output.Offsets)
-	require.Equal(t, []uint32{8, 8}, output.Lengths)
+	require.Equal(t, []string{"11:12:13", "11:12:13"}, output)
 
-	resultValues = &types.Bytes{
-		Data:    make([]byte, 0),
-		Offsets: make([]uint32, 2),
-		Lengths: make([]uint32, 2),
-	}
 	output, err = ExtractFromDatetime("hour_minute", inputs, resultValues)
 	require.NoError(t, err)
-	require.Equal(t, "11:1211:12", string(output.Data))
-	require.Equal(t, []uint32{0, 5}, output.Offsets)
-	require.Equal(t, []uint32{5, 5}, output.Lengths)
+	require.Equal(t, []string{"11:12", "11:12"}, output)
 
-	resultValues = &types.Bytes{
-		Data:    make([]byte, 0),
-		Offsets: make([]uint32, 2),
-		Lengths: make([]uint32, 2),
-	}
 	output, err = ExtractFromDatetime("day_microsecond", inputs, resultValues)
 	require.NoError(t, err)
-	require.Equal(t, "02 11:12:13.12345602 11:12:13.123456", string(output.Data))
-	require.Equal(t, []uint32{0, 18}, output.Offsets)
-	require.Equal(t, []uint32{18, 18}, output.Lengths)
+	require.Equal(t, []string{"02 11:12:13.123456", "02 11:12:13.123456"}, output)
 
-	resultValues = &types.Bytes{
-		Data:    make([]byte, 0),
-		Offsets: make([]uint32, 2),
-		Lengths: make([]uint32, 2),
-	}
 	output, err = ExtractFromDatetime("day_second", inputs, resultValues)
 	require.NoError(t, err)
-	require.Equal(t, "02 11:12:1302 11:12:13", string(output.Data))
-	require.Equal(t, []uint32{0, 11}, output.Offsets)
-	require.Equal(t, []uint32{11, 11}, output.Lengths)
+	require.Equal(t, []string{"02 11:12:13", "02 11:12:13"}, output)
 
-	resultValues = &types.Bytes{
-		Data:    make([]byte, 0),
-		Offsets: make([]uint32, 2),
-		Lengths: make([]uint32, 2),
-	}
 	output, err = ExtractFromDatetime("day_minute", inputs, resultValues)
 	require.NoError(t, err)
-	require.Equal(t, "02 11:1202 11:12", string(output.Data))
-	require.Equal(t, []uint32{0, 8}, output.Offsets)
-	require.Equal(t, []uint32{8, 8}, output.Lengths)
+	require.Equal(t, []string{"02 11:12", "02 11:12"}, output)
 
-	resultValues = &types.Bytes{
-		Data:    make([]byte, 0),
-		Offsets: make([]uint32, 2),
-		Lengths: make([]uint32, 2),
-	}
 	output, err = ExtractFromDatetime("day_hour", inputs, resultValues)
 	require.NoError(t, err)
-	require.Equal(t, "02 1102 11", string(output.Data))
-	require.Equal(t, []uint32{0, 5}, output.Offsets)
-	require.Equal(t, []uint32{5, 5}, output.Lengths)
+	require.Equal(t, []string{"02 11", "02 11"}, output)
 
-	resultValues = &types.Bytes{
-		Data:    make([]byte, 0),
-		Offsets: make([]uint32, 2),
-		Lengths: make([]uint32, 2),
-	}
 	output, err = ExtractFromDatetime("year_month", inputs, resultValues)
 	require.NoError(t, err)
-	require.Equal(t, "202001123401", string(output.Data))
-	require.Equal(t, []uint32{0, 7}, output.Offsets)
-	require.Equal(t, []uint32{7, 7}, output.Lengths)
+	require.Equal(t, []string{"202001", "123401"}, output)
 }

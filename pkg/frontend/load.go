@@ -283,50 +283,8 @@ func makeBatch(handler *ParseLineHandler, id int) *PoolElement {
 
 	//alloc space for vector
 	for i := 0; i < len(handler.attrName); i++ {
-		vec := vector.New(handler.cols[i].Attr.Type)
-		switch vec.Typ.Oid {
-		case types.T_bool:
-			vec.Col = make([]bool, batchSize)
-		case types.T_int8:
-			vec.Col = make([]int8, batchSize)
-		case types.T_int16:
-			vec.Col = make([]int16, batchSize)
-		case types.T_int32:
-			vec.Col = make([]int32, batchSize)
-		case types.T_int64:
-			vec.Col = make([]int64, batchSize)
-		case types.T_uint8:
-			vec.Col = make([]uint8, batchSize)
-		case types.T_uint16:
-			vec.Col = make([]uint16, batchSize)
-		case types.T_uint32:
-			vec.Col = make([]uint32, batchSize)
-		case types.T_uint64:
-			vec.Col = make([]uint64, batchSize)
-		case types.T_float32:
-			vec.Col = make([]float32, batchSize)
-		case types.T_float64:
-			vec.Col = make([]float64, batchSize)
-		case types.T_char, types.T_varchar, types.T_json:
-			vBytes := &types.Bytes{
-				Offsets: make([]uint32, batchSize),
-				Lengths: make([]uint32, batchSize),
-				Data:    nil,
-			}
-			vec.Col = vBytes
-		case types.T_date:
-			vec.Col = make([]types.Date, batchSize)
-		case types.T_datetime:
-			vec.Col = make([]types.Datetime, batchSize)
-		case types.T_decimal64:
-			vec.Col = make([]types.Decimal64, batchSize)
-		case types.T_decimal128:
-			vec.Col = make([]types.Decimal128, batchSize)
-		case types.T_timestamp:
-			vec.Col = make([]types.Timestamp, batchSize)
-		default:
-			panic("unsupported vector type")
-		}
+		// XXX memory alloc, where is the proc.Mp?
+		vec := vector.PreAllocType(handler.cols[i].Attr.Type, batchSize, batchSize, nil)
 		batchData.Vecs[i] = vec
 	}
 
@@ -418,11 +376,7 @@ func releaseBatch(handler *ParseLineHandler, pl *PoolElement) {
 	//clear vector.nulls.Nulls
 	for _, vec := range pl.bat.Vecs {
 		vec.Nsp = &nulls.Nulls{}
-		switch vec.Typ.Oid {
-		case types.T_char, types.T_varchar, types.T_json:
-			vBytes := vec.Col.(*types.Bytes)
-			vBytes.Data = vBytes.Data[:0]
-		}
+		// XXX old code special handle varlen types.   Now it is no op.
 	}
 	handler.simdCsvBatchPool <- pl
 }
@@ -911,24 +865,16 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool, 
 						cols[rowIdx] = d
 					}
 				case types.T_char, types.T_varchar:
-					vBytes := vec.Col.(*types.Bytes)
 					if isNullOrEmpty {
 						nulls.Add(vec.Nsp, uint64(rowIdx))
-						vBytes.Offsets[rowIdx] = uint32(len(vBytes.Data))
-						vBytes.Lengths[rowIdx] = uint32(len(field))
 					} else {
-						vBytes.Offsets[rowIdx] = uint32(len(vBytes.Data))
-						vBytes.Data = append(vBytes.Data, field...)
-						vBytes.Lengths[rowIdx] = uint32(len(field))
+						// XXX What about memory accounting?
+						vector.SetStringAt(vec, rowIdx, field, nil)
 					}
 				case types.T_json:
-					vBytes := vec.Col.(*types.Bytes)
 					if isNullOrEmpty {
 						nulls.Add(vec.Nsp, uint64(rowIdx))
-						vBytes.Offsets[rowIdx] = uint32(len(vBytes.Data))
-						vBytes.Lengths[rowIdx] = uint32(len(field))
 					} else {
-						vBytes.Offsets[rowIdx] = uint32(len(vBytes.Data))
 						json, err := types.ParseStringToByteJson(field)
 						if err != nil {
 							return makeParsedFailedError(vec.Typ.String(), field, vecAttr, base, offset)
@@ -937,8 +883,8 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool, 
 						if err != nil {
 							return makeParsedFailedError(vec.Typ.String(), field, vecAttr, base, offset)
 						}
-						vBytes.Data = append(vBytes.Data, jsonBytes...)
-						vBytes.Lengths[rowIdx] = uint32(len(jsonBytes))
+						// XXX What about memory accounting?
+						vector.SetBytesAt(vec, rowIdx, jsonBytes, nil)
 					}
 				case types.T_date:
 					cols := vec.Col.([]types.Date)
@@ -1042,12 +988,6 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool, 
 			for k := 0; k < len(columnFLags); k++ {
 				if columnFLags[k] == 0 {
 					vec := batchData.Vecs[k]
-					switch vec.Typ.Oid {
-					case types.T_char, types.T_varchar, types.T_json:
-						vBytes := vec.Col.(*types.Bytes)
-						vBytes.Offsets[rowIdx] = uint32(len(vBytes.Data))
-						vBytes.Lengths[rowIdx] = uint32(0)
-					}
 					nulls.Add(vec.Nsp, uint64(rowIdx))
 
 					//mysql warning ER_WARN_TOO_FEW_RECORDS
@@ -1420,34 +1360,24 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool, 
 					}
 				}
 			case types.T_char, types.T_varchar:
-				vBytes := vec.Col.(*types.Bytes)
 				//row
 				for i := 0; i < countOfLineArray; i++ {
 					line := fetchLines[i]
 					if j >= len(line) || len(line[j]) == 0 {
 						nulls.Add(vec.Nsp, uint64(i))
-						vBytes.Offsets[i] = uint32(len(vBytes.Data))
-						vBytes.Lengths[i] = uint32(len(line[j]))
 					} else {
-						field := line[j]
-						vBytes.Offsets[i] = uint32(len(vBytes.Data))
-						vBytes.Data = append(vBytes.Data, field...)
-						vBytes.Lengths[i] = uint32(len(field))
+						// XXX memory
+						vector.SetStringAt(vec, i, line[j], nil)
 					}
 				}
 			case types.T_json:
-				vBytes := vec.Col.(*types.Bytes)
 				//row
 				for i := 0; i < countOfLineArray; i++ {
 					line := fetchLines[i]
 					if j >= len(line) || len(line[j]) == 0 {
 						nulls.Add(vec.Nsp, uint64(i))
-						vBytes.Offsets[i] = uint32(len(vBytes.Data))
-						vBytes.Lengths[i] = uint32(len(line[j]))
 					} else {
 						field := line[j]
-						vBytes.Offsets[i] = uint32(len(vBytes.Data))
-						//vBytes.Data = append(vBytes.Data, field...)
 						json, err := types.ParseStringToByteJson(field)
 						if err != nil {
 							logutil.Errorf("parse field[%v] err:%v", field, err)
@@ -1466,8 +1396,8 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool, 
 							result.Warnings++
 							//break
 						}
-						vBytes.Data = append(vBytes.Data, jsonBytes...)
-						vBytes.Lengths[i] = uint32(len(jsonBytes))
+						// XXX Memory.
+						vector.SetBytesAt(vec, i, jsonBytes, nil)
 					}
 				}
 			case types.T_date:
@@ -1594,12 +1524,6 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool, 
 				vec := batchData.Vecs[k]
 				//row
 				for i := 0; i < countOfLineArray; i++ {
-					switch vec.Typ.Oid {
-					case types.T_char, types.T_varchar, types.T_json:
-						vBytes := vec.Col.(*types.Bytes)
-						vBytes.Offsets[i] = uint32(len(vBytes.Data))
-						vBytes.Lengths[i] = uint32(0)
-					}
 					nulls.Add(vec.Nsp, uint64(i))
 				}
 			}
@@ -1744,11 +1668,6 @@ func writeBatchToStorage(handler *WriteBatchHandler, force bool) error {
 		//clear vector.nulls.Nulls
 		for _, vec := range handler.batchData.Vecs {
 			vec.Nsp = &nulls.Nulls{}
-			switch vec.Typ.Oid {
-			case types.T_char, types.T_varchar, types.T_json:
-				vBytes := vec.Col.(*types.Bytes)
-				vBytes.Data = vBytes.Data[:0]
-			}
 		}
 		handler.batchFilled = 0
 
@@ -1801,13 +1720,8 @@ func writeBatchToStorage(handler *WriteBatchHandler, force bool) error {
 						cols := vec.Col.([]float64)
 						vec.Col = cols[:needLen]
 					case types.T_char, types.T_varchar, types.T_json: //bytes is different
-						vBytes := vec.Col.(*types.Bytes)
-						//logutil.Infof("saveBatchToStorage before data %s ",vBytes.String())
-						if len(vBytes.Offsets) > needLen {
-							vec.Col = vBytes.Window(0, needLen)
-						}
-
-						//logutil.Infof("saveBatchToStorage after data %s ",vBytes.String())
+						cols := vec.Col.([]types.Varlena)
+						vec.Col = cols[:needLen]
 					case types.T_date:
 						cols := vec.Col.([]types.Date)
 						vec.Col = cols[:needLen]
@@ -1823,6 +1737,9 @@ func writeBatchToStorage(handler *WriteBatchHandler, force bool) error {
 					case types.T_timestamp:
 						cols := vec.Col.([]types.Timestamp)
 						vec.Col = cols[:needLen]
+					default:
+						// XXX
+						panic("unhandled vec type")
 					}
 				}
 

@@ -17,6 +17,7 @@ package binary
 import (
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -126,14 +127,14 @@ func makeFindInSetTestVectors(left []string, right []string, isScalarL bool, isS
 		vec[0] = testutil.MakeVarcharVector(left, nil)
 		vec[0].IsConst = isScalarL
 	} else {
-		vec[0] = testutil.MakeScalarNull(0)
+		vec[0] = testutil.MakeScalarNull(types.T_varchar, 0)
 	}
 
 	if right != nil {
 		vec[1] = testutil.MakeVarcharVector(right, nil)
 		vec[1].IsConst = isScalarR
 	} else {
-		vec[1] = testutil.MakeScalarNull(0)
+		vec[1] = testutil.MakeScalarNull(types.T_varchar, 0)
 	}
 
 	return vec

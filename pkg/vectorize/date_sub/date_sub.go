@@ -20,21 +20,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
-var (
-	DateSub       func([]types.Date, []int64, []int64, *nulls.Nulls, *nulls.Nulls, *nulls.Nulls, []types.Date) ([]types.Date, error)
-	DatetimeSub   func([]types.Datetime, []int64, []int64, *nulls.Nulls, *nulls.Nulls, *nulls.Nulls, []types.Datetime) ([]types.Datetime, error)
-	DateStringSub func(*types.Bytes, []int64, []int64, *nulls.Nulls, *nulls.Nulls, *nulls.Nulls, []types.Datetime) ([]types.Datetime, error)
-	TimestampSub  func(*time.Location, []types.Timestamp, []int64, []int64, *nulls.Nulls, *nulls.Nulls, *nulls.Nulls, []types.Timestamp) ([]types.Timestamp, error)
-)
-
-func init() {
-	DateSub = dateSub
-	DatetimeSub = datetimeSub
-	DateStringSub = dateStringSub
-	TimestampSub = timestampSub
-}
-
-func dateSub(xs []types.Date, ys []int64, zs []int64, xns *nulls.Nulls, yns *nulls.Nulls, rns *nulls.Nulls, rs []types.Date) ([]types.Date, error) {
+func DateSub(xs []types.Date, ys []int64, zs []int64, xns *nulls.Nulls, yns *nulls.Nulls, rns *nulls.Nulls, rs []types.Date) ([]types.Date, error) {
 	if len(ys) == 0 || len(zs) == 0 {
 		for i := range xs {
 			nulls.Add(rns, uint64(i))
@@ -95,7 +81,7 @@ func dateSub(xs []types.Date, ys []int64, zs []int64, xns *nulls.Nulls, yns *nul
 	return rs, nil
 }
 
-func datetimeSub(xs []types.Datetime, ys []int64, zs []int64, xns *nulls.Nulls, yns *nulls.Nulls, rns *nulls.Nulls, rs []types.Datetime) ([]types.Datetime, error) {
+func DatetimeSub(xs []types.Datetime, ys []int64, zs []int64, xns *nulls.Nulls, yns *nulls.Nulls, rns *nulls.Nulls, rs []types.Datetime) ([]types.Datetime, error) {
 	if len(ys) == 0 || len(zs) == 0 {
 		for i := range xs {
 			nulls.Add(rns, uint64(i))
@@ -156,9 +142,9 @@ func datetimeSub(xs []types.Datetime, ys []int64, zs []int64, xns *nulls.Nulls, 
 	return rs, nil
 }
 
-func dateStringSub(xs *types.Bytes, ys []int64, zs []int64, xns *nulls.Nulls, yns *nulls.Nulls, rns *nulls.Nulls, rs []types.Datetime) ([]types.Datetime, error) {
+func DateStringSub(xs []string, ys []int64, zs []int64, xns *nulls.Nulls, yns *nulls.Nulls, rns *nulls.Nulls, rs []types.Datetime) ([]types.Datetime, error) {
 	if len(ys) == 0 || len(zs) == 0 {
-		for i := range xs.Lengths {
+		for i := range xs {
 			nulls.Add(rns, uint64(i))
 			rs[i] = 0
 		}
@@ -170,12 +156,11 @@ func dateStringSub(xs *types.Bytes, ys []int64, zs []int64, xns *nulls.Nulls, yn
 			return rs, err
 		}
 	}
-	ds := make([]types.Datetime, len(xs.Lengths))
-	for i := range xs.Lengths {
+	ds := make([]types.Datetime, len(xs))
+	for i, str := range xs {
 		if nulls.Contains(xns, uint64(i)) {
 			continue
 		}
-		str := string(xs.Get(int64(i)))
 		d, e := types.ParseDatetime(str, 6)
 		if e != nil {
 			return rs, e
@@ -230,7 +215,7 @@ func dateStringSub(xs *types.Bytes, ys []int64, zs []int64, xns *nulls.Nulls, yn
 	return rs, nil
 }
 
-func timestampSub(loc *time.Location, xs []types.Timestamp, ys []int64, zs []int64, xns *nulls.Nulls, yns *nulls.Nulls, rns *nulls.Nulls, rs []types.Timestamp) ([]types.Timestamp, error) {
+func TimestampSub(loc *time.Location, xs []types.Timestamp, ys []int64, zs []int64, xns *nulls.Nulls, yns *nulls.Nulls, rns *nulls.Nulls, rs []types.Timestamp) ([]types.Timestamp, error) {
 	if len(ys) == 0 || len(zs) == 0 {
 		for i := range xs {
 			nulls.Add(rns, uint64(i))
