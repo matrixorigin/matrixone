@@ -23,10 +23,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
-	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
-	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
-	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/smartystreets/goconvey/convey"
 )
 
@@ -43,7 +39,7 @@ var charVecBase2 = []string{"a", "12", ""}
 var compVec []string
 var compNsp = []int64{0, 1, 2, 5, 8, 11, 12, 13, 14, 15, 16, 17, 20, 23, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44}
 var origVecs = make([]*vector.Vector, 3)
-var proc = process.New(mheap.New(&guest.Mmu{Mmu: host.New(100000), Limit: 100000}))
+var proc = testutil.NewProc()
 
 func Test_varchar1(t *testing.T) {
 	convey.Convey("Test rpad varchar int64 and int64 succ", t, func() {

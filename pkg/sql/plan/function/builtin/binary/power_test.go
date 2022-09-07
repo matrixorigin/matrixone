@@ -17,9 +17,7 @@ package binary
 import (
 	"testing"
 
-	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
-	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
-	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -49,9 +47,7 @@ func TestPower(t *testing.T) {
 }
 
 func powerFloat64[T constraints.Integer | constraints.Float](t *testing.T, typ types.T, src T, src2 T, res float64) {
-	hm := host.New(1 << 40)
-	gm := guest.New(1<<40, hm)
-	procs := process.New(mheap.New(gm))
+	procs := testutil.NewProc()
 	cases := []struct {
 		name       string
 		vecs       []*vector.Vector
