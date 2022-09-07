@@ -21,10 +21,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
-	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
-	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
-	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/smartystreets/goconvey/convey"
 )
 
@@ -34,7 +30,7 @@ func Test_EndsWith(t *testing.T) {
 		var charVecBase2 = []string{"-", "+", "1", ""}
 		var nsp1, nsp2 []uint64
 		var origVecs = make([]*vector.Vector, 2)
-		var proc = process.New(mheap.New(&guest.Mmu{Mmu: host.New(100000), Limit: 100000}))
+		var proc = testutil.NewProc()
 		n1, n2 := len(charVecBase), len(charVecBase2)
 		inputVec := make([]string, n1*n2)
 		inputVec2 := make([]string, len(inputVec))

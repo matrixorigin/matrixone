@@ -101,7 +101,7 @@ func TestMerge(t *testing.T) {
 }
 
 func newTestCase(m *mheap.Mheap) mergeTestCase {
-	proc := process.New(m)
+	proc := testutil.NewProcessWithMheap(m)
 	proc.Reg.MergeReceivers = make([]*process.WaitRegister, 2)
 	ctx, cancel := context.WithCancel(context.Background())
 	proc.Reg.MergeReceivers[0] = &process.WaitRegister{
