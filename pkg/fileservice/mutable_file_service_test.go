@@ -45,6 +45,7 @@ func testMutableFileService(
 		assert.Nil(t, mutator.Close())
 	}()
 
+	// overwrite
 	err = mutator.Mutate(ctx, IOEntry{
 		Size: 3,
 		Data: []byte("123"),
@@ -64,6 +65,7 @@ func testMutableFileService(
 	assert.Nil(t, err)
 	assert.Equal(t, []byte("123d"), vec.Entries[0].Data)
 
+	// append
 	err = mutator.Mutate(ctx, IOEntry{
 		Offset: 4,
 		Size:   1,
@@ -83,5 +85,26 @@ func testMutableFileService(
 	err = fs.Read(ctx, vec)
 	assert.Nil(t, err)
 	assert.Equal(t, []byte("123dq"), vec.Entries[0].Data)
+
+	// append
+	err = mutator.Append(ctx, IOEntry{
+		Offset: 0,
+		Size:   3,
+		Data:   []byte("123"),
+	})
+	assert.Nil(t, err)
+
+	vec = &IOVector{
+		FilePath: "foo",
+		Entries: []IOEntry{
+			{
+				Offset: 0,
+				Size:   -1,
+			},
+		},
+	}
+	err = fs.Read(ctx, vec)
+	assert.Nil(t, err)
+	assert.Equal(t, []byte("123dq123"), vec.Entries[0].Data)
 
 }

@@ -120,7 +120,8 @@ func (r *relation) Write(_ context.Context, bat *batch.Batch) error {
 			if data, err = compress.Compress(v, data, compress.Lz4); err != nil {
 				return err
 			}
-			data = append(data, types.EncodeInt32(int32(len(v)))...)
+			lenV := int32(len(v))
+			data = append(data, types.EncodeInt32(&lenV)...)
 			v = data
 		}
 		if err := r.db.Set(key+"."+attr, v); err != nil {
@@ -158,6 +159,11 @@ func (r *relation) AddTableDef(_ context.Context, _ engine.TableDef) error {
 
 func (r *relation) DelTableDef(_ context.Context, _ engine.TableDef) error {
 	return nil
+}
+
+func (r *relation) GetTableID(_ context.Context) string {
+	//TODO
+	return "0"
 }
 
 func sKey(num int, id string) string {

@@ -118,7 +118,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 				continue
 			}
 			if ap.Cond != nil {
-				flg := true // mark no tuple satisfies the condition
+				matched := false // mark if any tuple satisfies the condition
 				sels := mSels[vals[k]-1]
 				for _, sel := range sels {
 					vec, err := colexec.JoinFilterEvalExprInBucket(bat, ctr.bat, i+k, int(sel), proc, ap.Cond)
@@ -127,13 +127,13 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 					}
 					bs := vec.Col.([]bool)
 					if bs[0] {
-						flg = false
-						vec.Free(proc.Mp)
+						matched = true
+						vec.Free(proc.Mp())
 						break
 					}
-					vec.Free(proc.Mp)
+					vec.Free(proc.Mp())
 				}
-				if flg {
+				if !matched {
 					continue
 				}
 			}

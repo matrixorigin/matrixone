@@ -79,11 +79,12 @@ type ColDef struct {
 func (def *ColDef) GetName() string     { return def.Name }
 func (def *ColDef) GetType() types.Type { return def.Type }
 
-func (def *ColDef) Nullable() bool  { return def.NullAbility }
-func (def *ColDef) IsHidden() bool  { return def.Hidden }
-func (def *ColDef) IsPhyAddr() bool { return def.PhyAddr }
-func (def *ColDef) IsPrimary() bool { return def.Primary }
-func (def *ColDef) IsSortKey() bool { return def.SortKey }
+func (def *ColDef) Nullable() bool        { return def.NullAbility }
+func (def *ColDef) IsHidden() bool        { return def.Hidden }
+func (def *ColDef) IsPhyAddr() bool       { return def.PhyAddr }
+func (def *ColDef) IsPrimary() bool       { return def.Primary }
+func (def *ColDef) IsAutoIncrement() bool { return def.AutoIncrement }
+func (def *ColDef) IsSortKey() bool       { return def.SortKey }
 
 type SortKey struct {
 	Defs      []*ColDef
@@ -127,6 +128,7 @@ type Schema struct {
 	BlockMaxRows     uint32
 	SegmentMaxBlocks uint16
 	Comment          string
+	Partition        string
 	Relkind          string
 	Createsql        string
 	View             string
@@ -268,6 +270,10 @@ func (s *Schema) ReadFrom(r io.Reader) (n int64, err error) {
 		return
 	}
 	n += sn
+	if s.Partition, sn, err = common.ReadString(r); err != nil {
+		return
+	}
+	n += sn
 	if s.Relkind, sn, err = common.ReadString(r); err != nil {
 		return
 	}
@@ -360,6 +366,9 @@ func (s *Schema) Marshal() (buf []byte, err error) {
 	if _, err = common.WriteString(s.Comment, &w); err != nil {
 		return
 	}
+	if _, err = common.WriteString(s.Partition, &w); err != nil {
+		return
+	}
 	if _, err = common.WriteString(s.Relkind, &w); err != nil {
 		return
 	}
@@ -373,7 +382,7 @@ func (s *Schema) Marshal() (buf []byte, err error) {
 		return
 	}
 	for _, def := range s.ColDefs {
-		if _, err = w.Write(types.EncodeType(def.Type)); err != nil {
+		if _, err = w.Write(types.EncodeType(&def.Type)); err != nil {
 			return
 		}
 		if _, err = common.WriteString(def.Name, &w); err != nil {
@@ -460,14 +469,15 @@ func (s *Schema) AppendPKColWithAttribute(attr engine.Attribute, idx int) error 
 		OriginString: attr.Default.OriginString,
 	}
 	def := &ColDef{
-		Name:    attr.Name,
-		Type:    attr.Type,
-		SortIdx: int8(idx),
-		Hidden:  attr.IsHidden,
-		SortKey: true,
-		Primary: true,
-		Comment: attr.Comment,
-		Default: attrDefault,
+		Name:          attr.Name,
+		Type:          attr.Type,
+		SortIdx:       int8(idx),
+		Hidden:        attr.IsHidden,
+		SortKey:       true,
+		Primary:       true,
+		Comment:       attr.Comment,
+		Default:       attrDefault,
+		AutoIncrement: attr.AutoIncrement,
 	}
 	return s.AppendColDef(def)
 }
@@ -506,12 +516,13 @@ func (s *Schema) AppendColWithAttribute(attr engine.Attribute) error {
 		OriginString: attr.Default.OriginString,
 	}
 	def := &ColDef{
-		Name:    attr.Name,
-		Type:    attr.Type,
-		Hidden:  attr.IsHidden,
-		SortIdx: -1,
-		Comment: attr.Comment,
-		Default: attrDefault,
+		Name:          attr.Name,
+		Type:          attr.Type,
+		Hidden:        attr.IsHidden,
+		SortIdx:       -1,
+		Comment:       attr.Comment,
+		Default:       attrDefault,
+		AutoIncrement: attr.AutoIncrement,
 	}
 	return s.AppendColDef(def)
 }

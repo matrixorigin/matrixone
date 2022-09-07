@@ -28,33 +28,15 @@ func UUID(inputVecs []*vector.Vector, proc *process.Process) (*vector.Vector, er
 	if len(inputVecs) != 1 {
 		return nil, moerr.NewError(moerr.INTERNAL_ERROR, "uuid function requires a hidden parameter")
 	}
-	rows := inputVecs[0].Length
-	resultType := types.T_varchar.ToType()
-	resultVector := vector.New(resultType)
-
-	results := &types.Bytes{
-		Data:    make([]byte, int(UUID_LENGTH)*rows),
-		Offsets: make([]uint32, rows),
-		Lengths: make([]uint32, rows),
-	}
-	var retCursor uint32 = 0
+	rows := inputVecs[0].Length()
+	results := make([]string, rows)
 	for i := 0; i < rows; i++ {
 		id, err := uuid.NewUUID()
 		if err != nil {
 			return nil, moerr.NewError(moerr.INTERNAL_ERROR, "generation uuid error")
 		}
-		slice := []byte(id.String())
-		for _, b := range slice {
-			results.Data[retCursor] = b
-			retCursor++
-		}
-		if i != 0 {
-			results.Offsets[i] = results.Offsets[i-1] + results.Lengths[i-1]
-		} else {
-			results.Offsets[i] = uint32(0)
-		}
-		results.Lengths[i] = UUID_LENGTH
+		results[i] = id.String()
 	}
-	vector.SetCol(resultVector, results)
+	resultVector := vector.NewWithStrings(types.T_varchar.ToType(), results, nil, proc.Mp())
 	return resultVector, nil
 }

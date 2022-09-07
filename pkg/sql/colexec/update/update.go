@@ -17,7 +17,6 @@ package update
 import (
 	"bytes"
 	"context"
-	"fmt"
 	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
@@ -25,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -42,16 +42,17 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 	if bat == nil || len(bat.Zs) == 0 {
 		return false, nil
 	}
-	defer bat.Clean(proc.Mp)
+
+	defer bat.Clean(proc.Mp())
 	var affectedRows uint64 = 0
 	batLen := batch.Length(bat)
 	// Fill vector for constant value
 	for i := range bat.Vecs {
-		bat.Vecs[i] = bat.Vecs[i].ConstExpand(proc.Mp)
+		bat.Vecs[i] = bat.Vecs[i].ConstExpand(proc.Mp())
 	}
 
 	ctx := context.TODO()
-	for _, updateCtx := range p.UpdateCtxs {
+	for i, updateCtx := range p.UpdateCtxs {
 
 		tmpBat := &batch.Batch{}
 
@@ -61,13 +62,12 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 			tmpBat.Vecs = bat.Vecs[int(idx)+1 : int(idx)+len(updateCtx.OrderAttrs)+1]
 			tmpBat.Attrs = append(tmpBat.Attrs, updateCtx.UpdateAttrs...)
 			tmpBat.Attrs = append(tmpBat.Attrs, updateCtx.OtherAttrs...)
+			tmpBat.Zs = bat.Zs
 
 			for i := range tmpBat.Vecs {
 				if tmpBat.Vecs[i].IsScalarNull() {
 					// vector need to be filled to insert
-					if err := fillVector(tmpBat.Vecs[i], batLen, proc); err != nil {
-						return false, err
-					}
+					vector.PreAlloc(tmpBat.Vecs[i], 0, batLen, proc.Mp())
 				}
 			}
 
@@ -77,6 +77,9 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 			}
 
 			batch.Reorder(tmpBat, updateCtx.OrderAttrs)
+			if err := colexec.UpdateInsertBatch(p.Engine, p.DB[i], ctx, proc, p.TableDefVec[i].Cols, tmpBat, p.TableID[i]); err != nil {
+				return false, err
+			}
 			err = updateCtx.TableSource.Write(ctx, tmpBat)
 			if err != nil {
 				return false, err
@@ -96,23 +99,26 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 
 			err := updateCtx.TableSource.Delete(ctx, tmpBat.GetVector(0), updateCtx.HideKey)
 			if err != nil {
-				tmpBat.Clean(proc.Mp)
+				tmpBat.Clean(proc.Mp())
 				return false, err
 			}
 
-			tmpBat.Vecs[0].Free(proc.Mp)
+			tmpBat.Vecs[0].Free(proc.Mp())
 			tmpBat.Vecs = tmpBat.Vecs[1:]
 
 			tmpBat.Attrs = append(tmpBat.Attrs, updateCtx.UpdateAttrs...)
 			tmpBat.Attrs = append(tmpBat.Attrs, updateCtx.OtherAttrs...)
 
 			batch.Reorder(tmpBat, updateCtx.OrderAttrs)
-			err = updateCtx.TableSource.Write(ctx, tmpBat)
-			if err != nil {
-				tmpBat.Clean(proc.Mp)
+			if err := colexec.UpdateInsertBatch(p.Engine, p.DB[i], ctx, proc, p.TableDefVec[i].Cols, tmpBat, p.TableID[i]); err != nil {
 				return false, err
 			}
-			tmpBat.Clean(proc.Mp)
+			err = updateCtx.TableSource.Write(ctx, tmpBat)
+			if err != nil {
+				tmpBat.Clean(proc.Mp())
+				return false, err
+			}
+			tmpBat.Clean(proc.Mp())
 
 			affectedRows += cnt
 		}
@@ -129,11 +135,11 @@ func FilterBatch(bat *batch.Batch, batLen int, proc *process.Process) (*batch.Ba
 
 	for _, vec := range bat.Vecs {
 		v := vector.New(vec.Typ)
-		vector.PreAlloc(v, vec, batLen, proc.Mp)
+		vector.PreAlloc(v, 0, batLen, proc.Mp())
 		newBat.Vecs = append(newBat.Vecs, v)
 	}
 
-	rows := bat.Vecs[0].Col.([]types.Decimal128)
+	rows := bat.Vecs[0].Col.([]types.Rowid)
 	for idx, row := range rows {
 		if _, ok := m[row]; ok {
 			continue
@@ -150,62 +156,17 @@ func FilterBatch(bat *batch.Batch, batLen int, proc *process.Process) (*batch.Ba
 				val = getIndexValue(idx, vec, false)
 			}
 
-			err := newBat.Vecs[j].Append(val, proc.Mp)
+			err := newBat.Vecs[j].Append(val, false, proc.Mp())
 			if err != nil {
 				return nil, 0
 			}
 		}
 	}
+	newBat.Zs = make([]int64, batLen)
 	return newBat, cnt
 }
 
-func fillVector(v *vector.Vector, batLen int, proc *process.Process) error {
-	switch v.Typ.Oid {
-	case types.T_bool:
-		v.Col = make([]bool, batLen)
-	case types.T_int8:
-		v.Col = make([]int8, batLen)
-	case types.T_int16:
-		v.Col = make([]int16, batLen)
-	case types.T_int32:
-		v.Col = make([]int32, batLen)
-	case types.T_int64:
-		v.Col = make([]int64, batLen)
-	case types.T_uint8:
-		v.Col = make([]uint8, batLen)
-	case types.T_uint16:
-		v.Col = make([]uint16, batLen)
-	case types.T_uint32:
-		v.Col = make([]uint32, batLen)
-	case types.T_uint64:
-		v.Col = make([]uint64, batLen)
-	case types.T_float32:
-		v.Col = make([]float32, batLen)
-	case types.T_float64:
-		v.Col = make([]float64, batLen)
-	case types.T_date:
-		v.Col = make([]types.Date, batLen)
-	case types.T_datetime:
-		v.Col = make([]types.Datetime, batLen)
-	case types.T_timestamp:
-		v.Col = make([]types.Timestamp, batLen)
-	case types.T_decimal64:
-		v.Col = make([]types.Decimal64, batLen)
-	case types.T_decimal128:
-		v.Col = make([]types.Decimal128, batLen)
-	case types.T_char, types.T_varchar, types.T_blob, types.T_json:
-		v.Col = &types.Bytes{}
-		tmp := make([][]byte, batLen)
-		err := v.Col.(*types.Bytes).Append(tmp)
-		if err != nil {
-			return err
-		}
-	default:
-		return fmt.Errorf("can't find type: %s", v.Typ.Oid.String())
-	}
-	return nil
-}
-
+// XXX isn't this type switch super slow?
 func getIndexValue(idx int, v *vector.Vector, isNull bool) any {
 	switch v.Typ.Oid {
 	case types.T_bool:
@@ -304,12 +265,26 @@ func getIndexValue(idx int, v *vector.Vector, isNull bool) any {
 		}
 		col := v.Col.([]types.Decimal128)
 		return col[idx]
+	case types.T_TS:
+		if isNull {
+			var ts types.TS
+			return ts
+		}
+		col := v.Col.([]types.TS)
+		return col[idx]
+	case types.T_Rowid:
+		if isNull {
+			var z types.Rowid
+			return z
+		}
+		col := v.Col.([]types.Rowid)
+		return col[idx]
 	case types.T_char, types.T_varchar, types.T_blob, types.T_json:
 		if isNull {
+			// XXX: Why don't we return nil?
 			return []byte{}
 		}
-		col := v.Col.(*types.Bytes)
-		return col.Data[col.Offsets[idx] : col.Offsets[idx]+col.Lengths[idx]]
+		return v.GetBytes(int64(idx))
 	default:
 		return nil
 	}

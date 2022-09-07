@@ -138,7 +138,7 @@ func (ctr *container) emptyProbe(bat *batch.Batch, ap *Argument, proc *process.P
 }
 
 func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Process, anal process.Analyze) error {
-	defer bat.Clean(proc.Mp)
+	defer bat.Clean(proc.Mp())
 	anal.Input(bat)
 	rbat := batch.NewWithSize(len(ap.Result))
 	rbat.Zs = proc.GetMheap().GetSels()
@@ -165,10 +165,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 		copy(ctr.inBuckets, hashmap.OneUInt8s)
 		vals, zvals := itr.Find(i, n, ctr.vecs, ctr.inBuckets)
 		for k := 0; k < n; k++ {
-			if ctr.inBuckets[k] == 0 {
-				continue
-			}
-			if zvals[k] == 0 {
+			if ctr.inBuckets[k] == 0 || zvals[k] == 0 {
 				continue
 			}
 			if vals[k] == 0 {
@@ -182,7 +179,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 				continue
 			}
 			if ap.Cond != nil {
-				flg := true // mark no tuple satisfies the condition
+				matched := false // mark if any tuple satisfies the condition
 				sels := mSels[vals[k]-1]
 				for _, sel := range sels {
 					vec, err := colexec.JoinFilterEvalExprInBucket(bat, ctr.bat, i+k, int(sel), proc, ap.Cond)
@@ -191,13 +188,13 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 					}
 					bs := vec.Col.([]bool)
 					if bs[0] {
-						flg = false
-						vec.Free(proc.Mp)
+						matched = true
+						vec.Free(proc.Mp())
 						break
 					}
-					vec.Free(proc.Mp)
+					vec.Free(proc.Mp())
 				}
-				if !flg {
+				if matched {
 					continue
 				}
 				for j, pos := range ap.Result {

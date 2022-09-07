@@ -23,11 +23,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/matrixorigin/matrixone/pkg/util/toml"
 
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
+	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"go.uber.org/zap"
 )
 
@@ -46,6 +48,11 @@ const (
 
 // Config cn service
 type Config struct {
+	// UUID cn store uuid
+	UUID string `toml:"uuid"`
+	// Role cn node role, [AP|TP]
+	Role string `toml:"role"`
+
 	// ListenAddress listening address for receiving external requests
 	ListenAddress string `toml:"listen-address"`
 	// FileService file service configuration
@@ -73,7 +80,7 @@ type Config struct {
 		BatchSize int64 `toml:"batch-size"`
 	}
 
-	//parameters for the frontend
+	// Frontend parameters for the frontend
 	Frontend config.FrontendParameters `toml:"frontend"`
 
 	// HAKeeper configuration
@@ -93,6 +100,12 @@ type Config struct {
 }
 
 func (c *Config) Validate() error {
+	if c.UUID == "" {
+		panic("missing cn store UUID")
+	}
+	if c.Role == "" {
+		c.Role = metadata.CNRole_TP.String()
+	}
 	if c.HAKeeper.DiscoveryTimeout.Duration == 0 {
 		c.HAKeeper.DiscoveryTimeout.Duration = time.Second * 30
 	}
@@ -106,6 +119,7 @@ func (c *Config) Validate() error {
 }
 
 type service struct {
+	metadata               metadata.CNStore
 	cfg                    *Config
 	responsePool           *sync.Pool
 	logger                 *zap.Logger
@@ -119,7 +133,7 @@ type service struct {
 	_txnSender             rpc.TxnSender
 	initTxnClientOnce      sync.Once
 	_txnClient             client.TxnClient
-	initFileServiceOnce    sync.Once
-	_fileService           fileservice.FileService
-	newFS                  fileservice.NewFileServicesFunc
+	metadataFS             fileservice.ReplaceableFileService
+	fileService            fileservice.FileService
+	stopper                *stopper.Stopper
 }

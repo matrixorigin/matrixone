@@ -23,6 +23,7 @@ import (
 	"github.com/BurntSushi/toml"
 	"github.com/matrixorigin/matrixone/pkg/cnservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/dnservice"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
@@ -34,6 +35,10 @@ const (
 	dnServiceType         = "DN"
 	logServiceType        = "LOG"
 	standaloneServiceType = "STANDALONE"
+
+	s3FileServiceName    = "S3"
+	localFileServiceName = "LOCAL"
+	etlFileServiceName   = "ETL"
 )
 
 var ErrInvalidConfig = moerr.NewError(moerr.BAD_CONFIGURATION, "invalid log configuration")
@@ -64,6 +69,8 @@ type Config struct {
 	LogService logservice.Config `toml:"logservice"`
 	// CN cn service config
 	CN cnservice.Config `toml:"cn"`
+	// Observability parameters for the metric/trace
+	Observability config.ObservabilityParameters `toml:"observability"`
 }
 
 func parseConfigFromFile(file string) (*Config, error) {
@@ -110,7 +117,7 @@ func (c *Config) createFileService(defaultName string) (*fileservice.FileService
 	}
 
 	// create FileServices
-	s, err := fileservice.NewFileServices(
+	fs, err := fileservice.NewFileServices(
 		defaultName,
 		services...,
 	)
@@ -119,12 +126,32 @@ func (c *Config) createFileService(defaultName string) (*fileservice.FileService
 	}
 
 	// validate default name
-	_, err = fileservice.Get[fileservice.FileService](s, defaultName)
+	_, err = fileservice.Get[fileservice.FileService](fs, defaultName)
 	if err != nil {
 		return nil, err
 	}
 
-	return s, nil
+	// ensure local exists
+	_, err = fileservice.Get[fileservice.FileService](fs, localFileServiceName)
+	if err != nil {
+		return nil, err
+	}
+
+	// ensure s3 exists
+	_, err = fileservice.Get[fileservice.FileService](fs, s3FileServiceName)
+	if err != nil {
+		return nil, err
+	}
+
+	// ensure etl exists, for trace & metric
+	if !c.Observability.DisableMetric || !c.Observability.DisableTrace {
+		_, err = fileservice.Get[fileservice.FileService](fs, etlFileServiceName)
+		if err != nil {
+			return nil, moerr.NewPanicError(err)
+		}
+	}
+
+	return fs, nil
 }
 
 func (c *Config) getLogServiceConfig() logservice.Config {
@@ -147,6 +174,12 @@ func (c *Config) getCNServiceConfig() cnservice.Config {
 	return cfg
 }
 
+func (c *Config) getObservabilityConfig() config.ObservabilityParameters {
+	cfg := c.Observability
+	cfg.SetDefaultValues(Version)
+	return cfg
+}
+
 // memberlist requires all gossip seed addresses to be provided as IP:PORT
 func (c *Config) resolveGossipSeedAddresses() error {
 	result := make([]string, 0)
@@ -155,15 +188,18 @@ func (c *Config) resolveGossipSeedAddresses() error {
 		if err != nil {
 			return err
 		}
-		addrs, err := net.LookupHost(host)
+		ips, err := net.LookupIP(host)
 		if err != nil {
+			// the configured member may be failed currently, keep the host name anyway since
+			// memberlist would try to resolve it again
+			result = append(result, addr)
 			continue
 		}
 		// only keep IPv4 addresses
 		filtered := make([]string, 0)
-		for _, cur := range addrs {
-			if net.ParseIP(cur).To4() != nil {
-				filtered = append(filtered, cur)
+		for _, ip := range ips {
+			if ip.To4() != nil {
+				filtered = append(filtered, ip.String())
 			}
 		}
 		if len(filtered) != 1 {

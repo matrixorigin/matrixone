@@ -17,11 +17,8 @@ package binary
 import (
 	"testing"
 
-	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
-	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
-	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -50,9 +47,7 @@ func TestPower(t *testing.T) {
 }
 
 func powerFloat64[T constraints.Integer | constraints.Float](t *testing.T, typ types.T, src T, src2 T, res float64) {
-	hm := host.New(1 << 40)
-	gm := guest.New(1<<40, hm)
-	procs := process.New(mheap.New(gm))
+	procs := testutil.NewProc()
 	cases := []struct {
 		name       string
 		vecs       []*vector.Vector
@@ -84,26 +79,7 @@ func powerFloat64[T constraints.Integer | constraints.Float](t *testing.T, typ t
 // Construct the vector parameter of the plus operator
 func makePowerVectors[T constraints.Integer | constraints.Float](src T, src2 T, srcScalar bool, t types.T) []*vector.Vector {
 	vectors := make([]*vector.Vector, 2)
-	vectors[0] = &vector.Vector{
-		Col:     []T{src},
-		Nsp:     &nulls.Nulls{},
-		Typ:     types.Type{Oid: t},
-		IsConst: srcScalar,
-		Length:  1,
-	}
-	vectors[1] = &vector.Vector{
-		Col:     []T{src2},
-		Nsp:     &nulls.Nulls{},
-		Typ:     types.Type{Oid: t},
-		IsConst: srcScalar,
-		Length:  1,
-	}
+	vectors[0] = vector.NewConstFixed(t.ToType(), 1, src)
+	vectors[1] = vector.NewConstFixed(t.ToType(), 1, src2)
 	return vectors
 }
-
-// NULL return not a value
-// func MakeScalarNullSlice(length int) []*vector.Vector {
-// 	vectors := make([]*vector.Vector, 1)
-// 	vectors[0] = testutil.MakeScalarNull(4)
-// 	return vectors
-// }

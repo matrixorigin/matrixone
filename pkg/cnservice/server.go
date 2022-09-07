@@ -33,13 +33,10 @@ import (
 
 	"github.com/fagongzi/goetty/v2"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
+	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
-)
-
-const (
-	s3FileServiceName    = "S3"
-	localFileServiceName = "LOCAL"
 )
 
 type Options func(*service)
@@ -47,19 +44,35 @@ type Options func(*service)
 func NewService(
 	cfg *Config,
 	ctx context.Context,
-	newFS fileservice.NewFileServicesFunc,
+	fileService fileservice.FileService,
 	options ...Options,
 ) (Service, error) {
-
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
 
-	srv := &service{
-		cfg:   cfg,
-		newFS: newFS,
+	// get metadata fs
+	fs, err := fileservice.Get[fileservice.ReplaceableFileService](fileService, "LOCAL")
+	if err != nil {
+		return nil, err
 	}
-	srv.logger = logutil.Adjust(srv.logger)
+
+	srv := &service{
+		logger: logutil.GetGlobalLogger().Named("cnservice"),
+		metadata: metadata.CNStore{
+			UUID: cfg.UUID,
+			Role: metadata.MustParseCNRole(cfg.Role),
+		},
+		cfg:         cfg,
+		metadataFS:  fs,
+		fileService: fileService,
+	}
+	srv.stopper = stopper.NewStopper("cn-service", stopper.WithLogger(srv.logger))
+
+	if err := srv.initMetadata(); err != nil {
+		return nil, err
+	}
+
 	srv.responsePool = &sync.Pool{
 		New: func() any {
 			return &pipeline.Message{}
@@ -68,8 +81,7 @@ func NewService(
 
 	pu := config.NewParameterUnit(&cfg.Frontend, nil, nil, nil, nil, nil)
 	cfg.Frontend.SetDefaultValues()
-	err := srv.initMOServer(ctx, pu)
-	if err != nil {
+	if err = srv.initMOServer(ctx, pu); err != nil {
 		return nil, err
 	}
 
@@ -93,6 +105,9 @@ func NewService(
 func (s *service) Start() error {
 	err := s.runMoServer()
 	if err != nil {
+		return err
+	}
+	if err := s.startCNStoreHeartbeat(); err != nil {
 		return err
 	}
 	return s.server.Start()
@@ -127,11 +142,7 @@ func (s *service) initMOServer(ctx context.Context, pu *config.ParameterUnit) er
 
 	pu.HostMmu = host.New(pu.SV.HostMmuLimitation)
 
-	fs, err := s.getFileService()
-	if err != nil {
-		return err
-	}
-	pu.FileService = fs
+	pu.FileService = s.fileService
 
 	logutil.Info("Initialize the engine ...")
 	err = s.initEngine(ctx, cancelMoServerCtx, pu)
@@ -179,27 +190,15 @@ func (s *service) createMOServer(inputCtx context.Context, pu *config.ParameterU
 	address := fmt.Sprintf("%s:%d", pu.SV.Host, pu.SV.Port)
 	moServerCtx := context.WithValue(inputCtx, config.ParameterUnitKey, pu)
 	s.mo = frontend.NewMOServer(moServerCtx, address, pu)
-	{
-		// init trace/log/error framework
-		if _, err := trace.Init(moServerCtx,
-			trace.WithMOVersion(pu.SV.MoVersion),
-			trace.WithNode("node_uuid", trace.NodeTypeCN),
-			trace.EnableTracer(!pu.SV.DisableTrace),
-			trace.WithBatchProcessMode(pu.SV.TraceBatchProcessor),
-			trace.DebugMode(pu.SV.EnableTraceDebug),
-			trace.WithSQLExecutor(func() ie.InternalExecutor {
-				return frontend.NewInternalExecutor(pu)
-			}),
-		); err != nil {
-			panic(err)
-		}
-	}
 
-	if !pu.SV.DisableMetric {
-		ieFactory := func() ie.InternalExecutor {
-			return frontend.NewInternalExecutor(pu)
-		}
-		metric.InitMetric(moServerCtx, ieFactory, pu, 0, metric.ALL_IN_ONE_MODE)
+	ieFactory := func() ie.InternalExecutor {
+		return frontend.NewInternalExecutor(pu)
+	}
+	if err := trace.InitSchema(moServerCtx, ieFactory); err != nil {
+		panic(err)
+	}
+	if err := metric.InitSchema(moServerCtx, ieFactory); err != nil {
+		panic(err)
 	}
 	frontend.InitServerVersion(pu.SV.MoVersion)
 	err := frontend.InitSysTenant(moServerCtx)
@@ -213,10 +212,6 @@ func (s *service) runMoServer() error {
 }
 
 func (s *service) serverShutdown(isgraceful bool) error {
-	// flush trace/log/error framework
-	if err := trace.Shutdown(trace.DefaultContext()); err != nil {
-		logutil.Errorf("Shutdown trace err: %v", err)
-	}
 	return s.mo.Stop()
 }
 
@@ -267,34 +262,4 @@ func WithMessageHandle(f func(ctx context.Context, message morpc.Message, cs mor
 	return func(s *service) {
 		s.requestHandler = f
 	}
-}
-
-func (s *service) getFileService() (fs fileservice.FileService, err error) {
-	s.initFileServiceOnce.Do(func() {
-
-		// create
-		fs, err = s.newFS(localFileServiceName)
-		if err != nil {
-			return
-		}
-
-		// ensure local exists
-		_, err := fileservice.Get[fileservice.FileService](fs, localFileServiceName)
-		if err != nil {
-			return
-		}
-
-		// ensure s3 exists
-		_, err = fileservice.Get[fileservice.FileService](fs, s3FileServiceName)
-		if err != nil {
-			return
-		}
-
-		// set
-		s._fileService = fs
-
-	})
-
-	fs = s._fileService
-	return
 }

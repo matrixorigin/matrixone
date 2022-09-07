@@ -15,6 +15,7 @@
 package main
 
 import (
+	"reflect"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -75,14 +76,22 @@ func TestFileServiceFactory(t *testing.T) {
 		Name:    "a",
 		Backend: "MEM",
 	})
+	c.FileServices = append(c.FileServices, fileservice.Config{
+		Name:    localFileServiceName,
+		Backend: "MEM",
+	})
+	c.FileServices = append(c.FileServices, fileservice.Config{
+		Name:    s3FileServiceName,
+		Backend: "MEM",
+	})
+	c.FileServices = append(c.FileServices, fileservice.Config{
+		Name:    etlFileServiceName,
+		Backend: "DISK-ETL",
+	})
 
 	fs, err := c.createFileService("A")
 	assert.NoError(t, err)
 	assert.NotNil(t, fs)
-
-	fs, err = c.createFileService("B")
-	assert.Error(t, err)
-	assert.Nil(t, fs)
 }
 
 func TestResolveGossipSeedAddresses(t *testing.T) {
@@ -107,8 +116,8 @@ func TestResolveGossipSeedAddresses(t *testing.T) {
 			nil,
 		},
 		{
+			[]string{"localhost:32001", "of-course-no-such-address42033.io:32001"},
 			[]string{"127.0.0.1:32001", "of-course-no-such-address42033.io:32001"},
-			[]string{"127.0.0.1:32001"},
 			nil,
 		},
 	}
@@ -122,6 +131,9 @@ func TestResolveGossipSeedAddresses(t *testing.T) {
 		err := cfg.resolveGossipSeedAddresses()
 		if err != tt.err {
 			t.Errorf("expected %v, got %v", tt.err, err)
+		}
+		if got := cfg.LogService.GossipSeedAddresses; !reflect.DeepEqual(got, tt.results) {
+			t.Errorf("expected %v, got %v", tt.results, got)
 		}
 	}
 }

@@ -37,9 +37,7 @@ DROP TABLE t0;
 # Comparison
 CREATE TABLE t1 (a char(10), b INT);
 INSERT INTO t1 VALUES ('', 0);
--- @bvt:issue#4696
 SELECT COALESCE(a) = COALESCE(b) FROM t1;
--- @bvt:issue
 DROP TABLE t1;
 
 # ORDER BY clause, DATE TYPE
@@ -118,10 +116,8 @@ drop table it3;
 #DATATYPE, distinct
 CREATE TABLE t1 (dt2 DATETIME(2), t3 TIMESTAMP, d DATE);
 INSERT INTO t1 VALUES ('2001-01-01 00:00:00.12', '2001-01-01 00:00:00.567', '2002-01-01');
--- @bvt:issue#4696
 SELECT distinct COALESCE(dt2, t3) FROM t1;
 SELECT CONCAT_WS(",", COALESCE(dt2, t3)) FROM t1;
--- @bvt:issue
 DROP TABLE t1;
 
 #SELECT 嵌套

@@ -554,19 +554,19 @@ func (tbl *txnTable) PreCommitOr2PCPrepareDedup() (err error) {
 func (tbl *txnTable) DoDedup(pks containers.Vector, preCommit bool) (err error) {
 	segIt := tbl.entry.MakeSegmentIt(false)
 	for segIt.Valid() {
-		seg := segIt.Get().GetPayload().(*catalog.SegmentEntry)
+		seg := segIt.Get().GetPayload()
 		if preCommit && seg.GetID() < tbl.maxSegId {
 			return
 		}
 		{
 			seg.RLock()
-			needwait, txnToWait := seg.NeedWaitCommittingMeta(tbl.store.txn.GetStartTS())
+			needwait, txnToWait := seg.NeedWaitCommitting(tbl.store.txn.GetStartTS())
 			if needwait {
 				seg.RUnlock()
 				txnToWait.GetTxnState(true)
 				seg.RLock()
 			}
-			invalid := seg.IsDroppedCommitted() || seg.InTxnOrRollbacked()
+			invalid := seg.IsDroppedCommitted() || seg.IsCreating()
 			seg.RUnlock()
 			if invalid {
 				segIt.Next()
@@ -585,13 +585,13 @@ func (tbl *txnTable) DoDedup(pks containers.Vector, preCommit bool) (err error) 
 		err = nil
 		blkIt := seg.MakeBlockIt(false)
 		for blkIt.Valid() {
-			blk := blkIt.Get().GetPayload().(*catalog.BlockEntry)
+			blk := blkIt.Get().GetPayload()
 			if preCommit && blk.GetID() < tbl.maxBlkId {
 				return
 			}
 			{
 				blk.RLock()
-				invalid := blk.IsDroppedCommitted() || blk.InTxnOrRollbacked()
+				invalid := blk.IsDroppedCommitted() || blk.IsCreating()
 				blk.RUnlock()
 				if invalid {
 					blkIt.Next()

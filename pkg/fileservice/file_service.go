@@ -51,17 +51,20 @@ type IOVector struct {
 	// a path has two parts, service name and file name, separated by ':'
 	// service name is optional, if omitted, the receiver FileService will use the default name of the service
 	// file name parts are separated by '/'
-	// valid characters in file names are intersection of valid characters of S3 and native file systems
+	// valid characters in file name: 0-9 a-z A-Z / ! - _ . * ' ( )
 	// example:
 	// s3:a/b/c S3:a/b/c represents the same file 'a/b/c' located in 'S3' service
 	FilePath string
 	// io entries
-	// empty Entries not allowed
+	// empty Entries is not allowed
+	// when writing, overlapping Entries is not allowed
 	Entries []IOEntry
 }
 
 type IOEntry struct {
-	// offset in file, [0, len(file) - 1]
+	// offset in file
+	// when writing or mutating, offset can be arbitrary value, gaps between provided data are zero-filled
+	// when reading, valid offsets are in range [0, len(file) - 1]
 	Offset int
 
 	// number of bytes to read or write, [1, len(file)]

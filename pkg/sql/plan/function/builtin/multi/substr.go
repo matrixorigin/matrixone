@@ -15,14 +15,84 @@
 package multi
 
 import (
-	"math"
-
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/substring"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
+
+// Cast, cast ...  sigh.
+func castConstAsInt64(vec *vector.Vector, idx int64) int64 {
+	switch vec.GetType().Oid {
+	case types.T_uint8:
+		return int64(vector.GetValueAt[uint8](vec, idx))
+	case types.T_uint16:
+		return int64(vector.GetValueAt[uint16](vec, idx))
+	case types.T_uint32:
+		return int64(vector.GetValueAt[uint32](vec, idx))
+	case types.T_uint64:
+		return int64(vector.GetValueAt[uint64](vec, idx))
+	case types.T_int8:
+		return int64(vector.GetValueAt[int8](vec, idx))
+	case types.T_int16:
+		return int64(vector.GetValueAt[int16](vec, idx))
+	case types.T_int32:
+		return int64(vector.GetValueAt[int32](vec, idx))
+	case types.T_int64:
+		return int64(vector.GetValueAt[int64](vec, idx))
+	case types.T_float32:
+		return int64(vector.GetValueAt[float32](vec, idx))
+	case types.T_float64:
+		return int64(vector.GetValueAt[float64](vec, idx))
+	default:
+		panic("castConstAsInt64 failed, unknown type")
+	}
+}
+
+func numSliceToI64[T types.BuiltinNumber](input []T) []int64 {
+	ret := make([]int64, len(input))
+	for i, v := range input {
+		ret[i] = int64(v)
+	}
+	return ret
+}
+
+func castTVecAsInt64(vec *vector.Vector) []int64 {
+	switch vec.GetType().Oid {
+	case types.T_uint8:
+		return numSliceToI64(vector.GetFixedVectorValues[uint8](vec))
+	case types.T_uint16:
+		return numSliceToI64(vector.GetFixedVectorValues[uint16](vec))
+	case types.T_uint32:
+		return numSliceToI64(vector.GetFixedVectorValues[uint32](vec))
+	case types.T_uint64:
+		return numSliceToI64(vector.GetFixedVectorValues[uint64](vec))
+	case types.T_int8:
+		return numSliceToI64(vector.GetFixedVectorValues[int8](vec))
+	case types.T_int16:
+		return numSliceToI64(vector.GetFixedVectorValues[int16](vec))
+	case types.T_int32:
+		return numSliceToI64(vector.GetFixedVectorValues[int32](vec))
+	case types.T_int64:
+		return numSliceToI64(vector.GetFixedVectorValues[int64](vec))
+	case types.T_float32:
+		return numSliceToI64(vector.GetFixedVectorValues[float32](vec))
+	case types.T_float64:
+		return numSliceToI64(vector.GetFixedVectorValues[float64](vec))
+	default:
+		panic("castTVecAsInt64 failed, unknown type")
+	}
+}
+
+// XXX Unless I mis read the code, substring simply does the following
+//				columnSrcCol := vector.MustStrCols(srcVector)
+//				columnStartCol := castTVecAsInt64(startVector)
+//				columnLengthCol := castTVecAsInt64(lengthVector)
+//				cs := []bool{inputVecs[0].IsScalar(), inputVecs[1].IsScalar(), inputVecs[2].IsScalar()}
+//				substring.SubstringDynamicOffsetBounded(columnSrcCol, results, columnStartCol, columnLengthCol, cs)
+//				return vector.NewWithStrings(srcVector.Typ, results, resultNsp, proc.Mp), nil
+// What are we doing here?
 
 func Substring(inputVecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	// get the number of substr function parameters
@@ -52,84 +122,77 @@ func substrSrcConst(inputVecs []*vector.Vector, proc *process.Process) (*vector.
 	var paramNum = len(inputVecs)
 	srcVector := inputVecs[0]
 	startVector := inputVecs[1]
-	columnSrcCol := vector.MustBytesCols(srcVector)
+
+	if startVector.IsScalarNull() {
+		return proc.AllocConstNullVector(srcVector.Typ, srcVector.Length()), nil
+	}
+
+	// XXX if this vector is const, then it is not expanded.  Really?
+	columnSrcCol := vector.MustStrCols(srcVector)
 
 	// request new memory space for result column
 	rows := calcResultVectorRows(inputVecs)
-	resultVec := proc.AllocScalarVector(srcVector.Typ)
-	results := &types.Bytes{
-		Data:    make([]byte, int64(len(columnSrcCol.Data)*rows)),
-		Offsets: make([]uint32, rows),
-		Lengths: make([]uint32, rows),
-	}
-	//set null row
-	//nulls.Or(inputVecs[0].Nsp, inputVecs[1].Nsp, resultVec.Nsp)
+	results := make([]string, rows)
+	resultNsp := nulls.NewWithSize(rows)
+
+	// set null row
 	if paramNum == 2 {
-		nulls.Or(inputVecs[0].Nsp, inputVecs[1].Nsp, resultVec.Nsp)
+		nulls.Or(inputVecs[0].Nsp, inputVecs[1].Nsp, resultNsp)
 	} else {
-		nulls.Or(inputVecs[0].Nsp, inputVecs[1].Nsp, resultVec.Nsp)
-		nulls.Or(inputVecs[2].Nsp, resultVec.Nsp, resultVec.Nsp)
+		nulls.Or(inputVecs[0].Nsp, inputVecs[1].Nsp, resultNsp)
+		nulls.Or(inputVecs[2].Nsp, resultNsp, resultNsp)
 	}
 
 	if startVector.IsScalar() {
 		if paramNum == 2 {
 			// get start constant value
-			startValue := castConstAsint64(startVector.Col, startVector.Typ.Oid, 0)
-
-			resultVec.IsConst = true
+			startValue := castConstAsInt64(startVector, 0)
 			if startValue > 0 {
-				vector.SetCol(resultVec, substring.SubstringFromLeftConstOffsetUnbounded(columnSrcCol, results, startValue-1))
+				substring.SubstringFromLeftConstOffsetUnbounded(columnSrcCol, results, startValue-1)
 			} else if startValue < 0 {
-				vector.SetCol(resultVec, substring.SubstringFromRightConstOffsetUnbounded(columnSrcCol, results, -startValue))
+				substring.SubstringFromRightConstOffsetUnbounded(columnSrcCol, results, -startValue)
 			} else {
-				vector.SetCol(resultVec, substring.SubstringFromZeroConstOffsetUnbounded(columnSrcCol, results))
+				substring.SubstringFromZeroConstOffsetUnbounded(columnSrcCol, results)
 			}
-			return resultVec, nil
+			return vector.NewConstString(srcVector.Typ, srcVector.Length(), results[0]), nil
 		} else { //has third parameter
 			lengthVector := inputVecs[2]
-			// if length parameter is constant
 			if lengthVector.IsScalar() {
-				resultVec.IsConst = true
 				// get start constant value
-				startValue := castConstAsint64(startVector.Col, startVector.Typ.Oid, 0)
-
+				startValue := castConstAsInt64(startVector, 0)
 				// get length constant value
-				lengthValue := castConstAsint64(lengthVector.Col, lengthVector.Typ.Oid, 0)
+				lengthValue := castConstAsInt64(lengthVector, 0)
 
 				if startValue > 0 {
-					vector.SetCol(resultVec, substring.SubstringFromLeftConstOffsetBounded(columnSrcCol, results, startValue-1, lengthValue))
+					substring.SubstringFromLeftConstOffsetBounded(columnSrcCol, results, startValue-1, lengthValue)
 				} else if startValue < 0 {
-					vector.SetCol(resultVec, substring.SubstringFromRightConstOffsetBounded(columnSrcCol, results, -startValue, lengthValue))
+					substring.SubstringFromRightConstOffsetBounded(columnSrcCol, results, -startValue, lengthValue)
 				} else {
-					vector.SetCol(resultVec, substring.SubstringFromZeroConstOffsetBounded(columnSrcCol, results))
+					substring.SubstringFromZeroConstOffsetBounded(columnSrcCol, results)
 				}
-				return resultVec, nil
+				return vector.NewConstString(srcVector.Typ, srcVector.Length(), results[0]), nil
 			} else {
-				columnStartCol := inputVecs[1].Col
-				columnStartType := inputVecs[1].Typ.Oid
-				columnLengthCol := inputVecs[2].Col
-				columnLengthType := inputVecs[2].Typ.Oid
+				columnStartCol := castTVecAsInt64(startVector)
+				columnLengthCol := castTVecAsInt64(lengthVector)
 				cs := []bool{inputVecs[0].IsScalar(), inputVecs[1].IsScalar(), inputVecs[2].IsScalar()}
-				vector.SetCol(resultVec, substring.SubstringDynamicOffsetBounded(columnSrcCol, results, columnStartCol, columnStartType, columnLengthCol, columnLengthType, cs))
-				return resultVec, nil
+				substring.SubstringDynamicOffsetBounded(columnSrcCol, results, columnStartCol, columnLengthCol, cs)
+				return vector.NewWithStrings(srcVector.Typ, results, resultNsp, proc.Mp()), nil
 			}
 		}
 	} else {
 		if paramNum == 2 {
 			//The pos column is a variable or an expression
-			columnStartCol := inputVecs[1].Col
-			columnStartType := inputVecs[1].Typ.Oid
-			vector.SetCol(resultVec, substring.SubstringDynamicOffsetUnbounded(columnSrcCol, results, columnStartCol, columnStartType))
-			return resultVec, nil
+			columnStartCol := castTVecAsInt64(inputVecs[1])
+			cs := []bool{inputVecs[0].IsScalar(), inputVecs[1].IsScalar()}
+			substring.SubstringDynamicOffsetUnbounded(columnSrcCol, results, columnStartCol, cs)
+			return vector.NewWithStrings(srcVector.Typ, results, resultNsp, proc.Mp()), nil
 		} else {
 			//Substring column with length parameter
-			columnStartCol := inputVecs[1].Col
-			columnStartType := inputVecs[1].Typ.Oid
-			columnLengthCol := inputVecs[2].Col
-			columnLengthType := inputVecs[2].Typ.Oid
+			columnStartCol := castTVecAsInt64(inputVecs[1])
+			columnLengthCol := castTVecAsInt64(inputVecs[2])
 			cs := []bool{inputVecs[0].IsScalar(), inputVecs[1].IsScalar(), inputVecs[2].IsScalar()}
-			vector.SetCol(resultVec, substring.SubstringDynamicOffsetBounded(columnSrcCol, results, columnStartCol, columnStartType, columnLengthCol, columnLengthType, cs))
-			return resultVec, nil
+			substring.SubstringDynamicOffsetBounded(columnSrcCol, results, columnStartCol, columnLengthCol, cs)
+			return vector.NewWithStrings(srcVector.Typ, results, resultNsp, proc.Mp()), nil
 		}
 	}
 }
@@ -139,83 +202,71 @@ func substrSrcCol(inputVecs []*vector.Vector, proc *process.Process) (*vector.Ve
 	var paramNum = len(inputVecs)
 	srcVector := inputVecs[0]
 	startVector := inputVecs[1]
-	columnSrcCol := srcVector.Col.(*types.Bytes)
+	columnSrcCol := vector.GetStrVectorValues(srcVector)
 
 	// request new memory space for result column
-	resultVec, err := proc.AllocVector(srcVector.Typ, int64(len(columnSrcCol.Data)))
-	if err != nil {
-		return nil, err
-	}
-	results := &types.Bytes{
-		Data:    resultVec.Data,
-		Offsets: make([]uint32, len(columnSrcCol.Offsets)),
-		Lengths: make([]uint32, len(columnSrcCol.Lengths)),
-	}
+	results := make([]string, len(columnSrcCol))
+
 	//set null row
-	//nulls.Set(resultVec.Nsp, inputVecs[0].Nsp)
+	resultNsp := nulls.NewWithSize(len(results))
 	if paramNum == 2 {
-		nulls.Or(inputVecs[0].Nsp, inputVecs[1].Nsp, resultVec.Nsp)
+		nulls.Or(inputVecs[0].Nsp, inputVecs[1].Nsp, resultNsp)
 	} else {
-		nulls.Or(inputVecs[0].Nsp, inputVecs[1].Nsp, resultVec.Nsp)
-		nulls.Or(inputVecs[2].Nsp, resultVec.Nsp, resultVec.Nsp)
+		nulls.Or(inputVecs[0].Nsp, inputVecs[1].Nsp, resultNsp)
+		nulls.Or(inputVecs[2].Nsp, resultNsp, resultNsp)
 	}
 
 	if startVector.IsScalar() {
 		if paramNum == 2 {
 			// get start constant value
-			startValue := castConstAsint64(startVector.Col, startVector.Typ.Oid, 0)
+			startValue := castConstAsInt64(startVector, 0)
 			if startValue > 0 {
-				vector.SetCol(resultVec, substring.SubstringFromLeftConstOffsetUnbounded(columnSrcCol, results, startValue-1))
+				substring.SubstringFromLeftConstOffsetUnbounded(columnSrcCol, results, startValue-1)
 			} else if startValue < 0 {
-				vector.SetCol(resultVec, substring.SubstringFromRightConstOffsetUnbounded(columnSrcCol, results, -startValue))
+				substring.SubstringFromRightConstOffsetUnbounded(columnSrcCol, results, -startValue)
 			} else {
 				//startValue == 0
-				vector.SetCol(resultVec, substring.SubstringFromZeroConstOffsetUnbounded(columnSrcCol, results))
+				substring.SubstringFromZeroConstOffsetUnbounded(columnSrcCol, results)
 			}
-			return resultVec, nil
+			return vector.NewWithStrings(srcVector.Typ, results, resultNsp, proc.Mp()), nil
 		} else { //has third parameter
 			lengthVector := inputVecs[2]
 			// if length parameter is constant
 			if lengthVector.IsScalar() {
 				// get start constant value
-				startValue := castConstAsint64(startVector.Col, startVector.Typ.Oid, 0)
+				startValue := castConstAsInt64(startVector, 0)
 				// get length constant value
-				lengthValue := castConstAsint64(lengthVector.Col, lengthVector.Typ.Oid, 0)
+				lengthValue := castConstAsInt64(lengthVector, 0)
 				if startValue > 0 {
-					vector.SetCol(resultVec, substring.SubstringFromLeftConstOffsetBounded(columnSrcCol, results, startValue-1, lengthValue))
+					substring.SubstringFromLeftConstOffsetBounded(columnSrcCol, results, startValue-1, lengthValue)
 				} else if startValue < 0 {
-					vector.SetCol(resultVec, substring.SubstringFromRightConstOffsetBounded(columnSrcCol, results, -startValue, lengthValue))
+					substring.SubstringFromRightConstOffsetBounded(columnSrcCol, results, -startValue, lengthValue)
 				} else {
 					//startValue == 0
-					vector.SetCol(resultVec, substring.SubstringFromZeroConstOffsetBounded(columnSrcCol, results))
+					substring.SubstringFromZeroConstOffsetBounded(columnSrcCol, results)
 				}
-				return resultVec, nil
+				return vector.NewWithStrings(srcVector.Typ, results, resultNsp, proc.Mp()), nil
 			} else {
-				columnStartCol := inputVecs[1].Col
-				columnStartType := inputVecs[1].Typ.Oid
-				columnLengthCol := inputVecs[2].Col
-				columnLengthType := inputVecs[2].Typ.Oid
+				columnStartCol := castTVecAsInt64(inputVecs[1])
+				columnLengthCol := castTVecAsInt64(inputVecs[2])
 				cs := []bool{inputVecs[0].IsScalar(), inputVecs[1].IsScalar(), inputVecs[2].IsScalar()}
-				vector.SetCol(resultVec, substring.SubstringDynamicOffsetBounded(columnSrcCol, results, columnStartCol, columnStartType, columnLengthCol, columnLengthType, cs))
-				return resultVec, nil
+				substring.SubstringDynamicOffsetBounded(columnSrcCol, results, columnStartCol, columnLengthCol, cs)
+				return vector.NewWithStrings(srcVector.Typ, results, resultNsp, proc.Mp()), nil
 			}
 		}
 	} else {
 		if paramNum == 2 {
 			//The pos column is a variable or an expression
-			columnStartCol := inputVecs[1].Col
-			columnStartType := inputVecs[1].Typ.Oid
-			vector.SetCol(resultVec, substring.SubstringDynamicOffsetUnbounded(columnSrcCol, results, columnStartCol, columnStartType))
-			return resultVec, nil
+			columnStartCol := castTVecAsInt64(inputVecs[1])
+			cs := []bool{inputVecs[0].IsScalar(), inputVecs[1].IsScalar()}
+			substring.SubstringDynamicOffsetUnbounded(columnSrcCol, results, columnStartCol, cs)
+			return vector.NewWithStrings(srcVector.Typ, results, resultNsp, proc.Mp()), nil
 		} else {
-			//Substring column with length parameter
-			columnStartCol := inputVecs[1].Col
-			columnStartType := inputVecs[1].Typ.Oid
-			columnLengthCol := inputVecs[2].Col
-			columnLengthType := inputVecs[2].Typ.Oid
+			columnStartCol := castTVecAsInt64(inputVecs[1])
+			columnLengthCol := castTVecAsInt64(inputVecs[2])
 			cs := []bool{inputVecs[0].IsScalar(), inputVecs[1].IsScalar(), inputVecs[2].IsScalar()}
-			vector.SetCol(resultVec, substring.SubstringDynamicOffsetBounded(columnSrcCol, results, columnStartCol, columnStartType, columnLengthCol, columnLengthType, cs))
-			return resultVec, nil
+			substring.SubstringDynamicOffsetBounded(columnSrcCol, results, columnStartCol, columnLengthCol, cs)
+			return vector.NewWithStrings(srcVector.Typ, results, resultNsp, proc.Mp()), nil
 		}
 	}
 }
@@ -226,50 +277,13 @@ func calcResultVectorRows(inputVecs []*vector.Vector) int {
 		if inputVecs[0].IsScalar() && inputVecs[1].IsScalar() {
 			return 1
 		} else {
-			return inputVecs[0].Length
+			return vector.Length(inputVecs[0])
 		}
 	} else {
 		if inputVecs[0].IsScalar() && inputVecs[1].IsScalar() && inputVecs[2].IsScalar() {
 			return 1
 		} else {
-			return inputVecs[0].Length
+			return vector.Length(inputVecs[0])
 		}
 	}
-}
-
-func castConstAsint64(srcColumn interface{}, columnType types.T, idx int) int64 {
-	var dstValue int64
-	switch columnType {
-	case types.T_uint8:
-		dstValue = int64(srcColumn.([]uint8)[idx])
-	case types.T_uint16:
-		dstValue = int64(srcColumn.([]uint16)[idx])
-	case types.T_uint32:
-		dstValue = int64(srcColumn.([]uint32)[idx])
-	case types.T_uint64:
-		dstValue = int64(srcColumn.([]uint64)[idx])
-		if srcColumn.([]uint64)[idx] > math.MaxInt64 {
-			dstValue = math.MaxInt64
-		}
-	case types.T_int8:
-		dstValue = int64(srcColumn.([]int8)[idx])
-	case types.T_int16:
-		dstValue = int64(srcColumn.([]int16)[idx])
-	case types.T_int32:
-		dstValue = int64(srcColumn.([]int32)[idx])
-	case types.T_int64:
-		dstValue = srcColumn.([]int64)[idx]
-	case types.T_float64:
-		fval := srcColumn.([]float64)[idx]
-		if fval > float64(math.MaxInt64) {
-			dstValue = math.MaxInt64
-		} else if fval < float64(math.MinInt64) {
-			dstValue = math.MinInt64
-		} else {
-			dstValue = int64(fval)
-		}
-	default:
-		dstValue = int64(0)
-	}
-	return dstValue
 }

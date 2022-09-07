@@ -150,8 +150,13 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (
 			},
 		}, nil
 	case *tree.MaxValue:
-		err = errors.New("", fmt.Sprintf("expr max'%v' is not supported now", exprImpl))
-
+		return &Expr{
+			Expr: &plan.Expr_Max{
+				Max: &MaxValue{
+					Value: "maxvalue",
+				},
+			},
+		}, nil
 	case *tree.VarExpr:
 		expr, err = b.baseBindVar(exprImpl, depth, isRoot)
 
@@ -388,7 +393,7 @@ func (b *baseBinder) bindUnaryExpr(astExpr *tree.UnaryExpr, depth int32, isRoot 
 	case tree.UNARY_PLUS:
 		return b.bindFuncExprImplByAstExpr("unary_plus", []tree.Expr{astExpr.Expr}, depth)
 	case tree.UNARY_TILDE:
-		return nil, errors.New("", fmt.Sprintf("'%v' is not supported now", astExpr))
+		return b.bindFuncExprImplByAstExpr("unary_tilde", []tree.Expr{astExpr.Expr}, depth)
 	case tree.UNARY_MARK:
 		return nil, errors.New("", fmt.Sprintf("'%v' is not supported now", astExpr))
 	}
@@ -415,6 +420,10 @@ func (b *baseBinder) bindBinaryExpr(astExpr *tree.BinaryExpr, depth int32, isRoo
 		return b.bindFuncExprImplByAstExpr("|", []tree.Expr{astExpr.Left, astExpr.Right}, depth)
 	case tree.BIT_AND:
 		return b.bindFuncExprImplByAstExpr("&", []tree.Expr{astExpr.Left, astExpr.Right}, depth)
+	case tree.LEFT_SHIFT:
+		return b.bindFuncExprImplByAstExpr("<<", []tree.Expr{astExpr.Left, astExpr.Right}, depth)
+	case tree.RIGHT_SHIFT:
+		return b.bindFuncExprImplByAstExpr(">>", []tree.Expr{astExpr.Left, astExpr.Right}, depth)
 	}
 	return nil, errors.New("", fmt.Sprintf("'%v' operator is not supported now", astExpr.Op.ToString()))
 }
@@ -751,9 +760,14 @@ func bindFuncExprImplByPlanExpr(name string, args []*Expr) (*plan.Expr, error) {
 			name = "date_sub"
 		}
 	case "+":
-		// rewrite "date '2001' + interval '1 day'" to date_add(date '2001', 1, day(unit))
 		if len(args) != 2 {
 			return nil, errors.New("", "operator function need two args")
+		}
+		if isNullExpr(args[0]) {
+			return args[0], nil
+		}
+		if isNullExpr(args[1]) {
+			return args[1], nil
 		}
 		if args[0].Typ.Id == int32(types.T_date) && args[1].Typ.Id == int32(types.T_interval) {
 			name = "date_add"
@@ -780,6 +794,15 @@ func bindFuncExprImplByPlanExpr(name string, args []*Expr) (*plan.Expr, error) {
 			return nil, err
 		}
 	case "-":
+		if len(args) != 2 {
+			return nil, errors.New("", "operator function need two args")
+		}
+		if isNullExpr(args[0]) {
+			return args[0], nil
+		}
+		if isNullExpr(args[1]) {
+			return args[1], nil
+		}
 		// rewrite "date '2001' - interval '1 day'" to date_sub(date '2001', 1, day(unit))
 		if args[0].Typ.Id == int32(types.T_date) && args[1].Typ.Id == int32(types.T_interval) {
 			name = "date_sub"
@@ -794,6 +817,16 @@ func bindFuncExprImplByPlanExpr(name string, args []*Expr) (*plan.Expr, error) {
 		if err != nil {
 			return nil, err
 		}
+	case "*", "/", "%":
+		if len(args) != 2 {
+			return nil, errors.New("", "operator function need two args")
+		}
+		if isNullExpr(args[0]) {
+			return args[0], nil
+		}
+		if isNullExpr(args[1]) {
+			return args[1], nil
+		}
 	case "unary_minus":
 		if args[0].Typ.Id == int32(types.T_uint64) {
 			args[0], err = appendCastBeforeExpr(args[0], &plan.Type{
@@ -804,7 +837,7 @@ func bindFuncExprImplByPlanExpr(name string, args []*Expr) (*plan.Expr, error) {
 				return nil, err
 			}
 		}
-	case "variance", "oct", "stddev_pop", "std", "bit_and", "bit_or", "bit_xor":
+	case "oct", "bit_and", "bit_or", "bit_xor":
 		if args[0].Typ.Id == int32(types.T_decimal128) || args[0].Typ.Id == int32(types.T_decimal64) {
 			args[0], err = appendCastBeforeExpr(args[0], &plan.Type{
 				Id:       int32(types.T_float64),
@@ -821,6 +854,16 @@ func bindFuncExprImplByPlanExpr(name string, args []*Expr) (*plan.Expr, error) {
 		}
 		if args[1].Typ.Id == int32(types.T_any) {
 			args[1].Typ.Id = int32(types.T_varchar)
+		}
+	// rewrite from_unixtime(a, b) to date_format(from_unixtime(a), b)
+	case "from_unixtime":
+		if len(args) == 2 {
+			newExpr, err := bindFuncExprImplByPlanExpr("from_unixtime", []*plan.Expr{args[0]})
+			if err != nil {
+				return nil, err
+			}
+			name = "date_format"
+			args = []*plan.Expr{newExpr, args[1]}
 		}
 	}
 
@@ -1022,9 +1065,6 @@ func (b *baseBinder) bindNumVal(astExpr *tree.NumVal, typ *Type) (*Expr, error) 
 	case tree.P_bit:
 		return returnDecimalExpr(astExpr.String())
 	case tree.P_char:
-		if typ != nil && typ.Id != int32(types.T_char) && typ.Id != int32(types.T_varchar) {
-			return appendCastBeforeExpr(getStringExpr(astExpr.String()), typ)
-		}
 		expr := getStringExpr(astExpr.String())
 		return expr, nil
 	default:

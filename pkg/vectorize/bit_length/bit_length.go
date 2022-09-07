@@ -14,21 +14,9 @@
 
 package bit_length
 
-import (
-	"github.com/matrixorigin/matrixone/pkg/container/types"
-)
-
-var (
-	StrBitLength func(*types.Bytes, []int64) []int64
-)
-
-func init() {
-	StrBitLength = strBitLength
-}
-
-func strBitLength(xs *types.Bytes, rs []int64) []int64 {
-	for i, n := range xs.Lengths {
-		rs[i] = int64(n) * 8
+func StrBitLength(xs [][]byte, rs []int64) []int64 {
+	for i, n := range xs {
+		rs[i] = int64(len(n) * 8)
 	}
 	return rs
 }

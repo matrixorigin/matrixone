@@ -85,6 +85,7 @@ const (
 	SystemRelAttr_Persistence = "relpersistence"
 	SystemRelAttr_Kind        = "relkind"
 	SystemRelAttr_Comment     = "rel_comment"
+	SystemRelAttr_Partition   = "rel_partition"
 	SystemRelAttr_CreateSQL   = "rel_createsql"
 	SystemRelAttr_Owner       = "owner"
 	SystemRelAttr_Creator     = "creator"
@@ -130,9 +131,8 @@ const (
 func init() {
 	var err error
 	PhyAddrColumnType = types.Type{
-		Oid:   types.T_decimal128,
-		Size:  16,
-		Width: 128,
+		Oid:  types.T_Rowid,
+		Size: 16,
 	}
 
 	tu32 := types.Type{
@@ -250,6 +250,14 @@ func init() {
 		Width: 100,
 	}
 	if err = SystemTableSchema.AppendCol(SystemRelAttr_Comment, t); err != nil {
+		panic(err)
+	}
+	t = types.Type{
+		Oid:   types.T_varchar,
+		Size:  24,
+		Width: 65535,
+	}
+	if err = SystemTableSchema.AppendCol(SystemRelAttr_Partition, t); err != nil {
 		panic(err)
 	}
 	t = types.Type{

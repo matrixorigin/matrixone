@@ -23,36 +23,37 @@ const (
 
 // All function IDs
 const (
-	EQUAL           = iota // =
-	NOT_EQUAL              // <>
-	GREAT_THAN             // >
-	GREAT_EQUAL            // >=
-	LESS_THAN              // <
-	LESS_EQUAL             // <=
-	BETWEEN                // BETWEEN
-	UNARY_PLUS             // UNARY_PLUS
-	UNARY_MINUS            // UNARY_MINUS
-	PLUS                   // +
-	MINUS                  // -
-	MULTI                  // *
-	DIV                    // /
-	INTEGER_DIV            // Div
-	BIT_SHIFT_LEFT         // <<
-	BIT_SHIFT_RIGHT        // >>
-	MOD                    // %
-	CONCAT                 // ||
-	AND                    // AND
-	OR                     // OR
-	XOR                    // XOR
-	NOT                    // NOT
-	CAST                   // CAST
-	IS                     //IS
-	ISNOT                  //ISNOT
-	ISNULL                 //ISNULL
-	ISNOTNULL              //ISNOTNULL
-	OP_BIT_AND             // &
-	OP_BIT_OR              // |
-	OP_BIT_XOR             // ^
+	EQUAL              = iota // =
+	NOT_EQUAL                 // <>
+	GREAT_THAN                // >
+	GREAT_EQUAL               // >=
+	LESS_THAN                 // <
+	LESS_EQUAL                // <=
+	BETWEEN                   // BETWEEN
+	UNARY_PLUS                // UNARY_PLUS +
+	UNARY_MINUS               // UNARY_MINUS -
+	UNARY_TILDE               // UNARY_TILDE ~
+	PLUS                      // +
+	MINUS                     // -
+	MULTI                     // *
+	DIV                       // /
+	INTEGER_DIV               // Div
+	MOD                       // %
+	CONCAT                    // ||
+	AND                       // AND
+	OR                        // OR
+	XOR                       // XOR
+	NOT                       // NOT
+	CAST                      // CAST
+	IS                        //IS
+	ISNOT                     //ISNOT
+	ISNULL                    //ISNULL
+	ISNOTNULL                 //ISNOTNULL
+	OP_BIT_AND                // &
+	OP_BIT_OR                 // |
+	OP_BIT_XOR                // ^
+	OP_BIT_SHIFT_LEFT         // <<
+	OP_BIT_SHIFT_RIGHT        // >>
 
 	ABS            // ABS
 	ACOS           // ACOS
@@ -267,6 +268,7 @@ var functionIdRegister = map[string]int32{
 	"mod":         MOD,
 	"unary_plus":  UNARY_PLUS,
 	"unary_minus": UNARY_MINUS,
+	"unary_tilde": UNARY_TILDE,
 	"case":        CASE,
 	"coalesce":    COALESCE,
 	"cast":        CAST,
@@ -281,6 +283,8 @@ var functionIdRegister = map[string]int32{
 	"&":           OP_BIT_AND,
 	"|":           OP_BIT_OR,
 	"^":           OP_BIT_XOR,
+	"<<":          OP_BIT_SHIFT_LEFT,
+	">>":          OP_BIT_SHIFT_RIGHT,
 	// aggregate
 	"max":                   MAX,
 	"min":                   MIN,

@@ -23,10 +23,10 @@ type Stddevpop[T1 types.Floats | types.Ints | types.UInts] struct {
 	variance *Variance.Variance[T1]
 }
 
-type Stddevpop2 struct {
-	variance *Variance.Variance2
+type StdD64 struct {
+	variance *Variance.VD64
 }
 
-type Stddevpop3 struct {
-	variance *Variance.Variance3
+type StdD128 struct {
+	variance *Variance.VD128
 }

@@ -760,11 +760,6 @@ func (th *TxnHandler) GetStorage() engine.Engine {
 	return th.storage
 }
 
-func (th *TxnHandler) IsTaeEngine() bool {
-	_, ok := th.storage.(moengine.TxnEngine)
-	return ok
-}
-
 func (th *TxnHandler) GetTxn() TxnOperator {
 	err := th.ses.TxnStart()
 	if err != nil {
@@ -894,9 +889,10 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string) (*plan2.
 					Precision: attr.Attr.Type.Precision,
 					Scale:     attr.Attr.Type.Scale,
 				},
-				Primary: attr.Attr.Primary,
-				Default: attr.Attr.Default,
-				Comment: attr.Attr.Comment,
+				Primary:       attr.Attr.Primary,
+				Default:       attr.Attr.Default,
+				Comment:       attr.Attr.Comment,
+				AutoIncrement: attr.Attr.AutoIncrement,
 			})
 		} else if pro, ok := def.(*engine.PropertiesDef); ok {
 			for _, p := range pro.Properties {
@@ -924,6 +920,17 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string) (*plan2.
 			properties = append(properties, &plan2.Property{
 				Key:   catalog.SystemRelAttr_Comment,
 				Value: commnetDef.Comment,
+			})
+		} else if partitionDef, ok := def.(*engine.PartitionDef); ok {
+			p := &plan2.PartitionInfo{}
+			err = p.UnMarshalPartitionInfo(([]byte)(partitionDef.Partition))
+			if err != nil {
+				return nil, nil
+			}
+			defs = append(defs, &plan2.TableDefType{
+				Def: &plan2.TableDef_DefType_Partition{
+					Partition: p,
+				},
 			})
 		}
 	}

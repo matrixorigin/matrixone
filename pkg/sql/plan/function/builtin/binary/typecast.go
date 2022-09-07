@@ -138,13 +138,13 @@ var (
 	BytesToInt64   = BytesToInt[int64]
 	Int64ToBytes   = IntToBytes[int64]
 	BytesToUint8   = BytesToUint[uint8]
-	Uint8ToBytes   = IntToBytes[uint8]
+	Uint8ToBytes   = UintToBytes[uint8]
 	BytesToUint16  = BytesToUint[uint16]
-	Uint16ToBytes  = IntToBytes[uint16]
+	Uint16ToBytes  = UintToBytes[uint16]
 	BytesToUint32  = BytesToUint[uint32]
-	Uint32ToBytes  = IntToBytes[uint32]
+	Uint32ToBytes  = UintToBytes[uint32]
 	BytesToUint64  = BytesToUint[uint64]
-	Uint64ToBytes  = IntToBytes[uint64]
+	Uint64ToBytes  = UintToBytes[uint64]
 	BytesToFloat32 = BytesToFloat[float32]
 	Float32ToBytes = FloatToBytes[float32]
 	BytesToFloat64 = BytesToFloat[float64]
@@ -166,8 +166,8 @@ var (
 	BoolToBytes         = boolToBytes
 	DateToBytes         = dateToBytes
 	DateToDatetime      = dateToDateTime
-	DateTimeToBytes     = datetimeToBytes
-	DateTimeToDate      = datetimeToDate
+	DatetimeToBytes     = datetimeToBytes
+	DatetimeToDate      = datetimeToDate
 )
 
 func NumericToNumeric[T1, T2 constraints.Integer | constraints.Float](xs []T1, rs []T2) ([]T2, error) {
@@ -223,11 +223,9 @@ func int64ToUint64(xs []int64, rs []uint64) ([]uint64, error) {
 	return rs, nil
 }
 
-func BytesToInt[T constraints.Signed](xs *types.Bytes, rs []T) ([]T, error) {
+func BytesToInt[T constraints.Signed](xs []string, rs []T) ([]T, error) {
 	var bitSize = int(unsafe.Sizeof(T(0))) * 8
-
-	for i, o := range xs.Offsets {
-		s := string(xs.Data[o : o+xs.Lengths[i]])
+	for i, s := range xs {
 		val, err := strconv.ParseInt(strings.TrimSpace(s), 10, bitSize)
 		if err != nil {
 			if strings.Contains(err.Error(), "value out of range") {
@@ -240,11 +238,10 @@ func BytesToInt[T constraints.Signed](xs *types.Bytes, rs []T) ([]T, error) {
 	return rs, nil
 }
 
-func BytesToUint[T constraints.Unsigned](xs *types.Bytes, rs []T) ([]T, error) {
+func BytesToUint[T constraints.Unsigned](xs []string, rs []T) ([]T, error) {
 	var bitSize = int(unsafe.Sizeof(T(0))) * 8
 
-	for i, o := range xs.Offsets {
-		s := string(xs.Data[o : o+xs.Lengths[i]])
+	for i, s := range xs {
 		val, err := strconv.ParseUint(strings.TrimSpace(s), 10, bitSize)
 		if err != nil {
 			if strings.Contains(err.Error(), "value out of range") {
@@ -257,59 +254,40 @@ func BytesToUint[T constraints.Unsigned](xs *types.Bytes, rs []T) ([]T, error) {
 	return rs, nil
 }
 
-func IntToBytes[T constraints.Integer](xs []T, rs *types.Bytes) (*types.Bytes, error) {
-	oldLen := uint32(0)
-	for _, x := range xs {
-		rs.Data = strconv.AppendInt(rs.Data, int64(x), 10)
-		newLen := uint32(len(rs.Data))
-		rs.Offsets = append(rs.Offsets, oldLen)
-		rs.Lengths = append(rs.Lengths, newLen-oldLen)
-		oldLen = newLen
+// XXX Potentially we can do much better with types.Varlena
+func IntToBytes[T constraints.Integer](xs []T, rs []string) ([]string, error) {
+	for i, x := range xs {
+		rs[i] = strconv.FormatInt(int64(x), 10)
 	}
 	return rs, nil
 }
 
-func UintToBytes[T constraints.Integer](xs []T, rs *types.Bytes) (*types.Bytes, error) {
-	oldLen := uint32(0)
-	for _, x := range xs {
-		rs.Data = strconv.AppendUint(rs.Data, uint64(x), 10)
-		newLen := uint32(len(rs.Data))
-		rs.Offsets = append(rs.Offsets, oldLen)
-		rs.Lengths = append(rs.Lengths, newLen-oldLen)
-		oldLen = newLen
+// XXX Potentially we can do much better with types.Varlena
+func UintToBytes[T constraints.Integer](xs []T, rs []string) ([]string, error) {
+	for i, x := range xs {
+		rs[i] = strconv.FormatUint(uint64(x), 10)
 	}
 	return rs, nil
 }
 
-func Decimal64ToBytes(xs []types.Decimal64, rs *types.Bytes, scale int32) (*types.Bytes, error) {
-	oldLen := uint32(0)
-	for _, x := range xs {
-		rs.Data = append(rs.Data, x.ToStringWithScale(scale)...)
-		newLen := uint32(len(rs.Data))
-		rs.Offsets = append(rs.Offsets, oldLen)
-		rs.Lengths = append(rs.Lengths, newLen-oldLen)
-		oldLen = newLen
+func Decimal64ToBytes(xs []types.Decimal64, rs []string, scale int32) ([]string, error) {
+	for i, x := range xs {
+		rs[i] = x.ToStringWithScale(scale)
 	}
 	return rs, nil
 }
 
-func Decimal128ToBytes(xs []types.Decimal128, rs *types.Bytes, scale int32) (*types.Bytes, error) {
-	oldLen := uint32(0)
-	for _, x := range xs {
-		rs.Data = append(rs.Data, x.ToStringWithScale(scale)...)
-		newLen := uint32(len(rs.Data))
-		rs.Offsets = append(rs.Offsets, oldLen)
-		rs.Lengths = append(rs.Lengths, newLen-oldLen)
-		oldLen = newLen
+func Decimal128ToBytes(xs []types.Decimal128, rs []string, scale int32) ([]string, error) {
+	for i, x := range xs {
+		rs[i] = x.ToStringWithScale(scale)
 	}
 	return rs, nil
 }
 
-func BytesToFloat[T constraints.Float](xs *types.Bytes, rs []T, isEmptyStringOrNull ...[]int) ([]T, error) {
+func BytesToFloat[T constraints.Float](xs []string, rs []T, isEmptyStringOrNull ...[]int) ([]T, error) {
 	var bitSize = int(unsafe.Sizeof(T(0))) * 8
 	usedEmptyStringOrNull := len(isEmptyStringOrNull) > 0
-	for i, o := range xs.Offsets {
-		s := string(xs.Data[o : o+xs.Lengths[i]])
+	for i, s := range xs {
 		val, err := strconv.ParseFloat(s, bitSize)
 		if err != nil {
 			if usedEmptyStringOrNull {
@@ -327,16 +305,10 @@ func BytesToFloat[T constraints.Float](xs *types.Bytes, rs []T, isEmptyStringOrN
 	return rs, nil
 }
 
-func FloatToBytes[T constraints.Float](xs []T, rs *types.Bytes) (*types.Bytes, error) {
+func FloatToBytes[T constraints.Float](xs []T, rs []string) ([]string, error) {
 	var bitSize = int(unsafe.Sizeof(T(0))) * 8
-
-	oldLen := uint32(0)
-	for _, x := range xs {
-		rs.Data = strconv.AppendFloat(rs.Data, float64(x), 'G', -1, bitSize)
-		newLen := uint32(len(rs.Data))
-		rs.Offsets = append(rs.Offsets, oldLen)
-		rs.Lengths = append(rs.Lengths, newLen-oldLen)
-		oldLen = newLen
+	for i, x := range xs {
+		rs[i] = strconv.FormatFloat(float64(x), 'G', -1, bitSize)
 	}
 	return rs, nil
 }
@@ -373,26 +345,16 @@ func timestampToDatetime(loc *time.Location, xs []types.Timestamp, rs []types.Da
 	return types.TimestampToDatetime(loc, xs, rs)
 }
 
-func timestampToVarchar(loc *time.Location, xs []types.Timestamp, rs *types.Bytes, precision int32) (*types.Bytes, error) {
-	oldLen := uint32(0)
+func timestampToVarchar(loc *time.Location, xs []types.Timestamp, rs []string, precision int32) ([]string, error) {
 	for i, x := range xs {
-		rs.Data = append(rs.Data, []byte(x.String2(loc, precision))...)
-		newLen := uint32(len(rs.Data))
-		rs.Offsets[i] = oldLen
-		rs.Lengths[i] = newLen - oldLen
-		oldLen = newLen
+		rs[i] = x.String2(loc, precision)
 	}
 	return rs, nil
 }
 
-func boolToBytes(xs []bool, rs *types.Bytes) (*types.Bytes, error) {
-	oldLen := uint32(0)
-	for _, x := range xs {
-		rs.Data = types.AppendBoolToByteArray(x, rs.Data)
-		newLen := uint32(len(rs.Data))
-		rs.Offsets = append(rs.Offsets, oldLen)
-		rs.Lengths = append(rs.Lengths, newLen-oldLen)
-		oldLen = newLen
+func boolToBytes(xs []bool, rs []string) ([]string, error) {
+	for i, x := range xs {
+		rs[i] = types.BoolToIntString(x)
 	}
 	return rs, nil
 }
@@ -404,14 +366,9 @@ func dateToDateTime(xs []types.Date, rs []types.Datetime) ([]types.Datetime, err
 	return rs, nil
 }
 
-func dateToBytes(xs []types.Date, rs *types.Bytes) (*types.Bytes, error) {
-	oldLen := uint32(0)
-	for _, x := range xs {
-		rs.Data = append(rs.Data, []byte(x.String())...)
-		newLen := uint32(len(rs.Data))
-		rs.Offsets = append(rs.Offsets, oldLen)
-		rs.Lengths = append(rs.Lengths, newLen-oldLen)
-		oldLen = newLen
+func dateToBytes(xs []types.Date, rs []string) ([]string, error) {
+	for i, x := range xs {
+		rs[i] = x.String()
 	}
 	return rs, nil
 }
@@ -423,14 +380,9 @@ func datetimeToDate(xs []types.Datetime, rs []types.Date) ([]types.Date, error) 
 	return rs, nil
 }
 
-func datetimeToBytes(xs []types.Datetime, rs *types.Bytes, precision int32) (*types.Bytes, error) {
-	oldLen := uint32(0)
-	for _, x := range xs {
-		rs.Data = append(rs.Data, []byte(x.String2(precision))...)
-		newLen := uint32(len(rs.Data))
-		rs.Offsets = append(rs.Offsets, oldLen)
-		rs.Lengths = append(rs.Lengths, newLen-oldLen)
-		oldLen = newLen
+func datetimeToBytes(xs []types.Datetime, rs []string, precision int32) ([]string, error) {
+	for i, x := range xs {
+		rs[i] = x.String2(precision)
 	}
 	return rs, nil
 }
@@ -618,6 +570,17 @@ func NumericToBool[T constraints.Integer | constraints.Float](xs []T, rs []bool)
 			rs[i] = true
 		} else {
 			return nil, moerr.NewError(moerr.INVALID_ARGUMENT, fmt.Sprintf("Can't cast '%v' as boolean type.", x))
+		}
+	}
+	return rs, nil
+}
+
+func BoolToNumeric[T constraints.Integer | constraints.Float](xs []bool, rs []T) ([]T, error) {
+	for i, x := range xs {
+		if x {
+			rs[i] = 1
+		} else {
+			rs[i] = 0
 		}
 	}
 	return rs, nil

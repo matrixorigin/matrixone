@@ -46,7 +46,7 @@ type bufferHolder struct {
 	// trigger handle Reminder strategy
 	trigger *time.Timer
 
-	mux      sync.RWMutex
+	mux      sync.Mutex
 	readonly uint32
 
 	batch *any
@@ -83,16 +83,16 @@ func newBufferHolder(name batchpipe.HasName, impl batchpipe.PipeImpl[batchpipe.H
 	return b
 }
 
-// Add directly call buffer.Add(), while bufferHolder is NOT readonly
+// Add call buffer.Add(), while bufferHolder is NOT readonly
 func (b *bufferHolder) Add(item batchpipe.HasName) {
-	b.mux.RLock()
+	b.mux.Lock()
 	for b.readonly == READONLY {
-		b.mux.RUnlock()
+		b.mux.Unlock()
 		time.Sleep(time.Millisecond)
-		b.mux.RLock()
+		b.mux.Lock()
 	}
-	defer b.mux.RUnlock()
 	b.buffer.Add(item)
+	b.mux.Unlock()
 	if b.buffer.ShouldFlush() {
 		b.signal(b)
 	}
@@ -108,8 +108,11 @@ func (b *bufferHolder) StopAndGetBatch(buf *bytes.Buffer) bool {
 		return false
 	}
 	b.trigger.Stop()
-	batch := b.buffer.GetBatch(buf)
-	b.batch = &batch
+	if batch := b.buffer.GetBatch(buf); batch == nil {
+		b.batch = nil
+	} else {
+		b.batch = &batch
+	}
 	b.readonly = READONLY
 	return true
 }
@@ -132,7 +135,7 @@ func (b *bufferHolder) FlushAndReset() bool {
 		var flush = b.impl.NewItemBatchHandler(context.TODO())
 		flush(*b.batch)
 	} else {
-		logutil.Debugf("batch is nil")
+		logutil.Debugf("batch is nil, item: %s", b.name)
 	}
 	b.resetTrigger()
 	b.buffer.Reset()
@@ -254,7 +257,7 @@ loop:
 	logutil.Debugf("doCollect %dth: Done.", idx)
 }
 
-func awakeBuffer(c *MOCollector) func(holder *bufferHolder) {
+var awakeBuffer = func(c *MOCollector) func(holder *bufferHolder) {
 	return func(holder *bufferHolder) {
 		c.awakeGenerate <- holder
 	}
@@ -324,9 +327,11 @@ func (c *MOCollector) Stop(graceful bool) error {
 			logutil.Debug(fmt.Sprintf("doCollect left %d job", len(c.awakeCollect)), logutil.NoReportFiled())
 			time.Sleep(250 * time.Second)
 		}
+		c.mux.Lock()
 		for _, buffer := range c.buffers {
 			_ = buffer.StopTrigger()
 		}
+		c.mux.Unlock()
 		close(c.stopCh)
 		c.stopWait.Wait()
 		for _, buffer := range c.buffers {

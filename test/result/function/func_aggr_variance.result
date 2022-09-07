@@ -31,14 +31,11 @@ select variance(h) from t1;
 variance(h)
 2254.078699999999
 select variance(i) from t1;
-variance(i)
-1.8517721999997623E7
+Aggregate function of 'variance' do not support implicit conversions for param of [DATE]
 select variance(k) from t1;
-variance(k)
-7.18750000000022E20
+Aggregate function of 'variance' do not support implicit conversions for param of [DATETIME]
 select variance(l) from t1;
-variance(l)
-1.2268750007375E22
+Aggregate function of 'variance' do not support implicit conversions for param of [TIMESTAMP]
 select variance(m) from t1;
 Aggregate function of 'variance' do not support implicit conversions for param of [CHAR]
 select variance(n) from t1;

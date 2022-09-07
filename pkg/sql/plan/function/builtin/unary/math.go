@@ -90,6 +90,9 @@ func Log(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	if len(vs) == 1 {
 		return math1(vs, proc, momath.Ln)
 	}
+	if vs[0].IsScalarNull() {
+		return vector.NewConstNull(vs[0].Typ, vs[1].Length()), nil
+	}
 	vals := vs[0].Col.([]float64)
 	for i := range vals {
 		if vals[i] == float64(1) {
