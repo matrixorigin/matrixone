@@ -154,7 +154,7 @@ func TestLogBlock(t *testing.T) {
 	meta := blk.GetMeta().(*catalog.BlockEntry)
 	err := txn.Commit()
 	assert.Nil(t, err)
-	ts := tae.Scheduler.GetSafeTS()
+	ts := tae.Scheduler.GetCheckpointTS()
 	cmd := meta.GetCheckpointItems(types.TS{}, ts).MakeLogEntry()
 	assert.NotNil(t, cmd)
 
@@ -187,7 +187,7 @@ func TestLogSegment(t *testing.T) {
 	meta := seg.GetMeta().(*catalog.SegmentEntry)
 	err := txn.Commit()
 	assert.Nil(t, err)
-	ts := tae.Scheduler.GetSafeTS()
+	ts := tae.Scheduler.GetCheckpointTS()
 	cmd := meta.GetCheckpointItems(types.TS{}, ts).MakeLogEntry()
 	assert.NotNil(t, cmd)
 
@@ -219,7 +219,7 @@ func TestLogTable(t *testing.T) {
 	meta := rel.GetMeta().(*catalog.TableEntry)
 	err := txn.Commit()
 	assert.Nil(t, err)
-	ts := tae.Scheduler.GetSafeTS()
+	ts := tae.Scheduler.GetCheckpointTS()
 	cmd := meta.GetCheckpointItems(types.TS{}, ts).MakeLogEntry()
 	assert.NotNil(t, cmd)
 
@@ -254,7 +254,7 @@ func TestLogDatabase(t *testing.T) {
 	meta := db.GetMeta().(*catalog.DBEntry)
 	err := txn.Commit()
 	assert.Nil(t, err)
-	ts := tae.Scheduler.GetSafeTS()
+	ts := tae.Scheduler.GetCheckpointTS()
 	cmd := meta.GetCheckpointItems(types.TS{}, ts).MakeLogEntry()
 	assert.NotNil(t, cmd)
 
@@ -323,7 +323,7 @@ func TestCheckpointCatalog2(t *testing.T) {
 		assert.Nil(t, err)
 	}
 	wg.Wait()
-	ts := tae.Scheduler.GetSafeTS()
+	ts := tae.Scheduler.GetCheckpointTS()
 	var zeroV types.TS
 	entry := tae.Catalog.PrepareCheckpoint(zeroV, ts)
 	maxIndex := entry.GetMaxIndex()
@@ -422,7 +422,7 @@ func TestCheckpointCatalog(t *testing.T) {
 	}
 	entry.PrintItems()
 	assert.Equal(t, 8, blkCnt)
-	entry2 := tae.Catalog.PrepareCheckpoint(endTs.Next(), tae.Scheduler.GetSafeTS())
+	entry2 := tae.Catalog.PrepareCheckpoint(endTs.Next(), tae.Scheduler.GetCheckpointTS())
 
 	blkCnt = 0
 	for _, cmd := range entry2.Entries {

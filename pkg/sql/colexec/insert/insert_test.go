@@ -52,7 +52,7 @@ func TestInsertOperator(t *testing.T) {
 			testutil.MakeScalarInt64(3, 3),
 			testutil.MakeVarcharVector([]string{"a", "b", "c"}, nil),
 			testutil.MakeScalarVarchar("d", 3),
-			testutil.MakeScalarNull(3),
+			testutil.MakeScalarNull(types.T_int64, 3),
 		},
 		Zs: []int64{1, 1, 1},
 	}
@@ -81,14 +81,6 @@ func TestInsertOperator(t *testing.T) {
 		require.Equal(t, len(batch1.Vecs), len(result.Vecs))
 		for i, vec := range result.Vecs {
 			require.Equal(t, len(batch1.Zs), vector.Length(vec), fmt.Sprintf("column number: %d", i))
-			switch vec.Typ.Oid {
-			case types.T_int64:
-				col := vector.MustTCols[int64](vec)
-				require.Equal(t, len(batch1.Zs), len(col))
-			case types.T_varchar:
-				col := vector.MustBytesCols(vec)
-				require.Equal(t, len(batch1.Zs), len(col.Lengths))
-			}
 		}
 	}
 

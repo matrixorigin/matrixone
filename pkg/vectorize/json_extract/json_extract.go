@@ -21,8 +21,8 @@ import (
 )
 
 var (
-	QueryByString func(*types.Bytes, *types.Bytes, *types.Bytes) (*types.Bytes, error)
-	QueryByJson   func(*types.Bytes, *types.Bytes, *types.Bytes) (*types.Bytes, error)
+	QueryByString func([][]byte, [][]byte, [][]byte) ([][]byte, error)
+	QueryByJson   func([][]byte, [][]byte, [][]byte) ([][]byte, error)
 )
 
 func init() {
@@ -30,21 +30,23 @@ func init() {
 	QueryByJson = byJson
 }
 
-func byJson(json *types.Bytes, path *types.Bytes, result *types.Bytes) (*types.Bytes, error) {
-	pData := path.Data
-	pStar, err := types.ParseStringToPath(string(pData))
+func byJson(json, path, result [][]byte) ([][]byte, error) {
+	// XXX The functoin only handles path is constant.
+	if len(path) != 1 {
+		panic("Json extract can only handle constant path for now.")
+	}
+	pStar, err := types.ParseStringToPath(string(path[0]))
 	if err != nil {
-		logutil.Infof("json qj: error:%v", err)
+		logutil.Infof("json extract: error:%v", err)
 		return nil, err
 	}
-	for i := range json.Offsets {
-		jOff, jLen := json.Offsets[i], json.Lengths[i]
-		ret, err := byJsonOne(json.Data[jOff:jOff+jLen], &pStar)
+	for i := range json {
+		ret, err := byJsonOne(json[i], &pStar)
 		if err != nil {
-			logutil.Infof("json qj: error:%v", err)
+			logutil.Infof("json extract: error:%v", err)
 			return nil, err
 		}
-		result.AppendOnce(ret)
+		result = append(result, ret)
 	}
 	return result, nil
 }
@@ -55,21 +57,23 @@ func byJsonOne(json []byte, path *bytejson.Path) ([]byte, error) {
 	return []byte(bj.Query(*path).String()), nil
 }
 
-func byString(json *types.Bytes, path *types.Bytes, result *types.Bytes) (*types.Bytes, error) {
-	pData := path.Data
-	pStar, err := types.ParseStringToPath(string(pData))
+func byString(json, path, result [][]byte) ([][]byte, error) {
+	// XXX The functoin only handles path is constant.
+	if len(path) != 1 {
+		panic("Json extract can only handle constant path for now.")
+	}
+	pStar, err := types.ParseStringToPath(string(path[0]))
 	if err != nil {
 		logutil.Infof("json qv: error:%v", err)
 		return nil, err
 	}
-	for i := range json.Offsets {
-		jOff, jLen := json.Offsets[i], json.Lengths[i]
-		ret, err := byStringOne(json.Data[jOff:jOff+jLen], &pStar)
+	for i := range json {
+		ret, err := byStringOne(json[i], &pStar)
 		if err != nil {
 			logutil.Infof("json qv: error:%v", err)
 			return nil, err
 		}
-		result.AppendOnce(ret)
+		result = append(result, ret)
 	}
 	return result, nil
 }

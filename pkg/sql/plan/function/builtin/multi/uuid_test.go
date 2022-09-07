@@ -15,34 +15,25 @@
 package multi
 
 import (
+	"testing"
+
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
-	"testing"
 )
 
 // test return multi line
 func TestUUID(t *testing.T) {
 	//scalar
-	vec := testutil.MakeScalarNull(5)
+	vec := testutil.MakeScalarNull(types.T_int8, 5)
 	proc := testutil.NewProc()
 	res, err := UUID([]*vector.Vector{vec}, proc)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	bytes := res.Col.(*types.Bytes)
-	uuids := make([]string, 5)
-
-	for i := 0; i < 5; i++ {
-		offset := bytes.Offsets[i]
-		length := bytes.Lengths[i]
-		bytes := bytes.Data[offset : offset+length]
-		uuid := string(bytes)
-		uuids[i] = uuid
-		t.Log(uuid)
-	}
+	uuids := vector.GetStrVectorValues(res)
 
 	for i := 0; i < 5; i++ {
 		for j := 0; j < 5; j++ {
@@ -54,7 +45,7 @@ func TestUUID(t *testing.T) {
 	}
 }
 
-// test retuan one line
+// test return one line
 func TestUUID2(t *testing.T) {
 	//scalar
 	vec := testutil.MakeScalarInt64(1, 1)
@@ -64,15 +55,7 @@ func TestUUID2(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	bytes := res.Col.(*types.Bytes)
-	uuids := make([]string, 1)
-
-	for i := 0; i < 1; i++ {
-		offset := bytes.Offsets[i]
-		length := bytes.Lengths[i]
-		bytes := bytes.Data[offset : offset+length]
-		uuid := string(bytes)
-		uuids[i] = uuid
-		t.Log(uuid)
-	}
+	uuids := vector.GetStrVectorValues(res)
+	require.Equal(t, len(uuids), 1)
+	t.Log(uuids[0])
 }

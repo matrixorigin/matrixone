@@ -155,18 +155,9 @@ func (m *StrHashMap) Insert(vecs []*vector.Vector, row int) (bool, error) {
 
 func (m *StrHashMap) encodeHashKeys(vecs []*vector.Vector, start, count int) {
 	for _, vec := range vecs {
-		switch typLen := vec.Typ.TypeSize(); typLen {
-		case 1:
-			fillGroupStr[uint8](m, vec, count, 1, start, 0)
-		case 2:
-			fillGroupStr[uint16](m, vec, count, 2, start, 0)
-		case 4:
-			fillGroupStr[uint32](m, vec, count, 4, start, 0)
-		case 8:
-			fillGroupStr[uint64](m, vec, count, 8, start, 0)
-		case 16:
-			fillGroupStr[types.Decimal128](m, vec, count, 16, start, 0)
-		default:
+		if vec.GetType().IsFixedLen() {
+			fillGroupStr(m, vec, count, vec.GetType().TypeSize(), start, 0)
+		} else {
 			fillStringGroupStr(m, vec, count, start)
 		}
 	}
@@ -178,13 +169,13 @@ func (m *StrHashMap) encodeHashKeys(vecs []*vector.Vector, start, count int) {
 }
 
 func fillStringGroupStr(m *StrHashMap, vec *vector.Vector, n int, start int) {
-	vs := vector.GetStrColumn(vec)
+	vs := vector.GetStrVectorValues(vec)
 	if !vec.GetNulls().Any() {
 		for i := 0; i < n; i++ {
 			if m.hasNull {
 				m.keys[i] = append(m.keys[i], byte(0))
 			}
-			m.keys[i] = append(m.keys[i], vs.Get(int64(i+start))...)
+			m.keys[i] = append(m.keys[i], vs[i+start]...)
 		}
 	} else {
 		nsp := vec.GetNulls()
@@ -195,22 +186,21 @@ func fillStringGroupStr(m *StrHashMap, vec *vector.Vector, n int, start int) {
 					m.keys[i] = append(m.keys[i], byte(1))
 				} else {
 					m.keys[i] = append(m.keys[i], byte(0))
-					m.keys[i] = append(m.keys[i], vs.Get(int64(i+start))...)
+					m.keys[i] = append(m.keys[i], vs[i+start]...)
 				}
 			} else {
 				if hasNull {
 					m.zValues[i] = 0
 					continue
 				}
-				m.keys[i] = append(m.keys[i], vs.Get(int64(i+start))...)
+				m.keys[i] = append(m.keys[i], vs[i+start]...)
 			}
 		}
 	}
 }
 
-func fillGroupStr[T any](m *StrHashMap, vec *vector.Vector, n int, sz int, start int, scale int32) {
-	vs := vector.GetFixedVectorValues[T](vec, int(sz))
-	data := unsafe.Slice((*byte)(unsafe.Pointer(&vs[0])), cap(vs)*sz)[:len(vs)*sz]
+func fillGroupStr(m *StrHashMap, vec *vector.Vector, n int, sz int, start int, scale int32) {
+	data := unsafe.Slice((*byte)(vector.GetPtrAt(vec, 0)), (n+start)*sz)
 	if !vec.GetNulls().Any() {
 		for i := 0; i < n; i++ {
 			if m.hasNull {

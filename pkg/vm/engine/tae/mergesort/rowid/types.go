@@ -12,27 +12,35 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package nulls
+package rowid
 
-import "github.com/matrixorigin/matrixone/pkg/common/bitmap"
+import (
+	"bytes"
 
-/*
-type Nulls interface{
-	Any() bool
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+)
 
-	Length() int
-
-	Add(...uint64)
-	Del(...uint64)
-	Range(uint64, uint64) Nulls
-
-	Or(Nulls)
-
-	Read([]byte) error
-	Show() ([]byte, error)
+type sortElem struct {
+	data types.Rowid
+	idx  uint32
 }
-*/
 
-type Nulls struct {
-	Np *bitmap.Bitmap
+type sortSlice []sortElem
+
+func (x sortSlice) Less(i, j int) bool {
+	return bytes.Compare(x[i].data[:], x[j].data[:]) < 0
 }
+func (x sortSlice) Swap(i, j int) { x[i], x[j] = x[j], x[i] }
+
+type heapElem struct {
+	data types.Rowid
+	src  uint32
+	next uint32
+}
+
+type heapSlice []heapElem
+
+func (x heapSlice) Less(i, j int) bool {
+	return bytes.Compare(x[i].data[:], x[j].data[:]) < 0
+}
+func (x heapSlice) Swap(i, j int) { x[i], x[j] = x[j], x[i] }

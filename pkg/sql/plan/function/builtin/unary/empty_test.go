@@ -17,6 +17,7 @@ package unary
 import (
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -71,9 +72,9 @@ func TestEmpty(t *testing.T) {
 		{
 			name:     "Non-empty string with null list",
 			proc:     procs,
-			inputstr: []string{"ab", "cd", " ", "\t", "\n", "\r"},
+			inputstr: []string{"ab", "", " ", "\t", "\n", "\r", ""},
 			inputNsp: []uint64{1, 4},
-			expected: []uint8{0, 1, 0, 0, 1, 0},
+			expected: []uint8{0, 1, 0, 0, 0, 0, 1},
 			isScalar: false,
 		},
 		{
@@ -102,9 +103,11 @@ func makeEmptyTestVectors(data []string, nsp []uint64, isScalar bool) []*vector.
 	vec := make([]*vector.Vector, 1)
 	if data != nil {
 		vec[0] = testutil.MakeCharVector(data, nsp)
-		vec[0].IsConst = isScalar
+		if isScalar {
+			vec[0].MakeScalar(1)
+		}
 	} else {
-		vec[0] = testutil.MakeScalarNull(0)
+		vec[0] = testutil.MakeScalarNull(types.T_char, 0)
 	}
 
 	return vec

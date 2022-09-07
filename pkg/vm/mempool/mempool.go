@@ -22,6 +22,8 @@ func Alloc(m *Mempool, size int) (ret []byte) {
 	return make([]byte, size)
 }
 
+// XXX, wait, the Alloc allocate memory, but this Realloc only compute size?
+// XXX WTF?
 func Realloc(data []byte, size int64) int64 {
 	if data == nil {
 		return size

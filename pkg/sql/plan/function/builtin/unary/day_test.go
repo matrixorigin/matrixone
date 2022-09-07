@@ -17,6 +17,7 @@ package unary
 import (
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -68,9 +69,11 @@ func TestDateToDayFunc(t *testing.T) {
 			vecs := make([]*vector.Vector, 1)
 			if c.inputstr != nil {
 				vecs[0] = testutil.MakeDateVector(c.inputstr, c.inputNsp)
-				vecs[0].IsConst = c.isScalar
+				if c.isScalar {
+					vecs[0].MakeScalar(1)
+				}
 			} else {
-				vecs[0] = testutil.MakeScalarNull(0)
+				vecs[0] = testutil.MakeScalarNull(types.T_date, 0)
 			}
 
 			result, err := DateToDay(vecs, c.proc)
@@ -129,9 +132,11 @@ func TestDatetimeToDayFunc(t *testing.T) {
 			vecs := make([]*vector.Vector, 1)
 			if c.inputstr != nil {
 				vecs[0] = testutil.MakeDateTimeVector(c.inputstr, c.inputNsp)
-				vecs[0].IsConst = c.isScalar
+				if c.isScalar {
+					vecs[0].MakeScalar(1)
+				}
 			} else {
-				vecs[0] = testutil.MakeScalarNull(0)
+				vecs[0] = testutil.MakeScalarNull(types.T_datetime, 0)
 			}
 
 			result, err := DatetimeToDay(vecs, c.proc)

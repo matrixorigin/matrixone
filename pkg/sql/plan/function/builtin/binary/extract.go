@@ -17,7 +17,6 @@ package binary
 import (
 	"errors"
 
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/extract"
@@ -70,20 +69,19 @@ func ExtractFromDate(vectors []*vector.Vector, proc *process.Process) (*vector.V
 	left, right := vectors[0], vectors[1]
 	resultType := types.Type{Oid: types.T_uint32, Size: 4}
 	resultElementSize := int(resultType.Size)
-	leftValues, rightValues := vector.MustBytesCols(left), vector.MustTCols[types.Date](right)
+	leftValues, rightValues := vector.MustStrCols(left), vector.MustTCols[types.Date](right)
 	switch {
 	case left.IsScalar() && right.IsScalar():
 		if left.ConstVectorIsNull() || right.ConstVectorIsNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
 		resultVector := vector.NewConst(resultType, 1)
-		resultValues := make([]uint32, 1)
-		unit := string(leftValues.Get(0))
-		results, err := extract.ExtractFromDate(unit, rightValues, resultValues)
+		resultValues := vector.MustTCols[uint32](resultVector)
+		unit := leftValues[0]
+		_, err := extract.ExtractFromDate(unit, rightValues, resultValues)
 		if err != nil {
 			return nil, errors.New("invalid input")
 		}
-		vector.SetCol(resultVector, results)
 		return resultVector, nil
 	case left.IsScalar() && !right.IsScalar():
 		if left.ConstVectorIsNull() {
@@ -93,15 +91,12 @@ func ExtractFromDate(vectors []*vector.Vector, proc *process.Process) (*vector.V
 		if err != nil {
 			return nil, err
 		}
-		resultValues := types.DecodeUint32Slice(resultVector.Data)
-		resultValues = resultValues[:len(rightValues)]
-		unit := string(leftValues.Get(0))
-		results, err := extract.ExtractFromDate(unit, rightValues, resultValues)
+		resultValues := vector.MustTCols[uint32](resultVector)
+		unit := leftValues[0]
+		_, err = extract.ExtractFromDate(unit, rightValues, resultValues)
 		if err != nil {
 			return nil, err
 		}
-		nulls.Set(resultVector.Nsp, right.Nsp)
-		vector.SetCol(resultVector, results)
 		return resultVector, nil
 	default:
 		return nil, errors.New("invalid input")
@@ -111,47 +106,30 @@ func ExtractFromDate(vectors []*vector.Vector, proc *process.Process) (*vector.V
 func ExtractFromDatetime(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	left, right := vectors[0], vectors[1]
 	resultType := types.Type{Oid: types.T_varchar, Size: 24}
-	resultElementSize := int(resultType.Size)
-	leftValues, rightValues := vector.MustBytesCols(left), vector.MustTCols[types.Datetime](right)
+	leftValues, rightValues := vector.MustStrCols(left), vector.MustTCols[types.Datetime](right)
 	switch {
 	case left.IsScalar() && right.IsScalar():
 		if left.ConstVectorIsNull() || right.ConstVectorIsNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
-		resultVector := vector.NewConst(resultType, 1)
-		resultValues := &types.Bytes{
-			Data:    make([]byte, 0),
-			Offsets: make([]uint32, 1),
-			Lengths: make([]uint32, 1),
-		}
-		unit := string(leftValues.Get(0))
-		results, err := extract.ExtractFromDatetime(unit, rightValues, resultValues)
+		resultValues := make([]string, 1)
+		unit := leftValues[0]
+		resultValues, err := extract.ExtractFromDatetime(unit, rightValues, resultValues)
 		if err != nil {
 			return nil, errors.New("invalid input")
 		}
-		vector.SetCol(resultVector, results)
-		return resultVector, nil
+		return vector.NewConstString(resultType, 1, resultValues[0]), nil
 	case left.IsScalar() && !right.IsScalar():
 		if left.ConstVectorIsNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
-		resultVector, err := proc.AllocVector(resultType, int64(resultElementSize*len(rightValues)))
+		resultValues := make([]string, len(rightValues))
+		unit := leftValues[0]
+		resultValues, err := extract.ExtractFromDatetime(unit, rightValues, resultValues)
 		if err != nil {
 			return nil, err
 		}
-		resultValues := &types.Bytes{
-			Data:    make([]byte, 0),
-			Offsets: make([]uint32, len(rightValues)),
-			Lengths: make([]uint32, len(rightValues)),
-		}
-		unit := string(leftValues.Get(0))
-		results, err := extract.ExtractFromDatetime(unit, rightValues, resultValues)
-		if err != nil {
-			return nil, err
-		}
-		nulls.Set(resultVector.Nsp, right.Nsp)
-		vector.SetCol(resultVector, results)
-		return resultVector, nil
+		return vector.NewWithStrings(resultType, resultValues, right.Nsp, proc.Mp()), nil
 	default:
 		return nil, errors.New("invalid input")
 	}

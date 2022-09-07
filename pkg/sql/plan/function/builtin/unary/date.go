@@ -79,8 +79,7 @@ func DatetimeToDate(vectors []*vector.Vector, proc *process.Process) (*vector.Ve
 func DateStringToDate(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	inputVector := vectors[0]
 	resultType := types.Type{Oid: types.T_date, Size: 4}
-	resultElementSize := int(resultType.Size)
-	inputValues := vector.MustBytesCols(inputVector)
+	inputValues := vector.MustStrCols(inputVector)
 
 	if inputVector.IsScalar() {
 		if inputVector.ConstVectorIsNull() {
@@ -92,15 +91,12 @@ func DateStringToDate(vectors []*vector.Vector, proc *process.Process) (*vector.
 		vector.SetCol(resultVector, result)
 		return resultVector, err
 	} else {
-		resultVector, err := proc.AllocVector(resultType, int64(resultElementSize*len(inputValues.Lengths)))
+		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(inputValues)), inputVector.Nsp)
 		if err != nil {
 			return nil, err
 		}
-		resultValues := types.DecodeDateSlice(resultVector.Data)
-		resultValues = resultValues[:len(inputValues.Lengths)]
-		nulls.Set(resultVector.Nsp, inputVector.Nsp)
-		result, err := date.DateStringToDate(inputValues, resultValues)
-		vector.SetCol(resultVector, result)
+		resultValues := vector.MustTCols[types.Date](resultVector)
+		_, err = date.DateStringToDate(inputValues, resultValues)
 		return resultVector, err
 	}
 }
