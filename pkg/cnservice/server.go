@@ -184,27 +184,15 @@ func (s *service) createMOServer(inputCtx context.Context, pu *config.ParameterU
 	address := fmt.Sprintf("%s:%d", pu.SV.Host, pu.SV.Port)
 	moServerCtx := context.WithValue(inputCtx, config.ParameterUnitKey, pu)
 	s.mo = frontend.NewMOServer(moServerCtx, address, pu)
-	{
-		// init trace/log/error framework
-		if _, err := trace.Init(moServerCtx,
-			trace.WithMOVersion(pu.SV.MoVersion),
-			trace.WithNode("node_uuid", trace.NodeTypeCN),
-			trace.EnableTracer(!pu.SV.DisableTrace),
-			trace.WithBatchProcessMode(pu.SV.TraceBatchProcessor),
-			trace.DebugMode(pu.SV.EnableTraceDebug),
-			trace.WithSQLExecutor(func() ie.InternalExecutor {
-				return frontend.NewInternalExecutor(pu)
-			}),
-		); err != nil {
-			panic(err)
-		}
-	}
 
-	if !pu.SV.DisableMetric {
-		ieFactory := func() ie.InternalExecutor {
-			return frontend.NewInternalExecutor(pu)
-		}
-		metric.InitMetric(moServerCtx, ieFactory, pu, 0, metric.ALL_IN_ONE_MODE)
+	ieFactory := func() ie.InternalExecutor {
+		return frontend.NewInternalExecutor(pu)
+	}
+	if err := trace.InitSchema(moServerCtx, ieFactory); err != nil {
+		panic(err)
+	}
+	if err := metric.InitSchema(moServerCtx, ieFactory); err != nil {
+		panic(err)
 	}
 	frontend.InitServerVersion(pu.SV.MoVersion)
 	err := frontend.InitSysTenant(moServerCtx)
@@ -218,10 +206,6 @@ func (s *service) runMoServer() error {
 }
 
 func (s *service) serverShutdown(isgraceful bool) error {
-	// flush trace/log/error framework
-	if err := trace.Shutdown(trace.DefaultContext()); err != nil {
-		logutil.Errorf("Shutdown trace err: %v", err)
-	}
 	return s.mo.Stop()
 }
 

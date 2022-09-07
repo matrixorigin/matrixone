@@ -213,7 +213,8 @@ func (vec *vector[T]) WriteTo(w io.Writer) (n int64, err error) {
 	var nr int
 	var tmpn int64
 	// 1. Vector type
-	if nr, err = w.Write(types.EncodeType(vec.GetType())); err != nil {
+	vt := vec.GetType()
+	if nr, err = w.Write(types.EncodeType(&vt)); err != nil {
 		return
 	}
 	n += int64(nr)

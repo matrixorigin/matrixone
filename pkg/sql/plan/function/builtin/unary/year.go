@@ -24,33 +24,25 @@ import (
 func DateToYear(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	inputVector := vectors[0]
 	resultType := types.Type{Oid: types.T_int64, Size: 8}
-	resultElementSize := int(resultType.Size)
 	inputValues := vector.MustTCols[types.Date](inputVector)
 	if inputVector.IsScalar() {
 		if inputVector.ConstVectorIsNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
-		resultVector := vector.NewConst(resultType, 1)
 		resultValues := make([]int64, 1)
 		DateToYearPlan2(inputValues, resultValues)
-		// resultValues2 := make([]int64, 1)
-		// resultValues2[0] = int64(resultValues[0])
-		vector.SetCol(resultVector, resultValues)
-		return resultVector, nil
+		return vector.NewConstFixed(resultType, 1, resultValues[0]), nil
 	} else {
-		resultVector, err := proc.AllocVector(resultType, int64(resultElementSize*len(inputValues)))
+		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(inputValues)), inputVector.Nsp)
 		if err != nil {
 			return nil, err
 		}
-		resultValues := types.DecodeInt64Slice(resultVector.Data)
-		resultValues = resultValues[:len(inputValues)]
-		nulls.Set(resultVector.Nsp, inputVector.Nsp)
+		resultValues := vector.MustTCols[int64](resultVector)
 		DateToYearPlan2(inputValues, resultValues)
 		// resultValues2 := make([]int64, len(resultValues))
 		// for i, x := range resultValues {
 		// 	resultValues2[i] = int64(x)
 		// }
-		vector.SetCol(resultVector, resultValues)
 		return resultVector, nil
 	}
 }
@@ -93,48 +85,23 @@ func DatetimeToYear(vectors []*vector.Vector, proc *process.Process) (*vector.Ve
 func DateStringToYear(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	inputVector := vectors[0]
 	resultType := types.Type{Oid: types.T_int64, Size: 8}
-	resultElementSize := int(resultType.Size)
-	inputValues := vector.MustBytesCols(inputVector)
+	inputValues := vector.MustStrCols(inputVector)
 	if inputVector.IsConst {
 		if inputVector.ConstVectorIsNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
-		resultVector := vector.NewConst(resultType, 1)
 		resultValues := make([]int64, 1)
-		DateStringToYearPlan2(inputValues, resultVector.Nsp, resultValues)
-		// resultValues2 := make([]int64, 1)
-		// resultValues2[0] = int64(resultValues[0])
-		vector.SetCol(resultVector, resultValues)
-		return resultVector, nil
+		DateStringToYearPlan2(inputValues, nil, resultValues)
+		return vector.NewConstFixed(resultType, 1, resultValues[0]), nil
 	} else {
-		resultVector, err := proc.AllocVector(resultType, int64(resultElementSize*len(inputValues.Lengths)))
+		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(inputValues)), inputVector.Nsp)
 		if err != nil {
 			return nil, err
 		}
-		resultValues := types.DecodeInt64Slice(resultVector.Data)
-		resultValues = resultValues[:len(inputValues.Lengths)]
-		nulls.Set(resultVector.Nsp, inputVector.Nsp)
+		resultValues := vector.MustTCols[int64](resultVector)
 		DateStringToYearPlan2(inputValues, resultVector.Nsp, resultValues)
-		// resultValues2 := make([]int64, len(resultValues))
-		// for i, x := range resultValues {
-		// 	resultValues2[i] = int64(x)
-		// }
-		vector.SetCol(resultVector, resultValues)
 		return resultVector, nil
 	}
-}
-
-// vectorize year and toYear function
-var (
-	DateToYearPlan2       func([]types.Date, []int64) []int64
-	DatetimeToYearPlan2   func([]types.Datetime, []int64) []int64
-	DateStringToYearPlan2 func(*types.Bytes, *nulls.Nulls, []int64) []int64
-)
-
-func init() {
-	DateToYearPlan2 = dateToYearPlan2
-	DatetimeToYearPlan2 = datetimeToYearPlan2
-	DateStringToYearPlan2 = dateStringToYearPlan2
 }
 
 func dateToYear(xs []types.Date, rs []uint16) []uint16 {
@@ -151,11 +118,11 @@ func datetimeToYear(xs []types.Datetime, rs []uint16) []uint16 {
 	return rs
 }
 
-func dateStringToYear(xs *types.Bytes, ns *nulls.Nulls, rs []uint16) []uint16 {
-	for i := range xs.Lengths {
-		str := string(xs.Get(int64(i)))
+func dateStringToYear(xs []string, ns *nulls.Nulls, rs []uint16) []uint16 {
+	for i, str := range xs {
 		d, e := types.ParseDateCast(str)
 		if e != nil {
+			// XXX this is a bug, should raise error.
 			// set null
 			nulls.Add(ns, uint64(i))
 			rs[i] = 0
@@ -166,29 +133,25 @@ func dateStringToYear(xs *types.Bytes, ns *nulls.Nulls, rs []uint16) []uint16 {
 	return rs
 }
 
-func dateToYearPlan2(xs []types.Date, rs []int64) []int64 {
+func DateToYearPlan2(xs []types.Date, rs []int64) []int64 {
 	for i, x := range xs {
 		rs[i] = int64(x.Year())
 	}
 	return rs
 }
 
-func datetimeToYearPlan2(xs []types.Datetime, rs []int64) []int64 {
+func DatetimeToYearPlan2(xs []types.Datetime, rs []int64) []int64 {
 	for i, x := range xs {
 		rs[i] = int64(x.Year())
 	}
 	return rs
 }
 
-func dateStringToYearPlan2(xs *types.Bytes, ns *nulls.Nulls, rs []int64) []int64 {
-	for i := range xs.Lengths {
-		str := string(xs.Get(int64(i)))
+func DateStringToYearPlan2(xs []string, ns *nulls.Nulls, rs []int64) []int64 {
+	for i, str := range xs {
 		d, e := types.ParseDateCast(str)
 		if e != nil {
-			// set null
-			nulls.Add(ns, uint64(i))
-			rs[i] = 0
-			continue
+			panic(e)
 		}
 		rs[i] = int64(d.Year())
 	}

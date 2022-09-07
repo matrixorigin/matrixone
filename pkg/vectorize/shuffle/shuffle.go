@@ -16,41 +16,36 @@ package shuffle
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"golang.org/x/exp/constraints"
 )
 
 var (
-	BoolShuffle  = fixedLengthShuffle[bool]
-	Int8Shuffle  = fixedLengthShuffle[int8]
-	Int16Shuffle = fixedLengthShuffle[int16]
-	Int32Shuffle = fixedLengthShuffle[int32]
-	Int64Shuffle = fixedLengthShuffle[int64]
+	BoolShuffle  = FixedLengthShuffle[bool]
+	Int8Shuffle  = FixedLengthShuffle[int8]
+	Int16Shuffle = FixedLengthShuffle[int16]
+	Int32Shuffle = FixedLengthShuffle[int32]
+	Int64Shuffle = FixedLengthShuffle[int64]
 
-	Uint8Shuffle  = fixedLengthShuffle[uint8]
-	Uint16Shuffle = fixedLengthShuffle[uint16]
-	Uint32Shuffle = fixedLengthShuffle[uint32]
-	Uint64Shuffle = fixedLengthShuffle[uint64]
+	Uint8Shuffle  = FixedLengthShuffle[uint8]
+	Uint16Shuffle = FixedLengthShuffle[uint16]
+	Uint32Shuffle = FixedLengthShuffle[uint32]
+	Uint64Shuffle = FixedLengthShuffle[uint64]
 
-	Float32Shuffle = fixedLengthShuffle[float32]
-	Float64Shuffle = fixedLengthShuffle[float64]
+	Float32Shuffle = FixedLengthShuffle[float32]
+	Float64Shuffle = FixedLengthShuffle[float64]
 
-	Decimal64Shuffle  = fixedLengthShuffle[types.Decimal64]
-	Decimal128Shuffle = fixedLengthShuffle[types.Decimal128]
+	Decimal64Shuffle  = FixedLengthShuffle[types.Decimal64]
+	Decimal128Shuffle = FixedLengthShuffle[types.Decimal128]
 
-	DateShuffle      = fixedLengthShuffle[types.Date]
-	DatetimeShuffle  = fixedLengthShuffle[types.Datetime]
-	TimestampShuffle = fixedLengthShuffle[types.Timestamp]
+	DateShuffle      = FixedLengthShuffle[types.Date]
+	DatetimeShuffle  = FixedLengthShuffle[types.Datetime]
+	TimestampShuffle = FixedLengthShuffle[types.Timestamp]
+
+	VarlenaShuffle = FixedLengthShuffle[types.Varlena]
 
 	TupleShuffle = tupleShuffle
-
-	StrShuffle = strShuffle
 )
 
-type fixedLength interface {
-	constraints.Integer | constraints.Float | types.Decimal64 | types.Decimal128 | bool
-}
-
-func fixedLengthShuffle[T fixedLength](vs, ws []T, sels []int64) []T {
+func FixedLengthShuffle[T types.FixedSizeT](vs, ws []T, sels []int64) []T {
 	for i, sel := range sels {
 		ws[i] = vs[sel]
 	}
@@ -63,15 +58,4 @@ func tupleShuffle(vs, ws [][]interface{}, sels []int64) [][]interface{} {
 		ws[i] = vs[sel]
 	}
 	return ws[:len(sels)]
-}
-
-func strShuffle(vs *types.Bytes, os, ns []uint32, sels []int64) *types.Bytes {
-	for i, sel := range sels {
-		os[i] = vs.Offsets[sel]
-		ns[i] = vs.Lengths[sel]
-	}
-	copy(vs.Offsets, os)
-	copy(vs.Lengths, ns)
-	vs.Offsets, vs.Lengths = vs.Offsets[:len(sels)], vs.Lengths[:len(sels)]
-	return vs
 }

@@ -15,10 +15,12 @@
 package unary
 
 import (
+	"testing"
+
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/smartystreets/goconvey/convey"
-	"testing"
 )
 
 func TestDate(t *testing.T) {
@@ -137,9 +139,9 @@ func TestDate(t *testing.T) {
 	})
 
 	convey.Convey("TestDateScalarNull", t, func() {
-		vecs := []*vector.Vector{testutil.MakeScalarNull(10)}
+		vecs := []*vector.Vector{testutil.MakeScalarNull(types.T_date, 10)}
 		proc := testutil.NewProc()
-		wantVector := testutil.MakeScalarNull(10)
+		wantVector := testutil.MakeScalarNull(types.T_date, 10)
 		vec, err := DateToDate(vecs, proc)
 		convey.So(err, convey.ShouldBeNil)
 		ret := testutil.CompareVectors(wantVector, vec)
@@ -147,9 +149,9 @@ func TestDate(t *testing.T) {
 	})
 
 	convey.Convey("TestDatetimeScalarNull", t, func() {
-		vecs := []*vector.Vector{testutil.MakeScalarNull(10)}
+		vecs := []*vector.Vector{testutil.MakeScalarNull(types.T_datetime, 10)}
 		proc := testutil.NewProc()
-		wantVector := testutil.MakeScalarNull(10)
+		wantVector := testutil.MakeScalarNull(types.T_date, 10)
 		vec, err := DatetimeToDate(vecs, proc)
 		convey.So(err, convey.ShouldBeNil)
 		ret := testutil.CompareVectors(wantVector, vec)

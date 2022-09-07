@@ -27,21 +27,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 )
 
-var TSize int
-var DateSize int
-var DatetimeSize int
-var TimestampSize int
-var Decimal64Size int
-var Decimal128Size int
-
-func init() {
-	TSize = int(unsafe.Sizeof(Type{}))
-	DateSize = int(unsafe.Sizeof(Date(0)))
-	DatetimeSize = int(unsafe.Sizeof(Datetime(0)))
-	TimestampSize = int(unsafe.Sizeof(Timestamp(0)))
-	Decimal64Size = int(unsafe.Sizeof(Decimal64{}))
-	Decimal128Size = int(unsafe.Sizeof(Decimal128{}))
-}
+const (
+	TSize          int = int(unsafe.Sizeof(Type{}))
+	DateSize       int = 4
+	DatetimeSize   int = 8
+	TimestampSize  int = 8
+	Decimal64Size  int = 8
+	Decimal128Size int = 16
+)
 
 func EncodeSlice[T any](v []T, sz int) (ret []byte) {
 	if len(v) > 0 {
@@ -83,19 +76,19 @@ func DecodeJson(buf []byte) bytejson.ByteJson {
 	return bj
 }
 
-func EncodeType(v Type) []byte {
-	return unsafe.Slice((*byte)(unsafe.Pointer(&v)), TSize)
+func EncodeType(v *Type) []byte {
+	return unsafe.Slice((*byte)(unsafe.Pointer(v)), TSize)
 }
 
 func DecodeType(v []byte) Type {
 	return *(*Type)(unsafe.Pointer(&v[0]))
 }
 
-func EncodeFixed[T any](v T) []byte {
+func EncodeFixed[T FixedSizeT](v T) []byte {
 	sz := unsafe.Sizeof(v)
 	return unsafe.Slice((*byte)(unsafe.Pointer(&v)), sz)
 }
-func DecodeFixed[T any](v []byte) T {
+func DecodeFixed[T FixedSizeT](v []byte) T {
 	return *(*T)(unsafe.Pointer(&v[0]))
 }
 
@@ -103,124 +96,124 @@ func DecodeBool(v []byte) bool {
 	return *(*bool)(unsafe.Pointer(&v[0]))
 }
 
-func EncodeBool(v bool) []byte {
-	return unsafe.Slice((*byte)(unsafe.Pointer(&v)), 1)
+func EncodeBool(v *bool) []byte {
+	return unsafe.Slice((*byte)(unsafe.Pointer(v)), 1)
 }
 
-func EncodeInt8(v int8) []byte {
-	return unsafe.Slice((*byte)(unsafe.Pointer(&v)), 1)
+func EncodeInt8(v *int8) []byte {
+	return unsafe.Slice((*byte)(unsafe.Pointer(v)), 1)
 }
 
 func DecodeInt8(v []byte) int8 {
 	return *(*int8)(unsafe.Pointer(&v[0]))
 }
 
-func EncodeUint8(v uint8) []byte {
-	return unsafe.Slice((*byte)(unsafe.Pointer(&v)), 1)
+func EncodeUint8(v *uint8) []byte {
+	return unsafe.Slice((*byte)(unsafe.Pointer(v)), 1)
 }
 
 func DecodeUint8(v []byte) uint8 {
 	return v[0]
 }
 
-func EncodeInt16(v int16) []byte {
-	return unsafe.Slice((*byte)(unsafe.Pointer(&v)), 2)
+func EncodeInt16(v *int16) []byte {
+	return unsafe.Slice((*byte)(unsafe.Pointer(v)), 2)
 }
 
 func DecodeInt16(v []byte) int16 {
 	return *(*int16)(unsafe.Pointer(&v[0]))
 }
 
-func EncodeUint16(v uint16) []byte {
-	return unsafe.Slice((*byte)(unsafe.Pointer(&v)), 2)
+func EncodeUint16(v *uint16) []byte {
+	return unsafe.Slice((*byte)(unsafe.Pointer(v)), 2)
 }
 
 func DecodeUint16(v []byte) uint16 {
 	return *(*uint16)(unsafe.Pointer(&v[0]))
 }
 
-func EncodeInt32(v int32) []byte {
-	return unsafe.Slice((*byte)(unsafe.Pointer(&v)), 4)
+func EncodeInt32(v *int32) []byte {
+	return unsafe.Slice((*byte)(unsafe.Pointer(v)), 4)
 }
 
 func DecodeInt32(v []byte) int32 {
 	return *(*int32)(unsafe.Pointer(&v[0]))
 }
 
-func EncodeUint32(v uint32) []byte {
-	return unsafe.Slice((*byte)(unsafe.Pointer(&v)), 4)
+func EncodeUint32(v *uint32) []byte {
+	return unsafe.Slice((*byte)(unsafe.Pointer(v)), 4)
 }
 
 func DecodeUint32(v []byte) uint32 {
 	return *(*uint32)(unsafe.Pointer(&v[0]))
 }
 
-func EncodeInt64(v int64) []byte {
-	return unsafe.Slice((*byte)(unsafe.Pointer(&v)), 8)
+func EncodeInt64(v *int64) []byte {
+	return unsafe.Slice((*byte)(unsafe.Pointer(v)), 8)
 }
 
 func DecodeInt64(v []byte) int64 {
 	return *(*int64)(unsafe.Pointer(&v[0]))
 }
 
-func EncodeUint64(v uint64) []byte {
-	return unsafe.Slice((*byte)(unsafe.Pointer(&v)), 8)
+func EncodeUint64(v *uint64) []byte {
+	return unsafe.Slice((*byte)(unsafe.Pointer(v)), 8)
 }
 
 func DecodeUint64(v []byte) uint64 {
 	return *(*uint64)(unsafe.Pointer(&v[0]))
 }
 
-func EncodeFloat32(v float32) []byte {
-	return unsafe.Slice((*byte)(unsafe.Pointer(&v)), 4)
+func EncodeFloat32(v *float32) []byte {
+	return unsafe.Slice((*byte)(unsafe.Pointer(v)), 4)
 }
 
 func DecodeFloat32(v []byte) float32 {
 	return *(*float32)(unsafe.Pointer(&v[0]))
 }
 
-func EncodeFloat64(v float64) []byte {
-	return unsafe.Slice((*byte)(unsafe.Pointer(&v)), 8)
+func EncodeFloat64(v *float64) []byte {
+	return unsafe.Slice((*byte)(unsafe.Pointer(v)), 8)
 }
 
 func DecodeFloat64(v []byte) float64 {
 	return *(*float64)(unsafe.Pointer(&v[0]))
 }
 
-func EncodeDate(v Date) []byte {
-	return unsafe.Slice((*byte)(unsafe.Pointer(&v)), 4)
+func EncodeDate(v *Date) []byte {
+	return unsafe.Slice((*byte)(unsafe.Pointer(v)), 4)
 }
 
 func DecodeDate(v []byte) Date {
 	return *(*Date)(unsafe.Pointer(&v[0]))
 }
 
-func EncodeDatetime(v Datetime) []byte {
-	return unsafe.Slice((*byte)(unsafe.Pointer(&v)), 8)
+func EncodeDatetime(v *Datetime) []byte {
+	return unsafe.Slice((*byte)(unsafe.Pointer(v)), 8)
 }
 
 func DecodeDatetime(v []byte) Datetime {
 	return *(*Datetime)(unsafe.Pointer(&v[0]))
 }
 
-func EncodeTimestamp(v Timestamp) []byte {
-	return unsafe.Slice((*byte)(unsafe.Pointer(&v)), 8)
+func EncodeTimestamp(v *Timestamp) []byte {
+	return unsafe.Slice((*byte)(unsafe.Pointer(v)), 8)
 }
 
 func DecodeTimestamp(v []byte) Timestamp {
 	return *(*Timestamp)(unsafe.Pointer(&v[0]))
 }
 
-func EncodeDecimal64(v Decimal64) []byte {
-	return unsafe.Slice((*byte)(unsafe.Pointer(&v)), Decimal64Size)
+func EncodeDecimal64(v *Decimal64) []byte {
+	return unsafe.Slice((*byte)(unsafe.Pointer(v)), Decimal64Size)
 }
 
 func DecodeDecimal64(v []byte) Decimal64 {
 	return *(*Decimal64)(unsafe.Pointer(&v[0]))
 }
 
-func EncodeDecimal128(v Decimal128) []byte {
-	return unsafe.Slice((*byte)(unsafe.Pointer(&v)), Decimal128Size)
+func EncodeDecimal128(v *Decimal128) []byte {
+	return unsafe.Slice((*byte)(unsafe.Pointer(v)), Decimal128Size)
 }
 
 func DecodeDecimal128(v []byte) Decimal128 {
@@ -235,9 +228,15 @@ func EncodeFixedSlice[T any](v []T, sz int) (ret []byte) {
 }
 
 func DecodeFixedSlice[T any](v []byte, sz int) (ret []T) {
-	if len(v) > 0 {
-		ret = unsafe.Slice((*T)(unsafe.Pointer(&v[0])), cap(v)/sz)[:len(v)/sz]
+	if v == nil {
+		return nil
 	}
+
+	if len(v) == 0 {
+		return make([]T, 0)
+	}
+
+	ret = unsafe.Slice((*T)(unsafe.Pointer(&v[0])), cap(v)/sz)[:len(v)/sz]
 	return
 }
 
@@ -383,12 +382,19 @@ func DecodeDecimal128Slice(v []byte) (ret []Decimal128) {
 	return DecodeFixedSlice[Decimal128](v, Decimal128Size)
 }
 
+func EncodeVarlenaSlice(v []Varlena) []byte {
+	return EncodeFixedSlice(v, VarlenaSize)
+}
+func DecodeVarlenaSlice(v []byte) (ret []Varlena) {
+	return DecodeFixedSlice[Varlena](v, VarlenaSize)
+}
+
 func EncodeStringSlice(vs []string) []byte {
 	var o int32
 	var buf bytes.Buffer
 
 	cnt := int32(len(vs))
-	buf.Write(EncodeInt32(cnt))
+	buf.Write(EncodeInt32(&cnt))
 	if cnt == 0 {
 		return buf.Bytes()
 	}
@@ -508,10 +514,6 @@ func EncodeValue(val any, typ Type) []byte {
 		panic("unsupported type")
 	}
 }
-func WriteFixedValue[T any](w io.Writer, v T) (err error) {
-	_, err = w.Write(EncodeFixed(v))
-	return
-}
 
 func WriteValues(w io.Writer, vals ...any) (n int64, err error) {
 	var nr int
@@ -607,9 +609,4 @@ func WriteValues(w io.Writer, vals ...any) (n int64, err error) {
 		}
 	}
 	return
-}
-
-func CopyFixValueToBuf[T any](dest []byte, val T) {
-	vbuf := EncodeFixed(val)
-	copy(dest[:unsafe.Sizeof(val)], vbuf)
 }

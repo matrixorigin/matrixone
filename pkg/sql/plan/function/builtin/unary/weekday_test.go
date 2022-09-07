@@ -15,10 +15,12 @@
 package unary
 
 import (
+	"testing"
+
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/smartystreets/goconvey/convey"
-	"testing"
 )
 
 func TestWeekday(t *testing.T) {
@@ -137,8 +139,8 @@ func TestWeekday(t *testing.T) {
 	})
 
 	convey.Convey("ScalarDateNUllCase", t, func() {
-		inVector := testutil.MakeScalarNull(10)
-		wantVec := testutil.MakeScalarNull(10)
+		inVector := testutil.MakeScalarNull(types.T_date, 10)
+		wantVec := testutil.MakeScalarNull(types.T_int64, 10)
 		proc := testutil.NewProc()
 		res, err := DateToWeekday([]*vector.Vector{inVector}, proc)
 		convey.So(err, convey.ShouldBeNil)
@@ -148,8 +150,8 @@ func TestWeekday(t *testing.T) {
 	})
 
 	convey.Convey("ScalarDateTimeNUllCase", t, func() {
-		inVector := testutil.MakeScalarNull(10)
-		wantVec := testutil.MakeScalarNull(10)
+		inVector := testutil.MakeScalarNull(types.T_datetime, 10)
+		wantVec := testutil.MakeScalarNull(types.T_int64, 10)
 		proc := testutil.NewProc()
 		res, err := DatetimeToWeekday([]*vector.Vector{inVector}, proc)
 		convey.So(err, convey.ShouldBeNil)
