@@ -19,15 +19,13 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
-	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
-	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
 
 func TestSubStr(t *testing.T) {
-	procs := makeProcess()
+	procs := testutil.NewProc()
 	cases := []struct {
 		name       string
 		vecs       []*vector.Vector
@@ -232,7 +230,7 @@ func TestSubStr(t *testing.T) {
 }
 
 func TestSubStrUTF(t *testing.T) {
-	procs := makeProcess()
+	procs := testutil.NewProc()
 	cases := []struct {
 		name       string
 		vecs       []*vector.Vector
@@ -434,12 +432,6 @@ func TestSubStrUTF(t *testing.T) {
 			require.Equal(t, c.wantScalar, substr.IsScalar())
 		})
 	}
-}
-
-func makeProcess() *process.Process {
-	hm := host.New(1 << 40)
-	gm := guest.New(1<<40, hm)
-	return process.New(mheap.New(gm))
 }
 
 // Construct vector parameter of substring function

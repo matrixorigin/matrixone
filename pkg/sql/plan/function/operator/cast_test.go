@@ -51,7 +51,7 @@ func TestCastStringToJson(t *testing.T) {
 			wantScalar: wantScalar,
 		}
 	}
-	procs := makeProcess()
+	procs := testutil.NewProc()
 	cases := []caseStruct{
 		makeCase("Test01", `{"a":1,"b":2}`, true, procs, types.T_json, true),
 		makeCase("Test02", `{"a":1,"b":2}`, false, procs, types.T_json, false),
@@ -76,7 +76,7 @@ func TestCastSameType(t *testing.T) {
 		return vectors
 	}
 
-	procs := makeProcess()
+	procs := testutil.NewProc()
 	cases := []struct {
 		name       string
 		vecs       []*vector.Vector
@@ -246,7 +246,7 @@ func TestCastSameType2(t *testing.T) {
 		return vectors
 	}
 
-	procs := makeProcess()
+	procs := testutil.NewProc()
 	//types.Date | types.Datetime | types.Timestamp
 	cases := []struct {
 		name       string
@@ -329,7 +329,7 @@ func TestCastLeftToRight(t *testing.T) {
 		return vectors
 	}
 
-	procs := makeProcess()
+	procs := testutil.NewProc()
 	cases := []struct {
 		name       string
 		vecs       []*vector.Vector
@@ -1062,7 +1062,7 @@ func TestCastSpecials1Int(t *testing.T) {
 		return vectors
 	}
 
-	procs := makeProcess()
+	procs := testutil.NewProc()
 	cases := []struct {
 		name       string
 		vecs       []*vector.Vector
@@ -1374,7 +1374,7 @@ func TestCastSpecials1Float(t *testing.T) {
 		return vectors
 	}
 
-	procs := makeProcess()
+	procs := testutil.NewProc()
 	cases := []struct {
 		name       string
 		vecs       []*vector.Vector
@@ -1490,7 +1490,7 @@ func TestCastSpecials2Float(t *testing.T) {
 		return vectors
 	}
 
-	procs := makeProcess()
+	procs := testutil.NewProc()
 	cases := []struct {
 		name       string
 		vecs       []*vector.Vector
@@ -1613,7 +1613,7 @@ func TestCastSpecials3(t *testing.T) {
 		return vectors
 	}
 
-	procs := makeProcess()
+	procs := testutil.NewProc()
 	cases := []struct {
 		name       string
 		vecs       []*vector.Vector
@@ -1739,7 +1739,7 @@ func TestCastSpecial4(t *testing.T) {
 	}
 	resType := types.T_decimal128.ToType()
 	decimal128 := types.Decimal128FromInt32(123)
-	procs := makeProcess()
+	procs := testutil.NewProc()
 	cases := []struct {
 		name       string
 		vecs       []*vector.Vector
@@ -2190,7 +2190,7 @@ func TestCastFloatAsDecimal(t *testing.T) {
 		{
 			name:      "TEST01",
 			vecs:      makeTempVectors([]float32{123.0}, leftType, rightType),
-			proc:      makeProcess(),
+			proc:      testutil.NewProc(),
 			wantBytes: []types.Decimal64{types.Decimal64FromFloat64(123.0)},
 		},
 	}
@@ -2222,7 +2222,7 @@ func TestCastDecimalAsString(t *testing.T) {
 		{
 			name: "TEST01",
 			vecs: makeTempVectors([]types.Decimal64{types.Decimal64FromInt32(1230)}, leftType, rightType),
-			proc: makeProcess(),
+			proc: testutil.NewProc(),
 			wantBytes: [][]byte{
 				{0x31, 0x32, 0x33, 0x30},
 			},
@@ -2298,7 +2298,7 @@ func TestCastDecimal64AsDecimal128(t *testing.T) {
 	d64_33333300 := types.Decimal64FromInt32(333333000)
 	d128_33333300 := types.Decimal128FromInt32(333333000)
 
-	procs := makeProcess()
+	procs := testutil.NewProc()
 	cases := []struct {
 		name       string
 		vecs       []*vector.Vector
@@ -2357,7 +2357,7 @@ func TestCastDecimal64AsDecimal64(t *testing.T) {
 	//decimal(10, 4)
 	destType := types.Type{Oid: types.T_decimal64, Size: 8, Width: 10, Scale: 4}
 
-	procs := makeProcess()
+	procs := testutil.NewProc()
 	cases := []struct {
 		name       string
 		vecs       []*vector.Vector
@@ -2414,7 +2414,7 @@ func TestCastDecimal128AsDecimal128(t *testing.T) {
 	leftType := types.Type{Oid: types.T_decimal128, Size: 16, Width: 20, Scale: 5}
 	destType := types.Type{Oid: types.T_decimal128, Size: 16, Width: 20, Scale: 5}
 
-	procs := makeProcess()
+	procs := testutil.NewProc()
 	cases := []struct {
 		name       string
 		vecs       []*vector.Vector
@@ -3042,7 +3042,7 @@ func TestCastNullAsAllType(t *testing.T) {
 		return vectors
 	}
 
-	procs := makeProcess()
+	procs := testutil.NewProc()
 	cases := []struct {
 		name       string
 		vecs       []*vector.Vector
@@ -4214,7 +4214,7 @@ func TestCastBoolAsString(t *testing.T) {
 		return vectors
 	}
 
-	procs := makeProcess()
+	procs := testutil.NewProc()
 	cases := []struct {
 		name       string
 		vecs       []*vector.Vector
@@ -4282,7 +4282,7 @@ func TestCastDateAsDatetimeAndString(t *testing.T) {
 		return vectors
 	}
 
-	procs := makeProcess()
+	procs := testutil.NewProc()
 	cases := []struct {
 		name       string
 		vecs       []*vector.Vector
@@ -4354,7 +4354,7 @@ func TestCastDatetimeAsDateAndString(t *testing.T) {
 		return vectors
 	}
 
-	procs := makeProcess()
+	procs := testutil.NewProc()
 	cases := []struct {
 		name       string
 		vecs       []*vector.Vector
