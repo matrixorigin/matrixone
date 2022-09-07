@@ -1,0 +1,2 @@
+# NULL
+SELECT load_file(NULL)

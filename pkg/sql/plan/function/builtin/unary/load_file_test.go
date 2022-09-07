@@ -67,7 +67,7 @@ func TestLoadFile(t *testing.T) {
 			inVector := testutil.MakeVarcharVector(inStrs, nil)
 			res, err := LoadFile([]*vector.Vector{inVector}, proc)
 			convey.So(err, convey.ShouldBeNil)
-			convey.So(res.Data, convey.ShouldResemble, c.want)
+			convey.So(res.GetBytes(0), convey.ShouldResemble, c.want)
 		})
 	}
 
@@ -93,7 +93,7 @@ func TestLoadFile(t *testing.T) {
 		{
 			name:     "Empty File Case",
 			filename: filepath,
-			want:     []byte(nil),
+			want:     []byte{},
 		},
 	}
 	for _, c := range cases2 {
@@ -103,7 +103,7 @@ func TestLoadFile(t *testing.T) {
 			inVector := testutil.MakeVarcharVector(inStrs, nil)
 			res, err := LoadFile([]*vector.Vector{inVector}, proc)
 			convey.So(err, convey.ShouldBeNil)
-			convey.So(res.Data, convey.ShouldResemble, c.want)
+			convey.So(res.GetBytes(0), convey.ShouldResemble, c.want)
 		})
 	}
 
