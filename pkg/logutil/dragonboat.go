@@ -31,7 +31,7 @@ type DragonboatAdaptLogger struct {
 func (d *DragonboatAdaptLogger) SetLevel(level logger.LogLevel) {
 	switch level {
 	case logger.CRITICAL:
-		d.atom.SetLevel(zapcore.DPanicLevel)
+		d.atom.SetLevel(zapcore.PanicLevel)
 	case logger.ERROR:
 		d.atom.SetLevel(zapcore.ErrorLevel)
 	case logger.WARNING:

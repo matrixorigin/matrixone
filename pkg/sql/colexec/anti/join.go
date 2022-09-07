@@ -138,7 +138,7 @@ func (ctr *container) emptyProbe(bat *batch.Batch, ap *Argument, proc *process.P
 }
 
 func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Process, anal process.Analyze) error {
-	defer bat.Clean(proc.Mp)
+	defer bat.Clean(proc.Mp())
 	anal.Input(bat)
 	rbat := batch.NewWithSize(len(ap.Result))
 	rbat.Zs = proc.GetMheap().GetSels()
@@ -189,10 +189,10 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 					bs := vec.Col.([]bool)
 					if bs[0] {
 						matched = true
-						vec.Free(proc.Mp)
+						vec.Free(proc.Mp())
 						break
 					}
-					vec.Free(proc.Mp)
+					vec.Free(proc.Mp())
 				}
 				if matched {
 					continue

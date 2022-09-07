@@ -15,10 +15,12 @@
 package unary
 
 import (
+	"testing"
+
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/smartystreets/goconvey/convey"
-	"testing"
 )
 
 func TestMonthFunction(t *testing.T) {
@@ -80,8 +82,8 @@ func TestMonthFunction(t *testing.T) {
 	})
 
 	convey.Convey("DateToMonthCaseScalarNull", t, func() {
-		inVector := testutil.MakeScalarNull(10)
-		wantVector := testutil.MakeScalarNull(10)
+		inVector := testutil.MakeScalarNull(types.T_date, 10)
+		wantVector := testutil.MakeScalarNull(types.T_uint8, 10)
 		proc := testutil.NewProc()
 		res, err := DateToMonth([]*vector.Vector{inVector}, proc)
 		convey.So(err, convey.ShouldBeNil)
@@ -146,8 +148,8 @@ func TestMonthFunction(t *testing.T) {
 	})
 
 	convey.Convey("DatetimeToMonthCaseScalarNull", t, func() {
-		inVector := testutil.MakeScalarNull(10)
-		wantVector := testutil.MakeScalarNull(10)
+		inVector := testutil.MakeScalarNull(types.T_datetime, 10)
+		wantVector := testutil.MakeScalarNull(types.T_uint8, 10)
 		proc := testutil.NewProc()
 		res, err := DatetimeToMonth([]*vector.Vector{inVector}, proc)
 		convey.So(err, convey.ShouldBeNil)
@@ -217,8 +219,8 @@ func TestMonthFunction(t *testing.T) {
 	})
 
 	convey.Convey("DateStringToMonthCaseScalarNull", t, func() {
-		inVector := testutil.MakeScalarNull(10)
-		wantVector := testutil.MakeScalarNull(10)
+		inVector := testutil.MakeScalarNull(types.T_char, 10)
+		wantVector := testutil.MakeScalarNull(types.T_uint8, 10)
 		proc := testutil.NewProc()
 		res, err := DateStringToMonth([]*vector.Vector{inVector}, proc)
 		convey.So(err, convey.ShouldBeNil)

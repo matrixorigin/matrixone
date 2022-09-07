@@ -18,7 +18,6 @@ import (
 	"bytes"
 
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -37,13 +36,14 @@ func (c *strCompare) Copy(vecSrc, vecDst int, src, dst int64, proc *process.Proc
 		return nil
 	}
 	nulls.Del(c.vs[vecDst].Nsp, uint64(dst))
-	return vector.Copy(c.vs[vecDst], c.vs[vecSrc], dst, src, proc.Mp)
+	return vector.Copy(c.vs[vecDst], c.vs[vecSrc], dst, src, proc.Mp())
 }
 
 func (c *strCompare) Compare(veci, vecj int, vi, vj int64) int {
-	x, y := c.vs[veci].Col.(*types.Bytes), c.vs[vecj].Col.(*types.Bytes)
+	x := c.vs[veci].GetBytes(vi)
+	y := c.vs[vecj].GetBytes(vj)
 	if c.desc {
-		return bytes.Compare(x.Get(vi), y.Get(vj)) * -1
+		return bytes.Compare(y, x)
 	}
-	return bytes.Compare(x.Get(vi), y.Get(vj))
+	return bytes.Compare(x, y)
 }

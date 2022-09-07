@@ -21,14 +21,24 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 )
 
 // New creates a new Process.
 // A process stores the execution context.
-func New(m *mheap.Mheap) *Process {
+func New(
+	ctx context.Context,
+	m *mheap.Mheap,
+	txnOperator client.TxnOperator,
+	fileService fileservice.FileService,
+) *Process {
 	return &Process{
-		Mp: m,
+		mp:          m,
+		Ctx:         ctx,
+		TxnOperator: txnOperator,
+		FileService: fileService,
 	}
 }
 
@@ -44,7 +54,7 @@ func NewFromProc(p *Process, ctx context.Context, regNumber int) *Process {
 	proc := new(Process)
 	newctx, cancel := context.WithCancel(ctx)
 	proc.Id = p.Id
-	proc.Mp = p.Mp
+	proc.mp = p.Mp()
 	proc.Lim = p.Lim
 	proc.TxnOperator = p.TxnOperator
 	proc.AnalInfos = p.AnalInfos
@@ -89,7 +99,14 @@ func (proc *Process) SetQueryId(id string) {
 }
 
 func (proc *Process) GetMheap() *mheap.Mheap {
-	return proc.Mp
+	if proc == nil {
+		return nil
+	}
+	return proc.mp
+}
+
+func (proc *Process) Mp() *mheap.Mheap {
+	return proc.GetMheap()
 }
 
 func (proc *Process) OperatorOutofMemory(size int64) bool {
@@ -112,12 +129,15 @@ func (proc *Process) GetAnalyze(idx int) Analyze {
 }
 
 func (proc *Process) AllocVector(typ types.Type, size int64) (*vector.Vector, error) {
-	data, err := mheap.Alloc(proc.Mp, size)
-	if err != nil {
-		return nil, err
-	}
+	return proc.AllocVectorOfRows(typ, size/int64(typ.TypeSize()), nil)
+}
+
+func (proc *Process) AllocVectorOfRows(typ types.Type, nele int64, nsp *nulls.Nulls) (*vector.Vector, error) {
 	vec := vector.New(typ)
-	vec.Data = data[:size]
+	vector.PreAlloc(vec, int(nele), int(nele), proc.Mp())
+	if nsp != nil {
+		nulls.Set(vec.Nsp, nsp)
+	}
 	return vec, nil
 }
 

@@ -21,62 +21,26 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func IsNotNull[T NormalType](vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+func IsNotNull(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	input := vectors[0]
 	retType := types.T_bool.ToType()
 	if input.IsScalar() {
-		vec := proc.AllocScalarVector(retType)
-		vector.SetCol(vec, []bool{!input.IsScalarNull()})
-		return vec, nil
-	} else {
-		cols := vector.MustTCols[T](input)
-		l := int64(len(cols))
-		vec, err := proc.AllocVector(retType, l)
-		if err != nil {
-			return nil, err
-		}
-		col := types.DecodeFixedSlice[bool](vec.Data, 1)
-		col = col[:l]
-		for i := range cols {
-			if nulls.Contains(input.Nsp, uint64(i)) {
-				col[i] = false
-			} else {
-				col[i] = true
-			}
-		}
-		vector.SetCol(vec, col)
-		return vec, nil
-	}
-}
-
-func IsStringNotNull(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	input := vectors[0]
-	retType := types.T_bool.ToType()
-	if input.IsScalar() {
-		vec := proc.AllocScalarVector(retType)
 		if input.IsScalarNull() {
-			vector.SetCol(vec, []bool{false})
+			return vector.NewConstFixed(retType, input.Length(), false), nil
 		} else {
-			vector.SetCol(vec, []bool{!nulls.Contains(input.Nsp, uint64(0))})
+			return vector.NewConstFixed(retType, input.Length(), true), nil
 		}
-		return vec, nil
 	} else {
-		cols := vector.MustBytesCols(input)
-		l := int64(len(cols.Lengths))
-		vec, err := proc.AllocVector(retType, l)
-		if err != nil {
-			return nil, err
-		}
-		col := types.DecodeFixedSlice[bool](vec.Data, 1)
-		col = col[:l]
-		for i := range cols.Lengths {
+		vlen := input.Length()
+		vec := vector.PreAllocType(retType, vlen, vlen, proc.Mp())
+		vals := vector.MustTCols[bool](vec)
+		for i := range vals {
 			if nulls.Contains(input.Nsp, uint64(i)) {
-				col[i] = false
+				vals[i] = false
 			} else {
-				col[i] = true
+				vals[i] = true
 			}
 		}
-		vector.SetCol(vec, col)
 		return vec, nil
 	}
 }

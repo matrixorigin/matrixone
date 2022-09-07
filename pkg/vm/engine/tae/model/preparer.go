@@ -21,11 +21,9 @@ import (
 
 func PreparePhyAddrData(typ types.Type, prefix []byte, startRow, length uint32) (col containers.Vector, err error) {
 	col = containers.MakeVector(typ, false)
-	buf := make([]byte, 16)
-	offsetBuf := make([]byte, 4)
 	for i := uint32(0); i < length; i++ {
-		EncodePhyAddrKeyWithPrefix(buf, prefix, offsetBuf, startRow+i)
-		col.Append(types.DecodeFixed[types.Decimal128](buf))
+		rowid := EncodePhyAddrKeyWithPrefix(prefix, startRow+i)
+		col.Append(rowid)
 	}
 	return
 }

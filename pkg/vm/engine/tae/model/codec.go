@@ -36,38 +36,34 @@ func EncodeBlockKeyPrefix(segmentId, blockId uint64) []byte {
 	return buf
 }
 
-func DecodeBlockKeyPrefix(buf []byte) (segmentId, blockId uint64) {
-	tempBuf := make([]byte, 12)
-	copy(tempBuf[2:], buf[0:6])
+func DecodeBlockKeyPrefix(rowid types.Rowid) (segmentId, blockId uint64) {
+	tempBuf := make([]byte, 8)
+	copy(tempBuf[2:], rowid[0:6])
 	segmentId = binary.BigEndian.Uint64(tempBuf)
-	copy(tempBuf[2:], buf[6:])
+	copy(tempBuf[2:], rowid[6:12])
 	blockId = binary.BigEndian.Uint64(tempBuf)
 	return
 }
 
-func EncodePhyAddrKey(segmentId, blockId uint64, offset uint32) (key any) {
-	buf := make([]byte, 16)
+func EncodePhyAddrKey(segmentId, blockId uint64, offset uint32) types.Rowid {
 	prefix := EncodeBlockKeyPrefix(segmentId, blockId)
-	offsetBuf := make([]byte, 4)
-	EncodePhyAddrKeyWithPrefix(buf, prefix, offsetBuf, offset)
-	key = types.DecodeFixed[types.Decimal128](buf)
-	return
+	return EncodePhyAddrKeyWithPrefix(prefix, offset)
 }
 
-func EncodePhyAddrKeyWithPrefix(dest, prefix, offsetBuf []byte, offset uint32) {
-	copy(dest, prefix)
-	binary.BigEndian.PutUint32(offsetBuf, offset)
-	copy(dest[12:], offsetBuf)
+func EncodePhyAddrKeyWithPrefix(prefix []byte, offset uint32) types.Rowid {
+	var rowid types.Rowid
+	copy(rowid[:12], prefix)
+	binary.BigEndian.PutUint32(rowid[12:16], offset)
+	return rowid
 }
 
 func DecodePhyAddrKeyFromValue(v any) (segmentId, blockId uint64, offset uint32) {
-	reflected := v.(types.Decimal128)
-	src := types.EncodeFixed(reflected)
-	return DecodePhyAddrKey(src)
+	rowid := v.(types.Rowid)
+	return DecodePhyAddrKey(rowid)
 }
 
-func DecodePhyAddrKey(src []byte) (segmentId, blockId uint64, offset uint32) {
-	segmentId, blockId = DecodeBlockKeyPrefix(src[:12])
+func DecodePhyAddrKey(src types.Rowid) (segmentId, blockId uint64, offset uint32) {
+	segmentId, blockId = DecodeBlockKeyPrefix(src)
 	offset = binary.BigEndian.Uint32(src[12:])
 	return
 }
@@ -113,6 +109,10 @@ func EncodeTypedVals(w *bytes.Buffer, vals ...any) []byte {
 		case types.Decimal64:
 			_, _ = w.Write(types.EncodeFixed(v))
 		case types.Decimal128:
+			_, _ = w.Write(types.EncodeFixed(v))
+		case types.TS:
+			_, _ = w.Write(types.EncodeFixed(v))
+		case types.Rowid:
 			_, _ = w.Write(types.EncodeFixed(v))
 		default:
 			panic(fmt.Errorf("%T:%v not supported", v, v))

@@ -24,40 +24,27 @@ import (
 
 func JsonExtractByString(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	jsonBytes, pathBytes := vectors[0], vectors[1]
-	//TODO size maybe not fit
-	resultType := types.Type{Oid: types.T_varchar, Size: 256}
+	resultType := types.T_varchar.ToType()
 	json, path := vector.MustBytesCols(jsonBytes), vector.MustBytesCols(pathBytes)
-	resultElementSize := int(resultType.Size)
-	resultVector, err := proc.AllocVector(resultType, int64((resultElementSize)*len(json.Lengths)))
-	if err != nil {
-		return nil, err
-	}
-	resultValues := resultVector.Col.(*types.Bytes)
-	out, err := json_extract.QueryByString(json, path, resultValues)
+	// XXX BUG: the function only handles path is a constant.
+	resultValues, err := json_extract.QueryByString(json, path, nil)
 	if err != nil {
 		logutil.Infof("json_extract: err:%v", err)
 		return nil, err
 	}
-	vector.SetCol(resultVector, out)
-	return resultVector, nil
+	// No null map?
+	return vector.NewWithBytes(resultType, resultValues, nil, proc.Mp()), nil
 }
 
 func JsonExtractByJson(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	jsonBytes, pathBytes := vectors[0], vectors[1]
-	//TODO size maybe not fit
-	resultType := types.Type{Oid: types.T_varchar, Size: 256}
+	resultType := types.T_varchar.ToType()
 	json, path := vector.MustBytesCols(jsonBytes), vector.MustBytesCols(pathBytes)
-	resultElementSize := int(resultType.Size)
-	resultVector, err := proc.AllocVector(resultType, int64((resultElementSize)*len(json.Lengths)))
-	if err != nil {
-		return nil, err
-	}
-	resultValues := resultVector.Col.(*types.Bytes)
-	out, err := json_extract.QueryByJson(json, path, resultValues)
+	// XXX BUG: the function only handles if path is constant.
+	resultValues, err := json_extract.QueryByJson(json, path, nil)
 	if err != nil {
 		logutil.Infof("json_extract: err:%v", err)
 		return nil, err
 	}
-	vector.SetCol(resultVector, out)
-	return resultVector, nil
+	return vector.NewWithBytes(resultType, resultValues, nil, proc.Mp()), nil
 }

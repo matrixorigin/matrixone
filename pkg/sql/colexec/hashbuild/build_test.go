@@ -80,10 +80,10 @@ func TestBuild(t *testing.T) {
 			require.Equal(t, true, ok)
 			mp := tc.proc.Reg.InputBatch.Ht.(*hashmap.JoinMap)
 			mp.Free()
-			tc.proc.Reg.InputBatch.Clean(tc.proc.Mp)
+			tc.proc.Reg.InputBatch.Clean(tc.proc.Mp())
 			break
 		}
-		require.Equal(t, int64(0), mheap.Size(tc.proc.Mp))
+		require.Equal(t, int64(0), mheap.Size(tc.proc.Mp()))
 	}
 }
 
@@ -108,7 +108,7 @@ func BenchmarkBuild(b *testing.B) {
 				require.Equal(t, true, ok)
 				mp := tc.proc.Reg.InputBatch.Ht.(*hashmap.JoinMap)
 				mp.Free()
-				tc.proc.Reg.InputBatch.Clean(tc.proc.Mp)
+				tc.proc.Reg.InputBatch.Clean(tc.proc.Mp())
 				break
 			}
 		}
@@ -132,7 +132,7 @@ func newExpr(pos int32, typ types.Type) *plan.Expr {
 }
 
 func newTestCase(m *mheap.Mheap, flgs []bool, ts []types.Type, cs []*plan.Expr) buildTestCase {
-	proc := process.New(m)
+	proc := testutil.NewProcessWithMheap(m)
 	proc.Reg.MergeReceivers = make([]*process.WaitRegister, 1)
 	ctx, cancel := context.WithCancel(context.Background())
 	proc.Reg.MergeReceivers[0] = &process.WaitRegister{
@@ -154,5 +154,5 @@ func newTestCase(m *mheap.Mheap, flgs []bool, ts []types.Type, cs []*plan.Expr) 
 
 // create a new block based on the type information, flgs[i] == ture: has null
 func newBatch(t *testing.T, flgs []bool, ts []types.Type, proc *process.Process, rows int64) *batch.Batch {
-	return testutil.NewBatch(ts, false, int(rows), proc.Mp)
+	return testutil.NewBatch(ts, false, int(rows), proc.Mp())
 }
