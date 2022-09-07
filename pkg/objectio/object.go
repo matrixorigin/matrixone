@@ -1,31 +1,20 @@
 package objectio
 
+import "github.com/matrixorigin/matrixone/pkg/fileservice"
+
 const Magic = 0xFFFFFFFF
 const Version = 1
-const ObjectSize = 2 << 30
 
 type Object struct {
-	oFile     ObjectFile
-	footer    *Footer
-	allocator *ObjectAllocator
+	oFile fileservice.FileService
 }
 
-func NewObject(path string) (*Object, error) {
+func NewObject(name string, path string) (*Object, error) {
 	var err error
-	object := &Object{
-		allocator: NewObjectAllocator(),
-	}
-	object.oFile, err = NewLocalFile(path)
+	object := &Object{}
+	object.oFile, err = fileservice.NewLocalFS(name, path, 0)
 	if err != nil {
 		return nil, err
 	}
 	return object, nil
-}
-
-func (o *Object) Append(data []byte, offset uint32) (n int, err error) {
-	n, err = o.oFile.WriteAt(data, int64(offset))
-	if err != nil {
-		return
-	}
-	return
 }

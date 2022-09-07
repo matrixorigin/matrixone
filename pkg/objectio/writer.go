@@ -47,7 +47,9 @@ func (w *ObjectWriter) WriteHeader() error {
 }
 
 func (w *ObjectWriter) Write(id *common.ID, batch *batch.Batch) error {
-	block := w.GetBlock(id, batch)
+	block := NewBlock(id, batch)
+	w.AddBlock(block)
+	//block := w.GetBlock(id, batch)
 	for i, vec := range batch.Vecs {
 		buf, err := vec.Show()
 		if err != nil {
@@ -115,19 +117,15 @@ func (w *ObjectWriter) WriteEnd() error {
 }
 
 // Sync is for testing
-func (w *ObjectWriter) Sync() error {
+func (w *ObjectWriter) Sync(dir string) error {
 	var err error
-	w.object, err = NewObject(w.name)
+	w.object, err = NewObject("local", dir)
 	if err != nil {
 		return err
 	}
-	offset, allocated := w.object.allocator.Allocate(uint32(w.buffer.Length()))
-	n, err := w.object.Append(w.buffer.GetData(), offset)
+	err = w.object.oFile.Write(nil, w.buffer.GetData())
 	if err != nil {
 		return err
-	}
-	if n != int(allocated) {
-		panic(any("Write Failed!"))
 	}
 	return err
 }

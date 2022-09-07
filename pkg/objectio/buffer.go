@@ -2,58 +2,48 @@ package objectio
 
 import (
 	"bytes"
-	"encoding/binary"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"sync"
 )
 
 type ObjectBuffer struct {
 	common.RefHelper
-	buf  *bytes.Buffer
-	name string
+	buf    *bytes.Buffer
+	vector fileservice.IOVector
 }
 
 func NewObjectBuffer(name string) *ObjectBuffer {
-	buffer := &ObjectBuffer{name: name}
-	buffer.buf = new(bytes.Buffer)
+	buffer := &ObjectBuffer{
+		buf: new(bytes.Buffer),
+		vector: fileservice.IOVector{
+			FilePath: name,
+		},
+	}
+	buffer.vector.Entries = make([]fileservice.IOEntry, 0)
 	buffer.Ref()
 	return buffer
 }
 
-func (buffer *ObjectBuffer) Write(buf []byte) (int, int, error) {
-	offset := buffer.buf.Len()
-	if err := binary.Write(buffer.buf, binary.BigEndian, buf); err != nil {
-		return offset, 0, err
+func (b *ObjectBuffer) Write(buf []byte) (int, int, error) {
+	var offset int = 0
+	le := len(b.vector.Entries)
+	if len(b.vector.Entries) > 0 {
+		offset = b.vector.Entries[le-1].Offset +
+			b.vector.Entries[le-1].Size
 	}
-	length := buffer.buf.Len() - offset
-	return offset, length, nil
+	entry := fileservice.IOEntry{
+		Offset: offset,
+		Size:   len(buf),
+		Data:   buf,
+	}
+	b.vector.Entries = append(b.vector.Entries, entry)
+	return offset, len(buf), nil
 }
 
-func (buffer *ObjectBuffer) Length() int {
-	return buffer.buf.Len()
+func (b *ObjectBuffer) Length() int {
+	return b.buf.Len()
 }
 
-func (buffer *ObjectBuffer) GetData() []byte {
-	return buffer.buf.Bytes()
-}
-
-type ObjectBufferPool struct {
-	sync.RWMutex
-	buffers map[string]*ObjectBuffer
-	count   uint32
-}
-
-func NewObjectBufferPool(count uint32) *ObjectBufferPool {
-	pool := &ObjectBufferPool{count: count}
-	pool.buffers = make(map[string]*ObjectBuffer)
-	return pool
-}
-
-func (pool *ObjectBufferPool) GetBuffer(name string) *ObjectBuffer {
-	buffer := NewObjectBuffer(name)
-
-	pool.Lock()
-	defer pool.Unlock()
-	pool.buffers[name] = buffer
-	return buffer
+func (b *ObjectBuffer) GetData() fileservice.IOVector {
+	return b.vector
 }

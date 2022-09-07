@@ -28,14 +28,13 @@ func TestNewBlock(t *testing.T) {
 	data := catalog.MockBatch(schema, int(schema.BlockMaxRows*2))
 	newbat := mobat.New(true, data.Attrs)
 	newbat.Vecs = moengine.CopyToMoVectors(data.Vecs)
+
 	ow, err := NewObjectWriter(name)
 	assert.Nil(t, err)
-	err = ow.Write(&common.ID{
-		BlockID: id,
-	}, newbat)
+	err = ow.Write(&common.ID{BlockID: id}, newbat)
 	assert.Nil(t, err)
 	err = ow.WriteEnd()
 	assert.Nil(t, err)
-	err = ow.Sync()
+	err = ow.Sync(dir)
 	assert.Nil(t, err)
 }

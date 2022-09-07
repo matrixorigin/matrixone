@@ -28,10 +28,6 @@ func NewObjectAllocator() *ObjectAllocator {
 	return allocator
 }
 
-func (o *ObjectAllocator) Init(capacity uint32) {
-	o.available = 0
-}
-
 func (o *ObjectAllocator) Allocate(needLen uint32) (uint32, uint32) {
 	o.mutex.Lock()
 	defer o.mutex.Unlock()
