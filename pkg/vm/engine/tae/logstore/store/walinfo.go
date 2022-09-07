@@ -228,11 +228,11 @@ func (w *StoreInfo) onCheckpoint() {
 	w.checkpointedMu.Lock()
 	for gid, ckp := range w.checkpointInfo {
 		ckped := ckp.GetCheckpointed()
+		// logutil.Infof("%d-%v", gid, ckp)
 		if ckped == 0 {
 			continue
 		}
 		w.checkpointed[gid] = ckped
-		logutil.Infof("%d-%v", gid, ckp)
 	}
 	w.checkpointedMu.Unlock()
 	w.ckpcntMu.Lock()

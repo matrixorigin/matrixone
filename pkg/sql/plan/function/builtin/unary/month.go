@@ -49,7 +49,7 @@ func DatetimeToMonth(vectors []*vector.Vector, proc *process.Process) (*vector.V
 	resultType := types.Type{Oid: types.T_uint8, Size: 1}
 	resultElementSize := int(resultType.Size)
 	inputValues := vector.MustTCols[types.Datetime](inputVector)
-	if inputVector.IsConst {
+	if inputVector.IsScalar() {
 		if inputVector.ConstVectorIsNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
@@ -74,7 +74,7 @@ func DateStringToMonth(vectors []*vector.Vector, proc *process.Process) (*vector
 	inputVector := vectors[0]
 	resultType := types.Type{Oid: types.T_uint8, Size: 1}
 	inputValues := vector.MustStrCols(inputVector)
-	if inputVector.IsConst {
+	if inputVector.IsScalar() {
 		if inputVector.ConstVectorIsNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}

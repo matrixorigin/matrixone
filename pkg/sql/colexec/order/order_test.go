@@ -126,7 +126,7 @@ func BenchmarkOrder(b *testing.B) {
 func newTestCase(m *mheap.Mheap, ts []types.Type, fs []colexec.Field) orderTestCase {
 	return orderTestCase{
 		types: ts,
-		proc:  process.New(m),
+		proc:  testutil.NewProcessWithMheap(m),
 		arg: &Argument{
 			Fs: fs,
 		},

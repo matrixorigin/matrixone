@@ -22,10 +22,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
-	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
-	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
-	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/smartystreets/goconvey/convey"
 )
 
@@ -34,7 +30,7 @@ func Test_CeilUint64(t *testing.T) {
 		var uint64VecBase = []uint64{1, 4, 8, 16, 32, math.MaxUint64, 0}
 		var nsp1 = []uint64{6}
 		var origVecs = make([]*vector.Vector, 1)
-		var proc = process.New(mheap.New(&guest.Mmu{Mmu: host.New(100000), Limit: 100000}))
+		var proc = testutil.NewProc()
 		origVecs[0] = testutil.MakeUint64Vector(uint64VecBase, nsp1)
 		vec, err := CeilUint64(origVecs, proc)
 		if err != nil {
@@ -72,7 +68,7 @@ func Test_CeilInt64(t *testing.T) {
 		var int64VecBase = []int64{math.MinInt64 + 1, math.MinInt64 + 2, -100, -1, 0, 1, 4, 8, 16, 32, 64, math.MaxInt64, 0}
 		var nsp1 = []uint64{12}
 		var origVecs = make([]*vector.Vector, 1)
-		var proc = process.New(mheap.New(&guest.Mmu{Mmu: host.New(100000), Limit: 100000}))
+		var proc = testutil.NewProc()
 		origVecs[0] = testutil.MakeInt64Vector(int64VecBase, nsp1)
 		vec, err := CeilInt64(origVecs, proc)
 		if err != nil {
@@ -110,7 +106,7 @@ func Test_CeilFloat64(t *testing.T) {
 			1.5, 4.4, 8.5, 16.32, 32.345, 64.09, math.MaxInt64, math.MaxFloat64, 0}
 		var nsp1 = []uint64{uint64(len(float64VecBase) - 1)}
 		var origVecs = make([]*vector.Vector, 1)
-		var proc = process.New(mheap.New(&guest.Mmu{Mmu: host.New(100000), Limit: 100000}))
+		var proc = testutil.NewProc()
 		origVecs[0] = testutil.MakeFloat64Vector(float64VecBase, nsp1)
 		vec, err := CeilFloat64(origVecs, proc)
 		if err != nil {
