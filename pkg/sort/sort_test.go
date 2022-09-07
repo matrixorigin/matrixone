@@ -102,8 +102,8 @@ func TestSort(t *testing.T) {
 		}
 		Sort(tc.desc, os, tc.vec)
 		checkResult(t, tc.desc, tc.vec, os)
-		tc.vec.Free(tc.proc.Mp)
-		require.Equal(t, int64(0), mheap.Size(tc.proc.Mp))
+		tc.vec.Free(tc.proc.Mp())
+		require.Equal(t, int64(0), mheap.Size(tc.proc.Mp()))
 	}
 }
 
@@ -133,7 +133,7 @@ func checkResult(t *testing.T, desc bool, vec *vector.Vector, os []int64) {
 	switch vec.Typ.Oid {
 	case types.T_int32:
 		vs := make([]int, len(os))
-		col := vector.GenericVectorValues[int32](vec)
+		col := vector.GetFixedVectorValues[int32](vec)
 		for i := range vs {
 			vs[i] = int(col[i])
 		}
@@ -151,7 +151,7 @@ func checkResult(t *testing.T, desc bool, vec *vector.Vector, os []int64) {
 		}
 	case types.T_int64:
 		vs := make([]int, len(os))
-		col := vector.GenericVectorValues[int64](vec)
+		col := vector.GetFixedVectorValues[int64](vec)
 		for i := range vs {
 			vs[i] = int(col[i])
 		}
@@ -169,7 +169,7 @@ func checkResult(t *testing.T, desc bool, vec *vector.Vector, os []int64) {
 		}
 	case types.T_float32:
 		vs := make([]float64, len(os))
-		col := vector.GenericVectorValues[float32](vec)
+		col := vector.GetFixedVectorValues[float32](vec)
 		for i := range vs {
 			vs[i] = float64(col[i])
 		}
@@ -187,7 +187,7 @@ func checkResult(t *testing.T, desc bool, vec *vector.Vector, os []int64) {
 		}
 	case types.T_float64:
 		vs := make([]float64, len(os))
-		col := vector.GenericVectorValues[float64](vec)
+		col := vector.GetFixedVectorValues[float64](vec)
 		for i := range vs {
 			vs[i] = float64(col[i])
 		}

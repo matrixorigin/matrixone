@@ -103,9 +103,9 @@ func TestCompare(t *testing.T) {
 		err := c.Copy(0, 1, 0, 0, tc.proc)
 		require.NoError(t, err)
 		c.Compare(0, 1, 0, 0)
-		tc.vecs[0].Free(tc.proc.Mp)
-		tc.vecs[1].Free(tc.proc.Mp)
-		require.Equal(t, int64(0), mheap.Size(tc.proc.Mp))
+		tc.vecs[0].Free(tc.proc.Mp())
+		tc.vecs[1].Free(tc.proc.Mp())
+		require.Equal(t, int64(0), mheap.Size(tc.proc.Mp()))
 	}
 }
 

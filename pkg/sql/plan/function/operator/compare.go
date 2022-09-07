@@ -192,7 +192,7 @@ func CompareString(vs []*vector.Vector, fn compStringFn, proc *process.Process) 
 	if v1.IsScalar() && v2.IsScalar() {
 		vec := proc.AllocScalarVector(boolType)
 		vec.Col = make([]bool, 1)
-		vec.Col.([]bool)[0] = fn(col1.Get(0), col2.Get(0), v1.Typ.Scale, v2.Typ.Scale)
+		vec.Col.([]bool)[0] = fn(col1[0], col2[0], v1.Typ.Scale, v2.Typ.Scale)
 		return vec, nil
 	}
 
@@ -201,7 +201,7 @@ func CompareString(vs []*vector.Vector, fn compStringFn, proc *process.Process) 
 		vec := allocateBoolVector(length, proc)
 		veccol := vec.Col.([]bool)
 		for i := range veccol {
-			veccol[i] = fn(col1.Get(0), col2.Get(int64(i)), v1.Typ.Scale, v2.Typ.Scale)
+			veccol[i] = fn(col1[0], col2[i], v1.Typ.Scale, v2.Typ.Scale)
 		}
 		nulls.Or(v2.Nsp, nil, vec.Nsp)
 		return vec, nil
@@ -212,7 +212,7 @@ func CompareString(vs []*vector.Vector, fn compStringFn, proc *process.Process) 
 		vec := allocateBoolVector(length, proc)
 		veccol := vec.Col.([]bool)
 		for i := range veccol {
-			veccol[i] = fn(col1.Get(int64(i)), col2.Get(0), v1.Typ.Scale, v2.Typ.Scale)
+			veccol[i] = fn(col1[i], col2[0], v1.Typ.Scale, v2.Typ.Scale)
 		}
 		nulls.Or(v1.Nsp, nil, vec.Nsp)
 		return vec, nil
@@ -223,7 +223,7 @@ func CompareString(vs []*vector.Vector, fn compStringFn, proc *process.Process) 
 	vec := allocateBoolVector(length, proc)
 	veccol := vec.Col.([]bool)
 	for i := range veccol {
-		veccol[i] = fn(col1.Get(int64(i)), col2.Get(int64(i)), v1.Typ.Scale, v2.Typ.Scale)
+		veccol[i] = fn(col1[i], col2[i], v1.Typ.Scale, v2.Typ.Scale)
 	}
 	nulls.Or(v1.Nsp, v2.Nsp, vec.Nsp)
 	return vec, nil

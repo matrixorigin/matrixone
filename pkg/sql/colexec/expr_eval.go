@@ -58,45 +58,32 @@ func EvalExpr(bat *batch.Batch, proc *process.Process, expr *plan.Expr) (*vector
 		} else {
 			switch t.C.GetValue().(type) {
 			case *plan.Const_Bval:
-				vec = vector.NewConst(constBType, length)
-				vec.Col = []bool{t.C.GetBval()}
+				vec = vector.NewConstFixed(constBType, length, t.C.GetBval())
 			case *plan.Const_Ival:
-				vec = vector.NewConst(constIType, length)
-				vec.Col = []int64{t.C.GetIval()}
+				vec = vector.NewConstFixed(constIType, length, t.C.GetIval())
 			case *plan.Const_Fval:
-				vec = vector.NewConst(constFType, length)
-				vec.Col = []float32{t.C.GetFval()}
+				vec = vector.NewConstFixed(constFType, length, t.C.GetFval())
 			case *plan.Const_Uval:
-				vec = vector.NewConst(constUType, length)
-				vec.Col = []uint64{t.C.GetUval()}
+				vec = vector.NewConstFixed(constUType, length, t.C.GetUval())
 			case *plan.Const_Dval:
-				vec = vector.NewConst(constDType, length)
-				vec.Col = []float64{t.C.GetDval()}
+				vec = vector.NewConstFixed(constDType, length, t.C.GetDval())
 			case *plan.Const_Dateval:
-				vec = vector.NewConst(constDateType, length)
-				vec.Col = []types.Date{types.Date(t.C.GetDateval())}
+				vec = vector.NewConstFixed(constDateType, length, t.C.GetDateval())
 			case *plan.Const_Datetimeval:
-				vec = vector.NewConst(constDatetimeType, length)
-				vec.Col = []types.Datetime{types.Datetime(t.C.GetDatetimeval())}
+				vec = vector.NewConstFixed(constDatetimeType, length, t.C.GetDatetimeval())
 			case *plan.Const_Decimal64Val:
-				vec = vector.NewConst(constDecimal64Type, length)
-				d64 := t.C.GetDecimal64Val()
-				vec.Col = []types.Decimal64{types.Decimal64FromInt64Raw(d64.A)}
+				cd64 := t.C.GetDecimal64Val()
+				d64 := types.Decimal64FromInt64Raw(cd64.A)
+				vec = vector.NewConstFixed(constDecimal64Type, length, d64)
 			case *plan.Const_Decimal128Val:
-				vec = vector.NewConst(constDecimal128Type, length)
-				d128 := t.C.GetDecimal128Val()
-				vec.Col = []types.Decimal128{types.Decimal128FromInt64Raw(d128.A, d128.B)}
+				cd128 := t.C.GetDecimal128Val()
+				d128 := types.Decimal64FromInt64Raw(cd128.A)
+				vec = vector.NewConstFixed(constDecimal128Type, length, d128)
 			case *plan.Const_Timestampval:
-				vec = vector.NewConst(constTimestampType, length)
-				vec.Col = []types.Timestamp{types.Timestamp(t.C.GetTimestampval())}
+				vec = vector.NewConstFixed(constTimestampType, length, t.C.GetTimestampval())
 			case *plan.Const_Sval:
-				vec = vector.NewConst(constSType, length)
 				sval := t.C.GetSval()
-				vec.Col = &types.Bytes{
-					Data:    []byte(sval),
-					Offsets: []uint32{0},
-					Lengths: []uint32{uint32(len(sval))},
-				}
+				vec = vector.NewConstString(constSType, length, sval)
 			default:
 				return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("unimplemented const expression %v", t.C.GetValue()))
 			}
@@ -133,7 +120,7 @@ func EvalExpr(bat *batch.Batch, proc *process.Process, expr *plan.Expr) (*vector
 					}
 					for j := 0; j < i; j++ {
 						if _, ok := mp[vs[j]]; !ok {
-							vector.Clean(vs[j], proc.Mp)
+							vector.Clean(vs[j], proc.Mp())
 						}
 					}
 				}
@@ -149,7 +136,7 @@ func EvalExpr(bat *batch.Batch, proc *process.Process, expr *plan.Expr) (*vector
 				}
 				for i := range vs {
 					if _, ok := mp[vs[i]]; !ok {
-						vector.Clean(vs[i], proc.Mp)
+						vector.Clean(vs[i], proc.Mp())
 					}
 				}
 			}
@@ -158,7 +145,7 @@ func EvalExpr(bat *batch.Batch, proc *process.Process, expr *plan.Expr) (*vector
 		if err != nil {
 			return nil, err
 		}
-		vec.Length = len(bat.Zs)
+		vector.SetLength(vec, len(bat.Zs))
 		vec.FillDefaultValue()
 		return vec, nil
 	default:
@@ -187,13 +174,8 @@ func JoinFilterEvalExpr(r, s *batch.Batch, rRow int, proc *process.Process, expr
 				vec = vector.NewConst(constDType, 1)
 				vec.Col = []float64{t.C.GetDval()}
 			case *plan.Const_Sval:
-				vec = vector.NewConst(constSType, 1)
 				sval := t.C.GetSval()
-				vec.Col = &types.Bytes{
-					Data:    []byte(sval),
-					Offsets: []uint32{0},
-					Lengths: []uint32{uint32(len(sval))},
-				}
+				vec = vector.NewConstString(constSType, 1, sval)
 			default:
 				return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("unimplemented const expression %v", t.C.GetValue()))
 			}
@@ -228,7 +210,7 @@ func JoinFilterEvalExpr(r, s *batch.Batch, rRow int, proc *process.Process, expr
 				}
 				for j := 0; j < i; j++ {
 					if _, ok := mp[vs[j]]; !ok {
-						vector.Clean(vs[j], proc.Mp)
+						vector.Clean(vs[j], proc.Mp())
 					}
 				}
 				return nil, err
@@ -242,7 +224,7 @@ func JoinFilterEvalExpr(r, s *batch.Batch, rRow int, proc *process.Process, expr
 			}
 			for i := range vs {
 				if _, ok := mp[vs[i]]; !ok {
-					vector.Clean(vs[i], proc.Mp)
+					vector.Clean(vs[i], proc.Mp())
 				}
 			}
 		}()
@@ -250,7 +232,7 @@ func JoinFilterEvalExpr(r, s *batch.Batch, rRow int, proc *process.Process, expr
 		if err != nil {
 			return nil, err
 		}
-		vec.Length = len(s.Zs)
+		vector.SetLength(vec, len(s.Zs))
 		vec.FillDefaultValue()
 		return vec, nil
 	default:
@@ -279,13 +261,8 @@ func JoinFilterEvalExprInBucket(r, s *batch.Batch, rRow, sRow int, proc *process
 				vec = vector.NewConst(constDType, 1)
 				vec.Col = []float64{t.C.GetDval()}
 			case *plan.Const_Sval:
-				vec = vector.NewConst(constSType, 1)
 				sval := t.C.GetSval()
-				vec.Col = &types.Bytes{
-					Data:    []byte(sval),
-					Offsets: []uint32{0},
-					Lengths: []uint32{uint32(len(sval))},
-				}
+				vec = vector.NewConstString(constSType, 1, sval)
 			default:
 				return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("unimplemented const expression %v", t.C.GetValue()))
 			}
@@ -320,7 +297,7 @@ func JoinFilterEvalExprInBucket(r, s *batch.Batch, rRow, sRow int, proc *process
 				}
 				for j := 0; j < i; j++ {
 					if _, ok := mp[vs[j]]; !ok {
-						vector.Clean(vs[j], proc.Mp)
+						vector.Clean(vs[j], proc.Mp())
 					}
 				}
 				return nil, err
@@ -334,7 +311,7 @@ func JoinFilterEvalExprInBucket(r, s *batch.Batch, rRow, sRow int, proc *process
 			}
 			for i := range vs {
 				if _, ok := mp[vs[i]]; !ok {
-					vector.Clean(vs[i], proc.Mp)
+					vector.Clean(vs[i], proc.Mp())
 				}
 			}
 		}()
@@ -342,7 +319,8 @@ func JoinFilterEvalExprInBucket(r, s *batch.Batch, rRow, sRow int, proc *process
 		if err != nil {
 			return nil, err
 		}
-		vec.Length = 1
+
+		vector.SetLength(vec, 1)
 		vec.FillDefaultValue()
 		return vec, nil
 	default:

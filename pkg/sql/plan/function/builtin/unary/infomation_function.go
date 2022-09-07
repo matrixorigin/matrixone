@@ -17,7 +17,6 @@ package unary
 import (
 	"errors"
 
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -39,22 +38,19 @@ func adapter(vectors []*vector.Vector,
 	jobFunc func(proc *process.Process, params ...interface{}) (interface{}, error),
 ) (*vector.Vector, error) {
 	if parameterCount == 0 {
+		//XXX step 1 is not needed now.
 		//step 1: evaluate the capacity for result vector
-		capacity, err := evaluateMemoryCapacityForJobFunc(proc)
-		if err != nil {
-			return nil, err
-		}
+
 		//step 2: allocate the memory for the result
+		var svals []string
+		var uvals []uint64
 		var resultSpace interface{}
-		switch resultType.Oid {
-		case types.T_varchar, types.T_char:
-			resultSpace = &types.Bytes{
-				Data:    make([]byte, capacity),
-				Offsets: make([]uint32, 1),
-				Lengths: make([]uint32, 1),
-			}
-		case types.T_uint64:
-			resultSpace = make([]uint64, 1)
+		if resultType.IsString() {
+			svals = make([]string, 1)
+			resultSpace = svals
+		} else {
+			uvals = make([]uint64, 1)
+			resultSpace = uvals
 		}
 		//step 3: evaluate the function and get the result
 		result, err := jobFunc(proc, resultSpace)
@@ -62,30 +58,15 @@ func adapter(vectors []*vector.Vector,
 			return nil, err
 		}
 		//step 4: fill the result vector
-		resultVector := vector.NewConst(resultType, 1)
 		if result == nil {
-			nulls.Add(resultVector.Nsp, 0)
+			return vector.NewConstNull(resultType, 1), nil
+		} else if resultType.IsString() {
+			return vector.NewConstString(resultType, 1, svals[0]), nil
 		} else {
-			vector.SetCol(resultVector, result)
+			return vector.NewConstFixed(resultType, 1, uvals[0]), nil
 		}
-		return resultVector, nil
 	}
 	return nil, errorParameterIsInvalid
-}
-
-func fillString(str string, dst *types.Bytes) error {
-	if dst == nil ||
-		dst.Data == nil ||
-		dst.Offsets == nil ||
-		dst.Lengths == nil ||
-		len(dst.Offsets) != len(dst.Lengths) {
-		return errorParameterIsInvalid
-	}
-	l := len(dst.Data)
-	copy(dst.Data, []byte(str)[:l])
-	dst.Offsets[0] = 0
-	dst.Lengths[0] = uint32(l)
-	return nil
 }
 
 func evaluateMemoryCapacityForDatabase(proc *process.Process, params ...interface{}) (int, error) {
@@ -93,14 +74,10 @@ func evaluateMemoryCapacityForDatabase(proc *process.Process, params ...interfac
 }
 
 func doDatabase(proc *process.Process, params ...interface{}) (interface{}, error) {
-	result := params[0].(*types.Bytes)
-	dbName := proc.SessionInfo.GetDatabase()
-	if len(dbName) == 0 {
+	result := params[0].([]string)
+	result[0] = proc.SessionInfo.GetDatabase()
+	if len(result[0]) == 0 {
 		return nil, nil
-	}
-	err := fillString(dbName, result)
-	if err != nil {
-		return nil, err
 	}
 	return result, nil
 }
@@ -118,11 +95,8 @@ func evaluateMemoryCapacityForUser(proc *process.Process, params ...interface{})
 }
 
 func doUser(proc *process.Process, params ...interface{}) (interface{}, error) {
-	result := params[0].(*types.Bytes)
-	err := fillString(proc.SessionInfo.GetUserHost(), result)
-	if err != nil {
-		return nil, err
-	}
+	result := params[0].([]string)
+	result[0] = proc.SessionInfo.GetUserHost()
 	return result, nil
 }
 
@@ -157,11 +131,8 @@ func evaluateMemoryCapacityForCharset(proc *process.Process, params ...interface
 }
 
 func doCharset(proc *process.Process, params ...interface{}) (interface{}, error) {
-	result := params[0].(*types.Bytes)
-	err := fillString(proc.SessionInfo.GetCharset(), result)
-	if err != nil {
-		return nil, err
-	}
+	result := params[0].([]string)
+	result[0] = proc.SessionInfo.GetCharset()
 	return result, nil
 }
 
@@ -180,15 +151,12 @@ func evaluateMemoryCapacityForCurrentRole(proc *process.Process, params ...inter
 }
 
 func doCurrentRole(proc *process.Process, params ...interface{}) (interface{}, error) {
-	result := params[0].(*types.Bytes)
+	result := params[0].([]string)
 	role := proc.SessionInfo.GetRole()
 	if len(role) == 0 {
 		return nil, nil
 	}
-	err := fillString(role, result)
-	if err != nil {
-		return nil, err
-	}
+	result[0] = role
 	return result, nil
 }
 
@@ -225,11 +193,8 @@ func ICULIBVersion(vectors []*vector.Vector, proc *process.Process) (*vector.Vec
 			return 0, nil
 		},
 		func(proc *process.Process, params ...interface{}) (interface{}, error) {
-			result := params[0].(*types.Bytes)
-			err := fillString("", result)
-			if err != nil {
-				return nil, err
-			}
+			result := params[0].([]string)
+			result[0] = ""
 			return result, nil
 		},
 	)
@@ -256,11 +221,8 @@ func RolesGraphml(vectors []*vector.Vector, proc *process.Process) (*vector.Vect
 			return 0, nil
 		},
 		func(proc *process.Process, params ...interface{}) (interface{}, error) {
-			result := params[0].(*types.Bytes)
-			err := fillString("", result)
-			if err != nil {
-				return nil, err
-			}
+			result := params[0].([]string)
+			result[0] = ""
 			return result, nil
 		},
 	)
@@ -287,11 +249,8 @@ func Version(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, e
 			return len(proc.SessionInfo.GetVersion()), nil
 		},
 		func(proc *process.Process, params ...interface{}) (interface{}, error) {
-			result := params[0].(*types.Bytes)
-			err := fillString(proc.SessionInfo.GetVersion(), result)
-			if err != nil {
-				return nil, err
-			}
+			result := params[0].([]string)
+			result[0] = proc.SessionInfo.GetVersion()
 			return result, nil
 		},
 	)
@@ -304,11 +263,8 @@ func Collation(vectors []*vector.Vector, proc *process.Process) (*vector.Vector,
 			return len(proc.SessionInfo.GetCollation()), nil
 		},
 		func(proc *process.Process, params ...interface{}) (interface{}, error) {
-			result := params[0].(*types.Bytes)
-			err := fillString(proc.SessionInfo.GetCollation(), result)
-			if err != nil {
-				return nil, err
-			}
+			result := params[0].([]string)
+			result[0] = proc.SessionInfo.GetCollation()
 			return result, nil
 		},
 	)

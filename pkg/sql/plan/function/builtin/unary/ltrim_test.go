@@ -15,11 +15,9 @@
 package unary
 
 import (
-	"errors"
 	"log"
 	"testing"
 
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
@@ -40,16 +38,13 @@ func Test_Ltrim(t *testing.T) {
 		if err != nil {
 			log.Fatal(err)
 		}
-		data, ok := vec.Col.(*types.Bytes)
-		if !ok {
-			log.Fatal(errors.New("the Ltrim function return value type is not types.Bytes"))
-		}
+
+		data := vector.GetStrVectorValues(vec)
 		compVec := []string{"123", "123", "123 ", "8 ", "8 a ", ""}
 		compNsp := []int64{5}
 
 		for i := 0; i < len(compVec); i++ {
-			str := string(data.Data[data.Offsets[i] : data.Offsets[i]+data.Lengths[i]])
-			convey.So(str, convey.ShouldEqual, compVec[i])
+			convey.So(data[i], convey.ShouldEqual, compVec[i])
 		}
 		j := 0
 		for i := 0; i < len(compVec); i++ {
@@ -65,5 +60,4 @@ func Test_Ltrim(t *testing.T) {
 			}
 		}
 	})
-
 }

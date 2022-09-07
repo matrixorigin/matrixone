@@ -76,7 +76,7 @@ func TestConnector(t *testing.T) {
 		{
 			for _, vec := range bat.Vecs {
 				if vec.Or {
-					mheap.Free(tc.proc.Mp, vec.Data)
+					mheap.Free(tc.proc.Mp(), vec.Data)
 				}
 			}
 		}
@@ -93,9 +93,9 @@ func TestConnector(t *testing.T) {
 			if len(bat.Zs) == 0 {
 				continue
 			}
-			bat.Clean(tc.proc.Mp)
+			bat.Clean(tc.proc.Mp())
 		}
-		require.Equal(t, mheap.Size(tc.proc.Mp), int64(0))
+		require.Equal(t, mheap.Size(tc.proc.Mp()), int64(0))
 	}
 }
 
@@ -121,5 +121,5 @@ func newTestCase(gm *guest.Mmu) connectorTestCase {
 
 // create a new block based on the type information
 func newBatch(t *testing.T, ts []types.Type, proc *process.Process, rows int64) *batch.Batch {
-	return testutil.NewBatch(ts, false, int(rows), proc.Mp)
+	return testutil.NewBatch(ts, false, int(rows), proc.Mp())
 }

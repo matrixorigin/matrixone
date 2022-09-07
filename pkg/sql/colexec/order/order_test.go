@@ -78,18 +78,18 @@ func TestOrder(t *testing.T) {
 		tc.proc.Reg.InputBatch = newBatch(t, tc.types, tc.proc, Rows)
 		_, _ = Call(0, tc.proc, tc.arg)
 		if tc.proc.Reg.InputBatch != nil {
-			tc.proc.Reg.InputBatch.Clean(tc.proc.Mp)
+			tc.proc.Reg.InputBatch.Clean(tc.proc.Mp())
 		}
 		tc.proc.Reg.InputBatch = newBatch(t, tc.types, tc.proc, Rows)
 		_, _ = Call(0, tc.proc, tc.arg)
 		if tc.proc.Reg.InputBatch != nil {
-			tc.proc.Reg.InputBatch.Clean(tc.proc.Mp)
+			tc.proc.Reg.InputBatch.Clean(tc.proc.Mp())
 		}
 		tc.proc.Reg.InputBatch = &batch.Batch{}
 		_, _ = Call(0, tc.proc, tc.arg)
 		tc.proc.Reg.InputBatch = nil
 		_, _ = Call(0, tc.proc, tc.arg)
-		require.Equal(t, int64(0), mheap.Size(tc.proc.Mp))
+		require.Equal(t, int64(0), mheap.Size(tc.proc.Mp()))
 	}
 }
 
@@ -108,12 +108,12 @@ func BenchmarkOrder(b *testing.B) {
 			tc.proc.Reg.InputBatch = newBatch(t, tc.types, tc.proc, BenchmarkRows)
 			_, _ = Call(0, tc.proc, tc.arg)
 			if tc.proc.Reg.InputBatch != nil {
-				tc.proc.Reg.InputBatch.Clean(tc.proc.Mp)
+				tc.proc.Reg.InputBatch.Clean(tc.proc.Mp())
 			}
 			tc.proc.Reg.InputBatch = newBatch(t, tc.types, tc.proc, BenchmarkRows)
 			_, _ = Call(0, tc.proc, tc.arg)
 			if tc.proc.Reg.InputBatch != nil {
-				tc.proc.Reg.InputBatch.Clean(tc.proc.Mp)
+				tc.proc.Reg.InputBatch.Clean(tc.proc.Mp())
 			}
 			tc.proc.Reg.InputBatch = &batch.Batch{}
 			_, _ = Call(0, tc.proc, tc.arg)
@@ -145,5 +145,5 @@ func newExpression(pos int32) *plan.Expr {
 
 // create a new block based on the type information
 func newBatch(t *testing.T, ts []types.Type, proc *process.Process, rows int64) *batch.Batch {
-	return testutil.NewBatch(ts, false, int(rows), proc.Mp)
+	return testutil.NewBatch(ts, false, int(rows), proc.Mp())
 }

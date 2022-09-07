@@ -15,9 +15,6 @@
 package multi
 
 import (
-	"errors"
-
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/ceil"
@@ -25,133 +22,21 @@ import (
 )
 
 func CeilUint64(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	if vecs[0].IsScalarNull() {
-		return proc.AllocScalarNullVector(types.Type{Oid: types.T_uint64, Size: 8}), nil
-	}
-	digits := int64(0)
-	vs := vector.MustTCols[uint64](vecs[0])
-	if len(vecs) > 1 {
-		if vecs[1].IsScalarNull() {
-			return proc.AllocScalarNullVector(types.Type{Oid: types.T_uint64, Size: 8}), nil
-		}
-		if !vecs[1].IsScalar() || vecs[1].Typ.Oid != types.T_int64 {
-			return nil, errors.New("the second argument of the ceil function must be an int64 constant")
-		}
-		digits = vecs[1].Col.([]int64)[0]
-	}
-	if vecs[0].IsScalar() {
-		vec := proc.AllocScalarVector(types.Type{Oid: types.T_uint64, Size: 8})
-		rs := make([]uint64, 1)
-		nulls.Set(vec.Nsp, vecs[0].Nsp)
-		vector.SetCol(vec, ceil.CeilUint64(vs, rs, digits))
-		return vec, nil
-	} else {
-		vec, err := proc.AllocVector(types.Type{Oid: types.T_uint64, Size: 8}, 8*int64(len(vs)))
-		if err != nil {
-			return nil, err
-		}
-		rs := types.DecodeUint64Slice(vec.Data)
-		rs = rs[:len(vs)]
-		vec.Col = rs
-		nulls.Set(vec.Nsp, vecs[0].Nsp)
-		vector.SetCol(vec, ceil.CeilUint64(vs, rs, digits))
-		return vec, nil
-	}
+	return generalMathMulti("ceil", vecs, proc, ceil.CeilUint64)
 }
 
 func CeilInt64(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	if vecs[0].IsScalarNull() {
-		return proc.AllocScalarNullVector(types.Type{Oid: types.T_int64, Size: 8}), nil
-	}
-	digits := int64(0)
-	vs := vector.MustTCols[int64](vecs[0])
-	if len(vecs) > 1 {
-		if vecs[1].IsScalarNull() {
-			return proc.AllocScalarNullVector(types.Type{Oid: types.T_int64, Size: 8}), nil
-		}
-		if !vecs[1].IsScalar() || vecs[1].Typ.Oid != types.T_int64 {
-			return nil, errors.New("the second argument of the ceil function must be an int64 constant")
-		}
-		digits = vecs[1].Col.([]int64)[0]
-	}
-
-	if vecs[0].IsScalar() {
-		vec := proc.AllocScalarVector(types.Type{Oid: types.T_int64, Size: 8})
-		rs := make([]int64, 1)
-		nulls.Set(vec.Nsp, vecs[0].Nsp)
-		vector.SetCol(vec, ceil.CeilInt64(vs, rs, digits))
-		return vec, nil
-	} else {
-		vec, err := proc.AllocVector(types.Type{Oid: types.T_int64, Size: 8}, 8*int64(len(vs)))
-		if err != nil {
-			return nil, err
-		}
-		rs := types.DecodeInt64Slice(vec.Data)
-		rs = rs[:len(vs)]
-		vec.Col = rs
-		nulls.Set(vec.Nsp, vecs[0].Nsp)
-		vector.SetCol(vec, ceil.CeilInt64(vs, rs, digits))
-		return vec, nil
-	}
+	return generalMathMulti("ceil", vecs, proc, ceil.CeilInt64)
 }
 
 func CeilFloat64(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	if vecs[0].IsScalarNull() {
-		return proc.AllocScalarNullVector(types.Type{Oid: types.T_float64, Size: 8}), nil
-	}
-	digits := int64(0)
-	vs := vector.MustTCols[float64](vecs[0])
-	if len(vecs) > 1 {
-		if vecs[1].IsScalarNull() {
-			return proc.AllocScalarNullVector(types.Type{Oid: types.T_float64, Size: 8}), nil
-		}
-		if !vecs[1].IsScalar() || vecs[1].Typ.Oid != types.T_int64 {
-			return nil, errors.New("the second argument of the ceil function must be an int64 constant")
-		}
-		digits = vecs[1].Col.([]int64)[0]
-	}
-
-	if vecs[0].IsScalar() {
-		vec := proc.AllocScalarVector(types.Type{Oid: types.T_float64, Size: 8})
-		rs := make([]float64, 1)
-		nulls.Set(vec.Nsp, vecs[0].Nsp)
-		vector.SetCol(vec, ceil.CeilFloat64(vs, rs, digits))
-		return vec, nil
-	} else {
-		vec, err := proc.AllocVector(types.Type{Oid: types.T_float64, Size: 8}, 8*int64(len(vs)))
-		if err != nil {
-			return nil, err
-		}
-		rs := types.DecodeFloat64Slice(vec.Data)
-		rs = rs[:len(vs)]
-		vec.Col = rs
-		nulls.Set(vec.Nsp, vecs[0].Nsp)
-		vector.SetCol(vec, ceil.CeilFloat64(vs, rs, digits))
-		return vec, nil
-	}
+	return generalMathMulti("ceil", vecs, proc, ceil.CeilFloat64)
 }
 
 func CeilDecimal128(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	digits := int64(0)
-	vs := vector.MustTCols[types.Decimal128](vecs[0])
-	if vecs[0].IsScalar() {
-		if vecs[0].IsScalarNull() {
-			return proc.AllocScalarNullVector(types.Type{Oid: types.T_decimal128, Size: 16}), nil
-		}
-		vec := proc.AllocScalarVector(types.Type{Oid: types.T_decimal128, Size: 16})
-		rs := make([]types.Decimal128, 1)
-		nulls.Set(vec.Nsp, vecs[0].Nsp)
-		vector.SetCol(vec, ceil.CeilDecimal128(vecs[0].Typ.Scale, vs, rs, digits))
-		return vec, nil
-	} else {
-		vec, err := proc.AllocVector(types.Type{Oid: types.T_decimal128, Size: 16}, 16*int64(len(vs)))
-		if err != nil {
-			return nil, err
-		}
-		rs := types.DecodeDecimal128Slice(vec.Data)
-		rs = rs[:len(vs)]
-		nulls.Set(vec.Nsp, vecs[0].Nsp)
-		vector.SetCol(vec, ceil.CeilDecimal128(vecs[0].Typ.Scale, vs, rs, digits))
-		return vec, nil
+	scale := vecs[0].Typ.Scale
+	cb := func(vs []types.Decimal128, rs []types.Decimal128, digits int64) []types.Decimal128 {
+		return ceil.CeilDecimal128(scale, vs, rs, digits)
 	}
+	return generalMathMulti("ceil", vecs, proc, cb)
 }

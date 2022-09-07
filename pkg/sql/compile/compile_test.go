@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/memEngine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -71,6 +72,19 @@ func TestCompile(t *testing.T) {
 		err = c.Run(0)
 		require.NoError(t, err)
 	}
+}
+
+func TestCompileWithFaults(t *testing.T) {
+	// Enable this line to trigger the Hung.
+	// fault.Enable()
+	fault.AddFaultPoint("panic_in_batch_append", ":::", "panic", 0, "")
+	tc := newTestCase("select * from R join S on R.uid = S.uid", t)
+	c := New("test", tc.sql, "", context.TODO(), tc.e, tc.proc, nil)
+	err := c.Compile(tc.pn, nil, testPrint)
+	require.NoError(t, err)
+	c.GetAffectedRows()
+	err = c.Run(0)
+	require.NoError(t, err)
 }
 
 func newTestCase(sql string, t *testing.T) compileTestCase {

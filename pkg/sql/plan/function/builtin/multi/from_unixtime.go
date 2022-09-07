@@ -28,28 +28,29 @@ func FromUnixTime(lv []*vector.Vector, proc *process.Process) (*vector.Vector, e
 	if inVec.IsScalarNull() {
 		return proc.AllocScalarNullVector(types.Type{Oid: types.T_datetime, Size: int32(size)}), nil
 	}
+
 	if inVec.IsScalar() {
-		vec := proc.AllocScalarVector(types.Type{Oid: types.T_datetime, Size: int32(size)})
 		rs := make([]types.Datetime, 1)
+		fromunixtime.UnixToDatetime(proc.SessionInfo.TimeZone, times, rs)
+
+		vec := vector.NewConstFixed(types.Type{Oid: types.T_datetime, Size: int32(size)}, 1, rs[0])
 		if times[0] < 0 || times[0] > 32536771199 {
 			nulls.Add(inVec.Nsp, 0)
 		}
 		nulls.Set(vec.Nsp, inVec.Nsp)
-		vector.SetCol(vec, fromunixtime.UnixToDatetime(proc.SessionInfo.TimeZone, times, rs))
 		return vec, nil
 	}
-	vec, err := proc.AllocVector(types.Type{Oid: types.T_datetime, Size: int32(size)}, int64(len(times))*int64(size))
-	if err != nil {
-		return nil, err
-	}
+
 	rs := make([]types.Datetime, len(times))
+	fromunixtime.UnixToDatetime(proc.SessionInfo.TimeZone, times, rs)
+
 	for i := 0; i < len(times); i++ {
 		if times[i] < 0 || times[i] > 32536771199 {
 			nulls.Add(inVec.Nsp, uint64(i))
 		}
 	}
+	vec := vector.NewWithFixed(types.Type{Oid: types.T_datetime, Size: int32(size)}, rs, nulls.NewWithSize(len(rs)), proc.GetMheap())
 	nulls.Set(vec.Nsp, inVec.Nsp)
-	vector.SetCol(vec, fromunixtime.UnixToDatetime(proc.SessionInfo.TimeZone, times, rs))
 	return vec, nil
 }
 
