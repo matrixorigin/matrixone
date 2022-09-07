@@ -15,7 +15,6 @@
 package multi
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/date_sub"
@@ -30,7 +29,6 @@ func DateSub(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, e
 	thirdValues := vector.MustTCols[int64](vectors[2])
 
 	resultType := types.Type{Oid: types.T_date, Size: 4}
-	resultElementSize := int(resultType.Size)
 	if firstVector.IsScalar() && secondVector.IsScalar() {
 		if firstVector.IsScalarNull() || secondVector.IsScalarNull() {
 			return proc.AllocScalarNullVector(resultType), nil
@@ -47,14 +45,12 @@ func DateSub(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, e
 		} else {
 			maxLen = len(secondValues)
 		}
-		resultVector, err := proc.AllocVector(resultType, int64(resultElementSize*maxLen))
+		resultVector, err := proc.AllocVectorOfRows(resultType, int64(maxLen), nil)
 		if err != nil {
 			return nil, err
 		}
-		resultValues := types.DecodeDateSlice(resultVector.Data)
-		resultValues = resultValues[:maxLen]
-		res, err := date_sub.DateSub(firstValues, secondValues, thirdValues, firstVector.Nsp, secondVector.Nsp, resultVector.Nsp, resultValues)
-		vector.SetCol(resultVector, res)
+		resultValues := vector.MustTCols[types.Date](resultVector)
+		_, err = date_sub.DateSub(firstValues, secondValues, thirdValues, firstVector.Nsp, secondVector.Nsp, resultVector.Nsp, resultValues)
 		return resultVector, err
 	}
 }
@@ -73,7 +69,6 @@ func DatetimeSub(vectors []*vector.Vector, proc *process.Process) (*vector.Vecto
 	}
 
 	resultType := types.Type{Oid: types.T_datetime, Precision: precision, Size: 8}
-	resultElementSize := int(resultType.Size)
 	if firstVector.IsScalar() && secondVector.IsScalar() {
 		if firstVector.IsScalarNull() || secondVector.IsScalarNull() {
 			return proc.AllocScalarNullVector(resultType), nil
@@ -90,14 +85,12 @@ func DatetimeSub(vectors []*vector.Vector, proc *process.Process) (*vector.Vecto
 		} else {
 			maxLen = len(secondValues)
 		}
-		resultVector, err := proc.AllocVector(resultType, int64(resultElementSize*maxLen))
+		resultVector, err := proc.AllocVectorOfRows(resultType, int64(maxLen), nil)
 		if err != nil {
 			return nil, err
 		}
-		resultValues := types.DecodeDatetimeSlice(resultVector.Data)
-		resultValues = resultValues[:maxLen]
-		res, err := date_sub.DatetimeSub(firstValues, secondValues, thirdValues, firstVector.Nsp, secondVector.Nsp, resultVector.Nsp, resultValues)
-		vector.SetCol(resultVector, res)
+		resultValues := vector.GetFixedVectorValues[types.Datetime](resultVector)
+		_, err = date_sub.DatetimeSub(firstValues, secondValues, thirdValues, firstVector.Nsp, secondVector.Nsp, resultVector.Nsp, resultValues)
 		return resultVector, err
 	}
 }
@@ -150,7 +143,6 @@ func TimeStampSub(vectors []*vector.Vector, proc *process.Process) (*vector.Vect
 	}
 
 	resultType := types.Type{Oid: types.T_timestamp, Precision: precision, Size: 8}
-	resultElementSize := int(resultType.Size)
 	if firstVector.IsScalar() && secondVector.IsScalar() {
 		if firstVector.IsScalarNull() || secondVector.IsScalarNull() {
 			return proc.AllocScalarNullVector(resultType), nil
@@ -167,15 +159,12 @@ func TimeStampSub(vectors []*vector.Vector, proc *process.Process) (*vector.Vect
 		} else {
 			maxLen = len(secondValues)
 		}
-		resultVector, err := proc.AllocVector(resultType, int64(resultElementSize*maxLen))
+		resultVector, err := proc.AllocVectorOfRows(resultType, int64(maxLen), firstVector.Nsp)
 		if err != nil {
 			return nil, err
 		}
-		resultValues := types.DecodeTimestampSlice(resultVector.Data)
-		resultValues = resultValues[:maxLen]
-		nulls.Set(resultVector.Nsp, firstVector.Nsp)
-		resultValues, err = date_sub.TimestampSub(proc.SessionInfo.TimeZone, firstValues, secondValues, thirdValues, firstVector.Nsp, secondVector.Nsp, resultVector.Nsp, resultValues)
-		vector.SetCol(resultVector, resultValues)
+		resultValues := vector.MustTCols[types.Timestamp](resultVector)
+		_, err = date_sub.TimestampSub(proc.SessionInfo.TimeZone, firstValues, secondValues, thirdValues, firstVector.Nsp, secondVector.Nsp, resultVector.Nsp, resultValues)
 		return resultVector, err
 	}
 }

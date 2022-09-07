@@ -15,7 +15,6 @@
 package unary
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/errors"
@@ -47,14 +46,10 @@ func math1(vs []*vector.Vector, proc *process.Process, fn mathFn) (*vector.Vecto
 		}
 	} else {
 		vecLen := int64(vector.Length(origVec))
-		resultVector, err := proc.AllocVector(types.Type{Oid: types.T_float64, Size: 8}, 8*vecLen)
+		resultVector, err := proc.AllocVectorOfRows(types.T_float64.ToType(), vecLen, origVec.Nsp)
 		if err != nil {
 			return nil, err
 		}
-		resCol := types.DecodeFloat64Slice(resultVector.Data)
-		resCol = resCol[:vecLen]
-		nulls.Set(resultVector.Nsp, origVec.Nsp)
-		vector.SetCol(resultVector, resCol)
 		if err = fn(origVec, resultVector); err != nil {
 			return nil, err
 		}
