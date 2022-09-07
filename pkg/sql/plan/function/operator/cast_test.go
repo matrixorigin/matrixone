@@ -2101,76 +2101,10 @@ func TestCastVarcharAsDate(t *testing.T) {
 	})
 }
 
-func TestCastTimestampAsVarchar(t *testing.T) {
-	//Cast converts timestamp to varchar
-	procs := testutil.NewProc()
-	cases := []struct {
-		name     string
-		vecs     []*vector.Vector
-		proc     *process.Process
-		input    []types.Timestamp
-		expected []string
-		isScalar bool
-	}{
-		//{
-		//	name:  "01 - normal test",
-		//	proc:  procs,
-		//	input: []types.Timestamp{66823357574906480},
-		//	expected: &types.Bytes{
-		//		Data:    []byte("2020-06-14 16:24:15.230000"),
-		//		Offsets: []uint32{0},
-		//		Lengths: []uint32{26},
-		//	},
-		//	isScalar: false,
-		//},
-		//{
-		//	name:  "02 - scalar test",
-		//	proc:  procs,
-		//	input: []types.Timestamp{66823357574906480},
-		//	expected: &types.Bytes{
-		//		Data:    []byte("2020-06-14 16:24:15.230000"),
-		//		Offsets: []uint32{0},
-		//		Lengths: []uint32{26},
-		//	},
-		//	isScalar: true,
-		//},
-		{
-			name:     "03 - null test",
-			proc:     procs,
-			isScalar: true,
-		},
-	}
-
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			vecs := make([]*vector.Vector, 2)
-			if c.input != nil {
-				vecs[0] = vector.New(types.T_timestamp.ToType())
-				vecs[0].Col = c.input
-				vecs[0].IsConst = c.isScalar
-			} else {
-				vecs[0] = testutil.MakeScalarNull(types.T_timestamp, 0)
-			}
-			vecs[1] = vector.New(types.T_varchar.ToType())
-
-			result, err := Cast(vecs, c.proc)
-			if err != nil {
-				t.Fatal(err)
-			}
-			require.Equal(t, c.isScalar, result.IsScalar())
-		})
-	}
-}
-
 func TestCastFloatAsDecimal(t *testing.T) {
 	makeTempVectors := func(leftVal []float32, leftType types.Type, rightType types.Type) []*vector.Vector {
 		vecs := make([]*vector.Vector, 2)
-		vecs[0] = &vector.Vector{
-			Col:     leftVal,
-			Typ:     leftType,
-			Nsp:     &nulls.Nulls{},
-			IsConst: true,
-		}
+		vecs[0] = vector.NewConstFixed(leftType, 1, leftVal[0])
 		vecs[1] = &vector.Vector{
 			Col: nil,
 			Typ: rightType,
@@ -2240,12 +2174,7 @@ func TestCastDecimalAsString(t *testing.T) {
 func TestCastTimestampAsDate(t *testing.T) {
 	makeTempVectors := func(leftVal []types.Timestamp, leftType types.Type, rightType types.Type) []*vector.Vector {
 		vecs := make([]*vector.Vector, 2)
-		vecs[0] = &vector.Vector{
-			Col:     leftVal,
-			Typ:     leftType,
-			Nsp:     &nulls.Nulls{},
-			IsConst: true,
-		}
+		vecs[0] = vector.NewConstFixed(leftType, 1, leftVal[0])
 		vecs[1] = &vector.Vector{
 			Col: nil,
 			Typ: rightType,
