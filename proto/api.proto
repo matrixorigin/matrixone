@@ -54,13 +54,15 @@ message SyncLogTailReq {
 };
 
 message SyncLogTailResp {
-    // location of catalog or metadata checkpoint.
+    // location of catalog or metadata checkpoint for a table.
+    //TODO:: how to get checkpoint on S3 by the ckp_location ,pls ref to ...
     string     ckp_location = 1;
-    //repeated timestamp.Timestamp new_checkpoints = 2;
+    // log tail for a table
     repeated Entry commands = 2;
 };
 
-//DN--->CN: DML
+//log tail entries returned to CN.
+//DN-->CN: DML
 //Append batch of data which comes from localsegment of table into multiple blocks.
 
 //// Append batch of data into table : 
@@ -83,7 +85,7 @@ message SyncLogTailResp {
 //          table_name =  xxx
 //          database_name = xxx
 //          file_name = "" 
-//          FIXME:: transient block id when bulk loading.
+//         // transient block id when bulk loading.
 //          block_id = 0
 //          bat.attrs = {"rowid", "commit timestamp"}
 //      }
@@ -97,7 +99,7 @@ message SyncLogTailResp {
 //          database_name = xxx
 //          file_name = "" 
 //          block_id = 0
-//          FIXME:: "Start" is the latest txn's start timestamp, "End" is the latest txn's commit timestamp
+//          //"Start" is the latest txn's start timestamp, "End" is the latest txn's commit timestamp
 //          bat.attrs = {"BlockId", "EntryState", "CreatedAt", 
 //                            "Start", "End", "MetaLoc", "DeltaLoc"}
 //      }
@@ -259,46 +261,51 @@ message Entry {
     Batch     bat = 8;
 };
 
-// Checkpint is a snapshot at a timestamp for catalog and block info, 
+// Checkpint is a snapshot at a timestamp for catalog and block meta.
 // it contains CatalogCkp and MetadataCkp.
 
 // CatalogCkp contains information about database and tables in the system,and
 // MetadataCkp contains information about blocks.
 message Checkpoint {
-    //min_ts is the last checkpoint timestamp.
+    //min_ts DN is the lower bounds of the checkpoint
+    // CN maybe don't care about it.
     timestamp.Timestamp min_ts = 1;
-    // max_ts is a checkpoint timestamp, namely it is the snapshot timestamp 
-    // at which a transaction dose a checkpoint for a table.
+    //max_ts is the upper bounds of the checkpoint.
+    // CN maybe don't care about it.
     timestamp.Timestamp max_ts = 2;
     Batch      bat   = 3;
 
 };
 // catalog checkpoint:
 // one Batch represents a table, such as : mo_databases, mo_tables, mo_columns,... etc.
+// knowing more about system tables, pls ref to pkg/vm/engine/tae/catalog/model.go
 message CatalogCkp {
    timestamp.Timestamp min_ts = 1;
    timestamp.Timestamp max_ts = 2;
-    Batch      bat   = 3;
+   Batch      bat   = 3;
 };
 
 //metadata checkpoint:
 // Batch is a batch of block metadata for a table,  
-// one row of Batch represents a block metadata.
+// one row of Batch represents a block meta data.
+// TODO::
+// knowing more about block meta data , pls ref to ...
 message MetadataCkp {
     timestamp.Timestamp min_ts = 1;
     timestamp.Timestamp max_ts = 2;
-    //block metadata for a table;
+    //block meta data for a table;
     Batch      bat = 3;
 };
 
 // block meta data :
-// type BlockMeta struct {
+// type Block struct {
 //    ID                    uint64
 //    SegmentID             uint64
 //    TableID               uint64
 //    DbID                  uint64
 //    CreatedAt, DeletedAt  timestamp.Timestamp
 //    MetaLoc points to BlockMetadata below; Deltaloc points to DeleteInfo below.
+//    TODO::How to get the detailed meta data for a block by MetaLoc and DeltaLoc? pls ref to ...
 //    MetaLoc, DeltaLoc     string
 //    StartTS, PrepareTS    timestamp.Timestamp
 //    CommitTS             timestamp.Timestamp
@@ -307,7 +314,7 @@ message MetadataCkp {
 //    Flag                  uint8
 //};
 
-// BlockMetadata is a detailed meta info for block.
+// BlockMetadata is a detailed meta data for a block.
 //type BlockMetadata struct {
 	//header  *BlockHeader
 	//columns []*ColumnMeta
@@ -336,6 +343,3 @@ message MetadataCkp {
 // type DeleteInfo struct {
 //      bat batch.Batch
 //};
-
-
-
