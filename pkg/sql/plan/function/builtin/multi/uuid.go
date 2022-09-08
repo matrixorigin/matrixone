@@ -40,23 +40,3 @@ func UUID(inputVecs []*vector.Vector, proc *process.Process) (*vector.Vector, er
 	resultVector := vector.NewWithStrings(types.T_varchar.ToType(), results, nil, proc.Mp())
 	return resultVector, nil
 }
-
-/*
- UUID function returns the implementation of UUID type
-func UUID(inputVecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	if len(inputVecs) != 1 {
-		return nil, moerr.NewError(moerr.INTERNAL_ERROR, "uuid function requires a hidden parameter")
-	}
-	rows := inputVecs[0].Length()
-	results := make([]types.Uuid, rows)
-	for i := 0; i < rows; i++ {
-		id, err := uuid.NewUUID()
-		if err != nil {
-			return nil, moerr.NewError(moerr.INTERNAL_ERROR, "generation uuid error")
-		}
-		results[i] = types.Uuid(id)
-	}
-	resultVector := vector.NewWithFixed(types.T_uuid.ToType(), results, nil, proc.Mp())
-	return resultVector, nil
-}
-*/

@@ -202,6 +202,7 @@ var (
 		for _, n := range nsp {
 			nulls.Add(vec.Nsp, n)
 		}
+
 		for i, value := range values {
 			if nulls.Contains(vec.Nsp, uint64(i)) {
 				continue
@@ -212,6 +213,10 @@ var (
 		vec.Data = types.EncodeFixedSlice(uuids, uuidType.TypeSize())
 		vec.Col = uuids
 		return vec
+	}
+
+	MakeUuidVector2 = func(values []types.Uuid, nsp []uint64) *vector.Vector {
+		return vector.NewWithData(uuidType, nil, values, nulls.Build(len(values), nsp...))
 	}
 
 	MakeUuidVectorByString = func(values []string, nsp []uint64) *vector.Vector {

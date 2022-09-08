@@ -46,10 +46,10 @@ a    b    c    d
 149e3f0f-2de4-11ed-940f-000c29847904    27    JONES    1981-04-02
 select * from t2 order by a;
 a    b    c    d
+149e3f0f-2de4-11ed-940f-000c29847904    27    JONES    1981-04-02
+1b50c137-2dba-11ed-940f-000c29847904    15    WARD    1981-02-22
 6d1b1f73-2dbf-11ed-940f-000c29847904    12    SMITH    1980-12-17
 ad9f809f-2dbd-11ed-940f-000c29847904    34    ALLEN    1981-02-20
-1b50c137-2dba-11ed-940f-000c29847904    15    WARD    1981-02-22
-149e3f0f-2de4-11ed-940f-000c29847904    27    JONES    1981-04-02
 drop table t2;
 create table t3(a int, b uuid);
 insert into t3 values(10, "f6355110-2d0c-11ed-940f-000c29847904");
@@ -59,6 +59,8 @@ insert into t3 values(40, "18b21c70-2d0d-11ed-940f-000c29847904");
 insert into t3 values(50, "1b50c129-2dba-11ed-940f-000c29847904");
 insert into t3 values(60, "ad9f83eb-2dbd-11ed-940f-000c29847904");
 insert into t3 values(70, "6d1b1fdb-2dbf-11ed-940f-000c29847904");
+insert into t3 values(80, "6d1b1fdb-2dbf-11ed-940f-000c29847904");
+insert into t3 values(90, "1b50c129-2dba-11ed-940f-000c29847904");
 select * from t3;
 a    b
 10    f6355110-2d0c-11ed-940f-000c29847904
@@ -68,6 +70,8 @@ a    b
 50    1b50c129-2dba-11ed-940f-000c29847904
 60    ad9f83eb-2dbd-11ed-940f-000c29847904
 70    6d1b1fdb-2dbf-11ed-940f-000c29847904
+80    6d1b1fdb-2dbf-11ed-940f-000c29847904
+90    1b50c129-2dba-11ed-940f-000c29847904
 select a,b from t3 where b =  "18b21c70-2d0d-11ed-940f-000c29847904";
 a    b
 40    18b21c70-2d0d-11ed-940f-000c29847904
@@ -79,6 +83,8 @@ a    b
 50    1b50c129-2dba-11ed-940f-000c29847904
 60    ad9f83eb-2dbd-11ed-940f-000c29847904
 70    6d1b1fdb-2dbf-11ed-940f-000c29847904
+80    6d1b1fdb-2dbf-11ed-940f-000c29847904
+90    1b50c129-2dba-11ed-940f-000c29847904
 select a,b from t3 where b >  "f6355110-2d0c-11ed-940f-000c29847904";
 a    b
 select a,b from t3 where b >= "f6355110-2d0c-11ed-940f-000c29847904";
@@ -89,15 +95,52 @@ a    b
 select a,b from t3 where b <= "117a0bd5-2d0d-11ed-940f-000c29847904";
 a    b
 30    117a0bd5-2d0d-11ed-940f-000c29847904
+select min(b) from t3;
+min(b)
+117a0bd5-2d0d-11ed-940f-000c29847904
+select max(b) from t3;
+max(b)
+f6355110-2d0c-11ed-940f-000c29847904
+select count(*) from t3 group by b;
+count(*)
+1
+1
+1
+1
+2
+1
+2
+select count(b) from t3 group by b;
+count(b)
+1
+1
+1
+1
+2
+1
+2
+select sum(a) from t3 group by b;
+sum(a)
+10
+20
+30
+40
+140
+60
+150
+select sum(a) from t3 group by b having by sum(a) > 20;
+You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at position 43 near 'by'; 
 select * from t3 order by b;
 a    b
-10    f6355110-2d0c-11ed-940f-000c29847904
-20    1ef96142-2d0d-11ed-940f-000c29847904
 30    117a0bd5-2d0d-11ed-940f-000c29847904
 40    18b21c70-2d0d-11ed-940f-000c29847904
 50    1b50c129-2dba-11ed-940f-000c29847904
-60    ad9f83eb-2dbd-11ed-940f-000c29847904
+90    1b50c129-2dba-11ed-940f-000c29847904
+20    1ef96142-2d0d-11ed-940f-000c29847904
 70    6d1b1fdb-2dbf-11ed-940f-000c29847904
+80    6d1b1fdb-2dbf-11ed-940f-000c29847904
+60    ad9f83eb-2dbd-11ed-940f-000c29847904
+10    f6355110-2d0c-11ed-940f-000c29847904
 delete from t3 where b = 'ad9f83eb-2dbd-11ed-940f-000c29847904';
 select * from t3;
 a    b
@@ -107,6 +150,8 @@ a    b
 40    18b21c70-2d0d-11ed-940f-000c29847904
 50    1b50c129-2dba-11ed-940f-000c29847904
 70    6d1b1fdb-2dbf-11ed-940f-000c29847904
+80    6d1b1fdb-2dbf-11ed-940f-000c29847904
+90    1b50c129-2dba-11ed-940f-000c29847904
 update t3 set b = 'e5c8314e-2ea7-11ed-8ec0-000c29847904' where a = 50;
 select * from t3 where a = 50;
 a    b

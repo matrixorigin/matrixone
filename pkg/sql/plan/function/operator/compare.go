@@ -284,10 +284,7 @@ func CompareUuid(vs []*vector.Vector, fn compUuidFn, proc *process.Process) (*ve
 	}
 
 	if v1.IsScalar() && v2.IsScalar() {
-		vec := proc.AllocScalarVector(boolType)
-		vec.Col = make([]bool, 1)
-		vec.Col.([]bool)[0] = fn(col1[0], col2[0])
-		return vec, nil
+		return vector.NewConstFixed(boolType, 1, fn(col1[0], col2[0])), nil
 	}
 
 	if v1.IsScalar() {

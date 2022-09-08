@@ -174,3 +174,34 @@ func (m *StrMax) Merge(_ int64, _ int64, x []byte, y []byte, xEmpty bool, yEmpty
 	}
 	return x, xEmpty
 }
+
+// --------------------------------------------------
+func NewUuidMax() *UuidMax {
+	return &UuidMax{}
+}
+
+func (m *UuidMax) Grows(_ int) {
+}
+
+func (m *UuidMax) Eval(vs []types.Uuid) []types.Uuid {
+	return vs
+}
+
+func (m *UuidMax) Fill(_ int64, value types.Uuid, ov types.Uuid, _ int64, isEmpty bool, isNull bool) (types.Uuid, bool) {
+	if !isNull {
+		if ov.Le(value) || isEmpty {
+			return value, false
+		}
+	}
+	return ov, isEmpty
+
+}
+func (m *UuidMax) Merge(_ int64, _ int64, x types.Uuid, y types.Uuid, xEmpty bool, yEmpty bool, _ any) (types.Uuid, bool) {
+	if !yEmpty {
+		if !xEmpty && x.Gt(y) {
+			return x, false
+		}
+		return y, false
+	}
+	return x, xEmpty
+}

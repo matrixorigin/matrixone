@@ -33,6 +33,10 @@ insert into t3 values(40, "18b21c70-2d0d-11ed-940f-000c29847904");
 insert into t3 values(50, "1b50c129-2dba-11ed-940f-000c29847904");
 insert into t3 values(60, "ad9f83eb-2dbd-11ed-940f-000c29847904");
 insert into t3 values(70, "6d1b1fdb-2dbf-11ed-940f-000c29847904");
+insert into t3 values(80, "6d1b1fdb-2dbf-11ed-940f-000c29847904");
+insert into t3 values(90, "1b50c129-2dba-11ed-940f-000c29847904");
+
+-- uuid type field as filter condition
 select * from t3;
 select a,b from t3 where b =  "18b21c70-2d0d-11ed-940f-000c29847904";
 select a,b from t3 where b != "18b21c70-2d0d-11ed-940f-000c29847904";
@@ -40,6 +44,17 @@ select a,b from t3 where b >  "f6355110-2d0c-11ed-940f-000c29847904";
 select a,b from t3 where b >= "f6355110-2d0c-11ed-940f-000c29847904";
 select a,b from t3 where b <  "117a0bd5-2d0d-11ed-940f-000c29847904";
 select a,b from t3 where b <= "117a0bd5-2d0d-11ed-940f-000c29847904";
+
+-- The uuid type field is used as the parameter of the aggregate function
+select min(b) from t3;
+select max(b) from t3;
+
+-- uuid type field as grouping condition
+select count(*) from t3 group by b;
+select count(b) from t3 group by b;
+select sum(a) from t3 group by b;
+select sum(a) from t3 group by b having by sum(a) > 20;
+-- uuid  type field as sorting criteria when order by
 select * from t3 order by b;
 -- test delete statement with uuid type
 delete from t3 where b = 'ad9f83eb-2dbd-11ed-940f-000c29847904';
