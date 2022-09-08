@@ -101,7 +101,7 @@ func Ln(arg, result *vector.Vector) error {
 	for i, v := range argCol {
 		if !nulls.Contains(arg.Nsp, (uint64)(i)) {
 			if v <= 0 {
-				return moerr.New(2003, "Natural Logarithm function input cannot be non positive")
+				return moerr.New(moerr.INVALID_ARGUMENT, "Natural Logarithm function input cannot be non positive")
 			} else {
 				resCol[i] = math.Log(v)
 			}
