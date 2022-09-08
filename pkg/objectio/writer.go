@@ -10,17 +10,17 @@ import (
 type ObjectWriter struct {
 	sync.RWMutex
 	object *Object
-	blocks map[uint64]*Block
+	blocks map[int]*Block
 	buffer *ObjectBuffer
 	name   string
-	lastId uint64
+	lastId int
 }
 
 func NewObjectWriter(name string) (*ObjectWriter, error) {
 	writer := &ObjectWriter{
 		name:   name,
 		buffer: NewObjectBuffer(name),
-		blocks: make(map[uint64]*Block),
+		blocks: make(map[int]*Block),
 		lastId: 0,
 	}
 	err := writer.WriteHeader()
@@ -47,17 +47,17 @@ func (w *ObjectWriter) WriteHeader() error {
 	return err
 }
 
-func (w *ObjectWriter) Write(batch *batch.Batch) error {
+func (w *ObjectWriter) Write(batch *batch.Batch) (int, error) {
 	block := NewBlock(batch)
 	w.AddBlock(block)
 	for i, vec := range batch.Vecs {
 		buf, err := vec.Show()
 		if err != nil {
-			return err
+			return 0, err
 		}
 		offset, length, err := w.buffer.Write(buf)
 		if err != nil {
-			return err
+			return 0, err
 		}
 		block.columns[i].meta.location = Extent{
 			id:         block.header.blockId,
@@ -66,7 +66,23 @@ func (w *ObjectWriter) Write(batch *batch.Batch) error {
 			originSize: uint32(length),
 		}
 	}
-	return nil
+	return block.fd, nil
+}
+
+func (w *ObjectWriter) WriteIndex(fd int, idx uint16, buf []byte) error {
+	var err error
+	block := w.GetBlock(fd)
+	if block == nil || block.columns[idx] == nil {
+		return ErrNotFound
+	}
+	offset, length, err := w.buffer.Write(buf)
+	if err != nil {
+		return err
+	}
+	block.columns[idx].meta.bloomFilter.offset = uint32(offset)
+	block.columns[idx].meta.bloomFilter.length = uint32(length)
+	block.columns[idx].meta.bloomFilter.originSize = uint32(length)
+	return err
 }
 
 func (w *ObjectWriter) WriteEnd() ([]Extent, error) {
@@ -135,7 +151,13 @@ func (w *ObjectWriter) Sync(dir string) error {
 func (w *ObjectWriter) AddBlock(block *Block) {
 	w.Lock()
 	defer w.Unlock()
-	block.id = w.lastId
-	w.blocks[block.id] = block
+	block.fd = w.lastId
+	w.blocks[block.fd] = block
 	w.lastId++
+}
+
+func (w *ObjectWriter) GetBlock(fd int) *Block {
+	w.Lock()
+	defer w.Unlock()
+	return w.blocks[fd]
 }

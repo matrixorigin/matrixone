@@ -7,7 +7,7 @@ import (
 )
 
 type Block struct {
-	id      uint64
+	fd      int
 	header  *BlockHeader
 	columns []*ColumnBlock
 	data    *batch.Batch

@@ -34,9 +34,14 @@ func TestNewObjectWriter(t *testing.T) {
 
 	objectWriter, err := NewObjectWriter(name)
 	assert.Nil(t, err)
-	err = objectWriter.Write(bat)
+	fd, err := objectWriter.Write(bat)
 	assert.Nil(t, err)
-	err = objectWriter.Write(bat)
+	for i, attr := range bat.Attrs {
+		buf := fmt.Sprintf("test index %v", attr)
+		err = objectWriter.WriteIndex(fd, uint16(i), []byte(buf))
+		assert.Nil(t, err)
+	}
+	_, err = objectWriter.Write(bat)
 	assert.Nil(t, err)
 	extents, err := objectWriter.WriteEnd()
 	assert.Nil(t, err)
@@ -66,4 +71,8 @@ func TestNewObjectWriter(t *testing.T) {
 		newbat.AddVector(data.Attrs[int(idxs[i])], vec)
 	}
 	assert.Equal(t, 3, len(newbat.Vecs))
+	vec, err = objectReader.ReadIndex(extents[0], idxs)
+	assert.Nil(t, err)
+	assert.Equal(t, 3, len(vec.Entries))
+	assert.Equal(t, "test index mock_0", string(vec.Entries[0].Data))
 }
