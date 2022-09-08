@@ -23,8 +23,8 @@ import (
 )
 
 func TestLn(t *testing.T){
-	as := []float64{1, math.Exp(0), math.Exp(1), math.Exp(10), math.Exp(100), math.Exp(99)}
-	cs := make([]float64, 6)
+	as := []float64{1, math.Exp(0), math.Exp(1), math.Exp(10), math.Exp(100), math.Exp(99), math.Exp(-1)}
+	cs := make([]float64, 7)
 
 	av := testutil.MakeFloat64Vector(as, nil)
 	cv := testutil.MakeFloat64Vector(cs, nil)
@@ -34,7 +34,7 @@ func TestLn(t *testing.T){
 		panic(err)
 	}
 	cols := vector.MustTCols[float64](cv)
-	require.Equal(t, []float64{0.0, 0.0, 1.0, 10.0, 100.0, 99.0}, cols)
+	require.Equal(t, []float64{0.0, 0.0, 1.0, 10.0, 100.0, 99.0, -1}, cols)
 }
 
 func TestExP(t *testing.T){
