@@ -29,22 +29,22 @@ import (
 )
 
 type AppendNode struct {
+	*txnbase.TxnMVCCNode
 	sync.RWMutex
-	commitTs  types.TS
-	prepareTs types.TS
-	txn       txnif.AsyncTxn
-	logIndex  *wal.Index
-	startRow  uint32
-	maxRow    uint32
-	mvcc      *MVCCHandle
-	id        *common.ID
+	startRow uint32
+	maxRow   uint32
+	mvcc     *MVCCHandle
+	id       *common.ID
 }
 
 func MockAppendNode(ts types.TS, startRow, maxRow uint32, mvcc *MVCCHandle) *AppendNode {
 	return &AppendNode{
-		commitTs: ts,
-		maxRow:   maxRow,
-		mvcc:     mvcc,
+		TxnMVCCNode: &txnbase.TxnMVCCNode{
+			Start: ts,
+			End:   ts,
+		},
+		maxRow: maxRow,
+		mvcc:   mvcc,
 	}
 }
 
@@ -53,7 +53,10 @@ func NewCommittedAppendNode(
 	startRow, maxRow uint32,
 	mvcc *MVCCHandle) *AppendNode {
 	return &AppendNode{
-		commitTs: ts,
+		TxnMVCCNode: &txnbase.TxnMVCCNode{
+			Start: ts,
+			End:   ts,
+		},
 		startRow: startRow,
 		maxRow:   maxRow,
 		mvcc:     mvcc,
@@ -69,17 +72,20 @@ func NewAppendNode(
 		ts = txn.GetCommitTS()
 	}
 	n := &AppendNode{
-		txn:      txn,
+		TxnMVCCNode: &txnbase.TxnMVCCNode{
+			Start: ts,
+			End:   ts,
+			Txn:   txn,
+		},
 		startRow: startRow,
 		maxRow:   maxRow,
-		commitTs: ts,
 		mvcc:     mvcc,
 	}
 	return n
 }
 
 func (node *AppendNode) GeneralDesc() string {
-	return fmt.Sprintf("TS=%d;StartRow=%d MaxRow=%d", node.commitTs, node.startRow, node.maxRow)
+	return fmt.Sprintf("%s;StartRow=%d MaxRow=%d", node.TxnMVCCNode.String(), node.startRow, node.maxRow)
 }
 func (node *AppendNode) GeneralString() string {
 	return node.GeneralDesc()
@@ -89,7 +95,7 @@ func (node *AppendNode) GeneralVerboseString() string {
 }
 
 func (node *AppendNode) SetLogIndex(idx *wal.Index) {
-	node.logIndex = idx
+	node.TxnMVCCNode.AddLogIndex(idx)
 }
 func (node *AppendNode) GetID() *common.ID {
 	return node.id
@@ -97,10 +103,10 @@ func (node *AppendNode) GetID() *common.ID {
 func (node *AppendNode) GetCommitTS() types.TS {
 	node.RLock()
 	defer node.RUnlock()
-	if node.txn != nil {
-		return node.txn.GetCommitTS()
+	if node.GetTxn() != nil {
+		return node.GetTxn().GetCommitTS()
 	}
-	return node.commitTs
+	return node.GetEnd()
 }
 func (node *AppendNode) GetStartRow() uint32  { return node.startRow }
 func (node *AppendNode) GetMaxRow() uint32    { return node.maxRow }
@@ -109,30 +115,27 @@ func (node *AppendNode) SetMaxRow(row uint32) { node.maxRow = row }
 func (node *AppendNode) Prepare2PCPrepare() error {
 	node.Lock()
 	defer node.Unlock()
-	node.prepareTs = node.txn.GetPrepareTS()
-	node.commitTs = node.txn.GetPrepareTS()
-	return nil
+	_, err := node.TxnMVCCNode.Prepare2PCPrepare()
+	return err
 }
 
 func (node *AppendNode) PrepareCommit() error {
 	node.Lock()
 	defer node.Unlock()
-	node.prepareTs = node.txn.GetCommitTS()
-	node.commitTs = node.txn.GetCommitTS()
-	return nil
+	_, err := node.TxnMVCCNode.PrepareCommit()
+	return err
 }
 
 func (node *AppendNode) ApplyCommit(index *wal.Index) error {
 	node.Lock()
 	defer node.Unlock()
-	if node.txn == nil {
+	if node.GetTxn() == nil {
 		panic("AppendNode | ApplyCommit | LogicErr")
 	}
-	node.txn = nil
-	node.logIndex = index
+	node.TxnMVCCNode.ApplyCommit(index)
 	if node.mvcc != nil {
-		logutil.Debugf("Set MaxCommitTS=%d, MaxVisibleRow=%d", node.commitTs, node.maxRow)
-		node.mvcc.SetMaxVisible(node.commitTs)
+		logutil.Debugf("Set MaxCommitTS=%v, MaxVisibleRow=%d", node.GetEnd(), node.maxRow)
+		node.mvcc.SetMaxVisible(node.GetEnd())
 	}
 	// logutil.Infof("Apply1Index %s TS=%d", index.String(), n.commitTs)
 	listener := node.mvcc.GetAppendListener()
@@ -145,7 +148,7 @@ func (node *AppendNode) ApplyCommit(index *wal.Index) error {
 func (node *AppendNode) ApplyRollback(index *wal.Index) (err error) {
 	node.Lock()
 	defer node.Unlock()
-	node.logIndex = index
+	node.TxnMVCCNode.ApplyRollback(index)
 	return
 }
 
@@ -163,10 +166,12 @@ func (node *AppendNode) WriteTo(w io.Writer) (n int64, err error) {
 		return
 	}
 	n += 4
-	if err = binary.Write(w, binary.BigEndian, node.commitTs); err != nil {
+	var sn int64
+	sn, err = node.TxnMVCCNode.WriteTo(w)
+	if err != nil {
 		return
 	}
-	n += 8
+	n += sn
 	return
 }
 
@@ -186,10 +191,12 @@ func (node *AppendNode) ReadFrom(r io.Reader) (n int64, err error) {
 		return
 	}
 	n += 4
-	if err = binary.Read(r, binary.BigEndian, &node.commitTs); err != nil {
+	var sn2 int64
+	sn2, err = node.TxnMVCCNode.ReadFrom(r)
+	if err != nil {
 		return
 	}
-	n += 8
+	n += sn2
 	return
 }
 

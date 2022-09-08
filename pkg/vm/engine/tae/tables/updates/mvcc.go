@@ -84,7 +84,7 @@ func (n *MVCCHandle) HasActiveAppendNode() bool {
 	}
 	node := n.appends[len(n.appends)-1]
 	node.RLock()
-	txn := node.txn
+	txn := node.GetTxn()
 	node.RUnlock()
 	return txn != nil
 }
@@ -212,7 +212,7 @@ func (n *MVCCHandle) GetDeleteChain() *DeleteChain {
 func (n *MVCCHandle) OnReplayAppendNode(an *AppendNode) {
 	an.mvcc = n
 	n.appends = append(n.appends, an)
-	n.TrySetMaxVisible(an.commitTs)
+	n.TrySetMaxVisible(an.GetCommitTS())
 }
 func (n *MVCCHandle) TrySetMaxVisible(ts types.TS) {
 	if ts.Greater(n.maxVisible.Load().(types.TS)) {
@@ -230,7 +230,7 @@ func (n *MVCCHandle) AddAppendNodeLocked(
 	} else {
 		an = n.appends[len(n.appends)-1]
 		an.RLock()
-		nTxn := an.txn
+		nTxn := an.GetTxn()
 		an.RUnlock()
 		if nTxn != txn {
 			an = NewAppendNode(txn, startRow, maxRow, n)
@@ -288,7 +288,7 @@ func (n *MVCCHandle) CollectAppendLogIndexesLocked(startTs, endTs types.TS) (ind
 		startOffset += 1
 	}
 	for i := endOffset; i >= startOffset; i-- {
-		indexes = append(indexes, n.appends[i].logIndex)
+		indexes = append(indexes, n.appends[i].GetLogIndex()...)
 	}
 	return
 }
@@ -344,7 +344,7 @@ func (n *MVCCHandle) getMaxVisibleRowLocked(ts types.TS) (int, uint32, bool, err
 	node := n.appends[mid]
 	if node.GetCommitTS().Greater(n.LoadMaxVisible()) {
 		node.RLock()
-		txn := node.txn
+		txn := node.GetTxn()
 		node.RUnlock()
 		// Note: Maybe there is a deadlock risk here
 		if txn != nil && node.GetCommitTS().Greater(n.LoadMaxVisible()) {

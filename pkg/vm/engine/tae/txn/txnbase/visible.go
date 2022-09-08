@@ -52,6 +52,7 @@ type VisibleNode interface {
 	PrepareCommit() (err error)
 }
 
+// TODO prepare ts
 type TxnMVCCNode struct {
 	Start, End types.TS
 	Txn        txnif.TxnReader
@@ -61,8 +62,12 @@ type TxnMVCCNode struct {
 }
 
 func NewTxnMVCCNodeWithTxn(txn txnif.TxnReader) *TxnMVCCNode {
+	var ts types.TS
+	if txn != nil {
+		ts = txn.GetStartTS()
+	}
 	return &TxnMVCCNode{
-		Start: txn.GetStartTS(),
+		Start: ts,
 		Txn:   txn,
 	}
 }
