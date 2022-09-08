@@ -84,6 +84,20 @@ func NewAppendNode(
 	return n
 }
 
+func NewEmptyAppendNode() txnbase.VisibleNode {
+	return &AppendNode{
+		TxnMVCCNode: &txnbase.TxnMVCCNode{},
+	}
+}
+func (node *AppendNode) CloneAll() txnbase.VisibleNode {
+	panic("todo")
+}
+func (node *AppendNode) CloneData() txnbase.VisibleNode {
+	panic("todo")
+}
+func (node *AppendNode) UpdateNode(txnbase.VisibleNode) {
+	panic("todo")
+}
 func (node *AppendNode) GeneralDesc() string {
 	return fmt.Sprintf("%s;StartRow=%d MaxRow=%d", node.TxnMVCCNode.String(), node.startRow, node.maxRow)
 }
@@ -103,14 +117,23 @@ func (node *AppendNode) GetID() *common.ID {
 func (node *AppendNode) GetCommitTS() types.TS {
 	node.RLock()
 	defer node.RUnlock()
-	if node.GetTxn() != nil {
-		return node.GetTxn().GetCommitTS()
-	}
 	return node.GetEnd()
 }
-func (node *AppendNode) GetStartRow() uint32  { return node.startRow }
-func (node *AppendNode) GetMaxRow() uint32    { return node.maxRow }
-func (node *AppendNode) SetMaxRow(row uint32) { node.maxRow = row }
+func (node *AppendNode) GetTxn() txnif.TxnReader {
+	node.RLock()
+	defer node.RUnlock()
+	return node.GetTxnLocked()
+}
+func (node *AppendNode) GetTxnLocked() txnif.TxnReader {
+	return node.TxnMVCCNode.GetTxn()
+}
+func (node *AppendNode) GetStartRow() uint32 { return node.startRow }
+func (node *AppendNode) GetMaxRow() uint32 {
+	return node.maxRow
+}
+func (node *AppendNode) SetMaxRow(row uint32) {
+	node.maxRow = row
+}
 
 func (node *AppendNode) Prepare2PCPrepare() error {
 	node.Lock()
@@ -129,12 +152,12 @@ func (node *AppendNode) PrepareCommit() error {
 func (node *AppendNode) ApplyCommit(index *wal.Index) error {
 	node.Lock()
 	defer node.Unlock()
-	if node.GetTxn() == nil {
+	if node.GetTxnLocked() == nil {
 		panic("AppendNode | ApplyCommit | LogicErr")
 	}
 	node.TxnMVCCNode.ApplyCommit(index)
 	if node.mvcc != nil {
-		logutil.Debugf("Set MaxCommitTS=%v, MaxVisibleRow=%d", node.GetEnd(), node.maxRow)
+		logutil.Debugf("Set MaxCommitTS=%v, MaxVisibleRow=%d", node.GetEnd(), node.GetMaxRow())
 		node.mvcc.SetMaxVisible(node.GetEnd())
 	}
 	// logutil.Infof("Apply1Index %s TS=%d", index.String(), n.commitTs)
