@@ -164,6 +164,7 @@ func (s *Scope) remoteRun(c *Compile) error {
 	n := len(s.Instructions) - 1
 	con := s.Instructions[n]
 	s.Instructions = s.Instructions[:n]
+	s.Plan = c.scope.Plan
 	sData, errEncode := encodeScope(s)
 	if errEncode != nil {
 		return errEncode
