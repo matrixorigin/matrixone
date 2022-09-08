@@ -317,6 +317,9 @@ import (
 //JSON function
 %token <str> JSON_EXTRACT
 
+// JSON table function
+%token <str> UNNEST
+
 // Insert
 %token <str> ROW OUTFILE HEADER MAX_FILE_SIZE FORCE_QUOTE
 
@@ -350,7 +353,7 @@ import (
 %type <selectExprs> select_expression_list
 %type <selectExpr> select_expression
 %type <tableExprs> table_references table_name_wild_list
-%type <tableExpr> table_reference table_factor join_table into_table_name escaped_table_reference
+%type <tableExpr> table_reference table_factor join_table into_table_name escaped_table_reference table_function
 %type <direction> asc_desc_opt
 %type <order> order
 %type <orderBy> order_list order_by_clause order_by_opt
@@ -3246,6 +3249,19 @@ table_factor:
             },
         }
     }
+|   table_function as_opt_id
+    {
+    	if $2 != "" {
+    		$$ = &tree.AliasedTableExpr{
+    			Expr: $1,
+    			As: tree.AliasClause{
+    				Alias: tree.Identifier($2),
+    			},
+    		}
+    	} else {
+    		$$ = $1
+    	}
+    }
 // |   '(' table_references ')'
 
 derived_table:
@@ -3253,6 +3269,43 @@ derived_table:
     {
         $$ = &tree.ParenTableExpr{Expr: $2}
     }
+
+table_function:
+    UNNEST '(' STRING ')'
+    {
+	name := tree.SetUnresolvedName(strings.ToLower($1))
+        a1 := tree.NewNumValWithType(constant.MakeString($3), $3, false, tree.P_char)
+        a2 := tree.NewNumValWithType(constant.MakeString(""), "", false, tree.P_char)
+        a3 := tree.NewNumValWithType(constant.MakeString("false"), "false", false, tree.P_bool)
+        $$ = &tree.FuncExpr{
+       		Func: tree.FuncName2ResolvableFunctionReference(name),
+       		Exprs: tree.Exprs{a1, a2, a3},
+       	}
+    }
+|   UNNEST '(' STRING ',' STRING ')'
+    {
+    	name := tree.SetUnresolvedName(strings.ToLower($1))
+	a1 := tree.NewNumValWithType(constant.MakeString($3), $3, false, tree.P_char)
+	a2 := tree.NewNumValWithType(constant.MakeString($5), $5, false, tree.P_char)
+	a3 := tree.NewNumValWithType(constant.MakeString("false"), "false", false, tree.P_bool)
+	$$ = &tree.FuncExpr{
+		Func: tree.FuncName2ResolvableFunctionReference(name),
+		Exprs: tree.Exprs{a1, a2, a3},
+	}
+    }
+|   UNNEST '(' STRING ',' STRING ',' true_or_false ')'
+    {
+    	name := tree.SetUnresolvedName(strings.ToLower($1))
+    		a1 := tree.NewNumValWithType(constant.MakeString($3), $3, false, tree.P_char)
+    		a2 := tree.NewNumValWithType(constant.MakeString($5), $5, false, tree.P_char)
+    		a3 := $7
+    		$$ = &tree.FuncExpr{
+    			Func: tree.FuncName2ResolvableFunctionReference(name),
+    			Exprs: tree.Exprs{a1, a2, a3},
+    		}
+    }
+
+
 
 as_opt:
     {}

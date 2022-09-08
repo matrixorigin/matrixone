@@ -1364,6 +1364,30 @@ var (
 			input:  `select json_extract(a, '$.b') from t`,
 			output: `select json_extract(a, $.b) from t`,
 		},
+		{
+			input:  `select * from unnest("a") as f`,
+			output: `select * from unnest(a, , false) as f`,
+		},
+		{
+			input:  `select * from unnest("a", "b") as f`,
+			output: `select * from unnest(a, b, false) as f`,
+		},
+		{
+			input:  `select * from unnest("a", "b", true) as f`,
+			output: `select * from unnest(a, b, true) as f`,
+		},
+		{
+			input:  `select * from unnest("a")`,
+			output: `select * from unnest(a, , false)`,
+		},
+		{
+			input:  `select * from unnest("a", "b")`,
+			output: `select * from unnest(a, b, false)`,
+		},
+		{
+			input:  `select * from unnest("a", "b", true)`,
+			output: `select * from unnest(a, b, true)`,
+		},
 	}
 )
 
