@@ -27,47 +27,47 @@ import (
 
 func TestNew(t *testing.T) {
 	v0 := New(types.Type{Oid: types.T(types.T_int8)})
-	require.Equal(t, v0, &Vector{Typ: types.Type{Oid: types.T(types.T_int8)}, Col: []int8{},
+	require.Equal(t, v0, &Vector{Typ: types.Type{Oid: types.T(types.T_int8)}, Data: []byte{}, Col: []int8{},
 		Nsp: &nulls.Nulls{}})
 
 	v1 := New(types.Type{Oid: types.T(types.T_int16)})
-	require.Equal(t, v1, &Vector{Typ: types.Type{Oid: types.T(types.T_int16)}, Col: []int16{},
+	require.Equal(t, v1, &Vector{Typ: types.Type{Oid: types.T(types.T_int16)}, Data: []byte{}, Col: []int16{},
 		Nsp: &nulls.Nulls{}})
 
 	v2 := New(types.Type{Oid: types.T(types.T_int32)})
-	require.Equal(t, v2, &Vector{Typ: types.Type{Oid: types.T(types.T_int32)}, Col: []int32{},
+	require.Equal(t, v2, &Vector{Typ: types.Type{Oid: types.T(types.T_int32)}, Data: []byte{}, Col: []int32{},
 		Nsp: &nulls.Nulls{}})
 
 	v3 := New(types.Type{Oid: types.T(types.T_int64)})
-	require.Equal(t, v3, &Vector{Typ: types.Type{Oid: types.T(types.T_int64)}, Col: []int64{},
+	require.Equal(t, v3, &Vector{Typ: types.Type{Oid: types.T(types.T_int64)}, Data: []byte{}, Col: []int64{},
 		Nsp: &nulls.Nulls{}})
 
 	v4 := New(types.Type{Oid: types.T(types.T_uint8)})
-	require.Equal(t, v4, &Vector{Typ: types.Type{Oid: types.T(types.T_uint8)}, Col: []uint8{},
+	require.Equal(t, v4, &Vector{Typ: types.Type{Oid: types.T(types.T_uint8)}, Data: []byte{}, Col: []uint8{},
 		Nsp: &nulls.Nulls{}})
 
 	v5 := New(types.Type{Oid: types.T(types.T_uint16)})
-	require.Equal(t, v5, &Vector{Typ: types.Type{Oid: types.T(types.T_uint16)}, Col: []uint16{},
+	require.Equal(t, v5, &Vector{Typ: types.Type{Oid: types.T(types.T_uint16)}, Data: []byte{}, Col: []uint16{},
 		Nsp: &nulls.Nulls{}})
 
 	v6 := New(types.Type{Oid: types.T(types.T_uint32)})
-	require.Equal(t, v6, &Vector{Typ: types.Type{Oid: types.T(types.T_uint32)}, Col: []uint32{},
+	require.Equal(t, v6, &Vector{Typ: types.Type{Oid: types.T(types.T_uint32)}, Data: []byte{}, Col: []uint32{},
 		Nsp: &nulls.Nulls{}})
 
 	v7 := New(types.Type{Oid: types.T(types.T_uint64)})
-	require.Equal(t, v7, &Vector{Typ: types.Type{Oid: types.T(types.T_uint64)}, Col: []uint64{},
+	require.Equal(t, v7, &Vector{Typ: types.Type{Oid: types.T(types.T_uint64)}, Data: []byte{}, Col: []uint64{},
 		Nsp: &nulls.Nulls{}})
 
 	v8 := New(types.Type{Oid: types.T(types.T_float32)})
-	require.Equal(t, v8, &Vector{Typ: types.Type{Oid: types.T(types.T_float32)}, Col: []float32{},
+	require.Equal(t, v8, &Vector{Typ: types.Type{Oid: types.T(types.T_float32)}, Data: []byte{}, Col: []float32{},
 		Nsp: &nulls.Nulls{}})
 
 	v9 := New(types.Type{Oid: types.T(types.T_float64)})
-	require.Equal(t, v9, &Vector{Typ: types.Type{Oid: types.T(types.T_float64)}, Col: []float64{},
+	require.Equal(t, v9, &Vector{Typ: types.Type{Oid: types.T(types.T_float64)}, Data: []byte{}, Col: []float64{},
 		Nsp: &nulls.Nulls{}})
 
 	v10 := New(types.Type{Oid: types.T(types.T_varchar)})
-	require.Equal(t, v10, &Vector{Typ: types.Type{Oid: types.T(types.T_varchar)}, Col: &types.Bytes{},
+	require.Equal(t, v10, &Vector{Typ: types.Type{Oid: types.T(types.T_varchar)}, Data: []byte{}, Col: []types.Varlena{},
 		Nsp: &nulls.Nulls{}})
 }
 
@@ -77,21 +77,8 @@ func TestReset(t *testing.T) {
 	require.Equal(t, 0, len(v0.Data))
 }
 
-func TestFree(t *testing.T) {
-	v0 := New(types.Type{Oid: types.T(types.T_int8)})
-	v0.Ref = 1
-	v0.Data = []byte("hello")
-	hm := host.New(1 << 20)
-	gm := guest.New(1<<20, hm)
-	mp := mheap.New(gm)
-	Free(v0, mp)
-	require.Equal(t, uint64(0), v0.Ref)
-	require.Equal(t, 0, len(v0.Data))
-}
-
 func TestClean(t *testing.T) {
 	v0 := New(types.Type{Oid: types.T(types.T_int8)})
-	v0.Ref = 1
 	v0.Data = []byte("hello")
 	hm := host.New(1 << 20)
 	gm := guest.New(1<<20, hm)
@@ -111,11 +98,9 @@ func TestLength(t *testing.T) {
 	v0.Col = []int8{1, 2, 3, 4, 5}
 	require.Equal(t, 5, Length(v0))
 	v1 := New(types.Type{Oid: types.T(types.T_char)})
-	v1.Col = &types.Bytes{
-		Data:    []byte("helloGut"),
-		Offsets: []uint32{0, 5},
-		Lengths: []uint32{5, 3},
-	}
+	va1, _, _ := types.BuildVarlena([]byte("foo"), nil, nil)
+	va2, _, _ := types.BuildVarlena([]byte("bar"), nil, nil)
+	v1.Col = []types.Varlena{va1, va2}
 	require.Equal(t, 2, Length(v1))
 }
 
@@ -179,21 +164,6 @@ func TestSetLength(t *testing.T) {
 	FillVectorData(v9)
 	SetLength(v9, 3)
 	require.Equal(t, 3, len(v9.Col.([]float64)))
-
-	v10 := New(types.Type{Oid: types.T(types.T_sel)})
-	v10.Col = []int64{1, 2, 3, 4, 5, 6, 7, 8}
-	FillVectorData(v10)
-	SetLength(v10, 3)
-	require.Equal(t, 3, len(v10.Col.([]int64)))
-
-	v11 := New(types.Type{Oid: types.T(types.T_char)})
-	v11.Col = &types.Bytes{
-		Data:    []byte("helloGutkonichiwanihao"),
-		Offsets: []uint32{0, 5, 8, 17},
-		Lengths: []uint32{5, 3, 9, 5},
-	}
-	SetLength(v11, 3)
-	require.Equal(t, 3, len(v11.Col.(*types.Bytes).Offsets))
 
 	v12 := New(types.Type{Oid: types.T(types.T_date)})
 	v12.Col = []types.Date{1, 2, 3, 4, 5, 6, 7, 8}
@@ -273,14 +243,21 @@ func TestDup(t *testing.T) {
 	require.Equal(t, v9, v9Duplicate)
 
 	v10 := New(types.Type{Oid: types.T(types.T_char)})
-	v10.Col = &types.Bytes{
-		Data:    []byte("helloGutkonichiwanihao"),
-		Offsets: []uint32{0, 5, 8, 17},
-		Lengths: []uint32{5, 3, 9, 5},
-	}
-	v10.Data = v10.Col.(*types.Bytes).Data
-	v10Duplicate, _ := Dup(v10, mp)
-	require.Equal(t, v10, v10Duplicate)
+	AppendBytes(v10, [][]byte{
+		[]byte("hello"),
+		[]byte("Gut"),
+		[]byte("knoichiwa"),
+		[]byte("nihao"),
+	}, nil)
+	v10Duplicate, err := Dup(v10, mp)
+	require.Equal(t, err, nil)
+	require.Equal(t, v10.Data, v10Duplicate.Data)
+	require.Equal(t, v10.area, v10Duplicate.area)
+	require.Equal(t, MustStrCols(v10), MustStrCols(v10Duplicate))
+	require.Equal(t, v10.GetString(0), v10Duplicate.GetString(0))
+	require.Equal(t, v10.GetString(1), v10Duplicate.GetString(1))
+	require.Equal(t, v10.GetString(2), v10Duplicate.GetString(2))
+	require.Equal(t, v10.GetString(3), v10Duplicate.GetString(3))
 
 	v11 := New(types.Type{Oid: types.T(types.T_date)})
 	v11.Data = types.EncodeDateSlice([]types.Date{1, 2, 3, 4})
@@ -367,25 +344,18 @@ func TestWindow(t *testing.T) {
 	v9Window = Window(v9, start, end, v9Window)
 	require.Equal(t, v9.Col.([]float64)[start:end], v9Window.Col)
 
-	v10 := New(types.Type{Oid: types.T(types.T_sel)})
-	v10.Data = types.EncodeInt64Slice([]int64{1, 2, 3, 4, 5, 6, 7, 8})
-	v10.Col = types.DecodeInt64Slice(v10.Data)
-	v10Window := New(types.Type{Oid: types.T(types.T_sel)})
-	v10Window = Window(v10, start, end, v10Window)
-	require.Equal(t, v10.Col.([]int64)[start:end], v10Window.Col)
-
 	v11 := New(types.Type{Oid: types.T(types.T_char)})
-	v11.Col = &types.Bytes{
-		Data:    []byte("helloGutkonichiwanihao"),
-		Offsets: []uint32{0, 5, 8, 17},
-		Lengths: []uint32{5, 3, 9, 5},
-	}
-	v11.Data = v11.Col.(*types.Bytes).Data
+	AppendBytes(v11, [][]byte{
+		[]byte("hello"),
+		[]byte("Gut"),
+		[]byte("konichiwa"),
+		[]byte("nihao"),
+	}, nil)
 	v11Window := New(types.Type{Oid: types.T(types.T_char)})
 	v11Window = Window(v11, start, end, v11Window)
-	require.Equal(t, v11.Col.(*types.Bytes).Offsets[start:end], v11Window.Col.(*types.Bytes).Offsets)
-	require.Equal(t, v11.Col.(*types.Bytes).Lengths[start:end], v11Window.Col.(*types.Bytes).Lengths)
-	// v11Window = Window(v11, start, end, v11Window)
+	vs11 := MustStrCols(v11)
+	ws11 := MustStrCols(v11Window)
+	require.Equal(t, vs11[start:end], ws11)
 
 	v12 := New(types.Type{Oid: types.T(types.T_date)})
 	v12.Data = types.EncodeDateSlice([]types.Date{1, 2, 3, 4, 5, 6, 7, 8})
@@ -408,7 +378,7 @@ func TestAppend(t *testing.T) {
 	v0.Data = types.EncodeInt8Slice(int8Slice)
 	v0.Col = types.DecodeInt8Slice(v0.Data)
 	appendInt8Slice := []int8{21, 22, 23}
-	err := Append(v0, appendInt8Slice)
+	err := AppendFixed(v0, appendInt8Slice, nil)
 	require.NoError(t, err)
 	require.Equal(t, append(int8Slice, appendInt8Slice...), v0.Col.([]int8))
 
@@ -417,7 +387,7 @@ func TestAppend(t *testing.T) {
 	v1.Data = types.EncodeInt16Slice(int16Slice)
 	v1.Col = types.DecodeInt16Slice(v1.Data)
 	appendInt16Slice := []int16{21, 22, 23}
-	err = Append(v1, appendInt16Slice)
+	err = AppendFixed(v1, appendInt16Slice, nil)
 	require.NoError(t, err)
 	require.Equal(t, append(int16Slice, appendInt16Slice...), v1.Col.([]int16))
 
@@ -426,7 +396,7 @@ func TestAppend(t *testing.T) {
 	v2.Data = types.EncodeInt32Slice(int32Slice)
 	v2.Col = types.DecodeInt32Slice(v2.Data)
 	appendInt32Slice := []int32{21, 22, 23}
-	err = Append(v2, appendInt32Slice)
+	err = AppendFixed(v2, appendInt32Slice, nil)
 	require.NoError(t, err)
 	require.Equal(t, append(int32Slice, appendInt32Slice...), v2.Col.([]int32))
 
@@ -435,7 +405,7 @@ func TestAppend(t *testing.T) {
 	v3.Data = types.EncodeInt64Slice(int64Slice)
 	v3.Col = types.DecodeInt64Slice(v3.Data)
 	appendInt64Slice := []int64{21, 22, 23}
-	err = Append(v3, appendInt64Slice)
+	err = AppendFixed(v3, appendInt64Slice, nil)
 	require.NoError(t, err)
 	require.Equal(t, append(int64Slice, appendInt64Slice...), v3.Col.([]int64))
 
@@ -444,7 +414,7 @@ func TestAppend(t *testing.T) {
 	v4.Data = types.EncodeUint8Slice(uint8Slice)
 	v4.Col = types.DecodeUint8Slice(v4.Data)
 	appendUint8Slice := []uint8{21, 22, 23}
-	err = Append(v4, appendUint8Slice)
+	err = AppendFixed(v4, appendUint8Slice, nil)
 	require.NoError(t, err)
 	require.Equal(t, append(uint8Slice, appendUint8Slice...), v4.Col.([]uint8))
 
@@ -453,7 +423,7 @@ func TestAppend(t *testing.T) {
 	v5.Data = types.EncodeUint16Slice(uint16Slice)
 	v5.Col = types.DecodeUint16Slice(v5.Data)
 	appendUint16Slice := []uint16{21, 22, 23}
-	err = Append(v5, appendUint16Slice)
+	err = AppendFixed(v5, appendUint16Slice, nil)
 	require.NoError(t, err)
 	require.Equal(t, append(uint16Slice, appendUint16Slice...), v5.Col.([]uint16))
 
@@ -462,7 +432,7 @@ func TestAppend(t *testing.T) {
 	v6.Data = types.EncodeUint32Slice(uint32Slice)
 	v6.Col = types.DecodeUint32Slice(v6.Data)
 	appendUint32Slice := []uint32{21, 22, 23}
-	err = Append(v6, appendUint32Slice)
+	err = AppendFixed(v6, appendUint32Slice, nil)
 	require.NoError(t, err)
 	require.Equal(t, append(uint32Slice, appendUint32Slice...), v6.Col.([]uint32))
 
@@ -471,7 +441,7 @@ func TestAppend(t *testing.T) {
 	v7.Data = types.EncodeUint64Slice(uint64Slice)
 	v7.Col = types.DecodeUint64Slice(v7.Data)
 	appendUint64Slice := []uint64{21, 22, 23}
-	err = Append(v7, appendUint64Slice)
+	err = AppendFixed(v7, appendUint64Slice, nil)
 	require.NoError(t, err)
 	require.Equal(t, append(uint64Slice, appendUint64Slice...), v7.Col.([]uint64))
 
@@ -480,7 +450,7 @@ func TestAppend(t *testing.T) {
 	v8.Data = types.EncodeFloat32Slice(float32Slice)
 	v8.Col = types.DecodeFloat32Slice(v8.Data)
 	appendFloat32Slice := []float32{21, 22, 23}
-	err = Append(v8, appendFloat32Slice)
+	err = AppendFixed(v8, appendFloat32Slice, nil)
 	require.NoError(t, err)
 	require.Equal(t, append(float32Slice, appendFloat32Slice...), v8.Col.([]float32))
 
@@ -489,7 +459,7 @@ func TestAppend(t *testing.T) {
 	v9.Data = types.EncodeFloat64Slice(float64Slice)
 	v9.Col = types.DecodeFloat64Slice(v9.Data)
 	appendFloat64Slice := []float64{21, 22, 23}
-	err = Append(v9, appendFloat64Slice)
+	err = AppendFixed(v9, appendFloat64Slice, nil)
 	require.NoError(t, err)
 	require.Equal(t, append(float64Slice, appendFloat64Slice...), v9.Col.([]float64))
 
@@ -498,7 +468,7 @@ func TestAppend(t *testing.T) {
 	v10.Data = types.EncodeDateSlice(dateSlice)
 	v10.Col = types.DecodeDateSlice(v10.Data)
 	appendDateSlice := []types.Date{21, 22, 23}
-	err = Append(v10, appendDateSlice)
+	err = AppendFixed(v10, appendDateSlice, nil)
 	require.NoError(t, err)
 	require.Equal(t, append(dateSlice, appendDateSlice...), v10.Col.([]types.Date))
 
@@ -507,18 +477,9 @@ func TestAppend(t *testing.T) {
 	v11.Data = types.EncodeDatetimeSlice(datetimeSlice)
 	v11.Col = types.DecodeDatetimeSlice(v11.Data)
 	appendDatetimeSlice := []types.Datetime{21, 22, 23}
-	err = Append(v11, appendDatetimeSlice)
+	err = AppendFixed(v11, appendDatetimeSlice, nil)
 	require.NoError(t, err)
 	require.Equal(t, append(datetimeSlice, appendDatetimeSlice...), v11.Col.([]types.Datetime))
-
-	v12 := New(types.Type{Oid: types.T(types.T_sel)})
-	selSlice := []int64{1, 2, 3, 4, 5, 6, 7, 8}
-	v12.Data = types.EncodeInt64Slice(selSlice)
-	v12.Col = types.DecodeInt64Slice(v12.Data)
-	appendInt64Slice = []int64{21, 22, 23}
-	err = Append(v12, appendInt64Slice)
-	require.NoError(t, err)
-	require.Equal(t, append(selSlice, appendInt64Slice...), v12.Col.([]int64))
 }
 
 func TestShrink(t *testing.T) {
@@ -582,12 +543,6 @@ func TestShrink(t *testing.T) {
 	v9.Col = types.DecodeFloat64Slice(v9.Data)
 	Shrink(v9, sels)
 	require.Equal(t, []float64{1, 3, 5}, v9.Col.([]float64))
-
-	v10 := New(types.Type{Oid: types.T(types.T_sel)})
-	v10.Data = types.EncodeInt64Slice([]int64{0, 1, 2, 3, 4, 5, 6, 7, 8})
-	v10.Col = types.DecodeInt64Slice(v10.Data)
-	Shrink(v10, sels)
-	require.Equal(t, []int64{1, 3, 5}, v10.Col.([]int64))
 
 	v11 := New(types.Type{Oid: types.T(types.T_date)})
 	v11.Data = types.EncodeDateSlice([]types.Date{0, 1, 2, 3, 4, 5, 6, 7, 8})
@@ -677,13 +632,6 @@ func TestShuffle(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, []float64{1, 3, 5}, v9.Col.([]float64))
 
-	v10 := New(types.Type{Oid: types.T(types.T_sel)})
-	v10.Data = types.EncodeInt64Slice([]int64{0, 1, 2, 3, 4, 5, 6, 7, 8})
-	v10.Col = types.DecodeInt64Slice(v10.Data)
-	err = Shuffle(v10, sels, mp)
-	require.NoError(t, err)
-	require.Equal(t, []int64{1, 3, 5}, v10.Col.([]int64))
-
 	v11 := New(types.Type{Oid: types.T(types.T_date)})
 	v11.Data = types.EncodeDateSlice([]types.Date{0, 1, 2, 3, 4, 5, 6, 7, 8})
 	v11.Col = types.DecodeDateSlice(v11.Data)
@@ -701,33 +649,33 @@ func TestShuffle(t *testing.T) {
 
 func TestCopy(t *testing.T) {
 	w0 := New(types.Type{Oid: types.T(types.T_char)})
-	w0.Col = &types.Bytes{
-		Data:    []byte("nihaonihaonihaonihao"),
-		Offsets: []uint32{0, 5, 10, 15},
-		Lengths: []uint32{5, 5, 5, 5},
-	}
-	w0.Data = w0.Col.(*types.Bytes).Data
+	AppendBytes(w0, [][]byte{
+		[]byte("nihao"),
+		[]byte("nihao"),
+		[]byte("nihao"),
+		[]byte("nihao"),
+	}, nil)
 	v0 := New(types.Type{Oid: types.T(types.T_char)})
-	v0.Col = &types.Bytes{
-		Data:    []byte("hellohellohellohello"),
-		Offsets: []uint32{0, 5, 10, 15},
-		Lengths: []uint32{5, 5, 5, 5},
-	}
-	v0.Data = v0.Col.(*types.Bytes).Data
+	AppendBytes(v0, [][]byte{
+		[]byte("hello"),
+		[]byte("hello"),
+		[]byte("hello"),
+		[]byte("hello"),
+	}, nil)
 	hm := host.New(1 << 20)
 	gm := guest.New(1<<20, hm)
 	mp := mheap.New(gm)
 	err := Copy(v0, w0, 2, 0, mp)
 	require.NoError(t, err)
-	require.Equal(t, []byte("hellohellonihaohello"), v0.Data)
-	v0.Col = &types.Bytes{
-		Data:    []byte("hihihihi"),
-		Offsets: []uint32{0, 2, 4, 6},
-		Lengths: []uint32{2, 2, 2, 2},
-	}
-	err = Copy(v0, w0, 2, 0, mp)
-	require.NoError(t, err)
-	require.Equal(t, []byte("hihinihaohi"), v0.Data)
+
+	expectvec := New(types.Type{Oid: types.T(types.T_char)})
+	AppendBytes(expectvec, [][]byte{
+		[]byte("hello"),
+		[]byte("hello"),
+		[]byte("nihao"),
+		[]byte("hello"),
+	}, nil)
+	require.Equal(t, GetStrVectorValues(expectvec), GetStrVectorValues(v0))
 }
 
 func TestUnionOne(t *testing.T) {
@@ -865,25 +813,38 @@ func TestUnionOne(t *testing.T) {
 	require.Equal(t, []float64{0, 1, 2, 3, 4, 5, 6, 7, 8, 3}, v9.Col.([]float64))
 
 	w10 := New(types.Type{Oid: types.T(types.T_char)})
-	w10.Col = &types.Bytes{
-		Data:    []byte("nihaonihaonihaonihao"),
-		Offsets: []uint32{0, 5, 10, 15},
-		Lengths: []uint32{5, 5, 5, 5},
-	}
-	w10.Data = w10.Col.(*types.Bytes).Data
+	AppendString(w10, []string{"nihao", "nihao", "nihao", "nihao"}, nil)
 	v10 := New(types.Type{Oid: types.T(types.T_char)})
 	err = UnionOne(v10, w10, 3, mp)
 	require.NoError(t, err)
-	require.Equal(t, []byte("nihao"), v10.Col.(*types.Bytes).Data)
-	v10.Col = &types.Bytes{
-		Data:    []byte("hellohellohellohello"),
-		Offsets: []uint32{0, 5, 10, 15},
-		Lengths: []uint32{5, 5, 5, 5},
-	}
-	v10.Data = v10.Col.(*types.Bytes).Data
+	v10vals := GetStrVectorValues(v10)
+	require.Equal(t, []string{"nihao"}, v10vals)
+
+	v10 = New(types.Type{Oid: types.T(types.T_char)})
+	AppendString(v10, []string{"hello", "hello", "hello"}, nil)
 	err = UnionOne(v10, w10, 3, mp)
 	require.NoError(t, err)
-	require.Equal(t, []byte("hellohellohellohellonihao"), v10.Col.(*types.Bytes).Data)
+	v10vals = GetStrVectorValues(v10)
+	require.Equal(t, []string{"hello", "hello", "hello", "nihao"}, v10vals)
+
+	// Long string test
+	astr := "a123456789012345678901234567890"
+	bstr := "b123456789012345678901234567890AKQJ1098765432"
+
+	w102 := New(types.Type{Oid: types.T(types.T_char)})
+	AppendString(w102, []string{astr, astr, astr, astr}, nil)
+	v102 := New(types.Type{Oid: types.T(types.T_char)})
+	err = UnionOne(v102, w102, 3, mp)
+	require.NoError(t, err)
+	v102vals := GetStrVectorValues(v102)
+	require.Equal(t, []string{astr}, v102vals)
+
+	v102 = New(types.Type{Oid: types.T(types.T_char)})
+	AppendString(v102, []string{bstr, bstr, bstr}, nil)
+	err = UnionOne(v102, w102, 3, mp)
+	require.NoError(t, err)
+	v102vals = GetStrVectorValues(v102)
+	require.Equal(t, []string{bstr, bstr, bstr, astr}, v102vals)
 
 	w11 := New(types.Type{Oid: types.T(types.T_date)})
 	w11.Data = types.EncodeDateSlice([]types.Date{0, 1, 2, 3, 4, 5, 6, 7, 8})
@@ -1047,25 +1008,17 @@ func TestUnionBatch(t *testing.T) {
 	require.Equal(t, []float64{0, 1, 2, 3, 4, 5, 6, 7, 8, 3, 4}, v9.Col.([]float64))
 
 	w10 := New(types.Type{Oid: types.T(types.T_char)})
-	w10.Col = &types.Bytes{
-		Data:    []byte("nihaonihaonihaonihao"),
-		Offsets: []uint32{0, 5, 10, 15},
-		Lengths: []uint32{5, 5, 5, 5},
-	}
-	w10.Data = w10.Col.(*types.Bytes).Data
+	AppendString(w10, []string{"nihao", "nihao", "nihao", "nihao"}, nil)
 	v10 := New(types.Type{Oid: types.T(types.T_char)})
 	err = UnionBatch(v10, w10, 1, 2, []uint8{1, 1}, mp)
 	require.NoError(t, err)
-	require.Equal(t, []byte("nihaonihao"), v10.Col.(*types.Bytes).Data)
-	v10.Col = &types.Bytes{
-		Data:    []byte("hellohellohellohello"),
-		Offsets: []uint32{0, 5, 10, 15},
-		Lengths: []uint32{5, 5, 5, 5},
-	}
-	v10.Data = v10.Col.(*types.Bytes).Data
+	require.Equal(t, []string{"nihao", "nihao"}, GetStrVectorValues(v10))
+
+	Clean(v10, mp)
+	AppendString(v10, []string{"hello", "hello", "hello", "hello"}, nil)
 	err = UnionBatch(v10, w10, 1, 2, []uint8{1, 1}, mp)
 	require.NoError(t, err)
-	require.Equal(t, []byte("hellohellohellohellonihaonihao"), v10.Col.(*types.Bytes).Data)
+	require.Equal(t, []string{"hello", "hello", "hello", "hello", "nihao", "nihao"}, GetStrVectorValues(v10))
 
 	w11 := New(types.Type{Oid: types.T(types.T_date)})
 	w11.Data = types.EncodeDateSlice([]types.Date{0, 1, 2, 3, 4, 5, 6, 7, 8})
@@ -1120,44 +1073,6 @@ func TestVector_String(t *testing.T) {
 	require.Equal(t, "[0 1 2]-&{<nil>}", result)
 }
 
-/*
-func TestVector(t *testing.T) {
-	v := New(types.Type{Oid: types.T(types.T_varchar), Size: 24, Width: 0, Precision: 0})
-	w := New(types.Type{Oid: types.T(types.T_varchar), Size: 24, Width: 0, Precision: 0})
-	{
-		vs := make([][]byte, 10)
-		for i := 0; i < 10; i++ {
-			vs[i] = []byte(fmt.Sprintf("%v", i*i))
-		}
-		vs[9] = []byte("abcd")
-		if err := Append(v, vs); err != nil {
-			log.Fatal(err)
-		}
-	}
-	hm := host.New(1 << 20)
-	gm := guest.New(1<<20, hm)
-	mp := mheap.New(gm)
-	for i := 0; i < 5; i++ {
-		if err := UnionOne(w, v, int64(i), mp); err != nil {
-			log.Fatal(err)
-		}
-	}
-	{
-		fmt.Printf("v: %v\n", v)
-		fmt.Printf("w: %v\n", w)
-	}
-	{
-		if err := Copy(w, v, 1, 9, mp); err != nil {
-			log.Fatal(err)
-		}
-		fmt.Printf("w[1] = v[9]: %v\n", w)
-	}
-	w.Ref = 1
-	Free(w, mp)
-	fmt.Printf("guest: %v, host: %v\n", gm.Size(), gm.HostSize())
-}
-*/
-
 func FillVectorData(v *Vector) {
 	switch v.Typ.Oid {
 	case types.T_bool:
@@ -1192,5 +1107,40 @@ func FillVectorData(v *Vector) {
 		v.Data = types.EncodeFixedSlice(v.Col.([]types.Decimal64), 8)
 	case types.T_decimal128:
 		v.Data = types.EncodeFixedSlice(v.Col.([]types.Decimal128), 16)
+	}
+}
+
+func TestVector_Marshial(t *testing.T) {
+	vals := []int64{0, 1, 2, 3, 4, 5, 6, 7, 8, 9}
+	vec := NewWithFixed(types.T_int64.ToType(), vals, nil, nil)
+	nulls.Add(vec.Nsp, 1)
+	nulls.Add(vec.Nsp, 3)
+	nulls.Add(vec.Nsp, 5)
+	nulls.Add(vec.Nsp, 7)
+	nulls.Add(vec.Nsp, 9)
+
+	bs, err := vec.MarshalBinary()
+	require.NoError(t, err)
+
+	vec2 := New(types.T_int64.ToType())
+	err = vec2.UnmarshalBinary(bs)
+	require.NoError(t, err)
+
+	require.Equal(t, vec.Length(), vec2.Length())
+	require.True(t, vec2.Nsp.Contains(1))
+	require.True(t, vec2.Nsp.Contains(3))
+	require.True(t, vec2.Nsp.Contains(5))
+	require.True(t, vec2.Nsp.Contains(7))
+	require.True(t, vec2.Nsp.Contains(9))
+
+	tv1 := MustTCols[int64](vec)
+	tv2 := MustTCols[int64](vec2)
+	for i := 0; i < vec.Length(); i++ {
+		ui := uint64(i)
+		require.Equal(t, vec2.Nsp.Contains(ui), i%2 != 0)
+		require.Equal(t, vec2.Nsp.Contains(ui), vec.Nsp.Contains(ui))
+		if !vec2.Nsp.Contains(ui) {
+			require.Equal(t, tv1[i], tv2[i])
+		}
 	}
 }

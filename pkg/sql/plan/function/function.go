@@ -16,13 +16,14 @@ package function
 
 import (
 	"fmt"
+	"math"
+
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/errno"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/errors"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"math"
 )
 
 const (
@@ -244,16 +245,9 @@ func GetFunctionByName(name string, args []types.Type) (int64, types.Type, []typ
 	case wrongFunctionParameters:
 		ArgsToPrint := getOidSlice(finalTypes) // arg information to print for error message
 		if len(fs.Overloads) > 0 && fs.Overloads[0].isFunction() {
-			// TODO: need to confirm the params supported by each function, and then process the error msg uniformly
-			if confirmFuncNameCurrently(name) {
-				return -1, emptyType, nil, errors.New(errno.UndefinedFunction, fmt.Sprintf("Function '%s' with parameters %v is not supported.", name, ArgsToPrint))
-			}
-			return -1, emptyType, nil, errors.New(errno.UndefinedFunction, fmt.Sprintf("Function '%s' with parameters %v will be implemented in future version.", name, ArgsToPrint))
+			return -1, emptyType, nil, errors.New(errno.UndefinedFunction, fmt.Sprintf("Function '%s' with parameters %v is not supported.", name, ArgsToPrint))
 		}
-		if confirmFuncNameCurrently(name) {
-			return -1, emptyType, nil, errors.New(errno.UndefinedFunction, fmt.Sprintf("Operator '%s' with parameters %v is not supported.", name, ArgsToPrint))
-		}
-		return -1, emptyType, nil, errors.New(errno.UndefinedFunction, fmt.Sprintf("Operator '%s' with parameters %v will be implemented in future version.", name, ArgsToPrint))
+		return -1, emptyType, nil, errors.New(errno.UndefinedFunction, fmt.Sprintf("Operator '%s' with parameters %v is not supported.", name, ArgsToPrint))
 	case tooManyFunctionsMatched:
 		return -1, emptyType, nil, errors.New(errno.AmbiguousParameter, fmt.Sprintf("too many overloads matched for '%s%v'", name, args))
 	case wrongFuncParamForAgg:
@@ -265,33 +259,6 @@ func GetFunctionByName(name string, args []types.Type) (int64, types.Type, []typ
 	rt := getRealReturnType(fid, fs.Overloads[index], finalTypes)
 
 	return EncodeOverloadID(fid, index), rt, targetTypes, nil
-}
-
-var confirmNames []string = []string{
-	"oct",
-	"sin",
-	"cos",
-	"tan",
-	"cot",
-	"acros",
-	"atan",
-	"sinh",
-	"log",
-	"cast",
-	"abs",
-	"weekday",
-	"dayofyear",
-	"round",
-	"if",
-}
-
-func confirmFuncNameCurrently(name string) bool {
-	for i := range confirmNames {
-		if name == confirmNames[i] {
-			return true
-		}
-	}
-	return false
 }
 
 func ensureBinaryOperatorWithSamePrecision(targets []types.Type, hasSet []bool) {

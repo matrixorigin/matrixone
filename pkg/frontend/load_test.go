@@ -23,7 +23,6 @@ import (
 
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
@@ -560,6 +559,7 @@ func Test_rowToColumnAndSaveToStorage(t *testing.T) {
 		rel := mock_frontend.NewMockRelation(ctrl)
 		rel.EXPECT().Write(ctx, gomock.Any()).Return(nil).AnyTimes()
 
+		// XXX the test is so strange, curBatchSize is used as both batch size and column count?
 		var curBatchSize = 13
 		handler := &WriteBatchHandler{
 			SharePart: SharePart{
@@ -580,20 +580,11 @@ func Test_rowToColumnAndSaveToStorage(t *testing.T) {
 		field := [][]string{{"a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "8", "9"}}
 		Oid := []types.T{types.T_int8, types.T_int16, types.T_int32, types.T_int64, types.T_uint8, types.T_uint16,
 			types.T_uint32, types.T_uint64, types.T_float32, types.T_float64, types.T_char, types.T_date, types.T_datetime}
-		Col := []interface{}{make([]int8, curBatchSize), make([]int16, curBatchSize), make([]int32, curBatchSize), make([]int64, curBatchSize),
-			make([]uint8, curBatchSize), make([]uint16, curBatchSize), make([]uint32, curBatchSize), make([]uint64, curBatchSize),
-			make([]float32, curBatchSize), make([]float64, curBatchSize), &types.Bytes{
-				Offsets: make([]uint32, curBatchSize), Lengths: make([]uint32, curBatchSize),
-			}, make([]types.Date, curBatchSize), make([]types.Datetime, curBatchSize)}
 		fmt.Println(Oid)
 		handler.simdCsvLineArray[0] = field[0]
 		for i := 0; i < curBatchSize; i++ {
 			handler.dataColumnId2TableColumnId[i] = i
-			handler.batchData.Vecs[i] = &vector.Vector{
-				Nsp: &nulls.Nulls{},
-				Typ: types.Type{Oid: Oid[i]},
-				Col: Col[i],
-			}
+			handler.batchData.Vecs[i] = vector.PreAllocType(Oid[i].ToType(), curBatchSize, curBatchSize, nil)
 		}
 		var force = false
 		convey.So(rowToColumnAndSaveToStorage(handler, force, row2colChoose), convey.ShouldBeNil)
@@ -611,11 +602,8 @@ func Test_rowToColumnAndSaveToStorage(t *testing.T) {
 			if Oid[i] == types.T_char {
 				continue
 			}
-			handler.batchData.Vecs[0] = &vector.Vector{
-				Nsp: &nulls.Nulls{},
-				Typ: types.Type{Oid: Oid[i]},
-				Col: Col[i],
-			}
+			// XXX Vecs[0]?   What are we testing?
+			handler.batchData.Vecs[0] = vector.PreAllocType(Oid[i].ToType(), curBatchSize, curBatchSize, nil)
 			convey.So(rowToColumnAndSaveToStorage(handler, force, row2colChoose), convey.ShouldNotBeNil)
 		}
 
@@ -625,11 +613,8 @@ func Test_rowToColumnAndSaveToStorage(t *testing.T) {
 			if Oid[i] == types.T_char {
 				continue
 			}
-			handler.batchData.Vecs[0] = &vector.Vector{
-				Nsp: &nulls.Nulls{},
-				Typ: types.Type{Oid: Oid[i]},
-				Col: Col[i],
-			}
+			// XXX Vecs[0]?   What are we testing?
+			handler.batchData.Vecs[0] = vector.PreAllocType(Oid[i].ToType(), curBatchSize, curBatchSize, nil)
 			convey.So(rowToColumnAndSaveToStorage(handler, force, row2colChoose), convey.ShouldNotBeNil)
 		}
 	})

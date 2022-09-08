@@ -30,145 +30,69 @@ var (
 
 func Like(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	lv, rv := vectors[0], vectors[1]
-	lvs, rvs := vector.MustBytesCols(lv), vector.MustBytesCols(rv)
-	rtl := 8
+	lvs, rvs := vector.MustStrCols(lv), vector.MustBytesCols(rv)
+	rtyp := types.T_bool.ToType()
 
 	if lv.IsScalarNull() || rv.IsScalarNull() {
-		return proc.AllocScalarNullVector(types.Type{Oid: types.T_bool}), nil
+		return proc.AllocConstNullVector(rtyp, lv.Length()), nil
 	}
+
+	var err error
+	rs := make([]bool, lv.Length())
 
 	switch {
 	case !lv.IsScalar() && rv.IsScalar():
-		vec, err := proc.AllocVector(types.Type{Oid: types.T_bool}, int64(len(lvs.Offsets)*rtl))
-		if err != nil {
-			return nil, err
-		}
-		rs := types.DecodeInt64Slice(vec.Data)
-		rs = rs[:len(lvs.Lengths)]
 		if nulls.Any(lv.Nsp) {
-			rs, err = like.BtSliceNullAndConst(lvs, rvs.Get(0), lv.Nsp.Np, rs)
+			rs, err = like.BtSliceNullAndConst(lvs, rvs[0], lv.Nsp, rs)
 			if err != nil {
 				return nil, err
 			}
-			vec.Nsp = lv.Nsp
 		} else {
-			rs, err = like.BtSliceAndConst(lvs, rvs.Get(0), rs)
+			rs, err = like.BtSliceAndConst(lvs, rvs[0], rs)
 			if err != nil {
 				return nil, err
 			}
 		}
-		col := make([]bool, len(lvs.Offsets))
-		rsi := 0
-		for i := 0; i < len(col); i++ {
-			if rsi >= len(rs) {
-				break
-			}
-			if int64(i) == rs[rsi] {
-				col[i] = true
-				rsi++
-			} else {
-				col[i] = false
-			}
-		}
-		vector.SetCol(vec, col)
-		return vec, nil
+		return vector.NewWithFixed(rtyp, rs, lv.Nsp, proc.Mp()), nil
 	case lv.IsScalar() && rv.IsScalar(): // in our design, this case should deal while pruning extends.
-		vec := proc.AllocScalarVector(types.Type{Oid: types.T_bool})
-		rs := make([]int64, 1)
-		rs, err := like.BtConstAndConst(lvs.Get(0), rvs.Get(0), rs)
+		ok, err := like.BtConstAndConst(lvs[0], rvs[0])
 		if err != nil {
 			return nil, err
 		}
-		col := make([]bool, 1)
-		if rs == nil {
-			col[0] = false
-		} else {
-			col[0] = rs[0] == int64(0)
-		}
-		vector.SetCol(vec, col)
-		return vec, nil
+		return vector.NewConstFixed(rtyp, lv.Length(), ok), nil
 	case lv.IsScalar() && !rv.IsScalar():
-		vec, err := proc.AllocVector(types.Type{Oid: types.T_bool}, int64(len(rvs.Offsets)*rtl))
+		rs, err = like.BtConstAndSliceNull(lvs[0], rvs, rv.Nsp, rs)
 		if err != nil {
 			return nil, err
 		}
-		rs := types.DecodeInt64Slice(vec.Data)
-		rs = rs[:len(rvs.Lengths)]
-		if nulls.Any(rv.Nsp) {
-			rs, err = like.BtConstAndSliceNull(lvs.Get(0), rvs, rv.Nsp.Np, rs)
-			if err != nil {
-				return nil, err
-			}
-			vec.Nsp = rv.Nsp
-		} else {
-			rs, err = like.BtConstAndSlice(lvs.Get(0), rvs, rs)
-			if err != nil {
-				return nil, err
-			}
-		}
-		col := make([]bool, len(rvs.Offsets))
-		rsi := 0
-		for i := 0; i < len(col); i++ {
-			if rsi >= len(rs) {
-				break
-			}
-			if int64(i) == rs[rsi] {
-				col[i] = true
-				rsi++
-			} else {
-				col[i] = false
-			}
-		}
-		vector.SetCol(vec, col)
-		return vec, nil
+		return vector.NewWithFixed(rtyp, rs, lv.Nsp, proc.Mp()), nil
 	case !lv.IsScalar() && !rv.IsScalar():
-		vec, err := proc.AllocVector(types.Type{Oid: types.T_bool}, int64(len(lvs.Offsets)*rtl))
-		if err != nil {
-			return nil, err
-		}
-		rs := types.DecodeInt64Slice(vec.Data)
-		rs = rs[:len(rvs.Lengths)]
+		var nsp *nulls.Nulls
 		if nulls.Any(rv.Nsp) && nulls.Any(lv.Nsp) {
-			nsp := lv.Nsp.Or(rv.Nsp)
-			rs, err = like.BtSliceNullAndSliceNull(lvs, rvs, nsp.Np, rs)
+			nsp = lv.Nsp.Or(rv.Nsp)
+			rs, err = like.BtSliceNullAndSliceNull(lvs, rvs, nsp, rs)
 			if err != nil {
 				return nil, err
 			}
-			vec.Nsp = nsp
 		} else if nulls.Any(rv.Nsp) && !nulls.Any(lv.Nsp) {
-			rs, err = like.BtSliceNullAndSliceNull(lvs, rvs, rv.Nsp.Np, rs)
+			nsp = rv.Nsp
+			rs, err = like.BtSliceNullAndSliceNull(lvs, rvs, nsp, rs)
 			if err != nil {
 				return nil, err
 			}
-			vec.Nsp = rv.Nsp
 		} else if !nulls.Any(rv.Nsp) && nulls.Any(lv.Nsp) {
-			rs, err = like.BtSliceNullAndSliceNull(lvs, rvs, lv.Nsp.Np, rs)
+			nsp = lv.Nsp
+			rs, err = like.BtSliceNullAndSliceNull(lvs, rvs, nsp, rs)
 			if err != nil {
 				return nil, err
 			}
-			//vector.SetCol(vec, rs)
-			vec.Nsp = lv.Nsp
 		} else {
 			rs, err = like.BtSliceAndSlice(lvs, rvs, rs)
 			if err != nil {
 				return nil, err
 			}
 		}
-		col := make([]bool, len(lvs.Offsets))
-		rsi := 0
-		for i := 0; i < len(col); i++ {
-			if rsi >= len(rs) {
-				break
-			}
-			if int64(i) == rs[rsi] {
-				col[i] = true
-				rsi++
-			} else {
-				col[i] = false
-			}
-		}
-		vector.SetCol(vec, col)
-		return vec, nil
+		return vector.NewWithFixed(rtyp, rs, nsp, proc.Mp()), nil
 	}
 	return nil, errUnexpected
 }

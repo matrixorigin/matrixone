@@ -16,72 +16,167 @@ package vector
 
 import (
 	"bytes"
-	"errors"
 	"fmt"
 	"reflect"
-	"strconv"
 	"unsafe"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/shuffle"
 	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 )
 
-func GetStrVectorValues(v *Vector) ([]byte, []uint32, []uint32) {
-	if v.IsConst {
-		col := v.Col.(*types.Bytes)
-		data := make([]byte, 0, len(col.Data)*v.Length)
-		os := make([]uint32, v.Length)
-		ns := make([]uint32, v.Length)
-		o := uint32(0)
-		for i := 0; i < v.Length; i++ {
-			os[i] = o
-			ns[i] = uint32(len(col.Data))
-			o += uint32(len(col.Data))
-			data = append(data, col.Data...)
-		}
-		return data, os, ns
-	}
-	vs := v.Col.(*types.Bytes)
-	return vs.Data, vs.Offsets, vs.Lengths
+// XXX Moved vector from types.go to vector.go
+// XXX Deleted vector interface, which was commented out and outdated anyway.
+/* Vector vector
+ * origin true:
+ * 				count || type || bitmap size || bitmap || vector
+ * origin false:
+ *  			count || vector
+ */
+type Vector struct {
+	Or bool // true: origin
+	// XXX There was Ref and Link, from the impl, it is totally wrong stuff.
+	// Removed.
+	Data []byte // raw data
+	Typ  types.Type
+	Col  interface{}  // column data, encoded Data
+	Nsp  *nulls.Nulls // nulls list
+
+	// area for holding large strings.
+	area []byte
+
+	// some attributes for const vector (a vector with a lot of rows of a same const value)
+	isConst bool
+	length  int
 }
 
-func GetFixedVectorValues[T any](v *Vector, sz int) []T {
-	if v.IsConst {
-		vs := make([]T, v.Length)
-		addr := reflect.ValueOf(v.Col).Index(0).Addr().UnsafePointer()
-		data := unsafe.Slice((*byte)(addr), sz)
-		val := types.DecodeFixedSlice[T](data, sz)[0]
+func (v *Vector) Length() int {
+	return Length(v)
+}
+
+func (v *Vector) ScalarLength() int {
+	if !v.isConst {
+		panic("Getting scalar length of non const vector.")
+	}
+	return v.length
+}
+
+func (v *Vector) SetScalarLength(length int) {
+	if !v.isConst {
+		panic("Setting length to non const vector.")
+	}
+	v.length = length
+}
+
+func DecodeFixedCol[T types.FixedSizeT](v *Vector, sz int) []T {
+	return types.DecodeFixedSlice[T](v.Data, sz)
+}
+
+// GetFixedVector decode data and return decoded []T.
+// For const/scalar vector we expand and return newly allocated slice.
+func GetFixedVectorValues[T types.FixedSizeT](v *Vector) []T {
+	if v.isConst {
+		cols := MustTCols[T](v)
+		vs := make([]T, v.Length())
 		for i := range vs {
-			vs[i] = val
+			vs[i] = cols[0]
 		}
 		return vs
 	}
-	return DecodeFixedCol[T](v, sz)
+	return MustTCols[T](v)
 }
 
-func GenericVectorValues[T any](v *Vector) []T {
-	return v.Col.([]T)
+func GetStrVectorValues(v *Vector) []string {
+	if v.isConst {
+		cols := MustTCols[types.Varlena](v)
+		ss := cols[0].GetString(v.area)
+		vs := make([]string, v.Length())
+		for i := range vs {
+			vs[i] = ss
+		}
+		return vs
+	}
+	return MustStrCols(v)
 }
 
+func GetBytesVectorValues(v *Vector) [][]byte {
+	if v.isConst {
+		cols := MustTCols[types.Varlena](v)
+		ss := cols[0].GetByteSlice(v.area)
+		vs := make([][]byte, v.Length())
+		for i := range vs {
+			vs[i] = ss
+		}
+		return vs
+	}
+	return MustBytesCols(v)
+}
+
+// XXX A huge hammer, get rid of any typing and totally depends on v.Col
+// We should really not using this one but it is wide spread already.
 func GetColumn[T any](v *Vector) []T {
 	return v.Col.([]T)
 }
 
-func GetStrColumn(v *Vector) *types.Bytes {
-	return v.Col.(*types.Bytes)
+// XXX Compatibility: how many aliases do we need ...
+func GetStrColumn(v *Vector) []string {
+	return GetStrVectorValues(v)
+}
+
+// Get Value at index
+func GetValueAt[T types.FixedSizeT](v *Vector, idx int64) T {
+	return MustTCols[T](v)[idx]
+}
+
+func GetValueAtOrZero[T types.FixedSizeT](v *Vector, idx int64) T {
+	var zt T
+	ts := MustTCols[T](v)
+	if int64(len(ts)) <= idx {
+		return zt
+	}
+	return ts[idx]
+}
+
+// Get the pointer to idx-th fixed size entry.
+func GetPtrAt(v *Vector, idx int64) unsafe.Pointer {
+	return unsafe.Pointer(&v.Data[idx*int64(v.GetType().TypeSize())])
+}
+
+// Raw version, get from v.Data.   Adopt python convention and
+// neg idx means counting from end, that is, -1 means last element.
+func (v *Vector) getRawValueAt(idx int64) []byte {
+	tlen := int64(v.GetType().TypeSize())
+	dlen := int64(len(v.Data))
+	if idx >= 0 {
+		if dlen < (idx+1)*tlen {
+			panic("vector invalid index access")
+		}
+		return v.Data[idx*tlen : idx*tlen+tlen]
+	} else {
+		start := dlen + tlen*idx
+		end := start + tlen
+		if start < 0 {
+			panic("vector invalid index access")
+		}
+		return v.Data[start:end]
+	}
 }
 
 func (v *Vector) MarshalBinary() ([]byte, error) {
 	var buf bytes.Buffer
 
-	if v.IsConst {
-		buf.WriteByte(byte(1))
+	if v.isConst {
+		i64 := int64(v.ScalarLength())
+		buf.WriteByte(1)
+		buf.Write(types.EncodeInt64(&i64))
 	} else {
-		buf.WriteByte(byte(0))
+		buf.WriteByte(0)
+		// length, even not used, let's fill it.
+		i64 := int64(0)
+		buf.Write(types.EncodeInt64(&i64))
 	}
-	buf.Write(types.EncodeInt64(int64(v.Length)))
 	data, err := v.Show()
 	if err != nil {
 		return nil, err
@@ -91,22 +186,23 @@ func (v *Vector) MarshalBinary() ([]byte, error) {
 }
 
 func (v *Vector) UnmarshalBinary(data []byte) error {
-	if data[1] == 1 {
-		v.IsConst = true
+	if data[0] == 1 {
+		v.isConst = true
+		data = data[1:]
+		v.SetScalarLength(int(types.DecodeInt64(data[:8])))
+		data = data[8:]
+	} else {
+		data = data[1:]
+		// skip 0
+		data = data[8:]
 	}
-	data = data[1:]
-	v.Length = int(types.DecodeInt64(data[:8]))
-	data = data[8:]
 	return v.Read(data)
 }
 
-// Count return the number of rows in the vector
-func (v *Vector) Count() int {
-	return Length(v)
-}
-
+// Size of data, I think this function is inherently broken.  This
+// Size is not meaningful other than used in (approximate) memory accounting.
 func (v *Vector) Size() int {
-	return len(v.Data)
+	return len(v.Data) + len(v.area)
 }
 
 func (v *Vector) GetType() types.Type {
@@ -117,8 +213,15 @@ func (v *Vector) GetNulls() *nulls.Nulls {
 	return v.Nsp
 }
 
-func (v *Vector) GetString(i int64) []byte {
-	return v.Col.(*types.Bytes).Get(i)
+func (v *Vector) GetBytes(i int64) []byte {
+	bs := MustTCols[types.Varlena](v)
+	return bs[i].GetByteSlice(v.area)
+}
+
+func (v *Vector) GetString(i int64) string {
+
+	bs := MustTCols[types.Varlena](v)
+	return bs[i].GetString(v.area)
 }
 
 func (v *Vector) FillDefaultValue() {
@@ -158,18 +261,19 @@ func (v *Vector) FillDefaultValue() {
 		fillDefaultValue[types.Decimal64](v)
 	case types.T_decimal128:
 		fillDefaultValue[types.Decimal128](v)
+	case types.T_TS:
+		fillDefaultValue[types.TS](v)
+	case types.T_Rowid:
+		fillDefaultValue[types.Rowid](v)
 	case types.T_char, types.T_varchar, types.T_json, types.T_blob:
-		col := v.Col.(*types.Bytes)
-		rows := v.Nsp.Np.ToArray()
-		for _, row := range rows {
-			col.Offsets[row] = 0
-			col.Lengths[row] = 0
-		}
+		fillDefaultValue[types.Varlena](v)
+	default:
+		panic("unsupported type in FillDefaultValue")
 	}
 }
 
 func (v *Vector) ToConst(row int) *Vector {
-	if v.IsConst {
+	if v.isConst {
 		return v
 	}
 	switch v.Typ.Oid {
@@ -205,38 +309,30 @@ func (v *Vector) ToConst(row int) *Vector {
 		return toConstVector[types.Decimal64](v, row)
 	case types.T_decimal128:
 		return toConstVector[types.Decimal128](v, row)
+	case types.T_TS:
+		return toConstVector[types.TS](v, row)
+	case types.T_Rowid:
+		return toConstVector[types.Rowid](v, row)
 	case types.T_char, types.T_varchar, types.T_json, types.T_blob:
-		col := v.Col.(*types.Bytes)
-		src := col.Data[col.Offsets[row] : col.Offsets[row]+col.Lengths[row]]
-		data := make([]byte, len(src))
-		copy(data, src)
-		return &Vector{
-			IsConst: true,
-			Typ:     v.Typ,
-			Col: &types.Bytes{
-				Data:    data,
-				Offsets: []uint32{0},
-				Lengths: []uint32{col.Lengths[row]},
-			},
+		if nulls.Contains(v.Nsp, uint64(row)) {
+			return NewConstNull(v.GetType(), 1)
 		}
+		bs := v.GetBytes(int64(row))
+		return NewConstBytes(v.Typ, 1, bs)
 	}
 	return nil
 }
 
 func (v *Vector) ConstExpand(m *mheap.Mheap) *Vector {
-	if !v.IsConst {
+	if !v.isConst {
 		return v
 	}
 	if v.IsScalarNull() {
-		var i uint64
-		l := uint64(v.Length)
-		temp := make([]uint64, v.Length)
-		for i = 0; i < l; i++ {
-			temp[i] = i
-		}
-		nulls.Add(v.Nsp, temp...)
+		vlen := uint64(v.ScalarLength())
+		nulls.AddRange(v.Nsp, 0, vlen)
 		return v
 	}
+
 	switch v.Typ.Oid {
 	case types.T_bool:
 		expandVector[bool](v, 1, m)
@@ -270,37 +366,14 @@ func (v *Vector) ConstExpand(m *mheap.Mheap) *Vector {
 		expandVector[types.Decimal64](v, 8, m)
 	case types.T_decimal128:
 		expandVector[types.Decimal128](v, 16, m)
+	case types.T_TS:
+		expandVector[types.TS](v, types.TxnTsSize, m)
+	case types.T_Rowid:
+		expandVector[types.Rowid](v, types.RowidSize, m)
 	case types.T_char, types.T_varchar, types.T_json, types.T_blob:
-		col := v.Col.(*types.Bytes)
-		if nulls.Any(v.Nsp) {
-			col.Offsets = col.Offsets[:0]
-			col.Lengths = col.Lengths[:0]
-			for i := 0; i < v.Length; i++ {
-				nulls.Add(v.Nsp, uint64(i))
-				col.Offsets = append(col.Offsets, 0)
-				col.Lengths = append(col.Lengths, 0)
-			}
-		} else {
-			data, err := mheap.Alloc(m, int64(v.Length*len(col.Data)))
-			if err != nil {
-				return nil
-			}
-			data = data[:0]
-			o := uint32(0)
-			os := make([]uint32, v.Length)
-			ns := make([]uint32, v.Length)
-			for i := 0; i < v.Length; i++ {
-				os[i] = o
-				ns[i] = uint32(len(col.Data))
-				o += uint32(len(col.Data))
-				data = append(data, col.Data...)
-			}
-			col.Data = data
-			col.Offsets = os
-			col.Lengths = ns
-		}
+		expandVector[types.Varlena](v, types.VarlenaSize, m)
 	}
-	v.IsConst = false
+	v.isConst = false
 	return v
 }
 
@@ -308,9 +381,8 @@ func (v *Vector) TryExpandNulls(n int) {
 	nulls.TryExpand(v.Nsp, n)
 }
 
-func fillDefaultValue[T any](v *Vector) {
+func fillDefaultValue[T types.FixedSizeT](v *Vector) {
 	var dv T
-
 	col := v.Col.([]T)
 	rows := v.Nsp.Np.ToArray()
 	for _, row := range rows {
@@ -319,32 +391,29 @@ func fillDefaultValue[T any](v *Vector) {
 	v.Col = col
 }
 
-func toConstVector[T any](v *Vector, row int) *Vector {
-	nsp := new(nulls.Nulls)
+func toConstVector[T types.FixedSizeT](v *Vector, row int) *Vector {
 	if nulls.Contains(v.Nsp, uint64(row)) {
-		nulls.Add(nsp, 0)
-	}
-	return &Vector{
-		Nsp:     nsp,
-		IsConst: true,
-		Typ:     v.Typ,
-		Col:     []T{v.Col.([]T)[row]},
+		return NewConstNull(v.Typ, 1)
+	} else {
+		val := GetValueAt[T](v, int64(row))
+		return NewConstFixed(v.Typ, 1, val)
 	}
 }
 
+// expandVector is used only in expand const vector.
 func expandVector[T any](v *Vector, sz int, m *mheap.Mheap) *Vector {
-	data, err := mheap.Alloc(m, int64(v.Length*sz))
+	data, err := mheap.Alloc(m, int64(v.ScalarLength()*sz))
 	if err != nil {
 		return nil
 	}
 	vs := types.DecodeFixedSlice[T](data, sz)
 	if nulls.Any(v.Nsp) {
-		for i := 0; i < v.Length; i++ {
+		for i := 0; i < v.ScalarLength(); i++ {
 			nulls.Add(v.Nsp, uint64(i))
 		}
 	} else {
 		val := v.Col.([]T)[0]
-		for i := 0; i < v.Length; i++ {
+		for i := 0; i < v.ScalarLength(); i++ {
 			vs[i] = val
 		}
 	}
@@ -353,160 +422,83 @@ func expandVector[T any](v *Vector, sz int, m *mheap.Mheap) *Vector {
 	return v
 }
 
-func DecodeFixedCol[T any](v *Vector, sz int) []T {
-	return types.DecodeFixedSlice[T](v.Data, sz)
-}
-
 func NewWithData(typ types.Type, data []byte, col interface{}, nsp *nulls.Nulls) *Vector {
-	return &Vector{
+	v := &Vector{
 		Nsp:  nsp,
-		Col:  col,
 		Typ:  typ,
+		Col:  col,
 		Data: data,
 	}
+	if col == nil {
+		v.colFromData()
+	}
+	return v
+}
+
+func NewWithStrings(typ types.Type, vals []string, nsp *nulls.Nulls, m *mheap.Mheap) *Vector {
+	vec := New(typ)
+	nulls.Set(vec.Nsp, nsp)
+	AppendString(vec, vals, m)
+	return vec
+}
+
+func NewWithBytes(typ types.Type, vals [][]byte, nsp *nulls.Nulls, m *mheap.Mheap) *Vector {
+	vec := New(typ)
+	nulls.Set(vec.Nsp, nsp)
+	AppendBytes(vec, vals, m)
+	return vec
+}
+
+func NewWithFixed[T types.FixedSizeT](typ types.Type, vals []T, nsp *nulls.Nulls, m *mheap.Mheap) *Vector {
+	vec := New(typ)
+	nulls.Set(vec.Nsp, nsp)
+	AppendFixed(vec, vals, m)
+	return vec
 }
 
 func New(typ types.Type) *Vector {
-	switch typ.Oid {
-	case types.T_any:
-		return &Vector{
-			Typ: typ,
-			Col: nil,
-			Nsp: &nulls.Nulls{},
-		}
-	case types.T_bool:
-		return &Vector{
-			Typ: typ,
-			Col: []bool{},
-			Nsp: &nulls.Nulls{},
-		}
-	case types.T_int8:
-		return &Vector{
-			Typ: typ,
-			Col: []int8{},
-			Nsp: &nulls.Nulls{},
-		}
-	case types.T_int16:
-		return &Vector{
-			Typ: typ,
-			Col: []int16{},
-			Nsp: &nulls.Nulls{},
-		}
-	case types.T_int32:
-		return &Vector{
-			Typ: typ,
-			Col: []int32{},
-			Nsp: &nulls.Nulls{},
-		}
-	case types.T_int64:
-		return &Vector{
-			Typ: typ,
-			Col: []int64{},
-			Nsp: &nulls.Nulls{},
-		}
-	case types.T_uint8:
-		return &Vector{
-			Typ: typ,
-			Col: []uint8{},
-			Nsp: &nulls.Nulls{},
-		}
-	case types.T_uint16:
-		return &Vector{
-			Typ: typ,
-			Col: []uint16{},
-			Nsp: &nulls.Nulls{},
-		}
-	case types.T_uint32:
-		return &Vector{
-			Typ: typ,
-			Col: []uint32{},
-			Nsp: &nulls.Nulls{},
-		}
-	case types.T_uint64:
-		return &Vector{
-			Typ: typ,
-			Col: []uint64{},
-			Nsp: &nulls.Nulls{},
-		}
-	case types.T_float32:
-		return &Vector{
-			Typ: typ,
-			Col: []float32{},
-			Nsp: &nulls.Nulls{},
-		}
-	case types.T_float64:
-		return &Vector{
-			Typ: typ,
-			Col: []float64{},
-			Nsp: &nulls.Nulls{},
-		}
-	case types.T_date:
-		return &Vector{
-			Typ: typ,
-			Col: []types.Date{},
-			Nsp: &nulls.Nulls{},
-		}
-	case types.T_datetime:
-		return &Vector{
-			Typ: typ,
-			Col: []types.Datetime{},
-			Nsp: &nulls.Nulls{},
-		}
-	case types.T_timestamp:
-		return &Vector{
-			Typ: typ,
-			Col: []types.Timestamp{},
-			Nsp: &nulls.Nulls{},
-		}
-	case types.T_sel:
-		return &Vector{
-			Typ: typ,
-			Col: []int64{},
-			Nsp: &nulls.Nulls{},
-		}
-	case types.T_tuple:
-		return &Vector{
-			Typ: typ,
-			Nsp: &nulls.Nulls{},
-			Col: [][]interface{}{},
-		}
-	case types.T_char, types.T_varchar, types.T_json, types.T_blob:
-		return &Vector{
-			Typ: typ,
-			Col: &types.Bytes{},
-			Nsp: &nulls.Nulls{},
-		}
-	case types.T_decimal64:
-		return &Vector{
-			Typ: typ,
-			Col: []types.Decimal64{},
-			Nsp: &nulls.Nulls{},
-		}
-	case types.T_decimal128:
-		return &Vector{
-			Typ: typ,
-			Col: []types.Decimal128{},
-			Nsp: &nulls.Nulls{},
-		}
-	default:
-		panic(fmt.Sprintf("unexpect type %s for function vector.New", typ))
-	}
+	return NewWithData(typ, []byte{}, nil, &nulls.Nulls{})
+}
+
+func NewWithNspSize(typ types.Type, n int64) *Vector {
+	return NewWithData(typ, []byte{}, nil, nulls.NewWithSize(int(n)))
 }
 
 func NewConst(typ types.Type, length int) *Vector {
 	v := New(typ)
-	v.IsConst = true
+	v.isConst = true
 	v.initConst(typ)
-	v.Length = length
+	v.length = length
 	return v
 }
 
 func NewConstNull(typ types.Type, length int) *Vector {
 	v := New(typ)
-	v.IsConst = true
+	v.isConst = true
 	v.initConst(typ)
 	nulls.Add(v.Nsp, 0)
-	v.Length = length
+	v.length = length
+	return v
+}
+
+func NewConstFixed[T types.FixedSizeT](typ types.Type, length int, val T) *Vector {
+	v := NewConst(typ, length)
+	vc := MustTCols[T](v)
+	vc[0] = val
+	return v
+}
+
+func NewConstString(typ types.Type, length int, val string) *Vector {
+	v := NewConst(typ, length)
+	// XXX memory accounting?
+	SetStringAt(v, 0, val, nil)
+	return v
+}
+
+func NewConstBytes(typ types.Type, length int, val []byte) *Vector {
+	v := NewConst(typ, length)
+	// XXX memory accounting?
+	SetBytesAt(v, 0, val, nil)
 	return v
 }
 
@@ -544,18 +536,12 @@ func (v *Vector) initConst(typ types.Type) {
 		v.Col = make([]types.Decimal64, 1)
 	case types.T_decimal128:
 		v.Col = make([]types.Decimal128, 1)
-	case types.T_char, types.T_varchar, types.T_blob:
-		v.Col = &types.Bytes{
-			Offsets: []uint32{0},
-			Lengths: []uint32{0},
-			Data:    []byte{},
-		}
-	case types.T_json:
-		v.Col = &types.Bytes{
-			Offsets: []uint32{},
-			Lengths: []uint32{},
-			Data:    []byte{},
-		}
+	case types.T_TS:
+		v.Col = make([]types.TS, 1)
+	case types.T_Rowid:
+		v.Col = make([]types.Rowid, 1)
+	case types.T_char, types.T_varchar, types.T_blob, types.T_json:
+		v.Col = make([]types.Varlena, 1)
 	}
 }
 
@@ -564,7 +550,24 @@ func (v *Vector) initConst(typ types.Type) {
 //
 //	a + 1, and 1's vector will return true
 func (v *Vector) IsScalar() bool {
-	return v.IsConst
+	return v.isConst
+}
+
+// Scalar and Const are synonym.
+func (v *Vector) IsConst() bool {
+	return v.isConst
+}
+
+func (v *Vector) MakeScalar(length int) {
+	if v.isConst {
+		v.length = length
+	} else {
+		if v.Length() != 1 {
+			panic("make scalar called on a vec")
+		}
+		v.isConst = true
+		v.length = length
+	}
 }
 
 // IsScalarNull return true if the vector means a scalar Null.
@@ -572,1067 +575,346 @@ func (v *Vector) IsScalar() bool {
 //
 //	a + Null, and the vector of right part will return true
 func (v *Vector) IsScalarNull() bool {
-	return v.IsConst && v.Nsp != nil && nulls.Contains(v.Nsp, 0)
+	return v.isConst && v.Nsp != nil && nulls.Contains(v.Nsp, 0)
 }
 
-// ConstVectorIsNull checks whether a const vector is null
+// XXX aliases ...
 func (v *Vector) ConstVectorIsNull() bool {
-	return v.Nsp != nil && nulls.Contains(v.Nsp, 0)
+	return v.IsScalarNull()
 }
 
 func (v *Vector) Free(m *mheap.Mheap) {
-	if !v.Or && v.Data != nil {
-		mheap.Free(m, v.Data)
-		v.Data = nil
-	}
-}
-
-func (v *Vector) Realloc(size int, m *mheap.Mheap) error {
-	oldLen := len(v.Data)
-	data, err := mheap.Grow(m, v.Data, int64(cap(v.Data)+size))
-	if err != nil {
-		return err
+	if v.Or {
+		// XXX: Should we panic, or this is really an Noop?
+		return
 	}
 	mheap.Free(m, v.Data)
-	v.Data = data[:oldLen]
-	switch v.Typ.Oid {
-	case types.T_bool:
-		v.Col = types.DecodeSlice[bool](v.Data[:len(data)], size)[:oldLen/size]
-	case types.T_int8:
-		v.Col = types.DecodeSlice[int8](v.Data[:len(data)], size)[:oldLen/size]
-	case types.T_int16:
-		v.Col = types.DecodeSlice[int16](v.Data[:len(data)], size)[:oldLen/size]
-	case types.T_int32:
-		v.Col = types.DecodeSlice[int32](v.Data[:len(data)], size)[:oldLen/size]
-	case types.T_int64:
-		v.Col = types.DecodeSlice[int64](v.Data[:len(data)], size)[:oldLen/size]
-	case types.T_uint8:
-		v.Col = types.DecodeSlice[uint8](v.Data[:len(data)], size)[:oldLen/size]
-	case types.T_uint16:
-		v.Col = types.DecodeSlice[uint16](v.Data[:len(data)], size)[:oldLen/size]
-	case types.T_uint32:
-		v.Col = types.DecodeSlice[uint32](v.Data[:len(data)], size)[:oldLen/size]
-	case types.T_uint64:
-		v.Col = types.DecodeSlice[uint64](v.Data[:len(data)], size)[:oldLen/size]
-	case types.T_date:
-		v.Col = types.DecodeSlice[types.Date](v.Data[:len(data)], size)[:oldLen/size]
-	case types.T_datetime:
-		v.Col = types.DecodeSlice[types.Datetime](v.Data[:len(data)], size)[:oldLen/size]
-	case types.T_timestamp:
-		v.Col = types.DecodeSlice[types.Timestamp](v.Data[:len(data)], size)[:oldLen/size]
-	case types.T_decimal64:
-		v.Col = types.DecodeSlice[types.Decimal64](v.Data[:len(data)], size)[:oldLen/size]
-	case types.T_decimal128:
-		v.Col = types.DecodeSlice[types.Decimal128](v.Data[:len(data)], size)[:oldLen/size]
+	v.Data = []byte{}
+	v.colFromData()
+	mheap.Free(m, v.area)
+	v.area = nil
+}
+
+func appendOne[T types.FixedSizeT](v *Vector, w T, isNull bool, m *mheap.Mheap) error {
+	if err := v.extend(1, m); err != nil {
+		return err
+	}
+	col := MustTCols[T](v)
+	pos := len(col) - 1
+	if isNull {
+		nulls.Add(v.Nsp, uint64(pos))
+	} else {
+		col[pos] = w
 	}
 	return nil
 }
 
-func (v *Vector) Append(w any, m *mheap.Mheap) error {
+func appendOneBytes(v *Vector, bs []byte, isNull bool, m *mheap.Mheap) error {
+	var err error
+	var va types.Varlena
+	if isNull {
+		return appendOne(v, va, true, m)
+	} else {
+		va, v.area, err = types.BuildVarlena(bs, v.area, m)
+		if err != nil {
+			return err
+		}
+		return appendOne(v, va, false, m)
+	}
+}
+
+func (v *Vector) Append(w any, isNull bool, m *mheap.Mheap) error {
 	switch v.Typ.Oid {
 	case types.T_bool:
-		wv := w.(bool)
-		col := v.Col.([]bool)
-		n := len(col)
-		if n+1 >= cap(col) {
-			if err := v.Realloc(1, m); err != nil {
-				return err
-			}
-			col = v.Col.([]bool)
-		}
-		col = append(col, wv)
-		v.Col = col
-		v.Data = v.Data[:(n + 1)]
+		return appendOne(v, w.(bool), isNull, m)
 	case types.T_int8:
-		wv := w.(int8)
-		col := v.Col.([]int8)
-		n := len(col)
-		if n+1 >= cap(col) {
-			if err := v.Realloc(1, m); err != nil {
-				return err
-			}
-			col = v.Col.([]int8)
-		}
-		col = append(col, wv)
-		v.Col = col
-		v.Data = v.Data[:(n+1)*1]
+		return appendOne(v, w.(int8), isNull, m)
 	case types.T_int16:
-		wv := w.(int16)
-		col := v.Col.([]int16)
-		n := len(col)
-		if n+1 >= cap(col) {
-			if err := v.Realloc(2, m); err != nil {
-				return err
-			}
-			col = v.Col.([]int16)
-		}
-		col = append(col, wv)
-		v.Col = col
-		v.Data = v.Data[:(n+1)*2]
+		return appendOne(v, w.(int16), isNull, m)
 	case types.T_int32:
-		wv := w.(int32)
-		col := v.Col.([]int32)
-		n := len(col)
-		if n+1 >= cap(col) {
-			if err := v.Realloc(4, m); err != nil {
-				return err
-			}
-			col = v.Col.([]int32)
-		}
-		col = append(col, wv)
-		v.Col = col
-		v.Data = v.Data[:(n+1)*4]
+		return appendOne(v, w.(int32), isNull, m)
 	case types.T_int64:
-		wv := w.(int64)
-		col := v.Col.([]int64)
-		n := len(col)
-		if n+1 >= cap(col) {
-			if err := v.Realloc(8, m); err != nil {
-				return err
-			}
-			col = v.Col.([]int64)
-		}
-		col = append(col, wv)
-		v.Col = col
-		v.Data = v.Data[:(n+1)*8]
+		return appendOne(v, w.(int64), isNull, m)
 	case types.T_uint8:
-		wv := w.(uint8)
-		col := v.Col.([]uint8)
-		n := len(col)
-		if n+1 >= cap(col) {
-			if err := v.Realloc(1, m); err != nil {
-				return err
-			}
-			col = v.Col.([]uint8)
-		}
-		col = append(col, wv)
-		v.Col = col
-		v.Data = v.Data[:(n + 1)]
+		return appendOne(v, w.(uint8), isNull, m)
 	case types.T_uint16:
-		wv := w.(uint16)
-		col := v.Col.([]uint16)
-		n := len(col)
-		if n+1 >= cap(col) {
-			if err := v.Realloc(2, m); err != nil {
-				return err
-			}
-			col = v.Col.([]uint16)
-		}
-		col = append(col, wv)
-		v.Col = col
-		v.Data = v.Data[:(n+1)*2]
+		return appendOne(v, w.(uint16), isNull, m)
 	case types.T_uint32:
-		wv := w.(uint32)
-		col := v.Col.([]uint32)
-		n := len(col)
-		if n+1 >= cap(col) {
-			if err := v.Realloc(4, m); err != nil {
-				return err
-			}
-			col = v.Col.([]uint32)
-		}
-		col = append(col, wv)
-		v.Col = col
-		v.Data = v.Data[:(n+1)*4]
+		return appendOne(v, w.(uint32), isNull, m)
 	case types.T_uint64:
-		wv := w.(uint64)
-		col := v.Col.([]uint64)
-		n := len(col)
-		if n+1 >= cap(col) {
-			if err := v.Realloc(8, m); err != nil {
-				return err
-			}
-			col = v.Col.([]uint64)
-		}
-		col = append(col, wv)
-		v.Col = col
-		v.Data = v.Data[:(n+1)*8]
+		return appendOne(v, w.(uint64), isNull, m)
 	case types.T_float32:
-		wv := w.(float32)
-		col := v.Col.([]float32)
-		n := len(col)
-		if n+1 >= cap(col) {
-			if err := v.Realloc(4, m); err != nil {
-				return err
-			}
-			col = v.Col.([]float32)
-		}
-		col = append(col, wv)
-		v.Col = col
-		v.Data = v.Data[:(n+1)*4]
+		return appendOne(v, w.(float32), isNull, m)
 	case types.T_float64:
-		wv := w.(float64)
-		col := v.Col.([]float64)
-		n := len(col)
-		if n+1 >= cap(col) {
-			if err := v.Realloc(8, m); err != nil {
-				return err
-			}
-			col = v.Col.([]float64)
-		}
-		col = append(col, wv)
-		v.Col = col
-		v.Data = v.Data[:(n+1)*8]
+		return appendOne(v, w.(float64), isNull, m)
 	case types.T_date:
-		wv := w.(types.Date)
-		col := v.Col.([]types.Date)
-		n := len(col)
-		if n+1 >= cap(col) {
-			if err := v.Realloc(4, m); err != nil {
-				return err
-			}
-			col = v.Col.([]types.Date)
-		}
-		col = append(col, wv)
-		v.Col = col
-		v.Data = v.Data[:(n+1)*4]
+		return appendOne(v, w.(types.Date), isNull, m)
 	case types.T_datetime:
-		wv := w.(types.Datetime)
-		col := v.Col.([]types.Datetime)
-		n := len(col)
-		if n+1 >= cap(col) {
-			if err := v.Realloc(8, m); err != nil {
-				return err
-			}
-			col = v.Col.([]types.Datetime)
-		}
-		col = append(col, wv)
-		v.Col = col
-		v.Data = v.Data[:(n+1)*8]
+		return appendOne(v, w.(types.Datetime), isNull, m)
 	case types.T_timestamp:
-		wv := w.(types.Timestamp)
-		col := v.Col.([]types.Timestamp)
-		n := len(col)
-		if n+1 >= cap(col) {
-			if err := v.Realloc(8, m); err != nil {
-				return err
-			}
-			col = v.Col.([]types.Timestamp)
-		}
-		col = append(col, wv)
-		v.Col = col
-		v.Data = v.Data[:(n+1)*8]
+		return appendOne(v, w.(types.Timestamp), isNull, m)
 	case types.T_decimal64:
-		wv := w.(types.Decimal64)
-		col := v.Col.([]types.Decimal64)
-		n := len(col)
-		if n+1 >= cap(col) {
-			if err := v.Realloc(8, m); err != nil {
-				return err
-			}
-			col = v.Col.([]types.Decimal64)
-		}
-		col = append(col, wv)
-		v.Col = col
-		v.Data = v.Data[:(n+1)*8]
+		return appendOne(v, w.(types.Decimal64), isNull, m)
 	case types.T_decimal128:
-		wv := w.(types.Decimal128)
-		col := v.Col.([]types.Decimal128)
-		n := len(col)
-		if n+1 >= cap(col) {
-			if err := v.Realloc(16, m); err != nil {
-				return err
-			}
-			col = v.Col.([]types.Decimal128)
-		}
-		col = append(col, wv)
-		v.Col = col
-		v.Data = v.Data[:(n+1)*16]
+		return appendOne(v, w.(types.Decimal128), isNull, m)
+	case types.T_TS:
+		return appendOne(v, w.(types.TS), isNull, m)
+	case types.T_Rowid:
+		return appendOne(v, w.(types.Rowid), isNull, m)
 	case types.T_char, types.T_varchar, types.T_json, types.T_blob:
-		wv := w.([]byte)
-		n := len(v.Data)
-		if n+len(wv) >= cap(v.Data) {
-			if err := v.Realloc(n+len(wv)-cap(v.Data)+1, m); err != nil {
-				return err
-			}
+		if isNull {
+			return appendOneBytes(v, nil, true, m)
 		}
-		col := v.Col.(*types.Bytes)
-		col.Lengths = append(col.Lengths, uint32(len(wv)))
-		col.Offsets = append(col.Offsets, uint32(len(v.Data)))
-		v.Data = append(v.Data, wv...)
-		col.Data = v.Data
-		v.Col = col
+		wv := w.([]byte)
+		return appendOneBytes(v, wv, false, m)
 	}
 	return nil
-}
-
-func Reset(v *Vector) {
-	switch v.Typ.Oid {
-	case types.T_char, types.T_varchar, types.T_json, types.T_blob:
-		v.Col.(*types.Bytes).Reset()
-	default:
-		*(*int)(unsafe.Pointer(uintptr((*(*emptyInterface)(unsafe.Pointer(&v.Col))).word) + uintptr(strconv.IntSize>>3))) = 0
-	}
-}
-
-func Free(v *Vector, m *mheap.Mheap) {
-	v.Ref--
-	if !v.Or && v.Data != nil {
-		if v.Ref == 0 && v.Link == 0 {
-			mheap.Free(m, v.Data)
-			v.Data = nil
-		}
-	}
 }
 
 func Clean(v *Vector, m *mheap.Mheap) {
-	if !v.Or && v.Data != nil {
-		mheap.Free(m, v.Data)
-		v.Data = nil
-	}
+	v.Free(m)
 }
 
 func SetCol(v *Vector, col interface{}) {
 	v.Col = col
 }
 
-func PreAlloc(v, w *Vector, rows int, m *mheap.Mheap) {
-	defer func() {
-		size := v.Typ.Oid.TypeLen()
-		if v.Typ.Oid != types.T_char && v.Typ.Oid != types.T_varchar && v.Typ.Oid != types.T_blob && v.Typ.Oid != types.T_json {
-			v.Data = v.Data[:reflect.ValueOf(v.Col).Len()*size]
-		}
-	}()
-	v.Ref = w.Ref
-	switch v.Typ.Oid {
-	case types.T_int8:
-		data, err := mheap.Alloc(m, int64(rows))
-		if err != nil {
-			return
-		}
-		v.Data = data
-		v.Col = types.DecodeInt8Slice(v.Data)[:0]
-	case types.T_int16:
-		data, err := mheap.Alloc(m, int64(rows*2))
-		if err != nil {
-			return
-		}
-		v.Data = data
-		v.Col = types.DecodeInt16Slice(v.Data)[:0]
-	case types.T_int32:
-		data, err := mheap.Alloc(m, int64(rows*4))
-		if err != nil {
-			return
-		}
-		v.Data = data
-		v.Col = types.DecodeInt32Slice(v.Data)[:0]
-	case types.T_int64:
-		data, err := mheap.Alloc(m, int64(rows*8))
-		if err != nil {
-			return
-		}
-		v.Data = data
-		v.Col = types.DecodeInt64Slice(v.Data)[:0]
-	case types.T_uint8:
-		data, err := mheap.Alloc(m, int64(rows))
-		if err != nil {
-			return
-		}
-		v.Data = data
-		v.Col = types.DecodeUint8Slice(v.Data)[:0]
-	case types.T_uint16:
-		data, err := mheap.Alloc(m, int64(rows*2))
-		if err != nil {
-			return
-		}
-		v.Data = data
-		v.Col = types.DecodeUint16Slice(v.Data)[:0]
-	case types.T_uint32:
-		data, err := mheap.Alloc(m, int64(rows*4))
-		if err != nil {
-			return
-		}
-		v.Data = data
-		v.Col = types.DecodeUint32Slice(v.Data)[:0]
-	case types.T_uint64:
-		data, err := mheap.Alloc(m, int64(rows*8))
-		if err != nil {
-			return
-		}
-		v.Data = data
-		v.Col = types.DecodeUint64Slice(v.Data)[:0]
-	case types.T_float32:
-		data, err := mheap.Alloc(m, int64(rows*4))
-		if err != nil {
-			return
-		}
-		v.Data = data
-		v.Col = types.DecodeFloat32Slice(v.Data)[:0]
-	case types.T_float64:
-		data, err := mheap.Alloc(m, int64(rows*8))
-		if err != nil {
-			return
-		}
-		v.Data = data
-		v.Col = types.DecodeFloat64Slice(v.Data)[:0]
-	case types.T_date:
-		data, err := mheap.Alloc(m, int64(rows*4))
-		if err != nil {
-			return
-		}
-		v.Data = data
-		v.Col = types.DecodeDateSlice(v.Data)[:0]
-	case types.T_datetime:
-		data, err := mheap.Alloc(m, int64(rows*8))
-		if err != nil {
-			return
-		}
-		v.Data = data
-		v.Col = types.DecodeDatetimeSlice(v.Data)[:0]
-	case types.T_timestamp:
-		data, err := mheap.Alloc(m, int64(rows*8))
-		if err != nil {
-			return
-		}
-		v.Data = data
-		v.Col = types.DecodeTimestampSlice(v.Data)[:0]
-	case types.T_char, types.T_varchar, types.T_blob, types.T_json:
-		vs, ws := v.Col.(*types.Bytes), w.Col.(*types.Bytes)
-		data, err := mheap.Alloc(m, int64(rows*len(ws.Data)/len(ws.Offsets)))
-		if err != nil {
-			return
-		}
-		v.Data = data
-		vs.Data = data[:0]
-		vs.Offsets = make([]uint32, 0, rows)
-		vs.Lengths = make([]uint32, 0, rows)
+func SetTAt[T types.FixedSizeT](v *Vector, idx int, t T) error {
+	// Let it panic if v is not a varlena vec
+	vacol := MustTCols[T](v)
+
+	if idx < 0 {
+		idx = len(vacol) + idx
 	}
+	if idx < 0 || idx >= len(vacol) {
+		return moerr.NewError(moerr.INTERNAL_ERROR, "vector idx out of range")
+	}
+	vacol[idx] = t
+	return nil
 }
 
-func Length(v *Vector) int {
-	if v.IsScalar() || v.Typ.Oid == types.T_any {
-		return v.Length
+func SetBytesAt(v *Vector, idx int, bs []byte, m *mheap.Mheap) error {
+	var va types.Varlena
+	var err error
+	va, v.area, err = types.BuildVarlena(bs, v.area, m)
+	if err != nil {
+		return err
 	}
-	switch v.Typ.Oid {
-	case types.T_char, types.T_varchar, types.T_json, types.T_blob:
-		return len(v.Col.(*types.Bytes).Offsets)
-	default:
+	return SetTAt(v, idx, va)
+}
+
+func SetStringAt(v *Vector, idx int, bs string, m *mheap.Mheap) error {
+	return SetBytesAt(v, idx, []byte(bs), m)
+}
+
+// XXX: PreAlloc create a empty v, with enough fixed slots to cap entry.
+func PreAlloc(v *Vector, rows, cap int, m *mheap.Mheap) {
+	var data []byte
+	var err error
+	sz := int64(cap * v.GetType().TypeSize())
+	if m == nil {
+		data = make([]byte, sz)
+	} else {
+		data, err = mheap.Alloc(m, int64(rows*v.GetType().TypeSize()))
+	}
+
+	// XXX: Was just returned and runs defer, which was Huh?   Let me panic.
+	if err != nil {
+		panic(err)
+	}
+	v.Data = data
+	v.setupColFromData(0, rows)
+}
+
+func PreAllocType(t types.Type, rows, cap int, m *mheap.Mheap) *Vector {
+	vec := New(t)
+	PreAlloc(vec, rows, cap, m)
+	return vec
+}
+
+// XXX Confusing as hell.
+func Length(v *Vector) int {
+	if !v.isConst {
 		return reflect.ValueOf(v.Col).Len()
 	}
-}
-
-func setLengthFixed[T any](v *Vector, n int) {
-	vs := v.Col.([]T)
-	m := len(vs)
-	v.Col = vs[:n]
-	nulls.RemoveRange(v.Nsp, uint64(n), uint64(m))
+	return v.ScalarLength()
 }
 
 func SetLength(v *Vector, n int) {
-	if v.IsScalar() || v.Typ.Oid == types.T_any {
-		SetScalarLength(v, n)
+	if v.IsScalar() {
+		// XXX old code test this one.  Why? || v.Typ.Oid == types.T_any {
+		v.SetScalarLength(n)
 		return
 	}
 	SetVectorLength(v, n)
 }
 
-func SetScalarLength(v *Vector, n int) {
-	v.Length = n
-}
-
 func SetVectorLength(v *Vector, n int) {
-	switch v.Typ.Oid {
-	case types.T_bool:
-		setLengthFixed[bool](v, n)
-	case types.T_int8:
-		v.Data = v.Data[:n*1]
-		setLengthFixed[int8](v, n)
-	case types.T_int16:
-		v.Data = v.Data[:n*2]
-		setLengthFixed[int16](v, n)
-	case types.T_int32:
-		v.Data = v.Data[:n*4]
-		setLengthFixed[int32](v, n)
-	case types.T_int64:
-		v.Data = v.Data[:n*8]
-		setLengthFixed[int64](v, n)
-	case types.T_uint8:
-		v.Data = v.Data[:n*1]
-		setLengthFixed[uint8](v, n)
-	case types.T_uint16:
-		v.Data = v.Data[:n*2]
-		setLengthFixed[uint16](v, n)
-	case types.T_uint32:
-		v.Data = v.Data[:n*4]
-		setLengthFixed[uint32](v, n)
-	case types.T_uint64:
-		v.Data = v.Data[:n*8]
-		setLengthFixed[uint64](v, n)
-	case types.T_float32:
-		v.Data = v.Data[:n*4]
-		setLengthFixed[float32](v, n)
-	case types.T_float64:
-		v.Data = v.Data[:n*8]
-		setLengthFixed[float64](v, n)
-	case types.T_date:
-		v.Data = v.Data[:n*4]
-		setLengthFixed[types.Date](v, n)
-	case types.T_datetime:
-		v.Data = v.Data[:n*8]
-		setLengthFixed[types.Datetime](v, n)
-	case types.T_timestamp:
-		v.Data = v.Data[:n*8]
-		setLengthFixed[types.Timestamp](v, n)
-	case types.T_decimal64:
-		v.Data = v.Data[:n*8]
-		setLengthFixed[types.Decimal64](v, n)
-	case types.T_decimal128:
-		v.Data = v.Data[:n*16]
-		setLengthFixed[types.Decimal128](v, n)
-
-	case types.T_sel:
-		vs := v.Col.([]int64)
-		m := len(vs)
-		v.Col = vs[:n]
-		nulls.RemoveRange(v.Nsp, uint64(n), uint64(m))
-	case types.T_tuple:
-		vs := v.Col.([][]interface{})
-		m := len(vs)
-		v.Col = vs[:n]
-		nulls.RemoveRange(v.Nsp, uint64(n), uint64(m))
-	case types.T_char, types.T_varchar, types.T_json, types.T_blob:
-		vs := v.Col.(*types.Bytes)
-		m := len(vs.Offsets)
-		vs.Data = vs.Data[:vs.Offsets[n-1]+vs.Lengths[n-1]]
-		vs.Offsets = vs.Offsets[:n]
-		vs.Lengths = vs.Lengths[:n]
-		nulls.RemoveRange(v.Nsp, uint64(n), uint64(m))
-	default:
-		panic(fmt.Sprintf("unexpect type %s for function vector.SetLength", v.Typ))
+	end := len(v.Data) / v.GetType().TypeSize()
+	if n > end {
+		panic("extend instead of shink vector")
 	}
+	nulls.RemoveRange(v.Nsp, uint64(n), uint64(end))
+	v.setupColFromData(0, n)
 }
 
+// XXX Original code is really confused by what is dup ...
 func Dup(v *Vector, m *mheap.Mheap) (*Vector, error) {
-	defer func() {
-		size := v.Typ.Oid.TypeLen()
-		if v.Typ.Oid != types.T_char && v.Typ.Oid != types.T_varchar && v.Typ.Oid != types.T_blob && v.Typ.Oid != types.T_json {
-			v.Data = v.Data[:reflect.ValueOf(v.Col).Len()*size]
-		}
-	}()
-	switch v.Typ.Oid {
-	case types.T_bool:
-		vs := v.Col.([]bool)
-		data, err := mheap.Alloc(m, int64(len(vs)))
-		if err != nil {
-			return nil, err
-		}
-		ws := types.DecodeBoolSlice(data)
-		copy(ws, vs)
-		return &Vector{
-			Col:  ws,
-			Data: data,
-			Typ:  v.Typ,
-			Nsp:  v.Nsp,
-			Ref:  v.Ref,
-			Link: v.Link,
-		}, nil
-	case types.T_int8:
-		vs := v.Col.([]int8)
-		data, err := mheap.Alloc(m, int64(len(vs)))
-		if err != nil {
-			return nil, err
-		}
-		ws := types.DecodeInt8Slice(data)
-		copy(ws, vs)
-		return &Vector{
-			Col:  ws,
-			Data: data,
-			Typ:  v.Typ,
-			Nsp:  v.Nsp,
-			Ref:  v.Ref,
-			Link: v.Link,
-		}, nil
-	case types.T_int16:
-		vs := v.Col.([]int16)
-		data, err := mheap.Alloc(m, int64(len(vs)*2))
-		if err != nil {
-			return nil, err
-		}
-		ws := types.DecodeInt16Slice(data)
-		copy(ws, vs)
-		return &Vector{
-			Col:  ws,
-			Data: data,
-			Typ:  v.Typ,
-			Nsp:  v.Nsp,
-			Ref:  v.Ref,
-			Link: v.Link,
-		}, nil
-	case types.T_int32:
-		vs := v.Col.([]int32)
-		data, err := mheap.Alloc(m, int64(len(vs)*4))
-		if err != nil {
-			return nil, err
-		}
-		ws := types.DecodeInt32Slice(data)
-		copy(ws, vs)
-		return &Vector{
-			Col:  ws,
-			Data: data,
-			Typ:  v.Typ,
-			Nsp:  v.Nsp,
-			Ref:  v.Ref,
-			Link: v.Link,
-		}, nil
-	case types.T_int64:
-		vs := v.Col.([]int64)
-		data, err := mheap.Alloc(m, int64(len(vs)*8))
-		if err != nil {
-			return nil, err
-		}
-		ws := types.DecodeInt64Slice(data)
-		copy(ws, vs)
-		return &Vector{
-			Col:  ws,
-			Data: data,
-			Typ:  v.Typ,
-			Nsp:  v.Nsp,
-			Ref:  v.Ref,
-			Link: v.Link,
-		}, nil
-	case types.T_uint8:
-		vs := v.Col.([]uint8)
-		data, err := mheap.Alloc(m, int64(len(vs)))
-		if err != nil {
-			return nil, err
-		}
-		ws := types.DecodeUint8Slice(data)
-		copy(ws, vs)
-		return &Vector{
-			Col:  ws,
-			Data: data,
-			Typ:  v.Typ,
-			Nsp:  v.Nsp,
-			Ref:  v.Ref,
-			Link: v.Link,
-		}, nil
-	case types.T_uint16:
-		vs := v.Col.([]uint16)
-		data, err := mheap.Alloc(m, int64(len(vs)*2))
-		if err != nil {
-			return nil, err
-		}
-		ws := types.DecodeUint16Slice(data)
-		copy(ws, vs)
-		return &Vector{
-			Col:  ws,
-			Data: data,
-			Typ:  v.Typ,
-			Nsp:  v.Nsp,
-			Ref:  v.Ref,
-			Link: v.Link,
-		}, nil
-	case types.T_uint32:
-		vs := v.Col.([]uint32)
-		data, err := mheap.Alloc(m, int64(len(vs)*4))
-		if err != nil {
-			return nil, err
-		}
-		ws := types.DecodeUint32Slice(data)
-		copy(ws, vs)
-		return &Vector{
-			Col:  ws,
-			Data: data,
-			Typ:  v.Typ,
-			Nsp:  v.Nsp,
-			Ref:  v.Ref,
-			Link: v.Link,
-		}, nil
-	case types.T_uint64:
-		vs := v.Col.([]uint64)
-		data, err := mheap.Alloc(m, int64(len(vs)*8))
-		if err != nil {
-			return nil, err
-		}
-		ws := types.DecodeUint64Slice(data)
-		copy(ws, vs)
-		return &Vector{
-			Col:  ws,
-			Data: data,
-			Typ:  v.Typ,
-			Nsp:  v.Nsp,
-			Ref:  v.Ref,
-			Link: v.Link,
-		}, nil
-	case types.T_float32:
-		vs := v.Col.([]float32)
-		data, err := mheap.Alloc(m, int64(len(vs)*4))
-		if err != nil {
-			return nil, err
-		}
-		ws := types.DecodeFloat32Slice(data)
-		copy(ws, vs)
-		return &Vector{
-			Col:  ws,
-			Data: data,
-			Typ:  v.Typ,
-			Nsp:  v.Nsp,
-			Ref:  v.Ref,
-			Link: v.Link,
-		}, nil
-	case types.T_float64:
-		vs := v.Col.([]float64)
-		data, err := mheap.Alloc(m, int64(len(vs)*8))
-		if err != nil {
-			return nil, err
-		}
-		ws := types.DecodeFloat64Slice(data)
-		copy(ws, vs)
-		return &Vector{
-			Col:  ws,
-			Data: data,
-			Typ:  v.Typ,
-			Nsp:  v.Nsp,
-			Ref:  v.Ref,
-			Link: v.Link,
-		}, nil
-	case types.T_char, types.T_varchar, types.T_json, types.T_blob:
-		var err error
-		var data []byte
-
-		vs := v.Col.(*types.Bytes)
-		ws := &types.Bytes{
-			Offsets: make([]uint32, len(vs.Offsets)),
-			Lengths: make([]uint32, len(vs.Lengths)),
-		}
-		if len(vs.Data) > 0 {
-			if data, err = mheap.Alloc(m, int64(len(vs.Data))); err != nil {
-				return nil, err
-			}
-			ws.Data = data
-			copy(ws.Data, vs.Data)
-		} else {
-			ws.Data = make([]byte, 0)
-		}
-		copy(ws.Offsets, vs.Offsets)
-		copy(ws.Lengths, vs.Lengths)
-		return &Vector{
-			Col:  ws,
-			Data: data,
-			Typ:  v.Typ,
-			Nsp:  v.Nsp,
-			Ref:  v.Ref,
-			Link: v.Link,
-		}, nil
-	case types.T_date:
-		vs := v.Col.([]types.Date)
-		data, err := mheap.Alloc(m, int64(len(vs)*4))
-		if err != nil {
-			return nil, err
-		}
-		ws := types.DecodeDateSlice(data)
-		copy(ws, vs)
-		return &Vector{
-			Col:  ws,
-			Data: data,
-			Typ:  v.Typ,
-			Nsp:  v.Nsp,
-			Ref:  v.Ref,
-			Link: v.Link,
-		}, nil
-	case types.T_datetime:
-		vs := v.Col.([]types.Datetime)
-		data, err := mheap.Alloc(m, int64(len(vs)*8))
-		if err != nil {
-			return nil, err
-		}
-		ws := types.DecodeDatetimeSlice(data)
-		copy(ws, vs)
-		return &Vector{
-			Col:  ws,
-			Data: data,
-			Typ:  v.Typ,
-			Nsp:  v.Nsp,
-			Ref:  v.Ref,
-			Link: v.Link,
-		}, nil
-	case types.T_timestamp:
-		vs := v.Col.([]types.Timestamp)
-		data, err := mheap.Alloc(m, int64(len(vs)*8))
-		if err != nil {
-			return nil, err
-		}
-		ws := types.DecodeTimestampSlice(data)
-		copy(ws, vs)
-		return &Vector{
-			Col:  ws,
-			Data: data,
-			Typ:  v.Typ,
-			Nsp:  v.Nsp,
-			Ref:  v.Ref,
-			Link: v.Link,
-		}, nil
-	case types.T_decimal64:
-		vs := v.Col.([]types.Decimal64)
-		data, err := mheap.Alloc(m, int64(len(vs)*8))
-		if err != nil {
-			return nil, err
-		}
-		ws := types.DecodeDecimal64Slice(data)
-		copy(ws, vs)
-		return &Vector{
-			Col:  ws,
-			Data: data,
-			Typ:  v.Typ,
-			Nsp:  v.Nsp,
-			Ref:  v.Ref,
-			Link: v.Link,
-		}, nil
-	case types.T_decimal128:
-		vs := v.Col.([]types.Decimal128)
-		data, err := mheap.Alloc(m, int64(len(vs)*16))
-		if err != nil {
-			return nil, err
-		}
-		ws := types.DecodeDecimal128Slice(data)
-		copy(ws, vs)
-		return &Vector{
-			Col:  ws,
-			Data: data,
-			Typ:  v.Typ,
-			Nsp:  v.Nsp,
-			Ref:  v.Ref,
-			Link: v.Link,
-		}, nil
+	to := Vector{
+		Typ: v.Typ,
+		Nsp: v.Nsp, // XXX: dude, you do not dup this?
 	}
-	return nil, fmt.Errorf("unsupport type %v", v.Typ)
+
+	var err error
+
+	// Copy v.data, note that this should work for Varlena type
+	// as because we will copy area next and offset len will stay
+	// valid for long varlena.
+	if len(v.Data) > 0 {
+		if to.Data, err = mheap.Alloc(m, int64(len(v.Data))); err != nil {
+			return nil, err
+		}
+		copy(to.Data, v.Data)
+	}
+	if len(v.area) > 0 {
+		if to.area, err = mheap.Alloc(m, int64(len(v.area))); err != nil {
+			return nil, err
+		}
+		copy(to.area, v.area)
+	}
+
+	nele := len(v.Data) / v.GetType().TypeSize()
+	to.setupColFromData(0, nele)
+	return &to, nil
 }
 
+// Window just returns a window out of input and no deep copy.
 func Window(v *Vector, start, end int, w *Vector) *Vector {
 	w.Typ = v.Typ
-	switch v.Typ.Oid {
-	case types.T_bool:
-		w.Col = v.Col.([]bool)[start:end]
-		w.Nsp = nulls.Range(v.Nsp, uint64(start), uint64(end), w.Nsp)
-	case types.T_int8:
-		w.Col = v.Col.([]int8)[start:end]
-		w.Nsp = nulls.Range(v.Nsp, uint64(start), uint64(end), w.Nsp)
-	case types.T_int16:
-		w.Col = v.Col.([]int16)[start:end]
-		w.Nsp = nulls.Range(v.Nsp, uint64(start), uint64(end), w.Nsp)
-	case types.T_int32:
-		w.Col = v.Col.([]int32)[start:end]
-		w.Nsp = nulls.Range(v.Nsp, uint64(start), uint64(end), w.Nsp)
-	case types.T_int64:
-		w.Col = v.Col.([]int64)[start:end]
-		w.Nsp = nulls.Range(v.Nsp, uint64(start), uint64(end), w.Nsp)
-	case types.T_uint8:
-		w.Col = v.Col.([]uint8)[start:end]
-		w.Nsp = nulls.Range(v.Nsp, uint64(start), uint64(end), w.Nsp)
-	case types.T_uint16:
-		w.Col = v.Col.([]uint16)[start:end]
-		w.Nsp = nulls.Range(v.Nsp, uint64(start), uint64(end), w.Nsp)
-	case types.T_uint32:
-		w.Col = v.Col.([]uint32)[start:end]
-		w.Nsp = nulls.Range(v.Nsp, uint64(start), uint64(end), w.Nsp)
-	case types.T_uint64:
-		w.Col = v.Col.([]uint64)[start:end]
-		w.Nsp = nulls.Range(v.Nsp, uint64(start), uint64(end), w.Nsp)
-	case types.T_float32:
-		w.Col = v.Col.([]float32)[start:end]
-		w.Nsp = nulls.Range(v.Nsp, uint64(start), uint64(end), w.Nsp)
-	case types.T_float64:
-		w.Col = v.Col.([]float64)[start:end]
-		w.Nsp = nulls.Range(v.Nsp, uint64(start), uint64(end), w.Nsp)
-	case types.T_sel:
-		w.Col = v.Col.([]int64)[start:end]
-		w.Nsp = nulls.Range(v.Nsp, uint64(start), uint64(end), w.Nsp)
-	case types.T_tuple:
-		w.Col = v.Col.([][]interface{})[start:end]
-		w.Nsp = nulls.Range(v.Nsp, uint64(start), uint64(end), w.Nsp)
-	case types.T_char, types.T_varchar, types.T_json, types.T_blob:
-		w.Col = v.Col.(*types.Bytes).Window(start, end)
-		w.Nsp = nulls.Range(v.Nsp, uint64(start), uint64(end), w.Nsp)
-	case types.T_date:
-		w.Col = v.Col.([]types.Date)[start:end]
-		w.Nsp = nulls.Range(v.Nsp, uint64(start), uint64(end), w.Nsp)
-	case types.T_datetime:
-		w.Col = v.Col.([]types.Datetime)[start:end]
-		w.Nsp = nulls.Range(v.Nsp, uint64(start), uint64(end), w.Nsp)
-	case types.T_timestamp:
-		w.Col = v.Col.([]types.Timestamp)[start:end]
-		w.Nsp = nulls.Range(v.Nsp, uint64(start), uint64(end), w.Nsp)
-	case types.T_decimal64:
-		w.Col = v.Col.([]types.Decimal64)[start:end]
-		w.Nsp = nulls.Range(v.Nsp, uint64(start), uint64(end), w.Nsp)
-	case types.T_decimal128:
-		w.Col = v.Col.([]types.Decimal128)[start:end]
-		w.Nsp = nulls.Range(v.Nsp, uint64(start), uint64(end), w.Nsp)
-	default:
-		panic(fmt.Sprintf("unexpect type %s for function vector.Window", v.Typ))
-	}
+	w.Nsp = nulls.Range(v.Nsp, uint64(start), uint64(end), w.Nsp)
+	w.Data = v.Data
+	w.area = v.area
+	w.setupColFromData(start, end)
 	return w
 }
 
-func Append(v *Vector, arg interface{}) error {
-	switch v.Typ.Oid {
-	case types.T_bool:
-		v.Col = append(v.Col.([]bool), arg.([]bool)...)
-		v.Data = types.EncodeFixedSlice(v.Col.([]bool), 1)
-	case types.T_int8:
-		v.Col = append(v.Col.([]int8), arg.([]int8)...)
-		v.Data = types.EncodeFixedSlice(v.Col.([]int8), 1)
-	case types.T_int16:
-		v.Col = append(v.Col.([]int16), arg.([]int16)...)
-		v.Data = types.EncodeFixedSlice(v.Col.([]int16), 2)
-	case types.T_int32:
-		v.Col = append(v.Col.([]int32), arg.([]int32)...)
-		v.Data = types.EncodeFixedSlice(v.Col.([]int32), 4)
-	case types.T_int64:
-		v.Col = append(v.Col.([]int64), arg.([]int64)...)
-		v.Data = types.EncodeFixedSlice(v.Col.([]int64), 8)
-	case types.T_uint8:
-		v.Col = append(v.Col.([]uint8), arg.([]uint8)...)
-		v.Data = types.EncodeFixedSlice(v.Col.([]uint8), 1)
-	case types.T_uint16:
-		v.Col = append(v.Col.([]uint16), arg.([]uint16)...)
-		v.Data = types.EncodeFixedSlice(v.Col.([]uint16), 2)
-	case types.T_uint32:
-		v.Col = append(v.Col.([]uint32), arg.([]uint32)...)
-		v.Data = types.EncodeFixedSlice(v.Col.([]uint32), 4)
-	case types.T_uint64:
-		v.Col = append(v.Col.([]uint64), arg.([]uint64)...)
-		v.Data = types.EncodeFixedSlice(v.Col.([]uint64), 8)
-	case types.T_float32:
-		v.Col = append(v.Col.([]float32), arg.([]float32)...)
-		v.Data = types.EncodeFixedSlice(v.Col.([]float32), 4)
-	case types.T_float64:
-		v.Col = append(v.Col.([]float64), arg.([]float64)...)
-		v.Data = types.EncodeFixedSlice(v.Col.([]float64), 8)
-	case types.T_date:
-		v.Col = append(v.Col.([]types.Date), arg.([]types.Date)...)
-		v.Data = types.EncodeFixedSlice(v.Col.([]types.Date), 4)
-	case types.T_datetime:
-		v.Col = append(v.Col.([]types.Datetime), arg.([]types.Datetime)...)
-		v.Data = types.EncodeFixedSlice(v.Col.([]types.Datetime), 8)
-	case types.T_timestamp:
-		v.Col = append(v.Col.([]types.Timestamp), arg.([]types.Timestamp)...)
-		v.Data = types.EncodeFixedSlice(v.Col.([]types.Timestamp), 8)
-	case types.T_sel:
-		v.Col = append(v.Col.([]int64), arg.([]int64)...)
-	case types.T_tuple:
-		v.Col = append(v.Col.([][]interface{}), arg.([][]interface{})...)
-	case types.T_char, types.T_varchar, types.T_json, types.T_blob:
-		return v.Col.(*types.Bytes).Append(arg.([][]byte))
-	case types.T_decimal64:
-		v.Col = append(v.Col.([]types.Decimal64), arg.([]types.Decimal64)...)
-		v.Data = types.EncodeFixedSlice(v.Col.([]types.Decimal64), 8)
-	case types.T_decimal128:
-		v.Col = append(v.Col.([]types.Decimal128), arg.([]types.Decimal128)...)
-		v.Data = types.EncodeFixedSlice(v.Col.([]types.Decimal128), 16)
-	default:
-		return fmt.Errorf("unexpect type %s for function vector.Append", v.Typ)
+func AppendFixed[T types.FixedSizeT](v *Vector, arg []T, m *mheap.Mheap) error {
+	var err error
+	col := MustTCols[T](v)
+	ncol := len(col)
+	narg := len(arg)
+	if narg == 0 {
+		return nil
 	}
+
+	nsz := (ncol + narg) * v.GetType().TypeSize()
+	v.Data, err = m.Grow(v.Data, int64(nsz))
+	if err != nil {
+		return err
+	}
+	v.colFromData()
+	col = MustTCols[T](v)
+	copy(col[ncol:ncol+narg], arg)
 	return nil
 }
 
+func AppendFixedRaw(v *Vector, data []byte) error {
+	v.Data = append(v.Data, data...)
+	v.colFromData()
+	return nil
+}
+
+func AppendBytes(v *Vector, arg [][]byte, m *mheap.Mheap) error {
+	var err error
+	vas := make([]types.Varlena, len(arg))
+	for idx, bs := range arg {
+		// XXX we do not track memory usage anymore?
+		vas[idx], v.area, err = types.BuildVarlena(bs, v.area, m)
+		if err != nil {
+			return err
+		}
+	}
+	return AppendFixed(v, vas, m)
+}
+
+func AppendString(v *Vector, arg []string, m *mheap.Mheap) error {
+	var err error
+	vas := make([]types.Varlena, len(arg))
+	for idx, bs := range arg {
+		// XXX we do not track memory usage anymore?
+		vas[idx], v.area, err = types.BuildVarlena([]byte(bs), v.area, m)
+		if err != nil {
+			return err
+		}
+	}
+	return AppendFixed(v, vas, m)
+}
+
+func AppendTuple(v *Vector, arg [][]interface{}) error {
+	if v.GetType().IsTuple() {
+		return moerr.NewError(moerr.INTERNAL_ERROR, "append tuple to non tuple vector")
+	}
+	v.Col = append(v.Col.([][]interface{}), arg...)
+	return nil
+}
+
+func ShrinkFixed[T types.FixedSizeT](v *Vector, sels []int64) {
+	vs := MustTCols[T](v)
+	for i, sel := range sels {
+		vs[i] = vs[sel]
+	}
+	v.Col = vs[:len(sels)]
+	v.Data = v.encodeColToByteSlice()
+	v.Nsp = nulls.Filter(v.Nsp, sels)
+}
 func Shrink(v *Vector, sels []int64) {
 	if v.IsScalar() {
-		v.Length = len(sels)
+		v.SetScalarLength(len(sels))
 		return
 	}
-	defer func() {
-		size := v.Typ.Oid.TypeLen()
-		if v.Typ.Oid != types.T_char && v.Typ.Oid != types.T_varchar && v.Typ.Oid != types.T_blob && v.Typ.Oid != types.T_json {
-			v.Data = v.Data[:reflect.ValueOf(v.Col).Len()*size]
-		}
-	}()
+
 	switch v.Typ.Oid {
 	case types.T_bool:
-		vs := v.Col.([]bool)
-		for i, sel := range sels {
-			vs[i] = vs[sel]
-		}
-		v.Col = vs[:len(sels)]
-		v.Nsp = nulls.Filter(v.Nsp, sels)
+		ShrinkFixed[bool](v, sels)
 	case types.T_int8:
-		vs := v.Col.([]int8)
-		for i, sel := range sels {
-			vs[i] = vs[sel]
-		}
-		v.Col = vs[:len(sels)]
-		v.Data = v.Data[:len(sels)*1]
-		v.Nsp = nulls.Filter(v.Nsp, sels)
+		ShrinkFixed[int8](v, sels)
 	case types.T_int16:
-		vs := v.Col.([]int16)
-		for i, sel := range sels {
-			vs[i] = vs[sel]
-		}
-		v.Col = vs[:len(sels)]
-		v.Data = v.Data[:len(sels)*2]
-		v.Nsp = nulls.Filter(v.Nsp, sels)
+		ShrinkFixed[int16](v, sels)
 	case types.T_int32:
-		vs := v.Col.([]int32)
-		for i, sel := range sels {
-			vs[i] = vs[sel]
-		}
-		v.Col = vs[:len(sels)]
-		v.Data = v.Data[:len(sels)*4]
-		v.Nsp = nulls.Filter(v.Nsp, sels)
+		ShrinkFixed[int32](v, sels)
 	case types.T_int64:
-		vs := v.Col.([]int64)
-		for i, sel := range sels {
-			vs[i] = vs[sel]
-		}
-		v.Col = vs[:len(sels)]
-		v.Data = v.Data[:len(sels)*8]
-		v.Nsp = nulls.Filter(v.Nsp, sels)
+		ShrinkFixed[int64](v, sels)
 	case types.T_uint8:
-		vs := v.Col.([]uint8)
-		for i, sel := range sels {
-			vs[i] = vs[sel]
-		}
-		v.Col = vs[:len(sels)]
-		v.Data = v.Data[:len(sels)*1]
-		v.Nsp = nulls.Filter(v.Nsp, sels)
+		ShrinkFixed[uint8](v, sels)
 	case types.T_uint16:
-		vs := v.Col.([]uint16)
-		for i, sel := range sels {
-			vs[i] = vs[sel]
-		}
-		v.Col = vs[:len(sels)]
-		v.Data = v.Data[:len(sels)*2]
-		v.Nsp = nulls.Filter(v.Nsp, sels)
+		ShrinkFixed[uint16](v, sels)
 	case types.T_uint32:
-		vs := v.Col.([]uint32)
-		for i, sel := range sels {
-			vs[i] = vs[sel]
-		}
-		v.Col = vs[:len(sels)]
-		v.Data = v.Data[:len(sels)*4]
-		v.Nsp = nulls.Filter(v.Nsp, sels)
+		ShrinkFixed[uint32](v, sels)
 	case types.T_uint64:
-		vs := v.Col.([]uint64)
-		for i, sel := range sels {
-			vs[i] = vs[sel]
-		}
-		v.Col = vs[:len(sels)]
-		v.Data = v.Data[:len(sels)*8]
-		v.Nsp = nulls.Filter(v.Nsp, sels)
+		ShrinkFixed[uint64](v, sels)
 	case types.T_float32:
-		vs := v.Col.([]float32)
-		for i, sel := range sels {
-			vs[i] = vs[sel]
-		}
-		v.Col = vs[:len(sels)]
-		v.Data = v.Data[:len(sels)*4]
-		v.Nsp = nulls.Filter(v.Nsp, sels)
+		ShrinkFixed[float32](v, sels)
 	case types.T_float64:
-		vs := v.Col.([]float64)
-		for i, sel := range sels {
-			vs[i] = vs[sel]
-		}
-		v.Col = vs[:len(sels)]
-		v.Data = v.Data[:len(sels)*8]
-		v.Nsp = nulls.Filter(v.Nsp, sels)
-	case types.T_sel:
-		vs := v.Col.([]int64)
-		for i, sel := range sels {
-			vs[i] = vs[sel]
-		}
-		v.Col = vs[:len(sels)]
-		v.Data = v.Data[:len(sels)*8]
-		v.Nsp = nulls.Filter(v.Nsp, sels)
+		ShrinkFixed[float64](v, sels)
+	case types.T_char, types.T_varchar, types.T_json, types.T_blob:
+		// XXX shrink varlena, but did not shrink area.  For our vector, this
+		// may well be the right thing.  If want to shrink area as well, we
+		// have to copy each varlena value and swizzle pointer.
+		ShrinkFixed[types.Varlena](v, sels)
+	case types.T_date:
+		ShrinkFixed[types.Date](v, sels)
+	case types.T_datetime:
+		ShrinkFixed[types.Datetime](v, sels)
+	case types.T_timestamp:
+		ShrinkFixed[types.Timestamp](v, sels)
+	case types.T_decimal64:
+		ShrinkFixed[types.Decimal64](v, sels)
+	case types.T_decimal128:
+		ShrinkFixed[types.Decimal128](v, sels)
+	case types.T_TS:
+		ShrinkFixed[types.TS](v, sels)
+	case types.T_Rowid:
+		ShrinkFixed[types.Rowid](v, sels)
 	case types.T_tuple:
 		vs := v.Col.([][]interface{})
 		for i, sel := range sels {
@@ -1640,3530 +922,445 @@ func Shrink(v *Vector, sels []int64) {
 		}
 		v.Col = vs[:len(sels)]
 		v.Nsp = nulls.Filter(v.Nsp, sels)
-	case types.T_char, types.T_varchar, types.T_json, types.T_blob:
-		vs := v.Col.(*types.Bytes)
-		for i, sel := range sels {
-			vs.Offsets[i] = vs.Offsets[sel]
-			vs.Lengths[i] = vs.Lengths[sel]
-		}
-		vs.Offsets = vs.Offsets[:len(sels)]
-		vs.Lengths = vs.Lengths[:len(sels)]
-		v.Nsp = nulls.Filter(v.Nsp, sels)
-	case types.T_date:
-		vs := v.Col.([]types.Date)
-		for i, sel := range sels {
-			vs[i] = vs[sel]
-		}
-		v.Col = vs[:len(sels)]
-		v.Data = v.Data[:len(sels)*4]
-		v.Nsp = nulls.Filter(v.Nsp, sels)
-	case types.T_datetime:
-		vs := v.Col.([]types.Datetime)
-		for i, sel := range sels {
-			vs[i] = vs[sel]
-		}
-		v.Col = vs[:len(sels)]
-		v.Data = v.Data[:len(sels)*8]
-		v.Nsp = nulls.Filter(v.Nsp, sels)
-	case types.T_timestamp:
-		vs := v.Col.([]types.Timestamp)
-		for i, sel := range sels {
-			vs[i] = vs[sel]
-		}
-		v.Col = vs[:len(sels)]
-		v.Data = v.Data[:len(sels)*8]
-		v.Nsp = nulls.Filter(v.Nsp, sels)
-	case types.T_decimal64:
-		vs := v.Col.([]types.Decimal64)
-		for i, sel := range sels {
-			vs[i] = vs[sel]
-		}
-		v.Col = vs[:len(sels)]
-		v.Data = v.Data[:len(sels)*8]
-		v.Nsp = nulls.Filter(v.Nsp, sels)
-	case types.T_decimal128:
-		vs := v.Col.([]types.Decimal128)
-		for i, sel := range sels {
-			vs[i] = vs[sel]
-		}
-		v.Col = vs[:len(sels)]
-		v.Data = v.Data[:len(sels)*16]
-		v.Nsp = nulls.Filter(v.Nsp, sels)
+	default:
+		panic("vector shrink unknonw type")
 	}
+}
+
+// Shuffle assumes we do not have dup in sels.
+func ShuffleFixed[T types.FixedSizeT](v *Vector, sels []int64, m *mheap.Mheap) error {
+	olddata := v.Data
+	ns := len(sels)
+	vs := MustTCols[T](v)
+	data, err := mheap.Alloc(m, int64(ns*v.GetType().TypeSize()))
+	if err != nil {
+		return err
+	}
+	ws := types.DecodeFixedSlice[T](data, v.GetType().TypeSize())
+	v.Col = shuffle.FixedLengthShuffle(vs, ws, sels)
+	v.Data = types.EncodeFixedSlice(ws, v.GetType().TypeSize())
+	v.Nsp = nulls.Filter(v.Nsp, sels)
+
+	mheap.Free(m, olddata)
+	return nil
 }
 
 func Shuffle(v *Vector, sels []int64, m *mheap.Mheap) error {
 	if v.IsScalar() {
-		v.Length = len(sels)
+		v.SetScalarLength(len(sels))
 		return nil
 	}
-	defer func() {
-		size := v.Typ.Oid.TypeLen()
-		if v.Typ.Oid != types.T_char && v.Typ.Oid != types.T_varchar && v.Typ.Oid != types.T_blob && v.Typ.Oid != types.T_json {
-			v.Data = v.Data[:reflect.ValueOf(v.Col).Len()*size]
-		}
-	}()
 	switch v.Typ.Oid {
 	case types.T_bool:
-		vs := v.Col.([]bool)
-		data, err := mheap.Alloc(m, int64(len(vs)))
-		if err != nil {
-			return err
-		}
-		ws := types.DecodeBoolSlice(data)
-		v.Col = shuffle.BoolShuffle(vs, ws, sels)
-		v.Nsp = nulls.Filter(v.Nsp, sels)
-		mheap.Free(m, data)
+		ShuffleFixed[bool](v, sels, m)
 	case types.T_int8:
-		vs := v.Col.([]int8)
-		data, err := mheap.Alloc(m, int64(len(vs)))
-		if err != nil {
-			return err
-		}
-		ws := types.DecodeInt8Slice(data)
-		v.Col = shuffle.Int8Shuffle(vs, ws, sels)
-		v.Nsp = nulls.Filter(v.Nsp, sels)
-		v.Data = v.Data[:len(sels)*1]
-		mheap.Free(m, data)
+		ShuffleFixed[int8](v, sels, m)
 	case types.T_int16:
-		vs := v.Col.([]int16)
-		data, err := mheap.Alloc(m, int64(len(vs)*2))
-		if err != nil {
-			return err
-		}
-		ws := types.DecodeInt16Slice(data)
-		v.Col = shuffle.Int16Shuffle(vs, ws, sels)
-		v.Nsp = nulls.Filter(v.Nsp, sels)
-		v.Data = v.Data[:len(sels)*2]
-		mheap.Free(m, data)
+		ShuffleFixed[int16](v, sels, m)
 	case types.T_int32:
-		vs := v.Col.([]int32)
-		data, err := mheap.Alloc(m, int64(len(vs)*4))
-		if err != nil {
-			return err
-		}
-		ws := types.DecodeInt32Slice(data)
-		v.Col = shuffle.Int32Shuffle(vs, ws, sels)
-		v.Nsp = nulls.Filter(v.Nsp, sels)
-		v.Data = v.Data[:len(sels)*4]
-		mheap.Free(m, data)
+		ShuffleFixed[int32](v, sels, m)
 	case types.T_int64:
-		vs := v.Col.([]int64)
-		data, err := mheap.Alloc(m, int64(len(vs)*8))
-		if err != nil {
-			return err
-		}
-		ws := types.DecodeInt64Slice(data)
-		v.Col = shuffle.Int64Shuffle(vs, ws, sels)
-		v.Nsp = nulls.Filter(v.Nsp, sels)
-		v.Data = v.Data[:len(sels)*8]
-		mheap.Free(m, data)
+		ShuffleFixed[int64](v, sels, m)
 	case types.T_uint8:
-		vs := v.Col.([]uint8)
-		data, err := mheap.Alloc(m, int64(len(vs)))
-		if err != nil {
-			return err
-		}
-		ws := types.DecodeUint8Slice(data)
-		v.Col = shuffle.Uint8Shuffle(vs, ws, sels)
-		v.Nsp = nulls.Filter(v.Nsp, sels)
-		v.Data = v.Data[:len(sels)*1]
-		mheap.Free(m, data)
+		ShuffleFixed[uint8](v, sels, m)
 	case types.T_uint16:
-		vs := v.Col.([]uint16)
-		data, err := mheap.Alloc(m, int64(len(vs)*2))
-		if err != nil {
-			return err
-		}
-		ws := types.DecodeUint16Slice(data)
-		v.Col = shuffle.Uint16Shuffle(vs, ws, sels)
-		v.Nsp = nulls.Filter(v.Nsp, sels)
-		v.Data = v.Data[:len(sels)*2]
-		mheap.Free(m, data)
+		ShuffleFixed[uint16](v, sels, m)
 	case types.T_uint32:
-		vs := v.Col.([]uint32)
-		data, err := mheap.Alloc(m, int64(len(vs)*4))
-		if err != nil {
-			return err
-		}
-		ws := types.DecodeUint32Slice(data)
-		v.Col = shuffle.Uint32Shuffle(vs, ws, sels)
-		v.Nsp = nulls.Filter(v.Nsp, sels)
-		v.Data = v.Data[:len(sels)*4]
-		mheap.Free(m, data)
+		ShuffleFixed[uint32](v, sels, m)
 	case types.T_uint64:
-		vs := v.Col.([]uint64)
-		data, err := mheap.Alloc(m, int64(len(vs)*8))
-		if err != nil {
-			return err
-		}
-		ws := types.DecodeUint64Slice(data)
-		v.Col = shuffle.Uint64Shuffle(vs, ws, sels)
-		v.Nsp = nulls.Filter(v.Nsp, sels)
-		v.Data = v.Data[:len(sels)*8]
-		mheap.Free(m, data)
+		ShuffleFixed[uint64](v, sels, m)
 	case types.T_float32:
-		vs := v.Col.([]float32)
-		data, err := mheap.Alloc(m, int64(len(vs)*4))
-		if err != nil {
-			return err
-		}
-		ws := types.DecodeFloat32Slice(data)
-		v.Col = shuffle.Float32Shuffle(vs, ws, sels)
-		v.Nsp = nulls.Filter(v.Nsp, sels)
-		v.Data = v.Data[:len(sels)*4]
-		mheap.Free(m, data)
+		ShuffleFixed[float32](v, sels, m)
 	case types.T_float64:
-		vs := v.Col.([]float64)
-		data, err := mheap.Alloc(m, int64(len(vs)*8))
-		if err != nil {
-			return err
-		}
-		ws := types.DecodeFloat64Slice(data)
-		v.Col = shuffle.Float64Shuffle(vs, ws, sels)
-		v.Nsp = nulls.Filter(v.Nsp, sels)
-		v.Data = v.Data[:len(sels)*8]
-		mheap.Free(m, data)
-	case types.T_sel:
-		vs := v.Col.([]int64)
-		data, err := mheap.Alloc(m, int64(len(vs)*8))
-		if err != nil {
-			return err
-		}
-		ws := types.DecodeInt64Slice(data)
-		v.Col = shuffle.Int64Shuffle(vs, ws, sels)
-		v.Nsp = nulls.Filter(v.Nsp, sels)
-		v.Data = v.Data[:len(sels)*8]
-		mheap.Free(m, data)
+		ShuffleFixed[float64](v, sels, m)
+	case types.T_char, types.T_varchar, types.T_json, types.T_blob:
+		ShuffleFixed[types.Varlena](v, sels, m)
+	case types.T_date:
+		ShuffleFixed[types.Date](v, sels, m)
+	case types.T_datetime:
+		ShuffleFixed[types.Datetime](v, sels, m)
+	case types.T_timestamp:
+		ShuffleFixed[types.Timestamp](v, sels, m)
+	case types.T_decimal64:
+		ShuffleFixed[types.Decimal64](v, sels, m)
+	case types.T_decimal128:
+		ShuffleFixed[types.Decimal128](v, sels, m)
+	case types.T_TS:
+		ShuffleFixed[types.TS](v, sels, m)
+	case types.T_Rowid:
+		ShuffleFixed[types.Rowid](v, sels, m)
 	case types.T_tuple:
 		vs := v.Col.([][]interface{})
 		ws := make([][]interface{}, len(vs))
 		v.Col = shuffle.TupleShuffle(vs, ws, sels)
 		v.Nsp = nulls.Filter(v.Nsp, sels)
-	case types.T_char, types.T_varchar, types.T_json, types.T_blob:
-		vs := v.Col.(*types.Bytes)
-		odata, err := mheap.Alloc(m, int64(len(vs.Offsets)*4))
-		if err != nil {
-			return err
-		}
-		os := types.DecodeUint32Slice(odata)
-		ndata, err := mheap.Alloc(m, int64(len(vs.Offsets)*4))
-		if err != nil {
-			mheap.Free(m, odata)
-			return err
-		}
-		ns := types.DecodeUint32Slice(ndata)
-		v.Col = shuffle.StrShuffle(vs, os, ns, sels)
-		v.Nsp = nulls.Filter(v.Nsp, sels)
-		mheap.Free(m, odata)
-		mheap.Free(m, ndata)
-	case types.T_date:
-		vs := v.Col.([]types.Date)
-		data, err := mheap.Alloc(m, int64(len(vs)*4))
-		if err != nil {
-			return err
-		}
-		ws := types.DecodeDateSlice(data)
-		v.Col = shuffle.DateShuffle(vs, ws, sels)
-		v.Nsp = nulls.Filter(v.Nsp, sels)
-		v.Data = v.Data[:len(sels)*4]
-		mheap.Free(m, data)
-	case types.T_datetime:
-		vs := v.Col.([]types.Datetime)
-		data, err := mheap.Alloc(m, int64(len(vs)*8))
-		if err != nil {
-			return err
-		}
-		ws := types.DecodeDatetimeSlice(data)
-		v.Col = shuffle.DatetimeShuffle(vs, ws, sels)
-		v.Nsp = nulls.Filter(v.Nsp, sels)
-		v.Data = v.Data[:len(sels)*8]
-		mheap.Free(m, data)
-	case types.T_timestamp:
-		vs := v.Col.([]types.Timestamp)
-		data, err := mheap.Alloc(m, int64(len(vs)*8))
-		if err != nil {
-			return err
-		}
-		ws := types.DecodeTimestampSlice(data)
-		v.Col = shuffle.TimestampShuffle(vs, ws, sels)
-		v.Nsp = nulls.Filter(v.Nsp, sels)
-		v.Data = v.Data[:len(sels)*8]
-		mheap.Free(m, data)
-	case types.T_decimal64:
-		vs := v.Col.([]types.Decimal64)
-		data, err := mheap.Alloc(m, int64(len(vs)*8))
-		if err != nil {
-			return err
-		}
-		ws := types.DecodeDecimal64Slice(data)
-		v.Col = shuffle.Decimal64Shuffle(vs, ws, sels)
-		v.Nsp = nulls.Filter(v.Nsp, sels)
-		v.Data = v.Data[:len(sels)*8]
-		mheap.Free(m, data)
-	case types.T_decimal128:
-		vs := v.Col.([]types.Decimal128)
-		data, err := mheap.Alloc(m, int64(len(vs)*16))
-		if err != nil {
-			return err
-		}
-		ws := types.DecodeDecimal128Slice(data)
-		v.Col = shuffle.Decimal128Shuffle(vs, ws, sels)
-		v.Nsp = nulls.Filter(v.Nsp, sels)
-		v.Data = v.Data[:len(sels)*1]
-		mheap.Free(m, data)
 	default:
 		panic(fmt.Sprintf("unexpect type %s for function vector.Shuffle", v.Typ))
 	}
 	return nil
 }
 
-// Copy v[vi] = w[wi]
-func Copy(v, w *Vector, vi, wi int64, m *mheap.Mheap) error {
-	defer func() {
-		size := v.Typ.Oid.TypeLen()
-		if v.Typ.Oid != types.T_char && v.Typ.Oid != types.T_varchar && v.Typ.Oid != types.T_blob && v.Typ.Oid != types.T_json {
-			v.Data = v.Data[:reflect.ValueOf(v.Col).Len()*size]
-		}
-	}()
-	vs, ws := v.Col.(*types.Bytes), w.Col.(*types.Bytes)
-	data := ws.Data[ws.Offsets[wi] : ws.Offsets[wi]+ws.Lengths[wi]]
-	if vs.Lengths[vi] >= ws.Lengths[wi] {
-		vs.Lengths[vi] = ws.Lengths[wi]
-		copy(vs.Data[vs.Offsets[vi]:int(vs.Offsets[vi])+len(data)], data)
-		return nil
-	}
-	diff := ws.Lengths[wi] - vs.Lengths[vi]
-	buf, err := mheap.Alloc(m, int64(len(vs.Data)+int(diff)))
+func (v *Vector) Show() ([]byte, error) {
+	// Write Typ
+	var buf bytes.Buffer
+	vtbs := types.EncodeType(&v.Typ)
+	buf.Write(vtbs)
+
+	// Write nspLen, nsp
+	nb, err := v.Nsp.Show()
 	if err != nil {
+		return nil, err
+	}
+
+	lenNb := uint32(len(nb))
+	buf.Write(types.EncodeUint32(&lenNb))
+	if len(nb) > 0 {
+		buf.Write(nb)
+	}
+
+	// Write colLen, col
+	bs := v.encodeColToByteSlice()
+	lenBs := uint32(len(bs))
+	buf.Write(types.EncodeUint32(&lenBs))
+	if len(bs) > 0 {
+		buf.Write(bs)
+	}
+
+	// Write areaLen, area
+	if len(v.area) == 0 {
+		z := uint32(0)
+		buf.Write(types.EncodeUint32(&z))
+	} else {
+		lenA := uint32(len(v.area))
+		buf.Write(types.EncodeUint32(&lenA))
+		buf.Write(v.area)
+	}
+	return buf.Bytes(), nil
+}
+
+func (v *Vector) Read(data []byte) error {
+	typ := types.DecodeType(data[:types.TSize])
+	data = data[types.TSize:]
+	v.Typ = typ
+	v.Or = true
+
+	// Read nspLen, nsp
+	v.Nsp = &nulls.Nulls{}
+	size := types.DecodeUint32(data)
+	data = data[4:]
+	if size > 0 {
+		if err := v.Nsp.Read(data[:size]); err != nil {
+			return err
+		}
+		data = data[size:]
+	}
+
+	// Read colLen, col,
+	size = types.DecodeUint32(data)
+	data = data[4:]
+	if size > 0 {
+		if v.GetType().IsTuple() {
+			col := v.Col.([][]interface{})
+			if err := types.Decode(data[:size], &col); err != nil {
+				return err
+			}
+			v.Col = col
+		} else {
+			v.Data = data[:size]
+			v.setupColFromData(0, int(size/uint32(v.GetType().TypeSize())))
+		}
+		data = data[size:]
+	} else {
+		// This will give Col correct type.
+		v.colFromData()
+	}
+
+	// Read areaLen and area
+	size = types.DecodeUint32(data)
+	if size != 0 {
+		data = data[4:]
+		v.area = data[:size]
+	}
+	return nil
+}
+
+// XXX Old Copy is FUBAR.
+// Copy simply does v[vi] = w[wi]
+func Copy(v, w *Vector, vi, wi int64, m *mheap.Mheap) error {
+	if v.GetType().IsTuple() {
+		// Not sure if Copy ever handle tuple
+		panic("copy tuple vector.")
+	} else if v.GetType().IsFixedLen() {
+		tlen := int64(v.GetType().TypeSize())
+		copy(v.Data[vi*tlen:(vi+1)*tlen], w.Data[wi*tlen:(wi+1)*tlen])
+	} else {
+		var err error
+		vva := MustTCols[types.Varlena](v)
+		wva := MustTCols[types.Varlena](w)
+		if wva[wi].IsSmall() {
+			vva[vi] = wva[wi]
+		} else {
+			bs := wva[wi].GetByteSlice(w.area)
+			vva[vi], v.area, err = types.BuildVarlena(bs, v.area, m)
+			if err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// XXX Old UnionOne is FUBAR
+// It is simply append.   We do not go through appendOne interface because
+// we don't want to horrible type switch.
+func UnionOne(v, w *Vector, sel int64, m *mheap.Mheap) (err error) {
+	if v.Or {
+		return moerr.NewError(moerr.INTERNAL_ERROR, "UnionOne cannot be performed on orig vector")
+	}
+
+	if err = v.extend(1, m); err != nil {
 		return err
 	}
-	copy(buf, vs.Data[:vs.Offsets[vi]])
-	copy(buf[vs.Offsets[vi]:], data)
-	o := vs.Offsets[vi] + vs.Lengths[vi]
-	copy(buf[o+diff:], vs.Data[o:])
-	mheap.Free(m, v.Data)
-	v.Data = buf
-	vs.Data = buf[:len(vs.Data)+int(diff)]
-	vs.Lengths[vi] = ws.Lengths[wi]
-	for i, j := vi+1, int64(len(vs.Offsets)); i < j; i++ {
-		vs.Offsets[i] += diff
-	}
-	return nil
-}
 
-func UnionOne(v, w *Vector, sel int64, m *mheap.Mheap) error {
-	if v.Or {
-		return errors.New("UnionOne operation cannot be performed for origin vector")
+	if v.GetType().IsTuple() {
+		vs := v.Col.([][]interface{})
+		ws := w.Col.([][]interface{})
+		v.Col = append(vs, ws[sel])
+		return nil
 	}
-	defer func() {
-		size := v.Typ.Oid.TypeLen()
-		if v.Typ.Oid != types.T_char && v.Typ.Oid != types.T_varchar && v.Typ.Oid != types.T_blob && v.Typ.Oid != types.T_json {
-			v.Data = v.Data[:reflect.ValueOf(v.Col).Len()*size]
-		}
-	}()
-	switch v.Typ.Oid {
-	case types.T_bool:
-		if len(v.Data) == 0 {
-			data, err := mheap.Alloc(m, 8)
-			if err != nil {
-				return err
-			}
-			v.Ref = w.Ref
-			vs := types.DecodeBoolSlice(data)
-			vs[0] = w.Col.([]bool)[sel]
-			v.Col = vs[:1]
-			v.Data = data
-		} else {
-			vs := v.Col.([]bool)
-			if n := len(vs); n+1 >= cap(vs) {
-				data, err := mheap.Grow(m, v.Data[:n], int64(n+1))
-				if err != nil {
-					return err
-				}
-				mheap.Free(m, v.Data)
-				vs = types.DecodeBoolSlice(data)
-				vs = vs[:n]
-				v.Col = vs
-				v.Data = data
-			}
-			vs = append(vs, w.Col.([]bool)[sel])
-			v.Col = vs
-		}
-	case types.T_int8:
-		if len(v.Data) == 0 {
-			data, err := mheap.Alloc(m, 8)
-			if err != nil {
-				return err
-			}
-			v.Ref = w.Ref
-			vs := types.DecodeInt8Slice(data)
-			vs[0] = w.Col.([]int8)[sel]
-			v.Col = vs[:1]
-			v.Data = data
-		} else {
-			vs := v.Col.([]int8)
-			if n := len(vs); n+1 >= cap(vs) {
-				data, err := mheap.Grow(m, v.Data[:n], int64(n+1))
-				if err != nil {
-					return err
-				}
-				mheap.Free(m, v.Data)
-				vs = types.DecodeInt8Slice(data)
-				vs = vs[:n]
-				v.Col = vs
-				v.Data = data
-			}
-			vs = append(vs, w.Col.([]int8)[sel])
-			v.Col = vs
-			v.Data = v.Data[:len(vs)*1]
-		}
-	case types.T_int16:
-		if len(v.Data) == 0 {
-			data, err := mheap.Alloc(m, 2*8)
-			if err != nil {
-				return err
-			}
-			v.Ref = w.Ref
-			vs := types.DecodeInt16Slice(data)
-			vs[0] = w.Col.([]int16)[sel]
-			v.Col = vs[:1]
-			v.Data = data
-		} else {
-			vs := v.Col.([]int16)
-			if n := len(vs); n+1 >= cap(vs) {
-				data, err := mheap.Grow(m, v.Data[:n*2], int64(n+1)*2)
-				if err != nil {
-					return err
-				}
-				mheap.Free(m, v.Data)
-				vs = types.DecodeInt16Slice(data)
-				vs = vs[:n]
-				v.Col = vs
-				v.Data = data
-			}
-			vs = append(vs, w.Col.([]int16)[sel])
-			v.Col = vs
-			v.Data = v.Data[:len(vs)*2]
-		}
-	case types.T_int32:
-		if len(v.Data) == 0 {
-			data, err := mheap.Alloc(m, 4*8)
-			if err != nil {
-				return err
-			}
-			v.Ref = w.Ref
-			vs := types.DecodeInt32Slice(data)
-			vs[0] = w.Col.([]int32)[sel]
-			v.Col = vs[:1]
-			v.Data = data
-		} else {
-			vs := v.Col.([]int32)
-			if n := len(vs); n+1 >= cap(vs) {
-				data, err := mheap.Grow(m, v.Data[:n*4], int64(n+1)*4)
-				if err != nil {
-					return err
-				}
-				mheap.Free(m, v.Data)
-				vs = types.DecodeInt32Slice(data)
-				vs = vs[:n]
-				v.Col = vs
-				v.Data = data
-			}
-			vs = append(vs, w.Col.([]int32)[sel])
-			v.Col = vs
-			v.Data = v.Data[:len(vs)*4]
-		}
-	case types.T_int64:
-		if len(v.Data) == 0 {
-			data, err := mheap.Alloc(m, 8*8)
-			if err != nil {
-				return err
-			}
-			v.Ref = w.Ref
-			vs := types.DecodeInt64Slice(data)
-			vs[0] = w.Col.([]int64)[sel]
-			v.Col = vs[:1]
-			v.Data = data
-		} else {
-			vs := v.Col.([]int64)
-			if n := len(vs); n+1 >= cap(vs) {
-				data, err := mheap.Grow(m, v.Data[:n*8], int64(n+1)*8)
-				if err != nil {
-					return err
-				}
-				mheap.Free(m, v.Data)
-				vs = types.DecodeInt64Slice(data)
-				vs = vs[:n]
-				v.Col = vs
-				v.Data = data
-			}
-			vs = append(vs, w.Col.([]int64)[sel])
-			v.Col = vs
-			v.Data = v.Data[:len(vs)*8]
-		}
-	case types.T_uint8:
-		if len(v.Data) == 0 {
-			data, err := mheap.Alloc(m, 8)
-			if err != nil {
-				return err
-			}
-			v.Ref = w.Ref
-			vs := types.DecodeUint8Slice(data)
-			vs[0] = w.Col.([]uint8)[sel]
-			v.Col = vs[:1]
-			v.Data = data
-		} else {
-			vs := v.Col.([]uint8)
-			if n := len(vs); n+1 >= cap(vs) {
-				data, err := mheap.Grow(m, v.Data[:n], int64(n+1))
-				if err != nil {
-					return err
-				}
-				mheap.Free(m, v.Data)
-				vs = types.DecodeUint8Slice(data)
-				vs = vs[:n]
-				v.Col = vs
-				v.Data = data
-			}
-			vs = append(vs, w.Col.([]uint8)[sel])
-			v.Col = vs
-			v.Data = v.Data[:len(vs)*1]
-		}
-	case types.T_uint16:
-		if len(v.Data) == 0 {
-			data, err := mheap.Alloc(m, 2*8)
-			if err != nil {
-				return err
-			}
-			v.Ref = w.Ref
-			vs := types.DecodeUint16Slice(data)
-			vs[0] = w.Col.([]uint16)[sel]
-			v.Col = vs[:1]
-			v.Data = data
-		} else {
-			vs := v.Col.([]uint16)
-			if n := len(vs); n+1 >= cap(vs) {
-				data, err := mheap.Grow(m, v.Data[:n*2], int64(n+1)*2)
-				if err != nil {
-					return err
-				}
-				mheap.Free(m, v.Data)
-				vs = types.DecodeUint16Slice(data)
-				vs = vs[:n]
-				v.Col = vs
-				v.Data = data
-			}
-			vs = append(vs, w.Col.([]uint16)[sel])
-			v.Col = vs
-			v.Data = v.Data[:len(vs)*2]
-		}
-	case types.T_uint32:
-		if len(v.Data) == 0 {
-			data, err := mheap.Alloc(m, 4*8)
-			if err != nil {
-				return err
-			}
-			v.Ref = w.Ref
-			vs := types.DecodeUint32Slice(data)
-			vs[0] = w.Col.([]uint32)[sel]
-			v.Col = vs[:1]
-			v.Data = data
-		} else {
-			vs := v.Col.([]uint32)
-			if n := len(vs); n+1 >= cap(vs) {
-				data, err := mheap.Grow(m, v.Data[:n*4], int64(n+1)*4)
-				if err != nil {
-					return err
-				}
-				mheap.Free(m, v.Data)
-				vs = types.DecodeUint32Slice(data)
-				vs = vs[:n]
-				v.Col = vs
-				v.Data = data
-			}
-			vs = append(vs, w.Col.([]uint32)[sel])
-			v.Col = vs
-			v.Data = v.Data[:len(vs)*4]
-		}
-	case types.T_uint64:
-		if len(v.Data) == 0 {
-			data, err := mheap.Alloc(m, 8*8)
-			if err != nil {
-				return err
-			}
-			v.Ref = w.Ref
-			vs := types.DecodeUint64Slice(data)
-			vs[0] = w.Col.([]uint64)[sel]
-			v.Col = vs[:1]
-			v.Data = data
-		} else {
-			vs := v.Col.([]uint64)
-			if n := len(vs); n+1 >= cap(vs) {
-				data, err := mheap.Grow(m, v.Data[:n*8], int64(n+1)*8)
-				if err != nil {
-					return err
-				}
-				mheap.Free(m, v.Data)
-				vs = types.DecodeUint64Slice(data)
-				vs = vs[:n]
-				v.Col = vs
-				v.Data = data
-			}
-			vs = append(vs, w.Col.([]uint64)[sel])
-			v.Col = vs
-			v.Data = v.Data[:len(vs)*8]
-		}
-	case types.T_float32:
-		if len(v.Data) == 0 {
-			data, err := mheap.Alloc(m, 4*8)
-			if err != nil {
-				return err
-			}
-			v.Ref = w.Ref
-			vs := types.DecodeFloat32Slice(data)
-			vs[0] = w.Col.([]float32)[sel]
-			v.Col = vs[:1]
-			v.Data = data
-		} else {
-			vs := v.Col.([]float32)
-			if n := len(vs); n+1 >= cap(vs) {
-				data, err := mheap.Grow(m, v.Data[:n*4], int64(n+1)*4)
-				if err != nil {
-					return err
-				}
-				mheap.Free(m, v.Data)
-				vs = types.DecodeFloat32Slice(data)
-				vs = vs[:n]
-				v.Col = vs
-				v.Data = data
-			}
-			vs = append(vs, w.Col.([]float32)[sel])
-			v.Col = vs
-			v.Data = v.Data[:len(vs)*4]
-		}
-	case types.T_float64:
-		if len(v.Data) == 0 {
-			data, err := mheap.Alloc(m, 8*8)
-			if err != nil {
-				return err
-			}
-			v.Ref = w.Ref
-			vs := types.DecodeFloat64Slice(data)
-			vs[0] = w.Col.([]float64)[sel]
-			v.Col = vs[:1]
-			v.Data = data
-		} else {
-			vs := v.Col.([]float64)
-			if n := len(vs); n+1 >= cap(vs) {
-				data, err := mheap.Grow(m, v.Data[:n*8], int64(n+1)*8)
-				if err != nil {
-					return err
-				}
-				mheap.Free(m, v.Data)
-				vs = types.DecodeFloat64Slice(data)
-				vs = vs[:n]
-				v.Col = vs
-				v.Data = data
-			}
-			vs = append(vs, w.Col.([]float64)[sel])
-			v.Col = vs
-			v.Data = v.Data[:len(vs)*8]
-		}
-	case types.T_tuple:
-		v.Ref = w.Ref
-		vs, ws := v.Col.([][]interface{}), w.Col.([][]interface{})
-		vs = append(vs, ws[sel])
-		v.Col = vs
-	case types.T_char, types.T_varchar, types.T_json, types.T_blob:
-		vs, ws := v.Col.(*types.Bytes), w.Col.(*types.Bytes)
-		from := ws.Get(sel)
-		if len(v.Data) == 0 {
-			data, err := mheap.Alloc(m, int64(len(from))*8)
-			if err != nil {
-				return err
-			}
-			v.Ref = w.Ref
-			v.Data = data
-			vs.Data = data[:0]
-		} else if n := len(vs.Data); n+len(from) >= cap(vs.Data) {
-			data, err := mheap.Grow(m, vs.Data, int64(n+len(from)))
-			if err != nil {
-				return err
-			}
-			mheap.Free(m, v.Data)
-			v.Data = data
-			n = len(vs.Offsets)
-			vs.Data = data[:vs.Offsets[n-1]+vs.Lengths[n-1]]
-		}
-		vs.Lengths = append(vs.Lengths, uint32(len(from)))
-		{
-			n := len(vs.Offsets)
-			if n > 0 {
-				vs.Offsets = append(vs.Offsets, vs.Offsets[n-1]+vs.Lengths[n-1])
-			} else {
-				vs.Offsets = append(vs.Offsets, 0)
-			}
-		}
-		vs.Data = append(vs.Data, from...)
-		v.Col = vs
-	case types.T_date:
-		if len(v.Data) == 0 {
-			data, err := mheap.Alloc(m, 4*8)
-			if err != nil {
-				return err
-			}
-			v.Ref = w.Ref
-			vs := types.DecodeDateSlice(data)
-			vs[0] = w.Col.([]types.Date)[sel]
-			v.Col = vs[:1]
-			v.Data = data
-		} else {
-			vs := v.Col.([]types.Date)
-			if n := len(vs); n+1 >= cap(vs) {
-				data, err := mheap.Grow(m, v.Data[:n*4], int64(n+1)*4)
-				if err != nil {
-					return err
-				}
-				mheap.Free(m, v.Data)
-				vs = types.DecodeDateSlice(data)
-				vs = vs[:n]
-				v.Col = vs
-				v.Data = data
-			}
-			vs = append(vs, w.Col.([]types.Date)[sel])
-			v.Col = vs
-			v.Data = v.Data[:len(vs)*4]
-		}
-	case types.T_datetime:
-		if len(v.Data) == 0 {
-			data, err := mheap.Alloc(m, 8*8)
-			if err != nil {
-				return err
-			}
-			v.Ref = w.Ref
-			vs := types.DecodeDatetimeSlice(data)
-			vs[0] = w.Col.([]types.Datetime)[sel]
-			v.Col = vs[:1]
-			v.Data = data
-		} else {
-			vs := v.Col.([]types.Datetime)
-			if n := len(vs); n+1 >= cap(vs) {
-				data, err := mheap.Grow(m, v.Data[:n*8], int64(n+1)*8)
-				if err != nil {
-					return err
-				}
-				mheap.Free(m, v.Data)
-				vs = types.DecodeDatetimeSlice(data)
-				vs = vs[:n]
-				v.Col = vs
-				v.Data = data
-			}
-			vs = append(vs, w.Col.([]types.Datetime)[sel])
-			v.Col = vs
-			v.Data = v.Data[:len(vs)*8]
-		}
-	case types.T_timestamp:
-		if len(v.Data) == 0 {
-			data, err := mheap.Alloc(m, 8*8)
-			if err != nil {
-				return err
-			}
-			v.Ref = w.Ref
-			vs := types.DecodeTimestampSlice(data)
-			vs[0] = w.Col.([]types.Timestamp)[sel]
-			v.Col = vs[:1]
-			v.Data = data
-		} else {
-			vs := v.Col.([]types.Timestamp)
-			if n := len(vs); n+1 >= cap(vs) {
-				data, err := mheap.Grow(m, v.Data[:n*8], int64(n+1)*8)
-				if err != nil {
-					return err
-				}
-				mheap.Free(m, v.Data)
-				vs = types.DecodeTimestampSlice(data)
-				vs = vs[:n]
-				v.Col = vs
-				v.Data = data
-			}
-			vs = append(vs, w.Col.([]types.Timestamp)[sel])
-			v.Col = vs
-			v.Data = v.Data[:len(vs)*8]
-		}
-	case types.T_decimal64:
-		if len(v.Data) == 0 {
-			data, err := mheap.Alloc(m, 8*8)
-			if err != nil {
-				return err
-			}
-			v.Ref = w.Ref
-			vs := types.DecodeDecimal64Slice(data)
-			vs[0] = w.Col.([]types.Decimal64)[sel]
-			v.Col = vs[:1]
-			v.Data = data
-		} else {
-			vs := v.Col.([]types.Decimal64)
-			if n := len(vs); n+1 >= cap(vs) {
-				data, err := mheap.Grow(m, v.Data[:n*8], int64(n+1)*8)
-				if err != nil {
-					return err
-				}
-				mheap.Free(m, v.Data)
-				vs = types.DecodeDecimal64Slice(data)
-				vs = vs[:n]
-				v.Col = vs
-				v.Data = data
-			}
-			vs = append(vs, w.Col.([]types.Decimal64)[sel])
-			v.Col = vs
-			v.Data = v.Data[:len(vs)*8]
-		}
-	case types.T_decimal128:
-		if len(v.Data) == 0 {
-			data, err := mheap.Alloc(m, 16*8)
-			if err != nil {
-				return err
-			}
-			v.Ref = w.Ref
-			vs := types.DecodeDecimal128Slice(data)
-			vs[0] = w.Col.([]types.Decimal128)[sel]
-			v.Col = vs[:1]
-			v.Data = data
-		} else {
-			vs := v.Col.([]types.Decimal128)
-			if n := len(vs); n+1 >= cap(vs) {
-				data, err := mheap.Grow(m, v.Data[:n*16], int64(n+1)*16)
-				if err != nil {
-					return err
-				}
-				mheap.Free(m, v.Data)
-				vs = types.DecodeDecimal128Slice(data)
-				vs = vs[:n]
-				v.Col = vs
-				v.Data = data
-			}
-			vs = append(vs, w.Col.([]types.Decimal128)[sel])
-			v.Col = vs
-			v.Data = v.Data[:len(vs)*16]
-		}
-	}
+
 	if nulls.Any(w.Nsp) && nulls.Contains(w.Nsp, uint64(sel)) {
-		nulls.Add(v.Nsp, uint64(Length(v)-1))
+		pos := uint64(v.Length() - 1)
+		nulls.Add(v.Nsp, pos)
+	} else if v.GetType().IsVarlen() {
+		bs := w.GetBytes(sel)
+		tgt := MustTCols[types.Varlena](v)
+		nele := len(tgt)
+		tgt[nele-1], v.area, err = types.BuildVarlena(bs, v.area, m)
+		if err != nil {
+			return err
+		}
+	} else {
+		src := w.getRawValueAt(sel)
+		tgt := v.getRawValueAt(-1)
+		copy(tgt, src)
 	}
 	return nil
 }
 
+// XXX Old UnionNull is FUBAR
+// func UnionNull(v, _ *Vector, m *mheap.Mheap) error
+// It seems to do UnionOne(v, v, 0, m), only that if v is empty,
+// append a zero value instead of v[0].   I don't know why this
+// is called UnionNull -- it does not have much to do with Null.
+//
+// XXX Original code alloc or grow typesize * 8 bytes.  It is not
+// clear people want to amortize alloc/grow, or it is a bug.
 func UnionNull(v, _ *Vector, m *mheap.Mheap) error {
 	if v.Or {
-		return errors.New("UnionNull operation cannot be performed for origin vector")
+		return moerr.NewError(moerr.INTERNAL_ERROR, "UnionNull cannot be performed on orig vector")
 	}
-	defer func() {
-		size := v.Typ.Oid.TypeLen()
-		if v.Typ.Oid != types.T_char && v.Typ.Oid != types.T_varchar && v.Typ.Oid != types.T_blob && v.Typ.Oid != types.T_json {
-			v.Data = v.Data[:reflect.ValueOf(v.Col).Len()*size]
-		}
-	}()
-	switch v.Typ.Oid {
-	case types.T_bool:
-		if len(v.Data) == 0 {
-			data, err := mheap.Alloc(m, 8)
-			if err != nil {
-				return err
-			}
-			vs := types.DecodeBoolSlice(data)
-			v.Col = vs[:1]
-			v.Data = data
-		} else {
-			vs := v.Col.([]bool)
-			if n := len(vs); n+1 >= cap(vs) {
-				data, err := mheap.Grow(m, v.Data[:n], int64(n+1))
-				if err != nil {
-					return err
-				}
-				mheap.Free(m, v.Data)
-				vs = types.DecodeBoolSlice(data)
-				vs = vs[:n]
-				v.Col = vs
-				v.Data = data
-			}
-			vs = append(vs, vs[0])
-			v.Col = vs
-		}
-	case types.T_int8:
-		if len(v.Data) == 0 {
-			data, err := mheap.Alloc(m, 8)
-			if err != nil {
-				return err
-			}
-			vs := types.DecodeInt8Slice(data)
-			v.Col = vs[:1]
-			v.Data = data
-		} else {
-			vs := v.Col.([]int8)
-			if n := len(vs); n+1 >= cap(vs) {
-				data, err := mheap.Grow(m, v.Data[:n], int64(n+1))
-				if err != nil {
-					return err
-				}
-				mheap.Free(m, v.Data)
-				vs = types.DecodeInt8Slice(data)
-				vs = vs[:n]
-				v.Col = vs
-				v.Data = data
-			}
-			vs = append(vs, vs[0])
-			v.Col = vs
-			v.Data = v.Data[:len(vs)*1]
-		}
-	case types.T_int16:
-		if len(v.Data) == 0 {
-			data, err := mheap.Alloc(m, 2*8)
-			if err != nil {
-				return err
-			}
-			vs := types.DecodeInt16Slice(data)
-			v.Col = vs[:1]
-			v.Data = data
-		} else {
-			vs := v.Col.([]int16)
-			if n := len(vs); n+1 >= cap(vs) {
-				data, err := mheap.Grow(m, v.Data[:n*2], int64(n+1)*2)
-				if err != nil {
-					return err
-				}
-				mheap.Free(m, v.Data)
-				vs = types.DecodeInt16Slice(data)
-				vs = vs[:n]
-				v.Col = vs
-				v.Data = data
-			}
-			vs = append(vs, vs[0])
-			v.Col = vs
-			v.Data = v.Data[:len(vs)*2]
-		}
-	case types.T_int32:
-		if len(v.Data) == 0 {
-			data, err := mheap.Alloc(m, 4*8)
-			if err != nil {
-				return err
-			}
-			vs := types.DecodeInt32Slice(data)
-			v.Col = vs[:1]
-			v.Data = data
-		} else {
-			vs := v.Col.([]int32)
-			if n := len(vs); n+1 >= cap(vs) {
-				data, err := mheap.Grow(m, v.Data[:n*4], int64(n+1)*4)
-				if err != nil {
-					return err
-				}
-				mheap.Free(m, v.Data)
-				vs = types.DecodeInt32Slice(data)
-				vs = vs[:n]
-				v.Col = vs
-				v.Data = data
-			}
-			vs = append(vs, vs[0])
-			v.Col = vs
-			v.Data = v.Data[:len(vs)*4]
-		}
-	case types.T_int64:
-		if len(v.Data) == 0 {
-			data, err := mheap.Alloc(m, 8*8)
-			if err != nil {
-				return err
-			}
-			vs := types.DecodeInt64Slice(data)
-			v.Col = vs[:1]
-			v.Data = data
-		} else {
-			vs := v.Col.([]int64)
-			if n := len(vs); n+1 >= cap(vs) {
-				data, err := mheap.Grow(m, v.Data[:n*8], int64(n+1)*8)
-				if err != nil {
-					return err
-				}
-				mheap.Free(m, v.Data)
-				vs = types.DecodeInt64Slice(data)
-				vs = vs[:n]
-				v.Col = vs
-				v.Data = data
-			}
-			vs = append(vs, vs[0])
-			v.Col = vs
-			v.Data = v.Data[:len(vs)*8]
-		}
-	case types.T_uint8:
-		if len(v.Data) == 0 {
-			data, err := mheap.Alloc(m, 8)
-			if err != nil {
-				return err
-			}
-			vs := types.DecodeUint8Slice(data)
-			v.Col = vs[:1]
-			v.Data = data
-		} else {
-			vs := v.Col.([]uint8)
-			if n := len(vs); n+1 >= cap(vs) {
-				data, err := mheap.Grow(m, v.Data[:n], int64(n+1))
-				if err != nil {
-					return err
-				}
-				mheap.Free(m, v.Data)
-				vs = types.DecodeUint8Slice(data)
-				vs = vs[:n]
-				v.Col = vs
-				v.Data = data
-			}
-			vs = append(vs, vs[0])
-			v.Col = vs
-			v.Data = v.Data[:len(vs)*1]
-		}
-	case types.T_uint16:
-		if len(v.Data) == 0 {
-			data, err := mheap.Alloc(m, 2*8)
-			if err != nil {
-				return err
-			}
-			vs := types.DecodeUint16Slice(data)
-			v.Col = vs[:1]
-			v.Data = data
-		} else {
-			vs := v.Col.([]uint16)
-			if n := len(vs); n+1 >= cap(vs) {
-				data, err := mheap.Grow(m, v.Data[:n*2], int64(n+1)*2)
-				if err != nil {
-					return err
-				}
-				mheap.Free(m, v.Data)
-				vs = types.DecodeUint16Slice(data)
-				vs = vs[:n]
-				v.Col = vs
-				v.Data = data
-			}
-			vs = append(vs, vs[0])
-			v.Col = vs
-			v.Data = v.Data[:len(vs)*2]
-		}
-	case types.T_uint32:
-		if len(v.Data) == 0 {
-			data, err := mheap.Alloc(m, 4*8)
-			if err != nil {
-				return err
-			}
-			vs := types.DecodeUint32Slice(data)
-			v.Col = vs[:1]
-			v.Data = data
-		} else {
-			vs := v.Col.([]uint32)
-			if n := len(vs); n+1 >= cap(vs) {
-				data, err := mheap.Grow(m, v.Data[:n*4], int64(n+1)*4)
-				if err != nil {
-					return err
-				}
-				mheap.Free(m, v.Data)
-				vs = types.DecodeUint32Slice(data)
-				vs = vs[:n]
-				v.Col = vs
-				v.Data = data
-			}
-			vs = append(vs, vs[0])
-			v.Col = vs
-			v.Data = v.Data[:len(vs)*4]
-		}
-	case types.T_uint64:
-		if len(v.Data) == 0 {
-			data, err := mheap.Alloc(m, 8*8)
-			if err != nil {
-				return err
-			}
-			vs := types.DecodeUint64Slice(data)
-			v.Col = vs[:1]
-			v.Data = data
-		} else {
-			vs := v.Col.([]uint64)
-			if n := len(vs); n+1 >= cap(vs) {
-				data, err := mheap.Grow(m, v.Data[:n*8], int64(n+1)*8)
-				if err != nil {
-					return err
-				}
-				mheap.Free(m, v.Data)
-				vs = types.DecodeUint64Slice(data)
-				vs = vs[:n]
-				v.Col = vs
-				v.Data = data
-			}
-			vs = append(vs, vs[0])
-			v.Col = vs
-			v.Data = v.Data[:len(vs)*8]
-		}
-	case types.T_float32:
-		if len(v.Data) == 0 {
-			data, err := mheap.Alloc(m, 4*8)
-			if err != nil {
-				return err
-			}
-			vs := types.DecodeFloat32Slice(data)
-			v.Col = vs[:1]
-			v.Data = data
-		} else {
-			vs := v.Col.([]float32)
-			if n := len(vs); n+1 >= cap(vs) {
-				data, err := mheap.Grow(m, v.Data[:n*4], int64(n+1)*4)
-				if err != nil {
-					return err
-				}
-				mheap.Free(m, v.Data)
-				vs = types.DecodeFloat32Slice(data)
-				vs = vs[:n]
-				v.Col = vs
-				v.Data = data
-			}
-			vs = append(vs, vs[0])
-			v.Col = vs
-			v.Data = v.Data[:len(vs)*4]
-		}
-	case types.T_float64:
-		if len(v.Data) == 0 {
-			data, err := mheap.Alloc(m, 8*8)
-			if err != nil {
-				return err
-			}
-			vs := types.DecodeFloat64Slice(data)
-			v.Col = vs[:1]
-			v.Data = data
-		} else {
-			vs := v.Col.([]float64)
-			if n := len(vs); n+1 >= cap(vs) {
-				data, err := mheap.Grow(m, v.Data[:n*8], int64(n+1)*8)
-				if err != nil {
-					return err
-				}
-				mheap.Free(m, v.Data)
-				vs = types.DecodeFloat64Slice(data)
-				vs = vs[:n]
-				v.Col = vs
-				v.Data = data
-			}
-			vs = append(vs, vs[0])
-			v.Col = vs
-			v.Data = v.Data[:len(vs)*8]
-		}
-	case types.T_char, types.T_varchar, types.T_json, types.T_blob:
-		vs := v.Col.(*types.Bytes)
-		n := len(vs.Offsets)
-		if n > 0 {
-			vs.Offsets = append(vs.Offsets, vs.Offsets[n-1])
-		} else {
-			vs.Offsets = append(vs.Offsets, 0)
-		}
-		vs.Lengths = append(vs.Lengths, 0)
-		v.Col = vs
-	case types.T_date:
-		if len(v.Data) == 0 {
-			data, err := mheap.Alloc(m, 4*8)
-			if err != nil {
-				return err
-			}
-			vs := types.DecodeDateSlice(data)
-			v.Col = vs[:1]
-			v.Data = data
-		} else {
-			vs := v.Col.([]types.Date)
-			if n := len(vs); n+1 >= cap(vs) {
-				data, err := mheap.Grow(m, v.Data[:n*4], int64(n+1)*4)
-				if err != nil {
-					return err
-				}
-				mheap.Free(m, v.Data)
-				vs = types.DecodeDateSlice(data)
-				vs = vs[:n]
-				v.Col = vs
-				v.Data = data
-			}
-			vs = append(vs, vs[0])
-			v.Col = vs
-			v.Data = v.Data[:len(vs)*4]
-		}
-	case types.T_datetime:
-		if len(v.Data) == 0 {
-			data, err := mheap.Alloc(m, 8*8)
-			if err != nil {
-				return err
-			}
-			vs := types.DecodeDatetimeSlice(data)
-			v.Col = vs[:1]
-			v.Data = data
-		} else {
-			vs := v.Col.([]types.Datetime)
-			if n := len(vs); n+1 >= cap(vs) {
-				data, err := mheap.Grow(m, v.Data[:n*8], int64(n+1)*8)
-				if err != nil {
-					return err
-				}
-				mheap.Free(m, v.Data)
-				vs = types.DecodeDatetimeSlice(data)
-				vs = vs[:n]
-				v.Col = vs
-				v.Data = data
-			}
-			vs = append(vs, vs[0])
-			v.Col = vs
-			v.Data = v.Data[:len(vs)*8]
-		}
-	case types.T_timestamp:
-		if len(v.Data) == 0 {
-			data, err := mheap.Alloc(m, 8*8)
-			if err != nil {
-				return err
-			}
-			vs := types.DecodeTimestampSlice(data)
-			v.Col = vs[:1]
-			v.Data = data
-		} else {
-			vs := v.Col.([]types.Timestamp)
-			if n := len(vs); n+1 >= cap(vs) {
-				data, err := mheap.Grow(m, v.Data[:n*8], int64(n+1)*8)
-				if err != nil {
-					return err
-				}
-				mheap.Free(m, v.Data)
-				vs = types.DecodeTimestampSlice(data)
-				vs = vs[:n]
-				v.Col = vs
-				v.Data = data
-			}
-			vs = append(vs, vs[0])
-			v.Col = vs
-			v.Data = v.Data[:len(vs)*8]
-		}
-	case types.T_decimal64:
-		if len(v.Data) == 0 {
-			data, err := mheap.Alloc(m, 8*8)
-			if err != nil {
-				return err
-			}
-			vs := types.DecodeDecimal64Slice(data)
-			v.Col = vs[:1]
-			v.Data = data
-		} else {
-			vs := v.Col.([]types.Decimal64)
-			if n := len(vs); n+1 >= cap(vs) {
-				data, err := mheap.Grow(m, v.Data[:n*8], int64(n+1)*8)
-				if err != nil {
-					return err
-				}
-				mheap.Free(m, v.Data)
-				vs = types.DecodeDecimal64Slice(data)
-				vs = vs[:n]
-				v.Col = vs
-				v.Data = data
-			}
-			vs = append(vs, vs[0])
-			v.Col = vs
-			v.Data = v.Data[:len(vs)*8]
-		}
-	case types.T_decimal128:
-		if len(v.Data) == 0 {
-			data, err := mheap.Alloc(m, 16*8)
-			if err != nil {
-				return err
-			}
-			vs := types.DecodeDecimal128Slice(data)
-			v.Col = vs[:1]
-			v.Data = data
-		} else {
-			vs := v.Col.([]types.Decimal128)
-			if n := len(vs); n+1 >= cap(vs) {
-				data, err := mheap.Grow(m, v.Data[:n*16], int64(n+1)*16)
-				if err != nil {
-					return err
-				}
-				mheap.Free(m, v.Data)
-				vs = types.DecodeDecimal128Slice(data)
-				vs = vs[:n]
-				v.Col = vs
-				v.Data = data
-			}
-			vs = append(vs, vs[0])
-			v.Col = vs
-			v.Data = v.Data[:len(vs)*16]
-		}
+
+	if v.Typ.IsTuple() {
+		panic("unionnull of tuple vector")
 	}
-	nulls.Add(v.Nsp, uint64(Length(v)-1))
+
+	if err := v.extend(1, m); err != nil {
+		return err
+	}
+
+	// XXX old code actually copies, but it is a null, so what
+	// is that good for.
+	//
+	// We don't care if v.GetType() is fixed len or not.  Since
+	// v.area stays valid, a simple slice copy of Varlena works.
+	// src := v.getRawValueAtOrZero(0)
+	// tgt := v.getRawValueAt(-1)
+	// copy(tgt, src)
+
+	pos := uint64(v.Length() - 1)
+	nulls.Add(v.Nsp, pos)
 	return nil
 }
 
-func Union(v, w *Vector, sels []int64, m *mheap.Mheap) error {
+// XXX Old Union is FUBAR
+// Union is just append.
+func Union(v, w *Vector, sels []int64, m *mheap.Mheap) (err error) {
 	if v.Or {
-		return errors.New("Union operation cannot be performed for origin vector")
+		return moerr.NewError(moerr.INTERNAL_ERROR, "Union cannot be performed on orig vector")
 	}
-	defer func() {
-		size := v.Typ.Oid.TypeLen()
-		if v.Typ.Oid != types.T_char && v.Typ.Oid != types.T_varchar && v.Typ.Oid != types.T_blob && v.Typ.Oid != types.T_json {
-			v.Data = v.Data[:reflect.ValueOf(v.Col).Len()*size]
-		}
-	}()
-	oldLen := Length(v)
-	switch v.Typ.Oid {
-	case types.T_bool:
-		cnt := len(sels)
-		ws := w.Col.([]bool)
-		vs := v.Col.([]bool)
-		n := len(vs)
-		if n+cnt >= cap(vs) {
-			data, err := mheap.Grow(m, v.Data[:n], int64(n+cnt))
-			if err != nil {
-				return err
-			}
-			mheap.Free(m, v.Data)
-			vs = types.DecodeBoolSlice(data)
-			v.Data = data
-		}
-		vs = vs[:n+cnt]
-		j := n
-		for i, sel := range sels {
-			vs[i] = ws[sel]
-			j++
-		}
-		v.Col = vs
-	case types.T_int8:
-		cnt := len(sels)
-		ws := w.Col.([]int8)
-		vs := v.Col.([]int8)
-		n := len(vs)
-		if n+cnt >= cap(vs) {
-			data, err := mheap.Grow(m, v.Data[:n], int64(n+cnt))
-			if err != nil {
-				return err
-			}
-			mheap.Free(m, v.Data)
-			vs = types.DecodeInt8Slice(data)
-			v.Data = data
-		}
-		vs = vs[:n+cnt]
-		j := n
-		for i, sel := range sels {
-			vs[i] = ws[sel]
-			j++
-		}
-		v.Col = vs
-	case types.T_int16:
-		cnt := len(sels)
-		ws := w.Col.([]int16)
-		vs := v.Col.([]int16)
-		n := len(vs)
-		if n+cnt >= cap(vs) {
-			data, err := mheap.Grow(m, v.Data[:n], int64(n+cnt)*2)
-			if err != nil {
-				return err
-			}
-			mheap.Free(m, v.Data)
-			vs = types.DecodeInt16Slice(data)
-			v.Data = data
-		}
-		vs = vs[:n+cnt]
-		j := n
-		for i, sel := range sels {
-			vs[i] = ws[sel]
-			j++
-		}
-		v.Col = vs
-	case types.T_int32:
-		cnt := len(sels)
-		ws := w.Col.([]int32)
-		vs := v.Col.([]int32)
-		n := len(vs)
-		if n+cnt >= cap(vs) {
-			data, err := mheap.Grow(m, v.Data[:n], int64(n+cnt)*4)
-			if err != nil {
-				return err
-			}
-			mheap.Free(m, v.Data)
-			vs = types.DecodeInt32Slice(data)
-			v.Data = data
-		}
-		vs = vs[:n+cnt]
-		j := n
-		for i, sel := range sels {
-			vs[i] = ws[sel]
-			j++
-		}
-		v.Col = vs
-	case types.T_int64:
-		cnt := len(sels)
-		ws := w.Col.([]int64)
-		vs := v.Col.([]int64)
-		n := len(vs)
-		if n+cnt >= cap(vs) {
-			data, err := mheap.Grow(m, v.Data[:n], int64(n+cnt)*8)
-			if err != nil {
-				return err
-			}
-			mheap.Free(m, v.Data)
-			vs = types.DecodeInt64Slice(data)
-			v.Data = data
-		}
-		vs = vs[:n+cnt]
-		j := n
-		for i, sel := range sels {
-			vs[i] = ws[sel]
-			j++
-		}
-		v.Col = vs
-	case types.T_uint8:
-		cnt := len(sels)
-		ws := w.Col.([]uint8)
-		vs := v.Col.([]uint8)
-		n := len(vs)
-		if n+cnt >= cap(vs) {
-			data, err := mheap.Grow(m, v.Data[:n], int64(n+cnt))
-			if err != nil {
-				return err
-			}
-			mheap.Free(m, v.Data)
-			vs = types.DecodeUint8Slice(data)
-			v.Data = data
-		}
-		vs = vs[:n+cnt]
-		j := n
-		for i, sel := range sels {
-			vs[i] = ws[sel]
-			j++
-		}
-		v.Col = vs
-	case types.T_uint16:
-		cnt := len(sels)
-		ws := w.Col.([]uint16)
-		vs := v.Col.([]uint16)
-		n := len(vs)
-		if n+cnt >= cap(vs) {
-			data, err := mheap.Grow(m, v.Data[:n], int64(n+cnt)*2)
-			if err != nil {
-				return err
-			}
-			mheap.Free(m, v.Data)
-			vs = types.DecodeUint16Slice(data)
-			v.Data = data
-		}
-		vs = vs[:n+cnt]
-		j := n
-		for i, sel := range sels {
-			vs[i] = ws[sel]
-			j++
-		}
-		v.Col = vs
-	case types.T_uint32:
-		cnt := len(sels)
-		ws := w.Col.([]uint32)
-		vs := v.Col.([]uint32)
-		n := len(vs)
-		if n+cnt >= cap(vs) {
-			data, err := mheap.Grow(m, v.Data[:n], int64(n+cnt)*4)
-			if err != nil {
-				return err
-			}
-			mheap.Free(m, v.Data)
-			vs = types.DecodeUint32Slice(data)
-			v.Data = data
-		}
-		vs = vs[:n+cnt]
-		j := n
-		for i, sel := range sels {
-			vs[i] = ws[sel]
-			j++
-		}
-		v.Col = vs
-	case types.T_uint64:
-		cnt := len(sels)
-		ws := w.Col.([]uint64)
-		vs := v.Col.([]uint64)
-		n := len(vs)
-		if n+cnt >= cap(vs) {
-			data, err := mheap.Grow(m, v.Data[:n], int64(n+cnt)*8)
-			if err != nil {
-				return err
-			}
-			mheap.Free(m, v.Data)
-			vs = types.DecodeUint64Slice(data)
-			v.Data = data
-		}
-		vs = vs[:n+cnt]
-		j := n
-		for i, sel := range sels {
-			vs[i] = ws[sel]
-			j++
-		}
-		v.Col = vs
-	case types.T_float32:
-		cnt := len(sels)
-		ws := w.Col.([]float32)
-		vs := v.Col.([]float32)
-		n := len(vs)
-		if n+cnt >= cap(vs) {
-			data, err := mheap.Grow(m, v.Data[:n], int64(n+cnt)*4)
-			if err != nil {
-				return err
-			}
-			mheap.Free(m, v.Data)
-			vs = types.DecodeFloat32Slice(data)
-			v.Data = data
-		}
-		vs = vs[:n+cnt]
-		j := n
-		for i, sel := range sels {
-			vs[i] = ws[sel]
-			j++
-		}
-		v.Col = vs
-	case types.T_float64:
-		cnt := len(sels)
-		ws := w.Col.([]float64)
-		vs := v.Col.([]float64)
-		n := len(vs)
-		if n+cnt >= cap(vs) {
-			data, err := mheap.Grow(m, v.Data[:n], int64(n+cnt)*8)
-			if err != nil {
-				return err
-			}
-			mheap.Free(m, v.Data)
-			vs = types.DecodeFloat64Slice(data)
-			v.Data = data
-		}
-		vs = vs[:n+cnt]
-		j := n
-		for i, sel := range sels {
-			vs[i] = ws[sel]
-			j++
-		}
-		v.Col = vs
-	case types.T_char, types.T_varchar, types.T_json, types.T_blob:
-		vs, ws := v.Col.(*types.Bytes), w.Col.(*types.Bytes)
-		incSize := 0
-		for _, sel := range sels {
-			incSize += int(ws.Lengths[sel])
-		}
-		if n := len(vs.Data); n+incSize > cap(vs.Data) {
-			data, err := mheap.Grow(m, vs.Data, int64(n+incSize))
-			if err != nil {
-				return err
-			}
-			mheap.Free(m, v.Data)
-			v.Data = data
-			vs.Data = data[:n]
-		}
-		for _, sel := range sels {
-			from := ws.Get(sel)
-			vs.Lengths = append(vs.Lengths, uint32(len(from)))
-			vs.Offsets = append(vs.Offsets, uint32(len(vs.Data)))
-			vs.Data = append(vs.Data, from...)
-		}
-		v.Col = vs
-	case types.T_date:
-		cnt := len(sels)
-		ws := w.Col.([]types.Date)
-		vs := v.Col.([]types.Date)
-		n := len(vs)
-		if n+cnt >= cap(vs) {
-			data, err := mheap.Grow(m, v.Data[:n], int64(n+cnt)*4)
-			if err != nil {
-				return err
-			}
-			mheap.Free(m, v.Data)
-			vs = types.DecodeDateSlice(data)
-			v.Data = data
-		}
-		vs = vs[:n+cnt]
-		j := n
-		for i, sel := range sels {
-			vs[i] = ws[sel]
-			j++
-		}
-		v.Col = vs
-	case types.T_datetime:
-		cnt := len(sels)
-		ws := w.Col.([]types.Datetime)
-		vs := v.Col.([]types.Datetime)
-		n := len(vs)
-		if n+cnt >= cap(vs) {
-			data, err := mheap.Grow(m, v.Data[:n], int64(n+cnt)*8)
-			if err != nil {
-				return err
-			}
-			mheap.Free(m, v.Data)
-			vs = types.DecodeDatetimeSlice(data)
-			v.Data = data
-		}
-		vs = vs[:n+cnt]
-		j := n
-		for i, sel := range sels {
-			vs[i] = ws[sel]
-			j++
-		}
-		v.Col = vs
-	case types.T_timestamp:
-		cnt := len(sels)
-		ws := w.Col.([]types.Timestamp)
-		vs := v.Col.([]types.Timestamp)
-		n := len(vs)
-		if n+cnt >= cap(vs) {
-			data, err := mheap.Grow(m, v.Data[:n], int64(n+cnt)*8)
-			if err != nil {
-				return err
-			}
-			mheap.Free(m, v.Data)
-			vs = types.DecodeTimestampSlice(data)
-			v.Data = data
-		}
-		vs = vs[:n+cnt]
-		j := n
-		for i, sel := range sels {
-			vs[i] = ws[sel]
-			j++
-		}
-		v.Col = vs
+
+	if err = v.extend(len(sels), m); err != nil {
+		return err
 	}
-	if nulls.Any(w.Nsp) {
-		j := uint64(oldLen)
-		for _, sel := range sels {
-			if nulls.Contains(w.Nsp, uint64(sel)) {
-				nulls.Add(v.Nsp, j)
-				j++
+
+	if v.GetType().IsTuple() {
+		panic("union called on tuple vector")
+	} else if v.GetType().IsVarlen() {
+		tgt := MustTCols[types.Varlena](v)
+		next := len(tgt) - len(sels)
+		for idx, sel := range sels {
+			bs := w.GetBytes(sel)
+			tgt[next+idx], v.area, err = types.BuildVarlena(bs, v.area, m)
+			if err != nil {
+				return err
 			}
+		}
+	} else {
+		next := -int64(len(sels))
+		for idx, sel := range sels {
+			src := w.getRawValueAt(sel)
+			tgt := v.getRawValueAt(next + int64(idx))
+			copy(tgt, src)
 		}
 	}
-	return nil
+	return
 }
 
-func UnionBatch(v, w *Vector, offset int64, cnt int, flags []uint8, m *mheap.Mheap) error {
+// XXX Old UnionBatch is FUBAR.
+func UnionBatch(v, w *Vector, offset int64, cnt int, flags []uint8, m *mheap.Mheap) (err error) {
 	if v.Or {
-		return errors.New("UnionOne operation cannot be performed for origin vector")
+		return moerr.NewError(moerr.INTERNAL_ERROR, "UnionBatch cannot be performed on orig vector")
 	}
-	defer func() {
-		size := v.Typ.Oid.TypeLen()
-		if v.Typ.Oid != types.T_char && v.Typ.Oid != types.T_varchar && v.Typ.Oid != types.T_blob && v.Typ.Oid != types.T_json {
-			v.Data = v.Data[:reflect.ValueOf(v.Col).Len()*size]
-		}
-	}()
 
-	oldLen := Length(v)
+	curIdx := v.Length()
+	oldLen := uint64(curIdx)
 
-	switch v.Typ.Oid {
-	case types.T_bool:
-		col := w.Col.([]bool)
-		if len(v.Data) == 0 {
-			newSize := 8
-			for newSize < cnt {
-				newSize <<= 1
-			}
-			data, err := mheap.Alloc(m, int64(newSize))
-			if err != nil {
-				return err
-			}
-			v.Ref = w.Ref
-			vs := types.DecodeBoolSlice(data)[:cnt]
-			for i, j := 0, 0; i < len(flags); i++ {
-				if flags[i] > 0 {
-					vs[j] = col[int(offset)+i]
-					j++
-				}
-			}
-			v.Col = vs
-			v.Data = data
-		} else {
-			vs := v.Col.([]bool)
-			n := len(vs)
-			if n+cnt > cap(vs) {
-				data, err := mheap.Grow(m, v.Data[:n], int64(n+cnt))
-				if err != nil {
-					return err
-				}
-				mheap.Free(m, v.Data)
-				vs = types.DecodeBoolSlice(data)
-				v.Data = data
-			}
-			vs = vs[:n+cnt]
-			for i, j := 0, n; i < len(flags); i++ {
-				if flags[i] > 0 {
-					vs[j] = col[int(offset)+i]
-					j++
-				}
-			}
-			v.Col = vs
-		}
-	case types.T_int8:
-		col := w.Col.([]int8)
-		if len(v.Data) == 0 {
-			newSize := 8
-			for newSize < cnt {
-				newSize <<= 1
-			}
-			data, err := mheap.Alloc(m, int64(newSize))
-			if err != nil {
-				return err
-			}
-			v.Ref = w.Ref
-			vs := types.DecodeInt8Slice(data)[:cnt]
-			for i, j := 0, 0; i < len(flags); i++ {
-				if flags[i] > 0 {
-					vs[j] = col[int(offset)+i]
-					j++
-				}
-			}
-			v.Col = vs
-			v.Data = data
-		} else {
-			vs := v.Col.([]int8)
-			n := len(vs)
-			if n+cnt > cap(vs) {
-				data, err := mheap.Grow(m, v.Data[:n], int64(n+cnt))
-				if err != nil {
-					return err
-				}
-				mheap.Free(m, v.Data)
-				vs = types.DecodeInt8Slice(data)
-				v.Data = data
-			}
-			vs = vs[:n+cnt]
-			for i, j := 0, n; i < len(flags); i++ {
-				if flags[i] > 0 {
-					vs[j] = col[int(offset)+i]
-					j++
-				}
-			}
-			v.Col = vs
-		}
+	if err = v.extend(cnt, m); err != nil {
+		return err
+	}
 
-	case types.T_int16:
-		col := w.Col.([]int16)
-		if len(v.Data) == 0 {
-			newSize := 8
-			for newSize < cnt {
-				newSize <<= 1
-			}
-			data, err := mheap.Alloc(m, int64(newSize)*2)
-			if err != nil {
-				return err
-			}
-			v.Ref = w.Ref
-			vs := types.DecodeInt16Slice(data)[:cnt]
-			for i, j := 0, 0; i < len(flags); i++ {
-				if flags[i] > 0 {
-					vs[j] = col[int(offset)+i]
-					j++
-				}
-			}
-			v.Col = vs
-			v.Data = data
-		} else {
-			vs := v.Col.([]int16)
-			n := len(vs)
-			if n+cnt > cap(vs) {
-				data, err := mheap.Grow(m, v.Data[:n*2], int64(n+cnt)*2)
-				if err != nil {
-					return err
-				}
-				mheap.Free(m, v.Data)
-				vs = types.DecodeInt16Slice(data)
-				v.Data = data
-			}
-			vs = vs[:n+cnt]
-			for i, j := 0, n; i < len(flags); i++ {
-				if flags[i] > 0 {
-					vs[j] = col[int(offset)+i]
-					j++
-				}
-			}
-			v.Col = vs
-		}
-
-	case types.T_int32:
-		col := w.Col.([]int32)
-		if len(v.Data) == 0 {
-			newSize := 8
-			for newSize < cnt {
-				newSize <<= 1
-			}
-			data, err := mheap.Alloc(m, int64(newSize)*4)
-			if err != nil {
-				return err
-			}
-			v.Ref = w.Ref
-			vs := types.DecodeInt32Slice(data)[:cnt]
-			for i, j := 0, 0; i < len(flags); i++ {
-				if flags[i] > 0 {
-					vs[j] = col[int(offset)+i]
-					j++
-				}
-			}
-			v.Col = vs
-			v.Data = data
-		} else {
-			vs := v.Col.([]int32)
-			n := len(vs)
-			if n+cnt > cap(vs) {
-				data, err := mheap.Grow(m, v.Data[:n*4], int64(n+cnt)*4)
-				if err != nil {
-					return err
-				}
-				mheap.Free(m, v.Data)
-				vs = types.DecodeInt32Slice(data)
-				v.Data = data
-			}
-			vs = vs[:n+cnt]
-			for i, j := 0, n; i < len(flags); i++ {
-				if flags[i] > 0 {
-					vs[j] = col[int(offset)+i]
-					j++
-				}
-			}
-			v.Col = vs
-		}
-
-	case types.T_int64:
-		col := w.Col.([]int64)
-		if len(v.Data) == 0 {
-			newSize := 8
-			for newSize < cnt {
-				newSize <<= 1
-			}
-			data, err := mheap.Alloc(m, int64(newSize)*8)
-			if err != nil {
-				return err
-			}
-			v.Ref = w.Ref
-			vs := types.DecodeInt64Slice(data)[:cnt]
-			for i, j := 0, 0; i < len(flags); i++ {
-				if flags[i] > 0 {
-					vs[j] = col[int(offset)+i]
-					j++
-				}
-			}
-			v.Col = vs
-			v.Data = data
-		} else {
-			vs := v.Col.([]int64)
-			n := len(vs)
-			if n+cnt > cap(vs) {
-				data, err := mheap.Grow(m, v.Data[:n*8], int64(n+cnt)*8)
-				if err != nil {
-					return err
-				}
-				mheap.Free(m, v.Data)
-				vs = types.DecodeInt64Slice(data)
-				v.Data = data
-			}
-			vs = vs[:n+cnt]
-			for i, j := 0, n; i < len(flags); i++ {
-				if flags[i] > 0 {
-					vs[j] = col[int(offset)+i]
-					j++
-				}
-			}
-			v.Col = vs
-		}
-
-	case types.T_uint8:
-		col := w.Col.([]uint8)
-		if len(v.Data) == 0 {
-			newSize := 8
-			for newSize < cnt {
-				newSize <<= 1
-			}
-			data, err := mheap.Alloc(m, int64(newSize))
-			if err != nil {
-				return err
-			}
-			v.Ref = w.Ref
-			vs := types.DecodeUint8Slice(data)[:cnt]
-			for i, j := 0, 0; i < len(flags); i++ {
-				if flags[i] > 0 {
-					vs[j] = col[int(offset)+i]
-					j++
-				}
-			}
-			v.Col = vs
-			v.Data = data
-		} else {
-			vs := v.Col.([]uint8)
-			n := len(vs)
-			if n+cnt > cap(vs) {
-				data, err := mheap.Grow(m, v.Data[:n], int64(n+cnt))
-				if err != nil {
-					return err
-				}
-				mheap.Free(m, v.Data)
-				vs = types.DecodeUint8Slice(data)
-				v.Data = data
-			}
-			vs = vs[:n+cnt]
-			for i, j := 0, n; i < len(flags); i++ {
-				if flags[i] > 0 {
-					vs[j] = col[int(offset)+i]
-					j++
-				}
-			}
-			v.Col = vs
-		}
-
-	case types.T_uint16:
-		col := w.Col.([]uint16)
-		if len(v.Data) == 0 {
-			newSize := 8
-			for newSize < cnt {
-				newSize <<= 1
-			}
-			data, err := mheap.Alloc(m, int64(newSize)*2)
-			if err != nil {
-				return err
-			}
-			v.Ref = w.Ref
-			vs := types.DecodeUint16Slice(data)[:cnt]
-			for i, j := 0, 0; i < len(flags); i++ {
-				if flags[i] > 0 {
-					vs[j] = col[int(offset)+i]
-					j++
-				}
-			}
-			v.Col = vs
-			v.Data = data
-		} else {
-			vs := v.Col.([]uint16)
-			n := len(vs)
-			if n+cnt > cap(vs) {
-				data, err := mheap.Grow(m, v.Data[:n*2], int64(n+cnt)*2)
-				if err != nil {
-					return err
-				}
-				mheap.Free(m, v.Data)
-				vs = types.DecodeUint16Slice(data)
-				v.Data = data
-			}
-			vs = vs[:n+cnt]
-			for i, j := 0, n; i < len(flags); i++ {
-				if flags[i] > 0 {
-					vs[j] = col[int(offset)+i]
-					j++
-				}
-			}
-			v.Col = vs
-		}
-
-	case types.T_uint32:
-		col := w.Col.([]uint32)
-		if len(v.Data) == 0 {
-			newSize := 8
-			for newSize < cnt {
-				newSize <<= 1
-			}
-			data, err := mheap.Alloc(m, int64(newSize)*4)
-			if err != nil {
-				return err
-			}
-			v.Ref = w.Ref
-			vs := types.DecodeUint32Slice(data)[:cnt]
-			for i, j := 0, 0; i < len(flags); i++ {
-				if flags[i] > 0 {
-					vs[j] = col[int(offset)+i]
-					j++
-				}
-			}
-			v.Col = vs
-			v.Data = data
-		} else {
-			vs := v.Col.([]uint32)
-			n := len(vs)
-			if n+cnt > cap(vs) {
-				data, err := mheap.Grow(m, v.Data[:n*4], int64(n+cnt)*4)
-				if err != nil {
-					return err
-				}
-				mheap.Free(m, v.Data)
-				vs = types.DecodeUint32Slice(data)
-				v.Col = vs
-				v.Data = data
-			}
-			vs = vs[:n+cnt]
-			for i, j := 0, n; i < len(flags); i++ {
-				if flags[i] > 0 {
-					vs[j] = col[int(offset)+i]
-					j++
-				}
-			}
-			v.Col = vs
-		}
-
-	case types.T_uint64:
-		col := w.Col.([]uint64)
-		if len(v.Data) == 0 {
-			newSize := 8
-			for newSize < cnt {
-				newSize <<= 1
-			}
-			data, err := mheap.Alloc(m, int64(newSize)*8)
-			if err != nil {
-				return err
-			}
-			v.Ref = w.Ref
-			vs := types.DecodeUint64Slice(data)[:cnt]
-			for i, j := 0, 0; i < len(flags); i++ {
-				if flags[i] > 0 {
-					vs[j] = col[int(offset)+i]
-					j++
-				}
-			}
-			v.Col = vs
-			v.Data = data
-		} else {
-			vs := v.Col.([]uint64)
-			n := len(vs)
-			if n+cnt > cap(vs) {
-				data, err := mheap.Grow(m, v.Data[:n*8], int64(n+cnt)*8)
-				if err != nil {
-					return err
-				}
-				mheap.Free(m, v.Data)
-				vs = types.DecodeUint64Slice(data)
-				v.Data = data
-			}
-			vs = vs[:n+cnt]
-			for i, j := 0, n; i < len(flags); i++ {
-				if flags[i] > 0 {
-					vs[j] = col[int(offset)+i]
-					j++
-				}
-			}
-			v.Col = vs
-		}
-
-	case types.T_float32:
-		col := w.Col.([]float32)
-		if len(v.Data) == 0 {
-			newSize := 8
-			for newSize < cnt {
-				newSize <<= 1
-			}
-			data, err := mheap.Alloc(m, int64(newSize)*4)
-			if err != nil {
-				return err
-			}
-			v.Ref = w.Ref
-			vs := types.DecodeFloat32Slice(data)[:cnt]
-			for i, j := 0, 0; i < len(flags); i++ {
-				if flags[i] > 0 {
-					vs[j] = col[int(offset)+i]
-					j++
-				}
-			}
-			v.Col = vs
-			v.Data = data
-		} else {
-			vs := v.Col.([]float32)
-			n := len(vs)
-			if n+cnt > cap(vs) {
-				data, err := mheap.Grow(m, v.Data[:n*4], int64(n+cnt)*4)
-				if err != nil {
-					return err
-				}
-				mheap.Free(m, v.Data)
-				vs = types.DecodeFloat32Slice(data)
-				v.Data = data
-			}
-			vs = vs[:n+cnt]
-			for i, j := 0, n; i < len(flags); i++ {
-				if flags[i] > 0 {
-					vs[j] = col[int(offset)+i]
-					j++
-				}
-			}
-			v.Col = vs
-		}
-
-	case types.T_float64:
-		col := w.Col.([]float64)
-		if len(v.Data) == 0 {
-			newSize := 8
-			for newSize < cnt {
-				newSize <<= 1
-			}
-			data, err := mheap.Alloc(m, int64(newSize)*8)
-			if err != nil {
-				return err
-			}
-			v.Ref = w.Ref
-			vs := types.DecodeFloat64Slice(data)[:cnt]
-			for i, j := 0, 0; i < len(flags); i++ {
-				if flags[i] > 0 {
-					vs[j] = col[int(offset)+i]
-					j++
-				}
-			}
-			v.Col = vs
-			v.Data = data
-		} else {
-			vs := v.Col.([]float64)
-			n := len(vs)
-			if n+cnt > cap(vs) {
-				data, err := mheap.Grow(m, v.Data[:n*8], int64(n+cnt)*8)
-				if err != nil {
-					return err
-				}
-				mheap.Free(m, v.Data)
-				vs = types.DecodeFloat64Slice(data)
-				v.Data = data
-			}
-			vs = vs[:n+cnt]
-			for i, j := 0, n; i < len(flags); i++ {
-				if flags[i] > 0 {
-					vs[j] = col[int(offset)+i]
-					j++
-				}
-			}
-			v.Col = vs
-		}
-
-	case types.T_tuple:
-		v.Ref = w.Ref
-		vs, ws := v.Col.([][]interface{}), w.Col.([][]interface{})
+	if v.GetType().IsTuple() {
+		vs := v.Col.([][]interface{})
+		ws := w.Col.([][]interface{})
 		for i, flag := range flags {
 			if flag > 0 {
 				vs = append(vs, ws[int(offset)+i])
 			}
 		}
 		v.Col = vs
-
-	case types.T_char, types.T_varchar, types.T_json, types.T_blob:
-		vs, ws := v.Col.(*types.Bytes), w.Col.(*types.Bytes)
-		incSize := 0
-		for i, flag := range flags {
-			if flag > 0 {
-				incSize += int(ws.Lengths[int(offset)+i])
+	} else if v.GetType().IsVarlen() {
+		tgt := MustTCols[types.Varlena](v)
+		for idx, flg := range flags {
+			if flg > 0 {
+				bs := w.GetBytes(offset + int64(idx))
+				tgt[curIdx], v.area, err = types.BuildVarlena(bs, v.area, m)
+				curIdx += 1
 			}
 		}
-
-		if len(v.Data) == 0 {
-			newSize := 8
-			for newSize < incSize {
-				newSize <<= 1
+	} else {
+		for idx, flg := range flags {
+			if flg > 0 {
+				src := w.getRawValueAt(offset + int64(idx))
+				tgt := v.getRawValueAt(int64(curIdx))
+				copy(tgt, src)
+				curIdx += 1
 			}
-			data, err := mheap.Alloc(m, int64(newSize))
-			if err != nil {
-				return err
-			}
-			v.Ref = w.Ref
-			v.Data = data
-			vs.Data = data[:0]
-		} else if n := len(vs.Data); n+incSize > cap(vs.Data) {
-			data, err := mheap.Grow(m, vs.Data, int64(n+incSize))
-			if err != nil {
-				return err
-			}
-			mheap.Free(m, v.Data)
-			v.Data = data
-			vs.Data = data[:n]
-		}
-
-		for i, flag := range flags {
-			if flag > 0 {
-				from := ws.Get(offset + int64(i))
-				vs.Lengths = append(vs.Lengths, uint32(len(from)))
-				vs.Offsets = append(vs.Offsets, uint32(len(vs.Data)))
-				vs.Data = append(vs.Data, from...)
-			}
-		}
-		v.Col = vs
-
-	case types.T_date:
-		col := w.Col.([]types.Date)
-		if len(v.Data) == 0 {
-			newSize := 8
-			for newSize < cnt {
-				newSize <<= 1
-			}
-			data, err := mheap.Alloc(m, int64(newSize)*4)
-			if err != nil {
-				return err
-			}
-			v.Ref = w.Ref
-			vs := types.DecodeDateSlice(data)[:cnt]
-			for i, j := 0, 0; i < len(flags); i++ {
-				if flags[i] > 0 {
-					vs[j] = col[int(offset)+i]
-					j++
-				}
-			}
-			v.Col = vs
-			v.Data = data
-		} else {
-			vs := v.Col.([]types.Date)
-			n := len(vs)
-			if n+cnt > cap(vs) {
-				data, err := mheap.Grow(m, v.Data[:n*4], int64(n+cnt)*4)
-				if err != nil {
-					return err
-				}
-				mheap.Free(m, v.Data)
-				vs = types.DecodeDateSlice(data)
-				v.Data = data
-			}
-			vs = vs[:n+cnt]
-			for i, j := 0, n; i < len(flags); i++ {
-				if flags[i] > 0 {
-					vs[j] = col[int(offset)+i]
-					j++
-				}
-			}
-			v.Col = vs
-		}
-
-	case types.T_datetime:
-		col := w.Col.([]types.Datetime)
-		if len(v.Data) == 0 {
-			newSize := 8
-			for newSize < cnt {
-				newSize <<= 1
-			}
-			data, err := mheap.Alloc(m, int64(newSize)*8)
-			if err != nil {
-				return err
-			}
-			v.Ref = w.Ref
-			vs := types.DecodeDatetimeSlice(data)[:cnt]
-			for i, j := 0, 0; i < len(flags); i++ {
-				if flags[i] > 0 {
-					vs[j] = col[int(offset)+i]
-					j++
-				}
-			}
-			v.Col = vs
-			v.Data = data
-		} else {
-			vs := v.Col.([]types.Datetime)
-			n := len(vs)
-			if n+cnt > cap(vs) {
-				data, err := mheap.Grow(m, v.Data[:n*8], int64(n+cnt)*8)
-				if err != nil {
-					return err
-				}
-				mheap.Free(m, v.Data)
-				vs = types.DecodeDatetimeSlice(data)
-				v.Data = data
-			}
-			vs = vs[:n+cnt]
-			for i, j := 0, n; i < len(flags); i++ {
-				if flags[i] > 0 {
-					vs[j] = col[int(offset)+i]
-					j++
-				}
-			}
-			v.Col = vs
-		}
-
-	case types.T_timestamp:
-		col := w.Col.([]types.Timestamp)
-		if len(v.Data) == 0 {
-			newSize := 8
-			for newSize < cnt {
-				newSize <<= 1
-			}
-			data, err := mheap.Alloc(m, int64(newSize)*8)
-			if err != nil {
-				return err
-			}
-			v.Ref = w.Ref
-			vs := types.DecodeTimestampSlice(data)[:cnt]
-			for i, j := 0, 0; i < len(flags); i++ {
-				if flags[i] > 0 {
-					vs[j] = col[int(offset)+i]
-					j++
-				}
-			}
-			v.Col = vs
-			v.Data = data
-		} else {
-			vs := v.Col.([]types.Timestamp)
-			n := len(vs)
-			if n+cnt > cap(vs) {
-				data, err := mheap.Grow(m, v.Data[:n*8], int64(n+cnt)*8)
-				if err != nil {
-					return err
-				}
-				mheap.Free(m, v.Data)
-				vs = types.DecodeTimestampSlice(data)
-				v.Data = data
-			}
-			vs = vs[:n+cnt]
-			for i, j := 0, n; i < len(flags); i++ {
-				if flags[i] > 0 {
-					vs[j] = col[int(offset)+i]
-					j++
-				}
-			}
-			v.Col = vs
-		}
-
-	case types.T_decimal64:
-		col := w.Col.([]types.Decimal64)
-		if len(v.Data) == 0 {
-			newSize := 8
-			for newSize < cnt {
-				newSize <<= 1
-			}
-			data, err := mheap.Alloc(m, int64(newSize)*8)
-			if err != nil {
-				return err
-			}
-			v.Ref = w.Ref
-			vs := types.DecodeDecimal64Slice(data)[:cnt]
-			for i, j := 0, 0; i < len(flags); i++ {
-				if flags[i] > 0 {
-					vs[j] = col[int(offset)+i]
-					j++
-				}
-			}
-			v.Col = vs
-			v.Data = data
-		} else {
-			vs := v.Col.([]types.Decimal64)
-			n := len(vs)
-			if n+cnt > cap(vs) {
-				data, err := mheap.Grow(m, v.Data[:n*8], int64(n+cnt)*8)
-				if err != nil {
-					return err
-				}
-				mheap.Free(m, v.Data)
-				vs = types.DecodeDecimal64Slice(data)
-				v.Data = data
-			}
-			vs = vs[:n+cnt]
-			for i, j := 0, n; i < len(flags); i++ {
-				if flags[i] > 0 {
-					vs[j] = col[int(offset)+i]
-					j++
-				}
-			}
-			v.Col = vs
-		}
-	case types.T_decimal128:
-		col := w.Col.([]types.Decimal128)
-		if len(v.Data) == 0 {
-			newSize := 8
-			for newSize < cnt {
-				newSize <<= 1
-			}
-			data, err := mheap.Alloc(m, int64(newSize)*16)
-			if err != nil {
-				return err
-			}
-			v.Ref = w.Ref
-			vs := types.DecodeDecimal128Slice(data)[:cnt]
-			for i, j := 0, 0; i < len(flags); i++ {
-				if flags[i] > 0 {
-					vs[j] = col[int(offset)+i]
-					j++
-				}
-			}
-			v.Col = vs
-			v.Data = data
-		} else {
-			vs := v.Col.([]types.Decimal128)
-			n := len(vs)
-			if n+cnt > cap(vs) {
-				data, err := mheap.Grow(m, v.Data[:n*16], int64(n+cnt)*16)
-				if err != nil {
-					return err
-				}
-				mheap.Free(m, v.Data)
-				vs = types.DecodeDecimal128Slice(data)
-				v.Data = data
-			}
-			vs = vs[:n+cnt]
-			for i, j := 0, n; i < len(flags); i++ {
-				if flags[i] > 0 {
-					vs[j] = col[int(offset)+i]
-					j++
-				}
-			}
-			v.Col = vs
-		}
-
-	}
-
-	for i, j := 0, uint64(oldLen); i < len(flags); i++ {
-		if flags[i] > 0 {
-			if nulls.Contains(w.Nsp, uint64(offset)+uint64(i)) {
-				nulls.Add(v.Nsp, j)
-			}
-			j++
 		}
 	}
-	return nil
+
+	if nulls.Any(w.Nsp) {
+		for idx, flg := range flags {
+			if flg > 0 {
+				if nulls.Contains(w.Nsp, uint64(offset)+uint64(idx)) {
+					nulls.Add(v.Nsp, oldLen)
+				}
+				// Advance oldLen regardless if it is null
+				oldLen += 1
+			}
+		}
+	}
+
+	return
 }
 
-func (v *Vector) Show() ([]byte, error) {
-	var buf bytes.Buffer
+// XXX Old Reset is FUBAR FUBAR.   I will put the code here just for fun.
+func Reset(v *Vector) {
+	/*
+		switch v.Typ.Oid {
+		case types.T_char, types.T_varchar, types.T_json, types.T_blob:
+			v.Col.(*types.Bytes).Reset()
+		default:
+			// WTF is going on?
+			*(*int)(unsafe.Pointer(uintptr((*(*emptyIntervade)(unsafe.Pointer(&v.Col))).word) + uintptr(strconv.IntSize>>3))) = 0
+		}
+	*/
 
-	switch v.Typ.Oid {
-	case types.T_bool:
-		buf.Write(types.EncodeType(v.Typ))
-		nb, err := v.Nsp.Show()
-		if err != nil {
-			return nil, err
-		}
-		buf.Write(types.EncodeUint32(uint32(len(nb))))
-		if len(nb) > 0 {
-			buf.Write(nb)
-		}
-		buf.Write(types.EncodeBoolSlice(v.Col.([]bool)))
-		return buf.Bytes(), nil
-	case types.T_int8:
-		buf.Write(types.EncodeType(v.Typ))
-		nb, err := v.Nsp.Show()
-		if err != nil {
-			return nil, err
-		}
-		buf.Write(types.EncodeUint32(uint32(len(nb))))
-		if len(nb) > 0 {
-			buf.Write(nb)
-		}
-		buf.Write(types.EncodeInt8Slice(v.Col.([]int8)))
-		return buf.Bytes(), nil
-	case types.T_int16:
-		buf.Write(types.EncodeType(v.Typ))
-		nb, err := v.Nsp.Show()
-		if err != nil {
-			return nil, err
-		}
-		buf.Write(types.EncodeUint32(uint32(len(nb))))
-		if len(nb) > 0 {
-			buf.Write(nb)
-		}
-		buf.Write(types.EncodeInt16Slice(v.Col.([]int16)))
-		return buf.Bytes(), nil
-	case types.T_int32:
-		buf.Write(types.EncodeType(v.Typ))
-		nb, err := v.Nsp.Show()
-		if err != nil {
-			return nil, err
-		}
-		buf.Write(types.EncodeUint32(uint32(len(nb))))
-		if len(nb) > 0 {
-			buf.Write(nb)
-		}
-		buf.Write(types.EncodeInt32Slice(v.Col.([]int32)))
-		return buf.Bytes(), nil
-	case types.T_int64:
-		buf.Write(types.EncodeType(v.Typ))
-		nb, err := v.Nsp.Show()
-		if err != nil {
-			return nil, err
-		}
-		buf.Write(types.EncodeUint32(uint32(len(nb))))
-		if len(nb) > 0 {
-			buf.Write(nb)
-		}
-		buf.Write(types.EncodeInt64Slice(v.Col.([]int64)))
-		return buf.Bytes(), nil
-	case types.T_uint8:
-		buf.Write(types.EncodeType(v.Typ))
-		nb, err := v.Nsp.Show()
-		if err != nil {
-			return nil, err
-		}
-		buf.Write(types.EncodeUint32(uint32(len(nb))))
-		if len(nb) > 0 {
-			buf.Write(nb)
-		}
-		buf.Write(types.EncodeUint8Slice(v.Col.([]uint8)))
-		return buf.Bytes(), nil
-	case types.T_uint16:
-		buf.Write(types.EncodeType(v.Typ))
-		nb, err := v.Nsp.Show()
-		if err != nil {
-			return nil, err
-		}
-		buf.Write(types.EncodeUint32(uint32(len(nb))))
-		if len(nb) > 0 {
-			buf.Write(nb)
-		}
-		buf.Write(types.EncodeUint16Slice(v.Col.([]uint16)))
-		return buf.Bytes(), nil
-	case types.T_uint32:
-		buf.Write(types.EncodeType(v.Typ))
-		nb, err := v.Nsp.Show()
-		if err != nil {
-			return nil, err
-		}
-		buf.Write(types.EncodeUint32(uint32(len(nb))))
-		if len(nb) > 0 {
-			buf.Write(nb)
-		}
-		buf.Write(types.EncodeUint32Slice(v.Col.([]uint32)))
-		return buf.Bytes(), nil
-	case types.T_uint64:
-		buf.Write(types.EncodeType(v.Typ))
-		nb, err := v.Nsp.Show()
-		if err != nil {
-			return nil, err
-		}
-		buf.Write(types.EncodeUint32(uint32(len(nb))))
-		if len(nb) > 0 {
-			buf.Write(nb)
-		}
-		buf.Write(types.EncodeUint64Slice(v.Col.([]uint64)))
-		return buf.Bytes(), nil
-	case types.T_float32:
-		buf.Write(types.EncodeType(v.Typ))
-		nb, err := v.Nsp.Show()
-		if err != nil {
-			return nil, err
-		}
-		buf.Write(types.EncodeUint32(uint32(len(nb))))
-		if len(nb) > 0 {
-			buf.Write(nb)
-		}
-		buf.Write(types.EncodeFloat32Slice(v.Col.([]float32)))
-		return buf.Bytes(), nil
-	case types.T_float64:
-		buf.Write(types.EncodeType(v.Typ))
-		nb, err := v.Nsp.Show()
-		if err != nil {
-			return nil, err
-		}
-		buf.Write(types.EncodeUint32(uint32(len(nb))))
-		if len(nb) > 0 {
-			buf.Write(nb)
-		}
-		buf.Write(types.EncodeFloat64Slice(v.Col.([]float64)))
-		return buf.Bytes(), nil
-	case types.T_date:
-		buf.Write(types.EncodeType(v.Typ))
-		nb, err := v.Nsp.Show()
-		if err != nil {
-			return nil, err
-		}
-		buf.Write(types.EncodeUint32(uint32(len(nb))))
-		if len(nb) > 0 {
-			buf.Write(nb)
-		}
-		buf.Write(types.EncodeDateSlice(v.Col.([]types.Date)))
-		return buf.Bytes(), nil
-	case types.T_datetime:
-		buf.Write(types.EncodeType(v.Typ))
-		nb, err := v.Nsp.Show()
-		if err != nil {
-			return nil, err
-		}
-		buf.Write(types.EncodeUint32(uint32(len(nb))))
-		if len(nb) > 0 {
-			buf.Write(nb)
-		}
-		buf.Write(types.EncodeDatetimeSlice(v.Col.([]types.Datetime)))
-		return buf.Bytes(), nil
-	case types.T_timestamp:
-		buf.Write(types.EncodeType(v.Typ))
-		nb, err := v.Nsp.Show()
-		if err != nil {
-			return nil, err
-		}
-		buf.Write(types.EncodeUint32(uint32(len(nb))))
-		if len(nb) > 0 {
-			buf.Write(nb)
-		}
-		buf.Write(types.EncodeTimestampSlice(v.Col.([]types.Timestamp)))
-		return buf.Bytes(), nil
-	case types.T_sel:
-		buf.Write(types.EncodeType(v.Typ))
-		nb, err := v.Nsp.Show()
-		if err != nil {
-			return nil, err
-		}
-		buf.Write(types.EncodeUint32(uint32(len(nb))))
-		if len(nb) > 0 {
-			buf.Write(nb)
-		}
-		buf.Write(types.EncodeInt64Slice(v.Col.([]int64)))
-		return buf.Bytes(), nil
-	case types.T_char, types.T_varchar, types.T_json, types.T_blob:
-		buf.Write(types.EncodeType(v.Typ))
-		nb, err := v.Nsp.Show()
-		if err != nil {
-			return nil, err
-		}
-		buf.Write(types.EncodeUint32(uint32(len(nb))))
-		if len(nb) > 0 {
-			buf.Write(nb)
-		}
-		Col := v.Col.(*types.Bytes)
-		cnt := int32(len(Col.Offsets))
-		buf.Write(types.EncodeInt32(cnt))
-		if cnt == 0 {
-			return buf.Bytes(), nil
-		}
-		buf.Write(types.EncodeUint32Slice(Col.Lengths))
-		buf.Write(Col.Data)
-		return buf.Bytes(), nil
-	case types.T_tuple:
-		buf.Write(types.EncodeType(v.Typ))
-		nb, err := v.Nsp.Show()
-		if err != nil {
-			return nil, err
-		}
-		buf.Write(types.EncodeUint32(uint32(len(nb))))
-		if len(nb) > 0 {
-			buf.Write(nb)
-		}
-		data, err := types.Encode(v.Col.([][]interface{}))
-		if err != nil {
-			return nil, err
-		}
-		buf.Write(data)
-		return buf.Bytes(), nil
-	case types.T_decimal64:
-		buf.Write(types.EncodeType(v.Typ))
-		nb, err := v.Nsp.Show()
-		if err != nil {
-			return nil, err
-		}
-		buf.Write(types.EncodeUint32(uint32(len(nb))))
-		if len(nb) > 0 {
-			buf.Write(nb)
-		}
-		buf.Write(types.EncodeDecimal64Slice(v.Col.([]types.Decimal64)))
-		return buf.Bytes(), nil
-	case types.T_decimal128:
-		buf.Write(types.EncodeType(v.Typ))
-		nb, err := v.Nsp.Show()
-		if err != nil {
-			return nil, err
-		}
-		buf.Write(types.EncodeUint32(uint32(len(nb))))
-		if len(nb) > 0 {
-			buf.Write(nb)
-		}
-		buf.Write(types.EncodeDecimal128Slice(v.Col.([]types.Decimal128)))
-		return buf.Bytes(), nil
-	default:
-		return nil, fmt.Errorf("unsupport types type %s", v.Typ.Oid)
-	}
+	// XXX Reset does not do mem accounting?
+	// I have no idea what is the purpose of Reset, so let me just Free it.
+	// Maybe Reset want to keep v.Data and v.area to save an allocation.
+	// Let me do that ...
+	v.setupColFromData(0, 0)
+	v.area = v.area[:0]
+	// XXX What about Nsp? Original code does not do anything to Nsp, which seems OK assuming
+	// that will be set when we add data and we only test null within range of len(v.Col)
+	// but who knows ...
 }
 
-func (v *Vector) Read(data []byte) error {
-	v.Data = data
-	typ := types.DecodeType(data[:types.TSize])
-	data = data[types.TSize:]
-	v.Typ = typ
-	v.Or = true
-	v.Nsp = &nulls.Nulls{}
-	switch typ.Oid {
-	case types.T_bool:
-		size := types.DecodeUint32(data)
-		if size == 0 {
-			v.Data = data[4:]
-			v.Col = types.DecodeBoolSlice(data[4:])
+// XXX What are these stuff, who use it?
+func VecToString[T types.FixedSizeT](v *Vector) string {
+	col := MustTCols[T](v)
+	if len(col) == 1 {
+		if nulls.Contains(v.Nsp, 0) {
+			return "null"
 		} else {
-			data = data[4:]
-			if err := v.Nsp.Read(data[:size]); err != nil {
-				return err
-			}
-			v.Data = data[size:]
-			v.Col = types.DecodeBoolSlice(data[size:])
-		}
-	case types.T_int8:
-		size := types.DecodeUint32(data)
-		if size == 0 {
-			v.Data = data[4:]
-			v.Col = types.DecodeInt8Slice(data[4:])
-		} else {
-			data = data[4:]
-			if err := v.Nsp.Read(data[:size]); err != nil {
-				return err
-			}
-			v.Data = data[size:]
-			v.Col = types.DecodeInt8Slice(data[size:])
-		}
-	case types.T_int16:
-		size := types.DecodeUint32(data)
-		if size == 0 {
-			v.Data = data[4:]
-			v.Col = types.DecodeInt16Slice(data[4:])
-		} else {
-			data = data[4:]
-			if err := v.Nsp.Read(data[:size]); err != nil {
-				return err
-			}
-			v.Data = data[size:]
-			v.Col = types.DecodeInt16Slice(data[size:])
-		}
-	case types.T_int32:
-		size := types.DecodeUint32(data)
-		if size == 0 {
-			v.Data = data[4:]
-			v.Col = types.DecodeInt32Slice(data[4:])
-		} else {
-			data = data[4:]
-			if err := v.Nsp.Read(data[:size]); err != nil {
-				return err
-			}
-			v.Data = data[size:]
-			v.Col = types.DecodeInt32Slice(data[size:])
-		}
-	case types.T_int64:
-		size := types.DecodeUint32(data)
-		if size == 0 {
-			v.Data = data[4:]
-			v.Col = types.DecodeInt64Slice(data[4:])
-		} else {
-			data = data[4:]
-			if err := v.Nsp.Read(data[:size]); err != nil {
-				return err
-			}
-			v.Data = data[size:]
-			v.Col = types.DecodeInt64Slice(data[size:])
-		}
-	case types.T_uint8:
-		size := types.DecodeUint32(data)
-		if size == 0 {
-			v.Data = data[4:]
-			v.Col = types.DecodeUint8Slice(data[4:])
-		} else {
-			data = data[4:]
-			if err := v.Nsp.Read(data[:size]); err != nil {
-				return err
-			}
-			v.Data = data[size:]
-			v.Col = types.DecodeUint8Slice(data[size:])
-		}
-	case types.T_uint16:
-		size := types.DecodeUint32(data)
-		if size == 0 {
-			v.Data = data[4:]
-			v.Col = types.DecodeUint16Slice(data[4:])
-		} else {
-			data = data[4:]
-			if err := v.Nsp.Read(data[:size]); err != nil {
-				return err
-			}
-			v.Data = data[size:]
-			v.Col = types.DecodeUint16Slice(data[size:])
-		}
-	case types.T_uint32:
-		size := types.DecodeUint32(data)
-		if size == 0 {
-			v.Data = data[4:]
-			v.Col = types.DecodeUint32Slice(data[4:])
-		} else {
-			data = data[4:]
-			if err := v.Nsp.Read(data[:size]); err != nil {
-				return err
-			}
-			v.Data = data[size:]
-			v.Col = types.DecodeUint32Slice(data[size:])
-		}
-	case types.T_uint64:
-		size := types.DecodeUint32(data)
-		if size == 0 {
-			v.Data = data[4:]
-			v.Col = types.DecodeUint64Slice(data[4:])
-		} else {
-			data = data[4:]
-			if err := v.Nsp.Read(data[:size]); err != nil {
-				return err
-			}
-			v.Data = data[size:]
-			v.Col = types.DecodeUint64Slice(data[size:])
-		}
-	case types.T_float32:
-		size := types.DecodeUint32(data)
-		if size == 0 {
-			v.Data = data[4:]
-			v.Col = types.DecodeFloat32Slice(data[4:])
-		} else {
-			data = data[4:]
-			if err := v.Nsp.Read(data[:size]); err != nil {
-				return err
-			}
-			v.Data = data[size:]
-			v.Col = types.DecodeFloat32Slice(data[size:])
-		}
-	case types.T_float64:
-		size := types.DecodeUint32(data)
-		if size == 0 {
-			v.Data = data[4:]
-			v.Col = types.DecodeFloat64Slice(data[4:])
-		} else {
-			data = data[4:]
-			if err := v.Nsp.Read(data[:size]); err != nil {
-				return err
-			}
-			v.Data = data[size:]
-			v.Col = types.DecodeFloat64Slice(data[size:])
-		}
-	case types.T_date:
-		size := types.DecodeUint32(data)
-		if size == 0 {
-			v.Data = data[4:]
-			v.Col = types.DecodeDateSlice(data[4:])
-		} else {
-			data = data[4:]
-			if err := v.Nsp.Read(data[:size]); err != nil {
-				return err
-			}
-			v.Data = data[size:]
-			v.Col = types.DecodeDateSlice(data[size:])
-		}
-	case types.T_datetime:
-		size := types.DecodeUint32(data)
-		if size == 0 {
-			v.Data = data[4:]
-			v.Col = types.DecodeDatetimeSlice(data[4:])
-		} else {
-			data = data[4:]
-			if err := v.Nsp.Read(data[:size]); err != nil {
-				return err
-			}
-			v.Data = data[size:]
-			v.Col = types.DecodeDatetimeSlice(data[size:])
-		}
-	case types.T_timestamp:
-		size := types.DecodeUint32(data)
-		if size == 0 {
-			v.Data = data[4:]
-			v.Col = types.DecodeTimestampSlice(data[4:])
-		} else {
-			data = data[4:]
-			if err := v.Nsp.Read(data[:size]); err != nil {
-				return err
-			}
-			v.Data = data[size:]
-			v.Col = types.DecodeTimestampSlice(data[size:])
-		}
-	case types.T_char, types.T_varchar, types.T_json, types.T_blob:
-		if v.Col == nil {
-			v.Col = &types.Bytes{}
-		}
-		Col := v.Col.(*types.Bytes)
-		Col.Reset()
-		size := types.DecodeUint32(data)
-		data = data[4:]
-		if size > 0 {
-			if err := v.Nsp.Read(data[:size]); err != nil {
-				return err
-			}
-			data = data[size:]
-		}
-		cnt := types.DecodeInt32(data)
-		if cnt == 0 {
-			break
-		}
-		data = data[4:]
-		Col.Offsets = make([]uint32, cnt)
-		Col.Lengths = types.DecodeUint32Slice(data[:4*cnt])
-		Col.Data = data[4*cnt:]
-		{
-			o := uint32(0)
-			for i, n := range Col.Lengths {
-				Col.Offsets[i] = o
-				o += n
-			}
-		}
-	case types.T_tuple:
-		col := v.Col.([][]interface{})
-		size := types.DecodeUint32(data)
-		data = data[4:]
-		if size > 0 {
-			if err := v.Nsp.Read(data[:size]); err != nil {
-				return err
-			}
-			data = data[size:]
-		}
-		cnt := types.DecodeInt32(data)
-		if cnt == 0 {
-			break
-		}
-		if err := types.Decode(data, &col); err != nil {
-			return err
-		}
-		v.Col = col
-	case types.T_decimal64:
-		size := types.DecodeUint32(data)
-		if size == 0 {
-			v.Data = data[4:]
-			v.Col = types.DecodeDecimal64Slice(data[4:])
-		} else {
-			data = data[4:]
-			if err := v.Nsp.Read(data[:size]); err != nil {
-				return err
-			}
-			v.Data = data[size:]
-			v.Col = types.DecodeDecimal64Slice(data[size:])
-		}
-	case types.T_decimal128:
-		size := types.DecodeUint32(data)
-		if size == 0 {
-			v.Data = data[4:]
-			v.Col = types.DecodeDecimal128Slice(data[4:])
-		} else {
-			data = data[4:]
-			if err := v.Nsp.Read(data[:size]); err != nil {
-				return err
-			}
-			v.Data = data[size:]
-			v.Col = types.DecodeDecimal128Slice(data[size:])
+			return fmt.Sprintf("%v", col[0])
 		}
 	}
-	return nil
+	// XXX Really?  What is this ...
+	return fmt.Sprintf("%v-%s", v.Col, v.Nsp)
 }
 
 func (v *Vector) String() string {
 	switch v.Typ.Oid {
 	case types.T_bool:
-		col := v.Col.([]bool)
-		if len(col) == 1 {
-			if nulls.Contains(v.Nsp, 0) {
-				return "null"
-			} else {
-				return fmt.Sprintf("%v", col[0])
-			}
-		}
+		return VecToString[bool](v)
 	case types.T_int8:
-		col := v.Col.([]int8)
-		if len(col) == 1 {
-			if nulls.Contains(v.Nsp, 0) {
-				return "null"
-			} else {
-				return fmt.Sprintf("%v", col[0])
-			}
-		}
+		return VecToString[int8](v)
 	case types.T_int16:
-		col := v.Col.([]int16)
-		if len(col) == 1 {
-			if nulls.Contains(v.Nsp, 0) {
-				return "null"
-			} else {
-				return fmt.Sprintf("%v", col[0])
-			}
-		}
+		return VecToString[int16](v)
 	case types.T_int32:
-		col := v.Col.([]int32)
-		if len(col) == 1 {
-			if nulls.Contains(v.Nsp, 0) {
-				return "null"
-			} else {
-				return fmt.Sprintf("%v", col[0])
-			}
-		}
+		return VecToString[int32](v)
 	case types.T_int64:
-		col := v.Col.([]int64)
-		if len(col) == 1 {
-			if nulls.Contains(v.Nsp, 0) {
-				return "null"
-			} else {
-				return fmt.Sprintf("%v", col[0])
-			}
-		}
+		return VecToString[int64](v)
 	case types.T_uint8:
-		col := v.Col.([]uint8)
-		if len(col) == 1 {
-			if nulls.Contains(v.Nsp, 0) {
-				return "null"
-			} else {
-				return fmt.Sprintf("%v", col[0])
-			}
-		}
+		return VecToString[uint8](v)
 	case types.T_uint16:
-		col := v.Col.([]uint16)
-		if len(col) == 1 {
-			if nulls.Contains(v.Nsp, 0) {
-				return "null"
-			} else {
-				return fmt.Sprintf("%v", col[0])
-			}
-		}
+		return VecToString[uint16](v)
 	case types.T_uint32:
-		col := v.Col.([]uint32)
-		if len(col) == 1 {
-			if nulls.Contains(v.Nsp, 0) {
-				return "null"
-			} else {
-				return fmt.Sprintf("%v", col[0])
-			}
-		}
+		return VecToString[uint32](v)
 	case types.T_uint64:
-		col := v.Col.([]uint64)
-		if len(col) == 1 {
-			if nulls.Contains(v.Nsp, 0) {
-				return "null"
-			} else {
-				return fmt.Sprintf("%v", col[0])
-			}
-		}
+		return VecToString[uint64](v)
 	case types.T_float32:
-		col := v.Col.([]float32)
-		if len(col) == 1 {
-			if nulls.Contains(v.Nsp, 0) {
-				return "null"
-			} else {
-				return fmt.Sprintf("%v", col[0])
-			}
-		}
+		return VecToString[float32](v)
 	case types.T_float64:
-		col := v.Col.([]float64)
-		if len(col) == 1 {
-			if nulls.Contains(v.Nsp, 0) {
-				return "null"
-			} else {
-				return fmt.Sprintf("%v", col[0])
-			}
-		}
+		return VecToString[float64](v)
 	case types.T_date:
-		col := v.Col.([]types.Date)
-		if len(col) == 1 {
-			if nulls.Contains(v.Nsp, 0) {
-				return "null"
-			} else {
-				return fmt.Sprintf("%v", col[0])
-			}
-		}
+		return VecToString[types.Date](v)
 	case types.T_datetime:
-		col := v.Col.([]types.Datetime)
-		if len(col) == 1 {
-			if nulls.Contains(v.Nsp, 0) {
-				return "null"
-			} else {
-				return fmt.Sprintf("%v", col[0])
-			}
-		}
+		return VecToString[types.Datetime](v)
 	case types.T_timestamp:
-		col := v.Col.([]types.Timestamp)
-		if len(col) == 1 {
-			if nulls.Contains(v.Nsp, 0) {
-				return "null"
-			} else {
-				return fmt.Sprintf("%v", col[0])
-			}
-		}
-	case types.T_sel:
-		col := v.Col.([]int64)
-		if len(col) == 1 {
-			if nulls.Contains(v.Nsp, 0) {
-				return "null"
-			} else {
-				return fmt.Sprintf("%v", col[0])
-			}
-		}
-	case types.T_tuple:
-		col := v.Col.([][]interface{})
-		if len(col) == 1 {
-			if nulls.Contains(v.Nsp, 0) {
-				return "null"
-			} else {
-				return fmt.Sprintf("%v", col[0])
-			}
-		}
+		return VecToString[types.Timestamp](v)
+	case types.T_decimal64:
+		return VecToString[types.Decimal64](v)
+	case types.T_decimal128:
+		return VecToString[types.Decimal128](v)
+	case types.T_TS:
+		return VecToString[types.TS](v)
+	case types.T_Rowid:
+		return VecToString[types.Rowid](v)
 	case types.T_char, types.T_varchar, types.T_json, types.T_blob:
-		col := v.Col.(*types.Bytes)
-		if len(col.Offsets) == 1 {
-			if nulls.Contains(v.Nsp, 0) {
-				return "null"
-			} else {
-				return fmt.Sprintf("%s\n", col.Get(0))
-			}
-		}
-	case types.T_decimal64:
-		col := v.Col.([]types.Decimal64)
+		col := MustStrCols(v)
 		if len(col) == 1 {
 			if nulls.Contains(v.Nsp, 0) {
 				return "null"
 			} else {
-				return fmt.Sprintf("%v", col[0])
+				return col[0]
 			}
 		}
-	case types.T_decimal128:
-		col := v.Col.([]types.Decimal128)
-		if len(col) == 1 {
-			if nulls.Contains(v.Nsp, 0) {
-				return "null"
-			} else {
-				return fmt.Sprintf("%v", col[0])
-			}
-		}
-	}
-	return fmt.Sprintf("%v-%s", v.Col, v.Nsp)
-}
+		return fmt.Sprintf("%v-%s", v.Col, v.Nsp)
 
-// GetColumnData get whole column from a vector
-func (v *Vector) GetColumnData(selectIndexs []int64, occurCounts []int64, rs []string) error {
-	const nullStr = "null"
-	typ := v.Typ
-	rows := len(rs)
-	allData := !nulls.Any(v.Nsp)
-	ifSel := len(selectIndexs) != 0
-
-	switch typ.Oid {
-	case types.T_bool:
-		vs := v.Col.([]bool)
-		for i := 0; i < rows; i++ {
-			index := i
-			count := occurCounts[i]
-			if count <= 0 {
-				i--
-				continue
-			}
-			if ifSel {
-				index = int(selectIndexs[i])
-			}
-			if allData {
-				rs[i] = fmt.Sprintf("%v", vs[index])
-			} else {
-				if nulls.Contains(v.Nsp, uint64(index)) {
-					rs[i] = nullStr
-				} else {
-					rs[i] = fmt.Sprintf("%v", vs[index])
-				}
-			}
-			for count > 1 {
-				count--
-				i++
-				rs[i] = rs[i-1]
-			}
-		}
-	case types.T_int8:
-		vs := v.Col.([]int8)
-		for i := 0; i < rows; i++ {
-			index := i
-			count := occurCounts[i]
-			if count <= 0 {
-				i--
-				continue
-			}
-			if ifSel {
-				index = int(selectIndexs[i])
-			}
-			if allData {
-				rs[i] = fmt.Sprintf("%d", vs[index])
-			} else {
-				if nulls.Contains(v.Nsp, uint64(index)) {
-					rs[i] = nullStr
-				} else {
-					rs[i] = fmt.Sprintf("%d", vs[index])
-				}
-			}
-			for count > 1 {
-				count--
-				i++
-				rs[i] = rs[i-1]
-			}
-		}
-	case types.T_int16:
-		vs := v.Col.([]int16)
-		for i := 0; i < rows; i++ {
-			index := i
-			count := occurCounts[i]
-			if count <= 0 {
-				i--
-				continue
-			}
-			if ifSel {
-				index = int(selectIndexs[i])
-			}
-			if allData {
-				rs[i] = fmt.Sprintf("%d", vs[index])
-			} else {
-				if nulls.Contains(v.Nsp, uint64(index)) {
-					rs[i] = nullStr
-				} else {
-					rs[i] = fmt.Sprintf("%d", vs[index])
-				}
-			}
-			for count > 1 {
-				count--
-				i++
-				rs[i] = rs[i-1]
-			}
-		}
-	case types.T_int32:
-		vs := v.Col.([]int32)
-		for i := 0; i < rows; i++ {
-			index := i
-			count := occurCounts[i]
-			if count <= 0 {
-				i--
-				continue
-			}
-			if ifSel {
-				index = int(selectIndexs[i])
-			}
-			if allData {
-				rs[i] = fmt.Sprintf("%d", vs[index])
-			} else {
-				if nulls.Contains(v.Nsp, uint64(index)) {
-					rs[i] = nullStr
-				} else {
-					rs[i] = fmt.Sprintf("%d", vs[index])
-				}
-			}
-			for count > 1 {
-				count--
-				i++
-				rs[i] = rs[i-1]
-			}
-		}
-	case types.T_int64:
-		vs := v.Col.([]int64)
-		for i := 0; i < rows; i++ {
-			index := i
-			count := occurCounts[i]
-			if count <= 0 {
-				i--
-				continue
-			}
-			if ifSel {
-				index = int(selectIndexs[i])
-			}
-			if allData {
-				rs[i] = fmt.Sprintf("%d", vs[index])
-			} else {
-				if nulls.Contains(v.Nsp, uint64(index)) {
-					rs[i] = nullStr
-				} else {
-					rs[i] = fmt.Sprintf("%d", vs[index])
-				}
-			}
-			for count > 1 {
-				count--
-				i++
-				rs[i] = rs[i-1]
-			}
-		}
-	case types.T_uint8:
-		vs := v.Col.([]uint8)
-		for i := 0; i < rows; i++ {
-			index := i
-			count := occurCounts[i]
-			if count <= 0 {
-				i--
-				continue
-			}
-			if ifSel {
-				index = int(selectIndexs[i])
-			}
-			if allData {
-				rs[i] = fmt.Sprintf("%d", vs[index])
-			} else {
-				if nulls.Contains(v.Nsp, uint64(index)) {
-					rs[i] = nullStr
-				} else {
-					rs[i] = fmt.Sprintf("%d", vs[index])
-				}
-			}
-			for count > 1 {
-				count--
-				i++
-				rs[i] = rs[i-1]
-			}
-		}
-	case types.T_uint16:
-		vs := v.Col.([]uint16)
-		for i := 0; i < rows; i++ {
-			index := i
-			count := occurCounts[i]
-			if count <= 0 {
-				i--
-				continue
-			}
-			if ifSel {
-				index = int(selectIndexs[i])
-			}
-			if allData {
-				rs[i] = fmt.Sprintf("%d", vs[index])
-			} else {
-				if nulls.Contains(v.Nsp, uint64(index)) {
-					rs[i] = nullStr
-				} else {
-					rs[i] = fmt.Sprintf("%d", vs[index])
-				}
-			}
-			for count > 1 {
-				count--
-				i++
-				rs[i] = rs[i-1]
-			}
-		}
-	case types.T_uint32:
-		vs := v.Col.([]uint32)
-		for i := 0; i < rows; i++ {
-			index := i
-			count := occurCounts[i]
-			if count <= 0 {
-				i--
-				continue
-			}
-			if ifSel {
-				index = int(selectIndexs[i])
-			}
-			if allData {
-				rs[i] = fmt.Sprintf("%d", vs[index])
-			} else {
-				if nulls.Contains(v.Nsp, uint64(index)) {
-					rs[i] = nullStr
-				} else {
-					rs[i] = fmt.Sprintf("%d", vs[index])
-				}
-			}
-			for count > 1 {
-				count--
-				i++
-				rs[i] = rs[i-1]
-			}
-		}
-	case types.T_uint64:
-		vs := v.Col.([]uint64)
-		for i := 0; i < rows; i++ {
-			index := i
-			count := occurCounts[i]
-			if count <= 0 {
-				i--
-				continue
-			}
-			if ifSel {
-				index = int(selectIndexs[i])
-			}
-			if allData {
-				rs[i] = fmt.Sprintf("%d", vs[index])
-			} else {
-				if nulls.Contains(v.Nsp, uint64(index)) {
-					rs[i] = nullStr
-				} else {
-					rs[i] = fmt.Sprintf("%d", vs[index])
-				}
-			}
-			for count > 1 {
-				count--
-				i++
-				rs[i] = rs[i-1]
-			}
-		}
-	case types.T_float32:
-		vs := v.Col.([]float32)
-		for i := 0; i < rows; i++ {
-			index := i
-			count := occurCounts[i]
-			if count <= 0 {
-				i--
-				continue
-			}
-			if ifSel {
-				index = int(selectIndexs[i])
-			}
-			if allData {
-				rs[i] = fmt.Sprintf("%f", vs[index])
-			} else {
-				if nulls.Contains(v.Nsp, uint64(index)) {
-					rs[i] = nullStr
-				} else {
-					rs[i] = fmt.Sprintf("%f", vs[index])
-				}
-			}
-			for count > 1 {
-				count--
-				i++
-				rs[i] = rs[i-1]
-			}
-		}
-	case types.T_float64:
-		vs := v.Col.([]float64)
-		for i := 0; i < rows; i++ {
-			index := i
-			count := occurCounts[i]
-			if count <= 0 {
-				i--
-				continue
-			}
-			if ifSel {
-				index = int(selectIndexs[i])
-			}
-			if allData {
-				rs[i] = fmt.Sprintf("%f", vs[index])
-			} else {
-				if nulls.Contains(v.Nsp, uint64(index)) {
-					rs[i] = nullStr
-				} else {
-					rs[i] = fmt.Sprintf("%f", vs[index])
-				}
-			}
-			for count > 1 {
-				count--
-				i++
-				rs[i] = rs[i-1]
-			}
-		}
-	case types.T_char, types.T_varchar, types.T_blob, types.T_json:
-		vs := v.Col.(*types.Bytes)
-		var i int64
-		for i = 0; i < int64(rows); i++ {
-			index := i
-			count := occurCounts[i]
-			if count <= 0 {
-				i--
-				continue
-			}
-			if ifSel {
-				index = selectIndexs[i]
-			}
-			if allData {
-				rs[i] = string(vs.Get(index))
-			} else {
-				if nulls.Contains(v.Nsp, uint64(index)) {
-					rs[i] = nullStr
-				} else {
-					rs[i] = string(vs.Get(index))
-				}
-			}
-			for count > 1 {
-				count--
-				i++
-				rs[i] = rs[i-1]
-			}
-		}
-	case types.T_date:
-		vs := v.Col.([]types.Date)
-		for i := 0; i < rows; i++ {
-			index := i
-			count := occurCounts[i]
-			if count <= 0 {
-				i--
-				continue
-			}
-			if ifSel {
-				index = int(selectIndexs[i])
-			}
-			if allData {
-				rs[i] = vs[index].String()
-			} else {
-				if nulls.Contains(v.Nsp, uint64(index)) {
-					rs[i] = nullStr
-				} else {
-					rs[i] = vs[index].String()
-				}
-			}
-			for count > 1 {
-				count--
-				i++
-				rs[i] = rs[i-1]
-			}
-		}
-	case types.T_datetime:
-		vs := v.Col.([]types.Datetime)
-		for i := 0; i < rows; i++ {
-			index := i
-			count := occurCounts[i]
-			if count <= 0 {
-				i--
-				continue
-			}
-			if ifSel {
-				index = int(selectIndexs[i])
-			}
-			if allData {
-				rs[i] = vs[index].String()
-			} else {
-				if nulls.Contains(v.Nsp, uint64(index)) {
-					rs[i] = nullStr
-				} else {
-					rs[i] = vs[index].String()
-				}
-			}
-			for count > 1 {
-				count--
-				i++
-				rs[i] = rs[i-1]
-			}
-		}
-	case types.T_timestamp:
-		vs := v.Col.([]types.Timestamp)
-		for i := 0; i < rows; i++ {
-			index := i
-			count := occurCounts[i]
-			if count <= 0 {
-				i--
-				continue
-			}
-			if ifSel {
-				index = int(selectIndexs[i])
-			}
-			if allData {
-				rs[i] = vs[index].String()
-			} else {
-				if nulls.Contains(v.Nsp, uint64(index)) {
-					rs[i] = nullStr
-				} else {
-					rs[i] = vs[index].String()
-				}
-			}
-			for count > 1 {
-				count--
-				i++
-				rs[i] = rs[i-1]
-			}
-		}
-	case types.T_decimal64:
-		vs := v.Col.([]types.Decimal64)
-		for i := 0; i < rows; i++ {
-			index := i
-			count := occurCounts[i]
-			if count <= 0 {
-				i--
-				continue
-			}
-			if ifSel {
-				index = int(selectIndexs[i])
-			}
-			if allData {
-				rs[i] = fmt.Sprintf("%d", vs[index])
-			} else {
-				if nulls.Contains(v.Nsp, uint64(index)) {
-					rs[i] = nullStr
-				} else {
-					rs[i] = fmt.Sprintf("%d", vs[index])
-				}
-			}
-			for count > 1 {
-				count--
-				i++
-				rs[i] = rs[i-1]
-			}
-		}
-	case types.T_decimal128:
-		vs := v.Col.([]types.Decimal128)
-		for i := 0; i < rows; i++ {
-			index := i
-			count := occurCounts[i]
-			if count <= 0 {
-				i--
-				continue
-			}
-			if ifSel {
-				index = int(selectIndexs[i])
-			}
-			if allData {
-				rs[i] = fmt.Sprintf("%d", vs[index])
-			} else {
-				if nulls.Contains(v.Nsp, uint64(index)) {
-					rs[i] = nullStr
-				} else {
-					rs[i] = fmt.Sprintf("%d", vs[index])
-				}
-			}
-			for count > 1 {
-				count--
-				i++
-				rs[i] = rs[i-1]
-			}
-		}
 	default:
-		return fmt.Errorf("unexpect type %v for function vector.GetColumnData", typ)
+		panic("vec to string unknown types.")
 	}
-	return nil
 }

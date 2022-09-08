@@ -32,7 +32,7 @@ func Prepare(proc *process.Process, argument any) error {
 	arg := argument.(*Argument)
 	{
 		arg.ctr.bat = nil
-		arg.ctr.hashTable, err = hashmap.NewStrMap(true, arg.IBucket, arg.NBucket, proc.Mp)
+		arg.ctr.hashTable, err = hashmap.NewStrMap(true, arg.IBucket, arg.NBucket, proc.Mp())
 		if err != nil {
 			return err
 		}
@@ -71,7 +71,7 @@ func Call(idx int, proc *process.Process, argument any) (bool, error) {
 			last := false
 			last, err = arg.ctr.probeHashTable(proc, analyze, 0)
 			if err != nil {
-				arg.ctr.bat.Clean(proc.Mp)
+				arg.ctr.bat.Clean(proc.Mp())
 				arg.ctr.hashTable.Free()
 				arg.ctr.state = operatorEnd
 				return true, err
@@ -114,11 +114,11 @@ func (ctr *container) buildHashTable(proc *process.Process, ana process.Analyze,
 			}
 			_, _, err := itr.Insert(i, n, bat.Vecs)
 			if err != nil {
-				bat.Clean(proc.Mp)
+				bat.Clean(proc.Mp())
 				return err
 			}
 		}
-		bat.Clean(proc.Mp)
+		bat.Clean(proc.Mp())
 	}
 	return nil
 }
@@ -158,7 +158,7 @@ func (ctr *container) probeHashTable(proc *process.Process, ana process.Analyze,
 			}
 			vs, _, err := itr.Insert(i, n, bat.Vecs)
 			if err != nil {
-				bat.Clean(proc.Mp)
+				bat.Clean(proc.Mp())
 				return false, err
 			}
 			copy(inserted[:n], restoreInserted[:n])
@@ -176,8 +176,8 @@ func (ctr *container) probeHashTable(proc *process.Process, ana process.Analyze,
 			insertCount := int(newHashGroup - oldHashGroup)
 			if insertCount > 0 {
 				for pos := range bat.Vecs {
-					if err := vector.UnionBatch(ctr.bat.Vecs[pos], bat.Vecs[pos], int64(i), insertCount, inserted[:n], proc.Mp); err != nil {
-						bat.Clean(proc.Mp)
+					if err := vector.UnionBatch(ctr.bat.Vecs[pos], bat.Vecs[pos], int64(i), insertCount, inserted[:n], proc.Mp()); err != nil {
+						bat.Clean(proc.Mp())
 						return false, err
 					}
 				}
@@ -185,7 +185,7 @@ func (ctr *container) probeHashTable(proc *process.Process, ana process.Analyze,
 		}
 		ana.Output(ctr.bat)
 		proc.SetInputBatch(ctr.bat)
-		bat.Clean(proc.Mp)
+		bat.Clean(proc.Mp())
 		return false, nil
 	}
 }

@@ -15,51 +15,13 @@
 package ltrim
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"strings"
 )
 
-var (
-	LtrimChar    func(*types.Bytes, *types.Bytes) *types.Bytes
-	LtrimVarChar func(*types.Bytes, *types.Bytes) *types.Bytes
-)
-
-func init() {
-	LtrimChar = ltrim
-	LtrimVarChar = ltrim
-}
-
-func CountSpacesFromLeft(xs *types.Bytes) int32 {
-	var (
-		spaceCount int32
-	)
-
-	for i, offset := range xs.Offsets {
-		cursor := offset
-		for ; cursor < offset+xs.Lengths[i] && xs.Data[cursor] == ' '; cursor++ {
-			spaceCount++
-		}
+func Ltrim(xs []string, rs []string) []string {
+	for i, str := range xs {
+		// rs[i] = strings.TrimLeft(str, " \u3000")
+		rs[i] = strings.TrimLeft(str, " ")
 	}
-
-	return spaceCount
-}
-
-func ltrim(xs *types.Bytes, rs *types.Bytes) *types.Bytes {
-	var resultCursor uint32
-
-	for i, offset := range xs.Offsets {
-		cursor := offset
-		// ignore the leading spaces
-		for ; cursor < offset+xs.Lengths[i] && xs.Data[cursor] == ' '; cursor++ {
-			continue
-		}
-
-		// copy the non-space characters
-		length := xs.Lengths[i] - (cursor - offset)
-		copy(rs.Data[resultCursor:resultCursor+length], xs.Data[cursor:cursor+length])
-		rs.Lengths[i] = length
-		rs.Offsets[i] = resultCursor
-		resultCursor += length
-	}
-
 	return rs
 }

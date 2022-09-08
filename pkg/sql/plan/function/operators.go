@@ -49,7 +49,7 @@ var operators = map[int]Functions{
 					types.T_uint8,
 				},
 				ReturnTyp: types.T_bool,
-				Fn:        operator.IsNull[uint8],
+				Fn:        operator.IsNull,
 			},
 			{
 				Index:  1,
@@ -59,7 +59,7 @@ var operators = map[int]Functions{
 					types.T_uint16,
 				},
 				ReturnTyp: types.T_bool,
-				Fn:        operator.IsNull[uint16],
+				Fn:        operator.IsNull,
 			},
 			{
 				Index:  2,
@@ -69,7 +69,7 @@ var operators = map[int]Functions{
 					types.T_uint32,
 				},
 				ReturnTyp: types.T_bool,
-				Fn:        operator.IsNull[uint32],
+				Fn:        operator.IsNull,
 			},
 			{
 				Index:  3,
@@ -79,7 +79,7 @@ var operators = map[int]Functions{
 					types.T_uint64,
 				},
 				ReturnTyp: types.T_bool,
-				Fn:        operator.IsNull[uint64],
+				Fn:        operator.IsNull,
 			},
 			{
 				Index:  4,
@@ -89,7 +89,7 @@ var operators = map[int]Functions{
 					types.T_int8,
 				},
 				ReturnTyp: types.T_bool,
-				Fn:        operator.IsNull[int8],
+				Fn:        operator.IsNull,
 			},
 			{
 				Index:  5,
@@ -99,7 +99,7 @@ var operators = map[int]Functions{
 					types.T_int16,
 				},
 				ReturnTyp: types.T_bool,
-				Fn:        operator.IsNull[int16],
+				Fn:        operator.IsNull,
 			},
 			{
 				Index:  6,
@@ -109,7 +109,7 @@ var operators = map[int]Functions{
 					types.T_int32,
 				},
 				ReturnTyp: types.T_bool,
-				Fn:        operator.IsNull[int32],
+				Fn:        operator.IsNull,
 			},
 			{
 				Index:  7,
@@ -119,7 +119,7 @@ var operators = map[int]Functions{
 					types.T_int64,
 				},
 				ReturnTyp: types.T_bool,
-				Fn:        operator.IsNull[int64],
+				Fn:        operator.IsNull,
 			},
 			{
 				Index:  8,
@@ -129,7 +129,7 @@ var operators = map[int]Functions{
 					types.T_float32,
 				},
 				ReturnTyp: types.T_bool,
-				Fn:        operator.IsNull[float32],
+				Fn:        operator.IsNull,
 			},
 			{
 				Index:  9,
@@ -139,7 +139,7 @@ var operators = map[int]Functions{
 					types.T_float64,
 				},
 				ReturnTyp: types.T_bool,
-				Fn:        operator.IsNull[float64],
+				Fn:        operator.IsNull,
 			},
 			{
 				Index:  10,
@@ -149,7 +149,7 @@ var operators = map[int]Functions{
 					types.T_decimal64,
 				},
 				ReturnTyp: types.T_bool,
-				Fn:        operator.IsNull[types.Decimal64],
+				Fn:        operator.IsNull,
 			},
 			{
 				Index:  11,
@@ -159,7 +159,7 @@ var operators = map[int]Functions{
 					types.T_decimal128,
 				},
 				ReturnTyp: types.T_bool,
-				Fn:        operator.IsNull[types.Decimal128],
+				Fn:        operator.IsNull,
 			},
 			{
 				Index:  12,
@@ -169,7 +169,7 @@ var operators = map[int]Functions{
 					types.T_varchar,
 				},
 				ReturnTyp: types.T_bool,
-				Fn:        operator.IsStringNull,
+				Fn:        operator.IsNull,
 			},
 			{
 				Index:  13,
@@ -179,7 +179,7 @@ var operators = map[int]Functions{
 					types.T_char,
 				},
 				ReturnTyp: types.T_bool,
-				Fn:        operator.IsStringNull,
+				Fn:        operator.IsNull,
 			},
 			{
 				Index:  14,
@@ -189,7 +189,7 @@ var operators = map[int]Functions{
 					types.T_date,
 				},
 				ReturnTyp: types.T_bool,
-				Fn:        operator.IsNull[types.Date],
+				Fn:        operator.IsNull,
 			},
 			{
 				Index:  15,
@@ -199,7 +199,7 @@ var operators = map[int]Functions{
 					types.T_datetime,
 				},
 				ReturnTyp: types.T_bool,
-				Fn:        operator.IsNull[types.Datetime],
+				Fn:        operator.IsNull,
 			},
 			{
 				Index:  16,
@@ -209,7 +209,7 @@ var operators = map[int]Functions{
 					types.T_bool,
 				},
 				ReturnTyp: types.T_bool,
-				Fn:        operator.IsNull[bool],
+				Fn:        operator.IsNull,
 			},
 			{
 				Index:  17,
@@ -219,7 +219,7 @@ var operators = map[int]Functions{
 					types.T_blob,
 				},
 				ReturnTyp: types.T_bool,
-				Fn:        operator.IsStringNull,
+				Fn:        operator.IsNull,
 			},
 		},
 	},
@@ -235,7 +235,7 @@ var operators = map[int]Functions{
 					types.T_uint8,
 				},
 				ReturnTyp: types.T_bool,
-				Fn:        operator.IsNotNull[uint8],
+				Fn:        operator.IsNotNull,
 			},
 			{
 				Index:  1,
@@ -245,7 +245,7 @@ var operators = map[int]Functions{
 					types.T_uint16,
 				},
 				ReturnTyp: types.T_bool,
-				Fn:        operator.IsNotNull[uint16],
+				Fn:        operator.IsNotNull,
 			},
 			{
 				Index:  2,
@@ -255,7 +255,7 @@ var operators = map[int]Functions{
 					types.T_uint32,
 				},
 				ReturnTyp: types.T_bool,
-				Fn:        operator.IsNotNull[uint32],
+				Fn:        operator.IsNotNull,
 			},
 			{
 				Index:  3,
@@ -265,7 +265,7 @@ var operators = map[int]Functions{
 					types.T_uint64,
 				},
 				ReturnTyp: types.T_bool,
-				Fn:        operator.IsNotNull[uint64],
+				Fn:        operator.IsNotNull,
 			},
 			{
 				Index:  4,
@@ -275,7 +275,7 @@ var operators = map[int]Functions{
 					types.T_int8,
 				},
 				ReturnTyp: types.T_bool,
-				Fn:        operator.IsNotNull[int8],
+				Fn:        operator.IsNotNull,
 			},
 			{
 				Index:  5,
@@ -285,7 +285,7 @@ var operators = map[int]Functions{
 					types.T_int16,
 				},
 				ReturnTyp: types.T_bool,
-				Fn:        operator.IsNotNull[int16],
+				Fn:        operator.IsNotNull,
 			},
 			{
 				Index:  6,
@@ -295,7 +295,7 @@ var operators = map[int]Functions{
 					types.T_int32,
 				},
 				ReturnTyp: types.T_bool,
-				Fn:        operator.IsNotNull[int32],
+				Fn:        operator.IsNotNull,
 			},
 			{
 				Index:  7,
@@ -305,7 +305,7 @@ var operators = map[int]Functions{
 					types.T_int64,
 				},
 				ReturnTyp: types.T_bool,
-				Fn:        operator.IsNotNull[int64],
+				Fn:        operator.IsNotNull,
 			},
 			{
 				Index:  8,
@@ -315,7 +315,7 @@ var operators = map[int]Functions{
 					types.T_float32,
 				},
 				ReturnTyp: types.T_bool,
-				Fn:        operator.IsNotNull[float32],
+				Fn:        operator.IsNotNull,
 			},
 			{
 				Index:  9,
@@ -325,7 +325,7 @@ var operators = map[int]Functions{
 					types.T_float64,
 				},
 				ReturnTyp: types.T_bool,
-				Fn:        operator.IsNotNull[float64],
+				Fn:        operator.IsNotNull,
 			},
 			{
 				Index:  10,
@@ -335,7 +335,7 @@ var operators = map[int]Functions{
 					types.T_decimal64,
 				},
 				ReturnTyp: types.T_bool,
-				Fn:        operator.IsNotNull[types.Decimal64],
+				Fn:        operator.IsNotNull,
 			},
 			{
 				Index:  11,
@@ -345,7 +345,7 @@ var operators = map[int]Functions{
 					types.T_decimal128,
 				},
 				ReturnTyp: types.T_bool,
-				Fn:        operator.IsNotNull[types.Decimal128],
+				Fn:        operator.IsNotNull,
 			},
 			{
 				Index:  12,
@@ -355,7 +355,7 @@ var operators = map[int]Functions{
 					types.T_varchar,
 				},
 				ReturnTyp: types.T_bool,
-				Fn:        operator.IsStringNotNull,
+				Fn:        operator.IsNotNull,
 			},
 			{
 				Index:  13,
@@ -365,7 +365,7 @@ var operators = map[int]Functions{
 					types.T_char,
 				},
 				ReturnTyp: types.T_bool,
-				Fn:        operator.IsStringNotNull,
+				Fn:        operator.IsNotNull,
 			},
 			{
 				Index:  14,
@@ -375,7 +375,7 @@ var operators = map[int]Functions{
 					types.T_date,
 				},
 				ReturnTyp: types.T_bool,
-				Fn:        operator.IsNotNull[types.Date],
+				Fn:        operator.IsNotNull,
 			},
 			{
 				Index:  15,
@@ -385,7 +385,7 @@ var operators = map[int]Functions{
 					types.T_datetime,
 				},
 				ReturnTyp: types.T_bool,
-				Fn:        operator.IsNotNull[types.Datetime],
+				Fn:        operator.IsNotNull,
 			},
 			{
 				Index:  16,
@@ -395,7 +395,7 @@ var operators = map[int]Functions{
 					types.T_bool,
 				},
 				ReturnTyp: types.T_bool,
-				Fn:        operator.IsNotNull[bool],
+				Fn:        operator.IsNotNull,
 			},
 			{
 				Index:  17,
@@ -405,7 +405,7 @@ var operators = map[int]Functions{
 					types.T_blob,
 				},
 				ReturnTyp: types.T_bool,
-				Fn:        operator.IsStringNotNull,
+				Fn:        operator.IsNotNull,
 			},
 		},
 	},
@@ -705,6 +705,194 @@ var operators = map[int]Functions{
 				},
 				ReturnTyp: types.T_int64,
 				Fn:        operator.OpBitAndFun[int64],
+			},
+		},
+	},
+
+	OP_BIT_SHIFT_RIGHT: {
+		Id: OP_BIT_SHIFT_RIGHT,
+		Overloads: []Function{
+			{
+				Index:  0,
+				Flag:   plan.Function_STRICT,
+				Layout: COMPARISON_OPERATOR,
+				Args: []types.T{
+					types.T_uint8,
+					types.T_uint8,
+				},
+				ReturnTyp: types.T_uint8,
+				Fn:        operator.OpBitRightShiftFun[uint8],
+			},
+			{
+				Index:  1,
+				Flag:   plan.Function_STRICT,
+				Layout: COMPARISON_OPERATOR,
+				Args: []types.T{
+					types.T_int8,
+					types.T_int8,
+				},
+				ReturnTyp: types.T_int8,
+				Fn:        operator.OpBitRightShiftFun[int8],
+			},
+			{
+				Index:  2,
+				Flag:   plan.Function_STRICT,
+				Layout: COMPARISON_OPERATOR,
+				Args: []types.T{
+					types.T_uint16,
+					types.T_uint16,
+				},
+				ReturnTyp: types.T_uint16,
+				Fn:        operator.OpBitRightShiftFun[uint16],
+			},
+			{
+				Index:  3,
+				Flag:   plan.Function_STRICT,
+				Layout: COMPARISON_OPERATOR,
+				Args: []types.T{
+					types.T_int16,
+					types.T_int16,
+				},
+				ReturnTyp: types.T_int16,
+				Fn:        operator.OpBitRightShiftFun[int16],
+			},
+			{
+				Index:  4,
+				Flag:   plan.Function_STRICT,
+				Layout: COMPARISON_OPERATOR,
+				Args: []types.T{
+					types.T_uint32,
+					types.T_uint32,
+				},
+				ReturnTyp: types.T_uint32,
+				Fn:        operator.OpBitRightShiftFun[uint32],
+			},
+			{
+				Index:  5,
+				Flag:   plan.Function_STRICT,
+				Layout: COMPARISON_OPERATOR,
+				Args: []types.T{
+					types.T_int32,
+					types.T_int32,
+				},
+				ReturnTyp: types.T_int32,
+				Fn:        operator.OpBitRightShiftFun[int32],
+			},
+			{
+				Index:  6,
+				Flag:   plan.Function_STRICT,
+				Layout: COMPARISON_OPERATOR,
+				Args: []types.T{
+					types.T_uint64,
+					types.T_uint64,
+				},
+				ReturnTyp: types.T_uint64,
+				Fn:        operator.OpBitRightShiftFun[uint64],
+			},
+			{
+				Index:  7,
+				Flag:   plan.Function_STRICT,
+				Layout: COMPARISON_OPERATOR,
+				Args: []types.T{
+					types.T_int64,
+					types.T_int64,
+				},
+				ReturnTyp: types.T_int64,
+				Fn:        operator.OpBitRightShiftFun[int64],
+			},
+		},
+	},
+
+	OP_BIT_SHIFT_LEFT: {
+		Id: OP_BIT_SHIFT_LEFT,
+		Overloads: []Function{
+			{
+				Index:  0,
+				Flag:   plan.Function_STRICT,
+				Layout: COMPARISON_OPERATOR,
+				Args: []types.T{
+					types.T_uint8,
+					types.T_uint8,
+				},
+				ReturnTyp: types.T_uint8,
+				Fn:        operator.OpBitLeftShiftFun[uint8],
+			},
+			{
+				Index:  1,
+				Flag:   plan.Function_STRICT,
+				Layout: COMPARISON_OPERATOR,
+				Args: []types.T{
+					types.T_int8,
+					types.T_int8,
+				},
+				ReturnTyp: types.T_int8,
+				Fn:        operator.OpBitLeftShiftFun[int8],
+			},
+			{
+				Index:  2,
+				Flag:   plan.Function_STRICT,
+				Layout: COMPARISON_OPERATOR,
+				Args: []types.T{
+					types.T_uint16,
+					types.T_uint16,
+				},
+				ReturnTyp: types.T_uint16,
+				Fn:        operator.OpBitLeftShiftFun[uint16],
+			},
+			{
+				Index:  3,
+				Flag:   plan.Function_STRICT,
+				Layout: COMPARISON_OPERATOR,
+				Args: []types.T{
+					types.T_int16,
+					types.T_int16,
+				},
+				ReturnTyp: types.T_int16,
+				Fn:        operator.OpBitLeftShiftFun[int16],
+			},
+			{
+				Index:  4,
+				Flag:   plan.Function_STRICT,
+				Layout: COMPARISON_OPERATOR,
+				Args: []types.T{
+					types.T_uint32,
+					types.T_uint32,
+				},
+				ReturnTyp: types.T_uint32,
+				Fn:        operator.OpBitLeftShiftFun[uint32],
+			},
+			{
+				Index:  5,
+				Flag:   plan.Function_STRICT,
+				Layout: COMPARISON_OPERATOR,
+				Args: []types.T{
+					types.T_int32,
+					types.T_int32,
+				},
+				ReturnTyp: types.T_int32,
+				Fn:        operator.OpBitLeftShiftFun[int32],
+			},
+			{
+				Index:  6,
+				Flag:   plan.Function_STRICT,
+				Layout: COMPARISON_OPERATOR,
+				Args: []types.T{
+					types.T_uint64,
+					types.T_uint64,
+				},
+				ReturnTyp: types.T_uint64,
+				Fn:        operator.OpBitLeftShiftFun[uint64],
+			},
+			{
+				Index:  7,
+				Flag:   plan.Function_STRICT,
+				Layout: COMPARISON_OPERATOR,
+				Args: []types.T{
+					types.T_int64,
+					types.T_int64,
+				},
+				ReturnTyp: types.T_int64,
+				Fn:        operator.OpBitLeftShiftFun[int64],
 			},
 		},
 	},
@@ -2777,7 +2965,9 @@ var operators = map[int]Functions{
 				Args:      []types.T{types.T_uint8},
 				ReturnTyp: types.T_uint8,
 				Fn: func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-					return vs[0], nil
+					data := vs[0].Col.([]uint8)
+					vec := vector.NewConstFixed(vs[0].Typ, vs[0].Length(), data[0])
+					return vec, nil
 				},
 			},
 			{
@@ -2787,7 +2977,9 @@ var operators = map[int]Functions{
 				Args:      []types.T{types.T_uint16},
 				ReturnTyp: types.T_uint16,
 				Fn: func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-					return vs[0], nil
+					data := vs[0].Col.([]uint16)
+					vec := vector.NewConstFixed(vs[0].Typ, vs[0].Length(), data[0])
+					return vec, nil
 				},
 			},
 			{
@@ -2797,7 +2989,9 @@ var operators = map[int]Functions{
 				Args:      []types.T{types.T_uint32},
 				ReturnTyp: types.T_uint32,
 				Fn: func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-					return vs[0], nil
+					data := vs[0].Col.([]uint32)
+					vec := vector.NewConstFixed(vs[0].Typ, vs[0].Length(), data[0])
+					return vec, nil
 				},
 			},
 			{
@@ -2807,7 +3001,9 @@ var operators = map[int]Functions{
 				Args:      []types.T{types.T_uint64},
 				ReturnTyp: types.T_uint64,
 				Fn: func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-					return vs[0], nil
+					data := vs[0].Col.([]uint64)
+					vec := vector.NewConstFixed(vs[0].Typ, vs[0].Length(), data[0])
+					return vec, nil
 				},
 			},
 			{
@@ -2817,7 +3013,9 @@ var operators = map[int]Functions{
 				Args:      []types.T{types.T_int8},
 				ReturnTyp: types.T_int8,
 				Fn: func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-					return vs[0], nil
+					data := vs[0].Col.([]int8)
+					vec := vector.NewConstFixed(vs[0].Typ, vs[0].Length(), data[0])
+					return vec, nil
 				},
 			},
 			{
@@ -2827,7 +3025,9 @@ var operators = map[int]Functions{
 				Args:      []types.T{types.T_int16},
 				ReturnTyp: types.T_int16,
 				Fn: func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-					return vs[0], nil
+					data := vs[0].Col.([]int16)
+					vec := vector.NewConstFixed(vs[0].Typ, vs[0].Length(), data[0])
+					return vec, nil
 				},
 			},
 			{
@@ -2837,7 +3037,9 @@ var operators = map[int]Functions{
 				Args:      []types.T{types.T_int32},
 				ReturnTyp: types.T_int32,
 				Fn: func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-					return vs[0], nil
+					data := vs[0].Col.([]int32)
+					vec := vector.NewConstFixed(vs[0].Typ, vs[0].Length(), data[0])
+					return vec, nil
 				},
 			},
 			{
@@ -2847,7 +3049,9 @@ var operators = map[int]Functions{
 				Args:      []types.T{types.T_int64},
 				ReturnTyp: types.T_int64,
 				Fn: func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-					return vs[0], nil
+					data := vs[0].Col.([]int64)
+					vec := vector.NewConstFixed(vs[0].Typ, vs[0].Length(), data[0])
+					return vec, nil
 				},
 			},
 			{
@@ -2857,7 +3061,9 @@ var operators = map[int]Functions{
 				Args:      []types.T{types.T_float32},
 				ReturnTyp: types.T_float32,
 				Fn: func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-					return vs[0], nil
+					data := vs[0].Col.([]float32)
+					vec := vector.NewConstFixed(vs[0].Typ, vs[0].Length(), data[0])
+					return vec, nil
 				},
 			},
 			{
@@ -2867,7 +3073,9 @@ var operators = map[int]Functions{
 				Args:      []types.T{types.T_float64},
 				ReturnTyp: types.T_float64,
 				Fn: func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-					return vs[0], nil
+					data := vs[0].Col.([]float64)
+					vec := vector.NewConstFixed(vs[0].Typ, vs[0].Length(), data[0])
+					return vec, nil
 				},
 			},
 			{
@@ -2877,7 +3085,9 @@ var operators = map[int]Functions{
 				Args:      []types.T{types.T_decimal64},
 				ReturnTyp: types.T_decimal64,
 				Fn: func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-					return vs[0], nil
+					data := vs[0].Col.([]types.Decimal64)
+					vec := vector.NewConstFixed(vs[0].Typ, vs[0].Length(), data[0])
+					return vec, nil
 				},
 			},
 			{
@@ -2887,7 +3097,9 @@ var operators = map[int]Functions{
 				Args:      []types.T{types.T_decimal128},
 				ReturnTyp: types.T_decimal128,
 				Fn: func(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-					return vs[0], nil
+					data := vs[0].Col.([]types.Decimal128)
+					vec := vector.NewConstFixed(vs[0].Typ, vs[0].Length(), data[0])
+					return vec, nil
 				},
 			},
 		},
@@ -2962,6 +3174,77 @@ var operators = map[int]Functions{
 			},
 		},
 	},
+
+	UNARY_TILDE: {
+		Id: UNARY_TILDE,
+		Overloads: []Function{
+			{
+				Index:     0,
+				Flag:      plan.Function_STRICT,
+				Layout:    UNARY_ARITHMETIC_OPERATOR,
+				Args:      []types.T{types.T_int8},
+				ReturnTyp: types.T_uint64,
+				Fn:        operator.UnaryTilde[int8],
+			},
+			{
+				Index:     1,
+				Flag:      plan.Function_STRICT,
+				Layout:    UNARY_ARITHMETIC_OPERATOR,
+				Args:      []types.T{types.T_int16},
+				ReturnTyp: types.T_uint64,
+				Fn:        operator.UnaryTilde[int16],
+			},
+			{
+				Index:     2,
+				Flag:      plan.Function_STRICT,
+				Layout:    UNARY_ARITHMETIC_OPERATOR,
+				Args:      []types.T{types.T_int32},
+				ReturnTyp: types.T_uint64,
+				Fn:        operator.UnaryTilde[int32],
+			},
+			{
+				Index:     3,
+				Flag:      plan.Function_STRICT,
+				Layout:    UNARY_ARITHMETIC_OPERATOR,
+				Args:      []types.T{types.T_int64},
+				ReturnTyp: types.T_uint64,
+				Fn:        operator.UnaryTilde[int64],
+			},
+			{
+				Index:     4,
+				Flag:      plan.Function_STRICT,
+				Layout:    UNARY_ARITHMETIC_OPERATOR,
+				Args:      []types.T{types.T_uint8},
+				ReturnTyp: types.T_uint64,
+				Fn:        operator.UnaryTilde[uint8],
+			},
+			{
+				Index:     5,
+				Flag:      plan.Function_STRICT,
+				Layout:    UNARY_ARITHMETIC_OPERATOR,
+				Args:      []types.T{types.T_uint16},
+				ReturnTyp: types.T_uint64,
+				Fn:        operator.UnaryTilde[uint16],
+			},
+			{
+				Index:     6,
+				Flag:      plan.Function_STRICT,
+				Layout:    UNARY_ARITHMETIC_OPERATOR,
+				Args:      []types.T{types.T_uint32},
+				ReturnTyp: types.T_uint64,
+				Fn:        operator.UnaryTilde[uint32],
+			},
+			{
+				Index:     7,
+				Flag:      plan.Function_STRICT,
+				Layout:    UNARY_ARITHMETIC_OPERATOR,
+				Args:      []types.T{types.T_uint64},
+				ReturnTyp: types.T_uint64,
+				Fn:        operator.UnaryTilde[uint64],
+			},
+		},
+	},
+
 	// others
 	CAST: {
 		Id: CAST,
@@ -5113,6 +5396,70 @@ var operators = map[int]Functions{
 				Layout:    CAST_EXPRESSION,
 				Args:      []types.T{types.T_decimal128, types.T_int32},
 				ReturnTyp: types.T_json,
+				Fn:        operator.Cast,
+			},
+			{
+				Index:     266,
+				Flag:      plan.Function_STRICT,
+				Layout:    CAST_EXPRESSION,
+				Args:      []types.T{types.T_bool, types.T_int8},
+				ReturnTyp: types.T_int8,
+				Fn:        operator.Cast,
+			},
+			{
+				Index:     267,
+				Flag:      plan.Function_STRICT,
+				Layout:    CAST_EXPRESSION,
+				Args:      []types.T{types.T_bool, types.T_int16},
+				ReturnTyp: types.T_int16,
+				Fn:        operator.Cast,
+			},
+			{
+				Index:     268,
+				Flag:      plan.Function_STRICT,
+				Layout:    CAST_EXPRESSION,
+				Args:      []types.T{types.T_bool, types.T_int32},
+				ReturnTyp: types.T_int32,
+				Fn:        operator.Cast,
+			},
+			{
+				Index:     269,
+				Flag:      plan.Function_STRICT,
+				Layout:    CAST_EXPRESSION,
+				Args:      []types.T{types.T_bool, types.T_int64},
+				ReturnTyp: types.T_int64,
+				Fn:        operator.Cast,
+			},
+			{
+				Index:     270,
+				Flag:      plan.Function_STRICT,
+				Layout:    CAST_EXPRESSION,
+				Args:      []types.T{types.T_bool, types.T_uint8},
+				ReturnTyp: types.T_uint8,
+				Fn:        operator.Cast,
+			},
+			{
+				Index:     271,
+				Flag:      plan.Function_STRICT,
+				Layout:    CAST_EXPRESSION,
+				Args:      []types.T{types.T_bool, types.T_uint16},
+				ReturnTyp: types.T_uint16,
+				Fn:        operator.Cast,
+			},
+			{
+				Index:     272,
+				Flag:      plan.Function_STRICT,
+				Layout:    CAST_EXPRESSION,
+				Args:      []types.T{types.T_bool, types.T_uint32},
+				ReturnTyp: types.T_uint32,
+				Fn:        operator.Cast,
+			},
+			{
+				Index:     273,
+				Flag:      plan.Function_STRICT,
+				Layout:    CAST_EXPRESSION,
+				Args:      []types.T{types.T_bool, types.T_uint64},
+				ReturnTyp: types.T_uint64,
 				Fn:        operator.Cast,
 			},
 		},

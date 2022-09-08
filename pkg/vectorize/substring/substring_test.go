@@ -22,54 +22,47 @@ import (
 
 func TestGetSliceFromLeft(t *testing.T) {
 	cases := []struct {
-		name      string
-		bytes     []byte
-		offset    int64
-		wantBytes []byte
-		wantLen   int64
+		name   string
+		bytes  string
+		offset int64
+		want   string
 	}{
 		{
-			name:      "TEST01",
-			bytes:     []byte("abcdefghijklmn"),
-			offset:    4,
-			wantBytes: []byte("efghijklmn"),
-			wantLen:   10,
+			name:   "TEST01",
+			bytes:  "abcdefghijklmn",
+			offset: 4,
+			want:   "efghijklmn",
 		},
 		{
-			name:      "TEST02",
-			bytes:     []byte("abcdefghijklmn"),
-			offset:    6,
-			wantBytes: []byte("ghijklmn"),
-			wantLen:   8,
+			name:   "TEST02",
+			bytes:  "abcdefghijklmn",
+			offset: 6,
+			want:   "ghijklmn",
 		},
 		{
-			name:      "Test03",
-			bytes:     []byte("abcdefghijklmn"),
-			offset:    10,
-			wantBytes: []byte("klmn"),
-			wantLen:   4,
+			name:   "Test03",
+			bytes:  "abcdefghijklmn",
+			offset: 10,
+			want:   "klmn",
 		},
 		{
-			name:      "TEST04",
-			bytes:     []byte("abcdefghijklmn"),
-			offset:    15,
-			wantBytes: []byte(""),
-			wantLen:   0,
+			name:   "TEST04",
+			bytes:  "abcdefghijklmn",
+			offset: 15,
+			want:   "",
 		},
 		{
-			name:      "TEST05",
-			bytes:     []byte("你好asd世界"),
-			offset:    3,
-			wantBytes: []byte("sd世界"),
-			wantLen:   8,
+			name:   "TEST05",
+			bytes:  "你好asd世界",
+			offset: 3,
+			want:   "sd世界",
 		},
 	}
 
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			got1, got2 := getSliceFromLeft(c.bytes, c.offset)
-			require.Equal(t, c.wantBytes, got1)
-			require.Equal(t, c.wantLen, got2)
+			got := getSliceFromLeft(c.bytes, c.offset)
+			require.Equal(t, c.want, got)
 		})
 	}
 }
@@ -77,90 +70,79 @@ func TestGetSliceFromLeft(t *testing.T) {
 func TestGetSliceFromLeftWithLength(t *testing.T) {
 	cases := []struct {
 		name      string
-		bytes     []byte
+		bytes     string
 		offset    int64
 		length    int64
-		wantBytes []byte
-		wantlen   int64
+		wantBytes string
 	}{
 		{
 			name:      "Test01",
-			bytes:     []byte("abcdefghijklmn"),
+			bytes:     "abcdefghijklmn",
 			offset:    5 - 1,
 			length:    6,
-			wantBytes: []byte("efghij"),
-			wantlen:   6,
+			wantBytes: "efghij",
 		},
 		{
 			name:      "Test02",
-			bytes:     []byte("abcdefghijklmn"),
+			bytes:     "abcdefghijklmn",
 			offset:    5 - 1,
 			length:    10,
-			wantBytes: []byte("efghijklmn"),
-			wantlen:   10,
+			wantBytes: "efghijklmn",
 		},
 		{
 			name:      "Test03",
-			bytes:     []byte("abcdefghijklmn"),
+			bytes:     "abcdefghijklmn",
 			offset:    5 - 1,
 			length:    0,
-			wantBytes: []byte(""),
-			wantlen:   0,
+			wantBytes: "",
 		},
 		{
 			name:      "Test04",
-			bytes:     []byte("abcdefghijklmn"),
+			bytes:     "abcdefghijklmn",
 			offset:    5,
 			length:    -8,
-			wantBytes: []byte(""),
-			wantlen:   0,
+			wantBytes: "",
 		},
 		{
 			name:      "Test05",
-			bytes:     []byte("abcdefghijklmn"),
+			bytes:     "abcdefghijklmn",
 			offset:    5,
 			length:    -9,
-			wantBytes: []byte(""),
-			wantlen:   0,
+			wantBytes: "",
 		},
 		{
 			name:      "Test06",
-			bytes:     []byte("abcdefghijklmn"),
+			bytes:     "abcdefghijklmn",
 			offset:    5,
 			length:    -4,
-			wantBytes: []byte(""),
-			wantlen:   0,
+			wantBytes: "",
 		},
 		{
 			name:      "Test07",
-			bytes:     []byte("abcdefghijklmn"),
+			bytes:     "abcdefghijklmn",
 			offset:    5,
 			length:    -1,
-			wantBytes: []byte(""),
-			wantlen:   0,
+			wantBytes: "",
 		},
 		{
 			name:      "Test08",
-			bytes:     []byte("abcdefghijklmn"),
+			bytes:     "abcdefghijklmn",
 			offset:    5,
 			length:    -1,
-			wantBytes: []byte(""),
-			wantlen:   0,
+			wantBytes: "",
 		},
 		{
 			name:      "Test09",
-			bytes:     []byte("明天abcdef我爱你中国"),
+			bytes:     "明天abcdef我爱你中国",
 			offset:    5 - 1,
 			length:    6,
-			wantBytes: []byte("cdef我爱"),
-			wantlen:   10,
+			wantBytes: "cdef我爱",
 		},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			gotBytes, gotLen := getSliceFromLeftWithLength(c.bytes, c.offset, c.length)
+			gotBytes := getSliceFromLeftWithLength(c.bytes, c.offset, c.length)
 			require.Equal(t, c.wantBytes, gotBytes)
-			require.Equal(t, c.wantlen, gotLen)
 		})
 	}
 }
@@ -205,9 +187,8 @@ func TestGetSliceFromRight(t *testing.T) {
 
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			gotBytes, gotLen := getSliceFromRight(c.bytes, c.offset)
-			require.Equal(t, c.wantBytes, gotBytes)
-			require.Equal(t, c.wantLen, gotLen)
+			gotBytes := getSliceFromRight(string(c.bytes), c.offset)
+			require.Equal(t, string(c.wantBytes), gotBytes)
 		})
 	}
 }
@@ -329,9 +310,8 @@ func TestGetSliceFromRightWithLength(t *testing.T) {
 
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			gotBytes, gotLen := getSliceFromRightWithLength(c.bytes, c.offset, c.length)
-			require.Equal(t, c.wantBytes, gotBytes)
-			require.Equal(t, c.wantLen, gotLen)
+			gotBytes := getSliceFromRightWithLength(string(c.bytes), c.offset, c.length)
+			require.Equal(t, string(c.wantBytes), gotBytes)
 		})
 	}
 }

@@ -66,7 +66,7 @@ func (ht *StringHashMap) InsertStringBatch(states [][3]uint64, keys [][]byte, va
 		return err
 	}
 
-	AesBytesBatchGenHashStates(&keys[0], &states[0], len(keys))
+	BytesBatchGenHashStates(&keys[0], &states[0], len(keys))
 
 	for i := range keys {
 		cell := ht.findCell(&states[i])
@@ -149,7 +149,7 @@ func (ht *StringHashMap) InsertStringBatchWithRing(zValues []int64, states [][3]
 		return err
 	}
 
-	AesBytesBatchGenHashStates(&keys[0], &states[0], len(keys))
+	BytesBatchGenHashStates(&keys[0], &states[0], len(keys))
 
 	for i := range keys {
 		if zValues[i] == 0 {
@@ -248,7 +248,7 @@ func (ht *StringHashMap) InsertHashStateBatchWithRing(zValues []int64, states []
 */
 
 func (ht *StringHashMap) FindStringBatch(states [][3]uint64, keys [][]byte, values []uint64) {
-	AesBytesBatchGenHashStates(&keys[0], &states[0], len(keys))
+	BytesBatchGenHashStates(&keys[0], &states[0], len(keys))
 
 	for i := range keys {
 		cell := ht.findCell(&states[i])
@@ -257,7 +257,7 @@ func (ht *StringHashMap) FindStringBatch(states [][3]uint64, keys [][]byte, valu
 }
 
 func (ht *StringHashMap) FindStringBatchWithRing(states [][3]uint64, zValues []int64, keys [][]byte, values []uint64) {
-	AesBytesBatchGenHashStates(&keys[0], &states[0], len(keys))
+	BytesBatchGenHashStates(&keys[0], &states[0], len(keys))
 
 	for i := range keys {
 		if zValues[i] == 0 {
@@ -270,7 +270,7 @@ func (ht *StringHashMap) FindStringBatchWithRing(states [][3]uint64, zValues []i
 }
 
 func (ht *StringHashMap) FindString24Batch(states [][3]uint64, keys [][3]uint64, values []uint64) {
-	AesInt192BatchGenHashStates(&keys[0], &states[0], len(keys))
+	Int192BatchGenHashStates(&keys[0], &states[0], len(keys))
 
 	for i := range keys {
 		cell := ht.findCell(&states[i])
@@ -279,7 +279,7 @@ func (ht *StringHashMap) FindString24Batch(states [][3]uint64, keys [][3]uint64,
 }
 
 func (ht *StringHashMap) FindString32Batch(states [][3]uint64, keys [][4]uint64, values []uint64) {
-	AesInt256BatchGenHashStates(&keys[0], &states[0], len(keys))
+	Int256BatchGenHashStates(&keys[0], &states[0], len(keys))
 
 	for i := range keys {
 		cell := ht.findCell(&states[i])
@@ -288,7 +288,7 @@ func (ht *StringHashMap) FindString32Batch(states [][3]uint64, keys [][4]uint64,
 }
 
 func (ht *StringHashMap) FindString40Batch(states [][3]uint64, keys [][5]uint64, values []uint64) {
-	AesInt320BatchGenHashStates(&keys[0], &states[0], len(keys))
+	Int320BatchGenHashStates(&keys[0], &states[0], len(keys))
 
 	for i := range keys {
 		cell := ht.findCell(&states[i])

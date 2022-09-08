@@ -137,11 +137,7 @@ func TestPartition(t *testing.T) {
 	require.Equal(t, []int64{0, 1}, partitions)
 
 	v11 := vector.New(types.Type{Oid: types.T(types.T_char)})
-	v11.Col = &types.Bytes{
-		Data:    []byte("helloGutkonichiwanihaonihaoniahonihao"),
-		Offsets: []uint32{0, 5, 8, 17, 22, 27, 32},
-		Lengths: []uint32{5, 3, 9, 5, 5, 5, 5},
-	}
+	vector.AppendString(v11, []string{"hello", "Gut", "konichiwa", "nihao", "nihao", "nihao", "nihao"}, nil)
 	v11.Nsp = &nulls.Nulls{}
 	Partition([]int64{1, 3, 5}, []bool{false, false, false}, partitions, v10)
 	require.Equal(t, []int64{0, 1}, partitions)

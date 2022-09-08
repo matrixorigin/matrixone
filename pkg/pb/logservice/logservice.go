@@ -75,6 +75,7 @@ func (s *CNState) Update(hb CNStoreHeartbeat, tick uint64) {
 	}
 	storeInfo.Tick = tick
 	storeInfo.ServiceAddress = hb.ServiceAddress
+	storeInfo.Role = hb.Role
 	s.Stores[hb.UUID] = storeInfo
 }
 

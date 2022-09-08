@@ -24,64 +24,35 @@ import (
 func TestSubstringFromLeftConstOffsetUnbounded(t *testing.T) {
 	cases := []struct {
 		name  string
-		args1 *types.Bytes
+		args1 []string
 		start int64
-		want  *types.Bytes
+		want  []string
 	}{
 		{
-			name: "Test01",
-			args1: &types.Bytes{
-				Data:    []byte("abcdefghijklmn"),
-				Lengths: []uint32{uint32(len("abcdefghijklmn"))},
-				Offsets: []uint32{0},
-			},
+			name:  "Test01",
+			args1: []string{"abcdefghijklmn"},
 			start: 5,
-			want: &types.Bytes{
-				Data:    []byte("efghijklmn"),
-				Lengths: []uint32{uint32(len("efghijklmn"))},
-				Offsets: []uint32{0},
-			},
+			want:  []string{"efghijklmn"},
 		},
 		{
-			name: "Test02",
-			args1: &types.Bytes{
-				Data:    []byte("abcdefghijklmn"),
-				Lengths: []uint32{uint32(len("abcdefghijklmn"))},
-				Offsets: []uint32{0},
-			},
+			name:  "Test02",
+			args1: []string{"abcdefghijklmn"},
 			start: 12,
-			want: &types.Bytes{
-				Data:    []byte("lmn"),
-				Lengths: []uint32{uint32(len("lmn"))},
-				Offsets: []uint32{0},
-			},
+			want:  []string{"lmn"},
 		},
 		{
-			name: "Test03",
-			args1: &types.Bytes{
-				Data:    []byte("abcdefghijklmn"),
-				Lengths: []uint32{uint32(len("abcdefghijklmn"))},
-				Offsets: []uint32{0},
-			},
+			name:  "Test03",
+			args1: []string{"abcdefghijklmn"},
 			start: 15,
-			want: &types.Bytes{
-				Data:    []byte(""),
-				Lengths: []uint32{uint32(len(""))},
-				Offsets: []uint32{0},
-			},
+			want:  []string{""},
 		},
 	}
 
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			out := &types.Bytes{
-				Data:    make([]byte, len(c.args1.Data)),
-				Lengths: make([]uint32, len(c.args1.Lengths)),
-				Offsets: make([]uint32, len(c.args1.Offsets)),
-			}
-
+			out := make([]string, len(c.args1))
 			got := SubstringFromLeftConstOffsetUnbounded(c.args1, out, c.start-1)
-			require.Equal(t, c.want.String(), got.String())
+			require.Equal(t, c.want, got)
 		})
 	}
 }
@@ -89,64 +60,35 @@ func TestSubstringFromLeftConstOffsetUnbounded(t *testing.T) {
 func TestSubstringFromRightConstOffsetUnbounded(t *testing.T) {
 	cases := []struct {
 		name  string
-		args1 *types.Bytes
+		args1 []string
 		start int64
-		want  *types.Bytes
+		want  []string
 	}{
 		{
-			name: "Test01",
-			args1: &types.Bytes{
-				Data:    []byte("abcdefghijklmn"),
-				Lengths: []uint32{uint32(len("abcdefghijklmn"))},
-				Offsets: []uint32{0},
-			},
+			name:  "Test01",
+			args1: []string{"abcdefghijklmn"},
 			start: -5,
-			want: &types.Bytes{
-				Data:    []byte("jklmn"),
-				Lengths: []uint32{uint32(len("jklmn"))},
-				Offsets: []uint32{0},
-			},
+			want:  []string{"jklmn"},
 		},
 		{
-			name: "Test02",
-			args1: &types.Bytes{
-				Data:    []byte("abcdefghijklmn"),
-				Lengths: []uint32{uint32(len("abcdefghijklmn"))},
-				Offsets: []uint32{0},
-			},
+			name:  "Test02",
+			args1: []string{"abcdefghijklmn"},
 			start: -14,
-			want: &types.Bytes{
-				Data:    []byte("abcdefghijklmn"),
-				Lengths: []uint32{uint32(len("abcdefghijklmn"))},
-				Offsets: []uint32{0},
-			},
+			want:  []string{"abcdefghijklmn"},
 		},
 		{
-			name: "Test03",
-			args1: &types.Bytes{
-				Data:    []byte("abcdefghijklmn"),
-				Lengths: []uint32{uint32(len("abcdefghijklmn"))},
-				Offsets: []uint32{0},
-			},
+			name:  "Test03",
+			args1: []string{"abcdefghijklmn"},
 			start: -16,
-			want: &types.Bytes{
-				Data:    []byte(""),
-				Lengths: []uint32{uint32(len(""))},
-				Offsets: []uint32{0},
-			},
+			want:  []string{""},
 		},
 	}
 
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			out := &types.Bytes{
-				Data:    make([]byte, len(c.args1.Data)),
-				Lengths: make([]uint32, len(c.args1.Lengths)),
-				Offsets: make([]uint32, len(c.args1.Offsets)),
-			}
-
+			out := make([]string, len(c.args1))
 			got := SubstringFromRightConstOffsetUnbounded(c.args1, out, -c.start)
-			require.Equal(t, c.want.String(), got.String())
+			require.Equal(t, c.want, got)
 		})
 	}
 }
@@ -154,227 +96,52 @@ func TestSubstringFromRightConstOffsetUnbounded(t *testing.T) {
 func TestSubstringFromZeroConstOffsetUnbounded(t *testing.T) {
 	cases := []struct {
 		name  string
-		args1 *types.Bytes
+		args1 []string
 		start int64
-		want  *types.Bytes
+		want  []string
 	}{
 		{
-			name: "Test01",
-			args1: &types.Bytes{
-				Data:    []byte("abcdefghijklmn"),
-				Lengths: []uint32{uint32(len("abcdefghijklmn"))},
-				Offsets: []uint32{0},
-			},
+			name:  "Test01",
+			args1: []string{"abcdefghijklmn"},
 			start: 0,
-			want: &types.Bytes{
-				Data:    []byte(""),
-				Lengths: []uint32{uint32(len(""))},
-				Offsets: []uint32{0},
-			},
+			want:  []string{""},
 		},
 		{
-			name: "Test02",
-			args1: &types.Bytes{
-				Data:    []byte("abcd132456"),
-				Lengths: []uint32{uint32(len("abcd132456"))},
-				Offsets: []uint32{0},
-			},
+			name:  "Test02",
+			args1: []string{"abcd132456"},
 			start: 0,
-			want: &types.Bytes{
-				Data:    []byte(""),
-				Lengths: []uint32{uint32(len(""))},
-				Offsets: []uint32{0},
-			},
+			want:  []string{""},
 		},
 	}
 
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			out := &types.Bytes{
-				Data:    make([]byte, len(c.args1.Data)),
-				Lengths: make([]uint32, len(c.args1.Lengths)),
-				Offsets: make([]uint32, len(c.args1.Offsets)),
-			}
-
+			out := make([]string, len(c.args1))
 			got := SubstringFromZeroConstOffsetUnbounded(c.args1, out)
-			require.Equal(t, c.want.String(), got.String())
+			require.Equal(t, c.want, got)
 		})
 	}
 }
 
+func tTestSubstringDynamicOffsetUnbounded[T types.BuiltinNumber](t *testing.T, name string, arg []string, startArgs []T, want []string) {
+	t.Run(name, func(t *testing.T) {
+		out := make([]string, len(arg))
+		got := SubstringDynamicOffsetUnbounded(arg, out, startArgs, []bool{false, false})
+		require.Equal(t, want, got)
+	})
+}
+
 func TestSubstringDynamicOffsetUnbounded(t *testing.T) {
-	cases := []struct {
-		name      string
-		srcArgs   *types.Bytes
-		startArgs interface{}
-		startType types.T
-		want      *types.Bytes
-	}{
-		{
-			name: "Test01",
-			srcArgs: &types.Bytes{
-				Data:    []byte("abcdefghijklmn"),
-				Lengths: []uint32{uint32(len("abcdefghijklmn"))},
-				Offsets: []uint32{0},
-			},
-			startArgs: []uint8{5},
-			startType: types.T_uint8,
-			want: &types.Bytes{
-				Data:    []byte("efghijklmn"),
-				Lengths: []uint32{uint32(len("efghijklmn"))},
-				Offsets: []uint32{0},
-			},
-		},
-		{
-			name: "Test02",
-			srcArgs: &types.Bytes{
-				Data:    []byte("abcdefghijklmn"),
-				Lengths: []uint32{uint32(len("abcdefghijklmn"))},
-				Offsets: []uint32{0},
-			},
-			startArgs: []uint16{5},
-			startType: types.T_uint16,
-			want: &types.Bytes{
-				Data:    []byte("efghijklmn"),
-				Lengths: []uint32{uint32(len("efghijklmn"))},
-				Offsets: []uint32{0},
-			},
-		},
-		{
-			name: "Test03",
-			srcArgs: &types.Bytes{
-				Data:    []byte("abcdefghijklmn"),
-				Lengths: []uint32{uint32(len("abcdefghijklmn"))},
-				Offsets: []uint32{0},
-			},
-			startArgs: []uint32{5},
-			startType: types.T_uint32,
-			want: &types.Bytes{
-				Data:    []byte("efghijklmn"),
-				Lengths: []uint32{uint32(len("efghijklmn"))},
-				Offsets: []uint32{0},
-			},
-		},
-		{
-			name: "Test04",
-			srcArgs: &types.Bytes{
-				Data:    []byte("abcdefghijklmn"),
-				Lengths: []uint32{uint32(len("abcdefghijklmn"))},
-				Offsets: []uint32{0},
-			},
-			startArgs: []uint64{5},
-			startType: types.T_uint64,
-			want: &types.Bytes{
-				Data:    []byte("efghijklmn"),
-				Lengths: []uint32{uint32(len("efghijklmn"))},
-				Offsets: []uint32{0},
-			},
-		},
-		{
-			name: "Test05",
-			srcArgs: &types.Bytes{
-				Data:    []byte("abcdefghijklmn"),
-				Lengths: []uint32{uint32(len("abcdefghijklmn"))},
-				Offsets: []uint32{0},
-			},
-			startArgs: []int8{-10},
-			startType: types.T_int8,
-			want: &types.Bytes{
-				Data:    []byte("efghijklmn"),
-				Lengths: []uint32{uint32(len("efghijklmn"))},
-				Offsets: []uint32{0},
-			},
-		},
-		{
-			name: "Test06",
-			srcArgs: &types.Bytes{
-				Data:    []byte("abcdefghijklmn"),
-				Lengths: []uint32{uint32(len("abcdefghijklmn"))},
-				Offsets: []uint32{0},
-			},
-			startArgs: []int16{-10},
-			startType: types.T_int16,
-			want: &types.Bytes{
-				Data:    []byte("efghijklmn"),
-				Lengths: []uint32{uint32(len("efghijklmn"))},
-				Offsets: []uint32{0},
-			},
-		},
-		{
-			name: "Test07",
-			srcArgs: &types.Bytes{
-				Data:    []byte("abcdefghijklmn"),
-				Lengths: []uint32{uint32(len("abcdefghijklmn"))},
-				Offsets: []uint32{0},
-			},
-			startArgs: []int32{-10},
-			startType: types.T_int32,
-			want: &types.Bytes{
-				Data:    []byte("efghijklmn"),
-				Lengths: []uint32{uint32(len("efghijklmn"))},
-				Offsets: []uint32{0},
-			},
-		},
-		{
-			name: "Test08",
-			srcArgs: &types.Bytes{
-				Data:    []byte("abcdefghijklmn"),
-				Lengths: []uint32{uint32(len("abcdefghijklmn"))},
-				Offsets: []uint32{0},
-			},
-			startArgs: []int64{-10},
-			startType: types.T_int64,
-			want: &types.Bytes{
-				Data:    []byte("efghijklmn"),
-				Lengths: []uint32{uint32(len("efghijklmn"))},
-				Offsets: []uint32{0},
-			},
-		},
-		{
-			name: "Test09",
-			srcArgs: &types.Bytes{
-				Data:    []byte("abcdefghijklmn"),
-				Lengths: []uint32{uint32(len("abcdefghijklmn"))},
-				Offsets: []uint32{0},
-			},
-			startArgs: []uint64{0},
-			startType: types.T_uint64,
-			want: &types.Bytes{
-				Data:    []byte(""),
-				Lengths: []uint32{uint32(len(""))},
-				Offsets: []uint32{0},
-			},
-		},
-		{
-			name: "Test10",
-			srcArgs: &types.Bytes{
-				Data:    []byte("abcdefghijklmn"),
-				Lengths: []uint32{uint32(len("abcdefghijklmn"))},
-				Offsets: []uint32{0},
-			},
-			startArgs: []int32{0},
-			startType: types.T_int32,
-			want: &types.Bytes{
-				Data:    []byte(""),
-				Lengths: []uint32{uint32(len(""))},
-				Offsets: []uint32{0},
-			},
-		},
-	}
-
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			out := &types.Bytes{
-				Data:    make([]byte, len(c.srcArgs.Data)),
-				Lengths: make([]uint32, len(c.srcArgs.Lengths)),
-				Offsets: make([]uint32, len(c.srcArgs.Offsets)),
-			}
-
-			got := SubstringDynamicOffsetUnbounded(c.srcArgs, out, c.startArgs, c.startType)
-			require.Equal(t, c.want.String(), got.String())
-		})
-	}
-
+	tTestSubstringDynamicOffsetUnbounded(t, "Testu1", []string{"abcdefghijklmn"}, []uint8{5}, []string{"efghijklmn"})
+	tTestSubstringDynamicOffsetUnbounded(t, "Testu2", []string{"abcdefghijklmn"}, []uint16{5}, []string{"efghijklmn"})
+	tTestSubstringDynamicOffsetUnbounded(t, "Testu3", []string{"abcdefghijklmn"}, []uint32{5}, []string{"efghijklmn"})
+	tTestSubstringDynamicOffsetUnbounded(t, "Testu4", []string{"abcdefghijklmn"}, []uint64{5}, []string{"efghijklmn"})
+	tTestSubstringDynamicOffsetUnbounded(t, "Testi1", []string{"abcdefghijklmn"}, []int8{5}, []string{"efghijklmn"})
+	tTestSubstringDynamicOffsetUnbounded(t, "Testi2", []string{"abcdefghijklmn"}, []int16{5}, []string{"efghijklmn"})
+	tTestSubstringDynamicOffsetUnbounded(t, "Testi3", []string{"abcdefghijklmn"}, []int32{5}, []string{"efghijklmn"})
+	tTestSubstringDynamicOffsetUnbounded(t, "Testi4", []string{"abcdefghijklmn"}, []int64{5}, []string{"efghijklmn"})
+	tTestSubstringDynamicOffsetUnbounded(t, "Testf3", []string{"abcdefghijklmn"}, []float32{5}, []string{"efghijklmn"})
+	tTestSubstringDynamicOffsetUnbounded(t, "Testf4", []string{"abcdefghijklmn"}, []float64{5}, []string{"efghijklmn"})
 }
 
 //-------------------------------------------------------------
@@ -382,112 +149,60 @@ func TestSubstringDynamicOffsetUnbounded(t *testing.T) {
 func TestSubstringFromLeftConstOffsetBounded(t *testing.T) {
 	cases := []struct {
 		name   string
-		args   *types.Bytes
+		args   []string
 		start  int64
 		length int64
-		want   *types.Bytes
+		want   []string
 	}{
 		{
-			name: "Test01",
-			args: &types.Bytes{
-				Data:    []byte("abcdefghijklmn"),
-				Lengths: []uint32{uint32(len("abcdefghijklmn"))},
-				Offsets: []uint32{0},
-			},
+			name:   "Test01",
+			args:   []string{"abcdefghijklmn"},
 			start:  5,
 			length: 6,
-			want: &types.Bytes{
-				Data:    []byte("efghij"),
-				Lengths: []uint32{uint32(len("efghij"))},
-				Offsets: []uint32{0},
-			},
+			want:   []string{"efghij"},
 		},
 		{
-			name: "Test02",
-			args: &types.Bytes{
-				Data:    []byte("abcdefghijklmn"),
-				Lengths: []uint32{uint32(len("abcdefghijklmn"))},
-				Offsets: []uint32{0},
-			},
+			name:   "Test02",
+			args:   []string{"abcdefghijklmn"},
 			start:  5,
 			length: 10,
-			want: &types.Bytes{
-				Data:    []byte("efghijklmn"),
-				Lengths: []uint32{uint32(len("efghijklmn"))},
-				Offsets: []uint32{0},
-			},
+			want:   []string{"efghijklmn"},
 		},
 		{
-			name: "Test03",
-			args: &types.Bytes{
-				Data:    []byte("abcdefghijklmn"),
-				Lengths: []uint32{uint32(len("abcdefghijklmn"))},
-				Offsets: []uint32{0},
-			},
+			name:   "Test03",
+			args:   []string{"abcdefghijklmn"},
 			start:  5,
 			length: 0,
-			want: &types.Bytes{
-				Data:    []byte(""),
-				Lengths: []uint32{uint32(len(""))},
-				Offsets: []uint32{0},
-			},
+			want:   []string{""},
 		},
 		{
-			name: "Test04",
-			args: &types.Bytes{
-				Data:    []byte("abcdefghijklmn"),
-				Lengths: []uint32{uint32(len("abcdefghijklmn"))},
-				Offsets: []uint32{0},
-			},
+			name:   "Test04",
+			args:   []string{"abcdefghijklmn"},
 			start:  5,
 			length: -3,
-			want: &types.Bytes{
-				Data:    []byte(""),
-				Lengths: []uint32{uint32(len(""))},
-				Offsets: []uint32{0},
-			},
+			want:   []string{""},
 		},
 		{
-			name: "Test05",
-			args: &types.Bytes{
-				Data:    []byte("abcdefghijklmn"),
-				Lengths: []uint32{uint32(len("abcdefghijklmn"))},
-				Offsets: []uint32{0},
-			},
+			name:   "Test05",
+			args:   []string{"abcdefghijklmn"},
 			start:  5,
 			length: -8,
-			want: &types.Bytes{
-				Data:    []byte(""),
-				Lengths: []uint32{uint32(len(""))},
-				Offsets: []uint32{0},
-			},
+			want:   []string{""},
 		},
 		{
-			name: "Test06",
-			args: &types.Bytes{
-				Data:    []byte("abcdefghijklmn"),
-				Lengths: []uint32{uint32(len("abcdefghijklmn"))},
-				Offsets: []uint32{0},
-			},
+			name:   "Test06",
+			args:   []string{"abcdefghijklmn"},
 			start:  5,
 			length: -10,
-			want: &types.Bytes{
-				Data:    []byte(""),
-				Lengths: []uint32{uint32(len(""))},
-				Offsets: []uint32{0},
-			},
+			want:   []string{""},
 		},
 	}
 
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			out := &types.Bytes{
-				Data:    make([]byte, len(c.args.Data)),
-				Lengths: make([]uint32, len(c.args.Lengths)),
-				Offsets: make([]uint32, len(c.args.Offsets)),
-			}
+			out := make([]string, len(c.args))
 			got := SubstringFromLeftConstOffsetBounded(c.args, out, c.start-1, c.length)
-			require.Equal(t, c.want.String(), got.String())
+			require.Equal(t, c.want, got)
 		})
 	}
 }
@@ -495,187 +210,88 @@ func TestSubstringFromLeftConstOffsetBounded(t *testing.T) {
 func TestSubstringFromRightConstOffsetBounded(t *testing.T) {
 	cases := []struct {
 		name   string
-		args   *types.Bytes
+		args   []string
 		start  int64
 		length int64
-		want   *types.Bytes
+		want   []string
 	}{
 		{
-			name: "Test03",
-			args: &types.Bytes{
-				Data:    []byte("abcdefghijklmn"),
-				Lengths: []uint32{uint32(len("abcdefghijklmn"))},
-				Offsets: []uint32{0},
-			},
+			name:   "Test03",
+			args:   []string{"abcdefghijklmn"},
 			start:  -10,
 			length: 5,
-			want: &types.Bytes{
-				Data:    []byte("efghi"),
-				Lengths: []uint32{uint32(len("efghi"))},
-				Offsets: []uint32{0},
-			},
+			want:   []string{"efghi"},
 		},
 		{
-			name: "Test04",
-			args: &types.Bytes{
-				Data:    []byte("abcdefghijklmn"),
-				Lengths: []uint32{uint32(len("abcdefghijklmn"))},
-				Offsets: []uint32{0},
-			},
+			name:   "Test04",
+			args:   []string{"abcdefghijklmn"},
 			start:  -10,
 			length: 0,
-			want: &types.Bytes{
-				Data:    []byte(""),
-				Lengths: []uint32{uint32(len(""))},
-				Offsets: []uint32{0},
-			},
+			want:   []string{""},
 		},
 		{
-			name: "Test05",
-			args: &types.Bytes{
-				Data:    []byte("abcdefghijklmn"),
-				Lengths: []uint32{uint32(len("abcdefghijklmn"))},
-				Offsets: []uint32{0},
-			},
+			name:   "Test05",
+			args:   []string{"abcdefghijklmn"},
 			start:  -10,
 			length: 12,
-			want: &types.Bytes{
-				Data:    []byte("efghijklmn"),
-				Lengths: []uint32{uint32(len("efghijklmn"))},
-				Offsets: []uint32{0},
-			},
+			want:   []string{"efghijklmn"},
 		},
 		{
-			name: "Test06",
-			args: &types.Bytes{
-				Data:    []byte("abcdefghijklmn"),
-				Lengths: []uint32{uint32(len("abcdefghijklmn"))},
-				Offsets: []uint32{0},
-			},
+			name:   "Test06",
+			args:   []string{"abcdefghijklmn"},
 			start:  -14,
 			length: 12,
-			want: &types.Bytes{
-				Data:    []byte("abcdefghijkl"),
-				Lengths: []uint32{uint32(len("abcdefghijkl"))},
-				Offsets: []uint32{0},
-			},
+			want:   []string{"abcdefghijkl"},
 		},
 		{
-			name: "Test07",
-			args: &types.Bytes{
-				Data:    []byte("abcdefghijklmn"),
-				Lengths: []uint32{uint32(len("abcdefghijklmn"))},
-				Offsets: []uint32{0},
-			},
+			name:   "Test07",
+			args:   []string{"abcdefghijklmn"},
 			start:  -20,
 			length: 4,
-			want: &types.Bytes{
-				Data:    []byte(""),
-				Lengths: []uint32{uint32(len(""))},
-				Offsets: []uint32{0},
-			},
+			want:   []string{""},
 		},
 		{
-			name: "Test08",
-			args: &types.Bytes{
-				Data:    []byte("abcdefghijklmn"),
-				Lengths: []uint32{uint32(len("abcdefghijklmn"))},
-				Offsets: []uint32{0},
-			},
+			name:   "Test08",
+			args:   []string{"abcdefghijklmn"},
 			start:  -16,
 			length: 10,
-			want: &types.Bytes{
-				Data:    []byte(""),
-				Lengths: []uint32{uint32(len(""))},
-				Offsets: []uint32{0},
-			},
+			want:   []string{""},
 		},
 		{
-			name: "Test09",
-			args: &types.Bytes{
-				Data:    []byte("abcdefghijklmn"),
-				Lengths: []uint32{uint32(len("abcdefghijklmn"))},
-				Offsets: []uint32{0},
-			},
+			name:   "Test09",
+			args:   []string{"abcdefghijklmn"},
 			start:  -16,
 			length: 20,
-			want: &types.Bytes{
-				Data:    []byte(""),
-				Lengths: []uint32{uint32(len(""))},
-				Offsets: []uint32{0},
-			},
+			want:   []string{""},
 		},
 		{
-			name: "Test10",
-			args: &types.Bytes{
-				Data:    []byte("abcdefghijklmn"),
-				Lengths: []uint32{uint32(len("abcdefghijklmn"))},
-				Offsets: []uint32{0},
-			},
+			name:   "Test10",
+			args:   []string{"abcdefghijklmn"},
 			start:  -8,
 			length: -4,
-			want: &types.Bytes{
-				Data:    []byte(""),
-				Lengths: []uint32{uint32(len(""))},
-				Offsets: []uint32{0},
-			},
+			want:   []string{""},
 		},
 		{
-			name: "Test11",
-			args: &types.Bytes{
-				Data:    []byte("abcdefghijklmn"),
-				Lengths: []uint32{uint32(len("abcdefghijklmn"))},
-				Offsets: []uint32{0},
-			},
+			name:   "Test11",
+			args:   []string{"abcdefghijklmn"},
 			start:  -8,
 			length: -6,
-			want: &types.Bytes{
-				Data:    []byte(""),
-				Lengths: []uint32{uint32(len(""))},
-				Offsets: []uint32{0},
-			},
+			want:   []string{""},
 		},
 		{
-			name: "Test11",
-			args: &types.Bytes{
-				Data:    []byte("abcdefghijklmn"),
-				Lengths: []uint32{uint32(len("abcdefghijklmn"))},
-				Offsets: []uint32{0},
-			},
+			name:   "Test11",
+			args:   []string{"abcdefghijklmn"},
 			start:  -14,
 			length: -6,
-			want: &types.Bytes{
-				Data:    []byte(""),
-				Lengths: []uint32{uint32(len(""))},
-				Offsets: []uint32{0},
-			},
-		},
-		{
-			name: "Test12",
-			args: &types.Bytes{
-				Data:    []byte("abcdefghijklmn"),
-				Lengths: []uint32{uint32(len("abcdefghijklmn"))},
-				Offsets: []uint32{0},
-			},
-			start:  -16,
-			length: -6,
-			want: &types.Bytes{
-				Data:    []byte(""),
-				Lengths: []uint32{uint32(len(""))},
-				Offsets: []uint32{0},
-			},
+			want:   []string{""},
 		},
 	}
 
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			out := &types.Bytes{
-				Data:    make([]byte, len(c.args.Data)),
-				Lengths: make([]uint32, len(c.args.Lengths)),
-				Offsets: make([]uint32, len(c.args.Offsets)),
-			}
+			out := make([]string, len(c.args))
 			got := SubstringFromRightConstOffsetBounded(c.args, out, -c.start, c.length)
-			require.Equal(t, c.want.String(), got.String())
+			require.Equal(t, c.want, got)
 		})
 	}
 }
@@ -683,369 +299,110 @@ func TestSubstringFromRightConstOffsetBounded(t *testing.T) {
 func TestSubstringFromZeroConstOffsetBounded(t *testing.T) {
 	cases := []struct {
 		name   string
-		args1  *types.Bytes
+		args1  []string
 		start  int64
 		length int64
-		want   *types.Bytes
+		want   []string
 	}{
 		{
-			name: "Test01",
-			args1: &types.Bytes{
-				Data:    []byte("abcdefghijklmn"),
-				Lengths: []uint32{uint32(len("abcdefghijklmn"))},
-				Offsets: []uint32{0},
-			},
+			name:   "Test01",
+			args1:  []string{"abcdefghijklmn"},
 			start:  0,
 			length: 20,
-			want: &types.Bytes{
-				Data:    []byte(""),
-				Lengths: []uint32{uint32(len(""))},
-				Offsets: []uint32{0},
-			},
+			want:   []string{""},
 		},
 		{
-			name: "Test02",
-			args1: &types.Bytes{
-				Data:    []byte("abcd132456"),
-				Lengths: []uint32{uint32(len("abcd132456"))},
-				Offsets: []uint32{0},
-			},
+			name:   "Test02",
+			args1:  []string{"abcd132456"},
 			start:  0,
 			length: -5,
-			want: &types.Bytes{
-				Data:    []byte(""),
-				Lengths: []uint32{uint32(len(""))},
-				Offsets: []uint32{0},
-			},
-		},
+			want:   []string{""}},
 	}
 
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			out := &types.Bytes{
-				Data:    make([]byte, len(c.args1.Data)),
-				Lengths: make([]uint32, len(c.args1.Lengths)),
-				Offsets: make([]uint32, len(c.args1.Offsets)),
-			}
-
+			out := make([]string, len(c.args1))
 			got := SubstringFromZeroConstOffsetBounded(c.args1, out)
-			require.Equal(t, c.want.String(), got.String())
+			require.Equal(t, c.want, got)
 		})
 	}
 }
 
+func tTestSubstringDynamicOffsetBounded[T1, T2 types.BuiltinNumber](
+	t *testing.T, name string, srcArgs []string, startArgs []T1, lengthArgs []T2, cs []bool, want []string) {
+	t.Run(name, func(t *testing.T) {
+		out := make([]string, len(srcArgs))
+		got := SubstringDynamicOffsetBounded(srcArgs, out, startArgs, lengthArgs, cs)
+		require.Equal(t, want, got)
+	})
+}
+
 func TestSubstringDynamicOffsetBounded(t *testing.T) {
-	cases := []struct {
-		name       string
-		srcArgs    *types.Bytes
-		startArgs  interface{}
-		startType  types.T
-		lengthArgs interface{}
-		lengthType types.T
-		cs         []bool
-		want       *types.Bytes
-	}{
-		{
-			name: "Test01",
-			srcArgs: &types.Bytes{
-				Data:    []byte("abcdefghijklmn"),
-				Lengths: []uint32{uint32(len("abcdefghijklmn"))},
-				Offsets: []uint32{0},
-			},
-			startArgs:  []uint8{5},
-			startType:  types.T_uint8,
-			lengthArgs: []uint8{6},
-			lengthType: types.T_uint8,
-			cs:         []bool{false, false, false},
-			want: &types.Bytes{
-				Data:    []byte("efghij"),
-				Lengths: []uint32{uint32(len("efghij"))},
-				Offsets: []uint32{0},
-			},
-		},
-		{
-			name: "Test02",
-			srcArgs: &types.Bytes{
-				Data:    []byte("abcdefghijklmn"),
-				Lengths: []uint32{uint32(len("abcdefghijklmn"))},
-				Offsets: []uint32{0},
-			},
-			startArgs:  []uint16{5},
-			startType:  types.T_uint16,
-			lengthArgs: []uint16{6},
-			lengthType: types.T_uint16,
-			cs:         []bool{false, false, false},
-			want: &types.Bytes{
-				Data:    []byte("efghij"),
-				Lengths: []uint32{uint32(len("efghij"))},
-				Offsets: []uint32{0},
-			},
-		},
-		{
-			name: "Test03",
-			srcArgs: &types.Bytes{
-				Data:    []byte("abcdefghijklmn"),
-				Lengths: []uint32{uint32(len("abcdefghijklmn"))},
-				Offsets: []uint32{0},
-			},
-			startArgs:  []uint32{5},
-			startType:  types.T_uint32,
-			lengthArgs: []uint32{6},
-			lengthType: types.T_uint32,
-			cs:         []bool{false, false, false},
-			want: &types.Bytes{
-				Data:    []byte("efghij"),
-				Lengths: []uint32{uint32(len("efghij"))},
-				Offsets: []uint32{0},
-			},
-		},
-		{
-			name: "Test04",
-			srcArgs: &types.Bytes{
-				Data:    []byte("abcdefghijklmn"),
-				Lengths: []uint32{uint32(len("abcdefghijklmn"))},
-				Offsets: []uint32{0},
-			},
-			startArgs:  []uint64{5},
-			startType:  types.T_uint64,
-			lengthArgs: []uint64{6},
-			lengthType: types.T_uint64,
-			cs:         []bool{false, false, false},
-			want: &types.Bytes{
-				Data:    []byte("efghij"),
-				Lengths: []uint32{uint32(len("efghij"))},
-				Offsets: []uint32{0},
-			},
-		},
-		{
-			name: "Test05",
-			srcArgs: &types.Bytes{
-				Data:    []byte("abcdefghijklmn"),
-				Lengths: []uint32{uint32(len("abcdefghijklmn"))},
-				Offsets: []uint32{0},
-			},
-			startArgs:  []uint32{5},
-			startType:  types.T_uint32,
-			lengthArgs: []int64{6},
-			lengthType: types.T_int64,
-			cs:         []bool{false, false, false},
-			want: &types.Bytes{
-				Data:    []byte("efghij"),
-				Lengths: []uint32{uint32(len("efghij"))},
-				Offsets: []uint32{0},
-			},
-		},
-		{
-			name: "Test06",
-			srcArgs: &types.Bytes{
-				Data:    []byte("abcdefghijklmn"),
-				Lengths: []uint32{uint32(len("abcdefghijklmn"))},
-				Offsets: []uint32{0},
-			},
-			startArgs:  []uint32{5},
-			startType:  types.T_uint32,
-			lengthArgs: []int64{-6},
-			lengthType: types.T_int64,
-			cs:         []bool{false, false, false},
-			want: &types.Bytes{
-				Data:    []byte("efgh"),
-				Lengths: []uint32{uint32(len("efgh"))},
-				Offsets: []uint32{0},
-			},
-		},
-		{
-			name: "Test07",
-			srcArgs: &types.Bytes{
-				Data:    []byte("abcdefghijklmn"),
-				Lengths: []uint32{uint32(len("abcdefghijklmn"))},
-				Offsets: []uint32{0},
-			},
-			startArgs:  []uint32{5},
-			startType:  types.T_uint32,
-			lengthArgs: []int8{-6},
-			lengthType: types.T_int8,
-			cs:         []bool{false, false, false},
-			want: &types.Bytes{
-				Data:    []byte("efgh"),
-				Lengths: []uint32{uint32(len("efgh"))},
-				Offsets: []uint32{0},
-			},
-		},
-		{
-			name: "Test08",
-			srcArgs: &types.Bytes{
-				Data:    []byte("abcdefghijklmn"),
-				Lengths: []uint32{uint32(len("abcdefghijklmn"))},
-				Offsets: []uint32{0},
-			},
-			startArgs:  []uint32{5},
-			startType:  types.T_uint32,
-			lengthArgs: []int8{0},
-			lengthType: types.T_int8,
-			cs:         []bool{false, false, false},
-			want: &types.Bytes{
-				Data:    []byte(""),
-				Lengths: []uint32{uint32(len(""))},
-				Offsets: []uint32{0},
-			},
-		},
-		{
-			name: "Test09",
-			srcArgs: &types.Bytes{
-				Data:    []byte("abcdefghijklmn"),
-				Lengths: []uint32{uint32(len("abcdefghijklmn"))},
-				Offsets: []uint32{0},
-			},
-			startArgs:  []uint32{5},
-			startType:  types.T_uint32,
-			lengthArgs: []int16{-10},
-			lengthType: types.T_int16,
-			cs:         []bool{false, false, false},
-			want: &types.Bytes{
-				Data:    []byte(""),
-				Lengths: []uint32{uint32(len(""))},
-				Offsets: []uint32{0},
-			},
-		},
-		{
-			name: "Test10",
-			srcArgs: &types.Bytes{
-				Data:    []byte("abcdefghijklmn"),
-				Lengths: []uint32{uint32(len("abcdefghijklmn"))},
-				Offsets: []uint32{0},
-			},
-			startArgs:  []int32{0},
-			startType:  types.T_int32,
-			lengthArgs: []int16{-10},
-			lengthType: types.T_int16,
-			cs:         []bool{false, false, false},
-			want: &types.Bytes{
-				Data:    []byte(""),
-				Lengths: []uint32{uint32(len(""))},
-				Offsets: []uint32{0},
-			},
-		},
-		//----------------------------------------
-		{
-			name: "Test11",
-			srcArgs: &types.Bytes{
-				Data:    []byte("abcdefghijklmn"),
-				Lengths: []uint32{uint32(len("abcdefghijklmn"))},
-				Offsets: []uint32{0},
-			},
-			startArgs:  []int16{-10},
-			startType:  types.T_int16,
-			lengthArgs: []int16{-2},
-			lengthType: types.T_int16,
-			cs:         []bool{false, false, false},
-			want: &types.Bytes{
-				Data:    []byte("efghijkl"),
-				Lengths: []uint32{uint32(len("efghijkl"))},
-				Offsets: []uint32{0},
-			},
-		},
-		{
-			name: "Test12",
-			srcArgs: &types.Bytes{
-				Data:    []byte("abcdefghijklmn"),
-				Lengths: []uint32{uint32(len("abcdefghijklmn"))},
-				Offsets: []uint32{0},
-			},
-			startArgs:  []int32{-10},
-			startType:  types.T_int32,
-			lengthArgs: []int64{-6},
-			lengthType: types.T_int64,
-			cs:         []bool{false, false, false},
-			want: &types.Bytes{
-				Data:    []byte("efgh"),
-				Lengths: []uint32{uint32(len("efgh"))},
-				Offsets: []uint32{0},
-			},
-		},
-		{
-			name: "Test13",
-			srcArgs: &types.Bytes{
-				Data:    []byte("abcdefghijklmn"),
-				Lengths: []uint32{uint32(len("abcdefghijklmn"))},
-				Offsets: []uint32{0},
-			},
-			startArgs:  []int8{-10},
-			startType:  types.T_int8,
-			lengthArgs: []int32{-12},
-			lengthType: types.T_int32,
-			cs:         []bool{false, false, false},
-			want: &types.Bytes{
-				Data:    []byte(""),
-				Lengths: []uint32{uint32(len(""))},
-				Offsets: []uint32{0},
-			},
-		},
-		{
-			name: "Test14",
-			srcArgs: &types.Bytes{
-				Data:    []byte("abcdefghijklmn"),
-				Lengths: []uint32{uint32(len("abcdefghijklmn"))},
-				Offsets: []uint32{0},
-			},
-			startArgs:  []int16{-10},
-			startType:  types.T_int16,
-			lengthArgs: []int32{0},
-			lengthType: types.T_int32,
-			cs:         []bool{false, false, false},
-			want: &types.Bytes{
-				Data:    []byte(""),
-				Lengths: []uint32{uint32(len(""))},
-				Offsets: []uint32{0},
-			},
-		},
-		{
-			name: "Test15",
-			srcArgs: &types.Bytes{
-				Data:    []byte("abcdefghijklmn"),
-				Lengths: []uint32{uint32(len("abcdefghijklmn"))},
-				Offsets: []uint32{0},
-			},
-			startArgs:  []int32{-10},
-			startType:  types.T_int32,
-			lengthArgs: []int64{-9},
-			lengthType: types.T_int64,
-			cs:         []bool{false, false, false},
-			want: &types.Bytes{
-				Data:    []byte("e"),
-				Lengths: []uint32{uint32(len("e"))},
-				Offsets: []uint32{0},
-			},
-		},
-		{
-			name: "Test16",
-			srcArgs: &types.Bytes{
-				Data:    []byte("abcdefghijklmn"),
-				Lengths: []uint32{uint32(len("abcdefghijklmn"))},
-				Offsets: []uint32{0},
-			},
-			startArgs:  []int32{-10},
-			startType:  types.T_int32,
-			lengthArgs: []int64{-10},
-			lengthType: types.T_int64,
-			cs:         []bool{false, false, false},
-			want: &types.Bytes{
-				Data:    []byte(""),
-				Lengths: []uint32{uint32(len(""))},
-				Offsets: []uint32{0},
-			},
-		},
-	}
+	tTestSubstringDynamicOffsetBounded(t, "Test01", []string{"abcdefghijklmn"},
+		[]uint8{5}, []uint8{6}, []bool{false, false, false},
+		[]string{"efghij"})
 
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			out := &types.Bytes{
-				Data:    make([]byte, len(c.srcArgs.Data)),
-				Lengths: make([]uint32, len(c.srcArgs.Lengths)),
-				Offsets: make([]uint32, len(c.srcArgs.Offsets)),
-			}
+	tTestSubstringDynamicOffsetBounded(t, "Test02", []string{"abcdefghijklmn"},
+		[]uint16{5}, []uint16{6}, []bool{false, false, false},
+		[]string{"efghij"})
 
-			got := SubstringDynamicOffsetBounded(c.srcArgs, out, c.startArgs, c.startType, c.lengthArgs, c.lengthType, c.cs)
-			require.Equal(t, c.want.String(), got.String())
-		})
-	}
+	tTestSubstringDynamicOffsetBounded(t, "Test03", []string{"abcdefghijklmn"},
+		[]uint32{5}, []uint32{6}, []bool{false, false, false},
+		[]string{"efghij"})
+
+	tTestSubstringDynamicOffsetBounded(t, "Test04", []string{"abcdefghijklmn"},
+		[]uint64{5}, []uint64{6}, []bool{false, false, false},
+		[]string{"efghij"})
+
+	tTestSubstringDynamicOffsetBounded(t, "Test04", []string{"abcdefghijklmn"},
+		[]uint64{5}, []uint64{6}, []bool{false, false, false},
+		[]string{"efghij"})
+
+	tTestSubstringDynamicOffsetBounded(t, "Test05", []string{"abcdefghijklmn"},
+		[]uint32{5}, []int64{6}, []bool{false, false, false},
+		[]string{"efghij"})
+
+	tTestSubstringDynamicOffsetBounded(t, "Test06", []string{"abcdefghijklmn"},
+		[]uint32{5}, []int64{-6}, []bool{false, false, false},
+		[]string{""})
+
+	tTestSubstringDynamicOffsetBounded(t, "Test07", []string{"abcdefghijklmn"},
+		[]uint32{5}, []int8{-6}, []bool{false, false, false},
+		[]string{""})
+
+	tTestSubstringDynamicOffsetBounded(t, "Test08", []string{"abcdefghijklmn"},
+		[]uint32{5}, []int8{0}, []bool{false, false, false},
+		[]string{""})
+
+	tTestSubstringDynamicOffsetBounded(t, "Test09", []string{"abcdefghijklmn"},
+		[]uint32{5}, []int16{-10}, []bool{false, false, false},
+		[]string{""})
+
+	tTestSubstringDynamicOffsetBounded(t, "Test10", []string{"abcdefghijklmn"},
+		[]uint32{0}, []int16{-10}, []bool{false, false, false},
+		[]string{""})
+
+	tTestSubstringDynamicOffsetBounded(t, "Test11", []string{"abcdefghijklmn"},
+		[]int32{-10}, []int16{-2}, []bool{false, false, false},
+		[]string{""})
+
+	tTestSubstringDynamicOffsetBounded(t, "Test12", []string{"abcdefghijklmn"},
+		[]int32{-10}, []int64{-6}, []bool{false, false, false},
+		[]string{""})
+
+	tTestSubstringDynamicOffsetBounded(t, "Test13", []string{"abcdefghijklmn"},
+		[]int32{-10}, []int64{-12}, []bool{false, false, false},
+		[]string{""})
+
+	tTestSubstringDynamicOffsetBounded(t, "Test14", []string{"abcdefghijklmn"},
+		[]int32{-10}, []int64{0}, []bool{false, false, false},
+		[]string{""})
+
+	tTestSubstringDynamicOffsetBounded(t, "Test15", []string{"abcdefghijklmn"},
+		[]int32{-10}, []int64{-9}, []bool{false, false, false},
+		[]string{""})
+
+	tTestSubstringDynamicOffsetBounded(t, "Test16", []string{"abcdefghijklmn"},
+		[]int32{-10}, []int64{-10}, []bool{false, false, false},
+		[]string{""})
 }

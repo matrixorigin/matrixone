@@ -20,8 +20,6 @@ import (
 	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/errno"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
@@ -57,7 +55,7 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 	if len(bat.Zs) == 0 {
 		return false, nil
 	}
-	defer bat.Clean(proc.Mp)
+	defer bat.Clean(proc.Mp())
 	{
 		// do null value check
 		for i := range bat.Vecs {
@@ -75,23 +73,7 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 		// scalar vector's extension
 		for i := range bat.Vecs {
 			bat.Attrs[i] = n.TargetColDefs[i].GetName()
-			if bat.Vecs[i].IsScalarNull() {
-				if bat.Vecs[i].Typ.Oid == types.T_any {
-					bat.Vecs[i].Typ.Oid = types.T(n.TargetColDefs[i].Typ.GetId())
-				}
-				switch bat.Vecs[i].Typ.Oid {
-				case types.T_char, types.T_varchar, types.T_blob, types.T_json:
-					bat.Vecs[i].Col = &types.Bytes{
-						Data:    nil,
-						Offsets: make([]uint32, len(bat.Zs)),
-						Lengths: make([]uint32, len(bat.Zs)),
-					}
-				default:
-					vector.PreAlloc(bat.Vecs[i], bat.Vecs[i], bat.Vecs[i].Length, proc.Mp)
-				}
-				vector.SetVectorLength(bat.Vecs[i], bat.Vecs[i].Length)
-			}
-			bat.Vecs[i] = bat.Vecs[i].ConstExpand(proc.Mp)
+			bat.Vecs[i] = bat.Vecs[i].ConstExpand(proc.Mp())
 		}
 	}
 	ctx := context.TODO()

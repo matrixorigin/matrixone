@@ -86,7 +86,7 @@ func (checker *warChecker) ReadBlock(dbId uint64, id *common.ID) {
 }
 
 func (checker *warChecker) check() (err error) {
-	var entry catalog.BaseEntryIf
+	var entry catalog.BaseEntry
 	for key := range checker.symTable {
 		keyt, did, tid, sid, bid := txnbase.KeyEncoder.Decode([]byte(key))
 		db, err := checker.catalog.GetDatabaseByID(did)
