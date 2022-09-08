@@ -2070,6 +2070,7 @@ var builtins = map[int]Functions{
 		Overloads: []Function{
 			{
 				Index:     0,
+				Volatile:  true,
 				Flag:      plan.Function_STRICT,
 				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_varchar},
@@ -2078,6 +2079,7 @@ var builtins = map[int]Functions{
 			},
 			{
 				Index:     1,
+				Volatile:  true,
 				Flag:      plan.Function_STRICT,
 				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_char},
