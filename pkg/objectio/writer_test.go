@@ -41,6 +41,7 @@ func TestNewObjectWriter(t *testing.T) {
 	extents, err := objectWriter.WriteEnd()
 	assert.Nil(t, err)
 	assert.Equal(t, 2, len(extents))
+	// Sync is for testing
 	err = objectWriter.Sync(dir)
 	assert.Nil(t, err)
 
