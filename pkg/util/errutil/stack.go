@@ -22,29 +22,6 @@ import (
 	"github.com/cockroachdb/errors/errbase"
 )
 
-// This file mirrors the WithStack functionality from
-// github.com/pkg/errutil. We would prefer to reuse the withStack
-// struct from that package directly (the library recognizes it well)
-// unfortunately github.com/pkg/errutil does not enable client code to
-// customize the depth at which the stack trace is captured.
-
-// WithStack annotates err with a stack trace at the point WithStack was called.
-func WithStack(err error) error {
-	// Skip the frame of WithStack itself in caller stack.
-	// this mirrors the behavior of WithStack() in github.com/pkg/errutil.
-	return WithStackDepth(err, 1)
-}
-
-// WithStackDepth annotates err with a stack trace starting from the given call depth.
-// The value zero identifies the caller of WithStackDepth itself.
-// See the documentation of WithStack() for more details.
-func WithStackDepth(err error, depth int) error {
-	if err == nil {
-		return nil
-	}
-	return &withStack{cause: err, Stack: util.Callers(depth + 1)}
-}
-
 // StackTracer retrieves the StackTrace
 // Generally you would want to use the GetStackTracer function to do that.
 type StackTracer interface {

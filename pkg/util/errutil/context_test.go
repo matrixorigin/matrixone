@@ -17,15 +17,14 @@ package errutil
 import (
 	"context"
 	goErrors "errors"
+	"github.com/matrixorigin/matrixone/pkg/util"
 	"reflect"
 	"testing"
 )
 
 var ctx = context.Background()
 var testErr = goErrors.New("test error")
-var stackErr = WithStack(testErr)
-var msgErr = WithMessage(stackErr, "prefix")
-var msg2Err = WithMessagef(msgErr, "prefix by %s", "jack")
+var stackErr error = &withStack{cause: testErr, Stack: util.Callers(1)}
 
 func TestGetContextTracer(t *testing.T) {
 	type args struct {
@@ -44,21 +43,6 @@ func TestGetContextTracer(t *testing.T) {
 		{
 			name: "context",
 			args: args{err: WithContext(context.Background(), goErrors.New("test error"))},
-			want: context.Background(),
-		},
-		{
-			name: "stack",
-			args: args{err: WithStack(goErrors.New("test error"))},
-			want: nil,
-		},
-		{
-			name: "message",
-			args: args{err: WithMessagef(goErrors.New("test error"), "prefix")},
-			want: nil,
-		},
-		{
-			name: "stack/context",
-			args: args{err: WithStack(WithContext(context.Background(), goErrors.New("test error")))},
 			want: context.Background(),
 		},
 	}
@@ -90,21 +74,6 @@ func TestHasContext(t *testing.T) {
 			args: args{err: WithContext(context.Background(), goErrors.New("test error"))},
 			want: true,
 		},
-		{
-			name: "stack",
-			args: args{err: WithStack(goErrors.New("test error"))},
-			want: false,
-		},
-		{
-			name: "message",
-			args: args{err: WithMessagef(goErrors.New("test error"), "prefix")},
-			want: false,
-		},
-		{
-			name: "stack/context",
-			args: args{err: WithStack(WithContext(context.Background(), goErrors.New("test error")))},
-			want: true,
-		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -134,11 +103,6 @@ func Test_withContext_Cause(t *testing.T) {
 			name:    "stack",
 			fields:  fields{stackErr, ctx},
 			wantErr: stackErr,
-		},
-		{
-			name:    "message",
-			fields:  fields{msgErr, ctx},
-			wantErr: msgErr,
 		},
 	}
 	for _, tt := range tests {
@@ -172,11 +136,6 @@ func Test_withContext_Context(t *testing.T) {
 		{
 			name:   "stack",
 			fields: fields{stackErr, ctx},
-			want:   ctx,
-		},
-		{
-			name:   "message",
-			fields: fields{msgErr, ctx},
 			want:   ctx,
 		},
 	}
@@ -213,11 +172,6 @@ func Test_withContext_Error(t *testing.T) {
 			fields: fields{stackErr, ctx},
 			want:   "test error",
 		},
-		{
-			name:   "message",
-			fields: fields{msgErr, ctx},
-			want:   "prefix: test error",
-		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -251,11 +205,6 @@ func Test_withContext_Unwrap(t *testing.T) {
 			name:    "stack",
 			fields:  fields{stackErr, ctx},
 			wantErr: stackErr,
-		},
-		{
-			name:    "message2",
-			fields:  fields{msg2Err, ctx},
-			wantErr: msg2Err,
 		},
 	}
 	for _, tt := range tests {

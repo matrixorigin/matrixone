@@ -132,11 +132,10 @@ func errorUsage(ctx context.Context) {
 	logutil.Infof("base err: %v", base)
 
 	// case 1: WithMessage
-	outputError("WithMessage", errutil.WithMessage(base, "new message"))
-	outputError("WithMessagef", errutil.WithMessagef(base, "new %s", "world"))
+	// removed
 
 	// case 2: WithStack
-	outputError("WithStack", errutil.WithStack(base))
+	// removed
 
 	// case 3: WithContext, store db & log
 	logutil.Info("WithContext with default action: 1) store in db; 2) gen log")

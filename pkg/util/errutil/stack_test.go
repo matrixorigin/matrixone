@@ -124,7 +124,7 @@ func Test_withStack_Cause(t *testing.T) {
 		{
 			name: "withContext",
 			fields: fields{
-				cause: msgErr,
+				cause: testErr,
 				Stack: stackErr.(*withStack).Stack,
 			},
 			wantErr: true,
@@ -185,31 +185,6 @@ func Test_WithStack_HasStack(t *testing.T) {
 				Stack: tt.fields.Stack,
 			}
 			if got := w.HasStack(); got != tt.want {
-				t.Errorf("HasStack() = %v, want %v", got, tt.want)
-			}
-		})
-	}
-}
-
-func Test_WithStack(t *testing.T) {
-	type fields struct {
-		cause error
-	}
-	tests := []struct {
-		name   string
-		fields fields
-		want   bool
-	}{
-		{
-			name:   "nil",
-			fields: fields{},
-			want:   false,
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := WithStack(tt.fields.cause)
-			if (got != nil) != tt.want {
 				t.Errorf("HasStack() = %v, want %v", got, tt.want)
 			}
 		})

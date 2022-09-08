@@ -17,7 +17,7 @@ package errutil
 import (
 	"context"
 	goErrors "errors"
-	"fmt"
+	pkgErr "github.com/pkg/errors"
 	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/util"
@@ -41,45 +41,19 @@ func New(text string) error {
 	return err
 }
 
-func NewWithContext(ctx context.Context, text string) (err error) {
-	err = &withStack{goErrors.New(text), util.Callers(1)}
+func NewWithContext(ctx context.Context, message string) (err error) {
+	err = pkgErr.New(message)
 	err = &withContext{err, ctx}
 	GetReportErrorFunc()(ctx, err, 1)
 	return err
 }
 
-// Wrap returns an error annotating err with a stack trace
-// at the point Wrap is called, and the supplied message.
-// If err is nil, Wrap returns nil.
 func Wrap(err error, message string) error {
-	if err == nil {
-		return nil
-	}
-	err = &withMessage{
-		cause: err,
-		msg:   message,
-	}
-	return &withStack{
-		err,
-		util.Callers(1),
-	}
+	return pkgErr.Wrap(err, message)
 }
 
-// Wrapf returns an error annotating err with a stack trace
-// at the point Wrapf is called, and the format specifier.
-// If err is nil, Wrapf returns nil.
 func Wrapf(err error, format string, args ...any) error {
-	if err == nil {
-		return nil
-	}
-	err = &withMessage{
-		cause: err,
-		msg:   fmt.Sprintf(format, args...),
-	}
-	return &withStack{
-		err,
-		util.Callers(1),
-	}
+	return pkgErr.Wrapf(err, format, args...)
 }
 
 // WalkDeep does a depth-first traversal of all errutil.
