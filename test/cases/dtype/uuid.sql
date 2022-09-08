@@ -56,6 +56,7 @@ select sum(a) from t3 group by b;
 select sum(a) from t3 group by b having by sum(a) > 20;
 -- uuid  type field as sorting criteria when order by
 select * from t3 order by b;
+select * from t3 order by b desc;
 -- test delete statement with uuid type
 delete from t3 where b = 'ad9f83eb-2dbd-11ed-940f-000c29847904';
 select * from t3;
