@@ -72,15 +72,17 @@ func TestHex(t *testing.T) {
 		convey.Convey(c.name, t, func() {
 			var inVector *vector.Vector
 			if c.inputstr != nil {
-				inVector = testutil.MakeVarcharVector(c.inputstr, nil)
-				inVector.IsConst = c.isScalar
+				if c.isScalar {
+					inVector = vector.NewConstString(types.T_varchar.ToType(), 1, c.inputstr[0])
+				} else {
+					inVector = testutil.MakeCharVector(c.inputstr, nil)
+				}
 			} else {
-				inVector = testutil.MakeScalarNull(0)
+				inVector = testutil.MakeScalarNull(types.T_char, 0)
 			}
 			result, err := HexString([]*vector.Vector{inVector}, c.proc)
 			convey.So(err, convey.ShouldBeNil)
-			s := BytesToString(result)
-			convey.So(s, convey.ShouldResemble, c.expected)
+			convey.So(vector.GetStrVectorValues(result), convey.ShouldResemble, c.expected)
 			convey.So(result.IsScalar(), convey.ShouldEqual, c.isScalar)
 		})
 	}
@@ -128,30 +130,19 @@ func TestHex(t *testing.T) {
 		convey.Convey(c.name, t, func() {
 			var inVector *vector.Vector
 			if c.inputnum != nil {
-				inVector = testutil.MakeInt64Vector(c.inputnum, nil)
-				inVector.IsConst = c.isScalar
+				if c.isScalar {
+					inVector = vector.NewConstFixed(types.T_int64.ToType(), 1, c.inputnum[0])
+				} else {
+					inVector = testutil.MakeInt64Vector(c.inputnum, nil)
+				}
 			} else {
-				inVector = testutil.MakeScalarNull(0)
+				inVector = testutil.MakeScalarNull(types.T_int64, 0)
 			}
 			result, err := HexInt64([]*vector.Vector{inVector}, c.proc)
 			convey.So(err, convey.ShouldBeNil)
-			s := BytesToString(result)
-			convey.So(s, convey.ShouldResemble, c.expected)
+			convey.So(vector.GetStrVectorValues(result), convey.ShouldResemble, c.expected)
 			convey.So(result.IsScalar(), convey.ShouldEqual, c.isScalar)
 		})
 	}
 
-}
-
-func BytesToString(result *vector.Vector) []string {
-	var s []string
-	col := result.Col.(*types.Bytes)
-	for i := 0; i < int(len(col.Lengths)); i++ {
-		if result.Nsp.Contains(uint64(i)) {
-			s = append(s, "")
-		} else {
-			s = append(s, string(col.Data[col.Offsets[i]:col.Offsets[i]+col.Lengths[i]]))
-		}
-	}
-	return s
 }

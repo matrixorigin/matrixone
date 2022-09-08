@@ -18,7 +18,6 @@ import (
 	"encoding/hex"
 	"fmt"
 
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -27,74 +26,50 @@ import (
 func HexString(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	inputVector := vectors[0]
 	resultType := types.New(types.T_varchar, 0, 0, 0)
+	inputValues := vector.MustStrCols(inputVector)
 	if inputVector.IsScalar() {
 		if inputVector.ConstVectorIsNull() {
-			return vector.NewConstNull(resultType, 1), nil
+			return proc.AllocScalarNullVector(resultType), nil
 		}
-		resultVector := vector.NewConst(resultType, 1)
-		inputValue := HexEncodeString(vector.GetStrColumn(inputVector).Get(0))
-		resultValue := &types.Bytes{
-			Data:    inputValue,
-			Offsets: []uint32{0},
-			Lengths: []uint32{uint32(len(inputValue))},
-		}
-		vector.SetCol(resultVector, resultValue)
-		return resultVector, nil
+		resultValues := make([]string, 1)
+		HexEncodeString(inputValues, resultValues)
+		return vector.NewConstString(resultType, inputVector.Length(), resultValues[0]), nil
 	} else {
-		resultVector := vector.New(resultType)
-		for i := 0; i < vector.Length(inputVector); i++ {
-			if nulls.Contains(inputVector.Nsp, uint64(i)) {
-				nulls.Add(resultVector.Nsp, uint64(i))
-			}
-			inputValue := vector.GetStrColumn(inputVector).Get(int64(i))
-			ctx := HexEncodeString(inputValue)
-			if err := resultVector.Append(ctx, proc.GetMheap()); err != nil {
-				return nil, err
-			}
-		}
-		return resultVector, nil
+		resultValues := make([]string, len(inputValues))
+		HexEncodeString(inputValues, resultValues)
+		return vector.NewWithStrings(resultType, resultValues, inputVector.Nsp, proc.Mp()), nil
 	}
 }
 
 func HexInt64(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	inputVector := vectors[0]
 	resultType := types.New(types.T_varchar, 0, 0, 0)
+	inputValues := vector.MustTCols[int64](inputVector)
 	if inputVector.IsScalar() {
 		if inputVector.ConstVectorIsNull() {
-			return vector.NewConstNull(resultType, 1), nil
+			return proc.AllocScalarNullVector(resultType), nil
 		}
-		resultVector := vector.NewConst(resultType, 1)
-		inputValue := HexEncodeInt64(vector.GetColumn[int64](inputVector)[0])
-		resultValue := &types.Bytes{
-			Data:    inputValue,
-			Offsets: []uint32{0},
-			Lengths: []uint32{uint32(len(inputValue))},
-		}
-		vector.SetCol(resultVector, resultValue)
-		return resultVector, nil
+		resultValues := make([]string, 1)
+		HexEncodeInt64(inputValues, resultValues)
+		return vector.NewConstString(resultType, inputVector.Length(), resultValues[0]), nil
 	} else {
-		resultVector := vector.New(resultType)
-		for i := 0; i < vector.Length(inputVector); i++ {
-			if nulls.Contains(inputVector.Nsp, uint64(i)) {
-				nulls.Add(resultVector.Nsp, uint64(i))
-			}
-			inputValue := vector.GetColumn[int64](inputVector)[i]
-			ctx := HexEncodeInt64(inputValue)
-			if err := resultVector.Append(ctx, proc.GetMheap()); err != nil {
-				return nil, err
-			}
-		}
-		return resultVector, nil
+		resultValues := make([]string, len(inputValues))
+		HexEncodeInt64(inputValues, resultValues)
+		return vector.NewWithStrings(resultType, resultValues, inputVector.Nsp, proc.Mp()), nil
 	}
 }
 
-func HexEncodeString(src []byte) []byte {
-	dst := make([]byte, hex.EncodedLen(len(src)))
-	hex.Encode(dst, src)
-	return dst
+func HexEncodeString(xs []string, rs []string) []string {
+	for i, str := range xs {
+		dst := hex.EncodeToString([]byte(str))
+		rs[i] = dst
+	}
+	return rs
 }
 
-func HexEncodeInt64(src int64) []byte {
-	r := fmt.Sprintf("%X", src)
-	return []byte(r)
+func HexEncodeInt64(xs []int64, rs []string) []string {
+	for i, str := range xs {
+		rs[i] = fmt.Sprintf("%X", str)
+	}
+	return rs
 }
