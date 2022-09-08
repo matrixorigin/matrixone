@@ -190,10 +190,7 @@ func CompareString(vs []*vector.Vector, fn compStringFn, proc *process.Process) 
 	}
 
 	if v1.IsScalar() && v2.IsScalar() {
-		vec := proc.AllocScalarVector(boolType)
-		vec.Col = make([]bool, 1)
-		vec.Col.([]bool)[0] = fn(col1[0], col2[0], v1.Typ.Scale, v2.Typ.Scale)
-		return vec, nil
+		return vector.NewConstFixed(boolType, 1, fn(col1[0], col2[0], v1.Typ.Scale, v2.Typ.Scale)), nil
 	}
 
 	if v1.IsScalar() {

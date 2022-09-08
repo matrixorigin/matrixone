@@ -197,25 +197,6 @@ var (
 	}
 
 	MakeUuidVector = func(values []types.Uuid, nsp []uint64) *vector.Vector {
-		vec := vector.New(uuidType)
-		uuids := make([]types.Uuid, len(values))
-		for _, n := range nsp {
-			nulls.Add(vec.Nsp, n)
-		}
-
-		for i, value := range values {
-			if nulls.Contains(vec.Nsp, uint64(i)) {
-				continue
-			}
-			uuids[i] = value
-		}
-
-		vec.Data = types.EncodeFixedSlice(uuids, uuidType.TypeSize())
-		vec.Col = uuids
-		return vec
-	}
-
-	MakeUuidVector2 = func(values []types.Uuid, nsp []uint64) *vector.Vector {
 		return vector.NewWithData(uuidType, nil, values, nulls.Build(len(values), nsp...))
 	}
 
