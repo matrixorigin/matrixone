@@ -44,9 +44,9 @@ type BaseEntry interface {
 	GetCurrOp() OpT
 	GetLogIndex() []*wal.Index
 
-	InsertNode(un *txnbase.TxnMVCCNode)
+	InsertNode(un txnbase.VisibleNode)
 
-	GetUpdateNodeLocked() *txnbase.TxnMVCCNode
+	GetUpdateNodeLocked() txnbase.VisibleNode
 	TxnCanRead(txn txnif.AsyncTxn, mu *sync.RWMutex) (canRead bool, err error)
 
 	ExistUpdate(minTs, MaxTs types.TS) (exist bool)

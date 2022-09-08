@@ -24,14 +24,40 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 )
 
+type VisibleNode interface {
+	PrepareWrite(startTS types.TS) error
+	IsSameStartTs(startTS types.TS) bool
+	TxnCanRead(startTS types.TS) (canRead, goNext bool)
+	CommittedIn(minTS, maxTS types.TS) (committedIn, commitBeforeMinTS bool)
+	NeedWaitCommitting(startTS types.TS) (bool, txnif.TxnReader)
+	IsSameTxn(startTS types.TS) bool
+	IsActive() bool
+	IsCommitting() bool
+	GetStart() types.TS
+	GetEnd() types.TS
+	GetTxn() txnif.TxnReader
+	// Compare(o VisibleNode) int
+	AddLogIndex(idx *wal.Index)
+	GetLogIndex() []*wal.Index
+	ApplyCommit(index *wal.Index) (err error)
+	ApplyRollback(index *wal.Index) (err error)
+	WriteTo(w io.Writer) (n int64, err error)
+	ReadFrom(r io.Reader) (n int64, err error)
+	UpdateNode(o VisibleNode)
+	CloneData() VisibleNode
+	CloneAll() VisibleNode
+	String() string
+	OnCommit()
+	Prepare2PCPrepare() (err error)
+	PrepareCommit() (err error)
+}
+
 type TxnMVCCNode struct {
 	Start, End types.TS
 	Txn        txnif.TxnReader
 	//Aborted bool
 	//State txnif.TxnState
 	LogIndex []*wal.Index
-
-	Attr txnif.Attr
 }
 
 func NewTxnMVCCNodeWithTxn(txn txnif.TxnReader) *TxnMVCCNode {
@@ -39,14 +65,6 @@ func NewTxnMVCCNodeWithTxn(txn txnif.TxnReader) *TxnMVCCNode {
 		Start: txn.GetStartTS(),
 		Txn:   txn,
 	}
-}
-
-func (un *TxnMVCCNode) SetAttr(attr txnif.Attr) {
-	un.Attr = attr
-}
-
-func (un *TxnMVCCNode) GetAttr() txnif.Attr {
-	return un.Attr
 }
 
 // Check w-w confilct
@@ -191,15 +209,6 @@ func (un *TxnMVCCNode) WriteTo(w io.Writer) (n int64, err error) {
 		}
 		n += sn
 	}
-	if err = binary.Write(w, binary.BigEndian, un.Attr.GetType()); err != nil {
-		return
-	}
-	n += 2
-	sn, err = un.Attr.WriteTo(w)
-	if err != nil {
-		return
-	}
-	n += sn
 	return
 }
 
@@ -231,17 +240,6 @@ func (un *TxnMVCCNode) ReadFrom(r io.Reader) (n int64, err error) {
 		n += sn
 		un.LogIndex = append(un.LogIndex, idx)
 	}
-	t := int16(0)
-	if err = binary.Read(r, binary.BigEndian, &t); err != nil {
-		return
-	}
-	n += 2
-	un.Attr = txnif.GetAttrFactory(t)()
-	sn, err = un.Attr.ReadFrom(r)
-	if err != nil {
-		return
-	}
-	n += sn
 	return
 }
 
@@ -256,17 +254,11 @@ func (un *TxnMVCCNode) UpdateNode(o *TxnMVCCNode) {
 	if !un.End.Equal(o.End) {
 		panic("logic err")
 	}
-	un.Attr.UpdateNode(o.Attr)
 	un.AddLogIndex(o.LogIndex[0])
-}
-
-func (un *TxnMVCCNode) CloneData(o *TxnMVCCNode) {
-	un.Attr = o.Attr.Clone()
 }
 
 func (un *TxnMVCCNode) CloneAll() *TxnMVCCNode {
 	n := &TxnMVCCNode{}
-	n.CloneData(un)
 	n.Start = un.Start
 	n.End = un.End
 	if len(un.LogIndex) != 0 {
@@ -279,10 +271,9 @@ func (un *TxnMVCCNode) CloneAll() *TxnMVCCNode {
 }
 
 func (un *TxnMVCCNode) String() string {
-	return fmt.Sprintf("[%v,%v]%s[logIndex=%v]",
+	return fmt.Sprintf("[%v,%v][logIndex=%v]",
 		un.Start,
 		un.End,
-		un.Attr.String(),
 		un.LogIndex)
 }
 
@@ -291,20 +282,14 @@ func (un *TxnMVCCNode) OnCommit() {
 	un.Txn = nil
 }
 
-func (e *TxnMVCCNode) Prepare2PCPrepare() (err error) {
-	err = e.Attr.Prepare2PCPrepare(e.Txn.GetPrepareTS())
-	if err != nil {
-		return
-	}
+func (e *TxnMVCCNode) Prepare2PCPrepare() (ts types.TS, err error) {
 	e.End = e.Txn.GetPrepareTS()
+	ts = e.End
 	return
 }
 
-func (e *TxnMVCCNode) PrepareCommit() (err error) {
-	err = e.Attr.PrepareCommit(e.Txn.GetCommitTS())
-	if err != nil {
-		return
-	}
+func (e *TxnMVCCNode) PrepareCommit() (ts types.TS, err error) {
 	e.End = e.Txn.GetCommitTS()
+	ts = e.End
 	return
 }

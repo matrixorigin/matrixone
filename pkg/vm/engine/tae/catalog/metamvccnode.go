@@ -20,24 +20,37 @@ import (
 	"io"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 )
 
 type MetadataMVCCNode struct {
 	*EntryMVCCNode
+	*txnbase.TxnMVCCNode
 	MetaLoc  string
 	DeltaLoc string
 }
 
-func NewEmptyMetadataMVCCNode() *MetadataMVCCNode {
+func NewEmptyMetadataMVCCNode() txnbase.VisibleNode {
 	return &MetadataMVCCNode{
 		EntryMVCCNode: &EntryMVCCNode{},
+		TxnMVCCNode:   &txnbase.TxnMVCCNode{},
 	}
 }
 
-func (e *MetadataMVCCNode) Clone() txnif.Attr {
+func CompareMetaBaseNode(e, o txnbase.VisibleNode) int {
+	return e.(*MetadataMVCCNode).Compare(o.(*MetadataMVCCNode).TxnMVCCNode)
+}
+
+func (e *MetadataMVCCNode) CloneAll() txnbase.VisibleNode {
+	node := e.CloneData()
+	node.(*MetadataMVCCNode).TxnMVCCNode = e.TxnMVCCNode.CloneAll()
+	return node
+}
+
+func (e *MetadataMVCCNode) CloneData() txnbase.VisibleNode {
 	return &MetadataMVCCNode{
 		EntryMVCCNode: e.EntryMVCCNode.Clone(),
+		TxnMVCCNode:   &txnbase.TxnMVCCNode{},
 		MetaLoc:       e.MetaLoc,
 		DeltaLoc:      e.DeltaLoc,
 	}
@@ -45,7 +58,8 @@ func (e *MetadataMVCCNode) Clone() txnif.Attr {
 
 func (e *MetadataMVCCNode) String() string {
 
-	return fmt.Sprintf("[C=%v,D=%v][Loc1=%s,Loc2=%s][Deleted?%v]",
+	return fmt.Sprintf("%s[C=%v,D=%v][Loc1=%s,Loc2=%s][Deleted?%v]",
+		e.TxnMVCCNode.String(),
 		e.CreatedAt,
 		e.DeletedAt,
 		e.MetaLoc,
@@ -54,7 +68,7 @@ func (e *MetadataMVCCNode) String() string {
 }
 
 // for create drop in one txn
-func (e *MetadataMVCCNode) UpdateNode(vun txnif.Attr) {
+func (e *MetadataMVCCNode) UpdateNode(vun txnbase.VisibleNode) {
 	un := vun.(*MetadataMVCCNode)
 	e.DeletedAt = un.DeletedAt
 	e.Deleted = true
@@ -75,7 +89,12 @@ func (e *MetadataMVCCNode) ApplyDelete() (err error) {
 	return
 }
 
-func (e *MetadataMVCCNode) Prepare2PCPrepare(ts types.TS) (err error) {
+func (e *MetadataMVCCNode) Prepare2PCPrepare() (err error) {
+	var ts types.TS
+	ts, err = e.TxnMVCCNode.Prepare2PCPrepare()
+	if err != nil {
+		return
+	}
 	if e.CreatedAt.IsEmpty() {
 		e.CreatedAt = ts
 	}
@@ -85,7 +104,12 @@ func (e *MetadataMVCCNode) Prepare2PCPrepare(ts types.TS) (err error) {
 	return
 }
 
-func (e *MetadataMVCCNode) PrepareCommit(ts types.TS) (err error) {
+func (e *MetadataMVCCNode) PrepareCommit() (err error) {
+	var ts types.TS
+	ts, err = e.TxnMVCCNode.PrepareCommit()
+	if err != nil {
+		return
+	}
 	if e.CreatedAt.IsEmpty() {
 		e.CreatedAt = ts
 	}
@@ -98,6 +122,11 @@ func (e *MetadataMVCCNode) PrepareCommit(ts types.TS) (err error) {
 func (e *MetadataMVCCNode) WriteTo(w io.Writer) (n int64, err error) {
 	var sn int64
 	sn, err = e.EntryMVCCNode.WriteTo(w)
+	if err != nil {
+		return
+	}
+	n += sn
+	sn, err = e.TxnMVCCNode.WriteTo(w)
 	if err != nil {
 		return
 	}
@@ -136,6 +165,11 @@ func (e *MetadataMVCCNode) WriteTo(w io.Writer) (n int64, err error) {
 func (e *MetadataMVCCNode) ReadFrom(r io.Reader) (n int64, err error) {
 	var sn int64
 	sn, err = e.EntryMVCCNode.ReadFrom(r)
+	if err != nil {
+		return
+	}
+	n += sn
+	sn, err = e.TxnMVCCNode.ReadFrom(r)
 	if err != nil {
 		return
 	}

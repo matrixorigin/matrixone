@@ -19,69 +19,58 @@ import (
 	"io"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 )
-
-const (
-	AttrMetadata int16 = iota
-	AttrTable
-	AttrDB
-)
-
-func init() {
-	txnif.RegisterAttrFactory(AttrMetadata, func() txnif.Attr {
-		return NewEmptyMetadataMVCCNode()
-	})
-	txnif.RegisterAttrFactory(AttrTable, func() txnif.Attr {
-		return NewEmptyTableMVCCNode()
-	})
-	txnif.RegisterAttrFactory(AttrDB, func() txnif.Attr {
-		return NewEmptyDBMVCCNode()
-	})
-}
-
-func (e *TableMVCCNode) GetType() int16 {
-	return AttrTable
-}
-func (e *MetadataMVCCNode) GetType() int16 {
-	return AttrMetadata
-}
-func (e *DBMVCCNode) GetType() int16 {
-	return AttrDB
-}
 
 type TableMVCCNode struct {
 	*EntryMVCCNode
+	*txnbase.TxnMVCCNode
 }
 
-func NewEmptyTableMVCCNode() *TableMVCCNode {
+func NewEmptyTableMVCCNode() txnbase.VisibleNode {
 	return &TableMVCCNode{
 		EntryMVCCNode: &EntryMVCCNode{},
+		TxnMVCCNode:   &txnbase.TxnMVCCNode{},
 	}
 }
 
-func (e *TableMVCCNode) Clone() txnif.Attr {
+func CompareTableBaseNode(e, o txnbase.VisibleNode) int {
+	return e.(*TableMVCCNode).Compare(o.(*TableMVCCNode).TxnMVCCNode)
+}
+
+func (e *TableMVCCNode) CloneAll() txnbase.VisibleNode {
+	node := e.CloneData()
+	node.(*TableMVCCNode).TxnMVCCNode = e.TxnMVCCNode.CloneAll()
+	return node
+}
+
+func (e *TableMVCCNode) CloneData() txnbase.VisibleNode {
 	return &TableMVCCNode{
 		EntryMVCCNode: e.EntryMVCCNode.Clone(),
+		TxnMVCCNode:   &txnbase.TxnMVCCNode{},
 	}
 }
 
 func (e *TableMVCCNode) String() string {
-	return fmt.Sprintf("[C=%v,D=%v][Deleted?%v]",
+
+	return fmt.Sprintf("%s[C=%v,D=%v][Deleted?%v]",
+		e.TxnMVCCNode.String(),
 		e.CreatedAt,
 		e.DeletedAt,
-		e.Deleted,
-	)
+		e.Deleted)
 }
 
 // for create drop in one txn
-func (e *TableMVCCNode) UpdateNode(vun txnif.Attr) {
+func (e *TableMVCCNode) UpdateNode(vun txnbase.VisibleNode) {
 	un := vun.(*TableMVCCNode)
 	e.DeletedAt = un.DeletedAt
 	e.Deleted = true
 }
 
 func (e *TableMVCCNode) ApplyUpdate(be *TableMVCCNode) (err error) {
+	// if e.Deleted {
+	// 	// TODO
+	// }
 	e.EntryMVCCNode = be.EntryMVCCNode.Clone()
 	return
 }
@@ -91,7 +80,12 @@ func (e *TableMVCCNode) ApplyDelete() (err error) {
 	return
 }
 
-func (e *TableMVCCNode) Prepare2PCPrepare(ts types.TS) (err error) {
+func (e *TableMVCCNode) Prepare2PCPrepare() (err error) {
+	var ts types.TS
+	ts, err = e.TxnMVCCNode.Prepare2PCPrepare()
+	if err != nil {
+		return
+	}
 	if e.CreatedAt.IsEmpty() {
 		e.CreatedAt = ts
 	}
@@ -101,7 +95,12 @@ func (e *TableMVCCNode) Prepare2PCPrepare(ts types.TS) (err error) {
 	return
 }
 
-func (e *TableMVCCNode) PrepareCommit(ts types.TS) (err error) {
+func (e *TableMVCCNode) PrepareCommit() (err error) {
+	var ts types.TS
+	ts, err = e.TxnMVCCNode.PrepareCommit()
+	if err != nil {
+		return
+	}
 	if e.CreatedAt.IsEmpty() {
 		e.CreatedAt = ts
 	}
@@ -118,12 +117,22 @@ func (e *TableMVCCNode) WriteTo(w io.Writer) (n int64, err error) {
 		return
 	}
 	n += sn
+	sn, err = e.TxnMVCCNode.WriteTo(w)
+	if err != nil {
+		return
+	}
+	n += sn
 	return
 }
 
 func (e *TableMVCCNode) ReadFrom(r io.Reader) (n int64, err error) {
 	var sn int64
 	sn, err = e.EntryMVCCNode.ReadFrom(r)
+	if err != nil {
+		return
+	}
+	n += sn
+	sn, err = e.TxnMVCCNode.ReadFrom(r)
 	if err != nil {
 		return
 	}

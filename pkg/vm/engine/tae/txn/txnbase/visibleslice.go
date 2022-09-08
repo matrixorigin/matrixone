@@ -27,13 +27,15 @@ import (
 
 type VisibleSlice struct {
 	*sync.RWMutex
-	MVCC []*TxnMVCCNode
+	MVCC      []VisibleNode
+	newnodefn func() VisibleNode
 }
 
-func NewVisibleSlice() *VisibleSlice {
+func NewVisibleSlice(newnodefn func() VisibleNode) *VisibleSlice {
 	return &VisibleSlice{
-		MVCC:    make([]*TxnMVCCNode, 0),
-		RWMutex: &sync.RWMutex{},
+		MVCC:      make([]VisibleNode, 0),
+		RWMutex:   &sync.RWMutex{},
+		newnodefn: newnodefn,
 	}
 }
 func (be *VisibleSlice) StringLocked() string {
@@ -50,19 +52,19 @@ func (be *VisibleSlice) StringLocked() string {
 
 // for replay
 func (be *VisibleSlice) GetTs() types.TS {
-	return be.GetUpdateNodeLocked().End
+	return be.GetUpdateNodeLocked().GetEnd()
 }
-func (be *VisibleSlice) GetTxn() txnif.TxnReader { return be.GetUpdateNodeLocked().Txn }
+func (be *VisibleSlice) GetTxn() txnif.TxnReader { return be.GetUpdateNodeLocked().GetTxn() }
 
 func (be *VisibleSlice) GetIndexes() []*wal.Index {
 	ret := make([]*wal.Index, 0)
 	for _, un := range be.MVCC {
-		ret = append(ret, un.LogIndex...)
+		ret = append(ret, un.GetLogIndex()...)
 	}
 	return ret
 }
 
-func (be *VisibleSlice) InsertNode(un *TxnMVCCNode) {
+func (be *VisibleSlice) InsertNode(un VisibleNode) {
 	be.MVCC = append(be.MVCC, un)
 }
 
@@ -85,7 +87,7 @@ func (be *VisibleSlice) ExistUpdate(minTs, maxTs types.TS) (exist bool) {
 // GetUpdateNode gets the latest UpdateNode.
 // It is useful in making command, apply state(e.g. ApplyCommit),
 // check confilct.
-func (be *VisibleSlice) GetUpdateNodeLocked() *TxnMVCCNode {
+func (be *VisibleSlice) GetUpdateNodeLocked() VisibleNode {
 	length := len(be.MVCC)
 	if length == 0 {
 		return nil
@@ -95,7 +97,7 @@ func (be *VisibleSlice) GetUpdateNodeLocked() *TxnMVCCNode {
 
 // GetCommittedNode gets the latest committed UpdateNode.
 // It's useful when check whether the catalog/metadata entry is deleted.
-func (be *VisibleSlice) GetCommittedNode() (node *TxnMVCCNode) {
+func (be *VisibleSlice) GetCommittedNode() (node VisibleNode) {
 	length := len(be.MVCC)
 	for i := length - 1; i >= 0; i-- {
 		un := be.MVCC[i]
@@ -110,7 +112,7 @@ func (be *VisibleSlice) GetCommittedNode() (node *TxnMVCCNode) {
 // GetNodeToRead gets UpdateNode according to the timestamp.
 // It returns the UpdateNode in the same txn as the read txn
 // or returns the latest UpdateNode with commitTS less than the timestamp.
-func (be *VisibleSlice) GetNodeToRead(startts types.TS) (node *TxnMVCCNode) {
+func (be *VisibleSlice) GetNodeToRead(startts types.TS) (node VisibleNode) {
 	length := len(be.MVCC)
 	for i := length - 1; i >= 0; i-- {
 		un := be.MVCC[i]
@@ -128,11 +130,11 @@ func (be *VisibleSlice) GetNodeToRead(startts types.TS) (node *TxnMVCCNode) {
 
 // GetExactUpdateNode gets the exact UpdateNode with the startTs.
 // It's only used in replay
-func (be *VisibleSlice) GetExactUpdateNode(startts types.TS) (node *TxnMVCCNode) {
+func (be *VisibleSlice) GetExactUpdateNode(startts types.TS) (node VisibleNode) {
 	length := len(be.MVCC)
 	for i := length - 1; i >= 0; i-- {
 		un := be.MVCC[i]
-		if un.Start == startts {
+		if un.GetStart() == startts {
 			node = un
 			break
 		}
@@ -165,7 +167,7 @@ func (be *VisibleSlice) PrepareWrite(txn txnif.TxnReader) (err error) {
 		return txnif.ErrTxnWWConflict
 	}
 
-	if node.End.Greater(txn.GetStartTS()) {
+	if node.GetEnd().Greater(txn.GetStartTS()) {
 		return txnif.ErrTxnWWConflict
 	}
 	return
@@ -201,7 +203,7 @@ func (be *VisibleSlice) WriteAllTo(w io.Writer) (n int64, err error) {
 
 func (be *VisibleSlice) ReadOneNodeFrom(r io.Reader) (n int64, err error) {
 	var n2 int64
-	un := &TxnMVCCNode{}
+	un := be.newnodefn()
 	n2, err = un.ReadFrom(r)
 	if err != nil {
 		return
@@ -219,7 +221,7 @@ func (be *VisibleSlice) ReadAllFrom(r io.Reader) (n int64, err error) {
 	n += 8
 	for i := 0; i < int(length); i++ {
 		var n2 int64
-		un := &TxnMVCCNode{}
+		un := be.newnodefn()
 		n2, err = un.ReadFrom(r)
 		if err != nil {
 			return
@@ -252,17 +254,16 @@ func (be *VisibleSlice) GetLogIndex() []*wal.Index {
 	if node == nil {
 		return nil
 	}
-	return node.LogIndex
+	return node.GetLogIndex()
 }
 
-func (be *VisibleSlice) CloneLatestNode() (*VisibleSlice, *TxnMVCCNode) {
+func (be *VisibleSlice) CloneLatestNode() (*VisibleSlice, VisibleNode) {
 	cloned := &VisibleSlice{
-		MVCC:    make([]*TxnMVCCNode, 0),
+		MVCC:    make([]VisibleNode, 0),
 		RWMutex: &sync.RWMutex{},
 	}
 	un := be.GetUpdateNodeLocked()
-	uncloned := &TxnMVCCNode{}
-	uncloned.CloneData(un)
+	uncloned := un.CloneData()
 	cloned.InsertNode(uncloned)
 	return cloned, uncloned
 }
@@ -305,7 +306,7 @@ func (be *VisibleSlice) IsCommitted() bool {
 	if un == nil {
 		return false
 	}
-	return un.Txn == nil
+	return un.GetTxn() == nil
 }
 
 func (be *VisibleSlice) CloneCommittedInRange(start, end types.TS) (ret *VisibleSlice) {
@@ -319,7 +320,7 @@ func (be *VisibleSlice) CloneCommittedInRange(start, end types.TS) (ret *Visible
 		committedIn, commitBeforeMinTs := un.CommittedIn(start, end)
 		if committedIn {
 			if ret == nil {
-				ret = NewVisibleSlice()
+				ret = NewVisibleSlice(be.newnodefn)
 			}
 			ret.InsertNode(un.CloneAll())
 		} else if !commitBeforeMinTs {

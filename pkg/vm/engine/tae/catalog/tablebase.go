@@ -33,7 +33,7 @@ type TableBaseEntry struct {
 
 func NewReplayTableBaseEntry() *TableBaseEntry {
 	be := &TableBaseEntry{
-		VisibleChain: txnbase.NewVisibleChain(),
+		VisibleChain: txnbase.NewVisibleChain(CompareTableBaseNode, NewEmptyTableMVCCNode),
 	}
 	return be
 }
@@ -41,7 +41,7 @@ func NewReplayTableBaseEntry() *TableBaseEntry {
 func NewTableBaseEntry(id uint64) *TableBaseEntry {
 	return &TableBaseEntry{
 		ID:           id,
-		VisibleChain: txnbase.NewVisibleChain(),
+		VisibleChain: txnbase.NewVisibleChain(CompareTableBaseNode, NewEmptyTableMVCCNode),
 	}
 }
 
@@ -65,23 +65,22 @@ func (be *TableBaseEntry) TryGetTerminatedTS(waitIfcommitting bool) (terminated 
 	if node == nil {
 		return
 	}
-	if node.GetAttr().(*TableMVCCNode).Deleted {
-		return true, node.GetAttr().(*TableMVCCNode).DeletedAt
+	if node.(*TableMVCCNode).Deleted {
+		return true, node.(*TableMVCCNode).DeletedAt
 	}
 	return
 }
 func (be *TableBaseEntry) GetID() uint64 { return be.ID }
 
 func (be *TableBaseEntry) CreateWithTS(ts types.TS) {
-	attr := &TableMVCCNode{
+	node := &TableMVCCNode{
 		EntryMVCCNode: &EntryMVCCNode{
 			CreatedAt: ts,
 		},
-	}
-	node := &txnbase.TxnMVCCNode{
-		Start: ts,
-		End:   ts,
-		Attr:  attr,
+		TxnMVCCNode: &txnbase.TxnMVCCNode{
+			Start: ts,
+			End:   ts,
+		},
 	}
 	be.InsertNode(node)
 }
@@ -91,13 +90,12 @@ func (be *TableBaseEntry) CreateWithTxn(txn txnif.AsyncTxn) {
 	if txn != nil {
 		startTS = txn.GetStartTS()
 	}
-	attr := &TableMVCCNode{
+	node := &TableMVCCNode{
 		EntryMVCCNode: &EntryMVCCNode{},
-	}
-	node := &txnbase.TxnMVCCNode{
-		Start: startTS,
-		Txn:   txn,
-		Attr:  attr,
+		TxnMVCCNode: &txnbase.TxnMVCCNode{
+			Start: startTS,
+			Txn:   txn,
+		},
 	}
 	be.InsertNode(node)
 }
@@ -105,16 +103,16 @@ func (be *TableBaseEntry) CreateWithTxn(txn txnif.AsyncTxn) {
 // TODO update create
 func (be *TableBaseEntry) DeleteLocked(txn txnif.TxnReader, impl INode) (node INode, err error) {
 	entry := be.MVCC.GetHead().GetPayload()
-	if entry.Txn == nil || entry.IsSameTxn(txn.GetStartTS()) {
+	if entry.GetTxn() == nil || entry.IsSameTxn(txn.GetStartTS()) {
 		if be.HasDropped() {
 			err = ErrNotFound
 			return
 		}
-		nbe := txnbase.NewTxnMVCCNodeWithTxn(txn)
-		nbe.CloneData(entry)
+		nbe := entry.CloneData()
+		nbe.(*TableMVCCNode).TxnMVCCNode = txnbase.NewTxnMVCCNodeWithTxn(txn)
 		be.InsertNode(nbe)
 		node = impl
-		err = nbe.GetAttr().(*TableMVCCNode).ApplyDeleteLocked()
+		err = nbe.(*TableMVCCNode).ApplyDeleteLocked()
 		return
 	} else {
 		err = txnif.ErrTxnWWConflict
@@ -151,7 +149,7 @@ func (be *TableBaseEntry) IsDroppedCommitted() bool {
 	if un == nil {
 		return false
 	}
-	return un.GetAttr().(*TableMVCCNode).HasDropped()
+	return un.(*TableMVCCNode).HasDropped()
 }
 
 func (be *TableBaseEntry) DoCompre(voe BaseEntry) int {
@@ -168,7 +166,7 @@ func (be *TableBaseEntry) HasDropped() bool {
 	if node == nil {
 		return false
 	}
-	return node.GetAttr().(*TableMVCCNode).HasDropped()
+	return node.(*TableMVCCNode).HasDropped()
 }
 
 func (be *TableBaseEntry) ExistedForTs(ts types.TS) bool {
@@ -184,7 +182,7 @@ func (be *TableBaseEntry) TsCanGet(ts types.TS) (can, dropped bool) {
 	if un == nil {
 		return
 	}
-	if un.GetAttr().(*TableMVCCNode).HasDropped() {
+	if un.(*TableMVCCNode).HasDropped() {
 		can, dropped = true, true
 		return
 	}
@@ -205,7 +203,7 @@ func (be *TableBaseEntry) TxnCanRead(txn txnif.AsyncTxn, mu *sync.RWMutex) (canR
 
 func (be *TableBaseEntry) CloneCreateEntry() BaseEntry {
 	cloned, uncloned := be.CloneLatestNode()
-	uncloned.GetAttr().(*TableMVCCNode).DeletedAt = types.TS{}
+	uncloned.(*TableMVCCNode).DeletedAt = types.TS{}
 	return &TableBaseEntry{
 		VisibleChain: cloned,
 		ID:           be.ID,
@@ -259,7 +257,7 @@ func (be *TableBaseEntry) DeleteAfter(ts types.TS) bool {
 	if un == nil {
 		return false
 	}
-	return un.GetAttr().(*TableMVCCNode).DeletedAt.Greater(ts)
+	return un.(*TableMVCCNode).DeletedAt.Greater(ts)
 }
 
 func (be *TableBaseEntry) CloneCommittedInRange(start, end types.TS) BaseEntry {
@@ -278,7 +276,7 @@ func (be *TableBaseEntry) GetCurrOp() OpT {
 	if un == nil {
 		return OpCreate
 	}
-	if !un.GetAttr().(*TableMVCCNode).Deleted {
+	if !un.(*TableMVCCNode).Deleted {
 		return OpCreate
 	}
 	return OpSoftDelete
@@ -289,7 +287,7 @@ func (be *TableBaseEntry) GetCreatedAt() types.TS {
 	if un == nil {
 		return types.TS{}
 	}
-	return un.GetAttr().(*TableMVCCNode).CreatedAt
+	return un.(*TableMVCCNode).CreatedAt
 }
 
 func (be *TableBaseEntry) GetDeleteAt() types.TS {
@@ -297,7 +295,7 @@ func (be *TableBaseEntry) GetDeleteAt() types.TS {
 	if un == nil {
 		return types.TS{}
 	}
-	return un.GetAttr().(*TableMVCCNode).DeletedAt
+	return un.(*TableMVCCNode).DeletedAt
 }
 
 func (be *TableBaseEntry) TxnCanGet(ts types.TS) (can, dropped bool) {

@@ -19,41 +19,58 @@ import (
 	"io"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 )
 
 type DBMVCCNode struct {
 	*EntryMVCCNode
+	*txnbase.TxnMVCCNode
 }
 
-func NewEmptyDBMVCCNode() *TableMVCCNode {
-	return &TableMVCCNode{
+func NewEmptyDBMVCCNode() txnbase.VisibleNode {
+	return &DBMVCCNode{
 		EntryMVCCNode: &EntryMVCCNode{},
+		TxnMVCCNode:   &txnbase.TxnMVCCNode{},
 	}
 }
 
-func (e *DBMVCCNode) Clone() txnif.Attr {
-	return &TableMVCCNode{
+func CompareDBBaseNode(e, o txnbase.VisibleNode) int {
+	return e.(*DBMVCCNode).Compare(o.(*DBMVCCNode).TxnMVCCNode)
+}
+
+func (e *DBMVCCNode) CloneAll() txnbase.VisibleNode {
+	node := e.CloneData()
+	node.(*DBMVCCNode).TxnMVCCNode = e.TxnMVCCNode.CloneAll()
+	return node
+}
+
+func (e *DBMVCCNode) CloneData() txnbase.VisibleNode {
+	return &DBMVCCNode{
 		EntryMVCCNode: e.EntryMVCCNode.Clone(),
+		TxnMVCCNode:   &txnbase.TxnMVCCNode{},
 	}
 }
 
 func (e *DBMVCCNode) String() string {
-	return fmt.Sprintf("[C=%v,D=%v][Deleted?%v]",
+
+	return fmt.Sprintf("%s[C=%v,D=%v][Deleted?%v]",
+		e.TxnMVCCNode.String(),
 		e.CreatedAt,
 		e.DeletedAt,
-		e.Deleted,
-	)
+		e.Deleted)
 }
 
 // for create drop in one txn
-func (e *DBMVCCNode) UpdateNode(vun txnif.Attr) {
-	un := vun.(*TableMVCCNode)
+func (e *DBMVCCNode) UpdateNode(vun txnbase.VisibleNode) {
+	un := vun.(*DBMVCCNode)
 	e.DeletedAt = un.DeletedAt
 	e.Deleted = true
 }
 
 func (e *DBMVCCNode) ApplyUpdate(be *DBMVCCNode) (err error) {
+	// if e.Deleted {
+	// 	// TODO
+	// }
 	e.EntryMVCCNode = be.EntryMVCCNode.Clone()
 	return
 }
@@ -63,7 +80,12 @@ func (e *DBMVCCNode) ApplyDelete() (err error) {
 	return
 }
 
-func (e *DBMVCCNode) Prepare2PCPrepare(ts types.TS) (err error) {
+func (e *DBMVCCNode) Prepare2PCPrepare() (err error) {
+	var ts types.TS
+	ts, err = e.TxnMVCCNode.Prepare2PCPrepare()
+	if err != nil {
+		return
+	}
 	if e.CreatedAt.IsEmpty() {
 		e.CreatedAt = ts
 	}
@@ -73,7 +95,12 @@ func (e *DBMVCCNode) Prepare2PCPrepare(ts types.TS) (err error) {
 	return
 }
 
-func (e *DBMVCCNode) PrepareCommit(ts types.TS) (err error) {
+func (e *DBMVCCNode) PrepareCommit() (err error) {
+	var ts types.TS
+	ts, err = e.TxnMVCCNode.PrepareCommit()
+	if err != nil {
+		return
+	}
 	if e.CreatedAt.IsEmpty() {
 		e.CreatedAt = ts
 	}
@@ -90,12 +117,22 @@ func (e *DBMVCCNode) WriteTo(w io.Writer) (n int64, err error) {
 		return
 	}
 	n += sn
+	sn, err = e.TxnMVCCNode.WriteTo(w)
+	if err != nil {
+		return
+	}
+	n += sn
 	return
 }
 
 func (e *DBMVCCNode) ReadFrom(r io.Reader) (n int64, err error) {
 	var sn int64
 	sn, err = e.EntryMVCCNode.ReadFrom(r)
+	if err != nil {
+		return
+	}
+	n += sn
+	sn, err = e.TxnMVCCNode.ReadFrom(r)
 	if err != nil {
 		return
 	}

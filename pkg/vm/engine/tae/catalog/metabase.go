@@ -33,7 +33,7 @@ type MetaBaseEntry struct {
 
 func NewReplayMetaBaseEntry() *MetaBaseEntry {
 	be := &MetaBaseEntry{
-		VisibleChain: txnbase.NewVisibleChain(),
+		VisibleChain: txnbase.NewVisibleChain(CompareMetaBaseNode, NewEmptyMetadataMVCCNode),
 	}
 	return be
 }
@@ -41,7 +41,7 @@ func NewReplayMetaBaseEntry() *MetaBaseEntry {
 func NewMetaBaseEntry(id uint64) *MetaBaseEntry {
 	return &MetaBaseEntry{
 		ID:           id,
-		VisibleChain: txnbase.NewVisibleChain(),
+		VisibleChain: txnbase.NewVisibleChain(CompareMetaBaseNode, NewEmptyMetadataMVCCNode),
 	}
 }
 
@@ -65,23 +65,22 @@ func (be *MetaBaseEntry) TryGetTerminatedTS(waitIfcommitting bool) (terminated b
 	if node == nil {
 		return
 	}
-	if node.GetAttr().(*MetadataMVCCNode).Deleted {
-		return true, node.GetAttr().(*MetadataMVCCNode).DeletedAt
+	if node.(*MetadataMVCCNode).Deleted {
+		return true, node.(*MetadataMVCCNode).DeletedAt
 	}
 	return
 }
 func (be *MetaBaseEntry) GetID() uint64 { return be.ID }
 
 func (be *MetaBaseEntry) CreateWithTS(ts types.TS) {
-	attr := &MetadataMVCCNode{
+	node := &MetadataMVCCNode{
 		EntryMVCCNode: &EntryMVCCNode{
 			CreatedAt: ts,
 		},
-	}
-	node := &txnbase.TxnMVCCNode{
-		Start: ts,
-		End:   ts,
-		Attr:  attr,
+		TxnMVCCNode: &txnbase.TxnMVCCNode{
+			Start: ts,
+			End:   ts,
+		},
 	}
 	be.InsertNode(node)
 }
@@ -91,13 +90,12 @@ func (be *MetaBaseEntry) CreateWithTxn(txn txnif.AsyncTxn) {
 	if txn != nil {
 		startTS = txn.GetStartTS()
 	}
-	attr := &MetadataMVCCNode{
+	node := &MetadataMVCCNode{
 		EntryMVCCNode: &EntryMVCCNode{},
-	}
-	node := &txnbase.TxnMVCCNode{
-		Start: startTS,
-		Txn:   txn,
-		Attr:  attr,
+		TxnMVCCNode: &txnbase.TxnMVCCNode{
+			Start: startTS,
+			Txn:   txn,
+		},
 	}
 	be.InsertNode(node)
 }
@@ -105,16 +103,16 @@ func (be *MetaBaseEntry) CreateWithTxn(txn txnif.AsyncTxn) {
 // TODO update create
 func (be *MetaBaseEntry) DeleteLocked(txn txnif.TxnReader, impl INode) (node INode, err error) {
 	entry := be.MVCC.GetHead().GetPayload()
-	if entry.Txn == nil || entry.IsSameTxn(txn.GetStartTS()) {
+	if entry.GetTxn() == nil || entry.IsSameTxn(txn.GetStartTS()) {
 		if be.HasDropped() {
 			err = ErrNotFound
 			return
 		}
-		nbe := txnbase.NewTxnMVCCNodeWithTxn(txn)
-		nbe.CloneData(entry)
+		nbe := entry.CloneData()
+		nbe.(*MetadataMVCCNode).TxnMVCCNode = txnbase.NewTxnMVCCNodeWithTxn(txn)
 		be.InsertNode(nbe)
 		node = impl
-		err = nbe.GetAttr().(*MetadataMVCCNode).ApplyDeleteLocked()
+		err = nbe.(*MetadataMVCCNode).ApplyDeleteLocked()
 		return
 	} else {
 		err = txnif.ErrTxnWWConflict
@@ -151,7 +149,7 @@ func (be *MetaBaseEntry) IsDroppedCommitted() bool {
 	if un == nil {
 		return false
 	}
-	return un.GetAttr().(*MetadataMVCCNode).HasDropped()
+	return un.(*MetadataMVCCNode).HasDropped()
 }
 
 func (be *MetaBaseEntry) DoCompre(voe BaseEntry) int {
@@ -168,7 +166,7 @@ func (be *MetaBaseEntry) HasDropped() bool {
 	if node == nil {
 		return false
 	}
-	return node.GetAttr().(*MetadataMVCCNode).HasDropped()
+	return node.(*MetadataMVCCNode).HasDropped()
 }
 
 func (be *MetaBaseEntry) ExistedForTs(ts types.TS) bool {
@@ -184,7 +182,7 @@ func (be *MetaBaseEntry) TsCanGet(ts types.TS) (can, dropped bool) {
 	if un == nil {
 		return
 	}
-	if un.GetAttr().(*MetadataMVCCNode).HasDropped() {
+	if un.(*MetadataMVCCNode).HasDropped() {
 		can, dropped = true, true
 		return
 	}
@@ -205,7 +203,7 @@ func (be *MetaBaseEntry) TxnCanRead(txn txnif.AsyncTxn, mu *sync.RWMutex) (canRe
 
 func (be *MetaBaseEntry) CloneCreateEntry() BaseEntry {
 	cloned, uncloned := be.CloneLatestNode()
-	uncloned.GetAttr().(*MetadataMVCCNode).DeletedAt = types.TS{}
+	uncloned.(*MetadataMVCCNode).DeletedAt = types.TS{}
 	return &MetaBaseEntry{
 		VisibleChain: cloned,
 		ID:           be.ID,
@@ -259,7 +257,7 @@ func (be *MetaBaseEntry) DeleteAfter(ts types.TS) bool {
 	if un == nil {
 		return false
 	}
-	return un.GetAttr().(*MetadataMVCCNode).DeletedAt.Greater(ts)
+	return un.(*MetadataMVCCNode).DeletedAt.Greater(ts)
 }
 
 func (be *MetaBaseEntry) CloneCommittedInRange(start, end types.TS) BaseEntry {
@@ -278,7 +276,7 @@ func (be *MetaBaseEntry) GetCurrOp() OpT {
 	if un == nil {
 		return OpCreate
 	}
-	if !un.GetAttr().(*MetadataMVCCNode).Deleted {
+	if !un.(*MetadataMVCCNode).Deleted {
 		return OpCreate
 	}
 	return OpSoftDelete
@@ -289,7 +287,7 @@ func (be *MetaBaseEntry) GetCreatedAt() types.TS {
 	if un == nil {
 		return types.TS{}
 	}
-	return un.GetAttr().(*MetadataMVCCNode).CreatedAt
+	return un.(*MetadataMVCCNode).CreatedAt
 }
 
 func (be *MetaBaseEntry) GetDeleteAt() types.TS {
@@ -297,7 +295,7 @@ func (be *MetaBaseEntry) GetDeleteAt() types.TS {
 	if un == nil {
 		return types.TS{}
 	}
-	return un.GetAttr().(*MetadataMVCCNode).DeletedAt
+	return un.(*MetadataMVCCNode).DeletedAt
 }
 
 func (be *MetaBaseEntry) TxnCanGet(ts types.TS) (can, dropped bool) {
