@@ -29,11 +29,11 @@ import (
 func TestLoadFile(t *testing.T) {
 	dir := t.TempDir()
 	proc := testutil.NewProc()
-	fs := proc.FileService
 	ctx := context.Background()
 	filepath := dir + "test"
-	err := fs.Write(ctx, fileservice.IOVector{
-		FilePath: filepath,
+	fs, readPath, err := fileservice.GetForETL(proc.FileService, filepath)
+	err = fs.Write(ctx, fileservice.IOVector{
+		FilePath: readPath,
 		Entries: []fileservice.IOEntry{
 			{
 				Offset: 0,
@@ -73,8 +73,9 @@ func TestLoadFile(t *testing.T) {
 
 	//Test empty file
 	filepath = dir + "emptyfile"
+	fs, readPath, err = fileservice.GetForETL(proc.FileService, filepath)
 	err = fs.Write(ctx, fileservice.IOVector{
-		FilePath: filepath,
+		FilePath: readPath,
 		Entries: []fileservice.IOEntry{
 			{
 				Offset: 0,
@@ -111,8 +112,9 @@ func TestLoadFile(t *testing.T) {
 	size := 1024 * 1024 * 1
 	data := make([]byte, size)
 	filepath = dir + "bigfile"
+	fs, readPath, err = fileservice.GetForETL(proc.FileService, filepath)
 	err = fs.Write(ctx, fileservice.IOVector{
-		FilePath: filepath,
+		FilePath: readPath,
 		Entries: []fileservice.IOEntry{
 			{
 				Offset: 0,
@@ -122,14 +124,7 @@ func TestLoadFile(t *testing.T) {
 		},
 	})
 	assert.Nil(t, err)
-	// bigf, err := os.CreateTemp("", "bigfile.bin")
-	// if err != nil {
-	// 	log.Fatal(err)
-	// }
-	// defer os.Remove(bigf.Name())
-	// if err := bigf.Truncate(size); err != nil {
-	// 	t.Fatal(err)
-	// }
+
 	cases3 := []struct {
 		name     string
 		filename string

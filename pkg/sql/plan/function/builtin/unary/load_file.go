@@ -55,21 +55,11 @@ func LoadFile(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, 
 }
 
 func ReadFromFile(Filepath string, fs fileservice.FileService) (io.ReadCloser, error) {
+	fs, readPath, err := fileservice.GetForETL(fs, Filepath)
 	var r io.ReadCloser
-	// index := strings.LastIndex(Filepath, "/")
-	// dir, file := "", Filepath
-	// if index != -1 {
-	// 	dir = string([]byte(Filepath)[0:index])
-	// 	file = string([]byte(Filepath)[index+1:])
-	// }
-
-	// fs, err := fileservice.NewLocalETLFS("etl", dir)
-	// if err != nil {
-	// 	return nil, err
-	// }
-	ctx := context.Background()
+	ctx := context.TODO()
 	vec := fileservice.IOVector{
-		FilePath: Filepath,
+		FilePath: readPath,
 		Entries: []fileservice.IOEntry{
 			0: {
 				Offset:            0,
@@ -78,7 +68,7 @@ func ReadFromFile(Filepath string, fs fileservice.FileService) (io.ReadCloser, e
 			},
 		},
 	}
-	err := fs.Read(ctx, &vec)
+	err = fs.Read(ctx, &vec)
 	if err != nil {
 		return nil, err
 	}
