@@ -665,16 +665,18 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 		case *tree.NumVal:
 			// rewrite count(*) to starcount(col_name)
 			if nval.String() == "*" {
-				name = "starcount"
 				if len(b.ctx.bindings) == 0 || len(b.ctx.bindings[0].cols) == 0 {
-					return nil, errors.New("", "can not find any column when rewrite count(*) to starcount(col)")
+					// return nil, errors.New("", "can not find any column when rewrite count(*) to starcount(col)")
+				} else {
+					name = "starcount"
+
+					var newCountCol *tree.UnresolvedName
+					newCountCol, err := tree.NewUnresolvedName(b.ctx.bindings[0].cols[0])
+					if err != nil {
+						return nil, err
+					}
+					astArgs[0] = newCountCol
 				}
-				var newCountCol *tree.UnresolvedName
-				newCountCol, err := tree.NewUnresolvedName(b.ctx.bindings[0].cols[0])
-				if err != nil {
-					return nil, err
-				}
-				astArgs[0] = newCountCol
 			}
 		}
 	}
