@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package errors
+package errutil
 
 import (
 	"fmt"
@@ -23,15 +23,15 @@ import (
 )
 
 // This file mirrors the WithStack functionality from
-// github.com/pkg/errors. We would prefer to reuse the withStack
+// github.com/pkg/errutil. We would prefer to reuse the withStack
 // struct from that package directly (the library recognizes it well)
-// unfortunately github.com/pkg/errors does not enable client code to
+// unfortunately github.com/pkg/errutil does not enable client code to
 // customize the depth at which the stack trace is captured.
 
 // WithStack annotates err with a stack trace at the point WithStack was called.
 func WithStack(err error) error {
 	// Skip the frame of WithStack itself in caller stack.
-	// this mirrors the behavior of WithStack() in github.com/pkg/errors.
+	// this mirrors the behavior of WithStack() in github.com/pkg/errutil.
 	return WithStackDepth(err, 1)
 }
 

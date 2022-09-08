@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package errors
+package errutil
 
 import (
 	"context"
@@ -33,18 +33,6 @@ type Wrapper interface {
 
 type WithIs interface {
 	Is(error) bool
-}
-
-func Unwrap(err error) error {
-	return goErrors.Unwrap(err)
-}
-
-func Is(err, target error) bool {
-	return goErrors.Is(err, target)
-}
-
-func As(err error, target any) bool {
-	return goErrors.As(err, target)
 }
 
 func New(text string) error {
@@ -94,7 +82,7 @@ func Wrapf(err error, format string, args ...any) error {
 	}
 }
 
-// WalkDeep does a depth-first traversal of all errors.
+// WalkDeep does a depth-first traversal of all errutil.
 // The visitor function can return true to end the traversal early.
 // In that case, WalkDeep will return true, otherwise false.
 func WalkDeep(err error, visitor func(err error) bool) bool {
@@ -104,7 +92,7 @@ func WalkDeep(err error, visitor func(err error) bool) bool {
 		if done := visitor(unErr); done {
 			return true
 		}
-		unErr = Unwrap(unErr)
+		unErr = goErrors.Unwrap(unErr)
 	}
 
 	return false

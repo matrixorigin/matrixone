@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package errors
+package errutil
 
 import (
 	"fmt"
@@ -20,7 +20,7 @@ import (
 )
 
 // This file mirrors the WithMessage functionality from
-// github.com/pkg/errors. We would prefer to reuse the withStack
+// github.com/pkg/errutil. We would prefer to reuse the withStack
 // struct from that package directly (the library recognizes it well)
 
 // WithMessage annotates err with a new message.
