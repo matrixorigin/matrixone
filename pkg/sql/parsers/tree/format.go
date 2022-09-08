@@ -15,6 +15,7 @@
 package tree
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
@@ -60,6 +61,15 @@ func (ctx *FmtCtx) PrintExpr(currentExpr Expr, expr Expr, left bool) {
 		if needParens {
 			ctx.WriteByte(')')
 		}
+	}
+}
+
+func (ctx *FmtCtx) WriteValue(t P_TYPE, v string) (int, error) {
+	switch t {
+	case P_char:
+		return ctx.WriteString(fmt.Sprintf("%q", v))
+	default:
+		return ctx.WriteString(v)
 	}
 }
 

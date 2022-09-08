@@ -58,7 +58,7 @@ type NumVal struct {
 
 func (n *NumVal) Format(ctx *FmtCtx) {
 	if n.origString != "" {
-		ctx.WriteString(FormatString(n.origString))
+		ctx.WriteValue(n.ValType, FormatString(n.origString))
 		return
 	}
 	switch n.Value.Kind() {
