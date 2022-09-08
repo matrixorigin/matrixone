@@ -133,43 +133,15 @@ const (
 
 func init() {
 	var err error
-	PhyAddrColumnType = types.Type{
-		Oid:  types.T_Rowid,
-		Size: 16,
-	}
+	PhyAddrColumnType = types.T_Rowid.ToType()
 
-	ti8 := types.Type{
-		Oid:   types.T_int8,
-		Size:  1,
-		Width: 8,
-	}
-	ti32 := types.Type{
-		Oid:   types.T_int32,
-		Size:  4,
-		Width: 32,
-	}
-	tu32 := types.Type{
-		Oid:  types.T_uint32,
-		Size: 4,
-	}
-	tu64 := types.Type{
-		Oid:  types.T_uint64,
-		Size: 8,
-	}
-	ttimestamp := types.Type{
-		Oid:  types.T_timestamp,
-		Size: 8,
-	}
-	tvarchar := types.Type{
-		Oid:   types.T_varchar,
-		Size:  24,
-		Width: 100,
-	}
-	tsinglechar := types.Type{
-		Oid:   types.T_char,
-		Size:  1,
-		Width: 8,
-	}
+	ti8 := types.T_int8.ToType()
+	ti32 := types.T_int32.ToType()
+	tu32 := types.T_uint32.ToType()
+	tu64 := types.T_uint64.ToType()
+	ttimestamp := types.T_timestamp.ToType()
+	tvarchar := types.T_varchar.ToType()
+	tsinglechar := types.T_char.ToType()
 
 	/*
 
