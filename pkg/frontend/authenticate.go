@@ -240,20 +240,44 @@ func (ot objectType) String() string {
 	panic("unsupported object type")
 }
 
+type privilegeLevelType int
+
 const (
 	//*
-	privilegeLevelStar = "*"
+	privilegeLevelStar privilegeLevelType = iota
 	//*.*
-	//privilegeLevelStarStar = "**"
+	privilegeLevelStarStar
+	//db_name
+	privilegeLevelDatabase
 	//db_name.*
-	privilegeLevelDatabaseStar = "_*"
+	privilegeLevelDatabaseStar
 	//db_name.tbl_name
-	//privilegeLevelDatabaseTable = "d_t"
+	privilegeLevelDatabaseTable
 	//tbl_name
-	privilegeLevelTable = "t"
+	privilegeLevelTable
 	//db_name.routine_name
-	privilegeLevelRoutine = "r"
+	privilegeLevelRoutine
 )
+
+func (plt privilegeLevelType) String() string {
+	switch plt {
+	case privilegeLevelStar:
+		return "*"
+	case privilegeLevelStarStar:
+		return "*.*"
+	case privilegeLevelDatabase:
+		return "d"
+	case privilegeLevelDatabaseStar:
+		return "d.*"
+	case privilegeLevelDatabaseTable:
+		return "d.t"
+	case privilegeLevelTable:
+		return "t"
+	case privilegeLevelRoutine:
+		return "r"
+	}
+	panic(fmt.Sprintf("no such privilege level type %d", plt))
+}
 
 type PrivilegeType int
 
@@ -626,7 +650,81 @@ var (
 
 	getInheritedRoleIdOfRoleIdFormat = `select granted_id,with_grant_option from mo_catalog.mo_role_grant where grantee_id = %d;`
 
-	checkRoleHasPrivilegeFormat = `select role_id,with_grant_option from mo_catalog.mo_role_privs where role_id = %d and obj_type = "%s" and obj_id = %d and privilege_id = %d`
+	checkRoleHasPrivilegeFormat = `select role_id,with_grant_option from mo_catalog.mo_role_privs where role_id = %d and obj_type = "%s" and obj_id = %d and privilege_id = %d;`
+
+	//For object_type : table, privilege_level : *.*
+	checkWithGrantOptionForTableStarStar = `select rp.privilege_id,rp.with_grant_option
+				from mo_database d, mo_tables t, mo_role_privs rp
+				where d.dat_id = t.reldatabase_id
+					and rp.obj_id = 0
+					and rp.obj_type = "table"
+					and rp.role_id = %d
+					and rp.privilege_id = %d
+					and rp.privilege_level="*.*";`
+
+	//For object_type : table, privilege_level : db.*
+	checkWithGrantOptionForTableDatabaseStar = `select rp.privilege_id,rp.with_grant_option
+				from mo_database d, mo_tables t, mo_role_privs rp
+				where d.dat_id = t.reldatabase_id
+					and rp.obj_id = 0
+					and rp.obj_type = "table"
+					and rp.role_id = %d
+					and rp.privilege_id = %d
+					and rp.privilege_level="d.*"
+					and d.datname = "%s";`
+
+	//For object_type : table, privilege_level : db.table
+	checkWithGrantOptionForTableDatabaseTable = `select rp.privilege_id,rp.with_grant_option
+				from mo_database d, mo_tables t, mo_role_privs rp
+				where d.dat_id = t.reldatabase_id
+					and rp.obj_id = t.rel_id
+					and rp.obj_type = "table"
+					and rp.role_id = %d
+					and rp.privilege_id = %d
+					and rp.privilege_level="d.t"
+					and d.datname = "%s"
+					and t.relname = "%s";`
+
+	//For object_type : database, privilege_level : *
+	checkWithGrantOptionForDatabaseStar = `select rp.privilege_id,rp.with_grant_option
+				from mo_database d, mo_tables t, mo_role_privs rp
+				where d.dat_id = t.reldatabase_id
+					and rp.obj_id = 0
+					and rp.obj_type = "database"
+					and rp.role_id = %d
+					and rp.privilege_id = %d
+					and rp.privilege_level="*";`
+
+	//For object_type : database, privilege_level : *.*
+	checkWithGrantOptionForDatabaseStarStar = `select rp.privilege_id,rp.with_grant_option
+				from mo_database d, mo_tables t, mo_role_privs rp
+				where d.dat_id = t.reldatabase_id
+					and rp.obj_id = 0
+					and rp.obj_type = "database"
+					and rp.role_id = %d
+					and rp.privilege_id = %d
+					and rp.privilege_level="*.*";`
+
+	//For object_type : database, privilege_level : db
+	checkWithGrantOptionForDatabaseDB = `select rp.privilege_id,rp.with_grant_option
+				from mo_database d, mo_tables t, mo_role_privs rp
+				where d.dat_id = t.reldatabase_id
+					and rp.obj_id = d.dat_id
+					and rp.obj_type = "database"
+					and rp.role_id = %d
+					and rp.privilege_id = %d
+					and rp.privilege_level="d"
+					and  d.datname = "%s";`
+
+	//For object_type : account, privilege_level : *
+	checkWithGrantOptionForAccountStar = `select rp.privilege_id,rp.with_grant_option
+				from mo_database d, mo_tables t, mo_role_privs rp
+				where d.dat_id = t.reldatabase_id
+					and rp.obj_id = 0
+					and rp.obj_type = "account"
+					and rp.role_id = %d
+					and rp.privilege_id = %d
+					and rp.privilege_level="**";`
 )
 
 func getSqlForCheckTenant(tenant string) string {
@@ -659,6 +757,34 @@ func getSqlForInheritedRoleIdOfRoleId(roleId int64) string {
 
 func getSqlForCheckRoleHasPrivilege(roleId int64, objType objectType, objId, privilegeId int64) string {
 	return fmt.Sprintf(checkRoleHasPrivilegeFormat, roleId, objType, objId, privilegeId)
+}
+
+func getSqlForCheckWithGrantOptionForTableStarStar(roleId int64, privId PrivilegeType) string {
+	return fmt.Sprintf(checkWithGrantOptionForTableStarStar, roleId, privId)
+}
+
+func getSqlForCheckWithGrantOptionForTableDatabaseStar(roleId int64, privId PrivilegeType, dbName string) string {
+	return fmt.Sprintf(checkWithGrantOptionForTableDatabaseStar, roleId, privId, dbName)
+}
+
+func getSqlForCheckWithGrantOptionForTableDatabaseTable(roleId int64, privId PrivilegeType, dbName string, tableName string) string {
+	return fmt.Sprintf(checkWithGrantOptionForTableDatabaseTable, roleId, privId, dbName, tableName)
+}
+
+func getSqlForCheckWithGrantOptionForDatabaseStar(roleId int64, privId PrivilegeType) string {
+	return fmt.Sprintf(checkWithGrantOptionForDatabaseStar, roleId, privId)
+}
+
+func getSqlForCheckWithGrantOptionForDatabaseStarStar(roleId int64, privId PrivilegeType) string {
+	return fmt.Sprintf(checkWithGrantOptionForDatabaseStarStar, roleId, privId)
+}
+
+func getSqlForCheckWithGrantOptionForDatabaseDB(roleId int64, privId PrivilegeType, dbName string) string {
+	return fmt.Sprintf(checkWithGrantOptionForDatabaseDB, roleId, privId, dbName)
+}
+
+func getSqlForCheckWithGrantOptionForAccountStar(roleId int64, privId PrivilegeType) string {
+	return fmt.Sprintf(checkWithGrantOptionForAccountStar, roleId, privId)
 }
 
 type specialTag int
@@ -709,7 +835,7 @@ func (p *privilege) privilegeKind() privilegeKind {
 // privilegeEntry denotes the entry of the privilege that appears in the table mo_role_privs
 type privilegeEntry struct {
 	privilegeId     PrivilegeType
-	privilegeLevel  string
+	privilegeLevel  privilegeLevelType
 	objType         objectType
 	objId           int
 	withGrantOption bool
@@ -1263,6 +1389,14 @@ func authenticatePrivilegeOfStatementWithObjectTypeAccount(ctx context.Context, 
 
 // determinePrivilegeHasWithGrantOption decides all privileges have the with_grant_option = true
 func determinePrivilegeHasWithGrantOption(ctx context.Context, ses *Session, privs []*tree.Privilege) (bool, error) {
+	return false, nil
+}
+
+func convertAstPrivilegeTypeToPrivilegeType(priv tree.PrivilegeType) PrivilegeType {
+	switch priv {
+	default:
+		return PrivilegeTypeAccountAll
+	}
 }
 
 // authenticatePrivilegeOfStatementWithObjectTypeNone decides the user has the privilege of executing the statement with object type none
@@ -1277,9 +1411,8 @@ func authenticatePrivilegeOfStatementWithObjectTypeNone(ctx context.Context, ses
 		return true, nil
 	} else if priv.privilegeKind() == privilegeKindSpecial { //GrantPrivilege, RevokePrivilege
 		//TODO:
-		switch stmt.(type) {
+		switch gp := stmt.(type) {
 		case *tree.GrantPrivilege:
-			//TODO:
 			//in the version 0.6, only the moAdmin and accountAdmin can grant the privilege.
 			if tenant.IsAdminRole() {
 				return true, nil
@@ -1310,20 +1443,169 @@ func authenticatePrivilegeOfStatementWithObjectTypeNone(ctx context.Context, ses
 			//  object_type + privilege_level => obj_id
 			//	Table : mo_database join mo_tables join mo_role_privs
 			//		*.* : => 0
+			/*
+				select rp.privilege_id,rp.with_grant_option
+				from mo_database d, mo_tables t, mo_role_privs rp
+				where d.dat_id = t.reldatabase_id
+					and rp.obj_id = 0
+					and rp.obj_type = "table"
+					and rp.role_id = ROLE_ID
+					and rp.privilege_id = SELECT_ID
+					and rp.privilege_level="*.*";
+			*/
 			//		db.* => 0
+			/*
+				select rp.privilege_id,rp.with_grant_option
+				from mo_database d, mo_tables t, mo_role_privs rp
+				where d.dat_id = t.reldatabase_id
+					and rp.obj_id = 0
+					and rp.obj_type = "table"
+					and rp.role_id = ROLE_ID
+					and rp.privilege_id = SELECT_ID
+					and rp.privilege_level="d.*"
+					and d.datname = DB;
+			*/
 			//		db.table => tableId
+			/*
+				select rp.privilege_id,rp.with_grant_option
+				from mo_database d, mo_tables t, mo_role_privs rp
+				where d.dat_id = t.reldatabase_id
+					and rp.obj_id = t.rel_id
+					and rp.obj_type = "table"
+					and rp.role_id = ROLE_ID
+					and rp.privilege_id = SELECT_ID
+					and rp.privilege_level="d.t"
+					and d.datname = DB
+					and t.relname = X;
+			*/
 			//		table => tableId
+			/*
+				select rp.privilege_id,rp.with_grant_option
+				from mo_database d, mo_tables t, mo_role_privs rp
+				where d.dat_id = t.reldatabase_id
+					and rp.obj_id = t.rel_id
+					and rp.obj_type = "table"
+					and rp.role_id = ROLE_ID
+					and rp.privilege_id = SELECT_ID
+					and rp.privilege_level="t"
+					and d.datname = CURRENT_DATABASE
+					and t.relname = X;
+			*/
 			//	Database: mo_database join mo_role_privs
 			//		*  : => 0
+			/*
+				select rp.privilege_id,rp.with_grant_option
+				from mo_database d, mo_tables t, mo_role_privs rp
+				where d.dat_id = t.reldatabase_id
+					and rp.obj_id = 0
+					and rp.obj_type = "database"
+					and rp.role_id = ROLE_ID
+					and rp.privilege_id = SELECT_ID
+					and rp.privilege_level="*";
+			*/
 			//		*.* : => 0
+			/*
+				select rp.privilege_id,rp.with_grant_option
+				from mo_database d, mo_tables t, mo_role_privs rp
+				where d.dat_id = t.reldatabase_id
+					and rp.obj_id = 0
+					and rp.obj_type = "database"
+					and rp.role_id = ROLE_ID
+					and rp.privilege_id = SELECT_ID
+					and rp.privilege_level="*.*";
+			*/
 			//		db; => databaseId
+			/*
+				select rp.privilege_id,rp.with_grant_option
+				from mo_database d, mo_tables t, mo_role_privs rp
+				where d.dat_id = t.reldatabase_id
+					and rp.obj_id = d.dat_id
+					and rp.obj_type = "database"
+					and rp.role_id = ROLE_ID
+					and rp.privilege_id = SELECT_ID
+					and rp.privilege_level="d"
+					and  d.datname = DB;
+			*/
 			//	Function:
 			//		*.*：=> 0
 			//		db.routine => routineId
 			//	Account:
 			//		*: => 0
+			/*
+				select rp.privilege_id,rp.with_grant_option
+				from mo_database d, mo_tables t, mo_role_privs rp
+				where d.dat_id = t.reldatabase_id
+					and rp.obj_id = 0
+					and rp.obj_type = "account"
+					and rp.role_id = ROLE_ID
+					and rp.privilege_id = SELECT_ID
+					and rp.privilege_level="**";
+			*/
 			//privilege_level :GrantPrivilege.privilegeLevel
 
+			for _, p := range gp.Privileges {
+				objType := objectTypeNone
+				privLevel := privilegeLevelStar
+				sql := ""
+				privType := convertAstPrivilegeTypeToPrivilegeType(p.Type)
+				switch gp.ObjType {
+				case tree.OBJECT_TYPE_DATABASE:
+					switch gp.Level.Level {
+					case tree.PRIVILEGE_LEVEL_TYPE_STAR:
+						sql = getSqlForCheckWithGrantOptionForDatabaseStar(int64(tenant.GetDefaultRoleID()), privType)
+					case tree.PRIVILEGE_LEVEL_TYPE_STAR_STAR:
+						sql = getSqlForCheckWithGrantOptionForDatabaseStarStar(int64(tenant.GetDefaultRoleID()), privType)
+					case tree.PRIVILEGE_LEVEL_TYPE_DATABASE:
+						sql = getSqlForCheckWithGrantOptionForDatabaseDB(int64(tenant.GetDefaultRoleID()), privType, gp.Level.DbName)
+					default:
+						return false, moerr.NewInternalError(" in object type %s privilege level type %s is unsupported", gp.ObjType, gp.Level.Level)
+					}
+				case tree.OBJECT_TYPE_TABLE:
+					switch gp.Level.Level {
+					case tree.PRIVILEGE_LEVEL_TYPE_STAR_STAR:
+						sql = getSqlForCheckWithGrantOptionForTableStarStar(int64(tenant.GetDefaultRoleID()), privType)
+					case tree.PRIVILEGE_LEVEL_TYPE_DATABASE_STAR:
+						sql = getSqlForCheckWithGrantOptionForTableDatabaseStar(int64(tenant.GetDefaultRoleID()), privType, gp.Level.DbName)
+					case tree.PRIVILEGE_LEVEL_TYPE_DATABASE_TABLE:
+						sql = getSqlForCheckWithGrantOptionForTableDatabaseTable(int64(tenant.GetDefaultRoleID()), privType, gp.Level.DbName, gp.Level.TabName)
+					case tree.PRIVILEGE_LEVEL_TYPE_STAR:
+					case tree.PRIVILEGE_LEVEL_TYPE_TABLE:
+						//TODO: complement current database
+						sql = getSqlForCheckWithGrantOptionForTableDatabaseTable(int64(tenant.GetDefaultRoleID()), privType, "TODO: CURRENT_DATABASE", gp.Level.TabName)
+					default:
+						return false, moerr.NewInternalError(" in object type %s privilege level type %s is unsupported", gp.ObjType, gp.Level.Level)
+					}
+
+				case tree.OBJECT_TYPE_ACCOUNT:
+					switch gp.Level.Level {
+					case tree.PRIVILEGE_LEVEL_TYPE_STAR:
+						sql = getSqlForCheckWithGrantOptionForAccountStar(int64(tenant.GetDefaultRoleID()), privType)
+					default:
+						return false, moerr.NewInternalError(" in object type %s privilege level type %s is unsupported", gp.ObjType, gp.Level.Level)
+					}
+				default:
+					return false, moerr.NewInternalError("object type %s is unsupported", gp.ObjType)
+				}
+
+				switch gp.Level.Level {
+				case tree.PRIVILEGE_LEVEL_TYPE_STAR:
+					privLevel = privilegeLevelStar
+				case tree.PRIVILEGE_LEVEL_TYPE_STAR_STAR:
+					privLevel = privilegeLevelStarStar
+				case tree.PRIVILEGE_LEVEL_TYPE_DATABASE:
+					privLevel = privilegeLevelDatabase
+				case tree.PRIVILEGE_LEVEL_TYPE_DATABASE_STAR:
+					privLevel = privilegeLevelDatabaseStar
+				case tree.PRIVILEGE_LEVEL_TYPE_DATABASE_TABLE:
+					privLevel = privilegeLevelDatabaseTable
+				case tree.PRIVILEGE_LEVEL_TYPE_TABLE:
+					privLevel = privilegeLevelTable
+				case tree.PRIVILEGE_LEVEL_TYPE_ROUTINE:
+					privLevel = privilegeLevelRoutine
+				default:
+					return false, moerr.NewInternalError("privilege level type %s is unsupported", gp.Level.Level)
+				}
+			}
 		case *tree.RevokeRole:
 			//in the version 0.6, only the moAdmin and accountAdmin can revoke the privilege.
 			return tenant.IsAdminRole(), nil
@@ -1600,7 +1882,7 @@ func checkTenantExistsOrNot(ctx context.Context, pu *config.ParameterUnit, userN
 	return true, nil
 }
 
-// InitGeneralTenant initializes the application level tenan
+// InitGeneralTenant initializes the application level tenant
 func InitGeneralTenant(ctx context.Context, tenant *TenantInfo, ca *tree.CreateAccount) error {
 	var err error
 	var exists bool
