@@ -21,10 +21,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
-	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
-	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"golang.org/x/exp/constraints"
 )
 
@@ -352,13 +348,6 @@ var (
 
 type vecType interface {
 	constraints.Integer | constraints.Float | bool
-}
-
-func NewProc() *process.Process {
-	proc := process.New(mheap.New(guest.New(1<<20, host.New(1<<20))))
-	proc.SessionInfo.TimeZone = time.Local
-	proc.FileService = NewFS()
-	return proc
 }
 
 func makeVector[T vecType](values []T, nsp []uint64, typ types.Type) *vector.Vector {

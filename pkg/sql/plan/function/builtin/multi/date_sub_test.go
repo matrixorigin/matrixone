@@ -19,6 +19,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
@@ -33,7 +34,7 @@ func TestDateSub(t *testing.T) {
 		{
 			name: "TEST01",
 			vecs: makeDateSubVectors("2022-01-02", true, 1, types.Day),
-			proc: makeProcess(),
+			proc: testutil.NewProc(),
 			want: "2022-01-01",
 		},
 	}
@@ -60,7 +61,7 @@ func TestDatetimeSub(t *testing.T) {
 		{
 			name: "TEST01",
 			vecs: makeDatetimeSubVectors("2022-01-02 00:00:00", true, 1, types.Day),
-			proc: makeProcess(),
+			proc: testutil.NewProc(),
 			want: "2022-01-01 00:00:00",
 		},
 	}
@@ -88,28 +89,28 @@ func TestDateStringSub(t *testing.T) {
 		{
 			name: "TEST01",
 			vecs: makeDateStringSubVectors("2022-01-02", true, 1, types.Day),
-			proc: makeProcess(),
+			proc: testutil.NewProc(),
 			want: "2022-01-01 00:00:00",
 			err:  nil,
 		},
 		{
 			name: "TEST02",
 			vecs: makeDateStringSubVectors("2022-01-02 00:00:00", true, 1, types.Day),
-			proc: makeProcess(),
+			proc: testutil.NewProc(),
 			want: "2022-01-01 00:00:00",
 			err:  nil,
 		},
 		{
 			name: "TEST03",
 			vecs: makeDateStringSubVectors("2022-01-01", true, 1, types.Second),
-			proc: makeProcess(),
+			proc: testutil.NewProc(),
 			want: "2021-12-31 23:59:59",
 			err:  nil,
 		},
 		{
 			name: "TEST04",
 			vecs: makeDateStringSubVectors("xxxx", true, 1, types.Second),
-			proc: makeProcess(),
+			proc: testutil.NewProc(),
 			want: "0001-01-01 00:00:00",
 			err:  types.ErrIncorrectDatetimeValue,
 		},

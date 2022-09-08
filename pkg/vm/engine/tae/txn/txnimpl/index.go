@@ -182,6 +182,10 @@ func (idx *simpleTableIndex) BatchInsert(col containers.Vector, start, count int
 		return InsertOp[types.Timestamp](col.Slice(), start, count, row, dedupInput, idx.tree)
 	case types.T_datetime:
 		return InsertOp[types.Datetime](col.Slice(), start, count, row, dedupInput, idx.tree)
+	case types.T_TS:
+		return InsertOp[types.TS](col.Slice(), start, count, row, dedupInput, idx.tree)
+	case types.T_Rowid:
+		return InsertOp[types.Rowid](col.Slice(), start, count, row, dedupInput, idx.tree)
 	case types.T_char, types.T_varchar, types.T_json, types.T_blob:
 		vs := col.Slice().(*containers.Bytes)
 		if dedupInput {
@@ -249,6 +253,10 @@ func (idx *simpleTableIndex) BatchDedup(col containers.Vector) error {
 		return DedupOp[types.Datetime](vals, idx.tree)
 	case types.T_timestamp:
 		return DedupOp[types.Timestamp](vals, idx.tree)
+	case types.T_TS:
+		return DedupOp[types.TS](vals, idx.tree)
+	case types.T_Rowid:
+		return DedupOp[types.Rowid](vals, idx.tree)
 	case types.T_char, types.T_varchar, types.T_json, types.T_blob:
 		vals := vals.(*containers.Bytes)
 		for i, s := range vals.Offset {

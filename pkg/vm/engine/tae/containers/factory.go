@@ -54,6 +54,10 @@ func MakeVector(typ types.Type, nullable bool, opts ...*Options) (vec Vector) {
 		vec = NewVector[types.Timestamp](typ, nullable, opts...)
 	case types.T_datetime:
 		vec = NewVector[types.Datetime](typ, nullable, opts...)
+	case types.T_TS:
+		vec = NewVector[types.TS](typ, nullable, opts...)
+	case types.T_Rowid:
+		vec = NewVector[types.Rowid](typ, nullable, opts...)
 	case types.T_char, types.T_varchar, types.T_json, types.T_blob:
 		vec = NewVector[[]byte](typ, nullable, opts...)
 	default:

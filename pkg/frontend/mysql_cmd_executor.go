@@ -1670,7 +1670,12 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 	ses.SetSql(sql)
 	ses.ep.Outfile = false
 
-	proc := process.New(mheap.New(ses.GuestMmu))
+	proc := process.New(
+		requestCtx,
+		mheap.New(ses.GuestMmu),
+		ses.GetTxnHandler().txn,
+		ses.Pu.FileService,
+	)
 	proc.Id = mce.getNextProcessId()
 	proc.Lim.Size = ses.Pu.SV.ProcessLimitationSize
 	proc.Lim.BatchRows = ses.Pu.SV.ProcessLimitationBatchRows
@@ -1683,7 +1688,6 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		Version:      serverVersion,
 		TimeZone:     ses.timeZone,
 	}
-	proc.FileService = ses.Pu.FileService
 
 	cws, err := GetComputationWrapper(ses.GetDatabaseName(),
 		sql,

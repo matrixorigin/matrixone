@@ -21,14 +21,24 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 )
 
 // New creates a new Process.
 // A process stores the execution context.
-func New(m *mheap.Mheap) *Process {
+func New(
+	ctx context.Context,
+	m *mheap.Mheap,
+	txnOperator client.TxnOperator,
+	fileService fileservice.FileService,
+) *Process {
 	return &Process{
-		mp: m,
+		mp:          m,
+		Ctx:         ctx,
+		TxnOperator: txnOperator,
+		FileService: fileService,
 	}
 }
 

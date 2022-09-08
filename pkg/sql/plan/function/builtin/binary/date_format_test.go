@@ -20,10 +20,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
-	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
-	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
-	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/smartystreets/goconvey/convey"
 	"github.com/stretchr/testify/require"
 )
@@ -540,12 +536,6 @@ func TestDateFormat(t *testing.T) {
 
 // Single row constant input parameter test date_format function
 func TestDateFormatWithScalar(t *testing.T) {
-	makeProcess := func() *process.Process {
-		hm := host.New(1 << 40)
-		gm := guest.New(1<<40, hm)
-		return process.New(mheap.New(gm))
-	}
-
 	// Construct vector parameter of date_format() function
 	makeDateFormatVectors := func(date string, format string) []*vector.Vector {
 		vec := make([]*vector.Vector, 2)
@@ -661,7 +651,7 @@ func TestDateFormatWithScalar(t *testing.T) {
 		},
 	}
 
-	proc := makeProcess()
+	proc := testutil.NewProc()
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			inputVecs := makeDateFormatVectors(c.datestr, c.format)

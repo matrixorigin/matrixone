@@ -71,10 +71,16 @@ const (
 	T_blob T = 70
 
 	// Transaction TS
-	T_TS T = 100
+	T_TS    T = 100
+	T_Rowid T = 101
 
 	// system family
 	T_tuple T = 201
+)
+
+const (
+	TxnTsSize = 12
+	RowidSize = 16
 )
 
 type Type struct {
@@ -102,14 +108,22 @@ type Timestamp int64
 type Decimal64 [8]byte
 type Decimal128 [16]byte
 
+type Varlena [VarlenaSize]byte
 // UUID is Version 1 UUID based on the current NodeID and clock sequence, and the current time.
 type Uuid [16]byte
 
-type Varlena [24]byte
-
 // timestamp for transaction: physical time (higher 8 bytes) + logical (lower 4 bytes)
 // See txts.go for impl.
-type TS [12]byte
+type TS [TxnTsSize]byte
+
+// Rowid
+type Rowid [RowidSize]byte
+
+// Fixed bytes.   Deciaml64/128 and Varlena are not included because they
+// has special meanings.  In general you cannot compare them as bytes.
+type FixedBytes interface {
+	TS | Rowid
+}
 
 type Ints interface {
 	int8 | int16 | int32 | int64
@@ -137,28 +151,11 @@ type Decimal interface {
 
 // FixedSized types in our type system.   Esp, Varlena.
 type FixedSizeT interface {
-	bool | OrderedT | Decimal | TS | Uuid | Varlena
-}
-
-// Fixed sized types, that can really be used.
-// varlena is considered internal and should not be used by code
-// outside of container.  Esp, containers/vector hacks varlena.
-type UserFixedTypeT interface {
-	bool | OrderedT | Decimal | TS
-}
-
-// Types can be used by code outside of the container.  Those
-// code really should use []byte and string.
-type UserTypeT interface {
-	UserFixedTypeT | []byte | string
+	bool | OrderedT | Decimal | TS | Rowid | Varlena | Uuid
 }
 
 type Number interface {
 	Ints | UInts | Floats | Decimal
-}
-
-type Generic interface {
-	Ints | UInts | Floats | Date | Datetime | Timestamp
 }
 
 var Types map[string]T = map[string]T{
@@ -193,6 +190,9 @@ var Types map[string]T = map[string]T{
 	"json": T_json,
 	"text": T_blob,
 	"uuid": T_uuid,
+
+	"transaction timestamp": T_TS,
+	"rowid":                 T_Rowid,
 }
 
 func New(oid T, width, scale, precision int32) Type {
@@ -279,8 +279,6 @@ func (t T) ToType() Type {
 
 	typ.Oid = t
 	switch t {
-	case T_json:
-		typ.Size = 24
 	case T_bool:
 		typ.Size = 1
 	case T_int8:
@@ -303,18 +301,23 @@ func (t T) ToType() Type {
 		typ.Size = 4
 	case T_float64:
 		typ.Size = 8
-	case T_char:
-		typ.Size = 24
-	case T_varchar:
-		typ.Size = 24
 	case T_decimal64:
 		typ.Size = 8
 	case T_decimal128:
 		typ.Size = 16
-	case T_blob:
-		typ.Size = 24
 	case T_uuid:
 		typ.Size = 16
+	case T_TS:
+		typ.Size = TxnTsSize
+	case T_Rowid:
+		typ.Size = RowidSize
+	case T_char, T_varchar, T_json, T_blob:
+		typ.Size = VarlenaSize
+	case T_any:
+		// XXX I don't know about this one ...
+		typ.Size = 0
+	default:
+		panic("Unknown type")
 	}
 	return typ
 }
@@ -365,6 +368,10 @@ func (t T) String() string {
 		return "DECIMAL128"
 	case T_blob:
 		return "TEXT"
+	case T_TS:
+		return "TRANSACTION TIMESTAMP"
+	case T_Rowid:
+		return "ROWID"
 	case T_uuid:
 		return "UUID"
 	}
@@ -418,6 +425,10 @@ func (t T) OidString() string {
 		return "T_decimal128"
 	case T_blob:
 		return "T_blob"
+	case T_TS:
+		return "T_TS"
+	case T_Rowid:
+		return "T_Rowid"
 	}
 	return "unknown_type"
 }
@@ -511,6 +522,10 @@ func (t T) TypeLen() int {
 		return 16
 	case T_uuid:
 		return 16
+	case T_TS:
+		return TxnTsSize
+	case T_Rowid:
+		return RowidSize
 	}
 	panic(moerr.NewInternalError("Unknow type %s", t))
 }
@@ -534,6 +549,10 @@ func (t T) FixedLength() int {
 		return 16
 	case T_uuid:
 		return 16
+	case T_TS:
+		return TxnTsSize
+	case T_Rowid:
+		return RowidSize
 	case T_char, T_varchar, T_blob, T_json:
 		return -24
 	}

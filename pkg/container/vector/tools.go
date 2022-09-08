@@ -94,6 +94,10 @@ func (v *Vector) colFromData() {
 			v.Col = DecodeFixedCol[types.Datetime](v, tlen)
 		case types.T_timestamp:
 			v.Col = DecodeFixedCol[types.Timestamp](v, tlen)
+		case types.T_TS:
+			v.Col = DecodeFixedCol[types.TS](v, tlen)
+		case types.T_Rowid:
+			v.Col = DecodeFixedCol[types.Rowid](v, tlen)
 		default:
 			panic("unknown type")
 		}
@@ -145,6 +149,10 @@ func (v *Vector) setupColFromData(start, end int) {
 			v.Col = DecodeFixedCol[types.Datetime](v, tlen)[start:end]
 		case types.T_timestamp:
 			v.Col = DecodeFixedCol[types.Timestamp](v, tlen)[start:end]
+		case types.T_TS:
+			v.Col = DecodeFixedCol[types.TS](v, tlen)[start:end]
+		case types.T_Rowid:
+			v.Col = DecodeFixedCol[types.Rowid](v, tlen)[start:end]
 		default:
 			panic("unknown type")
 		}
@@ -187,6 +195,10 @@ func (v *Vector) encodeColToByteSlice() []byte {
 		return types.EncodeDatetimeSlice(v.Col.([]types.Datetime))
 	case types.T_timestamp:
 		return types.EncodeTimestampSlice(v.Col.([]types.Timestamp))
+	case types.T_TS:
+		return types.EncodeFixedSlice(v.Col.([]types.TS), types.TxnTsSize)
+	case types.T_Rowid:
+		return types.EncodeFixedSlice(v.Col.([]types.Rowid), types.RowidSize)
 	case types.T_char, types.T_varchar, types.T_blob, types.T_json:
 		return types.EncodeVarlenaSlice(v.Col.([]types.Varlena))
 	case types.T_tuple:
