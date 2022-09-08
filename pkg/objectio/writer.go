@@ -49,7 +49,6 @@ func (w *ObjectWriter) WriteHeader() error {
 func (w *ObjectWriter) Write(id *common.ID, batch *batch.Batch) error {
 	block := NewBlock(id, batch)
 	w.AddBlock(block)
-	//block := w.GetBlock(id, batch)
 	for i, vec := range batch.Vecs {
 		buf, err := vec.Show()
 		if err != nil {
@@ -143,10 +142,5 @@ func (w *ObjectWriter) GetBlock(id *common.ID, batch *batch.Batch) *Block {
 	w.Lock()
 	defer w.Unlock()
 	block := w.blocks[id.BlockID]
-	if block != nil {
-		return block
-	}
-	block = NewBlock(id, batch)
-	w.blocks[id.BlockID] = block
 	return block
 }
