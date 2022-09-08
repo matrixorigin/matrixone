@@ -79,6 +79,9 @@ func (cb *ColumnBlock) UnShowMeta(data []byte) error {
 	if err = binary.Read(cache, binary.BigEndian, &cb.meta.alg); err != nil {
 		return err
 	}
+	if err = binary.Read(cache, binary.BigEndian, &cb.meta.idx); err != nil {
+		return err
+	}
 	cb.meta.location = Extent{}
 	if err = binary.Read(cache, binary.BigEndian, &cb.meta.location.offset); err != nil {
 		return err

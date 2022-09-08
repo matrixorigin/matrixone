@@ -1,6 +1,8 @@
 package objectio
 
-import "github.com/matrixorigin/matrixone/pkg/fileservice"
+import (
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
+)
 
 type ObjectReader struct {
 	object *Object
@@ -20,7 +22,7 @@ func NewObjectReader(name string, dir string) (*ObjectReader, error) {
 	return reader, nil
 }
 
-func (r *ObjectReader) Read(extent Extent, idxs []uint16) error {
+func (r *ObjectReader) Read(extent Extent, idxs []uint16) (*fileservice.IOVector, error) {
 	var err error
 	meta := &fileservice.IOVector{
 		FilePath: r.name,
@@ -32,12 +34,12 @@ func (r *ObjectReader) Read(extent Extent, idxs []uint16) error {
 	}
 	err = r.object.oFile.Read(nil, meta)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	block := &Block{}
 	err = block.UnShowMeta(meta.Entries[0].Data)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	data := &fileservice.IOVector{
 		FilePath: r.name,
@@ -53,7 +55,7 @@ func (r *ObjectReader) Read(extent Extent, idxs []uint16) error {
 	}
 	err = r.object.oFile.Read(nil, data)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	return nil
+	return data, nil
 }

@@ -1,12 +1,15 @@
 package objectio
 
 import (
+	"bytes"
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/moengine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/stl"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/stretchr/testify/assert"
 	"path"
@@ -46,5 +49,20 @@ func TestNewObjectWriter(t *testing.T) {
 	idxs[0] = 0
 	idxs[1] = 2
 	idxs[2] = 3
-	objectReader.Read(extents[0], idxs)
+	vec, err := objectReader.Read(extents[0], idxs)
+	assert.Nil(t, err)
+	opts := new(containers.Options)
+	opts.Capacity = int(schema.BlockMaxRows)
+	allocator := stl.NewSimpleAllocator()
+	opts.Allocator = allocator
+	newbat := containers.NewBatch()
+	for i, entry := range vec.Entries {
+		vec := containers.MakeVector(data.Vecs[int(idxs[i])].GetType(), false, opts)
+		r := bytes.NewBuffer(entry.Data)
+		if _, err = vec.ReadFrom(r); err != nil {
+			return
+		}
+		newbat.AddVector(data.Attrs[int(idxs[i])], vec)
+	}
+	assert.Equal(t, 3, len(newbat.Vecs))
 }
