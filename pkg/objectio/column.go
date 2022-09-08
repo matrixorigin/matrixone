@@ -14,7 +14,7 @@ func NewColumnBlock(idx uint16) *ColumnBlock {
 	meta := &ColumnMeta{
 		idx:         idx,
 		zoneMap:     &index.ZoneMap{},
-		bloomFilter: &Extent{},
+		bloomFilter: Extent{},
 	}
 	block := &ColumnBlock{
 		meta: meta,
@@ -68,4 +68,43 @@ func (cb *ColumnBlock) ShowMeta() ([]byte, error) {
 		return nil, err
 	}
 	return buffer.Bytes(), nil
+}
+
+func (cb *ColumnBlock) UnShowMeta(data []byte) error {
+	var err error
+	cache := bytes.NewBuffer(data)
+	if err = binary.Read(cache, binary.BigEndian, &cb.meta.typ); err != nil {
+		return err
+	}
+	if err = binary.Read(cache, binary.BigEndian, &cb.meta.alg); err != nil {
+		return err
+	}
+	cb.meta.location = Extent{}
+	if err = binary.Read(cache, binary.BigEndian, &cb.meta.location.offset); err != nil {
+		return err
+	}
+	if err = binary.Read(cache, binary.BigEndian, &cb.meta.location.length); err != nil {
+		return err
+	}
+	if err = binary.Read(cache, binary.BigEndian, &cb.meta.location.originSize); err != nil {
+		return err
+	}
+	cb.meta.bloomFilter = Extent{}
+	if err = binary.Read(cache, binary.BigEndian, &cb.meta.bloomFilter.offset); err != nil {
+		return err
+	}
+	if err = binary.Read(cache, binary.BigEndian, &cb.meta.bloomFilter.length); err != nil {
+		return err
+	}
+	if err = binary.Read(cache, binary.BigEndian, &cb.meta.bloomFilter.originSize); err != nil {
+		return err
+	}
+	if err = binary.Read(cache, binary.BigEndian, &cb.meta.checksum); err != nil {
+		return err
+	}
+	reserved := make([]byte, 32)
+	if err = binary.Read(cache, binary.BigEndian, &reserved); err != nil {
+		return err
+	}
+	return err
 }

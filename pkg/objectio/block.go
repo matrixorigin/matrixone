@@ -4,20 +4,17 @@ import (
 	"bytes"
 	"encoding/binary"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 )
 
 type Block struct {
+	id      uint64
 	header  *BlockHeader
 	columns []*ColumnBlock
 	data    *batch.Batch
 }
 
-func NewBlock(id *common.ID, batch *batch.Batch) *Block {
+func NewBlock(batch *batch.Batch) *Block {
 	header := &BlockHeader{
-		tableId:     id.TableID,
-		segmentId:   id.SegmentID,
-		blockId:     id.BlockID,
 		columnCount: uint16(len(batch.Attrs)),
 	}
 	block := &Block{
@@ -67,4 +64,38 @@ func (b *Block) ShowMeta() ([]byte, error) {
 		}
 	}
 	return buffer.Bytes(), nil
+}
+
+func (b *Block) UnShowMeta(data []byte) error {
+	var err error
+	cache := bytes.NewBuffer(data)
+	b.header = &BlockHeader{}
+	if err = binary.Read(cache, binary.BigEndian, &b.header.tableId); err != nil {
+		return err
+	}
+	if err = binary.Read(cache, binary.BigEndian, &b.header.segmentId); err != nil {
+		return err
+	}
+	if err = binary.Read(cache, binary.BigEndian, &b.header.blockId); err != nil {
+		return err
+	}
+	if err = binary.Read(cache, binary.BigEndian, &b.header.columnCount); err != nil {
+		return err
+	}
+	if err = binary.Read(cache, binary.BigEndian, &b.header.checksum); err != nil {
+		return err
+	}
+	reserved := make([]byte, 34)
+	if err = binary.Read(cache, binary.BigEndian, &reserved); err != nil {
+		return err
+	}
+	b.columns = make([]*ColumnBlock, b.header.columnCount)
+	for i, _ := range b.columns {
+		b.columns[i] = NewColumnBlock(uint16(i))
+		err = b.columns[i].UnShowMeta(cache.Bytes())
+		if err != nil {
+			return err
+		}
+	}
+	return err
 }

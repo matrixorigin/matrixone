@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"encoding/binary"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"sync"
 )
 
@@ -14,6 +13,7 @@ type ObjectWriter struct {
 	blocks map[uint64]*Block
 	buffer *ObjectBuffer
 	name   string
+	lastId uint64
 }
 
 func NewObjectWriter(name string) (*ObjectWriter, error) {
@@ -21,6 +21,7 @@ func NewObjectWriter(name string) (*ObjectWriter, error) {
 		name:   name,
 		buffer: NewObjectBuffer(name),
 		blocks: make(map[uint64]*Block),
+		lastId: 0,
 	}
 	err := writer.WriteHeader()
 	return writer, err
@@ -46,8 +47,8 @@ func (w *ObjectWriter) WriteHeader() error {
 	return err
 }
 
-func (w *ObjectWriter) Write(id *common.ID, batch *batch.Batch) error {
-	block := NewBlock(id, batch)
+func (w *ObjectWriter) Write(batch *batch.Batch) error {
+	block := NewBlock(batch)
 	w.AddBlock(block)
 	for i, vec := range batch.Vecs {
 		buf, err := vec.Show()
@@ -58,7 +59,8 @@ func (w *ObjectWriter) Write(id *common.ID, batch *batch.Batch) error {
 		if err != nil {
 			return err
 		}
-		block.columns[i].meta.location = &Extent{
+		block.columns[i].meta.location = Extent{
+			id:         block.header.blockId,
 			offset:     uint32(offset),
 			length:     uint32(length),
 			originSize: uint32(length),
@@ -67,7 +69,7 @@ func (w *ObjectWriter) Write(id *common.ID, batch *batch.Batch) error {
 	return nil
 }
 
-func (w *ObjectWriter) WriteEnd() error {
+func (w *ObjectWriter) WriteEnd() ([]Extent, error) {
 	var err error
 	w.RLock()
 	defer w.RUnlock()
@@ -75,13 +77,14 @@ func (w *ObjectWriter) WriteEnd() error {
 	for _, block := range w.blocks {
 		meta, err := block.ShowMeta()
 		if err != nil {
-			return err
+			return nil, err
 		}
 		offset, length, err := w.buffer.Write(meta)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		extents = append(extents, Extent{
+			id:         block.header.blockId,
 			offset:     uint32(offset),
 			length:     uint32(length),
 			originSize: uint32(length),
@@ -90,35 +93,35 @@ func (w *ObjectWriter) WriteEnd() error {
 	var buf bytes.Buffer
 	for _, extent := range extents {
 		if err = binary.Write(&buf, binary.BigEndian, extent.Offset()); err != nil {
-			return err
+			return nil, err
 		}
 		if err = binary.Write(&buf, binary.BigEndian, extent.Length()); err != nil {
-			return err
+			return nil, err
 		}
 		if err = binary.Write(&buf, binary.BigEndian, extent.OriginSize()); err != nil {
-			return err
+			return nil, err
 		}
 	}
 	if err = binary.Write(&buf, binary.BigEndian, uint8(0)); err != nil {
-		return err
+		return nil, err
 	}
 	if err = binary.Write(&buf, binary.BigEndian, uint32(len(extents))); err != nil {
-		return err
+		return nil, err
 	}
 	if err = binary.Write(&buf, binary.BigEndian, uint64(Magic)); err != nil {
-		return err
+		return nil, err
 	}
 	_, _, err = w.buffer.Write(buf.Bytes())
 	if err != nil {
-		return err
+		return nil, err
 	}
-	return err
+	return extents, err
 }
 
 // Sync is for testing
 func (w *ObjectWriter) Sync(dir string) error {
 	var err error
-	w.object, err = NewObject("local", dir)
+	w.object, err = NewObject(w.name, dir)
 	if err != nil {
 		return err
 	}
@@ -132,15 +135,7 @@ func (w *ObjectWriter) Sync(dir string) error {
 func (w *ObjectWriter) AddBlock(block *Block) {
 	w.Lock()
 	defer w.Unlock()
-	if w.blocks[block.header.blockId] != nil {
-		panic(any("Write duplicate block"))
-	}
-	w.blocks[block.header.blockId] = block
-}
-
-func (w *ObjectWriter) GetBlock(id *common.ID, batch *batch.Batch) *Block {
-	w.Lock()
-	defer w.Unlock()
-	block := w.blocks[id.BlockID]
-	return block
+	block.id = w.lastId
+	w.blocks[block.id] = block
+	w.lastId++
 }

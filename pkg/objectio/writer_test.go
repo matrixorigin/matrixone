@@ -19,9 +19,9 @@ const (
 
 func TestNewObjectWriter(t *testing.T) {
 	dir := testutils.InitTestEnv(ModuleName, t)
+	dir = path.Join(dir, "/local")
 	id := common.NextGlobalSeqNum()
-	baseName := fmt.Sprintf("%d.blk", id)
-	name := path.Join(dir, baseName)
+	name := fmt.Sprintf("%d.blk", id)
 	schema := catalog.MockSchemaAll(14, 3)
 	schema.BlockMaxRows = options.DefaultBlockMaxRows
 	schema.SegmentMaxBlocks = options.DefaultBlocksPerSegment
@@ -29,12 +29,22 @@ func TestNewObjectWriter(t *testing.T) {
 	bat := batch.New(true, data.Attrs)
 	bat.Vecs = moengine.CopyToMoVectors(data.Vecs)
 
-	ow, err := NewObjectWriter(name)
+	objectWriter, err := NewObjectWriter(name)
 	assert.Nil(t, err)
-	err = ow.Write(&common.ID{BlockID: id}, bat)
+	err = objectWriter.Write(bat)
 	assert.Nil(t, err)
-	err = ow.WriteEnd()
+	err = objectWriter.Write(bat)
 	assert.Nil(t, err)
-	err = ow.Sync(dir)
+	extents, err := objectWriter.WriteEnd()
 	assert.Nil(t, err)
+	assert.Equal(t, 2, len(extents))
+	err = objectWriter.Sync(dir)
+	assert.Nil(t, err)
+
+	objectReader, _ := NewObjectReader(name, dir)
+	idxs := make([]uint16, 3)
+	idxs[0] = 0
+	idxs[1] = 2
+	idxs[2] = 3
+	objectReader.Read(extents[0], idxs)
 }

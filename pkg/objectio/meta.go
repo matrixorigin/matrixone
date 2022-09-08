@@ -11,9 +11,9 @@ type ColumnMeta struct {
 	typ         uint8
 	idx         uint16
 	alg         uint8
-	location    *Extent
+	location    Extent
 	zoneMap     *index.ZoneMap
-	bloomFilter *Extent
+	bloomFilter Extent
 	checksum    uint32
 }
 

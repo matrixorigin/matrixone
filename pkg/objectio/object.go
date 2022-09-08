@@ -4,15 +4,20 @@ import "github.com/matrixorigin/matrixone/pkg/fileservice"
 
 const Magic = 0xFFFFFFFF
 const Version = 1
+const RootPath = "ObjectIo"
+const FSName = "local"
 
 type Object struct {
+	name  string
 	oFile fileservice.FileService
 }
 
-func NewObject(name string, path string) (*Object, error) {
+func NewObject(name string, dir string) (*Object, error) {
 	var err error
-	object := &Object{}
-	object.oFile, err = fileservice.NewLocalFS(name, path, 0)
+	object := &Object{
+		name: name,
+	}
+	object.oFile, err = fileservice.NewLocalFS(FSName, dir, 0)
 	if err != nil {
 		return nil, err
 	}
