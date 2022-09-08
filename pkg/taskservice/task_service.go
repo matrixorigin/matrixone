@@ -53,7 +53,7 @@ func (s *taskService) Create(ctx context.Context, value task.TaskMetadata) error
 
 func (s *taskService) CreateBatch(ctx context.Context, tasks []task.TaskMetadata) error {
 	now := time.Now().UnixMilli()
-	var values []task.Task
+	values := make([]task.Task, 0, len(tasks))
 	for _, v := range tasks {
 		values = append(values, task.Task{
 			Metadata: v,

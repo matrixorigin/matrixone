@@ -112,7 +112,7 @@ func (s *memTaskStorage) Query(ctx context.Context, conds ...Condition) ([]task.
 		cond(&c)
 	}
 
-	var sortedTasks []task.Task
+	sortedTasks := make([]task.Task, 0, len(s.tasks))
 	for _, task := range s.tasks {
 		sortedTasks = append(sortedTasks, task)
 	}
@@ -152,7 +152,7 @@ func (s *memTaskStorage) QueryCronTask(context.Context) ([]task.CronTask, error)
 	s.Lock()
 	defer s.Unlock()
 
-	var tasks []task.CronTask
+	tasks := make([]task.CronTask, 0, len(s.cronTasks))
 	for _, v := range s.cronTasks {
 		tasks = append(tasks, v)
 	}
