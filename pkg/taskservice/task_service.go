@@ -30,18 +30,23 @@ type taskService struct {
 // NewTaskService create a task service based on a task storage.
 func NewTaskService(store TaskStorage) TaskService {
 	return &taskService{
-		store:      store,
-		cronParser: cron.NewParser(cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow),
+		store: store,
+		cronParser: cron.NewParser(
+			cron.Second |
+				cron.Minute |
+				cron.Hour |
+				cron.Dom |
+				cron.Month |
+				cron.Dow |
+				cron.Descriptor),
 	}
 }
 
 func (s *taskService) Create(ctx context.Context, value task.TaskMetadata) error {
-	now := time.Now().UnixMilli()
 	_, err := s.store.Add(ctx, task.Task{
-		Metadata:      value,
-		Status:        task.TaskStatus_Created,
-		LastHeartbeat: now,
-		CreateAt:      now,
+		Metadata: value,
+		Status:   task.TaskStatus_Created,
+		CreateAt: time.Now().UnixMilli(),
 	})
 	return err
 }
@@ -51,10 +56,9 @@ func (s *taskService) CreateBatch(ctx context.Context, tasks []task.TaskMetadata
 	var values []task.Task
 	for _, v := range tasks {
 		values = append(values, task.Task{
-			Metadata:      v,
-			Status:        task.TaskStatus_Created,
-			LastHeartbeat: now,
-			CreateAt:      now,
+			Metadata: v,
+			Status:   task.TaskStatus_Created,
+			CreateAt: now,
 		})
 	}
 	_, err := s.store.Add(ctx, values...)
@@ -80,20 +84,56 @@ func (s *taskService) CreateCronTask(ctx context.Context, value task.TaskMetadat
 	return err
 }
 
-func (s *taskService) Complete(ctx context.Context, taskRunner string, value task.Task) error {
-	value.CompletedAt = time.Now().UnixMilli()
-	value.Status = task.TaskStatus_Completed
-	_, err := s.store.Update(ctx, []task.Task{value}, WithTaskRunner(EQ, taskRunner))
-	return err
+func (s *taskService) Allocate(ctx context.Context, value task.Task, taskRunner string) error {
+	value.Status = task.TaskStatus_Running
+	value.Epoch = 1
+	value.LastHeartbeat = time.Now().UnixMilli()
+	value.TaskRunner = taskRunner
+	n, err := s.store.Update(ctx, []task.Task{value},
+		WithTaskStatusCond(EQ, task.TaskStatus_Created))
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return ErrInvalidTask
+	}
+	return nil
 }
 
-func (s *taskService) Heartbeat(ctx context.Context, taskRunner string, tasks ...task.Task) error {
-	now := time.Now().UnixMilli()
-	for idx := range tasks {
-		tasks[idx].LastHeartbeat = now
+func (s *taskService) Complete(
+	ctx context.Context,
+	taskRunner string,
+	value task.Task,
+	result task.ExecuteResult) error {
+	value.CompletedAt = time.Now().UnixMilli()
+	value.Status = task.TaskStatus_Completed
+	value.ExecuteResult = &result
+	n, err := s.store.Update(ctx, []task.Task{value},
+		WithTaskStatusCond(EQ, task.TaskStatus_Running),
+		WithTaskRunnerCond(EQ, taskRunner),
+		WithTaskEpochCond(EQ, value.Epoch))
+	if err != nil {
+		return err
 	}
-	_, err := s.store.Update(ctx, tasks, WithTaskRunner(EQ, taskRunner))
-	return err
+	if n == 0 {
+		return ErrInvalidTask
+	}
+	return nil
+}
+
+func (s *taskService) Heartbeat(ctx context.Context, value task.Task) error {
+	value.LastHeartbeat = time.Now().UnixMilli()
+	n, err := s.store.Update(ctx, []task.Task{value},
+		WithTaskStatusCond(EQ, task.TaskStatus_Running),
+		WithTaskEpochCond(LE, value.Epoch),
+		WithTaskRunnerCond(EQ, value.TaskRunner))
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return ErrInvalidTask
+	}
+	return nil
 }
 
 func (s *taskService) QueryTask(ctx context.Context, conds ...Condition) ([]task.Task, error) {
@@ -102,4 +142,8 @@ func (s *taskService) QueryTask(ctx context.Context, conds ...Condition) ([]task
 
 func (s *taskService) QueryCronTask(ctx context.Context) ([]task.CronTask, error) {
 	return s.store.QueryCronTask(ctx)
+}
+
+func (s *taskService) Close() error {
+	return s.store.Close()
 }

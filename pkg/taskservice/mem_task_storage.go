@@ -33,6 +33,19 @@ type memTaskStorage struct {
 	cronTaskIndexes map[string]uint64
 }
 
+func newMemTaskStorage() TaskStorage {
+	return &memTaskStorage{
+		tasks:           make(map[uint64]task.Task),
+		taskIndexes:     make(map[string]uint64),
+		cronTasks:       make(map[uint64]task.CronTask),
+		cronTaskIndexes: make(map[string]uint64),
+	}
+}
+
+func (s *memTaskStorage) Close() error {
+	return nil
+}
+
 func (s *memTaskStorage) Add(ctx context.Context, tasks ...task.Task) (int, error) {
 	s.Lock()
 	defer s.Unlock()
@@ -46,6 +59,7 @@ func (s *memTaskStorage) Add(ctx context.Context, tasks ...task.Task) (int, erro
 		v.ID = s.nextIDLocked()
 		s.tasks[v.ID] = v
 		s.taskIndexes[v.Metadata.ID] = v.ID
+		n++
 	}
 	return n, nil
 }
@@ -61,7 +75,7 @@ func (s *memTaskStorage) Update(ctx context.Context, tasks []task.Task, conds ..
 
 	n := 0
 	for _, task := range tasks {
-		if s.filter(c, s.tasks[task.ID]) {
+		if v, ok := s.tasks[task.ID]; ok && s.filter(c, v) {
 			n++
 			s.tasks[task.ID] = task
 		}
@@ -80,7 +94,7 @@ func (s *memTaskStorage) Delete(ctx context.Context, conds ...Condition) (int, e
 
 	var removeTasks []task.Task
 	for _, task := range s.tasks {
-		if s.filter(c, task) {
+		if v, ok := s.tasks[task.ID]; ok && s.filter(c, v) {
 			removeTasks = append(removeTasks, task)
 		}
 	}
@@ -109,7 +123,7 @@ func (s *memTaskStorage) Query(ctx context.Context, conds ...Condition) ([]task.
 		if s.filter(c, task) {
 			result = append(result, task)
 		}
-		if c.limit >= len(result) {
+		if c.limit > 0 && c.limit <= len(result) {
 			break
 		}
 	}
@@ -129,8 +143,21 @@ func (s *memTaskStorage) AddCronTask(ctx context.Context, tasks ...task.CronTask
 		v.ID = s.nextIDLocked()
 		s.cronTasks[v.ID] = v
 		s.cronTaskIndexes[v.Metadata.ID] = v.ID
+		n++
 	}
 	return n, nil
+}
+
+func (s *memTaskStorage) QueryCronTask(context.Context) ([]task.CronTask, error) {
+	s.Lock()
+	defer s.Unlock()
+
+	var tasks []task.CronTask
+	for _, v := range s.cronTasks {
+		tasks = append(tasks, v)
+	}
+	sort.Slice(tasks, func(i, j int) bool { return tasks[i].ID < tasks[j].ID })
+	return tasks, nil
 }
 
 func (s *memTaskStorage) UpdateCronTask(ctx context.Context, cron task.CronTask, value task.Task) (int, error) {
@@ -138,6 +165,9 @@ func (s *memTaskStorage) UpdateCronTask(ctx context.Context, cron task.CronTask,
 	defer s.Unlock()
 
 	if _, ok := s.taskIndexes[value.Metadata.ID]; ok {
+		return 0, nil
+	}
+	if _, ok := s.cronTasks[cron.ID]; !ok {
 		return 0, nil
 	}
 
@@ -154,20 +184,58 @@ func (s *memTaskStorage) nextIDLocked() uint64 {
 }
 
 func (s *memTaskStorage) filter(c conditions, task task.Task) bool {
-	if c.taskID > 0 {
+	ok := true
+
+	if c.hasTaskIDCond {
 		switch c.taskIDOp {
 		case EQ:
-			return task.ID == c.taskID
+			ok = task.ID == c.taskID
 		case GT:
-			return task.ID > c.taskID
+			ok = task.ID > c.taskID
+		case GE:
+			ok = task.ID >= c.taskID
+		case LE:
+			ok = task.ID <= c.taskID
+		case LT:
+			ok = task.ID < c.taskID
 		}
 	}
 
-	if c.taskRunner != "" {
+	if ok && c.hasTaskRunnerCond {
 		switch c.taskRunnerOp {
 		case EQ:
-			return task.TaskRunner == c.taskRunner
+			ok = task.TaskRunner == c.taskRunner
 		}
 	}
-	return true
+
+	if ok && c.hasTaskStatusCond {
+		switch c.taskStatusOp {
+		case EQ:
+			ok = task.Status == c.taskStatus
+		case GT:
+			ok = task.Status > c.taskStatus
+		case GE:
+			ok = task.Status >= c.taskStatus
+		case LE:
+			ok = task.Status <= c.taskStatus
+		case LT:
+			ok = task.Status < c.taskStatus
+		}
+	}
+
+	if ok && c.hasTaskEpochCond {
+		switch c.taskEpochOp {
+		case EQ:
+			ok = task.Epoch == c.taskEpoch
+		case GT:
+			ok = task.Epoch > c.taskEpoch
+		case GE:
+			ok = task.Epoch >= c.taskEpoch
+		case LE:
+			ok = task.Epoch <= c.taskEpoch
+		case LT:
+			ok = task.Epoch < c.taskEpoch
+		}
+	}
+	return ok
 }
