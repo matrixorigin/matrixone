@@ -1,26 +1,22 @@
 select log(exp(10)),log(-1),log(NULL),log(1,1),log(3,9),log(-1,2),log(NULL,2);
-Logarithm function base cannot be 1
+Natural Logarithm function input cannot be non positive
 SELECT LOG(2);
 LOG(2)
 0.6931471805599453
 SELECT LOG(-2);
-LOG(-2)
-null
+Natural Logarithm function input cannot be non positive
 SELECT LOG(2,65536);
-LOG(2,65536)
-16.0
+log(2, 65536)
+16 
 SELECT LOG(10,100);
-LOG(10,100)
-2.0
+log(10, 100)
+2
 SELECT LOG(1,100);
-LOG(1,100)
-null
+Logarithm function base cannot be 1
 select log(2,-1);
-log(2,-1)
-null
+Natural Logarithm function input cannot be non positive
 select log(-2,1);
-log(-2,1)
-null
+Natural Logarithm function input cannot be non positive
 select log(0.00000000000000001);
 log(0.00000000000000001)
 -39.14394658089878
@@ -31,16 +27,15 @@ select log(0.141241241241313, 124314124124.12412341);
 log(0.141241241241313, 124314124124.12412341)
 -13.051786251584149
 select log(-0.141241241241313, -124314124124.12412341);
-log(-0.141241241241313, -124314124124.12412341)
-null
+Natural Logarithm function input cannot be non positive
 select log(null,2);
-log(null,2)
+log(null, 2)
 null
 select log(2, null);
 log(2, null)
 null
 select log(null,null);
-log(null,null)
+log(null, null)
 null
 CREATE TABLE t1(a DOUBLE);
 INSERT INTO t1 select (log(56));
@@ -61,13 +56,13 @@ log(a,b)	log(b,c)	log(c,d)	log(d,e)	log(e,f)	log(f,g)	log(g,h)	log(h,i)	log(i,k)
 null	null	2.0	1.160964047443681	1.059219544331585	2.0168211362765116	0.7740270385977794	6.319329540915667	1.8215087746921308	1.0000000000486744	null	null
 drop table t1;
 select log(123.54-123.03);
-log(123.54-123.03)
+log(123.54 - 123.03)
 -0.6733445532637656
 select log(123.54*0.34, 1203-1200);
-log(123.54*0.34, 1203-1200)
-0.29392300779426694
+log(123.54 * 0.34, 1203 - 1200)
+0.2939230077942669
 select log(134)-log(194);
-log(134)-log(194)
+log(134) - log(194)
 -0.3700183591124171
 drop table if exists t1;
 create table t1(a float,  b float);
