@@ -20,6 +20,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/sql/errors"
 )
 
 func Acos(arg, result *vector.Vector) error {
@@ -100,7 +101,7 @@ func Ln(arg, result *vector.Vector) error {
 	for i, v := range argCol {
 		if !nulls.Contains(arg.Nsp, (uint64)(i)) {
 			if v <= 0 {
-				nulls.Add(result.Nsp, uint64(i))
+				return errors.New("", "Natural Logarithm function input cannot be non positive")
 			} else {
 				resCol[i] = math.Log(v)
 			}
