@@ -128,10 +128,10 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 					bs := vec.Col.([]bool)
 					if bs[0] {
 						matched = true
-						vec.Free(proc.Mp)
+						vec.Free(proc.Mp())
 						break
 					}
-					vec.Free(proc.Mp)
+					vec.Free(proc.Mp())
 				}
 				if !matched {
 					continue

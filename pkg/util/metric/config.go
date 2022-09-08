@@ -33,8 +33,8 @@ var (
 	configForceReinit     int32 = envOrDefaultBool("MO_METRIC_DROP_AND_INIT", 0) // TODO: find a better way to init metrics and remove this one
 )
 
-func initConfigByParamaterUnit(pu *config.ParameterUnit) {
-	setExportToProm(!pu.SV.DisableMetricToProm)
+func initConfigByParamaterUnit(SV *config.ObservabilityParameters) {
+	setExportToProm(!SV.DisableMetricToProm)
 }
 
 func envOrDefaultBool(key string, defaultValue int32) int32 {

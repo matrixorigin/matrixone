@@ -88,7 +88,7 @@ func (ctr *container) eval(ap *Argument, proc *process.Process, anal process.Ana
 			return false, nil
 		}
 		ap.ctr.seen += uint64(length)
-		bat.Clean(proc.Mp)
+		bat.Clean(proc.Mp())
 		proc.SetInputBatch(nil)
 		i--
 	}

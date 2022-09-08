@@ -15,6 +15,8 @@
 package compare
 
 import (
+	"bytes"
+
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -103,6 +105,17 @@ func New(typ types.Type, desc bool) Compare {
 			return newCompare(decimal128DescCompare, decimal128Copy)
 		}
 		return newCompare(decimal128Compare, decimal128Copy)
+	case types.T_TS:
+		if desc {
+			return newCompare(txntsDescCompare, txntsCopy)
+		}
+		return newCompare(txntsCompare, txntsCopy)
+	case types.T_Rowid:
+		if desc {
+			return newCompare(rowidDescCompare, rowidCopy)
+		}
+		return newCompare(rowidCompare, rowidCopy)
+
 	case types.T_char, types.T_varchar, types.T_blob:
 		return &strCompare{
 			desc: desc,
@@ -125,12 +138,17 @@ func boolCompare[T bool](x, y T) int {
 func decimal64Compare(x, y types.Decimal64) int {
 	return x.Compare(y)
 }
-
 func decimal128Compare(x, y types.Decimal128) int {
 	return x.Compare(y)
 }
+func txntsCompare(x, y types.TS) int {
+	return bytes.Compare(x[:], y[:])
+}
+func rowidCompare(x, y types.Rowid) int {
+	return bytes.Compare(x[:], x[:])
+}
 
-func genericCompare[T types.Generic](x, y T) int {
+func genericCompare[T types.OrderedT](x, y T) int {
 	if x == y {
 		return 0
 	}
@@ -157,7 +175,14 @@ func decimal128DescCompare(x, y types.Decimal128) int {
 	return -x.Compare(y)
 }
 
-func genericDescCompare[T types.Generic](x, y T) int {
+func txntsDescCompare(x, y types.TS) int {
+	return bytes.Compare(y[:], x[:])
+}
+func rowidDescCompare(x, y types.Rowid) int {
+	return bytes.Compare(y[:], x[:])
+}
+
+func genericDescCompare[T types.OrderedT](x, y T) int {
 	if x == y {
 		return 0
 	}
@@ -179,7 +204,14 @@ func decimal128Copy(vecDst, vecSrc []types.Decimal128, dst, src int64) {
 	vecDst[dst] = vecSrc[src]
 }
 
-func genericCopy[T types.Generic](vecDst, vecSrc []T, dst, src int64) {
+func txntsCopy(vecDst, vecSrc []types.TS, dst, src int64) {
+	vecDst[dst] = vecSrc[src]
+}
+func rowidCopy(vecDst, vecSrc []types.Rowid, dst, src int64) {
+	vecDst[dst] = vecSrc[src]
+}
+
+func genericCopy[T types.OrderedT](vecDst, vecSrc []T, dst, src int64) {
 	vecDst[dst] = vecSrc[src]
 }
 

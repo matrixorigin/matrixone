@@ -122,7 +122,7 @@ func (ctr *Container) build(ap *Argument, bat *batch.Batch, proc *process.Proces
 			}
 		}
 	}
-	defer bat.Clean(proc.Mp)
+	defer bat.Clean(proc.Mp())
 	proc.Reg.InputBatch = &batch.Batch{}
 	return ctr.processBatch(ap.Limit, bat, proc)
 }
@@ -138,8 +138,8 @@ func (ctr *Container) processBatch(limit int64, bat *batch.Batch, proc *process.
 		}
 		for i := int64(0); i < start; i++ {
 			for j, vec := range ctr.bat.Vecs {
-				if err := vector.UnionOne(vec, bat.Vecs[j], i, proc.Mp); err != nil {
-					ctr.bat.Clean(proc.Mp)
+				if err := vector.UnionOne(vec, bat.Vecs[j], i, proc.Mp()); err != nil {
+					ctr.bat.Clean(proc.Mp())
 					return err
 				}
 			}
@@ -163,7 +163,7 @@ func (ctr *Container) processBatch(limit int64, bat *batch.Batch, proc *process.
 		if ctr.compare(1, 0, i, ctr.sels[0]) < 0 {
 			for _, cmp := range ctr.cmps {
 				if err := cmp.Copy(1, 0, i, ctr.sels[0], proc); err != nil {
-					ctr.bat.Clean(proc.Mp)
+					ctr.bat.Clean(proc.Mp())
 					return err
 				}
 				ctr.bat.Zs[0] = bat.Zs[i]
@@ -185,12 +185,12 @@ func (ctr *Container) eval(limit int64, proc *process.Process) error {
 	for i, j := 0, len(ctr.sels); i < j; i++ {
 		sels[len(sels)-1-i] = heap.Pop(ctr).(int64)
 	}
-	if err := ctr.bat.Shuffle(sels, proc.Mp); err != nil {
-		ctr.bat.Clean(proc.Mp)
+	if err := ctr.bat.Shuffle(sels, proc.Mp()); err != nil {
+		ctr.bat.Clean(proc.Mp())
 		ctr.bat = nil
 	}
 	for i := ctr.n; i < len(ctr.bat.Vecs); i++ {
-		vector.Clean(ctr.bat.Vecs[i], proc.Mp)
+		vector.Clean(ctr.bat.Vecs[i], proc.Mp())
 	}
 	ctr.bat.Vecs = ctr.bat.Vecs[:ctr.n]
 	ctr.bat.ExpandNulls()

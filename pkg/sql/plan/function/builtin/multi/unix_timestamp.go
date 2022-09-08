@@ -32,26 +32,23 @@ func UnixTimestamp(lv []*vector.Vector, proc *process.Process) (*vector.Vector, 
 	times := vector.MustTCols[types.Timestamp](inVec)
 
 	if inVec.IsScalar() {
-		{
-			vec := proc.AllocScalarVector(types.Type{Oid: types.T_int64, Size: int32(size)})
-			rs := make([]int64, 1)
-			nulls.Set(vec.Nsp, inVec.Nsp)
-			vector.SetCol(vec, unixtimestamp.UnixTimestamp(times, rs))
-			return vec, nil
-		}
+		rs := make([]int64, 1)
+		unixtimestamp.UnixTimestamp(times, rs)
+		return vector.NewConstFixed(types.T_int64.ToType(), inVec.Length(), rs[0]), nil
 	}
-	vec, err := proc.AllocVector(types.Type{Oid: types.T_int64, Size: int32(size)}, int64(len(times))*int64(size))
+
+	vec, err := proc.AllocVectorOfRows(types.T_int64.ToType(), int64(len(times)), inVec.Nsp)
 	if err != nil {
 		return nil, err
 	}
-	rs := make([]int64, len(times))
+	rs := vector.MustTCols[int64](vec)
 	for i := 0; i < len(times); i++ {
+		// XXX This is simply wrong.  We should raise error.
 		if times[i] < 0 {
-			nulls.Add(inVec.Nsp, uint64(i))
+			nulls.Add(vec.Nsp, uint64(i))
 		}
 	}
-	nulls.Set(vec.Nsp, inVec.Nsp)
-	vector.SetCol(vec, unixtimestamp.UnixTimestamp(times, rs))
+	unixtimestamp.UnixTimestamp(times, rs)
 	return vec, nil
 }
 
@@ -61,30 +58,26 @@ func UnixTimestampVarchar(lv []*vector.Vector, proc *process.Process) (*vector.V
 	if inVec.IsScalarNull() {
 		return proc.AllocScalarNullVector(types.Type{Oid: types.T_int64, Size: int32(size)}), nil
 	}
-	times_ := vector.MustBytesCols(inVec)
-	var times []types.Timestamp
-	for i := 0; i < len(times_.Lengths); i++ {
-		times = append(times, MustTimestamp(proc.SessionInfo.TimeZone, string(times_.Get(int64(i)))))
-	}
+
 	if inVec.IsScalar() {
-		if inVec.IsScalarNull() {
-			return proc.AllocScalarNullVector(types.Type{Oid: types.T_int64, Size: int32(size)}), nil
-		} else {
-			vec := proc.AllocScalarVector(types.Type{Oid: types.T_int64, Size: int32(size)})
-			rs := make([]int64, 1)
-			nulls.Set(vec.Nsp, inVec.Nsp)
-			vector.SetCol(vec, unixtimestamp.UnixTimestamp(times, rs))
-			return vec, nil
-		}
+		tms := make([]types.Timestamp, 1)
+		rs := make([]int64, 1)
+		tms[0] = MustTimestamp(proc.SessionInfo.TimeZone, inVec.GetString(0))
+		unixtimestamp.UnixTimestamp(tms, rs)
+		return vector.NewConstFixed(types.T_int64.ToType(), inVec.Length(), rs[0]), nil
 	}
 
-	vec, err := proc.AllocVector(types.Type{Oid: types.T_int64, Size: int32(size)}, int64(len(times))*int64(size))
+	vlen := inVec.Length()
+	times := make([]types.Timestamp, vlen)
+	for i := 0; i < vlen; i++ {
+		times[i] = MustTimestamp(proc.SessionInfo.TimeZone, inVec.GetString(int64(i)))
+	}
+	vec, err := proc.AllocVectorOfRows(types.T_int64.ToType(), int64(vlen), inVec.Nsp)
 	if err != nil {
 		return nil, err
 	}
-	rs := make([]int64, len(times))
-	nulls.Set(vec.Nsp, inVec.Nsp)
-	vector.SetCol(vec, unixtimestamp.UnixTimestamp(times, rs))
+	rs := vector.MustTCols[int64](vec)
+	unixtimestamp.UnixTimestamp(times, rs)
 	return vec, nil
 }
 

@@ -15,7 +15,6 @@
 package unary
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/ltrim"
@@ -24,37 +23,19 @@ import (
 
 func Ltrim(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	inputVector := vectors[0]
-	resultType := types.Type{Oid: types.T_varchar, Size: 24}
+	resultType := types.T_varchar.ToType()
 	// totalCount - spaceCount is the total bytes need for the ltrim-ed string
-	inputValues := vector.MustBytesCols(inputVector)
+	inputValues := vector.MustStrCols(inputVector)
 	if inputVector.IsScalar() {
 		if inputVector.ConstVectorIsNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
-		spaceCount := ltrim.CountSpacesFromLeft(inputValues)
-		totalCount := int32(len(inputValues.Data))
-		resultVector := vector.NewConst(resultType, 1)
-		resultValues := &types.Bytes{
-			Data:    make([]byte, totalCount-spaceCount),
-			Offsets: make([]uint32, 1),
-			Lengths: make([]uint32, 1),
-		}
-		vector.SetCol(resultVector, ltrim.LtrimChar(inputValues, resultValues))
-		return resultVector, nil
+		resultValues := make([]string, 1)
+		ltrim.Ltrim(inputValues, resultValues)
+		return vector.NewConstString(resultType, inputVector.Length(), resultValues[0]), nil
 	} else {
-		spaceCount := ltrim.CountSpacesFromLeft(inputValues)
-		totalCount := int32(len(inputValues.Data))
-		resultVector, err := proc.AllocVector(resultType, int64(totalCount-spaceCount))
-		if err != nil {
-			return nil, err
-		}
-		resultValues := &types.Bytes{
-			Data:    resultVector.Data,
-			Offsets: make([]uint32, len(inputValues.Offsets)),
-			Lengths: make([]uint32, len(inputValues.Lengths)),
-		}
-		nulls.Set(resultVector.Nsp, inputVector.Nsp)
-		vector.SetCol(resultVector, ltrim.LtrimChar(inputValues, resultValues))
-		return resultVector, nil
+		resultValues := make([]string, len(inputValues))
+		ltrim.Ltrim(inputValues, resultValues)
+		return vector.NewWithStrings(resultType, resultValues, inputVector.Nsp, proc.Mp()), nil
 	}
 }

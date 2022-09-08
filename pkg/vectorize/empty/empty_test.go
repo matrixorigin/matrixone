@@ -15,50 +15,31 @@
 package empty
 
 import (
-	"bytes"
 	"reflect"
 	"testing"
-
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
-
-func MakeBytes(strs []string) *types.Bytes {
-	ret := &types.Bytes{
-		Lengths: make([]uint32, len(strs)),
-		Offsets: make([]uint32, len(strs)),
-	}
-	cur := 0
-	var buf bytes.Buffer
-	for i, s := range strs {
-		buf.WriteString(s)
-		ret.Lengths[i] = uint32(len(s))
-		ret.Offsets[i] = uint32(cur)
-		cur += len(s)
-	}
-	ret.Data = buf.Bytes()
-	return ret
-}
 
 func TestEmpty(t *testing.T) {
 	tt := []struct {
 		name string
-		xs   *types.Bytes
+		xs   []string
 		rs   []uint8
 		want []uint8
 	}{
 		{
 			name: "Not Empty",
-			xs:   MakeBytes([]string{"Hello", "World", " ", "\t", "\n", "\r"}),
+			xs:   []string{"Hello", "World", " ", "\t", "\n", "\r"},
 			rs:   make([]uint8, 6),
 			want: []uint8{0, 0, 0, 0, 0, 0},
 		},
 		{
 			name: "Empty",
-			xs:   MakeBytes([]string{""}),
+			xs:   []string{""},
 			rs:   make([]uint8, 1),
 			want: []uint8{1},
 		},
 	}
+
 	for _, tc := range tt {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := Empty(tc.xs, tc.rs); !reflect.DeepEqual(got, tc.want) {

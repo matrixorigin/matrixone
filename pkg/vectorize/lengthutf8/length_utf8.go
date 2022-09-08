@@ -14,17 +14,11 @@
 
 package lengthutf8
 
-import (
-	"github.com/matrixorigin/matrixone/pkg/container/types"
-)
-
 var (
-	StrLengthUTF8 func(*types.Bytes, []uint64) []uint64
-	table         [256]uint8
+	table [256]uint8
 )
 
 func init() {
-	StrLengthUTF8 = strLengthUTF8
 	table = [256]uint8{
 		// start byte of 1-byte utf8 char: 0b0000'0000 ~ 0b0111'1111
 		1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
@@ -61,10 +55,9 @@ func countUTF8CodePoints(s []byte) uint64 {
 	return count
 }
 
-func strLengthUTF8(xs *types.Bytes, rs []uint64) []uint64 {
-	for i := range xs.Lengths {
-		x := xs.Get(int64(i))
-		rs[i] = countUTF8CodePoints(x)
+func StrLengthUTF8(xs []string, rs []uint64) []uint64 {
+	for i, x := range xs {
+		rs[i] = countUTF8CodePoints([]byte(x))
 	}
 	return rs
 }
