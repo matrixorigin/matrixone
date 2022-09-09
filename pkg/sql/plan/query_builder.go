@@ -20,6 +20,7 @@ import (
 	"math"
 	"sort"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/errors"
@@ -651,21 +652,21 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 	return builder.qry, nil
 }
 
-func (builder *QueryBuilder) buildUnion(stmt *tree.Select, ctx *BindContext, isRoot bool) (int32, error) {
+func (builder *QueryBuilder) buildUnion(stmt *tree.UnionClause, astOrderBy tree.OrderBy, astLimit *tree.Limit, ctx *BindContext, isRoot bool) (int32, error) {
 	var selectStmts []tree.Statement
 	var unionTypes []plan.Node_NodeType
 
 	// get Union selectStmts
-	err := getUnionSelects(stmt.Select.(*tree.UnionClause), &selectStmts, &unionTypes)
+	err := getUnionSelects(stmt, &selectStmts, &unionTypes)
 	if err != nil {
 		return 0, err
 	}
 
 	if len(selectStmts) == 1 {
 		if slt, ok := selectStmts[0].(*tree.Select); ok {
-			return builder.buildSelect(slt, ctx, false)
+			return builder.buildSelect(slt, ctx, isRoot)
 		} else {
-			return builder.buildSelect(&tree.Select{Select: selectStmts[0]}, ctx, false)
+			return builder.buildSelect(&tree.Select{Select: selectStmts[0]}, ctx, isRoot)
 		}
 	}
 
@@ -679,9 +680,9 @@ func (builder *QueryBuilder) buildUnion(stmt *tree.Select, ctx *BindContext, isR
 	for idx, sltStmt := range selectStmts {
 		subCtx := NewBindContext(builder, ctx)
 		if slt, ok := sltStmt.(*tree.Select); ok {
-			nodeID, err = builder.buildSelect(slt, subCtx, false)
+			nodeID, err = builder.buildSelect(slt, subCtx, isRoot)
 		} else {
-			nodeID, err = builder.buildSelect(&tree.Select{Select: sltStmt}, subCtx, false)
+			nodeID, err = builder.buildSelect(&tree.Select{Select: sltStmt}, subCtx, isRoot)
 		}
 		if err != nil {
 			return 0, err
@@ -775,22 +776,6 @@ func (builder *QueryBuilder) buildUnion(stmt *tree.Select, ctx *BindContext, isR
 		utIdx := i - 1
 		lastTag = builder.genNewTag()
 		leftNodeTag := builder.qry.Nodes[lastNodeId].BindingTags[0]
-		// TODO split UNION to UNION_ALL + AGG is little complicated.
-		// if newUnionType[utIdx] == plan.Node_UNION {
-		// 	lastNodeId = builder.appendNode(&plan.Node{
-		// 		NodeType:    plan.Node_UNION_ALL,
-		// 		Children:    []int32{lastNodeId, newNodes[i]},
-		// 		ProjectList: getProjectList(leftNodeTag),
-		// 		BindingTags: []int32{lastTag},
-		// 	}, ctx)
-
-		// 	lastTag = builder.genNewTag()
-		// 	lastNodeId = builder.appendNode(&plan.Node{
-		// 		NodeType:    plan.Node_DISTINCT,
-		// 		Children:    []int32{lastNodeId},
-		// 		BindingTags: []int32{lastTag},
-		// 	}, ctx)
-		// } else {
 
 		lastNodeId = builder.appendNode(&plan.Node{
 			NodeType:    newUnionType[utIdx],
@@ -798,8 +783,6 @@ func (builder *QueryBuilder) buildUnion(stmt *tree.Select, ctx *BindContext, isR
 			BindingTags: []int32{lastTag},
 			ProjectList: getProjectList(leftNodeTag),
 		}, ctx)
-
-		// }
 	}
 
 	// set ctx base on selects[0] and it's ctx
@@ -836,11 +819,11 @@ func (builder *QueryBuilder) buildUnion(stmt *tree.Select, ctx *BindContext, isR
 	}, ctx)
 
 	// append orderBy
-	if stmt.OrderBy != nil {
+	if astOrderBy != nil {
 		orderBinder := NewOrderBinder(projectionBinder, nil)
-		orderBys := make([]*plan.OrderBySpec, 0, len(stmt.OrderBy))
+		orderBys := make([]*plan.OrderBySpec, 0, len(astOrderBy))
 
-		for _, order := range stmt.OrderBy {
+		for _, order := range astOrderBy {
 			expr, err := orderBinder.BindExpr(order.Expr)
 			if err != nil {
 				return 0, err
@@ -870,18 +853,18 @@ func (builder *QueryBuilder) buildUnion(stmt *tree.Select, ctx *BindContext, isR
 	}
 
 	// append limit
-	if stmt.Limit != nil {
+	if astLimit != nil {
 		node := builder.qry.Nodes[lastNodeId]
 
 		limitBinder := NewLimitBinder()
-		if stmt.Limit.Offset != nil {
-			node.Limit, err = limitBinder.BindExpr(stmt.Limit.Offset, 0, true)
+		if astLimit.Offset != nil {
+			node.Limit, err = limitBinder.BindExpr(astLimit.Offset, 0, true)
 			if err != nil {
 				return 0, err
 			}
 		}
-		if stmt.Limit.Count != nil {
-			node.Offset, err = limitBinder.BindExpr(stmt.Limit.Count, 0, true)
+		if astLimit.Count != nil {
+			node.Offset, err = limitBinder.BindExpr(astLimit.Count, 0, true)
 			if err != nil {
 				return 0, err
 			}
@@ -954,15 +937,44 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 	}
 
 	var clause *tree.SelectClause
+	astOrderBy := stmt.OrderBy
+	astLimit := stmt.Limit
 
 	switch selectClause := stmt.Select.(type) {
 	case *tree.SelectClause:
 		clause = selectClause
 	case *tree.ParenSelect:
-		return builder.buildSelect(selectClause.Select, ctx, isRoot)
+		for {
+			if selectClause.Select.OrderBy != nil {
+				if astOrderBy != nil {
+					return 0, moerr.NewError(moerr.INVALID_INPUT, "multiple ORDER BY clauses not allowed")
+				}
+				astOrderBy = selectClause.Select.OrderBy
+			}
+			if selectClause.Select.Limit != nil {
+				if astLimit != nil {
+					return 0, moerr.NewError(moerr.INVALID_INPUT, "multiple LIMIT clauses not allowed")
+				}
+				astLimit = selectClause.Select.Limit
+			}
+
+			switch subClause := selectClause.Select.Select.(type) {
+			case *tree.SelectClause:
+				clause = subClause
+			case *tree.ParenSelect:
+				selectClause = selectClause.Select.Select.(*tree.ParenSelect)
+			case *tree.UnionClause:
+				return builder.buildUnion(subClause, astOrderBy, astLimit, ctx, isRoot)
+			default:
+				return 0, errors.New("", fmt.Sprintf("Statement '%s' will be supported in future version.", tree.String(stmt, dialect.MYSQL)))
+			}
+
+			if clause != nil {
+				break
+			}
+		}
 	case *tree.UnionClause:
-		return builder.buildUnion(stmt, ctx, isRoot)
-		// return 0, errors.New("", fmt.Sprintf("'%s' will be supported in future version.", selectClause.Type.String()))
+		return builder.buildUnion(selectClause, astOrderBy, astLimit, ctx, isRoot)
 	case *tree.ValuesClause:
 		return 0, errors.New("", "'SELECT FROM VALUES' will be supported in future version.")
 	default:
@@ -1141,11 +1153,11 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 
 	// bind ORDER BY clause
 	var orderBys []*plan.OrderBySpec
-	if stmt.OrderBy != nil {
+	if astOrderBy != nil {
 		orderBinder := NewOrderBinder(projectionBinder, selectList)
-		orderBys = make([]*plan.OrderBySpec, 0, len(stmt.OrderBy))
+		orderBys = make([]*plan.OrderBySpec, 0, len(astOrderBy))
 
-		for _, order := range stmt.OrderBy {
+		for _, order := range astOrderBy {
 			expr, err := orderBinder.BindExpr(order.Expr)
 			if err != nil {
 				return 0, err
@@ -1171,16 +1183,16 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 	// bind limit/offset clause
 	var limitExpr *Expr
 	var offsetExpr *Expr
-	if stmt.Limit != nil {
+	if astLimit != nil {
 		limitBinder := NewLimitBinder()
-		if stmt.Limit.Offset != nil {
-			offsetExpr, err = limitBinder.BindExpr(stmt.Limit.Offset, 0, true)
+		if astLimit.Offset != nil {
+			offsetExpr, err = limitBinder.BindExpr(astLimit.Offset, 0, true)
 			if err != nil {
 				return 0, err
 			}
 		}
-		if stmt.Limit.Count != nil {
-			limitExpr, err = limitBinder.BindExpr(stmt.Limit.Count, 0, true)
+		if astLimit.Count != nil {
+			limitExpr, err = limitBinder.BindExpr(astLimit.Count, 0, true)
 			if err != nil {
 				return 0, err
 			}
