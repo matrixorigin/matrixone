@@ -170,14 +170,14 @@ func (be *TableBaseEntry) HasDropped() bool {
 }
 
 func (be *TableBaseEntry) ensureVisibleAndNotDropped(ts types.TS) bool {
-	visible, dropped := be.GetVisibiltyLocked(ts)
+	visible, dropped := be.GetVisibilityLocked(ts)
 	if !visible {
 		return false
 	}
 	return !dropped
 }
 
-func (be *TableBaseEntry) GetVisibiltyLocked(ts types.TS) (visible, dropped bool) {
+func (be *TableBaseEntry) GetVisibilityLocked(ts types.TS) (visible, dropped bool) {
 	un := be.GetVisibleNode(ts)
 	if un == nil {
 		return
@@ -307,7 +307,7 @@ func (be *TableBaseEntry) GetVisibility(ts types.TS) (visible, dropped bool) {
 		txnToWait.GetTxnState(true)
 		be.RLock()
 	}
-	return be.GetVisibiltyLocked(ts)
+	return be.GetVisibilityLocked(ts)
 }
 func (be *TableBaseEntry) WriteOneNodeTo(w io.Writer) (n int64, err error) {
 	if err = binary.Write(w, binary.BigEndian, be.ID); err != nil {

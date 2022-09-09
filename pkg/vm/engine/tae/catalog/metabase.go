@@ -170,14 +170,14 @@ func (be *MetaBaseEntry) HasDropped() bool {
 }
 
 func (be *MetaBaseEntry) ensureVisibleAndNotDropped(ts types.TS) bool {
-	visible, dropped := be.GetVisibiltyLocked(ts)
+	visible, dropped := be.GetVisibilityLocked(ts)
 	if !visible {
 		return false
 	}
 	return !dropped
 }
 
-func (be *MetaBaseEntry) GetVisibiltyLocked(ts types.TS) (visible, dropped bool) {
+func (be *MetaBaseEntry) GetVisibilityLocked(ts types.TS) (visible, dropped bool) {
 	un := be.GetVisibleNode(ts)
 	if un == nil {
 		return
@@ -294,7 +294,7 @@ func (be *MetaBaseEntry) GetDeleteAt() types.TS {
 	return un.(*MetadataMVCCNode).DeletedAt
 }
 
-func (be *MetaBaseEntry) TxnCanGet(ts types.TS) (can, dropped bool) {
+func (be *MetaBaseEntry) GetVisibility(ts types.TS) (visible, dropped bool) {
 	be.RLock()
 	defer be.RUnlock()
 	needWait, txnToWait := be.NeedWaitCommitting(ts)
@@ -303,7 +303,7 @@ func (be *MetaBaseEntry) TxnCanGet(ts types.TS) (can, dropped bool) {
 		txnToWait.GetTxnState(true)
 		be.RLock()
 	}
-	return be.GetVisibiltyLocked(ts)
+	return be.GetVisibilityLocked(ts)
 }
 func (be *MetaBaseEntry) WriteOneNodeTo(w io.Writer) (n int64, err error) {
 	if err = binary.Write(w, binary.BigEndian, be.ID); err != nil {
