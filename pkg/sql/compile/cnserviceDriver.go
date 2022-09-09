@@ -191,7 +191,7 @@ func (s *Scope) remoteRun(c *Compile) error {
 	// TODO: move these code to front-end, get dead time from config file may suitable.
 	if _, ok := c.ctx.Deadline(); !ok {
 		var cancel context.CancelFunc
-		c.ctx, cancel = context.WithTimeout(c.ctx, time.Second*100)
+		c.ctx, cancel = context.WithTimeout(c.ctx, time.Second*10000)
 		_ = cancel
 	}
 
@@ -207,7 +207,14 @@ func (s *Scope) remoteRun(c *Compile) error {
 	if errReceive != nil {
 		return errReceive
 	}
-	for val := range messagesReceive {
+	var val morpc.Message
+	for {
+		select {
+		case <-c.ctx.Done():
+			return moerr.NewError(moerr.ErrRPCTimeout, "cn-client context has been canceled.")
+		case val = <-messagesReceive:
+		}
+
 		m := val.(*pipeline.Message)
 
 		errMessage := m.GetCode()
@@ -660,7 +667,6 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 			Ibucket: t.IBucket,
 			Nbucket: t.NBucket,
 		}
-	// may useless.
 	case *merge.Argument:
 	case *mergegroup.Argument:
 		in.Agg = &pipeline.Group{

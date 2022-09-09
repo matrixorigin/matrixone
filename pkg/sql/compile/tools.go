@@ -127,6 +127,9 @@ func generateReceiverMap(s *Scope, mp map[*process.WaitRegister]int) {
 	for i := range s.PreScopes {
 		generateReceiverMap(s.PreScopes[i], mp)
 	}
+	if s.Proc == nil {
+		return
+	}
 	for i := range s.Proc.Reg.MergeReceivers {
 		mp[s.Proc.Reg.MergeReceivers[i]] = len(mp)
 	}
@@ -171,7 +174,11 @@ func showScopes(ss []*Scope, gap int, rmp map[*process.WaitRegister]int) string 
 	var result string
 	for i := range ss {
 		str := addGap()
-		str += fmt.Sprintf("Scope %d (Magic: %s, Receiver: %s): [", i+1, magicShow(ss[i].Magic), getReceiverStr(ss[i].Proc.Reg.MergeReceivers))
+		receiverStr := "nil"
+		if ss[i].Proc != nil {
+			receiverStr = getReceiverStr(ss[i].Proc.Reg.MergeReceivers)
+		}
+		str += fmt.Sprintf("Scope %d (Magic: %s, Receiver: %s): [", i+1, magicShow(ss[i].Magic), receiverStr)
 		for j, instruction := range ss[i].Instructions {
 			if j != 0 {
 				str += " -> "
