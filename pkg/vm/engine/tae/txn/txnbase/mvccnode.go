@@ -27,13 +27,13 @@ import (
 type MVCCNode interface {
 	String() string
 
-	CheckConflict(startTS types.TS) error
+	IsVisible(ts types.TS) (visible bool)
+	CheckConflict(ts types.TS) error
 	UpdateNode(o MVCCNode)
 
-	IsVisible(startTS types.TS) (canRead bool)
 	CommittedIn(minTS, maxTS types.TS) (committedIn, commitBeforeMinTS bool)
-	NeedWaitCommitting(startTS types.TS) (bool, txnif.TxnReader)
-	IsSameTxn(startTS types.TS) bool
+	NeedWaitCommitting(ts types.TS) (bool, txnif.TxnReader)
+	IsSameTxn(ts types.TS) bool
 	IsActive() bool
 	IsCommitting() bool
 	IsCommitted() bool
@@ -75,27 +75,27 @@ func NewTxnMVCCNodeWithTxn(txn txnif.TxnReader) *TxnMVCCNode {
 }
 
 // Check w-w confilct
-func (un *TxnMVCCNode) CheckConflict(startTS types.TS) error {
+func (un *TxnMVCCNode) CheckConflict(ts types.TS) error {
 	if un.IsActive() {
-		if un.IsSameTxn(startTS) {
+		if un.IsSameTxn(ts) {
 			return nil
 		}
 		return txnif.ErrTxnWWConflict
 	}
-	if un.End.Greater(startTS) {
+	if un.End.Greater(ts) {
 		return txnif.ErrTxnWWConflict
 	}
 	return nil
 }
 
-func (un *TxnMVCCNode) IsVisible(startTS types.TS) (canRead bool) {
-	if un.IsSameTxn(startTS) {
+func (un *TxnMVCCNode) IsVisible(ts types.TS) (visible bool) {
+	if un.IsSameTxn(ts) {
 		return true
 	}
 	if un.IsActive() || un.IsCommitting() {
 		return false
 	}
-	if un.End.LessEq(startTS) {
+	if un.End.LessEq(ts) {
 		return true
 	}
 	return false
@@ -115,21 +115,21 @@ func (un *TxnMVCCNode) CommittedIn(minTS, maxTS types.TS) (committedIn, commitBe
 	return false, false
 }
 
-func (un *TxnMVCCNode) NeedWaitCommitting(startTS types.TS) (bool, txnif.TxnReader) {
+func (un *TxnMVCCNode) NeedWaitCommitting(ts types.TS) (bool, txnif.TxnReader) {
 	if !un.IsCommitting() {
 		return false, nil
 	}
-	if un.Txn.GetCommitTS().GreaterEq(startTS) {
+	if un.Txn.GetCommitTS().GreaterEq(ts) {
 		return false, nil
 	}
 	return true, un.Txn
 }
 
-func (un *TxnMVCCNode) IsSameTxn(startTS types.TS) bool {
+func (un *TxnMVCCNode) IsSameTxn(ts types.TS) bool {
 	if un.Txn == nil {
 		return false
 	}
-	return un.Txn.GetStartTS().Equal(startTS)
+	return un.Txn.GetStartTS().Equal(ts)
 }
 
 func (un *TxnMVCCNode) IsActive() bool {

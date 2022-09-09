@@ -169,24 +169,24 @@ func (be *TableBaseEntry) HasDropped() bool {
 	return node.(*TableMVCCNode).HasDropped()
 }
 
-func (be *TableBaseEntry) ExistedForTs(ts types.TS) bool {
-	can, dropped := be.TsCanGet(ts)
-	if !can {
+func (be *TableBaseEntry) ensureVisibleAndNotDropped(ts types.TS) bool {
+	visible, dropped := be.GetVisibiltyLocked(ts)
+	if !visible {
 		return false
 	}
 	return !dropped
 }
 
-func (be *TableBaseEntry) TsCanGet(ts types.TS) (can, dropped bool) {
-	un := be.GetNodeToRead(ts)
+func (be *TableBaseEntry) GetVisibiltyLocked(ts types.TS) (visible, dropped bool) {
+	un := be.GetVisibleNode(ts)
 	if un == nil {
 		return
 	}
 	if un.(*TableMVCCNode).HasDropped() {
-		can, dropped = true, true
+		visible, dropped = true, true
 		return
 	}
-	can, dropped = true, false
+	visible, dropped = true, un.(*TableMVCCNode).HasDropped()
 	return
 }
 
@@ -197,7 +197,7 @@ func (be *TableBaseEntry) IsVisible(ts types.TS, mu *sync.RWMutex) (ok bool, err
 		txnToWait.GetTxnState(true)
 		mu.RLock()
 	}
-	ok = be.ExistedForTs(ts)
+	ok = be.ensureVisibleAndNotDropped(ts)
 	return
 }
 
@@ -245,7 +245,7 @@ func (be *TableBaseEntry) PrepareAdd(txn txnif.TxnReader) (err error) {
 			return ErrDuplicate
 		}
 	} else {
-		if be.ExistedForTs(txn.GetStartTS()) {
+		if be.ensureVisibleAndNotDropped(txn.GetStartTS()) {
 			return ErrDuplicate
 		}
 	}
@@ -298,7 +298,7 @@ func (be *TableBaseEntry) GetDeleteAt() types.TS {
 	return un.(*TableMVCCNode).DeletedAt
 }
 
-func (be *TableBaseEntry) TxnCanGet(ts types.TS) (can, dropped bool) {
+func (be *TableBaseEntry) GetVisibility(ts types.TS) (visible, dropped bool) {
 	be.RLock()
 	defer be.RUnlock()
 	needWait, txnToWait := be.NeedWaitCommitting(ts)
@@ -307,11 +307,7 @@ func (be *TableBaseEntry) TxnCanGet(ts types.TS) (can, dropped bool) {
 		txnToWait.GetTxnState(true)
 		be.RLock()
 	}
-	un := be.GetNodeToRead(ts)
-	if un == nil {
-		return
-	}
-	return be.TsCanGet(ts)
+	return be.GetVisibiltyLocked(ts)
 }
 func (be *TableBaseEntry) WriteOneNodeTo(w io.Writer) (n int64, err error) {
 	if err = binary.Write(w, binary.BigEndian, be.ID); err != nil {

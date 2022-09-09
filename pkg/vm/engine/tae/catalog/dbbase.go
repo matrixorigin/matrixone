@@ -169,24 +169,20 @@ func (be *DBBaseEntry) HasDropped() bool {
 	return node.(*DBMVCCNode).HasDropped()
 }
 
-func (be *DBBaseEntry) ExistedForTs(ts types.TS) bool {
-	can, dropped := be.TsCanGet(ts)
-	if !can {
+func (be *DBBaseEntry) ensureVisibleAndNotDropped(ts types.TS) bool {
+	visible, dropped := be.GetVisibiltyLocked(ts)
+	if !visible {
 		return false
 	}
 	return !dropped
 }
 
-func (be *DBBaseEntry) TsCanGet(ts types.TS) (can, dropped bool) {
-	un := be.GetNodeToRead(ts)
+func (be *DBBaseEntry) GetVisibiltyLocked(ts types.TS) (visible, dropped bool) {
+	un := be.GetVisibleNode(ts)
 	if un == nil {
 		return
 	}
-	if un.(*DBMVCCNode).HasDropped() {
-		can, dropped = true, true
-		return
-	}
-	can, dropped = true, false
+	visible, dropped = true, un.(*DBMVCCNode).HasDropped()
 	return
 }
 
@@ -197,7 +193,7 @@ func (be *DBBaseEntry) IsVisible(ts types.TS, mu *sync.RWMutex) (ok bool, err er
 		txnToWait.GetTxnState(true)
 		mu.RLock()
 	}
-	ok = be.ExistedForTs(ts)
+	ok = be.ensureVisibleAndNotDropped(ts)
 	return
 }
 
@@ -245,7 +241,7 @@ func (be *DBBaseEntry) PrepareAdd(txn txnif.TxnReader) (err error) {
 			return ErrDuplicate
 		}
 	} else {
-		if be.ExistedForTs(txn.GetStartTS()) {
+		if be.ensureVisibleAndNotDropped(txn.GetStartTS()) {
 			return ErrDuplicate
 		}
 	}
@@ -298,7 +294,7 @@ func (be *DBBaseEntry) GetDeleteAt() types.TS {
 	return un.(*DBMVCCNode).DeletedAt
 }
 
-func (be *DBBaseEntry) TxnCanGet(ts types.TS) (can, dropped bool) {
+func (be *DBBaseEntry) GetVisibility(ts types.TS) (visible, dropped bool) {
 	be.RLock()
 	defer be.RUnlock()
 	needWait, txnToWait := be.NeedWaitCommitting(ts)
@@ -307,11 +303,7 @@ func (be *DBBaseEntry) TxnCanGet(ts types.TS) (can, dropped bool) {
 		txnToWait.GetTxnState(true)
 		be.RLock()
 	}
-	un := be.GetNodeToRead(ts)
-	if un == nil {
-		return
-	}
-	return be.TsCanGet(ts)
+	return be.GetVisibiltyLocked(ts)
 }
 func (be *DBBaseEntry) WriteOneNodeTo(w io.Writer) (n int64, err error) {
 	if err = binary.Write(w, binary.BigEndian, be.ID); err != nil {

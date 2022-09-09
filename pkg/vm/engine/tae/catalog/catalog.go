@@ -538,7 +538,7 @@ func (catalog *Catalog) AddEntryLocked(database *DBEntry, txn txnif.TxnReader) e
 		catalog.entries[database.GetID()] = n
 
 		nn := newNodeList(catalog.GetItemNodeByIDLocked,
-			databaseTxnCanGetFn[*DBEntry],
+			dbVisibilityFn[*DBEntry],
 			&catalog.nodesMu,
 			database.name)
 		catalog.nameNodes[database.GetFullName()] = nn
