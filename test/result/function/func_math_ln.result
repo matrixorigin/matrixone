@@ -5,11 +5,9 @@ SELECT ln(2);
 ln(2)
 0.6931471805599453
 SELECT ln(-2);
-ln(-2)
-null
+Natural Logarithm function input cannot be non positive
 SELECT ln(0);
-ln(0)
-null
+Natural Logarithm function input cannot be non positive
 select ln(0.00000000000000001);
 ln(0.00000000000000001)
 -39.14394658089878
@@ -20,8 +18,7 @@ select ln(0.141241241241313);
 ln(0.141241241241313)
 -1.9572859197892771
 select ln(-124314124124.12412341);
-ln(-124314124124.12412341)
-null
+Natural Logarithm function input cannot be non positive
 select ln(null);
 ln(null)
 null
