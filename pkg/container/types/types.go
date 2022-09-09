@@ -109,6 +109,7 @@ type Decimal64 [8]byte
 type Decimal128 [16]byte
 
 type Varlena [VarlenaSize]byte
+
 // UUID is Version 1 UUID based on the current NodeID and clock sequence, and the current time.
 type Uuid [16]byte
 
