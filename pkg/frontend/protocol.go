@@ -263,8 +263,6 @@ func (mp *MysqlProtocolImpl) SendResponse(resp *Response) error {
 			return mp.sendOKPacket(0, 0, uint16(resp.status), 0, "")
 		}
 		switch myerr := err.(type) {
-		case *moerr.MysqlError:
-			return mp.sendErrPacket(myerr.ErrorCode, myerr.SqlState, myerr.Error())
 		case *moerr.Error:
 			return mp.sendErrPacket(myerr.Code, myerr.SqlState, myerr.Error())
 		}

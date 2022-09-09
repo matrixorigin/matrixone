@@ -14,11 +14,6 @@
 
 package moerr
 
-import (
-	"fmt"
-	"strings"
-)
-
 /*
 Mysql Error Code
 information from https://dev.mysql.com/doc/mysql-errors/8.0/en/server-error-reference.html
@@ -10803,36 +10798,4 @@ var MysqlErrorMsgRefer = map[uint16]errorMsgItem{
 	ER_FIREWALL_UDF_REGISTER_FAILED:                                  {13704, []string{"HY000"}, "Automatic registration of function(s) failed."},
 	ER_FIREWALL_PFS_TABLE_REGISTER_FAILED:                            {13705, []string{"HY000"}, "Automatic registration of Performance schema table(s) failed."},
 	ER_IB_MSG_STATS_SAMPLING_TOO_LARGE:                               {13706, []string{"HY000"}, "%s"},
-}
-
-type MysqlError struct {
-	error
-	ErrorCode uint16
-	SqlState  string
-	Format    string
-	Args      []interface{}
-}
-
-func (me *MysqlError) Error() string {
-	cnt := strings.Count(me.Format, "%")
-	return fmt.Sprintf(me.Format, me.Args[:cnt]...)
-}
-
-func NewMysqlError(code uint16, args ...interface{}) *MysqlError {
-	if errItem, ok := MysqlErrorMsgRefer[code]; !ok {
-		defaultErr := MysqlErrorMsgRefer[ER_UNKNOWN_ERROR]
-		return &MysqlError{
-			ErrorCode: ER_UNKNOWN_ERROR,
-			SqlState:  defaultErr.SqlStates[0],
-			Format:    defaultErr.ErrorMsgOrFormat,
-			Args:      args,
-		}
-	} else {
-		return &MysqlError{
-			ErrorCode: code,
-			SqlState:  errItem.SqlStates[0],
-			Format:    errItem.ErrorMsgOrFormat,
-			Args:      args,
-		}
-	}
 }
