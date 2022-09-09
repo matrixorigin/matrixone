@@ -101,7 +101,7 @@ func (be *TableBaseEntry) CreateWithTxn(txn txnif.AsyncTxn) {
 }
 
 // TODO update create
-func (be *TableBaseEntry) DeleteLocked(txn txnif.TxnReader, impl INode) (node INode, err error) {
+func (be *TableBaseEntry) DeleteLocked(txn txnif.TxnReader) (err error) {
 	entry := be.MVCC.GetHead().GetPayload()
 	if entry.IsCommitted() || entry.IsSameTxn(txn.GetStartTS()) {
 		if be.HasDropped() {
@@ -111,7 +111,6 @@ func (be *TableBaseEntry) DeleteLocked(txn txnif.TxnReader, impl INode) (node IN
 		nbe := entry.CloneData()
 		nbe.(*TableMVCCNode).TxnMVCCNode = txnbase.NewTxnMVCCNodeWithTxn(txn)
 		be.InsertNode(nbe)
-		node = impl
 		err = nbe.(*TableMVCCNode).ApplyDeleteLocked()
 		return
 	} else {
@@ -218,7 +217,7 @@ func (be *TableBaseEntry) DropEntryLocked(txnCtx txnif.TxnReader) error {
 	if be.HasDropped() {
 		return ErrNotFound
 	}
-	_, err = be.DeleteLocked(txnCtx, nil)
+	err = be.DeleteLocked(txnCtx)
 	if err != nil {
 		return err
 	}

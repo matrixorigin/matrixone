@@ -15,6 +15,7 @@
 package catalog
 
 import (
+	"errors"
 	"io"
 	"sync"
 
@@ -73,3 +74,5 @@ func CompareUint64(left, right uint64) int {
 	}
 	return 0
 }
+
+var ErrTxnActive = errors.New("txn is active")

@@ -101,7 +101,7 @@ func (be *MetaBaseEntry) CreateWithTxn(txn txnif.AsyncTxn) {
 }
 
 // TODO update create
-func (be *MetaBaseEntry) DeleteLocked(txn txnif.TxnReader, impl INode) (node INode, err error) {
+func (be *MetaBaseEntry) DeleteLocked(txn txnif.TxnReader) (err error) {
 	entry := be.MVCC.GetHead().GetPayload()
 	if entry.IsCommitted() || entry.IsSameTxn(txn.GetStartTS()) {
 		if be.HasDropped() {
@@ -111,7 +111,6 @@ func (be *MetaBaseEntry) DeleteLocked(txn txnif.TxnReader, impl INode) (node INo
 		nbe := entry.CloneData()
 		nbe.(*MetadataMVCCNode).TxnMVCCNode = txnbase.NewTxnMVCCNodeWithTxn(txn)
 		be.InsertNode(nbe)
-		node = impl
 		err = nbe.(*MetadataMVCCNode).ApplyDeleteLocked()
 		return
 	} else {
@@ -214,7 +213,7 @@ func (be *MetaBaseEntry) DropEntryLocked(txnCtx txnif.TxnReader) error {
 	if be.HasDropped() {
 		return ErrNotFound
 	}
-	_, err = be.DeleteLocked(txnCtx, nil)
+	err = be.DeleteLocked(txnCtx)
 	if err != nil {
 		return err
 	}
