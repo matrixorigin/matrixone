@@ -10,7 +10,7 @@ type ObjectReader struct {
 	root   string
 }
 
-func NewObjectReader(name string, dir string) (*ObjectReader, error) {
+func NewObjectReader(name string, dir string) (Reader, error) {
 	var err error
 	reader := &ObjectReader{
 		name: name,

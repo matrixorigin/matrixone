@@ -47,7 +47,7 @@ func TestNewObjectWriter(t *testing.T) {
 	assert.Nil(t, err)
 	assert.Equal(t, 2, len(extents))
 	// Sync is for testing
-	err = objectWriter.Sync(dir)
+	err = objectWriter.(*ObjectWriter).Sync(dir)
 	assert.Nil(t, err)
 
 	objectReader, _ := NewObjectReader(name, dir)

@@ -16,7 +16,7 @@ type ObjectWriter struct {
 	lastId int
 }
 
-func NewObjectWriter(name string) (*ObjectWriter, error) {
+func NewObjectWriter(name string) (Writer, error) {
 	writer := &ObjectWriter{
 		name:   name,
 		buffer: NewObjectBuffer(name),
