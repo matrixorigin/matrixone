@@ -284,14 +284,14 @@ func (un *TxnMVCCNode) String() string {
 		un.LogIndex)
 }
 
-func (e *TxnMVCCNode) Prepare2PCPrepare() (ts types.TS, err error) {
-	e.End = e.Txn.GetPrepareTS()
-	ts = e.End
+func (un *TxnMVCCNode) Prepare2PCPrepare() (ts types.TS, err error) {
+	un.End = un.Txn.GetPrepareTS()
+	ts = un.End
 	return
 }
 
-func (e *TxnMVCCNode) PrepareCommit() (ts types.TS, err error) {
-	e.End = e.Txn.GetCommitTS()
-	ts = e.End
+func (un *TxnMVCCNode) PrepareCommit() (ts types.TS, err error) {
+	un.End = un.Txn.GetCommitTS()
+	ts = un.End
 	return
 }
