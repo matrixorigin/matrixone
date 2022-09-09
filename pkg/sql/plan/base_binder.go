@@ -663,11 +663,12 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 		// count(col_name) : astExprs[0].(type) is *tree.UnresolvedName
 		switch nval := astArgs[0].(type) {
 		case *tree.NumVal:
-			// rewrite count(*) to starcount(col_name)
 			if nval.String() == "*" {
 				if len(b.ctx.bindings) == 0 || len(b.ctx.bindings[0].cols) == 0 {
-					// return nil, errors.New("", "can not find any column when rewrite count(*) to starcount(col)")
+					// sql: 'select count(*)' without from clause. wo do nothing
 				} else {
+					// sql: 'select count(*) from t1',
+					// rewrite count(*) to starcount(col_name)
 					name = "starcount"
 
 					var newCountCol *tree.UnresolvedName
