@@ -42,7 +42,7 @@ func (c cpuTotal) Desc() *prom.Desc {
 	return prom.NewDesc(
 		"sys_cpu_seconds_total",
 		"System CPU time spent in seconds, normalized by number of cores",
-		nil, nil,
+		nil, sysTenantID,
 	)
 }
 
@@ -61,7 +61,7 @@ func (c cpuPercent) Desc() *prom.Desc {
 	return prom.NewDesc(
 		"sys_cpu_combined_percent",
 		"System CPU busy percentage, average among all logical cores",
-		nil, nil,
+		nil, sysTenantID,
 	)
 }
 
@@ -94,7 +94,7 @@ func (m memUsed) Desc() *prom.Desc {
 	return prom.NewDesc(
 		"sys_memory_used",
 		"System memory used in bytes",
-		nil, nil,
+		nil, sysTenantID,
 	)
 }
 
@@ -114,7 +114,7 @@ func (m memAvail) Desc() *prom.Desc {
 	return prom.NewDesc(
 		"sys_memory_available",
 		"System memory available in bytes",
-		nil, nil,
+		nil, sysTenantID,
 	)
 }
 

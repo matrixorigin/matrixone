@@ -49,7 +49,7 @@ func (c procCpuPercent) Desc() *prom.Desc {
 	return prom.NewDesc(
 		"process_cpu_percent",
 		"Process CPU busy percentage",
-		nil, nil,
+		nil, sysTenantID,
 	)
 }
 
@@ -74,7 +74,7 @@ func (c procMemUsage) Desc() *prom.Desc {
 	return prom.NewDesc(
 		"process_resident_memory_bytes",
 		"Resident memory size in bytes.",
-		nil, nil,
+		nil, sysTenantID,
 	)
 }
 
@@ -97,7 +97,7 @@ func (c procOpenFds) Desc() *prom.Desc {
 	return prom.NewDesc(
 		"process_open_fds",
 		"Number of open file descriptors.",
-		nil, nil,
+		nil, sysTenantID,
 	)
 }
 
@@ -120,7 +120,7 @@ func (c procFdsLimit) Desc() *prom.Desc {
 	return prom.NewDesc(
 		"process_max_fds",
 		"Maximum number of open file descriptors.",
-		nil, nil,
+		nil, sysTenantID,
 	)
 }
 

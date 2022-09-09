@@ -1647,24 +1647,24 @@ var GetComputationWrapper = func(db, sql, user string, eng engine.Engine, proc *
 	return cw, nil
 }
 
-func incStatementCounter(stmt tree.Statement, isInternal bool) {
+func incStatementCounter(tenant string, stmt tree.Statement) {
 	switch stmt.(type) {
 	case *tree.Select:
-		metric.StatementCounter(metric.SQLTypeSelect, isInternal).Inc()
+		metric.StatementCounter(tenant, metric.SQLTypeSelect).Inc()
 	case *tree.Insert:
-		metric.StatementCounter(metric.SQLTypeInsert, isInternal).Inc()
+		metric.StatementCounter(tenant, metric.SQLTypeInsert).Inc()
 	case *tree.Delete:
-		metric.StatementCounter(metric.SQLTypeDelete, isInternal).Inc()
+		metric.StatementCounter(tenant, metric.SQLTypeDelete).Inc()
 	case *tree.Update:
-		metric.StatementCounter(metric.SQLTypeUpdate, isInternal).Inc()
+		metric.StatementCounter(tenant, metric.SQLTypeUpdate).Inc()
 	default:
-		metric.StatementCounter(metric.SQLTypeOther, isInternal).Inc()
+		metric.StatementCounter(tenant, metric.SQLTypeOther).Inc()
 	}
 }
 
 func (mce *MysqlCmdExecutor) beforeRun(stmt tree.Statement) {
-	sess := mce.GetSession()
-	incStatementCounter(stmt, sess.IsInternal)
+	// incStatementCounter(sess.GetTenantInfo().Tenant, stmt, sess.IsInternal)
+	incStatementCounter("0", stmt)
 }
 
 // execute query

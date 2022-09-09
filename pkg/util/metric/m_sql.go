@@ -21,38 +21,20 @@ var (
 			Name:      "statement_total",
 			Help:      "Counter of executed sql statement",
 		},
-		[]string{"type", "internal"},
+		[]string{constTenantKey, "type"},
 	)
-	statementCounters = []Counter{
-		StatementCounterFactory.WithLabelValues("select", "0"),
-		StatementCounterFactory.WithLabelValues("insert", "0"),
-		StatementCounterFactory.WithLabelValues("delete", "0"),
-		StatementCounterFactory.WithLabelValues("update", "0"),
-		StatementCounterFactory.WithLabelValues("other", "0"),
-	}
-	internalStatementCounters = []Counter{
-		StatementCounterFactory.WithLabelValues("select", "1"),
-		StatementCounterFactory.WithLabelValues("insert", "1"),
-		StatementCounterFactory.WithLabelValues("delete", "1"),
-		StatementCounterFactory.WithLabelValues("update", "1"),
-		StatementCounterFactory.WithLabelValues("other", "1"),
-	}
 )
 
-type SQLType int
+type SQLType string
 
-const (
-	SQLTypeSelect SQLType = iota
-	SQLTypeInsert
-	SQLTypeUpdate
-	SQLTypeDelete
-	SQLTypeOther
+var (
+	SQLTypeSelect SQLType = "select"
+	SQLTypeInsert SQLType = "insert"
+	SQLTypeUpdate SQLType = "delete"
+	SQLTypeDelete SQLType = "update"
+	SQLTypeOther  SQLType = "other"
 )
 
-func StatementCounter(t SQLType, isInternal bool) Counter {
-	if isInternal {
-		return internalStatementCounters[t]
-	} else {
-		return statementCounters[t]
-	}
+func StatementCounter(tenant string, t SQLType) Counter {
+	return StatementCounterFactory.WithLabelValues(tenant, string(t))
 }
