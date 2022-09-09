@@ -226,7 +226,8 @@ SELECT AVG(2), BIT_AND(2), BIT_OR(2), BIT_XOR(2);
 avg(2)    bit_and(2)    bit_or(2)    bit_xor(2)
 2.0    2    2    2
 select count(*);
-can not find any column when rewrite count(*) to starcount(col)
+count(*)
+1
 select COUNT(12), COUNT(DISTINCT 12), MIN(2),MAX(2),STD(2), VARIANCE(2),SUM(2);
 count(12)    count(distinct 12)    min(2)    max(2)    std(2)    variance(2)    sum(2)
 1    1    2    2    0.0    0.0    2
