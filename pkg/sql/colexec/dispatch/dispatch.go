@@ -47,7 +47,7 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 	}
 	vecs := ap.vecs[:0]
 	for i := range bat.Vecs {
-		if bat.Vecs[i].Or {
+		if bat.Vecs[i].IsOriginal() {
 			vec, err := vector.Dup(bat.Vecs[i], proc.Mp())
 			if err != nil {
 				return false, err
@@ -56,7 +56,7 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 		}
 	}
 	for i := range bat.Vecs {
-		if bat.Vecs[i].Or {
+		if bat.Vecs[i].IsOriginal() {
 			bat.Vecs[i] = vecs[0]
 			vecs = vecs[1:]
 		}

@@ -43,12 +43,10 @@ func handleScalarNull(v1, v2 *vector.Vector, proc *process.Process) (*vector.Vec
 }
 
 func allocateBoolVector(length int, proc *process.Process) *vector.Vector {
-	vec, err := proc.AllocVector(boolType, int64(length))
+	vec, err := proc.AllocVectorOfRows(boolType, int64(length), nil)
 	if err != nil {
 		panic(moerr.NewPanicError("allocBoolVec OOM"))
 	}
-	vec.Col = types.DecodeBoolSlice(vec.Data)
-	vec.Col = vec.Col.([]bool)[:length]
 	return vec
 }
 
