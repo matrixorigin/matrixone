@@ -55,6 +55,14 @@ func TestEngine(t *testing.T) {
 	require.Equal(t, int(rel.Rows()), 20)
 	read[0].Close()
 	require.Equal(t, idx, len(TestBats))
+	// these are just used to improve code coverage below, we will make it sense after func is implemented
+	rel.AddTableDef(ctx, nil)
+	rel.DelTableDef(ctx, nil)
+	rel.Rows()
+	rel.GetHideKeys(ctx)
+	rel.GetPrimaryKeys(ctx)
+	rel.Ranges(ctx)
+	rel.TableDefs(ctx)
 }
 
 func CreateR(db engine.Database) (bats []*batch.Batch) {
