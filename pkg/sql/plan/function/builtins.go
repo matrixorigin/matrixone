@@ -2010,6 +2010,20 @@ var builtins = map[int]Functions{
 			},
 		},
 	},
+	UNNEST: {
+		Id: UNNEST,
+		Overloads: []Function{
+			{
+				Index:     0,
+				Volatile:  true,
+				Flag:      plan.Function_STRICT,
+				Layout:    STANDARD_FUNCTION,
+				Args:      []types.T{types.T_varchar, types.T_varchar, types.T_bool},
+				ReturnTyp: types.T_batch,
+				Fn:        multi.Unnest,
+			},
+		},
+	},
 
 	ENABLE_FAULT_INJECTION: {
 		Id: ENABLE_FAULT_INJECTION,

@@ -69,6 +69,9 @@ const (
 	// blobs
 	T_blob T = 70
 
+	//batch
+	T_batch T = 80
+
 	// Transaction TS
 	T_TS T = 100
 
@@ -147,6 +150,8 @@ type Generic interface {
 	Ints | UInts | Floats | Date | Datetime | Timestamp
 }
 
+//type Batch batch.Batch
+
 var Types map[string]T = map[string]T{
 	"bool": T_bool,
 
@@ -178,6 +183,7 @@ var Types map[string]T = map[string]T{
 
 	"json": T_json,
 	"text": T_blob,
+	"batch": T_batch,
 }
 
 func New(oid T, width, scale, precision int32) Type {
@@ -264,6 +270,8 @@ func (t T) ToType() Type {
 		typ.Size = 16
 	case T_blob:
 		typ.Size = 24
+	case T_batch:
+		typ.Size = 24
 	}
 	return typ
 }
@@ -316,6 +324,8 @@ func (t T) String() string {
 		return "DECIMAL128"
 	case T_blob:
 		return "TEXT"
+	case T_batch:
+		return "BATCH"
 	}
 	return fmt.Sprintf("unexpected type: %d", t)
 }
@@ -367,6 +377,8 @@ func (t T) OidString() string {
 		return "T_decimal128"
 	case T_blob:
 		return "T_blob"
+	case T_batch:
+		return "T_batch"
 	}
 	return "unknown_type"
 }
@@ -414,6 +426,8 @@ func (t T) GoType() string {
 		return "decimal128"
 	case T_blob:
 		return "string"
+	case T_batch:
+		return "batch"
 	}
 	return "unknown type"
 }
@@ -464,6 +478,8 @@ func (t T) TypeLen() int {
 		return 16
 	case T_blob:
 		return 24
+	case T_batch:
+		return 24
 	}
 	panic(moerr.NewInternalError("Unknow type %s", t))
 }
@@ -492,6 +508,8 @@ func (t T) FixedLength() int {
 	case T_sel:
 		return 8
 	case T_blob:
+		return -24
+	case T_batch:
 		return -24
 	}
 	panic(moerr.NewInternalError("Unknow type %s", t))

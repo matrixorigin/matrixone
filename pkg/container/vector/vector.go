@@ -488,6 +488,12 @@ func New(typ types.Type) *Vector {
 			Col: []types.Decimal128{},
 			Nsp: &nulls.Nulls{},
 		}
+	case types.T_batch:
+		return &Vector{
+			Typ: typ,
+			Col: nil,
+			Nsp: &nulls.Nulls{},
+		}
 	default:
 		panic(fmt.Sprintf("unexpect type %s for function vector.New", typ))
 	}
