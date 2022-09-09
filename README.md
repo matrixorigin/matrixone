@@ -239,6 +239,9 @@ docker run -d -p 6001:6001 --name matrixone matrixorigin/matrixone:0.5.1
     ```bash
     docker run -d -p 6001:6001 --name matrixone matrixorigin/matrixone:nightly-commitnumber
     ```
+    
+    !!! info
+         The *nightly* version is updated once a day.
 
 3. Mount the data directory(Optional)
 
