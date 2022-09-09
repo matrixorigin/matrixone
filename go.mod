@@ -30,6 +30,7 @@ require (
 	github.com/pierrec/lz4/v4 v4.1.14
 	github.com/plar/go-adaptive-radix-tree v1.0.4
 	github.com/prashantv/gostub v1.1.0
+	github.com/robfig/cron/v3 v3.0.1
 	github.com/smartystreets/goconvey v1.7.2
 	github.com/stretchr/testify v1.7.5
 	github.com/tidwall/btree v1.3.1

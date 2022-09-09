@@ -176,7 +176,7 @@ func TestOctInt64(t *testing.T) {
 func TestOctScalar(t *testing.T) {
 	procs := testutil.NewProc()
 	vecs := []*vector.Vector{testutil.MakeInt64Vector([]int64{-9223372036854775808}, nil)}
-	vecs[0].IsConst = true
+	vecs[0].MakeScalar(1)
 	e1, _ := types.Decimal128_FromStringWithScale("1000000000000000000000", 0)
 	expected := []types.Decimal128{e1}
 

@@ -37,6 +37,7 @@ const (
 	JsonFamily
 	EnumFamily
 	SetFamily
+	UuidFamily
 
 	//test
 	BlobFamily
@@ -335,6 +336,11 @@ var (
 		Family: JsonFamily,
 		Locale: &emptyLocale,
 		Oid:    uint32(defines.MYSQL_TYPE_JSON)}}
+
+	TYPE_UUID = &T{InternalType: InternalType{
+		Family: UuidFamily,
+		Locale: &emptyLocale,
+		Oid:    uint32(defines.MYSQL_TYPE_UUID)}}
 
 	TYPE_ENUM = &T{InternalType: InternalType{
 		Family: EnumFamily,

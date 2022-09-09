@@ -18,33 +18,21 @@ import (
 	"math"
 )
 
-var (
-	PowerScalarLeftConst  func(scalar float64, rv []float64, rs []float64) []float64
-	PowerScalarRightConst func(scalar float64, rv []float64, rs []float64) []float64
-	Power                 func(lv, rv, rs []float64) []float64
-)
-
-func init() {
-	PowerScalarLeftConst = powerScalarLeftConst
-	PowerScalarRightConst = powerScalarRightConst
-	Power = power
-}
-
-func powerScalarLeftConst(scalar float64, rv []float64, rs []float64) []float64 {
+func PowerScalarLeftConst(scalar float64, rv []float64, rs []float64) []float64 {
 	for i, x := range rv {
 		rs[i] = math.Pow(scalar, x)
 	}
 	return rs
 }
 
-func powerScalarRightConst(scalar float64, rv []float64, rs []float64) []float64 {
+func PowerScalarRightConst(scalar float64, rv []float64, rs []float64) []float64 {
 	for i, x := range rv {
 		rs[i] = math.Pow(x, scalar)
 	}
 	return rs
 }
 
-func power(lv, rv, rs []float64) []float64 {
+func Power(lv, rv, rs []float64) []float64 {
 	for i, x := range lv {
 		rs[i] = math.Pow(x, rv[i])
 	}

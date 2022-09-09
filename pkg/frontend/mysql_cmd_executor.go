@@ -735,6 +735,18 @@ func extractRowFromVector(ses *Session, vec *vector.Vector, i int, row []interfa
 				row[i] = vs[rowIndex].ToStringWithScale(scale)
 			}
 		}
+	case types.T_uuid:
+		if !nulls.Any(vec.Nsp) {
+			vs := vec.Col.([]types.Uuid)
+			row[i] = vs[rowIndex].ToString()
+		} else {
+			if nulls.Contains(vec.Nsp, uint64(rowIndex)) { //is null
+				row[i] = nil
+			} else {
+				vs := vec.Col.([]types.Uuid)
+				row[i] = vs[rowIndex].ToString()
+			}
+		}
 	default:
 		logutil.Errorf("extractRowFromVector : unsupported type %d \n", vec.Typ.Oid)
 		return fmt.Errorf("extractRowFromVector : unsupported type %d", vec.Typ.Oid)
@@ -1661,6 +1673,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 	proc := process.New(
 		requestCtx,
 		mheap.New(ses.GuestMmu),
+		ses.Pu.TxnClient,
 		ses.GetTxnHandler().txn,
 		ses.Pu.FileService,
 	)
@@ -2405,6 +2418,8 @@ func convertEngineTypeToMysqlType(engineType types.T, col *MysqlColumn) error {
 		col.SetColumnType(defines.MYSQL_TYPE_DECIMAL)
 	case types.T_blob:
 		col.SetColumnType(defines.MYSQL_TYPE_BLOB)
+	case types.T_uuid:
+		col.SetColumnType(defines.MYSQL_TYPE_UUID)
 	default:
 		return fmt.Errorf("RunWhileSend : unsupported type %d", engineType)
 	}

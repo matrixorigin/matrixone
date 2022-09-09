@@ -15,12 +15,10 @@
 package connector
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 // Argument pipe connector
 type Argument struct {
-	vecs []*vector.Vector
-	Reg  *process.WaitRegister
+	Reg *process.WaitRegister
 }

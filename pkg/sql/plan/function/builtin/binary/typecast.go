@@ -168,6 +168,7 @@ var (
 	DateToDatetime      = dateToDateTime
 	DatetimeToBytes     = datetimeToBytes
 	DatetimeToDate      = datetimeToDate
+	UuidToBytes         = uuidToBytes
 )
 
 func NumericToNumeric[T1, T2 constraints.Integer | constraints.Float](xs []T1, rs []T2) ([]T2, error) {
@@ -383,6 +384,13 @@ func datetimeToDate(xs []types.Datetime, rs []types.Date) ([]types.Date, error) 
 func datetimeToBytes(xs []types.Datetime, rs []string, precision int32) ([]string, error) {
 	for i, x := range xs {
 		rs[i] = x.String2(precision)
+	}
+	return rs, nil
+}
+
+func uuidToBytes(xs []types.Uuid, rs []string) ([]string, error) {
+	for i, x := range xs {
+		rs[i] = x.ToString()
 	}
 	return rs, nil
 }
