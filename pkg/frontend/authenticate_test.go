@@ -581,7 +581,7 @@ func Test_determineCreateAccount(t *testing.T) {
 		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
 		defer bhStub.Reset()
 
-		ok, err := authenticatePrivilegeOfStatementWithObjectTypeAccount(ses.GetRequestContext(), ses, nil)
+		ok, err := authenticatePrivilegeOfStatementWithObjectTypeAccountAndDatabase(ses.GetRequestContext(), ses, nil)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(ok, convey.ShouldBeTrue)
 	})
@@ -624,7 +624,7 @@ func Test_determineCreateAccount(t *testing.T) {
 		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
 		defer bhStub.Reset()
 
-		ok, err := authenticatePrivilegeOfStatementWithObjectTypeAccount(ses.GetRequestContext(), ses, nil)
+		ok, err := authenticatePrivilegeOfStatementWithObjectTypeAccountAndDatabase(ses.GetRequestContext(), ses, nil)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(ok, convey.ShouldBeFalse)
 	})
@@ -673,7 +673,7 @@ func Test_determineCreateUser(t *testing.T) {
 		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
 		defer bhStub.Reset()
 
-		ok, err := authenticatePrivilegeOfStatementWithObjectTypeAccount(ses.GetRequestContext(), ses, nil)
+		ok, err := authenticatePrivilegeOfStatementWithObjectTypeAccountAndDatabase(ses.GetRequestContext(), ses, nil)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(ok, convey.ShouldBeTrue)
 	})
@@ -730,7 +730,7 @@ func Test_determineCreateUser(t *testing.T) {
 		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
 		defer bhStub.Reset()
 
-		ok, err := authenticatePrivilegeOfStatementWithObjectTypeAccount(ses.GetRequestContext(), ses, nil)
+		ok, err := authenticatePrivilegeOfStatementWithObjectTypeAccountAndDatabase(ses.GetRequestContext(), ses, nil)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(ok, convey.ShouldBeTrue)
 	})
@@ -794,7 +794,7 @@ func Test_determineCreateUser(t *testing.T) {
 		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
 		defer bhStub.Reset()
 
-		ok, err := authenticatePrivilegeOfStatementWithObjectTypeAccount(ses.GetRequestContext(), ses, nil)
+		ok, err := authenticatePrivilegeOfStatementWithObjectTypeAccountAndDatabase(ses.GetRequestContext(), ses, nil)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(ok, convey.ShouldBeFalse)
 	})
@@ -844,7 +844,7 @@ func Test_determineDropUser(t *testing.T) {
 		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
 		defer bhStub.Reset()
 
-		ok, err := authenticatePrivilegeOfStatementWithObjectTypeAccount(ses.GetRequestContext(), ses, nil)
+		ok, err := authenticatePrivilegeOfStatementWithObjectTypeAccountAndDatabase(ses.GetRequestContext(), ses, nil)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(ok, convey.ShouldBeTrue)
 	})
@@ -901,7 +901,7 @@ func Test_determineDropUser(t *testing.T) {
 		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
 		defer bhStub.Reset()
 
-		ok, err := authenticatePrivilegeOfStatementWithObjectTypeAccount(ses.GetRequestContext(), ses, nil)
+		ok, err := authenticatePrivilegeOfStatementWithObjectTypeAccountAndDatabase(ses.GetRequestContext(), ses, nil)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(ok, convey.ShouldBeTrue)
 	})
@@ -965,7 +965,7 @@ func Test_determineDropUser(t *testing.T) {
 		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
 		defer bhStub.Reset()
 
-		ok, err := authenticatePrivilegeOfStatementWithObjectTypeAccount(ses.GetRequestContext(), ses, nil)
+		ok, err := authenticatePrivilegeOfStatementWithObjectTypeAccountAndDatabase(ses.GetRequestContext(), ses, nil)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(ok, convey.ShouldBeFalse)
 	})
@@ -1014,7 +1014,7 @@ func Test_determineCreateRole(t *testing.T) {
 		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
 		defer bhStub.Reset()
 
-		ok, err := authenticatePrivilegeOfStatementWithObjectTypeAccount(ses.GetRequestContext(), ses, nil)
+		ok, err := authenticatePrivilegeOfStatementWithObjectTypeAccountAndDatabase(ses.GetRequestContext(), ses, nil)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(ok, convey.ShouldBeTrue)
 	})
@@ -1071,7 +1071,7 @@ func Test_determineCreateRole(t *testing.T) {
 		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
 		defer bhStub.Reset()
 
-		ok, err := authenticatePrivilegeOfStatementWithObjectTypeAccount(ses.GetRequestContext(), ses, nil)
+		ok, err := authenticatePrivilegeOfStatementWithObjectTypeAccountAndDatabase(ses.GetRequestContext(), ses, nil)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(ok, convey.ShouldBeTrue)
 	})
@@ -1135,7 +1135,7 @@ func Test_determineCreateRole(t *testing.T) {
 		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
 		defer bhStub.Reset()
 
-		ok, err := authenticatePrivilegeOfStatementWithObjectTypeAccount(ses.GetRequestContext(), ses, nil)
+		ok, err := authenticatePrivilegeOfStatementWithObjectTypeAccountAndDatabase(ses.GetRequestContext(), ses, nil)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(ok, convey.ShouldBeFalse)
 	})
@@ -1184,7 +1184,7 @@ func Test_determineDropRole(t *testing.T) {
 		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
 		defer bhStub.Reset()
 
-		ok, err := authenticatePrivilegeOfStatementWithObjectTypeAccount(ses.GetRequestContext(), ses, nil)
+		ok, err := authenticatePrivilegeOfStatementWithObjectTypeAccountAndDatabase(ses.GetRequestContext(), ses, nil)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(ok, convey.ShouldBeTrue)
 	})
@@ -1241,7 +1241,7 @@ func Test_determineDropRole(t *testing.T) {
 		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
 		defer bhStub.Reset()
 
-		ok, err := authenticatePrivilegeOfStatementWithObjectTypeAccount(ses.GetRequestContext(), ses, nil)
+		ok, err := authenticatePrivilegeOfStatementWithObjectTypeAccountAndDatabase(ses.GetRequestContext(), ses, nil)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(ok, convey.ShouldBeTrue)
 	})
@@ -1305,7 +1305,7 @@ func Test_determineDropRole(t *testing.T) {
 		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
 		defer bhStub.Reset()
 
-		ok, err := authenticatePrivilegeOfStatementWithObjectTypeAccount(ses.GetRequestContext(), ses, nil)
+		ok, err := authenticatePrivilegeOfStatementWithObjectTypeAccountAndDatabase(ses.GetRequestContext(), ses, nil)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(ok, convey.ShouldBeFalse)
 	})
@@ -1354,7 +1354,7 @@ func Test_determineGrantRole(t *testing.T) {
 		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
 		defer bhStub.Reset()
 
-		ok, err := authenticatePrivilegeOfStatementWithObjectTypeAccount(ses.GetRequestContext(), ses, nil)
+		ok, err := authenticatePrivilegeOfStatementWithObjectTypeAccountAndDatabase(ses.GetRequestContext(), ses, nil)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(ok, convey.ShouldBeTrue)
 	})
@@ -1412,7 +1412,7 @@ func Test_determineGrantRole(t *testing.T) {
 		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
 		defer bhStub.Reset()
 
-		ok, err := authenticatePrivilegeOfStatementWithObjectTypeAccount(ses.GetRequestContext(), ses, nil)
+		ok, err := authenticatePrivilegeOfStatementWithObjectTypeAccountAndDatabase(ses.GetRequestContext(), ses, nil)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(ok, convey.ShouldBeTrue)
 	})
@@ -1506,7 +1506,7 @@ func Test_determineGrantRole(t *testing.T) {
 		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
 		defer bhStub.Reset()
 
-		ok, err := authenticatePrivilegeOfStatementWithObjectTypeAccount(ses.GetRequestContext(), ses, gr)
+		ok, err := authenticatePrivilegeOfStatementWithObjectTypeAccountAndDatabase(ses.GetRequestContext(), ses, gr)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(ok, convey.ShouldBeTrue)
 	})
@@ -1600,7 +1600,7 @@ func Test_determineGrantRole(t *testing.T) {
 		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
 		defer bhStub.Reset()
 
-		ok, err := authenticatePrivilegeOfStatementWithObjectTypeAccount(ses.GetRequestContext(), ses, gr)
+		ok, err := authenticatePrivilegeOfStatementWithObjectTypeAccountAndDatabase(ses.GetRequestContext(), ses, gr)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(ok, convey.ShouldBeTrue)
 	})
@@ -1694,7 +1694,7 @@ func Test_determineGrantRole(t *testing.T) {
 		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
 		defer bhStub.Reset()
 
-		ok, err := authenticatePrivilegeOfStatementWithObjectTypeAccount(ses.GetRequestContext(), ses, gr)
+		ok, err := authenticatePrivilegeOfStatementWithObjectTypeAccountAndDatabase(ses.GetRequestContext(), ses, gr)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(ok, convey.ShouldBeFalse)
 	})
@@ -1788,7 +1788,7 @@ func Test_determineGrantRole(t *testing.T) {
 		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
 		defer bhStub.Reset()
 
-		ok, err := authenticatePrivilegeOfStatementWithObjectTypeAccount(ses.GetRequestContext(), ses, gr)
+		ok, err := authenticatePrivilegeOfStatementWithObjectTypeAccountAndDatabase(ses.GetRequestContext(), ses, gr)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(ok, convey.ShouldBeFalse)
 	})
@@ -1837,7 +1837,7 @@ func Test_determineRevokeRole(t *testing.T) {
 		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
 		defer bhStub.Reset()
 
-		ok, err := authenticatePrivilegeOfStatementWithObjectTypeAccount(ses.GetRequestContext(), ses, nil)
+		ok, err := authenticatePrivilegeOfStatementWithObjectTypeAccountAndDatabase(ses.GetRequestContext(), ses, nil)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(ok, convey.ShouldBeTrue)
 	})
@@ -1895,7 +1895,7 @@ func Test_determineRevokeRole(t *testing.T) {
 		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
 		defer bhStub.Reset()
 
-		ok, err := authenticatePrivilegeOfStatementWithObjectTypeAccount(ses.GetRequestContext(), ses, nil)
+		ok, err := authenticatePrivilegeOfStatementWithObjectTypeAccountAndDatabase(ses.GetRequestContext(), ses, nil)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(ok, convey.ShouldBeTrue)
 	})
@@ -1960,7 +1960,1619 @@ func Test_determineRevokeRole(t *testing.T) {
 		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
 		defer bhStub.Reset()
 
-		ok, err := authenticatePrivilegeOfStatementWithObjectTypeAccount(ses.GetRequestContext(), ses, nil)
+		ok, err := authenticatePrivilegeOfStatementWithObjectTypeAccountAndDatabase(ses.GetRequestContext(), ses, nil)
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(ok, convey.ShouldBeFalse)
+	})
+}
+
+func Test_determineGrantPrivilege(t *testing.T) {
+	convey.Convey("convert ast privilege", t, func() {
+		type arg struct {
+			pt   tree.PrivilegeType
+			want PrivilegeType
+		}
+
+		args := []arg{
+			{tree.PRIVILEGE_TYPE_STATIC_SELECT, PrivilegeTypeSelect},
+		}
+
+		for _, a := range args {
+			w := convertAstPrivilegeTypeToPrivilegeType(a.pt)
+			convey.So(w, convey.ShouldEqual, a.want)
+		}
+	})
+	convey.Convey("grant privilege [ObjectType: Table] AdminRole succ", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		stmts := []*tree.GrantPrivilege{
+			{
+				Privileges: []*tree.Privilege{
+					{Type: tree.PRIVILEGE_TYPE_STATIC_SELECT},
+					{Type: tree.PRIVILEGE_TYPE_STATIC_INSERT},
+				},
+				ObjType: tree.OBJECT_TYPE_TABLE,
+				Level: &tree.PrivilegeLevel{
+					Level: tree.PRIVILEGE_LEVEL_TYPE_STAR,
+				},
+			},
+		}
+
+		for _, stmt := range stmts {
+			priv := determinePrivilegeSetOfStatement(stmt)
+			ses := newSes(priv)
+			ses.SetDatabaseName("db")
+
+			ok, err := authenticatePrivilegeOfStatementWithObjectTypeNone(ses.GetRequestContext(), ses, stmt)
+			convey.So(err, convey.ShouldBeNil)
+			convey.So(ok, convey.ShouldBeTrue)
+		}
+	})
+	convey.Convey("grant privilege [ObjectType: Table] succ", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		var currentSql string
+		var sql2result map[string]ExecResult
+
+		bh := mock_frontend.NewMockBackgroundExec(ctrl)
+		bh.EXPECT().Close().Return().AnyTimes()
+		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).DoAndReturn(func(_ context.Context, sql string) error {
+			currentSql = sql
+			return nil
+		}).AnyTimes()
+		bh.EXPECT().GetExecResultSet().DoAndReturn(func() []interface{} {
+			return []interface{}{sql2result[currentSql]}
+		}).AnyTimes()
+
+		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		defer bhStub.Reset()
+
+		stmts := []*tree.GrantPrivilege{
+			{
+				Privileges: []*tree.Privilege{
+					{Type: tree.PRIVILEGE_TYPE_STATIC_SELECT},
+					{Type: tree.PRIVILEGE_TYPE_STATIC_INSERT},
+				},
+				ObjType: tree.OBJECT_TYPE_TABLE,
+				Level: &tree.PrivilegeLevel{
+					Level: tree.PRIVILEGE_LEVEL_TYPE_STAR,
+				},
+			},
+			{
+				Privileges: []*tree.Privilege{
+					{Type: tree.PRIVILEGE_TYPE_STATIC_SELECT},
+					{Type: tree.PRIVILEGE_TYPE_STATIC_INSERT},
+				},
+				ObjType: tree.OBJECT_TYPE_TABLE,
+				Level: &tree.PrivilegeLevel{
+					Level: tree.PRIVILEGE_LEVEL_TYPE_STAR_STAR,
+				},
+			},
+			{
+				Privileges: []*tree.Privilege{
+					{Type: tree.PRIVILEGE_TYPE_STATIC_SELECT},
+					{Type: tree.PRIVILEGE_TYPE_STATIC_INSERT},
+				},
+				ObjType: tree.OBJECT_TYPE_TABLE,
+				Level: &tree.PrivilegeLevel{
+					Level: tree.PRIVILEGE_LEVEL_TYPE_DATABASE_STAR,
+				},
+			},
+			{
+				Privileges: []*tree.Privilege{
+					{Type: tree.PRIVILEGE_TYPE_STATIC_SELECT},
+					{Type: tree.PRIVILEGE_TYPE_STATIC_INSERT},
+				},
+				ObjType: tree.OBJECT_TYPE_TABLE,
+				Level: &tree.PrivilegeLevel{
+					Level: tree.PRIVILEGE_LEVEL_TYPE_DATABASE_TABLE,
+				},
+			},
+			{
+				Privileges: []*tree.Privilege{
+					{Type: tree.PRIVILEGE_TYPE_STATIC_SELECT},
+					{Type: tree.PRIVILEGE_TYPE_STATIC_INSERT},
+				},
+				ObjType: tree.OBJECT_TYPE_TABLE,
+				Level: &tree.PrivilegeLevel{
+					Level: tree.PRIVILEGE_LEVEL_TYPE_TABLE,
+				},
+			},
+		}
+
+		for _, stmt := range stmts {
+			priv := determinePrivilegeSetOfStatement(stmt)
+			ses := newSes(priv)
+			ses.tenant = &TenantInfo{
+				Tenant:        "xxx",
+				User:          "xxx",
+				DefaultRole:   "xxx",
+				TenantID:      1001,
+				UserID:        1001,
+				DefaultRoleID: 1001,
+			}
+			ses.SetDatabaseName("db")
+			//TODO: make sql2result
+			sql2result = make(map[string]ExecResult)
+			for _, p := range stmt.Privileges {
+				sql, err := formSqlFromGrantPrivilege(context.TODO(), ses, stmt, p)
+				convey.So(err, convey.ShouldBeNil)
+				makeRowsOfWithGrantOptionPrivilege(sql2result, sql, [][]interface{}{
+					{1, true},
+				})
+			}
+
+			ok, err := authenticatePrivilegeOfStatementWithObjectTypeNone(ses.GetRequestContext(), ses, stmt)
+			convey.So(err, convey.ShouldBeNil)
+			convey.So(ok, convey.ShouldBeTrue)
+		}
+	})
+	convey.Convey("grant privilege [ObjectType: Table] fail", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		var currentSql string
+		var sql2result map[string]ExecResult
+
+		bh := mock_frontend.NewMockBackgroundExec(ctrl)
+		bh.EXPECT().Close().Return().AnyTimes()
+		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).DoAndReturn(func(_ context.Context, sql string) error {
+			currentSql = sql
+			return nil
+		}).AnyTimes()
+		bh.EXPECT().GetExecResultSet().DoAndReturn(func() []interface{} {
+			return []interface{}{sql2result[currentSql]}
+		}).AnyTimes()
+
+		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		defer bhStub.Reset()
+
+		stmts := []*tree.GrantPrivilege{
+			{
+				Privileges: []*tree.Privilege{
+					{Type: tree.PRIVILEGE_TYPE_STATIC_SELECT},
+					{Type: tree.PRIVILEGE_TYPE_STATIC_INSERT},
+				},
+				ObjType: tree.OBJECT_TYPE_TABLE,
+				Level: &tree.PrivilegeLevel{
+					Level: tree.PRIVILEGE_LEVEL_TYPE_STAR,
+				},
+			},
+			{
+				Privileges: []*tree.Privilege{
+					{Type: tree.PRIVILEGE_TYPE_STATIC_SELECT},
+					{Type: tree.PRIVILEGE_TYPE_STATIC_INSERT},
+				},
+				ObjType: tree.OBJECT_TYPE_TABLE,
+				Level: &tree.PrivilegeLevel{
+					Level: tree.PRIVILEGE_LEVEL_TYPE_STAR_STAR,
+				},
+			},
+			{
+				Privileges: []*tree.Privilege{
+					{Type: tree.PRIVILEGE_TYPE_STATIC_SELECT},
+					{Type: tree.PRIVILEGE_TYPE_STATIC_INSERT},
+				},
+				ObjType: tree.OBJECT_TYPE_TABLE,
+				Level: &tree.PrivilegeLevel{
+					Level: tree.PRIVILEGE_LEVEL_TYPE_DATABASE_STAR,
+				},
+			},
+			{
+				Privileges: []*tree.Privilege{
+					{Type: tree.PRIVILEGE_TYPE_STATIC_SELECT},
+					{Type: tree.PRIVILEGE_TYPE_STATIC_INSERT},
+				},
+				ObjType: tree.OBJECT_TYPE_TABLE,
+				Level: &tree.PrivilegeLevel{
+					Level: tree.PRIVILEGE_LEVEL_TYPE_DATABASE_TABLE,
+				},
+			},
+			{
+				Privileges: []*tree.Privilege{
+					{Type: tree.PRIVILEGE_TYPE_STATIC_SELECT},
+					{Type: tree.PRIVILEGE_TYPE_STATIC_INSERT},
+				},
+				ObjType: tree.OBJECT_TYPE_TABLE,
+				Level: &tree.PrivilegeLevel{
+					Level: tree.PRIVILEGE_LEVEL_TYPE_TABLE,
+				},
+			},
+		}
+
+		for _, stmt := range stmts {
+			priv := determinePrivilegeSetOfStatement(stmt)
+			ses := newSes(priv)
+			ses.tenant = &TenantInfo{
+				Tenant:        "xxx",
+				User:          "xxx",
+				DefaultRole:   "xxx",
+				TenantID:      1001,
+				UserID:        1001,
+				DefaultRoleID: 1001,
+			}
+			ses.SetDatabaseName("db")
+			//TODO: make sql2result
+			sql2result = make(map[string]ExecResult)
+			for i, p := range stmt.Privileges {
+				sql, err := formSqlFromGrantPrivilege(context.TODO(), ses, stmt, p)
+				convey.So(err, convey.ShouldBeNil)
+				var rows [][]interface{}
+				if i == 0 {
+					rows = [][]interface{}{}
+				} else {
+					rows = [][]interface{}{
+						{1, true},
+					}
+				}
+				makeRowsOfWithGrantOptionPrivilege(sql2result, sql, rows)
+			}
+
+			ok, err := authenticatePrivilegeOfStatementWithObjectTypeNone(ses.GetRequestContext(), ses, stmt)
+			convey.So(err, convey.ShouldBeNil)
+			convey.So(ok, convey.ShouldBeFalse)
+		}
+	})
+	convey.Convey("grant privilege [ObjectType: Database] succ", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		var currentSql string
+		var sql2result map[string]ExecResult
+
+		bh := mock_frontend.NewMockBackgroundExec(ctrl)
+		bh.EXPECT().Close().Return().AnyTimes()
+		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).DoAndReturn(func(_ context.Context, sql string) error {
+			currentSql = sql
+			return nil
+		}).AnyTimes()
+		bh.EXPECT().GetExecResultSet().DoAndReturn(func() []interface{} {
+			return []interface{}{sql2result[currentSql]}
+		}).AnyTimes()
+
+		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		defer bhStub.Reset()
+
+		stmts := []*tree.GrantPrivilege{
+			{
+				Privileges: []*tree.Privilege{
+					{Type: tree.PRIVILEGE_TYPE_STATIC_SELECT},
+					{Type: tree.PRIVILEGE_TYPE_STATIC_INSERT},
+				},
+				ObjType: tree.OBJECT_TYPE_DATABASE,
+				Level: &tree.PrivilegeLevel{
+					Level: tree.PRIVILEGE_LEVEL_TYPE_STAR,
+				},
+			},
+			{
+				Privileges: []*tree.Privilege{
+					{Type: tree.PRIVILEGE_TYPE_STATIC_SELECT},
+					{Type: tree.PRIVILEGE_TYPE_STATIC_INSERT},
+				},
+				ObjType: tree.OBJECT_TYPE_DATABASE,
+				Level: &tree.PrivilegeLevel{
+					Level: tree.PRIVILEGE_LEVEL_TYPE_STAR_STAR,
+				},
+			},
+			{
+				Privileges: []*tree.Privilege{
+					{Type: tree.PRIVILEGE_TYPE_STATIC_SELECT},
+					{Type: tree.PRIVILEGE_TYPE_STATIC_INSERT},
+				},
+				ObjType: tree.OBJECT_TYPE_DATABASE,
+				Level: &tree.PrivilegeLevel{
+					Level: tree.PRIVILEGE_LEVEL_TYPE_DATABASE,
+				},
+			},
+		}
+
+		for _, stmt := range stmts {
+			priv := determinePrivilegeSetOfStatement(stmt)
+			ses := newSes(priv)
+			ses.tenant = &TenantInfo{
+				Tenant:        "xxx",
+				User:          "xxx",
+				DefaultRole:   "xxx",
+				TenantID:      1001,
+				UserID:        1001,
+				DefaultRoleID: 1001,
+			}
+			ses.SetDatabaseName("db")
+			//TODO: make sql2result
+			sql2result = make(map[string]ExecResult)
+			for _, p := range stmt.Privileges {
+				sql, err := formSqlFromGrantPrivilege(context.TODO(), ses, stmt, p)
+				convey.So(err, convey.ShouldBeNil)
+				makeRowsOfWithGrantOptionPrivilege(sql2result, sql, [][]interface{}{
+					{1, true},
+				})
+			}
+
+			ok, err := authenticatePrivilegeOfStatementWithObjectTypeNone(ses.GetRequestContext(), ses, stmt)
+			convey.So(err, convey.ShouldBeNil)
+			convey.So(ok, convey.ShouldBeTrue)
+		}
+	})
+	convey.Convey("grant privilege [ObjectType: Database] fail", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		var currentSql string
+		var sql2result map[string]ExecResult
+
+		bh := mock_frontend.NewMockBackgroundExec(ctrl)
+		bh.EXPECT().Close().Return().AnyTimes()
+		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).DoAndReturn(func(_ context.Context, sql string) error {
+			currentSql = sql
+			return nil
+		}).AnyTimes()
+		bh.EXPECT().GetExecResultSet().DoAndReturn(func() []interface{} {
+			return []interface{}{sql2result[currentSql]}
+		}).AnyTimes()
+
+		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		defer bhStub.Reset()
+
+		stmts := []*tree.GrantPrivilege{
+			{
+				Privileges: []*tree.Privilege{
+					{Type: tree.PRIVILEGE_TYPE_STATIC_SELECT},
+					{Type: tree.PRIVILEGE_TYPE_STATIC_INSERT},
+				},
+				ObjType: tree.OBJECT_TYPE_DATABASE,
+				Level: &tree.PrivilegeLevel{
+					Level: tree.PRIVILEGE_LEVEL_TYPE_STAR,
+				},
+			},
+			{
+				Privileges: []*tree.Privilege{
+					{Type: tree.PRIVILEGE_TYPE_STATIC_SELECT},
+					{Type: tree.PRIVILEGE_TYPE_STATIC_INSERT},
+				},
+				ObjType: tree.OBJECT_TYPE_DATABASE,
+				Level: &tree.PrivilegeLevel{
+					Level: tree.PRIVILEGE_LEVEL_TYPE_STAR_STAR,
+				},
+			},
+			{
+				Privileges: []*tree.Privilege{
+					{Type: tree.PRIVILEGE_TYPE_STATIC_SELECT},
+					{Type: tree.PRIVILEGE_TYPE_STATIC_INSERT},
+				},
+				ObjType: tree.OBJECT_TYPE_DATABASE,
+				Level: &tree.PrivilegeLevel{
+					Level: tree.PRIVILEGE_LEVEL_TYPE_DATABASE,
+				},
+			},
+		}
+
+		for _, stmt := range stmts {
+			priv := determinePrivilegeSetOfStatement(stmt)
+			ses := newSes(priv)
+			ses.tenant = &TenantInfo{
+				Tenant:        "xxx",
+				User:          "xxx",
+				DefaultRole:   "xxx",
+				TenantID:      1001,
+				UserID:        1001,
+				DefaultRoleID: 1001,
+			}
+			ses.SetDatabaseName("db")
+			//TODO: make sql2result
+			sql2result = make(map[string]ExecResult)
+			for i, p := range stmt.Privileges {
+				sql, err := formSqlFromGrantPrivilege(context.TODO(), ses, stmt, p)
+				convey.So(err, convey.ShouldBeNil)
+				var rows [][]interface{}
+				if i == 0 {
+					rows = [][]interface{}{}
+				} else {
+					rows = [][]interface{}{
+						{1, true},
+					}
+				}
+				makeRowsOfWithGrantOptionPrivilege(sql2result, sql, rows)
+			}
+
+			ok, err := authenticatePrivilegeOfStatementWithObjectTypeNone(ses.GetRequestContext(), ses, stmt)
+			convey.So(err, convey.ShouldBeNil)
+			convey.So(ok, convey.ShouldBeFalse)
+		}
+	})
+	convey.Convey("grant privilege [ObjectType: Account] succ", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		var currentSql string
+		var sql2result map[string]ExecResult
+
+		bh := mock_frontend.NewMockBackgroundExec(ctrl)
+		bh.EXPECT().Close().Return().AnyTimes()
+		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).DoAndReturn(func(_ context.Context, sql string) error {
+			currentSql = sql
+			return nil
+		}).AnyTimes()
+		bh.EXPECT().GetExecResultSet().DoAndReturn(func() []interface{} {
+			return []interface{}{sql2result[currentSql]}
+		}).AnyTimes()
+
+		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		defer bhStub.Reset()
+
+		stmts := []*tree.GrantPrivilege{
+			{
+				Privileges: []*tree.Privilege{
+					{Type: tree.PRIVILEGE_TYPE_STATIC_SELECT},
+					{Type: tree.PRIVILEGE_TYPE_STATIC_INSERT},
+				},
+				ObjType: tree.OBJECT_TYPE_ACCOUNT,
+				Level: &tree.PrivilegeLevel{
+					Level: tree.PRIVILEGE_LEVEL_TYPE_STAR,
+				},
+			},
+		}
+
+		for _, stmt := range stmts {
+			priv := determinePrivilegeSetOfStatement(stmt)
+			ses := newSes(priv)
+			ses.tenant = &TenantInfo{
+				Tenant:        "xxx",
+				User:          "xxx",
+				DefaultRole:   "xxx",
+				TenantID:      1001,
+				UserID:        1001,
+				DefaultRoleID: 1001,
+			}
+			ses.SetDatabaseName("db")
+			//TODO: make sql2result
+			sql2result = make(map[string]ExecResult)
+			for _, p := range stmt.Privileges {
+				sql, err := formSqlFromGrantPrivilege(context.TODO(), ses, stmt, p)
+				convey.So(err, convey.ShouldBeNil)
+				makeRowsOfWithGrantOptionPrivilege(sql2result, sql, [][]interface{}{
+					{1, true},
+				})
+			}
+
+			ok, err := authenticatePrivilegeOfStatementWithObjectTypeNone(ses.GetRequestContext(), ses, stmt)
+			convey.So(err, convey.ShouldBeNil)
+			convey.So(ok, convey.ShouldBeTrue)
+		}
+	})
+	convey.Convey("grant privilege [ObjectType: Account] fail", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		var currentSql string
+		var sql2result map[string]ExecResult
+
+		bh := mock_frontend.NewMockBackgroundExec(ctrl)
+		bh.EXPECT().Close().Return().AnyTimes()
+		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).DoAndReturn(func(_ context.Context, sql string) error {
+			currentSql = sql
+			return nil
+		}).AnyTimes()
+		bh.EXPECT().GetExecResultSet().DoAndReturn(func() []interface{} {
+			return []interface{}{sql2result[currentSql]}
+		}).AnyTimes()
+
+		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		defer bhStub.Reset()
+
+		stmts := []*tree.GrantPrivilege{
+			{
+				Privileges: []*tree.Privilege{
+					{Type: tree.PRIVILEGE_TYPE_STATIC_SELECT},
+					{Type: tree.PRIVILEGE_TYPE_STATIC_INSERT},
+				},
+				ObjType: tree.OBJECT_TYPE_ACCOUNT,
+				Level: &tree.PrivilegeLevel{
+					Level: tree.PRIVILEGE_LEVEL_TYPE_STAR,
+				},
+			},
+		}
+
+		for _, stmt := range stmts {
+			priv := determinePrivilegeSetOfStatement(stmt)
+			ses := newSes(priv)
+			ses.tenant = &TenantInfo{
+				Tenant:        "xxx",
+				User:          "xxx",
+				DefaultRole:   "xxx",
+				TenantID:      1001,
+				UserID:        1001,
+				DefaultRoleID: 1001,
+			}
+			ses.SetDatabaseName("db")
+			//TODO: make sql2result
+			sql2result = make(map[string]ExecResult)
+			for i, p := range stmt.Privileges {
+				sql, err := formSqlFromGrantPrivilege(context.TODO(), ses, stmt, p)
+				convey.So(err, convey.ShouldBeNil)
+				var rows [][]interface{}
+				if i == 0 {
+					rows = [][]interface{}{}
+				} else {
+					rows = [][]interface{}{
+						{1, true},
+					}
+				}
+				makeRowsOfWithGrantOptionPrivilege(sql2result, sql, rows)
+			}
+
+			ok, err := authenticatePrivilegeOfStatementWithObjectTypeNone(ses.GetRequestContext(), ses, stmt)
+			convey.So(err, convey.ShouldBeNil)
+			convey.So(ok, convey.ShouldBeFalse)
+		}
+	})
+}
+
+func Test_determineRevokePrivilege(t *testing.T) {
+	convey.Convey("revoke privilege [ObjectType: Table] AdminRole succ", t, func() {
+		var stmts []*tree.RevokePrivilege
+
+		for _, stmt := range stmts {
+			priv := determinePrivilegeSetOfStatement(stmt)
+			ses := newSes(priv)
+
+			ok, err := authenticatePrivilegeOfStatementWithObjectTypeNone(ses.GetRequestContext(), ses, stmt)
+			convey.So(err, convey.ShouldBeNil)
+			convey.So(ok, convey.ShouldBeTrue)
+		}
+	})
+	convey.Convey("revoke privilege [ObjectType: Table] not AdminRole fail", t, func() {
+		var stmts []*tree.RevokePrivilege
+
+		for _, stmt := range stmts {
+			priv := determinePrivilegeSetOfStatement(stmt)
+			ses := newSes(priv)
+			ses.tenant = &TenantInfo{
+				Tenant:        "xxx",
+				User:          "xxx",
+				DefaultRole:   "xxx",
+				TenantID:      1001,
+				UserID:        1001,
+				DefaultRoleID: 1001,
+			}
+
+			ok, err := authenticatePrivilegeOfStatementWithObjectTypeNone(ses.GetRequestContext(), ses, stmt)
+			convey.So(err, convey.ShouldBeNil)
+			convey.So(ok, convey.ShouldBeFalse)
+		}
+	})
+}
+
+func Test_determineCreateDatabase(t *testing.T) {
+	convey.Convey("create database succ", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		stmt := &tree.CreateDatabase{}
+		priv := determinePrivilegeSetOfStatement(stmt)
+		ses := newSes(priv)
+
+		rowsOfMoUserGrant := [][]interface{}{
+			{0, false},
+		}
+		roleIdsInMoRolePrivs := []int{0}
+		rowsOfMoRolePrivs := make([][][][]interface{}, len(roleIdsInMoRolePrivs))
+		for i := 0; i < len(roleIdsInMoRolePrivs); i++ {
+			rowsOfMoRolePrivs[i] = make([][][]interface{}, len(priv.entries))
+		}
+
+		//without privilege create database, all
+		rowsOfMoRolePrivs[0][0] = [][]interface{}{}
+		rowsOfMoRolePrivs[0][1] = [][]interface{}{
+			{0, true},
+		}
+
+		sql2result := makeSql2ExecResult2(0, rowsOfMoUserGrant,
+			roleIdsInMoRolePrivs, priv.entries, rowsOfMoRolePrivs,
+			nil, nil)
+
+		var currentSql string
+
+		bh := mock_frontend.NewMockBackgroundExec(ctrl)
+		bh.EXPECT().Close().Return().AnyTimes()
+		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).DoAndReturn(func(_ context.Context, sql string) error {
+			currentSql = sql
+			return nil
+		}).AnyTimes()
+		bh.EXPECT().GetExecResultSet().DoAndReturn(func() []interface{} {
+			return []interface{}{sql2result[currentSql]}
+		}).AnyTimes()
+
+		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		defer bhStub.Reset()
+
+		ok, err := authenticatePrivilegeOfStatementWithObjectTypeAccountAndDatabase(ses.GetRequestContext(), ses, nil)
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(ok, convey.ShouldBeTrue)
+	})
+	convey.Convey("create database succ 2", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		stmt := &tree.CreateDatabase{}
+		priv := determinePrivilegeSetOfStatement(stmt)
+		ses := newSes(priv)
+
+		rowsOfMoUserGrant := [][]interface{}{
+			{0, false},
+		}
+		roleIdsInMoRolePrivs := []int{0, 1}
+		rowsOfMoRolePrivs := make([][][][]interface{}, len(roleIdsInMoRolePrivs))
+		for i := 0; i < len(roleIdsInMoRolePrivs); i++ {
+			rowsOfMoRolePrivs[i] = make([][][]interface{}, len(priv.entries))
+		}
+
+		//role 0 without privilege create database, all, ownership
+		rowsOfMoRolePrivs[0][0] = [][]interface{}{}
+		rowsOfMoRolePrivs[0][1] = [][]interface{}{}
+
+		//role 1 with privilege create database
+		rowsOfMoRolePrivs[1][0] = [][]interface{}{
+			{1, true},
+		}
+		rowsOfMoRolePrivs[1][1] = [][]interface{}{}
+
+		//grant role 1 to role 0
+		roleIdsInMoRoleGrant := []int{0}
+		rowsOfMoRoleGrant := make([][][]interface{}, len(roleIdsInMoRoleGrant))
+		rowsOfMoRoleGrant[0] = [][]interface{}{
+			{1, true},
+		}
+
+		sql2result := makeSql2ExecResult2(0, rowsOfMoUserGrant,
+			roleIdsInMoRolePrivs, priv.entries, rowsOfMoRolePrivs,
+			roleIdsInMoRoleGrant, rowsOfMoRoleGrant)
+
+		var currentSql string
+
+		bh := mock_frontend.NewMockBackgroundExec(ctrl)
+		bh.EXPECT().Close().Return().AnyTimes()
+		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).DoAndReturn(func(_ context.Context, sql string) error {
+			currentSql = sql
+			return nil
+		}).AnyTimes()
+		bh.EXPECT().GetExecResultSet().DoAndReturn(func() []interface{} {
+			return []interface{}{sql2result[currentSql]}
+		}).AnyTimes()
+
+		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		defer bhStub.Reset()
+
+		ok, err := authenticatePrivilegeOfStatementWithObjectTypeAccountAndDatabase(ses.GetRequestContext(), ses, nil)
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(ok, convey.ShouldBeTrue)
+	})
+	convey.Convey("create database fail", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		stmt := &tree.CreateDatabase{}
+		priv := determinePrivilegeSetOfStatement(stmt)
+		ses := newSes(priv)
+
+		rowsOfMoUserGrant := [][]interface{}{
+			{0, false},
+		}
+		roleIdsInMoRolePrivs := []int{0, 1, 2}
+		rowsOfMoRolePrivs := make([][][][]interface{}, len(roleIdsInMoRolePrivs))
+		for i := 0; i < len(roleIdsInMoRolePrivs); i++ {
+			rowsOfMoRolePrivs[i] = make([][][]interface{}, len(priv.entries))
+		}
+
+		//role 0 without privilege create database, all, ownership
+		rowsOfMoRolePrivs[0][0] = [][]interface{}{}
+		rowsOfMoRolePrivs[0][1] = [][]interface{}{}
+
+		//role 1 without privilege create database, all, ownership
+		rowsOfMoRolePrivs[1][0] = [][]interface{}{}
+		rowsOfMoRolePrivs[1][1] = [][]interface{}{}
+
+		//role 2 without privilege create database, all, ownership
+		rowsOfMoRolePrivs[2][0] = [][]interface{}{}
+		rowsOfMoRolePrivs[2][1] = [][]interface{}{}
+
+		roleIdsInMoRoleGrant := []int{0, 1, 2}
+		rowsOfMoRoleGrant := make([][][]interface{}, len(roleIdsInMoRoleGrant))
+		//grant role 1 to role 0
+		rowsOfMoRoleGrant[0] = [][]interface{}{
+			{1, true},
+		}
+		//grant role 2 to role 1
+		rowsOfMoRoleGrant[1] = [][]interface{}{
+			{2, true},
+		}
+		rowsOfMoRoleGrant[2] = [][]interface{}{}
+
+		sql2result := makeSql2ExecResult2(0, rowsOfMoUserGrant,
+			roleIdsInMoRolePrivs, priv.entries, rowsOfMoRolePrivs,
+			roleIdsInMoRoleGrant, rowsOfMoRoleGrant)
+
+		var currentSql string
+
+		bh := mock_frontend.NewMockBackgroundExec(ctrl)
+		bh.EXPECT().Close().Return().AnyTimes()
+		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).DoAndReturn(func(_ context.Context, sql string) error {
+			currentSql = sql
+			return nil
+		}).AnyTimes()
+		bh.EXPECT().GetExecResultSet().DoAndReturn(func() []interface{} {
+			return []interface{}{sql2result[currentSql]}
+		}).AnyTimes()
+
+		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		defer bhStub.Reset()
+
+		ok, err := authenticatePrivilegeOfStatementWithObjectTypeAccountAndDatabase(ses.GetRequestContext(), ses, nil)
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(ok, convey.ShouldBeFalse)
+	})
+}
+
+func Test_determineDropDatabase(t *testing.T) {
+	convey.Convey("drop/alter database succ", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		stmt := &tree.DropDatabase{}
+		priv := determinePrivilegeSetOfStatement(stmt)
+		ses := newSes(priv)
+
+		rowsOfMoUserGrant := [][]interface{}{
+			{0, false},
+		}
+		roleIdsInMoRolePrivs := []int{0}
+		rowsOfMoRolePrivs := make([][][][]interface{}, len(roleIdsInMoRolePrivs))
+		for i := 0; i < len(roleIdsInMoRolePrivs); i++ {
+			rowsOfMoRolePrivs[i] = make([][][]interface{}, len(priv.entries))
+		}
+
+		//with privilege drop database
+		rowsOfMoRolePrivs[0][0] = [][]interface{}{
+			{0, true},
+		}
+		//without privilege all
+		rowsOfMoRolePrivs[0][1] = [][]interface{}{}
+
+		sql2result := makeSql2ExecResult2(0, rowsOfMoUserGrant,
+			roleIdsInMoRolePrivs, priv.entries, rowsOfMoRolePrivs,
+			nil, nil)
+
+		var currentSql string
+
+		bh := mock_frontend.NewMockBackgroundExec(ctrl)
+		bh.EXPECT().Close().Return().AnyTimes()
+		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).DoAndReturn(func(_ context.Context, sql string) error {
+			currentSql = sql
+			return nil
+		}).AnyTimes()
+		bh.EXPECT().GetExecResultSet().DoAndReturn(func() []interface{} {
+			return []interface{}{sql2result[currentSql]}
+		}).AnyTimes()
+
+		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		defer bhStub.Reset()
+
+		ok, err := authenticatePrivilegeOfStatementWithObjectTypeAccountAndDatabase(ses.GetRequestContext(), ses, nil)
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(ok, convey.ShouldBeTrue)
+	})
+	convey.Convey("drop/alter database succ 2", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		stmt := &tree.DropDatabase{}
+		priv := determinePrivilegeSetOfStatement(stmt)
+		ses := newSes(priv)
+
+		rowsOfMoUserGrant := [][]interface{}{
+			{0, false},
+		}
+		roleIdsInMoRolePrivs := []int{0, 1}
+		rowsOfMoRolePrivs := make([][][][]interface{}, len(roleIdsInMoRolePrivs))
+		for i := 0; i < len(roleIdsInMoRolePrivs); i++ {
+			rowsOfMoRolePrivs[i] = make([][][]interface{}, len(priv.entries))
+		}
+
+		//role 0 without privilege drop database, all, account/user ownership
+		rowsOfMoRolePrivs[0][0] = [][]interface{}{}
+		rowsOfMoRolePrivs[0][1] = [][]interface{}{}
+
+		//role 1 with privilege drop database
+		rowsOfMoRolePrivs[1][0] = [][]interface{}{
+			{1, true},
+		}
+		rowsOfMoRolePrivs[1][1] = [][]interface{}{}
+
+		//grant role 1 to role 0
+		roleIdsInMoRoleGrant := []int{0}
+		rowsOfMoRoleGrant := make([][][]interface{}, len(roleIdsInMoRoleGrant))
+		rowsOfMoRoleGrant[0] = [][]interface{}{
+			{1, true},
+		}
+
+		sql2result := makeSql2ExecResult2(0, rowsOfMoUserGrant,
+			roleIdsInMoRolePrivs, priv.entries, rowsOfMoRolePrivs,
+			roleIdsInMoRoleGrant, rowsOfMoRoleGrant)
+
+		var currentSql string
+
+		bh := mock_frontend.NewMockBackgroundExec(ctrl)
+		bh.EXPECT().Close().Return().AnyTimes()
+		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).DoAndReturn(func(_ context.Context, sql string) error {
+			currentSql = sql
+			return nil
+		}).AnyTimes()
+		bh.EXPECT().GetExecResultSet().DoAndReturn(func() []interface{} {
+			return []interface{}{sql2result[currentSql]}
+		}).AnyTimes()
+
+		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		defer bhStub.Reset()
+
+		ok, err := authenticatePrivilegeOfStatementWithObjectTypeAccountAndDatabase(ses.GetRequestContext(), ses, nil)
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(ok, convey.ShouldBeTrue)
+	})
+	convey.Convey("drop/alter database fail", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		stmt := &tree.DropDatabase{}
+		priv := determinePrivilegeSetOfStatement(stmt)
+		ses := newSes(priv)
+
+		rowsOfMoUserGrant := [][]interface{}{
+			{0, false},
+		}
+		roleIdsInMoRolePrivs := []int{0, 1, 2}
+		rowsOfMoRolePrivs := make([][][][]interface{}, len(roleIdsInMoRolePrivs))
+		for i := 0; i < len(roleIdsInMoRolePrivs); i++ {
+			rowsOfMoRolePrivs[i] = make([][][]interface{}, len(priv.entries))
+		}
+
+		//role 0 without privilege drop database, all, ownership
+		rowsOfMoRolePrivs[0][0] = [][]interface{}{}
+		rowsOfMoRolePrivs[0][1] = [][]interface{}{}
+
+		//role 1 without privilege drop database, all, ownership
+		rowsOfMoRolePrivs[1][0] = [][]interface{}{}
+		rowsOfMoRolePrivs[1][1] = [][]interface{}{}
+
+		//role 2 without privilege drop database, all, ownership
+		rowsOfMoRolePrivs[2][0] = [][]interface{}{}
+		rowsOfMoRolePrivs[2][1] = [][]interface{}{}
+
+		roleIdsInMoRoleGrant := []int{0, 1, 2}
+		rowsOfMoRoleGrant := make([][][]interface{}, len(roleIdsInMoRoleGrant))
+		//grant role 1 to role 0
+		rowsOfMoRoleGrant[0] = [][]interface{}{
+			{1, true},
+		}
+		//grant role 2 to role 1
+		rowsOfMoRoleGrant[1] = [][]interface{}{
+			{2, true},
+		}
+		rowsOfMoRoleGrant[2] = [][]interface{}{}
+
+		sql2result := makeSql2ExecResult2(0, rowsOfMoUserGrant,
+			roleIdsInMoRolePrivs, priv.entries, rowsOfMoRolePrivs,
+			roleIdsInMoRoleGrant, rowsOfMoRoleGrant)
+
+		var currentSql string
+
+		bh := mock_frontend.NewMockBackgroundExec(ctrl)
+		bh.EXPECT().Close().Return().AnyTimes()
+		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).DoAndReturn(func(_ context.Context, sql string) error {
+			currentSql = sql
+			return nil
+		}).AnyTimes()
+		bh.EXPECT().GetExecResultSet().DoAndReturn(func() []interface{} {
+			return []interface{}{sql2result[currentSql]}
+		}).AnyTimes()
+
+		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		defer bhStub.Reset()
+
+		ok, err := authenticatePrivilegeOfStatementWithObjectTypeAccountAndDatabase(ses.GetRequestContext(), ses, nil)
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(ok, convey.ShouldBeFalse)
+	})
+}
+
+func Test_determineShowDatabase(t *testing.T) {
+	convey.Convey("show database succ", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		stmt := &tree.ShowDatabases{}
+		priv := determinePrivilegeSetOfStatement(stmt)
+		ses := newSes(priv)
+
+		rowsOfMoUserGrant := [][]interface{}{
+			{0, false},
+		}
+		roleIdsInMoRolePrivs := []int{0}
+		rowsOfMoRolePrivs := make([][][][]interface{}, len(roleIdsInMoRolePrivs))
+		for i := 0; i < len(roleIdsInMoRolePrivs); i++ {
+			rowsOfMoRolePrivs[i] = make([][][]interface{}, len(priv.entries))
+		}
+
+		//with privilege show databases
+		rowsOfMoRolePrivs[0][0] = [][]interface{}{
+			{0, true},
+		}
+		//without privilege all
+		rowsOfMoRolePrivs[0][1] = [][]interface{}{}
+
+		sql2result := makeSql2ExecResult2(0, rowsOfMoUserGrant,
+			roleIdsInMoRolePrivs, priv.entries, rowsOfMoRolePrivs,
+			nil, nil)
+
+		var currentSql string
+
+		bh := mock_frontend.NewMockBackgroundExec(ctrl)
+		bh.EXPECT().Close().Return().AnyTimes()
+		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).DoAndReturn(func(_ context.Context, sql string) error {
+			currentSql = sql
+			return nil
+		}).AnyTimes()
+		bh.EXPECT().GetExecResultSet().DoAndReturn(func() []interface{} {
+			return []interface{}{sql2result[currentSql]}
+		}).AnyTimes()
+
+		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		defer bhStub.Reset()
+
+		ok, err := authenticatePrivilegeOfStatementWithObjectTypeAccountAndDatabase(ses.GetRequestContext(), ses, nil)
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(ok, convey.ShouldBeTrue)
+	})
+	convey.Convey("show database succ 2", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		stmt := &tree.ShowDatabases{}
+		priv := determinePrivilegeSetOfStatement(stmt)
+		ses := newSes(priv)
+
+		rowsOfMoUserGrant := [][]interface{}{
+			{0, false},
+		}
+		roleIdsInMoRolePrivs := []int{0, 1}
+		rowsOfMoRolePrivs := make([][][][]interface{}, len(roleIdsInMoRolePrivs))
+		for i := 0; i < len(roleIdsInMoRolePrivs); i++ {
+			rowsOfMoRolePrivs[i] = make([][][]interface{}, len(priv.entries))
+		}
+
+		//role 0 without privilege show databases, all, account/user ownership
+		rowsOfMoRolePrivs[0][0] = [][]interface{}{}
+		rowsOfMoRolePrivs[0][1] = [][]interface{}{}
+
+		//role 1 with privilege show databases
+		rowsOfMoRolePrivs[1][0] = [][]interface{}{
+			{1, true},
+		}
+		rowsOfMoRolePrivs[1][1] = [][]interface{}{}
+
+		//grant role 1 to role 0
+		roleIdsInMoRoleGrant := []int{0}
+		rowsOfMoRoleGrant := make([][][]interface{}, len(roleIdsInMoRoleGrant))
+		rowsOfMoRoleGrant[0] = [][]interface{}{
+			{1, true},
+		}
+
+		sql2result := makeSql2ExecResult2(0, rowsOfMoUserGrant,
+			roleIdsInMoRolePrivs, priv.entries, rowsOfMoRolePrivs,
+			roleIdsInMoRoleGrant, rowsOfMoRoleGrant)
+
+		var currentSql string
+
+		bh := mock_frontend.NewMockBackgroundExec(ctrl)
+		bh.EXPECT().Close().Return().AnyTimes()
+		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).DoAndReturn(func(_ context.Context, sql string) error {
+			currentSql = sql
+			return nil
+		}).AnyTimes()
+		bh.EXPECT().GetExecResultSet().DoAndReturn(func() []interface{} {
+			return []interface{}{sql2result[currentSql]}
+		}).AnyTimes()
+
+		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		defer bhStub.Reset()
+
+		ok, err := authenticatePrivilegeOfStatementWithObjectTypeAccountAndDatabase(ses.GetRequestContext(), ses, nil)
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(ok, convey.ShouldBeTrue)
+	})
+	convey.Convey("show database fail", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		stmt := &tree.ShowDatabases{}
+		priv := determinePrivilegeSetOfStatement(stmt)
+		ses := newSes(priv)
+
+		rowsOfMoUserGrant := [][]interface{}{
+			{0, false},
+		}
+		roleIdsInMoRolePrivs := []int{0, 1, 2}
+		rowsOfMoRolePrivs := make([][][][]interface{}, len(roleIdsInMoRolePrivs))
+		for i := 0; i < len(roleIdsInMoRolePrivs); i++ {
+			rowsOfMoRolePrivs[i] = make([][][]interface{}, len(priv.entries))
+		}
+
+		//role 0 without privilege show databases, all, ownership
+		rowsOfMoRolePrivs[0][0] = [][]interface{}{}
+		rowsOfMoRolePrivs[0][1] = [][]interface{}{}
+
+		//role 1 without privilege show databases, all, ownership
+		rowsOfMoRolePrivs[1][0] = [][]interface{}{}
+		rowsOfMoRolePrivs[1][1] = [][]interface{}{}
+
+		//role 2 without privilege show databases, all, ownership
+		rowsOfMoRolePrivs[2][0] = [][]interface{}{}
+		rowsOfMoRolePrivs[2][1] = [][]interface{}{}
+
+		roleIdsInMoRoleGrant := []int{0, 1, 2}
+		rowsOfMoRoleGrant := make([][][]interface{}, len(roleIdsInMoRoleGrant))
+		//grant role 1 to role 0
+		rowsOfMoRoleGrant[0] = [][]interface{}{
+			{1, true},
+		}
+		//grant role 2 to role 1
+		rowsOfMoRoleGrant[1] = [][]interface{}{
+			{2, true},
+		}
+		rowsOfMoRoleGrant[2] = [][]interface{}{}
+
+		sql2result := makeSql2ExecResult2(0, rowsOfMoUserGrant,
+			roleIdsInMoRolePrivs, priv.entries, rowsOfMoRolePrivs,
+			roleIdsInMoRoleGrant, rowsOfMoRoleGrant)
+
+		var currentSql string
+
+		bh := mock_frontend.NewMockBackgroundExec(ctrl)
+		bh.EXPECT().Close().Return().AnyTimes()
+		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).DoAndReturn(func(_ context.Context, sql string) error {
+			currentSql = sql
+			return nil
+		}).AnyTimes()
+		bh.EXPECT().GetExecResultSet().DoAndReturn(func() []interface{} {
+			return []interface{}{sql2result[currentSql]}
+		}).AnyTimes()
+
+		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		defer bhStub.Reset()
+
+		ok, err := authenticatePrivilegeOfStatementWithObjectTypeAccountAndDatabase(ses.GetRequestContext(), ses, nil)
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(ok, convey.ShouldBeFalse)
+	})
+}
+
+func Test_determineUseDatabase(t *testing.T) {
+	convey.Convey("use database succ", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		stmt := &tree.Use{
+			Name: "db",
+		}
+		priv := determinePrivilegeSetOfStatement(stmt)
+		ses := newSes(priv)
+
+		rowsOfMoUserGrant := [][]interface{}{
+			{0, false},
+		}
+		roleIdsInMoRolePrivs := []int{0}
+		rowsOfMoRolePrivs := make([][][][]interface{}, len(roleIdsInMoRolePrivs))
+		for i := 0; i < len(roleIdsInMoRolePrivs); i++ {
+			rowsOfMoRolePrivs[i] = make([][][]interface{}, len(priv.entries))
+		}
+
+		//with privilege show databases
+		rowsOfMoRolePrivs[0][0] = [][]interface{}{
+			{0, true},
+		}
+		//without privilege all
+		rowsOfMoRolePrivs[0][1] = [][]interface{}{}
+
+		sql2result := makeSql2ExecResult2(0, rowsOfMoUserGrant,
+			roleIdsInMoRolePrivs, priv.entries, rowsOfMoRolePrivs,
+			nil, nil)
+
+		var currentSql string
+
+		bh := mock_frontend.NewMockBackgroundExec(ctrl)
+		bh.EXPECT().Close().Return().AnyTimes()
+		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).DoAndReturn(func(_ context.Context, sql string) error {
+			currentSql = sql
+			return nil
+		}).AnyTimes()
+		bh.EXPECT().GetExecResultSet().DoAndReturn(func() []interface{} {
+			return []interface{}{sql2result[currentSql]}
+		}).AnyTimes()
+
+		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		defer bhStub.Reset()
+
+		ok, err := authenticatePrivilegeOfStatementWithObjectTypeAccountAndDatabase(ses.GetRequestContext(), ses, nil)
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(ok, convey.ShouldBeTrue)
+	})
+	convey.Convey("use database succ 2", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		stmt := &tree.Use{
+			Name: "db",
+		}
+		priv := determinePrivilegeSetOfStatement(stmt)
+		ses := newSes(priv)
+
+		rowsOfMoUserGrant := [][]interface{}{
+			{0, false},
+		}
+		roleIdsInMoRolePrivs := []int{0, 1}
+		rowsOfMoRolePrivs := make([][][][]interface{}, len(roleIdsInMoRolePrivs))
+		for i := 0; i < len(roleIdsInMoRolePrivs); i++ {
+			rowsOfMoRolePrivs[i] = make([][][]interface{}, len(priv.entries))
+		}
+
+		//role 0 without privilege show databases, all, account/user ownership
+		rowsOfMoRolePrivs[0][0] = [][]interface{}{}
+		rowsOfMoRolePrivs[0][1] = [][]interface{}{}
+
+		//role 1 with privilege show databases
+		rowsOfMoRolePrivs[1][0] = [][]interface{}{
+			{1, true},
+		}
+		rowsOfMoRolePrivs[1][1] = [][]interface{}{}
+
+		//grant role 1 to role 0
+		roleIdsInMoRoleGrant := []int{0}
+		rowsOfMoRoleGrant := make([][][]interface{}, len(roleIdsInMoRoleGrant))
+		rowsOfMoRoleGrant[0] = [][]interface{}{
+			{1, true},
+		}
+
+		sql2result := makeSql2ExecResult2(0, rowsOfMoUserGrant,
+			roleIdsInMoRolePrivs, priv.entries, rowsOfMoRolePrivs,
+			roleIdsInMoRoleGrant, rowsOfMoRoleGrant)
+
+		var currentSql string
+
+		bh := mock_frontend.NewMockBackgroundExec(ctrl)
+		bh.EXPECT().Close().Return().AnyTimes()
+		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).DoAndReturn(func(_ context.Context, sql string) error {
+			currentSql = sql
+			return nil
+		}).AnyTimes()
+		bh.EXPECT().GetExecResultSet().DoAndReturn(func() []interface{} {
+			return []interface{}{sql2result[currentSql]}
+		}).AnyTimes()
+
+		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		defer bhStub.Reset()
+
+		ok, err := authenticatePrivilegeOfStatementWithObjectTypeAccountAndDatabase(ses.GetRequestContext(), ses, nil)
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(ok, convey.ShouldBeTrue)
+	})
+	convey.Convey("use database fail", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		stmt := &tree.Use{
+			Name: "db",
+		}
+		priv := determinePrivilegeSetOfStatement(stmt)
+		ses := newSes(priv)
+
+		rowsOfMoUserGrant := [][]interface{}{
+			{0, false},
+		}
+		roleIdsInMoRolePrivs := []int{0, 1, 2}
+		rowsOfMoRolePrivs := make([][][][]interface{}, len(roleIdsInMoRolePrivs))
+		for i := 0; i < len(roleIdsInMoRolePrivs); i++ {
+			rowsOfMoRolePrivs[i] = make([][][]interface{}, len(priv.entries))
+		}
+
+		//role 0 without privilege show databases, all, ownership
+		rowsOfMoRolePrivs[0][0] = [][]interface{}{}
+		rowsOfMoRolePrivs[0][1] = [][]interface{}{}
+
+		//role 1 without privilege show databases, all, ownership
+		rowsOfMoRolePrivs[1][0] = [][]interface{}{}
+		rowsOfMoRolePrivs[1][1] = [][]interface{}{}
+
+		//role 2 without privilege show databases, all, ownership
+		rowsOfMoRolePrivs[2][0] = [][]interface{}{}
+		rowsOfMoRolePrivs[2][1] = [][]interface{}{}
+
+		roleIdsInMoRoleGrant := []int{0, 1, 2}
+		rowsOfMoRoleGrant := make([][][]interface{}, len(roleIdsInMoRoleGrant))
+		//grant role 1 to role 0
+		rowsOfMoRoleGrant[0] = [][]interface{}{
+			{1, true},
+		}
+		//grant role 2 to role 1
+		rowsOfMoRoleGrant[1] = [][]interface{}{
+			{2, true},
+		}
+		rowsOfMoRoleGrant[2] = [][]interface{}{}
+
+		sql2result := makeSql2ExecResult2(0, rowsOfMoUserGrant,
+			roleIdsInMoRolePrivs, priv.entries, rowsOfMoRolePrivs,
+			roleIdsInMoRoleGrant, rowsOfMoRoleGrant)
+
+		var currentSql string
+
+		bh := mock_frontend.NewMockBackgroundExec(ctrl)
+		bh.EXPECT().Close().Return().AnyTimes()
+		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).DoAndReturn(func(_ context.Context, sql string) error {
+			currentSql = sql
+			return nil
+		}).AnyTimes()
+		bh.EXPECT().GetExecResultSet().DoAndReturn(func() []interface{} {
+			return []interface{}{sql2result[currentSql]}
+		}).AnyTimes()
+
+		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		defer bhStub.Reset()
+
+		ok, err := authenticatePrivilegeOfStatementWithObjectTypeAccountAndDatabase(ses.GetRequestContext(), ses, nil)
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(ok, convey.ShouldBeFalse)
+	})
+}
+
+func Test_determineUseRole(t *testing.T) {
+	//TODO:add ut
+}
+
+func Test_determineCreateTable(t *testing.T) {
+	convey.Convey("create table succ", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		stmt := &tree.CreateTable{}
+		priv := determinePrivilegeSetOfStatement(stmt)
+		ses := newSes(priv)
+
+		rowsOfMoUserGrant := [][]interface{}{
+			{0, false},
+		}
+		roleIdsInMoRolePrivs := []int{0}
+		rowsOfMoRolePrivs := make([][][][]interface{}, len(roleIdsInMoRolePrivs))
+		for i := 0; i < len(roleIdsInMoRolePrivs); i++ {
+			rowsOfMoRolePrivs[i] = make([][][]interface{}, len(priv.entries))
+		}
+
+		//without privilege create table, all
+		rowsOfMoRolePrivs[0][0] = [][]interface{}{}
+		rowsOfMoRolePrivs[0][1] = [][]interface{}{
+			{0, true},
+		}
+
+		sql2result := makeSql2ExecResult2(0, rowsOfMoUserGrant,
+			roleIdsInMoRolePrivs, priv.entries, rowsOfMoRolePrivs,
+			nil, nil)
+
+		var currentSql string
+
+		bh := mock_frontend.NewMockBackgroundExec(ctrl)
+		bh.EXPECT().Close().Return().AnyTimes()
+		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).DoAndReturn(func(_ context.Context, sql string) error {
+			currentSql = sql
+			return nil
+		}).AnyTimes()
+		bh.EXPECT().GetExecResultSet().DoAndReturn(func() []interface{} {
+			return []interface{}{sql2result[currentSql]}
+		}).AnyTimes()
+
+		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		defer bhStub.Reset()
+
+		ok, err := authenticatePrivilegeOfStatementWithObjectTypeAccountAndDatabase(ses.GetRequestContext(), ses, nil)
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(ok, convey.ShouldBeTrue)
+	})
+	convey.Convey("create table succ 2", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		stmt := &tree.CreateTable{}
+		priv := determinePrivilegeSetOfStatement(stmt)
+		ses := newSes(priv)
+
+		rowsOfMoUserGrant := [][]interface{}{
+			{0, false},
+		}
+		roleIdsInMoRolePrivs := []int{0, 1}
+		rowsOfMoRolePrivs := make([][][][]interface{}, len(roleIdsInMoRolePrivs))
+		for i := 0; i < len(roleIdsInMoRolePrivs); i++ {
+			rowsOfMoRolePrivs[i] = make([][][]interface{}, len(priv.entries))
+		}
+
+		//role 0 without privilege create table, all, ownership
+		rowsOfMoRolePrivs[0][0] = [][]interface{}{}
+		rowsOfMoRolePrivs[0][1] = [][]interface{}{}
+
+		//role 1 with privilege create table
+		rowsOfMoRolePrivs[1][0] = [][]interface{}{
+			{1, true},
+		}
+		rowsOfMoRolePrivs[1][1] = [][]interface{}{}
+
+		//grant role 1 to role 0
+		roleIdsInMoRoleGrant := []int{0}
+		rowsOfMoRoleGrant := make([][][]interface{}, len(roleIdsInMoRoleGrant))
+		rowsOfMoRoleGrant[0] = [][]interface{}{
+			{1, true},
+		}
+
+		sql2result := makeSql2ExecResult2(0, rowsOfMoUserGrant,
+			roleIdsInMoRolePrivs, priv.entries, rowsOfMoRolePrivs,
+			roleIdsInMoRoleGrant, rowsOfMoRoleGrant)
+
+		var currentSql string
+
+		bh := mock_frontend.NewMockBackgroundExec(ctrl)
+		bh.EXPECT().Close().Return().AnyTimes()
+		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).DoAndReturn(func(_ context.Context, sql string) error {
+			currentSql = sql
+			return nil
+		}).AnyTimes()
+		bh.EXPECT().GetExecResultSet().DoAndReturn(func() []interface{} {
+			return []interface{}{sql2result[currentSql]}
+		}).AnyTimes()
+
+		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		defer bhStub.Reset()
+
+		ok, err := authenticatePrivilegeOfStatementWithObjectTypeAccountAndDatabase(ses.GetRequestContext(), ses, nil)
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(ok, convey.ShouldBeTrue)
+	})
+	convey.Convey("create table fail", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		stmt := &tree.CreateTable{}
+		priv := determinePrivilegeSetOfStatement(stmt)
+		ses := newSes(priv)
+
+		rowsOfMoUserGrant := [][]interface{}{
+			{0, false},
+		}
+		roleIdsInMoRolePrivs := []int{0, 1, 2}
+		rowsOfMoRolePrivs := make([][][][]interface{}, len(roleIdsInMoRolePrivs))
+		for i := 0; i < len(roleIdsInMoRolePrivs); i++ {
+			rowsOfMoRolePrivs[i] = make([][][]interface{}, len(priv.entries))
+		}
+
+		//role 0 without privilege create table, all, ownership
+		rowsOfMoRolePrivs[0][0] = [][]interface{}{}
+		rowsOfMoRolePrivs[0][1] = [][]interface{}{}
+
+		//role 1 without privilege create table, all, ownership
+		rowsOfMoRolePrivs[1][0] = [][]interface{}{}
+		rowsOfMoRolePrivs[1][1] = [][]interface{}{}
+
+		//role 2 without privilege create table, all, ownership
+		rowsOfMoRolePrivs[2][0] = [][]interface{}{}
+		rowsOfMoRolePrivs[2][1] = [][]interface{}{}
+
+		roleIdsInMoRoleGrant := []int{0, 1, 2}
+		rowsOfMoRoleGrant := make([][][]interface{}, len(roleIdsInMoRoleGrant))
+		//grant role 1 to role 0
+		rowsOfMoRoleGrant[0] = [][]interface{}{
+			{1, true},
+		}
+		//grant role 2 to role 1
+		rowsOfMoRoleGrant[1] = [][]interface{}{
+			{2, true},
+		}
+		rowsOfMoRoleGrant[2] = [][]interface{}{}
+
+		sql2result := makeSql2ExecResult2(0, rowsOfMoUserGrant,
+			roleIdsInMoRolePrivs, priv.entries, rowsOfMoRolePrivs,
+			roleIdsInMoRoleGrant, rowsOfMoRoleGrant)
+
+		var currentSql string
+
+		bh := mock_frontend.NewMockBackgroundExec(ctrl)
+		bh.EXPECT().Close().Return().AnyTimes()
+		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).DoAndReturn(func(_ context.Context, sql string) error {
+			currentSql = sql
+			return nil
+		}).AnyTimes()
+		bh.EXPECT().GetExecResultSet().DoAndReturn(func() []interface{} {
+			return []interface{}{sql2result[currentSql]}
+		}).AnyTimes()
+
+		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		defer bhStub.Reset()
+
+		ok, err := authenticatePrivilegeOfStatementWithObjectTypeAccountAndDatabase(ses.GetRequestContext(), ses, nil)
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(ok, convey.ShouldBeFalse)
+	})
+}
+
+func Test_determineDropTable(t *testing.T) {
+	convey.Convey("drop/alter table succ", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		stmt := &tree.DropTable{}
+		priv := determinePrivilegeSetOfStatement(stmt)
+		ses := newSes(priv)
+
+		rowsOfMoUserGrant := [][]interface{}{
+			{0, false},
+		}
+		roleIdsInMoRolePrivs := []int{0}
+		rowsOfMoRolePrivs := make([][][][]interface{}, len(roleIdsInMoRolePrivs))
+		for i := 0; i < len(roleIdsInMoRolePrivs); i++ {
+			rowsOfMoRolePrivs[i] = make([][][]interface{}, len(priv.entries))
+		}
+
+		//with privilege drop table
+		rowsOfMoRolePrivs[0][0] = [][]interface{}{
+			{0, true},
+		}
+		//without privilege all
+		rowsOfMoRolePrivs[0][1] = [][]interface{}{}
+
+		sql2result := makeSql2ExecResult2(0, rowsOfMoUserGrant,
+			roleIdsInMoRolePrivs, priv.entries, rowsOfMoRolePrivs,
+			nil, nil)
+
+		var currentSql string
+
+		bh := mock_frontend.NewMockBackgroundExec(ctrl)
+		bh.EXPECT().Close().Return().AnyTimes()
+		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).DoAndReturn(func(_ context.Context, sql string) error {
+			currentSql = sql
+			return nil
+		}).AnyTimes()
+		bh.EXPECT().GetExecResultSet().DoAndReturn(func() []interface{} {
+			return []interface{}{sql2result[currentSql]}
+		}).AnyTimes()
+
+		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		defer bhStub.Reset()
+
+		ok, err := authenticatePrivilegeOfStatementWithObjectTypeAccountAndDatabase(ses.GetRequestContext(), ses, nil)
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(ok, convey.ShouldBeTrue)
+	})
+	convey.Convey("drop/alter table succ 2", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		stmt := &tree.DropTable{}
+		priv := determinePrivilegeSetOfStatement(stmt)
+		ses := newSes(priv)
+
+		rowsOfMoUserGrant := [][]interface{}{
+			{0, false},
+		}
+		roleIdsInMoRolePrivs := []int{0, 1}
+		rowsOfMoRolePrivs := make([][][][]interface{}, len(roleIdsInMoRolePrivs))
+		for i := 0; i < len(roleIdsInMoRolePrivs); i++ {
+			rowsOfMoRolePrivs[i] = make([][][]interface{}, len(priv.entries))
+		}
+
+		//role 0 without privilege drop table, all, account/user ownership
+		rowsOfMoRolePrivs[0][0] = [][]interface{}{}
+		rowsOfMoRolePrivs[0][1] = [][]interface{}{}
+
+		//role 1 with privilege drop table
+		rowsOfMoRolePrivs[1][0] = [][]interface{}{
+			{1, true},
+		}
+		rowsOfMoRolePrivs[1][1] = [][]interface{}{}
+
+		//grant role 1 to role 0
+		roleIdsInMoRoleGrant := []int{0}
+		rowsOfMoRoleGrant := make([][][]interface{}, len(roleIdsInMoRoleGrant))
+		rowsOfMoRoleGrant[0] = [][]interface{}{
+			{1, true},
+		}
+
+		sql2result := makeSql2ExecResult2(0, rowsOfMoUserGrant,
+			roleIdsInMoRolePrivs, priv.entries, rowsOfMoRolePrivs,
+			roleIdsInMoRoleGrant, rowsOfMoRoleGrant)
+
+		var currentSql string
+
+		bh := mock_frontend.NewMockBackgroundExec(ctrl)
+		bh.EXPECT().Close().Return().AnyTimes()
+		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).DoAndReturn(func(_ context.Context, sql string) error {
+			currentSql = sql
+			return nil
+		}).AnyTimes()
+		bh.EXPECT().GetExecResultSet().DoAndReturn(func() []interface{} {
+			return []interface{}{sql2result[currentSql]}
+		}).AnyTimes()
+
+		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		defer bhStub.Reset()
+
+		ok, err := authenticatePrivilegeOfStatementWithObjectTypeAccountAndDatabase(ses.GetRequestContext(), ses, nil)
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(ok, convey.ShouldBeTrue)
+	})
+	convey.Convey("drop/alter table fail", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		stmt := &tree.DropTable{}
+		priv := determinePrivilegeSetOfStatement(stmt)
+		ses := newSes(priv)
+
+		rowsOfMoUserGrant := [][]interface{}{
+			{0, false},
+		}
+		roleIdsInMoRolePrivs := []int{0, 1, 2}
+		rowsOfMoRolePrivs := make([][][][]interface{}, len(roleIdsInMoRolePrivs))
+		for i := 0; i < len(roleIdsInMoRolePrivs); i++ {
+			rowsOfMoRolePrivs[i] = make([][][]interface{}, len(priv.entries))
+		}
+
+		//role 0 without privilege drop table, all, ownership
+		rowsOfMoRolePrivs[0][0] = [][]interface{}{}
+		rowsOfMoRolePrivs[0][1] = [][]interface{}{}
+
+		//role 1 without privilege drop table, all, ownership
+		rowsOfMoRolePrivs[1][0] = [][]interface{}{}
+		rowsOfMoRolePrivs[1][1] = [][]interface{}{}
+
+		//role 2 without privilege drop table, all, ownership
+		rowsOfMoRolePrivs[2][0] = [][]interface{}{}
+		rowsOfMoRolePrivs[2][1] = [][]interface{}{}
+
+		roleIdsInMoRoleGrant := []int{0, 1, 2}
+		rowsOfMoRoleGrant := make([][][]interface{}, len(roleIdsInMoRoleGrant))
+		//grant role 1 to role 0
+		rowsOfMoRoleGrant[0] = [][]interface{}{
+			{1, true},
+		}
+		//grant role 2 to role 1
+		rowsOfMoRoleGrant[1] = [][]interface{}{
+			{2, true},
+		}
+		rowsOfMoRoleGrant[2] = [][]interface{}{}
+
+		sql2result := makeSql2ExecResult2(0, rowsOfMoUserGrant,
+			roleIdsInMoRolePrivs, priv.entries, rowsOfMoRolePrivs,
+			roleIdsInMoRoleGrant, rowsOfMoRoleGrant)
+
+		var currentSql string
+
+		bh := mock_frontend.NewMockBackgroundExec(ctrl)
+		bh.EXPECT().Close().Return().AnyTimes()
+		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).DoAndReturn(func(_ context.Context, sql string) error {
+			currentSql = sql
+			return nil
+		}).AnyTimes()
+		bh.EXPECT().GetExecResultSet().DoAndReturn(func() []interface{} {
+			return []interface{}{sql2result[currentSql]}
+		}).AnyTimes()
+
+		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		defer bhStub.Reset()
+
+		ok, err := authenticatePrivilegeOfStatementWithObjectTypeAccountAndDatabase(ses.GetRequestContext(), ses, nil)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(ok, convey.ShouldBeFalse)
 	})
@@ -2094,6 +3706,31 @@ func makeRowsOfMoRoleGrant(sql2result map[string]ExecResult, roleIds []int, rows
 		sql := getSqlForInheritedRoleIdOfRoleId(int64(roleId))
 		sql2result[sql] = newMrsForInheritedRoleIdOfRoleId(rowsOfMoRoleGrant)
 	}
+}
+
+func newMrsForWithGrantOptionPrivilege(rows [][]interface{}) *MysqlResultSet {
+	mrs := &MysqlResultSet{}
+
+	col1 := &MysqlColumn{}
+	col1.SetName("privilege_id")
+	col1.SetColumnType(defines.MYSQL_TYPE_LONGLONG)
+
+	col2 := &MysqlColumn{}
+	col2.SetName("with_grant_option")
+	col2.SetColumnType(defines.MYSQL_TYPE_BOOL)
+
+	mrs.AddColumn(col1)
+	mrs.AddColumn(col2)
+
+	for _, row := range rows {
+		mrs.AddRow(row)
+	}
+
+	return mrs
+}
+
+func makeRowsOfWithGrantOptionPrivilege(sql2result map[string]ExecResult, sql string, rows [][]interface{}) {
+	sql2result[sql] = newMrsForWithGrantOptionPrivilege(rows)
 }
 
 func makeSql2ExecResult(userId int,

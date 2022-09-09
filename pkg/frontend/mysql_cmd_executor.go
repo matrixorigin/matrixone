@@ -1743,7 +1743,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 
 		if ses.GetTenantInfo() != nil {
 			ses.priv = determinePrivilegeSetOfStatement(stmt)
-			havePrivilege, err := authenticatePrivilegeOfStatementWithObjectTypeAccount(requestCtx, ses, stmt)
+			havePrivilege, err := authenticatePrivilegeOfStatementWithObjectTypeAccountAndDatabase(requestCtx, ses, stmt)
 			if err != nil {
 				return err
 			}
