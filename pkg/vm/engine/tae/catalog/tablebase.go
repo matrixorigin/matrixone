@@ -190,14 +190,14 @@ func (be *TableBaseEntry) TsCanGet(ts types.TS) (can, dropped bool) {
 	return
 }
 
-func (be *TableBaseEntry) TxnCanRead(txn txnif.AsyncTxn, mu *sync.RWMutex) (canRead bool, err error) {
-	needWait, txnToWait := be.NeedWaitCommitting(txn.GetStartTS())
+func (be *TableBaseEntry) IsVisible(ts types.TS, mu *sync.RWMutex) (ok bool, err error) {
+	needWait, txnToWait := be.NeedWaitCommitting(ts)
 	if needWait {
 		mu.RUnlock()
 		txnToWait.GetTxnState(true)
 		mu.RLock()
 	}
-	canRead = be.ExistedForTs(txn.GetStartTS())
+	ok = be.ExistedForTs(ts)
 	return
 }
 
