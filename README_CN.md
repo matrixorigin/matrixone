@@ -155,11 +155,11 @@ MatrixOne目前支持Linux及MacOS系统，您可以通过源码安装或者dock
 
 根据您的需要，选择您所获取的代码永远保持最新，还是获得稳定版本的代码。
 
-- *选项 1*：获取 MatrixOne(预览版本) 代码，搭建MatrixOne
+- *选项 1*：获取 MatrixOne(开发版本) 代码，搭建MatrixOne
 
 **main** 分支是默认分支，主分支上的代码总是最新的，但不够稳定。
 
-1. 获取 MatrixOne(预览版本) 代码方法如下：
+1. 获取 MatrixOne(开发版本，即 Pre0.6 版本) 代码方法如下：
 
     ```shell
     git clone https://github.com/matrixorigin/matrixone.git
@@ -175,7 +175,7 @@ MatrixOne目前支持Linux及MacOS系统，您可以通过源码安装或者dock
 3. 启动 MatrixOne 服务：
 
     !!! note
-         注意，MatrixOne(预览版本) 的启动配置文件与 MatrixOne(稳定版本) 的启动配置文件不同，MatrixOne(预览版本) 的启动配置文件代码如下：
+         注意，MatrixOne(开发版本) 的启动配置文件与 MatrixOne(稳定版本) 的启动配置文件不同，MatrixOne(开发版本) 的启动配置文件代码如下：
 
     ```
     ./mo-service -cfg ./etc/cn-standalone-test.toml
@@ -201,7 +201,7 @@ MatrixOne目前支持Linux及MacOS系统，您可以通过源码安装或者dock
 3. 启动 MatrixOne 服务：
 
     !!! note
-         注意，MatrixOne(稳定版本) 的启动配置文件与 MatrixOne(预览版本) 的启动配置文件不同，MatrixOne(稳定版本) 的启动配置文件代码如下：
+         注意，MatrixOne(稳定版本) 的启动配置文件与 MatrixOne(开发版本) 的启动配置文件不同，MatrixOne(稳定版本) 的启动配置文件代码如下：
 
     ```
     ./mo-server system_vars_config.toml
@@ -217,18 +217,20 @@ $ docker --version
 ```
 **步骤 2.** 创建并运行容器
 
-使用以下命令将从 Docker Hub 中拉取 MatrixOne 镜像，你可以选择最新的镜像，或稳定版本的镜像。
+使用以下命令将从 Docker Hub 中拉取 MatrixOne 镜像，你可以选择稳定版本镜像，或开发版本镜像。
 
-- 最新版本的镜像：
+- 稳定版本的镜像（0.5.1）
 
+```bash
+docker run -d -p 6001:6001 --name matrixone matrixorigin/matrixone:0.5.1
 ```
-$ docker run -d -p 6001:6001 --name matrixone matrixorigin/matrixone:latest
-```
 
-- 0.5.1 稳定版本的镜像
+- 开发版本的镜像（Pre0.6)
 
-```
-$ docker run -d -p 6001:6001 --name matrixone matrixorigin/matrixone:0.5.1
+获取最新开发版本的镜像，参见[Docker Hub](https://hub.docker.com/r/matrixorigin/matrixone/tags)，找到最新Tag，拉取镜像。拉取镜像代码示例如下：
+
+```bash
+docker run -d -p 6001:6001 --name matrixone matrixorigin/matrixone:nightly-commitnumber
 ```
 
 运行 Docker Hub 时需要输入用户名和密码，获取用户名和密码可以参考**连接 MatrixOne 服务**章节所述。
