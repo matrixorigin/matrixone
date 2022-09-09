@@ -18,7 +18,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"math"
 	"os"
 	"testing"
 
@@ -26,7 +25,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
-	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -335,11 +333,7 @@ func Test_GetBatchData(t *testing.T) {
 			simdCsvLineArray: [][]string{line},
 		}
 
-		mmu := &guest.Mmu{
-			Limit: math.MaxInt64,
-			Mmu:   &host.Mmu{},
-		}
-		proc := process.New(context.TODO(), mheap.New(mmu), nil, nil)
+		proc := testutil.NewProc()
 		_, err := GetBatchData(param, plh, proc)
 		convey.So(err, convey.ShouldBeNil)
 

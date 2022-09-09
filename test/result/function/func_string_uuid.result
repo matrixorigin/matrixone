@@ -5,5 +5,5 @@ length(uuid())
 36
 36
 SELECT uuid(1) FROM t1;
-Function 'uuid' with parameters [BIGINT] will be implemented in future version.
+Function 'uuid' with parameters [BIGINT] is not supported.
 drop table t1;
