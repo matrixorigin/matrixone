@@ -31,7 +31,6 @@ type MVCCChain struct {
 	MVCC      *common.GenericSortedDList[MVCCNode]
 	comparefn func(MVCCNode, MVCCNode) int
 	newnodefn func() MVCCNode
-	length    uint64
 }
 
 func NewMVCCChain(comparefn func(MVCCNode, MVCCNode) int, newnodefn func() MVCCNode) *MVCCChain {
@@ -201,7 +200,7 @@ func (be *MVCCChain) WriteOneNodeTo(w io.Writer) (n int64, err error) {
 
 func (be *MVCCChain) WriteAllTo(w io.Writer) (n int64, err error) {
 	n += 8
-	if err = binary.Write(w, binary.BigEndian, be.length); err != nil {
+	if err = binary.Write(w, binary.BigEndian, uint64(be.MVCC.Depth())); err != nil {
 		return
 	}
 	n += 8
@@ -230,11 +229,12 @@ func (be *MVCCChain) ReadOneNodeFrom(r io.Reader) (n int64, err error) {
 }
 
 func (be *MVCCChain) ReadAllFrom(r io.Reader) (n int64, err error) {
-	if err = binary.Read(r, binary.BigEndian, &be.length); err != nil {
+	var depth uint64
+	if err = binary.Read(r, binary.BigEndian, &depth); err != nil {
 		return
 	}
 	n += 8
-	for i := 0; i < int(be.length); i++ {
+	for i := 0; i < int(depth); i++ {
 		var n2 int64
 		un := be.newnodefn()
 		n2, err = un.ReadFrom(r)
@@ -340,7 +340,6 @@ func (be *MVCCChain) CloneCommittedInRange(start, end types.TS) (ret *MVCCChain)
 				ret = NewMVCCChain(be.comparefn, be.newnodefn)
 			}
 			ret.InsertNode(un.CloneAll())
-			ret.length++
 		} else if !commitBeforeMinTs {
 			return false
 		}
