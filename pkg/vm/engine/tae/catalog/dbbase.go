@@ -170,8 +170,8 @@ func (be *DBBaseEntry) HasDropped() bool {
 }
 
 func (be *DBBaseEntry) ensureVisibleAndNotDropped(ts types.TS) bool {
-	can, dropped := be.GetVisibiltyLocked(ts)
-	if !can {
+	visible, dropped := be.GetVisibiltyLocked(ts)
+	if !visible {
 		return false
 	}
 	return !dropped

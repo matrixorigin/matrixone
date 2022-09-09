@@ -330,7 +330,7 @@ func (e *DBEntry) AddEntryLocked(table *TableEntry, txn txnif.AsyncTxn) (err err
 		e.entries[table.GetID()] = n
 
 		nn := newNodeList(e.GetItemNodeByIDLocked,
-			tableTxnCanGetFn[*TableEntry],
+			tableVisibilityFn[*TableEntry],
 			&e.nodesMu,
 			fullName)
 		e.nameNodes[fullName] = nn
