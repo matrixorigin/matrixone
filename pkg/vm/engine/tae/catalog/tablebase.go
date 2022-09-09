@@ -178,7 +178,7 @@ func (be *TableBaseEntry) ensureVisibleAndNotDropped(ts types.TS) bool {
 }
 
 func (be *TableBaseEntry) GetVisibiltyLocked(ts types.TS) (visible, dropped bool) {
-	un := be.GetNodeToRead(ts)
+	un := be.GetVisibleNode(ts)
 	if un == nil {
 		return
 	}

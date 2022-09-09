@@ -122,32 +122,32 @@ func (be *MVCCChain) GetCommittedNode() (node MVCCNode) {
 	return
 }
 
-// GetNodeToRead gets UpdateNode according to the timestamp.
+// GetVisibleNode gets UpdateNode according to the timestamp.
 // It returns the UpdateNode in the same txn as the read txn
 // or returns the latest UpdateNode with commitTS less than the timestamp.
-func (be *MVCCChain) GetNodeToRead(startts types.TS) (node MVCCNode) {
+func (be *MVCCChain) GetVisibleNode(ts types.TS) (node MVCCNode) {
 	be.MVCC.Loop(func(n *common.GenericDLNode[MVCCNode]) (goNext bool) {
 		un := n.GetPayload()
-		var canRead bool
-		canRead, goNext = un.TxnCanRead(startts)
-		if canRead {
+		var visible bool
+		if visible = un.IsVisible(ts); visible {
 			node = un
 		}
+		goNext = !visible
 		return
 	}, false)
 	return
 }
 
-// GetExactUpdateNode gets the exact UpdateNode with the startTs.
+// GetExactUpdateNode gets the exact UpdateNode with the ts.
 // It's only used in replay
-func (be *MVCCChain) GetExactUpdateNode(startts types.TS) (node MVCCNode) {
+func (be *MVCCChain) GetExactUpdateNode(ts types.TS) (node MVCCNode) {
 	be.MVCC.Loop(func(n *common.GenericDLNode[MVCCNode]) bool {
 		un := n.GetPayload()
-		if un.IsSameTxn(startts) {
+		if un.IsSameTxn(ts) {
 			node = un
 			return false
 		}
-		// return un.Start < startts
+		// return un.Start < ts
 		return true
 	}, false)
 	return
@@ -166,12 +166,12 @@ func (be *MVCCChain) GetExactUpdateNodeByNode(o MVCCNode) (node MVCCNode) {
 	return
 }
 
-func (be *MVCCChain) NeedWaitCommitting(startTS types.TS) (bool, txnif.TxnReader) {
+func (be *MVCCChain) NeedWaitCommitting(ts types.TS) (bool, txnif.TxnReader) {
 	un := be.GetUpdateNodeLocked()
 	if un == nil {
 		return false, nil
 	}
-	return un.NeedWaitCommitting(startTS)
+	return un.NeedWaitCommitting(ts)
 }
 
 func (be *MVCCChain) IsCreating() bool {

@@ -178,7 +178,7 @@ func (be *MetaBaseEntry) ensureVisibleAndNotDropped(ts types.TS) bool {
 }
 
 func (be *MetaBaseEntry) GetVisibiltyLocked(ts types.TS) (visible, dropped bool) {
-	un := be.GetNodeToRead(ts)
+	un := be.GetVisibleNode(ts)
 	if un == nil {
 		return
 	}
