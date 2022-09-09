@@ -154,6 +154,14 @@ func initTypeCheckRelated() {
 			}
 		}
 
+		{
+			typ := types.T_uuid
+			for _, t1 := range strings {
+				convertRuleForBinaryTable = append(convertRuleForBinaryTable, [4]types.T{t1, typ, typ, typ})
+				convertRuleForBinaryTable = append(convertRuleForBinaryTable, [4]types.T{typ, t1, typ, typ})
+			}
+		}
+
 		convertRuleForBinaryTable = append(convertRuleForBinaryTable, [4]types.T{types.T_uint64, types.T_int64, types.T_int64, types.T_int64})
 		convertRuleForBinaryTable = append(convertRuleForBinaryTable, [4]types.T{types.T_int64, types.T_uint64, types.T_int64, types.T_int64})
 		convertRuleForBinaryTable = append(convertRuleForBinaryTable, [4]types.T{types.T_date, types.T_datetime, types.T_datetime, types.T_datetime})

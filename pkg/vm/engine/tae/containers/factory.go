@@ -42,6 +42,8 @@ func MakeVector(typ types.Type, nullable bool, opts ...*Options) (vec Vector) {
 		vec = NewVector[types.Decimal64](typ, nullable, opts...)
 	case types.T_decimal128:
 		vec = NewVector[types.Decimal128](typ, nullable, opts...)
+	case types.T_uuid:
+		vec = NewVector[types.Uuid](typ, nullable, opts...)
 	case types.T_float32:
 		vec = NewVector[float32](typ, nullable, opts...)
 	case types.T_float64:
