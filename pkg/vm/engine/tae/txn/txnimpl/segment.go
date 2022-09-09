@@ -53,7 +53,7 @@ func newSegmentIt(table *txnTable) handle.SegmentIt {
 	for it.linkIt.Valid() {
 		curr := it.linkIt.Get().GetPayload()
 		curr.RLock()
-		ok, err = curr.TxnCanRead(it.table.store.txn, curr.RWMutex)
+		ok, err = curr.TxnCanRead(it.table.store.txn.GetStartTS(), curr.RWMutex)
 		if err != nil {
 			curr.RUnlock()
 			it.err = err
@@ -99,7 +99,7 @@ func (it *segmentIt) Next() {
 		}
 		entry := node.GetPayload()
 		entry.RLock()
-		valid, err = entry.TxnCanRead(it.table.store.txn, entry.RWMutex)
+		valid, err = entry.TxnCanRead(it.table.store.txn.GetStartTS(), entry.RWMutex)
 		entry.RUnlock()
 		if err != nil {
 			it.err = err

@@ -69,7 +69,7 @@ func (it *txnDBIt) Next() {
 		curr := node.GetPayload()
 		curr.RLock()
 		if curr.GetTenantID() == it.txn.GetTenantID() || isSysSharedDB(curr.GetName()) {
-			valid, err = curr.TxnCanRead(it.txn, curr.RWMutex)
+			valid, err = curr.TxnCanRead(it.txn.GetStartTS(), curr.RWMutex)
 		}
 		curr.RUnlock()
 		if err != nil {

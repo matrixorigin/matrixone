@@ -47,7 +47,7 @@ type BaseEntry interface {
 	InsertNode(un txnbase.MVCCNode)
 
 	GetUpdateNodeLocked() txnbase.MVCCNode
-	TxnCanRead(txn txnif.AsyncTxn, mu *sync.RWMutex) (canRead bool, err error)
+	TxnCanRead(ts types.TS, mu *sync.RWMutex) (canRead bool, err error)
 
 	ExistUpdate(minTs, MaxTs types.TS) (exist bool)
 	IsCreating() bool
