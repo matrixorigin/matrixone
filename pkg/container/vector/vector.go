@@ -36,14 +36,15 @@ import (
  *  			count || vector
  */
 type Vector struct {
-	Or bool // true: origin
 	// XXX There was Ref and Link, from the impl, it is totally wrong stuff.
 	// Removed.
-	Data []byte // raw data
-	Typ  types.Type
-	Col  interface{}  // column data, encoded Data
-	Nsp  *nulls.Nulls // nulls list
+	Typ types.Type
+	Col interface{}  // column data, encoded Data
+	Nsp *nulls.Nulls // nulls list
 
+	original bool
+	// data of fixed length element, in case of varlen, the Varlena
+	data []byte
 	// area for holding large strings.
 	area []byte
 
@@ -70,8 +71,12 @@ func (v *Vector) SetScalarLength(length int) {
 	v.length = length
 }
 
+func (v *Vector) IsOriginal() bool {
+	return v.original
+}
+
 func DecodeFixedCol[T types.FixedSizeT](v *Vector, sz int) []T {
-	return types.DecodeFixedSlice[T](v.Data, sz)
+	return types.DecodeFixedSlice[T](v.data, sz)
 }
 
 // GetFixedVector decode data and return decoded []T.
@@ -141,26 +146,26 @@ func GetValueAtOrZero[T types.FixedSizeT](v *Vector, idx int64) T {
 
 // Get the pointer to idx-th fixed size entry.
 func GetPtrAt(v *Vector, idx int64) unsafe.Pointer {
-	return unsafe.Pointer(&v.Data[idx*int64(v.GetType().TypeSize())])
+	return unsafe.Pointer(&v.data[idx*int64(v.GetType().TypeSize())])
 }
 
-// Raw version, get from v.Data.   Adopt python convention and
+// Raw version, get from v.data.   Adopt python convention and
 // neg idx means counting from end, that is, -1 means last element.
 func (v *Vector) getRawValueAt(idx int64) []byte {
 	tlen := int64(v.GetType().TypeSize())
-	dlen := int64(len(v.Data))
+	dlen := int64(len(v.data))
 	if idx >= 0 {
 		if dlen < (idx+1)*tlen {
 			panic("vector invalid index access")
 		}
-		return v.Data[idx*tlen : idx*tlen+tlen]
+		return v.data[idx*tlen : idx*tlen+tlen]
 	} else {
 		start := dlen + tlen*idx
 		end := start + tlen
 		if start < 0 {
 			panic("vector invalid index access")
 		}
-		return v.Data[start:end]
+		return v.data[start:end]
 	}
 }
 
@@ -202,7 +207,7 @@ func (v *Vector) UnmarshalBinary(data []byte) error {
 // Size of data, I think this function is inherently broken.  This
 // Size is not meaningful other than used in (approximate) memory accounting.
 func (v *Vector) Size() int {
-	return len(v.Data) + len(v.area)
+	return len(v.data) + len(v.area)
 }
 
 func (v *Vector) GetType() types.Type {
@@ -225,7 +230,7 @@ func (v *Vector) GetString(i int64) string {
 }
 
 func (v *Vector) FillDefaultValue() {
-	if !nulls.Any(v.Nsp) || len(v.Data) == 0 {
+	if !nulls.Any(v.Nsp) || len(v.data) == 0 {
 		return
 	}
 	switch v.Typ.Oid {
@@ -424,7 +429,7 @@ func expandVector[T any](v *Vector, sz int, m *mheap.Mheap) *Vector {
 		}
 	}
 	v.Col = vs
-	v.Data = data[:len(vs)*sz]
+	v.data = data[:len(vs)*sz]
 	return v
 }
 
@@ -433,7 +438,7 @@ func NewWithData(typ types.Type, data []byte, col interface{}, nsp *nulls.Nulls)
 		Nsp:  nsp,
 		Typ:  typ,
 		Col:  col,
-		Data: data,
+		data: data,
 	}
 	if col == nil {
 		v.colFromData()
@@ -464,6 +469,12 @@ func NewWithFixed[T types.FixedSizeT](typ types.Type, vals []T, nsp *nulls.Nulls
 
 func New(typ types.Type) *Vector {
 	return NewWithData(typ, []byte{}, nil, &nulls.Nulls{})
+}
+
+func NewOriginal(typ types.Type) *Vector {
+	vec := NewWithData(typ, []byte{}, nil, &nulls.Nulls{})
+	vec.original = true
+	return vec
 }
 
 func NewWithNspSize(typ types.Type, n int64) *Vector {
@@ -560,12 +571,11 @@ func (v *Vector) initConst(typ types.Type) {
 func (v *Vector) IsScalar() bool {
 	return v.isConst
 }
-
-// Scalar and Const are synonym.
 func (v *Vector) IsConst() bool {
 	return v.isConst
 }
 
+// MakeScalar converts a vector to a scalar vec of length.
 func (v *Vector) MakeScalar(length int) {
 	if v.isConst {
 		v.length = length
@@ -592,15 +602,27 @@ func (v *Vector) ConstVectorIsNull() bool {
 }
 
 func (v *Vector) Free(m *mheap.Mheap) {
-	if v.Or {
+	if v.original {
 		// XXX: Should we panic, or this is really an Noop?
 		return
 	}
-	mheap.Free(m, v.Data)
-	v.Data = []byte{}
+	mheap.Free(m, v.data)
+	v.data = []byte{}
 	v.colFromData()
 	mheap.Free(m, v.area)
 	v.area = nil
+}
+
+func (v *Vector) FreeOriginal(m *mheap.Mheap) {
+	if v.original {
+		mheap.Free(m, v.data)
+		v.data = []byte{}
+		v.colFromData()
+		mheap.Free(m, v.area)
+		v.area = nil
+		return
+	}
+	panic("force original tries to free non-orignal vec")
 }
 
 func appendOne[T types.FixedSizeT](v *Vector, w T, isNull bool, m *mheap.Mheap) error {
@@ -732,7 +754,7 @@ func PreAlloc(v *Vector, rows, cap int, m *mheap.Mheap) {
 	if err != nil {
 		panic(err)
 	}
-	v.Data = data
+	v.data = data
 	v.setupColFromData(0, rows)
 }
 
@@ -760,7 +782,7 @@ func SetLength(v *Vector, n int) {
 }
 
 func SetVectorLength(v *Vector, n int) {
-	end := len(v.Data) / v.GetType().TypeSize()
+	end := len(v.data) / v.GetType().TypeSize()
 	if n > end {
 		panic("extend instead of shink vector")
 	}
@@ -780,11 +802,11 @@ func Dup(v *Vector, m *mheap.Mheap) (*Vector, error) {
 	// Copy v.data, note that this should work for Varlena type
 	// as because we will copy area next and offset len will stay
 	// valid for long varlena.
-	if len(v.Data) > 0 {
-		if to.Data, err = mheap.Alloc(m, int64(len(v.Data))); err != nil {
+	if len(v.data) > 0 {
+		if to.data, err = mheap.Alloc(m, int64(len(v.data))); err != nil {
 			return nil, err
 		}
-		copy(to.Data, v.Data)
+		copy(to.data, v.data)
 	}
 	if len(v.area) > 0 {
 		if to.area, err = mheap.Alloc(m, int64(len(v.area))); err != nil {
@@ -793,7 +815,7 @@ func Dup(v *Vector, m *mheap.Mheap) (*Vector, error) {
 		copy(to.area, v.area)
 	}
 
-	nele := len(v.Data) / v.GetType().TypeSize()
+	nele := len(v.data) / v.GetType().TypeSize()
 	to.setupColFromData(0, nele)
 	return &to, nil
 }
@@ -802,7 +824,7 @@ func Dup(v *Vector, m *mheap.Mheap) (*Vector, error) {
 func Window(v *Vector, start, end int, w *Vector) *Vector {
 	w.Typ = v.Typ
 	w.Nsp = nulls.Range(v.Nsp, uint64(start), uint64(end), w.Nsp)
-	w.Data = v.Data
+	w.data = v.data
 	w.area = v.area
 	w.setupColFromData(start, end)
 	return w
@@ -818,7 +840,7 @@ func AppendFixed[T types.FixedSizeT](v *Vector, arg []T, m *mheap.Mheap) error {
 	}
 
 	nsz := (ncol + narg) * v.GetType().TypeSize()
-	v.Data, err = m.Grow(v.Data, int64(nsz))
+	v.data, err = m.Grow(v.data, int64(nsz))
 	if err != nil {
 		return err
 	}
@@ -829,7 +851,7 @@ func AppendFixed[T types.FixedSizeT](v *Vector, arg []T, m *mheap.Mheap) error {
 }
 
 func AppendFixedRaw(v *Vector, data []byte) error {
-	v.Data = append(v.Data, data...)
+	v.data = append(v.data, data...)
 	v.colFromData()
 	return nil
 }
@@ -874,7 +896,7 @@ func ShrinkFixed[T types.FixedSizeT](v *Vector, sels []int64) {
 		vs[i] = vs[sel]
 	}
 	v.Col = vs[:len(sels)]
-	v.Data = v.encodeColToByteSlice()
+	v.data = v.encodeColToByteSlice()
 	v.Nsp = nulls.Filter(v.Nsp, sels)
 }
 func Shrink(v *Vector, sels []int64) {
@@ -941,7 +963,7 @@ func Shrink(v *Vector, sels []int64) {
 
 // Shuffle assumes we do not have dup in sels.
 func ShuffleFixed[T types.FixedSizeT](v *Vector, sels []int64, m *mheap.Mheap) error {
-	olddata := v.Data
+	olddata := v.data
 	ns := len(sels)
 	vs := MustTCols[T](v)
 	data, err := mheap.Alloc(m, int64(ns*v.GetType().TypeSize()))
@@ -950,7 +972,7 @@ func ShuffleFixed[T types.FixedSizeT](v *Vector, sels []int64, m *mheap.Mheap) e
 	}
 	ws := types.DecodeFixedSlice[T](data, v.GetType().TypeSize())
 	v.Col = shuffle.FixedLengthShuffle(vs, ws, sels)
-	v.Data = types.EncodeFixedSlice(ws, v.GetType().TypeSize())
+	v.data = types.EncodeFixedSlice(ws, v.GetType().TypeSize())
 	v.Nsp = nulls.Filter(v.Nsp, sels)
 
 	mheap.Free(m, olddata)
@@ -1056,7 +1078,7 @@ func (v *Vector) Read(data []byte) error {
 	typ := types.DecodeType(data[:types.TSize])
 	data = data[types.TSize:]
 	v.Typ = typ
-	v.Or = true
+	v.original = true
 
 	// Read nspLen, nsp
 	v.Nsp = &nulls.Nulls{}
@@ -1080,7 +1102,7 @@ func (v *Vector) Read(data []byte) error {
 			}
 			v.Col = col
 		} else {
-			v.Data = data[:size]
+			v.data = data[:size]
 			v.setupColFromData(0, int(size/uint32(v.GetType().TypeSize())))
 		}
 		data = data[size:]
@@ -1106,7 +1128,7 @@ func Copy(v, w *Vector, vi, wi int64, m *mheap.Mheap) error {
 		panic("copy tuple vector.")
 	} else if v.GetType().IsFixedLen() {
 		tlen := int64(v.GetType().TypeSize())
-		copy(v.Data[vi*tlen:(vi+1)*tlen], w.Data[wi*tlen:(wi+1)*tlen])
+		copy(v.data[vi*tlen:(vi+1)*tlen], w.data[wi*tlen:(wi+1)*tlen])
 	} else {
 		var err error
 		vva := MustTCols[types.Varlena](v)
@@ -1128,7 +1150,7 @@ func Copy(v, w *Vector, vi, wi int64, m *mheap.Mheap) error {
 // It is simply append.   We do not go through appendOne interface because
 // we don't want to horrible type switch.
 func UnionOne(v, w *Vector, sel int64, m *mheap.Mheap) (err error) {
-	if v.Or {
+	if v.original {
 		return moerr.NewError(moerr.INTERNAL_ERROR, "UnionOne cannot be performed on orig vector")
 	}
 
@@ -1171,7 +1193,7 @@ func UnionOne(v, w *Vector, sel int64, m *mheap.Mheap) (err error) {
 // XXX Original code alloc or grow typesize * 8 bytes.  It is not
 // clear people want to amortize alloc/grow, or it is a bug.
 func UnionNull(v, _ *Vector, m *mheap.Mheap) error {
-	if v.Or {
+	if v.original {
 		return moerr.NewError(moerr.INTERNAL_ERROR, "UnionNull cannot be performed on orig vector")
 	}
 
@@ -1200,7 +1222,7 @@ func UnionNull(v, _ *Vector, m *mheap.Mheap) error {
 // XXX Old Union is FUBAR
 // Union is just append.
 func Union(v, w *Vector, sels []int64, m *mheap.Mheap) (err error) {
-	if v.Or {
+	if v.original {
 		return moerr.NewError(moerr.INTERNAL_ERROR, "Union cannot be performed on orig vector")
 	}
 
@@ -1233,7 +1255,7 @@ func Union(v, w *Vector, sels []int64, m *mheap.Mheap) (err error) {
 
 // XXX Old UnionBatch is FUBAR.
 func UnionBatch(v, w *Vector, offset int64, cnt int, flags []uint8, m *mheap.Mheap) (err error) {
-	if v.Or {
+	if v.original {
 		return moerr.NewError(moerr.INTERNAL_ERROR, "UnionBatch cannot be performed on orig vector")
 	}
 
@@ -1302,7 +1324,7 @@ func Reset(v *Vector) {
 
 	// XXX Reset does not do mem accounting?
 	// I have no idea what is the purpose of Reset, so let me just Free it.
-	// Maybe Reset want to keep v.Data and v.area to save an allocation.
+	// Maybe Reset want to keep v.data and v.area to save an allocation.
 	// Let me do that ...
 	v.setupColFromData(0, 0)
 	v.area = v.area[:0]

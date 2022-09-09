@@ -1673,6 +1673,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 	proc := process.New(
 		requestCtx,
 		mheap.New(ses.GuestMmu),
+		ses.Pu.TxnClient,
 		ses.GetTxnHandler().txn,
 		ses.Pu.FileService,
 	)

@@ -15,7 +15,6 @@
 package unary
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/weekday"
@@ -25,7 +24,6 @@ import (
 func DateToWeekday(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	inputVector := vectors[0]
 	resultType := types.Type{Oid: types.T_int64, Size: 8}
-	resultElementSize := int(resultType.Size)
 	inputValues := vector.MustTCols[types.Date](inputVector)
 	if inputVector.IsScalar() {
 		if inputVector.ConstVectorIsNull() {
@@ -36,14 +34,12 @@ func DateToWeekday(vectors []*vector.Vector, proc *process.Process) (*vector.Vec
 		vector.SetCol(resultVector, weekday.DateToWeekday(inputValues, resultValues))
 		return resultVector, nil
 	} else {
-		resultVector, err := proc.AllocVector(resultType, int64(resultElementSize*len(inputValues)))
+		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(inputValues)), inputVector.Nsp)
 		if err != nil {
 			return nil, err
 		}
-		resultValues := types.DecodeInt64Slice(resultVector.Data)
-		resultValues = resultValues[:len(inputValues)]
-		nulls.Set(resultVector.Nsp, inputVector.Nsp)
-		vector.SetCol(resultVector, weekday.DateToWeekday(inputValues, resultValues))
+		resultValues := vector.MustTCols[int64](resultVector)
+		weekday.DateToWeekday(inputValues, resultValues)
 		return resultVector, nil
 	}
 }
@@ -51,7 +47,6 @@ func DateToWeekday(vectors []*vector.Vector, proc *process.Process) (*vector.Vec
 func DatetimeToWeekday(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	inputVector := vectors[0]
 	resultType := types.Type{Oid: types.T_int64, Size: 8}
-	resultElementSize := int(resultType.Size)
 	inputValues := vector.MustTCols[types.Datetime](inputVector)
 	if inputVector.IsScalar() {
 		if inputVector.ConstVectorIsNull() {
@@ -62,14 +57,12 @@ func DatetimeToWeekday(vectors []*vector.Vector, proc *process.Process) (*vector
 		vector.SetCol(resultVector, weekday.DatetimeToWeekday(inputValues, resultValues))
 		return resultVector, nil
 	} else {
-		resultVector, err := proc.AllocVector(resultType, int64(resultElementSize*len(inputValues)))
+		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(inputValues)), inputVector.Nsp)
 		if err != nil {
 			return nil, err
 		}
-		resultValues := types.DecodeInt64Slice(resultVector.Data)
-		resultValues = resultValues[:len(inputValues)]
-		nulls.Set(resultVector.Nsp, inputVector.Nsp)
-		vector.SetCol(resultVector, weekday.DatetimeToWeekday(inputValues, resultValues))
+		resultValues := vector.MustTCols[int64](resultVector)
+		weekday.DatetimeToWeekday(inputValues, resultValues)
 		return resultVector, nil
 	}
 }

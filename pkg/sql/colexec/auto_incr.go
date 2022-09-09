@@ -26,7 +26,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/errors"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/moengine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -98,19 +97,19 @@ func getRangeFromAutoIncrTable(param *AutoIncrParam, bat *batch.Batch, tableID s
 }
 
 func getOneColRangeFromAutoIncrTable(param *AutoIncrParam, bat *batch.Batch, name string, pos int) (int64, int64, error) {
-	taeEngine, ok := param.eg.(moengine.TxnEngine)
-	if !ok {
-		return 0, 0, errors.New("", "the engine is not tae")
-	}
-
-	txnCtx, err := taeEngine.StartTxn(nil)
+	txnOperator, err := param.proc.TxnClient.New()
 	if err != nil {
 		return 0, 0, err
 	}
 
 	oriNum, step := getCurrentIndex(param, name)
 	if oriNum < 0 {
-		if err2 := txnCtx.Rollback(); err2 != nil {
+		ctx, cancel := context.WithTimeout(
+			param.ctx,
+			param.eg.Hints().CommitOrRollbackTimeout,
+		)
+		defer cancel()
+		if err2 := txnOperator.Rollback(ctx); err2 != nil {
 			return 0, 0, err2
 		}
 		return 0, 0, errors.New("", "GetIndex from auto_increment table fail")
@@ -147,12 +146,22 @@ func getOneColRangeFromAutoIncrTable(param *AutoIncrParam, bat *batch.Batch, nam
 		return 0, 0, errors.New("", "auto_incrment column constant value overflows bigint")
 	}
 	if err := updateAutoIncrTable(param, maxNum, name); err != nil {
-		if err2 := txnCtx.Rollback(); err2 != nil {
+		ctx, cancel := context.WithTimeout(
+			param.ctx,
+			param.eg.Hints().CommitOrRollbackTimeout,
+		)
+		defer cancel()
+		if err2 := txnOperator.Rollback(ctx); err2 != nil {
 			return 0, 0, err2
 		}
 		return 0, 0, err
 	}
-	err = txnCtx.Commit()
+	ctx, cancel := context.WithTimeout(
+		param.ctx,
+		param.eg.Hints().CommitOrRollbackTimeout,
+	)
+	defer cancel()
+	err = txnOperator.Commit(ctx)
 	if err != nil {
 		return 0, 0, err
 	}

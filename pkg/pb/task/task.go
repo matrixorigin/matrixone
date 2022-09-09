@@ -12,29 +12,24 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package power
+package task
 
 import (
-	"math"
+	"fmt"
+	"time"
 )
 
-func PowerScalarLeftConst(scalar float64, rv []float64, rs []float64) []float64 {
-	for i, x := range rv {
-		rs[i] = math.Pow(scalar, x)
-	}
-	return rs
+// IsDelayTask returns true if the task is a delay task
+func (m Task) IsDelayTask() bool {
+	return m.Metadata.Options.DelayDuration > 0
 }
 
-func PowerScalarRightConst(scalar float64, rv []float64, rs []float64) []float64 {
-	for i, x := range rv {
-		rs[i] = math.Pow(x, scalar)
-	}
-	return rs
+// GetDelayDuration returns delay duration
+func (m Task) GetDelayDuration() time.Duration {
+	return time.Duration(m.Metadata.Options.DelayDuration)
 }
 
-func Power(lv, rv, rs []float64) []float64 {
-	for i, x := range lv {
-		rs[i] = math.Pow(x, rv[i])
-	}
-	return rs
+// DebugString returns the debug string
+func (m Task) DebugString() string {
+	return fmt.Sprintf("%s/%d", m.Metadata.ID, m.Metadata.Executor)
 }
