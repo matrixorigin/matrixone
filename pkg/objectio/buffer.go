@@ -3,11 +3,13 @@ package objectio
 import (
 	"bytes"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 )
 
+// ObjectBuffer is the buffer prepared before writing to
+// the object file, all data written to the object needs
+// to be filled in it, and then written to the object
+// file at one time
 type ObjectBuffer struct {
-	common.RefHelper
 	buf    *bytes.Buffer
 	vector fileservice.IOVector
 }
@@ -20,7 +22,6 @@ func NewObjectBuffer(name string) *ObjectBuffer {
 		},
 	}
 	buffer.vector.Entries = make([]fileservice.IOEntry, 0)
-	buffer.Ref()
 	return buffer
 }
 

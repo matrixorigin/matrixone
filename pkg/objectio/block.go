@@ -6,11 +6,16 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 )
 
+// Block is the organizational structure of a batch in objectio
+// Write one batch at a time, and batch and block correspond one-to-one
 type Block struct {
-	fd      int
-	header  *BlockHeader
+	// fd is the handle of the block
+	fd     int
+	header *BlockHeader
+	// columns is the vector in the batch
 	columns []*ColumnBlock
-	data    *batch.Batch
+	// data is the batch to be written
+	data *batch.Batch
 }
 
 func NewBlock(batch *batch.Batch) *Block {
@@ -28,7 +33,7 @@ func NewBlock(batch *batch.Batch) *Block {
 	return block
 }
 
-func (b *Block) ShowMeta() ([]byte, error) {
+func (b *Block) MarshalMeta() ([]byte, error) {
 	var (
 		err    error
 		buffer bytes.Buffer
@@ -55,7 +60,7 @@ func (b *Block) ShowMeta() ([]byte, error) {
 	}
 	// write columns meta
 	for _, column := range b.columns {
-		columnMeta, err := column.ShowMeta()
+		columnMeta, err := column.MarshalMeta()
 		if err != nil {
 			return nil, err
 		}
@@ -66,7 +71,7 @@ func (b *Block) ShowMeta() ([]byte, error) {
 	return buffer.Bytes(), nil
 }
 
-func (b *Block) UnShowMeta(data []byte) error {
+func (b *Block) UnMarshalMeta(data []byte) error {
 	var err error
 	cache := bytes.NewBuffer(data)
 	b.header = &BlockHeader{}
@@ -92,7 +97,7 @@ func (b *Block) UnShowMeta(data []byte) error {
 	b.columns = make([]*ColumnBlock, b.header.columnCount)
 	for i, _ := range b.columns {
 		b.columns[i] = NewColumnBlock(uint16(i))
-		err = b.columns[i].UnShowMeta(cache.Bytes())
+		err = b.columns[i].UnMarshalMate(cache.Bytes())
 		if err != nil {
 			return err
 		}

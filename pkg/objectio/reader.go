@@ -37,7 +37,7 @@ func (r *ObjectReader) ReadMeta(extent Extent) (*Block, error) {
 		return nil, err
 	}
 	block := &Block{}
-	err = block.UnShowMeta(meta.Entries[0].Data)
+	err = block.UnMarshalMeta(meta.Entries[0].Data)
 	if err != nil {
 		return nil, err
 	}

@@ -22,7 +22,7 @@ func NewColumnBlock(idx uint16) *ColumnBlock {
 	return block
 }
 
-func (cb *ColumnBlock) ShowMeta() ([]byte, error) {
+func (cb *ColumnBlock) MarshalMeta() ([]byte, error) {
 	var (
 		err    error
 		buffer bytes.Buffer
@@ -70,7 +70,7 @@ func (cb *ColumnBlock) ShowMeta() ([]byte, error) {
 	return buffer.Bytes(), nil
 }
 
-func (cb *ColumnBlock) UnShowMeta(data []byte) error {
+func (cb *ColumnBlock) UnMarshalMate(data []byte) error {
 	var err error
 	cache := bytes.NewBuffer(data)
 	if err = binary.Read(cache, binary.BigEndian, &cb.meta.typ); err != nil {

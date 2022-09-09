@@ -4,11 +4,12 @@ import "github.com/matrixorigin/matrixone/pkg/fileservice"
 
 const Magic = 0xFFFFFFFF
 const Version = 1
-const RootPath = "ObjectIo"
 const FSName = "local"
 
 type Object struct {
-	name  string
+	// name is the object file's name
+	name string
+	// oFile is an instance of fileservice
 	oFile fileservice.FileService
 }
 

@@ -91,7 +91,7 @@ func (w *ObjectWriter) WriteEnd() ([]Extent, error) {
 	defer w.RUnlock()
 	extents := make([]Extent, 0)
 	for _, block := range w.blocks {
-		meta, err := block.ShowMeta()
+		meta, err := block.MarshalMeta()
 		if err != nil {
 			return nil, err
 		}
