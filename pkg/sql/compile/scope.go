@@ -188,8 +188,8 @@ func (s *Scope) ParallelRun(c *Compile) error {
 		}
 		ss[i].Proc = process.NewWithAnalyze(s.Proc, c.ctx, 0, c.anal.Nodes())
 	}
-	s = newParallelScope(c, s, ss)
-	return s.MergeRun(c)
+	newScope := newParallelScope(c, s, ss)
+	return newScope.MergeRun(c)
 }
 
 func (s *Scope) PushdownRun(c *Compile) error {
@@ -317,7 +317,7 @@ func newParallelScope(c *Compile, s *Scope, ss []*Scope) *Scope {
 			s.Instructions[0] = vm.Instruction{
 				Op: vm.MergeGroup,
 				Arg: &mergegroup.Argument{
-					NeedEval: false,
+					NeedEval: true,
 				},
 			}
 			for i := range ss {
