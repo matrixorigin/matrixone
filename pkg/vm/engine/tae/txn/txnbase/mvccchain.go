@@ -140,18 +140,6 @@ func (be *MVCCChain) GetNodeToRead(startts types.TS) (node MVCCNode) {
 
 // GetExactUpdateNode gets the exact UpdateNode with the startTs.
 // It's only used in replay
-func (be *MVCCChain) GetExactUpdateNode(startts types.TS) (node MVCCNode) {
-	be.MVCC.Loop(func(n *common.GenericDLNode[MVCCNode]) bool {
-		un := n.GetPayload()
-		if un.IsSameTxn(startts) {
-			node = un
-			return false
-		}
-		// return un.Start < startts
-		return true
-	}, false)
-	return
-}
 func (be *MVCCChain) GetExactUpdateNodeByNode(o MVCCNode) (node MVCCNode) {
 	be.MVCC.Loop(func(n *common.GenericDLNode[MVCCNode]) bool {
 		un := n.GetPayload()
