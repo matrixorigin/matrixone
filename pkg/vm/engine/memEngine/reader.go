@@ -53,17 +53,16 @@ func (r *reader) Read(attrs []string, _ *plan.Expr, m *mheap.Mheap) (*batch.Batc
 			if err != nil {
 				return nil, err
 			}
-			bat.Vecs[i] = vector.New(md.Type)
+			bat.Vecs[i] = vector.NewOriginal(md.Type)
 			if err := bat.Vecs[i].Read(data); err != nil {
 				return nil, err
 			}
-			bat.Vecs[i].Or = true
 		} else {
 			data, err := r.db.Get(id+"."+attr, r.cds[i])
 			if err != nil {
 				return nil, err
 			}
-			bat.Vecs[i] = vector.New(md.Type)
+			bat.Vecs[i] = vector.NewOriginal(md.Type)
 			n := int(types.DecodeInt32(data[len(data)-4:]))
 			r.dds[i].Reset()
 			if n > r.dds[i].Cap() {
@@ -78,7 +77,6 @@ func (r *reader) Read(attrs []string, _ *plan.Expr, m *mheap.Mheap) (*batch.Batc
 			if err := bat.Vecs[i].Read(data); err != nil {
 				return nil, err
 			}
-			bat.Vecs[i].Or = true
 		}
 	}
 	n := vector.Length(bat.Vecs[0])

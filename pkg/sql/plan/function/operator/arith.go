@@ -56,20 +56,16 @@ func Arith[T1 arithT, T2 arithT](vectors []*vector.Vector, proc *process.Process
 		return resultVector, nil
 	}
 
-	resultElementSize := typ.Oid.TypeLen()
 	nEle := len(leftValues)
 	if left.IsScalar() {
 		nEle = len(rightValues)
 	}
 
-	resultVector, err := proc.AllocVector(typ, int64(resultElementSize*nEle))
+	resultVector, err := proc.AllocVectorOfRows(typ, int64(nEle), nil)
 	if err != nil {
 		return nil, err
 	}
-
-	resultValues := types.DecodeFixedSlice[T2](resultVector.Data, resultElementSize)
 	nulls.Or(left.Nsp, right.Nsp, resultVector.Nsp)
-	vector.SetCol(resultVector, resultValues)
 	if err = afn(left, right, resultVector); err != nil {
 		return nil, err
 	}

@@ -75,8 +75,8 @@ func TestConnector(t *testing.T) {
 		tc.proc.Reg.InputBatch = bat
 		{
 			for _, vec := range bat.Vecs {
-				if vec.Or {
-					mheap.Free(tc.proc.Mp(), vec.Data)
+				if vec.IsOriginal() {
+					vec.FreeOriginal(tc.proc.Mp())
 				}
 			}
 		}
