@@ -61,7 +61,7 @@ func newBlockIt(table *txnTable, meta *catalog.SegmentEntry) *blockIt {
 	for it.linkIt.Valid() {
 		curr := it.linkIt.Get().GetPayload()
 		curr.RLock()
-		ok, err = curr.TxnCanRead(it.table.store.txn.GetStartTS(), curr.RWMutex)
+		ok, err = curr.IsVisible(it.table.store.txn.GetStartTS(), curr.RWMutex)
 		if err != nil {
 			curr.RUnlock()
 			it.err = err
@@ -99,7 +99,7 @@ func (it *blockIt) Next() {
 		}
 		entry := node.GetPayload()
 		entry.RLock()
-		valid, err = entry.TxnCanRead(it.table.store.txn.GetStartTS(), entry.RWMutex)
+		valid, err = entry.IsVisible(it.table.store.txn.GetStartTS(), entry.RWMutex)
 		entry.RUnlock()
 		if err != nil {
 			it.err = err
