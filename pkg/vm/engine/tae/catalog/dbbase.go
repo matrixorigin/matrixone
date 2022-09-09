@@ -103,7 +103,7 @@ func (be *DBBaseEntry) CreateWithTxn(txn txnif.AsyncTxn) {
 // TODO update create
 func (be *DBBaseEntry) DeleteLocked(txn txnif.TxnReader, impl INode) (node INode, err error) {
 	entry := be.MVCC.GetHead().GetPayload()
-	if entry.GetTxn() == nil || entry.IsSameTxn(txn.GetStartTS()) {
+	if entry.IsCommitted() || entry.IsSameTxn(txn.GetStartTS()) {
 		if be.HasDropped() {
 			err = ErrNotFound
 			return

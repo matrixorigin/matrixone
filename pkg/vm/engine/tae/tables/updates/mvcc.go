@@ -48,7 +48,7 @@ func NewMVCCHandle(meta *catalog.BlockEntry) *MVCCHandle {
 		RWMutex: new(sync.RWMutex),
 		columns: make(map[uint16]*ColumnChain),
 		meta:    meta,
-		appends: txnbase.NewMVCCSlice(NewEmptyAppendNode),
+		appends: txnbase.NewMVCCSlice(NewEmptyAppendNode, CompareAppendNode),
 	}
 	node.deletes = NewDeleteChain(nil, node)
 	if meta == nil {

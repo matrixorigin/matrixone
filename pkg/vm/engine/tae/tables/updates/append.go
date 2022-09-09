@@ -38,6 +38,10 @@ type AppendNode struct {
 	id       *common.ID
 }
 
+func CompareAppendNode(e, o txnbase.MVCCNode) int {
+	return e.(*AppendNode).Compare(o.(*AppendNode).TxnMVCCNode)
+}
+
 func MockAppendNode(ts types.TS, startRow, maxRow uint32, mvcc *MVCCHandle) *AppendNode {
 	return &AppendNode{
 		TxnMVCCNode: &txnbase.TxnMVCCNode{
@@ -120,13 +124,13 @@ func (node *AppendNode) GetCommitTS() types.TS {
 	defer node.RUnlock()
 	return node.GetEnd()
 }
-func (node *AppendNode) GetTxn() txnif.TxnReader {
+func (node *AppendNode) IsCommitted() bool {
 	node.RLock()
 	defer node.RUnlock()
-	return node.GetTxnLocked()
+	return node.IsCommittedLocked()
 }
-func (node *AppendNode) GetTxnLocked() txnif.TxnReader {
-	return node.TxnMVCCNode.GetTxn()
+func (node *AppendNode) IsCommittedLocked() bool {
+	return node.TxnMVCCNode.IsCommitted()
 }
 func (node *AppendNode) GetStartRow() uint32 { return node.startRow }
 func (node *AppendNode) GetMaxRow() uint32 {
@@ -153,7 +157,7 @@ func (node *AppendNode) PrepareCommit() error {
 func (node *AppendNode) ApplyCommit(index *wal.Index) error {
 	node.Lock()
 	defer node.Unlock()
-	if node.GetTxnLocked() == nil {
+	if node.IsCommittedLocked() {
 		panic("AppendNode | ApplyCommit | LogicErr")
 	}
 	node.TxnMVCCNode.ApplyCommit(index)

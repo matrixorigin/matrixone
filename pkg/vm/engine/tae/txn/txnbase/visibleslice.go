@@ -26,12 +26,15 @@ import (
 type MVCCSlice struct {
 	MVCC      []MVCCNode
 	newnodefn func() MVCCNode
+	comparefn func(MVCCNode, MVCCNode) int
 }
 
-func NewMVCCSlice(newnodefn func() MVCCNode) *MVCCSlice {
+func NewMVCCSlice(newnodefn func() MVCCNode,
+	comparefn func(MVCCNode, MVCCNode) int) *MVCCSlice {
 	return &MVCCSlice{
 		MVCC:      make([]MVCCNode, 0),
 		newnodefn: newnodefn,
+		comparefn: comparefn,
 	}
 }
 func (be *MVCCSlice) StringLocked() string {
@@ -50,7 +53,8 @@ func (be *MVCCSlice) StringLocked() string {
 func (be *MVCCSlice) GetTs() types.TS {
 	return be.GetUpdateNodeLocked().GetEnd()
 }
-func (be *MVCCSlice) GetTxn() txnif.TxnReader { return be.GetUpdateNodeLocked().GetTxn() }
+
+// func (be *MVCCSlice) GetTxn() txnif.TxnReader { return be.GetUpdateNodeLocked().GetTxn() }
 
 func (be *MVCCSlice) InsertNode(un MVCCNode) {
 	be.MVCC = append(be.MVCC, un)
@@ -84,10 +88,11 @@ func (be *MVCCSlice) DeleteNode(node MVCCNode) {
 	length := len(be.MVCC)
 	for i := length - 1; i >= 0; i-- {
 		un := be.MVCC[i]
-		if un.GetStart().Equal(node.GetStart()) {
+		compare := be.comparefn(un, node)
+		if compare == 0 {
 			be.MVCC = append(be.MVCC[:i], be.MVCC[i+1:]...)
 			break
-		} else if un.GetStart().Less(node.GetStart()) {
+		} else if compare < 0 {
 			break
 		}
 	}
@@ -153,7 +158,7 @@ func (be *MVCCSlice) IsCommitted() bool {
 	if un == nil {
 		return false
 	}
-	return un.GetTxn() == nil
+	return un.IsCommitted()
 }
 
 func (be *MVCCSlice) CloneIndexInRange(start, end types.TS, mu *sync.RWMutex) (indexes []*wal.Index) {

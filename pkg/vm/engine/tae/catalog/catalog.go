@@ -199,7 +199,7 @@ func (catalog *Catalog) onReplayUpdateDatabase(cmd *EntryCommand, idx *wal.Index
 
 	un := cmd.entry.GetUpdateNodeLocked()
 	un.AddLogIndex(idx)
-	dbun := db.GetExactUpdateNode(un.GetStart())
+	dbun := db.GetExactUpdateNodeByNode(un)
 	if dbun == nil {
 		db.InsertNode(un) //TODO isvalid
 	} else {
@@ -227,7 +227,7 @@ func (catalog *Catalog) onReplayDatabase(cmd *EntryCommand) {
 
 	cmd.DB.MVCC.Loop(func(n *common.GenericDLNode[txnbase.MVCCNode]) bool {
 		un := n.GetPayload()
-		dbun := db.GetExactUpdateNode(un.GetStart())
+		dbun := db.GetExactUpdateNodeByNode(un)
 		if dbun == nil {
 			db.InsertNode(un) //TODO isvalid
 		} else {
@@ -265,7 +265,7 @@ func (catalog *Catalog) onReplayUpdateTable(cmd *EntryCommand, dataFactory DataF
 	}
 
 	un := cmd.entry.GetUpdateNodeLocked()
-	tblun := tbl.GetExactUpdateNode(un.GetStart())
+	tblun := tbl.GetExactUpdateNodeByNode(un)
 	un.AddLogIndex(idx)
 	if tblun == nil {
 		tbl.InsertNode(un) //TODO isvalid
@@ -295,7 +295,7 @@ func (catalog *Catalog) onReplayTable(cmd *EntryCommand, dataFactory DataFactory
 	} else {
 		cmd.Table.MVCC.Loop(func(n *common.GenericDLNode[txnbase.MVCCNode]) bool {
 			un := n.GetPayload()
-			node := rel.GetExactUpdateNode(un.GetStart())
+			node := rel.GetExactUpdateNodeByNode(un)
 			if node == nil {
 				rel.InsertNode(un)
 			} else {
@@ -331,7 +331,7 @@ func (catalog *Catalog) onReplayUpdateSegment(cmd *EntryCommand, dataFactory Dat
 		tbl.AddEntryLocked(cmd.Segment)
 	} else {
 		un := cmd.entry.GetUpdateNodeLocked()
-		node := seg.GetExactUpdateNode(un.GetStart())
+		node := seg.GetExactUpdateNodeByNode(un)
 		if node == nil {
 			seg.InsertNode(un)
 		} else {
@@ -360,7 +360,7 @@ func (catalog *Catalog) onReplaySegment(cmd *EntryCommand, dataFactory DataFacto
 	} else {
 		cmd.Segment.MVCC.Loop(func(n *common.GenericDLNode[txnbase.MVCCNode]) bool {
 			un := n.GetPayload()
-			segun := seg.GetExactUpdateNode(un.GetStart())
+			segun := seg.GetExactUpdateNodeByNode(un)
 			if segun != nil {
 				segun.UpdateNode(un)
 			} else {
@@ -395,7 +395,7 @@ func (catalog *Catalog) onReplayUpdateBlock(cmd *EntryCommand, dataFactory DataF
 	un := cmd.entry.GetUpdateNodeLocked()
 	un.AddLogIndex(idx)
 	if err == nil {
-		blkun := blk.GetExactUpdateNode(un.GetStart())
+		blkun := blk.GetExactUpdateNodeByNode(un)
 		if blkun != nil {
 			blkun.UpdateNode(un)
 		} else {
@@ -441,7 +441,7 @@ func (catalog *Catalog) onReplayBlock(cmd *EntryCommand, dataFactory DataFactory
 	} else {
 		cmd.Block.MVCC.Loop(func(n *common.GenericDLNode[txnbase.MVCCNode]) bool {
 			un := n.GetPayload()
-			blkun := blk.GetExactUpdateNode(un.GetStart())
+			blkun := blk.GetExactUpdateNodeByNode(un)
 			if blkun != nil {
 				blkun.UpdateNode(un)
 			}

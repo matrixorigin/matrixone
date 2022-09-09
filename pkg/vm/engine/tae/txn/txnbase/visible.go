@@ -25,30 +25,33 @@ import (
 )
 
 type MVCCNode interface {
+	String() string
+
 	PrepareWrite(startTS types.TS) error
-	IsSameStartTs(startTS types.TS) bool
+	UpdateNode(o MVCCNode)
+
 	TxnCanRead(startTS types.TS) (canRead, goNext bool)
 	CommittedIn(minTS, maxTS types.TS) (committedIn, commitBeforeMinTS bool)
 	NeedWaitCommitting(startTS types.TS) (bool, txnif.TxnReader)
 	IsSameTxn(startTS types.TS) bool
 	IsActive() bool
 	IsCommitting() bool
-	GetStart() types.TS
+	IsCommitted() bool
+
 	GetEnd() types.TS
 	GetTxn() txnif.TxnReader
 	AddLogIndex(idx *wal.Index)
 	GetLogIndex() []*wal.Index
+
 	ApplyCommit(index *wal.Index) (err error)
 	ApplyRollback(index *wal.Index) (err error)
-	WriteTo(w io.Writer) (n int64, err error)
-	ReadFrom(r io.Reader) (n int64, err error)
-	UpdateNode(o MVCCNode)
-	CloneData() MVCCNode
-	CloneAll() MVCCNode
-	String() string
-	OnCommit()
 	Prepare2PCPrepare() (err error)
 	PrepareCommit() (err error)
+
+	WriteTo(w io.Writer) (n int64, err error)
+	ReadFrom(r io.Reader) (n int64, err error)
+	CloneData() MVCCNode
+	CloneAll() MVCCNode
 }
 
 // TODO prepare ts
@@ -83,10 +86,6 @@ func (un *TxnMVCCNode) PrepareWrite(startTS types.TS) error {
 		return txnif.ErrTxnWWConflict
 	}
 	return nil
-}
-
-func (un *TxnMVCCNode) IsSameStartTs(startTS types.TS) bool {
-	return un.Start.Equal(startTS)
 }
 
 func (un *TxnMVCCNode) TxnCanRead(startTS types.TS) (canRead, goNext bool) {
@@ -145,6 +144,10 @@ func (un *TxnMVCCNode) IsCommitting() bool {
 		return false
 	}
 	return un.Txn.GetTxnState(false) != txnif.TxnStateActive
+}
+
+func (un *TxnMVCCNode) IsCommitted() bool {
+	return un.Txn == nil
 }
 
 func (un *TxnMVCCNode) GetStart() types.TS {
@@ -279,11 +282,6 @@ func (un *TxnMVCCNode) String() string {
 		un.Start,
 		un.End,
 		un.LogIndex)
-}
-
-func (un *TxnMVCCNode) OnCommit() {
-	un.End = un.Txn.GetCommitTS()
-	un.Txn = nil
 }
 
 func (e *TxnMVCCNode) Prepare2PCPrepare() (ts types.TS, err error) {

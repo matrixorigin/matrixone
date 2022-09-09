@@ -59,6 +59,7 @@ func (be *MVCCChain) StringLocked() string {
 func (be *MVCCChain) GetTs() types.TS {
 	return be.GetUpdateNodeLocked().GetEnd()
 }
+
 func (be *MVCCChain) GetTxn() txnif.TxnReader { return be.GetUpdateNodeLocked().GetTxn() }
 
 func (be *MVCCChain) GetIndexes() []*wal.Index {
@@ -143,11 +144,24 @@ func (be *MVCCChain) GetNodeToRead(startts types.TS) (node MVCCNode) {
 func (be *MVCCChain) GetExactUpdateNode(startts types.TS) (node MVCCNode) {
 	be.MVCC.Loop(func(n *common.GenericDLNode[MVCCNode]) bool {
 		un := n.GetPayload()
-		if un.GetStart() == startts {
+		if un.IsSameTxn(startts) {
 			node = un
 			return false
 		}
 		// return un.Start < startts
+		return true
+	}, false)
+	return
+}
+func (be *MVCCChain) GetExactUpdateNodeByNode(o MVCCNode) (node MVCCNode) {
+	be.MVCC.Loop(func(n *common.GenericDLNode[MVCCNode]) bool {
+		un := n.GetPayload()
+		compare := be.comparefn(un, o)
+		if compare == 0 {
+			node = un
+			return false
+		}
+		// return compare > 0
 		return true
 	}, false)
 	return
@@ -171,16 +185,7 @@ func (be *MVCCChain) IsCreating() bool {
 
 func (be *MVCCChain) PrepareWrite(txn txnif.TxnReader) (err error) {
 	node := be.GetUpdateNodeLocked()
-	if node.IsActive() {
-		if node.IsSameTxn(txn.GetStartTS()) {
-			return
-		}
-		return txnif.ErrTxnWWConflict
-	}
-
-	if node.GetEnd().Greater(txn.GetStartTS()) {
-		return txnif.ErrTxnWWConflict
-	}
+	err = node.PrepareWrite(txn.GetStartTS())
 	return
 }
 
@@ -317,7 +322,7 @@ func (be *MVCCChain) IsCommitted() bool {
 	if un == nil {
 		return false
 	}
-	return un.GetTxn() == nil
+	return un.IsCommitted()
 }
 
 func (be *MVCCChain) CloneCommittedInRange(start, end types.TS) (ret *MVCCChain) {
