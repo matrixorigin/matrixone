@@ -59,6 +59,10 @@ func (d Uuid) ToString() string {
 	return uuid.UUID(d).String()
 }
 
+func (d Uuid) ClockSequence() int {
+	return uuid.UUID(d).ClockSequence()
+}
+
 func (d Uuid) Compare(other Uuid) int {
 	return int(CompareUuid(d, other))
 }
