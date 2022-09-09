@@ -163,13 +163,22 @@ func (s *Scope) ParallelRun(c *Compile) error {
 	}
 	mcpu := s.NodeInfo.Mcpu
 	{
-		db, err := c.e.Database(c.ctx, s.DataSource.SchemaName, s.Proc.TxnOperator)
+		DbName := s.DataSource.SchemaName
+		TblName := s.DataSource.RelationName
+		tempDb, err := c.tempEngine.Database(c.ctx, s.DataSource.SchemaName, s.Proc.TxnOperator)
 		if err != nil {
 			return err
 		}
-		rel, err := db.Relation(c.ctx, s.DataSource.RelationName)
+		rel, err := tempDb.Relation(c.ctx, DbName+"-"+TblName)
 		if err != nil {
-			return err
+			db, err := c.e.Database(c.ctx, DbName, s.Proc.TxnOperator)
+			if err != nil {
+				return err
+			}
+			rel, err = db.Relation(c.ctx, TblName)
+			if err != nil {
+				return err
+			}
 		}
 		rds, _ = rel.NewReader(c.ctx, mcpu, nil, s.NodeInfo.Data)
 	}

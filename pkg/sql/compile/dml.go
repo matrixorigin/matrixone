@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/update"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	y "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -65,16 +66,25 @@ func (s *Scope) Update(c *Compile) (uint64, error) {
 
 func (s *Scope) InsertValues(c *Compile, stmt *tree.Insert) (uint64, error) {
 	p := s.Plan.GetIns()
-
-	dbSource, err := c.e.Database(c.ctx, p.DbName, c.proc.TxnOperator)
+	var dbSource engine.Database
+	var relation engine.Relation
+	var flag bool
+	dbSource, err := c.tempEngine.Database(c.ctx, p.DbName, c.proc.TxnOperator)
 	if err != nil {
 		return 0, err
 	}
-	relation, err := dbSource.Relation(c.ctx, p.TblName)
+	relation, err = dbSource.Relation(c.ctx, p.DbName+"-"+p.TblName)
 	if err != nil {
-		return 0, err
+		dbSource, err = c.e.Database(c.ctx, p.DbName, c.proc.TxnOperator)
+		if err != nil {
+			return 0, err
+		}
+		relation, err = dbSource.Relation(c.ctx, p.TblName)
+		if err != nil {
+			return 0, err
+		}
+		flag = true
 	}
-
 	bat := makeInsertBatch(p)
 
 	if p.OtherCols != nil {
@@ -85,10 +95,20 @@ func (s *Scope) InsertValues(c *Compile, stmt *tree.Insert) (uint64, error) {
 		return 0, err
 	}
 	batch.Reorder(bat, p.OrderAttrs)
-
-	if err = colexec.UpdateInsertValueBatch(c.e, c.ctx, c.proc, p, bat); err != nil {
-		return 0, err
+	if flag {
+		if err = colexec.UpdateInsertValueBatch(c.e, c.ctx, c.proc, p, bat); err != nil {
+			return 0, err
+		}
+	} else {
+		oldName := p.TblName
+		p.TblName = p.DbName + "-" + p.TblName
+		//update auto_incrment col
+		if err = colexec.UpdateInsertValueBatch(c.tempEngine, c.ctx, c.proc, p, bat); err != nil {
+			return 0, err
+		}
+		p.TblName = oldName
 	}
+
 	if err := relation.Write(c.ctx, bat); err != nil {
 		return 0, err
 	}

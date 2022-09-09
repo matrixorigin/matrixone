@@ -41,6 +41,7 @@ type AutoIncrParam struct {
 	colDefs []*plan.ColDef
 }
 
+// this func is used to update auto_incrment col
 func UpdateInsertBatch(e engine.Engine, db engine.Database, ctx context.Context, proc *process.Process, ColDefs []*plan.ColDef, bat *batch.Batch, tableID string) error {
 	incrParam := &AutoIncrParam{
 		eg:      e,

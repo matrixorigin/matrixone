@@ -1,0 +1,11 @@
+drop database if exists test;
+create database test;
+use test;
+create temporary table t1(a int,b int);
+create table t1(a int,b int);
+create table t2(a int,b int);
+show tables;
+select * from t1;
+insert into t1(b,a) values(2,1);
+insert into t1(a,b) values(3,4);
+select * from t1;
