@@ -177,9 +177,7 @@ drop table t12;
 
 SELECT AVG(2), BIT_AND(2), BIT_OR(2), BIT_XOR(2);
 
--- @bvt:issue#4798
 select count(*);
--- @bvt:issue
 
 select COUNT(12), COUNT(DISTINCT 12), MIN(2),MAX(2),STD(2), VARIANCE(2),SUM(2);
 
