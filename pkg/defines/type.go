@@ -106,3 +106,12 @@ const (
 	MaxInt24  = 1<<23 - 1
 	MinInt24  = -1 << 23
 )
+
+// use TenantIDKey{} UserIDKey{} RoleIDKey{} to get uint32 value from Context
+
+type TenantIDKey struct{}
+type UserIDKey struct{}
+type RoleIDKey struct{}
+
+// CarryOnCtxKeys defines keys needed to be serialized when pass context through net
+var CarryOnCtxKeys = []any{TenantIDKey{}, UserIDKey{}, RoleIDKey{}}
