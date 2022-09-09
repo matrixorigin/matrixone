@@ -65,6 +65,18 @@ func WithServerBatchSendSize(size int) ServerOption {
 	}
 }
 
+// WithServerDisableAutoCancelContext disable automatic cancel messaging for the context.
+// The server will receive RPC messages from the client, each message comes with a Context,
+// and morpc will call the handler to process it, and when the handler returns, the Context
+// will be auto cancel the context. But in some scenarios, the handler is asynchronous,
+// so morpc can't directly cancel the context after the handler returns, otherwise many strange
+// problems will occur.
+func WithServerDisableAutoCancelContext() ServerOption {
+	return func(s *server) {
+		s.options.disableAutoCancelContext = true
+	}
+}
+
 type server struct {
 	name        string
 	address     string
@@ -74,10 +86,11 @@ type server struct {
 	handler     func(ctx context.Context, request Message, sequence uint64, cs ClientSession) error
 	sessions    *sync.Map // session-id => *clientSession
 	options     struct {
-		goettyOptions []goetty.Option
-		bufferSize    int
-		batchSendSize int
-		filter        func(Message) bool
+		goettyOptions            []goetty.Option
+		bufferSize               int
+		batchSendSize            int
+		filter                   func(Message) bool
+		disableAutoCancelContext bool
 	}
 }
 
@@ -168,7 +181,11 @@ func (s *server) onMessage(rs goetty.IOSession, value any, sequence uint64) erro
 			zap.String("request", request.Message.DebugString()))
 	}
 
-	if request.cancel != nil {
+	// Can't be sure that the Context is properly consumed if disableAutoCancelContext is set to
+	// true. So we use the pessimistic wait for the context to time out automatically be canceled
+	// behavior here, which may cause some resources to be released more slowly.
+	// FIXME: Use the CancelFunc pass to let the handler decide to cancel itself
+	if !s.options.disableAutoCancelContext && request.cancel != nil {
 		defer request.cancel()
 	}
 	if err := s.handler(request.Ctx, request.Message, sequence, cs); err != nil {
