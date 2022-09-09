@@ -17,6 +17,7 @@ package frontend
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"testing"
 	"time"
 
@@ -642,11 +643,11 @@ func allocTestBatch(attrName []string, tt []types.Type, batchSize int) *batch.Ba
 
 func Test_mysqlerror(t *testing.T) {
 	convey.Convey("mysql error", t, func() {
-		err := NewMysqlError(ER_BAD_DB_ERROR, "T")
-		convey.So(err.ErrorCode, convey.ShouldEqual, ER_BAD_DB_ERROR)
+		err := moerr.NewMysqlError(moerr.ER_BAD_DB_ERROR, "T")
+		convey.So(err.ErrorCode, convey.ShouldEqual, moerr.ER_BAD_DB_ERROR)
 
-		err2 := NewMysqlError(65535, "T")
-		convey.So(err2.ErrorCode, convey.ShouldEqual, ER_UNKNOWN_ERROR)
+		err2 := moerr.NewMysqlError(65535, "T")
+		convey.So(err2.ErrorCode, convey.ShouldEqual, moerr.ER_UNKNOWN_ERROR)
 	})
 }
 
