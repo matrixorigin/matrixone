@@ -29,6 +29,8 @@ If there are no matching rows, SUM() returns NULL.
 
 ## **Examples**
 
+- Example 1:
+
 ```sql
 > drop table if exists tbl1,tbl2;
 > create table tbl1 (col_1a tinyint, col_1b smallint, col_1c int, col_1d bigint, col_1e char(10) not null);
@@ -58,6 +60,17 @@ If there are no matching rows, SUM() returns NULL.
 
 ```
 
-## Constraints
+- Example 2:
 
-SUM(DISTINCT) is not supported for the 0.5.1 version.
+```sql
+> CREATE TABLE t1(a varchar(255), b INT, c INT UNSIGNED, d DECIMAL(12,2), e REAL);
+> INSERT INTO t1 VALUES('iynfj', 1, 1, 1, 1);
+> INSERT INTO t1 VALUES('innfj', 2, 2, 2, 2);
+> SELECT SUM( DISTINCT b ) FROM t1 GROUP BY b;
++-----------------+
+| sum(distinct b) |
++-----------------+
+|               1 |
+|               2 |
++-----------------+
+```
