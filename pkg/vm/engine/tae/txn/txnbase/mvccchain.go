@@ -138,20 +138,7 @@ func (be *MVCCChain) GetVisibleNode(ts types.TS) (node MVCCNode) {
 	return
 }
 
-// GetExactUpdateNode gets the exact UpdateNode with the ts.
 // It's only used in replay
-func (be *MVCCChain) GetExactUpdateNode(ts types.TS) (node MVCCNode) {
-	be.MVCC.Loop(func(n *common.GenericDLNode[MVCCNode]) bool {
-		un := n.GetPayload()
-		if un.IsSameTxn(ts) {
-			node = un
-			return false
-		}
-		// return un.Start < ts
-		return true
-	}, false)
-	return
-}
 func (be *MVCCChain) GetExactUpdateNodeByNode(o MVCCNode) (node MVCCNode) {
 	be.MVCC.Loop(func(n *common.GenericDLNode[MVCCNode]) bool {
 		un := n.GetPayload()
@@ -182,9 +169,9 @@ func (be *MVCCChain) IsCreating() bool {
 	return un.IsActive()
 }
 
-func (be *MVCCChain) PrepareWrite(txn txnif.TxnReader) (err error) {
+func (be *MVCCChain) CheckConflict(txn txnif.TxnReader) (err error) {
 	node := be.GetUpdateNodeLocked()
-	err = node.PrepareWrite(txn.GetStartTS())
+	err = node.CheckConflict(txn.GetStartTS())
 	return
 }
 

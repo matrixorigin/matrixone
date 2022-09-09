@@ -207,7 +207,7 @@ func (be *DBBaseEntry) CloneCreateEntry() BaseEntry {
 }
 
 func (be *DBBaseEntry) DropEntryLocked(txnCtx txnif.TxnReader) error {
-	err := be.PrepareWrite(txnCtx)
+	err := be.CheckConflict(txnCtx)
 	if err != nil {
 		return err
 	}
@@ -231,7 +231,7 @@ func (be *DBBaseEntry) PrepareAdd(txn txnif.TxnReader) (err error) {
 			waitTxn.GetTxnState(true)
 			be.RLock()
 		}
-		err = be.PrepareWrite(txn)
+		err = be.CheckConflict(txn)
 		if err != nil {
 			return
 		}

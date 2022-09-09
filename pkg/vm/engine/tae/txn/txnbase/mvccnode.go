@@ -27,10 +27,10 @@ import (
 type MVCCNode interface {
 	String() string
 
-	PrepareWrite(ts types.TS) error
+	IsVisible(ts types.TS) (visible bool)
+	CheckConflict(ts types.TS) error
 	UpdateNode(o MVCCNode)
 
-	IsVisible(ts types.TS) (visible bool)
 	CommittedIn(minTS, maxTS types.TS) (committedIn, commitBeforeMinTS bool)
 	NeedWaitCommitting(ts types.TS) (bool, txnif.TxnReader)
 	IsSameTxn(ts types.TS) bool
@@ -75,7 +75,7 @@ func NewTxnMVCCNodeWithTxn(txn txnif.TxnReader) *TxnMVCCNode {
 }
 
 // Check w-w confilct
-func (un *TxnMVCCNode) PrepareWrite(ts types.TS) error {
+func (un *TxnMVCCNode) CheckConflict(ts types.TS) error {
 	if un.IsActive() {
 		if un.IsSameTxn(ts) {
 			return nil

@@ -120,8 +120,6 @@ func (node *AppendNode) GetID() *common.ID {
 	return node.id
 }
 func (node *AppendNode) GetCommitTS() types.TS {
-	node.RLock()
-	defer node.RUnlock()
 	return node.GetEnd()
 }
 func (node *AppendNode) IsCommitted() bool {
@@ -162,8 +160,8 @@ func (node *AppendNode) ApplyCommit(index *wal.Index) error {
 	}
 	node.TxnMVCCNode.ApplyCommit(index)
 	if node.mvcc != nil {
-		logutil.Debugf("Set MaxCommitTS=%v, MaxVisibleRow=%d", node.GetEnd(), node.GetMaxRow())
-		node.mvcc.SetMaxVisible(node.GetEnd())
+		logutil.Debugf("Set MaxCommitTS=%v, MaxVisibleRow=%d", node.GetEndLocked(), node.GetMaxRow())
+		node.mvcc.SetMaxVisible(node.GetEndLocked())
 	}
 	// logutil.Infof("Apply1Index %s TS=%d", index.String(), n.commitTs)
 	listener := node.mvcc.GetAppendListener()
@@ -237,4 +235,18 @@ func (node *AppendNode) PrepareRollback() (err error) {
 func (node *AppendNode) MakeCommand(id uint32) (cmd txnif.TxnCmd, err error) {
 	cmd = NewAppendCmd(id, node)
 	return
+}
+func (node *AppendNode) GetEnd() types.TS {
+	node.RLock()
+	defer node.RUnlock()
+	return node.GetEndLocked()
+}
+func (node *AppendNode) GetEndLocked() types.TS {
+	return node.TxnMVCCNode.GetEnd()
+}
+
+func (node *AppendNode) NeedWaitCommitting(startTS types.TS) (bool, txnif.TxnReader) {
+	node.RLock()
+	defer node.RUnlock()
+	return node.TxnMVCCNode.NeedWaitCommitting(startTS)
 }
