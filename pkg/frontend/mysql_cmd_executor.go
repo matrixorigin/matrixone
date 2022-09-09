@@ -1662,32 +1662,9 @@ func incStatementCounter(stmt tree.Statement, isInternal bool) {
 	}
 }
 
-func remindrecordSQLLentencyObserver(stmt tree.Statement, isInternal bool, value float64) {
-	switch stmt.(type) {
-	case *tree.Select:
-		metric.SQLLatencyObserver(metric.SQLTypeSelect, isInternal).Observe(value)
-	case *tree.Insert:
-		metric.SQLLatencyObserver(metric.SQLTypeInsert, isInternal).Observe(value)
-	case *tree.Delete:
-		metric.SQLLatencyObserver(metric.SQLTypeDelete, isInternal).Observe(value)
-	case *tree.Update:
-		metric.SQLLatencyObserver(metric.SQLTypeUpdate, isInternal).Observe(value)
-	default:
-		metric.SQLLatencyObserver(metric.SQLTypeOther, isInternal).Observe(value)
-	}
-}
-
 func (mce *MysqlCmdExecutor) beforeRun(stmt tree.Statement) {
 	sess := mce.GetSession()
 	incStatementCounter(stmt, sess.IsInternal)
-}
-
-func (mce *MysqlCmdExecutor) afterRun(stmt tree.Statement, beginInstant time.Time) {
-	// TODO: this latency doesn't consider complile and build stage, fix it!
-	latency := time.Since(beginInstant).Seconds()
-	sess := mce.GetSession()
-	remindrecordSQLLentencyObserver(stmt, sess.IsInternal, latency)
-
 }
 
 // execute query
@@ -1747,7 +1724,6 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 
 	stmt := cws[0].GetAst()
 	mce.beforeRun(stmt)
-	defer mce.afterRun(stmt, beginInstant)
 	for _, cw := range cws {
 		ses.SetMysqlResultSet(&MysqlResultSet{})
 		stmt := cw.GetAst()
