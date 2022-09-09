@@ -169,24 +169,20 @@ func (be *MetaBaseEntry) HasDropped() bool {
 	return node.(*MetadataMVCCNode).HasDropped()
 }
 
-func (be *MetaBaseEntry) ExistedForTs(ts types.TS) bool {
-	can, dropped := be.TsCanGet(ts)
-	if !can {
+func (be *MetaBaseEntry) ensureVisibleAndNotDropped(ts types.TS) bool {
+	visible, dropped := be.GetVisibiltyLocked(ts)
+	if !visible {
 		return false
 	}
 	return !dropped
 }
 
-func (be *MetaBaseEntry) TsCanGet(ts types.TS) (can, dropped bool) {
+func (be *MetaBaseEntry) GetVisibiltyLocked(ts types.TS) (visible, dropped bool) {
 	un := be.GetNodeToRead(ts)
 	if un == nil {
 		return
 	}
-	if un.(*MetadataMVCCNode).HasDropped() {
-		can, dropped = true, true
-		return
-	}
-	can, dropped = true, false
+	visible, dropped = true, un.(*MetadataMVCCNode).HasDropped()
 	return
 }
 
@@ -197,7 +193,7 @@ func (be *MetaBaseEntry) IsVisible(ts types.TS, mu *sync.RWMutex) (ok bool, err 
 		txnToWait.GetTxnState(true)
 		mu.RLock()
 	}
-	ok = be.ExistedForTs(ts)
+	ok = be.ensureVisibleAndNotDropped(ts)
 	return
 }
 
@@ -245,7 +241,7 @@ func (be *MetaBaseEntry) PrepareAdd(txn txnif.TxnReader) (err error) {
 			return ErrDuplicate
 		}
 	} else {
-		if be.ExistedForTs(txn.GetStartTS()) {
+		if be.ensureVisibleAndNotDropped(txn.GetStartTS()) {
 			return ErrDuplicate
 		}
 	}
@@ -307,11 +303,7 @@ func (be *MetaBaseEntry) TxnCanGet(ts types.TS) (can, dropped bool) {
 		txnToWait.GetTxnState(true)
 		be.RLock()
 	}
-	un := be.GetNodeToRead(ts)
-	if un == nil {
-		return
-	}
-	return be.TsCanGet(ts)
+	return be.GetVisibiltyLocked(ts)
 }
 func (be *MetaBaseEntry) WriteOneNodeTo(w io.Writer) (n int64, err error) {
 	if err = binary.Write(w, binary.BigEndian, be.ID); err != nil {
