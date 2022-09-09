@@ -20,8 +20,8 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/config"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/moengine"
 	"github.com/matrixorigin/matrixone/pkg/vm/mempool"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
 )
@@ -117,9 +117,9 @@ func (routine *Routine) Loop(routineCtx context.Context) {
 		routine.executor.(*MysqlCmdExecutor).setCancelRequestFunc(cancelRequestFunc)
 		ses := routine.GetSession()
 		tenant := ses.GetTenantInfo()
-		tenantCtx := context.WithValue(cancelRequestCtx, moengine.TenantIDKey{}, tenant.GetTenantID())
-		tenantCtx = context.WithValue(tenantCtx, moengine.UserIDKey{}, tenant.GetUserID())
-		tenantCtx = context.WithValue(tenantCtx, moengine.RoleIDKey{}, tenant.GetDefaultRoleID())
+		tenantCtx := context.WithValue(cancelRequestCtx, defines.TenantIDKey{}, tenant.GetTenantID())
+		tenantCtx = context.WithValue(tenantCtx, defines.UserIDKey{}, tenant.GetUserID())
+		tenantCtx = context.WithValue(tenantCtx, defines.RoleIDKey{}, tenant.GetDefaultRoleID())
 		ses.SetRequestContext(tenantCtx)
 		routine.executor.PrepareSessionBeforeExecRequest(routine.GetSession())
 

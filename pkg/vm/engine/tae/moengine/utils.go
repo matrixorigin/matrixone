@@ -726,11 +726,10 @@ func CopyToMoVector(vec containers.Vector) *vector.Vector {
 //
 // Not just copy it.   Until profiler says I need to work harder.
 func VectorsToMO(vec containers.Vector) *vector.Vector {
-	mov := vector.New(vec.GetType())
+	mov := vector.NewOriginal(vec.GetType())
 	data := vec.Data()
 	typ := vec.GetType()
 	mov.Typ = typ
-	mov.Or = true
 	if vec.HasNull() {
 		mov.Nsp.Np = bitmap.New(vec.Length())
 		mov.Nsp.Np.AddMany(vec.NullMask().ToArray())
