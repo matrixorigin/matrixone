@@ -63,7 +63,3 @@ NaN if the input parameter is empty.
 | 10.5000 |
 +---------+
 ```
-
-## Constraints
-
-AVG(DISTINCT) is not supported for the 0.5.1 version.
