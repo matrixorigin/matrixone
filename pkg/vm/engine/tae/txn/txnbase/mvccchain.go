@@ -128,12 +128,12 @@ func (be *MVCCChain) GetCommittedNode() (node MVCCNode) {
 func (be *MVCCChain) GetNodeToRead(startts types.TS) (node MVCCNode) {
 	be.MVCC.Loop(func(n *common.GenericDLNode[MVCCNode]) (goNext bool) {
 		un := n.GetPayload()
-		var canRead bool
-		canRead, goNext = un.TxnCanRead(startts)
-		if canRead {
+		ok := un.IsVisible(startts)
+		if ok {
 			node = un
+			return false
 		}
-		return
+		return true
 	}, false)
 	return
 }
@@ -182,9 +182,9 @@ func (be *MVCCChain) IsCreating() bool {
 	return un.IsActive()
 }
 
-func (be *MVCCChain) PrepareWrite(txn txnif.TxnReader) (err error) {
+func (be *MVCCChain) CheckConflict(txn txnif.TxnReader) (err error) {
 	node := be.GetUpdateNodeLocked()
-	err = node.PrepareWrite(txn.GetStartTS())
+	err = node.CheckConflict(txn.GetStartTS())
 	return
 }
 
