@@ -179,6 +179,26 @@ var (
 		}
 		return vector.NewWithFixed(types.T_timestamp.ToType(), ds, ns, nil)
 	}
+
+	MakeUuidVector = func(values []types.Uuid, nsp []uint64) *vector.Vector {
+		return vector.NewWithData(uuidType, nil, values, nulls.Build(len(values), nsp...))
+	}
+
+	MakeUuidVectorByString = func(values []string, nsp []uint64) *vector.Vector {
+		ds := make([]types.Uuid, len(values))
+		ns := nulls.Build(len(values), nsp...)
+		for i, s := range values {
+			if nulls.Contains(ns, uint64(i)) {
+				continue
+			}
+			d, err := types.ParseUuid(s)
+			if err != nil {
+				panic(err)
+			}
+			ds[i] = d
+		}
+		return vector.NewWithFixed(types.T_uuid.ToType(), ds, ns, nil)
+	}
 )
 
 // functions to make a scalar vector for test.

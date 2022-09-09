@@ -86,6 +86,8 @@ func (v *Vector) colFromData() {
 			v.Col = DecodeFixedCol[types.Decimal64](v, tlen)
 		case types.T_decimal128:
 			v.Col = DecodeFixedCol[types.Decimal128](v, tlen)
+		case types.T_uuid:
+			v.Col = DecodeFixedCol[types.Uuid](v, tlen)
 		case types.T_date:
 			v.Col = DecodeFixedCol[types.Date](v, tlen)
 		case types.T_datetime:
@@ -139,6 +141,8 @@ func (v *Vector) setupColFromData(start, end int) {
 			v.Col = DecodeFixedCol[types.Decimal64](v, tlen)[start:end]
 		case types.T_decimal128:
 			v.Col = DecodeFixedCol[types.Decimal128](v, tlen)[start:end]
+		case types.T_uuid:
+			v.Col = DecodeFixedCol[types.Uuid](v, tlen)[start:end]
 		case types.T_date:
 			v.Col = DecodeFixedCol[types.Date](v, tlen)[start:end]
 		case types.T_datetime:
@@ -183,6 +187,8 @@ func (v *Vector) encodeColToByteSlice() []byte {
 		return types.EncodeDecimal64Slice(v.Col.([]types.Decimal64))
 	case types.T_decimal128:
 		return types.EncodeDecimal128Slice(v.Col.([]types.Decimal128))
+	case types.T_uuid:
+		return types.EncodeUuidSlice(v.Col.([]types.Uuid))
 	case types.T_date:
 		return types.EncodeDateSlice(v.Col.([]types.Date))
 	case types.T_datetime:
