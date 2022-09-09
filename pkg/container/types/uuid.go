@@ -55,8 +55,8 @@ func CompareUuid(left Uuid, right Uuid) int64 {
 	return 0
 }
 
-func (muuid Uuid) ToString() string {
-	return uuid.UUID(muuid).String()
+func (d Uuid) ToString() string {
+	return uuid.UUID(d).String()
 }
 
 func (d Uuid) Compare(other Uuid) int {
