@@ -1,4 +1,4 @@
-// Copyright 2022 Matrix Origin
+// Copyright 2021 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,30 +12,37 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package min
+package uuids
 
-import (
-	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"golang.org/x/exp/constraints"
-)
+import "github.com/matrixorigin/matrixone/pkg/container/types"
 
-type Compare interface {
-	constraints.Integer | constraints.Float | types.Date |
-		types.Datetime | types.Timestamp
-}
-type Min[T Compare] struct {
-}
-type Decimal64Min struct {
+type sortElem struct {
+	data types.Uuid
+	idx  uint32
 }
 
-type Decimal128Min struct {
+type sortSlice []sortElem
+
+func (x sortSlice) Less(i, j int) bool {
+	return x[i].data.Lt(x[j].data)
 }
 
-type BoolMin struct {
+func (x sortSlice) Swap(i, j int) {
+	x[i], x[j] = x[j], x[i]
 }
 
-type StrMin struct {
+type heapElem struct {
+	data types.Uuid
+	src  uint32
+	next uint32
 }
 
-type UuidMin struct {
+type heapSlice []heapElem
+
+func (x heapSlice) Less(i, j int) bool {
+	return x[i].data.Lt(x[j].data)
+}
+
+func (x heapSlice) Swap(i, j int) {
+	x[i], x[j] = x[j], x[i]
 }

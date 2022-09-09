@@ -144,6 +144,13 @@ func Sort(desc bool, os []int64, vec *vector.Vector) {
 		} else {
 			genericSort(col, os, decimal128Greater)
 		}
+	case types.T_uuid:
+		col := vector.GetFixedVectorValues[types.Uuid](vec)
+		if !desc {
+			genericSort(col, os, uuidLess)
+		} else {
+			genericSort(col, os, uuidGreater)
+		}
 	case types.T_char, types.T_varchar, types.T_blob:
 		col := vector.GetFixedVectorValues[types.Varlena](vec)
 		varlenaCmp := func(data []types.Varlena, i, j int64) bool {
@@ -157,6 +164,7 @@ func Sort(desc bool, os []int64, vec *vector.Vector) {
 		}
 		genericSort(col, os, varlenaCmp)
 	}
+
 }
 
 func boolLess[T bool](data []T, i, j int64) bool {
@@ -180,6 +188,14 @@ func decimal128Less(data []types.Decimal128, i, j int64) bool {
 }
 
 func decimal128Greater(data []types.Decimal128, i, j int64) bool {
+	return data[i].Compare(data[j]) > 0
+}
+
+func uuidLess(data []types.Uuid, i, j int64) bool {
+	return data[i].Compare(data[j]) < 0
+}
+
+func uuidGreater(data []types.Uuid, i, j int64) bool {
 	return data[i].Compare(data[j]) > 0
 }
 
