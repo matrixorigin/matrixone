@@ -225,7 +225,7 @@ func (catalog *Catalog) onReplayDatabase(cmd *EntryCommand) {
 		return
 	}
 
-	cmd.DB.MVCC.Loop(func(n *common.GenericDLNode[txnbase.VisibleNode]) bool {
+	cmd.DB.MVCC.Loop(func(n *common.GenericDLNode[txnbase.MVCCNode]) bool {
 		un := n.GetPayload()
 		dbun := db.GetExactUpdateNode(un.GetStart())
 		if dbun == nil {
@@ -293,7 +293,7 @@ func (catalog *Catalog) onReplayTable(cmd *EntryCommand, dataFactory DataFactory
 			panic(err)
 		}
 	} else {
-		cmd.Table.MVCC.Loop(func(n *common.GenericDLNode[txnbase.VisibleNode]) bool {
+		cmd.Table.MVCC.Loop(func(n *common.GenericDLNode[txnbase.MVCCNode]) bool {
 			un := n.GetPayload()
 			node := rel.GetExactUpdateNode(un.GetStart())
 			if node == nil {
@@ -358,7 +358,7 @@ func (catalog *Catalog) onReplaySegment(cmd *EntryCommand, dataFactory DataFacto
 		cmd.Segment.table = rel
 		rel.AddEntryLocked(cmd.Segment)
 	} else {
-		cmd.Segment.MVCC.Loop(func(n *common.GenericDLNode[txnbase.VisibleNode]) bool {
+		cmd.Segment.MVCC.Loop(func(n *common.GenericDLNode[txnbase.MVCCNode]) bool {
 			un := n.GetPayload()
 			segun := seg.GetExactUpdateNode(un.GetStart())
 			if segun != nil {
@@ -439,7 +439,7 @@ func (catalog *Catalog) onReplayBlock(cmd *EntryCommand, dataFactory DataFactory
 		cmd.Block.segment = seg
 		seg.AddEntryLocked(cmd.Block)
 	} else {
-		cmd.Block.MVCC.Loop(func(n *common.GenericDLNode[txnbase.VisibleNode]) bool {
+		cmd.Block.MVCC.Loop(func(n *common.GenericDLNode[txnbase.MVCCNode]) bool {
 			un := n.GetPayload()
 			blkun := blk.GetExactUpdateNode(un.GetStart())
 			if blkun != nil {

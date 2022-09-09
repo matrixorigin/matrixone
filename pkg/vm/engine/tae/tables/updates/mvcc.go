@@ -37,7 +37,7 @@ type MVCCHandle struct {
 	holes           *roaring.Bitmap
 	meta            *catalog.BlockEntry
 	maxVisible      atomic.Value
-	appends         *txnbase.VisibleSlice
+	appends         *txnbase.MVCCSlice
 	changes         uint32
 	deletesListener func(uint64, common.RowGen, types.TS) error
 	appendListener  func(txnif.AppendNode) error
@@ -48,7 +48,7 @@ func NewMVCCHandle(meta *catalog.BlockEntry) *MVCCHandle {
 		RWMutex: new(sync.RWMutex),
 		columns: make(map[uint16]*ColumnChain),
 		meta:    meta,
-		appends: txnbase.NewVisibleSlice(NewEmptyAppendNode),
+		appends: txnbase.NewMVCCSlice(NewEmptyAppendNode),
 	}
 	node.deletes = NewDeleteChain(nil, node)
 	if meta == nil {

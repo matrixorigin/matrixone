@@ -24,7 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 )
 
-type VisibleNode interface {
+type MVCCNode interface {
 	PrepareWrite(startTS types.TS) error
 	IsSameStartTs(startTS types.TS) bool
 	TxnCanRead(startTS types.TS) (canRead, goNext bool)
@@ -36,16 +36,15 @@ type VisibleNode interface {
 	GetStart() types.TS
 	GetEnd() types.TS
 	GetTxn() txnif.TxnReader
-	// Compare(o VisibleNode) int
 	AddLogIndex(idx *wal.Index)
 	GetLogIndex() []*wal.Index
 	ApplyCommit(index *wal.Index) (err error)
 	ApplyRollback(index *wal.Index) (err error)
 	WriteTo(w io.Writer) (n int64, err error)
 	ReadFrom(r io.Reader) (n int64, err error)
-	UpdateNode(o VisibleNode)
-	CloneData() VisibleNode
-	CloneAll() VisibleNode
+	UpdateNode(o MVCCNode)
+	CloneData() MVCCNode
+	CloneAll() MVCCNode
 	String() string
 	OnCommit()
 	Prepare2PCPrepare() (err error)

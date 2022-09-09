@@ -27,26 +27,26 @@ import (
 )
 
 type DBBaseEntry struct {
-	*txnbase.VisibleChain
+	*txnbase.MVCCChain
 	ID uint64
 }
 
 func NewReplayDBBaseEntry() *DBBaseEntry {
 	be := &DBBaseEntry{
-		VisibleChain: txnbase.NewVisibleChain(CompareDBBaseNode, NewEmptyDBMVCCNode),
+		MVCCChain: txnbase.NewMVCCChain(CompareDBBaseNode, NewEmptyDBMVCCNode),
 	}
 	return be
 }
 
 func NewDBBaseEntry(id uint64) *DBBaseEntry {
 	return &DBBaseEntry{
-		ID:           id,
-		VisibleChain: txnbase.NewVisibleChain(CompareDBBaseNode, NewEmptyDBMVCCNode),
+		ID:        id,
+		MVCCChain: txnbase.NewMVCCChain(CompareDBBaseNode, NewEmptyDBMVCCNode),
 	}
 }
 
 func (be *DBBaseEntry) StringLocked() string {
-	return fmt.Sprintf("[%d %p]%s", be.ID, be.RWMutex, be.VisibleChain.StringLocked())
+	return fmt.Sprintf("[%d %p]%s", be.ID, be.RWMutex, be.MVCCChain.StringLocked())
 }
 
 func (be *DBBaseEntry) String() string {
@@ -205,8 +205,8 @@ func (be *DBBaseEntry) CloneCreateEntry() BaseEntry {
 	cloned, uncloned := be.CloneLatestNode()
 	uncloned.(*DBMVCCNode).DeletedAt = types.TS{}
 	return &DBBaseEntry{
-		VisibleChain: cloned,
-		ID:           be.ID,
+		MVCCChain: cloned,
+		ID:        be.ID,
 	}
 }
 
@@ -261,13 +261,13 @@ func (be *DBBaseEntry) DeleteAfter(ts types.TS) bool {
 }
 
 func (be *DBBaseEntry) CloneCommittedInRange(start, end types.TS) BaseEntry {
-	chain := be.VisibleChain.CloneCommittedInRange(start, end)
+	chain := be.MVCCChain.CloneCommittedInRange(start, end)
 	if chain == nil {
 		return nil
 	}
 	return &DBBaseEntry{
-		VisibleChain: chain,
-		ID:           be.ID,
+		MVCCChain: chain,
+		ID:        be.ID,
 	}
 }
 
@@ -319,7 +319,7 @@ func (be *DBBaseEntry) WriteOneNodeTo(w io.Writer) (n int64, err error) {
 	}
 	n += 8
 	var sn int64
-	sn, err = be.VisibleChain.WriteOneNodeTo(w)
+	sn, err = be.MVCCChain.WriteOneNodeTo(w)
 	if err != nil {
 		return
 	}
@@ -332,7 +332,7 @@ func (be *DBBaseEntry) WriteAllTo(w io.Writer) (n int64, err error) {
 	}
 	n += 8
 	var sn int64
-	sn, err = be.VisibleChain.WriteAllTo(w)
+	sn, err = be.MVCCChain.WriteAllTo(w)
 	if err != nil {
 		return
 	}
@@ -345,7 +345,7 @@ func (be *DBBaseEntry) ReadOneNodeFrom(r io.Reader) (n int64, err error) {
 	}
 	n += 8
 	var sn int64
-	sn, err = be.VisibleChain.ReadOneNodeFrom(r)
+	sn, err = be.MVCCChain.ReadOneNodeFrom(r)
 	if err != nil {
 		return
 	}
@@ -358,7 +358,7 @@ func (be *DBBaseEntry) ReadAllFrom(r io.Reader) (n int64, err error) {
 	}
 	n += 8
 	var sn int64
-	sn, err = be.VisibleChain.ReadAllFrom(r)
+	sn, err = be.MVCCChain.ReadAllFrom(r)
 	if err != nil {
 		return
 	}

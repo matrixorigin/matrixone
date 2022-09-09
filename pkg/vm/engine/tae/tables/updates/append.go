@@ -17,9 +17,10 @@ package updates
 import (
 	"encoding/binary"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"io"
 	"sync"
+
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -84,18 +85,18 @@ func NewAppendNode(
 	return n
 }
 
-func NewEmptyAppendNode() txnbase.VisibleNode {
+func NewEmptyAppendNode() txnbase.MVCCNode {
 	return &AppendNode{
 		TxnMVCCNode: &txnbase.TxnMVCCNode{},
 	}
 }
-func (node *AppendNode) CloneAll() txnbase.VisibleNode {
+func (node *AppendNode) CloneAll() txnbase.MVCCNode {
 	panic("todo")
 }
-func (node *AppendNode) CloneData() txnbase.VisibleNode {
+func (node *AppendNode) CloneData() txnbase.MVCCNode {
 	panic("todo")
 }
-func (node *AppendNode) UpdateNode(txnbase.VisibleNode) {
+func (node *AppendNode) UpdateNode(txnbase.MVCCNode) {
 	panic("todo")
 }
 func (node *AppendNode) GeneralDesc() string {

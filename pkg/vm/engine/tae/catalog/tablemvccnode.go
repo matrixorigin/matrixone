@@ -27,24 +27,24 @@ type TableMVCCNode struct {
 	*txnbase.TxnMVCCNode
 }
 
-func NewEmptyTableMVCCNode() txnbase.VisibleNode {
+func NewEmptyTableMVCCNode() txnbase.MVCCNode {
 	return &TableMVCCNode{
 		EntryMVCCNode: &EntryMVCCNode{},
 		TxnMVCCNode:   &txnbase.TxnMVCCNode{},
 	}
 }
 
-func CompareTableBaseNode(e, o txnbase.VisibleNode) int {
+func CompareTableBaseNode(e, o txnbase.MVCCNode) int {
 	return e.(*TableMVCCNode).Compare(o.(*TableMVCCNode).TxnMVCCNode)
 }
 
-func (e *TableMVCCNode) CloneAll() txnbase.VisibleNode {
+func (e *TableMVCCNode) CloneAll() txnbase.MVCCNode {
 	node := e.CloneData()
 	node.(*TableMVCCNode).TxnMVCCNode = e.TxnMVCCNode.CloneAll()
 	return node
 }
 
-func (e *TableMVCCNode) CloneData() txnbase.VisibleNode {
+func (e *TableMVCCNode) CloneData() txnbase.MVCCNode {
 	return &TableMVCCNode{
 		EntryMVCCNode: e.EntryMVCCNode.Clone(),
 		TxnMVCCNode:   &txnbase.TxnMVCCNode{},
@@ -61,7 +61,7 @@ func (e *TableMVCCNode) String() string {
 }
 
 // for create drop in one txn
-func (e *TableMVCCNode) UpdateNode(vun txnbase.VisibleNode) {
+func (e *TableMVCCNode) UpdateNode(vun txnbase.MVCCNode) {
 	un := vun.(*TableMVCCNode)
 	e.DeletedAt = un.DeletedAt
 	e.Deleted = true

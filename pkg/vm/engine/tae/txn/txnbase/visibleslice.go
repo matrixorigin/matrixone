@@ -23,18 +23,18 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 )
 
-type VisibleSlice struct {
-	MVCC      []VisibleNode
-	newnodefn func() VisibleNode
+type MVCCSlice struct {
+	MVCC      []MVCCNode
+	newnodefn func() MVCCNode
 }
 
-func NewVisibleSlice(newnodefn func() VisibleNode) *VisibleSlice {
-	return &VisibleSlice{
-		MVCC:      make([]VisibleNode, 0),
+func NewMVCCSlice(newnodefn func() MVCCNode) *MVCCSlice {
+	return &MVCCSlice{
+		MVCC:      make([]MVCCNode, 0),
 		newnodefn: newnodefn,
 	}
 }
-func (be *VisibleSlice) StringLocked() string {
+func (be *MVCCSlice) StringLocked() string {
 	var w bytes.Buffer
 
 	length := len(be.MVCC)
@@ -47,19 +47,19 @@ func (be *VisibleSlice) StringLocked() string {
 }
 
 // for replay
-func (be *VisibleSlice) GetTs() types.TS {
+func (be *MVCCSlice) GetTs() types.TS {
 	return be.GetUpdateNodeLocked().GetEnd()
 }
-func (be *VisibleSlice) GetTxn() txnif.TxnReader { return be.GetUpdateNodeLocked().GetTxn() }
+func (be *MVCCSlice) GetTxn() txnif.TxnReader { return be.GetUpdateNodeLocked().GetTxn() }
 
-func (be *VisibleSlice) InsertNode(un VisibleNode) {
+func (be *MVCCSlice) InsertNode(un MVCCNode) {
 	be.MVCC = append(be.MVCC, un)
 }
 
 // GetUpdateNode gets the latest UpdateNode.
 // It is useful in making command, apply state(e.g. ApplyCommit),
 // check confilct.
-func (be *VisibleSlice) GetUpdateNodeLocked() VisibleNode {
+func (be *MVCCSlice) GetUpdateNodeLocked() MVCCNode {
 	length := len(be.MVCC)
 	if length == 0 {
 		return nil
@@ -69,7 +69,7 @@ func (be *VisibleSlice) GetUpdateNodeLocked() VisibleNode {
 
 // GetCommittedNode gets the latest committed UpdateNode.
 // It's useful when check whether the catalog/metadata entry is deleted.
-func (be *VisibleSlice) GetCommittedNode() (node VisibleNode) {
+func (be *MVCCSlice) GetCommittedNode() (node MVCCNode) {
 	length := len(be.MVCC)
 	for i := length - 1; i >= 0; i-- {
 		un := be.MVCC[i]
@@ -80,7 +80,7 @@ func (be *VisibleSlice) GetCommittedNode() (node VisibleNode) {
 	}
 	return
 }
-func (be *VisibleSlice) DeleteNode(node VisibleNode) {
+func (be *MVCCSlice) DeleteNode(node MVCCNode) {
 	length := len(be.MVCC)
 	for i := length - 1; i >= 0; i-- {
 		un := be.MVCC[i]
@@ -97,7 +97,7 @@ func (be *VisibleSlice) DeleteNode(node VisibleNode) {
 // It returns the UpdateNode in the same txn as the read txn
 // or returns the latest UpdateNode with commitTS less than the timestamp.
 // todo getend or getcommitts
-func (be *VisibleSlice) GetNodeToRead(ts types.TS) (offset int, node VisibleNode) {
+func (be *MVCCSlice) GetNodeToRead(ts types.TS) (offset int, node MVCCNode) {
 	if len(be.MVCC) == 0 {
 		return 0, nil
 	}
@@ -128,7 +128,7 @@ func (be *VisibleSlice) GetNodeToRead(ts types.TS) (offset int, node VisibleNode
 	}
 	return mid, be.MVCC[mid]
 }
-func (be *VisibleSlice) NeedWaitCommitting(startTS types.TS) (bool, txnif.TxnReader) {
+func (be *MVCCSlice) NeedWaitCommitting(startTS types.TS) (bool, txnif.TxnReader) {
 	un := be.GetUpdateNodeLocked()
 	if un == nil {
 		return false, nil
@@ -136,11 +136,11 @@ func (be *VisibleSlice) NeedWaitCommitting(startTS types.TS) (bool, txnif.TxnRea
 	return un.NeedWaitCommitting(startTS)
 }
 
-func (be *VisibleSlice) IsEmpty() bool {
+func (be *MVCCSlice) IsEmpty() bool {
 	return len(be.MVCC) == 0
 }
 
-func (be *VisibleSlice) IsCommitting() bool {
+func (be *MVCCSlice) IsCommitting() bool {
 	node := be.GetUpdateNodeLocked()
 	if node == nil {
 		return false
@@ -148,7 +148,7 @@ func (be *VisibleSlice) IsCommitting() bool {
 	return node.IsCommitting()
 }
 
-func (be *VisibleSlice) IsCommitted() bool {
+func (be *MVCCSlice) IsCommitted() bool {
 	un := be.GetUpdateNodeLocked()
 	if un == nil {
 		return false
@@ -156,7 +156,7 @@ func (be *VisibleSlice) IsCommitted() bool {
 	return un.GetTxn() == nil
 }
 
-func (be *VisibleSlice) CloneIndexInRange(start, end types.TS, mu *sync.RWMutex) (indexes []*wal.Index) {
+func (be *MVCCSlice) CloneIndexInRange(start, end types.TS, mu *sync.RWMutex) (indexes []*wal.Index) {
 	needWait, txn := be.NeedWaitCommitting(end.Next())
 	if needWait {
 		mu.RUnlock()

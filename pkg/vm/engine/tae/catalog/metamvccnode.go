@@ -30,24 +30,24 @@ type MetadataMVCCNode struct {
 	DeltaLoc string
 }
 
-func NewEmptyMetadataMVCCNode() txnbase.VisibleNode {
+func NewEmptyMetadataMVCCNode() txnbase.MVCCNode {
 	return &MetadataMVCCNode{
 		EntryMVCCNode: &EntryMVCCNode{},
 		TxnMVCCNode:   &txnbase.TxnMVCCNode{},
 	}
 }
 
-func CompareMetaBaseNode(e, o txnbase.VisibleNode) int {
+func CompareMetaBaseNode(e, o txnbase.MVCCNode) int {
 	return e.(*MetadataMVCCNode).Compare(o.(*MetadataMVCCNode).TxnMVCCNode)
 }
 
-func (e *MetadataMVCCNode) CloneAll() txnbase.VisibleNode {
+func (e *MetadataMVCCNode) CloneAll() txnbase.MVCCNode {
 	node := e.CloneData()
 	node.(*MetadataMVCCNode).TxnMVCCNode = e.TxnMVCCNode.CloneAll()
 	return node
 }
 
-func (e *MetadataMVCCNode) CloneData() txnbase.VisibleNode {
+func (e *MetadataMVCCNode) CloneData() txnbase.MVCCNode {
 	return &MetadataMVCCNode{
 		EntryMVCCNode: e.EntryMVCCNode.Clone(),
 		TxnMVCCNode:   &txnbase.TxnMVCCNode{},
@@ -68,7 +68,7 @@ func (e *MetadataMVCCNode) String() string {
 }
 
 // for create drop in one txn
-func (e *MetadataMVCCNode) UpdateNode(vun txnbase.VisibleNode) {
+func (e *MetadataMVCCNode) UpdateNode(vun txnbase.MVCCNode) {
 	un := vun.(*MetadataMVCCNode)
 	e.DeletedAt = un.DeletedAt
 	e.Deleted = true

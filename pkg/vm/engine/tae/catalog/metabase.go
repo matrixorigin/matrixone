@@ -27,26 +27,26 @@ import (
 )
 
 type MetaBaseEntry struct {
-	*txnbase.VisibleChain
+	*txnbase.MVCCChain
 	ID uint64
 }
 
 func NewReplayMetaBaseEntry() *MetaBaseEntry {
 	be := &MetaBaseEntry{
-		VisibleChain: txnbase.NewVisibleChain(CompareMetaBaseNode, NewEmptyMetadataMVCCNode),
+		MVCCChain: txnbase.NewMVCCChain(CompareMetaBaseNode, NewEmptyMetadataMVCCNode),
 	}
 	return be
 }
 
 func NewMetaBaseEntry(id uint64) *MetaBaseEntry {
 	return &MetaBaseEntry{
-		ID:           id,
-		VisibleChain: txnbase.NewVisibleChain(CompareMetaBaseNode, NewEmptyMetadataMVCCNode),
+		ID:        id,
+		MVCCChain: txnbase.NewMVCCChain(CompareMetaBaseNode, NewEmptyMetadataMVCCNode),
 	}
 }
 
 func (be *MetaBaseEntry) StringLocked() string {
-	return fmt.Sprintf("[%d %p]%s", be.ID, be.RWMutex, be.VisibleChain.StringLocked())
+	return fmt.Sprintf("[%d %p]%s", be.ID, be.RWMutex, be.MVCCChain.StringLocked())
 }
 
 func (be *MetaBaseEntry) String() string {
@@ -205,8 +205,8 @@ func (be *MetaBaseEntry) CloneCreateEntry() BaseEntry {
 	cloned, uncloned := be.CloneLatestNode()
 	uncloned.(*MetadataMVCCNode).DeletedAt = types.TS{}
 	return &MetaBaseEntry{
-		VisibleChain: cloned,
-		ID:           be.ID,
+		MVCCChain: cloned,
+		ID:        be.ID,
 	}
 }
 
@@ -261,13 +261,13 @@ func (be *MetaBaseEntry) DeleteAfter(ts types.TS) bool {
 }
 
 func (be *MetaBaseEntry) CloneCommittedInRange(start, end types.TS) BaseEntry {
-	chain := be.VisibleChain.CloneCommittedInRange(start, end)
+	chain := be.MVCCChain.CloneCommittedInRange(start, end)
 	if chain == nil {
 		return nil
 	}
 	return &MetaBaseEntry{
-		VisibleChain: chain,
-		ID:           be.ID,
+		MVCCChain: chain,
+		ID:        be.ID,
 	}
 }
 
@@ -319,7 +319,7 @@ func (be *MetaBaseEntry) WriteOneNodeTo(w io.Writer) (n int64, err error) {
 	}
 	n += 8
 	var sn int64
-	sn, err = be.VisibleChain.WriteOneNodeTo(w)
+	sn, err = be.MVCCChain.WriteOneNodeTo(w)
 	if err != nil {
 		return
 	}
@@ -332,7 +332,7 @@ func (be *MetaBaseEntry) WriteAllTo(w io.Writer) (n int64, err error) {
 	}
 	n += 8
 	var sn int64
-	sn, err = be.VisibleChain.WriteAllTo(w)
+	sn, err = be.MVCCChain.WriteAllTo(w)
 	if err != nil {
 		return
 	}
@@ -345,7 +345,7 @@ func (be *MetaBaseEntry) ReadOneNodeFrom(r io.Reader) (n int64, err error) {
 	}
 	n += 8
 	var sn int64
-	sn, err = be.VisibleChain.ReadOneNodeFrom(r)
+	sn, err = be.MVCCChain.ReadOneNodeFrom(r)
 	if err != nil {
 		return
 	}
@@ -358,7 +358,7 @@ func (be *MetaBaseEntry) ReadAllFrom(r io.Reader) (n int64, err error) {
 	}
 	n += 8
 	var sn int64
-	sn, err = be.VisibleChain.ReadAllFrom(r)
+	sn, err = be.MVCCChain.ReadAllFrom(r)
 	if err != nil {
 		return
 	}
