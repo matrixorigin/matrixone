@@ -70,9 +70,8 @@ func (cb *ColumnBlock) MarshalMeta() ([]byte, error) {
 	return buffer.Bytes(), nil
 }
 
-func (cb *ColumnBlock) UnMarshalMate(data []byte) error {
+func (cb *ColumnBlock) UnMarshalMate(cache *bytes.Buffer) error {
 	var err error
-	cache := bytes.NewBuffer(data)
 	if err = binary.Read(cache, binary.BigEndian, &cb.meta.typ); err != nil {
 		return err
 	}

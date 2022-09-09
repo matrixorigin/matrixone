@@ -20,12 +20,12 @@ type Block struct {
 
 func NewBlock(batch *batch.Batch) *Block {
 	header := &BlockHeader{
-		columnCount: uint16(len(batch.Attrs)),
+		columnCount: uint16(len(batch.Vecs)),
 	}
 	block := &Block{
 		header:  header,
 		data:    batch,
-		columns: make([]*ColumnBlock, len(batch.Attrs)),
+		columns: make([]*ColumnBlock, len(batch.Vecs)),
 	}
 	for i := range block.columns {
 		block.columns[i] = NewColumnBlock(uint16(i))
@@ -97,7 +97,7 @@ func (b *Block) UnMarshalMeta(data []byte) error {
 	b.columns = make([]*ColumnBlock, b.header.columnCount)
 	for i, _ := range b.columns {
 		b.columns[i] = NewColumnBlock(uint16(i))
-		err = b.columns[i].UnMarshalMate(cache.Bytes())
+		err = b.columns[i].UnMarshalMate(cache)
 		if err != nil {
 			return err
 		}

@@ -1,16 +1,17 @@
 package objectio
 
 import (
-	"bytes"
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/moengine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/stl"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
+	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
+	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
+	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
 	"github.com/stretchr/testify/assert"
 	"path"
 	"testing"
@@ -25,19 +26,14 @@ func TestNewObjectWriter(t *testing.T) {
 	dir = path.Join(dir, "/local")
 	id := common.NextGlobalSeqNum()
 	name := fmt.Sprintf("%d.blk", id)
-	schema := catalog.MockSchemaAll(14, 3)
-	schema.BlockMaxRows = options.DefaultBlockMaxRows
-	schema.SegmentMaxBlocks = options.DefaultBlocksPerSegment
-	data := catalog.MockBatch(schema, int(schema.BlockMaxRows*2))
-	bat := batch.New(true, data.Attrs)
-	bat.Vecs = moengine.CopyToMoVectors(data.Vecs)
+	bat := newBatch()
 
 	objectWriter, err := NewObjectWriter(name)
 	assert.Nil(t, err)
 	fd, err := objectWriter.Write(bat)
 	assert.Nil(t, err)
-	for i, attr := range bat.Attrs {
-		buf := fmt.Sprintf("test index %v", attr)
+	for i, _ := range bat.Vecs {
+		buf := fmt.Sprintf("test index %d", i)
 		err = objectWriter.WriteIndex(fd, uint16(i), []byte(buf))
 		assert.Nil(t, err)
 	}
@@ -57,22 +53,37 @@ func TestNewObjectWriter(t *testing.T) {
 	idxs[2] = 3
 	vec, err := objectReader.Read(extents[0], idxs)
 	assert.Nil(t, err)
-	opts := new(containers.Options)
-	opts.Capacity = int(schema.BlockMaxRows)
-	allocator := stl.NewSimpleAllocator()
-	opts.Allocator = allocator
-	newbat := containers.NewBatch()
-	for i, entry := range vec.Entries {
-		vec := containers.MakeVector(data.Vecs[int(idxs[i])].GetType(), false, opts)
-		r := bytes.NewBuffer(entry.Data)
-		if _, err = vec.ReadFrom(r); err != nil {
-			return
-		}
-		newbat.AddVector(data.Attrs[int(idxs[i])], vec)
-	}
-	assert.Equal(t, 3, len(newbat.Vecs))
+	vector1 := newVector(types.Type{Oid: types.T_int8}, vec.Entries[0].Data)
+	assert.Equal(t, int8(3), vector1.Col.([]int8)[3])
+	vector2 := newVector(types.Type{Oid: types.T_int32}, vec.Entries[1].Data)
+	assert.Equal(t, int32(3), vector2.Col.([]int32)[3])
+	vector3 := newVector(types.Type{Oid: types.T_int64}, vec.Entries[2].Data)
+	assert.Equal(t, int64(3), vector3.Col.([]int64)[3])
 	vec, err = objectReader.ReadIndex(extents[0], idxs)
 	assert.Nil(t, err)
 	assert.Equal(t, 3, len(vec.Entries))
-	assert.Equal(t, "test index mock_0", string(vec.Entries[0].Data))
+	assert.Equal(t, "test index 0", string(vec.Entries[0].Data))
+}
+
+func newBatch() *batch.Batch {
+	hm := host.New(1 << 30)
+	gm := guest.New(1<<30, hm)
+	mp := mheap.New(gm)
+	types := []types.Type{
+		{Oid: types.T_int8},
+		{Oid: types.T_int16},
+		{Oid: types.T_int32},
+		{Oid: types.T_int64},
+		{Oid: types.T_uint16},
+		{Oid: types.T_uint32},
+		{Oid: types.T_uint8},
+		{Oid: types.T_uint64},
+	}
+	return testutil.NewBatch(types, false, int(options.DefaultBlockMaxRows*2), mp)
+}
+
+func newVector(tye types.Type, buf []byte) *vector.Vector {
+	vector := vector.New(tye)
+	vector.Read(buf)
+	return vector
 }
