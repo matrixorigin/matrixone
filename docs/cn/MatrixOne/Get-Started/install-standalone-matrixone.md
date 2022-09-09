@@ -136,6 +136,9 @@ docker run -d -p 6001:6001 --name matrixone matrixorigin/matrixone:0.5.1
 docker run -d -p 6001:6001 --name matrixone matrixorigin/matrixone:nightly-commitnumber
 ```
 
+!!! info
+     如上面代码所示，*nightly* 为标识的 Tag 版本每天都进行更新，请注意获取最新的镜像。
+
 运行 Docker Hub 时需要输入用户名和密码，获取用户名和密码可以参考下一步骤 - 连接 MatrixOne 服务
 
 ### 3. 挂载数据（选做）
