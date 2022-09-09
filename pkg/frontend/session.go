@@ -17,9 +17,11 @@ package frontend
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"strings"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -600,9 +602,9 @@ func (ses *Session) AuthenticateUser(userInput string) ([]byte, error) {
 	ses.SetTenantInfo(tenant)
 
 	//step1 : check tenant exists or not in SYS tenant context
-	sysTenantCtx := context.WithValue(ses.requestCtx, moengine.TenantIDKey{}, uint32(sysAccountID))
-	sysTenantCtx = context.WithValue(sysTenantCtx, moengine.UserIDKey{}, uint32(rootID))
-	sysTenantCtx = context.WithValue(sysTenantCtx, moengine.RoleIDKey{}, uint32(moAdminRoleID))
+	sysTenantCtx := context.WithValue(ses.requestCtx, defines.TenantIDKey{}, uint32(sysAccountID))
+	sysTenantCtx = context.WithValue(sysTenantCtx, defines.UserIDKey{}, uint32(rootID))
+	sysTenantCtx = context.WithValue(sysTenantCtx, defines.RoleIDKey{}, uint32(moAdminRoleID))
 	sqlForCheckTenant := getSqlForCheckTenant(tenant.GetTenant())
 	rsset, err := executeSQLInBackgroundSession(sysTenantCtx, ses.GuestMmu, ses.Mempool, ses.Pu, sqlForCheckTenant)
 	if err != nil {
@@ -621,7 +623,7 @@ func (ses *Session) AuthenticateUser(userInput string) ([]byte, error) {
 	//step2 : check user exists or not in general tenant.
 	//step3 : get the password of the user
 
-	tenantCtx := context.WithValue(ses.requestCtx, moengine.TenantIDKey{}, uint32(tenantID))
+	tenantCtx := context.WithValue(ses.requestCtx, defines.TenantIDKey{}, uint32(tenantID))
 
 	//Get the password of the user in an independent session
 	sqlForPasswordOfUser := getSqlForPasswordOfUser(tenant.GetUser())
