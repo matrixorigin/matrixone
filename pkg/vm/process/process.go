@@ -31,12 +31,14 @@ import (
 func New(
 	ctx context.Context,
 	m *mheap.Mheap,
+	txnClient client.TxnClient,
 	txnOperator client.TxnOperator,
 	fileService fileservice.FileService,
 ) *Process {
 	return &Process{
 		mp:          m,
 		Ctx:         ctx,
+		TxnClient:   txnClient,
 		TxnOperator: txnOperator,
 		FileService: fileService,
 	}
@@ -56,6 +58,7 @@ func NewFromProc(p *Process, ctx context.Context, regNumber int) *Process {
 	proc.Id = p.Id
 	proc.mp = p.Mp()
 	proc.Lim = p.Lim
+	proc.TxnClient = p.TxnClient
 	proc.TxnOperator = p.TxnOperator
 	proc.AnalInfos = p.AnalInfos
 	proc.SessionInfo = p.SessionInfo
