@@ -16,13 +16,13 @@ package momath
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/stretchr/testify/require"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/stretchr/testify/require"
 	"math"
 	"testing"
 )
 
-func TestLn(t *testing.T){
+func TestLn(t *testing.T) {
 	as := []float64{1, math.Exp(0), math.Exp(1), math.Exp(10), math.Exp(100), math.Exp(99), math.Exp(-1)}
 	cs := make([]float64, 7)
 
@@ -30,14 +30,14 @@ func TestLn(t *testing.T){
 	cv := testutil.MakeFloat64Vector(cs, nil)
 
 	err := Ln(av, cv)
-	if err != nil{
+	if err != nil {
 		panic(err)
 	}
 	cols := vector.MustTCols[float64](cv)
 	require.Equal(t, []float64{0.0, 0.0, 1.0, 10.0, 100.0, 99.0, -1}, cols)
 }
 
-func TestExP(t *testing.T){
+func TestExP(t *testing.T) {
 	as := []float64{-1, 0, 1, 2, 10, 100}
 	cs := make([]float64, 6)
 
@@ -45,14 +45,14 @@ func TestExP(t *testing.T){
 	cv := testutil.MakeFloat64Vector(cs, nil)
 
 	err := Exp(av, cv)
-	if err != nil{
+	if err != nil {
 		panic(err)
 	}
 	cols := vector.MustTCols[float64](cv)
 	require.Equal(t, []float64{math.Exp(-1), math.Exp(0), math.Exp(1), math.Exp(2), math.Exp(10), math.Exp(100)}, cols)
 }
 
-func TestSin(t *testing.T){
+func TestSin(t *testing.T) {
 	as := []float64{-math.Pi / 2, 0, math.Pi / 2}
 	cs := make([]float64, 3)
 
@@ -60,14 +60,14 @@ func TestSin(t *testing.T){
 	cv := testutil.MakeFloat64Vector(cs, nil)
 
 	err := Sin(av, cv)
-	if err != nil{
+	if err != nil {
 		panic(err)
 	}
 	cols := vector.MustTCols[float64](cv)
 	require.Equal(t, []float64{-1, 0, 1}, cols)
 }
 
-func TestCos(t *testing.T){
+func TestCos(t *testing.T) {
 	as := []float64{-math.Pi, 0, math.Pi}
 	cs := make([]float64, 3)
 
@@ -75,14 +75,14 @@ func TestCos(t *testing.T){
 	cv := testutil.MakeFloat64Vector(cs, nil)
 
 	err := Cos(av, cv)
-	if err != nil{
+	if err != nil {
 		panic(err)
 	}
 	cols := vector.MustTCols[float64](cv)
 	require.Equal(t, []float64{-1, 1, -1}, cols)
 }
 
-func TestTan(t *testing.T){
+func TestTan(t *testing.T) {
 	as := []float64{0}
 	cs := make([]float64, 1)
 
@@ -90,14 +90,14 @@ func TestTan(t *testing.T){
 	cv := testutil.MakeFloat64Vector(cs, nil)
 
 	err := Tan(av, cv)
-	if err != nil{
+	if err != nil {
 		panic(err)
 	}
 	cols := vector.MustTCols[float64](cv)
 	require.Equal(t, []float64{0}, cols)
 }
 
-func TestSinh(t *testing.T){
+func TestSinh(t *testing.T) {
 	as := []float64{0}
 	cs := make([]float64, 1)
 
@@ -105,15 +105,14 @@ func TestSinh(t *testing.T){
 	cv := testutil.MakeFloat64Vector(cs, nil)
 
 	err := Sinh(av, cv)
-	if err != nil{
+	if err != nil {
 		panic(err)
 	}
 	cols := vector.MustTCols[float64](cv)
 	require.Equal(t, []float64{0}, cols)
 }
 
-
-func TestAcos(t *testing.T){
+func TestAcos(t *testing.T) {
 	as := []float64{1}
 	cs := make([]float64, 1)
 
@@ -121,14 +120,14 @@ func TestAcos(t *testing.T){
 	cv := testutil.MakeFloat64Vector(cs, nil)
 
 	err := Acos(av, cv)
-	if err != nil{
+	if err != nil {
 		panic(err)
 	}
 	cols := vector.MustTCols[float64](cv)
 	require.Equal(t, []float64{0}, cols)
 }
 
-func TestAtan(t *testing.T){
+func TestAtan(t *testing.T) {
 	as := []float64{0}
 	cs := make([]float64, 1)
 
@@ -136,10 +135,9 @@ func TestAtan(t *testing.T){
 	cv := testutil.MakeFloat64Vector(cs, nil)
 
 	err := Atan(av, cv)
-	if err != nil{
+	if err != nil {
 		panic(err)
 	}
 	cols := vector.MustTCols[float64](cv)
 	require.Equal(t, []float64{0}, cols)
 }
-

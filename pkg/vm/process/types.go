@@ -107,6 +107,8 @@ type Process struct {
 	// unix timestamp
 	UnixTime int64
 
+	TxnClient client.TxnClient
+
 	TxnOperator client.TxnOperator
 
 	AnalInfos []*AnalyzeInfo
