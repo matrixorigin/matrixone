@@ -1592,10 +1592,20 @@ func (cwft *TxnComputationWrapper) Run(ts uint64) error {
 }
 
 func buildPlan(ctx plan2.CompilerContext, stmt tree.Statement) (*plan2.Plan, error) {
+	var ret *plan2.Plan
+	var err error
 	if s, ok := stmt.(*tree.Insert); ok {
 		if _, ok := s.Rows.Select.(*tree.ValuesClause); ok {
-			return plan2.BuildPlan(ctx, stmt)
+			ret, err = plan2.BuildPlan(ctx, stmt)
+			if err != nil {
+				return nil, err
+			}
 		}
+	}
+	if ret != nil {
+		arr := extractPrivilegeTipsFromPlan(ret)
+		fmt.Println(arr)
+		return ret, err
 	}
 	switch stmt := stmt.(type) {
 	case *tree.Select, *tree.ParenSelect,
@@ -1607,14 +1617,20 @@ func buildPlan(ctx plan2.CompilerContext, stmt tree.Statement) (*plan2.Plan, err
 		if err != nil {
 			return nil, err
 		}
-		return &plan2.Plan{
+		ret = &plan2.Plan{
 			Plan: &plan2.Plan_Query{
 				Query: optimized,
 			},
-		}, nil
+		}
 	default:
-		return plan2.BuildPlan(ctx, stmt)
+		ret, err = plan2.BuildPlan(ctx, stmt)
 	}
+	if ret != nil {
+		//TODO:
+		arr := extractPrivilegeTipsFromPlan(ret)
+		fmt.Println(arr)
+	}
+	return ret, err
 }
 
 /*

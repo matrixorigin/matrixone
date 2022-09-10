@@ -3578,6 +3578,10 @@ func Test_determineDropTable(t *testing.T) {
 	})
 }
 
+func Test_determineSelect(t *testing.T) {
+	convey.Convey("build plan", t, func() {})
+}
+
 func newSes(priv *privilege) *Session {
 	pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil, nil, nil)
 	pu.SV.SetDefaultValues()

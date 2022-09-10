@@ -20,7 +20,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/moengine"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
 	"github.com/tidwall/btree"
@@ -862,45 +864,48 @@ type privilegeEntry struct {
 	objType         objectType
 	objId           int
 	withGrantOption bool
+	//for object type table
+	databaseName string
+	tableName    string
 }
 
 var (
 	//initial privilege entries
 	privilegeEntriesMap = map[PrivilegeType]privilegeEntry{
-		PrivilegeTypeCreateAccount:     {PrivilegeTypeCreateAccount, privilegeLevelStar, objectTypeAccount, objectIDAll, false},
-		PrivilegeTypeDropAccount:       {PrivilegeTypeDropAccount, privilegeLevelStar, objectTypeAccount, objectIDAll, false},
-		PrivilegeTypeAlterAccount:      {PrivilegeTypeAlterAccount, privilegeLevelStar, objectTypeAccount, objectIDAll, false},
-		PrivilegeTypeCreateUser:        {PrivilegeTypeCreateUser, privilegeLevelStar, objectTypeAccount, objectIDAll, true},
-		PrivilegeTypeDropUser:          {PrivilegeTypeDropUser, privilegeLevelStar, objectTypeAccount, objectIDAll, true},
-		PrivilegeTypeAlterUser:         {PrivilegeTypeAlterUser, privilegeLevelStar, objectTypeAccount, objectIDAll, true},
-		PrivilegeTypeCreateRole:        {PrivilegeTypeCreateRole, privilegeLevelStar, objectTypeAccount, objectIDAll, true},
-		PrivilegeTypeDropRole:          {PrivilegeTypeDropRole, privilegeLevelStar, objectTypeAccount, objectIDAll, true},
-		PrivilegeTypeAlterRole:         {PrivilegeTypeAlterRole, privilegeLevelStar, objectTypeAccount, objectIDAll, true},
-		PrivilegeTypeCreateDatabase:    {PrivilegeTypeCreateDatabase, privilegeLevelStar, objectTypeAccount, objectIDAll, true},
-		PrivilegeTypeDropDatabase:      {PrivilegeTypeDropDatabase, privilegeLevelStar, objectTypeAccount, objectIDAll, true},
-		PrivilegeTypeShowDatabases:     {PrivilegeTypeShowDatabases, privilegeLevelStar, objectTypeAccount, objectIDAll, true},
-		PrivilegeTypeConnect:           {PrivilegeTypeConnect, privilegeLevelStar, objectTypeAccount, objectIDAll, true},
-		PrivilegeTypeManageGrants:      {PrivilegeTypeManageGrants, privilegeLevelStar, objectTypeAccount, objectIDAll, true},
-		PrivilegeTypeAccountAll:        {PrivilegeTypeAccountAll, privilegeLevelStar, objectTypeAccount, objectIDAll, true},
-		PrivilegeTypeAccountOwnership:  {PrivilegeTypeAccountOwnership, privilegeLevelStar, objectTypeAccount, objectIDAll, true},
-		PrivilegeTypeUserOwnership:     {PrivilegeTypeUserOwnership, privilegeLevelStar, objectTypeAccount, objectIDAll, true},
-		PrivilegeTypeRoleOwnership:     {PrivilegeTypeRoleOwnership, privilegeLevelStar, objectTypeAccount, objectIDAll, true},
-		PrivilegeTypeShowTables:        {PrivilegeTypeShowTables, privilegeLevelDatabaseStar, objectTypeDatabase, objectIDAll, true},
-		PrivilegeTypeCreateObject:      {PrivilegeTypeCreateObject, privilegeLevelDatabaseStar, objectTypeDatabase, objectIDAll, true},
-		PrivilegeTypeDropObject:        {PrivilegeTypeDropObject, privilegeLevelDatabaseStar, objectTypeDatabase, objectIDAll, true},
-		PrivilegeTypeAlterObject:       {PrivilegeTypeAlterObject, privilegeLevelDatabaseStar, objectTypeDatabase, objectIDAll, true},
-		PrivilegeTypeDatabaseAll:       {PrivilegeTypeDatabaseAll, privilegeLevelStar, objectTypeAccount, objectIDAll, true},
-		PrivilegeTypeDatabaseOwnership: {PrivilegeTypeDatabaseOwnership, privilegeLevelStar, objectTypeAccount, objectIDAll, true},
-		PrivilegeTypeSelect:            {PrivilegeTypeSelect, privilegeLevelTable, objectTypeTable, objectIDAll, true},
-		PrivilegeTypeInsert:            {PrivilegeTypeInsert, privilegeLevelTable, objectTypeTable, objectIDAll, true},
-		PrivilegeTypeUpdate:            {PrivilegeTypeUpdate, privilegeLevelTable, objectTypeTable, objectIDAll, true},
-		PrivilegeTypeTruncate:          {PrivilegeTypeTruncate, privilegeLevelTable, objectTypeTable, objectIDAll, true},
-		PrivilegeTypeDelete:            {PrivilegeTypeDelete, privilegeLevelTable, objectTypeTable, objectIDAll, true},
-		PrivilegeTypeReference:         {PrivilegeTypeReference, privilegeLevelTable, objectTypeTable, objectIDAll, true},
-		PrivilegeTypeIndex:             {PrivilegeTypeIndex, privilegeLevelTable, objectTypeTable, objectIDAll, true},
-		PrivilegeTypeTableAll:          {PrivilegeTypeTableAll, privilegeLevelStar, objectTypeAccount, objectIDAll, true},
-		PrivilegeTypeTableOwnership:    {PrivilegeTypeTableOwnership, privilegeLevelStar, objectTypeAccount, objectIDAll, true},
-		PrivilegeTypeExecute:           {PrivilegeTypeExecute, privilegeLevelRoutine, objectTypeFunction, objectIDAll, true},
+		PrivilegeTypeCreateAccount:     {PrivilegeTypeCreateAccount, privilegeLevelStar, objectTypeAccount, objectIDAll, false, "", ""},
+		PrivilegeTypeDropAccount:       {PrivilegeTypeDropAccount, privilegeLevelStar, objectTypeAccount, objectIDAll, false, "", ""},
+		PrivilegeTypeAlterAccount:      {PrivilegeTypeAlterAccount, privilegeLevelStar, objectTypeAccount, objectIDAll, false, "", ""},
+		PrivilegeTypeCreateUser:        {PrivilegeTypeCreateUser, privilegeLevelStar, objectTypeAccount, objectIDAll, true, "", ""},
+		PrivilegeTypeDropUser:          {PrivilegeTypeDropUser, privilegeLevelStar, objectTypeAccount, objectIDAll, true, "", ""},
+		PrivilegeTypeAlterUser:         {PrivilegeTypeAlterUser, privilegeLevelStar, objectTypeAccount, objectIDAll, true, "", ""},
+		PrivilegeTypeCreateRole:        {PrivilegeTypeCreateRole, privilegeLevelStar, objectTypeAccount, objectIDAll, true, "", ""},
+		PrivilegeTypeDropRole:          {PrivilegeTypeDropRole, privilegeLevelStar, objectTypeAccount, objectIDAll, true, "", ""},
+		PrivilegeTypeAlterRole:         {PrivilegeTypeAlterRole, privilegeLevelStar, objectTypeAccount, objectIDAll, true, "", ""},
+		PrivilegeTypeCreateDatabase:    {PrivilegeTypeCreateDatabase, privilegeLevelStar, objectTypeAccount, objectIDAll, true, "", ""},
+		PrivilegeTypeDropDatabase:      {PrivilegeTypeDropDatabase, privilegeLevelStar, objectTypeAccount, objectIDAll, true, "", ""},
+		PrivilegeTypeShowDatabases:     {PrivilegeTypeShowDatabases, privilegeLevelStar, objectTypeAccount, objectIDAll, true, "", ""},
+		PrivilegeTypeConnect:           {PrivilegeTypeConnect, privilegeLevelStar, objectTypeAccount, objectIDAll, true, "", ""},
+		PrivilegeTypeManageGrants:      {PrivilegeTypeManageGrants, privilegeLevelStar, objectTypeAccount, objectIDAll, true, "", ""},
+		PrivilegeTypeAccountAll:        {PrivilegeTypeAccountAll, privilegeLevelStar, objectTypeAccount, objectIDAll, true, "", ""},
+		PrivilegeTypeAccountOwnership:  {PrivilegeTypeAccountOwnership, privilegeLevelStar, objectTypeAccount, objectIDAll, true, "", ""},
+		PrivilegeTypeUserOwnership:     {PrivilegeTypeUserOwnership, privilegeLevelStar, objectTypeAccount, objectIDAll, true, "", ""},
+		PrivilegeTypeRoleOwnership:     {PrivilegeTypeRoleOwnership, privilegeLevelStar, objectTypeAccount, objectIDAll, true, "", ""},
+		PrivilegeTypeShowTables:        {PrivilegeTypeShowTables, privilegeLevelDatabaseStar, objectTypeDatabase, objectIDAll, true, "", ""},
+		PrivilegeTypeCreateObject:      {PrivilegeTypeCreateObject, privilegeLevelDatabaseStar, objectTypeDatabase, objectIDAll, true, "", ""},
+		PrivilegeTypeDropObject:        {PrivilegeTypeDropObject, privilegeLevelDatabaseStar, objectTypeDatabase, objectIDAll, true, "", ""},
+		PrivilegeTypeAlterObject:       {PrivilegeTypeAlterObject, privilegeLevelDatabaseStar, objectTypeDatabase, objectIDAll, true, "", ""},
+		PrivilegeTypeDatabaseAll:       {PrivilegeTypeDatabaseAll, privilegeLevelStar, objectTypeAccount, objectIDAll, true, "", ""},
+		PrivilegeTypeDatabaseOwnership: {PrivilegeTypeDatabaseOwnership, privilegeLevelStar, objectTypeAccount, objectIDAll, true, "", ""},
+		PrivilegeTypeSelect:            {PrivilegeTypeSelect, privilegeLevelTable, objectTypeTable, objectIDAll, true, "", ""},
+		PrivilegeTypeInsert:            {PrivilegeTypeInsert, privilegeLevelTable, objectTypeTable, objectIDAll, true, "", ""},
+		PrivilegeTypeUpdate:            {PrivilegeTypeUpdate, privilegeLevelTable, objectTypeTable, objectIDAll, true, "", ""},
+		PrivilegeTypeTruncate:          {PrivilegeTypeTruncate, privilegeLevelTable, objectTypeTable, objectIDAll, true, "", ""},
+		PrivilegeTypeDelete:            {PrivilegeTypeDelete, privilegeLevelTable, objectTypeTable, objectIDAll, true, "", ""},
+		PrivilegeTypeReference:         {PrivilegeTypeReference, privilegeLevelTable, objectTypeTable, objectIDAll, true, "", ""},
+		PrivilegeTypeIndex:             {PrivilegeTypeIndex, privilegeLevelTable, objectTypeTable, objectIDAll, true, "", ""},
+		PrivilegeTypeTableAll:          {PrivilegeTypeTableAll, privilegeLevelStar, objectTypeAccount, objectIDAll, true, "", ""},
+		PrivilegeTypeTableOwnership:    {PrivilegeTypeTableOwnership, privilegeLevelStar, objectTypeAccount, objectIDAll, true, "", ""},
+		PrivilegeTypeExecute:           {PrivilegeTypeExecute, privilegeLevelRoutine, objectTypeFunction, objectIDAll, true, "", ""},
 	}
 
 	//the initial entries of mo_role_privs for the role 'moadmin'
@@ -1088,6 +1093,122 @@ func determineRoleSetOfUser(tenant *TenantInfo) TenantInfo {
 	return *tenant
 }
 
+// privilege will be done on the table
+type privilegeTips struct {
+	typ          PrivilegeType
+	databaseName string
+	tableName    string
+}
+
+type privilegeTipsArray []privilegeTips
+
+func (pot privilegeTips) String() string {
+	return fmt.Sprintf("%s %s %s", pot.typ, pot.databaseName, pot.tableName)
+}
+
+func (pota privilegeTipsArray) String() string {
+	b := strings.Builder{}
+	for _, table := range pota {
+		b.WriteString(table.String())
+		b.WriteString("\n")
+	}
+	return b.String()
+}
+
+// extractPrivilegeTipsFromPlan extracts the privilege tips from the plan
+func extractPrivilegeTipsFromPlan(p *plan2.Plan) privilegeTipsArray {
+	var pots privilegeTipsArray
+	appendPot := func(pot privilegeTips) {
+		pots = append(pots, pot)
+	}
+	if p.GetQuery() != nil { //select,insert select, update, delete
+		q := p.GetQuery()
+		lastNode := q.Nodes[len(q.Nodes)-1]
+		var t PrivilegeType
+
+		for _, node := range q.Nodes {
+			if node.NodeType == plan.Node_TABLE_SCAN {
+				switch lastNode.NodeType {
+				case plan.Node_UPDATE:
+					t = PrivilegeTypeUpdate
+				case plan.Node_DELETE:
+					t = PrivilegeTypeDelete
+				default:
+					t = PrivilegeTypeSelect
+				}
+				appendPot(privilegeTips{
+					t,
+					node.ObjRef.GetSchemaName(),
+					node.ObjRef.GetObjName(),
+				})
+			} else if node.NodeType == plan.Node_INSERT { //insert select
+				appendPot(privilegeTips{
+					PrivilegeTypeInsert,
+					node.ObjRef.GetSchemaName(),
+					node.ObjRef.GetObjName(),
+				})
+			}
+		}
+	} else if p.GetIns() != nil { //insert into values
+		ins := p.GetIns()
+		appendPot(privilegeTips{
+			PrivilegeTypeInsert,
+			ins.GetDbName(),
+			ins.GetTblName()})
+	}
+	return pots
+}
+
+// convertPrivilegeTipsToPrivilege constructs the privilege entries from the privilege tips from the plan
+func convertPrivilegeTipsToPrivilege(stmt tree.Statement, arr privilegeTipsArray) *privilege {
+	priv := determinePrivilegeSetOfStatement(stmt)
+
+	//rewirte the privilege entries based on privilege tips
+	if priv.objectType() != objectTypeTable {
+		panic("only rewrite the privilege entries from object type table")
+	}
+
+	type pair struct {
+		databaseName string
+		tableName    string
+	}
+
+	dedup := make(map[pair]int8)
+
+	var entries []privilegeEntry
+	for _, tips := range arr {
+		entries = append(entries, privilegeEntry{
+			privilegeId:    tips.typ,
+			privilegeLevel: 0,
+			objType:        objectTypeTable,
+			objId:          objectIDAll,
+			databaseName:   tips.databaseName,
+			tableName:      tips.tableName,
+		})
+
+		dedup[pair{tips.databaseName, tips.tableName}] = 1
+	}
+
+	//predefined privilege : tableAll, ownership
+	predefined := []PrivilegeType{PrivilegeTypeTableAll /*,PrivilegeTypeTableOwnership*/}
+	for _, p := range predefined {
+		for par, _ := range dedup {
+			entries = append(entries, privilegeEntry{
+				privilegeId:    p,
+				privilegeLevel: 0,
+				objType:        objectTypeTable,
+				objId:          objectIDAll,
+				databaseName:   par.databaseName,
+				tableName:      par.tableName,
+			})
+		}
+	}
+
+	priv.entries = entries
+
+	return priv
+}
+
 // determineRoleSetSatisfyPrivilegeSet decides the privileges of role set can satisfy the requirement of the privilege set.
 // The algorithm 2.
 func determineRoleSetSatisfyPrivilegeSet(ctx context.Context, bh BackgroundExec, roleIds []int64, priv *privilege) (bool, error) {
@@ -1105,7 +1226,7 @@ func determineRoleSetSatisfyPrivilegeSet(ctx context.Context, bh BackgroundExec,
 			//for object type table, need concrete tableid
 			//TODO: table level check should be done after getting the plan
 			if priv.objectType() == objectTypeTable {
-				sqlForCheckRoleHasPrivilege = getSqlForCheckRoleHasTableLevelPrivilegeFormat(roleId, entry.privilegeId, "TODO:", "TODO")
+				sqlForCheckRoleHasPrivilege = getSqlForCheckRoleHasTableLevelPrivilegeFormat(roleId, entry.privilegeId, entry.databaseName, entry.tableName)
 			} else {
 				sqlForCheckRoleHasPrivilege = getSqlForCheckRoleHasPrivilege(roleId, entry.objType, int64(entry.objId), int64(entry.privilegeId))
 			}
@@ -1655,7 +1776,6 @@ func authenticatePrivilegeOfStatementWithObjectTypeNone(ctx context.Context, ses
 	if priv.privilegeKind() == privilegeKindNone { // do nothing
 		return true, nil
 	} else if priv.privilegeKind() == privilegeKindSpecial { //GrantPrivilege, RevokePrivilege
-		//TODO:
 		switch gp := stmt.(type) {
 		case *tree.GrantPrivilege:
 			//in the version 0.6, only the moAdmin and accountAdmin can grant the privilege.
