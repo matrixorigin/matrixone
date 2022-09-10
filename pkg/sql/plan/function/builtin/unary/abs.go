@@ -15,7 +15,6 @@
 package unary
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/abs"
@@ -26,7 +25,6 @@ import (
 func AbsUInt64(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	inputVector := vectors[0]
 	resultType := types.Type{Oid: types.T_uint64, Size: 8}
-	resultElementSize := int(resultType.Size)
 	inputValues := vector.MustTCols[uint64](inputVector)
 	if inputVector.IsScalar() {
 		if inputVector.ConstVectorIsNull() {
@@ -37,14 +35,12 @@ func AbsUInt64(vectors []*vector.Vector, proc *process.Process) (*vector.Vector,
 		vector.SetCol(resultVector, abs.AbsUint64(inputValues, resultValues))
 		return resultVector, nil
 	} else {
-		resultVector, err := proc.AllocVector(resultType, int64(resultElementSize*len(inputValues)))
+		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(inputValues)), inputVector.Nsp)
 		if err != nil {
 			return nil, err
 		}
-		resultValues := types.DecodeUint64Slice(resultVector.Data)
-		resultValues = resultValues[:len(inputValues)]
-		nulls.Set(resultVector.Nsp, inputVector.Nsp)
-		vector.SetCol(resultVector, abs.AbsUint64(inputValues, resultValues))
+		resultValues := vector.GetFixedVectorValues[uint64](resultVector)
+		abs.AbsUint64(inputValues, resultValues)
 		return resultVector, nil
 	}
 }
@@ -53,7 +49,6 @@ func AbsUInt64(vectors []*vector.Vector, proc *process.Process) (*vector.Vector,
 func AbsInt64(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	inputVector := vectors[0]
 	resultType := types.Type{Oid: types.T_int64, Size: 8}
-	resultElementSize := int(resultType.Size)
 	inputValues := vector.MustTCols[int64](inputVector)
 	if inputVector.IsScalar() {
 		if inputVector.ConstVectorIsNull() {
@@ -64,14 +59,12 @@ func AbsInt64(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, 
 		vector.SetCol(resultVector, abs.AbsInt64(inputValues, resultValues))
 		return resultVector, nil
 	} else {
-		resultVector, err := proc.AllocVector(resultType, int64(resultElementSize*len(inputValues)))
+		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(inputValues)), inputVector.Nsp)
 		if err != nil {
 			return nil, err
 		}
-		resultValues := types.DecodeInt64Slice(resultVector.Data)
-		resultValues = resultValues[:len(inputValues)]
-		nulls.Set(resultVector.Nsp, inputVector.Nsp)
-		vector.SetCol(resultVector, abs.AbsInt64(inputValues, resultValues))
+		resultValues := vector.MustTCols[int64](resultVector)
+		abs.AbsInt64(inputValues, resultValues)
 		return resultVector, nil
 	}
 }
@@ -80,7 +73,6 @@ func AbsInt64(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, 
 func AbsFloat64(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	inputVector := vectors[0]
 	resultType := types.Type{Oid: types.T_float64, Size: 8}
-	resultElementSize := int(resultType.Size)
 	inputValues := vector.MustTCols[float64](inputVector)
 	if inputVector.IsScalar() {
 		if inputVector.ConstVectorIsNull() {
@@ -91,14 +83,12 @@ func AbsFloat64(vectors []*vector.Vector, proc *process.Process) (*vector.Vector
 		vector.SetCol(resultVector, abs.AbsFloat64(inputValues, resultValues))
 		return resultVector, nil
 	} else {
-		resultVector, err := proc.AllocVector(resultType, int64(resultElementSize*len(inputValues)))
+		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(inputValues)), inputVector.Nsp)
 		if err != nil {
 			return nil, err
 		}
-		resultValues := types.DecodeFloat64Slice(resultVector.Data)
-		resultValues = resultValues[:len(inputValues)]
-		nulls.Set(resultVector.Nsp, inputVector.Nsp)
-		vector.SetCol(resultVector, abs.AbsFloat64(inputValues, resultValues))
+		resultValues := vector.MustTCols[float64](resultVector)
+		abs.AbsFloat64(inputValues, resultValues)
 		return resultVector, nil
 	}
 }
@@ -106,7 +96,6 @@ func AbsFloat64(vectors []*vector.Vector, proc *process.Process) (*vector.Vector
 func AbsDecimal128(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	inputVector := vectors[0]
 	resultType := types.Type{Oid: types.T_decimal128, Size: 16, Scale: inputVector.Typ.Scale}
-	resultElementSize := int(resultType.Size)
 	inputValues := vector.MustTCols[types.Decimal128](inputVector)
 	if inputVector.IsScalar() {
 		if inputVector.ConstVectorIsNull() {
@@ -117,14 +106,12 @@ func AbsDecimal128(vectors []*vector.Vector, proc *process.Process) (*vector.Vec
 		vector.SetCol(resultVector, abs.AbsDecimal128(inputValues, resultValues))
 		return resultVector, nil
 	} else {
-		resultVector, err := proc.AllocVector(resultType, int64(resultElementSize*len(inputValues)))
+		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(inputValues)), inputVector.Nsp)
 		if err != nil {
 			return nil, err
 		}
-		resultValues := types.DecodeDecimal128Slice(resultVector.Data)
-		resultValues = resultValues[:len(inputValues)]
-		nulls.Set(resultVector.Nsp, inputVector.Nsp)
-		vector.SetCol(resultVector, abs.AbsDecimal128(inputValues, resultValues))
+		resultValues := vector.MustTCols[types.Decimal128](resultVector)
+		abs.AbsDecimal128(inputValues, resultValues)
 		return resultVector, nil
 	}
 }

@@ -307,6 +307,11 @@ func (zm *ZoneMap) Unmarshal(buf []byte) error {
 		buf = buf[32:]
 		zm.max = types.DecodeFixed[types.Decimal128](buf[:16])
 		return nil
+	case types.T_uuid:
+		zm.min = types.DecodeFixed[types.Uuid](buf[:16])
+		buf = buf[32:]
+		zm.max = types.DecodeFixed[types.Uuid](buf[:16])
+		return nil
 	case types.T_char, types.T_varchar, types.T_json:
 		minBuf := make([]byte, buf[31]&0x7f)
 		copy(minBuf, buf[0:32])

@@ -15,81 +15,63 @@
 package catalog
 
 import (
-	"bytes"
 	"encoding/binary"
 	"fmt"
 	"io"
 
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 )
 
 type MetadataMVCCNode struct {
 	*EntryMVCCNode
+	*txnbase.TxnMVCCNode
 	MetaLoc  string
 	DeltaLoc string
-
-	*TxnMVCCNode
 }
 
-func NewEmptyMetadataMVCCNode() *MetadataMVCCNode {
+func NewEmptyMetadataMVCCNode() txnbase.MVCCNode {
 	return &MetadataMVCCNode{
-		TxnMVCCNode:   &TxnMVCCNode{},
 		EntryMVCCNode: &EntryMVCCNode{},
+		TxnMVCCNode:   &txnbase.TxnMVCCNode{},
 	}
 }
 
-func (e MetadataMVCCNode) CloneAll() MVCCNode {
-	n := e.cloneData()
-	// n.State = e.State
-	n.Start = e.Start
-	n.End = e.End
-	n.Deleted = e.Deleted
-	if len(e.LogIndex) != 0 {
-		n.LogIndex = make([]*wal.Index, 0)
-		for _, idx := range e.LogIndex {
-			n.LogIndex = append(n.LogIndex, idx.Clone())
-		}
-	}
-	return n
+func CompareMetaBaseNode(e, o txnbase.MVCCNode) int {
+	return e.(*MetadataMVCCNode).Compare(o.(*MetadataMVCCNode).TxnMVCCNode)
 }
 
-func (e *MetadataMVCCNode) cloneData() *MetadataMVCCNode {
+func (e *MetadataMVCCNode) CloneAll() txnbase.MVCCNode {
+	node := e.CloneData()
+	node.(*MetadataMVCCNode).TxnMVCCNode = e.TxnMVCCNode.CloneAll()
+	return node
+}
+
+func (e *MetadataMVCCNode) CloneData() txnbase.MVCCNode {
 	return &MetadataMVCCNode{
 		EntryMVCCNode: e.EntryMVCCNode.Clone(),
-		TxnMVCCNode:   &TxnMVCCNode{},
+		TxnMVCCNode:   &txnbase.TxnMVCCNode{},
 		MetaLoc:       e.MetaLoc,
 		DeltaLoc:      e.DeltaLoc,
 	}
 }
 
 func (e *MetadataMVCCNode) String() string {
-	var w bytes.Buffer
-	_, _ = w.WriteString(
-		fmt.Sprintf("[%v,%v][C=%v,D=%v][Loc1=%s,Loc2=%s][Deleted?%v][logIndex=%v]",
-			e.Start,
-			e.End,
-			e.CreatedAt,
-			e.DeletedAt,
-			// e.State,
-			e.MetaLoc,
-			e.DeltaLoc,
-			e.Deleted,
-			e.LogIndex))
-	return w.String()
+
+	return fmt.Sprintf("%s[C=%v,D=%v][Loc1=%s,Loc2=%s][Deleted?%v]",
+		e.TxnMVCCNode.String(),
+		e.CreatedAt,
+		e.DeletedAt,
+		e.MetaLoc,
+		e.DeltaLoc,
+		e.Deleted)
 }
 
 // for create drop in one txn
-func (e *MetadataMVCCNode) UpdateNode(vun MVCCNode) {
+func (e *MetadataMVCCNode) UpdateNode(vun txnbase.MVCCNode) {
 	un := vun.(*MetadataMVCCNode)
-	if e.Start != un.Start {
-		panic("logic err")
-	}
-	if e.End != un.End {
-		panic("logic err")
-	}
 	e.DeletedAt = un.DeletedAt
 	e.Deleted = true
-	e.AddLogIndex(un.LogIndex[0])
 }
 
 func (e *MetadataMVCCNode) ApplyUpdate(be *MetadataMVCCNode) (err error) {
@@ -107,29 +89,33 @@ func (e *MetadataMVCCNode) ApplyDelete() (err error) {
 	return
 }
 
-func compareMetadataMVCCNode(e, o *MetadataMVCCNode) int {
-	return e.Compare(o.TxnMVCCNode)
-}
-
 func (e *MetadataMVCCNode) Prepare2PCPrepare() (err error) {
+	var ts types.TS
+	ts, err = e.TxnMVCCNode.Prepare2PCPrepare()
+	if err != nil {
+		return
+	}
 	if e.CreatedAt.IsEmpty() {
-		e.CreatedAt = e.Txn.GetPrepareTS()
+		e.CreatedAt = ts
 	}
 	if e.Deleted {
-		e.DeletedAt = e.Txn.GetPrepareTS()
+		e.DeletedAt = ts
 	}
-	e.End = e.Txn.GetPrepareTS()
 	return
 }
 
 func (e *MetadataMVCCNode) PrepareCommit() (err error) {
+	var ts types.TS
+	ts, err = e.TxnMVCCNode.PrepareCommit()
+	if err != nil {
+		return
+	}
 	if e.CreatedAt.IsEmpty() {
-		e.CreatedAt = e.Txn.GetCommitTS()
+		e.CreatedAt = ts
 	}
 	if e.Deleted {
-		e.DeletedAt = e.Txn.GetCommitTS()
+		e.DeletedAt = ts
 	}
-	e.End = e.Txn.GetCommitTS()
 	return
 }
 
