@@ -57,8 +57,8 @@ func (r *ObjectReader) Read(extent Extent, idxs []uint16) (*fileservice.IOVector
 	for _, idx := range idxs {
 		col := block.columns[idx]
 		entry := fileservice.IOEntry{
-			Offset: int(col.meta.location.Offset()),
-			Size:   int(col.meta.location.Length()),
+			Offset: int(col.GetMeta().location.Offset()),
+			Size:   int(col.GetMeta().location.Length()),
 		}
 		data.Entries = append(data.Entries, entry)
 	}
@@ -82,8 +82,8 @@ func (r *ObjectReader) ReadIndex(extent Extent, idxs []uint16) (*fileservice.IOV
 	for _, idx := range idxs {
 		col := block.columns[idx]
 		entry := fileservice.IOEntry{
-			Offset: int(col.meta.bloomFilter.Offset()),
-			Size:   int(col.meta.bloomFilter.Length()),
+			Offset: int(col.GetMeta().bloomFilter.Offset()),
+			Size:   int(col.GetMeta().bloomFilter.Length()),
 		}
 		data.Entries = append(data.Entries, entry)
 	}

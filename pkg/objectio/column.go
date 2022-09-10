@@ -3,23 +3,64 @@ package objectio
 import (
 	"bytes"
 	"encoding/binary"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 )
 
 type ColumnBlock struct {
-	meta *ColumnMeta
+	meta  *ColumnMeta
+	block *Block
 }
 
-func NewColumnBlock(idx uint16) *ColumnBlock {
+func NewColumnBlock(idx uint16, block *Block) ColumnObject {
 	meta := &ColumnMeta{
 		idx:         idx,
 		zoneMap:     &index.ZoneMap{},
 		bloomFilter: Extent{},
 	}
-	block := &ColumnBlock{
-		meta: meta,
+	col := &ColumnBlock{
+		block: block,
+		meta:  meta,
 	}
-	return block
+	return col
+}
+
+func (cb *ColumnBlock) GetData() (*fileservice.IOVector, error) {
+	var err error
+	data := &fileservice.IOVector{
+		FilePath: cb.block.object.name,
+		Entries:  make([]fileservice.IOEntry, 1),
+	}
+	data.Entries[0] = fileservice.IOEntry{
+		Offset: int(cb.meta.location.Offset()),
+		Size:   int(cb.meta.location.Length()),
+	}
+	err = cb.block.object.oFile.Read(nil, data)
+	if err != nil {
+		return nil, err
+	}
+	return data, nil
+}
+
+func (cb *ColumnBlock) GetIndex() (*fileservice.IOVector, error) {
+	var err error
+	data := &fileservice.IOVector{
+		FilePath: cb.block.object.name,
+		Entries:  make([]fileservice.IOEntry, 1),
+	}
+	data.Entries[0] = fileservice.IOEntry{
+		Offset: int(cb.meta.bloomFilter.Offset()),
+		Size:   int(cb.meta.bloomFilter.Length()),
+	}
+	err = cb.block.object.oFile.Read(nil, data)
+	if err != nil {
+		return nil, err
+	}
+	return data, nil
+}
+
+func (cb *ColumnBlock) GetMeta() *ColumnMeta {
+	return cb.meta
 }
 
 func (cb *ColumnBlock) MarshalMeta() ([]byte, error) {

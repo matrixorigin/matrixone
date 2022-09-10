@@ -11,7 +11,7 @@ type Writer interface {
 	// Write writes one batch to the Buffer at a time,
 	// one batch corresponds to a virtual block,
 	// and returns the handle of the block.
-	Write(batch *batch.Batch) (int, error)
+	Write(batch *batch.Batch) (BlockObject, error)
 
 	// WriteIndex is the index of the column in the block written to the block's handle.
 	// fd is the handle of the block
@@ -21,7 +21,7 @@ type Writer interface {
 
 	// WriteEnd is to write multiple batches written to
 	// the buffer to the fileservice at one time
-	WriteEnd() ([]Extent, error)
+	WriteEnd() (map[int]BlockObject, error)
 }
 
 // Reader is to read data from fileservice
@@ -37,4 +37,17 @@ type Reader interface {
 
 	// ReadIndex is the index data of the read columns
 	ReadIndex(extent Extent, idxs []uint16) (*fileservice.IOVector, error)
+}
+
+type BlockObject interface {
+	GetColumn(idx uint16) (ColumnObject, error)
+	GetRows() (uint32, error)
+	GetMeta() *BlockMeta
+	GetExtent() Extent
+}
+
+type ColumnObject interface {
+	GetData() (*fileservice.IOVector, error)
+	GetIndex() (*fileservice.IOVector, error)
+	GetMeta() *ColumnMeta
 }

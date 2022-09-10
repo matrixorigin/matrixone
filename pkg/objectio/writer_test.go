@@ -34,7 +34,7 @@ func TestNewObjectWriter(t *testing.T) {
 	assert.Nil(t, err)
 	for i, _ := range bat.Vecs {
 		buf := fmt.Sprintf("test index %d", i)
-		err = objectWriter.WriteIndex(fd, uint16(i), []byte(buf))
+		err = objectWriter.WriteIndex(fd.(*Block).fd, uint16(i), []byte(buf))
 		assert.Nil(t, err)
 	}
 	_, err = objectWriter.Write(bat)
@@ -51,7 +51,7 @@ func TestNewObjectWriter(t *testing.T) {
 	idxs[0] = 0
 	idxs[1] = 2
 	idxs[2] = 3
-	vec, err := objectReader.Read(extents[0], idxs)
+	vec, err := objectReader.Read(extents[0].GetExtent(), idxs)
 	assert.Nil(t, err)
 	vector1 := newVector(types.Type{Oid: types.T_int8}, vec.Entries[0].Data)
 	assert.Equal(t, int8(3), vector1.Col.([]int8)[3])
@@ -59,7 +59,7 @@ func TestNewObjectWriter(t *testing.T) {
 	assert.Equal(t, int32(3), vector2.Col.([]int32)[3])
 	vector3 := newVector(types.Type{Oid: types.T_int64}, vec.Entries[2].Data)
 	assert.Equal(t, int64(3), vector3.Col.([]int64)[3])
-	vec, err = objectReader.ReadIndex(extents[0], idxs)
+	vec, err = objectReader.ReadIndex(extents[0].GetExtent(), idxs)
 	assert.Nil(t, err)
 	assert.Equal(t, 3, len(vec.Entries))
 	assert.Equal(t, "test index 0", string(vec.Entries[0].Data))

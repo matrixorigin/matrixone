@@ -13,24 +13,45 @@ type Block struct {
 	fd     int
 	header *BlockHeader
 	// columns is the vector in the batch
-	columns []*ColumnBlock
+	columns []ColumnObject
 	// data is the batch to be written
-	data *batch.Batch
+	data   *batch.Batch
+	object *Object
+	extent Extent
 }
 
-func NewBlock(batch *batch.Batch) *Block {
+func NewBlock(batch *batch.Batch, object *Object) BlockObject {
 	header := &BlockHeader{
 		columnCount: uint16(len(batch.Vecs)),
 	}
 	block := &Block{
 		header:  header,
 		data:    batch,
-		columns: make([]*ColumnBlock, len(batch.Vecs)),
+		object:  object,
+		columns: make([]ColumnObject, len(batch.Vecs)),
 	}
 	for i := range block.columns {
-		block.columns[i] = NewColumnBlock(uint16(i))
+		block.columns[i] = NewColumnBlock(uint16(i), block)
 	}
 	return block
+}
+
+func (b *Block) GetExtent() Extent {
+	return b.extent
+}
+
+func (b *Block) GetColumn(idx uint16) (ColumnObject, error) {
+	return b.columns[idx], nil
+}
+
+func (b *Block) GetRows() (uint32, error) {
+	panic(any("implement me"))
+}
+
+func (b *Block) GetMeta() *BlockMeta {
+	return &BlockMeta{
+		header: b.header,
+	}
 }
 
 func (b *Block) MarshalMeta() ([]byte, error) {
@@ -60,7 +81,7 @@ func (b *Block) MarshalMeta() ([]byte, error) {
 	}
 	// write columns meta
 	for _, column := range b.columns {
-		columnMeta, err := column.MarshalMeta()
+		columnMeta, err := column.(*ColumnBlock).MarshalMeta()
 		if err != nil {
 			return nil, err
 		}
@@ -94,10 +115,10 @@ func (b *Block) UnMarshalMeta(data []byte) error {
 	if err = binary.Read(cache, binary.BigEndian, &reserved); err != nil {
 		return err
 	}
-	b.columns = make([]*ColumnBlock, b.header.columnCount)
+	b.columns = make([]ColumnObject, b.header.columnCount)
 	for i, _ := range b.columns {
-		b.columns[i] = NewColumnBlock(uint16(i))
-		err = b.columns[i].UnMarshalMate(cache)
+		b.columns[i] = NewColumnBlock(uint16(i), b)
+		err = b.columns[i].(*ColumnBlock).UnMarshalMate(cache)
 		if err != nil {
 			return err
 		}

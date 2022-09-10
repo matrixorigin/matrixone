@@ -27,7 +27,7 @@ import "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 // ColumnCnt = The number of column in the block
 // Chksum = Block metadata checksum
 // Reserved = 41 bytes reserved space
-type BlockMetadata struct {
+type BlockMeta struct {
 	header  *BlockHeader
 	columns []*ColumnMeta
 }
