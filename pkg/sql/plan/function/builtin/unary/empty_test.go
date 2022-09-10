@@ -103,7 +103,9 @@ func makeEmptyTestVectors(data []string, nsp []uint64, isScalar bool) []*vector.
 	vec := make([]*vector.Vector, 1)
 	if data != nil {
 		vec[0] = testutil.MakeCharVector(data, nsp)
-		vec[0].IsConst = isScalar
+		if isScalar {
+			vec[0].MakeScalar(1)
+		}
 	} else {
 		vec[0] = testutil.MakeScalarNull(types.T_char, 0)
 	}

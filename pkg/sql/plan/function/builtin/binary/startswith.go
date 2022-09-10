@@ -35,7 +35,7 @@ func Startswith(vectors []*vector.Vector, proc *process.Process) (*vector.Vector
 		resultValues := vector.MustTCols[uint8](resultVector)
 		startswith.StartsWithAllConst(leftValues[0], rightValues[0], resultValues)
 		return resultVector, nil
-	case left.IsConst && !right.IsConst:
+	case left.IsScalar() && !right.IsScalar():
 		if left.ConstVectorIsNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
@@ -46,7 +46,7 @@ func Startswith(vectors []*vector.Vector, proc *process.Process) (*vector.Vector
 		resultValues := vector.MustTCols[uint8](resultVector)
 		startswith.StartsWithLeftConst(leftValues[0], rightValues, resultValues)
 		return resultVector, nil
-	case !left.IsConst && right.IsConst:
+	case !left.IsScalar() && right.IsScalar():
 		if right.ConstVectorIsNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}

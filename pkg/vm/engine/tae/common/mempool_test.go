@@ -55,9 +55,7 @@ func TestPool(t *testing.T) {
 	var wg sync.WaitGroup
 
 	now := time.Now()
-	// hm := host.New(1 << 48)
-	// gm := guest.New(1<<48, hm)
-	// proc := process.New(gm, mempool.New(1<<48, 8))
+	// proc := testutil.NewProc()
 
 	// for i := 0; i < 1024*512; i++ {
 	// 	wg.Add(1)
