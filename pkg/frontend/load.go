@@ -583,7 +583,7 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool, 
 
 				switch vec.Typ.Oid {
 				case types.T_bool:
-					cols := vec.Col.([]bool)
+					cols := vector.MustTCols[bool](vec)
 					if isNullOrEmpty {
 						nulls.Add(vec.Nsp, uint64(rowIdx))
 					} else {
@@ -596,7 +596,7 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool, 
 						}
 					}
 				case types.T_int8:
-					cols := vec.Col.([]int8)
+					cols := vector.MustTCols[int8](vec)
 					if isNullOrEmpty {
 						nulls.Add(vec.Nsp, uint64(rowIdx))
 					} else {
@@ -625,7 +625,7 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool, 
 						}
 					}
 				case types.T_int16:
-					cols := vec.Col.([]int16)
+					cols := vector.MustTCols[int16](vec)
 					if isNullOrEmpty {
 						nulls.Add(vec.Nsp, uint64(rowIdx))
 					} else {
@@ -654,7 +654,7 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool, 
 						}
 					}
 				case types.T_int32:
-					cols := vec.Col.([]int32)
+					cols := vector.MustTCols[int32](vec)
 					if isNullOrEmpty {
 						nulls.Add(vec.Nsp, uint64(rowIdx))
 					} else {
@@ -683,7 +683,7 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool, 
 						}
 					}
 				case types.T_int64:
-					cols := vec.Col.([]int64)
+					cols := vector.MustTCols[int64](vec)
 					if isNullOrEmpty {
 						nulls.Add(vec.Nsp, uint64(rowIdx))
 					} else {
@@ -712,7 +712,7 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool, 
 						}
 					}
 				case types.T_uint8:
-					cols := vec.Col.([]uint8)
+					cols := vector.MustTCols[uint8](vec)
 					if isNullOrEmpty {
 						nulls.Add(vec.Nsp, uint64(rowIdx))
 					} else {
@@ -741,7 +741,7 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool, 
 						}
 					}
 				case types.T_uint16:
-					cols := vec.Col.([]uint16)
+					cols := vector.MustTCols[uint16](vec)
 					if isNullOrEmpty {
 						nulls.Add(vec.Nsp, uint64(rowIdx))
 					} else {
@@ -770,7 +770,7 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool, 
 						}
 					}
 				case types.T_uint32:
-					cols := vec.Col.([]uint32)
+					cols := vector.MustTCols[uint32](vec)
 					if isNullOrEmpty {
 						nulls.Add(vec.Nsp, uint64(rowIdx))
 					} else {
@@ -799,7 +799,7 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool, 
 						}
 					}
 				case types.T_uint64:
-					cols := vec.Col.([]uint64)
+					cols := vector.MustTCols[uint64](vec)
 					if isNullOrEmpty {
 						nulls.Add(vec.Nsp, uint64(rowIdx))
 					} else {
@@ -829,7 +829,7 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool, 
 						}
 					}
 				case types.T_float32:
-					cols := vec.Col.([]float32)
+					cols := vector.MustTCols[float32](vec)
 					if isNullOrEmpty {
 						nulls.Add(vec.Nsp, uint64(rowIdx))
 					} else {
@@ -846,7 +846,7 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool, 
 						cols[rowIdx] = float32(d)
 					}
 				case types.T_float64:
-					cols := vec.Col.([]float64)
+					cols := vector.MustTCols[float64](vec)
 					if isNullOrEmpty {
 						nulls.Add(vec.Nsp, uint64(rowIdx))
 					} else {
@@ -887,7 +887,7 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool, 
 						vector.SetBytesAt(vec, rowIdx, jsonBytes, nil)
 					}
 				case types.T_date:
-					cols := vec.Col.([]types.Date)
+					cols := vector.MustTCols[types.Date](vec)
 					if isNullOrEmpty {
 						nulls.Add(vec.Nsp, uint64(rowIdx))
 					} else {
@@ -906,7 +906,7 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool, 
 						cols[rowIdx] = d
 					}
 				case types.T_datetime:
-					cols := vec.Col.([]types.Datetime)
+					cols := vector.MustTCols[types.Datetime](vec)
 					if isNullOrEmpty {
 						nulls.Add(vec.Nsp, uint64(rowIdx))
 					} else {
@@ -923,7 +923,7 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool, 
 						cols[rowIdx] = d
 					}
 				case types.T_decimal64:
-					cols := vec.Col.([]types.Decimal64)
+					cols := vector.MustTCols[types.Decimal64](vec)
 					if isNullOrEmpty {
 						nulls.Add(vec.Nsp, uint64(rowIdx))
 					} else {
@@ -942,7 +942,7 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool, 
 						cols[rowIdx] = d
 					}
 				case types.T_decimal128:
-					cols := vec.Col.([]types.Decimal128)
+					cols := vector.MustTCols[types.Decimal128](vec)
 					if isNullOrEmpty {
 						nulls.Add(vec.Nsp, uint64(rowIdx))
 					} else {
@@ -961,7 +961,7 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool, 
 						cols[rowIdx] = d
 					}
 				case types.T_timestamp:
-					cols := vec.Col.([]types.Timestamp)
+					cols := vector.MustTCols[types.Timestamp](vec)
 					if isNullOrEmpty {
 						nulls.Add(vec.Nsp, uint64(rowIdx))
 					} else {
@@ -974,6 +974,22 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool, 
 							}
 							result.Warnings++
 							d = types.Timestamp(0)
+						}
+						cols[rowIdx] = d
+					}
+				case types.T_uuid:
+					cols := vector.MustTCols[types.Uuid](vec)
+					if isNullOrEmpty {
+						nulls.Add(vec.Nsp, uint64(rowIdx))
+					} else {
+						d, err := types.ParseUuid(field)
+						if err != nil {
+							logutil.Errorf("parse field[%v] err:%v", field, err)
+							if !ignoreFieldError {
+								return makeParsedFailedError(vec.Typ.String(), field, vecAttr, base, offset)
+							}
+							result.Warnings++
+							d = types.Uuid{0}
 						}
 						cols[rowIdx] = d
 					}
@@ -1024,7 +1040,7 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool, 
 
 			switch vec.Typ.Oid {
 			case types.T_bool:
-				cols := vec.Col.([]bool)
+				cols := vector.MustTCols[bool](vec)
 				for i := 0; i < countOfLineArray; i++ {
 					line := fetchLines[i]
 					if j >= len(line) || len(line[j]) == 0 {
@@ -1041,7 +1057,7 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool, 
 					}
 				}
 			case types.T_int8:
-				cols := vec.Col.([]int8)
+				cols := vector.MustTCols[int8](vec)
 				//row
 				for i := 0; i < countOfLineArray; i++ {
 					line := fetchLines[i]
@@ -1075,7 +1091,7 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool, 
 					}
 				}
 			case types.T_int16:
-				cols := vec.Col.([]int16)
+				cols := vector.MustTCols[int16](vec)
 				//row
 				for i := 0; i < countOfLineArray; i++ {
 					line := fetchLines[i]
@@ -1109,7 +1125,7 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool, 
 					}
 				}
 			case types.T_int32:
-				cols := vec.Col.([]int32)
+				cols := vector.MustTCols[int32](vec)
 				//row
 				for i := 0; i < countOfLineArray; i++ {
 					line := fetchLines[i]
@@ -1143,7 +1159,7 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool, 
 					}
 				}
 			case types.T_int64:
-				cols := vec.Col.([]int64)
+				cols := vector.MustTCols[int64](vec)
 				//row
 				for i := 0; i < countOfLineArray; i++ {
 					line := fetchLines[i]
@@ -1177,7 +1193,7 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool, 
 					}
 				}
 			case types.T_uint8:
-				cols := vec.Col.([]uint8)
+				cols := vector.MustTCols[uint8](vec)
 				//row
 				for i := 0; i < countOfLineArray; i++ {
 					line := fetchLines[i]
@@ -1211,7 +1227,7 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool, 
 					}
 				}
 			case types.T_uint16:
-				cols := vec.Col.([]uint16)
+				cols := vector.MustTCols[uint16](vec)
 				//row
 				for i := 0; i < countOfLineArray; i++ {
 					line := fetchLines[i]
@@ -1245,7 +1261,7 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool, 
 					}
 				}
 			case types.T_uint32:
-				cols := vec.Col.([]uint32)
+				cols := vector.MustTCols[uint32](vec)
 				//row
 				for i := 0; i < countOfLineArray; i++ {
 					line := fetchLines[i]
@@ -1280,7 +1296,7 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool, 
 					}
 				}
 			case types.T_uint64:
-				cols := vec.Col.([]uint64)
+				cols := vector.MustTCols[uint64](vec)
 				//row
 				for i := 0; i < countOfLineArray; i++ {
 					line := fetchLines[i]
@@ -1315,7 +1331,7 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool, 
 					}
 				}
 			case types.T_float32:
-				cols := vec.Col.([]float32)
+				cols := vector.MustTCols[float32](vec)
 				//row
 				for i := 0; i < countOfLineArray; i++ {
 					line := fetchLines[i]
@@ -1337,7 +1353,7 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool, 
 					}
 				}
 			case types.T_float64:
-				cols := vec.Col.([]float64)
+				cols := vector.MustTCols[float64](vec)
 				//row
 				for i := 0; i < countOfLineArray; i++ {
 					line := fetchLines[i]
@@ -1401,7 +1417,7 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool, 
 					}
 				}
 			case types.T_date:
-				cols := vec.Col.([]types.Date)
+				cols := vector.MustTCols[types.Date](vec)
 				//row
 				for i := 0; i < countOfLineArray; i++ {
 					line := fetchLines[i]
@@ -1424,7 +1440,7 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool, 
 					}
 				}
 			case types.T_datetime:
-				cols := vec.Col.([]types.Datetime)
+				cols := vector.MustTCols[types.Datetime](vec)
 				for i := 0; i < countOfLineArray; i++ {
 					line := fetchLines[i]
 					if j >= len(line) || len(line[j]) == 0 {
@@ -1446,7 +1462,7 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool, 
 					}
 				}
 			case types.T_decimal64:
-				cols := vec.Col.([]types.Decimal64)
+				cols := vector.MustTCols[types.Decimal64](vec)
 				for i := 0; i < countOfLineArray; i++ {
 					line := fetchLines[i]
 					if j >= len(line) || len(line[j]) == 0 {
@@ -1468,7 +1484,7 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool, 
 					}
 				}
 			case types.T_decimal128:
-				cols := vec.Col.([]types.Decimal128)
+				cols := vector.MustTCols[types.Decimal128](vec)
 				for i := 0; i < countOfLineArray; i++ {
 					line := fetchLines[i]
 					if j >= len(line) || len(line[j]) == 0 {
@@ -1490,7 +1506,7 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool, 
 					}
 				}
 			case types.T_timestamp:
-				cols := vec.Col.([]types.Timestamp)
+				cols := vector.MustTCols[types.Timestamp](vec)
 				for i := 0; i < countOfLineArray; i++ {
 					line := fetchLines[i]
 					if j >= len(line) || len(line[j]) == 0 {
@@ -1506,6 +1522,29 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool, 
 							}
 							result.Warnings++
 							d = 0
+							//break
+						}
+						cols[i] = d
+					}
+				}
+			case types.T_uuid:
+				cols := vector.MustTCols[types.Uuid](vec)
+				for i := 0; i < countOfLineArray; i++ {
+					line := fetchLines[i]
+					if j >= len(line) || len(line[j]) == 0 {
+						nulls.Add(vec.Nsp, uint64(i))
+					} else {
+						field := line[j]
+						//logutil.Infof("==== > field string [%s] ",fs)
+						d, err := types.ParseUuid(field)
+						//d, err := types.ParseStringToDecimal128(field, vec.Typ.Width, vec.Typ.Scale)
+						if err != nil {
+							logutil.Errorf("parse field[%v] err:%v", field, err)
+							if !ignoreFieldError {
+								return err
+							}
+							result.Warnings++
+							d = types.Uuid{}
 							//break
 						}
 						cols[i] = d
@@ -1687,55 +1726,58 @@ func writeBatchToStorage(handler *WriteBatchHandler, force bool) error {
 					//remove row
 					switch vec.Typ.Oid {
 					case types.T_bool:
-						cols := vec.Col.([]bool)
+						cols := vector.MustTCols[bool](vec)
 						vec.Col = cols[:needLen]
 					case types.T_int8:
-						cols := vec.Col.([]int8)
+						cols := vector.MustTCols[int8](vec)
 						vec.Col = cols[:needLen]
 					case types.T_int16:
-						cols := vec.Col.([]int16)
+						cols := vector.MustTCols[int16](vec)
 						vec.Col = cols[:needLen]
 					case types.T_int32:
-						cols := vec.Col.([]int32)
+						cols := vector.MustTCols[int32](vec)
 						vec.Col = cols[:needLen]
 					case types.T_int64:
-						cols := vec.Col.([]int64)
+						cols := vector.MustTCols[int64](vec)
 						vec.Col = cols[:needLen]
 					case types.T_uint8:
-						cols := vec.Col.([]uint8)
+						cols := vector.MustTCols[uint8](vec)
 						vec.Col = cols[:needLen]
 					case types.T_uint16:
-						cols := vec.Col.([]uint16)
+						cols := vector.MustTCols[uint16](vec)
 						vec.Col = cols[:needLen]
 					case types.T_uint32:
-						cols := vec.Col.([]uint32)
+						cols := vector.MustTCols[uint32](vec)
 						vec.Col = cols[:needLen]
 					case types.T_uint64:
-						cols := vec.Col.([]uint64)
+						cols := vector.MustTCols[uint64](vec)
 						vec.Col = cols[:needLen]
 					case types.T_float32:
-						cols := vec.Col.([]float32)
+						cols := vector.MustTCols[float32](vec)
 						vec.Col = cols[:needLen]
 					case types.T_float64:
-						cols := vec.Col.([]float64)
+						cols := vector.MustTCols[float64](vec)
 						vec.Col = cols[:needLen]
 					case types.T_char, types.T_varchar, types.T_json: //bytes is different
-						cols := vec.Col.([]types.Varlena)
+						cols := vector.MustTCols[types.Varlena](vec)
 						vec.Col = cols[:needLen]
 					case types.T_date:
-						cols := vec.Col.([]types.Date)
+						cols := vector.MustTCols[types.Date](vec)
 						vec.Col = cols[:needLen]
 					case types.T_datetime:
-						cols := vec.Col.([]types.Datetime)
+						cols := vector.MustTCols[types.Datetime](vec)
 						vec.Col = cols[:needLen]
 					case types.T_decimal64:
-						cols := vec.Col.([]types.Decimal64)
+						cols := vector.MustTCols[types.Decimal64](vec)
 						vec.Col = cols[:needLen]
 					case types.T_decimal128:
-						cols := vec.Col.([]types.Decimal128)
+						cols := vector.MustTCols[types.Decimal128](vec)
 						vec.Col = cols[:needLen]
 					case types.T_timestamp:
-						cols := vec.Col.([]types.Timestamp)
+						cols := vector.MustTCols[types.Timestamp](vec)
+						vec.Col = cols[:needLen]
+					case types.T_uuid:
+						cols := vector.MustTCols[types.Uuid](vec)
 						vec.Col = cols[:needLen]
 					default:
 						// XXX

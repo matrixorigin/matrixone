@@ -138,6 +138,8 @@ func NewCount(typ types.Type, dist bool, isStar bool) agg.Agg[any] {
 		return newGenericCount[types.Decimal64](typ, dist, isStar)
 	case types.T_decimal128:
 		return newGenericCount[types.Decimal128](typ, dist, isStar)
+	case types.T_uuid:
+		return newGenericCount[types.Uuid](typ, dist, isStar)
 	}
 	panic(fmt.Errorf("unsupport type '%s' for anyvalue", typ))
 }
@@ -182,6 +184,8 @@ func NewAnyValue(typ types.Type, dist bool) agg.Agg[any] {
 		return newGenericAnyValue[types.Decimal64](typ, dist)
 	case types.T_decimal128:
 		return newGenericAnyValue[types.Decimal128](typ, dist)
+	case types.T_uuid:
+		return newGenericAnyValue[types.Uuid](typ, dist)
 	}
 	panic(fmt.Errorf("unsupport type '%s' for anyvalue", typ))
 }
@@ -326,6 +330,12 @@ func NewMax(typ types.Type, dist bool) agg.Agg[any] {
 			return agg.NewUnaryDistAgg(false, typ, max.ReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
 		}
 		return agg.NewUnaryAgg(aggPriv, false, typ, max.ReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
+	case types.T_uuid:
+		aggPriv := max.NewUuidMax()
+		if dist {
+			return agg.NewUnaryDistAgg(false, typ, max.ReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
+		}
+		return agg.NewUnaryAgg(aggPriv, false, typ, max.ReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
 	}
 	panic(fmt.Errorf("unsupport type '%s' for anyvalue", typ))
 }
@@ -394,6 +404,12 @@ func NewMin(typ types.Type, dist bool) agg.Agg[any] {
 			return agg.NewUnaryDistAgg(false, typ, min.ReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
 		}
 		return agg.NewUnaryAgg(aggPriv, false, typ, min.ReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
+	case types.T_uuid:
+		aggPriv := min.NewUuidMin()
+		if dist {
+			return agg.NewUnaryDistAgg(false, typ, min.ReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
+		}
+		return agg.NewUnaryAgg(aggPriv, false, typ, min.ReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
 	}
 	panic(fmt.Errorf("unsupport type '%s' for anyvalue", typ))
 }
@@ -438,6 +454,8 @@ func NewApprox(typ types.Type, dist bool) agg.Agg[any] {
 		return newGenericApproxcd[types.Decimal64](typ, dist)
 	case types.T_decimal128:
 		return newGenericApproxcd[types.Decimal128](typ, dist)
+	case types.T_uuid:
+		return newGenericApproxcd[types.Uuid](typ, dist)
 	}
 	panic(fmt.Errorf("unsupport type '%s' for anyvalue", typ))
 }

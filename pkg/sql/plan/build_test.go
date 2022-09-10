@@ -32,7 +32,8 @@ func TestSingleSQL(t *testing.T) {
 	// sql := `select n_name, avg(N_REGIONKEY) t from NATION where n_name != 'a' group by n_name having avg(N_REGIONKEY) > 10 order by t limit 20`
 	// sql := `select date_add('1997-12-31 23:59:59',INTERVAL 100000 SECOND)`
 	//sql := "create view v1 as select * from nation"
-	sql := "select n_name,N_REGIONKEY from NATION"
+	//sql := "select n_name,N_REGIONKEY from NATION"
+	sql := "INSERT INTO NATION (N_NATIONKEY, N_REGIONKEY, N_NAME, N_COMMENT) VALUES (1, 21, 'NAME1','comment1'), (2, 22, 'NAME2', 'comment2')"
 	// sql := "explain a"
 	// sql := "select 18446744073709551500"
 	// stmts, err := mysql.Parse(sql)
