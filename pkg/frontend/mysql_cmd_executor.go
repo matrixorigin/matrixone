@@ -760,7 +760,7 @@ func (mce *MysqlCmdExecutor) handleChangeDB(requestCtx context.Context, db strin
 	//TODO: check meta data
 	if _, err := ses.Pu.StorageEngine.Database(requestCtx, db, txnHandler.GetTxn()); err != nil {
 		//echo client. no such database
-		return NewMysqlError(ER_BAD_DB_ERROR, db)
+		return moerr.New(moerr.ER_BAD_DB_ERROR, db)
 	}
 	oldDB := ses.GetDatabaseName()
 	ses.SetDatabaseName(db)
@@ -874,7 +874,7 @@ func (mce *MysqlCmdExecutor) handleLoadData(requestCtx context.Context, load *tr
 	dbHandler, err := ses.GetStorage().Database(requestCtx, loadDb, txnHandler.GetTxn())
 	if err != nil {
 		//echo client. no such database
-		return NewMysqlError(ER_BAD_DB_ERROR, loadDb)
+		return moerr.New(moerr.ER_BAD_DB_ERROR, loadDb)
 	}
 
 	//change db to the database in the LOAD DATA statement if necessary
@@ -890,7 +890,7 @@ func (mce *MysqlCmdExecutor) handleLoadData(requestCtx context.Context, load *tr
 	tableHandler, err := dbHandler.Relation(requestCtx, loadTable)
 	if err != nil {
 		//echo client. no such table
-		return NewMysqlError(ER_NO_SUCH_TABLE, loadDb, loadTable)
+		return moerr.New(moerr.ER_NO_SUCH_TABLE, loadDb, loadTable)
 	}
 
 	/*
@@ -904,7 +904,7 @@ func (mce *MysqlCmdExecutor) handleLoadData(requestCtx context.Context, load *tr
 	/*
 		response
 	*/
-	info := NewMysqlError(ER_LOAD_INFO, result.Records, result.Deleted, result.Skipped, result.Warnings, result.WriteTimeout).Error()
+	info := moerr.New(moerr.ER_LOAD_INFO, result.Records, result.Deleted, result.Skipped, result.Warnings, result.WriteTimeout).Error()
 	resp := NewOkResponse(result.Records, 0, uint16(result.Warnings), 0, int(COM_QUERY), info)
 	if err = proto.SendResponse(resp); err != nil {
 		return fmt.Errorf("routine send response failed. error:%v ", err)
@@ -923,7 +923,7 @@ func (mce *MysqlCmdExecutor) handleCmdFieldList(requestCtx context.Context, icfl
 
 	dbName := ses.GetDatabaseName()
 	if dbName == "" {
-		return NewMysqlError(ER_NO_DB_ERROR)
+		return moerr.New(moerr.ER_NO_DB_ERROR)
 	}
 
 	//Get table infos for the database from the cube
@@ -1696,7 +1696,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		ses.Pu.StorageEngine,
 		proc, ses)
 	if err != nil {
-		return NewMysqlError(ER_PARSE_ERROR, err, "")
+		return moerr.New(moerr.ER_PARSE_ERROR, err, "")
 	}
 
 	defer func() {
