@@ -2104,6 +2104,8 @@ var builtins = map[int]Functions{
 			// 	ReturnTyp: types.T_blob,
 			// 	Fn:        unary.LoadFile,
 			// },
+		},
+	},
 	HEX: {
 		Id: HEX,
 		Overloads: []Function{
