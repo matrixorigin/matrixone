@@ -31,8 +31,8 @@ import (
 )
 
 const (
-	RC_DIVISION_BY_ZERO = 2000
-	RC_OUT_OF_RANGE     = 2001
+	RC_DIVISION_BY_ZERO = 20200
+	RC_OUT_OF_RANGE     = 20201
 )
 
 func dec64PtrToC(p *types.Decimal64) *C.int64_t {

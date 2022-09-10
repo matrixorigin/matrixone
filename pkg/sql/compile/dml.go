@@ -105,6 +105,24 @@ func fillBatch(bat *batch.Batch, p *plan.InsertValues, rows []tree.Exprs, proc *
 
 	for i, v := range bat.Vecs {
 		switch v.Typ.Oid {
+		case types.T_uuid:
+			vs := make([]types.Uuid, rowCount)
+			{
+				for j, expr := range p.Columns[i].Column {
+					vec, err := colexec.EvalExpr(tmpBat, proc, expr)
+					if err != nil {
+						return y.MakeInsertError(v.Typ.Oid, p.ExplicitCols[i], rows, i, j)
+					}
+					if nulls.Any(vec.Nsp) {
+						nulls.Add(v.Nsp, uint64(j))
+					} else {
+						vs[j] = vector.GetValueAt[types.Uuid](vec, 0)
+					}
+				}
+			}
+			if err := vector.AppendFixed(v, vs, proc.Mp()); err != nil {
+				return err
+			}
 		case types.T_bool:
 			vs := make([]bool, rowCount)
 			{
@@ -116,7 +134,7 @@ func fillBatch(bat *batch.Batch, p *plan.InsertValues, rows []tree.Exprs, proc *
 					if nulls.Any(vec.Nsp) {
 						nulls.Add(v.Nsp, uint64(j))
 					} else {
-						vs[j] = vec.Col.([]bool)[0]
+						vs[j] = vector.GetValueAt[bool](vec, 0)
 					}
 				}
 			}
@@ -134,7 +152,7 @@ func fillBatch(bat *batch.Batch, p *plan.InsertValues, rows []tree.Exprs, proc *
 					if nulls.Any(vec.Nsp) {
 						nulls.Add(v.Nsp, uint64(j))
 					} else {
-						vs[j] = vec.Col.([]int8)[0]
+						vs[j] = vector.GetValueAt[int8](vec, 0)
 					}
 				}
 			}
@@ -152,7 +170,7 @@ func fillBatch(bat *batch.Batch, p *plan.InsertValues, rows []tree.Exprs, proc *
 					if nulls.Any(vec.Nsp) {
 						nulls.Add(v.Nsp, uint64(j))
 					} else {
-						vs[j] = vec.Col.([]int16)[0]
+						vs[j] = vector.GetValueAt[int16](vec, 0)
 					}
 				}
 			}
@@ -170,7 +188,7 @@ func fillBatch(bat *batch.Batch, p *plan.InsertValues, rows []tree.Exprs, proc *
 					if nulls.Any(vec.Nsp) {
 						nulls.Add(v.Nsp, uint64(j))
 					} else {
-						vs[j] = vec.Col.([]int32)[0]
+						vs[j] = vector.GetValueAt[int32](vec, 0)
 					}
 				}
 			}
@@ -188,7 +206,7 @@ func fillBatch(bat *batch.Batch, p *plan.InsertValues, rows []tree.Exprs, proc *
 					if nulls.Any(vec.Nsp) {
 						nulls.Add(v.Nsp, uint64(j))
 					} else {
-						vs[j] = vec.Col.([]int64)[0]
+						vs[j] = vector.GetValueAt[int64](vec, 0)
 					}
 				}
 			}
@@ -206,7 +224,7 @@ func fillBatch(bat *batch.Batch, p *plan.InsertValues, rows []tree.Exprs, proc *
 					if nulls.Any(vec.Nsp) {
 						nulls.Add(v.Nsp, uint64(j))
 					} else {
-						vs[j] = vec.Col.([]uint8)[0]
+						vs[j] = vector.GetValueAt[uint8](vec, 0)
 					}
 				}
 			}
@@ -224,7 +242,7 @@ func fillBatch(bat *batch.Batch, p *plan.InsertValues, rows []tree.Exprs, proc *
 					if nulls.Any(vec.Nsp) {
 						nulls.Add(v.Nsp, uint64(j))
 					} else {
-						vs[j] = vec.Col.([]uint16)[0]
+						vs[j] = vector.GetValueAt[uint16](vec, 0)
 					}
 				}
 			}
@@ -242,7 +260,7 @@ func fillBatch(bat *batch.Batch, p *plan.InsertValues, rows []tree.Exprs, proc *
 					if nulls.Any(vec.Nsp) {
 						nulls.Add(v.Nsp, uint64(j))
 					} else {
-						vs[j] = vec.Col.([]uint32)[0]
+						vs[j] = vector.GetValueAt[uint32](vec, 0)
 					}
 				}
 			}
@@ -260,7 +278,7 @@ func fillBatch(bat *batch.Batch, p *plan.InsertValues, rows []tree.Exprs, proc *
 					if nulls.Any(vec.Nsp) {
 						nulls.Add(v.Nsp, uint64(j))
 					} else {
-						vs[j] = vec.Col.([]uint64)[0]
+						vs[j] = vector.GetValueAt[uint64](vec, 0)
 					}
 				}
 			}
@@ -278,7 +296,7 @@ func fillBatch(bat *batch.Batch, p *plan.InsertValues, rows []tree.Exprs, proc *
 					if nulls.Any(vec.Nsp) {
 						nulls.Add(v.Nsp, uint64(j))
 					} else {
-						vs[j] = vec.Col.([]float32)[0]
+						vs[j] = vector.GetValueAt[float32](vec, 0)
 					}
 				}
 			}
@@ -296,7 +314,7 @@ func fillBatch(bat *batch.Batch, p *plan.InsertValues, rows []tree.Exprs, proc *
 					if nulls.Any(vec.Nsp) {
 						nulls.Add(v.Nsp, uint64(j))
 					} else {
-						vs[j] = vec.Col.([]float64)[0]
+						vs[j] = vector.GetValueAt[float64](vec, 0)
 					}
 				}
 			}
@@ -332,7 +350,7 @@ func fillBatch(bat *batch.Batch, p *plan.InsertValues, rows []tree.Exprs, proc *
 					if nulls.Any(vec.Nsp) {
 						nulls.Add(v.Nsp, uint64(j))
 					} else {
-						vs[j] = vec.Col.([]types.Date)[0]
+						vs[j] = vector.GetValueAt[types.Date](vec, 0)
 					}
 				}
 			}
@@ -350,7 +368,7 @@ func fillBatch(bat *batch.Batch, p *plan.InsertValues, rows []tree.Exprs, proc *
 					if nulls.Any(vec.Nsp) {
 						nulls.Add(v.Nsp, uint64(j))
 					} else {
-						vs[j] = vec.Col.([]types.Datetime)[0]
+						vs[j] = vector.GetValueAt[types.Datetime](vec, 0)
 					}
 				}
 			}
@@ -368,7 +386,7 @@ func fillBatch(bat *batch.Batch, p *plan.InsertValues, rows []tree.Exprs, proc *
 					if nulls.Any(vec.Nsp) {
 						nulls.Add(v.Nsp, uint64(j))
 					} else {
-						vs[j] = vec.Col.([]types.Timestamp)[0]
+						vs[j] = vector.GetValueAt[types.Timestamp](vec, 0)
 					}
 				}
 			}
@@ -386,7 +404,7 @@ func fillBatch(bat *batch.Batch, p *plan.InsertValues, rows []tree.Exprs, proc *
 					if nulls.Any(vec.Nsp) {
 						nulls.Add(v.Nsp, uint64(j))
 					} else {
-						vs[j] = vec.Col.([]types.Decimal64)[0]
+						vs[j] = vector.GetValueAt[types.Decimal64](vec, 0)
 					}
 				}
 			}
@@ -404,7 +422,7 @@ func fillBatch(bat *batch.Batch, p *plan.InsertValues, rows []tree.Exprs, proc *
 					if nulls.Any(vec.Nsp) {
 						nulls.Add(v.Nsp, uint64(j))
 					} else {
-						vs[j] = vec.Col.([]types.Decimal128)[0]
+						vs[j] = vector.GetValueAt[types.Decimal128](vec, 0)
 					}
 				}
 			}

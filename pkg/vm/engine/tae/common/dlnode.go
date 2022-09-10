@@ -54,6 +54,7 @@ type GenericSortedDList[T any] struct {
 	head    *GenericDLNode[T]
 	tail    *GenericDLNode[T]
 	compare func(T, T) int
+	depth   int
 }
 
 func NewGenericSortedDList[T any](compare func(T, T) int) *GenericSortedDList[T] {
@@ -95,12 +96,7 @@ func (l *GenericSortedDList[T]) Update(n *GenericDLNode[T]) {
 
 // Get the length of the list
 func (l *GenericSortedDList[T]) Depth() int {
-	depth := 0
-	l.Loop(func(_ *GenericDLNode[T]) bool {
-		depth++
-		return true
-	}, false)
-	return depth
+	return l.depth
 }
 
 // Insert a object and wrap it as GenericDLNode into the list
@@ -117,6 +113,7 @@ func (l *GenericSortedDList[T]) Insert(payload T) *GenericDLNode[T] {
 	if tail != nil {
 		l.tail = tail
 	}
+	l.depth += 1
 	return n
 }
 
@@ -141,6 +138,7 @@ func (l *GenericSortedDList[T]) Delete(n *GenericDLNode[T]) {
 		l.head = nil
 		l.tail = nil
 	}
+	l.depth -= 1
 }
 
 // Loop the list and apply fn on each node
