@@ -58,9 +58,9 @@ func (ai *accessInfo) ReadFrom(r io.Reader) (n int64, err error) {
 	return 20, nil
 }
 
-func databaseTxnCanGetFn[T *DBEntry](n *common.GenericDLNode[*DBEntry], ts types.TS) (can, dropped bool) {
+func dbVisibilityFn[T *DBEntry](n *common.GenericDLNode[*DBEntry], ts types.TS) (visible, dropped bool) {
 	db := n.GetPayload()
-	can, dropped = db.TxnCanGet(ts)
+	visible, dropped = db.GetVisibility(ts)
 	return
 }
 
@@ -330,7 +330,7 @@ func (e *DBEntry) AddEntryLocked(table *TableEntry, txn txnif.AsyncTxn) (err err
 		e.entries[table.GetID()] = n
 
 		nn := newNodeList(e.GetItemNodeByIDLocked,
-			tableTxnCanGetFn[*TableEntry],
+			tableVisibilityFn[*TableEntry],
 			&e.nodesMu,
 			fullName)
 		e.nameNodes[fullName] = nn
