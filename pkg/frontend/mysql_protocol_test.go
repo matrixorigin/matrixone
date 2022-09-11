@@ -1750,7 +1750,7 @@ func TestSendPrepareResponse(t *testing.T) {
 		if err != nil {
 			t.Error(err)
 		}
-		preparePlan, err := buildPlan(nil, st)
+		preparePlan, err := buildPlan(nil, nil, nil, st)
 		if err != nil {
 			t.Error(err)
 		}
@@ -1784,7 +1784,7 @@ func TestSendPrepareResponse(t *testing.T) {
 		if err != nil {
 			t.Error(err)
 		}
-		preparePlan, err := buildPlan(nil, st)
+		preparePlan, err := buildPlan(nil, nil, nil, st)
 		if err != nil {
 			t.Error(err)
 		}
@@ -1819,7 +1819,7 @@ func FuzzParseExecuteData(f *testing.F) {
 	if err != nil {
 		f.Error(err)
 	}
-	preparePlan, err := buildPlan(nil, st)
+	preparePlan, err := buildPlan(nil, nil, nil, st)
 	if err != nil {
 		f.Error(err)
 	}
@@ -1884,7 +1884,7 @@ func TestParseExecuteData(t *testing.T) {
 		if err != nil {
 			t.Error(err)
 		}
-		preparePlan, err := buildPlan(nil, st)
+		preparePlan, err := buildPlan(nil, nil, nil, st)
 		if err != nil {
 			t.Error(err)
 		}

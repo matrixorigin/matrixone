@@ -21,7 +21,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/mempool"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
 	"github.com/prashantv/gostub"
@@ -566,17 +568,7 @@ func Test_determineCreateAccount(t *testing.T) {
 			roleIdsInMoRolePrivs, priv.entries, rowsOfMoRolePrivs,
 			nil, nil)
 
-		var currentSql string
-
-		bh := mock_frontend.NewMockBackgroundExec(ctrl)
-		bh.EXPECT().Close().Return().AnyTimes()
-		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).DoAndReturn(func(_ context.Context, sql string) error {
-			currentSql = sql
-			return nil
-		}).AnyTimes()
-		bh.EXPECT().GetExecResultSet().DoAndReturn(func() []interface{} {
-			return []interface{}{sql2result[currentSql]}
-		}).AnyTimes()
+		bh := newBh(ctrl, sql2result)
 
 		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
 		defer bhStub.Reset()
@@ -609,17 +601,7 @@ func Test_determineCreateAccount(t *testing.T) {
 			roleIdsInMoRolePrivs, priv.entries, rowsOfMoRolePrivs,
 			roleIdsInMoRoleGrant, rowsOfMoRoleGrant)
 
-		var currentSql string
-
-		bh := mock_frontend.NewMockBackgroundExec(ctrl)
-		bh.EXPECT().Close().Return().AnyTimes()
-		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).DoAndReturn(func(_ context.Context, sql string) error {
-			currentSql = sql
-			return nil
-		}).AnyTimes()
-		bh.EXPECT().GetExecResultSet().DoAndReturn(func() []interface{} {
-			return []interface{}{sql2result[currentSql]}
-		}).AnyTimes()
+		bh := newBh(ctrl, sql2result)
 
 		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
 		defer bhStub.Reset()
@@ -658,17 +640,7 @@ func Test_determineCreateUser(t *testing.T) {
 			roleIdsInMoRolePrivs, priv.entries, rowsOfMoRolePrivs,
 			nil, nil)
 
-		var currentSql string
-
-		bh := mock_frontend.NewMockBackgroundExec(ctrl)
-		bh.EXPECT().Close().Return().AnyTimes()
-		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).DoAndReturn(func(_ context.Context, sql string) error {
-			currentSql = sql
-			return nil
-		}).AnyTimes()
-		bh.EXPECT().GetExecResultSet().DoAndReturn(func() []interface{} {
-			return []interface{}{sql2result[currentSql]}
-		}).AnyTimes()
+		bh := newBh(ctrl, sql2result)
 
 		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
 		defer bhStub.Reset()
@@ -715,17 +687,7 @@ func Test_determineCreateUser(t *testing.T) {
 			roleIdsInMoRolePrivs, priv.entries, rowsOfMoRolePrivs,
 			roleIdsInMoRoleGrant, rowsOfMoRoleGrant)
 
-		var currentSql string
-
-		bh := mock_frontend.NewMockBackgroundExec(ctrl)
-		bh.EXPECT().Close().Return().AnyTimes()
-		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).DoAndReturn(func(_ context.Context, sql string) error {
-			currentSql = sql
-			return nil
-		}).AnyTimes()
-		bh.EXPECT().GetExecResultSet().DoAndReturn(func() []interface{} {
-			return []interface{}{sql2result[currentSql]}
-		}).AnyTimes()
+		bh := newBh(ctrl, sql2result)
 
 		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
 		defer bhStub.Reset()
@@ -779,17 +741,7 @@ func Test_determineCreateUser(t *testing.T) {
 			roleIdsInMoRolePrivs, priv.entries, rowsOfMoRolePrivs,
 			roleIdsInMoRoleGrant, rowsOfMoRoleGrant)
 
-		var currentSql string
-
-		bh := mock_frontend.NewMockBackgroundExec(ctrl)
-		bh.EXPECT().Close().Return().AnyTimes()
-		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).DoAndReturn(func(_ context.Context, sql string) error {
-			currentSql = sql
-			return nil
-		}).AnyTimes()
-		bh.EXPECT().GetExecResultSet().DoAndReturn(func() []interface{} {
-			return []interface{}{sql2result[currentSql]}
-		}).AnyTimes()
+		bh := newBh(ctrl, sql2result)
 
 		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
 		defer bhStub.Reset()
@@ -829,17 +781,7 @@ func Test_determineDropUser(t *testing.T) {
 			roleIdsInMoRolePrivs, priv.entries, rowsOfMoRolePrivs,
 			nil, nil)
 
-		var currentSql string
-
-		bh := mock_frontend.NewMockBackgroundExec(ctrl)
-		bh.EXPECT().Close().Return().AnyTimes()
-		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).DoAndReturn(func(_ context.Context, sql string) error {
-			currentSql = sql
-			return nil
-		}).AnyTimes()
-		bh.EXPECT().GetExecResultSet().DoAndReturn(func() []interface{} {
-			return []interface{}{sql2result[currentSql]}
-		}).AnyTimes()
+		bh := newBh(ctrl, sql2result)
 
 		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
 		defer bhStub.Reset()
@@ -886,17 +828,7 @@ func Test_determineDropUser(t *testing.T) {
 			roleIdsInMoRolePrivs, priv.entries, rowsOfMoRolePrivs,
 			roleIdsInMoRoleGrant, rowsOfMoRoleGrant)
 
-		var currentSql string
-
-		bh := mock_frontend.NewMockBackgroundExec(ctrl)
-		bh.EXPECT().Close().Return().AnyTimes()
-		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).DoAndReturn(func(_ context.Context, sql string) error {
-			currentSql = sql
-			return nil
-		}).AnyTimes()
-		bh.EXPECT().GetExecResultSet().DoAndReturn(func() []interface{} {
-			return []interface{}{sql2result[currentSql]}
-		}).AnyTimes()
+		bh := newBh(ctrl, sql2result)
 
 		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
 		defer bhStub.Reset()
@@ -950,17 +882,7 @@ func Test_determineDropUser(t *testing.T) {
 			roleIdsInMoRolePrivs, priv.entries, rowsOfMoRolePrivs,
 			roleIdsInMoRoleGrant, rowsOfMoRoleGrant)
 
-		var currentSql string
-
-		bh := mock_frontend.NewMockBackgroundExec(ctrl)
-		bh.EXPECT().Close().Return().AnyTimes()
-		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).DoAndReturn(func(_ context.Context, sql string) error {
-			currentSql = sql
-			return nil
-		}).AnyTimes()
-		bh.EXPECT().GetExecResultSet().DoAndReturn(func() []interface{} {
-			return []interface{}{sql2result[currentSql]}
-		}).AnyTimes()
+		bh := newBh(ctrl, sql2result)
 
 		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
 		defer bhStub.Reset()
@@ -999,17 +921,7 @@ func Test_determineCreateRole(t *testing.T) {
 			roleIdsInMoRolePrivs, priv.entries, rowsOfMoRolePrivs,
 			nil, nil)
 
-		var currentSql string
-
-		bh := mock_frontend.NewMockBackgroundExec(ctrl)
-		bh.EXPECT().Close().Return().AnyTimes()
-		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).DoAndReturn(func(_ context.Context, sql string) error {
-			currentSql = sql
-			return nil
-		}).AnyTimes()
-		bh.EXPECT().GetExecResultSet().DoAndReturn(func() []interface{} {
-			return []interface{}{sql2result[currentSql]}
-		}).AnyTimes()
+		bh := newBh(ctrl, sql2result)
 
 		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
 		defer bhStub.Reset()
@@ -1056,17 +968,7 @@ func Test_determineCreateRole(t *testing.T) {
 			roleIdsInMoRolePrivs, priv.entries, rowsOfMoRolePrivs,
 			roleIdsInMoRoleGrant, rowsOfMoRoleGrant)
 
-		var currentSql string
-
-		bh := mock_frontend.NewMockBackgroundExec(ctrl)
-		bh.EXPECT().Close().Return().AnyTimes()
-		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).DoAndReturn(func(_ context.Context, sql string) error {
-			currentSql = sql
-			return nil
-		}).AnyTimes()
-		bh.EXPECT().GetExecResultSet().DoAndReturn(func() []interface{} {
-			return []interface{}{sql2result[currentSql]}
-		}).AnyTimes()
+		bh := newBh(ctrl, sql2result)
 
 		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
 		defer bhStub.Reset()
@@ -1120,17 +1022,7 @@ func Test_determineCreateRole(t *testing.T) {
 			roleIdsInMoRolePrivs, priv.entries, rowsOfMoRolePrivs,
 			roleIdsInMoRoleGrant, rowsOfMoRoleGrant)
 
-		var currentSql string
-
-		bh := mock_frontend.NewMockBackgroundExec(ctrl)
-		bh.EXPECT().Close().Return().AnyTimes()
-		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).DoAndReturn(func(_ context.Context, sql string) error {
-			currentSql = sql
-			return nil
-		}).AnyTimes()
-		bh.EXPECT().GetExecResultSet().DoAndReturn(func() []interface{} {
-			return []interface{}{sql2result[currentSql]}
-		}).AnyTimes()
+		bh := newBh(ctrl, sql2result)
 
 		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
 		defer bhStub.Reset()
@@ -1169,17 +1061,7 @@ func Test_determineDropRole(t *testing.T) {
 			roleIdsInMoRolePrivs, priv.entries, rowsOfMoRolePrivs,
 			nil, nil)
 
-		var currentSql string
-
-		bh := mock_frontend.NewMockBackgroundExec(ctrl)
-		bh.EXPECT().Close().Return().AnyTimes()
-		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).DoAndReturn(func(_ context.Context, sql string) error {
-			currentSql = sql
-			return nil
-		}).AnyTimes()
-		bh.EXPECT().GetExecResultSet().DoAndReturn(func() []interface{} {
-			return []interface{}{sql2result[currentSql]}
-		}).AnyTimes()
+		bh := newBh(ctrl, sql2result)
 
 		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
 		defer bhStub.Reset()
@@ -1226,17 +1108,7 @@ func Test_determineDropRole(t *testing.T) {
 			roleIdsInMoRolePrivs, priv.entries, rowsOfMoRolePrivs,
 			roleIdsInMoRoleGrant, rowsOfMoRoleGrant)
 
-		var currentSql string
-
-		bh := mock_frontend.NewMockBackgroundExec(ctrl)
-		bh.EXPECT().Close().Return().AnyTimes()
-		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).DoAndReturn(func(_ context.Context, sql string) error {
-			currentSql = sql
-			return nil
-		}).AnyTimes()
-		bh.EXPECT().GetExecResultSet().DoAndReturn(func() []interface{} {
-			return []interface{}{sql2result[currentSql]}
-		}).AnyTimes()
+		bh := newBh(ctrl, sql2result)
 
 		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
 		defer bhStub.Reset()
@@ -1290,17 +1162,7 @@ func Test_determineDropRole(t *testing.T) {
 			roleIdsInMoRolePrivs, priv.entries, rowsOfMoRolePrivs,
 			roleIdsInMoRoleGrant, rowsOfMoRoleGrant)
 
-		var currentSql string
-
-		bh := mock_frontend.NewMockBackgroundExec(ctrl)
-		bh.EXPECT().Close().Return().AnyTimes()
-		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).DoAndReturn(func(_ context.Context, sql string) error {
-			currentSql = sql
-			return nil
-		}).AnyTimes()
-		bh.EXPECT().GetExecResultSet().DoAndReturn(func() []interface{} {
-			return []interface{}{sql2result[currentSql]}
-		}).AnyTimes()
+		bh := newBh(ctrl, sql2result)
 
 		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
 		defer bhStub.Reset()
@@ -1339,17 +1201,7 @@ func Test_determineGrantRole(t *testing.T) {
 			roleIdsInMoRolePrivs, priv.entries, rowsOfMoRolePrivs,
 			nil, nil)
 
-		var currentSql string
-
-		bh := mock_frontend.NewMockBackgroundExec(ctrl)
-		bh.EXPECT().Close().Return().AnyTimes()
-		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).DoAndReturn(func(_ context.Context, sql string) error {
-			currentSql = sql
-			return nil
-		}).AnyTimes()
-		bh.EXPECT().GetExecResultSet().DoAndReturn(func() []interface{} {
-			return []interface{}{sql2result[currentSql]}
-		}).AnyTimes()
+		bh := newBh(ctrl, sql2result)
 
 		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
 		defer bhStub.Reset()
@@ -1396,18 +1248,7 @@ func Test_determineGrantRole(t *testing.T) {
 		sql2result := makeSql2ExecResult2(0, rowsOfMoUserGrant,
 			roleIdsInMoRolePrivs, priv.entries, rowsOfMoRolePrivs,
 			roleIdsInMoRoleGrant, rowsOfMoRoleGrant)
-
-		var currentSql string
-
-		bh := mock_frontend.NewMockBackgroundExec(ctrl)
-		bh.EXPECT().Close().Return().AnyTimes()
-		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).DoAndReturn(func(_ context.Context, sql string) error {
-			currentSql = sql
-			return nil
-		}).AnyTimes()
-		bh.EXPECT().GetExecResultSet().DoAndReturn(func() []interface{} {
-			return []interface{}{sql2result[currentSql]}
-		}).AnyTimes()
+		bh := newBh(ctrl, sql2result)
 
 		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
 		defer bhStub.Reset()
@@ -1491,17 +1332,7 @@ func Test_determineGrantRole(t *testing.T) {
 		}
 		makeRowsOfMoRole(sql2result, roleNames, rowsOfMoRole)
 
-		var currentSql string
-
-		bh := mock_frontend.NewMockBackgroundExec(ctrl)
-		bh.EXPECT().Close().Return().AnyTimes()
-		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).DoAndReturn(func(_ context.Context, sql string) error {
-			currentSql = sql
-			return nil
-		}).AnyTimes()
-		bh.EXPECT().GetExecResultSet().DoAndReturn(func() []interface{} {
-			return []interface{}{sql2result[currentSql]}
-		}).AnyTimes()
+		bh := newBh(ctrl, sql2result)
 
 		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
 		defer bhStub.Reset()
@@ -1585,17 +1416,7 @@ func Test_determineGrantRole(t *testing.T) {
 		}
 		makeRowsOfMoRole(sql2result, roleNames, rowsOfMoRole)
 
-		var currentSql string
-
-		bh := mock_frontend.NewMockBackgroundExec(ctrl)
-		bh.EXPECT().Close().Return().AnyTimes()
-		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).DoAndReturn(func(_ context.Context, sql string) error {
-			currentSql = sql
-			return nil
-		}).AnyTimes()
-		bh.EXPECT().GetExecResultSet().DoAndReturn(func() []interface{} {
-			return []interface{}{sql2result[currentSql]}
-		}).AnyTimes()
+		bh := newBh(ctrl, sql2result)
 
 		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
 		defer bhStub.Reset()
@@ -1679,17 +1500,7 @@ func Test_determineGrantRole(t *testing.T) {
 		}
 		makeRowsOfMoRole(sql2result, roleNames, rowsOfMoRole)
 
-		var currentSql string
-
-		bh := mock_frontend.NewMockBackgroundExec(ctrl)
-		bh.EXPECT().Close().Return().AnyTimes()
-		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).DoAndReturn(func(_ context.Context, sql string) error {
-			currentSql = sql
-			return nil
-		}).AnyTimes()
-		bh.EXPECT().GetExecResultSet().DoAndReturn(func() []interface{} {
-			return []interface{}{sql2result[currentSql]}
-		}).AnyTimes()
+		bh := newBh(ctrl, sql2result)
 
 		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
 		defer bhStub.Reset()
@@ -1773,17 +1584,7 @@ func Test_determineGrantRole(t *testing.T) {
 		}
 		makeRowsOfMoRole(sql2result, roleNames, rowsOfMoRole)
 
-		var currentSql string
-
-		bh := mock_frontend.NewMockBackgroundExec(ctrl)
-		bh.EXPECT().Close().Return().AnyTimes()
-		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).DoAndReturn(func(_ context.Context, sql string) error {
-			currentSql = sql
-			return nil
-		}).AnyTimes()
-		bh.EXPECT().GetExecResultSet().DoAndReturn(func() []interface{} {
-			return []interface{}{sql2result[currentSql]}
-		}).AnyTimes()
+		bh := newBh(ctrl, sql2result)
 
 		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
 		defer bhStub.Reset()
@@ -1822,17 +1623,7 @@ func Test_determineRevokeRole(t *testing.T) {
 			roleIdsInMoRolePrivs, priv.entries, rowsOfMoRolePrivs,
 			nil, nil)
 
-		var currentSql string
-
-		bh := mock_frontend.NewMockBackgroundExec(ctrl)
-		bh.EXPECT().Close().Return().AnyTimes()
-		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).DoAndReturn(func(_ context.Context, sql string) error {
-			currentSql = sql
-			return nil
-		}).AnyTimes()
-		bh.EXPECT().GetExecResultSet().DoAndReturn(func() []interface{} {
-			return []interface{}{sql2result[currentSql]}
-		}).AnyTimes()
+		bh := newBh(ctrl, sql2result)
 
 		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
 		defer bhStub.Reset()
@@ -1880,17 +1671,7 @@ func Test_determineRevokeRole(t *testing.T) {
 			roleIdsInMoRolePrivs, priv.entries, rowsOfMoRolePrivs,
 			roleIdsInMoRoleGrant, rowsOfMoRoleGrant)
 
-		var currentSql string
-
-		bh := mock_frontend.NewMockBackgroundExec(ctrl)
-		bh.EXPECT().Close().Return().AnyTimes()
-		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).DoAndReturn(func(_ context.Context, sql string) error {
-			currentSql = sql
-			return nil
-		}).AnyTimes()
-		bh.EXPECT().GetExecResultSet().DoAndReturn(func() []interface{} {
-			return []interface{}{sql2result[currentSql]}
-		}).AnyTimes()
+		bh := newBh(ctrl, sql2result)
 
 		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
 		defer bhStub.Reset()
@@ -1945,17 +1726,7 @@ func Test_determineRevokeRole(t *testing.T) {
 			roleIdsInMoRolePrivs, priv.entries, rowsOfMoRolePrivs,
 			roleIdsInMoRoleGrant, rowsOfMoRoleGrant)
 
-		var currentSql string
-
-		bh := mock_frontend.NewMockBackgroundExec(ctrl)
-		bh.EXPECT().Close().Return().AnyTimes()
-		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).DoAndReturn(func(_ context.Context, sql string) error {
-			currentSql = sql
-			return nil
-		}).AnyTimes()
-		bh.EXPECT().GetExecResultSet().DoAndReturn(func() []interface{} {
-			return []interface{}{sql2result[currentSql]}
-		}).AnyTimes()
+		bh := newBh(ctrl, sql2result)
 
 		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
 		defer bhStub.Reset()
@@ -2013,18 +1784,8 @@ func Test_determineGrantPrivilege(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 
-		var currentSql string
-		var sql2result map[string]ExecResult
-
-		bh := mock_frontend.NewMockBackgroundExec(ctrl)
-		bh.EXPECT().Close().Return().AnyTimes()
-		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).DoAndReturn(func(_ context.Context, sql string) error {
-			currentSql = sql
-			return nil
-		}).AnyTimes()
-		bh.EXPECT().GetExecResultSet().DoAndReturn(func() []interface{} {
-			return []interface{}{sql2result[currentSql]}
-		}).AnyTimes()
+		bh := &backgroundExecTest{}
+		bh.init()
 
 		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
 		defer bhStub.Reset()
@@ -2095,11 +1856,11 @@ func Test_determineGrantPrivilege(t *testing.T) {
 			}
 			ses.SetDatabaseName("db")
 			//TODO: make sql2result
-			sql2result = make(map[string]ExecResult)
+			bh.init()
 			for _, p := range stmt.Privileges {
 				sql, err := formSqlFromGrantPrivilege(context.TODO(), ses, stmt, p)
 				convey.So(err, convey.ShouldBeNil)
-				makeRowsOfWithGrantOptionPrivilege(sql2result, sql, [][]interface{}{
+				makeRowsOfWithGrantOptionPrivilege(bh.sql2result, sql, [][]interface{}{
 					{1, true},
 				})
 			}
@@ -2113,18 +1874,8 @@ func Test_determineGrantPrivilege(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 
-		var currentSql string
-		var sql2result map[string]ExecResult
-
-		bh := mock_frontend.NewMockBackgroundExec(ctrl)
-		bh.EXPECT().Close().Return().AnyTimes()
-		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).DoAndReturn(func(_ context.Context, sql string) error {
-			currentSql = sql
-			return nil
-		}).AnyTimes()
-		bh.EXPECT().GetExecResultSet().DoAndReturn(func() []interface{} {
-			return []interface{}{sql2result[currentSql]}
-		}).AnyTimes()
+		bh := &backgroundExecTest{}
+		bh.init()
 
 		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
 		defer bhStub.Reset()
@@ -2195,7 +1946,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 			}
 			ses.SetDatabaseName("db")
 			//TODO: make sql2result
-			sql2result = make(map[string]ExecResult)
+			bh.init()
 			for i, p := range stmt.Privileges {
 				sql, err := formSqlFromGrantPrivilege(context.TODO(), ses, stmt, p)
 				convey.So(err, convey.ShouldBeNil)
@@ -2207,7 +1958,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 						{1, true},
 					}
 				}
-				makeRowsOfWithGrantOptionPrivilege(sql2result, sql, rows)
+				makeRowsOfWithGrantOptionPrivilege(bh.sql2result, sql, rows)
 			}
 
 			ok, err := authenticatePrivilegeOfStatementWithObjectTypeNone(ses.GetRequestContext(), ses, stmt)
@@ -2219,18 +1970,8 @@ func Test_determineGrantPrivilege(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 
-		var currentSql string
-		var sql2result map[string]ExecResult
-
-		bh := mock_frontend.NewMockBackgroundExec(ctrl)
-		bh.EXPECT().Close().Return().AnyTimes()
-		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).DoAndReturn(func(_ context.Context, sql string) error {
-			currentSql = sql
-			return nil
-		}).AnyTimes()
-		bh.EXPECT().GetExecResultSet().DoAndReturn(func() []interface{} {
-			return []interface{}{sql2result[currentSql]}
-		}).AnyTimes()
+		bh := &backgroundExecTest{}
+		bh.init()
 
 		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
 		defer bhStub.Reset()
@@ -2281,11 +2022,11 @@ func Test_determineGrantPrivilege(t *testing.T) {
 			}
 			ses.SetDatabaseName("db")
 			//TODO: make sql2result
-			sql2result = make(map[string]ExecResult)
+			bh.init()
 			for _, p := range stmt.Privileges {
 				sql, err := formSqlFromGrantPrivilege(context.TODO(), ses, stmt, p)
 				convey.So(err, convey.ShouldBeNil)
-				makeRowsOfWithGrantOptionPrivilege(sql2result, sql, [][]interface{}{
+				makeRowsOfWithGrantOptionPrivilege(bh.sql2result, sql, [][]interface{}{
 					{1, true},
 				})
 			}
@@ -2299,18 +2040,8 @@ func Test_determineGrantPrivilege(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 
-		var currentSql string
-		var sql2result map[string]ExecResult
-
-		bh := mock_frontend.NewMockBackgroundExec(ctrl)
-		bh.EXPECT().Close().Return().AnyTimes()
-		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).DoAndReturn(func(_ context.Context, sql string) error {
-			currentSql = sql
-			return nil
-		}).AnyTimes()
-		bh.EXPECT().GetExecResultSet().DoAndReturn(func() []interface{} {
-			return []interface{}{sql2result[currentSql]}
-		}).AnyTimes()
+		bh := &backgroundExecTest{}
+		bh.init()
 
 		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
 		defer bhStub.Reset()
@@ -2361,7 +2092,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 			}
 			ses.SetDatabaseName("db")
 			//TODO: make sql2result
-			sql2result = make(map[string]ExecResult)
+			bh.init()
 			for i, p := range stmt.Privileges {
 				sql, err := formSqlFromGrantPrivilege(context.TODO(), ses, stmt, p)
 				convey.So(err, convey.ShouldBeNil)
@@ -2373,7 +2104,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 						{1, true},
 					}
 				}
-				makeRowsOfWithGrantOptionPrivilege(sql2result, sql, rows)
+				makeRowsOfWithGrantOptionPrivilege(bh.sql2result, sql, rows)
 			}
 
 			ok, err := authenticatePrivilegeOfStatementWithObjectTypeNone(ses.GetRequestContext(), ses, stmt)
@@ -2385,18 +2116,8 @@ func Test_determineGrantPrivilege(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 
-		var currentSql string
-		var sql2result map[string]ExecResult
-
-		bh := mock_frontend.NewMockBackgroundExec(ctrl)
-		bh.EXPECT().Close().Return().AnyTimes()
-		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).DoAndReturn(func(_ context.Context, sql string) error {
-			currentSql = sql
-			return nil
-		}).AnyTimes()
-		bh.EXPECT().GetExecResultSet().DoAndReturn(func() []interface{} {
-			return []interface{}{sql2result[currentSql]}
-		}).AnyTimes()
+		bh := &backgroundExecTest{}
+		bh.init()
 
 		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
 		defer bhStub.Reset()
@@ -2427,11 +2148,11 @@ func Test_determineGrantPrivilege(t *testing.T) {
 			}
 			ses.SetDatabaseName("db")
 			//TODO: make sql2result
-			sql2result = make(map[string]ExecResult)
+			bh.init()
 			for _, p := range stmt.Privileges {
 				sql, err := formSqlFromGrantPrivilege(context.TODO(), ses, stmt, p)
 				convey.So(err, convey.ShouldBeNil)
-				makeRowsOfWithGrantOptionPrivilege(sql2result, sql, [][]interface{}{
+				makeRowsOfWithGrantOptionPrivilege(bh.sql2result, sql, [][]interface{}{
 					{1, true},
 				})
 			}
@@ -2445,18 +2166,8 @@ func Test_determineGrantPrivilege(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 
-		var currentSql string
-		var sql2result map[string]ExecResult
-
-		bh := mock_frontend.NewMockBackgroundExec(ctrl)
-		bh.EXPECT().Close().Return().AnyTimes()
-		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).DoAndReturn(func(_ context.Context, sql string) error {
-			currentSql = sql
-			return nil
-		}).AnyTimes()
-		bh.EXPECT().GetExecResultSet().DoAndReturn(func() []interface{} {
-			return []interface{}{sql2result[currentSql]}
-		}).AnyTimes()
+		bh := &backgroundExecTest{}
+		bh.init()
 
 		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
 		defer bhStub.Reset()
@@ -2487,7 +2198,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 			}
 			ses.SetDatabaseName("db")
 			//TODO: make sql2result
-			sql2result = make(map[string]ExecResult)
+			bh.init()
 			for i, p := range stmt.Privileges {
 				sql, err := formSqlFromGrantPrivilege(context.TODO(), ses, stmt, p)
 				convey.So(err, convey.ShouldBeNil)
@@ -2499,7 +2210,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 						{1, true},
 					}
 				}
-				makeRowsOfWithGrantOptionPrivilege(sql2result, sql, rows)
+				makeRowsOfWithGrantOptionPrivilege(bh.sql2result, sql, rows)
 			}
 
 			ok, err := authenticatePrivilegeOfStatementWithObjectTypeNone(ses.GetRequestContext(), ses, stmt)
@@ -2572,17 +2283,7 @@ func Test_determineCreateDatabase(t *testing.T) {
 			roleIdsInMoRolePrivs, priv.entries, rowsOfMoRolePrivs,
 			nil, nil)
 
-		var currentSql string
-
-		bh := mock_frontend.NewMockBackgroundExec(ctrl)
-		bh.EXPECT().Close().Return().AnyTimes()
-		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).DoAndReturn(func(_ context.Context, sql string) error {
-			currentSql = sql
-			return nil
-		}).AnyTimes()
-		bh.EXPECT().GetExecResultSet().DoAndReturn(func() []interface{} {
-			return []interface{}{sql2result[currentSql]}
-		}).AnyTimes()
+		bh := newBh(ctrl, sql2result)
 
 		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
 		defer bhStub.Reset()
@@ -2629,17 +2330,7 @@ func Test_determineCreateDatabase(t *testing.T) {
 			roleIdsInMoRolePrivs, priv.entries, rowsOfMoRolePrivs,
 			roleIdsInMoRoleGrant, rowsOfMoRoleGrant)
 
-		var currentSql string
-
-		bh := mock_frontend.NewMockBackgroundExec(ctrl)
-		bh.EXPECT().Close().Return().AnyTimes()
-		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).DoAndReturn(func(_ context.Context, sql string) error {
-			currentSql = sql
-			return nil
-		}).AnyTimes()
-		bh.EXPECT().GetExecResultSet().DoAndReturn(func() []interface{} {
-			return []interface{}{sql2result[currentSql]}
-		}).AnyTimes()
+		bh := newBh(ctrl, sql2result)
 
 		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
 		defer bhStub.Reset()
@@ -2693,17 +2384,7 @@ func Test_determineCreateDatabase(t *testing.T) {
 			roleIdsInMoRolePrivs, priv.entries, rowsOfMoRolePrivs,
 			roleIdsInMoRoleGrant, rowsOfMoRoleGrant)
 
-		var currentSql string
-
-		bh := mock_frontend.NewMockBackgroundExec(ctrl)
-		bh.EXPECT().Close().Return().AnyTimes()
-		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).DoAndReturn(func(_ context.Context, sql string) error {
-			currentSql = sql
-			return nil
-		}).AnyTimes()
-		bh.EXPECT().GetExecResultSet().DoAndReturn(func() []interface{} {
-			return []interface{}{sql2result[currentSql]}
-		}).AnyTimes()
+		bh := newBh(ctrl, sql2result)
 
 		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
 		defer bhStub.Reset()
@@ -2743,17 +2424,7 @@ func Test_determineDropDatabase(t *testing.T) {
 			roleIdsInMoRolePrivs, priv.entries, rowsOfMoRolePrivs,
 			nil, nil)
 
-		var currentSql string
-
-		bh := mock_frontend.NewMockBackgroundExec(ctrl)
-		bh.EXPECT().Close().Return().AnyTimes()
-		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).DoAndReturn(func(_ context.Context, sql string) error {
-			currentSql = sql
-			return nil
-		}).AnyTimes()
-		bh.EXPECT().GetExecResultSet().DoAndReturn(func() []interface{} {
-			return []interface{}{sql2result[currentSql]}
-		}).AnyTimes()
+		bh := newBh(ctrl, sql2result)
 
 		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
 		defer bhStub.Reset()
@@ -2800,18 +2471,7 @@ func Test_determineDropDatabase(t *testing.T) {
 			roleIdsInMoRolePrivs, priv.entries, rowsOfMoRolePrivs,
 			roleIdsInMoRoleGrant, rowsOfMoRoleGrant)
 
-		var currentSql string
-
-		bh := mock_frontend.NewMockBackgroundExec(ctrl)
-		bh.EXPECT().Close().Return().AnyTimes()
-		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).DoAndReturn(func(_ context.Context, sql string) error {
-			currentSql = sql
-			return nil
-		}).AnyTimes()
-		bh.EXPECT().GetExecResultSet().DoAndReturn(func() []interface{} {
-			return []interface{}{sql2result[currentSql]}
-		}).AnyTimes()
-
+		bh := newBh(ctrl, sql2result)
 		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
 		defer bhStub.Reset()
 
@@ -2863,18 +2523,7 @@ func Test_determineDropDatabase(t *testing.T) {
 		sql2result := makeSql2ExecResult2(0, rowsOfMoUserGrant,
 			roleIdsInMoRolePrivs, priv.entries, rowsOfMoRolePrivs,
 			roleIdsInMoRoleGrant, rowsOfMoRoleGrant)
-
-		var currentSql string
-
-		bh := mock_frontend.NewMockBackgroundExec(ctrl)
-		bh.EXPECT().Close().Return().AnyTimes()
-		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).DoAndReturn(func(_ context.Context, sql string) error {
-			currentSql = sql
-			return nil
-		}).AnyTimes()
-		bh.EXPECT().GetExecResultSet().DoAndReturn(func() []interface{} {
-			return []interface{}{sql2result[currentSql]}
-		}).AnyTimes()
+		bh := newBh(ctrl, sql2result)
 
 		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
 		defer bhStub.Reset()
@@ -2914,17 +2563,7 @@ func Test_determineShowDatabase(t *testing.T) {
 			roleIdsInMoRolePrivs, priv.entries, rowsOfMoRolePrivs,
 			nil, nil)
 
-		var currentSql string
-
-		bh := mock_frontend.NewMockBackgroundExec(ctrl)
-		bh.EXPECT().Close().Return().AnyTimes()
-		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).DoAndReturn(func(_ context.Context, sql string) error {
-			currentSql = sql
-			return nil
-		}).AnyTimes()
-		bh.EXPECT().GetExecResultSet().DoAndReturn(func() []interface{} {
-			return []interface{}{sql2result[currentSql]}
-		}).AnyTimes()
+		bh := newBh(ctrl, sql2result)
 
 		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
 		defer bhStub.Reset()
@@ -2971,17 +2610,7 @@ func Test_determineShowDatabase(t *testing.T) {
 			roleIdsInMoRolePrivs, priv.entries, rowsOfMoRolePrivs,
 			roleIdsInMoRoleGrant, rowsOfMoRoleGrant)
 
-		var currentSql string
-
-		bh := mock_frontend.NewMockBackgroundExec(ctrl)
-		bh.EXPECT().Close().Return().AnyTimes()
-		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).DoAndReturn(func(_ context.Context, sql string) error {
-			currentSql = sql
-			return nil
-		}).AnyTimes()
-		bh.EXPECT().GetExecResultSet().DoAndReturn(func() []interface{} {
-			return []interface{}{sql2result[currentSql]}
-		}).AnyTimes()
+		bh := newBh(ctrl, sql2result)
 
 		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
 		defer bhStub.Reset()
@@ -3035,17 +2664,7 @@ func Test_determineShowDatabase(t *testing.T) {
 			roleIdsInMoRolePrivs, priv.entries, rowsOfMoRolePrivs,
 			roleIdsInMoRoleGrant, rowsOfMoRoleGrant)
 
-		var currentSql string
-
-		bh := mock_frontend.NewMockBackgroundExec(ctrl)
-		bh.EXPECT().Close().Return().AnyTimes()
-		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).DoAndReturn(func(_ context.Context, sql string) error {
-			currentSql = sql
-			return nil
-		}).AnyTimes()
-		bh.EXPECT().GetExecResultSet().DoAndReturn(func() []interface{} {
-			return []interface{}{sql2result[currentSql]}
-		}).AnyTimes()
+		bh := newBh(ctrl, sql2result)
 
 		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
 		defer bhStub.Reset()
@@ -3087,17 +2706,7 @@ func Test_determineUseDatabase(t *testing.T) {
 			roleIdsInMoRolePrivs, priv.entries, rowsOfMoRolePrivs,
 			nil, nil)
 
-		var currentSql string
-
-		bh := mock_frontend.NewMockBackgroundExec(ctrl)
-		bh.EXPECT().Close().Return().AnyTimes()
-		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).DoAndReturn(func(_ context.Context, sql string) error {
-			currentSql = sql
-			return nil
-		}).AnyTimes()
-		bh.EXPECT().GetExecResultSet().DoAndReturn(func() []interface{} {
-			return []interface{}{sql2result[currentSql]}
-		}).AnyTimes()
+		bh := newBh(ctrl, sql2result)
 
 		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
 		defer bhStub.Reset()
@@ -3146,17 +2755,7 @@ func Test_determineUseDatabase(t *testing.T) {
 			roleIdsInMoRolePrivs, priv.entries, rowsOfMoRolePrivs,
 			roleIdsInMoRoleGrant, rowsOfMoRoleGrant)
 
-		var currentSql string
-
-		bh := mock_frontend.NewMockBackgroundExec(ctrl)
-		bh.EXPECT().Close().Return().AnyTimes()
-		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).DoAndReturn(func(_ context.Context, sql string) error {
-			currentSql = sql
-			return nil
-		}).AnyTimes()
-		bh.EXPECT().GetExecResultSet().DoAndReturn(func() []interface{} {
-			return []interface{}{sql2result[currentSql]}
-		}).AnyTimes()
+		bh := newBh(ctrl, sql2result)
 
 		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
 		defer bhStub.Reset()
@@ -3212,17 +2811,7 @@ func Test_determineUseDatabase(t *testing.T) {
 			roleIdsInMoRolePrivs, priv.entries, rowsOfMoRolePrivs,
 			roleIdsInMoRoleGrant, rowsOfMoRoleGrant)
 
-		var currentSql string
-
-		bh := mock_frontend.NewMockBackgroundExec(ctrl)
-		bh.EXPECT().Close().Return().AnyTimes()
-		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).DoAndReturn(func(_ context.Context, sql string) error {
-			currentSql = sql
-			return nil
-		}).AnyTimes()
-		bh.EXPECT().GetExecResultSet().DoAndReturn(func() []interface{} {
-			return []interface{}{sql2result[currentSql]}
-		}).AnyTimes()
+		bh := newBh(ctrl, sql2result)
 
 		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
 		defer bhStub.Reset()
@@ -3265,17 +2854,7 @@ func Test_determineCreateTable(t *testing.T) {
 			roleIdsInMoRolePrivs, priv.entries, rowsOfMoRolePrivs,
 			nil, nil)
 
-		var currentSql string
-
-		bh := mock_frontend.NewMockBackgroundExec(ctrl)
-		bh.EXPECT().Close().Return().AnyTimes()
-		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).DoAndReturn(func(_ context.Context, sql string) error {
-			currentSql = sql
-			return nil
-		}).AnyTimes()
-		bh.EXPECT().GetExecResultSet().DoAndReturn(func() []interface{} {
-			return []interface{}{sql2result[currentSql]}
-		}).AnyTimes()
+		bh := newBh(ctrl, sql2result)
 
 		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
 		defer bhStub.Reset()
@@ -3322,17 +2901,7 @@ func Test_determineCreateTable(t *testing.T) {
 			roleIdsInMoRolePrivs, priv.entries, rowsOfMoRolePrivs,
 			roleIdsInMoRoleGrant, rowsOfMoRoleGrant)
 
-		var currentSql string
-
-		bh := mock_frontend.NewMockBackgroundExec(ctrl)
-		bh.EXPECT().Close().Return().AnyTimes()
-		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).DoAndReturn(func(_ context.Context, sql string) error {
-			currentSql = sql
-			return nil
-		}).AnyTimes()
-		bh.EXPECT().GetExecResultSet().DoAndReturn(func() []interface{} {
-			return []interface{}{sql2result[currentSql]}
-		}).AnyTimes()
+		bh := newBh(ctrl, sql2result)
 
 		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
 		defer bhStub.Reset()
@@ -3386,17 +2955,7 @@ func Test_determineCreateTable(t *testing.T) {
 			roleIdsInMoRolePrivs, priv.entries, rowsOfMoRolePrivs,
 			roleIdsInMoRoleGrant, rowsOfMoRoleGrant)
 
-		var currentSql string
-
-		bh := mock_frontend.NewMockBackgroundExec(ctrl)
-		bh.EXPECT().Close().Return().AnyTimes()
-		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).DoAndReturn(func(_ context.Context, sql string) error {
-			currentSql = sql
-			return nil
-		}).AnyTimes()
-		bh.EXPECT().GetExecResultSet().DoAndReturn(func() []interface{} {
-			return []interface{}{sql2result[currentSql]}
-		}).AnyTimes()
+		bh := newBh(ctrl, sql2result)
 
 		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
 		defer bhStub.Reset()
@@ -3436,18 +2995,7 @@ func Test_determineDropTable(t *testing.T) {
 			roleIdsInMoRolePrivs, priv.entries, rowsOfMoRolePrivs,
 			nil, nil)
 
-		var currentSql string
-
-		bh := mock_frontend.NewMockBackgroundExec(ctrl)
-		bh.EXPECT().Close().Return().AnyTimes()
-		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).DoAndReturn(func(_ context.Context, sql string) error {
-			currentSql = sql
-			return nil
-		}).AnyTimes()
-		bh.EXPECT().GetExecResultSet().DoAndReturn(func() []interface{} {
-			return []interface{}{sql2result[currentSql]}
-		}).AnyTimes()
-
+		bh := newBh(ctrl, sql2result)
 		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
 		defer bhStub.Reset()
 
@@ -3492,18 +3040,7 @@ func Test_determineDropTable(t *testing.T) {
 		sql2result := makeSql2ExecResult2(0, rowsOfMoUserGrant,
 			roleIdsInMoRolePrivs, priv.entries, rowsOfMoRolePrivs,
 			roleIdsInMoRoleGrant, rowsOfMoRoleGrant)
-
-		var currentSql string
-
-		bh := mock_frontend.NewMockBackgroundExec(ctrl)
-		bh.EXPECT().Close().Return().AnyTimes()
-		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).DoAndReturn(func(_ context.Context, sql string) error {
-			currentSql = sql
-			return nil
-		}).AnyTimes()
-		bh.EXPECT().GetExecResultSet().DoAndReturn(func() []interface{} {
-			return []interface{}{sql2result[currentSql]}
-		}).AnyTimes()
+		bh := newBh(ctrl, sql2result)
 
 		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
 		defer bhStub.Reset()
@@ -3557,17 +3094,7 @@ func Test_determineDropTable(t *testing.T) {
 			roleIdsInMoRolePrivs, priv.entries, rowsOfMoRolePrivs,
 			roleIdsInMoRoleGrant, rowsOfMoRoleGrant)
 
-		var currentSql string
-
-		bh := mock_frontend.NewMockBackgroundExec(ctrl)
-		bh.EXPECT().Close().Return().AnyTimes()
-		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).DoAndReturn(func(_ context.Context, sql string) error {
-			currentSql = sql
-			return nil
-		}).AnyTimes()
-		bh.EXPECT().GetExecResultSet().DoAndReturn(func() []interface{} {
-			return []interface{}{sql2result[currentSql]}
-		}).AnyTimes()
+		bh := newBh(ctrl, sql2result)
 
 		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
 		defer bhStub.Reset()
@@ -3578,8 +3105,230 @@ func Test_determineDropTable(t *testing.T) {
 	})
 }
 
-func Test_determineSelect(t *testing.T) {
-	convey.Convey("build plan", t, func() {})
+func Test_determineDML(t *testing.T) {
+	type arg struct {
+		stmt tree.Statement
+		p    *plan2.Plan
+	}
+
+	args := []arg{
+		{
+			stmt: &tree.Select{},
+			p: &plan2.Plan{
+				Plan: &plan2.Plan_Query{
+					Query: &plan2.Query{
+						Nodes: []*plan2.Node{
+							{NodeType: plan.Node_TABLE_SCAN, ObjRef: &plan2.ObjectRef{SchemaName: "t", ObjName: "a"}},
+							{NodeType: plan.Node_TABLE_SCAN, ObjRef: &plan2.ObjectRef{SchemaName: "s", ObjName: "b"}},
+						},
+					},
+				},
+			},
+		},
+		{
+			stmt: &tree.Update{},
+			p: &plan2.Plan{
+				Plan: &plan2.Plan_Query{
+					Query: &plan2.Query{
+						Nodes: []*plan2.Node{
+							{NodeType: plan.Node_TABLE_SCAN, ObjRef: &plan2.ObjectRef{SchemaName: "t", ObjName: "a"}},
+							{NodeType: plan.Node_TABLE_SCAN, ObjRef: &plan2.ObjectRef{SchemaName: "s", ObjName: "b"}},
+							{NodeType: plan.Node_UPDATE},
+						},
+					},
+				},
+			},
+		},
+		{
+			stmt: &tree.Delete{},
+			p: &plan2.Plan{
+				Plan: &plan2.Plan_Query{
+					Query: &plan2.Query{
+						Nodes: []*plan2.Node{
+							{NodeType: plan.Node_TABLE_SCAN, ObjRef: &plan2.ObjectRef{SchemaName: "t", ObjName: "a"}},
+							{NodeType: plan.Node_TABLE_SCAN, ObjRef: &plan2.ObjectRef{SchemaName: "s", ObjName: "b"}},
+							{NodeType: plan.Node_DELETE},
+						},
+					},
+				},
+			},
+		},
+		{ //insert into values
+			stmt: &tree.Insert{},
+			p: &plan2.Plan{
+				Plan: &plan.Plan_Ins{
+					Ins: &plan.InsertValues{
+						DbName:  "t",
+						TblName: "a",
+					},
+				},
+			},
+		},
+		{ //insert into select
+			stmt: &tree.Insert{},
+			p: &plan2.Plan{
+				Plan: &plan2.Plan_Query{
+					Query: &plan2.Query{
+						Nodes: []*plan2.Node{
+							{NodeType: plan.Node_TABLE_SCAN, ObjRef: &plan2.ObjectRef{SchemaName: "t", ObjName: "a"}},
+							{NodeType: plan.Node_TABLE_SCAN, ObjRef: &plan2.ObjectRef{SchemaName: "s", ObjName: "b"}},
+							{NodeType: plan.Node_INSERT, ObjRef: &plan2.ObjectRef{SchemaName: "s", ObjName: "b"}},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	convey.Convey("select/update/delete/insert succ", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		for _, a := range args {
+			priv := determinePrivilegeSetOfStatement(a.stmt)
+			ses := newSes(priv)
+
+			rowsOfMoUserGrant := [][]interface{}{
+				{0, false},
+			}
+
+			sql2result := makeSql2ExecResult2(0, rowsOfMoUserGrant,
+				nil, nil, nil,
+				nil, nil)
+
+			arr := extractPrivilegeTipsFromPlan(a.p)
+			convertPrivilegeTipsToPrivilege(priv, arr)
+
+			roleIds := []int{
+				int(ses.tenant.GetDefaultRoleID()),
+			}
+
+			for _, roleId := range roleIds {
+				for _, entry := range priv.entries {
+					sql := getSqlForCheckRoleHasTableLevelPrivilegeFormat(int64(roleId), entry.privilegeId, entry.databaseName, entry.tableName)
+					sql2result[sql] = newMrsForWithGrantOptionPrivilege([][]interface{}{
+						{entry.privilegeId, true},
+					})
+				}
+			}
+
+			bh := newBh(ctrl, sql2result)
+			bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+			defer bhStub.Reset()
+
+			ok, err := authenticatePrivilegeOfStatementWithObjectTypeTable(ses.GetRequestContext(), ses, a.stmt, a.p)
+			convey.So(err, convey.ShouldBeNil)
+			convey.So(ok, convey.ShouldBeTrue)
+		}
+
+	})
+
+	convey.Convey("select/update/delete/insert succ 2", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		for _, a := range args {
+			priv := determinePrivilegeSetOfStatement(a.stmt)
+			ses := newSes(priv)
+
+			rowsOfMoUserGrant := [][]interface{}{
+				{0, false},
+			}
+
+			//grant role 1 to role 0
+			roleIdsInMoRoleGrant := []int{0}
+			rowsOfMoRoleGrant := make([][][]interface{}, len(roleIdsInMoRoleGrant))
+			rowsOfMoRoleGrant[0] = [][]interface{}{
+				{1, true},
+			}
+
+			sql2result := makeSql2ExecResult2(0, rowsOfMoUserGrant,
+				nil, nil, nil,
+				roleIdsInMoRoleGrant, rowsOfMoRoleGrant)
+
+			arr := extractPrivilegeTipsFromPlan(a.p)
+			convertPrivilegeTipsToPrivilege(priv, arr)
+
+			//role 0 does not have the select
+			//role 1 has the select
+			roleIds := []int{
+				int(ses.tenant.GetDefaultRoleID()), 1,
+			}
+
+			for _, roleId := range roleIds {
+				for _, entry := range priv.entries {
+					sql := getSqlForCheckRoleHasTableLevelPrivilegeFormat(int64(roleId), entry.privilegeId, entry.databaseName, entry.tableName)
+					var rows [][]interface{}
+					if roleId == 1 {
+						rows = [][]interface{}{
+							{entry.privilegeId, true},
+						}
+					}
+					sql2result[sql] = newMrsForWithGrantOptionPrivilege(rows)
+				}
+			}
+
+			bh := newBh(ctrl, sql2result)
+
+			bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+			defer bhStub.Reset()
+
+			ok, err := authenticatePrivilegeOfStatementWithObjectTypeTable(ses.GetRequestContext(), ses, a.stmt, a.p)
+			convey.So(err, convey.ShouldBeNil)
+			convey.So(ok, convey.ShouldBeTrue)
+		}
+	})
+
+	convey.Convey("select/update/delete/insert fail", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		for _, a := range args {
+			priv := determinePrivilegeSetOfStatement(a.stmt)
+			ses := newSes(priv)
+
+			rowsOfMoUserGrant := [][]interface{}{
+				{0, false},
+			}
+
+			//grant role 1 to role 0
+			roleIdsInMoRoleGrant := []int{0, 1}
+			rowsOfMoRoleGrant := make([][][]interface{}, len(roleIdsInMoRoleGrant))
+			rowsOfMoRoleGrant[0] = [][]interface{}{
+				{1, true},
+			}
+			rowsOfMoRoleGrant[0] = [][]interface{}{}
+
+			sql2result := makeSql2ExecResult2(0, rowsOfMoUserGrant,
+				nil, nil, nil,
+				roleIdsInMoRoleGrant, rowsOfMoRoleGrant)
+
+			arr := extractPrivilegeTipsFromPlan(a.p)
+			convertPrivilegeTipsToPrivilege(priv, arr)
+
+			//role 0,1 does not have the select
+			roleIds := []int{
+				int(ses.tenant.GetDefaultRoleID()), 1,
+			}
+
+			for _, roleId := range roleIds {
+				for _, entry := range priv.entries {
+					sql := getSqlForCheckRoleHasTableLevelPrivilegeFormat(int64(roleId), entry.privilegeId, entry.databaseName, entry.tableName)
+					rows := make([][]interface{}, 0)
+					sql2result[sql] = newMrsForWithGrantOptionPrivilege(rows)
+				}
+			}
+
+			bh := newBh(ctrl, sql2result)
+
+			bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+			defer bhStub.Reset()
+
+			ok, err := authenticatePrivilegeOfStatementWithObjectTypeTable(ses.GetRequestContext(), ses, a.stmt, a.p)
+			convey.So(err, convey.ShouldBeNil)
+			convey.So(ok, convey.ShouldBeFalse)
+		}
+	})
 }
 
 func newSes(priv *privilege) *Session {
@@ -3606,6 +3355,47 @@ func newSes(priv *privilege) *Session {
 	ses.SetRequestContext(ctx)
 	return ses
 }
+
+func newBh(ctrl *gomock.Controller, sql2result map[string]ExecResult) BackgroundExec {
+	var currentSql string
+	bh := mock_frontend.NewMockBackgroundExec(ctrl)
+	bh.EXPECT().Close().Return().AnyTimes()
+	bh.EXPECT().Exec(gomock.Any(), gomock.Any()).DoAndReturn(func(_ context.Context, sql string) error {
+		currentSql = sql
+		return nil
+	}).AnyTimes()
+	bh.EXPECT().GetExecResultSet().DoAndReturn(func() []interface{} {
+		return []interface{}{sql2result[currentSql]}
+	}).AnyTimes()
+	return bh
+}
+
+type backgroundExecTest struct {
+	currentSql string
+	sql2result map[string]ExecResult
+}
+
+func (bt *backgroundExecTest) init() {
+	bt.sql2result = make(map[string]ExecResult)
+}
+
+func (bt *backgroundExecTest) Close() {
+}
+
+func (bt *backgroundExecTest) Exec(ctx context.Context, s string) error {
+	bt.currentSql = s
+	return nil
+}
+
+func (bt *backgroundExecTest) GetExecResultSet() []interface{} {
+	return []interface{}{bt.sql2result[bt.currentSql]}
+}
+
+func (bt *backgroundExecTest) ClearExecResultSet() {
+	bt.init()
+}
+
+var _ BackgroundExec = &backgroundExecTest{}
 
 func newMrsForRoleIdOfRole(rows [][]interface{}) *MysqlResultSet {
 	mrs := &MysqlResultSet{}

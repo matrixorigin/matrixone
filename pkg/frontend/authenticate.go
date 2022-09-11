@@ -1160,12 +1160,10 @@ func extractPrivilegeTipsFromPlan(p *plan2.Plan) privilegeTipsArray {
 }
 
 // convertPrivilegeTipsToPrivilege constructs the privilege entries from the privilege tips from the plan
-func convertPrivilegeTipsToPrivilege(stmt tree.Statement, arr privilegeTipsArray) *privilege {
-	priv := determinePrivilegeSetOfStatement(stmt)
-
+func convertPrivilegeTipsToPrivilege(priv *privilege, arr privilegeTipsArray) {
 	//rewirte the privilege entries based on privilege tips
 	if priv.objectType() != objectTypeTable {
-		panic("only rewrite the privilege entries from object type table")
+		return
 	}
 
 	type pair struct {
@@ -1205,8 +1203,6 @@ func convertPrivilegeTipsToPrivilege(stmt tree.Statement, arr privilegeTipsArray
 	}
 
 	priv.entries = entries
-
-	return priv
 }
 
 // determineRoleSetSatisfyPrivilegeSet decides the privileges of role set can satisfy the requirement of the privilege set.
@@ -1215,7 +1211,7 @@ func determineRoleSetSatisfyPrivilegeSet(ctx context.Context, bh BackgroundExec,
 	var rsset []ExecResult
 	for _, roleId := range roleIds {
 		for _, entry := range priv.entries {
-			if entry.privilegeId == PrivilegeTypeAccountOwnership || entry.privilegeId == PrivilegeTypeUserOwnership {
+			if entry.privilegeId == PrivilegeTypeAccountOwnership || entry.privilegeId == PrivilegeTypeUserOwnership || entry.privilegeId == PrivilegeTypeTableOwnership {
 				if roleId == moAdminRoleID || roleId == accountAdminRoleID {
 					//in the version 0.6, only the moAdmin and accountAdmin have the owner right.
 					return true, nil
@@ -1542,6 +1538,21 @@ func authenticatePrivilegeOfStatementWithObjectTypeAccountAndDatabase(ctx contex
 		}
 	}
 	return ok, nil
+}
+
+// authenticatePrivilegeOfStatementWithObjectTypeTable decides the user has the privilege of executing the statement with object type table
+func authenticatePrivilegeOfStatementWithObjectTypeTable(ctx context.Context, ses *Session, stmt tree.Statement, p *plan2.Plan) (bool, error) {
+	priv := determinePrivilegeSetOfStatement(stmt)
+	if priv.objectType() == objectTypeTable {
+		arr := extractPrivilegeTipsFromPlan(p)
+		convertPrivilegeTipsToPrivilege(priv, arr)
+		ok, err := determinePrivilegesOfUserSatisfyPrivilegeSet(ctx, ses, priv, stmt)
+		if err != nil {
+			return false, err
+		}
+		return ok, nil
+	}
+	return true, nil
 }
 
 // formSqlFromGrantPrivilege makes the sql for querying the database.
