@@ -9,18 +9,14 @@ const FSName = "local"
 type Object struct {
 	// name is the object file's name
 	name string
-	// oFile is an instance of fileservice
-	oFile fileservice.FileService
+	// fs is an instance of fileservice
+	fs fileservice.FileService
 }
 
-func NewObject(name string, dir string) (*Object, error) {
-	var err error
+func NewObject(name string, fs fileservice.FileService) *Object {
 	object := &Object{
 		name: name,
+		fs:   fs,
 	}
-	object.oFile, err = fileservice.NewLocalFS(FSName, dir, 0)
-	if err != nil {
-		return nil, err
-	}
-	return object, nil
+	return object
 }

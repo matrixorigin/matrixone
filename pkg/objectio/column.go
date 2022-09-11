@@ -35,7 +35,7 @@ func (cb *ColumnBlock) GetData() (*fileservice.IOVector, error) {
 		Offset: int(cb.meta.location.Offset()),
 		Size:   int(cb.meta.location.Length()),
 	}
-	err = cb.block.object.oFile.Read(nil, data)
+	err = cb.block.object.fs.Read(nil, data)
 	if err != nil {
 		return nil, err
 	}
@@ -52,7 +52,7 @@ func (cb *ColumnBlock) GetIndex() (*fileservice.IOVector, error) {
 		Offset: int(cb.meta.bloomFilter.Offset()),
 		Size:   int(cb.meta.bloomFilter.Length()),
 	}
-	err = cb.block.object.oFile.Read(nil, data)
+	err = cb.block.object.fs.Read(nil, data)
 	if err != nil {
 		return nil, err
 	}

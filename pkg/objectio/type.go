@@ -39,15 +39,29 @@ type Reader interface {
 	ReadIndex(extent Extent, idxs []uint16) (*fileservice.IOVector, error)
 }
 
+// BlockObject is a batch written to fileservice
 type BlockObject interface {
+	// GetColumn gets a ColumnObject with idx
 	GetColumn(idx uint16) (ColumnObject, error)
+
+	// GetRows gets the rows of the BlockObject
 	GetRows() (uint32, error)
+
+	// GetMeta gets the meta of the BlockObject
 	GetMeta() *BlockMeta
+
+	// GetExtent gets the metadata offset of BlockObject in fileservice
 	GetExtent() Extent
 }
 
+// ColumnObject is a vector in a batch written to fileservice
 type ColumnObject interface {
+	// GetData gets the data of ColumnObject
 	GetData() (*fileservice.IOVector, error)
+
+	// GetIndex gets the index of ColumnObject
 	GetIndex() (*fileservice.IOVector, error)
+
+	// GetMeta gets the metadata of ColumnObject
 	GetMeta() *ColumnMeta
 }

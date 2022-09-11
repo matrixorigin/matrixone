@@ -5,6 +5,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
@@ -27,8 +28,15 @@ func TestNewObjectWriter(t *testing.T) {
 	id := common.NextGlobalSeqNum()
 	name := fmt.Sprintf("%d.blk", id)
 	bat := newBatch()
+	c := fileservice.Config{
+		Name:    "LOCAL",
+		Backend: "DISK",
+		DataDir: dir,
+	}
+	service, err := fileservice.NewFileService(c)
+	assert.Nil(t, err)
 
-	objectWriter, err := NewObjectWriter(name)
+	objectWriter, err := NewObjectWriter(name, service)
 	assert.Nil(t, err)
 	fd, err := objectWriter.Write(bat)
 	assert.Nil(t, err)
@@ -46,7 +54,7 @@ func TestNewObjectWriter(t *testing.T) {
 	err = objectWriter.(*ObjectWriter).Sync(dir)
 	assert.Nil(t, err)
 
-	objectReader, _ := NewObjectReader(name, dir)
+	objectReader, _ := NewObjectReader(name, service)
 	idxs := make([]uint16, 3)
 	idxs[0] = 0
 	idxs[1] = 2

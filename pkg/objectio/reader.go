@@ -10,14 +10,10 @@ type ObjectReader struct {
 	root   string
 }
 
-func NewObjectReader(name string, dir string) (Reader, error) {
-	var err error
+func NewObjectReader(name string, fs fileservice.FileService) (Reader, error) {
 	reader := &ObjectReader{
-		name: name,
-	}
-	reader.object, err = NewObject(name, dir)
-	if err != nil {
-		return nil, err
+		name:   name,
+		object: NewObject(name, fs),
 	}
 	return reader, nil
 }
@@ -32,7 +28,7 @@ func (r *ObjectReader) ReadMeta(extent Extent) (*Block, error) {
 		Offset: int(extent.offset),
 		Size:   int(extent.Length()),
 	}
-	err = r.object.oFile.Read(nil, meta)
+	err = r.object.fs.Read(nil, meta)
 	if err != nil {
 		return nil, err
 	}
@@ -62,7 +58,7 @@ func (r *ObjectReader) Read(extent Extent, idxs []uint16) (*fileservice.IOVector
 		}
 		data.Entries = append(data.Entries, entry)
 	}
-	err = r.object.oFile.Read(nil, data)
+	err = r.object.fs.Read(nil, data)
 	if err != nil {
 		return nil, err
 	}
@@ -87,7 +83,7 @@ func (r *ObjectReader) ReadIndex(extent Extent, idxs []uint16) (*fileservice.IOV
 		}
 		data.Entries = append(data.Entries, entry)
 	}
-	err = r.object.oFile.Read(nil, data)
+	err = r.object.fs.Read(nil, data)
 	if err != nil {
 		return nil, err
 	}

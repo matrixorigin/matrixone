@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"sync"
 )
 
@@ -16,9 +17,11 @@ type ObjectWriter struct {
 	lastId int
 }
 
-func NewObjectWriter(name string) (Writer, error) {
+func NewObjectWriter(name string, fs fileservice.FileService) (Writer, error) {
+	object := NewObject(name, fs)
 	writer := &ObjectWriter{
 		name:   name,
+		object: object,
 		buffer: NewObjectBuffer(name),
 		blocks: make(map[int]BlockObject),
 		lastId: 0,
@@ -134,11 +137,7 @@ func (w *ObjectWriter) WriteEnd() (map[int]BlockObject, error) {
 // Sync is for testing
 func (w *ObjectWriter) Sync(dir string) error {
 	var err error
-	w.object, err = NewObject(w.name, dir)
-	if err != nil {
-		return err
-	}
-	err = w.object.oFile.Write(nil, w.buffer.GetData())
+	err = w.object.fs.Write(nil, w.buffer.GetData())
 	if err != nil {
 		return err
 	}
