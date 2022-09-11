@@ -96,6 +96,7 @@ type TxnWriter interface {
 
 type TxnAsyncer interface {
 	WaitDone(error) error
+	WaitPrepared() error
 }
 
 type TxnTest interface {
@@ -189,6 +190,7 @@ type UpdateNode interface {
 type TxnStore interface {
 	Txn2PC
 	io.Closer
+	WaitPrepared() error
 	BindTxn(AsyncTxn)
 	GetLSN() uint64
 

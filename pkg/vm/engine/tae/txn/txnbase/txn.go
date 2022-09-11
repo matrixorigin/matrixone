@@ -453,6 +453,10 @@ func (txn *Txn) String() string {
 	return fmt.Sprintf("%s: %v", str, txn.GetError())
 }
 
+func (txn *Txn) WaitPrepared() error {
+	return txn.Store.WaitPrepared()
+}
+
 func (txn *Txn) WaitDone(err error) error {
 	// logutil.Infof("Wait %s Done", txn.String())
 	txn.DoneWithErr(err)

@@ -376,13 +376,17 @@ func (store *txnStore) Apply2PCPrepare() (err error) {
 	return
 }
 
-func (store *txnStore) ApplyCommit() (err error) {
+func (store *txnStore) WaitPrepared() (err error) {
 	for _, e := range store.logs {
 		if err = e.WaitDone(); err != nil {
-			return
+			break
 		}
 		e.Free()
 	}
+	return
+}
+
+func (store *txnStore) ApplyCommit() (err error) {
 	for _, db := range store.dbs {
 		if err = db.ApplyCommit(); err != nil {
 			break

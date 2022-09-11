@@ -315,6 +315,7 @@ func (mgr *TxnManager) on2PCPrepared(op *OpTxn) {
 	}
 }
 
+// 1PC and 2PC
 // dequeuePreparing the commit of 1PC txn and prepare of 2PC txn
 // must both enter into this queue for conflict check.
 // OpCommit : the commit of 1PC txn
@@ -347,11 +348,17 @@ func (mgr *TxnManager) dequeuePreparing(items ...any) {
 		common.CountField(len(items)))
 }
 
+// 1PC and 2PC
 func (mgr *TxnManager) dequeuePrepared(items ...any) {
 	var err error
 	now := time.Now()
 	for _, item := range items {
 		op := item.(*OpTxn)
+
+		if err = op.Txn.WaitPrepared(); err != nil {
+			// v0.6 TODO: Error handling
+			panic(err)
+		}
 
 		if op.Is2PC() {
 			mgr.on2PCPrepared(op)
@@ -369,6 +376,7 @@ func (mgr *TxnManager) dequeuePrepared(items ...any) {
 		common.DurationField(time.Since(now)))
 }
 
+// 2PC only
 // wait for committing, commit, rollback events of 2PC distributed transactions
 func (mgr *TxnManager) dequeue2PCCommitting(items ...any) {
 	var err error
@@ -410,6 +418,7 @@ func (mgr *TxnManager) dequeue2PCCommitting(items ...any) {
 		common.DurationField(time.Since(now)))
 }
 
+// 2PC only
 func (mgr *TxnManager) dequeue2PCLogging(items ...any) {
 	var err error
 	now := time.Now()
