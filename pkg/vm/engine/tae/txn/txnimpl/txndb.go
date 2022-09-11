@@ -320,16 +320,6 @@ func (db *txnDB) ApplyRollback() (err error) {
 	return
 }
 
-// ApplyPrepare apply preparing for a 2PC distributed transaction
-func (db *txnDB) Apply2PCPrepare() (err error) {
-	now := time.Now()
-	for _, table := range db.tables {
-		table.WaitSynced()
-	}
-	logutil.Debugf("Txn-%d ApplyCommit Takes %s", db.store.txn.GetID(), time.Since(now))
-	return
-}
-
 func (db *txnDB) ApplyCommit() (err error) {
 	now := time.Now()
 	for _, table := range db.tables {

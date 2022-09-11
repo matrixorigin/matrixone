@@ -378,24 +378,6 @@ func (txn *Txn) PreApply2PCPrepare() (err error) {
 	return
 }
 
-// Apply2PCPrepare apply preparing for a 2PC distributed transaction
-func (txn *Txn) Apply2PCPrepare() (err error) {
-	defer func() {
-		//Get the lsn of ETTxnRecord entry in GroupC
-		txn.LSN = txn.Store.GetLSN()
-		if err != nil {
-			txn.Store.Close()
-		}
-	}()
-	if txn.ApplyPrepareFn != nil {
-		if err = txn.ApplyPrepareFn(txn); err != nil {
-			return
-		}
-	}
-	err = txn.Store.Apply2PCPrepare()
-	return
-}
-
 func (txn *Txn) ApplyCommit() (err error) {
 	defer func() {
 		//Get the lsn of ETTxnRecord entry in GroupC.

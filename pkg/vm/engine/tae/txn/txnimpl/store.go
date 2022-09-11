@@ -360,22 +360,6 @@ func (store *txnStore) ApplyRollback() (err error) {
 	return
 }
 
-// ApplyPrepare apply preparing for a 2PC distributed transaction
-func (store *txnStore) Apply2PCPrepare() (err error) {
-	for _, e := range store.logs {
-		if err = e.WaitDone(); err != nil {
-			return
-		}
-		e.Free()
-	}
-	for _, db := range store.dbs {
-		if err = db.Apply2PCPrepare(); err != nil {
-			break
-		}
-	}
-	return
-}
-
 func (store *txnStore) WaitPrepared() (err error) {
 	for _, e := range store.logs {
 		if err = e.WaitDone(); err != nil {

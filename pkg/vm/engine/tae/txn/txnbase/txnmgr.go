@@ -296,10 +296,6 @@ func (mgr *TxnManager) on2PCPrepared(op *OpTxn) {
 	var err error
 	switch op.Op {
 	case OpPrepare:
-		//wait for redo log synced.
-		if err = op.Txn.Apply2PCPrepare(); err != nil {
-			panic(err)
-		}
 		err = mgr.Enqueue2PCCommitting(&OpTxn{
 			Txn: op.Txn,
 			Op:  OpInvalid,

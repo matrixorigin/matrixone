@@ -34,7 +34,6 @@ type Txn2PC interface {
 	Prepare2PCPrepare() error
 	PreApplyCommit() error
 	PreApply2PCPrepare() error
-	Apply2PCPrepare() error
 	ApplyCommit() error
 }
 
