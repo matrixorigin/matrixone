@@ -47,6 +47,10 @@ type OpTxn struct {
 	Op  OpType
 }
 
+func (txn *OpTxn) IsTryCommitting() bool {
+	return txn.Op == OpCommit || txn.Op == OpPrepare
+}
+
 func (txn *OpTxn) Repr() string {
 	if txn.Op == OpCommit {
 		return fmt.Sprintf("[Commit][Txn-%d]", txn.Txn.GetID())

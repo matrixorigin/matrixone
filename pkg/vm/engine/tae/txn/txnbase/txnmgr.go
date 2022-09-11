@@ -163,10 +163,16 @@ func (mgr *TxnManager) OnOpTxn(op *OpTxn) (err error) {
 	return
 }
 
-func (mgr *TxnManager) onPrePrepare(txn txnif.AsyncTxn) {
+func (mgr *TxnManager) onPrePrepare(op *OpTxn) {
+	// If txn is not trying committing, do nothing
+	if !op.IsTryCommitting() {
+		return
+	}
+
+	// If txn is trying committing, call txn.PrePrepare()
 	now := time.Now()
-	txn.SetError(txn.PrePrepare())
-	logutil.Debug("[PrePrepare]", TxnField(txn), common.DurationField(time.Since(now)))
+	op.Txn.SetError(op.Txn.PrePrepare())
+	logutil.Debug("[PrePrepare]", TxnField(op.Txn), common.DurationField(time.Since(now)))
 }
 
 func (mgr *TxnManager) onPreparCommit(txn txnif.AsyncTxn) {
@@ -195,6 +201,30 @@ func (mgr *TxnManager) onPreparRollback(txn txnif.AsyncTxn) {
 	_ = txn.PrepareRollback()
 }
 
+func (mgr *TxnManager) bindPrepareTimeStamp(op *OpTxn) (ts types.TS) {
+	mgr.Lock()
+	defer mgr.Unlock()
+
+	ts = mgr.TsAlloc.Alloc()
+
+	op.Txn.Lock()
+	defer op.Txn.Unlock()
+
+	if op.Txn.GetError() != nil {
+		op.Op = OpRollback
+	}
+	if op.Op == OpCommit {
+		// Should not fail here
+		_ = op.Txn.ToCommittingLocked(ts)
+	} else if op.Op == OpRollback {
+		// Should not fail here
+		_ = op.Txn.ToRollbackingLocked(ts)
+	} else if op.Op == OpPrepare {
+		_ = op.Txn.ToPreparingLocked(ts)
+	}
+	return
+}
+
 // onPreparing the commit of 1PC txn and prepare of 2PC txn
 // must both enter into this queue for conflict check.
 // OpCommit : the commit of 1PC txn
@@ -204,28 +234,13 @@ func (mgr *TxnManager) onPreparing(items ...any) {
 	now := time.Now()
 	for _, item := range items {
 		op := item.(*OpTxn)
-		if op.Op == OpCommit || op.Op == OpPrepare {
-			//Mainly do conflict check for 1PC Commit or 2PC Prepare
-			mgr.onPrePrepare(op.Txn)
-		}
+
+		// Mainly do conflict check for 1PC Commit or 2PC Prepare
+		mgr.onPrePrepare(op)
+
 		//Before this moment, all mvcc nodes of a txn has been pushed into the MVCCHandle.
-		mgr.Lock()
-		ts := mgr.TsAlloc.Alloc()
-		op.Txn.Lock()
-		if op.Txn.GetError() != nil {
-			op.Op = OpRollback
-		}
-		if op.Op == OpCommit {
-			// Should not fail here
-			_ = op.Txn.ToCommittingLocked(ts)
-		} else if op.Op == OpRollback {
-			// Should not fail here
-			_ = op.Txn.ToRollbackingLocked(ts)
-		} else if op.Op == OpPrepare {
-			_ = op.Txn.ToPreparingLocked(ts)
-		}
-		op.Txn.Unlock()
-		mgr.Unlock()
+		ts := mgr.bindPrepareTimeStamp(op)
+
 		//for 1PC Commit
 		if op.Op == OpCommit {
 			mgr.onPreparCommit(op.Txn)
