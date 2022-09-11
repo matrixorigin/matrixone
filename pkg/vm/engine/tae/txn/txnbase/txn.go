@@ -47,6 +47,7 @@ type OpTxn struct {
 	Op  OpType
 }
 
+func (txn *OpTxn) Is2PC() bool { return txn.Txn.Is2PC() }
 func (txn *OpTxn) IsTryCommitting() bool {
 	return txn.Op == OpCommit || txn.Op == OpPrepare
 }
@@ -169,8 +170,8 @@ func (txn *Txn) Rollback() (err error) {
 	}
 
 	state := (txnif.TxnState)(atomic.LoadInt32((*int32)(&txn.State)))
-	if (!txn.Is2PC && state != txnif.TxnStateActive) ||
-		txn.Is2PC && state != txnif.TxnStateActive &&
+	if (!txn.Is2PC() && state != txnif.TxnStateActive) ||
+		txn.Is2PC() && state != txnif.TxnStateActive &&
 			state != txnif.TxnStatePrepared {
 		logutil.Warnf("unexpected txn status : %s", txnif.TxnStrState(txn.State))
 		return ErrTxnStateCannotRollback
@@ -180,7 +181,7 @@ func (txn *Txn) Rollback() (err error) {
 		return
 	}
 	//2PC
-	if txn.Is2PC {
+	if txn.Is2PC() {
 		if state == txnif.TxnStateActive {
 			txn.Add(1)
 			err = txn.Mgr.OnOpTxn(&OpTxn{
@@ -247,8 +248,8 @@ func (txn *Txn) Committing() (err error) {
 // since Preparing had already succeeded.
 func (txn *Txn) Commit() (err error) {
 	state := (txnif.TxnState)(atomic.LoadInt32((*int32)(&txn.State)))
-	if (!txn.Is2PC && state != txnif.TxnStateActive) ||
-		txn.Is2PC && state != txnif.TxnStateCommittingFinished &&
+	if (!txn.Is2PC() && state != txnif.TxnStateActive) ||
+		txn.Is2PC() && state != txnif.TxnStateCommittingFinished &&
 			state != txnif.TxnStatePrepared {
 		logutil.Warnf("unexpected txn state : %s", txnif.TxnStrState(txn.State))
 		//txn.Err = ErrTxnStatusCannotCommit
@@ -258,7 +259,7 @@ func (txn *Txn) Commit() (err error) {
 		txn.Mgr.DeleteTxn(txn.GetID())
 		return nil
 	}
-	if txn.Is2PC {
+	if txn.Is2PC() {
 		//It's a 2PC transaction running in Coordinator
 		if state == txnif.TxnStateCommittingFinished {
 			//TODO:Append committed log entry into log service asynchronously

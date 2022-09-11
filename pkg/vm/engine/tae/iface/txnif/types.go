@@ -41,6 +41,7 @@ type Txn2PC interface {
 type TxnReader interface {
 	RLock()
 	RUnlock()
+	Is2PC() bool
 	GetID() uint64
 	GetCtx() []byte
 	GetStartTS() types.TS
