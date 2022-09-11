@@ -15,12 +15,13 @@
 package txnbase
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/txn/clock"
-	"github.com/tidwall/btree"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/txn/clock"
+	"github.com/tidwall/btree"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -162,10 +163,10 @@ func (mgr *TxnManager) OnOpTxn(op *OpTxn) (err error) {
 	return
 }
 
-func (mgr *TxnManager) onPreCommitOr2PCPrepare(txn txnif.AsyncTxn) {
+func (mgr *TxnManager) onPrePrepare(txn txnif.AsyncTxn) {
 	now := time.Now()
-	txn.SetError(txn.PreCommitOr2PCPrepare())
-	logutil.Debug("[PreCommit]", TxnField(txn), common.DurationField(time.Since(now)))
+	txn.SetError(txn.PrePrepare())
+	logutil.Debug("[PrePrepare]", TxnField(txn), common.DurationField(time.Since(now)))
 }
 
 func (mgr *TxnManager) onPreparCommit(txn txnif.AsyncTxn) {
@@ -205,7 +206,7 @@ func (mgr *TxnManager) onPreparing(items ...any) {
 		op := item.(*OpTxn)
 		if op.Op == OpCommit || op.Op == OpPrepare {
 			//Mainly do conflict check for 1PC Commit or 2PC Prepare
-			mgr.onPreCommitOr2PCPrepare(op.Txn)
+			mgr.onPrePrepare(op.Txn)
 		}
 		//Before this moment, all mvcc nodes of a txn has been pushed into the MVCCHandle.
 		mgr.Lock()

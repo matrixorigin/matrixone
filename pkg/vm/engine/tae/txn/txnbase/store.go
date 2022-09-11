@@ -30,7 +30,7 @@ func (store *NoopTxnStore) BindTxn(txn txnif.AsyncTxn)                          
 func (store *NoopTxnStore) Close() error                                         { return nil }
 func (store *NoopTxnStore) Append(dbId, id uint64, data *containers.Batch) error { return nil }
 func (store *NoopTxnStore) PrepareRollback() error                               { return nil }
-func (store *NoopTxnStore) PreCommitOr2PCPrepare() error                         { return nil }
+func (store *NoopTxnStore) PrePrepare() error                                    { return nil }
 func (store *NoopTxnStore) PrepareCommit() error                                 { return nil }
 func (store *NoopTxnStore) Prepare2PCPrepare() error                             { return nil }
 func (store *NoopTxnStore) ApplyRollback() error                                 { return nil }

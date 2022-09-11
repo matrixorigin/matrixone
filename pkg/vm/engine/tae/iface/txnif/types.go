@@ -29,7 +29,7 @@ import (
 type Txn2PC interface {
 	PrepareRollback() error
 	ApplyRollback() error
-	PreCommitOr2PCPrepare() error
+	PrePrepare() error
 	PrepareCommit() error
 	Prepare2PCPrepare() error
 	PreApplyCommit() error

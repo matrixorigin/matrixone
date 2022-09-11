@@ -391,9 +391,9 @@ func (store *txnStore) ApplyCommit() (err error) {
 	return
 }
 
-func (store *txnStore) PreCommitOr2PCPrepare() (err error) {
+func (store *txnStore) PrePrepare() (err error) {
 	for _, db := range store.dbs {
-		if err = db.PreCommitOr2PCPrepare(); err != nil {
+		if err = db.PrePrepare(); err != nil {
 			return
 		}
 	}

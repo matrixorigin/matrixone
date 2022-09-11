@@ -354,14 +354,14 @@ func (db *txnDB) ApplyCommit() (err error) {
 	return
 }
 
-func (db *txnDB) PreCommitOr2PCPrepare() (err error) {
+func (db *txnDB) PrePrepare() (err error) {
 	for _, table := range db.tables {
-		if err = table.PreCommitOr2PCPrepareDedup(); err != nil {
+		if err = table.PrePrepareDedup(); err != nil {
 			return
 		}
 	}
 	for _, table := range db.tables {
-		if err = table.PreCommitOr2PCPrepare(); err != nil {
+		if err = table.PrePrepare(); err != nil {
 			panic(err)
 		}
 	}

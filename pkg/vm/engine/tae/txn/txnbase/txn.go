@@ -428,8 +428,8 @@ func (txn *Txn) ApplyRollback() (err error) {
 	return
 }
 
-func (txn *Txn) PreCommitOr2PCPrepare() error {
-	return txn.Store.PreCommitOr2PCPrepare()
+func (txn *Txn) PrePrepare() error {
+	return txn.Store.PrePrepare()
 }
 
 func (txn *Txn) PrepareRollback() (err error) {
