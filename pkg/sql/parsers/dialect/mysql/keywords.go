@@ -203,6 +203,7 @@ func init() {
 		"iterate":                  UNUSED,
 		"join":                     JOIN,
 		"json":                     JSON,
+		"uuid":                     UUID,
 		"key":                      KEY,
 		"keys":                     KEYS,
 		"key_block_size":           KEY_BLOCK_SIZE,

@@ -49,9 +49,9 @@ func datetimeToTimestamp(loc *time.Location, xs []types.Datetime, ns *nulls.Null
 	return rs
 }
 
-func dateStringToTimestamp(loc *time.Location, xs *types.Bytes, ns *nulls.Nulls, rs []types.Timestamp) []types.Timestamp {
-	for i := range xs.Lengths {
-		t, err := types.ParseTimestamp(loc, string(xs.Get(int64(i))), 6)
+func dateStringToTimestamp(loc *time.Location, xs []string, ns *nulls.Nulls, rs []types.Timestamp) []types.Timestamp {
+	for i, str := range xs {
+		t, err := types.ParseTimestamp(loc, str, 6)
 		if err != nil {
 			rs[i] = 0
 			nulls.Add(ns, uint64(i))

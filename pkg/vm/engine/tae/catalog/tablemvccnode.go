@@ -15,76 +15,62 @@
 package catalog
 
 import (
-	"bytes"
 	"fmt"
 	"io"
 
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 )
 
 type TableMVCCNode struct {
 	*EntryMVCCNode
-	*TxnMVCCNode
+	*txnbase.TxnMVCCNode
 }
 
-func NewEmptyTableMVCCNode() *TableMVCCNode {
+func NewEmptyTableMVCCNode() txnbase.MVCCNode {
 	return &TableMVCCNode{
-		TxnMVCCNode:   &TxnMVCCNode{},
 		EntryMVCCNode: &EntryMVCCNode{},
+		TxnMVCCNode:   &txnbase.TxnMVCCNode{},
 	}
 }
 
-func (e *TableMVCCNode) CloneAll() MVCCNodeIf {
-	n := e.cloneData()
-	// n.State = e.State
-	n.Start = e.Start
-	n.End = e.End
-	n.Deleted = e.Deleted
-	if len(e.LogIndex) != 0 {
-		n.LogIndex = make([]*wal.Index, 0)
-		for _, idx := range e.LogIndex {
-			n.LogIndex = append(n.LogIndex, idx.Clone())
-		}
-	}
-	return n
+func CompareTableBaseNode(e, o txnbase.MVCCNode) int {
+	return e.(*TableMVCCNode).Compare(o.(*TableMVCCNode).TxnMVCCNode)
 }
 
-func (e *TableMVCCNode) cloneData() *TableMVCCNode {
+func (e *TableMVCCNode) CloneAll() txnbase.MVCCNode {
+	node := e.CloneData()
+	node.(*TableMVCCNode).TxnMVCCNode = e.TxnMVCCNode.CloneAll()
+	return node
+}
+
+func (e *TableMVCCNode) CloneData() txnbase.MVCCNode {
 	return &TableMVCCNode{
 		EntryMVCCNode: e.EntryMVCCNode.Clone(),
-		TxnMVCCNode:   &TxnMVCCNode{},
+		TxnMVCCNode:   &txnbase.TxnMVCCNode{},
 	}
 }
 
 func (e *TableMVCCNode) String() string {
-	var w bytes.Buffer
-	_, _ = w.WriteString(
-		fmt.Sprintf("[%v,%v][C=%v,D=%v][Deleted?%v][logIndex=%v]",
-			e.Start,
-			e.End,
-			e.CreatedAt,
-			e.DeletedAt,
-			// e.State,
-			e.Deleted,
-			e.LogIndex))
-	return w.String()
+
+	return fmt.Sprintf("%s[C=%v,D=%v][Deleted?%v]",
+		e.TxnMVCCNode.String(),
+		e.CreatedAt,
+		e.DeletedAt,
+		e.Deleted)
 }
 
 // for create drop in one txn
-func (e *TableMVCCNode) UpdateNode(vun MVCCNodeIf) {
+func (e *TableMVCCNode) UpdateNode(vun txnbase.MVCCNode) {
 	un := vun.(*TableMVCCNode)
-	if e.Start != un.Start {
-		panic("logic err")
-	}
-	if e.End != un.End {
-		panic("logic err")
-	}
 	e.DeletedAt = un.DeletedAt
 	e.Deleted = true
-	e.AddLogIndex(un.LogIndex[0])
 }
 
 func (e *TableMVCCNode) ApplyUpdate(be *TableMVCCNode) (err error) {
+	// if e.Deleted {
+	// 	// TODO
+	// }
 	e.EntryMVCCNode = be.EntryMVCCNode.Clone()
 	return
 }
@@ -94,29 +80,33 @@ func (e *TableMVCCNode) ApplyDelete() (err error) {
 	return
 }
 
-func compareTableMVCCNode(e, o *TableMVCCNode) int {
-	return e.Compare(o.TxnMVCCNode)
-}
-
 func (e *TableMVCCNode) Prepare2PCPrepare() (err error) {
+	var ts types.TS
+	ts, err = e.TxnMVCCNode.Prepare2PCPrepare()
+	if err != nil {
+		return
+	}
 	if e.CreatedAt.IsEmpty() {
-		e.CreatedAt = e.Txn.GetPrepareTS()
+		e.CreatedAt = ts
 	}
 	if e.Deleted {
-		e.DeletedAt = e.Txn.GetPrepareTS()
+		e.DeletedAt = ts
 	}
-	e.End = e.Txn.GetPrepareTS()
 	return
 }
 
 func (e *TableMVCCNode) PrepareCommit() (err error) {
+	var ts types.TS
+	ts, err = e.TxnMVCCNode.PrepareCommit()
+	if err != nil {
+		return
+	}
 	if e.CreatedAt.IsEmpty() {
-		e.CreatedAt = e.Txn.GetCommitTS()
+		e.CreatedAt = ts
 	}
 	if e.Deleted {
-		e.DeletedAt = e.Txn.GetCommitTS()
+		e.DeletedAt = ts
 	}
-	e.End = e.Txn.GetCommitTS()
 	return
 }
 

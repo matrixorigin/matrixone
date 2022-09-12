@@ -15,70 +15,92 @@
 package types
 
 import (
-	"bytes"
+	"unsafe"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 )
 
 const (
-	MaxStringSize = 10485760
+	VarlenaInlineSize = 23
+	VarlenaSize       = 24
+	MaxStringSize     = 10485760
+	VarlenaBigHdr     = 0xffffffff
 )
 
-func (a *Bytes) Reset() {
-	a.Offsets = a.Offsets[:0]
-	a.Lengths = a.Lengths[:0]
-	a.Data = a.Data[:0]
+func (v *Varlena) unsafePtr() unsafe.Pointer {
+	return unsafe.Pointer(&v[0])
 }
 
-func (a *Bytes) Window(start, end int) *Bytes {
-	return &Bytes{
-		Data:    a.Data,
-		Offsets: a.Offsets[start:end],
-		Lengths: a.Lengths[start:end],
-	}
+func (v *Varlena) byteSlice() []byte {
+	svlen := (*v)[0]
+	ptr := unsafe.Add(unsafe.Pointer(&v[0]), 1)
+	return unsafe.Slice((*byte)(ptr), svlen)
 }
 
-func (a *Bytes) AppendOnce(v []byte) {
-	o := uint32(len(a.Data))
-	a.Offsets = append(a.Offsets, o)
-	a.Data = append(a.Data, v...)
-	a.Lengths = append(a.Lengths, uint32(len(v)))
+func (v *Varlena) u32Slice() []uint32 {
+	ptr := (*uint32)(v.unsafePtr())
+	return unsafe.Slice(ptr, 6)
 }
 
-func (a *Bytes) Append(vs [][]byte) error {
-	o := uint32(len(a.Data))
-	for _, v := range vs {
-		a.Offsets = append(a.Offsets, o)
-		a.Data = append(a.Data, v...)
-		o += uint32(len(v))
-		a.Lengths = append(a.Lengths, uint32(len(v)))
-	}
-	return nil
+func (v *Varlena) offsetLen() (uint32, uint32) {
+	s := v.u32Slice()
+	return s[1], s[2]
+}
+func (v *Varlena) setOffsetLen(voff, vlen uint32) {
+	s := v.u32Slice()
+	s[0] = VarlenaBigHdr
+	s[1] = voff
+	s[2] = vlen
 }
 
-func (a *Bytes) Get(n int64) []byte {
-	offset := a.Offsets[n]
-	return a.Data[offset : offset+a.Lengths[n]]
-}
-
-func (a *Bytes) GetString(n int64) string {
-	return string(a.Get(n))
-}
-
-func (a *Bytes) Swap(i, j int64) {
-	a.Offsets[i], a.Offsets[j] = a.Offsets[j], a.Offsets[i]
-	a.Lengths[i], a.Lengths[j] = a.Lengths[j], a.Lengths[i]
-}
-
-func (a *Bytes) String() string {
-	var buf bytes.Buffer
-
-	buf.WriteByte('[')
-	j := len(a.Offsets) - 1
-	for i, o := range a.Offsets {
-		buf.Write(a.Data[o : o+a.Lengths[i]])
-		if i != j {
-			buf.WriteByte(' ')
+func BuildVarlena(bs []byte, area []byte, m *mheap.Mheap) (Varlena, []byte, error) {
+	var err error
+	var v Varlena
+	vlen := len(bs)
+	if vlen <= VarlenaInlineSize {
+		v[0] = byte(vlen)
+		copy(v[1:1+vlen], bs)
+		return v, area, nil
+	} else {
+		voff := len(area)
+		if voff+vlen < cap(area) || m == nil {
+			area = append(area, bs...)
+		} else {
+			area, err = mheap.Grow2(m, area, bs, int64(voff+vlen))
+			if err != nil {
+				return v, nil, err
+			}
 		}
+		v.setOffsetLen(uint32(voff), uint32(vlen))
+		return v, area, nil
 	}
-	buf.WriteByte(']')
-	return buf.String()
+}
+
+func (v *Varlena) IsSmall() bool {
+	return (*v)[0] <= VarlenaInlineSize
+}
+
+// For short slice, this one will return a slice stored internal
+// in the varlena.   Caller must ensure that v has a longer life
+// span than the returned byte slice.
+//
+// Main user of Varlena is vector.  v that comes from vector.Data
+// will be fine.
+func (v *Varlena) GetByteSlice(area []byte) []byte {
+	svlen := (*v)[0]
+	if svlen <= VarlenaInlineSize {
+		return v.byteSlice()
+	}
+	voff, vlen := v.offsetLen()
+	return area[voff : voff+vlen]
+}
+
+// See the lifespan comment above.
+func (v *Varlena) GetString(area []byte) string {
+	return string(v.GetByteSlice(area))
+}
+
+func (v *Varlena) Reset() {
+	var vzero Varlena
+	*v = vzero
 }

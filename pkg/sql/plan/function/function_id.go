@@ -117,6 +117,7 @@ const (
 	HASH_AGG    // HASH_AGG
 	HEX_DECODE  // HEX_DECODE
 	HEX_ENCODE  // HEX_ENCODE
+	HEX         // HEX
 	IFF         // IFF
 	IFNULL      // IFNULL
 	ILIKE       // ILIKE
@@ -386,6 +387,7 @@ var functionIdRegister = map[string]int32{
 	"remove_fault_point":      REMOVE_FAULT_POINT,
 	"trigger_fault_point":     TRIGGER_FAULT_POINT,
 	"uuid":                    UUID,
+	"hex":                     HEX,
 }
 
 func GetFunctionIsWinfunByName(name string) bool {

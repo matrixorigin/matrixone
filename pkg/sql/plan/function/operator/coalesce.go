@@ -198,20 +198,15 @@ func coalesceGeneral[T NormalType](vs []*vector.Vector, proc *process.Process, t
 func coalesceString(vs []*vector.Vector, proc *process.Process, typ types.Type) (*vector.Vector, error) {
 	vecLen := vector.Length(vs[0])
 	startIdx := 0
+
+	// If leading expressions are non null scalar, return.   Otherwise startIdx
+	// is positioned at the first non scalar vector.
 	for i := 0; i < len(vs); i++ {
 		input := vs[i]
 		if input.IsScalar() {
 			if !input.IsScalarNull() {
-				cols := vector.MustBytesCols(input)
-				r := proc.AllocScalarVector(typ)
-				r.Col = &types.Bytes{
-					Data:    make([]byte, cols.Lengths[0]),
-					Offsets: make([]uint32, 1),
-					Lengths: make([]uint32, 1),
-				}
-				copy(r.Col.(*types.Bytes).Data, cols.Data)
-				r.Col.(*types.Bytes).Lengths[0] = cols.Lengths[0]
-				return r, nil
+				cols := vector.MustStrCols(input)
+				return vector.NewConstString(typ, input.Length(), cols[0]), nil
 			}
 		} else {
 			startIdx = i
@@ -219,36 +214,23 @@ func coalesceString(vs []*vector.Vector, proc *process.Process, typ types.Type) 
 		}
 	}
 
-	rs, err := proc.AllocVector(typ, 0)
-	if err != nil {
-		return nil, err
-	}
-	rs.Col = &types.Bytes{
-		Data:    nil,
-		Offsets: make([]uint32, vecLen),
-		Lengths: make([]uint32, vecLen),
-	}
-	rsCols := rs.Col.(*types.Bytes)
-
-	dataVec := make([][]byte, vecLen)
-
-	rs.Nsp = nulls.NewWithSize(vecLen)
-	rs.Nsp.Np.AddRange(0, uint64(vecLen))
+	rs := make([]string, vecLen)
+	nsp := nulls.NewWithSize(vecLen)
+	nsp.Np.AddRange(0, uint64(vecLen))
 
 	for i := startIdx; i < len(vs); i++ {
 		input := vs[i]
-		cols := vector.MustBytesCols(input)
+		cols := vector.MustStrCols(input)
 		if input.IsScalar() {
 			if input.IsScalarNull() {
 				continue
 			}
-
 			for j := 0; j < vecLen; j++ {
-				if rs.Nsp.Contains(uint64(j)) {
-					dataVec[j] = append(dataVec[j], cols.Data...)
+				if nsp.Contains(uint64(j)) {
+					rs[j] = cols[0]
 				}
 			}
-			rs.Nsp.Np = nil
+			nsp = nil
 			break
 		} else {
 			nullsLength := nulls.Length(input.Nsp)
@@ -258,45 +240,29 @@ func coalesceString(vs []*vector.Vector, proc *process.Process, typ types.Type) 
 			} else if nullsLength == 0 {
 				// all not null
 				for j := 0; j < vecLen; j++ {
-					if rs.Nsp.Contains(uint64(j)) {
-						length := cols.Lengths[j]
-						o := cols.Offsets[j]
-						dataVec[j] = append(dataVec[j], cols.Data[o:o+length]...)
+					if nsp.Contains(uint64(j)) {
+						rs[j] = cols[j]
 					}
 				}
-				rs.Nsp.Np = nil
+				nsp = nil
 				break
 			} else {
 				// some nulls
 				for j := 0; j < vecLen; j++ {
-					if rs.Nsp.Contains(uint64(j)) && !input.Nsp.Contains(uint64(j)) {
-						length := cols.Lengths[j]
-						o := cols.Offsets[j]
-						dataVec[j] = append(dataVec[j], cols.Data[o:o+length]...)
-						rs.Nsp.Np.Remove(uint64(j))
+					if nsp.Contains(uint64(j)) && !input.Nsp.Contains(uint64(j)) {
+						rs[j] = cols[j]
+						nsp.Np.Remove(uint64(j))
 					}
 				}
+
 				// now if is empty, break
-				if rs.Nsp.Np.IsEmpty() {
-					rs.Nsp.Np = nil
+				if nsp.Np.IsEmpty() {
+					nsp = nil
 					break
 				}
 			}
 		}
 	}
 
-	var offset uint32 = 0
-	for j := 0; j < vecLen; j++ {
-		length := len(dataVec[j])
-		if length > 0 {
-			rsCols.Data = append(rsCols.Data, dataVec[j]...)
-			rsCols.Offsets[j] = offset
-			rsCols.Lengths[j] = uint32(length)
-			offset = offset + uint32(length)
-		}
-	}
-
-	rs.Data = rsCols.Data
-
-	return rs, nil
+	return vector.NewWithStrings(typ, rs, nsp, proc.Mp()), nil
 }

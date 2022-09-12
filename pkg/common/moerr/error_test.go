@@ -75,7 +75,7 @@ func TestPanicError(t *testing.T) {
 
 func TestNew(t *testing.T) {
 	type args struct {
-		code int32
+		code uint16
 		args []any
 	}
 	tests := []struct {
@@ -86,67 +86,67 @@ func TestNew(t *testing.T) {
 		{
 			name: "DIVISION_BY_ZERO",
 			args: args{code: DIVIVISION_BY_ZERO, args: []any{}},
-			want: &Error{Code: DIVIVISION_BY_ZERO, ErrorCode: 20000 + DIVIVISION_BY_ZERO, Message: "division by zero"},
+			want: &Error{Code: DIVIVISION_BY_ZERO, SqlState: MySQLDefaultSqlState, Message: "division by zero"},
 		},
 		{
 			name: "OUT_OF_RANGE",
 			args: args{code: OUT_OF_RANGE, args: []any{"double", "bigint"}},
-			want: &Error{Code: OUT_OF_RANGE, ErrorCode: 20000 + OUT_OF_RANGE, Message: "overflow from double to bigint", MysqlErrCode: 0},
+			want: &Error{Code: OUT_OF_RANGE, SqlState: MySQLDefaultSqlState, Message: "overflow from double to bigint"},
 		},
 		{
 			name: "DATA_TRUNCATED",
 			args: args{code: DATA_TRUNCATED, args: []any{"decimal128"}},
-			want: &Error{Code: DATA_TRUNCATED, ErrorCode: 20000 + DATA_TRUNCATED, Message: "decimal128 data truncated"},
+			want: &Error{Code: DATA_TRUNCATED, SqlState: MySQLDefaultSqlState, Message: "decimal128 data truncated"},
 		},
 		{
 			name: "BAD_CONFIGURATION",
 			args: args{code: BAD_CONFIGURATION, args: []any{"log"}},
-			want: &Error{Code: BAD_CONFIGURATION, ErrorCode: 20000 + BAD_CONFIGURATION, Message: "invalid log configuration"},
+			want: &Error{Code: BAD_CONFIGURATION, SqlState: MySQLDefaultSqlState, Message: "invalid log configuration"},
 		},
 		{
 			name: "LOG_SERVICE_NOT_READY",
 			args: args{code: LOG_SERVICE_NOT_READY, args: []any{}},
-			want: &Error{Code: LOG_SERVICE_NOT_READY, ErrorCode: 20000 + LOG_SERVICE_NOT_READY, Message: "log service not ready"},
+			want: &Error{Code: LOG_SERVICE_NOT_READY, SqlState: MySQLDefaultSqlState, Message: "log service not ready"},
 		},
 		{
 			name: "ErrClientClosed",
 			args: args{code: ErrClientClosed, args: []any{}},
-			want: &Error{Code: ErrClientClosed, ErrorCode: 20000 + ErrClientClosed, Message: "client closed"},
+			want: &Error{Code: ErrClientClosed, SqlState: MySQLDefaultSqlState, Message: "client closed"},
 		},
 		{
 			name: "ErrBackendClosed",
 			args: args{code: ErrBackendClosed, args: []any{}},
-			want: &Error{Code: ErrBackendClosed, ErrorCode: 20000 + ErrBackendClosed, Message: "backend closed"},
+			want: &Error{Code: ErrBackendClosed, SqlState: MySQLDefaultSqlState, Message: "backend closed"},
 		},
 		{
 			name: "ErrStreamClosed",
 			args: args{code: ErrStreamClosed, args: []any{}},
-			want: &Error{Code: ErrStreamClosed, ErrorCode: 20000 + ErrStreamClosed, Message: "stream closed"},
+			want: &Error{Code: ErrStreamClosed, SqlState: MySQLDefaultSqlState, Message: "stream closed"},
 		},
 		{
 			name: "ErrNoAvailableBackend",
 			args: args{code: ErrNoAvailableBackend, args: []any{}},
-			want: &Error{Code: ErrNoAvailableBackend, ErrorCode: 20000 + ErrNoAvailableBackend, Message: "no available backend"},
+			want: &Error{Code: ErrNoAvailableBackend, SqlState: MySQLDefaultSqlState, Message: "no available backend"},
 		},
 		{
 			name: "ErrTxnClosed",
 			args: args{code: ErrTxnClosed, args: []any{}},
-			want: &Error{Code: ErrTxnClosed, ErrorCode: 20000 + ErrTxnClosed, Message: "the transaction has been committed or aborted"},
+			want: &Error{Code: ErrTxnClosed, SqlState: MySQLDefaultSqlState, Message: "the transaction has been committed or aborted"},
 		},
 		{
 			name: "ErrTxnWriteConflict",
 			args: args{code: ErrTxnWriteConflict, args: []any{}},
-			want: &Error{Code: ErrTxnWriteConflict, ErrorCode: 20000 + ErrTxnWriteConflict, Message: "write conflict"},
+			want: &Error{Code: ErrTxnWriteConflict, SqlState: MySQLDefaultSqlState, Message: "write conflict"},
 		},
 		{
 			name: "ErrMissingTxn",
 			args: args{code: ErrMissingTxn, args: []any{}},
-			want: &Error{Code: ErrMissingTxn, ErrorCode: 20000 + ErrMissingTxn, Message: "missing txn"},
+			want: &Error{Code: ErrMissingTxn, SqlState: MySQLDefaultSqlState, Message: "missing txn"},
 		},
 		{
 			name: "ErrUnresolvedConflict",
 			args: args{code: ErrUnresolvedConflict, args: []any{}},
-			want: &Error{Code: ErrUnresolvedConflict, ErrorCode: 20000 + ErrUnresolvedConflict, Message: "unresolved conflict"},
+			want: &Error{Code: ErrUnresolvedConflict, SqlState: MySQLDefaultSqlState, Message: "unresolved conflict"},
 		},
 	}
 	for _, tt := range tests {
@@ -160,7 +160,7 @@ func TestNew(t *testing.T) {
 
 func TestNewError(t *testing.T) {
 	type args struct {
-		code int32
+		code uint16
 		msg  string
 	}
 	tests := []struct {
@@ -246,7 +246,7 @@ func TestNewError(t *testing.T) {
 
 func TestNew_panic(t *testing.T) {
 	type args struct {
-		code int32
+		code uint16
 		msg  string
 	}
 	tests := []struct {
@@ -275,7 +275,7 @@ func TestNew_panic(t *testing.T) {
 
 func TestNew_MyErrorCode(t *testing.T) {
 	type args struct {
-		code int32
+		code uint16
 		args []any
 	}
 	tests := []struct {
@@ -285,19 +285,19 @@ func TestNew_MyErrorCode(t *testing.T) {
 	}{
 		{
 			name: "hasMysqlErrorCode",
-			args: args{code: ErrNoDatabaseSelected, args: []any{}},
+			args: args{code: ER_NO_DB_ERROR, args: []any{}},
 			want: 1046,
 		},
 	}
 	for _, tt := range tests {
 		got := New(tt.args.code, tt.args.args...)
-		require.Equal(t, got.MyErrorCode(), tt.want)
+		require.Equal(t, got.Code, tt.want)
 	}
 }
 
 func TestNewError_panic(t *testing.T) {
 	type args struct {
-		code int32
+		code uint16
 		msg  string
 	}
 	tests := []struct {
@@ -366,8 +366,8 @@ func TestNewWarn(t *testing.T) {
 		got := NewWarn(tt.args.msg)
 		require.Equal(t, tt.want, got)
 		require.Equal(t, tt.want.Message, got.Error())
-		require.Equal(t, tt.want.ErrorCode, got.(*Error).MyErrorCode())
-		require.Equal(t, "HY000", got.(*Error).SqlState())
+		require.Equal(t, tt.want.Code, got.(*Error).Code)
+		require.Equal(t, "HY000", got.(*Error).SqlState)
 		require.Equal(t, IsMoErrCode(got, tt.want.Code), true)
 	}
 }
@@ -375,7 +375,7 @@ func TestNewWarn(t *testing.T) {
 func TestIsMoErrCode(t *testing.T) {
 	type args struct {
 		e  error
-		rc int32
+		rc uint16
 	}
 	tests := []struct {
 		name string
@@ -405,7 +405,7 @@ func TestIsMoErrCode(t *testing.T) {
 func TestNewWithContext(t *testing.T) {
 	type args struct {
 		ctx  context.Context
-		code int32
+		code uint16
 		args []any
 	}
 	tests := []struct {
@@ -416,7 +416,7 @@ func TestNewWithContext(t *testing.T) {
 		{
 			name: "normal",
 			args: args{ctx: context.Background(), code: DIVIVISION_BY_ZERO, args: []any{}},
-			want: &Error{Code: DIVIVISION_BY_ZERO, ErrorCode: 20000 + DIVIVISION_BY_ZERO, Message: "division by zero"},
+			want: &Error{Code: DIVIVISION_BY_ZERO, SqlState: MySQLDefaultSqlState, Message: "division by zero"},
 		},
 	}
 	for _, tt := range tests {

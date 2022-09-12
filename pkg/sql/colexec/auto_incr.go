@@ -26,7 +26,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/errors"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/moengine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -98,19 +97,19 @@ func getRangeFromAutoIncrTable(param *AutoIncrParam, bat *batch.Batch, tableID s
 }
 
 func getOneColRangeFromAutoIncrTable(param *AutoIncrParam, bat *batch.Batch, name string, pos int) (int64, int64, error) {
-	taeEngine, ok := param.eg.(moengine.TxnEngine)
-	if !ok {
-		return 0, 0, errors.New("", "the engine is not tae")
-	}
-
-	txnCtx, err := taeEngine.StartTxn(nil)
+	txnOperator, err := param.proc.TxnClient.New()
 	if err != nil {
 		return 0, 0, err
 	}
 
 	oriNum, step := getCurrentIndex(param, name)
 	if oriNum < 0 {
-		if err2 := txnCtx.Rollback(); err2 != nil {
+		ctx, cancel := context.WithTimeout(
+			param.ctx,
+			param.eg.Hints().CommitOrRollbackTimeout,
+		)
+		defer cancel()
+		if err2 := txnOperator.Rollback(ctx); err2 != nil {
 			return 0, 0, err2
 		}
 		return 0, 0, errors.New("", "GetIndex from auto_increment table fail")
@@ -147,12 +146,22 @@ func getOneColRangeFromAutoIncrTable(param *AutoIncrParam, bat *batch.Batch, nam
 		return 0, 0, errors.New("", "auto_incrment column constant value overflows bigint")
 	}
 	if err := updateAutoIncrTable(param, maxNum, name); err != nil {
-		if err2 := txnCtx.Rollback(); err2 != nil {
+		ctx, cancel := context.WithTimeout(
+			param.ctx,
+			param.eg.Hints().CommitOrRollbackTimeout,
+		)
+		defer cancel()
+		if err2 := txnOperator.Rollback(ctx); err2 != nil {
 			return 0, 0, err2
 		}
 		return 0, 0, err
 	}
-	err = txnCtx.Commit()
+	ctx, cancel := context.WithTimeout(
+		param.ctx,
+		param.eg.Hints().CommitOrRollbackTimeout,
+	)
+	defer cancel()
+	err = txnOperator.Commit(ctx)
 	if err != nil {
 		return 0, 0, err
 	}
@@ -205,19 +214,18 @@ func updateBatchImpl(ColDefs []*plan.ColDef, bat *batch.Batch, offset, step []in
 func getCurrentIndex(param *AutoIncrParam, colName string) (int64, int64) {
 	rds, _ := param.rel.NewReader(param.ctx, 1, nil, nil)
 	for {
-		bat, err := rds[0].Read(AUTO_INCR_TABLE_COLNAME, nil, param.proc.Mp)
+		bat, err := rds[0].Read(AUTO_INCR_TABLE_COLNAME, nil, param.proc.Mp())
 		if err != nil || bat == nil {
 			return -1, 0
 		}
 		if len(bat.Vecs) < 2 {
 			panic(errors.New("", "the mo_increment_columns col num is not two"))
 		}
-		vs := bat.Vecs[0].Col.(*types.Bytes)
-		vs2 := bat.Vecs[1].Col.([]int64)
-		vs3 := bat.Vecs[2].Col.([]int64)
+		vs2 := vector.MustTCols[int64](bat.Vecs[1])
+		vs3 := vector.MustTCols[int64](bat.Vecs[2])
 		var rowIndex int64
 		for rowIndex = 0; rowIndex < int64(bat.Length()); rowIndex++ {
-			str := string(vs.Get(rowIndex))
+			str := bat.Vecs[0].GetString(rowIndex)
 			if str == colName {
 				break
 			}
@@ -242,39 +250,9 @@ func updateAutoIncrTable(param *AutoIncrParam, curNum int64, name string) error 
 }
 
 func makeAutoIncrBatch(name string, num, step int64) *batch.Batch {
-	vBytes := &types.Bytes{
-		Offsets: make([]uint32, 1),
-		Lengths: make([]uint32, 1),
-		Data:    nil,
-	}
-	vec := &vector.Vector{
-		Typ:  types.T_varchar.ToType(),
-		Col:  vBytes,
-		Data: make([]byte, 0),
-		Nsp:  &nulls.Nulls{},
-	}
-
-	vec.Data = append(vec.Data, name...)
-	vBytes.Offsets[0] = uint32(0)
-	vBytes.Data = append(vBytes.Data, name...)
-	vBytes.Lengths[0] = uint32(len(name))
-
-	vec2 := &vector.Vector{
-		Typ: types.T_int64.ToType(),
-		Nsp: &nulls.Nulls{},
-	}
-	vec2.Data = make([]byte, 8)
-	vec2.Col = types.DecodeInt64Slice(vec2.Data)
-	vec2.Col.([]int64)[0] = num
-
-	vec3 := &vector.Vector{
-		Typ: types.T_int64.ToType(),
-		Nsp: &nulls.Nulls{},
-	}
-	vec3.Data = make([]byte, 8)
-	vec3.Col = types.DecodeInt64Slice(vec3.Data)
-	vec3.Col.([]int64)[0] = step
-
+	vec := vector.NewWithStrings(types.T_varchar.ToType(), []string{name}, nil, nil)
+	vec2 := vector.NewWithFixed(types.T_int64.ToType(), []int64{num}, nil, nil)
+	vec3 := vector.NewWithFixed(types.T_int64.ToType(), []int64{step}, nil, nil)
 	bat := &batch.Batch{
 		Attrs: AUTO_INCR_TABLE_COLNAME,
 		Vecs:  []*vector.Vector{vec, vec2, vec3},

@@ -17,6 +17,8 @@ package trace
 import (
 	"context"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
+	"github.com/stretchr/testify/require"
+	"strings"
 	"sync"
 	"testing"
 )
@@ -46,7 +48,7 @@ func (e *dummySqlExecutor) Exec(ctx context.Context, sql string, opts ie.Session
 }
 
 // copy from /Users/jacksonxie/go/src/github.com/matrixorigin/matrixone/pkg/util/metric/metric_collector_test.go
-func newExecutorFactory(sqlch chan string) func() ie.InternalExecutor {
+func newDummyExecutorFactory(sqlch chan string) func() ie.InternalExecutor {
 	return func() ie.InternalExecutor {
 		return &dummySqlExecutor{
 			opts: ie.NewOptsBuilder().Finish(),
@@ -66,7 +68,7 @@ func TestInitSchemaByInnerExecutor(t *testing.T) {
 	}{
 		{
 			name: "fake",
-			args: args{newExecutorFactory(c)},
+			args: args{newDummyExecutorFactory(c)},
 		},
 	}
 	wg := sync.WaitGroup{}
@@ -89,7 +91,77 @@ func TestInitSchemaByInnerExecutor(t *testing.T) {
 	<-startedC
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			InitSchemaByInnerExecutor(context.TODO(), tt.args.ieFactory)
+			err := InitSchemaByInnerExecutor(context.TODO(), tt.args.ieFactory)
+			require.Equal(t, nil, err)
+		})
+	}
+	close(c)
+	wg.Wait()
+}
+
+func TestInitExternalTblSchema(t *testing.T) {
+	type args struct {
+		ctx       context.Context
+		ieFactory func() ie.InternalExecutor
+		mode      string
+	}
+	c := make(chan string, 10)
+	tests := []struct {
+		name string
+		args args
+	}{
+		{
+			name: "dummy",
+			args: args{
+				ctx:       context.Background(),
+				ieFactory: newDummyExecutorFactory(c),
+				mode:      FileService,
+			},
+		},
+		{
+			name: "dummyS3",
+			args: args{
+				ctx:       context.Background(),
+				ieFactory: newDummyExecutorFactory(c),
+				mode:      FileService,
+			},
+		},
+	}
+
+	wg := sync.WaitGroup{}
+	// 1: want goroutine started
+	wg.Add(1)
+	go func() {
+		wg.Done() // started
+	loop:
+		for {
+			sql, ok := <-c
+			wg.Done()
+			if ok {
+				t.Logf("exec sql: %s", sql)
+				if sql == "create database if not exists system" {
+					continue
+				}
+				idx := strings.Index(sql, "CREATE EXTERNAL TABLE")
+				require.Equal(t, 0, idx)
+			} else {
+				t.Log("exec sql Done.")
+				break loop
+			}
+		}
+	}()
+	wg.Wait()
+
+	// (1 + 4) * n + 1
+	// 1: create database ...
+	// 4: create EXTERNAL table
+	// 1: close
+	wg.Add(1)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			wg.Add(5)
+			err := InitExternalTblSchema(tt.args.ctx, tt.args.ieFactory)
+			require.Equal(t, nil, err)
 		})
 	}
 	close(c)

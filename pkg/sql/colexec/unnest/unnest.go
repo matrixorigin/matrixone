@@ -19,7 +19,6 @@ import (
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -106,10 +105,10 @@ func callByCol(pathStr string, outer bool, proc *process.Process) (bool, error) 
 		for i := range colDefs {
 			bat.Vecs[i] = vector.New(name2Types[colDefs[i].Name])
 		}
-		col := vec.Col.(*types.Bytes)
+		col := vector.GetBytesVectorValues(vec)
 		rows := 0
-		for i := 0; i < len(col.Lengths); i++ {
-			json := types.DecodeJson(col.Get(int64(i)))
+		for i := 0; i < len(col); i++ {
+			json := types.DecodeJson(col[i])
 			if err != nil {
 				return false, err
 			}
@@ -133,39 +132,20 @@ func makeBatch(bat *batch.Batch, ures []*bytejson.UnnestResult, proc *process.Pr
 			var err error
 			switch cols[j] {
 			case "col":
-				err = vec.Append([]byte(colName), proc.Mp)
+				err = vec.Append([]byte(colName), false, proc.Mp())
 			case "seq":
-				err = vec.Append(seq, proc.Mp)
+				err = vec.Append(seq, false, proc.Mp())
 			case "key":
-				if len(ures[i].Key) == 0 {
-					nulls.Add(vec.Nsp, uint64(i+start))
-				} else {
-					err = vec.Append([]byte(ures[i].Key), proc.Mp)
-				}
+				err = vec.Append([]byte(ures[i].Key), len(ures[i].Key) == 0, proc.Mp())
 			case "path":
-				if len(ures[i].Path) == 0 {
-					nulls.Add(vec.Nsp, uint64(i+start))
-				} else {
-					err = vec.Append([]byte(ures[i].Path), proc.Mp)
-				}
+				err = vec.Append([]byte(ures[i].Path), len(ures[i].Path) == 0, proc.Mp())
 			case "index":
-				if len(ures[i].Index) == 0 {
-					nulls.Add(vec.Nsp, uint64(i+start))
-				} else {
-					err = vec.Append([]byte(ures[i].Index), proc.Mp)
-				}
+				err = vec.Append([]byte(ures[i].Index), len(ures[i].Index) == 0, proc.Mp())
+
 			case "value":
-				if len(ures[i].Value) == 0 {
-					nulls.Add(vec.Nsp, uint64(i+start))
-				} else {
-					err = vec.Append([]byte(ures[i].Value), proc.Mp)
-				}
+				err = vec.Append([]byte(ures[i].Value), len(ures[i].Value) == 0, proc.Mp())
 			case "this":
-				if len(ures[i].This) == 0 {
-					nulls.Add(vec.Nsp, uint64(i+start))
-				} else {
-					err = vec.Append([]byte(ures[i].This), proc.Mp)
-				}
+				err = vec.Append([]byte(ures[i].This), len(ures[i].This) == 0, proc.Mp())
 			default:
 				err = fmt.Errorf("unnest: invalid column name:%s", cols[j])
 			}

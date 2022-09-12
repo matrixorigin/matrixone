@@ -123,7 +123,7 @@ func (tbl *txnTable) GetSegment(id uint64) (seg handle.Segment, err error) {
 	}
 	var ok bool
 	meta.RLock()
-	ok, err = meta.TxnCanRead(tbl.store.txn, meta.RWMutex)
+	ok, err = meta.IsVisible(tbl.store.txn.GetStartTS(), meta.RWMutex)
 	meta.RUnlock()
 	if err != nil {
 		return
@@ -566,7 +566,7 @@ func (tbl *txnTable) DoDedup(pks containers.Vector, preCommit bool) (err error) 
 				txnToWait.GetTxnState(true)
 				seg.RLock()
 			}
-			invalid := seg.IsDroppedCommitted() || seg.InTxnOrRollbacked()
+			invalid := seg.IsDroppedCommitted() || seg.IsCreating()
 			seg.RUnlock()
 			if invalid {
 				segIt.Next()
@@ -591,7 +591,7 @@ func (tbl *txnTable) DoDedup(pks containers.Vector, preCommit bool) (err error) 
 			}
 			{
 				blk.RLock()
-				invalid := blk.IsDroppedCommitted() || blk.InTxnOrRollbacked()
+				invalid := blk.IsDroppedCommitted() || blk.IsCreating()
 				blk.RUnlock()
 				if invalid {
 					blkIt.Next()

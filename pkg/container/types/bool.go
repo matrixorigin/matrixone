@@ -57,3 +57,11 @@ func ParseBool(s string) (bool, error) {
 		return false, errors.New(errno.IndeterminateDatatype, fmt.Sprintf("the input value '%s' is not bool type", s))
 	}
 }
+
+// ToIntString print out 1 or 0 as true/false.
+func BoolToIntString(b bool) string {
+	if b {
+		return "1"
+	}
+	return "0"
+}

@@ -307,6 +307,11 @@ func (zm *ZoneMap) Unmarshal(buf []byte) error {
 		buf = buf[32:]
 		zm.max = types.DecodeFixed[types.Decimal128](buf[:16])
 		return nil
+	case types.T_uuid:
+		zm.min = types.DecodeFixed[types.Uuid](buf[:16])
+		buf = buf[32:]
+		zm.max = types.DecodeFixed[types.Uuid](buf[:16])
+		return nil
 	case types.T_char, types.T_varchar, types.T_json:
 		minBuf := make([]byte, buf[31]&0x7f)
 		copy(minBuf, buf[0:32])
@@ -317,6 +322,18 @@ func (zm *ZoneMap) Unmarshal(buf []byte) error {
 
 		zm.isInf = is32BytesMax(maxBuf)
 		return nil
+
+	case types.T_TS:
+		zm.min = buf[:types.TxnTsSize]
+		buf = buf[32:]
+		zm.max = buf[:types.TxnTsSize]
+		return nil
+	case types.T_Rowid:
+		zm.min = buf[:types.RowidSize]
+		buf = buf[32:]
+		zm.max = buf[:types.RowidSize]
+		return nil
+
 	default:
 		panic("unsupported type")
 	}

@@ -108,8 +108,11 @@ func (b *bufferHolder) StopAndGetBatch(buf *bytes.Buffer) bool {
 		return false
 	}
 	b.trigger.Stop()
-	batch := b.buffer.GetBatch(buf)
-	b.batch = &batch
+	if batch := b.buffer.GetBatch(buf); batch == nil {
+		b.batch = nil
+	} else {
+		b.batch = &batch
+	}
 	b.readonly = READONLY
 	return true
 }
@@ -132,7 +135,7 @@ func (b *bufferHolder) FlushAndReset() bool {
 		var flush = b.impl.NewItemBatchHandler(context.TODO())
 		flush(*b.batch)
 	} else {
-		logutil.Debugf("batch is nil")
+		logutil.Debugf("batch is nil, item: %s", b.name)
 	}
 	b.resetTrigger()
 	b.buffer.Reset()
@@ -324,9 +327,11 @@ func (c *MOCollector) Stop(graceful bool) error {
 			logutil.Debug(fmt.Sprintf("doCollect left %d job", len(c.awakeCollect)), logutil.NoReportFiled())
 			time.Sleep(250 * time.Second)
 		}
+		c.mux.Lock()
 		for _, buffer := range c.buffers {
 			_ = buffer.StopTrigger()
 		}
+		c.mux.Unlock()
 		close(c.stopCh)
 		c.stopWait.Wait()
 		for _, buffer := range c.buffers {

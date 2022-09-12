@@ -30,11 +30,13 @@ require (
 	github.com/pierrec/lz4/v4 v4.1.14
 	github.com/plar/go-adaptive-radix-tree v1.0.4
 	github.com/prashantv/gostub v1.1.0
+	github.com/robfig/cron/v3 v3.0.1
 	github.com/smartystreets/goconvey v1.7.2
 	github.com/stretchr/testify v1.7.5
 	github.com/tidwall/btree v1.3.1
 	github.com/yireyun/go-queue v0.0.0-20220725040158-a4dd64810e1e
 	go.uber.org/zap v1.21.0
+	golang.org/x/sys v0.0.0-20220728004956-3c1f35247d10
 	gopkg.in/natefinch/lumberjack.v2 v2.0.0
 )
 
@@ -72,7 +74,6 @@ require (
 	github.com/smartystreets/assertions v1.2.0 // indirect
 	github.com/valyala/fastrand v1.1.0 // indirect
 	github.com/valyala/histogram v1.2.0 // indirect
-	golang.org/x/sys v0.0.0-20220728004956-3c1f35247d10 // indirect
 	gopkg.in/yaml.v2 v2.4.0 // indirect
 )
 

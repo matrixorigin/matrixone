@@ -15,12 +15,14 @@
 package catalog
 
 import (
+	"errors"
 	"io"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 )
 
@@ -28,7 +30,7 @@ import (
 // Generic BaseEntry can't work in go 1.19 because of compiler bug:
 // https://github.com/golang/go/issues/54671
 // Refactor catalog and use generic BaseEntry after go 1.19.1 release.
-type BaseEntryIf interface {
+type BaseEntry interface {
 	RLock()
 	RUnlock()
 
@@ -43,19 +45,19 @@ type BaseEntryIf interface {
 	GetCurrOp() OpT
 	GetLogIndex() []*wal.Index
 
-	InsertNode(un MVCCNodeIf)
+	InsertNode(un txnbase.MVCCNode)
 
-	GetUpdateNodeLocked() MVCCNodeIf
-	TxnCanRead(txn txnif.AsyncTxn, mu *sync.RWMutex) (canRead bool, err error)
+	GetUpdateNodeLocked() txnbase.MVCCNode
+	IsVisible(ts types.TS, mu *sync.RWMutex) (ok bool, err error)
 
 	ExistUpdate(minTs, MaxTs types.TS) (exist bool)
-	InTxnOrRollbacked() bool
+	IsCreating() bool
 	IsCommitting() bool
 	DeleteBefore(ts types.TS) bool
 
 	WriteOneNodeTo(w io.Writer) (n int64, err error)
 	ReadOneNodeFrom(r io.Reader) (n int64, err error)
-	CloneCommittedInRange(start, end types.TS) (ret BaseEntryIf)
+	CloneCommittedInRange(start, end types.TS) (ret BaseEntry)
 
 	PrepareCommit() error
 	Prepare2PCPrepare() error
@@ -72,3 +74,5 @@ func CompareUint64(left, right uint64) int {
 	}
 	return 0
 }
+
+var ErrTxnActive = errors.New("txn is active")

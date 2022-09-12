@@ -14,7 +14,9 @@
 
 package catalog
 
-import "github.com/matrixorigin/matrixone/pkg/container/types"
+import (
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+)
 
 type EntryType uint8
 
@@ -92,6 +94,7 @@ const (
 	SystemRelAttr_CreateAt    = "created_time"
 	SystemRelAttr_AccID       = "account_id"
 
+	SystemColAttr_UniqName        = "att_uniq_name"
 	SystemColAttr_AccID           = "account_id"
 	SystemColAttr_Name            = "attname"
 	SystemColAttr_DBID            = "att_database_id"
@@ -130,24 +133,15 @@ const (
 
 func init() {
 	var err error
-	PhyAddrColumnType = types.Type{
-		Oid:   types.T_decimal128,
-		Size:  16,
-		Width: 128,
-	}
+	PhyAddrColumnType = types.T_Rowid.ToType()
 
-	tu32 := types.Type{
-		Oid:  types.T_uint32,
-		Size: 4,
-	}
-	tu64 := types.Type{
-		Oid:  types.T_uint64,
-		Size: 8,
-	}
-	ttimestamp := types.Type{
-		Oid:  types.T_timestamp,
-		Size: 8,
-	}
+	ti8 := types.T_int8.ToType()
+	ti32 := types.T_int32.ToType()
+	tu32 := types.T_uint32.ToType()
+	tu64 := types.T_uint64.ToType()
+	ttimestamp := types.T_timestamp.ToType()
+	tvarchar := types.T_varchar.ToType()
+	tsinglechar := types.T_char.ToType()
 
 	/*
 
@@ -159,28 +153,13 @@ func init() {
 	if err = SystemDBSchema.AppendPKCol(SystemDBAttr_ID, tu64, 0); err != nil {
 		panic(err)
 	}
-	t := types.Type{
-		Oid:   types.T_varchar,
-		Size:  24,
-		Width: 100,
-	}
-	if err = SystemDBSchema.AppendCol(SystemDBAttr_Name, t); err != nil {
+	if err = SystemDBSchema.AppendCol(SystemDBAttr_Name, tvarchar); err != nil {
 		panic(err)
 	}
-	t = types.Type{
-		Oid:   types.T_varchar,
-		Size:  24,
-		Width: 100,
-	}
-	if err = SystemDBSchema.AppendCol(SystemDBAttr_CatalogName, t); err != nil {
+	if err = SystemDBSchema.AppendCol(SystemDBAttr_CatalogName, tvarchar); err != nil {
 		panic(err)
 	}
-	t = types.Type{
-		Oid:   types.T_varchar,
-		Size:  24,
-		Width: 100,
-	}
-	if err = SystemDBSchema.AppendCol(SystemDBAttr_CreateSQL, t); err != nil {
+	if err = SystemDBSchema.AppendCol(SystemDBAttr_CreateSQL, tvarchar); err != nil {
 		panic(err)
 	}
 	if err = SystemDBSchema.AppendCol(SystemDBAttr_Owner, tu32); err != nil {
@@ -210,63 +189,28 @@ func init() {
 	if err = SystemTableSchema.AppendPKCol(SystemRelAttr_ID, tu64, 0); err != nil {
 		panic(err)
 	}
-	t = types.Type{
-		Oid:   types.T_varchar,
-		Size:  24,
-		Width: 100,
-	}
-	if err = SystemTableSchema.AppendCol(SystemRelAttr_Name, t); err != nil {
+	if err = SystemTableSchema.AppendCol(SystemRelAttr_Name, tvarchar); err != nil {
 		panic(err)
 	}
-	t = types.Type{
-		Oid:   types.T_varchar,
-		Size:  24,
-		Width: 100,
-	}
-	if err = SystemTableSchema.AppendCol(SystemRelAttr_DBName, t); err != nil {
+	if err = SystemTableSchema.AppendCol(SystemRelAttr_DBName, tvarchar); err != nil {
 		panic(err)
 	}
 	if err = SystemTableSchema.AppendCol(SystemRelAttr_DBID, tu64); err != nil {
 		panic(err)
 	}
-	t = types.Type{
-		Oid:   types.T_char,
-		Size:  1,
-		Width: 8,
-	}
-	if err = SystemTableSchema.AppendCol(SystemRelAttr_Persistence, t); err != nil {
+	if err = SystemTableSchema.AppendCol(SystemRelAttr_Persistence, tsinglechar); err != nil {
 		panic(err)
 	}
-	t = types.Type{
-		Oid:   types.T_char,
-		Size:  1,
-		Width: 8,
-	}
-	if err = SystemTableSchema.AppendCol(SystemRelAttr_Kind, t); err != nil {
+	if err = SystemTableSchema.AppendCol(SystemRelAttr_Kind, tsinglechar); err != nil {
 		panic(err)
 	}
-	t = types.Type{
-		Oid:   types.T_varchar,
-		Size:  24,
-		Width: 100,
-	}
-	if err = SystemTableSchema.AppendCol(SystemRelAttr_Comment, t); err != nil {
+	if err = SystemTableSchema.AppendCol(SystemRelAttr_Comment, tvarchar); err != nil {
 		panic(err)
 	}
-	t = types.Type{
-		Oid:   types.T_varchar,
-		Size:  24,
-		Width: 65535,
-	}
-	if err = SystemTableSchema.AppendCol(SystemRelAttr_Partition, t); err != nil {
+	if err = SystemTableSchema.AppendCol(SystemRelAttr_Partition, tvarchar); err != nil {
 		panic(err)
 	}
-	t = types.Type{
-		Oid:   types.T_varchar,
-		Size:  24,
-		Width: 100,
-	}
-	if err = SystemTableSchema.AppendCol(SystemRelAttr_CreateSQL, t); err != nil {
+	if err = SystemTableSchema.AppendCol(SystemRelAttr_CreateSQL, tvarchar); err != nil {
 		panic(err)
 	}
 	if err = SystemTableSchema.AppendCol(SystemRelAttr_Owner, tu32); err != nil {
@@ -292,133 +236,68 @@ func init() {
 	*/
 
 	SystemColumnSchema = NewEmptySchema(SystemTable_Columns_Name)
-	if err = SystemColumnSchema.AppendCol(SystemColAttr_AccID, tu32); err != nil {
+	if err = SystemColumnSchema.AppendColDef(&ColDef{
+		Name:    SystemColAttr_UniqName,
+		Type:    tvarchar,
+		Hidden:  true,
+		SortIdx: 0,
+		SortKey: true,
+		Primary: true,
+	}); err != nil {
 		panic(err)
 	}
-	t = types.Type{
-		Oid:   types.T_varchar,
-		Size:  24,
-		Width: 100,
+	if err = SystemColumnSchema.AppendCol(SystemColAttr_AccID, tu32); err != nil {
+		panic(err)
 	}
 	if err = SystemColumnSchema.AppendCol(SystemColAttr_DBID, tu64); err != nil {
 		panic(err)
 	}
-	if err = SystemColumnSchema.AppendCol(SystemColAttr_DBName, t); err != nil {
+	if err = SystemColumnSchema.AppendCol(SystemColAttr_DBName, tvarchar); err != nil {
 		panic(err)
-	}
-	t = types.Type{
-		Oid:   types.T_varchar,
-		Size:  24,
-		Width: 100,
 	}
 	if err = SystemColumnSchema.AppendCol(SystemColAttr_RelID, tu64); err != nil {
 		panic(err)
 	}
-	if err = SystemColumnSchema.AppendCol(SystemColAttr_RelName, t); err != nil {
+	if err = SystemColumnSchema.AppendCol(SystemColAttr_RelName, tvarchar); err != nil {
 		panic(err)
 	}
-	t = types.Type{
-		Oid:   types.T_varchar,
-		Size:  24,
-		Width: 100,
-	}
-	if err = SystemColumnSchema.AppendPKCol(SystemColAttr_Name, t, 0); err != nil {
+	if err = SystemColumnSchema.AppendCol(SystemColAttr_Name, tvarchar); err != nil {
 		panic(err)
 	}
-	t = types.Type{
-		Oid:   types.T_int32,
-		Size:  4,
-		Width: 32,
-	}
-	if err = SystemColumnSchema.AppendCol(SystemColAttr_Type, t); err != nil {
+	if err = SystemColumnSchema.AppendCol(SystemColAttr_Type, ti32); err != nil {
 		panic(err)
 	}
-	t = types.Type{
-		Oid:   types.T_int32,
-		Size:  4,
-		Width: 32,
-	}
-	if err = SystemColumnSchema.AppendCol(SystemColAttr_Num, t); err != nil {
+	if err = SystemColumnSchema.AppendCol(SystemColAttr_Num, ti32); err != nil {
 		panic(err)
 	}
-	t = types.Type{
-		Oid:   types.T_int32,
-		Size:  4,
-		Width: 32,
-	}
-	if err = SystemColumnSchema.AppendCol(SystemColAttr_Length, t); err != nil {
+	if err = SystemColumnSchema.AppendCol(SystemColAttr_Length, ti32); err != nil {
 		panic(err)
 	}
-	t = types.Type{
-		Oid:   types.T_int8,
-		Size:  1,
-		Width: 8,
-	}
-	if err = SystemColumnSchema.AppendCol(SystemColAttr_NullAbility, t); err != nil {
+	if err = SystemColumnSchema.AppendCol(SystemColAttr_NullAbility, ti8); err != nil {
 		panic(err)
 	}
-	t = types.Type{
-		Oid:   types.T_int8,
-		Size:  1,
-		Width: 8,
-	}
-	if err = SystemColumnSchema.AppendCol(SystemColAttr_HasExpr, t); err != nil {
+	if err = SystemColumnSchema.AppendCol(SystemColAttr_HasExpr, ti8); err != nil {
 		panic(err)
 	}
-	t = types.Type{
-		Oid:   types.T_varchar,
-		Size:  24,
-		Width: 100,
-	}
-	if err = SystemColumnSchema.AppendCol(SystemColAttr_DefaultExpr, t); err != nil {
+	if err = SystemColumnSchema.AppendCol(SystemColAttr_DefaultExpr, tvarchar); err != nil {
 		panic(err)
 	}
-	t = types.Type{
-		Oid:   types.T_int8,
-		Size:  1,
-		Width: 8,
-	}
-	if err = SystemColumnSchema.AppendCol(SystemColAttr_IsDropped, t); err != nil {
+	if err = SystemColumnSchema.AppendCol(SystemColAttr_IsDropped, ti8); err != nil {
 		panic(err)
 	}
-	t = types.Type{
-		Oid:   types.T_char,
-		Size:  1,
-		Width: 8,
-	}
-	if err = SystemColumnSchema.AppendCol(SystemColAttr_ConstraintType, t); err != nil {
+	if err = SystemColumnSchema.AppendCol(SystemColAttr_ConstraintType, tsinglechar); err != nil {
 		panic(err)
 	}
-	t = types.Type{
-		Oid:   types.T_int8,
-		Size:  1,
-		Width: 8,
-	}
-	if err = SystemColumnSchema.AppendCol(SystemColAttr_IsUnsigned, t); err != nil {
+	if err = SystemColumnSchema.AppendCol(SystemColAttr_IsUnsigned, ti8); err != nil {
 		panic(err)
 	}
-	t = types.Type{
-		Oid:   types.T_int8,
-		Size:  1,
-		Width: 8,
-	}
-	if err = SystemColumnSchema.AppendCol(SystemColAttr_IsAutoIncrement, t); err != nil {
+	if err = SystemColumnSchema.AppendCol(SystemColAttr_IsAutoIncrement, ti8); err != nil {
 		panic(err)
 	}
-	t = types.Type{
-		Oid:   types.T_varchar,
-		Size:  24,
-		Width: 100,
-	}
-	if err = SystemColumnSchema.AppendCol(SystemColAttr_Comment, t); err != nil {
+	if err = SystemColumnSchema.AppendCol(SystemColAttr_Comment, tvarchar); err != nil {
 		panic(err)
 	}
-	t = types.Type{
-		Oid:   types.T_int8,
-		Size:  1,
-		Width: 8,
-	}
-	if err = SystemColumnSchema.AppendCol(SystemColAttr_IsHidden, t); err != nil {
+	if err = SystemColumnSchema.AppendCol(SystemColAttr_IsHidden, ti8); err != nil {
 		panic(err)
 	}
 	if err = SystemColumnSchema.Finalize(true); err != nil {

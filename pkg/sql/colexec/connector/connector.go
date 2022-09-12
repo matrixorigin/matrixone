@@ -46,20 +46,13 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 	if bat.Length() == 0 {
 		return false, nil
 	}
-	vecs := ap.vecs[:0]
 	for i := range bat.Vecs {
-		if bat.Vecs[i].Or {
+		if bat.Vecs[i].IsOriginal() {
 			vec, err := vector.Dup(bat.Vecs[i], proc.GetMheap())
 			if err != nil {
 				return false, err
 			}
-			vecs = append(vecs, vec)
-		}
-	}
-	for i := range bat.Vecs {
-		if bat.Vecs[i].Or {
-			bat.Vecs[i] = vecs[0]
-			vecs = vecs[1:]
+			bat.Vecs[i] = vec
 		}
 	}
 	select {

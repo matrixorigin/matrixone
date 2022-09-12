@@ -23,6 +23,7 @@ import (
 	"github.com/BurntSushi/toml"
 	"github.com/matrixorigin/matrixone/pkg/cnservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/dnservice"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
@@ -37,6 +38,7 @@ const (
 
 	s3FileServiceName    = "S3"
 	localFileServiceName = "LOCAL"
+	etlFileServiceName   = "ETL"
 )
 
 var ErrInvalidConfig = moerr.NewError(moerr.BAD_CONFIGURATION, "invalid log configuration")
@@ -67,6 +69,8 @@ type Config struct {
 	LogService logservice.Config `toml:"logservice"`
 	// CN cn service config
 	CN cnservice.Config `toml:"cn"`
+	// Observability parameters for the metric/trace
+	Observability config.ObservabilityParameters `toml:"observability"`
 }
 
 func parseConfigFromFile(file string) (*Config, error) {
@@ -139,6 +143,14 @@ func (c *Config) createFileService(defaultName string) (*fileservice.FileService
 		return nil, err
 	}
 
+	// ensure etl exists, for trace & metric
+	if !c.Observability.DisableMetric || !c.Observability.DisableTrace {
+		_, err = fileservice.Get[fileservice.FileService](fs, etlFileServiceName)
+		if err != nil {
+			return nil, moerr.NewPanicError(err)
+		}
+	}
+
 	return fs, nil
 }
 
@@ -159,6 +171,12 @@ func (c *Config) getCNServiceConfig() cnservice.Config {
 	cfg := c.CN
 	cfg.HAKeeper.ClientConfig = c.HAKeeperClient
 	cfg.Frontend.SetLogAndVersion(&c.Log, Version)
+	return cfg
+}
+
+func (c *Config) getObservabilityConfig() config.ObservabilityParameters {
+	cfg := c.Observability
+	cfg.SetDefaultValues(Version)
 	return cfg
 }
 

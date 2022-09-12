@@ -16,7 +16,7 @@ package plan
 
 import (
 	"fmt"
-
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/errno"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -207,7 +207,8 @@ func MakeInsertError(id types.T, col *ColDef, rows []tree.Exprs, colIdx, rowIdx 
 	} else {
 		str = tree.String(rows[rowIdx][colIdx], dialect.MYSQL)
 	}
-	return fmt.Errorf("%s truncation: Incorrect %s value: '%s' for column '%s' at row %d", "Data", id.String(), str, col.Name, rowIdx)
+	return moerr.New(moerr.ER_TRUNCATED_WRONG_VALUE_FOR_FIELD, id.String(), str, col.Name, rowIdx+1)
+	// return fmt.Errorf("%s truncation: Incorrect %s value: '%s' for column '%s' at row %d", "Data", id.String(), str, col.Name, rowIdx)
 }
 
 func buildInsertSelect(stmt *tree.Insert, ctx CompilerContext) (p *Plan, err error) {

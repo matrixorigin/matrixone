@@ -30,7 +30,6 @@ func UnaryTilde[T constraints.Integer](vectors []*vector.Vector, proc *process.P
 		Oid:  types.T_uint64,
 		Size: types.T_uint64.ToType().Size,
 	}
-	resultElementSize := returnType.Oid.TypeLen()
 
 	if srcVector.IsScalar() {
 		if srcVector.IsScalarNull() {
@@ -43,12 +42,11 @@ func UnaryTilde[T constraints.Integer](vectors []*vector.Vector, proc *process.P
 		vector.SetCol(resVector, resValues)
 		return resVector, nil
 	} else {
-		resVector, err := proc.AllocVector(returnType, int64(resultElementSize*len(srcValues)))
+		resVector, err := proc.AllocVectorOfRows(returnType, int64(len(srcValues)), srcVector.Nsp)
 		if err != nil {
 			return nil, err
 		}
-		resValues := types.DecodeFixedSlice[uint64](resVector.Data, resultElementSize)
-		nulls.Set(resVector.Nsp, srcVector.Nsp)
+		resValues := vector.MustTCols[uint64](resVector)
 
 		var i uint64
 		if nulls.Any(resVector.Nsp) {
@@ -64,7 +62,6 @@ func UnaryTilde[T constraints.Integer](vectors []*vector.Vector, proc *process.P
 				resValues[i] = funcBitInversion(srcValues[i])
 			}
 		}
-		vector.SetCol(resVector, resValues)
 		return resVector, nil
 	}
 }
@@ -81,7 +78,6 @@ func funcBitInversion[T constraints.Integer](x T) uint64 {
 func UnaryMinus[T constraints.Signed | constraints.Float](vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	srcVector := vectors[0]
 	srcValues := vector.MustTCols[T](srcVector)
-	resultElementSize := srcVector.Typ.Oid.TypeLen()
 
 	if srcVector.IsScalar() {
 		if srcVector.IsScalarNull() {
@@ -93,13 +89,12 @@ func UnaryMinus[T constraints.Signed | constraints.Float](vectors []*vector.Vect
 		vector.SetCol(resVector, neg.NumericNeg(srcValues, resValues))
 		return resVector, nil
 	} else {
-		resVector, err := proc.AllocVector(srcVector.Typ, int64(resultElementSize*len(srcValues)))
+		resVector, err := proc.AllocVectorOfRows(srcVector.Typ, int64(len(srcValues)), srcVector.Nsp)
 		if err != nil {
 			return nil, err
 		}
-		resValues := types.DecodeFixedSlice[T](resVector.Data, resultElementSize)
-		nulls.Set(resVector.Nsp, srcVector.Nsp)
-		vector.SetCol(resVector, neg.NumericNeg(srcValues, resValues))
+		resValues := vector.MustTCols[T](resVector)
+		neg.NumericNeg(srcValues, resValues)
 		return resVector, nil
 	}
 }
@@ -107,7 +102,6 @@ func UnaryMinus[T constraints.Signed | constraints.Float](vectors []*vector.Vect
 func UnaryMinusDecimal64(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	srcVector := vectors[0]
 	srcValues := vector.MustTCols[types.Decimal64](srcVector)
-	resultElementSize := srcVector.Typ.Oid.TypeLen()
 
 	if srcVector.IsScalar() {
 		if srcVector.ConstVectorIsNull() {
@@ -119,13 +113,12 @@ func UnaryMinusDecimal64(vectors []*vector.Vector, proc *process.Process) (*vect
 		vector.SetCol(resVector, neg.Decimal64Neg(srcValues, resValues))
 		return resVector, nil
 	} else {
-		resVector, err := proc.AllocVector(srcVector.Typ, int64(resultElementSize*len(srcValues)))
+		resVector, err := proc.AllocVectorOfRows(srcVector.Typ, int64(len(srcValues)), srcVector.Nsp)
 		if err != nil {
 			return nil, err
 		}
-		resValues := types.DecodeDecimal64Slice(resVector.Data)
-		nulls.Set(resVector.Nsp, srcVector.Nsp)
-		vector.SetCol(resVector, neg.Decimal64Neg(srcValues, resValues))
+		resValues := vector.MustTCols[types.Decimal64](resVector)
+		neg.Decimal64Neg(srcValues, resValues)
 		return resVector, nil
 	}
 }
@@ -133,7 +126,6 @@ func UnaryMinusDecimal64(vectors []*vector.Vector, proc *process.Process) (*vect
 func UnaryMinusDecimal128(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	srcVector := vectors[0]
 	srcValues := vector.MustTCols[types.Decimal128](srcVector)
-	resultElementSize := srcVector.Typ.Oid.TypeLen()
 
 	if srcVector.IsScalar() {
 		if srcVector.ConstVectorIsNull() {
@@ -144,13 +136,13 @@ func UnaryMinusDecimal128(vectors []*vector.Vector, proc *process.Process) (*vec
 		vector.SetCol(resVector, neg.Decimal128Neg(srcValues, resValues))
 		return resVector, nil
 	} else {
-		resVector, err := proc.AllocVector(srcVector.Typ, int64(resultElementSize*len(srcValues)))
+		resVector, err := proc.AllocVectorOfRows(srcVector.Typ, int64(len(srcValues)), srcVector.Nsp)
 		if err != nil {
 			return nil, err
 		}
-		resValues := types.DecodeDecimal128Slice(resVector.Data)
-		nulls.Set(resVector.Nsp, srcVector.Nsp)
-		vector.SetCol(resVector, neg.Decimal128Neg(srcValues, resValues))
+		resValues := vector.MustTCols[types.Decimal128](resVector)
+		// XXX should pass in nulls
+		neg.Decimal128Neg(srcValues, resValues)
 		return resVector, nil
 	}
 }

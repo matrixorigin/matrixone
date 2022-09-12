@@ -17,6 +17,8 @@ package compile
 import (
 	"context"
 	"fmt"
+	"testing"
+
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
@@ -25,7 +27,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/memEngine"
 	"github.com/stretchr/testify/require"
-	"testing"
 )
 
 func TestScopeSerialization(t *testing.T) {
