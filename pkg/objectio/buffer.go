@@ -40,7 +40,7 @@ func NewObjectBuffer(name string) *ObjectBuffer {
 }
 
 func (b *ObjectBuffer) Write(buf []byte) (int, int, error) {
-	var offset int = 0
+	offset := 0
 	le := len(b.vector.Entries)
 	if len(b.vector.Entries) > 0 {
 		offset = b.vector.Entries[le-1].Offset +

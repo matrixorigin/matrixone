@@ -15,13 +15,13 @@
 package objectio
 
 import (
+	"context"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 )
 
 type ObjectReader struct {
 	object *Object
 	name   string
-	root   string
 }
 
 func NewObjectReader(name string, fs fileservice.FileService) (Reader, error) {
@@ -42,7 +42,7 @@ func (r *ObjectReader) ReadMeta(extent Extent) (*Block, error) {
 		Offset: int(extent.offset),
 		Size:   int(extent.Length()),
 	}
-	err = r.object.fs.Read(nil, meta)
+	err = r.object.fs.Read(context.Background(), meta)
 	if err != nil {
 		return nil, err
 	}

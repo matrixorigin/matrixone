@@ -16,6 +16,7 @@ package objectio
 
 import (
 	"bytes"
+	"context"
 	"encoding/binary"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
@@ -49,7 +50,7 @@ func (cb *ColumnBlock) GetData() (*fileservice.IOVector, error) {
 		Offset: int(cb.meta.location.Offset()),
 		Size:   int(cb.meta.location.Length()),
 	}
-	err = cb.block.object.fs.Read(nil, data)
+	err = cb.block.object.fs.Read(context.Background(), data)
 	if err != nil {
 		return nil, err
 	}
@@ -66,7 +67,7 @@ func (cb *ColumnBlock) GetIndex() (*fileservice.IOVector, error) {
 		Offset: int(cb.meta.bloomFilter.Offset()),
 		Size:   int(cb.meta.bloomFilter.Length()),
 	}
-	err = cb.block.object.fs.Read(nil, data)
+	err = cb.block.object.fs.Read(context.Background(), data)
 	if err != nil {
 		return nil, err
 	}

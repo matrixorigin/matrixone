@@ -42,8 +42,8 @@ import "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 // Chksum = Block metadata checksum
 // Reserved = 41 bytes reserved space
 type BlockMeta struct {
-	header  *BlockHeader
-	columns []*ColumnMeta
+	header *BlockHeader
+	//columns []*ColumnMeta
 }
 
 type BlockHeader struct {
@@ -90,8 +90,8 @@ type Header struct {
 	version uint16
 }
 
-type Footer struct {
+/*type Footer struct {
 	alg   uint8
 	metas []Extent
 	magic uint64
-}
+}*/

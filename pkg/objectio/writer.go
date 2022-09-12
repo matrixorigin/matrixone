@@ -150,8 +150,7 @@ func (w *ObjectWriter) WriteEnd() (map[int]BlockObject, error) {
 
 // Sync is for testing
 func (w *ObjectWriter) Sync(dir string) error {
-	var err error
-	err = w.object.fs.Write(nil, w.buffer.GetData())
+	err := w.object.fs.Write(nil, w.buffer.GetData())
 	if err != nil {
 		return err
 	}
