@@ -179,19 +179,8 @@ func (mgr *TxnManager) onPreparCommit(txn txnif.AsyncTxn) {
 	txn.SetError(txn.PrepareCommit())
 }
 
-func (mgr *TxnManager) onPrepar2PCPrepare(txn txnif.AsyncTxn) {
-	txn.SetError(txn.Prepare2PCPrepare())
-}
-
 func (mgr *TxnManager) onPreApplyCommit(txn txnif.AsyncTxn) {
 	if err := txn.PreApplyCommit(); err != nil {
-		txn.SetError(err)
-		mgr.OnException(err)
-	}
-}
-
-func (mgr *TxnManager) onPreApply2PCPrepare(txn txnif.AsyncTxn) {
-	if err := txn.PreApply2PCPrepare(); err != nil {
 		txn.SetError(err)
 		mgr.OnException(err)
 	}
@@ -225,13 +214,7 @@ func (mgr *TxnManager) onBindPrepareTimeStamp(op *OpTxn) (ts types.TS) {
 	return
 }
 
-func (mgr *TxnManager) onPrepare1PC(op *OpTxn, ts types.TS) {
-	// If Op is not OpCommit, prepare rollback
-	if op.Op != OpCommit {
-		mgr.onPreparRollback(op.Txn)
-		return
-	}
-
+func (mgr *TxnManager) onPrepare(op *OpTxn, ts types.TS) {
 	mgr.onPreparCommit(op.Txn)
 	if op.Txn.GetError() != nil {
 		op.Op = OpRollback
@@ -251,6 +234,15 @@ func (mgr *TxnManager) onPrepare1PC(op *OpTxn, ts types.TS) {
 	}
 }
 
+func (mgr *TxnManager) onPrepare1PC(op *OpTxn, ts types.TS) {
+	// If Op is not OpCommit, prepare rollback
+	if op.Op != OpCommit {
+		mgr.onPreparRollback(op.Txn)
+		return
+	}
+	mgr.onPrepare(op, ts)
+}
+
 func (mgr *TxnManager) onPrepare2PC(op *OpTxn, ts types.TS) {
 	// If Op is not OpPrepare, prepare rollback
 	if op.Op != OpPrepare {
@@ -258,23 +250,7 @@ func (mgr *TxnManager) onPrepare2PC(op *OpTxn, ts types.TS) {
 		return
 	}
 
-	mgr.onPrepar2PCPrepare(op.Txn)
-	if op.Txn.GetError() != nil {
-		op.Op = OpRollback
-		op.Txn.Lock()
-		// Should not fail here
-		_ = op.Txn.ToRollbackingLocked(ts)
-		op.Txn.Unlock()
-		mgr.onPreparRollback(op.Txn)
-	} else {
-		//1.Appending the data into appendableNode of block
-		// 2. Collect redo log,append into WalDriver
-		//TODO::need to handle the error,instead of panic for simplicity
-		mgr.onPreApply2PCPrepare(op.Txn)
-		if op.Txn.GetError() != nil {
-			panic(op.Txn.GetID())
-		}
-	}
+	mgr.onPrepare(op, ts)
 }
 
 func (mgr *TxnManager) on1PCPrepared(op *OpTxn) {

@@ -31,9 +31,7 @@ type Txn2PC interface {
 	ApplyRollback() error
 	PrePrepare() error
 	PrepareCommit() error
-	Prepare2PCPrepare() error
 	PreApplyCommit() error
-	PreApply2PCPrepare() error
 	ApplyCommit() error
 }
 
@@ -237,7 +235,8 @@ type TxnEntry interface {
 	RLock()
 	RUnlock()
 	PrepareCommit() error
-	Prepare2PCPrepare() error
+	// TODO: remove all Prepare2PCPrepare
+	// Prepare2PCPrepare() error
 	PrepareRollback() error
 	ApplyCommit(index *wal.Index) error
 	ApplyRollback(index *wal.Index) error

@@ -385,39 +385,6 @@ func (db *txnDB) PrepareCommit() (err error) {
 	return
 }
 
-func (db *txnDB) Prepare2PCPrepare() (err error) {
-	now := time.Now()
-	if db.createEntry != nil {
-		if err = db.createEntry.Prepare2PCPrepare(); err != nil {
-			return
-		}
-	}
-	for _, table := range db.tables {
-		if err = table.Prepare2PCPrepare(); err != nil {
-			break
-		}
-	}
-	if db.dropEntry != nil {
-		if err = db.dropEntry.Prepare2PCPrepare(); err != nil {
-			return
-		}
-	}
-
-	logutil.Debugf("Txn-%d PrepareCommit Takes %s", db.store.txn.GetID(), time.Since(now))
-
-	return
-}
-
-func (db *txnDB) PreApply2PCPrepare() (err error) {
-	for _, table := range db.tables {
-		// table.ApplyAppend()
-		if err = table.PreApply2PCPrepare(); err != nil {
-			return
-		}
-	}
-	return
-}
-
 func (db *txnDB) PreApplyCommit() (err error) {
 	for _, table := range db.tables {
 		// table.ApplyAppend()

@@ -357,24 +357,8 @@ func (txn *Txn) PrepareCommit() (err error) {
 	return err
 }
 
-func (txn *Txn) Prepare2PCPrepare() (err error) {
-	logutil.Debugf("Prepare Committing %d", txn.ID)
-	if txn.Prepare2PCPrepareFn != nil {
-		if err = txn.Prepare2PCPrepareFn(txn); err != nil {
-			return
-		}
-	}
-	err = txn.Store.Prepare2PCPrepare()
-	return err
-}
-
 func (txn *Txn) PreApplyCommit() (err error) {
 	err = txn.Store.PreApplyCommit()
-	return
-}
-
-func (txn *Txn) PreApply2PCPrepare() (err error) {
-	err = txn.Store.PreApply2PCPrepare()
 	return
 }
 

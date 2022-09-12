@@ -686,20 +686,7 @@ func (tbl *txnTable) PrepareCommit() (err error) {
 	return
 }
 
-func (tbl *txnTable) Prepare2PCPrepare() (err error) {
-	for _, node := range tbl.txnEntries {
-		if err = node.Prepare2PCPrepare(); err != nil {
-			break
-		}
-	}
-	return
-}
-
 func (tbl *txnTable) PreApplyCommit() (err error) {
-	return tbl.ApplyAppend()
-}
-
-func (tbl *txnTable) PreApply2PCPrepare() (err error) {
 	return tbl.ApplyAppend()
 }
 
