@@ -16,6 +16,7 @@ package connector
 
 import (
 	"bytes"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -30,6 +31,7 @@ func Prepare(_ *process.Process, _ any) error {
 }
 
 func Call(_ int, proc *process.Process, arg any) (bool, error) {
+	logutil.Infof("connector.Call unnest")
 	ap := arg.(*Argument)
 	reg := ap.Reg
 	bat := proc.InputBatch()

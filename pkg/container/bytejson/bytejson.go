@@ -364,10 +364,10 @@ func (bj ByteJson) queryWithSubPath(keys []string, vals []ByteJson, path Path, p
 	return keys, vals
 }
 
-func (bj ByteJson) unnestWithParams(out []UnnestResult, outer, recursive bool, mode string, pathStr string, this *ByteJson) ([]UnnestResult, error) {
+func (bj ByteJson) unnestWithParams(out []*UnnestResult, outer, recursive bool, mode string, pathStr string, this *ByteJson) ([]*UnnestResult, error) {
 	if !bj.canUnnest() {
 		index, key := genIndexOrKey(pathStr)
-		out = append(out, UnnestResult{
+		out = append(out, &UnnestResult{
 			Path:  pathStr,
 			Value: bj.String(),
 			Index: index,
@@ -382,7 +382,7 @@ func (bj ByteJson) unnestWithParams(out []UnnestResult, outer, recursive bool, m
 			key := bj.getObjectKey(i)
 			val := bj.getObjectVal(i)
 			newPathStr := fmt.Sprintf("%s.%s", pathStr, key)
-			out = append(out, UnnestResult{
+			out = append(out, &UnnestResult{
 				Path:  newPathStr,
 				Value: val.String(),
 				Key:   string(key),
@@ -403,7 +403,7 @@ func (bj ByteJson) unnestWithParams(out []UnnestResult, outer, recursive bool, m
 		for i := 0; i < cnt; i++ {
 			val := bj.getArrayElem(i)
 			newPathStr := fmt.Sprintf("%s[%d]", pathStr, i)
-			out = append(out, UnnestResult{
+			out = append(out, &UnnestResult{
 				Path:  newPathStr,
 				Value: val.String(),
 				Index: fmt.Sprintf("%d", i),
@@ -421,7 +421,7 @@ func (bj ByteJson) unnestWithParams(out []UnnestResult, outer, recursive bool, m
 	return out, nil
 }
 
-func (bj ByteJson) unnest(out []UnnestResult, path Path, outer, recursive bool, mode string) ([]UnnestResult, error) {
+func (bj ByteJson) unnest(out []*UnnestResult, path Path, outer, recursive bool, mode string) ([]*UnnestResult, error) {
 
 	keys := make([]string, 0, 1)
 	vals := make([]ByteJson, 0, 1)
@@ -440,7 +440,7 @@ func (bj ByteJson) unnest(out []UnnestResult, path Path, outer, recursive bool, 
 	}
 	if len(out) == 0 && outer {
 		for i := 0; i < len(keys); i++ {
-			out = append(out, UnnestResult{
+			out = append(out, &UnnestResult{
 				Path: keys[i],
 				This: vals[i].String(),
 			})
@@ -449,11 +449,11 @@ func (bj ByteJson) unnest(out []UnnestResult, path Path, outer, recursive bool, 
 	return out, nil
 }
 
-func (bj ByteJson) Unnest(path Path, outer, recursive bool, mode string) ([]UnnestResult, error) {
+func (bj ByteJson) Unnest(path Path, outer, recursive bool, mode string) ([]*UnnestResult, error) {
 	if !checkMode(mode) {
 		return nil, errors.New(errno.InvalidUnnestMode, fmt.Sprintf("invalid unnest mode %s", mode))
 	}
-	out := make([]UnnestResult, 0, 1)
+	out := make([]*UnnestResult, 0, 1)
 	out, err := bj.unnest(out, path, outer, recursive, mode)
 	return out, err
 }

@@ -17,6 +17,7 @@ package compile
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"runtime"
 	"sync/atomic"
 
@@ -89,7 +90,6 @@ func (c *Compile) Run(_ uint64) (err error) {
 	}
 
 	PrintScope(nil, []*Scope{c.scope})
-
 	switch c.scope.Magic {
 	case Normal:
 		defer c.fillAnalyzeInfo()
@@ -329,6 +329,7 @@ func (c *Compile) compileApQuery(qry *plan.Query, ss []*Scope) (*Scope, error) {
 }
 
 func (c *Compile) compilePlanScope(n *plan.Node, ns []*plan.Node) ([]*Scope, error) {
+	logutil.Infof("compile plan scope_unnest: %s", n)
 	switch n.NodeType {
 	case plan.Node_VALUE_SCAN:
 		ds := &Scope{Magic: Normal}
@@ -472,6 +473,23 @@ func (c *Compile) compilePlanScope(n *plan.Node, ns []*plan.Node) ([]*Scope, err
 			return nil, err
 		}
 		return ss, nil
+	case plan.Node_UNNEST:
+		logutil.Infof("compiling unnest")
+		var (
+			pre []*Scope
+			err error
+		)
+		if len(n.Children) != 0 {
+			curr := c.anal.curr
+			c.anal.curr = int(n.Children[0])
+			pre, err = c.compilePlanScope(ns[n.Children[0]], ns)
+			if err != nil {
+				return nil, err
+			}
+			c.anal.curr = curr
+		}
+		ss := c.compileUnnest(n, pre)
+		return ss, nil
 	default:
 		return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("query '%s' not support now", n))
 	}
@@ -493,6 +511,43 @@ func (c *Compile) compileExternScan(n *plan.Node) []*Scope {
 			Op:  vm.External,
 			Idx: c.anal.curr,
 			Arg: constructExternal(n, c.ctx),
+		})
+	}
+	return ss
+}
+
+func (c *Compile) compileUnnest(n *plan.Node, pre []*Scope) []*Scope {
+	logutil.Infof("compileTableFuncUnnest: %v", n)
+	ds := &Scope{}
+	args := &tree.UnnestParam{}
+	err := args.Unmarshal(n.TableDef.UnnestParam)
+	if err != nil {
+		panic(err)
+	}
+	logutil.Infof("compileTableFuncUnnest: %v", args)
+	if args.IsCol {
+		ds.Magic = Merge
+		ds.Proc = process.NewWithAnalyze(c.proc, c.ctx, 1, c.anal.Nodes())
+		ds.PreScopes = pre
+		pre[0].appendInstruction(vm.Instruction{
+			Op: vm.Connector,
+			Arg: &connector.Argument{
+				Reg: ds.Proc.Reg.MergeReceivers[0],
+			},
+		})
+	} else {
+		ds.Magic = Normal
+		ds.Proc = process.NewWithAnalyze(c.proc, c.ctx, 0, c.anal.Nodes())
+		ds.DataSource = &Source{
+			Bat: batch.NewWithSize(0),
+		}
+	}
+	ss := []*Scope{ds}
+	for i := range ss {
+		ss[i].appendInstruction(vm.Instruction{
+			Op:  vm.Unnest,
+			Idx: c.anal.curr,
+			Arg: constructUnnest(n, c.ctx),
 		})
 	}
 	return ss

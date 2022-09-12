@@ -3273,36 +3273,129 @@ derived_table:
 table_function:
     UNNEST '(' STRING ')'
     {
-	name := tree.SetUnresolvedName(strings.ToLower($1))
-        a1 := tree.NewNumValWithType(constant.MakeString($3), $3, false, tree.P_char)
-        a2 := tree.NewNumValWithType(constant.MakeString(""), "", false, tree.P_char)
-        a3 := tree.NewNumValWithType(constant.MakeString("false"), "false", false, tree.P_bool)
-        $$ = &tree.FuncExpr{
-       		Func: tree.FuncName2ResolvableFunctionReference(name),
-       		Exprs: tree.Exprs{a1, a2, a3},
+        a1 := $3
+        a2 := "$"
+        a3 := false
+        $$ = &tree.Unnest{
+        	Param: &tree.UnnestParam{
+			Origin: a1,
+			Path: a2,
+			Outer: a3,
+		},
        	}
     }
 |   UNNEST '(' STRING ',' STRING ')'
     {
-    	name := tree.SetUnresolvedName(strings.ToLower($1))
-	a1 := tree.NewNumValWithType(constant.MakeString($3), $3, false, tree.P_char)
-	a2 := tree.NewNumValWithType(constant.MakeString($5), $5, false, tree.P_char)
-	a3 := tree.NewNumValWithType(constant.MakeString("false"), "false", false, tree.P_bool)
-	$$ = &tree.FuncExpr{
-		Func: tree.FuncName2ResolvableFunctionReference(name),
-		Exprs: tree.Exprs{a1, a2, a3},
+	a1 := $3
+	a2 := "$"
+	if len($5) > 0 {
+       	    a2 = $5
+        }
+        a3 := false
+	$$ = &tree.Unnest{
+                Param: &tree.UnnestParam{
+        		Origin: a1,
+        		Path: a2,
+        		Outer: a3,
+        	},
+        }
+    }
+|   UNNEST '(' STRING ',' STRING ',' TRUE ')'
+    {
+    	a1 := $3
+    	a2 := "$"
+        if len($5) > 0 {
+            a2 = $5
+        }
+	a3 := true
+	$$ = &tree.Unnest{
+                Param: &tree.UnnestParam{
+        		Origin: a1,
+        		Path: a2,
+        		Outer: a3,
+        	},
+        }
+    }
+|   UNNEST '(' STRING ',' STRING ',' FALSE ')'
+    {
+    	a1 := $3
+    	a2 := "$"
+    	if len($5) > 0 {
+            a2 = $5
+        }
+    	a3 := false
+    	$$ = &tree.Unnest{
+		Param: &tree.UnnestParam{
+			Origin: a1,
+			Path: a2,
+			Outer: a3,
+		},
 	}
     }
-|   UNNEST '(' STRING ',' STRING ',' true_or_false ')'
+|   UNNEST '(' column_name ')'
     {
-    	name := tree.SetUnresolvedName(strings.ToLower($1))
-    		a1 := tree.NewNumValWithType(constant.MakeString($3), $3, false, tree.P_char)
-    		a2 := tree.NewNumValWithType(constant.MakeString($5), $5, false, tree.P_char)
-    		a3 := $7
-    		$$ = &tree.FuncExpr{
-    			Func: tree.FuncName2ResolvableFunctionReference(name),
-    			Exprs: tree.Exprs{a1, a2, a3},
-    		}
+    	a1 := $3
+    	a2 := "$"
+    	a3 := false
+    	$$ = &tree.Unnest{
+		Param: &tree.UnnestParam{
+			Origin: a1,
+			Path: a2,
+			Outer: a3,
+			IsCol: true,
+		},
+	}
+    }
+|   UNNEST '(' column_name ',' STRING ')'
+    {
+    	a1 := $3
+    	a2 := "$"
+    	if len($5) > 0 {
+    	    a2 = $5
+    	}
+    	a3 := false
+    	$$ = &tree.Unnest{
+    		Param: &tree.UnnestParam{
+    			Origin: a1,
+    			Path: a2,
+   			Outer: a3,
+    			IsCol: true,
+    		},
+    	}
+    }
+|   UNNEST '(' column_name ',' STRING ',' TRUE ')'
+    {
+    	a1 := $3
+    	a2 := "$"
+    	if len($5) > 0 {
+    	    a2 = $5
+    	}
+    	a3 := true
+    	$$ = &tree.Unnest{
+    		Param: &tree.UnnestParam{
+    			Origin: a1,
+    			Path: a2,
+    			Outer: a3,
+    			IsCol: true,
+    		},
+    	}
+    }
+|   UNNEST '(' column_name ',' STRING ',' FALSE ')'
+    {
+    	a1 := $3
+    	a2 := "$"
+    	if len($5) > 0 {
+    	    a2 = $5
+    	}
+    	a3 := false
+    	$$ = &tree.Unnest{
+    		Param: &tree.UnnestParam{
+    			Origin: a1,
+    			Path: a2,
+    			Outer: a3,
+    			IsCol: true,
+    		},
+    	}
     }
 
 

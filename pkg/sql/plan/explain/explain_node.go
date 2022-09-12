@@ -119,6 +119,7 @@ func (ndesc *NodeDescribeImpl) GetNodeBasicInfo(options *ExplainOptions) (string
 		pname = "Update"
 	case plan.Node_DELETE:
 		pname = "Delete"
+	case plan.Node_UNNEST:
 	default:
 		panic("error node type")
 	}

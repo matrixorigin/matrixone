@@ -84,7 +84,7 @@ func byOnePath(jBytes *types.Bytes, path *bytejson.Path, outer []bool, result *b
 			if err != nil {
 				return nil, err
 			}
-			err = addValue(result, v)
+			err = addValue(result, *v)
 			if err != nil {
 				return nil, err
 			}

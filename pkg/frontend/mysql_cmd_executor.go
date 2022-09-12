@@ -369,7 +369,6 @@ Warning: The pipeline is the multi-thread environment. The getDataFromPipeline w
 */
 func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 	ses := obj.(*Session)
-
 	if bat == nil {
 		return nil
 	}
@@ -1689,6 +1688,10 @@ func (mce *MysqlCmdExecutor) afterRun(stmt tree.Statement, beginInstant time.Tim
 
 // execute query
 func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) (retErr error) {
+	// check sql containes unnest
+	if strings.Contains(sql, "unnest")||strings.Contains(sql, "t.a") {
+		logutil.Infof("sql contains unnest, sql: %s", sql)
+	}
 	beginInstant := time.Now()
 	ses := mce.GetSession()
 	ses.showStmtType = NotShowStatement
@@ -2293,7 +2296,7 @@ func StatementCanBeExecutedInUncommittedTransaction(stmt tree.Statement) bool {
 	case *tree.CreateTable, *tree.CreateDatabase, *tree.CreateIndex, *tree.CreateView:
 		return true
 		//dml statement
-	case *tree.Insert, *tree.Update, *tree.Delete, *tree.Select, *tree.Load:
+	case *tree.Insert, *tree.Update, *tree.Delete, *tree.Select, *tree.Load, *tree.Unnest:
 		return true
 		//transaction
 	case *tree.BeginTransaction, *tree.CommitTransaction, *tree.RollbackTransaction:
