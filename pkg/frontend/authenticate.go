@@ -23,12 +23,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/moengine"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
 	"github.com/tidwall/btree"
+
 	"math/rand"
 	"strings"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/defines"
 )
 
 type TenantInfo struct {
@@ -1878,9 +1880,9 @@ func InitSysTenant(ctx context.Context) error {
 		DefaultRoleID: moAdminRoleID,
 	}
 
-	ctx = context.WithValue(ctx, moengine.TenantIDKey{}, uint32(sysAccountID))
-	ctx = context.WithValue(ctx, moengine.UserIDKey{}, uint32(rootID))
-	ctx = context.WithValue(ctx, moengine.RoleIDKey{}, uint32(moAdminRoleID))
+	ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(sysAccountID))
+	ctx = context.WithValue(ctx, defines.UserIDKey{}, uint32(rootID))
+	ctx = context.WithValue(ctx, defines.RoleIDKey{}, uint32(moAdminRoleID))
 
 	exists, err = checkSysExistsOrNot(ctx, pu)
 	if err != nil {
@@ -2042,9 +2044,9 @@ func InitGeneralTenant(ctx context.Context, tenant *TenantInfo, ca *tree.CreateA
 		return moerr.NewInternalError("tenant %s user %s role %s do not have the privilege to create the new account", tenant.GetTenant(), tenant.GetUser(), tenant.GetDefaultRole())
 	}
 
-	ctx = context.WithValue(ctx, moengine.TenantIDKey{}, tenant.GetTenantID())
-	ctx = context.WithValue(ctx, moengine.UserIDKey{}, tenant.GetUserID())
-	ctx = context.WithValue(ctx, moengine.RoleIDKey{}, tenant.GetDefaultRoleID())
+	ctx = context.WithValue(ctx, defines.TenantIDKey{}, tenant.GetTenantID())
+	ctx = context.WithValue(ctx, defines.UserIDKey{}, tenant.GetUserID())
+	ctx = context.WithValue(ctx, defines.RoleIDKey{}, tenant.GetDefaultRoleID())
 
 	exists, err = checkTenantExistsOrNot(ctx, pu, ca.Name)
 	if err != nil {
@@ -2176,9 +2178,9 @@ func createTablesInMoCatalogOfGeneralTenant(ctx context.Context, tenant *TenantI
 
 	//with new tenant
 	//TODO: when we have the auto_increment column, we need new strategy.
-	newTenantCtx := context.WithValue(ctx, moengine.TenantIDKey{}, newTenantID)
-	newTenantCtx = context.WithValue(newTenantCtx, moengine.UserIDKey{}, newUserId)
-	newTenantCtx = context.WithValue(newTenantCtx, moengine.RoleIDKey{}, uint32(publicRoleID))
+	newTenantCtx := context.WithValue(ctx, defines.TenantIDKey{}, newTenantID)
+	newTenantCtx = context.WithValue(newTenantCtx, defines.UserIDKey{}, newUserId)
+	newTenantCtx = context.WithValue(newTenantCtx, defines.RoleIDKey{}, uint32(publicRoleID))
 
 	newTenant := &TenantInfo{
 		Tenant:        ca.Name,
@@ -2220,9 +2222,9 @@ func createTablesInInformationSchemaOfGeneralTenant(ctx context.Context, tenant 
 	guestMMu := guest.New(pu.SV.GuestMmuLimitation, pu.HostMmu)
 	//with new tenant
 	//TODO: when we have the auto_increment column, we need new strategy.
-	ctx = context.WithValue(ctx, moengine.TenantIDKey{}, uint32(newTenant.GetTenantID()))
-	ctx = context.WithValue(ctx, moengine.UserIDKey{}, uint32(newTenant.GetUserID()))
-	ctx = context.WithValue(ctx, moengine.RoleIDKey{}, uint32(newTenant.GetDefaultRoleID()))
+	ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(newTenant.GetTenantID()))
+	ctx = context.WithValue(ctx, defines.UserIDKey{}, uint32(newTenant.GetUserID()))
+	ctx = context.WithValue(ctx, defines.RoleIDKey{}, uint32(newTenant.GetDefaultRoleID()))
 	bh := NewBackgroundHandler(ctx, guestMMu, pu.Mempool, pu)
 	defer bh.Close()
 	err := bh.Exec(ctx, "create database information_schema;")

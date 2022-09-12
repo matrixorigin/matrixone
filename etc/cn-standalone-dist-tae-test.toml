@@ -10,6 +10,9 @@ service-addresses = [
   "127.0.0.1:32000",
 ]
 
+[cn]
+uuid = "cn1"
+
 [cn.Engine]
 type = "distributed-tae"
 
@@ -42,4 +45,9 @@ backend = "MEM"
 [[fileservice]]
 name = "S3"
 backend = "MEM"
+
+[[fileservice]]
+name = "ETL"
+backend = "DISK-ETL"
+data-dir = "store"
 

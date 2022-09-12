@@ -1357,7 +1357,20 @@ var (
 			input: "use secondary role all",
 		}, {
 			input: "use secondary role none",
-		}}
+		}, {
+			input:  `select json_extract('{"a":1,"b":2}', '$.b')`,
+			output: `select json_extract({"a":1,"b":2}, $.b)`,
+		}, {
+			input:  `select json_extract(a, '$.b') from t`,
+			output: `select json_extract(a, $.b) from t`,
+		}, {
+			input: `create table t1 (a int, b uuid)`,
+		}, {
+			input: `create table t2 (a uuid primary key, b varchar(10))`,
+		}, {
+			input: `create table t3 (a int, b uuid, primary key idx (a, b))`,
+		},
+	}
 )
 
 func TestValid(t *testing.T) {

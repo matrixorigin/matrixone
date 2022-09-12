@@ -29,7 +29,7 @@ var (
 )
 
 // getDefaultHardwareAddr returns hardware address(like mac addr), like the first valid val.
-func getDefaultHardwareAddr() (net.HardwareAddr, error) {
+var getDefaultHardwareAddr = func() (net.HardwareAddr, error) {
 	ifaces, err := net.Interfaces()
 	if err != nil {
 		return []byte{}, err

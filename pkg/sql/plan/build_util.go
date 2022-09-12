@@ -100,6 +100,8 @@ func getTypeFromAst(typ tree.ResolvableTypeReference) (*plan.Type, error) {
 			return &plan.Type{Id: int32(types.T_blob), Size: 24}, nil
 		case defines.MYSQL_TYPE_JSON:
 			return &plan.Type{Id: int32(types.T_json)}, nil
+		case defines.MYSQL_TYPE_UUID:
+			return &plan.Type{Id: int32(types.T_uuid), Size: 16}, nil
 		default:
 			return nil, errors.New("", fmt.Sprintf("Data type: '%s', will be supported in future version.", tree.String(&n.InternalType, dialect.MYSQL)))
 		}
@@ -125,7 +127,7 @@ func buildDefaultExpr(col *tree.ColumnTableDef, typ *plan.Type) (*plan.Default, 
 		}
 	}
 
-	if !nullAbility && isNullExpr(expr) {
+	if !nullAbility && isNullAstExpr(expr) {
 		return nil, errors.New(errno.InvalidColumnDefinition, fmt.Sprintf("Invalid default value for '%s'", col.Name.Parts[0]))
 	}
 
@@ -163,7 +165,19 @@ func buildDefaultExpr(col *tree.ColumnTableDef, typ *plan.Type) (*plan.Default, 
 	}, nil
 }
 
-func isNullExpr(expr tree.Expr) bool {
+func isNullExpr(expr *plan.Expr) bool {
+	if expr == nil {
+		return false
+	}
+	switch ef := expr.Expr.(type) {
+	case *plan.Expr_C:
+		return expr.Typ.Id == int32(types.T_any) && ef.C.Isnull
+	default:
+		return false
+	}
+}
+
+func isNullAstExpr(expr tree.Expr) bool {
 	if expr == nil {
 		return false
 	}

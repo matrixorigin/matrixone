@@ -1,0 +1,111 @@
+/* 
+ * Copyright 2021 Matrix Origin
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+ syntax = "proto3";
+ package task; 
+ option go_package = "github.com/matrixorigin/matrixone/pkg/pb/task";
+ 
+ import "github.com/gogo/protobuf/gogoproto/gogo.proto";
+ 
+ option (gogoproto.goproto_enum_prefix_all) = true;
+ 
+ // TaskStatus task status
+ enum TaskStatus {
+     // Create is the state of waiting to be scheduled.
+     Created   = 0;
+     // Running is running state. Task is assigned to a CN node and is running
+     Running   = 1;
+     // Completed the task has been completed.
+     Completed = 2;
+ }
+ 
+ // TaskMetadata is a task metadata abstraction that can be scheduled for execution at any CN node.
+ message TaskMetadata {
+     // ID task id, global unique
+     string      ID       = 1;
+     // Executor used to select a particular task executor to run a task
+     uint32      Executor = 2;
+     // Context context needed to run the task
+     bytes       Context  = 3;
+     // Options options for execute task
+     TaskOptions Options  = 4 [(gogoproto.nullable) = false];
+ }
+ 
+ // TaskOptions task options
+ message TaskOptions {
+     // MaxRetryTimes 0 means disable retry
+     uint32 MaxRetryTimes = 1;
+     // RetryInterval retry interval
+     int64  RetryInterval = 2;
+     // DelayDuration delay duration. Controls how long a task is delayed before it is scheduled for 
+     // execution.
+     int64  DelayDuration = 3;
+ }
+ 
+ // ResultCode result code
+ enum ResultCode {
+     // Success success
+     Success = 0;
+     // Failed failed
+     Failed  = 1;
+ }
+ 
+ // ExecuteResult task execute result
+ message ExecuteResult {
+     // Code result code
+     ResultCode Code  = 1;
+     // Error error message
+     string     Error = 2;
+ }
+ 
+ // Task task execute info.
+ message Task {
+     uint64        ID            = 1;
+     // TaskMetadata task metadata
+     TaskMetadata  Metadata      = 2 [(gogoproto.nullable) = false];
+     // ParentTaskID used to record the parent task of the current task
+     string        ParentTaskID  = 3;
+     // TaskStatus task status
+     TaskStatus    Status        = 4;
+     // TaskRunner is the UUID of the CN node which the task run is assigned to
+     string        TaskRunner    = 5;
+     // Epoch indicates how many times the current task is scheduled, the first time it is scheduled 
+     // is 1. Each time it is scheduled, Epoch++.
+     uint32        Epoch         = 6;
+     // LastHeartbeat time of the last heartbeat reported by TaskRunner. Unix timestamp in ms
+     int64         LastHeartbeat = 7;
+     // CreateAt time of the task created. Unix timestamp in ms
+     int64         CreateAt      = 8;
+     // CompletedAt time of the task completed. Unix timestamp in ms
+     int64         CompletedAt   = 9;
+     // ExecuteResult execute result
+     ExecuteResult ExecuteResult = 10;
+ }
+ 
+ // CronTask task execute info.
+ message CronTask {
+     uint64        ID            = 1;
+     // TaskMetadata task metadata
+     TaskMetadata  Metadata      = 2 [(gogoproto.nullable) = false];
+     // CronExpr cron expr
+     string        CronExpr      = 3;
+     // NextTime the next time it should be scheduled for execution. Unix timestamp in ms
+     int64         NextTime      = 4;
+     // CreateAt time of the cron task created. Unix timestamp in ms
+     int64         CreateAt      = 5;
+     // CreateAt time of the cron task created. Unix timestamp in ms
+     int64         UpdateAt      = 6;
+ }

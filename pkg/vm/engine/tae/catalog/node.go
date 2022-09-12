@@ -25,27 +25,27 @@ import (
 
 type nodeList[T any] struct {
 	common.SSLLNode
-	getter     func(uint64) *common.GenericDLNode[T]
-	txnChecker func(*common.GenericDLNode[T], types.TS) (bool, bool)
-	rwlocker   *sync.RWMutex
-	name       string
+	getter       func(uint64) *common.GenericDLNode[T]
+	visibilityFn func(*common.GenericDLNode[T], types.TS) (bool, bool)
+	rwlocker     *sync.RWMutex
+	name         string
 }
 
 func newNodeList[T any](getter func(uint64) *common.GenericDLNode[T],
-	txnChecker func(*common.GenericDLNode[T], types.TS) (bool, bool),
+	visibilityFn func(*common.GenericDLNode[T], types.TS) (bool, bool),
 	rwlocker *sync.RWMutex,
 	name string) *nodeList[T] {
 	return &nodeList[T]{
-		SSLLNode:   *common.NewSSLLNode(),
-		getter:     getter,
-		txnChecker: txnChecker,
-		rwlocker:   rwlocker,
-		name:       name,
+		SSLLNode:     *common.NewSSLLNode(),
+		getter:       getter,
+		visibilityFn: visibilityFn,
+		rwlocker:     rwlocker,
+		name:         name,
 	}
 }
 
 func (n *nodeList[T]) CreateNode(id uint64) *nameNode[T] {
-	nn := newNameNode[T](id, n.getter)
+	nn := newNameNode(id, n.getter)
 	n.rwlocker.Lock()
 	defer n.rwlocker.Unlock()
 	n.Insert(nn)
@@ -138,8 +138,8 @@ func (n *nodeList[T]) TxnGetNodeLocked(
 	txn txnif.TxnReader) (dn *common.GenericDLNode[T], err error) {
 	fn := func(nn *nameNode[T]) bool {
 		dlNode := nn.GetNode()
-		can, dropped := n.txnChecker(dlNode, txn.GetStartTS())
-		if !can {
+		visible, dropped := n.visibilityFn(dlNode, txn.GetStartTS())
+		if !visible {
 			return true
 		}
 		if dropped {

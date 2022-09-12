@@ -25,10 +25,7 @@ import (
 )
 
 func TestPartition(t *testing.T) {
-	v0 := vector.New(types.Type{Oid: types.T(types.T_int8)})
-	v0.Data = types.EncodeInt8Slice([]int8{3, 4, 5, 6, 7, 8})
-	v0.Col = types.DecodeInt8Slice(v0.Data)
-	v0.Nsp = &nulls.Nulls{}
+	v0 := vector.NewWithFixed(types.T_int8.ToType(), []int8{3, 4, 5, 6, 7, 8}, nil, nil)
 	partitions := make([]int64, 2)
 	Partition([]int64{1, 3, 5}, []bool{false, false, false}, partitions, v0)
 	require.Equal(t, []int64{0, 1}, partitions)
@@ -36,113 +33,77 @@ func TestPartition(t *testing.T) {
 	Partition([]int64{1, 3, 5}, []bool{false, false, false}, partitions, v0)
 	require.Equal(t, []int64{0, 1}, partitions)
 
-	v1 := vector.New(types.Type{Oid: types.T(types.T_int16)})
-	v1.Data = types.EncodeInt16Slice([]int16{3, 4, 5, 6, 7, 8})
-	v1.Col = types.DecodeInt16Slice(v1.Data)
-	v1.Nsp = &nulls.Nulls{}
+	v1 := vector.NewWithFixed(types.T_int16.ToType(), []int16{3, 4, 5, 6, 7, 8}, nil, nil)
 	Partition([]int64{1, 3, 5}, []bool{false, false, false}, partitions, v1)
 	require.Equal(t, []int64{0, 1}, partitions)
 	nulls.Add(v0.Nsp, 1)
 	Partition([]int64{1, 3, 5}, []bool{false, false, false}, partitions, v1)
 	require.Equal(t, []int64{0, 1}, partitions)
 
-	v2 := vector.New(types.Type{Oid: types.T(types.T_int32)})
-	v2.Data = types.EncodeInt32Slice([]int32{3, 4, 5, 6, 7, 8})
-	v2.Col = types.DecodeInt32Slice(v2.Data)
-	v2.Nsp = &nulls.Nulls{}
+	v2 := vector.NewWithFixed(types.T_int32.ToType(), []int32{3, 4, 5, 6, 7, 8}, nil, nil)
 	Partition([]int64{1, 3, 5}, []bool{false, false, false}, partitions, v2)
 	require.Equal(t, []int64{0, 1}, partitions)
 	nulls.Add(v2.Nsp, 1)
 	Partition([]int64{1, 3, 5}, []bool{false, false, false}, partitions, v2)
 	require.Equal(t, []int64{0, 1}, partitions)
 
-	v3 := vector.New(types.Type{Oid: types.T(types.T_int64)})
-	v3.Data = types.EncodeInt64Slice([]int64{3, 4, 5, 6, 7, 8})
-	v3.Col = types.DecodeInt64Slice(v3.Data)
-	v3.Nsp = &nulls.Nulls{}
+	v3 := vector.NewWithFixed(types.T_int64.ToType(), []int64{3, 4, 5, 6, 7, 8}, nil, nil)
 	Partition([]int64{1, 3, 5}, []bool{false, false, false}, partitions, v3)
 	require.Equal(t, []int64{0, 1}, partitions)
 	nulls.Add(v3.Nsp, 1)
 	Partition([]int64{1, 3, 5}, []bool{false, false, false}, partitions, v3)
 	require.Equal(t, []int64{0, 1}, partitions)
 
-	v4 := vector.New(types.Type{Oid: types.T(types.T_uint8)})
-	v4.Data = types.EncodeUint8Slice([]uint8{3, 4, 5, 6, 7, 8})
-	v4.Col = types.DecodeUint8Slice(v4.Data)
-	v4.Nsp = &nulls.Nulls{}
+	v4 := vector.NewWithFixed(types.T_uint8.ToType(), []uint8{3, 4, 5, 6, 7, 8}, nil, nil)
 	Partition([]int64{1, 3, 5}, []bool{false, false, false}, partitions, v4)
 	require.Equal(t, []int64{0, 1}, partitions)
 	nulls.Add(v4.Nsp, 1)
 	Partition([]int64{1, 3, 5}, []bool{false, false, false}, partitions, v4)
 	require.Equal(t, []int64{0, 1}, partitions)
 
-	v5 := vector.New(types.Type{Oid: types.T(types.T_uint16)})
-	v5.Data = types.EncodeUint16Slice([]uint16{3, 4, 5, 6, 7, 8})
-	v5.Col = types.DecodeUint16Slice(v5.Data)
-	v5.Nsp = &nulls.Nulls{}
+	v5 := vector.NewWithFixed(types.T_uint16.ToType(), []uint16{3, 4, 5, 6, 7, 8}, nil, nil)
 	Partition([]int64{1, 3, 5}, []bool{false, false, false}, partitions, v5)
 	require.Equal(t, []int64{0, 1}, partitions)
 	nulls.Add(v5.Nsp, 1)
 	Partition([]int64{1, 3, 5}, []bool{false, false, false}, partitions, v5)
 	require.Equal(t, []int64{0, 1}, partitions)
 
-	v6 := vector.New(types.Type{Oid: types.T(types.T_uint32)})
-	v6.Data = types.EncodeUint32Slice([]uint32{3, 4, 5, 6, 7, 8})
-	v6.Col = types.DecodeUint32Slice(v6.Data)
-	v6.Nsp = &nulls.Nulls{}
+	v6 := vector.NewWithFixed(types.T_uint32.ToType(), []uint32{3, 4, 5, 6, 7, 8}, nil, nil)
 	Partition([]int64{1, 3, 5}, []bool{false, false, false}, partitions, v6)
 	require.Equal(t, []int64{0, 1}, partitions)
 	nulls.Add(v6.Nsp, 1)
 	Partition([]int64{1, 3, 5}, []bool{false, false, false}, partitions, v6)
 	require.Equal(t, []int64{0, 1}, partitions)
 
-	v7 := vector.New(types.Type{Oid: types.T(types.T_uint64)})
-	v7.Data = types.EncodeUint64Slice([]uint64{3, 4, 5, 6, 7, 8})
-	v7.Col = types.DecodeUint64Slice(v7.Data)
-	v7.Nsp = &nulls.Nulls{}
+	v7 := vector.NewWithFixed(types.T_uint64.ToType(), []uint64{3, 4, 5, 6, 7, 8}, nil, nil)
 	Partition([]int64{1, 3, 5}, []bool{false, false, false}, partitions, v7)
 	require.Equal(t, []int64{0, 1}, partitions)
 	nulls.Add(v7.Nsp, 1)
 	Partition([]int64{1, 3, 5}, []bool{false, false, false}, partitions, v7)
 	require.Equal(t, []int64{0, 1}, partitions)
 
-	v8 := vector.New(types.Type{Oid: types.T(types.T_date)})
-	v8.Data = types.EncodeDateSlice([]types.Date{3, 4, 5, 6, 7, 8})
-	v8.Col = types.DecodeDateSlice(v8.Data)
-	v8.Nsp = &nulls.Nulls{}
+	v8 := vector.NewWithFixed(types.T_date.ToType(), []types.Date{3, 4, 5, 6, 7, 8}, nil, nil)
 	Partition([]int64{1, 3, 5}, []bool{false, false, false}, partitions, v8)
 	require.Equal(t, []int64{0, 1}, partitions)
 	nulls.Add(v8.Nsp, 1)
 	Partition([]int64{1, 3, 5}, []bool{false, false, false}, partitions, v8)
 	require.Equal(t, []int64{0, 1}, partitions)
 
-	v9 := vector.New(types.Type{Oid: types.T(types.T_float32)})
-	v9.Data = types.EncodeFloat32Slice([]float32{3, 4, 5, 6, 7, 8})
-	v9.Col = types.DecodeFloat32Slice(v9.Data)
-	v9.Nsp = &nulls.Nulls{}
+	v9 := vector.NewWithFixed(types.T_float32.ToType(), []float32{3, 4, 5, 6, 7, 8}, nil, nil)
 	Partition([]int64{1, 3, 5}, []bool{false, false, false}, partitions, v9)
 	require.Equal(t, []int64{0, 1}, partitions)
 	nulls.Add(v9.Nsp, 1)
 	Partition([]int64{1, 3, 5}, []bool{false, false, false}, partitions, v9)
 	require.Equal(t, []int64{0, 1}, partitions)
 
-	v10 := vector.New(types.Type{Oid: types.T(types.T_float64)})
-	v10.Data = types.EncodeFloat64Slice([]float64{3, 4, 5, 6, 7, 8})
-	v10.Col = types.DecodeFloat64Slice(v10.Data)
-	v10.Nsp = &nulls.Nulls{}
+	v10 := vector.NewWithFixed(types.T_float64.ToType(), []float64{3, 4, 5, 6, 7, 8}, nil, nil)
 	Partition([]int64{1, 3, 5}, []bool{false, false, false}, partitions, v10)
 	require.Equal(t, []int64{0, 1}, partitions)
 	nulls.Add(v10.Nsp, 1)
 	Partition([]int64{1, 3, 5}, []bool{false, false, false}, partitions, v10)
 	require.Equal(t, []int64{0, 1}, partitions)
 
-	v11 := vector.New(types.Type{Oid: types.T(types.T_char)})
-	v11.Col = &types.Bytes{
-		Data:    []byte("helloGutkonichiwanihaonihaoniahonihao"),
-		Offsets: []uint32{0, 5, 8, 17, 22, 27, 32},
-		Lengths: []uint32{5, 3, 9, 5, 5, 5, 5},
-	}
-	v11.Nsp = &nulls.Nulls{}
+	v11 := vector.NewWithStrings(types.T_char.ToType(), []string{"hello", "Gut", "konichiwa", "nihao", "nihao", "nihao", "nihao"}, nil, nil)
 	Partition([]int64{1, 3, 5}, []bool{false, false, false}, partitions, v10)
 	require.Equal(t, []int64{0, 1}, partitions)
 	nulls.Add(v11.Nsp, 1)

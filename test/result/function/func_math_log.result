@@ -1,11 +1,10 @@
 select log(exp(10)),log(-1),log(NULL),log(1,1),log(3,9),log(-1,2),log(NULL,2);
-Logarithm function base cannot be 1
+Natural Logarithm function input cannot be non positive
 SELECT LOG(2);
 LOG(2)
 0.6931471805599453
 SELECT LOG(-2);
-LOG(-2)
-null
+Natural Logarithm function input cannot be non positive
 SELECT LOG(2,65536);
 LOG(2,65536)
 16.0

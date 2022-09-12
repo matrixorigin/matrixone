@@ -17,18 +17,15 @@ package multi
 import (
 	"testing"
 
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
-	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
-	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
 
 func TestSubStr(t *testing.T) {
-	procs := makeProcess()
+	procs := testutil.NewProc()
 	cases := []struct {
 		name       string
 		vecs       []*vector.Vector
@@ -226,18 +223,14 @@ func TestSubStr(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			col := substr.Col.(*types.Bytes)
-			offset := col.Offsets[0]
-			length := col.Lengths[0]
-			resBytes := col.Data[offset:length]
-			require.Equal(t, c.wantBytes, resBytes)
+			require.Equal(t, c.wantBytes, substr.GetBytes(0))
 			require.Equal(t, c.wantScalar, substr.IsScalar())
 		})
 	}
 }
 
 func TestSubStrUTF(t *testing.T) {
-	procs := makeProcess()
+	procs := testutil.NewProc()
 	cases := []struct {
 		name       string
 		vecs       []*vector.Vector
@@ -435,54 +428,20 @@ func TestSubStrUTF(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			col := substr.Col.(*types.Bytes)
-			offset := col.Offsets[0]
-			length := col.Lengths[0]
-			resBytes := col.Data[offset:length]
-			require.Equal(t, c.wantBytes, resBytes)
+			require.Equal(t, c.wantBytes, substr.GetBytes(0))
 			require.Equal(t, c.wantScalar, substr.IsScalar())
 		})
 	}
 }
 
-func makeProcess() *process.Process {
-	hm := host.New(1 << 40)
-	gm := guest.New(1<<40, hm)
-	return process.New(mheap.New(gm))
-}
-
 // Construct vector parameter of substring function
 func makeSubStrVectors(src string, start int64, length int64, withLength bool) []*vector.Vector {
 	vec := make([]*vector.Vector, 2)
-	srcBytes := &types.Bytes{
-		Data:    []byte(src),
-		Offsets: []uint32{0},
-		Lengths: []uint32{uint32(len(src))},
-	}
-
-	vec[0] = &vector.Vector{
-		Col:     srcBytes,
-		Nsp:     &nulls.Nulls{},
-		Typ:     types.Type{Oid: types.T_varchar, Size: 24},
-		IsConst: true,
-		Length:  10,
-	}
-
-	vec[1] = &vector.Vector{
-		Col:     []int64{start},
-		Nsp:     &nulls.Nulls{},
-		Typ:     types.Type{Oid: types.T_int64},
-		IsConst: true,
-		Length:  10,
-	}
+	vec[0] = vector.NewConstString(types.T_varchar.ToType(), 10, src)
+	vec[1] = vector.NewConstFixed(types.T_int64.ToType(), 10, start)
 	if withLength {
-		vec = append(vec, &vector.Vector{
-			Col:     []int64{length},
-			Nsp:     &nulls.Nulls{},
-			Typ:     types.Type{Oid: types.T_int64},
-			IsConst: true,
-			Length:  10,
-		})
+		lvec := vector.NewConstFixed(types.T_int64.ToType(), 10, length)
+		vec = append(vec, lvec)
 	}
 	return vec
 }

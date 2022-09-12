@@ -128,6 +128,7 @@ type Schema struct {
 	BlockMaxRows     uint32
 	SegmentMaxBlocks uint16
 	Comment          string
+	Partition        string
 	Relkind          string
 	Createsql        string
 	View             string
@@ -269,6 +270,10 @@ func (s *Schema) ReadFrom(r io.Reader) (n int64, err error) {
 		return
 	}
 	n += sn
+	if s.Partition, sn, err = common.ReadString(r); err != nil {
+		return
+	}
+	n += sn
 	if s.Relkind, sn, err = common.ReadString(r); err != nil {
 		return
 	}
@@ -361,6 +366,9 @@ func (s *Schema) Marshal() (buf []byte, err error) {
 	if _, err = common.WriteString(s.Comment, &w); err != nil {
 		return
 	}
+	if _, err = common.WriteString(s.Partition, &w); err != nil {
+		return
+	}
 	if _, err = common.WriteString(s.Relkind, &w); err != nil {
 		return
 	}
@@ -374,7 +382,7 @@ func (s *Schema) Marshal() (buf []byte, err error) {
 		return
 	}
 	for _, def := range s.ColDefs {
-		if _, err = w.Write(types.EncodeType(def.Type)); err != nil {
+		if _, err = w.Write(types.EncodeType(&def.Type)); err != nil {
 			return
 		}
 		if _, err = common.WriteString(def.Name, &w); err != nil {

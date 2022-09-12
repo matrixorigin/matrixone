@@ -4,7 +4,7 @@
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-// http://www.apache.org/licenses/LICENSE-2.0
+//      http://www.apache.org/licenses/LICENSE-2.0
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -12,21 +12,24 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package tables
+package task
 
-type Operation interface {
-	OpName() string
+import (
+	"fmt"
+	"time"
+)
+
+// IsDelayTask returns true if the task is a delay task
+func (m Task) IsDelayTask() bool {
+	return m.Metadata.Options.DelayDuration > 0
 }
 
-type forceCompactOp struct{}
+// GetDelayDuration returns delay duration
+func (m Task) GetDelayDuration() time.Duration {
+	return time.Duration(m.Metadata.Options.DelayDuration)
+}
 
-func (op *forceCompactOp) OpName() string { return "ForceCompactOp" }
-
-type unloadOp struct{}
-
-func (op *unloadOp) OpName() string { return "UnloadOp" }
-
-// loadOp is unused
-// type loadOp struct{}
-
-// func (op *loadOp) OpName() string { return "LoadOp" }
+// DebugString returns the debug string
+func (m Task) DebugString() string {
+	return fmt.Sprintf("%s/%d", m.Metadata.ID, m.Metadata.Executor)
+}

@@ -128,9 +128,9 @@ func TestCheckpoint2(t *testing.T) {
 	}
 	var meta *catalog.BlockEntry
 	testutils.WaitExpect(1000, func() bool {
-		return tae.Wal.GetPenddingCnt() == 4
+		return tae.Wal.GetPenddingCnt() == 9
 	})
-	assert.Equal(t, uint64(4), tae.Wal.GetPenddingCnt())
+	assert.Equal(t, uint64(9), tae.Wal.GetPenddingCnt())
 	t.Log(tae.Wal.GetPenddingCnt())
 	appendClosure(t, bats[8], schema1.Name, tae, nil)()
 	// t.Log(tae.MTBufMgr.String())
@@ -160,15 +160,15 @@ func TestCheckpoint2(t *testing.T) {
 	t.Log(tae.Wal.GetPenddingCnt())
 	err := meta.GetBlockData().Destroy()
 	assert.Nil(t, err)
-	task, err := tae.Scheduler.ScheduleScopedFn(tasks.WaitableCtx, tasks.CheckpointTask, nil, tae.Catalog.CheckpointClosure(tae.Scheduler.GetSafeTS()))
+	task, err := tae.Scheduler.ScheduleScopedFn(tasks.WaitableCtx, tasks.CheckpointTask, nil, tae.Catalog.CheckpointClosure(tae.Scheduler.GetCheckpointTS()))
 	assert.Nil(t, err)
 	err = task.WaitDone()
 	assert.Nil(t, err)
 	testutils.WaitExpect(1000, func() bool {
-		return tae.Wal.GetPenddingCnt() == 0
+		return tae.Wal.GetPenddingCnt() == 4
 	})
 	t.Log(tae.Wal.GetPenddingCnt())
-	assert.Equal(t, uint64(0), tae.Wal.GetPenddingCnt())
+	assert.Equal(t, uint64(4), tae.Wal.GetPenddingCnt())
 }
 
 func TestSchedule1(t *testing.T) {

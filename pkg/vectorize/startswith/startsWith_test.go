@@ -15,39 +15,20 @@
 package startswith
 
 import (
-	"bytes"
 	"reflect"
 	"testing"
-
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
-func makeBytes(strs []string) *types.Bytes {
-	result := &types.Bytes{
-		Lengths: make([]uint32, len(strs)),
-		Offsets: make([]uint32, len(strs)),
-	}
-
-	cursor := 0
-	var buf bytes.Buffer
-	for i, str := range strs {
-		buf.WriteString(str)
-		result.Lengths[i] = uint32(len(str))
-		result.Offsets[i] = uint32(cursor)
-		cursor += len(str)
-	}
-	result.Data = buf.Bytes()
-
-	return result
+func makeBytes(strs []string) []string {
+	return strs
 }
 
 func TestStartsWith(t *testing.T) {
 	tests := []struct {
-		name string
-		lv   *types.Bytes
-		rv   *types.Bytes
-		want []uint8
-		rs   []uint8
+		name   string
+		lv, rv []string
+		want   []uint8
+		rs     []uint8
 	}{
 		{
 			name: "English Match",
@@ -104,11 +85,10 @@ func TestStartsWith(t *testing.T) {
 
 func TestStartsWithRightConst(t *testing.T) {
 	tests := []struct {
-		name string
-		lv   *types.Bytes
-		rv   *types.Bytes
-		want []uint8
-		rs   []uint8
+		name   string
+		lv, rv []string
+		want   []uint8
+		rs     []uint8
 	}{
 		{
 			name: "Right Const",
@@ -121,7 +101,7 @@ func TestStartsWithRightConst(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := StartsWithRightConst(tt.lv, tt.rv, tt.rs); !reflect.DeepEqual(got, tt.want) {
+			if got := StartsWithRightConst(tt.lv, tt.rv[0], tt.rs); !reflect.DeepEqual(got, tt.want) {
 				t.Errorf("StartsWithRightConst() = %v, want %v", got, tt.want)
 			}
 		})
@@ -130,11 +110,10 @@ func TestStartsWithRightConst(t *testing.T) {
 
 func TestStartsWithLeftConst(t *testing.T) {
 	tests := []struct {
-		name string
-		lv   *types.Bytes
-		rv   *types.Bytes
-		want []uint8
-		rs   []uint8
+		name   string
+		lv, rv []string
+		want   []uint8
+		rs     []uint8
 	}{
 		{
 			name: "Left Const",
@@ -147,7 +126,7 @@ func TestStartsWithLeftConst(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := StartsWithLeftConst(tt.lv, tt.rv, tt.rs); !reflect.DeepEqual(got, tt.want) {
+			if got := StartsWithLeftConst(tt.lv[0], tt.rv, tt.rs); !reflect.DeepEqual(got, tt.want) {
 				t.Errorf("StartsWithLeftConst() = %v, want %v", got, tt.want)
 			}
 		})
@@ -156,11 +135,10 @@ func TestStartsWithLeftConst(t *testing.T) {
 
 func TestStartsWithAllConst(t *testing.T) {
 	tests := []struct {
-		name string
-		lv   *types.Bytes
-		rv   *types.Bytes
-		want []uint8
-		rs   []uint8
+		name   string
+		lv, rv []string
+		want   []uint8
+		rs     []uint8
 	}{
 		{
 			name: "All Const",
@@ -180,7 +158,7 @@ func TestStartsWithAllConst(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := StartsWithAllConst(tt.lv, tt.rv, tt.rs); !reflect.DeepEqual(got, tt.want) {
+			if got := StartsWithAllConst(tt.lv[0], tt.rv[0], tt.rs); !reflect.DeepEqual(got, tt.want) {
 				t.Errorf("StartsWithAllConst() = %v, want %v", got, tt.want)
 			}
 		})

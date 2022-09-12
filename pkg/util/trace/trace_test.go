@@ -1,4 +1,4 @@
-// Copyright 2022 Matrix Origin
+// Copyright The OpenTelemetry Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,16 +12,24 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+// Portions of this file are additionally subject to the following
+// copyright.
+//
+// Copyright (C) 2022 Matrix Origin.
+//
+// Modified the behavior and the interface of the step.
+
 package trace
 
 import (
 	"context"
 	"fmt"
+	"reflect"
+	"testing"
+
 	"github.com/matrixorigin/matrixone/pkg/util/export"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"reflect"
-	"testing"
 )
 
 func Test_initExport(t *testing.T) {
@@ -48,7 +56,16 @@ func Test_initExport(t *testing.T) {
 			args: args{
 				enableTracer: true,
 				config: &tracerProviderConfig{
-					enableTracer: 1, batchProcessMode: InternalExecutor, sqlExecutor: newExecutorFactory(ch),
+					enableTracer: 1, batchProcessMode: InternalExecutor, sqlExecutor: newDummyExecutorFactory(ch),
+				}},
+			empty: false,
+		},
+		{
+			name: "enable_FileService",
+			args: args{
+				enableTracer: true,
+				config: &tracerProviderConfig{
+					enableTracer: 1, batchProcessMode: FileService, sqlExecutor: newDummyExecutorFactory(ch),
 				}},
 			empty: false,
 		},
@@ -109,7 +126,7 @@ func TestGetNodeResource(t *testing.T) {
 	}{
 		{
 			name: "normal",
-			want: &MONodeResource{"node_uuid", NodeTypeNode},
+			want: &MONodeResource{"node_uuid", NodeTypeStandalone},
 		},
 	}
 	for _, tt := range tests {

@@ -23,20 +23,23 @@ func init() {
 }
 
 type PolicyCfg struct {
-	Interval int64 // ms
-	Levels   int
+	Interval      int64 // ms
+	FlushInterval int64 // ms
+	Levels        int
 }
 
 type LeveledPolicy interface {
 	TotalLevels() int
 	DecideLevel(score int) int
 	ScanInterval(level int) time.Duration
+	GetFlushInterval() int64
 }
 
 type simpleLeveledPolicy struct {
-	levels   int
-	step     float64
-	interval int64
+	levels        int
+	step          float64
+	interval      int64
+	flushInterval int64
 }
 
 func newSimpleLeveledPolicy(cfg *PolicyCfg) *simpleLeveledPolicy {
@@ -44,15 +47,17 @@ func newSimpleLeveledPolicy(cfg *PolicyCfg) *simpleLeveledPolicy {
 		cfg = new(PolicyCfg)
 		cfg.Levels = 30
 		cfg.Interval = 1000
+		cfg.FlushInterval = 3 * 60 * 1000
 	}
 	if cfg.Levels <= 1 {
 		panic("too small levels")
 	}
 	step := float64(70) / (float64(cfg.Levels) - 1)
 	return &simpleLeveledPolicy{
-		levels:   cfg.Levels,
-		step:     step,
-		interval: cfg.Interval,
+		levels:        cfg.Levels,
+		step:          step,
+		interval:      cfg.Interval,
+		flushInterval: cfg.FlushInterval,
 	}
 }
 
@@ -70,4 +75,8 @@ func (policy *simpleLeveledPolicy) DecideLevel(score int) int {
 		level = policy.levels - 1
 	}
 	return level
+}
+
+func (policy *simpleLeveledPolicy) GetFlushInterval() int64 {
+	return policy.flushInterval
 }

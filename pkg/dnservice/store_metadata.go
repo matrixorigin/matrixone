@@ -15,12 +15,9 @@
 package dnservice
 
 import (
-	"context"
-	"time"
-
 	"github.com/fagongzi/util/protoc"
-	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	"github.com/matrixorigin/matrixone/pkg/util/file"
 	"go.uber.org/zap"
 )
 
@@ -29,36 +26,26 @@ const (
 )
 
 func (s *store) initMetadata() error {
-	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
-	defer cancel()
-
-	vec := &fileservice.IOVector{
-		FilePath: metadataFile,
-		Entries: []fileservice.IOEntry{
-			{
-				Offset: 0,
-				Size:   -1,
-			},
-		},
-	}
-	if err := s.metadataFileService.Read(ctx, vec); err != nil {
-		if err == fileservice.ErrFileNotFound {
-			return nil
-		}
+	data, err := file.ReadFile(s.metadataFileService, metadataFile)
+	if err != nil {
 		return err
 	}
 
-	if len(vec.Entries[0].Data) == 0 {
+	if len(data) == 0 {
+		s.mustUpdateMetadataLocked()
 		return nil
 	}
 
 	v := &metadata.DNStore{}
-	protoc.MustUnmarshal(v, vec.Entries[0].Data)
+	protoc.MustUnmarshal(v, data)
 	if v.UUID != s.mu.metadata.UUID {
 		s.logger.Fatal("BUG: disk DNStore and start DNStore not match",
 			zap.String("disk-store", v.UUID))
 	}
 	s.mu.metadata = *v
+
+	s.logger.Info("local DNShard loaded",
+		zap.String("metadata", s.mu.metadata.DebugString()))
 	return nil
 }
 
@@ -87,20 +74,7 @@ func (s *store) removeDNShard(id uint64) {
 }
 
 func (s *store) mustUpdateMetadataLocked() {
-	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
-	defer cancel()
-
-	vec := fileservice.IOVector{
-		FilePath: metadataFile,
-		Entries: []fileservice.IOEntry{
-			{
-				Offset: 0,
-				Size:   s.mu.metadata.Size(),
-				Data:   protoc.MustMarshal(&s.mu.metadata),
-			},
-		},
-	}
-	if err := s.metadataFileService.Replace(ctx, vec); err != nil {
+	if err := file.WriteFile(s.metadataFileService, metadataFile, protoc.MustMarshal(&s.mu.metadata)); err != nil {
 		s.logger.Fatal("update metadata to local file failed",
 			zap.Error(err))
 	}

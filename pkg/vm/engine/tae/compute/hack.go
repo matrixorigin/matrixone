@@ -68,6 +68,8 @@ func InplaceDeleteRows(orig any, rowGen common.RowGen) any {
 		return InplaceDeleteRowsFromSlice[types.Decimal64](arr, rowGen)
 	case []types.Decimal128:
 		return InplaceDeleteRowsFromSlice[types.Decimal128](arr, rowGen)
+	case []types.Uuid:
+		return InplaceDeleteRowsFromSlice[types.Uuid](arr, rowGen)
 	case []float32:
 		return InplaceDeleteRowsFromSlice[float32](arr, rowGen)
 	case []float64:
@@ -76,6 +78,10 @@ func InplaceDeleteRows(orig any, rowGen common.RowGen) any {
 		return InplaceDeleteRowsFromSlice[types.Date](arr, rowGen)
 	case []types.Datetime:
 		return InplaceDeleteRowsFromSlice[types.Datetime](arr, rowGen)
+	case []types.TS:
+		return InplaceDeleteRowsFromSlice[types.TS](arr, rowGen)
+	case []types.Rowid:
+		return InplaceDeleteRowsFromSlice[types.Rowid](arr, rowGen)
 	}
 	panic("not support")
 }

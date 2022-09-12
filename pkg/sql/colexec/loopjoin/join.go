@@ -142,7 +142,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 				}
 			}
 		}
-		vector.Clean(vec, proc.Mp)
+		vector.Clean(vec, proc.Mp())
 	}
 	rbat.ExpandNulls()
 	anal.Output(rbat)

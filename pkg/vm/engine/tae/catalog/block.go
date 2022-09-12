@@ -29,11 +29,11 @@ import (
 type BlockDataFactory = func(meta *BlockEntry) data.Block
 
 func compareBlockFn(a, b *BlockEntry) int {
-	return a.BaseEntry.DoCompre(b.BaseEntry)
+	return a.MetaBaseEntry.DoCompre(b.MetaBaseEntry)
 }
 
 type BlockEntry struct {
-	*BaseEntry
+	*MetaBaseEntry
 	segment *SegmentEntry
 	state   EntryState
 	blkData data.Block
@@ -41,41 +41,41 @@ type BlockEntry struct {
 
 func NewReplayBlockEntry() *BlockEntry {
 	return &BlockEntry{
-		BaseEntry: NewReplayBaseEntry(),
+		MetaBaseEntry: NewReplayMetaBaseEntry(),
 	}
 }
 
 func NewBlockEntry(segment *SegmentEntry, txn txnif.AsyncTxn, state EntryState, dataFactory BlockDataFactory) *BlockEntry {
 	id := segment.GetTable().GetDB().catalog.NextBlock()
 	e := &BlockEntry{
-		BaseEntry: NewBaseEntry(id),
-		segment:   segment,
-		state:     state,
+		MetaBaseEntry: NewMetaBaseEntry(id),
+		segment:       segment,
+		state:         state,
 	}
 	if dataFactory != nil {
 		e.blkData = dataFactory(e)
 	}
-	e.BaseEntry.CreateWithTxn(txn)
+	e.MetaBaseEntry.CreateWithTxn(txn)
 	return e
 }
 
 func NewStandaloneBlock(segment *SegmentEntry, id uint64, ts types.TS) *BlockEntry {
 	e := &BlockEntry{
-		BaseEntry: NewBaseEntry(id),
-		segment:   segment,
-		state:     ES_Appendable,
+		MetaBaseEntry: NewMetaBaseEntry(id),
+		segment:       segment,
+		state:         ES_Appendable,
 	}
-	e.BaseEntry.CreateWithTS(ts)
+	e.MetaBaseEntry.CreateWithTS(ts)
 	return e
 }
 
 func NewSysBlockEntry(segment *SegmentEntry, id uint64) *BlockEntry {
 	e := &BlockEntry{
-		BaseEntry: NewBaseEntry(id),
-		segment:   segment,
-		state:     ES_Appendable,
+		MetaBaseEntry: NewMetaBaseEntry(id),
+		segment:       segment,
+		state:         ES_Appendable,
 	}
-	e.BaseEntry.CreateWithTS(types.SystemDBTS)
+	e.MetaBaseEntry.CreateWithTS(types.SystemDBTS)
 	return e
 }
 
@@ -113,7 +113,7 @@ func (entry *BlockEntry) String() string {
 }
 
 func (entry *BlockEntry) StringLocked() string {
-	return fmt.Sprintf("[%s]BLOCK%s", entry.state.Repr(), entry.BaseEntry.StringLocked())
+	return fmt.Sprintf("[%s]BLOCK%s", entry.state.Repr(), entry.MetaBaseEntry.StringLocked())
 }
 
 func (entry *BlockEntry) AsCommonID() *common.ID {
@@ -138,7 +138,7 @@ func (entry *BlockEntry) GetFileTs() (types.TS, error) {
 }
 func (entry *BlockEntry) PrepareRollback() (err error) {
 	var empty bool
-	empty, err = entry.BaseEntry.PrepareRollback()
+	empty, err = entry.MetaBaseEntry.PrepareRollback()
 	if err != nil {
 		panic(err)
 	}
@@ -151,7 +151,7 @@ func (entry *BlockEntry) PrepareRollback() (err error) {
 }
 
 func (entry *BlockEntry) WriteTo(w io.Writer) (n int64, err error) {
-	if n, err = entry.BaseEntry.WriteAllTo(w); err != nil {
+	if n, err = entry.MetaBaseEntry.WriteAllTo(w); err != nil {
 		return
 	}
 	if err = binary.Write(w, binary.BigEndian, entry.state); err != nil {
@@ -162,7 +162,7 @@ func (entry *BlockEntry) WriteTo(w io.Writer) (n int64, err error) {
 }
 
 func (entry *BlockEntry) ReadFrom(r io.Reader) (n int64, err error) {
-	if n, err = entry.BaseEntry.ReadAllFrom(r); err != nil {
+	if n, err = entry.MetaBaseEntry.ReadAllFrom(r); err != nil {
 		return
 	}
 	err = binary.Read(r, binary.BigEndian, &entry.state)
@@ -180,9 +180,9 @@ func (entry *BlockEntry) GetCheckpointItems(start, end types.TS) CheckpointItems
 		return nil
 	}
 	return &BlockEntry{
-		BaseEntry: ret,
-		state:     entry.state,
-		segment:   entry.segment,
+		MetaBaseEntry: ret.(*MetaBaseEntry),
+		state:         entry.state,
+		segment:       entry.segment,
 	}
 }
 

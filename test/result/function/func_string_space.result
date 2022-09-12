@@ -38,18 +38,15 @@ space(-4294967297)
 select space(4294967297);
 the space count exceeds maxallowedCount 8000
 select space(-18446744073709551615);
-space(-18446744073709551615)
-
+Can't cast '-18446744073709551615' from DECIMAL128 type to BIGINT UNSIGNED type. Reason: overflow
 select space(18446744073709551615);
 the space count exceeds maxallowedCount 8000
 select space(-18446744073709551616);
-space(-18446744073709551616)
-
+Can't cast '-18446744073709551616' from DECIMAL128 type to BIGINT UNSIGNED type. Reason: overflow
 select space(18446744073709551616);
 the space count exceeds maxallowedCount 8000
 select space(-18446744073709551617);
-space(-18446744073709551617)
-
+Can't cast '-18446744073709551617' from DECIMAL128 type to BIGINT UNSIGNED type. Reason: overflow
 select space(18446744073709551617);
 the space count exceeds maxallowedCount 8000
 SELECT space(9223372036854775808);

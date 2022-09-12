@@ -15,7 +15,6 @@
 package unary
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/date"
@@ -23,9 +22,9 @@ import (
 )
 
 func DateToDate(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	// XXX Why do we ever need this one?  Isn't this a noop?
 	inputVector := vectors[0]
 	resultType := types.Type{Oid: types.T_date, Size: 4}
-	resultElementSize := int(resultType.Size)
 	inputValues := vector.MustTCols[types.Date](inputVector)
 	if inputVector.IsScalar() {
 		if inputVector.ConstVectorIsNull() {
@@ -37,15 +36,12 @@ func DateToDate(vectors []*vector.Vector, proc *process.Process) (*vector.Vector
 		vector.SetCol(resultVector, resultValues)
 		return resultVector, nil
 	} else {
-		resultVector, err := proc.AllocVector(resultType, int64(resultElementSize*len(inputValues)))
+		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(inputValues)), inputVector.Nsp)
 		if err != nil {
 			return nil, err
 		}
-		resultValues := types.DecodeDateSlice(resultVector.Data)
-		resultValues = resultValues[:len(inputValues)]
+		resultValues := vector.MustTCols[types.Date](resultVector)
 		copy(resultValues, inputValues)
-		nulls.Set(resultVector.Nsp, inputVector.Nsp)
-		vector.SetCol(resultVector, resultValues)
 		return resultVector, nil
 	}
 }
@@ -53,7 +49,6 @@ func DateToDate(vectors []*vector.Vector, proc *process.Process) (*vector.Vector
 func DatetimeToDate(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	inputVector := vectors[0]
 	resultType := types.Type{Oid: types.T_date, Size: 4}
-	resultElementSize := int(resultType.Size)
 	inputValues := vector.MustTCols[types.Datetime](inputVector)
 	if inputVector.IsScalar() {
 		if inputVector.ConstVectorIsNull() {
@@ -64,14 +59,12 @@ func DatetimeToDate(vectors []*vector.Vector, proc *process.Process) (*vector.Ve
 		vector.SetCol(resultVector, date.DatetimeToDate(inputValues, resultValues))
 		return resultVector, nil
 	} else {
-		resultVector, err := proc.AllocVector(resultType, int64(resultElementSize*len(inputValues)))
+		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(inputValues)), inputVector.Nsp)
 		if err != nil {
 			return nil, err
 		}
-		resultValues := types.DecodeDateSlice(resultVector.Data)
-		resultValues = resultValues[:len(inputValues)]
-		nulls.Set(resultVector.Nsp, inputVector.Nsp)
-		vector.SetCol(resultVector, date.DatetimeToDate(inputValues, resultValues))
+		resultValues := vector.MustTCols[types.Date](resultVector)
+		date.DatetimeToDate(inputValues, resultValues)
 		return resultVector, nil
 	}
 }
@@ -79,8 +72,7 @@ func DatetimeToDate(vectors []*vector.Vector, proc *process.Process) (*vector.Ve
 func DateStringToDate(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	inputVector := vectors[0]
 	resultType := types.Type{Oid: types.T_date, Size: 4}
-	resultElementSize := int(resultType.Size)
-	inputValues := vector.MustBytesCols(inputVector)
+	inputValues := vector.MustStrCols(inputVector)
 
 	if inputVector.IsScalar() {
 		if inputVector.ConstVectorIsNull() {
@@ -92,15 +84,12 @@ func DateStringToDate(vectors []*vector.Vector, proc *process.Process) (*vector.
 		vector.SetCol(resultVector, result)
 		return resultVector, err
 	} else {
-		resultVector, err := proc.AllocVector(resultType, int64(resultElementSize*len(inputValues.Lengths)))
+		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(inputValues)), inputVector.Nsp)
 		if err != nil {
 			return nil, err
 		}
-		resultValues := types.DecodeDateSlice(resultVector.Data)
-		resultValues = resultValues[:len(inputValues.Lengths)]
-		nulls.Set(resultVector.Nsp, inputVector.Nsp)
-		result, err := date.DateStringToDate(inputValues, resultValues)
-		vector.SetCol(resultVector, result)
+		resultValues := vector.MustTCols[types.Date](resultVector)
+		_, err = date.DateStringToDate(inputValues, resultValues)
 		return resultVector, err
 	}
 }

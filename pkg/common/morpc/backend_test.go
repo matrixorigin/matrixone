@@ -275,6 +275,33 @@ func TestStream(t *testing.T) {
 		WithBackendConnectWhenCreate())
 }
 
+func TestStreamSendWillPanicIfDeadlineNotSet(t *testing.T) {
+	testBackendSend(t,
+		func(conn goetty.IOSession, msg interface{}, seq uint64) error {
+			return conn.Write(msg, goetty.WriteOptions{Flush: true})
+		},
+		func(b *remoteBackend) {
+			st, err := b.NewStream()
+			assert.NoError(t, err)
+			defer func() {
+				assert.NoError(t, st.Close())
+				b.mu.RLock()
+				assert.Equal(t, 0, len(b.mu.futures))
+				b.mu.RUnlock()
+			}()
+
+			defer func() {
+				if err := recover(); err == nil {
+					assert.Fail(t, "must panic")
+				}
+			}()
+
+			req := &testMessage{id: st.ID()}
+			assert.NoError(t, st.Send(context.TODO(), req))
+		},
+		WithBackendConnectWhenCreate())
+}
+
 func TestStreamClosedByConnReset(t *testing.T) {
 	testBackendSend(t,
 		func(conn goetty.IOSession, msg interface{}, seq uint64) error {

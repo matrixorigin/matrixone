@@ -95,7 +95,7 @@ func (processor *calibrationOp) onBlock(blockEntry *catalog.BlockEntry) (err err
 		blockEntry.RUnlock()
 		return nil
 	}
-	if blockEntry.GetSegment().IsAppendable() && catalog.ActiveWithNoTxnFilter(blockEntry.BaseEntry) && catalog.NonAppendableBlkFilter(blockEntry) {
+	if blockEntry.GetSegment().IsAppendable() && catalog.ActiveWithNoTxnFilter(blockEntry.MetaBaseEntry) && catalog.NonAppendableBlkFilter(blockEntry) {
 		processor.blkCntOfSegment++
 	}
 	blockEntry.RUnlock()
@@ -103,9 +103,7 @@ func (processor *calibrationOp) onBlock(blockEntry *catalog.BlockEntry) (err err
 	data := blockEntry.GetBlockData()
 
 	// 3. Run calibration and estimate score for checkpoint
-	data.RunCalibration()
-	score := data.EstimateScore()
-	if score > 0 {
+	if data.RunCalibration() > 0 {
 		processor.db.CKPDriver.EnqueueCheckpointUnit(data)
 	}
 	return
@@ -117,6 +115,7 @@ type catalogStatsMonitor struct {
 	unCheckpointedCnt  int64
 	minTs              types.TS
 	maxTs              types.TS
+	gcTs               types.TS
 	lastScheduleTime   time.Time
 	cntLimit           int64
 	intervalLimit      time.Duration
@@ -149,7 +148,8 @@ func newCatalogStatsMonitor(db *DB, cntLimit int64, intervalLimit time.Duration)
 func (monitor *catalogStatsMonitor) PreExecute() error {
 	monitor.unCheckpointedCnt = 0
 	monitor.minTs = monitor.db.Catalog.GetCheckpointed().MaxTS.Next()
-	monitor.maxTs = monitor.db.Scheduler.GetSafeTS()
+	monitor.maxTs = monitor.db.Scheduler.GetCheckpointTS()
+	monitor.gcTs = monitor.db.Scheduler.GetGCTS()
 	return nil
 }
 
@@ -175,14 +175,14 @@ func (monitor *catalogStatsMonitor) PostExecute() error {
 }
 
 func (monitor *catalogStatsMonitor) onBlock(entry *catalog.BlockEntry) (err error) {
-	if monitor.minTs.LessEq(monitor.maxTs) && catalog.CheckpointSelectOp(entry.BaseEntry, monitor.minTs, monitor.maxTs) {
+	if monitor.minTs.LessEq(monitor.maxTs) && catalog.CheckpointSelectOp(entry.MetaBaseEntry, monitor.minTs, monitor.maxTs) {
 		monitor.unCheckpointedCnt++
 		return
 	}
 	checkpointed := monitor.db.Scheduler.GetCheckpointedLSN()
 	gcNeeded := false
 	entry.RLock()
-	if entry.IsDroppedCommitted() && !entry.DeleteAfter(monitor.maxTs) {
+	if entry.IsDroppedCommitted() && !entry.DeleteAfter(monitor.gcTs) {
 		logIndex := entry.GetLogIndex()
 		if logIndex != nil {
 			gcNeeded = checkpointed >= logIndex[0].LSN
@@ -215,14 +215,14 @@ func (monitor *catalogStatsMonitor) onBlock(entry *catalog.BlockEntry) (err erro
 }
 
 func (monitor *catalogStatsMonitor) onSegment(entry *catalog.SegmentEntry) (err error) {
-	if monitor.minTs.LessEq(monitor.maxTs) && catalog.CheckpointSelectOp(entry.BaseEntry, monitor.minTs, monitor.maxTs) {
+	if monitor.minTs.LessEq(monitor.maxTs) && catalog.CheckpointSelectOp(entry.MetaBaseEntry, monitor.minTs, monitor.maxTs) {
 		monitor.unCheckpointedCnt++
 		return
 	}
 	checkpointed := monitor.db.Scheduler.GetCheckpointedLSN()
 	gcNeeded := false
 	entry.RLock()
-	if entry.IsDroppedCommitted() {
+	if entry.IsDroppedCommitted() && !entry.DeleteAfter(monitor.gcTs) {
 		logIndex := entry.GetLogIndex()
 		if logIndex != nil {
 			gcNeeded = checkpointed >= logIndex[0].LSN
@@ -246,14 +246,14 @@ func (monitor *catalogStatsMonitor) onSegment(entry *catalog.SegmentEntry) (err 
 }
 
 func (monitor *catalogStatsMonitor) onTable(entry *catalog.TableEntry) (err error) {
-	if monitor.minTs.LessEq(monitor.maxTs) && catalog.CheckpointSelectOp(entry.BaseEntry, monitor.minTs, monitor.maxTs) {
+	if monitor.minTs.LessEq(monitor.maxTs) && catalog.CheckpointSelectOp(entry.TableBaseEntry, monitor.minTs, monitor.maxTs) {
 		monitor.unCheckpointedCnt++
 		return
 	}
 	checkpointed := monitor.db.Scheduler.GetCheckpointedLSN()
 	gcNeeded := false
 	entry.RLock()
-	if entry.IsDroppedCommitted() {
+	if entry.IsDroppedCommitted() && !entry.DeleteAfter(monitor.gcTs) {
 		if logIndex := entry.GetLogIndex(); logIndex != nil {
 			gcNeeded = checkpointed >= logIndex[0].LSN
 		}
@@ -276,14 +276,14 @@ func (monitor *catalogStatsMonitor) onTable(entry *catalog.TableEntry) (err erro
 }
 
 func (monitor *catalogStatsMonitor) onDatabase(entry *catalog.DBEntry) (err error) {
-	if monitor.minTs.LessEq(monitor.maxTs) && catalog.CheckpointSelectOp(entry.BaseEntry, monitor.minTs, monitor.maxTs) {
+	if monitor.minTs.LessEq(monitor.maxTs) && catalog.CheckpointSelectOp(entry.DBBaseEntry, monitor.minTs, monitor.maxTs) {
 		monitor.unCheckpointedCnt++
 		return
 	}
 	checkpointed := monitor.db.Scheduler.GetCheckpointedLSN()
 	gcNeeded := false
 	entry.RLock()
-	if entry.IsDroppedCommitted() {
+	if entry.IsDroppedCommitted() && !entry.DeleteAfter(monitor.gcTs) {
 		if logIndex := entry.GetLogIndex(); logIndex != nil {
 			gcNeeded = checkpointed >= logIndex[0].LSN
 		}

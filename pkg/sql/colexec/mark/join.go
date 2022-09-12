@@ -197,7 +197,7 @@ func (ctr *container) emptyProbe(bat *batch.Batch, ap *Argument, proc *process.P
 }
 
 func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Process, anal process.Analyze) error {
-	defer bat.Clean(proc.Mp)
+	defer bat.Clean(proc.Mp())
 	anal.Input(bat)
 	rbat := batch.NewWithSize(len(ap.Result) + 1)
 	// vector.UnionBatch()
@@ -385,10 +385,10 @@ func (ctr *container) nonEqJoinInMap(ap *Argument, mSels [][]int64, vals []uint6
 			bs := vec.Col.([]bool)
 			if bs[0] {
 				condState = condTrue
-				vec.Free(proc.Mp)
+				vec.Free(proc.Mp())
 				break
 			}
-			vec.Free(proc.Mp)
+			vec.Free(proc.Mp())
 		}
 		return condState, nil
 	} else {

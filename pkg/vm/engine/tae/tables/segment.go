@@ -79,14 +79,14 @@ func (segment *dataSegment) BatchDedup(txn txnif.AsyncTxn, pks containers.Vector
 
 func (segment *dataSegment) MutationInfo() string { return "" }
 
-func (segment *dataSegment) RunCalibration()    {}
-func (segment *dataSegment) EstimateScore() int { return 0 }
+func (segment *dataSegment) RunCalibration() int              { return 0 }
+func (segment *dataSegment) EstimateScore(interval int64) int { return 0 }
 
 func (segment *dataSegment) BuildCompactionTaskFactory() (factory tasks.TxnTaskFactory, taskType tasks.TaskType, scopes []common.ID, err error) {
 	if segment.meta.IsAppendable() {
 		segment.meta.RLock()
 		dropped := segment.meta.IsDroppedCommitted()
-		inTxn := segment.meta.InTxnOrRollbacked()
+		inTxn := segment.meta.IsCreating()
 		segment.meta.RUnlock()
 		if dropped || inTxn {
 			return

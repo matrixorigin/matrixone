@@ -104,4 +104,5 @@ const (
 	InvalidJsonNumber                       = "the JSON number is not valid"
 	InvalidJsonKeyTooLong                   = "the JSON key is too long"
 	UnSupportedJsonType                     = "the JSON data type is not supported"
+	InvalidJsonPath                         = "the JSON path is not valid"
 )

@@ -16,7 +16,7 @@ package txnstorage
 
 import (
 	"fmt"
-	"sort"
+	"math"
 	"sync"
 
 	"github.com/google/uuid"
@@ -33,11 +33,10 @@ import (
 
 // CatalogHandler handles read-only requests for catalog
 type CatalogHandler struct {
-	upstream   *MemHandler
-	database   *DatabaseRow
-	relations  map[string]*RelationRow  // id -> row
-	attributes map[string]*AttributeRow // id -> row
-	iterators  struct {
+	upstream       *MemHandler
+	dbID           string
+	sysRelationIDs map[string]string
+	iterators      struct {
 		sync.Mutex
 		Map map[string]any // id -> Iterator
 	}
@@ -48,40 +47,53 @@ var _ Handler = new(CatalogHandler)
 func NewCatalogHandler(upstream *MemHandler) *CatalogHandler {
 
 	handler := &CatalogHandler{
-		upstream:   upstream,
-		relations:  make(map[string]*RelationRow),
-		attributes: make(map[string]*AttributeRow),
+		upstream:       upstream,
+		sysRelationIDs: make(map[string]string),
 	}
 	handler.iterators.Map = make(map[string]any)
 
+	tx := NewTransaction(uuid.NewString(), Time{
+		Timestamp: timestamp.Timestamp{
+			PhysicalTime: math.MinInt,
+		},
+	}, SnapshotIsolation)
+	defer tx.State.Store(Committed)
+
 	// database
-	handler.database = &DatabaseRow{
+	db := DatabaseRow{
 		ID:   uuid.NewString(),
-		Name: catalog.SystemDBName, // hardcoded in frontend package
+		Name: catalog.SystemDBName,
 	}
+	upstream.databases.Insert(tx, db)
+	handler.dbID = db.ID
 
 	// relations
-	databasesRelRow := &RelationRow{
+	databasesRelRow := RelationRow{
 		ID:         uuid.NewString(),
-		DatabaseID: handler.database.ID,
-		Name:       catalog.SystemTable_DB_Name, // hardcoded in frontend package
+		DatabaseID: db.ID,
+		Name:       catalog.SystemTable_DB_Name,
 		Type:       txnengine.RelationTable,
 	}
-	handler.relations[databasesRelRow.ID] = databasesRelRow
-	tablesRelRow := &RelationRow{
+	upstream.relations.Insert(tx, databasesRelRow)
+	handler.sysRelationIDs[databasesRelRow.ID] = databasesRelRow.Name
+
+	tablesRelRow := RelationRow{
 		ID:         uuid.NewString(),
-		DatabaseID: handler.database.ID,
-		Name:       catalog.SystemTable_Table_Name, // hardcoded in frontend package
+		DatabaseID: db.ID,
+		Name:       catalog.SystemTable_Table_Name,
 		Type:       txnengine.RelationTable,
 	}
-	handler.relations[tablesRelRow.ID] = tablesRelRow
-	attributesRelRow := &RelationRow{
+	upstream.relations.Insert(tx, tablesRelRow)
+	handler.sysRelationIDs[tablesRelRow.ID] = tablesRelRow.Name
+
+	attributesRelRow := RelationRow{
 		ID:         uuid.NewString(),
-		DatabaseID: handler.database.ID,
-		Name:       catalog.SystemTable_Columns_Name, // hardcoded in frontend package
+		DatabaseID: db.ID,
+		Name:       catalog.SystemTable_Columns_Name,
 		Type:       txnengine.RelationTable,
 	}
-	handler.relations[attributesRelRow.ID] = attributesRelRow
+	upstream.relations.Insert(tx, attributesRelRow)
+	handler.sysRelationIDs[attributesRelRow.ID] = attributesRelRow.Name
 
 	// attributes
 	// databases
@@ -94,13 +106,13 @@ func NewCatalogHandler(upstream *MemHandler) *CatalogHandler {
 		if !ok {
 			continue
 		}
-		row := &AttributeRow{
+		row := AttributeRow{
 			ID:         uuid.NewString(),
 			RelationID: databasesRelRow.ID,
 			Order:      i,
 			Attribute:  attr.Attr,
 		}
-		handler.attributes[row.ID] = row
+		upstream.attributes.Insert(tx, row)
 	}
 	// relations
 	defs, err = moengine.SchemaToDefs(catalog.SystemTableSchema)
@@ -112,13 +124,13 @@ func NewCatalogHandler(upstream *MemHandler) *CatalogHandler {
 		if !ok {
 			continue
 		}
-		row := &AttributeRow{
+		row := AttributeRow{
 			ID:         uuid.NewString(),
 			RelationID: tablesRelRow.ID,
 			Order:      i,
 			Attribute:  attr.Attr,
 		}
-		handler.attributes[row.ID] = row
+		upstream.attributes.Insert(tx, row)
 	}
 	// attributes
 	defs, err = moengine.SchemaToDefs(catalog.SystemColumnSchema)
@@ -130,21 +142,22 @@ func NewCatalogHandler(upstream *MemHandler) *CatalogHandler {
 		if !ok {
 			continue
 		}
-		row := &AttributeRow{
+		row := AttributeRow{
 			ID:         uuid.NewString(),
 			RelationID: attributesRelRow.ID,
 			Order:      i,
 			Attribute:  attr.Attr,
 		}
-		handler.attributes[row.ID] = row
+		upstream.attributes.Insert(tx, row)
 	}
 
 	return handler
 }
 
-func (c *CatalogHandler) HandleAddTableDef(meta txn.TxnMeta, req txnengine.AddTableDefReq, resp *txnengine.AddTableDefResp) error {
-	if row, ok := c.relations[req.TableID]; ok {
-		resp.ErrReadOnly.Why = fmt.Sprintf("%s is system table", row.Name)
+func (c *CatalogHandler) HandleAddTableDef(meta txn.TxnMeta, req txnengine.AddTableDefReq, resp *txnengine.AddTableDefResp) (err error) {
+	if name, ok := c.sysRelationIDs[req.TableID]; ok {
+		defer logReq("catalog", req, meta, resp, &err)()
+		resp.ErrReadOnly.Why = fmt.Sprintf("%s is system table", name)
 		return nil
 	}
 	return c.upstream.HandleAddTableDef(meta, req, resp)
@@ -154,12 +167,13 @@ func (c *CatalogHandler) HandleClose() error {
 	return c.upstream.HandleClose()
 }
 
-func (c *CatalogHandler) HandleCloseTableIter(meta txn.TxnMeta, req txnengine.CloseTableIterReq, resp *txnengine.CloseTableIterResp) error {
+func (c *CatalogHandler) HandleCloseTableIter(meta txn.TxnMeta, req txnengine.CloseTableIterReq, resp *txnengine.CloseTableIterResp) (err error) {
 
 	c.iterators.Lock()
 	v, ok := c.iterators.Map[req.IterID]
 	c.iterators.Unlock()
 	if ok {
+		defer logReq("catalog", req, meta, resp, &err)()
 		switch v := v.(type) {
 		case *Iter[Text, DatabaseRow]:
 			if err := v.TableIter.Close(); err != nil {
@@ -193,50 +207,55 @@ func (c *CatalogHandler) HandleCommitting(meta txn.TxnMeta) error {
 	return c.upstream.HandleCommitting(meta)
 }
 
-func (c *CatalogHandler) HandleCreateDatabase(meta txn.TxnMeta, req txnengine.CreateDatabaseReq, resp *txnengine.CreateDatabaseResp) error {
-	if req.Name == c.database.Name {
+func (c *CatalogHandler) HandleCreateDatabase(meta txn.TxnMeta, req txnengine.CreateDatabaseReq, resp *txnengine.CreateDatabaseResp) (err error) {
+	if req.Name == catalog.SystemDBName {
+		defer logReq("catalog", req, meta, resp, &err)()
 		resp.ErrReadOnly.Why = req.Name + " is system database"
 		return nil
 	}
 	return c.upstream.HandleCreateDatabase(meta, req, resp)
 }
 
-func (c *CatalogHandler) HandleCreateRelation(meta txn.TxnMeta, req txnengine.CreateRelationReq, resp *txnengine.CreateRelationResp) error {
-	if req.DatabaseID == c.database.ID {
-		resp.ErrReadOnly.Why = "can't create relation in system database"
-		return nil
-	}
+func (c *CatalogHandler) HandleCreateRelation(meta txn.TxnMeta, req txnengine.CreateRelationReq, resp *txnengine.CreateRelationResp) (err error) {
 	return c.upstream.HandleCreateRelation(meta, req, resp)
 }
 
-func (c *CatalogHandler) HandleDelTableDef(meta txn.TxnMeta, req txnengine.DelTableDefReq, resp *txnengine.DelTableDefResp) error {
-	if row, ok := c.relations[req.TableID]; ok {
-		resp.ErrReadOnly.Why = fmt.Sprintf("%s is system table", row.Name)
+func (c *CatalogHandler) HandleDelTableDef(meta txn.TxnMeta, req txnengine.DelTableDefReq, resp *txnengine.DelTableDefResp) (err error) {
+	if name, ok := c.sysRelationIDs[req.TableID]; ok {
+		defer logReq("catalog", req, meta, resp, &err)()
+		resp.ErrReadOnly.Why = fmt.Sprintf("%s is system table", name)
 		return nil
 	}
 	return c.upstream.HandleDelTableDef(meta, req, resp)
 }
 
-func (c *CatalogHandler) HandleDelete(meta txn.TxnMeta, req txnengine.DeleteReq, resp *txnengine.DeleteResp) error {
-	if row, ok := c.relations[req.TableID]; ok {
-		resp.ErrReadOnly.Why = fmt.Sprintf("%s is system table", row.Name)
+func (c *CatalogHandler) HandleDelete(meta txn.TxnMeta, req txnengine.DeleteReq, resp *txnengine.DeleteResp) (err error) {
+	if name, ok := c.sysRelationIDs[req.TableID]; ok {
+		defer logReq("catalog", req, meta, resp, &err)()
+		resp.ErrReadOnly.Why = fmt.Sprintf("%s is system table", name)
 		return nil
 	}
 	return c.upstream.HandleDelete(meta, req, resp)
 }
 
-func (c *CatalogHandler) HandleDeleteDatabase(meta txn.TxnMeta, req txnengine.DeleteDatabaseReq, resp *txnengine.DeleteDatabaseResp) error {
-	if req.Name == c.database.Name {
+func (c *CatalogHandler) HandleDeleteDatabase(meta txn.TxnMeta, req txnengine.DeleteDatabaseReq, resp *txnengine.DeleteDatabaseResp) (err error) {
+	if req.Name == catalog.SystemDBName {
+		defer logReq("catalog", req, meta, resp, &err)()
 		resp.ErrReadOnly.Why = fmt.Sprintf("%s is system database", req.Name)
 		return nil
 	}
 	return c.upstream.HandleDeleteDatabase(meta, req, resp)
 }
 
-func (c *CatalogHandler) HandleDeleteRelation(meta txn.TxnMeta, req txnengine.DeleteRelationReq, resp *txnengine.DeleteRelationResp) error {
-	if req.DatabaseID == c.database.ID {
-		resp.ErrReadOnly.Why = "can't delete relation from system database"
-		return nil
+func (c *CatalogHandler) HandleDeleteRelation(meta txn.TxnMeta, req txnengine.DeleteRelationReq, resp *txnengine.DeleteRelationResp) (err error) {
+	if req.DatabaseID == c.dbID {
+		for _, name := range c.sysRelationIDs {
+			if req.Name == name {
+				defer logReq("catalog", req, meta, resp, &err)()
+				resp.ErrReadOnly.Why = "can't delete this system table"
+				return nil
+			}
+		}
 	}
 	return c.upstream.HandleDeleteRelation(meta, req, resp)
 }
@@ -249,95 +268,34 @@ func (c *CatalogHandler) HandleGetDatabases(meta txn.TxnMeta, req txnengine.GetD
 	if err := c.upstream.HandleGetDatabases(meta, req, resp); err != nil {
 		return err
 	}
-	resp.Names = append(resp.Names, c.database.Name)
 	return nil
 }
 
-func (c *CatalogHandler) HandleGetPrimaryKeys(meta txn.TxnMeta, req txnengine.GetPrimaryKeysReq, resp *txnengine.GetPrimaryKeysResp) error {
-	if rel, ok := c.relations[req.TableID]; ok {
-		for _, attr := range c.attributes {
-			if attr.RelationID != rel.ID {
-				continue
-			}
-			if !attr.Primary {
-				continue
-			}
-			resp.Attrs = append(resp.Attrs, &attr.Attribute)
-		}
-		return nil
-	}
+func (c *CatalogHandler) HandleGetPrimaryKeys(meta txn.TxnMeta, req txnengine.GetPrimaryKeysReq, resp *txnengine.GetPrimaryKeysResp) (err error) {
 	return c.upstream.HandleGetPrimaryKeys(meta, req, resp)
 }
 
-func (c *CatalogHandler) HandleGetRelations(meta txn.TxnMeta, req txnengine.GetRelationsReq, resp *txnengine.GetRelationsResp) error {
-	if req.DatabaseID == c.database.ID {
-		for _, row := range c.relations {
-			resp.Names = append(resp.Names, row.Name)
-		}
-		return nil
-	}
+func (c *CatalogHandler) HandleGetRelations(meta txn.TxnMeta, req txnengine.GetRelationsReq, resp *txnengine.GetRelationsResp) (err error) {
 	return c.upstream.HandleGetRelations(meta, req, resp)
 }
 
-func (c *CatalogHandler) HandleGetTableDefs(meta txn.TxnMeta, req txnengine.GetTableDefsReq, resp *txnengine.GetTableDefsResp) error {
-	if rel, ok := c.relations[req.TableID]; ok {
-
-		// comments
-		resp.Defs = append(resp.Defs, &engine.CommentDef{
-			Comment: rel.Comments,
-		})
-
-		// attributes and primary index
-		{
-			var primaryAttrNames []string
-			var attrRows []*AttributeRow
-			for _, attr := range c.attributes {
-				if attr.RelationID != req.TableID {
-					continue
-				}
-				attrRows = append(attrRows, attr)
-				if attr.Primary {
-					primaryAttrNames = append(primaryAttrNames, attr.Name)
-				}
-			}
-			if len(primaryAttrNames) > 0 {
-				resp.Defs = append(resp.Defs, &engine.PrimaryIndexDef{
-					Names: primaryAttrNames,
-				})
-			}
-			sort.Slice(attrRows, func(i, j int) bool {
-				return attrRows[i].Order < attrRows[j].Order
-			})
-			for _, row := range attrRows {
-				resp.Defs = append(resp.Defs, &engine.AttributeDef{
-					Attr: row.Attribute,
-				})
-			}
-		}
-
-		// properties
-		propertiesDef := new(engine.PropertiesDef)
-		for key, value := range rel.Properties {
-			propertiesDef.Properties = append(propertiesDef.Properties, engine.Property{
-				Key:   key,
-				Value: value,
-			})
-		}
-		resp.Defs = append(resp.Defs, propertiesDef)
-
-		return nil
-	}
-
+func (c *CatalogHandler) HandleGetTableDefs(meta txn.TxnMeta, req txnengine.GetTableDefsReq, resp *txnengine.GetTableDefsResp) (err error) {
 	return c.upstream.HandleGetTableDefs(meta, req, resp)
 }
 
-func (c *CatalogHandler) HandleNewTableIter(meta txn.TxnMeta, req txnengine.NewTableIterReq, resp *txnengine.NewTableIterResp) error {
+func (c *CatalogHandler) HandleNewTableIter(meta txn.TxnMeta, req txnengine.NewTableIterReq, resp *txnengine.NewTableIterResp) (err error) {
 
-	if rel, ok := c.relations[req.TableID]; ok {
+	if name, ok := c.sysRelationIDs[req.TableID]; ok {
+		defer logReq("catalog", req, meta, resp, &err)()
 		tx := c.upstream.getTx(meta)
 
 		attrsMap := make(map[string]*AttributeRow)
-		for _, attr := range c.attributes {
+		it := c.upstream.attributes.NewIter(tx)
+		for ok := it.First(); ok; ok = it.Next() {
+			_, attr, err := it.Read()
+			if err != nil {
+				return err
+			}
 			if attr.RelationID != req.TableID {
 				continue
 			}
@@ -345,7 +303,7 @@ func (c *CatalogHandler) HandleNewTableIter(meta txn.TxnMeta, req txnengine.NewT
 		}
 
 		var iter any
-		switch rel.Name {
+		switch name {
 		case catalog.SystemTable_DB_Name:
 			iter = &Iter[Text, DatabaseRow]{
 				TableIter: c.upstream.databases.NewIter(tx),
@@ -362,7 +320,7 @@ func (c *CatalogHandler) HandleNewTableIter(meta txn.TxnMeta, req txnengine.NewT
 				AttrsMap:  attrsMap,
 			}
 		default:
-			panic(fmt.Errorf("fixme: %s", rel.Name))
+			panic(fmt.Errorf("fixme: %s", name))
 		}
 
 		id := uuid.NewString()
@@ -377,26 +335,11 @@ func (c *CatalogHandler) HandleNewTableIter(meta txn.TxnMeta, req txnengine.NewT
 	return c.upstream.HandleNewTableIter(meta, req, resp)
 }
 
-func (c *CatalogHandler) HandleOpenDatabase(meta txn.TxnMeta, req txnengine.OpenDatabaseReq, resp *txnengine.OpenDatabaseResp) error {
-	if req.Name == c.database.Name {
-		resp.ID = c.database.ID
-		return nil
-	}
+func (c *CatalogHandler) HandleOpenDatabase(meta txn.TxnMeta, req txnengine.OpenDatabaseReq, resp *txnengine.OpenDatabaseResp) (err error) {
 	return c.upstream.HandleOpenDatabase(meta, req, resp)
 }
 
-func (c *CatalogHandler) HandleOpenRelation(meta txn.TxnMeta, req txnengine.OpenRelationReq, resp *txnengine.OpenRelationResp) error {
-	if req.DatabaseID == c.database.ID {
-		for _, row := range c.relations {
-			if row.Name == req.Name {
-				resp.ID = row.ID
-				resp.Type = row.Type
-				return nil
-			}
-		}
-		resp.ErrNotFound.Name = req.Name
-		return nil
-	}
+func (c *CatalogHandler) HandleOpenRelation(meta txn.TxnMeta, req txnengine.OpenRelationReq, resp *txnengine.OpenRelationResp) (err error) {
 	return c.upstream.HandleOpenRelation(meta, req, resp)
 }
 
@@ -404,13 +347,15 @@ func (c *CatalogHandler) HandlePrepare(meta txn.TxnMeta) (timestamp.Timestamp, e
 	return c.upstream.HandlePrepare(meta)
 }
 
-func (c *CatalogHandler) HandleRead(meta txn.TxnMeta, req txnengine.ReadReq, resp *txnengine.ReadResp) error {
+func (c *CatalogHandler) HandleRead(meta txn.TxnMeta, req txnengine.ReadReq, resp *txnengine.ReadResp) (err error) {
 	tx := c.upstream.getTx(meta)
 
 	c.iterators.Lock()
 	v, ok := c.iterators.Map[req.IterID]
 	c.iterators.Unlock()
 	if ok {
+		defer logReq("catalog", req, meta, resp, &err)()
+
 		b := batch.New(false, req.ColNames)
 		maxRows := 4096
 		rows := 0
@@ -422,17 +367,7 @@ func (c *CatalogHandler) HandleRead(meta txn.TxnMeta, req txnengine.ReadReq, res
 				b.Vecs[i] = vector.New(iter.AttrsMap[name].Type)
 			}
 
-			fn := iter.TableIter.First
-			if iter.FirstCalled {
-				fn = iter.TableIter.Next
-			} else {
-				iter.FirstCalled = true
-			}
-			for ok := fn(); ok; ok = iter.TableIter.Next() {
-				_, row, err := iter.TableIter.Read()
-				if err != nil {
-					return err
-				}
+			handleRow := func(row *DatabaseRow) (bool, error) {
 				for i, name := range req.ColNames {
 					var value any
 
@@ -445,20 +380,22 @@ func (c *CatalogHandler) HandleRead(meta txn.TxnMeta, req txnengine.ReadReq, res
 						value = ""
 					default:
 						resp.ErrColumnNotFound.Name = name
-						return nil
+						return true, nil
 					}
 
-					b.Vecs[i].Append(value, c.upstream.mheap)
+					str, ok := value.(string)
+					if ok {
+						value = []byte(str)
+					}
+					b.Vecs[i].Append(value, false, c.upstream.mheap)
 				}
+
 				rows++
 				if rows >= maxRows {
-					break
+					return true, nil
 				}
-			}
 
-		case *Iter[Text, RelationRow]:
-			for i, name := range req.ColNames {
-				b.Vecs[i] = vector.New(iter.AttrsMap[name].Type)
+				return false, nil
 			}
 
 			fn := iter.TableIter.First
@@ -472,6 +409,19 @@ func (c *CatalogHandler) HandleRead(meta txn.TxnMeta, req txnengine.ReadReq, res
 				if err != nil {
 					return err
 				}
+				if end, err := handleRow(row); err != nil {
+					return err
+				} else if end {
+					return nil
+				}
+			}
+
+		case *Iter[Text, RelationRow]:
+			for i, name := range req.ColNames {
+				b.Vecs[i] = vector.New(iter.AttrsMap[name].Type)
+			}
+
+			handleRow := func(row *RelationRow) (bool, error) {
 				for i, name := range req.ColNames {
 					var value any
 
@@ -479,11 +429,11 @@ func (c *CatalogHandler) HandleRead(meta txn.TxnMeta, req txnengine.ReadReq, res
 					case catalog.SystemRelAttr_Name:
 						value = row.Name
 					case catalog.SystemRelAttr_DBName:
-						dbRow, err := c.upstream.databases.Get(tx, Text(row.DatabaseID))
+						db, err := c.upstream.databases.Get(tx, Text(row.DatabaseID))
 						if err != nil {
-							return nil
+							return true, err
 						}
-						value = dbRow.Name
+						value = db.Name
 					case catalog.SystemRelAttr_Persistence:
 						value = true
 					case catalog.SystemRelAttr_Kind:
@@ -494,20 +444,22 @@ func (c *CatalogHandler) HandleRead(meta txn.TxnMeta, req txnengine.ReadReq, res
 						value = ""
 					default:
 						resp.ErrColumnNotFound.Name = name
-						return nil
+						return true, err
 					}
 
-					b.Vecs[i].Append(value, c.upstream.mheap)
+					str, ok := value.(string)
+					if ok {
+						value = []byte(str)
+					}
+					b.Vecs[i].Append(value, false, c.upstream.mheap)
 				}
+
 				rows++
 				if rows >= maxRows {
-					break
+					return true, nil
 				}
-			}
 
-		case *Iter[Text, AttributeRow]:
-			for i, name := range req.ColNames {
-				b.Vecs[i] = vector.New(iter.AttrsMap[name].Type)
+				return false, nil
 			}
 
 			fn := iter.TableIter.First
@@ -521,26 +473,39 @@ func (c *CatalogHandler) HandleRead(meta txn.TxnMeta, req txnengine.ReadReq, res
 				if err != nil {
 					return err
 				}
+				if end, err := handleRow(row); err != nil {
+					return err
+				} else if end {
+					return nil
+				}
+			}
+
+		case *Iter[Text, AttributeRow]:
+			for i, name := range req.ColNames {
+				b.Vecs[i] = vector.New(iter.AttrsMap[name].Type)
+			}
+
+			handleRow := func(row *AttributeRow) (bool, error) {
 				for i, name := range req.ColNames {
 					var value any
 
 					switch name {
 					case catalog.SystemColAttr_DBName:
-						relRow, err := c.upstream.relations.Get(tx, Text(row.RelationID))
+						rel, err := c.upstream.relations.Get(tx, Text(row.RelationID))
 						if err != nil {
-							return err
+							return true, err
 						}
-						dbRow, err := c.upstream.databases.Get(tx, Text(relRow.DatabaseID))
+						db, err := c.upstream.databases.Get(tx, Text(rel.DatabaseID))
 						if err != nil {
-							return err
+							return true, err
 						}
-						value = dbRow.Name
+						value = db.Name
 					case catalog.SystemColAttr_RelName:
-						relRow, err := c.upstream.relations.Get(tx, Text(row.RelationID))
+						rel, err := c.upstream.relations.Get(tx, Text(row.RelationID))
 						if err != nil {
-							return err
+							return true, err
 						}
-						value = relRow.Name
+						value = rel.Name
 					case catalog.SystemColAttr_Name:
 						value = row.Name
 					case catalog.SystemColAttr_Type:
@@ -577,14 +542,39 @@ func (c *CatalogHandler) HandleRead(meta txn.TxnMeta, req txnengine.ReadReq, res
 						value = row.IsHidden
 					default:
 						resp.ErrColumnNotFound.Name = name
-						return nil
+						return true, nil
 					}
 
-					b.Vecs[i].Append(value, c.upstream.mheap)
+					str, ok := value.(string)
+					if ok {
+						value = []byte(str)
+					}
+					b.Vecs[i].Append(value, false, c.upstream.mheap)
 				}
+
 				rows++
 				if rows >= maxRows {
-					break
+					return true, nil
+				}
+
+				return false, nil
+			}
+
+			fn := iter.TableIter.First
+			if iter.FirstCalled {
+				fn = iter.TableIter.Next
+			} else {
+				iter.FirstCalled = true
+			}
+			for ok := fn(); ok; ok = iter.TableIter.Next() {
+				_, row, err := iter.TableIter.Read()
+				if err != nil {
+					return err
+				}
+				if end, err := handleRow(row); err != nil {
+					return err
+				} else if end {
+					return nil
 				}
 			}
 
@@ -611,23 +601,26 @@ func (c *CatalogHandler) HandleStartRecovery(ch chan txn.TxnMeta) {
 	c.upstream.HandleStartRecovery(ch)
 }
 
-func (c *CatalogHandler) HandleTruncate(meta txn.TxnMeta, req txnengine.TruncateReq, resp *txnengine.TruncateResp) error {
-	if row, ok := c.relations[req.TableID]; ok {
-		resp.ErrReadOnly.Why = fmt.Sprintf("%s is system table", row.Name)
+func (c *CatalogHandler) HandleTruncate(meta txn.TxnMeta, req txnengine.TruncateReq, resp *txnengine.TruncateResp) (err error) {
+	if name, ok := c.sysRelationIDs[req.TableID]; ok {
+		defer logReq("catalog", req, meta, resp, &err)()
+		resp.ErrReadOnly.Why = fmt.Sprintf("%s is system table", name)
 	}
 	return c.upstream.HandleTruncate(meta, req, resp)
 }
 
-func (c *CatalogHandler) HandleUpdate(meta txn.TxnMeta, req txnengine.UpdateReq, resp *txnengine.UpdateResp) error {
-	if row, ok := c.relations[req.TableID]; ok {
-		resp.ErrReadOnly.Why = fmt.Sprintf("%s is system table", row.Name)
+func (c *CatalogHandler) HandleUpdate(meta txn.TxnMeta, req txnengine.UpdateReq, resp *txnengine.UpdateResp) (err error) {
+	if name, ok := c.sysRelationIDs[req.TableID]; ok {
+		defer logReq("catalog", req, meta, resp, &err)()
+		resp.ErrReadOnly.Why = fmt.Sprintf("%s is system table", name)
 	}
 	return c.upstream.HandleUpdate(meta, req, resp)
 }
 
-func (c *CatalogHandler) HandleWrite(meta txn.TxnMeta, req txnengine.WriteReq, resp *txnengine.WriteResp) error {
-	if row, ok := c.relations[req.TableID]; ok {
-		resp.ErrReadOnly.Why = fmt.Sprintf("%s is system table", row.Name)
+func (c *CatalogHandler) HandleWrite(meta txn.TxnMeta, req txnengine.WriteReq, resp *txnengine.WriteResp) (err error) {
+	if name, ok := c.sysRelationIDs[req.TableID]; ok {
+		defer logReq("catalog", req, meta, resp, &err)()
+		resp.ErrReadOnly.Why = fmt.Sprintf("%s is system table", name)
 	}
 	return c.upstream.HandleWrite(meta, req, resp)
 }

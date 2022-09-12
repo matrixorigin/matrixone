@@ -51,6 +51,7 @@ func init() {
 	// register TableDef types
 	gob.Register(new(engine.ViewDef))
 	gob.Register(new(engine.CommentDef))
+	gob.Register(new(engine.PartitionDef))
 	gob.Register(new(engine.AttributeDef))
 	gob.Register(new(engine.IndexTableDef))
 	gob.Register(new(engine.PropertiesDef))
@@ -68,8 +69,8 @@ func init() {
 	gob.Register([]uint64{})
 	gob.Register([]float32{})
 	gob.Register([]float64{})
+	gob.Register([]string{})
 	gob.Register([][]any{})
-	gob.Register(new(types.Bytes))
 	gob.Register([]types.Date{})
 	gob.Register([]types.Datetime{})
 	gob.Register([]types.Timestamp{})

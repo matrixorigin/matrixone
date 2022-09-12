@@ -129,7 +129,7 @@ func getConstantValue(vec *vector.Vector) *plan.Const {
 	case types.T_varchar:
 		return &plan.Const{
 			Value: &plan.Const_Sval{
-				Sval: string(vec.Col.(*types.Bytes).Data),
+				Sval: vec.GetString(0),
 			},
 		}
 	default:
@@ -139,7 +139,7 @@ func getConstantValue(vec *vector.Vector) *plan.Const {
 
 func isConstant(e *plan.Expr) bool {
 	switch ef := e.Expr.(type) {
-	case *plan.Expr_C:
+	case *plan.Expr_C, *plan.Expr_T:
 		return true
 	case *plan.Expr_F:
 		overloadID := ef.F.Func.GetObj()

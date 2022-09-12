@@ -15,7 +15,9 @@
 package metadata
 
 import (
+	"bytes"
 	"fmt"
+	"strings"
 )
 
 // IsEmpty return true if is a empty DNShard
@@ -31,4 +33,35 @@ func (m DNShard) Equal(dn DNShard) bool {
 // DebugString returns debug string
 func (m DNShard) DebugString() string {
 	return fmt.Sprintf("%d-%d-%d-%s", m.ShardID, m.ReplicaID, m.LogShardID, m.Address)
+}
+
+// DebugString returns debug string
+func (m DNStore) DebugString() string {
+	n := len(m.Shards)
+	var buf bytes.Buffer
+	buf.WriteString(m.UUID)
+	buf.WriteString("/")
+	buf.WriteString(fmt.Sprintf("%d", len(m.Shards)))
+	buf.WriteString(" DNShards[")
+	for idx, shard := range m.Shards {
+		buf.WriteString(shard.DebugString())
+		if idx < n-1 {
+			buf.WriteString(", ")
+		}
+	}
+	buf.WriteString("]")
+	return buf.String()
+}
+
+// DebugString returns debug string
+func (m CNStore) DebugString() string {
+	return fmt.Sprintf("%s/%s", m.UUID, m.Role.String())
+}
+
+// MustParseCNRole parse CN Role from role string
+func MustParseCNRole(role string) CNRole {
+	if v, ok := CNRole_value[strings.ToUpper(role)]; ok {
+		return CNRole(v)
+	}
+	panic(fmt.Sprintf("invalid CN Role %s", role))
 }

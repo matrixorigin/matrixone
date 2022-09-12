@@ -14,122 +14,42 @@
 
 package lpad
 
-import (
-	"github.com/matrixorigin/matrixone/pkg/container/types"
-)
-
-var (
-	Lpad        func(res *types.Bytes, src *types.Bytes, length uint32, pad *types.Bytes) *types.Bytes
-	LpadVarchar func(a *types.Bytes, b []int64, c *types.Bytes) *types.Bytes
-)
-
-func init() {
-	Lpad = lpadPure
-	LpadVarchar = lpadVarcharPure
+func lpadOne(a string, b0 int, c string) string {
+	c0 := len(c)
+	if c0 == 0 {
+		panic("Pad with empty string")
+	}
+	if len(a) > b0 {
+		return string([]byte(a)[:b0])
+	} else {
+		lens := b0 - len(a)
+		t1 := lens / c0
+		t2 := lens % c0
+		tmps := []byte{}
+		for j := 0; j < t1; j++ {
+			tmps = append(tmps, c...)
+		}
+		tmps = append(tmps, []byte(c)[:t2]...)
+		tmps = append(tmps, a...)
+		return string(tmps)
+	}
 }
 
-func lpadVarcharPure(a *types.Bytes, b []int64, c *types.Bytes) *types.Bytes {
-	var res = &types.Bytes{}
+func LpadVarchar(a []string, b []int64, c []string) []string {
+	// XXX This function, always take b[0] and c[0], is this correct?
+	b0 := int(b[0])
+	c0 := c[0]
+	res := make([]string, len(a))
 	//in fact,the length of three slice is the same with each other
-	for i := 0; i < len(a.Lengths); i++ {
-		if a.Lengths[i] > uint32(b[0]) { //length less
-			res.Offsets = append(res.Offsets, uint32(len(res.Data)))
-			res.Data = append(res.Data, a.Data[a.Offsets[i]:a.Offsets[i]+uint32(b[0])]...)
-			res.Lengths = append(res.Lengths, uint32(b[0]))
-		} else {
-			lens := uint32(b[0]) - a.Lengths[i]
-			t1 := lens / c.Lengths[0]
-			t2 := lens % c.Lengths[0]
-			temp := []byte{}
-			for j := 0; j < int(t1); j++ {
-				temp = append(temp, c.Data[c.Offsets[0]:c.Offsets[0]+c.Lengths[0]]...)
-			}
-			temp = append(temp, c.Data[c.Offsets[0]:c.Offsets[0]+t2]...)
-			temp = append(temp, a.Data[a.Offsets[i]:a.Offsets[i]+a.Lengths[i]]...)
-
-			res.Offsets = append(res.Offsets, uint32(len(res.Data)))
-			res.Data = append(res.Data, temp...)
-			res.Lengths = append(res.Lengths, uint32(len(temp)))
-		}
+	for i := range a {
+		res[i] = lpadOne(a[i], b0, c0)
 	}
 	return res
 }
 
-func lpadPure(res *types.Bytes, src *types.Bytes, length uint32, pad *types.Bytes) *types.Bytes {
-	var retCursor uint32 = 0
-	padLengh := pad.Lengths[0]
-	padOffset := pad.Offsets[0]
-	padBytes := pad.Data[padOffset:padLengh]
-	for idx, offset := range src.Offsets {
-		cursor := offset
-		curLen := src.Lengths[idx]
-		bytes := src.Data[cursor : cursor+curLen]
-
-		if length <= src.Lengths[idx] {
-			slice, size := getSliceFromLeft(bytes, length)
-			for _, b := range slice {
-				res.Data[retCursor] = b
-				retCursor++
-			}
-			if idx != 0 {
-				res.Offsets[idx] = res.Offsets[idx-1] + res.Lengths[idx-1]
-			} else {
-				res.Offsets[idx] = uint32(0)
-			}
-			res.Lengths[idx] = uint32(size)
-		} else {
-			diff := length - curLen
-			if diff <= padLengh {
-				leftpad, size := getSliceFromLeft(padBytes, diff)
-				for _, b := range leftpad {
-					res.Data[retCursor] = b
-					retCursor++
-				}
-				for _, b := range bytes {
-					res.Data[retCursor] = b
-					retCursor++
-				}
-				if idx != 0 {
-					res.Offsets[idx] = res.Offsets[idx-1] + res.Lengths[idx-1]
-				} else {
-					res.Offsets[idx] = uint32(0)
-				}
-				res.Lengths[idx] = uint32(size) + curLen
-			} else {
-				frequency := diff / padLengh
-				remainder := diff % padLengh
-
-				for i := uint32(0); i < frequency; i++ {
-					for j := uint32(0); j < padLengh; j++ {
-						res.Data[retCursor] = padBytes[j]
-						retCursor++
-					}
-				}
-				for k := uint32(0); k < remainder; k++ {
-					res.Data[retCursor] = padBytes[k]
-					retCursor++
-				}
-				for _, b := range bytes {
-					res.Data[retCursor] = b
-					retCursor++
-				}
-				if idx != 0 {
-					res.Offsets[idx] = res.Offsets[idx-1] + res.Lengths[idx-1]
-				} else {
-					res.Offsets[idx] = uint32(0)
-				}
-				res.Lengths[idx] = uint32(length)
-			}
-		}
+func Lpad(res []string, src []string, length uint32, pad []string) []string {
+	for idx, str := range src {
+		res[idx] = lpadOne(str, int(length), pad[idx])
 	}
 	return res
-}
-
-// Slice from left to right, starting from 0
-func getSliceFromLeft(bytes []byte, length uint32) ([]byte, uint32) {
-	elemsize := uint32(len(bytes))
-	if length > elemsize {
-		return bytes, elemsize
-	}
-	return bytes[0:length], length
 }

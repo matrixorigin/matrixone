@@ -28,6 +28,7 @@ type Path struct {
 }
 
 func ParsePath(s string) (path Path, err error) {
+	// split
 	parts := strings.SplitN(s, ServiceNameSeparator, 2)
 	switch len(parts) {
 	case 1:
@@ -37,9 +38,25 @@ func ParsePath(s string) (path Path, err error) {
 		// with service
 		path.Service = parts[0]
 		path.File = parts[1]
-	default:
-		panic("impossible")
 	}
+
+	// validate
+	for _, r := range path.File {
+		// most common patterns first
+		if r >= '0' && r <= '9' ||
+			r >= 'a' && r <= 'z' ||
+			r >= 'A' && r <= 'Z' ||
+			r == '/' {
+			continue
+		}
+		switch r {
+		case '!', '-', '_', '.', '*', '\'', '(', ')':
+			continue
+		}
+		err = fmt.Errorf("%w: invalid file path %s", ErrInvalidPath, path.File)
+		return
+	}
+
 	path.Full = joinPath(path.Service, path.File)
 	return
 }
@@ -52,7 +69,7 @@ func ParsePathAtService(s string, serviceName string) (path Path, err error) {
 	if serviceName != "" &&
 		path.Service != "" &&
 		!strings.EqualFold(path.Service, serviceName) {
-		err = fmt.Errorf("wrong file service name, expecting %s, got %s", serviceName, path.Service)
+		err = fmt.Errorf("%w: expecting %s, got %s", ErrWrongService, serviceName, path.Service)
 		return
 	}
 	return

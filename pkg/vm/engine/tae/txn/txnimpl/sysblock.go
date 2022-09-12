@@ -16,6 +16,7 @@ package txnimpl
 
 import (
 	"bytes"
+	"fmt"
 
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -163,7 +164,7 @@ func (blk *txnSysBlock) isPrimaryKey(schema *catalog.Schema, colIdx int) bool {
 	attrName := schema.ColDefs[colIdx].Name
 	switch schema.Name {
 	case catalog.SystemTable_Columns_Name:
-		return attrName == catalog.SystemColAttr_Name || attrName == catalog.SystemColAttr_DBName || attrName == catalog.SystemColAttr_RelName
+		return attrName == catalog.SystemColAttr_Name || attrName == catalog.SystemColAttr_RelID
 	case catalog.SystemTable_Table_Name:
 		return attrName == catalog.SystemRelAttr_ID
 	case catalog.SystemTable_DB_Name:
@@ -178,8 +179,11 @@ func (blk *txnSysBlock) getColumnTableData(colIdx int) (view *model.ColumnView, 
 	colData := containers.MakeVector(col.Type, col.Nullable())
 	tableFn := func(table *catalog.TableEntry) error {
 		schema := table.GetSchema()
+		tableID := table.GetID()
 		for i, colDef := range table.GetSchema().ColDefs {
 			switch col.Name {
+			case catalog.SystemColAttr_UniqName:
+				colData.Append([]byte(fmt.Sprintf("%d-%s", tableID, colDef.Name)))
 			case catalog.SystemColAttr_AccID:
 				colData.Append(schema.AcInfo.TenantID)
 			case catalog.SystemColAttr_Name:
@@ -193,7 +197,7 @@ func (blk *txnSysBlock) getColumnTableData(colIdx int) (view *model.ColumnView, 
 			case catalog.SystemColAttr_DBName:
 				colData.Append([]byte(table.GetDB().GetName()))
 			case catalog.SystemColAttr_RelID:
-				colData.Append(table.GetID())
+				colData.Append(tableID)
 			case catalog.SystemColAttr_RelName:
 				colData.Append([]byte(table.GetSchema().Name))
 			case catalog.SystemColAttr_ConstraintType:
@@ -259,6 +263,8 @@ func (blk *txnSysBlock) getRelTableData(colIdx int) (view *model.ColumnView, err
 			colData.Append(table.GetDB().GetID())
 		case catalog.SystemRelAttr_Comment:
 			colData.Append([]byte(table.GetSchema().Comment))
+		case catalog.SystemRelAttr_Partition:
+			colData.Append([]byte(table.GetSchema().Partition))
 		case catalog.SystemRelAttr_Persistence:
 			colData.Append([]byte(catalog.SystemPersistRel))
 		case catalog.SystemRelAttr_Kind:

@@ -15,9 +15,36 @@
 package txnstorage
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"fmt"
+
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/pb/txn"
+	"go.uber.org/zap"
 )
 
-type (
-	Timestamp = timestamp.Timestamp
-)
+func logReq[
+	Req any,
+	Resp any,
+](
+	msg string,
+	req Req,
+	meta txn.TxnMeta,
+	resp *Resp,
+	err *error,
+) (
+	deferFunc func(),
+) {
+	logutil.Debug("engine: DN "+msg,
+		zap.String("type", fmt.Sprintf("%T", req)),
+		zap.Any("txn", meta),
+		zap.Any("data", req),
+	)
+	return func() {
+		logutil.Debug("engine: DN "+msg+" result",
+			zap.String("type", fmt.Sprintf("%T", *resp)),
+			zap.Any("txn", meta),
+			zap.Any("data", *resp),
+			zap.Any("error", *err),
+		)
+	}
+}
