@@ -16,6 +16,7 @@ package objectio
 
 import (
 	"bytes"
+	"context"
 	"encoding/binary"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -150,7 +151,7 @@ func (w *ObjectWriter) WriteEnd() (map[int]BlockObject, error) {
 
 // Sync is for testing
 func (w *ObjectWriter) Sync(dir string) error {
-	err := w.object.fs.Write(nil, w.buffer.GetData())
+	err := w.object.fs.Write(context.Background(), w.buffer.GetData())
 	if err != nil {
 		return err
 	}

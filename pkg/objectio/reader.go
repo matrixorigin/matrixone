@@ -72,7 +72,7 @@ func (r *ObjectReader) Read(extent Extent, idxs []uint16) (*fileservice.IOVector
 		}
 		data.Entries = append(data.Entries, entry)
 	}
-	err = r.object.fs.Read(nil, data)
+	err = r.object.fs.Read(context.Background(), data)
 	if err != nil {
 		return nil, err
 	}
@@ -97,7 +97,7 @@ func (r *ObjectReader) ReadIndex(extent Extent, idxs []uint16) (*fileservice.IOV
 		}
 		data.Entries = append(data.Entries, entry)
 	}
-	err = r.object.fs.Read(nil, data)
+	err = r.object.fs.Read(context.Background(), data)
 	if err != nil {
 		return nil, err
 	}
