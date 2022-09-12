@@ -238,10 +238,6 @@ func (b *baseBinder) baseBindColRef(astExpr *tree.UnresolvedName, depth int32, i
 			err = errors.New("", fmt.Sprintf("Column '%s' does not exist", name))
 		}
 	} else {
-		// check table contains unnest
-		if strings.Contains(table, "unnest") {
-			fmt.Println("table contains unnest")
-		}
 		if binding, ok := b.ctx.bindingByTable[table]; ok {
 			colPos = binding.FindColumn(col)
 			if colPos == AmbiguousName {

@@ -21,10 +21,9 @@ import (
 )
 
 type Param struct {
-	Attrs         []string
-	Cols          []*plan.ColDef
-	Name2ColIndex map[string]int32
-	Extern        *tree.UnnestParam
+	Attrs  []string
+	Cols   []*plan.ColDef
+	Extern *tree.UnnestParam
 }
 
 type Argument struct {

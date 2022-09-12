@@ -17,7 +17,6 @@ package compile
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/unnest"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 
@@ -231,7 +230,7 @@ func dupInstruction(in vm.Instruction) vm.Instruction {
 		}
 	case *unnest.Argument:
 		rin.Arg = &unnest.Argument{
-			Es:     arg.Es,
+			Es: arg.Es,
 		}
 	default:
 		panic(errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("Unsupport instruction %T\n", in.Arg)))
@@ -356,24 +355,16 @@ func constructExternal(n *plan.Node, ctx context.Context) *external.Argument {
 	}
 }
 
-func constructUnnest(n *plan.Node, ctx context.Context) *unnest.Argument {
-	logutil.Infof("constructUnnest: %v", n)
+func constructUnnest(n *plan.Node, ctx context.Context, param *tree.UnnestParam) *unnest.Argument {
 	attrs := make([]string, len(n.TableDef.Cols))
 	for j, col := range n.TableDef.Cols {
 		attrs[j] = col.Name
 	}
-	param := &tree.UnnestParam{}
-	err := param.Unmarshal(n.TableDef.UnnestParam)
-	if err != nil {
-		//logutil.Errorf("constructUnnest: %v", err)
-		panic(err)
-	}
 	return &unnest.Argument{
 		Es: &unnest.Param{
-			Attrs:         attrs,
-			Cols:          n.TableDef.Cols,
-			Name2ColIndex: n.TableDef.Name2ColIndex,
-			Extern:        param,
+			Attrs:  attrs,
+			Cols:   n.TableDef.Cols,
+			Extern: param,
 		},
 	}
 }

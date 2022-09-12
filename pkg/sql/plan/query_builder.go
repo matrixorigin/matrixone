@@ -17,7 +17,6 @@ package plan
 import (
 	"encoding/json"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"math"
 	"sort"
 
@@ -95,11 +94,11 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 
 		tag := node.BindingTags[0]
 		newTableDef := &plan.TableDef{
-			Name:          node.TableDef.Name,
-			Defs:          node.TableDef.Defs,
-			Name2ColIndex: node.TableDef.Name2ColIndex,
-			Createsql:     node.TableDef.Createsql,
-			UnnestParam:   node.TableDef.UnnestParam,
+			Name:               node.TableDef.Name,
+			Defs:               node.TableDef.Defs,
+			Name2ColIndex:      node.TableDef.Name2ColIndex,
+			Createsql:          node.TableDef.Createsql,
+			TableFunctionParam: node.TableDef.TableFunctionParam,
 		}
 
 		for i, col := range node.TableDef.Cols {
@@ -924,7 +923,6 @@ func (builder *QueryBuilder) buildUnion(stmt *tree.Select, ctx *BindContext, isR
 }
 
 func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, isRoot bool) (int32, error) {
-	logutil.Infof("buildSelect_unnest")
 	// preprocess CTEs
 	if stmt.With != nil {
 		ctx.cteByName = make(map[string]*CTERef)
@@ -1408,7 +1406,6 @@ func (builder *QueryBuilder) rewriteRightJoinToLeftJoin(nodeID int32) {
 }
 
 func (builder *QueryBuilder) buildFrom(stmt tree.TableExprs, ctx *BindContext) (int32, error) {
-	logutil.Infof("buildFrom_unnest: %v", stmt)
 	if len(stmt) == 1 {
 		return builder.buildTable(stmt[0], ctx)
 	}
@@ -1450,191 +1447,6 @@ func (builder *QueryBuilder) buildFrom(stmt tree.TableExprs, ctx *BindContext) (
 	}
 
 	return leftChildID, err
-}
-
-func (builder *QueryBuilder) buildUnnest(tbl *tree.Unnest, ctx *BindContext) (int32, error) {
-	logutil.Infof("build unnest: %v", tbl.String())
-	tag := builder.genNewTag()
-	colDefs := []*plan.ColDef{
-		{
-			Name: "col",
-			Typ: &plan.Type{
-				Id:       int32(types.T_varchar),
-				Nullable: true,
-				Width:    4,
-			},
-		},
-		{
-			Name: "seq",
-			Typ: &plan.Type{
-				Id:       int32(types.T_int32),
-				Nullable: true,
-			},
-		},
-		{
-			Name: "key",
-			Typ: &plan.Type{
-				Id:       int32(types.T_varchar),
-				Nullable: true,
-				Width:    256,
-			},
-		},
-		{
-			Name: "path",
-			Typ: &plan.Type{
-				Id:       int32(types.T_varchar),
-				Nullable: true,
-				Width:    256,
-			},
-		},
-		{
-			Name: "index",
-			Typ: &plan.Type{
-				Id:       int32(types.T_varchar),
-				Nullable: true,
-				Width:    4,
-			},
-		},
-		{
-			Name: "value",
-			Typ: &plan.Type{
-				Id:       int32(types.T_varchar),
-				Nullable: true,
-				Width:    1024,
-			},
-		},
-		{
-			Name: "this",
-			Typ: &plan.Type{
-				Id:       int32(types.T_varchar),
-				Nullable: true,
-				Width:    1024,
-			},
-		},
-	}
-	paramData, err := tbl.Param.Marshal()
-	if err != nil {
-		return 0, err
-	}
-	node := &plan.Node{
-		NodeType: plan.Node_UNNEST,
-		Cost:     &plan.Cost{},
-		TableDef: &plan.TableDef{
-			TableType:     "UNNEST",
-			Name:          tbl.String(),
-			UnnestParam:   paramData,
-			Cols:          colDefs,
-			Name2ColIndex: map[string]int32{},
-		},
-		BindingTags: []int32{tag},
-	}
-	for i := 0; i < len(colDefs); i++ {
-		node.TableDef.Name2ColIndex[colDefs[i].Name] = int32(i)
-		tmp := &plan.Expr{
-			Typ: colDefs[i].Typ,
-			Expr: &plan.Expr_Col{
-				Col: &plan.ColRef{
-					ColPos: int32(i),
-					Name:   colDefs[i].Name,
-				},
-			},
-		}
-		node.ProjectList = append(node.ProjectList, tmp)
-	}
-	switch o := tbl.Param.Origin.(type) {
-	case *tree.UnresolvedName:
-		schemaName, tableName, colName := o.GetNames()
-		objRef, tableDef := builder.compCtx.Resolve(schemaName, tableName)
-		if objRef == nil {
-			return 0, fmt.Errorf("schema %s not found", schemaName)
-		}
-		if tableDef == nil {
-			return 0, fmt.Errorf("table %s not found", tableName)
-		}
-		scanNode := &plan.Node{
-			NodeType:    plan.Node_TABLE_SCAN,
-			TableDef:    tableDef,
-			ObjRef:      objRef,
-			Cost:        builder.compCtx.Cost(objRef, nil),
-			BindingTags: []int32{builder.genNewTag()},
-		}
-		for i := 0; i < len(tableDef.Cols); i++ {
-			if tableDef.Name2ColIndex == nil {
-				tableDef.Name2ColIndex = map[string]int32{}
-			}
-			tableDef.Name2ColIndex[tableDef.Cols[i].Name] = int32(i)
-			if tableDef.Cols[i].Name == colName {
-				tmp := &plan.Expr{
-					Typ: tableDef.Cols[i].Typ,
-					Expr: &plan.Expr_Col{
-						Col: &plan.ColRef{
-							ColPos: int32(i),
-							Name:   tableName + "." + tableDef.Cols[i].Name,
-						},
-					},
-				}
-				scanNode.ProjectList = append(scanNode.ProjectList, tmp)
-				break
-			}
-		}
-		childId := builder.appendNode(scanNode, ctx)
-		node.Children = []int32{childId}
-	default:
-		break
-
-	}
-
-	nodeID := builder.appendNode(node, ctx)
-	//ctx.hasSingleRow = true
-	cols := []string{"col", "seq", "key", "path", "index", "value", "this"}
-	types :=
-		[]*plan.Type{
-			{
-				Id:       int32(types.T_varchar),
-				Nullable: true,
-				Width:    4,
-			},
-			{
-				Id:       int32(types.T_int32),
-				Nullable: true,
-				Width:    4,
-			},
-			{
-				Id:       int32(types.T_varchar),
-				Nullable: true,
-				Width:    24,
-			},
-			{
-				Id:       int32(types.T_varchar),
-				Nullable: true,
-				Width:    24,
-			},
-			{
-				Id:       int32(types.T_varchar),
-				Nullable: true,
-				Width:    4,
-			},
-			{
-				Id:       int32(types.T_varchar),
-				Nullable: true,
-				Width:    256,
-			},
-			{
-				Id:       int32(types.T_varchar),
-				Nullable: true,
-				Width:    256, //TODO here may not fit
-			},
-		}
-	binding := NewBinding(tag, nodeID, tbl.String(), cols, types)
-	ctx.bindingTree = &BindingTreeNode{
-		binding: binding,
-	}
-	ctx.bindingByTable[tbl.String()] = binding
-	for _, col := range cols {
-		ctx.bindingByCol[col] = binding
-	}
-
-	return nodeID, nil
 }
 
 func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext) (nodeID int32, err error) {
@@ -1845,7 +1657,7 @@ func (builder *QueryBuilder) addBinding(nodeID int32, alias tree.AliasClause, ct
 	var types []*plan.Type
 	var binding *Binding
 
-	if node.NodeType == plan.Node_TABLE_SCAN || node.NodeType == plan.Node_MATERIAL_SCAN || node.NodeType == plan.Node_EXTERNAL_SCAN|| node.NodeType == plan.Node_UNNEST {
+	if node.NodeType == plan.Node_TABLE_SCAN || node.NodeType == plan.Node_MATERIAL_SCAN || node.NodeType == plan.Node_EXTERNAL_SCAN || node.NodeType == plan.Node_UNNEST {
 		if len(alias.Cols) > len(node.TableDef.Cols) {
 			return errors.New("", fmt.Sprintf("table %q has %d columns available but %d columns specified", alias.Alias, len(node.TableDef.Cols), len(alias.Cols)))
 		}

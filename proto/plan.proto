@@ -278,7 +278,7 @@ message TableDef {
 	string table_type 		= 4;
 	string createsql 		= 5;
 	map<string, int32> name2col_index = 6;
-	bytes unnest_param = 7;
+	bytes table_function_param = 7;
 }
 
 message Cost {

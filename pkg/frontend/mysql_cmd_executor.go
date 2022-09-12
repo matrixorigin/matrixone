@@ -1662,10 +1662,6 @@ func (mce *MysqlCmdExecutor) afterRun(stmt tree.Statement, beginInstant time.Tim
 
 // execute query
 func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) (retErr error) {
-	// check sql containes unnest
-	if strings.Contains(sql, "unnest")||strings.Contains(sql, "t.a") {
-		logutil.Infof("sql contains unnest, sql: %s", sql)
-	}
 	beginInstant := time.Now()
 	ses := mce.GetSession()
 	ses.showStmtType = NotShowStatement

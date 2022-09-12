@@ -17,7 +17,6 @@ package compile
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"runtime"
 	"sync/atomic"
 
@@ -329,7 +328,6 @@ func (c *Compile) compileApQuery(qry *plan.Query, ss []*Scope) (*Scope, error) {
 }
 
 func (c *Compile) compilePlanScope(n *plan.Node, ns []*plan.Node) ([]*Scope, error) {
-	logutil.Infof("compile plan scope_unnest: %s", n)
 	switch n.NodeType {
 	case plan.Node_VALUE_SCAN:
 		ds := &Scope{Magic: Normal}
@@ -474,7 +472,6 @@ func (c *Compile) compilePlanScope(n *plan.Node, ns []*plan.Node) ([]*Scope, err
 		}
 		return ss, nil
 	case plan.Node_UNNEST:
-		logutil.Infof("compiling unnest")
 		var (
 			pre []*Scope
 			err error
@@ -488,8 +485,7 @@ func (c *Compile) compilePlanScope(n *plan.Node, ns []*plan.Node) ([]*Scope, err
 			}
 			c.anal.curr = curr
 		}
-		ss := c.compileUnnest(n, pre)
-		return ss, nil
+		return c.compileUnnest(n, pre)
 	default:
 		return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("query '%s' not support now", n))
 	}
@@ -516,15 +512,13 @@ func (c *Compile) compileExternScan(n *plan.Node) []*Scope {
 	return ss
 }
 
-func (c *Compile) compileUnnest(n *plan.Node, pre []*Scope) []*Scope {
-	logutil.Infof("compileTableFuncUnnest: %v", n)
+func (c *Compile) compileUnnest(n *plan.Node, pre []*Scope) ([]*Scope, error) {
 	ds := &Scope{}
 	args := &tree.UnnestParam{}
-	err := args.Unmarshal(n.TableDef.UnnestParam)
+	err := args.Unmarshal(n.TableDef.TableFunctionParam)
 	if err != nil {
-		panic(err)
+		return nil, err
 	}
-	logutil.Infof("compileTableFuncUnnest: %v", args)
 	if args.IsCol {
 		ds.Magic = Merge
 		ds.Proc = process.NewWithAnalyze(c.proc, c.ctx, 1, c.anal.Nodes())
@@ -547,10 +541,10 @@ func (c *Compile) compileUnnest(n *plan.Node, pre []*Scope) []*Scope {
 		ss[i].appendInstruction(vm.Instruction{
 			Op:  vm.Unnest,
 			Idx: c.anal.curr,
-			Arg: constructUnnest(n, c.ctx),
+			Arg: constructUnnest(n, c.ctx, args),
 		})
 	}
-	return ss
+	return ss, nil
 }
 
 func (c *Compile) compileTableScan(n *plan.Node) []*Scope {

@@ -157,3 +157,4 @@ func makeBatch(bat *batch.Batch, ures []*bytejson.UnnestResult, proc *process.Pr
 	seq += 1
 	return bat, nil
 }
+
