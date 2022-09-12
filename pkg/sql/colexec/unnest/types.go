@@ -33,7 +33,7 @@ type Argument struct {
 var (
 	end           = false
 	seq     int32 = 0
-	colName       = "UNNET_DEFAULT"
+	colName       = "UNNEST_DEFAULT"
 	//rows     = 0
 	cols       = []string{"col", "seq", "key", "path", "index", "value", "this"}
 	colDefs    []*plan.ColDef

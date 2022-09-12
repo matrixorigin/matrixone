@@ -20,6 +20,11 @@ import (
 	"fmt"
 )
 
+var (
+	// use this to avoid the error: gob: type not registered for interface: tree.UnresolvedName
+	registered = false
+)
+
 type UnnestParam struct {
 	Origin interface{}
 	Path   string
@@ -76,14 +81,27 @@ func (node Unnest) getOrigin() string {
 //	return ret
 //}
 
+func (p UnnestParam) maybeRegister() {
+	if !registered {
+		switch p.Origin.(type) {
+		case string:
+			break
+		case *UnresolvedName:
+			gob.Register(p.Origin)
+			registered = true
+		}
+	}
+}
+
 func (p UnnestParam) Marshal() ([]byte, error) {
-	gob.Register(p.Origin)
+	p.maybeRegister()
 	buf := new(bytes.Buffer)
 	enc := gob.NewEncoder(buf)
 	err := enc.Encode(p)
 	return buf.Bytes(), err
 }
 func (p *UnnestParam) Unmarshal(data []byte) error {
+	p.maybeRegister()
 	dec := gob.NewDecoder(bytes.NewBuffer(data))
 	return dec.Decode(p)
 }
