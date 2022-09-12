@@ -1761,6 +1761,8 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 	var txnErr error
 	var rspLen uint64
 	var prepareStmt *PrepareStmt
+	var havePrivilege bool
+	var err2 error
 
 	stmt := cws[0].GetAst()
 	mce.beforeRun(stmt)
@@ -1771,10 +1773,19 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		ctx := mce.RecordStatement(requestCtx, ses, proc, cw, beginInstant)
 
 		if ses.GetTenantInfo() != nil {
-			ses.priv = determinePrivilegeSetOfStatement(stmt)
-			havePrivilege, err := authenticatePrivilegeOfStatementWithObjectTypeAccountAndDatabase(requestCtx, ses, stmt)
-			if err != nil {
-				return err
+			ses.SetPrivilege(determinePrivilegeSetOfStatement(stmt))
+			havePrivilege, err2 = authenticatePrivilegeOfStatementWithObjectTypeAccountAndDatabase(requestCtx, ses, stmt)
+			if err2 != nil {
+				return err2
+			}
+
+			if !havePrivilege {
+				return moerr.NewInternalError("do not have privilege to execute the statement")
+			}
+
+			havePrivilege, err2 = authenticatePrivilegeOfStatementWithObjectTypeNone(requestCtx, ses, stmt)
+			if err2 != nil {
+				return err2
 			}
 
 			if !havePrivilege {

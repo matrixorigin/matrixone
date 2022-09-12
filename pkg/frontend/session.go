@@ -692,6 +692,10 @@ func (ses *Session) GetPrivilege() *privilege {
 	return ses.priv
 }
 
+func (ses *Session) SetPrivilege(priv *privilege) {
+	ses.priv = priv
+}
+
 func (th *TxnHandler) SetSession(ses *Session) {
 	th.ses = ses
 }
