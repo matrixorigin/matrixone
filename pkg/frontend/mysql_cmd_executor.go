@@ -1603,7 +1603,7 @@ func buildPlan(requestCtx context.Context, ses *Session, ctx plan2.CompilerConte
 		}
 	}
 	if ret != nil {
-		if ses.GetTenantInfo() != nil {
+		if ses != nil && ses.GetTenantInfo() != nil {
 			yes, err := authenticatePrivilegeOfStatementWithObjectTypeTable(requestCtx, ses, stmt, ret)
 			if err != nil {
 				return nil, err
@@ -1633,7 +1633,7 @@ func buildPlan(requestCtx context.Context, ses *Session, ctx plan2.CompilerConte
 		ret, err = plan2.BuildPlan(ctx, stmt)
 	}
 	if ret != nil {
-		if ses.GetTenantInfo() != nil {
+		if ses != nil && ses.GetTenantInfo() != nil {
 			yes, err := authenticatePrivilegeOfStatementWithObjectTypeTable(requestCtx, ses, stmt, ret)
 			if err != nil {
 				return nil, err
