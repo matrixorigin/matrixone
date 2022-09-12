@@ -540,8 +540,7 @@ func Test_determinePrivilege(t *testing.T) {
 
 	convey.Convey("privilege of statement", t, func() {
 		for i := 0; i < len(args); i++ {
-			var priv *privilege
-			priv = determinePrivilegeSetOfStatement(args[i].stmt)
+			priv := determinePrivilegeSetOfStatement(args[i].stmt)
 			convey.So(priv, convey.ShouldResemble, args[i].priv)
 		}
 	})

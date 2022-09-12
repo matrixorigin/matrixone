@@ -830,14 +830,6 @@ const (
 	privilegeKindNone                         //does not need any privilege
 )
 
-type withGrantOptionKind int
-
-const (
-	withGrantOptionKindNone      withGrantOptionKind = iota //no with_grant_option
-	withGrantOptionKindRole                                 //with_grant_option in mo_user_grant or mo_role_grant
-	withGrantOptionKindPrivilege                            //with_grant_option in mo_role_privs
-)
-
 type privilege struct {
 	kind privilegeKind
 	//account: the privilege can be defined before constructing the plan.
@@ -1087,12 +1079,6 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 	return &privilege{kind, objType, entries, special}
 }
 
-// determineRoleSetOfUser decides the roles that the user has.
-// That is the Set R for the role set.
-func determineRoleSetOfUser(tenant *TenantInfo) TenantInfo {
-	return *tenant
-}
-
 // privilege will be done on the table
 type privilegeTips struct {
 	typ          PrivilegeType
@@ -1173,7 +1159,7 @@ func convertPrivilegeTipsToPrivilege(priv *privilege, arr privilegeTipsArray) {
 
 	dedup := make(map[pair]int8)
 
-	var entries []privilegeEntry
+	entries := make([]privilegeEntry, 0, len(arr))
 	for _, tips := range arr {
 		entries = append(entries, privilegeEntry{
 			privilegeId:    tips.typ,
@@ -1190,7 +1176,7 @@ func convertPrivilegeTipsToPrivilege(priv *privilege, arr privilegeTipsArray) {
 	//predefined privilege : tableAll, ownership
 	predefined := []PrivilegeType{PrivilegeTypeTableAll /*,PrivilegeTypeTableOwnership*/}
 	for _, p := range predefined {
-		for par, _ := range dedup {
+		for par := range dedup {
 			entries = append(entries, privilegeEntry{
 				privilegeId:    p,
 				privilegeLevel: 0,
@@ -1804,36 +1790,6 @@ func authenticatePrivilegeOfStatementWithObjectTypeNone(ctx context.Context, ses
 			//in the version 0.6, only the moAdmin and accountAdmin can revoke the privilege.
 			return tenant.IsAdminRole(), nil
 		}
-	}
-
-	return false, nil
-}
-
-// authenticatePrivilege decides the user has the privilege of executing the statement.
-func authenticatePrivilege(ctx context.Context, ses *Session, priv *privilege, stmt tree.Statement) (bool, error) {
-	switch priv.kind {
-	case privilegeKindInherit: //for the GrantRole
-		//TODO: need databaseid for object_type = database
-		//TODO: need tableid for object_type = table
-		//TODO: check with_grant_option
-		//Check with_grant_option first.
-		//TODO:
-		fallthrough
-	case privilegeKindGeneral:
-		//TODO: need databaseid for object_type = database
-		//TODO: need tableid for object_type = table
-		ok, err := determinePrivilegesOfUserSatisfyPrivilegeSet(ctx, ses, priv, stmt)
-		if err != nil {
-			return false, err
-		}
-		if ok {
-			return ok, nil
-		}
-
-	case privilegeKindSpecial: //for the Grant/Revoke Privilege
-		//TODO: check MOADMIN / ACCOUNTADMIN, with_grant_option, owner of object
-	case privilegeKindNone:
-		return true, nil
 	}
 
 	return false, nil
