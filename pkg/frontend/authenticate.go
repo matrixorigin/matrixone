@@ -1105,6 +1105,7 @@ func (pota privilegeTipsArray) String() string {
 
 // extractPrivilegeTipsFromPlan extracts the privilege tips from the plan
 func extractPrivilegeTipsFromPlan(p *plan2.Plan) privilegeTipsArray {
+	//NOTE: the pots may be nil when the plan does operate any table.
 	var pots privilegeTipsArray
 	appendPot := func(pot privilegeTips) {
 		pots = append(pots, pot)
@@ -1154,6 +1155,8 @@ func convertPrivilegeTipsToPrivilege(priv *privilege, arr privilegeTipsArray) {
 		return
 	}
 
+	//NOTE: when the arr is nil, it denotes that there is no operation on the table.
+
 	type pair struct {
 		databaseName string
 		tableName    string
@@ -1197,6 +1200,10 @@ func convertPrivilegeTipsToPrivilege(priv *privilege, arr privilegeTipsArray) {
 // The algorithm 2.
 func determineRoleSetSatisfyPrivilegeSet(ctx context.Context, bh BackgroundExec, roleIds []int64, priv *privilege) (bool, error) {
 	var rsset []ExecResult
+	//there is no privilege needs, just approve
+	if len(priv.entries) == 0 {
+		return true, nil
+	}
 	for _, roleId := range roleIds {
 		for _, entry := range priv.entries {
 			if entry.privilegeId == PrivilegeTypeAccountOwnership || entry.privilegeId == PrivilegeTypeUserOwnership || entry.privilegeId == PrivilegeTypeTableOwnership {
