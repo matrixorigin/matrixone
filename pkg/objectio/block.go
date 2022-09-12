@@ -130,7 +130,7 @@ func (b *Block) UnMarshalMeta(data []byte) error {
 		return err
 	}
 	b.columns = make([]ColumnObject, b.header.columnCount)
-	for i, _ := range b.columns {
+	for i := range b.columns {
 		b.columns[i] = NewColumnBlock(uint16(i), b)
 		err = b.columns[i].(*ColumnBlock).UnMarshalMate(cache)
 		if err != nil {
