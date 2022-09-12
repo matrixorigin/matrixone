@@ -361,6 +361,11 @@ func (store *txnStore) ApplyRollback() (err error) {
 }
 
 func (store *txnStore) WaitPrepared() (err error) {
+	for _, db := range store.dbs {
+		if err = db.WaitPrepared(); err != nil {
+			return
+		}
+	}
 	for _, e := range store.logs {
 		if err = e.WaitDone(); err != nil {
 			break

@@ -320,11 +320,15 @@ func (db *txnDB) ApplyRollback() (err error) {
 	return
 }
 
-func (db *txnDB) ApplyCommit() (err error) {
-	now := time.Now()
+func (db *txnDB) WaitPrepared() (err error) {
 	for _, table := range db.tables {
 		table.WaitSynced()
 	}
+	return
+}
+
+func (db *txnDB) ApplyCommit() (err error) {
+	now := time.Now()
 	if db.createEntry != nil {
 		if err = db.createEntry.ApplyCommit(db.store.cmdMgr.MakeLogIndex(db.ddlCSN)); err != nil {
 			return
