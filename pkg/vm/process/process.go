@@ -21,14 +21,26 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 )
 
 // New creates a new Process.
 // A process stores the execution context.
-func New(m *mheap.Mheap) *Process {
+func New(
+	ctx context.Context,
+	m *mheap.Mheap,
+	txnClient client.TxnClient,
+	txnOperator client.TxnOperator,
+	fileService fileservice.FileService,
+) *Process {
 	return &Process{
-		mp: m,
+		mp:          m,
+		Ctx:         ctx,
+		TxnClient:   txnClient,
+		TxnOperator: txnOperator,
+		FileService: fileService,
 	}
 }
 
@@ -46,6 +58,7 @@ func NewFromProc(p *Process, ctx context.Context, regNumber int) *Process {
 	proc.Id = p.Id
 	proc.mp = p.Mp()
 	proc.Lim = p.Lim
+	proc.TxnClient = p.TxnClient
 	proc.TxnOperator = p.TxnOperator
 	proc.AnalInfos = p.AnalInfos
 	proc.SessionInfo = p.SessionInfo

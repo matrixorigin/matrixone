@@ -209,7 +209,7 @@ func checkResult(t *testing.T, desc bool, vec *vector.Vector, os []int64) {
 func newTestCase(desc bool, m *mheap.Mheap, typ types.Type) testCase {
 	return testCase{
 		desc: desc,
-		proc: process.New(m),
+		proc: testutil.NewProcessWithMheap(m),
 		vec:  testutil.NewVector(Rows, typ, m, true, nil),
 	}
 }

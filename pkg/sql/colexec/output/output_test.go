@@ -52,7 +52,7 @@ func init() {
 	gm := guest.New(1<<30, hm)
 	tcs = []outputTestCase{
 		{
-			proc: process.New(mheap.New(gm)),
+			proc: testutil.NewProcessWithMheap(mheap.New(gm)),
 			types: []types.Type{
 				{Oid: types.T_int8},
 			},

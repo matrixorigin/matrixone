@@ -735,6 +735,18 @@ func extractRowFromVector(ses *Session, vec *vector.Vector, i int, row []interfa
 				row[i] = vs[rowIndex].ToStringWithScale(scale)
 			}
 		}
+	case types.T_uuid:
+		if !nulls.Any(vec.Nsp) {
+			vs := vec.Col.([]types.Uuid)
+			row[i] = vs[rowIndex].ToString()
+		} else {
+			if nulls.Contains(vec.Nsp, uint64(rowIndex)) { //is null
+				row[i] = nil
+			} else {
+				vs := vec.Col.([]types.Uuid)
+				row[i] = vs[rowIndex].ToString()
+			}
+		}
 	default:
 		logutil.Errorf("extractRowFromVector : unsupported type %d \n", vec.Typ.Oid)
 		return fmt.Errorf("extractRowFromVector : unsupported type %d", vec.Typ.Oid)
@@ -748,7 +760,7 @@ func (mce *MysqlCmdExecutor) handleChangeDB(requestCtx context.Context, db strin
 	//TODO: check meta data
 	if _, err := ses.Pu.StorageEngine.Database(requestCtx, db, txnHandler.GetTxn()); err != nil {
 		//echo client. no such database
-		return NewMysqlError(ER_BAD_DB_ERROR, db)
+		return moerr.New(moerr.ER_BAD_DB_ERROR, db)
 	}
 	oldDB := ses.GetDatabaseName()
 	ses.SetDatabaseName(db)
@@ -862,7 +874,7 @@ func (mce *MysqlCmdExecutor) handleLoadData(requestCtx context.Context, load *tr
 	dbHandler, err := ses.GetStorage().Database(requestCtx, loadDb, txnHandler.GetTxn())
 	if err != nil {
 		//echo client. no such database
-		return NewMysqlError(ER_BAD_DB_ERROR, loadDb)
+		return moerr.New(moerr.ER_BAD_DB_ERROR, loadDb)
 	}
 
 	//change db to the database in the LOAD DATA statement if necessary
@@ -878,7 +890,7 @@ func (mce *MysqlCmdExecutor) handleLoadData(requestCtx context.Context, load *tr
 	tableHandler, err := dbHandler.Relation(requestCtx, loadTable)
 	if err != nil {
 		//echo client. no such table
-		return NewMysqlError(ER_NO_SUCH_TABLE, loadDb, loadTable)
+		return moerr.New(moerr.ER_NO_SUCH_TABLE, loadDb, loadTable)
 	}
 
 	/*
@@ -892,7 +904,7 @@ func (mce *MysqlCmdExecutor) handleLoadData(requestCtx context.Context, load *tr
 	/*
 		response
 	*/
-	info := NewMysqlError(ER_LOAD_INFO, result.Records, result.Deleted, result.Skipped, result.Warnings, result.WriteTimeout).Error()
+	info := moerr.New(moerr.ER_LOAD_INFO, result.Records, result.Deleted, result.Skipped, result.Warnings, result.WriteTimeout).Error()
 	resp := NewOkResponse(result.Records, 0, uint16(result.Warnings), 0, int(COM_QUERY), info)
 	if err = proto.SendResponse(resp); err != nil {
 		return fmt.Errorf("routine send response failed. error:%v ", err)
@@ -911,7 +923,7 @@ func (mce *MysqlCmdExecutor) handleCmdFieldList(requestCtx context.Context, icfl
 
 	dbName := ses.GetDatabaseName()
 	if dbName == "" {
-		return NewMysqlError(ER_NO_DB_ERROR)
+		return moerr.New(moerr.ER_NO_DB_ERROR)
 	}
 
 	//Get table infos for the database from the cube
@@ -1658,7 +1670,13 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 	ses.SetSql(sql)
 	ses.ep.Outfile = false
 
-	proc := process.New(mheap.New(ses.GuestMmu))
+	proc := process.New(
+		requestCtx,
+		mheap.New(ses.GuestMmu),
+		ses.Pu.TxnClient,
+		ses.GetTxnHandler().txn,
+		ses.Pu.FileService,
+	)
 	proc.Id = mce.getNextProcessId()
 	proc.Lim.Size = ses.Pu.SV.ProcessLimitationSize
 	proc.Lim.BatchRows = ses.Pu.SV.ProcessLimitationBatchRows
@@ -1671,7 +1689,6 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		Version:      serverVersion,
 		TimeZone:     ses.timeZone,
 	}
-	proc.FileService = ses.Pu.FileService
 
 	cws, err := GetComputationWrapper(ses.GetDatabaseName(),
 		sql,
@@ -1679,7 +1696,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		ses.Pu.StorageEngine,
 		proc, ses)
 	if err != nil {
-		return NewMysqlError(ER_PARSE_ERROR, err, "")
+		return moerr.New(moerr.ER_PARSE_ERROR, err, "")
 	}
 
 	defer func() {
@@ -2401,6 +2418,8 @@ func convertEngineTypeToMysqlType(engineType types.T, col *MysqlColumn) error {
 		col.SetColumnType(defines.MYSQL_TYPE_DECIMAL)
 	case types.T_blob:
 		col.SetColumnType(defines.MYSQL_TYPE_BLOB)
+	case types.T_uuid:
+		col.SetColumnType(defines.MYSQL_TYPE_UUID)
 	default:
 		return fmt.Errorf("RunWhileSend : unsupported type %d", engineType)
 	}

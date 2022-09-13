@@ -51,7 +51,7 @@ func TestCastStringToJson(t *testing.T) {
 			wantScalar: wantScalar,
 		}
 	}
-	procs := makeProcess()
+	procs := testutil.NewProc()
 	cases := []caseStruct{
 		makeCase("Test01", `{"a":1,"b":2}`, true, procs, types.T_json, true),
 		makeCase("Test02", `{"a":1,"b":2}`, false, procs, types.T_json, false),
@@ -76,7 +76,7 @@ func TestCastSameType(t *testing.T) {
 		return vectors
 	}
 
-	procs := makeProcess()
+	procs := testutil.NewProc()
 	cases := []struct {
 		name       string
 		vecs       []*vector.Vector
@@ -246,7 +246,7 @@ func TestCastSameType2(t *testing.T) {
 		return vectors
 	}
 
-	procs := makeProcess()
+	procs := testutil.NewProc()
 	//types.Date | types.Datetime | types.Timestamp
 	cases := []struct {
 		name       string
@@ -329,7 +329,7 @@ func TestCastLeftToRight(t *testing.T) {
 		return vectors
 	}
 
-	procs := makeProcess()
+	procs := testutil.NewProc()
 	cases := []struct {
 		name       string
 		vecs       []*vector.Vector
@@ -1062,7 +1062,7 @@ func TestCastSpecials1Int(t *testing.T) {
 		return vectors
 	}
 
-	procs := makeProcess()
+	procs := testutil.NewProc()
 	cases := []struct {
 		name       string
 		vecs       []*vector.Vector
@@ -1374,7 +1374,7 @@ func TestCastSpecials1Float(t *testing.T) {
 		return vectors
 	}
 
-	procs := makeProcess()
+	procs := testutil.NewProc()
 	cases := []struct {
 		name       string
 		vecs       []*vector.Vector
@@ -1490,7 +1490,7 @@ func TestCastSpecials2Float(t *testing.T) {
 		return vectors
 	}
 
-	procs := makeProcess()
+	procs := testutil.NewProc()
 	cases := []struct {
 		name       string
 		vecs       []*vector.Vector
@@ -1613,7 +1613,7 @@ func TestCastSpecials3(t *testing.T) {
 		return vectors
 	}
 
-	procs := makeProcess()
+	procs := testutil.NewProc()
 	cases := []struct {
 		name       string
 		vecs       []*vector.Vector
@@ -1739,7 +1739,7 @@ func TestCastSpecial4(t *testing.T) {
 	}
 	resType := types.T_decimal128.ToType()
 	decimal128 := types.Decimal128FromInt32(123)
-	procs := makeProcess()
+	procs := testutil.NewProc()
 	cases := []struct {
 		name       string
 		vecs       []*vector.Vector
@@ -2101,76 +2101,10 @@ func TestCastVarcharAsDate(t *testing.T) {
 	})
 }
 
-func TestCastTimestampAsVarchar(t *testing.T) {
-	//Cast converts timestamp to varchar
-	procs := testutil.NewProc()
-	cases := []struct {
-		name     string
-		vecs     []*vector.Vector
-		proc     *process.Process
-		input    []types.Timestamp
-		expected []string
-		isScalar bool
-	}{
-		//{
-		//	name:  "01 - normal test",
-		//	proc:  procs,
-		//	input: []types.Timestamp{66823357574906480},
-		//	expected: &types.Bytes{
-		//		Data:    []byte("2020-06-14 16:24:15.230000"),
-		//		Offsets: []uint32{0},
-		//		Lengths: []uint32{26},
-		//	},
-		//	isScalar: false,
-		//},
-		//{
-		//	name:  "02 - scalar test",
-		//	proc:  procs,
-		//	input: []types.Timestamp{66823357574906480},
-		//	expected: &types.Bytes{
-		//		Data:    []byte("2020-06-14 16:24:15.230000"),
-		//		Offsets: []uint32{0},
-		//		Lengths: []uint32{26},
-		//	},
-		//	isScalar: true,
-		//},
-		{
-			name:     "03 - null test",
-			proc:     procs,
-			isScalar: true,
-		},
-	}
-
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			vecs := make([]*vector.Vector, 2)
-			if c.input != nil {
-				vecs[0] = vector.New(types.T_timestamp.ToType())
-				vecs[0].Col = c.input
-				vecs[0].IsConst = c.isScalar
-			} else {
-				vecs[0] = testutil.MakeScalarNull(types.T_timestamp, 0)
-			}
-			vecs[1] = vector.New(types.T_varchar.ToType())
-
-			result, err := Cast(vecs, c.proc)
-			if err != nil {
-				t.Fatal(err)
-			}
-			require.Equal(t, c.isScalar, result.IsScalar())
-		})
-	}
-}
-
 func TestCastFloatAsDecimal(t *testing.T) {
 	makeTempVectors := func(leftVal []float32, leftType types.Type, rightType types.Type) []*vector.Vector {
 		vecs := make([]*vector.Vector, 2)
-		vecs[0] = &vector.Vector{
-			Col:     leftVal,
-			Typ:     leftType,
-			Nsp:     &nulls.Nulls{},
-			IsConst: true,
-		}
+		vecs[0] = vector.NewConstFixed(leftType, 1, leftVal[0])
 		vecs[1] = &vector.Vector{
 			Col: nil,
 			Typ: rightType,
@@ -2190,7 +2124,7 @@ func TestCastFloatAsDecimal(t *testing.T) {
 		{
 			name:      "TEST01",
 			vecs:      makeTempVectors([]float32{123.0}, leftType, rightType),
-			proc:      makeProcess(),
+			proc:      testutil.NewProc(),
 			wantBytes: []types.Decimal64{types.Decimal64FromFloat64(123.0)},
 		},
 	}
@@ -2222,7 +2156,7 @@ func TestCastDecimalAsString(t *testing.T) {
 		{
 			name: "TEST01",
 			vecs: makeTempVectors([]types.Decimal64{types.Decimal64FromInt32(1230)}, leftType, rightType),
-			proc: makeProcess(),
+			proc: testutil.NewProc(),
 			wantBytes: [][]byte{
 				{0x31, 0x32, 0x33, 0x30},
 			},
@@ -2240,12 +2174,7 @@ func TestCastDecimalAsString(t *testing.T) {
 func TestCastTimestampAsDate(t *testing.T) {
 	makeTempVectors := func(leftVal []types.Timestamp, leftType types.Type, rightType types.Type) []*vector.Vector {
 		vecs := make([]*vector.Vector, 2)
-		vecs[0] = &vector.Vector{
-			Col:     leftVal,
-			Typ:     leftType,
-			Nsp:     &nulls.Nulls{},
-			IsConst: true,
-		}
+		vecs[0] = vector.NewConstFixed(leftType, 1, leftVal[0])
 		vecs[1] = &vector.Vector{
 			Col: nil,
 			Typ: rightType,
@@ -2298,7 +2227,7 @@ func TestCastDecimal64AsDecimal128(t *testing.T) {
 	d64_33333300 := types.Decimal64FromInt32(333333000)
 	d128_33333300 := types.Decimal128FromInt32(333333000)
 
-	procs := makeProcess()
+	procs := testutil.NewProc()
 	cases := []struct {
 		name       string
 		vecs       []*vector.Vector
@@ -2357,7 +2286,7 @@ func TestCastDecimal64AsDecimal64(t *testing.T) {
 	//decimal(10, 4)
 	destType := types.Type{Oid: types.T_decimal64, Size: 8, Width: 10, Scale: 4}
 
-	procs := makeProcess()
+	procs := testutil.NewProc()
 	cases := []struct {
 		name       string
 		vecs       []*vector.Vector
@@ -2414,7 +2343,7 @@ func TestCastDecimal128AsDecimal128(t *testing.T) {
 	leftType := types.Type{Oid: types.T_decimal128, Size: 16, Width: 20, Scale: 5}
 	destType := types.Type{Oid: types.T_decimal128, Size: 16, Width: 20, Scale: 5}
 
-	procs := makeProcess()
+	procs := testutil.NewProc()
 	cases := []struct {
 		name       string
 		vecs       []*vector.Vector
@@ -3042,7 +2971,7 @@ func TestCastNullAsAllType(t *testing.T) {
 		return vectors
 	}
 
-	procs := makeProcess()
+	procs := testutil.NewProc()
 	cases := []struct {
 		name       string
 		vecs       []*vector.Vector
@@ -4214,7 +4143,7 @@ func TestCastBoolAsString(t *testing.T) {
 		return vectors
 	}
 
-	procs := makeProcess()
+	procs := testutil.NewProc()
 	cases := []struct {
 		name       string
 		vecs       []*vector.Vector
@@ -4282,7 +4211,7 @@ func TestCastDateAsDatetimeAndString(t *testing.T) {
 		return vectors
 	}
 
-	procs := makeProcess()
+	procs := testutil.NewProc()
 	cases := []struct {
 		name       string
 		vecs       []*vector.Vector
@@ -4354,7 +4283,7 @@ func TestCastDatetimeAsDateAndString(t *testing.T) {
 		return vectors
 	}
 
-	procs := makeProcess()
+	procs := testutil.NewProc()
 	cases := []struct {
 		name       string
 		vecs       []*vector.Vector
@@ -4414,6 +4343,103 @@ func TestCastDatetimeAsDateAndString(t *testing.T) {
 		})
 	}
 
+}
+
+// cast uuid to string
+func TestCastUuidAsString(t *testing.T) {
+	// White box test
+	convey.Convey("test cast uuid to string", t, func() {
+		cases := []struct {
+			uuid types.Uuid
+			str  string
+		}{
+			{
+				uuid: [16]byte{13, 86, 135, 218, 42, 103, 17, 237, 153, 224, 0, 12, 41, 132, 121, 4},
+				str:  "0d5687da-2a67-11ed-99e0-000c29847904",
+			},
+			{
+				uuid: [16]byte{97, 25, 223, 253, 42, 107, 17, 237, 153, 224, 0, 12, 41, 132, 121, 4},
+				str:  "6119dffd-2a6b-11ed-99e0-000c29847904",
+			},
+			{
+				uuid: [16]byte{62, 53, 10, 92, 34, 42, 17, 235, 171, 239, 2, 66, 172, 17, 0, 2},
+				str:  "3e350a5c-222a-11eb-abef-0242ac110002",
+			},
+			{
+				uuid: [16]byte{62, 53, 10, 92, 34, 42, 17, 235, 171, 239, 2, 66, 172, 17, 0, 2},
+				str:  "3e350a5c222a11ebabef0242ac110002",
+			},
+		}
+
+		var uuids []types.Uuid
+		var expects []string
+		for _, c := range cases {
+			uuids = append(uuids, c.uuid)
+			expects = append(expects, c.str)
+		}
+
+		srcVector := testutil.MakeUuidVector(uuids, nil)
+		destVector := testutil.MakeVarcharVector(nil, nil)
+
+		wantVec := testutil.MakeVarcharVector(expects, nil)
+		proc := testutil.NewProc()
+		res, err := Cast([]*vector.Vector{srcVector, destVector}, proc)
+		convey.ShouldBeNil(err)
+		compare := testutil.CompareVectors(wantVec, res)
+		convey.ShouldBeTrue(compare)
+	})
+
+}
+
+// cast string to uuid
+func TestCastStringToUuid(t *testing.T) {
+	// White box test
+	convey.Convey("test cast to uuid case", t, func() {
+		cases := []struct {
+			str  string
+			uuid string
+		}{
+			{
+				str:  "0d5687da-2a67-11ed-99e0-000c29847904",
+				uuid: "0d5687da-2a67-11ed-99e0-000c29847904",
+				//uuid: [16]byte{13, 86, 135, 218, 42, 103, 17, 237, 153, 224, 0, 12, 41, 132, 121, 4},
+			},
+			{
+				str:  "6119dffd-2a6b-11ed-99e0-000c29847904",
+				uuid: "6119dffd-2a6b-11ed-99e0-000c29847904",
+				//uuid: [16]byte{97, 25, 223, 253, 42, 107, 17, 237, 153, 224, 0, 12, 41, 132, 121, 4},
+			},
+			{
+				str:  "3e350a5c-222a-11eb-abef-0242ac110002",
+				uuid: "3e350a5c-222a-11eb-abef-0242ac110002",
+				//uuid: [16]byte{62, 53, 10, 92, 34, 42, 17, 235, 171, 239, 2, 66, 172, 17, 0, 2},
+			},
+			{
+				str:  "3e350a5c222a11ebabef0242ac110002",
+				uuid: "3e350a5c-222a-11eb-abef-0242ac110002",
+				//uuid: [16]byte{62, 53, 10, 92, 34, 42, 17, 235, 171, 239, 2, 66, 172, 17, 0, 2},
+			},
+		}
+
+		var srcstrs []string
+		var expects []string
+		for _, c := range cases {
+			srcstrs = append(srcstrs, c.str)
+			expects = append(expects, c.uuid)
+		}
+
+		srcVector := testutil.MakeVarcharVector(srcstrs, nil)
+		destVector := testutil.MakeUuidVector(nil, nil)
+
+		wantVec := testutil.MakeUuidVectorByString(expects, nil)
+		proc := testutil.NewProc()
+		res, err := Cast([]*vector.Vector{srcVector, destVector}, proc)
+		convey.ShouldBeNil(err)
+		compare := testutil.CompareVectors(wantVec, res)
+		convey.ShouldBeTrue(compare)
+	})
+
+	// tolerance test
 }
 
 func makeTypeVector(t types.T) *vector.Vector {

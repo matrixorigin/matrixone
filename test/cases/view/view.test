@@ -1,11 +1,15 @@
 -- @label:bvt
 drop table if exists t1;
+drop table if exists t2;
 create table t1 (a int, b int);
+create table t2 (aa int, bb varchar(20));
 create view v1 as select * from t1;
 select * from v1;
 insert into t1 values (1, 11), (2, 22), (3, 33);
+insert into t2 values (1, "aa"), (2, "bb");
 show columns from v1;
 select * from v1 where a > 1;
+select * from v1, t2 where v1.a = t2.aa;
 create database db2;
 use db2;
 select * from view.v1 where a > 1;

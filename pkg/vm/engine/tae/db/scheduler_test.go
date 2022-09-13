@@ -160,7 +160,7 @@ func TestCheckpoint2(t *testing.T) {
 	t.Log(tae.Wal.GetPenddingCnt())
 	err := meta.GetBlockData().Destroy()
 	assert.Nil(t, err)
-	task, err := tae.Scheduler.ScheduleScopedFn(tasks.WaitableCtx, tasks.CheckpointTask, nil, tae.Catalog.CheckpointClosure(tae.Scheduler.GetSafeTS()))
+	task, err := tae.Scheduler.ScheduleScopedFn(tasks.WaitableCtx, tasks.CheckpointTask, nil, tae.Catalog.CheckpointClosure(tae.Scheduler.GetCheckpointTS()))
 	assert.Nil(t, err)
 	err = task.WaitDone()
 	assert.Nil(t, err)

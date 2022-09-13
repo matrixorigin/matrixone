@@ -15,16 +15,10 @@
 package unary
 
 import (
-	"errors"
-
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/reverse"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-)
-
-var (
-	errorReverseStringFailed = errors.New("errors happened in reversing string")
 )
 
 func Reverse(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {

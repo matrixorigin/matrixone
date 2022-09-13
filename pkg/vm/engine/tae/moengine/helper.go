@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil/logutil2"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 
@@ -27,17 +28,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 )
 
-type TenantIDKey struct{}
-type UserIDKey struct{}
-type RoleIDKey struct{}
-
 func txnBindAccessInfoFromCtx(txn txnif.AsyncTxn, ctx context.Context) {
 	if ctx == nil {
 		return
 	}
-	tid, okt := ctx.Value(TenantIDKey{}).(uint32)
-	uid, oku := ctx.Value(UserIDKey{}).(uint32)
-	rid, okr := ctx.Value(RoleIDKey{}).(uint32)
+	tid, okt := ctx.Value(defines.TenantIDKey{}).(uint32)
+	uid, oku := ctx.Value(defines.UserIDKey{}).(uint32)
+	rid, okr := ctx.Value(defines.RoleIDKey{}).(uint32)
 	logutil2.Debugf(ctx, "try set %d txn access info to t%d(%v) u%d(%v) r%d(%v), ", txn.GetID(), tid, okt, uid, oku, rid, okr)
 	if okt { // TODO: tenantID is required, or all need to be ok?
 		txn.BindAccessInfo(tid, uid, rid)

@@ -86,6 +86,8 @@ func CompareGeneric(a, b any, t types.Type) int64 {
 		return CompareOrdered[types.Date](a, b)
 	case types.T_datetime:
 		return CompareOrdered[types.Datetime](a, b)
+	case types.T_uuid:
+		return types.CompareUuid(a.(types.Uuid), b.(types.Uuid))
 	case types.T_char, types.T_varchar, types.T_blob, types.T_json:
 		return CompareBytes(a, b)
 	default:
