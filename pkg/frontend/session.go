@@ -17,9 +17,11 @@ package frontend
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"strings"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -114,6 +116,8 @@ type Session struct {
 	uuid uuid.UUID
 
 	timeZone *time.Location
+
+	priv *privilege
 }
 
 func NewSession(proto Protocol, gm *guest.Mmu, mp *mempool.Mempool, PU *config.ParameterUnit, gSysVars *GlobalSystemVariables) *Session {
@@ -600,9 +604,9 @@ func (ses *Session) AuthenticateUser(userInput string) ([]byte, error) {
 	ses.SetTenantInfo(tenant)
 
 	//step1 : check tenant exists or not in SYS tenant context
-	sysTenantCtx := context.WithValue(ses.requestCtx, moengine.TenantIDKey{}, uint32(sysAccountID))
-	sysTenantCtx = context.WithValue(sysTenantCtx, moengine.UserIDKey{}, uint32(rootID))
-	sysTenantCtx = context.WithValue(sysTenantCtx, moengine.RoleIDKey{}, uint32(moAdminRoleID))
+	sysTenantCtx := context.WithValue(ses.requestCtx, defines.TenantIDKey{}, uint32(sysAccountID))
+	sysTenantCtx = context.WithValue(sysTenantCtx, defines.UserIDKey{}, uint32(rootID))
+	sysTenantCtx = context.WithValue(sysTenantCtx, defines.RoleIDKey{}, uint32(moAdminRoleID))
 	sqlForCheckTenant := getSqlForCheckTenant(tenant.GetTenant())
 	rsset, err := executeSQLInBackgroundSession(sysTenantCtx, ses.GuestMmu, ses.Mempool, ses.Pu, sqlForCheckTenant)
 	if err != nil {
@@ -621,7 +625,7 @@ func (ses *Session) AuthenticateUser(userInput string) ([]byte, error) {
 	//step2 : check user exists or not in general tenant.
 	//step3 : get the password of the user
 
-	tenantCtx := context.WithValue(ses.requestCtx, moengine.TenantIDKey{}, uint32(tenantID))
+	tenantCtx := context.WithValue(ses.requestCtx, defines.TenantIDKey{}, uint32(tenantID))
 
 	//Get the password of the user in an independent session
 	sqlForPasswordOfUser := getSqlForPasswordOfUser(tenant.GetUser())
@@ -684,6 +688,14 @@ func (ses *Session) AuthenticateUser(userInput string) ([]byte, error) {
 	logutil.Info(tenant.String())
 
 	return []byte(pwd), nil
+}
+
+func (ses *Session) GetPrivilege() *privilege {
+	return ses.priv
+}
+
+func (ses *Session) SetPrivilege(priv *privilege) {
+	ses.priv = priv
 }
 
 func (th *TxnHandler) SetSession(ses *Session) {
@@ -855,7 +867,7 @@ func (tcc *TxnCompilerContext) ensureDatabaseIsNotEmpty(dbName string) (string, 
 		dbName = tcc.DefaultDatabase()
 	}
 	if len(dbName) == 0 {
-		return "", NewMysqlError(ER_NO_DB_ERROR)
+		return "", moerr.New(moerr.ER_NO_DB_ERROR)
 	}
 	return dbName, nil
 }

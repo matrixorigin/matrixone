@@ -65,34 +65,39 @@ const (
 	T_char    T = 60
 	T_varchar T = 61
 	T_json    T = 62
+	T_uuid    T = 63
 
 	// blobs
 	T_blob T = 70
 
 	// Transaction TS
-	T_TS T = 100
+	T_TS    T = 100
+	T_Rowid T = 101
 
 	// system family
-	T_sel   T = 200
 	T_tuple T = 201
 )
 
+const (
+	TxnTsSize = 12
+	RowidSize = 16
+)
+
 type Type struct {
-	Oid  T     `json:"oid,string"`
-	Size int32 `json:"size,string"` // e.g. int8.Size = 1, int16.Size = 2, char.Size = 24(SliceHeader size)
+	Oid T
+	// XXX Dummies.  T is uint8, make it 4 bytes aligned, otherwise, it may contain
+	// garbage data.  In theory these unused garbage should not be a problem, but
+	// it is.  Give it a name will zero fill it ...
+	dummy1 uint8
+	dummy2 uint8
+	dummy3 uint8
 
-	// Width means max Display width for float and double, char and varchar // todo: need to add new attribute DisplayWidth ?
-	Width int32 `json:"width,string"`
-
-	Scale int32 `json:"Scale,string"`
-
-	Precision int32 `json:"Precision,string"`
-}
-
-type Bytes struct {
-	Data    []byte
-	Offsets []uint32
-	Lengths []uint32
+	// Width means max Display width for float and double, char and varchar
+	// todo: need to add new attribute DisplayWidth ?
+	Size      int32
+	Width     int32
+	Scale     int32
+	Precision int32
 }
 
 type Date int32
@@ -103,9 +108,23 @@ type Timestamp int64
 type Decimal64 [8]byte
 type Decimal128 [16]byte
 
+type Varlena [VarlenaSize]byte
+
+// UUID is Version 1 UUID based on the current NodeID and clock sequence, and the current time.
+type Uuid [16]byte
+
 // timestamp for transaction: physical time (higher 8 bytes) + logical (lower 4 bytes)
 // See txts.go for impl.
-type TS [12]byte
+type TS [TxnTsSize]byte
+
+// Rowid
+type Rowid [RowidSize]byte
+
+// Fixed bytes.   Deciaml64/128 and Varlena are not included because they
+// has special meanings.  In general you cannot compare them as bytes.
+type FixedBytes interface {
+	TS | Rowid
+}
 
 type Ints interface {
 	int8 | int16 | int32 | int64
@@ -119,6 +138,10 @@ type Floats interface {
 	float32 | float64
 }
 
+type BuiltinNumber interface {
+	Ints | UInts | Floats
+}
+
 type OrderedT interface {
 	constraints.Ordered | Date | Datetime | Timestamp
 }
@@ -127,24 +150,13 @@ type Decimal interface {
 	Decimal64 | Decimal128
 }
 
+// FixedSized types in our type system.   Esp, Varlena.
 type FixedSizeT interface {
-	bool | OrderedT | Decimal
-}
-
-type VarSizeT interface {
-	Bytes
+	bool | OrderedT | Decimal | TS | Rowid | Varlena | Uuid
 }
 
 type Number interface {
 	Ints | UInts | Floats | Decimal
-}
-
-type String interface {
-	Get(int64) []byte
-}
-
-type Generic interface {
-	Ints | UInts | Floats | Date | Datetime | Timestamp
 }
 
 var Types map[string]T = map[string]T{
@@ -178,6 +190,10 @@ var Types map[string]T = map[string]T{
 
 	"json": T_json,
 	"text": T_blob,
+	"uuid": T_uuid,
+
+	"transaction timestamp": T_TS,
+	"rowid":                 T_Rowid,
 }
 
 func New(oid T, width, scale, precision int32) Type {
@@ -202,13 +218,49 @@ func (t Type) IsBoolean() bool {
 	return t.Oid == T_bool
 }
 
+func (t Type) IsFixedLen() bool {
+	return t.Oid.FixedLength() >= 0
+}
+
+func (t Type) IsVarlen() bool {
+	return t.Oid.FixedLength() < 0
+}
+
+// Special
+func (t Type) IsTuple() bool {
+	return t.Oid == T_tuple
+}
+
+// Bad function, but keep for now so that old code works.
 func (t Type) IsString() bool {
-	return t.Oid == T_char || t.Oid == T_varchar || t.Oid == T_blob
+	return t.IsVarlen()
+}
+
+func (t Type) IsInt() bool {
+	switch t.Oid {
+	case T_int8, T_int16, T_int32, T_int64:
+		return true
+	default:
+		return false
+	}
+}
+
+func (t Type) IsUInt() bool {
+	switch t.Oid {
+	case T_uint8, T_uint16, T_uint32, T_uint64:
+		return true
+	default:
+		return false
+	}
 }
 
 func (t Type) IsIntOrUint() bool {
+	return t.IsInt() || t.IsUInt()
+}
+
+func (t Type) IsFloat() bool {
 	switch t.Oid {
-	case T_uint8, T_uint16, T_uint32, T_uint64, T_int8, T_int16, T_int32, T_int64:
+	case T_float32, T_float64:
 		return true
 	default:
 		return false
@@ -228,8 +280,6 @@ func (t T) ToType() Type {
 
 	typ.Oid = t
 	switch t {
-	case T_json:
-		typ.Size = 24
 	case T_bool:
 		typ.Size = 1
 	case T_int8:
@@ -252,18 +302,23 @@ func (t T) ToType() Type {
 		typ.Size = 4
 	case T_float64:
 		typ.Size = 8
-	case T_char:
-		typ.Size = 24
-	case T_varchar:
-		typ.Size = 24
-	case T_sel:
-		typ.Size = 8
 	case T_decimal64:
 		typ.Size = 8
 	case T_decimal128:
 		typ.Size = 16
-	case T_blob:
-		typ.Size = 24
+	case T_uuid:
+		typ.Size = 16
+	case T_TS:
+		typ.Size = TxnTsSize
+	case T_Rowid:
+		typ.Size = RowidSize
+	case T_char, T_varchar, T_json, T_blob:
+		typ.Size = VarlenaSize
+	case T_any:
+		// XXX I don't know about this one ...
+		typ.Size = 0
+	default:
+		panic("Unknown type")
 	}
 	return typ
 }
@@ -306,8 +361,6 @@ func (t T) String() string {
 		return "VARCHAR"
 	case T_json:
 		return "JSON"
-	case T_sel:
-		return "SEL"
 	case T_tuple:
 		return "TUPLE"
 	case T_decimal64:
@@ -316,6 +369,12 @@ func (t T) String() string {
 		return "DECIMAL128"
 	case T_blob:
 		return "TEXT"
+	case T_TS:
+		return "TRANSACTION TIMESTAMP"
+	case T_Rowid:
+		return "ROWID"
+	case T_uuid:
+		return "UUID"
 	}
 	return fmt.Sprintf("unexpected type: %d", t)
 }
@@ -325,6 +384,8 @@ func (t T) String() string {
 // OidString returns T string
 func (t T) OidString() string {
 	switch t {
+	case T_uuid:
+		return "T_uuid"
 	case T_json:
 		return "T_json"
 	case T_bool:
@@ -349,8 +410,6 @@ func (t T) OidString() string {
 		return "T_uint32"
 	case T_uint64:
 		return "T_uint64"
-	case T_sel:
-		return "T_sel"
 	case T_char:
 		return "T_char"
 	case T_varchar:
@@ -367,6 +426,10 @@ func (t T) OidString() string {
 		return "T_decimal128"
 	case T_blob:
 		return "T_blob"
+	case T_TS:
+		return "T_TS"
+	case T_Rowid:
+		return "T_Rowid"
 	}
 	return "unknown_type"
 }
@@ -396,8 +459,6 @@ func (t T) GoType() string {
 		return "uint32"
 	case T_uint64:
 		return "uint64"
-	case T_sel:
-		return "int64"
 	case T_char:
 		return "string"
 	case T_varchar:
@@ -414,6 +475,8 @@ func (t T) GoType() string {
 		return "decimal128"
 	case T_blob:
 		return "string"
+	case T_uuid:
+		return "uuid"
 	}
 	return "unknown type"
 }
@@ -430,8 +493,8 @@ func (t T) GoGoType() string {
 // TypeLen returns type's length whose type oid is T
 func (t T) TypeLen() int {
 	switch t {
-	case T_json:
-		return 24
+	case T_any:
+		return 0
 	case T_int8, T_bool:
 		return 1
 	case T_int16:
@@ -452,18 +515,18 @@ func (t T) TypeLen() int {
 		return 4
 	case T_float64:
 		return 8
-	case T_char:
-		return 24
-	case T_varchar:
-		return 24
-	case T_sel:
-		return 8
+	case T_char, T_varchar, T_json, T_blob:
+		return VarlenaSize
 	case T_decimal64:
 		return 8
 	case T_decimal128:
 		return 16
-	case T_blob:
-		return 24
+	case T_uuid:
+		return 16
+	case T_TS:
+		return TxnTsSize
+	case T_Rowid:
+		return RowidSize
 	}
 	panic(moerr.NewInternalError("Unknow type %s", t))
 }
@@ -471,8 +534,8 @@ func (t T) TypeLen() int {
 // FixedLength dangerous code, use TypeLen() if you don't want -8, -16, -24
 func (t T) FixedLength() int {
 	switch t {
-	case T_json:
-		return -24
+	case T_any:
+		return 0
 	case T_int8, T_uint8, T_bool:
 		return 1
 	case T_int16, T_uint16:
@@ -482,16 +545,16 @@ func (t T) FixedLength() int {
 	case T_int64, T_uint64, T_datetime, T_float64, T_timestamp:
 		return 8
 	case T_decimal64:
-		return -8
-	case T_decimal128:
-		return -16
-	case T_char:
-		return -24
-	case T_varchar:
-		return -24
-	case T_sel:
 		return 8
-	case T_blob:
+	case T_decimal128:
+		return 16
+	case T_uuid:
+		return 16
+	case T_TS:
+		return TxnTsSize
+	case T_Rowid:
+		return RowidSize
+	case T_char, T_varchar, T_blob, T_json:
 		return -24
 	}
 	panic(moerr.NewInternalError("Unknow type %s", t))

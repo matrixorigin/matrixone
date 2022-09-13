@@ -18,7 +18,6 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -65,12 +64,6 @@ func FromUnixtimeCase(t *testing.T, typ types.T, src int64, res types.Datetime) 
 
 func makeVector(src int64, srcScalar bool, t types.T) []*vector.Vector {
 	vectors := make([]*vector.Vector, 1)
-	vectors[0] = &vector.Vector{
-		Col:     []int64{src},
-		Nsp:     &nulls.Nulls{},
-		Typ:     types.Type{Oid: t},
-		IsConst: srcScalar,
-		Length:  1,
-	}
+	vectors[0] = vector.NewConstFixed(t.ToType(), 1, src)
 	return vectors
 }

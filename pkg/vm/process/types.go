@@ -102,10 +102,12 @@ type Process struct {
 	Id  string
 	Reg Register
 	Lim Limitation
-	Mp  *mheap.Mheap
+	mp  *mheap.Mheap
 
 	// unix timestamp
 	UnixTime int64
+
+	TxnClient client.TxnClient
 
 	TxnOperator client.TxnOperator
 

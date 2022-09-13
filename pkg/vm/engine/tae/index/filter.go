@@ -106,7 +106,7 @@ func (filter *binaryFuseFilter) MayContainsAnyKeys(keys containers.Vector, visib
 
 func (filter *binaryFuseFilter) Marshal() (buf []byte, err error) {
 	var w bytes.Buffer
-	if _, err = w.Write(types.EncodeType(filter.typ)); err != nil {
+	if _, err = w.Write(types.EncodeType(&filter.typ)); err != nil {
 		return
 	}
 	if _, err = types.WriteValues(

@@ -57,7 +57,7 @@ func Call(idx int, proc *process.Process, arg any) (bool, error) {
 			if bat == nil {
 				ctr.state = End
 				if ctr.bat != nil {
-					ctr.bat.Clean(proc.Mp)
+					ctr.bat.Clean(proc.Mp())
 				}
 				continue
 			}
@@ -176,7 +176,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 				}
 			}
 		}
-		vector.Clean(vec, proc.Mp)
+		vector.Clean(vec, proc.Mp())
 		if !matched {
 			for k, rp := range ap.Result {
 				if rp.Rel == 0 {

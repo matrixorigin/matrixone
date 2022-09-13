@@ -76,8 +76,8 @@ func TestDispatch(t *testing.T) {
 		tc.proc.Reg.InputBatch = bat
 		{
 			for _, vec := range bat.Vecs {
-				if vec.Or {
-					mheap.Free(tc.proc.Mp, vec.Data)
+				if vec.IsOriginal() {
+					vec.FreeOriginal(tc.proc.Mp())
 				}
 			}
 		}
@@ -94,14 +94,14 @@ func TestDispatch(t *testing.T) {
 			if len(bat.Zs) == 0 {
 				continue
 			}
-			bat.Clean(tc.proc.Mp)
+			bat.Clean(tc.proc.Mp())
 		}
-		require.Equal(t, mheap.Size(tc.proc.Mp), int64(0))
+		require.Equal(t, mheap.Size(tc.proc.Mp()), int64(0))
 	}
 }
 
 func newTestCase(gm *guest.Mmu, all bool) dispatchTestCase {
-	proc := process.New(mheap.New(gm))
+	proc := testutil.NewProcessWithMheap(mheap.New(gm))
 	proc.Reg.MergeReceivers = make([]*process.WaitRegister, 2)
 	ctx, cancel := context.WithCancel(context.Background())
 	reg := &process.WaitRegister{Ctx: ctx, Ch: make(chan *batch.Batch, 3)}
@@ -121,5 +121,5 @@ func newTestCase(gm *guest.Mmu, all bool) dispatchTestCase {
 
 // create a new block based on the type information
 func newBatch(t *testing.T, ts []types.Type, proc *process.Process, rows int64) *batch.Batch {
-	return testutil.NewBatch(ts, false, int(rows), proc.Mp)
+	return testutil.NewBatch(ts, false, int(rows), proc.Mp())
 }

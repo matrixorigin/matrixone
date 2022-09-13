@@ -76,7 +76,7 @@ func (ctr *container) eval(ap *Argument, proc *process.Process, anal process.Ana
 		anal.Input(bat)
 		if ap.ctr.seen >= ap.Limit {
 			proc.SetInputBatch(nil)
-			bat.Clean(proc.Mp)
+			bat.Clean(proc.Mp())
 			return true, nil
 		}
 		newSeen := ap.ctr.seen + uint64(bat.Length())

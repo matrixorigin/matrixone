@@ -26,15 +26,94 @@ var (
 	ErrInvalidTask = moerr.New(moerr.INVALID_STATE, "task does not belong to the current task runner")
 )
 
-// QueryOption options for query tasks
-type QueryOption func(*queryOptions)
+// Condition options for query tasks
+type Condition func(*conditions)
 
-type queryOptions struct {
+// Op condition op
+type Op int
+
+var (
+	// EQ record == condition
+	EQ = Op(1)
+	// GT record > condition
+	GT = Op(2)
+	// GE record >= condition
+	GE = Op(3)
+	// LT record < condition
+	LT = Op(4)
+	// LT record <= condition
+	LE = Op(5)
+)
+
+type conditions struct {
+	limit int
+
+	hasTaskIDCond bool
+	taskIDOp      Op
+	taskID        uint64
+
+	hasTaskRunnerCond bool
+	taskRunnerOp      Op
+	taskRunner        string
+
+	hasTaskStatusCond bool
+	taskStatusOp      Op
+	taskStatus        task.TaskStatus
+
+	hasTaskEpochCond bool
+	taskEpochOp      Op
+	taskEpoch        uint32
+}
+
+// WithLimitCond set query result limit
+func WithLimitCond(limit int) Condition {
+	return func(qo *conditions) {
+		qo.limit = limit
+	}
+}
+
+// WithTaskIDCond set task id condition
+func WithTaskIDCond(op Op, value uint64) Condition {
+	return func(qo *conditions) {
+		qo.hasTaskIDCond = true
+		qo.taskIDOp = op
+		qo.taskID = value
+	}
+}
+
+// WithTaskRunnerCond set task runner condition
+func WithTaskRunnerCond(op Op, value string) Condition {
+	return func(qo *conditions) {
+		qo.hasTaskRunnerCond = true
+		qo.taskRunner = value
+		qo.taskRunnerOp = op
+	}
+}
+
+// WithTaskStatusCond set status condition
+func WithTaskStatusCond(op Op, value task.TaskStatus) Condition {
+	return func(qo *conditions) {
+		qo.hasTaskStatusCond = true
+		qo.taskStatus = value
+		qo.taskStatusOp = op
+	}
+}
+
+// WithTaskEpochCond set task epoch condition
+func WithTaskEpochCond(op Op, value uint32) Condition {
+	return func(qo *conditions) {
+		qo.hasTaskEpochCond = true
+		qo.taskEpoch = value
+		qo.taskEpochOp = op
+	}
 }
 
 // TaskService Asynchronous Task Service, which provides scheduling execution and management of
 // asynchronous tasks. CN, DN, HAKeeper, LogService will all hold this service.
 type TaskService interface {
+	// Close close the task service
+	Close() error
+
 	// Create Creates an asynchronous task that executes a single time, this method is idempotent, the
 	// same task is not created repeatedly based on multiple calls.
 	Create(context.Context, task.TaskMetadata) error
@@ -43,22 +122,26 @@ type TaskService interface {
 	// CreateCronTask is similar to Create, but create a task that runs periodically, with the period
 	// described using a Cron expression.
 	CreateCronTask(ctx context.Context, task task.TaskMetadata, cronExpr string) error
-	// QueryTask search tasks according to conditions.
-	QueryTask(...QueryOption) ([]task.Task, error)
-	// CronTasks returns all created cron tasks
-	CronTasks() ([]task.CronTask, error)
+	// Allocate allocate task runner fot spec task.
+	Allocate(ctx context.Context, value task.Task, taskRunner string) error
+	// Complete task completed. The result used to indicate whether the execution succeeded or failed
+	Complete(ctx context.Context, taskRunner string, task task.Task, result task.ExecuteResult) error
 	// Heartbeat sending a heartbeat tells the scheduler that the specified task is running normally.
 	// If the scheduler does not receive the heartbeat for a long time, it will reassign the task executor
 	// to execute the task. Returning `ErrInvalidTask` means that the Task has been reassigned or has
 	// ended, and the Task execution needs to be terminated immediately。
-	Heartbeat(taskRunner string, tasks ...task.Task) error
+	Heartbeat(ctx context.Context, task task.Task) error
+	// QueryTask query tasks by conditions
+	QueryTask(context.Context, ...Condition) ([]task.Task, error)
+	// QueryCronTask returns all cron task metadata
+	QueryCronTask(context.Context) ([]task.CronTask, error)
 }
 
 // TaskExecutor which is responsible for the execution logic of a specific Task, and the function exits to
 // represent the completion of the task execution. In the process of task execution task may be interrupted
 // at any time, so the implementation needs to frequently check the state of the Context, in the
 // Context.Done(), as soon as possible to exit. Epoch is 1 means the task is executed for the first time,
-// otherwise it means that the task is rescheduled, the task may do done may not be done
+// otherwise it means that the task is rescheduled, the task may completed or not.
 type TaskExecutor func(ctx context.Context, task task.Task) error
 
 // TaskRunner each runner can execute multiple task concurrently
@@ -74,4 +157,28 @@ type TaskRunner interface {
 	Parallelism() int
 	// RegisterExectuor register the task executor
 	RegisterExectuor(code int, executor TaskExecutor)
+}
+
+// TaskStorage task storage
+type TaskStorage interface {
+	// Close close the task storage
+	Close() error
+
+	// Add add tasks and returns number of successful added
+	Add(context.Context, ...task.Task) (int, error)
+	// Update update tasks and returns number of successful updated
+	Update(context.Context, []task.Task, ...Condition) (int, error)
+	// Delete delete tasks and returns number of successful deleted
+	Delete(context.Context, ...Condition) (int, error)
+	// Query query tasks by conditions
+	Query(context.Context, ...Condition) ([]task.Task, error)
+
+	// AddCronTask add cron task and returns number of successful added
+	AddCronTask(context.Context, ...task.CronTask) (int, error)
+	// QueryCronTask query all cron tasks
+	QueryCronTask(context.Context) ([]task.CronTask, error)
+
+	// UpdateCronTask crontask generates tasks periodically, and this update
+	// needs to be in a transaction. Update cron task and insert a new task.
+	UpdateCronTask(context.Context, task.CronTask, task.Task) (int, error)
 }

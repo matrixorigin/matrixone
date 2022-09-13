@@ -16,9 +16,12 @@ package bytejson
 
 import (
 	"encoding/binary"
+	"regexp"
 )
 
 type TpCode byte
+type subPathType byte
+type pathFlag byte
 
 type ByteJson struct {
 	Data []byte
@@ -28,6 +31,27 @@ type kv struct {
 	key string
 	val interface{}
 }
+type subPath struct {
+	idx int
+	key string
+	tp  subPathType
+}
+type Path struct {
+	paths []subPath
+	flag  pathFlag
+}
+
+const subPathIdxALL = -1
+
+const (
+	subPathDoubleStar = 0x01
+	subPathIdx        = 0x02
+	subPathKey        = 0x03
+)
+const (
+	pathFlagSingleStar = 0x01
+	pathFlagDoubleStar = 0x02
+)
 
 const (
 	TpCodeObject  = 0x01
@@ -56,5 +80,6 @@ const (
 )
 
 var (
-	endian = binary.LittleEndian
+	endian        = binary.LittleEndian
+	jsonSubPathRe = regexp.MustCompile(`(\.\s*(([\$]*[a-zA-Z_][a-zA-Z0-9_]*)+|\*|"[^"\\]*(\\.[^"\\]*)*")|(\[\s*([0-9]+|\*)\s*\])|\*\*)`)
 )

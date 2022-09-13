@@ -166,7 +166,7 @@ func (view *ColumnView) Insert(key uint32, un txnif.UpdateNode) (err error) {
 	// First update to key
 	var link *common.GenericSortedDList[*ColumnUpdateNode]
 	if link = view.links[key]; link == nil {
-		link = common.NewGenericSortedDList[*ColumnUpdateNode](compareUpdateNode)
+		link = common.NewGenericSortedDList(compareUpdateNode)
 		link.Insert(n)
 		view.mask.Add(key)
 		view.links[key] = link

@@ -188,7 +188,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 						matched = true
 						idx = j
 					}
-					vec.Free(proc.Mp)
+					vec.Free(proc.Mp())
 				}
 			} else if len(sels) > 1 {
 				return errors.New("scalar subquery returns more than 1 row")

@@ -123,7 +123,7 @@ func (tbl *txnTable) GetSegment(id uint64) (seg handle.Segment, err error) {
 	}
 	var ok bool
 	meta.RLock()
-	ok, err = meta.TxnCanRead(tbl.store.txn, meta.RWMutex)
+	ok, err = meta.IsVisible(tbl.store.txn.GetStartTS(), meta.RWMutex)
 	meta.RUnlock()
 	if err != nil {
 		return
@@ -540,8 +540,8 @@ func (tbl *txnTable) UncommittedRows() uint32 {
 	return tbl.localSegment.Rows()
 }
 
-// PreCommitOr2PCPrepareDedup do deduplication check for 1PC Commit or 2PC Prepare
-func (tbl *txnTable) PreCommitOr2PCPrepareDedup() (err error) {
+// PrePrepareDedup do deduplication check for 1PC Commit or 2PC Prepare
+func (tbl *txnTable) PrePrepareDedup() (err error) {
 	if tbl.localSegment == nil || !tbl.schema.HasPK() {
 		return
 	}
@@ -566,7 +566,7 @@ func (tbl *txnTable) DoDedup(pks containers.Vector, preCommit bool) (err error) 
 				txnToWait.GetTxnState(true)
 				seg.RLock()
 			}
-			invalid := seg.IsDroppedCommitted() || seg.InTxnOrRollbacked()
+			invalid := seg.IsDroppedCommitted() || seg.IsCreating()
 			seg.RUnlock()
 			if invalid {
 				segIt.Next()
@@ -591,7 +591,7 @@ func (tbl *txnTable) DoDedup(pks containers.Vector, preCommit bool) (err error) 
 			}
 			{
 				blk.RLock()
-				invalid := blk.IsDroppedCommitted() || blk.InTxnOrRollbacked()
+				invalid := blk.IsDroppedCommitted() || blk.IsCreating()
 				blk.RUnlock()
 				if invalid {
 					blkIt.Next()
@@ -670,7 +670,7 @@ func (tbl *txnTable) ApplyAppend() (err error) {
 	return
 }
 
-func (tbl *txnTable) PreCommitOr2PCPrepare() (err error) {
+func (tbl *txnTable) PrePrepare() (err error) {
 	if tbl.localSegment != nil {
 		err = tbl.localSegment.PrepareApply()
 	}
@@ -686,20 +686,7 @@ func (tbl *txnTable) PrepareCommit() (err error) {
 	return
 }
 
-func (tbl *txnTable) Prepare2PCPrepare() (err error) {
-	for _, node := range tbl.txnEntries {
-		if err = node.Prepare2PCPrepare(); err != nil {
-			break
-		}
-	}
-	return
-}
-
 func (tbl *txnTable) PreApplyCommit() (err error) {
-	return tbl.ApplyAppend()
-}
-
-func (tbl *txnTable) PreApply2PCPrepare() (err error) {
 	return tbl.ApplyAppend()
 }
 

@@ -26,7 +26,7 @@ import (
 var gLogConfigs atomic.Value
 
 func EnableStoreDB() bool {
-	return gLogConfigs.Load().(*LogConfig).EnableStore
+	return !gLogConfigs.Load().(*LogConfig).DisableStore
 }
 
 func setGlobalLogConfig(cfg *LogConfig) {
@@ -143,7 +143,11 @@ func (e *TraceLogEncoder) EncodeEntry(entry zapcore.Entry, fields []zapcore.Fiel
 const MOInternalFiledKeyNoopReport = "MOInternalFiledKeyNoopReport"
 
 func NoReportFiled() zap.Field {
-	return zap.Bool(MOInternalFiledKeyNoopReport, false)
+	return zap.Bool(MOInternalFiledKeyNoopReport, true)
+}
+
+func ErrorField(err error) zap.Field {
+	return zap.Error(err)
 }
 
 func newTraceLogEncoder() *TraceLogEncoder {

@@ -15,10 +15,12 @@
 package unary
 
 import (
+	"testing"
+
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/smartystreets/goconvey/convey"
-	"testing"
 )
 
 func TestLengthUTF8(t *testing.T) {
@@ -138,8 +140,8 @@ func TestLengthUTF8(t *testing.T) {
 		convey.So(ret, convey.ShouldBeTrue)
 	})
 	convey.Convey("null", t, func() {
-		ivec := testutil.MakeScalarNull(10)
-		wantvec := testutil.MakeScalarNull(10)
+		ivec := testutil.MakeScalarNull(types.T_char, 10)
+		wantvec := testutil.MakeScalarNull(types.T_uint64, 10)
 		proc := testutil.NewProc()
 		ovec, err := LengthUTF8([]*vector.Vector{ivec}, proc)
 		convey.So(err, convey.ShouldBeNil)

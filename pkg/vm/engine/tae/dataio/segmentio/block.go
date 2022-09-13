@@ -267,7 +267,7 @@ func (bf *blockFile) PrepareUpdates(
 	nullable bool,
 	mask *roaring.Bitmap,
 	vals map[uint32]any) (err error) {
-	_, _ = tool.Write(types.EncodeType(typ))
+	_, _ = tool.Write(types.EncodeType(&typ))
 	_, _ = tool.Write(types.EncodeFixed(nullable))
 	buf, err := mask.ToBytes()
 	if err != nil {

@@ -14,9 +14,9 @@
 
 #include "textflag.h"
 
-// func Crc32Int64BatchHash(data *uint64, hashes *uint64, length int)
+// func crc32Int64BatchHash(data *uint64, hashes *uint64, length int)
 // Requires: CRC32
-TEXT ·Crc32Int64BatchHash(SB), NOSPLIT, $0-24
+TEXT ·crc32Int64BatchHash(SB), NOSPLIT, $0-24
 	MOVD data+0(FP), R0
 	MOVD hashes+8(FP), R1
 	MOVD length+16(FP), R2
@@ -71,9 +71,9 @@ tailLoop:
 done:
 	RET
 
-// func Crc32Int64CellBatchHash(data *uint64, hashes *uint64, length int)
+// func crc32Int64CellBatchHash(data *uint64, hashes *uint64, length int)
 // Requires: CRC32
-TEXT ·Crc32Int64CellBatchHash(SB), NOSPLIT, $0-24
+TEXT ·crc32Int64CellBatchHash(SB), NOSPLIT, $0-24
 	MOVD data+0(FP), R0
 	MOVD hashes+8(FP), R1
 	MOVD length+16(FP), R2
@@ -173,9 +173,9 @@ DATA CryptedPi<>+0x70(SB)/8, $0x5063d25a1cb7b6b9
 DATA CryptedPi<>+0x78(SB)/8, $0xb2623e6241e8e46e
 GLOBL CryptedPi<>(SB), (NOPTR+RODATA), $0x80
 
-// func AesBytesBatchGenHashStates(data *[]byte, states *[3]uint64, length int)
+// func aesBytesBatchGenHashStates(data *[]byte, states *[3]uint64, length int)
 // Requires: AES
-TEXT ·AesBytesBatchGenHashStates(SB), NOSPLIT, $0-24
+TEXT ·aesBytesBatchGenHashStates(SB), NOSPLIT, $0-24
 	MOVD data+0(FP), R0
 	MOVD states+8(FP), R1
 	MOVD length+16(FP), R2
@@ -340,9 +340,9 @@ done:
 
 	RET
 
-// func AesInt192BatchGenHashStates(data *[3]uint64, states *[3]uint64, length int)
+// func aesInt192BatchGenHashStates(data *[3]uint64, states *[3]uint64, length int)
 // Requires: AES
-TEXT ·AesInt192BatchGenHashStates(SB), NOSPLIT, $0-24
+TEXT ·aesInt192BatchGenHashStates(SB), NOSPLIT, $0-24
 	MOVD data+0(FP), R0
 	MOVD states+8(FP), R1
 	MOVD length+16(FP), R2
@@ -417,9 +417,9 @@ loop:
 done:
 	RET
 
-// func AesInt256BatchGenHashStates(data *[4]uint64, states *[3]uint64, length int)
+// func aesInt256BatchGenHashStates(data *[4]uint64, states *[3]uint64, length int)
 // Requires: AES
-TEXT ·AesInt256BatchGenHashStates(SB), NOSPLIT, $0-24
+TEXT ·aesInt256BatchGenHashStates(SB), NOSPLIT, $0-24
 	MOVD data+0(FP), R0
 	MOVD states+8(FP), R1
 	MOVD length+16(FP), R2
@@ -492,9 +492,9 @@ loop:
 done:
 	RET
 
-// func AesInt320BatchGenHashStates(data *[5]uint64, states *[3]uint64, length int)
+// func aesInt320BatchGenHashStates(data *[5]uint64, states *[3]uint64, length int)
 // Requires: AES
-TEXT ·AesInt320BatchGenHashStates(SB), NOSPLIT, $0-24
+TEXT ·aesInt320BatchGenHashStates(SB), NOSPLIT, $0-24
 	MOVD data+0(FP), R0
 	MOVD states+8(FP), R1
 	MOVD length+16(FP), R2

@@ -103,3 +103,7 @@ func (m Timestamp) Prev() Timestamp {
 func (m Timestamp) DebugString() string {
 	return fmt.Sprintf("%d-%d", m.PhysicalTime, m.LogicalTime)
 }
+
+func (m Timestamp) ProtoSize() int {
+	return m.Size()
+}
