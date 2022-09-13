@@ -19,7 +19,6 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -32,6 +31,7 @@ func New(
 	getClusterDetails GetClusterDetailsFunc,
 ) *Engine {
 	return &Engine{
+		db:                newDB(),
 		getClusterDetails: getClusterDetails,
 		txns:              make(map[string]*Transaction),
 	}
@@ -44,20 +44,37 @@ func (e *Engine) Create(ctx context.Context, name string, op client.TxnOperator)
 	if err != nil {
 		return err
 	}
-	if err := txn.WriteBatch(INSERT, MO_CATALOG_ID, MO_DATABASE_ID, MO_CATALOG, MO_DATABASE, generateCreateDatabaseTuple(name)); err != nil {
+	// non-io operations do not need to pass context
+	if err := txn.WriteBatch(INSERT, MO_CATALOG_ID, MO_DATABASE_ID, MO_CATALOG,
+		MO_DATABASE, genCreateDatabaseTuple(name)); err != nil {
 		return err
 	}
 	return nil
 }
 
-func (e *Engine) Database(ctx context.Context, name string, op client.TxnOperator) (engine.Database, error) {
-	//TODO
-	panic("unimplemented")
+func (e *Engine) Database(ctx context.Context, name string,
+	op client.TxnOperator) (engine.Database, error) {
+	txn, err := e.getOrAddTransaction(op, e.getClusterDetails)
+	if err != nil {
+		return nil, err
+	}
+	id, err := txn.getDatabaseId(ctx, name)
+	if err != nil {
+		return nil, err
+	}
+	return &database{
+		txn:          txn,
+		databaseId:   id,
+		databaseName: name,
+	}, nil
 }
 
 func (e *Engine) Databases(ctx context.Context, op client.TxnOperator) ([]string, error) {
-	//TODO
-	panic("unimplemented")
+	txn, err := e.getOrAddTransaction(op, e.getClusterDetails)
+	if err != nil {
+		return nil, err
+	}
+	return txn.getDatabaseList(ctx)
 }
 
 func (e *Engine) Delete(ctx context.Context, name string, op client.TxnOperator) error {
@@ -65,7 +82,9 @@ func (e *Engine) Delete(ctx context.Context, name string, op client.TxnOperator)
 	if err != nil {
 		return err
 	}
-	if err := txn.WriteBatch(DELETE, MO_CATALOG_ID, MO_DATABASE_ID, MO_CATALOG, MO_DATABASE, generateDropDatabaseTuple(name)); err != nil {
+	// non-io operations do not need to pass context
+	if err := txn.WriteBatch(DELETE, MO_CATALOG_ID, MO_DATABASE_ID, MO_CATALOG,
+		MO_DATABASE, genDropDatabaseTuple(name)); err != nil {
 		return err
 	}
 	return nil
@@ -121,7 +140,8 @@ func (e *Engine) Hints() (h engine.Hints) {
 	return
 }
 
-func (e *Engine) getOrAddTransaction(op client.TxnOperator, getClusterDetails GetClusterDetailsFunc) (*Transaction, error) {
+func (e *Engine) getOrAddTransaction(op client.TxnOperator,
+	getClusterDetails GetClusterDetailsFunc) (*Transaction, error) {
 	id := string(op.Txn().ID)
 	e.Lock()
 	defer e.Unlock()
@@ -132,6 +152,7 @@ func (e *Engine) getOrAddTransaction(op client.TxnOperator, getClusterDetails Ge
 			return nil, err
 		}
 		txn = &Transaction{
+			db:       e.db,
 			readOnly: false,
 			meta:     op.Txn(),
 			dnStores: cluster.DNStores,
@@ -153,12 +174,4 @@ func (e *Engine) delTransaction(txn *Transaction) {
 	e.Lock()
 	defer e.Unlock()
 	delete(e.txns, string(txn.meta.ID))
-}
-
-func generateCreateDatabaseTuple(name string) *batch.Batch {
-	return &batch.Batch{}
-}
-
-func generateDropDatabaseTuple(name string) *batch.Batch {
-	return &batch.Batch{}
 }
