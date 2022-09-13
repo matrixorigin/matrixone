@@ -53,7 +53,7 @@ func (r *ObjectReader) ReadMeta(extents []Extent) ([]BlockObject, error) {
 	}
 	blocks := make([]BlockObject, len(extents))
 	for i := range extents {
-		blocks[i] = &Block{}
+		blocks[i] = &Block{object: r.object}
 		err = blocks[i].(*Block).UnMarshalMeta(metas.Entries[i].Data)
 		if err != nil {
 			return nil, err
@@ -90,7 +90,7 @@ func (r *ObjectReader) Read(extent Extent, idxs []uint16) (*fileservice.IOVector
 	return data, nil
 }
 
-func (r *ObjectReader) ReadIndex(extent Extent, idxs []uint16) (*fileservice.IOVector, error) {
+func (r *ObjectReader) ReadIndex(extent Extent, idxs []uint16, typ IndexDataType) ([]IndexData, error) {
 	var err error
 	extents := make([]Extent, 1)
 	extents[0] = extent
@@ -99,21 +99,15 @@ func (r *ObjectReader) ReadIndex(extent Extent, idxs []uint16) (*fileservice.IOV
 		return nil, err
 	}
 	block := blocks[0]
-	data := &fileservice.IOVector{
-		FilePath: r.name,
-		Entries:  make([]fileservice.IOEntry, 0),
-	}
+	indexes := make([]IndexData, 0)
 	for _, idx := range idxs {
 		col := block.(*Block).columns[idx]
-		entry := fileservice.IOEntry{
-			Offset: int(col.GetMeta().bloomFilter.Offset()),
-			Size:   int(col.GetMeta().bloomFilter.Length()),
+
+		index, err := col.GetIndex(typ)
+		if err != nil {
+			return nil, err
 		}
-		data.Entries = append(data.Entries, entry)
+		indexes = append(indexes, index)
 	}
-	err = r.object.fs.Read(context.Background(), data)
-	if err != nil {
-		return nil, err
-	}
-	return data, nil
+	return indexes, nil
 }

@@ -63,21 +63,26 @@ func (cb *ColumnBlock) GetData() (*fileservice.IOVector, error) {
 	return data, nil
 }
 
-func (cb *ColumnBlock) GetIndex() (*fileservice.IOVector, error) {
+func (cb *ColumnBlock) GetIndex(dataType IndexDataType) (IndexData, error) {
 	var err error
-	data := &fileservice.IOVector{
-		FilePath: cb.object.name,
-		Entries:  make([]fileservice.IOEntry, 1),
+	if dataType == ZoneMapType {
+		return &cb.meta.zoneMap, nil
+	} else if dataType == BloomFilterType {
+		data := &fileservice.IOVector{
+			FilePath: cb.object.name,
+			Entries:  make([]fileservice.IOEntry, 1),
+		}
+		data.Entries[0] = fileservice.IOEntry{
+			Offset: int(cb.meta.bloomFilter.Offset()),
+			Size:   int(cb.meta.bloomFilter.Length()),
+		}
+		err = cb.object.fs.Read(context.Background(), data)
+		if err != nil {
+			return nil, err
+		}
+		return NewBloomFilter(cb.meta.idx, 0, data.Entries[0].Data), nil
 	}
-	data.Entries[0] = fileservice.IOEntry{
-		Offset: int(cb.meta.bloomFilter.Offset()),
-		Size:   int(cb.meta.bloomFilter.Length()),
-	}
-	err = cb.object.fs.Read(context.Background(), data)
-	if err != nil {
-		return nil, err
-	}
-	return data, nil
+	return nil, nil
 }
 
 func (cb *ColumnBlock) GetMeta() *ColumnMeta {

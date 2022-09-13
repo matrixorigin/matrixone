@@ -51,7 +51,7 @@ type Reader interface {
 	ReadMeta(extent []Extent) ([]BlockObject, error)
 
 	// ReadIndex is the index data of the read columns
-	ReadIndex(extent Extent, idxs []uint16) (*fileservice.IOVector, error)
+	ReadIndex(extent Extent, idxs []uint16, dataType IndexDataType) ([]IndexData, error)
 }
 
 // BlockObject is a batch written to fileservice
@@ -80,7 +80,7 @@ type ColumnObject interface {
 	GetData() (*fileservice.IOVector, error)
 
 	// GetIndex gets the index of ColumnObject
-	GetIndex() (*fileservice.IOVector, error)
+	GetIndex(dataType IndexDataType) (IndexData, error)
 
 	// GetMeta gets the metadata of ColumnObject
 	GetMeta() *ColumnMeta
