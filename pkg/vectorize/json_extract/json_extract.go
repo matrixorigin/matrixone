@@ -54,7 +54,7 @@ func byJson(json, path, result [][]byte) ([][]byte, error) {
 func byJsonOne(json []byte, path *bytejson.Path) ([]byte, error) {
 	//TODO check here
 	bj := types.DecodeJson(json)
-	return []byte(bj.Query(*path).String()), nil
+	return []byte(bj.Query(path).String()), nil
 }
 
 func byString(json, path, result [][]byte) ([][]byte, error) {
@@ -83,5 +83,5 @@ func byStringOne(json []byte, path *bytejson.Path) ([]byte, error) {
 		logutil.Debugf("json qvOne : error:%v", err)
 		return nil, err
 	}
-	return []byte(bj.Query(*path).String()), nil
+	return []byte(bj.Query(path).String()), nil
 }

@@ -15,6 +15,7 @@
 package bytejson
 
 import (
+	"bytes"
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
@@ -374,7 +375,7 @@ func addByteElem(buf []byte, entryStart int, elems []ByteJson) []byte {
 	return buf
 }
 
-func mergeToArray(origin []ByteJson) ByteJson {
+func mergeToArray(origin []ByteJson) *ByteJson {
 	totalSize := headerSize + len(origin)*valEntrySize
 	for _, el := range origin {
 		if el.Type != TpCodeLiteral {
@@ -385,7 +386,7 @@ func mergeToArray(origin []ByteJson) ByteJson {
 	endian.PutUint32(buf, uint32(len(origin)))
 	endian.PutUint32(buf[docSizeOff:], uint32(totalSize))
 	buf = addByteElem(buf, headerSize, origin)
-	return ByteJson{Type: TpCodeArray, Data: buf}
+	return &ByteJson{Type: TpCodeArray, Data: buf}
 }
 
 // check unnest mode
@@ -407,6 +408,28 @@ func genIndexOrKey(pathStr string) (string, string) {
 	return "", pathStr[idx+1:]
 }
 
+// for test
 func (r UnnestResult) String() string {
-	return fmt.Sprintf("key: %s, path: %s, index: %s, value: %s, this: %s", r.Key, r.Path, r.Index, r.Value, r.This)
+	var buf bytes.Buffer
+	if val, ok := r["key"]; ok {
+		buf.WriteString("key: ")
+		buf.WriteString(val + ", ")
+	}
+	if val, ok := r["path"]; ok {
+		buf.WriteString("path: ")
+		buf.WriteString(val + ", ")
+	}
+	if val, ok := r["index"]; ok {
+		buf.WriteString("index: ")
+		buf.WriteString(val + ", ")
+	}
+	if val, ok := r["value"]; ok {
+		buf.WriteString("value: ")
+		buf.WriteString(val + ", ")
+	}
+	if val, ok := r["this"]; ok {
+		buf.WriteString("this: ")
+		buf.WriteString(val)
+	}
+	return buf.String()
 }

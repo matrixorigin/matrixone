@@ -38,6 +38,20 @@ func Prepare(_ *process.Process, arg any) error {
 	}
 	param.seq = 0
 	param.end = false
+	var filters []string
+	for i := range param.Attrs {
+		denied := false
+		for j := range deniedFilters {
+			if param.Attrs[i] == deniedFilters[j] {
+				denied = true
+				break
+			}
+		}
+		if !denied {
+			filters = append(filters, param.Attrs[i])
+		}
+	}
+	param.filters = filters
 	return nil
 }
 
@@ -61,7 +75,7 @@ func callByStr(param *Param, proc *process.Process) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	ures, err := json.Unnest(path, param.Extern.Outer, recursive, mode)
+	ures, err := json.Unnest(&path, param.Extern.Outer, recursive, mode, param.filters)
 	bat := batch.New(false, param.Attrs)
 	for i := range param.Cols {
 		bat.Vecs[i] = vector.New(dupType(param.Cols[i].Typ))
@@ -109,7 +123,7 @@ func callByCol(param *Param, proc *process.Process) (bool, error) {
 			if err != nil {
 				return false, err
 			}
-			ures, err := json.Unnest(path, param.Extern.Outer, recursive, mode)
+			ures, err := json.Unnest(&path, param.Extern.Outer, recursive, mode, param.filters)
 			bat, err = makeBatch(bat, ures, param, proc)
 			if err != nil {
 				return false, err
@@ -122,7 +136,7 @@ func callByCol(param *Param, proc *process.Process) (bool, error) {
 	return false, nil
 }
 
-func makeBatch(bat *batch.Batch, ures []*bytejson.UnnestResult, param *Param, proc *process.Process) (*batch.Batch, error) {
+func makeBatch(bat *batch.Batch, ures []bytejson.UnnestResult, param *Param, proc *process.Process) (*batch.Batch, error) {
 	for i := 0; i < len(ures); i++ {
 		for j := 0; j < len(param.Attrs); j++ {
 			vec := bat.GetVector(int32(j))
@@ -132,17 +146,9 @@ func makeBatch(bat *batch.Batch, ures []*bytejson.UnnestResult, param *Param, pr
 				err = vec.Append([]byte(param.colName), false, proc.Mp())
 			case "seq":
 				err = vec.Append(param.seq, false, proc.Mp())
-			case "key":
-				err = vec.Append([]byte(ures[i].Key), len(ures[i].Key) == 0, proc.Mp())
-			case "path":
-				err = vec.Append([]byte(ures[i].Path), len(ures[i].Path) == 0, proc.Mp())
-			case "index":
-				err = vec.Append([]byte(ures[i].Index), len(ures[i].Index) == 0, proc.Mp())
-
-			case "value":
-				err = vec.Append([]byte(ures[i].Value), len(ures[i].Value) == 0, proc.Mp())
-			case "this":
-				err = vec.Append([]byte(ures[i].This), len(ures[i].This) == 0, proc.Mp())
+			case "key", "path", "index", "value", "this":
+				val, ok := ures[i][param.Attrs[j]]
+				err = vec.Append([]byte(val), !ok, proc.Mp())
 			default:
 				err = fmt.Errorf("unnest: invalid column name:%s", param.Attrs[j])
 			}
