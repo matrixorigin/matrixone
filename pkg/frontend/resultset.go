@@ -491,6 +491,8 @@ func (mrs *MysqlResultSet) GetString(rindex, cindex uint64) (string, error) {
 		return v.String(), nil
 	case bytejson.ByteJson:
 		return v.String(), nil
+	case types.Uuid:
+		return v.ToString(), nil
 	default:
 		return "", fmt.Errorf("unsupported type %d ", v)
 	}

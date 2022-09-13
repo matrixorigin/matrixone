@@ -15,9 +15,23 @@
 package disttae
 
 import (
+	"context"
+
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
-func (db *DB) NewReader(databaseName, tableName string, expr *plan.Expr) Reader {
+func (db *DB) Update(ctx context.Context, databaseId, tableId uint64, ts timestamp.Timestamp) error {
 	return nil
+}
+
+func (db *DB) BlockList(ctx context.Context, databaseId, tableId uint64,
+	ts timestamp.Timestamp, entries [][]Entry) []BlockMeta {
+	return nil
+}
+
+func (db *DB) NewReader(ctx context.Context, readNumber int, expr *plan.Expr,
+	databaseId, tableId uint64, ts timestamp.Timestamp, entires [][]Entry) ([]engine.Reader, error) {
+	return nil, nil
 }

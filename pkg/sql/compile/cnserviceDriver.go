@@ -807,6 +807,7 @@ func newCompile(
 		proc: process.New(
 			ctx,
 			mheap.New(guest.New(1<<30, host.New(1<<20))),
+			nil, //TODO must set txn client
 			nil, //TODO must set txn operator
 			nil, //TODO must set file service
 		),

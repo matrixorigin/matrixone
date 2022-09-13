@@ -1363,6 +1363,12 @@ var (
 		}, {
 			input:  `select json_extract(a, '$.b') from t`,
 			output: `select json_extract(a, $.b) from t`,
+		}, {
+			input: `create table t1 (a int, b uuid)`,
+		}, {
+			input: `create table t2 (a uuid primary key, b varchar(10))`,
+		}, {
+			input: `create table t3 (a int, b uuid, primary key idx (a, b))`,
 		},
 	}
 )
