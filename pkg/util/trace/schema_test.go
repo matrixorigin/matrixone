@@ -91,7 +91,7 @@ func TestInitSchemaByInnerExecutor(t *testing.T) {
 	<-startedC
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := InitSchemaByInnerExecutor(context.TODO(), tt.args.ieFactory)
+			err := InitSchemaByInnerExecutor(context.TODO(), tt.args.ieFactory, InternalExecutor)
 			require.Equal(t, nil, err)
 		})
 	}
@@ -154,13 +154,13 @@ func TestInitExternalTblSchema(t *testing.T) {
 
 	// (1 + 4) * n + 1
 	// 1: create database ...
-	// 4: create EXTERNAL table
+	// 5: create EXTERNAL table
 	// 1: close
 	wg.Add(1)
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			wg.Add(5)
-			err := InitExternalTblSchema(tt.args.ctx, tt.args.ieFactory)
+			wg.Add(6)
+			err := InitSchemaByInnerExecutor(tt.args.ctx, tt.args.ieFactory, tt.args.mode)
 			require.Equal(t, nil, err)
 		})
 	}

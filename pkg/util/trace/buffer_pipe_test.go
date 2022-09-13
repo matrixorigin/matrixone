@@ -39,7 +39,7 @@ import (
 )
 
 var buf = new(bytes.Buffer)
-var err1 = errors.WithStack(errors.New("test1"))
+var err1 = errors.New("test1")
 var err2 = errors.Wrapf(err1, "test2")
 var testBaseBuffer2SqlOption = []buffer2SqlOption{bufferWithSizeThreshold(1 * KB)}
 var traceIDSpanIDColumnStr string
@@ -315,8 +315,6 @@ func Test_buffer2Sql_GetBatch_AllType(t *testing.T) {
 						StatementID:          _1TraceID,
 						TransactionID:        _1TxnID,
 						SessionID:            _1SesID,
-						TenantID:             666,
-						UserID:               999,
 						Account:              "MO",
 						User:                 "moroot",
 						Database:             "system",
@@ -324,15 +322,15 @@ func Test_buffer2Sql_GetBatch_AllType(t *testing.T) {
 						StatementFingerprint: "show tables",
 						StatementTag:         "",
 						RequestAt:            util.TimeNano(0),
-						ExecPlan:             "",
+						ExecPlan:             nil,
 					},
 				},
 				buf: buf,
 			},
 			wantFunc: genStatementBatchSql,
 			want: `insert into system.statement_info (` +
-				"`statement_id`, `transaction_id`, `session_id`, `tenant_id`, `user_id`, `account`, `user`, `host`, `database`, `statement`, `statement_tag`, `statement_fingerprint`, `node_uuid`, `node_type`, `request_at`, `exec_plan`" +
-				`) values ("00000000-0000-0000-0000-000000000001", "00000000-0000-0000-0000-000000000001", "00000000-0000-0000-0000-000000000001", 666, 999, "MO", "moroot", "", "system", "show tables", "show tables", "", "node_uuid", "Standalone", "1970-01-01 00:00:00.000000", "")`,
+				"`statement_id`, `transaction_id`, `session_id`, `account`, `user`, `host`, `database`, `statement`, `statement_tag`, `statement_fingerprint`, `node_uuid`, `node_type`, `request_at`, `exec_plan`" +
+				`) values ("00000000-0000-0000-0000-000000000001", "00000000-0000-0000-0000-000000000001", "00000000-0000-0000-0000-000000000001", "MO", "moroot", "", "system", "show tables", "show tables", "", "node_uuid", "Standalone", "1970-01-01 00:00:00.000000", "null")`,
 		},
 		{
 			name:   "multi_statement",
@@ -343,8 +341,6 @@ func Test_buffer2Sql_GetBatch_AllType(t *testing.T) {
 						StatementID:          _1TraceID,
 						TransactionID:        _1TxnID,
 						SessionID:            _1SesID,
-						TenantID:             666,
-						UserID:               999,
 						Account:              "MO",
 						User:                 "moroot",
 						Database:             "system",
@@ -352,14 +348,12 @@ func Test_buffer2Sql_GetBatch_AllType(t *testing.T) {
 						StatementFingerprint: "show tables",
 						StatementTag:         "",
 						RequestAt:            util.TimeNano(0),
-						ExecPlan:             "",
+						ExecPlan:             nil,
 					},
 					&StatementInfo{
 						StatementID:          _2TraceID,
 						TransactionID:        _1TxnID,
 						SessionID:            _1SesID,
-						TenantID:             222,
-						UserID:               555,
 						Account:              "MO",
 						User:                 "moroot",
 						Database:             "system",
@@ -367,16 +361,16 @@ func Test_buffer2Sql_GetBatch_AllType(t *testing.T) {
 						StatementFingerprint: "show databases",
 						StatementTag:         "dcl",
 						RequestAt:            util.TimeNano(time.Microsecond),
-						ExecPlan:             "",
+						ExecPlan:             nil,
 					},
 				},
 				buf: buf,
 			},
 			wantFunc: genStatementBatchSql,
 			want: `insert into system.statement_info (` +
-				"`statement_id`, `transaction_id`, `session_id`, `tenant_id`, `user_id`, `account`, `user`, `host`, `database`, `statement`, `statement_tag`, `statement_fingerprint`, `node_uuid`, `node_type`, `request_at`, `exec_plan`" +
-				`) values ("00000000-0000-0000-0000-000000000001", "00000000-0000-0000-0000-000000000001", "00000000-0000-0000-0000-000000000001", 666, 999, "MO", "moroot", "", "system", "show tables", "show tables", "", "node_uuid", "Standalone", "1970-01-01 00:00:00.000000", "")` +
-				`,("00000000-0000-0000-0000-000000000002", "00000000-0000-0000-0000-000000000001", "00000000-0000-0000-0000-000000000001", 222, 555, "MO", "moroot", "", "system", "show databases", "show databases", "dcl", "node_uuid", "Standalone", "1970-01-01 00:00:00.000001", "")`,
+				"`statement_id`, `transaction_id`, `session_id`, `account`, `user`, `host`, `database`, `statement`, `statement_tag`, `statement_fingerprint`, `node_uuid`, `node_type`, `request_at`, `exec_plan`" +
+				`) values ("00000000-0000-0000-0000-000000000001", "00000000-0000-0000-0000-000000000001", "00000000-0000-0000-0000-000000000001", "MO", "moroot", "", "system", "show tables", "show tables", "", "node_uuid", "Standalone", "1970-01-01 00:00:00.000000", "null")` +
+				`,("00000000-0000-0000-0000-000000000002", "00000000-0000-0000-0000-000000000001", "00000000-0000-0000-0000-000000000001", "MO", "moroot", "", "system", "show databases", "show databases", "dcl", "node_uuid", "Standalone", "1970-01-01 00:00:00.000001", "null")`,
 		},
 		{
 			name:   "single_zap",
@@ -559,8 +553,6 @@ func Test_buffer2Sql_ShouldFlush(t *testing.T) {
 		sizeThreshold int64
 		batchFunc     genBatchFunc
 	}
-	err1 := errors.WithStack(errors.New("test1"))
-	err2 := errors.Wrapf(err1, "test2")
 	tests := []struct {
 		name        string
 		fields      fields
@@ -686,7 +678,7 @@ func Test_quote(t *testing.T) {
 			}
 		})
 	}
-	var err1 = errors.WithStack(errors.New("test1"))
+	var err1 = errors.WithContext(context.Background(), errors.New("test1"))
 	t.Logf("show quote(err): \"%s\"", quote(fmt.Sprintf("%+v", err1)))
 }
 
@@ -963,8 +955,6 @@ func Test_genCsvData(t *testing.T) {
 						StatementID:          _1TraceID,
 						TransactionID:        _1TxnID,
 						SessionID:            _1SesID,
-						TenantID:             666,
-						UserID:               999,
 						Account:              "MO",
 						User:                 "moroot",
 						Database:             "system",
@@ -972,12 +962,12 @@ func Test_genCsvData(t *testing.T) {
 						StatementFingerprint: "show tables",
 						StatementTag:         "",
 						RequestAt:            util.TimeNano(0),
-						ExecPlan:             "",
+						ExecPlan:             nil,
 					},
 				},
 				buf: buf,
 			},
-			want: `00000000-0000-0000-0000-000000000001,00000000-0000-0000-0000-000000000001,00000000-0000-0000-0000-000000000001,666,999,MO,moroot,,system,show tables,,show tables,node_uuid,Standalone,1970-01-01 00:00:00.000000,
+			want: `00000000-0000-0000-0000-000000000001,00000000-0000-0000-0000-000000000001,00000000-0000-0000-0000-000000000001,MO,moroot,,system,show tables,,show tables,node_uuid,Standalone,1970-01-01 00:00:00.000000,null
 `,
 		},
 		{
@@ -988,8 +978,6 @@ func Test_genCsvData(t *testing.T) {
 						StatementID:          _1TraceID,
 						TransactionID:        _1TxnID,
 						SessionID:            _1SesID,
-						TenantID:             666,
-						UserID:               999,
 						Account:              "MO",
 						User:                 "moroot",
 						Database:             "system",
@@ -997,14 +985,12 @@ func Test_genCsvData(t *testing.T) {
 						StatementFingerprint: "show tables",
 						StatementTag:         "",
 						RequestAt:            util.TimeNano(0),
-						ExecPlan:             "",
+						ExecPlan:             nil,
 					},
 					&StatementInfo{
 						StatementID:          _2TraceID,
 						TransactionID:        _1TxnID,
 						SessionID:            _1SesID,
-						TenantID:             321,
-						UserID:               567,
 						Account:              "MO",
 						User:                 "moroot",
 						Database:             "system",
@@ -1012,13 +998,13 @@ func Test_genCsvData(t *testing.T) {
 						StatementFingerprint: "show databases",
 						StatementTag:         "dcl",
 						RequestAt:            util.TimeNano(time.Microsecond),
-						ExecPlan:             "",
+						ExecPlan:             nil,
 					},
 				},
 				buf: buf,
 			},
-			want: `00000000-0000-0000-0000-000000000001,00000000-0000-0000-0000-000000000001,00000000-0000-0000-0000-000000000001,666,999,MO,moroot,,system,show tables,,show tables,node_uuid,Standalone,1970-01-01 00:00:00.000000,
-00000000-0000-0000-0000-000000000002,00000000-0000-0000-0000-000000000001,00000000-0000-0000-0000-000000000001,321,567,MO,moroot,,system,show databases,dcl,show databases,node_uuid,Standalone,1970-01-01 00:00:00.000001,
+			want: `00000000-0000-0000-0000-000000000001,00000000-0000-0000-0000-000000000001,00000000-0000-0000-0000-000000000001,MO,moroot,,system,show tables,,show tables,node_uuid,Standalone,1970-01-01 00:00:00.000000,null
+00000000-0000-0000-0000-000000000002,00000000-0000-0000-0000-000000000001,00000000-0000-0000-0000-000000000001,MO,moroot,,system,show databases,dcl,show databases,node_uuid,Standalone,1970-01-01 00:00:00.000001,null
 `,
 		},
 		{

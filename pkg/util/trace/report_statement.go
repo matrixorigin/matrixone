@@ -16,9 +16,13 @@ package trace
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"github.com/google/uuid"
+	"time"
 	"unsafe"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/export"
 )
@@ -30,8 +34,6 @@ type StatementInfo struct {
 	StatementID          [16]byte      `json:"statement_id"`
 	TransactionID        [16]byte      `json:"transaction_id"`
 	SessionID            [16]byte      `jons:"session_id"`
-	TenantID             uint32        `json:"tenant_id"`
-	UserID               uint32        `json:"user_id"`
 	Account              string        `json:"account"`
 	User                 string        `json:"user"`
 	Host                 string        `json:"host"`
@@ -40,7 +42,10 @@ type StatementInfo struct {
 	StatementFingerprint string        `json:"statement_fingerprint"`
 	StatementTag         string        `json:"statement_tag"`
 	RequestAt            util.TimeNano `json:"request_at"` // see WithRequestAt
-	ExecPlan             string        `json:"exec_plan"`
+	ExecPlan             any           `json:"exec_plan"`
+
+	// flow ctrl
+	end bool
 }
 
 func (s StatementInfo) GetName() string {
@@ -61,16 +66,10 @@ func (s StatementInfo) CsvOptions() *CsvOptions {
 }
 
 func (s StatementInfo) CsvFields() []string {
-	var uuid = make([]byte, 36)
 	var result []string
-	bytes2Uuid(uuid, s.StatementID)
-	result = append(result, string(uuid[:]))
-	bytes2Uuid(uuid, s.TransactionID)
-	result = append(result, string(uuid[:]))
-	bytes2Uuid(uuid, s.SessionID)
-	result = append(result, string(uuid[:]))
-	result = append(result, fmt.Sprintf("%d", s.TenantID))
-	result = append(result, fmt.Sprintf("%d", s.UserID))
+	result = append(result, uuid.UUID(s.StatementID).String())
+	result = append(result, uuid.UUID(s.TransactionID).String())
+	result = append(result, uuid.UUID(s.SessionID).String())
 	result = append(result, s.Account)
 	result = append(result, s.User)
 	result = append(result, s.Host)
@@ -81,8 +80,58 @@ func (s StatementInfo) CsvFields() []string {
 	result = append(result, GetNodeResource().NodeUuid)
 	result = append(result, GetNodeResource().NodeType)
 	result = append(result, nanoSec2DatetimeString(s.RequestAt))
-	result = append(result, s.ExecPlan)
+	result = append(result, s.ExecPlan2Json())
 	return result
+}
+
+func (s *StatementInfo) ExecPlan2Json() string {
+	json, err := json.Marshal(s.ExecPlan)
+	if err != nil {
+		panic(moerr.NewPanicError(err))
+	}
+	return string(json)
+}
+
+// SetExecPlan record execPlan should be TxnComputationWrapper.plan obj, which support 2json.
+func (s *StatementInfo) SetExecPlan(execPlan any) {
+	s.ExecPlan = execPlan
+}
+
+func (s *StatementInfo) End(ctx context.Context) {
+	s.end = true
+	ReportStatement(ctx, s)
+}
+
+func EndStatement(ctx context.Context, err error) time.Time {
+	s := StatementFromContext(ctx)
+	if s == nil {
+		panic(moerr.NewPanicError(fmt.Errorf("no statement info in context")))
+	}
+	endTime := util.NowNS()
+	if !s.end {
+		s.End(ctx)
+	}
+	status := "Success"
+	if err != nil {
+		status = fmt.Sprintf("Failed. %s", err.Error())
+	}
+
+	ReportStats(ctx, &MOStatsInfo{
+		StatementID:       s.StatementID,
+		Account:           s.Account,
+		Timestamp:         endTime,
+		Operator:          "status",
+		OperateObjectDesc: status,
+		NodeId:            0,
+		InputRows:         0,
+		OutputRows:        0,
+		TimeConsumed:      int64((endTime - s.RequestAt) / 1e3),
+		InputSize:         0,
+		OutputSize:        0,
+		MemorySize:        0,
+	})
+
+	return util.Time(endTime)
 }
 
 type StatementInfoStatus int
