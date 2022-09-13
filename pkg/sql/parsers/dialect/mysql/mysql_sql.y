@@ -224,7 +224,7 @@ import (
 %token <str> TIME TIMESTAMP DATETIME YEAR
 %token <str> CHAR VARCHAR BOOL CHARACTER VARBINARY NCHAR
 %token <str> TEXT TINYTEXT MEDIUMTEXT LONGTEXT
-%token <str> BLOB TINYBLOB MEDIUMBLOB LONGBLOB JSON ENUM
+%token <str> BLOB TINYBLOB MEDIUMBLOB LONGBLOB JSON ENUM UUID
 %token <str> GEOMETRY POINT LINESTRING POLYGON GEOMETRYCOLLECTION MULTIPOINT MULTILINESTRING MULTIPOLYGON
 %token <str> INT1 INT2 INT3 INT4 INT8
 
@@ -5754,6 +5754,7 @@ name_confict:
 |   USER
 |   WEEK
 |   YEAR
+|   UUID
 
 interval_expr:
     INTERVAL expression time_unit
@@ -6673,6 +6674,21 @@ char_type:
 	        },
         }
     }
+|  UUID
+    {
+   	locale := ""
+    	$$ = &tree.T{
+	     InternalType: tree.InternalType{
+		Family: tree.UuidFamily,
+	   	FamilyString: $1,
+		Width:  128,
+		Locale: &locale,
+		Oid:    uint32(defines.MYSQL_TYPE_UUID),
+	},
+    }
+}
+
+
 
 spatial_type:
     GEOMETRY

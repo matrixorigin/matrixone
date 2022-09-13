@@ -33,48 +33,87 @@ type Condition func(*conditions)
 type Op int
 
 var (
-	// EQ ==
+	// EQ record == condition
 	EQ = Op(1)
-	// GT >
+	// GT record > condition
 	GT = Op(2)
+	// GE record >= condition
+	GE = Op(3)
+	// LT record < condition
+	LT = Op(4)
+	// LT record <= condition
+	LE = Op(5)
 )
 
 type conditions struct {
 	limit int
 
-	taskIDOp Op
-	taskID   uint64
+	hasTaskIDCond bool
+	taskIDOp      Op
+	taskID        uint64
 
-	taskRunnerOp Op
-	taskRunner   string
+	hasTaskRunnerCond bool
+	taskRunnerOp      Op
+	taskRunner        string
+
+	hasTaskStatusCond bool
+	taskStatusOp      Op
+	taskStatus        task.TaskStatus
+
+	hasTaskEpochCond bool
+	taskEpochOp      Op
+	taskEpoch        uint32
 }
 
-// WithLimit set query result limit
-func WithLimit(limit int) Condition {
+// WithLimitCond set query result limit
+func WithLimitCond(limit int) Condition {
 	return func(qo *conditions) {
 		qo.limit = limit
 	}
 }
 
-// WithTaskID set task id condition
-func WithTaskID(op Op, value uint64) Condition {
+// WithTaskIDCond set task id condition
+func WithTaskIDCond(op Op, value uint64) Condition {
 	return func(qo *conditions) {
-		qo.taskID = value
+		qo.hasTaskIDCond = true
 		qo.taskIDOp = op
+		qo.taskID = value
 	}
 }
 
-// WithTaskRunner set task runner condition
-func WithTaskRunner(op Op, value string) Condition {
+// WithTaskRunnerCond set task runner condition
+func WithTaskRunnerCond(op Op, value string) Condition {
 	return func(qo *conditions) {
+		qo.hasTaskRunnerCond = true
 		qo.taskRunner = value
 		qo.taskRunnerOp = op
+	}
+}
+
+// WithTaskStatusCond set status condition
+func WithTaskStatusCond(op Op, value task.TaskStatus) Condition {
+	return func(qo *conditions) {
+		qo.hasTaskStatusCond = true
+		qo.taskStatus = value
+		qo.taskStatusOp = op
+	}
+}
+
+// WithTaskEpochCond set task epoch condition
+func WithTaskEpochCond(op Op, value uint32) Condition {
+	return func(qo *conditions) {
+		qo.hasTaskEpochCond = true
+		qo.taskEpoch = value
+		qo.taskEpochOp = op
 	}
 }
 
 // TaskService Asynchronous Task Service, which provides scheduling execution and management of
 // asynchronous tasks. CN, DN, HAKeeper, LogService will all hold this service.
 type TaskService interface {
+	// Close close the task service
+	Close() error
+
 	// Create Creates an asynchronous task that executes a single time, this method is idempotent, the
 	// same task is not created repeatedly based on multiple calls.
 	Create(context.Context, task.TaskMetadata) error
@@ -83,13 +122,15 @@ type TaskService interface {
 	// CreateCronTask is similar to Create, but create a task that runs periodically, with the period
 	// described using a Cron expression.
 	CreateCronTask(ctx context.Context, task task.TaskMetadata, cronExpr string) error
-	// Complete task completed.
-	Complete(ctx context.Context, taskRunner string, task task.Task) error
+	// Allocate allocate task runner fot spec task.
+	Allocate(ctx context.Context, value task.Task, taskRunner string) error
+	// Complete task completed. The result used to indicate whether the execution succeeded or failed
+	Complete(ctx context.Context, taskRunner string, task task.Task, result task.ExecuteResult) error
 	// Heartbeat sending a heartbeat tells the scheduler that the specified task is running normally.
 	// If the scheduler does not receive the heartbeat for a long time, it will reassign the task executor
 	// to execute the task. Returning `ErrInvalidTask` means that the Task has been reassigned or has
 	// ended, and the Task execution needs to be terminated immediately。
-	Heartbeat(ctx context.Context, taskRunner string, tasks ...task.Task) error
+	Heartbeat(ctx context.Context, task task.Task) error
 	// QueryTask query tasks by conditions
 	QueryTask(context.Context, ...Condition) ([]task.Task, error)
 	// QueryCronTask returns all cron task metadata
@@ -120,6 +161,9 @@ type TaskRunner interface {
 
 // TaskStorage task storage
 type TaskStorage interface {
+	// Close close the task storage
+	Close() error
+
 	// Add add tasks and returns number of successful added
 	Add(context.Context, ...task.Task) (int, error)
 	// Update update tasks and returns number of successful updated

@@ -34,6 +34,7 @@ const (
 	TimestampSize  int = 8
 	Decimal64Size  int = 8
 	Decimal128Size int = 16
+	UuidSize       int = 16
 )
 
 func EncodeSlice[T any](v []T, sz int) (ret []byte) {
@@ -220,6 +221,14 @@ func DecodeDecimal128(v []byte) Decimal128 {
 	return *(*Decimal128)(unsafe.Pointer(&v[0]))
 }
 
+func EncodeUuid(v *Uuid) []byte {
+	return unsafe.Slice((*byte)(unsafe.Pointer(v)), UuidSize)
+}
+
+func DecodeUuid(v []byte) Uuid {
+	return *(*Uuid)(unsafe.Pointer(&v[0]))
+}
+
 func EncodeFixedSlice[T any](v []T, sz int) (ret []byte) {
 	if len(v) > 0 {
 		ret = unsafe.Slice((*byte)(unsafe.Pointer(&v[0])), cap(v)*sz)[:len(v)*sz]
@@ -350,6 +359,14 @@ func DecodeDateSlice(v []byte) []Date {
 	return DecodeFixedSlice[Date](v, DateSize)
 }
 
+func EncodeUuidSlice(v []Uuid) []byte {
+	return EncodeFixedSlice(v, UuidSize)
+}
+
+func DecodeUuidSlice(v []byte) []Uuid {
+	return DecodeFixedSlice[Uuid](v, UuidSize)
+}
+
 func EncodeDatetimeSlice(v []Datetime) []byte {
 	return EncodeFixedSlice(v, DatetimeSize)
 }
@@ -467,6 +484,8 @@ func DecodeValue(val []byte, typ Type) any {
 		return DecodeFixed[Decimal64](val)
 	case T_decimal128:
 		return DecodeFixed[Decimal128](val)
+	case T_uuid:
+		return DecodeFixed[Uuid](val)
 	case T_char, T_varchar:
 		return val
 	default:
@@ -498,6 +517,8 @@ func EncodeValue(val any, typ Type) []byte {
 		return EncodeFixed(val.(Decimal64))
 	case T_decimal128:
 		return EncodeFixed(val.(Decimal128))
+	case T_uuid:
+		return EncodeFixed(val.(Uuid))
 	case T_float32:
 		return EncodeFixed(val.(float32))
 	case T_float64:
@@ -600,6 +621,11 @@ func WriteValues(w io.Writer, vals ...any) (n int64, err error) {
 			}
 			n += int64(nr)
 		case Decimal128:
+			if nr, err = w.Write(EncodeFixed(v)); err != nil {
+				return
+			}
+			n += int64(nr)
+		case Uuid:
 			if nr, err = w.Write(EncodeFixed(v)); err != nil {
 				return
 			}

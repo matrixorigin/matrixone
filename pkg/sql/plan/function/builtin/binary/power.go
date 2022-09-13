@@ -15,7 +15,6 @@
 package binary
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/power"
@@ -24,8 +23,7 @@ import (
 
 func Power(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	left, right := vectors[0], vectors[1]
-	resultType := types.Type{Oid: types.T_float64, Size: 8}
-	resultElementSize := int(resultType.Size)
+	resultType := types.T_float64.ToType()
 	leftValues, rightValues := vector.MustTCols[float64](left), vector.MustTCols[float64](right)
 	switch {
 	case left.IsScalar() && right.IsScalar():
@@ -40,36 +38,30 @@ func Power(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, err
 		if left.ConstVectorIsNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
-		resultVector, err := proc.AllocVector(resultType, int64(resultElementSize*len(rightValues)))
+		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(rightValues)), right.Nsp)
 		if err != nil {
 			return nil, err
 		}
-		resultValues := types.DecodeFloat64Slice(resultVector.Data)
-		resultValues = resultValues[:len(rightValues)]
-		nulls.Set(resultVector.Nsp, right.Nsp)
-		vector.SetCol(resultVector, power.PowerScalarLeftConst(leftValues[0], rightValues, resultValues))
+		resultValues := vector.MustTCols[float64](resultVector)
+		power.PowerScalarLeftConst(leftValues[0], rightValues, resultValues)
 		return resultVector, nil
 	case !left.IsScalar() && right.IsScalar():
 		if right.ConstVectorIsNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
-		resultVector, err := proc.AllocVector(resultType, int64(resultElementSize*len(leftValues)))
+		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(leftValues)), left.Nsp)
 		if err != nil {
 			return nil, err
 		}
-		resultValues := types.DecodeFloat64Slice(resultVector.Data)
-		resultValues = resultValues[:len(leftValues)]
-		nulls.Set(resultVector.Nsp, left.Nsp)
-		vector.SetCol(resultVector, power.PowerScalarRightConst(rightValues[0], leftValues, resultValues))
+		resultValues := vector.MustTCols[float64](resultVector)
+		power.PowerScalarRightConst(rightValues[0], leftValues, resultValues)
 		return resultVector, nil
 	}
-	resultVector, err := proc.AllocVector(resultType, int64(resultElementSize*len(rightValues)))
+	resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(rightValues)), nil)
 	if err != nil {
 		return nil, err
 	}
-	resultValues := types.DecodeFloat64Slice(resultVector.Data)
-	resultValues = resultValues[:len(leftValues)]
-	nulls.Or(left.Nsp, right.Nsp, resultVector.Nsp)
-	vector.SetCol(resultVector, power.Power(leftValues, rightValues, resultValues))
+	resultValues := vector.MustTCols[float64](resultVector)
+	power.Power(leftValues, rightValues, resultValues)
 	return resultVector, nil
 }

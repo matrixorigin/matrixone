@@ -37,3 +37,6 @@ type BoolMax struct {
 
 type StrMax struct {
 }
+
+type UuidMax struct {
+}
