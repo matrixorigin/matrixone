@@ -20,6 +20,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/google/uuid"
+	"sync"
 	"time"
 	"unsafe"
 
@@ -49,13 +50,16 @@ type StatementInfo struct {
 
 	// after
 	Status        StatementInfoStatus `json:"status"`
-	Error         string              `json:"error"`
+	Error         error               `json:"error"`
 	ResponseAt    util.TimeNano       `json:"response_at"`
 	Duration      uint64              `json:"duration"` // unit: ns
 	ExecPlanStats any                 `json:"exec_plan_stats"`
 
 	// flow ctrl
 	end bool
+	mux sync.Mutex
+	// mark reported
+	reported bool
 }
 
 func (s StatementInfo) GetName() string {
@@ -75,7 +79,10 @@ func (s StatementInfo) CsvOptions() *CsvOptions {
 	return CommonCsvOptions
 }
 
-func (s StatementInfo) CsvFields() []string {
+func (s *StatementInfo) CsvFields() []string {
+	s.mux.Lock()
+	defer s.mux.Unlock()
+	s.reported = true
 	var result []string
 	result = append(result, uuid.UUID(s.StatementID).String())
 	result = append(result, uuid.UUID(s.TransactionID).String())
@@ -91,8 +98,13 @@ func (s StatementInfo) CsvFields() []string {
 	result = append(result, GetNodeResource().NodeType)
 	result = append(result, nanoSec2DatetimeString(s.RequestAt))
 	result = append(result, nanoSec2DatetimeString(s.ResponseAt))
-	result = append(result, s.Status.String())
 	result = append(result, fmt.Sprintf("%d", s.Duration))
+	result = append(result, s.Status.String())
+	if s.Error == nil {
+		result = append(result, "")
+	} else {
+		result = append(result, fmt.Sprintf("%s", s.Error))
+	}
 	result = append(result, s.ExecPlan2Json())
 	result = append(result, s.ExecPlanStats2Json())
 
@@ -126,8 +138,8 @@ func (s *StatementInfo) SetExecPlan(execPlan any) {
 	s.ExecPlan = execPlan
 }
 
-func (s *StatementInfo) SetExecPlanStats(execPlan any) {
-	s.ExecPlan = execPlan
+func (s *StatementInfo) SetExecPlanStats(stats any) {
+	s.ExecPlanStats = stats
 }
 
 func (s *StatementInfo) SetTxnIDIsZero(id []byte) {
@@ -149,13 +161,15 @@ func EndStatement(ctx context.Context, err error) time.Time {
 	if s.end {
 		goto endL
 	}
-	// do report, fixme: maybe last report not done yet
+	// do report
+	s.mux.Lock()
+	defer s.mux.Unlock()
 	s.end = true
 	s.ResponseAt = endTime
 	s.Duration = s.ResponseAt - s.RequestAt
 	s.Status = StatementStatusSuccess
 	if err != nil {
-		s.Error = err.Error()
+		s.Error = err
 		s.Status = StatementStatusFailed
 	}
 	s.Report(ctx)

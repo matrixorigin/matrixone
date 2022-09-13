@@ -75,8 +75,9 @@ const (
  node_type varchar(64) NOT NULL COMMENT "node type in MO, enum: DN, CN, LogService;",
  request_at datetime(6) NOT NULL,
  response_at datetime(6) NOT NULL,
- ` + "`status`" + ` varchar(32) default 'Running' COMMENT 'sql statement running status, enum: Running, Success, Failed',
  duration bigint unsigned default 0 COMMENT 'exec time, unit: ns',
+ ` + "`status`" + ` varchar(32) default 'Running' COMMENT 'sql statement running status, enum: Running, Success, Failed',
+ error TEXT NOT NULL COMMENT 'error message',
  exec_plan JSON NOT NULL COMMENT "sql execution plan",
  exec_plan_stats JSON NOT NULL COMMENT "sql execution plan with stats info",
 PRIMARY KEY (statement_id)
