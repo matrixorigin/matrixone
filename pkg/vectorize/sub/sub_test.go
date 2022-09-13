@@ -134,7 +134,7 @@ func TestDec128Sub(t *testing.T) {
 
 	res := vector.MustTCols[types.Decimal128](cv)
 	for i := 0; i < 10; i++ {
-		d, _ := types.Decimal128_FromInt64(as[i]-bs[i], 64)
+		d, _ := types.Decimal128_FromInt64(as[i]-bs[i], 64, 0)
 		if !res[i].Eq(d) {
 			t.Fatalf("decimal128 sub wrong result")
 		}
@@ -161,7 +161,7 @@ func TestDec64SubOfOppNumber(t *testing.T) {
 
 	res := vector.MustTCols[types.Decimal64](cv)
 	for i := 0; i < 10; i++ {
-		d, _ := types.Decimal64_FromInt64(as[i]-bs[i], 64)
+		d, _ := types.Decimal64_FromInt64(as[i]-bs[i], 64, 0)
 		if !res[i].Eq(d) {
 			t.Fatalf("decimal64 sub wrong result")
 		}
@@ -188,7 +188,7 @@ func TestDec128SubOfOppNumber(t *testing.T) {
 
 	res := vector.MustTCols[types.Decimal128](cv)
 	for i := 0; i < 10; i++ {
-		d, _ := types.Decimal128_FromInt64(as[i]-bs[i], 64)
+		d, _ := types.Decimal128_FromInt64(as[i]-bs[i], 64, 0)
 		if !res[i].Eq(d) {
 			t.Fatalf("decimal128 sub wrong result")
 		}

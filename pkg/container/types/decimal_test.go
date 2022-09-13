@@ -63,7 +63,7 @@ func TestParse(t *testing.T) {
 
 	d128, err = Decimal128_FromString(longstr)
 	require.True(t, err == nil)
-	dd, err = d128.ToDecimal64(64, 0)
+	dd, err = d128.ToDecimal64(33, 15)
 	require.True(t, d64.Eq(dd))
 	require.True(t, err == nil)
 }
