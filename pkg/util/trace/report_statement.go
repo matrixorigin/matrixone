@@ -152,7 +152,7 @@ func (s *StatementInfo) Report(ctx context.Context) {
 	ReportStatement(ctx, s)
 }
 
-func EndStatement(ctx context.Context, err error) time.Time {
+var EndStatement = func(ctx context.Context, err error) time.Time {
 	s := StatementFromContext(ctx)
 	if s == nil {
 		panic(moerr.NewPanicError(fmt.Errorf("no statement info in context")))

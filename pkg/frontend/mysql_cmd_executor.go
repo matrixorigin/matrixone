@@ -147,7 +147,7 @@ func (mce *MysqlCmdExecutor) GetRoutineManager() *RoutineManager {
 	return mce.routineMgr
 }
 
-func (mce *MysqlCmdExecutor) RecordStatement(ctx context.Context, ses *Session, proc *process.Process, cw ComputationWrapper, beginIns time.Time) context.Context {
+var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Process, cw ComputationWrapper, beginIns time.Time) context.Context {
 	sessInfo := proc.SessionInfo
 	tenant := ses.GetTenantInfo()
 	if tenant == nil {
@@ -1774,7 +1774,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 	for _, cw := range cws {
 		ses.SetMysqlResultSet(&MysqlResultSet{})
 		stmt := cw.GetAst()
-		requestCtx = mce.RecordStatement(requestCtx, ses, proc, cw, beginInstant)
+		requestCtx = RecordStatement(requestCtx, ses, proc, cw, beginInstant)
 
 		if ses.GetTenantInfo() != nil {
 			ses.SetPrivilege(determinePrivilegeSetOfStatement(stmt))

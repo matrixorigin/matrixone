@@ -50,6 +50,13 @@ func Test_mce(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 
+		stm := &trace.StatementInfo{}
+		ctx := trace.ContextWithStatement(ctx, stm)
+		rsStubs := gostub.Stub(&RecordStatement, func(context.Context, *Session, *process.Process, ComputationWrapper, time.Time) context.Context {
+			return ctx
+		})
+		defer rsStubs.Reset()
+
 		eng := mock_frontend.NewMockEngine(ctrl)
 		eng.EXPECT().Hints().Return(engine.Hints{
 			CommitOrRollbackTimeout: time.Second,
