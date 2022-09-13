@@ -15,15 +15,17 @@
 package unnest
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
 type Param struct {
-	Attrs  []string
-	Cols   []*plan.ColDef
-	Extern *tree.UnnestParam
+	Attrs   []string
+	Cols    []*plan.ColDef
+	Extern  *tree.UnnestParam
+	colName string
+	end     bool
+	seq     int32
 }
 
 type Argument struct {
@@ -31,50 +33,52 @@ type Argument struct {
 }
 
 var (
-	end           = false
-	seq     int32 = 0
-	colName       = "UNNEST_DEFAULT"
-	//rows     = 0
-	cols       = []string{"col", "seq", "key", "path", "index", "value", "this"}
-	colDefs    []*plan.ColDef
-	name2Types = map[string]types.Type{
-		"col":   colTypes[0],
-		"seq":   colTypes[1],
-		"key":   colTypes[2],
-		"path":  colTypes[3],
-		"index": colTypes[4],
-		"value": colTypes[5],
-		"this":  colTypes[6],
-	}
-	colTypes = []types.Type{
-		{
-			Oid:   types.T_varchar,
-			Width: 4,
-		},
-		{
-			Oid: types.T_int32,
-		},
-		{
-			Oid:   types.T_varchar,
-			Width: 24,
-		},
-		{
-			Oid:   types.T_varchar,
-			Width: 24,
-		},
-		{
-			Oid:   types.T_varchar,
-			Width: 4,
-		},
-		{
-			Oid:   types.T_varchar,
-			Width: 256,
-		},
-		{
-			Oid:   types.T_varchar,
-			Width: 256,
-		},
-	}
+// end           = false
+// seq     int32 = 0
+// colName       = "UNNEST_DEFAULT"
+// //rows     = 0
+// cols       = []string{"col", "seq", "key", "path", "index", "value", "this"}
+// colDefs    []*plan.ColDef
+//
+//	name2Types = map[string]types.Type{
+//		"col":   colTypes[0],
+//		"seq":   colTypes[1],
+//		"key":   colTypes[2],
+//		"path":  colTypes[3],
+//		"index": colTypes[4],
+//		"value": colTypes[5],
+//		"this":  colTypes[6],
+//	}
+//
+//	colTypes = []types.Type{
+//		{
+//			Oid:   types.T_varchar,
+//			Width: 4,
+//		},
+//		{
+//			Oid: types.T_int32,
+//		},
+//		{
+//			Oid:   types.T_varchar,
+//			Width: 24,
+//		},
+//		{
+//			Oid:   types.T_varchar,
+//			Width: 24,
+//		},
+//		{
+//			Oid:   types.T_varchar,
+//			Width: 4,
+//		},
+//		{
+//			Oid:   types.T_varchar,
+//			Width: 256,
+//		},
+//		{
+//			Oid:   types.T_varchar,
+//			Width: 256,
+//		},
+//	}
 )
 
 const (
