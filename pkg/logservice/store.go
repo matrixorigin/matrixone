@@ -16,6 +16,7 @@ package logservice
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/hakeeper/task"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -131,6 +132,8 @@ type store struct {
 	bootstrapCheckCycles uint64
 	bootstrapMgr         *bootstrap.Manager
 
+	taskScheduler hakeeper.TaskScheduler
+
 	mu struct {
 		sync.Mutex
 		truncateCh      chan struct{}
@@ -151,6 +154,7 @@ func newLogStore(cfg Config) (*store, error) {
 		cfg:           cfg,
 		nh:            nh,
 		checker:       checkers.NewCoordinator(hakeeperConfig),
+		taskScheduler: task.NewTaskScheduler(cfg.TaskService, hakeeperConfig),
 		alloc:         newIDAllocator(),
 		stopper:       stopper.NewStopper("log-store"),
 		tickerStopper: stopper.NewStopper("hakeeper-ticker"),

@@ -33,7 +33,7 @@ type memTaskStorage struct {
 	cronTaskIndexes map[string]uint64
 }
 
-func newMemTaskStorage() TaskStorage {
+func NewMemTaskStorage() TaskStorage {
 	return &memTaskStorage{
 		tasks:           make(map[uint64]task.Task),
 		taskIndexes:     make(map[string]uint64),

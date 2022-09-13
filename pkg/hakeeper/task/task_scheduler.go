@@ -32,12 +32,13 @@ type Scheduler struct {
 	cfg hakeeper.Config
 }
 
-func NewTaskScheduler(ctx context.Context, storage taskservice.TaskStorage, cfg hakeeper.Config) *Scheduler {
+func NewTaskScheduler(taskService taskservice.TaskService, cfg hakeeper.Config) *Scheduler {
 	cfg.Fill()
 	return &Scheduler{
-		ctx:         ctx,
-		logger:      logutil.GetGlobalLogger().Named("hakeeper"),
-		TaskService: taskservice.NewTaskService(storage),
+		ctx:    context.Background(),
+		logger: logutil.GetGlobalLogger().Named("hakeeper"),
+
+		TaskService: taskService,
 		cfg:         cfg,
 	}
 }

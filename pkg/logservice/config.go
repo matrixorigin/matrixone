@@ -15,6 +15,7 @@
 package logservice
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"strconv"
 	"strings"
 	"time"
@@ -153,6 +154,8 @@ type Config struct {
 
 	// HAKeeperClientConfig is the config for HAKeeperClient
 	HAKeeperClientConfig HAKeeperClientConfig
+	// TaskService is the interface for managing async tasks running on CNs.
+	TaskService taskservice.TaskService
 	// DisableWorkers disables the HAKeeper ticker and HAKeeper client in tests.
 	// Never set this field to true in production
 	DisableWorkers bool
@@ -293,6 +296,9 @@ func (c *Config) Validate() error {
 func (c *Config) Fill() {
 	if c.FS == nil {
 		c.FS = vfs.Default
+	}
+	if c.TaskService == nil {
+		c.TaskService = taskservice.NewTaskService(taskservice.NewMemTaskStorage())
 	}
 	if c.RTTMillisecond == 0 {
 		c.RTTMillisecond = 200
