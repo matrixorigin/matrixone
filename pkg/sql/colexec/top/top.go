@@ -41,7 +41,11 @@ func String(arg any, buf *bytes.Buffer) {
 func Prepare(_ *process.Process, arg any) error {
 	ap := arg.(*Argument)
 	ap.ctr = new(Container)
-	ap.ctr.sels = make([]int64, 0, ap.Limit)
+	if ap.Limit > 1024 {
+		ap.ctr.sels = make([]int64, 0, 1024)
+	} else {
+		ap.ctr.sels = make([]int64, 0, ap.Limit)
+	}
 	ap.ctr.poses = make([]int32, 0, len(ap.Fs))
 	return nil
 }
