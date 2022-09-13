@@ -940,11 +940,9 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 	astOrderBy := stmt.OrderBy
 	astLimit := stmt.Limit
 
-	switch selectClause := stmt.Select.(type) {
-	case *tree.SelectClause:
-		clause = selectClause
-	case *tree.ParenSelect:
-		for {
+	// strip parentheses
+	for {
+		if selectClause, ok := stmt.Select.(*tree.ParenSelect); ok {
 			if selectClause.Select.OrderBy != nil {
 				if astOrderBy != nil {
 					return 0, moerr.NewError(moerr.INVALID_INPUT, "multiple ORDER BY clauses not allowed")
@@ -957,22 +955,15 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 				}
 				astLimit = selectClause.Select.Limit
 			}
-
-			switch subClause := selectClause.Select.Select.(type) {
-			case *tree.SelectClause:
-				clause = subClause
-			case *tree.ParenSelect:
-				selectClause = selectClause.Select.Select.(*tree.ParenSelect)
-			case *tree.UnionClause:
-				return builder.buildUnion(subClause, astOrderBy, astLimit, ctx, isRoot)
-			default:
-				return 0, errors.New("", fmt.Sprintf("Statement '%s' will be supported in future version.", tree.String(stmt, dialect.MYSQL)))
-			}
-
-			if clause != nil {
-				break
-			}
+			stmt = selectClause.Select
+		} else {
+			break
 		}
+	}
+
+	switch selectClause := stmt.Select.(type) {
+	case *tree.SelectClause:
+		clause = selectClause
 	case *tree.UnionClause:
 		return builder.buildUnion(selectClause, astOrderBy, astLimit, ctx, isRoot)
 	case *tree.ValuesClause:
