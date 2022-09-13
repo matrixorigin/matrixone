@@ -22,20 +22,27 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 )
 
+// ColumnBlock is the organizational structure of a vector in objectio
+// One batch can be written at a time, and a batch can contain multiple vectors.
+// It is a child of the block
 type ColumnBlock struct {
-	meta  *ColumnMeta
-	block *Block
+	// meta is the metadata of the ColumnBlock,
+	// such as index, data location, compression algorithm...
+	meta *ColumnMeta
+
+	// object is the block.object
+	object *Object
 }
 
-func NewColumnBlock(idx uint16, block *Block) ColumnObject {
+func NewColumnBlock(idx uint16, object *Object) ColumnObject {
 	meta := &ColumnMeta{
 		idx:         idx,
 		zoneMap:     &index.ZoneMap{},
 		bloomFilter: Extent{},
 	}
 	col := &ColumnBlock{
-		block: block,
-		meta:  meta,
+		object: object,
+		meta:   meta,
 	}
 	return col
 }
@@ -43,14 +50,14 @@ func NewColumnBlock(idx uint16, block *Block) ColumnObject {
 func (cb *ColumnBlock) GetData() (*fileservice.IOVector, error) {
 	var err error
 	data := &fileservice.IOVector{
-		FilePath: cb.block.object.name,
+		FilePath: cb.object.name,
 		Entries:  make([]fileservice.IOEntry, 1),
 	}
 	data.Entries[0] = fileservice.IOEntry{
 		Offset: int(cb.meta.location.Offset()),
 		Size:   int(cb.meta.location.Length()),
 	}
-	err = cb.block.object.fs.Read(context.Background(), data)
+	err = cb.object.fs.Read(context.Background(), data)
 	if err != nil {
 		return nil, err
 	}
@@ -60,14 +67,14 @@ func (cb *ColumnBlock) GetData() (*fileservice.IOVector, error) {
 func (cb *ColumnBlock) GetIndex() (*fileservice.IOVector, error) {
 	var err error
 	data := &fileservice.IOVector{
-		FilePath: cb.block.object.name,
+		FilePath: cb.object.name,
 		Entries:  make([]fileservice.IOEntry, 1),
 	}
 	data.Entries[0] = fileservice.IOEntry{
 		Offset: int(cb.meta.bloomFilter.Offset()),
 		Size:   int(cb.meta.bloomFilter.Length()),
 	}
-	err = cb.block.object.fs.Read(context.Background(), data)
+	err = cb.object.fs.Read(context.Background(), data)
 	if err != nil {
 		return nil, err
 	}

@@ -44,11 +44,11 @@ type Reader interface {
 	// Read is to read columns data of a block from fileservice at one time
 	// extent is location of the block meta
 	// idxs is the column serial number of the data to be read
-	Read(extent Extent, idxs []uint16) (*fileservice.IOVector, error)
+	Read(extents Extent, idxs []uint16) (*fileservice.IOVector, error)
 
 	// ReadMeta is the meta that reads a block
 	// extent is location of the block meta
-	ReadMeta(extent Extent) (*Block, error)
+	ReadMeta(extent []Extent) ([]*Block, error)
 
 	// ReadIndex is the index data of the read columns
 	ReadIndex(extent Extent, idxs []uint16) (*fileservice.IOVector, error)
@@ -75,6 +75,8 @@ type BlockObject interface {
 // ColumnObject is a vector in a batch written to fileservice
 type ColumnObject interface {
 	// GetData gets the data of ColumnObject
+	// Returns an IOVector, the caller needs to traverse the IOVector
+	// to get all the structures required for data generation
 	GetData() (*fileservice.IOVector, error)
 
 	// GetIndex gets the index of ColumnObject

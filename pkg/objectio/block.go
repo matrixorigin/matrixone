@@ -54,7 +54,7 @@ func NewBlock(batch *batch.Batch, object *Object) BlockObject {
 		columns: make([]ColumnObject, len(batch.Vecs)),
 	}
 	for i := range block.columns {
-		block.columns[i] = NewColumnBlock(uint16(i), block)
+		block.columns[i] = NewColumnBlock(uint16(i), block.object)
 	}
 	return block
 }
@@ -144,7 +144,7 @@ func (b *Block) UnMarshalMeta(data []byte) error {
 	}
 	b.columns = make([]ColumnObject, b.header.columnCount)
 	for i := range b.columns {
-		b.columns[i] = NewColumnBlock(uint16(i), b)
+		b.columns[i] = NewColumnBlock(uint16(i), b.object)
 		err = b.columns[i].(*ColumnBlock).UnMarshalMate(cache)
 		if err != nil {
 			return err

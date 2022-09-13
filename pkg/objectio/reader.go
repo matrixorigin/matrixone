@@ -32,34 +32,45 @@ func NewObjectReader(name string, fs fileservice.FileService) (Reader, error) {
 	return reader, nil
 }
 
-func (r *ObjectReader) ReadMeta(extent Extent) (*Block, error) {
+func (r *ObjectReader) ReadMeta(extents []Extent) ([]*Block, error) {
 	var err error
-	meta := &fileservice.IOVector{
+	if len(extents) == 0 {
+		return nil, nil
+	}
+	metas := &fileservice.IOVector{
 		FilePath: r.name,
-		Entries:  make([]fileservice.IOEntry, 1),
+		Entries:  make([]fileservice.IOEntry, len(extents)),
 	}
-	meta.Entries[0] = fileservice.IOEntry{
-		Offset: int(extent.offset),
-		Size:   int(extent.Length()),
+	for i, extent := range extents {
+		metas.Entries[i] = fileservice.IOEntry{
+			Offset: int(extent.offset),
+			Size:   int(extent.Length()),
+		}
 	}
-	err = r.object.fs.Read(context.Background(), meta)
+	err = r.object.fs.Read(context.Background(), metas)
 	if err != nil {
 		return nil, err
 	}
-	block := &Block{}
-	err = block.UnMarshalMeta(meta.Entries[0].Data)
-	if err != nil {
-		return nil, err
+	blocks := make([]*Block, len(extents))
+	for i, _ := range extents {
+		blocks[i] = &Block{}
+		err = blocks[i].UnMarshalMeta(metas.Entries[i].Data)
+		if err != nil {
+			return nil, err
+		}
 	}
-	return block, err
+	return blocks, err
 }
 
 func (r *ObjectReader) Read(extent Extent, idxs []uint16) (*fileservice.IOVector, error) {
 	var err error
-	block, err := r.ReadMeta(extent)
+	extents := make([]Extent, 1)
+	extents[0] = extent
+	blocks, err := r.ReadMeta(extents)
 	if err != nil {
 		return nil, err
 	}
+	block := blocks[0]
 	data := &fileservice.IOVector{
 		FilePath: r.name,
 		Entries:  make([]fileservice.IOEntry, 0),
@@ -81,10 +92,13 @@ func (r *ObjectReader) Read(extent Extent, idxs []uint16) (*fileservice.IOVector
 
 func (r *ObjectReader) ReadIndex(extent Extent, idxs []uint16) (*fileservice.IOVector, error) {
 	var err error
-	block, err := r.ReadMeta(extent)
+	extents := make([]Extent, 1)
+	extents[0] = extent
+	blocks, err := r.ReadMeta(extents)
 	if err != nil {
 		return nil, err
 	}
+	block := blocks[0]
 	data := &fileservice.IOVector{
 		FilePath: r.name,
 		Entries:  make([]fileservice.IOEntry, 0),
