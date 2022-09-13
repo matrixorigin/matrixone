@@ -16,7 +16,6 @@ package logservice
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/hakeeper/task"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -35,6 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/hakeeper"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper/bootstrap"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper/checkers"
+	"github.com/matrixorigin/matrixone/pkg/hakeeper/task"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 )

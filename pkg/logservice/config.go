@@ -15,7 +15,6 @@
 package logservice
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"strconv"
 	"strings"
 	"time"
@@ -27,6 +26,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper"
+	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/util/toml"
 )
 
