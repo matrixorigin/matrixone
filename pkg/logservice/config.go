@@ -145,6 +145,10 @@ type Config struct {
 		// If HAKeeper does not receive two heartbeat within DNStoreTimeout,
 		// it regards the dn store as down.
 		DNStoreTimeout toml.Duration `toml:"dn-store-timeout"`
+		// CNStoreTimeout is the actual time limit between a cn store's heartbeat.
+		// If HAKeeper does not receive two heartbeat within CNStoreTimeout,
+		// it regards the dn store as down.
+		CNStoreTimeout toml.Duration `toml:"cn-store-timeout"`
 	}
 
 	// HAKeeperClientConfig is the config for HAKeeperClient
@@ -159,6 +163,7 @@ func (c *Config) GetHAKeeperConfig() hakeeper.Config {
 		TickPerSecond:   c.HAKeeperConfig.TickPerSecond,
 		LogStoreTimeout: c.HAKeeperConfig.LogStoreTimeout.Duration,
 		DNStoreTimeout:  c.HAKeeperConfig.DNStoreTimeout.Duration,
+		CNStoreTimeout:  c.HAKeeperConfig.CNStoreTimeout.Duration,
 	}
 }
 
