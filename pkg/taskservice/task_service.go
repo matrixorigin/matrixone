@@ -85,12 +85,30 @@ func (s *taskService) CreateCronTask(ctx context.Context, value task.TaskMetadat
 }
 
 func (s *taskService) Allocate(ctx context.Context, value task.Task, taskRunner string) error {
-	value.Status = task.TaskStatus_Running
-	value.Epoch = 1
-	value.LastHeartbeat = time.Now().UnixMilli()
-	value.TaskRunner = taskRunner
-	n, err := s.store.Update(ctx, []task.Task{value},
-		WithTaskStatusCond(EQ, task.TaskStatus_Created))
+	exists, err := s.store.Query(ctx, WithTaskIDCond(EQ, value.ID))
+	if err != nil {
+		return nil
+	}
+	if len(exists) != 1 {
+		return ErrInvalidTask
+	}
+
+	old := exists[0]
+	switch old.Status {
+	case task.TaskStatus_Running:
+		old.Epoch++
+		old.TaskRunner = taskRunner
+		old.LastHeartbeat = time.Now().UnixMilli()
+	case task.TaskStatus_Created:
+		old.Status = task.TaskStatus_Running
+		old.Epoch = 1
+		old.TaskRunner = taskRunner
+		old.LastHeartbeat = time.Now().UnixMilli()
+	}
+
+	n, err := s.store.Update(ctx,
+		[]task.Task{old},
+		WithTaskEpochCond(EQ, old.Epoch-1))
 	if err != nil {
 		return err
 	}
