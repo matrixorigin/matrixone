@@ -652,6 +652,8 @@ var (
 
 	getRoleIdOfUserIdFormat = `select role_id,with_grant_option from mo_catalog.mo_user_grant where user_id = %d;`
 
+	checkUserRoleFormat = `select role_id,user_id,with_grant_option from mo_catalog.mo_user_grant where role_id = %d and user_id = %d`
+
 	getInheritedRoleIdOfRoleIdFormat = `select granted_id,with_grant_option from mo_catalog.mo_role_grant where grantee_id = %d;`
 
 	checkRoleHasPrivilegeFormat = `select role_id,with_grant_option from mo_catalog.mo_role_privs where role_id = %d and obj_type = "%s" and obj_id = %d and privilege_id = %d;`
@@ -772,6 +774,15 @@ func getSqlForRoleOfUser(userID int, roleName string) string {
 
 func getSqlForRoleIdOfUserId(userId int) string {
 	return fmt.Sprintf(getRoleIdOfUserIdFormat, userId)
+}
+
+func getSqlForCheckUserRole(roleId, userId int64) string {
+	return fmt.Sprintf(checkUserRoleFormat, roleId, userId)
+}
+
+// TODO:
+func getSqlForUpdateUserRole(roleId, userId int64, timestamp string, withGrantOption bool) string {
+	return ""
 }
 
 func getSqlForInheritedRoleIdOfRoleId(roleId int64) string {
@@ -980,6 +991,141 @@ var (
 		PrivilegeTypeConnect,
 	}
 )
+
+// doGrantRole accomplishes the GrantRole statement
+func doGrantRole(ctx context.Context, ses *Session, gr *tree.GrantRole) error {
+	pu := ses.Pu
+	guestMMu := guest.New(pu.SV.GuestMmuLimitation, pu.HostMmu)
+	bh := NewBackgroundHandler(ctx, guestMMu, pu.Mempool, pu)
+	defer bh.Close()
+	var rsset []ExecResult
+
+	//TODO: put it into the single transaction
+
+	//step1 : check Roles exists or not
+	type verifiedRoleType int
+	const (
+		roleType verifiedRoleType = iota
+		userType
+	)
+	type verifiedRole struct {
+		typ  verifiedRoleType
+		name string
+		id   int64
+	}
+
+	verifiedFromRoles := make([]*verifiedRole, len(gr.Roles))
+
+	verifyRoleFunc := func(sql, name string, typ verifiedRoleType) (*verifiedRole, error) {
+		err := bh.Exec(ctx, sql)
+		if err != nil {
+			return nil, err
+		}
+
+		results := bh.GetExecResultSet()
+		rsset, err = convertIntoResultSet(results)
+		if err != nil {
+			return nil, err
+		}
+
+		if len(rsset) != 0 && rsset[0].GetRowCount() != 0 {
+			for j := uint64(0); j < rsset[0].GetRowCount(); j++ {
+				roleId, err := rsset[0].GetInt64(j, 0)
+				if err != nil {
+					return nil, err
+				}
+				return &verifiedRole{typ, name, roleId}, nil
+			}
+		}
+		return nil, nil
+	}
+
+	for i, role := range gr.Roles {
+		sql := getSqlForRoleIdOfRole(role.UserName)
+		vr, err := verifyRoleFunc(sql, role.UserName, roleType)
+		if err != nil {
+			return err
+		}
+		if vr == nil {
+			return moerr.NewInternalError("there is no role %s", role.UserName)
+		}
+		verifiedFromRoles[i] = vr
+	}
+
+	//step2 : check Users are real Users or Roles,  exists or not
+	verifiedToRoles := make([]*verifiedRole, len(gr.Users))
+	for i, user := range gr.Users {
+		sql := getSqlForRoleIdOfRole(user.Username)
+		vr, err := verifyRoleFunc(sql, user.Username, roleType)
+		if err != nil {
+			return err
+		}
+		if vr != nil {
+			verifiedToRoles[i] = vr
+		} else {
+			//check user
+			sql = getSqlForPasswordOfUser(user.Username)
+			vr, err = verifyRoleFunc(sql, user.Username, userType)
+			if vr == nil {
+				return moerr.NewInternalError("there is no role or user %s", user.Username)
+			}
+			verifiedToRoles[i] = vr
+		}
+	}
+	//step3 : process Grant role to role
+	//step4 : process Grant role to user
+
+	for _, from := range verifiedFromRoles {
+		for _, to := range verifiedToRoles {
+			if to.typ == roleType {
+				//grant to role
+			} else {
+				//grant to user
+				//get (roleId,userId,with_grant_option) from the mo_user_grant
+				sql := getSqlForCheckUserRole(from.id, to.id)
+				err := bh.Exec(ctx, sql)
+				if err != nil {
+					return err
+				}
+
+				results := bh.GetExecResultSet()
+				rsset, err = convertIntoResultSet(results)
+				if err != nil {
+					return err
+				}
+
+				//choice 1: (roleId,userId) exists and with_grant_option is same.
+				//	Do nothing.
+				//choice 2: (roleId,userId) exists and with_grant_option is different.
+				//	Update.
+				//choice 3: (roleId,userId) does not exist.
+				// Insert.
+				choice := 1
+				if len(rsset) != 0 && rsset[0].GetRowCount() != 0 {
+					for j := uint64(0); j < rsset[0].GetRowCount(); j++ {
+						withGrantOption, err := rsset[0].GetInt64(j, 2)
+						if err != nil {
+							return err
+						}
+						if (withGrantOption == 1) != gr.GrantOption {
+							choice = 2
+						}
+					}
+				} else {
+					choice = 3
+				}
+
+				if choice == 2 {
+					//update
+				} else if choice == 3 {
+					//insert
+				}
+			}
+		}
+	}
+
+	return nil
+}
 
 // determinePrivilegeSetOfStatement decides the privileges that the statement needs before running it.
 // That is the Set P for the privilege Set .
@@ -1388,7 +1534,7 @@ func determineRoleHasWithGrantOption(ctx context.Context, ses *Session, roles []
 	defer bh.Close()
 	var rsset []ExecResult
 
-	//step1 : get roleIds from roleName
+	//step1 : get roleIds from name
 	dedupNames := &btree.Set[string]{}
 	for _, role := range roles {
 		dedupNames.Insert(role.UserName)
