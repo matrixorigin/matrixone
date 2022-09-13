@@ -59,7 +59,6 @@ a	b
 {"t1": "b"}	2
 {"t1": "a"}	1
 {"t1": "b"}	2
-
 delete from t1;
 load data local infile '$resources/json/data_1.csv' into table t1 fields terminated by '\t';
 select * from t1;
