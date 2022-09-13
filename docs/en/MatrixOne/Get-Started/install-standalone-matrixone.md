@@ -8,6 +8,8 @@ MatrixOne supports Linux and MacOS. You can install a standalone MatrixOne versi
 
 Recommended hardware specification: x86 CPU with 4 cores and 32GB memory, with CentOS 7+ OS.
 
+For more information on the required operating system versions for deploying MatrixOne, see [Operating system requirements](../FAQs/deployment-faqs.md)。
+
 ## <h2><a name="code_source">Method 1: Building from source</a></h2>
 
 ### 1. Install Go as necessary dependancy
@@ -96,6 +98,9 @@ wget https://github.com/matrixorigin/matrixone/releases/download/v0.5.1/mo-serve
 unzip mo-server-v0.5.1-darwin-x86_64.zip
 ```
 
+!!! info
+    MatrixOne is not fully supported by ARM for now; MacOS M1 chips and above can use the x86 binary package shown above, and some SQL errors will occur.
+
 ### 2.Launch MatrixOne server
 
 ```
@@ -135,10 +140,10 @@ docker run -d -p 6001:6001 --name matrixone matrixorigin/matrixone:0.5.1
     ```bash
     docker run -d -p 6001:6001 --name matrixone matrixorigin/matrixone:nightly-commitnumber
     ```
-    
+
     !!! info
          The *nightly* version is updated once a day.
-    
+
 For the information on the user name and password, see the next step - Connect to MatrixOne Server.
 
 ### 3. Mount the data directory(Optional)
@@ -148,6 +153,15 @@ To customize the configuration file, you can mount the custom configuration file
 ```
 docker run -d -p 6001:6001 -v ${path_name}/system_vars_config.toml:/system_vars_config.toml:ro -v ${path_name}/store:/store:rw --name matrixone matrixorigin/matrixone:0.5.1
 ```
+
+|Parameter|Description|
+|---|---|
+|${path_name}/system_vars_config.toml|The local disk directory to which the configuration file *system_vars_config.toml* is mounted|
+|/system_vars_config.toml| */system_vars_config.toml* in the container|
+|${path_name}/store|*/store* path of the backup local disk directory|
+|/store|*/store* directory in the container|
+
+For more information on the description of *Docker run*, run the commands `docker run --help`.
 
 ### 4. Connect to MatrixOne Server
 
