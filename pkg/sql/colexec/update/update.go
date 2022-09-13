@@ -279,6 +279,12 @@ func getIndexValue(idx int, v *vector.Vector, isNull bool) any {
 		}
 		col := v.Col.([]types.Rowid)
 		return col[idx]
+	case types.T_uuid:
+		if isNull {
+			return types.Uuid([16]byte{})
+		}
+		col := v.Col.([]types.Uuid)
+		return col[idx]
 	case types.T_char, types.T_varchar, types.T_blob, types.T_json:
 		if isNull {
 			// XXX: Why don't we return nil?

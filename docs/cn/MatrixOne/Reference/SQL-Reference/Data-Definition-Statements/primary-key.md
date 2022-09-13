@@ -4,7 +4,7 @@
 
 `PRIMARY KEY` 即主键约束，用于唯一标示表中的每条数据。
 主键必须包含 `UNIQUE` 值，不能包含 `NULL` 值。
-一个表只能有一个主键，但一个主键可以包含一个列。
+当前版本一个表只能有一个主键，并且这个主键只能有一个列组成。
 
 ## **在建表时创建主键**
 
@@ -21,7 +21,20 @@
 ```
 
 !!! Note 注意区分
-    上述示例中只有一个主键 `PK_Person`, 但其中包含了两列（`ID`与`LastName`）
+    上述示例中只有一个主键 `PK_Person`, 并且其中仅包含了一列（`ID`）
+
+例如使用如下建表语句时会有错误：
+
+```
+> CREATE TABLE Students (
+    ID int NOT NULL,
+    LastName varchar(255) NOT NULL,
+    FirstName varchar(255),
+    Age int,
+    PRIMARY KEY (ID,LastName)
+);
+ERROR 1105 (HY000): tae catalog: schema validation: compound idx not supported yet
+```
 
 ## **限制**
 

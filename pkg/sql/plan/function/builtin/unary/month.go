@@ -15,7 +15,6 @@
 package unary
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/month"
@@ -47,7 +46,6 @@ func DateToMonth(vectors []*vector.Vector, proc *process.Process) (*vector.Vecto
 func DatetimeToMonth(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	inputVector := vectors[0]
 	resultType := types.Type{Oid: types.T_uint8, Size: 1}
-	resultElementSize := int(resultType.Size)
 	inputValues := vector.MustTCols[types.Datetime](inputVector)
 	if inputVector.IsScalar() {
 		if inputVector.ConstVectorIsNull() {
@@ -58,14 +56,12 @@ func DatetimeToMonth(vectors []*vector.Vector, proc *process.Process) (*vector.V
 		vector.SetCol(resultVector, month.DatetimeToMonth(inputValues, resultValues))
 		return resultVector, nil
 	} else {
-		resultVector, err := proc.AllocVector(resultType, int64(resultElementSize*len(inputValues)))
+		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(inputValues)), inputVector.Nsp)
 		if err != nil {
 			return nil, err
 		}
-		resultValues := types.DecodeUint8Slice(resultVector.Data)
-		resultValues = resultValues[:len(inputValues)]
-		nulls.Set(resultVector.Nsp, inputVector.Nsp)
-		vector.SetCol(resultVector, month.DatetimeToMonth(inputValues, resultValues))
+		resultValues := vector.MustTCols[uint8](resultVector)
+		month.DatetimeToMonth(inputValues, resultValues)
 		return resultVector, nil
 	}
 }

@@ -107,7 +107,7 @@ func TestDec64Sub(t *testing.T) {
 
 	res := vector.MustTCols[types.Decimal64](cv)
 	for i := 0; i < 10; i++ {
-		d, _ := types.Decimal64_FromInt64(as[i]-bs[i], 64)
+		d, _ := types.Decimal64_FromInt64(as[i]-bs[i], 64, 0)
 		if !res[i].Eq(d) {
 			t.Fatalf("decimal64 sub wrong result")
 		}

@@ -448,9 +448,9 @@ a
 -9223372036854775808
 9223372036854775807
 insert into t1 values(9223372036854775808);
-Data truncation: Incorrect BIGINT value: '9223372036854775808' for column 'a' at row 0
+Incorrect BIGINT value: '9223372036854775808' for column 'a' at row 1
 insert into t1 values(-9223372036854775809);
-Data truncation: Incorrect BIGINT value: '-9223372036854775809' for column 'a' at row 0
+Incorrect BIGINT value: '-9223372036854775809' for column 'a' at row 1
 
 create table t2(a decimal(19, 0));
 insert into t2 values(-9223372036854775808), (9223372036854775807);
@@ -480,9 +480,9 @@ select * from t1;
 a
 18446744073709551615
 insert into t1 values(18446744073709551616);
-Data truncation: Incorrect BIGINT UNSIGNED value: '18446744073709551616' for column 'a' at row 0
+Incorrect BIGINT UNSIGNED value: '18446744073709551616' for column 'a' at row 1
 insert into t1 values(-1);
-Data truncation: Incorrect BIGINT UNSIGNED value: '-1' for column 'a' at row 0
+Incorrect BIGINT UNSIGNED value: '-1' for column 'a' at row 1
 create table t2(a decimal(20, 0));
 insert into t2 values(0), (18446744073709551615);
 insert into t1 select * from t2;

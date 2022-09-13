@@ -1,0 +1,345 @@
+/* 
+ * Copyright 2021 Matrix Origin
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+ 
+syntax = "proto3";
+package api;
+
+import "github.com/gogo/protobuf/gogoproto/gogo.proto";
+import "timestamp.proto";
+import "plan.proto";
+
+
+option go_package = "github.com/matrixorigin/matrixone/pkg/pb/api";
+option (gogoproto.sizer_all) = false;
+option (gogoproto.protosizer_all) = true;
+
+message Vector {
+    bytes data = 1;
+    plan.Type  type = 2;
+    bool  nullable = 3;
+    bytes nsp = 4;
+    bool is_const = 5;
+    uint32 len = 6;
+};
+
+message Batch {
+    repeated string attrs = 1;
+    repeated Vector vecs = 2;
+};
+
+message TableID {
+    uint64 db_id  = 1; 
+    uint64 tb_id  = 2;
+}
+
+// CN pull the tail of redo logs from DN.
+message SyncLogTailReq {
+    //timestamp.Timestamp checkpoint_ts = 1;
+    timestamp.Timestamp cn_have = 1;
+    timestamp.Timestamp cn_want = 2;
+    TableID   table = 3;
+};
+
+message SyncLogTailResp {
+    // location of catalog or metadata checkpoint for a table.
+    //TODO:: how to get checkpoint on S3 by the ckp_location ,pls ref to ...
+    string     ckp_location = 1;
+    // log tail for a table
+    repeated Entry commands = 2;
+};
+
+//log tail entries returned to CN.
+//DN-->CN: DML
+//Append batch of data which comes from localsegment of table into multiple blocks.
+
+//// Append batch of data into table : 
+//      Entry {
+//          entry_type = Insert
+//          table_id =  tid
+//          database_id = dbId
+//          table_name =  xxx
+//          database_name = xxx
+//          file_name = "" 
+//          block_id = 0
+//          bat.attrs = {"rowid", "commit timestamp", "primary column value",  "column1 value", ...}
+//      }
+
+//// delete a batch of data from a block : 
+//      Entry {
+//          entry_type = Delte
+//          table_id =  tid
+//          database_id = dbId
+//          table_name =  xxx
+//          database_name = xxx
+//          file_name = "" 
+//         // transient block id when bulk loading.
+//          block_id = 0
+//          bat.attrs = {"rowid", "commit timestamp"}
+//      }
+// DDL:
+// create block : 
+//      Entry {
+//          entry_type = Insert
+//          table_id = tid
+//          database_id = dbId
+//          table_name =  xxx
+//          database_name = xxx
+//          file_name = "" 
+//          block_id = 0
+//          //"Start" is the latest txn's start timestamp, "End" is the latest txn's commit timestamp
+//          bat.attrs = {"BlockId", "EntryState", "CreatedAt", 
+//                            "Start", "End", "MetaLoc", "DeltaLoc"}
+//      }
+
+// delete block : 
+//      Entry {
+//          entry_type = Delete
+//          table_id = tid
+//          database_id = dbId
+//          table_name =  xxx
+//          database_name = xxx
+//          file_name = "" 
+//          block_id = 0
+//          bat.attrs = {"BlockId", "EntryState", "DeletedAt",
+//                         "Start", "End", "MetaLoc", "DeltaLoc"}
+//      }
+
+// create segment: pls refer to "create block"
+
+// delete segment: pls refer to "delete block"
+
+
+// create a user table: 
+//   insert entry into mo_tables and ...
+//      Entry {
+//          entry_type = Insert
+//          table_id = 1
+//          database_id =  0
+//          table_name =  mo_tables
+//          database_name = mo_catalog
+//          file_name = "" 
+//          block_id = 0
+//          bat.attrs = {"relid", "relname", ..., "CreatedAt", "Start", "End"} 
+//                        
+//      }
+
+// drop table: 
+//  drop entries from mo_tables and ...
+//      Entry {
+//          entry_type = delete
+//          table_id = 1
+//          database_id = 0
+//          table_name =  mo_tables
+//          database_name = mo_catalog
+//          file_name = "" 
+//          block_id = 0
+//          bat.attrs = {"relid", "relname", ... , "DeletedAt", "Start", "End"}
+//      }
+
+
+message PrecommitWriteCmd {
+    repeated Entry entry_list = 1;
+};
+
+// CN--->DN, DDL
+// create database test: 
+//      Entry {
+//          entry_type = Insert
+//          table_id = 0
+//          database_id = 0
+//          table_name = mo_database
+//          database_name = mo_catalog
+//          file_name = "" 
+//          block_id = 0
+//          bat = "test, 0, ..." 
+//      }
+// drop database test:
+//      Entry {
+//          entry_type = Delete
+//          table_id = 0
+//          database_id = 0
+//          table_name = mo_database
+//          database_name = mo_catalog
+//          file_name = "" 
+//          block_id = 0
+//          bat= "test, 0, ..." 
+//      }
+
+// create a user table: 
+//  insert entry into mo_tables and ...;
+//      Entry {
+//          entry_type = Insert
+//          table_id = 1
+//          database_id =  0
+//          table_name =  mo_tables
+//          database_name = mo_catalog
+//          file_name = "" 
+//          block_id = 0
+//          bat.attrs = {"relid", "relname", "reldatabase", ...}
+//      }
+
+// drop table: 
+//  delete entry from mo_tables and ...;
+//      Entry {
+//          entry_type = delete
+//          table_id = 1
+//          database_id = 0
+//          table_name =  mo_tables
+//          database_name = mo_catalog
+//          file_name = "" 
+//          block_id = 0
+//          bat.attrs = {"relid", "relname",...}
+//      }
+
+//  bulk load:
+// bulk loads a block into S3.
+//      Entry {
+//          entry_type = Insert
+//          table_id = tid
+//          database_id = dbId
+//          table_name =  xxx
+//          database_name = xxx
+//          file_name = "s3 file name" 
+//          //transient block id;
+//          block_id = "xxx" 
+
+//          //block meta info and colunm meta info
+//          bat.attrs = {"clounm index", "min", "max", "bf location", "data location",...}
+//      }
+
+//  DML:
+// append a batch of data into table;
+//            Entry {
+    //          entry_type = Insert
+    //          table_id =  tid
+    //          database_id = dbId
+    //          table_name =  xxx
+    //          database_name = xxx
+    //          file_name = "" 
+    //          block_id = 0
+    //          bat.attrs = {"primary column value",  "column1 value", ...}
+    //      }
+
+//  delete batch of data from table;
+//            Entry {
+    //          entry_type = Insert
+    //          table_id =  tid
+    //          database_id = dbId
+    //          table_name =  xxx
+    //          database_name = xxx
+    //          file_name = "" 
+    //          block_id = 0
+    //          bat.attrs = {"rowid", "primary column value",  "column1 value", ...}
+    //      }
+
+
+message Entry {
+    enum EntryType {
+        Insert = 0;
+        Delete = 1;
+    }
+    EntryType entry_type = 1;
+    uint64    table_id = 2;
+    uint64    database_id = 3;
+    string    table_name = 4;
+    string    database_name = 5;
+    string    file_name = 6;
+    uint64    block_id = 7;
+    Batch     bat = 8;
+};
+
+// Checkpint is a snapshot at a timestamp for catalog and block meta.
+// it contains CatalogCkp and MetadataCkp.
+
+// CatalogCkp contains information about database and tables in the system,and
+// MetadataCkp contains information about blocks.
+message Checkpoint {
+    //min_ts DN is the lower bounds of the checkpoint
+    // CN maybe don't care about it.
+    timestamp.Timestamp min_ts = 1;
+    //max_ts is the upper bounds of the checkpoint.
+    // CN maybe don't care about it.
+    timestamp.Timestamp max_ts = 2;
+    Batch      bat   = 3;
+
+};
+// catalog checkpoint:
+// one Batch represents a table, such as : mo_databases, mo_tables, mo_columns,... etc.
+// knowing more about system tables, pls ref to pkg/vm/engine/tae/catalog/model.go
+message CatalogCkp {
+   timestamp.Timestamp min_ts = 1;
+   timestamp.Timestamp max_ts = 2;
+   Batch      bat   = 3;
+};
+
+//metadata checkpoint:
+// Batch is a batch of block metadata for a table,  
+// one row of Batch represents a block meta data.
+// TODO::
+// knowing more about block meta data , pls ref to ...
+message MetadataCkp {
+    timestamp.Timestamp min_ts = 1;
+    timestamp.Timestamp max_ts = 2;
+    //block meta data for a table;
+    Batch      bat = 3;
+};
+
+// block meta data :
+// type Block struct {
+//    ID                    uint64
+//    SegmentID             uint64
+//    TableID               uint64
+//    DbID                  uint64
+//    CreatedAt, DeletedAt  timestamp.Timestamp
+//    MetaLoc points to BlockMetadata below; Deltaloc points to DeleteInfo below.
+//    TODO::How to get the detailed meta data for a block by MetaLoc and DeltaLoc? pls ref to ...
+//    MetaLoc, DeltaLoc     string
+//    StartTS, PrepareTS    timestamp.Timestamp
+//    CommitTS             timestamp.Timestamp
+//    Aborted               bool
+//    LogIndex              []byte
+//    Flag                  uint8
+//};
+
+// BlockMetadata is a detailed meta data for a block.
+//type BlockMetadata struct {
+	//header  *BlockHeader
+	//columns []*ColumnMeta
+//}
+
+//type ColumnMeta struct {
+	//typ         uint8
+	//idx         uint16
+	//alg         uint8
+	//location    *Extent
+	//zoneMap     *index.ZoneMap
+	//bloomFilter *Extent
+	//checksum    uint32
+//}
+
+//type BlockHeader struct {
+	//tableId     uint64
+	//segmentId   uint64
+	//blockId     uint64
+	//columnCount uint16
+	//checksum    uint32
+//}
+
+//Deletes info for rows 
+// bat.attrs = {"rowid", "DeletedAt",...}
+// type DeleteInfo struct {
+//      bat batch.Batch
+//};

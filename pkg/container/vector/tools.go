@@ -86,6 +86,8 @@ func (v *Vector) colFromData() {
 			v.Col = DecodeFixedCol[types.Decimal64](v, tlen)
 		case types.T_decimal128:
 			v.Col = DecodeFixedCol[types.Decimal128](v, tlen)
+		case types.T_uuid:
+			v.Col = DecodeFixedCol[types.Uuid](v, tlen)
 		case types.T_date:
 			v.Col = DecodeFixedCol[types.Date](v, tlen)
 		case types.T_datetime:
@@ -139,6 +141,8 @@ func (v *Vector) setupColFromData(start, end int) {
 			v.Col = DecodeFixedCol[types.Decimal64](v, tlen)[start:end]
 		case types.T_decimal128:
 			v.Col = DecodeFixedCol[types.Decimal128](v, tlen)[start:end]
+		case types.T_uuid:
+			v.Col = DecodeFixedCol[types.Uuid](v, tlen)[start:end]
 		case types.T_date:
 			v.Col = DecodeFixedCol[types.Date](v, tlen)[start:end]
 		case types.T_datetime:
@@ -156,6 +160,9 @@ func (v *Vector) setupColFromData(start, end int) {
 }
 
 func (v *Vector) encodeColToByteSlice() []byte {
+	if v.Col == nil {
+		return nil
+	}
 	switch v.GetType().Oid {
 	case types.T_bool:
 		return types.EncodeBoolSlice(v.Col.([]bool))
@@ -183,6 +190,8 @@ func (v *Vector) encodeColToByteSlice() []byte {
 		return types.EncodeDecimal64Slice(v.Col.([]types.Decimal64))
 	case types.T_decimal128:
 		return types.EncodeDecimal128Slice(v.Col.([]types.Decimal128))
+	case types.T_uuid:
+		return types.EncodeUuidSlice(v.Col.([]types.Uuid))
 	case types.T_date:
 		return types.EncodeDateSlice(v.Col.([]types.Date))
 	case types.T_datetime:
@@ -206,28 +215,28 @@ func (v *Vector) encodeColToByteSlice() []byte {
 // XXX extend will entend the vector's Data to accormordate rows more entry.
 // XXX we do not fix null map, Huh?
 func (v *Vector) extend(rows int, m *mheap.Mheap) error {
-	origSz := len(v.Data)
+	origSz := len(v.data)
 	growSz := rows * v.GetType().TypeSize()
 	tgtSz := origSz + growSz
-	if tgtSz <= cap(v.Data) {
-		// XXX v.Data can hold data, just grow.
+	if tgtSz <= cap(v.data) {
+		// XXX v.data can hold data, just grow.
 		// XXX do not use Grow, because this case it will still malloc and copy
-		v.Data = v.Data[:tgtSz]
-	} else if v.Data == nil {
+		v.data = v.data[:tgtSz]
+	} else if v.data == nil {
 		// XXX mheap Relloc is broken, cannot handle nil, so we Alloc here.
 		// XXX The interface on size, int/int64 u, FUBAR.
 		data, err := mheap.Alloc(m, int64(tgtSz))
 		if err != nil {
 			return err
 		}
-		v.Data = data[:tgtSz]
+		v.data = data[:tgtSz]
 	} else {
-		data, err := mheap.Grow(m, v.Data, int64(tgtSz))
+		data, err := mheap.Grow(m, v.data, int64(tgtSz))
 		if err != nil {
 			return err
 		}
-		mheap.Free(m, v.Data)
-		v.Data = data[:tgtSz]
+		mheap.Free(m, v.data)
+		v.data = data[:tgtSz]
 	}
 	// Setup v.Col
 	v.setupColFromData(0, tgtSz/v.GetType().TypeSize())

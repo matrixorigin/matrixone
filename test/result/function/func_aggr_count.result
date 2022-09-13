@@ -188,7 +188,8 @@ SELECT (SELECT COUNT(DISTINCT 12)) FROM t1 GROUP BY t1.a;
 1
 1
 SELECT AVG(2), BIT_AND(2), BIT_OR(2), BIT_XOR(2), COUNT(*), COUNT(12),COUNT(DISTINCT 12), MIN(2),MAX(2),STD(2), VARIANCE(2),SUM(2);
-can not find any column when rewrite count(*) to starcount(col)
+avg(2)	bit_and(2)	bit_or(2)	bit_xor(2)	count(*)	count(12)	count(distinct 12)	min(2)	max(2)	std(2)	variance(2)	sum(2)
+2.0	2	2	2	1	1	1	2	2	0.0	0.0	2
 DROP TABLE t1;
 CREATE TABLE t1 (col1 decimal(16,12));
 INSERT INTO t1 VALUES (-5.00000000001),(-5.00000000002),(-5.00000000003),(-5.00000000000),(-5.00000000001),(-5.00000000002);

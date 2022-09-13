@@ -147,7 +147,7 @@ func TestDecimalAnyva(t *testing.T) {
 func MakeDecimal128Arr(input []int64) []types.Decimal128 {
 	ret := make([]types.Decimal128, len(input))
 	for i, v := range input {
-		d, _ := types.InitDecimal128(v, 64)
+		d, _ := types.InitDecimal128(v, 64, 0)
 		ret[i] = d
 	}
 

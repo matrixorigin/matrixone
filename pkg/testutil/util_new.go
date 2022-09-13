@@ -46,7 +46,8 @@ func NewProcessWithMheap(heap *mheap.Mheap) *process.Process {
 	proc := process.New(
 		context.Background(),
 		heap,
-		nil,
+		nil, // no txn client can be set
+		nil, // no txn operator can be set
 		NewFS(),
 	)
 	proc.Lim.Size = 1 << 20

@@ -36,3 +36,6 @@ type BoolMin struct {
 
 type StrMin struct {
 }
+
+type UuidMin struct {
+}

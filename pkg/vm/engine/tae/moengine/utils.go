@@ -242,6 +242,8 @@ func AppendValue(vec *vector.Vector, v any) {
 		AppendFixedValue[types.Timestamp](vec, v)
 	case types.T_datetime:
 		AppendFixedValue[types.Datetime](vec, v)
+	case types.T_uuid:
+		AppendFixedValue[types.Uuid](vec, v)
 	case types.T_TS:
 		AppendFixedValue[types.TS](vec, v)
 	case types.T_Rowid:
@@ -280,6 +282,8 @@ func GetValue(col *vector.Vector, row uint32) any {
 		return vector.GetValueAt[types.Decimal64](col, int64(row))
 	case types.T_decimal128:
 		return vector.GetValueAt[types.Decimal128](col, int64(row))
+	case types.T_uuid:
+		return vector.GetValueAt[types.Uuid](col, int64(row))
 	case types.T_float32:
 		return vector.GetValueAt[float32](col, int64(row))
 	case types.T_float64:
@@ -336,6 +340,8 @@ func UpdateValue(col *vector.Vector, row uint32, val any) {
 		GenericUpdateFixedValue[types.Datetime](col, row, val)
 	case types.T_timestamp:
 		GenericUpdateFixedValue[types.Timestamp](col, row, val)
+	case types.T_uuid:
+		GenericUpdateFixedValue[types.Uuid](col, row, val)
 	case types.T_TS:
 		GenericUpdateFixedValue[types.TS](col, row, val)
 	case types.T_Rowid:
@@ -527,6 +533,8 @@ func MOToVector(v *vector.Vector, nullable bool) containers.Vector {
 			bs.Data = types.EncodeFixedSlice(v.Col.([]types.Decimal64), 8)
 		case types.T_decimal128:
 			bs.Data = types.EncodeFixedSlice(v.Col.([]types.Decimal128), 16)
+		case types.T_uuid:
+			bs.Data = types.EncodeFixedSlice(v.Col.([]types.Uuid), 16)
 		case types.T_TS:
 			bs.Data = types.EncodeFixedSlice(v.Col.([]types.TS), types.TxnTsSize)
 		case types.T_Rowid:
@@ -679,6 +687,14 @@ func MOToVectorTmp(v *vector.Vector, nullable bool) containers.Vector {
 		} else {
 			bs.Data = types.EncodeFixedSlice(v.Col.([]types.Decimal128), 16)
 		}
+	case types.T_uuid:
+		if v.Col == nil || len(v.Col.([]types.Uuid)) == 0 {
+			bs.Data = make([]byte, v.Length()*16)
+			logutil.Warn("[Moengine]", common.OperationField("MOToVector"),
+				common.OperandField("Col length is 0"))
+		} else {
+			bs.Data = types.EncodeFixedSlice(v.Col.([]types.Uuid), 16)
+		}
 	case types.T_TS:
 		if v.Col == nil || len(v.Col.([]types.TS)) == 0 {
 			bs.Data = make([]byte, v.Length()*types.TxnTsSize)
@@ -728,11 +744,10 @@ func CopyToMoVector(vec containers.Vector) *vector.Vector {
 //
 // Not just copy it.   Until profiler says I need to work harder.
 func VectorsToMO(vec containers.Vector) *vector.Vector {
-	mov := vector.New(vec.GetType())
+	mov := vector.NewOriginal(vec.GetType())
 	data := vec.Data()
 	typ := vec.GetType()
 	mov.Typ = typ
-	mov.Or = true
 	if vec.HasNull() {
 		mov.Nsp.Np = bitmap.New(vec.Length())
 		mov.Nsp.Np.AddMany(vec.NullMask().ToArray())
