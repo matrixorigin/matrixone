@@ -116,6 +116,8 @@ type Session struct {
 	uuid uuid.UUID
 
 	timeZone *time.Location
+
+	priv *privilege
 }
 
 func NewSession(proto Protocol, gm *guest.Mmu, mp *mempool.Mempool, PU *config.ParameterUnit, gSysVars *GlobalSystemVariables) *Session {
@@ -686,6 +688,14 @@ func (ses *Session) AuthenticateUser(userInput string) ([]byte, error) {
 	logutil.Info(tenant.String())
 
 	return []byte(pwd), nil
+}
+
+func (ses *Session) GetPrivilege() *privilege {
+	return ses.priv
+}
+
+func (ses *Session) SetPrivilege(priv *privilege) {
+	ses.priv = priv
 }
 
 func (th *TxnHandler) SetSession(ses *Session) {

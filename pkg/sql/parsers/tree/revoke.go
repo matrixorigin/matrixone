@@ -155,6 +155,7 @@ type PrivilegeLevelType int
 const (
 	PRIVILEGE_LEVEL_TYPE_STAR           PrivilegeLevelType = iota //*
 	PRIVILEGE_LEVEL_TYPE_STAR_STAR                                //*.*
+	PRIVILEGE_LEVEL_TYPE_DATABASE                                 //db_name
 	PRIVILEGE_LEVEL_TYPE_DATABASE_STAR                            //db_name.*
 	PRIVILEGE_LEVEL_TYPE_DATABASE_TABLE                           //db_name.tbl_name
 	PRIVILEGE_LEVEL_TYPE_TABLE                                    //tbl_name
@@ -200,6 +201,10 @@ func (node *ObjectType) ToString() string {
 		return "function"
 	case OBJECT_TYPE_PROCEDURE:
 		return "procedure"
+	case OBJECT_TYPE_ACCOUNT:
+		return "account"
+	case OBJECT_TYPE_DATABASE:
+		return "database"
 	default:
 		return "Unknown ObjectType"
 	}
@@ -212,6 +217,7 @@ const (
 	OBJECT_TYPE_FUNCTION
 	OBJECT_TYPE_PROCEDURE
 	OBJECT_TYPE_VIEW
+	OBJECT_TYPE_ACCOUNT
 )
 
 type PrivilegeType int
