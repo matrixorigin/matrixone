@@ -22,8 +22,9 @@
 
 !!! Note 注意区分
     上述示例中只有一个主键 `PK_Person`, 并且其中仅包含了一列（`ID`）
-    
+
 例如使用如下建表语句时会有错误：
+
 ```
 > CREATE TABLE Students (
     ID int NOT NULL,
@@ -34,7 +35,6 @@
 );
 ERROR 1105 (HY000): tae catalog: schema validation: compound idx not supported yet
 ```
-
 
 ## **限制**
 
