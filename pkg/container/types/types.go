@@ -65,6 +65,7 @@ const (
 	T_char    T = 60
 	T_varchar T = 61
 	T_json    T = 62
+	T_uuid    T = 63
 
 	// blobs
 	T_blob T = 70
@@ -109,6 +110,9 @@ type Decimal128 [16]byte
 
 type Varlena [VarlenaSize]byte
 
+// UUID is Version 1 UUID based on the current NodeID and clock sequence, and the current time.
+type Uuid [16]byte
+
 // timestamp for transaction: physical time (higher 8 bytes) + logical (lower 4 bytes)
 // See txts.go for impl.
 type TS [TxnTsSize]byte
@@ -148,7 +152,7 @@ type Decimal interface {
 
 // FixedSized types in our type system.   Esp, Varlena.
 type FixedSizeT interface {
-	bool | OrderedT | Decimal | TS | Rowid | Varlena
+	bool | OrderedT | Decimal | TS | Rowid | Varlena | Uuid
 }
 
 type Number interface {
@@ -186,6 +190,7 @@ var Types map[string]T = map[string]T{
 
 	"json": T_json,
 	"text": T_blob,
+	"uuid": T_uuid,
 
 	"transaction timestamp": T_TS,
 	"rowid":                 T_Rowid,
@@ -301,6 +306,8 @@ func (t T) ToType() Type {
 		typ.Size = 8
 	case T_decimal128:
 		typ.Size = 16
+	case T_uuid:
+		typ.Size = 16
 	case T_TS:
 		typ.Size = TxnTsSize
 	case T_Rowid:
@@ -366,6 +373,8 @@ func (t T) String() string {
 		return "TRANSACTION TIMESTAMP"
 	case T_Rowid:
 		return "ROWID"
+	case T_uuid:
+		return "UUID"
 	}
 	return fmt.Sprintf("unexpected type: %d", t)
 }
@@ -375,6 +384,8 @@ func (t T) String() string {
 // OidString returns T string
 func (t T) OidString() string {
 	switch t {
+	case T_uuid:
+		return "T_uuid"
 	case T_json:
 		return "T_json"
 	case T_bool:
@@ -464,6 +475,8 @@ func (t T) GoType() string {
 		return "decimal128"
 	case T_blob:
 		return "string"
+	case T_uuid:
+		return "uuid"
 	}
 	return "unknown type"
 }
@@ -508,6 +521,8 @@ func (t T) TypeLen() int {
 		return 8
 	case T_decimal128:
 		return 16
+	case T_uuid:
+		return 16
 	case T_TS:
 		return TxnTsSize
 	case T_Rowid:
@@ -532,6 +547,8 @@ func (t T) FixedLength() int {
 	case T_decimal64:
 		return 8
 	case T_decimal128:
+		return 16
+	case T_uuid:
 		return 16
 	case T_TS:
 		return TxnTsSize

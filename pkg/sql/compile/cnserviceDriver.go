@@ -921,6 +921,7 @@ func newCompile(ctx context.Context, message morpc.Message, pHelper *processHelp
 	proc := process.New(
 		ctx,
 		mheap.New(guest.New(1<<30, host.New(1<<20))),
+		nil,
 		pHelper.txnOperator,
 		mHelper.fileService,
 	)
@@ -1098,10 +1099,10 @@ func decodeBatch(_ *process.Process, msg *pipeline.Message) (*batch.Batch, error
 	// TODO: allocate the memory from process may suitable.
 	bat := new(batch.Batch)
 	err := types.Decode(msg.GetData(), bat)
-	// set all vectors to be origin, and they can be freed by process.
-	for i := range bat.Vecs {
-		bat.Vecs[i].Or = true
-	}
+	// TODO: set all vectors to be origin, and they can be freed by process. (not sure
+	//for i := range bat.Vecs {
+	//	bat.Vecs[i].Or = true
+	//}
 	return bat, err
 }
 

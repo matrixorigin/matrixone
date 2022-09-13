@@ -194,7 +194,10 @@ func TestCatalogHandler(t *testing.T) {
 			},
 		}, &resp)
 		assert.Nil(t, err)
-		assert.Equal(t, 39, resp.Batch.Length())
+		totalColumns := len(catalog.SystemDBSchema.ColDefs) +
+			len(catalog.SystemTableSchema.ColDefs) +
+			len(catalog.SystemColumnSchema.ColDefs)
+		assert.Equal(t, totalColumns, resp.Batch.Length())
 		assert.Equal(t, 2, len(resp.Batch.Attrs))
 	}
 	{
