@@ -48,7 +48,7 @@ type Reader interface {
 
 	// ReadMeta is the meta that reads a block
 	// extent is location of the block meta
-	ReadMeta(extent []Extent) ([]*Block, error)
+	ReadMeta(extent []Extent) ([]BlockObject, error)
 
 	// ReadIndex is the index data of the read columns
 	ReadIndex(extent Extent, idxs []uint16) (*fileservice.IOVector, error)
@@ -65,7 +65,7 @@ type BlockObject interface {
 	// GetMeta gets the meta of the BlockObject
 	GetMeta() BlockMeta
 
-	// GetExtent gets the metadata offset of BlockObject in fileservice
+	// GetExtent gets the metadata location of BlockObject in fileservice
 	GetExtent() Extent
 
 	// GetID is to get the serial number of the block in the object

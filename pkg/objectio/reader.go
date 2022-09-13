@@ -32,7 +32,7 @@ func NewObjectReader(name string, fs fileservice.FileService) (Reader, error) {
 	return reader, nil
 }
 
-func (r *ObjectReader) ReadMeta(extents []Extent) ([]*Block, error) {
+func (r *ObjectReader) ReadMeta(extents []Extent) ([]BlockObject, error) {
 	var err error
 	if len(extents) == 0 {
 		return nil, nil
@@ -51,10 +51,10 @@ func (r *ObjectReader) ReadMeta(extents []Extent) ([]*Block, error) {
 	if err != nil {
 		return nil, err
 	}
-	blocks := make([]*Block, len(extents))
+	blocks := make([]BlockObject, len(extents))
 	for i, _ := range extents {
 		blocks[i] = &Block{}
-		err = blocks[i].UnMarshalMeta(metas.Entries[i].Data)
+		err = blocks[i].(*Block).UnMarshalMeta(metas.Entries[i].Data)
 		if err != nil {
 			return nil, err
 		}
@@ -76,7 +76,7 @@ func (r *ObjectReader) Read(extent Extent, idxs []uint16) (*fileservice.IOVector
 		Entries:  make([]fileservice.IOEntry, 0),
 	}
 	for _, idx := range idxs {
-		col := block.columns[idx]
+		col := block.(*Block).columns[idx]
 		entry := fileservice.IOEntry{
 			Offset: int(col.GetMeta().location.Offset()),
 			Size:   int(col.GetMeta().location.Length()),
@@ -104,7 +104,7 @@ func (r *ObjectReader) ReadIndex(extent Extent, idxs []uint16) (*fileservice.IOV
 		Entries:  make([]fileservice.IOEntry, 0),
 	}
 	for _, idx := range idxs {
-		col := block.columns[idx]
+		col := block.(*Block).columns[idx]
 		entry := fileservice.IOEntry{
 			Offset: int(col.GetMeta().bloomFilter.Offset()),
 			Size:   int(col.GetMeta().bloomFilter.Length()),
