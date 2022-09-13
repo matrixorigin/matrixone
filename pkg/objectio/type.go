@@ -29,14 +29,14 @@ type Writer interface {
 	Write(batch *batch.Batch) (BlockObject, error)
 
 	// WriteIndex is the index of the column in the block written to the block's handle.
-	// fd is the handle of the block
+	// block is the handle of the block
 	// idx is the column to which the index is written
 	// buf is the data to write to the index
-	WriteIndex(fd int, idx uint16, buf []byte) error
+	WriteIndex(block BlockObject, idx uint16, buf []byte) error
 
 	// WriteEnd is to write multiple batches written to
 	// the buffer to the fileservice at one time
-	WriteEnd() (map[int]BlockObject, error)
+	WriteEnd() (map[uint32]BlockObject, error)
 }
 
 // Reader is to read data from fileservice
@@ -67,6 +67,9 @@ type BlockObject interface {
 
 	// GetExtent gets the metadata offset of BlockObject in fileservice
 	GetExtent() Extent
+
+	// GetID is to get the serial number of the block in the object
+	GetID() uint32
 }
 
 // ColumnObject is a vector in a batch written to fileservice

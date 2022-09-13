@@ -23,14 +23,23 @@ import (
 // Block is the organizational structure of a batch in objectio
 // Write one batch at a time, and batch and block correspond one-to-one
 type Block struct {
-	// fd is the handle of the block
-	fd     int
+	// id is the serial number of the block in the object
+	id uint32
+
+	// header is the metadata of the block, such as tableid, blockid, column count...
 	header BlockHeader
+
 	// columns is the vector in the batch
 	columns []ColumnObject
+
 	// data is the batch to be written
-	data   *batch.Batch
+	data *batch.Batch
+
+	// object is a container that can store multiple blocks,
+	// using a fileservice file storage
 	object *Object
+
+	// extent is the location of the block's metadata on the fileservice
 	extent Extent
 }
 
@@ -68,6 +77,10 @@ func (b *Block) GetMeta() BlockMeta {
 	}
 }
 
+func (b *Block) GetID() uint32 {
+	return b.id
+}
+
 func (b *Block) MarshalMeta() ([]byte, error) {
 	var (
 		err    error
@@ -89,7 +102,7 @@ func (b *Block) MarshalMeta() ([]byte, error) {
 	if err = binary.Write(&buffer, endian, uint32(0)); err != nil {
 		return nil, err
 	}
-	reserved := make([]byte, 34)
+	reserved := make([]byte, BlockHeaderReserved)
 	if err = binary.Write(&buffer, endian, reserved); err != nil {
 		return nil, err
 	}
@@ -125,7 +138,7 @@ func (b *Block) UnMarshalMeta(data []byte) error {
 	if err = binary.Read(cache, endian, &b.header.checksum); err != nil {
 		return err
 	}
-	reserved := make([]byte, 34)
+	reserved := make([]byte, BlockHeaderReserved)
 	if err = binary.Read(cache, endian, &reserved); err != nil {
 		return err
 	}

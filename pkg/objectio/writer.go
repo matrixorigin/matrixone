@@ -27,10 +27,10 @@ import (
 type ObjectWriter struct {
 	sync.RWMutex
 	object *Object
-	blocks map[int]BlockObject
+	blocks map[uint32]BlockObject
 	buffer *ObjectBuffer
 	name   string
-	lastId int
+	lastId uint32
 }
 
 func NewObjectWriter(name string, fs fileservice.FileService) (Writer, error) {
@@ -39,7 +39,7 @@ func NewObjectWriter(name string, fs fileservice.FileService) (Writer, error) {
 		name:   name,
 		object: object,
 		buffer: NewObjectBuffer(name),
-		blocks: make(map[int]BlockObject),
+		blocks: make(map[uint32]BlockObject),
 		lastId: 0,
 	}
 	err := writer.WriteHeader()
@@ -58,7 +58,7 @@ func (w *ObjectWriter) WriteHeader() error {
 	if err = binary.Write(&header, endian, h.version); err != nil {
 		return err
 	}
-	reserved := make([]byte, 22)
+	reserved := make([]byte, HeaderReserved)
 	if err = binary.Write(&header, endian, reserved); err != nil {
 		return err
 	}
@@ -88,9 +88,9 @@ func (w *ObjectWriter) Write(batch *batch.Batch) (BlockObject, error) {
 	return block, nil
 }
 
-func (w *ObjectWriter) WriteIndex(fd int, idx uint16, buf []byte) error {
+func (w *ObjectWriter) WriteIndex(fd BlockObject, idx uint16, buf []byte) error {
 	var err error
-	block := w.GetBlock(fd)
+	block := w.GetBlock(fd.GetID())
 	if block == nil || block.columns[idx] == nil {
 		return errors.New("object io: not found")
 	}
@@ -104,7 +104,7 @@ func (w *ObjectWriter) WriteIndex(fd int, idx uint16, buf []byte) error {
 	return err
 }
 
-func (w *ObjectWriter) WriteEnd() (map[int]BlockObject, error) {
+func (w *ObjectWriter) WriteEnd() (map[uint32]BlockObject, error) {
 	var err error
 	w.RLock()
 	defer w.RUnlock()
@@ -162,13 +162,13 @@ func (w *ObjectWriter) Sync(dir string) error {
 func (w *ObjectWriter) AddBlock(block *Block) {
 	w.Lock()
 	defer w.Unlock()
-	block.fd = w.lastId
-	w.blocks[block.fd] = block
+	block.id = w.lastId
+	w.blocks[block.id] = block
 	w.lastId++
 }
 
-func (w *ObjectWriter) GetBlock(fd int) *Block {
+func (w *ObjectWriter) GetBlock(id uint32) *Block {
 	w.Lock()
 	defer w.Unlock()
-	return w.blocks[fd].(*Block)
+	return w.blocks[id].(*Block)
 }

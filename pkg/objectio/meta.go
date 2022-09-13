@@ -38,7 +38,6 @@ import "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 // Reserved = 34 bytes reserved space
 type BlockMeta struct {
 	header BlockHeader
-	//columns []*ColumnMeta
 }
 
 type BlockHeader struct {
@@ -48,6 +47,8 @@ type BlockHeader struct {
 	columnCount uint16
 	checksum    uint32
 }
+
+const BlockHeaderReserved = 34
 
 // +---------------------------------------------------------------------------------------------------------------+
 // |                                                    ColumnMeta                                                 |
@@ -80,10 +81,14 @@ type ColumnMeta struct {
 	checksum    uint32
 }
 
+const ColumnMetaReserved = 32
+
 type Header struct {
 	magic   uint64
 	version uint16
 }
+
+const HeaderReserved = 22
 
 /*type Footer struct {
 	alg   uint8
