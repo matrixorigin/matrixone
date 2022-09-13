@@ -48,9 +48,9 @@ func init() {
 	AbsDecimal128 = absDecimal128
 }
 
-// Unsigned simply return
 func absUnsigned[T constraints.Unsigned](xs, rs []T) []T {
-	return xs
+	copy(rs, xs)
+	return rs
 }
 
 // Signed, flip sign and check out of range.

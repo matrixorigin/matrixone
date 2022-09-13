@@ -24,6 +24,12 @@ import (
 )
 
 func UnixTimestamp(lv []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	if len(lv) == 0 {
+		rs := make([]int64, 1)
+		unixtimestamp.UnixTimestamp([]types.Timestamp{types.CurrentTimestamp()}, rs)
+		return vector.NewConstFixed(types.T_int64.ToType(), 1, rs[0]), nil
+	}
+
 	inVec := lv[0]
 	size := types.T(types.T_int64).TypeLen()
 	if inVec.IsScalarNull() {

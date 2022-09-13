@@ -163,11 +163,11 @@ For other installation types, please refer to [MatrixOne installation](https://d
 
 Depending on your needs, choose whether you want to keep your code up to date, or if you want to get the latest stable version of the code.
 
-- *Option 1*: Get the MatrixOne(Preview Version) code, build MatrixOne
+- *Option 1*: Get the MatrixOne(Develop Version) code, build MatrixOne
 
 The **main** branch is the default branch, the code on the main branch is always up-to-date but not stable enough.
 
-1. Get the MatrixOne(Preview Version) code:
+1. Get the MatrixOne(Develop Version, also called Pre0.6 version) code:
 
     ```
     git clone https://github.com/matrixorigin/matrixone.git
@@ -183,7 +183,7 @@ The **main** branch is the default branch, the code on the main branch is always
 3. Launch MatrixOne server：
 
     !!! note
-         The startup-config file of MatrixOne(Preview Version) is different from the startup-config file of MatrixOne(Stable Version). The startup-config file code of MatrixOne(Preview Version) is as below:
+         The startup-config file of MatrixOne(Develop Version) is different from the startup-config file of MatrixOne(Stable Version). The startup-config file code of MatrixOne(Develop Version) is as below:
 
     ```
     ./mo-service -cfg ./etc/cn-standalone-test.toml
@@ -209,7 +209,7 @@ The **main** branch is the default branch, the code on the main branch is always
 3. Launch MatrixOne server：
 
     !!! note
-         The startup-config file of MatrixOne(Stable Version) is different from the startup-config file of MatrixOne(Preview Version). The startup-config file code of MatrixOne(Stable Version) is as below:
+         The startup-config file of MatrixOne(Stable Version) is different from the startup-config file of MatrixOne(Develop Version). The startup-config file code of MatrixOne(Stable Version) is as below:
 
     ```
     ./mo-server system_vars_config.toml
@@ -224,19 +224,24 @@ $ docker --version
 
 2. Create and run the container for the latest release of MatrixOne. It will pull the image from Docker Hub if not exists.
 
-It will pull the image from Docker Hub if not exists. You can choose to pull the latest image or a stable version.
+It will pull the image from Docker Hub if not exists. You can choose to pull the stable version image or the develop version image.
 
-- Latest Image
+- Stable Version Image(0.5.1 version)
 
-```
-$ docker run -d -p 6001:6001 --name matrixone matrixorigin/matrixone:latest
+```bash
+docker run -d -p 6001:6001 --name matrixone matrixorigin/matrixone:0.5.1
 ```
 
-- 0.5.1 Version Image
+- If you want to pull the develop version image, see [Docker Hub](https://hub.docker.com/r/matrixorigin/matrixone/tags), get the image tag. An example as below:
 
-```
-$ docker run -d -p 6001:6001 --name matrixone matrixorigin/matrixone:0.5.1
-```
+    Develop Version Image(Pre0.6 version)
+
+    ```bash
+    docker run -d -p 6001:6001 --name matrixone matrixorigin/matrixone:nightly-commitnumber
+    ```
+    
+    !!! info
+         The *nightly* version is updated once a day.
 
 3. Mount the data directory(Optional)
 

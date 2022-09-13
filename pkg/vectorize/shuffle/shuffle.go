@@ -40,6 +40,8 @@ var (
 	DatetimeShuffle  = FixedLengthShuffle[types.Datetime]
 	TimestampShuffle = FixedLengthShuffle[types.Timestamp]
 
+	UuidShuffle = FixedLengthShuffle[types.Uuid]
+
 	VarlenaShuffle = FixedLengthShuffle[types.Varlena]
 
 	TupleShuffle = tupleShuffle
