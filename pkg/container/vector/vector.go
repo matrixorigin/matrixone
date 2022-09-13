@@ -266,6 +266,8 @@ func (v *Vector) FillDefaultValue() {
 		fillDefaultValue[types.Decimal64](v)
 	case types.T_decimal128:
 		fillDefaultValue[types.Decimal128](v)
+	case types.T_uuid:
+		fillDefaultValue[types.Uuid](v)
 	case types.T_TS:
 		fillDefaultValue[types.TS](v)
 	case types.T_Rowid:
@@ -314,6 +316,8 @@ func (v *Vector) ToConst(row int) *Vector {
 		return toConstVector[types.Decimal64](v, row)
 	case types.T_decimal128:
 		return toConstVector[types.Decimal128](v, row)
+	case types.T_uuid:
+		return toConstVector[types.Uuid](v, row)
 	case types.T_TS:
 		return toConstVector[types.TS](v, row)
 	case types.T_Rowid:
@@ -371,6 +375,8 @@ func (v *Vector) ConstExpand(m *mheap.Mheap) *Vector {
 		expandVector[types.Decimal64](v, 8, m)
 	case types.T_decimal128:
 		expandVector[types.Decimal128](v, 16, m)
+	case types.T_uuid:
+		expandVector[types.Uuid](v, 16, m)
 	case types.T_TS:
 		expandVector[types.TS](v, types.TxnTsSize, m)
 	case types.T_Rowid:
@@ -547,6 +553,8 @@ func (v *Vector) initConst(typ types.Type) {
 		v.Col = make([]types.Decimal64, 1)
 	case types.T_decimal128:
 		v.Col = make([]types.Decimal128, 1)
+	case types.T_uuid:
+		v.Col = make([]types.Uuid, 1)
 	case types.T_TS:
 		v.Col = make([]types.TS, 1)
 	case types.T_Rowid:
@@ -679,6 +687,8 @@ func (v *Vector) Append(w any, isNull bool, m *mheap.Mheap) error {
 		return appendOne(v, w.(types.Decimal64), isNull, m)
 	case types.T_decimal128:
 		return appendOne(v, w.(types.Decimal128), isNull, m)
+	case types.T_uuid:
+		return appendOne(v, w.(types.Uuid), isNull, m)
 	case types.T_TS:
 		return appendOne(v, w.(types.TS), isNull, m)
 	case types.T_Rowid:
@@ -933,6 +943,8 @@ func Shrink(v *Vector, sels []int64) {
 		ShrinkFixed[types.Decimal64](v, sels)
 	case types.T_decimal128:
 		ShrinkFixed[types.Decimal128](v, sels)
+	case types.T_uuid:
+		ShrinkFixed[types.Uuid](v, sels)
 	case types.T_TS:
 		ShrinkFixed[types.TS](v, sels)
 	case types.T_Rowid:
@@ -1007,6 +1019,8 @@ func Shuffle(v *Vector, sels []int64, m *mheap.Mheap) error {
 		ShuffleFixed[types.Decimal64](v, sels, m)
 	case types.T_decimal128:
 		ShuffleFixed[types.Decimal128](v, sels, m)
+	case types.T_uuid:
+		ShuffleFixed[types.Uuid](v, sels, m)
 	case types.T_TS:
 		ShuffleFixed[types.TS](v, sels, m)
 	case types.T_Rowid:
@@ -1367,6 +1381,8 @@ func (v *Vector) String() string {
 		return VecToString[types.Decimal64](v)
 	case types.T_decimal128:
 		return VecToString[types.Decimal128](v)
+	case types.T_uuid:
+		return VecToString[types.Uuid](v)
 	case types.T_TS:
 		return VecToString[types.TS](v)
 	case types.T_Rowid:

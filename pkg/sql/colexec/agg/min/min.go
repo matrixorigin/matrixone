@@ -174,3 +174,34 @@ func (m *StrMin) Merge(_ int64, _ int64, x []byte, y []byte, xEmpty bool, yEmpty
 	}
 	return x, xEmpty
 }
+
+// ----------------------------------------------------------
+func NewUuidMin() *UuidMin {
+	return &UuidMin{}
+}
+
+func (m *UuidMin) Grows(_ int) {
+}
+
+func (m *UuidMin) Eval(vs []types.Uuid) []types.Uuid {
+	return vs
+}
+
+func (m *UuidMin) Fill(_ int64, value types.Uuid, ov types.Uuid, _ int64, isEmpty bool, isNull bool) (types.Uuid, bool) {
+	if !isNull {
+		if value.Lt(ov) || isEmpty {
+			return value, false
+		}
+	}
+	return ov, isEmpty
+}
+
+func (m *UuidMin) Merge(_ int64, _ int64, x types.Uuid, y types.Uuid, xEmpty bool, yEmpty bool, _ any) (types.Uuid, bool) {
+	if !yEmpty {
+		if !xEmpty && x.Lt(y) {
+			return x, false
+		}
+		return y, false
+	}
+	return x, xEmpty
+}

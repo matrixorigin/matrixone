@@ -642,9 +642,9 @@ func TestTransaction2(t *testing.T) {
 	assert.Nil(t, err)
 	t.Log(db.String())
 	assert.Equal(t, txn1.GetCommitTS(), db.GetMeta().(*catalog.DBEntry).GetCreatedAt())
-	assert.Nil(t, db.GetMeta().(*catalog.DBEntry).GetTxn())
+	assert.True(t, db.GetMeta().(*catalog.DBEntry).IsCommitted())
 	assert.Equal(t, txn1.GetCommitTS(), rel.GetMeta().(*catalog.TableEntry).GetCreatedAt())
-	assert.Nil(t, rel.GetMeta().(*catalog.TableEntry).GetTxn())
+	assert.True(t, rel.GetMeta().(*catalog.TableEntry).IsCommitted())
 
 	txn2, _ := mgr.StartTxn(nil)
 	get, err := txn2.GetDatabase(name)

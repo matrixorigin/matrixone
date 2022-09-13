@@ -412,6 +412,182 @@ func TestDiscincStrlMin(t *testing.T) {
 	require.Equal(t, int64(0), m.Size())
 }
 
+func TestUuidMin(t *testing.T) {
+	testTyp := types.New(types.T_uuid, 0, 0, 0)
+	mn := NewUuidMin()
+
+	m := mheap.New(guest.New(1<<30, host.New(1<<30)))
+
+	vs := []string{
+		"f6355110-2d0c-11ed-940f-000c29847904",
+		"1ef96142-2d0d-11ed-940f-000c29847904",
+		"117a0bd5-2d0d-11ed-940f-000c29847904",
+		"18b21c70-2d0d-11ed-940f-000c29847904",
+		"1b50c129-2dba-11ed-940f-000c29847904",
+		"ad9f83eb-2dbd-11ed-940f-000c29847904",
+		"6d1b1fdb-2dbf-11ed-940f-000c29847904",
+		"6d1b1fdb-2dbf-11ed-940f-000c29847904",
+		"1b50c129-2dba-11ed-940f-000c29847904",
+		"ad9f83eb-2dbd-11ed-940f-000c29847904",
+	}
+	vs2 := []string{
+		"550e8400-e29b-41d4-a716-446655440000",
+		"3e350a5c-222a-11eb-abef-0242ac110002",
+		"9e7862b3-2f69-11ed-8ec0-000c29847904",
+		"6d1b1f73-2dbf-11ed-940f-000c29847904",
+		"ad9f809f-2dbd-11ed-940f-000c29847904",
+		"1b50c137-2dba-11ed-940f-000c29847904",
+		"149e3f0f-2de4-11ed-940f-000c29847904",
+		"1b50c137-2dba-11ed-940f-000c29847904",
+		"9e7862b3-2f69-11ed-8ec0-000c29847904",
+		"3F2504E0-4F89-11D3-9A0C-0305E82C3301",
+	}
+	vec := testutil.MakeUuidVectorByString(vs, nil)
+	vec2 := testutil.MakeUuidVectorByString(vs2, nil)
+	{
+		// test single agg with Grow & Fill function
+		agg := agg.NewUnaryAgg(nil, true, testTyp, testTyp, mn.Grows, mn.Eval, mn.Merge, mn.Fill, nil)
+		err := agg.Grows(1, m)
+		require.NoError(t, err)
+		for i := 0; i < Rows; i++ {
+			agg.Fill(0, int64(i), 1, []*vector.Vector{vec})
+		}
+		v, err := agg.Eval(m)
+		require.NoError(t, err)
+
+		want, err := types.ParseUuid("117a0bd5-2d0d-11ed-940f-000c29847904")
+		require.NoError(t, err)
+
+		require.Equal(t, []types.Uuid{want}, vector.GetColumn[types.Uuid](v))
+		v.Free(m)
+	}
+	{
+		// test two agg with Merge function
+		agg0 := agg.NewUnaryAgg(nil, true, testTyp, testTyp, mn.Grows, mn.Eval, mn.Merge, mn.Fill, nil)
+		err := agg0.Grows(1, m)
+		require.NoError(t, err)
+		for i := 0; i < Rows; i++ {
+			agg0.Fill(0, int64(i), 1, []*vector.Vector{vec})
+		}
+		agg1 := agg.NewUnaryAgg(nil, true, testTyp, testTyp, mn.Grows, mn.Eval, mn.Merge, mn.Fill, nil)
+		err = agg1.Grows(1, m)
+		require.NoError(t, err)
+		for i := 0; i < Rows; i++ {
+			agg1.Fill(0, int64(i), 1, []*vector.Vector{vec2})
+		}
+		agg0.Merge(agg1, 0, 0)
+		{
+			v, err := agg0.Eval(m)
+			require.NoError(t, err)
+			want, err := types.ParseUuid("117a0bd5-2d0d-11ed-940f-000c29847904")
+			require.NoError(t, err)
+
+			require.Equal(t, []types.Uuid{want}, vector.GetColumn[types.Uuid](v))
+			v.Free(m)
+		}
+		{
+			v, err := agg1.Eval(m)
+			require.NoError(t, err)
+			want, err := types.ParseUuid("149e3f0f-2de4-11ed-940f-000c29847904")
+			require.NoError(t, err)
+
+			require.Equal(t, []types.Uuid{want}, vector.GetColumn[types.Uuid](v))
+			v.Free(m)
+		}
+	}
+	vec.Free(m)
+	vec2.Free(m)
+	require.Equal(t, int64(0), m.Size())
+}
+
+func TestUuidDiscincMin(t *testing.T) {
+	testTyp := types.New(types.T_uuid, 0, 0, 0)
+	mn := NewUuidMin()
+
+	m := mheap.New(guest.New(1<<30, host.New(1<<30)))
+
+	vs := []string{
+		"f6355110-2d0c-11ed-940f-000c29847904",
+		"1ef96142-2d0d-11ed-940f-000c29847904",
+		"117a0bd5-2d0d-11ed-940f-000c29847904",
+		"18b21c70-2d0d-11ed-940f-000c29847904",
+		"1b50c129-2dba-11ed-940f-000c29847904",
+		"ad9f83eb-2dbd-11ed-940f-000c29847904",
+		"6d1b1fdb-2dbf-11ed-940f-000c29847904",
+		"6d1b1fdb-2dbf-11ed-940f-000c29847904",
+		"1b50c129-2dba-11ed-940f-000c29847904",
+		"ad9f83eb-2dbd-11ed-940f-000c29847904",
+	}
+	vs2 := []string{
+		"550e8400-e29b-41d4-a716-446655440000",
+		"3e350a5c-222a-11eb-abef-0242ac110002",
+		"9e7862b3-2f69-11ed-8ec0-000c29847904",
+		"6d1b1f73-2dbf-11ed-940f-000c29847904",
+		"ad9f809f-2dbd-11ed-940f-000c29847904",
+		"1b50c137-2dba-11ed-940f-000c29847904",
+		"149e3f0f-2de4-11ed-940f-000c29847904",
+		"1b50c137-2dba-11ed-940f-000c29847904",
+		"9e7862b3-2f69-11ed-8ec0-000c29847904",
+		"3F2504E0-4F89-11D3-9A0C-0305E82C3301",
+	}
+	vec := testutil.MakeUuidVectorByString(vs, nil)
+	vec2 := testutil.MakeUuidVectorByString(vs2, nil)
+	{
+		// test single agg with Grow & Fill function
+		agg := agg.NewUnaryDistAgg(true, testTyp, testTyp, mn.Grows, mn.Eval, mn.Merge, mn.Fill)
+		err := agg.Grows(1, m)
+		require.NoError(t, err)
+		for i := 0; i < Rows; i++ {
+			agg.Fill(0, int64(i), 1, []*vector.Vector{vec})
+		}
+		v, err := agg.Eval(m)
+		require.NoError(t, err)
+
+		want, err := types.ParseUuid("117a0bd5-2d0d-11ed-940f-000c29847904")
+		require.NoError(t, err)
+
+		require.Equal(t, []types.Uuid{want}, vector.GetColumn[types.Uuid](v))
+		v.Free(m)
+	}
+	{
+		// test two agg with Merge function
+		agg0 := agg.NewUnaryDistAgg(true, testTyp, testTyp, mn.Grows, mn.Eval, mn.Merge, mn.Fill)
+		err := agg0.Grows(1, m)
+		require.NoError(t, err)
+		for i := 0; i < Rows; i++ {
+			agg0.Fill(0, int64(i), 1, []*vector.Vector{vec})
+		}
+		agg1 := agg.NewUnaryDistAgg(true, testTyp, testTyp, mn.Grows, mn.Eval, mn.Merge, mn.Fill)
+		err = agg1.Grows(1, m)
+		require.NoError(t, err)
+		for i := 0; i < Rows; i++ {
+			agg1.Fill(0, int64(i), 1, []*vector.Vector{vec2})
+		}
+		agg0.Merge(agg1, 0, 0)
+		{
+			v, err := agg0.Eval(m)
+			require.NoError(t, err)
+			want, err := types.ParseUuid("117a0bd5-2d0d-11ed-940f-000c29847904")
+			require.NoError(t, err)
+
+			require.Equal(t, []types.Uuid{want}, vector.GetColumn[types.Uuid](v))
+			v.Free(m)
+		}
+		{
+			v, err := agg1.Eval(m)
+			require.NoError(t, err)
+			want, err := types.ParseUuid("149e3f0f-2de4-11ed-940f-000c29847904")
+			require.NoError(t, err)
+
+			require.Equal(t, []types.Uuid{want}, vector.GetColumn[types.Uuid](v))
+			v.Free(m)
+		}
+	}
+	vec.Free(m)
+	vec2.Free(m)
+	require.Equal(t, int64(0), m.Size())
+}
+
 func MakeDecimal128Arr(input []int64) []types.Decimal128 {
 	ret := make([]types.Decimal128, len(input))
 	for i, v := range input {

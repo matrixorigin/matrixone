@@ -17,6 +17,8 @@ package txnif
 import (
 	"fmt"
 	"io"
+
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
 type TxnCmd interface {
@@ -45,6 +47,40 @@ func RegisterCmdFactory(cmdType int16, factory CmdFactory) {
 
 func GetCmdFactory(cmdType int16) (factory CmdFactory) {
 	factory = cmdFactories[cmdType]
+	if factory == nil {
+		panic(fmt.Sprintf("no factory found for cmd: %d", cmdType))
+	}
+	return
+}
+
+type Attr interface {
+	GetType() int16
+
+	Clone() Attr
+	String() string
+	ReadFrom(io.Reader) (int64, error)
+	WriteTo(io.Writer) (int64, error)
+
+	PrepareCommit(types.TS) error
+	Prepare2PCPrepare(types.TS) error
+
+	UpdateNode(Attr)
+}
+
+type AttrFactory func() Attr
+
+var AttrFactories = map[int16]AttrFactory{}
+
+func RegisterAttrFactory(cmdType int16, factory AttrFactory) {
+	_, ok := AttrFactories[cmdType]
+	if ok {
+		panic(fmt.Sprintf("duplicate cmd type: %d", cmdType))
+	}
+	AttrFactories[cmdType] = factory
+}
+
+func GetAttrFactory(cmdType int16) (factory AttrFactory) {
+	factory = AttrFactories[cmdType]
 	if factory == nil {
 		panic(fmt.Sprintf("no factory found for cmd: %d", cmdType))
 	}

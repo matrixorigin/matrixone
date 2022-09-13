@@ -170,6 +170,8 @@ func (idx *simpleTableIndex) BatchInsert(col containers.Vector, start, count int
 		return InsertOp[types.Decimal64](col.Slice(), start, count, row, dedupInput, idx.tree)
 	case types.T_decimal128:
 		return InsertOp[types.Decimal128](col.Slice(), start, count, row, dedupInput, idx.tree)
+	case types.T_uuid:
+		return InsertOp[types.Uuid](col.Slice(), start, count, row, dedupInput, idx.tree)
 	case types.T_float32:
 		return InsertOp[float32](col.Slice(), start, count, row, dedupInput, idx.tree)
 	case types.T_float64:

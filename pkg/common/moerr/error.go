@@ -23,194 +23,168 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/errors"
 )
 
-type MOErrorCode = uint16
+const MySQLDefaultSqlState = "HY000"
 
 const (
 	// 0 is OK.
-	SUCCESS = 0
-	INFO    = 1
-	WARN    = 2
+	SUCCESS uint16 = 0
+	INFO    uint16 = 1
+	WARN    uint16 = 2
 
 	// Group 1: Internal errors
-	ERROR_START              = 1000
-	INTERNAL_ERROR           = 1001
-	NYI                      = 1002
-	ERROR_FUNCTION_PARAMETER = 1003
+	ERROR_START              uint16 = 20100
+	INTERNAL_ERROR           uint16 = 20101
+	NYI                      uint16 = 20102
+	ERROR_FUNCTION_PARAMETER uint16 = 20103
 
 	// Group 2: numeric
-	DIVIVISION_BY_ZERO = 2000
-	OUT_OF_RANGE       = 2001
-	DATA_TRUNCATED     = 2002
-	INVALID_ARGUMENT   = 2003
+	DIVIVISION_BY_ZERO uint16 = 20200
+	OUT_OF_RANGE       uint16 = 20201
+	DATA_TRUNCATED     uint16 = 20202
+	INVALID_ARGUMENT   uint16 = 20203
 
 	// Group 3: invalid input
-	BAD_CONFIGURATION = 3000
-	INVALID_INPUT     = 3001
+	BAD_CONFIGURATION uint16 = 20300
+	INVALID_INPUT     uint16 = 20301
 
 	// Group 4: unexpected state
-	INVALID_STATE         = 4000
-	LOG_SERVICE_NOT_READY = 4001
+	INVALID_STATE         uint16 = 20400
+	LOG_SERVICE_NOT_READY uint16 = 20401
 
-	// group 5: rpc timeout
+	// Group 5: rpc timeout
 	// ErrRPCTimeout rpc timeout
-	ErrRPCTimeout = 5000
+	ErrRPCTimeout uint16 = 20500
 	// ErrClientClosed rpc client closed
-	ErrClientClosed = 5001
+	ErrClientClosed uint16 = 20501
 	// ErrBackendClosed backend closed
-	ErrBackendClosed = 5002
+	ErrBackendClosed uint16 = 20502
 	// ErrStreamClosed rpc stream closed
-	ErrStreamClosed = 5003
+	ErrStreamClosed uint16 = 20503
 	// ErrNoAvailableBackend no available backend
-	ErrNoAvailableBackend = 5004
+	ErrNoAvailableBackend uint16 = 20504
 
-	// Group 6: sql error, can usually correspond one-to-one to MysqlError, val in [6000, 6999]
-	ErrNoDatabaseSelected = 6000 + iota
-	ErrBadTable
-	ErrFieldNotFoundPart
-	ErrPartitionSubpartition
-	ErrWrongExprInPartitionFunc
-	ErrFieldTypeNotAllowedAsPartitionField
-	ErrSameNamePartition
-	ErrSameNamePartitionField
-	ErrTooManyPartitions
-	ErrPartitionMaxvalue
-	ErrPartitionConstDomain
-	ErrValuesIsNotIntType
-	ErrRangeNotIncreasing
-	ErrPartitionsMustBeDefined
-	ErrPartitionColumnList
-	ErrWrongTypeColumnValue
-	ErrUniqueKeyNeedAllFieldsInPf
-	ErrMultipleDefConstInListPart
-	ErrPartitionWrongNoPart
-
-	// Group 10: txn
+	// Group 6: txn
 	// ErrTxnAborted read and write a transaction that has been rolled back.
-	ErrTxnClosed = 10000
+	ErrTxnClosed uint16 = 20600
 	// ErrTxnWriteConflict write conflict error for concurrent transactions
-	ErrTxnWriteConflict = 10001
+	ErrTxnWriteConflict uint16 = 20601
 	// ErrMissingTxn missing transaction error
-	ErrMissingTxn = 10002
+	ErrMissingTxn uint16 = 20602
 	// ErrUnresolvedConflict read transaction encounters unresolved data
-	ErrUnresolvedConflict = 10003
+	ErrUnresolvedConflict uint16 = 20603
 	// ErrTxnError TxnError wrapper
-	ErrTxnError = 10004
+	ErrTxnError uint16 = 20604
 	// ErrDNShardNotFound DNShard not found, need to get the latest DN list from HAKeeper
-	ErrDNShardNotFound = 10005
+	ErrDNShardNotFound uint16 = 20605
 
 	// ErrEnd, the max value of MOErrorCode
-	ErrEnd = 65535
+	ErrEnd uint16 = 65535
 )
 
 type moErrorMsgItem struct {
-	errorCode        MOErrorCode
-	mysqlErrorCode   uint16
+	errorCode        uint16
+	sqlStates        []string
 	errorMsgOrFormat string
 }
 
-var errorMsgRefer = map[int32]moErrorMsgItem{
-	SUCCESS: {0, 0, "ok"},
-	INFO:    {20001, 0, "%s"},
-	WARN:    {20002, 0, "%s"},
+var errorMsgRefer = map[uint16]moErrorMsgItem{
+	SUCCESS: {0, []string{MySQLDefaultSqlState}, "ok"},
+	INFO:    {1, []string{MySQLDefaultSqlState}, "%s"},
+	WARN:    {2, []string{MySQLDefaultSqlState}, "%s"},
 
 	// Group 1: Internal errors
-	ERROR_START:              {21000, 0, "%s"},
-	INTERNAL_ERROR:           {21001, 0, "%s"},
-	NYI:                      {21002, 0, "%s"},
-	ERROR_FUNCTION_PARAMETER: {21003, 0, "%s"},
+	ERROR_START:              {20100, []string{MySQLDefaultSqlState}, "%s"},
+	INTERNAL_ERROR:           {20101, []string{MySQLDefaultSqlState}, "%s"},
+	NYI:                      {20102, []string{MySQLDefaultSqlState}, "%s"},
+	ERROR_FUNCTION_PARAMETER: {20103, []string{MySQLDefaultSqlState}, "%s"},
 
 	// Group 2: numeric
-	DIVIVISION_BY_ZERO: {22000, 0, "division by zero"},
-	OUT_OF_RANGE:       {22001, 0, "overflow from %s to %s"},
-	DATA_TRUNCATED:     {22002, 0, "%s data truncated"},
-	INVALID_ARGUMENT:   {22003, 0, "%s"},
+	DIVIVISION_BY_ZERO: {20200, []string{MySQLDefaultSqlState}, "division by zero"},
+	OUT_OF_RANGE:       {20201, []string{MySQLDefaultSqlState}, "overflow from %s to %s"},
+	DATA_TRUNCATED:     {20202, []string{MySQLDefaultSqlState}, "%s data truncated"},
+	INVALID_ARGUMENT:   {20203, []string{MySQLDefaultSqlState}, "%s"},
 
 	// Group 3: invalid input
-	BAD_CONFIGURATION: {23000, 0, "invalid %s configuration"},
-	INVALID_INPUT:     {23001, 0, "%s"},
+	BAD_CONFIGURATION: {20300, []string{MySQLDefaultSqlState}, "invalid %s configuration"},
+	INVALID_INPUT:     {20301, []string{MySQLDefaultSqlState}, "%s"},
 
 	// Group 4: unexpected state
-	INVALID_STATE:         {24000, 0, "%s"},
-	LOG_SERVICE_NOT_READY: {24001, 0, "log service not ready"},
+	INVALID_STATE:         {20400, []string{MySQLDefaultSqlState}, "%s"},
+	LOG_SERVICE_NOT_READY: {20401, []string{MySQLDefaultSqlState}, "log service not ready"},
 
-	// group 5: rpc timeout
-	ErrRPCTimeout:         {25000, 0, "%s"},
-	ErrClientClosed:       {25001, 0, "client closed"},
-	ErrBackendClosed:      {25002, 0, "backend closed"},
-	ErrStreamClosed:       {25003, 0, "stream closed"},
-	ErrNoAvailableBackend: {25004, 0, "no available backend"},
+	// Group 5: rpc timeout
+	ErrRPCTimeout:         {20500, []string{MySQLDefaultSqlState}, "%s"},
+	ErrClientClosed:       {20501, []string{MySQLDefaultSqlState}, "client closed"},
+	ErrBackendClosed:      {20502, []string{MySQLDefaultSqlState}, "backend closed"},
+	ErrStreamClosed:       {20503, []string{MySQLDefaultSqlState}, "stream closed"},
+	ErrNoAvailableBackend: {20504, []string{MySQLDefaultSqlState}, "no available backend"},
 
-	// Group 1: sql error
-	ErrNoDatabaseSelected:                  {26000, 1046, "No database selected"},
-	ErrBadTable:                            {26001, 1051, "Unknown table '%-.129s.%-.129s'"},
-	ErrFieldNotFoundPart:                   {26002, 1500, "Field in list of fields for partition function not found in table"},
-	ErrPartitionSubpartition:               {26003, 1482, "It is only possible to mix RANGE/LIST partitioning with HASH/KEY partitioning for subpartitioning"},
-	ErrWrongExprInPartitionFunc:            {26004, 1486, "Constant, random or timezone-dependent expressions in (sub)partitioning function are not allowed"},
-	ErrFieldTypeNotAllowedAsPartitionField: {26005, 1659, "Field '%-.192s' is of a not allowed type for this type of partitioning"},
-	ErrSameNamePartition:                   {26006, 1517, "Duplicate partition name %-.192s"},
-	ErrSameNamePartitionField:              {26007, 1652, "Duplicate partition field name '%-.192s'"},
-	ErrTooManyPartitions:                   {26008, 1499, "Too many partitions (including subpartitions) were defined"},
-	ErrPartitionMaxvalue:                   {26009, 1481, "MAXVALUE can only be used in last partition definition"},
-	ErrPartitionConstDomain:                {26010, 1563, "Partition constant is out of partition function domain"},
-	ErrValuesIsNotIntType:                  {26011, 1697, "VALUES value for partition '%-.64s' must have type INT"},
-	ErrRangeNotIncreasing:                  {26012, 1493, "VALUES LESS THAN value must be strictly increasing for each partition"},
-	ErrPartitionsMustBeDefined:             {26013, 1492, "For %-.64s partitions each partition must be defined"},
-	ErrPartitionColumnList:                 {26014, 1653, "Inconsistency in usage of column lists for partitioning"},
-	ErrWrongTypeColumnValue:                {26015, 1654, "Partition column values of incorrect type"},
-	ErrUniqueKeyNeedAllFieldsInPf:          {26016, 1503, "A %-.192s must include all columns in the table's partitioning function"},
-	ErrMultipleDefConstInListPart:          {26017, 1495, "Multiple definition of same constant in list partitioning"},
-	ErrPartitionWrongNoPart:                {26018, 1064, "Wrong number of partitions defined, mismatch with previous setting"},
-
-	// Group 10: txn
-	ErrTxnClosed:          {30000, 0, "the transaction has been committed or aborted"},
-	ErrTxnWriteConflict:   {30001, 0, "write conflict"},
-	ErrMissingTxn:         {30002, 0, "missing txn"},
-	ErrUnresolvedConflict: {30003, 0, "unresolved conflict"},
-	ErrTxnError:           {30004, 0, "%s"},
-	ErrDNShardNotFound:    {30005, 0, "%s"},
+	// Group 6: txn
+	ErrTxnClosed:          {20600, []string{MySQLDefaultSqlState}, "the transaction has been committed or aborted"},
+	ErrTxnWriteConflict:   {20601, []string{MySQLDefaultSqlState}, "write conflict"},
+	ErrMissingTxn:         {20602, []string{MySQLDefaultSqlState}, "missing txn"},
+	ErrUnresolvedConflict: {20603, []string{MySQLDefaultSqlState}, "unresolved conflict"},
+	ErrTxnError:           {20604, []string{MySQLDefaultSqlState}, "%s"},
+	ErrDNShardNotFound:    {20605, []string{MySQLDefaultSqlState}, "%s"},
 
 	// Group End: max value of MOErrorCode
-	ErrEnd: {65535, 0, "%s"},
+	ErrEnd: {65535, []string{MySQLDefaultSqlState}, "%s"},
 }
 
-func New(code int32, args ...any) *Error {
+func New(code uint16, args ...any) *Error {
 	return newWithDepth(Context(), code, args...)
 }
 
-func NewWithContext(ctx context.Context, code int32, args ...any) *Error {
+func NewWithContext(ctx context.Context, code uint16, args ...any) *Error {
 	return newWithDepth(ctx, code, args...)
 }
 
-func newWithDepth(ctx context.Context, code int32, args ...any) *Error {
+func newWithDepth(ctx context.Context, code uint16, args ...any) *Error {
 	var err *Error
-	item, has := errorMsgRefer[code]
-	if !has {
-		panic(fmt.Errorf("not exist MOErrorCode: %d", code))
-	}
-	if len(args) == 0 {
-		err = &Error{
-			MysqlErrCode: item.mysqlErrorCode,
-			Code:         code,
-			ErrorCode:    item.errorCode,
-			Message:      item.errorMsgOrFormat,
+	// We should try to find the corresponding error information and error code in mysql_error_define, in order to be more compatible with MySQL.
+	// you can customize moerr if you can't find it.
+	if t, ok := MysqlErrorMsgRefer[uint16(code)]; ok {
+		if len(args) == 0 {
+			err = &Error{
+				Code:     code,
+				Message:  t.ErrorMsgOrFormat,
+				SqlState: MysqlErrorMsgRefer[code].SqlStates[0],
+			}
+		} else {
+			err = &Error{
+				Code:     code,
+				Message:  fmt.Sprintf(t.ErrorMsgOrFormat, args...),
+				SqlState: MysqlErrorMsgRefer[code].SqlStates[0],
+			}
 		}
 	} else {
-		err = &Error{
-			MysqlErrCode: item.mysqlErrorCode,
-			Code:         code,
-			ErrorCode:    item.errorCode,
-			Message:      fmt.Sprintf(item.errorMsgOrFormat, args...),
+		item, has := errorMsgRefer[code]
+		if !has {
+			panic(fmt.Errorf("not exist MOErrorCode: %d", code))
+		}
+		if len(args) == 0 {
+			err = &Error{
+				Code:     code,
+				Message:  item.errorMsgOrFormat,
+				SqlState: item.sqlStates[0],
+			}
+		} else {
+			err = &Error{
+				Code:     code,
+				Message:  fmt.Sprintf(item.errorMsgOrFormat, args...),
+				SqlState: item.sqlStates[0],
+			}
 		}
 	}
+
 	_ = errors.WithContextWithDepth(ctx, err, 2)
 	return err
 }
 
 type Error struct {
-	MysqlErrCode uint16
-	ErrorCode    MOErrorCode
-	Code         int32
-	Message      string
+	Code     uint16
+	Message  string
+	SqlState string
 }
 
 func (e *Error) Ok() bool {
@@ -221,19 +195,7 @@ func (e *Error) Error() string {
 	return e.Message
 }
 
-func (e *Error) MyErrorCode() uint16 {
-	if e.MysqlErrCode > 0 {
-		return e.MysqlErrCode
-	} else {
-		return e.ErrorCode
-	}
-}
-
-func (e *Error) SqlState() string {
-	return "HY000"
-}
-
-func IsMoErrCode(e error, rc int32) bool {
+func IsMoErrCode(e error, rc uint16) bool {
 	me, ok := e.(*Error)
 	if !ok {
 		// This is not a moerr
@@ -269,13 +231,14 @@ func NewPanicError(v interface{}) *Error {
 	return newWithDepth(Context(), INTERNAL_ERROR, fmt.Sprintf("panic %v: %s", v, debug.Stack()))
 }
 
-func NewError(code int32, msg string) *Error {
+func NewError(code uint16, msg string) *Error {
 	err := &Error{Code: code, Message: msg}
-	if item, has := errorMsgRefer[code]; !has {
-		panic(fmt.Errorf("not exist MOErrorCode: %d", code))
+	if t, ok := MysqlErrorMsgRefer[code]; ok {
+		err.SqlState = t.SqlStates[0]
+	} else if item, has := errorMsgRefer[code]; has {
+		err.SqlState = item.sqlStates[0]
 	} else {
-		err.MysqlErrCode = item.mysqlErrorCode
-		err.ErrorCode = item.errorCode
+		panic(fmt.Errorf("not exist MOErrorCode: %d", code))
 	}
 	_ = errors.WithContextWithDepth(Context(), err, 1)
 	return err

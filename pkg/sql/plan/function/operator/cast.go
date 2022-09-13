@@ -657,6 +657,14 @@ func doCast(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) 
 		return CastStringToJson(lv, rv, proc)
 	}
 
+	if isString(lv.Typ.Oid) && rv.Typ.Oid == types.T_uuid {
+		return CastStringToUuid(lv, rv, proc)
+	}
+
+	if lv.Typ.Oid == types.T_uuid && isString(rv.Typ.Oid) {
+		return CastUuidToString(lv, rv, proc)
+	}
+
 	return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("parameter types [%s, %s] of cast function do not match", lv.Typ.Oid, rv.Typ.Oid))
 }
 
@@ -2074,6 +2082,61 @@ func CastStringToBool(lv, rv *vector.Vector, proc *process.Process) (*vector.Vec
 	return vec, nil
 }
 
+// ---------------------------------------------uuid cast---------------------------------------------------------------
+func CastStringToUuid(lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	vs := vector.MustStrCols(lv)
+	if lv.IsScalar() {
+		if lv.IsScalarNull() {
+			return proc.AllocConstNullVector(rv.Typ, lv.Length()), nil
+		}
+		val, err := types.ParseUuid(vs[0])
+		if err != nil {
+			return nil, err
+		}
+		return vector.NewConstFixed(rv.Typ, lv.Length(), val), nil
+	}
+	vec, err := proc.AllocVectorOfRows(rv.Typ, int64(len(vs)), lv.Nsp)
+	if err != nil {
+		return nil, err
+	}
+	rs := vector.MustTCols[types.Uuid](vec)
+	for i := range vs {
+		if nulls.Contains(lv.Nsp, uint64(i)) {
+			continue
+		}
+		val, err2 := types.ParseUuid(vs[i])
+		if err2 != nil {
+			return nil, err2
+		}
+		rs[i] = val
+	}
+	return vec, nil
+}
+
+func CastUuidToString(lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	var err error
+	if lv.IsScalar() {
+		if lv.IsScalarNull() {
+			return proc.AllocConstNullVector(rv.Typ, lv.Length()), nil
+		} else {
+			lvs := vector.MustTCols[types.Uuid](lv)
+			col := make([]string, 1)
+			if col, err = binary.UuidToBytes(lvs, col); err != nil {
+				return nil, err
+			}
+			return vector.NewConstString(rv.Typ, lv.Length(), col[0]), nil
+		}
+	} else {
+		lvs := vector.MustTCols[types.Uuid](lv)
+		col := make([]string, len(lvs))
+		if col, err = binary.UuidToBytes(lvs, col); err != nil {
+			return nil, err
+		}
+		return vector.NewWithStrings(rv.Typ, col, lv.Nsp, proc.Mp()), nil
+	}
+}
+
+// ----------------------------------------------------------------------------------------------------------------------
 // IsInteger return true if the types.T is integer type
 func IsInteger(t types.T) bool {
 	if t == types.T_int8 || t == types.T_int16 || t == types.T_int32 || t == types.T_int64 ||
