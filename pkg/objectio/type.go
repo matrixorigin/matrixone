@@ -32,7 +32,7 @@ type Writer interface {
 	// block is the handle of the block
 	// idx is the column to which the index is written
 	// buf is the data to write to the index
-	WriteIndex(block BlockObject, idx uint16, buf []byte) error
+	WriteIndex(block BlockObject, index IndexData) error
 
 	// WriteEnd is to write multiple batches written to
 	// the buffer to the fileservice at one time

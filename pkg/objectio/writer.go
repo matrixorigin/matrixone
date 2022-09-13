@@ -88,19 +88,14 @@ func (w *ObjectWriter) Write(batch *batch.Batch) (BlockObject, error) {
 	return block, nil
 }
 
-func (w *ObjectWriter) WriteIndex(fd BlockObject, idx uint16, buf []byte) error {
+func (w *ObjectWriter) WriteIndex(fd BlockObject, index IndexData) error {
 	var err error
+
 	block := w.GetBlock(fd.GetID())
-	if block == nil || block.columns[idx] == nil {
+	if block == nil || block.columns[index.GetIdx()] == nil {
 		return errors.New("object io: not found")
 	}
-	offset, length, err := w.buffer.Write(buf)
-	if err != nil {
-		return err
-	}
-	block.columns[idx].(*ColumnBlock).meta.bloomFilter.offset = uint32(offset)
-	block.columns[idx].(*ColumnBlock).meta.bloomFilter.length = uint32(length)
-	block.columns[idx].(*ColumnBlock).meta.bloomFilter.originSize = uint32(length)
+	index.Write(w, block)
 	return err
 }
 

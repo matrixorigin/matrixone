@@ -14,8 +14,6 @@
 
 package objectio
 
-import "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
-
 // +---------------------------------------------------------------------------------------------+
 // |                                           Header                                            |
 // +-------------+---------------+--------------+---------------+------------+-------------------+
@@ -76,7 +74,7 @@ type ColumnMeta struct {
 	idx         uint16
 	alg         uint8
 	location    Extent
-	zoneMap     *index.ZoneMap
+	zoneMap     ZoneMap
 	bloomFilter Extent
 	checksum    uint32
 }

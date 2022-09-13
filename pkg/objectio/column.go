@@ -19,7 +19,6 @@ import (
 	"context"
 	"encoding/binary"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 )
 
 // ColumnBlock is the organizational structure of a vector in objectio
@@ -37,7 +36,7 @@ type ColumnBlock struct {
 func NewColumnBlock(idx uint16, object *Object) ColumnObject {
 	meta := &ColumnMeta{
 		idx:         idx,
-		zoneMap:     &index.ZoneMap{},
+		zoneMap:     ZoneMap{},
 		bloomFilter: Extent{},
 	}
 	col := &ColumnBlock{
@@ -108,12 +107,12 @@ func (cb *ColumnBlock) MarshalMeta() ([]byte, error) {
 	if err = binary.Write(&buffer, endian, cb.meta.location.OriginSize()); err != nil {
 		return nil, err
 	}
-	/*if err = binary.Write(&buffer, endian, cb.meta.zoneMap.GetMin()); err != nil {
+	if err = binary.Write(&buffer, endian, cb.meta.zoneMap.min); err != nil {
 		return nil, err
 	}
-	if err = binary.Write(&buffer, endian, cb.meta.zoneMap.GetMax()); err != nil {
+	if err = binary.Write(&buffer, endian, cb.meta.zoneMap.max); err != nil {
 		return nil, err
-	}*/
+	}
 	if err = binary.Write(&buffer, endian, cb.meta.bloomFilter.Offset()); err != nil {
 		return nil, err
 	}
@@ -152,6 +151,17 @@ func (cb *ColumnBlock) UnMarshalMate(cache *bytes.Buffer) error {
 		return err
 	}
 	if err = binary.Read(cache, endian, &cb.meta.location.originSize); err != nil {
+		return err
+	}
+	cb.meta.zoneMap = ZoneMap{
+		idx: cb.meta.idx,
+		min: make([]byte, ZoneMapMinSize),
+		max: make([]byte, ZoneMapMaxSize),
+	}
+	if err = binary.Read(cache, endian, &cb.meta.zoneMap.min); err != nil {
+		return err
+	}
+	if err = binary.Read(cache, endian, &cb.meta.zoneMap.max); err != nil {
 		return err
 	}
 	cb.meta.bloomFilter = Extent{}

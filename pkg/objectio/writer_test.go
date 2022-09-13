@@ -56,7 +56,17 @@ func TestNewObjectWriter(t *testing.T) {
 	assert.Nil(t, err)
 	for i := range bat.Vecs {
 		buf := fmt.Sprintf("test index %d", i)
-		err = objectWriter.WriteIndex(fd, uint16(i), []byte(buf))
+		index := NewBloomFilter(uint16(i), 0, []byte(buf))
+		err = objectWriter.WriteIndex(fd, index)
+		assert.Nil(t, err)
+
+		min := make([]byte, 32)
+		min[31] = 1
+		max := make([]byte, 32)
+		max[31] = 10
+		index, err = NewZoneMap(uint16(i), min, max)
+		assert.Nil(t, err)
+		err = objectWriter.WriteIndex(fd, index)
 		assert.Nil(t, err)
 	}
 	_, err = objectWriter.Write(bat)
