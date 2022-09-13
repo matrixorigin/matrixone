@@ -34,7 +34,7 @@ type (
 
 type ComputationRunner interface {
 	Run(ts uint64) (err error)
-	RecordAnalyzeInfo(context.Context) error
+	RecordExecPlanStats(context.Context) error
 }
 
 // ComputationWrapper is the wrapper of the computation

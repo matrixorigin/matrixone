@@ -62,20 +62,20 @@ type StatementInfo struct {
 	reported bool
 }
 
-func (s StatementInfo) GetName() string {
+func (s *StatementInfo) GetName() string {
 	return MOStatementType
 }
 
-func (s StatementInfo) Size() int64 {
+func (s *StatementInfo) Size() int64 {
 	return int64(unsafe.Sizeof(s)) + int64(
 		len(s.Account)+len(s.User)+len(s.Host)+
 			len(s.Database)+len(s.Statement)+len(s.StatementFingerprint)+len(s.StatementTag),
 	)
 }
 
-func (s StatementInfo) Free() {}
+func (s *StatementInfo) Free() {}
 
-func (s StatementInfo) CsvOptions() *CsvOptions {
+func (s *StatementInfo) CsvOptions() *CsvOptions {
 	return CommonCsvOptions
 }
 

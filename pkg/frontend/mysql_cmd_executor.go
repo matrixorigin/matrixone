@@ -1586,8 +1586,8 @@ func (cwft *TxnComputationWrapper) Run(ts uint64) error {
 	return nil
 }
 
-func (cwft *TxnComputationWrapper) RecordAnalyzeInfo(ctx context.Context) error {
-	return cwft.compile.RecordAnalyzeInfo(ctx)
+func (cwft *TxnComputationWrapper) RecordExecPlanStats(ctx context.Context) error {
+	return cwft.compile.RecordExecPlanStats(ctx)
 }
 
 func buildPlan(requestCtx context.Context, ses *Session, ctx plan2.CompilerContext, stmt tree.Statement) (*plan2.Plan, error) {
@@ -2043,7 +2043,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			if err = runner.Run(0); err != nil {
 				goto handleFailed
 			}
-			_ = runner.RecordAnalyzeInfo(requestCtx)
+			_ = runner.RecordExecPlanStats(requestCtx)
 			if ses.showStmtType == ShowColumns {
 				if err = handleShowColumns(ses); err != nil {
 					goto handleFailed
@@ -2092,7 +2092,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			if err = runner.Run(0); err != nil {
 				goto handleFailed
 			}
-			_ = runner.RecordAnalyzeInfo(requestCtx)
+			_ = runner.RecordExecPlanStats(requestCtx)
 
 			if !ses.Pu.SV.DisableRecordTimeElapsedOfSqlRequest {
 				logutil2.Infof(requestCtx, "time of Exec.Run : %s", time.Since(runBegin).String())

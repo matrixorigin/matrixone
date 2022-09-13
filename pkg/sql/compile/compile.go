@@ -1020,7 +1020,7 @@ func (c *Compile) fillAnalyzeInfo() {
 	}
 }
 
-func (c *Compile) RecordAnalyzeInfo(ctx context.Context) error {
+func (c *Compile) RecordExecPlanStats(ctx context.Context) error {
 	if c.anal == nil {
 		return nil
 	}
