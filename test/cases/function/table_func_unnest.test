@@ -1,0 +1,31 @@
+#Test for str case
+select * from unnest('{"a":1}') as f;
+select * from unnest('{"a":1}', '$.a') as f;
+select * from unnest('{"a":1}', '$.a', true) as f;
+select * from unnest('{"a":1}');
+select * from unnest('{"a":1}', '$.a');
+select * from unnest('{"a":1}', '$.a', true);
+
+#Test for col case
+drop table if exists t1;
+create table t1 (a json,b int);
+insert into t1 values ('{"a":1,"b":[{"c":2,"d":3},false,4],"e":{"f":true,"g":[null,true,1.1]}}',1);
+insert into t1 values ('[1,true,false,null,"aaa",1.1,{"t":false}]',2);
+select * from t1;
+select * from unnest(t1.a) as f;
+select * from unnest(t1.a, "$.b") as f;
+select * from unnest(t1.a, "$.a") as f;
+select * from unnest(t1.a, "$.a", true) as f;
+select * from unnest(t1.a);
+select * from unnest(t1.a, "$.b");
+select * from unnest(t1.a, "$.a");
+select * from unnest(t1.a, "$.a", true);
+
+#Test for other cases
+select col from unnest(t1.a, "$.b");
+select f.col from unnest(t1.a, "$.b") as f;
+select f.seq, f.col from unnest(t1.a, "$.b") as f;
+select distinct(f.seq) from unnest(t1.a, "$") as f;
+select `index`,path from unnest(t1.a, "$");
+
+

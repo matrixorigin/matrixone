@@ -1,0 +1,99 @@
+select * from unnest('{"a":1}') as f;
+col	seq	key	path	index	value	this
+UNNEST_DEFAULT	0	a	$.a	null	1	{"a": 1}
+select * from unnest('{"a":1}', '$.a') as f;
+col	seq	key	path	index	value	this
+select * from unnest('{"a":1}', '$.a', true) as f;
+col	seq	key	path	index	value	this
+UNNEST_DEFAULT	0	null	$.a	null	null	1
+select * from unnest('{"a":1}');
+col	seq	key	path	index	value	this
+UNNEST_DEFAULT	0	a	$.a	null	1	{"a": 1}
+select * from unnest('{"a":1}', '$.a');
+col	seq	key	path	index	value	this
+select * from unnest('{"a":1}', '$.a', true);
+col	seq	key	path	index	value	this
+UNNEST_DEFAULT	0	null	$.a	null	null	1
+drop table if exists t1;
+create table t1 (a json,b int);
+insert into t1 values ('{"a":1,"b":[{"c":2,"d":3},false,4],"e":{"f":true,"g":[null,true,1.1]}}',1);
+insert into t1 values ('[1,true,false,null,"aaa",1.1,{"t":false}]',2);
+select * from t1;
+a	b
+{"a": 1, "b": [{"c": 2, "d": 3}, false, 4], "e": {"f": true, "g": [null, true, 1.1]}}	1
+[1, true, false, null, "aaa", 1.1, {"t": false}]	2
+select * from unnest(t1.a) as f;
+col	seq	key	path	index	value	this
+a	0	a	$.a	null	1	{"a": 1, "b": [{"c": 2, "d": 3}, false, 4], "e": {"f": true, "g": [null, true, 1.1]}}
+a	0	b	$.b	null	[{"c": 2, "d": 3}, false, 4]	{"a": 1, "b": [{"c": 2, "d": 3}, false, 4], "e": {"f": true, "g": [null, true, 1.1]}}
+a	0	e	$.e	null	{"f": true, "g": [null, true, 1.1]}	{"a": 1, "b": [{"c": 2, "d": 3}, false, 4], "e": {"f": true, "g": [null, true, 1.1]}}
+a	1	null	$[0]	0	1	[1, true, false, null, "aaa", 1.1, {"t": false}]
+a	1	null	$[1]	1	true	[1, true, false, null, "aaa", 1.1, {"t": false}]
+a	1	null	$[2]	2	false	[1, true, false, null, "aaa", 1.1, {"t": false}]
+a	1	null	$[3]	3	null	[1, true, false, null, "aaa", 1.1, {"t": false}]
+a	1	null	$[4]	4	"aaa"	[1, true, false, null, "aaa", 1.1, {"t": false}]
+a	1	null	$[5]	5	1.1	[1, true, false, null, "aaa", 1.1, {"t": false}]
+a	1	null	$[6]	6	{"t": false}	[1, true, false, null, "aaa", 1.1, {"t": false}]
+select * from unnest(t1.a, "$.b") as f;
+col	seq	key	path	index	value	this
+a	0	null	$.b[0]	0	{"c": 2, "d": 3}	[{"c": 2, "d": 3}, false, 4]
+a	0	null	$.b[1]	1	false	[{"c": 2, "d": 3}, false, 4]
+a	0	null	$.b[2]	2	4	[{"c": 2, "d": 3}, false, 4]
+select * from unnest(t1.a, "$.a") as f;
+col	seq	key	path	index	value	this
+select * from unnest(t1.a, "$.a", true) as f;
+col	seq	key	path	index	value	this
+a	0	null	$.a	null	null	1
+select * from unnest(t1.a);
+col	seq	key	path	index	value	this
+a	0	a	$.a	null	1	{"a": 1, "b": [{"c": 2, "d": 3}, false, 4], "e": {"f": true, "g": [null, true, 1.1]}}
+a	0	b	$.b	null	[{"c": 2, "d": 3}, false, 4]	{"a": 1, "b": [{"c": 2, "d": 3}, false, 4], "e": {"f": true, "g": [null, true, 1.1]}}
+a	0	e	$.e	null	{"f": true, "g": [null, true, 1.1]}	{"a": 1, "b": [{"c": 2, "d": 3}, false, 4], "e": {"f": true, "g": [null, true, 1.1]}}
+a	1	null	$[0]	0	1	[1, true, false, null, "aaa", 1.1, {"t": false}]
+a	1	null	$[1]	1	true	[1, true, false, null, "aaa", 1.1, {"t": false}]
+a	1	null	$[2]	2	false	[1, true, false, null, "aaa", 1.1, {"t": false}]
+a	1	null	$[3]	3	null	[1, true, false, null, "aaa", 1.1, {"t": false}]
+a	1	null	$[4]	4	"aaa"	[1, true, false, null, "aaa", 1.1, {"t": false}]
+a	1	null	$[5]	5	1.1	[1, true, false, null, "aaa", 1.1, {"t": false}]
+a	1	null	$[6]	6	{"t": false}	[1, true, false, null, "aaa", 1.1, {"t": false}]
+select * from unnest(t1.a, "$.b");
+col	seq	key	path	index	value	this
+a	0	null	$.b[0]	0	{"c": 2, "d": 3}	[{"c": 2, "d": 3}, false, 4]
+a	0	null	$.b[1]	1	false	[{"c": 2, "d": 3}, false, 4]
+a	0	null	$.b[2]	2	4	[{"c": 2, "d": 3}, false, 4]
+select * from unnest(t1.a, "$.a");
+col	seq	key	path	index	value	this
+select * from unnest(t1.a, "$.a", true);
+col	seq	key	path	index	value	this
+a	0	null	$.a	null	null	1
+select col from unnest(t1.a, "$.b");
+col
+a
+a
+a
+select f.col from unnest(t1.a, "$.b") as f;
+col
+a
+a
+a
+select f.seq, f.col from unnest(t1.a, "$.b") as f;
+seq	col
+0	a
+0	a
+0	a
+select distinct(f.seq) from unnest(t1.a, "$") as f;
+f.seq
+0
+1
+select `index`,path from unnest(t1.a, "$");
+index	path
+null	$.a
+null	$.b
+null	$.e
+0	$[0]
+1	$[1]
+2	$[2]
+3	$[3]
+4	$[4]
+5	$[5]
+6	$[6]
