@@ -23,6 +23,15 @@ var (
 		},
 		[]string{constTenantKey, "type"},
 	)
+
+	TransactionErrorsFactory = NewCounterVec(
+		CounterOpts{
+			Subsystem: "sql",
+			Name:      "transaction_errors",
+			Help:      "Counter of errors on execute commit/rollback statement",
+		},
+		[]string{constTenantKey, "type"},
+	)
 )
 
 type SQLType string
@@ -37,4 +46,8 @@ var (
 
 func StatementCounter(tenant string, t SQLType) Counter {
 	return StatementCounterFactory.WithLabelValues(tenant, string(t))
+}
+
+func TransactionErrorCounter(account string, t SQLType) Counter {
+	return TransactionErrorsFactory.WithLabelValues(account, string(t))
 }

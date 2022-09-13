@@ -1732,6 +1732,21 @@ func incStatementCounter(tenant string, stmt tree.Statement) {
 	}
 }
 
+func incTransactionErrorCounter(tenant string, stmt tree.Statement) {
+	switch stmt.(type) {
+	case *tree.Select:
+		metric.TransactionErrorCounter(tenant, metric.SQLTypeSelect).Inc()
+	case *tree.Insert:
+		metric.TransactionErrorCounter(tenant, metric.SQLTypeInsert).Inc()
+	case *tree.Delete:
+		metric.TransactionErrorCounter(tenant, metric.SQLTypeDelete).Inc()
+	case *tree.Update:
+		metric.TransactionErrorCounter(tenant, metric.SQLTypeUpdate).Inc()
+	default:
+		metric.TransactionErrorCounter(tenant, metric.SQLTypeOther).Inc()
+	}
+}
+
 func (mce *MysqlCmdExecutor) beforeRun(stmt tree.Statement) {
 	// incStatementCounter(sess.GetTenantInfo().Tenant, stmt, sess.IsInternal)
 	incStatementCounter("0", stmt)
@@ -1873,11 +1888,13 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		case *tree.CommitTransaction:
 			err = ses.TxnCommit()
 			if err != nil {
+				incTransactionErrorCounter(stmt, ses.GetTenantInfo().GetTenant())
 				goto handleFailed
 			}
 		case *tree.RollbackTransaction:
 			err = ses.TxnRollback()
 			if err != nil {
+				incTransactionErrorCounter(stmt, ses.GetTenantInfo().GetTenant())
 				goto handleFailed
 			}
 		}
@@ -2316,6 +2333,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			txnErr = ses.TxnCommitSingleStatement(stmt)
 			if txnErr != nil {
 				logStatementStatus(ctx, ses, stmt, fail, txnErr)
+				incTransactionErrorCounter(stmt, ses.GetTenantInfo().GetTenant())
 				return txnErr
 			}
 			switch stmt.(type) {
