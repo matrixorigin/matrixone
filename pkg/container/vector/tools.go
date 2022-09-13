@@ -160,6 +160,9 @@ func (v *Vector) setupColFromData(start, end int) {
 }
 
 func (v *Vector) encodeColToByteSlice() []byte {
+	if v.Col == nil {
+		return nil
+	}
 	switch v.GetType().Oid {
 	case types.T_bool:
 		return types.EncodeBoolSlice(v.Col.([]bool))
