@@ -29,18 +29,16 @@ import (
 type Txn2PC interface {
 	PrepareRollback() error
 	ApplyRollback() error
-	PreCommitOr2PCPrepare() error
+	PrePrepare() error
 	PrepareCommit() error
-	Prepare2PCPrepare() error
 	PreApplyCommit() error
-	PreApply2PCPrepare() error
-	Apply2PCPrepare() error
 	ApplyCommit() error
 }
 
 type TxnReader interface {
 	RLock()
 	RUnlock()
+	Is2PC() bool
 	GetID() uint64
 	GetCtx() []byte
 	GetStartTS() types.TS
@@ -95,6 +93,7 @@ type TxnWriter interface {
 
 type TxnAsyncer interface {
 	WaitDone(error) error
+	WaitPrepared() error
 }
 
 type TxnTest interface {
@@ -188,6 +187,7 @@ type UpdateNode interface {
 type TxnStore interface {
 	Txn2PC
 	io.Closer
+	WaitPrepared() error
 	BindTxn(AsyncTxn)
 	GetLSN() uint64
 
@@ -235,7 +235,8 @@ type TxnEntry interface {
 	RLock()
 	RUnlock()
 	PrepareCommit() error
-	Prepare2PCPrepare() error
+	// TODO: remove all Prepare2PCPrepare
+	// Prepare2PCPrepare() error
 	PrepareRollback() error
 	ApplyCommit(index *wal.Index) error
 	ApplyRollback(index *wal.Index) error
