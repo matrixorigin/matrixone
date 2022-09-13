@@ -104,6 +104,8 @@ func (s *taskService) Allocate(ctx context.Context, value task.Task, taskRunner 
 		old.Epoch = 1
 		old.TaskRunner = taskRunner
 		old.LastHeartbeat = time.Now().UnixMilli()
+	default:
+		return ErrInvalidTask
 	}
 
 	n, err := s.store.Update(ctx,
