@@ -49,10 +49,7 @@ type Routine struct {
 	routineMgr *RoutineManager
 
 	ses *Session
-	// TODO: The current protocol and mysql access code, designed to be
-	// confusing, will lead to multiple calls to Quit, here the use of
-	// sync.Once also just to solve the problem of multiple closures, the
-	// code needs to be refactored
+	// TODO: the initialization and closure of application in goetty should be clear in 0.7
 	closeOnce sync.Once
 }
 
@@ -91,7 +88,6 @@ func (routine *Routine) Loop(routineCtx context.Context) {
 	var req *Request = nil
 	var err error
 	var resp *Response
-	defer routine.Quit()
 	//session for the connection
 	for {
 		quit := false

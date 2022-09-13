@@ -24,20 +24,8 @@ SELECT
 ## **示例**
 
 ```sql
-> SELECT number FROM numbers(3);
-+--------+
-| number |
-+--------+
-|      0 |
-|      1 |
-|      2 |
-+--------+
-
-> SELECT * FROM t1 WHERE spID>2 AND userID <2 || userID >=2 OR userID < 2 LIMIT 3;
-
-> SELECT userID,MAX(score) max_score FROM t1 WHERE userID <2 || userID > 3 GROUP BY userID ORDER BY max_score;
-
 > create table t1 (spID int,userID int,score smallint);
+
 > insert into t1 values (1,1,1);
 > insert into t1 values (2,2,2);
 > insert into t1 values (2,1,4);
@@ -45,6 +33,24 @@ SELECT
 > insert into t1 values (1,1,5);
 > insert into t1 values (4,6,10);
 > insert into t1 values (5,11,99);
+
+> SELECT * FROM t1 WHERE spID>2 AND userID <2 || userID >=2 OR userID < 2 LIMIT 3;
++------+--------+-------+
+| spid | userid | score |
++------+--------+-------+
+|    1 |      1 |     1 |
+|    2 |      2 |     2 |
+|    2 |      1 |     4 |
++------+--------+-------+
+> SELECT userID,MAX(score) max_score FROM t1 WHERE userID <2 || userID > 3 GROUP BY userID ORDER BY max_score;
++--------+-----------+
+| userid | max_score |
++--------+-----------+
+|      1 |         5 |
+|      6 |        10 |
+|     11 |        99 |
++--------+-----------+
+
 > select userID,count(score) from t1 group by userID having count(score)>1 order by userID;
 +--------+--------------+
 | userid | count(score) |
