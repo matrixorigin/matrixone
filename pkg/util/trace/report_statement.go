@@ -172,7 +172,9 @@ func EndStatement(ctx context.Context, err error) time.Time {
 		s.Error = err
 		s.Status = StatementStatusFailed
 	}
-	s.Report(ctx)
+	if s.reported { // cooperate with s.mux
+		s.Report(ctx)
+	}
 
 endL:
 	return util.Time(endTime)

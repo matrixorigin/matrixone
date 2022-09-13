@@ -342,6 +342,7 @@ func genStatementBatchSql(in []IBuffer2SqlItem, buf *bytes.Buffer) any {
 		buf.WriteString(fmt.Sprintf(`, %q`, s.ExecPlanStats2Json()))
 		buf.WriteString("),")
 
+		s.reported = true
 		s.mux.Unlock()
 	}
 	return string(buf.Next(buf.Len() - 1))
