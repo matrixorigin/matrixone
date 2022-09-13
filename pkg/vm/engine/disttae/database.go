@@ -17,8 +17,11 @@ package disttae
 import (
 	"context"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
+
+var _ engine.Database = new(database)
 
 func (db *database) Relations(ctx context.Context) ([]string, error) {
 	return db.txn.getTableList(ctx, db.databaseId)
@@ -37,25 +40,25 @@ func (db *database) Relation(ctx context.Context, name string) (engine.Relation,
 }
 
 func (db *database) Delete(ctx context.Context, name string) error {
-	if err := db.txn.WriteBatch(DELETE, MO_CATALOG_ID, MO_TABLES_ID,
-		MO_CATALOG, MO_TABLES, genDropTableTuple(name)); err != nil {
+	if err := db.txn.WriteBatch(DELETE, catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID,
+		catalog.MO_CATALOG, catalog.MO_TABLES, genDropTableTuple(name)); err != nil {
 		return err
 	}
-	if err := db.txn.WriteBatch(DELETE, MO_CATALOG_ID, MO_COLUMNS_ID,
-		MO_CATALOG, MO_COLUMNS, genDropColumnsTuple(name)); err != nil {
+	if err := db.txn.WriteBatch(DELETE, catalog.MO_CATALOG_ID, catalog.MO_COLUMNS_ID,
+		catalog.MO_CATALOG, catalog.MO_COLUMNS, genDropColumnsTuple(name)); err != nil {
 		return err
 	}
 	return nil
 }
 
 func (db *database) Create(ctx context.Context, name string, defs []engine.TableDef) error {
-	if err := db.txn.WriteBatch(INSERT, MO_CATALOG_ID, MO_TABLES_ID,
-		MO_CATALOG, MO_TABLES, genCreateTableTuple(name)); err != nil {
+	if err := db.txn.WriteBatch(INSERT, catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID,
+		catalog.MO_CATALOG, catalog.MO_TABLES, genCreateTableTuple(name)); err != nil {
 		return err
 	}
 	for _, def := range defs {
-		if err := db.txn.WriteBatch(INSERT, MO_CATALOG_ID, MO_COLUMNS_ID,
-			MO_CATALOG, MO_COLUMNS, genCreateColumnTuple(def)); err != nil {
+		if err := db.txn.WriteBatch(INSERT, catalog.MO_CATALOG_ID, catalog.MO_COLUMNS_ID,
+			catalog.MO_CATALOG, catalog.MO_COLUMNS, genCreateColumnTuple(def)); err != nil {
 			return err
 		}
 	}

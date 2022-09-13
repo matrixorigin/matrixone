@@ -24,6 +24,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
+var _ engine.Relation = new(table)
+
 func (tbl *table) Rows() int64 {
 	return 0
 }

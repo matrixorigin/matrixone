@@ -18,6 +18,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
@@ -45,8 +46,8 @@ func (e *Engine) Create(ctx context.Context, name string, op client.TxnOperator)
 		return err
 	}
 	// non-io operations do not need to pass context
-	if err := txn.WriteBatch(INSERT, MO_CATALOG_ID, MO_DATABASE_ID, MO_CATALOG,
-		MO_DATABASE, genCreateDatabaseTuple(name)); err != nil {
+	if err := txn.WriteBatch(INSERT, catalog.MO_CATALOG_ID, catalog.MO_DATABASE_ID,
+		catalog.MO_CATALOG, catalog.MO_DATABASE, genCreateDatabaseTuple(name)); err != nil {
 		return err
 	}
 	return nil
@@ -83,8 +84,8 @@ func (e *Engine) Delete(ctx context.Context, name string, op client.TxnOperator)
 		return err
 	}
 	// non-io operations do not need to pass context
-	if err := txn.WriteBatch(DELETE, MO_CATALOG_ID, MO_DATABASE_ID, MO_CATALOG,
-		MO_DATABASE, genDropDatabaseTuple(name)); err != nil {
+	if err := txn.WriteBatch(DELETE, catalog.MO_CATALOG_ID, catalog.MO_DATABASE_ID,
+		catalog.MO_CATALOG, catalog.MO_DATABASE, genDropDatabaseTuple(name)); err != nil {
 		return err
 	}
 	return nil
