@@ -941,6 +941,11 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 	astLimit := stmt.Limit
 
 	// strip parentheses
+	// ((select a from t1)) order by b  [ is equal ] select a from t1 order by b
+	// (((select a from t1)) order by b) [ is equal ] select a from t1 order by b
+	//
+	// (select a from t1 union/union all select aa from t2) order by a
+	//       => we will trip parentheses, but order by only can use 'a' column from the union's output projectlist
 	for {
 		if selectClause, ok := stmt.Select.(*tree.ParenSelect); ok {
 			if selectClause.Select.OrderBy != nil {
