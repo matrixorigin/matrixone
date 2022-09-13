@@ -63,7 +63,7 @@ func (node Unnest) getOrigin() string {
 		} else if len(tableName) > 0 {
 			return fmt.Sprintf("%s.%s", tableName, colName)
 		} else {
-			return fmt.Sprintf("%s", colName)
+			return colName
 		}
 	default:
 		panic("unknown type")

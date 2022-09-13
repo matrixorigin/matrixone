@@ -77,6 +77,9 @@ func callByStr(param *Param, proc *process.Process) (bool, error) {
 		return false, err
 	}
 	ures, err := json.Unnest(&path, param.Extern.Outer, recursive, mode, param.filters)
+	if err != nil {
+		return false, err
+	}
 	bat := batch.New(false, param.Attrs)
 	for i := range param.Cols {
 		bat.Vecs[i] = vector.New(dupType(param.Cols[i].Typ))
@@ -121,10 +124,10 @@ func callByCol(param *Param, proc *process.Process) (bool, error) {
 		rows := 0
 		for i := 0; i < len(col); i++ {
 			json := types.DecodeJson(col[i])
+			ures, err := json.Unnest(&path, param.Extern.Outer, recursive, mode, param.filters)
 			if err != nil {
 				return false, err
 			}
-			ures, err := json.Unnest(&path, param.Extern.Outer, recursive, mode, param.filters)
 			bat, err = makeBatch(bat, ures, param, proc)
 			if err != nil {
 				return false, err

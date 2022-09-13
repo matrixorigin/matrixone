@@ -105,7 +105,7 @@ var stringFunc = [...]func(any, *bytes.Buffer){
 
 	HashBuild: hashbuild.String,
 
-	Unnest : unnest.String,
+	Unnest: unnest.String,
 }
 
 var prepareFunc = [...]func(*process.Process, any) error{
@@ -151,7 +151,7 @@ var prepareFunc = [...]func(*process.Process, any) error{
 
 	HashBuild: hashbuild.Prepare,
 
-	Unnest : unnest.Prepare,
+	Unnest: unnest.Prepare,
 }
 
 var execFunc = [...]func(int, *process.Process, any) (bool, error){
@@ -196,5 +196,5 @@ var execFunc = [...]func(int, *process.Process, any) (bool, error){
 
 	HashBuild: hashbuild.Call,
 
-	Unnest : unnest.Call,
+	Unnest: unnest.Call,
 }

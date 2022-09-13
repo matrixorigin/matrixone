@@ -214,6 +214,9 @@ func makeTestBatch(jsons []string, proc *process.Process) (*batch.Batch, error) 
 			return nil, err
 		}
 		err = bat.GetVector(0).Append(bjBytes, false, proc.Mp())
+		if err != nil {
+			return nil, err
+		}
 	}
 	return bat, nil
 }
