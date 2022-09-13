@@ -62,6 +62,8 @@ func (n *NumVal) Format(ctx *FmtCtx) {
 		return
 	}
 	switch n.Value.Kind() {
+	case constant.String:
+		ctx.WriteValue(n.ValType, n.origString)
 	case constant.Bool:
 		ctx.WriteString(strings.ToLower(n.Value.String()))
 	case constant.Unknown:
