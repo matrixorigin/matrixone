@@ -20,11 +20,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"sync"
+	"time"
 )
 
 var Client *CNClient
 
 type CNClient struct {
+	ready  bool
 	config *ClientConfig
 	client morpc.RPCClient
 
@@ -33,7 +35,7 @@ type CNClient struct {
 }
 
 func (c *CNClient) Ready() bool {
-	return c != nil && c.config != nil
+	return c != nil && c.ready
 }
 
 func (c *CNClient) Send(ctx context.Context, backend string, request morpc.Message) (*morpc.Future, error) {
@@ -45,11 +47,13 @@ func (c *CNClient) NewStream(backend string) (morpc.Stream, error) {
 }
 
 func (c *CNClient) Close() error {
+	c.ready = false
 	return c.client.Close()
 }
 
 const (
-	dfMaxSenderNumber       = 1000
+	dfMaxSenderNumber       = 100000
+	dfConnectTimeout        = 5 * time.Second
 	dfClientReadBufferSize  = 1 << 10
 	dfClientWriteBufferSize = 1 << 10
 	dfPayLoadCopyBufferSize = 1 << 20
@@ -59,6 +63,8 @@ const (
 type ClientConfig struct {
 	// MaxSenderNumber is the max number of backends per host for compute node service.
 	MaxSenderNumber int
+	// TimeOutForEachConnect is the out time for each tcp connect.
+	TimeOutForEachConnect time.Duration
 	// related buffer size.
 	PayLoadCopyBufferSize int
 	ReadBufferSize        int
@@ -76,11 +82,13 @@ func NewCNClient(cfg *ClientConfig) error {
 		morpc.WithBackendConnectWhenCreate(),
 		morpc.WithBackendGoettyOptions(goetty.WithSessionRWBUfferSize(
 			cfg.ReadBufferSize, cfg.WriteBufferSize)),
+		morpc.WithBackendConnectTimeout(cfg.TimeOutForEachConnect),
 	)
 
 	Client.client, err = morpc.NewClient(factory,
 		morpc.WithClientMaxBackendPerHost(cfg.MaxSenderNumber),
 	)
+	Client.ready = true
 	return err
 }
 
@@ -101,5 +109,8 @@ func (cfg *ClientConfig) Fill() {
 	}
 	if cfg.WriteBufferSize < 0 {
 		cfg.WriteBufferSize = dfClientWriteBufferSize
+	}
+	if cfg.TimeOutForEachConnect <= 0 {
+		cfg.TimeOutForEachConnect = dfConnectTimeout
 	}
 }

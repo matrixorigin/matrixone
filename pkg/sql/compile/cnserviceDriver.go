@@ -83,6 +83,7 @@ type processHelper struct {
 	unixTime    int64
 	txnOperator client.TxnOperator
 	txnClient   client.TxnClient
+	sessionInfo process.SessionInfo
 }
 
 // CnServerMessageHandler deal the client message that received at cn-server.
@@ -130,25 +131,27 @@ func pipelineMessageHandle(ctx context.Context, message morpc.Message, cs morpc.
 	refactorScope(c, c.ctx, s)
 
 	// just test.
-	println(ShowScopes([]*Scope{s}))
+	// println(ShowScopes([]*Scope{s}))
 	err = s.ParallelRun(c)
 	if err != nil {
 		return nil, err
 	}
 	// if it's a query sql, get analyse related information
-	if query, ok := s.Plan.Plan.(*plan.Plan_Query); ok {
-		nodes := query.Query.GetNodes()
-		anas := &pipeline.AnalysisList{
-			List: make([]*plan.AnalyzeInfo, len(nodes)),
-		}
-		for i := range anas.List {
-			if nodes[i].AnalyzeInfo == nil {
-				anas.List[i] = &plan.AnalyzeInfo{}
-			} else {
-				anas.List[i] = nodes[i].AnalyzeInfo
+	if s.Plan != nil {
+		if query, ok := s.Plan.Plan.(*plan.Plan_Query); ok {
+			nodes := query.Query.GetNodes()
+			anas := &pipeline.AnalysisList{
+				List: make([]*plan.AnalyzeInfo, len(nodes)),
 			}
+			for i := range anas.List {
+				if nodes[i].AnalyzeInfo == nil {
+					anas.List[i] = &plan.AnalyzeInfo{}
+				} else {
+					anas.List[i] = nodes[i].AnalyzeInfo
+				}
+			}
+			return anas.Marshal()
 		}
-		return anas.Marshal()
 	}
 	return nil, nil
 }
@@ -165,7 +168,7 @@ func (s *Scope) remoteRun(c *Compile) error {
 	n := len(s.Instructions) - 1
 	con := s.Instructions[n]
 	s.Instructions = s.Instructions[:n]
-	s.Plan = c.scope.Plan
+	// s.Plan = c.scope.Plan
 	sData, errEncode := encodeScope(s)
 	if errEncode != nil {
 		return errEncode
@@ -293,6 +296,17 @@ func encodeProcessInfo(proc *process.Process) ([]byte, error) {
 		}
 		procInfo.Snapshot = string(snapshot)
 	}
+	{ // session info
+		procInfo.SessionInfo = &pipeline.SessionInfo{
+			User:         proc.SessionInfo.GetUser(),
+			Host:         proc.SessionInfo.GetHost(),
+			Role:         proc.SessionInfo.GetRole(),
+			ConnectionId: proc.SessionInfo.GetConnectionID(),
+			Database:     proc.SessionInfo.GetDatabase(),
+			Version:      proc.SessionInfo.GetVersion(),
+			TimeZoneName: proc.SessionInfo.TimeZone.String(),
+		}
+	}
 	return procInfo.Marshal()
 }
 
@@ -302,12 +316,16 @@ func generateProcessHelper(data []byte, cli client.TxnClient) (*processHelper, e
 	procInfo := &pipeline.ProcessInfo{}
 	err := procInfo.Unmarshal(data)
 	if err != nil {
-		return result, err
+		return nil, err
 	}
 	result.id = procInfo.Id
 	result.lim = convertToProcessLimitation(procInfo.Lim)
 	result.unixTime = procInfo.UnixTime
 	result.txnOperator, err = cli.NewWithSnapshot([]byte(procInfo.Snapshot))
+	if err != nil {
+		return nil, err
+	}
+	result.sessionInfo, err = convertToProcessSessionInfo(procInfo.SessionInfo)
 	if err != nil {
 		return nil, err
 	}
@@ -922,7 +940,7 @@ func newCompile(ctx context.Context, message morpc.Message, pHelper *processHelp
 	// TODO: this process is just an temporary solution. And process's properties need to be refined.
 	proc := process.New(
 		ctx,
-		mheap.New(guest.New(1<<30, host.New(1<<20))),
+		mheap.New(guest.New(1<<30, host.New(1<<30))),
 		pHelper.txnClient,
 		pHelper.txnOperator,
 		mHelper.fileService,
@@ -930,6 +948,7 @@ func newCompile(ctx context.Context, message morpc.Message, pHelper *processHelp
 	proc.UnixTime = pHelper.unixTime
 	proc.Id = pHelper.id
 	proc.Lim = pHelper.lim
+	proc.SessionInfo = pHelper.sessionInfo
 
 	c := &Compile{
 		ctx:  ctx,
@@ -1095,6 +1114,24 @@ func convertToProcessLimitation(lim *pipeline.ProcessLimitation) process.Limitat
 		PartitionRows: lim.PartitionRows,
 		ReaderSize:    lim.ReaderSize,
 	}
+}
+
+// convert pipeline.SessionInfo to process.SessionInfo
+func convertToProcessSessionInfo(sei *pipeline.SessionInfo) (process.SessionInfo, error) {
+	sessionInfo := process.SessionInfo{
+		User:         sei.User,
+		Host:         sei.Host,
+		Role:         sei.Role,
+		ConnectionID: sei.ConnectionId,
+		Database:     sei.Database,
+		Version:      sei.Version,
+	}
+	tz, err := time.LoadLocation(sei.TimeZoneName)
+	if err != nil {
+		return sessionInfo, err
+	}
+	sessionInfo.TimeZone = tz
+	return sessionInfo, nil
 }
 
 func decodeBatch(_ *process.Process, msg *pipeline.Message) (*batch.Batch, error) {
