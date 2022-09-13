@@ -152,13 +152,13 @@ func (txn *Transaction) getRows(ctx context.Context, databaseId uint64, tableId 
 func (txn *Transaction) readTable(ctx context.Context, databaseId uint64, tableId uint64,
 	dnList []DNStore, columns []string, expr *plan.Expr) ([]*batch.Batch, error) {
 	var writes [][]Entry
-	var bats []*batch.Batch
 
 	// consider halloween problem
 	if int64(txn.statementId)-2 > 0 {
 		writes = txn.writes[:txn.statementId-2]
 	}
 	blkInfos := txn.db.BlockList(ctx, dnList, databaseId, tableId, txn.meta.SnapshotTS, writes)
+	bats := make([]*batch.Batch, 0, len(blkInfos))
 	for _, blkInfo := range blkInfos {
 		if !needRead(expr, blkInfo) {
 			continue
