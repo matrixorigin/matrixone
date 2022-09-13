@@ -154,12 +154,12 @@ func TestInitExternalTblSchema(t *testing.T) {
 
 	// (1 + 4) * n + 1
 	// 1: create database ...
-	// 5: create EXTERNAL table
+	// 4: create EXTERNAL table
 	// 1: close
 	wg.Add(1)
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			wg.Add(6)
+			wg.Add(1 + len(initDDLs))
 			err := InitSchemaByInnerExecutor(tt.args.ctx, tt.args.ieFactory, tt.args.mode)
 			require.Equal(t, nil, err)
 		})

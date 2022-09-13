@@ -329,8 +329,8 @@ func Test_buffer2Sql_GetBatch_AllType(t *testing.T) {
 			},
 			wantFunc: genStatementBatchSql,
 			want: `insert into system.statement_info (` +
-				"`statement_id`, `transaction_id`, `session_id`, `account`, `user`, `host`, `database`, `statement`, `statement_tag`, `statement_fingerprint`, `node_uuid`, `node_type`, `request_at`, `exec_plan`" +
-				`) values ("00000000-0000-0000-0000-000000000001", "00000000-0000-0000-0000-000000000001", "00000000-0000-0000-0000-000000000001", "MO", "moroot", "", "system", "show tables", "show tables", "", "node_uuid", "Standalone", "1970-01-01 00:00:00.000000", "null")`,
+				"`statement_id`, `transaction_id`, `session_id`, `account`, `user`, `host`, `database`, `statement`, `statement_tag`, `statement_fingerprint`, `node_uuid`, `node_type`, `request_at`, `response_at`, `status`, `error`, `duration`, `exec_plan`, `exec_plan_stats`" +
+				`) values ("00000000-0000-0000-0000-000000000001", "00000000-0000-0000-0000-000000000001", "00000000-0000-0000-0000-000000000001", "MO", "moroot", "", "system", "show tables", "show tables", "", "node_uuid", "Standalone", "1970-01-01 00:00:00.000000", "1970-01-01 00:00:00.000000", 0, "Running", "", "{}", "{}")`,
 		},
 		{
 			name:   "multi_statement",
@@ -361,6 +361,8 @@ func Test_buffer2Sql_GetBatch_AllType(t *testing.T) {
 						StatementFingerprint: "show databases",
 						StatementTag:         "dcl",
 						RequestAt:            util.TimeNano(time.Microsecond),
+						ResponseAt:           util.TimeNano(time.Microsecond + time.Second),
+						Duration:             uint64(time.Second),
 						ExecPlan:             nil,
 					},
 				},
@@ -368,9 +370,9 @@ func Test_buffer2Sql_GetBatch_AllType(t *testing.T) {
 			},
 			wantFunc: genStatementBatchSql,
 			want: `insert into system.statement_info (` +
-				"`statement_id`, `transaction_id`, `session_id`, `account`, `user`, `host`, `database`, `statement`, `statement_tag`, `statement_fingerprint`, `node_uuid`, `node_type`, `request_at`, `exec_plan`" +
-				`) values ("00000000-0000-0000-0000-000000000001", "00000000-0000-0000-0000-000000000001", "00000000-0000-0000-0000-000000000001", "MO", "moroot", "", "system", "show tables", "show tables", "", "node_uuid", "Standalone", "1970-01-01 00:00:00.000000", "null")` +
-				`,("00000000-0000-0000-0000-000000000002", "00000000-0000-0000-0000-000000000001", "00000000-0000-0000-0000-000000000001", "MO", "moroot", "", "system", "show databases", "show databases", "dcl", "node_uuid", "Standalone", "1970-01-01 00:00:00.000001", "null")`,
+				"`statement_id`, `transaction_id`, `session_id`, `account`, `user`, `host`, `database`, `statement`, `statement_tag`, `statement_fingerprint`, `node_uuid`, `node_type`, `request_at`, `response_at`, `status`, `error`, `duration`, `exec_plan`, `exec_plan_stats`" +
+				`) values ("00000000-0000-0000-0000-000000000001", "00000000-0000-0000-0000-000000000001", "00000000-0000-0000-0000-000000000001", "MO", "moroot", "", "system", "show tables", "show tables", "", "node_uuid", "Standalone", "1970-01-01 00:00:00.000000", "1970-01-01 00:00:00.000000", 0, "Running", "", "{}", "{}")` +
+				`,("00000000-0000-0000-0000-000000000002", "00000000-0000-0000-0000-000000000001", "00000000-0000-0000-0000-000000000001", "MO", "moroot", "", "system", "show databases", "show databases", "dcl", "node_uuid", "Standalone", "1970-01-01 00:00:00.000001", "1970-01-01 00:00:01.000001", 1000000000, "Running", "", "{}", "{}")`,
 		},
 		{
 			name:   "single_zap",
@@ -967,7 +969,7 @@ func Test_genCsvData(t *testing.T) {
 				},
 				buf: buf,
 			},
-			want: `00000000-0000-0000-0000-000000000001,00000000-0000-0000-0000-000000000001,00000000-0000-0000-0000-000000000001,MO,moroot,,system,show tables,,show tables,node_uuid,Standalone,1970-01-01 00:00:00.000000,null
+			want: `00000000-0000-0000-0000-000000000001,00000000-0000-0000-0000-000000000001,00000000-0000-0000-0000-000000000001,MO,moroot,,system,show tables,,show tables,node_uuid,Standalone,1970-01-01 00:00:00.000000,1970-01-01 00:00:00.000000,0,Running,,{},{}
 `,
 		},
 		{
@@ -998,13 +1000,17 @@ func Test_genCsvData(t *testing.T) {
 						StatementFingerprint: "show databases",
 						StatementTag:         "dcl",
 						RequestAt:            util.TimeNano(time.Microsecond),
+						ResponseAt:           util.TimeNano(time.Microsecond + time.Second),
+						Duration:             uint64(time.Microsecond + time.Second),
+						Status:               StatementStatusFailed,
+						Error:                fmt.Errorf("test error"),
 						ExecPlan:             nil,
 					},
 				},
 				buf: buf,
 			},
-			want: `00000000-0000-0000-0000-000000000001,00000000-0000-0000-0000-000000000001,00000000-0000-0000-0000-000000000001,MO,moroot,,system,show tables,,show tables,node_uuid,Standalone,1970-01-01 00:00:00.000000,null
-00000000-0000-0000-0000-000000000002,00000000-0000-0000-0000-000000000001,00000000-0000-0000-0000-000000000001,MO,moroot,,system,show databases,dcl,show databases,node_uuid,Standalone,1970-01-01 00:00:00.000001,null
+			want: `00000000-0000-0000-0000-000000000001,00000000-0000-0000-0000-000000000001,00000000-0000-0000-0000-000000000001,MO,moroot,,system,show tables,,show tables,node_uuid,Standalone,1970-01-01 00:00:00.000000,1970-01-01 00:00:00.000000,0,Running,,{},{}
+00000000-0000-0000-0000-000000000002,00000000-0000-0000-0000-000000000001,00000000-0000-0000-0000-000000000001,MO,moroot,,system,show databases,dcl,show databases,node_uuid,Standalone,1970-01-01 00:00:00.000001,1970-01-01 00:00:01.000001,1000001000,Failed,test error,{},{}
 `,
 		},
 		{

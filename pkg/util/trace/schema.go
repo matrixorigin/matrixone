@@ -93,6 +93,13 @@ PRIMARY KEY (statement_id)
 )`
 )
 
+var initDDLs = []struct{ sqlPrefix, filePrefix string }{
+	{sqlCreateStatementInfoTable, MOStatementType},
+	{sqlCreateSpanInfoTable, MOSpanType},
+	{sqlCreateLogInfoTable, MOLogType},
+	{sqlCreateErrorInfoTable, MOErrorType},
+}
+
 // InitSchemaByInnerExecutor init schema, which can access db by io.InternalExecutor on any Node.
 func InitSchemaByInnerExecutor(ctx context.Context, ieFactory func() ie.InternalExecutor, mode string) error {
 	exec := ieFactory()
@@ -121,12 +128,6 @@ func InitSchemaByInnerExecutor(ctx context.Context, ieFactory func() ie.Internal
 	}()
 	instant := time.Now()
 
-	var initDDLs = []struct{ sqlPrefix, filePrefix string }{
-		{sqlCreateStatementInfoTable, MOStatementType},
-		{sqlCreateSpanInfoTable, MOSpanType},
-		{sqlCreateLogInfoTable, MOLogType},
-		{sqlCreateErrorInfoTable, MOErrorType},
-	}
 	for _, ddl := range initDDLs {
 		opts := optFactory(StatsDatabase, ddl.filePrefix)
 		sql := opts.FormatDdl(ddl.sqlPrefix) + opts.GetTableOptions()

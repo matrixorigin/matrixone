@@ -315,6 +315,7 @@ func genStatementBatchSql(in []IBuffer2SqlItem, buf *bytes.Buffer) any {
 		if !ok {
 			panic("Not StatementInfo")
 		}
+		s.mux.Lock()
 		buf.WriteString("(")
 		buf.WriteString(fmt.Sprintf(`%q`, uuid.UUID(s.StatementID).String()))
 		buf.WriteString(fmt.Sprintf(`, %q`, uuid.UUID(s.TransactionID).String()))
@@ -332,10 +333,16 @@ func genStatementBatchSql(in []IBuffer2SqlItem, buf *bytes.Buffer) any {
 		buf.WriteString(fmt.Sprintf(`, %q`, nanoSec2DatetimeString(s.ResponseAt)))
 		buf.WriteString(fmt.Sprintf(`, %d`, s.Duration))
 		buf.WriteString(fmt.Sprintf(`, %q`, s.Status.String()))
-		buf.WriteString(fmt.Sprintf(`, %q`, s.Error))
+		if s.Error == nil {
+			buf.WriteString(`, ""`)
+		} else {
+			buf.WriteString(fmt.Sprintf(`, %q`, s.Error))
+		}
 		buf.WriteString(fmt.Sprintf(`, %q`, s.ExecPlan2Json()))
 		buf.WriteString(fmt.Sprintf(`, %q`, s.ExecPlanStats2Json()))
 		buf.WriteString("),")
+
+		s.mux.Unlock()
 	}
 	return string(buf.Next(buf.Len() - 1))
 }
