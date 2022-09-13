@@ -101,14 +101,12 @@ func initExporter(ctx context.Context, config *tracerProviderConfig) error {
 		export.Register(&MOZapLog{}, NewBufferPipe2SqlWorker())
 		export.Register(&StatementInfo{}, NewBufferPipe2SqlWorker())
 		export.Register(&MOErrorHolder{}, NewBufferPipe2SqlWorker())
-		export.Register(&MOStatsInfo{}, NewBufferPipe2SqlWorker())
 	case config.batchProcessMode == FileService:
 		export.Register(&MOSpan{}, NewBufferPipe2CSVWorker())
 		export.Register(&MOLog{}, NewBufferPipe2CSVWorker())
 		export.Register(&MOZapLog{}, NewBufferPipe2CSVWorker())
 		export.Register(&StatementInfo{}, NewBufferPipe2CSVWorker())
 		export.Register(&MOErrorHolder{}, NewBufferPipe2CSVWorker())
-		export.Register(&MOStatsInfo{}, NewBufferPipe2CSVWorker())
 	default:
 		return moerr.NewPanicError(fmt.Errorf("unknown batchProcessMode: %s", config.batchProcessMode))
 	}

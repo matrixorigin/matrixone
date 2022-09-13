@@ -15,6 +15,7 @@
 package trace
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -26,6 +27,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/export"
 )
+
+var nilTxnID [16]byte
 
 var _ IBuffer2SqlItem = (*StatementInfo)(nil)
 var _ CsvFields = (*StatementInfo)(nil)
@@ -43,6 +46,13 @@ type StatementInfo struct {
 	StatementTag         string        `json:"statement_tag"`
 	RequestAt            util.TimeNano `json:"request_at"` // see WithRequestAt
 	ExecPlan             any           `json:"exec_plan"`
+
+	// after
+	Status        StatementInfoStatus `json:"status"`
+	Error         string              `json:"error"`
+	ResponseAt    util.TimeNano       `json:"response_at"`
+	Duration      uint64              `json:"duration"` // unit: ns
+	ExecPlanStats any                 `json:"exec_plan_stats"`
 
 	// flow ctrl
 	end bool
@@ -80,12 +90,31 @@ func (s StatementInfo) CsvFields() []string {
 	result = append(result, GetNodeResource().NodeUuid)
 	result = append(result, GetNodeResource().NodeType)
 	result = append(result, nanoSec2DatetimeString(s.RequestAt))
+	result = append(result, nanoSec2DatetimeString(s.ResponseAt))
+	result = append(result, s.Status.String())
+	result = append(result, fmt.Sprintf("%d", s.Duration))
 	result = append(result, s.ExecPlan2Json())
+	result = append(result, s.ExecPlanStats2Json())
+
 	return result
 }
 
 func (s *StatementInfo) ExecPlan2Json() string {
+	if s.ExecPlan == nil {
+		return "{}"
+	}
 	json, err := json.Marshal(s.ExecPlan)
+	if err != nil {
+		panic(moerr.NewPanicError(err))
+	}
+	return string(json)
+}
+
+func (s *StatementInfo) ExecPlanStats2Json() string {
+	if s.ExecPlanStats == nil {
+		return "{}"
+	}
+	json, err := json.Marshal(s.ExecPlanStats)
 	if err != nil {
 		panic(moerr.NewPanicError(err))
 	}
@@ -97,8 +126,17 @@ func (s *StatementInfo) SetExecPlan(execPlan any) {
 	s.ExecPlan = execPlan
 }
 
-func (s *StatementInfo) End(ctx context.Context) {
-	s.end = true
+func (s *StatementInfo) SetExecPlanStats(execPlan any) {
+	s.ExecPlan = execPlan
+}
+
+func (s *StatementInfo) SetTxnIDIsZero(id []byte) {
+	if bytes.Equal(s.TransactionID[:], nilTxnID[:]) {
+		copy(s.TransactionID[:], id)
+	}
+}
+
+func (s *StatementInfo) Report(ctx context.Context) {
 	ReportStatement(ctx, s)
 }
 
@@ -108,29 +146,21 @@ func EndStatement(ctx context.Context, err error) time.Time {
 		panic(moerr.NewPanicError(fmt.Errorf("no statement info in context")))
 	}
 	endTime := util.NowNS()
-	if !s.end {
-		s.End(ctx)
+	if s.end {
+		goto endL
 	}
-	status := "Success"
+	// do report, fixme: maybe last report not done yet
+	s.end = true
+	s.ResponseAt = endTime
+	s.Duration = s.ResponseAt - s.RequestAt
+	s.Status = StatementStatusSuccess
 	if err != nil {
-		status = fmt.Sprintf("Failed. %s", err.Error())
+		s.Error = err.Error()
+		s.Status = StatementStatusFailed
 	}
+	s.Report(ctx)
 
-	ReportStats(ctx, &MOStatsInfo{
-		StatementID:       s.StatementID,
-		Account:           s.Account,
-		Timestamp:         endTime,
-		Operator:          "status",
-		OperateObjectDesc: status,
-		NodeId:            0,
-		InputRows:         0,
-		OutputRows:        0,
-		TimeConsumed:      int64((endTime - s.RequestAt) / 1e3),
-		InputSize:         0,
-		OutputSize:        0,
-		MemorySize:        0,
-	})
-
+endL:
 	return util.Time(endTime)
 }
 

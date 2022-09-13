@@ -31,7 +31,6 @@ const (
 	logInfoTbl       = "log_info"
 	statementInfoTbl = "statement_info"
 	errorInfoTbl     = "error_info"
-	statsTbl         = "stats_info"
 )
 
 const (
@@ -65,8 +64,7 @@ const (
  statement_id varchar(36) NOT NULL,
  transaction_id varchar(36) NOT NULL,
  session_id varchar(36) NOT NULL,
- tenant_id INT UNSIGNED NOT NULL,
- tenant varchar(1024) NOT NULL COMMENT 'tenant name',
+ account varchar(1024) NOT NULL COMMENT 'account name',
  user varchar(1024) NOT NULL COMMENT 'user name',
  host varchar(1024) NOT NULL COMMENT 'user client ip',
  ` + "`database`" + ` varchar(1024) NOT NULL COMMENT 'database name',
@@ -76,7 +74,11 @@ const (
  node_uuid varchar(36) NOT NULL COMMENT "node uuid in MO, which node accept this request",
  node_type varchar(64) NOT NULL COMMENT "node type in MO, enum: DN, CN, LogService;",
  request_at datetime(6) NOT NULL,
+ response_at datetime(6) NOT NULL,
+ ` + "`status`" + ` varchar(32) default 'Running' COMMENT 'sql statement running status, enum: Running, Success, Failed',
+ duration bigint unsigned default 0 COMMENT 'exec time, unit: ns',
  exec_plan JSON NOT NULL COMMENT "sql execution plan",
+ exec_plan_stats JSON NOT NULL COMMENT "sql execution plan with stats info",
 PRIMARY KEY (statement_id)
 )`
 	sqlCreateErrorInfoTable = `CREATE TABLE IF NOT EXISTS error_info(
@@ -87,22 +89,6 @@ PRIMARY KEY (statement_id)
  err_code varchar(1024) NOT NULL,
  stack varchar(4096) NOT NULL,
  timestamp datetime(6) NOT NULL
-)`
-	sqlCreateStatsTable = `CREATE TABLE IF NOT EXISTS stats_info(
- statement_id varchar(36) NOT NULL,
- tenant_id int NOT NULL,
- timestamp datetime(6) NOT NULL COMMENT "end timestamp",
- node_uuid varchar(36) NOT NULL COMMENT "node uuid in MO, which node accept this request",
- node_type varchar(64) NOT NULL COMMENT "node type in MO, enum: DN, CN, LogService;",
- ` + "`operator`" + ` varchar(128) NOT NULL,
- operate_object varchar(4096) NOT NULL COMMENT "desc operator status/result/info",
- node_id int NOT NULL,
- input_rows bigint NOT NULL,
- output_rows bigint NOT NULL,
- time_consumed bigint NOT NULL,
- input_size bigint NOT NULL,
- output_size bigint NOT NULL,
- memory_size bigint NOT NULL
 )`
 )
 
@@ -139,7 +125,6 @@ func InitSchemaByInnerExecutor(ctx context.Context, ieFactory func() ie.Internal
 		{sqlCreateSpanInfoTable, MOSpanType},
 		{sqlCreateLogInfoTable, MOLogType},
 		{sqlCreateErrorInfoTable, MOErrorType},
-		{sqlCreateStatsTable, MOStatsType},
 	}
 	for _, ddl := range initDDLs {
 		opts := optFactory(StatsDatabase, ddl.filePrefix)

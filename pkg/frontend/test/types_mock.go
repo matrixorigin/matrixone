@@ -51,6 +51,20 @@ func (mr *MockComputationRunnerMockRecorder) Run(ts interface{}) *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Run", reflect.TypeOf((*MockComputationRunner)(nil).Run), ts)
 }
 
+// RecordAnalyzeInfo mocks base method.
+func (m *MockComputationRunner) RecordAnalyzeInfo(ctx context.Context) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "RecordAnalyzeInfo", ctx)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// RecordAnalyzeInfo indicates an expected call of Run.
+func (mr *MockComputationRunnerMockRecorder) RecordAnalyzeInfo(ctx context.Context) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "RecordAnalyzeInfo", reflect.TypeOf((*MockComputationRunner)(nil).RecordAnalyzeInfo), ctx)
+}
+
 // MockComputationWrapper is a mock of ComputationWrapper interface.
 type MockComputationWrapper struct {
 	ctrl     *gomock.Controller
@@ -132,6 +146,20 @@ func (mr *MockComputationWrapperMockRecorder) GetColumns() *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetColumns", reflect.TypeOf((*MockComputationWrapper)(nil).GetColumns))
 }
 
+// RecordExecPlan mocks base method.
+func (m *MockComputationWrapper) RecordExecPlan(ctx context.Context) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "RecordExecPlan", ctx)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// RecordExecPlan indicates an expected call of RecordExecPlan.
+func (mr *MockComputationWrapperMockRecorder) RecordExecPlan(ctx context.Context) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "RecordExecPlan", reflect.TypeOf((*MockComputationWrapper)(nil).RecordExecPlan), ctx)
+}
+
 // GetUUID mocks base method.
 func (m *MockComputationWrapper) GetUUID() []byte {
 	m.ctrl.T.Helper()
@@ -158,6 +186,20 @@ func (m *MockComputationWrapper) Run(ts uint64) error {
 func (mr *MockComputationWrapperMockRecorder) Run(ts interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Run", reflect.TypeOf((*MockComputationWrapper)(nil).Run), ts)
+}
+
+// RecordAnalyzeInfo mocks base method.
+func (m *MockComputationWrapper) RecordAnalyzeInfo(ctx context.Context) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "RecordAnalyzeInfo", ctx)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// RecordAnalyzeInfo indicates an expected call of Run.
+func (mr *MockComputationWrapperMockRecorder) RecordAnalyzeInfo(ctx context.Context) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "RecordAnalyzeInfo", reflect.TypeOf((*MockComputationWrapper)(nil).RecordAnalyzeInfo), ctx)
 }
 
 // SetDatabaseName mocks base method.

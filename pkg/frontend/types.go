@@ -34,6 +34,7 @@ type (
 
 type ComputationRunner interface {
 	Run(ts uint64) (err error)
+	RecordAnalyzeInfo(context.Context) error
 }
 
 // ComputationWrapper is the wrapper of the computation
@@ -50,6 +51,8 @@ type ComputationWrapper interface {
 	Compile(requestCtx context.Context, u interface{}, fill func(interface{}, *batch.Batch) error) (interface{}, error)
 
 	GetUUID() []byte
+
+	RecordExecPlan(ctx context.Context) error
 }
 
 type ColumnInfo interface {

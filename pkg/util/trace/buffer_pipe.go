@@ -84,8 +84,6 @@ func (t batchSqlHandler) NewItemBuffer(name string) bp.ItemBuffer[bp.HasName, an
 		opts = append(opts, bufferWithFilterItemFunc(filterTraceInsertSql))
 	case MOErrorType:
 		f = genErrorBatchSql
-	case MOStatsType:
-		f = genStatsBatchSql
 	default:
 		panic(fmt.Errorf("unknown type %s", name))
 	}
@@ -302,7 +300,11 @@ func genStatementBatchSql(in []IBuffer2SqlItem, buf *bytes.Buffer) any {
 	buf.WriteString(", `node_uuid`")
 	buf.WriteString(", `node_type`")
 	buf.WriteString(", `request_at`")
+	buf.WriteString(", `response_at`")
+	buf.WriteString(", `status`")
+	buf.WriteString(", `duration`")
 	buf.WriteString(", `exec_plan`")
+	buf.WriteString(", `exec_plan_stats`")
 	buf.WriteString(") values ")
 
 	moNode := GetNodeResource()
@@ -326,7 +328,11 @@ func genStatementBatchSql(in []IBuffer2SqlItem, buf *bytes.Buffer) any {
 		buf.WriteString(fmt.Sprintf(`, %q`, moNode.NodeUuid))
 		buf.WriteString(fmt.Sprintf(`, %q`, moNode.NodeType))
 		buf.WriteString(fmt.Sprintf(`, %q`, nanoSec2DatetimeString(s.RequestAt)))
+		buf.WriteString(fmt.Sprintf(`, %q`, nanoSec2DatetimeString(s.ResponseAt)))
+		buf.WriteString(fmt.Sprintf(`, %q`, s.Status.String()))
+		buf.WriteString(fmt.Sprintf(`, %d`, s.Duration))
 		buf.WriteString(fmt.Sprintf(`, %q`, s.ExecPlan2Json()))
+		buf.WriteString(fmt.Sprintf(`, %q`, s.ExecPlanStats2Json()))
 		buf.WriteString("),")
 	}
 	return string(buf.Next(buf.Len() - 1))

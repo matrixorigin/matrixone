@@ -37,6 +37,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+
+	"github.com/matrixorigin/matrixone/pkg/util/trace"
 )
 
 // New is used to new an object of compile
@@ -1016,6 +1018,16 @@ func (c *Compile) fillAnalyzeInfo() {
 		c.anal.qry.Nodes[i].AnalyzeInfo.TimeConsumed = atomic.LoadInt64(&anal.TimeConsumed)
 		c.anal.qry.Nodes[i].AnalyzeInfo.MemorySize = atomic.LoadInt64(&anal.MemorySize)
 	}
+}
+
+func (c *Compile) RecordAnalyzeInfo(ctx context.Context) error {
+	if c.anal == nil {
+		return nil
+	}
+	if stm := trace.StatementFromContext(ctx); stm != nil {
+		stm.SetExecPlanStats(c.anal.qry)
+	}
+	return nil
 }
 
 func (anal *anaylze) Nodes() []*process.AnalyzeInfo {
