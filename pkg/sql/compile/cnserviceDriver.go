@@ -82,6 +82,7 @@ type processHelper struct {
 	lim         process.Limitation
 	unixTime    int64
 	txnOperator client.TxnOperator
+	txnClient   client.TxnClient
 }
 
 // CnServerMessageHandler deal the client message that received at cn-server.
@@ -310,6 +311,7 @@ func generateProcessHelper(data []byte, cli client.TxnClient) (*processHelper, e
 	if err != nil {
 		return nil, err
 	}
+	result.txnClient = cli
 	return result, nil
 }
 
@@ -921,7 +923,7 @@ func newCompile(ctx context.Context, message morpc.Message, pHelper *processHelp
 	proc := process.New(
 		ctx,
 		mheap.New(guest.New(1<<30, host.New(1<<20))),
-		nil,
+		pHelper.txnClient,
 		pHelper.txnOperator,
 		mHelper.fileService,
 	)
