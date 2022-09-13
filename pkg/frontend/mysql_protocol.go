@@ -1062,8 +1062,8 @@ func (mp *MysqlProtocolImpl) handleHandshake(payload []byte) (bool, error) {
 	}
 
 	if err := mp.authenticateUser(authResponse); err != nil {
-		fail := errorMsgRefer[ER_ACCESS_DENIED_ERROR]
-		_ = mp.sendErrPacket(fail.errorCode, fail.sqlStates[0], "Access denied for user")
+		fail := moerr.MysqlErrorMsgRefer[moerr.ER_ACCESS_DENIED_ERROR]
+		_ = mp.sendErrPacket(fail.ErrorCode, fail.SqlStates[0], "Access denied for user")
 		return false, err
 	}
 
@@ -1670,6 +1670,12 @@ func (mp *MysqlProtocolImpl) makeResultSetTextRow(data []byte, mrs *MysqlResultS
 			} else {
 				data = mp.appendStringLenEnc(data, value)
 			}
+		case defines.MYSQL_TYPE_UUID:
+			if value, err2 := mrs.GetString(r, i); err2 != nil {
+				return nil, err2
+			} else {
+				data = mp.appendStringLenEnc(data, value)
+			}
 		case defines.MYSQL_TYPE_TINY, defines.MYSQL_TYPE_SHORT, defines.MYSQL_TYPE_INT24, defines.MYSQL_TYPE_LONG, defines.MYSQL_TYPE_YEAR:
 			if value, err2 := mrs.GetInt64(r, i); err2 != nil {
 				return nil, err2
@@ -1784,7 +1790,7 @@ func (mp *MysqlProtocolImpl) SendResultSetTextBatchRowSpeedup(mrs *MysqlResultSe
 
 		if err != nil {
 			//ERR_Packet in case of error
-			err1 := mp.sendErrPacket(ER_UNKNOWN_ERROR, DefaultMySQLState, err.Error())
+			err1 := mp.sendErrPacket(moerr.ER_UNKNOWN_ERROR, DefaultMySQLState, err.Error())
 			if err1 != nil {
 				return err1
 			}
@@ -1992,7 +1998,7 @@ func (mp *MysqlProtocolImpl) sendResultSetTextRow(mrs *MysqlResultSet, r uint64)
 	}
 	if _, err = mp.makeResultSetTextRow(nil, mrs, r); err != nil {
 		//ERR_Packet in case of error
-		err1 := mp.sendErrPacket(ER_UNKNOWN_ERROR, DefaultMySQLState, err.Error())
+		err1 := mp.sendErrPacket(moerr.ER_UNKNOWN_ERROR, DefaultMySQLState, err.Error())
 		if err1 != nil {
 			return err1
 		}

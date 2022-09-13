@@ -857,7 +857,7 @@ func (tcc *TxnCompilerContext) ensureDatabaseIsNotEmpty(dbName string) (string, 
 		dbName = tcc.DefaultDatabase()
 	}
 	if len(dbName) == 0 {
-		return "", NewMysqlError(ER_NO_DB_ERROR)
+		return "", moerr.New(moerr.ER_NO_DB_ERROR)
 	}
 	return dbName, nil
 }

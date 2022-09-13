@@ -27,12 +27,12 @@ static const int32_t RC_SUCCESS = 0;
 static const int32_t RC_INFO = 1;
 static const int32_t RC_WARN = 2;
 
-static const int32_t RC_INTERNAL_ERROR = 1001;
+static const int32_t RC_INTERNAL_ERROR = 20101;
 
-static const int32_t RC_DIVISION_BY_ZERO = 2000;
-static const int32_t RC_OUT_OF_RANGE = 2001;
-static const int32_t RC_DATA_TRUNCATED = 2002;
-static const int32_t RC_INVALID_ARGUMENT = 2003;
+static const int32_t RC_DIVISION_BY_ZERO = 20200;
+static const int32_t RC_OUT_OF_RANGE = 20201;
+static const int32_t RC_DATA_TRUNCATED = 20202;
+static const int32_t RC_INVALID_ARGUMENT = 20203;
 
 static const int32_t LEFT_IS_SCALAR = 1;
 static const int32_t RIGHT_IS_SCALAR = 2;
