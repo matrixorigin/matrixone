@@ -99,9 +99,10 @@ func TestScheduleCreatedTasks(t *testing.T) {
 	// Create Task 1
 	service.Create(context.Background(), task.TaskMetadata{ID: "1"})
 	query, err := service.QueryTask(context.Background())
+	assert.NoError(t, err)
 	assert.Equal(t, task.TaskStatus_Created, query[0].Status)
 
-	// Scheduler Task 1
+	// Schedule Task 1
 	scheduler.Schedule(cnState, currentTick)
 
 	query, err = service.QueryTask(context.Background())
@@ -113,6 +114,7 @@ func TestScheduleCreatedTasks(t *testing.T) {
 	service.Create(context.Background(), task.TaskMetadata{ID: "2"})
 	query, err = service.QueryTask(context.Background(),
 		taskservice.WithTaskStatusCond(taskservice.EQ, task.TaskStatus_Created))
+	assert.NoError(t, err)
 	assert.Equal(t, 1, len(query))
 	assert.NotNil(t, query[0].Status)
 
