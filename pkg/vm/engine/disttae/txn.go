@@ -192,6 +192,12 @@ func needRead(expr *plan.Expr, blkInfo BlockMeta) bool {
 	return false
 }
 
+// write a block to s3
+func blockWrite(ctx context.Context, blkInfo BlockMeta, bat *batch.Batch) error {
+	//TODO
+	return nil
+}
+
 // read a block from s3
 func blockRead(ctx context.Context, columns []string, blkInfo BlockMeta) (*batch.Batch, error) {
 	//TODO
