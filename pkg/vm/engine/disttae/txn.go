@@ -156,8 +156,8 @@ func (txn *Transaction) readTable(ctx context.Context, databaseId uint64, tableI
 	var writes [][]Entry
 
 	// consider halloween problem
-	if int64(txn.statementId)-2 > 0 {
-		writes = txn.writes[:txn.statementId-2]
+	if int64(txn.statementId)-1 > 0 {
+		writes = txn.writes[:txn.statementId-1]
 	}
 	blkInfos := txn.db.BlockList(ctx, dnList, databaseId, tableId, txn.meta.SnapshotTS, writes)
 	bats := make([]*batch.Batch, 0, len(blkInfos))
