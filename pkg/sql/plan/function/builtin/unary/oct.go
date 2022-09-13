@@ -17,7 +17,6 @@ package unary
 import (
 	"fmt"
 
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/oct"
@@ -28,7 +27,6 @@ import (
 func Oct[T constraints.Unsigned | constraints.Signed](vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	inputVector := vectors[0]
 	resultType := types.Type{Oid: types.T_decimal128, Size: 16}
-	resultElementSize := int(resultType.Size)
 	inputValues := vector.MustTCols[T](inputVector)
 	if inputVector.IsScalar() {
 		if inputVector.ConstVectorIsNull() {
@@ -43,18 +41,15 @@ func Oct[T constraints.Unsigned | constraints.Signed](vectors []*vector.Vector, 
 		vector.SetCol(resultVector, col)
 		return resultVector, nil
 	} else {
-		resultVector, err := proc.AllocVector(resultType, int64(resultElementSize*len(inputValues)))
+		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(inputValues)), inputVector.Nsp)
 		if err != nil {
 			return nil, err
 		}
-		resultValues := types.DecodeDecimal128Slice(resultVector.Data)
-		resultValues = resultValues[:len(inputValues)]
-		nulls.Set(resultVector.Nsp, inputVector.Nsp)
-		col, err := oct.Oct(inputValues, resultValues)
+		resultValues := vector.MustTCols[types.Decimal128](resultVector)
+		_, err = oct.Oct(inputValues, resultValues)
 		if err != nil {
 			return nil, err
 		}
-		vector.SetCol(resultVector, col)
 		return resultVector, nil
 	}
 }
@@ -62,7 +57,6 @@ func Oct[T constraints.Unsigned | constraints.Signed](vectors []*vector.Vector, 
 func OctFloat[T constraints.Float](vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	inputVector := vectors[0]
 	resultType := types.Type{Oid: types.T_decimal128, Size: 16}
-	resultElementSize := int(resultType.Size)
 	inputValues := vector.MustTCols[T](inputVector)
 	if inputVector.IsScalar() {
 		if inputVector.ConstVectorIsNull() {
@@ -77,18 +71,15 @@ func OctFloat[T constraints.Float](vectors []*vector.Vector, proc *process.Proce
 		vector.SetCol(resultVector, col)
 		return resultVector, nil
 	} else {
-		resultVector, err := proc.AllocVector(resultType, int64(resultElementSize*len(inputValues)))
+		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(inputValues)), inputVector.Nsp)
 		if err != nil {
 			return nil, err
 		}
-		resultValues := types.DecodeDecimal128Slice(resultVector.Data)
-		resultValues = resultValues[:len(inputValues)]
-		nulls.Set(resultVector.Nsp, inputVector.Nsp)
-		col, err := oct.OctFloat(inputValues, resultValues)
+		resultValues := vector.MustTCols[types.Decimal128](resultVector)
+		_, err = oct.OctFloat(inputValues, resultValues)
 		if err != nil {
 			return nil, fmt.Errorf("the input value is out of integer range")
 		}
-		vector.SetCol(resultVector, col)
 		return resultVector, nil
 	}
 }

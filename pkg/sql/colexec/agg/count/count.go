@@ -19,7 +19,7 @@ import (
 )
 
 type Decimal128AndString interface {
-	types.Decimal | []byte | bool
+	types.Decimal | []byte | bool | types.Uuid
 }
 
 type Count[T1 types.OrderedT | Decimal128AndString] struct {

@@ -16,24 +16,14 @@ package week
 
 import "github.com/matrixorigin/matrixone/pkg/container/types"
 
-var (
-	DateToWeek     func([]types.Date, []uint8) []uint8
-	DatetimeToWeek func([]types.Datetime, []uint8) []uint8
-)
-
-func init() {
-	DateToWeek = dateToWeek
-	DatetimeToWeek = datetimeToWeek
-}
-
-func dateToWeek(xs []types.Date, rs []uint8) []uint8 {
+func DateToWeek(xs []types.Date, rs []uint8) []uint8 {
 	for i, x := range xs {
 		_, rs[i] = x.WeekOfYear()
 	}
 	return rs
 }
 
-func datetimeToWeek(xs []types.Datetime, rs []uint8) []uint8 {
+func DatetimeToWeek(xs []types.Datetime, rs []uint8) []uint8 {
 	for i, x := range xs {
 		_, rs[i] = x.WeekOfYear()
 	}

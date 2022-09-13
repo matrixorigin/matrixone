@@ -34,10 +34,14 @@ type testTxnOperator struct {
 	meta txn.TxnMeta
 }
 
-func TestDB(t *testing.T) {
+func TestCache(t *testing.T) {
 	db := new(DB)
+	ctx := context.Background()
+	ts := newTimestamp(rand.Int63())
 	db.readTs = newTimestamp(rand.Int63())
-	_ = db.NewReader("test", "test", nil)
+	_ = db.Update(ctx, 0, 0, ts)
+	_ = db.BlockList(ctx, 0, 0, ts, nil)
+	_, _ = db.NewReader(ctx, 0, nil, 0, 0, ts, nil)
 }
 
 func TestEngine(t *testing.T) {
