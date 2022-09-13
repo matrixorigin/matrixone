@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"errors"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"sync"
@@ -51,14 +52,14 @@ func (w *ObjectWriter) WriteHeader() error {
 		header bytes.Buffer
 	)
 	h := Header{magic: Magic, version: Version}
-	if err = binary.Write(&header, binary.BigEndian, h.magic); err != nil {
+	if err = binary.Write(&header, endian, h.magic); err != nil {
 		return err
 	}
-	if err = binary.Write(&header, binary.BigEndian, h.version); err != nil {
+	if err = binary.Write(&header, endian, h.version); err != nil {
 		return err
 	}
 	reserved := make([]byte, 22)
-	if err = binary.Write(&header, binary.BigEndian, reserved); err != nil {
+	if err = binary.Write(&header, endian, reserved); err != nil {
 		return err
 	}
 	_, _, err = w.buffer.Write(header.Bytes())
@@ -91,7 +92,7 @@ func (w *ObjectWriter) WriteIndex(fd int, idx uint16, buf []byte) error {
 	var err error
 	block := w.GetBlock(fd)
 	if block == nil || block.columns[idx] == nil {
-		return ErrNotFound
+		return errors.New("object io: not found")
 	}
 	offset, length, err := w.buffer.Write(buf)
 	if err != nil {
@@ -123,23 +124,23 @@ func (w *ObjectWriter) WriteEnd() (map[int]BlockObject, error) {
 			length:     uint32(length),
 			originSize: uint32(length),
 		}
-		if err = binary.Write(&buf, binary.BigEndian, w.blocks[i].(*Block).extent.Offset()); err != nil {
+		if err = binary.Write(&buf, endian, w.blocks[i].(*Block).extent.Offset()); err != nil {
 			return nil, err
 		}
-		if err = binary.Write(&buf, binary.BigEndian, w.blocks[i].(*Block).extent.Length()); err != nil {
+		if err = binary.Write(&buf, endian, w.blocks[i].(*Block).extent.Length()); err != nil {
 			return nil, err
 		}
-		if err = binary.Write(&buf, binary.BigEndian, w.blocks[i].(*Block).extent.OriginSize()); err != nil {
+		if err = binary.Write(&buf, endian, w.blocks[i].(*Block).extent.OriginSize()); err != nil {
 			return nil, err
 		}
 	}
-	if err = binary.Write(&buf, binary.BigEndian, uint8(0)); err != nil {
+	if err = binary.Write(&buf, endian, uint8(0)); err != nil {
 		return nil, err
 	}
-	if err = binary.Write(&buf, binary.BigEndian, uint32(len(w.blocks))); err != nil {
+	if err = binary.Write(&buf, endian, uint32(len(w.blocks))); err != nil {
 		return nil, err
 	}
-	if err = binary.Write(&buf, binary.BigEndian, uint64(Magic)); err != nil {
+	if err = binary.Write(&buf, endian, uint64(Magic)); err != nil {
 		return nil, err
 	}
 	_, _, err = w.buffer.Write(buf.Bytes())

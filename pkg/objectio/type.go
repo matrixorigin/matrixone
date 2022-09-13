@@ -15,6 +15,7 @@
 package objectio
 
 import (
+	"encoding/binary"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 )
@@ -62,7 +63,7 @@ type BlockObject interface {
 	GetRows() (uint32, error)
 
 	// GetMeta gets the meta of the BlockObject
-	GetMeta() *BlockMeta
+	GetMeta() BlockMeta
 
 	// GetExtent gets the metadata offset of BlockObject in fileservice
 	GetExtent() Extent
@@ -79,3 +80,7 @@ type ColumnObject interface {
 	// GetMeta gets the metadata of ColumnObject
 	GetMeta() *ColumnMeta
 }
+
+var (
+	endian = binary.LittleEndian
+)

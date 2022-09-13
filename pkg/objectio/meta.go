@@ -19,7 +19,7 @@ import "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 // +---------------------------------------------------------------------------------------------+
 // |                                           Header                                            |
 // +-------------+---------------+--------------+---------------+------------+-------------------+
-// | TableID(8B) | SegmentID(8B) | BlockID(8B)  | ColumnCnt(2B) | Chksum(4B) |  Reserved(33B)    |
+// | TableID(8B) | SegmentID(8B) | BlockID(8B)  | ColumnCnt(2B) | Chksum(4B) |  Reserved(34B)    |
 // +-------------+---------------+--------------+---------------+------------+-------------------+
 // |                                         ColumnMeta                                          |
 // +---------------------------------------------------------------------------------------------+
@@ -35,9 +35,9 @@ import "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 // BlockID = Block ID
 // ColumnCnt = The number of column in the block
 // Chksum = Block metadata checksum
-// Reserved = 41 bytes reserved space
+// Reserved = 34 bytes reserved space
 type BlockMeta struct {
-	header *BlockHeader
+	header BlockHeader
 	//columns []*ColumnMeta
 }
 
@@ -52,9 +52,9 @@ type BlockHeader struct {
 // +---------------------------------------------------------------------------------------------------------------+
 // |                                                    ColumnMeta                                                 |
 // +--------+-------+----------+--------+---------+--------+--------+------------+---------+-----------+-----------+
-// |Type(1B)|Idx(2B)|Offset(4B)|Size(4B)|oSize(4B)|Min(32B)|Max(32B)|BFoffset(4b)|BFlen(4b)|BFoSize(4B)|Chksum(4B) |
+// |Type(1B)|Idx(2B)| Algo(1B) |Offset(4B)|Size(4B)|oSize(4B)|Min(32B)|Max(32B)|BFoffset(4b)|BFlen(4b)|BFoSize(4B) |
 // +--------+-------+----------+--------+---------+--------+--------+------------+---------+-----------+-----------+
-// |                                                    Reserved(33B)                                              |
+// |   Chksum(4B)   |                                   Reserved(32B)                                              |
 // +---------------------------------------------------------------------------------------------------------------+
 // ColumnMeta Size = 128B
 // Type = Metadata type, always 0, representing column meta, used for extension.
@@ -69,7 +69,7 @@ type BlockHeader struct {
 // Bflen = Bloomfilter data size
 // BFoSize = Bloomfilter original data size
 // Chksum = Data checksum
-// Reserved = 33 bytes reserved space
+// Reserved = 32 bytes reserved space
 type ColumnMeta struct {
 	typ         uint8
 	idx         uint16

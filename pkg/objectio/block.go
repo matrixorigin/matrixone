@@ -25,7 +25,7 @@ import (
 type Block struct {
 	// fd is the handle of the block
 	fd     int
-	header *BlockHeader
+	header BlockHeader
 	// columns is the vector in the batch
 	columns []ColumnObject
 	// data is the batch to be written
@@ -35,7 +35,7 @@ type Block struct {
 }
 
 func NewBlock(batch *batch.Batch, object *Object) BlockObject {
-	header := &BlockHeader{
+	header := BlockHeader{
 		columnCount: uint16(len(batch.Vecs)),
 	}
 	block := &Block{
@@ -62,8 +62,8 @@ func (b *Block) GetRows() (uint32, error) {
 	panic(any("implement me"))
 }
 
-func (b *Block) GetMeta() *BlockMeta {
-	return &BlockMeta{
+func (b *Block) GetMeta() BlockMeta {
+	return BlockMeta{
 		header: b.header,
 	}
 }
@@ -74,23 +74,23 @@ func (b *Block) MarshalMeta() ([]byte, error) {
 		buffer bytes.Buffer
 	)
 	// write header
-	if err = binary.Write(&buffer, binary.BigEndian, b.header.tableId); err != nil {
+	if err = binary.Write(&buffer, endian, b.header.tableId); err != nil {
 		return nil, err
 	}
-	if err = binary.Write(&buffer, binary.BigEndian, b.header.segmentId); err != nil {
+	if err = binary.Write(&buffer, endian, b.header.segmentId); err != nil {
 		return nil, err
 	}
-	if err = binary.Write(&buffer, binary.BigEndian, b.header.blockId); err != nil {
+	if err = binary.Write(&buffer, endian, b.header.blockId); err != nil {
 		return nil, err
 	}
-	if err = binary.Write(&buffer, binary.BigEndian, b.header.columnCount); err != nil {
+	if err = binary.Write(&buffer, endian, b.header.columnCount); err != nil {
 		return nil, err
 	}
-	if err = binary.Write(&buffer, binary.BigEndian, uint32(0)); err != nil {
+	if err = binary.Write(&buffer, endian, uint32(0)); err != nil {
 		return nil, err
 	}
 	reserved := make([]byte, 34)
-	if err = binary.Write(&buffer, binary.BigEndian, reserved); err != nil {
+	if err = binary.Write(&buffer, endian, reserved); err != nil {
 		return nil, err
 	}
 	// write columns meta
@@ -99,7 +99,7 @@ func (b *Block) MarshalMeta() ([]byte, error) {
 		if err != nil {
 			return nil, err
 		}
-		if err = binary.Write(&buffer, binary.BigEndian, columnMeta); err != nil {
+		if err = binary.Write(&buffer, endian, columnMeta); err != nil {
 			return nil, err
 		}
 	}
@@ -109,24 +109,24 @@ func (b *Block) MarshalMeta() ([]byte, error) {
 func (b *Block) UnMarshalMeta(data []byte) error {
 	var err error
 	cache := bytes.NewBuffer(data)
-	b.header = &BlockHeader{}
-	if err = binary.Read(cache, binary.BigEndian, &b.header.tableId); err != nil {
+	b.header = BlockHeader{}
+	if err = binary.Read(cache, endian, &b.header.tableId); err != nil {
 		return err
 	}
-	if err = binary.Read(cache, binary.BigEndian, &b.header.segmentId); err != nil {
+	if err = binary.Read(cache, endian, &b.header.segmentId); err != nil {
 		return err
 	}
-	if err = binary.Read(cache, binary.BigEndian, &b.header.blockId); err != nil {
+	if err = binary.Read(cache, endian, &b.header.blockId); err != nil {
 		return err
 	}
-	if err = binary.Read(cache, binary.BigEndian, &b.header.columnCount); err != nil {
+	if err = binary.Read(cache, endian, &b.header.columnCount); err != nil {
 		return err
 	}
-	if err = binary.Read(cache, binary.BigEndian, &b.header.checksum); err != nil {
+	if err = binary.Read(cache, endian, &b.header.checksum); err != nil {
 		return err
 	}
 	reserved := make([]byte, 34)
-	if err = binary.Read(cache, binary.BigEndian, &reserved); err != nil {
+	if err = binary.Read(cache, endian, &reserved); err != nil {
 		return err
 	}
 	b.columns = make([]ColumnObject, b.header.columnCount)

@@ -83,44 +83,44 @@ func (cb *ColumnBlock) MarshalMeta() ([]byte, error) {
 		err    error
 		buffer bytes.Buffer
 	)
-	if err = binary.Write(&buffer, binary.BigEndian, cb.meta.typ); err != nil {
+	if err = binary.Write(&buffer, endian, cb.meta.typ); err != nil {
 		return nil, err
 	}
-	if err = binary.Write(&buffer, binary.BigEndian, cb.meta.alg); err != nil {
+	if err = binary.Write(&buffer, endian, cb.meta.alg); err != nil {
 		return nil, err
 	}
-	if err = binary.Write(&buffer, binary.BigEndian, cb.meta.idx); err != nil {
+	if err = binary.Write(&buffer, endian, cb.meta.idx); err != nil {
 		return nil, err
 	}
-	if err = binary.Write(&buffer, binary.BigEndian, cb.meta.location.Offset()); err != nil {
+	if err = binary.Write(&buffer, endian, cb.meta.location.Offset()); err != nil {
 		return nil, err
 	}
-	if err = binary.Write(&buffer, binary.BigEndian, cb.meta.location.Length()); err != nil {
+	if err = binary.Write(&buffer, endian, cb.meta.location.Length()); err != nil {
 		return nil, err
 	}
-	if err = binary.Write(&buffer, binary.BigEndian, cb.meta.location.OriginSize()); err != nil {
+	if err = binary.Write(&buffer, endian, cb.meta.location.OriginSize()); err != nil {
 		return nil, err
 	}
-	/*if err = binary.Write(&buffer, binary.BigEndian, cb.meta.zoneMap.GetMin()); err != nil {
+	/*if err = binary.Write(&buffer, endian, cb.meta.zoneMap.GetMin()); err != nil {
 		return nil, err
 	}
-	if err = binary.Write(&buffer, binary.BigEndian, cb.meta.zoneMap.GetMax()); err != nil {
+	if err = binary.Write(&buffer, endian, cb.meta.zoneMap.GetMax()); err != nil {
 		return nil, err
 	}*/
-	if err = binary.Write(&buffer, binary.BigEndian, cb.meta.bloomFilter.Offset()); err != nil {
+	if err = binary.Write(&buffer, endian, cb.meta.bloomFilter.Offset()); err != nil {
 		return nil, err
 	}
-	if err = binary.Write(&buffer, binary.BigEndian, cb.meta.bloomFilter.Length()); err != nil {
+	if err = binary.Write(&buffer, endian, cb.meta.bloomFilter.Length()); err != nil {
 		return nil, err
 	}
-	if err = binary.Write(&buffer, binary.BigEndian, cb.meta.bloomFilter.OriginSize()); err != nil {
+	if err = binary.Write(&buffer, endian, cb.meta.bloomFilter.OriginSize()); err != nil {
 		return nil, err
 	}
-	if err = binary.Write(&buffer, binary.BigEndian, uint32(0)); err != nil {
+	if err = binary.Write(&buffer, endian, uint32(0)); err != nil {
 		return nil, err
 	}
 	reserved := make([]byte, 32)
-	if err = binary.Write(&buffer, binary.BigEndian, reserved); err != nil {
+	if err = binary.Write(&buffer, endian, reserved); err != nil {
 		return nil, err
 	}
 	return buffer.Bytes(), nil
@@ -128,40 +128,40 @@ func (cb *ColumnBlock) MarshalMeta() ([]byte, error) {
 
 func (cb *ColumnBlock) UnMarshalMate(cache *bytes.Buffer) error {
 	var err error
-	if err = binary.Read(cache, binary.BigEndian, &cb.meta.typ); err != nil {
+	if err = binary.Read(cache, endian, &cb.meta.typ); err != nil {
 		return err
 	}
-	if err = binary.Read(cache, binary.BigEndian, &cb.meta.alg); err != nil {
+	if err = binary.Read(cache, endian, &cb.meta.alg); err != nil {
 		return err
 	}
-	if err = binary.Read(cache, binary.BigEndian, &cb.meta.idx); err != nil {
+	if err = binary.Read(cache, endian, &cb.meta.idx); err != nil {
 		return err
 	}
 	cb.meta.location = Extent{}
-	if err = binary.Read(cache, binary.BigEndian, &cb.meta.location.offset); err != nil {
+	if err = binary.Read(cache, endian, &cb.meta.location.offset); err != nil {
 		return err
 	}
-	if err = binary.Read(cache, binary.BigEndian, &cb.meta.location.length); err != nil {
+	if err = binary.Read(cache, endian, &cb.meta.location.length); err != nil {
 		return err
 	}
-	if err = binary.Read(cache, binary.BigEndian, &cb.meta.location.originSize); err != nil {
+	if err = binary.Read(cache, endian, &cb.meta.location.originSize); err != nil {
 		return err
 	}
 	cb.meta.bloomFilter = Extent{}
-	if err = binary.Read(cache, binary.BigEndian, &cb.meta.bloomFilter.offset); err != nil {
+	if err = binary.Read(cache, endian, &cb.meta.bloomFilter.offset); err != nil {
 		return err
 	}
-	if err = binary.Read(cache, binary.BigEndian, &cb.meta.bloomFilter.length); err != nil {
+	if err = binary.Read(cache, endian, &cb.meta.bloomFilter.length); err != nil {
 		return err
 	}
-	if err = binary.Read(cache, binary.BigEndian, &cb.meta.bloomFilter.originSize); err != nil {
+	if err = binary.Read(cache, endian, &cb.meta.bloomFilter.originSize); err != nil {
 		return err
 	}
-	if err = binary.Read(cache, binary.BigEndian, &cb.meta.checksum); err != nil {
+	if err = binary.Read(cache, endian, &cb.meta.checksum); err != nil {
 		return err
 	}
 	reserved := make([]byte, 32)
-	if err = binary.Read(cache, binary.BigEndian, &reserved); err != nil {
+	if err = binary.Read(cache, endian, &reserved); err != nil {
 		return err
 	}
 	return err
