@@ -125,8 +125,9 @@ func TestDescExtra(t *testing.T) {
 
 type dummyTableOptions struct{}
 
-func (o dummyTableOptions) GetCreateOptions() string { return "" }
-func (o dummyTableOptions) GetTableOptions() string  { return "" }
+func (o dummyTableOptions) FormatDdl(ddl string) string { return ddl }
+func (o dummyTableOptions) GetCreateOptions() string    { return "" }
+func (o dummyTableOptions) GetTableOptions() string     { return "" }
 
 var dummyOptionsFactory = func(db, tbl string) trace.TableOptions {
 	return &dummyTableOptions{}
