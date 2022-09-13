@@ -28,28 +28,28 @@ import (
 
 func (s *Scope) CreateDatabase(c *Compile) error {
 	dbName := s.Plan.GetDdl().GetCreateDatabase().GetDatabase()
-	if _, err := c.e.Database(c.ctx, dbName, c.proc.TxnOperator); err == nil {
+	if _, err := c.e.TaeEngine.Database(c.ctx, dbName, c.proc.TxnOperator); err == nil {
 		if s.Plan.GetDdl().GetCreateDatabase().GetIfNotExists() {
 			return nil
 		}
 		return errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("database %s already exists", dbName))
 	}
-	err := c.e.Create(c.ctx, dbName, c.proc.TxnOperator)
+	err := c.e.TaeEngine.Create(c.ctx, dbName, c.proc.TxnOperator)
 	if err != nil {
 		return err
 	}
-	return colexec.CreateAutoIncrTable(c.e, c.ctx, c.proc, dbName)
+	return colexec.CreateAutoIncrTable(c.e.TaeEngine, c.ctx, c.proc, dbName)
 }
 
 func (s *Scope) DropDatabase(c *Compile) error {
 	dbName := s.Plan.GetDdl().GetDropDatabase().GetDatabase()
-	if _, err := c.e.Database(c.ctx, dbName, c.proc.TxnOperator); err != nil {
+	if _, err := c.e.TaeEngine.Database(c.ctx, dbName, c.proc.TxnOperator); err != nil {
 		if s.Plan.GetDdl().GetDropDatabase().GetIfExists() {
 			return nil
 		}
 		return err
 	}
-	return c.e.Delete(c.ctx, dbName, c.proc.TxnOperator)
+	return c.e.TaeEngine.Delete(c.ctx, dbName, c.proc.TxnOperator)
 }
 
 func (s *Scope) CreateTable(c *Compile) error {
@@ -73,7 +73,7 @@ func (s *Scope) CreateTable(c *Compile) error {
 	if qry.GetDatabase() != "" {
 		dbName = qry.GetDatabase()
 	}
-	dbSource, err := c.e.Database(c.ctx, dbName, c.proc.TxnOperator)
+	dbSource, err := c.e.TaeEngine.Database(c.ctx, dbName, c.proc.TxnOperator)
 	if err != nil {
 		return err
 	}
@@ -85,7 +85,7 @@ func (s *Scope) CreateTable(c *Compile) error {
 		return errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("table '%s' already exists", tblName))
 	}
 	// add the tempEngine logic
-	tempDb, _ := c.tempEngine.Database(c.ctx, dbName, c.proc.TxnOperator)
+	tempDb, _ := c.e.TempEngine.Database(c.ctx, dbName, c.proc.TxnOperator)
 	if _, err := tempDb.Relation(c.ctx, dbName+"-"+tblName); err == nil {
 		return errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("temporary table '%s' already exists", tblName))
 	}
@@ -112,7 +112,7 @@ func (s *Scope) CreateTempTable(c *Compile) error {
 	if qry.GetDatabase() != "" {
 		dbName = qry.GetDatabase()
 	}
-	dbSource1, err := c.tempEngine.Database(c.ctx, dbName, c.proc.TxnOperator)
+	dbSource1, err := c.e.TempEngine.Database(c.ctx, dbName, c.proc.TxnOperator)
 	if err != nil {
 		return err
 	}
@@ -124,7 +124,7 @@ func (s *Scope) CreateTempTable(c *Compile) error {
 		return errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("temporary table '%s' already exists", tblName))
 	}
 
-	dbSource2, err := c.e.Database(c.ctx, dbName, c.proc.TxnOperator)
+	dbSource2, err := c.e.TaeEngine.Database(c.ctx, dbName, c.proc.TxnOperator)
 	if err != nil {
 		return err
 	}
@@ -145,7 +145,7 @@ func (s *Scope) DropTable(c *Compile) error {
 	qry := s.Plan.GetDdl().GetDropTable()
 
 	dbName := qry.GetDatabase()
-	dbSource, err := c.e.Database(c.ctx, dbName, c.proc.TxnOperator)
+	dbSource, err := c.e.TaeEngine.Database(c.ctx, dbName, c.proc.TxnOperator)
 	if err != nil {
 		if qry.GetIfExists() {
 			return nil

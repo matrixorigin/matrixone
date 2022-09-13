@@ -195,3 +195,8 @@ type Engine interface {
 type Hints struct {
 	CommitOrRollbackTimeout time.Duration
 }
+
+type EntrieEngine struct {
+	TaeEngine  Engine
+	TempEngine Engine
+}

@@ -165,13 +165,13 @@ func (s *Scope) ParallelRun(c *Compile) error {
 	{
 		DbName := s.DataSource.SchemaName
 		TblName := s.DataSource.RelationName
-		tempDb, err := c.tempEngine.Database(c.ctx, s.DataSource.SchemaName, s.Proc.TxnOperator)
+		tempDb, err := c.e.TempEngine.Database(c.ctx, s.DataSource.SchemaName, s.Proc.TxnOperator)
 		if err != nil {
 			return err
 		}
 		rel, err := tempDb.Relation(c.ctx, DbName+"-"+TblName)
 		if err != nil {
-			db, err := c.e.Database(c.ctx, DbName, s.Proc.TxnOperator)
+			db, err := c.e.TaeEngine.Database(c.ctx, DbName, s.Proc.TxnOperator)
 			if err != nil {
 				return err
 			}

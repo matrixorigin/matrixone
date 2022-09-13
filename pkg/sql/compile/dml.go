@@ -69,13 +69,13 @@ func (s *Scope) InsertValues(c *Compile, stmt *tree.Insert) (uint64, error) {
 	var dbSource engine.Database
 	var relation engine.Relation
 	var flag bool
-	dbSource, err := c.tempEngine.Database(c.ctx, p.DbName, c.proc.TxnOperator)
+	dbSource, err := c.e.TempEngine.Database(c.ctx, p.DbName, c.proc.TxnOperator)
 	if err != nil {
 		return 0, err
 	}
 	relation, err = dbSource.Relation(c.ctx, p.DbName+"-"+p.TblName)
 	if err != nil {
-		dbSource, err = c.e.Database(c.ctx, p.DbName, c.proc.TxnOperator)
+		dbSource, err = c.e.TaeEngine.Database(c.ctx, p.DbName, c.proc.TxnOperator)
 		if err != nil {
 			return 0, err
 		}
@@ -96,14 +96,14 @@ func (s *Scope) InsertValues(c *Compile, stmt *tree.Insert) (uint64, error) {
 	}
 	batch.Reorder(bat, p.OrderAttrs)
 	if flag {
-		if err = colexec.UpdateInsertValueBatch(c.e, c.ctx, c.proc, p, bat); err != nil {
+		if err = colexec.UpdateInsertValueBatch(c.e.TaeEngine, c.ctx, c.proc, p, bat); err != nil {
 			return 0, err
 		}
 	} else {
 		oldName := p.TblName
 		p.TblName = p.DbName + "-" + p.TblName
 		//update auto_incrment col
-		if err = colexec.UpdateInsertValueBatch(c.tempEngine, c.ctx, c.proc, p, bat); err != nil {
+		if err = colexec.UpdateInsertValueBatch(c.e.TempEngine, c.ctx, c.proc, p, bat); err != nil {
 			return 0, err
 		}
 		p.TblName = oldName

@@ -41,16 +41,15 @@ import (
 
 // New is used to new an object of compile
 func New(db string, sql string, uid string, ctx context.Context,
-	e engine.Engine, tempEngine engine.Engine, proc *process.Process, stmt tree.Statement) *Compile {
+	e engine.EntrieEngine, proc *process.Process, stmt tree.Statement) *Compile {
 	return &Compile{
-		e:          e,
-		db:         db,
-		ctx:        ctx,
-		uid:        uid,
-		sql:        sql,
-		proc:       proc,
-		stmt:       stmt,
-		tempEngine: tempEngine,
+		e:    e,
+		db:   db,
+		ctx:  ctx,
+		uid:  uid,
+		sql:  sql,
+		proc: proc,
+		stmt: stmt,
 	}
 }
 
@@ -208,7 +207,7 @@ func (c *Compile) compileQuery(qry *plan.Query) (*Scope, error) {
 		return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("query '%s' not support now", qry))
 	}
 	var err error
-	c.cnList, err = c.e.Nodes()
+	c.cnList, err = c.e.TaeEngine.Nodes()
 	if err != nil {
 		return nil, err
 	}
@@ -245,7 +244,7 @@ func (c *Compile) compileTpQuery(qry *plan.Query, ss []*Scope) (*Scope, error) {
 	}
 	switch qry.StmtType {
 	case plan.Query_DELETE:
-		scp, err := constructDeletion(qry.Nodes[qry.Steps[0]], c.e, c.proc.TxnOperator)
+		scp, err := constructDeletion(qry.Nodes[qry.Steps[0]], c.e.TaeEngine, c.proc.TxnOperator)
 		if err != nil {
 			return nil, err
 		}
@@ -254,7 +253,7 @@ func (c *Compile) compileTpQuery(qry *plan.Query, ss []*Scope) (*Scope, error) {
 			Arg: scp,
 		})
 	case plan.Query_INSERT:
-		arg, err := constructInsert(qry.Nodes[qry.Steps[0]], c.e, c.proc.TxnOperator)
+		arg, err := constructInsert(qry.Nodes[qry.Steps[0]], c.e.TaeEngine, c.proc.TxnOperator)
 		if err != nil {
 			return nil, err
 		}
@@ -263,7 +262,7 @@ func (c *Compile) compileTpQuery(qry *plan.Query, ss []*Scope) (*Scope, error) {
 			Arg: arg,
 		})
 	case plan.Query_UPDATE:
-		scp, err := constructUpdate(qry.Nodes[qry.Steps[0]], c.e, c.proc.TxnOperator)
+		scp, err := constructUpdate(qry.Nodes[qry.Steps[0]], c.e.TaeEngine, c.proc.TxnOperator)
 		if err != nil {
 			return nil, err
 		}
@@ -296,7 +295,7 @@ func (c *Compile) compileApQuery(qry *plan.Query, ss []*Scope) (*Scope, error) {
 	}
 	switch qry.StmtType {
 	case plan.Query_DELETE:
-		scp, err := constructDeletion(qry.Nodes[qry.Steps[0]], c.e, c.proc.TxnOperator)
+		scp, err := constructDeletion(qry.Nodes[qry.Steps[0]], c.e.TaeEngine, c.proc.TxnOperator)
 		if err != nil {
 			return nil, err
 		}
@@ -305,7 +304,7 @@ func (c *Compile) compileApQuery(qry *plan.Query, ss []*Scope) (*Scope, error) {
 			Arg: scp,
 		})
 	case plan.Query_INSERT:
-		arg, err := constructInsert(qry.Nodes[qry.Steps[0]], c.e, c.proc.TxnOperator)
+		arg, err := constructInsert(qry.Nodes[qry.Steps[0]], c.e.TaeEngine, c.proc.TxnOperator)
 		if err != nil {
 			return nil, err
 		}
@@ -314,7 +313,7 @@ func (c *Compile) compileApQuery(qry *plan.Query, ss []*Scope) (*Scope, error) {
 			Arg: arg,
 		})
 	case plan.Query_UPDATE:
-		scp, err := constructUpdate(qry.Nodes[qry.Steps[0]], c.e, c.proc.TxnOperator)
+		scp, err := constructUpdate(qry.Nodes[qry.Steps[0]], c.e.TaeEngine, c.proc.TxnOperator)
 		if err != nil {
 			return nil, err
 		}

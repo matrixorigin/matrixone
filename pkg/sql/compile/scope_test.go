@@ -25,6 +25,7 @@ import (
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/memEngine"
 	"github.com/stretchr/testify/require"
 )
@@ -76,7 +77,7 @@ func generateScopeCases(t *testing.T, testCases []string) []*Scope {
 		require.NoError(t1, err)
 		qry, err := opt.Optimize(stmts[0])
 		require.NoError(t1, err)
-		c := New("test", sql, "", context.Background(), e, nil, proc, nil)
+		c := New("test", sql, "", context.Background(), engine.EntrieEngine{TaeEngine: e}, proc, nil)
 		err = c.Compile(&plan.Plan{Plan: &plan.Plan_Query{Query: qry}}, nil, func(a any, batch *batch.Batch) error {
 			return nil
 		})

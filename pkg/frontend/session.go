@@ -88,8 +88,7 @@ type Session struct {
 
 	txnHandler    *TxnHandler
 	txnCompileCtx *TxnCompilerContext
-	storage       engine.Engine
-	tempStorage   engine.Engine
+	storage       engine.EntrieEngine
 	sql           string
 
 	sysVars         map[string]interface{}
@@ -134,9 +133,11 @@ func NewSession(proto Protocol, gm *guest.Mmu, mp *mempool.Mempool, PU *config.P
 		},
 		txnHandler: txnHandler,
 		//TODO:fix database name after the catalog is ready
-		txnCompileCtx:   InitTxnCompilerContext(txnHandler, proto.GetDatabaseName()),
-		storage:         PU.StorageEngine,
-		tempStorage:     tempengine.NewTempEngine(),
+		txnCompileCtx: InitTxnCompilerContext(txnHandler, proto.GetDatabaseName()),
+		storage: engine.EntrieEngine{
+			TaeEngine:  PU.StorageEngine,
+			TempEngine: tempengine.NewTempEngine(),
+		},
 		sysVars:         gSysVars.CopySysVarsToSession(),
 		userDefinedVars: make(map[string]interface{}),
 		gSysVars:        gSysVars,
@@ -361,12 +362,12 @@ func (ses *Session) GetSql() string {
 }
 
 func (ses *Session) IsTaeEngine() bool {
-	_, ok := ses.storage.(moengine.TxnEngine)
+	_, ok := ses.storage.TaeEngine.(moengine.TxnEngine)
 	return ok
 }
 
 func (ses *Session) GetStorage() engine.Engine {
-	return ses.storage
+	return ses.storage.TaeEngine
 }
 
 func (ses *Session) GetDatabaseName() string {
@@ -862,7 +863,7 @@ func (tcc *TxnCompilerContext) getRelation(dbName string, tableName string) (eng
 }
 
 func (tcc *TxnCompilerContext) handleGetTempRelation(dbName string, tableName string, ctx context.Context) (engine.Relation, error) {
-	db, err := tcc.ses.tempStorage.Database(ctx, dbName, tcc.txnHandler.GetTxn())
+	db, err := tcc.ses.storage.TempEngine.Database(ctx, dbName, tcc.txnHandler.GetTxn())
 	if err != nil {
 		logutil.Errorf("get database %v error %v", dbName, err)
 		return nil, err
