@@ -64,3 +64,8 @@ func TestParseCNStores(t *testing.T) {
 		assert.Equal(t, c.expectedExpired, expired)
 	}
 }
+
+func TestContains(t *testing.T) {
+	assert.True(t, contains([]string{"a"}, "a"))
+	assert.False(t, contains([]string{"a"}, "b"))
+}

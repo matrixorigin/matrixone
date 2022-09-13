@@ -70,7 +70,15 @@ func (s *Scheduler) Schedule(cnState logservice.CNState, currentTick uint64) {
 		return
 	}
 	cnMaps := getCNOrderedMap(runningTasks, workingCN)
-	for _, t := range createdTasks {
+
+	s.allocateCreatedTasks(createdTasks, cnMaps)
+
+	expiredTasks := getExpiredTasks(runningTasks, expiredCN)
+	s.reallocateRunningTasks(expiredTasks, cnMaps)
+}
+
+func (s *Scheduler) allocateCreatedTasks(tasks []task.Task, cnMaps *OrderedMap) {
+	for _, t := range tasks {
 		err := s.Allocate(s.ctx, t, cnMaps.Min())
 		if err != nil {
 			s.logger.Error("allocating task error",
@@ -79,9 +87,11 @@ func (s *Scheduler) Schedule(cnState logservice.CNState, currentTick uint64) {
 		}
 		cnMaps.Inc(t.TaskRunner)
 	}
+}
 
-	// TODO: Need re-allocation in TaskService to reallocate expired tasks.
-	_ = getExpiredTasks(runningTasks, expiredCN)
+// TODO: Need re-allocation in TaskService to reallocate expired tasks.
+func (s *Scheduler) reallocateRunningTasks(tasks []task.Task, cnMaps *OrderedMap) {
+	// panic("not implemented")
 }
 
 func getExpiredTasks(tasks []task.Task, expiredCN []string) (expired []task.Task) {
@@ -94,7 +104,7 @@ func getExpiredTasks(tasks []task.Task, expiredCN []string) (expired []task.Task
 }
 
 func getCNOrderedMap(tasks []task.Task, workingCN []string) *OrderedMap {
-	orderedMap := NewOrderedMap()
+	orderedMap := NewOrderedMap(workingCN)
 	for _, t := range tasks {
 		if contains(workingCN, t.TaskRunner) {
 			orderedMap.Inc(t.TaskRunner)

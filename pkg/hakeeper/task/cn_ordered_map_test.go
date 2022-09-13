@@ -20,7 +20,7 @@ import (
 )
 
 func TestOrderedMap(t *testing.T) {
-	orderedMap := NewOrderedMap()
+	orderedMap := NewOrderedMap(nil)
 	orderedMap.Set("a", 100)
 	orderedMap.Set("b", 110)
 	orderedMap.Set("c", 90)
@@ -28,6 +28,7 @@ func TestOrderedMap(t *testing.T) {
 	orderedMap.Set("e", 120)
 	orderedMap.Set("f", 50)
 	assert.Equal(t, 6, orderedMap.Len())
+	assert.True(t, len(orderedMap.Map) == len(orderedMap.OrderedKeys))
 	assert.Equal(t, "f", orderedMap.Min())
 
 	orderedMap.Set("f", 150)
@@ -42,4 +43,6 @@ func TestOrderedMap(t *testing.T) {
 		assert.Equal(t, uint32(i+1), orderedMap.Get("g"))
 	}
 	assert.Equal(t, "d", orderedMap.Min())
+	assert.Equal(t, 7, orderedMap.Len())
+	assert.True(t, len(orderedMap.Map) == len(orderedMap.OrderedKeys))
 }

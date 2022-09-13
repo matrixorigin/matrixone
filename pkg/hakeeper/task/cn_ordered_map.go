@@ -23,16 +23,21 @@ type OrderedMap struct {
 	OrderedKeys []string
 }
 
-func NewOrderedMap() *OrderedMap {
-	return &OrderedMap{
-		Map: make(map[string]uint32),
+func NewOrderedMap(keys []string) *OrderedMap {
+	orderedMap := &OrderedMap{
+		Map:         make(map[string]uint32),
+		OrderedKeys: make([]string, 0, len(keys)),
 	}
+
+	for _, key := range keys {
+		orderedMap.Map[key] = 0
+		orderedMap.OrderedKeys = append(orderedMap.OrderedKeys, key)
+	}
+
+	return orderedMap
 }
 
 func (o *OrderedMap) Len() int {
-	if len(o.Map) != len(o.OrderedKeys) {
-		panic("task.OrderedMap panic")
-	}
 	return len(o.Map)
 }
 
@@ -55,12 +60,7 @@ func (o *OrderedMap) Get(key string) uint32 {
 }
 
 func (o *OrderedMap) Inc(key string) {
-	if _, ok := o.Map[key]; !ok {
-		o.Map[key] = 0
-		o.OrderedKeys = append(o.OrderedKeys, key)
-	}
-	o.Map[key]++
-	o.sort()
+	o.Set(key, o.Get(key)+1)
 }
 
 func (o *OrderedMap) Min() string {
