@@ -1,6 +1,6 @@
-# **用 JDBC 连接器连接 MatrixOne 服务**
+# **用 JDBC 连接器连接 MatrixOne 服务示例**
 
-本教程将向你展示如何使用 JDBC 连接器连接 MatrixOne 服务。
+本教程示例将向你展示如何使用 JDBC 连接器连接 MatrixOne 服务。
 
 ## **开始前准备**
 
@@ -60,7 +60,7 @@ public class demo {
 	    //test为数据库名称
 	    // MySQL 8.0 以下版本选择
 	    //static final String JdbcDriver = "com.mysql.jdbc.Driver";  
-	    //static final String Url = "jdbc:mysql://localhost:6001/test";
+	    //static final String Url = "jdbc:mysql://localhost:3306/test";
 
 	    // MySQL 8.0 以上版本选择
 	    static final String JdbcDriver = "com.mysql.cj.jdbc.Driver";  
@@ -68,7 +68,7 @@ public class demo {
 
 
 	    //输入连接数据库的用户名与密码
-	    static final String User = "dump";//输入你的数据库用户名
+	    static final String User = "dump";//输入你的数据库库名
 	    static final String PassWord = "111";//输入你的数据库连接密码
 
 	    public static void main(String[] args) {

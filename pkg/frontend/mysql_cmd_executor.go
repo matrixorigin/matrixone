@@ -1725,9 +1725,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		ses.Pu.StorageEngine,
 		proc, ses)
 	if err != nil {
-		retErr = moerr.New(moerr.ER_PARSE_ERROR, err, "")
-		logStatementStringStatus(requestCtx, ses, sql, fail, retErr)
-		return retErr
+		return moerr.New(moerr.ER_PARSE_ERROR, err, "")
 	}
 
 	defer func() {
@@ -1757,26 +1755,20 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			ses.SetPrivilege(determinePrivilegeSetOfStatement(stmt))
 			havePrivilege, err2 = authenticatePrivilegeOfStatementWithObjectTypeAccountAndDatabase(requestCtx, ses, stmt)
 			if err2 != nil {
-				logStatementStatus(ctx, ses, stmt, fail, err2)
 				return err2
 			}
 
 			if !havePrivilege {
-				retErr = moerr.NewInternalError("do not have privilege to execute the statement")
-				logStatementStatus(ctx, ses, stmt, fail, retErr)
-				return retErr
+				return moerr.NewInternalError("do not have privilege to execute the statement")
 			}
 
 			havePrivilege, err2 = authenticatePrivilegeOfStatementWithObjectTypeNone(requestCtx, ses, stmt)
 			if err2 != nil {
-				logStatementStatus(ctx, ses, stmt, fail, err2)
 				return err2
 			}
 
 			if !havePrivilege {
-				retErr = moerr.NewInternalError("do not have privilege to execute the statement")
-				logStatementStatus(ctx, ses, stmt, fail, retErr)
-				return retErr
+				return moerr.NewInternalError("do not have privilege to execute the statement")
 			}
 		}
 
@@ -1798,21 +1790,13 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			if !can {
 				//is ddl statement
 				if IsDDL(stmt) {
-					retErr = errorOnlyCreateStatement
-					logStatementStatus(ctx, ses, stmt, fail, retErr)
-					return retErr
+					return errorOnlyCreateStatement
 				} else if IsAdministrativeStatement(stmt) {
-					retErr = errorAdministrativeStatement
-					logStatementStatus(ctx, ses, stmt, fail, retErr)
-					return retErr
+					return errorAdministrativeStatement
 				} else if IsParameterModificationStatement(stmt) {
-					retErr = errorParameterModificationInTxn
-					logStatementStatus(ctx, ses, stmt, fail, retErr)
-					return retErr
+					return errorParameterModificationInTxn
 				} else {
-					retErr = errorUnclassifiedStatement
-					logStatementStatus(ctx, ses, stmt, fail, retErr)
-					return retErr
+					return errorUnclassifiedStatement
 				}
 			}
 		}
@@ -2096,7 +2080,6 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		if !fromLoadData {
 			txnErr = ses.TxnCommitSingleStatement(stmt)
 			if txnErr != nil {
-				logStatementStatus(ctx, ses, stmt, fail, txnErr)
 				return txnErr
 			}
 			switch stmt.(type) {
@@ -2110,40 +2093,31 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 				*tree.Deallocate:
 				resp := NewOkResponse(rspLen, 0, 0, 0, int(COM_QUERY), "")
 				if err := mce.GetSession().protocol.SendResponse(resp); err != nil {
-					retErr = fmt.Errorf("routine send response failed. error:%v ", err)
-					logStatementStatus(ctx, ses, stmt, fail, retErr)
-					return retErr
+					return fmt.Errorf("routine send response failed. error:%v ", err)
 				}
 
 			case *tree.PrepareStmt, *tree.PrepareString:
 				if mce.ses.Cmd == int(COM_STMT_PREPARE) {
 					if err := mce.ses.protocol.SendPrepareResponse(prepareStmt); err != nil {
-						retErr = fmt.Errorf("routine send response failed. error:%v ", err)
-						logStatementStatus(ctx, ses, stmt, fail, retErr)
-						return retErr
+						return fmt.Errorf("routine send response failed. error:%v ", err)
 					}
 				} else {
 					resp := NewOkResponse(rspLen, 0, 0, 0, int(COM_QUERY), "")
 					if err := mce.GetSession().protocol.SendResponse(resp); err != nil {
-						retErr = fmt.Errorf("routine send response failed. error:%v ", err)
-						logStatementStatus(ctx, ses, stmt, fail, retErr)
-						return retErr
+						return fmt.Errorf("routine send response failed. error:%v ", err)
 					}
 				}
 			}
 		}
-		logStatementStatus(ctx, ses, stmt, success, nil)
 		goto handleNext
 	handleFailed:
 		logutil.Error(err.Error())
 		if !fromLoadData {
 			txnErr = ses.TxnRollbackSingleStatement(stmt)
 			if txnErr != nil {
-				logStatementStatus(ctx, ses, stmt, fail, txnErr)
 				return txnErr
 			}
 		}
-		logStatementStatus(ctx, ses, stmt, fail, err)
 		return err
 	handleNext:
 	} // end of for

@@ -76,7 +76,7 @@ var (
 	defaultStorePath = "./store"
 
 	//the length of query printed into console. -1, complete string. 0, empty string. >0 , length of characters at the header of the string.
-	defaultLengthOfQueryPrinted = 200000
+	defaultLengthOfQueryPrinted = 50
 
 	//the count of rows in vector of batch in load data
 	defaultBatchSizeInLoadData = 40000

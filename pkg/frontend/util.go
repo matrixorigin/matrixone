@@ -16,9 +16,7 @@ package frontend
 
 import (
 	"bytes"
-	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"go/constant"
 	"os"
 	"runtime"
@@ -421,38 +419,4 @@ func GetSimpleExprValue(e tree.Expr) (interface{}, error) {
 		return nil, errorComplicateExprIsNotSupported
 	}
 	return value, nil
-}
-
-type statementStatus int
-
-const (
-	success statementStatus = iota
-	fail
-)
-
-func (s statementStatus) String() string {
-	switch s {
-	case success:
-		return "success"
-	case fail:
-		return "fail"
-	}
-	return "running"
-}
-
-// logStatementStatus prints the status of the statement into the log.
-func logStatementStatus(ctx context.Context, ses *Session, stmt tree.Statement, status statementStatus, err error) {
-	fmtCtx := tree.NewFmtCtx(dialect.MYSQL)
-	stmt.Format(fmtCtx)
-	stmtStr := fmtCtx.String()
-	logStatementStringStatus(ctx, ses, stmtStr, status, err)
-}
-
-func logStatementStringStatus(ctx context.Context, ses *Session, stmtStr string, status statementStatus, err error) {
-	str := SubStringFromBegin(stmtStr, int(ses.Pu.SV.LengthOfQueryPrinted))
-	if status == success {
-		logutil.Infof("Connection id: %d Status: %s Statement: %s", ses.GetConnectionID(), status, str)
-	} else {
-		logutil.Errorf("Connection id: %d Status: %s Statement: %s Error: %v", ses.GetConnectionID(), status, str, err)
-	}
 }
