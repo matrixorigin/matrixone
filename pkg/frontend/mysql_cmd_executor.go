@@ -1237,7 +1237,7 @@ func (mce *MysqlCmdExecutor) handleExplainStmt(stmt *tree.ExplainStmt) error {
 	}
 
 	//get query optimizer and execute Optimize
-	plan, err := buildPlan(mce.ses.txnCompileCtx, stmt.Statement)
+	plan, err := buildPlan(mce.ses.requestCtx, mce.ses, mce.ses.txnCompileCtx, stmt.Statement)
 	if err != nil {
 		return err
 	}
@@ -1314,7 +1314,7 @@ func (mce *MysqlCmdExecutor) handlePrepareStmt(st *tree.PrepareStmt) (*PrepareSt
 	case *tree.Delete:
 		mce.ses.GetTxnCompileCtx().SetQueryType(TXN_DELETE)
 	}
-	preparePlan, err := buildPlan(mce.ses.txnCompileCtx, st)
+	preparePlan, err := buildPlan(mce.ses.requestCtx, mce.ses, mce.ses.txnCompileCtx, st)
 	if err != nil {
 		return nil, err
 	}
@@ -1342,7 +1342,7 @@ func (mce *MysqlCmdExecutor) handlePrepareString(st *tree.PrepareString) (*Prepa
 		mce.ses.GetTxnCompileCtx().SetQueryType(TXN_DELETE)
 	}
 
-	preparePlan, err := buildPlan(mce.ses.txnCompileCtx, st)
+	preparePlan, err := buildPlan(mce.ses.requestCtx, mce.ses, mce.ses.txnCompileCtx, st)
 	if err != nil {
 		return nil, err
 	}
@@ -1359,7 +1359,7 @@ func (mce *MysqlCmdExecutor) handlePrepareString(st *tree.PrepareString) (*Prepa
 
 // handleDeallocate
 func (mce *MysqlCmdExecutor) handleDeallocate(st *tree.Deallocate) error {
-	deallocatePlan, err := buildPlan(mce.ses.txnCompileCtx, st)
+	deallocatePlan, err := buildPlan(mce.ses.requestCtx, mce.ses, mce.ses.txnCompileCtx, st)
 	if err != nil {
 		return err
 	}
@@ -1499,7 +1499,7 @@ func (cwft *TxnComputationWrapper) GetAffectedRows() uint64 {
 
 func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interface{}, fill func(interface{}, *batch.Batch) error) (interface{}, error) {
 	var err error
-	cwft.plan, err = buildPlan(cwft.ses.GetTxnCompilerContext(), cwft.stmt)
+	cwft.plan, err = buildPlan(requestCtx, cwft.ses, cwft.ses.GetTxnCompilerContext(), cwft.stmt)
 	if err != nil {
 		return nil, err
 	}
@@ -1564,11 +1564,28 @@ func (cwft *TxnComputationWrapper) Run(ts uint64) error {
 	return nil
 }
 
-func buildPlan(ctx plan2.CompilerContext, stmt tree.Statement) (*plan2.Plan, error) {
+func buildPlan(requestCtx context.Context, ses *Session, ctx plan2.CompilerContext, stmt tree.Statement) (*plan2.Plan, error) {
+	var ret *plan2.Plan
+	var err error
 	if s, ok := stmt.(*tree.Insert); ok {
 		if _, ok := s.Rows.Select.(*tree.ValuesClause); ok {
-			return plan2.BuildPlan(ctx, stmt)
+			ret, err = plan2.BuildPlan(ctx, stmt)
+			if err != nil {
+				return nil, err
+			}
 		}
+	}
+	if ret != nil {
+		if ses != nil && ses.GetTenantInfo() != nil {
+			yes, err := authenticatePrivilegeOfStatementWithObjectTypeTable(requestCtx, ses, stmt, ret)
+			if err != nil {
+				return nil, err
+			}
+			if !yes {
+				return nil, moerr.NewInternalError("do not have privilege to execute the statement")
+			}
+		}
+		return ret, err
 	}
 	switch stmt := stmt.(type) {
 	case *tree.Select, *tree.ParenSelect,
@@ -1580,14 +1597,26 @@ func buildPlan(ctx plan2.CompilerContext, stmt tree.Statement) (*plan2.Plan, err
 		if err != nil {
 			return nil, err
 		}
-		return &plan2.Plan{
+		ret = &plan2.Plan{
 			Plan: &plan2.Plan_Query{
 				Query: optimized,
 			},
-		}, nil
+		}
 	default:
-		return plan2.BuildPlan(ctx, stmt)
+		ret, err = plan2.BuildPlan(ctx, stmt)
 	}
+	if ret != nil {
+		if ses != nil && ses.GetTenantInfo() != nil {
+			yes, err := authenticatePrivilegeOfStatementWithObjectTypeTable(requestCtx, ses, stmt, ret)
+			if err != nil {
+				return nil, err
+			}
+			if !yes {
+				return nil, moerr.NewInternalError("do not have privilege to execute the statement")
+			}
+		}
+	}
+	return ret, err
 }
 
 /*
@@ -1695,7 +1724,9 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		ses.Pu.StorageEngine,
 		proc, ses)
 	if err != nil {
-		return moerr.New(moerr.ER_PARSE_ERROR, err, "")
+		retErr = moerr.New(moerr.ER_PARSE_ERROR, err, "")
+		logStatementStringStatus(requestCtx, ses, sql, fail, retErr)
+		return retErr
 	}
 
 	defer func() {
@@ -1710,6 +1741,8 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 	var txnErr error
 	var rspLen uint64
 	var prepareStmt *PrepareStmt
+	var havePrivilege bool
+	var err2 error
 
 	stmt := cws[0].GetAst()
 	mce.beforeRun(stmt)
@@ -1718,6 +1751,33 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		ses.SetMysqlResultSet(&MysqlResultSet{})
 		stmt := cw.GetAst()
 		ctx := mce.RecordStatement(requestCtx, ses, proc, cw, beginInstant)
+
+		if ses.GetTenantInfo() != nil {
+			ses.SetPrivilege(determinePrivilegeSetOfStatement(stmt))
+			havePrivilege, err2 = authenticatePrivilegeOfStatementWithObjectTypeAccountAndDatabase(requestCtx, ses, stmt)
+			if err2 != nil {
+				logStatementStatus(ctx, ses, stmt, fail, err2)
+				return err2
+			}
+
+			if !havePrivilege {
+				retErr = moerr.NewInternalError("do not have privilege to execute the statement")
+				logStatementStatus(ctx, ses, stmt, fail, retErr)
+				return retErr
+			}
+
+			havePrivilege, err2 = authenticatePrivilegeOfStatementWithObjectTypeNone(requestCtx, ses, stmt)
+			if err2 != nil {
+				logStatementStatus(ctx, ses, stmt, fail, err2)
+				return err2
+			}
+
+			if !havePrivilege {
+				retErr = moerr.NewInternalError("do not have privilege to execute the statement")
+				logStatementStatus(ctx, ses, stmt, fail, retErr)
+				return retErr
+			}
+		}
 
 		/*
 				if it is in an active or multi-statement transaction, we check the type of the statement.
@@ -1737,13 +1797,21 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			if !can {
 				//is ddl statement
 				if IsDDL(stmt) {
-					return errorOnlyCreateStatement
+					retErr = errorOnlyCreateStatement
+					logStatementStatus(ctx, ses, stmt, fail, retErr)
+					return retErr
 				} else if IsAdministrativeStatement(stmt) {
-					return errorAdministrativeStatement
+					retErr = errorAdministrativeStatement
+					logStatementStatus(ctx, ses, stmt, fail, retErr)
+					return retErr
 				} else if IsParameterModificationStatement(stmt) {
-					return errorParameterModificationInTxn
+					retErr = errorParameterModificationInTxn
+					logStatementStatus(ctx, ses, stmt, fail, retErr)
+					return retErr
 				} else {
-					return errorUnclassifiedStatement
+					retErr = errorUnclassifiedStatement
+					logStatementStatus(ctx, ses, stmt, fail, retErr)
+					return retErr
 				}
 			}
 		}
@@ -1821,7 +1889,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		case *tree.Deallocate:
 			selfHandle = true
 			err = mce.handleDeallocate(st)
-			deallocatePlan, err := buildPlan(mce.ses.txnCompileCtx, st)
+			deallocatePlan, err := buildPlan(requestCtx, ses, mce.ses.txnCompileCtx, st)
 			if err != nil {
 				goto handleFailed
 			}
@@ -2027,6 +2095,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		if !fromLoadData {
 			txnErr = ses.TxnCommitSingleStatement(stmt)
 			if txnErr != nil {
+				logStatementStatus(ctx, ses, stmt, fail, txnErr)
 				return txnErr
 			}
 			switch stmt.(type) {
@@ -2040,31 +2109,40 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 				*tree.Deallocate:
 				resp := NewOkResponse(rspLen, 0, 0, 0, int(COM_QUERY), "")
 				if err := mce.GetSession().protocol.SendResponse(resp); err != nil {
-					return fmt.Errorf("routine send response failed. error:%v ", err)
+					retErr = fmt.Errorf("routine send response failed. error:%v ", err)
+					logStatementStatus(ctx, ses, stmt, fail, retErr)
+					return retErr
 				}
 
 			case *tree.PrepareStmt, *tree.PrepareString:
 				if mce.ses.Cmd == int(COM_STMT_PREPARE) {
 					if err := mce.ses.protocol.SendPrepareResponse(prepareStmt); err != nil {
-						return fmt.Errorf("routine send response failed. error:%v ", err)
+						retErr = fmt.Errorf("routine send response failed. error:%v ", err)
+						logStatementStatus(ctx, ses, stmt, fail, retErr)
+						return retErr
 					}
 				} else {
 					resp := NewOkResponse(rspLen, 0, 0, 0, int(COM_QUERY), "")
 					if err := mce.GetSession().protocol.SendResponse(resp); err != nil {
-						return fmt.Errorf("routine send response failed. error:%v ", err)
+						retErr = fmt.Errorf("routine send response failed. error:%v ", err)
+						logStatementStatus(ctx, ses, stmt, fail, retErr)
+						return retErr
 					}
 				}
 			}
 		}
+		logStatementStatus(ctx, ses, stmt, success, nil)
 		goto handleNext
 	handleFailed:
 		logutil.Error(err.Error())
 		if !fromLoadData {
 			txnErr = ses.TxnRollbackSingleStatement(stmt)
 			if txnErr != nil {
+				logStatementStatus(ctx, ses, stmt, fail, txnErr)
 				return txnErr
 			}
 		}
+		logStatementStatus(ctx, ses, stmt, fail, err)
 		return err
 	handleNext:
 	} // end of for
