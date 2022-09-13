@@ -57,9 +57,6 @@ func Prepare(_ *process.Process, arg any) error {
 
 func Call(_ int, proc *process.Process, arg any) (bool, error) {
 	param := arg.(*Argument).Es
-	if param.end {
-		return true, nil
-	}
 	if param.Extern.IsCol {
 		return callByCol(param, proc)
 	}
@@ -67,6 +64,10 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 }
 
 func callByStr(param *Param, proc *process.Process) (bool, error) {
+	if param.end {
+		proc.SetInputBatch(nil)
+		return true, nil
+	}
 	json, err := types.ParseStringToByteJson(param.Extern.Origin.(string))
 	if err != nil {
 		return false, err
@@ -94,11 +95,11 @@ func callByCol(param *Param, proc *process.Process) (bool, error) {
 	reg := proc.Reg.MergeReceivers[0]
 	select {
 	case <-reg.Ctx.Done():
-		param.end = true
+		proc.SetInputBatch(nil)
 		return true, nil
 	case data := <-reg.Ch:
 		if data == nil {
-			param.end = true
+			proc.SetInputBatch(nil)
 			return true, nil
 		}
 		if len(data.Vecs) != 1 {
