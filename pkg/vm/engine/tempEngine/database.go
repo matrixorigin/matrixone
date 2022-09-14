@@ -38,6 +38,7 @@ func (db *TempDatabase) Delete(_ context.Context, db_tblNme string) error {
 }
 
 // remember that the db_tblname is really "databaseName-tblName"
+// for update and delete statement, we add a hidekey called "Paddr"
 func (db *TempDatabase) Create(ctx context.Context, db_tblName string, tblDefs []engine.TableDef) error {
 	// Create Table - (name, table define)
 	schema, err := DefsToSchema(db_tblName, tblDefs)

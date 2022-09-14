@@ -75,7 +75,7 @@ func (s *Scope) InsertValues(c *Compile, stmt *tree.Insert) (uint64, error) {
 	}
 	relation, err = dbSource.Relation(c.ctx, p.DbName+"-"+p.TblName)
 	if err != nil {
-		dbSource, err = c.e.TaeEngine.Database(c.ctx, p.DbName, c.proc.TxnOperator)
+		dbSource, err = c.e.Engine.Database(c.ctx, p.DbName, c.proc.TxnOperator)
 		if err != nil {
 			return 0, err
 		}
@@ -96,7 +96,7 @@ func (s *Scope) InsertValues(c *Compile, stmt *tree.Insert) (uint64, error) {
 	}
 	batch.Reorder(bat, p.OrderAttrs)
 	if flag {
-		if err = colexec.UpdateInsertValueBatch(c.e.TaeEngine, c.ctx, c.proc, p, bat); err != nil {
+		if err = colexec.UpdateInsertValueBatch(c.e.Engine, c.ctx, c.proc, p, bat); err != nil {
 			return 0, err
 		}
 	} else {

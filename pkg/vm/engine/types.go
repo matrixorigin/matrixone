@@ -197,6 +197,6 @@ type Hints struct {
 }
 
 type EntrieEngine struct {
-	TaeEngine  Engine
+	Engine     Engine
 	TempEngine Engine
 }

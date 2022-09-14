@@ -135,7 +135,7 @@ func NewSession(proto Protocol, gm *guest.Mmu, mp *mempool.Mempool, PU *config.P
 		//TODO:fix database name after the catalog is ready
 		txnCompileCtx: InitTxnCompilerContext(txnHandler, proto.GetDatabaseName()),
 		storage: engine.EntrieEngine{
-			TaeEngine:  PU.StorageEngine,
+			Engine:     PU.StorageEngine,
 			TempEngine: tempengine.NewTempEngine(),
 		},
 		sysVars:         gSysVars.CopySysVarsToSession(),
@@ -362,12 +362,12 @@ func (ses *Session) GetSql() string {
 }
 
 func (ses *Session) IsTaeEngine() bool {
-	_, ok := ses.storage.TaeEngine.(moengine.TxnEngine)
+	_, ok := ses.storage.Engine.(moengine.TxnEngine)
 	return ok
 }
 
 func (ses *Session) GetStorage() engine.Engine {
-	return ses.storage.TaeEngine
+	return ses.storage.Engine
 }
 
 func (ses *Session) GetDatabaseName() string {
