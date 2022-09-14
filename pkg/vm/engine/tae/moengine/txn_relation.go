@@ -117,8 +117,11 @@ func (rel *txnRelation) Delete(_ context.Context, data *vector.Vector, col strin
 	panic(any("Key not found"))
 }
 
-func (rel *txnRelation) Truncate(_ context.Context) (uint64, error) {
-	rows := uint64(rel.Rows())
+func (rel *txnRelation) Truncate(ctx context.Context) (uint64, error) {
+	rows, err := rel.Rows(ctx)
+	if err != nil {
+		return 0, err
+	}
 	name := rel.handle.GetMeta().(*catalog.TableEntry).GetSchema().Name
 	db, err := rel.handle.GetDB()
 	if err != nil {
@@ -128,5 +131,5 @@ func (rel *txnRelation) Truncate(_ context.Context) (uint64, error) {
 	if err != nil {
 		return 0, err
 	}
-	return rows, nil
+	return uint64(rows), nil
 }

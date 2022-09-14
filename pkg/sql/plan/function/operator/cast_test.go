@@ -1735,6 +1735,8 @@ func TestCastSpecial4(t *testing.T) {
 		vectors := make([]*vector.Vector, 2)
 		vectors[0] = makeVector(src, srcIsConst)
 		vectors[1] = makeTypeVector(destType)
+		vectors[1].Typ.Width = 64
+		vectors[1].Typ.Scale = 0
 		return vectors
 	}
 	resType := types.T_decimal128.ToType()
@@ -2114,6 +2116,7 @@ func TestCastFloatAsDecimal(t *testing.T) {
 	}
 	leftType := types.Type{Oid: types.T_float32, Size: 8}
 	rightType := types.Type{Oid: types.T_decimal64, Size: 8, Scale: 2, Width: 16}
+	d, _ := types.Decimal64FromFloat64(123.0, 5, 1)
 
 	cases := []struct {
 		name      string
@@ -2125,7 +2128,7 @@ func TestCastFloatAsDecimal(t *testing.T) {
 			name:      "TEST01",
 			vecs:      makeTempVectors([]float32{123.0}, leftType, rightType),
 			proc:      testutil.NewProc(),
-			wantBytes: []types.Decimal64{types.Decimal64FromFloat64(123.0)},
+			wantBytes: []types.Decimal64{d},
 		},
 	}
 
@@ -4563,7 +4566,6 @@ func makeVector(src interface{}, isSrcConst bool) *vector.Vector {
 			vec = vector.NewWithFixed(typeOid.ToType(), []bool{val}, nil, nil)
 		}
 	}
-
 	return vec
 }
 

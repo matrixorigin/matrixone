@@ -26,6 +26,8 @@ type cacheKey = int
 const (
 	cacheKeyMemStats cacheKey = iota
 	cacheKeyProcess
+	cacheKeyDiskIO
+	cacheKeyNetIO
 )
 
 type statCaches struct {
