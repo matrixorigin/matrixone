@@ -25,13 +25,31 @@ import (
 type FmtCtx struct {
 	*strings.Builder
 	dialectType dialect.DialectType
+	// quoteString string
+	quoteString bool
 }
 
-func NewFmtCtx(dialectType dialect.DialectType) *FmtCtx {
-	return &FmtCtx{
+func NewFmtCtx(dialectType dialect.DialectType, opts ...FmtCtxOption) *FmtCtx {
+	ctx := &FmtCtx{
 		Builder:     new(strings.Builder),
 		dialectType: dialectType,
 	}
+	for _, opt := range opts {
+		opt.Apply(ctx)
+	}
+	return ctx
+}
+
+type FmtCtxOption func(*FmtCtx)
+
+func (f FmtCtxOption) Apply(ctx *FmtCtx) {
+	f(ctx)
+}
+
+func WithQuoteString(quote bool) FmtCtxOption {
+	return FmtCtxOption(func(ctx *FmtCtx) {
+		ctx.quoteString = quote
+	})
 }
 
 // NodeFormatter for formatted output of the node.
@@ -65,12 +83,15 @@ func (ctx *FmtCtx) PrintExpr(currentExpr Expr, expr Expr, left bool) {
 }
 
 func (ctx *FmtCtx) WriteValue(t P_TYPE, v string) (int, error) {
-	switch t {
-	case P_char:
-		return ctx.WriteString(fmt.Sprintf("%q", v))
-	default:
-		return ctx.WriteString(v)
+	if ctx.quoteString {
+		switch t {
+		case P_char:
+			return ctx.WriteString(fmt.Sprintf("%q", v))
+		default:
+			return ctx.WriteString(v)
+		}
 	}
+	return ctx.WriteString(v)
 }
 
 // needParens says if we need a parenthesis
