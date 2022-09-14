@@ -91,7 +91,7 @@ var (
 		cols := make([]types.Decimal64, len(values))
 		if nsp == nil {
 			for i, v := range values {
-				cols[i] = types.Decimal64_FromInt64(v)
+				cols[i], _ = types.Decimal64_FromInt64(v, 64, 0)
 			}
 		} else {
 			for _, n := range nsp {
@@ -101,7 +101,7 @@ var (
 				if nulls.Contains(vec.Nsp, uint64(i)) {
 					continue
 				}
-				cols[i] = types.Decimal64_FromInt64(v)
+				cols[i], _ = types.Decimal64_FromInt64(v, 64, 0)
 			}
 		}
 		vec.Col = cols
@@ -113,7 +113,7 @@ var (
 		cols := make([]types.Decimal128, len(values))
 		if nsp == nil {
 			for i, v := range values {
-				d := types.InitDecimal128(v)
+				d, _ := types.InitDecimal128(v, 64, 0)
 				cols[i] = d
 			}
 		} else {
@@ -124,7 +124,7 @@ var (
 				if nulls.Contains(vec.Nsp, uint64(i)) {
 					continue
 				}
-				d := types.InitDecimal128(v)
+				d, _ := types.InitDecimal128(v, 64, 0)
 				cols[i] = d
 			}
 		}
@@ -289,11 +289,13 @@ var (
 	}
 
 	MakeScalarDecimal64 = func(v int64, length int, _ types.Type) *vector.Vector {
-		return vector.NewConstFixed(decimal64Type, length, types.InitDecimal64(v))
+		d, _ := types.InitDecimal64(v, 64, 0)
+		return vector.NewConstFixed(decimal64Type, length, d)
 	}
 
 	MakeScalarDecimal128 = func(v uint64, length int, _ types.Type) *vector.Vector {
-		return vector.NewConstFixed(decimal64Type, length, types.InitDecimal128UsingUint(v))
+		d, _ := types.InitDecimal128UsingUint(v, 64, 0)
+		return vector.NewConstFixed(decimal64Type, length, d)
 	}
 
 	MakeScalarDecimal128ByFloat64 = func(v float64, length int, _ types.Type) *vector.Vector {
