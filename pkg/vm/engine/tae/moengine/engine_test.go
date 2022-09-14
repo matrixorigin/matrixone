@@ -247,7 +247,8 @@ func TestEngineAllType(t *testing.T) {
 	assert.Nil(t, err)
 	rel, err = dbase.Relation(ctx, schema.Name)
 	assert.Nil(t, err)
-	rows := rel.Rows()
+	rows, err := rel.Rows(ctx)
+	assert.Nil(t, err)
 	readers, _ := rel.NewReader(ctx, 10, nil, nil)
 	m := mheap.New(guest.New(1<<20, host.New(1<<20)))
 	for _, reader := range readers {
@@ -270,7 +271,9 @@ func TestEngineAllType(t *testing.T) {
 	assert.Nil(t, err)
 	rel, err = dbase.Relation(ctx, schema.Name)
 	assert.Nil(t, err)
-	assert.Zero(t, rel.Rows())
+	n, err := rel.Rows(ctx)
+	assert.Nil(t, err)
+	assert.Zero(t, n)
 	assert.Nil(t, txn.Commit())
 	t.Log(tae.Catalog.SimplePPString(common.PPL1))
 }
