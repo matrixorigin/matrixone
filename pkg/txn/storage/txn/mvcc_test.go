@@ -40,13 +40,17 @@ func testMVCC(
 			LogicalTime:  0,
 		},
 	}
+	tick := func() {
+		now.Timestamp = now.Timestamp.Next()
+	}
 
 	// tx
 	tx1 := NewTransaction("1", now, isolationPolicy)
 	tx2 := NewTransaction("2", now, isolationPolicy)
 
 	// insert
-	err := m.Insert(tx1, now, 1)
+	n := 1
+	err := m.Insert(now, tx1, &n)
 	assert.Nil(t, err)
 	assert.Equal(t, 1, len(m.Values))
 	assert.Equal(t, tx1, m.Values[0].BornTx)
@@ -54,7 +58,8 @@ func testMVCC(
 	assert.Nil(t, m.Values[0].LockTx)
 	assert.True(t, m.Values[0].LockTime.IsZero())
 
-	err = m.Insert(tx2, now, 2)
+	n2 := 2
+	err = m.Insert(now, tx2, &n2)
 	assert.Nil(t, err)
 	assert.Equal(t, 2, len(m.Values))
 	assert.Equal(t, tx2, m.Values[1].BornTx)
@@ -63,59 +68,60 @@ func testMVCC(
 	assert.True(t, m.Values[1].LockTime.IsZero())
 
 	// not readable now
-	res, err := m.Read(tx1, now)
+	res, err := m.Read(now, tx1)
 	assert.Equal(t, sql.ErrNoRows, err)
 	assert.Nil(t, res)
 
-	res, err = m.Read(tx2, now)
+	res, err = m.Read(now, tx2)
 	assert.Equal(t, sql.ErrNoRows, err)
 	assert.Nil(t, res)
 
-	now = now.Next()
+	tick()
 
 	// read
-	res, err = m.Read(tx1, now)
+	res, err = m.Read(now, tx1)
 	assert.Nil(t, err)
 	assert.NotNil(t, res)
 	assert.Equal(t, 1, *res)
 
-	res, err = m.Read(tx2, now)
+	res, err = m.Read(now, tx2)
 	assert.Nil(t, err)
 	assert.NotNil(t, res)
 	assert.Equal(t, 2, *res)
 
 	// delete
-	err = m.Delete(tx1, now)
+	err = m.Delete(now, tx1)
 	assert.Nil(t, err)
 	assert.Equal(t, 2, len(m.Values))
 	assert.Equal(t, tx1, m.Values[0].LockTx)
 	assert.Equal(t, now, m.Values[0].LockTime)
 
 	// not readable now by current tx
-	res, err = m.Read(tx1, now)
+	res, err = m.Read(now, tx1)
 	assert.Equal(t, sql.ErrNoRows, err)
 	assert.Nil(t, res)
 
 	// tx2 still readable
-	res, err = m.Read(tx2, now)
+	res, err = m.Read(now, tx2)
 	assert.Nil(t, err)
 	assert.NotNil(t, res)
 	assert.Equal(t, 2, *res)
 
-	err = m.Delete(tx2, now)
+	err = m.Delete(now, tx2)
 	assert.Nil(t, err)
 	assert.Equal(t, 2, len(m.Values))
 	assert.Equal(t, tx2, m.Values[1].LockTx)
 	assert.Equal(t, now, m.Values[1].LockTime)
 
-	res, err = m.Read(tx2, now)
+	res, err = m.Read(now, tx2)
 	assert.Equal(t, sql.ErrNoRows, err)
 	assert.Nil(t, res)
 
-	now = now.Next()
+	tick()
 
 	// insert again
-	err = m.Insert(tx1, now, 3)
+	n3 := 3
+	err = m.Insert(now, tx1, &n3)
 	assert.Nil(t, err)
 	assert.Equal(t, 3, len(m.Values))
 	assert.Equal(t, tx1, m.Values[2].BornTx)
@@ -123,7 +129,8 @@ func testMVCC(
 	assert.Nil(t, m.Values[2].LockTx)
 	assert.True(t, m.Values[2].LockTime.IsZero())
 
-	err = m.Insert(tx2, now, 4)
+	n4 := 4
+	err = m.Insert(now, tx2, &n4)
 	assert.Nil(t, err)
 	assert.Equal(t, 4, len(m.Values))
 	assert.Equal(t, tx2, m.Values[3].BornTx)
@@ -131,10 +138,11 @@ func testMVCC(
 	assert.Nil(t, m.Values[3].LockTx)
 	assert.True(t, m.Values[3].LockTime.IsZero())
 
-	now = now.Next()
+	tick()
 
 	// update
-	err = m.Update(tx1, now, 5)
+	n5 := 5
+	err = m.Update(now, tx1, &n5)
 	assert.Nil(t, err)
 	assert.Equal(t, 5, len(m.Values))
 	assert.Equal(t, tx1, m.Values[2].LockTx)
@@ -145,22 +153,23 @@ func testMVCC(
 	assert.True(t, m.Values[4].LockTime.IsZero())
 
 	// commit tx1
-	tx1.State.Store(Committed)
+	err = tx1.Commit()
+	assert.Nil(t, err)
 
-	now = now.Next()
+	tick()
 
 	// test read policy
 	switch isolationPolicy.Read {
 	case ReadCommitted:
-		res, err = m.Read(tx2, now)
+		res, err = m.Read(now, tx2)
 		assert.Nil(t, err)
 		assert.Equal(t, 5, *res)
 	case ReadSnapshot:
-		res, err = m.Read(tx2, now)
+		res, err = m.Read(now, tx2)
 		assert.Nil(t, err)
 		assert.Equal(t, 4, *res)
 	case ReadNoStale:
-		res, err = m.Read(tx2, now)
+		res, err = m.Read(now, tx2)
 		assert.NotNil(t, err)
 		assert.NotNil(t, res)
 		assert.Equal(t, 5, *res)
@@ -173,21 +182,23 @@ func testMVCC(
 	}
 
 	// write stale conflict
-	err = m.Insert(tx2, now, 1)
+	i := 1
+	err = m.Insert(now, tx2, &i)
 	assert.NotNil(t, err)
 	writeConflict, ok := err.(*ErrWriteConflict)
 	assert.True(t, ok)
 	assert.Equal(t, tx2, writeConflict.WritingTx)
 	assert.Equal(t, tx1, writeConflict.Stale)
 
-	err = m.Delete(tx2, now)
+	err = m.Delete(now, tx2)
 	assert.NotNil(t, err)
 	writeConflict, ok = err.(*ErrWriteConflict)
 	assert.True(t, ok)
 	assert.Equal(t, tx2, writeConflict.WritingTx)
 	assert.Equal(t, tx1, writeConflict.Stale)
 
-	err = m.Update(tx2, now, 1)
+	i2 := 1
+	err = m.Update(now, tx2, &i2)
 	assert.NotNil(t, err)
 	writeConflict, ok = err.(*ErrWriteConflict)
 	assert.True(t, ok)
@@ -199,24 +210,26 @@ func testMVCC(
 	tx4 := NewTransaction("4", now, isolationPolicy)
 
 	// write locked conflict
-	err = m.Delete(tx3, now)
+	err = m.Delete(now, tx3)
 	assert.Nil(t, err)
 
-	err = m.Delete(tx4, now)
+	err = m.Delete(now, tx4)
 	assert.NotNil(t, err)
 	writeConflict, ok = err.(*ErrWriteConflict)
 	assert.True(t, ok)
 	assert.Equal(t, tx4, writeConflict.WritingTx)
 	assert.Equal(t, tx3, writeConflict.Locked)
 
-	err = m.Insert(tx4, now, 1)
+	i3 := 1
+	err = m.Insert(now, tx4, &i3)
 	assert.NotNil(t, err)
 	writeConflict, ok = err.(*ErrWriteConflict)
 	assert.True(t, ok)
 	assert.Equal(t, tx4, writeConflict.WritingTx)
 	assert.Equal(t, tx3, writeConflict.Locked)
 
-	err = m.Update(tx4, now, 1)
+	i4 := 1
+	err = m.Update(now, tx4, &i4)
 	assert.NotNil(t, err)
 	writeConflict, ok = err.(*ErrWriteConflict)
 	assert.True(t, ok)

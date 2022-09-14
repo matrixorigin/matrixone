@@ -17,6 +17,7 @@ package txnstorage
 import (
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -29,11 +30,16 @@ func (t TestRow) PrimaryKey() Int {
 	return t.Key
 }
 
+func (t TestRow) Indexes() []AnyKey {
+	return []AnyKey{
+		{Text("foo"), Int(t.Value)},
+	}
+}
+
 func TestTable(t *testing.T) {
+
 	table := NewTable[Int, TestRow]()
-
 	tx := NewTransaction("1", Time{}, Serializable)
-
 	row := TestRow{Key: 42, Value: 1}
 
 	// insert
@@ -54,8 +60,75 @@ func TestTable(t *testing.T) {
 	assert.Nil(t, err)
 	assert.Equal(t, &row, r)
 
+	// index
+	keys, err := table.Index(tx, AnyKey{
+		Text("foo"), Int(1),
+	})
+	assert.Nil(t, err)
+	assert.Equal(t, 0, len(keys))
+	keys, err = table.Index(tx, AnyKey{
+		Text("foo"), Int(2),
+	})
+	assert.Nil(t, err)
+	assert.Equal(t, 1, len(keys))
+	assert.Equal(t, Int(42), keys[0])
+
 	// delete
 	err = table.Delete(tx, Int(42))
 	assert.Nil(t, err)
+
+}
+
+func TestTableIsolation(t *testing.T) {
+
+	table := NewTable[Int, TestRow]()
+
+	tx1 := NewTransaction("1", Time{
+		Timestamp: timestamp.Timestamp{
+			PhysicalTime: 1,
+		},
+	}, SnapshotIsolation)
+
+	tx2 := NewTransaction("2", Time{
+		Timestamp: timestamp.Timestamp{
+			PhysicalTime: 2,
+		},
+	}, SnapshotIsolation)
+	err := table.Insert(tx2, TestRow{
+		Key:   1,
+		Value: 2,
+	})
+	assert.Nil(t, err)
+	err = tx2.Commit()
+	assert.Nil(t, err)
+
+	// duplicated key
+	err = table.Insert(tx1, TestRow{
+		Key:   1,
+		Value: 3,
+	})
+	assert.NotNil(t, err)
+	var dup *ErrPrimaryKeyDuplicated
+	assert.ErrorAs(t, err, &dup)
+
+	// read committed
+	iter := table.NewIter(tx1)
+	n := 0
+	for ok := iter.First(); ok; ok = iter.Next() {
+		n++
+	}
+	assert.Equal(t, 0, n)
+
+	tx3 := NewTransaction("3", Time{
+		Timestamp: timestamp.Timestamp{
+			PhysicalTime: 3,
+		},
+	}, SnapshotIsolation)
+	iter = table.NewIter(tx3)
+	n = 0
+	for ok := iter.First(); ok; ok = iter.Next() {
+		n++
+	}
+	assert.Equal(t, 1, n)
 
 }

@@ -38,12 +38,14 @@ const (
 	OpDelete
 	OpGetPrimaryKeys
 	OpGetTableDefs
+	OpGetHiddenKeys
 	OpTruncate
 	OpUpdate
 	OpWrite
 	OpNewTableIter
 	OpRead
 	OpCloseTableIter
+	OpTableStats
 )
 
 func init() {
@@ -104,16 +106,19 @@ func init() {
 }
 
 type CreateDatabaseReq struct {
-	Name string
+	AccessInfo AccessInfo
+	Name       string
 }
 
 type CreateDatabaseResp struct {
+	ID          string
 	ErrReadOnly ErrReadOnly
 	ErrExisted  ErrExisted
 }
 
 type OpenDatabaseReq struct {
-	Name string
+	AccessInfo AccessInfo
+	Name       string
 }
 
 type OpenDatabaseResp struct {
@@ -122,6 +127,7 @@ type OpenDatabaseResp struct {
 }
 
 type GetDatabasesReq struct {
+	AccessInfo AccessInfo
 }
 
 type GetDatabasesResp struct {
@@ -129,10 +135,12 @@ type GetDatabasesResp struct {
 }
 
 type DeleteDatabaseReq struct {
-	Name string
+	AccessInfo AccessInfo
+	Name       string
 }
 
 type DeleteDatabaseResp struct {
+	ID          string
 	ErrReadOnly ErrReadOnly
 	ErrNotFound ErrDatabaseNotFound
 }
@@ -145,6 +153,7 @@ type CreateRelationReq struct {
 }
 
 type CreateRelationResp struct {
+	ID                  string
 	ErrReadOnly         ErrReadOnly
 	ErrDatabaseNotFound ErrDatabaseNotFound
 	ErrExisted          ErrExisted
@@ -156,6 +165,7 @@ type DeleteRelationReq struct {
 }
 
 type DeleteRelationResp struct {
+	ID          string
 	ErrReadOnly ErrReadOnly
 	ErrNotFound ErrRelationNotFound
 }
@@ -203,13 +213,15 @@ type DelTableDefResp struct {
 }
 
 type DeleteReq struct {
-	TableID string
-	Vector  *vector.Vector
+	TableID    string
+	ColumnName string
+	Vector     *vector.Vector
 }
 
 type DeleteResp struct {
-	ErrReadOnly      ErrReadOnly
-	ErrTableNotFound ErrRelationNotFound
+	ErrReadOnly       ErrReadOnly
+	ErrTableNotFound  ErrRelationNotFound
+	ErrColumnNotFound ErrColumnNotFound
 }
 
 type GetPrimaryKeysReq struct {
@@ -227,6 +239,15 @@ type GetTableDefsReq struct {
 
 type GetTableDefsResp struct {
 	Defs             []engine.TableDef
+	ErrTableNotFound ErrRelationNotFound
+}
+
+type GetHiddenKeysReq struct {
+	TableID string
+}
+
+type GetHiddenKeysResp struct {
+	Attrs            []*engine.Attribute
 	ErrTableNotFound ErrRelationNotFound
 }
 
@@ -288,4 +309,13 @@ type CloseTableIterReq struct {
 
 type CloseTableIterResp struct {
 	ErrIterNotFound ErrIterNotFound
+}
+
+type TableStatsReq struct {
+	TableID string
+}
+
+type TableStatsResp struct {
+	Rows             int
+	ErrTableNotFound ErrRelationNotFound
 }

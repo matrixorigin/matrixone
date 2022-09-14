@@ -1,4 +1,4 @@
-// Copyright 2022 Matrix Origin
+// Copyright 2021 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,11 +12,21 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package txnengine
+package objectio
 
-type RelationType uint8
+type Extent struct {
+	id         uint64
+	offset     uint32
+	length     uint32
+	originSize uint32
+}
 
-const (
-	RelationTable RelationType = iota + 1
-	RelationView
-)
+func (ex *Extent) Id() uint64 { return ex.id }
+
+func (ex *Extent) End() uint32 { return ex.offset + ex.length }
+
+func (ex *Extent) Offset() uint32 { return ex.offset }
+
+func (ex *Extent) Length() uint32 { return ex.length }
+
+func (ex *Extent) OriginSize() uint32 { return ex.originSize }
