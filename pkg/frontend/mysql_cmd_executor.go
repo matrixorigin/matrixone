@@ -1758,25 +1758,25 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			ses.SetPrivilege(determinePrivilegeSetOfStatement(stmt))
 			havePrivilege, err2 = authenticatePrivilegeOfStatementWithObjectTypeAccountAndDatabase(requestCtx, ses, stmt)
 			if err2 != nil {
-				logStatementStatus(ctx, ses, stmt, fail, err2)
+				logStatementStatus(requestCtx, ses, stmt, fail, err2)
 				return err2
 			}
 
 			if !havePrivilege {
 				retErr = moerr.NewInternalError("do not have privilege to execute the statement")
-				logStatementStatus(ctx, ses, stmt, fail, retErr)
+				logStatementStatus(requestCtx, ses, stmt, fail, retErr)
 				return retErr
 			}
 
 			havePrivilege, err2 = authenticatePrivilegeOfStatementWithObjectTypeNone(requestCtx, ses, stmt)
 			if err2 != nil {
-				logStatementStatus(ctx, ses, stmt, fail, err2)
+				logStatementStatus(requestCtx, ses, stmt, fail, err2)
 				return err2
 			}
 
 			if !havePrivilege {
 				retErr = moerr.NewInternalError("do not have privilege to execute the statement")
-				logStatementStatus(ctx, ses, stmt, fail, retErr)
+				logStatementStatus(requestCtx, ses, stmt, fail, retErr)
 				return retErr
 			}
 		}
@@ -1800,19 +1800,19 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 				//is ddl statement
 				if IsDDL(stmt) {
 					retErr = errorOnlyCreateStatement
-					logStatementStatus(ctx, ses, stmt, fail, retErr)
+					logStatementStatus(requestCtx, ses, stmt, fail, retErr)
 					return retErr
 				} else if IsAdministrativeStatement(stmt) {
 					retErr = errorAdministrativeStatement
-					logStatementStatus(ctx, ses, stmt, fail, retErr)
+					logStatementStatus(requestCtx, ses, stmt, fail, retErr)
 					return retErr
 				} else if IsParameterModificationStatement(stmt) {
 					retErr = errorParameterModificationInTxn
-					logStatementStatus(ctx, ses, stmt, fail, retErr)
+					logStatementStatus(requestCtx, ses, stmt, fail, retErr)
 					return retErr
 				} else {
 					retErr = errorUnclassifiedStatement
-					logStatementStatus(ctx, ses, stmt, fail, retErr)
+					logStatementStatus(requestCtx, ses, stmt, fail, retErr)
 					return retErr
 				}
 			}
@@ -2101,7 +2101,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		if !fromLoadData {
 			txnErr = ses.TxnCommitSingleStatement(stmt)
 			if txnErr != nil {
-				logStatementStatus(ctx, ses, stmt, fail, txnErr)
+				logStatementStatus(requestCtx, ses, stmt, fail, txnErr)
 				return txnErr
 			}
 			switch stmt.(type) {
@@ -2117,7 +2117,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 				if err := mce.GetSession().protocol.SendResponse(resp); err != nil {
 					trace.EndStatement(requestCtx, err)
 					retErr = fmt.Errorf("routine send response failed. error:%v ", err)
-					logStatementStatus(ctx, ses, stmt, fail, retErr)
+					logStatementStatus(requestCtx, ses, stmt, fail, retErr)
 					return retErr
 				}
 
@@ -2126,7 +2126,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 					if err := mce.ses.protocol.SendPrepareResponse(prepareStmt); err != nil {
 						trace.EndStatement(requestCtx, err)
 						retErr = fmt.Errorf("routine send response failed. error:%v ", err)
-						logStatementStatus(ctx, ses, stmt, fail, retErr)
+						logStatementStatus(requestCtx, ses, stmt, fail, retErr)
 						return retErr
 					}
 				} else {
@@ -2134,14 +2134,14 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 					if err := mce.GetSession().protocol.SendResponse(resp); err != nil {
 						trace.EndStatement(requestCtx, err)
 						retErr = fmt.Errorf("routine send response failed. error:%v ", err)
-						logStatementStatus(ctx, ses, stmt, fail, retErr)
+						logStatementStatus(requestCtx, ses, stmt, fail, retErr)
 						return retErr
 					}
 				}
 			}
 		}
 		trace.EndStatement(requestCtx, nil)
-		logStatementStatus(ctx, ses, stmt, success, nil)
+		logStatementStatus(requestCtx, ses, stmt, success, nil)
 		goto handleNext
 	handleFailed:
 		trace.EndStatement(requestCtx, err)
@@ -2149,11 +2149,11 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		if !fromLoadData {
 			txnErr = ses.TxnRollbackSingleStatement(stmt)
 			if txnErr != nil {
-				logStatementStatus(ctx, ses, stmt, fail, txnErr)
+				logStatementStatus(requestCtx, ses, stmt, fail, txnErr)
 				return txnErr
 			}
 		}
-		logStatementStatus(ctx, ses, stmt, fail, err)
+		logStatementStatus(requestCtx, ses, stmt, fail, err)
 		return err
 	handleNext:
 	} // end of for
