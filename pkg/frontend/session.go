@@ -116,6 +116,8 @@ type Session struct {
 	uuid uuid.UUID
 
 	timeZone *time.Location
+
+	priv *privilege
 }
 
 func NewSession(proto Protocol, gm *guest.Mmu, mp *mempool.Mempool, PU *config.ParameterUnit, gSysVars *GlobalSystemVariables) *Session {
@@ -688,6 +690,14 @@ func (ses *Session) AuthenticateUser(userInput string) ([]byte, error) {
 	return []byte(pwd), nil
 }
 
+func (ses *Session) GetPrivilege() *privilege {
+	return ses.priv
+}
+
+func (ses *Session) SetPrivilege(priv *privilege) {
+	ses.priv = priv
+}
+
 func (th *TxnHandler) SetSession(ses *Session) {
 	th.ses = ses
 }
@@ -857,7 +867,7 @@ func (tcc *TxnCompilerContext) ensureDatabaseIsNotEmpty(dbName string) (string, 
 		dbName = tcc.DefaultDatabase()
 	}
 	if len(dbName) == 0 {
-		return "", NewMysqlError(ER_NO_DB_ERROR)
+		return "", moerr.New(moerr.ER_NO_DB_ERROR)
 	}
 	return dbName, nil
 }

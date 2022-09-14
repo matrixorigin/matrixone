@@ -2075,4 +2075,33 @@ var builtins = map[int]Functions{
 			},
 		},
 	},
+	HEX: {
+		Id: HEX,
+		Overloads: []Function{
+			{
+				Index:     0,
+				Flag:      plan.Function_STRICT,
+				Layout:    STANDARD_FUNCTION,
+				Args:      []types.T{types.T_varchar},
+				ReturnTyp: types.T_varchar,
+				Fn:        unary.HexString,
+			},
+			{
+				Index:     1,
+				Flag:      plan.Function_STRICT,
+				Layout:    STANDARD_FUNCTION,
+				Args:      []types.T{types.T_char},
+				ReturnTyp: types.T_varchar,
+				Fn:        unary.HexString,
+			},
+			{
+				Index:     2,
+				Flag:      plan.Function_STRICT,
+				Layout:    STANDARD_FUNCTION,
+				Args:      []types.T{types.T_int64},
+				ReturnTyp: types.T_varchar,
+				Fn:        unary.HexInt64,
+			},
+		},
+	},
 }
