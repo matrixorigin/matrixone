@@ -24,18 +24,11 @@ jobs:
           mentioned_list: '["@all"]'
           content: "New Issue Opened or Assigned: [${{ github.event.issue.title }}](${{ github.event.issue.html_url }})\nAssignees:<font color=\"warning\">${{ join(github.event.issue.assignees.*.login, ', ') }}</font>\nOpen Issue Number: <font color=\"warning\">${{ github.event.repository.open_issues }}</font>"
 
-  issue-reopen:
+  check-bvt-issue:
+    if: github.event.action == 'closed'
     runs-on: ubuntu-latest
     steps:
-      - name: Reopen Issue
-        if: github.event.issue.user.login != github.event.sender.login && github.event.action == 'closed' && github.event.sender.login != 'yingfeng' && github.event.sender.login != 'aressu1985'
-        uses: actions-cool/issues-helper@v3
-        with:
-          actions: 'open-issue'
-          token: ${{ secrets.TOKEN_ACTION }}
-          issue-number: ${{ github.event.issue.number }}
-
-      - name: Check Out
+      - name: CheckOut
         uses: actions/checkout@v3
 
       - name: Check the code to see if the issue number is removed
@@ -69,6 +62,17 @@ jobs:
           issue-number: ${{ github.event.issue.number }}
           body: |
             Hello @${{ github.event.issue.user.login }}. The bug issue in the BVT test code has not been removed,issues automatically open.
+
+  issue-reopen:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Reopen Issue
+        if: github.event.issue.user.login != github.event.sender.login && github.event.action == 'closed' && github.event.sender.login != 'yingfeng' && github.event.sender.login != 'aressu1985'
+        uses: actions-cool/issues-helper@v3
+        with:
+          actions: 'open-issue'
+          token: ${{ secrets.TOKEN_ACTION }}
+          issue-number: ${{ github.event.issue.number }}
 
   nightly-check:
     if: github.event_name != 'issues'
