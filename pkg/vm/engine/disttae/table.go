@@ -26,12 +26,12 @@ import (
 
 var _ engine.Relation = new(table)
 
-func (tbl *table) Rows() int64 {
-	return 0
+func (tbl *table) Rows(ctx context.Context) (int64, error) {
+	return 0, nil
 }
 
-func (tbl *table) Size(name string) int64 {
-	return 0
+func (tbl *table) Size(ctx context.Context, name string) (int64, error) {
+	return 0, nil
 }
 
 func (tbl *table) Ranges(ctx context.Context) ([][]byte, error) {
