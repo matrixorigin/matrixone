@@ -16,6 +16,6 @@ package fileservice
 
 type CacheKey struct {
 	Path   string
-	Offset int
-	Size   int
+	Offset int64
+	Size   int64
 }

@@ -40,7 +40,7 @@ func NewObjectBuffer(name string) *ObjectBuffer {
 }
 
 func (b *ObjectBuffer) Write(buf []byte) (int, int, error) {
-	offset := 0
+	offset := int64(0)
 	le := len(b.vector.Entries)
 	if len(b.vector.Entries) > 0 {
 		offset = b.vector.Entries[le-1].Offset +
@@ -48,11 +48,11 @@ func (b *ObjectBuffer) Write(buf []byte) (int, int, error) {
 	}
 	entry := fileservice.IOEntry{
 		Offset: offset,
-		Size:   len(buf),
+		Size:   int64(len(buf)),
 		Data:   buf,
 	}
 	b.vector.Entries = append(b.vector.Entries, entry)
-	return offset, len(buf), nil
+	return int(offset), len(buf), nil
 }
 
 func (b *ObjectBuffer) Length() int {

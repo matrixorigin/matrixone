@@ -43,7 +43,7 @@ func testCachingFileService(
 		FilePath: "foo",
 		Entries: []IOEntry{
 			{
-				Size: len(data),
+				Size: int64(len(data)),
 				Data: data,
 			},
 		},
@@ -54,8 +54,8 @@ func testCachingFileService(
 		FilePath: "foo",
 		Entries: []IOEntry{
 			{
-				Size: len(data),
-				ToObject: func(r io.Reader) (any, int, error) {
+				Size: int64(len(data)),
+				ToObject: func(r io.Reader) (any, int64, error) {
 					var m map[int]int
 					if err := gob.NewDecoder(r).Decode(&m); err != nil {
 						return nil, 0, err
@@ -72,7 +72,7 @@ func testCachingFileService(
 	assert.True(t, ok)
 	assert.Equal(t, 1, len(m))
 	assert.Equal(t, 42, m[42])
-	assert.Equal(t, 1, vec.Entries[0].ObjectSize)
+	assert.Equal(t, int64(1), vec.Entries[0].ObjectSize)
 
 	// read again
 	err = fs.Read(ctx, vec)
@@ -81,7 +81,7 @@ func testCachingFileService(
 	assert.True(t, ok)
 	assert.Equal(t, 1, len(m))
 	assert.Equal(t, 42, m[42])
-	assert.Equal(t, 1, vec.Entries[0].ObjectSize)
+	assert.Equal(t, int64(1), vec.Entries[0].ObjectSize)
 
 	stats := fs.CacheStats()
 	assert.Equal(t, stats.NumRead, int64(2))
