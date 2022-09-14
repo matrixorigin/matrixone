@@ -1,0 +1,12 @@
+SELECT load_file(NULL);
+load_file(null)
+null
+SELECT load_file('$resources/auto_increment_columns/auto_increment_1.csv');
+load_file(/home/yjw/blob/matrixone/test/resources/auto_increment_columns/auto_increment_1.csv)
+1,1,'你好'\n2,3,'hello'\n4,,'world'\n\N,,','\n\N,\N,'\N'\n,,',,,'\n,,'###'\n,,,\n,,,\n100,100,'100'\n,,,
+SELECT load_file('$resources/file_test/normal.txt');
+load_file(/home/yjw/blob/matrixone/test/resources/file_test/normal.txt)
+Hello world!
+SELECT load_file('$resources/file_test/empty.txt');
+load_file(/home/yjw/blob/matrixone/test/resources/file_test/empty.txt)
+null
