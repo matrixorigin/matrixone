@@ -15,11 +15,7 @@
 package txnstorage
 
 import (
-	"fmt"
-
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
-	"go.uber.org/zap"
 )
 
 func logReq[
@@ -34,17 +30,18 @@ func logReq[
 ) (
 	deferFunc func(),
 ) {
-	logutil.Debug("engine: DN "+msg,
-		zap.String("type", fmt.Sprintf("%T", req)),
-		zap.Any("txn", meta),
-		zap.Any("data", req),
-	)
-	return func() {
-		logutil.Debug("engine: DN "+msg+" result",
-			zap.String("type", fmt.Sprintf("%T", *resp)),
-			zap.Any("txn", meta),
-			zap.Any("data", *resp),
-			zap.Any("error", *err),
-		)
-	}
+	return func() {}
+	//logutil.Debug("engine: DN "+msg,
+	//	zap.String("type", fmt.Sprintf("%T", req)),
+	//	zap.Any("txn", meta),
+	//	zap.Any("data", req),
+	//)
+	//return func() {
+	//	logutil.Debug("engine: DN "+msg+" result",
+	//		zap.String("type", fmt.Sprintf("%T", *resp)),
+	//		zap.Any("txn", meta),
+	//		zap.Any("data", *resp),
+	//		zap.Any("error", *err),
+	//	)
+	//}
 }

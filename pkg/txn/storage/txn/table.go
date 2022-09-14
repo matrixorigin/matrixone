@@ -16,7 +16,9 @@ package txnstorage
 
 import (
 	"database/sql"
+	"errors"
 	"sync"
+	"time"
 
 	"github.com/tidwall/btree"
 )
@@ -26,14 +28,14 @@ type Table[
 	R Row[K],
 ] struct {
 	sync.Mutex
-	Rows *btree.Generic[*PhysicalRow[K, R]]
-	//TODO unique index
-	//TODO indexes
-	//TODO foreign keys
+	rows      *btree.Generic[*PhysicalRow[K, R]]
+	index     *btree.Generic[IndexEntry[K, R]]
+	writeSets map[*Transaction]map[*PhysicalRow[K, R]]struct{}
 }
 
 type Row[K any] interface {
 	PrimaryKey() K
+	Indexes() []AnyKey
 }
 
 type PhysicalRow[
@@ -41,6 +43,7 @@ type PhysicalRow[
 	R Row[K],
 ] struct {
 	PrimaryKey K
+	LastUpdate *Atomic[time.Time]
 	Values     *MVCC[R]
 }
 
@@ -48,14 +51,30 @@ type Ordered[To any] interface {
 	Less(to To) bool
 }
 
+type IndexEntry[K Ordered[K], R Row[K]] struct {
+	Index AnyKey
+	Key   K
+	Row   *R
+}
+
 func NewTable[
 	K Ordered[K],
 	R Row[K],
 ]() *Table[K, R] {
 	return &Table[K, R]{
-		Rows: btree.NewGeneric(func(a, b *PhysicalRow[K, R]) bool {
+		rows: btree.NewGeneric(func(a, b *PhysicalRow[K, R]) bool {
 			return a.PrimaryKey.Less(b.PrimaryKey)
 		}),
+		index: btree.NewGeneric(func(a, b IndexEntry[K, R]) bool {
+			if a.Index.Less(b.Index) {
+				return true
+			}
+			if b.Index.Less(a.Index) {
+				return false
+			}
+			return a.Key.Less(b.Key)
+		}),
+		writeSets: make(map[*Transaction]map[*PhysicalRow[K, R]]struct{}),
 	}
 }
 
@@ -65,16 +84,37 @@ func (t *Table[K, R]) Insert(
 ) error {
 	t.Lock()
 	key := row.PrimaryKey()
-	physicalRow := t.getRow(key)
+	physicalRow := t.getOrSetRowByKey(key)
 	t.Unlock()
-	if err := physicalRow.Values.Insert(tx, tx.CurrentTime, row); err != nil {
+
+	existed, err := physicalRow.Values.ReadVisible(tx.Time, tx)
+	if errors.Is(err, sql.ErrNoRows) {
+		err = nil
+	}
+	if err != nil {
 		return err
 	}
-	//TODO this is wrong
-	// writeTime's logical time should be the statement number
-	// but currently the engine does not expose statement numbers
-	// for now, just tick on every write operation
-	tx.Tick()
+	if existed != nil {
+		return &ErrPrimaryKeyDuplicated{
+			Key: key,
+		}
+	}
+
+	if err := physicalRow.Values.Insert(tx.Time, tx, &row); err != nil {
+		return err
+	}
+	physicalRow.LastUpdate.Store(time.Now())
+	for _, index := range row.Indexes() {
+		t.index.Set(IndexEntry[K, R]{
+			Index: index,
+			Key:   key,
+			Row:   &row,
+		})
+	}
+
+	t.setCommitter(tx, physicalRow)
+
+	tx.Time.Tick()
 	return nil
 }
 
@@ -84,12 +124,25 @@ func (t *Table[K, R]) Update(
 ) error {
 	t.Lock()
 	key := row.PrimaryKey()
-	physicalRow := t.getRow(key)
+	physicalRow := t.getOrSetRowByKey(key)
 	t.Unlock()
-	if err := physicalRow.Values.Update(tx, tx.CurrentTime, row); err != nil {
+
+	if err := physicalRow.Values.Update(tx.Time, tx, &row); err != nil {
 		return err
 	}
-	tx.Tick()
+	physicalRow.LastUpdate.Store(time.Now())
+	for _, index := range row.Indexes() {
+		t.index.Set(IndexEntry[K, R]{
+			Index: index,
+			Key:   key,
+			Row:   &row,
+		})
+	}
+
+	//TODO
+	//t.setCommitter(tx, physicalRow)
+
+	tx.Time.Tick()
 	return nil
 }
 
@@ -98,13 +151,21 @@ func (t *Table[K, R]) Delete(
 	key K,
 ) error {
 	t.Lock()
-	physicalRow := t.getRow(key)
+	physicalRow := t.getRowByKey(key)
 	t.Unlock()
-	if err := physicalRow.Values.Delete(tx, tx.CurrentTime); err != nil {
+
+	if physicalRow == nil {
+		return nil
+	}
+	if err := physicalRow.Values.Delete(tx.Time, tx); err != nil {
 		return err
 	}
-	//TODO cascade delete with foreign keys
-	tx.Tick()
+	physicalRow.LastUpdate.Store(time.Now())
+
+	//TODO
+	//t.setCommitter(tx, physicalRow)
+
+	tx.Time.Tick()
 	return nil
 }
 
@@ -116,29 +177,152 @@ func (t *Table[K, R]) Get(
 	err error,
 ) {
 	t.Lock()
-	physicalRow := t.getRow(key)
+	physicalRow := t.getRowByKey(key)
 	t.Unlock()
 	if physicalRow == nil {
 		err = sql.ErrNoRows
 		return
 	}
 	mvccValues := physicalRow.Values
-	row, err = mvccValues.Read(tx, tx.CurrentTime)
+	row, err = mvccValues.Read(tx.Time, tx)
 	if err != nil {
 		return
 	}
 	return
 }
 
-func (t *Table[K, R]) getRow(key K) *PhysicalRow[K, R] {
+func (t *Table[K, R]) getRowByKey(key K) *PhysicalRow[K, R] {
 	pivot := &PhysicalRow[K, R]{
 		PrimaryKey: key,
 	}
-	row, ok := t.Rows.Get(pivot)
+	row, _ := t.rows.Get(pivot)
+	return row
+}
+
+func (t *Table[K, R]) getOrSetRowByKey(key K) *PhysicalRow[K, R] {
+	pivot := &PhysicalRow[K, R]{
+		PrimaryKey: key,
+		LastUpdate: NewAtomic(time.Now()),
+	}
+	row, ok := t.rows.Get(pivot)
 	if !ok {
 		row = pivot
 		row.Values = new(MVCC[R])
-		t.Rows.Set(row)
+		row.LastUpdate = NewAtomic(time.Now())
+		t.rows.Set(row)
 	}
 	return row
+}
+
+func (t *Table[K, R]) Index(tx *Transaction, index AnyKey) (keys []K, err error) {
+	pivot := IndexEntry[K, R]{
+		Index: index,
+	}
+	iter := t.index.Copy().Iter()
+	defer iter.Release()
+	for ok := iter.Seek(pivot); ok; ok = iter.Next() {
+		item := iter.Item()
+		if index.Less(item.Index) {
+			break
+		}
+		if item.Index.Less(index) {
+			break
+		}
+		cur, err := t.Get(tx, item.Key)
+		if err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				continue
+			}
+			return nil, err
+		}
+		if cur == item.Row {
+			keys = append(keys, item.Key)
+		}
+	}
+	return
+}
+
+func (t *Table[K, R]) IndexRows(tx *Transaction, index AnyKey) (rows []*R, err error) {
+	pivot := IndexEntry[K, R]{
+		Index: index,
+	}
+	iter := t.index.Copy().Iter()
+	defer iter.Release()
+	for ok := iter.Seek(pivot); ok; ok = iter.Next() {
+		item := iter.Item()
+		if index.Less(item.Index) {
+			break
+		}
+		if item.Index.Less(index) {
+			break
+		}
+		cur, err := t.Get(tx, item.Key)
+		if err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				continue
+			}
+			return nil, err
+		}
+		if cur == item.Row {
+			rows = append(rows, cur)
+		}
+	}
+	return
+}
+
+func (t *Table[K, R]) setCommitter(tx *Transaction, row *PhysicalRow[K, R]) {
+	tx.committers[t] = struct{}{}
+	t.Lock()
+	set, ok := t.writeSets[tx]
+	if !ok {
+		set = make(map[*PhysicalRow[K, R]]struct{})
+		t.writeSets[tx] = set
+	}
+	set[row] = struct{}{}
+	t.Unlock()
+}
+
+func (t *Table[K, R]) CommitTx(tx *Transaction) error {
+	t.Lock()
+	set := t.writeSets[tx]
+	t.Unlock()
+	defer func() {
+		t.Lock()
+		delete(t.writeSets, tx)
+		t.Unlock()
+	}()
+
+	for physicalRow := range set {
+		values := physicalRow.Values
+
+		var err error
+		values.RLock()
+		for i := len(values.Values) - 1; i >= 0; i-- {
+			value := values.Values[i]
+
+			if value.Visible(tx.Time, tx.ID) &&
+				value.BornTx.ID != tx.ID &&
+				value.BornTime.After(tx.BeginTime) {
+				err = &ErrPrimaryKeyDuplicated{
+					Key: physicalRow.PrimaryKey,
+				}
+				break
+			}
+
+		}
+		values.RUnlock()
+
+		if err != nil {
+			return err
+		}
+
+	}
+
+	return nil
+}
+
+func (t *Table[K, R]) AbortTx(tx *Transaction) {
+	t.Lock()
+	delete(t.writeSets, tx)
+	t.Unlock()
 }

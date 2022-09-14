@@ -34,14 +34,15 @@ func TestCatalogHandler(t *testing.T) {
 	defer cancel()
 
 	// new
+	clock := clock.NewHLCClock(func() int64 {
+		return time.Now().UnixNano()
+	}, math.MaxInt64)
 	storage, err := New(
 		NewCatalogHandler(
 			NewMemHandler(
 				testutil.NewMheap(),
 				Serializable,
-				clock.NewHLCClock(func() int64 {
-					return time.Now().UnixNano()
-				}, math.MaxInt64),
+				clock,
 			),
 		),
 	)

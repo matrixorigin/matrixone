@@ -37,7 +37,7 @@ type MVCCValue[T any] struct {
 
 // Read reads the visible value from Values
 // readTime's logical time should be monotonically increasing in one transaction to reflect commands order
-func (m *MVCC[T]) Read(tx *Transaction, readTime Time) (*T, error) {
+func (m *MVCC[T]) Read(now Time, tx *Transaction) (*T, error) {
 	if tx.State.Load() != Active {
 		panic("should not call Read")
 	}
@@ -46,15 +46,17 @@ func (m *MVCC[T]) Read(tx *Transaction, readTime Time) (*T, error) {
 	defer m.RUnlock()
 	for i := len(m.Values) - 1; i >= 0; i-- {
 		value := m.Values[i]
-		if value.Visible(tx.ID, readTime) {
+		if value.Visible(now, tx.ID) {
 			switch tx.IsolationPolicy.Read {
 			case ReadCommitted:
 			case ReadSnapshot:
-				if value.BornTx != tx && value.BornTime.After(tx.BeginTime) {
+				// BornTx must be committed to be visible here
+				if value.BornTx.ID != tx.ID && value.BornTime.After(tx.BeginTime) {
 					continue
 				}
 			case ReadNoStale:
-				if value.BornTx != tx && value.BornTime.After(tx.BeginTime) {
+				// BornTx must be committed to be visible here
+				if value.BornTx.ID != tx.ID && value.BornTime.After(tx.BeginTime) {
 					return value.Value, &ErrReadConflict{
 						ReadingTx: tx,
 						Stale:     value.BornTx,
@@ -68,7 +70,25 @@ func (m *MVCC[T]) Read(tx *Transaction, readTime Time) (*T, error) {
 	return nil, sql.ErrNoRows
 }
 
-func (m *MVCCValue[T]) Visible(txID string, readTime Time) bool {
+// ReadVisible reads a committed value despite the tx's isolation policy
+func (m *MVCC[T]) ReadVisible(now Time, tx *Transaction) (*MVCCValue[T], error) {
+	if tx.State.Load() != Active {
+		panic("should not call Read")
+	}
+
+	m.RLock()
+	defer m.RUnlock()
+	for i := len(m.Values) - 1; i >= 0; i-- {
+		value := m.Values[i]
+		if value.Visible(now, tx.ID) {
+			return value, nil
+		}
+	}
+
+	return nil, sql.ErrNoRows
+}
+
+func (m *MVCCValue[T]) Visible(now Time, txID string) bool {
 
 	// the following algorithm is from https://momjian.us/main/writings/pgsql/mvcc.pdf
 	// "[Mike Olson] says 17 march 1993: the tests in this routine are correct; if you think they’re not, you’re wrongand you should think about it again. i know, it happened to me."
@@ -76,13 +96,13 @@ func (m *MVCCValue[T]) Visible(txID string, readTime Time) bool {
 	// inserted by current tx
 	if m.BornTx.ID == txID {
 		// inserted before the read time
-		if m.BornTime.Before(readTime) {
+		if m.BornTime.Before(now) {
 			// not been deleted
 			if m.LockTx == nil {
 				return true
 			}
 			// deleted by current tx after the read time
-			if m.LockTx.ID == txID && m.LockTime.After(readTime) {
+			if m.LockTx.ID == txID && m.LockTime.After(now) {
 				return true
 			}
 		}
@@ -96,7 +116,7 @@ func (m *MVCCValue[T]) Visible(txID string, readTime Time) bool {
 			return true
 		}
 		// being deleted by current tx after the read time
-		if m.LockTx.ID == txID && m.LockTime.After(readTime) {
+		if m.LockTx.ID == txID && m.LockTime.After(now) {
 			return true
 		}
 		// deleted by another tx but not committed
@@ -108,7 +128,7 @@ func (m *MVCCValue[T]) Visible(txID string, readTime Time) bool {
 	return false
 }
 
-func (m *MVCC[T]) Insert(tx *Transaction, writeTime Time, value T) error {
+func (m *MVCC[T]) Insert(now Time, tx *Transaction, value *T) error {
 	if tx.State.Load() != Active {
 		panic("should not call Insert")
 	}
@@ -118,14 +138,15 @@ func (m *MVCC[T]) Insert(tx *Transaction, writeTime Time, value T) error {
 
 	for i := len(m.Values) - 1; i >= 0; i-- {
 		value := m.Values[i]
-		if value.Visible(tx.ID, writeTime) {
-			if value.LockTx != nil {
+		if value.Visible(now, tx.ID) {
+			if value.LockTx != nil && value.LockTx.State.Load() != Aborted {
+				// locked by active or committed tx
 				return &ErrWriteConflict{
 					WritingTx: tx,
 					Locked:    value.LockTx,
 				}
 			}
-			if value.BornTx != tx && value.BornTime.After(tx.BeginTime) {
+			if value.BornTx.ID != tx.ID && value.BornTime.After(tx.BeginTime) {
 				return &ErrWriteConflict{
 					WritingTx: tx,
 					Stale:     value.BornTx,
@@ -136,14 +157,14 @@ func (m *MVCC[T]) Insert(tx *Transaction, writeTime Time, value T) error {
 
 	m.Values = append(m.Values, &MVCCValue[T]{
 		BornTx:   tx,
-		BornTime: writeTime,
-		Value:    &value,
+		BornTime: now,
+		Value:    value,
 	})
 
 	return nil
 }
 
-func (m *MVCC[T]) Delete(tx *Transaction, writeTime Time) error {
+func (m *MVCC[T]) Delete(now Time, tx *Transaction) error {
 	if tx.State.Load() != Active {
 		panic("should not call Delete")
 	}
@@ -153,21 +174,21 @@ func (m *MVCC[T]) Delete(tx *Transaction, writeTime Time) error {
 
 	for i := len(m.Values) - 1; i >= 0; i-- {
 		value := m.Values[i]
-		if value.Visible(tx.ID, writeTime) {
-			if value.LockTx != nil {
+		if value.Visible(now, tx.ID) {
+			if value.LockTx != nil && value.LockTx.State.Load() != Aborted {
 				return &ErrWriteConflict{
 					WritingTx: tx,
 					Locked:    value.LockTx,
 				}
 			}
-			if value.BornTx != tx && value.BornTime.After(tx.BeginTime) {
+			if value.BornTx.ID != tx.ID && value.BornTime.After(tx.BeginTime) {
 				return &ErrWriteConflict{
 					WritingTx: tx,
 					Stale:     value.BornTx,
 				}
 			}
 			value.LockTx = tx
-			value.LockTime = writeTime
+			value.LockTime = now
 			return nil
 		}
 	}
@@ -175,7 +196,7 @@ func (m *MVCC[T]) Delete(tx *Transaction, writeTime Time) error {
 	return sql.ErrNoRows
 }
 
-func (m *MVCC[T]) Update(tx *Transaction, writeTime Time, newValue T) error {
+func (m *MVCC[T]) Update(now Time, tx *Transaction, newValue *T) error {
 	if tx.State.Load() != Active {
 		panic("should not call Update")
 	}
@@ -185,25 +206,25 @@ func (m *MVCC[T]) Update(tx *Transaction, writeTime Time, newValue T) error {
 
 	for i := len(m.Values) - 1; i >= 0; i-- {
 		value := m.Values[i]
-		if value.Visible(tx.ID, writeTime) {
-			if value.LockTx != nil {
+		if value.Visible(now, tx.ID) {
+			if value.LockTx != nil && value.LockTx.State.Load() != Aborted {
 				return &ErrWriteConflict{
 					WritingTx: tx,
 					Locked:    value.LockTx,
 				}
 			}
-			if value.BornTx != tx && value.BornTime.After(tx.BeginTime) {
+			if value.BornTx.ID != tx.ID && value.BornTime.After(tx.BeginTime) {
 				return &ErrWriteConflict{
 					WritingTx: tx,
 					Stale:     value.BornTx,
 				}
 			}
 			value.LockTx = tx
-			value.LockTime = writeTime
+			value.LockTime = now
 			m.Values = append(m.Values, &MVCCValue[T]{
 				BornTx:   tx,
-				BornTime: writeTime,
-				Value:    &newValue,
+				BornTime: now,
+				Value:    newValue,
 			})
 			return nil
 		}
