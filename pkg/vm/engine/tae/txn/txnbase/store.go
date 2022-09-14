@@ -91,3 +91,7 @@ func (store *NoopTxnStore) LogTxnEntry(dbId, tableId uint64, entry txnif.TxnEntr
 
 func (store *NoopTxnStore) IsReadonly() bool      { return false }
 func (store *NoopTxnStore) IncreateWriteCnt() int { return 0 }
+
+func (store *NoopTxnStore) IsTableDataChanged(tableID uint64) bool            { return false }
+func (store *NoopTxnStore) GetTableDirtyPoints(tableID uint64) txnif.DirtySet { return nil }
+func (store *NoopTxnStore) IsCatalogChanged() bool                            { return false }
