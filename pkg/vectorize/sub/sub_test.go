@@ -15,11 +15,12 @@
 package sub
 
 import (
+	"math"
+	"testing"
+
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
-	"math"
-	"testing"
 )
 
 func TestI32SubOf(t *testing.T) {
@@ -106,10 +107,8 @@ func TestDec64Sub(t *testing.T) {
 
 	res := vector.MustTCols[types.Decimal64](cv)
 	for i := 0; i < 10; i++ {
-		//fmt.Printf("%+v - %+v \n", as[i], bs[i])
-		//fmt.Printf("actual res:%+v\n", res[i].String())
-		//fmt.Printf("expect res:%+v\n", as[i]-bs[i])
-		if !res[i].Eq(types.Decimal64_FromInt64(as[i] - bs[i])) {
+		d, _ := types.Decimal64_FromInt64(as[i]-bs[i], 64, 0)
+		if !res[i].Eq(d) {
 			t.Fatalf("decimal64 sub wrong result")
 		}
 	}
@@ -135,10 +134,8 @@ func TestDec128Sub(t *testing.T) {
 
 	res := vector.MustTCols[types.Decimal128](cv)
 	for i := 0; i < 10; i++ {
-		//fmt.Printf("%+v - %+v \n", as[i], bs[i])
-		//fmt.Printf("actual res:%+v\n", res[i].String())
-		//fmt.Printf("expect res:%+v\n", as[i]-bs[i])
-		if !res[i].Eq(types.Decimal128_FromInt64(as[i] - bs[i])) {
+		d, _ := types.Decimal128_FromInt64(as[i]-bs[i], 64, 0)
+		if !res[i].Eq(d) {
 			t.Fatalf("decimal128 sub wrong result")
 		}
 	}
@@ -164,7 +161,8 @@ func TestDec64SubOfOppNumber(t *testing.T) {
 
 	res := vector.MustTCols[types.Decimal64](cv)
 	for i := 0; i < 10; i++ {
-		if !res[i].Eq(types.Decimal64_FromInt64(as[i] - bs[i])) {
+		d, _ := types.Decimal64_FromInt64(as[i]-bs[i], 64, 0)
+		if !res[i].Eq(d) {
 			t.Fatalf("decimal64 sub wrong result")
 		}
 	}
@@ -190,10 +188,8 @@ func TestDec128SubOfOppNumber(t *testing.T) {
 
 	res := vector.MustTCols[types.Decimal128](cv)
 	for i := 0; i < 10; i++ {
-		//fmt.Printf("%+v - %+v \n", as[i], bs[i])
-		//fmt.Printf("actual res:%+v\n", res[i].String())
-		//fmt.Printf("expect res:%+v\n", as[i]-bs[i])
-		if !res[i].Eq(types.Decimal128_FromInt64(as[i] - bs[i])) {
+		d, _ := types.Decimal128_FromInt64(as[i]-bs[i], 64, 0)
+		if !res[i].Eq(d) {
 			t.Fatalf("decimal128 sub wrong result")
 		}
 	}
@@ -249,7 +245,8 @@ func TestDec128SubByFloat64(t *testing.T) {
 			}
 
 			res := vector.MustTCols[types.Decimal128](cv)
-			if !res[0].Eq(types.Decimal128_FromFloat64(c.want)) {
+			d, _ := types.Decimal128_FromFloat64(c.want, 64, 4)
+			if !res[0].Eq(d) {
 				t.Fatalf("decimal128 sub wrong result")
 			}
 		})

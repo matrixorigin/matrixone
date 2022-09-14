@@ -326,6 +326,9 @@ func getRealReturnType(fid int32, f Function, realArgs []types.Type) types.Type 
 			copyType(&rt, &realArgs[i])
 			break
 		}
+		if types.T(rt.Oid) == types.T_decimal128 && types.T(realArgs[i].Oid) == types.T_decimal64 {
+			copyType(&rt, &realArgs[i])
+		}
 	}
 	return rt
 }
