@@ -38,7 +38,7 @@ type BaseEntry interface {
 	StringLocked() string
 	PPString(common.PPLevel, int, string) string
 
-	GetTs() types.TS
+	GetPrepareTs() types.TS
 	GetTxn() txnif.TxnReader
 	GetID() uint64
 	GetIndexes() []*wal.Index
@@ -60,7 +60,6 @@ type BaseEntry interface {
 	CloneCommittedInRange(start, end types.TS) (ret BaseEntry)
 
 	PrepareCommit() error
-	Prepare2PCPrepare() error
 	PrepareRollback() (bool, error)
 	ApplyCommit(index *wal.Index) error
 	ApplyRollback(index *wal.Index) error

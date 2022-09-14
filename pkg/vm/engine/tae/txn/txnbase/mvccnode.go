@@ -46,7 +46,6 @@ type MVCCNode interface {
 
 	ApplyCommit(index *wal.Index) (err error)
 	ApplyRollback(index *wal.Index) (err error)
-	Prepare2PCPrepare() (err error)
 	PrepareCommit() (err error)
 
 	WriteTo(w io.Writer) (n int64, err error)
@@ -183,14 +182,18 @@ func (un *TxnMVCCNode) AddLogIndex(idx *wal.Index) {
 func (un *TxnMVCCNode) GetLogIndex() []*wal.Index {
 	return un.LogIndex
 }
-func (un *TxnMVCCNode) ApplyCommit(index *wal.Index) (ts types.TS, err error) {
+func (un *TxnMVCCNode) ApplyCommit(index *wal.Index, deleteTxn bool) (ts types.TS, err error) {
 	un.End = un.Txn.GetCommitTS()
-	un.Txn = nil
+	if deleteTxn {
+		un.Txn = nil
+	}
 	un.AddLogIndex(index)
 	ts = un.End
 	return
 }
-
+func (un *TxnMVCCNode) OnReplayCommit(ts types.TS) {
+	un.End = ts
+}
 func (un *TxnMVCCNode) ApplyRollback(index *wal.Index) (err error) {
 	un.End = un.Txn.GetCommitTS()
 	un.Txn = nil
@@ -200,6 +203,10 @@ func (un *TxnMVCCNode) ApplyRollback(index *wal.Index) (err error) {
 
 func (un *TxnMVCCNode) WriteTo(w io.Writer) (n int64, err error) {
 	if err = binary.Write(w, binary.BigEndian, un.Start); err != nil {
+		return
+	}
+	n += 12
+	if err = binary.Write(w, binary.BigEndian, un.Prepare); err != nil {
 		return
 	}
 	n += 12
@@ -225,6 +232,10 @@ func (un *TxnMVCCNode) WriteTo(w io.Writer) (n int64, err error) {
 
 func (un *TxnMVCCNode) ReadFrom(r io.Reader) (n int64, err error) {
 	if err = binary.Read(r, binary.BigEndian, &un.Start); err != nil {
+		return
+	}
+	n += 12
+	if err = binary.Read(r, binary.BigEndian, &un.Prepare); err != nil {
 		return
 	}
 	n += 12
@@ -287,12 +298,6 @@ func (un *TxnMVCCNode) String() string {
 		un.Prepare,
 		un.End,
 		un.LogIndex)
-}
-
-func (un *TxnMVCCNode) Prepare2PCPrepare() (ts types.TS, err error) {
-	un.End = un.Txn.GetPrepareTS()
-	ts = un.End
-	return
 }
 
 func (un *TxnMVCCNode) PrepareCommit() (ts types.TS, err error) {

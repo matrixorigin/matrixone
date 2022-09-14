@@ -141,13 +141,6 @@ func (node *AppendNode) SetMaxRow(row uint32) {
 	node.maxRow = row
 }
 
-func (node *AppendNode) Prepare2PCPrepare() error {
-	node.Lock()
-	defer node.Unlock()
-	_, err := node.TxnMVCCNode.Prepare2PCPrepare()
-	return err
-}
-
 func (node *AppendNode) PrepareCommit() error {
 	node.Lock()
 	defer node.Unlock()
@@ -161,7 +154,7 @@ func (node *AppendNode) ApplyCommit(index *wal.Index) error {
 	if node.IsCommittedLocked() {
 		panic("AppendNode | ApplyCommit | LogicErr")
 	}
-	node.TxnMVCCNode.ApplyCommit(index)
+	node.TxnMVCCNode.ApplyCommit(index,true)
 	if node.mvcc != nil {
 		logutil.Debugf("Set MaxCommitTS=%v, MaxVisibleRow=%d", node.GetEndLocked(), node.GetMaxRow())
 		node.mvcc.SetMaxVisible(node.GetEndLocked())

@@ -424,7 +424,7 @@ func (store *txnStore) PreApplyCommit() (err error) {
 	}
 
 	//TODO:How to distinguish prepare log of 2PC entry from commit log entry of 1PC?
-	logEntry, err := store.cmdMgr.ApplyTxnRecord(store.txn.GetID())
+	logEntry, err := store.cmdMgr.ApplyTxnRecord(store.txn.GetID(), store.txn)
 	if err != nil {
 		return
 	}

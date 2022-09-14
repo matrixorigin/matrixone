@@ -91,7 +91,7 @@ func (e *MetadataMVCCNode) ApplyDelete() (err error) {
 }
 
 func (e *MetadataMVCCNode) ApplyCommit(index *wal.Index) (err error) {
-	commitTS, err := e.TxnMVCCNode.ApplyCommit(index)
+	commitTS, err := e.TxnMVCCNode.ApplyCommit(index, true)
 	if err != nil {
 		return
 	}
@@ -100,37 +100,13 @@ func (e *MetadataMVCCNode) ApplyCommit(index *wal.Index) (err error) {
 }
 
 func (e *MetadataMVCCNode) onReplayCommit(ts types.TS) (err error) {
-	err = e.EntryMVCCNode.ApplyCommit(ts)
-	return
-}
-
-func (e *MetadataMVCCNode) Prepare2PCPrepare() (err error) {
-	var ts types.TS
-	ts, err = e.TxnMVCCNode.Prepare2PCPrepare()
-	if err != nil {
-		return
-	}
-	if e.CreatedAt.IsEmpty() {
-		e.CreatedAt = ts
-	}
-	if e.Deleted {
-		e.DeletedAt = ts
-	}
+	err = e.EntryMVCCNode.ReplayCommit(ts)
+	e.TxnMVCCNode.OnReplayCommit(ts)
 	return
 }
 
 func (e *MetadataMVCCNode) PrepareCommit() (err error) {
-	var ts types.TS
-	ts, err = e.TxnMVCCNode.PrepareCommit()
-	if err != nil {
-		return
-	}
-	if e.CreatedAt.IsEmpty() {
-		e.CreatedAt = ts
-	}
-	if e.Deleted {
-		e.DeletedAt = ts
-	}
+	_, err = e.TxnMVCCNode.PrepareCommit()
 	return
 }
 

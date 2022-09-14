@@ -55,8 +55,8 @@ func (be *MVCCChain) StringLocked() string {
 }
 
 // for replay
-func (be *MVCCChain) GetTs() types.TS {
-	return be.GetUpdateNodeLocked().GetEnd()
+func (be *MVCCChain) GetPrepareTs() types.TS {
+	return be.GetUpdateNodeLocked().GetPrepare()
 }
 
 func (be *MVCCChain) GetTxn() txnif.TxnReader { return be.GetUpdateNodeLocked().GetTxn() }
@@ -281,12 +281,6 @@ func (be *MVCCChain) IsCommitting() bool {
 		return false
 	}
 	return node.IsCommitting()
-}
-
-func (be *MVCCChain) Prepare2PCPrepare() error {
-	be.Lock()
-	defer be.Unlock()
-	return be.GetUpdateNodeLocked().Prepare2PCPrepare()
 }
 
 func (be *MVCCChain) PrepareCommit() error {

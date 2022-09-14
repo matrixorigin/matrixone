@@ -36,6 +36,7 @@ const (
 	CmdComposed
 	CmdCommit
 	CmdRollback
+	CmdTxn
 	CmdCustomized
 )
 
@@ -57,6 +58,9 @@ func init() {
 	})
 	txnif.RegisterCmdFactory(CmdRollback, func(int16) txnif.TxnCmd {
 		return new(RollbackCmd)
+	})
+	txnif.RegisterCmdFactory(CmdTxn, func(int16) txnif.TxnCmd {
+		return NewEmptyTxnCmd()
 	})
 }
 
@@ -82,6 +86,12 @@ type PointerCmd struct {
 type DeleteBitmapCmd struct {
 	BaseCmd
 	Bitmap *roaring.Bitmap
+}
+
+type TxnCmd struct {
+	*ComposedCmd
+	*TxnCtx
+	Txn txnif.AsyncTxn
 }
 
 type BatchCmd struct {
@@ -245,6 +255,94 @@ func (c *BaseCustomizedCmd) GetID() uint32 {
 	return c.ID
 }
 
+func NewTxnCmd() *TxnCmd {
+	return &TxnCmd{
+		ComposedCmd: NewComposedCmd(),
+	}
+}
+func NewEmptyTxnCmd() *TxnCmd {
+	return &TxnCmd{
+		ComposedCmd: NewComposedCmd(),
+		TxnCtx:      &TxnCtx{},
+	}
+}
+func (c *TxnCmd) SetTxn(txn txnif.AsyncTxn) {
+	c.Txn = txn
+}
+func (c *TxnCmd) WriteTo(w io.Writer) (n int64, err error) {
+	if err = binary.Write(w, binary.BigEndian, c.GetType()); err != nil {
+		return
+	}
+	n += 2
+	var sn int64
+	sn, err = c.ComposedCmd.WriteTo(w)
+	if err != nil {
+		return
+	}
+	n += sn
+	if err = binary.Write(w, binary.BigEndian, c.Txn.GetID()); err != nil {
+		return
+	}
+	n += 8
+	is2PC := uint8(0)
+	if c.Txn.Is2PC() {
+		is2PC = 1
+	}
+	if err = binary.Write(w, binary.BigEndian, is2PC); err != nil {
+		return
+	}
+	n += 1
+	return
+}
+func (c *TxnCmd) ReadFrom(r io.Reader) (n int64, err error) {
+	var sn int64
+	var cmd txnif.TxnCmd
+	cmd, sn, err = BuildCommandFrom(r)
+	if err != nil {
+		return
+	}
+	c.ComposedCmd = cmd.(*ComposedCmd)
+	n += sn
+	if err = binary.Read(r, binary.BigEndian, &c.ID); err != nil {
+		return
+	}
+	n += 8
+	is2PC := uint8(0)
+	if err = binary.Read(r, binary.BigEndian, &is2PC); err != nil {
+		return
+	}
+	n += 1
+	if is2PC == 1 {
+		c.Kind2PC = true
+	}
+	return
+}
+func (c *TxnCmd) Marshal() (buf []byte, err error) {
+	var bbuf bytes.Buffer
+	if _, err = c.WriteTo(&bbuf); err != nil {
+		return
+	}
+	buf = bbuf.Bytes()
+	return
+}
+func (c *TxnCmd) Unmarshal(buf []byte) (err error) {
+	bbuf := bytes.NewBuffer(buf)
+	_, err = c.ReadFrom(bbuf)
+	return err
+}
+func (c *TxnCmd) GetType() int16 { return CmdTxn }
+func (c *TxnCmd) Desc() string {
+	return fmt.Sprintf("Tid=%d,Is2PC=%v,%s", c.ID, c.Is2PC(), c.ComposedCmd.Desc())
+}
+func (c *TxnCmd) String() string {
+	return fmt.Sprintf("Tid=%d,Is2PC=%v,%s", c.ID, c.Is2PC(), c.ComposedCmd.String())
+}
+func (c *TxnCmd) VerboseString() string {
+	return fmt.Sprintf("Tid=%d,Is2PC=%v,%s", c.ID, c.Is2PC(), c.ComposedCmd.VerboseString())
+}
+func (c *TxnCmd) Close() {
+	c.ComposedCmd.Close()
+}
 func (e *PointerCmd) GetType() int16 {
 	return CmdPointer
 }

@@ -95,3 +95,13 @@ func (un *EntryMVCCNode) ApplyCommit(ts types.TS) (err error) {
 	}
 	return nil
 }
+
+func (un *EntryMVCCNode) ReplayCommit(ts types.TS) (err error) {
+	if un.CreatedAt.IsEmpty() {
+		un.CreatedAt = ts
+	} else {
+		un.Deleted=true
+		un.DeletedAt = ts
+	}
+	return nil
+}

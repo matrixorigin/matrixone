@@ -81,7 +81,12 @@ func (e *DBMVCCNode) ApplyDelete() (err error) {
 	return
 }
 func (e *DBMVCCNode) ApplyCommit(index *wal.Index) (err error) {
-	commitTS, err := e.TxnMVCCNode.ApplyCommit(index)
+	var commitTS types.TS
+	if e.Deleted && e.CreatedAt.IsEmpty() {
+		commitTS, err = e.TxnMVCCNode.ApplyCommit(index, false)
+	} else {
+		commitTS, err = e.TxnMVCCNode.ApplyCommit(index, true)
+	}
 	if err != nil {
 		return
 	}
@@ -89,37 +94,13 @@ func (e *DBMVCCNode) ApplyCommit(index *wal.Index) (err error) {
 	return nil
 }
 func (e *DBMVCCNode) onReplayCommit(ts types.TS) (err error) {
-	e.EntryMVCCNode.ApplyCommit(ts)
+	e.EntryMVCCNode.ReplayCommit(ts)
+	e.TxnMVCCNode.OnReplayCommit(ts)
 	return nil
 }
 
-func (e *DBMVCCNode) Prepare2PCPrepare() (err error) {
-	var ts types.TS
-	ts, err = e.TxnMVCCNode.Prepare2PCPrepare()
-	if err != nil {
-		return
-	}
-	if e.CreatedAt.IsEmpty() {
-		e.CreatedAt = ts
-	}
-	if e.Deleted {
-		e.DeletedAt = ts
-	}
-	return
-}
-
 func (e *DBMVCCNode) PrepareCommit() (err error) {
-	var ts types.TS
-	ts, err = e.TxnMVCCNode.PrepareCommit()
-	if err != nil {
-		return
-	}
-	if e.CreatedAt.IsEmpty() {
-		e.CreatedAt = ts
-	}
-	if e.Deleted {
-		e.DeletedAt = ts
-	}
+	_, err = e.TxnMVCCNode.PrepareCommit()
 	return
 }
 

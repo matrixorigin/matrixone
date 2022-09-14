@@ -209,9 +209,7 @@ func (replayer *Replayer) OnReplayEntry(group uint32, lsn uint64, payload []byte
 	if err != nil {
 		panic(err)
 	}
-	ts := types.TS{}
-	cmdType := txnif.CmdPrepare
-	replayer.OnReplayCmd(txnCmd, idxCtx, cmdType, ts)
+	replayer.OnReplayCmd(txnCmd, idxCtx, txnif.CmdInvalid, types.TS{})
 	if err != nil {
 		panic(err)
 	}
@@ -235,9 +233,13 @@ func (replayer *Replayer) OnReplayCmd(txncmd txnif.TxnCmd, idxCtx *wal.Index, cm
 	}
 	var err error
 	switch cmd := txncmd.(type) {
-	case *txnbase.ComposedCmd:
+	case *txnbase.TxnCmd:
 		idxCtx.Size = cmd.CmdSize
 		internalCnt := uint32(0)
+		cmdType := txnif.CmdPrepare
+		if !cmd.Is2PC() {
+			cmdType = txnif.Cmd1PC
+		}
 		for i, command := range cmd.Cmds {
 			_, ok := command.(*txnimpl.AppendCmd)
 			if ok {
@@ -399,7 +401,10 @@ func (db *DB) onReplayUpdateCmd(cmd *updates.UpdateCmd, idxCtx *wal.Index, obser
 }
 
 func (db *DB) onReplayDelete(cmd *updates.UpdateCmd, idxCtx *wal.Index, observer wal.ReplayObserver, cmdType txnif.CmdType, commitTS types.TS) {
-	if cmdType != txnif.CmdCommit {
+	switch cmdType {
+	case txnif.CmdInvalid:
+		panic("invalid type")
+	case txnif.CmdPrepare:
 		return
 	}
 	database, err := db.Catalog.GetDatabaseByID(cmd.GetDBID())
@@ -408,6 +413,9 @@ func (db *DB) onReplayDelete(cmd *updates.UpdateCmd, idxCtx *wal.Index, observer
 	}
 	deleteNode := cmd.GetDeleteNode()
 	deleteNode.SetLogIndex(idxCtx)
+	if cmdType == txnif.Cmd1PC {
+		commitTS = deleteNode.GetPrepareTS()
+	}
 	deleteNode.OnReplayCommit(commitTS)
 	id := deleteNode.GetID()
 	blk, err := database.GetBlockEntryByID(id)
@@ -418,7 +426,7 @@ func (db *DB) onReplayDelete(cmd *updates.UpdateCmd, idxCtx *wal.Index, observer
 		observer.OnStaleIndex(idxCtx)
 		return
 	}
-	if !blk.GetBlockData().GetMaxCheckpointTS().IsEmpty() {
+	if commitTS.LessEq(blk.GetBlockData().GetMaxCheckpointTS()) {
 		observer.OnStaleIndex(idxCtx)
 		return
 	}
@@ -428,12 +436,15 @@ func (db *DB) onReplayDelete(cmd *updates.UpdateCmd, idxCtx *wal.Index, observer
 		panic(err)
 	}
 	if observer != nil {
-		observer.OnTimeStamp(deleteNode.GetCommitTSLocked())
+		observer.OnTimeStamp(commitTS)
 	}
 }
 
 func (db *DB) onReplayAppend(cmd *updates.UpdateCmd, idxCtx *wal.Index, observer wal.ReplayObserver, cmdType txnif.CmdType, commitTS types.TS) {
-	if cmdType != txnif.CmdCommit {
+	switch cmdType {
+	case txnif.CmdInvalid:
+		panic("invalid type")
+	case txnif.CmdPrepare:
 		return
 	}
 	database, err := db.Catalog.GetDatabaseByID(cmd.GetDBID())
@@ -442,6 +453,9 @@ func (db *DB) onReplayAppend(cmd *updates.UpdateCmd, idxCtx *wal.Index, observer
 	}
 	appendNode := cmd.GetAppendNode()
 	appendNode.SetLogIndex(idxCtx)
+	if cmdType == txnif.Cmd1PC {
+		commitTS = appendNode.GetPrepare()
+	}
 	appendNode.OnReplayCommit(commitTS)
 	id := appendNode.GetID()
 	blk, err := database.GetBlockEntryByID(id)

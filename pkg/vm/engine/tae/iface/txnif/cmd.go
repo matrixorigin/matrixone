@@ -54,8 +54,10 @@ func GetCmdFactory(cmdType int16) (factory CmdFactory) {
 type CmdType uint16
 
 const (
-	CmdPrepare CmdType = iota
+	CmdInvalid CmdType = iota
+	CmdPrepare
 	CmdCommit
 	CmdRollback
+	Cmd1PC
 	CmdSnapshot
 )
