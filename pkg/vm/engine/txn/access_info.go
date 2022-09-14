@@ -12,26 +12,29 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package txnstorage
+package txnengine
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/txn/clock"
-	"github.com/matrixorigin/matrixone/pkg/txn/storage"
-	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
+	"context"
+
+	"github.com/matrixorigin/matrixone/pkg/defines"
 )
 
-func NewMemoryStorage(
-	mheap *mheap.Mheap,
-	defaultIsolationPolicy IsolationPolicy,
-	clock clock.Clock,
-) (storage.TxnStorage, error) {
+type AccessInfo struct {
+	AccountID uint32
+	UserID    uint32
+	RoleID    uint32
+}
 
-	memHandler := NewMemHandler(mheap, defaultIsolationPolicy, clock)
-	catalogHandler := NewCatalogHandler(memHandler)
-	storage, err := New(catalogHandler)
-	if err != nil {
-		return nil, err
+func getAccessInfo(ctx context.Context) (info AccessInfo) {
+	if v := ctx.Value(defines.TenantIDKey{}); v != nil {
+		info.AccountID = v.(uint32)
 	}
-	return storage, nil
-
+	if v := ctx.Value(defines.UserIDKey{}); v != nil {
+		info.UserID = v.(uint32)
+	}
+	if v := ctx.Value(defines.RoleIDKey{}); v != nil {
+		info.RoleID = v.(uint32)
+	}
+	return
 }

@@ -82,7 +82,7 @@ func TestMetric(t *testing.T) {
 		require.Equal(t, r.StatusCode, 200)
 
 		content, _ := io.ReadAll(r.Body)
-		require.Contains(t, string(content), "process_cpu_seconds_total")
+		require.Contains(t, string(content), "# HELP") // check we have metrics output
 	})
 }
 

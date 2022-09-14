@@ -20,9 +20,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/logservice"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
-	"go.uber.org/zap"
 )
 
 func GetClusterDetailsFromHAKeeper(
@@ -44,9 +42,6 @@ func GetClusterDetailsFromHAKeeper(
 		defer lock.Unlock()
 		detailsError = err
 		details = ret
-		logutil.Debug("engine: CN cluster details update",
-			zap.Any("cluster", details),
-		)
 	}
 	update()
 

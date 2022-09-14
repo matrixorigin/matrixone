@@ -18,6 +18,7 @@ import (
 	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 )
 
 type Time struct {
@@ -25,9 +26,15 @@ type Time struct {
 	Statement int
 }
 
-func (t Time) Next() Time {
+func Now(clock clock.Clock) Time {
+	now, _ := clock.Now()
+	return Time{
+		Timestamp: now,
+	}
+}
+
+func (t *Time) Tick() {
 	t.Statement++
-	return t
 }
 
 func (t Time) After(t2 Time) bool {

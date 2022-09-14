@@ -64,6 +64,12 @@ func (s *Storage) Read(ctx context.Context, txnMeta txn.TxnMeta, op uint32, payl
 			s.handler.HandleGetTableDefs,
 		)
 
+	case txnengine.OpGetHiddenKeys:
+		return handleRead(
+			s, txnMeta, payload,
+			s.handler.HandleGetHiddenKeys,
+		)
+
 	case txnengine.OpNewTableIter:
 		return handleRead(
 			s, txnMeta, payload,
@@ -80,6 +86,12 @@ func (s *Storage) Read(ctx context.Context, txnMeta txn.TxnMeta, op uint32, payl
 		return handleRead(
 			s, txnMeta, payload,
 			s.handler.HandleCloseTableIter,
+		)
+
+	case txnengine.OpTableStats:
+		return handleRead(
+			s, txnMeta, payload,
+			s.handler.HandleTableStats,
 		)
 
 	}

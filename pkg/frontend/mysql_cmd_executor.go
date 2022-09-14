@@ -161,7 +161,7 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 	}
 	var sesID uuid.UUID
 	copy(sesID[:], ses.GetUUID())
-	fmtCtx := tree.NewFmtCtx(dialect.MYSQL)
+	fmtCtx := tree.NewFmtCtx(dialect.MYSQL, tree.WithQuoteString(true))
 	cw.GetAst().Format(fmtCtx)
 	stm := &trace.StatementInfo{
 		StatementID:          stmID,

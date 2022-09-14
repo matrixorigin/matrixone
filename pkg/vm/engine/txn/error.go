@@ -17,7 +17,10 @@ package txnengine
 import (
 	"errors"
 	"fmt"
+	"reflect"
 	"strings"
+
+	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 )
 
 type ErrExisted bool
@@ -91,6 +94,29 @@ func (e ErrReadOnly) Error() string {
 	return "read only, not modifiable: " + e.Why
 }
 
+var errorType = reflect.TypeOf((*error)(nil)).Elem()
+
+type TxnError struct {
+	txnError *txn.TxnError
+}
+
+var _ error = TxnError{}
+
+func (e TxnError) Error() string {
+	return e.txnError.Message
+}
+
+func errorFromTxnResponses(resps []txn.TxnResponse) error {
+	for _, resp := range resps {
+		if resp.TxnError != nil {
+			return TxnError{
+				txnError: resp.TxnError,
+			}
+		}
+	}
+	return nil
+}
+
 type Errors []error
 
 var _ error = Errors{}
@@ -109,6 +135,15 @@ func (e Errors) Error() string {
 func (e Errors) As(target any) bool {
 	for _, err := range e {
 		if errors.As(err, target) {
+			return true
+		}
+	}
+	return false
+}
+
+func (e Errors) Is(target error) bool {
+	for _, err := range e {
+		if errors.Is(err, target) {
 			return true
 		}
 	}
