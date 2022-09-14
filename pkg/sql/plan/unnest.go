@@ -197,6 +197,8 @@ func (builder *QueryBuilder) buildUnnest(tbl *tree.Unnest, ctx *BindContext) (in
 	//ctx.hasSingleRow = true
 	cols := _getDefaultCols()
 	binding := NewBinding(tag, nodeID, tbl.String(), cols, _getDefaultPlanTypes())
+	ctx.bindings = append(ctx.bindings, binding)
+	ctx.bindingByTag[tag] = binding
 	for _, col := range cols {
 		ctx.bindingByCol[col] = binding
 	}
