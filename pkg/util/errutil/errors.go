@@ -16,11 +16,13 @@ package errutil
 
 import (
 	"context"
-	goErrors "errors"
-	pkgErr "github.com/pkg/errors"
+	"errors"
+	"fmt"
 	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/util"
+
+	pkgErr "github.com/pkg/errors"
 )
 
 func init() {
@@ -36,7 +38,7 @@ type WithIs interface {
 }
 
 func New(text string) error {
-	err := &withStack{goErrors.New(text), util.Callers(1)}
+	err := &withStack{fmt.Errorf(text), util.Callers(1)}
 	GetReportErrorFunc()(nil, err, 1)
 	return err
 }
@@ -65,7 +67,7 @@ func WalkDeep(err error, visitor func(err error) bool) bool {
 		if done := visitor(unErr); done {
 			return true
 		}
-		unErr = goErrors.Unwrap(unErr)
+		unErr = errors.Unwrap(unErr)
 	}
 
 	return false
