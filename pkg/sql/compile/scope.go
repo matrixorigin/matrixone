@@ -17,8 +17,10 @@ package compile
 import (
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	plan2 "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
@@ -122,6 +124,22 @@ func (s *Scope) MergeRun(c *Compile) error {
 
 // RemoteRun send the scope to a remote node (if target node is itself, it is same to function ParallelRun) and run it.
 func (s *Scope) RemoteRun(c *Compile) error {
+	// TODO: This is a temporary solution that will need to be redesigned
+	//  when distributed transactions are supported.
+	// if not select, just run it locally
+	if c.scope.Plan == nil {
+		return s.ParallelRun(c)
+	}
+	if query, ok := c.scope.Plan.Plan.(*plan.Plan_Query); ok {
+		switch query.Query.StmtType {
+		case plan2.Query_INSERT, plan2.Query_UPDATE, plan2.Query_DELETE:
+			return s.ParallelRun(c)
+		case plan2.Query_SELECT:
+		case plan2.Query_MERGE:
+		case plan2.Query_UNKNOWN:
+		}
+	}
+
 	// if address itself, just run it parallel at local.
 	//	return s.ParallelRun(c)
 	if len(s.NodeInfo.Addr) == 0 {
