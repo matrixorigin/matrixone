@@ -80,9 +80,10 @@ func TestTransaction(t *testing.T) {
 	txn.RegisterFile("test")
 	err = txn.WriteFile(DELETE, 0, 0, "test", "test", "test")
 	require.NoError(t, err)
-	blockWrite(context.TODO(), BlockMeta{}, nil)
-	_, _ = txn.getRow(nil, 0, 0, nil, nil, nil)
-	_, _ = txn.getRows(nil, 0, 0, nil, nil)
+	ctx := context.TODO()
+	blockWrite(ctx, BlockMeta{}, nil)
+	_, _ = txn.getRow(ctx, 0, 0, nil, nil, nil)
+	_, _ = txn.getRows(ctx, 0, 0, nil, nil)
 }
 
 func TestTable(t *testing.T) {
