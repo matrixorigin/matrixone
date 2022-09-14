@@ -157,7 +157,7 @@ func (mce *MysqlCmdExecutor) RecordStatement(ctx context.Context, ses *Session, 
 	}
 	var sesID uuid.UUID
 	copy(sesID[:], ses.GetUUID())
-	fmtCtx := tree.NewFmtCtx(dialect.MYSQL)
+	fmtCtx := tree.NewFmtCtx(dialect.MYSQL, tree.WithQuoteString(true))
 	cw.GetAst().Format(fmtCtx)
 	trace.ReportStatement(
 		ctx,
