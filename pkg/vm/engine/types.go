@@ -72,8 +72,8 @@ type Property struct {
 }
 
 type Statistics interface {
-	Rows() int64
-	Size(string) int64
+	Rows(ctx context.Context) (int64, error)
+	Size(ctx context.Context, columnName string) (int64, error)
 }
 
 type IndexTableDef struct {
