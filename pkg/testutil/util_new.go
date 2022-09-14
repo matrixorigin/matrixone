@@ -69,10 +69,15 @@ func NewFS() *fileservice.FileServices {
 	if err != nil {
 		panic(err)
 	}
+	etl, err := fileservice.NewMemoryFS("etl")
+	if err != nil {
+		panic(err)
+	}
 	fs, err := fileservice.NewFileServices(
 		"local",
 		local,
 		s3,
+		etl,
 	)
 	if err != nil {
 		panic(err)
