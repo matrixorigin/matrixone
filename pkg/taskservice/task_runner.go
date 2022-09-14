@@ -311,7 +311,7 @@ func (r *taskRunner) retry(ctx context.Context) {
 		case <-timer.C:
 			now := time.Now()
 			needRetryTasks = needRetryTasks[:0]
-			r.mu.RLock()
+			r.mu.Lock()
 			for idx, rt := range r.mu.retryTasks {
 				if rt.retryAt.After(now) {
 					r.mu.retryTasks = r.mu.retryTasks[:copy(r.mu.retryTasks, r.mu.retryTasks[idx:])]
@@ -319,7 +319,7 @@ func (r *taskRunner) retry(ctx context.Context) {
 				}
 				needRetryTasks = append(needRetryTasks, rt)
 			}
-			r.mu.RUnlock()
+			r.mu.Unlock()
 			if len(needRetryTasks) > 0 {
 				for _, rt := range needRetryTasks {
 					r.runTask(ctx, rt)
