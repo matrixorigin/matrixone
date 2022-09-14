@@ -14,26 +14,32 @@
 
 package txnstorage
 
-import (
-	"fmt"
-	"strings"
-)
-
 type Transaction struct {
 	ID              string
 	BeginTime       Time
-	CurrentTime     Time
+	Time            Time
 	State           *Atomic[TransactionState]
 	IsolationPolicy IsolationPolicy
+	committers      map[TxCommitter]struct{}
 }
 
-func NewTransaction(id string, t Time, isolationPolicy IsolationPolicy) *Transaction {
+type TxCommitter interface {
+	CommitTx(*Transaction) error
+	AbortTx(*Transaction)
+}
+
+func NewTransaction(
+	id string,
+	t Time,
+	isolationPolicy IsolationPolicy,
+) *Transaction {
 	return &Transaction{
 		ID:              id,
 		BeginTime:       t,
-		CurrentTime:     t,
+		Time:            t,
 		State:           NewAtomic[TransactionState](Active),
 		IsolationPolicy: isolationPolicy,
+		committers:      make(map[TxCommitter]struct{}),
 	}
 }
 
@@ -45,44 +51,19 @@ const (
 	Aborted
 )
 
-type ErrWriteConflict struct {
-	WritingTx *Transaction
-	// if Locked is not nil, the row is locked by another uncommitted transaction
-	// caller may wait after the Locked transactiion is committed or aborted, or abort without waiting
-	Locked *Transaction
-	// if Stale is not nil, the row is updated by another committed transaction after the WritingTx has started
-	// caller should abort the WritingTx to avoid lost-update phenomena
-	Stale *Transaction
-}
-
-func (e ErrWriteConflict) Error() string {
-	buf := new(strings.Builder)
-	buf.WriteString(fmt.Sprintf("write conflict: %s", e.WritingTx.ID))
-	if e.Locked != nil {
-		buf.WriteString(fmt.Sprintf(" ,locked by %s", e.Locked.ID))
+func (t *Transaction) Commit() error {
+	for committer := range t.committers {
+		if err := committer.CommitTx(t); err != nil {
+			return err
+		}
 	}
-	if e.Stale != nil {
-		buf.WriteString(fmt.Sprintf(" ,stale after %s", e.Stale.ID))
+	t.State.Store(Committed)
+	return nil
+}
+
+func (t *Transaction) Abort() {
+	for committer := range t.committers {
+		committer.AbortTx(t)
 	}
-	return buf.String()
-}
-
-type ErrReadConflict struct {
-	ReadingTx *Transaction
-	// if Stale is not nil, the row is updated by another committed transaction after the ReadingTx has started
-	// caller should abort the ReadingTx to avoid stale read
-	Stale *Transaction
-}
-
-func (e ErrReadConflict) Error() string {
-	buf := new(strings.Builder)
-	buf.WriteString(fmt.Sprintf("read conflict: %s", e.ReadingTx.ID))
-	if e.Stale != nil {
-		buf.WriteString(fmt.Sprintf(" ,stale after %s", e.Stale.ID))
-	}
-	return buf.String()
-}
-
-func (t *Transaction) Tick() {
-	t.CurrentTime = t.CurrentTime.Next()
+	t.State.Store(Aborted)
 }

@@ -16,7 +16,6 @@ package txnengine
 
 import (
 	"context"
-	"strings"
 	"time"
 
 	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
@@ -50,14 +49,15 @@ var _ engine.Engine = new(Engine)
 
 func (e *Engine) Create(ctx context.Context, dbName string, txnOperator client.TxnOperator) error {
 
-	_, err := engine.DoTxnRequest[CreateDatabaseResp](
+	_, err := DoTxnRequest[CreateDatabaseResp](
 		ctx,
 		e,
 		txnOperator.Write,
 		e.allNodesShards,
 		OpCreateDatabase,
 		CreateDatabaseReq{
-			Name: strings.ToLower(dbName),
+			AccessInfo: getAccessInfo(ctx),
+			Name:       dbName,
 		},
 	)
 	if err != nil {
@@ -69,14 +69,15 @@ func (e *Engine) Create(ctx context.Context, dbName string, txnOperator client.T
 
 func (e *Engine) Database(ctx context.Context, dbName string, txnOperator client.TxnOperator) (engine.Database, error) {
 
-	resps, err := engine.DoTxnRequest[OpenDatabaseResp](
+	resps, err := DoTxnRequest[OpenDatabaseResp](
 		ctx,
 		e,
 		txnOperator.Read,
 		e.firstNodeShard,
 		OpOpenDatabase,
 		OpenDatabaseReq{
-			Name: strings.ToLower(dbName),
+			AccessInfo: getAccessInfo(ctx),
+			Name:       dbName,
 		},
 	)
 	if err != nil {
@@ -96,13 +97,15 @@ func (e *Engine) Database(ctx context.Context, dbName string, txnOperator client
 
 func (e *Engine) Databases(ctx context.Context, txnOperator client.TxnOperator) ([]string, error) {
 
-	resps, err := engine.DoTxnRequest[GetDatabasesResp](
+	resps, err := DoTxnRequest[GetDatabasesResp](
 		ctx,
 		e,
 		txnOperator.Read,
 		e.firstNodeShard,
 		OpGetDatabases,
-		GetDatabasesReq{},
+		GetDatabasesReq{
+			AccessInfo: getAccessInfo(ctx),
+		},
 	)
 	if err != nil {
 		return nil, err
@@ -118,14 +121,15 @@ func (e *Engine) Databases(ctx context.Context, txnOperator client.TxnOperator) 
 
 func (e *Engine) Delete(ctx context.Context, dbName string, txnOperator client.TxnOperator) error {
 
-	_, err := engine.DoTxnRequest[DeleteDatabaseResp](
+	_, err := DoTxnRequest[DeleteDatabaseResp](
 		ctx,
 		e,
 		txnOperator.Write,
 		e.allNodesShards,
 		OpDeleteDatabase,
 		DeleteDatabaseReq{
-			Name: strings.ToLower(dbName),
+			AccessInfo: getAccessInfo(ctx),
+			Name:       dbName,
 		},
 	)
 	if err != nil {
