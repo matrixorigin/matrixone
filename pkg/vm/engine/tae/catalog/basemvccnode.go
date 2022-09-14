@@ -83,3 +83,15 @@ func (un *EntryMVCCNode) WriteTo(w io.Writer) (n int64, err error) {
 	n += 12
 	return
 }
+func (un *EntryMVCCNode) PrepareCommit() (err error) {
+	return nil
+}
+func (un *EntryMVCCNode) ApplyCommit(ts types.TS) (err error) {
+	if un.CreatedAt.IsEmpty() {
+		un.CreatedAt = ts
+	}
+	if un.Deleted {
+		un.DeletedAt = ts
+	}
+	return nil
+}

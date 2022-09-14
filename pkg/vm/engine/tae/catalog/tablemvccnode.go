@@ -20,6 +20,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 )
 
 type TableMVCCNode struct {
@@ -77,6 +78,20 @@ func (e *TableMVCCNode) ApplyUpdate(be *TableMVCCNode) (err error) {
 
 func (e *TableMVCCNode) ApplyDelete() (err error) {
 	err = e.ApplyDeleteLocked()
+	return
+}
+
+func (e *TableMVCCNode) ApplyCommit(index *wal.Index) (err error) {
+	commitTS, err := e.TxnMVCCNode.ApplyCommit(index)
+	if err != nil {
+		return
+	}
+	err = e.EntryMVCCNode.ApplyCommit(commitTS)
+	return err
+}
+
+func (e *TableMVCCNode) onReplayCommit(ts types.TS) (err error) {
+	err = e.EntryMVCCNode.ApplyCommit(ts)
 	return
 }
 

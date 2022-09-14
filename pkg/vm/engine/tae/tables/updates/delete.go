@@ -100,6 +100,9 @@ func NewDeleteNode(txn txnif.AsyncTxn, dt handle.DeleteType) *DeleteNode {
 	}
 	return n
 }
+func (node *DeleteNode) OnReplayCommit(ts types.TS) {
+	node.commitTs = ts
+}
 func (node *DeleteNode) GetID() *common.ID {
 	return node.id
 }

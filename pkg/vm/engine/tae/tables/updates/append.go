@@ -119,6 +119,9 @@ func (node *AppendNode) SetLogIndex(idx *wal.Index) {
 func (node *AppendNode) GetID() *common.ID {
 	return node.id
 }
+func (node *AppendNode) OnReplayCommit(ts types.TS) {
+	node.End = ts
+}
 func (node *AppendNode) GetCommitTS() types.TS {
 	return node.GetEnd()
 }

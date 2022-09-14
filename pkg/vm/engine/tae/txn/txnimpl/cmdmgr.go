@@ -68,11 +68,11 @@ func (mgr *commandManager) ApplyTxnRecord(tid uint64) (logEntry entry.Entry, err
 		return
 	}
 	info := &entry.Info{
-		Group: wal.GroupC,
+		Group: wal.GroupPrepare,
 		TxnId: tid,
 	}
 	logEntry.SetInfo(info)
-	mgr.lsn, err = mgr.driver.AppendEntry(wal.GroupC, logEntry)
+	mgr.lsn, err = mgr.driver.AppendEntry(wal.GroupPrepare, logEntry)
 	logutil.Debugf("ApplyTxnRecord LSN=%d, Size=%d", mgr.lsn, len(buf))
 	return
 }

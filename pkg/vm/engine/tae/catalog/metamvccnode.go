@@ -21,6 +21,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 )
 
 type MetadataMVCCNode struct {
@@ -86,6 +87,20 @@ func (e *MetadataMVCCNode) ApplyUpdate(be *MetadataMVCCNode) (err error) {
 
 func (e *MetadataMVCCNode) ApplyDelete() (err error) {
 	err = e.ApplyDeleteLocked()
+	return
+}
+
+func (e *MetadataMVCCNode) ApplyCommit(index *wal.Index) (err error) {
+	commitTS, err := e.TxnMVCCNode.ApplyCommit(index)
+	if err != nil {
+		return
+	}
+	e.EntryMVCCNode.ApplyCommit(commitTS)
+	return nil
+}
+
+func (e *MetadataMVCCNode) onReplayCommit(ts types.TS) (err error) {
+	err = e.EntryMVCCNode.ApplyCommit(ts)
 	return
 }
 

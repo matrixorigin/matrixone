@@ -163,7 +163,7 @@ func (cmd *EntryCommand) GetLogIndex() []*wal.Index {
 }
 
 func (cmd *EntryCommand) GetTs() types.TS {
-	ts := cmd.entry.GetUpdateNodeLocked().GetEnd()
+	ts := cmd.entry.GetUpdateNodeLocked().GetPrepare()
 	return ts
 }
 func (cmd *EntryCommand) IDString() string {

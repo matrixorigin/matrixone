@@ -198,18 +198,20 @@ func (replayer *Replayer) OnStaleIndex(idx *wal.Index) {
 	replayer.staleIndexes = append(replayer.staleIndexes, idx)
 }
 
-func (replayer *Replayer) OnReplayEntry(group uint32, commitId uint64, payload []byte, typ uint16, info any) {
+func (replayer *Replayer) OnReplayEntry(group uint32, lsn uint64, payload []byte, typ uint16, info any) {
 	replayer.once.Do(replayer.PreReplayWal)
-	if group != wal.GroupC {
+	if group != wal.GroupPrepare && group != wal.GroupC {
 		return
 	}
-	idxCtx := store.NewIndex(commitId, 0, 0)
+	idxCtx := store.NewIndex(lsn, 0, 0)
 	r := bytes.NewBuffer(payload)
 	txnCmd, _, err := txnbase.BuildCommandFrom(r)
 	if err != nil {
 		panic(err)
 	}
-	replayer.OnReplayCmd(txnCmd, idxCtx)
+	ts := types.TS{}
+	cmdType := txnif.CmdPrepare
+	replayer.OnReplayCmd(txnCmd, idxCtx, cmdType, ts)
 	if err != nil {
 		panic(err)
 	}
@@ -225,7 +227,7 @@ func (replayer *Replayer) OnTimeStamp(ts types.TS) {
 	}
 }
 
-func (replayer *Replayer) OnReplayCmd(txncmd txnif.TxnCmd, idxCtx *wal.Index) {
+func (replayer *Replayer) OnReplayCmd(txncmd txnif.TxnCmd, idxCtx *wal.Index, cmdType txnif.CmdType, commitTS types.TS) {
 	if idxCtx != nil && idxCtx.Size > 0 {
 		logutil.Info("", common.OperationField("replay-cmd"),
 			common.OperandField(txncmd.Desc()),
@@ -240,26 +242,70 @@ func (replayer *Replayer) OnReplayCmd(txncmd txnif.TxnCmd, idxCtx *wal.Index) {
 			_, ok := command.(*txnimpl.AppendCmd)
 			if ok {
 				internalCnt++
-				replayer.OnReplayCmd(command, nil)
+				replayer.OnReplayCmd(command, nil, cmdType, commitTS)
 			} else {
 				idx := idxCtx.Clone()
 				idx.CSN = uint32(i) - internalCnt
-				replayer.OnReplayCmd(command, idx)
+				replayer.OnReplayCmd(command, idx, cmdType, commitTS)
 			}
 		}
 	case *catalog.EntryCommand:
-		replayer.db.Catalog.ReplayCmd(txncmd, replayer.DataFactory, idxCtx, replayer, replayer.cache)
+		replayer.db.Catalog.ReplayCmd(txncmd, replayer.DataFactory, idxCtx, replayer, replayer.cache, cmdType, commitTS)
 	case *txnimpl.AppendCmd:
-		replayer.db.onReplayAppendCmd(cmd, replayer)
+		replayer.db.onReplayAppendCmd(cmd, replayer, cmdType, commitTS)
 	case *updates.UpdateCmd:
-		err = replayer.db.onReplayUpdateCmd(cmd, idxCtx, replayer)
+		err = replayer.db.onReplayUpdateCmd(cmd, idxCtx, replayer, cmdType, commitTS)
+	case *txnbase.CommitCmd:
+		replayer.onReplayCommitCmd(cmd, replayer)
+	case *txnbase.RollbackCmd:
+		replayer.onReplayRollbackCmd(cmd, replayer)
 	}
 	if err != nil {
 		panic(err)
 	}
 }
+func (replayer *Replayer) onReplayCommitCmd(cmd *txnbase.CommitCmd, observer wal.ReplayObserver) {
+	if observer != nil {
+		observer.OnTimeStamp(cmd.CommitTS)
+	}
+	prepareLSN := cmd.PrepareLSN
+	prepareEntry, err := replayer.db.Wal.LoadEntry(wal.GroupPrepare, prepareLSN)
+	if err != nil {
+		// TODO
+		return
+	}
+	r := bytes.NewBuffer(prepareEntry.GetPayload())
+	prepareCmd, _, err := txnbase.BuildCommandFrom(r)
+	if err != nil {
+		panic(err)
+	}
+	idxCtx := store.NewIndex(prepareLSN, 0, 0)
+	replayer.OnReplayCmd(prepareCmd, idxCtx, txnif.CmdCommit, cmd.CommitTS)
+}
 
-func (db *DB) onReplayAppendCmd(cmd *txnimpl.AppendCmd, observer wal.ReplayObserver) {
+func (replayer *Replayer) onReplayRollbackCmd(cmd *txnbase.RollbackCmd, observer wal.ReplayObserver) {
+	if observer != nil {
+		observer.OnTimeStamp(cmd.CommitTS)
+	}
+	prepareLSN := cmd.PrepareLSN
+	prepareEntry, err := replayer.db.Wal.LoadEntry(wal.GroupPrepare, prepareLSN)
+	if err != nil {
+		// TODO
+		return
+	}
+	r := bytes.NewBuffer(prepareEntry.GetPayload())
+	prepareCmd, _, err := txnbase.BuildCommandFrom(r)
+	if err != nil {
+		panic(err)
+	}
+	idxCtx := store.NewIndex(prepareLSN, 0, 0)
+	replayer.OnReplayCmd(prepareCmd, idxCtx, txnif.CmdRollback, cmd.CommitTS)
+}
+
+func (db *DB) onReplayAppendCmd(cmd *txnimpl.AppendCmd, observer wal.ReplayObserver, cmdType txnif.CmdType, commitTS types.TS) {
+	if cmdType == txnif.CmdCommit {
+		return
+	}
 	hasActive := false
 	for _, info := range cmd.Infos {
 		database, err := db.Catalog.GetDatabaseByID(info.GetDBID())
@@ -277,7 +323,7 @@ func (db *DB) onReplayAppendCmd(cmd *txnimpl.AppendCmd, observer wal.ReplayObser
 		if observer != nil {
 			observer.OnTimeStamp(blk.GetBlockData().GetMaxCheckpointTS())
 		}
-		if cmd.Ts.LessEq(blk.GetBlockData().GetMaxCheckpointTS()) {
+		if !blk.GetBlockData().GetMaxCheckpointTS().IsEmpty() {
 			continue
 		}
 		hasActive = true
@@ -340,25 +386,29 @@ func (db *DB) onReplayAppendCmd(cmd *txnimpl.AppendCmd, observer wal.ReplayObser
 	}
 }
 
-func (db *DB) onReplayUpdateCmd(cmd *updates.UpdateCmd, idxCtx *wal.Index, observer wal.ReplayObserver) (err error) {
+func (db *DB) onReplayUpdateCmd(cmd *updates.UpdateCmd, idxCtx *wal.Index, observer wal.ReplayObserver, cmdType txnif.CmdType, commitTS types.TS) (err error) {
 	switch cmd.GetType() {
 	case txnbase.CmdAppend:
-		db.onReplayAppend(cmd, idxCtx, observer)
+		db.onReplayAppend(cmd, idxCtx, observer, cmdType, commitTS)
 	case txnbase.CmdUpdate:
 		db.onReplayUpdate(cmd, idxCtx, observer)
 	case txnbase.CmdDelete:
-		db.onReplayDelete(cmd, idxCtx, observer)
+		db.onReplayDelete(cmd, idxCtx, observer, cmdType, commitTS)
 	}
 	return
 }
 
-func (db *DB) onReplayDelete(cmd *updates.UpdateCmd, idxCtx *wal.Index, observer wal.ReplayObserver) {
+func (db *DB) onReplayDelete(cmd *updates.UpdateCmd, idxCtx *wal.Index, observer wal.ReplayObserver, cmdType txnif.CmdType, commitTS types.TS) {
+	if cmdType != txnif.CmdCommit {
+		return
+	}
 	database, err := db.Catalog.GetDatabaseByID(cmd.GetDBID())
 	if err != nil {
 		panic(err)
 	}
 	deleteNode := cmd.GetDeleteNode()
 	deleteNode.SetLogIndex(idxCtx)
+	deleteNode.OnReplayCommit(commitTS)
 	id := deleteNode.GetID()
 	blk, err := database.GetBlockEntryByID(id)
 	if err != nil {
@@ -368,7 +418,7 @@ func (db *DB) onReplayDelete(cmd *updates.UpdateCmd, idxCtx *wal.Index, observer
 		observer.OnStaleIndex(idxCtx)
 		return
 	}
-	if deleteNode.GetCommitTSLocked().LessEq(blk.GetBlockData().GetMaxCheckpointTS()) {
+	if !blk.GetBlockData().GetMaxCheckpointTS().IsEmpty() {
 		observer.OnStaleIndex(idxCtx)
 		return
 	}
@@ -382,13 +432,17 @@ func (db *DB) onReplayDelete(cmd *updates.UpdateCmd, idxCtx *wal.Index, observer
 	}
 }
 
-func (db *DB) onReplayAppend(cmd *updates.UpdateCmd, idxCtx *wal.Index, observer wal.ReplayObserver) {
+func (db *DB) onReplayAppend(cmd *updates.UpdateCmd, idxCtx *wal.Index, observer wal.ReplayObserver, cmdType txnif.CmdType, commitTS types.TS) {
+	if cmdType != txnif.CmdCommit {
+		return
+	}
 	database, err := db.Catalog.GetDatabaseByID(cmd.GetDBID())
 	if err != nil {
 		panic(err)
 	}
 	appendNode := cmd.GetAppendNode()
 	appendNode.SetLogIndex(idxCtx)
+	appendNode.OnReplayCommit(commitTS)
 	id := appendNode.GetID()
 	blk, err := database.GetBlockEntryByID(id)
 	if err != nil {

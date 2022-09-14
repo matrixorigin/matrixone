@@ -39,6 +39,7 @@ type MVCCNode interface {
 	IsCommitted() bool
 
 	GetEnd() types.TS
+	GetPrepare() types.TS
 	GetTxn() txnif.TxnReader
 	AddLogIndex(idx *wal.Index)
 	GetLogIndex() []*wal.Index
@@ -56,8 +57,8 @@ type MVCCNode interface {
 
 // TODO prepare ts
 type TxnMVCCNode struct {
-	Start, End types.TS
-	Txn        txnif.TxnReader
+	Start, Prepare, End types.TS
+	Txn                 txnif.TxnReader
 	//Aborted bool
 	//State txnif.TxnState
 	LogIndex []*wal.Index
@@ -101,7 +102,7 @@ func (un *TxnMVCCNode) IsVisible(ts types.TS) (visible bool) {
 	return false
 
 }
-
+func (un *TxnMVCCNode) GetPrepare() types.TS { return un.Prepare }
 func (un *TxnMVCCNode) CommittedIn(minTS, maxTS types.TS) (committedIn, commitBeforeMinTS bool) {
 	if un.End.IsEmpty() {
 		return false, false
@@ -182,13 +183,16 @@ func (un *TxnMVCCNode) AddLogIndex(idx *wal.Index) {
 func (un *TxnMVCCNode) GetLogIndex() []*wal.Index {
 	return un.LogIndex
 }
-func (un *TxnMVCCNode) ApplyCommit(index *wal.Index) (err error) {
+func (un *TxnMVCCNode) ApplyCommit(index *wal.Index) (ts types.TS, err error) {
+	un.End = un.Txn.GetCommitTS()
 	un.Txn = nil
 	un.AddLogIndex(index)
+	ts = un.End
 	return
 }
 
 func (un *TxnMVCCNode) ApplyRollback(index *wal.Index) (err error) {
+	un.End = un.Txn.GetCommitTS()
 	un.Txn = nil
 	un.AddLogIndex(index)
 	return
@@ -278,8 +282,9 @@ func (un *TxnMVCCNode) CloneAll() *TxnMVCCNode {
 }
 
 func (un *TxnMVCCNode) String() string {
-	return fmt.Sprintf("[%v,%v][logIndex=%v]",
+	return fmt.Sprintf("[%v,%v,%v][logIndex=%v]",
 		un.Start,
+		un.Prepare,
 		un.End,
 		un.LogIndex)
 }
@@ -291,7 +296,7 @@ func (un *TxnMVCCNode) Prepare2PCPrepare() (ts types.TS, err error) {
 }
 
 func (un *TxnMVCCNode) PrepareCommit() (ts types.TS, err error) {
-	un.End = un.Txn.GetCommitTS()
-	ts = un.End
+	un.Prepare = un.Txn.GetPrepareTS()
+	ts = un.Prepare
 	return
 }
