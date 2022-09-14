@@ -22,7 +22,7 @@ import (
 )
 
 // WithContext annotates err with a stack info and a context, which should contain span info.
-// ReportError at the mean time.
+// At the mean time, it will call ReportError to store error info
 // If err is nil, WithContext returns nil.
 func WithContext(ctx context.Context, err error) error {
 	return WithContextWithDepth(ctx, err, 1)

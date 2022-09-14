@@ -56,9 +56,8 @@ func Wrapf(err error, format string, args ...any) error {
 	return pkgErr.Wrapf(err, format, args...)
 }
 
-// WalkDeep does a depth-first traversal of all errutil.
-// The visitor function can return true to end the traversal early.
-// In that case, WalkDeep will return true, otherwise false.
+// WalkDeep does a depth-first traversal of all errors.
+// The visitor function can return true to end the traversal early, otherwise false.
 func WalkDeep(err error, visitor func(err error) bool) bool {
 	// Go deep
 	unErr := err
