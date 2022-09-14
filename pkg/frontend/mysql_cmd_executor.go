@@ -1736,6 +1736,21 @@ func incTransactionErrorsCounter(tenant string, t metric.SQLType) {
 	metric.TransactionErrorsCounter(tenant, t).Inc()
 }
 
+func incStatementErrorsCounter(tenant string, stmt tree.Statement) {
+	switch stmt.(type) {
+	case *tree.Select:
+		metric.StatementErrorsCounter(tenant, metric.SQLTypeSelect).Inc()
+	case *tree.Insert:
+		metric.StatementErrorsCounter(tenant, metric.SQLTypeInsert).Inc()
+	case *tree.Delete:
+		metric.StatementErrorsCounter(tenant, metric.SQLTypeDelete).Inc()
+	case *tree.Update:
+		metric.StatementErrorsCounter(tenant, metric.SQLTypeUpdate).Inc()
+	default:
+		metric.StatementErrorsCounter(tenant, metric.SQLTypeOther).Inc()
+	}
+}
+
 func (mce *MysqlCmdExecutor) beforeRun(stmt tree.Statement) {
 	// incStatementCounter(sess.GetTenantInfo().Tenant, stmt, sess.IsInternal)
 	incStatementCounter("0", stmt)
@@ -2361,6 +2376,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		logStatementStatus(ctx, ses, stmt, success, nil)
 		goto handleNext
 	handleFailed:
+		incStatementErrorsCounter(ses.GetTenantInfo().GetTenant(), stmt)
 		logutil.Error(err.Error())
 		if !fromLoadData {
 			txnErr = ses.TxnRollbackSingleStatement(stmt)

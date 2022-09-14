@@ -32,6 +32,15 @@ var (
 		},
 		[]string{constTenantKey, "type"},
 	)
+
+	StatementErrorsFactory = NewCounterVec(
+		CounterOpts{
+			Subsystem: "sql",
+			Name:      "statement_errors",
+			Help:      "Counter of executed sql statement failed.",
+		},
+		[]string{constTenantKey, "type"},
+	)
 )
 
 type SQLType string
@@ -53,4 +62,8 @@ func StatementCounter(tenant string, t SQLType) Counter {
 
 func TransactionErrorsCounter(account string, t SQLType) Counter {
 	return TransactionErrorsFactory.WithLabelValues(account, string(t))
+}
+
+func StatementErrorsCounter(account string, t SQLType) Counter {
+	return StatementErrorsFactory.WithLabelValues(account, string(t))
 }
