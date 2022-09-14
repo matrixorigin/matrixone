@@ -116,7 +116,8 @@ type taskRunner struct {
 	}
 }
 
-// NewTaskRunner new task runner
+// NewTaskRunner new task runner. The TaskRunner can be created by CN nodes and pull tasks from TaskService to
+// execute periodically.
 func NewTaskRunner(runnerID string, service TaskService, opts ...RunnerOption) (TaskRunner, error) {
 	r := &taskRunner{
 		runnerID: runnerID,
