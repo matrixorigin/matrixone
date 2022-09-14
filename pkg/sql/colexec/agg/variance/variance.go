@@ -102,8 +102,9 @@ func NewVD64() *VD64 {
 }
 
 func (v *VD64) Grows(cnt int) {
+	d, _ := types.Decimal128_FromInt64(0, 64, 0)
 	for i := 0; i < cnt; i++ {
-		v.sum = append(v.sum, types.Decimal128_FromInt64(0))
+		v.sum = append(v.sum, d)
 		v.counts = append(v.counts, 0)
 	}
 }
@@ -150,8 +151,9 @@ func NewVD128() *VD128 {
 }
 
 func (v *VD128) Grows(cnt int) {
+	d, _ := types.Decimal128_FromInt64(0, 64, 0)
 	for i := 0; i < cnt; i++ {
-		v.sum = append(v.sum, types.Decimal128_FromInt64(0))
+		v.sum = append(v.sum, d)
 		v.counts = append(v.counts, 0)
 	}
 }

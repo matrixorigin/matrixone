@@ -1092,8 +1092,8 @@ func CastSpecials3(lv, rv *vector.Vector, proc *process.Process) (*vector.Vector
 }
 
 func CastSpecialIntToDecimal[T constraints.Integer](
-	lv, _ *vector.Vector,
-	i2d func(xs []T, rs []types.Decimal128) ([]types.Decimal128, error),
+	lv, rv *vector.Vector,
+	i2d func(xs []T, rs []types.Decimal128, width, scale int32) ([]types.Decimal128, error),
 	proc *process.Process) (*vector.Vector, error) {
 	resultScale := int32(0)
 	resultTyp := types.T_decimal128.ToType()
@@ -1104,7 +1104,7 @@ func CastSpecialIntToDecimal[T constraints.Integer](
 		return proc.AllocConstNullVector(resultTyp, lv.Length()), nil
 	} else if lv.IsScalar() {
 		rs := make([]types.Decimal128, 1)
-		if _, err := i2d(lvs, rs); err != nil {
+		if _, err := i2d(lvs, rs, rv.Typ.Width, rv.Typ.Scale); err != nil {
 			return nil, err
 		}
 		return vector.NewConstFixed(resultTyp, lv.Length(), rs[0]), nil
@@ -1115,7 +1115,7 @@ func CastSpecialIntToDecimal[T constraints.Integer](
 		return nil, err
 	}
 	rs := vector.MustTCols[types.Decimal128](vec)
-	if _, err := i2d(lvs, rs); err != nil {
+	if _, err := i2d(lvs, rs, rv.Typ.Width, rv.Typ.Scale); err != nil {
 		return nil, err
 	}
 	return vec, nil
@@ -1123,7 +1123,7 @@ func CastSpecialIntToDecimal[T constraints.Integer](
 
 func CastSpecialIntToDecimal64[T constraints.Integer](
 	lv, rv *vector.Vector,
-	i2d func(xs []T, rs []types.Decimal64) ([]types.Decimal64, error),
+	i2d func(xs []T, rs []types.Decimal64, width, scale int32) ([]types.Decimal64, error),
 	proc *process.Process) (*vector.Vector, error) {
 
 	resultScale := int32(0)
@@ -1135,7 +1135,7 @@ func CastSpecialIntToDecimal64[T constraints.Integer](
 		return proc.AllocConstNullVector(resultTyp, lv.Length()), nil
 	} else if lv.IsScalar() {
 		rs := make([]types.Decimal64, 1)
-		if _, err := i2d(lvs, rs); err != nil {
+		if _, err := i2d(lvs, rs, rv.Typ.Width, rv.Typ.Scale); err != nil {
 			return nil, err
 		}
 		return vector.NewConstFixed(resultTyp, lv.Length(), rs[0]), nil
@@ -1146,7 +1146,7 @@ func CastSpecialIntToDecimal64[T constraints.Integer](
 		return nil, err
 	}
 	rs := vector.MustTCols[types.Decimal64](vec)
-	if _, err := i2d(lvs, rs); err != nil {
+	if _, err := i2d(lvs, rs, rv.Typ.Width, rv.Typ.Scale); err != nil {
 		return nil, err
 	}
 	return vec, nil
@@ -1208,10 +1208,14 @@ func CastFloatAsDecimal128[T constraints.Float](lv, rv *vector.Vector, proc *pro
 func CastFloatAsDecimal64[T constraints.Float](lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	resultType := rv.Typ
 	vs := vector.MustTCols[T](lv)
+	var err error
 	if lv.IsScalar() {
 		vec := proc.AllocScalarVector(resultType)
 		rs := make([]types.Decimal64, 1)
-		rs[0] = types.Decimal64_FromFloat64(float64(vs[0]))
+		rs[0], err = types.Decimal64_FromFloat64(float64(vs[0]), resultType.Width, resultType.Scale)
+		if err != nil {
+			return nil, err
+		}
 		nulls.Reset(vec.Nsp)
 		vector.SetCol(vec, rs)
 		return vec, nil
@@ -1226,7 +1230,10 @@ func CastFloatAsDecimal64[T constraints.Float](lv, rv *vector.Vector, proc *proc
 		if nulls.Contains(lv.Nsp, uint64(i)) {
 			continue
 		}
-		rs[i] = types.Decimal64_FromFloat64(float64(vs[i]))
+		rs[i], err = types.Decimal64_FromFloat64(float64(vs[i]), resultType.Width, resultType.Scale)
+		if err != nil {
+			return nil, err
+		}
 	}
 	return vec, nil
 }
@@ -1327,8 +1334,8 @@ func CastVarcharAsTimestamp(lv, rv *vector.Vector, proc *process.Process) (*vect
 	return vec, nil
 }
 
-// CastDecimal64AsDecimal128 : Cast converts decimal64 to timestamp decimal128
-func CastDecimal64AsDecimal128(lv, _ *vector.Vector, proc *process.Process) (*vector.Vector, error) {
+// CastDecimal64AsDecimal128 : Cast converts decimal64 to decimal128
+func CastDecimal64AsDecimal128(lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	lvScale := lv.Typ.Scale
 	resultTyp := types.T_decimal128.ToType()
 	resultTyp.Scale = lvScale
@@ -1337,7 +1344,7 @@ func CastDecimal64AsDecimal128(lv, _ *vector.Vector, proc *process.Process) (*ve
 	if lv.IsScalar() {
 		vec := proc.AllocScalarVector(resultTyp)
 		rs := make([]types.Decimal128, 1)
-		if _, err := binary.Decimal64ToDecimal128(lvs, rs); err != nil {
+		if _, err := binary.Decimal64ToDecimal128(lvs, rs, rv.Typ.Width, rv.Typ.Scale); err != nil {
 			return nil, err
 		}
 		nulls.Set(vec.Nsp, lv.Nsp)
@@ -1350,7 +1357,7 @@ func CastDecimal64AsDecimal128(lv, _ *vector.Vector, proc *process.Process) (*ve
 		return nil, err
 	}
 	rs := vector.MustTCols[types.Decimal128](vec)
-	if _, err := binary.Decimal64ToDecimal128(lvs, rs); err != nil {
+	if _, err := binary.Decimal64ToDecimal128(lvs, rs, rv.Typ.Width, rv.Typ.Scale); err != nil {
 		return nil, err
 	}
 	return vec, nil
@@ -1879,7 +1886,7 @@ func CastDecimal128ToDecimal64(lv, rv *vector.Vector, proc *process.Process) (*v
 	if lv.IsScalar() {
 		vec := proc.AllocScalarVector(rv.Typ)
 		rs := make([]types.Decimal64, 1)
-		if _, err := binary.Decimal128ToDecimal64(lvs, lv.Typ.Scale, rv.Typ.Width, rv.Typ.Scale, rs); err != nil {
+		if _, err := binary.Decimal128ToDecimal64(lvs, rv.Typ.Width, rv.Typ.Scale, rs); err != nil {
 			return nil, err
 		}
 		nulls.Set(vec.Nsp, lv.Nsp)
@@ -1891,7 +1898,7 @@ func CastDecimal128ToDecimal64(lv, rv *vector.Vector, proc *process.Process) (*v
 		return nil, err
 	}
 	rs := vector.MustTCols[types.Decimal64](vec)
-	if _, err := binary.Decimal128ToDecimal64(lvs, lv.Typ.Scale, rv.Typ.Precision, rv.Typ.Scale, rs); err != nil {
+	if _, err := binary.Decimal128ToDecimal64(lvs, rv.Typ.Width, rv.Typ.Scale, rs); err != nil {
 		return nil, err
 	}
 	return vec, nil
