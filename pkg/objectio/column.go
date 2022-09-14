@@ -127,11 +127,10 @@ func (cb *ColumnBlock) MarshalMeta() ([]byte, error) {
 	if err = binary.Write(&buffer, endian, cb.meta.bloomFilter.OriginSize()); err != nil {
 		return nil, err
 	}
-	if err = binary.Write(&buffer, endian, uint32(0)); err != nil {
+	if err = binary.Write(&buffer, endian, cb.meta.dummy); err != nil {
 		return nil, err
 	}
-	reserved := make([]byte, ColumnMetaReserved)
-	if err = binary.Write(&buffer, endian, reserved); err != nil {
+	if err = binary.Write(&buffer, endian, uint32(0)); err != nil {
 		return nil, err
 	}
 	return buffer.Bytes(), nil
@@ -179,11 +178,10 @@ func (cb *ColumnBlock) UnMarshalMate(cache *bytes.Buffer) error {
 	if err = binary.Read(cache, endian, &cb.meta.bloomFilter.originSize); err != nil {
 		return err
 	}
-	if err = binary.Read(cache, endian, &cb.meta.checksum); err != nil {
+	if err = binary.Read(cache, endian, &cb.meta.dummy); err != nil {
 		return err
 	}
-	reserved := make([]byte, ColumnMetaReserved)
-	if err = binary.Read(cache, endian, &reserved); err != nil {
+	if err = binary.Read(cache, endian, &cb.meta.checksum); err != nil {
 		return err
 	}
 	return err

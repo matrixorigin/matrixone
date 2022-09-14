@@ -58,8 +58,7 @@ func (w *ObjectWriter) WriteHeader() error {
 	if err = binary.Write(&header, endian, h.version); err != nil {
 		return err
 	}
-	reserved := make([]byte, HeaderReserved)
-	if err = binary.Write(&header, endian, reserved); err != nil {
+	if err = binary.Write(&header, endian, h.dummy); err != nil {
 		return err
 	}
 	_, _, err = w.buffer.Write(header.Bytes())

@@ -99,11 +99,10 @@ func (b *Block) MarshalMeta() ([]byte, error) {
 	if err = binary.Write(&buffer, endian, b.header.columnCount); err != nil {
 		return nil, err
 	}
-	if err = binary.Write(&buffer, endian, uint32(0)); err != nil {
+	if err = binary.Write(&buffer, endian, b.header.dummy); err != nil {
 		return nil, err
 	}
-	reserved := make([]byte, BlockHeaderReserved)
-	if err = binary.Write(&buffer, endian, reserved); err != nil {
+	if err = binary.Write(&buffer, endian, uint32(0)); err != nil {
 		return nil, err
 	}
 	// write columns meta
@@ -135,11 +134,10 @@ func (b *Block) UnMarshalMeta(data []byte) error {
 	if err = binary.Read(cache, endian, &b.header.columnCount); err != nil {
 		return err
 	}
-	if err = binary.Read(cache, endian, &b.header.checksum); err != nil {
+	if err = binary.Read(cache, endian, &b.header.dummy); err != nil {
 		return err
 	}
-	reserved := make([]byte, BlockHeaderReserved)
-	if err = binary.Read(cache, endian, &reserved); err != nil {
+	if err = binary.Read(cache, endian, &b.header.checksum); err != nil {
 		return err
 	}
 	b.columns = make([]ColumnObject, b.header.columnCount)
