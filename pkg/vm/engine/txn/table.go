@@ -31,12 +31,12 @@ type Table struct {
 
 var _ engine.Relation = new(Table)
 
-func (*Table) Rows() int64 {
-	return 1
+func (t *Table) Rows(ctx context.Context) (int64, error) {
+	return 1, nil
 }
 
-func (*Table) Size(string) int64 {
-	return 0
+func (t *Table) Size(ctx context.Context, columnName string) (int64, error) {
+	return 0, nil
 }
 
 func (t *Table) AddTableDef(ctx context.Context, def engine.TableDef) error {
