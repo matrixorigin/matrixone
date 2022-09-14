@@ -313,6 +313,9 @@ func buildTableDefs(defs tree.TableDefs, ctx CompilerContext, tableDef *TableDef
 			if err != nil {
 				return err
 			}
+			if auto_incr && defaultValue.Expr != nil {
+				return fmt.Errorf("invalid default value for '%s'", def.Name.Parts[0])
+			}
 
 			col := &ColDef{
 				Name:          def.Name.Parts[0],
