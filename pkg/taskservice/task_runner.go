@@ -17,6 +17,7 @@ package taskservice
 import (
 	"context"
 	"runtime"
+	"sort"
 	"sync"
 	"time"
 
@@ -28,6 +29,13 @@ import (
 
 // RunnerOption option for create task runner
 type RunnerOption func(*taskRunner)
+
+// WithRunnerLogger set logger
+func WithRunnerLogger(logger *zap.Logger) RunnerOption {
+	return func(r *taskRunner) {
+		r.logger = logger
+	}
+}
 
 // WithRunnerFetchLimit set fetch tasks limit
 func WithRunnerFetchLimit(limit int) RunnerOption {
@@ -94,6 +102,7 @@ type taskRunner struct {
 		started      bool
 		executors    map[int]TaskExecutor
 		runningTasks map[uint64]runningTask
+		retryTasks   []runningTask
 	}
 
 	options struct {
@@ -182,18 +191,21 @@ func (r *taskRunner) Start() error {
 	if err := r.stopper.RunNamedTask("heartbeat-task", r.heartbeat); err != nil {
 		return err
 	}
+	if err := r.stopper.RunNamedTask("retry-task", r.retry); err != nil {
+		return err
+	}
 	return nil
 }
 
 func (r *taskRunner) Stop() error {
 	r.mu.Lock()
-	defer r.mu.Unlock()
-
 	if !r.mu.started {
+		r.mu.Unlock()
 		return nil
 	}
-
 	r.mu.started = false
+	r.mu.Unlock()
+
 	r.stopper.Stop()
 	close(r.waitTasksC)
 	close(r.parallelismC)
@@ -248,6 +260,9 @@ func (r *taskRunner) doFetch() ([]task.Task, error) {
 	}
 
 	r.lastTaskID = tasks[len(tasks)-1].ID
+	r.logger.Debug("new task fetched",
+		zap.Int("count", len(tasks)),
+		zap.Uint64("last-task-id", r.lastTaskID))
 	return tasks, nil
 }
 
@@ -262,6 +277,7 @@ func (r *taskRunner) addToWait(ctx context.Context, task task.Task) bool {
 	case <-ctx.Done():
 		return false
 	case r.waitTasksC <- task:
+		r.logger.Debug("task added", zap.String("task", task.DebugString()))
 		return true
 	}
 }
@@ -280,16 +296,56 @@ func (r *taskRunner) dispatch(ctx context.Context) {
 	}
 }
 
-func (r *taskRunner) runTask(ctx context.Context, task task.Task) bool {
+func (r *taskRunner) retry(ctx context.Context) {
+	r.logger.Info("retry task started")
+	timer := time.NewTimer(time.Second)
+	defer timer.Stop()
+
+	var needRetryTasks []runningTask
+	for {
+		select {
+		case <-ctx.Done():
+			r.logger.Info("retry task stopped")
+			return
+		case <-timer.C:
+			now := time.Now()
+			needRetryTasks = needRetryTasks[:0]
+			r.mu.RLock()
+			for idx, rt := range r.mu.retryTasks {
+				if rt.retryAt.After(now) {
+					r.mu.retryTasks = r.mu.retryTasks[:copy(r.mu.retryTasks, r.mu.retryTasks[idx:])]
+					break
+				}
+				needRetryTasks = append(needRetryTasks, rt)
+			}
+			r.mu.RUnlock()
+			if len(needRetryTasks) > 0 {
+				for _, rt := range needRetryTasks {
+					r.runTask(ctx, rt)
+				}
+			}
+		}
+		timer.Reset(time.Millisecond * 100)
+	}
+}
+
+func (r *taskRunner) runTask(ctx context.Context, value any) bool {
 	select {
 	case <-ctx.Done():
 		return false
 	case r.parallelismC <- struct{}{}:
-		rt := runningTask{task: task}
-		rt.ctx, rt.cancel = context.WithCancel(ctx)
-		r.mu.Lock()
-		r.mu.runningTasks[rt.task.ID] = rt
-		r.mu.Unlock()
+		var rt runningTask
+		switch value := value.(type) {
+		case task.Task:
+			rt = runningTask{task: value}
+			rt.ctx, rt.cancel = context.WithCancel(ctx)
+			r.mu.Lock()
+			r.mu.runningTasks[rt.task.ID] = rt
+			r.mu.Unlock()
+		case runningTask:
+			rt = value
+		}
+
 		r.run(rt)
 		return true
 	}
@@ -297,8 +353,15 @@ func (r *taskRunner) runTask(ctx context.Context, task task.Task) bool {
 
 func (r *taskRunner) run(rt runningTask) {
 	err := r.stopper.RunTask(func(ctx context.Context) {
-		result := &task.ExecuteResult{Code: task.ResultCode_Success}
+		start := time.Now()
+		r.logger.Debug("task start execute",
+			zap.String("task", rt.task.DebugString()))
+		defer r.logger.Debug("task execute completed",
+			zap.String("task", rt.task.DebugString()),
+			zap.Duration("cost", time.Since(start)))
+
 		executor := r.getExecutor(int(rt.task.Metadata.Executor))
+		result := &task.ExecuteResult{Code: task.ResultCode_Success}
 		err := executor(rt.ctx, rt.task)
 		if err != nil {
 			r.logger.Error("run task failed",
@@ -306,6 +369,12 @@ func (r *taskRunner) run(rt runningTask) {
 				zap.Error(err))
 			if rt.canRetry() {
 				rt.retryTimes++
+				rt.retryAt = time.Now().Add(time.Duration(rt.task.Metadata.Options.RetryInterval))
+				if !r.addRetryTask(rt) {
+					// retry queue is full, let scheduler re-allocate.
+					r.removeRunningTask(rt.task.ID)
+					r.releaseParallel()
+				}
 				return
 			}
 			result.Code = task.ResultCode_Failed
@@ -321,13 +390,31 @@ func (r *taskRunner) run(rt runningTask) {
 }
 
 func (r *taskRunner) addDoneTask(rt runningTask) {
+	r.releaseParallel()
+	r.doneC <- rt
+}
+
+func (r *taskRunner) addRetryTask(task runningTask) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if len(r.mu.retryTasks) >= r.options.maxWaitTasks {
+		return false
+	}
+
+	r.mu.retryTasks = append(r.mu.retryTasks, task)
+	sort.Slice(r.mu.retryTasks, func(i, j int) bool {
+		return r.mu.retryTasks[i].retryAt.Before(r.mu.retryTasks[j].retryAt)
+	})
+	return true
+}
+
+func (r *taskRunner) releaseParallel() {
 	// other task can execute
 	select {
 	case <-r.parallelismC:
 	default:
 		panic("BUG")
 	}
-	r.doneC <- rt
 }
 
 func (r *taskRunner) done(ctx context.Context) {
@@ -392,8 +479,8 @@ func (r *taskRunner) doHeartbeat(ctx context.Context) {
 	for _, rt := range tasks {
 		if err := r.service.Heartbeat(ctx, rt.task); err != nil {
 			if err == ErrInvalidTask {
-				rt.cancel()
 				r.removeRunningTask(rt.task.ID)
+				rt.cancel()
 			}
 			r.logger.Error("task heartbeat failed", zap.Error(err))
 		}
@@ -419,6 +506,7 @@ type runningTask struct {
 	ctx        context.Context
 	cancel     context.CancelFunc
 	retryTimes uint32
+	retryAt    time.Time
 }
 
 func (rt runningTask) canRetry() bool {
