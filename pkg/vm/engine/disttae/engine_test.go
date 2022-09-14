@@ -80,6 +80,7 @@ func TestTransaction(t *testing.T) {
 	txn.RegisterFile("test")
 	err = txn.WriteFile(DELETE, 0, 0, "test", "test", "test")
 	require.NoError(t, err)
+	blockWrite(context.TODO(), BlockMeta{}, nil)
 }
 
 func newTestTxnOperator() *testTxnOperator {
