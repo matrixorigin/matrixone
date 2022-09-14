@@ -42,12 +42,15 @@ var (
 	SQLTypeUpdate SQLType = "delete"
 	SQLTypeDelete SQLType = "update"
 	SQLTypeOther  SQLType = "other"
+
+	SQLTypeCommit   SQLType = "commit"
+	SQLTypeRollback SQLType = "rollback"
 )
 
 func StatementCounter(tenant string, t SQLType) Counter {
 	return StatementCounterFactory.WithLabelValues(tenant, string(t))
 }
 
-func TransactionErrorCounter(account string, t SQLType) Counter {
+func TransactionErrorsCounter(account string, t SQLType) Counter {
 	return TransactionErrorsFactory.WithLabelValues(account, string(t))
 }
