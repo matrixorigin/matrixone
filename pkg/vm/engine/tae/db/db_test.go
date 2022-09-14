@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils/config"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -2883,4 +2884,71 @@ func TestMultiTenantMoCatalogOps(t *testing.T) {
 		checkAllColRowsByScan(t, sysColTbl, reservedColumnsCnt+2, true)
 	}
 
+}
+
+func TestLogtailBasic(t *testing.T) {
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := newTestEngine(t, opts)
+	defer tae.Close()
+	logMgr := txnbase.NewLogtailMgr(30)
+	tae.TxnMgr.LogtailMgr = logMgr
+
+	minTs, maxTs := types.BuildTS(0, 0), types.BuildTS(1000, 1000)
+	assert.False(t, logMgr.CollectCatalogChange(minTs, maxTs))
+	assert.Equal(t, 0, len(logMgr.CollectDirtyTree(minTs, maxTs, 1000)))
+	schema := catalog.MockSchemaAll(2, -1)
+	schema.Name = "test"
+	schema.BlockMaxRows = 10
+	schema.SegmentMaxBlocks = 2
+	txn, _ := tae.StartTxn(nil)
+	db, _ := txn.CreateDatabase("db")
+	tbl, _ := db.CreateRelation(schema)
+	tableID := tbl.ID()
+	txn.Commit()
+
+	ts1 := txn.GetPrepareTS()
+	var ts2, ts3 types.TS
+
+	wg := new(sync.WaitGroup)
+	wg.Add(1)
+	go func() {
+		for i := 0; i < 100; i++ {
+			txn, _ = tae.StartTxn(nil)
+			db, _ := txn.GetDatabase("db")
+			tbl, _ := db.GetRelationByName("test")
+			tbl.Append(catalog.MockBatch(schema, 1))
+			assert.NoError(t, txn.Commit())
+			if i == 0 {
+				ts2 = txn.GetPrepareTS()
+			}
+			if i == 99 {
+				ts3 = txn.GetPrepareTS()
+			}
+		}
+		wg.Done()
+	}()
+
+	// test race
+	for i := 0; i < 5; i++ {
+		wg.Add(1)
+		go func() {
+			for i := 0; i < 10; i++ {
+				logMgr.CollectDirtyTree(minTs, maxTs, tableID)
+				assert.True(t, logMgr.CollectCatalogChange(minTs, maxTs))
+			}
+			wg.Done()
+		}()
+	}
+
+	wg.Wait()
+
+	assert.False(t, logMgr.CollectCatalogChange(ts2, ts3.Next()))
+	assert.Equal(t, 0, len(logMgr.CollectDirtyTree(minTs, ts1, tableID)))
+	assert.Equal(t, 0, len(logMgr.CollectDirtyTree(ts2, ts3, tableID-1)))
+	// 5 segments, every segment has 2 blocks
+	dirtyTree := logMgr.CollectDirtyTree(ts2, ts3, tableID)
+	assert.Equal(t, 5, len(dirtyTree))
+	for _, blkSet := range dirtyTree {
+		assert.Equal(t, 2, len(blkSet))
+	}
 }

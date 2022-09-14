@@ -44,6 +44,7 @@ type TxnManager struct {
 	TsAlloc         *types.TsAlloctor
 	TxnStoreFactory TxnStoreFactory
 	TxnFactory      TxnFactory
+	LogtailMgr      *LogtailMgr
 	Active          *btree.Generic[types.TS]
 	Exception       *atomic.Value
 }
@@ -58,7 +59,8 @@ func NewTxnManager(txnStoreFactory TxnStoreFactory, txnFactory TxnFactory, clock
 		TsAlloc:         types.NewTsAlloctor(clock),
 		TxnStoreFactory: txnStoreFactory,
 		TxnFactory:      txnFactory,
-		Active: btree.NewGeneric[types.TS](func(a, b types.TS) bool {
+		LogtailMgr:      NewLogtailMgr(constPageSize),
+		Active: btree.NewGeneric(func(a, b types.TS) bool {
 			return a.Less(b)
 		}),
 		Exception: new(atomic.Value)}
@@ -303,6 +305,7 @@ func (mgr *TxnManager) dequeuePreparing(items ...any) {
 
 		//Before this moment, all mvcc nodes of a txn has been pushed into the MVCCHandle.
 		ts := mgr.onBindPrepareTimeStamp(op)
+		mgr.LogtailMgr.AddTxn(op.Txn)
 
 		if op.Txn.Is2PC() {
 			mgr.onPrepare2PC(op, ts)
