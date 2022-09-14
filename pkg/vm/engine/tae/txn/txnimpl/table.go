@@ -540,8 +540,8 @@ func (tbl *txnTable) UncommittedRows() uint32 {
 	return tbl.localSegment.Rows()
 }
 
-// PreCommitOr2PCPrepareDedup do deduplication check for 1PC Commit or 2PC Prepare
-func (tbl *txnTable) PreCommitOr2PCPrepareDedup() (err error) {
+// PrePrepareDedup do deduplication check for 1PC Commit or 2PC Prepare
+func (tbl *txnTable) PrePrepareDedup() (err error) {
 	if tbl.localSegment == nil || !tbl.schema.HasPK() {
 		return
 	}
@@ -670,7 +670,7 @@ func (tbl *txnTable) ApplyAppend() (err error) {
 	return
 }
 
-func (tbl *txnTable) PreCommitOr2PCPrepare() (err error) {
+func (tbl *txnTable) PrePrepare() (err error) {
 	if tbl.localSegment != nil {
 		err = tbl.localSegment.PrepareApply()
 	}
@@ -686,20 +686,7 @@ func (tbl *txnTable) PrepareCommit() (err error) {
 	return
 }
 
-func (tbl *txnTable) Prepare2PCPrepare() (err error) {
-	for _, node := range tbl.txnEntries {
-		if err = node.Prepare2PCPrepare(); err != nil {
-			break
-		}
-	}
-	return
-}
-
 func (tbl *txnTable) PreApplyCommit() (err error) {
-	return tbl.ApplyAppend()
-}
-
-func (tbl *txnTable) PreApply2PCPrepare() (err error) {
 	return tbl.ApplyAppend()
 }
 

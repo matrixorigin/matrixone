@@ -31,6 +31,7 @@ type memTaskStorage struct {
 	taskIndexes     map[string]uint64
 	cronTasks       map[uint64]task.CronTask
 	cronTaskIndexes map[string]uint64
+	preUpdate       func()
 }
 
 func newMemTaskStorage() TaskStorage {
@@ -65,6 +66,10 @@ func (s *memTaskStorage) Add(ctx context.Context, tasks ...task.Task) (int, erro
 }
 
 func (s *memTaskStorage) Update(ctx context.Context, tasks []task.Task, conds ...Condition) (int, error) {
+	if s.preUpdate != nil {
+		s.preUpdate()
+	}
+
 	c := conditions{}
 	for _, cond := range conds {
 		cond(&c)
