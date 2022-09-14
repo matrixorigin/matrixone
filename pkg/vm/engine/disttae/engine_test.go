@@ -39,9 +39,9 @@ func TestCache(t *testing.T) {
 	ctx := context.Background()
 	ts := newTimestamp(rand.Int63())
 	db.readTs = newTimestamp(rand.Int63())
-	_ = db.Update(ctx, 0, 0, ts)
-	_ = db.BlockList(ctx, 0, 0, ts, nil)
-	_, _ = db.NewReader(ctx, 0, nil, 0, 0, ts, nil)
+	_ = db.Update(ctx, nil, 0, 0, ts)
+	_ = db.BlockList(ctx, nil, 0, 0, ts, nil)
+	_, _ = db.NewReader(ctx, 0, nil, nil, 0, 0, ts, nil)
 }
 
 func TestEngine(t *testing.T) {
@@ -80,6 +80,38 @@ func TestTransaction(t *testing.T) {
 	txn.RegisterFile("test")
 	err = txn.WriteFile(DELETE, 0, 0, "test", "test", "test")
 	require.NoError(t, err)
+	ctx := context.TODO()
+	blockWrite(ctx, BlockMeta{}, nil)
+	_, _ = txn.getRow(ctx, 0, 0, nil, nil, nil)
+	_, _ = txn.getRows(ctx, 0, 0, nil, nil)
+}
+
+func TestTable(t *testing.T) {
+	tbl := new(table)
+	ctx := context.TODO()
+	_, _ = tbl.Rows(ctx)
+	_, _ = tbl.Size(ctx, "test")
+	_, _ = tbl.Ranges(ctx)
+	_, _ = tbl.TableDefs(ctx)
+	_, _ = tbl.GetPrimaryKeys(ctx)
+	_, _ = tbl.GetHideKeys(ctx)
+	_ = tbl.Write(ctx, nil)
+	_ = tbl.Update(ctx, nil)
+	_ = tbl.Delete(ctx, nil, "test")
+	_, _ = tbl.Truncate(ctx)
+	_ = tbl.AddTableDef(ctx, nil)
+	_ = tbl.DelTableDef(ctx, nil)
+	_ = tbl.GetTableID(ctx)
+	_, _ = tbl.NewReader(ctx, 0, nil, nil)
+}
+
+func TestTools(t *testing.T) {
+	_ = genCreateTableTuple("test")
+	_ = genCreateColumnTuple(nil)
+	_ = genDropTableTuple("test")
+	_ = genDropColumnsTuple("test")
+	_ = genDatabaseIdExpr("test")
+	_ = genTableIdExpr(0, "test")
 }
 
 func newTestTxnOperator() *testTxnOperator {

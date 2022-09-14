@@ -22,16 +22,28 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
-func (db *DB) Update(ctx context.Context, databaseId, tableId uint64, ts timestamp.Timestamp) error {
+func newDB() *DB {
+	return &DB{
+		readTs: timestamp.Timestamp{
+			PhysicalTime: 0,
+			LogicalTime:  0,
+		},
+	}
+}
+
+func (db *DB) Update(ctx context.Context, dnList []DNStore,
+	databaseId, tableId uint64, ts timestamp.Timestamp) error {
 	return nil
 }
 
-func (db *DB) BlockList(ctx context.Context, databaseId, tableId uint64,
-	ts timestamp.Timestamp, entries [][]Entry) []BlockMeta {
+func (db *DB) BlockList(ctx context.Context, dnList []DNStore,
+	databaseId, tableId uint64, ts timestamp.Timestamp,
+	entries [][]Entry) []BlockMeta {
 	return nil
 }
 
 func (db *DB) NewReader(ctx context.Context, readNumber int, expr *plan.Expr,
-	databaseId, tableId uint64, ts timestamp.Timestamp, entires [][]Entry) ([]engine.Reader, error) {
+	dnList []DNStore, databaseId, tableId uint64, ts timestamp.Timestamp,
+	entires [][]Entry) ([]engine.Reader, error) {
 	return nil, nil
 }
