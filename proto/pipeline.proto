@@ -211,7 +211,7 @@ message SessionInfo {
     uint64 connection_id = 4;
     string database = 5;
     string version = 6;
-    string time_zone_name = 7;
+    bytes  time_zone = 7;
 }
 
 message Pipeline {

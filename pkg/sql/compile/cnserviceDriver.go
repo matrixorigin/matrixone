@@ -297,6 +297,11 @@ func encodeProcessInfo(proc *process.Process) ([]byte, error) {
 		procInfo.Snapshot = string(snapshot)
 	}
 	{ // session info
+		timeBytes, err := time.Time{}.In(proc.SessionInfo.TimeZone).MarshalBinary()
+		if err != nil {
+			return nil, err
+		}
+
 		procInfo.SessionInfo = &pipeline.SessionInfo{
 			User:         proc.SessionInfo.GetUser(),
 			Host:         proc.SessionInfo.GetHost(),
@@ -304,7 +309,7 @@ func encodeProcessInfo(proc *process.Process) ([]byte, error) {
 			ConnectionId: proc.SessionInfo.GetConnectionID(),
 			Database:     proc.SessionInfo.GetDatabase(),
 			Version:      proc.SessionInfo.GetVersion(),
-			TimeZoneName: proc.SessionInfo.TimeZone.String(),
+			TimeZone:     timeBytes,
 		}
 	}
 	return procInfo.Marshal()
@@ -1126,11 +1131,12 @@ func convertToProcessSessionInfo(sei *pipeline.SessionInfo) (process.SessionInfo
 		Database:     sei.Database,
 		Version:      sei.Version,
 	}
-	tz, err := time.LoadLocation(sei.TimeZoneName)
+	t := time.Time{}
+	err := t.UnmarshalBinary(sei.TimeZone)
 	if err != nil {
-		return sessionInfo, err
+		return sessionInfo, nil
 	}
-	sessionInfo.TimeZone = tz
+	sessionInfo.TimeZone = t.Location()
 	return sessionInfo, nil
 }
 
