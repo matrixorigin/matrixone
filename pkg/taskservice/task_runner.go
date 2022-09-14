@@ -471,7 +471,7 @@ func (r *taskRunner) heartbeat(ctx context.Context) {
 
 func (r *taskRunner) doHeartbeat(ctx context.Context) {
 	r.mu.RLock()
-	tasks := make([]runningTask, len(r.mu.runningTasks))
+	tasks := make([]runningTask, 0, len(r.mu.runningTasks))
 	for _, rt := range r.mu.runningTasks {
 		tasks = append(tasks, rt)
 	}
