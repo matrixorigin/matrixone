@@ -22,17 +22,17 @@ import (
 )
 
 type TestRow struct {
-	Key   Int
-	Value int
+	key   Int
+	value int
 }
 
-func (t TestRow) PrimaryKey() Int {
-	return t.Key
+func (t TestRow) Key() Int {
+	return t.key
 }
 
-func (t TestRow) Indexes() []AnyKey {
-	return []AnyKey{
-		{Text("foo"), Int(t.Value)},
+func (t TestRow) Indexes() []Tuple {
+	return []Tuple{
+		{Text("foo"), Int(t.value)},
 	}
 }
 
@@ -40,7 +40,7 @@ func TestTable(t *testing.T) {
 
 	table := NewTable[Int, TestRow]()
 	tx := NewTransaction("1", Time{}, Serializable)
-	row := TestRow{Key: 42, Value: 1}
+	row := TestRow{key: 42, value: 1}
 
 	// insert
 	err := table.Insert(tx, row)
@@ -52,7 +52,7 @@ func TestTable(t *testing.T) {
 	assert.Equal(t, &row, r)
 
 	// update
-	row.Value = 2
+	row.value = 2
 	err = table.Update(tx, row)
 	assert.Nil(t, err)
 
@@ -61,12 +61,12 @@ func TestTable(t *testing.T) {
 	assert.Equal(t, &row, r)
 
 	// index
-	keys, err := table.Index(tx, AnyKey{
+	keys, err := table.Index(tx, Tuple{
 		Text("foo"), Int(1),
 	})
 	assert.Nil(t, err)
 	assert.Equal(t, 0, len(keys))
-	keys, err = table.Index(tx, AnyKey{
+	keys, err = table.Index(tx, Tuple{
 		Text("foo"), Int(2),
 	})
 	assert.Nil(t, err)
@@ -95,8 +95,8 @@ func TestTableIsolation(t *testing.T) {
 		},
 	}, SnapshotIsolation)
 	err := table.Insert(tx2, TestRow{
-		Key:   1,
-		Value: 2,
+		key:   1,
+		value: 2,
 	})
 	assert.Nil(t, err)
 	err = tx2.Commit()
@@ -104,8 +104,8 @@ func TestTableIsolation(t *testing.T) {
 
 	// duplicated key
 	err = table.Insert(tx1, TestRow{
-		Key:   1,
-		Value: 3,
+		key:   1,
+		value: 3,
 	})
 	assert.NotNil(t, err)
 	var dup *ErrPrimaryKeyDuplicated
