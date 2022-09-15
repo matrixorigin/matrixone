@@ -178,18 +178,6 @@ func boolToInt8(b bool) int8 {
 	return 0
 }
 
-func valueEqual(a, b any) bool {
-	bsA, ok := a.([]byte)
-	if ok {
-		bsB, ok := b.([]byte)
-		if ok {
-			return bytes.Equal(bsA, bsB)
-		}
-		panic(fmt.Errorf("type not the same: %T %T", a, b))
-	}
-	return a == b
-}
-
 func newRowID() types.Rowid {
 	var rowid types.Rowid
 	err := binary.Read(rand.Reader, binary.LittleEndian, &rowid)
