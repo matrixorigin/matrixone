@@ -92,8 +92,7 @@ func (a AnyKey) Less(than AnyKey) bool {
 type AnyRow struct {
 	primaryKey AnyKey
 	indexes    []AnyKey
-	attributes map[string]any  // attribute id -> value
-	isNull     map[string]bool // attribute id -> is null
+	attributes map[string]Nullable // attribute id -> nullable value
 }
 
 func (a AnyRow) PrimaryKey() AnyKey {
@@ -109,7 +108,7 @@ func (a *AnyRow) String() string {
 	buf.WriteString("AnyRow{")
 	buf.WriteString(fmt.Sprintf("key: %+v", a.primaryKey))
 	for key, value := range a.attributes {
-		buf.WriteString(fmt.Sprintf(", %s: %v", key, value))
+		buf.WriteString(fmt.Sprintf(", %s: %+v", key, value))
 	}
 	buf.WriteString("}")
 	return buf.String()
@@ -119,8 +118,18 @@ func NewAnyRow(
 	indexes []AnyKey,
 ) *AnyRow {
 	return &AnyRow{
-		attributes: make(map[string]any),
-		isNull:     make(map[string]bool),
+		attributes: make(map[string]Nullable),
 		indexes:    indexes,
 	}
+}
+
+type NamedAnyRow struct {
+	Row      *AnyRow
+	AttrsMap map[string]*AttributeRow
+}
+
+var _ NamedRow = new(NamedAnyRow)
+
+func (n *NamedAnyRow) AttrByName(tx *Transaction, name string) (Nullable, error) {
+	return n.Row.attributes[n.AttrsMap[name].ID], nil
 }
