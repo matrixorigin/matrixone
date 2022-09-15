@@ -203,6 +203,7 @@ message ProcessInfo {
     int64 unix_time = 3;
     string snapshot = 4;
     SessionInfo session_info = 5;
+    repeated int32 analysis_node_list = 6;
 }
 
 message SessionInfo {

@@ -77,12 +77,13 @@ type messageHandleHelper struct {
 // processHelper a structure records information about source process. and to help
 // rebuild the process in the remote node.
 type processHelper struct {
-	id          string
-	lim         process.Limitation
-	unixTime    int64
-	txnOperator client.TxnOperator
-	txnClient   client.TxnClient
-	sessionInfo process.SessionInfo
+	id               string
+	lim              process.Limitation
+	unixTime         int64
+	txnOperator      client.TxnOperator
+	txnClient        client.TxnClient
+	sessionInfo      process.SessionInfo
+	analysisNodeList []int32
 }
 
 // CnServerMessageHandler deal the client message that received at cn-server.
@@ -134,30 +135,18 @@ func pipelineMessageHandle(ctx context.Context, message morpc.Message, cs morpc.
 	}
 	refactorScope(c, c.ctx, s)
 
-	// just test.
-	// println(ShowScopes([]*Scope{s}))
 	err = s.ParallelRun(c)
 	if err != nil {
 		return nil, err
 	}
-	// if it's a query sql, get analyse related information
-	if s.Plan != nil {
-		if query, ok := s.Plan.Plan.(*plan.Plan_Query); ok {
-			nodes := query.Query.GetNodes()
-			anas := &pipeline.AnalysisList{
-				List: make([]*plan.AnalyzeInfo, len(nodes)),
-			}
-			for i := range anas.List {
-				if nodes[i].AnalyzeInfo == nil {
-					anas.List[i] = &plan.AnalyzeInfo{}
-				} else {
-					anas.List[i] = nodes[i].AnalyzeInfo
-				}
-			}
-			return anas.Marshal()
-		}
+	// encode analysis info and return.
+	anas := &pipeline.AnalysisList{
+		List: make([]*plan.AnalyzeInfo, len(c.proc.AnalInfos)),
 	}
-	return nil, nil
+	for i := range anas.List {
+		anas.List[i] = convertToPlanAnalyzeInfo(c.proc.AnalInfos[i])
+	}
+	return anas.Marshal()
 }
 
 // remoteRun sends a scope to remote node for execution, and wait to receive the back message.
@@ -299,6 +288,10 @@ func encodeProcessInfo(proc *process.Process) ([]byte, error) {
 			return nil, err
 		}
 		procInfo.Snapshot = string(snapshot)
+		procInfo.AnalysisNodeList = make([]int32, len(proc.AnalInfos))
+		for i := range procInfo.AnalysisNodeList {
+			procInfo.AnalysisNodeList[i] = proc.AnalInfos[i].NodeId
+		}
 	}
 	{ // session info
 		timeBytes, err := time.Time{}.In(proc.SessionInfo.TimeZone).MarshalBinary()
@@ -320,16 +313,19 @@ func encodeProcessInfo(proc *process.Process) ([]byte, error) {
 }
 
 func generateProcessHelper(data []byte, cli client.TxnClient) (*processHelper, error) {
-	result := &processHelper{}
-
 	procInfo := &pipeline.ProcessInfo{}
 	err := procInfo.Unmarshal(data)
 	if err != nil {
 		return nil, err
 	}
-	result.id = procInfo.Id
-	result.lim = convertToProcessLimitation(procInfo.Lim)
-	result.unixTime = procInfo.UnixTime
+
+	result := &processHelper{
+		id:               procInfo.Id,
+		lim:              convertToProcessLimitation(procInfo.Lim),
+		unixTime:         procInfo.UnixTime,
+		txnClient:        cli,
+		analysisNodeList: procInfo.GetAnalysisNodeList(),
+	}
 	result.txnOperator, err = cli.NewWithSnapshot([]byte(procInfo.Snapshot))
 	if err != nil {
 		return nil, err
@@ -338,7 +334,7 @@ func generateProcessHelper(data []byte, cli client.TxnClient) (*processHelper, e
 	if err != nil {
 		return nil, err
 	}
-	result.txnClient = cli
+
 	return result, nil
 }
 
@@ -914,7 +910,6 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext) (vm.In
 		v.Arg = &connector.Argument{
 			Reg: ctx.root.getRegister(t.PipelineId, t.ConnectorIndex),
 		}
-	// may useless
 	case vm.Merge:
 		v.Arg = &merge.Argument{}
 	case vm.MergeGroup:
@@ -946,7 +941,6 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext) (vm.In
 
 // newCompile generates a new compile for remote run.
 func newCompile(ctx context.Context, message morpc.Message, pHelper *processHelper, mHelper *messageHandleHelper, cs morpc.ClientSession) *Compile {
-	// TODO: this process is just an temporary solution. And process's properties need to be refined.
 	proc := process.New(
 		ctx,
 		mheap.New(guest.New(1<<30, host.New(1<<30))),
@@ -958,6 +952,10 @@ func newCompile(ctx context.Context, message morpc.Message, pHelper *processHelp
 	proc.Id = pHelper.id
 	proc.Lim = pHelper.lim
 	proc.SessionInfo = pHelper.sessionInfo
+	proc.AnalInfos = make([]*process.AnalyzeInfo, len(pHelper.analysisNodeList))
+	for i := range proc.AnalInfos {
+		proc.AnalInfos[i].NodeId = pHelper.analysisNodeList[i]
+	}
 
 	c := &Compile{
 		ctx:  ctx,
@@ -1142,6 +1140,17 @@ func convertToProcessSessionInfo(sei *pipeline.SessionInfo) (process.SessionInfo
 	}
 	sessionInfo.TimeZone = t.Location()
 	return sessionInfo, nil
+}
+
+func convertToPlanAnalyzeInfo(info *process.AnalyzeInfo) *plan.AnalyzeInfo {
+	return &plan.AnalyzeInfo{
+		InputRows:    info.InputRows,
+		OutputRows:   info.OutputRows,
+		InputSize:    info.InputSize,
+		OutputSize:   info.OutputSize,
+		TimeConsumed: info.TimeConsumed,
+		MemorySize:   info.MemorySize,
+	}
 }
 
 func decodeBatch(_ *process.Process, msg *pipeline.Message) (*batch.Batch, error) {
