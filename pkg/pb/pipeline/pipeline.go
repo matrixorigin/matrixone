@@ -31,5 +31,5 @@ func (m *Message) SetID(id uint64) {
 }
 
 func (m *Message) DebugString() string {
-	return fmt.Sprintf("sid: %v, cmd: %v, code: %s", m.Sid, m.Cmd, m.Code)
+	return fmt.Sprintf("sid: %v, cmd: %v, data: %s, err: %s", m.Sid, m.Cmd, m.Data, m.ErrStr)
 }

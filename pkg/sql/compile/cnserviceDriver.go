@@ -16,7 +16,6 @@ package compile
 
 import (
 	"context"
-	"errors"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"time"
 
@@ -92,7 +91,8 @@ type processHelper struct {
 func CnServerMessageHandler(ctx context.Context, message morpc.Message,
 	cs morpc.ClientSession,
 	storeEngine engine.Engine, fileService fileservice.FileService, cli client.TxnClient) error {
-	var errCode []byte = nil
+	var errCode uint32 = 0
+	var errStr string
 	// structure to help handle the message.
 	helper := &messageHandleHelper{
 		storeEngine: storeEngine,
@@ -101,9 +101,13 @@ func CnServerMessageHandler(ctx context.Context, message morpc.Message,
 	// decode message and run it, get final analysis information and err info.
 	analysis, err := pipelineMessageHandle(ctx, message, cs, helper, cli)
 	if err != nil {
-		errCode = []byte(err.Error())
+		errStr = err.Error()
+		if me, ok := err.(*moerr.Error); ok {
+			errCode = uint32(me.Code)
+			errStr = me.Message
+		}
 	}
-	return cs.Write(ctx, &pipeline.Message{Id: message.GetID(), Sid: pipeline.MessageEnd, Code: errCode, Analyse: analysis})
+	return cs.Write(ctx, &pipeline.Message{Id: message.GetID(), Sid: pipeline.MessageEnd, ErrCode: errCode, ErrStr: errStr, Analyse: analysis})
 }
 
 func pipelineMessageHandle(ctx context.Context, message morpc.Message, cs morpc.ClientSession, messageHelper *messageHandleHelper, cli client.TxnClient) (anaData []byte, err error) {
@@ -221,9 +225,9 @@ func (s *Scope) remoteRun(c *Compile) error {
 
 		m := val.(*pipeline.Message)
 
-		errMessage := m.GetCode()
+		errMessage := m.GetErrStr()
 		if len(errMessage) > 0 {
-			return errors.New(string(errMessage))
+			return moerr.NewError(uint16(m.GetErrCode()), errMessage)
 		}
 
 		sid := m.GetSid()
@@ -954,7 +958,6 @@ func newCompile(ctx context.Context, message morpc.Message, pHelper *processHelp
 	proc.Id = pHelper.id
 	proc.Lim = pHelper.lim
 	proc.SessionInfo = pHelper.sessionInfo
-	s, _ := pHelper.txnOperator.Snapshot()
 
 	c := &Compile{
 		ctx:  ctx,

@@ -28,11 +28,12 @@ import "plan.proto";
 message Message {
     uint64  sid = 1;
     uint64  cmd = 2;
-    bytes   code = 3;
-    bytes   data = 4;
-    bytes   proc_info_data = 5;
-    bytes   analyse = 6;
-    uint64  id = 7;
+    uint32  err_code = 3;
+    string  err_str = 4;
+    bytes   data = 5;
+    bytes   proc_info_data = 6;
+    bytes   analyse = 7;
+    uint64  id = 8;
 }
 
 message Connector {
