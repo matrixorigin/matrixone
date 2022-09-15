@@ -275,14 +275,14 @@ func (l *LocalETLFS) Read(ctx context.Context, vector *IOVector) error {
 				entry.Data = data
 
 			} else {
-				if len(entry.Data) < entry.Size {
+				if int64(len(entry.Data)) < entry.Size {
 					entry.Data = make([]byte, entry.Size)
 				}
 				n, err := io.ReadFull(r, entry.Data)
 				if err != nil {
 					return err
 				}
-				if n != entry.Size {
+				if int64(n) != entry.Size {
 					return ErrUnexpectedEOF
 				}
 			}
@@ -331,7 +331,7 @@ func (l *LocalETLFS) List(ctx context.Context, dirPath string) (ret []DirEntry, 
 		ret = append(ret, DirEntry{
 			Name:  name,
 			IsDir: entry.IsDir(),
-			Size:  int(info.Size()),
+			Size:  info.Size(),
 		})
 	}
 
@@ -483,10 +483,10 @@ func (l *LocalETLFSMutator) Append(ctx context.Context, entries ...IOEntry) erro
 	if err != nil {
 		return err
 	}
-	return l.mutate(ctx, int(offset), entries...)
+	return l.mutate(ctx, offset, entries...)
 }
 
-func (l *LocalETLFSMutator) mutate(ctx context.Context, baseOffset int, entries ...IOEntry) error {
+func (l *LocalETLFSMutator) mutate(ctx context.Context, baseOffset int64, entries ...IOEntry) error {
 
 	// write
 	for _, entry := range entries {
@@ -501,7 +501,7 @@ func (l *LocalETLFSMutator) mutate(ctx context.Context, baseOffset int, entries 
 			if err != nil {
 				return err
 			}
-			if int(n) != entry.Size {
+			if n != entry.Size {
 				return ErrSizeNotMatch
 			}
 
@@ -511,7 +511,7 @@ func (l *LocalETLFSMutator) mutate(ctx context.Context, baseOffset int, entries 
 			if err != nil {
 				return err
 			}
-			if int(n) != entry.Size {
+			if int64(n) != entry.Size {
 				return ErrSizeNotMatch
 			}
 		}
