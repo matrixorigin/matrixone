@@ -17,12 +17,12 @@ package dnservice
 import (
 	"sort"
 
-	"github.com/lni/dragonboat/v4/logger"
-
 	"github.com/matrixorigin/matrixone/pkg/hakeeper"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper/checkers/util"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper/operator"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
+	"go.uber.org/zap"
 )
 
 var (
@@ -30,7 +30,7 @@ var (
 	waitingShards *initialShards
 
 	// logger for dnservice checker
-	log = logger.GetLogger("dnchecker")
+	logger = logutil.GetGlobalLogger().Named("hakeeper")
 )
 
 func init() {
@@ -49,7 +49,7 @@ func Check(
 ) []*operator.Operator {
 	stores, reportedShards := parseDnState(cfg, dnState, currTick)
 	if len(stores.WorkingStores()) < 1 {
-		log.Warningf("no working dn stores")
+		logger.Warn("no working dn stores")
 		return nil
 	}
 
@@ -66,7 +66,7 @@ func Check(
 
 	// 2. check expected dn state
 	operators = append(operators,
-		checkInitatingShards(
+		checkInitiatingShards(
 			reportedShards, mapper, stores.WorkingStores(), idAlloc,
 			cluster, cfg, currTick,
 		)...,
@@ -84,26 +84,26 @@ func checkShard(
 	case 0: // need add replica
 		newReplicaID, ok := idAlloc.Next()
 		if !ok {
-			log.Warningf("fail to allocate replica ID")
+			logger.Warn("fail to allocate replica ID")
 			return nil
 		}
 
 		target, err := consumeLeastSpareStore(workingStores)
 		if err != nil {
-			log.Warningf("no working dn stores")
+			logger.Warn("no working dn stores")
 			return nil
 		}
 
 		logShardID, err := mapper.getLogShardID(shard.shardID)
 		if err != nil {
-			log.Warningf("shard not registerd: %d", shard.shardID)
+			logger.Warn("shard not registered", zap.Uint64("ShardID", shard.shardID))
 			return nil
 		}
 
 		s := newAddStep(
 			target, shard.shardID, newReplicaID, logShardID,
 		)
-		log.Infof(s.String())
+		logger.Info(s.String())
 		return []operator.OpStep{s}
 
 	case 1: // ignore expired replicas
@@ -115,7 +115,7 @@ func checkShard(
 
 		logShardID, err := mapper.getLogShardID(shard.shardID)
 		if err != nil {
-			log.Warningf("shard not registerd: %d", shard.shardID)
+			logger.Warn("shard not registered", zap.Uint64("ShardID", shard.shardID))
 			return nil
 		}
 
@@ -123,7 +123,7 @@ func checkShard(
 			s := newRemoveStep(
 				r.storeID, r.shardID, r.replicaID, logShardID,
 			)
-			log.Infof(s.String())
+			logger.Info(s.String())
 			steps = append(steps, s)
 		}
 		return steps
