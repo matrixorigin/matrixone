@@ -3556,3 +3556,29 @@ func makeSql2ExecResult2(userId int,
 	}
 	return sql2result
 }
+
+func Test_graph(t *testing.T) {
+	convey.Convey("create graph", t, func() {
+		g := NewGraph()
+
+		g.addEdge(1, 2)
+		g.addEdge(2, 3)
+		g.addEdge(3, 4)
+
+		convey.So(g.hasLoop(1), convey.ShouldBeFalse)
+
+		g2 := NewGraph()
+		g2.addEdge(1, 2)
+		g2.addEdge(2, 3)
+		g2.addEdge(3, 4)
+		e1 := g2.addEdge(4, 1)
+
+		convey.So(g2.hasLoop(1), convey.ShouldBeTrue)
+
+		g2.removeEdge(e1)
+		convey.So(g2.hasLoop(1), convey.ShouldBeFalse)
+
+		g2.addEdge(4, 1)
+		convey.So(g2.hasLoop(1), convey.ShouldBeTrue)
+	})
+}
