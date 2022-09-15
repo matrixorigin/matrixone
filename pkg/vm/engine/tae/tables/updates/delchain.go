@@ -19,12 +19,12 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
@@ -113,7 +113,7 @@ func (chain *DeleteChain) IsDeleted(row uint32, ts types.TS, rwlocker *sync.RWMu
 				} else if state == txnif.TxnStatePreparing {
 					logutil.Fatal("txn state error")
 				} else if state == txnif.TxnStateUnknown {
-					err = txnif.ErrTxnInternal
+					err = moerr.NewTxnInternal()
 				}
 			}
 		}
@@ -132,9 +132,9 @@ func (chain *DeleteChain) PrepareRangeDelete(start, end uint32, ts types.TS) (er
 		overlap := n.HasOverlapLocked(start, end)
 		if overlap {
 			if n.txn == nil || n.txn.GetStartTS().Equal(ts) {
-				err = data.ErrNotFound
+				err = moerr.NewNotFound()
 			} else {
-				err = txnif.ErrTxnWWConflict
+				err = moerr.NewTxnWWConflict()
 			}
 			return false
 		}
@@ -289,7 +289,7 @@ func (chain *DeleteChain) CollectDeletesLocked(
 				}
 				return true
 			} else if state == txnif.TxnStateUnknown {
-				err = txnif.ErrTxnInternal
+				err = moerr.NewTxnInternal()
 				if rwlocker != nil {
 					rwlocker.RLock()
 				}

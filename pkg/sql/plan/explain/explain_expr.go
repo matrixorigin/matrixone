@@ -17,10 +17,9 @@ package explain
 import (
 	"strconv"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/errno"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/errors"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 )
 
@@ -106,7 +105,7 @@ func funcExprExplain(funcExpr *plan.Expr_F, Typ *plan.Type, options *ExplainOpti
 
 	funcProtoType, err := function.GetFunctionByID(funcDef.Obj & function.DistinctMask)
 	if err != nil {
-		return result, errors.New(errno.InvalidName, "invalid function or opreator name '"+funcName+"'")
+		return result, moerr.NewInvalidInput("invalid function or opreator '%s'", funcName)
 	}
 
 	switch funcProtoType.Layout {
@@ -240,7 +239,7 @@ func funcExprExplain(funcExpr *plan.Expr_F, Typ *plan.Type, options *ExplainOpti
 
 		result += funcExpr.F.Func.GetObjName() + "(" + first + " from " + second + ")"
 	case function.UNKNOW_KIND_FUNCTION:
-		return result, errors.New(errno.UndefinedFunction, "UNKNOW_KIND_FUNCTION is not support now")
+		return result, moerr.NewInvalidInput("explain contains UNKNOW_KIND_FUNCTION")
 	}
 	return result, nil
 }

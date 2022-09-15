@@ -17,10 +17,10 @@ package logservice
 import (
 	"testing"
 
-	"github.com/cockroachdb/errors"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper"
 )
 
@@ -98,7 +98,7 @@ func TestGetInitHAKeeperMembers(t *testing.T) {
 		cfg := Config{}
 		cfg.BootstrapConfig.InitHAKeeperMembers = v
 		_, err := cfg.GetInitHAKeeperMembers()
-		assert.Equal(t, ErrInvalidBootstrapConfig, err)
+		assert.True(t, moerr.IsMoErrCode(err, moerr.ErrBadConfig))
 	}
 }
 
@@ -108,27 +108,33 @@ func TestConfigCanBeValidated(t *testing.T) {
 
 	c1 := c
 	c1.DeploymentID = 0
-	assert.True(t, errors.Is(c1.Validate(), ErrInvalidConfig))
+	err := c1.Validate()
+	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrBadConfig))
 
 	c2 := c
 	c2.ServiceAddress = ""
-	assert.True(t, errors.Is(c2.Validate(), ErrInvalidConfig))
+	err = c2.Validate()
+	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrBadConfig))
 
 	c3 := c
 	c3.RaftAddress = ""
-	assert.True(t, errors.Is(c3.Validate(), ErrInvalidConfig))
+	err = c2.Validate()
+	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrBadConfig))
 
 	c4 := c
 	c4.GossipAddress = ""
-	assert.True(t, errors.Is(c4.Validate(), ErrInvalidConfig))
+	err = c4.Validate()
+	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrBadConfig))
 
 	c5 := c
 	c5.GossipSeedAddresses = []string{}
-	assert.True(t, errors.Is(c5.Validate(), ErrInvalidConfig))
+	err = c5.Validate()
+	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrBadConfig))
 
 	c6 := c
 	c6.GossipProbeInterval.Duration = 0
-	assert.True(t, errors.Is(c6.Validate(), ErrInvalidConfig))
+	err = c6.Validate()
+	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrBadConfig))
 }
 
 func TestBootstrapConfigCanBeValidated(t *testing.T) {
@@ -144,19 +150,23 @@ func TestBootstrapConfigCanBeValidated(t *testing.T) {
 
 	c1 := c
 	c1.BootstrapConfig.NumOfLogShards = 0
-	assert.True(t, errors.Is(c1.Validate(), ErrInvalidConfig))
+	err := c1.Validate()
+	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrBadConfig))
 
 	c2 := c
 	c2.BootstrapConfig.NumOfDNShards = 0
-	assert.True(t, errors.Is(c2.Validate(), ErrInvalidConfig))
+	err = c2.Validate()
+	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrBadConfig))
 
 	c3 := c
 	c3.BootstrapConfig.NumOfDNShards = 2
-	assert.True(t, errors.Is(c3.Validate(), ErrInvalidConfig))
+	err = c3.Validate()
+	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrBadConfig))
 
 	c4 := c
 	c4.BootstrapConfig.NumOfLogShardReplicas = 2
-	assert.True(t, errors.Is(c4.Validate(), ErrInvalidConfig))
+	err = c4.Validate()
+	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrBadConfig))
 }
 
 func TestFillConfig(t *testing.T) {
@@ -226,7 +236,7 @@ func TestClientConfigValidate(t *testing.T) {
 		if tt.ok {
 			assert.NoError(t, err)
 		} else {
-			assert.True(t, errors.Is(err, ErrInvalidConfig))
+			assert.True(t, moerr.IsMoErrCode(err, moerr.ErrBadConfig))
 		}
 	}
 }
@@ -258,7 +268,7 @@ func TestHAKeeperClientConfigValidate(t *testing.T) {
 		if tt.ok {
 			assert.NoError(t, err)
 		} else {
-			assert.True(t, errors.Is(err, ErrInvalidConfig))
+			assert.True(t, moerr.IsMoErrCode(err, moerr.ErrBadConfig))
 		}
 	}
 }

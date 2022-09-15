@@ -20,8 +20,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/cockroachdb/errors"
-
 	"github.com/google/uuid"
 	"github.com/lni/dragonboat/v4"
 	"github.com/lni/goutils/leaktest"
@@ -29,6 +27,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
@@ -40,13 +39,13 @@ func TestHAKeeperClientConfigIsValidated(t *testing.T) {
 	cfg := HAKeeperClientConfig{}
 	cc1, err := NewCNHAKeeperClient(context.TODO(), cfg)
 	assert.Nil(t, cc1)
-	assert.True(t, errors.Is(err, ErrInvalidConfig))
+	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrBadConfig))
 	cc2, err := NewDNHAKeeperClient(context.TODO(), cfg)
 	assert.Nil(t, cc2)
-	assert.True(t, errors.Is(err, ErrInvalidConfig))
+	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrBadConfig))
 	cc3, err := NewLogHAKeeperClient(context.TODO(), cfg)
 	assert.Nil(t, cc3)
-	assert.True(t, errors.Is(err, ErrInvalidConfig))
+	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrBadConfig))
 }
 
 func TestHAKeeperClientsCanBeCreated(t *testing.T) {
@@ -77,11 +76,11 @@ func TestHAKeeperClientCanNotConnectToNonHAKeeperNode(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
 		_, err := NewCNHAKeeperClient(ctx, cfg)
-		require.Equal(t, ErrNotHAKeeper, err)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrNoHAKeeper))
 		_, err = NewDNHAKeeperClient(ctx, cfg)
-		assert.Equal(t, ErrNotHAKeeper, err)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrNoHAKeeper))
 		_, err = NewLogHAKeeperClient(ctx, cfg)
-		assert.Equal(t, ErrNotHAKeeper, err)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrNoHAKeeper))
 	}
 	runServiceTest(t, false, true, fn)
 }

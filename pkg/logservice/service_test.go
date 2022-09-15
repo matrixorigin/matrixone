@@ -29,6 +29,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	hapkg "github.com/matrixorigin/matrixone/pkg/hakeeper"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
@@ -133,8 +134,7 @@ func TestServiceConnect(t *testing.T) {
 			},
 		}
 		resp := s.handleConnect(ctx, req)
-		assert.Equal(t, pb.NoError, resp.ErrorCode)
-		assert.Equal(t, "", resp.ErrorMessage)
+		assert.Equal(t, uint32(moerr.Ok), resp.ErrorCode)
 	}
 	runServiceTest(t, false, true, fn)
 }
@@ -152,8 +152,7 @@ func TestServiceConnectTimeout(t *testing.T) {
 			},
 		}
 		resp := s.handleConnect(ctx, req)
-		assert.Equal(t, pb.Timeout, resp.ErrorCode)
-		assert.Equal(t, "", resp.ErrorMessage)
+		assert.Equal(t, uint32(moerr.ErrDragonboatTimeout), resp.ErrorCode)
 	}
 	runServiceTest(t, false, true, fn)
 }
@@ -171,8 +170,7 @@ func TestServiceConnectRO(t *testing.T) {
 			},
 		}
 		resp := s.handleConnect(ctx, req)
-		assert.Equal(t, pb.NoError, resp.ErrorCode)
-		assert.Equal(t, "", resp.ErrorMessage)
+		assert.Equal(t, uint32(moerr.Ok), resp.ErrorCode)
 	}
 	runServiceTest(t, false, true, fn)
 }
@@ -241,7 +239,7 @@ func TestServiceHandleCNHeartbeat(t *testing.T) {
 		}
 		resp := s.handleCNHeartbeat(ctx, req)
 		assert.Nil(t, resp.CommandBatch)
-		assert.Equal(t, pb.ErrorCode(0), resp.ErrorCode)
+		assert.Equal(t, uint32(moerr.Ok), resp.ErrorCode)
 	}
 	runServiceTest(t, true, true, fn)
 }
@@ -302,8 +300,7 @@ func TestServiceHandleAppend(t *testing.T) {
 			},
 		}
 		resp := s.handleConnect(ctx, req)
-		assert.Equal(t, pb.NoError, resp.ErrorCode)
-		assert.Equal(t, "", resp.ErrorMessage)
+		assert.Equal(t, uint32(moerr.Ok), resp.ErrorCode)
 
 		data := make([]byte, 8)
 		cmd := getTestAppendCmd(req.LogRequest.DNID, data)
@@ -314,8 +311,7 @@ func TestServiceHandleAppend(t *testing.T) {
 			},
 		}
 		resp = s.handleAppend(ctx, req, cmd)
-		assert.Equal(t, pb.NoError, resp.ErrorCode)
-		assert.Equal(t, "", resp.ErrorMessage)
+		assert.Equal(t, uint32(moerr.Ok), resp.ErrorCode)
 		assert.Equal(t, uint64(4), resp.LogResponse.Lsn)
 	}
 	runServiceTest(t, false, true, fn)
@@ -334,8 +330,7 @@ func TestServiceHandleAppendWhenNotBeingTheLeaseHolder(t *testing.T) {
 			},
 		}
 		resp := s.handleConnect(ctx, req)
-		assert.Equal(t, pb.NoError, resp.ErrorCode)
-		assert.Equal(t, "", resp.ErrorMessage)
+		assert.Equal(t, uint32(moerr.Ok), resp.ErrorCode)
 
 		data := make([]byte, 8)
 		cmd := getTestAppendCmd(req.LogRequest.DNID+1, data)
@@ -346,8 +341,7 @@ func TestServiceHandleAppendWhenNotBeingTheLeaseHolder(t *testing.T) {
 			},
 		}
 		resp = s.handleAppend(ctx, req, cmd)
-		assert.Equal(t, pb.NotLeaseHolder, resp.ErrorCode)
-		assert.Equal(t, "", resp.ErrorMessage)
+		assert.Equal(t, uint32(moerr.ErrNotLeaseHolder), resp.ErrorCode)
 		assert.Equal(t, uint64(0), resp.LogResponse.Lsn)
 	}
 	runServiceTest(t, false, true, fn)
@@ -366,8 +360,7 @@ func TestServiceHandleRead(t *testing.T) {
 			},
 		}
 		resp := s.handleConnect(ctx, req)
-		assert.Equal(t, pb.NoError, resp.ErrorCode)
-		assert.Equal(t, "", resp.ErrorMessage)
+		assert.Equal(t, uint32(moerr.Ok), resp.ErrorCode)
 
 		data := make([]byte, 8)
 		cmd := getTestAppendCmd(req.LogRequest.DNID, data)
@@ -378,8 +371,7 @@ func TestServiceHandleRead(t *testing.T) {
 			},
 		}
 		resp = s.handleAppend(ctx, req, cmd)
-		assert.Equal(t, pb.NoError, resp.ErrorCode)
-		assert.Equal(t, "", resp.ErrorMessage)
+		assert.Equal(t, uint32(moerr.Ok), resp.ErrorCode)
 		assert.Equal(t, uint64(4), resp.LogResponse.Lsn)
 
 		req = pb.Request{
@@ -391,8 +383,7 @@ func TestServiceHandleRead(t *testing.T) {
 			},
 		}
 		resp, records := s.handleRead(ctx, req)
-		assert.Equal(t, pb.NoError, resp.ErrorCode)
-		assert.Equal(t, "", resp.ErrorMessage)
+		assert.Equal(t, uint32(moerr.Ok), resp.ErrorCode)
 		assert.Equal(t, uint64(1), resp.LogResponse.LastLsn)
 		require.Equal(t, 4, len(records.Records))
 		assert.Equal(t, pb.Internal, records.Records[0].Type)
@@ -417,8 +408,7 @@ func TestServiceTruncate(t *testing.T) {
 			},
 		}
 		resp := s.handleConnect(ctx, req)
-		assert.Equal(t, pb.NoError, resp.ErrorCode)
-		assert.Equal(t, "", resp.ErrorMessage)
+		assert.Equal(t, uint32(moerr.Ok), resp.ErrorCode)
 
 		data := make([]byte, 8)
 		cmd := getTestAppendCmd(req.LogRequest.DNID, data)
@@ -429,8 +419,7 @@ func TestServiceTruncate(t *testing.T) {
 			},
 		}
 		resp = s.handleAppend(ctx, req, cmd)
-		assert.Equal(t, pb.NoError, resp.ErrorCode)
-		assert.Equal(t, "", resp.ErrorMessage)
+		assert.Equal(t, uint32(moerr.Ok), resp.ErrorCode)
 		assert.Equal(t, uint64(4), resp.LogResponse.Lsn)
 
 		req = pb.Request{
@@ -441,8 +430,7 @@ func TestServiceTruncate(t *testing.T) {
 			},
 		}
 		resp = s.handleTruncate(ctx, req)
-		assert.Equal(t, pb.NoError, resp.ErrorCode)
-		assert.Equal(t, "", resp.ErrorMessage)
+		assert.Equal(t, uint32(moerr.Ok), resp.ErrorCode)
 		assert.Equal(t, uint64(0), resp.LogResponse.Lsn)
 
 		req = pb.Request{
@@ -452,8 +440,7 @@ func TestServiceTruncate(t *testing.T) {
 			},
 		}
 		resp = s.handleGetTruncatedIndex(ctx, req)
-		assert.Equal(t, pb.NoError, resp.ErrorCode)
-		assert.Equal(t, "", resp.ErrorMessage)
+		assert.Equal(t, uint32(moerr.Ok), resp.ErrorCode)
 		assert.Equal(t, uint64(4), resp.LogResponse.Lsn)
 
 		req = pb.Request{
@@ -464,8 +451,7 @@ func TestServiceTruncate(t *testing.T) {
 			},
 		}
 		resp = s.handleTruncate(ctx, req)
-		assert.Equal(t, pb.LsnAlreadyTruncated, resp.ErrorCode)
-		assert.Equal(t, "", resp.ErrorMessage)
+		assert.Equal(t, uint32(moerr.ErrInvalidTruncateLsn), resp.ErrorCode)
 	}
 	runServiceTest(t, false, true, fn)
 }
@@ -482,19 +468,16 @@ func TestServiceTsoUpdate(t *testing.T) {
 			},
 		}
 		resp := s.handleTsoUpdate(ctx, req)
-		assert.Equal(t, pb.NoError, resp.ErrorCode)
-		assert.Equal(t, "", resp.ErrorMessage)
+		assert.Equal(t, uint32(moerr.Ok), resp.ErrorCode)
 		assert.Equal(t, uint64(1), resp.TsoResponse.Value)
 
 		req.TsoRequest.Count = 1000
 		resp = s.handleTsoUpdate(ctx, req)
-		assert.Equal(t, pb.NoError, resp.ErrorCode)
-		assert.Equal(t, "", resp.ErrorMessage)
+		assert.Equal(t, uint32(moerr.Ok), resp.ErrorCode)
 		assert.Equal(t, uint64(101), resp.TsoResponse.Value)
 
 		resp = s.handleTsoUpdate(ctx, req)
-		assert.Equal(t, pb.NoError, resp.ErrorCode)
-		assert.Equal(t, "", resp.ErrorMessage)
+		assert.Equal(t, uint32(moerr.Ok), resp.ErrorCode)
 		assert.Equal(t, uint64(1101), resp.TsoResponse.Value)
 	}
 	runServiceTest(t, false, true, fn)
@@ -509,7 +492,7 @@ func TestServiceCheckHAKeeper(t *testing.T) {
 			Method: pb.CHECK_HAKEEPER,
 		}
 		resp := s.handleCheckHAKeeper(ctx, req)
-		assert.Equal(t, pb.NoError, resp.ErrorCode)
+		assert.Equal(t, uint32(moerr.Ok), resp.ErrorCode)
 		assert.False(t, resp.IsHAKeeper)
 	}
 	runServiceTest(t, false, false, fn)
@@ -525,7 +508,7 @@ func TestServiceCheckHAKeeper(t *testing.T) {
 			Method: pb.CHECK_HAKEEPER,
 		}
 		resp := s.handleCheckHAKeeper(ctx, req)
-		assert.Equal(t, pb.NoError, resp.ErrorCode)
+		assert.Equal(t, uint32(moerr.Ok), resp.ErrorCode)
 		assert.True(t, resp.IsHAKeeper)
 	}
 	runServiceTest(t, false, false, fn)

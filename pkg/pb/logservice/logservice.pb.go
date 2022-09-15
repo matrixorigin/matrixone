@@ -170,73 +170,6 @@ func (RecordType) EnumDescriptor() ([]byte, []int) {
 	return fileDescriptor_fd1040c5381ab5a7, []int{3}
 }
 
-type ErrorCode int32
-
-const (
-	NoError             ErrorCode = 0
-	Timeout             ErrorCode = 1
-	Canceled            ErrorCode = 2
-	InvalidShard        ErrorCode = 3
-	InvalidTimeout      ErrorCode = 4
-	InvalidPayload      ErrorCode = 5
-	InvalidPayloadSize  ErrorCode = 6
-	Rejected            ErrorCode = 7
-	ShardNotReady       ErrorCode = 8
-	SystemClosed        ErrorCode = 9
-	LsnAlreadyTruncated ErrorCode = 100
-	OutOfRange          ErrorCode = 101
-	NotLeaseHolder      ErrorCode = 102
-	NotHAKeeper         ErrorCode = 103
-	LogShardNotFound    ErrorCode = 104
-	OtherSystemError    ErrorCode = 1000
-)
-
-var ErrorCode_name = map[int32]string{
-	0:    "NoError",
-	1:    "Timeout",
-	2:    "Canceled",
-	3:    "InvalidShard",
-	4:    "InvalidTimeout",
-	5:    "InvalidPayload",
-	6:    "InvalidPayloadSize",
-	7:    "Rejected",
-	8:    "ShardNotReady",
-	9:    "SystemClosed",
-	100:  "LsnAlreadyTruncated",
-	101:  "OutOfRange",
-	102:  "NotLeaseHolder",
-	103:  "NotHAKeeper",
-	104:  "LogShardNotFound",
-	1000: "OtherSystemError",
-}
-
-var ErrorCode_value = map[string]int32{
-	"NoError":             0,
-	"Timeout":             1,
-	"Canceled":            2,
-	"InvalidShard":        3,
-	"InvalidTimeout":      4,
-	"InvalidPayload":      5,
-	"InvalidPayloadSize":  6,
-	"Rejected":            7,
-	"ShardNotReady":       8,
-	"SystemClosed":        9,
-	"LsnAlreadyTruncated": 100,
-	"OutOfRange":          101,
-	"NotLeaseHolder":      102,
-	"NotHAKeeper":         103,
-	"LogShardNotFound":    104,
-	"OtherSystemError":    1000,
-}
-
-func (x ErrorCode) String() string {
-	return proto.EnumName(ErrorCode_name, int32(x))
-}
-
-func (ErrorCode) EnumDescriptor() ([]byte, []int) {
-	return fileDescriptor_fd1040c5381ab5a7, []int{4}
-}
-
 type HAKeeperUpdateType int32
 
 const (
@@ -277,7 +210,7 @@ func (x HAKeeperUpdateType) String() string {
 }
 
 func (HAKeeperUpdateType) EnumDescriptor() ([]byte, []int) {
-	return fileDescriptor_fd1040c5381ab5a7, []int{5}
+	return fileDescriptor_fd1040c5381ab5a7, []int{4}
 }
 
 type HAKeeperState int32
@@ -311,7 +244,7 @@ func (x HAKeeperState) String() string {
 }
 
 func (HAKeeperState) EnumDescriptor() ([]byte, []int) {
-	return fileDescriptor_fd1040c5381ab5a7, []int{6}
+	return fileDescriptor_fd1040c5381ab5a7, []int{5}
 }
 
 // ConfigChangeType indicates config change command type.
@@ -346,7 +279,7 @@ func (x ConfigChangeType) String() string {
 }
 
 func (ConfigChangeType) EnumDescriptor() ([]byte, []int) {
-	return fileDescriptor_fd1040c5381ab5a7, []int{7}
+	return fileDescriptor_fd1040c5381ab5a7, []int{6}
 }
 
 // ServiceType specifies type of service
@@ -372,7 +305,7 @@ func (x ServiceType) String() string {
 }
 
 func (ServiceType) EnumDescriptor() ([]byte, []int) {
-	return fileDescriptor_fd1040c5381ab5a7, []int{8}
+	return fileDescriptor_fd1040c5381ab5a7, []int{7}
 }
 
 type CNStore struct {
@@ -1465,7 +1398,7 @@ func (m *LogResponse) GetLastLsn() uint64 {
 type Response struct {
 	RequestID            uint64                `protobuf:"varint,1,opt,name=RequestID,proto3" json:"RequestID,omitempty"`
 	Method               MethodType            `protobuf:"varint,2,opt,name=Method,proto3,enum=logservice.MethodType" json:"Method,omitempty"`
-	ErrorCode            ErrorCode             `protobuf:"varint,3,opt,name=ErrorCode,proto3,enum=logservice.ErrorCode" json:"ErrorCode,omitempty"`
+	ErrorCode            uint32                `protobuf:"varint,3,opt,name=ErrorCode,proto3" json:"ErrorCode,omitempty"`
 	ErrorMessage         string                `protobuf:"bytes,4,opt,name=ErrorMessage,proto3" json:"ErrorMessage,omitempty"`
 	IsHAKeeper           bool                  `protobuf:"varint,5,opt,name=IsHAKeeper,proto3" json:"IsHAKeeper,omitempty"`
 	LogResponse          LogResponse           `protobuf:"bytes,6,opt,name=LogResponse,proto3" json:"LogResponse"`
@@ -1525,11 +1458,11 @@ func (m *Response) GetMethod() MethodType {
 	return TSO_UPDATE
 }
 
-func (m *Response) GetErrorCode() ErrorCode {
+func (m *Response) GetErrorCode() uint32 {
 	if m != nil {
 		return m.ErrorCode
 	}
-	return NoError
+	return 0
 }
 
 func (m *Response) GetErrorMessage() string {
@@ -2908,7 +2841,6 @@ func init() {
 	proto.RegisterEnum("logservice.NodeState", NodeState_name, NodeState_value)
 	proto.RegisterEnum("logservice.MethodType", MethodType_name, MethodType_value)
 	proto.RegisterEnum("logservice.RecordType", RecordType_name, RecordType_value)
-	proto.RegisterEnum("logservice.ErrorCode", ErrorCode_name, ErrorCode_value)
 	proto.RegisterEnum("logservice.HAKeeperUpdateType", HAKeeperUpdateType_name, HAKeeperUpdateType_value)
 	proto.RegisterEnum("logservice.HAKeeperState", HAKeeperState_name, HAKeeperState_value)
 	proto.RegisterEnum("logservice.ConfigChangeType", ConfigChangeType_name, ConfigChangeType_value)
@@ -8732,7 +8664,7 @@ func (m *Response) Unmarshal(dAtA []byte) error {
 				}
 				b := dAtA[iNdEx]
 				iNdEx++
-				m.ErrorCode |= ErrorCode(b&0x7F) << shift
+				m.ErrorCode |= uint32(b&0x7F) << shift
 				if b < 0x80 {
 					break
 				}

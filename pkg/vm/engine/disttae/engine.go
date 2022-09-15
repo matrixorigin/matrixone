@@ -158,11 +158,11 @@ func (e *Engine) New(ctx context.Context, op client.TxnOperator) error {
 func (e *Engine) Commit(ctx context.Context, op client.TxnOperator) error {
 	txn := e.getTransaction(op)
 	if txn == nil {
-		return moerr.New(moerr.ErrTxnClosed, "the transaction has been committed or aborted")
+		return moerr.NewTxnClosed()
 	}
 	defer e.delTransaction(txn)
 	if e.hasConflict(txn) {
-		return moerr.New(moerr.ErrTxnWriteConflict, "write conflict")
+		return moerr.NewTxnWriteConflict("")
 	}
 	reqs, err := genWriteReqs(txn.writes)
 	if err != nil {
@@ -175,7 +175,7 @@ func (e *Engine) Commit(ctx context.Context, op client.TxnOperator) error {
 func (e *Engine) Rollback(ctx context.Context, op client.TxnOperator) error {
 	txn := e.getTransaction(op)
 	if txn == nil {
-		return moerr.New(moerr.ErrTxnClosed, "the transaction has been committed or aborted")
+		return moerr.NewTxnClosed()
 	}
 	defer e.delTransaction(txn)
 	return nil

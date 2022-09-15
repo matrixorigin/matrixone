@@ -19,12 +19,12 @@ import (
 	"fmt"
 	"math"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/errors"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -112,7 +112,7 @@ func getOneColRangeFromAutoIncrTable(param *AutoIncrParam, bat *batch.Batch, nam
 		if err2 := txnOperator.Rollback(ctx); err2 != nil {
 			return 0, 0, err2
 		}
-		return 0, 0, errors.New("", "GetIndex from auto_increment table fail")
+		return 0, 0, moerr.NewInternalError("GetIndex from auto_increment table fail")
 	}
 
 	vec := bat.Vecs[pos]
@@ -143,7 +143,7 @@ func getOneColRangeFromAutoIncrTable(param *AutoIncrParam, bat *batch.Batch, nam
 	}
 
 	if maxNum < 0 {
-		return 0, 0, errors.New("", "auto_incrment column constant value overflows bigint")
+		return 0, 0, moerr.NewInvalidInput("invalid auto_incrment maxNum %d", maxNum)
 	}
 	if err := updateAutoIncrTable(param, maxNum, name); err != nil {
 		ctx, cancel := context.WithTimeout(
@@ -205,7 +205,7 @@ func updateBatchImpl(ColDefs []*plan.ColDef, bat *batch.Batch, offset, step []in
 				}
 			}
 		default:
-			return errors.New("", "the auto_incr col is not int32 or int64 type")
+			return moerr.NewInvalidInput("invalid auto_increment type '%v'", vec.Typ.Oid)
 		}
 	}
 	return nil
@@ -219,7 +219,7 @@ func getCurrentIndex(param *AutoIncrParam, colName string) (int64, int64) {
 			return -1, 0
 		}
 		if len(bat.Vecs) < 2 {
-			panic(errors.New("", "the mo_increment_columns col num is not two"))
+			panic(moerr.NewInternalError("the mo_increment_columns col num is not two"))
 		}
 		vs2 := vector.MustTCols[int64](bat.Vecs[1])
 		vs3 := vector.MustTCols[int64](bat.Vecs[2])

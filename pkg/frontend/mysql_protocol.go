@@ -370,11 +370,11 @@ type response320 struct {
 func (mp *MysqlProtocolImpl) SendPrepareResponse(stmt *PrepareStmt) error {
 	dcPrepare, ok := stmt.PreparePlan.GetDcl().Control.(*planPb.DataControl_Prepare)
 	if !ok {
-		return moerr.NewError(moerr.INTERNAL_ERROR, "can not get prepare plan in prepareStmt")
+		return moerr.NewInternalError("can not get prepare plan in prepareStmt")
 	}
 	stmtID, err := GetPrepareStmtID(stmt.Name)
 	if err != nil {
-		return moerr.NewError(moerr.INTERNAL_ERROR, "can not get prepare stmtID")
+		return moerr.NewInternalError("can not get prepare stmtID")
 	}
 	paramTypes := dcPrepare.Prepare.ParamTypes
 	numParams := len(paramTypes)
@@ -445,7 +445,7 @@ func (mp *MysqlProtocolImpl) SendPrepareResponse(stmt *PrepareStmt) error {
 func (mp *MysqlProtocolImpl) ParseExecuteData(stmt *PrepareStmt, data []byte, pos int) (names []string, vars []any, err error) {
 	dcPrepare, ok := stmt.PreparePlan.GetDcl().Control.(*planPb.DataControl_Prepare)
 	if !ok {
-		err = moerr.NewError(moerr.INTERNAL_ERROR, "can not get prepare plan in prepareStmt")
+		err = moerr.NewInternalError("can not get prepare plan in prepareStmt")
 		return
 	}
 	numParams := len(dcPrepare.Prepare.ParamTypes)
@@ -453,12 +453,12 @@ func (mp *MysqlProtocolImpl) ParseExecuteData(stmt *PrepareStmt, data []byte, po
 	var flag uint8
 	flag, pos, ok = mp.io.ReadUint8(data, pos)
 	if !ok {
-		err = moerr.NewError(moerr.INVALID_INPUT, "malform packet")
+		err = moerr.NewInternalError("malform packet")
 		return
 	}
 	if flag != 0 {
 		// TODO only support CURSOR_TYPE_NO_CURSOR flag now
-		err = moerr.NewError(moerr.INVALID_INPUT, fmt.Sprintf("unsupported flag %d", flag))
+		err = moerr.NewInvalidInput("unsupported prepare flag '%v'", flag)
 		return
 	}
 
@@ -473,7 +473,7 @@ func (mp *MysqlProtocolImpl) ParseExecuteData(stmt *PrepareStmt, data []byte, po
 		nullBitmapLen := (numParams + 7) >> 3
 		nullBitmaps, pos, ok = mp.readCountOfBytes(data, pos, nullBitmapLen)
 		if !ok {
-			err = moerr.NewError(moerr.INVALID_INPUT, "malform packet")
+			err = moerr.NewInvalidInput("mysql protocol error, malformed packet")
 			return
 		}
 
@@ -485,7 +485,7 @@ func (mp *MysqlProtocolImpl) ParseExecuteData(stmt *PrepareStmt, data []byte, po
 			// we need save it for further use.
 			stmt.ParamTypes, pos, ok = mp.readCountOfBytes(data, pos, numParams<<1)
 			if !ok {
-				err = moerr.NewError(moerr.INVALID_INPUT, "malform packet")
+				err = moerr.NewInvalidInput("mysql protocol error, malformed packet")
 				return
 			}
 		} else {
@@ -508,7 +508,7 @@ func (mp *MysqlProtocolImpl) ParseExecuteData(stmt *PrepareStmt, data []byte, po
 			}
 
 			if (i<<1)+1 >= len(stmt.ParamTypes) {
-				err = moerr.NewError(moerr.INVALID_INPUT, "malform packet")
+				err = moerr.NewInvalidInput("mysql protocol error, malformed packet")
 				return
 			}
 			tp := stmt.ParamTypes[i<<1]
@@ -521,7 +521,7 @@ func (mp *MysqlProtocolImpl) ParseExecuteData(stmt *PrepareStmt, data []byte, po
 			case defines.MYSQL_TYPE_TINY:
 				val, newPos, ok := mp.io.ReadUint8(data, pos)
 				if !ok {
-					err = moerr.NewError(moerr.INVALID_INPUT, "malform packet")
+					err = moerr.NewInvalidInput("mysql protocol error, malformed packet")
 					return
 				}
 
@@ -535,7 +535,7 @@ func (mp *MysqlProtocolImpl) ParseExecuteData(stmt *PrepareStmt, data []byte, po
 			case defines.MYSQL_TYPE_SHORT, defines.MYSQL_TYPE_YEAR:
 				val, newPos, ok := mp.io.ReadUint16(data, pos)
 				if !ok {
-					err = moerr.NewError(moerr.INVALID_INPUT, "malform packet")
+					err = moerr.NewInvalidInput("mysql protocol error, malformed packet")
 					return
 				}
 
@@ -549,7 +549,7 @@ func (mp *MysqlProtocolImpl) ParseExecuteData(stmt *PrepareStmt, data []byte, po
 			case defines.MYSQL_TYPE_INT24, defines.MYSQL_TYPE_LONG:
 				val, newPos, ok := mp.io.ReadUint32(data, pos)
 				if !ok {
-					err = moerr.NewError(moerr.INVALID_INPUT, "malform packet")
+					err = moerr.NewInvalidInput("mysql protocol error, malformed packet")
 					return
 				}
 
@@ -563,7 +563,7 @@ func (mp *MysqlProtocolImpl) ParseExecuteData(stmt *PrepareStmt, data []byte, po
 			case defines.MYSQL_TYPE_LONGLONG:
 				val, newPos, ok := mp.io.ReadUint64(data, pos)
 				if !ok {
-					err = moerr.NewError(moerr.INVALID_INPUT, "malform packet")
+					err = moerr.NewInvalidInput("mysql protocol error, malformed packet")
 					return
 				}
 
@@ -577,7 +577,7 @@ func (mp *MysqlProtocolImpl) ParseExecuteData(stmt *PrepareStmt, data []byte, po
 			case defines.MYSQL_TYPE_FLOAT:
 				val, newPos, ok := mp.io.ReadUint32(data, pos)
 				if !ok {
-					err = moerr.NewError(moerr.INVALID_INPUT, "malform packet")
+					err = moerr.NewInvalidInput("mysql protocol error, malformed packet")
 					return
 				}
 				pos = newPos
@@ -586,7 +586,7 @@ func (mp *MysqlProtocolImpl) ParseExecuteData(stmt *PrepareStmt, data []byte, po
 			case defines.MYSQL_TYPE_DOUBLE:
 				val, newPos, ok := mp.io.ReadUint64(data, pos)
 				if !ok {
-					err = moerr.NewError(moerr.INVALID_INPUT, "malform packet")
+					err = moerr.NewInvalidInput("mysql protocol error, malformed packet")
 					return
 				}
 				pos = newPos
@@ -596,7 +596,7 @@ func (mp *MysqlProtocolImpl) ParseExecuteData(stmt *PrepareStmt, data []byte, po
 				defines.MYSQL_TYPE_ENUM, defines.MYSQL_TYPE_SET, defines.MYSQL_TYPE_GEOMETRY, defines.MYSQL_TYPE_BIT:
 				val, newPos, ok := mp.readStringLenEnc(data, pos)
 				if !ok {
-					err = moerr.NewError(moerr.INVALID_INPUT, "malform packet")
+					err = moerr.NewInvalidInput("mysql protocol error, malformed packet")
 					return
 				}
 				pos = newPos
@@ -605,7 +605,7 @@ func (mp *MysqlProtocolImpl) ParseExecuteData(stmt *PrepareStmt, data []byte, po
 			case defines.MYSQL_TYPE_BLOB, defines.MYSQL_TYPE_TINY_BLOB, defines.MYSQL_TYPE_MEDIUM_BLOB, defines.MYSQL_TYPE_LONG_BLOB:
 				val, newPos, ok := mp.readStringLenEnc(data, pos)
 				if !ok {
-					err = moerr.NewError(moerr.INVALID_INPUT, "malform packet")
+					err = moerr.NewInvalidInput("mysql protocol error, malformed packet")
 					return
 				}
 				pos = newPos
@@ -617,7 +617,7 @@ func (mp *MysqlProtocolImpl) ParseExecuteData(stmt *PrepareStmt, data []byte, po
 				// for more details.
 				length, newPos, ok := mp.io.ReadUint8(data, pos)
 				if !ok {
-					err = moerr.NewError(moerr.INVALID_INPUT, "malform packet")
+					err = moerr.NewInvalidInput("mysql protocol error, malformed packet")
 					return
 				}
 				pos = newPos
@@ -631,7 +631,7 @@ func (mp *MysqlProtocolImpl) ParseExecuteData(stmt *PrepareStmt, data []byte, po
 				case 11:
 					pos, vars[i] = mp.readTimestamp(paramValues, pos)
 				default:
-					err = moerr.NewError(moerr.INVALID_INPUT, "malform packet")
+					err = moerr.NewInvalidInput("mysql protocol error, malformed packet")
 					return
 				}
 
@@ -639,14 +639,14 @@ func (mp *MysqlProtocolImpl) ParseExecuteData(stmt *PrepareStmt, data []byte, po
 				// use string for decimal.  Not tested
 				val, newPos, ok := mp.readStringLenEnc(data, pos)
 				if !ok {
-					err = moerr.NewError(moerr.INVALID_INPUT, "malform packet")
+					err = moerr.NewInvalidInput("mysql protocol error, malformed packet")
 					return
 				}
 				pos = newPos
 				vars[i] = val
 
 			default:
-				err = moerr.NewError(moerr.INTERNAL_ERROR, "unsupport parameter type")
+				err = moerr.NewInternalError("unsupport parameter type")
 				return
 			}
 		}

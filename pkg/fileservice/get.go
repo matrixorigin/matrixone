@@ -15,9 +15,10 @@
 package fileservice
 
 import (
-	"fmt"
 	"path/filepath"
 	"strings"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
 func Get[T any](fs FileService, name string) (res T, err error) {
@@ -25,12 +26,12 @@ func Get[T any](fs FileService, name string) (res T, err error) {
 	if fs, ok := fs.(*FileServices); ok {
 		f, ok := fs.mappings[lowerName]
 		if !ok {
-			err = fmt.Errorf("%w: %s", ErrServiceNotFound, name)
+			err = moerr.NewNoService(name)
 			return
 		}
 		res, ok = f.(T)
 		if !ok {
-			err = fmt.Errorf("%w: %T does not implement %T", ErrWrongService, f, res)
+			err = moerr.NewNoService(name)
 			return
 		}
 		return
@@ -38,11 +39,11 @@ func Get[T any](fs FileService, name string) (res T, err error) {
 	var ok bool
 	res, ok = fs.(T)
 	if !ok {
-		err = fmt.Errorf("%w: %T does not implement %T", ErrWrongService, fs, res)
+		err = moerr.NewNoService(name)
 		return
 	}
 	if !strings.EqualFold(fs.Name(), lowerName) {
-		err = fmt.Errorf("%w: expecting %s, got %s", ErrWrongService, name, fs.Name())
+		err = moerr.NewNoService(name)
 		return
 	}
 	return

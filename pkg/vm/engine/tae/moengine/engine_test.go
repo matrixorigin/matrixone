@@ -18,13 +18,13 @@ import (
 	"context"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 
 	mobat "github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
@@ -503,7 +503,7 @@ func TestTxnRelation_Update(t *testing.T) {
 	assert.Nil(t, err)
 	err = rel.Update(ctx, updatePK)
 	assert.NotNil(t, err)
-	assert.Equal(t, data.ErrUpdateUniqueKey, err)
+	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrTAEError))
 }
 
 func TestCopy1(t *testing.T) {

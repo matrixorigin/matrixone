@@ -26,6 +26,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/cnservice"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/dnservice"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -367,7 +368,7 @@ func (c *testCluster) GetDNStoreInfo(
 	if storeInfo, ok := stores[uuid]; ok {
 		return storeInfo, nil
 	}
-	return logpb.DNStoreInfo{}, ErrServiceNotExist
+	return logpb.DNStoreInfo{}, moerr.NewNoService(uuid)
 }
 
 func (c *testCluster) GetDNStoreInfoIndexed(
@@ -391,7 +392,7 @@ func (c *testCluster) GetLogStoreInfo(
 	if storeInfo, ok := stores[uuid]; ok {
 		return storeInfo, nil
 	}
-	return logpb.LogStoreInfo{}, ErrServiceNotExist
+	return logpb.LogStoreInfo{}, moerr.NewNoService(uuid)
 }
 
 func (c *testCluster) GetLogStoreInfoIndexed(
@@ -440,7 +441,7 @@ func (c *testCluster) DNStoreExpired(uuid string) (bool, error) {
 
 	dnStore, ok := state.DNState.Stores[uuid]
 	if !ok {
-		return false, wrappedError(ErrStoreNotReported, uuid)
+		return false, moerr.NewShardNotReported(uuid, 0xDEADBEEF)
 	}
 
 	hkcfg := c.GetHAKeeperConfig()
@@ -471,7 +472,7 @@ func (c *testCluster) LogStoreExpired(uuid string) (bool, error) {
 
 	logStore, ok := state.LogState.Stores[uuid]
 	if !ok {
-		return false, wrappedError(ErrStoreNotReported, uuid)
+		return false, moerr.NewShardNotReported(uuid, 0xDEADBEEF)
 	}
 
 	hkcfg := c.GetHAKeeperConfig()
@@ -882,7 +883,7 @@ func (c *testCluster) GetDNService(uuid string) (DNService, error) {
 			return c.dn.svcs[i], nil
 		}
 	}
-	return nil, wrappedError(ErrServiceNotExist, uuid)
+	return nil, moerr.NewNoService(uuid)
 }
 
 func (c *testCluster) GetLogService(uuid string) (LogService, error) {
@@ -894,7 +895,7 @@ func (c *testCluster) GetLogService(uuid string) (LogService, error) {
 			return svc, nil
 		}
 	}
-	return nil, wrappedError(ErrServiceNotExist, uuid)
+	return nil, moerr.NewNoService(uuid)
 }
 
 func (c *testCluster) GetCNService(uuid string) (CNService, error) {
@@ -914,9 +915,7 @@ func (c *testCluster) GetDNServiceIndexed(index int) (DNService, error) {
 	defer c.dn.Unlock()
 
 	if index >= len(c.dn.svcs) || index < 0 {
-		return nil, wrappedError(
-			ErrInvalidServiceIndex, fmt.Sprintf("index: %d", index),
-		)
+		return nil, moerr.NewInvalidServiceIndex(index)
 	}
 	return c.dn.svcs[index], nil
 }
@@ -926,9 +925,7 @@ func (c *testCluster) GetLogServiceIndexed(index int) (LogService, error) {
 	defer c.log.Unlock()
 
 	if index >= len(c.log.svcs) || index < 0 {
-		return nil, wrappedError(
-			ErrInvalidServiceIndex, fmt.Sprintf("index: %d", index),
-		)
+		return nil, moerr.NewInvalidServiceIndex(index)
 	}
 	return c.log.svcs[index], nil
 }
