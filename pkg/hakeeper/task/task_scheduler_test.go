@@ -129,3 +129,53 @@ func TestScheduleCreatedTasks(t *testing.T) {
 	assert.NotNil(t, query)
 	assert.Equal(t, task.TaskStatus_Running, query[0].Status)
 }
+
+func TestReallocateExpiredTasks(t *testing.T) {
+	service := taskservice.NewTaskService(taskservice.NewMemTaskStorage())
+	scheduler := NewTaskScheduler(service, hakeeper.Config{})
+	cnState := pb.CNState{Stores: map[string]pb.CNStoreInfo{"a": {}}}
+	currentTick := expiredTick - 1
+
+	// Create Task 1
+	service.Create(context.Background(), task.TaskMetadata{ID: "1"})
+	query, err := service.QueryTask(context.Background())
+	assert.NoError(t, err)
+	assert.Equal(t, task.TaskStatus_Created, query[0].Status)
+
+	// Schedule Task 1 on "a"
+	scheduler.Schedule(cnState, currentTick)
+
+	query, err = service.QueryTask(context.Background())
+	assert.NoError(t, err)
+	assert.Equal(t, 1, len(query))
+	assert.Equal(t, "a", query[0].TaskRunner)
+	assert.Equal(t, task.TaskStatus_Running, query[0].Status)
+
+	// Make CNStore "a" expired
+	cnState = pb.CNState{Stores: map[string]pb.CNStoreInfo{"a": {}}}
+	currentTick = expiredTick + 1
+
+	// Re-schedule Task 1
+	// Since no other CN available, task 1 remains on CN "a"
+	scheduler.Schedule(cnState, currentTick)
+
+	query, err = service.QueryTask(context.Background())
+	assert.NoError(t, err)
+	assert.Equal(t, 1, len(query))
+	assert.Equal(t, "a", query[0].TaskRunner)
+	assert.Equal(t, task.TaskStatus_Running, query[0].Status)
+
+	// Add CNStore "b"
+	cnState = pb.CNState{Stores: map[string]pb.CNStoreInfo{"a": {}, "b": {Tick: expiredTick}}}
+
+	// Re-schedule Task 1
+	// "b" available
+	scheduler.Schedule(cnState, currentTick)
+
+	query, err = service.QueryTask(context.Background())
+	assert.NoError(t, err)
+	assert.Equal(t, 1, len(query))
+	assert.Equal(t, "b", query[0].TaskRunner)
+	assert.Equal(t, task.TaskStatus_Running, query[0].Status)
+
+}

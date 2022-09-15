@@ -25,7 +25,7 @@ type OrderedMap struct {
 
 func NewOrderedMap(keys []string) *OrderedMap {
 	orderedMap := &OrderedMap{
-		Map:         make(map[string]uint32),
+		Map:         make(map[string]uint32, len(keys)),
 		OrderedKeys: make([]string, 0, len(keys)),
 	}
 
@@ -64,5 +64,8 @@ func (o *OrderedMap) Inc(key string) {
 }
 
 func (o *OrderedMap) Min() string {
+	if len(o.OrderedKeys) == 0 {
+		return ""
+	}
 	return o.OrderedKeys[0]
 }
