@@ -748,17 +748,6 @@ func (builder *QueryBuilder) buildUnion(stmt *tree.UnionClause, astOrderBy tree.
 				}
 			}
 		}
-		// for idx, castType := range argsCastType {
-		// 	if !argsType[idx].Eq(castType) && castType.Oid != types.T_any {
-		// 		//  reset projectNode's projectList
-		// 		typ := makePlan2Type(&castType)
-		// 		node := builder.qry.Nodes[nodes[idx]]
-		// 		node.ProjectList[columnIdx], err = appendCastBeforeExpr(node.ProjectList[columnIdx], typ)
-		// 		if err != nil {
-		// 			return 0, err
-		// 		}
-		// 	}
-		// }
 	}
 
 	firstSelectProjectNode := builder.qry.Nodes[nodes[0]]
