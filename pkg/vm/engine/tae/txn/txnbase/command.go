@@ -21,7 +21,6 @@ import (
 	"io"
 
 	"github.com/RoaringBitmap/roaring"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 )
@@ -34,8 +33,6 @@ const (
 	CmdUpdate
 	CmdDelete
 	CmdComposed
-	CmdCommit
-	CmdRollback
 	CmdTxn
 	CmdCustomized
 )
@@ -52,12 +49,6 @@ func init() {
 	})
 	txnif.RegisterCmdFactory(CmdComposed, func(int16) txnif.TxnCmd {
 		return new(ComposedCmd)
-	})
-	txnif.RegisterCmdFactory(CmdCommit, func(int16) txnif.TxnCmd {
-		return new(CommitCmd)
-	})
-	txnif.RegisterCmdFactory(CmdRollback, func(int16) txnif.TxnCmd {
-		return new(RollbackCmd)
 	})
 	txnif.RegisterCmdFactory(CmdTxn, func(int16) txnif.TxnCmd {
 		return NewEmptyTxnCmd()
@@ -105,126 +96,11 @@ type ComposedCmd struct {
 	CmdSize uint32
 }
 
-type CommitCmd struct {
-	PrepareLSN uint64
-	CommitTS   types.TS
-}
-
-type RollbackCmd struct {
-	PrepareLSN uint64
-	CommitTS   types.TS
-}
-
 type BaseCustomizedCmd struct {
 	BaseCmd
 	ID   uint32
 	Impl txnif.TxnCmd
 }
-
-func NewCommitCmd(ts types.TS, lsn uint64) *CommitCmd {
-	return &CommitCmd{
-		PrepareLSN: lsn,
-		CommitTS:   ts,
-	}
-}
-func (c *CommitCmd) WriteTo(w io.Writer) (n int64, err error) {
-	if err = binary.Write(w, binary.BigEndian, c.GetType()); err != nil {
-		return
-	}
-	n += 2
-	if err = binary.Write(w, binary.BigEndian, c.PrepareLSN); err != nil {
-		return
-	}
-	n += 8
-	if err = binary.Write(w, binary.BigEndian, c.CommitTS); err != nil {
-		return
-	}
-	n += 16
-	return
-}
-func (c *CommitCmd) ReadFrom(r io.Reader) (n int64, err error) {
-	if err = binary.Read(r, binary.BigEndian, &c.PrepareLSN); err != nil {
-		return
-	}
-	n += 8
-	if err = binary.Read(r, binary.BigEndian, &c.CommitTS); err != nil {
-		return
-	}
-	n += 16
-	return
-}
-func (c *CommitCmd) Marshal() (buf []byte, err error) {
-	var bbuf bytes.Buffer
-	if _, err = c.WriteTo(&bbuf); err != nil {
-		return
-	}
-	buf = bbuf.Bytes()
-	return
-}
-func (c *CommitCmd) Unmarshal(buf []byte) error {
-	bbuf := bytes.NewBuffer(buf)
-	_, err := c.ReadFrom(bbuf)
-	return err
-}
-func (c *CommitCmd) GetType() int16 {
-	return CmdCommit
-}
-func (c *CommitCmd) Desc() string          { return fmt.Sprintf("Commit %d, TS=%v", c.PrepareLSN, c.CommitTS) }
-func (c *CommitCmd) String() string        { return c.Desc() }
-func (c *CommitCmd) VerboseString() string { return c.Desc() }
-func (c *CommitCmd) Close()                {}
-func NewRollbackCmd(ts types.TS, lsn uint64) *RollbackCmd {
-	return &RollbackCmd{
-		PrepareLSN: lsn,
-		CommitTS:   ts,
-	}
-}
-func (c *RollbackCmd) WriteTo(w io.Writer) (n int64, err error) {
-	if err = binary.Write(w, binary.BigEndian, c.GetType()); err != nil {
-		return
-	}
-	n += 2
-	if err = binary.Write(w, binary.BigEndian, c.PrepareLSN); err != nil {
-		return
-	}
-	n += 8
-	if err = binary.Write(w, binary.BigEndian, c.CommitTS); err != nil {
-		return
-	}
-	n += 16
-	return
-}
-func (c *RollbackCmd) ReadFrom(r io.Reader) (n int64, err error) {
-	if err = binary.Read(r, binary.BigEndian, &c.PrepareLSN); err != nil {
-		return
-	}
-	n += 8
-	if err = binary.Read(r, binary.BigEndian, &c.CommitTS); err != nil {
-		return
-	}
-	n += 16
-	return
-}
-func (c *RollbackCmd) Marshal() (buf []byte, err error) {
-	var bbuf bytes.Buffer
-	if _, err = c.WriteTo(&bbuf); err != nil {
-		return
-	}
-	buf = bbuf.Bytes()
-	return
-}
-func (c *RollbackCmd) Unmarshal(buf []byte) error {
-	bbuf := bytes.NewBuffer(buf)
-	_, err := c.ReadFrom(bbuf)
-	return err
-}
-func (c *RollbackCmd) GetType() int16 { return CmdRollback }
-func (c *RollbackCmd) Desc() string {
-	return fmt.Sprintf("Rollback %d, TS=%v", c.PrepareLSN, c.CommitTS)
-}
-func (c *RollbackCmd) String() string        { return c.Desc() }
-func (c *RollbackCmd) VerboseString() string { return c.Desc() }
-func (c *RollbackCmd) Close()                {}
 
 func NewBaseCustomizedCmd(id uint32, impl txnif.TxnCmd) *BaseCustomizedCmd {
 	return &BaseCustomizedCmd{

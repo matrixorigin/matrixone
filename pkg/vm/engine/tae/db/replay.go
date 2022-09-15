@@ -257,51 +257,10 @@ func (replayer *Replayer) OnReplayCmd(txncmd txnif.TxnCmd, idxCtx *wal.Index, cm
 		replayer.db.onReplayAppendCmd(cmd, replayer, cmdType, commitTS)
 	case *updates.UpdateCmd:
 		err = replayer.db.onReplayUpdateCmd(cmd, idxCtx, replayer, cmdType, commitTS)
-	case *txnbase.CommitCmd:
-		replayer.onReplayCommitCmd(cmd, replayer)
-	case *txnbase.RollbackCmd:
-		replayer.onReplayRollbackCmd(cmd, replayer)
 	}
 	if err != nil {
 		panic(err)
 	}
-}
-func (replayer *Replayer) onReplayCommitCmd(cmd *txnbase.CommitCmd, observer wal.ReplayObserver) {
-	if observer != nil {
-		observer.OnTimeStamp(cmd.CommitTS)
-	}
-	prepareLSN := cmd.PrepareLSN
-	prepareEntry, err := replayer.db.Wal.LoadEntry(wal.GroupPrepare, prepareLSN)
-	if err != nil {
-		// TODO
-		return
-	}
-	r := bytes.NewBuffer(prepareEntry.GetPayload())
-	prepareCmd, _, err := txnbase.BuildCommandFrom(r)
-	if err != nil {
-		panic(err)
-	}
-	idxCtx := store.NewIndex(prepareLSN, 0, 0)
-	replayer.OnReplayCmd(prepareCmd, idxCtx, txnif.CmdCommit, cmd.CommitTS)
-}
-
-func (replayer *Replayer) onReplayRollbackCmd(cmd *txnbase.RollbackCmd, observer wal.ReplayObserver) {
-	if observer != nil {
-		observer.OnTimeStamp(cmd.CommitTS)
-	}
-	prepareLSN := cmd.PrepareLSN
-	prepareEntry, err := replayer.db.Wal.LoadEntry(wal.GroupPrepare, prepareLSN)
-	if err != nil {
-		// TODO
-		return
-	}
-	r := bytes.NewBuffer(prepareEntry.GetPayload())
-	prepareCmd, _, err := txnbase.BuildCommandFrom(r)
-	if err != nil {
-		panic(err)
-	}
-	idxCtx := store.NewIndex(prepareLSN, 0, 0)
-	replayer.OnReplayCmd(prepareCmd, idxCtx, txnif.CmdRollback, cmd.CommitTS)
 }
 
 func (db *DB) onReplayAppendCmd(cmd *txnimpl.AppendCmd, observer wal.ReplayObserver, cmdType txnif.CmdType, commitTS types.TS) {
