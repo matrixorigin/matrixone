@@ -17,10 +17,7 @@ package errutil
 import (
 	"context"
 	"errors"
-	"fmt"
 	"sync/atomic"
-
-	"github.com/matrixorigin/matrixone/pkg/util"
 
 	pkgErr "github.com/pkg/errors"
 )
@@ -35,19 +32,6 @@ type Wrapper interface {
 
 type WithIs interface {
 	Is(error) bool
-}
-
-func New(text string) error {
-	err := &withStack{fmt.Errorf(text), util.Callers(1)}
-	GetReportErrorFunc()(nil, err, 1)
-	return err
-}
-
-func NewWithContext(ctx context.Context, message string) (err error) {
-	err = pkgErr.New(message)
-	err = &withContext{err, ctx}
-	GetReportErrorFunc()(ctx, err, 1)
-	return err
 }
 
 func Wrap(err error, message string) error {
