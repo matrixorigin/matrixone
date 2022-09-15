@@ -46,9 +46,6 @@ type Block interface {
 	OpenColumn(colIdx int) (ColumnBlock, error)
 	// WriteColumn(colIdx int, ts uint64, data []byte, updates []byte) (common.IVFile, error)
 
-	// TODO: Remove later
-	WriteSnapshot(bat *containers.Batch, ts types.TS, masks map[uint16]*roaring.Bitmap,
-		vals map[uint16]map[uint32]any, deletes *roaring.Bitmap) error
 	WriteBatch(bat *containers.Batch, ts types.TS) error
 	LoadBatch([]types.Type, []string, []bool, *containers.Options) (bat *containers.Batch, err error)
 	WriteColumnVec(ts types.TS, colIdx int, vec containers.Vector) error
