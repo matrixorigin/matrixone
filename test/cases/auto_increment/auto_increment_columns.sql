@@ -398,3 +398,6 @@ load data infile '$resources/auto_increment_columns/auto_increment_3.csv' into t
 select * from t13 order by a;
 
 drop table t13;
+
+create table t1(a int, b int default(10), c int auto_increment);
+show create table t1;
