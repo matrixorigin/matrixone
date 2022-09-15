@@ -17,8 +17,10 @@ package frontend
 import (
 	"context"
 	"encoding/binary"
+	"encoding/json"
 	goErrors "errors"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"os"
 	"runtime/pprof"
 	"sort"
@@ -358,6 +360,117 @@ func handleShowColumns(ses *Session) error {
 	return nil
 }
 
+func getDateFromLocalBatch(obj interface{}, bat *batch.Batch) error {
+	ses := obj.(*Session)
+	if bat == nil {
+		return nil
+	}
+
+	goID := GetRoutineId()
+
+	logutil.Infof("goid %d \n", goID)
+	enableProfile := ses.Pu.SV.EnableProfileGetDataFromPipeline
+
+	var cpuf *os.File = nil
+	if enableProfile {
+		cpuf, _ = os.Create("cpu_profile")
+	}
+
+	begin := time.Now()
+
+	proto := ses.GetMysqlProtocol()
+	proto.PrepareBeforeProcessingResultSet()
+
+	//Create a new temporary resultset per pipeline thread.
+	mrs := &MysqlResultSet{}
+	//Warning: Don't change ResultColumns in this.
+	//Reference the shared ResultColumns of the session among multi-thread.
+	mrs.Columns = ses.Mrs.Columns
+	mrs.Name2Index = ses.Mrs.Name2Index
+
+	begin3 := time.Now()
+	countOfResultSet := 1
+	//group row
+	mrs.Data = make([][]interface{}, countOfResultSet)
+	for i := 0; i < countOfResultSet; i++ {
+		mrs.Data[i] = make([]interface{}, len(bat.Vecs))
+	}
+	allocateOutBufferTime := time.Since(begin3)
+
+	oq := NewOutputQueue(proto, mrs, uint64(countOfResultSet), ses.ep, ses.showStmtType)
+	oq.reset()
+
+	row2colTime := time.Duration(0)
+
+	procBatchBegin := time.Now()
+
+	n := vector.Length(bat.Vecs[0])
+
+	if enableProfile {
+		if err := pprof.StartCPUProfile(cpuf); err != nil {
+			return err
+		}
+	}
+	for j := 0; j < n; j++ { //row index
+		if oq.ep.Outfile {
+			select {
+			case <-ses.requestCtx.Done():
+				{
+					return nil
+				}
+			default:
+				{
+				}
+			}
+		}
+
+		if bat.Zs[j] <= 0 {
+			continue
+		}
+		row, err := extractRowFromEveryVector(ses, bat, int64(j), oq)
+		if err != nil {
+			return err
+		}
+		if oq.showStmtType == ShowColumns {
+			row2 := make([]interface{}, len(row))
+			copy(row2, row)
+			ses.Data = append(ses.Data, row2)
+		}
+	}
+
+	err := oq.flush()
+	if err != nil {
+		return err
+	}
+
+	if enableProfile {
+		pprof.StopCPUProfile()
+	}
+
+	procBatchTime := time.Since(procBatchBegin)
+	tTime := time.Since(begin)
+	logutil.Infof("rowCount %v \n"+
+		"time of getDataFromPipeline : %s \n"+
+		"processBatchTime %v \n"+
+		"row2colTime %v \n"+
+		"allocateOutBufferTime %v \n"+
+		"outputQueue.flushTime %v \n"+
+		"processBatchTime - row2colTime - allocateOutbufferTime - flushTime %v \n"+
+		"restTime(=tTime - row2colTime - allocateOutBufferTime) %v \n"+
+		"protoStats %s\n",
+		n,
+		tTime,
+		procBatchTime,
+		row2colTime,
+		allocateOutBufferTime,
+		oq.flushTime,
+		procBatchTime-row2colTime-allocateOutBufferTime-oq.flushTime,
+		tTime-row2colTime-allocateOutBufferTime,
+		proto.GetStats())
+
+	return nil
+}
+
 /*
 extract the data from the pipeline.
 obj: routine obj
@@ -368,6 +481,10 @@ Warning: The pipeline is the multi-thread environment. The getDataFromPipeline w
 */
 func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 	ses := obj.(*Session)
+
+	if ses.showStmtType == ExplainAnalyze {
+		return nil
+	}
 
 	if bat == nil {
 		return nil
@@ -1414,6 +1531,24 @@ func GetExplainColumns(explainColName string) ([]interface{}, error) {
 	return columns, err
 }
 
+func ConvPlanExplainOption(option *plan.ExplainOption) explain.ExplainOptions {
+	ep := explain.ExplainOptions{
+		Verbose: option.Verbose,
+		Anzlyze: option.Anzlyze,
+	}
+	switch option.Format {
+	case plan.ExplainOption_TEXT:
+		ep.Format = explain.EXPLAIN_FORMAT_TEXT
+	case plan.ExplainOption_JSON:
+		ep.Format = explain.EXPLAIN_FORMAT_JSON
+	case plan.ExplainOption_XML:
+		ep.Format = explain.EXPLAIN_FORMAT_XML
+	case plan.ExplainOption_DOT:
+		ep.Format = explain.EXPLAIN_FORMAT_DOT
+	}
+	return ep
+}
+
 func buildMoExplainQuery(explainColName string, buffer *explain.ExplainDataBuffer, session *Session, fill func(interface{}, *batch.Batch) error) error {
 	bat := batch.New(true, []string{explainColName})
 	rs := buffer.Lines
@@ -1575,7 +1710,8 @@ func buildPlan(ctx plan2.CompilerContext, stmt tree.Statement) (*plan2.Plan, err
 	case *tree.Select, *tree.ParenSelect,
 		*tree.Update, *tree.Delete, *tree.Insert,
 		*tree.ShowDatabases, *tree.ShowTables, *tree.ShowColumns,
-		*tree.ShowCreateDatabase, *tree.ShowCreateTable:
+		*tree.ShowCreateDatabase, *tree.ShowCreateTable,
+		*tree.ExplainStmt, *tree.ExplainAnalyze:
 		opt := plan2.NewBaseOptimizer(ctx)
 		optimized, err := opt.Optimize(stmt)
 		if err != nil {
@@ -1850,8 +1986,10 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 				goto handleFailed
 			}
 		case *tree.ExplainAnalyze:
-			err = errors.New(errno.FeatureNotSupported, "not support explain analyze statement now")
-			goto handleFailed
+			//err = errors.New(errno.FeatureNotSupported, "not support explain analyze statement now")
+			//goto handleFailed
+			ses.showStmtType = ExplainAnalyze
+			ses.Data = nil
 		case *tree.ShowColumns:
 			ses.showStmtType = ShowColumns
 			ses.Data = nil
@@ -1907,7 +2045,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			*tree.ShowCreateTable, *tree.ShowCreateDatabase, *tree.ShowTables, *tree.ShowDatabases, *tree.ShowColumns,
 			*tree.ShowProcessList, *tree.ShowErrors, *tree.ShowWarnings, *tree.ShowVariables, *tree.ShowStatus,
 			*tree.ShowIndex, *tree.ShowCreateView,
-			*tree.ExplainFor, *tree.ExplainAnalyze, *tree.ExplainStmt:
+			*tree.ExplainFor:
 			columns, err2 := cw.GetColumns()
 			if err2 != nil {
 				logutil.Errorf("GetColumns from Computation handler failed. error: %v", err2)
@@ -1991,6 +2129,28 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			if err != nil {
 				goto handleFailed
 			}
+			/*
+				Step 4: Serialize the execution plan by json
+			*/
+			if cwft, ok := cw.(*TxnComputationWrapper); ok {
+				queryPlan := cwft.plan
+				// generator query explain
+				explainQuery := explain.NewExplainQueryImpl(queryPlan.GetQuery())
+				options := &explain.ExplainOptions{
+					Verbose: true,
+					Anzlyze: false,
+					Format:  explain.EXPLAIN_FORMAT_TEXT,
+				}
+
+				marshalPlan := explainQuery.BuildJsonPlan(cwft.uuid, options)
+				marshal, err3 := json.Marshal(marshalPlan)
+				if err3 != nil {
+					goto handleFailed
+				}
+				json := string(marshal)
+				fmt.Printf("wuxiliang --------------------> SQL explain json : %s\n", json)
+				//logutil.Infof("wuxiliang --> SQL explain json : %s\n", json)
+			}
 		//just status, no result set
 		case *tree.CreateTable, *tree.DropTable, *tree.CreateDatabase, *tree.DropDatabase,
 			*tree.CreateIndex, *tree.DropIndex,
@@ -2005,7 +2165,6 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			*tree.SetDefaultRole, *tree.SetRole, *tree.SetPassword,
 			*tree.Delete:
 			runBegin := time.Now()
-
 			/*
 				Step 1: Start
 			*/
@@ -2022,6 +2181,94 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			if !ses.Pu.SV.DisableRecordTimeElapsedOfSqlRequest {
 				logutil.Infof("time of SendResponse %s", time.Since(echoTime).String())
 			}
+		case *tree.ExplainAnalyze, *tree.ExplainStmt:
+			explainColName := "QUERY PLAN"
+			columns, err := GetExplainColumns(explainColName)
+			if err != nil {
+				logutil.Errorf("GetColumns from ExplainColumns handler failed, error: %v", err)
+				return err
+			}
+			/*
+				Step 1 : send column count and column definition.
+			*/
+			//send column count
+			colCnt := uint64(len(columns))
+			err = proto.SendColumnCountPacket(colCnt)
+			if err != nil {
+				goto handleFailed
+			}
+			//send columns
+			//column_count * Protocol::ColumnDefinition packets
+			cmd := ses.Cmd
+			for _, c := range columns {
+				mysqlc := c.(Column)
+				ses.Mrs.AddColumn(mysqlc)
+
+				/*
+					mysql COM_QUERY response: send the column definition per column
+				*/
+				err = proto.SendColumnDefinitionPacket(mysqlc, cmd)
+				if err != nil {
+					goto handleFailed
+				}
+			}
+
+			/*
+				mysql COM_QUERY response: End after the column has been sent.
+				send EOF packet
+			*/
+			err = proto.SendEOFPacketIf(0, 0)
+			if err != nil {
+				goto handleFailed
+			}
+
+			runBegin := time.Now()
+			/*
+				Step 1: Start
+			*/
+			if err = runner.Run(0); err != nil {
+				goto handleFailed
+			}
+
+			if !ses.Pu.SV.DisableRecordTimeElapsedOfSqlRequest {
+				logutil.Infof("time of Exec.Run : %s", time.Since(runBegin).String())
+			}
+
+			if cwft, ok := cw.(*TxnComputationWrapper); ok {
+				queryPlan := cwft.plan
+
+				// generator query explain
+				explainQuery := explain.NewExplainQueryImpl(queryPlan.GetQuery())
+
+				// build explain data buffer
+				buffer := explain.NewExplainDataBuffer()
+
+				option := ConvPlanExplainOption(queryPlan.GetQuery().ExplainOption)
+
+				err = explainQuery.ExplainPlan(buffer, &option)
+				if err != nil {
+					logutil.Errorf("explain Query statement error: %v", err)
+					return errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("explain Query statement error:%v", err))
+				}
+
+				err = buildMoExplainQuery(explainColName, buffer, ses, getDateFromLocalBatch)
+				if err != nil {
+					return err
+				}
+
+				/*
+					Step 3: Say goodbye
+					mysql COM_QUERY response: End after the data row has been sent.
+					After all row data has been sent, it sends the EOF or OK packet.
+				*/
+				err = proto.sendEOFOrOkPacket(0, 0)
+				if err != nil {
+					goto handleFailed
+				}
+			} else {
+				return nil
+			}
+			return nil
 		}
 	handleSucceeded:
 		//load data handle txn failure internally

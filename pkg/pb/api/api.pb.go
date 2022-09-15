@@ -314,9 +314,10 @@ func (m *SyncLogTailReq) GetTable() *TableID {
 }
 
 type SyncLogTailResp struct {
-	// location of catalog or metadata checkpoint.
+	// location of catalog or metadata checkpoint for a table.
+	//TODO:: how to get checkpoint on S3 by the ckp_location ,pls ref to ...
 	CkpLocation string `protobuf:"bytes,1,opt,name=ckp_location,json=ckpLocation,proto3" json:"ckp_location,omitempty"`
-	//repeated timestamp.Timestamp new_checkpoints = 2;
+	// log tail for a table
 	Commands             []*Entry `protobuf:"bytes,2,rep,name=commands,proto3" json:"commands,omitempty"`
 	XXX_NoUnkeyedLiteral struct{} `json:"-"`
 	XXX_unrecognized     []byte   `json:"-"`
@@ -523,10 +524,11 @@ func (m *Entry) GetBat() *Batch {
 // CatalogCkp contains information about database and tables in the system,and
 // MetadataCkp contains information about blocks.
 type Checkpoint struct {
-	//min_ts is the last checkpoint timestamp.
+	//min_ts DN is the lower bounds of the checkpoint
+	// CN maybe don't care about it.
 	MinTs *timestamp.Timestamp `protobuf:"bytes,1,opt,name=min_ts,json=minTs,proto3" json:"min_ts,omitempty"`
-	// max_ts is a checkpoint timestamp, namely it is the snapshot timestamp
-	// at which a transaction dose a checkpoint for a table.
+	//max_ts is the upper bounds of the checkpoint.
+	// CN maybe don't care about it.
 	MaxTs                *timestamp.Timestamp `protobuf:"bytes,2,opt,name=max_ts,json=maxTs,proto3" json:"max_ts,omitempty"`
 	Bat                  *Batch               `protobuf:"bytes,3,opt,name=bat,proto3" json:"bat,omitempty"`
 	XXX_NoUnkeyedLiteral struct{}             `json:"-"`
@@ -590,6 +592,7 @@ func (m *Checkpoint) GetBat() *Batch {
 
 // catalog checkpoint:
 // one Batch represents a table, such as : mo_databases, mo_tables, mo_columns,... etc.
+// knowing more about system tables, pls ref to pkg/vm/engine/tae/catalog/model.go
 type CatalogCkp struct {
 	MinTs                *timestamp.Timestamp `protobuf:"bytes,1,opt,name=min_ts,json=minTs,proto3" json:"min_ts,omitempty"`
 	MaxTs                *timestamp.Timestamp `protobuf:"bytes,2,opt,name=max_ts,json=maxTs,proto3" json:"max_ts,omitempty"`
@@ -655,11 +658,13 @@ func (m *CatalogCkp) GetBat() *Batch {
 
 // metadata checkpoint:
 // Batch is a batch of block metadata for a table,
-// one row of Batch represents a block metadata.
+// one row of Batch represents a block meta data.
+// TODO::
+// knowing more about block meta data , pls ref to ...
 type MetadataCkp struct {
 	MinTs *timestamp.Timestamp `protobuf:"bytes,1,opt,name=min_ts,json=minTs,proto3" json:"min_ts,omitempty"`
 	MaxTs *timestamp.Timestamp `protobuf:"bytes,2,opt,name=max_ts,json=maxTs,proto3" json:"max_ts,omitempty"`
-	//block metadata for a table;
+	//block meta data for a table;
 	Bat                  *Batch   `protobuf:"bytes,3,opt,name=bat,proto3" json:"bat,omitempty"`
 	XXX_NoUnkeyedLiteral struct{} `json:"-"`
 	XXX_unrecognized     []byte   `json:"-"`

@@ -1707,15 +1707,15 @@ explain_stmt:
     }
 |   explain_sym ANALYZE explainable_stmt
     {
-		explainStmt := tree.NewExplainStmt($3, "text")
-		optionElem := tree.MakeOptionElem("analyze", "NULL")
-        options := tree.MakeOptions(optionElem)
-        explainStmt.Options = options
-		$$ = explainStmt
+    		explainStmt := tree.NewExplainAnalyze($3, "text")
+    		optionElem := tree.MakeOptionElem("analyze", "NULL")
+    	options := tree.MakeOptions(optionElem)
+	explainStmt.Options = options
+	$$ = explainStmt
     }
 |   explain_sym ANALYZE VERBOSE explainable_stmt
     {
-        explainStmt := tree.NewExplainStmt($4, "text")
+        explainStmt := tree.NewExplainAnalyze($4, "text")
         optionElem1 := tree.MakeOptionElem("analyze", "NULL")
 		optionElem2 := tree.MakeOptionElem("verbose", "NULL")
 		options := tree.MakeOptions(optionElem1)

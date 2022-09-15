@@ -189,7 +189,24 @@ func TestDerivedTableQuery(t *testing.T) {
 
 // Collection query
 func TestCollectionQuery(t *testing.T) {
-
+	sqls := []string{
+		"explain verbose select 1 union select 2",
+		"explain verbose select 1 union (select 2 union select 3)",
+		"explain verbose (select 1 union select 2) union select 3 intersect select 4 order by 1",
+		"explain verbose select 1 union select null",
+		"explain verbose select n_name from nation intersect select n_name from nation2",
+		"explain verbose select n_name from nation minus select n_name from nation2",
+		"explain verbose select 1 union select 2 intersect select 2 union all select 1.1 minus select 22222",
+		"explain verbose select 1 as a union select 2 order by a limit 1",
+		"explain verbose select n_name from nation union select n_comment from nation order by n_name",
+		"explain verbose with qn (foo, bar) as (select 1 as col, 2 as coll union select 4, 5) select qn1.bar from qn qn1",
+		"explain verbose select n_name, n_comment from nation union all select n_name, n_comment from nation2",
+		"explain verbose select n_name from nation intersect all select n_name from nation2",
+		"explain verbose SELECT distinct(l.L_ORDERKEY) FROM LINEITEM AS l WHERE l.L_SHIPINSTRUCT='DELIVER IN PERSON' UNION SELECT distinct(l.L_ORDERKEY) FROM LINEITEM AS l WHERE l.L_SHIPMODE='AIR' OR  l.L_SHIPMODE='AIR REG'",
+		"explain verbose SELECT distinct(l.L_ORDERKEY) FROM LINEITEM AS l WHERE l.L_SHIPMODE IN ('AIR','AIR REG') EXCEPT SELECT distinct(l.L_ORDERKEY) FROM LINEITEM AS l WHERE l.L_SHIPINSTRUCT='DELIVER IN PERSON'",
+	}
+	mockOptimizer := plan.NewMockOptimizer()
+	runTestShouldPass(mockOptimizer, t, sqls)
 }
 
 func TestDMLInsert(t *testing.T) {

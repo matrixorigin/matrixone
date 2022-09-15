@@ -15,10 +15,13 @@
 package explain
 
 import (
+	"github.com/google/uuid"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/errno"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/errors"
+	"strconv"
 )
 
 var _ ExplainQuery = &ExplainQueryImpl{}
@@ -49,6 +52,30 @@ func (e *ExplainQueryImpl) ExplainPlan(buffer *ExplainDataBuffer, options *Expla
 		}
 	}
 	return nil
+}
+
+func (e *ExplainQueryImpl) BuildJsonPlan(uuid uuid.UUID, options *ExplainOptions) *ExplainData {
+	nodes := e.QueryPlan.Nodes
+	expdata := NewExplainData(uuid)
+	for index, rootNodeId := range e.QueryPlan.Steps {
+		graphData := NewGraphData()
+		err := PreOrderPlan(nodes[rootNodeId], nodes, graphData, options)
+		if err != nil {
+			var errdata *ExplainData
+			if moErr, ok := err.(*moerr.Error); ok {
+				errdata = NewExplainDataFail(uuid, moErr.Code, moErr.Message)
+			} else {
+				newError := moerr.NewError(moerr.ERROR_SERIALIZE_PLAN_JSON, "An error occurred when plan is serialized to json")
+				errdata = NewExplainDataFail(uuid, newError.Code, newError.Message)
+			}
+			return errdata
+		}
+		step := NewStep(index)
+		step.GraphData = *graphData
+
+		expdata.Steps = append(expdata.Steps, *step)
+	}
+	return expdata
 }
 
 func (e *ExplainQueryImpl) ExplainAnalyze(buffer *ExplainDataBuffer, options *ExplainOptions) error {
@@ -97,6 +124,17 @@ func explainStep(step *plan.Node, settings *FormatSettings, options *ExplainOpti
 					}
 					settings.buffer.PushNewLine(rowsetInfo, false, settings.level)
 				}
+			}
+		}
+
+		// print out the actual operation information
+		if options.Anzlyze {
+			if nodedescImpl.Node.AnalyzeInfo != nil {
+				analyze, err := nodedescImpl.GetActualAnalyzeInfo(options)
+				if err != nil {
+					return err
+				}
+				settings.buffer.PushNewLine(analyze, false, settings.level)
 			}
 		}
 
@@ -150,4 +188,42 @@ func serachNodeIndex(nodeID int32, Nodes []*plan.Node) (int32, error) {
 		}
 	}
 	return -1, errors.New(errno.InternalError, "Invalid Plan nodeID")
+}
+
+// ----------------------------------------------------------------------------------------------------------
+func PreOrderPlan(node *plan.Node, Nodes []*plan.Node, graphData *GraphData, options *ExplainOptions) error {
+	if node != nil {
+		newNode, err := ConvertNode(node, options)
+		if err != nil {
+			return err
+		}
+		graphData.Nodes = append(graphData.Nodes, *newNode)
+		if len(node.Children) > 0 {
+			for _, childNodeID := range node.Children {
+				index, err := serachNodeIndex(childNodeID, Nodes)
+				if err != nil {
+					return err
+				}
+
+				edge := buildEdge(node, Nodes[index], index)
+				graphData.Edges = append(graphData.Edges, *edge)
+
+				err = PreOrderPlan(Nodes[index], Nodes, graphData, options)
+				if err != nil {
+					return err
+				}
+			}
+		}
+	}
+	return nil
+}
+
+func buildEdge(parentNode *plan.Node, childNode *plan.Node, index int32) *Edge {
+	return &Edge{
+		Id:     "E" + strconv.Itoa(int(index)),
+		Src:    childNode.NodeId,
+		Dst:    parentNode.NodeId,
+		Output: childNode.AnalyzeInfo.OutputSize,
+		Unit:   "bytes",
+	}
 }

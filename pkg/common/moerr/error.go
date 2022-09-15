@@ -32,10 +32,11 @@ const (
 	WARN    = 2
 
 	// Group 1: Internal errors
-	ERROR_START              = 1000
-	INTERNAL_ERROR           = 1001
-	NYI                      = 1002
-	ERROR_FUNCTION_PARAMETER = 1003
+	ERROR_START               = 1000
+	INTERNAL_ERROR            = 1001
+	NYI                       = 1002
+	ERROR_FUNCTION_PARAMETER  = 1003
+	ERROR_SERIALIZE_PLAN_JSON = 1004
 
 	// Group 2: numeric
 	DIVIVISION_BY_ZERO = 2000
@@ -114,10 +115,11 @@ var errorMsgRefer = map[int32]moErrorMsgItem{
 	WARN:    {20002, 0, "%s"},
 
 	// Group 1: Internal errors
-	ERROR_START:              {21000, 0, "%s"},
-	INTERNAL_ERROR:           {21001, 0, "%s"},
-	NYI:                      {21002, 0, "%s"},
-	ERROR_FUNCTION_PARAMETER: {21003, 0, "%s"},
+	ERROR_START:               {21000, 0, "%s"},
+	INTERNAL_ERROR:            {21001, 0, "%s"},
+	NYI:                       {21002, 0, "%s"},
+	ERROR_FUNCTION_PARAMETER:  {21003, 0, "%s"},
+	ERROR_SERIALIZE_PLAN_JSON: {21004, 0, "%s"},
 
 	// Group 2: numeric
 	DIVIVISION_BY_ZERO: {22000, 0, "division by zero"},

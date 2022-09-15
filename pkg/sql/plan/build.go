@@ -16,6 +16,7 @@ package plan
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/errno"
@@ -44,12 +45,80 @@ func runBuildSelectByBinder(stmtType plan.Query_StatementType, ctx CompilerConte
 	}, err
 }
 
+func buildExplain(ctx CompilerContext, stmt *tree.ExplainStmt) (*Plan, error) {
+	return nil, nil
+}
+
+func buildExplainAnalyze(ctx CompilerContext, stmt *tree.ExplainAnalyze) (*Plan, error) {
+	//es := explain.NewExplainDefaultOptions()
+	es := plan.ExplainOption{
+		Anzlyze: true,
+	}
+
+	for _, v := range stmt.Options {
+		if strings.EqualFold(v.Name, "VERBOSE") {
+			if strings.EqualFold(v.Value, "TRUE") || v.Value == "NULL" {
+				es.Verbose = true
+			} else if strings.EqualFold(v.Value, "FALSE") {
+				es.Verbose = false
+			} else {
+				return nil, errors.New(errno.InvalidOptionValue, fmt.Sprintf("%s requires a Boolean value", v.Name))
+			}
+		} else if strings.EqualFold(v.Name, "ANALYZE") {
+			if strings.EqualFold(v.Value, "TRUE") || v.Value == "NULL" {
+				es.Anzlyze = true
+			} else if strings.EqualFold(v.Value, "FALSE") {
+				es.Anzlyze = false
+			} else {
+				return nil, errors.New(errno.InvalidOptionValue, fmt.Sprintf("%s requires a Boolean value", v.Name))
+			}
+		} else if strings.EqualFold(v.Name, "FORMAT") {
+			if v.Name == "NULL" {
+				return nil, errors.New(errno.InvalidOptionValue, fmt.Sprintf("%s requires a parameter", v.Name))
+			} else if strings.EqualFold(v.Value, "TEXT") {
+				es.Format = plan.ExplainOption_TEXT
+			} else if strings.EqualFold(v.Value, "JSON") {
+				es.Format = plan.ExplainOption_JSON
+			} else if strings.EqualFold(v.Value, "DOT") {
+				es.Format = plan.ExplainOption_DOT
+			} else {
+				return nil, errors.New(errno.InvalidOptionValue, fmt.Sprintf("unrecognized value for EXPLAIN option \"%s\": \"%s\"", v.Name, v.Value))
+			}
+		} else {
+			return nil, errors.New(errno.InvalidOptionValue, fmt.Sprintf("unrecognized EXPLAIN option \"%s\"", v.Name))
+		}
+	}
+	/*
+		switch stmt.Statement.(type) {
+		case *tree.Delete:
+			mce.ses.GetTxnCompileCtx().SetQueryType(TXN_DELETE)
+		case *tree.Update:
+			mce.ses.GetTxnCompileCtx().SetQueryType(TXN_UPDATE)
+		default:
+			mce.ses.GetTxnCompileCtx().SetQueryType(TXN_DEFAULT)
+		}
+	*/
+
+	//get query optimizer and execute Optimize
+	plan, err := BuildPlan(ctx, stmt.Statement)
+	if err != nil {
+		return nil, err
+	}
+	plan.GetQuery().ExplainOption = &es
+
+	return plan, nil
+}
+
 func BuildPlan(ctx CompilerContext, stmt tree.Statement) (*Plan, error) {
 	switch stmt := stmt.(type) {
 	case *tree.Select:
 		return runBuildSelectByBinder(plan.Query_SELECT, ctx, stmt)
 	case *tree.ParenSelect:
 		return runBuildSelectByBinder(plan.Query_SELECT, ctx, stmt.Select)
+	case *tree.ExplainStmt:
+		return buildExplain(ctx, stmt)
+	case *tree.ExplainAnalyze:
+		return buildExplainAnalyze(ctx, stmt)
 	case *tree.Insert:
 		return buildInsert(stmt, ctx)
 	case *tree.Update:

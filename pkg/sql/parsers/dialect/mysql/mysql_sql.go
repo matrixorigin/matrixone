@@ -7177,7 +7177,7 @@ yydefault:
 		var yyLOCAL tree.Statement
 //line mysql_sql.y:1709
 		{
-			explainStmt := tree.NewExplainStmt(yyDollar[3].statementUnion(), "text")
+			explainStmt := tree.NewExplainAnalyze(yyDollar[3].statementUnion(), "text")
 			optionElem := tree.MakeOptionElem("analyze", "NULL")
 			options := tree.MakeOptions(optionElem)
 			explainStmt.Options = options
@@ -7189,7 +7189,7 @@ yydefault:
 		var yyLOCAL tree.Statement
 //line mysql_sql.y:1717
 		{
-			explainStmt := tree.NewExplainStmt(yyDollar[4].statementUnion(), "text")
+			explainStmt := tree.NewExplainAnalyze(yyDollar[4].statementUnion(), "text")
 			optionElem1 := tree.MakeOptionElem("analyze", "NULL")
 			optionElem2 := tree.MakeOptionElem("verbose", "NULL")
 			options := tree.MakeOptions(optionElem1)
