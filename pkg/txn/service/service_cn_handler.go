@@ -110,7 +110,8 @@ func (s *service) Read(ctx context.Context, request *txn.TxnRequest, response *t
 	}
 
 	response.CNOpResponse.Payload = data
-	response.Txn = &request.Txn
+	txnMeta := request.Txn
+	response.Txn = &txnMeta
 	return nil
 }
 

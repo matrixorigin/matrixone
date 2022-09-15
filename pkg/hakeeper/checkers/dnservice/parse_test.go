@@ -25,8 +25,8 @@ import (
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 )
 
-func TestCheckInitatingShards(t *testing.T) {
-	// clear all records, or other test would failed
+func TestCheckInitiatingShards(t *testing.T) {
+	// clear all records, or other test would fail
 	defer func() {
 		waitingShards.clear()
 	}()
@@ -66,15 +66,15 @@ func TestCheckInitatingShards(t *testing.T) {
 	expiredTick := config.ExpiredTick(earliestTick, config.DNStoreTimeout) + 1
 
 	// discover an initial shard => no operators generated
-	ops := checkInitatingShards(rs, mapper, workingStores, idAlloc, cluster, config, earliestTick)
+	ops := checkInitiatingShards(rs, mapper, workingStores, idAlloc, cluster, config, earliestTick)
 	require.Equal(t, 0, len(ops))
 
 	// waiting some time, but not long enough
-	ops = checkInitatingShards(rs, mapper, workingStores, idAlloc, cluster, config, expiredTick-1)
+	ops = checkInitiatingShards(rs, mapper, workingStores, idAlloc, cluster, config, expiredTick-1)
 	require.Equal(t, 0, len(ops))
 
 	// waiting long enough
-	ops = checkInitatingShards(rs, mapper, workingStores, idAlloc, cluster, config, expiredTick)
+	ops = checkInitiatingShards(rs, mapper, workingStores, idAlloc, cluster, config, expiredTick)
 	require.Equal(t, 1, len(ops))
 }
 
@@ -133,7 +133,7 @@ func TestInitialShards(t *testing.T) {
 	})
 	require.Equal(t, 1, len(ids))
 
-	// test delte
+	// test delta
 	updated = waitingShards.remove(shardID + 1)
 	require.False(t, updated)
 	updated = waitingShards.remove(shardID)
