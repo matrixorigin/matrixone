@@ -15,7 +15,6 @@
 package txnimpl
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
@@ -130,21 +129,15 @@ func (checker *warChecker) check() (err error) {
 		if entry != nil {
 			commitTs := checker.txn.GetCommitTS()
 			entry.RLock()
-			if entry.DeleteBefore(commitTs) {
-				if !entry.IsCommitting() {
-					entry.RUnlock()
-					return txnif.ErrTxnRWConflict
-				}
-				eTxn := entry.GetTxn()
+			needWait, txnToWait := entry.GetUpdateNodeLocked().NeedWaitCommitting(commitTs)
+			if needWait {
 				entry.RUnlock()
-				state := eTxn.GetTxnState(true)
-				if state == txnif.TxnStateCommitted {
-					logutil.Infof("ErrTxnRWConflict Found:[%s]<===RW===[%s]", eTxn.String(), checker.txn.String())
-					return txnif.ErrTxnRWConflict
-				} else if state == txnif.TxnStateUnknown {
-					return txnif.ErrTxnInternal
-				}
+				txnToWait.GetTxnState(true)
 				entry.RLock()
+			}
+			if entry.DeleteBefore(commitTs) {
+				entry.RUnlock()
+				return txnif.ErrTxnRWConflict
 			}
 			entry.RUnlock()
 		}

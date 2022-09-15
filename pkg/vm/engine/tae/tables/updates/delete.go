@@ -209,15 +209,15 @@ func (node *DeleteNode) ApplyRollback(index *wal.Index) (err error) {
 }
 
 func (node *DeleteNode) GeneralString() string {
-	return fmt.Sprintf("TS=%d;Cnt=%d;LogIndex%v", node.commitTs, node.mask.GetCardinality(), node.logIndex)
+	return fmt.Sprintf("TS=%d;Cnt=%d;LogIndex%v", node.prepareTs, node.mask.GetCardinality(), node.logIndex)
 }
 
 func (node *DeleteNode) GeneralDesc() string {
-	return fmt.Sprintf("TS=%d;Cnt=%d", node.commitTs, node.mask.GetCardinality())
+	return fmt.Sprintf("TS=%d;Cnt=%d", node.prepareTs, node.mask.GetCardinality())
 }
 
 func (node *DeleteNode) GeneralVerboseString() string {
-	return fmt.Sprintf("TS=%d;%v;Cnt=%d;Deletes=%v", node.commitTs, node.logIndex, node.mask.GetCardinality(), node.mask)
+	return fmt.Sprintf("TS=%d;%v;Cnt=%d;Deletes=%v", node.prepareTs, node.logIndex, node.mask.GetCardinality(), node.mask)
 }
 
 func (node *DeleteNode) StringLocked() string {
@@ -229,7 +229,7 @@ func (node *DeleteNode) StringLocked() string {
 	if node.commitTs == txnif.UncommitTS {
 		commitState = "UC"
 	}
-	s := fmt.Sprintf("[%s:%s](%d-%d)[%d:%s]%s", ntype, commitState, node.startTs, node.commitTs, node.mask.GetCardinality(), node.mask.String(), node.logIndex.String())
+	s := fmt.Sprintf("[%s:%s](%d-%d)[%d:%s]%s", ntype, commitState, node.startTs, node.prepareTs, node.mask.GetCardinality(), node.mask.String(), node.logIndex.String())
 	return s
 }
 

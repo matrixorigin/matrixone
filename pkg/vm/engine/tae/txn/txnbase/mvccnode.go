@@ -119,7 +119,11 @@ func (un *TxnMVCCNode) NeedWaitCommitting(ts types.TS) (bool, txnif.TxnReader) {
 	if !un.IsCommitting() {
 		return false, nil
 	}
-	if un.Txn.GetCommitTS().GreaterEq(ts) {
+	if un.Txn.GetPrepareTS().GreaterEq(ts) {
+		return false, nil
+	}
+	commitTS := un.Txn.GetCommitTS()
+	if !commitTS.IsEmpty() && commitTS.GreaterEq(ts) {
 		return false, nil
 	}
 	return true, un.Txn

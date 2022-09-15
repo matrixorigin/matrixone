@@ -185,7 +185,7 @@ func (catalog *Catalog) onReplayUpdateDatabase(cmd *EntryCommand, idx *wal.Index
 		switch cmdType {
 		case txnif.CmdCommit:
 			observer.OnTimeStamp(commitTS)
-		case txnif.CmdPrepare,txnif.Cmd1PC:
+		case txnif.CmdPrepare, txnif.Cmd1PC:
 			observer.OnTimeStamp(cmd.GetTs())
 		}
 	}
@@ -263,7 +263,7 @@ func (catalog *Catalog) onReplayUpdateTable(cmd *EntryCommand, dataFactory DataF
 		switch cmdType {
 		case txnif.CmdCommit:
 			observer.OnTimeStamp(commitTS)
-		case txnif.CmdPrepare,txnif.Cmd1PC:
+		case txnif.CmdPrepare, txnif.Cmd1PC:
 			observer.OnTimeStamp(cmd.GetTs())
 		}
 	}
@@ -349,7 +349,7 @@ func (catalog *Catalog) onReplayUpdateSegment(
 		switch cmdType {
 		case txnif.CmdCommit:
 			observer.OnTimeStamp(commitTS)
-		case txnif.CmdPrepare,txnif.Cmd1PC:
+		case txnif.CmdPrepare, txnif.Cmd1PC:
 			observer.OnTimeStamp(cmd.GetTs())
 		}
 	}
@@ -435,7 +435,7 @@ func (catalog *Catalog) onReplayUpdateBlock(cmd *EntryCommand,
 		switch cmdType {
 		case txnif.CmdCommit:
 			observer.OnTimeStamp(commitTS)
-		case txnif.CmdPrepare,txnif.Cmd1PC:
+		case txnif.CmdPrepare, txnif.Cmd1PC:
 			observer.OnTimeStamp(cmd.GetTs())
 		}
 	}

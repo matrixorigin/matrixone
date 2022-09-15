@@ -154,7 +154,7 @@ func (node *AppendNode) ApplyCommit(index *wal.Index) error {
 	if node.IsCommittedLocked() {
 		panic("AppendNode | ApplyCommit | LogicErr")
 	}
-	node.TxnMVCCNode.ApplyCommit(index,true)
+	node.TxnMVCCNode.ApplyCommit(index, true)
 	if node.mvcc != nil {
 		logutil.Debugf("Set MaxCommitTS=%v, MaxVisibleRow=%d", node.GetEndLocked(), node.GetMaxRow())
 		node.mvcc.SetMaxVisible(node.GetEndLocked())
