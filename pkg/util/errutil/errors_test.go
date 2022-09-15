@@ -51,58 +51,6 @@ func TestGetReportErrorFunc(t *testing.T) {
 	}
 }
 
-func TestNew(t *testing.T) {
-	type args struct {
-		text string
-	}
-	tests := []struct {
-		name    string
-		args    args
-		wantErr bool
-	}{
-		{
-			name:    "normal",
-			args:    args{text: "message"},
-			wantErr: true,
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if err := New(tt.args.text); (err != nil) != tt.wantErr {
-				t.Errorf("New() error = %v, wantErr %v", err, tt.wantErr)
-			}
-		})
-	}
-}
-
-func TestNewWithContext(t *testing.T) {
-	type args struct {
-		ctx  context.Context
-		text string
-	}
-	tests := []struct {
-		name    string
-		args    args
-		wantErr bool
-	}{
-		{
-			name: "normal",
-			args: args{
-				ctx:  context.Background(),
-				text: "normal",
-			},
-			wantErr: true,
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if err := NewWithContext(tt.args.ctx, tt.args.text); (err != nil) != tt.wantErr {
-				t.Errorf("NewWithContext() error = %v, wantErr %v", err, tt.wantErr)
-			}
-		})
-	}
-}
-
 func TestReportError(t *testing.T) {
 	type args struct {
 		ctx context.Context

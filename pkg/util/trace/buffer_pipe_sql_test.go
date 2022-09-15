@@ -39,7 +39,7 @@ import (
 )
 
 var buf = new(bytes.Buffer)
-var err1 = errutil.New("test1")
+var err1 = fmt.Errorf("test1")
 var err2 = errutil.Wrapf(err1, "test2")
 var testBaseBuffer2SqlOption = []buffer2SqlOption{bufferWithSizeThreshold(1 * KB)}
 var traceIDSpanIDColumnStr string
@@ -684,7 +684,7 @@ func Test_quote(t *testing.T) {
 			}
 		})
 	}
-	var err1 = errutil.WithContext(context.Background(), errutil.New("test1"))
+	var err1 = errutil.WithContext(context.Background(), fmt.Errorf("test1"))
 	t.Logf("show quote(err): \"%s\"", quote(fmt.Sprintf("%+v", err1)))
 }
 

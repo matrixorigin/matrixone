@@ -143,8 +143,7 @@ func errorUsage(ctx context.Context) {
 	outputError("Wrapf", errutil.Wrapf(base, "extra message"))
 
 	// case 4: NewWithContext, store db & log
-	logutil.Info("errutil.New with ctx, with default action: 1) store in db; 2) gen log")
-	outputError("New", errutil.NewWithContext(newCtx, "new with ctx"))
+	// removed
 
 }
 
