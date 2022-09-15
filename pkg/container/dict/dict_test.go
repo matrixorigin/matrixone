@@ -1,0 +1,241 @@
+// Copyright 2021 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package dict
+
+import (
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
+	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
+	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"testing"
+)
+
+func TestDict_Cardinality(t *testing.T) {
+	dict, err := newTestDict(types.Type{Oid: types.T_int64})
+	require.Nil(t, err)
+
+	dict.unique.Col = []int64{5, 2, 3, 7}
+	require.Equal(t, uint64(4), dict.Cardinality())
+}
+
+func TestDict_InsertBatchFixedLen(t *testing.T) {
+	dict, err := newTestDict(types.Type{Oid: types.T_int64})
+	require.Nil(t, err)
+
+	v0 := vector.New(types.Type{Oid: types.T_int64})
+	v0.Col = []int64{5, 2, 3, 7, 3, 2}
+
+	ips, err := dict.InsertBatch(v0)
+	require.Nil(t, err)
+	require.Equal(t, uint64(1), ips[0])
+	require.Equal(t, uint64(2), ips[1])
+	require.Equal(t, uint64(3), ips[2])
+	require.Equal(t, uint64(4), ips[3])
+	require.Equal(t, uint64(3), ips[4])
+	require.Equal(t, uint64(2), ips[5])
+
+	v1 := vector.New(types.Type{Oid: types.T_int64})
+	v1.Col = []int64{4, 2, 1, 5}
+
+	ips, err = dict.InsertBatch(v1)
+	require.Nil(t, err)
+	require.Equal(t, uint64(5), ips[0])
+	require.Equal(t, uint64(2), ips[1])
+	require.Equal(t, uint64(6), ips[2])
+	require.Equal(t, uint64(1), ips[3])
+}
+
+func TestDict_FindBatchFixedLen(t *testing.T) {
+	dict, err := newTestDict(types.Type{Oid: types.T_int16})
+	require.Nil(t, err)
+
+	v0 := vector.New(types.Type{Oid: types.T_int16})
+	v0.Col = []int16{5, 2, 3, 7, 1, 4}
+
+	ips, err := dict.InsertBatch(v0)
+	require.Nil(t, err)
+	require.Equal(t, uint64(1), ips[0])
+	require.Equal(t, uint64(2), ips[1])
+	require.Equal(t, uint64(3), ips[2])
+	require.Equal(t, uint64(4), ips[3])
+	require.Equal(t, uint64(5), ips[4])
+	require.Equal(t, uint64(6), ips[5])
+
+	v1 := vector.New(types.Type{Oid: types.T_int16})
+	v1.Col = []int16{7, 3, 8, 4, 6, 3}
+
+	poses := dict.FindBatch(v1)
+	require.Equal(t, uint64(4), poses[0])
+	require.Equal(t, uint64(3), poses[1])
+	require.Equal(t, uint64(0), poses[2])
+	require.Equal(t, uint64(6), poses[3])
+	require.Equal(t, uint64(0), poses[4])
+	require.Equal(t, uint64(3), poses[5])
+}
+
+func TestDict_FindDataFixedLen(t *testing.T) {
+	dict, err := newTestDict(types.Type{Oid: types.T_int32})
+	require.Nil(t, err)
+
+	v0 := vector.New(types.Type{Oid: types.T_int32})
+	v0.Col = []int32{5, 3, 1, 7, 1, 3}
+
+	ips, err := dict.InsertBatch(v0)
+	require.Nil(t, err)
+	require.Equal(t, uint64(1), ips[0])
+	require.Equal(t, uint64(2), ips[1])
+	require.Equal(t, uint64(3), ips[2])
+	require.Equal(t, uint64(4), ips[3])
+	require.Equal(t, uint64(3), ips[4])
+	require.Equal(t, uint64(2), ips[5])
+
+	data := dict.FindData(1)
+	require.Equal(t, int32(5), data.Col.([]int32)[0])
+
+	data = dict.FindData(2)
+	require.Equal(t, int32(3), data.Col.([]int32)[0])
+
+	data = dict.FindData(3)
+	require.Equal(t, int32(1), data.Col.([]int32)[0])
+
+	data = dict.FindData(4)
+	require.Equal(t, int32(7), data.Col.([]int32)[0])
+}
+
+func TestDict_InsertBatchVarLen(t *testing.T) {
+	dict, err := newTestDict(types.Type{Oid: types.T_varchar})
+	require.Nil(t, err)
+
+	v0 := vector.New(types.Type{Oid: types.T_varchar})
+	assert.Nil(t, vector.AppendBytes(v0, [][]byte{
+		[]byte("hello"),
+		[]byte("My"),
+		[]byte("name"),
+		[]byte("is"),
+		[]byte("Tom"),
+	}, nil))
+
+	ips, err := dict.InsertBatch(v0)
+	require.Nil(t, err)
+	require.Equal(t, uint64(1), ips[0])
+	require.Equal(t, uint64(2), ips[1])
+	require.Equal(t, uint64(3), ips[2])
+	require.Equal(t, uint64(4), ips[3])
+	require.Equal(t, uint64(5), ips[4])
+
+	v1 := vector.New(types.Type{Oid: types.T_varchar})
+	assert.Nil(t, vector.AppendBytes(v1, [][]byte{
+		[]byte("Tom"),
+		[]byte("is"),
+		[]byte("My"),
+		[]byte("friend"),
+	}, nil))
+
+	ips, err = dict.InsertBatch(v1)
+	require.Nil(t, err)
+	require.Equal(t, uint64(5), ips[0])
+	require.Equal(t, uint64(4), ips[1])
+	require.Equal(t, uint64(2), ips[2])
+	require.Equal(t, uint64(6), ips[3])
+}
+
+func TestDict_FindBatchVarLen(t *testing.T) {
+	dict, err := newTestDict(types.Type{Oid: types.T_varchar})
+	require.Nil(t, err)
+
+	v0 := vector.New(types.Type{Oid: types.T_varchar})
+	assert.Nil(t, vector.AppendBytes(v0, [][]byte{
+		[]byte("hello"),
+		[]byte("My"),
+		[]byte("name"),
+		[]byte("is"),
+		[]byte("Tom"),
+	}, nil))
+
+	ips, err := dict.InsertBatch(v0)
+	require.Nil(t, err)
+	require.Equal(t, uint64(1), ips[0])
+	require.Equal(t, uint64(2), ips[1])
+	require.Equal(t, uint64(3), ips[2])
+	require.Equal(t, uint64(4), ips[3])
+	require.Equal(t, uint64(5), ips[4])
+
+	v1 := vector.New(types.Type{Oid: types.T_varchar})
+	assert.Nil(t, vector.AppendBytes(v1, [][]byte{
+		[]byte("Jack"),
+		[]byte("is"),
+		[]byte("My"),
+		[]byte("friend"),
+		[]byte("name"),
+	}, nil))
+
+	poses := dict.FindBatch(v1)
+	require.Equal(t, uint64(0), poses[0])
+	require.Equal(t, uint64(4), poses[1])
+	require.Equal(t, uint64(2), poses[2])
+	require.Equal(t, uint64(0), poses[3])
+	require.Equal(t, uint64(3), poses[4])
+}
+
+func TestDict_FindDataVarLen(t *testing.T) {
+	dict, err := newTestDict(types.Type{Oid: types.T_varchar})
+	require.Nil(t, err)
+
+	v0 := vector.New(types.Type{Oid: types.T_varchar})
+	assert.Nil(t, vector.AppendBytes(v0, [][]byte{
+		[]byte("thisisalonglonglonglongstring"),
+		[]byte("My"),
+		[]byte("name"),
+		[]byte("is"),
+		[]byte("Tom"),
+		[]byte("is"),
+		[]byte("Tom"),
+	}, nil))
+
+	ips, err := dict.InsertBatch(v0)
+	require.Nil(t, err)
+	require.Equal(t, uint64(1), ips[0])
+	require.Equal(t, uint64(2), ips[1])
+	require.Equal(t, uint64(3), ips[2])
+	require.Equal(t, uint64(4), ips[3])
+	require.Equal(t, uint64(5), ips[4])
+	require.Equal(t, uint64(4), ips[5])
+	require.Equal(t, uint64(5), ips[6])
+
+	data := dict.FindData(1)
+	require.Equal(t, []byte("thisisalonglonglonglongstring"), data.GetBytes(0))
+
+	data = dict.FindData(2)
+	require.Equal(t, []byte("My"), data.GetBytes(0))
+
+	data = dict.FindData(3)
+	require.Equal(t, []byte("name"), data.GetBytes(0))
+
+	data = dict.FindData(4)
+	require.Equal(t, []byte("is"), data.GetBytes(0))
+
+	data = dict.FindData(5)
+	require.Equal(t, []byte("Tom"), data.GetBytes(0))
+}
+
+func newTestDict(typ types.Type) (*Dict, error) {
+	hm := host.New(1 << 30)
+	gm := guest.New(1<<30, hm)
+	m := mheap.New(gm)
+	return New(typ, m)
+}
