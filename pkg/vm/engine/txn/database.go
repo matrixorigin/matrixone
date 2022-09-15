@@ -34,7 +34,7 @@ var _ engine.Database = new(Database)
 
 func (d *Database) Create(ctx context.Context, relName string, defs []engine.TableDef) error {
 
-	_, err := engine.DoTxnRequest[CreateDatabaseResp](
+	_, err := DoTxnRequest[CreateDatabaseResp](
 		ctx,
 		d.engine,
 		d.txnOperator.Write,
@@ -56,7 +56,7 @@ func (d *Database) Create(ctx context.Context, relName string, defs []engine.Tab
 
 func (d *Database) Delete(ctx context.Context, relName string) error {
 
-	_, err := engine.DoTxnRequest[DeleteRelationResp](
+	_, err := DoTxnRequest[DeleteRelationResp](
 		ctx,
 		d.engine,
 		d.txnOperator.Write,
@@ -76,7 +76,11 @@ func (d *Database) Delete(ctx context.Context, relName string) error {
 
 func (d *Database) Relation(ctx context.Context, relName string) (engine.Relation, error) {
 
-	resps, err := engine.DoTxnRequest[OpenRelationResp](
+	if relName == "" {
+		return nil, fmt.Errorf("empty relation name")
+	}
+
+	resps, err := DoTxnRequest[OpenRelationResp](
 		ctx,
 		d.engine,
 		d.txnOperator.Read,
@@ -95,7 +99,7 @@ func (d *Database) Relation(ctx context.Context, relName string) (engine.Relatio
 
 	switch resp.Type {
 
-	case RelationTable:
+	case RelationTable, RelationView:
 		table := &Table{
 			engine:      d.engine,
 			txnOperator: d.txnOperator,
@@ -104,14 +108,14 @@ func (d *Database) Relation(ctx context.Context, relName string) (engine.Relatio
 		return table, nil
 
 	default:
-		panic(fmt.Errorf("unknown type: %+v", resp))
+		panic(fmt.Errorf("unknown type: %+v", resp.Type))
 	}
 
 }
 
 func (d *Database) Relations(ctx context.Context) ([]string, error) {
 
-	resps, err := engine.DoTxnRequest[GetRelationsResp](
+	resps, err := DoTxnRequest[GetRelationsResp](
 		ctx,
 		d.engine,
 		d.txnOperator.Read,

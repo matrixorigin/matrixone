@@ -172,13 +172,353 @@ var (
 )
 
 func NumericToNumeric[T1, T2 constraints.Integer | constraints.Float](xs []T1, rs []T2) ([]T2, error) {
+	if err := NumericToNumericOverflow[T1, T2](xs, rs); err != nil {
+		return nil, err
+	}
 	for i, x := range xs {
 		rs[i] = T2(x)
 	}
 	return rs, nil
 }
 
+func NumericToNumericOverflow[T1, T2 constraints.Integer | constraints.Float](xs []T1, rs []T2) error {
+	var t1 T1
+	var t2 T2
+	var li interface{} = &t1
+	var ri interface{} = &t2
+	switch li.(type) {
+	case *int8:
+		switch ri.(type) {
+		case *uint8, *uint16, *uint32, *uint64:
+			for _, x := range xs {
+				if x < 0 {
+					return moerr.NewError(moerr.OUT_OF_RANGE, "")
+				}
+			}
+		}
+	case *int16:
+		switch ri.(type) {
+		case *int8:
+			for _, x := range xs {
+				if int16(x) < math.MinInt8 || x > math.MaxInt8 {
+					return moerr.NewError(moerr.OUT_OF_RANGE, "")
+				}
+			}
+		case *uint8:
+			for _, x := range xs {
+				if x < 0 || int64(x) > math.MaxUint8 {
+					return moerr.NewError(moerr.OUT_OF_RANGE, "")
+				}
+			}
+		case *uint16, *uint32, *uint64:
+			for _, x := range xs {
+				if x < 0 {
+					return moerr.NewError(moerr.OUT_OF_RANGE, "")
+				}
+			}
+		}
+	case *int32:
+		switch ri.(type) {
+		case *int8:
+			for _, x := range xs {
+				if int32(x) < math.MinInt8 || x > math.MaxInt8 {
+					return moerr.NewError(moerr.OUT_OF_RANGE, "")
+				}
+			}
+		case *int16:
+			for _, x := range xs {
+				if int32(x) < math.MinInt16 || int32(x) > math.MaxInt16 {
+					return moerr.NewError(moerr.OUT_OF_RANGE, "")
+				}
+			}
+		case *uint8:
+			for _, x := range xs {
+				if x < 0 || int64(x) > math.MaxUint8 {
+					return moerr.NewError(moerr.OUT_OF_RANGE, "")
+				}
+			}
+		case *uint16:
+			for _, x := range xs {
+				if x < 0 || int64(x) > math.MaxUint16 {
+					return moerr.NewError(moerr.OUT_OF_RANGE, "")
+				}
+			}
+		case *uint32, *uint64:
+			for _, x := range xs {
+				if x < 0 {
+					return moerr.NewError(moerr.OUT_OF_RANGE, "")
+				}
+			}
+		}
+	case *int64:
+		switch ri.(type) {
+		case *int8:
+			for _, x := range xs {
+				if int64(x) < math.MinInt8 || x > math.MaxInt8 {
+					return moerr.NewError(moerr.OUT_OF_RANGE, "")
+				}
+			}
+		case *int16:
+			for _, x := range xs {
+				if int64(x) < math.MinInt16 || int64(x) > math.MaxInt16 {
+					return moerr.NewError(moerr.OUT_OF_RANGE, "")
+				}
+			}
+		case *int32:
+			for _, x := range xs {
+				if int64(x) < math.MinInt32 || int64(x) > math.MaxInt32 {
+					return moerr.NewError(moerr.OUT_OF_RANGE, "")
+				}
+			}
+		case *uint8:
+			for _, x := range xs {
+				if x < 0 || int64(x) > math.MaxUint8 {
+					return moerr.NewError(moerr.OUT_OF_RANGE, "")
+				}
+			}
+		case *uint16:
+			for _, x := range xs {
+				if x < 0 || int64(x) > math.MaxUint16 {
+					return moerr.NewError(moerr.OUT_OF_RANGE, "")
+				}
+			}
+		case *uint32:
+			for _, x := range xs {
+				if x < 0 || int64(x) > math.MaxUint32 {
+					return moerr.NewError(moerr.OUT_OF_RANGE, "")
+				}
+			}
+		case *uint64:
+			for _, x := range xs {
+				if x < 0 {
+					return moerr.NewError(moerr.OUT_OF_RANGE, "")
+				}
+			}
+		}
+	case *uint8:
+		switch ri.(type) {
+		case *int8:
+			for _, x := range xs {
+				if x > math.MaxInt8 {
+					return moerr.NewError(moerr.OUT_OF_RANGE, "")
+				}
+			}
+		}
+	case *uint16:
+		switch ri.(type) {
+		case *int8:
+			for _, x := range xs {
+				if x > math.MaxInt8 {
+					return moerr.NewError(moerr.OUT_OF_RANGE, "")
+				}
+			}
+		case *int16:
+			for _, x := range xs {
+				if uint16(x) > math.MaxInt16 {
+					return moerr.NewError(moerr.OUT_OF_RANGE, "")
+				}
+			}
+		case *uint8:
+			for _, x := range xs {
+				if uint16(x) > math.MaxUint8 {
+					return moerr.NewError(moerr.OUT_OF_RANGE, "")
+				}
+			}
+		}
+	case *uint32:
+		switch ri.(type) {
+		case *int8:
+			for _, x := range xs {
+				if x > math.MaxInt8 {
+					return moerr.NewError(moerr.OUT_OF_RANGE, "")
+				}
+			}
+		case *int16:
+			for _, x := range xs {
+				if uint32(x) > math.MaxInt16 {
+					return moerr.NewError(moerr.OUT_OF_RANGE, "")
+				}
+			}
+		case *int32:
+			for _, x := range xs {
+				if uint32(x) > math.MaxInt32 {
+					return moerr.NewError(moerr.OUT_OF_RANGE, "")
+				}
+			}
+		case *uint8:
+			for _, x := range xs {
+				if uint32(x) > math.MaxUint8 {
+					return moerr.NewError(moerr.OUT_OF_RANGE, "")
+				}
+			}
+		case *uint16:
+			for _, x := range xs {
+				if uint32(x) > math.MaxUint16 {
+					return moerr.NewError(moerr.OUT_OF_RANGE, "")
+				}
+			}
+		}
+	case *uint64:
+		switch ri.(type) {
+		case *int8:
+			for _, x := range xs {
+				if x > math.MaxInt8 {
+					return moerr.NewError(moerr.OUT_OF_RANGE, "")
+				}
+			}
+		case *int16:
+			for _, x := range xs {
+				if uint64(x) > math.MaxInt16 {
+					return moerr.NewError(moerr.OUT_OF_RANGE, "")
+				}
+			}
+		case *int32:
+			for _, x := range xs {
+				if uint64(x) > math.MaxInt32 {
+					return moerr.NewError(moerr.OUT_OF_RANGE, "")
+				}
+			}
+		case *int64:
+			for _, x := range xs {
+				if uint64(x) > math.MaxInt64 {
+					return moerr.NewError(moerr.OUT_OF_RANGE, "")
+				}
+			}
+		case *uint8:
+			for _, x := range xs {
+				if uint64(x) > math.MaxUint8 {
+					return moerr.NewError(moerr.OUT_OF_RANGE, "")
+				}
+			}
+		case *uint16:
+			for _, x := range xs {
+				if uint64(x) > math.MaxUint16 {
+					return moerr.NewError(moerr.OUT_OF_RANGE, "")
+				}
+			}
+		case *uint32:
+			for _, x := range xs {
+				if uint64(x) > math.MaxUint32 {
+					return moerr.NewError(moerr.OUT_OF_RANGE, "")
+				}
+			}
+		}
+	case *float32:
+		switch ri.(type) {
+		case *int8:
+			for _, x := range xs {
+				if math.Round(float64(x)) > math.MaxInt8 {
+					return moerr.NewError(moerr.OUT_OF_RANGE, "")
+				}
+			}
+		case *int16:
+			for _, x := range xs {
+				if math.Round(float64(x)) > math.MaxInt16 {
+					return moerr.NewError(moerr.OUT_OF_RANGE, "")
+				}
+			}
+		case *int32:
+			for _, x := range xs {
+				if math.Round(float64(x)) > math.MaxInt32 {
+					return moerr.NewError(moerr.OUT_OF_RANGE, "")
+				}
+			}
+		case *int64:
+			for _, x := range xs {
+				if math.Round(float64(x)) > math.MaxInt64 {
+					return moerr.NewError(moerr.OUT_OF_RANGE, "")
+				}
+			}
+		case *uint8:
+			for _, x := range xs {
+				if math.Round(float64(x)) > math.MaxUint8 {
+					return moerr.NewError(moerr.OUT_OF_RANGE, "")
+				}
+			}
+		case *uint16:
+			for _, x := range xs {
+				if math.Round(float64(x)) > math.MaxUint16 {
+					return moerr.NewError(moerr.OUT_OF_RANGE, "")
+				}
+			}
+		case *uint32:
+			for _, x := range xs {
+				if math.Round(float64(x)) > math.MaxUint32 {
+					return moerr.NewError(moerr.OUT_OF_RANGE, "")
+				}
+			}
+		case *uint64:
+			for _, x := range xs {
+				if math.Round(float64(x)) > math.MaxUint64 {
+					return moerr.NewError(moerr.OUT_OF_RANGE, "")
+				}
+			}
+		}
+	case *float64:
+		switch ri.(type) {
+		case *int8:
+			for _, x := range xs {
+				if math.Round(float64(x)) > math.MaxInt8 {
+					return moerr.NewError(moerr.OUT_OF_RANGE, "")
+				}
+			}
+		case *int16:
+			for _, x := range xs {
+				if math.Round(float64(x)) > math.MaxInt16 {
+					return moerr.NewError(moerr.OUT_OF_RANGE, "")
+				}
+			}
+		case *int32:
+			for _, x := range xs {
+				if math.Round(float64(x)) > math.MaxInt32 {
+					return moerr.NewError(moerr.OUT_OF_RANGE, "")
+				}
+			}
+		case *int64:
+			for _, x := range xs {
+				if math.Round(float64(x)) > math.MaxInt64 {
+					return moerr.NewError(moerr.OUT_OF_RANGE, "")
+				}
+			}
+		case *uint8:
+			for _, x := range xs {
+				if math.Round(float64(x)) > math.MaxUint8 {
+					return moerr.NewError(moerr.OUT_OF_RANGE, "")
+				}
+			}
+		case *uint16:
+			for _, x := range xs {
+				if math.Round(float64(x)) > math.MaxUint16 {
+					return moerr.NewError(moerr.OUT_OF_RANGE, "")
+				}
+			}
+		case *uint32:
+			for _, x := range xs {
+				if math.Round(float64(x)) > math.MaxUint32 {
+					return moerr.NewError(moerr.OUT_OF_RANGE, "")
+				}
+			}
+		case *uint64:
+			for _, x := range xs {
+				if math.Round(float64(x)) > math.MaxUint64 {
+					return moerr.NewError(moerr.OUT_OF_RANGE, "")
+				}
+			}
+		case *float32:
+			for _, x := range xs {
+				if float64(x) > math.MaxFloat32 {
+					return moerr.NewError(moerr.OUT_OF_RANGE, "")
+				}
+			}
+		}
+	}
+	return nil
+}
+
 func FloatToIntWithoutError[T1 constraints.Float, T2 constraints.Integer](xs []T1, rs []T2) ([]T2, error) {
+	if err := NumericToNumericOverflow[T1, T2](xs, rs); err != nil {
+		return nil, err
+	}
 	for i, x := range xs {
 		rs[i] = T2(math.Round(float64(x)))
 	}
@@ -314,30 +654,42 @@ func FloatToBytes[T constraints.Float](xs []T, rs []string) ([]string, error) {
 	return rs, nil
 }
 
-func decimal64ToDecimal128Pure(xs []types.Decimal64, rs []types.Decimal128) ([]types.Decimal128, error) {
+func decimal64ToDecimal128Pure(xs []types.Decimal64, rs []types.Decimal128, width, scale int32) ([]types.Decimal128, error) {
+	var err error
 	for i, x := range xs {
-		rs[i] = types.Decimal128_FromDecimal64(x)
+		if rs[i], err = types.Decimal128_FromDecimal64WithScale(x, width, scale); err != nil {
+			return nil, err
+		}
 	}
 	return rs, nil
 }
 
-func IntToDecimal128[T constraints.Integer](xs []T, rs []types.Decimal128) ([]types.Decimal128, error) {
+func IntToDecimal128[T constraints.Integer](xs []T, rs []types.Decimal128, width, scale int32) ([]types.Decimal128, error) {
+	var err error
 	for i, x := range xs {
-		rs[i] = types.InitDecimal128(int64(x))
+		if rs[i], err = types.InitDecimal128(int64(x), width, scale); err != nil {
+			return nil, err
+		}
 	}
 	return rs, nil
 }
 
-func IntToDecimal64[T constraints.Integer](xs []T, rs []types.Decimal64) ([]types.Decimal64, error) {
+func IntToDecimal64[T constraints.Integer](xs []T, rs []types.Decimal64, width, scale int32) ([]types.Decimal64, error) {
+	var err error
 	for i, x := range xs {
-		rs[i] = types.InitDecimal64(int64(x))
+		if rs[i], err = types.InitDecimal64(int64(x), width, scale); err != nil {
+			return nil, err
+		}
 	}
 	return rs, nil
 }
 
-func UintToDecimal128[T constraints.Integer](xs []T, rs []types.Decimal128) ([]types.Decimal128, error) {
+func UintToDecimal128[T constraints.Integer](xs []T, rs []types.Decimal128, width, scale int32) ([]types.Decimal128, error) {
+	var err error
 	for i, x := range xs {
-		rs[i] = types.InitDecimal128UsingUint(uint64(x))
+		if rs[i], err = types.InitDecimal128UsingUint(uint64(x), width, scale); err != nil {
+			return nil, err
+		}
 	}
 	return rs, nil
 }
@@ -484,37 +836,25 @@ func Decimal64ToInt64(xs []types.Decimal64, scale int32, rs []int64) ([]int64, e
 }
 
 func Decimal128ToInt64(xs []types.Decimal128, scale int32, rs []int64) ([]int64, error) {
+	var err error
 	for i, x := range xs {
-		xStr := x.ToStringWithScale(scale)
-		floatRepresentation, err := strconv.ParseFloat(xStr, 64)
+		xStr := x.ToStringWithScale(0)
+		rs[i], err = strconv.ParseInt(xStr, 10, 64)
 		if err != nil {
 			return []int64{}, moerr.NewError(moerr.OUT_OF_RANGE, "cannot convert decimal to BIGINT correctly")
 		}
-
-		if floatRepresentation > math.MaxInt64 || floatRepresentation < math.MinInt64 {
-			return []int64{}, moerr.NewError(moerr.OUT_OF_RANGE, "cannot convert decimal to BIGINT correctly")
-		}
-
-		result := int64(math.Round(floatRepresentation))
-		rs[i] = result
 	}
 	return rs, nil
 }
 
 func Decimal128ToInt32(xs []types.Decimal128, scale int32, rs []int32) ([]int32, error) {
 	for i, x := range xs {
-		xStr := x.ToStringWithScale(scale)
-		floatRepresentation, err := strconv.ParseFloat(xStr, 64)
+		xStr := x.ToStringWithScale(0)
+		ret, err := strconv.ParseInt(xStr, 10, 32)
 		if err != nil {
 			return []int32{}, moerr.NewError(moerr.OUT_OF_RANGE, "cannot convert decimal to INT correctly")
 		}
-
-		if floatRepresentation > math.MaxInt32 || floatRepresentation < math.MinInt32 {
-			return []int32{}, moerr.NewError(moerr.OUT_OF_RANGE, "cannot convert decimal to INT correctly")
-		}
-
-		result := int32(math.Round(floatRepresentation))
-		rs[i] = result
+		rs[i] = int32(ret)
 	}
 	return rs, nil
 }
@@ -547,24 +887,24 @@ func Decimal128ToUint64(xs []types.Decimal128, scale int32, rs []uint64) ([]uint
 
 // the scale of decimal128 is guaranteed to be less than 18
 // this cast function is too slow, and therefore only temporary, rewrite needed
-func Decimal128ToDecimal64(xs []types.Decimal128, xsScale int32, ysPrecision, ysScale int32, rs []types.Decimal64) ([]types.Decimal64, error) {
+func Decimal128ToDecimal64(xs []types.Decimal128, width, scale int32, rs []types.Decimal64) ([]types.Decimal64, error) {
 	var err error
 	for i, x := range xs {
-		rs[i], _ = x.ToDecimal64()
+		rs[i], err = x.ToDecimal64(width, scale)
 		if err != nil {
-			return []types.Decimal64{}, moerr.NewError(moerr.OUT_OF_RANGE, fmt.Sprintf("cannot convert to Decimal(%d, %d) correctly", ysPrecision, ysScale))
+			return []types.Decimal64{}, moerr.NewError(moerr.OUT_OF_RANGE, fmt.Sprintf("cannot convert to Decimal(%d, %d) correctly", width, scale))
 		}
 	}
 	return rs, nil
 }
 
-func Decimal128ToDecimal128(xs []types.Decimal128, scale int32, rs []types.Decimal128) ([]types.Decimal128, error) {
+func Decimal128ToDecimal128(xs []types.Decimal128, width, scale int32, rs []types.Decimal128) ([]types.Decimal128, error) {
 	var err error
 	for i, x := range xs {
 		xStr := x.ToStringWithScale(scale)
 		rs[i], err = types.Decimal128_FromString(xStr)
 		if err != nil {
-			return []types.Decimal128{}, moerr.NewError(moerr.OUT_OF_RANGE, fmt.Sprintf("cannot convert to Decimal(34, %d) correctly", scale))
+			return []types.Decimal128{}, moerr.NewError(moerr.OUT_OF_RANGE, fmt.Sprintf("cannot convert to Decimal(%d, %d) correctly", width, scale))
 		}
 	}
 	return rs, nil

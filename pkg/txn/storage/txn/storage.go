@@ -26,7 +26,9 @@ type Storage struct {
 	handler Handler
 }
 
-func New(handler Handler) (*Storage, error) {
+func New(
+	handler Handler,
+) (*Storage, error) {
 	s := &Storage{
 		handler: handler,
 	}

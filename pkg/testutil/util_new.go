@@ -69,10 +69,15 @@ func NewFS() *fileservice.FileServices {
 	if err != nil {
 		panic(err)
 	}
+	etl, err := fileservice.NewMemoryFS("etl")
+	if err != nil {
+		panic(err)
+	}
 	fs, err := fileservice.NewFileServices(
 		"local",
 		local,
 		s3,
+		etl,
 	)
 	if err != nil {
 		panic(err)
@@ -487,7 +492,8 @@ func NewDecimal64Vector(n int, typ types.Type, m *mheap.Mheap, random bool, vs [
 		if random {
 			v = rand.Int()
 		}
-		if err := vec.Append(types.InitDecimal64(int64(v)), false, m); err != nil {
+		d, _ := types.InitDecimal64(int64(v), 64, 0)
+		if err := vec.Append(d, false, m); err != nil {
 
 			vec.Free(m)
 			return nil
@@ -512,7 +518,8 @@ func NewDecimal128Vector(n int, typ types.Type, m *mheap.Mheap, random bool, vs 
 		if random {
 			v = rand.Int()
 		}
-		if err := vec.Append(types.InitDecimal128(int64(v)), false, m); err != nil {
+		d, _ := types.InitDecimal128(int64(v), 64, 0)
+		if err := vec.Append(d, false, m); err != nil {
 			vec.Free(m)
 			return nil
 		}

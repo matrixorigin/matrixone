@@ -112,6 +112,9 @@ func (s *memTaskStorage) Delete(ctx context.Context, conds ...Condition) (int, e
 }
 
 func (s *memTaskStorage) Query(ctx context.Context, conds ...Condition) ([]task.Task, error) {
+	s.RLock()
+	defer s.RUnlock()
+
 	c := conditions{}
 	for _, cond := range conds {
 		cond(&c)
