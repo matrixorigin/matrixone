@@ -31,21 +31,7 @@ const (
 	DELETE
 )
 
-const (
-	// default database name for catalog
-	MO_CATALOG  = "mo_catalog"
-	MO_DATABASE = "mo_database"
-	MO_TABLES   = "mo_tables"
-	MO_COLUMNS  = "mo_columns"
-)
-
-const (
-	// default database id for catalog
-	MO_CATALOG_ID  = 1
-	MO_DATABASE_ID = 1
-	MO_TABLES_ID   = 2
-	MO_COLUMNS_ID  = 3
-)
+type DNStore = logservice.DNStore
 
 // tae's block metadata, which is currently just an empty one,
 // does not serve any purpose When tae submits a concrete structure,
@@ -61,23 +47,24 @@ type BlockMeta struct {
 // suppose there are 2 dn, for table A exist dn0 - 100, dn1 - 200.
 type Cache interface {
 	// update table's cache to the specified timestamp
-	Update(ctx context.Context, dnList []int, databaseId uint64,
+	Update(ctx context.Context, dnList []DNStore, databaseId uint64,
 		tableId uint64, ts timestamp.Timestamp) error
 	// BlockList return a list of unmodified blocks that do not require
 	// a merge read and can be very simply distributed to other nodes
 	// to perform queries
-	BlockList(ctx context.Context, dnList []int, databaseId uint64,
+	BlockList(ctx context.Context, dnList []DNStore, databaseId uint64,
 		tableId uint64, ts timestamp.Timestamp, entries [][]Entry) []BlockMeta
 	// NewReader create some readers to read the data of the modified blocks,
 	// including workspace data
 	NewReader(ctx context.Context, readerNumber int, expr *plan.Expr,
-		dnList []int, databaseId uint64, tableId uint64,
+		dnList []DNStore, databaseId uint64, tableId uint64,
 		ts timestamp.Timestamp, entries [][]Entry) ([]engine.Reader, error)
 }
 
 type Engine struct {
 	sync.RWMutex
 	getClusterDetails GetClusterDetailsFunc
+	db                *DB
 	txns              map[string]*Transaction
 }
 
@@ -88,6 +75,7 @@ type DB struct {
 
 // Transaction represents a transaction
 type Transaction struct {
+	db *DB
 	// readOnly default value is true, once a write happen, then set to false
 	readOnly bool
 	// db       *DB
@@ -103,7 +91,7 @@ type Transaction struct {
 	// writes cache stores any writes done by txn
 	// every statement is an element
 	writes   [][]Entry
-	dnStores []logservice.DNStore
+	dnStores []DNStore
 }
 
 // Entry represents a delete/insert
@@ -119,4 +107,16 @@ type Entry struct {
 	blockId uint64
 	// update or delete tuples
 	bat *batch.Batch
+}
+
+type database struct {
+	databaseId   uint64
+	databaseName string
+	txn          *Transaction
+}
+
+type table struct {
+	tableId   uint64
+	tableName string
+	db        *database
 }

@@ -20,230 +20,348 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 )
 
-type BatchIter func() (tuple []any)
+type BatchIter func() (tuple []Nullable)
 
 func NewBatchIter(b *batch.Batch) BatchIter {
 	i := 0
-
-	iter := func() (tuple []any) {
-
-		for _, vec := range b.Vecs {
-			switch vec.Typ.Oid {
-
-			case types.T_bool:
-				col := vec.Col.([]bool)
-				if i < len(col) {
-					tuple = append(tuple, col[i])
-				} else {
-					return
-				}
-
-			case types.T_int8:
-				col := vec.Col.([]int8)
-				if i < len(col) {
-					tuple = append(tuple, col[i])
-				} else {
-					return
-				}
-
-			case types.T_int16:
-				col := vec.Col.([]int16)
-				if i < len(col) {
-					tuple = append(tuple, col[i])
-				} else {
-					return
-				}
-
-			case types.T_int32:
-				col := vec.Col.([]int32)
-				if i < len(col) {
-					tuple = append(tuple, col[i])
-				} else {
-					return
-				}
-
-			case types.T_int64:
-				col := vec.Col.([]int64)
-				if i < len(col) {
-					tuple = append(tuple, col[i])
-				} else {
-					return
-				}
-
-			case types.T_uint8:
-				col := vec.Col.([]uint8)
-				if i < len(col) {
-					tuple = append(tuple, col[i])
-				} else {
-					return
-				}
-
-			case types.T_uint16:
-				col := vec.Col.([]uint16)
-				if i < len(col) {
-					tuple = append(tuple, col[i])
-				} else {
-					return
-				}
-
-			case types.T_uint32:
-				col := vec.Col.([]uint32)
-				if i < len(col) {
-					tuple = append(tuple, col[i])
-				} else {
-					return
-				}
-
-			case types.T_uint64:
-				col := vec.Col.([]uint64)
-				if i < len(col) {
-					tuple = append(tuple, col[i])
-				} else {
-					return
-				}
-
-			case types.T_float32:
-				col := vec.Col.([]float32)
-				if i < len(col) {
-					tuple = append(tuple, col[i])
-				} else {
-					return
-				}
-
-			case types.T_float64:
-				col := vec.Col.([]float64)
-				if i < len(col) {
-					tuple = append(tuple, col[i])
-				} else {
-					return
-				}
-
-			case types.T_tuple:
-				col := vec.Col.([][]any)
-				if i < len(col) {
-					tuple = append(tuple, col[i])
-				} else {
-					return
-				}
-
-			case types.T_char, types.T_varchar, types.T_json, types.T_blob:
-				if i < vec.Length() {
-					tuple = append(tuple, vec.GetBytes(int64(i)))
-				} else {
-					return
-				}
-
-			case types.T_date:
-				col := vec.Col.([]types.Date)
-				if i < len(col) {
-					tuple = append(tuple, col[i])
-				} else {
-					return
-				}
-
-			case types.T_datetime:
-				col := vec.Col.([]types.Datetime)
-				if i < len(col) {
-					tuple = append(tuple, col[i])
-				} else {
-					return
-				}
-
-			case types.T_timestamp:
-				col := vec.Col.([]types.Timestamp)
-				if i < len(col) {
-					tuple = append(tuple, col[i])
-				} else {
-					return
-				}
-
-			case types.T_decimal64:
-				col := vec.Col.([]types.Decimal64)
-				if i < len(col) {
-					tuple = append(tuple, col[i])
-				} else {
-					return
-				}
-
-			case types.T_decimal128:
-				col := vec.Col.([]types.Decimal128)
-				if i < len(col) {
-					tuple = append(tuple, col[i])
-				} else {
-					return
-				}
-
-			}
+	iter := func() (tuple []Nullable) {
+		if i >= b.Vecs[0].Length() {
+			return
 		}
-
+		for _, vec := range b.Vecs {
+			value := vectorAt(vec, i)
+			tuple = append(tuple, value)
+		}
 		i++
-
 		return
 	}
-
 	return iter
 }
 
-func vectorAt(vec *vector.Vector, i int) any {
+func vectorAt(vec *vector.Vector, i int) (value Nullable) {
+	if vec.IsConst() {
+		i = 0
+	}
 	switch vec.Typ.Oid {
 
 	case types.T_bool:
-		return vec.Col.([]bool)[i]
+		if vec.IsScalarNull() {
+			value = Nullable{
+				IsNull: true,
+				Value:  false,
+			}
+			return
+		}
+		value = Nullable{
+			IsNull: vec.GetNulls().Contains(uint64(i)),
+			Value:  vec.Col.([]bool)[i],
+		}
+		return
 
 	case types.T_int8:
-		return vec.Col.([]int8)[i]
+		if vec.IsScalarNull() {
+			value = Nullable{
+				IsNull: true,
+				Value:  int8(0),
+			}
+			return
+		}
+		value = Nullable{
+			IsNull: vec.GetNulls().Contains(uint64(i)),
+			Value:  vec.Col.([]int8)[i],
+		}
+		return
 
 	case types.T_int16:
-		return vec.Col.([]int16)[i]
+		if vec.IsScalarNull() {
+			value = Nullable{
+				IsNull: true,
+				Value:  int16(0),
+			}
+			return
+		}
+		value = Nullable{
+			IsNull: vec.GetNulls().Contains(uint64(i)),
+			Value:  vec.Col.([]int16)[i],
+		}
+		return
 
 	case types.T_int32:
-		return vec.Col.([]int32)[i]
+		if vec.IsScalarNull() {
+			value = Nullable{
+				IsNull: true,
+				Value:  int32(0),
+			}
+			return
+		}
+		value = Nullable{
+			IsNull: vec.GetNulls().Contains(uint64(i)),
+			Value:  vec.Col.([]int32)[i],
+		}
+		return
 
 	case types.T_int64:
-		return vec.Col.([]int64)[i]
+		if vec.IsScalarNull() {
+			value = Nullable{
+				IsNull: true,
+				Value:  int64(0),
+			}
+			return
+		}
+		value = Nullable{
+			IsNull: vec.GetNulls().Contains(uint64(i)),
+			Value:  vec.Col.([]int64)[i],
+		}
+		return
 
 	case types.T_uint8:
-		return vec.Col.([]uint8)[i]
+		if vec.IsScalarNull() {
+			value = Nullable{
+				IsNull: true,
+				Value:  uint8(0),
+			}
+			return
+		}
+		value = Nullable{
+			IsNull: vec.GetNulls().Contains(uint64(i)),
+			Value:  vec.Col.([]uint8)[i],
+		}
+		return
 
 	case types.T_uint16:
-		return vec.Col.([]uint16)[i]
+		if vec.IsScalarNull() {
+			value = Nullable{
+				IsNull: true,
+				Value:  uint16(0),
+			}
+			return
+		}
+		value = Nullable{
+			IsNull: vec.GetNulls().Contains(uint64(i)),
+			Value:  vec.Col.([]uint16)[i],
+		}
+		return
 
 	case types.T_uint32:
-		return vec.Col.([]uint32)[i]
+		if vec.IsScalarNull() {
+			value = Nullable{
+				IsNull: true,
+				Value:  uint32(0),
+			}
+			return
+		}
+		value = Nullable{
+			IsNull: vec.GetNulls().Contains(uint64(i)),
+			Value:  vec.Col.([]uint32)[i],
+		}
+		return
 
 	case types.T_uint64:
-		return vec.Col.([]uint64)[i]
+		if vec.IsScalarNull() {
+			value = Nullable{
+				IsNull: true,
+				Value:  uint64(0),
+			}
+			return
+		}
+		value = Nullable{
+			IsNull: vec.GetNulls().Contains(uint64(i)),
+			Value:  vec.Col.([]uint64)[i],
+		}
+		return
 
 	case types.T_float32:
-		return vec.Col.([]float32)[i]
+		if vec.IsScalarNull() {
+			value = Nullable{
+				IsNull: true,
+				Value:  float32(0),
+			}
+			return
+		}
+		value = Nullable{
+			IsNull: vec.GetNulls().Contains(uint64(i)),
+			Value:  vec.Col.([]float32)[i],
+		}
+		return
 
 	case types.T_float64:
-		return vec.Col.([]float64)[i]
+		if vec.IsScalarNull() {
+			value = Nullable{
+				IsNull: true,
+				Value:  float64(0),
+			}
+			return
+		}
+		value = Nullable{
+			IsNull: vec.GetNulls().Contains(uint64(i)),
+			Value:  vec.Col.([]float64)[i],
+		}
+		return
 
 	case types.T_tuple:
-		return vec.Col.([][]any)[i]
+		if vec.IsScalarNull() {
+			value = Nullable{
+				IsNull: true,
+				Value:  []any{},
+			}
+			return
+		}
+		value = Nullable{
+			IsNull: vec.GetNulls().Contains(uint64(i)),
+			Value:  vec.Col.([][]any)[i],
+		}
+		return
 
 	case types.T_char, types.T_varchar, types.T_json, types.T_blob:
-		return vec.GetBytes(int64(i))
+		if vec.IsScalarNull() {
+			value = Nullable{
+				IsNull: true,
+				Value:  []byte{},
+			}
+			return
+		}
+		value = Nullable{
+			IsNull: vec.GetNulls().Contains(uint64(i)),
+			Value:  vec.GetBytes(int64(i)),
+		}
+		return
 
 	case types.T_date:
-		return vec.Col.([]types.Date)[i]
+		if vec.IsScalarNull() {
+			var zero types.Date
+			value = Nullable{
+				IsNull: true,
+				Value:  zero,
+			}
+			return
+		}
+		value = Nullable{
+			IsNull: vec.GetNulls().Contains(uint64(i)),
+			Value:  vec.Col.([]types.Date)[i],
+		}
+		return
 
 	case types.T_datetime:
-		return vec.Col.([]types.Datetime)[i]
+		if vec.IsScalarNull() {
+			var zero types.Datetime
+			value = Nullable{
+				IsNull: true,
+				Value:  zero,
+			}
+			return
+		}
+		value = Nullable{
+			IsNull: vec.GetNulls().Contains(uint64(i)),
+			Value:  vec.Col.([]types.Datetime)[i],
+		}
+		return
 
 	case types.T_timestamp:
-		return vec.Col.([]types.Timestamp)[i]
+		if vec.IsScalarNull() {
+			var zero types.Timestamp
+			value = Nullable{
+				IsNull: true,
+				Value:  zero,
+			}
+			return
+		}
+		value = Nullable{
+			IsNull: vec.GetNulls().Contains(uint64(i)),
+			Value:  vec.Col.([]types.Timestamp)[i],
+		}
+		return
 
 	case types.T_decimal64:
-		return vec.Col.([]types.Decimal64)[i]
+		if vec.IsScalarNull() {
+			var zero types.Decimal64
+			value = Nullable{
+				IsNull: true,
+				Value:  zero,
+			}
+			return
+		}
+		value = Nullable{
+			IsNull: vec.GetNulls().Contains(uint64(i)),
+			Value:  vec.Col.([]types.Decimal64)[i],
+		}
+		return
 
 	case types.T_decimal128:
-		return vec.Col.([]types.Decimal128)[i]
+		if vec.IsScalarNull() {
+			var zero types.Decimal128
+			value = Nullable{
+				IsNull: true,
+				Value:  zero,
+			}
+			return
+		}
+		value = Nullable{
+			IsNull: vec.GetNulls().Contains(uint64(i)),
+			Value:  vec.Col.([]types.Decimal128)[i],
+		}
+		return
+
+	case types.T_Rowid:
+		if vec.IsScalarNull() {
+			var zero types.Rowid
+			value = Nullable{
+				IsNull: true,
+				Value:  zero,
+			}
+			return
+		}
+		value = Nullable{
+			IsNull: vec.GetNulls().Contains(uint64(i)),
+			Value:  vec.Col.([]types.Rowid)[i],
+		}
+		return
+
+	case types.T_uuid:
+		if vec.IsScalarNull() {
+			var zero types.Uuid
+			value = Nullable{
+				IsNull: true,
+				Value:  zero,
+			}
+			return
+		}
+		value = Nullable{
+			IsNull: vec.GetNulls().Contains(uint64(i)),
+			Value:  vec.Col.([]types.Uuid)[i],
+		}
+		return
 
 	}
 
 	panic(fmt.Errorf("unknown column type: %v", vec.Typ))
+}
+
+func vectorAppend(vec *vector.Vector, value Nullable, heap *mheap.Mheap) {
+	str, ok := value.Value.(string)
+	if ok {
+		value.Value = []byte(str)
+	}
+	vec.Append(value.Value, false, heap)
+	if value.IsNull {
+		vec.GetNulls().Set(uint64(vec.Length() - 1))
+	}
+}
+
+func appendNamedRow(
+	tx *Transaction,
+	heap *mheap.Mheap,
+	bat *batch.Batch,
+	row NamedRow,
+) error {
+	for i, name := range bat.Attrs {
+		value, err := row.AttrByName(tx, name)
+		if err != nil {
+			return err
+		}
+		vectorAppend(bat.Vecs[i], value, heap)
+	}
+	return nil
 }

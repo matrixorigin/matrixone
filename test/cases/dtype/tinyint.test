@@ -213,3 +213,104 @@ drop table t1;
 create table t1 (a tinyint primary key, b char(32));
 insert into t1 values (1,'apple'), (2,'apple');
 select * from t1;
+
+drop table t1;
+create table t1(a tinyint);
+insert into t1 values(-128), (127);
+select * from t1;
+insert into t1 values(-129);
+insert into t1 values(128);
+
+create table t2(a tinyint unsigned);
+insert into t2 values(128);
+insert into t1 select * from t2;
+
+drop table t2;
+create table t2(a smallint);
+insert into t2 values(-129);
+insert into t1 select * from t2;
+delete from t2;
+insert into t2 values(128);
+insert into t1 select * from t2;
+
+drop table t2;
+create table t2(a smallint unsigned);
+insert into t2 values(128);
+insert into t1 select * from t2;
+
+drop table t2;
+create table t2(a int);
+insert into t2 values(-129);
+insert into t1 select * from t2;
+delete from t2;
+insert into t2 values(128);
+insert into t1 select * from t2;
+
+drop table t2;
+create table t2(a int unsigned);
+insert into t2 values(128);
+insert into t1 select * from t2;
+
+drop table t2;
+create table t2(a bigint);
+insert into t2 values(-129);
+insert into t1 select * from t2;
+delete from t2;
+insert into t2 values(128);
+insert into t1 select * from t2;
+
+drop table t2;
+create table t2(a bigint unsigned);
+insert into t2 values(128);
+insert into t1 select * from t2;
+
+drop table t1;
+create table t1(a tinyint unsigned);
+insert into t1 values(0), (255);
+select * from t1;
+insert into t1 values(-1);
+insert into t1 values(256);
+
+drop table t2;
+create table t2(a tinyint);
+insert into t2 values(-1);
+insert into t1 select * from t2;
+
+drop table t2;
+create table t2(a smallint);
+insert into t2 values(-1);
+insert into t1 select * from t2;
+delete from t2;
+insert into t2 values(256);
+insert into t1 select * from t2;
+
+drop table t2;
+create table t2(a smallint unsigned);
+insert into t2 values(256);
+insert into t1 select * from t2;
+
+drop table t2;
+create table t2(a int);
+insert into t2 values(-1);
+insert into t1 select * from t2;
+delete from t2;
+insert into t2 values(256);
+insert into t1 select * from t2;
+
+drop table t2;
+create table t2(a int unsigned);
+insert into t2 values(256);
+insert into t1 select * from t2;
+
+drop table t2;
+create table t2(a bigint);
+insert into t2 values(-1);
+insert into t1 select * from t2;
+delete from t2;
+insert into t2 values(256);
+insert into t1 select * from t2;
+
+drop table t2;
+create table t2(a bigint unsigned);
+insert into t2 values(256);
+insert into t1 select * from t2;

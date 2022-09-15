@@ -440,8 +440,6 @@ select * from t11 join t12 on t11.a!=t12.b;
 select * from t11 left join t12 on t11.a!=t12.b;
 select * from t11 right join t12 on t11.a!=t12.b;
 
--- @bvt:issue#4660
-select * from t11 union select * from t12;
-select * from t11 union all select * from t12;
--- @bvt
+select * from t11 union select * from t12 order by a;
+select * from t11 union all select * from t12 order by a;
 
