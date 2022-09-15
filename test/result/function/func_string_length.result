@@ -83,3 +83,16 @@ a	b
 3	2008-12-04
 4	2012-03-23
 drop table t1;
+DROP table if exists t1;
+CREATE TABLE t1 (s BLOB);
+INSERT INTO t1 VALUES ('test');
+SELECT LENGTH(s) FROM t1;
+length(s)
+4
+CREATE TABLE t2 (s BLOB);
+INSERT INTO t2 VALUES ('1234589002');
+SELECT LENGTH(s) FROM t2;
+length(s)
+10
+drop table t1;
+drop table t2;

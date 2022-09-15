@@ -304,3 +304,19 @@ abc	abcd
 ab	abcd
 drop table t1;
 drop table t2;
+drop table if exists t1;
+create table t1(a blob);
+insert into t1 values('ab'), ('abc'), ('abcd'), ('abcde');
+SELECT SUBSTRING(a,1,4), LENGTH(a) FROM t1 GROUP BY a;
+substring(a, 1, 4)    length(a)
+ab    2
+abc    3
+abcd    4
+abcd    5
+SELECT SUBSTRING(a,-1) FROM t1;
+substring(a, -1)
+b
+c
+d
+e
+drop table t1;
