@@ -56,7 +56,7 @@ func TestGetCNOrderedMap(t *testing.T) {
 		tasks     []task.Task
 		workingCN []string
 
-		expected *OrderedMap
+		expected *cnMap
 	}{
 		{
 			tasks:     nil,
@@ -68,24 +68,24 @@ func TestGetCNOrderedMap(t *testing.T) {
 			tasks:     []task.Task{{TaskRunner: "a"}, {TaskRunner: "b"}, {TaskRunner: "b"}},
 			workingCN: []string{"a", "b"},
 
-			expected: &OrderedMap{
-				Map:         map[string]uint32{"a": 1, "b": 2},
-				OrderedKeys: []string{"a", "b"},
+			expected: &cnMap{
+				m:           map[string]uint32{"a": 1, "b": 2},
+				orderedKeys: []string{"a", "b"},
 			},
 		},
 		{
 			tasks:     []task.Task{{TaskRunner: "a"}, {TaskRunner: "b"}, {TaskRunner: "a"}, {TaskRunner: "a"}},
 			workingCN: []string{"a", "b"},
 
-			expected: &OrderedMap{
-				Map:         map[string]uint32{"a": 3, "b": 1},
-				OrderedKeys: []string{"b", "a"},
+			expected: &cnMap{
+				m:           map[string]uint32{"a": 3, "b": 1},
+				orderedKeys: []string{"b", "a"},
 			},
 		},
 	}
 
 	for _, c := range cases {
-		results := getCNOrderedMap(c.tasks, c.workingCN)
+		results := getCNOrdered(c.tasks, c.workingCN)
 		assert.Equal(t, c.expected, results)
 	}
 }

@@ -69,17 +69,17 @@ func (s *Scheduler) Schedule(cnState logservice.CNState, currentTick uint64) {
 	if runningTasks == nil && createdTasks == nil {
 		return
 	}
-	cnMaps := getCNOrderedMap(runningTasks, workingCN)
+	orderedCN := getCNOrdered(runningTasks, workingCN)
 
-	s.allocateTasks(createdTasks, cnMaps)
+	s.allocateTasks(createdTasks, orderedCN)
 
 	expiredTasks := getExpiredTasks(runningTasks, expiredCN)
-	s.allocateTasks(expiredTasks, cnMaps)
+	s.allocateTasks(expiredTasks, orderedCN)
 }
 
-func (s *Scheduler) allocateTasks(tasks []task.Task, cnMaps *OrderedMap) {
+func (s *Scheduler) allocateTasks(tasks []task.Task, orderedCN *cnMap) {
 	for _, t := range tasks {
-		runner := cnMaps.Min()
+		runner := orderedCN.Min()
 		if runner == "" {
 			s.logger.Info("no CN available")
 			return
@@ -90,7 +90,7 @@ func (s *Scheduler) allocateTasks(tasks []task.Task, cnMaps *OrderedMap) {
 				zap.Uint64("task-id", t.ID), zap.String("task-runner", t.TaskRunner))
 			return
 		}
-		cnMaps.Inc(t.TaskRunner)
+		orderedCN.Inc(t.TaskRunner)
 	}
 }
 
@@ -103,7 +103,7 @@ func getExpiredTasks(tasks []task.Task, expiredCN []string) (expired []task.Task
 	return
 }
 
-func getCNOrderedMap(tasks []task.Task, workingCN []string) *OrderedMap {
+func getCNOrdered(tasks []task.Task, workingCN []string) *cnMap {
 	orderedMap := NewOrderedMap(workingCN)
 	for _, t := range tasks {
 		if contains(workingCN, t.TaskRunner) {
