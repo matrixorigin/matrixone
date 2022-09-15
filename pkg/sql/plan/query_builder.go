@@ -630,9 +630,9 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 
 func (builder *QueryBuilder) createQuery() (*Query, error) {
 	for i, rootId := range builder.qry.Steps {
-		rootId = builder.pushdownSemiAntiJoins(rootId)
 		rootId, _ = builder.pushdownFilters(rootId, nil)
 		rootId = builder.determineJoinOrder(rootId)
+		rootId = builder.pushdownSemiAntiJoins(rootId)
 		builder.qry.Steps[i] = rootId
 
 		colRefCnt := make(map[[2]int32]int)

@@ -38,6 +38,7 @@ type joinVertex struct {
 }
 
 func (builder *QueryBuilder) pushdownSemiAntiJoins(nodeID int32) int32 {
+	// TODO: handle SEMI/ANTI joins in join order
 	node := builder.qry.Nodes[nodeID]
 
 	for i, childID := range node.Children {
