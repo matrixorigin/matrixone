@@ -17,6 +17,7 @@ package moengine
 import (
 	"context"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
@@ -45,13 +46,11 @@ func (w *wrappedEngine) New(options ...client.TxnOption) (client.TxnOperator, er
 }
 
 func (w *wrappedEngine) NewWithSnapshot(snapshot []byte) (client.TxnOperator, error) {
-	tx, err := w.engine.StartTxn(snapshot)
-	if err != nil {
-		return nil, err
+	txn := w.engine.(*txnEngine).impl.TxnMgr.GetTxnByCtx(snapshot)
+	if txn == nil {
+		return nil, moerr.NewError(moerr.ErrMissingTxn, "txn not found")
 	}
-	return &wrappedTx{
-		tx: tx,
-	}, nil
+	return TxnToTxnOperator(txn), nil
 }
 
 type wrappedTx struct {
@@ -82,8 +81,8 @@ func (w *wrappedTx) Rollback(ctx context.Context) error {
 	return w.tx.Rollback()
 }
 
-func (*wrappedTx) Snapshot() ([]byte, error) {
-	panic("should not call")
+func (w *wrappedTx) Snapshot() ([]byte, error) {
+	return w.tx.GetCtx(), nil
 }
 
 func (*wrappedTx) Write(ctx context.Context, ops []txn.TxnRequest) (*rpc.SendResult, error) {

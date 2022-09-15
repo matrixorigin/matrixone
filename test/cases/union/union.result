@@ -73,3 +73,13 @@ a
 30
 127
 127.44
+drop table if exists t7;
+CREATE TABLE t7 (
+a int not null,
+b char (10) not null
+);
+insert into t7 values(1,'a'),(2,'b'),(3,'c'),(3,'c');
+select * from (select * from t7 union all select * from t7 limit 2) a;
+a	b
+1	a
+2	b
