@@ -43,29 +43,11 @@ func NewTaskScheduler(taskService taskservice.TaskService, cfg hakeeper.Config) 
 	}
 }
 
-func (s *Scheduler) QueryRunningTasks() []task.Task {
-	tasks, err := s.QueryTask(s.ctx, taskservice.WithTaskStatusCond(taskservice.EQ, task.TaskStatus_Running))
-	if err != nil {
-		s.logger.Error("query running tasks error")
-		return nil
-	}
-	return tasks
-}
-
-func (s *Scheduler) QueryCreatedTasks() []task.Task {
-	tasks, err := s.QueryTask(s.ctx, taskservice.WithTaskStatusCond(taskservice.EQ, task.TaskStatus_Created))
-	if err != nil {
-		s.logger.Error("query created tasks error")
-		return nil
-	}
-	return tasks
-}
-
 func (s *Scheduler) Schedule(cnState logservice.CNState, currentTick uint64) {
 	workingCN, expiredCN := parseCNStores(s.cfg, cnState, currentTick)
 
-	runningTasks := s.QueryRunningTasks()
-	createdTasks := s.QueryCreatedTasks()
+	runningTasks := s.queryRunningTasks()
+	createdTasks := s.queryCreatedTasks()
 	if runningTasks == nil && createdTasks == nil {
 		return
 	}
@@ -77,9 +59,27 @@ func (s *Scheduler) Schedule(cnState logservice.CNState, currentTick uint64) {
 	s.allocateTasks(expiredTasks, orderedCN)
 }
 
+func (s *Scheduler) queryRunningTasks() []task.Task {
+	tasks, err := s.QueryTask(s.ctx, taskservice.WithTaskStatusCond(taskservice.EQ, task.TaskStatus_Running))
+	if err != nil {
+		s.logger.Error("query running tasks error")
+		return nil
+	}
+	return tasks
+}
+
+func (s *Scheduler) queryCreatedTasks() []task.Task {
+	tasks, err := s.QueryTask(s.ctx, taskservice.WithTaskStatusCond(taskservice.EQ, task.TaskStatus_Created))
+	if err != nil {
+		s.logger.Error("query created tasks error")
+		return nil
+	}
+	return tasks
+}
+
 func (s *Scheduler) allocateTasks(tasks []task.Task, orderedCN *cnMap) {
 	for _, t := range tasks {
-		runner := orderedCN.Min()
+		runner := orderedCN.min()
 		if runner == "" {
 			s.logger.Info("no CN available")
 			return
@@ -90,7 +90,7 @@ func (s *Scheduler) allocateTasks(tasks []task.Task, orderedCN *cnMap) {
 				zap.Uint64("task-id", t.ID), zap.String("task-runner", t.TaskRunner))
 			return
 		}
-		orderedCN.Inc(t.TaskRunner)
+		orderedCN.inc(t.TaskRunner)
 	}
 }
 
@@ -104,10 +104,10 @@ func getExpiredTasks(tasks []task.Task, expiredCN []string) (expired []task.Task
 }
 
 func getCNOrdered(tasks []task.Task, workingCN []string) *cnMap {
-	orderedMap := NewOrderedMap(workingCN)
+	orderedMap := newOrderedMap(workingCN)
 	for _, t := range tasks {
 		if contains(workingCN, t.TaskRunner) {
-			orderedMap.Inc(t.TaskRunner)
+			orderedMap.inc(t.TaskRunner)
 		}
 	}
 

@@ -23,7 +23,7 @@ type cnMap struct {
 	orderedKeys []string
 }
 
-func NewOrderedMap(keys []string) *cnMap {
+func newOrderedMap(keys []string) *cnMap {
 	orderedMap := &cnMap{
 		m:           make(map[string]uint32, len(keys)),
 		orderedKeys: make([]string, 0, len(keys)),
@@ -37,17 +37,13 @@ func NewOrderedMap(keys []string) *cnMap {
 	return orderedMap
 }
 
-func (o *cnMap) Len() int {
-	return len(o.m)
-}
-
 func (o *cnMap) sort() {
 	sort.Slice(o.orderedKeys, func(i, j int) bool {
 		return o.m[o.orderedKeys[i]] < o.m[o.orderedKeys[j]]
 	})
 }
 
-func (o *cnMap) Set(key string, val uint32) {
+func (o *cnMap) set(key string, val uint32) {
 	if _, ok := o.m[key]; !ok {
 		o.orderedKeys = append(o.orderedKeys, key)
 	}
@@ -55,15 +51,15 @@ func (o *cnMap) Set(key string, val uint32) {
 	o.sort()
 }
 
-func (o *cnMap) Get(key string) uint32 {
+func (o *cnMap) get(key string) uint32 {
 	return o.m[key]
 }
 
-func (o *cnMap) Inc(key string) {
-	o.Set(key, o.Get(key)+1)
+func (o *cnMap) inc(key string) {
+	o.set(key, o.get(key)+1)
 }
 
-func (o *cnMap) Min() string {
+func (o *cnMap) min() string {
 	if len(o.orderedKeys) == 0 {
 		return ""
 	}

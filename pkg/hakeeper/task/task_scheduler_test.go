@@ -62,7 +62,7 @@ func TestGetCNOrderedMap(t *testing.T) {
 			tasks:     nil,
 			workingCN: nil,
 
-			expected: NewOrderedMap(nil),
+			expected: newOrderedMap(nil),
 		},
 		{
 			tasks:     []task.Task{{TaskRunner: "a"}, {TaskRunner: "b"}, {TaskRunner: "b"}},

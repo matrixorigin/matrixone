@@ -20,29 +20,29 @@ import (
 )
 
 func TestOrderedMap(t *testing.T) {
-	orderedMap := NewOrderedMap(nil)
-	orderedMap.Set("a", 100)
-	orderedMap.Set("b", 110)
-	orderedMap.Set("c", 90)
-	orderedMap.Set("d", 80)
-	orderedMap.Set("e", 120)
-	orderedMap.Set("f", 50)
-	assert.Equal(t, 6, orderedMap.Len())
+	orderedMap := newOrderedMap(nil)
+	orderedMap.set("a", 100)
+	orderedMap.set("b", 110)
+	orderedMap.set("c", 90)
+	orderedMap.set("d", 80)
+	orderedMap.set("e", 120)
+	orderedMap.set("f", 50)
+	assert.Equal(t, 6, len(orderedMap.m))
 	assert.True(t, len(orderedMap.m) == len(orderedMap.orderedKeys))
-	assert.Equal(t, "f", orderedMap.Min())
+	assert.Equal(t, "f", orderedMap.min())
 
-	orderedMap.Set("f", 150)
-	assert.Equal(t, "d", orderedMap.Min())
+	orderedMap.set("f", 150)
+	assert.Equal(t, "d", orderedMap.min())
 
-	orderedMap.Set("b", 70)
-	assert.Equal(t, "b", orderedMap.Min())
+	orderedMap.set("b", 70)
+	assert.Equal(t, "b", orderedMap.min())
 
-	orderedMap.Set("b", 100)
+	orderedMap.set("b", 100)
 	for i := 0; i < 100; i++ {
-		orderedMap.Inc("g")
-		assert.Equal(t, uint32(i+1), orderedMap.Get("g"))
+		orderedMap.inc("g")
+		assert.Equal(t, uint32(i+1), orderedMap.get("g"))
 	}
-	assert.Equal(t, "d", orderedMap.Min())
-	assert.Equal(t, 7, orderedMap.Len())
+	assert.Equal(t, "d", orderedMap.min())
+	assert.Equal(t, 7, len(orderedMap.m))
 	assert.True(t, len(orderedMap.m) == len(orderedMap.orderedKeys))
 }
