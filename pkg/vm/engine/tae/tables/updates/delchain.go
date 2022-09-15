@@ -264,7 +264,7 @@ func (chain *DeleteChain) CollectDeletesLocked(
 				merged = NewMergedNode(n.GetCommitTSLocked())
 			}
 			merged.MergeLocked(n, collectIndex)
-		} else if txn.CommitAfter(ts) {
+		} else if txn.GetPrepareTS().Greater(ts) {
 			// Skip txn deletes committed after ts
 			n.RUnlock()
 			return true
