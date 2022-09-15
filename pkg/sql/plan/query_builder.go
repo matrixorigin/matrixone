@@ -858,13 +858,13 @@ func (builder *QueryBuilder) buildUnion(stmt *tree.UnionClause, astOrderBy tree.
 
 		limitBinder := NewLimitBinder()
 		if astLimit.Offset != nil {
-			node.Limit, err = limitBinder.BindExpr(astLimit.Offset, 0, true)
+			node.Offset, err = limitBinder.BindExpr(astLimit.Offset, 0, true)
 			if err != nil {
 				return 0, err
 			}
 		}
 		if astLimit.Count != nil {
-			node.Offset, err = limitBinder.BindExpr(astLimit.Count, 0, true)
+			node.Limit, err = limitBinder.BindExpr(astLimit.Count, 0, true)
 			if err != nil {
 				return 0, err
 			}
