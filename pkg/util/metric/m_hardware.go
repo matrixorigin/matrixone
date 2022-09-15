@@ -16,11 +16,14 @@ package metric
 
 import (
 	"errors"
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	prom "github.com/prometheus/client_golang/prometheus"
 	"github.com/shirou/gopsutil/v3/cpu"
+	"github.com/shirou/gopsutil/v3/disk"
 	"github.com/shirou/gopsutil/v3/mem"
+	"github.com/shirou/gopsutil/v3/net"
 )
 
 var hardwareStatsCollector = newBatchStatsCollector(
@@ -28,6 +31,10 @@ var hardwareStatsCollector = newBatchStatsCollector(
 	cpuPercent{},
 	memUsed{},
 	memAvail{},
+	diskR{},
+	diskW{},
+	netR{},
+	netW{},
 )
 
 var logicalCore int
@@ -42,7 +49,7 @@ func (c cpuTotal) Desc() *prom.Desc {
 	return prom.NewDesc(
 		"sys_cpu_seconds_total",
 		"System CPU time spent in seconds, normalized by number of cores",
-		nil, nil,
+		nil, sysTenantID,
 	)
 }
 
@@ -61,7 +68,7 @@ func (c cpuPercent) Desc() *prom.Desc {
 	return prom.NewDesc(
 		"sys_cpu_combined_percent",
 		"System CPU busy percentage, average among all logical cores",
-		nil, nil,
+		nil, sysTenantID,
 	)
 }
 
@@ -94,7 +101,7 @@ func (m memUsed) Desc() *prom.Desc {
 	return prom.NewDesc(
 		"sys_memory_used",
 		"System memory used in bytes",
-		nil, nil,
+		nil, sysTenantID,
 	)
 }
 
@@ -114,7 +121,7 @@ func (m memAvail) Desc() *prom.Desc {
 	return prom.NewDesc(
 		"sys_memory_available",
 		"System memory available in bytes",
-		nil, nil,
+		nil, sysTenantID,
 	)
 }
 
@@ -125,4 +132,128 @@ func (m memAvail) Metric(s *statCaches) (prom.Metric, error) {
 	}
 	memostats := val.(*mem.VirtualMemoryStat)
 	return prom.MustNewConstMetric(m.Desc(), prom.GaugeValue, float64(memostats.Available)), nil
+}
+
+func getDiskStats() any {
+	if diskStats, err := disk.IOCounters(); err == nil {
+		var total disk.IOCountersStat
+		for _, v := range diskStats {
+			total.ReadBytes += v.ReadBytes
+			total.WriteBytes += v.WriteBytes
+		}
+		return &total
+	} else {
+		logutil.Warnf("[Metric] failed to get DiskIOCounters, %v", err)
+		return nil
+	}
+}
+
+// if we have window function, we can just use NewConstMetric
+var diskRead = NewCounter(prom.CounterOpts{
+	Subsystem:   "sys",
+	Name:        "disk_read_bytes",
+	Help:        "Total read bytes of all disks",
+	ConstLabels: sysTenantID,
+})
+
+var diskWrite = NewCounter(prom.CounterOpts{
+	Subsystem:   "sys",
+	Name:        "disk_write_bytes",
+	Help:        "Total write bytes of all disks",
+	ConstLabels: sysTenantID,
+})
+
+type diskR struct{}
+
+func (d diskR) Desc() *prom.Desc {
+	return diskRead.Desc()
+}
+
+func (d diskR) Metric(s *statCaches) (prom.Metric, error) {
+	val := s.getOrInsert(cacheKeyDiskIO, getDiskStats)
+	if val == nil {
+		return nil, errors.New("empty available disk stats")
+	}
+	memostats := val.(*disk.IOCountersStat)
+	diskRead.Set(memostats.ReadBytes)
+	return diskRead, nil
+}
+
+type diskW struct{}
+
+func (d diskW) Desc() *prom.Desc {
+	return diskWrite.Desc()
+}
+
+func (d diskW) Metric(s *statCaches) (prom.Metric, error) {
+	val := s.getOrInsert(cacheKeyDiskIO, getDiskStats)
+	if val == nil {
+		return nil, errors.New("empty available disk stats")
+	}
+	memostats := val.(*disk.IOCountersStat)
+	diskWrite.Set(memostats.WriteBytes)
+	return diskWrite, nil
+}
+
+func getNetStats() any {
+	if netStats, err := net.IOCounters(true); err == nil {
+		var total net.IOCountersStat
+		for _, v := range netStats {
+			if strings.HasPrefix(v.Name, "lo") {
+				continue
+			}
+			total.BytesRecv += v.BytesRecv
+			total.BytesSent += v.BytesSent
+		}
+		return &total
+	} else {
+		logutil.Warnf("[Metric] failed to get DiskIOCounters, %v", err)
+		return nil
+	}
+}
+
+var netRead = NewCounter(prom.CounterOpts{
+	Subsystem:   "sys",
+	Name:        "net_recv_bytes",
+	Help:        "Total recv bytes of all nic (expect lo)",
+	ConstLabels: sysTenantID,
+})
+
+var netWrite = NewCounter(prom.CounterOpts{
+	Subsystem:   "sys",
+	Name:        "net_sent_bytes",
+	Help:        "Total sent bytes of all nic (expect lo)",
+	ConstLabels: sysTenantID,
+})
+
+type netR struct{}
+
+func (d netR) Desc() *prom.Desc {
+	return netRead.Desc()
+}
+
+func (d netR) Metric(s *statCaches) (prom.Metric, error) {
+	val := s.getOrInsert(cacheKeyNetIO, getNetStats)
+	if val == nil {
+		return nil, errors.New("empty available net stats")
+	}
+	memostats := val.(*net.IOCountersStat)
+	netRead.Set(memostats.BytesRecv)
+	return netRead, nil
+}
+
+type netW struct{}
+
+func (d netW) Desc() *prom.Desc {
+	return netWrite.Desc()
+}
+
+func (d netW) Metric(s *statCaches) (prom.Metric, error) {
+	val := s.getOrInsert(cacheKeyNetIO, getNetStats)
+	if val == nil {
+		return nil, errors.New("empty available net stats")
+	}
+	memostats := val.(*net.IOCountersStat)
+	netWrite.Set(memostats.BytesSent)
+	return netWrite, nil
 }

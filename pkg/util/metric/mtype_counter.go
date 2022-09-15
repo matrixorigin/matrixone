@@ -120,6 +120,11 @@ func (c *ratecounter) Add(v float64) {
 	}
 }
 
+// this is used only in disk IO counter, can be deleted if we don't need to calc rate in Write
+func (c *ratecounter) Set(v uint64) {
+	atomic.StoreUint64(&c.valInt, v)
+}
+
 func (c *ratecounter) Inc() { atomic.AddUint64(&c.valInt, 1) }
 
 func (c *ratecounter) Desc() *prom.Desc { return c.desc }

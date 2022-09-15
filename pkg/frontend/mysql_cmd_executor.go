@@ -157,7 +157,7 @@ func (mce *MysqlCmdExecutor) RecordStatement(ctx context.Context, ses *Session, 
 	}
 	var sesID uuid.UUID
 	copy(sesID[:], ses.GetUUID())
-	fmtCtx := tree.NewFmtCtx(dialect.MYSQL)
+	fmtCtx := tree.NewFmtCtx(dialect.MYSQL, tree.WithQuoteString(true))
 	cw.GetAst().Format(fmtCtx)
 	trace.ReportStatement(
 		ctx,
@@ -1647,47 +1647,24 @@ var GetComputationWrapper = func(db, sql, user string, eng engine.Engine, proc *
 	return cw, nil
 }
 
-func incStatementCounter(stmt tree.Statement, isInternal bool) {
+func incStatementCounter(tenant string, stmt tree.Statement) {
 	switch stmt.(type) {
 	case *tree.Select:
-		metric.StatementCounter(metric.SQLTypeSelect, isInternal).Inc()
+		metric.StatementCounter(tenant, metric.SQLTypeSelect).Inc()
 	case *tree.Insert:
-		metric.StatementCounter(metric.SQLTypeInsert, isInternal).Inc()
+		metric.StatementCounter(tenant, metric.SQLTypeInsert).Inc()
 	case *tree.Delete:
-		metric.StatementCounter(metric.SQLTypeDelete, isInternal).Inc()
+		metric.StatementCounter(tenant, metric.SQLTypeDelete).Inc()
 	case *tree.Update:
-		metric.StatementCounter(metric.SQLTypeUpdate, isInternal).Inc()
+		metric.StatementCounter(tenant, metric.SQLTypeUpdate).Inc()
 	default:
-		metric.StatementCounter(metric.SQLTypeOther, isInternal).Inc()
-	}
-}
-
-func remindrecordSQLLentencyObserver(stmt tree.Statement, isInternal bool, value float64) {
-	switch stmt.(type) {
-	case *tree.Select:
-		metric.SQLLatencyObserver(metric.SQLTypeSelect, isInternal).Observe(value)
-	case *tree.Insert:
-		metric.SQLLatencyObserver(metric.SQLTypeInsert, isInternal).Observe(value)
-	case *tree.Delete:
-		metric.SQLLatencyObserver(metric.SQLTypeDelete, isInternal).Observe(value)
-	case *tree.Update:
-		metric.SQLLatencyObserver(metric.SQLTypeUpdate, isInternal).Observe(value)
-	default:
-		metric.SQLLatencyObserver(metric.SQLTypeOther, isInternal).Observe(value)
+		metric.StatementCounter(tenant, metric.SQLTypeOther).Inc()
 	}
 }
 
 func (mce *MysqlCmdExecutor) beforeRun(stmt tree.Statement) {
-	sess := mce.GetSession()
-	incStatementCounter(stmt, sess.IsInternal)
-}
-
-func (mce *MysqlCmdExecutor) afterRun(stmt tree.Statement, beginInstant time.Time) {
-	// TODO: this latency doesn't consider complile and build stage, fix it!
-	latency := time.Since(beginInstant).Seconds()
-	sess := mce.GetSession()
-	remindrecordSQLLentencyObserver(stmt, sess.IsInternal, latency)
-
+	// incStatementCounter(sess.GetTenantInfo().Tenant, stmt, sess.IsInternal)
+	incStatementCounter("0", stmt)
 }
 
 // execute query
@@ -1725,7 +1702,9 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		ses.Pu.StorageEngine,
 		proc, ses)
 	if err != nil {
-		return moerr.New(moerr.ER_PARSE_ERROR, err, "")
+		retErr = moerr.New(moerr.ER_PARSE_ERROR, err, "")
+		logStatementStringStatus(requestCtx, ses, sql, fail, retErr)
+		return retErr
 	}
 
 	defer func() {
@@ -1745,7 +1724,6 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 
 	stmt := cws[0].GetAst()
 	mce.beforeRun(stmt)
-	defer mce.afterRun(stmt, beginInstant)
 	for _, cw := range cws {
 		ses.SetMysqlResultSet(&MysqlResultSet{})
 		stmt := cw.GetAst()
@@ -1755,20 +1733,26 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			ses.SetPrivilege(determinePrivilegeSetOfStatement(stmt))
 			havePrivilege, err2 = authenticatePrivilegeOfStatementWithObjectTypeAccountAndDatabase(requestCtx, ses, stmt)
 			if err2 != nil {
+				logStatementStatus(ctx, ses, stmt, fail, err2)
 				return err2
 			}
 
 			if !havePrivilege {
-				return moerr.NewInternalError("do not have privilege to execute the statement")
+				retErr = moerr.NewInternalError("do not have privilege to execute the statement")
+				logStatementStatus(ctx, ses, stmt, fail, retErr)
+				return retErr
 			}
 
 			havePrivilege, err2 = authenticatePrivilegeOfStatementWithObjectTypeNone(requestCtx, ses, stmt)
 			if err2 != nil {
+				logStatementStatus(ctx, ses, stmt, fail, err2)
 				return err2
 			}
 
 			if !havePrivilege {
-				return moerr.NewInternalError("do not have privilege to execute the statement")
+				retErr = moerr.NewInternalError("do not have privilege to execute the statement")
+				logStatementStatus(ctx, ses, stmt, fail, retErr)
+				return retErr
 			}
 		}
 
@@ -1790,13 +1774,21 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			if !can {
 				//is ddl statement
 				if IsDDL(stmt) {
-					return errorOnlyCreateStatement
+					retErr = errorOnlyCreateStatement
+					logStatementStatus(ctx, ses, stmt, fail, retErr)
+					return retErr
 				} else if IsAdministrativeStatement(stmt) {
-					return errorAdministrativeStatement
+					retErr = errorAdministrativeStatement
+					logStatementStatus(ctx, ses, stmt, fail, retErr)
+					return retErr
 				} else if IsParameterModificationStatement(stmt) {
-					return errorParameterModificationInTxn
+					retErr = errorParameterModificationInTxn
+					logStatementStatus(ctx, ses, stmt, fail, retErr)
+					return retErr
 				} else {
-					return errorUnclassifiedStatement
+					retErr = errorUnclassifiedStatement
+					logStatementStatus(ctx, ses, stmt, fail, retErr)
+					return retErr
 				}
 			}
 		}
@@ -2080,6 +2072,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		if !fromLoadData {
 			txnErr = ses.TxnCommitSingleStatement(stmt)
 			if txnErr != nil {
+				logStatementStatus(ctx, ses, stmt, fail, txnErr)
 				return txnErr
 			}
 			switch stmt.(type) {
@@ -2093,31 +2086,40 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 				*tree.Deallocate:
 				resp := NewOkResponse(rspLen, 0, 0, 0, int(COM_QUERY), "")
 				if err := mce.GetSession().protocol.SendResponse(resp); err != nil {
-					return fmt.Errorf("routine send response failed. error:%v ", err)
+					retErr = fmt.Errorf("routine send response failed. error:%v ", err)
+					logStatementStatus(ctx, ses, stmt, fail, retErr)
+					return retErr
 				}
 
 			case *tree.PrepareStmt, *tree.PrepareString:
 				if mce.ses.Cmd == int(COM_STMT_PREPARE) {
 					if err := mce.ses.protocol.SendPrepareResponse(prepareStmt); err != nil {
-						return fmt.Errorf("routine send response failed. error:%v ", err)
+						retErr = fmt.Errorf("routine send response failed. error:%v ", err)
+						logStatementStatus(ctx, ses, stmt, fail, retErr)
+						return retErr
 					}
 				} else {
 					resp := NewOkResponse(rspLen, 0, 0, 0, int(COM_QUERY), "")
 					if err := mce.GetSession().protocol.SendResponse(resp); err != nil {
-						return fmt.Errorf("routine send response failed. error:%v ", err)
+						retErr = fmt.Errorf("routine send response failed. error:%v ", err)
+						logStatementStatus(ctx, ses, stmt, fail, retErr)
+						return retErr
 					}
 				}
 			}
 		}
+		logStatementStatus(ctx, ses, stmt, success, nil)
 		goto handleNext
 	handleFailed:
 		logutil.Error(err.Error())
 		if !fromLoadData {
 			txnErr = ses.TxnRollbackSingleStatement(stmt)
 			if txnErr != nil {
+				logStatementStatus(ctx, ses, stmt, fail, txnErr)
 				return txnErr
 			}
 		}
+		logStatementStatus(ctx, ses, stmt, fail, err)
 		return err
 	handleNext:
 	} // end of for
