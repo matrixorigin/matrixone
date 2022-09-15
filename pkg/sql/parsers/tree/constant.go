@@ -58,10 +58,12 @@ type NumVal struct {
 
 func (n *NumVal) Format(ctx *FmtCtx) {
 	if n.origString != "" {
-		ctx.WriteString(FormatString(n.origString))
+		ctx.WriteValue(n.ValType, FormatString(n.origString))
 		return
 	}
 	switch n.Value.Kind() {
+	case constant.String:
+		ctx.WriteValue(n.ValType, n.origString)
 	case constant.Bool:
 		ctx.WriteString(strings.ToLower(n.Value.String()))
 	case constant.Unknown:

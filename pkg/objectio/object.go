@@ -1,4 +1,4 @@
-// Copyright 2022 Matrix Origin
+// Copyright 2021 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,26 +12,25 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package txnstorage
+package objectio
 
-import (
-	"github.com/matrixorigin/matrixone/pkg/txn/clock"
-	"github.com/matrixorigin/matrixone/pkg/txn/storage"
-	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
-)
+import "github.com/matrixorigin/matrixone/pkg/fileservice"
 
-func NewMemoryStorage(
-	mheap *mheap.Mheap,
-	defaultIsolationPolicy IsolationPolicy,
-	clock clock.Clock,
-) (storage.TxnStorage, error) {
+const Magic = 0xFFFFFFFF
+const Version = 1
+const FSName = "local"
 
-	memHandler := NewMemHandler(mheap, defaultIsolationPolicy, clock)
-	catalogHandler := NewCatalogHandler(memHandler)
-	storage, err := New(catalogHandler)
-	if err != nil {
-		return nil, err
+type Object struct {
+	// name is the object file's name
+	name string
+	// fs is an instance of fileservice
+	fs fileservice.FileService
+}
+
+func NewObject(name string, fs fileservice.FileService) *Object {
+	object := &Object{
+		name: name,
+		fs:   fs,
 	}
-	return storage, nil
-
+	return object
 }

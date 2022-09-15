@@ -112,7 +112,7 @@ func checkReportedState(
 		}
 	}
 
-	log.Infof("construct %d operator for reported dn shards", len(ops))
+	log.Debugf("construct %d operator for reported dn shards", len(ops))
 
 	return ops
 }
