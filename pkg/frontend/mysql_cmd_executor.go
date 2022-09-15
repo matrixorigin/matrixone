@@ -1401,6 +1401,11 @@ func (mce *MysqlCmdExecutor) handleGrantRole(ctx context.Context, gr *tree.Grant
 	return doGrantRole(ctx, mce.GetSession(), gr)
 }
 
+// handleRevoke revokes the role
+func (mce *MysqlCmdExecutor) handleRevokeRole(ctx context.Context, rr *tree.RevokeRole) error {
+	return doRevokeRole(ctx, mce.GetSession(), rr)
+}
+
 func GetExplainColumns(explainColName string) ([]interface{}, error) {
 	cols := []*plan2.ColDef{
 		{Typ: &plan2.Type{Id: int32(types.T_varchar)}, Name: explainColName},
@@ -1960,6 +1965,15 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 					goto handleFailed
 				}
 			case tree.GrantTypePrivilege:
+			}
+		case *tree.Revoke:
+			selfHandle = true
+			switch st.Typ {
+			case tree.RevokeTypeRole:
+				if err = mce.handleRevokeRole(requestCtx, &st.RevokeRole); err != nil {
+					goto handleFailed
+				}
+			case tree.RevokeTypePrivilege:
 			}
 		}
 

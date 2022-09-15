@@ -653,18 +653,22 @@ var (
 
 	getRoleIdOfUserIdFormat = `select role_id,with_grant_option from mo_catalog.mo_user_grant where user_id = %d;`
 
-	checkUserGrantFormat = `select role_id,user_id,with_grant_option from mo_catalog.mo_user_grant where role_id = %d and user_id = %d`
+	checkUserGrantFormat = `select role_id,user_id,with_grant_option from mo_catalog.mo_user_grant where role_id = %d and user_id = %d;`
 
-	updateUserGrantFormat = `update mo_catalog.mo_user_grant set granted_time = "%s", with_grant_option = %v where role_id = %d and user_id = %d`
+	updateUserGrantFormat = `update mo_catalog.mo_user_grant set granted_time = "%s", with_grant_option = %v where role_id = %d and user_id = %d;`
 
-	insertUserGrantFormat = `insert into mo_catalog.mo_user_grant(role_id,user_id,granted_time,with_grant_option) values (%d,%d,"%s",%v)`
+	insertUserGrantFormat = `insert into mo_catalog.mo_user_grant(role_id,user_id,granted_time,with_grant_option) values (%d,%d,"%s",%v);`
+
+	deleteUserGrantFormat = `delete from mo_catalog.mo_user_grant where role_id = %d and user_id = %d;`
 
 	//operations on the mo_role_grant
 	checkRoleGrantFormat = `select granted_id,grantee_id,with_grant_option from mo_catalog.mo_role_grant where granted_id = %d and grantee_id = %d;`
 
 	updateRoleGrantFormat = `update mo_catalog.mo_role_grant set operation_role_id = %d, operation_user_id = %d, granted_time = "%s", with_grant_option = %v where granted_id = %d and grantee_id = %d;`
 
-	insertRoleGrantFormat = `insert mo_catalog.mo_role_grant(granted_id,grantee_id,operation_role_id,operation_user_id,granted_time,with_grant_option) values (%d,%d,%d,%d,"%s",%v)`
+	insertRoleGrantFormat = `insert mo_catalog.mo_role_grant(granted_id,grantee_id,operation_role_id,operation_user_id,granted_time,with_grant_option) values (%d,%d,%d,%d,"%s",%v);`
+
+	deleteRoleGrantFormat = `delete from mo_catalog.mo_role_grant where granted_id = %d and grantee_id = %d;`
 
 	getAllStuffRoleGrantFormat = `select granted_id,grantee_id,with_grant_option from mo_catalog.mo_role_grant;`
 
@@ -802,6 +806,10 @@ func getSqlForInsertUserGrant(roleId, userId int64, timestamp string, withGrantO
 	return fmt.Sprintf(insertUserGrantFormat, roleId, userId, timestamp, withGrantOption)
 }
 
+func getSqlForDeleteUserGrant(roleId, userId int64) string {
+	return fmt.Sprintf(deleteUserGrantFormat, roleId, userId)
+}
+
 func getSqlForCheckRoleGrant(grantedId, granteeId int64) string {
 	return fmt.Sprintf(checkRoleGrantFormat, grantedId, granteeId)
 }
@@ -812,6 +820,10 @@ func getSqlForUpdateRoleGrant(grantedId, granteeId, operationRoleId, operationUs
 
 func getSqlForInsertRoleGrant(grantedId, granteeId, operationRoleId, operationUserId int64, timestamp string, withGrantOption bool) string {
 	return fmt.Sprintf(insertRoleGrantFormat, grantedId, granteeId, operationRoleId, operationUserId, timestamp, withGrantOption)
+}
+
+func getSqlForDeleteRoleGrant(grantedId, granteeId int64) string {
+	return fmt.Sprintf(deleteRoleGrantFormat, grantedId, granteeId)
 }
 
 func getSqlForGetAllStuffRoleGrantFormat() string {
@@ -1025,6 +1037,48 @@ var (
 	}
 )
 
+type verifiedRoleType int
+
+const (
+	roleType verifiedRoleType = iota
+	userType
+)
+
+type verifiedRole struct {
+	typ  verifiedRoleType
+	name string
+	id   int64
+}
+
+// verifyRoleFunc gets result set from mo_role_grant or mo_user_grant
+func verifyRoleFunc(ctx context.Context, bh BackgroundExec, sql, name string, typ verifiedRoleType) (*verifiedRole, error) {
+	var err error
+	var rsset []ExecResult
+	var roleId int64
+	bh.ClearExecResultSet()
+	err = bh.Exec(ctx, sql)
+	if err != nil {
+		return nil, err
+	}
+
+	results := bh.GetExecResultSet()
+	rsset, err = convertIntoResultSet(results)
+	if err != nil {
+		return nil, err
+	}
+
+	if len(rsset) != 0 && rsset[0].GetRowCount() != 0 {
+		for j := uint64(0); j < rsset[0].GetRowCount(); j++ {
+			roleId, err = rsset[0].GetInt64(j, 0)
+			if err != nil {
+				return nil, err
+			}
+			return &verifiedRole{typ, name, roleId}, nil
+		}
+	}
+	return nil, nil
+}
+
 type visitTag int
 
 const (
@@ -1111,6 +1165,103 @@ func (g *graph) hasLoop(start int64) bool {
 	return !g.toposort(start, visited)
 }
 
+// doRevokeRole accomplishes the RevokeRole statement
+func doRevokeRole(ctx context.Context, ses *Session, rr *tree.RevokeRole) error {
+	pu := ses.Pu
+	guestMMu := guest.New(pu.SV.GuestMmuLimitation, pu.HostMmu)
+	bh := NewBackgroundHandler(ctx, guestMMu, pu.Mempool, pu)
+	defer bh.Close()
+	var err error
+
+	//step1 : check Roles exists or not
+	var vr *verifiedRole
+
+	verifiedFromRoles := make([]*verifiedRole, len(rr.Roles))
+	verifiedToRoles := make([]*verifiedRole, len(rr.Users))
+
+	//put it into the single transaction
+	err = bh.Exec(ctx, "begin;")
+	if err != nil {
+		goto handleFailed
+	}
+
+	//TODO: handle "IF EXISTS"
+	for i, role := range rr.Roles {
+		sql := getSqlForRoleIdOfRole(role.UserName)
+		vr, err = verifyRoleFunc(ctx, bh, sql, role.UserName, roleType)
+		if err != nil {
+			goto handleFailed
+		}
+		verifiedFromRoles[i] = vr
+		if vr == nil {
+			if !rr.IfExists { //when the "IF EXISTS" is set, just skip the check
+				err = moerr.NewInternalError("there is no role %s", role.UserName)
+				goto handleFailed
+			}
+		}
+	}
+
+	//step2 : check Users are real Users or Roles,  exists or not
+	for i, user := range rr.Users {
+		sql := getSqlForRoleIdOfRole(user.Username)
+		vr, err = verifyRoleFunc(ctx, bh, sql, user.Username, roleType)
+		if err != nil {
+			goto handleFailed
+		}
+		if vr != nil {
+			verifiedToRoles[i] = vr
+		} else {
+			//check user
+			sql = getSqlForPasswordOfUser(user.Username)
+			vr, err = verifyRoleFunc(ctx, bh, sql, user.Username, userType)
+			if vr == nil {
+				err = moerr.NewInternalError("there is no role or user %s", user.Username)
+				goto handleFailed
+			}
+			verifiedToRoles[i] = vr
+		}
+	}
+
+	//step3 : process Revoke role from role
+	//step4 : process Revoke role from user
+	for _, from := range verifiedFromRoles {
+		if from == nil { //Under "IF EXISTS"
+			continue
+		}
+		for _, to := range verifiedToRoles {
+			sql := ""
+			if to.typ == roleType {
+				//revoke from role
+				//delete (granted_id,grantee_id) from the mo_role_grant
+				sql = getSqlForDeleteRoleGrant(from.id, to.id)
+			} else {
+				//revoke from user
+				//delete (roleId,userId) from the mo_user_grant
+				sql = getSqlForDeleteUserGrant(from.id, to.id)
+			}
+			err = bh.Exec(ctx, sql)
+			if err != nil {
+				goto handleFailed
+			}
+		}
+	}
+
+	err = bh.Exec(ctx, "commit;")
+	if err != nil {
+		goto handleFailed
+	}
+
+	return err
+
+handleFailed:
+	//ROLLBACK the transaction
+	rbErr := bh.Exec(ctx, "rollback;")
+	if rbErr != nil {
+		return rbErr
+	}
+	return err
+}
+
 // doGrantRole accomplishes the GrantRole statement
 func doGrantRole(ctx context.Context, ses *Session, gr *tree.GrantRole) error {
 	pu := ses.Pu
@@ -1123,59 +1274,17 @@ func doGrantRole(ctx context.Context, ses *Session, gr *tree.GrantRole) error {
 	var withGrantOption int64
 
 	//step1 : check Roles exists or not
-	type verifiedRoleType int
-
-	const (
-		roleType verifiedRoleType = iota
-		userType
-	)
-
-	type verifiedRole struct {
-		typ  verifiedRoleType
-		name string
-		id   int64
-	}
-
 	var vr *verifiedRole
+	var needLoadMoRoleGrant bool
+	var grantedId, granteeId int64
 
 	verifiedFromRoles := make([]*verifiedRole, len(gr.Roles))
-
-	verifyRoleFunc := func(sql, name string, typ verifiedRoleType) (*verifiedRole, error) {
-		bh.ClearExecResultSet()
-		err = bh.Exec(ctx, sql)
-		if err != nil {
-			return nil, err
-		}
-
-		results := bh.GetExecResultSet()
-		rsset, err = convertIntoResultSet(results)
-		if err != nil {
-			return nil, err
-		}
-
-		if len(rsset) != 0 && rsset[0].GetRowCount() != 0 {
-			for j := uint64(0); j < rsset[0].GetRowCount(); j++ {
-				roleId, err := rsset[0].GetInt64(j, 0)
-				if err != nil {
-					return nil, err
-				}
-				return &verifiedRole{typ, name, roleId}, nil
-			}
-		}
-		return nil, nil
-	}
-
 	verifiedToRoles := make([]*verifiedRole, len(gr.Users))
 
-	//TODO：loop check
 	//load mo_role_grant into memory for
 	checkLoopGraph := NewGraph()
 
-	var needLoadMoRoleGrant bool
-
-	var grantedId, granteeId int64
-
-	//TODO: put it into the single transaction
+	//put it into the single transaction
 	err = bh.Exec(ctx, "begin;")
 	if err != nil {
 		goto handleFailed
@@ -1183,7 +1292,7 @@ func doGrantRole(ctx context.Context, ses *Session, gr *tree.GrantRole) error {
 
 	for i, role := range gr.Roles {
 		sql := getSqlForRoleIdOfRole(role.UserName)
-		vr, err = verifyRoleFunc(sql, role.UserName, roleType)
+		vr, err = verifyRoleFunc(ctx, bh, sql, role.UserName, roleType)
 		if err != nil {
 			goto handleFailed
 		}
@@ -1197,7 +1306,7 @@ func doGrantRole(ctx context.Context, ses *Session, gr *tree.GrantRole) error {
 	//step2 : check Users are real Users or Roles,  exists or not
 	for i, user := range gr.Users {
 		sql := getSqlForRoleIdOfRole(user.Username)
-		vr, err = verifyRoleFunc(sql, user.Username, roleType)
+		vr, err = verifyRoleFunc(ctx, bh, sql, user.Username, roleType)
 		if err != nil {
 			goto handleFailed
 		}
@@ -1206,7 +1315,7 @@ func doGrantRole(ctx context.Context, ses *Session, gr *tree.GrantRole) error {
 		} else {
 			//check user
 			sql = getSqlForPasswordOfUser(user.Username)
-			vr, err = verifyRoleFunc(sql, user.Username, userType)
+			vr, err = verifyRoleFunc(ctx, bh, sql, user.Username, userType)
 			if vr == nil {
 				err = moerr.NewInternalError("there is no role or user %s", user.Username)
 				goto handleFailed
@@ -1408,12 +1517,20 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 	case *tree.GrantRole:
 		kind = privilegeKindInherit
 		typs = append(typs, PrivilegeTypeManageGrants, PrivilegeTypeAccountAll /*, PrivilegeTypeAccountOwnership, PrivilegeTypeRoleOwnership*/)
-	case *tree.RevokeRole:
-		typs = append(typs, PrivilegeTypeManageGrants, PrivilegeTypeAccountAll /*, PrivilegeTypeAccountOwnership, PrivilegeTypeRoleOwnership*/)
 	case *tree.GrantPrivilege:
 		objType = objectTypeNone
 		kind = privilegeKindSpecial
 		special = specialTagAdmin | specialTagWithGrantOption | specialTagOwnerOfObject
+	case *tree.Revoke:
+		if st.Typ == tree.RevokeTypeRole {
+			typs = append(typs, PrivilegeTypeManageGrants, PrivilegeTypeAccountAll /*, PrivilegeTypeAccountOwnership, PrivilegeTypeRoleOwnership*/)
+		} else if st.Typ == tree.RevokeTypePrivilege {
+			objType = objectTypeNone
+			kind = privilegeKindSpecial
+			special = specialTagAdmin
+		}
+	case *tree.RevokeRole:
+		typs = append(typs, PrivilegeTypeManageGrants, PrivilegeTypeAccountAll /*, PrivilegeTypeAccountOwnership, PrivilegeTypeRoleOwnership*/)
 	case *tree.RevokePrivilege:
 		objType = objectTypeNone
 		kind = privilegeKindSpecial
