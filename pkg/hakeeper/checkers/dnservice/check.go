@@ -17,12 +17,13 @@ package dnservice
 import (
 	"sort"
 
+	"go.uber.org/zap"
+
 	"github.com/matrixorigin/matrixone/pkg/hakeeper"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper/checkers/util"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper/operator"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
-	"go.uber.org/zap"
 )
 
 var (
