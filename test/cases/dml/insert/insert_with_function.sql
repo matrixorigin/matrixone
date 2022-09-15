@@ -14,7 +14,6 @@ INSERT INTO char_test(str1) VALUES(CONCAT_WS(' ', ' I have ', '  a dream'));
 INSERT INTO char_test(str1) VALUES(CONCAT_WS(',', ',I have ', ',a dream'));
 INSERT INTO char_test(str1) VALUES(CONCAT_WS('x', ' I have x', 'x a dream'));
 INSERT INTO char_test(str1) SELECT CONCAT_WS('.', 'MESSI is a ', '. aloha bumda.');
-SELECT * FROM char_test;
 DELETE FROM char_test;
 
 --FIND_IN_SET()
@@ -39,14 +38,13 @@ INSERT INTO char_test(str2) VALUES(EMPTY(null));
 INSERT INTO char_test(str2) VALUES(EMPTY(CONCAT_WS(' ', 'ABCDE','JKFL;JDK','FDAFD')));
 INSERT INTO char_test(str2) VALUES(EMPTY(SPACE(100)));
 INSERT INTO char_test(str2) VALUES(EMPTY(OCT(4564123156)));
-SELECT * FROM char_test;
 
 -- @bvt:issue#4963
-SELECT str1, STARTSWITH(str1,'') FROM char_test;
+--SELECT str1, STARTSWITH(str1,'') FROM char_test;
 -- @bvt:issue
 
 -- @bvt:issue#4966
-SELECT str1, ENDSWITH(str1,'') FROM char_test;
+--SELECT str1, ENDSWITH(str1,'') FROM char_test;
 -- @bvt:issue
 
 -- 日期时间类型
@@ -66,11 +64,11 @@ SELECT * FROM date_test;
 DELETE FROM date_test;
 
 -- @bvt:issue#4990
-INSERT INTO date_test(d5) SELECT UNIX_TIMESTAMP("2021-02-29");
+--INSERT INTO date_test(d5) SELECT UNIX_TIMESTAMP("2021-02-29");
 -- @bvt:issue
 
 -- @bvt:issue#4987
-INSERT INTO date_test(d3) VALUES(DATE_ADD('2008-13-26 23:59:59', NULL));
+--INSERT INTO date_test(d3) VALUES(DATE_ADD('2008-13-26 23:59:59', NULL));
 -- @bvt:issue
 
 -- 数字类型
@@ -92,7 +90,7 @@ INSERT INTO math_test(tiny_un, small_un, int_un) VALUES(127, 32768, 2147483648);
 SELECT * FROM math_test;
 
 -- @bvt:issue#4952
-INSERT INTO math_test(tiny_un, small_un, int_un) VALUES(-128, -32768, -2147483648);
+--INSERT INTO math_test(tiny_un, small_un, int_un) VALUES(-128, -32768, -2147483648);
 -- @bvt:issue
 
 -- 小数位数
@@ -107,7 +105,7 @@ INSERT INTO test1 VALUES(3.1415, 3.1415, 3.1415);
 SELECT * FROM test1;
 
 -- @bvt:issue#4947
-INSERT INTO test1 VALUES(3.1415, 3.1415, 3.1415);
+--INSERT INTO test1 VALUES(3.1415, 3.1415, 3.1415);
 -- @bvt:issue
 
 DROP TABLE char_test;
