@@ -15,7 +15,6 @@
 package plan
 
 import (
-	"math"
 	"sort"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -127,11 +126,35 @@ func (builder *QueryBuilder) determineJoinOrder(nodeID int32) int32 {
 				rightCost := builder.qry.Nodes[node.Children[1]].Cost
 
 				switch node.JoinType {
-				case plan.Node_LEFT, plan.Node_RIGHT:
-					node.Cost.Card = math.Pow(leftCost.Card*rightCost.Card, 2./3.)
+				case plan.Node_LEFT:
+					card := leftCost.Card * rightCost.Card
+					if len(node.OnList) > 0 {
+						card *= 0.1
+						card += leftCost.Card
+					}
+					node.Cost = &plan.Cost{
+						Card: card,
+					}
+
+				case plan.Node_RIGHT:
+					card := leftCost.Card * rightCost.Card
+					if len(node.OnList) > 0 {
+						card *= 0.1
+						card += rightCost.Card
+					}
+					node.Cost = &plan.Cost{
+						Card: card,
+					}
 
 				case plan.Node_OUTER:
-					node.Cost.Card = math.Pow(leftCost.Card*rightCost.Card, 2./3.) + leftCost.Card + rightCost.Card
+					card := leftCost.Card * rightCost.Card
+					if len(node.OnList) > 0 {
+						card *= 0.1
+						card += leftCost.Card + rightCost.Card
+					}
+					node.Cost = &plan.Cost{
+						Card: card,
+					}
 
 				case plan.Node_SEMI, plan.Node_ANTI:
 					node.Cost.Card = leftCost.Card * .7
@@ -144,7 +167,7 @@ func (builder *QueryBuilder) determineJoinOrder(nodeID int32) int32 {
 				if len(node.GroupBy) > 0 {
 					childCost := builder.qry.Nodes[node.Children[0]].Cost
 					node.Cost = &plan.Cost{
-						Card: math.Pow(childCost.Card, 2./3.),
+						Card: childCost.Card * 0.1,
 					}
 				} else {
 					node.Cost = &plan.Cost{
@@ -258,7 +281,7 @@ func (builder *QueryBuilder) determineJoinOrder(nodeID int32) int32 {
 				JoinType: plan.Node_INNER,
 			}, nil)
 
-			leftCard = math.Cbrt(leftCard) * rightCard
+			leftCard = leftCard * rightCard * 0.1
 
 			for i, adj := range adjMat[nextSibling*nLeaf : (nextSibling+1)*nLeaf] {
 				eligible[i] = eligible[i] || adj
