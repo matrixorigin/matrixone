@@ -227,8 +227,8 @@ type TxnStore interface {
 	IsReadonly() bool
 	IncreateWriteCnt() int
 
-	IsTableDataChanged(tableID uint64) bool
-	IsCatalogChanged() bool
+	HasTableDataChanges(tableID uint64) bool
+	HasCatalogChanges() bool
 	GetTableDirtyPoints(tableID uint64) DirtySet
 }
 

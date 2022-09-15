@@ -516,7 +516,7 @@ func (store *txnStore) PrepareRollback() error {
 
 func (store *txnStore) GetLSN() uint64 { return store.cmdMgr.lsn }
 
-func (store *txnStore) IsTableDataChanged(tableID uint64) bool {
+func (store *txnStore) HasTableDataChanges(tableID uint64) bool {
 	_, changed := store.dirtyMemo.tableChanges[tableID]
 	return changed
 }
@@ -527,6 +527,6 @@ func (store *txnStore) GetTableDirtyPoints(tableID uint64) dirtySet {
 	return dirtiesMap
 }
 
-func (store *txnStore) IsCatalogChanged() bool {
+func (store *txnStore) HasCatalogChanges() bool {
 	return store.dirtyMemo.catalogChanged
 }
