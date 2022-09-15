@@ -75,6 +75,10 @@ func (v *Vector) IsOriginal() bool {
 	return v.original
 }
 
+func (v *Vector) SetOriginal(status bool) {
+	v.original = status
+}
+
 func DecodeFixedCol[T types.FixedSizeT](v *Vector, sz int) []T {
 	return types.DecodeFixedSlice[T](v.data, sz)
 }
