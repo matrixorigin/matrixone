@@ -76,7 +76,7 @@ func newDiskFileService(cfg Config) (FileService, error) {
 	fs, err := NewLocalFS(
 		cfg.Name,
 		cfg.DataDir,
-		int(cfg.CacheMemCapacityBytes),
+		int64(cfg.CacheMemCapacityBytes),
 	)
 	if err != nil {
 		return nil, err
@@ -102,7 +102,7 @@ func newMinioFileService(cfg Config) (FileService, error) {
 		cfg.S3.Endpoint,
 		cfg.S3.Bucket,
 		cfg.S3.KeyPrefix,
-		int(cfg.CacheMemCapacityBytes),
+		int64(cfg.CacheMemCapacityBytes),
 	)
 	if err != nil {
 		return nil, err
@@ -117,7 +117,7 @@ func newS3FileService(cfg Config) (FileService, error) {
 		cfg.S3.Endpoint,
 		cfg.S3.Bucket,
 		cfg.S3.KeyPrefix,
-		int(cfg.CacheMemCapacityBytes),
+		int64(cfg.CacheMemCapacityBytes),
 	)
 	if err != nil {
 		return nil, err
