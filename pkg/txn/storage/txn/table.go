@@ -38,6 +38,10 @@ type Row[K any] interface {
 	Indexes() []AnyKey
 }
 
+type NamedRow interface {
+	AttrByName(tx *Transaction, name string) (Nullable, error)
+}
+
 type PhysicalRow[
 	K Ordered[K],
 	R Row[K],
