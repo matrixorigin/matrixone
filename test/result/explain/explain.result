@@ -212,24 +212,24 @@ insert into t1 values ('BerkeleyPublic2','Berkeley');
 insert into t1 values ('NYCLib','NewYork');
 explain select * from t1,t2,t3;
 QUERY PLAN
-Project(cost=0.00..0.00 card=23.92 ndv=0.00 rowsize=0)
-  ->  Join(cost=0.00..0.00 card=23.92 ndv=0.00 rowsize=0)
+Project(cost=0.00..0.00 card=400.00 ndv=0.00 rowsize=0)
+  ->  Join(cost=0.00..0.00 card=400.00 ndv=0.00 rowsize=0)
         Join Type: INNER
-        ->  Join(cost=0.00..0.00 card=13.68 ndv=0.00 rowsize=0)
+        ->  Join(cost=0.00..0.00 card=40.00 ndv=0.00 rowsize=0)
               Join Type: INNER
-              ->  Table Scan on explain.t1(cost=0.00..0.00 card=5.00 ndv=0.00 rowsize=0)
               ->  Table Scan on explain.t2(cost=0.00..0.00 card=8.00 ndv=0.00 rowsize=0)
+              ->  Table Scan on explain.t1(cost=0.00..0.00 card=5.00 ndv=0.00 rowsize=0)
         ->  Table Scan on explain.t3(cost=0.00..0.00 card=10.00 ndv=0.00 rowsize=0)
 explain select city,libname1,count(libname1) as a from t3 join t1 on libname1=libname3 join t2 on isbn3=isbn2 group by city,libname1;
 QUERY PLAN
-Project(cost=0.00..0.00 card=6.78 ndv=0.00 rowsize=0)
-  ->  Aggregate(cost=0.00..0.00 card=6.78 ndv=0.00 rowsize=0)
+Project(cost=0.00..0.00 card=4.64 ndv=0.00 rowsize=0)
+  ->  Aggregate(cost=0.00..0.00 card=4.64 ndv=0.00 rowsize=0)
         Group Key:t1.city, t1.libname1
         Aggregate Functions: count(t1.libname1)
-        ->  Join(cost=0.00..0.00 card=17.67 ndv=0.00 rowsize=0)
+        ->  Join(cost=0.00..0.00 card=10.00 ndv=0.00 rowsize=0)
               Join Type: INNER
               Join Cond: (t3.isbn3 = t2.isbn2)
-              ->  Join(cost=0.00..0.00 card=10.77 ndv=0.00 rowsize=0)
+              ->  Join(cost=0.00..0.00 card=10.00 ndv=0.00 rowsize=0)
                     Join Type: INNER
                     Join Cond: (t1.libname1 = t3.libname3)
                     ->  Table Scan on explain.t3(cost=0.00..0.00 card=10.00 ndv=0.00 rowsize=0)
@@ -237,14 +237,14 @@ Project(cost=0.00..0.00 card=6.78 ndv=0.00 rowsize=0)
               ->  Table Scan on explain.t2(cost=0.00..0.00 card=8.00 ndv=0.00 rowsize=0)
 explain select city,libname1,count(libname1) as a from t3 join t2 on isbn3=isbn2 join t1 on libname1=libname3 group by city,libname1;
 QUERY PLAN
-Project(cost=0.00..0.00 card=6.78 ndv=0.00 rowsize=0)
-  ->  Aggregate(cost=0.00..0.00 card=6.78 ndv=0.00 rowsize=0)
+Project(cost=0.00..0.00 card=4.64 ndv=0.00 rowsize=0)
+  ->  Aggregate(cost=0.00..0.00 card=4.64 ndv=0.00 rowsize=0)
         Group Key:t1.city, t1.libname1
         Aggregate Functions: count(t1.libname1)
-        ->  Join(cost=0.00..0.00 card=17.67 ndv=0.00 rowsize=0)
+        ->  Join(cost=0.00..0.00 card=10.00 ndv=0.00 rowsize=0)
               Join Type: INNER
               Join Cond: (t3.isbn3 = t2.isbn2)
-              ->  Join(cost=0.00..0.00 card=10.77 ndv=0.00 rowsize=0)
+              ->  Join(cost=0.00..0.00 card=10.00 ndv=0.00 rowsize=0)
                     Join Type: INNER
                     Join Cond: (t1.libname1 = t3.libname3)
                     ->  Table Scan on explain.t3(cost=0.00..0.00 card=10.00 ndv=0.00 rowsize=0)
@@ -252,14 +252,14 @@ Project(cost=0.00..0.00 card=6.78 ndv=0.00 rowsize=0)
               ->  Table Scan on explain.t2(cost=0.00..0.00 card=8.00 ndv=0.00 rowsize=0)
 explain select city,libname1,count(libname1) as a from t1 join t3 on libname1=libname3 join t2 on isbn3=isbn2 group by city,libname1;
 QUERY PLAN
-Project(cost=0.00..0.00 card=6.78 ndv=0.00 rowsize=0)
-  ->  Aggregate(cost=0.00..0.00 card=6.78 ndv=0.00 rowsize=0)
+Project(cost=0.00..0.00 card=4.64 ndv=0.00 rowsize=0)
+  ->  Aggregate(cost=0.00..0.00 card=4.64 ndv=0.00 rowsize=0)
         Group Key:t1.city, t1.libname1
         Aggregate Functions: count(t1.libname1)
-        ->  Join(cost=0.00..0.00 card=17.67 ndv=0.00 rowsize=0)
+        ->  Join(cost=0.00..0.00 card=10.00 ndv=0.00 rowsize=0)
               Join Type: INNER
               Join Cond: (t3.isbn3 = t2.isbn2)
-              ->  Join(cost=0.00..0.00 card=10.77 ndv=0.00 rowsize=0)
+              ->  Join(cost=0.00..0.00 card=10.00 ndv=0.00 rowsize=0)
                     Join Type: INNER
                     Join Cond: (t1.libname1 = t3.libname3)
                     ->  Table Scan on explain.t3(cost=0.00..0.00 card=10.00 ndv=0.00 rowsize=0)
@@ -456,11 +456,11 @@ insert into t2 (c) values (1), (2), (3);
 explain select t1.a, (case t1.a when 0 then 0 else t1.b end) d from t1
 join t2 on t1.a=t2.c order by d;
 QUERY PLAN
-Project(cost=0.00..0.00 card=4.33 ndv=0.00 rowsize=0)
-  ->  Sort(cost=0.00..0.00 card=4.33 ndv=0.00 rowsize=0)
+Project(cost=0.00..0.00 card=9.00 ndv=0.00 rowsize=0)
+  ->  Sort(cost=0.00..0.00 card=9.00 ndv=0.00 rowsize=0)
         Sort Key: case t1.a when 0 then 0 else t1.b end INTERNAL
-        ->  Project(cost=0.00..0.00 card=4.33 ndv=0.00 rowsize=0)
-              ->  Join(cost=0.00..0.00 card=4.33 ndv=0.00 rowsize=0)
+        ->  Project(cost=0.00..0.00 card=9.00 ndv=0.00 rowsize=0)
+              ->  Join(cost=0.00..0.00 card=9.00 ndv=0.00 rowsize=0)
                     Join Type: INNER
                     Join Cond: (t1.a = t2.c)
                     ->  Table Scan on explain.t1(cost=0.00..0.00 card=3.00 ndv=0.00 rowsize=0)
@@ -468,11 +468,11 @@ Project(cost=0.00..0.00 card=4.33 ndv=0.00 rowsize=0)
 explain select t1.a, (case t1.a when 0 then 0 else t1.b end) d from t1
 join t2 on t1.a=t2.c where b=11120436154190595086 order by d;
 QUERY PLAN
-Project(cost=0.00..0.00 card=4.33 ndv=0.00 rowsize=0)
-  ->  Sort(cost=0.00..0.00 card=4.33 ndv=0.00 rowsize=0)
+Project(cost=0.00..0.00 card=9.00 ndv=0.00 rowsize=0)
+  ->  Sort(cost=0.00..0.00 card=9.00 ndv=0.00 rowsize=0)
         Sort Key: case t1.a when 0 then 0 else t1.b end INTERNAL
-        ->  Project(cost=0.00..0.00 card=4.33 ndv=0.00 rowsize=0)
-              ->  Join(cost=0.00..0.00 card=4.33 ndv=0.00 rowsize=0)
+        ->  Project(cost=0.00..0.00 card=9.00 ndv=0.00 rowsize=0)
+              ->  Join(cost=0.00..0.00 card=9.00 ndv=0.00 rowsize=0)
                     Join Type: INNER
                     Join Cond: (t1.a = t2.c)
                     ->  Table Scan on explain.t1(cost=0.00..0.00 card=3.00 ndv=0.00 rowsize=0)
@@ -510,8 +510,8 @@ insert into t1 values(null,null,null),(2,3,4);
 explain WITH qn AS (SELECT b as a FROM t1)
 SELECT qn.a, qn2.a  FROM qn, qn as qn2;
 QUERY PLAN
-Project(cost=0.00..0.00 card=2.52 ndv=0.00 rowsize=0)
-  ->  Join(cost=0.00..0.00 card=2.52 ndv=0.00 rowsize=0)
+Project(cost=0.00..0.00 card=4.00 ndv=0.00 rowsize=0)
+  ->  Join(cost=0.00..0.00 card=4.00 ndv=0.00 rowsize=0)
         Join Type: INNER
         ->  Project(cost=0.00..0.00 card=2.00 ndv=0.00 rowsize=0)
               ->  Table Scan on explain.t1(cost=0.00..0.00 card=2.00 ndv=0.00 rowsize=0)
@@ -521,8 +521,8 @@ explain WITH qn AS (SELECT b as a FROM t1),
 qn2 AS (SELECT c FROM t1 WHERE a IS NULL or a>0)
 SELECT qn.a, qn2.c  FROM qn, qn2;
 QUERY PLAN
-Project(cost=0.00..0.00 card=2.52 ndv=0.00 rowsize=0)
-  ->  Join(cost=0.00..0.00 card=2.52 ndv=0.00 rowsize=0)
+Project(cost=0.00..0.00 card=4.00 ndv=0.00 rowsize=0)
+  ->  Join(cost=0.00..0.00 card=4.00 ndv=0.00 rowsize=0)
         Join Type: INNER
         ->  Project(cost=0.00..0.00 card=2.00 ndv=0.00 rowsize=0)
               ->  Table Scan on explain.t1(cost=0.00..0.00 card=2.00 ndv=0.00 rowsize=0)
