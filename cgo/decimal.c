@@ -58,6 +58,10 @@
 #define CHECK_INEXACT CHECK_RET_STATUS(DEC_STATUS_INEXACT, RC_DATA_TRUNCATED) 
 #define CHECK_ALL CHECK_RET_STATUS(DEC_STATUS_ALL, RC_INVALID_ARGUMENT)
 
+
+int32_t Judge_Decimal64_Overflow(const decDouble* d, int32_t range);
+int32_t Judge_Decimal128_Overflow(const decQuad* d, int32_t range);
+
 /*
  * About decDouble/decQuad cohort.  One decimal number may have serveral different 
  * representations (cohort).   Cohort is useful in computing while maintaining a 
@@ -139,7 +143,7 @@ int32_t Decimal128_FromUint32(int64_t *d, uint32_t v)
     return RC_SUCCESS;
 }
 
-int32_t Decimal64_FromInt64(int64_t *d, int64_t v) 
+int32_t Decimal64_FromInt64(int64_t *d, int64_t v, int32_t range)
 {
     DECLARE_DEC64_CTXT;
     char s[128];
@@ -147,9 +151,9 @@ int32_t Decimal64_FromInt64(int64_t *d, int64_t v)
     sprintf(s, "%" PRId64 "", v);
     decDoubleFromString(&tmp, s, &_fn_dc);
     decDoubleReduce(DecDoublePtr(d), &tmp, &_fn_dc);
-    return RC_SUCCESS;
+    return Judge_Decimal64_Overflow(DecDoublePtr(d), range);
 }
-int32_t Decimal128_FromInt64(int64_t *d, int64_t v) 
+int32_t Decimal128_FromInt64(int64_t *d, int64_t v, int32_t range)
 {
     DECLARE_DEC128_CTXT;
     decQuad tmp;
@@ -157,10 +161,10 @@ int32_t Decimal128_FromInt64(int64_t *d, int64_t v)
     sprintf(s, "%" PRId64 "", v);
     decQuadFromString(&tmp, s, &_fn_dc);
     decQuadReduce(DecQuadPtr(d), &tmp, &_fn_dc);
-    return RC_SUCCESS;
+    return Judge_Decimal128_Overflow(DecQuadPtr(d), range);
 }
 
-int32_t Decimal64_FromUint64(int64_t *d, uint64_t v) 
+int32_t Decimal64_FromUint64(int64_t *d, uint64_t v, int32_t range)
 {
     DECLARE_DEC64_CTXT;
     decDouble tmp;
@@ -168,9 +172,9 @@ int32_t Decimal64_FromUint64(int64_t *d, uint64_t v)
     sprintf(s, "%" PRIu64 "", v);
     decDoubleFromString(&tmp, s, &_fn_dc);
     decDoubleReduce(DecDoublePtr(d), &tmp, &_fn_dc);
-    return RC_SUCCESS;
+    return Judge_Decimal64_Overflow(DecDoublePtr(d), range);
 }
-int32_t Decimal128_FromUint64(int64_t *d, uint64_t v) 
+int32_t Decimal128_FromUint64(int64_t *d, uint64_t v, int32_t range)
 {
     DECLARE_DEC128_CTXT;
     decQuad tmp;
@@ -178,28 +182,22 @@ int32_t Decimal128_FromUint64(int64_t *d, uint64_t v)
     sprintf(s, "%" PRIu64 "", v);
     decQuadFromString(&tmp, s, &_fn_dc);
     decQuadReduce(DecQuadPtr(d), &tmp, &_fn_dc);
-    return RC_SUCCESS;
+    return Judge_Decimal128_Overflow(DecQuadPtr(d), range);
 }
 
-int32_t Decimal64_FromFloat64(int64_t *d, double v) 
+int32_t Decimal64_FromFloat64(int64_t *d, double v, int32_t width, int32_t scale)
 {
     DECLARE_DEC64_CTXT;
-    decDouble tmp;
     char s[128];
     sprintf(s, "%g", v);
-    decDoubleFromString(&tmp, s, &_fn_dc);
-    decDoubleReduce(DecDoublePtr(d), &tmp, &_fn_dc);
-    return RC_SUCCESS;
+    return Decimal64_FromStringWithScale(d, s, width, scale);
 }
-int32_t Decimal128_FromFloat64(int64_t *d, double v) 
+int32_t Decimal128_FromFloat64(int64_t *d, double v, int32_t width, int32_t scale)
 {
     DECLARE_DEC128_CTXT;
-    decQuad tmp;
     char s[128];
     sprintf(s, "%g", v);
-    decQuadFromString(&tmp, s, &_fn_dc);
-    decQuadReduce(DecQuadPtr(d), &tmp, &_fn_dc);
-    return RC_SUCCESS;
+    return Decimal128_FromStringWithScale(d, s, width, scale);
 }
 
 int32_t Decimal64_FromString(int64_t *d, char *s)
@@ -308,7 +306,22 @@ int32_t Decimal128_ToStringWithScale(char *s, int64_t *d, int32_t scale)
     return RC_SUCCESS;
 }
 
-int32_t Decimal64_FromStringWithScale(int64_t *d, char *s, int32_t scale)
+int32_t Judge_Decimal64_Overflow(const decDouble* d, int32_t range) {
+    int32_t digit = decDoubleDigits(d);
+    int32_t exp = decDoubleGetExponent(d);
+    if (range == 0) {
+        if (decDoubleIsZero(d)) {
+            return RC_SUCCESS;
+        }
+    }
+    if (digit + exp <= range) {
+        return RC_SUCCESS;
+    } else {
+        return RC_OUT_OF_RANGE;
+    }
+}
+
+int32_t Decimal64_FromStringWithScale(int64_t *d, char *s, int32_t width, int32_t scale)
 {
     DECLARE_DEC64_CTXT;
     decDouble tmp1;
@@ -321,14 +334,29 @@ int32_t Decimal64_FromStringWithScale(int64_t *d, char *s, int32_t scale)
         }
         decDoubleQuantize(&tmp, &tmp1, quan, &_fn_dc); 
         decDoubleReduce(DecDoublePtr(d), &tmp, &_fn_dc);
-        return RC_SUCCESS;
+        return Judge_Decimal64_Overflow(DecDoublePtr(d), width - scale);
     } else {
         decDoubleReduce(DecDoublePtr(d), &tmp, &_fn_dc);
         return rc;
     }
 }
 
-int32_t Decimal128_FromStringWithScale(int64_t *d, char *s, int32_t scale)
+int32_t Judge_Decimal128_Overflow(const decQuad* d, int32_t range) {
+    int32_t digit = decQuadDigits(d);
+    int32_t exp = decQuadGetExponent(d);
+    if (range == 0) {
+        if (decQuadIsZero(d)) {
+            return RC_SUCCESS;
+        }
+    }
+    if (digit + exp <= range) {
+        return RC_SUCCESS;
+    } else {
+        return RC_OUT_OF_RANGE;
+    }
+}
+
+int32_t Decimal128_FromStringWithScale(int64_t *d, char *s, int32_t width, int32_t scale)
 {
     DECLARE_DEC128_CTXT;
     decQuad tmp1;
@@ -341,7 +369,7 @@ int32_t Decimal128_FromStringWithScale(int64_t *d, char *s, int32_t scale)
         }
         decQuadQuantize(&tmp, &tmp1, quan, &_fn_dc); 
         decQuadReduce(DecQuadPtr(d), &tmp, &_fn_dc);
-        return RC_SUCCESS;
+        return Judge_Decimal128_Overflow(DecQuadPtr(d), width - scale);
     } else {
         decQuadReduce(DecQuadPtr(d), &tmp, &_fn_dc);
         return rc;
@@ -411,6 +439,22 @@ int32_t Decimal64_ToDecimal128(int64_t *d128, int64_t *d64)
     decQuadReduce(DecQuadPtr(d128), &tmp, &_fn_dc);
     return RC_SUCCESS;
 }
+
+int32_t Decimal64_ToDecimal128WithScale(int64_t *d128, int64_t *d64, int32_t width, int32_t scale)
+{
+    DECLARE_DEC128_CTXT;
+    decQuad tmp1;
+    decQuad tmp;
+    decDoubleToWider(DecDoublePtr(d64), &tmp1);
+    decQuad *quan = dec128_scale(scale);
+    if (quan == NULL) {
+        return RC_INVALID_ARGUMENT;
+    }
+    decQuadQuantize(&tmp, &tmp1, quan, &_fn_dc);
+    decQuadReduce(DecQuadPtr(d128), &tmp, &_fn_dc);
+    return Judge_Decimal128_Overflow(DecQuadPtr(d128), width - scale);
+}
+
 int32_t Decimal128_ToDecimal64(int64_t *d64, int64_t *d128)
 {
     decDouble tmp;
@@ -418,6 +462,21 @@ int32_t Decimal128_ToDecimal64(int64_t *d64, int64_t *d128)
     decDoubleFromWider(&tmp, DecQuadPtr(d128), &_fn_dc);
     decDoubleReduce(DecDoublePtr(d64), &tmp, &_fn_dc);
     return RC_SUCCESS;
+}
+
+int32_t Decimal128_ToDecimal64WithScale(int64_t *d64, int64_t *d128, int32_t width, int32_t scale)
+{
+    DECLARE_DEC64_CTXT;
+    decDouble tmp1;
+    decDouble tmp;
+    decDoubleFromWider(&tmp1, DecQuadPtr(d128), &_fn_dc);
+    decDouble *quan = dec64_scale(scale);
+    if (quan == NULL) {
+        return RC_INVALID_ARGUMENT;
+    }
+    decDoubleQuantize(&tmp, &tmp1, quan, &_fn_dc);
+    decDoubleReduce(DecDoublePtr(d64), &tmp, &_fn_dc);
+    return Judge_Decimal64_Overflow(DecDoublePtr(d64), width - scale);
 }
 
 int32_t Decimal64_Add(int64_t *r, int64_t *a, int64_t *b) 
@@ -433,7 +492,7 @@ int32_t Decimal64_Add(int64_t *r, int64_t *a, int64_t *b)
 int32_t Decimal64_AddInt64(int64_t *r, int64_t *a, int64_t b) 
 {
     decDouble db;
-    Decimal64_FromInt64((int64_t *) &db, b);
+    Decimal64_FromInt64((int64_t *) &db, b, DECDOUBLE_Emax);
     return Decimal64_Add(r, a, (int64_t *) &db);
 }
 
@@ -450,7 +509,7 @@ int32_t Decimal64_Sub(int64_t *r, int64_t *a, int64_t *b)
 int32_t Decimal64_SubInt64(int64_t *r, int64_t *a, int64_t b) 
 {
     decDouble db;
-    Decimal64_FromInt64((int64_t *) &db, b);
+    Decimal64_FromInt64((int64_t *) &db, b, DECDOUBLE_Emax);
     return Decimal64_Sub(r, a, (int64_t *) &db);
 }
 
@@ -476,7 +535,7 @@ int32_t Decimal64_MulWiden(int64_t *r, int64_t *a, int64_t *b)
 int32_t Decimal64_MulInt64(int64_t *r, int64_t *a, int64_t b) 
 {
     decDouble db;
-    Decimal64_FromInt64((int64_t *) &db, b);
+    Decimal64_FromInt64((int64_t *) &db, b, DECDOUBLE_Emax);
     return Decimal64_Mul(r, a, (int64_t *) &db);
 }
 
@@ -503,7 +562,7 @@ int32_t Decimal64_DivWiden(int64_t *r, int64_t *a, int64_t *b)
 int32_t Decimal64_DivInt64(int64_t *r, int64_t *a, int64_t b) 
 {
     decDouble db;
-    Decimal64_FromInt64((int64_t *) &db, b);
+    Decimal64_FromInt64((int64_t *) &db, b, DECDOUBLE_Emax);
     return Decimal64_Div(r, a, (int64_t *) &db);
 }
 
@@ -520,7 +579,7 @@ int32_t Decimal128_Add(int64_t *r, int64_t *a, int64_t *b)
 int32_t Decimal128_AddInt64(int64_t *r, int64_t *a, int64_t b) 
 {
     decQuad db;
-    Decimal128_FromInt64((int64_t *) &db, b);
+    Decimal128_FromInt64((int64_t *) &db, b, DECDOUBLE_Emax);
     return Decimal128_Add(r, a, (int64_t *) &db);
 }
 
@@ -544,7 +603,7 @@ int32_t Decimal128_Sub(int64_t *r, int64_t *a, int64_t *b)
 int32_t Decimal128_SubInt64(int64_t *r, int64_t *a, int64_t b) 
 {
     decQuad db;
-    Decimal128_FromInt64((int64_t *) &db, b);
+    Decimal128_FromInt64((int64_t *) &db, b, DECDOUBLE_Emax);
     return Decimal128_Sub(r, a, (int64_t *) &db);
 }
 
@@ -561,7 +620,7 @@ int32_t Decimal128_Mul(int64_t *r, int64_t *a, int64_t *b)
 int32_t Decimal128_MulInt64(int64_t *r, int64_t *a, int64_t b) 
 {
     decQuad db;
-    Decimal128_FromInt64((int64_t *) &db, b);
+    Decimal128_FromInt64((int64_t *) &db, b, DECDOUBLE_Emax);
     return Decimal128_Mul(r, a, (int64_t *) &db);
 }
 
@@ -579,7 +638,7 @@ int32_t Decimal128_Div(int64_t *r, int64_t *a, int64_t *b)
 int32_t Decimal128_DivInt64(int64_t *r, int64_t *a, int64_t b) 
 {
     decQuad db;
-    Decimal128_FromInt64((int64_t *) &db, b);
+    Decimal128_FromInt64((int64_t *) &db, b, DECDOUBLE_Emax);
     return Decimal128_Div(r, a, (int64_t *) &db);
 }
 

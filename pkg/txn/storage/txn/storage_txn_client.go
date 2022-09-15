@@ -22,11 +22,22 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
+	"github.com/matrixorigin/matrixone/pkg/txn/storage"
 )
 
 type StorageTxnClient struct {
 	clock   clock.Clock
-	storage *Storage
+	storage storage.TxnStorage
+}
+
+func NewStorageTxnClient(
+	clock clock.Clock,
+	storage storage.TxnStorage,
+) *StorageTxnClient {
+	return &StorageTxnClient{
+		clock:   clock,
+		storage: storage,
+	}
 }
 
 var _ client.TxnClient = new(StorageTxnClient)
@@ -48,7 +59,7 @@ func (*StorageTxnClient) NewWithSnapshot(snapshot []byte) (client.TxnOperator, e
 }
 
 type StorageTxnOperator struct {
-	storage *Storage
+	storage storage.TxnStorage
 	meta    txn.TxnMeta
 }
 
@@ -63,6 +74,12 @@ func (s *StorageTxnOperator) Commit(ctx context.Context) error {
 }
 
 func (s *StorageTxnOperator) Read(ctx context.Context, ops []txn.TxnRequest) (*rpc.SendResult, error) {
+
+	// set op txn meta
+	for i := range ops {
+		ops[i].Txn = s.meta
+	}
+
 	result := &rpc.SendResult{}
 	for _, op := range ops {
 		txnResponse := txn.TxnResponse{
@@ -108,6 +125,12 @@ func (s *StorageTxnOperator) Txn() txn.TxnMeta {
 }
 
 func (s *StorageTxnOperator) Write(ctx context.Context, ops []txn.TxnRequest) (*rpc.SendResult, error) {
+
+	// set op txn meta
+	for i := range ops {
+		ops[i].Txn = s.meta
+	}
+
 	result := &rpc.SendResult{}
 	for _, op := range ops {
 		txnResponse := txn.TxnResponse{
@@ -136,6 +159,12 @@ func (s *StorageTxnOperator) Write(ctx context.Context, ops []txn.TxnRequest) (*
 }
 
 func (s *StorageTxnOperator) WriteAndCommit(ctx context.Context, ops []txn.TxnRequest) (*rpc.SendResult, error) {
+
+	// set op txn meta
+	for i := range ops {
+		ops[i].Txn = s.meta
+	}
+
 	result, err := s.Write(ctx, ops)
 	if err != nil {
 		return nil, err

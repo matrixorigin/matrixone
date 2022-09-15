@@ -182,6 +182,11 @@ func (s *service) initEngine(
 			return err
 		}
 
+	case EngineNonDistributedMemory:
+		if err := s.initMemoryEngineNonDist(cancelMoServerCtx, pu); err != nil {
+			return err
+		}
+
 	default:
 		return fmt.Errorf("unknown engine type: %s", s.cfg.Engine.Type)
 

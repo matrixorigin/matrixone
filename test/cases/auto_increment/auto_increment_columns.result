@@ -100,7 +100,7 @@ a    b
 201    xefrsdfgds
 insert into t1 values (-9223372036854775808,'xefrsdfgds');
 insert into t1 values (-9223372036854775809,'xefrsdfgds');
-tae data: duplicate
+Incorrect BIGINT value: '-9223372036854775809' for column 'a' at row 1
 insert into t1 values (9223372036854775807,'xefrsdfgds');
 insert into t1 values (9223372036854775808,'xefrsdfgds');
 Incorrect BIGINT value: '9223372036854775808' for column 'a' at row 1

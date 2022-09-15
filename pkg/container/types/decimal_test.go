@@ -15,9 +15,11 @@
 package types
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/smartystreets/goconvey/convey"
 	"github.com/stretchr/testify/require"
 )
 
@@ -47,7 +49,7 @@ func TestParse(t *testing.T) {
 
 	d128, err := Decimal128_FromString("1.23456789")
 	require.True(t, err == nil)
-	dd, err := d128.ToDecimal64()
+	dd, err := d128.ToDecimal64(64, 10)
 	require.True(t, d64.Eq(dd))
 	require.True(t, err == nil)
 
@@ -61,7 +63,7 @@ func TestParse(t *testing.T) {
 
 	d128, err = Decimal128_FromString(longstr)
 	require.True(t, err == nil)
-	dd, err = d128.ToDecimal64()
+	dd, err = d128.ToDecimal64(33, 15)
 	require.True(t, d64.Eq(dd))
 	require.True(t, err == nil)
 }
@@ -90,11 +92,43 @@ func TestAdd(t *testing.T) {
 }
 
 func TestBits(t *testing.T) {
-	d1, err := Decimal64_FromStringWithScale("9.2234", 5)
+	d1, err := Decimal64_FromStringWithScale("9.2234", 5, 4)
 	require.True(t, err == nil)
-	d2, err := Decimal64_FromStringWithScale("9.22337777675788773437747747747347377", 4)
+	d2, err := Decimal64_FromStringWithScale("9.22337777675788773437747747747347377", 5, 4)
 	require.True(t, err == nil)
 
 	require.Equal(t, d1.ToInt64(), d2.ToInt64())
 	require.Equal(t, Decimal64ToInt64Raw(d1), Decimal64ToInt64Raw(d2))
+}
+
+func Test_ParseStringToDecimal64(t *testing.T) {
+	convey.Convey("ParseStringToDecimal64 succ", t, func() {
+		M := 15
+		for i := 1; i <= M; i++ {
+			for j := 0; j <= i; j++ {
+				str := strings.Repeat("9", i-j) + "." + strings.Repeat("9", j)
+				_, err := ParseStringToDecimal64(str+"4", int32(i), int32(j))
+				convey.So(err, convey.ShouldBeNil)
+
+				_, err = ParseStringToDecimal64(str+"5", int32(i), int32(j))
+				convey.So(err, convey.ShouldNotBeNil)
+			}
+		}
+	})
+}
+
+func Test_ParseStringToDecimal128(t *testing.T) {
+	convey.Convey("ParseStringToDecimal64 succ", t, func() {
+		M := 33
+		for i := 16; i <= M; i++ {
+			for j := 0; j <= i && j <= 33; j++ {
+				str := strings.Repeat("9", i-j) + "." + strings.Repeat("9", j)
+				_, err := ParseStringToDecimal128(str+"4", int32(i), int32(j))
+				convey.So(err, convey.ShouldBeNil)
+
+				_, err = ParseStringToDecimal128(str+"5", int32(i), int32(j))
+				convey.So(err, convey.ShouldNotBeNil)
+			}
+		}
+	})
 }

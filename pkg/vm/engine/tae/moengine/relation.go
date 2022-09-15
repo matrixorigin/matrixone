@@ -32,8 +32,8 @@ var (
 
 const ADDR = "localhost:20000"
 
-func (*baseRelation) Size(string) int64 {
-	return 0
+func (*baseRelation) Size(context.Context, string) (int64, error) {
+	return 0, nil
 }
 
 func (*baseRelation) CardinalNumber(string) int64 {
@@ -58,8 +58,8 @@ func (rel *baseRelation) TableDefs(_ context.Context) ([]engine.TableDef, error)
 	return defs, nil
 }
 
-func (rel *baseRelation) Rows() int64 {
-	return rel.handle.Rows()
+func (rel *baseRelation) Rows(context.Context) (int64, error) {
+	return rel.handle.Rows(), nil
 }
 
 func (rel *baseRelation) GetPrimaryKeys(_ context.Context) ([]*engine.Attribute, error) {
