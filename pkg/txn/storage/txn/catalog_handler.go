@@ -421,40 +421,20 @@ func (c *CatalogHandler) HandleRead(meta txn.TxnMeta, req txnengine.ReadReq, res
 		rows := 0
 
 		handleRow := func(
-			row namedAttrGetter,
-			colDefs []*catalog.ColDef,
+			row NamedRow,
 		) (bool, error) {
-			for i, name := range req.ColNames {
-
-				var colDef *catalog.ColDef
-				for _, def := range colDefs {
-					if def.Name != name {
-						continue
-					}
-					colDef = def
-					break
-				}
-				if colDef == nil {
-					resp.ErrColumnNotFound.Name = name
-					return true, nil
-				}
-
-				value, err := row.attrByName(name, tx, c.upstream, colDef.Type.Oid)
-				if err != nil {
-					return true, err
-				}
-				if !typeMatch(value, colDef.Type.Oid) {
-					panic(fmt.Errorf("%T.%s: expecting %s, but got %T", row, name, colDef.Type, value))
-				}
-
-				vectorAppend(b.Vecs[i], value, c.upstream.mheap)
+			if err := appendNamedRow(
+				tx,
+				c.upstream.mheap,
+				b,
+				row,
+			); err != nil {
+				return true, err
 			}
-
 			rows++
 			if rows >= maxRows {
 				return true, nil
 			}
-
 			return false, nil
 		}
 
@@ -476,7 +456,7 @@ func (c *CatalogHandler) HandleRead(meta txn.TxnMeta, req txnengine.ReadReq, res
 				if err != nil {
 					return err
 				}
-				if end, err := handleRow(row, catalog.SystemDBSchema.ColDefs); err != nil {
+				if end, err := handleRow(row); err != nil {
 					return err
 				} else if end {
 					return nil
@@ -499,7 +479,8 @@ func (c *CatalogHandler) HandleRead(meta txn.TxnMeta, req txnengine.ReadReq, res
 				if err != nil {
 					return err
 				}
-				if end, err := handleRow(row, catalog.SystemTableSchema.ColDefs); err != nil {
+				row.handler = c.upstream
+				if end, err := handleRow(row); err != nil {
 					return err
 				} else if end {
 					return nil
@@ -525,7 +506,8 @@ func (c *CatalogHandler) HandleRead(meta txn.TxnMeta, req txnengine.ReadReq, res
 				if row.IsHidden {
 					continue
 				}
-				if end, err := handleRow(row, catalog.SystemColumnSchema.ColDefs); err != nil {
+				row.handler = c.upstream
+				if end, err := handleRow(row); err != nil {
 					return err
 				} else if end {
 					return nil
