@@ -16,6 +16,8 @@ package txnstorage
 
 import (
 	"bytes"
+	"crypto/rand"
+	"encoding/binary"
 	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -58,6 +60,9 @@ func (b Bytes) Less(than Bytes) bool {
 }
 
 func typeConv(v any) any {
+	if v == nil {
+		panic("should not be nil")
+	}
 	switch v := v.(type) {
 	case bool:
 		return Bool(v)
@@ -101,7 +106,83 @@ func typeConv(v any) any {
 		return Bytes(v[:])
 	case types.Rowid:
 		return Bytes(v[:])
+	case types.Uuid:
+		return Bytes(v[:])
 	default:
 		panic(fmt.Errorf("unknown type: %T", v))
 	}
+}
+
+func typeMatch(v any, typ types.T) bool {
+	if v == nil {
+		panic("should not be nil")
+	}
+	var ok bool
+	switch typ {
+	case types.T_bool:
+		_, ok = v.(bool)
+	case types.T_int8:
+		_, ok = v.(int8)
+	case types.T_int16:
+		_, ok = v.(int16)
+	case types.T_int32:
+		_, ok = v.(int32)
+	case types.T_int64:
+		_, ok = v.(int64)
+	case types.T_uint8:
+		_, ok = v.(uint8)
+	case types.T_uint16:
+		_, ok = v.(uint16)
+	case types.T_uint32:
+		_, ok = v.(uint32)
+	case types.T_uint64:
+		_, ok = v.(uint64)
+	case types.T_float32:
+		_, ok = v.(float32)
+	case types.T_float64:
+		_, ok = v.(float64)
+	case types.T_decimal64:
+		_, ok = v.(types.Decimal64)
+	case types.T_decimal128:
+		_, ok = v.(types.Decimal128)
+	case types.T_date:
+		_, ok = v.(types.Date)
+	case types.T_time:
+		_, ok = v.(types.TimeType)
+	case types.T_datetime:
+		_, ok = v.(types.Datetime)
+	case types.T_timestamp:
+		_, ok = v.(types.Timestamp)
+	case types.T_interval:
+		_, ok = v.(types.IntervalType)
+	case types.T_char:
+		_, ok = v.(string)
+	case types.T_varchar:
+		_, ok = v.(string)
+	case types.T_json:
+		_, ok = v.(string)
+	case types.T_blob:
+		_, ok = v.(string)
+	case types.T_uuid:
+		_, ok = v.(string)
+	default:
+		panic(fmt.Errorf("fixme: %v", typ))
+	}
+	return ok
+}
+
+func boolToInt8(b bool) int8 {
+	if b {
+		return 1
+	}
+	return 0
+}
+
+func newRowID() types.Rowid {
+	var rowid types.Rowid
+	err := binary.Read(rand.Reader, binary.LittleEndian, &rowid)
+	if err != nil {
+		panic(err)
+	}
+	return rowid
 }

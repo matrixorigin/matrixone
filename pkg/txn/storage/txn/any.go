@@ -24,56 +24,83 @@ type AnyKey []any
 var _ Ordered[AnyKey] = AnyKey{}
 
 func (a AnyKey) Less(than AnyKey) bool {
+	if len(a) < len(than) {
+		return true
+	}
+	if len(than) < len(a) {
+		return false
+	}
 	for i, key := range a {
-		if i >= len(than) {
-			return false
-		}
 		switch key := key.(type) {
 
 		case Text:
-			if key.Less(than[i].(Text)) {
+			key2 := than[i].(Text)
+			if key.Less(key2) {
 				return true
+			} else if key2.Less(key) {
+				return false
 			}
 
 		case Bool:
-			if key.Less(than[i].(Bool)) {
+			key2 := than[i].(Bool)
+			if key.Less(key2) {
 				return true
+			} else if key2.Less(key) {
+				return false
 			}
 
 		case Int:
-			if key.Less(than[i].(Int)) {
+			key2 := than[i].(Int)
+			if key.Less(key2) {
 				return true
+			} else if key2.Less(key) {
+				return false
 			}
 
 		case Uint:
-			if key.Less(than[i].(Uint)) {
+			key2 := than[i].(Uint)
+			if key.Less(key2) {
 				return true
+			} else if key2.Less(key) {
+				return false
 			}
 
 		case Float:
-			if key.Less(than[i].(Float)) {
+			key2 := than[i].(Float)
+			if key.Less(key2) {
 				return true
+			} else if key2.Less(key) {
+				return false
 			}
 
 		case Bytes:
-			if key.Less(than[i].(Bytes)) {
+			key2 := than[i].(Bytes)
+			if key.Less(key2) {
 				return true
+			} else if key2.Less(key) {
+				return false
 			}
 
 		default:
 			panic(fmt.Errorf("unknown key type: %T", key))
 		}
 	}
+	// equal
 	return false
 }
 
 type AnyRow struct {
 	primaryKey AnyKey
-	attributes map[string]any // attribute id -> value
+	indexes    []AnyKey
+	attributes map[string]Nullable // attribute id -> nullable value
 }
 
-func (a *AnyRow) PrimaryKey() AnyKey {
+func (a AnyRow) PrimaryKey() AnyKey {
 	return a.primaryKey
+}
+
+func (a AnyRow) Indexes() []AnyKey {
+	return a.indexes
 }
 
 func (a *AnyRow) String() string {
@@ -81,14 +108,28 @@ func (a *AnyRow) String() string {
 	buf.WriteString("AnyRow{")
 	buf.WriteString(fmt.Sprintf("key: %+v", a.primaryKey))
 	for key, value := range a.attributes {
-		buf.WriteString(fmt.Sprintf(", %s: %v", key, value))
+		buf.WriteString(fmt.Sprintf(", %s: %+v", key, value))
 	}
 	buf.WriteString("}")
 	return buf.String()
 }
 
-func NewAnyRow() *AnyRow {
+func NewAnyRow(
+	indexes []AnyKey,
+) *AnyRow {
 	return &AnyRow{
-		attributes: make(map[string]any),
+		attributes: make(map[string]Nullable),
+		indexes:    indexes,
 	}
+}
+
+type NamedAnyRow struct {
+	Row      *AnyRow
+	AttrsMap map[string]*AttributeRow
+}
+
+var _ NamedRow = new(NamedAnyRow)
+
+func (n *NamedAnyRow) AttrByName(tx *Transaction, name string) (Nullable, error) {
+	return n.Row.attributes[n.AttrsMap[name].ID], nil
 }

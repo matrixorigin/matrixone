@@ -455,8 +455,8 @@ func collectWriteBatchResult(handler *ParseLineHandler, wh *WriteBatchHandler, e
 	wh.simdCsvErr = nil
 }
 
-func makeParsedFailedError(tp, field, column string, line uint64, offset int) *MysqlError {
-	return NewMysqlError(ER_TRUNCATED_WRONG_VALUE_FOR_FIELD,
+func makeParsedFailedError(tp, field, column string, line uint64, offset int) *moerr.Error {
+	return moerr.New(moerr.ER_TRUNCATED_WRONG_VALUE_FOR_FIELD,
 		tp,
 		field,
 		column,
@@ -465,7 +465,7 @@ func makeParsedFailedError(tp, field, column string, line uint64, offset int) *M
 
 func errorCanBeIgnored(err error) bool {
 	switch err.(type) {
-	case *MysqlError, *csv.ParseError:
+	case *moerr.Error, *csv.ParseError:
 		return false
 	default:
 		return true
@@ -2053,7 +2053,7 @@ func (mce *MysqlCmdExecutor) LoadLoop(requestCtx context.Context, load *tree.Loa
 			select {
 			case <-requestCtx.Done():
 				logutil.Info("cancel the load")
-				retErr = NewMysqlError(ER_QUERY_INTERRUPTED)
+				retErr = moerr.New(moerr.ER_QUERY_INTERRUPTED)
 				quit = true
 			case ne = <-handler.simdCsvNotiyEventChan:
 				switch ne.neType {

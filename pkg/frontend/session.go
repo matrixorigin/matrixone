@@ -20,13 +20,12 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/defines"
-
+	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-
-	"github.com/matrixorigin/matrixone/pkg/config"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/errors"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -36,8 +35,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/moengine"
 	"github.com/matrixorigin/matrixone/pkg/vm/mempool"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
-
-	"github.com/google/uuid"
 )
 
 const MaxPrepareNumberInOneSession = 64
@@ -117,6 +114,8 @@ type Session struct {
 	uuid uuid.UUID
 
 	timeZone *time.Location
+
+	priv *privilege
 }
 
 func NewSession(proto Protocol, gm *guest.Mmu, mp *mempool.Mempool, PU *config.ParameterUnit, gSysVars *GlobalSystemVariables) *Session {
@@ -689,6 +688,14 @@ func (ses *Session) AuthenticateUser(userInput string) ([]byte, error) {
 	return []byte(pwd), nil
 }
 
+func (ses *Session) GetPrivilege() *privilege {
+	return ses.priv
+}
+
+func (ses *Session) SetPrivilege(priv *privilege) {
+	ses.priv = priv
+}
+
 func (th *TxnHandler) SetSession(ses *Session) {
 	th.ses = ses
 }
@@ -858,7 +865,7 @@ func (tcc *TxnCompilerContext) ensureDatabaseIsNotEmpty(dbName string) (string, 
 		dbName = tcc.DefaultDatabase()
 	}
 	if len(dbName) == 0 {
-		return "", NewMysqlError(ER_NO_DB_ERROR)
+		return "", moerr.New(moerr.ER_NO_DB_ERROR)
 	}
 	return dbName, nil
 }
@@ -1064,19 +1071,24 @@ func (tcc *TxnCompilerContext) GetHideKeyDef(dbName string, tableName string) *p
 	return hideDef
 }
 
-func (tcc *TxnCompilerContext) Cost(obj *plan2.ObjectRef, e *plan2.Expr) *plan2.Cost {
+func (tcc *TxnCompilerContext) Cost(obj *plan2.ObjectRef, e *plan2.Expr) (cost *plan2.Cost) {
+	cost = new(plan2.Cost)
 	dbName := obj.GetSchemaName()
-	tableName := obj.GetObjName()
 	dbName, err := tcc.ensureDatabaseIsNotEmpty(dbName)
 	if err != nil {
-		return nil
+		return
 	}
+	tableName := obj.GetObjName()
 	table, err := tcc.getRelation(dbName, tableName)
 	if err != nil {
-		return nil
+		return
 	}
-	rows := table.Rows()
-	return &plan2.Cost{Card: float64(rows)}
+	rows, err := table.Rows(tcc.ses.GetRequestContext())
+	if err != nil {
+		return
+	}
+	cost.Card = float64(rows)
+	return
 }
 
 // fakeDataSetFetcher gets the result set from the pipeline and save it in the session.

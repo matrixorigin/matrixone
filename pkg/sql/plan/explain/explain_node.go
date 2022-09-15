@@ -183,16 +183,18 @@ func (ndesc *NodeDescribeImpl) GetNodeBasicInfo(options *ExplainOptions) (string
 
 	// Get Costs info of Node
 	if options.Format == EXPLAIN_FORMAT_TEXT {
-		costDescImpl := &CostDescribeImpl{
-			Cost: ndesc.Node.GetCost(),
-		}
-		costInfo, err := costDescImpl.GetDescription(options)
-		if err != nil {
-			return result, err
-		}
-		result += costInfo
-
 		//result += " (cost=%.2f..%.2f rows=%.0f width=%f)"
+
+		if options.Verbose {
+			costDescImpl := &CostDescribeImpl{
+				Cost: ndesc.Node.GetCost(),
+			}
+			costInfo, err := costDescImpl.GetDescription(options)
+			if err != nil {
+				return result, err
+			}
+			result += " " + costInfo
+		}
 	} else if options.Format == EXPLAIN_FORMAT_JSON {
 		return result, errors.New(errno.FeatureNotSupported, "unimplement explain format json")
 	} else if options.Format == EXPLAIN_FORMAT_DOT {

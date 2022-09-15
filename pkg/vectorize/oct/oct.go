@@ -16,8 +16,9 @@ package oct
 
 import (
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"strconv"
+
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 
 	"golang.org/x/exp/constraints"
 )
@@ -83,5 +84,5 @@ func OctFloat[T constraints.Float](xs []T, rs []types.Decimal128) ([]types.Decim
 }
 
 func oct(val uint64) (types.Decimal128, error) {
-	return types.Decimal128_FromStringWithScale(fmt.Sprintf("%o", val), 0)
+	return types.Decimal128_FromStringWithScale(fmt.Sprintf("%o", val), 33, 0)
 }

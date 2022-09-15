@@ -206,7 +206,8 @@ func TestDistincAvg(t *testing.T) {
 func MakeDecimal128Arr(input []float64) []types.Decimal128 {
 	ret := make([]types.Decimal128, len(input))
 	for i, v := range input {
-		ret[i] = types.Decimal128FromFloat64(v)
+		d, _ := types.Decimal128FromFloat64(v, 64, 10)
+		ret[i] = d
 	}
 
 	return ret

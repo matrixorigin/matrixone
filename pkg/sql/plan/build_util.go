@@ -90,7 +90,7 @@ func getTypeFromAst(typ tree.ResolvableTypeReference) (*plan.Type, error) {
 		case defines.MYSQL_TYPE_TIMESTAMP:
 			return &plan.Type{Id: int32(types.T_timestamp), Size: 8, Width: n.InternalType.Width, Precision: n.InternalType.Precision}, nil
 		case defines.MYSQL_TYPE_DECIMAL:
-			if n.InternalType.DisplayWith > 16 {
+			if n.InternalType.DisplayWith > 15 {
 				return &plan.Type{Id: int32(types.T_decimal128), Size: 16, Width: n.InternalType.DisplayWith, Scale: n.InternalType.Precision}, nil
 			}
 			return &plan.Type{Id: int32(types.T_decimal64), Size: 8, Width: n.InternalType.DisplayWith, Scale: n.InternalType.Precision}, nil

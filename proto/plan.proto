@@ -192,6 +192,7 @@ message ColDef {
 	bool auto_increment = 6;
 	int32 pkidx 		= 7;
 	string comment		= 8;
+	bool is_cPkey = 9;
 }
 
 message Default {
@@ -566,6 +567,7 @@ message InsertValues {
 	repeated ColDef other_cols = 4;
 	repeated string order_attrs = 5;
 	repeated column columns = 6;
+	ColDef composite_pkey = 7;
 }
 
 message column{

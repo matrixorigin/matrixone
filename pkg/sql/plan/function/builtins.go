@@ -2075,4 +2075,80 @@ var builtins = map[int]Functions{
 			},
 		},
 	},
+	LOAD_FILE: {
+		Id: LOAD_FILE,
+		Overloads: []Function{
+			{
+				Index:     0,
+				Volatile:  true,
+				Flag:      plan.Function_STRICT,
+				Layout:    STANDARD_FUNCTION,
+				Args:      []types.T{types.T_varchar},
+				ReturnTyp: types.T_blob,
+				Fn:        unary.LoadFile,
+			},
+			{
+				Index:     1,
+				Volatile:  true,
+				Flag:      plan.Function_STRICT,
+				Layout:    STANDARD_FUNCTION,
+				Args:      []types.T{types.T_char},
+				ReturnTyp: types.T_blob,
+				Fn:        unary.LoadFile,
+			},
+			// {
+			// 	Index:     2,
+			// 	Flag:      plan.Function_STRICT,
+			// 	Layout:    STANDARD_FUNCTION,
+			// 	Args:      []types.T{types.T_text},
+			// 	ReturnTyp: types.T_blob,
+			// 	Fn:        unary.LoadFile,
+			// },
+		},
+	},
+	HEX: {
+		Id: HEX,
+		Overloads: []Function{
+			{
+				Index:     0,
+				Flag:      plan.Function_STRICT,
+				Layout:    STANDARD_FUNCTION,
+				Args:      []types.T{types.T_varchar},
+				ReturnTyp: types.T_varchar,
+				Fn:        unary.HexString,
+			},
+			{
+				Index:     1,
+				Flag:      plan.Function_STRICT,
+				Layout:    STANDARD_FUNCTION,
+				Args:      []types.T{types.T_char},
+				ReturnTyp: types.T_varchar,
+				Fn:        unary.HexString,
+			},
+			{
+				Index:     2,
+				Flag:      plan.Function_STRICT,
+				Layout:    STANDARD_FUNCTION,
+				Args:      []types.T{types.T_int64},
+				ReturnTyp: types.T_varchar,
+				Fn:        unary.HexInt64,
+			},
+		},
+	},
+	SERIAL: {
+		Id: SERIAL,
+		TypeCheckFn: func(_ []Function, inputs []types.T) (overloadIndex int32, ts []types.T) {
+			return int32(0), nil
+		},
+		Overloads: []Function{
+			{
+				Index:     0,
+				Flag:      plan.Function_STRICT,
+				Layout:    STANDARD_FUNCTION,
+				Args:      []types.T{},
+				ReturnTyp: types.T_varchar,
+				Fn:        multi.Serial,
+			},
+		},
+	},
 }

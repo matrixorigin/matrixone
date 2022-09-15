@@ -20,7 +20,7 @@ import (
 
 type ExplainData struct {
 	Steps   []Step `json:"steps"`
-	Code    int32  `json:"code"`
+	Code    uint16 `json:"code"`
 	Message string `json:"message"`
 	Success bool   `json:"success"`
 	Uuid    string `json:"uuid"`
@@ -111,7 +111,7 @@ func NewExplainData(uuid uuid.UUID) *ExplainData {
 	}
 }
 
-func NewExplainDataFail(uuid uuid.UUID, code int32, msg string) *ExplainData {
+func NewExplainDataFail(uuid uuid.UUID, code uint16, msg string) *ExplainData {
 	return &ExplainData{
 		Code:    code,
 		Message: msg,

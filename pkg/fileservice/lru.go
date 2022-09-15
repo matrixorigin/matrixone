@@ -21,8 +21,8 @@ import (
 
 type LRU struct {
 	sync.Mutex
-	capacity int
-	size     int
+	capacity int64
+	size     int64
 	evicts   *list.List
 	kv       map[any]*list.Element
 }
@@ -30,10 +30,10 @@ type LRU struct {
 type lruItem struct {
 	Key   any
 	Value any
-	Size  int
+	Size  int64
 }
 
-func NewLRU(capacity int) *LRU {
+func NewLRU(capacity int64) *LRU {
 	return &LRU{
 		capacity: capacity,
 		evicts:   list.New(),
@@ -41,7 +41,7 @@ func NewLRU(capacity int) *LRU {
 	}
 }
 
-func (l *LRU) Set(key any, value any, size int) {
+func (l *LRU) Set(key any, value any, size int64) {
 	l.Lock()
 	defer l.Unlock()
 

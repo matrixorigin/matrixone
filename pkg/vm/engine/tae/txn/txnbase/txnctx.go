@@ -42,7 +42,7 @@ type TxnCtx struct {
 	StartTS, CommitTS, PrepareTS types.TS
 	Info                         []byte
 	State                        txnif.TxnState
-	Is2PC                        bool
+	Kind2PC                      bool
 }
 
 func NewTxnCtx(id uint64, start types.TS, info []byte) *TxnCtx {
@@ -56,6 +56,8 @@ func NewTxnCtx(id uint64, start types.TS, info []byte) *TxnCtx {
 	ctx.DoneCond = *sync.NewCond(ctx)
 	return ctx
 }
+
+func (ctx *TxnCtx) Is2PC() bool { return ctx.Kind2PC }
 
 func (ctx *TxnCtx) GetCtx() []byte {
 	return ctx.IDCtx

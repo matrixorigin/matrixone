@@ -17,9 +17,8 @@ package plan
 import (
 	"encoding/json"
 	"fmt"
-	"math"
-	"sort"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/errors"
@@ -631,9 +630,9 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 
 func (builder *QueryBuilder) createQuery() (*Query, error) {
 	for i, rootId := range builder.qry.Steps {
-		rootId = builder.pushdownSemiAntiJoins(rootId)
 		rootId, _ = builder.pushdownFilters(rootId, nil)
 		rootId = builder.determineJoinOrder(rootId)
+		rootId = builder.pushdownSemiAntiJoins(rootId)
 		builder.qry.Steps[i] = rootId
 
 		colRefCnt := make(map[[2]int32]int)
@@ -651,21 +650,21 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 	return builder.qry, nil
 }
 
-func (builder *QueryBuilder) buildUnion(stmt *tree.Select, ctx *BindContext, isRoot bool) (int32, error) {
+func (builder *QueryBuilder) buildUnion(stmt *tree.UnionClause, astOrderBy tree.OrderBy, astLimit *tree.Limit, ctx *BindContext, isRoot bool) (int32, error) {
 	var selectStmts []tree.Statement
 	var unionTypes []plan.Node_NodeType
 
 	// get Union selectStmts
-	err := getUnionSelects(stmt.Select.(*tree.UnionClause), &selectStmts, &unionTypes)
+	err := getUnionSelects(stmt, &selectStmts, &unionTypes)
 	if err != nil {
 		return 0, err
 	}
 
 	if len(selectStmts) == 1 {
 		if slt, ok := selectStmts[0].(*tree.Select); ok {
-			return builder.buildSelect(slt, ctx, false)
+			return builder.buildSelect(slt, ctx, isRoot)
 		} else {
-			return builder.buildSelect(&tree.Select{Select: selectStmts[0]}, ctx, false)
+			return builder.buildSelect(&tree.Select{Select: selectStmts[0]}, ctx, isRoot)
 		}
 	}
 
@@ -679,9 +678,9 @@ func (builder *QueryBuilder) buildUnion(stmt *tree.Select, ctx *BindContext, isR
 	for idx, sltStmt := range selectStmts {
 		subCtx := NewBindContext(builder, ctx)
 		if slt, ok := sltStmt.(*tree.Select); ok {
-			nodeID, err = builder.buildSelect(slt, subCtx, false)
+			nodeID, err = builder.buildSelect(slt, subCtx, isRoot)
 		} else {
-			nodeID, err = builder.buildSelect(&tree.Select{Select: sltStmt}, subCtx, false)
+			nodeID, err = builder.buildSelect(&tree.Select{Select: sltStmt}, subCtx, isRoot)
 		}
 		if err != nil {
 			return 0, err
@@ -775,22 +774,6 @@ func (builder *QueryBuilder) buildUnion(stmt *tree.Select, ctx *BindContext, isR
 		utIdx := i - 1
 		lastTag = builder.genNewTag()
 		leftNodeTag := builder.qry.Nodes[lastNodeId].BindingTags[0]
-		// TODO split UNION to UNION_ALL + AGG is little complicated.
-		// if newUnionType[utIdx] == plan.Node_UNION {
-		// 	lastNodeId = builder.appendNode(&plan.Node{
-		// 		NodeType:    plan.Node_UNION_ALL,
-		// 		Children:    []int32{lastNodeId, newNodes[i]},
-		// 		ProjectList: getProjectList(leftNodeTag),
-		// 		BindingTags: []int32{lastTag},
-		// 	}, ctx)
-
-		// 	lastTag = builder.genNewTag()
-		// 	lastNodeId = builder.appendNode(&plan.Node{
-		// 		NodeType:    plan.Node_DISTINCT,
-		// 		Children:    []int32{lastNodeId},
-		// 		BindingTags: []int32{lastTag},
-		// 	}, ctx)
-		// } else {
 
 		lastNodeId = builder.appendNode(&plan.Node{
 			NodeType:    newUnionType[utIdx],
@@ -798,8 +781,6 @@ func (builder *QueryBuilder) buildUnion(stmt *tree.Select, ctx *BindContext, isR
 			BindingTags: []int32{lastTag},
 			ProjectList: getProjectList(leftNodeTag),
 		}, ctx)
-
-		// }
 	}
 
 	// set ctx base on selects[0] and it's ctx
@@ -836,11 +817,11 @@ func (builder *QueryBuilder) buildUnion(stmt *tree.Select, ctx *BindContext, isR
 	}, ctx)
 
 	// append orderBy
-	if stmt.OrderBy != nil {
+	if astOrderBy != nil {
 		orderBinder := NewOrderBinder(projectionBinder, nil)
-		orderBys := make([]*plan.OrderBySpec, 0, len(stmt.OrderBy))
+		orderBys := make([]*plan.OrderBySpec, 0, len(astOrderBy))
 
-		for _, order := range stmt.OrderBy {
+		for _, order := range astOrderBy {
 			expr, err := orderBinder.BindExpr(order.Expr)
 			if err != nil {
 				return 0, err
@@ -870,18 +851,18 @@ func (builder *QueryBuilder) buildUnion(stmt *tree.Select, ctx *BindContext, isR
 	}
 
 	// append limit
-	if stmt.Limit != nil {
+	if astLimit != nil {
 		node := builder.qry.Nodes[lastNodeId]
 
 		limitBinder := NewLimitBinder()
-		if stmt.Limit.Offset != nil {
-			node.Limit, err = limitBinder.BindExpr(stmt.Limit.Offset, 0, true)
+		if astLimit.Offset != nil {
+			node.Offset, err = limitBinder.BindExpr(astLimit.Offset, 0, true)
 			if err != nil {
 				return 0, err
 			}
 		}
-		if stmt.Limit.Count != nil {
-			node.Offset, err = limitBinder.BindExpr(stmt.Limit.Count, 0, true)
+		if astLimit.Count != nil {
+			node.Limit, err = limitBinder.BindExpr(astLimit.Count, 0, true)
 			if err != nil {
 				return 0, err
 			}
@@ -954,15 +935,40 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 	}
 
 	var clause *tree.SelectClause
+	astOrderBy := stmt.OrderBy
+	astLimit := stmt.Limit
+
+	// strip parentheses
+	// ((select a from t1)) order by b  [ is equal ] select a from t1 order by b
+	// (((select a from t1)) order by b) [ is equal ] select a from t1 order by b
+	//
+	// (select a from t1 union/union all select aa from t2) order by a
+	//       => we will strip parentheses, but order by only can use 'a' column from the union's output projectlist
+	for {
+		if selectClause, ok := stmt.Select.(*tree.ParenSelect); ok {
+			if selectClause.Select.OrderBy != nil {
+				if astOrderBy != nil {
+					return 0, moerr.NewError(moerr.INVALID_INPUT, "multiple ORDER BY clauses not allowed")
+				}
+				astOrderBy = selectClause.Select.OrderBy
+			}
+			if selectClause.Select.Limit != nil {
+				if astLimit != nil {
+					return 0, moerr.NewError(moerr.INVALID_INPUT, "multiple LIMIT clauses not allowed")
+				}
+				astLimit = selectClause.Select.Limit
+			}
+			stmt = selectClause.Select
+		} else {
+			break
+		}
+	}
 
 	switch selectClause := stmt.Select.(type) {
 	case *tree.SelectClause:
 		clause = selectClause
-	case *tree.ParenSelect:
-		return builder.buildSelect(selectClause.Select, ctx, isRoot)
 	case *tree.UnionClause:
-		return builder.buildUnion(stmt, ctx, isRoot)
-		// return 0, errors.New("", fmt.Sprintf("'%s' will be supported in future version.", selectClause.Type.String()))
+		return builder.buildUnion(selectClause, astOrderBy, astLimit, ctx, isRoot)
 	case *tree.ValuesClause:
 		return 0, errors.New("", "'SELECT FROM VALUES' will be supported in future version.")
 	default:
@@ -1141,11 +1147,11 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 
 	// bind ORDER BY clause
 	var orderBys []*plan.OrderBySpec
-	if stmt.OrderBy != nil {
+	if astOrderBy != nil {
 		orderBinder := NewOrderBinder(projectionBinder, selectList)
-		orderBys = make([]*plan.OrderBySpec, 0, len(stmt.OrderBy))
+		orderBys = make([]*plan.OrderBySpec, 0, len(astOrderBy))
 
-		for _, order := range stmt.OrderBy {
+		for _, order := range astOrderBy {
 			expr, err := orderBinder.BindExpr(order.Expr)
 			if err != nil {
 				return 0, err
@@ -1171,16 +1177,16 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 	// bind limit/offset clause
 	var limitExpr *Expr
 	var offsetExpr *Expr
-	if stmt.Limit != nil {
+	if astLimit != nil {
 		limitBinder := NewLimitBinder()
-		if stmt.Limit.Offset != nil {
-			offsetExpr, err = limitBinder.BindExpr(stmt.Limit.Offset, 0, true)
+		if astLimit.Offset != nil {
+			offsetExpr, err = limitBinder.BindExpr(astLimit.Offset, 0, true)
 			if err != nil {
 				return 0, err
 			}
 		}
-		if stmt.Limit.Count != nil {
-			limitExpr, err = limitBinder.BindExpr(stmt.Limit.Count, 0, true)
+		if astLimit.Count != nil {
+			limitExpr, err = limitBinder.BindExpr(astLimit.Count, 0, true)
 			if err != nil {
 				return 0, err
 			}
@@ -1336,18 +1342,42 @@ func (builder *QueryBuilder) appendNode(node *plan.Node, ctx *BindContext) int32
 
 		switch node.JoinType {
 		case plan.Node_INNER:
+			card := leftCost.Card * rightCost.Card
+			if len(node.OnList) > 0 {
+				card *= 0.1
+			}
 			node.Cost = &plan.Cost{
-				Card: math.Cbrt(leftCost.Card) * rightCost.Card,
+				Card: card,
 			}
 
-		case plan.Node_LEFT, plan.Node_RIGHT:
+		case plan.Node_LEFT:
+			card := leftCost.Card * rightCost.Card
+			if len(node.OnList) > 0 {
+				card *= 0.1
+				card += leftCost.Card
+			}
 			node.Cost = &plan.Cost{
-				Card: math.Pow(leftCost.Card*rightCost.Card, 2./3.),
+				Card: card,
+			}
+
+		case plan.Node_RIGHT:
+			card := leftCost.Card * rightCost.Card
+			if len(node.OnList) > 0 {
+				card *= 0.1
+				card += rightCost.Card
+			}
+			node.Cost = &plan.Cost{
+				Card: card,
 			}
 
 		case plan.Node_OUTER:
+			card := leftCost.Card * rightCost.Card
+			if len(node.OnList) > 0 {
+				card *= 0.1
+				card += leftCost.Card + rightCost.Card
+			}
 			node.Cost = &plan.Cost{
-				Card: math.Pow(leftCost.Card*rightCost.Card, 2./3.) + leftCost.Card + rightCost.Card,
+				Card: card,
 			}
 
 		case plan.Node_SEMI, plan.Node_ANTI:
@@ -1365,7 +1395,7 @@ func (builder *QueryBuilder) appendNode(node *plan.Node, ctx *BindContext) int32
 		if len(node.GroupBy) > 0 {
 			childCost := builder.qry.Nodes[node.Children[0]].Cost
 			node.Cost = &plan.Cost{
-				Card: math.Pow(childCost.Card, 2./3.),
+				Card: childCost.Card * 0.1,
 			}
 		} else {
 			node.Cost = &plan.Cost{
@@ -1535,64 +1565,65 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext) (
 		nodeType := plan.Node_TABLE_SCAN
 		if tableDef.TableType == catalog.SystemExternalRel {
 			nodeType = plan.Node_EXTERNAL_SCAN
-		}
-		// set view statment to CTE
-		viewDefString := ""
-		for _, def := range tableDef.Defs {
-			if viewDef, ok := def.Def.(*plan.TableDef_DefType_View); ok {
-				viewDefString = viewDef.View.View
-				break
-			}
-		}
-		if viewDefString != "" {
-			if ctx.cteByName == nil {
-				ctx.cteByName = make(map[string]*CTERef)
-			}
+		} else if tableDef.TableType == catalog.SystemViewRel {
 
-			viewData := ViewData{}
-			err := json.Unmarshal([]byte(viewDefString), &viewData)
-			if err != nil {
-				return 0, err
-			}
-
-			originStmts, err := mysql.Parse(viewData.Stmt)
-			if err != nil {
-				return 0, err
-			}
-			viewStmt, ok := originStmts[0].(*tree.CreateView)
-			if !ok {
-				return 0, errors.New("", "can not get view statement")
-			}
-
-			// when use db1.v1 in db2 context, if you use v1 as ViewName， that may conflict
-			viewName := fmt.Sprintf("%s.%s", viewData.DefaultDatabase, viewStmt.Name.ObjectName)
-			var maskedCTEs map[string]any
-			if len(ctx.cteByName) > 0 {
-				maskedCTEs := make(map[string]any)
-				for name := range ctx.cteByName {
-					maskedCTEs[name] = nil
+			// set view statment to CTE
+			viewDefString := ""
+			for _, def := range tableDef.Defs {
+				if viewDef, ok := def.Def.(*plan.TableDef_DefType_View); ok {
+					viewDefString = viewDef.View.View
+					break
 				}
 			}
+			if viewDefString != "" {
+				if ctx.cteByName == nil {
+					ctx.cteByName = make(map[string]*CTERef)
+				}
 
-			ctx.cteByName[string(viewName)] = &CTERef{
-				ast: &tree.CTE{
-					Name: &tree.AliasClause{
-						Alias: tree.Identifier(viewName),
-						Cols:  viewStmt.ColNames,
+				viewData := ViewData{}
+				err := json.Unmarshal([]byte(viewDefString), &viewData)
+				if err != nil {
+					return 0, err
+				}
+
+				originStmts, err := mysql.Parse(viewData.Stmt)
+				if err != nil {
+					return 0, err
+				}
+				viewStmt, ok := originStmts[0].(*tree.CreateView)
+				if !ok {
+					return 0, errors.New("", "can not get view statement")
+				}
+
+				viewName := viewStmt.Name.ObjectName
+				var maskedCTEs map[string]any
+				if len(ctx.cteByName) > 0 {
+					maskedCTEs := make(map[string]any)
+					for name := range ctx.cteByName {
+						maskedCTEs[name] = nil
+					}
+				}
+
+				ctx.cteByName[string(viewName)] = &CTERef{
+					ast: &tree.CTE{
+						Name: &tree.AliasClause{
+							Alias: tree.Identifier(viewName),
+							Cols:  viewStmt.ColNames,
+						},
+						Stmt: viewStmt.AsSource,
 					},
-					Stmt: viewStmt.AsSource,
-				},
-				defaultDatabase: viewData.DefaultDatabase,
-				maskedCTEs:      maskedCTEs,
-			}
+					defaultDatabase: viewData.DefaultDatabase,
+					maskedCTEs:      maskedCTEs,
+				}
 
-			newTableName := tree.NewTableName(tree.Identifier(viewName), tree.ObjectNamePrefix{
-				CatalogName:     tbl.CatalogName, // TODO unused now, if used in some code, that will be save in view
-				SchemaName:      tree.Identifier(""),
-				ExplicitCatalog: false,
-				ExplicitSchema:  false,
-			})
-			return builder.buildTable(newTableName, ctx)
+				newTableName := tree.NewTableName(tree.Identifier(viewName), tree.ObjectNamePrefix{
+					CatalogName:     tbl.CatalogName, // TODO unused now, if used in some code, that will be save in view
+					SchemaName:      tree.Identifier(""),
+					ExplicitCatalog: false,
+					ExplicitSchema:  false,
+				})
+				return builder.buildTable(newTableName, ctx)
+			}
 		}
 
 		nodeID = builder.appendNode(&plan.Node{
@@ -2082,269 +2113,4 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr)
 	}
 
 	return nodeID, cantPushdown
-}
-
-func (builder *QueryBuilder) pushdownSemiAntiJoins(nodeID int32) int32 {
-	node := builder.qry.Nodes[nodeID]
-
-	for i, childID := range node.Children {
-		node.Children[i] = builder.pushdownSemiAntiJoins(childID)
-	}
-
-	if node.NodeType != plan.Node_JOIN {
-		return nodeID
-	}
-
-	if node.JoinType != plan.Node_SEMI && node.JoinType != plan.Node_ANTI {
-		return nodeID
-	}
-
-	var targetNode *plan.Node
-	var targetSide int32
-
-	joinNode := builder.qry.Nodes[node.Children[0]]
-
-	for {
-		if joinNode.NodeType != plan.Node_JOIN {
-			break
-		}
-
-		if joinNode.JoinType != plan.Node_INNER && joinNode.JoinType != plan.Node_LEFT {
-			break
-		}
-
-		leftTags := make(map[int32]*Binding)
-		for _, tag := range builder.enumerateTags(joinNode.Children[0]) {
-			leftTags[tag] = nil
-		}
-
-		rightTags := make(map[int32]*Binding)
-		for _, tag := range builder.enumerateTags(joinNode.Children[1]) {
-			rightTags[tag] = nil
-		}
-
-		var joinSide int8
-		for _, cond := range node.OnList {
-			joinSide |= getJoinSide(cond, leftTags, rightTags)
-		}
-
-		if joinSide == JoinSideLeft {
-			targetNode = joinNode
-			targetSide = 0
-			joinNode = builder.qry.Nodes[joinNode.Children[0]]
-		} else if joinNode.JoinType == plan.Node_INNER && joinSide == JoinSideRight {
-			targetNode = joinNode
-			targetSide = 1
-			joinNode = builder.qry.Nodes[joinNode.Children[1]]
-		} else {
-			break
-		}
-	}
-
-	if targetNode != nil {
-		nodeID = node.Children[0]
-		node.Children[0] = targetNode.Children[targetSide]
-		targetNode.Children[targetSide] = node.NodeId
-	}
-
-	return nodeID
-}
-
-func (builder *QueryBuilder) determineJoinOrder(nodeID int32) int32 {
-	node := builder.qry.Nodes[nodeID]
-
-	if node.NodeType != plan.Node_JOIN || node.JoinType != plan.Node_INNER {
-		if len(node.Children) > 0 {
-			for i, child := range node.Children {
-				node.Children[i] = builder.determineJoinOrder(child)
-			}
-
-			switch node.NodeType {
-			case plan.Node_JOIN:
-				leftCost := builder.qry.Nodes[node.Children[0]].Cost
-				rightCost := builder.qry.Nodes[node.Children[1]].Cost
-
-				switch node.JoinType {
-				case plan.Node_LEFT, plan.Node_RIGHT:
-					node.Cost.Card = math.Pow(leftCost.Card*rightCost.Card, 2./3.)
-
-				case plan.Node_OUTER:
-					node.Cost.Card = math.Pow(leftCost.Card*rightCost.Card, 2./3.) + leftCost.Card + rightCost.Card
-
-				case plan.Node_SEMI, plan.Node_ANTI:
-					node.Cost.Card = leftCost.Card * .7
-
-				case plan.Node_SINGLE, plan.Node_MARK:
-					node.Cost.Card = leftCost.Card
-				}
-
-			case plan.Node_AGG:
-				if len(node.GroupBy) > 0 {
-					childCost := builder.qry.Nodes[node.Children[0]].Cost
-					node.Cost = &plan.Cost{
-						Card: math.Pow(childCost.Card, 2./3.),
-					}
-				} else {
-					node.Cost = &plan.Cost{
-						Card: 1,
-					}
-				}
-
-			default:
-				childCost := builder.qry.Nodes[node.Children[0]].Cost
-				node.Cost.Card = childCost.Card
-			}
-		}
-
-		return nodeID
-	}
-
-	leaves, conds := builder.gatherJoinLeavesAndConds(node, nil, nil)
-
-	sort.Slice(leaves, func(i, j int) bool {
-		if leaves[j].Cost == nil {
-			return false
-		}
-
-		if leaves[i].Cost == nil {
-			return true
-		}
-
-		return leaves[i].Cost.Card < leaves[j].Cost.Card
-	})
-
-	leafByTag := make(map[int32]int32)
-
-	for i, leaf := range leaves {
-		tags := builder.enumerateTags(leaf.NodeId)
-
-		for _, tag := range tags {
-			leafByTag[tag] = int32(i)
-		}
-	}
-
-	nLeaf := int32(len(leaves))
-
-	adjMat := make([]bool, nLeaf*nLeaf)
-	firstConnected := nLeaf
-	visited := make([]bool, nLeaf)
-
-	for _, cond := range conds {
-		hyperEdge := make(map[int32]any)
-		getHyperEdgeFromExpr(cond, leafByTag, hyperEdge)
-
-		for i := range hyperEdge {
-			if i < firstConnected {
-				firstConnected = i
-			}
-			for j := range hyperEdge {
-				adjMat[int32(nLeaf)*i+j] = true
-			}
-		}
-	}
-
-	if firstConnected < nLeaf {
-		nodeID = leaves[firstConnected].NodeId
-		visited[firstConnected] = true
-
-		eligible := adjMat[firstConnected*nLeaf : (firstConnected+1)*nLeaf]
-
-		var leftCard, rightCard float64
-		leftCard = leaves[firstConnected].Cost.Card
-
-		for {
-			nextSibling := nLeaf
-			for i := range eligible {
-				if !visited[i] && eligible[i] {
-					nextSibling = int32(i)
-					break
-				}
-			}
-
-			if nextSibling == nLeaf {
-				break
-			}
-
-			visited[nextSibling] = true
-
-			rightCard = leaves[nextSibling].Cost.Card
-
-			children := []int32{nodeID, leaves[nextSibling].NodeId}
-			if leftCard < rightCard {
-				children[0], children[1] = children[1], children[0]
-				leftCard, rightCard = rightCard, leftCard
-			}
-
-			nodeID = builder.appendNode(&plan.Node{
-				NodeType: plan.Node_JOIN,
-				Children: children,
-				JoinType: plan.Node_INNER,
-			}, nil)
-
-			leftCard = math.Cbrt(leftCard) * rightCard
-
-			for i, adj := range adjMat[nextSibling*nLeaf : (nextSibling+1)*nLeaf] {
-				eligible[i] = eligible[i] || adj
-			}
-		}
-
-		for i := range visited {
-			if !visited[i] {
-				nodeID = builder.appendNode(&plan.Node{
-					NodeType: plan.Node_JOIN,
-					Children: []int32{nodeID, leaves[i].NodeId},
-					JoinType: plan.Node_INNER,
-				}, nil)
-			}
-		}
-	} else {
-		nodeID = builder.appendNode(&plan.Node{
-			NodeType: plan.Node_JOIN,
-			Children: []int32{leaves[0].NodeId, leaves[1].NodeId},
-			JoinType: plan.Node_INNER,
-		}, nil)
-
-		for i := 2; i < len(leaves); i++ {
-			nodeID = builder.appendNode(&plan.Node{
-				NodeType: plan.Node_JOIN,
-				Children: []int32{nodeID, leaves[i].NodeId},
-				JoinType: plan.Node_INNER,
-			}, nil)
-		}
-	}
-
-	nodeID, _ = builder.pushdownFilters(nodeID, conds)
-
-	return nodeID
-}
-
-func (builder *QueryBuilder) gatherJoinLeavesAndConds(joinNode *plan.Node, leaves []*plan.Node, conds []*plan.Expr) ([]*plan.Node, []*plan.Expr) {
-	if joinNode.NodeType != plan.Node_JOIN || joinNode.JoinType != plan.Node_INNER {
-		nodeID := builder.determineJoinOrder(joinNode.NodeId)
-		leaves = append(leaves, builder.qry.Nodes[nodeID])
-		return leaves, conds
-	}
-
-	for _, childID := range joinNode.Children {
-		leaves, conds = builder.gatherJoinLeavesAndConds(builder.qry.Nodes[childID], leaves, conds)
-	}
-
-	conds = append(conds, joinNode.OnList...)
-
-	return leaves, conds
-}
-
-func (builder *QueryBuilder) enumerateTags(nodeID int32) []int32 {
-	node := builder.qry.Nodes[nodeID]
-	if len(node.BindingTags) > 0 {
-		return node.BindingTags
-	}
-
-	var tags []int32
-
-	for _, childID := range builder.qry.Nodes[nodeID].Children {
-		tags = append(tags, builder.enumerateTags(childID)...)
-	}
-
-	return tags
 }

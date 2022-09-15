@@ -24,9 +24,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
+	"github.com/tidwall/btree"
+
+	"github.com/matrixorigin/matrixone/pkg/defines"
 )
 
 type TenantInfo struct {
@@ -89,6 +93,10 @@ func (ti *TenantInfo) IsDefaultRole() bool {
 
 func (ti *TenantInfo) IsMoAdminRole() bool {
 	return ti.GetDefaultRole() == moAdminRoleName
+}
+
+func (ti *TenantInfo) IsAdminRole() bool {
+	return ti.GetDefaultRoleID() == moAdminRoleID || ti.GetDefaultRoleID() == accountAdminRoleID
 }
 
 func GetDefaultTenant() string {
@@ -208,30 +216,72 @@ const (
 	dumpDefaultRoleID = moAdminRoleID
 )
 
+type objectType int
+
 const (
-	objectTypeDatabase = "database"
-	objectTypeTable    = "table"
-	objectTypeFunction = "function"
-	objectTypeView     = "view"
-	objectTypeIndex    = "index"
+	objectTypeDatabase objectType = iota
+	objectTypeTable
+	objectTypeFunction
+	objectTypeAccount
+	objectTypeNone
 
 	objectIDAll = 0 //denotes all objects in the object type
 )
 
+func (ot objectType) String() string {
+	switch ot {
+	case objectTypeDatabase:
+		return "database"
+	case objectTypeTable:
+		return "table"
+	case objectTypeFunction:
+		return "function"
+	case objectTypeAccount:
+		return "account"
+	case objectTypeNone:
+		return "none"
+	}
+	panic("unsupported object type")
+}
+
+type privilegeLevelType int
+
 const (
 	//*
-	privilegeLevelStar = "*"
+	privilegeLevelStar privilegeLevelType = iota
 	//*.*
-	//privilegeLevelStarStar = "**"
+	privilegeLevelStarStar
+	//db_name
+	privilegeLevelDatabase
 	//db_name.*
-	privilegeLevelDatabaseStar = "_*"
+	privilegeLevelDatabaseStar
 	//db_name.tbl_name
-	//privilegeLevelDatabaseTable = "d_t"
+	privilegeLevelDatabaseTable
 	//tbl_name
-	privilegeLevelTable = "t"
+	privilegeLevelTable
 	//db_name.routine_name
-	//privilegeLevelRoutine = "r"
+	privilegeLevelRoutine
 )
+
+func (plt privilegeLevelType) String() string {
+	switch plt {
+	case privilegeLevelStar:
+		return "*"
+	case privilegeLevelStarStar:
+		return "*.*"
+	case privilegeLevelDatabase:
+		return "d"
+	case privilegeLevelDatabaseStar:
+		return "d.*"
+	case privilegeLevelDatabaseTable:
+		return "d.t"
+	case privilegeLevelTable:
+		return "t"
+	case privilegeLevelRoutine:
+		return "r"
+	}
+	panic(fmt.Sprintf("no such privilege level type %d", plt))
+}
 
 type PrivilegeType int
 
@@ -250,15 +300,16 @@ const (
 	PrivilegeTypeShowDatabases
 	PrivilegeTypeConnect
 	PrivilegeTypeManageGrants
-	PrivilegeTypeAll
-	PrivilegeTypeOwnership
+	PrivilegeTypeAccountAll
+	PrivilegeTypeAccountOwnership
+	PrivilegeTypeUserOwnership
+	PrivilegeTypeRoleOwnership
 	PrivilegeTypeShowTables
-	PrivilegeTypeCreateTable
-	PrivilegeTypeCreateView
-	PrivilegeTypeDropTable
-	PrivilegeTypeDropView
-	PrivilegeTypeAlterTable
-	PrivilegeTypeAlterView
+	PrivilegeTypeCreateObject //includes: table, view, stream, sequence, function, dblink,etc
+	PrivilegeTypeDropObject
+	PrivilegeTypeAlterObject
+	PrivilegeTypeDatabaseAll
+	PrivilegeTypeDatabaseOwnership
 	PrivilegeTypeSelect
 	PrivilegeTypeInsert
 	PrivilegeTypeUpdate
@@ -266,6 +317,8 @@ const (
 	PrivilegeTypeDelete
 	PrivilegeTypeReference
 	PrivilegeTypeIndex //include create/alter/drop index
+	PrivilegeTypeTableAll
+	PrivilegeTypeTableOwnership
 	PrivilegeTypeExecute
 )
 
@@ -346,24 +399,26 @@ func (pt PrivilegeType) String() string {
 		return "connect"
 	case PrivilegeTypeManageGrants:
 		return "manage grants"
-	case PrivilegeTypeAll:
-		return "all"
-	case PrivilegeTypeOwnership:
-		return "ownership"
+	case PrivilegeTypeAccountAll:
+		return "account all"
+	case PrivilegeTypeAccountOwnership:
+		return "account ownership"
+	case PrivilegeTypeUserOwnership:
+		return "user ownership"
+	case PrivilegeTypeRoleOwnership:
+		return "role ownership"
 	case PrivilegeTypeShowTables:
 		return "show tables"
-	case PrivilegeTypeCreateTable:
-		return "create table"
-	case PrivilegeTypeCreateView:
-		return "create view"
-	case PrivilegeTypeDropTable:
-		return "drop table"
-	case PrivilegeTypeDropView:
-		return "drop view"
-	case PrivilegeTypeAlterTable:
-		return "alter table"
-	case PrivilegeTypeAlterView:
-		return "alter view"
+	case PrivilegeTypeCreateObject:
+		return "create object"
+	case PrivilegeTypeDropObject:
+		return "drop object"
+	case PrivilegeTypeAlterObject:
+		return "alter object"
+	case PrivilegeTypeDatabaseAll:
+		return "database all"
+	case PrivilegeTypeDatabaseOwnership:
+		return "database ownership"
 	case PrivilegeTypeSelect:
 		return "select"
 	case PrivilegeTypeInsert:
@@ -378,6 +433,10 @@ func (pt PrivilegeType) String() string {
 		return "reference"
 	case PrivilegeTypeIndex:
 		return "create/alter/drop index"
+	case PrivilegeTypeTableAll:
+		return "table all"
+	case PrivilegeTypeTableOwnership:
+		return "table ownership"
 	case PrivilegeTypeExecute:
 		return "execute"
 	}
@@ -414,24 +473,26 @@ func (pt PrivilegeType) Scope() PrivilegeScope {
 		return PrivilegeScopeAccount
 	case PrivilegeTypeManageGrants:
 		return PrivilegeScopeAccount
-	case PrivilegeTypeAll:
-		return PrivilegeScopeAccount | PrivilegeScopeDatabase | PrivilegeScopeTable
-	case PrivilegeTypeOwnership:
-		return PrivilegeScopeAccount | PrivilegeScopeUser | PrivilegeScopeRole | PrivilegeScopeDatabase | PrivilegeScopeTable
+	case PrivilegeTypeAccountAll:
+		return PrivilegeScopeAccount
+	case PrivilegeTypeAccountOwnership:
+		return PrivilegeScopeAccount
+	case PrivilegeTypeUserOwnership:
+		return PrivilegeScopeUser
+	case PrivilegeTypeRoleOwnership:
+		return PrivilegeScopeRole
 	case PrivilegeTypeShowTables:
 		return PrivilegeScopeDatabase
-	case PrivilegeTypeCreateTable:
+	case PrivilegeTypeCreateObject:
 		return PrivilegeScopeDatabase
-	case PrivilegeTypeCreateView:
-		return PrivilegeScopeTable
-	case PrivilegeTypeDropTable:
+	case PrivilegeTypeDropObject:
 		return PrivilegeScopeDatabase
-	case PrivilegeTypeDropView:
-		return PrivilegeScopeTable
-	case PrivilegeTypeAlterTable:
+	case PrivilegeTypeAlterObject:
 		return PrivilegeScopeDatabase
-	case PrivilegeTypeAlterView:
-		return PrivilegeScopeTable
+	case PrivilegeTypeDatabaseAll:
+		return PrivilegeScopeDatabase
+	case PrivilegeTypeDatabaseOwnership:
+		return PrivilegeScopeDatabase
 	case PrivilegeTypeSelect:
 		return PrivilegeScopeTable
 	case PrivilegeTypeInsert:
@@ -445,6 +506,10 @@ func (pt PrivilegeType) Scope() PrivilegeScope {
 	case PrivilegeTypeReference:
 		return PrivilegeScopeTable
 	case PrivilegeTypeIndex:
+		return PrivilegeScopeTable
+	case PrivilegeTypeTableAll:
+		return PrivilegeScopeTable
+	case PrivilegeTypeTableOwnership:
 		return PrivilegeScopeTable
 	case PrivilegeTypeExecute:
 		return PrivilegeScopeTable
@@ -465,7 +530,7 @@ var (
 		"mo_role":       0,
 		"mo_user_grant": 0,
 		"mo_role_grant": 0,
-		"mo_role_priv":  0,
+		"mo_role_privs": 0,
 	}
 	//the sqls creating many tables for the tenant.
 	//Wrap them in a transaction
@@ -512,7 +577,7 @@ var (
 				granted_time timestamp,
 				with_grant_option bool
 			);`,
-		`create table mo_role_priv(
+		`create table mo_role_privs(
 				role_id int,
 				role_name  varchar(100),
 				obj_type  varchar(16),
@@ -553,7 +618,7 @@ var (
 				owner,
 				default_role
     		) values(%d,%s,"%s","%s","%s","%s",%s,"%s",%d,%d,%d);`
-	initMoRolePrivFormat = `insert into mo_catalog.mo_role_priv(
+	initMoRolePrivFormat = `insert into mo_catalog.mo_role_privs(
 				role_id,
 				role_name,
 				obj_type,
@@ -584,6 +649,105 @@ var (
 	roleIdOfRoleFormat = `select role_id from mo_catalog.mo_role where role_name = "%s";`
 
 	getRoleOfUserFormat = `select r.role_id from  mo_catalog.mo_role r, mo_catalog.mo_user_grant ug where ug.role_id = r.role_id and ug.user_id = %d and r.role_name = "%s";`
+
+	getRoleIdOfUserIdFormat = `select role_id,with_grant_option from mo_catalog.mo_user_grant where user_id = %d;`
+
+	getInheritedRoleIdOfRoleIdFormat = `select granted_id,with_grant_option from mo_catalog.mo_role_grant where grantee_id = %d;`
+
+	checkRoleHasPrivilegeFormat = `select role_id,with_grant_option from mo_catalog.mo_role_privs where role_id = %d and obj_type = "%s" and obj_id = %d and privilege_id = %d;`
+
+	//For object_type : table, privilege_level : *.*
+	checkWithGrantOptionForTableStarStar = `select rp.privilege_id,rp.with_grant_option
+				from mo_catalog.mo_database d, mo_catalog.mo_tables t, mo_catalog.mo_role_privs rp
+				where d.dat_id = t.reldatabase_id
+					and rp.obj_id = 0
+					and rp.obj_type = "table"
+					and rp.role_id = %d
+					and rp.privilege_id = %d
+					and rp.privilege_level = "*.*"
+					and rp.with_grant_option = true;`
+
+	//For object_type : table, privilege_level : db.*
+	checkWithGrantOptionForTableDatabaseStar = `select rp.privilege_id,rp.with_grant_option
+				from mo_catalog.mo_database d, mo_catalog.mo_tables t, mo_catalog.mo_role_privs rp
+				where d.dat_id = t.reldatabase_id
+					and rp.obj_id = 0
+					and rp.obj_type = "table"
+					and rp.role_id = %d
+					and rp.privilege_id = %d
+					and rp.privilege_level = "d.*"
+					and d.datname = "%s"
+					and rp.with_grant_option = true;`
+
+	//For object_type : table, privilege_level : db.table
+	checkWithGrantOptionForTableDatabaseTable = `select rp.privilege_id,rp.with_grant_option
+				from mo_catalog.mo_database d, mo_catalog.mo_tables t, mo_catalog.mo_role_privs rp
+				where d.dat_id = t.reldatabase_id
+					and rp.obj_id = t.rel_id
+					and rp.obj_type = "table"
+					and rp.role_id = %d
+					and rp.privilege_id = %d
+					and rp.privilege_level = "d.t"
+					and d.datname = "%s"
+					and t.relname = "%s"
+					and rp.with_grant_option = true;`
+
+	//For object_type : database, privilege_level : *
+	checkWithGrantOptionForDatabaseStar = `select rp.privilege_id,rp.with_grant_option
+				from mo_catalog.mo_database d, mo_catalog.mo_tables t, mo_catalog.mo_role_privs rp
+				where d.dat_id = t.reldatabase_id
+					and rp.obj_id = 0
+					and rp.obj_type = "database"
+					and rp.role_id = %d
+					and rp.privilege_id = %d
+					and rp.privilege_level = "*"
+					and rp.with_grant_option = true;`
+
+	//For object_type : database, privilege_level : *.*
+	checkWithGrantOptionForDatabaseStarStar = `select rp.privilege_id,rp.with_grant_option
+				from mo_catalog.mo_database d, mo_catalog.mo_tables t, mo_catalog.mo_role_privs rp
+				where d.dat_id = t.reldatabase_id
+					and rp.obj_id = 0
+					and rp.obj_type = "database"
+					and rp.role_id = %d
+					and rp.privilege_id = %d
+					and rp.privilege_level = "*.*"
+					and rp.with_grant_option = true;`
+
+	//For object_type : database, privilege_level : db
+	checkWithGrantOptionForDatabaseDB = `select rp.privilege_id,rp.with_grant_option
+				from mo_catalog.mo_database d, mo_catalog.mo_tables t, mo_catalog.mo_role_privs rp
+				where d.dat_id = t.reldatabase_id
+					and rp.obj_id = d.dat_id
+					and rp.obj_type = "database"
+					and rp.role_id = %d
+					and rp.privilege_id = %d
+					and rp.privilege_level = "d"
+					and  d.datname = "%s"
+					and rp.with_grant_option = true;`
+
+	//For object_type : account, privilege_level : *
+	checkWithGrantOptionForAccountStar = `select rp.privilege_id,rp.with_grant_option
+				from mo_catalog.mo_database d, mo_catalog.mo_tables t, mo_catalog.mo_role_privs rp
+				where d.dat_id = t.reldatabase_id
+					and rp.obj_id = 0
+					and rp.obj_type = "account"
+					and rp.role_id = %d
+					and rp.privilege_id = %d
+					and rp.privilege_level = "**"
+					and rp.with_grant_option = true;`
+
+	//check the role has the table level privilege
+	checkRoleHasTableLevelPrivilegeFormat = `select rp.privilege_id,rp.with_grant_option
+				from mo_catalog.mo_database d, mo_catalog.mo_tables t, mo_catalog.mo_role_privs rp
+				where d.dat_id = t.reldatabase_id
+					and rp.obj_id = t.rel_id
+					and rp.obj_type = "table"
+					and rp.role_id = %d
+					and rp.privilege_id = %d
+					and rp.privilege_level in ("d.t","t")
+					and d.datname = "%s"
+					and t.relname = "%s";`
 )
 
 func getSqlForCheckTenant(tenant string) string {
@@ -606,93 +770,1042 @@ func getSqlForRoleOfUser(userID int, roleName string) string {
 	return fmt.Sprintf(getRoleOfUserFormat, userID, roleName)
 }
 
-type role struct {
-	id   int
-	name string
+func getSqlForRoleIdOfUserId(userId int) string {
+	return fmt.Sprintf(getRoleIdOfUserIdFormat, userId)
 }
 
-type object struct {
-	typ string
-	id  int
+func getSqlForInheritedRoleIdOfRoleId(roleId int64) string {
+	return fmt.Sprintf(getInheritedRoleIdOfRoleIdFormat, roleId)
 }
+
+func getSqlForCheckRoleHasPrivilege(roleId int64, objType objectType, objId, privilegeId int64) string {
+	return fmt.Sprintf(checkRoleHasPrivilegeFormat, roleId, objType, objId, privilegeId)
+}
+
+func getSqlForCheckWithGrantOptionForTableStarStar(roleId int64, privId PrivilegeType) string {
+	return fmt.Sprintf(checkWithGrantOptionForTableStarStar, roleId, privId)
+}
+
+func getSqlForCheckWithGrantOptionForTableDatabaseStar(roleId int64, privId PrivilegeType, dbName string) string {
+	return fmt.Sprintf(checkWithGrantOptionForTableDatabaseStar, roleId, privId, dbName)
+}
+
+func getSqlForCheckWithGrantOptionForTableDatabaseTable(roleId int64, privId PrivilegeType, dbName string, tableName string) string {
+	return fmt.Sprintf(checkWithGrantOptionForTableDatabaseTable, roleId, privId, dbName, tableName)
+}
+
+func getSqlForCheckWithGrantOptionForDatabaseStar(roleId int64, privId PrivilegeType) string {
+	return fmt.Sprintf(checkWithGrantOptionForDatabaseStar, roleId, privId)
+}
+
+func getSqlForCheckWithGrantOptionForDatabaseStarStar(roleId int64, privId PrivilegeType) string {
+	return fmt.Sprintf(checkWithGrantOptionForDatabaseStarStar, roleId, privId)
+}
+
+func getSqlForCheckWithGrantOptionForDatabaseDB(roleId int64, privId PrivilegeType, dbName string) string {
+	return fmt.Sprintf(checkWithGrantOptionForDatabaseDB, roleId, privId, dbName)
+}
+
+func getSqlForCheckWithGrantOptionForAccountStar(roleId int64, privId PrivilegeType) string {
+	return fmt.Sprintf(checkWithGrantOptionForAccountStar, roleId, privId)
+}
+
+func getSqlForCheckRoleHasTableLevelPrivilegeFormat(roleId int64, privId PrivilegeType, dbName string, tableName string) string {
+	return fmt.Sprintf(checkRoleHasTableLevelPrivilegeFormat, roleId, privId, dbName, tableName)
+}
+
+type specialTag int
+
+const (
+	specialTagNone            specialTag = 0
+	specialTagAdmin           specialTag = 1
+	specialTagWithGrantOption specialTag = 2
+	specialTagOwnerOfObject   specialTag = 4
+)
+
+type privilegeKind int
+
+const (
+	privilegeKindGeneral privilegeKind = iota //as same as definition in the privilegeEntriesMap
+	privilegeKindInherit                      //General + with_grant_option
+	privilegeKindSpecial                      //no obj_type,obj_id,privilege_level. only needs (MOADMIN / ACCOUNTADMIN, with_grant_option, owner of object)
+	privilegeKindNone                         //does not need any privilege
+)
 
 type privilege struct {
-	id              PrivilegeType
-	level           string
+	kind privilegeKind
+	//account: the privilege can be defined before constructing the plan.
+	//database: (do not need the database_id) the privilege can be defined before constructing the plan.
+	//table: need table id. the privilege can be defined after constructing the plan.
+	//function: need function id ?
+	objType objectType
+	entries []privilegeEntry
+	special specialTag
+}
+
+func (p *privilege) objectType() objectType {
+	return p.objType
+}
+
+func (p *privilege) privilegeKind() privilegeKind {
+	return p.kind
+}
+
+// privilegeEntry denotes the entry of the privilege that appears in the table mo_role_privs
+type privilegeEntry struct {
+	privilegeId     PrivilegeType
+	privilegeLevel  privilegeLevelType
+	objType         objectType
+	objId           int
 	withGrantOption bool
+	//for object type table
+	databaseName string
+	tableName    string
 }
 
 var (
-	//the content to fill the table mo_role_priv
-	sysRoles = []role{
-		{moAdminRoleID, moAdminRoleName},
-		{publicRoleID, publicRoleName},
+	//initial privilege entries
+	privilegeEntriesMap = map[PrivilegeType]privilegeEntry{
+		PrivilegeTypeCreateAccount:     {PrivilegeTypeCreateAccount, privilegeLevelStar, objectTypeAccount, objectIDAll, false, "", ""},
+		PrivilegeTypeDropAccount:       {PrivilegeTypeDropAccount, privilegeLevelStar, objectTypeAccount, objectIDAll, false, "", ""},
+		PrivilegeTypeAlterAccount:      {PrivilegeTypeAlterAccount, privilegeLevelStar, objectTypeAccount, objectIDAll, false, "", ""},
+		PrivilegeTypeCreateUser:        {PrivilegeTypeCreateUser, privilegeLevelStar, objectTypeAccount, objectIDAll, true, "", ""},
+		PrivilegeTypeDropUser:          {PrivilegeTypeDropUser, privilegeLevelStar, objectTypeAccount, objectIDAll, true, "", ""},
+		PrivilegeTypeAlterUser:         {PrivilegeTypeAlterUser, privilegeLevelStar, objectTypeAccount, objectIDAll, true, "", ""},
+		PrivilegeTypeCreateRole:        {PrivilegeTypeCreateRole, privilegeLevelStar, objectTypeAccount, objectIDAll, true, "", ""},
+		PrivilegeTypeDropRole:          {PrivilegeTypeDropRole, privilegeLevelStar, objectTypeAccount, objectIDAll, true, "", ""},
+		PrivilegeTypeAlterRole:         {PrivilegeTypeAlterRole, privilegeLevelStar, objectTypeAccount, objectIDAll, true, "", ""},
+		PrivilegeTypeCreateDatabase:    {PrivilegeTypeCreateDatabase, privilegeLevelStar, objectTypeAccount, objectIDAll, true, "", ""},
+		PrivilegeTypeDropDatabase:      {PrivilegeTypeDropDatabase, privilegeLevelStar, objectTypeAccount, objectIDAll, true, "", ""},
+		PrivilegeTypeShowDatabases:     {PrivilegeTypeShowDatabases, privilegeLevelStar, objectTypeAccount, objectIDAll, true, "", ""},
+		PrivilegeTypeConnect:           {PrivilegeTypeConnect, privilegeLevelStar, objectTypeAccount, objectIDAll, true, "", ""},
+		PrivilegeTypeManageGrants:      {PrivilegeTypeManageGrants, privilegeLevelStar, objectTypeAccount, objectIDAll, true, "", ""},
+		PrivilegeTypeAccountAll:        {PrivilegeTypeAccountAll, privilegeLevelStar, objectTypeAccount, objectIDAll, true, "", ""},
+		PrivilegeTypeAccountOwnership:  {PrivilegeTypeAccountOwnership, privilegeLevelStar, objectTypeAccount, objectIDAll, true, "", ""},
+		PrivilegeTypeUserOwnership:     {PrivilegeTypeUserOwnership, privilegeLevelStar, objectTypeAccount, objectIDAll, true, "", ""},
+		PrivilegeTypeRoleOwnership:     {PrivilegeTypeRoleOwnership, privilegeLevelStar, objectTypeAccount, objectIDAll, true, "", ""},
+		PrivilegeTypeShowTables:        {PrivilegeTypeShowTables, privilegeLevelDatabaseStar, objectTypeDatabase, objectIDAll, true, "", ""},
+		PrivilegeTypeCreateObject:      {PrivilegeTypeCreateObject, privilegeLevelDatabaseStar, objectTypeDatabase, objectIDAll, true, "", ""},
+		PrivilegeTypeDropObject:        {PrivilegeTypeDropObject, privilegeLevelDatabaseStar, objectTypeDatabase, objectIDAll, true, "", ""},
+		PrivilegeTypeAlterObject:       {PrivilegeTypeAlterObject, privilegeLevelDatabaseStar, objectTypeDatabase, objectIDAll, true, "", ""},
+		PrivilegeTypeDatabaseAll:       {PrivilegeTypeDatabaseAll, privilegeLevelStar, objectTypeAccount, objectIDAll, true, "", ""},
+		PrivilegeTypeDatabaseOwnership: {PrivilegeTypeDatabaseOwnership, privilegeLevelStar, objectTypeAccount, objectIDAll, true, "", ""},
+		PrivilegeTypeSelect:            {PrivilegeTypeSelect, privilegeLevelTable, objectTypeTable, objectIDAll, true, "", ""},
+		PrivilegeTypeInsert:            {PrivilegeTypeInsert, privilegeLevelTable, objectTypeTable, objectIDAll, true, "", ""},
+		PrivilegeTypeUpdate:            {PrivilegeTypeUpdate, privilegeLevelTable, objectTypeTable, objectIDAll, true, "", ""},
+		PrivilegeTypeTruncate:          {PrivilegeTypeTruncate, privilegeLevelTable, objectTypeTable, objectIDAll, true, "", ""},
+		PrivilegeTypeDelete:            {PrivilegeTypeDelete, privilegeLevelTable, objectTypeTable, objectIDAll, true, "", ""},
+		PrivilegeTypeReference:         {PrivilegeTypeReference, privilegeLevelTable, objectTypeTable, objectIDAll, true, "", ""},
+		PrivilegeTypeIndex:             {PrivilegeTypeIndex, privilegeLevelTable, objectTypeTable, objectIDAll, true, "", ""},
+		PrivilegeTypeTableAll:          {PrivilegeTypeTableAll, privilegeLevelStar, objectTypeAccount, objectIDAll, true, "", ""},
+		PrivilegeTypeTableOwnership:    {PrivilegeTypeTableOwnership, privilegeLevelStar, objectTypeAccount, objectIDAll, true, "", ""},
+		PrivilegeTypeExecute:           {PrivilegeTypeExecute, privilegeLevelRoutine, objectTypeFunction, objectIDAll, true, "", ""},
 	}
 
-	sysObjects = []object{
-		{objectTypeDatabase, objectIDAll},
-		{objectTypeTable, objectIDAll},
-		{objectTypeView, objectIDAll},
-		{objectTypeIndex, objectIDAll},
-		{objectTypeFunction, objectIDAll},
+	//the initial entries of mo_role_privs for the role 'moadmin'
+	entriesOfMoAdminForMoRolePrivsFor = []PrivilegeType{
+		PrivilegeTypeCreateAccount,
+		PrivilegeTypeDropAccount,
+		PrivilegeTypeAlterAccount,
+		PrivilegeTypeCreateUser,
+		PrivilegeTypeDropUser,
+		PrivilegeTypeAlterUser,
+		PrivilegeTypeCreateRole,
+		PrivilegeTypeDropRole,
+		PrivilegeTypeAlterRole,
+		PrivilegeTypeCreateDatabase,
+		PrivilegeTypeDropDatabase,
+		PrivilegeTypeShowDatabases,
+		PrivilegeTypeConnect,
+		PrivilegeTypeManageGrants,
+		PrivilegeTypeAccountAll,
+		PrivilegeTypeAccountOwnership,
+		PrivilegeTypeUserOwnership,
+		PrivilegeTypeRoleOwnership,
+		PrivilegeTypeShowTables,
+		PrivilegeTypeCreateObject,
+		PrivilegeTypeDropObject,
+		PrivilegeTypeAlterObject,
+		PrivilegeTypeDatabaseAll,
+		PrivilegeTypeDatabaseOwnership,
+		PrivilegeTypeSelect,
+		PrivilegeTypeInsert,
+		PrivilegeTypeUpdate,
+		PrivilegeTypeTruncate,
+		PrivilegeTypeDelete,
+		PrivilegeTypeReference,
+		PrivilegeTypeIndex,
+		PrivilegeTypeTableAll,
+		PrivilegeTypeTableOwnership,
+		PrivilegeTypeExecute,
 	}
 
-	sysPrivileges = []privilege{
-		{PrivilegeTypeCreateAccount, privilegeLevelStar, false},
-		{PrivilegeTypeDropAccount, privilegeLevelStar, false},
-		{PrivilegeTypeAlterAccount, privilegeLevelStar, false},
-		{PrivilegeTypeCreateUser, privilegeLevelStar, true},
-		{PrivilegeTypeDropUser, privilegeLevelStar, true},
-		{PrivilegeTypeAlterUser, privilegeLevelStar, true},
-		{PrivilegeTypeCreateRole, privilegeLevelStar, true},
-		{PrivilegeTypeDropRole, privilegeLevelStar, true},
-		{PrivilegeTypeAlterRole, privilegeLevelStar, true},
-		{PrivilegeTypeCreateDatabase, privilegeLevelStar, true},
-		{PrivilegeTypeDropDatabase, privilegeLevelStar, true},
-		{PrivilegeTypeShowDatabases, privilegeLevelStar, true},
-		{PrivilegeTypeConnect, privilegeLevelStar, true},
-		{PrivilegeTypeManageGrants, privilegeLevelStar, true},
-		{PrivilegeTypeAll, privilegeLevelStar, true},
-		{PrivilegeTypeAll, privilegeLevelDatabaseStar, true},
-		{PrivilegeTypeAll, privilegeLevelTable, true},
-		{PrivilegeTypeOwnership, privilegeLevelStar, true},         //multiple
-		{PrivilegeTypeOwnership, privilegeLevelStar, true},         //multiple
-		{PrivilegeTypeOwnership, privilegeLevelStar, true},         //multiple
-		{PrivilegeTypeOwnership, privilegeLevelDatabaseStar, true}, //multiple
-		{PrivilegeTypeOwnership, privilegeLevelTable, true},        //multiple
-		{PrivilegeTypeShowTables, privilegeLevelDatabaseStar, true},
-		{PrivilegeTypeCreateTable, privilegeLevelDatabaseStar, true},
-		{PrivilegeTypeDropTable, privilegeLevelDatabaseStar, true},
-		{PrivilegeTypeAlterTable, privilegeLevelDatabaseStar, true},
-		{PrivilegeTypeSelect, privilegeLevelTable, true},
-		{PrivilegeTypeInsert, privilegeLevelTable, true},
-		{PrivilegeTypeUpdate, privilegeLevelTable, true},
-		{PrivilegeTypeTruncate, privilegeLevelTable, true},
-		{PrivilegeTypeDelete, privilegeLevelTable, true},
-		{PrivilegeTypeReference, privilegeLevelTable, true},
-		{PrivilegeTypeCreateView, privilegeLevelTable, true},
-		{PrivilegeTypeDropView, privilegeLevelTable, true},
-		{PrivilegeTypeAlterView, privilegeLevelTable, true},
-		{PrivilegeTypeIndex, privilegeLevelTable, true},
-		{PrivilegeTypeExecute, privilegeLevelTable, true},
+	//the initial entries of mo_role_privs for the role 'accountadmin'
+	entriesOfAccountAdminForMoRolePrivsFor = []PrivilegeType{
+		PrivilegeTypeCreateUser,
+		PrivilegeTypeDropUser,
+		PrivilegeTypeAlterUser,
+		PrivilegeTypeCreateRole,
+		PrivilegeTypeDropRole,
+		PrivilegeTypeAlterRole,
+		PrivilegeTypeCreateDatabase,
+		PrivilegeTypeDropDatabase,
+		PrivilegeTypeShowDatabases,
+		PrivilegeTypeConnect,
+		PrivilegeTypeManageGrants,
+		PrivilegeTypeAccountAll,
+		PrivilegeTypeAccountOwnership,
+		PrivilegeTypeUserOwnership,
+		PrivilegeTypeRoleOwnership,
+		PrivilegeTypeShowTables,
+		PrivilegeTypeCreateObject,
+		PrivilegeTypeDropObject,
+		PrivilegeTypeAlterObject,
+		PrivilegeTypeDatabaseAll,
+		PrivilegeTypeDatabaseOwnership,
+		PrivilegeTypeSelect,
+		PrivilegeTypeInsert,
+		PrivilegeTypeUpdate,
+		PrivilegeTypeTruncate,
+		PrivilegeTypeDelete,
+		PrivilegeTypeReference,
+		PrivilegeTypeIndex,
+		PrivilegeTypeTableAll,
+		PrivilegeTypeTableOwnership,
+		PrivilegeTypeExecute,
 	}
 
-	applicationLevelRoles = []role{
-		{publicRoleID, publicRoleName},
-	}
-
-	applicationLevelObjects = []object{
-		{objectTypeDatabase, objectIDAll},
-		{objectTypeTable, objectIDAll},
-		{objectTypeView, objectIDAll},
-		{objectTypeIndex, objectIDAll},
-		{objectTypeFunction, objectIDAll},
-	}
-
-	applicationLevelPrivileges = []privilege{
-		{PrivilegeTypeConnect, privilegeLevelStar, true},
+	//the initial entries of mo_role_privs for the role 'public'
+	entriesOfPublicForMoRolePrivsFor = []PrivilegeType{
+		PrivilegeTypeConnect,
 	}
 )
+
+// determinePrivilegeSetOfStatement decides the privileges that the statement needs before running it.
+// That is the Set P for the privilege Set .
+func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
+	typs := make([]PrivilegeType, 0, 5)
+	kind := privilegeKindGeneral
+	special := specialTagNone
+	objType := objectTypeAccount
+	switch st := stmt.(type) {
+	case *tree.CreateAccount:
+		typs = append(typs, PrivilegeTypeCreateAccount)
+	case *tree.DropAccount:
+		typs = append(typs, PrivilegeTypeDropAccount)
+	case *tree.AlterAccount:
+		typs = append(typs, PrivilegeTypeAlterAccount)
+	case *tree.CreateUser:
+		typs = append(typs, PrivilegeTypeCreateUser, PrivilegeTypeAccountAll /*, PrivilegeTypeAccountOwnership*/)
+	case *tree.DropUser:
+		typs = append(typs, PrivilegeTypeDropUser, PrivilegeTypeAccountAll /*, PrivilegeTypeAccountOwnership, PrivilegeTypeUserOwnership*/)
+	case *tree.AlterUser:
+		typs = append(typs, PrivilegeTypeAlterUser, PrivilegeTypeAccountAll /*, PrivilegeTypeAccountOwnership, PrivilegeTypeUserOwnership*/)
+	case *tree.CreateRole:
+		typs = append(typs, PrivilegeTypeCreateRole, PrivilegeTypeAccountAll /*, PrivilegeTypeAccountOwnership*/)
+	case *tree.DropRole:
+		typs = append(typs, PrivilegeTypeDropRole, PrivilegeTypeAccountAll /*, PrivilegeTypeAccountOwnership, PrivilegeTypeRoleOwnership*/)
+	case *tree.GrantRole:
+		kind = privilegeKindInherit
+		typs = append(typs, PrivilegeTypeManageGrants, PrivilegeTypeAccountAll /*, PrivilegeTypeAccountOwnership, PrivilegeTypeRoleOwnership*/)
+	case *tree.RevokeRole:
+		typs = append(typs, PrivilegeTypeManageGrants, PrivilegeTypeAccountAll /*, PrivilegeTypeAccountOwnership, PrivilegeTypeRoleOwnership*/)
+	case *tree.GrantPrivilege:
+		objType = objectTypeNone
+		kind = privilegeKindSpecial
+		special = specialTagAdmin | specialTagWithGrantOption | specialTagOwnerOfObject
+	case *tree.RevokePrivilege:
+		objType = objectTypeNone
+		kind = privilegeKindSpecial
+		special = specialTagAdmin
+	case *tree.CreateDatabase:
+		typs = append(typs, PrivilegeTypeCreateDatabase, PrivilegeTypeAccountAll /*, PrivilegeTypeAccountOwnership*/)
+	case *tree.DropDatabase:
+		typs = append(typs, PrivilegeTypeDropDatabase, PrivilegeTypeAccountAll /*, PrivilegeTypeAccountOwnership*/)
+	case *tree.ShowDatabases:
+		typs = append(typs, PrivilegeTypeShowDatabases, PrivilegeTypeAccountAll /*, PrivilegeTypeAccountOwnership*/)
+	case *tree.Use:
+		if st.IsUseRole() {
+			objType = objectTypeNone
+			kind = privilegeKindNone
+		} else {
+			typs = append(typs, PrivilegeTypeConnect, PrivilegeTypeAccountAll /*, PrivilegeTypeAccountOwnership*/)
+		}
+	case *tree.ShowTables, *tree.ShowCreateTable, *tree.ShowColumns, *tree.ShowCreateView, *tree.ShowCreateDatabase:
+		objType = objectTypeDatabase
+		typs = append(typs, PrivilegeTypeShowTables, PrivilegeTypeDatabaseAll /*PrivilegeTypeDatabaseOwnership*/)
+	case *tree.CreateTable, *tree.CreateView:
+		objType = objectTypeDatabase
+		typs = append(typs, PrivilegeTypeCreateObject, PrivilegeTypeDatabaseAll /* PrivilegeTypeDatabaseOwnership*/)
+	case *tree.DropTable, *tree.DropView:
+		objType = objectTypeDatabase
+		typs = append(typs, PrivilegeTypeDropObject, PrivilegeTypeDatabaseAll /*PrivilegeTypeDatabaseOwnership*/)
+	case *tree.Select:
+		objType = objectTypeTable
+		typs = append(typs, PrivilegeTypeSelect, PrivilegeTypeTableAll /*PrivilegeTypeTableOwnership*/)
+	case *tree.Insert, *tree.Load:
+		objType = objectTypeTable
+		typs = append(typs, PrivilegeTypeInsert, PrivilegeTypeTableAll /*PrivilegeTypeTableOwnership*/)
+	case *tree.Update:
+		objType = objectTypeTable
+		typs = append(typs, PrivilegeTypeUpdate, PrivilegeTypeTableAll /*PrivilegeTypeTableOwnership*/)
+	case *tree.Delete:
+		objType = objectTypeTable
+		typs = append(typs, PrivilegeTypeDelete, PrivilegeTypeTableAll /*PrivilegeTypeTableOwnership*/)
+	case *tree.CreateIndex, *tree.DropIndex, *tree.ShowIndex:
+		objType = objectTypeTable
+		typs = append(typs, PrivilegeTypeIndex)
+	case *tree.ShowProcessList, *tree.ShowErrors, *tree.ShowWarnings, *tree.ShowVariables, *tree.ShowStatus, *tree.ShowTarget:
+		objType = objectTypeNone
+		kind = privilegeKindNone
+	case *tree.ExplainFor, *tree.ExplainAnalyze, *tree.ExplainStmt:
+		objType = objectTypeNone
+		kind = privilegeKindNone
+	case *tree.BeginTransaction, *tree.CommitTransaction, *tree.RollbackTransaction, *tree.SetVar:
+		objType = objectTypeNone
+		kind = privilegeKindNone
+	case *tree.SetDefaultRole, *tree.SetRole, *tree.SetPassword:
+		objType = objectTypeNone
+		kind = privilegeKindNone
+	case *tree.PrepareStmt, *tree.PrepareString, *tree.Deallocate:
+		objType = objectTypeNone
+		kind = privilegeKindNone
+	case *tree.Execute:
+		objType = objectTypeNone
+		kind = privilegeKindNone
+	default:
+		panic(fmt.Sprintf("does not have the privilege definition of the statement %s", stmt))
+	}
+
+	entries := make([]privilegeEntry, len(typs))
+	for i, typ := range typs {
+		entries[i] = privilegeEntriesMap[typ]
+	}
+	return &privilege{kind, objType, entries, special}
+}
+
+// privilege will be done on the table
+type privilegeTips struct {
+	typ          PrivilegeType
+	databaseName string
+	tableName    string
+}
+
+type privilegeTipsArray []privilegeTips
+
+func (pot privilegeTips) String() string {
+	return fmt.Sprintf("%s %s %s", pot.typ, pot.databaseName, pot.tableName)
+}
+
+func (pota privilegeTipsArray) String() string {
+	b := strings.Builder{}
+	for _, table := range pota {
+		b.WriteString(table.String())
+		b.WriteString("\n")
+	}
+	return b.String()
+}
+
+// extractPrivilegeTipsFromPlan extracts the privilege tips from the plan
+func extractPrivilegeTipsFromPlan(p *plan2.Plan) privilegeTipsArray {
+	//NOTE: the pots may be nil when the plan does operate any table.
+	var pots privilegeTipsArray
+	appendPot := func(pot privilegeTips) {
+		pots = append(pots, pot)
+	}
+	if p.GetQuery() != nil { //select,insert select, update, delete
+		q := p.GetQuery()
+		lastNode := q.Nodes[len(q.Nodes)-1]
+		var t PrivilegeType
+
+		for _, node := range q.Nodes {
+			if node.NodeType == plan.Node_TABLE_SCAN {
+				switch lastNode.NodeType {
+				case plan.Node_UPDATE:
+					t = PrivilegeTypeUpdate
+				case plan.Node_DELETE:
+					t = PrivilegeTypeDelete
+				default:
+					t = PrivilegeTypeSelect
+				}
+				appendPot(privilegeTips{
+					t,
+					node.ObjRef.GetSchemaName(),
+					node.ObjRef.GetObjName(),
+				})
+			} else if node.NodeType == plan.Node_INSERT { //insert select
+				appendPot(privilegeTips{
+					PrivilegeTypeInsert,
+					node.ObjRef.GetSchemaName(),
+					node.ObjRef.GetObjName(),
+				})
+			}
+		}
+	} else if p.GetIns() != nil { //insert into values
+		ins := p.GetIns()
+		appendPot(privilegeTips{
+			PrivilegeTypeInsert,
+			ins.GetDbName(),
+			ins.GetTblName()})
+	}
+	return pots
+}
+
+// convertPrivilegeTipsToPrivilege constructs the privilege entries from the privilege tips from the plan
+func convertPrivilegeTipsToPrivilege(priv *privilege, arr privilegeTipsArray) {
+	//rewirte the privilege entries based on privilege tips
+	if priv.objectType() != objectTypeTable {
+		return
+	}
+
+	//NOTE: when the arr is nil, it denotes that there is no operation on the table.
+
+	type pair struct {
+		databaseName string
+		tableName    string
+	}
+
+	dedup := make(map[pair]int8)
+
+	entries := make([]privilegeEntry, 0, len(arr))
+	for _, tips := range arr {
+		entries = append(entries, privilegeEntry{
+			privilegeId:    tips.typ,
+			privilegeLevel: 0,
+			objType:        objectTypeTable,
+			objId:          objectIDAll,
+			databaseName:   tips.databaseName,
+			tableName:      tips.tableName,
+		})
+
+		dedup[pair{tips.databaseName, tips.tableName}] = 1
+	}
+
+	//predefined privilege : tableAll, ownership
+	predefined := []PrivilegeType{PrivilegeTypeTableAll /*,PrivilegeTypeTableOwnership*/}
+	for _, p := range predefined {
+		for par := range dedup {
+			entries = append(entries, privilegeEntry{
+				privilegeId:    p,
+				privilegeLevel: 0,
+				objType:        objectTypeTable,
+				objId:          objectIDAll,
+				databaseName:   par.databaseName,
+				tableName:      par.tableName,
+			})
+		}
+	}
+
+	priv.entries = entries
+}
+
+// determineRoleSetSatisfyPrivilegeSet decides the privileges of role set can satisfy the requirement of the privilege set.
+// The algorithm 2.
+func determineRoleSetSatisfyPrivilegeSet(ctx context.Context, bh BackgroundExec, roleIds []int64, priv *privilege) (bool, error) {
+	var rsset []ExecResult
+	//there is no privilege needs, just approve
+	if len(priv.entries) == 0 {
+		return true, nil
+	}
+	for _, roleId := range roleIds {
+		for _, entry := range priv.entries {
+			if entry.privilegeId == PrivilegeTypeAccountOwnership || entry.privilegeId == PrivilegeTypeUserOwnership || entry.privilegeId == PrivilegeTypeTableOwnership {
+				if roleId == moAdminRoleID || roleId == accountAdminRoleID {
+					//in the version 0.6, only the moAdmin and accountAdmin have the owner right.
+					return true, nil
+				}
+			}
+
+			var sqlForCheckRoleHasPrivilege string
+			//for object type table, need concrete tableid
+			//TODO: table level check should be done after getting the plan
+			if priv.objectType() == objectTypeTable {
+				sqlForCheckRoleHasPrivilege = getSqlForCheckRoleHasTableLevelPrivilegeFormat(roleId, entry.privilegeId, entry.databaseName, entry.tableName)
+			} else {
+				sqlForCheckRoleHasPrivilege = getSqlForCheckRoleHasPrivilege(roleId, entry.objType, int64(entry.objId), int64(entry.privilegeId))
+			}
+
+			err := bh.Exec(ctx, sqlForCheckRoleHasPrivilege)
+			if err != nil {
+				return false, err
+			}
+			results := bh.GetExecResultSet()
+			rsset, err = convertIntoResultSet(results)
+			if err != nil {
+				return false, err
+			}
+
+			if len(rsset) != 0 && rsset[0].GetRowCount() != 0 {
+				return true, nil
+			}
+		}
+
+	}
+	return false, nil
+}
+
+// determinePrivilegesOfUserSatisfyPrivilegeSet decides the privileges of user can satisfy the requirement of the privilege set
+// The algorithm 1.
+func determinePrivilegesOfUserSatisfyPrivilegeSet(ctx context.Context, ses *Session, priv *privilege, stmt tree.Statement) (bool, error) {
+	setR := &btree.Set[int64]{}
+	tenant := ses.GetTenantInfo()
+	pu := ses.Pu
+
+	//step 1: The Set R1 {default role id}
+	setR.Insert((int64)(tenant.GetDefaultRoleID()))
+	//TODO: call the algorithm 2.
+	//step 2: The Set R2 {the roleid granted to the userid}
+	guestMMu := guest.New(pu.SV.GuestMmuLimitation, pu.HostMmu)
+	bh := NewBackgroundHandler(ctx, guestMMu, pu.Mempool, pu)
+	defer bh.Close()
+	var rsset []ExecResult
+
+	sqlForRoleIdOfUserId := getSqlForRoleIdOfUserId(int(tenant.GetUserID()))
+	err := bh.Exec(ctx, sqlForRoleIdOfUserId)
+	if err != nil {
+		return false, err
+	}
+
+	results := bh.GetExecResultSet()
+	rsset, err = convertIntoResultSet(results)
+	if err != nil {
+		return false, err
+	}
+
+	if len(rsset) != 0 && rsset[0].GetRowCount() != 0 {
+		for i := uint64(0); i < rsset[0].GetRowCount(); i++ {
+			roleId, err := rsset[0].GetInt64(i, 0)
+			if err != nil {
+				return false, err
+			}
+			setR.Insert(roleId)
+		}
+	}
+
+	setVisited := &btree.Set[int64]{}
+	setRList := make([]int64, 0, setR.Len())
+	//init setVisited = setR
+	setR.Scan(func(roleId int64) bool {
+		setVisited.Insert(roleId)
+		setRList = append(setRList, roleId)
+		return true
+	})
+	//TODO: call the algorithm 2.
+	//If the result of the algorithm 2 is true, Then return true;
+	yes, err := determineRoleSetSatisfyPrivilegeSet(ctx, bh, setRList, priv)
+	if err != nil {
+		return false, err
+	}
+	if yes {
+		return true, nil
+	}
+	/*
+		step 3: !!!NOTE all roleid in setR has been processed by the algorithm 2.
+		setVisited is the set of all roleid that has been processed.
+		setVisited = setR;
+		For {
+			For roleA in setR {
+				Find the peer roleB in the table mo_role_grant(granted_id,grantee_id) with grantee_id = roleA;
+				If roleB is not in setVisited, Then add roleB into setR';
+					add roleB into setVisited;
+			}
+
+			If setR' is empty, Then return false;
+			//TODO: call the algorithm 2.
+			If the result of the algorithm 2 is true, Then return true;
+			setR = setR';
+			setR' = {};
+		}
+	*/
+	for {
+		setRPlus := make([]int64, 0, len(setRList))
+		quit := false
+		select {
+		case <-ctx.Done():
+			quit = true
+		default:
+		}
+		if quit {
+			break
+		}
+
+		//get roleB of roleA
+		for _, roleA := range setRList {
+			sqlForInheritedRoleIdOfRoleId := getSqlForInheritedRoleIdOfRoleId(roleA)
+			err = bh.Exec(ctx, sqlForInheritedRoleIdOfRoleId)
+			if err != nil {
+				return false, moerr.NewInternalError("get inherited role id of the role id. error:%v", err)
+			}
+
+			results = bh.GetExecResultSet()
+			rsset, err = convertIntoResultSet(results)
+			if err != nil {
+				return false, err
+			}
+
+			if len(rsset) != 0 && rsset[0].GetRowCount() != 0 {
+				for i := uint64(0); i < rsset[0].GetRowCount(); i++ {
+					roleB, err := rsset[0].GetInt64(i, 0)
+					if err != nil {
+						return false, err
+					}
+
+					if !setVisited.Contains(roleB) {
+						setVisited.Insert(roleB)
+						setRPlus = append(setRPlus, roleB)
+					}
+				}
+			}
+		}
+
+		//no more roleB, it is done
+		if len(setRPlus) == 0 {
+			return false, nil
+		}
+
+		//TODO: call the algorithm 2.
+		//If the result of the algorithm 2 is true, Then return true;
+		yes, err := determineRoleSetSatisfyPrivilegeSet(ctx, bh, setRPlus, priv)
+		if err != nil {
+			return false, err
+		}
+		if yes {
+			return true, nil
+		}
+		setRList = setRPlus
+	}
+
+	return false, nil
+}
+
+// determineRoleHasWithGrantOption decides all roleIds have the with_grant_option = true
+func determineRoleHasWithGrantOption(ctx context.Context, ses *Session, roles []*tree.Role) (bool, error) {
+	tenant := ses.GetTenantInfo()
+	pu := ses.Pu
+
+	guestMMu := guest.New(pu.SV.GuestMmuLimitation, pu.HostMmu)
+	bh := NewBackgroundHandler(ctx, guestMMu, pu.Mempool, pu)
+	defer bh.Close()
+	var rsset []ExecResult
+
+	//step1 : get roleIds from roleName
+	dedupNames := &btree.Set[string]{}
+	for _, role := range roles {
+		dedupNames.Insert(role.UserName)
+	}
+
+	dedup := &btree.Map[int64, int64]{}
+	for _, name := range dedupNames.Keys() {
+		sql := getSqlForRoleIdOfRole(name)
+		err := bh.Exec(ctx, sql)
+		if err != nil {
+			return false, err
+		}
+
+		results := bh.GetExecResultSet()
+		rsset, err = convertIntoResultSet(results)
+		if err != nil {
+			return false, err
+		}
+
+		if len(rsset) != 0 && rsset[0].GetRowCount() != 0 {
+			for i := uint64(0); i < rsset[0].GetRowCount(); i++ {
+				roleId, err := rsset[0].GetInt64(i, 0)
+				if err != nil {
+					return false, err
+				}
+
+				dedup.Set(roleId, 0)
+			}
+		}
+	}
+
+	//step2 : get all role id the user has.
+	sqlForRoleIdOfUserId := getSqlForRoleIdOfUserId(int(tenant.GetUserID()))
+	err := bh.Exec(ctx, sqlForRoleIdOfUserId)
+	if err != nil {
+		return false, err
+	}
+
+	results := bh.GetExecResultSet()
+	rsset, err = convertIntoResultSet(results)
+	if err != nil {
+		return false, err
+	}
+
+	if len(rsset) != 0 && rsset[0].GetRowCount() != 0 {
+		for i := uint64(0); i < rsset[0].GetRowCount(); i++ {
+			roleId, err := rsset[0].GetInt64(i, 0)
+			if err != nil {
+				return false, err
+			}
+
+			grantOpt, err := rsset[0].GetInt64(i, 1)
+			if err != nil {
+				return false, err
+			}
+
+			if grantOpt != 0 { //with_grant_option = true
+				if _, exists := dedup.Get(roleId); exists {
+					dedup.Set(roleId, grantOpt)
+				}
+			}
+		}
+	}
+
+	all := true
+	//if all roleId have the with_grant_option = true, it is done
+	dedup.Scan(func(k, v int64) bool {
+		if v == 0 {
+			all = false
+			return false
+		}
+		return true
+	})
+
+	if all {
+		return all, nil
+	}
+
+	//step3 : check mo_role_grant
+	sqlForInherited := getSqlForInheritedRoleIdOfRoleId(int64(tenant.GetDefaultRoleID()))
+	err = bh.Exec(ctx, sqlForInherited)
+	if err != nil {
+		return false, err
+	}
+
+	results = bh.GetExecResultSet()
+	rsset, err = convertIntoResultSet(results)
+	if err != nil {
+		return false, err
+	}
+
+	if len(rsset) != 0 && rsset[0].GetRowCount() != 0 {
+		for i := uint64(0); i < rsset[0].GetRowCount(); i++ {
+			grantedId, err := rsset[0].GetInt64(i, 0)
+			if err != nil {
+				return false, err
+			}
+
+			grantOpt, err := rsset[0].GetInt64(i, 1)
+			if err != nil {
+				return false, err
+			}
+
+			if grantOpt != 0 { //with_grant_option = true
+				if _, exists := dedup.Get(grantedId); exists {
+					dedup.Set(grantedId, grantOpt)
+				}
+			}
+		}
+	}
+
+	all = true
+	//if all roleId have the with_grant_option = true, it is done
+	dedup.Scan(func(k, v int64) bool {
+		if v == 0 {
+			all = false
+			return false
+		}
+		return true
+	})
+
+	return all, nil
+}
+
+// authenticatePrivilegeOfStatementWithObjectTypeAccountAndDatabase decides the user has the privilege of executing the statement with object type account
+func authenticatePrivilegeOfStatementWithObjectTypeAccountAndDatabase(ctx context.Context, ses *Session, stmt tree.Statement) (bool, error) {
+	priv := ses.GetPrivilege()
+	if priv.objectType() != objectTypeAccount && priv.objectType() != objectTypeDatabase { //do nothing
+		return true, nil
+	}
+	ok, err := determinePrivilegesOfUserSatisfyPrivilegeSet(ctx, ses, priv, stmt)
+	if err != nil {
+		return false, err
+	}
+
+	//for GrantRole statement, check with_grant_option
+	if !ok && priv.kind == privilegeKindInherit {
+		grantRole := stmt.(*tree.GrantRole)
+		yes, err := determineRoleHasWithGrantOption(ctx, ses, grantRole.Roles)
+		if err != nil {
+			return false, err
+		}
+		if yes {
+			return true, nil
+		}
+	}
+	return ok, nil
+}
+
+// authenticatePrivilegeOfStatementWithObjectTypeTable decides the user has the privilege of executing the statement with object type table
+func authenticatePrivilegeOfStatementWithObjectTypeTable(ctx context.Context, ses *Session, stmt tree.Statement, p *plan2.Plan) (bool, error) {
+	priv := determinePrivilegeSetOfStatement(stmt)
+	if priv.objectType() == objectTypeTable {
+		arr := extractPrivilegeTipsFromPlan(p)
+		convertPrivilegeTipsToPrivilege(priv, arr)
+		ok, err := determinePrivilegesOfUserSatisfyPrivilegeSet(ctx, ses, priv, stmt)
+		if err != nil {
+			return false, err
+		}
+		return ok, nil
+	}
+	return true, nil
+}
+
+// formSqlFromGrantPrivilege makes the sql for querying the database.
+func formSqlFromGrantPrivilege(ctx context.Context, ses *Session, gp *tree.GrantPrivilege, priv *tree.Privilege) (string, error) {
+	tenant := ses.GetTenantInfo()
+	sql := ""
+	privType := convertAstPrivilegeTypeToPrivilegeType(priv.Type)
+	switch gp.ObjType {
+
+	case tree.OBJECT_TYPE_TABLE:
+		switch gp.Level.Level {
+		case tree.PRIVILEGE_LEVEL_TYPE_STAR:
+			sql = getSqlForCheckWithGrantOptionForTableDatabaseStar(int64(tenant.GetDefaultRoleID()), privType, ses.GetDatabaseName())
+		case tree.PRIVILEGE_LEVEL_TYPE_STAR_STAR:
+			sql = getSqlForCheckWithGrantOptionForTableStarStar(int64(tenant.GetDefaultRoleID()), privType)
+		case tree.PRIVILEGE_LEVEL_TYPE_DATABASE_STAR:
+			sql = getSqlForCheckWithGrantOptionForTableDatabaseStar(int64(tenant.GetDefaultRoleID()), privType, gp.Level.DbName)
+		case tree.PRIVILEGE_LEVEL_TYPE_DATABASE_TABLE:
+			sql = getSqlForCheckWithGrantOptionForTableDatabaseTable(int64(tenant.GetDefaultRoleID()), privType, gp.Level.DbName, gp.Level.TabName)
+		case tree.PRIVILEGE_LEVEL_TYPE_TABLE:
+			sql = getSqlForCheckWithGrantOptionForTableDatabaseTable(int64(tenant.GetDefaultRoleID()), privType, ses.GetDatabaseName(), gp.Level.TabName)
+		default:
+			return "", moerr.NewInternalError("in object type %s privilege level type %s is unsupported", gp.ObjType, gp.Level.Level)
+		}
+	case tree.OBJECT_TYPE_DATABASE:
+		switch gp.Level.Level {
+		case tree.PRIVILEGE_LEVEL_TYPE_STAR:
+			sql = getSqlForCheckWithGrantOptionForDatabaseStar(int64(tenant.GetDefaultRoleID()), privType)
+		case tree.PRIVILEGE_LEVEL_TYPE_STAR_STAR:
+			sql = getSqlForCheckWithGrantOptionForDatabaseStarStar(int64(tenant.GetDefaultRoleID()), privType)
+		case tree.PRIVILEGE_LEVEL_TYPE_DATABASE:
+			sql = getSqlForCheckWithGrantOptionForDatabaseDB(int64(tenant.GetDefaultRoleID()), privType, gp.Level.DbName)
+		default:
+			return "", moerr.NewInternalError("in object type %s privilege level type %s is unsupported", gp.ObjType, gp.Level.Level)
+		}
+	case tree.OBJECT_TYPE_ACCOUNT:
+		switch gp.Level.Level {
+		case tree.PRIVILEGE_LEVEL_TYPE_STAR:
+			sql = getSqlForCheckWithGrantOptionForAccountStar(int64(tenant.GetDefaultRoleID()), privType)
+		default:
+			return "", moerr.NewInternalError("in object type %s privilege level type %s is unsupported", gp.ObjType, gp.Level.Level)
+		}
+	default:
+		return "", moerr.NewInternalError("object type %s is unsupported", gp.ObjType)
+	}
+	return sql, nil
+}
+
+// determinePrivilegeHasWithGrantOption decides all privileges have the with_grant_option = true
+func determinePrivilegeHasWithGrantOption(ctx context.Context, ses *Session, gp *tree.GrantPrivilege) (bool, error) {
+	pu := ses.Pu
+	guestMMu := guest.New(pu.SV.GuestMmuLimitation, pu.HostMmu)
+	bh := NewBackgroundHandler(ctx, guestMMu, pu.Mempool, pu)
+	defer bh.Close()
+	var rsset []ExecResult
+
+	/*
+		object_type and privilege_level
+			Table :
+				*.* : all tables of all databases
+				db.*
+				db.table
+				table
+			Database:
+				*  : all databases
+				*.* : all objects of all databases
+				db;
+			Function:
+				*.*：all functions of all databases
+				db.routine
+			Account:
+				*: only
+	*/
+	//Fields' source
+	//role_id : tenant.defaultRoleId
+	//obj_type : GrantPrivilege.ObjType
+	//obj_id :
+	//  object_type + privilege_level => obj_id
+	//	Table : mo_database join mo_tables join mo_role_privs
+	//		*.* : => 0
+	/*
+		select rp.privilege_id,rp.with_grant_option
+		from mo_database d, mo_tables t, mo_role_privs rp
+		where d.dat_id = t.reldatabase_id
+			and rp.obj_id = 0
+			and rp.obj_type = "table"
+			and rp.role_id = ROLE_ID
+			and rp.privilege_id = SELECT_ID
+			and rp.privilege_level="*.*"
+			and rp.with_grant_option = true;
+	*/
+	//		db.* => 0
+	/*
+		select rp.privilege_id,rp.with_grant_option
+		from mo_database d, mo_tables t, mo_role_privs rp
+		where d.dat_id = t.reldatabase_id
+			and rp.obj_id = 0
+			and rp.obj_type = "table"
+			and rp.role_id = ROLE_ID
+			and rp.privilege_id = SELECT_ID
+			and rp.privilege_level="d.*"
+			and d.datname = DB
+			and rp.with_grant_option = true;
+	*/
+	//		db.table => tableId
+	/*
+		select rp.privilege_id,rp.with_grant_option
+		from mo_database d, mo_tables t, mo_role_privs rp
+		where d.dat_id = t.reldatabase_id
+			and rp.obj_id = t.rel_id
+			and rp.obj_type = "table"
+			and rp.role_id = ROLE_ID
+			and rp.privilege_id = SELECT_ID
+			and rp.privilege_level="d.t"
+			and d.datname = DB
+			and t.relname = X
+			and rp.with_grant_option = true;
+	*/
+	//		table => tableId
+	/*
+		select rp.privilege_id,rp.with_grant_option
+		from mo_database d, mo_tables t, mo_role_privs rp
+		where d.dat_id = t.reldatabase_id
+			and rp.obj_id = t.rel_id
+			and rp.obj_type = "table"
+			and rp.role_id = ROLE_ID
+			and rp.privilege_id = SELECT_ID
+			and rp.privilege_level="t"
+			and d.datname = CURRENT_DATABASE
+			and t.relname = X
+			and rp.with_grant_option = true;
+	*/
+	//	Database: mo_database join mo_role_privs
+	//		*  : => 0
+	/*
+		select rp.privilege_id,rp.with_grant_option
+		from mo_database d, mo_tables t, mo_role_privs rp
+		where d.dat_id = t.reldatabase_id
+			and rp.obj_id = 0
+			and rp.obj_type = "database"
+			and rp.role_id = ROLE_ID
+			and rp.privilege_id = SELECT_ID
+			and rp.privilege_level="*"
+			and rp.with_grant_option = true;
+	*/
+	//		*.* : => 0
+	/*
+		select rp.privilege_id,rp.with_grant_option
+		from mo_database d, mo_tables t, mo_role_privs rp
+		where d.dat_id = t.reldatabase_id
+			and rp.obj_id = 0
+			and rp.obj_type = "database"
+			and rp.role_id = ROLE_ID
+			and rp.privilege_id = SELECT_ID
+			and rp.privilege_level="*.*"
+			and rp.with_grant_option = true;
+	*/
+	//		db; => databaseId
+	/*
+		select rp.privilege_id,rp.with_grant_option
+		from mo_database d, mo_tables t, mo_role_privs rp
+		where d.dat_id = t.reldatabase_id
+			and rp.obj_id = d.dat_id
+			and rp.obj_type = "database"
+			and rp.role_id = ROLE_ID
+			and rp.privilege_id = SELECT_ID
+			and rp.privilege_level="d"
+			and  d.datname = DB
+			and rp.with_grant_option = true;
+	*/
+	//	Function:
+	//		*.*：=> 0
+	//		db.routine => routineId
+	//	Account:
+	//		*: => 0
+	/*
+		select rp.privilege_id,rp.with_grant_option
+		from mo_database d, mo_tables t, mo_role_privs rp
+		where d.dat_id = t.reldatabase_id
+			and rp.obj_id = 0
+			and rp.obj_type = "account"
+			and rp.role_id = ROLE_ID
+			and rp.privilege_id = SELECT_ID
+			and rp.privilege_level="**"
+			and rp.with_grant_option = true;
+	*/
+	//privilege_level :GrantPrivilege.privilegeLevel
+
+	//For every privilege, Do the check.
+	for _, p := range gp.Privileges {
+		sql, err := formSqlFromGrantPrivilege(ctx, ses, gp, p)
+		if err != nil {
+			return false, err
+		}
+		err = bh.Exec(ctx, sql)
+		if err != nil {
+			return false, err
+		}
+
+		results := bh.GetExecResultSet()
+		rsset, err = convertIntoResultSet(results)
+		if err != nil {
+			return false, err
+		}
+
+		if len(rsset) == 0 || rsset[0].GetRowCount() == 0 {
+			return false, nil
+		}
+	}
+	return true, nil
+}
+
+func convertAstPrivilegeTypeToPrivilegeType(priv tree.PrivilegeType) PrivilegeType {
+	switch priv {
+	case tree.PRIVILEGE_TYPE_STATIC_SELECT:
+		return PrivilegeTypeSelect
+	case tree.PRIVILEGE_TYPE_STATIC_INSERT:
+		return PrivilegeTypeInsert
+	default:
+		return PrivilegeTypeAccountAll
+	}
+}
+
+// authenticatePrivilegeOfStatementWithObjectTypeNone decides the user has the privilege of executing the statement with object type none
+func authenticatePrivilegeOfStatementWithObjectTypeNone(ctx context.Context, ses *Session, stmt tree.Statement) (bool, error) {
+	priv := ses.GetPrivilege()
+	if priv.objectType() != objectTypeNone { //do nothing
+		return true, nil
+	}
+	tenant := ses.GetTenantInfo()
+
+	if priv.privilegeKind() == privilegeKindNone { // do nothing
+		return true, nil
+	} else if priv.privilegeKind() == privilegeKindSpecial { //GrantPrivilege, RevokePrivilege
+		switch gp := stmt.(type) {
+		case *tree.GrantPrivilege:
+			//in the version 0.6, only the moAdmin and accountAdmin can grant the privilege.
+			if tenant.IsAdminRole() {
+				return true, nil
+			}
+			yes, err := determinePrivilegeHasWithGrantOption(ctx, ses, gp)
+			if err != nil {
+				return yes, err
+			}
+			if yes {
+				return yes, nil
+			}
+		case *tree.RevokePrivilege:
+			//in the version 0.6, only the moAdmin and accountAdmin can revoke the privilege.
+			return tenant.IsAdminRole(), nil
+		}
+	}
+
+	return false, nil
+}
 
 // checkSysExistsOrNot checks the SYS tenant exists or not.
 func checkSysExistsOrNot(ctx context.Context, pu *config.ParameterUnit) (bool, error) {
@@ -845,26 +1958,29 @@ func createTablesInMoCatalog(ctx context.Context, tenant *TenantInfo, pu *config
 	addSqlIntoSet(initMoUser1)
 	addSqlIntoSet(initMoUser2)
 
-	//step4: add new entries to the mo_role_priv
+	//step4: add new entries to the mo_role_privs
+	//moadmin role
+	for _, t := range entriesOfMoAdminForMoRolePrivsFor {
+		entry := privilegeEntriesMap[t]
+		initMoRolePriv := fmt.Sprintf(initMoRolePrivFormat,
+			moAdminRoleID, moAdminRoleName,
+			entry.objType, entry.objId,
+			entry.privilegeId, entry.privilegeId.String(), entry.privilegeLevel,
+			rootID, types.CurrentTimestamp().String2(time.UTC, 0),
+			entry.withGrantOption)
+		addSqlIntoSet(initMoRolePriv)
+	}
 
-	for i := 0; i < len(sysRoles); i++ {
-		for j := 0; j < len(sysObjects); j++ {
-			for k := 0; k < len(sysPrivileges); k++ {
-				r := sysRoles[i]
-				o := sysObjects[j]
-				p := sysPrivileges[k]
-				if r.id == publicRoleID && p.id != PrivilegeTypeConnect {
-					continue
-				}
-				initMoRolePriv := fmt.Sprintf(initMoRolePrivFormat,
-					r.id, r.name,
-					o.typ, o.id,
-					p.id, p.id.String(), p.level,
-					rootID, types.CurrentTimestamp().String2(time.UTC, 0),
-					p.withGrantOption)
-				addSqlIntoSet(initMoRolePriv)
-			}
-		}
+	//public role
+	for _, t := range entriesOfPublicForMoRolePrivsFor {
+		entry := privilegeEntriesMap[t]
+		initMoRolePriv := fmt.Sprintf(initMoRolePrivFormat,
+			publicRoleID, publicRoleName,
+			entry.objType, entry.objId,
+			entry.privilegeId, entry.privilegeId.String(), entry.privilegeLevel,
+			rootID, types.CurrentTimestamp().String2(time.UTC, 0),
+			entry.withGrantOption)
+		addSqlIntoSet(initMoRolePriv)
 	}
 
 	//step5: add new entries to the mo_user_grant
@@ -878,7 +1994,7 @@ func createTablesInMoCatalog(ctx context.Context, tenant *TenantInfo, pu *config
 
 	addSqlIntoSet("commit;")
 
-	//fill the mo_account, mo_role, mo_user, mo_role_priv, mo_user_grant
+	//fill the mo_account, mo_role, mo_user, mo_role_privs, mo_user_grant
 	guestMMu := guest.New(pu.SV.GuestMmuLimitation, pu.HostMmu)
 	bh := NewBackgroundHandler(ctx, guestMMu, pu.Mempool, pu)
 	defer bh.Close()
@@ -928,7 +2044,7 @@ func checkTenantExistsOrNot(ctx context.Context, pu *config.ParameterUnit, userN
 	return true, nil
 }
 
-// InitGeneralTenant initializes the application level tenan
+// InitGeneralTenant initializes the application level tenant
 func InitGeneralTenant(ctx context.Context, tenant *TenantInfo, ca *tree.CreateAccount) error {
 	var err error
 	var exists bool
@@ -992,7 +2108,7 @@ func createTablesInMoCatalogOfGeneralTenant(ctx context.Context, tenant *TenantI
 	if ca.Comment.Exist {
 		comment = ca.Comment.Comment
 	}
-	newTenantID := rand.Uint32()
+	newTenantID := uint32(rand.Int31())
 	initMoAccount = fmt.Sprintf(initMoAccountFormat, newTenantID, ca.Name, sysAccountStatus, types.CurrentTimestamp().String2(time.UTC, 0), comment)
 
 	insertIntoMoAccountSqlIdx := len(initDataSqls)
@@ -1033,32 +2149,35 @@ func createTablesInMoCatalogOfGeneralTenant(ctx context.Context, tenant *TenantI
 			status = "suspend"
 		}
 	}
-	newUserId := rand.Uint32()
+	newUserId := uint32(rand.Int31())
 	initMoUser1 := fmt.Sprintf(initMoUserFormat, newUserId, rootHost, name, password, status,
 		types.CurrentTimestamp().String2(time.UTC, 0), rootExpiredTime, rootLoginType,
 		tenant.GetUserID(), tenant.GetDefaultRoleID(), publicRoleID)
 	addSqlIntoSet(initMoUser1)
 
-	//step4: add new entries to the mo_role_priv
+	//step4: add new entries to the mo_role_privs
+	//accountadmin role
+	for _, t := range entriesOfAccountAdminForMoRolePrivsFor {
+		entry := privilegeEntriesMap[t]
+		initMoRolePriv := fmt.Sprintf(initMoRolePrivFormat,
+			accountAdminRoleID, accountAdminRoleName,
+			entry.objType, entry.objId,
+			entry.privilegeId, entry.privilegeId.String(), entry.privilegeLevel,
+			tenant.GetUserID(), types.CurrentTimestamp().String2(time.UTC, 0),
+			entry.withGrantOption)
+		addSqlIntoSet(initMoRolePriv)
+	}
 
-	for i := 0; i < len(applicationLevelRoles); i++ {
-		for j := 0; j < len(applicationLevelObjects); j++ {
-			for k := 0; k < len(applicationLevelPrivileges); k++ {
-				r := applicationLevelRoles[i]
-				o := applicationLevelObjects[j]
-				p := applicationLevelPrivileges[k]
-				if r.id == publicRoleID && p.id != PrivilegeTypeConnect {
-					continue
-				}
-				initMoRolePriv := fmt.Sprintf(initMoRolePrivFormat,
-					r.id, r.name,
-					o.typ, o.id,
-					p.id, p.id.String(), p.level,
-					tenant.GetUserID(), types.CurrentTimestamp().String2(time.UTC, 0),
-					p.withGrantOption)
-				addSqlIntoSet(initMoRolePriv)
-			}
-		}
+	//public role
+	for _, t := range entriesOfPublicForMoRolePrivsFor {
+		entry := privilegeEntriesMap[t]
+		initMoRolePriv := fmt.Sprintf(initMoRolePrivFormat,
+			publicRoleID, publicRoleName,
+			entry.objType, entry.objId,
+			entry.privilegeId, entry.privilegeId.String(), entry.privilegeLevel,
+			tenant.GetUserID(), types.CurrentTimestamp().String2(time.UTC, 0),
+			entry.withGrantOption)
+		addSqlIntoSet(initMoRolePriv)
 	}
 
 	//step5: add new entries to the mo_user_grant
@@ -1082,7 +2201,7 @@ func createTablesInMoCatalogOfGeneralTenant(ctx context.Context, tenant *TenantI
 		DefaultRoleID: publicRoleID,
 	}
 
-	//fill the mo_account, mo_role, mo_user, mo_role_priv, mo_user_grant
+	//fill the mo_account, mo_role, mo_user, mo_role_privs, mo_user_grant
 	guestMMu := guest.New(pu.SV.GuestMmuLimitation, pu.HostMmu)
 	bh := NewBackgroundHandler(ctx, guestMMu, pu.Mempool, pu)
 	defer bh.Close()
@@ -1221,7 +2340,7 @@ func InitUser(ctx context.Context, tenant *TenantInfo, cu *tree.CreateUser) erro
 
 		//TODO: get comment or attribute. there is no field in mo_user to store it.
 		//TODO: to get the user id from the auto_increment table
-		newUserId := rand.Uint32()
+		newUserId := rand.Int31()
 		initMoUser1 := fmt.Sprintf(initMoUserFormat, newUserId, rootHost, user.Username, password, status,
 			types.CurrentTimestamp().String2(time.UTC, 0), rootExpiredTime, rootLoginType,
 			tenant.GetUserID(), tenant.GetDefaultRoleID(), newRoleId)
@@ -1304,7 +2423,7 @@ func InitRole(ctx context.Context, tenant *TenantInfo, cr *tree.CreateRole) erro
 			return moerr.NewInternalError("the role %s exists", r.UserName)
 		}
 
-		newRoleId := rand.Uint32()
+		newRoleId := rand.Int31()
 		initMoRole := fmt.Sprintf(initMoRoleFormat, newRoleId, r.UserName, tenant.GetUserID(), tenant.GetDefaultRoleID(),
 			types.CurrentTimestamp().String2(time.UTC, 0), "")
 		appendSql(initMoRole)
