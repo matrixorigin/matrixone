@@ -556,8 +556,8 @@ func (m *MemHandler) HandleDelete(meta txn.TxnMeta, req txnengine.DeleteReq, res
 	// by row id
 	if req.ColumnName == rowIDColumnName {
 		for i := 0; i < reqVecLen; i++ {
-			value, _ := vectorAt(req.Vector, i)
-			rowID := value.(types.Rowid)
+			value := vectorAt(req.Vector, i)
+			rowID := value.Value.(types.Rowid)
 			keys, err := table.Index(tx, AnyKey{
 				index_RowID, typeConv(rowID),
 			})
@@ -589,8 +589,8 @@ func (m *MemHandler) HandleDelete(meta txn.TxnMeta, req txnengine.DeleteReq, res
 	if len(rows) == 1 && rows[0].Name == req.ColumnName {
 		// by primary key
 		for i := 0; i < reqVecLen; i++ {
-			value, _ := vectorAt(req.Vector, i)
-			primaryKey := AnyKey{typeConv(value)}
+			value := vectorAt(req.Vector, i)
+			primaryKey := AnyKey{typeConv(value.Value)}
 			if err := table.Delete(tx, primaryKey); err != nil {
 				return err
 			}
@@ -620,15 +620,13 @@ func (m *MemHandler) HandleDelete(meta txn.TxnMeta, req txnengine.DeleteReq, res
 			return err
 		}
 		for i := 0; i < reqVecLen; i++ {
-			value, isNull := vectorAt(req.Vector, i)
-			valueInRow, ok := (*row).attributes[attrID]
+			value := vectorAt(req.Vector, i)
+			attrInRow, ok := (*row).attributes[attrID]
 			if !ok {
 				// attr not in row
 				continue
 			}
-			if (isNull && (*row).isNull[attrID]) /* null match */ ||
-				(!isNull && !(*row).isNull[attrID] &&
-					valueEqual(value, valueInRow)) /* value match */ {
+			if value.Equal(attrInRow) {
 				if err := table.Delete(tx, key); err != nil {
 					return err
 				}
@@ -1031,18 +1029,14 @@ func (m *MemHandler) HandleRead(meta txn.TxnMeta, req txnengine.ReadReq, resp *t
 		)
 	})
 
+	tx := m.getTx(meta)
 	for _, row := range rows {
-		for i, name := range req.ColNames {
-			attrID := iter.AttrsMap[name].ID
-			value, ok := row.Value.attributes[attrID]
-			if !ok {
-				resp.ErrColumnNotFound.Name = name
-				return nil
-			}
-			vectorAppend(b.Vecs[i], value, m.mheap)
-			if row.Value.isNull[attrID] {
-				b.Vecs[i].GetNulls().Set(uint64(b.Vecs[i].Length() - 1))
-			}
+		namedRow := &NamedAnyRow{
+			Row:      row.Value,
+			AttrsMap: iter.AttrsMap,
+		}
+		if err := appendNamedRow(tx, m.mheap, b, namedRow); err != nil {
+			return err
 		}
 	}
 
@@ -1158,7 +1152,7 @@ func (m *MemHandler) rangeBatchPhysicalRows(
 	}
 	batchIter := NewBatchIter(b)
 	for {
-		row, isNulls := batchIter()
+		row := batchIter()
 		if len(row) == 0 {
 			break
 		}
@@ -1167,7 +1161,9 @@ func (m *MemHandler) rangeBatchPhysicalRows(
 		physicalRow := NewAnyRow([]AnyKey{
 			{index_RowID, typeConv(rowID)},
 		})
-		physicalRow.attributes[nameToAttrs[rowIDColumnName].ID] = rowID
+		physicalRow.attributes[nameToAttrs[rowIDColumnName].ID] = Nullable{
+			Value: rowID,
+		}
 
 		for i, col := range row {
 			name := b.Attrs[i]
@@ -1178,11 +1174,10 @@ func (m *MemHandler) rangeBatchPhysicalRows(
 			}
 
 			if attr.Primary {
-				physicalRow.primaryKey = append(physicalRow.primaryKey, typeConv(col))
+				physicalRow.primaryKey = append(physicalRow.primaryKey, typeConv(col.Value))
 			}
 
 			physicalRow.attributes[attr.ID] = col
-			physicalRow.isNull[attr.ID] = isNulls[i]
 		}
 
 		// use row id as primary key if no primary key is provided

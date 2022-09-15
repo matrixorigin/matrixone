@@ -35,10 +35,6 @@ var (
 	index_RowID                = Text("row id")
 )
 
-type namedAttrGetter interface {
-	attrByName(name string, tx *Transaction, handler *MemHandler, typ types.T) (any, error)
-}
-
 type DatabaseRow struct {
 	ID        string
 	NumberID  uint64
@@ -57,20 +53,32 @@ func (d DatabaseRow) Indexes() []AnyKey {
 	}
 }
 
-var _ namedAttrGetter = DatabaseRow{}
+var _ NamedRow = DatabaseRow{}
 
-func (d DatabaseRow) attrByName(name string, tx *Transaction, handler *MemHandler, typ types.T) (any, error) {
+func (d DatabaseRow) AttrByName(tx *Transaction, name string) (ret Nullable, err error) {
+	defer func() {
+		for _, attr := range catalog.SystemDBSchema.ColDefs {
+			if attr.Name != name {
+				continue
+			}
+			if !typeMatch(ret.Value, attr.Type.Oid) {
+				panic(fmt.Errorf("%s should be %v typed", name, attr.Type))
+			}
+		}
+	}()
 	switch name {
 	case catalog.SystemDBAttr_Name:
-		return d.Name, nil
+		ret.Value = d.Name
 	case catalog.SystemDBAttr_CatalogName:
-		return "", nil
+		ret.Value = ""
 	case catalog.SystemDBAttr_CreateSQL:
-		return "", nil
+		ret.Value = ""
 	case catalog.SystemDBAttr_ID:
-		return d.NumberID, nil
+		ret.Value = d.NumberID
+	default:
+		panic(fmt.Errorf("fixme: %s", name))
 	}
-	panic(fmt.Errorf("fixme: %s", name))
+	return
 }
 
 type RelationRow struct {
@@ -83,6 +91,8 @@ type RelationRow struct {
 	Properties   map[string]string
 	PartitionDef string
 	ViewDef      string
+
+	handler *MemHandler
 }
 
 func (r RelationRow) PrimaryKey() Text {
@@ -96,42 +106,56 @@ func (r RelationRow) Indexes() []AnyKey {
 	}
 }
 
-var _ namedAttrGetter = RelationRow{}
+var _ NamedRow = RelationRow{}
 
-func (r RelationRow) attrByName(name string, tx *Transaction, handler *MemHandler, typ types.T) (any, error) {
+func (r RelationRow) AttrByName(tx *Transaction, name string) (ret Nullable, err error) {
+	defer func() {
+		for _, attr := range catalog.SystemTableSchema.ColDefs {
+			if attr.Name != name {
+				continue
+			}
+			if !typeMatch(ret.Value, attr.Type.Oid) {
+				panic(fmt.Errorf("%s should be %v typed", name, attr.Type))
+			}
+		}
+	}()
 	switch name {
 	case catalog.SystemRelAttr_ID:
-		return r.NumberID, nil
+		ret.Value = r.NumberID
 	case catalog.SystemRelAttr_Name:
-		return r.Name, nil
+		ret.Value = r.Name
 	case catalog.SystemRelAttr_DBName:
 		if r.DatabaseID == "" {
-			return "", nil
+			ret.Value = ""
+			return
 		}
-		db, err := handler.databases.Get(tx, Text(r.DatabaseID))
+		db, err := r.handler.databases.Get(tx, Text(r.DatabaseID))
 		if err != nil {
-			return true, err
+			return ret, err
 		}
-		return db.Name, nil
+		ret.Value = db.Name
 	case catalog.SystemRelAttr_Persistence:
-		return "", nil
+		ret.Value = ""
 	case catalog.SystemRelAttr_Kind:
-		return "r", nil
+		ret.Value = "r"
 	case catalog.SystemRelAttr_Comment:
-		return r.Comments, nil
+		ret.Value = r.Comments
 	case catalog.SystemRelAttr_CreateSQL:
-		return "", nil
+		ret.Value = ""
 	case catalog.SystemRelAttr_DBID:
 		if r.DatabaseID == "" {
-			return "", nil
+			ret.Value = ""
+			return
 		}
-		db, err := handler.databases.Get(tx, Text(r.DatabaseID))
+		db, err := r.handler.databases.Get(tx, Text(r.DatabaseID))
 		if err != nil {
-			return true, err
+			return ret, err
 		}
-		return db.NumberID, nil
+		ret.Value = db.NumberID
+	default:
+		panic(fmt.Errorf("fixme: %s", name))
 	}
-	panic(fmt.Errorf("fixme: %s", name))
+	return
 }
 
 type AttributeRow struct {
@@ -140,6 +164,8 @@ type AttributeRow struct {
 	Order      int
 	Nullable   bool
 	engine.Attribute
+
+	handler *MemHandler
 }
 
 func (a AttributeRow) PrimaryKey() Text {
@@ -155,63 +181,78 @@ func (a AttributeRow) Indexes() []AnyKey {
 	}
 }
 
-func (a AttributeRow) attrByName(name string, tx *Transaction, handler *MemHandler, typ types.T) (any, error) {
+var _ NamedRow = AttributeRow{}
+
+func (a AttributeRow) AttrByName(tx *Transaction, name string) (ret Nullable, err error) {
+	defer func() {
+		for _, attr := range catalog.SystemColumnSchema.ColDefs {
+			if attr.Name != name {
+				continue
+			}
+			if !typeMatch(ret.Value, attr.Type.Oid) {
+				panic(fmt.Errorf("%s should be %v typed", name, attr.Type))
+			}
+		}
+	}()
 	switch name {
 	case catalog.SystemColAttr_DBName:
-		rel, err := handler.relations.Get(tx, Text(a.RelationID))
+		rel, err := a.handler.relations.Get(tx, Text(a.RelationID))
 		if err != nil {
-			return true, err
+			return ret, err
 		}
 		if rel.DatabaseID == "" {
-			return "", nil
+			ret.Value = ""
+			return ret, nil
 		}
-		db, err := handler.databases.Get(tx, Text(rel.DatabaseID))
+		db, err := a.handler.databases.Get(tx, Text(rel.DatabaseID))
 		if err != nil {
-			return true, err
+			return ret, err
 		}
-		return db.Name, nil
+		ret.Value = db.Name
 	case catalog.SystemColAttr_RelName:
-		rel, err := handler.relations.Get(tx, Text(a.RelationID))
+		rel, err := a.handler.relations.Get(tx, Text(a.RelationID))
 		if err != nil {
-			return true, err
+			return ret, err
 		}
-		return rel.Name, nil
+		ret.Value = rel.Name
 	case catalog.SystemColAttr_Name:
-		return a.Name, nil
+		ret.Value = a.Name
 	case catalog.SystemColAttr_Type:
-		return int32(a.Type.Oid), nil
+		ret.Value = int32(a.Type.Oid)
 	case catalog.SystemColAttr_Num:
-		return int32(a.Order), nil
+		ret.Value = int32(a.Order)
 	case catalog.SystemColAttr_Length:
-		return int32(a.Type.Size), nil
+		ret.Value = int32(a.Type.Size)
 	case catalog.SystemColAttr_NullAbility:
-		return boolToInt8(a.Nullable), nil
+		ret.Value = boolToInt8(a.Nullable)
 	case catalog.SystemColAttr_HasExpr:
-		return boolToInt8(a.Default.Expr != nil), nil
+		ret.Value = boolToInt8(a.Default.Expr != nil)
 	case catalog.SystemColAttr_DefaultExpr:
-		return a.Default.Expr.String(), nil
+		ret.Value = a.Default.Expr.String()
 	case catalog.SystemColAttr_IsDropped:
-		return boolToInt8(false), nil
+		ret.Value = boolToInt8(false)
 	case catalog.SystemColAttr_ConstraintType:
 		if a.Primary {
-			return "p", nil
+			ret.Value = "p"
 		} else {
-			return "n", nil
+			ret.Value = "n"
 		}
 	case catalog.SystemColAttr_IsUnsigned:
-		return boolToInt8(a.Type.Oid == types.T_uint8 ||
+		ret.Value = boolToInt8(a.Type.Oid == types.T_uint8 ||
 			a.Type.Oid == types.T_uint16 ||
 			a.Type.Oid == types.T_uint32 ||
 			a.Type.Oid == types.T_uint64 ||
-			a.Type.Oid == types.T_uint128), nil
+			a.Type.Oid == types.T_uint128)
 	case catalog.SystemColAttr_IsAutoIncrement:
-		return boolToInt8(false), nil //TODO
+		ret.Value = boolToInt8(false)
 	case catalog.SystemColAttr_Comment:
-		return a.Comment, nil
+		ret.Value = a.Comment
 	case catalog.SystemColAttr_IsHidden:
-		return boolToInt8(a.IsHidden), nil
+		ret.Value = boolToInt8(a.IsHidden)
+	default:
+		panic(fmt.Errorf("fixme: %s", name))
 	}
-	panic(fmt.Errorf("fixme: %s", name))
+	return
 }
 
 type IndexRow struct {

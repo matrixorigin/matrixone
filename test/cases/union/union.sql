@@ -38,3 +38,10 @@ insert into t4 values(500, 100, 0.0, 0);
 insert into t4 values(200, 35, 127.0, 1);
 insert into t4 values(200, 35, 127.44, 1);
 select a from t3 union select col3 from t4 order by a;
+drop table if exists t7;
+CREATE TABLE t7 (
+a int not null,
+b char (10) not null
+);
+insert into t7 values(1,'a'),(2,'b'),(3,'c'),(3,'c');
+select * from (select * from t7 union all select * from t7 limit 2) a;
