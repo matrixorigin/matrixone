@@ -31,7 +31,7 @@ var (
 )
 
 func createMem(t *testing.T) TaskStorage {
-	return newMemTaskStorage()
+	return NewMemTaskStorage()
 }
 
 func TestAddTask(t *testing.T) {

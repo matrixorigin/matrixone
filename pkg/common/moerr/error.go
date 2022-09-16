@@ -20,7 +20,7 @@ import (
 	"runtime/debug"
 	"sync/atomic"
 
-	"github.com/matrixorigin/matrixone/pkg/util/errors"
+	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 )
 
 const MySQLDefaultSqlState = "HY000"
@@ -176,8 +176,7 @@ func newWithDepth(ctx context.Context, code uint16, args ...any) *Error {
 			}
 		}
 	}
-
-	_ = errors.WithContextWithDepth(ctx, err, 2)
+	_ = errutil.WithContextWithDepth(ctx, err, 2)
 	return err
 }
 
@@ -240,7 +239,7 @@ func NewError(code uint16, msg string) *Error {
 	} else {
 		panic(fmt.Errorf("not exist MOErrorCode: %d", code))
 	}
-	_ = errors.WithContextWithDepth(Context(), err, 1)
+	_ = errutil.WithContextWithDepth(Context(), err, 1)
 	return err
 }
 

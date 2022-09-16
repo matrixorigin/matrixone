@@ -73,7 +73,7 @@ func (s *Scope) CreateTable(c *Compile) error {
 	dbSource, err := c.e.Database(c.ctx, dbName, c.proc.TxnOperator)
 	if err != nil {
 		if dbName == "" {
-			return moerr.NewError(moerr.BAD_CONFIGURATION, "No database selected")
+			return moerr.NewError(moerr.ER_NO_DB_ERROR, "No database selected")
 		}
 		return err
 	}
@@ -179,6 +179,7 @@ func planColsToExeCols(planCols []*plan.ColDef) []engine.TableDef {
 					Size:      colTyp.GetSize(),
 				},
 				Default:       planCols[i].GetDefault(),
+				OnUpdate:      planCols[i].GetOnUpdate(),
 				Primary:       col.GetPrimary(),
 				Comment:       col.GetComment(),
 				AutoIncrement: col.GetAutoIncrement(),

@@ -27,7 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggregate"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/agg"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/anti"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
@@ -1020,8 +1020,8 @@ func convertToTypes(ts []*plan.Type) []types.Type {
 	return result
 }
 
-// convert []aggregate.Aggregate to []*pipeline.Aggregate
-func convertToPipelineAggregates(ags []aggregate.Aggregate) []*pipeline.Aggregate {
+// convert []agg.Aggregate to []*pipeline.Aggregate
+func convertToPipelineAggregates(ags []agg.Aggregate) []*pipeline.Aggregate {
 	result := make([]*pipeline.Aggregate, len(ags))
 	for i, a := range ags {
 		result[i] = &pipeline.Aggregate{
@@ -1033,11 +1033,11 @@ func convertToPipelineAggregates(ags []aggregate.Aggregate) []*pipeline.Aggregat
 	return result
 }
 
-// convert []*pipeline.Aggregate to []aggregate.Aggregate
-func convertToAggregates(ags []*pipeline.Aggregate) []aggregate.Aggregate {
-	result := make([]aggregate.Aggregate, len(ags))
+// convert []*pipeline.Aggregate to []agg.Aggregate
+func convertToAggregates(ags []*pipeline.Aggregate) []agg.Aggregate {
+	result := make([]agg.Aggregate, len(ags))
 	for i, a := range ags {
-		result[i] = aggregate.Aggregate{
+		result[i] = agg.Aggregate{
 			Op:   int(a.Op),
 			Dist: a.Dist,
 			E:    a.Expr,

@@ -46,6 +46,9 @@ func (m TxnResponse) HasFlag(flag uint32) bool {
 func (m TxnRequest) DebugString() string {
 	var buffer bytes.Buffer
 
+	buffer.WriteString(fmt.Sprintf("%d: ",
+		m.RequestID))
+
 	buffer.WriteString("<")
 	buffer.WriteString(m.Txn.DebugString())
 	buffer.WriteString(">/")
@@ -73,6 +76,9 @@ func (m TxnError) DebugString() string {
 // DebugString returns debug string
 func (m TxnResponse) DebugString() string {
 	var buffer bytes.Buffer
+
+	buffer.WriteString(fmt.Sprintf("%d: ",
+		m.RequestID))
 
 	if m.Txn != nil {
 		buffer.WriteString("<")

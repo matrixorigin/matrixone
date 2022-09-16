@@ -214,6 +214,10 @@ func (v *Vector) Size() int {
 	return len(v.data) + len(v.area)
 }
 
+func (v *Vector) GetArea() []byte {
+	return v.area
+}
+
 func (v *Vector) GetType() types.Type {
 	return v.Typ
 }

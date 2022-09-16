@@ -634,6 +634,11 @@ type AttributeOnUpdate struct {
 	Expr Expr
 }
 
+func (node *AttributeOnUpdate) Format(ctx *FmtCtx) {
+	ctx.WriteString("on update ")
+	node.Expr.Format(ctx)
+}
+
 func NewAttributeOnUpdate(e Expr) *AttributeOnUpdate {
 	return &AttributeOnUpdate{
 		Expr: e,

@@ -55,6 +55,14 @@ func main() {
 	flag.Parse()
 	maybePrintVersion()
 
+	if *cpuProfilePathFlag != "" {
+		stop := startCPUProfile()
+		defer stop()
+	}
+	if *allocsProfilePathFlag != "" {
+		defer writeAllocsProfile()
+	}
+
 	rand.Seed(time.Now().UnixNano())
 	cfg, err := parseConfigFromFile(*configFile)
 	if err != nil {
