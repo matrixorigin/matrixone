@@ -34,15 +34,19 @@ type Table[
 }
 
 type Row[K any] interface {
-	PrimaryKey() K
-	Indexes() []AnyKey
+	Key() K
+	Indexes() []Tuple
+}
+
+type NamedRow interface {
+	AttrByName(tx *Transaction, name string) (Nullable, error)
 }
 
 type PhysicalRow[
 	K Ordered[K],
 	R Row[K],
 ] struct {
-	PrimaryKey K
+	Key        K
 	LastUpdate *Atomic[time.Time]
 	Values     *MVCC[R]
 }
@@ -52,7 +56,7 @@ type Ordered[To any] interface {
 }
 
 type IndexEntry[K Ordered[K], R Row[K]] struct {
-	Index AnyKey
+	Index Tuple
 	Key   K
 	Row   *R
 }
@@ -63,7 +67,7 @@ func NewTable[
 ]() *Table[K, R] {
 	return &Table[K, R]{
 		rows: btree.NewGeneric(func(a, b *PhysicalRow[K, R]) bool {
-			return a.PrimaryKey.Less(b.PrimaryKey)
+			return a.Key.Less(b.Key)
 		}),
 		index: btree.NewGeneric(func(a, b IndexEntry[K, R]) bool {
 			if a.Index.Less(b.Index) {
@@ -82,8 +86,8 @@ func (t *Table[K, R]) Insert(
 	tx *Transaction,
 	row R,
 ) error {
+	key := row.Key()
 	t.Lock()
-	key := row.PrimaryKey()
 	physicalRow := t.getOrSetRowByKey(key)
 	t.Unlock()
 
@@ -122,8 +126,8 @@ func (t *Table[K, R]) Update(
 	tx *Transaction,
 	row R,
 ) error {
+	key := row.Key()
 	t.Lock()
-	key := row.PrimaryKey()
 	physicalRow := t.getOrSetRowByKey(key)
 	t.Unlock()
 
@@ -193,7 +197,7 @@ func (t *Table[K, R]) Get(
 
 func (t *Table[K, R]) getRowByKey(key K) *PhysicalRow[K, R] {
 	pivot := &PhysicalRow[K, R]{
-		PrimaryKey: key,
+		Key: key,
 	}
 	row, _ := t.rows.Get(pivot)
 	return row
@@ -201,8 +205,7 @@ func (t *Table[K, R]) getRowByKey(key K) *PhysicalRow[K, R] {
 
 func (t *Table[K, R]) getOrSetRowByKey(key K) *PhysicalRow[K, R] {
 	pivot := &PhysicalRow[K, R]{
-		PrimaryKey: key,
-		LastUpdate: NewAtomic(time.Now()),
+		Key: key,
 	}
 	row, ok := t.rows.Get(pivot)
 	if !ok {
@@ -214,7 +217,7 @@ func (t *Table[K, R]) getOrSetRowByKey(key K) *PhysicalRow[K, R] {
 	return row
 }
 
-func (t *Table[K, R]) Index(tx *Transaction, index AnyKey) (keys []K, err error) {
+func (t *Table[K, R]) Index(tx *Transaction, index Tuple) (keys []K, err error) {
 	pivot := IndexEntry[K, R]{
 		Index: index,
 	}
@@ -242,7 +245,7 @@ func (t *Table[K, R]) Index(tx *Transaction, index AnyKey) (keys []K, err error)
 	return
 }
 
-func (t *Table[K, R]) IndexRows(tx *Transaction, index AnyKey) (rows []*R, err error) {
+func (t *Table[K, R]) IndexRows(tx *Transaction, index Tuple) (rows []*R, err error) {
 	pivot := IndexEntry[K, R]{
 		Index: index,
 	}
@@ -304,7 +307,7 @@ func (t *Table[K, R]) CommitTx(tx *Transaction) error {
 				value.BornTx.ID != tx.ID &&
 				value.BornTime.After(tx.BeginTime) {
 				err = &ErrPrimaryKeyDuplicated{
-					Key: physicalRow.PrimaryKey,
+					Key: physicalRow.Key,
 				}
 				break
 			}

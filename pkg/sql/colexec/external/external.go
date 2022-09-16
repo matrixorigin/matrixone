@@ -213,9 +213,29 @@ func makeBatch(param *ExternalParam, plh *ParseLineHandler) *batch.Batch {
 	return batchData
 }
 
+func deleteEnclosed(param *ExternalParam, plh *ParseLineHandler) {
+	close := param.extern.Tail.Fields.EnclosedBy
+	if close == '"' || close == 0 {
+		return
+	}
+	for rowIdx := 0; rowIdx < plh.batchSize; rowIdx++ {
+		Line := plh.simdCsvLineArray[rowIdx]
+		for i := 0; i < len(Line); i++ {
+			len := len(Line[i])
+			if len < 2 {
+				continue
+			}
+			if Line[i][0] == close && Line[i][len-1] == close {
+				Line[i] = Line[i][1 : len-1]
+			}
+		}
+	}
+}
+
 func GetBatchData(param *ExternalParam, plh *ParseLineHandler, proc *process.Process) (*batch.Batch, error) {
 	bat := makeBatch(param, plh)
 	var Line []string
+	deleteEnclosed(param, plh)
 	for rowIdx := 0; rowIdx < plh.batchSize; rowIdx++ {
 		Line = plh.simdCsvLineArray[rowIdx]
 		if len(Line) < len(param.Attrs) {
