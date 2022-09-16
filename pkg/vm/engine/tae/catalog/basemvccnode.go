@@ -34,6 +34,7 @@ const (
 type EntryMVCCNode struct {
 	CreatedAt, DeletedAt types.TS
 	NodeOp               []NodeOp
+	CommittedOpCnt       int
 }
 
 func NewEntryMVCCNode() *EntryMVCCNode {
@@ -70,9 +71,10 @@ func (un *EntryMVCCNode) Clone() *EntryMVCCNode {
 	ntypes := make([]NodeOp, len(un.NodeOp))
 	copy(ntypes, un.NodeOp)
 	return &EntryMVCCNode{
-		CreatedAt: un.CreatedAt,
-		DeletedAt: un.DeletedAt,
-		NodeOp:    ntypes,
+		CreatedAt:      un.CreatedAt,
+		DeletedAt:      un.DeletedAt,
+		NodeOp:         ntypes,
+		CommittedOpCnt: un.CommittedOpCnt,
 	}
 }
 
@@ -142,14 +144,16 @@ func (un *EntryMVCCNode) PrepareCommit() (err error) {
 func (un *EntryMVCCNode) String() string {
 	return fmt.Sprintf("CreatedAt=%v,DeletedAt=%v,Ops=%v", un.CreatedAt, un.DeletedAt, un.NodeOp)
 }
+func (un *EntryMVCCNode) IsLastOp() bool {
+	return un.CommittedOpCnt == len(un.NodeOp)-1
+}
 func (un *EntryMVCCNode) ApplyCommit(ts types.TS) (err error) {
-	for _, ntype := range un.NodeOp {
-		switch ntype {
-		case NOpCreate:
-			un.CreatedAt = ts
-		case NOpDelete:
-			un.DeletedAt = ts
-		}
+	ntype := un.NodeOp[un.CommittedOpCnt]
+	switch ntype {
+	case NOpCreate:
+		un.CreatedAt = ts
+	case NOpDelete:
+		un.DeletedAt = ts
 	}
 	return nil
 }

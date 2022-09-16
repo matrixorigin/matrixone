@@ -40,8 +40,9 @@ func CompareTableBaseNode(e, o txnbase.MVCCNode) int {
 }
 
 func (e *TableMVCCNode) CloneAll() txnbase.MVCCNode {
-	node := e.CloneData()
-	node.(*TableMVCCNode).TxnMVCCNode = e.TxnMVCCNode.CloneAll()
+	node := &TableMVCCNode{}
+	node.EntryMVCCNode = e.EntryMVCCNode.Clone()
+	node.TxnMVCCNode = e.TxnMVCCNode.CloneAll()
 	return node
 }
 
@@ -75,10 +76,11 @@ func (e *TableMVCCNode) UpdateNode(vun txnbase.MVCCNode) {
 
 func (e *TableMVCCNode) ApplyCommit(index *wal.Index) (err error) {
 	var commitTS types.TS
-	if e.TxnMVCCNode.GetTxn() == nil {
-		return nil
+	deleteTxn := false
+	if e.IsLastOp() {
+		deleteTxn = true
 	}
-	commitTS, err = e.TxnMVCCNode.ApplyCommit(index, true)
+	commitTS, err = e.TxnMVCCNode.ApplyCommit(index, deleteTxn)
 	if err != nil {
 		return
 	}

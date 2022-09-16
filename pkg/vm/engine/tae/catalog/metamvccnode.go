@@ -43,8 +43,10 @@ func CompareMetaBaseNode(e, o txnbase.MVCCNode) int {
 }
 
 func (e *MetadataMVCCNode) CloneAll() txnbase.MVCCNode {
-	node := e.CloneData()
-	node.(*MetadataMVCCNode).TxnMVCCNode = e.TxnMVCCNode.CloneAll()
+	node := &MetadataMVCCNode{
+		EntryMVCCNode: e.EntryMVCCNode.Clone(),
+		TxnMVCCNode:   e.TxnMVCCNode.CloneAll(),
+	}
 	return node
 }
 
@@ -87,7 +89,12 @@ func (e *MetadataMVCCNode) UpdateNode(vun txnbase.MVCCNode) {
 }
 
 func (e *MetadataMVCCNode) ApplyCommit(index *wal.Index) (err error) {
-	commitTS, err := e.TxnMVCCNode.ApplyCommit(index, true)
+	var commitTS types.TS
+	deleteTxn := false
+	if e.IsLastOp() {
+		deleteTxn = true
+	}
+	commitTS, err = e.TxnMVCCNode.ApplyCommit(index, deleteTxn)
 	if err != nil {
 		return
 	}
