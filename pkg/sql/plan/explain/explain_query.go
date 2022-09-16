@@ -21,7 +21,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/errors"
-	"strconv"
 )
 
 var _ ExplainQuery = &ExplainQueryImpl{}
@@ -216,14 +215,4 @@ func PreOrderPlan(node *plan.Node, Nodes []*plan.Node, graphData *GraphData, opt
 		}
 	}
 	return nil
-}
-
-func buildEdge(parentNode *plan.Node, childNode *plan.Node, index int32) *Edge {
-	return &Edge{
-		Id:     "E" + strconv.Itoa(int(index)),
-		Src:    childNode.NodeId,
-		Dst:    parentNode.NodeId,
-		Output: childNode.AnalyzeInfo.OutputSize,
-		Unit:   "bytes",
-	}
 }

@@ -17,13 +17,15 @@ package explain
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"strconv"
 )
 
 func ConvertNode(node *plan.Node, options *ExplainOptions) (*Node, error) {
 	marshalNodeImpl := NewMarshalNodeImpl(node)
 	newNode := &Node{
-		LogicalId:  node.NodeId,
+		NodeId:     strconv.FormatInt(int64(node.NodeId), 10),
 		Statistics: marshalNodeImpl.GetStatistics(),
+		Cost:       marshalNodeImpl.GetCost(),
 		TotalStats: marshalNodeImpl.GetTotalStats(),
 	}
 	name, err := marshalNodeImpl.GetNodeName()
@@ -51,6 +53,7 @@ type MarshalNode interface {
 	GetNodeTitle(options *ExplainOptions) (string, error)
 	GetNodeLabels(options *ExplainOptions) ([]Label, error)
 	GetStatistics() Statistics
+	GetCost() Cost
 	GetTotalStats() TotalStats
 }
 
@@ -61,6 +64,17 @@ type MarshalNodeImpl struct {
 func NewMarshalNodeImpl(node *plan.Node) *MarshalNodeImpl {
 	return &MarshalNodeImpl{
 		node: node,
+	}
+}
+
+func (m MarshalNodeImpl) GetCost() Cost {
+	c := m.node.Cost
+	return Cost{
+		Start:   c.Start,
+		Total:   c.Total,
+		Card:    c.Card,
+		Ndv:     c.Ndv,
+		Rowsize: c.Rowsize,
 	}
 }
 
@@ -243,6 +257,8 @@ func (m MarshalNodeImpl) GetNodeTitle(options *ExplainOptions) (string, error) {
 }
 
 func (m MarshalNodeImpl) GetNodeLabels(options *ExplainOptions) ([]Label, error) {
+	labels := make([]Label, 0)
+
 	switch m.node.NodeType {
 	case plan.Node_TABLE_SCAN, plan.Node_FUNCTION_SCAN, plan.Node_EXTERNAL_SCAN,
 		plan.Node_MATERIAL_SCAN, plan.Node_INSERT, plan.Node_UPDATE, plan.Node_DELETE:
@@ -257,84 +273,68 @@ func (m MarshalNodeImpl) GetNodeLabels(options *ExplainOptions) ([]Label, error)
 		} else {
 			return nil, moerr.NewError(moerr.ERROR_SERIALIZE_PLAN_JSON, "Table definition not found when plan is serialized to json")
 		}
-
 		// "name" : "Columns (2 / 28)",
 		columns := make([]string, len(tableDef.Cols))
 		for i, col := range tableDef.Cols {
 			columns[i] = col.Name
 		}
 
-		labels := []Label{
-			{
-				Name:  "Full table name",
-				Value: fullTableName,
-			},
-			{
-				Name:  "Columns",
-				Value: fullTableName,
-			},
-		}
-		return labels, nil
+		labels = append(labels, Label{
+			Name:  "Full table name",
+			Value: fullTableName,
+		})
+
+		labels = append(labels, Label{
+			Name:  "Columns",
+			Value: columns,
+		})
 	case plan.Node_PROJECT:
-		exprs := NewExprListDescribeImpl(m.node.ProjectList)
-		describe, err := exprs.GetDescription(options)
+		value, err := GetLabelValue(m.node.ProjectList, options)
 		if err != nil {
 			return nil, err
 		}
 		// "name" : "List of Expressions",
-		labels := []Label{
-			{
-				Name:  "List of Expressions",
-				Value: describe,
-			},
-		}
-		return labels, nil
+		labels = append(labels, Label{
+			Name:  "List of Expressions",
+			Value: value,
+		})
 	case plan.Node_AGG:
-		labels := make([]Label, 0)
 		// Get Group key info
 		if len(m.node.GroupBy) > 0 {
-			exprs := NewExprListDescribeImpl(m.node.GroupBy)
-			describe, err := exprs.GetDescription(options)
+			value, err := GetLabelValue(m.node.GroupBy, options)
 			if err != nil {
 				return nil, err
 			}
 			// "name" : "Grouping Keys",
 			labels = append(labels, Label{
 				Name:  "Grouping Keys",
-				Value: describe,
+				Value: value,
 			})
 		}
 
 		// Get Aggregate function info
 		if len(m.node.AggList) > 0 {
-			exprs := NewExprListDescribeImpl(m.node.AggList)
-			describe, err := exprs.GetDescription(options)
+			value, err := GetLabelValue(m.node.AggList, options)
 			if err != nil {
 				return nil, err
 			}
 			// name:  "Aggregate Functions"
 			labels = append(labels, Label{
 				Name:  "Aggregate Functions",
-				Value: describe,
+				Value: value,
 			})
 		}
-		return labels, nil
 	case plan.Node_FILTER:
-		exprs := NewExprListDescribeImpl(m.node.FilterList)
-		describe, err := exprs.GetDescription(options)
+		value, err := GetLabelValue(m.node.FilterList, options)
 		if err != nil {
 			return nil, err
 		}
 		//"name" : "Filter condition"
-		labels := []Label{
-			{
-				Name:  "Filter condition",
-				Value: describe,
-			},
-		}
-		return labels, nil
+		labels = append(labels, Label{
+			Name:  "Filter condition",
+			Value: value,
+		})
 	case plan.Node_JOIN:
-		labels := make([]Label, 0)
 		// Get Join type
 		labels = append(labels, Label{
 			Name:  "Join Type",
@@ -343,138 +343,126 @@ func (m MarshalNodeImpl) GetNodeLabels(options *ExplainOptions) ([]Label, error)
 
 		// Get Join Condition info
 		if len(m.node.OnList) > 0 {
-			exprs := NewExprListDescribeImpl(m.node.OnList)
-			describe, err := exprs.GetDescription(options)
+			value, err := GetLabelValue(m.node.OnList, options)
 			if err != nil {
-				panic(err)
+				return nil, err
 			}
 			//"name" : "Equality Join Condition",
 			labels = append(labels, Label{
 				Name:  "Join Condition",
-				Value: describe,
+				Value: value,
 			})
 		}
-
 		labels = append(labels, Label{
 			Name:  "Left Node Id",
 			Value: m.node.Children[0],
 		})
-
 		labels = append(labels, Label{
 			Name:  "Right Node Id",
 			Value: m.node.Children[1],
 		})
-		return labels, nil
 	case plan.Node_SORT:
-		var result string
-		first := true
+		result := make([]string, 0)
 		for _, v := range m.node.GetOrderBy() {
-			if !first {
-				result += ", "
-			}
-			first = false
 			orderByDescImpl := NewOrderByDescribeImpl(v)
 			describe, err := orderByDescImpl.GetDescription(options)
 			if err != nil {
 				return nil, err
 			}
-			result += describe
+			result = append(result, describe)
 		}
 		//"name" : "Filter condition"
-		labels := []Label{
-			{
-				Name:  "Sort keys",
-				Value: result,
-			},
-		}
-		return labels, nil
+		labels = append(labels, Label{
+			Name:  "Sort keys",
+			Value: result,
+		})
 	case plan.Node_VALUE_SCAN:
-		exprs := NewExprListDescribeImpl(m.node.ProjectList)
-		describe, err := exprs.GetDescription(options)
+		value, err := GetLabelValue(m.node.ProjectList, options)
 		if err != nil {
 			return nil, err
 		}
-		// "name" : "List of Expressions",
-		labels := []Label{
-			{
-				Name:  "List of Values",
-				Value: describe,
-			},
-		}
-		return labels, nil
+		// "name" : "List of Values",
+		labels = append(labels, Label{
+			Name:  "List of Values",
+			Value: value,
+		})
 	case plan.Node_UNION:
-		exprs := NewExprListDescribeImpl(m.node.ProjectList)
-		describe, err := exprs.GetDescription(options)
+		value, err := GetLabelValue(m.node.ProjectList, options)
 		if err != nil {
 			return nil, err
 		}
-		// "name" : "",
-		labels := []Label{
-			{
-				Name:  "Union expressions",
-				Value: describe,
-			},
-		}
-		return labels, nil
+		labels = append(labels, Label{
+			Name:  "Union expressions",
+			Value: value,
+		})
 	case plan.Node_UNION_ALL:
-		exprs := NewExprListDescribeImpl(m.node.ProjectList)
-		describe, err := exprs.GetDescription(options)
+		value, err := GetLabelValue(m.node.ProjectList, options)
 		if err != nil {
 			return nil, err
 		}
-		// "name" : "",
-		labels := []Label{
-			{
-				Name:  "Union All expressions",
-				Value: describe,
-			},
-		}
-		return labels, nil
+		labels = append(labels, Label{
+			Name:  "Union All expressions",
+			Value: value,
+		})
 	case plan.Node_INTERSECT:
-		exprs := NewExprListDescribeImpl(m.node.ProjectList)
-		describe, err := exprs.GetDescription(options)
+		value, err := GetLabelValue(m.node.ProjectList, options)
 		if err != nil {
 			return nil, err
 		}
-		// "name" : "",
-		labels := []Label{
-			{
-				Name:  "Intersect expressions",
-				Value: describe,
-			},
-		}
-		return labels, nil
+		labels = append(labels, Label{
+			Name:  "Intersect expressions",
+			Value: value,
+		})
 	case plan.Node_INTERSECT_ALL:
-		exprs := NewExprListDescribeImpl(m.node.ProjectList)
-		describe, err := exprs.GetDescription(options)
+		value, err := GetLabelValue(m.node.ProjectList, options)
 		if err != nil {
 			return nil, err
 		}
-		// "name" : "",
-		labels := []Label{
-			{
-				Name:  "Intersect All expressions",
-				Value: describe,
-			},
-		}
-		return labels, nil
+		labels = append(labels, Label{
+			Name:  "Intersect All expressions",
+			Value: value,
+		})
 	case plan.Node_MINUS:
-		exprs := NewExprListDescribeImpl(m.node.ProjectList)
-		describe, err := exprs.GetDescription(options)
+		value, err := GetLabelValue(m.node.ProjectList, options)
 		if err != nil {
 			return nil, err
 		}
-		// "name" : "",
-		labels := []Label{
-			{
-				Name:  "Minus expressions",
-				Value: describe,
-			},
-		}
-		return labels, nil
+		labels = append(labels, Label{
+			Name:  "Minus expressions",
+			Value: value,
+		})
 	default:
 		return nil, moerr.NewError(moerr.ERROR_SERIALIZE_PLAN_JSON, "Unsupported node type when plan is serialized to json")
 	}
+
+	// Get Limit And Offset info
+	if m.node.Limit != nil {
+		limitInfo, err := describeExpr(m.node.Limit, options)
+		if err != nil {
+			return nil, err
+		}
+		labels = append(labels, Label{
+			Name:  "Number of rows",
+			Value: limitInfo,
+		})
+
+		if m.node.Offset != nil {
+			offsetInfo, err := describeExpr(m.node.Offset, options)
+			if err != nil {
+				return nil, err
+			}
+			labels = append(labels, Label{
+				Name:  "Offset",
+				Value: offsetInfo,
+			})
+		} else {
+			labels = append(labels, Label{
+				Name:  "Offset",
+				Value: 0,
+			})
+		}
+	}
+	return labels, nil
 }
 
 func (m MarshalNodeImpl) GetStatistics() Statistics {
@@ -493,12 +481,12 @@ func (m MarshalNodeImpl) GetStatistics() Statistics {
 		{
 			Name:  "Input Size",
 			Value: analyzeInfo.InputSize,
-			Unit:  "bytes",
+			Unit:  "byte",
 		},
 		{
 			Name:  "Output Size",
 			Value: analyzeInfo.OutputSize,
-			Unit:  "bytes",
+			Unit:  "byte",
 		},
 	}
 
@@ -506,7 +494,7 @@ func (m MarshalNodeImpl) GetStatistics() Statistics {
 		{
 			Name:  "Memory Size",
 			Value: analyzeInfo.MemorySize,
-			Unit:  "bytes",
+			Unit:  "byte",
 		},
 	}
 
@@ -526,3 +514,19 @@ func (m MarshalNodeImpl) GetTotalStats() TotalStats {
 }
 
 var _ MarshalNode = MarshalNodeImpl{}
+
+func GetLabelValue(exprList []*plan.Expr, options *ExplainOptions) ([]string, error) {
+	if exprList == nil {
+		return make([]string, 0), nil
+	}
+
+	result := make([]string, 0)
+	for _, v := range exprList {
+		descV, err := describeExpr(v, options)
+		if err != nil {
+			return result, err
+		}
+		result = append(result, descV)
+	}
+	return result, nil
+}

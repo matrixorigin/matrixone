@@ -45,14 +45,9 @@ func runBuildSelectByBinder(stmtType plan.Query_StatementType, ctx CompilerConte
 	}, err
 }
 
-func buildExplain(ctx CompilerContext, stmt *tree.ExplainStmt) (*Plan, error) {
-	return nil, nil
-}
-
 func buildExplainAnalyze(ctx CompilerContext, stmt *tree.ExplainAnalyze) (*Plan, error) {
-	//es := explain.NewExplainDefaultOptions()
-	es := plan.ExplainOption{
-		Anzlyze: true,
+	es := &plan.ExplainOption{
+		Analyze: true,
 	}
 
 	for _, v := range stmt.Options {
@@ -66,9 +61,9 @@ func buildExplainAnalyze(ctx CompilerContext, stmt *tree.ExplainAnalyze) (*Plan,
 			}
 		} else if strings.EqualFold(v.Name, "ANALYZE") {
 			if strings.EqualFold(v.Value, "TRUE") || v.Value == "NULL" {
-				es.Anzlyze = true
+				es.Analyze = true
 			} else if strings.EqualFold(v.Value, "FALSE") {
-				es.Anzlyze = false
+				es.Analyze = false
 			} else {
 				return nil, errors.New(errno.InvalidOptionValue, fmt.Sprintf("%s requires a Boolean value", v.Name))
 			}
@@ -104,8 +99,7 @@ func buildExplainAnalyze(ctx CompilerContext, stmt *tree.ExplainAnalyze) (*Plan,
 	if err != nil {
 		return nil, err
 	}
-	plan.GetQuery().ExplainOption = &es
-
+	plan.GetQuery().ExplainOption = es
 	return plan, nil
 }
 
@@ -115,8 +109,6 @@ func BuildPlan(ctx CompilerContext, stmt tree.Statement) (*Plan, error) {
 		return runBuildSelectByBinder(plan.Query_SELECT, ctx, stmt)
 	case *tree.ParenSelect:
 		return runBuildSelectByBinder(plan.Query_SELECT, ctx, stmt.Select)
-	case *tree.ExplainStmt:
-		return buildExplain(ctx, stmt)
 	case *tree.ExplainAnalyze:
 		return buildExplainAnalyze(ctx, stmt)
 	case *tree.Insert:

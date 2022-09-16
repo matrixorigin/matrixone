@@ -16,6 +16,8 @@ package explain
 
 import (
 	"github.com/google/uuid"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"strconv"
 )
 
 type ExplainData struct {
@@ -27,13 +29,11 @@ type ExplainData struct {
 }
 
 type Step struct {
-	GraphData                GraphData                `json:"graphData"`
-	Step                     int                      `json:"step"`
-	Description              string                   `json:"description"`
-	TimeInMs                 int                      `json:"timeInMs"`
-	State                    string                   `json:"state"`
-	Stats                    Stats                    `json:"stats"`
-	AutoMaterializationStats AutoMaterializationStats `json:"autoMaterializationStats"`
+	GraphData   GraphData `json:"graphData"`
+	Step        int       `json:"step"`
+	Description string    `json:"description"`
+	State       string    `json:"state"`
+	Stats       Stats     `json:"stats"`
 }
 
 type GraphData struct {
@@ -50,18 +50,19 @@ type AutoMaterializationStats struct {
 }
 
 type Node struct {
-	LogicalId  int32      `json:"logicalId"`
+	NodeId     string     `json:"id"`
 	Name       string     `json:"name"`
 	Title      string     `json:"title"`
 	Labels     []Label    `json:"labels"`
 	Statistics Statistics `json:"statistics"`
+	Cost       Cost       `json:"Cost"`
 	TotalStats TotalStats `json:"totalStats"`
 }
 
 type Edge struct {
 	Id     string `json:"id"`
-	Src    int32  `json:"src"`
-	Dst    int32  `json:"dst"`
+	Src    string `json:"src"`
+	Dst    string `json:"dst"`
 	Output int64  `json:"output"`
 	Unit   string `json:"unit"`
 }
@@ -69,12 +70,6 @@ type Edge struct {
 type Label struct {
 	Name  string      `json:"name"`
 	Value interface{} `json:"value"`
-}
-
-type Wait struct {
-	Name       string  `json:"name"`
-	Value      float64 `json:"value"`
-	Percentage float64 `json:"percentage"`
 }
 
 type TotalStats struct {
@@ -85,7 +80,6 @@ type TotalStats struct {
 
 type Global struct {
 	Statistics Statistics `json:"statistics"`
-	Waits      []Wait     `json:"waits"`
 	TotalStats TotalStats `json:"totalStats"`
 }
 
@@ -94,7 +88,14 @@ type Statistics struct {
 	Throughput []StatisticValue `json:"Throughput"`
 	IO         []StatisticValue `json:"IO"`
 	Network    []StatisticValue `json:"Network"`
-	Pruning    []StatisticValue `json:"Pruning"`
+}
+
+type Cost struct {
+	Start   float64 `json:"Start"`
+	Total   float64 `json:"Total"`
+	Card    float64 `json:"Card"`
+	Ndv     float64 `json:"Ndv"`
+	Rowsize float64 `json:"Rowsize"`
 }
 
 type StatisticValue struct {
@@ -123,8 +124,7 @@ func NewExplainDataFail(uuid uuid.UUID, code uint16, msg string) *ExplainData {
 func NewStep(step int) *Step {
 	return &Step{
 		Step:        step,
-		Description: "???",
-		TimeInMs:    0,
+		Description: "",
 		State:       "success",
 	}
 }
@@ -137,11 +137,27 @@ func NewGraphData() *GraphData {
 	}
 }
 
+func NewLabel(name string, value interface{}) *Label {
+	return &Label{
+		Name:  name,
+		Value: value,
+	}
+}
+
 func NewStatistics() *Statistics {
 	return &Statistics{
 		Throughput: make([]StatisticValue, 0),
 		IO:         make([]StatisticValue, 0),
 		Network:    make([]StatisticValue, 0),
-		Pruning:    make([]StatisticValue, 0),
+	}
+}
+
+func buildEdge(parentNode *plan.Node, childNode *plan.Node, index int32) *Edge {
+	return &Edge{
+		Id:     "E" + strconv.Itoa(int(index)),
+		Src:    strconv.FormatInt(int64(childNode.NodeId), 10),
+		Dst:    strconv.FormatInt(int64(parentNode.NodeId), 10),
+		Output: childNode.AnalyzeInfo.OutputSize,
+		Unit:   "count",
 	}
 }

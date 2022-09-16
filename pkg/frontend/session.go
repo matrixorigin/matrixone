@@ -45,6 +45,7 @@ const (
 	NotShowStatement ShowStatementType = 0
 	ShowColumns      ShowStatementType = 1
 	ExplainAnalyze   ShowStatementType = 2
+	Explain          ShowStatementType = 3
 )
 
 type TxnHandler struct {

@@ -350,7 +350,7 @@ message AnalyzeInfo {
 
 message ExplainOption {
 	bool Verbose = 1;
-	bool Anzlyze = 2;
+	bool Analyze = 2;
 	enum FormatType {
 			TEXT = 0;
 			XML = 1;

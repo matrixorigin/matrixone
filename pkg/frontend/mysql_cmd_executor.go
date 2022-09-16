@@ -1534,7 +1534,7 @@ func GetExplainColumns(explainColName string) ([]interface{}, error) {
 func ConvPlanExplainOption(option *plan.ExplainOption) explain.ExplainOptions {
 	ep := explain.ExplainOptions{
 		Verbose: option.Verbose,
-		Anzlyze: option.Anzlyze,
+		Anzlyze: option.Analyze,
 	}
 	switch option.Format {
 	case plan.ExplainOption_TEXT:
@@ -2030,10 +2030,16 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 				goto handleFailed
 			}
 		case *tree.ExplainAnalyze:
-			//err = errors.New(errno.FeatureNotSupported, "not support explain analyze statement now")
-			//goto handleFailed
 			ses.showStmtType = ExplainAnalyze
 			ses.Data = nil
+			switch st.Statement.(type) {
+			case *tree.Delete:
+				mce.ses.GetTxnCompileCtx().SetQueryType(TXN_DELETE)
+			case *tree.Update:
+				mce.ses.GetTxnCompileCtx().SetQueryType(TXN_UPDATE)
+			default:
+				mce.ses.GetTxnCompileCtx().SetQueryType(TXN_DEFAULT)
+			}
 		case *tree.ShowColumns:
 			ses.showStmtType = ShowColumns
 			ses.Data = nil
