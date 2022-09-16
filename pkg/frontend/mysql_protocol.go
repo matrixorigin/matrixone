@@ -1654,12 +1654,11 @@ func (mp *MysqlProtocolImpl) makeResultSetBinaryRow(data []byte, mrs *MysqlResul
 	data = mp.append(data, defines.OKHeader) // append OkHeader
 
 	// get null buffer
-	var buffer []byte
-	nullBitmapOff := len(buffer)
 	columnsLength := mrs.GetColumnCount()
+	buffer := mp.lenEncBuffer[:columnsLength]
 	numBytes4Null := (columnsLength + 7 + 2) / 8
 	for i := uint64(0); i < numBytes4Null; i++ {
-		buffer = append(buffer, 0)
+		buffer[i] = 0
 	}
 	for i := uint64(0); i < uint64(columnsLength); i++ {
 		if isNil, err := mrs.ColumnIsNull(rowIdx, i); err != nil {
@@ -1667,7 +1666,7 @@ func (mp *MysqlProtocolImpl) makeResultSetBinaryRow(data []byte, mrs *MysqlResul
 		} else if isNil {
 			bytePos := (i + 2) / 8
 			bitPos := byte((i + 2) % 8)
-			idx := nullBitmapOff + int(bytePos)
+			idx := int(bytePos)
 			buffer[idx] |= 1 << bitPos
 			continue
 		}
