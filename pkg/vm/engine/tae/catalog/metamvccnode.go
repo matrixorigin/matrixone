@@ -50,7 +50,7 @@ func (e *MetadataMVCCNode) CloneAll() txnbase.MVCCNode {
 
 func (e *MetadataMVCCNode) CloneData() txnbase.MVCCNode {
 	return &MetadataMVCCNode{
-		EntryMVCCNode: e.EntryMVCCNode.Clone(),
+		EntryMVCCNode: e.EntryMVCCNode.CloneData(),
 		TxnMVCCNode:   &txnbase.TxnMVCCNode{},
 		MetaLoc:       e.MetaLoc,
 		DeltaLoc:      e.DeltaLoc,
@@ -59,35 +59,31 @@ func (e *MetadataMVCCNode) CloneData() txnbase.MVCCNode {
 
 func (e *MetadataMVCCNode) String() string {
 
-	return fmt.Sprintf("%s[C=%v,D=%v][Loc1=%s,Loc2=%s][Deleted?%v]",
+	return fmt.Sprintf("%s%s",
 		e.TxnMVCCNode.String(),
-		e.CreatedAt,
-		e.DeletedAt,
-		e.MetaLoc,
-		e.DeltaLoc,
-		e.Deleted)
+		e.EntryMVCCNode.String())
+}
+func (e *MetadataMVCCNode) UpdateAttr(o *MetadataMVCCNode) {
+	if o.MetaLoc != "" {
+		e.MetaLoc = o.MetaLoc
+	}
+	if o.DeltaLoc != "" {
+		e.DeltaLoc = o.DeltaLoc
+	}
 }
 
 // for create drop in one txn
 func (e *MetadataMVCCNode) UpdateNode(vun txnbase.MVCCNode) {
 	un := vun.(*MetadataMVCCNode)
-	e.DeletedAt = un.DeletedAt
-	e.Deleted = true
-}
-
-func (e *MetadataMVCCNode) ApplyUpdate(be *MetadataMVCCNode) (err error) {
-	// if e.Deleted {
-	// 	// TODO
-	// }
-	e.EntryMVCCNode = be.EntryMVCCNode.Clone()
-	e.MetaLoc = be.MetaLoc
-	e.DeltaLoc = be.DeltaLoc
-	return
-}
-
-func (e *MetadataMVCCNode) ApplyDelete() (err error) {
-	err = e.ApplyDeleteLocked()
-	return
+	for _, op := range un.NodeOp {
+		switch op {
+		case NOpCreate:
+			e.CreatedAt = un.CreatedAt
+		case NOpDelete:
+			e.DeletedAt = un.DeletedAt
+		}
+		e.NodeOp = append(e.NodeOp, op)
+	}
 }
 
 func (e *MetadataMVCCNode) ApplyCommit(index *wal.Index) (err error) {

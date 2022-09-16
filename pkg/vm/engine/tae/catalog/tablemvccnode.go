@@ -47,47 +47,38 @@ func (e *TableMVCCNode) CloneAll() txnbase.MVCCNode {
 
 func (e *TableMVCCNode) CloneData() txnbase.MVCCNode {
 	return &TableMVCCNode{
-		EntryMVCCNode: e.EntryMVCCNode.Clone(),
+		EntryMVCCNode: e.EntryMVCCNode.CloneData(),
 		TxnMVCCNode:   &txnbase.TxnMVCCNode{},
 	}
 }
 
 func (e *TableMVCCNode) String() string {
 
-	return fmt.Sprintf("%s[C=%v,D=%v][Deleted?%v]",
+	return fmt.Sprintf("%s%s",
 		e.TxnMVCCNode.String(),
-		e.CreatedAt,
-		e.DeletedAt,
-		e.Deleted)
+		e.EntryMVCCNode.String())
 }
 
 // for create drop in one txn
 func (e *TableMVCCNode) UpdateNode(vun txnbase.MVCCNode) {
 	un := vun.(*TableMVCCNode)
-	e.DeletedAt = un.DeletedAt
-	e.Deleted = true
-}
-
-func (e *TableMVCCNode) ApplyUpdate(be *TableMVCCNode) (err error) {
-	// if e.Deleted {
-	// 	// TODO
-	// }
-	e.EntryMVCCNode = be.EntryMVCCNode.Clone()
-	return
-}
-
-func (e *TableMVCCNode) ApplyDelete() (err error) {
-	err = e.ApplyDeleteLocked()
-	return
+	for _, op := range un.NodeOp {
+		switch op {
+		case NOpCreate:
+			e.CreatedAt = un.CreatedAt
+		case NOpDelete:
+			e.DeletedAt = un.DeletedAt
+		}
+		e.NodeOp = append(e.NodeOp, op)
+	}
 }
 
 func (e *TableMVCCNode) ApplyCommit(index *wal.Index) (err error) {
 	var commitTS types.TS
-	if e.Deleted && e.CreatedAt.IsEmpty() {
-		commitTS, err = e.TxnMVCCNode.ApplyCommit(index, false)
-	} else {
-		commitTS, err = e.TxnMVCCNode.ApplyCommit(index, true)
+	if e.TxnMVCCNode.GetTxn() == nil {
+		return nil
 	}
+	commitTS, err = e.TxnMVCCNode.ApplyCommit(index, true)
 	if err != nil {
 		return
 	}
