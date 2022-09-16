@@ -53,11 +53,11 @@ func NewFlushBlkTask(
 func (task *flushBlkTask) Scope() *common.ID { return task.meta.AsCommonID() }
 
 func (task *flushBlkTask) Execute() (err error) {
-	if task.sortCol != nil {
+	/*if task.sortCol != nil {
 		if err = BuildAndFlushIndex(task.file, task.meta, task.sortCol); err != nil {
 			return
 		}
-	}
+	}*/
 	if err = task.file.WriteBatch(task.data, task.ts); err != nil {
 		return
 	}

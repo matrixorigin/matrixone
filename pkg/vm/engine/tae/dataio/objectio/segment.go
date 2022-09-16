@@ -17,6 +17,7 @@ package objectio
 import (
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"path"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -43,6 +44,8 @@ func (factory *segmentFactory) DecodeName(name string) (id uint64, err error) {
 }
 
 func (factory *segmentFactory) Build(dir string, id uint64) file.Segment {
+	name := path.Join(dir, "data")
+	factory.fs.SetDir(name)
 	return openSegment(dir, id, factory.fs)
 }
 

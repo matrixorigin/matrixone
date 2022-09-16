@@ -60,7 +60,13 @@ func (r *Reader) LoadBlkColumns(
 	nullables []bool,
 	opts *containers.Options) (bat *containers.Batch, err error) {
 	bat = containers.NewBatch()
+
 	for i, _ := range r.block.columns {
+		vec := containers.MakeVector(colTypes[i], nullables[i], opts)
+		bat.AddVector(colNames[i], vec)
+		if r.block.meta == nil {
+			continue
+		}
 		col, err := r.block.meta.GetColumn(uint16(i))
 		if err != nil {
 			return bat, err
@@ -69,8 +75,6 @@ func (r *Reader) LoadBlkColumns(
 		if err != nil {
 			return bat, err
 		}
-		vec := containers.MakeVector(colTypes[i], nullables[i], opts)
-		bat.AddVector(colNames[i], vec)
 		r := bytes.NewBuffer(data.Entries[0].Data)
 		if _, err = vec.ReadFrom(r); err != nil {
 			return bat, err

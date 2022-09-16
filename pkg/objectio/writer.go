@@ -141,6 +141,10 @@ func (w *ObjectWriter) WriteEnd() (map[uint32]BlockObject, error) {
 	if err != nil {
 		return nil, err
 	}
+	err = w.Sync("")
+	if err != nil {
+		return nil, err
+	}
 	return w.blocks, err
 }
 

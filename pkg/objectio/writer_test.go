@@ -94,9 +94,6 @@ func TestNewObjectWriter(t *testing.T) {
 	extents, err := objectWriter.WriteEnd()
 	assert.Nil(t, err)
 	assert.Equal(t, 2, len(extents))
-	// Sync is for testing
-	err = objectWriter.(*ObjectWriter).Sync(dir)
-	assert.Nil(t, err)
 
 	objectReader, _ := NewObjectReader(name, service)
 	idxs := make([]uint16, 3)

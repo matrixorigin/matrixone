@@ -15,10 +15,9 @@
 package db
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/objectio"
 	"sync/atomic"
 	"time"
-
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/segmentio"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
@@ -59,7 +58,7 @@ func Open(dirname string, opts *options.Options) (db *DB, err error) {
 		IndexBufMgr: indexBufMgr,
 		MTBufMgr:    mutBufMgr,
 		TxnBufMgr:   txnBufMgr,
-		FileFactory: segmentio.SegmentFactory,
+		FileFactory: objectio.SegmentFactory,
 		Closed:      new(atomic.Value),
 	}
 

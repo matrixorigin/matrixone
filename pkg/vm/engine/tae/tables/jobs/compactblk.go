@@ -176,7 +176,7 @@ func (task *compactBlockTask) Execute() (err error) {
 	if err = ioTask.WaitDone(); err != nil {
 		return
 	}
-	if err = newBlkData.ReplayIndex(); err != nil {
+	/*if err = newBlkData.ReplayIndex(); err != nil {
 		return err
 	}
 	/*

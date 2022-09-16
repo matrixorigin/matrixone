@@ -51,7 +51,7 @@ func TestAppend(t *testing.T) {
 	tae.bindSchema(schema)
 	data := catalog.MockBatch(schema, int(schema.BlockMaxRows*2))
 	defer data.Close()
-	bats := data.Split(4)
+	bats := data.Split(2)
 	now := time.Now()
 	tae.createRelAndAppend(bats[0], true)
 	t.Log(time.Since(now))
@@ -62,10 +62,12 @@ func TestAppend(t *testing.T) {
 	assert.NoError(t, err)
 	// FIXME
 	// checkAllColRowsByScan(t, rel, bats[0].Length()+bats[1].Length(), false)
-	err = rel.Append(bats[2])
-	assert.NoError(t, err)
+
 	assert.NoError(t, txn.Commit())
-	tae.checkRowsByScan(bats[0].Length()+bats[1].Length()+bats[2].Length(), false)
+	testutils.WaitExpect(10000, func() bool {
+		return tae.Scheduler.GetPenddingLSNCnt() == 0
+	})
+	// tae.checkRowsByScan(bats[0].Length()+bats[1].Length()+bats[2].Length(), false)
 }
 
 func TestAppend2(t *testing.T) {

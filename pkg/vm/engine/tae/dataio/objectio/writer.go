@@ -15,11 +15,13 @@
 package objectio
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/moengine"
 )
 
 type Writer struct {
@@ -33,6 +35,49 @@ func NewWriter(fs *ObjectFS) *Writer {
 	}
 }
 
+func VectorsToMO(vec containers.Vector) *vector.Vector {
+	mov := vector.NewOriginal(vec.GetType())
+	data := vec.Data()
+	typ := vec.GetType()
+	mov.Typ = typ
+	if vec.HasNull() {
+		mov.Nsp.Np = bitmap.New(vec.Length())
+		mov.Nsp.Np.AddMany(vec.NullMask().ToArray())
+		//mov.Nsp.Np = vec.NullMask()
+	}
+
+	if vec.GetType().IsVarlen() {
+		bs := vec.Bytes()
+		nbs := len(bs.Offset)
+		bsv := make([][]byte, nbs)
+		for i := 0; i < nbs; i++ {
+			bsv[i] = bs.Data[bs.Offset[i] : bs.Offset[i]+bs.Length[i]]
+		}
+		vector.AppendBytes(mov, bsv, nil)
+	} else if vec.GetType().IsTuple() {
+		cnt := types.DecodeInt32(data)
+		if cnt != 0 {
+			if err := types.Decode(data, &mov.Col); err != nil {
+				panic(any(err))
+			}
+		}
+	} else {
+		vector.AppendFixedRaw(mov, data)
+	}
+
+	return mov
+}
+func CopyToMoVector(vec containers.Vector) *vector.Vector {
+	return VectorsToMO(vec)
+}
+func CopyToMoVectors(vecs []containers.Vector) []*vector.Vector {
+	movecs := make([]*vector.Vector, len(vecs))
+	for i := range movecs {
+		movecs[i] = CopyToMoVector(vecs[i])
+	}
+	return movecs
+}
+
 func (w *Writer) WriteBlock(
 	id *common.ID,
 	columns *containers.Batch) (block objectio.BlockObject, err error) {
@@ -43,8 +88,12 @@ func (w *Writer) WriteBlock(
 	}
 	w.writer = writer
 	bat := batch.New(true, columns.Attrs)
-	bat.Vecs = moengine.CopyToMoVectors(columns.Vecs)
+	bat.Vecs = CopyToMoVectors(columns.Vecs)
 	block, err = w.writer.Write(bat)
+	if err != nil {
+		return
+	}
+	_, err = w.writer.WriteEnd()
 	return
 }
 

@@ -15,6 +15,7 @@
 package objectio
 
 import (
+	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/compress"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -52,7 +53,20 @@ func NewObjectFS(service fileservice.FileService) *ObjectFS {
 }
 
 func (o *ObjectFS) SetDir(dir string) {
+	if o.attr.dir != "" {
+		return
+	}
 	o.attr.dir = dir
+	c := fileservice.Config{
+		Name:    "LOCAL",
+		Backend: "DISK",
+		DataDir: dir,
+	}
+	service, err := fileservice.NewFileService(c)
+	if err != nil {
+		panic(fmt.Sprintf("NewFileService failed: %s", err.Error()))
+	}
+	o.service = service
 }
 
 func (o *ObjectFS) ReadDir(dir string) ([]common.FileInfo, error) {
