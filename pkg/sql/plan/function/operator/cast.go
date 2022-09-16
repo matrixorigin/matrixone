@@ -43,7 +43,7 @@ func Cast(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 			}
 		}
 		if moErr, ok := err.(*moerr.Error); ok {
-			if moErr.Code == moerr.OUT_OF_RANGE {
+			if moErr.GetCode() == moerr.OUT_OF_RANGE {
 				extraError = " Reason: overflow"
 			}
 		}

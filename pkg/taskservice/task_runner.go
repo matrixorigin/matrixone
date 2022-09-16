@@ -16,6 +16,7 @@ package taskservice
 
 import (
 	"context"
+	"errors"
 	"runtime"
 	"sort"
 	"sync"
@@ -439,7 +440,7 @@ func (r *taskRunner) doTaskDone(ctx context.Context, rt runningTask) bool {
 			return false
 		default:
 			err := r.service.Complete(rt.ctx, r.runnerID, rt.task, *rt.task.ExecuteResult)
-			if err == nil || err == ErrInvalidTask {
+			if err == nil || errors.Is(err, ErrInvalidTask) {
 				r.removeRunningTask(rt.task.ID)
 				return true
 			}
@@ -479,7 +480,7 @@ func (r *taskRunner) doHeartbeat(ctx context.Context) {
 
 	for _, rt := range tasks {
 		if err := r.service.Heartbeat(ctx, rt.task); err != nil {
-			if err == ErrInvalidTask {
+			if errors.Is(err, ErrInvalidTask) {
 				r.removeRunningTask(rt.task.ID)
 				rt.cancel()
 			}

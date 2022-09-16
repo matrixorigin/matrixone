@@ -644,10 +644,10 @@ func allocTestBatch(attrName []string, tt []types.Type, batchSize int) *batch.Ba
 func Test_mysqlerror(t *testing.T) {
 	convey.Convey("mysql error", t, func() {
 		err := moerr.New(moerr.ER_BAD_DB_ERROR, "T")
-		convey.So(err.Code, convey.ShouldEqual, moerr.ER_BAD_DB_ERROR)
+		convey.So(err.GetCode(), convey.ShouldEqual, moerr.ER_BAD_DB_ERROR)
 
 		err2 := moerr.New(65535, "T")
-		convey.So(err2.Code, convey.ShouldEqual, moerr.ErrEnd)
+		convey.So(err2.GetCode(), convey.ShouldEqual, moerr.ErrEnd)
 	})
 }
 

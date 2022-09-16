@@ -35,7 +35,7 @@ func TestF32IntegerDivByZero(t *testing.T) {
 	err := NumericIntegerDivFloat[float32](av, bv, cv)
 	if err == nil {
 		if moerror, ok := err.(*moerr.Error); ok {
-			if moerror.Code != moerr.DIVIVISION_BY_ZERO {
+			if moerror.GetCode() != moerr.DIVIVISION_BY_ZERO {
 				t.Fatalf("should have div by zero error.")
 			}
 		} else {
@@ -59,7 +59,7 @@ func TestF64IntegerDivByZero(t *testing.T) {
 	err := NumericIntegerDivFloat[float64](av, bv, cv)
 	if err == nil {
 		if moerror, ok := err.(*moerr.Error); ok {
-			if moerror.Code != moerr.DIVIVISION_BY_ZERO {
+			if moerror.GetCode() != moerr.DIVIVISION_BY_ZERO {
 				t.Fatalf("should have div by zero error.")
 			}
 		} else {

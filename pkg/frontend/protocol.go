@@ -264,9 +264,9 @@ func (mp *MysqlProtocolImpl) SendResponse(resp *Response) error {
 		}
 		switch myerr := err.(type) {
 		case *moerr.Error:
-			return mp.sendErrPacket(myerr.Code, myerr.SqlState, myerr.Error())
+			return mp.sendErrPacket(uint16(myerr.GetCode()), string(myerr.GetSqlState()), myerr.Error())
 		}
-		return mp.sendErrPacket(moerr.ER_UNKNOWN_ERROR, DefaultMySQLState, fmt.Sprintf("%v", err))
+		return mp.sendErrPacket(uint16(moerr.ER_UNKNOWN_ERROR), DefaultMySQLState, fmt.Sprintf("%v", err))
 	case ResultResponse:
 		mer := resp.data.(*MysqlExecutionResult)
 		if mer == nil {

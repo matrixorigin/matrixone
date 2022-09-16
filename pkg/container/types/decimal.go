@@ -161,7 +161,7 @@ func Decimal64_FromFloat64(f float64, width int32, scale int32) (Decimal64, erro
 func Decimal64_FromString(s string) (Decimal64, error) {
 	var d Decimal64
 	buf := zstr(s)
-	rc := uint16(C.Decimal64_FromString(dec64PtrToC(&d), bytesPtrToC(buf)))
+	rc := moerr.Code(C.Decimal64_FromString(dec64PtrToC(&d), bytesPtrToC(buf)))
 	if rc == moerr.DATA_TRUNCATED {
 		return d, moerr.New(moerr.DATA_TRUNCATED, "decimal64")
 	} else if rc != 0 {
@@ -225,7 +225,7 @@ func Decimal128_FromFloat64(f float64, width, scale int32) (Decimal128, error) {
 func Decimal128_FromString(s string) (Decimal128, error) {
 	var d Decimal128
 	buf := zstr(s)
-	rc := uint16(C.Decimal128_FromString(dec128PtrToC(&d), bytesPtrToC(buf)))
+	rc := moerr.Code(C.Decimal128_FromString(dec128PtrToC(&d), bytesPtrToC(buf)))
 	if rc == moerr.DATA_TRUNCATED {
 		return d, moerr.NewError(moerr.DATA_TRUNCATED, "decimal128 data truncated")
 	} else if rc != 0 {
@@ -250,7 +250,7 @@ func (d Decimal64) ToFloat64() float64 {
 	if rc == 0 {
 		return float64(ret)
 	}
-	panic(moerr.NewError(uint16(rc), "error when converting decimal128 to float64"))
+	panic(moerr.NewError(moerr.Code(rc), "error when converting decimal128 to float64"))
 }
 func (d Decimal64) ToInt64() int64 {
 	var ret C.int64_t
@@ -258,7 +258,7 @@ func (d Decimal64) ToInt64() int64 {
 	if rc == 0 {
 		return int64(ret)
 	}
-	panic(moerr.NewError(uint16(rc), "error when converting decimal128 to float64"))
+	panic(moerr.NewError(moerr.Code(rc), "error when converting decimal128 to float64"))
 }
 
 func (d Decimal64) String() string {
@@ -281,7 +281,7 @@ func (d Decimal128) ToFloat64() float64 {
 	if int32(rc) == 0 {
 		return float64(ret)
 	}
-	panic(moerr.NewError(uint16(rc), "error when converting decimal128 to float64"))
+	panic(moerr.NewError(moerr.Code(rc), "error when converting decimal128 to float64"))
 }
 func (d Decimal128) ToInt64() int64 {
 	var ret C.int64_t
@@ -289,7 +289,7 @@ func (d Decimal128) ToInt64() int64 {
 	if rc == 0 {
 		return int64(ret)
 	}
-	panic(moerr.NewError(uint16(rc), "error when converting decimal128 to int64"))
+	panic(moerr.NewError(moerr.Code(rc), "error when converting decimal128 to int64"))
 }
 
 func (d Decimal128) String() string {
