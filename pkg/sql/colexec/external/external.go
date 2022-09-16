@@ -192,6 +192,9 @@ const NULL_FLAG = "\\N"
 
 func judgeInterge(field string) bool {
 	for i := 0; i < len(field); i++ {
+		if field[i] == '-' || field[i] == '+' {
+			continue
+		}
 		if field[i] > '9' || field[i] < '0' {
 			return false
 		}
