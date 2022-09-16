@@ -33,6 +33,7 @@ message Vector {
     bytes nsp = 4;
     bool is_const = 5;
     uint32 len = 6;
+    bytes area = 7;
 };
 
 message Batch {

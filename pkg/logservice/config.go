@@ -26,6 +26,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper"
+	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/util/toml"
 )
 
@@ -145,10 +146,16 @@ type Config struct {
 		// If HAKeeper does not receive two heartbeat within DNStoreTimeout,
 		// it regards the dn store as down.
 		DNStoreTimeout toml.Duration `toml:"dn-store-timeout"`
+		// CNStoreTimeout is the actual time limit between a cn store's heartbeat.
+		// If HAKeeper does not receive two heartbeat within CNStoreTimeout,
+		// it regards the dn store as down.
+		CNStoreTimeout toml.Duration `toml:"cn-store-timeout"`
 	}
 
 	// HAKeeperClientConfig is the config for HAKeeperClient
 	HAKeeperClientConfig HAKeeperClientConfig
+	// TaskService is the interface for managing async tasks running on CNs.
+	TaskService taskservice.TaskService
 	// DisableWorkers disables the HAKeeper ticker and HAKeeper client in tests.
 	// Never set this field to true in production
 	DisableWorkers bool
@@ -159,6 +166,7 @@ func (c *Config) GetHAKeeperConfig() hakeeper.Config {
 		TickPerSecond:   c.HAKeeperConfig.TickPerSecond,
 		LogStoreTimeout: c.HAKeeperConfig.LogStoreTimeout.Duration,
 		DNStoreTimeout:  c.HAKeeperConfig.DNStoreTimeout.Duration,
+		CNStoreTimeout:  c.HAKeeperConfig.CNStoreTimeout.Duration,
 	}
 }
 
@@ -288,6 +296,9 @@ func (c *Config) Validate() error {
 func (c *Config) Fill() {
 	if c.FS == nil {
 		c.FS = vfs.Default
+	}
+	if c.TaskService == nil {
+		c.TaskService = taskservice.NewTaskService(taskservice.NewMemTaskStorage())
 	}
 	if c.RTTMillisecond == 0 {
 		c.RTTMillisecond = 200

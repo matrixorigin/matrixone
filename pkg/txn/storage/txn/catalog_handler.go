@@ -359,19 +359,25 @@ func (c *CatalogHandler) HandleNewTableIter(meta txn.TxnMeta, req txnengine.NewT
 		var iter any
 		switch name {
 		case catalog.SystemTable_DB_Name:
+			tableIter := c.upstream.databases.NewIter(tx)
 			iter = &Iter[Text, DatabaseRow]{
-				TableIter: c.upstream.databases.NewIter(tx),
+				TableIter: tableIter,
 				AttrsMap:  attrsMap,
+				nextFunc:  tableIter.First,
 			}
 		case catalog.SystemTable_Table_Name:
+			tableIter := c.upstream.relations.NewIter(tx)
 			iter = &Iter[Text, RelationRow]{
-				TableIter: c.upstream.relations.NewIter(tx),
+				TableIter: tableIter,
 				AttrsMap:  attrsMap,
+				nextFunc:  tableIter.First,
 			}
 		case catalog.SystemTable_Columns_Name:
+			tableIter := c.upstream.attributes.NewIter(tx)
 			iter = &Iter[Text, AttributeRow]{
-				TableIter: c.upstream.attributes.NewIter(tx),
+				TableIter: tableIter,
 				AttrsMap:  attrsMap,
+				nextFunc:  tableIter.First,
 			}
 		default:
 			panic(fmt.Errorf("fixme: %s", name))
@@ -445,11 +451,10 @@ func (c *CatalogHandler) HandleRead(meta txn.TxnMeta, req txnengine.ReadReq, res
 				b.Vecs[i] = vector.New(iter.AttrsMap[name].Type)
 			}
 
-			fn := iter.TableIter.First
-			if iter.FirstCalled {
-				fn = iter.TableIter.Next
-			} else {
-				iter.FirstCalled = true
+			fn := iter.TableIter.Next
+			if iter.nextFunc != nil {
+				fn = iter.nextFunc
+				iter.nextFunc = nil
 			}
 			for ok := fn(); ok; ok = iter.TableIter.Next() {
 				_, row, err := iter.TableIter.Read()
@@ -468,11 +473,10 @@ func (c *CatalogHandler) HandleRead(meta txn.TxnMeta, req txnengine.ReadReq, res
 				b.Vecs[i] = vector.New(iter.AttrsMap[name].Type)
 			}
 
-			fn := iter.TableIter.First
-			if iter.FirstCalled {
-				fn = iter.TableIter.Next
-			} else {
-				iter.FirstCalled = true
+			fn := iter.TableIter.Next
+			if iter.nextFunc != nil {
+				fn = iter.nextFunc
+				iter.nextFunc = nil
 			}
 			for ok := fn(); ok; ok = iter.TableIter.Next() {
 				_, row, err := iter.TableIter.Read()
@@ -492,11 +496,10 @@ func (c *CatalogHandler) HandleRead(meta txn.TxnMeta, req txnengine.ReadReq, res
 				b.Vecs[i] = vector.New(iter.AttrsMap[name].Type)
 			}
 
-			fn := iter.TableIter.First
-			if iter.FirstCalled {
-				fn = iter.TableIter.Next
-			} else {
-				iter.FirstCalled = true
+			fn := iter.TableIter.Next
+			if iter.nextFunc != nil {
+				fn = iter.nextFunc
+				iter.nextFunc = nil
 			}
 			for ok := fn(); ok; ok = iter.TableIter.Next() {
 				_, row, err := iter.TableIter.Read()

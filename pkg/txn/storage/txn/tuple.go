@@ -14,23 +14,20 @@
 
 package txnstorage
 
-import (
-	"fmt"
-	"strings"
-)
+import "fmt"
 
-type AnyKey []any
+type Tuple []any
 
-var _ Ordered[AnyKey] = AnyKey{}
+var _ Ordered[Tuple] = Tuple{}
 
-func (a AnyKey) Less(than AnyKey) bool {
-	if len(a) < len(than) {
+func (t Tuple) Less(than Tuple) bool {
+	if len(t) < len(than) {
 		return true
 	}
-	if len(than) < len(a) {
+	if len(t) > len(than) {
 		return false
 	}
-	for i, key := range a {
+	for i, key := range t {
 		switch key := key.(type) {
 
 		case Text:
@@ -87,49 +84,4 @@ func (a AnyKey) Less(than AnyKey) bool {
 	}
 	// equal
 	return false
-}
-
-type AnyRow struct {
-	primaryKey AnyKey
-	indexes    []AnyKey
-	attributes map[string]Nullable // attribute id -> nullable value
-}
-
-func (a AnyRow) PrimaryKey() AnyKey {
-	return a.primaryKey
-}
-
-func (a AnyRow) Indexes() []AnyKey {
-	return a.indexes
-}
-
-func (a *AnyRow) String() string {
-	buf := new(strings.Builder)
-	buf.WriteString("AnyRow{")
-	buf.WriteString(fmt.Sprintf("key: %+v", a.primaryKey))
-	for key, value := range a.attributes {
-		buf.WriteString(fmt.Sprintf(", %s: %+v", key, value))
-	}
-	buf.WriteString("}")
-	return buf.String()
-}
-
-func NewAnyRow(
-	indexes []AnyKey,
-) *AnyRow {
-	return &AnyRow{
-		attributes: make(map[string]Nullable),
-		indexes:    indexes,
-	}
-}
-
-type NamedAnyRow struct {
-	Row      *AnyRow
-	AttrsMap map[string]*AttributeRow
-}
-
-var _ NamedRow = new(NamedAnyRow)
-
-func (n *NamedAnyRow) AttrByName(tx *Transaction, name string) (Nullable, error) {
-	return n.Row.attributes[n.AttrsMap[name].ID], nil
 }
