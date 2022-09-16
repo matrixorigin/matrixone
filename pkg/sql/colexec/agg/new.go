@@ -12,13 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package aggregate
+package agg
 
 import (
 	"fmt"
-
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/agg"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/agg/anyvalue"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/agg/approxcd"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/agg/avg"
@@ -33,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/agg/variance"
 )
 
+// ReturnType get aggregate operator's return type according to its operator-id and input-types.
 func ReturnType(op int, typ types.Type) (types.Type, error) {
 	var otyp types.Type
 
@@ -66,39 +65,39 @@ func ReturnType(op int, typ types.Type) (types.Type, error) {
 	return otyp, nil
 }
 
-func New(op int, dist bool, typ types.Type) (agg.Agg[any], error) {
+func New(op int, dist bool, typ types.Type) (Agg[any], error) {
 	switch op {
 	case Sum:
-		return NewSum(typ, dist), nil
+		return newSum(typ, dist), nil
 	case Avg:
-		return NewAvg(typ, dist), nil
+		return newAvg(typ, dist), nil
 	case Max:
-		return NewMax(typ, dist), nil
+		return newMax(typ, dist), nil
 	case Min:
-		return NewMin(typ, dist), nil
+		return newMin(typ, dist), nil
 	case Count:
-		return NewCount(typ, dist, false), nil
+		return newCount(typ, dist, false), nil
 	case StarCount:
-		return NewCount(typ, dist, true), nil
+		return newCount(typ, dist, true), nil
 	case ApproxCountDistinct:
-		return NewApprox(typ, dist), nil
+		return newApprox(typ, dist), nil
 	case Variance:
-		return NewVariance(typ, dist), nil
+		return newVariance(typ, dist), nil
 	case BitAnd:
-		return NewBitAnd(typ, dist), nil
+		return newBitAnd(typ, dist), nil
 	case BitXor:
-		return NewBitXor(typ, dist), nil
+		return newBitXor(typ, dist), nil
 	case BitOr:
-		return NewBitOr(typ, dist), nil
+		return newBitOr(typ, dist), nil
 	case StdDevPop:
-		return NewStdDevPop(typ, dist), nil
+		return newStdDevPop(typ, dist), nil
 	case AnyValue:
-		return NewAnyValue(typ, dist), nil
+		return newAnyValue(typ, dist), nil
 	}
 	panic(fmt.Errorf("unsupport type '%s' for aggregate %s", typ, Names[op]))
 }
 
-func NewCount(typ types.Type, dist bool, isStar bool) agg.Agg[any] {
+func newCount(typ types.Type, dist bool, isStar bool) Agg[any] {
 	switch typ.Oid {
 	case types.T_bool:
 		return newGenericCount[bool](typ, dist, isStar)
@@ -144,7 +143,7 @@ func NewCount(typ types.Type, dist bool, isStar bool) agg.Agg[any] {
 	panic(fmt.Errorf("unsupport type '%s' for anyvalue", typ))
 }
 
-func NewAnyValue(typ types.Type, dist bool) agg.Agg[any] {
+func newAnyValue(typ types.Type, dist bool) Agg[any] {
 	switch typ.Oid {
 	case types.T_bool:
 		return newGenericAnyValue[bool](typ, dist)
@@ -190,7 +189,7 @@ func NewAnyValue(typ types.Type, dist bool) agg.Agg[any] {
 	panic(fmt.Errorf("unsupport type '%s' for anyvalue", typ))
 }
 
-func NewAvg(typ types.Type, dist bool) agg.Agg[any] {
+func newAvg(typ types.Type, dist bool) Agg[any] {
 	switch typ.Oid {
 	case types.T_int8:
 		return newGenericAvg[int8](typ, dist)
@@ -215,20 +214,20 @@ func NewAvg(typ types.Type, dist bool) agg.Agg[any] {
 	case types.T_decimal64:
 		aggPriv := avg.NewD64Avg()
 		if dist {
-			return agg.NewUnaryDistAgg(false, typ, avg.ReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
+			return NewUnaryDistAgg(false, typ, avg.ReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
 		}
-		return agg.NewUnaryAgg(aggPriv, false, typ, avg.ReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, aggPriv.BatchFill)
+		return NewUnaryAgg(aggPriv, false, typ, avg.ReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, aggPriv.BatchFill)
 	case types.T_decimal128:
 		aggPriv := avg.NewD128Avg()
 		if dist {
-			return agg.NewUnaryDistAgg(false, typ, avg.ReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
+			return NewUnaryDistAgg(false, typ, avg.ReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
 		}
-		return agg.NewUnaryAgg(aggPriv, false, typ, avg.ReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, aggPriv.BatchFill)
+		return NewUnaryAgg(aggPriv, false, typ, avg.ReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, aggPriv.BatchFill)
 	}
 	panic(fmt.Errorf("unsupport type '%s' for avg", typ))
 }
 
-func NewSum(typ types.Type, dist bool) agg.Agg[any] {
+func newSum(typ types.Type, dist bool) Agg[any] {
 	switch typ.Oid {
 	case types.T_int8:
 		return newGenericSum[int8, int64](typ, dist)
@@ -253,27 +252,27 @@ func NewSum(typ types.Type, dist bool) agg.Agg[any] {
 	case types.T_decimal64:
 		aggPriv := sum.NewD64Sum()
 		if dist {
-			return agg.NewUnaryDistAgg(false, typ, sum.ReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
+			return NewUnaryDistAgg(false, typ, sum.ReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
 		}
-		return agg.NewUnaryAgg(aggPriv, false, typ, sum.ReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, aggPriv.BatchFill)
+		return NewUnaryAgg(aggPriv, false, typ, sum.ReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, aggPriv.BatchFill)
 	case types.T_decimal128:
 		aggPriv := sum.NewD128Sum()
 		if dist {
-			return agg.NewUnaryDistAgg(false, typ, sum.ReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
+			return NewUnaryDistAgg(false, typ, sum.ReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
 		}
-		return agg.NewUnaryAgg(aggPriv, false, typ, sum.ReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, aggPriv.BatchFill)
+		return NewUnaryAgg(aggPriv, false, typ, sum.ReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, aggPriv.BatchFill)
 	}
 	panic(fmt.Errorf("unsupport type '%s' for sum", typ))
 }
 
-func NewMax(typ types.Type, dist bool) agg.Agg[any] {
+func newMax(typ types.Type, dist bool) Agg[any] {
 	switch typ.Oid {
 	case types.T_bool:
 		aggPriv := max.NewBoolMax()
 		if dist {
-			return agg.NewUnaryDistAgg(false, typ, max.ReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
+			return NewUnaryDistAgg(false, typ, max.ReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
 		}
-		return agg.NewUnaryAgg(aggPriv, false, typ, max.ReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
+		return NewUnaryAgg(aggPriv, false, typ, max.ReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
 	case types.T_int8:
 		return newGenericMax[int8](typ, dist)
 	case types.T_int16:
@@ -297,21 +296,21 @@ func NewMax(typ types.Type, dist bool) agg.Agg[any] {
 	case types.T_char:
 		aggPriv := max.NewStrMax()
 		if dist {
-			return agg.NewUnaryDistAgg(false, typ, max.ReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
+			return NewUnaryDistAgg(false, typ, max.ReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
 		}
-		return agg.NewUnaryAgg(aggPriv, false, typ, max.ReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
+		return NewUnaryAgg(aggPriv, false, typ, max.ReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
 	case types.T_varchar:
 		aggPriv := max.NewStrMax()
 		if dist {
-			return agg.NewUnaryDistAgg(false, typ, max.ReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
+			return NewUnaryDistAgg(false, typ, max.ReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
 		}
-		return agg.NewUnaryAgg(aggPriv, false, typ, max.ReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
+		return NewUnaryAgg(aggPriv, false, typ, max.ReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
 	case types.T_blob:
 		aggPriv := max.NewStrMax()
 		if dist {
-			return agg.NewUnaryDistAgg(false, typ, max.ReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
+			return NewUnaryDistAgg(false, typ, max.ReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
 		}
-		return agg.NewUnaryAgg(aggPriv, false, typ, max.ReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
+		return NewUnaryAgg(aggPriv, false, typ, max.ReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
 	case types.T_date:
 		return newGenericMax[types.Date](typ, dist)
 	case types.T_datetime:
@@ -321,33 +320,33 @@ func NewMax(typ types.Type, dist bool) agg.Agg[any] {
 	case types.T_decimal64:
 		aggPriv := max.NewD64Max()
 		if dist {
-			return agg.NewUnaryDistAgg(false, typ, max.ReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
+			return NewUnaryDistAgg(false, typ, max.ReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
 		}
-		return agg.NewUnaryAgg(aggPriv, false, typ, max.ReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
+		return NewUnaryAgg(aggPriv, false, typ, max.ReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
 	case types.T_decimal128:
 		aggPriv := max.NewD128Max()
 		if dist {
-			return agg.NewUnaryDistAgg(false, typ, max.ReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
+			return NewUnaryDistAgg(false, typ, max.ReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
 		}
-		return agg.NewUnaryAgg(aggPriv, false, typ, max.ReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
+		return NewUnaryAgg(aggPriv, false, typ, max.ReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
 	case types.T_uuid:
 		aggPriv := max.NewUuidMax()
 		if dist {
-			return agg.NewUnaryDistAgg(false, typ, max.ReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
+			return NewUnaryDistAgg(false, typ, max.ReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
 		}
-		return agg.NewUnaryAgg(aggPriv, false, typ, max.ReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
+		return NewUnaryAgg(aggPriv, false, typ, max.ReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
 	}
 	panic(fmt.Errorf("unsupport type '%s' for anyvalue", typ))
 }
 
-func NewMin(typ types.Type, dist bool) agg.Agg[any] {
+func newMin(typ types.Type, dist bool) Agg[any] {
 	switch typ.Oid {
 	case types.T_bool:
 		aggPriv := min.NewBoolMin()
 		if dist {
-			return agg.NewUnaryDistAgg(false, typ, min.ReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
+			return NewUnaryDistAgg(false, typ, min.ReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
 		}
-		return agg.NewUnaryAgg(aggPriv, false, typ, min.ReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
+		return NewUnaryAgg(aggPriv, false, typ, min.ReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
 	case types.T_int8:
 		return newGenericMin[int8](typ, dist)
 	case types.T_int16:
@@ -371,21 +370,21 @@ func NewMin(typ types.Type, dist bool) agg.Agg[any] {
 	case types.T_char:
 		aggPriv := min.NewStrMin()
 		if dist {
-			return agg.NewUnaryDistAgg(false, typ, min.ReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
+			return NewUnaryDistAgg(false, typ, min.ReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
 		}
-		return agg.NewUnaryAgg(aggPriv, false, typ, min.ReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
+		return NewUnaryAgg(aggPriv, false, typ, min.ReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
 	case types.T_varchar:
 		aggPriv := min.NewStrMin()
 		if dist {
-			return agg.NewUnaryDistAgg(false, typ, min.ReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
+			return NewUnaryDistAgg(false, typ, min.ReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
 		}
-		return agg.NewUnaryAgg(aggPriv, false, typ, min.ReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
+		return NewUnaryAgg(aggPriv, false, typ, min.ReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
 	case types.T_blob:
 		aggPriv := min.NewStrMin()
 		if dist {
-			return agg.NewUnaryDistAgg(false, typ, min.ReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
+			return NewUnaryDistAgg(false, typ, min.ReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
 		}
-		return agg.NewUnaryAgg(aggPriv, false, typ, min.ReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
+		return NewUnaryAgg(aggPriv, false, typ, min.ReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
 	case types.T_date:
 		return newGenericMin[types.Date](typ, dist)
 	case types.T_datetime:
@@ -395,26 +394,26 @@ func NewMin(typ types.Type, dist bool) agg.Agg[any] {
 	case types.T_decimal64:
 		aggPriv := min.NewD64Min()
 		if dist {
-			return agg.NewUnaryDistAgg(false, typ, min.ReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
+			return NewUnaryDistAgg(false, typ, min.ReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
 		}
-		return agg.NewUnaryAgg(aggPriv, false, typ, min.ReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
+		return NewUnaryAgg(aggPriv, false, typ, min.ReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
 	case types.T_decimal128:
 		aggPriv := min.NewD128Min()
 		if dist {
-			return agg.NewUnaryDistAgg(false, typ, min.ReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
+			return NewUnaryDistAgg(false, typ, min.ReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
 		}
-		return agg.NewUnaryAgg(aggPriv, false, typ, min.ReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
+		return NewUnaryAgg(aggPriv, false, typ, min.ReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
 	case types.T_uuid:
 		aggPriv := min.NewUuidMin()
 		if dist {
-			return agg.NewUnaryDistAgg(false, typ, min.ReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
+			return NewUnaryDistAgg(false, typ, min.ReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
 		}
-		return agg.NewUnaryAgg(aggPriv, false, typ, min.ReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
+		return NewUnaryAgg(aggPriv, false, typ, min.ReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
 	}
 	panic(fmt.Errorf("unsupport type '%s' for anyvalue", typ))
 }
 
-func NewApprox(typ types.Type, dist bool) agg.Agg[any] {
+func newApprox(typ types.Type, dist bool) Agg[any] {
 	switch typ.Oid {
 	case types.T_bool:
 		return newGenericApproxcd[bool](typ, dist)
@@ -460,7 +459,7 @@ func NewApprox(typ types.Type, dist bool) agg.Agg[any] {
 	panic(fmt.Errorf("unsupport type '%s' for anyvalue", typ))
 }
 
-func NewBitOr(typ types.Type, dist bool) agg.Agg[any] {
+func newBitOr(typ types.Type, dist bool) Agg[any] {
 	switch typ.Oid {
 	case types.T_int8:
 		return newGenericBitOr[int8](typ, dist)
@@ -486,7 +485,7 @@ func NewBitOr(typ types.Type, dist bool) agg.Agg[any] {
 	panic(fmt.Errorf("unsupport type '%s' for avg", typ))
 }
 
-func NewBitXor(typ types.Type, dist bool) agg.Agg[any] {
+func newBitXor(typ types.Type, dist bool) Agg[any] {
 	switch typ.Oid {
 	case types.T_int8:
 		return newGenericBitXor[int8](typ, dist)
@@ -512,7 +511,7 @@ func NewBitXor(typ types.Type, dist bool) agg.Agg[any] {
 	panic(fmt.Errorf("unsupport type '%s' for avg", typ))
 }
 
-func NewBitAnd(typ types.Type, dist bool) agg.Agg[any] {
+func newBitAnd(typ types.Type, dist bool) Agg[any] {
 	switch typ.Oid {
 	case types.T_int8:
 		return newGenericBitAnd[int8](typ, dist)
@@ -538,7 +537,7 @@ func NewBitAnd(typ types.Type, dist bool) agg.Agg[any] {
 	panic(fmt.Errorf("unsupport type '%s' for avg", typ))
 }
 
-func NewVariance(typ types.Type, dist bool) agg.Agg[any] {
+func newVariance(typ types.Type, dist bool) Agg[any] {
 	switch typ.Oid {
 	case types.T_int8:
 		return newGenericVariance[int8](typ, dist)
@@ -563,21 +562,21 @@ func NewVariance(typ types.Type, dist bool) agg.Agg[any] {
 	case types.T_decimal64:
 		aggPriv := variance.NewVD64()
 		if dist {
-			return agg.NewUnaryDistAgg(false, typ, variance.ReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
+			return NewUnaryDistAgg(false, typ, variance.ReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
 		}
-		return agg.NewUnaryAgg(aggPriv, false, typ, variance.ReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
+		return NewUnaryAgg(aggPriv, false, typ, variance.ReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
 	case types.T_decimal128:
 		aggPriv := variance.NewVD128()
 		if dist {
-			return agg.NewUnaryDistAgg(false, typ, variance.ReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
+			return NewUnaryDistAgg(false, typ, variance.ReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
 		}
-		return agg.NewUnaryAgg(aggPriv, false, typ, variance.ReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
+		return NewUnaryAgg(aggPriv, false, typ, variance.ReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
 
 	}
 	panic(fmt.Errorf("unsupport type '%s' for avg", typ))
 }
 
-func NewStdDevPop(typ types.Type, dist bool) agg.Agg[any] {
+func newStdDevPop(typ types.Type, dist bool) Agg[any] {
 	switch typ.Oid {
 	case types.T_int8:
 		return newGenericStdDevPop[int8](typ, dist)
@@ -602,112 +601,112 @@ func NewStdDevPop(typ types.Type, dist bool) agg.Agg[any] {
 	case types.T_decimal64:
 		aggPriv := stddevpop.NewStdD64()
 		if dist {
-			return agg.NewUnaryDistAgg(false, typ, stddevpop.ReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
+			return NewUnaryDistAgg(false, typ, stddevpop.ReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
 		}
-		return agg.NewUnaryAgg(aggPriv, false, typ, stddevpop.ReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
+		return NewUnaryAgg(aggPriv, false, typ, stddevpop.ReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
 	case types.T_decimal128:
 		aggPriv := stddevpop.NewStdD128()
 		if dist {
-			return agg.NewUnaryDistAgg(false, typ, stddevpop.ReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
+			return NewUnaryDistAgg(false, typ, stddevpop.ReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
 		}
-		return agg.NewUnaryAgg(aggPriv, false, typ, stddevpop.ReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
+		return NewUnaryAgg(aggPriv, false, typ, stddevpop.ReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
 
 	}
 	panic(fmt.Errorf("unsupport type '%s' for avg", typ))
 }
 
-func newGenericAnyValue[T any](typ types.Type, dist bool) agg.Agg[any] {
+func newGenericAnyValue[T any](typ types.Type, dist bool) Agg[any] {
 	aggPriv := anyvalue.NewAnyvalue[T]()
 	if dist {
-		return agg.NewUnaryDistAgg(false, typ, anyvalue.ReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
+		return NewUnaryDistAgg(false, typ, anyvalue.ReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
 	}
-	return agg.NewUnaryAgg(aggPriv, false, typ, anyvalue.ReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
+	return NewUnaryAgg(aggPriv, false, typ, anyvalue.ReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
 }
 
-func newGenericSum[T1 sum.Numeric, T2 sum.ReturnTyp](typ types.Type, dist bool) agg.Agg[any] {
+func newGenericSum[T1 sum.Numeric, T2 sum.ReturnTyp](typ types.Type, dist bool) Agg[any] {
 	aggPriv := sum.NewSum[T1, T2]()
 	if dist {
-		return agg.NewUnaryDistAgg(false, typ, sum.ReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
+		return NewUnaryDistAgg(false, typ, sum.ReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
 	}
-	return agg.NewUnaryAgg(aggPriv, false, typ, sum.ReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
+	return NewUnaryAgg(aggPriv, false, typ, sum.ReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
 }
 
-func newGenericAvg[T sum.Numeric](typ types.Type, dist bool) agg.Agg[any] {
+func newGenericAvg[T sum.Numeric](typ types.Type, dist bool) Agg[any] {
 	aggPriv := avg.NewAvg[T]()
 	if dist {
-		return agg.NewUnaryDistAgg(false, typ, avg.ReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
+		return NewUnaryDistAgg(false, typ, avg.ReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
 	}
-	return agg.NewUnaryAgg(aggPriv, false, typ, avg.ReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
+	return NewUnaryAgg(aggPriv, false, typ, avg.ReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
 }
 
-func newGenericMax[T max.Compare](typ types.Type, dist bool) agg.Agg[any] {
+func newGenericMax[T max.Compare](typ types.Type, dist bool) Agg[any] {
 	aggPriv := max.NewMax[T]()
 	if dist {
-		return agg.NewUnaryDistAgg(false, typ, max.ReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
+		return NewUnaryDistAgg(false, typ, max.ReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
 	}
-	return agg.NewUnaryAgg(aggPriv, false, typ, max.ReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
+	return NewUnaryAgg(aggPriv, false, typ, max.ReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
 }
 
-func newGenericMin[T max.Compare](typ types.Type, dist bool) agg.Agg[any] {
+func newGenericMin[T max.Compare](typ types.Type, dist bool) Agg[any] {
 	aggPriv := min.NewMin[T]()
 	if dist {
-		return agg.NewUnaryDistAgg(false, typ, min.ReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
+		return NewUnaryDistAgg(false, typ, min.ReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
 	}
-	return agg.NewUnaryAgg(aggPriv, false, typ, min.ReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
+	return NewUnaryAgg(aggPriv, false, typ, min.ReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
 }
 
-func newGenericCount[T types.OrderedT | count.Decimal128AndString](typ types.Type, dist bool, isStar bool) agg.Agg[any] {
+func newGenericCount[T types.OrderedT | count.Decimal128AndString](typ types.Type, dist bool, isStar bool) Agg[any] {
 	aggPriv := count.New[T](isStar)
 	if dist {
-		return agg.NewUnaryDistAgg(true, typ, count.ReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
+		return NewUnaryDistAgg(true, typ, count.ReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
 	}
-	return agg.NewUnaryAgg(aggPriv, true, typ, count.ReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
+	return NewUnaryAgg(aggPriv, true, typ, count.ReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
 }
 
-func newGenericApproxcd[T any](typ types.Type, dist bool) agg.Agg[any] {
+func newGenericApproxcd[T any](typ types.Type, dist bool) Agg[any] {
 	aggPriv := approxcd.NewApproxc[T]()
 	if dist {
-		return agg.NewUnaryDistAgg(false, typ, approxcd.ReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
+		return NewUnaryDistAgg(false, typ, approxcd.ReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
 	}
-	return agg.NewUnaryAgg(aggPriv, false, typ, approxcd.ReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
+	return NewUnaryAgg(aggPriv, false, typ, approxcd.ReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
 }
 
-func newGenericBitOr[T types.Ints | types.UInts | types.Floats](typ types.Type, dist bool) agg.Agg[any] {
+func newGenericBitOr[T types.Ints | types.UInts | types.Floats](typ types.Type, dist bool) Agg[any] {
 	aggPriv := bit_or.New[T]()
 	if dist {
-		return agg.NewUnaryDistAgg(false, typ, bit_or.ReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
+		return NewUnaryDistAgg(false, typ, bit_or.ReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
 	}
-	return agg.NewUnaryAgg(aggPriv, false, typ, bit_or.ReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
+	return NewUnaryAgg(aggPriv, false, typ, bit_or.ReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
 }
 
-func newGenericBitXor[T types.Ints | types.UInts | types.Floats](typ types.Type, dist bool) agg.Agg[any] {
+func newGenericBitXor[T types.Ints | types.UInts | types.Floats](typ types.Type, dist bool) Agg[any] {
 	aggPriv := bit_xor.New[T]()
 	if dist {
-		return agg.NewUnaryDistAgg(false, typ, bit_xor.ReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
+		return NewUnaryDistAgg(false, typ, bit_xor.ReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
 	}
-	return agg.NewUnaryAgg(aggPriv, false, typ, bit_xor.ReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
+	return NewUnaryAgg(aggPriv, false, typ, bit_xor.ReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
 }
 
-func newGenericBitAnd[T types.Ints | types.UInts | types.Floats](typ types.Type, dist bool) agg.Agg[any] {
+func newGenericBitAnd[T types.Ints | types.UInts | types.Floats](typ types.Type, dist bool) Agg[any] {
 	aggPriv := bit_and.New[T]()
 	if dist {
-		return agg.NewUnaryDistAgg(false, typ, bit_and.ReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
+		return NewUnaryDistAgg(false, typ, bit_and.ReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
 	}
-	return agg.NewUnaryAgg(aggPriv, false, typ, bit_and.ReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
+	return NewUnaryAgg(aggPriv, false, typ, bit_and.ReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
 }
 
-func newGenericVariance[T types.Ints | types.UInts | types.Floats](typ types.Type, dist bool) agg.Agg[any] {
+func newGenericVariance[T types.Ints | types.UInts | types.Floats](typ types.Type, dist bool) Agg[any] {
 	aggPriv := variance.New1[T]()
 	if dist {
-		return agg.NewUnaryDistAgg(false, typ, variance.ReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
+		return NewUnaryDistAgg(false, typ, variance.ReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
 	}
-	return agg.NewUnaryAgg(aggPriv, false, typ, variance.ReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
+	return NewUnaryAgg(aggPriv, false, typ, variance.ReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
 }
 
-func newGenericStdDevPop[T types.Ints | types.UInts | types.Floats](typ types.Type, dist bool) agg.Agg[any] {
+func newGenericStdDevPop[T types.Ints | types.UInts | types.Floats](typ types.Type, dist bool) Agg[any] {
 	aggPriv := stddevpop.New[T]()
 	if dist {
-		return agg.NewUnaryDistAgg(false, typ, stddevpop.ReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
+		return NewUnaryDistAgg(false, typ, stddevpop.ReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill)
 	}
-	return agg.NewUnaryAgg(aggPriv, false, typ, stddevpop.ReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
+	return NewUnaryAgg(aggPriv, false, typ, stddevpop.ReturnType([]types.Type{typ}), aggPriv.Grows, aggPriv.Eval, aggPriv.Merge, aggPriv.Fill, nil)
 }

@@ -17,7 +17,7 @@ package function
 import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggregate"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/agg"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/operator"
 )
 
@@ -44,7 +44,7 @@ var aggregates = map[int]Functions{
 				Layout:        STANDARD_FUNCTION,
 				Args:          []types.T{types.T_uint8},
 				ReturnTyp:     types.T_uint8,
-				AggregateInfo: aggregate.Max,
+				AggregateInfo: agg.Max,
 			},
 			{
 				Index:         1,
@@ -52,7 +52,7 @@ var aggregates = map[int]Functions{
 				Layout:        STANDARD_FUNCTION,
 				Args:          []types.T{types.T_uint16},
 				ReturnTyp:     types.T_uint16,
-				AggregateInfo: aggregate.Max,
+				AggregateInfo: agg.Max,
 			},
 			{
 				Index:         2,
@@ -60,7 +60,7 @@ var aggregates = map[int]Functions{
 				Layout:        STANDARD_FUNCTION,
 				Args:          []types.T{types.T_uint32},
 				ReturnTyp:     types.T_uint32,
-				AggregateInfo: aggregate.Max,
+				AggregateInfo: agg.Max,
 			},
 			{
 				Index:         3,
@@ -68,7 +68,7 @@ var aggregates = map[int]Functions{
 				Layout:        STANDARD_FUNCTION,
 				Args:          []types.T{types.T_uint64},
 				ReturnTyp:     types.T_uint64,
-				AggregateInfo: aggregate.Max,
+				AggregateInfo: agg.Max,
 			},
 			{
 				Index:         4,
@@ -76,7 +76,7 @@ var aggregates = map[int]Functions{
 				Layout:        STANDARD_FUNCTION,
 				Args:          []types.T{types.T_int8},
 				ReturnTyp:     types.T_int8,
-				AggregateInfo: aggregate.Max,
+				AggregateInfo: agg.Max,
 			},
 			{
 				Index:         5,
@@ -84,7 +84,7 @@ var aggregates = map[int]Functions{
 				Layout:        STANDARD_FUNCTION,
 				Args:          []types.T{types.T_int16},
 				ReturnTyp:     types.T_int16,
-				AggregateInfo: aggregate.Max,
+				AggregateInfo: agg.Max,
 			},
 			{
 				Index:         6,
@@ -92,7 +92,7 @@ var aggregates = map[int]Functions{
 				Layout:        STANDARD_FUNCTION,
 				Args:          []types.T{types.T_int32},
 				ReturnTyp:     types.T_int32,
-				AggregateInfo: aggregate.Max,
+				AggregateInfo: agg.Max,
 			},
 			{
 				Index:         7,
@@ -100,7 +100,7 @@ var aggregates = map[int]Functions{
 				Layout:        STANDARD_FUNCTION,
 				Args:          []types.T{types.T_int64},
 				ReturnTyp:     types.T_int64,
-				AggregateInfo: aggregate.Max,
+				AggregateInfo: agg.Max,
 			},
 			{
 				Index:         8,
@@ -108,7 +108,7 @@ var aggregates = map[int]Functions{
 				Layout:        STANDARD_FUNCTION,
 				Args:          []types.T{types.T_float32},
 				ReturnTyp:     types.T_float32,
-				AggregateInfo: aggregate.Max,
+				AggregateInfo: agg.Max,
 			},
 			{
 				Index:         9,
@@ -116,7 +116,7 @@ var aggregates = map[int]Functions{
 				Layout:        STANDARD_FUNCTION,
 				Args:          []types.T{types.T_float64},
 				ReturnTyp:     types.T_float64,
-				AggregateInfo: aggregate.Max,
+				AggregateInfo: agg.Max,
 			},
 			{
 				Index:         10,
@@ -124,7 +124,7 @@ var aggregates = map[int]Functions{
 				Layout:        STANDARD_FUNCTION,
 				Args:          []types.T{types.T_date},
 				ReturnTyp:     types.T_date,
-				AggregateInfo: aggregate.Max,
+				AggregateInfo: agg.Max,
 			},
 			{
 				Index:         11,
@@ -132,7 +132,7 @@ var aggregates = map[int]Functions{
 				Layout:        STANDARD_FUNCTION,
 				Args:          []types.T{types.T_datetime},
 				ReturnTyp:     types.T_datetime,
-				AggregateInfo: aggregate.Max,
+				AggregateInfo: agg.Max,
 			},
 			{
 				Index:         12,
@@ -140,7 +140,7 @@ var aggregates = map[int]Functions{
 				Layout:        STANDARD_FUNCTION,
 				Args:          []types.T{types.T_timestamp},
 				ReturnTyp:     types.T_timestamp,
-				AggregateInfo: aggregate.Max,
+				AggregateInfo: agg.Max,
 			},
 			{
 				Index:         13,
@@ -148,7 +148,7 @@ var aggregates = map[int]Functions{
 				Layout:        STANDARD_FUNCTION,
 				Args:          []types.T{types.T_decimal64},
 				ReturnTyp:     types.T_decimal64,
-				AggregateInfo: aggregate.Max,
+				AggregateInfo: agg.Max,
 			},
 			{
 				Index:         14,
@@ -156,7 +156,7 @@ var aggregates = map[int]Functions{
 				Layout:        STANDARD_FUNCTION,
 				Args:          []types.T{types.T_decimal128},
 				ReturnTyp:     types.T_decimal128,
-				AggregateInfo: aggregate.Max,
+				AggregateInfo: agg.Max,
 			},
 			{
 				Index:         15,
@@ -164,7 +164,7 @@ var aggregates = map[int]Functions{
 				Layout:        STANDARD_FUNCTION,
 				Args:          []types.T{types.T_bool},
 				ReturnTyp:     types.T_bool,
-				AggregateInfo: aggregate.Max,
+				AggregateInfo: agg.Max,
 			},
 			{
 				Index:         16,
@@ -172,7 +172,7 @@ var aggregates = map[int]Functions{
 				Layout:        STANDARD_FUNCTION,
 				Args:          []types.T{types.T_varchar},
 				ReturnTyp:     types.T_varchar,
-				AggregateInfo: aggregate.Max,
+				AggregateInfo: agg.Max,
 			},
 			{
 				Index:         17,
@@ -180,7 +180,7 @@ var aggregates = map[int]Functions{
 				Layout:        STANDARD_FUNCTION,
 				Args:          []types.T{types.T_char},
 				ReturnTyp:     types.T_char,
-				AggregateInfo: aggregate.Max,
+				AggregateInfo: agg.Max,
 			},
 			{
 				Index:         18,
@@ -188,7 +188,7 @@ var aggregates = map[int]Functions{
 				Layout:        STANDARD_FUNCTION,
 				Args:          []types.T{types.T_blob},
 				ReturnTyp:     types.T_blob,
-				AggregateInfo: aggregate.Max,
+				AggregateInfo: agg.Max,
 			},
 			{
 				Index:         19,
@@ -196,7 +196,7 @@ var aggregates = map[int]Functions{
 				Layout:        STANDARD_FUNCTION,
 				Args:          []types.T{types.T_uuid},
 				ReturnTyp:     types.T_uuid,
-				AggregateInfo: aggregate.Max,
+				AggregateInfo: agg.Max,
 			},
 		},
 	},
@@ -210,7 +210,7 @@ var aggregates = map[int]Functions{
 				Layout:        STANDARD_FUNCTION,
 				Args:          []types.T{types.T_uint8},
 				ReturnTyp:     types.T_uint8,
-				AggregateInfo: aggregate.Min,
+				AggregateInfo: agg.Min,
 			},
 			{
 				Index:         1,
@@ -218,7 +218,7 @@ var aggregates = map[int]Functions{
 				Layout:        STANDARD_FUNCTION,
 				Args:          []types.T{types.T_uint16},
 				ReturnTyp:     types.T_uint16,
-				AggregateInfo: aggregate.Min,
+				AggregateInfo: agg.Min,
 			},
 			{
 				Index:         2,
@@ -226,7 +226,7 @@ var aggregates = map[int]Functions{
 				Layout:        STANDARD_FUNCTION,
 				Args:          []types.T{types.T_uint32},
 				ReturnTyp:     types.T_uint32,
-				AggregateInfo: aggregate.Min,
+				AggregateInfo: agg.Min,
 			},
 			{
 				Index:         3,
@@ -234,7 +234,7 @@ var aggregates = map[int]Functions{
 				Layout:        STANDARD_FUNCTION,
 				Args:          []types.T{types.T_uint64},
 				ReturnTyp:     types.T_uint64,
-				AggregateInfo: aggregate.Min,
+				AggregateInfo: agg.Min,
 			},
 			{
 				Index:         4,
@@ -242,7 +242,7 @@ var aggregates = map[int]Functions{
 				Layout:        STANDARD_FUNCTION,
 				Args:          []types.T{types.T_int8},
 				ReturnTyp:     types.T_int8,
-				AggregateInfo: aggregate.Min,
+				AggregateInfo: agg.Min,
 			},
 			{
 				Index:         5,
@@ -250,7 +250,7 @@ var aggregates = map[int]Functions{
 				Layout:        STANDARD_FUNCTION,
 				Args:          []types.T{types.T_int16},
 				ReturnTyp:     types.T_int16,
-				AggregateInfo: aggregate.Min,
+				AggregateInfo: agg.Min,
 			},
 			{
 				Index:         6,
@@ -258,7 +258,7 @@ var aggregates = map[int]Functions{
 				Layout:        STANDARD_FUNCTION,
 				Args:          []types.T{types.T_int32},
 				ReturnTyp:     types.T_int32,
-				AggregateInfo: aggregate.Min,
+				AggregateInfo: agg.Min,
 			},
 			{
 				Index:         7,
@@ -266,7 +266,7 @@ var aggregates = map[int]Functions{
 				Layout:        STANDARD_FUNCTION,
 				Args:          []types.T{types.T_int64},
 				ReturnTyp:     types.T_int64,
-				AggregateInfo: aggregate.Min,
+				AggregateInfo: agg.Min,
 			},
 			{
 				Index:         8,
@@ -274,7 +274,7 @@ var aggregates = map[int]Functions{
 				Layout:        STANDARD_FUNCTION,
 				Args:          []types.T{types.T_float32},
 				ReturnTyp:     types.T_float32,
-				AggregateInfo: aggregate.Min,
+				AggregateInfo: agg.Min,
 			},
 			{
 				Index:         9,
@@ -282,7 +282,7 @@ var aggregates = map[int]Functions{
 				Layout:        STANDARD_FUNCTION,
 				Args:          []types.T{types.T_float64},
 				ReturnTyp:     types.T_float64,
-				AggregateInfo: aggregate.Min,
+				AggregateInfo: agg.Min,
 			},
 			{
 				Index:         10,
@@ -290,7 +290,7 @@ var aggregates = map[int]Functions{
 				Layout:        STANDARD_FUNCTION,
 				Args:          []types.T{types.T_date},
 				ReturnTyp:     types.T_date,
-				AggregateInfo: aggregate.Min,
+				AggregateInfo: agg.Min,
 			},
 			{
 				Index:         11,
@@ -298,7 +298,7 @@ var aggregates = map[int]Functions{
 				Layout:        STANDARD_FUNCTION,
 				Args:          []types.T{types.T_datetime},
 				ReturnTyp:     types.T_datetime,
-				AggregateInfo: aggregate.Min,
+				AggregateInfo: agg.Min,
 			},
 			{
 				Index:         12,
@@ -306,7 +306,7 @@ var aggregates = map[int]Functions{
 				Layout:        STANDARD_FUNCTION,
 				Args:          []types.T{types.T_timestamp},
 				ReturnTyp:     types.T_timestamp,
-				AggregateInfo: aggregate.Min,
+				AggregateInfo: agg.Min,
 			},
 			{
 				Index:         13,
@@ -314,7 +314,7 @@ var aggregates = map[int]Functions{
 				Layout:        STANDARD_FUNCTION,
 				Args:          []types.T{types.T_decimal64},
 				ReturnTyp:     types.T_decimal64,
-				AggregateInfo: aggregate.Min,
+				AggregateInfo: agg.Min,
 			},
 			{
 				Index:         14,
@@ -322,7 +322,7 @@ var aggregates = map[int]Functions{
 				Layout:        STANDARD_FUNCTION,
 				Args:          []types.T{types.T_decimal128},
 				ReturnTyp:     types.T_decimal128,
-				AggregateInfo: aggregate.Min,
+				AggregateInfo: agg.Min,
 			},
 			{
 				Index:         15,
@@ -330,7 +330,7 @@ var aggregates = map[int]Functions{
 				Layout:        STANDARD_FUNCTION,
 				Args:          []types.T{types.T_bool},
 				ReturnTyp:     types.T_bool,
-				AggregateInfo: aggregate.Min,
+				AggregateInfo: agg.Min,
 			},
 			{
 				Index:         16,
@@ -338,7 +338,7 @@ var aggregates = map[int]Functions{
 				Layout:        STANDARD_FUNCTION,
 				Args:          []types.T{types.T_varchar},
 				ReturnTyp:     types.T_varchar,
-				AggregateInfo: aggregate.Min,
+				AggregateInfo: agg.Min,
 			},
 			{
 				Index:         17,
@@ -346,21 +346,21 @@ var aggregates = map[int]Functions{
 				Layout:        STANDARD_FUNCTION,
 				Args:          []types.T{types.T_char},
 				ReturnTyp:     types.T_char,
-				AggregateInfo: aggregate.Min,
+				AggregateInfo: agg.Min,
 			}, {
 				Index:         18,
 				Flag:          plan.Function_AGG,
 				Layout:        STANDARD_FUNCTION,
 				Args:          []types.T{types.T_blob},
 				ReturnTyp:     types.T_blob,
-				AggregateInfo: aggregate.Min,
+				AggregateInfo: agg.Min,
 			}, {
 				Index:         19,
 				Flag:          plan.Function_AGG,
 				Layout:        STANDARD_FUNCTION,
 				Args:          []types.T{types.T_uuid},
 				ReturnTyp:     types.T_uuid,
-				AggregateInfo: aggregate.Min,
+				AggregateInfo: agg.Min,
 			},
 		},
 	},
@@ -374,7 +374,7 @@ var aggregates = map[int]Functions{
 				Layout:        STANDARD_FUNCTION,
 				Args:          []types.T{types.T_uint8},
 				ReturnTyp:     types.T_uint64,
-				AggregateInfo: aggregate.Sum,
+				AggregateInfo: agg.Sum,
 			},
 			{
 				Index:         1,
@@ -382,7 +382,7 @@ var aggregates = map[int]Functions{
 				Layout:        STANDARD_FUNCTION,
 				Args:          []types.T{types.T_uint16},
 				ReturnTyp:     types.T_uint64,
-				AggregateInfo: aggregate.Sum,
+				AggregateInfo: agg.Sum,
 			},
 			{
 				Index:         2,
@@ -390,7 +390,7 @@ var aggregates = map[int]Functions{
 				Layout:        STANDARD_FUNCTION,
 				Args:          []types.T{types.T_uint32},
 				ReturnTyp:     types.T_uint64,
-				AggregateInfo: aggregate.Sum,
+				AggregateInfo: agg.Sum,
 			},
 			{
 				Index:         3,
@@ -398,7 +398,7 @@ var aggregates = map[int]Functions{
 				Layout:        STANDARD_FUNCTION,
 				Args:          []types.T{types.T_uint64},
 				ReturnTyp:     types.T_uint64,
-				AggregateInfo: aggregate.Sum,
+				AggregateInfo: agg.Sum,
 			},
 			{
 				Index:         4,
@@ -406,7 +406,7 @@ var aggregates = map[int]Functions{
 				Layout:        STANDARD_FUNCTION,
 				Args:          []types.T{types.T_int8},
 				ReturnTyp:     types.T_int64,
-				AggregateInfo: aggregate.Sum,
+				AggregateInfo: agg.Sum,
 			},
 			{
 				Index:         5,
@@ -414,7 +414,7 @@ var aggregates = map[int]Functions{
 				Layout:        STANDARD_FUNCTION,
 				Args:          []types.T{types.T_int16},
 				ReturnTyp:     types.T_int64,
-				AggregateInfo: aggregate.Sum,
+				AggregateInfo: agg.Sum,
 			},
 			{
 				Index:         6,
@@ -422,7 +422,7 @@ var aggregates = map[int]Functions{
 				Layout:        STANDARD_FUNCTION,
 				Args:          []types.T{types.T_int32},
 				ReturnTyp:     types.T_int64,
-				AggregateInfo: aggregate.Sum,
+				AggregateInfo: agg.Sum,
 			},
 			{
 				Index:         7,
@@ -430,7 +430,7 @@ var aggregates = map[int]Functions{
 				Layout:        STANDARD_FUNCTION,
 				Args:          []types.T{types.T_int64},
 				ReturnTyp:     types.T_int64,
-				AggregateInfo: aggregate.Sum,
+				AggregateInfo: agg.Sum,
 			},
 			{
 				Index:         8,
@@ -438,7 +438,7 @@ var aggregates = map[int]Functions{
 				Layout:        STANDARD_FUNCTION,
 				Args:          []types.T{types.T_float32},
 				ReturnTyp:     types.T_float64,
-				AggregateInfo: aggregate.Sum,
+				AggregateInfo: agg.Sum,
 			},
 			{
 				Index:         9,
@@ -446,7 +446,7 @@ var aggregates = map[int]Functions{
 				Layout:        STANDARD_FUNCTION,
 				Args:          []types.T{types.T_float64},
 				ReturnTyp:     types.T_float64,
-				AggregateInfo: aggregate.Sum,
+				AggregateInfo: agg.Sum,
 			},
 			/*
 				{
@@ -456,7 +456,7 @@ var aggregates = map[int]Functions{
 					Args:          []types.T{types.T_date},
 					TypeCheckFn:   strictTypeCheck,
 					ReturnTyp:     types.T_date,
-					AggregateInfo: aggregate.Sum,
+					AggregateInfo: agg.Sum,
 				},
 				{
 					Index:         11,
@@ -465,7 +465,7 @@ var aggregates = map[int]Functions{
 					Args:          []types.T{types.T_datetime},
 					TypeCheckFn:   strictTypeCheck,
 					ReturnTyp:     types.T_datetime,
-					AggregateInfo: aggregate.Sum,
+					AggregateInfo: agg.Sum,
 				},
 			*/
 			{
@@ -474,7 +474,7 @@ var aggregates = map[int]Functions{
 				Layout:        STANDARD_FUNCTION,
 				Args:          []types.T{types.T_decimal64},
 				ReturnTyp:     types.T_decimal64,
-				AggregateInfo: aggregate.Sum,
+				AggregateInfo: agg.Sum,
 			},
 			{
 				Index:         11,
@@ -482,7 +482,7 @@ var aggregates = map[int]Functions{
 				Layout:        STANDARD_FUNCTION,
 				Args:          []types.T{types.T_decimal128},
 				ReturnTyp:     types.T_decimal128,
-				AggregateInfo: aggregate.Sum,
+				AggregateInfo: agg.Sum,
 			},
 		},
 	},
@@ -496,7 +496,7 @@ var aggregates = map[int]Functions{
 				Layout:        STANDARD_FUNCTION,
 				Args:          []types.T{types.T_uint8},
 				ReturnTyp:     types.T_float64,
-				AggregateInfo: aggregate.Avg,
+				AggregateInfo: agg.Avg,
 			},
 			{
 				Index:         1,
@@ -504,7 +504,7 @@ var aggregates = map[int]Functions{
 				Layout:        STANDARD_FUNCTION,
 				Args:          []types.T{types.T_uint16},
 				ReturnTyp:     types.T_float64,
-				AggregateInfo: aggregate.Avg,
+				AggregateInfo: agg.Avg,
 			},
 			{
 				Index:         2,
@@ -512,7 +512,7 @@ var aggregates = map[int]Functions{
 				Layout:        STANDARD_FUNCTION,
 				Args:          []types.T{types.T_uint32},
 				ReturnTyp:     types.T_float64,
-				AggregateInfo: aggregate.Avg,
+				AggregateInfo: agg.Avg,
 			},
 			{
 				Index:         3,
@@ -520,7 +520,7 @@ var aggregates = map[int]Functions{
 				Layout:        STANDARD_FUNCTION,
 				Args:          []types.T{types.T_uint64},
 				ReturnTyp:     types.T_float64,
-				AggregateInfo: aggregate.Avg,
+				AggregateInfo: agg.Avg,
 			},
 			{
 				Index:         4,
@@ -528,7 +528,7 @@ var aggregates = map[int]Functions{
 				Layout:        STANDARD_FUNCTION,
 				Args:          []types.T{types.T_int8},
 				ReturnTyp:     types.T_float64,
-				AggregateInfo: aggregate.Avg,
+				AggregateInfo: agg.Avg,
 			},
 			{
 				Index:         5,
@@ -536,7 +536,7 @@ var aggregates = map[int]Functions{
 				Layout:        STANDARD_FUNCTION,
 				Args:          []types.T{types.T_int16},
 				ReturnTyp:     types.T_float64,
-				AggregateInfo: aggregate.Avg,
+				AggregateInfo: agg.Avg,
 			},
 			{
 				Index:         6,
@@ -544,7 +544,7 @@ var aggregates = map[int]Functions{
 				Layout:        STANDARD_FUNCTION,
 				Args:          []types.T{types.T_int32},
 				ReturnTyp:     types.T_float64,
-				AggregateInfo: aggregate.Avg,
+				AggregateInfo: agg.Avg,
 			},
 			{
 				Index:         7,
@@ -552,7 +552,7 @@ var aggregates = map[int]Functions{
 				Layout:        STANDARD_FUNCTION,
 				Args:          []types.T{types.T_int64},
 				ReturnTyp:     types.T_float64,
-				AggregateInfo: aggregate.Avg,
+				AggregateInfo: agg.Avg,
 			},
 			{
 				Index:         8,
@@ -560,7 +560,7 @@ var aggregates = map[int]Functions{
 				Layout:        STANDARD_FUNCTION,
 				Args:          []types.T{types.T_float32},
 				ReturnTyp:     types.T_float64,
-				AggregateInfo: aggregate.Avg,
+				AggregateInfo: agg.Avg,
 			},
 			{
 				Index:         9,
@@ -568,7 +568,7 @@ var aggregates = map[int]Functions{
 				Layout:        STANDARD_FUNCTION,
 				Args:          []types.T{types.T_float64},
 				ReturnTyp:     types.T_float64,
-				AggregateInfo: aggregate.Avg,
+				AggregateInfo: agg.Avg,
 			},
 			{
 				Index:         10,
@@ -576,7 +576,7 @@ var aggregates = map[int]Functions{
 				Layout:        STANDARD_FUNCTION,
 				Args:          []types.T{types.T_decimal64},
 				ReturnTyp:     types.T_decimal128,
-				AggregateInfo: aggregate.Avg,
+				AggregateInfo: agg.Avg,
 			},
 			{
 				Index:         11,
@@ -584,7 +584,7 @@ var aggregates = map[int]Functions{
 				Layout:        STANDARD_FUNCTION,
 				Args:          []types.T{types.T_decimal128},
 				ReturnTyp:     types.T_decimal128,
-				AggregateInfo: aggregate.Avg,
+				AggregateInfo: agg.Avg,
 			},
 		},
 	},
@@ -602,7 +602,7 @@ var aggregates = map[int]Functions{
 				Flag:          plan.Function_AGG,
 				Layout:        STANDARD_FUNCTION,
 				ReturnTyp:     types.T_int64,
-				AggregateInfo: aggregate.Count,
+				AggregateInfo: agg.Count,
 			},
 		},
 	},
@@ -620,7 +620,7 @@ var aggregates = map[int]Functions{
 				Flag:          plan.Function_AGG,
 				Layout:        STANDARD_FUNCTION,
 				ReturnTyp:     types.T_int64,
-				AggregateInfo: aggregate.StarCount,
+				AggregateInfo: agg.StarCount,
 			},
 		},
 	},
@@ -634,7 +634,7 @@ var aggregates = map[int]Functions{
 				if !operator.IsNumeric(inputs[0]) && !operator.IsDecimal(inputs[0]) {
 					return wrongFuncParamForAgg, nil
 				}
-				_, err := aggregate.ReturnType(aggregate.BitAnd, types.Type{Oid: inputs[0]})
+				_, err := agg.ReturnType(agg.BitAnd, types.Type{Oid: inputs[0]})
 				if err == nil {
 					return 0, nil
 				}
@@ -647,7 +647,7 @@ var aggregates = map[int]Functions{
 				Flag:          plan.Function_AGG,
 				Layout:        STANDARD_FUNCTION,
 				ReturnTyp:     types.T_uint64,
-				AggregateInfo: aggregate.BitAnd,
+				AggregateInfo: agg.BitAnd,
 			},
 		},
 	},
@@ -661,7 +661,7 @@ var aggregates = map[int]Functions{
 				if !operator.IsNumeric(inputs[0]) && !operator.IsDecimal(inputs[0]) {
 					return wrongFuncParamForAgg, nil
 				}
-				_, err := aggregate.ReturnType(aggregate.BitOr, types.Type{Oid: inputs[0]})
+				_, err := agg.ReturnType(agg.BitOr, types.Type{Oid: inputs[0]})
 				if err == nil {
 					return 0, nil
 				}
@@ -674,7 +674,7 @@ var aggregates = map[int]Functions{
 				Flag:          plan.Function_AGG,
 				Layout:        STANDARD_FUNCTION,
 				ReturnTyp:     types.T_uint64,
-				AggregateInfo: aggregate.BitOr,
+				AggregateInfo: agg.BitOr,
 			},
 		},
 	},
@@ -688,7 +688,7 @@ var aggregates = map[int]Functions{
 				if !operator.IsNumeric(inputs[0]) && !operator.IsDecimal(inputs[0]) {
 					return wrongFuncParamForAgg, nil
 				}
-				_, err := aggregate.ReturnType(aggregate.BitXor, types.Type{Oid: inputs[0]})
+				_, err := agg.ReturnType(agg.BitXor, types.Type{Oid: inputs[0]})
 				if err == nil {
 					return 0, nil
 				}
@@ -701,7 +701,7 @@ var aggregates = map[int]Functions{
 				Flag:          plan.Function_AGG,
 				Layout:        STANDARD_FUNCTION,
 				ReturnTyp:     types.T_uint64,
-				AggregateInfo: aggregate.BitXor,
+				AggregateInfo: agg.BitXor,
 			},
 		},
 	},
@@ -715,7 +715,7 @@ var aggregates = map[int]Functions{
 				if !operator.IsNumeric(inputs[0]) && !operator.IsDecimal(inputs[0]) {
 					return wrongFuncParamForAgg, nil
 				}
-				t, err := aggregate.ReturnType(aggregate.Variance, types.Type{Oid: inputs[0]})
+				t, err := agg.ReturnType(agg.Variance, types.Type{Oid: inputs[0]})
 				if err != nil {
 					return wrongFunctionParameters, nil
 				}
@@ -732,14 +732,14 @@ var aggregates = map[int]Functions{
 				Flag:          plan.Function_AGG,
 				Layout:        STANDARD_FUNCTION,
 				ReturnTyp:     types.T_float64,
-				AggregateInfo: aggregate.Variance,
+				AggregateInfo: agg.Variance,
 			},
 			{
 				Index:         1,
 				Flag:          plan.Function_AGG,
 				Layout:        STANDARD_FUNCTION,
 				ReturnTyp:     types.T_decimal128,
-				AggregateInfo: aggregate.Variance,
+				AggregateInfo: agg.Variance,
 			},
 		},
 	},
@@ -753,7 +753,7 @@ var aggregates = map[int]Functions{
 				if !operator.IsNumeric(inputs[0]) && !operator.IsDecimal(inputs[0]) {
 					return wrongFuncParamForAgg, nil
 				}
-				t, err := aggregate.ReturnType(aggregate.StdDevPop, types.Type{Oid: inputs[0]})
+				t, err := agg.ReturnType(agg.StdDevPop, types.Type{Oid: inputs[0]})
 				if err != nil {
 					return wrongFunctionParameters, nil
 				}
@@ -770,14 +770,14 @@ var aggregates = map[int]Functions{
 				Flag:          plan.Function_AGG,
 				Layout:        STANDARD_FUNCTION,
 				ReturnTyp:     types.T_float64,
-				AggregateInfo: aggregate.StdDevPop,
+				AggregateInfo: agg.StdDevPop,
 			},
 			{
 				Index:         1,
 				Flag:          plan.Function_AGG,
 				Layout:        STANDARD_FUNCTION,
 				ReturnTyp:     types.T_decimal128,
-				AggregateInfo: aggregate.StdDevPop,
+				AggregateInfo: agg.StdDevPop,
 			},
 		},
 	},
@@ -795,7 +795,7 @@ var aggregates = map[int]Functions{
 				Flag:          plan.Function_AGG,
 				Layout:        STANDARD_FUNCTION,
 				ReturnTyp:     types.T_uint64,
-				AggregateInfo: aggregate.ApproxCountDistinct,
+				AggregateInfo: agg.ApproxCountDistinct,
 			},
 		},
 	},
@@ -809,7 +809,7 @@ var aggregates = map[int]Functions{
 				Layout:        STANDARD_FUNCTION,
 				Args:          []types.T{types.T_uint8},
 				ReturnTyp:     types.T_uint8,
-				AggregateInfo: aggregate.AnyValue,
+				AggregateInfo: agg.AnyValue,
 			},
 			{
 				Index:         1,
@@ -817,7 +817,7 @@ var aggregates = map[int]Functions{
 				Layout:        STANDARD_FUNCTION,
 				Args:          []types.T{types.T_uint16},
 				ReturnTyp:     types.T_uint16,
-				AggregateInfo: aggregate.AnyValue,
+				AggregateInfo: agg.AnyValue,
 			},
 			{
 				Index:         2,
@@ -825,7 +825,7 @@ var aggregates = map[int]Functions{
 				Layout:        STANDARD_FUNCTION,
 				Args:          []types.T{types.T_uint32},
 				ReturnTyp:     types.T_uint32,
-				AggregateInfo: aggregate.AnyValue,
+				AggregateInfo: agg.AnyValue,
 			},
 			{
 				Index:         3,
@@ -833,7 +833,7 @@ var aggregates = map[int]Functions{
 				Layout:        STANDARD_FUNCTION,
 				Args:          []types.T{types.T_uint64},
 				ReturnTyp:     types.T_uint64,
-				AggregateInfo: aggregate.AnyValue,
+				AggregateInfo: agg.AnyValue,
 			},
 			{
 				Index:         4,
@@ -841,7 +841,7 @@ var aggregates = map[int]Functions{
 				Layout:        STANDARD_FUNCTION,
 				Args:          []types.T{types.T_int8},
 				ReturnTyp:     types.T_int8,
-				AggregateInfo: aggregate.AnyValue,
+				AggregateInfo: agg.AnyValue,
 			},
 			{
 				Index:         5,
@@ -849,7 +849,7 @@ var aggregates = map[int]Functions{
 				Layout:        STANDARD_FUNCTION,
 				Args:          []types.T{types.T_int16},
 				ReturnTyp:     types.T_int16,
-				AggregateInfo: aggregate.AnyValue,
+				AggregateInfo: agg.AnyValue,
 			},
 			{
 				Index:         6,
@@ -857,7 +857,7 @@ var aggregates = map[int]Functions{
 				Layout:        STANDARD_FUNCTION,
 				Args:          []types.T{types.T_int32},
 				ReturnTyp:     types.T_int32,
-				AggregateInfo: aggregate.AnyValue,
+				AggregateInfo: agg.AnyValue,
 			},
 			{
 				Index:         7,
@@ -865,7 +865,7 @@ var aggregates = map[int]Functions{
 				Layout:        STANDARD_FUNCTION,
 				Args:          []types.T{types.T_int64},
 				ReturnTyp:     types.T_int64,
-				AggregateInfo: aggregate.AnyValue,
+				AggregateInfo: agg.AnyValue,
 			},
 			{
 				Index:         8,
@@ -873,7 +873,7 @@ var aggregates = map[int]Functions{
 				Layout:        STANDARD_FUNCTION,
 				Args:          []types.T{types.T_float32},
 				ReturnTyp:     types.T_float32,
-				AggregateInfo: aggregate.AnyValue,
+				AggregateInfo: agg.AnyValue,
 			},
 			{
 				Index:         9,
@@ -881,7 +881,7 @@ var aggregates = map[int]Functions{
 				Layout:        STANDARD_FUNCTION,
 				Args:          []types.T{types.T_float64},
 				ReturnTyp:     types.T_float64,
-				AggregateInfo: aggregate.AnyValue,
+				AggregateInfo: agg.AnyValue,
 			},
 			{
 				Index:         10,
@@ -889,7 +889,7 @@ var aggregates = map[int]Functions{
 				Layout:        STANDARD_FUNCTION,
 				Args:          []types.T{types.T_date},
 				ReturnTyp:     types.T_date,
-				AggregateInfo: aggregate.AnyValue,
+				AggregateInfo: agg.AnyValue,
 			},
 			{
 				Index:         11,
@@ -897,7 +897,7 @@ var aggregates = map[int]Functions{
 				Layout:        STANDARD_FUNCTION,
 				Args:          []types.T{types.T_datetime},
 				ReturnTyp:     types.T_datetime,
-				AggregateInfo: aggregate.AnyValue,
+				AggregateInfo: agg.AnyValue,
 			},
 			{
 				Index:         12,
@@ -905,7 +905,7 @@ var aggregates = map[int]Functions{
 				Layout:        STANDARD_FUNCTION,
 				Args:          []types.T{types.T_decimal64},
 				ReturnTyp:     types.T_decimal64,
-				AggregateInfo: aggregate.AnyValue,
+				AggregateInfo: agg.AnyValue,
 			},
 			{
 				Index:         13,
@@ -913,7 +913,7 @@ var aggregates = map[int]Functions{
 				Layout:        STANDARD_FUNCTION,
 				Args:          []types.T{types.T_decimal128},
 				ReturnTyp:     types.T_decimal128,
-				AggregateInfo: aggregate.AnyValue,
+				AggregateInfo: agg.AnyValue,
 			},
 			{
 				Index:         14,
@@ -921,7 +921,7 @@ var aggregates = map[int]Functions{
 				Layout:        STANDARD_FUNCTION,
 				Args:          []types.T{types.T_bool},
 				ReturnTyp:     types.T_bool,
-				AggregateInfo: aggregate.AnyValue,
+				AggregateInfo: agg.AnyValue,
 			},
 			{
 				Index:         15,
@@ -929,7 +929,7 @@ var aggregates = map[int]Functions{
 				Layout:        STANDARD_FUNCTION,
 				Args:          []types.T{types.T_char},
 				ReturnTyp:     types.T_char,
-				AggregateInfo: aggregate.AnyValue,
+				AggregateInfo: agg.AnyValue,
 			},
 			{
 				Index:         16,
@@ -937,7 +937,7 @@ var aggregates = map[int]Functions{
 				Layout:        STANDARD_FUNCTION,
 				Args:          []types.T{types.T_varchar},
 				ReturnTyp:     types.T_varchar,
-				AggregateInfo: aggregate.AnyValue,
+				AggregateInfo: agg.AnyValue,
 			},
 			{
 				Index:         17,
@@ -945,7 +945,7 @@ var aggregates = map[int]Functions{
 				Layout:        STANDARD_FUNCTION,
 				Args:          []types.T{types.T_timestamp},
 				ReturnTyp:     types.T_timestamp,
-				AggregateInfo: aggregate.AnyValue,
+				AggregateInfo: agg.AnyValue,
 			},
 			{
 				Index:         18,
@@ -953,7 +953,7 @@ var aggregates = map[int]Functions{
 				Layout:        STANDARD_FUNCTION,
 				Args:          []types.T{types.T_blob},
 				ReturnTyp:     types.T_blob,
-				AggregateInfo: aggregate.AnyValue,
+				AggregateInfo: agg.AnyValue,
 			},
 			{
 				Index:         19,
@@ -961,7 +961,7 @@ var aggregates = map[int]Functions{
 				Layout:        STANDARD_FUNCTION,
 				Args:          []types.T{types.T_uuid},
 				ReturnTyp:     types.T_uuid,
-				AggregateInfo: aggregate.AnyValue,
+				AggregateInfo: agg.AnyValue,
 			},
 		},
 	},

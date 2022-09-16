@@ -19,8 +19,47 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 )
+
+const (
+	Sum = iota
+	Avg
+	Max
+	Min
+	Count
+	StarCount
+	ApproxCountDistinct
+	Variance
+	BitAnd
+	BitXor
+	BitOr
+	StdDevPop
+	AnyValue
+)
+
+var Names = [...]string{
+	Sum:                 "sum",
+	Avg:                 "avg",
+	Max:                 "max",
+	Min:                 "min",
+	Count:               "count",
+	StarCount:           "starcount",
+	ApproxCountDistinct: "approx_count_distinct",
+	Variance:            "var",
+	BitAnd:              "bit_and",
+	BitXor:              "bit_xor",
+	BitOr:               "bit_or",
+	StdDevPop:           "stddev_pop",
+	AnyValue:            "any",
+}
+
+type Aggregate struct {
+	Op   int
+	Dist bool
+	E    *plan.Expr
+}
 
 // Agg agg interface
 type Agg[T any] interface {
