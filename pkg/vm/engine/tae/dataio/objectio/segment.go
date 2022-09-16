@@ -17,7 +17,6 @@ package objectio
 import (
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/tfs"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -28,11 +27,11 @@ import (
 var SegmentFactory file.SegmentFactory
 
 func init() {
-	SegmentFactory = &segmentFactory{fs: NewObjectFS()}
+	SegmentFactory = &segmentFactory{fs: NewObjectFS(nil)}
 }
 
 type segmentFactory struct {
-	fs tfs.FS
+	fs *ObjectFS
 }
 
 func (factory *segmentFactory) EncodeName(id uint64) string {
@@ -44,7 +43,6 @@ func (factory *segmentFactory) DecodeName(name string) (id uint64, err error) {
 }
 
 func (factory *segmentFactory) Build(dir string, id uint64) file.Segment {
-	factory.fs.(*ObjectFS).SetDir(dir)
 	return openSegment(dir, id, factory.fs)
 }
 
@@ -55,10 +53,10 @@ type segmentFile struct {
 	ts     uint64
 	blocks map[uint64]*blockFile
 	name   string
-	fs     tfs.FS
+	fs     *ObjectFS
 }
 
-func openSegment(name string, id uint64, fs tfs.FS) *segmentFile {
+func openSegment(name string, id uint64, fs *ObjectFS) *segmentFile {
 	sf := &segmentFile{
 		blocks: make(map[uint64]*blockFile),
 		name:   name,
@@ -126,10 +124,6 @@ func (sf *segmentFile) ReadTS() (ts types.TS) {
 func (sf *segmentFile) String() string {
 	s := fmt.Sprintf("SegmentFile[%d][\"%s\"][TS=%d][BCnt=%d]", sf.id, sf.name, sf.ts, len(sf.blocks))
 	return s
-}
-
-func (sf *segmentFile) GetFs() tfs.FS {
-	return sf.fs
 }
 
 func (sf *segmentFile) Sync() error {

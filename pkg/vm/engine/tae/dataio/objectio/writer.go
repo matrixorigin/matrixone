@@ -15,164 +15,42 @@
 package objectio
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/tfs"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/stl/adaptors"
-	"os"
-
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/moengine"
 )
 
 type Writer struct {
-	fs tfs.FS
+	writer objectio.Writer
+	fs     *ObjectFS
 }
 
-func NewWriter(fs tfs.FS) *Writer {
+func NewWriter(fs *ObjectFS) *Writer {
 	return &Writer{
 		fs: fs,
 	}
 }
 
-func (w *Writer) WriteABlkColumn(
-	version uint64,
+func (w *Writer) WriteBlock(
 	id *common.ID,
-	column containers.Vector) (info common.FileInfo, err error) {
-	name := EncodeColBlkNameWithVersion(id, version, w.fs)
-	f, err := w.fs.OpenFile(name, os.O_CREATE)
-	if err != nil {
-		return
-	}
-	defer f.Close()
-	info = f.Stat()
-	writerBuffer := adaptors.NewBuffer(nil)
-	defer writerBuffer.Close()
-	if _, err = column.WriteTo(writerBuffer); err != nil {
-		return
-	}
-	if _, err = f.Write(writerBuffer.Bytes()); err != nil {
-		return
-	}
-	return
-}
-
-func (w *Writer) WriteABlkColumns(
-	version uint64,
-	id *common.ID,
-	columns *containers.Batch) (infos []common.FileInfo, err error) {
-	var info common.FileInfo
+	columns *containers.Batch) (block objectio.BlockObject, err error) {
 	name := EncodeBlkName(id)
-	writer, err := objectio.NewObjectWriter(name, w.fs.(*ObjectFS).service)
+	writer, err := objectio.NewObjectWriter(name, w.fs.service)
 	if err != nil {
 		return
 	}
-	writer.Write(columns)
-	for colIdx := range columns.Attrs {
-		colId := *id
-		colId.Idx = uint16(colIdx)
-		if info, err = w.WriteABlkColumn(version, &colId, columns.Vecs[colIdx]); err != nil {
-			return
-		}
-		infos = append(infos, info)
-	}
-	return
-}
-
-func (w *Writer) WriteBlockColumn(
-	version uint64,
-	id *common.ID,
-	column *vector.Vector) (err error) {
-	name := EncodeColBlkNameWithVersion(id, version, w.fs)
-	f, err := w.fs.OpenFile(name, os.O_CREATE)
-	if err != nil {
-		return
-	}
-	defer f.Close()
-	buf, err := column.Show()
-	if err != nil {
-		return
-	}
-	_, err = f.Write(buf)
-	return
-}
-
-func (w *Writer) WriteUpdates(
-	version uint64,
-	id *common.ID,
-	data []byte) (err error) {
-	name := EncodeUpdateNameWithVersion(id, version, w.fs)
-	f, err := w.fs.OpenFile(name, os.O_CREATE)
-	if err != nil {
-		return
-	}
-	defer f.Close()
-	_, err = f.Write(data)
-	return
-}
-
-func (w *Writer) WriteDeletes(
-	version uint64,
-	id *common.ID,
-	data []byte) (err error) {
-	name := EncodeDeleteNameWithVersion(id, version, w.fs)
-	f, err := w.fs.OpenFile(name, os.O_CREATE)
-	if err != nil {
-		return
-	}
-	defer f.Close()
-	_, err = f.Write(data)
-	return
-}
-
-func (w *Writer) WriteIndexMeta(
-	id *common.ID,
-	data []byte) (err error) {
-	name := EncodeMetaIndexName(id, w.fs)
-	f, err := w.fs.OpenFile(name, os.O_CREATE)
-	if err != nil {
-		return
-	}
-	defer f.Close()
-	_, err = f.Write(data)
+	w.writer = writer
+	bat := batch.New(true, columns.Attrs)
+	bat.Vecs = moengine.CopyToMoVectors(columns.Vecs)
+	block, err = w.writer.Write(bat)
 	return
 }
 
 func (w *Writer) WriteIndex(
-	id *common.ID,
-	idx int,
-	data []byte) (err error) {
-	name := EncodeIndexName(id, idx, w.fs)
-	f, err := w.fs.OpenFile(name, os.O_CREATE)
-	if err != nil {
-		return
-	}
-	defer f.Close()
-	_, err = f.Write(data)
-	return
-}
-
-func (w *Writer) WriteData(
-	version uint64,
-	id *common.ID,
-	data []byte) (err error) {
-	name := EncodeColBlkNameWithVersion(id, version, w.fs)
-	f, err := w.fs.OpenFile(name, os.O_CREATE)
-	if err != nil {
-		return
-	}
-	defer f.Close()
-	_, err = f.Write(data)
-	return
-}
-
-func (w *Writer) WriteZonemapIndexFromSource(
-	version uint64,
-	cols []int,
-	indexT catalog.IndexT,
-	id *common.ID,
-	source *vector.Vector) (err error) {
-	// TODO
+	block objectio.BlockObject,
+	index objectio.IndexData) (err error) {
+	w.writer.WriteIndex(block, index)
 	return
 }

@@ -36,8 +36,6 @@ func TestSgment1(t *testing.T) {
 	blk1, err := seg.OpenBlock(blkId1, 2, nil)
 	assert.Nil(t, err)
 	blkTs1 := common.NextGlobalSeqNum()
-	err = blk1.WriteTS(blkTs1)
-	assert.Nil(t, err)
 
 	ts, _ := blk1.ReadTS()
 	assert.Equal(t, blkTs1, ts)

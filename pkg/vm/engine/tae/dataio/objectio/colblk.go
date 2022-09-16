@@ -18,7 +18,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"os"
 )
 
 type columnBlock struct {
@@ -27,7 +26,6 @@ type columnBlock struct {
 	ts      uint64
 	indexes int
 	id      *common.ID
-	vfs     *VFS
 }
 
 func newColumnBlock(block *blockFile, indexCnt int, col int) *columnBlock {
@@ -41,7 +39,6 @@ func newColumnBlock(block *blockFile, indexCnt int, col int) *columnBlock {
 		indexes: indexCnt,
 		id:      cId,
 	}
-	cb.vfs = &VFS{cb: cb}
 	cb.OnZeroCB = cb.close
 	cb.Ref()
 	return cb
@@ -52,15 +49,15 @@ func (cb *columnBlock) WriteTS(ts types.TS) (err error) {
 }
 
 func (cb *columnBlock) WriteData(buf []byte) (err error) {
-	return cb.block.writer.WriteData(cb.ts, cb.id, buf)
+	return
 }
 
 func (cb *columnBlock) WriteUpdates(buf []byte) (err error) {
-	return cb.block.writer.WriteUpdates(cb.ts, cb.id, buf)
+	return
 }
 
 func (cb *columnBlock) WriteIndex(idx int, buf []byte) (err error) {
-	return cb.block.writer.WriteIndex(cb.id, idx, buf)
+	return
 }
 
 func (cb *columnBlock) ReadTS() (ts types.TS) {
@@ -84,28 +81,15 @@ func (cb *columnBlock) GetDataFileStat() (stat common.FileInfo) {
 }
 
 func (cb *columnBlock) OpenIndexFile(idx int) (vfile common.IRWFile, err error) {
-	name := EncodeIndexName(cb.id, idx, nil)
-	vfile, err = cb.block.seg.fs.OpenFile(name, os.O_RDWR)
-	if err != nil {
-		return
-	}
-	vfile.Ref()
-	return
+	return nil, nil
 }
 
 func (cb *columnBlock) OpenUpdateFile() (vfile common.IRWFile, err error) {
-	name := EncodeUpdateNameWithVersion(cb.id, cb.ts, nil)
-	vfile, err = cb.block.seg.fs.OpenFile(name, os.O_RDWR)
-	if err != nil {
-		return
-	}
-	vfile.Ref()
-	return
+	return nil, nil
 }
 
 func (cb *columnBlock) OpenDataFile() (vfile common.IRWFile, err error) {
-	cb.vfs.Ref()
-	return cb.vfs, nil
+	return nil, nil
 }
 
 func (cb *columnBlock) Close() error {

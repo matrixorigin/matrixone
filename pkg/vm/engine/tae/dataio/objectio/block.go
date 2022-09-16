@@ -17,6 +17,7 @@ package objectio
 import (
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/file"
@@ -28,7 +29,7 @@ type blockFile struct {
 	seg     *segmentFile
 	rows    uint32
 	id      *common.ID
-	ts      uint64
+	meta    objectio.BlockObject
 	columns []*columnBlock
 	writer  *Writer
 	reader  *Reader
@@ -56,6 +57,13 @@ func newBlock(id uint64, seg *segmentFile, colCnt int, indexCnt map[int]int) *bl
 	}
 	bf.Ref()
 	return bf
+}
+
+func (bf *blockFile) WriteBatch(bat *containers.Batch, ts types.TS) (err error) {
+	block, err := bf.writer.WriteBlock(bf.id, bat)
+	bf.meta = block
+	bf.meta.GetMeta()
+	return err
 }
 
 func (bf *blockFile) Fingerprint() *common.ID {
@@ -88,7 +96,7 @@ func (bf *blockFile) ReadTS() (ts types.TS, err error) {
 }
 
 func (bf *blockFile) WriteDeletes(buf []byte) (err error) {
-	return bf.writer.WriteDeletes(bf.ts, bf.id, buf)
+	return
 }
 
 func (bf *blockFile) ReadDeletes(buf []byte) (err error) {
@@ -100,11 +108,11 @@ func (bf *blockFile) GetDeletesFileStat() (stat common.FileInfo) {
 }
 
 func (bf *blockFile) WriteIndexMeta(buf []byte) (err error) {
-	return bf.writer.WriteIndexMeta(bf.id, buf)
+	return
 }
 
 func (bf *blockFile) LoadIndexMeta() (any, error) {
-	return bf.reader.LoadIndexMeta(bf.id)
+	return nil, nil
 }
 
 func (bf *blockFile) OpenColumn(colIdx int) (colBlk file.ColumnBlock, err error) {
@@ -150,22 +158,10 @@ func (bf *blockFile) WriteColumnVec(_ types.TS, colIdx int, vec containers.Vecto
 	return
 }
 
-func (bf *blockFile) WriteBatch(bat *containers.Batch, ts types.TS) (err error) {
-	if err = bf.WriteRows(uint32(bat.Length())); err != nil {
-		return
-	}
-	for colIdx := range bat.Attrs {
-		if err = bf.WriteColumnVec(ts, colIdx, bat.Vecs[colIdx]); err != nil {
-			return
-		}
-	}
-	return
-}
-
 func (bf *blockFile) LoadDeletes() (mask *roaring.Bitmap, err error) {
 	return bf.reader.LoadDeletes(bf.id)
 }
 
 func (bf *blockFile) LoadUpdates() (masks map[uint16]*roaring.Bitmap, vals map[uint16]map[uint32]any) {
-	return bf.reader.LoadUpdates()
+	return
 }
