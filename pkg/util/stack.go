@@ -28,8 +28,7 @@ type Frame = pkgErr.Frame
 
 type Stack []uintptr
 
-// Callers mirrors the code in github.com/pkg/errors,
-// but makes the depth customizable.
+// Callers makes the depth customizable.
 func Callers(depth int) *Stack {
 	const numFrames = 32
 	var pcs [numFrames]uintptr
@@ -46,7 +45,6 @@ func Caller(depth int) Frame {
 	return Frame(pcs[0])
 }
 
-// Format mirrors the code in github.com/pkg/errors.
 func (s *Stack) Format(st fmt.State, verb rune) {
 	for _, pc := range *s {
 		f := Frame(pc)
@@ -55,7 +53,6 @@ func (s *Stack) Format(st fmt.State, verb rune) {
 	}
 }
 
-// StackTrace mirrors the code in github.com/pkg/errors.
 func (s *Stack) StackTrace() pkgErr.StackTrace {
 	f := make([]pkgErr.Frame, len(*s))
 	for i := 0; i < len(f); i++ {

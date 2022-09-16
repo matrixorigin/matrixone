@@ -2135,4 +2135,20 @@ var builtins = map[int]Functions{
 			},
 		},
 	},
+	SERIAL: {
+		Id: SERIAL,
+		TypeCheckFn: func(_ []Function, inputs []types.T) (overloadIndex int32, ts []types.T) {
+			return int32(0), nil
+		},
+		Overloads: []Function{
+			{
+				Index:     0,
+				Flag:      plan.Function_STRICT,
+				Layout:    STANDARD_FUNCTION,
+				Args:      []types.T{},
+				ReturnTyp: types.T_varchar,
+				Fn:        multi.Serial,
+			},
+		},
+	},
 }

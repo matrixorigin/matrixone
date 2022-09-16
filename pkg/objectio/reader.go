@@ -43,8 +43,8 @@ func (r *ObjectReader) ReadMeta(extents []Extent) ([]BlockObject, error) {
 	}
 	for i, extent := range extents {
 		metas.Entries[i] = fileservice.IOEntry{
-			Offset: int(extent.offset),
-			Size:   int(extent.Length()),
+			Offset: int64(extent.offset),
+			Size:   int64(extent.Length()),
 		}
 	}
 	err = r.object.fs.Read(context.Background(), metas)
@@ -78,8 +78,8 @@ func (r *ObjectReader) Read(extent Extent, idxs []uint16) (*fileservice.IOVector
 	for _, idx := range idxs {
 		col := block.(*Block).columns[idx]
 		entry := fileservice.IOEntry{
-			Offset: int(col.GetMeta().location.Offset()),
-			Size:   int(col.GetMeta().location.Length()),
+			Offset: int64(col.GetMeta().location.Offset()),
+			Size:   int64(col.GetMeta().location.Length()),
 		}
 		data.Entries = append(data.Entries, entry)
 	}
