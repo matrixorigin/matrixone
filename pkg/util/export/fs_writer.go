@@ -117,8 +117,8 @@ mkdirRetry:
 		FilePath: w.fileServiceName + fileservice.ServiceNameSeparator + path.Join(w.dir, w.filename) + csvExtension,
 		Entries: []fileservice.IOEntry{
 			{
-				Offset: w.offset,
-				Size:   n,
+				Offset: int64(w.offset),
+				Size:   int64(n),
 				Data:   p,
 			},
 		},

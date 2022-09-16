@@ -43,7 +43,7 @@ var _ FileService = new(LocalFS)
 func NewLocalFS(
 	name string,
 	rootPath string,
-	memCacheCapacity int,
+	memCacheCapacity int64,
 ) (*LocalFS, error) {
 
 	const sentinelFileName = "thisisalocalfileservicedir"
@@ -335,14 +335,14 @@ func (l *LocalFS) read(ctx context.Context, vector *IOVector) error {
 				entry.Data = data
 
 			} else {
-				if len(entry.Data) < entry.Size {
+				if int64(len(entry.Data)) < entry.Size {
 					entry.Data = make([]byte, entry.Size)
 				}
 				n, err := io.ReadFull(r, entry.Data)
 				if err != nil {
 					return err
 				}
-				if n != entry.Size {
+				if int64(n) != entry.Size {
 					return ErrUnexpectedEOF
 				}
 			}
@@ -392,7 +392,7 @@ func (l *LocalFS) List(ctx context.Context, dirPath string) (ret []DirEntry, err
 		ret = append(ret, DirEntry{
 			Name:  name,
 			IsDir: entry.IsDir(),
-			Size:  int(info.Size()),
+			Size:  info.Size(),
 		})
 	}
 
@@ -544,17 +544,17 @@ func (l *LocalFSMutator) Append(ctx context.Context, entries ...IOEntry) error {
 	if err != nil {
 		return err
 	}
-	return l.mutate(ctx, int(offset), entries...)
+	return l.mutate(ctx, offset, entries...)
 }
 
-func (l *LocalFSMutator) mutate(ctx context.Context, baseOffset int, entries ...IOEntry) error {
+func (l *LocalFSMutator) mutate(ctx context.Context, baseOffset int64, entries ...IOEntry) error {
 
 	// write
 	for _, entry := range entries {
 
 		if entry.ReaderForWrite != nil {
 			// seek and copy
-			_, err := l.fileWithChecksum.Seek(int64(entry.Offset+baseOffset), 0)
+			_, err := l.fileWithChecksum.Seek(entry.Offset+baseOffset, 0)
 			if err != nil {
 				return err
 			}
@@ -562,7 +562,7 @@ func (l *LocalFSMutator) mutate(ctx context.Context, baseOffset int, entries ...
 			if err != nil {
 				return err
 			}
-			if int(n) != entry.Size {
+			if n != entry.Size {
 				return ErrSizeNotMatch
 			}
 
@@ -572,7 +572,7 @@ func (l *LocalFSMutator) mutate(ctx context.Context, baseOffset int, entries ...
 			if err != nil {
 				return err
 			}
-			if int(n) != entry.Size {
+			if int64(n) != entry.Size {
 				return ErrSizeNotMatch
 			}
 		}
