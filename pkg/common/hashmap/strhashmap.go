@@ -169,13 +169,14 @@ func (m *StrHashMap) encodeHashKeys(vecs []*vector.Vector, start, count int) {
 }
 
 func fillStringGroupStr(m *StrHashMap, vec *vector.Vector, n int, start int) {
-	vs := vector.GetStrVectorValues(vec)
+	area := vec.GetArea()
+	vs := vector.MustTCols[types.Varlena](vec)
 	if !vec.GetNulls().Any() {
 		for i := 0; i < n; i++ {
 			if m.hasNull {
 				m.keys[i] = append(m.keys[i], byte(0))
 			}
-			m.keys[i] = append(m.keys[i], vs[i+start]...)
+			m.keys[i] = append(m.keys[i], vs[i+start].GetByteSlice(area)...)
 		}
 	} else {
 		nsp := vec.GetNulls()
@@ -186,14 +187,14 @@ func fillStringGroupStr(m *StrHashMap, vec *vector.Vector, n int, start int) {
 					m.keys[i] = append(m.keys[i], byte(1))
 				} else {
 					m.keys[i] = append(m.keys[i], byte(0))
-					m.keys[i] = append(m.keys[i], vs[i+start]...)
+					m.keys[i] = append(m.keys[i], vs[i+start].GetByteSlice(area)...)
 				}
 			} else {
 				if hasNull {
 					m.zValues[i] = 0
 					continue
 				}
-				m.keys[i] = append(m.keys[i], vs[i+start]...)
+				m.keys[i] = append(m.keys[i], vs[i+start].GetByteSlice(area)...)
 			}
 		}
 	}
