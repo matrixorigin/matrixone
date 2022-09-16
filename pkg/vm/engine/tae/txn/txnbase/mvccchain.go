@@ -79,10 +79,11 @@ func (be *MVCCChain) InsertNode(vun MVCCNode) {
 // [start, end]
 // Check whether there is any committed node in between [start, end]
 // -----+------+-------+--------+----------+--------->
-//      |      |       |        |          |      Time
-//      |     start    |       end         |
-//  commitTs <----- commitTs <--------- commitTs|uncommitted  <=  MVCCChain Header
-//     (1)            (2)                 (3)
+//
+//	    |      |       |        |          |      Time
+//	    |     start    |       end         |
+//	commitTs <----- commitTs <--------- commitTs|uncommitted  <=  MVCCChain Header
+//	   (1)            (2)                 (3)
 func (be *MVCCChain) HasCommittedNodeInRange(start, end types.TS) (ok bool) {
 	be.MVCC.Loop(func(n *common.GenericDLNode[MVCCNode]) bool {
 		un := n.GetPayload()

@@ -26,6 +26,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 )
 
+const (
+	NOpUpdateAttr NodeOp = NOpCustomizedStart + iota
+)
+
 type MetaBaseEntry struct {
 	*txnbase.MVCCChain
 	ID uint64
@@ -132,6 +136,7 @@ func (be *MetaBaseEntry) UpdateAttr(txn txnif.TxnReader, node *MetadataMVCCNode)
 	}
 	be.CheckConflict(txn)
 	entry := be.getOrSetUpdateNode(txn)
+	entry.AddOp(NOpUpdateAttr)
 	entry.UpdateAttr(node)
 	return
 }

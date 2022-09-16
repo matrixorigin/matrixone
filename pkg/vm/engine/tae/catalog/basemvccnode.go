@@ -79,8 +79,6 @@ func (un *EntryMVCCNode) Clone() *EntryMVCCNode {
 }
 
 func (un *EntryMVCCNode) CloneData() *EntryMVCCNode {
-	ntypes := make([]NodeOp, len(un.NodeOp))
-	copy(ntypes, un.NodeOp)
 	return &EntryMVCCNode{
 		CreatedAt: un.CreatedAt,
 		DeletedAt: un.DeletedAt,
