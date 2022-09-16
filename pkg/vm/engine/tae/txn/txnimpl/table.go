@@ -142,38 +142,32 @@ func (tbl *txnTable) SoftDeleteSegment(id uint64) (err error) {
 		return
 	}
 	tbl.store.IncreateWriteCnt()
+	tbl.store.dirtyMemo.recordSeg(tbl.entry.ID, id)
 	tbl.txnEntries = append(tbl.txnEntries, txnEntry)
 	tbl.store.warChecker.ReadTable(tbl.entry.GetDB().ID, tbl.entry.AsCommonID())
 	return
 }
 
-func (tbl *txnTable) CreateNonAppendableSegment() (seg handle.Segment, err error) {
-	var meta *catalog.SegmentEntry
-	var factory catalog.SegmentDataFactory
-	if tbl.store.dataFactory != nil {
-		factory = tbl.store.dataFactory.MakeSegmentFactory()
-	}
-	if meta, err = tbl.entry.CreateSegment(tbl.store.txn, catalog.ES_NotAppendable, factory); err != nil {
-		return
-	}
-	seg = newSegment(tbl, meta)
-	tbl.store.IncreateWriteCnt()
-	tbl.txnEntries = append(tbl.txnEntries, meta)
-	tbl.store.warChecker.ReadTable(tbl.entry.GetDB().ID, meta.GetTable().AsCommonID())
-	return
+func (tbl *txnTable) CreateSegment() (seg handle.Segment, err error) {
+	return tbl.createSegment(catalog.ES_Appendable)
 }
 
-func (tbl *txnTable) CreateSegment() (seg handle.Segment, err error) {
+func (tbl *txnTable) CreateNonAppendableSegment() (seg handle.Segment, err error) {
+	return tbl.createSegment(catalog.ES_NotAppendable)
+}
+
+func (tbl *txnTable) createSegment(state catalog.EntryState) (seg handle.Segment, err error) {
 	var meta *catalog.SegmentEntry
 	var factory catalog.SegmentDataFactory
 	if tbl.store.dataFactory != nil {
 		factory = tbl.store.dataFactory.MakeSegmentFactory()
 	}
-	if meta, err = tbl.entry.CreateSegment(tbl.store.txn, catalog.ES_Appendable, factory); err != nil {
+	if meta, err = tbl.entry.CreateSegment(tbl.store.txn, state, factory); err != nil {
 		return
 	}
 	seg = newSegment(tbl, meta)
 	tbl.store.IncreateWriteCnt()
+	tbl.store.dirtyMemo.recordSeg(tbl.entry.ID, meta.ID)
 	tbl.txnEntries = append(tbl.txnEntries, meta)
 	tbl.store.warChecker.ReadTable(tbl.entry.GetDB().ID, meta.GetTable().AsCommonID())
 	return
@@ -189,6 +183,7 @@ func (tbl *txnTable) SoftDeleteBlock(id *common.ID) (err error) {
 		return
 	}
 	tbl.store.IncreateWriteCnt()
+	tbl.store.dirtyMemo.recordBlk(*id)
 	tbl.txnEntries = append(tbl.txnEntries, meta)
 	tbl.store.warChecker.ReadSegment(tbl.entry.GetDB().ID, seg.AsCommonID())
 	return
@@ -243,6 +238,7 @@ func (tbl *txnTable) createBlock(sid uint64, state catalog.EntryState) (blk hand
 		return
 	}
 	tbl.store.IncreateWriteCnt()
+	tbl.store.dirtyMemo.recordBlk(*meta.AsCommonID())
 	tbl.txnEntries = append(tbl.txnEntries, meta)
 	tbl.store.warChecker.ReadSegment(tbl.entry.GetDB().ID, seg.AsCommonID())
 	return buildBlock(tbl, meta), err
@@ -253,6 +249,7 @@ func (tbl *txnTable) SetCreateEntry(e txnif.TxnEntry) {
 		panic("logic error")
 	}
 	tbl.store.IncreateWriteCnt()
+	tbl.store.dirtyMemo.recordCatalogChange()
 	tbl.createEntry = e
 	tbl.createIdx = len(tbl.txnEntries)
 	tbl.txnEntries = append(tbl.txnEntries, e)
@@ -264,6 +261,7 @@ func (tbl *txnTable) SetDropEntry(e txnif.TxnEntry) error {
 		panic("logic error")
 	}
 	tbl.store.IncreateWriteCnt()
+	tbl.store.dirtyMemo.recordCatalogChange()
 	tbl.dropEntry = e
 	tbl.txnEntries = append(tbl.txnEntries, e)
 	tbl.store.warChecker.ReadDB(tbl.entry.GetDB().GetID())
@@ -308,6 +306,7 @@ func (tbl *txnTable) AddDeleteNode(id *common.ID, node txnif.DeleteNode) error {
 	}
 	tbl.deleteNodes[nid] = node
 	tbl.store.IncreateWriteCnt()
+	tbl.store.dirtyMemo.recordBlk(*id)
 	tbl.txnEntries = append(tbl.txnEntries, node)
 	return nil
 }

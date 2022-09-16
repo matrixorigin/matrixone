@@ -2884,3 +2884,75 @@ func TestMultiTenantMoCatalogOps(t *testing.T) {
 	}
 
 }
+
+func TestLogtailBasic(t *testing.T) {
+	opts := config.WithLongScanAndCKPOpts(nil)
+	opts.LogtailCfg = &options.LogtailCfg{PageSize: 30}
+	tae := newTestEngine(t, opts)
+	logMgr := tae.LogtailMgr
+	defer tae.Close()
+
+	minTs, maxTs := types.BuildTS(0, 0), types.BuildTS(1000, 1000)
+	view := logMgr.GetLogtailView(minTs, maxTs, 1000)
+	assert.False(t, view.HasCatalogChanges())
+	assert.Equal(t, 0, len(view.GetDirtyPoints().Segs))
+	schema := catalog.MockSchemaAll(2, -1)
+	schema.Name = "test"
+	schema.BlockMaxRows = 10
+	schema.SegmentMaxBlocks = 2
+	txn, _ := tae.StartTxn(nil)
+	db, _ := txn.CreateDatabase("db")
+	tbl, _ := db.CreateRelation(schema)
+	tableID := tbl.ID()
+	txn.Commit()
+
+	ts1 := txn.GetPrepareTS()
+	var ts2, ts3 types.TS
+
+	wg := new(sync.WaitGroup)
+	wg.Add(1)
+	go func() {
+		for i := 0; i < 100; i++ {
+			txn, _ = tae.StartTxn(nil)
+			db, _ := txn.GetDatabase("db")
+			tbl, _ := db.GetRelationByName("test")
+			tbl.Append(catalog.MockBatch(schema, 1))
+			assert.NoError(t, txn.Commit())
+			if i == 0 {
+				ts2 = txn.GetPrepareTS()
+			}
+			if i == 99 {
+				ts3 = txn.GetPrepareTS()
+			}
+		}
+		wg.Done()
+	}()
+
+	// test race
+	for i := 0; i < 5; i++ {
+		wg.Add(1)
+		go func() {
+			for i := 0; i < 10; i++ {
+				view := logMgr.GetLogtailView(minTs, maxTs, tableID)
+				assert.True(t, view.HasCatalogChanges())
+			}
+			wg.Done()
+		}()
+	}
+
+	wg.Wait()
+
+	view = logMgr.GetLogtailView(ts2, ts3.Next(), tableID)
+	assert.False(t, view.HasCatalogChanges())
+	view = logMgr.GetLogtailView(minTs, ts1, tableID)
+	assert.Equal(t, 0, len(view.GetDirtyPoints().Segs))
+	view = logMgr.GetLogtailView(ts2, ts3, tableID-1)
+	assert.Equal(t, 0, len(view.GetDirtyPoints().Segs))
+	// 5 segments, every segment has 2 blocks
+	view = logMgr.GetLogtailView(ts2, ts3, tableID)
+	dirties := view.GetDirtyPoints()
+	assert.Equal(t, 5, len(dirties.Segs))
+	for _, seg := range dirties.Segs {
+		assert.Equal(t, 2, len(seg.Blks))
+	}
+}
