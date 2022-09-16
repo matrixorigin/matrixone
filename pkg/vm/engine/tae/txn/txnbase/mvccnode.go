@@ -102,30 +102,69 @@ func (un *TxnMVCCNode) IsVisible(ts types.TS) (visible bool) {
 
 }
 func (un *TxnMVCCNode) GetPrepare() types.TS { return un.Prepare }
+
+// committedIn indicates whether this node is committed in between [minTs, maxTs]
+// commitBeforeMinTS indicates whether this node is committed before minTs
+// NeedWaitCommitting should be called before to make sure all prepared active
+// txns in between [minTs, maxTs] be committed or rollbacked
 func (un *TxnMVCCNode) CommittedIn(minTS, maxTS types.TS) (committedIn, commitBeforeMinTS bool) {
+	// -------+----------+----------------+--------------->
+	//        |          |                |             Time
+	//       MinTS     MaxTs       Commit In future
+	// Created by other active txn
+	// false: not committed in range
+	// false: not committed before minTs
 	if un.End.IsEmpty() {
 		return false, false
 	}
+
+	// -------+--------------+------------+--------------->
+	//        |              |            |             Time
+	//    CommittedTS     MinTs         MaxTs
+	// Created by other committed txn
+	// false: not committed in range
+	// true: committed before minTs
 	if un.End.Less(minTS) {
 		return false, true
 	}
+
+	// -------+--------------+------------+--------------->
+	//        |              |            |             Time
+	//       MinTs     CommittedTS       MaxTs
+	// Created by other committed txn
+	// true: committed in range
+	// false: not committed before minTs
 	if un.End.GreaterEq(minTS) && un.End.LessEq(maxTS) {
 		return true, false
 	}
+
+	// -------+--------------+------------+--------------->
+	//        |              |            |             Time
+	//       MinTs          MaxTs     CommittedTs
+	// Created by other committed txn
+	// false: not committed in range
+	// false: not committed before minTs
 	return false, false
 }
 
+// Check whether need to wait this mvcc node
 func (un *TxnMVCCNode) NeedWaitCommitting(ts types.TS) (bool, txnif.TxnReader) {
+	// If this node is active, not to wait
+	// If this node is committed|rollbacked, not to wait
 	if !un.IsCommitting() {
 		return false, nil
 	}
+
+	// --------+----------------+------------------------>
+	//         Ts           PrepareTs                Time
+	// If ts is before the prepare ts. not to wait
 	if un.Txn.GetPrepareTS().GreaterEq(ts) {
 		return false, nil
 	}
-	commitTS := un.Txn.GetCommitTS()
-	if !commitTS.IsEmpty() && commitTS.GreaterEq(ts) {
-		return false, nil
-	}
+
+	// --------+----------------+------------------------>
+	//     PrepareTs            Ts                   Time
+	// If ts is before the prepare ts. not to wait
 	return true, un.Txn
 }
 
