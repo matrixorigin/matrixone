@@ -28,7 +28,7 @@ func (m *MemHandler) ensureAccount(
 ) {
 
 	// ensure catalog db exists for this account
-	keys, err := m.databases.Index(tx, AnyKey{
+	keys, err := m.databases.Index(tx, Tuple{
 		index_AccountID_Name,
 		Uint(accessInfo.AccountID),
 		Text(catalog.SystemDBName),
