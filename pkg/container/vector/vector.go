@@ -210,6 +210,10 @@ func (v *Vector) Size() int {
 	return len(v.data) + len(v.area)
 }
 
+func (v *Vector) GetArea() []byte {
+	return v.area
+}
+
 func (v *Vector) GetType() types.Type {
 	return v.Typ
 }
@@ -253,7 +257,7 @@ func (v *Vector) FillDefaultValue() {
 	case types.T_uint64:
 		fillDefaultValue[uint64](v)
 	case types.T_float32:
-		fillDefaultValue[uint64](v)
+		fillDefaultValue[float32](v)
 	case types.T_float64:
 		fillDefaultValue[float64](v)
 	case types.T_date:

@@ -148,7 +148,8 @@ func TestDecimalDist(t *testing.T) {
 		}
 		v, err := agg.Eval(m)
 		require.NoError(t, err)
-		require.Equal(t, []types.Decimal128{types.Decimal128_FromFloat64(2.8722813232690143)}, vector.GetColumn[types.Decimal128](v))
+		d, _ := types.Decimal128_FromFloat64(2.8722813232690143, 64, 16)
+		require.Equal(t, []types.Decimal128{d}, vector.GetColumn[types.Decimal128](v))
 		v.Free(m)
 	}
 	{
@@ -168,13 +169,15 @@ func TestDecimalDist(t *testing.T) {
 		{
 			v, err := agg0.Eval(m)
 			require.NoError(t, err)
-			require.Equal(t, []types.Decimal128{types.Decimal128_FromFloat64(2.8722813232690143)}, vector.GetColumn[types.Decimal128](v))
+			d, _ := types.Decimal128_FromFloat64(2.8722813232690143, 64, 16)
+			require.Equal(t, []types.Decimal128{d}, vector.GetColumn[types.Decimal128](v))
 			v.Free(m)
 		}
 		{
 			v, err := agg1.Eval(m)
 			require.NoError(t, err)
-			require.Equal(t, []types.Decimal128{types.Decimal128_FromFloat64(2.8722813232690143)}, vector.GetColumn[types.Decimal128](v))
+			d, _ := types.Decimal128_FromFloat64(2.8722813232690143, 64, 16)
+			require.Equal(t, []types.Decimal128{d}, vector.GetColumn[types.Decimal128](v))
 			v.Free(m)
 		}
 	}

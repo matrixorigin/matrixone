@@ -73,6 +73,15 @@ func SchemaToDefs(schema *catalog.Schema) (defs []engine.TableDef, err error) {
 			expr = nil
 		}
 
+		onUpdate := &plan.Expr{}
+		if col.OnUpdate != nil {
+			if err := onUpdate.Unmarshal(col.OnUpdate); err != nil {
+				return nil, err
+			}
+		} else {
+			onUpdate = nil
+		}
+
 		def := &engine.AttributeDef{
 			Attr: engine.Attribute{
 				Name:    col.Name,
@@ -84,6 +93,7 @@ func SchemaToDefs(schema *catalog.Schema) (defs []engine.TableDef, err error) {
 					OriginString: col.Default.OriginString,
 					Expr:         expr,
 				},
+				OnUpdate:      onUpdate,
 				AutoIncrement: col.IsAutoIncrement(),
 			},
 		}

@@ -100,7 +100,7 @@ a    b
 201    xefrsdfgds
 insert into t1 values (-9223372036854775808,'xefrsdfgds');
 insert into t1 values (-9223372036854775809,'xefrsdfgds');
-tae data: duplicate
+Incorrect BIGINT value: '-9223372036854775809' for column 'a' at row 1
 insert into t1 values (9223372036854775807,'xefrsdfgds');
 insert into t1 values (9223372036854775808,'xefrsdfgds');
 Incorrect BIGINT value: '9223372036854775808' for column 'a' at row 1
@@ -597,3 +597,16 @@ a    b    c
 5    5    'ccc'
 6    6    '%%'
 drop table t13;
+
+create table t1(a int default(-1) auto_increment);
+invalid default value for 'a'
+create table t1(a int primary key default(-1) auto_increment);
+invalid default value for 'a'
+create table t1(a bigint default(-1) auto_increment);
+invalid default value for 'a'
+create table t1(a bigint primary key default(-1) auto_increment);
+invalid default value for 'a'
+create table t1(a int, b int default(10), c int auto_increment);
+show create table t1;
+Table    Create Table
+t1    CREATE TABLE `t1` (\n`a` INT DEFAULT NULL,\n`b` INT DEFAULT (10),\n`c` INT NOT NULL AUTO_INCREMENT\n)

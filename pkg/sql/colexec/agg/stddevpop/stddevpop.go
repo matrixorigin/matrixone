@@ -68,7 +68,8 @@ func (s *StdD64) Eval(vs []types.Decimal128) []types.Decimal128 {
 	s.variance.Eval(vs)
 	for i, v := range vs {
 		tmp := math.Sqrt(v.ToFloat64())
-		vs[i] = types.Decimal128_FromFloat64(tmp)
+		d, _ := types.Decimal128_FromFloat64(tmp, 34, 10)
+		vs[i] = d
 	}
 	return vs
 }
@@ -94,7 +95,8 @@ func (s *StdD128) Eval(vs []types.Decimal128) []types.Decimal128 {
 	s.variance.Eval(vs)
 	for i, v := range vs {
 		tmp := math.Sqrt(v.ToFloat64())
-		vs[i] = types.Decimal128_FromFloat64(tmp)
+		d, _ := types.Decimal128_FromFloat64(tmp, 34, 10)
+		vs[i] = d
 	}
 	return vs
 }

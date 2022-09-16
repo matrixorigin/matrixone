@@ -21,72 +21,20 @@ var (
 			Name:      "statement_total",
 			Help:      "Counter of executed sql statement",
 		},
-		[]string{"type", "internal"},
+		[]string{constTenantKey, "type"},
 	)
-	statementCounters = []Counter{
-		StatementCounterFactory.WithLabelValues("select", "0"),
-		StatementCounterFactory.WithLabelValues("insert", "0"),
-		StatementCounterFactory.WithLabelValues("delete", "0"),
-		StatementCounterFactory.WithLabelValues("update", "0"),
-		StatementCounterFactory.WithLabelValues("other", "0"),
-	}
-	internalStatementCounters = []Counter{
-		StatementCounterFactory.WithLabelValues("select", "1"),
-		StatementCounterFactory.WithLabelValues("insert", "1"),
-		StatementCounterFactory.WithLabelValues("delete", "1"),
-		StatementCounterFactory.WithLabelValues("update", "1"),
-		StatementCounterFactory.WithLabelValues("other", "1"),
-	}
-
-	SQLLatencyObserverFactory = NewRawHistVec(
-		HistogramOpts{
-			Subsystem: "sql",
-			Name:      "latency_seconds",
-			Help:      "Processing time in seconds of handled sql statement",
-			// these buckets are defined for compatible purpose
-			Buckets: ExponentialBuckets(0.0005, 2, 28), // 0.5ms ~ 1.5days
-		},
-		[]string{"type", "internal"},
-	)
-
-	sqlLatencyObservers = []Observer{
-		SQLLatencyObserverFactory.WithLabelValues("select", "0"),
-		SQLLatencyObserverFactory.WithLabelValues("insert", "0"),
-		SQLLatencyObserverFactory.WithLabelValues("delete", "0"),
-		SQLLatencyObserverFactory.WithLabelValues("update", "0"),
-		SQLLatencyObserverFactory.WithLabelValues("other", "0"),
-	}
-	internalSQLLatencyObservers = []Observer{
-		SQLLatencyObserverFactory.WithLabelValues("select", "1"),
-		SQLLatencyObserverFactory.WithLabelValues("insert", "1"),
-		SQLLatencyObserverFactory.WithLabelValues("delete", "1"),
-		SQLLatencyObserverFactory.WithLabelValues("update", "1"),
-		SQLLatencyObserverFactory.WithLabelValues("other", "1"),
-	}
 )
 
-type SQLType int
+type SQLType string
 
-const (
-	SQLTypeSelect SQLType = iota
-	SQLTypeInsert
-	SQLTypeUpdate
-	SQLTypeDelete
-	SQLTypeOther
+var (
+	SQLTypeSelect SQLType = "select"
+	SQLTypeInsert SQLType = "insert"
+	SQLTypeUpdate SQLType = "delete"
+	SQLTypeDelete SQLType = "update"
+	SQLTypeOther  SQLType = "other"
 )
 
-func StatementCounter(t SQLType, isInternal bool) Counter {
-	if isInternal {
-		return internalStatementCounters[t]
-	} else {
-		return statementCounters[t]
-	}
-}
-
-func SQLLatencyObserver(t SQLType, isInternal bool) Observer {
-	if isInternal {
-		return internalSQLLatencyObservers[t]
-	} else {
-		return sqlLatencyObservers[t]
-	}
+func StatementCounter(tenant string, t SQLType) Counter {
+	return StatementCounterFactory.WithLabelValues(tenant, string(t))
 }
