@@ -103,7 +103,7 @@ func (view *ColumnView) GetValue(key uint32, startTs types.TS) (v any, err error
 					v = nil
 					head = head.GetNext()
 					continue
-				} else if state == txnif.TxnStateCommitting {
+				} else if state == txnif.TxnStatePreparing {
 					logutil.Fatal("txn state error")
 				} else if state == txnif.TxnStateUnknown {
 					err = txnif.ErrTxnInternal

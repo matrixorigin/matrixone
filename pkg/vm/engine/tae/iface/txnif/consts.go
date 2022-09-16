@@ -27,8 +27,6 @@ type TxnState int32
 const (
 	TxnStateActive TxnState = iota
 	//TxnStateCommitting only for 1PC
-	TxnStateCommitting
-	//TxnStatePreparing only for 2PC
 	TxnStatePreparing
 	//TxnStatePrepared only for 2PC
 	TxnStatePrepared
@@ -54,8 +52,8 @@ func TxnStrState(state TxnState) string {
 	switch state {
 	case TxnStateActive:
 		return "Active"
-	case TxnStateCommitting:
-		return "Committing"
+	case TxnStatePreparing:
+		return "Preparing"
 	case TxnStatePrepared:
 		return "Prepared"
 	case TxnStateCommittingFinished:

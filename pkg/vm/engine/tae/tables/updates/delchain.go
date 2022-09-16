@@ -110,7 +110,7 @@ func (chain *DeleteChain) IsDeleted(row uint32, ts types.TS, rwlocker *sync.RWMu
 				// logutil.Infof("%d -- wait --> %s: %d", ts, txn.Repr(), state)
 				if state == txnif.TxnStateCommitted {
 					deleted = true
-				} else if state == txnif.TxnStateCommitting {
+				} else if state == txnif.TxnStatePreparing {
 					logutil.Fatal("txn state error")
 				} else if state == txnif.TxnStateUnknown {
 					err = txnif.ErrTxnInternal
