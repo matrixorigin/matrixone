@@ -45,3 +45,10 @@ b char (10) not null
 );
 insert into t7 values(1,'a'),(2,'b'),(3,'c'),(3,'c');
 select * from (select * from t7 union all select * from t7 limit 2) a;
+drop table if exists t2;
+CREATE TABLE t2 ( id int(3) unsigned default '0', id_master int(5) default '0', text1 varchar(5) default NULL, text2 varchar(5) default NULL);
+INSERT INTO t2 (id, id_master, text1, text2) VALUES("1", "1", "foo1", "bar1");
+INSERT INTO t2 (id, id_master, text1, text2) VALUES("2", "1", "foo2", "bar2");
+INSERT INTO t2 (id, id_master, text1, text2) VALUES("3", "1", NULL, "bar3");
+INSERT INTO t2 (id, id_master, text1, text2) VALUES("4", "1", "foo4", "bar4");
+SELECT 1 AS id_master, 1 AS id, NULL AS text1, 'ABCDE' AS text2 UNION SELECT id_master, id, text1, text2 FROM t2 order by id;

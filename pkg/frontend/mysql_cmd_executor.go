@@ -2488,14 +2488,15 @@ func (mce *MysqlCmdExecutor) ExecRequest(requestCtx context.Context, req *Reques
 		return resp, nil
 
 	case COM_STMT_EXECUTE:
+		mce.ses.Cmd = int(COM_STMT_EXECUTE)
 		data := req.GetData().([]byte)
 		sql, err := mce.parseStmtExecute(data)
 		if err != nil {
-			return NewGeneralErrorResponse(COM_STMT_PREPARE, err), nil
+			return NewGeneralErrorResponse(COM_STMT_EXECUTE, err), nil
 		}
 		err = mce.doComQuery(requestCtx, sql)
 		if err != nil {
-			resp = NewGeneralErrorResponse(COM_STMT_PREPARE, err)
+			resp = NewGeneralErrorResponse(COM_STMT_EXECUTE, err)
 		}
 		return resp, nil
 

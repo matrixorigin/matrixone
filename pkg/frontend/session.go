@@ -902,6 +902,7 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string) (*plan2.
 				},
 				Primary:       attr.Attr.Primary,
 				Default:       attr.Attr.Default,
+				OnUpdate:      attr.Attr.OnUpdate,
 				Comment:       attr.Attr.Comment,
 				AutoIncrement: attr.Attr.AutoIncrement,
 			})

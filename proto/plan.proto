@@ -50,6 +50,7 @@ message Const {
 		int64 timestampval = 12;
 		string jsonval = 13;
 		bool defaultval = 14;
+		bool updateVal = 15;
 	}
 }
 
@@ -193,6 +194,7 @@ message ColDef {
 	int32 pkidx 		= 7;
 	string comment		= 8;
 	bool is_cPkey = 9;
+	Expr on_update = 10;
 }
 
 message Default {

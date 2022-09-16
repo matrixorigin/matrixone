@@ -46,3 +46,7 @@ type BootstrapManager interface {
 
 	CheckBootstrap(pb.LogState) bool
 }
+
+type TaskScheduler interface {
+	Schedule(cnState pb.CNState, currentTick uint64)
+}
