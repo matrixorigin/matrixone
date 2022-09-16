@@ -210,8 +210,10 @@ func New(oid T, width, scale, precision int32) Type {
 func CharsetType(oid T) uint8 {
 	switch oid {
 	case T_blob:
+		// binary charset
 		return 1
 	default:
+		// utf8 charset
 		return 0
 	}
 }
