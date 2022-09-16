@@ -39,10 +39,12 @@ func TestGetAvailablePort(t *testing.T) {
 func TestServiceAddress(t *testing.T) {
 	logServiceNum := 3
 	dnServiceNum := 2
+	cnServiceNum := 1
 
-	address := newServiceAddresses(t, logServiceNum, dnServiceNum, "127.0.0.1")
+	address := newServiceAddresses(t, logServiceNum, dnServiceNum, cnServiceNum, "127.0.0.1")
 	address.assertDNService()
 	address.assertLogService()
+	address.assertCnService()
 
 	for i := 0; i < dnServiceNum; i++ {
 		addrList := address.listDnServiceAddresses(i)
@@ -64,27 +66,37 @@ func TestServiceAddress(t *testing.T) {
 	addrList = address.listLogServiceAddresses(3)
 	require.Equal(t, 0, len(addrList))
 
+	for i := 0; i < cnServiceNum; i++ {
+		addrList := address.listCnServiceAddresses(i)
+		// 1 address for every cn service now
+		require.Equal(t, 1, len(addrList))
+	}
+	// valid dn index: 0
+	// invalid dn index: 1
+	addrList = address.listCnServiceAddresses(1)
+	require.Equal(t, 0, len(addrList))
+
 	// ------------------------------
 	// integrate with NetworkPartition
 	// ------------------------------
 	dnIndex := uint32(1)
 	logIndex := uint32(2)
+	cnIndex := uint32(1)
 	partition1 := newNetworkPartition(
 		logServiceNum, []uint32{logIndex},
 		dnServiceNum, []uint32{dnIndex},
+		cnServiceNum, []uint32{cnIndex},
 	)
 
-	partition2 := remainingNetworkPartition(
-		logServiceNum, dnServiceNum, partition1,
-	)
+	partition2 := remainingNetworkPartition(logServiceNum, dnServiceNum, cnServiceNum, partition1)
 
 	addrSets := address.buildPartitionAddressSets(partition1, partition2)
 	// there are 2 address sets corresponding with 2 partitions
 	require.Equal(t, 2, len(addrSets))
 	// in partition 1, there are 1 dn service and 1 log service.
 	require.Equal(t, 3+1, len(addrSets[0]))
-	// in partition 1, there are 1 dn service and 2 log service.
-	require.Equal(t, 3*2+1, len(addrSets[1]))
+	// in partition 1, there are 1 dn service, 1 cn service and 2 log service.
+	require.Equal(t, 3*2+1+1, len(addrSets[1]))
 
 	// the first address set should contains the following addresses.
 	dnListenAddr := address.getDnListenAddress(int(dnIndex))
@@ -99,7 +111,7 @@ func TestServiceAddress(t *testing.T) {
 
 func TestGetDnListenAddress(t *testing.T) {
 	dnNum := 3
-	address := newServiceAddresses(t, 1, dnNum, "127.0.0.1")
+	address := newServiceAddresses(t, 1, dnNum, 0, "127.0.0.1")
 
 	addr0 := address.getDnListenAddress(0)
 	addr1 := address.getDnListenAddress(1)
@@ -114,7 +126,7 @@ func TestGetDnListenAddress(t *testing.T) {
 
 func TestGetLogListenAddress(t *testing.T) {
 	logNum := 3
-	address := newServiceAddresses(t, logNum, 1, "127.0.0.1")
+	address := newServiceAddresses(t, logNum, 1, 0, "127.0.0.1")
 
 	addr0 := address.getLogListenAddress(0)
 	addr1 := address.getLogListenAddress(1)
@@ -129,7 +141,7 @@ func TestGetLogListenAddress(t *testing.T) {
 
 func TestGetLogRaftAddress(t *testing.T) {
 	logNum := 3
-	address := newServiceAddresses(t, logNum, 1, "127.0.0.1")
+	address := newServiceAddresses(t, logNum, 1, 0, "127.0.0.1")
 
 	addr0 := address.getLogRaftAddress(0)
 	addr1 := address.getLogRaftAddress(1)
@@ -144,7 +156,7 @@ func TestGetLogRaftAddress(t *testing.T) {
 
 func TestGetLogGossipAddress(t *testing.T) {
 	logNum := 3
-	address := newServiceAddresses(t, logNum, 1, "127.0.0.1")
+	address := newServiceAddresses(t, logNum, 1, 0, "127.0.0.1")
 
 	addr0 := address.getLogGossipAddress(0)
 	addr1 := address.getLogGossipAddress(1)
@@ -159,7 +171,7 @@ func TestGetLogGossipAddress(t *testing.T) {
 
 func TestListHAKeeperListenAddresses(t *testing.T) {
 	logNum := 3
-	address := newServiceAddresses(t, logNum, 1, "127.0.0.1")
+	address := newServiceAddresses(t, logNum, 1, 0, "127.0.0.1")
 	addrs := address.listHAKeeperListenAddresses()
 	require.Equal(t, logNum, len(addrs))
 	require.NotEqual(t, addrs[0], addrs[1])
@@ -169,7 +181,7 @@ func TestListHAKeeperListenAddresses(t *testing.T) {
 
 func TestGetLogGossipSeedAddresses(t *testing.T) {
 	logNum := 4
-	address := newServiceAddresses(t, logNum, 1, "127.0.0.1")
+	address := newServiceAddresses(t, logNum, 1, 0, "127.0.0.1")
 	addrs := address.getLogGossipSeedAddresses()
 	require.Equal(t, defaultGossipSeedNum, len(addrs))
 	require.NotEqual(t, addrs[0], addrs[1])
@@ -180,19 +192,19 @@ func TestGetLogGossipSeedAddresses(t *testing.T) {
 func TestPartition(t *testing.T) {
 	logServiceNum := 3
 	dnServiceNum := 2
+	cnServiceNum := 1
 
 	// normal condition
 	{
 		partition := newNetworkPartition(
 			logServiceNum, []uint32{1},
 			dnServiceNum, []uint32{0, 1},
+			cnServiceNum, []uint32{1},
 		)
 		require.Equal(t, []uint32{0, 1}, partition.ListDNServiceIndex())
 		require.Equal(t, []uint32{1}, partition.ListLogServiceIndex())
 
-		remaining := remainingNetworkPartition(
-			logServiceNum, dnServiceNum, partition,
-		)
+		remaining := remainingNetworkPartition(logServiceNum, dnServiceNum, cnServiceNum, partition)
 		require.Nil(t, remaining.ListDNServiceIndex())
 		require.Equal(t, []uint32{0, 2}, remaining.ListLogServiceIndex())
 
@@ -208,13 +220,12 @@ func TestPartition(t *testing.T) {
 		partition := newNetworkPartition(
 			logServiceNum, nil,
 			dnServiceNum, []uint32{0, 2, 3},
+			cnServiceNum, nil,
 		)
 		require.Equal(t, []uint32{0}, partition.ListDNServiceIndex())
 		require.Nil(t, partition.ListLogServiceIndex())
 
-		remaining := remainingNetworkPartition(
-			logServiceNum, dnServiceNum, partition,
-		)
+		remaining := remainingNetworkPartition(logServiceNum, dnServiceNum, cnServiceNum, partition)
 		require.Equal(t, []uint32{1}, remaining.ListDNServiceIndex())
 		require.Equal(t, []uint32{0, 1, 2}, remaining.ListLogServiceIndex())
 

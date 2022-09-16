@@ -64,8 +64,10 @@ type Options struct {
 	initial struct {
 		dnServiceNum  int
 		logServiceNum int
+		cnServiceNum  int
 		dnShardNum    uint64
 		logShardNum   uint64
+		cnShardNum    uint64
 		logReplicaNum uint64
 	}
 
