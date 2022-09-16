@@ -1663,7 +1663,7 @@ func (mp *MysqlProtocolImpl) makeResultSetBinaryRow(data []byte, mrs *MysqlResul
 	for i := uint64(0); i < numBytes4Null; i++ {
 		buffer = append(buffer, 0)
 	}
-	for i := uint64(0); i < uint64(columnsLength); i++ {
+	for i := uint64(0); i < columnsLength; i++ {
 		if isNil, err := mrs.ColumnIsNull(rowIdx, i); err != nil {
 			return nil, err
 		} else if isNil {
@@ -1676,7 +1676,7 @@ func (mp *MysqlProtocolImpl) makeResultSetBinaryRow(data []byte, mrs *MysqlResul
 	}
 	data = mp.append(data, buffer...)
 
-	for i := uint64(0); i < uint64(columnsLength); i++ {
+	for i := uint64(0); i < columnsLength; i++ {
 		if isNil, err := mrs.ColumnIsNull(rowIdx, i); err != nil {
 			return nil, err
 		} else if isNil {
@@ -2354,7 +2354,7 @@ func NewMysqlClientProtocol(connectionID uint32, tcp goetty.IOSession, maxBytesT
 		capability:       DefaultCapability,
 		strconvBuffer:    make([]byte, 0, 16*1024),
 		lenEncBuffer:     make([]byte, 0, 10),
-		binaryNullBuffer: make([]byte, 0, 1024),
+		binaryNullBuffer: make([]byte, 0, 512),
 		rowHandler: rowHandler{
 			beginWriteIndex:           0,
 			bytesInOutBuffer:          0,
