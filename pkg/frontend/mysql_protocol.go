@@ -1632,6 +1632,127 @@ func (mp *MysqlProtocolImpl) sendColumns(mrs *MysqlResultSet, cmd int, warnings,
 }
 
 // the server convert every row of the result set into the format that mysql protocol needs
+func (mp *MysqlProtocolImpl) makeResultSetBinaryRow(buffer []byte, mrs *MysqlResultSet, rowIdx uint64) ([]byte, error) {
+	buffer = append(buffer, defines.OKHeader) // append OkHeader
+	nullBitmapOff := len(buffer)
+	columnsLength := mrs.GetColumnCount()
+	numBytes4Null := (columnsLength + 7 + 2) / 8
+	for i := uint64(0); i < numBytes4Null; i++ {
+		buffer = append(buffer, 0)
+	}
+
+	appendString := func(val string) {
+		mp.lenEncBuffer = mp.lenEncBuffer[:9]
+		pos := mp.writeIntLenEnc(mp.lenEncBuffer, 0, uint64(len(val)))
+		buffer = append(buffer, mp.lenEncBuffer[:pos]...)
+		buffer = append(buffer, []byte(val)...)
+	}
+
+	for i := uint64(0); i < uint64(columnsLength); i++ {
+		if isNil, err := mrs.ColumnIsNull(rowIdx, i); err != nil {
+			return nil, err
+		} else if isNil {
+			bytePos := (i + 2) / 8
+			bitPos := byte((i + 2) % 8)
+			idx := nullBitmapOff + int(bytePos)
+			buffer[idx] |= 1 << bitPos
+			continue
+		}
+
+		column, err := mrs.GetColumn(uint64(i))
+		if err != nil {
+			return nil, err
+		}
+		mysqlColumn, ok := column.(*MysqlColumn)
+		if !ok {
+			return nil, fmt.Errorf("sendColumn need MysqlColumn")
+		}
+
+		switch mysqlColumn.ColumnType() {
+		case defines.MYSQL_TYPE_TINY:
+			if value, err := mrs.GetInt64(rowIdx, i); err != nil {
+				return nil, err
+			} else {
+				buffer = mp.io.AppendUint8(buffer, uint8(value))
+			}
+		case defines.MYSQL_TYPE_SHORT, defines.MYSQL_TYPE_YEAR:
+			if value, err := mrs.GetInt64(rowIdx, i); err != nil {
+				return nil, err
+			} else {
+				buffer = mp.io.AppendUint16(buffer, uint16(value))
+			}
+		case defines.MYSQL_TYPE_INT24, defines.MYSQL_TYPE_LONG:
+			if value, err := mrs.GetInt64(rowIdx, i); err != nil {
+				return nil, err
+			} else {
+				buffer = mp.io.AppendUint32(buffer, uint32(value))
+			}
+		case defines.MYSQL_TYPE_LONGLONG:
+			if value, err := mrs.GetUint64(rowIdx, i); err != nil {
+				return nil, err
+			} else {
+				buffer = mp.io.AppendUint64(buffer, value)
+			}
+		case defines.MYSQL_TYPE_FLOAT:
+			if value, err := mrs.GetFloat64(rowIdx, i); err != nil {
+				return nil, err
+			} else {
+				buffer = mp.io.AppendUint32(buffer, math.Float32bits(float32(value)))
+			}
+		case defines.MYSQL_TYPE_DOUBLE:
+			if value, err := mrs.GetFloat64(rowIdx, i); err != nil {
+				return nil, err
+			} else {
+				buffer = mp.io.AppendUint64(buffer, math.Float64bits(value))
+			}
+		case defines.MYSQL_TYPE_VARCHAR, defines.MYSQL_TYPE_VAR_STRING, defines.MYSQL_TYPE_STRING, defines.MYSQL_TYPE_BLOB:
+			if value, err := mrs.GetString(rowIdx, i); err != nil {
+				return nil, err
+			} else {
+				appendString(value)
+			}
+		// TODO: some type, we use string now. someday need fix it
+		case defines.MYSQL_TYPE_DECIMAL:
+			if value, err := mrs.GetString(rowIdx, i); err != nil {
+				return nil, err
+			} else {
+				appendString(value)
+			}
+		case defines.MYSQL_TYPE_UUID:
+			if value, err := mrs.GetString(rowIdx, i); err != nil {
+				return nil, err
+			} else {
+				appendString(value)
+			}
+		case defines.MYSQL_TYPE_DATE:
+			if value, err := mrs.GetString(rowIdx, i); err != nil {
+				return nil, err
+			} else {
+				appendString(value)
+			}
+		case defines.MYSQL_TYPE_DATETIME:
+			if value, err := mrs.GetString(rowIdx, i); err != nil {
+				return nil, err
+			} else {
+				appendString(value)
+			}
+		case defines.MYSQL_TYPE_TIMESTAMP:
+			if value, err := mrs.GetString(rowIdx, i); err != nil {
+				return nil, err
+			} else {
+				appendString(value)
+			}
+		default:
+			return nil, moerr.NewError(moerr.INTERNAL_ERROR, "type is not supported in binary text result row")
+		}
+	}
+
+	mp.append(nil, buffer...)
+
+	return buffer, nil
+}
+
+// the server convert every row of the result set into the format that mysql protocol needs
 func (mp *MysqlProtocolImpl) makeResultSetTextRow(data []byte, mrs *MysqlResultSet, r uint64) ([]byte, error) {
 	for i := uint64(0); i < mrs.GetColumnCount(); i++ {
 		column, err := mrs.GetColumn(i)
@@ -1778,6 +1899,12 @@ func (mp *MysqlProtocolImpl) SendResultSetTextBatchRowSpeedup(mrs *MysqlResultSe
 	defer mp.GetLock().Unlock()
 	var err error = nil
 
+	binary := false
+	// XXX now we known COM_QUERY will use textRow, COM_STMT_EXECUTE use binaryRow
+	if mp.ses.Cmd == int(COM_STMT_EXECUTE) {
+		binary = true
+	}
+
 	//make rows into the batch
 	for i := uint64(0); i < cnt; i++ {
 		err = mp.openRow(nil)
@@ -1785,7 +1912,11 @@ func (mp *MysqlProtocolImpl) SendResultSetTextBatchRowSpeedup(mrs *MysqlResultSe
 			return err
 		}
 		//begin1 := time.Now()
-		_, err = mp.makeResultSetTextRow(nil, mrs, i)
+		if binary {
+			_, err = mp.makeResultSetBinaryRow(nil, mrs, i)
+		} else {
+			_, err = mp.makeResultSetTextRow(nil, mrs, i)
+		}
 		//mp.makeTime += time.Since(begin1)
 
 		if err != nil {
