@@ -179,6 +179,7 @@ func planColsToExeCols(planCols []*plan.ColDef) []engine.TableDef {
 					Size:      colTyp.GetSize(),
 				},
 				Default:       planCols[i].GetDefault(),
+				OnUpdate:      planCols[i].GetOnUpdate(),
 				Primary:       col.GetPrimary(),
 				Comment:       col.GetComment(),
 				AutoIncrement: col.GetAutoIncrement(),

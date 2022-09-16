@@ -129,4 +129,16 @@ update t1 set a=null;
 select * from t1;
 update t1 set b=null;
 select * from t1;
+drop table if exists t1;
+create table t1(
+id int,
+a datetime ON UPDATE CURRENT_TIMESTAMP,
+b datetime NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+insert into t1(id) values(1);
+select a is null from t1;
+update t1 set id = 2 where id = 1;
+select a is not null from t1;
+update t1  set id = 3,  a = '20121212' where id = 2;
+select id from t1 where a = '20121212';
 drop database if exists db1;
