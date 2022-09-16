@@ -380,6 +380,7 @@ func Test_initUser(t *testing.T) {
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
 		bh := mock_frontend.NewMockBackgroundExec(ctrl)
+		bh.EXPECT().ClearExecResultSet().AnyTimes()
 		bh.EXPECT().Close().Return().AnyTimes()
 		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 		rs := mock_frontend.NewMockExecResult(ctrl)
@@ -443,6 +444,7 @@ func Test_initRole(t *testing.T) {
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
 
 		bh := mock_frontend.NewMockBackgroundExec(ctrl)
+		bh.EXPECT().ClearExecResultSet().AnyTimes()
 		bh.EXPECT().Close().Return().AnyTimes()
 		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 		rs := mock_frontend.NewMockExecResult(ctrl)
@@ -4474,6 +4476,7 @@ func newSes(priv *privilege) *Session {
 func newBh(ctrl *gomock.Controller, sql2result map[string]ExecResult) BackgroundExec {
 	var currentSql string
 	bh := mock_frontend.NewMockBackgroundExec(ctrl)
+	bh.EXPECT().ClearExecResultSet().AnyTimes()
 	bh.EXPECT().Close().Return().AnyTimes()
 	bh.EXPECT().Exec(gomock.Any(), gomock.Any()).DoAndReturn(func(_ context.Context, sql string) error {
 		currentSql = sql

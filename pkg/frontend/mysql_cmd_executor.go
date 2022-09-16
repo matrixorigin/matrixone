@@ -1406,6 +1406,11 @@ func (mce *MysqlCmdExecutor) handleRevokeRole(ctx context.Context, rr *tree.Revo
 	return doRevokeRole(ctx, mce.GetSession(), rr)
 }
 
+// handleGrantRole grants the privilege to the role
+func (mce *MysqlCmdExecutor) handleGrantPrivilege(ctx context.Context, gp *tree.GrantPrivilege) error {
+	return doGrantPrivilege(ctx, mce.GetSession(), gp)
+}
+
 func GetExplainColumns(explainColName string) ([]interface{}, error) {
 	cols := []*plan2.ColDef{
 		{Typ: &plan2.Type{Id: int32(types.T_varchar)}, Name: explainColName},
@@ -1947,16 +1952,21 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			if err = mce.handleCreateAccount(requestCtx, st); err != nil {
 				goto handleFailed
 			}
+		case *tree.DropAccount: //TODO
+		case *tree.AlterAccount: //TODO
 		case *tree.CreateUser:
 			selfHandle = true
 			if err = mce.handleCreateUser(requestCtx, st); err != nil {
 				goto handleFailed
 			}
+		case *tree.DropUser: //TODO
+		case *tree.AlterUser: //TODO
 		case *tree.CreateRole:
 			selfHandle = true
 			if err = mce.handleCreateRole(requestCtx, st); err != nil {
 				goto handleFailed
 			}
+		case *tree.DropRole: //TODO
 		case *tree.Grant:
 			selfHandle = true
 			switch st.Typ {
@@ -1965,6 +1975,9 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 					goto handleFailed
 				}
 			case tree.GrantTypePrivilege:
+				if err = mce.handleGrantPrivilege(requestCtx, &st.GrantPrivilege); err != nil {
+					goto handleFailed
+				}
 			}
 		case *tree.Revoke:
 			selfHandle = true
