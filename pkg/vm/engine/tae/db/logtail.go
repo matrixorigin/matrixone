@@ -11,7 +11,7 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-package txnbase
+package db
 
 import (
 	"sync"
@@ -20,6 +20,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
+
 	"github.com/tidwall/btree"
 )
 
@@ -31,7 +33,7 @@ type txnPage struct {
 func cmpTxnPage(a, b *txnPage) bool { return a.minTs.Less(b.minTs) }
 
 type LogtailMgr struct {
-	noopCommitListener
+	txnbase.NoopCommitListener
 	pageSize   int32             // for test
 	minTs      types.TS          // the lower bound of active page
 	tsAlloc    *types.TsAlloctor // share same clock with txnMgr
@@ -61,7 +63,7 @@ func NewLogtailMgr(pageSize int32, clock clock.Clock) *LogtailMgr {
 }
 
 // LogtailMgr as a commit listener
-func (l *LogtailMgr) OnEndPrePrepare(op *OpTxn) { l.AddTxn(op.Txn) }
+func (l *LogtailMgr) OnEndPrePrepare(op *txnbase.OpTxn) { l.AddTxn(op.Txn) }
 
 // AddTxn happens in a queue, it is safe to assume there is no concurrent AddTxn now.
 func (l *LogtailMgr) AddTxn(txn txnif.AsyncTxn) {

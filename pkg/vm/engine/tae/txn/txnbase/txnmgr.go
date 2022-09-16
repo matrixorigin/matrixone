@@ -34,10 +34,10 @@ type TxnCommitListener interface {
 	OnEndPrePrepare(*OpTxn)
 }
 
-type noopCommitListener struct{}
+type NoopCommitListener struct{}
 
-func (bl *noopCommitListener) OnBeginPrePrepare(op *OpTxn) {}
-func (bl *noopCommitListener) OnEndPrePrepare(op *OpTxn)   {}
+func (bl *NoopCommitListener) OnBeginPrePrepare(op *OpTxn) {}
+func (bl *NoopCommitListener) OnEndPrePrepare(op *OpTxn)   {}
 
 type batchTxnCommitListener struct {
 	listeners []TxnCommitListener

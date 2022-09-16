@@ -51,7 +51,7 @@ type DB struct {
 	TxnBufMgr   base.INodeManager
 
 	TxnMgr     *txnbase.TxnManager
-	LogtailMgr *txnbase.LogtailMgr
+	LogtailMgr *LogtailMgr
 	Wal        wal.Driver
 
 	CKPDriver checkpoint.Driver
