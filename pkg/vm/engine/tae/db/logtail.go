@@ -34,16 +34,19 @@ func cmpTxnPage(a, b *txnPage) bool { return a.minTs.Less(b.minTs) }
 
 type LogtailMgr struct {
 	txnbase.NoopCommitListener
-	pageSize   int32             // for test
-	minTs      types.TS          // the lower bound of active page
-	tsAlloc    *types.TsAlloctor // share same clock with txnMgr
+	pageSize int32             // for test
+	minTs    types.TS          // the lower bound of active page
+	tsAlloc  *types.TsAlloctor // share same clock with txnMgr
+
+	// TODO: move the active page to btree, simplify the iteration of pages
 	activeSize *int32
 	// activePage is a fixed size array, has fixed memory address during its whole lifetime
 	activePage []txnif.AsyncTxn
-	// Lock is used to protect pages. there are two cases to hold lock
+	// Lock is used to protect pages. there are three cases to hold lock
 	// 1. activePage is full and moves to pages
 	// 2. prune txn because of checkpoint TODO
-	// Not RwLock because read the btree by copying a read only view, without holding read lock
+	// 3. copy btree
+	// Not RwLock because a copied btree can be read without holding read lock
 	sync.Mutex
 	pages *btree.Generic[*txnPage]
 }
@@ -65,27 +68,26 @@ func NewLogtailMgr(pageSize int32, clock clock.Clock) *LogtailMgr {
 // LogtailMgr as a commit listener
 func (l *LogtailMgr) OnEndPrePrepare(op *txnbase.OpTxn) { l.AddTxn(op.Txn) }
 
-// AddTxn happens in a queue, it is safe to assume there is no concurrent AddTxn now.
+// Notes:
+// 1. AddTxn happens in a queue, it is safe to assume there is no concurrent AddTxn now.
+// 2. the added txn has no prepareTS because it happens in OnEndPrePrepare, so it is safe to alloc ts to be minTs
 func (l *LogtailMgr) AddTxn(txn txnif.AsyncTxn) {
 	size := atomic.LoadInt32(l.activeSize)
 	l.activePage[size] = txn
 	newsize := atomic.AddInt32(l.activeSize, 1)
 
 	if newsize == l.pageSize {
+		// alloc ts without lock
+		prevMinTs := l.minTs
+		l.minTs = l.tsAlloc.Alloc()
 		l.Lock()
 		defer l.Unlock()
-		txns := l.activePage
-		minTs := txns[0].GetPrepareTS()
-		if minTs.IsEmpty() {
-			minTs = l.minTs
-		}
 		newPage := &txnPage{
-			minTs: minTs,
-			txns:  txns,
+			minTs: prevMinTs,
+			txns:  l.activePage,
 		}
 		l.pages.Set(newPage)
 
-		l.minTs = l.tsAlloc.Alloc()
 		l.activePage = make([]txnif.AsyncTxn, l.pageSize)
 		atomic.StoreInt32(l.activeSize, 0)
 	}
