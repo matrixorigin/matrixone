@@ -17,6 +17,7 @@ package compile
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/agg"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/intersectall"
 
@@ -43,7 +44,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/errno"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggregate"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
@@ -514,7 +514,7 @@ func constructLimit(n *plan.Node, proc *process.Process) *limit.Argument {
 }
 
 func constructGroup(n, cn *plan.Node, ibucket, nbucket int, needEval bool) *group.Argument {
-	aggs := make([]aggregate.Aggregate, len(n.AggList))
+	aggs := make([]agg.Aggregate, len(n.AggList))
 	for i, expr := range n.AggList {
 		if f, ok := expr.Expr.(*plan.Expr_F); ok {
 			distinct := (uint64(f.F.Func.Obj) & function.Distinct) != 0
@@ -523,7 +523,7 @@ func constructGroup(n, cn *plan.Node, ibucket, nbucket int, needEval bool) *grou
 			if err != nil {
 				panic(err)
 			}
-			aggs[i] = aggregate.Aggregate{
+			aggs[i] = agg.Aggregate{
 				E:    f.F.Args[0],
 				Dist: distinct,
 				Op:   fun.AggregateInfo,
