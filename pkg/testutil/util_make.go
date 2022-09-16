@@ -333,3 +333,23 @@ func makeScalar[T types.FixedSizeT](value T, length int, typ types.Type) *vector
 func makeScalarString(value string, length int, typ types.Type) *vector.Vector {
 	return vector.NewConstString(typ, length, value)
 }
+
+func MakeDecimal128ArrByInt64Arr(input []int64) []types.Decimal128 {
+	ret := make([]types.Decimal128, len(input))
+	for i, v := range input {
+		d, _ := types.InitDecimal128(v, 64, 0)
+		ret[i] = d
+	}
+
+	return ret
+}
+
+func MakeDecimal128ArrByFloat64Arr(input []float64) []types.Decimal128 {
+	ret := make([]types.Decimal128, len(input))
+	for i, v := range input {
+		d, _ := types.Decimal128FromFloat64(v, 64, 10)
+		ret[i] = d
+	}
+
+	return ret
+}
