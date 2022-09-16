@@ -31,7 +31,8 @@ type MVCCNode interface {
 	CheckConflict(ts types.TS) error
 	UpdateNode(o MVCCNode)
 
-	CommittedIn(minTS, maxTS types.TS) (committedIn, commitBeforeMinTS bool)
+	PreparedIn(minTS, maxTS types.TS) (in, before bool)
+	CommittedIn(minTS, maxTS types.TS) (in, before bool)
 	NeedWaitCommitting(ts types.TS) (bool, txnif.TxnReader)
 	IsSameTxn(ts types.TS) bool
 	IsActive() bool
@@ -76,38 +77,93 @@ func NewTxnMVCCNodeWithTxn(txn txnif.TxnReader) *TxnMVCCNode {
 
 // Check w-w confilct
 func (un *TxnMVCCNode) CheckConflict(ts types.TS) error {
+	// If node is held by a active txn
 	if un.IsActive() {
+		// No conflict if it is the same txn
 		if un.IsSameTxn(ts) {
 			return nil
 		}
 		return txnif.ErrTxnWWConflict
 	}
+
+	// For a committed node, it is w-w conflict if ts is lt the node commit ts
+	// -------+-------------+-------------------->
+	//        ts         CommitTs            time
 	if un.End.Greater(ts) {
 		return txnif.ErrTxnWWConflict
 	}
 	return nil
 }
 
+// Check whether is mvcc node is visible to ts
+// Make sure all the relevant prepared txns should be committed|rollbacked
 func (un *TxnMVCCNode) IsVisible(ts types.TS) (visible bool) {
+	// Node is always visible to its born txn
 	if un.IsSameTxn(ts) {
 		return true
 	}
+
+	// The born txn of this node has not been commited|rollbacked
 	if un.IsActive() || un.IsCommitting() {
 		return false
 	}
+
+	// Node is visible if the commit ts is le ts
 	if un.End.LessEq(ts) {
 		return true
 	}
+
+	// Node is invisible if the commit ts is gt ts
 	return false
 
 }
 func (un *TxnMVCCNode) GetPrepare() types.TS { return un.Prepare }
 
-// committedIn indicates whether this node is committed in between [minTs, maxTs]
-// commitBeforeMinTS indicates whether this node is committed before minTs
+func (un *TxnMVCCNode) PreparedIn(minTS, maxTS types.TS) (in, before bool) {
+	// -------+----------+----------------+--------------->
+	//        |          |                |             Time
+	//       MinTS     MaxTs       Prepare In future
+	// Created by other active txn
+	// false: not prepared in range
+	// false: not prepared before minTs
+	if un.Prepare.IsEmpty() {
+		return false, false
+	}
+
+	// -------+--------------+------------+--------------->
+	//        |              |            |             Time
+	//    PrepareTs        MinTs         MaxTs
+	// Created by other committed txn
+	// false: not prepared in range
+	// true: prepared before minTs
+	if un.Prepare.Less(minTS) {
+		return false, true
+	}
+
+	// -------+--------------+------------+--------------->
+	//        |              |            |             Time
+	//       MinTs       PrepareTs       MaxTs
+	// Created by other committed txn
+	// true: prepared in range
+	// false: not prepared before minTs
+	if un.Prepare.GreaterEq(minTS) && un.Prepare.LessEq(maxTS) {
+		return true, false
+	}
+
+	// -------+--------------+------------+--------------->
+	//        |              |            |             Time
+	//       MinTs          MaxTs     PrepareTs
+	// Created by other committed txn
+	// false: not prepared in range
+	// false: not prepared before minTs
+	return false, false
+}
+
+// in indicates whether this node is committed in between [minTs, maxTs]
+// before indicates whether this node is committed before minTs
 // NeedWaitCommitting should be called before to make sure all prepared active
 // txns in between [minTs, maxTs] be committed or rollbacked
-func (un *TxnMVCCNode) CommittedIn(minTS, maxTS types.TS) (committedIn, commitBeforeMinTS bool) {
+func (un *TxnMVCCNode) CommittedIn(minTS, maxTS types.TS) (in, before bool) {
 	// -------+----------+----------------+--------------->
 	//        |          |                |             Time
 	//       MinTS     MaxTs       Commit In future
