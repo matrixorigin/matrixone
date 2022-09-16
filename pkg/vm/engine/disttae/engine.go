@@ -29,11 +29,17 @@ type GetClusterDetailsFunc = func() (logservice.ClusterDetails, error)
 
 func New(
 	ctx context.Context,
+	cli client.TxnClient,
 	getClusterDetails GetClusterDetailsFunc,
 ) *Engine {
+	cluster, err := getClusterDetails()
+	if err != nil {
+		return nil
+	}
 	return &Engine{
-		db:                newDB(),
+		cli:               cli,
 		getClusterDetails: getClusterDetails,
+		db:                newDB(cli, cluster.DNStores),
 		txns:              make(map[string]*Transaction),
 	}
 }

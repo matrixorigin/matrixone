@@ -27,6 +27,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 )
 
+const (
+	OpGetLogTail = 0x1000
+)
+
 type Nodes []Node
 
 type Node struct {

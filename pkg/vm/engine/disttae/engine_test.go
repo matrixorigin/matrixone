@@ -38,8 +38,7 @@ func TestCache(t *testing.T) {
 	db := new(DB)
 	ctx := context.Background()
 	ts := newTimestamp(rand.Int63())
-	db.readTs = newTimestamp(rand.Int63())
-	_ = db.Update(ctx, nil, 0, 0, ts)
+	//	_ = db.Update(ctx, nil, 0, 0, ts)
 	_ = db.BlockList(ctx, nil, 0, 0, ts, nil)
 	_, _ = db.NewReader(ctx, 0, nil, nil, 0, 0, ts, nil)
 }
@@ -50,7 +49,7 @@ func TestEngine(t *testing.T) {
 		return
 	}
 	txnOp := newTestTxnOperator()
-	e := New(ctx, getClusterDetails)
+	e := New(ctx, nil, getClusterDetails)
 	err := e.Create(ctx, "test", txnOp)
 	require.NoError(t, err)
 	err = e.Delete(ctx, "test", txnOp)
