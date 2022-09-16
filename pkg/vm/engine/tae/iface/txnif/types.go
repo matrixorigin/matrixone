@@ -226,6 +226,17 @@ type TxnStore interface {
 
 	IsReadonly() bool
 	IncreateWriteCnt() int
+
+	HasTableDataChanges(tableID uint64) bool
+	HasCatalogChanges() bool
+	GetTableDirtyPoints(tableID uint64) DirtySet
+}
+
+type DirtySet = map[DirtyPoint]struct{}
+
+// not use common id to save space, less hash cost
+type DirtyPoint struct {
+	SegID, BlkID uint64
 }
 
 type TxnEntryType int16
