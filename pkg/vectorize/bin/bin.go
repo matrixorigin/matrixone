@@ -15,8 +15,9 @@
 package bin
 
 import (
+	"fmt"
+	"strconv"
 	"math/bits"
-
 	"golang.org/x/exp/constraints"
 )
 
@@ -86,4 +87,25 @@ func uintToBinary(x uint64) string {
 	}
 
 	return string(b[i+1:])
+}
+
+
+func Bin[T constraints.Unsigned | constraints.Signed](xs []T, rs []string) []string {
+	for idx := range xs {
+		res := uintToBinary(uint64(xs[idx]))
+		rs[idx] = res
+	}
+	return rs
+}
+
+func BinFloat[T constraints.Float](xs []T, rs []string) ([]string, error) {
+	for idx := range xs {
+		val, err := strconv.ParseInt(fmt.Sprintf("%1.0f", xs[idx]), 10, 64)
+		if err != nil {
+			return nil, err
+		}
+		res := uintToBinary(uint64(val))
+		rs[idx] = res
+	}
+	return rs, nil
 }
