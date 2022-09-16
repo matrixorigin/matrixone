@@ -283,6 +283,9 @@ type MysqlProtocolImpl struct {
 	//for encoding the length into bytes
 	lenEncBuffer []byte
 
+	//for encoding the null bytes in binary row
+	binaryNullBuffer []byte
+
 	rowHandler
 
 	SV *config.FrontendParameters
@@ -1654,11 +1657,11 @@ func (mp *MysqlProtocolImpl) makeResultSetBinaryRow(data []byte, mrs *MysqlResul
 	data = mp.append(data, defines.OKHeader) // append OkHeader
 
 	// get null buffer
+	buffer := mp.binaryNullBuffer[:0]
 	columnsLength := mrs.GetColumnCount()
-	buffer := mp.lenEncBuffer[:columnsLength]
 	numBytes4Null := (columnsLength + 7 + 2) / 8
 	for i := uint64(0); i < numBytes4Null; i++ {
-		buffer[i] = 0
+		buffer = append(buffer, 0)
 	}
 	for i := uint64(0); i < uint64(columnsLength); i++ {
 		if isNil, err := mrs.ColumnIsNull(rowIdx, i); err != nil {
@@ -2346,11 +2349,12 @@ func NewMysqlClientProtocol(connectionID uint32, tcp goetty.IOSession, maxBytesT
 			connectionID: connectionID,
 			established:  false,
 		},
-		sequenceId:    0,
-		charset:       "utf8mb4",
-		capability:    DefaultCapability,
-		strconvBuffer: make([]byte, 0, 16*1024),
-		lenEncBuffer:  make([]byte, 0, 10),
+		sequenceId:       0,
+		charset:          "utf8mb4",
+		capability:       DefaultCapability,
+		strconvBuffer:    make([]byte, 0, 16*1024),
+		lenEncBuffer:     make([]byte, 0, 10),
+		binaryNullBuffer: make([]byte, 0, 1024),
 		rowHandler: rowHandler{
 			beginWriteIndex:           0,
 			bytesInOutBuffer:          0,
