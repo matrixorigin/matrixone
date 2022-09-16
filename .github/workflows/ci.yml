@@ -105,7 +105,6 @@ jobs:
           path: |
             ${{ github.workspace }}
           retention-days: 7
-
   bvt-linux-x86:
     runs-on: ubuntu-latest
     name: BVT Test on Ubuntu/x64
@@ -156,6 +155,79 @@ jobs:
           sleep 60s
           cd $GITHUB_WORKSPACE/mo-tester
           ./run.sh -n -g -p $GITHUB_WORKSPACE/head/test/cases 2>&1
+
+      - name: Check mo-service Status
+        if: ${{ always() && !cancelled() }}
+        run: |
+          if [ "$(ps -ef | grep 'mo-service' | grep -v "grep" | wc -l)" -gt 0 ]; then pkill -9 mo-service; else echo 'current mo-service has already crashed'; exit 1; fi
+
+      - name: remove some files
+        continue-on-error: true
+        run: |
+          cd $GITHUB_WORKSPACE
+          if  [ -d  "./head/mo-service"  ]; then rm -rf ./head/mo-service; fi
+          rm -rf ./mo-tester/.git
+          rm -rf ./mo-tester/lib
+
+      - uses: actions/upload-artifact@v2
+        if: ${{ failure() }}
+        continue-on-error: true
+        with:
+          name: linux_x86_ci_reports
+          path: |
+            ${{ github.workspace }}
+          retention-days: 7
+
+  memengine-bvt-linux-x86:
+    runs-on: ubuntu-latest
+    name: BVT Test on Ubuntu/x64
+    timeout-minutes: 30
+
+    steps:
+      - name: checkout head
+        uses: actions/checkout@v2
+        with:
+          fetch-depth: '3'
+          path: ./head
+          repository: ${{ github.event.pull_request.head.repo.full_name }}
+          ref: ${{ github.event.pull_request.head.ref }}
+
+      - name: Set up Go
+        uses: ./head/.github/actions/setup_env
+
+      - name: Build MatrixOne
+        run: |
+          cd $GITHUB_WORKSPACE/head && make clean && make debug
+          git rev-parse --short HEAD
+
+      - name: Start MO
+        run: |
+          cd $GITHUB_WORKSPACE/head
+          ./mo-service -cfg ./etc/cn-standalone-mem-engine-test.toml &>mo-service.log &
+
+      - name: Clone test-tool repository
+        uses: actions/checkout@v2
+        with:
+          repository: matrixorigin/mo-tester
+          path: ./mo-tester
+          ref: main
+
+      - name: Set up JDK 8 for x64
+        uses: actions/setup-java@v3
+        with:
+          java-version: '8'
+          distribution: 'adopt'
+          architecture: x64
+
+      - name: Start BVT Test
+        id: bvt_on_pr_version
+        run: |
+          timedatectl status
+          sudo timedatectl set-timezone "Asia/Shanghai"
+          timedatectl status
+          sleep 60s
+          cd $GITHUB_WORKSPACE/mo-tester
+          ./run.sh -n -g -p $GITHUB_WORKSPACE/head/test/cases -e isolation 2>&1
 
       - name: Check mo-service Status
         if: ${{ always() && !cancelled() }}
