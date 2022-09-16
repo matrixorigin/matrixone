@@ -76,17 +76,37 @@ func (be *MVCCChain) InsertNode(vun MVCCNode) {
 	be.MVCC.Insert(un)
 }
 
-func (be *MVCCChain) ExistUpdate(minTs, maxTs types.TS) (exist bool) {
+// [start, end]
+// Check whether there is any committed node in between [start, end]
+// -----+------+-------+--------+----------+--------->
+//      |      |       |        |          |      Time
+//      |     start    |       end         |
+//  commitTs <----- commitTs <--------- commitTs|uncommitted  <=  MVCCChain Header
+//     (1)            (2)                 (3)
+func (be *MVCCChain) HasCommittedNodeInRange(start, end types.TS) (ok bool) {
 	be.MVCC.Loop(func(n *common.GenericDLNode[MVCCNode]) bool {
 		un := n.GetPayload()
-		committedIn, commitBeforeMinTS := un.CommittedIn(minTs, maxTs)
-		if committedIn {
-			exist = true
+		in, before := un.CommittedIn(start, end)
+
+		// case (2)
+		// A committed node is found. Stop the loop.
+		// Found
+		if in {
+			ok = true
 			return false
 		}
-		if !commitBeforeMinTS {
+
+		// case (3)
+		// Committed after the end ts or uncommitted.
+		// Go to prev node
+		// Not found
+		if !before {
 			return true
 		}
+
+		// case (1)
+		// Committed before the start ts. Stop the loop.
+		// Not found
 		return false
 	}, false)
 	return
@@ -315,13 +335,13 @@ func (be *MVCCChain) CloneCommittedInRange(start, end types.TS) (ret *MVCCChain)
 	}
 	be.MVCC.Loop(func(n *common.GenericDLNode[MVCCNode]) bool {
 		un := n.GetPayload()
-		committedIn, commitBeforeMinTs := un.CommittedIn(start, end)
-		if committedIn {
+		in, before := un.CommittedIn(start, end)
+		if in {
 			if ret == nil {
 				ret = NewMVCCChain(be.comparefn, be.newnodefn)
 			}
 			ret.InsertNode(un.CloneAll())
-		} else if !commitBeforeMinTs {
+		} else if !before {
 			return false
 		}
 		return true

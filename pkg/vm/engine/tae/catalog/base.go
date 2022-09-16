@@ -49,7 +49,7 @@ type BaseEntry interface {
 	GetUpdateNodeLocked() txnbase.MVCCNode
 	IsVisible(ts types.TS, mu *sync.RWMutex) (ok bool, err error)
 
-	ExistUpdate(minTs, MaxTs types.TS) (exist bool)
+	HasCommittedNodeInRange(minTs, MaxTs types.TS) bool
 	IsCreating() bool
 	IsCommitting() bool
 	DeleteBefore(ts types.TS) bool
