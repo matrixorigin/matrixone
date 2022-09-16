@@ -38,7 +38,6 @@ type BaseEntry interface {
 	StringLocked() string
 	PPString(common.PPLevel, int, string) string
 
-	GetPrepareTs() types.TS
 	GetTxn() txnif.TxnReader
 	GetID() uint64
 	GetIndexes() []*wal.Index

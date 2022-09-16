@@ -47,11 +47,12 @@ type TxnCtx struct {
 
 func NewTxnCtx(id uint64, start types.TS, info []byte) *TxnCtx {
 	ctx := &TxnCtx{
-		ID:       id,
-		IDCtx:    IDToIDCtx(id),
-		StartTS:  start,
-		CommitTS: txnif.UncommitTS,
-		Info:     info,
+		ID:        id,
+		IDCtx:     IDToIDCtx(id),
+		StartTS:   start,
+		PrepareTS: txnif.UncommitTS,
+		CommitTS:  txnif.UncommitTS,
+		Info:      info,
 	}
 	ctx.DoneCond = *sync.NewCond(ctx)
 	return ctx

@@ -78,7 +78,7 @@ func NewTxnMVCCNodeWithTxn(txn txnif.TxnReader) *TxnMVCCNode {
 // Check w-w confilct
 func (un *TxnMVCCNode) CheckConflict(ts types.TS) error {
 	// If node is held by a active txn
-	if un.IsActive() {
+	if !un.IsCommitted() {
 		// No conflict if it is the same txn
 		if un.IsSameTxn(ts) {
 			return nil
@@ -381,6 +381,7 @@ func (un *TxnMVCCNode) UpdateNode(o *TxnMVCCNode) {
 func (un *TxnMVCCNode) CloneAll() *TxnMVCCNode {
 	n := &TxnMVCCNode{}
 	n.Start = un.Start
+	n.Prepare = un.Prepare
 	n.End = un.End
 	if len(un.LogIndex) != 0 {
 		n.LogIndex = make([]*wal.Index, 0)

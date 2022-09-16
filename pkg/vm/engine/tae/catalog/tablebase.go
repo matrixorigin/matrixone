@@ -65,7 +65,7 @@ func (be *TableBaseEntry) TryGetTerminatedTS(waitIfcommitting bool) (terminated 
 	if node == nil {
 		return
 	}
-	if node.(*TableMVCCNode).Deleted {
+	if node.(*TableMVCCNode).HasDropped() {
 		return true, node.(*TableMVCCNode).DeletedAt
 	}
 	return
@@ -76,6 +76,7 @@ func (be *TableBaseEntry) CreateWithTS(ts types.TS) {
 	node := &TableMVCCNode{
 		EntryMVCCNode: &EntryMVCCNode{
 			CreatedAt: ts,
+			NodeOp:    []NodeOp{NOpCreate},
 		},
 		TxnMVCCNode: &txnbase.TxnMVCCNode{
 			Start: ts,
@@ -91,7 +92,9 @@ func (be *TableBaseEntry) CreateWithTxn(txn txnif.AsyncTxn) {
 		startTS = txn.GetStartTS()
 	}
 	node := &TableMVCCNode{
-		EntryMVCCNode: &EntryMVCCNode{},
+		EntryMVCCNode: &EntryMVCCNode{
+			NodeOp: []NodeOp{NOpCreate},
+		},
 		TxnMVCCNode: &txnbase.TxnMVCCNode{
 			Start: startTS,
 			Txn:   txn,
@@ -102,19 +105,15 @@ func (be *TableBaseEntry) CreateWithTxn(txn txnif.AsyncTxn) {
 
 // TODO update create
 func (be *TableBaseEntry) DeleteLocked(txn txnif.TxnReader) (err error) {
-	entry := be.MVCC.GetHead().GetPayload()
-	if entry.IsCommitted() || entry.IsSameTxn(txn.GetStartTS()) {
-		if be.HasDropped() {
-			err = ErrNotFound
-			return
-		}
-		nbe := entry.CloneData()
-		nbe.(*TableMVCCNode).TxnMVCCNode = txnbase.NewTxnMVCCNodeWithTxn(txn)
-		be.InsertNode(nbe)
-		err = nbe.(*TableMVCCNode).ApplyDeleteLocked()
+	entry := be.GetUpdateNodeLocked()
+	if entry.IsSameTxn(txn.GetStartTS()) {
+		entry.(*TableMVCCNode).AddOp(NOpDelete)
 		return
 	} else {
-		err = txnif.ErrTxnWWConflict
+		node := entry.CloneData().(*TableMVCCNode)
+		node.TxnMVCCNode = txnbase.NewTxnMVCCNodeWithTxn(txn)
+		node.AddOp(NOpDelete)
+		be.InsertNode(node)
 	}
 	return
 }
@@ -275,7 +274,7 @@ func (be *TableBaseEntry) GetCurrOp() OpT {
 	if un == nil {
 		return OpCreate
 	}
-	if !un.(*TableMVCCNode).Deleted {
+	if !un.(*TableMVCCNode).HasDropped() {
 		return OpCreate
 	}
 	return OpSoftDelete

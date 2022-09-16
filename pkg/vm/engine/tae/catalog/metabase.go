@@ -65,7 +65,7 @@ func (be *MetaBaseEntry) TryGetTerminatedTS(waitIfcommitting bool) (terminated b
 	if node == nil {
 		return
 	}
-	if node.(*MetadataMVCCNode).Deleted {
+	if node.(*MetadataMVCCNode).HasDropped() {
 		return true, node.(*MetadataMVCCNode).DeletedAt
 	}
 	return
@@ -76,6 +76,7 @@ func (be *MetaBaseEntry) CreateWithTS(ts types.TS) {
 	node := &MetadataMVCCNode{
 		EntryMVCCNode: &EntryMVCCNode{
 			CreatedAt: ts,
+			NodeOp:    []NodeOp{NOpCreate},
 		},
 		TxnMVCCNode: &txnbase.TxnMVCCNode{
 			Start: ts,
@@ -91,7 +92,9 @@ func (be *MetaBaseEntry) CreateWithTxn(txn txnif.AsyncTxn) {
 		startTS = txn.GetStartTS()
 	}
 	node := &MetadataMVCCNode{
-		EntryMVCCNode: &EntryMVCCNode{},
+		EntryMVCCNode: &EntryMVCCNode{
+			NodeOp: []NodeOp{NOpCreate},
+		},
 		TxnMVCCNode: &txnbase.TxnMVCCNode{
 			Start: startTS,
 			Txn:   txn,
@@ -100,22 +103,36 @@ func (be *MetaBaseEntry) CreateWithTxn(txn txnif.AsyncTxn) {
 	be.InsertNode(node)
 }
 
-// TODO update create
-func (be *MetaBaseEntry) DeleteLocked(txn txnif.TxnReader) (err error) {
-	entry := be.MVCC.GetHead().GetPayload()
-	if entry.IsCommitted() || entry.IsSameTxn(txn.GetStartTS()) {
-		if be.HasDropped() {
-			err = ErrNotFound
-			return
-		}
-		nbe := entry.CloneData()
-		nbe.(*MetadataMVCCNode).TxnMVCCNode = txnbase.NewTxnMVCCNodeWithTxn(txn)
-		be.InsertNode(nbe)
-		err = nbe.(*MetadataMVCCNode).ApplyDeleteLocked()
-		return
+func (be *MetaBaseEntry) getOrSetUpdateNode(txn txnif.TxnReader) *MetadataMVCCNode {
+	entry := be.GetUpdateNodeLocked()
+	if entry.IsSameTxn(txn.GetStartTS()) {
+		return entry.(*MetadataMVCCNode)
 	} else {
-		err = txnif.ErrTxnWWConflict
+		node := entry.CloneData().(*MetadataMVCCNode)
+		node.TxnMVCCNode = txnbase.NewTxnMVCCNodeWithTxn(txn)
+		be.InsertNode(node)
+		return node
 	}
+}
+
+func (be *MetaBaseEntry) DeleteLocked(txn txnif.TxnReader) (err error) {
+	entry := be.getOrSetUpdateNode(txn)
+	entry.AddOp(NOpDelete)
+	return
+}
+
+func (be *MetaBaseEntry) UpdateAttr(txn txnif.TxnReader, node *MetadataMVCCNode) (err error) {
+	be.Lock()
+	defer be.Unlock()
+	needWait, txnToWait := be.NeedWaitCommitting(txn.GetStartTS())
+	if needWait {
+		be.RUnlock()
+		txnToWait.GetTxnState(true)
+		be.RLock()
+	}
+	be.CheckConflict(txn)
+	entry := be.getOrSetUpdateNode(txn)
+	entry.UpdateAttr(node)
 	return
 }
 
@@ -220,33 +237,6 @@ func (be *MetaBaseEntry) DropEntryLocked(txnCtx txnif.TxnReader) error {
 	return nil
 }
 
-func (be *MetaBaseEntry) PrepareAdd(txn txnif.TxnReader) (err error) {
-	be.RLock()
-	defer be.RUnlock()
-	if txn != nil {
-		needWait, waitTxn := be.NeedWaitCommitting(txn.GetStartTS())
-		if needWait {
-			be.RUnlock()
-			waitTxn.GetTxnState(true)
-			be.RLock()
-		}
-		err = be.CheckConflict(txn)
-		if err != nil {
-			return
-		}
-	}
-	if txn == nil || be.GetTxn() != txn {
-		if !be.HasDropped() {
-			return ErrDuplicate
-		}
-	} else {
-		if be.ensureVisibleAndNotDropped(txn.GetStartTS()) {
-			return ErrDuplicate
-		}
-	}
-	return
-}
-
 func (be *MetaBaseEntry) DeleteAfter(ts types.TS) bool {
 	un := be.GetUpdateNodeLocked()
 	if un == nil {
@@ -271,7 +261,7 @@ func (be *MetaBaseEntry) GetCurrOp() OpT {
 	if un == nil {
 		return OpCreate
 	}
-	if !un.(*MetadataMVCCNode).Deleted {
+	if !un.(*MetadataMVCCNode).HasDropped() {
 		return OpCreate
 	}
 	return OpSoftDelete
