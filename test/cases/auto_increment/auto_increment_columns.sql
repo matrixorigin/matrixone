@@ -399,5 +399,9 @@ select * from t13 order by a;
 
 drop table t13;
 
+create table t1(a int default(-1) auto_increment);
+create table t1(a int primary key default(-1) auto_increment);
+create table t1(a bigint default(-1) auto_increment);
+create table t1(a bigint primary key default(-1) auto_increment);
 create table t1(a int, b int default(10), c int auto_increment);
 show create table t1;
