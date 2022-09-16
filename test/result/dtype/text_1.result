@@ -519,7 +519,7 @@ a    b    c
 1    1    1
 100    100    100
 select * from t10 where c=<'2';
-You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at position 28; 
+You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 27 near "<'2';";
 select * from t10 where c is NULL;
 a    b    c
 select * from t10 where c='';
