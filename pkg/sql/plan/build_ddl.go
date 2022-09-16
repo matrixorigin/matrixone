@@ -18,6 +18,7 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/errno"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -313,12 +314,21 @@ func buildTableDefs(defs tree.TableDefs, ctx CompilerContext, tableDef *TableDef
 			if err != nil {
 				return err
 			}
+			if auto_incr && defaultValue.Expr != nil {
+				return moerr.NewError(moerr.ER_INVALID_DEFAULT, fmt.Sprintf("invalid default value for '%s'", def.Name.Parts[0]))
+			}
+
+			onUpdateExpr, err := buildOnUpdate(def, colType)
+			if err != nil {
+				return err
+			}
 
 			col := &ColDef{
 				Name:          def.Name.Parts[0],
 				Alg:           plan.CompressType_Lz4,
 				Typ:           colType,
 				Default:       defaultValue,
+				OnUpdate:      onUpdateExpr,
 				Comment:       comment,
 				AutoIncrement: auto_incr,
 			}
