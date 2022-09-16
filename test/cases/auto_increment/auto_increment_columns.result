@@ -597,3 +597,8 @@ a    b    c
 5    5    'ccc'
 6    6    '%%'
 drop table t13;
+
+create table t1(a int, b int default(10), c int auto_increment);
+show create table t1;
+Table    Create Table
+t1    CREATE TABLE `t1` (\n`a` INT DEFAULT NULL,\n`b` INT DEFAULT (10),\n`c` INT NOT NULL AUTO_INCREMENT\n)

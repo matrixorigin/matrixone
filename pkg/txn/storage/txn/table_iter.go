@@ -42,7 +42,7 @@ func (t *Table[K, R]) NewIter(
 
 func (t *TableIter[K, R]) Read() (key K, row *R, err error) {
 	physicalRow := t.iter.Item()
-	key = physicalRow.PrimaryKey
+	key = physicalRow.Key
 	row, err = physicalRow.Values.Read(t.readTime, t.tx)
 	if err != nil {
 		return
@@ -70,6 +70,26 @@ func (t *TableIter[K, R]) Next() bool {
 
 func (t *TableIter[K, R]) First() bool {
 	if ok := t.iter.First(); !ok {
+		return false
+	}
+	for {
+		// skip unreadable values
+		value, _ := t.iter.Item().Values.Read(t.readTime, t.tx)
+		if value == nil {
+			if ok := t.iter.Next(); !ok {
+				return false
+			}
+			continue
+		}
+		return true
+	}
+}
+
+func (t *TableIter[K, R]) Seek(key K) bool {
+	pivot := &PhysicalRow[K, R]{
+		Key: key,
+	}
+	if ok := t.iter.Seek(pivot); !ok {
 		return false
 	}
 	for {
