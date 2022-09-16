@@ -74,6 +74,7 @@ type ColDef struct {
 	SortKey       bool
 	Comment       string
 	Default       Default
+	OnUpdate      []byte
 }
 
 func (def *ColDef) GetName() string     { return def.Name }
@@ -183,6 +184,41 @@ func (s *Schema) GetSortKeyCnt() int {
 	return s.SortKey.Size()
 }
 
+func MarshalOnUpdate(w *bytes.Buffer, data []byte) (err error) {
+	if data == nil {
+		err = binary.Write(w, binary.BigEndian, uint16(0))
+		return
+	} else {
+		if err = binary.Write(w, binary.BigEndian, uint16(len(data))); err != nil {
+			return
+		}
+	}
+
+	if err = binary.Write(w, binary.BigEndian, data); err != nil {
+		return
+	}
+	return nil
+}
+
+func UnMarshalOnUpdate(r io.Reader) ([]byte, int64, error) {
+	var valueLen uint16 = 0
+	if err := binary.Read(r, binary.BigEndian, &valueLen); err != nil {
+		return nil, 0, err
+	}
+	n := int64(2)
+
+	if valueLen == 0 {
+		return nil, 0, nil
+	}
+
+	buf := make([]byte, valueLen)
+	if _, err := r.Read(buf); err != nil {
+		return nil, 0, err
+	}
+	n += int64(valueLen)
+	return buf, n, nil
+}
+
 func MarshalDefault(w *bytes.Buffer, data Default) (err error) {
 	if err = binary.Write(w, binary.BigEndian, data.NullAbility); err != nil {
 		return
@@ -194,9 +230,7 @@ func MarshalDefault(w *bytes.Buffer, data Default) (err error) {
 		return
 	}
 	if data.Expr == nil {
-		if err = binary.Write(w, binary.BigEndian, uint16(0)); err != nil {
-			return
-		}
+		err = binary.Write(w, binary.BigEndian, uint16(0))
 		return
 	} else {
 		if err = binary.Write(w, binary.BigEndian, uint16(len(data.Expr))); err != nil {
@@ -341,6 +375,10 @@ func (s *Schema) ReadFrom(r io.Reader) (n int64, err error) {
 			return
 		}
 		n += sn
+		if def.OnUpdate, sn, err = UnMarshalOnUpdate(r); err != nil {
+			return
+		}
+		n += sn
 		if err = s.AppendColDef(def); err != nil {
 			return
 		}
@@ -413,6 +451,9 @@ func (s *Schema) Marshal() (buf []byte, err error) {
 			return
 		}
 		if err = MarshalDefault(&w, def.Default); err != nil {
+			return
+		}
+		if err = MarshalOnUpdate(&w, def.OnUpdate); err != nil {
 			return
 		}
 	}
@@ -503,6 +544,7 @@ func (s *Schema) AppendColWithDefault(name string, typ types.Type, val Default) 
 
 func (s *Schema) AppendColWithAttribute(attr engine.Attribute) error {
 	var bs []byte = nil
+	var ps []byte = nil
 	var err error
 	if attr.Default.Expr != nil {
 		bs, err = attr.Default.Expr.Marshal()
@@ -515,6 +557,12 @@ func (s *Schema) AppendColWithAttribute(attr engine.Attribute) error {
 		Expr:         bs,
 		OriginString: attr.Default.OriginString,
 	}
+	if attr.OnUpdate != nil {
+		ps, err = attr.OnUpdate.Marshal()
+		if err != nil {
+			return err
+		}
+	}
 	def := &ColDef{
 		Name:          attr.Name,
 		Type:          attr.Type,
@@ -523,6 +571,7 @@ func (s *Schema) AppendColWithAttribute(attr engine.Attribute) error {
 		Comment:       attr.Comment,
 		Default:       attrDefault,
 		AutoIncrement: attr.AutoIncrement,
+		OnUpdate:      ps,
 	}
 	return s.AppendColDef(def)
 }

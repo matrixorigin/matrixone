@@ -119,6 +119,11 @@ func buildUpdate(stmt *tree.Update, ctx CompilerContext) (*Plan, error) {
 					idx++
 					continue
 				}
+				if c.GetUpdateVal() {
+					lastNode.ProjectList[idx] = col.OnUpdate
+					idx++
+					continue
+				}
 			}
 			lastNode.ProjectList[idx], err = makePlan2CastExpr(lastNode.ProjectList[idx], col.Typ)
 			if err != nil {
@@ -254,6 +259,7 @@ func buildCtxAndProjection(updateColsArray [][]updateCol, updateExprsArray []tre
 		}
 		orderAttrs := make([]string, 0, len(tblRefs[k].Cols)-1)
 		// figure out other cols that will not be updated
+		var onUpdateCols []updateCol
 		for _, col := range tblRefs[k].Cols {
 			if col.Name == hideKey {
 				continue
@@ -268,9 +274,14 @@ func buildCtxAndProjection(updateColsArray [][]updateCol, updateExprsArray []tre
 				}
 			}
 			if !isUpdateCol {
-				otherAttrs = append(otherAttrs, col.Name)
-				e, _ := tree.NewUnresolvedName(updateCols[0].aliasTblName, col.Name)
-				useProjectExprs = append(useProjectExprs, tree.SelectExpr{Expr: e})
+				if col.OnUpdate != nil {
+					onUpdateCols = append(onUpdateCols, updateCol{colDef: col})
+					useProjectExprs = append(useProjectExprs, tree.SelectExpr{Expr: &tree.UpdateVal{}})
+				} else {
+					otherAttrs = append(otherAttrs, col.Name)
+					e, _ := tree.NewUnresolvedName(updateCols[0].aliasTblName, col.Name)
+					useProjectExprs = append(useProjectExprs, tree.SelectExpr{Expr: e})
+				}
 			}
 		}
 		offset += int32(len(orderAttrs)) + 1
@@ -286,6 +297,9 @@ func buildCtxAndProjection(updateColsArray [][]updateCol, updateExprsArray []tre
 			OrderAttrs: orderAttrs,
 		}
 		for _, u := range updateCols {
+			ct.UpdateCols = append(ct.UpdateCols, u.colDef)
+		}
+		for _, u := range onUpdateCols {
 			ct.UpdateCols = append(ct.UpdateCols, u.colDef)
 		}
 		updateCtxs = append(updateCtxs, ct)
