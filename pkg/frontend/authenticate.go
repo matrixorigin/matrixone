@@ -678,6 +678,9 @@ var (
 
 	updateRolePrivsFormat = `update mo_catalog.mo_role_privs set operation_user_id = %d, granted_time = "%s", with_grant_option = %v where role_id = %d and obj_type = "%s" and obj_id = %d and privilege_id = %d;`
 
+	//TODO: add
+	insertRolePrivsFormat = `insert into mo_catalog.mo_role_privs(role_id,role_name,`
+
 	checkDatabaseFormat = `select dat_id from mo_catalog.mo_database where datname = "%s";`
 
 	checkDatabaseTableFormat = `select t.relid from mo_catalog.mo_database d, mo_catalog.mo_tables t
@@ -1384,16 +1387,20 @@ func doGrantPrivilege(ctx context.Context, ses *Session, gp *tree.GrantPrivilege
 				choice = 2
 			}
 
-			if choice == 1 {
-				sql = getSqlForUpdateRolePrivs(account.GetUserID(),
+			if choice == 1 { //update the record
+				sql = getSqlForUpdateRolePrivs(int64(account.GetUserID()),
 					types.CurrentTimestamp().String2(time.UTC, 0),
-					gp.GrantOption,
-				)
-			} else if choice == 2 {
+					gp.GrantOption, role.id, objType, objId, int64(privType))
+			} else if choice == 2 { //insert new record
 
 			}
 
 			//insert or update
+			bh.ClearExecResultSet()
+			err = bh.Exec(ctx, sql)
+			if err != nil {
+				goto handleFailed
+			}
 		}
 	}
 
