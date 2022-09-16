@@ -30,7 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/util"
 	bp "github.com/matrixorigin/matrixone/pkg/util/batchpipe"
-	"github.com/matrixorigin/matrixone/pkg/util/errors"
+	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 
 	"github.com/google/uuid"
@@ -360,7 +360,7 @@ func genErrorBatchSql(in []IBuffer2SqlItem, buf *bytes.Buffer) any {
 		if !ok {
 			panic("Not MOErrorHolder")
 		}
-		if ct := errors.GetContextTracer(s.Error); ct != nil && ct.Context() != nil {
+		if ct := errutil.GetContextTracer(s.Error); ct != nil && ct.Context() != nil {
 			span = SpanFromContext(ct.Context())
 		} else {
 			span = SpanFromContext(DefaultContext())
