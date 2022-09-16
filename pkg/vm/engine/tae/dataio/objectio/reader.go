@@ -54,47 +54,28 @@ func (r *Reader) LoadDeletes(id *common.ID) (mask *roaring.Bitmap, err error) {
 	return
 }
 
-func (r *Reader) Read(
-	version uint64,
-	id *common.ID,
-	data []byte) (err error) {
-	/*name := EncodeColBlkNameWithVersion(id, version, r.fs)
-	f, err := r.fs.OpenFile(name, os.O_RDWR)
-	if err != nil {
-		return
-	}
-	defer f.Close()
-	_, err = f.Read(data)*/
-	return
-}
-
-func (r *Reader) LoadABlkColumns(
+func (r *Reader) LoadBlkColumns(
 	colTypes []types.Type,
 	colNames []string,
 	nullables []bool,
 	opts *containers.Options) (bat *containers.Batch, err error) {
 	bat = containers.NewBatch()
-	var f common.IRWFile
-	for i, colBlk := range r.block.columns {
-		if f, err = colBlk.OpenDataFile(); err != nil {
-			return
+	for i, _ := range r.block.columns {
+		col, err := r.block.meta.GetColumn(uint16(i))
+		if err != nil {
+			return bat, err
 		}
-		defer f.Unref()
+		data, err := col.GetData()
+		if err != nil {
+			return bat, err
+		}
 		vec := containers.MakeVector(colTypes[i], nullables[i], opts)
 		bat.AddVector(colNames[i], vec)
-		size := f.Stat().Size()
-		if size == 0 {
-			continue
-		}
-		buf := make([]byte, size)
-		if _, err = f.Read(buf); err != nil {
-			return
-		}
-		r := bytes.NewBuffer(buf)
+		r := bytes.NewBuffer(data.Entries[0].Data)
 		if _, err = vec.ReadFrom(r); err != nil {
-			return
+			return bat, err
 		}
 		bat.Vecs[i] = vec
 	}
-	return
+	return bat, err
 }

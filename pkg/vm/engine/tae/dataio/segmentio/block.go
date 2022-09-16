@@ -17,6 +17,7 @@ package segmentio
 import (
 	"bytes"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"sync"
 
 	"github.com/RoaringBitmap/roaring"
@@ -39,6 +40,10 @@ type blockFile struct {
 	deletes   *deletesFile
 	indexMeta *dataFile
 	destroy   sync.Mutex
+}
+
+func (bf *blockFile) GetMeta() objectio.BlockObject {
+	return nil
 }
 
 func newBlock(id uint64, seg *segmentFile, colCnt int, indexCnt map[int]int) *blockFile {

@@ -15,6 +15,7 @@
 package file
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"io"
 
 	"github.com/RoaringBitmap/roaring"
@@ -49,6 +50,7 @@ type Block interface {
 	WriteBatch(bat *containers.Batch, ts types.TS) error
 	LoadBatch([]types.Type, []string, []bool, *containers.Options) (bat *containers.Batch, err error)
 	WriteColumnVec(ts types.TS, colIdx int, vec containers.Vector) error
+	GetMeta() objectio.BlockObject
 
 	Destroy() error
 }

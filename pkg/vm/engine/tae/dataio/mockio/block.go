@@ -17,6 +17,7 @@ package mockio
 import (
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/file"
@@ -32,6 +33,10 @@ type blockFile struct {
 	columns   []*columnBlock
 	deletes   *deletesFile
 	indexMeta *dataFile
+}
+
+func (bf *blockFile) GetMeta() objectio.BlockObject {
+	panic("implement me")
 }
 
 func (bf *blockFile) GetDeletesFileStat() common.FileInfo {

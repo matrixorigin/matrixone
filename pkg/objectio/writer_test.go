@@ -21,14 +21,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
 	"github.com/stretchr/testify/assert"
+	"os"
 	"path"
+	"path/filepath"
 	"testing"
 )
 
@@ -36,10 +35,31 @@ const (
 	ModuleName = "ObjectIo"
 )
 
+func GetDefaultTestPath(module string, t *testing.T) string {
+	return filepath.Join("/tmp", module, t.Name())
+}
+
+func MakeDefaultTestPath(module string, t *testing.T) string {
+	path := GetDefaultTestPath(module, t)
+	err := os.MkdirAll(path, os.FileMode(0755))
+	assert.Nil(t, err)
+	return path
+}
+
+func RemoveDefaultTestPath(module string, t *testing.T) {
+	path := GetDefaultTestPath(module, t)
+	os.RemoveAll(path)
+}
+
+func InitTestEnv(module string, t *testing.T) string {
+	RemoveDefaultTestPath(module, t)
+	return MakeDefaultTestPath(module, t)
+}
+
 func TestNewObjectWriter(t *testing.T) {
-	dir := testutils.InitTestEnv(ModuleName, t)
+	dir := InitTestEnv(ModuleName, t)
 	dir = path.Join(dir, "/local")
-	id := common.NextGlobalSeqNum()
+	id := 1
 	name := fmt.Sprintf("%d.blk", id)
 	bat := newBatch()
 	c := fileservice.Config{
@@ -116,7 +136,7 @@ func newBatch() *batch.Batch {
 		{Oid: types.T_uint8},
 		{Oid: types.T_uint64},
 	}
-	return testutil.NewBatch(types, false, int(options.DefaultBlockMaxRows*2), mp)
+	return testutil.NewBatch(types, false, int(40000*2), mp)
 }
 
 func newVector(tye types.Type, buf []byte) *vector.Vector {

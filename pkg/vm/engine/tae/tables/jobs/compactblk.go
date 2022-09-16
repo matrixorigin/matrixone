@@ -176,10 +176,21 @@ func (task *compactBlockTask) Execute() (err error) {
 	if err = ioTask.WaitDone(); err != nil {
 		return
 	}
-
 	if err = newBlkData.ReplayIndex(); err != nil {
 		return err
 	}
+	/*
+		// TODO:
+		MetaLoc := fmt.Sprintf("%s:%d_%d_%d",
+			objectio.EncodeBlkName(ioTask.file.Fingerprint()),
+			ioTask.file.GetMeta().GetExtent().Offset(),
+			ioTask.file.GetMeta().GetExtent().Length(),
+			ioTask.file.GetMeta().GetExtent().OriginSize(),
+		)
+		node := catalog.NewEmptyMetadataMVCCNode()
+		node.(*catalog.MetadataMVCCNode).MetaLoc = MetaLoc
+		newBlk.GetMeta().(*catalog.BlockEntry).MetaBaseEntry.UpdateAttr(task.txn, node)
+	*/
 	task.created = newBlk
 	table := task.meta.GetSegment().GetTable()
 	txnEntry := txnentries.NewCompactBlockEntry(task.txn, task.compacted, task.created, task.scheduler, task.mapping, task.deletes)

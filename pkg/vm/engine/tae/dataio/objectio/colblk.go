@@ -65,7 +65,7 @@ func (cb *columnBlock) ReadTS() (ts types.TS) {
 }
 
 func (cb *columnBlock) ReadData(buf []byte) (err error) {
-	return cb.block.reader.Read(cb.ts, cb.id, buf)
+	return
 }
 
 func (cb *columnBlock) ReadUpdates(buf []byte) (err error) {

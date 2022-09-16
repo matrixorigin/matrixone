@@ -21,7 +21,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/file"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/stl/adaptors"
 )
 
 type blockFile struct {
@@ -33,6 +32,10 @@ type blockFile struct {
 	columns []*columnBlock
 	writer  *Writer
 	reader  *Reader
+}
+
+func (bf *blockFile) GetMeta() objectio.BlockObject {
+	return bf.meta
 }
 
 func newBlock(id uint64, seg *segmentFile, colCnt int, indexCnt map[int]int) *blockFile {
@@ -62,7 +65,6 @@ func newBlock(id uint64, seg *segmentFile, colCnt int, indexCnt map[int]int) *bl
 func (bf *blockFile) WriteBatch(bat *containers.Batch, ts types.TS) (err error) {
 	block, err := bf.writer.WriteBlock(bf.id, bat)
 	bf.meta = block
-	bf.meta.GetMeta()
 	return err
 }
 
@@ -140,21 +142,10 @@ func (bf *blockFile) LoadBatch(
 	colNames []string,
 	nullables []bool,
 	opts *containers.Options) (bat *containers.Batch, err error) {
-	return bf.reader.LoadABlkColumns(colTypes, colNames, nullables, opts)
+	return bf.reader.LoadBlkColumns(colTypes, colNames, nullables, opts)
 }
 
 func (bf *blockFile) WriteColumnVec(_ types.TS, colIdx int, vec containers.Vector) (err error) {
-	cb, err := bf.OpenColumn(colIdx)
-	if err != nil {
-		return err
-	}
-	defer cb.Close()
-	w := adaptors.NewBuffer(nil)
-	defer w.Close()
-	if _, err = vec.WriteTo(w); err != nil {
-		return
-	}
-	err = cb.WriteData(w.Bytes())
 	return
 }
 
