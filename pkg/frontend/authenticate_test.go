@@ -4111,6 +4111,341 @@ func Test_doGrantRole(t *testing.T) {
 	})
 }
 
+func Test_doRevokeRole(t *testing.T) {
+	convey.Convey("revoke role from role succ", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		defer bhStub.Reset()
+
+		stmt := &tree.RevokeRole{
+			Roles: []*tree.Role{
+				{UserName: "r1"},
+				{UserName: "r2"},
+				{UserName: "r3"},
+			},
+			Users: []*tree.User{
+				{Username: "r4"},
+				{Username: "r5"},
+				{Username: "r6"},
+			},
+		}
+		priv := determinePrivilegeSetOfStatement(stmt)
+		ses := newSes(priv)
+
+		//no result set
+		bh.sql2result["begin;"] = nil
+		bh.sql2result["commit;"] = nil
+		bh.sql2result["rollback;"] = nil
+
+		//init from roles
+		for i, role := range stmt.Roles {
+			sql := getSqlForRoleIdOfRole(role.UserName)
+			mrs := newMrsForRoleIdOfRole([][]interface{}{
+				{i},
+			})
+			bh.sql2result[sql] = mrs
+		}
+
+		//init to roles
+		for i, user := range stmt.Users {
+			sql := getSqlForRoleIdOfRole(user.Username)
+			mrs := newMrsForRoleIdOfRole([][]interface{}{
+				{i + len(stmt.Roles)},
+			})
+
+			bh.sql2result[sql] = mrs
+		}
+
+		//loop on from ... to
+		for fromId, _ := range stmt.Roles {
+			for toId, _ := range stmt.Users {
+				toId = toId + len(stmt.Roles)
+				sql := getSqlForDeleteRoleGrant(int64(fromId), int64(toId))
+				bh.sql2result[sql] = nil
+			}
+		}
+
+		err := doRevokeRole(ses.GetRequestContext(), ses, stmt)
+		convey.So(err, convey.ShouldBeNil)
+	})
+	convey.Convey("revoke role from role succ (if exists = true, miss role before FROM)", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		defer bhStub.Reset()
+
+		stmt := &tree.RevokeRole{
+			IfExists: true,
+			Roles: []*tree.Role{
+				{UserName: "r1"},
+				{UserName: "r2"},
+				{UserName: "r3"},
+			},
+			Users: []*tree.User{
+				{Username: "r4"},
+				{Username: "r5"},
+				{Username: "r6"},
+			},
+		}
+		priv := determinePrivilegeSetOfStatement(stmt)
+		ses := newSes(priv)
+
+		//no result set
+		bh.sql2result["begin;"] = nil
+		bh.sql2result["commit;"] = nil
+		bh.sql2result["rollback;"] = nil
+
+		//init from roles
+		var mrs *MysqlResultSet
+		for i, role := range stmt.Roles {
+			sql := getSqlForRoleIdOfRole(role.UserName)
+			if i == 0 {
+				mrs = newMrsForRoleIdOfRole([][]interface{}{})
+			} else {
+				mrs = newMrsForRoleIdOfRole([][]interface{}{
+					{i},
+				})
+			}
+			bh.sql2result[sql] = mrs
+		}
+
+		//init to roles
+		for i, user := range stmt.Users {
+			sql := getSqlForRoleIdOfRole(user.Username)
+			mrs := newMrsForRoleIdOfRole([][]interface{}{
+				{i + len(stmt.Roles)},
+			})
+
+			bh.sql2result[sql] = mrs
+		}
+
+		//loop on from ... to
+		for fromId, _ := range stmt.Roles {
+			for toId, _ := range stmt.Users {
+				toId = toId + len(stmt.Roles)
+				sql := getSqlForDeleteRoleGrant(int64(fromId), int64(toId))
+				bh.sql2result[sql] = nil
+			}
+		}
+
+		err := doRevokeRole(ses.GetRequestContext(), ses, stmt)
+		convey.So(err, convey.ShouldBeNil)
+	})
+	convey.Convey("revoke role from role fail (if exists = false,miss role before FROM)", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		defer bhStub.Reset()
+
+		stmt := &tree.RevokeRole{
+			Roles: []*tree.Role{
+				{UserName: "r1"},
+				{UserName: "r2"},
+				{UserName: "r3"},
+			},
+			Users: []*tree.User{
+				{Username: "r4"},
+				{Username: "r5"},
+				{Username: "r6"},
+			},
+		}
+		priv := determinePrivilegeSetOfStatement(stmt)
+		ses := newSes(priv)
+
+		//no result set
+		bh.sql2result["begin;"] = nil
+		bh.sql2result["commit;"] = nil
+		bh.sql2result["rollback;"] = nil
+
+		//init from roles
+		var mrs *MysqlResultSet
+		for i, role := range stmt.Roles {
+			sql := getSqlForRoleIdOfRole(role.UserName)
+			if i == 0 {
+				mrs = newMrsForRoleIdOfRole([][]interface{}{})
+			} else {
+				mrs = newMrsForRoleIdOfRole([][]interface{}{
+					{i},
+				})
+			}
+
+			bh.sql2result[sql] = mrs
+		}
+
+		//init to roles
+		for i, user := range stmt.Users {
+			sql := getSqlForRoleIdOfRole(user.Username)
+			mrs := newMrsForRoleIdOfRole([][]interface{}{
+				{i + len(stmt.Roles)},
+			})
+
+			bh.sql2result[sql] = mrs
+		}
+
+		//loop on from ... to
+		for fromId, _ := range stmt.Roles {
+			for toId, _ := range stmt.Users {
+				toId = toId + len(stmt.Roles)
+				sql := getSqlForDeleteRoleGrant(int64(fromId), int64(toId))
+				bh.sql2result[sql] = nil
+			}
+		}
+
+		err := doRevokeRole(ses.GetRequestContext(), ses, stmt)
+		convey.So(err, convey.ShouldBeError)
+	})
+	convey.Convey("revoke role from user fail (if exists = false,miss role after FROM)", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		defer bhStub.Reset()
+
+		stmt := &tree.RevokeRole{
+			Roles: []*tree.Role{
+				{UserName: "r1"},
+				{UserName: "r2"},
+				{UserName: "r3"},
+			},
+			Users: []*tree.User{
+				{Username: "u1"},
+				{Username: "u2"},
+				{Username: "u3"},
+			},
+		}
+		priv := determinePrivilegeSetOfStatement(stmt)
+		ses := newSes(priv)
+
+		//no result set
+		bh.sql2result["begin;"] = nil
+		bh.sql2result["commit;"] = nil
+		bh.sql2result["rollback;"] = nil
+
+		//init from roles
+		var mrs *MysqlResultSet
+		for i, role := range stmt.Roles {
+			sql := getSqlForRoleIdOfRole(role.UserName)
+			mrs = newMrsForRoleIdOfRole([][]interface{}{
+				{i},
+			})
+
+			bh.sql2result[sql] = mrs
+		}
+
+		//init to roles
+		for i, user := range stmt.Users {
+			sql := getSqlForRoleIdOfRole(user.Username)
+			mrs = newMrsForRoleIdOfRole([][]interface{}{})
+
+			sql = getSqlForPasswordOfUser(user.Username)
+			//miss u2
+			if i == 1 {
+				mrs = newMrsForPasswordOfUser([][]interface{}{})
+			} else {
+				mrs = newMrsForPasswordOfUser([][]interface{}{
+					{i + len(stmt.Roles)},
+				})
+			}
+
+			bh.sql2result[sql] = mrs
+		}
+
+		//loop on from ... to
+		for fromId, _ := range stmt.Roles {
+			for toId, _ := range stmt.Users {
+				toId = toId + len(stmt.Roles)
+				sql := getSqlForDeleteUserGrant(int64(fromId), int64(toId))
+				bh.sql2result[sql] = nil
+			}
+		}
+
+		err := doRevokeRole(ses.GetRequestContext(), ses, stmt)
+		convey.So(err, convey.ShouldBeError)
+	})
+	convey.Convey("revoke role from user succ", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		defer bhStub.Reset()
+
+		stmt := &tree.RevokeRole{
+			Roles: []*tree.Role{
+				{UserName: "r1"},
+				{UserName: "r2"},
+				{UserName: "r3"},
+			},
+			Users: []*tree.User{
+				{Username: "u4"},
+				{Username: "u5"},
+				{Username: "u6"},
+			},
+		}
+		priv := determinePrivilegeSetOfStatement(stmt)
+		ses := newSes(priv)
+
+		//no result set
+		bh.sql2result["begin;"] = nil
+		bh.sql2result["commit;"] = nil
+		bh.sql2result["rollback;"] = nil
+
+		//init from roles
+		for i, role := range stmt.Roles {
+			sql := getSqlForRoleIdOfRole(role.UserName)
+			mrs := newMrsForRoleIdOfRole([][]interface{}{
+				{i},
+			})
+			bh.sql2result[sql] = mrs
+		}
+
+		//init to roles
+		for i, user := range stmt.Users {
+			sql := getSqlForRoleIdOfRole(user.Username)
+			mrs := newMrsForRoleIdOfRole([][]interface{}{})
+
+			bh.sql2result[sql] = mrs
+
+			sql = getSqlForPasswordOfUser(user.Username)
+			mrs = newMrsForPasswordOfUser([][]interface{}{
+				{i},
+			})
+
+			bh.sql2result[sql] = mrs
+		}
+
+		//loop on from ... to
+		for fromId, _ := range stmt.Roles {
+			for toId, _ := range stmt.Users {
+				toId = toId + len(stmt.Roles)
+				sql := getSqlForDeleteRoleGrant(int64(fromId), int64(toId))
+				bh.sql2result[sql] = nil
+			}
+		}
+
+		err := doRevokeRole(ses.GetRequestContext(), ses, stmt)
+		convey.So(err, convey.ShouldBeNil)
+	})
+}
+
 func newSes(priv *privilege) *Session {
 	pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil, nil, nil)
 	pu.SV.SetDefaultValues()
