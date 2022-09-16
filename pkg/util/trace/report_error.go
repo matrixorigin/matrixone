@@ -18,7 +18,7 @@ import (
 	"context"
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/util/errors"
+	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 	"go.uber.org/zap"
 	"unsafe"
 
@@ -51,7 +51,7 @@ func (h MOErrorHolder) CsvOptions() *CsvOptions {
 
 func (h MOErrorHolder) CsvFields() []string {
 	var span Span
-	if ct := errors.GetContextTracer(h.Error); ct != nil && ct.Context() != nil {
+	if ct := errutil.GetContextTracer(h.Error); ct != nil && ct.Context() != nil {
 		span = SpanFromContext(ct.Context())
 	} else {
 		span = SpanFromContext(DefaultContext())
@@ -78,7 +78,7 @@ func ReportError(ctx context.Context, err error) {
 	export.GetGlobalBatchProcessor().Collect(ctx, e)
 }
 
-// HandleError api for pkg/util/errors as errorReporter
+// HandleError api for pkg/util/errutil as errorReporter
 func HandleError(ctx context.Context, err error, depth int) {
 	if !GetTracerProvider().IsEnable() {
 		return
