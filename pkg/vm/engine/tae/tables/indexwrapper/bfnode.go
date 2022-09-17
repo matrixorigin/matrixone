@@ -16,6 +16,7 @@ package indexwrapper
 
 import (
 	"github.com/RoaringBitmap/roaring"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -27,13 +28,13 @@ import (
 type bloomFilterNode struct {
 	*buffer.Node
 	mgr  base.INodeManager
-	file common.IVFile
+	file objectio.ColumnObject
 	impl index.StaticFilter
 }
 
-func newBloomFilterNode(mgr base.INodeManager, file common.IVFile, id *common.ID) *bloomFilterNode {
+func newBloomFilterNode(mgr base.INodeManager, file objectio.ColumnObject, id *common.ID) *bloomFilterNode {
 	impl := new(bloomFilterNode)
-	impl.Node = buffer.NewNode(impl, mgr, *id, uint64(file.Stat().Size()))
+	impl.Node = buffer.NewNode(impl, mgr, *id, uint64(file.GetMeta().GetLocation().Length()))
 	impl.LoadFunc = impl.OnLoad
 	impl.UnloadFunc = impl.OnUnload
 	impl.DestroyFunc = impl.OnDestroy
@@ -49,17 +50,16 @@ func (n *bloomFilterNode) OnLoad() {
 		// no-op
 		return
 	}
-	var err error
 	//startOffset := n.meta.StartOffset
-	stat := n.file.Stat()
-	size := stat.Size()
-	compressTyp := stat.CompressAlgo()
-	data := make([]byte, size)
-	if _, err := n.file.Read(data); err != nil {
+	stat := n.file.GetMeta()
+	compressTyp := stat.GetAlg()
+	fsData, err := n.file.GetIndex(objectio.BloomFilterType)
+	if err != nil {
 		panic(err)
 	}
-	rawSize := stat.OriginSize()
+	rawSize := stat.GetBloomFilter().OriginSize()
 	buf := make([]byte, rawSize)
+	data := fsData.(*objectio.BloomFilter).GetData()
 	if err = Decompress(data, buf, CompressType(compressTyp)); err != nil {
 		panic(err)
 	}
@@ -78,7 +78,7 @@ func (n *bloomFilterNode) OnUnload() {
 }
 
 func (n *bloomFilterNode) OnDestroy() {
-	n.file.Unref()
+	//n.file.Unref()
 }
 
 func (n *bloomFilterNode) Close() (err error) {
@@ -93,7 +93,7 @@ type BFReader struct {
 	node *bloomFilterNode
 }
 
-func NewBFReader(mgr base.INodeManager, file common.IVFile, id *common.ID) *BFReader {
+func NewBFReader(mgr base.INodeManager, file objectio.ColumnObject, id *common.ID) *BFReader {
 	return &BFReader{
 		node: newBloomFilterNode(mgr, file, id),
 	}

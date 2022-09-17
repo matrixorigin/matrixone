@@ -17,6 +17,7 @@ package indexwrapper
 import (
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -28,14 +29,14 @@ import (
 type zonemapNode struct {
 	*buffer.Node
 	mgr     base.INodeManager
-	file    common.IVFile
+	file    objectio.ColumnObject
 	zonemap *index.ZoneMap
 	dataTyp types.Type
 }
 
-func newZonemapNode(mgr base.INodeManager, file common.IVFile, id *common.ID, typ types.Type) *zonemapNode {
+func newZonemapNode(mgr base.INodeManager, file objectio.ColumnObject, id *common.ID, typ types.Type) *zonemapNode {
 	impl := new(zonemapNode)
-	impl.Node = buffer.NewNode(impl, mgr, *id, uint64(file.Stat().Size()))
+	impl.Node = buffer.NewNode(impl, mgr, *id, uint64(file.GetMeta().GetLocation().Length()))
 	impl.LoadFunc = impl.OnLoad
 	impl.UnloadFunc = impl.OnUnload
 	impl.DestroyFunc = impl.OnDestroy
@@ -51,21 +52,13 @@ func (n *zonemapNode) OnLoad() {
 		// no-op
 		return
 	}
-	var err error
-	stat := n.file.Stat()
-	size := stat.Size()
-	compressTyp := stat.CompressAlgo()
-	data := make([]byte, size)
-	if _, err := n.file.Read(data); err != nil {
+	fsData, err := n.file.GetIndex(objectio.ZoneMapType)
+	if err != nil {
 		panic(err)
 	}
-	rawSize := stat.OriginSize()
-	buf := make([]byte, rawSize)
-	if err = Decompress(data, buf, CompressType(compressTyp)); err != nil {
-		panic(err)
-	}
+	data := fsData.(*objectio.ZoneMap)
 	n.zonemap = index.NewZoneMap(n.dataTyp)
-	err = n.zonemap.Unmarshal(buf)
+	err = n.zonemap.Unmarshal(data.GetMin(), data.GetMax())
 	if err != nil {
 		panic(err)
 	}
@@ -80,7 +73,7 @@ func (n *zonemapNode) OnUnload() {
 }
 
 func (n *zonemapNode) OnDestroy() {
-	n.file.Unref()
+	//n.file.Unref()
 }
 
 func (n *zonemapNode) Close() (err error) {
@@ -95,7 +88,7 @@ type ZMReader struct {
 	node *zonemapNode
 }
 
-func NewZMReader(mgr base.INodeManager, file common.IVFile, id *common.ID, typ types.Type) *ZMReader {
+func NewZMReader(mgr base.INodeManager, file objectio.ColumnObject, id *common.ID, typ types.Type) *ZMReader {
 	return &ZMReader{
 		node: newZonemapNode(mgr, file, id, typ),
 	}

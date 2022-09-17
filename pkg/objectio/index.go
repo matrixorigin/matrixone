@@ -59,6 +59,14 @@ func (z *ZoneMap) Write(_ *ObjectWriter, block *Block) error {
 	return err
 }
 
+func (z *ZoneMap) GetMin() []byte {
+	return z.min
+}
+
+func (z *ZoneMap) GetMax() []byte {
+	return z.max
+}
+
 type BloomFilter struct {
 	idx uint16
 	alg uint8
@@ -76,6 +84,10 @@ func NewBloomFilter(idx uint16, alg uint8, buf []byte) IndexData {
 
 func (b *BloomFilter) GetIdx() uint16 {
 	return b.idx
+}
+
+func (b *BloomFilter) GetData() []byte {
+	return b.buf
 }
 
 func (b *BloomFilter) Write(writer *ObjectWriter, block *Block) error {

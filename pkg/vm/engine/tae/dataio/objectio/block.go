@@ -34,10 +34,6 @@ type blockFile struct {
 	reader  *Reader
 }
 
-func (bf *blockFile) GetMeta() objectio.BlockObject {
-	return bf.meta
-}
-
 func newBlock(id uint64, seg *segmentFile, colCnt int, indexCnt map[int]int) *blockFile {
 	blockID := &common.ID{
 		SegmentID: seg.id.SegmentID,
@@ -87,6 +83,10 @@ func (bf *blockFile) WriteRows(rows uint32) (err error) {
 
 func (bf *blockFile) ReadRows() uint32 {
 	return bf.rows
+}
+
+func (bf *blockFile) GetMeta() objectio.BlockObject {
+	return bf.meta
 }
 
 func (bf *blockFile) WriteTS(ts types.TS) (err error) {

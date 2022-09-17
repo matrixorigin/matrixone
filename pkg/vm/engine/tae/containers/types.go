@@ -16,6 +16,7 @@ package containers
 
 import (
 	"bytes"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"io"
 
 	"github.com/RoaringBitmap/roaring"
@@ -87,6 +88,7 @@ type Vector interface {
 	ReadFrom(r io.Reader) (int64, error)
 
 	ReadFromFile(common.IVFile, *bytes.Buffer) error
+	ReadFromColumn(objectio.ColumnObject, *bytes.Buffer) error
 
 	Close()
 }

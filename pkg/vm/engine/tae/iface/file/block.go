@@ -72,4 +72,5 @@ type ColumnBlock interface {
 	OpenUpdateFile() (common.IRWFile, error)
 	OpenIndexFile(idx int) (common.IRWFile, error)
 	OpenDataFile() (common.IRWFile, error)
+	GetDataObject() objectio.ColumnObject
 }

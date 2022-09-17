@@ -117,29 +117,14 @@ func (index *immutableIndex) ReadFrom(blk data.Block) (err error) {
 	}
 	defer colFile.Close()
 	for _, meta := range metas.Metas {
-		idxFile, err := colFile.OpenIndexFile(int(meta.InternalIdx))
-		if err != nil {
-			return err
-		}
+		idxFile := colFile.GetDataObject()
 		id := entry.AsCommonID()
 		id.PartID = uint32(meta.InternalIdx) + 1000
 		id.Idx = meta.ColIdx
 		switch meta.IdxType {
 		case BlockZoneMapIndex:
-			size := idxFile.Stat().Size()
-			buf := make([]byte, size)
-			if _, err = idxFile.Read(buf); err != nil {
-				idxFile.Unref()
-				return err
-			}
 			index.zmReader = NewZMReader(blk.GetBufMgr(), idxFile, id, colDef.Type)
 		case StaticFilterIndex:
-			size := idxFile.Stat().Size()
-			buf := make([]byte, size)
-			if _, err = idxFile.Read(buf); err != nil {
-				idxFile.Unref()
-				return err
-			}
 			index.bfReader = NewBFReader(blk.GetBufMgr(), idxFile, id)
 		default:
 			panic("unsupported index type")

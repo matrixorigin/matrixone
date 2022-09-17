@@ -17,6 +17,7 @@ package objectio
 import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 )
 
@@ -26,6 +27,7 @@ type columnBlock struct {
 	ts      uint64
 	indexes int
 	id      *common.ID
+	data    objectio.ColumnObject
 }
 
 func newColumnBlock(block *blockFile, indexCnt int, col int) *columnBlock {
@@ -42,6 +44,10 @@ func newColumnBlock(block *blockFile, indexCnt int, col int) *columnBlock {
 	cb.OnZeroCB = cb.close
 	cb.Ref()
 	return cb
+}
+
+func (cb *columnBlock) GetDataObject() objectio.ColumnObject {
+	return cb.data
 }
 
 func (cb *columnBlock) WriteTS(ts types.TS) (err error) {

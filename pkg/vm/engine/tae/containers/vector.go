@@ -16,6 +16,8 @@ package containers
 
 import (
 	"bytes"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"io"
 	"unsafe"
 
@@ -314,6 +316,84 @@ func (vec *vector[T]) ReadFrom(r io.Reader) (n int64, err error) {
 		return
 	}
 	n += tmpn
+	return
+}
+
+func (vec *vector[T]) ReadFromColumn(f objectio.ColumnObject, buffer *bytes.Buffer) (err error) {
+	vec.releaseRoStorage()
+	var n stl.MemNode
+	var buf []byte
+	var fsVector *fileservice.IOVector
+	stat := f.GetMeta()
+	if stat.GetAlg() != compress.None {
+		osize := int(stat.GetLocation().OriginSize())
+		size := stat.GetLocation().Length()
+		tmpNode := vec.GetAllocator().Alloc(int(size))
+		defer vec.GetAllocator().Free(tmpNode)
+		srcBuf := tmpNode.GetBuf()[:size]
+		fsVector, err = f.GetData()
+		if err != nil {
+			return
+		}
+
+		srcBuf = fsVector.Entries[0].Data
+		if buffer == nil {
+			n = vec.GetAllocator().Alloc(osize)
+			buf = n.GetBuf()[:osize]
+		} else {
+			buffer.Reset()
+			if osize > buffer.Cap() {
+				buffer.Grow(osize)
+			}
+			buf = buffer.Bytes()[:osize]
+		}
+		if _, err = compress.Decompress(srcBuf, buf, compress.Lz4); err != nil {
+			if n != nil {
+				vec.GetAllocator().Free(n)
+			}
+			return
+		}
+	}
+
+	vec.typ = types.DecodeType(buf[:types.TSize])
+	buf = buf[types.TSize:]
+
+	nullable := types.DecodeFixed[bool](buf[:1])
+	buf = buf[1:]
+
+	if nullable {
+		vec.impl = newNullableVecImpl(vec)
+	} else {
+		vec.impl = newVecImpl(vec)
+	}
+	var nr int64
+	if nr, err = vec.stlvec.InitFromSharedBuf(buf); err != nil {
+		if n != nil {
+			vec.GetAllocator().Free(n)
+		}
+		return
+	}
+	buf = buf[nr:]
+	if !nullable {
+		vec.roStorage = n
+		return
+	}
+
+	nullSize := types.DecodeFixed[uint32](buf[:4])
+	buf = buf[4:]
+	if nullSize > 0 {
+		nullBuf := buf[:nullSize]
+		nulls := roaring64.New()
+		r := bytes.NewBuffer(nullBuf)
+		if _, err = nulls.ReadFrom(r); err != nil {
+			if n != nil {
+				vec.GetAllocator().Free(n)
+			}
+			return
+		}
+		vec.nulls = nulls
+	}
+	vec.roStorage = n
 	return
 }
 

@@ -15,15 +15,21 @@
 package containers
 
 import (
+	"bytes"
 	"fmt"
-
 	"github.com/RoaringBitmap/roaring"
 	"github.com/RoaringBitmap/roaring/roaring64"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 )
 
 type vecImpl[T any] struct {
 	*vecBase[T]
+}
+
+func (v vecImpl[T]) ReadFromColumn(block objectio.ColumnObject, buffer *bytes.Buffer) error {
+	//TODO implement me
+	panic("implement me")
 }
 
 func newVecImpl[T any](derived *vector[T]) *vecImpl[T] {
@@ -34,6 +40,11 @@ func newVecImpl[T any](derived *vector[T]) *vecImpl[T] {
 
 type nullableVecImpl[T any] struct {
 	*vecBase[T]
+}
+
+func (impl *nullableVecImpl[T]) ReadFromColumn(block objectio.ColumnObject, buffer *bytes.Buffer) error {
+	//TODO implement me
+	panic("implement me")
 }
 
 func newNullableVecImpl[T any](derived *vector[T]) *nullableVecImpl[T] {

@@ -69,7 +69,7 @@ type dataBlock struct {
 	meta      *catalog.BlockEntry
 	node      *appendableNode
 	file      file.Block
-	colFiles  map[int]common.IRWFile
+	colFiles  map[int]file.ColumnBlock
 	bufMgr    base.INodeManager
 	scheduler tasks.TaskScheduler
 	index     indexwrapper.Index
@@ -86,20 +86,20 @@ func newBlock(meta *catalog.BlockEntry, segFile file.Segment, bufMgr base.INodeM
 	if meta.GetSchema().HasSortKey() {
 		indexCnt[meta.GetSchema().SortKey.Defs[0].Idx] = 2
 	}
-	file, err := segFile.OpenBlock(meta.GetID(), colCnt, indexCnt)
+	blockFile, err := segFile.OpenBlock(meta.GetID(), colCnt, indexCnt)
 	if err != nil {
 		panic(err)
 	}
-	colFiles := make(map[int]common.IRWFile)
+	colFiles := make(map[int]file.ColumnBlock)
 	for i := 0; i < colCnt; i++ {
-		if colBlk, err := file.OpenColumn(i); err != nil {
+		if colBlk, err := blockFile.OpenColumn(i); err != nil {
 			panic(err)
 		} else {
-			colFiles[i], err = colBlk.OpenDataFile()
+			colFiles[i] = colBlk
 			if err != nil {
 				panic(err)
 			}
-			colBlk.Close()
+			//colBlk.Close()
 		}
 	}
 	var node *appendableNode
@@ -107,7 +107,7 @@ func newBlock(meta *catalog.BlockEntry, segFile file.Segment, bufMgr base.INodeM
 	block := &dataBlock{
 		RWMutex:   new(sync.RWMutex),
 		meta:      meta,
-		file:      file,
+		file:      blockFile,
 		colFiles:  colFiles,
 		mvcc:      updates.NewMVCCHandle(meta),
 		scheduler: scheduler,
@@ -118,7 +118,7 @@ func newBlock(meta *catalog.BlockEntry, segFile file.Segment, bufMgr base.INodeM
 	block.mvcc.SetAppendListener(block.OnApplyAppend)
 	if meta.IsAppendable() {
 		block.mvcc.SetDeletesListener(block.ABlkApplyDelete)
-		node = newNode(bufMgr, block, file)
+		node = newNode(bufMgr, block, blockFile)
 		block.node = node
 		if meta.GetSchema().HasPK() {
 			block.index = indexwrapper.NewMutableIndex(meta.GetSchema().GetSortKeyType())
@@ -189,9 +189,9 @@ func (blk *dataBlock) Destroy() (err error) {
 		}
 	}
 	for _, file := range blk.colFiles {
-		file.Unref()
+		file.Close()
 	}
-	blk.colFiles = make(map[int]common.IRWFile)
+	blk.colFiles = make(map[int]file.ColumnBlock)
 	if blk.index != nil {
 		if err = blk.index.Destroy(); err != nil {
 			return
@@ -618,7 +618,7 @@ func (blk *dataBlock) LoadColumnData(
 	buffer *bytes.Buffer) (vec containers.Vector, err error) {
 	def := blk.meta.GetSchema().ColDefs[colIdx]
 	vec = containers.MakeVector(def.Type, def.Nullable())
-	err = vec.ReadFromFile(blk.colFiles[colIdx], buffer)
+	err = vec.ReadFromColumn(blk.colFiles[colIdx].GetDataObject(), buffer)
 	return
 }
 
