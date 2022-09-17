@@ -485,7 +485,11 @@ func (c *Compile) compilePlanScope(n *plan.Node, ns []*plan.Node) ([]*Scope, err
 			}
 			c.anal.curr = curr
 		}
-		return c.compileUnnest(n, pre)
+		ss, err := c.compileUnnest(n, pre)
+		if err != nil {
+			return nil, err
+		}
+		return c.compileSort(n, c.compileProjection(n, c.compileRestrict(n, ss))), nil
 	default:
 		return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("query '%s' not support now", n))
 	}

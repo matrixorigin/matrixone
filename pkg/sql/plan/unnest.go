@@ -19,6 +19,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 )
 
 var (
@@ -130,30 +131,29 @@ func (builder *QueryBuilder) buildUnnest(tbl *tree.Unnest, ctx *BindContext) (in
 		return 0, err
 	}
 	colDefs := _getDefaultColDefs()
-
 	node := &plan.Node{
 		NodeType: plan.Node_UNNEST,
 		Cost:     &plan.Cost{},
 		TableDef: &plan.TableDef{
-			TableType:          "UNNEST",
+			TableType:          catalog.SystemViewRel, //test if ok
 			Name:               tbl.String(),
 			TableFunctionParam: paramData,
 			Cols:               colDefs,
 		},
 		BindingTags: []int32{tag},
 	}
-	for i := 0; i < len(colDefs); i++ {
-		tmp := &plan.Expr{
-			Typ: colDefs[i].Typ,
-			Expr: &plan.Expr_Col{
-				Col: &plan.ColRef{
-					ColPos: int32(i),
-					Name:   colDefs[i].Name,
-				},
-			},
-		}
-		node.ProjectList = append(node.ProjectList, tmp)
-	}
+	//for i := 0; i < len(colDefs); i++ {
+	//	tmp := &plan.Expr{
+	//		Typ: colDefs[i].Typ,
+	//		Expr: &plan.Expr_Col{
+	//			Col: &plan.ColRef{
+	//				ColPos: int32(i),
+	//				Name:   colDefs[i].Name,
+	//			},
+	//		},
+	//	}
+	//	node.ProjectList = append(node.ProjectList, tmp)
+	//}
 	switch o := tbl.Param.Origin.(type) {
 	case *tree.UnresolvedName:
 		schemaName, tableName, colName := o.GetNames()
@@ -195,17 +195,17 @@ func (builder *QueryBuilder) buildUnnest(tbl *tree.Unnest, ctx *BindContext) (in
 
 	nodeID := builder.appendNode(node, ctx)
 	//ctx.hasSingleRow = true
-	cols := _getDefaultCols()
-	binding := NewBinding(tag, nodeID, tbl.String(), cols, _getDefaultPlanTypes())
-	ctx.bindings = append(ctx.bindings, binding)
-	ctx.bindingByTag[tag] = binding
-	for _, col := range cols {
-		ctx.bindingByCol[col] = binding
-	}
-	ctx.bindingTree = &BindingTreeNode{
-		binding: binding,
-	}
-	ctx.bindingByTable[tbl.String()] = binding
+	//cols := _getDefaultCols()
+	//binding := NewBinding(tag, nodeID, tbl.String(), cols, _getDefaultPlanTypes())
+	//ctx.bindings = append(ctx.bindings, binding)
+	//ctx.bindingByTag[tag] = binding
+	//for _, col := range cols {
+	//	ctx.bindingByCol[col] = binding
+	//}
+	//ctx.bindingTree = &BindingTreeNode{
+	//	binding: binding,
+	//}
+	//ctx.bindingByTable[tbl.String()] = binding
 
 	return nodeID, nil
 }

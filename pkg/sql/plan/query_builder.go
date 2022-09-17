@@ -1674,6 +1674,10 @@ func (builder *QueryBuilder) addBinding(nodeID int32, alias tree.AliasClause, ct
 		if alias.Alias != "" {
 			table = string(alias.Alias)
 		} else {
+			if node.NodeType == plan.Node_UNNEST {
+				return errors.New("", fmt.Sprintf("Every table function must have an alias"))
+			}
+
 			table = node.TableDef.Name
 		}
 
