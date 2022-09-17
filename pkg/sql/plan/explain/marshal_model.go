@@ -134,6 +134,21 @@ func NewGraphData() *GraphData {
 		Nodes:  make([]Node, 0),
 		Edges:  make([]Edge, 0),
 		Labels: make([]Label, 0),
+		Global: *NewGlobal(),
+	}
+}
+
+func NewGlobal() *Global {
+	statistics := Statistics{
+		Memory:     make([]StatisticValue, 0),
+		Throughput: make([]StatisticValue, 0),
+		IO:         make([]StatisticValue, 0),
+		Network:    make([]StatisticValue, 0),
+	}
+
+	return &Global{
+		Statistics: statistics,
+		TotalStats: TotalStats{},
 	}
 }
 
@@ -146,6 +161,7 @@ func NewLabel(name string, value interface{}) *Label {
 
 func NewStatistics() *Statistics {
 	return &Statistics{
+		Memory:     make([]StatisticValue, 0),
 		Throughput: make([]StatisticValue, 0),
 		IO:         make([]StatisticValue, 0),
 		Network:    make([]StatisticValue, 0),
@@ -157,7 +173,7 @@ func buildEdge(parentNode *plan.Node, childNode *plan.Node, index int32) *Edge {
 		Id:     "E" + strconv.Itoa(int(index)),
 		Src:    strconv.FormatInt(int64(childNode.NodeId), 10),
 		Dst:    strconv.FormatInt(int64(parentNode.NodeId), 10),
-		Output: childNode.AnalyzeInfo.OutputSize,
+		Output: childNode.AnalyzeInfo.OutputRows,
 		Unit:   "count",
 	}
 }

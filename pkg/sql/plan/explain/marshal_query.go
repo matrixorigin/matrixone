@@ -264,7 +264,6 @@ func (m MarshalNodeImpl) GetNodeLabels(options *ExplainOptions) ([]Label, error)
 		plan.Node_MATERIAL_SCAN, plan.Node_INSERT, plan.Node_UPDATE, plan.Node_DELETE:
 		tableDef := m.node.TableDef
 		objRef := m.node.ObjRef
-		// "name":"Full table name",
 		var fullTableName string
 		if objRef != nil {
 			fullTableName += objRef.GetSchemaName() + "." + objRef.GetObjName()
@@ -293,7 +292,6 @@ func (m MarshalNodeImpl) GetNodeLabels(options *ExplainOptions) ([]Label, error)
 		if err != nil {
 			return nil, err
 		}
-		// "name" : "List of Expressions",
 		labels = append(labels, Label{
 			Name:  "List of Expressions",
 			Value: value,
@@ -301,11 +299,11 @@ func (m MarshalNodeImpl) GetNodeLabels(options *ExplainOptions) ([]Label, error)
 	case plan.Node_AGG:
 		// Get Group key info
 		if len(m.node.GroupBy) > 0 {
+			// Get Grouping Key
 			value, err := GetLabelValue(m.node.GroupBy, options)
 			if err != nil {
 				return nil, err
 			}
-			// "name" : "Grouping Keys",
 			labels = append(labels, Label{
 				Name:  "Grouping Keys",
 				Value: value,
@@ -318,7 +316,6 @@ func (m MarshalNodeImpl) GetNodeLabels(options *ExplainOptions) ([]Label, error)
 			if err != nil {
 				return nil, err
 			}
-			// name:  "Aggregate Functions"
 			labels = append(labels, Label{
 				Name:  "Aggregate Functions",
 				Value: value,
@@ -329,7 +326,6 @@ func (m MarshalNodeImpl) GetNodeLabels(options *ExplainOptions) ([]Label, error)
 		if err != nil {
 			return nil, err
 		}
-		//"name" : "Filter condition"
 		labels = append(labels, Label{
 			Name:  "Filter condition",
 			Value: value,
@@ -347,7 +343,6 @@ func (m MarshalNodeImpl) GetNodeLabels(options *ExplainOptions) ([]Label, error)
 			if err != nil {
 				return nil, err
 			}
-			//"name" : "Equality Join Condition",
 			labels = append(labels, Label{
 				Name:  "Join Condition",
 				Value: value,
@@ -371,7 +366,6 @@ func (m MarshalNodeImpl) GetNodeLabels(options *ExplainOptions) ([]Label, error)
 			}
 			result = append(result, describe)
 		}
-		//"name" : "Filter condition"
 		labels = append(labels, Label{
 			Name:  "Sort keys",
 			Value: result,
@@ -381,7 +375,6 @@ func (m MarshalNodeImpl) GetNodeLabels(options *ExplainOptions) ([]Label, error)
 		if err != nil {
 			return nil, err
 		}
-		// "name" : "List of Values",
 		labels = append(labels, Label{
 			Name:  "List of Values",
 			Value: value,
@@ -519,7 +512,6 @@ func GetLabelValue(exprList []*plan.Expr, options *ExplainOptions) ([]string, er
 	if exprList == nil {
 		return make([]string, 0), nil
 	}
-
 	result := make([]string, 0)
 	for _, v := range exprList {
 		descV, err := describeExpr(v, options)

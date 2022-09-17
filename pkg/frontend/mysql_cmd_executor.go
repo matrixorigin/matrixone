@@ -2191,15 +2191,13 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 					Anzlyze: false,
 					Format:  explain.EXPLAIN_FORMAT_TEXT,
 				}
-
 				marshalPlan := explainQuery.BuildJsonPlan(cwft.uuid, options)
+				// data transform to json datastruct
 				marshal, err3 := json.Marshal(marshalPlan)
 				if err3 != nil {
 					goto handleFailed
 				}
-				json := string(marshal)
-				fmt.Printf("wuxiliang --------------------> SQL explain json : %s\n", json)
-				//logutil.Infof("wuxiliang --> SQL explain json : %s\n", json)
+				logutil.Infof("json of sql plan is : %s", string(marshal))
 			}
 		//just status, no result set
 		case *tree.CreateTable, *tree.DropTable, *tree.CreateDatabase, *tree.DropDatabase,
