@@ -2195,7 +2195,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 				// data transform to json datastruct
 				marshal, err3 := json.Marshal(marshalPlan)
 				if err3 != nil {
-					goto handleFailed
+					marshal = BuildErrorJsonPlan(cwft.uuid)
 				}
 				logutil.Infof("json of sql plan is : %s", string(marshal))
 			}
@@ -2730,4 +2730,18 @@ func convertEngineTypeToMysqlType(engineType types.T, col *MysqlColumn) error {
 		return fmt.Errorf("RunWhileSend : unsupported type %d", engineType)
 	}
 	return nil
+}
+
+// build plan json when marhal plan error
+func BuildErrorJsonPlan(uuid uuid.UUID) []byte {
+	//`{"steps":null,"code":20104,"message":"An error occurred when plan is serialized to json","success":false,"uuid":"fd146c24-0770-4647-b690-f1fc98966898"}`
+	var json []byte = []byte{123, 34, 115, 116, 101, 112, 115, 34, 58, 110, 117, 108, 108, 44,
+		34, 99, 111, 100, 101, 34, 58, 50, 48, 49, 48, 52, 44, 34, 109, 101, 115, 115, 97, 103,
+		101, 34, 58, 34, 65, 110, 32, 101, 114, 114, 111, 114, 32, 111, 99, 99, 117, 114, 114,
+		101, 100, 32, 119, 104, 101, 110, 32, 112, 108, 97, 110, 32, 105, 115, 32, 115, 101,
+		114, 105, 97, 108, 105, 122, 101, 100, 32, 116, 111, 32, 106, 115, 111, 110, 34, 44,
+		34, 115, 117, 99, 99, 101, 115, 115, 34, 58, 102, 97, 108, 115, 101, 44, 34, 117, 117,
+		105, 100, 34, 58, 34, 50, 53, 51, 52, 53, 97, 48, 98, 45, 99, 97, 101, 97, 45, 52, 57,
+		54, 56, 45, 97, 101, 56, 52, 45, 54, 54, 101, 97, 54, 101, 100, 55, 99, 56, 57, 56, 34, 125}
+	return json
 }
