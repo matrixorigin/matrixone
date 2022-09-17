@@ -19,6 +19,7 @@ import (
 	"encoding/binary"
 	goErrors "errors"
 	"fmt"
+	"math"
 	"os"
 	"runtime/pprof"
 	"sort"
@@ -516,6 +517,21 @@ func extractRowFromEveryVector(ses *Session, dataSet *batch.Batch, j int64, oq o
 	return row, nil
 }
 
+func formatFloatNum[T types.Floats](num T, Typ types.Type) T {
+	if Typ.Precision == -1 {
+		return num
+	}
+	pow := math.Pow10(int(Typ.Precision))
+	t := math.Abs(float64(num))
+	t *= pow
+	t = math.Round(t)
+	t /= pow
+	if num < 0 {
+		t = -1 * t
+	}
+	return T(t)
+}
+
 // extractRowFromVector gets the rowIndex row from the i vector
 func extractRowFromVector(ses *Session, vec *vector.Vector, i int, row []interface{}, rowIndex int64) error {
 	switch vec.Typ.Oid { //get col
@@ -640,25 +656,25 @@ func extractRowFromVector(ses *Session, vec *vector.Vector, i int, row []interfa
 	case types.T_float32:
 		if !nulls.Any(vec.Nsp) { //all data in this column are not null
 			vs := vec.Col.([]float32)
-			row[i] = vs[rowIndex]
+			row[i] = formatFloatNum[float32](vs[rowIndex], vec.Typ)
 		} else {
 			if nulls.Contains(vec.Nsp, uint64(rowIndex)) { //is null
 				row[i] = nil
 			} else {
 				vs := vec.Col.([]float32)
-				row[i] = vs[rowIndex]
+				row[i] = formatFloatNum[float32](vs[rowIndex], vec.Typ)
 			}
 		}
 	case types.T_float64:
 		if !nulls.Any(vec.Nsp) { //all data in this column are not null
 			vs := vec.Col.([]float64)
-			row[i] = vs[rowIndex]
+			row[i] = formatFloatNum[float64](vs[rowIndex], vec.Typ)
 		} else {
 			if nulls.Contains(vec.Nsp, uint64(rowIndex)) { //is null
 				row[i] = nil
 			} else {
 				vs := vec.Col.([]float64)
-				row[i] = vs[rowIndex]
+				row[i] = formatFloatNum[float64](vs[rowIndex], vec.Typ)
 			}
 		}
 	case types.T_char, types.T_varchar, types.T_blob:
