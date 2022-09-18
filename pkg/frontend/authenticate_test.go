@@ -4448,6 +4448,58 @@ func Test_doRevokeRole(t *testing.T) {
 	})
 }
 
+func Test_doGrantPrivilege(t *testing.T) {
+	convey.Convey("grant object type account to user succ", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		defer bhStub.Reset()
+
+		stmt := &tree.GrantPrivilege{
+			Privileges: []*tree.Privilege{
+				{Type: tree.PRIVILEGE_TYPE_STATIC_CREATE_DATABASE},
+			},
+			ObjType: tree.OBJECT_TYPE_ACCOUNT,
+			Level:   &tree.PrivilegeLevel{Level: tree.PRIVILEGE_LEVEL_TYPE_STAR},
+			Roles: []*tree.Role{
+				{UserName: "r1"},
+			},
+		}
+		priv := determinePrivilegeSetOfStatement(stmt)
+		ses := newSes(priv)
+
+		//no result set
+		bh.sql2result["begin;"] = nil
+		bh.sql2result["commit;"] = nil
+		bh.sql2result["rollback;"] = nil
+
+		//init from roles
+		for i, role := range stmt.Roles {
+			sql := getSqlForRoleIdOfRole(role.UserName)
+			mrs := newMrsForRoleIdOfRole([][]interface{}{
+				{i},
+			})
+			bh.sql2result[sql] = mrs
+		}
+
+		for _, p := range stmt.Privileges {
+			privType := convertAstPrivilegeTypeToPrivilegeType(p.Type)
+			for j, _ := range stmt.Roles {
+				sql := getSqlForCheckRoleHasPrivilege(int64(j), objectTypeAccount, objectIDAll, int64(privType))
+				mrs := newMrsForCheckRoleHasPrivilege([][]interface{}{})
+				bh.sql2result[sql] = mrs
+			}
+		}
+
+		err := doGrantPrivilege(ses.GetRequestContext(), ses, stmt)
+		convey.So(err, convey.ShouldBeNil)
+	})
+}
+
 func newSes(priv *privilege) *Session {
 	pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil, nil, nil)
 	pu.SV.SetDefaultValues()
