@@ -678,8 +678,8 @@ var (
 
 	updateRolePrivsFormat = `update mo_catalog.mo_role_privs set operation_user_id = %d, granted_time = "%s", with_grant_option = %v where role_id = %d and obj_type = "%s" and obj_id = %d and privilege_id = %d;`
 
-	//TODO: add
-	insertRolePrivsFormat = `insert into mo_catalog.mo_role_privs(role_id,role_name,`
+	insertRolePrivsFormat = `insert into mo_catalog.mo_role_privs(role_id,role_name,obj_type,obj_id,privilege_id,privilege_name,privilege_level,operation_user_id,granted_time,with_grant_option) 
+								values (%d,"%s","%s",%d,%d,"%s","%s",%d,"%s",%v);`
 
 	checkDatabaseFormat = `select dat_id from mo_catalog.mo_database where datname = "%s";`
 
@@ -694,10 +694,10 @@ var (
 				from mo_catalog.mo_database d, mo_catalog.mo_tables t, mo_catalog.mo_role_privs rp
 				where d.dat_id = t.reldatabase_id
 					and rp.obj_id = 0
-					and rp.obj_type = "table"
+					and rp.obj_type = "%s"
 					and rp.role_id = %d
 					and rp.privilege_id = %d
-					and rp.privilege_level = "*.*"
+					and rp.privilege_level = "%s"
 					and rp.with_grant_option = true;`
 
 	//For object_type : table, privilege_level : db.*
@@ -705,10 +705,10 @@ var (
 				from mo_catalog.mo_database d, mo_catalog.mo_tables t, mo_catalog.mo_role_privs rp
 				where d.dat_id = t.reldatabase_id
 					and rp.obj_id = 0
-					and rp.obj_type = "table"
+					and rp.obj_type = "%s"
 					and rp.role_id = %d
 					and rp.privilege_id = %d
-					and rp.privilege_level = "d.*"
+					and rp.privilege_level = "%s"
 					and d.datname = "%s"
 					and rp.with_grant_option = true;`
 
@@ -717,10 +717,10 @@ var (
 				from mo_catalog.mo_database d, mo_catalog.mo_tables t, mo_catalog.mo_role_privs rp
 				where d.dat_id = t.reldatabase_id
 					and rp.obj_id = t.rel_id
-					and rp.obj_type = "table"
+					and rp.obj_type = "%s"
 					and rp.role_id = %d
 					and rp.privilege_id = %d
-					and rp.privilege_level = "d.t"
+					and rp.privilege_level = "%s"
 					and d.datname = "%s"
 					and t.relname = "%s"
 					and rp.with_grant_option = true;`
@@ -730,10 +730,10 @@ var (
 				from mo_catalog.mo_database d, mo_catalog.mo_tables t, mo_catalog.mo_role_privs rp
 				where d.dat_id = t.reldatabase_id
 					and rp.obj_id = 0
-					and rp.obj_type = "database"
+					and rp.obj_type = "%s"
 					and rp.role_id = %d
 					and rp.privilege_id = %d
-					and rp.privilege_level = "*"
+					and rp.privilege_level = "%s"
 					and rp.with_grant_option = true;`
 
 	//For object_type : database, privilege_level : *.*
@@ -741,10 +741,10 @@ var (
 				from mo_catalog.mo_database d, mo_catalog.mo_tables t, mo_catalog.mo_role_privs rp
 				where d.dat_id = t.reldatabase_id
 					and rp.obj_id = 0
-					and rp.obj_type = "database"
+					and rp.obj_type = "%s"
 					and rp.role_id = %d
 					and rp.privilege_id = %d
-					and rp.privilege_level = "*.*"
+					and rp.privilege_level = "%s"
 					and rp.with_grant_option = true;`
 
 	//For object_type : database, privilege_level : db
@@ -752,10 +752,10 @@ var (
 				from mo_catalog.mo_database d, mo_catalog.mo_tables t, mo_catalog.mo_role_privs rp
 				where d.dat_id = t.reldatabase_id
 					and rp.obj_id = d.dat_id
-					and rp.obj_type = "database"
+					and rp.obj_type = "%s"
 					and rp.role_id = %d
 					and rp.privilege_id = %d
-					and rp.privilege_level = "d"
+					and rp.privilege_level = "%s"
 					and  d.datname = "%s"
 					and rp.with_grant_option = true;`
 
@@ -764,10 +764,10 @@ var (
 				from mo_catalog.mo_database d, mo_catalog.mo_tables t, mo_catalog.mo_role_privs rp
 				where d.dat_id = t.reldatabase_id
 					and rp.obj_id = 0
-					and rp.obj_type = "account"
+					and rp.obj_type = "%s"
 					and rp.role_id = %d
 					and rp.privilege_id = %d
-					and rp.privilege_level = "**"
+					and rp.privilege_level = "%s"
 					and rp.with_grant_option = true;`
 
 	//check the role has the table level privilege
@@ -775,10 +775,10 @@ var (
 				from mo_catalog.mo_database d, mo_catalog.mo_tables t, mo_catalog.mo_role_privs rp
 				where d.dat_id = t.reldatabase_id
 					and rp.obj_id = t.rel_id
-					and rp.obj_type = "table"
+					and rp.obj_type = "%s"
 					and rp.role_id = %d
 					and rp.privilege_id = %d
-					and rp.privilege_level in ("d.t","t")
+					and rp.privilege_level in ("%s","%s")
 					and d.datname = "%s"
 					and t.relname = "%s";`
 )
@@ -855,36 +855,40 @@ func getSqlForUpdateRolePrivs(userId int64, timestamp string, withGrantOption bo
 	return fmt.Sprintf(updateRolePrivsFormat, userId, timestamp, withGrantOption, roleId, objType, objId, privilegeId)
 }
 
+func getSqlForInsertRolePrivs(roleId int64, roleName, objType string, objId, privilegeId int64, privilegeName, privilegeLevel string, operationUserId int64, grantedTime string, withGrantOption bool) string {
+	return fmt.Sprintf(insertRolePrivsFormat, roleId, roleName, objType, objId, privilegeId, privilegeName, privilegeLevel, operationUserId, grantedTime, withGrantOption)
+}
+
 func getSqlForCheckWithGrantOptionForTableStarStar(roleId int64, privId PrivilegeType) string {
-	return fmt.Sprintf(checkWithGrantOptionForTableStarStar, roleId, privId)
+	return fmt.Sprintf(checkWithGrantOptionForTableStarStar, objectTypeTable, roleId, privId, privilegeLevelStarStar)
 }
 
 func getSqlForCheckWithGrantOptionForTableDatabaseStar(roleId int64, privId PrivilegeType, dbName string) string {
-	return fmt.Sprintf(checkWithGrantOptionForTableDatabaseStar, roleId, privId, dbName)
+	return fmt.Sprintf(checkWithGrantOptionForTableDatabaseStar, objectTypeTable, roleId, privId, privilegeLevelDatabaseStar, dbName)
 }
 
 func getSqlForCheckWithGrantOptionForTableDatabaseTable(roleId int64, privId PrivilegeType, dbName string, tableName string) string {
-	return fmt.Sprintf(checkWithGrantOptionForTableDatabaseTable, roleId, privId, dbName, tableName)
+	return fmt.Sprintf(checkWithGrantOptionForTableDatabaseTable, objectTypeTable, roleId, privId, privilegeLevelDatabaseTable, dbName, tableName)
 }
 
 func getSqlForCheckWithGrantOptionForDatabaseStar(roleId int64, privId PrivilegeType) string {
-	return fmt.Sprintf(checkWithGrantOptionForDatabaseStar, roleId, privId)
+	return fmt.Sprintf(checkWithGrantOptionForDatabaseStar, objectTypeDatabase, roleId, privId, privilegeLevelStar)
 }
 
 func getSqlForCheckWithGrantOptionForDatabaseStarStar(roleId int64, privId PrivilegeType) string {
-	return fmt.Sprintf(checkWithGrantOptionForDatabaseStarStar, roleId, privId)
+	return fmt.Sprintf(checkWithGrantOptionForDatabaseStarStar, objectTypeDatabase, roleId, privId, privilegeLevelStarStar)
 }
 
 func getSqlForCheckWithGrantOptionForDatabaseDB(roleId int64, privId PrivilegeType, dbName string) string {
-	return fmt.Sprintf(checkWithGrantOptionForDatabaseDB, roleId, privId, dbName)
+	return fmt.Sprintf(checkWithGrantOptionForDatabaseDB, objectTypeDatabase, roleId, privId, privilegeLevelDatabase, dbName)
 }
 
 func getSqlForCheckWithGrantOptionForAccountStar(roleId int64, privId PrivilegeType) string {
-	return fmt.Sprintf(checkWithGrantOptionForAccountStar, roleId, privId)
+	return fmt.Sprintf(checkWithGrantOptionForAccountStar, objectTypeAccount, roleId, privId, privilegeLevelStarStar)
 }
 
 func getSqlForCheckRoleHasTableLevelPrivilegeFormat(roleId int64, privId PrivilegeType, dbName string, tableName string) string {
-	return fmt.Sprintf(checkRoleHasTableLevelPrivilegeFormat, roleId, privId, dbName, tableName)
+	return fmt.Sprintf(checkRoleHasTableLevelPrivilegeFormat, objectTypeTable, roleId, privId, privilegeLevelDatabaseTable, privilegeLevelTable, dbName, tableName)
 }
 
 func getSqlForCheckDatabase(dbName string) string {
@@ -1283,7 +1287,6 @@ func doGrantPrivilege(ctx context.Context, ses *Session, gp *tree.GrantPrivilege
 		}
 	}
 
-	//TODO: check the privilege with the level like you can not grant CreateAccount to a table.
 	//step 2: get obj_type, privilege_level
 	//step 3: get obj_id
 	switch gp.ObjType {
@@ -1356,8 +1359,33 @@ func doGrantPrivilege(ctx context.Context, ses *Session, gp *tree.GrantPrivilege
 	}
 
 	//step 4: get privilege_id
+	//step 5: check exists
+	//step 6: update or insert
 	for _, priv := range gp.Privileges {
 		privType = convertAstPrivilegeTypeToPrivilegeType(priv.Type)
+		//check the match between the privilegeScope and the objectType
+		switch privType.Scope() {
+		case PrivilegeScopeSys, PrivilegeScopeAccount, PrivilegeScopeUser, PrivilegeScopeRole:
+			if objType != objectTypeAccount {
+				err = moerr.NewInternalError("the privilege %s can not be granted to the object type account", priv.Type.ToString())
+				goto handleFailed
+			}
+		case PrivilegeScopeDatabase:
+			if objType != objectTypeDatabase {
+				err = moerr.NewInternalError("the privilege %s can not be granted to the object type database", priv.Type.ToString())
+				goto handleFailed
+			}
+		case PrivilegeScopeTable:
+			if objType != objectTypeTable {
+				err = moerr.NewInternalError("the privilege %s can not be granted to the object type table", priv.Type.ToString())
+				goto handleFailed
+			}
+		case PrivilegeScopeRoutine:
+			if objType != objectTypeFunction {
+				err = moerr.NewInternalError("the privilege %s can not be granted to the object type function", priv.Type.ToString())
+				goto handleFailed
+			}
+		}
 		for _, role := range verifiedRoles {
 			sql := getSqlForCheckRoleHasPrivilege(role.id, objType, objId, int64(privType))
 			//check exists
@@ -1392,7 +1420,9 @@ func doGrantPrivilege(ctx context.Context, ses *Session, gp *tree.GrantPrivilege
 					types.CurrentTimestamp().String2(time.UTC, 0),
 					gp.GrantOption, role.id, objType, objId, int64(privType))
 			} else if choice == 2 { //insert new record
-
+				sql = getSqlForInsertRolePrivs(role.id, role.name, objType.String(), objId,
+					int64(privType), privType.String(), privLevel.String(), int64(account.GetUserID()),
+					types.CurrentTimestamp().String2(time.UTC, 0), gp.GrantOption)
 			}
 
 			//insert or update
@@ -1404,11 +1434,7 @@ func doGrantPrivilege(ctx context.Context, ses *Session, gp *tree.GrantPrivilege
 		}
 	}
 
-	//step 5: check exists
-	//step 6: update or insert
-
 	return err
-
 handleFailed:
 	//ROLLBACK the transaction
 	rbErr := bh.Exec(ctx, "rollback;")
