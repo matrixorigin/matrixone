@@ -278,7 +278,7 @@ func genZapLogBatchSql(in []IBuffer2SqlItem, buf *bytes.Buffer) any {
 	return string(buf.Next(buf.Len() - 1))
 }
 
-func genStatementBatchSql(in []IBuffer2SqlItem, buf *bytes.Buffer) any {
+var genStatementBatchSql = func(in []IBuffer2SqlItem, buf *bytes.Buffer) any {
 	buf.Reset()
 	if len(in) == 0 {
 		logutil.Debugf("genStatementBatchSql empty")
@@ -342,7 +342,7 @@ func genStatementBatchSql(in []IBuffer2SqlItem, buf *bytes.Buffer) any {
 		buf.WriteString(fmt.Sprintf(`, %q`, s.ExecPlanStats2Json()))
 		buf.WriteString("),")
 
-		s.reported = true
+		s.exported = true
 		s.mux.Unlock()
 	}
 	return string(buf.Next(buf.Len() - 1))

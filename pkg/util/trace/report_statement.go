@@ -60,6 +60,8 @@ type StatementInfo struct {
 	mux sync.Mutex
 	// mark reported
 	reported bool
+	// mark exported
+	exported bool
 }
 
 func (s *StatementInfo) GetName() string {
@@ -82,7 +84,7 @@ func (s *StatementInfo) CsvOptions() *CsvOptions {
 func (s *StatementInfo) CsvFields() []string {
 	s.mux.Lock()
 	defer s.mux.Unlock()
-	s.reported = true
+	s.exported = true
 	var result []string
 	result = append(result, uuid.UUID(s.StatementID).String())
 	result = append(result, uuid.UUID(s.TransactionID).String())
@@ -149,6 +151,7 @@ func (s *StatementInfo) SetTxnIDIsZero(id []byte) {
 }
 
 func (s *StatementInfo) Report(ctx context.Context) {
+	s.reported = true
 	ReportStatement(ctx, s)
 }
 
@@ -172,7 +175,7 @@ var EndStatement = func(ctx context.Context, err error) time.Time {
 		s.Error = err
 		s.Status = StatementStatusFailed
 	}
-	if s.reported { // cooperate with s.mux
+	if !s.reported || s.exported { // cooperate with s.mux
 		s.Report(ctx)
 	}
 
@@ -206,7 +209,7 @@ type StatementOption interface {
 
 type StatementOptionFunc func(*StatementInfo)
 
-func ReportStatement(ctx context.Context, s *StatementInfo) error {
+var ReportStatement = func(ctx context.Context, s *StatementInfo) error {
 	if !GetTracerProvider().IsEnable() {
 		return nil
 	}
