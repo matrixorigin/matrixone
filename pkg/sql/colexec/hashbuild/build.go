@@ -16,8 +16,6 @@ package hashbuild
 
 import (
 	"bytes"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
-
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -96,11 +94,9 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 		anal.Alloc(int64(bat.Size()))
 		if ctr.bat, err = ctr.bat.Append(proc.GetMheap(), bat); err != nil {
 			bat.Clean(proc.GetMheap())
-			logutil.Infof("hash build append error %v,proc:%v,bat:%v", err, proc, ctr.bat)
 			ctr.bat.Clean(proc.GetMheap())
 			return err
 		}
-		logutil.Infof("hash build append success,proc:%v,bat:%v", proc, ctr.bat)
 		bat.Clean(proc.GetMheap())
 	}
 	if ctr.bat == nil || ctr.bat.Length() == 0 || !ap.NeedHashMap {
