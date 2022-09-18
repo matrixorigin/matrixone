@@ -4488,7 +4488,7 @@ func Test_doGrantPrivilege(t *testing.T) {
 
 		for _, p := range stmt.Privileges {
 			privType := convertAstPrivilegeTypeToPrivilegeType(p.Type)
-			for j, _ := range stmt.Roles {
+			for j := range stmt.Roles {
 				sql := getSqlForCheckRoleHasPrivilege(int64(j), objectTypeAccount, objectIDAll, int64(privType))
 				mrs := newMrsForCheckRoleHasPrivilege([][]interface{}{})
 				bh.sql2result[sql] = mrs
