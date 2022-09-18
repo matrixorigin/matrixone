@@ -58,7 +58,7 @@ var (
 		{
 			Name: "index",
 			Typ: &plan.Type{
-				Id:       int32(types.T_varchar),
+				Id:       int32(types.T_int32),
 				Nullable: true,
 				Width:    4,
 			},
@@ -142,17 +142,20 @@ func (builder *QueryBuilder) buildUnnest(tbl *tree.Unnest, ctx *BindContext) (in
 		},
 		BindingTags: []int32{tag},
 	}
+	//not this fault,for restrict.go bat not enough
 	//for i := 0; i < len(colDefs); i++ {
 	//	tmp := &plan.Expr{
 	//		Typ: colDefs[i].Typ,
 	//		Expr: &plan.Expr_Col{
 	//			Col: &plan.ColRef{
+	//				RelPos: tag,
 	//				ColPos: int32(i),
 	//				Name:   colDefs[i].Name,
 	//			},
 	//		},
 	//	}
 	//	node.ProjectList = append(node.ProjectList, tmp)
+	//	//node.FilterList = append(node.FilterList, tmp)
 	//}
 	switch o := tbl.Param.Origin.(type) {
 	case *tree.UnresolvedName:

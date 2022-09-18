@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"strconv"
 )
 
 func String(arg any, buf *bytes.Buffer) {
@@ -150,7 +151,15 @@ func makeBatch(bat *batch.Batch, ures []bytejson.UnnestResult, param *Param, pro
 				err = vec.Append([]byte(param.colName), false, proc.Mp())
 			case "seq":
 				err = vec.Append(param.seq, false, proc.Mp())
-			case "key", "path", "index", "value", "this":
+			case "index":
+				val, ok := ures[i][param.Attrs[j]]
+				if !ok {
+					err = vec.Append(int32(0), true, proc.Mp())
+				} else {
+					intVal, _ := strconv.Atoi(val)
+					err = vec.Append(int32(intVal), false, proc.Mp())
+				}
+			case "key", "path", "value", "this":
 				val, ok := ures[i][param.Attrs[j]]
 				err = vec.Append([]byte(val), !ok, proc.Mp())
 			default:

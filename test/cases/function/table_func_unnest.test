@@ -19,13 +19,25 @@ select * from unnest(t1.a, "$.a", true) as f;
 select * from unnest(t1.a);
 select * from unnest(t1.a, "$.b");
 select * from unnest(t1.a, "$.a");
-select * from unnest(t1.a, "$.a", true);
+select * from unnest(t1.a, "$.a", true) as f;
 
 #Test for other cases
-select col from unnest(t1.a, "$.b");
+select col from unnest(t1.a, "$.b") as f;
 select f.col from unnest(t1.a, "$.b") as f;
 select f.seq, f.col from unnest(t1.a, "$.b") as f;
 select distinct(f.seq) from unnest(t1.a, "$") as f;
-select `index`,path from unnest(t1.a, "$");
-
-
+select `index`,path from unnest(t1.a, "$") u;
+select `index`,path from unnest(t1.a, "$") u where u.`index` = 1;
+select `index`,path from unnest(t1.a, "$") u where u.`index` is null or u.path='$.b';
+select `index`,path from unnest(t1.a, "$") u where u.`index` is null and u.path='$.b';
+select * from t1,unnest(t1.a, "$") u;
+select * from t1,unnest(t1.a, "$") u where u.`index` = 1;
+select `key`,path,value from t1, unnest(t1.a, "$") u where u.`index` is null or u.path='$.b';
+select seq,col,b from t1, unnest(t1.a, "$") u where u.`index` is null;
+select count(b),b from t1, unnest(t1.a, "$") u where u.`index` is null group by b;
+insert into t1 values ('{"add":1}',1);
+select count(seq),seq from t1, unnest(t1.a, "$") u where u.`index` is null group by seq;
+select count(seq),seq from t1, unnest(t1.a, "$") u where u.`index` is null group by seq order by seq desc;
+select count(`index`),`index`,sum(`index`) from t1, unnest(t1.a, "$") u where u.`index` is not null group by `index` order by sum(`index`) desc;
+select * from t1,unnest(t1.a,"$.b",true) u where seq>1;
+with u_table as (select * from t1,unnest(t1.a,"$.b",true) u where seq>1) select a,`index` from u_table where b=1;

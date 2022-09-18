@@ -884,9 +884,6 @@ func TestBuildUnnest(t *testing.T) {
 		`select * from unnest('{"a":1}') as f`,
 		`select * from unnest('{"a":1}', '') as f`,
 		`select * from unnest('{"a":1}', '$', true) as f`,
-		`select * from unnest('{"a":1}')`,
-		`select * from unnest('{"a":1}', "$")`,
-		`select * from unnest('{"a":1}', "", true)`,
 	}
 	runTestShouldPass(mock, t, sqls, false, false)
 	errSqls := []string{
@@ -896,6 +893,9 @@ func TestBuildUnnest(t *testing.T) {
 		`select * from unnest(t.a) as f`,
 		`select * from unnest(t.a, "$.b") as f`,
 		`select * from unnest(t.a, "$.b", true) as f`,
+		`select * from unnest('{"a":1}')`,
+		`select * from unnest('{"a":1}', "$")`,
+		`select * from unnest('{"a":1}', "", true)`,
 	}
 	runTestShouldError(mock, t, errSqls)
 }
