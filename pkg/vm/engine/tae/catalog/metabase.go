@@ -79,8 +79,9 @@ func (be *MetaBaseEntry) GetID() uint64 { return be.ID }
 func (be *MetaBaseEntry) CreateWithTS(ts types.TS) {
 	node := &MetadataMVCCNode{
 		EntryMVCCNode: &EntryMVCCNode{
-			CreatedAt: ts,
-			NodeOp:    []NodeOp{NOpCreate},
+			CreatedAt:   ts,
+			HasCreateOp: true,
+			TotalOp:     1,
 		},
 		TxnMVCCNode: &txnbase.TxnMVCCNode{
 			Start: ts,
@@ -97,7 +98,8 @@ func (be *MetaBaseEntry) CreateWithTxn(txn txnif.AsyncTxn) {
 	}
 	node := &MetadataMVCCNode{
 		EntryMVCCNode: &EntryMVCCNode{
-			NodeOp: []NodeOp{NOpCreate},
+			HasCreateOp: true,
+			TotalOp:     1,
 		},
 		TxnMVCCNode: &txnbase.TxnMVCCNode{
 			Start: startTS,

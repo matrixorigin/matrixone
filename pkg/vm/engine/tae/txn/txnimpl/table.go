@@ -40,7 +40,6 @@ var (
 type txnTable struct {
 	store        *txnStore
 	createEntry  txnif.TxnEntry
-	createIdx    int
 	dropEntry    txnif.TxnEntry
 	localSegment *localSegment
 	updateNodes  map[common.ID]txnif.UpdateNode
@@ -93,10 +92,19 @@ func (tbl *txnTable) WaitSynced() {
 
 func (tbl *txnTable) CollectCmd(cmdMgr *commandManager) (err error) {
 	tbl.csnStart = uint32(cmdMgr.GetCSN())
-	for i, txnEntry := range tbl.txnEntries {
-		if tbl.createEntry != nil && tbl.dropEntry != nil && i == tbl.createIdx {
-			txnEntry = txnEntry.(*catalog.TableEntry).CloneCreateEntry()
+	if tbl.createEntry != nil && tbl.dropEntry != nil {
+		cmd, err := tbl.dropEntry.MakeCommand(tbl.csnStart)
+		// logutil.Infof("%d-%d",csn,cmd.GetType())
+		if err != nil {
+			return err
 		}
+		if cmd == nil {
+			panic(tbl.dropEntry)
+		}
+		cmdMgr.AddCmd(cmd)
+		return nil
+	}
+	for _, txnEntry := range tbl.txnEntries {
 		csn := cmdMgr.GetCSN()
 		cmd, err := txnEntry.MakeCommand(csn)
 		// logutil.Infof("%d-%d",csn,cmd.GetType())
@@ -254,7 +262,6 @@ func (tbl *txnTable) SetCreateEntry(e txnif.TxnEntry) {
 	}
 	tbl.store.IncreateWriteCnt()
 	tbl.createEntry = e
-	tbl.createIdx = len(tbl.txnEntries)
 	tbl.txnEntries = append(tbl.txnEntries, e)
 	tbl.store.warChecker.ReadDB(tbl.entry.GetDB().GetID())
 }

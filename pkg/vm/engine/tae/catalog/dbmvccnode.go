@@ -64,15 +64,10 @@ func (e *DBMVCCNode) String() string {
 // for create drop in one txn
 func (e *DBMVCCNode) UpdateNode(vun txnbase.MVCCNode) {
 	un := vun.(*DBMVCCNode)
-	for _, op := range un.NodeOp {
-		switch op {
-		case NOpCreate:
-			e.CreatedAt = un.CreatedAt
-		case NOpDelete:
-			e.DeletedAt = un.DeletedAt
-		}
-		e.NodeOp = append(e.NodeOp, op)
-	}
+	e.HasCreateOp = un.HasCreateOp
+	e.HasDeleteOp = un.HasDeleteOp
+	e.CreatedAt = un.CreatedAt
+	e.DeletedAt = un.DeletedAt
 }
 
 func (e *DBMVCCNode) ApplyCommit(index *wal.Index) (err error) {

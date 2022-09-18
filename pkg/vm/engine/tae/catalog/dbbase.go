@@ -75,8 +75,9 @@ func (be *DBBaseEntry) GetID() uint64 { return be.ID }
 func (be *DBBaseEntry) CreateWithTS(ts types.TS) {
 	node := &DBMVCCNode{
 		EntryMVCCNode: &EntryMVCCNode{
-			CreatedAt: ts,
-			NodeOp:    []NodeOp{NOpCreate},
+			CreatedAt:   ts,
+			HasCreateOp: true,
+			TotalOp:     1,
 		},
 		TxnMVCCNode: &txnbase.TxnMVCCNode{
 			Start: ts,
@@ -93,7 +94,8 @@ func (be *DBBaseEntry) CreateWithTxn(txn txnif.AsyncTxn) {
 	}
 	node := &DBMVCCNode{
 		EntryMVCCNode: &EntryMVCCNode{
-			NodeOp: []NodeOp{NOpCreate},
+			HasCreateOp: true,
+			TotalOp:     1,
 		},
 		TxnMVCCNode: &txnbase.TxnMVCCNode{
 			Start: startTS,

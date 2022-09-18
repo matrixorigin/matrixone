@@ -396,6 +396,18 @@ func (db *txnDB) PreApplyCommit() (err error) {
 }
 
 func (db *txnDB) CollectCmd(cmdMgr *commandManager) (err error) {
+	if db.createEntry != nil && db.dropEntry != nil {
+		cmd, err := db.dropEntry.MakeCommand(cmdMgr.GetCSN())
+		// logutil.Infof("%d-%d",csn,cmd.GetType())
+		if err != nil {
+			return err
+		}
+		if cmd == nil {
+			panic(db.dropEntry)
+		}
+		cmdMgr.AddCmd(cmd)
+		return nil
+	}
 	if db.createEntry != nil {
 		csn := cmdMgr.GetCSN()
 		entry := db.createEntry

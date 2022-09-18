@@ -77,15 +77,12 @@ func (e *MetadataMVCCNode) UpdateAttr(o *MetadataMVCCNode) {
 // for create drop in one txn
 func (e *MetadataMVCCNode) UpdateNode(vun txnbase.MVCCNode) {
 	un := vun.(*MetadataMVCCNode)
-	for _, op := range un.NodeOp {
-		switch op {
-		case NOpCreate:
-			e.CreatedAt = un.CreatedAt
-		case NOpDelete:
-			e.DeletedAt = un.DeletedAt
-		}
-		e.NodeOp = append(e.NodeOp, op)
-	}
+	e.HasCreateOp = un.HasCreateOp
+	e.HasDeleteOp = un.HasDeleteOp
+	e.CreatedAt = un.CreatedAt
+	e.DeletedAt = un.DeletedAt
+	e.MetaLoc = un.MetaLoc
+	e.DeltaLoc = un.DeltaLoc
 }
 
 func (e *MetadataMVCCNode) ApplyCommit(index *wal.Index) (err error) {

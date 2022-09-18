@@ -32,27 +32,21 @@ const (
 )
 
 type EntryMVCCNode struct {
-	CreatedAt, DeletedAt types.TS
-	NodeOp               []NodeOp
-	CommittedOpCnt       int
+	CreatedAt, DeletedAt     types.TS
+	HasCreateOp, HasDeleteOp bool
+	CommittedOpCnt           int
+	TotalOp                  int
 }
 
 func NewEntryMVCCNode() *EntryMVCCNode {
-	return &EntryMVCCNode{
-		NodeOp: make([]NodeOp, 0),
-	}
+	return &EntryMVCCNode{}
 }
 
 func (un *EntryMVCCNode) HasDropped() bool {
 	if !un.DeletedAt.IsEmpty() {
 		return true
 	}
-	for _, ntype := range un.NodeOp {
-		if ntype == NOpDelete {
-			return true
-		}
-	}
-	return false
+	return un.HasDeleteOp
 }
 
 func (un *EntryMVCCNode) GetCreatedAt() types.TS {
@@ -68,12 +62,12 @@ func (un *EntryMVCCNode) IsCreating() bool {
 }
 
 func (un *EntryMVCCNode) Clone() *EntryMVCCNode {
-	ntypes := make([]NodeOp, len(un.NodeOp))
-	copy(ntypes, un.NodeOp)
 	return &EntryMVCCNode{
 		CreatedAt:      un.CreatedAt,
 		DeletedAt:      un.DeletedAt,
-		NodeOp:         ntypes,
+		HasCreateOp:    un.HasCreateOp,
+		HasDeleteOp:    un.HasDeleteOp,
+		TotalOp:        un.TotalOp,
 		CommittedOpCnt: un.CommittedOpCnt,
 	}
 }
@@ -86,7 +80,13 @@ func (un *EntryMVCCNode) CloneData() *EntryMVCCNode {
 }
 
 func (un *EntryMVCCNode) AddOp(op NodeOp) {
-	un.NodeOp = append(un.NodeOp, op)
+	switch op {
+	case NOpCreate:
+		un.HasCreateOp = true
+	case NOpDelete:
+		un.HasDeleteOp = true
+	}
+	un.TotalOp++
 }
 
 func (un *EntryMVCCNode) ReadFrom(r io.Reader) (n int64, err error) {
@@ -98,19 +98,20 @@ func (un *EntryMVCCNode) ReadFrom(r io.Reader) (n int64, err error) {
 		return
 	}
 	n += 12
-	length := uint8(0)
-	if err = binary.Read(r, binary.BigEndian, &length); err != nil {
+	var hasCreateOp, hasDeleteOp uint8
+	if err = binary.Read(r, binary.BigEndian, &hasCreateOp); err != nil {
 		return
 	}
-	un.NodeOp = make([]NodeOp, length)
 	n += 1
-	for i := 0; i < int(length); i++ {
-		ntype := NOpNoop
-		if err = binary.Read(r, binary.BigEndian, &ntype); err != nil {
-			return
-		}
-		n += 2
-		un.NodeOp[i] = ntype
+	if hasCreateOp == 1 {
+		un.HasCreateOp = true
+	}
+	if err = binary.Read(r, binary.BigEndian, &hasDeleteOp); err != nil {
+		return
+	}
+	n += 1
+	if hasDeleteOp == 1 {
+		un.HasDeleteOp = true
 	}
 	return
 }
@@ -123,47 +124,48 @@ func (un *EntryMVCCNode) WriteTo(w io.Writer) (n int64, err error) {
 		return
 	}
 	n += 12
-	length := uint8(len(un.NodeOp))
-	if err = binary.Write(w, binary.BigEndian, length); err != nil {
+	var hasCreateOp, hasDeleteOp uint8
+	if un.HasCreateOp {
+		hasCreateOp = 1
+	}
+	if err = binary.Write(w, binary.BigEndian, hasCreateOp); err != nil {
 		return
 	}
 	n += 1
-	for _, ntype := range un.NodeOp {
-		if err = binary.Write(w, binary.BigEndian, &ntype); err != nil {
-			return
-		}
-		n += 2
+	if un.HasDeleteOp {
+		hasDeleteOp = 1
 	}
+	if err = binary.Write(w, binary.BigEndian, hasDeleteOp); err != nil {
+		return
+	}
+	n += 1
 	return
 }
 func (un *EntryMVCCNode) PrepareCommit() (err error) {
 	return nil
 }
 func (un *EntryMVCCNode) String() string {
-	return fmt.Sprintf("CreatedAt=%v,DeletedAt=%v,Ops=%v", un.CreatedAt, un.DeletedAt, un.NodeOp)
+	return fmt.Sprintf("CreatedAt=%v,DeletedAt=%v", un.CreatedAt, un.DeletedAt)
 }
 func (un *EntryMVCCNode) IsLastOp() bool {
-	return un.CommittedOpCnt == len(un.NodeOp)-1
+	return un.CommittedOpCnt == un.TotalOp-1
 }
 func (un *EntryMVCCNode) ApplyCommit(ts types.TS) (err error) {
-	ntype := un.NodeOp[un.CommittedOpCnt]
-	switch ntype {
-	case NOpCreate:
+	if un.HasCreateOp {
 		un.CreatedAt = ts
-	case NOpDelete:
+	}
+	if un.HasDeleteOp {
 		un.DeletedAt = ts
 	}
 	return nil
 }
 
 func (un *EntryMVCCNode) ReplayCommit(ts types.TS) (err error) {
-	for _, ntype := range un.NodeOp {
-		switch ntype {
-		case NOpCreate:
-			un.CreatedAt = ts
-		case NOpDelete:
-			un.DeletedAt = ts
-		}
+	if un.HasCreateOp {
+		un.CreatedAt = ts
+	}
+	if un.HasDeleteOp {
+		un.DeletedAt = ts
 	}
 	return nil
 }
