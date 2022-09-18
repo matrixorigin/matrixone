@@ -307,7 +307,3 @@ func (t *Table) GetHideKeys(ctx context.Context) (attrs []*engine.Attribute, err
 
 	return resp.Attrs, nil
 }
-
-func (t *Table) GetTableID(ctx context.Context) string {
-	return t.id
-}

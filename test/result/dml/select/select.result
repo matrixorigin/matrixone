@@ -370,9 +370,9 @@ null
 
 drop table if exists t1;
 create table if not exists t1(a tinyint auto_increment);
-the auto_incr column is only support int32 and int64 type now
+drop table if exists t1;
 create table if not exists t1(a smallint auto_increment);
-the auto_incr column is only support int32 and int64 type now
+drop table if exists t1;
 create table if not exists t1(a int auto_increment);
 select * from t1;
 a

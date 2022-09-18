@@ -35,7 +35,7 @@ type Argument struct {
 	Affected      uint64
 	Engine        engine.Engine
 	DB            engine.Database
-	TableID       string
+	TableDB       string
 }
 
 func String(_ any, buf *bytes.Buffer) {
@@ -77,7 +77,7 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 		}
 	}
 	ctx := context.TODO()
-	if err := colexec.UpdateInsertBatch(n.Engine, n.DB, ctx, proc, n.TargetColDefs, bat, n.TableID); err != nil {
+	if err := colexec.UpdateInsertBatch(n.Engine, n.DB, ctx, proc, n.TargetColDefs, bat, n.TableDB); err != nil {
 		return false, err
 	}
 	err := n.TargetTable.Write(ctx, bat)

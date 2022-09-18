@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/errors"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/operator"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 )
 
@@ -298,8 +299,8 @@ func buildTableDefs(defs tree.TableDefs, ctx CompilerContext, tableDef *TableDef
 
 				if _, ok := attr.(*tree.AttributeAutoIncrement); ok {
 					auto_incr = true
-					if colType.GetId() != int32(types.T_int32) && colType.GetId() != int32(types.T_int64) {
-						return errors.New(errno.InvalidColumnDefinition, "the auto_incr column is only support int32 and int64 type now")
+					if !operator.IsInteger(types.T(colType.GetId())) {
+						return errors.New(errno.InvalidColumnDefinition, "the auto_incr column is only support integer type now")
 					}
 				}
 			}

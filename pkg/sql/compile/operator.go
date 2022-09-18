@@ -17,6 +17,7 @@ package compile
 import (
 	"context"
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/agg"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/intersectall"
@@ -281,14 +282,14 @@ func constructInsert(n *plan.Node, eg engine.Engine, txnOperator TxnOperator) (*
 		TargetColDefs: n.TableDef.Cols,
 		Engine:        eg,
 		DB:            db,
-		TableID:       relation.GetTableID(ctx),
+		TableDB:       n.TableDef.Name + "_" + n.ObjRef.SchemaName,
 	}, nil
 }
 
 func constructUpdate(n *plan.Node, eg engine.Engine, txnOperator TxnOperator) (*update.Argument, error) {
 	ctx := context.TODO()
 	us := make([]*update.UpdateCtx, len(n.UpdateCtxs))
-	tableID := make([]string, len(n.UpdateCtxs))
+	tableDB := make([]string, len(n.UpdateCtxs))
 	db := make([]engine.Database, len(n.UpdateCtxs))
 	for i, updateCtx := range n.UpdateCtxs {
 		dbSource, err := eg.Database(ctx, updateCtx.DbName, txnOperator)
@@ -301,7 +302,7 @@ func constructUpdate(n *plan.Node, eg engine.Engine, txnOperator TxnOperator) (*
 			return nil, err
 		}
 
-		tableID[i] = relation.GetTableID(ctx)
+		tableDB[i] = updateCtx.TblName + "_" + updateCtx.DbName
 		colNames := make([]string, 0, len(updateCtx.UpdateCols))
 		for _, col := range updateCtx.UpdateCols {
 			colNames = append(colNames, col.Name)
@@ -322,7 +323,7 @@ func constructUpdate(n *plan.Node, eg engine.Engine, txnOperator TxnOperator) (*
 		UpdateCtxs:  us,
 		Engine:      eg,
 		DB:          db,
-		TableID:     tableID,
+		TableDB:     tableDB,
 		TableDefVec: n.TableDefVec,
 	}, nil
 }

@@ -200,20 +200,6 @@ func (mr *MockRelationMockRecorder) GetPrimaryKeys(arg0 interface{}) *gomock.Cal
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetPrimaryKeys", reflect.TypeOf((*MockRelation)(nil).GetPrimaryKeys), arg0)
 }
 
-// GetTableID mocks base method.
-func (m *MockRelation) GetTableID(arg0 context.Context) string {
-	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "GetTableID", arg0)
-	ret0, _ := ret[0].(string)
-	return ret0
-}
-
-// GetTableID indicates an expected call of GetTableID.
-func (mr *MockRelationMockRecorder) GetTableID(arg0 interface{}) *gomock.Call {
-	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetTableID", reflect.TypeOf((*MockRelation)(nil).GetTableID), arg0)
-}
-
 // NewReader mocks base method.
 func (m *MockRelation) NewReader(arg0 context.Context, arg1 int, arg2 *plan.Expr, arg3 [][]byte) ([]engine.Reader, error) {
 	m.ctrl.T.Helper()

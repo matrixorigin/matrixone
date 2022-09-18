@@ -161,11 +161,6 @@ func (r *relation) DelTableDef(_ context.Context, _ engine.TableDef) error {
 	return nil
 }
 
-func (r *relation) GetTableID(_ context.Context) string {
-	//TODO
-	return "0"
-}
-
 func sKey(num int, id string) string {
 	return fmt.Sprintf("%v.%v", id, num)
 }

@@ -101,7 +101,6 @@ func TestTable(t *testing.T) {
 	_, _ = tbl.Truncate(ctx)
 	_ = tbl.AddTableDef(ctx, nil)
 	_ = tbl.DelTableDef(ctx, nil)
-	_ = tbl.GetTableID(ctx)
 	_, _ = tbl.NewReader(ctx, 0, nil, nil)
 }
 

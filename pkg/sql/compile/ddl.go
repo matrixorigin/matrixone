@@ -87,7 +87,7 @@ func (s *Scope) CreateTable(c *Compile) error {
 	if err := dbSource.Create(c.ctx, tblName, append(exeCols, exeDefs...)); err != nil {
 		return err
 	}
-	return colexec.CreateAutoIncrCol(dbSource, c.ctx, c.proc, planCols, tblName)
+	return colexec.CreateAutoIncrCol(dbSource, c.ctx, c.proc, planCols, tblName+"_"+dbName)
 }
 
 func (s *Scope) DropTable(c *Compile) error {
@@ -112,7 +112,7 @@ func (s *Scope) DropTable(c *Compile) error {
 	if err := dbSource.Delete(c.ctx, tblName); err != nil {
 		return err
 	}
-	return colexec.DeleteAutoIncrCol(rel, dbSource, c.ctx, c.proc, rel.GetTableID(c.ctx))
+	return colexec.DeleteAutoIncrCol(rel, dbSource, c.ctx, c.proc, tblName+"_"+dbName)
 }
 
 func planDefsToExeDefs(planDefs []*plan.TableDef_DefType) ([]engine.TableDef, error) {
