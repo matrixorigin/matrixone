@@ -35,7 +35,7 @@ type fileServices struct {
 	s3FS     fileservice.FileService
 }
 
-// newFileServices construcs an instance of fileServices.
+// newFileServices constructs an instance of fileServices.
 func newFileServices(t *testing.T, dnServiceNum int) *fileServices {
 	locals := make([]fileservice.FileService, 0, dnServiceNum)
 	for i := 0; i < dnServiceNum; i++ {

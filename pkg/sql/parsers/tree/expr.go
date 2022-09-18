@@ -801,6 +801,12 @@ func NewDefaultVal(e Expr) *DefaultVal {
 	}
 }
 
+type UpdateVal struct {
+	exprImpl
+}
+
+func (node *UpdateVal) Format(ctx *FmtCtx) {}
+
 type TypeExpr interface {
 	Expr
 }

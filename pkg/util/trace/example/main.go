@@ -20,7 +20,7 @@ import (
 	"github.com/lni/dragonboat/v4/logger"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/logutil/logutil2"
-	"github.com/matrixorigin/matrixone/pkg/util/errors"
+	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"go.uber.org/zap"
@@ -139,12 +139,13 @@ func errorUsage(ctx context.Context) {
 
 	// case 3: WithContext, store db & log
 	logutil.Info("WithContext with default action: 1) store in db; 2) gen log")
-	outputError("WithContext", errors.WithContext(newCtx, base))
-	outputError("Wrapf", errors.Wrapf(base, "extra message"))
+	outputError("WithContext", errutil.WithContext(newCtx, base))
+	outputError("Wrapf", errutil.Wrapf(base, "extra message"))
 
 	// case 4: NewWithContext, store db & log
 	logutil.Info("errors.New with ctx, with default action: 1) store in db; 2) gen log")
 	outputError("New", errors.NewWithContext(newCtx, "new with ctx"))
+	// removed
 
 }
 
@@ -192,13 +193,13 @@ func mixUsage(ctx context.Context) {
 	logutil.Info("message", trace.ContextField(newCtx))
 
 	err := childFunc(newCtx)
-	trace.ReportError(newCtx, errors.Wrapf(err, "extra %s", "message"))
+	trace.ReportError(newCtx, errutil.Wrapf(err, "extra %s", "message"))
 
 }
 
 func childFunc(ctx context.Context) error {
 	err := goErrors.New("example: not found Database")
-	return errors.WithContext(ctx, err)
+	return errutil.WithContext(ctx, err)
 }
 
 func shutdown(ctx context.Context) {

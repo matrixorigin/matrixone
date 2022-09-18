@@ -1261,10 +1261,15 @@ func (mce *MysqlCmdExecutor) handleExplainStmt(stmt *tree.ExplainStmt) error {
 		return errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("build query plan and optimize failed:'%v'", err))
 	}
 
-	// build explain data buffer
-	buffer := explain.NewExplainDataBuffer()
+	if plan.GetQuery() == nil {
+		logutil.Errorf("The sql query plan does not support explain")
+		return errors.New(errno.SyntaxErrororAccessRuleViolation, "the sql query plan does not support explain.")
+	}
 	// generator query explain
 	explainQuery := explain.NewExplainQueryImpl(plan.GetQuery())
+
+	// build explain data buffer
+	buffer := explain.NewExplainDataBuffer()
 	err = explainQuery.ExplainPlan(buffer, es)
 	if err != nil {
 		logutil.Errorf("explain Query statement error: %v", err)
@@ -2272,14 +2277,15 @@ func (mce *MysqlCmdExecutor) ExecRequest(requestCtx context.Context, req *Reques
 		return resp, nil
 
 	case COM_STMT_EXECUTE:
+		mce.ses.Cmd = int(COM_STMT_EXECUTE)
 		data := req.GetData().([]byte)
 		sql, err := mce.parseStmtExecute(data)
 		if err != nil {
-			return NewGeneralErrorResponse(COM_STMT_PREPARE, err), nil
+			return NewGeneralErrorResponse(COM_STMT_EXECUTE, err), nil
 		}
 		err = mce.doComQuery(requestCtx, sql)
 		if err != nil {
-			resp = NewGeneralErrorResponse(COM_STMT_PREPARE, err)
+			resp = NewGeneralErrorResponse(COM_STMT_EXECUTE, err)
 		}
 		return resp, nil
 

@@ -20,7 +20,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggregate"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/agg"
 )
 
 const (
@@ -56,5 +56,5 @@ type Argument struct {
 	Nbucket  uint64
 	Exprs    []*plan.Expr // group Expressions
 	Types    []types.Type
-	Aggs     []aggregate.Aggregate // aggregations
+	Aggs     []agg.Aggregate // aggregations
 }

@@ -30,7 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/batchpipe"
-	"github.com/matrixorigin/matrixone/pkg/util/errors"
+	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 	"github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 
 	"github.com/google/gops/agent"
@@ -39,8 +39,8 @@ import (
 )
 
 var buf = new(bytes.Buffer)
-var err1 = errors.New("test1")
-var err2 = errors.Wrapf(err1, "test2")
+var err1 = fmt.Errorf("test1")
+var err2 = errutil.Wrapf(err1, "test2")
 var testBaseBuffer2SqlOption = []buffer2SqlOption{bufferWithSizeThreshold(1 * KB)}
 var traceIDSpanIDColumnStr string
 var traceIDSpanIDCsvStr string
@@ -66,7 +66,7 @@ func init() {
 		panic(err)
 	}
 	logutil.SetLogReporter(&logutil.TraceReporter{ReportLog: noopReportLog, LevelSignal: SetLogLevel})
-	errors.SetErrorReporter(noopReportError)
+	errutil.SetErrorReporter(noopReportError)
 
 	sc := SpanFromContext(DefaultContext()).SpanContext()
 	traceIDSpanIDColumnStr = fmt.Sprintf(`"%s", "%s"`, sc.TraceID.String(), sc.SpanID.String())
@@ -680,7 +680,7 @@ func Test_quote(t *testing.T) {
 			}
 		})
 	}
-	var err1 = errors.WithContext(context.Background(), errors.New("test1"))
+	var err1 = errutil.WithContext(context.Background(), fmt.Errorf("test1"))
 	t.Logf("show quote(err): \"%s\"", quote(fmt.Sprintf("%+v", err1)))
 }
 

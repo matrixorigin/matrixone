@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/builtin/binary"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/timestamp"
@@ -669,10 +670,16 @@ func doCast(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) 
 }
 
 func CastTimestampAsDate(lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	var t *time.Location
+	if proc == nil {
+		t = time.Local
+	} else {
+		t = proc.SessionInfo.TimeZone
+	}
 	lvs := vector.MustTCols[types.Timestamp](lv)
 	if lv.IsScalar() {
 		rs := make([]types.Datetime, 1)
-		if _, err := binary.TimestampToDatetime(proc.SessionInfo.TimeZone, lvs, rs); err != nil {
+		if _, err := binary.TimestampToDatetime(t, lvs, rs); err != nil {
 			return nil, err
 		}
 		rs2 := make([]types.Date, 1)
@@ -687,7 +694,7 @@ func CastTimestampAsDate(lv, rv *vector.Vector, proc *process.Process) (*vector.
 	}
 	rs := vector.MustTCols[types.Date](vec)
 	rs2 := make([]types.Datetime, len(lvs), cap(lvs))
-	if _, err := binary.TimestampToDatetime(proc.SessionInfo.TimeZone, lvs, rs2); err != nil {
+	if _, err := binary.TimestampToDatetime(t, lvs, rs2); err != nil {
 		return nil, err
 	}
 	for i := 0; i < len(rs2); i++ {
@@ -1306,13 +1313,19 @@ func CastVarcharAsDatetime(lv, rv *vector.Vector, proc *process.Process) (*vecto
 
 // CastVarcharAsTimestamp : Cast converts varchar to timestamp type
 func CastVarcharAsTimestamp(lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	var t *time.Location
+	if proc == nil {
+		t = time.Local
+	} else {
+		t = proc.SessionInfo.TimeZone
+	}
 	vs := vector.MustStrCols(lv)
 
 	if lv.IsScalar() {
 		if lv.IsScalarNull() {
 			return proc.AllocConstNullVector(rv.Typ, lv.Length()), nil
 		}
-		data, err := types.ParseTimestamp(proc.SessionInfo.TimeZone, vs[0], rv.Typ.Precision)
+		data, err := types.ParseTimestamp(t, vs[0], rv.Typ.Precision)
 		if err != nil {
 			return nil, err
 		}
@@ -1325,7 +1338,7 @@ func CastVarcharAsTimestamp(lv, rv *vector.Vector, proc *process.Process) (*vect
 	}
 	rs := vector.MustTCols[types.Timestamp](vec)
 	for i, str := range vs {
-		data, err := types.ParseTimestamp(proc.SessionInfo.TimeZone, str, rv.Typ.Precision)
+		data, err := types.ParseTimestamp(t, str, rv.Typ.Precision)
 		if err != nil {
 			return nil, err
 		}
@@ -1365,11 +1378,17 @@ func CastDecimal64AsDecimal128(lv, rv *vector.Vector, proc *process.Process) (*v
 
 // castTimeStampAsDatetime : Cast converts timestamp to datetime decimal128
 func castTimeStampAsDatetime(lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	var t *time.Location
+	if proc == nil {
+		t = time.Local
+	} else {
+		t = proc.SessionInfo.TimeZone
+	}
 	lvs := vector.MustTCols[types.Timestamp](lv)
 	if lv.IsScalar() {
 		vec := proc.AllocScalarVector(rv.Typ)
 		rs := make([]types.Datetime, 1)
-		if _, err := binary.TimestampToDatetime(proc.SessionInfo.TimeZone, lvs, rs); err != nil {
+		if _, err := binary.TimestampToDatetime(t, lvs, rs); err != nil {
 			return nil, err
 		}
 		nulls.Set(vec.Nsp, lv.Nsp)
@@ -1382,7 +1401,7 @@ func castTimeStampAsDatetime(lv, rv *vector.Vector, proc *process.Process) (*vec
 		return nil, err
 	}
 	rs := vector.MustTCols[types.Datetime](vec)
-	if _, err := binary.TimestampToDatetime(proc.SessionInfo.TimeZone, lvs, rs); err != nil {
+	if _, err := binary.TimestampToDatetime(t, lvs, rs); err != nil {
 		return nil, err
 	}
 	return vec, nil
@@ -1390,6 +1409,12 @@ func castTimeStampAsDatetime(lv, rv *vector.Vector, proc *process.Process) (*vec
 
 // castTimestampAsVarchar : Cast converts timestamp to varchar
 func castTimestampAsVarchar(lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	var t *time.Location
+	if proc == nil {
+		t = time.Local
+	} else {
+		t = proc.SessionInfo.TimeZone
+	}
 	lvs := vector.MustTCols[types.Timestamp](lv)
 	resultType := rv.Typ
 	precision := lv.Typ.Precision
@@ -1398,14 +1423,14 @@ func castTimestampAsVarchar(lv, rv *vector.Vector, proc *process.Process) (*vect
 			return proc.AllocConstNullVector(resultType, lv.Length()), nil
 		}
 		rs := make([]string, 1)
-		if _, err := binary.TimestampToVarchar(proc.SessionInfo.TimeZone, lvs, rs, precision); err != nil {
+		if _, err := binary.TimestampToVarchar(t, lvs, rs, precision); err != nil {
 			return nil, err
 		}
 		return vector.NewConstString(resultType, lv.Length(), rs[0]), nil
 	}
 
 	rs := make([]string, len(lvs))
-	if _, err := binary.TimestampToVarchar(proc.SessionInfo.TimeZone, lvs, rs, precision); err != nil {
+	if _, err := binary.TimestampToVarchar(t, lvs, rs, precision); err != nil {
 		return nil, err
 	}
 	return vector.NewWithStrings(resultType, rs, lv.Nsp, proc.Mp()), nil
@@ -1543,13 +1568,19 @@ func CastStringAsDecimal128(lv, rv *vector.Vector, proc *process.Process) (*vect
 
 // CastDatetimeAsTimeStamp : Cast converts datetime to timestamp
 func CastDatetimeAsTimeStamp(lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	var t *time.Location
+	if proc == nil {
+		t = time.Local
+	} else {
+		t = proc.SessionInfo.TimeZone
+	}
 	lvs := vector.MustTCols[types.Datetime](lv)
 	if lv.IsScalar() {
 		if lv.IsScalarNull() {
 			return proc.AllocConstNullVector(rv.Typ, lv.Length()), nil
 		}
 		rs := make([]types.Timestamp, 1)
-		timestamp.DatetimeToTimestamp(proc.SessionInfo.TimeZone, lvs, lv.Nsp, rs)
+		timestamp.DatetimeToTimestamp(t, lvs, lv.Nsp, rs)
 		return vector.NewConstFixed(rv.Typ, lv.Length(), rs[0]), nil
 	}
 
@@ -1558,19 +1589,25 @@ func CastDatetimeAsTimeStamp(lv, rv *vector.Vector, proc *process.Process) (*vec
 		return nil, err
 	}
 	rs := vector.MustTCols[types.Timestamp](vec)
-	timestamp.DatetimeToTimestamp(proc.SessionInfo.TimeZone, lvs, lv.Nsp, rs)
+	timestamp.DatetimeToTimestamp(t, lvs, lv.Nsp, rs)
 	return vec, nil
 }
 
 // CastDateAsTimeStamp : Cast converts date to timestamp
 func CastDateAsTimeStamp(lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	var t *time.Location
+	if proc == nil {
+		t = time.Local
+	} else {
+		t = proc.SessionInfo.TimeZone
+	}
 	lvs := vector.MustTCols[types.Date](lv)
 	if lv.IsScalar() {
 		if lv.IsScalarNull() {
 			return proc.AllocConstNullVector(rv.Typ, lv.Length()), nil
 		}
 		rs := make([]types.Timestamp, 1)
-		timestamp.DateToTimestamp(proc.SessionInfo.TimeZone, lvs, lv.Nsp, rs)
+		timestamp.DateToTimestamp(t, lvs, lv.Nsp, rs)
 		return vector.NewConstFixed(rv.Typ, lv.Length(), rs[0]), nil
 	}
 
@@ -1579,7 +1616,7 @@ func CastDateAsTimeStamp(lv, rv *vector.Vector, proc *process.Process) (*vector.
 		return nil, err
 	}
 	rs := vector.MustTCols[types.Timestamp](vec)
-	timestamp.DateToTimestamp(proc.SessionInfo.TimeZone, lvs, lv.Nsp, rs)
+	timestamp.DateToTimestamp(t, lvs, lv.Nsp, rs)
 	return vec, nil
 }
 

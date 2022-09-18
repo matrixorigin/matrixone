@@ -86,8 +86,15 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 			continue
 		}
 		nullOrNot := "NOT NULL"
-		if col.Default != nil && col.Default.NullAbility {
-			nullOrNot = "DEFAULT NULL"
+		if col.Default != nil {
+			if col.Default.Expr != nil {
+				nullOrNot = "DEFAULT " + col.Default.OriginString
+			} else if col.Default.NullAbility {
+				nullOrNot = "DEFAULT NULL"
+			}
+		}
+		if col.AutoIncrement {
+			nullOrNot = "NOT NULL AUTO_INCREMENT"
 		}
 
 		var hasAttrComment string

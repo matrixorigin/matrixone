@@ -323,6 +323,11 @@ func Test_GetBatchData(t *testing.T) {
 		param := &ExternalParam{
 			Attrs: atrrs,
 			Cols:  cols,
+			extern: &tree.ExternParam{
+				Tail: &tree.TailParameter{
+					Fields: &tree.Fields{},
+				},
+			},
 		}
 		param.Name2ColIndex = make(map[string]int32)
 		for i := 0; i < len(atrrs); i++ {

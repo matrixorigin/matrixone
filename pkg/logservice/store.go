@@ -34,6 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/hakeeper"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper/bootstrap"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper/checkers"
+	"github.com/matrixorigin/matrixone/pkg/hakeeper/task"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 )
@@ -131,6 +132,8 @@ type store struct {
 	bootstrapCheckCycles uint64
 	bootstrapMgr         *bootstrap.Manager
 
+	taskScheduler hakeeper.TaskScheduler
+
 	mu struct {
 		sync.Mutex
 		truncateCh      chan struct{}
@@ -145,12 +148,13 @@ func newLogStore(cfg Config) (*store, error) {
 		return nil, err
 	}
 	hakeeperConfig := cfg.GetHAKeeperConfig()
-	plog.Infof("HAKeeper LogStoreTimeout: %s, DNStoreTimeout: %s",
-		hakeeperConfig.LogStoreTimeout, hakeeperConfig.DNStoreTimeout)
+	plog.Infof("HAKeeper LogStoreTimeout: %s, DNStoreTimeout: %s, CNStoreTimeout: %s",
+		hakeeperConfig.LogStoreTimeout, hakeeperConfig.DNStoreTimeout, hakeeperConfig.CNStoreTimeout)
 	ls := &store{
 		cfg:           cfg,
 		nh:            nh,
 		checker:       checkers.NewCoordinator(hakeeperConfig),
+		taskScheduler: task.NewTaskScheduler(cfg.TaskService, hakeeperConfig),
 		alloc:         newIDAllocator(),
 		stopper:       stopper.NewStopper("log-store"),
 		tickerStopper: stopper.NewStopper("hakeeper-ticker"),

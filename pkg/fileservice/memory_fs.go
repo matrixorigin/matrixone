@@ -78,7 +78,7 @@ func (m *MemoryFS) List(ctx context.Context, dirPath string) (entries []DirEntry
 			entries = append(entries, DirEntry{
 				IsDir: isDir,
 				Name:  name,
-				Size:  len(item.Data),
+				Size:  int64(len(item.Data)),
 			})
 		}
 	}
@@ -173,9 +173,9 @@ func (m *MemoryFS) Read(ctx context.Context, vector *IOVector) error {
 			return ErrEmptyRange
 		}
 		if entry.Size < 0 {
-			entry.Size = len(fsEntry.Data) - entry.Offset
+			entry.Size = int64(len(fsEntry.Data)) - entry.Offset
 		}
-		if entry.Size > len(fsEntry.Data) {
+		if entry.Size > int64(len(fsEntry.Data)) {
 			return ErrUnexpectedEOF
 		}
 		data := fsEntry.Data[entry.Offset : entry.Offset+entry.Size]
@@ -196,7 +196,7 @@ func (m *MemoryFS) Read(ctx context.Context, vector *IOVector) error {
 		}
 
 		if setData {
-			if len(entry.Data) < entry.Size {
+			if int64(len(entry.Data)) < entry.Size {
 				entry.Data = data
 			} else {
 				copy(entry.Data, data)

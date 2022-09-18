@@ -29,7 +29,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/util/errors"
+	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 	"github.com/matrixorigin/matrixone/pkg/util/export"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 )
@@ -55,7 +55,7 @@ func Init(ctx context.Context, opts ...TracerProviderOption) (context.Context, e
 	// init tool dependence
 	logutil.SetLogReporter(&logutil.TraceReporter{ReportLog: ReportLog, ReportZap: ReportZap, LevelSignal: SetLogLevel, ContextField: ContextField})
 	logutil.SpanFieldKey.Store(SpanFieldKey)
-	errors.SetErrorReporter(HandleError)
+	errutil.SetErrorReporter(HandleError)
 	export.SetDefaultContextFunc(DefaultContext)
 
 	// init TraceProvider

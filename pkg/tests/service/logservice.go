@@ -170,7 +170,7 @@ func buildLogConfig(
 	cfg.HAKeeperConfig.LogStoreTimeout.Duration = opt.hakeeper.logStoreTimeout
 	cfg.HAKeeperConfig.DNStoreTimeout.Duration = opt.hakeeper.dnStoreTimeout
 
-	// we must invoke Fill in order to setting default configruation value.
+	// we must invoke Fill in order to set default configuration value.
 	cfg.Fill()
 
 	return cfg
@@ -201,7 +201,7 @@ func (c *testCluster) startHAKeeperReplica() error {
 		return uint64(index + 1)
 	}
 
-	// construct ppers
+	// construct peers
 	peers := make(map[uint64]dragonboat.Target)
 	for i, logsvc := range selected {
 		replicaID := indexToReplicaID(i)

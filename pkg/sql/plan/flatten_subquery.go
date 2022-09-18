@@ -22,6 +22,24 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/errors"
 )
 
+var (
+	constTrue = &plan.Expr{
+		Expr: &plan.Expr_C{
+			C: &plan.Const{
+				Isnull: false,
+				Value: &plan.Const_Bval{
+					Bval: true,
+				},
+			},
+		},
+		Typ: &plan.Type{
+			Id:       int32(types.T_bool),
+			Nullable: false,
+			Size:     1,
+		},
+	}
+)
+
 func (builder *QueryBuilder) flattenSubqueries(nodeID int32, expr *plan.Expr, ctx *BindContext) (int32, *plan.Expr, error) {
 	var err error
 
@@ -42,7 +60,7 @@ func (builder *QueryBuilder) flattenSubqueries(nodeID int32, expr *plan.Expr, ct
 }
 
 func (builder *QueryBuilder) flattenSubquery(nodeID int32, subquery *plan.SubqueryRef, ctx *BindContext) (int32, *plan.Expr, error) {
-	// TODO: use SINGLE JOIN for scalar subquery and MARK JOIN for quantified subquery
+	// TODO: use MARK JOIN for quantified subquery
 
 	subID := subquery.NodeId
 	subCtx := builder.ctxByNode[subID]
@@ -58,27 +76,11 @@ func (builder *QueryBuilder) flattenSubquery(nodeID int32, subquery *plan.Subque
 		return 0, nil, errors.New("", fmt.Sprintf("correlated columns in %s subquery deeper than 1 level will be supported in future version", subquery.Typ.String()))
 	}
 
-	alwaysTrue := &plan.Expr{
-		Expr: &plan.Expr_C{
-			C: &plan.Const{
-				Isnull: false,
-				Value: &plan.Const_Bval{
-					Bval: true,
-				},
-			},
-		},
-		Typ: &plan.Type{
-			Id:       int32(types.T_bool),
-			Nullable: false,
-			Size:     1,
-		},
-	}
-
 	switch subquery.Typ {
 	case plan.SubqueryRef_SCALAR:
 		// Uncorrelated subquery
 		if len(joinPreds) == 0 {
-			joinPreds = append(joinPreds, alwaysTrue)
+			joinPreds = append(joinPreds, constTrue)
 		}
 
 		joinType := plan.Node_SINGLE
@@ -114,7 +116,7 @@ func (builder *QueryBuilder) flattenSubquery(nodeID int32, subquery *plan.Subque
 	case plan.SubqueryRef_EXISTS:
 		// Uncorrelated subquery
 		if len(joinPreds) == 0 {
-			joinPreds = append(joinPreds, alwaysTrue)
+			joinPreds = append(joinPreds, constTrue)
 		}
 
 		nodeID = builder.appendNode(&plan.Node{
@@ -129,7 +131,7 @@ func (builder *QueryBuilder) flattenSubquery(nodeID int32, subquery *plan.Subque
 	case plan.SubqueryRef_NOT_EXISTS:
 		// Uncorrelated subquery
 		if len(joinPreds) == 0 {
-			joinPreds = append(joinPreds, alwaysTrue)
+			joinPreds = append(joinPreds, constTrue)
 		}
 
 		nodeID = builder.appendNode(&plan.Node{
@@ -428,6 +430,10 @@ func (builder *QueryBuilder) pullupCorrelatedPredicates(nodeID int32, ctx *BindC
 		var newFilterList []*plan.Expr
 		for _, cond := range node.FilterList {
 			if hasCorrCol(cond) {
+				//cond, err = bindFuncExprImplByPlanExpr("is", []*plan.Expr{cond, DeepCopyExpr(constTrue)})
+				if err != nil {
+					return 0, nil, err
+				}
 				preds = append(preds, cond)
 			} else {
 				newFilterList = append(newFilterList, cond)
