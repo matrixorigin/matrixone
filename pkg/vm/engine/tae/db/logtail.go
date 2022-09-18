@@ -21,8 +21,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnimpl"
 
 	"github.com/tidwall/btree"
 )
@@ -295,14 +297,14 @@ func (c *LogtailCollector) collectUserTbl() (err error) {
 		if seg, err = tbl.GetSegmentByID(dirtySeg.Sig); err != nil {
 			return err
 		}
-		if err = c.visitor.visitSeg(seg); err != nil {
+		if err = c.visitor.VisitSeg(seg); err != nil {
 			return err
 		}
 		for _, blkid := range dirtySeg.Blks {
 			if blk, err = seg.GetBlockEntryByID(blkid); err != nil {
 				return err
 			}
-			if err = c.visitor.visitBlk(blk); err != nil {
+			if err = c.visitor.VisitBlk(blk); err != nil {
 				return err
 			}
 		}
@@ -316,7 +318,7 @@ func (c *LogtailCollector) collectCatalogDB() error {
 	}
 	dbIt := c.catalog.MakeDBIt(true)
 	for dbIt.Valid() {
-		if err := c.visitor.visitDB(dbIt.Get().GetPayload()); err != nil {
+		if err := c.visitor.VisitDB(dbIt.Get().GetPayload()); err != nil {
 			return err
 		}
 		dbIt.Next()
@@ -333,7 +335,7 @@ func (c *LogtailCollector) collectCatalogTbl() error {
 		db := dbIt.Get().GetPayload()
 		tblIt := db.MakeTableIt(true)
 		for tblIt.Valid() {
-			if err := c.visitor.visitTbl(tblIt.Get().GetPayload()); err != nil {
+			if err := c.visitor.VisitTbl(tblIt.Get().GetPayload()); err != nil {
 				return err
 			}
 			tblIt.Next()
@@ -343,37 +345,245 @@ func (c *LogtailCollector) collectCatalogTbl() error {
 	return nil
 }
 
+const (
+	commitTsAttr = "commit_ts"
+	abortedAttr  = "aborted"
+)
+
+type RespBuilder interface {
+	EntryVisitor
+	BuildResp() api.SyncLogTailResp
+}
+
 type EntryVisitor interface {
-	visitDB(entry *catalog.DBEntry) error
-	visitTbl(entry *catalog.TableEntry) error
-	visitSeg(entry *catalog.SegmentEntry) error
-	visitBlk(entry *catalog.BlockEntry) error
+	VisitDB(entry *catalog.DBEntry) error
+	VisitTbl(entry *catalog.TableEntry) error
+	VisitSeg(entry *catalog.SegmentEntry) error
+	VisitBlk(entry *catalog.BlockEntry) error
 }
 
-// LogtailRespBuilder knows how to make api-entry from catalog entry
+type noopEntryVisitor struct{}
+
+func (v *noopEntryVisitor) VisitDB(entry *catalog.DBEntry) error       { return nil }
+func (v *noopEntryVisitor) VisitTbl(entry *catalog.TableEntry) error   { return nil }
+func (v *noopEntryVisitor) VisitSeg(entry *catalog.SegmentEntry) error { return nil }
+func (v *noopEntryVisitor) VisitBlk(entry *catalog.BlockEntry) error   { return nil }
+
+// CatalogLogtailRespBuilder knows how to make api-entry from catalog entry
 // impl EntryVisitor interface, driven by LogtailCollector
-type LogtailRespBuilder struct {
+type CatalogLogtailRespBuilder struct {
+	noopEntryVisitor
+	mode       CollectMode
+	start, end types.TS
 	checkpoint string
-	entries    []*api.Entry
+	insSchema  *catalog.Schema
+	delSchema  *catalog.Schema
+	insBatch   *containers.Batch
+	delBatch   *containers.Batch
 }
 
-func NewLogtailRespBuilder(checkpoint string) *LogtailRespBuilder {
-	return &LogtailRespBuilder{
-		checkpoint: checkpoint,
-		entries:    make([]*api.Entry, 0),
+func NewCatalogLogtailRespBuilder(mode CollectMode, ckp string, start, end types.TS) *CatalogLogtailRespBuilder {
+	b := &CatalogLogtailRespBuilder{
+		start:      start,
+		end:        end,
+		checkpoint: ckp,
 	}
+	if mode == CollectModeDB {
+		b.insSchema = catalog.SystemDBSchema
+		b.delSchema = catalog.SystemDBSchema
+	} else {
+		b.insSchema = catalog.SystemTableSchema
+		b.delSchema = catalog.SystemTableSchema
+	}
+
+	b.insBatch = makeBatchFromSchema(b.insSchema)
+	b.delBatch = makeBatchFromSchema(b.delSchema)
+	return b
 }
 
-func (c *LogtailRespBuilder) visitDB(entry *catalog.DBEntry) error       { return nil }
-func (c *LogtailRespBuilder) visitTbl(entry *catalog.TableEntry) error   { return nil }
-func (c *LogtailRespBuilder) visitSeg(entry *catalog.SegmentEntry) error { return nil }
-func (c *LogtailRespBuilder) visitBlk(entry *catalog.BlockEntry) error   { return nil }
+func (b *CatalogLogtailRespBuilder) VisitDB(entry *catalog.DBEntry) error {
+	mvccNodes := entry.ClonePreparedInRange(b.start, b.end)
+	var commitTS types.TS
+	var abroted bool
+	for _, node := range mvccNodes {
+		if txn := node.GetTxn(); txn != nil {
+			state := txn.GetTxnState(true)
+			if state != txnif.TxnStateCommitted {
+				abroted = true
+			}
+		}
+		commitTS = node.GetEnd()
+		catalogEntry2Batch(b.insBatch, entry, catalog.SystemDBSchema, txnimpl.FillDBRow, commitTS, abroted)
+	}
+	return nil
+}
 
-func (c *LogtailRespBuilder) BuildResp() api.SyncLogTailResp {
+func (b *CatalogLogtailRespBuilder) VisitTbl(entry *catalog.TableEntry) error {
+	mvccNodes := entry.ClonePreparedInRange(b.start, b.end)
+	var commitTS types.TS
+	var abroted bool
+	var dstBatch *containers.Batch
+	for _, node := range mvccNodes {
+		// if txn := node.GetTxn(); txn != nil {
+		// 	state := txn.GetTxnState(true)
+		// 	if state != txnif.TxnStateCommitted {
+		// 		abroted = true
+		// 	}
+		// }
+		// Wait and get state and check is dropped
+		commitTS = node.GetEnd()
+		if true {
+			dstBatch = b.insBatch
+		} else {
+			dstBatch = b.delBatch
+		}
+		catalogEntry2Batch(dstBatch, entry, catalog.SystemDBSchema, txnimpl.FillTableRow, commitTS, abroted)
+	}
+	return nil
+}
+
+func (b *CatalogLogtailRespBuilder) BuildResp() api.SyncLogTailResp {
+	entries := make([]*api.Entry, 0)
+	var tblID uint64
+	var tblName string
+	if b.mode == CollectModeDB {
+		tblID = catalog.SystemTable_DB_ID
+		tblName = catalog.SystemTable_DB_Name
+	} else {
+		tblID = catalog.SystemTable_Table_ID
+		tblName = catalog.SystemTable_Table_Name
+	}
+	if b.insBatch.Vecs[0].Length() > 0 {
+		insEntry := &api.Entry{
+			EntryType:    api.Entry_Insert,
+			TableId:      tblID,
+			TableName:    tblName,
+			DatabaseId:   catalog.SystemDBID,
+			DatabaseName: catalog.SystemDBName,
+			// Bat:       ToProtoBatch(b.insBatch),
+		}
+		entries = append(entries, insEntry)
+	}
+	if b.delBatch.Vecs[0].Length() > 0 {
+		delEntry := &api.Entry{
+			EntryType:    api.Entry_Delete,
+			TableId:      tblID,
+			TableName:    tblName,
+			DatabaseId:   catalog.SystemDBID,
+			DatabaseName: catalog.SystemDBName,
+			// Bat:       ToProtoBatch(b.delBatch),
+		}
+		entries = append(entries, delEntry)
+	}
 	return api.SyncLogTailResp{
-		CkpLocation: c.checkpoint,
-		Commands:    c.entries,
+		CkpLocation: b.checkpoint,
+		Commands:    entries,
 	}
+}
+
+func catalogEntry2Batch[T *catalog.DBEntry | *catalog.TableEntry](
+	dstBatch *containers.Batch,
+	e T,
+	schema *catalog.Schema,
+	fillDataRow func(e T, attr string, col containers.Vector),
+	commitTs types.TS,
+	aborted bool,
+) {
+	size := len(dstBatch.Attrs)
+	for i, attr := range dstBatch.Attrs[:size-2] {
+		fillDataRow(e, attr, dstBatch.Vecs[i])
+	}
+	dstBatch.Vecs[size-2].Append(commitTs)
+	dstBatch.Vecs[size-1].Append(aborted)
+}
+
+func makeBatchFromSchema(schema *catalog.Schema) *containers.Batch {
+	attrs := schema.Attrs()
+	attrs = append(attrs, commitTsAttr, abortedAttr)
+	typs := schema.Types()
+	nullables := schema.Nullables()
+	vecs := make([]containers.Vector, len(typs))
+	for i, ty := range typs {
+		v := containers.MakeVector(ty, nullables[i])
+		vecs[i] = v
+	}
+	vts := containers.MakeVector(types.T_TS.ToType(), true)
+	vaborted := containers.MakeVector(types.T_bool.ToType(), true)
+	vecs = append(vecs, vts, vaborted)
+	return &containers.Batch{
+		Attrs: attrs,
+		Vecs:  vecs,
+	}
+}
+
+type TableLogtailRespBuilder struct {
+	noopEntryVisitor
+	start, end    types.TS
+	did, tid      uint64
+	dname, tname  string
+	checkpoint    string
+	metaSchema    *catalog.Schema
+	blkMetaBatch  *containers.Batch
+	dataInsSchema *catalog.Schema
+	dataDelSchema *catalog.Schema
+	entris        []*api.Entry
+}
+
+func NewTableLogtailRespBuilder(ckp string, start, end types.TS, tbl *catalog.TableEntry) *TableLogtailRespBuilder {
+	b := &TableLogtailRespBuilder{
+		start:      start,
+		end:        end,
+		checkpoint: ckp,
+	}
+
+	b.dataInsSchema = tbl.GetSchema()
+	b.did = tbl.GetDB().GetID()
+	b.tid = tbl.ID
+	b.dname = tbl.GetDB().GetName()
+	b.tname = b.dataInsSchema.Name
+
+	delSchema := catalog.NewEmptySchema("del")
+	delSchema.AppendCol("row_id", types.T_Rowid.ToType())
+	b.dataDelSchema = delSchema
+
+	metaSchema := catalog.NewEmptySchema("meta")
+	metaSchema.AppendCol("block_id", types.T_uint64.ToType())
+	metaSchema.AppendCol("entry_state", types.T_int8.ToType())
+	metaSchema.AppendCol("create_at", types.T_TS.ToType())
+	metaSchema.AppendCol("delete_at", types.T_TS.ToType())
+	metaSchema.AppendCol("meta_loc", types.T_varchar.ToType())
+	metaSchema.AppendCol("delta_loc", types.T_varchar.ToType())
+	b.metaSchema = metaSchema
+
+	return b
+}
+
+func (b *TableLogtailRespBuilder) visitBlkMeta(e *catalog.BlockEntry) {
+	mvccNodes := e.ClonePreparedInRange(b.start, b.end)
+	// var commitTS types.TS
+	// var abroted bool
+	for _, node := range mvccNodes {
+		// if txn := node.GetTxn(); txn != nil {
+		// 	state := txn.GetTxnState(true)
+		// 	if state != txnif.TxnStateCommitted {
+		// 		abroted = true
+		// 	}
+		// }
+		// Wait and get state and check is dropped
+		_ = node.GetEnd()
+		// append data to meta batch
+	}
+}
+
+func (b *TableLogtailRespBuilder) visitBlkData(e *catalog.BlockEntry) {
+	_ = e.GetBlockData()
+
+}
+
+func (b *TableLogtailRespBuilder) VisitBlk(entry *catalog.BlockEntry) error {
+	b.visitBlkMeta(entry)
+	// return b.
+	return nil
 }
 
 func sampleHandler(db *DB, req api.SyncLogTailReq) (api.SyncLogTailResp, error) {
@@ -386,17 +596,25 @@ func sampleHandler(db *DB, req api.SyncLogTailReq) (api.SyncLogTailResp, error) 
 
 	// get a collector with a read only view for txns
 	collector := db.LogtailMgr.GetLogtailCollector(start, end, did, tid)
-	respBuilder := NewLogtailRespBuilder(verifiedCheckpoint)
+
 	mode := CollectModeSegAndBlk
 	if tid == catalog.SystemTable_DB_ID {
 		mode = CollectModeDB
 	} else if tid == catalog.SystemTable_Table_ID {
 		mode = CollectModeTbl
 	}
+
+	var respBuilder RespBuilder
+
+	if mode == CollectModeDB || mode == CollectModeTbl {
+		respBuilder = NewCatalogLogtailRespBuilder(mode, verifiedCheckpoint, start, end)
+	} else {
+		respBuilder = nil
+	}
+
 	collector.BindCollectEnv(mode, db.Catalog, respBuilder)
 	if err := collector.Collect(); err != nil {
 		return api.SyncLogTailResp{}, err
 	}
 	return respBuilder.BuildResp(), nil
-
 }

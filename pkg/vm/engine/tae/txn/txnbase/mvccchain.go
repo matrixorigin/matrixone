@@ -349,3 +349,21 @@ func (be *MVCCChain) CloneCommittedInRange(start, end types.TS) (ret *MVCCChain)
 	}, true)
 	return
 }
+
+func (be *MVCCChain) ClonePreparedInRange(start, end types.TS) (ret []MVCCNode) {
+	be.MVCC.Loop(func(n *common.GenericDLNode[MVCCNode]) bool {
+		un := n.GetPayload()
+		// TODO replace CommmittedIn with PreparedIn
+		in, before := un.CommittedIn(start, end)
+		if in {
+			if ret == nil {
+				ret = make([]MVCCNode, 0)
+			}
+			ret = append(ret, un.CloneAll())
+		} else if !before {
+			return false
+		}
+		return true
+	}, true)
+	return
+}
