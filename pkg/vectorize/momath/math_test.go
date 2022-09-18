@@ -141,3 +141,17 @@ func TestAtan(t *testing.T) {
 	cols := vector.MustTCols[float64](cv)
 	require.Equal(t, []float64{0}, cols)
 }
+
+func TestAtanWithTwoArg(t *testing.T){
+	firstCol:= []float64{-1, 1, 1, 1, 1.0, 1.0}
+	secondCol := []float64{1, 0, -1, 1, -1.0, 1.0}
+	resultCol := make([]float64, 6)
+	resultVector := testutil.MakeFloat64Vector(resultCol, nil)
+	err := AtanWithTwoArg(firstCol, secondCol, resultVector);
+	if err != nil {
+		panic(err)
+	}
+	cols := vector.MustTCols[float64](resultVector)
+	require.Equal(t, []float64{-0.7853981633974483, 0, -0.7853981633974483, 0.7853981633974483, -0.7853981633974483, 0.7853981633974483}, cols)
+	
+}

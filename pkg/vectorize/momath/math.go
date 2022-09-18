@@ -20,6 +20,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"golang.org/x/exp/constraints"
 )
 
 func Acos(arg, result *vector.Vector) error {
@@ -48,6 +49,23 @@ func Atan(arg, result *vector.Vector) error {
 		if !nulls.Contains(arg.Nsp, (uint64)(i)) {
 			resCol[i] = math.Atan(v)
 		}
+	}
+	return nil
+}
+func AtanWithOneArg[T constraints.Unsigned | constraints.Signed | constraints.Float](firstArg []T,  result *vector.Vector) error {
+	resCol := vector.MustTCols[float64](result)
+	for i, v := range firstArg {
+		resCol[i] = math.Atan(float64(v))
+	}
+	return nil
+}
+func AtanWithTwoArg[T constraints.Unsigned | constraints.Signed | constraints.Float](firstArg,secondArg []T,  result *vector.Vector) error {
+	resCol := vector.MustTCols[float64](result)
+	for i, v := range firstArg {
+		if float64(v) == float64(0){
+			return moerr.New(moerr.INVALID_ARGUMENT, "Atan function first input cannot be 0")
+		}
+		resCol[i] = math.Atan(float64(secondArg[i]) / float64(v))
 	}
 	return nil
 }
