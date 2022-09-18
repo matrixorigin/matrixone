@@ -3389,8 +3389,8 @@ func Test_doGrantRole(t *testing.T) {
 		bh.sql2result[sql] = mrs
 
 		//loop on from ... to
-		for fromId, _ := range stmt.Roles {
-			for toId, _ := range stmt.Users {
+		for fromId := range stmt.Roles {
+			for toId := range stmt.Users {
 				toId = toId + len(stmt.Roles)
 				sql = getSqlForCheckRoleGrant(int64(fromId), int64(toId))
 				mrs = newMrsForCheckRoleGrant([][]interface{}{})
@@ -3462,8 +3462,8 @@ func Test_doGrantRole(t *testing.T) {
 		bh.sql2result[sql] = mrs
 
 		//loop on from ... to
-		for fromId, _ := range stmt.Roles {
-			for toId, _ := range stmt.Users {
+		for fromId := range stmt.Roles {
+			for toId := range stmt.Users {
 				sql = getSqlForCheckRoleGrant(int64(fromId), int64(toId))
 				mrs = newMrsForCheckRoleGrant([][]interface{}{})
 				bh.sql2result[sql] = mrs
@@ -3552,8 +3552,8 @@ func Test_doGrantRole(t *testing.T) {
 		bh.sql2result[sql] = mrs
 
 		//loop on from ... to
-		for fromId, _ := range stmt.Roles {
-			for toId, _ := range stmt.Users {
+		for fromId := range stmt.Roles {
+			for toId := range stmt.Users {
 				if toId < 2 { //roles
 					toId = toId + len(stmt.Roles)
 					sql = getSqlForCheckRoleGrant(int64(fromId), int64(toId))
@@ -3658,8 +3658,8 @@ func Test_doGrantRole(t *testing.T) {
 		bh.sql2result[sql] = mrs
 
 		//loop on from ... to
-		for fromId, _ := range stmt.Roles {
-			for toId, _ := range stmt.Users {
+		for fromId := range stmt.Roles {
+			for toId := range stmt.Users {
 				if toId < 2 { //roles
 					toId = toId + len(stmt.Roles)
 					sql = getSqlForCheckRoleGrant(int64(fromId), int64(toId))
@@ -3764,8 +3764,8 @@ func Test_doGrantRole(t *testing.T) {
 		bh.sql2result[sql] = mrs
 
 		//loop on from ... to
-		for fromId, _ := range stmt.Roles {
-			for toId, _ := range stmt.Users {
+		for fromId := range stmt.Roles {
+			for toId := range stmt.Users {
 				if toId < 2 { //roles
 					toId = toId + len(stmt.Roles)
 					sql = getSqlForCheckRoleGrant(int64(fromId), int64(toId))
@@ -3847,8 +3847,8 @@ func Test_doGrantRole(t *testing.T) {
 		bh.sql2result[sql] = mrs
 
 		//loop on from ... to
-		for fromId, _ := range stmt.Roles {
-			for toId, _ := range stmt.Users {
+		for fromId := range stmt.Roles {
+			for toId := range stmt.Users {
 				toId = toId + len(stmt.Roles)
 				sql = getSqlForCheckRoleGrant(int64(fromId), int64(toId))
 				mrs = newMrsForCheckRoleGrant([][]interface{}{})
@@ -3940,8 +3940,8 @@ func Test_doGrantRole(t *testing.T) {
 		bh.sql2result[sql] = mrs
 
 		//loop on from ... to
-		for fromId, _ := range stmt.Roles {
-			for toId, _ := range stmt.Users {
+		for fromId := range stmt.Roles {
+			for toId := range stmt.Users {
 				if toId < 2 { //roles
 					toId = toId + len(stmt.Roles)
 					sql = getSqlForCheckRoleGrant(int64(fromId), int64(toId))
@@ -4025,8 +4025,8 @@ func Test_doGrantRole(t *testing.T) {
 		bh.sql2result[sql] = mrs
 
 		//loop on from ... to
-		for fromId, _ := range stmt.Roles {
-			for toId, _ := range stmt.Users {
+		for fromId := range stmt.Roles {
+			for toId := range stmt.Users {
 				toId = toId + len(stmt.Roles)
 				sql = getSqlForCheckRoleGrant(int64(fromId), int64(toId))
 				mrs = newMrsForCheckRoleGrant([][]interface{}{})
@@ -4096,8 +4096,8 @@ func Test_doGrantRole(t *testing.T) {
 		bh.sql2result[sql] = mrs
 
 		//loop on from ... to
-		for fromId, _ := range stmt.Roles {
-			for toId, _ := range stmt.Users {
+		for fromId := range stmt.Roles {
+			for toId := range stmt.Users {
 				sql = getSqlForCheckRoleGrant(int64(fromId), int64(toId))
 				mrs = newMrsForCheckRoleGrant([][]interface{}{})
 				bh.sql2result[sql] = mrs
@@ -4164,8 +4164,8 @@ func Test_doRevokeRole(t *testing.T) {
 		}
 
 		//loop on from ... to
-		for fromId, _ := range stmt.Roles {
-			for toId, _ := range stmt.Users {
+		for fromId := range stmt.Roles {
+			for toId := range stmt.Users {
 				toId = toId + len(stmt.Roles)
 				sql := getSqlForDeleteRoleGrant(int64(fromId), int64(toId))
 				bh.sql2result[sql] = nil
@@ -4231,8 +4231,8 @@ func Test_doRevokeRole(t *testing.T) {
 		}
 
 		//loop on from ... to
-		for fromId, _ := range stmt.Roles {
-			for toId, _ := range stmt.Users {
+		for fromId := range stmt.Roles {
+			for toId := range stmt.Users {
 				toId = toId + len(stmt.Roles)
 				sql := getSqlForDeleteRoleGrant(int64(fromId), int64(toId))
 				bh.sql2result[sql] = nil
@@ -4298,8 +4298,8 @@ func Test_doRevokeRole(t *testing.T) {
 		}
 
 		//loop on from ... to
-		for fromId, _ := range stmt.Roles {
-			for toId, _ := range stmt.Users {
+		for fromId := range stmt.Roles {
+			for toId := range stmt.Users {
 				toId = toId + len(stmt.Roles)
 				sql := getSqlForDeleteRoleGrant(int64(fromId), int64(toId))
 				bh.sql2result[sql] = nil
@@ -4352,10 +4352,10 @@ func Test_doRevokeRole(t *testing.T) {
 
 		//init to roles
 		for i, user := range stmt.Users {
-			sql := getSqlForRoleIdOfRole(user.Username)
-			mrs = newMrsForRoleIdOfRole([][]interface{}{})
+			//sql := getSqlForRoleIdOfRole(user.Username)
+			//mrs = newMrsForRoleIdOfRole([][]interface{}{})
 
-			sql = getSqlForPasswordOfUser(user.Username)
+			sql := getSqlForPasswordOfUser(user.Username)
 			//miss u2
 			if i == 1 {
 				mrs = newMrsForPasswordOfUser([][]interface{}{})
@@ -4369,8 +4369,8 @@ func Test_doRevokeRole(t *testing.T) {
 		}
 
 		//loop on from ... to
-		for fromId, _ := range stmt.Roles {
-			for toId, _ := range stmt.Users {
+		for fromId := range stmt.Roles {
+			for toId := range stmt.Users {
 				toId = toId + len(stmt.Roles)
 				sql := getSqlForDeleteUserGrant(int64(fromId), int64(toId))
 				bh.sql2result[sql] = nil
@@ -4435,8 +4435,8 @@ func Test_doRevokeRole(t *testing.T) {
 		}
 
 		//loop on from ... to
-		for fromId, _ := range stmt.Roles {
-			for toId, _ := range stmt.Users {
+		for fromId := range stmt.Roles {
+			for toId := range stmt.Users {
 				toId = toId + len(stmt.Roles)
 				sql := getSqlForDeleteRoleGrant(int64(fromId), int64(toId))
 				bh.sql2result[sql] = nil

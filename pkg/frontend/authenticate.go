@@ -906,7 +906,7 @@ func getSqlForDeleteRoleGrant(grantedId, granteeId int64) string {
 }
 
 func getSqlForGetAllStuffRoleGrantFormat() string {
-	return fmt.Sprintf(getAllStuffRoleGrantFormat)
+	return getAllStuffRoleGrantFormat
 }
 
 func getSqlForInheritedRoleIdOfRoleId(roleId int64) string {
@@ -1195,13 +1195,11 @@ func verifyRoleFunc(ctx context.Context, bh BackgroundExec, sql, name string, ty
 	}
 
 	if len(rsset) != 0 && rsset[0].GetRowCount() != 0 {
-		for j := uint64(0); j < rsset[0].GetRowCount(); j++ {
-			roleId, err = rsset[0].GetInt64(j, 0)
-			if err != nil {
-				return nil, err
-			}
-			return &verifiedRole{typ, name, roleId}, nil
+		roleId, err = rsset[0].GetInt64(0, 0)
+		if err != nil {
+			return nil, err
 		}
+		return &verifiedRole{typ, name, roleId}, nil
 	}
 	return nil, nil
 }
@@ -1285,7 +1283,7 @@ func (g *graph) toposort(u int64, visited map[int64]visitTag) bool {
 // hasLoop checks the loop
 func (g *graph) hasLoop(start int64) bool {
 	visited := make(map[int64]visitTag)
-	for v, _ := range g.vertexes {
+	for v := range g.vertexes {
 		visited[v] = vtUnVisited
 	}
 
@@ -1328,13 +1326,11 @@ func doGrantPrivilege(ctx context.Context, ses *Session, gp *tree.GrantPrivilege
 		}
 
 		if len(rsset) != 0 && rsset[0].GetRowCount() != 0 {
-			for j := uint64(0); j < rsset[0].GetRowCount(); j++ {
-				id, err = rsset[0].GetInt64(j, 0)
-				if err != nil {
-					return 0, err
-				}
-				return id, nil
+			id, err = rsset[0].GetInt64(0, 0)
+			if err != nil {
+				return 0, err
 			}
+			return id, nil
 		}
 		if isDb {
 			return 0, moerr.NewInternalError("there is no database %s", dbName)
@@ -1504,7 +1500,7 @@ func doGrantPrivilege(ctx context.Context, ses *Session, gp *tree.GrantPrivilege
 			choice := 1
 			if len(rsset) != 0 && rsset[0].GetRowCount() != 0 {
 				for j := uint64(0); j < rsset[0].GetRowCount(); j++ {
-					roleId, err = rsset[0].GetInt64(j, 0)
+					_, err = rsset[0].GetInt64(j, 0)
 					if err != nil {
 						goto handleFailed
 					}
@@ -1596,6 +1592,9 @@ func doRevokeRole(ctx context.Context, ses *Session, rr *tree.RevokeRole) error 
 			//check user
 			sql = getSqlForPasswordOfUser(user.Username)
 			vr, err = verifyRoleFunc(ctx, bh, sql, user.Username, userType)
+			if err != nil {
+				goto handleFailed
+			}
 			if vr == nil {
 				err = moerr.NewInternalError("there is no role or user %s", user.Username)
 				goto handleFailed
@@ -1698,6 +1697,9 @@ func doGrantRole(ctx context.Context, ses *Session, gr *tree.GrantRole) error {
 			//check user
 			sql = getSqlForPasswordOfUser(user.Username)
 			vr, err = verifyRoleFunc(ctx, bh, sql, user.Username, userType)
+			if err != nil {
+				goto handleFailed
+			}
 			if vr == nil {
 				err = moerr.NewInternalError("there is no role or user %s", user.Username)
 				goto handleFailed
