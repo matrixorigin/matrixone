@@ -57,7 +57,6 @@ func init() {
 		newTestCase("select * from R join S on R.uid > S.uid", new(testing.T)),
 		newTestCase("insert into R select * from R", new(testing.T)),
 		newTestCase(`select * from unnest('{"a":1}') as f`, new(testing.T)),
-		newTestCase(`select * from unnest('{"a":1}')`, new(testing.T)),
 	}
 }
 
