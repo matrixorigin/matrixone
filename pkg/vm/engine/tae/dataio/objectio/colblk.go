@@ -47,7 +47,11 @@ func newColumnBlock(block *blockFile, indexCnt int, col int) *columnBlock {
 }
 
 func (cb *columnBlock) GetDataObject() objectio.ColumnObject {
-	return cb.data
+	object, err := cb.block.meta.GetColumn(cb.id.Idx)
+	if err != nil {
+		panic(err)
+	}
+	return object
 }
 
 func (cb *columnBlock) WriteTS(ts types.TS) (err error) {
