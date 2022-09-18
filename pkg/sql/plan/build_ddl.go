@@ -318,11 +318,17 @@ func buildTableDefs(defs tree.TableDefs, ctx CompilerContext, tableDef *TableDef
 				return moerr.NewError(moerr.ER_INVALID_DEFAULT, fmt.Sprintf("invalid default value for '%s'", def.Name.Parts[0]))
 			}
 
+			onUpdateExpr, err := buildOnUpdate(def, colType)
+			if err != nil {
+				return err
+			}
+
 			col := &ColDef{
 				Name:          def.Name.Parts[0],
 				Alg:           plan.CompressType_Lz4,
 				Typ:           colType,
 				Default:       defaultValue,
+				OnUpdate:      onUpdateExpr,
 				Comment:       comment,
 				AutoIncrement: auto_incr,
 			}

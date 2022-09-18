@@ -204,8 +204,8 @@ func (opt Options) WithHostAddress(host string) Options {
 	return opt
 }
 
-// WithLogLvel sets log level.
-func (opt Options) WithLogLvel(lvl zapcore.Level) Options {
+// WithLogLevel sets log level.
+func (opt Options) WithLogLevel(lvl zapcore.Level) Options {
 	opt.logLevel = lvl
 	return opt
 }
