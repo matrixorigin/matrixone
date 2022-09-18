@@ -302,40 +302,58 @@ func (node *PrivilegeType) ToString() string {
 From: https://dev.mysql.com/doc/refman/8.0/en/grant.html
 */
 const (
-	PRIVILEGE_TYPE_STATIC_ALL                     PrivilegeType = iota //Grant all privileges at specified access level except GRANT OPTION and PROXY.
-	PRIVILEGE_TYPE_STATIC_ALTER                                        //Enable use of ALTER TABLE. Levels: Global, database, table.
-	PRIVILEGE_TYPE_STATIC_ALTER_ROUTINE                                //Enable stored routines to be altered or dropped. Levels: Global, database, routine.
-	PRIVILEGE_TYPE_STATIC_CREATE                                       //Enable database and table creation. Levels: Global, database, table.
-	PRIVILEGE_TYPE_STATIC_CREATE_ROLE                                  //Enable role creation. Level: Global.
-	PRIVILEGE_TYPE_STATIC_CREATE_ROUTINE                               //Enable stored routine creation. Levels: Global, database.
-	PRIVILEGE_TYPE_STATIC_CREATE_TABLESPACE                            //Enable tablespaces and log file groups to be created, altered, or dropped. Level: Global.
-	PRIVILEGE_TYPE_STATIC_CREATE_TEMPORARY_TABLES                      //Enable use of CREATE TEMPORARY TABLE. Levels: Global, database.
-	PRIVILEGE_TYPE_STATIC_CREATE_USER                                  //Enable use of CREATE USER, DROP USER, RENAME USER, and REVOKE ALL PRIVILEGES. Level: Global.
-	PRIVILEGE_TYPE_STATIC_CREATE_VIEW                                  //Enable views to be created or altered. Levels: Global, database, table.
-	PRIVILEGE_TYPE_STATIC_DELETE                                       //Enable use of DELETE. Level: Global, database, table.
-	PRIVILEGE_TYPE_STATIC_DROP                                         //Enable databases, tables, and views to be dropped. Levels: Global, database, table.
-	PRIVILEGE_TYPE_STATIC_DROP_ROLE                                    //Enable roles to be dropped. Level: Global.
-	PRIVILEGE_TYPE_STATIC_EVENT                                        //Enable use of events for the Event Scheduler. Levels: Global, database.
-	PRIVILEGE_TYPE_STATIC_EXECUTE                                      //Enable the user to execute stored routines. Levels: Global, database, routine.
-	PRIVILEGE_TYPE_STATIC_FILE                                         //Enable the user to cause the server to read or write files. Level: Global.
-	PRIVILEGE_TYPE_STATIC_GRANT_OPTION                                 //Enable privileges to be granted to or removed from other accounts. Levels: Global, database, table, routine, proxy.
-	PRIVILEGE_TYPE_STATIC_INDEX                                        //Enable indexes to be created or dropped. Levels: Global, database, table.
-	PRIVILEGE_TYPE_STATIC_INSERT                                       //Enable use of INSERT. Levels: Global, database, table, column.
-	PRIVILEGE_TYPE_STATIC_LOCK_TABLES                                  //Enable use of LOCK TABLES on tables for which you have the SELECT privilege. Levels: Global, database.
-	PRIVILEGE_TYPE_STATIC_PROCESS                                      //Enable the user to see all processes with SHOW PROCESSLIST. Level: Global.
-	PRIVILEGE_TYPE_STATIC_PROXY                                        //Enable user proxying. Level: From user to user.
-	PRIVILEGE_TYPE_STATIC_REFERENCES                                   //Enable foreign key creation. Levels: Global, database, table, column.
-	PRIVILEGE_TYPE_STATIC_RELOAD                                       //Enable use of FLUSH operations. Level: Global.
-	PRIVILEGE_TYPE_STATIC_REPLICATION_CLIENT                           //Enable the user to ask where source or replica servers are. Level: Global.
-	PRIVILEGE_TYPE_STATIC_REPLICATION_SLAVE                            //Enable replicas to read binary log events from the source. Level: Global.
-	PRIVILEGE_TYPE_STATIC_SELECT                                       //Enable use of SELECT. Levels: Global, database, table, column.
-	PRIVILEGE_TYPE_STATIC_SHOW_DATABASES                               //Enable SHOW DATABASES to show all databases. Level: Global.
-	PRIVILEGE_TYPE_STATIC_SHOW_VIEW                                    //Enable use of SHOW CREATE VIEW. Levels: Global, database, table.
-	PRIVILEGE_TYPE_STATIC_SHUTDOWN                                     //Enable use of mysqladmin shutdown. Level: Global.
-	PRIVILEGE_TYPE_STATIC_SUPER                                        //Enable use of other administrative operations such as CHANGE REPLICATION SOURCE TO, CHANGE MASTER TO, KILL, PURGE BINARY LOGS, SET GLOBAL, and mysqladmin debug command. Level: Global.
-	PRIVILEGE_TYPE_STATIC_TRIGGER                                      //Enable trigger operations. Levels: Global, database, table.
-	PRIVILEGE_TYPE_STATIC_UPDATE                                       //Enable use of UPDATE. Levels: Global, database, table, column.
-	PRIVILEGE_TYPE_STATIC_USAGE                                        //Synonym for “no privileges”
+	PRIVILEGE_TYPE_STATIC_ALL PrivilegeType = iota //Grant all privileges at specified access level except GRANT OPTION and PROXY.
+	PRIVILEGE_TYPE_STATIC_CREATE_ACCOUNT
+	PRIVILEGE_TYPE_STATIC_DROP_ACCOUNT
+	PRIVILEGE_TYPE_STATIC_ALTER_ACCOUNT
+	PRIVILEGE_TYPE_STATIC_CREATE_USER //Enable use of CREATE USER, DROP USER, RENAME USER, and REVOKE ALL PRIVILEGES. Level: Global.
+	PRIVILEGE_TYPE_STATIC_DROP_USER
+	PRIVILEGE_TYPE_STATIC_ALTER_USER
+	PRIVILEGE_TYPE_STATIC_CREATE_ROLE //Enable role creation. Level: Global.
+	PRIVILEGE_TYPE_STATIC_DROP_ROLE   //Enable roles to be dropped. Level: Global.
+	PRIVILEGE_TYPE_STATIC_ALTER_ROLE
+	PRIVILEGE_TYPE_STATIC_CREATE_DATABASE
+	PRIVILEGE_TYPE_STATIC_DROP_DATABASE
+	PRIVILEGE_TYPE_STATIC_SHOW_DATABASES //Enable SHOW DATABASES to show all databases. Level: Global.
+	PRIVILEGE_TYPE_STATIC_CONNECT
+	PRIVILEGE_TYPE_STATIC_MANAGE_GRANTS
+	PRIVILEGE_TYPE_STATIC_OWNERSHIP
+	PRIVILEGE_TYPE_STATIC_SHOW_TABLES
+	PRIVILEGE_TYPE_STATIC_CREATE_TABLE
+	PRIVILEGE_TYPE_STATIC_DROP_TABLE
+	PRIVILEGE_TYPE_STATIC_DROP_VIEW
+	PRIVILEGE_TYPE_STATIC_ALTER_TABLE
+	PRIVILEGE_TYPE_STATIC_ALTER_VIEW
+	PRIVILEGE_TYPE_STATIC_SELECT     //Enable use of SELECT. Levels: Global, database, table, column.
+	PRIVILEGE_TYPE_STATIC_INSERT     //Enable use of INSERT. Levels: Global, database, table, column.
+	PRIVILEGE_TYPE_STATIC_UPDATE     //Enable use of UPDATE. Levels: Global, database, table, column.
+	PRIVILEGE_TYPE_STATIC_DELETE     //Enable use of DELETE. Level: Global, database, table.
+	PRIVILEGE_TYPE_STATIC_REFERENCES //Enable foreign key creation. Levels: Global, database, table, column.
+	PRIVILEGE_TYPE_STATIC_INDEX      //Enable indexes to be created or dropped. Levels: Global, database, table.
+	PRIVILEGE_TYPE_STATIC_EXECUTE    //Enable the user to execute stored routines. Levels: Global, database, routine.
+
+	PRIVILEGE_TYPE_STATIC_ALTER
+	PRIVILEGE_TYPE_STATIC_CREATE
+	PRIVILEGE_TYPE_STATIC_DROP
+	PRIVILEGE_TYPE_STATIC_ALTER_ROUTINE           //Enable stored routines to be altered or dropped. Levels: Global, database, routine.
+	PRIVILEGE_TYPE_STATIC_CREATE_ROUTINE          //Enable stored routine creation. Levels: Global, database.
+	PRIVILEGE_TYPE_STATIC_CREATE_TABLESPACE       //Enable tablespaces and log file groups to be created, altered, or dropped. Level: Global.
+	PRIVILEGE_TYPE_STATIC_CREATE_TEMPORARY_TABLES //Enable use of CREATE TEMPORARY TABLE. Levels: Global, database.
+	PRIVILEGE_TYPE_STATIC_CREATE_VIEW             //Enable views to be created or altered. Levels: Global, database, table.
+	PRIVILEGE_TYPE_STATIC_EVENT                   //Enable use of events for the Event Scheduler. Levels: Global, database.
+	PRIVILEGE_TYPE_STATIC_FILE                    //Enable the user to cause the server to read or write files. Level: Global.
+	PRIVILEGE_TYPE_STATIC_GRANT_OPTION            //Enable privileges to be granted to or removed from other accounts. Levels: Global, database, table, routine, proxy.
+	PRIVILEGE_TYPE_STATIC_LOCK_TABLES             //Enable use of LOCK TABLES on tables for which you have the SELECT privilege. Levels: Global, database.
+	PRIVILEGE_TYPE_STATIC_PROCESS                 //Enable the user to see all processes with SHOW PROCESSLIST. Level: Global.
+	PRIVILEGE_TYPE_STATIC_PROXY                   //Enable user proxying. Level: From user to user.
+	PRIVILEGE_TYPE_STATIC_RELOAD                  //Enable use of FLUSH operations. Level: Global.
+	PRIVILEGE_TYPE_STATIC_REPLICATION_CLIENT      //Enable the user to ask where source or replica servers are. Level: Global.
+	PRIVILEGE_TYPE_STATIC_REPLICATION_SLAVE       //Enable replicas to read binary log events from the source. Level: Global.
+	PRIVILEGE_TYPE_STATIC_SHOW_VIEW               //Enable use of SHOW CREATE VIEW. Levels: Global, database, table.
+	PRIVILEGE_TYPE_STATIC_SHUTDOWN                //Enable use of mysqladmin shutdown. Level: Global.
+	PRIVILEGE_TYPE_STATIC_SUPER                   //Enable use of other administrative operations such as CHANGE REPLICATION SOURCE TO, CHANGE MASTER TO, KILL, PURGE BINARY LOGS, SET GLOBAL, and mysqladmin debug command. Level: Global.
+	PRIVILEGE_TYPE_STATIC_TRIGGER                 //Enable trigger operations. Levels: Global, database, table.
+	PRIVILEGE_TYPE_STATIC_USAGE                   //Synonym for “no privileges”
 	PRIVILEGE_TYPE_
 	PRIVILEGE_TYPE_DYNAMIC_APPLICATION_PASSWORD_ADMIN //Enable dual password administration. Level: Global.
 	PRIVILEGE_TYPE_DYNAMIC_AUDIT_ADMIN                //Enable audit log configuration. Level: Global.

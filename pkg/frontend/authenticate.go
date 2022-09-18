@@ -306,8 +306,14 @@ const (
 	PrivilegeTypeRoleOwnership
 	PrivilegeTypeShowTables
 	PrivilegeTypeCreateObject //includes: table, view, stream, sequence, function, dblink,etc
+	PrivilegeTypeCreateTable
+	PrivilegeTypeCreateView
 	PrivilegeTypeDropObject
+	PrivilegeTypeDropTable
+	PrivilegeTypeDropView
 	PrivilegeTypeAlterObject
+	PrivilegeTypeAlterTable
+	PrivilegeTypeAlterView
 	PrivilegeTypeDatabaseAll
 	PrivilegeTypeDatabaseOwnership
 	PrivilegeTypeSelect
@@ -411,10 +417,22 @@ func (pt PrivilegeType) String() string {
 		return "show tables"
 	case PrivilegeTypeCreateObject:
 		return "create object"
+	case PrivilegeTypeCreateTable:
+		return "create table"
+	case PrivilegeTypeCreateView:
+		return "create view"
 	case PrivilegeTypeDropObject:
 		return "drop object"
+	case PrivilegeTypeDropTable:
+		return "drop table"
+	case PrivilegeTypeDropView:
+		return "drop view"
 	case PrivilegeTypeAlterObject:
 		return "alter object"
+	case PrivilegeTypeAlterTable:
+		return "alter table"
+	case PrivilegeTypeAlterView:
+		return "alter view"
 	case PrivilegeTypeDatabaseAll:
 		return "database all"
 	case PrivilegeTypeDatabaseOwnership:
@@ -483,11 +501,11 @@ func (pt PrivilegeType) Scope() PrivilegeScope {
 		return PrivilegeScopeRole
 	case PrivilegeTypeShowTables:
 		return PrivilegeScopeDatabase
-	case PrivilegeTypeCreateObject:
+	case PrivilegeTypeCreateObject, PrivilegeTypeCreateTable, PrivilegeTypeCreateView:
 		return PrivilegeScopeDatabase
-	case PrivilegeTypeDropObject:
+	case PrivilegeTypeDropObject, PrivilegeTypeDropTable, PrivilegeTypeDropView:
 		return PrivilegeScopeDatabase
-	case PrivilegeTypeAlterObject:
+	case PrivilegeTypeAlterObject, PrivilegeTypeAlterTable, PrivilegeTypeAlterView:
 		return PrivilegeScopeDatabase
 	case PrivilegeTypeDatabaseAll:
 		return PrivilegeScopeDatabase
@@ -683,7 +701,7 @@ var (
 
 	checkDatabaseFormat = `select dat_id from mo_catalog.mo_database where datname = "%s";`
 
-	checkDatabaseTableFormat = `select t.relid from mo_catalog.mo_database d, mo_catalog.mo_tables t
+	checkDatabaseTableFormat = `select t.rel_id from mo_catalog.mo_database d, mo_catalog.mo_tables t
 										where d.dat_id = t.reldatabase_id
 											and d.datname = "%s"
 											and t.relname = "%s";`
@@ -770,7 +788,8 @@ var (
 					and rp.privilege_level = "%s"
 					and rp.with_grant_option = true;`
 
-	//check the role has the table level privilege
+	//for database.table or table
+	//check the role has the table level privilege for the privilege level (d.t or t)
 	checkRoleHasTableLevelPrivilegeFormat = `select rp.privilege_id,rp.with_grant_option
 				from mo_catalog.mo_database d, mo_catalog.mo_tables t, mo_catalog.mo_role_privs rp
 				where d.dat_id = t.reldatabase_id
@@ -781,6 +800,53 @@ var (
 					and rp.privilege_level in ("%s","%s")
 					and d.datname = "%s"
 					and t.relname = "%s";`
+
+	//for database.* or *
+	checkRoleHasTableLevelForDatabaseStarFormat = `select rp.privilege_id,rp.with_grant_option
+				from mo_catalog.mo_database d, mo_catalog.mo_role_privs rp
+				where d.dat_id = rp.obj_id
+					and rp.obj_type = "%s"
+					and rp.role_id = %d
+					and rp.privilege_id = %d
+					and rp.privilege_level in ("%s","%s")
+					and d.datname = "%s";`
+
+	//for *.*
+	checkRoleHasTableLevelForStarStarFormat = `select rp.privilege_id,rp.with_grant_option
+				from mo_catalog.mo_role_privs rp
+				where rp.obj_id = 0
+					and rp.obj_type = "%s"
+					and rp.role_id = %d
+					and rp.privilege_id = %d
+					and rp.privilege_level = "%s";`
+
+	//for * or *.*
+	checkRoleHasDatabaseLevelForStarStarFormat = `select rp.privilege_id,rp.with_grant_option
+				from mo_catalog.mo_role_privs rp
+				where rp.obj_id = 0
+					and rp.obj_type = "%s"
+					and rp.role_id = %d
+					and rp.privilege_id = %d
+					and rp.privilege_level = "%s";`
+
+	//for database
+	checkRoleHasDatabaseLevelForDatabaseFormat = `select rp.privilege_id,rp.with_grant_option
+				from mo_catalog.mo_database d, mo_catalog.mo_role_privs rp
+				where d.dat_id = rp.obj_id
+					and rp.obj_type = "%s"
+					and rp.role_id = %d
+					and rp.privilege_id = %d
+					and rp.privilege_level = "%s"
+					and d.datname = "%s";`
+
+	//for *
+	checkRoleHasAccountLevelForStarFormat = `select rp.privilege_id,rp.with_grant_option
+				from mo_catalog.mo_role_privs rp
+				where rp.obj_id = 0
+					and rp.obj_type = "%s"
+					and rp.role_id = %d
+					and rp.privilege_id = %d
+					and rp.privilege_level = "%s";`
 )
 
 func getSqlForCheckTenant(tenant string) string {
@@ -887,8 +953,28 @@ func getSqlForCheckWithGrantOptionForAccountStar(roleId int64, privId PrivilegeT
 	return fmt.Sprintf(checkWithGrantOptionForAccountStar, objectTypeAccount, roleId, privId, privilegeLevelStarStar)
 }
 
-func getSqlForCheckRoleHasTableLevelPrivilegeFormat(roleId int64, privId PrivilegeType, dbName string, tableName string) string {
+func getSqlForCheckRoleHasTableLevelPrivilege(roleId int64, privId PrivilegeType, dbName string, tableName string) string {
 	return fmt.Sprintf(checkRoleHasTableLevelPrivilegeFormat, objectTypeTable, roleId, privId, privilegeLevelDatabaseTable, privilegeLevelTable, dbName, tableName)
+}
+
+func getSqlForCheckRoleHasTableLevelForDatabaseStar(roleId int64, privId PrivilegeType, dbName string) string {
+	return fmt.Sprintf(checkRoleHasTableLevelForDatabaseStarFormat, objectTypeTable, roleId, privId, privilegeLevelDatabaseStar, privilegeLevelStar, dbName)
+}
+
+func getSqlForCheckRoleHasTableLevelForStarStar(roleId int64, privId PrivilegeType) string {
+	return fmt.Sprintf(checkRoleHasTableLevelForStarStarFormat, objectTypeTable, roleId, privId, privilegeLevelStarStar)
+}
+
+func getSqlForCheckRoleHasDatabaseLevelForStarStar(roleId int64, privId PrivilegeType, level privilegeLevelType) string {
+	return fmt.Sprintf(checkRoleHasDatabaseLevelForStarStarFormat, objectTypeDatabase, roleId, privId, level)
+}
+
+func getSqlForCheckRoleHasDatabaseLevelForDatabase(roleId int64, privId PrivilegeType, dbName string) string {
+	return fmt.Sprintf(checkRoleHasDatabaseLevelForDatabaseFormat, objectTypeDatabase, roleId, privId, privilegeLevelDatabase, dbName)
+}
+
+func getSqlForCheckRoleHasAccountLevelForStar(roleId int64, privId PrivilegeType) string {
+	return fmt.Sprintf(checkRoleHasAccountLevelForStarFormat, objectTypeAccount, roleId, privId, privilegeLevelStar)
 }
 
 func getSqlForCheckDatabase(dbName string) string {
@@ -969,10 +1055,14 @@ var (
 		PrivilegeTypeAccountOwnership:  {PrivilegeTypeAccountOwnership, privilegeLevelStar, objectTypeAccount, objectIDAll, true, "", ""},
 		PrivilegeTypeUserOwnership:     {PrivilegeTypeUserOwnership, privilegeLevelStar, objectTypeAccount, objectIDAll, true, "", ""},
 		PrivilegeTypeRoleOwnership:     {PrivilegeTypeRoleOwnership, privilegeLevelStar, objectTypeAccount, objectIDAll, true, "", ""},
-		PrivilegeTypeShowTables:        {PrivilegeTypeShowTables, privilegeLevelDatabaseStar, objectTypeDatabase, objectIDAll, true, "", ""},
-		PrivilegeTypeCreateObject:      {PrivilegeTypeCreateObject, privilegeLevelDatabaseStar, objectTypeDatabase, objectIDAll, true, "", ""},
-		PrivilegeTypeDropObject:        {PrivilegeTypeDropObject, privilegeLevelDatabaseStar, objectTypeDatabase, objectIDAll, true, "", ""},
-		PrivilegeTypeAlterObject:       {PrivilegeTypeAlterObject, privilegeLevelDatabaseStar, objectTypeDatabase, objectIDAll, true, "", ""},
+		PrivilegeTypeShowTables:        {PrivilegeTypeShowTables, privilegeLevelDatabase, objectTypeDatabase, objectIDAll, true, "", ""},
+		PrivilegeTypeCreateObject:      {PrivilegeTypeCreateObject, privilegeLevelDatabase, objectTypeDatabase, objectIDAll, true, "", ""},
+		PrivilegeTypeCreateTable:       {PrivilegeTypeCreateTable, privilegeLevelDatabase, objectTypeDatabase, objectIDAll, true, "", ""},
+		PrivilegeTypeCreateView:        {PrivilegeTypeCreateView, privilegeLevelDatabase, objectTypeDatabase, objectIDAll, true, "", ""},
+		PrivilegeTypeDropObject:        {PrivilegeTypeDropObject, privilegeLevelDatabase, objectTypeDatabase, objectIDAll, true, "", ""},
+		PrivilegeTypeDropTable:         {PrivilegeTypeDropTable, privilegeLevelDatabase, objectTypeDatabase, objectIDAll, true, "", ""},
+		PrivilegeTypeDropView:          {PrivilegeTypeDropView, privilegeLevelDatabase, objectTypeDatabase, objectIDAll, true, "", ""},
+		PrivilegeTypeAlterObject:       {PrivilegeTypeAlterObject, privilegeLevelDatabase, objectTypeDatabase, objectIDAll, true, "", ""},
 		PrivilegeTypeDatabaseAll:       {PrivilegeTypeDatabaseAll, privilegeLevelStar, objectTypeAccount, objectIDAll, true, "", ""},
 		PrivilegeTypeDatabaseOwnership: {PrivilegeTypeDatabaseOwnership, privilegeLevelStar, objectTypeAccount, objectIDAll, true, "", ""},
 		PrivilegeTypeSelect:            {PrivilegeTypeSelect, privilegeLevelTable, objectTypeTable, objectIDAll, true, "", ""},
@@ -1009,7 +1099,11 @@ var (
 		PrivilegeTypeRoleOwnership,
 		PrivilegeTypeShowTables,
 		PrivilegeTypeCreateObject,
+		PrivilegeTypeCreateTable,
+		PrivilegeTypeCreateView,
 		PrivilegeTypeDropObject,
+		PrivilegeTypeDropTable,
+		PrivilegeTypeDropView,
 		PrivilegeTypeAlterObject,
 		PrivilegeTypeDatabaseAll,
 		PrivilegeTypeDatabaseOwnership,
@@ -1044,7 +1138,11 @@ var (
 		PrivilegeTypeRoleOwnership,
 		PrivilegeTypeShowTables,
 		PrivilegeTypeCreateObject,
+		PrivilegeTypeCreateTable,
+		PrivilegeTypeCreateView,
 		PrivilegeTypeDropObject,
+		PrivilegeTypeDropTable,
+		PrivilegeTypeDropView,
 		PrivilegeTypeAlterObject,
 		PrivilegeTypeDatabaseAll,
 		PrivilegeTypeDatabaseOwnership,
@@ -1340,7 +1438,7 @@ func doGrantPrivilege(ctx context.Context, ses *Session, gp *tree.GrantPrivilege
 				goto handleFailed
 			}
 		default:
-			err = moerr.NewInternalError("in object type %s privilege level type %s is unsupported", gp.ObjType, gp.Level.Level)
+			err = moerr.NewInternalError("in object type %s privilege level type %s is unsupported", gp.ObjType.ToString(), gp.Level.Level)
 			goto handleFailed
 		}
 	case tree.OBJECT_TYPE_ACCOUNT:
@@ -1432,6 +1530,11 @@ func doGrantPrivilege(ctx context.Context, ses *Session, gp *tree.GrantPrivilege
 				goto handleFailed
 			}
 		}
+	}
+
+	err = bh.Exec(ctx, "commit;")
+	if err != nil {
+		goto handleFailed
 	}
 
 	return err
@@ -1830,12 +1933,18 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 	case *tree.ShowTables, *tree.ShowCreateTable, *tree.ShowColumns, *tree.ShowCreateView, *tree.ShowCreateDatabase:
 		objType = objectTypeDatabase
 		typs = append(typs, PrivilegeTypeShowTables, PrivilegeTypeDatabaseAll /*PrivilegeTypeDatabaseOwnership*/)
-	case *tree.CreateTable, *tree.CreateView:
+	case *tree.CreateTable:
 		objType = objectTypeDatabase
-		typs = append(typs, PrivilegeTypeCreateObject, PrivilegeTypeDatabaseAll /* PrivilegeTypeDatabaseOwnership*/)
-	case *tree.DropTable, *tree.DropView:
+		typs = append(typs, PrivilegeTypeCreateTable, PrivilegeTypeCreateObject, PrivilegeTypeDatabaseAll /* PrivilegeTypeDatabaseOwnership*/)
+	case *tree.CreateView:
 		objType = objectTypeDatabase
-		typs = append(typs, PrivilegeTypeDropObject, PrivilegeTypeDatabaseAll /*PrivilegeTypeDatabaseOwnership*/)
+		typs = append(typs, PrivilegeTypeCreateView, PrivilegeTypeCreateObject, PrivilegeTypeDatabaseAll /* PrivilegeTypeDatabaseOwnership*/)
+	case *tree.DropTable:
+		objType = objectTypeDatabase
+		typs = append(typs, PrivilegeTypeDropTable, PrivilegeTypeDropObject, PrivilegeTypeDatabaseAll /*PrivilegeTypeDatabaseOwnership*/)
+	case *tree.DropView:
+		objType = objectTypeDatabase
+		typs = append(typs, PrivilegeTypeDropView, PrivilegeTypeDropObject, PrivilegeTypeDatabaseAll /*PrivilegeTypeDatabaseOwnership*/)
 	case *tree.Select:
 		objType = objectTypeTable
 		typs = append(typs, PrivilegeTypeSelect, PrivilegeTypeTableAll /*PrivilegeTypeTableOwnership*/)
@@ -1935,6 +2044,12 @@ func extractPrivilegeTipsFromPlan(p *plan2.Plan) privilegeTipsArray {
 					node.ObjRef.GetSchemaName(),
 					node.ObjRef.GetObjName(),
 				})
+			} else if node.NodeType == plan.Node_DELETE {
+				appendPot(privilegeTips{
+					PrivilegeTypeDelete,
+					node.ObjRef.GetSchemaName(),
+					node.ObjRef.GetObjName(),
+				})
 			}
 		}
 	} else if p.GetIns() != nil { //insert into values
@@ -1965,14 +2080,10 @@ func convertPrivilegeTipsToPrivilege(priv *privilege, arr privilegeTipsArray) {
 
 	entries := make([]privilegeEntry, 0, len(arr))
 	for _, tips := range arr {
-		entries = append(entries, privilegeEntry{
-			privilegeId:    tips.typ,
-			privilegeLevel: 0,
-			objType:        objectTypeTable,
-			objId:          objectIDAll,
-			databaseName:   tips.databaseName,
-			tableName:      tips.tableName,
-		})
+		e := privilegeEntriesMap[tips.typ]
+		e.databaseName = tips.databaseName
+		e.tableName = tips.tableName
+		entries = append(entries, e)
 
 		dedup[pair{tips.databaseName, tips.tableName}] = 1
 	}
@@ -1981,24 +2092,60 @@ func convertPrivilegeTipsToPrivilege(priv *privilege, arr privilegeTipsArray) {
 	predefined := []PrivilegeType{PrivilegeTypeTableAll /*,PrivilegeTypeTableOwnership*/}
 	for _, p := range predefined {
 		for par := range dedup {
-			entries = append(entries, privilegeEntry{
-				privilegeId:    p,
-				privilegeLevel: 0,
-				objType:        objectTypeTable,
-				objId:          objectIDAll,
-				databaseName:   par.databaseName,
-				tableName:      par.tableName,
-			})
+			e := privilegeEntriesMap[p]
+			e.databaseName = par.databaseName
+			e.tableName = par.tableName
+			entries = append(entries, e)
 		}
 	}
 
 	priv.entries = entries
 }
 
+// getSqlFromPrivilegeEntry generates the query sql for the privilege entry
+func getSqlFromPrivilegeEntry(roleId int64, entry privilegeEntry) (string, error) {
+	var sql string
+	//for object type table, need concrete tableid
+	//TODO: table level check should be done after getting the plan
+	if entry.objType == objectTypeTable {
+		switch entry.privilegeLevel {
+		case privilegeLevelDatabaseTable, privilegeLevelTable:
+			sql = getSqlForCheckRoleHasTableLevelPrivilege(roleId, entry.privilegeId, entry.databaseName, entry.tableName)
+		case privilegeLevelDatabaseStar, privilegeLevelStar:
+			sql = getSqlForCheckRoleHasTableLevelForDatabaseStar(roleId, entry.privilegeId, entry.databaseName)
+		case privilegeLevelStarStar:
+			sql = getSqlForCheckRoleHasTableLevelForStarStar(roleId, entry.privilegeId)
+		default:
+			return "", moerr.NewInternalError("unsupported privilegel level %s for the privilege %s", entry.privilegeLevel, entry.privilegeId)
+		}
+	} else if entry.objType == objectTypeDatabase {
+		switch entry.privilegeLevel {
+		case privilegeLevelStar, privilegeLevelStarStar:
+			sql = getSqlForCheckRoleHasDatabaseLevelForStarStar(roleId, entry.privilegeId, entry.privilegeLevel)
+		case privilegeLevelDatabase:
+			sql = getSqlForCheckRoleHasDatabaseLevelForDatabase(roleId, entry.privilegeId, entry.databaseName)
+		default:
+			return "", moerr.NewInternalError("unsupported privilegel level %s for the privilege %s", entry.privilegeLevel, entry.privilegeId)
+		}
+	} else if entry.objType == objectTypeAccount {
+		switch entry.privilegeLevel {
+		case privilegeLevelStar:
+			sql = getSqlForCheckRoleHasAccountLevelForStar(roleId, entry.privilegeId)
+		default:
+			return "false", moerr.NewInternalError("unsupported privilegel level %s for the privilege %s", entry.privilegeLevel, entry.privilegeId)
+		}
+	} else {
+		sql = getSqlForCheckRoleHasPrivilege(roleId, entry.objType, int64(entry.objId), int64(entry.privilegeId))
+	}
+	return sql, nil
+}
+
 // determineRoleSetSatisfyPrivilegeSet decides the privileges of role set can satisfy the requirement of the privilege set.
 // The algorithm 2.
 func determineRoleSetSatisfyPrivilegeSet(ctx context.Context, bh BackgroundExec, roleIds []int64, priv *privilege) (bool, error) {
 	var rsset []ExecResult
+	var sql string
+	var err error
 	//there is no privilege needs, just approve
 	if len(priv.entries) == 0 {
 		return true, nil
@@ -2012,17 +2159,23 @@ func determineRoleSetSatisfyPrivilegeSet(ctx context.Context, bh BackgroundExec,
 				}
 			}
 
-			var sqlForCheckRoleHasPrivilege string
-			//for object type table, need concrete tableid
-			//TODO: table level check should be done after getting the plan
-			if priv.objectType() == objectTypeTable {
-				sqlForCheckRoleHasPrivilege = getSqlForCheckRoleHasTableLevelPrivilegeFormat(roleId, entry.privilegeId, entry.databaseName, entry.tableName)
-			} else {
-				sqlForCheckRoleHasPrivilege = getSqlForCheckRoleHasPrivilege(roleId, entry.objType, int64(entry.objId), int64(entry.privilegeId))
+			if entry.objType == objectTypeTable {
+				if roleId == moAdminRoleID || roleId == accountAdminRoleID {
+					//NOTE: admin role can operate the mo_catalog.*
+					//TODO: how to fix general role access the mo_catalog.*
+					if entry.databaseName == "mo_catalog" {
+						return true, nil
+					}
+				}
+			}
+
+			sql, err = getSqlFromPrivilegeEntry(roleId, entry)
+			if err != nil {
+				return false, err
 			}
 
 			bh.ClearExecResultSet()
-			err := bh.Exec(ctx, sqlForCheckRoleHasPrivilege)
+			err = bh.Exec(ctx, sql)
 			if err != nil {
 				return false, err
 			}
@@ -2567,12 +2720,66 @@ func determinePrivilegeHasWithGrantOption(ctx context.Context, ses *Session, gp 
 
 func convertAstPrivilegeTypeToPrivilegeType(priv tree.PrivilegeType) PrivilegeType {
 	switch priv {
+	case tree.PRIVILEGE_TYPE_STATIC_CREATE_ACCOUNT:
+		return PrivilegeTypeCreateAccount
+	case tree.PRIVILEGE_TYPE_STATIC_DROP_ACCOUNT:
+		return PrivilegeTypeDropAccount
+	case tree.PRIVILEGE_TYPE_STATIC_ALTER_ACCOUNT:
+		return PrivilegeTypeAlterAccount
+	case tree.PRIVILEGE_TYPE_STATIC_CREATE_USER:
+		return PrivilegeTypeCreateUser
+	case tree.PRIVILEGE_TYPE_STATIC_DROP_USER:
+		return PrivilegeTypeDropUser
+	case tree.PRIVILEGE_TYPE_STATIC_ALTER_USER:
+		return PrivilegeTypeAlterUser
+	case tree.PRIVILEGE_TYPE_STATIC_CREATE_ROLE:
+		return PrivilegeTypeCreateRole
+	case tree.PRIVILEGE_TYPE_STATIC_DROP_ROLE:
+		return PrivilegeTypeDropRole
+	case tree.PRIVILEGE_TYPE_STATIC_ALTER_ROLE:
+		return PrivilegeTypeAlterRole
+	case tree.PRIVILEGE_TYPE_STATIC_CREATE_DATABASE:
+		return PrivilegeTypeCreateDatabase
+	case tree.PRIVILEGE_TYPE_STATIC_DROP_DATABASE:
+		return PrivilegeTypeDropDatabase
+	case tree.PRIVILEGE_TYPE_STATIC_SHOW_DATABASES:
+		return PrivilegeTypeShowDatabases
+	case tree.PRIVILEGE_TYPE_STATIC_CONNECT:
+		return PrivilegeTypeConnect
+	case tree.PRIVILEGE_TYPE_STATIC_MANAGE_GRANTS:
+		return PrivilegeTypeManageGrants
+	case tree.PRIVILEGE_TYPE_STATIC_ALL:
+		return PrivilegeTypeDatabaseAll //TODO: database ? table ? account ?
+	case tree.PRIVILEGE_TYPE_STATIC_OWNERSHIP:
+		return PrivilegeTypeDatabaseOwnership //TODO
+	case tree.PRIVILEGE_TYPE_STATIC_SHOW_TABLES:
+		return PrivilegeTypeShowTables
+	case tree.PRIVILEGE_TYPE_STATIC_CREATE_TABLE:
+		return PrivilegeTypeCreateTable
+	case tree.PRIVILEGE_TYPE_STATIC_DROP_TABLE:
+		return PrivilegeTypeDropTable
+	case tree.PRIVILEGE_TYPE_STATIC_CREATE_VIEW:
+		return PrivilegeTypeCreateView
+	case tree.PRIVILEGE_TYPE_STATIC_DROP_VIEW:
+		return PrivilegeTypeDropView
+	case tree.PRIVILEGE_TYPE_STATIC_ALTER_VIEW:
+		return PrivilegeTypeAlterView
+	case tree.PRIVILEGE_TYPE_STATIC_ALTER_TABLE:
+		return PrivilegeTypeAlterTable
 	case tree.PRIVILEGE_TYPE_STATIC_SELECT:
 		return PrivilegeTypeSelect
 	case tree.PRIVILEGE_TYPE_STATIC_INSERT:
 		return PrivilegeTypeInsert
+	case tree.PRIVILEGE_TYPE_STATIC_UPDATE:
+		return PrivilegeTypeUpdate
+	case tree.PRIVILEGE_TYPE_STATIC_DELETE:
+		return PrivilegeTypeDelete
+	case tree.PRIVILEGE_TYPE_STATIC_INDEX:
+		return PrivilegeTypeIndex
+	case tree.PRIVILEGE_TYPE_STATIC_EXECUTE:
+		return PrivilegeTypeExecute
 	default:
-		return PrivilegeTypeAccountAll
+		panic(fmt.Sprintf("unsupported privilege type %s", priv.ToString()))
 	}
 }
 
@@ -2587,13 +2794,37 @@ func authenticatePrivilegeOfStatementWithObjectTypeNone(ctx context.Context, ses
 	if priv.privilegeKind() == privilegeKindNone { // do nothing
 		return true, nil
 	} else if priv.privilegeKind() == privilegeKindSpecial { //GrantPrivilege, RevokePrivilege
-		switch gp := stmt.(type) {
-		case *tree.GrantPrivilege:
+
+		checkGrantPrivilege := func(g *tree.GrantPrivilege) (bool, error) {
 			//in the version 0.6, only the moAdmin and accountAdmin can grant the privilege.
 			if tenant.IsAdminRole() {
 				return true, nil
 			}
-			yes, err := determinePrivilegeHasWithGrantOption(ctx, ses, gp)
+			return determinePrivilegeHasWithGrantOption(ctx, ses, g)
+		}
+
+		checkRevokePrivilege := func() (bool, error) {
+			//in the version 0.6, only the moAdmin and accountAdmin can revoke the privilege.
+			return tenant.IsAdminRole(), nil
+		}
+
+		switch gp := stmt.(type) {
+		case *tree.Grant:
+			if gp.Typ == tree.GrantTypePrivilege {
+				yes, err := checkGrantPrivilege(&gp.GrantPrivilege)
+				if err != nil {
+					return yes, err
+				}
+				if yes {
+					return yes, nil
+				}
+			}
+		case *tree.Revoke:
+			if gp.Typ == tree.RevokeTypePrivilege {
+				return checkRevokePrivilege()
+			}
+		case *tree.GrantPrivilege:
+			yes, err := checkGrantPrivilege(gp)
 			if err != nil {
 				return yes, err
 			}
@@ -2601,8 +2832,7 @@ func authenticatePrivilegeOfStatementWithObjectTypeNone(ctx context.Context, ses
 				return yes, nil
 			}
 		case *tree.RevokePrivilege:
-			//in the version 0.6, only the moAdmin and accountAdmin can revoke the privilege.
-			return tenant.IsAdminRole(), nil
+			return checkRevokePrivilege()
 		}
 	}
 

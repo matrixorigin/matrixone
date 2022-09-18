@@ -3206,7 +3206,7 @@ func Test_determineDML(t *testing.T) {
 
 			for _, roleId := range roleIds {
 				for _, entry := range priv.entries {
-					sql := getSqlForCheckRoleHasTableLevelPrivilegeFormat(int64(roleId), entry.privilegeId, entry.databaseName, entry.tableName)
+					sql := getSqlForCheckRoleHasTableLevelPrivilege(int64(roleId), entry.privilegeId, entry.databaseName, entry.tableName)
 					sql2result[sql] = newMrsForWithGrantOptionPrivilege([][]interface{}{
 						{entry.privilegeId, true},
 					})
@@ -3258,7 +3258,7 @@ func Test_determineDML(t *testing.T) {
 
 			for _, roleId := range roleIds {
 				for _, entry := range priv.entries {
-					sql := getSqlForCheckRoleHasTableLevelPrivilegeFormat(int64(roleId), entry.privilegeId, entry.databaseName, entry.tableName)
+					sql, _ := getSqlFromPrivilegeEntry(int64(roleId), entry)
 					var rows [][]interface{}
 					if roleId == 1 {
 						rows = [][]interface{}{
@@ -3314,7 +3314,7 @@ func Test_determineDML(t *testing.T) {
 
 			for _, roleId := range roleIds {
 				for _, entry := range priv.entries {
-					sql := getSqlForCheckRoleHasTableLevelPrivilegeFormat(int64(roleId), entry.privilegeId, entry.databaseName, entry.tableName)
+					sql, _ := getSqlFromPrivilegeEntry(int64(roleId), entry)
 					rows := make([][]interface{}, 0)
 					sql2result[sql] = newMrsForWithGrantOptionPrivilege(rows)
 				}
@@ -4711,7 +4711,7 @@ func makeRowsOfMoUserGrant(sql2result map[string]ExecResult, userId int, rows []
 func makeRowsOfMoRolePrivs(sql2result map[string]ExecResult, roleIds []int, entries []privilegeEntry, rowsOfMoRolePrivs [][]interface{}) {
 	for _, roleId := range roleIds {
 		for _, entry := range entries {
-			sql := getSqlForCheckRoleHasPrivilege(int64(roleId), entry.objType, int64(entry.objId), int64(entry.privilegeId))
+			sql, _ := getSqlFromPrivilegeEntry(int64(roleId), entry)
 			sql2result[sql] = newMrsForCheckRoleHasPrivilege(rowsOfMoRolePrivs)
 		}
 	}
@@ -4768,7 +4768,7 @@ func makeSql2ExecResult2(userId int,
 	makeRowsOfMoUserGrant(sql2result, userId, rowsOfMoUserGrant)
 	for i, roleId := range roleIdsInMoRolePrivs {
 		for j, entry := range entries {
-			sql := getSqlForCheckRoleHasPrivilege(int64(roleId), entry.objType, int64(entry.objId), int64(entry.privilegeId))
+			sql, _ := getSqlFromPrivilegeEntry(int64(roleId), entry)
 			sql2result[sql] = newMrsForCheckRoleHasPrivilege(rowsOfMoRolePrivs[i][j])
 		}
 	}
