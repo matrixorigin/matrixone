@@ -415,6 +415,7 @@ func (c *CatalogHandler) HandlePrepare(meta txn.TxnMeta) (timestamp.Timestamp, e
 
 func (c *CatalogHandler) HandleRead(meta txn.TxnMeta, req txnengine.ReadReq, resp *txnengine.ReadResp) (err error) {
 	tx := c.upstream.getTx(meta)
+	resp.SetHeap(c.upstream.mheap)
 
 	c.iterators.Lock()
 	v, ok := c.iterators.Map[req.IterID]

@@ -962,6 +962,8 @@ func (m *MemHandler) HandleOpenRelation(meta txn.TxnMeta, req txnengine.OpenRela
 }
 
 func (m *MemHandler) HandleRead(meta txn.TxnMeta, req txnengine.ReadReq, resp *txnengine.ReadResp) error {
+	resp.SetHeap(m.mheap)
+
 	m.iterators.Lock()
 	iter, ok := m.iterators.Map[req.IterID]
 	if !ok {
