@@ -36,5 +36,4 @@ type = "tae"
 [cn.frontend]
 
 [observability]
-disableMetric=true
-disableTrace=true
+
