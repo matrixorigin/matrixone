@@ -18,7 +18,9 @@ import (
 	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 
@@ -110,6 +112,16 @@ func (l *LogtailMgr) GetLogtailView(start, end types.TS, tid uint64) *LogtailVie
 	}
 }
 
+// GetLogtailCollector try to fix a read view, use LogtailCollector.BindCollectEnv to set other collect args
+func (l *LogtailMgr) GetLogtailCollector(start, end types.TS, did, tid uint64) *LogtailCollector {
+	view := l.GetLogtailView(start, end, tid)
+	return &LogtailCollector{
+		did:  did,
+		tid:  tid,
+		view: view,
+	}
+}
+
 // a read only view of txns
 type LogtailView struct {
 	start, end types.TS                 // included
@@ -118,7 +130,17 @@ type LogtailView struct {
 	activeView []txnif.AsyncTxn         // read only active page
 }
 
-func (v *LogtailView) GetDirtyPoints() Dirties {
+// DirtySegs has determined iter order
+type DirtySegs struct {
+	Segs []dirtySeg
+}
+
+type dirtySeg struct {
+	Sig  uint64
+	Blks []uint64
+}
+
+func (v *LogtailView) GetDirty() DirtySegs {
 	// if tree[segID] is nil, it means that is just a seg operation
 	tree := make(map[uint64]map[uint64]struct{}, 0)
 	var blkSet map[uint64]struct{}
@@ -156,17 +178,7 @@ func (v *LogtailView) GetDirtyPoints() Dirties {
 		}
 		segs = append(segs, dirtySeg{Sig: sig, Blks: blk})
 	}
-	return Dirties{Segs: segs}
-}
-
-// Dirties has determined iter order
-type Dirties struct {
-	Segs []dirtySeg
-}
-
-type dirtySeg struct {
-	Sig  uint64
-	Blks []uint64
+	return DirtySegs{Segs: segs}
 }
 
 func (v *LogtailView) HasCatalogChanges() bool {
@@ -223,4 +235,168 @@ func (v *LogtailView) scanTxnBetween(start, end types.TS, f func(txn txnif.Async
 			return
 		}
 	}
+}
+
+type CollectMode = int
+
+const (
+	// changes for mo_databases
+	CollectModeDB CollectMode = iota + 1
+	// changes for mo_tables
+	CollectModeTbl
+	// changes for user tables
+	CollectModeSegAndBlk
+)
+
+// LogtailCollector holds a read only view, knows how to iter entry.
+// Drive a entry visitor, which acts as an api resp builder
+type LogtailCollector struct {
+	mode    CollectMode
+	did     uint64
+	tid     uint64
+	catalog *catalog.Catalog
+	view    *LogtailView
+	visitor EntryVisitor
+}
+
+// BindInfo set collect env args and these args don't affect dirty seg/blk ids
+func (c *LogtailCollector) BindCollectEnv(mode CollectMode, catalog *catalog.Catalog, visitor EntryVisitor) {
+	c.mode, c.catalog, c.visitor = mode, catalog, visitor
+}
+
+func (c *LogtailCollector) Collect() error {
+	switch c.mode {
+	case CollectModeDB:
+		return c.collectCatalogDB()
+	case CollectModeTbl:
+		return c.collectCatalogTbl()
+	case CollectModeSegAndBlk:
+		return c.collectUserTbl()
+	default:
+		panic("unknown logtail collect mode")
+	}
+}
+
+func (c *LogtailCollector) collectUserTbl() (err error) {
+	var (
+		db  *catalog.DBEntry
+		tbl *catalog.TableEntry
+		seg *catalog.SegmentEntry
+		blk *catalog.BlockEntry
+	)
+	if db, err = c.catalog.GetDatabaseByID(c.did); err != nil {
+		return
+	}
+	if tbl, err = db.GetTableEntryByID(c.tid); err != nil {
+		return
+	}
+	dirty := c.view.GetDirty()
+	for _, dirtySeg := range dirty.Segs {
+		if seg, err = tbl.GetSegmentByID(dirtySeg.Sig); err != nil {
+			return err
+		}
+		if err = c.visitor.visitSeg(seg); err != nil {
+			return err
+		}
+		for _, blkid := range dirtySeg.Blks {
+			if blk, err = seg.GetBlockEntryByID(blkid); err != nil {
+				return err
+			}
+			if err = c.visitor.visitBlk(blk); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func (c *LogtailCollector) collectCatalogDB() error {
+	if !c.view.HasCatalogChanges() {
+		return nil
+	}
+	dbIt := c.catalog.MakeDBIt(true)
+	for dbIt.Valid() {
+		if err := c.visitor.visitDB(dbIt.Get().GetPayload()); err != nil {
+			return err
+		}
+		dbIt.Next()
+	}
+	return nil
+}
+
+func (c *LogtailCollector) collectCatalogTbl() error {
+	if !c.view.HasCatalogChanges() {
+		return nil
+	}
+	dbIt := c.catalog.MakeDBIt(true)
+	for dbIt.Valid() {
+		db := dbIt.Get().GetPayload()
+		tblIt := db.MakeTableIt(true)
+		for tblIt.Valid() {
+			if err := c.visitor.visitTbl(tblIt.Get().GetPayload()); err != nil {
+				return err
+			}
+			tblIt.Next()
+		}
+		dbIt.Next()
+	}
+	return nil
+}
+
+type EntryVisitor interface {
+	visitDB(entry *catalog.DBEntry) error
+	visitTbl(entry *catalog.TableEntry) error
+	visitSeg(entry *catalog.SegmentEntry) error
+	visitBlk(entry *catalog.BlockEntry) error
+}
+
+// LogtailRespBuilder knows how to make api-entry from catalog entry
+// impl EntryVisitor interface, driven by LogtailCollector
+type LogtailRespBuilder struct {
+	checkpoint string
+	entries    []*api.Entry
+}
+
+func NewLogtailRespBuilder(checkpoint string) *LogtailRespBuilder {
+	return &LogtailRespBuilder{
+		checkpoint: checkpoint,
+		entries:    make([]*api.Entry, 0),
+	}
+}
+
+func (c *LogtailRespBuilder) visitDB(entry *catalog.DBEntry) error       { return nil }
+func (c *LogtailRespBuilder) visitTbl(entry *catalog.TableEntry) error   { return nil }
+func (c *LogtailRespBuilder) visitSeg(entry *catalog.SegmentEntry) error { return nil }
+func (c *LogtailRespBuilder) visitBlk(entry *catalog.BlockEntry) error   { return nil }
+
+func (c *LogtailRespBuilder) BuildResp() api.SyncLogTailResp {
+	return api.SyncLogTailResp{
+		CkpLocation: c.checkpoint,
+		Commands:    c.entries,
+	}
+}
+
+func sampleHandler(db *DB, req api.SyncLogTailReq) (api.SyncLogTailResp, error) {
+	start := types.BuildTS(req.CnHave.PhysicalTime, req.CnHave.LogicalTime)
+	end := types.BuildTS(req.CnWant.PhysicalTime, req.CnWant.LogicalTime)
+	did, tid := req.Table.DbId, req.Table.TbId
+	verifiedCheckpoint := ""
+	// TODO
+	// verifiedCheckpoint, start, end = db.CheckpointMgr.check(start, end)
+
+	// get a collector with a read only view for txns
+	collector := db.LogtailMgr.GetLogtailCollector(start, end, did, tid)
+	respBuilder := NewLogtailRespBuilder(verifiedCheckpoint)
+	mode := CollectModeSegAndBlk
+	if tid == catalog.SystemTable_DB_ID {
+		mode = CollectModeDB
+	} else if tid == catalog.SystemTable_Table_ID {
+		mode = CollectModeTbl
+	}
+	collector.BindCollectEnv(mode, db.Catalog, respBuilder)
+	if err := collector.Collect(); err != nil {
+		return api.SyncLogTailResp{}, err
+	}
+	return respBuilder.BuildResp(), nil
+
 }
