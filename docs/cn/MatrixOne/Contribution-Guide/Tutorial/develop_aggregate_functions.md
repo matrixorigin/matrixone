@@ -73,6 +73,7 @@ MatrixOne 中的 `Ring` 是一个接口，具有类似于代数 `Ring` 结构的
 | BatchAdd                 | Merge several couples of groups for two Rings                           |
 | Mul                      | Multiplication between groups for two Rings, called when join occurs      |
 
+注：6.0版本 ring暂时被删除，不在/pkg/container/ring/下
 `Ring` 数据结构在路径 `/pkg/container/ring/` 下实现。
 
 ## **`Ring` 如何进行查询**

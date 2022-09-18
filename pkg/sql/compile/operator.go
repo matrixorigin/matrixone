@@ -17,6 +17,7 @@ package compile
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/agg"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/unnest"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 
@@ -45,7 +46,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/errno"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggregate"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
@@ -228,10 +228,6 @@ func dupInstruction(in vm.Instruction) vm.Instruction {
 		rin.Arg = &external.Argument{
 			Es: arg.Es,
 		}
-	case *unnest.Argument:
-		rin.Arg = &unnest.Argument{
-			Es: arg.Es,
-		}
 	default:
 		panic(errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("Unsupport instruction %T\n", in.Arg)))
 	}
@@ -354,7 +350,6 @@ func constructExternal(n *plan.Node, ctx context.Context) *external.Argument {
 		},
 	}
 }
-
 func constructUnnest(n *plan.Node, ctx context.Context, param *tree.UnnestParam) *unnest.Argument {
 	attrs := make([]string, len(n.TableDef.Cols))
 	for j, col := range n.TableDef.Cols {
@@ -533,7 +528,7 @@ func constructLimit(n *plan.Node, proc *process.Process) *limit.Argument {
 }
 
 func constructGroup(n, cn *plan.Node, ibucket, nbucket int, needEval bool) *group.Argument {
-	aggs := make([]aggregate.Aggregate, len(n.AggList))
+	aggs := make([]agg.Aggregate, len(n.AggList))
 	for i, expr := range n.AggList {
 		if f, ok := expr.Expr.(*plan.Expr_F); ok {
 			distinct := (uint64(f.F.Func.Obj) & function.Distinct) != 0
@@ -542,7 +537,7 @@ func constructGroup(n, cn *plan.Node, ibucket, nbucket int, needEval bool) *grou
 			if err != nil {
 				panic(err)
 			}
-			aggs[i] = aggregate.Aggregate{
+			aggs[i] = agg.Aggregate{
 				E:    f.F.Args[0],
 				Dist: distinct,
 				Op:   fun.AggregateInfo,

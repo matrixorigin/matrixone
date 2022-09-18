@@ -31,17 +31,34 @@ type Table struct {
 
 var _ engine.Relation = new(Table)
 
-func (*Table) Rows() int64 {
-	return 1
+func (t *Table) Rows(ctx context.Context) (int64, error) {
+
+	resps, err := DoTxnRequest[TableStatsResp](
+		ctx,
+		t.engine,
+		t.txnOperator.Read,
+		t.engine.firstNodeShard,
+		OpTableStats,
+		TableStatsReq{
+			TableID: t.id,
+		},
+	)
+	if err != nil {
+		return 0, err
+	}
+
+	resp := resps[0]
+
+	return int64(resp.Rows), nil
 }
 
-func (*Table) Size(string) int64 {
-	return 0
+func (t *Table) Size(ctx context.Context, columnName string) (int64, error) {
+	return 1, nil
 }
 
 func (t *Table) AddTableDef(ctx context.Context, def engine.TableDef) error {
 
-	_, err := engine.DoTxnRequest[AddTableDefResp](
+	_, err := DoTxnRequest[AddTableDefResp](
 		ctx,
 		t.engine,
 		t.txnOperator.Write,
@@ -61,7 +78,7 @@ func (t *Table) AddTableDef(ctx context.Context, def engine.TableDef) error {
 
 func (t *Table) DelTableDef(ctx context.Context, def engine.TableDef) error {
 
-	_, err := engine.DoTxnRequest[DelTableDefResp](
+	_, err := DoTxnRequest[DelTableDefResp](
 		ctx,
 		t.engine,
 		t.txnOperator.Write,
@@ -79,7 +96,7 @@ func (t *Table) DelTableDef(ctx context.Context, def engine.TableDef) error {
 	return nil
 }
 
-func (t *Table) Delete(ctx context.Context, vec *vector.Vector, _ string) error {
+func (t *Table) Delete(ctx context.Context, vec *vector.Vector, colName string) error {
 
 	clusterDetails, err := t.engine.getClusterDetails()
 	if err != nil {
@@ -94,15 +111,16 @@ func (t *Table) Delete(ctx context.Context, vec *vector.Vector, _ string) error 
 	}
 
 	for _, shard := range shards {
-		_, err := engine.DoTxnRequest[DeleteResp](
+		_, err := DoTxnRequest[DeleteResp](
 			ctx,
 			t.engine,
 			t.txnOperator.Write,
 			thisShard(shard.Shard),
 			OpDelete,
 			DeleteReq{
-				TableID: t.id,
-				Vector:  shard.Vector,
+				TableID:    t.id,
+				ColumnName: colName,
+				Vector:     shard.Vector,
 			},
 		)
 		if err != nil {
@@ -123,7 +141,7 @@ func (*Table) GetPriKeyOrHideKey() ([]engine.Attribute, bool) {
 
 func (t *Table) GetPrimaryKeys(ctx context.Context) ([]*engine.Attribute, error) {
 
-	resps, err := engine.DoTxnRequest[GetPrimaryKeysResp](
+	resps, err := DoTxnRequest[GetPrimaryKeysResp](
 		ctx,
 		t.engine,
 		t.txnOperator.Read,
@@ -157,7 +175,7 @@ func (t *Table) Ranges(ctx context.Context) ([][]byte, error) {
 
 func (t *Table) TableDefs(ctx context.Context) ([]engine.TableDef, error) {
 
-	resps, err := engine.DoTxnRequest[GetTableDefsResp](
+	resps, err := DoTxnRequest[GetTableDefsResp](
 		ctx,
 		t.engine,
 		t.txnOperator.Read,
@@ -178,7 +196,7 @@ func (t *Table) TableDefs(ctx context.Context) ([]engine.TableDef, error) {
 
 func (t *Table) Truncate(ctx context.Context) (uint64, error) {
 
-	resps, err := engine.DoTxnRequest[TruncateResp](
+	resps, err := DoTxnRequest[TruncateResp](
 		ctx,
 		t.engine,
 		t.txnOperator.Write,
@@ -216,7 +234,7 @@ func (t *Table) Update(ctx context.Context, data *batch.Batch) error {
 	}
 
 	for _, shard := range shards {
-		_, err := engine.DoTxnRequest[UpdateResp](
+		_, err := DoTxnRequest[UpdateResp](
 			ctx,
 			t.engine,
 			t.txnOperator.Write,
@@ -251,7 +269,7 @@ func (t *Table) Write(ctx context.Context, data *batch.Batch) error {
 	}
 
 	for _, shard := range shards {
-		_, err := engine.DoTxnRequest[WriteResp](
+		_, err := DoTxnRequest[WriteResp](
 			ctx,
 			t.engine,
 			t.txnOperator.Write,
@@ -271,11 +289,25 @@ func (t *Table) Write(ctx context.Context, data *batch.Batch) error {
 }
 
 func (t *Table) GetHideKeys(ctx context.Context) (attrs []*engine.Attribute, err error) {
-	//TODO
-	return
+	resps, err := DoTxnRequest[GetHiddenKeysResp](
+		ctx,
+		t.engine,
+		t.txnOperator.Read,
+		t.engine.firstNodeShard,
+		OpGetHiddenKeys,
+		GetHiddenKeysReq{
+			TableID: t.id,
+		},
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	resp := resps[0]
+
+	return resp.Attrs, nil
 }
 
 func (t *Table) GetTableID(ctx context.Context) string {
-	//TODO
-	return "0"
+	return t.id
 }

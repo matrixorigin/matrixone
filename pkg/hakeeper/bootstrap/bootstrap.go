@@ -40,7 +40,7 @@ func NewBootstrapManager(cluster pb.ClusterInfo, logger *zap.Logger) *Manager {
 
 	manager := &Manager{
 		cluster: nc,
-		logger:  logutil.Adjust(logger).Named("hakeeper"),
+		logger:  logutil.GetGlobalLogger().Named("hakeeper"),
 	}
 
 	return manager

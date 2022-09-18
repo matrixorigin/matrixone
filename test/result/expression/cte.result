@@ -19,11 +19,13 @@ WITH qn AS (SELECT a FROM t1), qn as (select b from t1)
 SELECT 1 FROM qn;
 WITH query name "qn" specified more than once
 with test.qn as (select "with") select * from test.qn;
-You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at position 11;
+You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 10 near ".qn as (select "with") select * from test.qn;";
 with qn as (select "with" as a)
 with qn2 as (select "with" as a)
 select a from qn;
-You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at position 37 near 'with';
+You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 2 column 5 near "
+with qn2 as (select "with" as a)
+select a from qn;";
 with qne as (select a from t1),
 qnm as (select a from t1),
 qnea as (select a from t1),
@@ -135,14 +137,18 @@ worst_month(month, total, award) as
 (select month, total, "worst" from sales_by_month
 where total=(select min(total) from sales_by_month))
 select * from best_month union all select * from worst_month;
-'union' will be supported in future version.
+month	total	award
+1	300	best
+3	11	worst
 drop table if exists sales_days;
 drop table if exists t1;
 create table t1(a int);
 insert into t1 values(1),(2);
 with qn(a) as (select 1 from t1 limit 2)
 select * from qn where qn.a=(select * from qn qn1 limit 1) union select 2;
-'union' will be supported in future version.
+a
+1
+2
 drop table if exists t1;
 create table t1(a int, b int, c int);
 insert into t1 values(null,null,null),(2,3,4),(4,5,6);
@@ -241,7 +247,7 @@ drop table if exists t2;
 create table t1(a int, b int, c int);
 insert into t1 values(null,null,null),(2,3,4),(4,5,6),(4,5,6),(8,9,10);
 with qn () as (select 1) select * from qn, qn qn1;
-You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at position 11;
+You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 10 near ") as (select 1) select * from qn, qn qn1;";
 with qn (foo, bar) as (select 1) select * from qn, qn qn1;
 table "qn" has 1 columns available but 2 columns specified
 with qn as (select 1,1) select * from qn;
@@ -273,8 +279,13 @@ foo	bar	foo	bar
 1	2	1	2
 1	2	1	2
 with qn (foo, bar) as (select 1 as col, 2 as coll union
-select a,b from t1) select qn1.bar from qn qn1;
-'union' will be supported in future version.
+select a,b from t1 order by col) select qn1.bar from qn qn1;
+bar
+null
+2
+3
+5
+9
 with qn (foo, bar) as (select a, b from t1 limit 2) select qn.bar,foo from qn;
 bar	foo
 null	null

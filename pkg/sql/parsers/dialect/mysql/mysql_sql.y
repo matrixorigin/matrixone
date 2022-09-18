@@ -186,9 +186,11 @@ import (
 %token <str> NEXT VALUE SHARE MODE
 %token <str> SQL_NO_CACHE SQL_CACHE
 %left <str> JOIN STRAIGHT_JOIN LEFT RIGHT INNER OUTER CROSS NATURAL USE FORCE
-%left <str> ON USING
+%nonassoc LOWER_THAN_ON
+%nonassoc <str> ON USING
 %left <str> SUBQUERY_AS_EXPR
-%left <str> '(' ',' ')'
+%right <str> '('
+%left <str> ')'
 %nonassoc LOWER_THAN_STRING
 %nonassoc <str> ID AT_ID AT_AT_ID STRING VALUE_ARG LIST_ARG COMMENT COMMENT_KEYWORD
 %token <item> INTEGRAL HEX BIT_LITERAL FLOAT HEXNUM
@@ -212,7 +214,7 @@ import (
 %left <str> COLLATE
 %right <str> BINARY UNDERSCORE_BINARY
 %right <str> INTERVAL
-%nonassoc <str> '.'
+%nonassoc <str> '.' ','
 
 // Transaction
 %token <str> BEGIN START TRANSACTION COMMIT ROLLBACK WORK CONSISTENT SNAPSHOT
@@ -378,7 +380,7 @@ import (
 %type <int64Val> field_length_opt max_file_size_opt
 %type <matchType> match match_opt
 %type <referenceOptionType> ref_opt on_delete on_update
-%type <referenceOnRecord> on_delete_update_opt on_delete_update
+%type <referenceOnRecord> on_delete_update_opt
 %type <attributeReference> references_def
 
 %type <tableOption> table_option
@@ -4871,10 +4873,19 @@ column_attribute_elem:
     {
         $$ = tree.NewAttributeCheck($4, $6, $1)
     }
-// |   ON UPDATE function_call_nonkeyword
-//     {
-//         $$ = tree.NewAttributeOnUpdate($3)
-//     }
+|   ON UPDATE name_datetime_precision datetime_precision_opt
+    {
+		name := tree.SetUnresolvedName(strings.ToLower($3))
+        var es tree.Exprs = nil
+        if $4 != nil {
+            es = append(es, $4)
+        }
+        expr := &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(name),
+            Exprs: es,
+        }
+        $$ = tree.NewAttributeOnUpdate(expr)
+    }
 
 enforce:
     ENFORCED
@@ -4918,23 +4929,21 @@ references_def:
     }
 
 on_delete_update_opt:
+	%prec LOWER_THAN_ON
     {
         $$ = &tree.ReferenceOnRecord{
             OnDelete: tree.REFERENCE_OPTION_INVALID,
             OnUpdate: tree.REFERENCE_OPTION_INVALID,
         }
     }
-|   on_delete_update
-
-on_delete_update:
-    on_delete
+|   on_delete %prec LOWER_THAN_ON
     {
         $$ = &tree.ReferenceOnRecord{
             OnDelete: $1,
             OnUpdate: tree.REFERENCE_OPTION_INVALID,
         }
     }
-|   on_update
+|   on_update %prec LOWER_THAN_ON
     {
         $$ = &tree.ReferenceOnRecord{
             OnDelete: tree.REFERENCE_OPTION_INVALID,
@@ -7087,6 +7096,7 @@ reserved_keyword:
 |   REQUIRE
 |   REPEAT
 |   ROW_COUNT
+|	REFERENCES
 |   RECURSIVE
 |   REVERSE
 |   SCHEMA

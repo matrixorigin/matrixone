@@ -33,14 +33,14 @@ func benchmarkFileService(b *testing.B, newFS func() FileService) {
 		writeVector := IOVector{
 			FilePath: "foo",
 		}
-		offset := 0
+		offset := int64(0)
 		for _, part := range parts {
 			writeVector.Entries = append(writeVector.Entries, IOEntry{
 				Offset: offset,
-				Size:   len(part),
+				Size:   int64(len(part)),
 				Data:   part,
 			})
-			offset += len(part)
+			offset += int64(len(part))
 		}
 		err := fs.Write(ctx, writeVector)
 		assert.Nil(b, err)
@@ -49,13 +49,13 @@ func benchmarkFileService(b *testing.B, newFS func() FileService) {
 		readVector := &IOVector{
 			FilePath: "foo",
 		}
-		offset = 0
+		offset = int64(0)
 		for _, part := range parts2 {
 			readVector.Entries = append(readVector.Entries, IOEntry{
 				Offset: offset,
-				Size:   len(part),
+				Size:   int64(len(part)),
 			})
-			offset += len(part)
+			offset += int64(len(part))
 		}
 
 		b.ResetTimer()

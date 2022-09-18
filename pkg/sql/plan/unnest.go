@@ -100,22 +100,6 @@ func _dupColDef(src *plan.ColDef) *plan.ColDef {
 	}
 }
 
-func _getDefaultCols() []string {
-	ret := make([]string, 0, len(defaultColDefs))
-	for _, v := range defaultColDefs {
-		ret = append(ret, v.Name)
-	}
-	return ret
-}
-
-func _getDefaultPlanTypes() []*plan.Type {
-	ret := make([]*plan.Type, 0, len(defaultColDefs))
-	for _, v := range defaultColDefs {
-		tp := _dupType(v.Typ)
-		ret = append(ret, tp)
-	}
-	return ret
-}
 func _getDefaultColDefs() []*plan.ColDef {
 	ret := make([]*plan.ColDef, 0, len(defaultColDefs))
 	for _, v := range defaultColDefs {

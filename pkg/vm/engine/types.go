@@ -50,6 +50,8 @@ type Attribute struct {
 	Type types.Type
 	// DefaultExpr default value of this attribute
 	Default *plan.Default
+	// to update col when define in create table
+	OnUpdate *plan.Expr
 	// Primary is primary key or not
 	Primary bool
 	// Comment of attribute
@@ -72,8 +74,8 @@ type Property struct {
 }
 
 type Statistics interface {
-	Rows() int64
-	Size(string) int64
+	Rows(ctx context.Context) (int64, error)
+	Size(ctx context.Context, columnName string) (int64, error)
 }
 
 type IndexTableDef struct {

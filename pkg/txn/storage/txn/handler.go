@@ -41,7 +41,7 @@ type Handler interface {
 	)
 
 	HandleStartRecovery(
-		chan txn.TxnMeta,
+		ch chan txn.TxnMeta,
 	)
 
 	HandleClose() error
@@ -82,6 +82,12 @@ type Handler interface {
 		meta txn.TxnMeta,
 		req txnengine.GetTableDefsReq,
 		resp *txnengine.GetTableDefsResp,
+	) error
+
+	HandleGetHiddenKeys(
+		meta txn.TxnMeta,
+		req txnengine.GetHiddenKeysReq,
+		resp *txnengine.GetHiddenKeysResp,
 	) error
 
 	HandleNewTableIter(
@@ -160,5 +166,17 @@ type Handler interface {
 		meta txn.TxnMeta,
 		req txnengine.WriteReq,
 		resp *txnengine.WriteResp,
+	) error
+
+	HandleTableStats(
+		meta txn.TxnMeta,
+		req txnengine.TableStatsReq,
+		resp *txnengine.TableStatsResp,
+	) error
+
+	HandleGetLogTail(
+		meta txn.TxnMeta,
+		req txnengine.GetLogTailReq,
+		resp *txnengine.GetLogTailResp,
 	) error
 }
