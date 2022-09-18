@@ -20,8 +20,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	apipb "github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 )
 
 const (
@@ -46,6 +48,7 @@ const (
 	OpRead
 	OpCloseTableIter
 	OpTableStats
+	OpGetLogTail
 )
 
 func init() {
@@ -301,6 +304,19 @@ type ReadResp struct {
 	Batch             *batch.Batch
 	ErrIterNotFound   ErrIterNotFound
 	ErrColumnNotFound ErrColumnNotFound
+
+	heap *mheap.Mheap
+}
+
+func (r *ReadResp) Close() error {
+	if r.Batch != nil {
+		r.Batch.Clean(r.heap)
+	}
+	return nil
+}
+
+func (r *ReadResp) SetHeap(heap *mheap.Mheap) {
+	r.heap = heap
 }
 
 type CloseTableIterReq struct {
@@ -318,4 +334,14 @@ type TableStatsReq struct {
 type TableStatsResp struct {
 	Rows             int
 	ErrTableNotFound ErrRelationNotFound
+}
+
+type GetLogTailReq struct {
+	TableID string
+	Request apipb.SyncLogTailReq
+}
+
+type GetLogTailResp struct {
+	ErrRelationNotFound ErrRelationNotFound
+	Response            apipb.SyncLogTailResp
 }

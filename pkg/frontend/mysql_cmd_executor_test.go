@@ -17,9 +17,10 @@ package frontend
 import (
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"testing"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 
 	"github.com/fagongzi/goetty/v2/buf"
 	"github.com/golang/mock/gomock"
@@ -447,6 +448,7 @@ func Test_getDataFromPipeline(t *testing.T) {
 		ses := NewSession(proto, guestMmu, pu.Mempool, pu, &gSys)
 		ses.SetRequestContext(ctx)
 		ses.Mrs = &MysqlResultSet{}
+		proto.ses = ses
 
 		// mce := NewMysqlCmdExecutor()
 		// mce.PrepareSessionBeforeExecRequest(ses)
@@ -519,6 +521,7 @@ func Test_getDataFromPipeline(t *testing.T) {
 		ses := NewSession(proto, guestMmu, pu.Mempool, pu, &gSys)
 		ses.SetRequestContext(ctx)
 		ses.Mrs = &MysqlResultSet{}
+		proto.ses = ses
 
 		convey.So(getDataFromPipeline(ses, nil), convey.ShouldBeNil)
 
@@ -772,6 +775,7 @@ func Test_handleShowColumns(t *testing.T) {
 		ses.Data[0][1] = int32(1)
 		ses.Data[0][2] = int8(2)
 		ses.Data[0][primaryKeyPos] = []byte("p")
+		proto.ses = ses
 
 		ses.Mrs = &MysqlResultSet{}
 		err = handleShowColumns(ses)
