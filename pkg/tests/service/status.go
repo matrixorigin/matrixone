@@ -14,7 +14,7 @@
 
 package service
 
-// ServiceStatus indicates serivce status.
+// ServiceStatus indicates service status.
 type ServiceStatus int
 
 const (

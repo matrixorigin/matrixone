@@ -518,7 +518,7 @@ func extractRowFromEveryVector(ses *Session, dataSet *batch.Batch, j int64, oq o
 }
 
 func formatFloatNum[T types.Floats](num T, Typ types.Type) T {
-	if Typ.Precision == -1 {
+	if Typ.Precision == -1 || Typ.Width == 0 {
 		return num
 	}
 	pow := math.Pow10(int(Typ.Precision))
