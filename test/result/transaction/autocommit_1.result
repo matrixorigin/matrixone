@@ -443,7 +443,8 @@ select * from t5;
 a
 drop table t5
 start transaction;
-You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at position 20 near 'start'; 
+You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 2 column 6 near "
+start transaction;";
 set @@a=0;
 the system variable does not exist
 rollback;

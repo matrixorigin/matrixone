@@ -185,7 +185,7 @@ func mockDnShard(
 }
 
 func TestCheck(t *testing.T) {
-	// clear all records, or other test would failed
+	// clear all records, or other test would fail
 	defer func() {
 		waitingShards.clear()
 	}()

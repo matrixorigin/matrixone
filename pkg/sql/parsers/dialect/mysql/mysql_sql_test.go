@@ -52,6 +52,12 @@ var (
 		input  string
 		output string
 	}{{
+		input:  "create table t1 (a datetime on update CURRENT_TIMESTAMP(1))",
+		output: "create table t1 (a datetime(26) on update current_timestamp(1))",
+	}, {
+		input:  `create table table10 (a int primary key, b varchar(10)) checksum=0 COMMENT="asdf"`,
+		output: "create table table10 (a int primary key, b varchar(10)) checksum = 0 comment = asdf",
+	}, {
 		input:  "commit work",
 		output: "commit",
 	}, {

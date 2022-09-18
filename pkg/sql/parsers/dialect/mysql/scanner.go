@@ -32,8 +32,11 @@ type Scanner struct {
 	dialectType         dialect.DialectType
 	MysqlSpecialComment *Scanner
 
-	Pos int
-	buf string
+	Pos    int
+	Line   int
+	Col    int
+	PrePos int
+	buf    string
 }
 
 func NewScanner(dialectType dialect.DialectType, sql string) *Scanner {
@@ -52,16 +55,16 @@ func (s *Scanner) Scan() (int, string) {
 		}
 		s.MysqlSpecialComment = nil
 	}
-
+	s.PrePos = s.Pos
 	s.skipBlank()
 	switch ch := s.cur(); {
 	case ch == '@':
 		tokenID := AT_ID
-		s.skip(1)
+		s.inc()
 		s.skipBlank()
 		if s.cur() == '@' {
 			tokenID = AT_AT_ID
-			s.skip(1)
+			s.inc()
 		} else if s.cur() == '\'' || s.cur() == '"' {
 			return int('@'), ""
 		} else if s.cur() == ',' {
@@ -70,7 +73,7 @@ func (s *Scanner) Scan() (int, string) {
 		var tID int
 		var tBytes string
 		if s.cur() == '`' {
-			s.skip(1)
+			s.inc()
 			tID, tBytes = s.scanLiteralIdentifier()
 		} else if s.cur() == eofChar {
 			return LEX_ERROR, ""
@@ -84,13 +87,13 @@ func (s *Scanner) Scan() (int, string) {
 	case isLetter(ch):
 		if ch == 'X' || ch == 'x' {
 			if s.peek(1) == '\'' {
-				s.skip(2)
+				s.incN(2)
 				return s.scanHex()
 			}
 		}
 		if ch == 'B' || ch == 'b' {
 			if s.peek(1) == '\'' {
-				s.skip(2)
+				s.incN(2)
 				return s.scanBitLiteral()
 			}
 		}
@@ -99,28 +102,28 @@ func (s *Scanner) Scan() (int, string) {
 		return s.scanNumber()
 	case ch == ':':
 		if s.peek(1) == '=' {
-			s.skip(2)
+			s.incN(2)
 			return ASSIGNMENT, ""
 		}
 		// Like mysql -h ::1 ?
 		return s.scanBindVar()
 	case ch == ';':
-		s.skip(1)
+		s.inc()
 		return ';', ""
 	case ch == '.' && isDigit(s.peek(1)):
 		return s.scanNumber()
 	case ch == '/':
-		s.skip(1)
+		s.inc()
 		switch s.cur() {
 		case '/':
-			s.skip(1)
+			s.inc()
 			id, str := s.scanCommentTypeLine(2)
 			if id == LEX_ERROR {
 				return id, str
 			}
 			return s.Scan()
 		case '*':
-			s.skip(1)
+			s.inc()
 			switch {
 			case s.cur() == '!' && s.dialectType == dialect.MYSQL:
 				// TODO: ExtractMysqlComment
@@ -141,7 +144,7 @@ func (s *Scanner) Scan() (int, string) {
 }
 
 func (s *Scanner) stepBackOneChar(ch uint16) (int, string) {
-	s.skip(1)
+	s.inc()
 	switch ch {
 	case eofChar:
 		return 0, ""
@@ -149,13 +152,13 @@ func (s *Scanner) stepBackOneChar(ch uint16) (int, string) {
 		return int(ch), ""
 	case '&':
 		if s.cur() == '&' {
-			s.skip(1)
+			s.inc()
 			return AND, ""
 		}
 		return int(ch), ""
 	case '|':
 		if s.cur() == '|' {
-			s.skip(1)
+			s.inc()
 			return PIPE_CONCAT, ""
 		}
 		return int(ch), ""
@@ -175,11 +178,11 @@ func (s *Scanner) stepBackOneChar(ch uint16) (int, string) {
 		case '-':
 			nextChar := s.peek(1)
 			if nextChar == ' ' || nextChar == '\n' || nextChar == '\t' || nextChar == '\r' || nextChar == eofChar {
-				s.skip(1)
+				s.inc()
 				return s.scanCommentTypeLine(2)
 			}
 		case '>':
-			s.skip(1)
+			s.inc()
 			// TODO:
 			// JSON_UNQUOTE_EXTRACT_OP
 			// JSON_EXTRACT_OP
@@ -189,16 +192,16 @@ func (s *Scanner) stepBackOneChar(ch uint16) (int, string) {
 	case '<':
 		switch s.cur() {
 		case '>':
-			s.skip(1)
+			s.inc()
 			return NE, ""
 		case '<':
-			s.skip(1)
+			s.inc()
 			return SHIFT_LEFT, ""
 		case '=':
-			s.skip(1)
+			s.inc()
 			switch s.cur() {
 			case '>':
-				s.skip(1)
+				s.inc()
 				return NULL_SAFE_EQUAL, ""
 			default:
 				return LE, ""
@@ -209,17 +212,17 @@ func (s *Scanner) stepBackOneChar(ch uint16) (int, string) {
 	case '>':
 		switch s.cur() {
 		case '=':
-			s.skip(1)
+			s.inc()
 			return GE, ""
 		case '>':
-			s.skip(1)
+			s.inc()
 			return SHIFT_RIGHT, ""
 		default:
 			return int(ch), ""
 		}
 	case '!':
 		if s.cur() == '=' {
-			s.skip(1)
+			s.inc()
 			return NE, ""
 		}
 		return int(ch), ""
@@ -243,7 +246,7 @@ func (s *Scanner) scanString(delim uint16, typ int) (int, string) {
 		switch s.cur() {
 		case delim:
 			if s.peek(1) != delim {
-				s.skip(1)
+				s.inc()
 				return typ, s.buf[start : s.Pos-1]
 			}
 			fallthrough
@@ -257,7 +260,7 @@ func (s *Scanner) scanString(delim uint16, typ int) (int, string) {
 			return LEX_ERROR, s.buf[start:s.Pos]
 		}
 
-		s.skip(1)
+		s.inc()
 	}
 }
 
@@ -283,11 +286,11 @@ func (s *Scanner) scanStringSlow(buffer *strings.Builder, delim uint16, typ int)
 
 			buffer.WriteString(s.buf[start:s.Pos])
 			if s.Pos >= len(s.buf) {
-				s.skip(1)
+				s.inc()
 				continue
 			}
 		}
-		s.skip(1)
+		s.inc()
 
 		if ch == '\\' {
 			ch = s.cur()
@@ -317,7 +320,7 @@ func (s *Scanner) scanStringSlow(buffer *strings.Builder, delim uint16, typ int)
 			break
 		}
 		buffer.WriteByte(byte(ch))
-		s.skip(1)
+		s.inc()
 	}
 
 	return typ, buffer.String()
@@ -335,19 +338,19 @@ func (s *Scanner) scanLiteralIdentifier() (int, string) {
 				if s.Pos == start {
 					return LEX_ERROR, ""
 				}
-				s.skip(1)
+				s.inc()
 				return ID, s.buf[start : s.Pos-1]
 			}
 
 			var buf strings.Builder
 			buf.WriteString(s.buf[start:s.Pos])
-			s.skip(1)
+			s.inc()
 			return s.scanLiteralIdentifierSlow(&buf)
 		case eofChar:
 			// Premature EOF.
 			return LEX_ERROR, s.buf[start:s.Pos]
 		default:
-			s.skip(1)
+			s.inc()
 		}
 	}
 }
@@ -366,7 +369,7 @@ func (s *Scanner) scanLiteralIdentifierSlow(buf *strings.Builder) (int, string) 
 			}
 			backTickSeen = false
 			buf.WriteByte('`')
-			s.skip(1)
+			s.inc()
 			continue
 		}
 		// The previous char was not a backtick.
@@ -380,7 +383,7 @@ func (s *Scanner) scanLiteralIdentifierSlow(buf *strings.Builder) (int, string) 
 			buf.WriteByte(byte(s.cur()))
 			// keep scanning
 		}
-		s.skip(1)
+		s.inc()
 	}
 	return ID, buf.String()
 }
@@ -391,9 +394,9 @@ func (s *Scanner) scanCommentTypeBlock() (int, string) {
 	start := s.Pos - 2
 	for {
 		if s.cur() == '*' {
-			s.skip(1)
+			s.inc()
 			if s.cur() == '/' {
-				s.skip(1)
+				s.inc()
 				break
 			}
 			continue
@@ -401,7 +404,7 @@ func (s *Scanner) scanCommentTypeBlock() (int, string) {
 		if s.cur() == eofChar {
 			return LEX_ERROR, s.buf[start:s.Pos]
 		}
-		s.skip(1)
+		s.inc()
 	}
 	return COMMENT, s.buf[start:s.Pos]
 }
@@ -411,9 +414,9 @@ func (s *Scanner) scanMySQLSpecificComment() (int, string) {
 	start := s.Pos - 3
 	for {
 		if s.cur() == '*' {
-			s.skip(1)
+			s.inc()
 			if s.cur() == '/' {
-				s.skip(1)
+				s.inc()
 				break
 			}
 			continue
@@ -421,7 +424,7 @@ func (s *Scanner) scanMySQLSpecificComment() (int, string) {
 		if s.cur() == eofChar {
 			return LEX_ERROR, s.buf[start:s.Pos]
 		}
-		s.skip(1)
+		s.inc()
 	}
 
 	_, sql := ExtractMysqlComment(s.buf[start:s.Pos])
@@ -460,10 +463,10 @@ func (s *Scanner) scanCommentTypeLine(prefixLen int) (int, string) {
 	start := s.Pos - prefixLen
 	for s.cur() != eofChar {
 		if s.cur() == '\n' {
-			s.skip(1)
+			s.inc()
 			break
 		}
-		s.skip(1)
+		s.inc()
 	}
 	return COMMENT, s.buf[start:s.Pos]
 }
@@ -474,10 +477,10 @@ func (s *Scanner) scanBindVar() (int, string) {
 	start := s.Pos
 	token := VALUE_ARG
 
-	s.skip(1)
+	s.inc()
 	if s.cur() == ':' {
 		token = LIST_ARG
-		s.skip(1)
+		s.inc()
 	}
 	if !isLetter(s.cur()) {
 		return LEX_ERROR, s.buf[start:s.Pos]
@@ -487,7 +490,7 @@ func (s *Scanner) scanBindVar() (int, string) {
 		if !isLetter(ch) && !isDigit(ch) && ch != '.' {
 			break
 		}
-		s.skip(1)
+		s.inc()
 	}
 	return token, s.buf[start:s.Pos]
 }
@@ -499,22 +502,22 @@ func (s *Scanner) scanNumber() (int, string) {
 
 	if s.cur() == '.' {
 		token = FLOAT
-		s.skip(1)
+		s.inc()
 		s.scanMantissa(10)
 		goto exponent
 	}
 
 	// 0x construct.
 	if s.cur() == '0' {
-		s.skip(1)
+		s.inc()
 		if s.cur() == 'x' || s.cur() == 'X' {
 			token = HEXNUM
-			s.skip(1)
+			s.inc()
 			s.scanMantissa(16)
 			goto exit
 		} else if s.cur() == 'b' || s.cur() == 'B' {
 			token = BIT_LITERAL
-			s.skip(1)
+			s.inc()
 			s.scanMantissa(2)
 			goto exit
 		}
@@ -524,7 +527,7 @@ func (s *Scanner) scanNumber() (int, string) {
 
 	if s.cur() == '.' {
 		token = FLOAT
-		s.skip(1)
+		s.inc()
 		s.scanMantissa(10)
 	}
 
@@ -532,10 +535,10 @@ exponent:
 	if s.cur() == 'e' || s.cur() == 'E' {
 		if s.peek(1) == '+' || s.peek(1) == '-' {
 			token = FLOAT
-			s.skip(2)
+			s.incN(2)
 		} else if digitVal(s.peek(1)) < 10 {
 			token = FLOAT
-			s.skip(1)
+			s.inc()
 		} else {
 			goto exit
 		}
@@ -554,7 +557,7 @@ exit:
 
 func (s *Scanner) scanIdentifier(isVariable bool) (int, string) {
 	start := s.Pos
-	s.skip(1)
+	s.inc()
 
 	for {
 		ch := s.cur()
@@ -564,7 +567,7 @@ func (s *Scanner) scanIdentifier(isVariable bool) (int, string) {
 		if ch == '@' {
 			isVariable = true
 		}
-		s.skip(1)
+		s.inc()
 	}
 	keywordName := s.buf[start:s.Pos]
 	lower := strings.ToLower(keywordName)
@@ -585,7 +588,7 @@ func (s *Scanner) scanBitLiteral() (int, string) {
 	if s.cur() != '\'' {
 		return LEX_ERROR, bit
 	}
-	s.skip(1)
+	s.inc()
 	return BIT_LITERAL, bit
 }
 
@@ -596,7 +599,7 @@ func (s *Scanner) scanHex() (int, string) {
 	if s.cur() != '\'' {
 		return LEX_ERROR, hex
 	}
-	s.skip(1)
+	s.inc()
 	if len(hex)%2 != 0 {
 		return LEX_ERROR, hex
 	}
@@ -605,28 +608,27 @@ func (s *Scanner) scanHex() (int, string) {
 
 func (s *Scanner) scanMantissa(base int) {
 	for digitVal(s.cur()) < base {
-		s.skip(1)
+		s.inc()
 	}
 }
 
 // PositionedErr holds context related to parser errros
 type PositionedErr struct {
-	Err  string
-	Pos  int
-	Near string
+	Err    string
+	Line   int
+	Col    int
+	Near   string
+	LenStr string
 }
 
 func (p PositionedErr) Error() string {
-	if p.Near != "" {
-		return fmt.Sprintf("%s at position %v near '%s';", p.Err, p.Pos, p.Near)
-	}
-	return fmt.Sprintf("%s at position %v;", p.Err, p.Pos)
+	return fmt.Sprintf("%s at line %d column %d near \"%s\"%s;", p.Err, p.Line+1, p.Col, p.Near, p.LenStr)
 }
 
 func (s *Scanner) skipBlank() {
 	ch := s.cur()
 	for ch == ' ' || ch == '\n' || ch == '\r' || ch == '\t' {
-		s.skip(1)
+		s.inc()
 		ch = s.cur()
 	}
 }
@@ -635,8 +637,22 @@ func (s *Scanner) cur() uint16 {
 	return s.peek(0)
 }
 
-func (s *Scanner) skip(dist int) {
-	s.Pos += dist
+func (s *Scanner) inc() {
+	if s.Pos >= len(s.buf) {
+		return
+	}
+	if s.buf[s.Pos] == '\n' {
+		s.Line++
+		s.Col = 0
+	}
+	s.Pos++
+	s.Col++
+}
+
+func (s *Scanner) incN(dist int) {
+	for i := 0; i < dist; i++ {
+		s.inc()
+	}
 }
 
 func (s *Scanner) peek(dist int) uint16 {

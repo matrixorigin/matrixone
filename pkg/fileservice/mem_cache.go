@@ -24,7 +24,7 @@ type MemCache struct {
 	stats *CacheStats
 }
 
-func NewMemCache(capacity int) *MemCache {
+func NewMemCache(capacity int64) *MemCache {
 	return &MemCache{
 		lru:   NewLRU(capacity),
 		stats: new(CacheStats),

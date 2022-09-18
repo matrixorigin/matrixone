@@ -34,20 +34,24 @@ func (t *Table[K, R]) NewIter(
 ) {
 	iter = &TableIter[K, R]{
 		tx:       tx,
-		iter:     t.Rows.Copy().Iter(),
-		readTime: tx.CurrentTime,
+		iter:     t.rows.Copy().Iter(),
+		readTime: tx.Time,
 	}
 	return
 }
 
 func (t *TableIter[K, R]) Read() (key K, row *R, err error) {
 	physicalRow := t.iter.Item()
-	key = physicalRow.PrimaryKey
-	row, err = physicalRow.Values.Read(t.tx, t.readTime)
+	key = physicalRow.Key
+	row, err = physicalRow.Values.Read(t.readTime, t.tx)
 	if err != nil {
 		return
 	}
 	return
+}
+
+func (t *TableIter[K, R]) Item() (row *PhysicalRow[K, R]) {
+	return t.iter.Item()
 }
 
 func (t *TableIter[K, R]) Next() bool {
@@ -56,7 +60,7 @@ func (t *TableIter[K, R]) Next() bool {
 			return false
 		}
 		// skip unreadable values
-		value, _ := t.iter.Item().Values.Read(t.tx, t.readTime)
+		value, _ := t.iter.Item().Values.Read(t.readTime, t.tx)
 		if value == nil {
 			continue
 		}
@@ -70,7 +74,27 @@ func (t *TableIter[K, R]) First() bool {
 	}
 	for {
 		// skip unreadable values
-		value, _ := t.iter.Item().Values.Read(t.tx, t.readTime)
+		value, _ := t.iter.Item().Values.Read(t.readTime, t.tx)
+		if value == nil {
+			if ok := t.iter.Next(); !ok {
+				return false
+			}
+			continue
+		}
+		return true
+	}
+}
+
+func (t *TableIter[K, R]) Seek(key K) bool {
+	pivot := &PhysicalRow[K, R]{
+		Key: key,
+	}
+	if ok := t.iter.Seek(pivot); !ok {
+		return false
+	}
+	for {
+		// skip unreadable values
+		value, _ := t.iter.Item().Values.Read(t.readTime, t.tx)
 		if value == nil {
 			if ok := t.iter.Next(); !ok {
 				return false

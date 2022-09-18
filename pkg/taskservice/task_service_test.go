@@ -25,7 +25,7 @@ import (
 )
 
 func TestCreate(t *testing.T) {
-	store := newMemTaskStorage()
+	store := NewMemTaskStorage()
 	s := NewTaskService(store)
 	defer func() {
 		assert.NoError(t, s.Close())
@@ -50,7 +50,7 @@ func TestCreate(t *testing.T) {
 }
 
 func TestCreateBatch(t *testing.T) {
-	store := newMemTaskStorage()
+	store := NewMemTaskStorage()
 	s := NewTaskService(store)
 	defer func() {
 		assert.NoError(t, s.Close())
@@ -84,7 +84,7 @@ func TestCreateBatch(t *testing.T) {
 }
 
 func TestAllocate(t *testing.T) {
-	store := newMemTaskStorage()
+	store := NewMemTaskStorage()
 	s := NewTaskService(store)
 	defer func() {
 		assert.NoError(t, s.Close())
@@ -104,8 +104,38 @@ func TestAllocate(t *testing.T) {
 	assert.Equal(t, uint32(1), v.Epoch)
 }
 
+func TestReAllocate(t *testing.T) {
+	store := NewMemTaskStorage()
+	s := NewTaskService(store)
+	defer func() {
+		assert.NoError(t, s.Close())
+	}()
+
+	ctx, cancel := context.WithTimeout(context.TODO(), time.Second*10)
+	defer cancel()
+
+	assert.NoError(t, s.Create(ctx, newTestTaskMetadata("t1")))
+	v := mustGetTestTask(t, store, 1)[0]
+	assert.NoError(t, s.Allocate(ctx, v, "r1"))
+
+	v = mustGetTestTask(t, store, 1)[0]
+	assert.Equal(t, task.TaskStatus_Running, v.Status)
+	assert.True(t, v.LastHeartbeat > 0)
+	assert.Equal(t, "r1", v.TaskRunner)
+	assert.Equal(t, uint32(1), v.Epoch)
+
+	last := v.LastHeartbeat
+	time.Sleep(time.Millisecond)
+	assert.NoError(t, s.Allocate(ctx, v, "r2"))
+	v = mustGetTestTask(t, store, 1)[0]
+	assert.Equal(t, task.TaskStatus_Running, v.Status)
+	assert.True(t, v.LastHeartbeat > last)
+	assert.Equal(t, "r2", v.TaskRunner)
+	assert.Equal(t, uint32(2), v.Epoch)
+}
+
 func TestAllocateWithNotExistTask(t *testing.T) {
-	store := newMemTaskStorage()
+	store := NewMemTaskStorage()
 	s := NewTaskService(store)
 	defer func() {
 		assert.NoError(t, s.Close())
@@ -117,43 +147,33 @@ func TestAllocateWithNotExistTask(t *testing.T) {
 	assert.Equal(t, ErrInvalidTask, s.Allocate(ctx, task.Task{ID: 1}, "r1"))
 }
 
-func TestAllocateMultiTimes(t *testing.T) {
-	store := newMemTaskStorage()
+func TestAllocateWithInvalidEpoch(t *testing.T) {
+	store := NewMemTaskStorage().(*memTaskStorage)
 	s := NewTaskService(store)
 	defer func() {
 		assert.NoError(t, s.Close())
 	}()
+
+	store.preUpdate = func() {
+		store.Lock()
+		defer store.Unlock()
+
+		for k, v := range store.tasks {
+			v.Epoch++
+			store.tasks[k] = v
+		}
+	}
 
 	ctx, cancel := context.WithTimeout(context.TODO(), time.Second*10)
 	defer cancel()
 
 	assert.NoError(t, s.Create(ctx, newTestTaskMetadata("t1")))
 	v := mustGetTestTask(t, store, 1)[0]
-
-	assert.NoError(t, s.Allocate(ctx, v, "r1"))
-	assert.Equal(t, ErrInvalidTask, s.Allocate(ctx, v, "r2"))
-}
-
-func TestAllocateWithInvalidStatus(t *testing.T) {
-	store := newMemTaskStorage()
-	s := NewTaskService(store)
-	defer func() {
-		assert.NoError(t, s.Close())
-	}()
-
-	ctx, cancel := context.WithTimeout(context.TODO(), time.Second*10)
-	defer cancel()
-
-	assert.NoError(t, s.Create(ctx, newTestTaskMetadata("t1")))
-	v := mustGetTestTask(t, store, 1)[0]
-	v.Status = task.TaskStatus_Running
-	mustUpdateTestTask(t, store, 1, []task.Task{v})
-
 	assert.Equal(t, ErrInvalidTask, s.Allocate(ctx, v, "r2"))
 }
 
 func TestCompleted(t *testing.T) {
-	store := newMemTaskStorage()
+	store := NewMemTaskStorage()
 	s := NewTaskService(store)
 	defer func() {
 		assert.NoError(t, s.Close())
@@ -176,7 +196,7 @@ func TestCompleted(t *testing.T) {
 }
 
 func TestCompletedWithInvalidStatus(t *testing.T) {
-	store := newMemTaskStorage()
+	store := NewMemTaskStorage()
 	s := NewTaskService(store)
 	defer func() {
 		assert.NoError(t, s.Close())
@@ -198,7 +218,7 @@ func TestCompletedWithInvalidStatus(t *testing.T) {
 }
 
 func TestCompletedWithInvalidEpoch(t *testing.T) {
-	store := newMemTaskStorage()
+	store := NewMemTaskStorage()
 	s := NewTaskService(store)
 	defer func() {
 		assert.NoError(t, s.Close())
@@ -220,7 +240,7 @@ func TestCompletedWithInvalidEpoch(t *testing.T) {
 }
 
 func TestCompletedWithInvalidTaskRunner(t *testing.T) {
-	store := newMemTaskStorage()
+	store := NewMemTaskStorage()
 	s := NewTaskService(store)
 	defer func() {
 		assert.NoError(t, s.Close())
@@ -239,7 +259,7 @@ func TestCompletedWithInvalidTaskRunner(t *testing.T) {
 }
 
 func TestHeartbeat(t *testing.T) {
-	store := newMemTaskStorage()
+	store := NewMemTaskStorage()
 	s := NewTaskService(store)
 	defer func() {
 		assert.NoError(t, s.Close())
@@ -262,7 +282,7 @@ func TestHeartbeat(t *testing.T) {
 }
 
 func TestHeartbeatWithSmallEpoch(t *testing.T) {
-	store := newMemTaskStorage()
+	store := NewMemTaskStorage()
 	s := NewTaskService(store)
 	defer func() {
 		assert.NoError(t, s.Close())
@@ -284,7 +304,7 @@ func TestHeartbeatWithSmallEpoch(t *testing.T) {
 }
 
 func TestHeartbeatWithBiggerEpochShouldSuccess(t *testing.T) {
-	store := newMemTaskStorage()
+	store := NewMemTaskStorage()
 	s := NewTaskService(store)
 	defer func() {
 		assert.NoError(t, s.Close())
@@ -306,7 +326,7 @@ func TestHeartbeatWithBiggerEpochShouldSuccess(t *testing.T) {
 }
 
 func TestCreateCronTask(t *testing.T) {
-	store := newMemTaskStorage()
+	store := NewMemTaskStorage()
 	s := NewTaskService(store)
 	defer func() {
 		assert.NoError(t, s.Close())
@@ -319,7 +339,7 @@ func TestCreateCronTask(t *testing.T) {
 }
 
 func TestQueryCronTask(t *testing.T) {
-	store := newMemTaskStorage()
+	store := NewMemTaskStorage()
 	s := NewTaskService(store)
 	defer func() {
 		assert.NoError(t, s.Close())
@@ -338,7 +358,7 @@ func TestQueryCronTask(t *testing.T) {
 }
 
 func TestQueryTask(t *testing.T) {
-	store := newMemTaskStorage()
+	store := NewMemTaskStorage()
 	s := NewTaskService(store)
 	defer func() {
 		assert.NoError(t, s.Close())

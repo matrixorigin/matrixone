@@ -145,43 +145,48 @@ func fillKeys[T types.FixedSizeT](m *IntHashMap, vec *vector.Vector, size uint32
 }
 
 func fillStrKey(m *IntHashMap, vec *vector.Vector, start int, n int) {
-	bvs := vector.GetBytesVectorValues(vec)
+	area := vec.GetArea()
+	vs := vector.MustTCols[types.Varlena](vec)
 	keys := m.keys
 	keyOffs := m.keyOffs
 	if !vec.GetNulls().Any() {
 		if m.hasNull {
 			for i := 0; i < n; i++ {
+				v := vs[i+start].GetByteSlice(area)
 				*(*int8)(unsafe.Add(unsafe.Pointer(&keys[i]), keyOffs[i])) = 0
-				copy(unsafe.Slice((*byte)(unsafe.Pointer(&keys[i])), 8)[m.keyOffs[i]+1:], bvs[i+start])
-				m.keyOffs[i] += uint32(len(bvs[i+start]) + 1)
+				copy(unsafe.Slice((*byte)(unsafe.Pointer(&keys[i])), 8)[m.keyOffs[i]+1:], v)
+				m.keyOffs[i] += uint32(len(v) + 1)
 			}
 		} else {
 			for i := 0; i < n; i++ {
-				copy(unsafe.Slice((*byte)(unsafe.Pointer(&keys[i])), 8)[m.keyOffs[i]:], bvs[i+start])
-				m.keyOffs[i] += uint32(len(bvs[i+start]))
+				v := vs[i+start].GetByteSlice(area)
+				copy(unsafe.Slice((*byte)(unsafe.Pointer(&keys[i])), 8)[m.keyOffs[i]:], v)
+				m.keyOffs[i] += uint32(len(v))
 			}
 		}
 	} else {
 		nsp := vec.GetNulls()
 		if m.hasNull {
 			for i := 0; i < n; i++ {
+				v := vs[i+start].GetByteSlice(area)
 				if nsp.Contains(uint64(i + start)) {
 					*(*int8)(unsafe.Add(unsafe.Pointer(&keys[i]), keyOffs[i])) = 1
 					keyOffs[i]++
 				} else {
 					*(*int8)(unsafe.Add(unsafe.Pointer(&keys[i]), keyOffs[i])) = 0
-					copy(unsafe.Slice((*byte)(unsafe.Pointer(&keys[i])), 8)[m.keyOffs[i]+1:], bvs[i+start])
-					m.keyOffs[i] += uint32(len(bvs[i+start]) + 1)
+					copy(unsafe.Slice((*byte)(unsafe.Pointer(&keys[i])), 8)[m.keyOffs[i]+1:], v)
+					m.keyOffs[i] += uint32(len(v) + 1)
 				}
 			}
 		} else {
 			for i := 0; i < n; i++ {
+				v := vs[i+start].GetByteSlice(area)
 				if nsp.Contains(uint64(i + start)) {
 					m.zValues[i] = 0
 					continue
 				}
-				copy(unsafe.Slice((*byte)(unsafe.Pointer(&keys[i])), 8)[m.keyOffs[i]:], bvs[i+start])
-				m.keyOffs[i] += uint32(len(bvs[i+start]))
+				copy(unsafe.Slice((*byte)(unsafe.Pointer(&keys[i])), 8)[m.keyOffs[i]:], v)
+				m.keyOffs[i] += uint32(len(v))
 			}
 		}
 	}

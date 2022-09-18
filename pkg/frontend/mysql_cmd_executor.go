@@ -157,7 +157,7 @@ func (mce *MysqlCmdExecutor) RecordStatement(ctx context.Context, ses *Session, 
 	}
 	var sesID uuid.UUID
 	copy(sesID[:], ses.GetUUID())
-	fmtCtx := tree.NewFmtCtx(dialect.MYSQL)
+	fmtCtx := tree.NewFmtCtx(dialect.MYSQL, tree.WithQuoteString(true))
 	cw.GetAst().Format(fmtCtx)
 	trace.ReportStatement(
 		ctx,
@@ -1248,10 +1248,15 @@ func (mce *MysqlCmdExecutor) handleExplainStmt(stmt *tree.ExplainStmt) error {
 		return errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("build query plan and optimize failed:'%v'", err))
 	}
 
-	// build explain data buffer
-	buffer := explain.NewExplainDataBuffer()
+	if plan.GetQuery() == nil {
+		logutil.Errorf("The sql query plan does not support explain")
+		return errors.New(errno.SyntaxErrororAccessRuleViolation, "the sql query plan does not support explain.")
+	}
 	// generator query explain
 	explainQuery := explain.NewExplainQueryImpl(plan.GetQuery())
+
+	// build explain data buffer
+	buffer := explain.NewExplainDataBuffer()
 	err = explainQuery.ExplainPlan(buffer, es)
 	if err != nil {
 		logutil.Errorf("explain Query statement error: %v", err)
@@ -1662,47 +1667,24 @@ var GetComputationWrapper = func(db, sql, user string, eng engine.Engine, proc *
 	return cw, nil
 }
 
-func incStatementCounter(stmt tree.Statement, isInternal bool) {
+func incStatementCounter(tenant string, stmt tree.Statement) {
 	switch stmt.(type) {
 	case *tree.Select:
-		metric.StatementCounter(metric.SQLTypeSelect, isInternal).Inc()
+		metric.StatementCounter(tenant, metric.SQLTypeSelect).Inc()
 	case *tree.Insert:
-		metric.StatementCounter(metric.SQLTypeInsert, isInternal).Inc()
+		metric.StatementCounter(tenant, metric.SQLTypeInsert).Inc()
 	case *tree.Delete:
-		metric.StatementCounter(metric.SQLTypeDelete, isInternal).Inc()
+		metric.StatementCounter(tenant, metric.SQLTypeDelete).Inc()
 	case *tree.Update:
-		metric.StatementCounter(metric.SQLTypeUpdate, isInternal).Inc()
+		metric.StatementCounter(tenant, metric.SQLTypeUpdate).Inc()
 	default:
-		metric.StatementCounter(metric.SQLTypeOther, isInternal).Inc()
-	}
-}
-
-func remindrecordSQLLentencyObserver(stmt tree.Statement, isInternal bool, value float64) {
-	switch stmt.(type) {
-	case *tree.Select:
-		metric.SQLLatencyObserver(metric.SQLTypeSelect, isInternal).Observe(value)
-	case *tree.Insert:
-		metric.SQLLatencyObserver(metric.SQLTypeInsert, isInternal).Observe(value)
-	case *tree.Delete:
-		metric.SQLLatencyObserver(metric.SQLTypeDelete, isInternal).Observe(value)
-	case *tree.Update:
-		metric.SQLLatencyObserver(metric.SQLTypeUpdate, isInternal).Observe(value)
-	default:
-		metric.SQLLatencyObserver(metric.SQLTypeOther, isInternal).Observe(value)
+		metric.StatementCounter(tenant, metric.SQLTypeOther).Inc()
 	}
 }
 
 func (mce *MysqlCmdExecutor) beforeRun(stmt tree.Statement) {
-	sess := mce.GetSession()
-	incStatementCounter(stmt, sess.IsInternal)
-}
-
-func (mce *MysqlCmdExecutor) afterRun(stmt tree.Statement, beginInstant time.Time) {
-	// TODO: this latency doesn't consider complile and build stage, fix it!
-	latency := time.Since(beginInstant).Seconds()
-	sess := mce.GetSession()
-	remindrecordSQLLentencyObserver(stmt, sess.IsInternal, latency)
-
+	// incStatementCounter(sess.GetTenantInfo().Tenant, stmt, sess.IsInternal)
+	incStatementCounter("0", stmt)
 }
 
 // execute query
@@ -1762,7 +1744,6 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 
 	stmt := cws[0].GetAst()
 	mce.beforeRun(stmt)
-	defer mce.afterRun(stmt, beginInstant)
 	for _, cw := range cws {
 		ses.SetMysqlResultSet(&MysqlResultSet{})
 		stmt := cw.GetAst()
@@ -2300,14 +2281,15 @@ func (mce *MysqlCmdExecutor) ExecRequest(requestCtx context.Context, req *Reques
 		return resp, nil
 
 	case COM_STMT_EXECUTE:
+		mce.ses.Cmd = int(COM_STMT_EXECUTE)
 		data := req.GetData().([]byte)
 		sql, err := mce.parseStmtExecute(data)
 		if err != nil {
-			return NewGeneralErrorResponse(COM_STMT_PREPARE, err), nil
+			return NewGeneralErrorResponse(COM_STMT_EXECUTE, err), nil
 		}
 		err = mce.doComQuery(requestCtx, sql)
 		if err != nil {
-			resp = NewGeneralErrorResponse(COM_STMT_PREPARE, err)
+			resp = NewGeneralErrorResponse(COM_STMT_EXECUTE, err)
 		}
 		return resp, nil
 
