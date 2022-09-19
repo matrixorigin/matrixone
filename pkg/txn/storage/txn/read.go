@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/gob"
+	"io"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage"
@@ -94,6 +95,12 @@ func (s *Storage) Read(ctx context.Context, txnMeta txn.TxnMeta, op uint32, payl
 			s.handler.HandleTableStats,
 		)
 
+	case txnengine.OpGetLogTail:
+		return handleRead(
+			s, txnMeta, payload,
+			s.handler.HandleGetLogTail,
+		)
+
 	}
 
 	return
@@ -122,6 +129,11 @@ func handleRead[Req any, Resp any](
 
 	var resp Resp
 	defer logReq("read", req, txnMeta, &resp, &err)()
+	defer func() {
+		if closer, ok := (any)(resp).(io.Closer); ok {
+			_ = closer.Close()
+		}
+	}()
 
 	err = fn(txnMeta, req, &resp)
 	if err != nil {
