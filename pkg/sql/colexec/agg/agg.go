@@ -15,8 +15,8 @@
 package agg
 
 import (
+	"bytes"
 	"fmt"
-
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -251,24 +251,52 @@ func (a *UnaryAgg[T1, T2]) Eval(m *mheap.Mheap) (*vector.Vector, error) {
 	return vector.NewWithData(a.otyp, a.da, a.eval(a.vs), nsp), nil
 }
 
+func (a *UnaryAgg[T1, T2]) IsDistinct() bool {
+	return false
+}
+
+func (a *UnaryAgg[T1, T2]) GetOperatorId() int {
+	return a.op
+}
+
+func (a *UnaryAgg[T1, T2]) GetInputTypes() []types.Type {
+	return a.ityps
+}
+
 func (a *UnaryAgg[T1, T2]) MarshalBinary() ([]byte, error) {
+	var b []byte
+
 	pData, err := a.priv.MarshalBinary()
 	if err != nil {
 		return nil, err
 	}
-	b, err := types.Encode(&EncodeAgg{
+	// encode the input types.
+	var buf bytes.Buffer
+	i32 := int32(len(a.ityps))
+	buf.Write(types.EncodeInt32(&i32))
+	for _, it := range a.ityps {
+		buf.Write(types.EncodeType(&it))
+	}
+
+	source := &EncodeAgg{
 		Op:         a.op,
 		Private:    pData,
 		Es:         a.es,
-		Da:         a.da,
-		InputType:  a.ityps,
-		OutputType: a.otyp,
+		InputTypes: buf.Bytes(),
+		OutputType: types.EncodeType(&a.otyp),
 		IsCount:    a.isCount,
-	})
-	if err != nil {
-		return nil, err
+	}
+	if types.IsString(a.otyp.Oid) {
+		// TODO: 我不知道这块怎么弄
+		// source.StrVs
+	} else {
+		source.Da = a.da
 	}
 
+	b, err = types.Encode(source)
+	if err == nil {
+		return nil, err
+	}
 	return b, nil
 }
 
@@ -279,26 +307,23 @@ func (a *UnaryAgg[T1, T2]) UnmarshalBinary(data []byte) error {
 	}
 
 	// Recover data
-	//a.priv.UnmarshalBinary(decoded.Private)
-	a.ityps = decoded.InputType
-	a.otyp = decoded.OutputType
+	inputTypesData := decoded.InputTypes
+	inputTypesLength := int(types.DecodeInt32(inputTypesData[:4]))
+	inputTypesData = inputTypesData[4:]
+	a.ityps = make([]types.Type, inputTypesLength)
+	for i := range a.ityps {
+		a.ityps[i] = types.DecodeType(inputTypesData[:types.TSize])
+		inputTypesData = inputTypesData[types.TSize:]
+	}
+	a.otyp = types.DecodeType(decoded.OutputType)
 	a.isCount = decoded.IsCount
 	a.es = decoded.Es
 	a.da = decoded.Da
-	a.vs = types.DecodeFixedSlice[T2](a.da, a.otyp.TypeSize())
-
-	// Recover the priv data and function pointer
-	tmp, err := New(decoded.Op, false, a.ityps[0])
-	if err != nil {
-		return err
+	if types.IsString(a.otyp.Oid) {
+		//
+	} else {
+		a.vs = types.DecodeFixedSlice[T2](a.da, a.otyp.TypeSize())
 	}
-	newAgg := tmp.(*UnaryAgg[T1, T2])
-	a.priv = newAgg.priv
-	a.priv.UnmarshalBinary(decoded.Private)
-	a.grows = newAgg.grows
-	a.eval = newAgg.eval
-	a.merge = newAgg.merge
-	a.fill = newAgg.fill
 
-	return nil
+	return a.priv.UnmarshalBinary(decoded.Private)
 }

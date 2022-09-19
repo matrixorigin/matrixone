@@ -66,6 +66,9 @@ type Aggregate struct {
 
 // Agg agg interface
 type Agg[T any] interface {
+	encoding.BinaryMarshaler
+	encoding.BinaryUnmarshaler
+
 	// Dup will duplicate a new agg with the same type.
 	Dup() Agg[any]
 
@@ -114,13 +117,18 @@ type Agg[T any] interface {
 	// groupIndex2-group of agg2
 	Merge(agg2 Agg[any], groupIndex1 int64, groupIndex2 int64) error
 
-	// BatchAdd merges multi groups of agg1 and agg2
+	// BatchMerge merges multi groups of agg1 and agg2
 	//  agg1's (vps[i]-1)th group is related to agg2's (start+i)th group
 	// For more introduction of os, please refer to comments of Function BatchFill.
 	BatchMerge(agg2 Agg[any], start int64, os []uint8, vps []uint64) error
 
-	MarshalBinary() ([]byte, error)
-	UnmarshalBinary([]byte) error
+	// GetInputTypes get types of aggregate's input arguments.
+	GetInputTypes() []types.Type
+
+	// GetOperatorId get types of aggregate's aggregate id.
+	GetOperatorId() int
+
+	IsDistinct() bool
 }
 
 type AggStruct interface {
@@ -232,13 +240,14 @@ type EncodeAgg struct {
 	Private []byte
 	Es      []bool
 	Da      []byte
+	StrVs   [][]byte
 
-	InputType  []types.Type
-	OutputType types.Type
+	InputTypes []byte
+	OutputType []byte
 	IsCount    bool
 }
 
-type EncodeAggDistinc[T any] struct {
+type EncodeAggDistinct[T any] struct {
 	Op      int
 	Private []byte
 	Es      []bool
@@ -249,7 +258,6 @@ type EncodeAggDistinc[T any] struct {
 
 	IsCount bool
 	Srcs    [][]T
-	Maps    []*hashmap.StrHashMap
 }
 
 type Compare interface {
