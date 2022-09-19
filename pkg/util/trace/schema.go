@@ -18,7 +18,7 @@ import (
 	"context"
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/logutil/logutil2"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 	"strings"
 	"time"
@@ -121,9 +121,7 @@ func InitSchemaByInnerExecutor(ctx context.Context, ieFactory func() ie.Internal
 	}
 	var createCost time.Duration
 	defer func() {
-		logutil2.Debugf(
-			DefaultContext(),
-			"[Trace] init tables: create cost %d ms",
+		logutil.Debugf("[Trace] init tables: create cost %d ms",
 			createCost.Milliseconds())
 	}()
 	instant := time.Now()

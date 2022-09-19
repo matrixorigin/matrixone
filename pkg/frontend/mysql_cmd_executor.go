@@ -36,7 +36,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/errno"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/logutil/logutil2"
 	"github.com/matrixorigin/matrixone/pkg/sql/errors"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/util"
@@ -1976,7 +1975,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 
 		runner = ret.(ComputationRunner)
 		if !ses.Pu.SV.DisableRecordTimeElapsedOfSqlRequest {
-			logutil2.Infof(requestCtx, "time of Exec.Build : %s", time.Since(cmpBegin).String())
+			logutil.Infof("time of Exec.Build : %s", time.Since(cmpBegin).String())
 		}
 
 		// cw.Compile might rewrite sql, here we fetch the latest version
@@ -1989,7 +1988,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			*tree.ExplainFor, *tree.ExplainAnalyze, *tree.ExplainStmt:
 			columns, err2 := cw.GetColumns()
 			if err2 != nil {
-				logutil2.Errorf(requestCtx, "GetColumns from Computation handler failed. error: %v", err2)
+				logutil.Errorf("GetColumns from Computation handler failed. error: %v", err2)
 				err = err2
 				goto handleFailed
 			}
@@ -2060,7 +2059,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			}
 
 			if !ses.Pu.SV.DisableRecordTimeElapsedOfSqlRequest {
-				logutil2.Infof(requestCtx, "time of Exec.Run : %s", time.Since(runBegin).String())
+				logutil.Infof("time of Exec.Run : %s", time.Since(runBegin).String())
 			}
 			/*
 				Step 3: Say goodbye
@@ -2095,13 +2094,13 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			_ = runner.RecordExecPlanStats(requestCtx)
 
 			if !ses.Pu.SV.DisableRecordTimeElapsedOfSqlRequest {
-				logutil2.Infof(requestCtx, "time of Exec.Run : %s", time.Since(runBegin).String())
+				logutil.Infof("time of Exec.Run : %s", time.Since(runBegin).String())
 			}
 
 			rspLen = cw.GetAffectedRows()
 			echoTime := time.Now()
 			if !ses.Pu.SV.DisableRecordTimeElapsedOfSqlRequest {
-				logutil2.Infof(requestCtx, "time of SendResponse %s", time.Since(echoTime).String())
+				logutil.Infof("time of SendResponse %s", time.Since(echoTime).String())
 			}
 		}
 	handleSucceeded:
