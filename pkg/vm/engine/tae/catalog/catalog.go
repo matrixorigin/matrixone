@@ -197,7 +197,7 @@ func (catalog *Catalog) onReplayUpdateDatabase(cmd *EntryCommand, idx *wal.Index
 	if cmdType == txnif.Cmd1PC {
 		un.onReplayCommit(prepareTS)
 	}
-	un.AddLogIndex(idx)
+	un.SetLogIndex(idx)
 
 	db, err := catalog.GetDatabaseByID(cmd.entry.GetID())
 	if err != nil {
@@ -206,7 +206,7 @@ func (catalog *Catalog) onReplayUpdateDatabase(cmd *EntryCommand, idx *wal.Index
 		}
 		cmd.DB.RWMutex = new(sync.RWMutex)
 		cmd.DB.catalog = catalog
-		cmd.entry.GetNodeLocked().AddLogIndex(idx)
+		cmd.entry.GetNodeLocked().SetLogIndex(idx)
 		err = catalog.AddEntryLocked(cmd.DB, nil)
 		if err != nil {
 			panic(err)
@@ -280,7 +280,7 @@ func (catalog *Catalog) onReplayUpdateTable(cmd *EntryCommand, dataFactory DataF
 	if cmdType == txnif.Cmd1PC {
 		un.onReplayCommit(prepareTS)
 	}
-	un.AddLogIndex(idx)
+	un.SetLogIndex(idx)
 
 	if err != nil {
 		cmd.Table.db = db
@@ -359,9 +359,9 @@ func (catalog *Catalog) onReplayUpdateSegment(
 	case txnif.CmdCommit:
 		un.onReplayCommit(commitTS)
 	case txnif.CmdPrepare:
-		un.AddLogIndex(idx)
+		un.SetLogIndex(idx)
 	case txnif.Cmd1PC:
-		un.AddLogIndex(idx)
+		un.SetLogIndex(idx)
 		un.onReplayCommit(prepareTS)
 	}
 	db, err := catalog.GetDatabaseByID(cmd.DBID)
@@ -457,9 +457,9 @@ func (catalog *Catalog) onReplayUpdateBlock(cmd *EntryCommand,
 	case txnif.CmdCommit:
 		un.onReplayCommit(commitTS)
 	case txnif.CmdPrepare:
-		un.AddLogIndex(idx)
+		un.SetLogIndex(idx)
 	case txnif.Cmd1PC:
-		un.AddLogIndex(idx)
+		un.SetLogIndex(idx)
 		un.onReplayCommit(prepareTS)
 	}
 	if err == nil {

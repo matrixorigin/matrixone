@@ -42,7 +42,7 @@ type BaseEntry interface {
 	GetID() uint64
 	GetIndexes() []*wal.Index
 	GetCurrOp() OpT
-	GetLogIndex() []*wal.Index
+	GetLogIndex() *wal.Index
 
 	Insert(un txnbase.MVCCNode)
 

@@ -21,6 +21,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/store"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 )
 
@@ -42,8 +43,8 @@ type MVCCNode interface {
 	GetEnd() types.TS
 	GetPrepare() types.TS
 	GetTxn() txnif.TxnReader
-	AddLogIndex(idx *wal.Index)
-	GetLogIndex() []*wal.Index
+	SetLogIndex(idx *wal.Index)
+	GetLogIndex() *wal.Index
 
 	ApplyCommit(index *wal.Index) (err error)
 	ApplyRollback(index *wal.Index) (err error)
@@ -61,7 +62,7 @@ type TxnMVCCNode struct {
 	Txn                 txnif.TxnReader
 	//Aborted bool
 	//State txnif.TxnState
-	LogIndex []*wal.Index
+	LogIndex *wal.Index
 }
 
 func NewTxnMVCCNodeWithTxn(txn txnif.TxnReader) *TxnMVCCNode {
@@ -271,19 +272,16 @@ func (un *TxnMVCCNode) Compare(o *TxnMVCCNode) int {
 	return 1
 }
 
-func (un *TxnMVCCNode) AddLogIndex(idx *wal.Index) {
-	if un.LogIndex == nil {
-		un.LogIndex = make([]*wal.Index, 0)
-	}
-	un.LogIndex = append(un.LogIndex, idx)
+func (un *TxnMVCCNode) SetLogIndex(idx *wal.Index) {
+	un.LogIndex = idx
 
 }
-func (un *TxnMVCCNode) GetLogIndex() []*wal.Index {
+func (un *TxnMVCCNode) GetLogIndex() *wal.Index {
 	return un.LogIndex
 }
 func (un *TxnMVCCNode) ApplyCommit(index *wal.Index) (ts types.TS, err error) {
 	un.End = un.Txn.GetCommitTS()
-	un.AddLogIndex(index)
+	un.SetLogIndex(index)
 	un.Txn = nil
 	ts = un.End
 	return
@@ -294,7 +292,7 @@ func (un *TxnMVCCNode) OnReplayCommit(ts types.TS) {
 func (un *TxnMVCCNode) ApplyRollback(index *wal.Index) (err error) {
 	un.End = un.Txn.GetCommitTS()
 	un.Txn = nil
-	un.AddLogIndex(index)
+	un.SetLogIndex(index)
 	return
 }
 
@@ -312,18 +310,15 @@ func (un *TxnMVCCNode) WriteTo(w io.Writer) (n int64, err error) {
 	}
 	n += 12
 	var sn int64
-	length := uint32(len(un.LogIndex))
-	if err = binary.Write(w, binary.BigEndian, length); err != nil {
+	logIndex := un.LogIndex
+	if logIndex == nil {
+		logIndex = new(wal.Index)
+	}
+	sn, err = logIndex.WriteTo(w)
+	if err != nil {
 		return
 	}
-	n += 4
-	for _, idx := range un.LogIndex {
-		sn, err = idx.WriteTo(w)
-		if err != nil {
-			return
-		}
-		n += sn
-	}
+	n += sn
 	return
 }
 
@@ -341,24 +336,13 @@ func (un *TxnMVCCNode) ReadFrom(r io.Reader) (n int64, err error) {
 	}
 	n += 12
 
-	length := uint32(0)
-	if err = binary.Read(r, binary.BigEndian, &length); err != nil {
+	var sn int64
+	un.LogIndex = &store.Index{}
+	sn, err = un.LogIndex.ReadFrom(r)
+	if err != nil {
 		return
 	}
-	n += 4
-	if length != 0 {
-		un.LogIndex = make([]*wal.Index, 0)
-	}
-	var sn int64
-	for i := 0; i < int(length); i++ {
-		idx := new(wal.Index)
-		sn, err = idx.ReadFrom(r)
-		if err != nil {
-			return
-		}
-		n += sn
-		un.LogIndex = append(un.LogIndex, idx)
-	}
+	n += sn
 	return
 }
 
@@ -373,7 +357,7 @@ func (un *TxnMVCCNode) Update(o *TxnMVCCNode) {
 	if !un.End.Equal(o.End) {
 		panic("logic err")
 	}
-	un.AddLogIndex(o.LogIndex[0])
+	un.LogIndex = o.LogIndex
 }
 
 func (un *TxnMVCCNode) CloneAll() *TxnMVCCNode {
@@ -381,12 +365,7 @@ func (un *TxnMVCCNode) CloneAll() *TxnMVCCNode {
 	n.Start = un.Start
 	n.Prepare = un.Prepare
 	n.End = un.End
-	if len(un.LogIndex) != 0 {
-		n.LogIndex = make([]*wal.Index, 0)
-		for _, idx := range un.LogIndex {
-			n.LogIndex = append(n.LogIndex, idx.Clone())
-		}
-	}
+	n.LogIndex = un.LogIndex.Clone()
 	return n
 }
 

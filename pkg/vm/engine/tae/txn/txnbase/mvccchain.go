@@ -65,7 +65,7 @@ func (be *MVCCChain) GetIndexes() []*wal.Index {
 	ret := make([]*wal.Index, 0)
 	be.MVCC.Loop(func(n *common.GenericDLNode[MVCCNode]) bool {
 		un := n.GetPayload()
-		ret = append(ret, un.GetLogIndex()...)
+		ret = append(ret, un.GetLogIndex())
 		return true
 	}, true)
 	return ret
@@ -273,7 +273,7 @@ func (be *MVCCChain) ApplyCommit(index *wal.Index) error {
 	return be.GetNodeLocked().ApplyCommit(index)
 }
 
-func (be *MVCCChain) GetLogIndex() []*wal.Index {
+func (be *MVCCChain) GetLogIndex() *wal.Index {
 	node := be.GetNodeLocked()
 	if node == nil {
 		return nil

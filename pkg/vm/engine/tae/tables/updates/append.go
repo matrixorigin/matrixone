@@ -114,7 +114,7 @@ func (node *AppendNode) GeneralVerboseString() string {
 }
 
 func (node *AppendNode) SetLogIndex(idx *wal.Index) {
-	node.TxnMVCCNode.AddLogIndex(idx)
+	node.TxnMVCCNode.SetLogIndex(idx)
 }
 func (node *AppendNode) GetID() *common.ID {
 	return node.id
