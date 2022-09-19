@@ -26,8 +26,7 @@ var (
 		input  string
 		output string
 	}{
-		input:  `grant show databases on account * to r1`,
-		output: "grant show databases on account * to r1",
+		input: "select password from t1",
 	}
 )
 
@@ -52,6 +51,8 @@ var (
 		input  string
 		output string
 	}{{
+		input: "select password from t1",
+	}, {
 		input:  "create table t1 (a datetime on update CURRENT_TIMESTAMP(1))",
 		output: "create table t1 (a datetime(26) on update current_timestamp(1))",
 	}, {
@@ -510,10 +511,10 @@ var (
 		input:  "load data local infile 'data' replace into table db.a (a, b, @vc, @vd) set a = @vc != 0, d = @vd != 1",
 		output: "load data local infile data replace into table db.a (a, b, @vc, @vd) set a = @vc != 0, d = @vd != 1",
 	}, {
-		input:  "load data local infile 'data' replace into table db.a lines starting by '#' terminated by '\t' ignore 2 lines",
+		input: "load data local infile 'data' replace into table db.a lines starting by '#' terminated by '\t' ignore 2 lines",
 		output: "load data local infile data replace into table db.a lines starting by # terminated by 	 ignore 2 lines",
 	}, {
-		input:  "load data local infile 'data' replace into table db.a lines starting by '#' terminated by '\t' ignore 2 rows",
+		input: "load data local infile 'data' replace into table db.a lines starting by '#' terminated by '\t' ignore 2 rows",
 		output: "load data local infile data replace into table db.a lines starting by # terminated by 	 ignore 2 lines",
 	}, {
 		input:  "load data infile 'data.txt' into table db.a fields terminated by '\t' escaped by '\t'",
