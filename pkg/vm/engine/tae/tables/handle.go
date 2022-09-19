@@ -71,18 +71,22 @@ func (h *tableHandle) GetAppender() (appender data.BlockAppender, err error) {
 			return
 		}
 		blkEntry := segEntry.LastAppendableBlock()
+		if blkEntry == nil {
+			err = data.ErrAppendableBlockNotFound
+			return
+		}
 		h.block = blkEntry.GetBlockData().(*dataBlock)
 		h.appender, err = h.block.MakeAppender()
 		if err != nil {
 			panic(err)
 		}
 	}
-	if !h.appender.IsAppendable() || !h.block.IsAppendable() {
+	if !h.appender.IsAppendable() || !h.block.IsAppendable() || h.block.meta.HasDropped() {
 		return h.ThrowAppenderAndErr()
 	}
 	h.block.Ref()
 	// Similar to optimistic locking
-	if !h.appender.IsAppendable() || !h.block.IsAppendable() {
+	if !h.appender.IsAppendable() || !h.block.IsAppendable() || h.block.meta.HasDropped() {
 		h.block.Unref()
 		return h.ThrowAppenderAndErr()
 	}

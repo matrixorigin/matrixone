@@ -189,13 +189,13 @@ func (entry *SegmentEntry) LastAppendableBlock() (blk *BlockEntry) {
 	it := entry.MakeBlockIt(false)
 	for it.Valid() {
 		itBlk := it.Get().GetPayload()
-		if itBlk.IsAppendable() {
+		if itBlk.IsAppendable() && !itBlk.HasDropped() {
 			blk = itBlk
 			break
 		}
 		it.Next()
 	}
-	return blk
+	return
 }
 
 func (entry *SegmentEntry) CreateBlock(txn txnif.AsyncTxn, state EntryState, dataFactory BlockDataFactory) (created *BlockEntry, err error) {

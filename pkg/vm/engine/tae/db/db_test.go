@@ -3000,3 +3000,28 @@ func TestLogtailBasic(t *testing.T) {
 		assert.Equal(t, 2, len(seg.Blks))
 	}
 }
+
+// txn1: create relation and append, half blk
+// txn2: compact
+// txn3: append, shouldn't get rw
+func TestGetLastAppender(t *testing.T) {
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := newTestEngine(t, opts)
+	defer tae.Close()
+	schema := catalog.MockSchemaAll(1, -1)
+	schema.BlockMaxRows = 10
+	schema.SegmentMaxBlocks = 2
+	tae.bindSchema(schema)
+	bat := catalog.MockBatch(schema, 14)
+	bats := bat.Split(2)
+
+	tae.createRelAndAppend(bats[0], true)
+	t.Log(tae.Catalog.SimplePPString(3))
+
+	tae.compactBlocks(false)
+	t.Log(tae.Catalog.SimplePPString(3))
+
+	txn, rel := tae.getRelation()
+	rel.Append(bats[1])
+	assert.NoError(t, txn.Commit())
+}

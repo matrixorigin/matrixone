@@ -234,7 +234,7 @@ func (entry *TableEntry) LastAppendableSegmemt() (seg *SegmentEntry) {
 	it := entry.MakeSegmentIt(false)
 	for it.Valid() {
 		itSeg := it.Get().GetPayload()
-		if itSeg.IsAppendable() {
+		if itSeg.IsAppendable() && !itSeg.HasDropped() {
 			seg = itSeg
 			break
 		}
