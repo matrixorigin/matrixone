@@ -100,6 +100,12 @@ func NewDeleteNode(txn txnif.AsyncTxn, dt handle.DeleteType) *DeleteNode {
 	}
 	return n
 }
+func (node *DeleteNode) GetPrepareTS() types.TS {
+	return node.prepareTs
+}
+func (node *DeleteNode) OnReplayCommit(ts types.TS) {
+	node.commitTs = ts
+}
 func (node *DeleteNode) GetID() *common.ID {
 	return node.id
 }
@@ -165,25 +171,12 @@ func (node *DeleteNode) RangeDeleteLocked(start, end uint32) {
 }
 func (node *DeleteNode) GetCardinalityLocked() uint32 { return uint32(node.mask.GetCardinality()) }
 
-func (node *DeleteNode) Prepare2PCPrepare() (err error) {
-	node.chain.mvcc.Lock()
-	defer node.chain.mvcc.Unlock()
-	if node.commitTs != txnif.UncommitTS {
-		return
-	}
-	node.commitTs = node.txn.GetPrepareTS()
-	node.prepareTs = node.txn.GetPrepareTS()
-	node.chain.UpdateLocked(node)
-	return
-}
-
 func (node *DeleteNode) PrepareCommit() (err error) {
 	node.chain.mvcc.Lock()
 	defer node.chain.mvcc.Unlock()
 	if node.commitTs != txnif.UncommitTS {
 		return
 	}
-	node.commitTs = node.txn.GetCommitTS()
 	node.prepareTs = node.txn.GetCommitTS()
 	node.chain.UpdateLocked(node)
 	return
@@ -194,6 +187,7 @@ func (node *DeleteNode) ApplyCommit(index *wal.Index) (err error) {
 	if node.txn == nil {
 		panic("DeleteNode | ApplyCommit | LogicErr")
 	}
+	node.commitTs = node.txn.GetCommitTS()
 	node.txn = nil
 	node.logIndex = index
 	if node.chain.mvcc != nil {
@@ -215,15 +209,15 @@ func (node *DeleteNode) ApplyRollback(index *wal.Index) (err error) {
 }
 
 func (node *DeleteNode) GeneralString() string {
-	return fmt.Sprintf("TS=%d;Cnt=%d;LogIndex%v", node.commitTs, node.mask.GetCardinality(), node.logIndex)
+	return fmt.Sprintf("TS=%d;Cnt=%d;LogIndex%v", node.prepareTs, node.mask.GetCardinality(), node.logIndex)
 }
 
 func (node *DeleteNode) GeneralDesc() string {
-	return fmt.Sprintf("TS=%d;Cnt=%d", node.commitTs, node.mask.GetCardinality())
+	return fmt.Sprintf("TS=%d;Cnt=%d", node.prepareTs, node.mask.GetCardinality())
 }
 
 func (node *DeleteNode) GeneralVerboseString() string {
-	return fmt.Sprintf("TS=%d;%v;Cnt=%d;Deletes=%v", node.commitTs, node.logIndex, node.mask.GetCardinality(), node.mask)
+	return fmt.Sprintf("TS=%d;%v;Cnt=%d;Deletes=%v", node.prepareTs, node.logIndex, node.mask.GetCardinality(), node.mask)
 }
 
 func (node *DeleteNode) StringLocked() string {
@@ -235,7 +229,7 @@ func (node *DeleteNode) StringLocked() string {
 	if node.commitTs == txnif.UncommitTS {
 		commitState = "UC"
 	}
-	s := fmt.Sprintf("[%s:%s](%d-%d)[%d:%s]%s", ntype, commitState, node.startTs, node.commitTs, node.mask.GetCardinality(), node.mask.String(), node.logIndex.String())
+	s := fmt.Sprintf("[%s:%s](%d-%d)[%d:%s]%s", ntype, commitState, node.startTs, node.prepareTs, node.mask.GetCardinality(), node.mask.String(), node.logIndex.String())
 	return s
 }
 
@@ -257,7 +251,7 @@ func (node *DeleteNode) WriteTo(w io.Writer) (n int64, err error) {
 		return
 	}
 	n += int64(sn) + 4
-	if err = binary.Write(w, binary.BigEndian, node.commitTs); err != nil {
+	if err = binary.Write(w, binary.BigEndian, node.prepareTs); err != nil {
 		return
 	}
 	n += 8
@@ -290,7 +284,7 @@ func (node *DeleteNode) ReadFrom(r io.Reader) (n int64, err error) {
 	if err != nil {
 		return
 	}
-	if err = binary.Read(r, binary.BigEndian, &node.commitTs); err != nil {
+	if err = binary.Read(r, binary.BigEndian, &node.prepareTs); err != nil {
 		return
 	}
 	n += 4

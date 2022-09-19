@@ -21,7 +21,7 @@ import (
 
 type ioEntriesReader struct {
 	entries []IOEntry
-	offset  int
+	offset  int64
 }
 
 var _ io.Reader = new(ioEntriesReader)
@@ -48,11 +48,11 @@ func (i *ioEntriesReader) Read(buf []byte) (n int, err error) {
 		// gap
 		if i.offset < entry.Offset {
 			numBytes := entry.Offset - i.offset
-			if len(buf) < numBytes {
-				numBytes = len(buf)
+			if l := int64(len(buf)); l < numBytes {
+				numBytes = l
 			}
 			buf = buf[numBytes:] // skip
-			n += numBytes
+			n += int(numBytes)
 			i.offset += numBytes
 		}
 
@@ -63,8 +63,8 @@ func (i *ioEntriesReader) Read(buf []byte) (n int, err error) {
 
 		// copy data
 		numBytes := entry.Size
-		if len(buf) < numBytes {
-			numBytes = len(buf)
+		if l := int64(len(buf)); l < numBytes {
+			numBytes = l
 		}
 		if entry.ReaderForWrite != nil {
 			r := io.LimitReader(entry.ReaderForWrite, int64(numBytes))
@@ -73,12 +73,12 @@ func (i *ioEntriesReader) Read(buf []byte) (n int, err error) {
 			if err != nil {
 				return
 			}
-			if bytesRead != numBytes {
+			if int64(bytesRead) != numBytes {
 				err = ErrSizeNotMatch
 				return
 			}
 		} else {
-			if len(entry.Data) != entry.Size {
+			if int64(len(entry.Data)) != entry.Size {
 				err = ErrSizeNotMatch
 				return
 			}
@@ -92,7 +92,7 @@ func (i *ioEntriesReader) Read(buf []byte) (n int, err error) {
 			i.entries = i.entries[1:]
 		}
 		i.offset += numBytes
-		n += numBytes
+		n += int(numBytes)
 
 	}
 }

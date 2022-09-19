@@ -178,7 +178,7 @@ import (
 %token LEX_ERROR
 %nonassoc EMPTY
 %left <str> UNION EXCEPT INTERSECT MINUS
-%token <str> SELECT STREAM INSERT UPDATE DELETE FROM WHERE GROUP HAVING ORDER BY LIMIT OFFSET FOR
+%token <str> SELECT STREAM INSERT UPDATE DELETE FROM WHERE GROUP HAVING ORDER BY LIMIT OFFSET FOR CONNECT MANAGE GRANTS OWNERSHIP
 %nonassoc LOWER_THAN_SET
 %nonassoc <str> SET
 %token <str> ALL DISTINCT DISTINCTROW AS EXISTS ASC DESC INTO DUPLICATE DEFAULT LOCK KEYS
@@ -186,9 +186,11 @@ import (
 %token <str> NEXT VALUE SHARE MODE
 %token <str> SQL_NO_CACHE SQL_CACHE
 %left <str> JOIN STRAIGHT_JOIN LEFT RIGHT INNER OUTER CROSS NATURAL USE FORCE
-%left <str> ON USING
+%nonassoc LOWER_THAN_ON
+%nonassoc <str> ON USING
 %left <str> SUBQUERY_AS_EXPR
-%left <str> '(' ',' ')'
+%right <str> '('
+%left <str> ')'
 %nonassoc LOWER_THAN_STRING
 %nonassoc <str> ID AT_ID AT_AT_ID STRING VALUE_ARG LIST_ARG COMMENT COMMENT_KEYWORD
 %token <item> INTEGRAL HEX BIT_LITERAL FLOAT HEXNUM
@@ -212,7 +214,7 @@ import (
 %left <str> COLLATE
 %right <str> BINARY UNDERSCORE_BINARY
 %right <str> INTERVAL
-%nonassoc <str> '.'
+%nonassoc <str> '.' ','
 
 // Transaction
 %token <str> BEGIN START TRANSACTION COMMIT ROLLBACK WORK CONSISTENT SNAPSHOT
@@ -375,7 +377,7 @@ import (
 %type <int64Val> field_length_opt max_file_size_opt
 %type <matchType> match match_opt
 %type <referenceOptionType> ref_opt on_delete on_update
-%type <referenceOnRecord> on_delete_update_opt on_delete_update
+%type <referenceOnRecord> on_delete_update_opt
 %type <attributeReference> references_def
 
 %type <tableOption> table_option
@@ -1027,10 +1029,7 @@ priv_level:
     }
 
 object_type:
-    {
-        $$ = tree.OBJECT_TYPE_NONE
-    }
-|   TABLE
+    TABLE
     {
         $$ = tree.OBJECT_TYPE_TABLE
     }
@@ -1050,6 +1049,11 @@ object_type:
     {
         $$ = tree.OBJECT_TYPE_VIEW
     }
+|   ACCOUNT
+    {
+        $$ = tree.OBJECT_TYPE_ACCOUNT
+    }
+
 
 priv_list:
     priv_elem
@@ -1092,13 +1096,29 @@ priv_type:
 	{
 		$$ = tree.PRIVILEGE_TYPE_STATIC_ALL
 	}
+|	CREATE ACCOUNT
+	{
+		$$ = tree.PRIVILEGE_TYPE_STATIC_CREATE_ACCOUNT
+	}
+|	DROP ACCOUNT
+        {
+        	$$ = tree.PRIVILEGE_TYPE_STATIC_DROP_ACCOUNT
+        }
+|	ALTER ACCOUNT
+        {
+                $$ = tree.PRIVILEGE_TYPE_STATIC_ALTER_ACCOUNT
+        }
 |	ALL PRIVILEGES
 	{
 	    $$ = tree.PRIVILEGE_TYPE_STATIC_ALL
 	}
-|	ALTER
+|	ALTER TABLE
 	{
-		$$ = tree.PRIVILEGE_TYPE_STATIC_ALTER
+		$$ = tree.PRIVILEGE_TYPE_STATIC_ALTER_TABLE
+	}
+|	ALTER VIEW
+	{
+		$$ = tree.PRIVILEGE_TYPE_STATIC_ALTER_VIEW
 	}
 |	CREATE
 	{
@@ -1107,6 +1127,14 @@ priv_type:
 |	CREATE USER
 	{
 		$$ = tree.PRIVILEGE_TYPE_STATIC_CREATE_USER
+	}
+|	DROP USER
+	{
+		$$ = tree.PRIVILEGE_TYPE_STATIC_DROP_USER
+	}
+|	ALTER USER
+	{
+		$$ = tree.PRIVILEGE_TYPE_STATIC_ALTER_USER
 	}
 |	CREATE TABLESPACE
 	{
@@ -1120,9 +1148,13 @@ priv_type:
 	{
 		$$ = tree.PRIVILEGE_TYPE_STATIC_DELETE
 	}
-|	DROP
+|	DROP TABLE
 	{
-		$$ = tree.PRIVILEGE_TYPE_STATIC_DROP
+		$$ = tree.PRIVILEGE_TYPE_STATIC_DROP_TABLE
+	}
+|	DROP VIEW
+	{
+		$$ = tree.PRIVILEGE_TYPE_STATIC_DROP_VIEW
 	}
 |	EXECUTE
 	{
@@ -1144,9 +1176,37 @@ priv_type:
 	{
 		$$ = tree.PRIVILEGE_TYPE_STATIC_SUPER
 	}
+|	CREATE DATABASE
+	{
+		$$ = tree.PRIVILEGE_TYPE_STATIC_CREATE_DATABASE
+	}
+|	DROP DATABASE
+	{
+		$$ = tree.PRIVILEGE_TYPE_STATIC_DROP_DATABASE
+	}
 |	SHOW DATABASES
 	{
 		$$ = tree.PRIVILEGE_TYPE_STATIC_SHOW_DATABASES
+	}
+|	CONNECT
+	{
+		$$ = tree.PRIVILEGE_TYPE_STATIC_CONNECT
+	}
+|	MANAGE GRANTS
+	{
+		$$ = tree.PRIVILEGE_TYPE_STATIC_MANAGE_GRANTS
+	}
+|	OWNERSHIP
+	{
+		$$ = tree.PRIVILEGE_TYPE_STATIC_OWNERSHIP
+	}
+|	SHOW TABLES
+	{
+		$$ = tree.PRIVILEGE_TYPE_STATIC_SHOW_TABLES
+	}
+|	CREATE TABLE
+	{
+		$$ = tree.PRIVILEGE_TYPE_STATIC_CREATE_TABLE
 	}
 |	UPDATE
 	{
@@ -1204,7 +1264,11 @@ priv_type:
 	{
 		$$ = tree.PRIVILEGE_TYPE_STATIC_DROP_ROLE
 	}
-|   CREATE ROUTINE
+|	ALTER ROLE
+	{
+		$$ = tree.PRIVILEGE_TYPE_STATIC_ALTER_ROLE
+	}
+|  	CREATE ROUTINE
 	{
 		$$ = tree.PRIVILEGE_TYPE_STATIC_CREATE_ROUTINE
 	}
@@ -4725,10 +4789,19 @@ column_attribute_elem:
     {
         $$ = tree.NewAttributeCheck($4, $6, $1)
     }
-// |   ON UPDATE function_call_nonkeyword
-//     {
-//         $$ = tree.NewAttributeOnUpdate($3)
-//     }
+|   ON UPDATE name_datetime_precision datetime_precision_opt
+    {
+		name := tree.SetUnresolvedName(strings.ToLower($3))
+        var es tree.Exprs = nil
+        if $4 != nil {
+            es = append(es, $4)
+        }
+        expr := &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(name),
+            Exprs: es,
+        }
+        $$ = tree.NewAttributeOnUpdate(expr)
+    }
 
 enforce:
     ENFORCED
@@ -4772,23 +4845,21 @@ references_def:
     }
 
 on_delete_update_opt:
+	%prec LOWER_THAN_ON
     {
         $$ = &tree.ReferenceOnRecord{
             OnDelete: tree.REFERENCE_OPTION_INVALID,
             OnUpdate: tree.REFERENCE_OPTION_INVALID,
         }
     }
-|   on_delete_update
-
-on_delete_update:
-    on_delete
+|   on_delete %prec LOWER_THAN_ON
     {
         $$ = &tree.ReferenceOnRecord{
             OnDelete: $1,
             OnUpdate: tree.REFERENCE_OPTION_INVALID,
         }
     }
-|   on_update
+|   on_update %prec LOWER_THAN_ON
     {
         $$ = &tree.ReferenceOnRecord{
             OnDelete: tree.REFERENCE_OPTION_INVALID,
@@ -6941,6 +7012,7 @@ reserved_keyword:
 |   REQUIRE
 |   REPEAT
 |   ROW_COUNT
+|	REFERENCES
 |   RECURSIVE
 |   REVERSE
 |   SCHEMA

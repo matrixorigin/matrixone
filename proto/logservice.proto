@@ -398,7 +398,8 @@ message CheckerState {
   ClusterInfo ClusterInfo = 2 [(gogoproto.nullable) = false];
   DNState DNState         = 3 [(gogoproto.nullable) = false];
   LogState LogState       = 4 [(gogoproto.nullable) = false];
-  HAKeeperState State     = 5;
+  CNState CNState         = 5 [(gogoproto.nullable) = false];
+  HAKeeperState State     = 6;
 }
 
 // HAKeeperRSMState contains state maintained by HAKeeper's RSM.

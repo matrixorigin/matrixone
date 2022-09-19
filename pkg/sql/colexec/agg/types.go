@@ -19,8 +19,48 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
+	"golang.org/x/exp/constraints"
 )
+
+const (
+	AggregateSum = iota
+	AggregateAvg
+	AggregateMax
+	AggregateMin
+	AggregateCount
+	AggregateStarCount
+	AggregateApproxCountDistinct
+	AggregateVariance
+	AggregateBitAnd
+	AggregateBitXor
+	AggregateBitOr
+	AggregateStdDevPop
+	AggregateAnyValue
+)
+
+var Names = [...]string{
+	AggregateSum:                 "sum",
+	AggregateAvg:                 "avg",
+	AggregateMax:                 "max",
+	AggregateMin:                 "min",
+	AggregateCount:               "count",
+	AggregateStarCount:           "starcount",
+	AggregateApproxCountDistinct: "approx_count_distinct",
+	AggregateVariance:            "var",
+	AggregateBitAnd:              "bit_and",
+	AggregateBitXor:              "bit_xor",
+	AggregateBitOr:               "bit_or",
+	AggregateStdDevPop:           "stddev_pop",
+	AggregateAnyValue:            "any",
+}
+
+type Aggregate struct {
+	Op   int
+	Dist bool
+	E    *plan.Expr
+}
 
 // Agg agg interface
 type Agg[T any] interface {
@@ -165,4 +205,9 @@ type UnaryDistAgg[T1, T2 any] struct {
 	//  fifth represents whether it is a new group
 	//  sixth represents whether the value to be fed is null
 	fill func(int64, T1, T2, int64, bool, bool) (T2, bool)
+}
+
+type Compare interface {
+	constraints.Integer | constraints.Float | types.Date |
+		types.Datetime | types.Timestamp
 }

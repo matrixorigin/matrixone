@@ -29,6 +29,7 @@ type MockCompilerContext struct {
 	objects map[string]*ObjectRef
 	tables  map[string]*TableDef
 	costs   map[string]*Cost
+	pks     map[string][]int
 }
 
 func (m *MockCompilerContext) ResolveVariable(varName string, isSystemVar, isGlobalVar bool) (interface{}, error) {
@@ -66,6 +67,7 @@ func NewEmptyCompilerContext() *MockCompilerContext {
 
 type Schema struct {
 	cols []col
+	pks  []int
 	card float64
 }
 
@@ -87,6 +89,7 @@ func NewMockCompilerContext() *MockCompilerContext {
 			{"n_regionkey", types.T_int32, false, 0, 0},
 			{"n_comment", types.T_varchar, true, 152, 0},
 		},
+		pks:  []int{0},
 		card: 25,
 	}
 	tpchSchema["nation2"] = &Schema{
@@ -96,6 +99,7 @@ func NewMockCompilerContext() *MockCompilerContext {
 			{"r_regionkey", types.T_int32, false, 0, 0}, //change N_REGIONKEY to R_REGIONKEY for test NaturalJoin And UsingJoin
 			{"n_comment", types.T_varchar, true, 152, 0},
 		},
+		pks:  []int{0},
 		card: 25,
 	}
 	tpchSchema["region"] = &Schema{
@@ -104,6 +108,7 @@ func NewMockCompilerContext() *MockCompilerContext {
 			{"r_name", types.T_varchar, false, 25, 0},
 			{"r_comment", types.T_varchar, true, 152, 0},
 		},
+		pks:  []int{0},
 		card: 5,
 	}
 	tpchSchema["part"] = &Schema{
@@ -118,7 +123,8 @@ func NewMockCompilerContext() *MockCompilerContext {
 			{"p_retailprice", types.T_float64, false, 15, 2},
 			{"p_comment", types.T_varchar, false, 23, 0},
 		},
-		card: SF * 2e4,
+		pks:  []int{0},
+		card: SF * 2e5,
 	}
 	tpchSchema["supplier"] = &Schema{
 		cols: []col{
@@ -130,7 +136,8 @@ func NewMockCompilerContext() *MockCompilerContext {
 			{"s_acctbal", types.T_float64, false, 15, 2},
 			{"s_comment", types.T_varchar, false, 101, 0},
 		},
-		card: SF * 1e3,
+		pks:  []int{0},
+		card: SF * 1e4,
 	}
 	tpchSchema["partsupp"] = &Schema{
 		cols: []col{
@@ -140,7 +147,8 @@ func NewMockCompilerContext() *MockCompilerContext {
 			{"ps_supplycost", types.T_float64, false, 15, 2},
 			{"ps_comment", types.T_varchar, false, 199, 0},
 		},
-		card: SF * 8e4,
+		pks:  []int{0, 1},
+		card: SF * 8e5,
 	}
 	tpchSchema["customer"] = &Schema{
 		cols: []col{
@@ -153,7 +161,8 @@ func NewMockCompilerContext() *MockCompilerContext {
 			{"c_mktsegment", types.T_varchar, false, 10, 0},
 			{"c_comment", types.T_varchar, false, 117, 0},
 		},
-		card: SF * 15e3,
+		pks:  []int{0},
+		card: SF * 15e4,
 	}
 	tpchSchema["orders"] = &Schema{
 		cols: []col{
@@ -167,7 +176,8 @@ func NewMockCompilerContext() *MockCompilerContext {
 			{"o_shippriority", types.T_int32, false, 0, 0},
 			{"o_comment", types.T_varchar, false, 79, 0},
 		},
-		card: SF * 15e4,
+		pks:  []int{0},
+		card: SF * 15e5,
 	}
 	tpchSchema["lineitem"] = &Schema{
 		cols: []col{
@@ -188,7 +198,8 @@ func NewMockCompilerContext() *MockCompilerContext {
 			{"l_shipmode", types.T_varchar, false, 10, 0},
 			{"l_comment", types.T_varchar, false, 44, 0},
 		},
-		card: SF * 6e5,
+		pks:  []int{0, 3},
+		card: SF * 6e6,
 	}
 	// it's a view
 	tpchSchema["v1"] = &Schema{
@@ -226,6 +237,7 @@ func NewMockCompilerContext() *MockCompilerContext {
 	objects := make(map[string]*ObjectRef)
 	tables := make(map[string]*TableDef)
 	costs := make(map[string]*Cost)
+	pks := make(map[string][]int)
 	// build tpch/mo context data(schema)
 	for db, schema := range schemas {
 		tableIdx := 0
@@ -296,6 +308,8 @@ func NewMockCompilerContext() *MockCompilerContext {
 			costs[tableName] = &plan.Cost{
 				Card: table.card,
 			}
+
+			pks[tableName] = table.pks
 		}
 	}
 
@@ -303,6 +317,7 @@ func NewMockCompilerContext() *MockCompilerContext {
 		objects: objects,
 		tables:  tables,
 		costs:   costs,
+		pks:     pks,
 	}
 }
 
@@ -324,7 +339,11 @@ func (m *MockCompilerContext) Resolve(dbName string, tableName string) (*ObjectR
 }
 
 func (m *MockCompilerContext) GetPrimaryKeyDef(dbName string, tableName string) []*ColDef {
-	return []*ColDef{m.tables[tableName].Cols[0]}
+	defs := make([]*ColDef, 0, 2)
+	for _, pk := range m.pks[tableName] {
+		defs = append(defs, m.tables[tableName].Cols[pk])
+	}
+	return defs
 }
 
 func (m *MockCompilerContext) GetHideKeyDef(dbName string, tableName string) *ColDef {

@@ -132,6 +132,7 @@ func (l *store) hakeeperCheck() {
 			l.handleBootstrapFailure()
 		case pb.HAKeeperRunning:
 			l.healthCheck(term, state)
+			l.taskSchedule(state)
 		default:
 			panic("unknown HAKeeper state")
 		}
@@ -175,6 +176,13 @@ func (l *store) healthCheck(term uint64, state *pb.CheckerState) {
 			return
 		}
 	}
+}
+
+func (l *store) taskSchedule(state *pb.CheckerState) {
+	l.assertHAKeeperState(pb.HAKeeperRunning)
+	defer l.assertHAKeeperState(pb.HAKeeperRunning)
+
+	l.taskScheduler.Schedule(state.GetCNState(), state.Tick)
 }
 
 func (l *store) bootstrap(term uint64, state *pb.CheckerState) {
