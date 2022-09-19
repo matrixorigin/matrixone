@@ -14,31 +14,39 @@
 
 package unary
 
-
-import(
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"github.com/matrixorigin/matrixone/pkg/vectorize/bin"
+import (
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/vectorize/bin"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"golang.org/x/exp/constraints"
-	"fmt"
 )
 
 func Bin[T constraints.Unsigned | constraints.Signed](vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	inputVector := vectors[0]
 	resultType := types.T_varchar.ToType()
-	inputValues := vector.MustTCols[T](inputVector)
 	if inputVector.IsScalar() {
 		if inputVector.ConstVectorIsNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
-		resultValues := make([]string, 1)
-		bin.Bin(inputValues, resultValues)
-		return vector.NewConstString(resultType, inputVector.Length(), resultValues[0]), nil
+		resultVector := proc.AllocScalarVector(resultType)
+		resultValues := make([]types.Varlena, 0)
+		vector.SetCol(resultVector, resultValues)
+		err := bin.Bin[T](inputVector, resultVector, proc)
+		if err != nil{
+			return nil, err
+		}
+		return resultVector, nil
 	} else {
-		resultValues := make([]string, len(inputValues))
-		bin.Bin(inputValues, resultValues)
-		return vector.NewWithStrings(resultType, resultValues, inputVector.Nsp, proc.Mp()), nil
+		resultVector, err := proc.AllocVectorOfRows(resultType, 0, inputVector.Nsp)
+		if err != nil {
+			return nil, err
+		}
+		if err = bin.Bin[T](inputVector, resultVector, proc); err != nil {
+			return nil, err
+		}
+		return resultVector, nil
 	}
 }
 
@@ -46,23 +54,27 @@ func Bin[T constraints.Unsigned | constraints.Signed](vectors []*vector.Vector, 
 func BinFloat[T constraints.Float](vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	inputVector := vectors[0]
 	resultType := types.T_varchar.ToType()
-	inputValues := vector.MustTCols[T](inputVector)
 	if inputVector.IsScalar() {
 		if inputVector.ConstVectorIsNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
-		resultValues := make([]string, 1)
-		_, err := bin.BinFloat(inputValues, resultValues)
+		resultVector := proc.AllocScalarVector(resultType)
+		resultValues := make([]types.Varlena, 0)
+		vector.SetCol(resultVector, resultValues)
+		err := bin.BinFloat[T](inputVector, resultVector, proc)
 		if err != nil{
-			return nil, fmt.Errorf("The input value is out of range")
+			return nil, moerr.New(moerr.INVALID_ARGUMENT, "The input value is out of range")
 		}
-		return vector.NewConstString(resultType, inputVector.Length(), resultValues[0]), nil
+		return resultVector, nil
 	} else {
-		resultValues := make([]string, len(inputValues))
-		_, err := bin.BinFloat(inputValues, resultValues)
-		if err != nil{
-			return nil, fmt.Errorf("The input value is out of range")
+		resultVector, err := proc.AllocVectorOfRows(resultType, 0, inputVector.Nsp)
+		if err != nil {
+			return nil, err
 		}
-		return vector.NewWithStrings(resultType, resultValues, inputVector.Nsp, proc.Mp()), nil
+		err = bin.BinFloat[T](inputVector, resultVector, proc)
+		if err != nil{
+			return nil, moerr.New(moerr.INVALID_ARGUMENT, "The input value is out of range")
+		}
+		return resultVector,nil
 	}
 }

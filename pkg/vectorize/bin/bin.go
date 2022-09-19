@@ -16,8 +16,11 @@ package bin
 
 import (
 	"fmt"
-	"strconv"
 	"math/bits"
+	"strconv"
+
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"golang.org/x/exp/constraints"
 )
 
@@ -90,22 +93,28 @@ func uintToBinary(x uint64) string {
 }
 
 
-func Bin[T constraints.Unsigned | constraints.Signed](xs []T, rs []string) []string {
+func Bin[T constraints.Unsigned | constraints.Signed](intputVector, resultVector *vector.Vector, proc *process.Process) error{
+	xs := vector.MustTCols[T](intputVector)
+	rs := make([]string,0)
 	for idx := range xs {
 		res := uintToBinary(uint64(xs[idx]))
-		rs[idx] = res
+		rs = append(rs,res)
 	}
-	return rs
+	vector.AppendString(resultVector, rs, proc.Mp())
+	return nil
 }
 
-func BinFloat[T constraints.Float](xs []T, rs []string) ([]string, error) {
+func BinFloat[T constraints.Float](intputVector, resultVector *vector.Vector, proc *process.Process) error {
+	xs := vector.MustTCols[T](intputVector)
+	rs := make([]string,0)
 	for idx := range xs {
 		val, err := strconv.ParseInt(fmt.Sprintf("%1.0f", xs[idx]), 10, 64)
 		if err != nil {
-			return nil, err
+			return err
 		}
 		res := uintToBinary(uint64(val))
-		rs[idx] = res
+		rs = append(rs,res)
 	}
-	return rs, nil
+	vector.AppendString(resultVector, rs, proc.Mp())
+	return nil
 }
