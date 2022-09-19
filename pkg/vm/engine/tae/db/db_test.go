@@ -2884,3 +2884,48 @@ func TestMultiTenantMoCatalogOps(t *testing.T) {
 	}
 
 }
+
+// txn1 create update
+// txn2 update delete
+// txn3 update
+func TestUpdateAttr(t *testing.T) {
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := newTestEngine(t, opts)
+	schema := catalog.MockSchemaAll(1, -1)
+	defer tae.Close()
+
+	txn, err := tae.StartTxn(nil)
+	assert.NoError(t, err)
+	db, err := txn.CreateDatabase("db")
+	assert.NoError(t, err)
+	rel, err := db.CreateRelation(schema)
+	assert.NoError(t, err)
+	seg, err := rel.CreateSegment()
+	assert.NoError(t, err)
+	un := &catalog.MetadataMVCCNode{
+		MetaLoc: "test_1",
+	}
+	seg.GetMeta().(*catalog.SegmentEntry).UpdateAttr(txn, un)
+	assert.NoError(t, txn.Commit())
+
+	txn, err = tae.StartTxn(nil)
+	assert.NoError(t, err)
+	db, err = txn.GetDatabase("db")
+	assert.NoError(t, err)
+	rel, err = db.GetRelationByName(schema.Name)
+	assert.NoError(t, err)
+	seg, err = rel.GetSegment(seg.GetID())
+	assert.NoError(t, err)
+	un = &catalog.MetadataMVCCNode{
+		DeltaLoc: "test_2",
+	}
+	seg.GetMeta().(*catalog.SegmentEntry).UpdateAttr(txn, un)
+	rel.SoftDeleteSegment(seg.GetID())
+	assert.NoError(t, txn.Commit())
+
+	t.Log(tae.Catalog.SimplePPString(3))
+
+	tae.restart()
+
+	t.Log(tae.Catalog.SimplePPString(3))
+}

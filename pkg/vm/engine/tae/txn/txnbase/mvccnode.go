@@ -284,7 +284,7 @@ func (un *TxnMVCCNode) GetLogIndex() []*wal.Index {
 func (un *TxnMVCCNode) ApplyCommit(index *wal.Index) (ts types.TS, err error) {
 	un.End = un.Txn.GetCommitTS()
 	un.AddLogIndex(index)
-	un.Txn=nil
+	un.Txn = nil
 	ts = un.End
 	return
 }

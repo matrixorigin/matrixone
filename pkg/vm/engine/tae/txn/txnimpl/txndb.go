@@ -303,7 +303,7 @@ func (db *txnDB) SoftDeleteSegment(id *common.ID) (err error) {
 	return table.SoftDeleteSegment(id.SegmentID)
 }
 func (db *txnDB) NeedRollback() bool {
-	return db.createEntry!=nil&&db.dropEntry!=nil
+	return db.createEntry != nil && db.dropEntry != nil
 }
 func (db *txnDB) ApplyRollback() (err error) {
 	if db.createEntry != nil {
@@ -354,11 +354,11 @@ func (db *txnDB) ApplyCommit() (err error) {
 
 func (db *txnDB) PrePrepare() (err error) {
 	for _, table := range db.tables {
-		if table.NeedRollback(){
-			if err=table.PrepareRollback();err!=nil{
+		if table.NeedRollback() {
+			if err = table.PrepareRollback(); err != nil {
 				return
 			}
-			delete(db.tables,table.GetID())
+			delete(db.tables, table.GetID())
 		}
 	}
 	for _, table := range db.tables {

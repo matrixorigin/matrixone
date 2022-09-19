@@ -35,8 +35,6 @@ const (
 type EntryMVCCNode struct {
 	CreatedAt, DeletedAt     types.TS
 	HasCreateOp, HasDeleteOp bool
-	CommittedOpCnt           int
-	TotalOp                  int
 }
 
 func NewEntryMVCCNode() *EntryMVCCNode {
@@ -64,12 +62,10 @@ func (un *EntryMVCCNode) IsCreating() bool {
 
 func (un *EntryMVCCNode) Clone() *EntryMVCCNode {
 	return &EntryMVCCNode{
-		CreatedAt:      un.CreatedAt,
-		DeletedAt:      un.DeletedAt,
-		HasCreateOp:    un.HasCreateOp,
-		HasDeleteOp:    un.HasDeleteOp,
-		TotalOp:        un.TotalOp,
-		CommittedOpCnt: un.CommittedOpCnt,
+		CreatedAt:   un.CreatedAt,
+		DeletedAt:   un.DeletedAt,
+		HasCreateOp: un.HasCreateOp,
+		HasDeleteOp: un.HasDeleteOp,
 	}
 }
 
@@ -80,14 +76,8 @@ func (un *EntryMVCCNode) CloneData() *EntryMVCCNode {
 	}
 }
 
-func (un *EntryMVCCNode) AddOp(op NodeOp) {
-	switch op {
-	case NOpCreate:
-		un.HasCreateOp = true
-	case NOpDelete:
-		un.HasDeleteOp = true
-	}
-	un.TotalOp++
+func (un *EntryMVCCNode) Delete() {
+	un.HasDeleteOp = true
 }
 
 func (un *EntryMVCCNode) ReadFrom(r io.Reader) (n int64, err error) {
@@ -102,7 +92,7 @@ func (un *EntryMVCCNode) ReadFrom(r io.Reader) (n int64, err error) {
 	if un.CreatedAt.Equal(txnif.UncommitTS) {
 		un.HasCreateOp = true
 	}
-	if un.DeletedAt.Equal(txnif.UncommitTS){
+	if un.DeletedAt.Equal(txnif.UncommitTS) {
 		un.HasDeleteOp = true
 	}
 	return
@@ -119,19 +109,16 @@ func (un *EntryMVCCNode) WriteTo(w io.Writer) (n int64, err error) {
 	return
 }
 func (un *EntryMVCCNode) PrepareCommit() (err error) {
-	if un.HasCreateOp{
-		un.CreatedAt=txnif.UncommitTS
+	if un.HasCreateOp {
+		un.CreatedAt = txnif.UncommitTS
 	}
-	if un.HasDeleteOp{
-		un.DeletedAt=txnif.UncommitTS
+	if un.HasDeleteOp {
+		un.DeletedAt = txnif.UncommitTS
 	}
 	return nil
 }
 func (un *EntryMVCCNode) String() string {
 	return fmt.Sprintf("CreatedAt=%v,DeletedAt=%v", un.CreatedAt, un.DeletedAt)
-}
-func (un *EntryMVCCNode) IsLastOp() bool {
-	return un.CommittedOpCnt == un.TotalOp-1
 }
 func (un *EntryMVCCNode) ApplyCommit(ts types.TS) (err error) {
 	if un.HasCreateOp {

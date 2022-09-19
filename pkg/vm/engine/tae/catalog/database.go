@@ -264,7 +264,7 @@ func (e *DBEntry) DropTableEntry(name string, txnCtx txnif.AsyncTxn) (newEntry b
 	entry := dn.GetPayload()
 	entry.Lock()
 	defer entry.Unlock()
-	newEntry,err = entry.DropEntryLocked(txnCtx)
+	newEntry, err = entry.DropEntryLocked(txnCtx)
 	if err == nil {
 		deleted = entry
 	}

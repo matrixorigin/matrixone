@@ -299,8 +299,8 @@ func (entry *TableEntry) DropSegmentEntry(id uint64, txn txnif.AsyncTxn) (delete
 		seg.Lock()
 	}
 	var isNewNode bool
-	isNewNode,err = seg.DropEntryLocked(txn)
-	if err == nil && isNewNode{
+	isNewNode, err = seg.DropEntryLocked(txn)
+	if err == nil && isNewNode {
 		deleted = seg
 	}
 	return

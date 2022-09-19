@@ -77,7 +77,6 @@ func (be *TableBaseEntry) CreateWithTS(ts types.TS) {
 		EntryMVCCNode: &EntryMVCCNode{
 			CreatedAt:   ts,
 			HasCreateOp: true,
-			TotalOp:     1,
 		},
 		TxnMVCCNode: &txnbase.TxnMVCCNode{
 			Start: ts,
@@ -95,7 +94,6 @@ func (be *TableBaseEntry) CreateWithTxn(txn txnif.AsyncTxn) {
 	node := &TableMVCCNode{
 		EntryMVCCNode: &EntryMVCCNode{
 			HasCreateOp: true,
-			TotalOp:     1,
 		},
 		TxnMVCCNode: &txnbase.TxnMVCCNode{
 			Start: startTS,
@@ -116,11 +114,11 @@ func (be *TableBaseEntry) getOrSetUpdateNode(txn txnif.TxnReader) (newNode bool,
 		return true, node
 	}
 }
-// TODO update create
+
 func (be *TableBaseEntry) DeleteLocked(txn txnif.TxnReader) (isNewNode bool, err error) {
 	var entry *TableMVCCNode
-	isNewNode,entry=be.getOrSetUpdateNode(txn)
-	entry.AddOp(NOpDelete)
+	isNewNode, entry = be.getOrSetUpdateNode(txn)
+	entry.Delete()
 	return
 }
 
@@ -214,13 +212,13 @@ func (be *TableBaseEntry) CloneCreateEntry() BaseEntry {
 	}
 }
 
-func (be *TableBaseEntry) DropEntryLocked(txnCtx txnif.TxnReader) (isNewNode bool,err error) {
+func (be *TableBaseEntry) DropEntryLocked(txnCtx txnif.TxnReader) (isNewNode bool, err error) {
 	err = be.CheckConflict(txnCtx)
 	if err != nil {
 		return
 	}
 	if be.HasDropped() {
-		return false,ErrNotFound
+		return false, ErrNotFound
 	}
 	isNewNode, err = be.DeleteLocked(txnCtx)
 	return

@@ -87,10 +87,10 @@ func (e *TableMVCCNode) onReplayCommit(ts types.TS) (err error) {
 
 func (e *TableMVCCNode) PrepareCommit() (err error) {
 	_, err = e.TxnMVCCNode.PrepareCommit()
-	if err!=nil{
+	if err != nil {
 		return
 	}
-	err=e.EntryMVCCNode.PrepareCommit()
+	err = e.EntryMVCCNode.PrepareCommit()
 	return
 }
 

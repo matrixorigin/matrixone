@@ -61,9 +61,11 @@ func (e *MetadataMVCCNode) CloneData() txnbase.MVCCNode {
 
 func (e *MetadataMVCCNode) String() string {
 
-	return fmt.Sprintf("%s%s",
+	return fmt.Sprintf("%s%s,MetaLoc=%s,DeltaLoc=%s",
 		e.TxnMVCCNode.String(),
-		e.EntryMVCCNode.String())
+		e.EntryMVCCNode.String(),
+		e.MetaLoc,
+		e.DeltaLoc)
 }
 func (e *MetadataMVCCNode) UpdateAttr(o *MetadataMVCCNode) {
 	if o.MetaLoc != "" {
@@ -103,10 +105,10 @@ func (e *MetadataMVCCNode) onReplayCommit(ts types.TS) (err error) {
 
 func (e *MetadataMVCCNode) PrepareCommit() (err error) {
 	_, err = e.TxnMVCCNode.PrepareCommit()
-	if err!=nil{
+	if err != nil {
 		return
 	}
-	err=e.EntryMVCCNode.PrepareCommit()
+	err = e.EntryMVCCNode.PrepareCommit()
 	return
 }
 

@@ -388,11 +388,11 @@ func (store *txnStore) ApplyCommit() (err error) {
 
 func (store *txnStore) PrePrepare() (err error) {
 	for _, db := range store.dbs {
-		if db.NeedRollback(){
-			if err = db.PrepareRollback();err!=nil{
+		if db.NeedRollback() {
+			if err = db.PrepareRollback(); err != nil {
 				return
 			}
-			delete(store.dbs,db.entry.GetID())
+			delete(store.dbs, db.entry.GetID())
 		}
 		if err = db.PrePrepare(); err != nil {
 			return

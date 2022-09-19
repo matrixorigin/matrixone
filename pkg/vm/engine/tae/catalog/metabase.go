@@ -81,7 +81,6 @@ func (be *MetaBaseEntry) CreateWithTS(ts types.TS) {
 		EntryMVCCNode: &EntryMVCCNode{
 			CreatedAt:   ts,
 			HasCreateOp: true,
-			TotalOp:     1,
 		},
 		TxnMVCCNode: &txnbase.TxnMVCCNode{
 			Start: ts,
@@ -99,7 +98,6 @@ func (be *MetaBaseEntry) CreateWithTxn(txn txnif.AsyncTxn) {
 	node := &MetadataMVCCNode{
 		EntryMVCCNode: &EntryMVCCNode{
 			HasCreateOp: true,
-			TotalOp:     1,
 		},
 		TxnMVCCNode: &txnbase.TxnMVCCNode{
 			Start: startTS,
@@ -124,11 +122,11 @@ func (be *MetaBaseEntry) getOrSetUpdateNode(txn txnif.TxnReader) (newNode bool, 
 func (be *MetaBaseEntry) DeleteLocked(txn txnif.TxnReader) (isNewNode bool, err error) {
 	var entry *MetadataMVCCNode
 	isNewNode, entry = be.getOrSetUpdateNode(txn)
-	entry.AddOp(NOpDelete)
+	entry.Delete()
 	return
 }
 
-func (be *MetaBaseEntry) UpdateAttr(txn txnif.TxnReader, node *MetadataMVCCNode) (isNewNode bool,err error) {
+func (be *MetaBaseEntry) UpdateAttr(txn txnif.TxnReader, node *MetadataMVCCNode) (isNewNode bool, err error) {
 	be.Lock()
 	defer be.Unlock()
 	needWait, txnToWait := be.NeedWaitCommitting(txn.GetStartTS())
@@ -140,7 +138,6 @@ func (be *MetaBaseEntry) UpdateAttr(txn txnif.TxnReader, node *MetadataMVCCNode)
 	be.CheckConflict(txn)
 	var entry *MetadataMVCCNode
 	isNewNode, entry = be.getOrSetUpdateNode(txn)
-	entry.AddOp(NOpUpdateAttr)
 	entry.UpdateAttr(node)
 	return
 }
@@ -231,7 +228,7 @@ func (be *MetaBaseEntry) CloneCreateEntry() BaseEntry {
 	}
 }
 
-func (be *MetaBaseEntry) DropEntryLocked(txnCtx txnif.TxnReader) (isNewNode bool,err error) {
+func (be *MetaBaseEntry) DropEntryLocked(txnCtx txnif.TxnReader) (isNewNode bool, err error) {
 	err = be.CheckConflict(txnCtx)
 	if err != nil {
 		return
@@ -240,7 +237,7 @@ func (be *MetaBaseEntry) DropEntryLocked(txnCtx txnif.TxnReader) (isNewNode bool
 		return false, ErrNotFound
 	}
 	isNewNode, err = be.DeleteLocked(txnCtx)
-	return 
+	return
 }
 
 func (be *MetaBaseEntry) DeleteAfter(ts types.TS) bool {
