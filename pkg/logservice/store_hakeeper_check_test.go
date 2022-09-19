@@ -29,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
+	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 )
@@ -123,7 +124,7 @@ func runHAKeeperStoreTest(t *testing.T, startLogReplica bool, fn func(*testing.T
 	defer leaktest.AfterTest(t)()
 	cfg := getStoreTestConfig()
 	defer vfs.ReportLeakedFD(cfg.FS, t)
-	store, err := getTestStore(cfg, startLogReplica)
+	store, err := getTestStore(cfg, startLogReplica, nil)
 	assert.NoError(t, err)
 	defer func() {
 		assert.NoError(t, store.close())
@@ -132,6 +133,23 @@ func runHAKeeperStoreTest(t *testing.T, startLogReplica bool, fn func(*testing.T
 	peers[1] = store.id()
 	assert.NoError(t, store.startHAKeeperReplica(1, peers, false))
 	fn(t, store)
+}
+
+func runHakeeperTaskServiceTest(t *testing.T, fn func(*testing.T, *store, taskservice.TaskService)) {
+	defer leaktest.AfterTest(t)()
+	cfg := getStoreTestConfig()
+	defer vfs.ReportLeakedFD(cfg.FS, t)
+
+	taskService := taskservice.NewTaskService(taskservice.NewMemTaskStorage())
+	store, err := getTestStore(cfg, false, taskService)
+	assert.NoError(t, err)
+	defer func() {
+		assert.NoError(t, store.close())
+	}()
+	peers := make(map[uint64]dragonboat.Target)
+	peers[1] = store.id()
+	assert.NoError(t, store.startHAKeeperReplica(1, peers, false))
+	fn(t, store, taskService)
 }
 
 func runHAKeeperClusterTest(t *testing.T, fn func(*testing.T, []*Service)) {
@@ -584,4 +602,98 @@ func testBootstrap(t *testing.T, fail bool) {
 		}
 	}
 	runHAKeeperStoreTest(t, false, fn)
+}
+
+func TestTaskSchedulerCanScheduleTasksToCNs(t *testing.T) {
+	fn := func(t *testing.T, store *store, taskService taskservice.TaskService) {
+		state, err := store.getCheckerState()
+		require.NoError(t, err)
+		assert.Equal(t, pb.HAKeeperCreated, state.State)
+		require.NoError(t, store.setInitialClusterInfo(1, 1, 1))
+		state, err = store.getCheckerState()
+		require.NoError(t, err)
+		assert.Equal(t, pb.HAKeeperBootstrapping, state.State)
+		m := store.getHeartbeatMessage()
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		_, err = store.addLogStoreHeartbeat(ctx, m)
+		assert.NoError(t, err)
+
+		_, term, err := store.isLeaderHAKeeper()
+		require.NoError(t, err)
+
+		state, err = store.getCheckerState()
+		require.NoError(t, err)
+		store.bootstrap(term, state)
+
+		state, err = store.getCheckerState()
+		require.NoError(t, err)
+		assert.Equal(t, pb.HAKeeperBootstrapCommandsReceived, state.State)
+		assert.Equal(t, uint64(checkBootstrapCycles), store.bootstrapCheckCycles)
+		require.NotNil(t, store.bootstrapMgr)
+		assert.False(t, store.bootstrapMgr.CheckBootstrap(state.LogState))
+
+		cb, err := store.getCommandBatch(ctx, store.id())
+		require.NoError(t, err)
+		require.Equal(t, 1, len(cb.Commands))
+		assert.True(t, cb.Commands[0].Bootstrapping)
+		service := &Service{store: store}
+		service.handleStartReplica(cb.Commands[0])
+
+		for i := 0; i < 100; i++ {
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			m := store.getHeartbeatMessage()
+			_, err = store.addLogStoreHeartbeat(ctx, m)
+			assert.NoError(t, err)
+
+			state, err = store.getCheckerState()
+			require.NoError(t, err)
+			store.checkBootstrap(state)
+
+			state, err = store.getCheckerState()
+			require.NoError(t, err)
+			if state.State != pb.HAKeeperRunning {
+				time.Sleep(50 * time.Millisecond)
+			} else {
+				break
+			}
+			if i == 2999 {
+				t.Fatalf("failed to complete bootstrap")
+			}
+		}
+
+		cnUUID1 := uuid.New().String()
+		cnMsg1 := pb.CNStoreHeartbeat{UUID: cnUUID1}
+		err = store.addCNStoreHeartbeat(ctx, cnMsg1)
+		assert.NoError(t, err)
+		err = taskService.Create(ctx, task.TaskMetadata{ID: "a"})
+		assert.NoError(t, err)
+		state, err = store.getCheckerState()
+		require.NoError(t, err)
+		tasks, err := taskService.QueryTask(ctx, taskservice.WithTaskRunnerCond(taskservice.EQ, cnUUID1))
+		assert.NoError(t, err)
+		assert.Equal(t, 0, len(tasks))
+		store.taskSchedule(state)
+		tasks, err = taskService.QueryTask(ctx, taskservice.WithTaskRunnerCond(taskservice.EQ, cnUUID1))
+		assert.NoError(t, err)
+		assert.Equal(t, 1, len(tasks))
+
+		cnUUID2 := uuid.New().String()
+		cnMsg2 := pb.CNStoreHeartbeat{UUID: cnUUID2}
+		err = store.addCNStoreHeartbeat(ctx, cnMsg2)
+		assert.NoError(t, err)
+		err = taskService.Create(ctx, task.TaskMetadata{ID: "b"})
+		assert.NoError(t, err)
+		state, err = store.getCheckerState()
+		require.NoError(t, err)
+		tasks, err = taskService.QueryTask(ctx, taskservice.WithTaskRunnerCond(taskservice.EQ, cnUUID2))
+		assert.NoError(t, err)
+		assert.Equal(t, 0, len(tasks))
+		store.taskSchedule(state)
+		tasks, err = taskService.QueryTask(ctx, taskservice.WithTaskRunnerCond(taskservice.EQ, cnUUID2))
+		assert.NoError(t, err)
+		assert.Equal(t, 1, len(tasks))
+	}
+	runHakeeperTaskServiceTest(t, fn)
 }

@@ -16,6 +16,7 @@ package logservice
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"math"
 	"sync/atomic"
 	"testing"
@@ -82,8 +83,8 @@ func TestStoreCanBeCreatedAndClosed(t *testing.T) {
 	plog.Infof("2")
 }
 
-func getTestStore(cfg Config, startLogReplica bool) (*store, error) {
-	store, err := newLogStore(cfg, nil)
+func getTestStore(cfg Config, startLogReplica bool, taskService taskservice.TaskService) (*store, error) {
+	store, err := newLogStore(cfg, taskService)
 	if err != nil {
 		return nil, err
 	}
@@ -117,7 +118,7 @@ func TestStateMachineCanBeStarted(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 	cfg := getStoreTestConfig()
 	defer vfs.ReportLeakedFD(cfg.FS, t)
-	store, err := getTestStore(cfg, true)
+	store, err := getTestStore(cfg, true, nil)
 	assert.NoError(t, err)
 	defer func() {
 		assert.NoError(t, store.close())
@@ -129,7 +130,7 @@ func TestReplicaCanBeStopped(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 	cfg := getStoreTestConfig()
 	defer vfs.ReportLeakedFD(cfg.FS, t)
-	store, err := getTestStore(cfg, true)
+	store, err := getTestStore(cfg, true, nil)
 	assert.NoError(t, err)
 	defer func() {
 		assert.NoError(t, store.close())
@@ -143,7 +144,7 @@ func runStoreTest(t *testing.T, fn func(*testing.T, *store)) {
 	defer leaktest.AfterTest(t)()
 	cfg := getStoreTestConfig()
 	defer vfs.ReportLeakedFD(cfg.FS, t)
-	store, err := getTestStore(cfg, true)
+	store, err := getTestStore(cfg, true, nil)
 	assert.NoError(t, err)
 	defer func() {
 		assert.NoError(t, store.close())
@@ -257,7 +258,7 @@ func TestQueryLog(t *testing.T) {
 		assert.Equal(t, 1, len(entries))
 		assert.Equal(t, uint64(4), lsn)
 		assert.Equal(t, entries[0].Data, cmd)
-		// lease holder ID update cmd at entry index 3
+		// leaseholder ID update cmd at entry index 3
 		entries, lsn, err = store.queryLog(ctx, 1, 3, math.MaxUint64)
 		assert.NoError(t, err)
 		assert.Equal(t, 2, len(entries))
