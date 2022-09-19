@@ -103,7 +103,7 @@ func (txn *Txn) SetApplyCommitFn(fn func(txnif.AsyncTxn) error)     { txn.ApplyC
 func (txn *Txn) SetApplyRollbackFn(fn func(txnif.AsyncTxn) error)   { txn.ApplyRollbackFn = fn }
 
 //The state transition of transaction is as follows:
-// 1PC: TxnStateActive--->TxnStateCommitting--->TxnStateCommitted/TxnStateRollbacked
+// 1PC: TxnStateActive--->TxnStatePreparing--->TxnStateCommitted/TxnStateRollbacked
 //         TxnStateActive--->TxnStateRollbacking--->TxnStateRollbacked
 // 2PC running on Coordinator: TxnStateActive--->TxnStatePreparing-->TxnStatePrepared
 //								-->TxnStateCommittingFinished--->TxnStateCommitted or
@@ -234,7 +234,7 @@ func (txn *Txn) DoneWithErr(err error) {
 		txn.ToUnknownLocked()
 		txn.SetError(err)
 	} else {
-		if txn.State == txnif.TxnStateCommitting {
+		if txn.State == txnif.TxnStatePreparing {
 			if err := txn.ToCommittedLocked(); err != nil {
 				txn.SetError(err)
 			}
@@ -249,13 +249,8 @@ func (txn *Txn) DoneWithErr(err error) {
 	txn.DoneCond.L.Unlock()
 }
 
-func (txn *Txn) IsTerminated(waitIfcommitting bool) bool {
-	state := txn.GetTxnState(waitIfcommitting)
-	return state == txnif.TxnStateCommitted || state == txnif.TxnStateRollbacked
-}
-
 func (txn *Txn) PrepareCommit() (err error) {
-	logutil.Debugf("Prepare Committing %d", txn.ID)
+	logutil.Debugf("Prepare Commite %d", txn.ID)
 	if txn.PrepareCommitFn != nil {
 		if err = txn.PrepareCommitFn(txn); err != nil {
 			return

@@ -26,8 +26,8 @@ var (
 		input  string
 		output string
 	}{
-		input:  "create table t1 (a datetime on update current_timestamp(0))",
-		output: "create table t1 (a datetime(26) on update current_timestamp(0))",
+		input:  `grant show databases on account * to r1`,
+		output: "grant show databases on account * to r1",
 	}
 )
 
@@ -1322,21 +1322,21 @@ var (
 		}, {
 			input: "grant all, all(a, b), create(a, b), select(a, b), super(a, b, c) on table db.a to u1, u2 with grant option",
 		}, {
-			input: "grant all, all(a, b) on *.* to u1, u2 with grant option",
+			input: "grant all, all(a, b) on table *.* to u1, u2 with grant option",
 		}, {
-			input: "grant all, all(a, b) on db.a to u1, u2 with grant option",
+			input: "grant all, all(a, b) on table db.a to u1, u2 with grant option",
 		}, {
-			input: "grant all, all(a, b) on db.* to u1, u2 with grant option",
+			input: "grant all, all(a, b) on table db.* to u1, u2 with grant option",
 		}, {
-			input: "grant all, all(a, b) on * to u1, u2 with grant option",
+			input: "grant all, all(a, b) on database * to u1, u2 with grant option",
 		}, {
-			input: "grant all, all(a, b) on *.* to u1, u2 with grant option",
+			input: "grant all, all(a, b) on table *.* to u1, u2 with grant option",
 		}, {
-			input: "grant all, all(a, b) on db1.* to u1, u2 with grant option",
+			input: "grant all, all(a, b) on table db1.* to u1, u2 with grant option",
 		}, {
-			input: "grant all, all(a, b) on db1.tb1 to u1, u2 with grant option",
+			input: "grant all, all(a, b) on table db1.tb1 to u1, u2 with grant option",
 		}, {
-			input: "grant all, all(a, b) on tb1 to u1, u2 with grant option",
+			input: "grant all, all(a, b) on table tb1 to u1, u2 with grant option",
 		}, {
 			input: "grant r1, r2 to u1, u2, r3 with grant option",
 		}, {
