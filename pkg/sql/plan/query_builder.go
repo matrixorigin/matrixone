@@ -663,34 +663,36 @@ func (builder *QueryBuilder) buildUnion(stmt *tree.UnionClause, astOrderBy tree.
 	if len(selectStmts) == 1 {
 		switch sltStmt := selectStmts[0].(type) {
 		case *tree.Select:
-			// rewrite sltStmt to select distinct * from (sltStmt) a
-			tmpSltStmt := &tree.Select{
-				Select: &tree.SelectClause{
-					Distinct: true,
-					Exprs: []tree.SelectExpr{
-						{
-							Expr: &tree.UnqualifiedStar{},
-							As:   "",
+			if sltClause, ok := sltStmt.Select.(*tree.SelectClause); ok {
+				sltClause.Distinct = true
+				return builder.buildSelect(sltStmt, ctx, isRoot)
+			} else {
+				// rewrite sltStmt to select distinct * from (sltStmt) a
+				tmpSltStmt := &tree.Select{
+					Select: &tree.SelectClause{
+						Distinct: true,
+
+						Exprs: []tree.SelectExpr{
+							{Expr: tree.StarExpr()},
 						},
-					},
-					From: &tree.From{
-						Tables: tree.TableExprs{
-							&tree.AliasedTableExpr{
-								Expr: &tree.Subquery{
-									Select: sltStmt,
-									Exists: false,
-								},
-								As: tree.AliasClause{
-									Alias: "a",
+						From: &tree.From{
+							Tables: tree.TableExprs{
+								&tree.AliasedTableExpr{
+									Expr: &tree.ParenTableExpr{
+										Expr: sltStmt,
+									},
+									As: tree.AliasClause{
+										Alias: "a",
+									},
 								},
 							},
 						},
 					},
-				},
-				Limit:   astLimit,
-				OrderBy: astOrderBy,
+					Limit:   astLimit,
+					OrderBy: astOrderBy,
+				}
+				return builder.buildSelect(tmpSltStmt, ctx, isRoot)
 			}
-			return builder.buildSelect(tmpSltStmt, ctx, isRoot)
 
 		case *tree.SelectClause:
 			if !sltStmt.Distinct {
