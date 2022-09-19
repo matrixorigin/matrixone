@@ -20,6 +20,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 )
 
 type DBMVCCNode struct {
@@ -39,74 +40,55 @@ func CompareDBBaseNode(e, o txnbase.MVCCNode) int {
 }
 
 func (e *DBMVCCNode) CloneAll() txnbase.MVCCNode {
-	node := e.CloneData()
-	node.(*DBMVCCNode).TxnMVCCNode = e.TxnMVCCNode.CloneAll()
+	node := &DBMVCCNode{
+		EntryMVCCNode: e.EntryMVCCNode.Clone(),
+		TxnMVCCNode:   e.TxnMVCCNode.CloneAll(),
+	}
 	return node
 }
 
 func (e *DBMVCCNode) CloneData() txnbase.MVCCNode {
 	return &DBMVCCNode{
-		EntryMVCCNode: e.EntryMVCCNode.Clone(),
+		EntryMVCCNode: e.EntryMVCCNode.CloneData(),
 		TxnMVCCNode:   &txnbase.TxnMVCCNode{},
 	}
 }
 
 func (e *DBMVCCNode) String() string {
 
-	return fmt.Sprintf("%s[C=%v,D=%v][Deleted?%v]",
+	return fmt.Sprintf("%s%s",
 		e.TxnMVCCNode.String(),
-		e.CreatedAt,
-		e.DeletedAt,
-		e.Deleted)
+		e.EntryMVCCNode.String())
 }
 
 // for create drop in one txn
-func (e *DBMVCCNode) UpdateNode(vun txnbase.MVCCNode) {
+func (e *DBMVCCNode) Update(vun txnbase.MVCCNode) {
 	un := vun.(*DBMVCCNode)
+	e.CreatedAt = un.CreatedAt
 	e.DeletedAt = un.DeletedAt
-	e.Deleted = true
 }
 
-func (e *DBMVCCNode) ApplyUpdate(be *DBMVCCNode) (err error) {
-	// if e.Deleted {
-	// 	// TODO
-	// }
-	e.EntryMVCCNode = be.EntryMVCCNode.Clone()
-	return
-}
-
-func (e *DBMVCCNode) ApplyDelete() (err error) {
-	err = e.ApplyDeleteLocked()
-	return
-}
-
-func (e *DBMVCCNode) Prepare2PCPrepare() (err error) {
-	var ts types.TS
-	ts, err = e.TxnMVCCNode.Prepare2PCPrepare()
+func (e *DBMVCCNode) ApplyCommit(index *wal.Index) (err error) {
+	var commitTS types.TS
+	commitTS, err = e.TxnMVCCNode.ApplyCommit(index)
 	if err != nil {
 		return
 	}
-	if e.CreatedAt.IsEmpty() {
-		e.CreatedAt = ts
-	}
-	if e.Deleted {
-		e.DeletedAt = ts
-	}
-	return
+	e.EntryMVCCNode.ApplyCommit(commitTS)
+	return nil
+}
+func (e *DBMVCCNode) onReplayCommit(ts types.TS) (err error) {
+	e.EntryMVCCNode.ReplayCommit(ts)
+	e.TxnMVCCNode.OnReplayCommit(ts)
+	return nil
 }
 
 func (e *DBMVCCNode) PrepareCommit() (err error) {
-	var ts types.TS
-	ts, err = e.TxnMVCCNode.PrepareCommit()
+	_, err = e.TxnMVCCNode.PrepareCommit()
 	if err != nil {
 		return
 	}
-	if e.CreatedAt.IsEmpty() {
-		e.CreatedAt = ts
-	}
-	if e.Deleted {
-		e.DeletedAt = ts
-	}
+	err = e.EntryMVCCNode.PrepareCommit()
 	return
 }
 

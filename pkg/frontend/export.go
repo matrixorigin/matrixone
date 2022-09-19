@@ -285,8 +285,7 @@ func exportDataToCSVFile(oq *outputQueue) error {
 			if err != nil {
 				return err
 			}
-			oq.resetLineStr()
-			oq.lineStr = strconv.AppendFloat(oq.lineStr, value, 'f', 4, 64)
+			oq.lineStr = []byte(fmt.Sprintf("%v", value))
 			if err = formatOutputString(oq, oq.lineStr, symbol[i], closeby, flag[i]); err != nil {
 				return err
 			}

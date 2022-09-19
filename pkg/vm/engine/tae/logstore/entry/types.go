@@ -40,8 +40,6 @@ const (
 	GTInvalid uint32 = iota
 	GTNoop
 	GTCKp
-	GTUncommit
-	GTCommit
 	GTInternal
 	GTCustomizedStart
 )
