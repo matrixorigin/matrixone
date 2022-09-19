@@ -230,8 +230,10 @@ func (store *txnStore) DropDatabase(name string) (h handle.Database, err error) 
 	if err != nil {
 		return
 	}
-	if err = db.SetDropEntry(meta); err != nil {
-		return
+	if meta != nil {
+		if err = db.SetDropEntry(meta); err != nil {
+			return
+		}
 	}
 	h = buildDB(db)
 	return

@@ -194,7 +194,9 @@ func (db *txnDB) DropRelationByName(name string) (relation handle.Relation, err 
 		return nil, err
 	}
 	relation = newRelation(table)
-	err = table.SetDropEntry(meta)
+	if meta != nil {
+		err = table.SetDropEntry(meta)
+	}
 	return
 }
 

@@ -150,7 +150,9 @@ func (tbl *txnTable) SoftDeleteSegment(id uint64) (err error) {
 		return
 	}
 	tbl.store.IncreateWriteCnt()
-	tbl.txnEntries = append(tbl.txnEntries, txnEntry)
+	if txnEntry != nil {
+		tbl.txnEntries = append(tbl.txnEntries, txnEntry)
+	}
 	tbl.store.warChecker.ReadTable(tbl.entry.GetDB().ID, tbl.entry.AsCommonID())
 	return
 }
@@ -197,7 +199,9 @@ func (tbl *txnTable) SoftDeleteBlock(id *common.ID) (err error) {
 		return
 	}
 	tbl.store.IncreateWriteCnt()
-	tbl.txnEntries = append(tbl.txnEntries, meta)
+	if meta != nil {
+		tbl.txnEntries = append(tbl.txnEntries, meta)
+	}
 	tbl.store.warChecker.ReadSegment(tbl.entry.GetDB().ID, seg.AsCommonID())
 	return
 }

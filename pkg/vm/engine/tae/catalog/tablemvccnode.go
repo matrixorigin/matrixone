@@ -71,11 +71,7 @@ func (e *TableMVCCNode) UpdateNode(vun txnbase.MVCCNode) {
 
 func (e *TableMVCCNode) ApplyCommit(index *wal.Index) (err error) {
 	var commitTS types.TS
-	deleteTxn := false
-	if e.IsLastOp() {
-		deleteTxn = true
-	}
-	commitTS, err = e.TxnMVCCNode.ApplyCommit(index, deleteTxn)
+	commitTS, err = e.TxnMVCCNode.ApplyCommit(index)
 	if err != nil {
 		return
 	}

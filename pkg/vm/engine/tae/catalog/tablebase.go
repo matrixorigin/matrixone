@@ -105,18 +105,22 @@ func (be *TableBaseEntry) CreateWithTxn(txn txnif.AsyncTxn) {
 	be.InsertNode(node)
 }
 
-// TODO update create
-func (be *TableBaseEntry) DeleteLocked(txn txnif.TxnReader) (err error) {
+func (be *TableBaseEntry) getOrSetUpdateNode(txn txnif.TxnReader) (newNode bool, node *TableMVCCNode) {
 	entry := be.GetUpdateNodeLocked()
 	if entry.IsSameTxn(txn.GetStartTS()) {
-		entry.(*TableMVCCNode).AddOp(NOpDelete)
-		return
+		return false, entry.(*TableMVCCNode)
 	} else {
 		node := entry.CloneData().(*TableMVCCNode)
 		node.TxnMVCCNode = txnbase.NewTxnMVCCNodeWithTxn(txn)
-		node.AddOp(NOpDelete)
 		be.InsertNode(node)
+		return true, node
 	}
+}
+// TODO update create
+func (be *TableBaseEntry) DeleteLocked(txn txnif.TxnReader) (isNewNode bool, err error) {
+	var entry *TableMVCCNode
+	isNewNode,entry=be.getOrSetUpdateNode(txn)
+	entry.AddOp(NOpDelete)
 	return
 }
 
@@ -210,19 +214,16 @@ func (be *TableBaseEntry) CloneCreateEntry() BaseEntry {
 	}
 }
 
-func (be *TableBaseEntry) DropEntryLocked(txnCtx txnif.TxnReader) error {
-	err := be.CheckConflict(txnCtx)
+func (be *TableBaseEntry) DropEntryLocked(txnCtx txnif.TxnReader) (isNewNode bool,err error) {
+	err = be.CheckConflict(txnCtx)
 	if err != nil {
-		return err
+		return
 	}
 	if be.HasDropped() {
-		return ErrNotFound
+		return false,ErrNotFound
 	}
-	err = be.DeleteLocked(txnCtx)
-	if err != nil {
-		return err
-	}
-	return nil
+	isNewNode, err = be.DeleteLocked(txnCtx)
+	return
 }
 
 func (be *TableBaseEntry) PrepareAdd(txn txnif.TxnReader) (err error) {

@@ -281,11 +281,8 @@ func (un *TxnMVCCNode) AddLogIndex(idx *wal.Index) {
 func (un *TxnMVCCNode) GetLogIndex() []*wal.Index {
 	return un.LogIndex
 }
-func (un *TxnMVCCNode) ApplyCommit(index *wal.Index, deleteTxn bool) (ts types.TS, err error) {
+func (un *TxnMVCCNode) ApplyCommit(index *wal.Index) (ts types.TS, err error) {
 	un.End = un.Txn.GetCommitTS()
-	if deleteTxn {
-		un.Txn = nil
-	}
 	un.AddLogIndex(index)
 	ts = un.End
 	return

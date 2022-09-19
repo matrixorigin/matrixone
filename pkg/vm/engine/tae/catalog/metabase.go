@@ -109,25 +109,26 @@ func (be *MetaBaseEntry) CreateWithTxn(txn txnif.AsyncTxn) {
 	be.InsertNode(node)
 }
 
-func (be *MetaBaseEntry) getOrSetUpdateNode(txn txnif.TxnReader) *MetadataMVCCNode {
+func (be *MetaBaseEntry) getOrSetUpdateNode(txn txnif.TxnReader) (newNode bool, node *MetadataMVCCNode) {
 	entry := be.GetUpdateNodeLocked()
 	if entry.IsSameTxn(txn.GetStartTS()) {
-		return entry.(*MetadataMVCCNode)
+		return false, entry.(*MetadataMVCCNode)
 	} else {
 		node := entry.CloneData().(*MetadataMVCCNode)
 		node.TxnMVCCNode = txnbase.NewTxnMVCCNodeWithTxn(txn)
 		be.InsertNode(node)
-		return node
+		return true, node
 	}
 }
 
-func (be *MetaBaseEntry) DeleteLocked(txn txnif.TxnReader) (err error) {
-	entry := be.getOrSetUpdateNode(txn)
+func (be *MetaBaseEntry) DeleteLocked(txn txnif.TxnReader) (isNewNode bool, err error) {
+	var entry *MetadataMVCCNode
+	isNewNode, entry = be.getOrSetUpdateNode(txn)
 	entry.AddOp(NOpDelete)
 	return
 }
 
-func (be *MetaBaseEntry) UpdateAttr(txn txnif.TxnReader, node *MetadataMVCCNode) (err error) {
+func (be *MetaBaseEntry) UpdateAttr(txn txnif.TxnReader, node *MetadataMVCCNode) (isNewNode bool,err error) {
 	be.Lock()
 	defer be.Unlock()
 	needWait, txnToWait := be.NeedWaitCommitting(txn.GetStartTS())
@@ -137,7 +138,8 @@ func (be *MetaBaseEntry) UpdateAttr(txn txnif.TxnReader, node *MetadataMVCCNode)
 		be.RLock()
 	}
 	be.CheckConflict(txn)
-	entry := be.getOrSetUpdateNode(txn)
+	var entry *MetadataMVCCNode
+	isNewNode, entry = be.getOrSetUpdateNode(txn)
 	entry.AddOp(NOpUpdateAttr)
 	entry.UpdateAttr(node)
 	return
@@ -229,19 +231,16 @@ func (be *MetaBaseEntry) CloneCreateEntry() BaseEntry {
 	}
 }
 
-func (be *MetaBaseEntry) DropEntryLocked(txnCtx txnif.TxnReader) error {
-	err := be.CheckConflict(txnCtx)
+func (be *MetaBaseEntry) DropEntryLocked(txnCtx txnif.TxnReader) (isNewNode bool,err error) {
+	err = be.CheckConflict(txnCtx)
 	if err != nil {
-		return err
+		return
 	}
 	if be.HasDropped() {
-		return ErrNotFound
+		return false, ErrNotFound
 	}
-	err = be.DeleteLocked(txnCtx)
-	if err != nil {
-		return err
-	}
-	return nil
+	isNewNode, err = be.DeleteLocked(txnCtx)
+	return 
 }
 
 func (be *MetaBaseEntry) DeleteAfter(ts types.TS) bool {
