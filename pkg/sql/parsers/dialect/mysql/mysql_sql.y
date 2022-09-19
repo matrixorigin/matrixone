@@ -3344,7 +3344,6 @@ table_function:
 			Origin: a1,
 			Path: a2,
 			Outer: a3,
-			IsCol: true,
 		},
 	}
     }
@@ -3361,7 +3360,6 @@ table_function:
     			Origin: a1,
     			Path: a2,
    			Outer: a3,
-    			IsCol: true,
     		},
     	}
     }
@@ -3378,7 +3376,6 @@ table_function:
     			Origin: a1,
     			Path: a2,
     			Outer: a3,
-    			IsCol: true,
     		},
     	}
     }
@@ -3395,7 +3392,6 @@ table_function:
     			Origin: a1,
     			Path: a2,
     			Outer: a3,
-    			IsCol: true,
     		},
     	}
     }

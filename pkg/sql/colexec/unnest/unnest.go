@@ -34,8 +34,9 @@ func String(arg any, buf *bytes.Buffer) {
 func Prepare(_ *process.Process, arg any) error {
 	param := arg.(*Argument).Es
 	param.colName = "UNNEST_DEFAULT"
-	if param.Extern.IsCol {
-		_, _, param.colName = param.Extern.Origin.(*tree.UnresolvedName).GetNames()
+	if uName, ok := param.Extern.Origin.(*tree.UnresolvedName); ok {
+		_, _, param.colName = uName.GetNames()
+		param.isCol = true
 	}
 	param.seq = 0
 	param.end = false
@@ -58,7 +59,7 @@ func Prepare(_ *process.Process, arg any) error {
 
 func Call(_ int, proc *process.Process, arg any) (bool, error) {
 	param := arg.(*Argument).Es
-	if param.Extern.IsCol {
+	if param.isCol {
 		return callByCol(param, proc)
 	}
 	return callByStr(param, proc)
@@ -96,48 +97,41 @@ func callByStr(param *Param, proc *process.Process) (bool, error) {
 }
 
 func callByCol(param *Param, proc *process.Process) (bool, error) {
-	reg := proc.Reg.MergeReceivers[0]
-	select {
-	case <-reg.Ctx.Done():
-		proc.SetInputBatch(nil)
+	bat := proc.InputBatch()
+	if bat == nil {
 		return true, nil
-	case data := <-reg.Ch:
-		if data == nil {
-			proc.SetInputBatch(nil)
-			return true, nil
-		}
-		if len(data.Vecs) != 1 {
-			return false, fmt.Errorf("unnest: invalid input batch,len(vecs)[%d] != 1", len(data.Vecs))
-		}
-		vec := data.GetVector(0)
-		if vec.Typ.Oid != types.T_json {
-			return false, fmt.Errorf("unnest: invalid column type:%s", vec.Typ)
-		}
-		path, err := types.ParseStringToPath(param.Extern.Path)
+	}
+	if len(bat.Vecs) != 1 {
+		return false, fmt.Errorf("unnest: invalid input batch,len(vecs)[%d] != 1", len(bat.Vecs))
+	}
+	vec := bat.GetVector(0)
+	if vec.Typ.Oid != types.T_json {
+		return false, fmt.Errorf("unnest: invalid column type:%s", vec.Typ)
+	}
+	path, err := types.ParseStringToPath(param.Extern.Path)
+	if err != nil {
+		return false, err
+	}
+	rbat := batch.New(false, param.Attrs)
+	for i := range param.Cols {
+		rbat.Vecs[i] = vector.New(dupType(param.Cols[i].Typ))
+	}
+	col := vector.GetBytesVectorValues(vec)
+	rows := 0
+	for i := 0; i < len(col); i++ {
+		json := types.DecodeJson(col[i])
+		ures, err := json.Unnest(&path, param.Extern.Outer, recursive, mode, param.filters)
 		if err != nil {
 			return false, err
 		}
-		bat := batch.New(false, param.Attrs)
-		for i := range param.Cols {
-			bat.Vecs[i] = vector.New(dupType(param.Cols[i].Typ))
+		rbat, err = makeBatch(rbat, ures, param, proc)
+		if err != nil {
+			return false, err
 		}
-		col := vector.GetBytesVectorValues(vec)
-		rows := 0
-		for i := 0; i < len(col); i++ {
-			json := types.DecodeJson(col[i])
-			ures, err := json.Unnest(&path, param.Extern.Outer, recursive, mode, param.filters)
-			if err != nil {
-				return false, err
-			}
-			bat, err = makeBatch(bat, ures, param, proc)
-			if err != nil {
-				return false, err
-			}
-			rows += len(ures)
-		}
-		bat.InitZsOne(rows)
-		proc.SetInputBatch(bat)
+		rows += len(ures)
 	}
+	rbat.InitZsOne(rows)
+	proc.SetInputBatch(rbat)
 	return false, nil
 }
 

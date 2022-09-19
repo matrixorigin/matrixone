@@ -517,30 +517,25 @@ func (c *Compile) compileExternScan(n *plan.Node) []*Scope {
 }
 
 func (c *Compile) compileUnnest(n *plan.Node, pre []*Scope) ([]*Scope, error) {
-	ds := &Scope{}
 	args := &tree.UnnestParam{}
 	err := args.Unmarshal(n.TableDef.TableFunctionParam)
 	if err != nil {
 		return nil, err
 	}
-	if args.IsCol {
-		ds.Magic = Merge
-		ds.Proc = process.NewWithAnalyze(c.proc, c.ctx, 1, c.anal.Nodes())
-		ds.PreScopes = pre
-		pre[0].appendInstruction(vm.Instruction{
-			Op: vm.Connector,
-			Arg: &connector.Argument{
-				Reg: ds.Proc.Reg.MergeReceivers[0],
-			},
-		})
-	} else {
-		ds.Magic = Normal
-		ds.Proc = process.NewWithAnalyze(c.proc, c.ctx, 0, c.anal.Nodes())
-		ds.DataSource = &Source{
-			Bat: batch.NewWithSize(0),
-		}
+	if len(pre) > 1 {
+		return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, "unnest can only have one or less child")
 	}
-	ss := []*Scope{ds}
+	ss := dupScopeList(pre)
+	if len(ss) == 0 {
+		ds := &Scope{
+			Magic: Normal,
+			Proc:  process.NewWithAnalyze(c.proc, c.ctx, 0, c.anal.Nodes()),
+			DataSource: &Source{
+				Bat: batch.NewWithSize(0),
+			},
+		}
+		ss = append(ss, ds)
+	}
 	for i := range ss {
 		ss[i].appendInstruction(vm.Instruction{
 			Op:  vm.Unnest,

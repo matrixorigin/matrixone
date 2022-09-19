@@ -27,6 +27,7 @@ type Param struct {
 	colName string
 	end     bool // use it to mark the end of the unnest while input is from command line
 	seq     int32
+	isCol   bool // use to mark the unnest args is from column in table
 }
 
 type Argument struct {

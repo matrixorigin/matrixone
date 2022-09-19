@@ -228,6 +228,14 @@ func dupInstruction(in vm.Instruction) vm.Instruction {
 		rin.Arg = &external.Argument{
 			Es: arg.Es,
 		}
+	case *unnest.Argument:
+		rin.Arg = &unnest.Argument{
+			Es: &unnest.Param{
+				Attrs:  arg.Es.Attrs,
+				Cols:   arg.Es.Cols,
+				Extern: arg.Es.Extern,
+			},
+		}
 	default:
 		panic(errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("Unsupport instruction %T\n", in.Arg)))
 	}

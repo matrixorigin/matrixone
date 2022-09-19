@@ -29,7 +29,6 @@ type UnnestParam struct {
 	Origin interface{}
 	Path   string
 	Outer  bool
-	IsCol  bool
 }
 
 type Unnest struct {
@@ -69,17 +68,6 @@ func (node Unnest) getOrigin() string {
 		panic("unknown type")
 	}
 }
-
-//func (node Unnest) GetParam() map[string]string {
-//
-//	ret := map[string]string{
-//		"origin": node.getOrigin(),
-//		"path":   node.Param.Path,
-//		"outer":  fmt.Sprintf("%v", node.Param.Outer),
-//		"isCol":  fmt.Sprintf("%v", node.Param.IsCol),
-//	}
-//	return ret
-//}
 
 func (p UnnestParam) maybeRegister() {
 	if !registered {

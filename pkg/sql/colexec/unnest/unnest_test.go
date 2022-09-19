@@ -27,7 +27,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
-	"sync"
 	"testing"
 )
 
@@ -113,16 +112,6 @@ func init() {
 
 func newTestCase(m *mheap.Mheap, attrs []string, colDefs []*plan.ColDef, origin interface{}, path string, outer, isCol bool, jsons []string, inputTimes int) unnestTestCase {
 	proc := testutil.NewProcessWithMheap(m)
-	var reg *process.WaitRegister
-	if isCol {
-		proc.Reg.MergeReceivers = []*process.WaitRegister{
-			{
-				Ctx: proc.Ctx,
-				Ch:  make(chan *batch.Batch, 1),
-			},
-		}
-		reg = proc.Reg.MergeReceivers[0]
-	}
 	return unnestTestCase{
 		proc: proc,
 		arg: &Argument{
@@ -133,11 +122,9 @@ func newTestCase(m *mheap.Mheap, attrs []string, colDefs []*plan.ColDef, origin 
 					Origin: origin,
 					Path:   path,
 					Outer:  outer,
-					IsCol:  isCol,
 				},
 			},
 		},
-		reg:        reg,
 		isCol:      isCol,
 		jsons:      jsons,
 		inputTimes: inputTimes,
@@ -169,31 +156,22 @@ func TestUnnest(t *testing.T) {
 			require.Nil(t, ut.proc.InputBatch())
 			continue
 		}
-		wg := sync.WaitGroup{}
-		wg.Add(ut.inputTimes + 1)
-		go func(t *testing.T, proc *process.Process, arg *Argument, wg *sync.WaitGroup) {
-			end := false
-			for !end {
-				var err error
-				end, err = Call(0, proc, arg)
-				require.Nil(t, err)
-				require.False(t, arg.Es.end)
-				if end {
-					require.Nil(t, proc.InputBatch())
-				} else {
-					require.NotNil(t, proc.InputBatch())
-				}
-				wg.Done()
-			}
-		}(t, ut.proc, ut.arg, &wg)
+
 		for i := 0; i < ut.inputTimes; i++ {
-			bat, err := makeTestBatch(ut.jsons, ut.proc)
+			ut.proc.Reg.InputBatch, err = makeTestBatch(ut.jsons, ut.proc)
 			require.Nil(t, err)
-			require.NotNil(t, bat)
-			ut.reg.Ch <- bat
+			end, err := Call(0, ut.proc, ut.arg)
+			require.Nil(t, err)
+			require.False(t, end)
+			require.False(t, ut.arg.Es.end)
+			require.Nil(t, err)
+			require.NotNil(t, ut.proc.InputBatch())
 		}
-		ut.reg.Ch <- nil // terminate
-		wg.Wait()
+		ut.proc.Reg.InputBatch = nil
+		end, err := Call(0, ut.proc, ut.arg)
+		require.Nil(t, err)
+		require.True(t, end)
+		require.False(t, ut.arg.Es.end)
 	}
 }
 func makeTestBatch(jsons []string, proc *process.Process) (*batch.Batch, error) {
