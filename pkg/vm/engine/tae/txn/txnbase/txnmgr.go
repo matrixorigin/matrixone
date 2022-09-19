@@ -306,6 +306,10 @@ func (mgr *TxnManager) on1PCPrepared(op *OpTxn) {
 			logutil.Warn("[ApplyRollback]", TxnField(op.Txn), common.ErrorField(err))
 		}
 	}
+
+	// Here only notify the user txn have been done with err.
+	// The err returned can be access via op.Txn.GetError()
+	_ = op.Txn.WaitDone(err)
 }
 
 func (mgr *TxnManager) on2PCPrepared(op *OpTxn) {
@@ -324,6 +328,10 @@ func (mgr *TxnManager) on2PCPrepared(op *OpTxn) {
 			mgr.OnException(err)
 			logutil.Warn("[ApplyRollback]", TxnField(op.Txn), common.ErrorField(err))
 		}
+
+		// The 2PC txn has been applied rollback. Here to change the txn state and
+		// broadcast the rollback event to all waiting threads
+		_ = op.Txn.WaitDone(err)
 	}
 }
 
@@ -377,10 +385,6 @@ func (mgr *TxnManager) dequeuePrepared(items ...any) {
 		} else {
 			mgr.on1PCPrepared(op)
 		}
-
-		// Here only notify the user txn have been done with err.
-		// The err returned can be access via op.Txn.GetError()
-		_ = op.Txn.WaitDone(err)
 	}
 	logutil.Debug("[dequeuePrepared]",
 		common.NameSpaceField("txns"),
