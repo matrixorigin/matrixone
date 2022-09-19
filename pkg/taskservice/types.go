@@ -63,6 +63,10 @@ type conditions struct {
 	hasTaskEpochCond bool
 	taskEpochOp      Op
 	taskEpoch        uint32
+
+	hasTaskParentIDCond bool
+	taskParentTaskIDOp  Op
+	taskParentTaskID    string
 }
 
 // WithLimitCond set query result limit
@@ -108,6 +112,15 @@ func WithTaskEpochCond(op Op, value uint32) Condition {
 	}
 }
 
+// WithTaskParentTaskIDCond set task ParentTaskID condition
+func WithTaskParentTaskIDCond(op Op, value string) Condition {
+	return func(qo *conditions) {
+		qo.hasTaskParentIDCond = true
+		qo.taskParentTaskID = value
+		qo.taskParentTaskIDOp = op
+	}
+}
+
 // TaskService Asynchronous Task Service, which provides scheduling execution and management of
 // asynchronous tasks. CN, DN, HAKeeper, LogService will all hold this service.
 type TaskService interface {
@@ -136,7 +149,12 @@ type TaskService interface {
 	// QueryCronTask returns all cron task metadata
 	QueryCronTask(context.Context) ([]task.CronTask, error)
 
-	StartTriggerCronTask()
+	// StartScheduleCronTask start schedule cron tasks. A timer will be started to pull the latest CronTask
+	// from the TaskStore at regular intervals, and a timer will be maintained in memory for all Cron's to be
+	// triggered at regular intervals.
+	StartScheduleCronTask()
+	// StopScheduleCronTask stop schedule cron tasks.
+	StopScheduleCronTask()
 }
 
 // TaskExecutor which is responsible for the execution logic of a specific Task, and the function exits to

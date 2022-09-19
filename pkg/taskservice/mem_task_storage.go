@@ -32,6 +32,7 @@ type memTaskStorage struct {
 	cronTasks       map[uint64]task.CronTask
 	cronTaskIndexes map[string]uint64
 	preUpdate       func()
+	preUpdateCron   func() error
 }
 
 func NewMemTaskStorage() TaskStorage {
@@ -40,6 +41,8 @@ func NewMemTaskStorage() TaskStorage {
 		taskIndexes:     make(map[string]uint64),
 		cronTasks:       make(map[uint64]task.CronTask),
 		cronTaskIndexes: make(map[string]uint64),
+		preUpdateCron:   func() error { return nil },
+		preUpdate:       func() {},
 	}
 }
 
@@ -172,6 +175,10 @@ func (s *memTaskStorage) UpdateCronTask(ctx context.Context, cron task.CronTask,
 	s.Lock()
 	defer s.Unlock()
 
+	if err := s.preUpdateCron(); err != nil {
+		return 0, err
+	}
+
 	if _, ok := s.taskIndexes[value.Metadata.ID]; ok {
 		return 0, nil
 	}
@@ -243,6 +250,13 @@ func (s *memTaskStorage) filter(c conditions, task task.Task) bool {
 			ok = task.Epoch <= c.taskEpoch
 		case LT:
 			ok = task.Epoch < c.taskEpoch
+		}
+	}
+
+	if ok && c.hasTaskParentIDCond {
+		switch c.taskParentTaskIDOp {
+		case EQ:
+			ok = task.ParentTaskID == c.taskParentTaskID
 		}
 	}
 	return ok

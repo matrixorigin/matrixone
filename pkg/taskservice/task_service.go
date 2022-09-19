@@ -16,7 +16,6 @@ package taskservice
 
 import (
 	"context"
-	"fmt"
 	"sync"
 	"time"
 
@@ -37,10 +36,10 @@ type taskService struct {
 
 		started  bool
 		stopper  *stopper.Stopper
-		tasks    map[uint64]task.CronTask
-		entryIDs map[uint64]cron.EntryID
 		cron     *cron.Cron
-		retryC   chan uint64
+		retryC   chan task.CronTask
+		jobs     map[uint64]*cronJob
+		entryIDs map[uint64]cron.EntryID
 	}
 }
 
@@ -181,135 +180,4 @@ func (s *taskService) QueryCronTask(ctx context.Context) ([]task.CronTask, error
 
 func (s *taskService) Close() error {
 	return s.store.Close()
-}
-
-func (s *taskService) StartTriggerCronTask() {
-	s.crons.Lock()
-	defer s.crons.Unlock()
-
-	if s.crons.started {
-		return
-	}
-
-	s.crons.started = true
-	s.crons.stopper = stopper.NewStopper("crontasks")
-	s.crons.tasks = make(map[uint64]task.CronTask)
-	s.crons.entryIDs = make(map[uint64]cron.EntryID)
-	s.crons.retryC = make(chan uint64, 256)
-	if err := s.crons.stopper.RunTask(s.runTriggerCron); err != nil {
-		panic(err)
-	}
-}
-
-func (s *taskService) runTriggerCron(ctx context.Context) {
-	timer := time.NewTimer(time.Second)
-	defer timer.Stop()
-
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-timer.C:
-			// c, cancel := context.WithTimeout(ctx, time.Second*10)
-			// tasks, err := s.QueryCronTask(c)
-			// cancel()
-			// if err != nil {
-			// 	s.logger.Error("query cron tasks failed",
-			// 		zap.Error(err))
-			// 	break
-			// }
-
-			// now := time.Now()
-			// newTasks := make(map[uint64]task.CronTask)
-			// for _, task := range tasks {
-			// 	newTasks[task.ID] = task
-			// }
-
-			// s.crons.Lock()
-			// // add new and update crons
-			// for id, v := range newTasks {
-			// 	old, ok := s.crons.tasks[id]
-			// 	if !ok {
-
-			// 	}
-			// }
-
-			// // remove deleted crons
-
-			// // update crons
-		}
-		timer.Reset(time.Second)
-	}
-}
-
-func (s *taskService) triggerNewCronTaskLocked(t task.CronTask) {
-	s.crons.cron.AddFunc(t.CronExpr, func() {})
-}
-
-func (s *taskService) getCronJob(t task.CronTask) func() {
-	return func() {
-		if !s.hasCronTask(t.ID) {
-			return
-		}
-
-		sche, err := s.cronParser.Parse(t.CronExpr)
-		if err != nil {
-			panic(err)
-		}
-		now := time.Now()
-		next := sche.Next(now)
-		t.NextTime = next.UnixMilli()
-		t.UpdateAt = now.UnixMilli()
-
-		ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
-		defer cancel()
-
-		t.TriggerTimes++
-		value := newTaskFromMetadata(t.Metadata)
-		value.ParentTaskID = value.Metadata.ID
-		value.Metadata.ID = fmt.Sprintf("%s:%d", value.ParentTaskID, t.TriggerTimes)
-
-		_, err = s.store.UpdateCronTask(ctx, t, value)
-		if err == nil {
-			s.updateCronTask(t)
-			return
-		}
-
-		s.logger.Error("trigger cron task failed",
-			zap.String("cron-task", t.Metadata.ID),
-			zap.Error(err))
-		s.crons.retryC <- t.ID
-	}
-}
-
-func (s *taskService) hasCronTask(id uint64) bool {
-	s.crons.Lock()
-	defer s.crons.Unlock()
-	if !s.crons.started {
-		return false
-	}
-
-	_, ok := s.crons.entryIDs[id]
-	return ok
-}
-
-func (s *taskService) updateCronTask(t task.CronTask) {
-	s.crons.Lock()
-	defer s.crons.Unlock()
-
-	if !s.crons.started {
-		return
-	}
-
-	if _, ok := s.crons.tasks[t.ID]; ok {
-		s.crons.tasks[t.ID] = t
-	}
-}
-
-func newTaskFromMetadata(metadata task.TaskMetadata) task.Task {
-	return task.Task{
-		Metadata: metadata,
-		Status:   task.TaskStatus_Created,
-		CreateAt: time.Now().UnixMilli(),
-	}
 }
