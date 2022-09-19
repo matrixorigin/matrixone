@@ -24,10 +24,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 )
 
-func NewUnaryDistAgg[T1, T2 any](isCount bool, ityp, otyp types.Type, grows func(int),
+func NewUnaryDistAgg[T1, T2 any](op int, priv AggStruct, isCount bool, ityp, otyp types.Type, grows func(int),
 	eval func([]T2) []T2, merge func(int64, int64, T2, T2, bool, bool, any) (T2, bool),
 	fill func(int64, T1, T2, int64, bool, bool) (T2, bool)) Agg[*UnaryDistAgg[T1, T2]] {
 	return &UnaryDistAgg[T1, T2]{
+		op:      op,
+		priv:    priv,
 		otyp:    otyp,
 		eval:    eval,
 		fill:    fill,
@@ -339,4 +341,54 @@ func (a *UnaryDistAgg[T1, T2]) Eval(m *mheap.Mheap) (*vector.Vector, error) {
 		return vec, nil
 	}
 	return vector.NewWithData(a.otyp, a.da, a.eval(a.vs), nsp), nil
+}
+
+func (a *UnaryDistAgg[T1, T2]) MarshalBinary() ([]byte, error) {
+	pData, err := a.priv.MarshalBinary()
+	if err != nil {
+		return nil, err
+	}
+	return types.Encode(&EncodeAggDistinc[T1]{
+		Op:         a.op,
+		Private:    pData,
+		Es:         a.es,
+		Da:         a.da,
+		IsCount:    a.isCount,
+		InputType:  a.ityps,
+		OutputType: a.otyp,
+		Srcs:       a.srcs,
+		Maps:       a.maps,
+	})
+}
+
+func (a *UnaryDistAgg[T1, T2]) UnmarshalBinary(data []byte) error {
+	decode := new(EncodeAggDistinc[T1])
+	if err := types.Decode(data, decode); err != nil {
+		return err
+	}
+
+	// Recover data
+	a.op = decode.Op
+	a.ityps = decode.InputType
+	a.otyp = decode.OutputType
+	a.es = decode.Es
+	a.da = decode.Da
+	a.vs = types.DecodeFixedSlice[T2](a.da, a.otyp.TypeSize())
+	a.srcs = decode.Srcs
+	a.maps = decode.Maps
+
+	// Recover the priv data and function pointer
+	tmp, err := New(decode.Op, true, a.ityps[0])
+	if err != nil {
+		return err
+	}
+	newAgg := tmp.(*UnaryAgg[T1, T2])
+	a.priv = newAgg.priv
+	a.priv.UnmarshalBinary(decode.Private)
+	a.grows = newAgg.grows
+	a.eval = newAgg.eval
+	a.merge = newAgg.merge
+	a.fill = newAgg.fill
+
+	return nil
 }

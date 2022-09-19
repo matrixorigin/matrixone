@@ -15,6 +15,8 @@
 package agg
 
 import (
+	"encoding"
+
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -116,11 +118,23 @@ type Agg[T any] interface {
 	//  agg1's (vps[i]-1)th group is related to agg2's (start+i)th group
 	// For more introduction of os, please refer to comments of Function BatchFill.
 	BatchMerge(agg2 Agg[any], start int64, os []uint8, vps []uint64) error
+
+	MarshalBinary() ([]byte, error)
+	UnmarshalBinary([]byte) error
+}
+
+type AggStruct interface {
+	encoding.BinaryMarshaler
+	encoding.BinaryUnmarshaler
 }
 
 // UnaryAgg generic aggregation function with one input vector and without distinct
 type UnaryAgg[T1, T2 any] struct {
-	priv any
+	// operation type of aggregate
+	op int
+
+	// aggregate struct
+	priv AggStruct
 
 	// vs is result value list
 	vs []T2
@@ -164,6 +178,12 @@ type UnaryAgg[T1, T2 any] struct {
 
 // UnaryDistAgg generic aggregation function with one input vector and with distinct
 type UnaryDistAgg[T1, T2 any] struct {
+	// operation type of aggregate
+	op int
+
+	// aggregate struct
+	priv AggStruct
+
 	// vs is result value list
 	vs []T2
 	// es, es[i] is true to indicate that this group has not yet been populated with any value
@@ -205,6 +225,31 @@ type UnaryDistAgg[T1, T2 any] struct {
 	//  fifth represents whether it is a new group
 	//  sixth represents whether the value to be fed is null
 	fill func(int64, T1, T2, int64, bool, bool) (T2, bool)
+}
+
+type EncodeAgg struct {
+	Op      int
+	Private []byte
+	Es      []bool
+	Da      []byte
+
+	InputType  []types.Type
+	OutputType types.Type
+	IsCount    bool
+}
+
+type EncodeAggDistinc[T any] struct {
+	Op      int
+	Private []byte
+	Es      []bool
+	Da      []byte
+
+	InputType  []types.Type
+	OutputType types.Type
+
+	IsCount bool
+	Srcs    [][]T
+	Maps    []*hashmap.StrHashMap
 }
 
 type Compare interface {
