@@ -100,7 +100,7 @@ func (node *AppendNode) CloneAll() txnbase.MVCCNode {
 func (node *AppendNode) CloneData() txnbase.MVCCNode {
 	panic("todo")
 }
-func (node *AppendNode) UpdateNode(txnbase.MVCCNode) {
+func (node *AppendNode) Update(txnbase.MVCCNode) {
 	panic("todo")
 }
 func (node *AppendNode) GeneralDesc() string {
@@ -114,10 +114,13 @@ func (node *AppendNode) GeneralVerboseString() string {
 }
 
 func (node *AppendNode) SetLogIndex(idx *wal.Index) {
-	node.TxnMVCCNode.AddLogIndex(idx)
+	node.TxnMVCCNode.SetLogIndex(idx)
 }
 func (node *AppendNode) GetID() *common.ID {
 	return node.id
+}
+func (node *AppendNode) OnReplayCommit(ts types.TS) {
+	node.End = ts
 }
 func (node *AppendNode) GetCommitTS() types.TS {
 	return node.GetEnd()
@@ -136,13 +139,6 @@ func (node *AppendNode) GetMaxRow() uint32 {
 }
 func (node *AppendNode) SetMaxRow(row uint32) {
 	node.maxRow = row
-}
-
-func (node *AppendNode) Prepare2PCPrepare() error {
-	node.Lock()
-	defer node.Unlock()
-	_, err := node.TxnMVCCNode.Prepare2PCPrepare()
-	return err
 }
 
 func (node *AppendNode) PrepareCommit() error {

@@ -40,7 +40,6 @@ var (
 type txnTable struct {
 	store        *txnStore
 	createEntry  txnif.TxnEntry
-	createIdx    int
 	dropEntry    txnif.TxnEntry
 	localSegment *localSegment
 	updateNodes  map[common.ID]txnif.UpdateNode
@@ -93,10 +92,7 @@ func (tbl *txnTable) WaitSynced() {
 
 func (tbl *txnTable) CollectCmd(cmdMgr *commandManager) (err error) {
 	tbl.csnStart = uint32(cmdMgr.GetCSN())
-	for i, txnEntry := range tbl.txnEntries {
-		if tbl.createEntry != nil && tbl.dropEntry != nil && i == tbl.createIdx {
-			txnEntry = txnEntry.(*catalog.TableEntry).CloneCreateEntry()
-		}
+	for _, txnEntry := range tbl.txnEntries {
 		csn := cmdMgr.GetCSN()
 		cmd, err := txnEntry.MakeCommand(csn)
 		// logutil.Infof("%d-%d",csn,cmd.GetType())
@@ -142,8 +138,10 @@ func (tbl *txnTable) SoftDeleteSegment(id uint64) (err error) {
 		return
 	}
 	tbl.store.IncreateWriteCnt()
+	if txnEntry != nil {
+		tbl.txnEntries = append(tbl.txnEntries, txnEntry)
+	}
 	tbl.store.dirtyMemo.recordSeg(tbl.entry.ID, id)
-	tbl.txnEntries = append(tbl.txnEntries, txnEntry)
 	tbl.store.warChecker.ReadTable(tbl.entry.GetDB().ID, tbl.entry.AsCommonID())
 	return
 }
@@ -184,7 +182,9 @@ func (tbl *txnTable) SoftDeleteBlock(id *common.ID) (err error) {
 	}
 	tbl.store.IncreateWriteCnt()
 	tbl.store.dirtyMemo.recordBlk(*id)
-	tbl.txnEntries = append(tbl.txnEntries, meta)
+	if meta != nil {
+		tbl.txnEntries = append(tbl.txnEntries, meta)
+	}
 	tbl.store.warChecker.ReadSegment(tbl.entry.GetDB().ID, seg.AsCommonID())
 	return
 }
@@ -251,7 +251,6 @@ func (tbl *txnTable) SetCreateEntry(e txnif.TxnEntry) {
 	tbl.store.IncreateWriteCnt()
 	tbl.store.dirtyMemo.recordCatalogChange()
 	tbl.createEntry = e
-	tbl.createIdx = len(tbl.txnEntries)
 	tbl.txnEntries = append(tbl.txnEntries, e)
 	tbl.store.warChecker.ReadDB(tbl.entry.GetDB().GetID())
 }
@@ -537,6 +536,9 @@ func (tbl *txnTable) UncommittedRows() uint32 {
 		return 0
 	}
 	return tbl.localSegment.Rows()
+}
+func (tbl *txnTable) NeedRollback() bool {
+	return tbl.createEntry != nil && tbl.dropEntry != nil
 }
 
 // PrePrepareDedup do deduplication check for 1PC Commit or 2PC Prepare
