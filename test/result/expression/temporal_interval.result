@@ -140,7 +140,7 @@ select date_add("1997-12-31 23:59:59",INTERVAL 1.5 DAY);
 date_add("1997-12-31 23:59:59",INTERVAL 1.5 DAY)
 1998-01-02 23:59:59
 select date_add("1997-12-31 23:59:59",INTERVAL 1.5 ABC);
-You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at position 55 near 'abc';
+You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 54 near " ABC);";
 select date_sub("1998-01-01 00:00:00",INTERVAL 1 SECOND);
 date_sub("1998-01-01 00:00:00",INTERVAL 1 SECOND)
 1997-12-31 23:59:59
@@ -290,7 +290,7 @@ select date_sub("1998-01-01 00:00:00",INTERVAL 1.5 QUARTER);
 date_sub("1998-01-01 00:00:00",INTERVAL 1.5 QUARTER)
 1997-07-01 00:00:00
 select date_sub("1998-01-01 00:00:00",INTERVAL 1 ABC);
-You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at position 53 near 'abc';
+You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 52 near " ABC);";
 select date_sub(NULL,INTERVAL 100000 SECOND);
 date_sub(NULL,INTERVAL 100000 SECOND)
 null
@@ -348,9 +348,9 @@ date_add(a,INTERVAL 1 SECOND)	date_add(b,INTERVAL 1 MINUTE)	date_add(c,INTERVAL 
 1998-01-01 00:00:01	1998-01-01 00:01:00	1998-01-01 01:00:00	1998-02-01 00:00:00	1998-03-31 23:59:59.000002000
 null	null	null	null	null
 select date_add(a,INTERVAL 1 YEAR), date_add(b,"1:1" MINUTE_SECOND), date_add(c,INTERVAL "1:1" HOUR_MINUTE), date_add(d,INTERVAL "1:1" DAY_HOUR), date_add(e,INTERVAL "1 1" YEAR_MONTH) from t1;
-You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at position 67 near 'minute_second';
+You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 66 near " MINUTE_SECOND), date_add(c,INTERVAL "1:1" HOUR_MINUTE), date_add(d,INTERVAL "1:1" DAY_HOUR), date_add(e,INTERVAL "1 1" YEAR_MONTH) from t1;";
 select date_add(a,"1:1:1" HOUR_SECOND), date_add(b,"1:1:1" HOUR_SECOND), date_add(c,INTERVAL "1 1:1" DAY_MINUTE), date_add(d,INTERVAL "1 1:1:1" DAY_SECOND), date_add(e,INTERVAL "1 1" YEAR_MONTH) from t1;
-You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at position 38 near 'hour_second';
+You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 37 near " HOUR_SECOND), date_add(b,"1:1:1" HOUR_SECOND), date_add(c,INTERVAL "1 1:1" DAY_MINUTE), date_add(d,INTERVAL "1 1:1:1" DAY_SECOND), date_add(e,INTERVAL "1 1" YEAR_MONTH) from t1;";
 select date_sub(a,INTERVAL 1 SECOND), date_sub(b,INTERVAL 1 MINUTE), date_sub(c,INTERVAL 1 HOUR), date_sub(d,INTERVAL 1 MONTH), date_sub(e,INTERVAL 1 QUARTER) from t1;
 date_sub(a,INTERVAL 1 SECOND)	date_sub(b,INTERVAL 1 MINUTE)	date_sub(c,INTERVAL 1 HOUR)	date_sub(d,INTERVAL 1 MONTH)	date_sub(e,INTERVAL 1 QUARTER)
 1997-12-30 23:59:59	1997-12-30 23:59:00	1997-12-31 22:59:59	1997-11-30 23:59:59	1997-09-30 23:59:59.000002000
@@ -377,7 +377,7 @@ a - INTERVAL 1 SECOND	b - INTERVAL 1 MINUTE	c - INTERVAL 1 HOUR
 1997-12-31 23:59:59	1997-12-31 23:59:00	1997-12-31 23:00:00
 null	null	null
 select i + INTERVAL 1 SECOND from t1;
-Operator '+' with parameters [INT unexpected type: 54] will be implemented in future version.
+Operator '+' with parameters [INT unexpected type: 54] is not supported.
 select month(date_sub("1998-01-01 00:00:00",INTERVAL 1 SECOND));
 month(date_sub("1998-01-01 00:00:00",INTERVAL 1 SECOND))
 12

@@ -20,6 +20,8 @@ import (
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/stretchr/testify/require"
+	"io"
+	"os"
 	"reflect"
 	"sync"
 	"testing"
@@ -28,7 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/batchpipe"
-	"github.com/matrixorigin/matrixone/pkg/util/errors"
+	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 	"github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 
 	"github.com/google/gops/agent"
@@ -37,24 +39,25 @@ import (
 )
 
 var buf = new(bytes.Buffer)
-var err1 = errors.WithStack(errors.New("test1"))
-var err2 = errors.Wrapf(err1, "test2")
+var err1 = fmt.Errorf("test1")
+var err2 = errutil.Wrapf(err1, "test2")
 var testBaseBuffer2SqlOption = []buffer2SqlOption{bufferWithSizeThreshold(1 * KB)}
-var nodeStateSpanIdStr string
+var traceIDSpanIDColumnStr string
+var traceIDSpanIDCsvStr string
 
 func noopReportLog(context.Context, zapcore.Level, int, string, ...any) {}
 func noopReportError(context.Context, error, int)                       {}
 
 func init() {
-	setup()
-}
-
-func setup() {
 	if _, err := Init(
 		context.Background(),
 		EnableTracer(true),
 		WithMOVersion("v0.test.0"),
-		WithNode("node_uuid", NodeTypeNode),
+		WithNode("node_uuid", NodeTypeStandalone),
+		WithBatchProcessMode(InternalExecutor),
+		WithFSWriterFactory(func(ctx context.Context, dir string, name batchpipe.HasName) io.StringWriter {
+			return os.Stdout
+		}),
 		WithSQLExecutor(func() internalExecutor.InternalExecutor {
 			return nil
 		}),
@@ -63,10 +66,11 @@ func setup() {
 		panic(err)
 	}
 	logutil.SetLogReporter(&logutil.TraceReporter{ReportLog: noopReportLog, LevelSignal: SetLogLevel})
-	errors.SetErrorReporter(noopReportError)
+	errutil.SetErrorReporter(noopReportError)
 
 	sc := SpanFromContext(DefaultContext()).SpanContext()
-	nodeStateSpanIdStr = fmt.Sprintf(`"%s", "%s"`, sc.TraceID.String(), sc.SpanID.String())
+	traceIDSpanIDColumnStr = fmt.Sprintf(`"%s", "%s"`, sc.TraceID.String(), sc.SpanID.String())
+	traceIDSpanIDCsvStr = fmt.Sprintf(`%s,%s`, sc.TraceID.String(), sc.SpanID.String())
 
 	if err := agent.Listen(agent.Options{}); err != nil {
 		_ = fmt.Errorf("listen gops agent failed: %s", err)
@@ -127,7 +131,7 @@ func Test_batchSqlHandler_NewItemBuffer_Check_genBatchFunc(t1 *testing.T) {
 		want genBatchFunc
 	}{
 		{name: "span_type", args: args{opt: opts, name: MOSpanType}, want: genSpanBatchSql},
-		{name: "log_type", args: args{opt: opts, name: MOLogType}, want: genLogBatchSql},
+		{name: "log_type", args: args{opt: opts, name: MORawLogType}, want: genLogBatchSql},
 		{name: "statement_type", args: args{opt: opts, name: MOStatementType},
 			want: genStatementBatchSql},
 		{name: "error_type", args: args{opt: opts, name: MOErrorType},
@@ -179,7 +183,7 @@ func Test_buffer2Sql_GetBatch_AllType(t *testing.T) {
 			wantFunc: genErrorBatchSql,
 			want: `insert into system.error_info (` +
 				"`statement_id`, `span_id`, `node_uuid`, `node_type`, `err_code`, `stack`, `timestamp`" +
-				`) values (` + nodeStateSpanIdStr + `, "node_uuid", "Node", "test1", "test1", "1970-01-01 00:00:00.000000")`,
+				`) values (` + traceIDSpanIDColumnStr + `, "node_uuid", "Standalone", "test1", "test1", "1970-01-01 00:00:00.000000")`,
 		},
 		{
 			name:   "multi_error",
@@ -194,8 +198,8 @@ func Test_buffer2Sql_GetBatch_AllType(t *testing.T) {
 			wantFunc: genErrorBatchSql,
 			want: `insert into system.error_info (` +
 				"`statement_id`, `span_id`, `node_uuid`, `node_type`, `err_code`, `stack`, `timestamp`" +
-				`) values (` + nodeStateSpanIdStr + `, "node_uuid", "Node", "test1", "test1", "1970-01-01 00:00:00.000000")` +
-				`,(` + nodeStateSpanIdStr + `, "node_uuid", "Node", "test2: test1", "test2: test1", "1970-01-01 00:00:00.001001")`,
+				`) values (` + traceIDSpanIDColumnStr + `, "node_uuid", "Standalone", "test1", "test1", "1970-01-01 00:00:00.000000")` +
+				`,(` + traceIDSpanIDColumnStr + `, "node_uuid", "Standalone", "test2: test1", "test2: test1", "1970-01-01 00:00:00.001001")`,
 		},
 		{
 			name:   "single_log",
@@ -217,7 +221,7 @@ func Test_buffer2Sql_GetBatch_AllType(t *testing.T) {
 			wantFunc: genLogBatchSql,
 			want: `insert into system.log_info (` +
 				"`span_id`, `statement_id`, `node_uuid`, `node_type`, `timestamp`, `name`, `level`, `caller`, `message`, `extra`" +
-				`) values ("0000000000000001", "00000000-0000-0000-0000-000000000001", "node_uuid", "Node", "1970-01-01 00:00:00.000000", "", "info", "Test_buffer2Sql_GetBatch_AllType", "info message", "{}")`,
+				`) values ("0000000000000001", "00000000-0000-0000-0000-000000000001", "node_uuid", "Standalone", "1970-01-01 00:00:00.000000", "", "info", "Test_buffer2Sql_GetBatch_AllType", "info message", "{}")`,
 		},
 		{
 			name:   "multi_log",
@@ -248,8 +252,8 @@ func Test_buffer2Sql_GetBatch_AllType(t *testing.T) {
 			wantFunc: genLogBatchSql,
 			want: `insert into system.log_info (` +
 				"`span_id`, `statement_id`, `node_uuid`, `node_type`, `timestamp`, `name`, `level`, `caller`, `message`, `extra`" +
-				`) values ("0000000000000001", "00000000-0000-0000-0000-000000000001", "node_uuid", "Node", "1970-01-01 00:00:00.000000", "", "info", "Test_buffer2Sql_GetBatch_AllType", "info message", "{}")` +
-				`,("0000000000000001", "00000000-0000-0000-0000-000000000001", "node_uuid", "Node", "1970-01-01 00:00:00.001001", "", "debug", "Test_buffer2Sql_GetBatch_AllType", "debug message", "{}")`,
+				`) values ("0000000000000001", "00000000-0000-0000-0000-000000000001", "node_uuid", "Standalone", "1970-01-01 00:00:00.000000", "", "info", "Test_buffer2Sql_GetBatch_AllType", "info message", "{}")` +
+				`,("0000000000000001", "00000000-0000-0000-0000-000000000001", "node_uuid", "Standalone", "1970-01-01 00:00:00.001001", "", "debug", "Test_buffer2Sql_GetBatch_AllType", "debug message", "{}")`,
 		},
 		{
 			name:   "single_span",
@@ -270,7 +274,7 @@ func Test_buffer2Sql_GetBatch_AllType(t *testing.T) {
 			wantFunc: genSpanBatchSql,
 			want: `insert into system.span_info (` +
 				"`span_id`, `statement_id`, `parent_span_id`, `node_uuid`, `node_type`, `resource`, `name`, `start_time`, `end_time`, `duration`" +
-				`) values ("0000000000000001", "00000000-0000-0000-0000-000000000001", "0000000000000000", "node_uuid", "Node", "{\"Node\":{\"node_uuid\":\"node_uuid\",\"node_type\":0},\"version\":\"v0.test.0\"}", "span1", "1970-01-01 00:00:00.000000", "1970-01-01 00:00:00.000001", 1000)`,
+				`) values ("0000000000000001", "00000000-0000-0000-0000-000000000001", "0000000000000000", "node_uuid", "Standalone", "{\"Node\":{\"node_uuid\":\"node_uuid\",\"node_type\":\"Standalone\"},\"version\":\"v0.test.0\"}", "span1", "1970-01-01 00:00:00.000000", "1970-01-01 00:00:00.000001", 1000)`,
 		},
 		{
 			name:   "multi_span",
@@ -299,8 +303,8 @@ func Test_buffer2Sql_GetBatch_AllType(t *testing.T) {
 			wantFunc: genSpanBatchSql,
 			want: `insert into system.span_info (` +
 				"`span_id`, `statement_id`, `parent_span_id`, `node_uuid`, `node_type`, `resource`, `name`, `start_time`, `end_time`, `duration`" +
-				`) values ("0000000000000001", "00000000-0000-0000-0000-000000000001", "0000000000000000", "node_uuid", "Node", "{\"Node\":{\"node_uuid\":\"node_uuid\",\"node_type\":0},\"version\":\"v0.test.0\"}", "span1", "1970-01-01 00:00:00.000000", "1970-01-01 00:00:00.000001", 1000)` +
-				`,("0000000000000002", "00000000-0000-0000-0000-000000000001", "0000000000000000", "node_uuid", "Node", "{\"Node\":{\"node_uuid\":\"node_uuid\",\"node_type\":0},\"version\":\"v0.test.0\"}", "span2", "1970-01-01 00:00:00.000001", "1970-01-01 00:00:00.001000", 999000)`,
+				`) values ("0000000000000001", "00000000-0000-0000-0000-000000000001", "0000000000000000", "node_uuid", "Standalone", "{\"Node\":{\"node_uuid\":\"node_uuid\",\"node_type\":\"Standalone\"},\"version\":\"v0.test.0\"}", "span1", "1970-01-01 00:00:00.000000", "1970-01-01 00:00:00.000001", 1000)` +
+				`,("0000000000000002", "00000000-0000-0000-0000-000000000001", "0000000000000000", "node_uuid", "Standalone", "{\"Node\":{\"node_uuid\":\"node_uuid\",\"node_type\":\"Standalone\"},\"version\":\"v0.test.0\"}", "span2", "1970-01-01 00:00:00.000001", "1970-01-01 00:00:00.001000", 999000)`,
 		},
 		{
 			name:   "single_statement",
@@ -311,6 +315,8 @@ func Test_buffer2Sql_GetBatch_AllType(t *testing.T) {
 						StatementID:          _1TraceID,
 						TransactionID:        _1TxnID,
 						SessionID:            _1SesID,
+						TenantID:             666,
+						UserID:               999,
 						Account:              "MO",
 						User:                 "moroot",
 						Database:             "system",
@@ -318,7 +324,6 @@ func Test_buffer2Sql_GetBatch_AllType(t *testing.T) {
 						StatementFingerprint: "show tables",
 						StatementTag:         "",
 						RequestAt:            util.TimeNano(0),
-						Status:               StatementStatusRunning,
 						ExecPlan:             "",
 					},
 				},
@@ -326,8 +331,8 @@ func Test_buffer2Sql_GetBatch_AllType(t *testing.T) {
 			},
 			wantFunc: genStatementBatchSql,
 			want: `insert into system.statement_info (` +
-				"`statement_id`, `transaction_id`, `session_id`, `account`, `user`, `host`, `database`, `statement`, `statement_tag`, `statement_fingerprint`, `node_uuid`, `node_type`, `request_at`, `status`, `exec_plan`" +
-				`) values ("00000000-0000-0000-0000-000000000001", "00000000-0000-0000-0000-000000000001", "00000000-0000-0000-0000-000000000001", "MO", "moroot", "", "system", "show tables", "show tables", "", "node_uuid", "Node", "1970-01-01 00:00:00.000000", "Running", "")`,
+				"`statement_id`, `transaction_id`, `session_id`, `tenant_id`, `user_id`, `account`, `user`, `host`, `database`, `statement`, `statement_tag`, `statement_fingerprint`, `node_uuid`, `node_type`, `request_at`, `exec_plan`" +
+				`) values ("00000000-0000-0000-0000-000000000001", "00000000-0000-0000-0000-000000000001", "00000000-0000-0000-0000-000000000001", 666, 999, "MO", "moroot", "", "system", "show tables", "show tables", "", "node_uuid", "Standalone", "1970-01-01 00:00:00.000000", "")`,
 		},
 		{
 			name:   "multi_statement",
@@ -338,6 +343,8 @@ func Test_buffer2Sql_GetBatch_AllType(t *testing.T) {
 						StatementID:          _1TraceID,
 						TransactionID:        _1TxnID,
 						SessionID:            _1SesID,
+						TenantID:             666,
+						UserID:               999,
 						Account:              "MO",
 						User:                 "moroot",
 						Database:             "system",
@@ -345,13 +352,14 @@ func Test_buffer2Sql_GetBatch_AllType(t *testing.T) {
 						StatementFingerprint: "show tables",
 						StatementTag:         "",
 						RequestAt:            util.TimeNano(0),
-						Status:               StatementStatusRunning,
 						ExecPlan:             "",
 					},
 					&StatementInfo{
 						StatementID:          _2TraceID,
 						TransactionID:        _1TxnID,
 						SessionID:            _1SesID,
+						TenantID:             222,
+						UserID:               555,
 						Account:              "MO",
 						User:                 "moroot",
 						Database:             "system",
@@ -359,7 +367,6 @@ func Test_buffer2Sql_GetBatch_AllType(t *testing.T) {
 						StatementFingerprint: "show databases",
 						StatementTag:         "dcl",
 						RequestAt:            util.TimeNano(time.Microsecond),
-						Status:               StatementStatusFailed,
 						ExecPlan:             "",
 					},
 				},
@@ -367,16 +374,16 @@ func Test_buffer2Sql_GetBatch_AllType(t *testing.T) {
 			},
 			wantFunc: genStatementBatchSql,
 			want: `insert into system.statement_info (` +
-				"`statement_id`, `transaction_id`, `session_id`, `account`, `user`, `host`, `database`, `statement`, `statement_tag`, `statement_fingerprint`, `node_uuid`, `node_type`, `request_at`, `status`, `exec_plan`" +
-				`) values ("00000000-0000-0000-0000-000000000001", "00000000-0000-0000-0000-000000000001", "00000000-0000-0000-0000-000000000001", "MO", "moroot", "", "system", "show tables", "show tables", "", "node_uuid", "Node", "1970-01-01 00:00:00.000000", "Running", "")` +
-				`,("00000000-0000-0000-0000-000000000002", "00000000-0000-0000-0000-000000000001", "00000000-0000-0000-0000-000000000001", "MO", "moroot", "", "system", "show databases", "show databases", "dcl", "node_uuid", "Node", "1970-01-01 00:00:00.000001", "Failed", "")`,
+				"`statement_id`, `transaction_id`, `session_id`, `tenant_id`, `user_id`, `account`, `user`, `host`, `database`, `statement`, `statement_tag`, `statement_fingerprint`, `node_uuid`, `node_type`, `request_at`, `exec_plan`" +
+				`) values ("00000000-0000-0000-0000-000000000001", "00000000-0000-0000-0000-000000000001", "00000000-0000-0000-0000-000000000001", 666, 999, "MO", "moroot", "", "system", "show tables", "show tables", "", "node_uuid", "Standalone", "1970-01-01 00:00:00.000000", "")` +
+				`,("00000000-0000-0000-0000-000000000002", "00000000-0000-0000-0000-000000000001", "00000000-0000-0000-0000-000000000001", 222, 555, "MO", "moroot", "", "system", "show databases", "show databases", "dcl", "node_uuid", "Standalone", "1970-01-01 00:00:00.000001", "")`,
 		},
 		{
 			name:   "single_zap",
 			fields: defaultFields,
 			args: args{
 				in: []IBuffer2SqlItem{
-					&MOZap{
+					&MOZapLog{
 						Level:       zapcore.InfoLevel,
 						SpanContext: &sc,
 						Timestamp:   time.Unix(0, 0),
@@ -390,14 +397,14 @@ func Test_buffer2Sql_GetBatch_AllType(t *testing.T) {
 			wantFunc: genZapLogBatchSql,
 			want: `insert into system.log_info (` +
 				"`span_id`, `statement_id`, `node_uuid`, `node_type`, `timestamp`, `name`, `level`, `caller`, `message`, `extra`" +
-				`) values ("0000000000000001", "00000000-0000-0000-0000-000000000001", "node_uuid", "Node", "1970-01-01 00:00:00.000000", "", "info", "trace/buffer_pipe_sql_test.go:100", "info message", "{}")`,
+				`) values ("0000000000000001", "00000000-0000-0000-0000-000000000001", "node_uuid", "Standalone", "1970-01-01 00:00:00.000000", "", "info", "trace/buffer_pipe_sql_test.go:100", "info message", "{}")`,
 		},
 		{
 			name:   "multi_zap",
 			fields: defaultFields,
 			args: args{
 				in: []IBuffer2SqlItem{
-					&MOZap{
+					&MOZapLog{
 						Level:       zapcore.InfoLevel,
 						SpanContext: &sc,
 						Timestamp:   time.Unix(0, 0),
@@ -405,7 +412,7 @@ func Test_buffer2Sql_GetBatch_AllType(t *testing.T) {
 						Message:     "info message",
 						Extra:       "{}",
 					},
-					&MOZap{
+					&MOZapLog{
 						Level:       zapcore.DebugLevel,
 						SpanContext: &sc,
 						Timestamp:   time.Unix(0, int64(time.Microsecond+time.Millisecond)),
@@ -419,8 +426,8 @@ func Test_buffer2Sql_GetBatch_AllType(t *testing.T) {
 			wantFunc: genZapLogBatchSql,
 			want: `insert into system.log_info (` +
 				"`span_id`, `statement_id`, `node_uuid`, `node_type`, `timestamp`, `name`, `level`, `caller`, `message`, `extra`" +
-				`) values ("0000000000000001", "00000000-0000-0000-0000-000000000001", "node_uuid", "Node", "1970-01-01 00:00:00.000000", "", "info", "trace/buffer_pipe_sql_test.go:100", "info message", "{}")` +
-				`,("0000000000000001", "00000000-0000-0000-0000-000000000001", "node_uuid", "Node", "1970-01-01 00:00:00.001001", "", "debug", "trace/buffer_pipe_sql_test.go:100", "debug message", "{}")`,
+				`) values ("0000000000000001", "00000000-0000-0000-0000-000000000001", "node_uuid", "Standalone", "1970-01-01 00:00:00.000000", "", "info", "trace/buffer_pipe_sql_test.go:100", "info message", "{}")` +
+				`,("0000000000000001", "00000000-0000-0000-0000-000000000001", "node_uuid", "Standalone", "1970-01-01 00:00:00.001001", "", "debug", "trace/buffer_pipe_sql_test.go:100", "debug message", "{}")`,
 		},
 	}
 
@@ -552,8 +559,6 @@ func Test_buffer2Sql_ShouldFlush(t *testing.T) {
 		sizeThreshold int64
 		batchFunc     genBatchFunc
 	}
-	err1 := errors.WithStack(errors.New("test1"))
-	err2 := errors.Wrapf(err1, "test2")
 	tests := []struct {
 		name        string
 		fields      fields
@@ -679,7 +684,7 @@ func Test_quote(t *testing.T) {
 			}
 		})
 	}
-	var err1 = errors.WithStack(errors.New("test1"))
+	var err1 = errutil.WithContext(context.Background(), fmt.Errorf("test1"))
 	t.Logf("show quote(err): \"%s\"", quote(fmt.Sprintf("%+v", err1)))
 }
 
@@ -764,7 +769,7 @@ func Test_batchSqlHandler_NewItemBatchHandler(t1 *testing.T) {
 	}
 	for _, tt := range tests {
 		t1.Run(tt.name, func(t1 *testing.T) {
-			gTracerProvider = newMOTracerProvider(WithSQLExecutor(newExecutorFactory(tt.fields.ch)))
+			WithSQLExecutor(newDummyExecutorFactory(tt.fields.ch)).apply(&GetTracerProvider().tracerProviderConfig)
 			t := batchSqlHandler{
 				defaultOpts: tt.fields.defaultOpts,
 			}
@@ -791,6 +796,262 @@ func Test_batchSqlHandler_NewItemBatchHandler(t1 *testing.T) {
 			got(tt.args.batch)
 			close(tt.fields.ch)
 			wg.Wait()
+		})
+	}
+	WithSQLExecutor(func() internalExecutor.InternalExecutor { return nil }).apply(&GetTracerProvider().tracerProviderConfig)
+}
+
+func Test_genCsvData(t *testing.T) {
+	time.Local = time.FixedZone("CST", 0) // set time-zone +0000
+	errorFormatter.Store("%v")
+	logStackFormatter.Store("%n")
+	type args struct {
+		in  []IBuffer2SqlItem
+		buf *bytes.Buffer
+	}
+	sc := SpanContextWithIDs(_1TraceID, _1SpanID)
+	tests := []struct {
+		name string
+		args args
+		want any
+	}{
+		{
+			name: "single_span",
+			args: args{
+				in: []IBuffer2SqlItem{
+					&MOSpan{
+						SpanConfig:  SpanConfig{SpanContext: SpanContext{TraceID: _1TraceID, SpanID: _1SpanID}, parent: noopSpan{}},
+						Name:        *bytes.NewBuffer([]byte("span1")),
+						StartTimeNS: util.TimeNano(0),
+						EndTimeNS:   util.TimeNano(time.Microsecond),
+						Duration:    util.TimeNano(time.Microsecond),
+						tracer:      gTracer.(*MOTracer),
+					},
+				},
+				buf: buf,
+			},
+			want: `0000000000000001,00000000-0000-0000-0000-000000000001,0000000000000000,node_uuid,Standalone,span1,1970-01-01 00:00:00.000000,1970-01-01 00:00:00.000001,1000,"{""Node"":{""node_uuid"":""node_uuid"",""node_type"":""Standalone""},""version"":""v0.test.0""}"
+`,
+		},
+		{
+			name: "multi_span",
+			args: args{
+				in: []IBuffer2SqlItem{
+					&MOSpan{
+						SpanConfig:  SpanConfig{SpanContext: SpanContext{TraceID: _1TraceID, SpanID: _1SpanID}, parent: noopSpan{}},
+						Name:        *bytes.NewBuffer([]byte("span1")),
+						StartTimeNS: util.TimeNano(0),
+						EndTimeNS:   util.TimeNano(time.Microsecond),
+						Duration:    util.TimeNano(time.Microsecond),
+						tracer:      gTracer.(*MOTracer),
+					},
+					&MOSpan{
+						SpanConfig:  SpanConfig{SpanContext: SpanContext{TraceID: _1TraceID, SpanID: _2SpanID}, parent: noopSpan{}},
+						Name:        *bytes.NewBuffer([]byte("span2")),
+						StartTimeNS: util.TimeNano(time.Microsecond),
+						EndTimeNS:   util.TimeNano(time.Millisecond),
+						Duration:    util.TimeNano(time.Millisecond - time.Microsecond),
+						tracer:      gTracer.(*MOTracer),
+					},
+				},
+				buf: buf,
+			},
+			want: `0000000000000001,00000000-0000-0000-0000-000000000001,0000000000000000,node_uuid,Standalone,span1,1970-01-01 00:00:00.000000,1970-01-01 00:00:00.000001,1000,"{""Node"":{""node_uuid"":""node_uuid"",""node_type"":""Standalone""},""version"":""v0.test.0""}"
+0000000000000002,00000000-0000-0000-0000-000000000001,0000000000000000,node_uuid,Standalone,span2,1970-01-01 00:00:00.000001,1970-01-01 00:00:00.001000,999000,"{""Node"":{""node_uuid"":""node_uuid"",""node_type"":""Standalone""},""version"":""v0.test.0""}"
+`,
+		},
+		{
+			name: "single_log",
+			args: args{
+				in: []IBuffer2SqlItem{
+					&MOLog{
+						TraceID:   _1TraceID,
+						SpanID:    _1SpanID,
+						Timestamp: uint64(0),
+						Level:     zapcore.InfoLevel,
+						Caller:    util.Caller(0),
+						Message:   "info message",
+						Extra:     "{}",
+					},
+				},
+				buf: buf,
+			},
+			want: `00000000-0000-0000-0000-000000000001,0000000000000001,node_uuid,Standalone,1970-01-01 00:00:00.000000,,info,Test_genCsvData,info message,{}
+`,
+		},
+		{
+			name: "multi_log",
+			args: args{
+				in: []IBuffer2SqlItem{
+					&MOLog{
+						TraceID:   _1TraceID,
+						SpanID:    _1SpanID,
+						Timestamp: uint64(0),
+						Level:     zapcore.InfoLevel,
+						Caller:    util.Caller(0),
+						Message:   "info message",
+						Extra:     "{}",
+					},
+					&MOLog{
+						TraceID:   _1TraceID,
+						SpanID:    _1SpanID,
+						Timestamp: uint64(time.Millisecond + time.Microsecond),
+						Level:     zapcore.DebugLevel,
+						Caller:    util.Caller(0),
+						Message:   "debug message",
+						Extra:     "{}",
+					},
+				},
+				buf: buf,
+			},
+			want: `00000000-0000-0000-0000-000000000001,0000000000000001,node_uuid,Standalone,1970-01-01 00:00:00.000000,,info,Test_genCsvData,info message,{}
+00000000-0000-0000-0000-000000000001,0000000000000001,node_uuid,Standalone,1970-01-01 00:00:00.001001,,debug,Test_genCsvData,debug message,{}
+`,
+		},
+		{
+			name: "single_zap",
+			args: args{
+				in: []IBuffer2SqlItem{
+					&MOZapLog{
+						Level:       zapcore.InfoLevel,
+						SpanContext: &sc,
+						Timestamp:   time.Unix(0, 0),
+						Caller:      "trace/buffer_pipe_sql_test.go:912",
+						Message:     "info message",
+						Extra:       "{}",
+					},
+				},
+				buf: buf,
+			},
+			want: `00000000-0000-0000-0000-000000000001,0000000000000001,node_uuid,Standalone,1970-01-01 00:00:00.000000,,info,trace/buffer_pipe_sql_test.go:912,info message,{}
+`,
+		},
+		{
+			name: "multi_zap",
+			args: args{
+				in: []IBuffer2SqlItem{
+					&MOZapLog{
+						Level:       zapcore.InfoLevel,
+						SpanContext: &sc,
+						Timestamp:   time.Unix(0, 0),
+						Caller:      "trace/buffer_pipe_sql_test.go:939",
+						Message:     "info message",
+						Extra:       "{}",
+					},
+					&MOZapLog{
+						Level:       zapcore.DebugLevel,
+						SpanContext: &sc,
+						Timestamp:   time.Unix(0, int64(time.Microsecond+time.Millisecond)),
+						Caller:      "trace/buffer_pipe_sql_test.go:939",
+						Message:     "debug message",
+						Extra:       "{}",
+					},
+				},
+				buf: buf,
+			},
+			want: `00000000-0000-0000-0000-000000000001,0000000000000001,node_uuid,Standalone,1970-01-01 00:00:00.000000,,info,trace/buffer_pipe_sql_test.go:939,info message,{}
+00000000-0000-0000-0000-000000000001,0000000000000001,node_uuid,Standalone,1970-01-01 00:00:00.001001,,debug,trace/buffer_pipe_sql_test.go:939,debug message,{}
+`,
+		},
+		{
+			name: "single_statement",
+			args: args{
+				in: []IBuffer2SqlItem{
+					&StatementInfo{
+						StatementID:          _1TraceID,
+						TransactionID:        _1TxnID,
+						SessionID:            _1SesID,
+						TenantID:             666,
+						UserID:               999,
+						Account:              "MO",
+						User:                 "moroot",
+						Database:             "system",
+						Statement:            "show tables",
+						StatementFingerprint: "show tables",
+						StatementTag:         "",
+						RequestAt:            util.TimeNano(0),
+						ExecPlan:             "",
+					},
+				},
+				buf: buf,
+			},
+			want: `00000000-0000-0000-0000-000000000001,00000000-0000-0000-0000-000000000001,00000000-0000-0000-0000-000000000001,666,999,MO,moroot,,system,show tables,,show tables,node_uuid,Standalone,1970-01-01 00:00:00.000000,
+`,
+		},
+		{
+			name: "multi_statement",
+			args: args{
+				in: []IBuffer2SqlItem{
+					&StatementInfo{
+						StatementID:          _1TraceID,
+						TransactionID:        _1TxnID,
+						SessionID:            _1SesID,
+						TenantID:             666,
+						UserID:               999,
+						Account:              "MO",
+						User:                 "moroot",
+						Database:             "system",
+						Statement:            "show tables",
+						StatementFingerprint: "show tables",
+						StatementTag:         "",
+						RequestAt:            util.TimeNano(0),
+						ExecPlan:             "",
+					},
+					&StatementInfo{
+						StatementID:          _2TraceID,
+						TransactionID:        _1TxnID,
+						SessionID:            _1SesID,
+						TenantID:             321,
+						UserID:               567,
+						Account:              "MO",
+						User:                 "moroot",
+						Database:             "system",
+						Statement:            "show databases",
+						StatementFingerprint: "show databases",
+						StatementTag:         "dcl",
+						RequestAt:            util.TimeNano(time.Microsecond),
+						ExecPlan:             "",
+					},
+				},
+				buf: buf,
+			},
+			want: `00000000-0000-0000-0000-000000000001,00000000-0000-0000-0000-000000000001,00000000-0000-0000-0000-000000000001,666,999,MO,moroot,,system,show tables,,show tables,node_uuid,Standalone,1970-01-01 00:00:00.000000,
+00000000-0000-0000-0000-000000000002,00000000-0000-0000-0000-000000000001,00000000-0000-0000-0000-000000000001,321,567,MO,moroot,,system,show databases,dcl,show databases,node_uuid,Standalone,1970-01-01 00:00:00.000001,
+`,
+		},
+		{
+			name: "single_error",
+			args: args{
+				in: []IBuffer2SqlItem{
+					&MOErrorHolder{Error: err1, Timestamp: uint64(0)},
+				},
+				buf: buf,
+			},
+			want: traceIDSpanIDCsvStr + `,node_uuid,Standalone,test1,test1,1970-01-01 00:00:00.000000
+`,
+		},
+		{
+			name: "multi_error",
+			args: args{
+				in: []IBuffer2SqlItem{
+					&MOErrorHolder{Error: err1, Timestamp: uint64(0)},
+					&MOErrorHolder{Error: err2, Timestamp: uint64(time.Millisecond + time.Microsecond)},
+				},
+				buf: buf,
+			},
+			want: traceIDSpanIDCsvStr + `,node_uuid,Standalone,test1,test1,1970-01-01 00:00:00.000000
+` + traceIDSpanIDCsvStr + `,node_uuid,Standalone,test2: test1,test2: test1,1970-01-01 00:00:00.001001
+`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := genCsvData(tt.args.in, tt.args.buf)
+			require.NotEqual(t, nil, got)
+			req, ok := got.(CSVRequest)
+			require.Equal(t, true, ok)
+			assert.Equalf(t, tt.want, req.content, "genCsvData(%v, %v)", req.content, tt.args.buf)
+			t.Logf("%s", tt.want)
 		})
 	}
 }

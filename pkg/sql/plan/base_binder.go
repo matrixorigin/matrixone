@@ -149,6 +149,17 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (
 				},
 			},
 		}, nil
+	case *tree.UpdateVal:
+		return &Expr{
+			Expr: &plan.Expr_C{
+				C: &Const{
+					Isnull: false,
+					Value: &plan.Const_UpdateVal{
+						UpdateVal: true,
+					},
+				},
+			},
+		}, nil
 	case *tree.MaxValue:
 		return &Expr{
 			Expr: &plan.Expr_Max{
@@ -663,18 +674,21 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 		// count(col_name) : astExprs[0].(type) is *tree.UnresolvedName
 		switch nval := astArgs[0].(type) {
 		case *tree.NumVal:
-			// rewrite count(*) to starcount(col_name)
 			if nval.String() == "*" {
-				name = "starcount"
 				if len(b.ctx.bindings) == 0 || len(b.ctx.bindings[0].cols) == 0 {
-					return nil, errors.New("", "can not find any column when rewrite count(*) to starcount(col)")
+					// sql: 'select count(*)' without from clause. we do nothing
+				} else {
+					// sql: 'select count(*) from t1',
+					// rewrite count(*) to starcount(col_name)
+					name = "starcount"
+
+					var newCountCol *tree.UnresolvedName
+					newCountCol, err := tree.NewUnresolvedName(b.ctx.bindings[0].cols[0])
+					if err != nil {
+						return nil, err
+					}
+					astArgs[0] = newCountCol
 				}
-				var newCountCol *tree.UnresolvedName
-				newCountCol, err := tree.NewUnresolvedName(b.ctx.bindings[0].cols[0])
-				if err != nil {
-					return nil, err
-				}
-				astArgs[0] = newCountCol
 			}
 		}
 	}
@@ -837,7 +851,7 @@ func bindFuncExprImplByPlanExpr(name string, args []*Expr) (*plan.Expr, error) {
 				return nil, err
 			}
 		}
-	case "variance", "oct", "stddev_pop", "std", "bit_and", "bit_or", "bit_xor":
+	case "oct", "bit_and", "bit_or", "bit_xor":
 		if args[0].Typ.Id == int32(types.T_decimal128) || args[0].Typ.Id == int32(types.T_decimal64) {
 			args[0], err = appendCastBeforeExpr(args[0], &plan.Type{
 				Id:       int32(types.T_float64),

@@ -15,121 +15,98 @@
 package catalog
 
 import (
-	"bytes"
 	"encoding/binary"
 	"fmt"
 	"io"
 
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 )
 
 type MetadataMVCCNode struct {
 	*EntryMVCCNode
+	*txnbase.TxnMVCCNode
 	MetaLoc  string
 	DeltaLoc string
-
-	*TxnMVCCNode
 }
 
-func NewEmptyMetadataMVCCNode() *MetadataMVCCNode {
+func NewEmptyMetadataMVCCNode() txnbase.MVCCNode {
 	return &MetadataMVCCNode{
-		TxnMVCCNode:   &TxnMVCCNode{},
 		EntryMVCCNode: &EntryMVCCNode{},
+		TxnMVCCNode:   &txnbase.TxnMVCCNode{},
 	}
 }
 
-func (e MetadataMVCCNode) CloneAll() MVCCNodeIf {
-	n := e.cloneData()
-	// n.State = e.State
-	n.Start = e.Start
-	n.End = e.End
-	n.Deleted = e.Deleted
-	if len(e.LogIndex) != 0 {
-		n.LogIndex = make([]*wal.Index, 0)
-		for _, idx := range e.LogIndex {
-			n.LogIndex = append(n.LogIndex, idx.Clone())
-		}
-	}
-	return n
+func CompareMetaBaseNode(e, o txnbase.MVCCNode) int {
+	return e.(*MetadataMVCCNode).Compare(o.(*MetadataMVCCNode).TxnMVCCNode)
 }
 
-func (e *MetadataMVCCNode) cloneData() *MetadataMVCCNode {
-	return &MetadataMVCCNode{
+func (e *MetadataMVCCNode) CloneAll() txnbase.MVCCNode {
+	node := &MetadataMVCCNode{
 		EntryMVCCNode: e.EntryMVCCNode.Clone(),
-		TxnMVCCNode:   &TxnMVCCNode{},
+		TxnMVCCNode:   e.TxnMVCCNode.CloneAll(),
+	}
+	return node
+}
+
+func (e *MetadataMVCCNode) CloneData() txnbase.MVCCNode {
+	return &MetadataMVCCNode{
+		EntryMVCCNode: e.EntryMVCCNode.CloneData(),
+		TxnMVCCNode:   &txnbase.TxnMVCCNode{},
 		MetaLoc:       e.MetaLoc,
 		DeltaLoc:      e.DeltaLoc,
 	}
 }
 
 func (e *MetadataMVCCNode) String() string {
-	var w bytes.Buffer
-	_, _ = w.WriteString(
-		fmt.Sprintf("[%v,%v][C=%v,D=%v][Loc1=%s,Loc2=%s][Deleted?%v][logIndex=%v]",
-			e.Start,
-			e.End,
-			e.CreatedAt,
-			e.DeletedAt,
-			// e.State,
-			e.MetaLoc,
-			e.DeltaLoc,
-			e.Deleted,
-			e.LogIndex))
-	return w.String()
+
+	return fmt.Sprintf("%s%s,MetaLoc=%s,DeltaLoc=%s",
+		e.TxnMVCCNode.String(),
+		e.EntryMVCCNode.String(),
+		e.MetaLoc,
+		e.DeltaLoc)
+}
+func (e *MetadataMVCCNode) UpdateAttr(o *MetadataMVCCNode) {
+	if o.MetaLoc != "" {
+		e.MetaLoc = o.MetaLoc
+	}
+	if o.DeltaLoc != "" {
+		e.DeltaLoc = o.DeltaLoc
+	}
 }
 
 // for create drop in one txn
-func (e *MetadataMVCCNode) UpdateNode(vun MVCCNodeIf) {
+func (e *MetadataMVCCNode) Update(vun txnbase.MVCCNode) {
 	un := vun.(*MetadataMVCCNode)
-	if e.Start != un.Start {
-		panic("logic err")
-	}
-	if e.End != un.End {
-		panic("logic err")
-	}
+	e.CreatedAt = un.CreatedAt
 	e.DeletedAt = un.DeletedAt
-	e.Deleted = true
-	e.AddLogIndex(un.LogIndex[0])
+	e.MetaLoc = un.MetaLoc
+	e.DeltaLoc = un.DeltaLoc
 }
 
-func (e *MetadataMVCCNode) ApplyUpdate(be *MetadataMVCCNode) (err error) {
-	// if e.Deleted {
-	// 	// TODO
-	// }
-	e.EntryMVCCNode = be.EntryMVCCNode.Clone()
-	e.MetaLoc = be.MetaLoc
-	e.DeltaLoc = be.DeltaLoc
-	return
-}
-
-func (e *MetadataMVCCNode) ApplyDelete() (err error) {
-	err = e.ApplyDeleteLocked()
-	return
-}
-
-func compareMetadataMVCCNode(e, o *MetadataMVCCNode) int {
-	return e.Compare(o.TxnMVCCNode)
-}
-
-func (e *MetadataMVCCNode) Prepare2PCPrepare() (err error) {
-	if e.CreatedAt.IsEmpty() {
-		e.CreatedAt = e.Txn.GetPrepareTS()
+func (e *MetadataMVCCNode) ApplyCommit(index *wal.Index) (err error) {
+	var commitTS types.TS
+	commitTS, err = e.TxnMVCCNode.ApplyCommit(index)
+	if err != nil {
+		return
 	}
-	if e.Deleted {
-		e.DeletedAt = e.Txn.GetPrepareTS()
-	}
-	e.End = e.Txn.GetPrepareTS()
+	e.EntryMVCCNode.ApplyCommit(commitTS)
+	return nil
+}
+
+func (e *MetadataMVCCNode) onReplayCommit(ts types.TS) (err error) {
+	err = e.EntryMVCCNode.ReplayCommit(ts)
+	e.TxnMVCCNode.OnReplayCommit(ts)
 	return
 }
 
 func (e *MetadataMVCCNode) PrepareCommit() (err error) {
-	if e.CreatedAt.IsEmpty() {
-		e.CreatedAt = e.Txn.GetCommitTS()
+	_, err = e.TxnMVCCNode.PrepareCommit()
+	if err != nil {
+		return
 	}
-	if e.Deleted {
-		e.DeletedAt = e.Txn.GetCommitTS()
-	}
-	e.End = e.Txn.GetCommitTS()
+	err = e.EntryMVCCNode.PrepareCommit()
 	return
 }
 

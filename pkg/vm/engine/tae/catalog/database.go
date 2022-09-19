@@ -58,9 +58,9 @@ func (ai *accessInfo) ReadFrom(r io.Reader) (n int64, err error) {
 	return 20, nil
 }
 
-func databaseTxnCanGetFn[T *DBEntry](n *common.GenericDLNode[*DBEntry], ts types.TS) (can, dropped bool) {
+func dbVisibilityFn[T *DBEntry](n *common.GenericDLNode[*DBEntry], ts types.TS) (visible, dropped bool) {
 	db := n.GetPayload()
-	can, dropped = db.TxnCanGet(ts)
+	visible, dropped = db.GetVisibility(ts)
 	return
 }
 
@@ -256,7 +256,7 @@ func (e *DBEntry) GetTableEntry(name string, txnCtx txnif.AsyncTxn) (entry *Tabl
 //
 // 3. Check duplicate/not found.
 // If the entry has already been dropped, return ErrNotFound.
-func (e *DBEntry) DropTableEntry(name string, txnCtx txnif.AsyncTxn) (deleted *TableEntry, err error) {
+func (e *DBEntry) DropTableEntry(name string, txnCtx txnif.AsyncTxn) (newEntry bool, deleted *TableEntry, err error) {
 	dn, err := e.txnGetNodeByName(name, txnCtx)
 	if err != nil {
 		return
@@ -264,7 +264,7 @@ func (e *DBEntry) DropTableEntry(name string, txnCtx txnif.AsyncTxn) (deleted *T
 	entry := dn.GetPayload()
 	entry.Lock()
 	defer entry.Unlock()
-	err = entry.DropEntryLocked(txnCtx)
+	newEntry, err = entry.DropEntryLocked(txnCtx)
 	if err == nil {
 		deleted = entry
 	}
@@ -330,7 +330,7 @@ func (e *DBEntry) AddEntryLocked(table *TableEntry, txn txnif.AsyncTxn) (err err
 		e.entries[table.GetID()] = n
 
 		nn := newNodeList(e.GetItemNodeByIDLocked,
-			tableTxnCanGetFn[*TableEntry],
+			tableVisibilityFn[*TableEntry],
 			&e.nodesMu,
 			fullName)
 		e.nameNodes[fullName] = nn

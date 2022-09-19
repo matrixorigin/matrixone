@@ -18,4 +18,5 @@ type RelationType uint8
 
 const (
 	RelationTable RelationType = iota + 1
+	RelationView
 )

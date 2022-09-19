@@ -16,6 +16,7 @@ package frontend
 
 import (
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"math"
 	"net"
 	"sync"
@@ -262,10 +263,10 @@ func (mp *MysqlProtocolImpl) SendResponse(resp *Response) error {
 			return mp.sendOKPacket(0, 0, uint16(resp.status), 0, "")
 		}
 		switch myerr := err.(type) {
-		case *MysqlError:
-			return mp.sendErrPacket(myerr.ErrorCode, myerr.SqlState, myerr.Error())
+		case *moerr.Error:
+			return mp.sendErrPacket(myerr.Code, myerr.SqlState, myerr.Error())
 		}
-		return mp.sendErrPacket(ER_UNKNOWN_ERROR, DefaultMySQLState, fmt.Sprintf("%v", err))
+		return mp.sendErrPacket(moerr.ER_UNKNOWN_ERROR, DefaultMySQLState, fmt.Sprintf("%v", err))
 	case ResultResponse:
 		mer := resp.data.(*MysqlExecutionResult)
 		if mer == nil {

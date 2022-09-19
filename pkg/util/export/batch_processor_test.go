@@ -25,7 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/batchpipe"
-	"github.com/matrixorigin/matrixone/pkg/util/errors"
+	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 
 	"github.com/google/gops/agent"
 	"github.com/prashantv/gostub"
@@ -35,13 +35,14 @@ import (
 
 func init() {
 	logutil.SetupMOLogger(&logutil.LogConfig{
-		Level:       zapcore.DebugLevel.String(),
-		Format:      "console",
-		Filename:    "",
-		MaxSize:     512,
-		MaxDays:     0,
-		MaxBackups:  0,
-		EnableStore: false,
+		Level:      zapcore.DebugLevel.String(),
+		Format:     "console",
+		Filename:   "",
+		MaxSize:    512,
+		MaxDays:    0,
+		MaxBackups: 0,
+
+		DisableStore: true,
 	})
 	if err := agent.Listen(agent.Options{}); err != nil {
 		logutil.Errorf("listen gops agent failed: %s", err)
@@ -235,7 +236,7 @@ func Test_newBufferHolder(t *testing.T) {
 
 func TestNewMOCollector(t *testing.T) {
 	ch := make(chan string, 3)
-	errors.SetErrorReporter(func(ctx context.Context, err error, i int) {
+	errutil.SetErrorReporter(func(ctx context.Context, err error, i int) {
 		t.Logf("TestNewMOCollector::ErrorReport: %+v", err)
 	})
 	var signalC = make(chan struct{}, 16)
@@ -270,7 +271,7 @@ func TestNewMOCollector(t *testing.T) {
 
 func TestMOCollector_HangBug(t *testing.T) {
 	ch := make(chan string, 3)
-	errors.SetErrorReporter(func(ctx context.Context, err error, i int) {
+	errutil.SetErrorReporter(func(ctx context.Context, err error, i int) {
 		t.Logf("TestNewMOCollector::ErrorReport: %+v", err)
 	})
 

@@ -24,6 +24,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 )
 
+type Nulls struct {
+	Np *bitmap.Bitmap
+}
+
 // Or performs union operation on Nulls n,m and store the result in r
 func Or(n, m, r *Nulls) {
 	if Ptr(n) == nil && Ptr(m) == nil {
@@ -52,6 +56,13 @@ func NewWithSize(size int) *Nulls {
 	}
 }
 
+func Build(size int, rows ...uint64) *Nulls {
+	n := NewWithSize(size)
+	Add(n, rows...)
+	return n
+}
+
+// XXX this is so broken,
 func New(n *Nulls, size int) {
 	n.Np = bitmap.New(size)
 }
@@ -118,6 +129,15 @@ func Add(n *Nulls, rows ...uint64) {
 		n.Np.TryExpandWithSize(int(rows[len(rows)-1]) + 1)
 	}
 	n.Np.AddMany(rows)
+}
+
+func AddRange(n *Nulls, start, end uint64) {
+	if n.Np == nil {
+		n.Np = bitmap.New(int(end + 1))
+	} else {
+		n.Np.TryExpandWithSize(int(end + 1))
+	}
+	n.Np.AddRange(start, end)
 }
 
 func Del(n *Nulls, rows ...uint64) {

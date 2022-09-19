@@ -17,6 +17,7 @@ package compile
 import (
 	"fmt"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/compress"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/errno"
@@ -71,6 +72,9 @@ func (s *Scope) CreateTable(c *Compile) error {
 	}
 	dbSource, err := c.e.Database(c.ctx, dbName, c.proc.TxnOperator)
 	if err != nil {
+		if dbName == "" {
+			return moerr.NewError(moerr.ER_NO_DB_ERROR, "No database selected")
+		}
 		return err
 	}
 	tblName := qry.GetTableDef().GetName()
@@ -175,6 +179,7 @@ func planColsToExeCols(planCols []*plan.ColDef) []engine.TableDef {
 					Size:      colTyp.GetSize(),
 				},
 				Default:       planCols[i].GetDefault(),
+				OnUpdate:      planCols[i].GetOnUpdate(),
 				Primary:       col.GetPrimary(),
 				Comment:       col.GetComment(),
 				AutoIncrement: col.GetAutoIncrement(),

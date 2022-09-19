@@ -18,11 +18,12 @@ import (
 	"bufio"
 	"errors"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"io"
 	"os"
 	"strconv"
 	"sync"
+
+	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -284,8 +285,7 @@ func exportDataToCSVFile(oq *outputQueue) error {
 			if err != nil {
 				return err
 			}
-			oq.resetLineStr()
-			oq.lineStr = strconv.AppendFloat(oq.lineStr, value, 'f', 4, 64)
+			oq.lineStr = []byte(fmt.Sprintf("%v", value))
 			if err = formatOutputString(oq, oq.lineStr, symbol[i], closeby, flag[i]); err != nil {
 				return err
 			}
@@ -311,7 +311,7 @@ func exportDataToCSVFile(oq *outputQueue) error {
 					}
 				}
 			}
-		case defines.MYSQL_TYPE_VARCHAR, defines.MYSQL_TYPE_VAR_STRING, defines.MYSQL_TYPE_STRING:
+		case defines.MYSQL_TYPE_VARCHAR, defines.MYSQL_TYPE_VAR_STRING, defines.MYSQL_TYPE_STRING, defines.MYSQL_TYPE_BLOB:
 			value, err := oq.mrs.GetValue(0, i)
 			if err != nil {
 				return err

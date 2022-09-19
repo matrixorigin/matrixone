@@ -28,6 +28,7 @@ uuid = "9c4dccb4-4d3c-41f8-b482-5251dc7a41bf"
 gossip-seed-addresses = [
   "127.0.0.1:32002",
 ]
+data-dir = "store/logservice"
 
 [logservice.BootstrapConfig]
 bootstrap-cluster = true
@@ -45,4 +46,9 @@ backend = "MEM"
 [[fileservice]]
 name = "S3"
 backend = "MEM"
+
+[[fileservice]]
+name = "ETL"
+backend = "DISK-ETL"
+data-dir = "store"
 

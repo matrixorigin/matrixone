@@ -15,10 +15,11 @@
 package mult
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"math"
 	"testing"
+
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 )
@@ -107,7 +108,8 @@ func TestDec128Mult(t *testing.T) {
 
 	res := vector.MustTCols[types.Decimal128](cv)
 	for i := 0; i < 10; i++ {
-		if !res[i].Eq(types.Decimal128_FromInt64(as[i] * bs[i])) {
+		d, _ := types.Decimal128_FromInt64(as[i]*bs[i], 64, 0)
+		if !res[i].Eq(d) {
 			t.Fatalf("decimal128 add wrong result")
 		}
 	}

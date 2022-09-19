@@ -23,7 +23,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/agg"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggregate"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -37,11 +36,11 @@ func String(arg any, buf *bytes.Buffer) {
 		buf.WriteString(fmt.Sprintf("%v", expr))
 	}
 	buf.WriteString("], [")
-	for i, agg := range ap.Aggs {
+	for i, ag := range ap.Aggs {
 		if i > 0 {
 			buf.WriteString(", ")
 		}
-		buf.WriteString(fmt.Sprintf("%v(%v)", aggregate.Names[agg.Op], agg.E))
+		buf.WriteString(fmt.Sprintf("%v(%v)", agg.Names[ag.Op], ag.E))
 	}
 	buf.WriteString("])")
 }
@@ -109,7 +108,7 @@ func (ctr *container) process(ap *Argument, proc *process.Process, anal process.
 		ctr.bat.Zs = append(ctr.bat.Zs, 0)
 		ctr.bat.Aggs = make([]agg.Agg[any], len(ap.Aggs))
 		for i, ag := range ap.Aggs {
-			if ctr.bat.Aggs[i], err = aggregate.New(ag.Op, ag.Dist, ctr.aggVecs[i].vec.Typ); err != nil {
+			if ctr.bat.Aggs[i], err = agg.New(ag.Op, ag.Dist, ctr.aggVecs[i].vec.Typ); err != nil {
 				ctr.bat = nil
 				return false, err
 			}
@@ -235,7 +234,7 @@ func (ctr *container) processWithGroup(ap *Argument, proc *process.Process, anal
 		}
 		ctr.bat.Aggs = make([]agg.Agg[any], len(ap.Aggs))
 		for i, ag := range ap.Aggs {
-			if ctr.bat.Aggs[i], err = aggregate.New(ag.Op, ag.Dist, ctr.aggVecs[i].vec.Typ); err != nil {
+			if ctr.bat.Aggs[i], err = agg.New(ag.Op, ag.Dist, ctr.aggVecs[i].vec.Typ); err != nil {
 				ctr.bat = nil
 				return false, err
 			}
@@ -344,7 +343,7 @@ func (ctr *container) batchFill(i int, n int, bat *batch.Batch, vals []uint64, h
 			}
 		}
 		for _, ag := range ctr.bat.Aggs {
-			if err := ag.Grows(cnt, proc.Mp); err != nil {
+			if err := ag.Grows(cnt, proc.Mp()); err != nil {
 				return err
 			}
 		}
@@ -361,7 +360,7 @@ func (ctr *container) batchFill(i int, n int, bat *batch.Batch, vals []uint64, h
 	return nil
 }
 
-func (ctr *container) evalAggVector(bat *batch.Batch, aggs []aggregate.Aggregate, proc *process.Process) error {
+func (ctr *container) evalAggVector(bat *batch.Batch, aggs []agg.Aggregate, proc *process.Process) error {
 	for i, ag := range aggs {
 		vec, err := colexec.EvalExpr(bat, proc, ag.E)
 		if err != nil || vec.ConstExpand(proc.GetMheap()) == nil {

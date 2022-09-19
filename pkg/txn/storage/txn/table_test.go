@@ -17,24 +17,30 @@ package txnstorage
 import (
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/stretchr/testify/assert"
 )
 
 type TestRow struct {
-	Key   Int
-	Value int
+	key   Int
+	value int
 }
 
-func (t TestRow) PrimaryKey() Int {
-	return t.Key
+func (t TestRow) Key() Int {
+	return t.key
+}
+
+func (t TestRow) Indexes() []Tuple {
+	return []Tuple{
+		{Text("foo"), Int(t.value)},
+	}
 }
 
 func TestTable(t *testing.T) {
+
 	table := NewTable[Int, TestRow]()
-
 	tx := NewTransaction("1", Time{}, Serializable)
-
-	row := TestRow{Key: 42, Value: 1}
+	row := TestRow{key: 42, value: 1}
 
 	// insert
 	err := table.Insert(tx, row)
@@ -46,7 +52,7 @@ func TestTable(t *testing.T) {
 	assert.Equal(t, &row, r)
 
 	// update
-	row.Value = 2
+	row.value = 2
 	err = table.Update(tx, row)
 	assert.Nil(t, err)
 
@@ -54,8 +60,75 @@ func TestTable(t *testing.T) {
 	assert.Nil(t, err)
 	assert.Equal(t, &row, r)
 
+	// index
+	keys, err := table.Index(tx, Tuple{
+		Text("foo"), Int(1),
+	})
+	assert.Nil(t, err)
+	assert.Equal(t, 0, len(keys))
+	keys, err = table.Index(tx, Tuple{
+		Text("foo"), Int(2),
+	})
+	assert.Nil(t, err)
+	assert.Equal(t, 1, len(keys))
+	assert.Equal(t, Int(42), keys[0])
+
 	// delete
 	err = table.Delete(tx, Int(42))
 	assert.Nil(t, err)
+
+}
+
+func TestTableIsolation(t *testing.T) {
+
+	table := NewTable[Int, TestRow]()
+
+	tx1 := NewTransaction("1", Time{
+		Timestamp: timestamp.Timestamp{
+			PhysicalTime: 1,
+		},
+	}, SnapshotIsolation)
+
+	tx2 := NewTransaction("2", Time{
+		Timestamp: timestamp.Timestamp{
+			PhysicalTime: 2,
+		},
+	}, SnapshotIsolation)
+	err := table.Insert(tx2, TestRow{
+		key:   1,
+		value: 2,
+	})
+	assert.Nil(t, err)
+	err = tx2.Commit()
+	assert.Nil(t, err)
+
+	// duplicated key
+	err = table.Insert(tx1, TestRow{
+		key:   1,
+		value: 3,
+	})
+	assert.NotNil(t, err)
+	var dup *ErrPrimaryKeyDuplicated
+	assert.ErrorAs(t, err, &dup)
+
+	// read committed
+	iter := table.NewIter(tx1)
+	n := 0
+	for ok := iter.First(); ok; ok = iter.Next() {
+		n++
+	}
+	assert.Equal(t, 0, n)
+
+	tx3 := NewTransaction("3", Time{
+		Timestamp: timestamp.Timestamp{
+			PhysicalTime: 3,
+		},
+	}, SnapshotIsolation)
+	iter = table.NewIter(tx3)
+	n = 0
+	for ok := iter.First(); ok; ok = iter.Next() {
+		n++
+	}
+	assert.Equal(t, 1, n)
 
 }

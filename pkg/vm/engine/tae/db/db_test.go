@@ -691,7 +691,7 @@ func TestAutoCompactABlk1(t *testing.T) {
 	bat := catalog.MockBatch(schema, int(totalRows))
 	defer bat.Close()
 	createRelationAndAppend(t, 0, tae, "db", schema, bat, true)
-	err := tae.Catalog.Checkpoint(tae.Scheduler.GetSafeTS())
+	err := tae.Catalog.Checkpoint(tae.Scheduler.GetCheckpointTS())
 	assert.Nil(t, err)
 	testutils.WaitExpect(1000, func() bool {
 		return tae.Scheduler.GetPenddingLSNCnt() == 0
@@ -809,7 +809,7 @@ func TestCompactABlk(t *testing.T) {
 		assert.NoError(t, err)
 		assert.NoError(t, txn.Commit())
 	}
-	err := tae.Catalog.Checkpoint(tae.Scheduler.GetSafeTS())
+	err := tae.Catalog.Checkpoint(tae.Scheduler.GetCheckpointTS())
 	assert.Nil(t, err)
 	testutils.WaitExpect(1000, func() bool {
 		return tae.Scheduler.GetPenddingLSNCnt() == 0
@@ -2821,6 +2821,9 @@ func TestMultiTenantMoCatalogOps(t *testing.T) {
 
 	tae.restart()
 
+	reservedColumnsCnt := len(catalog.SystemDBSchema.ColDefs) +
+		len(catalog.SystemColumnSchema.ColDefs) +
+		len(catalog.SystemTableSchema.ColDefs)
 	{
 		// account 2
 		// check data for good
@@ -2837,8 +2840,8 @@ func TestMultiTenantMoCatalogOps(t *testing.T) {
 		// [mo_database, mo_tables, mo_columns, 'mo_users_t2' 'test-table-a-timestamp']
 		checkAllColRowsByScan(t, sysTblTbl, 5, true)
 		sysColTbl, _ := sysDB.GetRelationByName(catalog.SystemTable_Columns_Name)
-		// [mo_database(8), mo_tables(133), mo_columns(18), 'mo_users_t2'(1+1), 'test-table-a-timestamp'(2+1)]
-		checkAllColRowsByScan(t, sysColTbl, 44, true)
+		// [mo_database(8), mo_tables(13), mo_columns(19), 'mo_users_t2'(1+1), 'test-table-a-timestamp'(2+1)]
+		checkAllColRowsByScan(t, sysColTbl, reservedColumnsCnt+5, true)
 	}
 	{
 		// account 1
@@ -2858,8 +2861,8 @@ func TestMultiTenantMoCatalogOps(t *testing.T) {
 		// [mo_database, mo_tables, mo_columns, 'mo_users_t1' 'test-table-a-timestamp']
 		checkAllColRowsByScan(t, sysTblTbl, 5, true)
 		sysColTbl, _ := sysDB.GetRelationByName(catalog.SystemTable_Columns_Name)
-		// [mo_database(8), mo_tables(13), mo_columns(18), 'mo_users_t1'(1+1), 'test-table-a-timestamp'(3+1)]
-		checkAllColRowsByScan(t, sysColTbl, 45, true)
+		// [mo_database(8), mo_tables(13), mo_columns(19), 'mo_users_t1'(1+1), 'test-table-a-timestamp'(3+1)]
+		checkAllColRowsByScan(t, sysColTbl, reservedColumnsCnt+6, true)
 	}
 	{
 		// sys account
@@ -2876,8 +2879,124 @@ func TestMultiTenantMoCatalogOps(t *testing.T) {
 		// [mo_database, mo_tables, mo_columns, 'mo_accounts']
 		checkAllColRowsByScan(t, sysTblTbl, 4, true)
 		sysColTbl, _ := sysDB.GetRelationByName(catalog.SystemTable_Columns_Name)
-		// [mo_database(8), mo_tables(13), mo_columns(18), 'mo_accounts'(1+1)]
-		checkAllColRowsByScan(t, sysColTbl, 41, true)
+		// [mo_database(8), mo_tables(13), mo_columns(19), 'mo_accounts'(1+1)]
+		checkAllColRowsByScan(t, sysColTbl, reservedColumnsCnt+2, true)
 	}
 
+}
+
+// txn1 create update
+// txn2 update delete
+func TestUpdateAttr(t *testing.T) {
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := newTestEngine(t, opts)
+	schema := catalog.MockSchemaAll(1, -1)
+	defer tae.Close()
+
+	txn, err := tae.StartTxn(nil)
+	assert.NoError(t, err)
+	db, err := txn.CreateDatabase("db")
+	assert.NoError(t, err)
+	rel, err := db.CreateRelation(schema)
+	assert.NoError(t, err)
+	seg, err := rel.CreateSegment()
+	assert.NoError(t, err)
+	un := &catalog.MetadataMVCCNode{
+		MetaLoc: "test_1",
+	}
+	seg.GetMeta().(*catalog.SegmentEntry).UpdateAttr(txn, un)
+	assert.NoError(t, txn.Commit())
+
+	txn, err = tae.StartTxn(nil)
+	assert.NoError(t, err)
+	db, err = txn.GetDatabase("db")
+	assert.NoError(t, err)
+	rel, err = db.GetRelationByName(schema.Name)
+	assert.NoError(t, err)
+	seg, err = rel.GetSegment(seg.GetID())
+	assert.NoError(t, err)
+	un = &catalog.MetadataMVCCNode{
+		DeltaLoc: "test_2",
+	}
+	seg.GetMeta().(*catalog.SegmentEntry).UpdateAttr(txn, un)
+	rel.SoftDeleteSegment(seg.GetID())
+	assert.NoError(t, txn.Commit())
+
+	t.Log(tae.Catalog.SimplePPString(3))
+
+	tae.restart()
+
+	t.Log(tae.Catalog.SimplePPString(3))
+}
+
+func TestLogtailBasic(t *testing.T) {
+	opts := config.WithLongScanAndCKPOpts(nil)
+	opts.LogtailCfg = &options.LogtailCfg{PageSize: 30}
+	tae := newTestEngine(t, opts)
+	logMgr := tae.LogtailMgr
+	defer tae.Close()
+
+	minTs, maxTs := types.BuildTS(0, 0), types.BuildTS(1000, 1000)
+	view := logMgr.GetLogtailView(minTs, maxTs, 1000)
+	assert.False(t, view.HasCatalogChanges())
+	assert.Equal(t, 0, len(view.GetDirtyPoints().Segs))
+	schema := catalog.MockSchemaAll(2, -1)
+	schema.Name = "test"
+	schema.BlockMaxRows = 10
+	schema.SegmentMaxBlocks = 2
+	txn, _ := tae.StartTxn(nil)
+	db, _ := txn.CreateDatabase("db")
+	tbl, _ := db.CreateRelation(schema)
+	tableID := tbl.ID()
+	txn.Commit()
+
+	ts1 := txn.GetPrepareTS()
+	var ts2, ts3 types.TS
+
+	wg := new(sync.WaitGroup)
+	wg.Add(1)
+	go func() {
+		for i := 0; i < 100; i++ {
+			txn, _ = tae.StartTxn(nil)
+			db, _ := txn.GetDatabase("db")
+			tbl, _ := db.GetRelationByName("test")
+			tbl.Append(catalog.MockBatch(schema, 1))
+			assert.NoError(t, txn.Commit())
+			if i == 0 {
+				ts2 = txn.GetPrepareTS()
+			}
+			if i == 99 {
+				ts3 = txn.GetPrepareTS()
+			}
+		}
+		wg.Done()
+	}()
+
+	// test race
+	for i := 0; i < 5; i++ {
+		wg.Add(1)
+		go func() {
+			for i := 0; i < 10; i++ {
+				view := logMgr.GetLogtailView(minTs, maxTs, tableID)
+				assert.True(t, view.HasCatalogChanges())
+			}
+			wg.Done()
+		}()
+	}
+
+	wg.Wait()
+
+	view = logMgr.GetLogtailView(ts2, ts3.Next(), tableID)
+	assert.False(t, view.HasCatalogChanges())
+	view = logMgr.GetLogtailView(minTs, ts1, tableID)
+	assert.Equal(t, 0, len(view.GetDirtyPoints().Segs))
+	view = logMgr.GetLogtailView(ts2, ts3, tableID-1)
+	assert.Equal(t, 0, len(view.GetDirtyPoints().Segs))
+	// 5 segments, every segment has 2 blocks
+	view = logMgr.GetLogtailView(ts2, ts3, tableID)
+	dirties := view.GetDirtyPoints()
+	assert.Equal(t, 5, len(dirties.Segs))
+	for _, seg := range dirties.Segs {
+		assert.Equal(t, 2, len(seg.Blks))
+	}
 }

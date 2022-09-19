@@ -52,7 +52,7 @@ col2 datetime,
 col3 timestamp
 );
 insert into t6 values ('2022-02-01', '2022-02-01:23:59 59.999999', '2037-09-08 23:59:59.999999');
-Data truncation: Incorrect DATETIME value: '2022-02-01:23:59 59.999999' for column 'col2' at row 0
+Incorrect DATETIME value: '2022-02-01:23:59 59.999999' for column 'col2' at row 1
 select cast(col1 as text), cast(col2 as text), cast(col3 as text) from t6;
 cast(col1 as text)    cast(col2 as text)    cast(col3 as text)
 drop table t6;
@@ -519,7 +519,7 @@ a    b    c
 1    1    1
 100    100    100
 select * from t10 where c=<'2';
-You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at position 28; 
+You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 27 near "<'2';";
 select * from t10 where c is NULL;
 a    b    c
 select * from t10 where c='';
@@ -594,7 +594,19 @@ a    b
 111    ccc
 222    ccc
 333    ccc
-select * from t11 union select * from t12;
-Can't cast column from TEXT type to TINYINT type because of one or more values in that column.
-select * from t11 union all select * from t12;
-Can't cast column from TEXT type to TINYINT type because of one or more values in that column.
+select * from t11 union select * from t12 order by a;
+a
+111
+222
+333
+aaa
+bbb
+ccc
+select * from t11 union all select * from t12 order by a;
+a
+111
+222
+333
+aaa
+bbb
+ccc

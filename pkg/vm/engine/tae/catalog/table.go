@@ -29,9 +29,9 @@ import (
 
 type TableDataFactory = func(meta *TableEntry) data.Table
 
-func tableTxnCanGetFn[T *TableEntry](n *common.GenericDLNode[*TableEntry], ts types.TS) (can, dropped bool) {
+func tableVisibilityFn[T *TableEntry](n *common.GenericDLNode[*TableEntry], ts types.TS) (visible, dropped bool) {
 	table := n.GetPayload()
-	can, dropped = table.TxnCanGet(ts)
+	visible, dropped = table.GetVisibility(ts)
 	return
 }
 
@@ -298,8 +298,9 @@ func (entry *TableEntry) DropSegmentEntry(id uint64, txn txnif.AsyncTxn) (delete
 		waitTxn.GetTxnState(true)
 		seg.Lock()
 	}
-	err = seg.DropEntryLocked(txn)
-	if err == nil {
+	var isNewNode bool
+	isNewNode, err = seg.DropEntryLocked(txn)
+	if err == nil && isNewNode {
 		deleted = seg
 	}
 	return

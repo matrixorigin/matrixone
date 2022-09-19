@@ -117,6 +117,7 @@ const (
 	HASH_AGG    // HASH_AGG
 	HEX_DECODE  // HEX_DECODE
 	HEX_ENCODE  // HEX_ENCODE
+	HEX         // HEX
 	IFF         // IFF
 	IFNULL      // IFNULL
 	ILIKE       // ILIKE
@@ -208,6 +209,8 @@ const (
 	DATE_SUB              // DATE_SUB
 	APPROX_COUNT_DISTINCT // APPROX_COUNT_DISTINCT, special aggregate
 
+	LOAD_FILE // LOAD_FILE
+
 	//information functions
 	//Reference to : https://dev.mysql.com/doc/refman/8.0/en/information-functions.html
 	DATABASE
@@ -233,6 +236,8 @@ const (
 	REMOVE_FAULT_POINT  // Remove
 	TRIGGER_FAULT_POINT // Trigger.
 	UUID
+
+	SERIAL
 
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
@@ -385,6 +390,9 @@ var functionIdRegister = map[string]int32{
 	"remove_fault_point":      REMOVE_FAULT_POINT,
 	"trigger_fault_point":     TRIGGER_FAULT_POINT,
 	"uuid":                    UUID,
+	"load_file":               LOAD_FILE,
+	"hex":                     HEX,
+	"serial":                  SERIAL,
 }
 
 func GetFunctionIsWinfunByName(name string) bool {

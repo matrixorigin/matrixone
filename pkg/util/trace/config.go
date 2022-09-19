@@ -20,6 +20,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"github.com/matrixorigin/matrixone/pkg/util"
+	"github.com/matrixorigin/matrixone/pkg/util/export"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
@@ -34,11 +35,11 @@ const (
 )
 
 const (
-	MOStatementType = "MOStatementType"
-	MOSpanType      = "MOSpan"
-	MOLogType       = "MOLog"
-	MOZapType       = "MOZap"
-	MOErrorType     = "MOError"
+	MOStatementType = "statement"
+	MOSpanType      = "span"
+	MORawLogType    = "raw_log"
+	MOLogType       = "log"
+	MOErrorType     = "error"
 )
 
 const (
@@ -70,7 +71,12 @@ type tracerProviderConfig struct {
 
 	batchProcessMode string // see WithBatchProcessMode
 
+	// writerFactory gen writer for CSV output
+	writerFactory export.FSWriterFactory // see WithFSWriterFactory, default from export.GetFSWriterFactory result
+
 	sqlExecutor func() ie.InternalExecutor // see WithSQLExecutor
+	// needInit control table schema create
+	needInit bool // see WithInitAction
 
 	mux sync.RWMutex
 }
@@ -119,7 +125,7 @@ func WithMOVersion(v string) tracerProviderOptionFunc {
 }
 
 // WithNode give id as NodeId, t as NodeType
-func WithNode(uuid string, t NodeType) tracerProviderOptionFunc {
+func WithNode(uuid string, t string) tracerProviderOptionFunc {
 	return func(cfg *tracerProviderConfig) {
 		cfg.resource.Put("Node", &MONodeResource{
 			NodeUuid: uuid,
@@ -132,6 +138,12 @@ func EnableTracer(enable bool) tracerProviderOptionFunc {
 	return func(cfg *tracerProviderConfig) {
 		cfg.EnableTracer(enable)
 	}
+}
+
+func WithFSWriterFactory(f export.FSWriterFactory) tracerProviderOptionFunc {
+	return tracerProviderOptionFunc(func(cfg *tracerProviderConfig) {
+		cfg.writerFactory = f
+	})
 }
 
 func DebugMode(debug bool) tracerProviderOptionFunc {
@@ -149,6 +161,12 @@ func WithBatchProcessMode(mode string) tracerProviderOptionFunc {
 func WithSQLExecutor(f func() ie.InternalExecutor) tracerProviderOptionFunc {
 	return func(cfg *tracerProviderConfig) {
 		cfg.sqlExecutor = f
+	}
+}
+
+func WithInitAction(init bool) tracerProviderOptionFunc {
+	return func(cfg *tracerProviderConfig) {
+		cfg.needInit = init
 	}
 }
 
@@ -374,31 +392,9 @@ func (r *Resource) String() string {
 
 }
 
-type NodeType int
-
-const (
-	NodeTypeNode NodeType = iota
-	NodeTypeCN
-	NodeTypeDN
-	NodeTypeLogService
-)
-
-func (t NodeType) String() string {
-	switch t {
-	case NodeTypeNode:
-		return "Node"
-	case NodeTypeCN:
-		return "CN"
-	case NodeTypeDN:
-		return "DN"
-	case NodeTypeLogService:
-		return "LogService"
-	default:
-		return "Unknown"
-	}
-}
+const NodeTypeStandalone = "Standalone"
 
 type MONodeResource struct {
-	NodeUuid string   `json:"node_uuid"`
-	NodeType NodeType `json:"node_type"`
+	NodeUuid string `json:"node_uuid"`
+	NodeType string `json:"node_type"`
 }

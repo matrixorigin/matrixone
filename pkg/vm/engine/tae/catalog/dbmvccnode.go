@@ -15,112 +15,80 @@
 package catalog
 
 import (
-	"bytes"
 	"fmt"
 	"io"
 
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 )
 
 type DBMVCCNode struct {
 	*EntryMVCCNode
-	*TxnMVCCNode
+	*txnbase.TxnMVCCNode
 }
 
-func NewEmptyDBMVCCNode() *DBMVCCNode {
+func NewEmptyDBMVCCNode() txnbase.MVCCNode {
 	return &DBMVCCNode{
-		TxnMVCCNode:   &TxnMVCCNode{},
 		EntryMVCCNode: &EntryMVCCNode{},
+		TxnMVCCNode:   &txnbase.TxnMVCCNode{},
 	}
 }
 
-func (e *DBMVCCNode) CloneAll() MVCCNodeIf {
-	n := e.cloneData()
-	// n.State = e.State
-	n.Start = e.Start
-	n.End = e.End
-	n.Deleted = e.Deleted
-	if len(e.LogIndex) != 0 {
-		n.LogIndex = make([]*wal.Index, 0)
-		for _, idx := range e.LogIndex {
-			n.LogIndex = append(n.LogIndex, idx.Clone())
-		}
-	}
-	return n
+func CompareDBBaseNode(e, o txnbase.MVCCNode) int {
+	return e.(*DBMVCCNode).Compare(o.(*DBMVCCNode).TxnMVCCNode)
 }
 
-func (e *DBMVCCNode) cloneData() *DBMVCCNode {
-	return &DBMVCCNode{
+func (e *DBMVCCNode) CloneAll() txnbase.MVCCNode {
+	node := &DBMVCCNode{
 		EntryMVCCNode: e.EntryMVCCNode.Clone(),
-		TxnMVCCNode:   &TxnMVCCNode{},
+		TxnMVCCNode:   e.TxnMVCCNode.CloneAll(),
+	}
+	return node
+}
+
+func (e *DBMVCCNode) CloneData() txnbase.MVCCNode {
+	return &DBMVCCNode{
+		EntryMVCCNode: e.EntryMVCCNode.CloneData(),
+		TxnMVCCNode:   &txnbase.TxnMVCCNode{},
 	}
 }
 
 func (e *DBMVCCNode) String() string {
-	var w bytes.Buffer
-	_, _ = w.WriteString(
-		fmt.Sprintf("[%v,%v][C=%v,D=%v][Deleted?%v][logIndex=%v]",
-			e.Start,
-			e.End,
-			e.CreatedAt,
-			e.DeletedAt,
-			// e.State,
-			e.Deleted,
-			e.LogIndex))
-	return w.String()
+
+	return fmt.Sprintf("%s%s",
+		e.TxnMVCCNode.String(),
+		e.EntryMVCCNode.String())
 }
 
 // for create drop in one txn
-func (e *DBMVCCNode) UpdateNode(vun MVCCNodeIf) {
+func (e *DBMVCCNode) Update(vun txnbase.MVCCNode) {
 	un := vun.(*DBMVCCNode)
-	if e.Start != un.Start {
-		panic("logic err")
-	}
-	if e.End != un.End {
-		panic("logic err")
-	}
+	e.CreatedAt = un.CreatedAt
 	e.DeletedAt = un.DeletedAt
-	e.Deleted = true
-	e.AddLogIndex(un.LogIndex[0])
 }
 
-func (e *DBMVCCNode) ApplyUpdate(be *DBMVCCNode) (err error) {
-	// if e.Deleted {
-	// 	// TODO
-	// }
-	e.CreatedAt = be.CreatedAt
-	e.DeletedAt = be.DeletedAt
-	return
-}
-
-func (e *DBMVCCNode) ApplyDelete() (err error) {
-	err = e.ApplyDeleteLocked()
-	return
-}
-
-func compareDBMVCCNode(e, o *DBMVCCNode) int {
-	return e.Compare(o.TxnMVCCNode)
-}
-
-func (e *DBMVCCNode) Prepare2PCPrepare() (err error) {
-	if e.CreatedAt.IsEmpty() {
-		e.CreatedAt = e.Txn.GetPrepareTS()
+func (e *DBMVCCNode) ApplyCommit(index *wal.Index) (err error) {
+	var commitTS types.TS
+	commitTS, err = e.TxnMVCCNode.ApplyCommit(index)
+	if err != nil {
+		return
 	}
-	if e.Deleted {
-		e.DeletedAt = e.Txn.GetPrepareTS()
-	}
-	e.End = e.Txn.GetPrepareTS()
-	return
+	e.EntryMVCCNode.ApplyCommit(commitTS)
+	return nil
+}
+func (e *DBMVCCNode) onReplayCommit(ts types.TS) (err error) {
+	e.EntryMVCCNode.ReplayCommit(ts)
+	e.TxnMVCCNode.OnReplayCommit(ts)
+	return nil
 }
 
 func (e *DBMVCCNode) PrepareCommit() (err error) {
-	if e.CreatedAt.IsEmpty() {
-		e.CreatedAt = e.Txn.GetCommitTS()
+	_, err = e.TxnMVCCNode.PrepareCommit()
+	if err != nil {
+		return
 	}
-	if e.Deleted {
-		e.DeletedAt = e.Txn.GetCommitTS()
-	}
-	e.End = e.Txn.GetCommitTS()
+	err = e.EntryMVCCNode.PrepareCommit()
 	return
 }
 

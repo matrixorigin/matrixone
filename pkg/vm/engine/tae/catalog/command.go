@@ -83,7 +83,7 @@ func init() {
 type EntryCommand struct {
 	*txnbase.BaseCustomizedCmd
 	cmdType   int16
-	entry     BaseEntryIf
+	entry     BaseEntry
 	DBID      uint64
 	TableID   uint64
 	SegmentID uint64
@@ -155,15 +155,15 @@ func (cmd *EntryCommand) Desc() string {
 	return s
 }
 
-func (cmd *EntryCommand) GetLogIndex() []*wal.Index {
+func (cmd *EntryCommand) GetLogIndex() *wal.Index {
 	if cmd.entry == nil {
 		return nil
 	}
-	return cmd.entry.GetUpdateNodeLocked().GetLogIndex()
+	return cmd.entry.GetNodeLocked().GetLogIndex()
 }
 
 func (cmd *EntryCommand) GetTs() types.TS {
-	ts := cmd.entry.GetUpdateNodeLocked().GetEnd()
+	ts := cmd.entry.GetNodeLocked().GetPrepare()
 	return ts
 }
 func (cmd *EntryCommand) IDString() string {

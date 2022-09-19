@@ -15,12 +15,18 @@
 package disttae
 
 import (
+	"context"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/logservice"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 )
 
 const (
@@ -29,37 +35,82 @@ const (
 )
 
 const (
-	// default database name for catalog
-	MO_CATALOG  = "mo_catalog"
-	MO_DATABASE = "mo_database"
-	MO_TABLES   = "mo_tables"
-	MO_COLUMNS  = "mo_columns"
+	CacheSize = 1 << 20
 )
 
-const (
-	// default database id for catalog
-	MO_CATALOG_ID  = 0
-	MO_DATABASE_ID = 1
-	MO_TABLES_ID   = 2
-	MO_COLUMNS_ID  = 3
-)
+type DNStore = logservice.DNStore
 
-type Reader interface {
+// tae's block metadata, which is currently just an empty one,
+// does not serve any purpose When tae submits a concrete structure,
+// it will replace this structure with tae's code
+type BlockMeta struct {
+}
+
+// Cache is a multi-version cache for maintaining some table data.
+// The cache is concurrently secure,  with multiple transactions accessing
+// the cache at the same time.
+// For different dn,  the cache is handled independently, the format
+// for our example is k-v, k being the dn number and v the timestamp,
+// suppose there are 2 dn, for table A exist dn0 - 100, dn1 - 200.
+type Cache interface {
+	// update table's cache to the specified timestamp
+	Update(ctx context.Context, dnList []DNStore, databaseId uint64,
+		tableId uint64, ts timestamp.Timestamp) error
+	// BlockList return a list of unmodified blocks that do not require
+	// a merge read and can be very simply distributed to other nodes
+	// to perform queries
+	BlockList(ctx context.Context, dnList []DNStore, databaseId uint64,
+		tableId uint64, ts timestamp.Timestamp, entries [][]Entry) []BlockMeta
+	// NewReader create some readers to read the data of the modified blocks,
+	// including workspace data
+	NewReader(ctx context.Context, readerNumber int, expr *plan.Expr,
+		dnList []DNStore, databaseId uint64, tableId uint64,
+		ts timestamp.Timestamp, entries [][]Entry) ([]engine.Reader, error)
+}
+
+// mvcc is the core data structure of cn and is used to
+// maintain multiple versions of logtail data for a table's partition
+type MVCC interface {
+	CheckPoint(ts timestamp.Timestamp) error
+	Insert(ctx context.Context, bat *api.Batch) error
+	Delete(ctx context.Context, bat *api.Batch) error
+	BlockList(ctx context.Context, ts timestamp.Timestamp,
+		entries [][]Entry) []BlockMeta
+	NewReader(ctx context.Context, readerNumber int, expr *plan.Expr,
+		ts timestamp.Timestamp, entries [][]Entry) ([]engine.Reader, error)
 }
 
 type Engine struct {
 	sync.RWMutex
+	db                *DB
+	m                 *mheap.Mheap
+	cli               client.TxnClient
 	getClusterDetails GetClusterDetailsFunc
 	txns              map[string]*Transaction
 }
 
-// ReadOnly DB cache for tae
+// DB is implementataion of cache
 type DB struct {
-	readTs timestamp.Timestamp
+	sync.RWMutex
+	dnMap  map[string]int
+	cli    client.TxnClient
+	tables map[[2]uint64]Partitions
+}
+
+type Partitions []*Partition
+
+// a partition corresponds to a dn
+type Partition struct {
+	sync.RWMutex
+	// multi-version data of logtail, implemented with reusee's memengine
+	data MVCC
+	// last updated timestamp
+	ts timestamp.Timestamp
 }
 
 // Transaction represents a transaction
 type Transaction struct {
+	db *DB
 	// readOnly default value is true, once a write happen, then set to false
 	readOnly bool
 	// db       *DB
@@ -69,12 +120,13 @@ type Transaction struct {
 	// use for solving halloween problem
 	statementId uint64
 	meta        txn.TxnMeta
-	// fileMaps used to store the mapping relationship between s3 filenames and blockId
+	// fileMaps used to store the mapping relationship between s3 filenames
+	// and blockId
 	fileMap map[string]uint64
 	// writes cache stores any writes done by txn
 	// every statement is an element
 	writes   [][]Entry
-	dnStores []logservice.DNStore
+	dnStores []DNStore
 }
 
 // Entry represents a delete/insert
@@ -84,7 +136,22 @@ type Entry struct {
 	databaseId   uint64
 	tableName    string
 	databaseName string
-	fileName     string       // blockName for s3 file
-	blockId      uint64       // blockId for s3 file
-	bat          *batch.Batch // update or delete
+	// blockName for s3 file
+	fileName string
+	// blockId for s3 file
+	blockId uint64
+	// update or delete tuples
+	bat *batch.Batch
+}
+
+type database struct {
+	databaseId   uint64
+	databaseName string
+	txn          *Transaction
+}
+
+type table struct {
+	tableId   uint64
+	tableName string
+	db        *database
 }

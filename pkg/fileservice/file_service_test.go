@@ -167,14 +167,14 @@ func testFileService(
 			writeVector := IOVector{
 				FilePath: filePath,
 			}
-			offset := 0
+			offset := int64(0)
 			for _, part := range parts {
 				writeVector.Entries = append(writeVector.Entries, IOEntry{
 					Offset: offset,
-					Size:   len(part),
+					Size:   int64(len(part)),
 					Data:   part,
 				})
-				offset += len(part)
+				offset += int64(len(part))
 			}
 			err = fs.Write(ctx, writeVector)
 			assert.Nil(t, err)
@@ -198,13 +198,13 @@ func testFileService(
 			// read, random entry
 			parts2 := randomSplit(content, 16)
 			readVector.Entries = readVector.Entries[:0]
-			offset = 0
+			offset = int64(0)
 			for _, part := range parts2 {
 				readVector.Entries = append(readVector.Entries, IOEntry{
 					Offset: offset,
-					Size:   len(part),
+					Size:   int64(len(part)),
 				})
-				offset += len(part)
+				offset += int64(len(part))
 			}
 			err = fs.Read(ctx, readVector)
 			assert.Nil(t, err)
@@ -225,13 +225,13 @@ func testFileService(
 			"bar",
 			"qux/quux",
 		} {
-			for i := 0; i < 8; i++ {
+			for i := int64(0); i < 8; i++ {
 				err := fs.Write(ctx, IOVector{
 					FilePath: path.Join(dir, fmt.Sprintf("%d", i)),
 					Entries: []IOEntry{
 						{
 							Size: i,
-							Data: []byte(strings.Repeat(fmt.Sprintf("%d", i), i)),
+							Data: []byte(strings.Repeat(fmt.Sprintf("%d", i), int(i))),
 						},
 					},
 				})
@@ -260,11 +260,11 @@ func testFileService(
 		assert.Equal(t, entries[2].Name, "qux")
 		assert.Equal(t, entries[3].IsDir, false)
 		assert.Equal(t, entries[3].Name, "0")
-		assert.Equal(t, entries[3].Size, 0)
+		assert.Equal(t, entries[3].Size, int64(0))
 		assert.Equal(t, entries[10].IsDir, false)
 		assert.Equal(t, entries[10].Name, "7")
 		if _, ok := fs.(ETLFileService); ok {
-			assert.Equal(t, entries[10].Size, 7)
+			assert.Equal(t, entries[10].Size, int64(7))
 		}
 
 		entries, err = fs.List(ctx, "abc")
@@ -404,7 +404,7 @@ func testFileService(
 			FilePath: "foo",
 			Entries: []IOEntry{
 				{
-					Size: len(data),
+					Size: int64(len(data)),
 					Data: data,
 				},
 			},
@@ -415,8 +415,8 @@ func testFileService(
 			FilePath: "foo",
 			Entries: []IOEntry{
 				{
-					Size: len(data),
-					ToObject: func(r io.Reader) (any, int, error) {
+					Size: int64(len(data)),
+					ToObject: func(r io.Reader) (any, int64, error) {
 						var m map[int]int
 						if err := gob.NewDecoder(r).Decode(&m); err != nil {
 							return nil, 0, err
@@ -433,7 +433,7 @@ func testFileService(
 		assert.True(t, ok)
 		assert.Equal(t, 1, len(m))
 		assert.Equal(t, 42, m[42])
-		assert.Equal(t, 1, vec.Entries[0].ObjectSize)
+		assert.Equal(t, int64(1), vec.Entries[0].ObjectSize)
 
 	})
 
@@ -446,7 +446,7 @@ func testFileService(
 			FilePath: "foo",
 			Entries: []IOEntry{
 				{
-					Size: len(data),
+					Size: int64(len(data)),
 					Data: data,
 				},
 			},
@@ -457,11 +457,11 @@ func testFileService(
 			FilePath: "foo",
 			Entries: []IOEntry{
 				{
-					Size:   len(data),
+					Size:   int64(len(data)),
 					ignore: true,
 				},
 				{
-					Size: len(data),
+					Size: int64(len(data)),
 				},
 			},
 		}

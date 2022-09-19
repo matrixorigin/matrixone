@@ -25,7 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggregate"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/agg"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/anti"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
@@ -798,11 +798,19 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext) (vm.In
 }
 
 // newCompile init a new compile for remote run.
-func newCompile(ctx context.Context) *Compile {
+func newCompile(
+	ctx context.Context,
+) *Compile {
 	// not implement now, fill method should send by stream
 	c := &Compile{
-		ctx:  ctx,
-		proc: process.New(mheap.New(guest.New(1<<30, host.New(1<<20)))),
+		ctx: ctx,
+		proc: process.New(
+			ctx,
+			mheap.New(guest.New(1<<30, host.New(1<<20))),
+			nil, //TODO must set txn client
+			nil, //TODO must set txn operator
+			nil, //TODO must set file service
+		),
 	}
 	//c.fill = func(a any, b *batch.Batch) error {
 	//	stream, err := CNClient.NewStream("target")
@@ -860,8 +868,8 @@ func convertToTypes(ts []*plan.Type) []types.Type {
 	return result
 }
 
-// convert []aggregate.Aggregate to []*pipeline.Aggregate
-func convertToPipelineAggregates(ags []aggregate.Aggregate) []*pipeline.Aggregate {
+// convert []agg.Aggregate to []*pipeline.Aggregate
+func convertToPipelineAggregates(ags []agg.Aggregate) []*pipeline.Aggregate {
 	result := make([]*pipeline.Aggregate, len(ags))
 	for i, a := range ags {
 		result[i] = &pipeline.Aggregate{
@@ -873,11 +881,11 @@ func convertToPipelineAggregates(ags []aggregate.Aggregate) []*pipeline.Aggregat
 	return result
 }
 
-// convert []*pipeline.Aggregate to []aggregate.Aggregate
-func convertToAggregates(ags []*pipeline.Aggregate) []aggregate.Aggregate {
-	result := make([]aggregate.Aggregate, len(ags))
+// convert []*pipeline.Aggregate to []agg.Aggregate
+func convertToAggregates(ags []*pipeline.Aggregate) []agg.Aggregate {
+	result := make([]agg.Aggregate, len(ags))
 	for i, a := range ags {
-		result[i] = aggregate.Aggregate{
+		result[i] = agg.Aggregate{
 			Op:   int(a.Op),
 			Dist: a.Dist,
 			E:    a.Expr,

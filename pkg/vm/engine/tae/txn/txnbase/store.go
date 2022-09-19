@@ -25,17 +25,17 @@ var NoopStoreFactory = func() txnif.TxnStore { return new(NoopTxnStore) }
 
 type NoopTxnStore struct{}
 
+func (store *NoopTxnStore) WaitPrepared() (err error)                            { return }
 func (store *NoopTxnStore) GetLSN() uint64                                       { return 0 }
 func (store *NoopTxnStore) BindTxn(txn txnif.AsyncTxn)                           {}
 func (store *NoopTxnStore) Close() error                                         { return nil }
 func (store *NoopTxnStore) Append(dbId, id uint64, data *containers.Batch) error { return nil }
 func (store *NoopTxnStore) PrepareRollback() error                               { return nil }
-func (store *NoopTxnStore) PreCommitOr2PCPrepare() error                         { return nil }
+func (store *NoopTxnStore) PrePrepare() error                                    { return nil }
 func (store *NoopTxnStore) PrepareCommit() error                                 { return nil }
 func (store *NoopTxnStore) Prepare2PCPrepare() error                             { return nil }
 func (store *NoopTxnStore) ApplyRollback() error                                 { return nil }
 func (store *NoopTxnStore) PreApplyCommit() error                                { return nil }
-func (store *NoopTxnStore) PreApply2PCPrepare() error                            { return nil }
 func (store *NoopTxnStore) ApplyCommit() error                                   { return nil }
 func (store *NoopTxnStore) Apply2PCPrepare() error                               { return nil }
 
@@ -91,3 +91,7 @@ func (store *NoopTxnStore) LogTxnEntry(dbId, tableId uint64, entry txnif.TxnEntr
 
 func (store *NoopTxnStore) IsReadonly() bool      { return false }
 func (store *NoopTxnStore) IncreateWriteCnt() int { return 0 }
+
+func (store *NoopTxnStore) HasTableDataChanges(tableID uint64) bool           { return false }
+func (store *NoopTxnStore) GetTableDirtyPoints(tableID uint64) txnif.DirtySet { return nil }
+func (store *NoopTxnStore) HasCatalogChanges() bool                           { return false }

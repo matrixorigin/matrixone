@@ -40,7 +40,7 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 	if bat == nil || len(bat.Zs) == 0 {
 		return false, nil
 	}
-	defer bat.Clean(proc.Mp)
+	defer bat.Clean(proc.Mp())
 	batLen := batch.Length(bat)
 	var affectedRows uint64
 
@@ -60,7 +60,7 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 			}
 			affectedRows += cnt
 
-			tmpBat.Clean(proc.Mp)
+			tmpBat.Clean(proc.Mp())
 		} else {
 			err := p.DeleteCtxs[i].TableSource.Delete(ctx, bat.GetVector(int32(i)), p.DeleteCtxs[i].UseDeleteKey)
 			if err != nil {

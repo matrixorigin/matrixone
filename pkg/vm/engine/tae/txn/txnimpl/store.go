@@ -32,6 +32,54 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 )
 
+type dirtyPoint = txnif.DirtyPoint
+type dirtySet = txnif.DirtySet
+
+// dirtyMemo intercepts txn to record changed segments and blocks, or catalog
+//
+// no locks to protect dirtyMemo because it is expected to be quried by other goroutines
+// until the txn enqueued, and after that, no one will change it
+type dirtyMemo struct {
+	// tableChanges records modified segments and blocks in current txn
+	tableChanges map[uint64]dirtySet
+	// catalogChanged indicates whether create/drop db/table
+	catalogChanged bool
+}
+
+func newDirtyMemo() *dirtyMemo {
+	return &dirtyMemo{
+		tableChanges: make(map[uint64]dirtySet, 0),
+	}
+}
+
+func (m *dirtyMemo) recordBlk(id common.ID) {
+	point := dirtyPoint{
+		SegID: id.SegmentID,
+		BlkID: id.BlockID,
+	}
+	m.recordDirty(id.TableID, point)
+}
+
+func (m *dirtyMemo) recordSeg(tid, sid uint64) {
+	point := dirtyPoint{
+		SegID: sid,
+	}
+	m.recordDirty(tid, point)
+}
+
+func (m *dirtyMemo) recordDirty(tid uint64, point dirtyPoint) {
+	dirties, exist := m.tableChanges[tid]
+	if !exist {
+		dirties = make(map[dirtyPoint]struct{}, 0)
+		m.tableChanges[tid] = dirties
+	}
+	dirties[point] = struct{}{}
+}
+
+func (m *dirtyMemo) recordCatalogChange() {
+	m.catalogChanged = true
+}
+
 type txnStore struct {
 	txnbase.NoopTxnStore
 	dbs         map[uint64]*txnDB
@@ -45,6 +93,8 @@ type txnStore struct {
 	warChecker  *warChecker
 	dataFactory *tables.DataFactory
 	writeOps    uint32
+
+	dirtyMemo *dirtyMemo
 }
 
 var TxnStoreFactory = func(catalog *catalog.Catalog, driver wal.Driver, txnBufMgr base.INodeManager, dataFactory *tables.DataFactory) txnbase.TxnStoreFactory {
@@ -62,6 +112,7 @@ func newStore(catalog *catalog.Catalog, driver wal.Driver, txnBufMgr base.INodeM
 		logs:        make([]entry.Entry, 0),
 		dataFactory: dataFactory,
 		nodesMgr:    txnBufMgr,
+		dirtyMemo:   newDirtyMemo(),
 	}
 }
 
@@ -222,7 +273,7 @@ func (store *txnStore) CreateDatabase(name string) (h handle.Database, err error
 }
 
 func (store *txnStore) DropDatabase(name string) (h handle.Database, err error) {
-	meta, err := store.catalog.DropDBEntry(name, store.txn)
+	hasNewEntry, meta, err := store.catalog.DropDBEntry(name, store.txn)
 	if err != nil {
 		return
 	}
@@ -230,8 +281,10 @@ func (store *txnStore) DropDatabase(name string) (h handle.Database, err error) 
 	if err != nil {
 		return
 	}
-	if err = db.SetDropEntry(meta); err != nil {
-		return
+	if hasNewEntry {
+		if err = db.SetDropEntry(meta); err != nil {
+			return
+		}
 	}
 	h = buildDB(db)
 	return
@@ -360,29 +413,22 @@ func (store *txnStore) ApplyRollback() (err error) {
 	return
 }
 
-// ApplyPrepare apply preparing for a 2PC distributed transaction
-func (store *txnStore) Apply2PCPrepare() (err error) {
-	for _, e := range store.logs {
-		if err = e.WaitDone(); err != nil {
+func (store *txnStore) WaitPrepared() (err error) {
+	for _, db := range store.dbs {
+		if err = db.WaitPrepared(); err != nil {
 			return
 		}
-		e.Free()
 	}
-	for _, db := range store.dbs {
-		if err = db.Apply2PCPrepare(); err != nil {
+	for _, e := range store.logs {
+		if err = e.WaitDone(); err != nil {
 			break
 		}
+		e.Free()
 	}
 	return
 }
 
 func (store *txnStore) ApplyCommit() (err error) {
-	for _, e := range store.logs {
-		if err = e.WaitDone(); err != nil {
-			return
-		}
-		e.Free()
-	}
 	for _, db := range store.dbs {
 		if err = db.ApplyCommit(); err != nil {
 			break
@@ -391,9 +437,15 @@ func (store *txnStore) ApplyCommit() (err error) {
 	return
 }
 
-func (store *txnStore) PreCommitOr2PCPrepare() (err error) {
+func (store *txnStore) PrePrepare() (err error) {
 	for _, db := range store.dbs {
-		if err = db.PreCommitOr2PCPrepare(); err != nil {
+		if db.NeedRollback() {
+			if err = db.PrepareRollback(); err != nil {
+				return
+			}
+			delete(store.dbs, db.entry.GetID())
+		}
+		if err = db.PrePrepare(); err != nil {
 			return
 		}
 	}
@@ -408,21 +460,6 @@ func (store *txnStore) PrepareCommit() (err error) {
 	}
 	for _, db := range store.dbs {
 		if err = db.PrepareCommit(); err != nil {
-			break
-		}
-	}
-
-	return
-}
-
-func (store *txnStore) Prepare2PCPrepare() (err error) {
-	if store.warChecker != nil {
-		if err = store.warChecker.check(); err != nil {
-			return err
-		}
-	}
-	for _, db := range store.dbs {
-		if err = db.Prepare2PCPrepare(); err != nil {
 			break
 		}
 	}
@@ -445,34 +482,8 @@ func (store *txnStore) PreApplyCommit() (err error) {
 		return
 	}
 
-	logEntry, err := store.cmdMgr.ApplyTxnRecord(store.txn.GetID())
-	if err != nil {
-		return
-	}
-	if logEntry != nil {
-		store.logs = append(store.logs, logEntry)
-	}
-	logutil.Debugf("Txn-%d PrepareCommit Takes %s", store.txn.GetID(), time.Since(now))
-	return
-}
-
-func (store *txnStore) PreApply2PCPrepare() (err error) {
-	now := time.Now()
-	for _, db := range store.dbs {
-		if err = db.PreApply2PCPrepare(); err != nil {
-			return
-		}
-	}
-	if err = store.CollectCmd(); err != nil {
-		return
-	}
-
-	if store.cmdMgr.GetCSN() == 0 {
-		return
-	}
 	//TODO:How to distinguish prepare log of 2PC entry from commit log entry of 1PC?
-	//logEntry, err := store.cmdMgr.ApplyTxnRecord(store.txn.GetID(), type)
-	logEntry, err := store.cmdMgr.ApplyTxnRecord(store.txn.GetID())
+	logEntry, err := store.cmdMgr.ApplyTxnRecord(store.txn.GetID(), store.txn)
 	if err != nil {
 		return
 	}
@@ -512,3 +523,18 @@ func (store *txnStore) PrepareRollback() error {
 }
 
 func (store *txnStore) GetLSN() uint64 { return store.cmdMgr.lsn }
+
+func (store *txnStore) HasTableDataChanges(tableID uint64) bool {
+	_, changed := store.dirtyMemo.tableChanges[tableID]
+	return changed
+}
+
+// GetTableDirtyPoints returns touched segments and blocks in the txn.
+func (store *txnStore) GetTableDirtyPoints(tableID uint64) dirtySet {
+	dirtiesMap := store.dirtyMemo.tableChanges[tableID]
+	return dirtiesMap
+}
+
+func (store *txnStore) HasCatalogChanges() bool {
+	return store.dirtyMemo.catalogChanged
+}

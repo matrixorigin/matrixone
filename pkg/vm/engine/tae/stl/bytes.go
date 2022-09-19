@@ -33,6 +33,13 @@ func (bs *Bytes) Get(i int) []byte {
 	return bs.Data[bs.Offset[i] : bs.Offset[i]+bs.Length[i]]
 }
 
+func (bs *Bytes) Append(v []byte) {
+	off := len(bs.Data)
+	bs.Data = append(bs.Data, v...)
+	bs.Length = append(bs.Length, uint32(len(v)))
+	bs.Offset = append(bs.Offset, uint32(off))
+}
+
 func (bs *Bytes) Window(offset, length int) *Bytes {
 	win := NewBytes()
 	if len(bs.Length) == 0 || length == 0 {

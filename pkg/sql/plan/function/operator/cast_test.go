@@ -51,7 +51,7 @@ func TestCastStringToJson(t *testing.T) {
 			wantScalar: wantScalar,
 		}
 	}
-	procs := makeProcess()
+	procs := testutil.NewProc()
 	cases := []caseStruct{
 		makeCase("Test01", `{"a":1,"b":2}`, true, procs, types.T_json, true),
 		makeCase("Test02", `{"a":1,"b":2}`, false, procs, types.T_json, false),
@@ -62,7 +62,7 @@ func TestCastStringToJson(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			require.JSONEq(t, c.wantValues.(string), types.DecodeJson(castRes.Col.(*types.Bytes).Data).String())
+			require.JSONEq(t, c.wantValues.(string), types.DecodeJson(castRes.GetBytes(0)).String())
 			require.Equal(t, c.wantScalar, castRes.IsScalar())
 		})
 	}
@@ -76,7 +76,7 @@ func TestCastSameType(t *testing.T) {
 		return vectors
 	}
 
-	procs := makeProcess()
+	procs := testutil.NewProc()
 	cases := []struct {
 		name       string
 		vecs       []*vector.Vector
@@ -246,7 +246,7 @@ func TestCastSameType2(t *testing.T) {
 		return vectors
 	}
 
-	procs := makeProcess()
+	procs := testutil.NewProc()
 	//types.Date | types.Datetime | types.Timestamp
 	cases := []struct {
 		name       string
@@ -329,7 +329,7 @@ func TestCastLeftToRight(t *testing.T) {
 		return vectors
 	}
 
-	procs := makeProcess()
+	procs := testutil.NewProc()
 	cases := []struct {
 		name       string
 		vecs       []*vector.Vector
@@ -1062,7 +1062,7 @@ func TestCastSpecials1Int(t *testing.T) {
 		return vectors
 	}
 
-	procs := makeProcess()
+	procs := testutil.NewProc()
 	cases := []struct {
 		name       string
 		vecs       []*vector.Vector
@@ -1374,7 +1374,7 @@ func TestCastSpecials1Float(t *testing.T) {
 		return vectors
 	}
 
-	procs := makeProcess()
+	procs := testutil.NewProc()
 	cases := []struct {
 		name       string
 		vecs       []*vector.Vector
@@ -1490,7 +1490,7 @@ func TestCastSpecials2Float(t *testing.T) {
 		return vectors
 	}
 
-	procs := makeProcess()
+	procs := testutil.NewProc()
 	cases := []struct {
 		name       string
 		vecs       []*vector.Vector
@@ -1590,11 +1590,7 @@ func TestCastSpecials2Float(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			col := castRes.Col.(*types.Bytes)
-			offset := col.Offsets[0]
-			length := col.Lengths[0]
-			resBytes := col.Data[offset:length]
-			require.Equal(t, c.wantBytes, resBytes)
+			require.Equal(t, c.wantBytes, castRes.GetBytes(0))
 			require.Equal(t, c.wantScalar, castRes.IsScalar())
 		})
 	}
@@ -1617,7 +1613,7 @@ func TestCastSpecials3(t *testing.T) {
 		return vectors
 	}
 
-	procs := makeProcess()
+	procs := testutil.NewProc()
 	cases := []struct {
 		name       string
 		vecs       []*vector.Vector
@@ -1724,11 +1720,7 @@ func TestCastSpecials3(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			col := castRes.Col.(*types.Bytes)
-			offset := col.Offsets[0]
-			length := col.Lengths[0]
-			resBytes := col.Data[offset:length]
-			require.Equal(t, c.wantBytes, resBytes)
+			require.Equal(t, c.wantBytes, castRes.GetBytes(0))
 			require.Equal(t, c.wantScalar, castRes.IsScalar())
 		})
 	}
@@ -1743,11 +1735,13 @@ func TestCastSpecial4(t *testing.T) {
 		vectors := make([]*vector.Vector, 2)
 		vectors[0] = makeVector(src, srcIsConst)
 		vectors[1] = makeTypeVector(destType)
+		vectors[1].Typ.Width = 64
+		vectors[1].Typ.Scale = 0
 		return vectors
 	}
-	resType := types.Type{Oid: types.T_decimal128, Size: 16, Width: 38, Scale: 0}
+	resType := types.T_decimal128.ToType()
 	decimal128 := types.Decimal128FromInt32(123)
-	procs := makeProcess()
+	procs := testutil.NewProc()
 	cases := []struct {
 		name       string
 		vecs       []*vector.Vector
@@ -2109,81 +2103,10 @@ func TestCastVarcharAsDate(t *testing.T) {
 	})
 }
 
-func TestCastTimestampAsVarchar(t *testing.T) {
-	//Cast converts timestamp to varchar
-	procs := testutil.NewProc()
-	cases := []struct {
-		name     string
-		vecs     []*vector.Vector
-		proc     *process.Process
-		input    []types.Timestamp
-		expected *types.Bytes
-		isScalar bool
-	}{
-		//{
-		//	name:  "01 - normal test",
-		//	proc:  procs,
-		//	input: []types.Timestamp{66823357574906480},
-		//	expected: &types.Bytes{
-		//		Data:    []byte("2020-06-14 16:24:15.230000"),
-		//		Offsets: []uint32{0},
-		//		Lengths: []uint32{26},
-		//	},
-		//	isScalar: false,
-		//},
-		//{
-		//	name:  "02 - scalar test",
-		//	proc:  procs,
-		//	input: []types.Timestamp{66823357574906480},
-		//	expected: &types.Bytes{
-		//		Data:    []byte("2020-06-14 16:24:15.230000"),
-		//		Offsets: []uint32{0},
-		//		Lengths: []uint32{26},
-		//	},
-		//	isScalar: true,
-		//},
-		{
-			name: "03 - null test",
-			proc: procs,
-			expected: &types.Bytes{
-				Data:    nil,
-				Offsets: nil,
-				Lengths: nil,
-			},
-			isScalar: true,
-		},
-	}
-
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			vecs := make([]*vector.Vector, 2)
-			if c.input != nil {
-				vecs[0] = vector.New(types.T_timestamp.ToType())
-				vecs[0].Col = c.input
-				vecs[0].IsConst = c.isScalar
-			} else {
-				vecs[0] = testutil.MakeScalarNull(0)
-			}
-			vecs[1] = vector.New(types.T_varchar.ToType())
-
-			result, err := Cast(vecs, c.proc)
-			if err != nil {
-				t.Fatal(err)
-			}
-			require.Equal(t, c.isScalar, result.IsScalar())
-		})
-	}
-}
-
 func TestCastFloatAsDecimal(t *testing.T) {
 	makeTempVectors := func(leftVal []float32, leftType types.Type, rightType types.Type) []*vector.Vector {
 		vecs := make([]*vector.Vector, 2)
-		vecs[0] = &vector.Vector{
-			Col:     leftVal,
-			Typ:     leftType,
-			Nsp:     &nulls.Nulls{},
-			IsConst: true,
-		}
+		vecs[0] = vector.NewConstFixed(leftType, 1, leftVal[0])
 		vecs[1] = &vector.Vector{
 			Col: nil,
 			Typ: rightType,
@@ -2193,6 +2116,7 @@ func TestCastFloatAsDecimal(t *testing.T) {
 	}
 	leftType := types.Type{Oid: types.T_float32, Size: 8}
 	rightType := types.Type{Oid: types.T_decimal64, Size: 8, Scale: 2, Width: 16}
+	d, _ := types.Decimal64FromFloat64(123.0, 5, 1)
 
 	cases := []struct {
 		name      string
@@ -2203,8 +2127,8 @@ func TestCastFloatAsDecimal(t *testing.T) {
 		{
 			name:      "TEST01",
 			vecs:      makeTempVectors([]float32{123.0}, leftType, rightType),
-			proc:      makeProcess(),
-			wantBytes: []types.Decimal64{types.Decimal64FromFloat64(123.0)},
+			proc:      testutil.NewProc(),
+			wantBytes: []types.Decimal64{d},
 		},
 	}
 
@@ -2219,17 +2143,8 @@ func TestCastFloatAsDecimal(t *testing.T) {
 func TestCastDecimalAsString(t *testing.T) {
 	makeTempVectors := func(leftVal []types.Decimal64, leftType types.Type, rightType types.Type) []*vector.Vector {
 		vecs := make([]*vector.Vector, 2)
-		vecs[0] = &vector.Vector{
-			Col:     leftVal,
-			Typ:     leftType,
-			Nsp:     &nulls.Nulls{},
-			IsConst: true,
-		}
-		vecs[1] = &vector.Vector{
-			Col: nil,
-			Typ: rightType,
-			Nsp: &nulls.Nulls{},
-		}
+		vecs[0] = vector.NewConstFixed(leftType, 1, leftVal[0])
+		vecs[1] = vector.New(rightType)
 		return vecs
 	}
 	leftType := types.Type{Oid: types.T_decimal64, Size: 8}
@@ -2244,11 +2159,9 @@ func TestCastDecimalAsString(t *testing.T) {
 		{
 			name: "TEST01",
 			vecs: makeTempVectors([]types.Decimal64{types.Decimal64FromInt32(1230)}, leftType, rightType),
-			proc: makeProcess(),
-			wantBytes: &types.Bytes{
-				Data:    []byte{0x31, 0x32, 0x33, 0x30},
-				Offsets: []uint32{0x0},
-				Lengths: []uint32{0x4},
+			proc: testutil.NewProc(),
+			wantBytes: [][]byte{
+				{0x31, 0x32, 0x33, 0x30},
 			},
 		},
 	}
@@ -2256,7 +2169,7 @@ func TestCastDecimalAsString(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			result, _ := Cast(c.vecs, c.proc)
-			require.Equal(t, c.wantBytes, result.Col.(*types.Bytes))
+			require.Equal(t, c.wantBytes, vector.GetBytesVectorValues(result))
 		})
 	}
 }
@@ -2264,12 +2177,7 @@ func TestCastDecimalAsString(t *testing.T) {
 func TestCastTimestampAsDate(t *testing.T) {
 	makeTempVectors := func(leftVal []types.Timestamp, leftType types.Type, rightType types.Type) []*vector.Vector {
 		vecs := make([]*vector.Vector, 2)
-		vecs[0] = &vector.Vector{
-			Col:     leftVal,
-			Typ:     leftType,
-			Nsp:     &nulls.Nulls{},
-			IsConst: true,
-		}
+		vecs[0] = vector.NewConstFixed(leftType, 1, leftVal[0])
 		vecs[1] = &vector.Vector{
 			Col: nil,
 			Typ: rightType,
@@ -2306,20 +2214,12 @@ func TestCastDecimal64AsDecimal128(t *testing.T) {
 	//Cast converts decimal64 to decimal128
 	makeTempVector := func(left types.Decimal64, leftType types.Type, leftScalar bool, destType types.Type) []*vector.Vector {
 		vectors := make([]*vector.Vector, 2)
-		vectors[0] = &vector.Vector{
-			Col:     []types.Decimal64{left},
-			Nsp:     &nulls.Nulls{},
-			Typ:     leftType,
-			IsConst: leftScalar,
-			Length:  1,
+		if leftScalar {
+			vectors[0] = vector.NewConstFixed(leftType, 1, left)
+		} else {
+			vectors[0] = vector.NewWithFixed(leftType, []types.Decimal64{left}, nil, nil)
 		}
-		vectors[1] = &vector.Vector{
-			Col:     nil,
-			Nsp:     &nulls.Nulls{},
-			Typ:     destType,
-			IsConst: false,
-			Length:  0,
-		}
+		vectors[1] = vector.New(destType)
 		return vectors
 	}
 	// decimal(10,5)
@@ -2330,7 +2230,7 @@ func TestCastDecimal64AsDecimal128(t *testing.T) {
 	d64_33333300 := types.Decimal64FromInt32(333333000)
 	d128_33333300 := types.Decimal128FromInt32(333333000)
 
-	procs := makeProcess()
+	procs := testutil.NewProc()
 	cases := []struct {
 		name       string
 		vecs       []*vector.Vector
@@ -2375,21 +2275,13 @@ func TestCastDecimal64AsDecimal64(t *testing.T) {
 	//Cast converts decimal64 to decimal64
 	makeTempVector := func(left types.Decimal64, leftType types.Type, leftScalar bool, destType types.Type) []*vector.Vector {
 		vectors := make([]*vector.Vector, 2)
-		vectors[0] = &vector.Vector{
-			Col:     []types.Decimal64{left},
-			Nsp:     &nulls.Nulls{},
-			Typ:     leftType,
-			IsConst: leftScalar,
-			Length:  1,
+		if leftScalar {
+			vectors[0] = vector.NewConstFixed(leftType, 1, left)
+		} else {
+			vectors[0] = vector.NewWithFixed(leftType, []types.Decimal64{left}, nil, nil)
 		}
 
-		vectors[1] = &vector.Vector{
-			Col:     nil,
-			Nsp:     &nulls.Nulls{},
-			Typ:     destType,
-			IsConst: false,
-			Length:  0,
-		}
+		vectors[1] = vector.New(destType)
 		return vectors
 	}
 	// decimal(10,5)
@@ -2397,7 +2289,7 @@ func TestCastDecimal64AsDecimal64(t *testing.T) {
 	//decimal(10, 4)
 	destType := types.Type{Oid: types.T_decimal64, Size: 8, Width: 10, Scale: 4}
 
-	procs := makeProcess()
+	procs := testutil.NewProc()
 	cases := []struct {
 		name       string
 		vecs       []*vector.Vector
@@ -2441,28 +2333,20 @@ func TestCastDecimal128AsDecimal128(t *testing.T) {
 	// Cast converts decimal128 to decimal128
 	makeTempVector := func(left types.Decimal128, leftType types.Type, leftScalar bool, destType types.Type) []*vector.Vector {
 		vectors := make([]*vector.Vector, 2)
-		vectors[0] = &vector.Vector{
-			Col:     []types.Decimal128{left},
-			Nsp:     &nulls.Nulls{},
-			Typ:     leftType,
-			IsConst: leftScalar,
-			Length:  1,
+		if leftScalar {
+			vectors[0] = vector.NewConstFixed(leftType, 1, left)
+		} else {
+			vectors[0] = vector.NewWithFixed(leftType, []types.Decimal128{left}, nil, nil)
 		}
 
-		vectors[1] = &vector.Vector{
-			Col:     nil,
-			Nsp:     &nulls.Nulls{},
-			Typ:     destType,
-			IsConst: false,
-			Length:  0,
-		}
+		vectors[1] = vector.New(destType)
 		return vectors
 	}
 
 	leftType := types.Type{Oid: types.T_decimal128, Size: 16, Width: 20, Scale: 5}
 	destType := types.Type{Oid: types.T_decimal128, Size: 16, Width: 20, Scale: 5}
 
-	procs := makeProcess()
+	procs := testutil.NewProc()
 	cases := []struct {
 		name       string
 		vecs       []*vector.Vector
@@ -3090,7 +2974,7 @@ func TestCastNullAsAllType(t *testing.T) {
 		return vectors
 	}
 
-	procs := makeProcess()
+	procs := testutil.NewProc()
 	cases := []struct {
 		name       string
 		vecs       []*vector.Vector
@@ -4262,7 +4146,7 @@ func TestCastBoolAsString(t *testing.T) {
 		return vectors
 	}
 
-	procs := makeProcess()
+	procs := testutil.NewProc()
 	cases := []struct {
 		name       string
 		vecs       []*vector.Vector
@@ -4272,50 +4156,34 @@ func TestCastBoolAsString(t *testing.T) {
 		wantScalar bool
 	}{
 		{
-			name: "Test01",
-			vecs: makeTempVectors(true, true, types.T_char),
-			proc: procs,
-			wantValues: &types.Bytes{
-				Data:    []byte("1"),
-				Offsets: []uint32{0},
-				Lengths: []uint32{1},
-			},
+			name:       "Test01",
+			vecs:       makeTempVectors(true, true, types.T_char),
+			proc:       procs,
+			wantValues: []string{"1"},
 			wantType:   types.T_char,
 			wantScalar: true,
 		},
 		{
-			name: "Test02",
-			vecs: makeTempVectors(true, false, types.T_char),
-			proc: procs,
-			wantValues: &types.Bytes{
-				Data:    []byte("1"),
-				Offsets: []uint32{0},
-				Lengths: []uint32{1},
-			},
+			name:       "Test02",
+			vecs:       makeTempVectors(true, false, types.T_char),
+			proc:       procs,
+			wantValues: []string{"1"},
 			wantType:   types.T_char,
 			wantScalar: false,
 		},
 		{
-			name: "Test03",
-			vecs: makeTempVectors(false, false, types.T_varchar),
-			proc: procs,
-			wantValues: &types.Bytes{
-				Data:    []byte("0"),
-				Offsets: []uint32{0},
-				Lengths: []uint32{1},
-			},
+			name:       "Test03",
+			vecs:       makeTempVectors(false, false, types.T_varchar),
+			proc:       procs,
+			wantValues: []string{"0"},
 			wantType:   types.T_varchar,
 			wantScalar: false,
 		},
 		{
-			name: "Test04",
-			vecs: makeTempVectors(false, false, types.T_varchar),
-			proc: procs,
-			wantValues: &types.Bytes{
-				Data:    []byte("0"),
-				Offsets: []uint32{0},
-				Lengths: []uint32{1},
-			},
+			name:       "Test04",
+			vecs:       makeTempVectors(false, false, types.T_varchar),
+			proc:       procs,
+			wantValues: []string{"0"},
 			wantType:   types.T_varchar,
 			wantScalar: false,
 		},
@@ -4327,7 +4195,8 @@ func TestCastBoolAsString(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			require.Equal(t, c.wantValues, castRes.Col)
+			got := vector.GetStrVectorValues(castRes)
+			require.Equal(t, c.wantValues, got)
 			require.Equal(t, c.wantType, castRes.Typ.Oid)
 			require.Equal(t, c.wantScalar, castRes.IsScalar())
 		})
@@ -4345,7 +4214,7 @@ func TestCastDateAsDatetimeAndString(t *testing.T) {
 		return vectors
 	}
 
-	procs := makeProcess()
+	procs := testutil.NewProc()
 	cases := []struct {
 		name       string
 		vecs       []*vector.Vector
@@ -4371,26 +4240,18 @@ func TestCastDateAsDatetimeAndString(t *testing.T) {
 			wantScalar: false,
 		},
 		{
-			name: "Test03",
-			vecs: makeTempVectors("1992-01-01", true, types.T_char),
-			proc: procs,
-			wantValues: &types.Bytes{
-				Data:    []byte("1992-01-01"),
-				Offsets: []uint32{0},
-				Lengths: []uint32{10},
-			},
+			name:       "Test03",
+			vecs:       makeTempVectors("1992-01-01", true, types.T_char),
+			proc:       procs,
+			wantValues: []string{"1992-01-01"},
 			wantType:   types.T_char,
 			wantScalar: true,
 		},
 		{
-			name: "Test04",
-			vecs: makeTempVectors("1992-02-02", true, types.T_varchar),
-			proc: procs,
-			wantValues: &types.Bytes{
-				Data:    []byte("1992-02-02"),
-				Offsets: []uint32{0},
-				Lengths: []uint32{10},
-			},
+			name:       "Test04",
+			vecs:       makeTempVectors("1992-02-02", true, types.T_varchar),
+			proc:       procs,
+			wantValues: []string{"1992-02-02"},
 			wantType:   types.T_varchar,
 			wantScalar: true,
 		},
@@ -4402,7 +4263,12 @@ func TestCastDateAsDatetimeAndString(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			require.Equal(t, c.wantValues, castRes.Col)
+			if castRes.GetType().IsVarlen() {
+				got := vector.GetStrVectorValues(castRes)
+				require.Equal(t, c.wantValues, got)
+			} else {
+				require.Equal(t, c.wantValues, castRes.Col)
+			}
 			require.Equal(t, c.wantType, castRes.Typ.Oid)
 			require.Equal(t, c.wantScalar, castRes.IsScalar())
 		})
@@ -4420,7 +4286,7 @@ func TestCastDatetimeAsDateAndString(t *testing.T) {
 		return vectors
 	}
 
-	procs := makeProcess()
+	procs := testutil.NewProc()
 	cases := []struct {
 		name       string
 		vecs       []*vector.Vector
@@ -4446,26 +4312,18 @@ func TestCastDatetimeAsDateAndString(t *testing.T) {
 			wantScalar: false,
 		},
 		{
-			name: "Test03",
-			vecs: makeTempVectors("1992-01-01 00:00:00", true, types.T_char),
-			proc: procs,
-			wantValues: &types.Bytes{
-				Data:    []byte("1992-01-01 00:00:00"),
-				Offsets: []uint32{0},
-				Lengths: []uint32{19},
-			},
+			name:       "Test03",
+			vecs:       makeTempVectors("1992-01-01 00:00:00", true, types.T_char),
+			proc:       procs,
+			wantValues: []string{"1992-01-01 00:00:00"},
 			wantType:   types.T_char,
 			wantScalar: true,
 		},
 		{
-			name: "Test04",
-			vecs: makeTempVectors("1992-02-02 00:00:00", true, types.T_varchar),
-			proc: procs,
-			wantValues: &types.Bytes{
-				Data:    []byte("1992-02-02 00:00:00"),
-				Offsets: []uint32{0},
-				Lengths: []uint32{19},
-			},
+			name:       "Test04",
+			vecs:       makeTempVectors("1992-02-02 00:00:00", true, types.T_varchar),
+			proc:       procs,
+			wantValues: []string{"1992-02-02 00:00:00"},
 			wantType:   types.T_varchar,
 			wantScalar: true,
 		},
@@ -4477,7 +4335,12 @@ func TestCastDatetimeAsDateAndString(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			require.Equal(t, c.wantValues, castRes.Col)
+			if castRes.GetType().IsVarlen() {
+				got := vector.GetStrVectorValues(castRes)
+				require.Equal(t, c.wantValues, got)
+			} else {
+				require.Equal(t, c.wantValues, castRes.Col)
+			}
 			require.Equal(t, c.wantType, castRes.Typ.Oid)
 			require.Equal(t, c.wantScalar, castRes.IsScalar())
 		})
@@ -4485,118 +4348,237 @@ func TestCastDatetimeAsDateAndString(t *testing.T) {
 
 }
 
+// cast uuid to string
+func TestCastUuidAsString(t *testing.T) {
+	// White box test
+	convey.Convey("test cast uuid to string", t, func() {
+		cases := []struct {
+			uuid types.Uuid
+			str  string
+		}{
+			{
+				uuid: [16]byte{13, 86, 135, 218, 42, 103, 17, 237, 153, 224, 0, 12, 41, 132, 121, 4},
+				str:  "0d5687da-2a67-11ed-99e0-000c29847904",
+			},
+			{
+				uuid: [16]byte{97, 25, 223, 253, 42, 107, 17, 237, 153, 224, 0, 12, 41, 132, 121, 4},
+				str:  "6119dffd-2a6b-11ed-99e0-000c29847904",
+			},
+			{
+				uuid: [16]byte{62, 53, 10, 92, 34, 42, 17, 235, 171, 239, 2, 66, 172, 17, 0, 2},
+				str:  "3e350a5c-222a-11eb-abef-0242ac110002",
+			},
+			{
+				uuid: [16]byte{62, 53, 10, 92, 34, 42, 17, 235, 171, 239, 2, 66, 172, 17, 0, 2},
+				str:  "3e350a5c222a11ebabef0242ac110002",
+			},
+		}
+
+		var uuids []types.Uuid
+		var expects []string
+		for _, c := range cases {
+			uuids = append(uuids, c.uuid)
+			expects = append(expects, c.str)
+		}
+
+		srcVector := testutil.MakeUuidVector(uuids, nil)
+		destVector := testutil.MakeVarcharVector(nil, nil)
+
+		wantVec := testutil.MakeVarcharVector(expects, nil)
+		proc := testutil.NewProc()
+		res, err := Cast([]*vector.Vector{srcVector, destVector}, proc)
+		convey.ShouldBeNil(err)
+		compare := testutil.CompareVectors(wantVec, res)
+		convey.ShouldBeTrue(compare)
+	})
+
+}
+
+// cast string to uuid
+func TestCastStringToUuid(t *testing.T) {
+	// White box test
+	convey.Convey("test cast to uuid case", t, func() {
+		cases := []struct {
+			str  string
+			uuid string
+		}{
+			{
+				str:  "0d5687da-2a67-11ed-99e0-000c29847904",
+				uuid: "0d5687da-2a67-11ed-99e0-000c29847904",
+				//uuid: [16]byte{13, 86, 135, 218, 42, 103, 17, 237, 153, 224, 0, 12, 41, 132, 121, 4},
+			},
+			{
+				str:  "6119dffd-2a6b-11ed-99e0-000c29847904",
+				uuid: "6119dffd-2a6b-11ed-99e0-000c29847904",
+				//uuid: [16]byte{97, 25, 223, 253, 42, 107, 17, 237, 153, 224, 0, 12, 41, 132, 121, 4},
+			},
+			{
+				str:  "3e350a5c-222a-11eb-abef-0242ac110002",
+				uuid: "3e350a5c-222a-11eb-abef-0242ac110002",
+				//uuid: [16]byte{62, 53, 10, 92, 34, 42, 17, 235, 171, 239, 2, 66, 172, 17, 0, 2},
+			},
+			{
+				str:  "3e350a5c222a11ebabef0242ac110002",
+				uuid: "3e350a5c-222a-11eb-abef-0242ac110002",
+				//uuid: [16]byte{62, 53, 10, 92, 34, 42, 17, 235, 171, 239, 2, 66, 172, 17, 0, 2},
+			},
+		}
+
+		var srcstrs []string
+		var expects []string
+		for _, c := range cases {
+			srcstrs = append(srcstrs, c.str)
+			expects = append(expects, c.uuid)
+		}
+
+		srcVector := testutil.MakeVarcharVector(srcstrs, nil)
+		destVector := testutil.MakeUuidVector(nil, nil)
+
+		wantVec := testutil.MakeUuidVectorByString(expects, nil)
+		proc := testutil.NewProc()
+		res, err := Cast([]*vector.Vector{srcVector, destVector}, proc)
+		convey.ShouldBeNil(err)
+		compare := testutil.CompareVectors(wantVec, res)
+		convey.ShouldBeTrue(compare)
+	})
+
+	// tolerance test
+}
+
 func makeTypeVector(t types.T) *vector.Vector {
-	return &vector.Vector{
-		Col:     nil,
-		Nsp:     &nulls.Nulls{},
-		Typ:     types.Type{Oid: t},
-		IsConst: false,
-		Length:  0,
-	}
+	return vector.New(t.ToType())
 }
 
 // make vector for type of int8,int16,int32,int64,uint8,uint16,uint32,uint64,date,datetime,timestamp,bool
 func makeVector(src interface{}, isSrcConst bool) *vector.Vector {
 	var typeOid types.T
-	var col interface{}
+	var vec *vector.Vector
 	switch val := src.(type) {
 	case int8:
 		typeOid = types.T_int8
-		col = []int8{val}
+		if isSrcConst {
+			vec = vector.NewConstFixed(typeOid.ToType(), 1, val)
+		} else {
+			vec = vector.NewWithFixed(typeOid.ToType(), []int8{val}, nil, nil)
+		}
+
 	case int16:
 		typeOid = types.T_int16
-		col = []int16{val}
+		if isSrcConst {
+			vec = vector.NewConstFixed(typeOid.ToType(), 1, val)
+		} else {
+			vec = vector.NewWithFixed(typeOid.ToType(), []int16{val}, nil, nil)
+		}
+
 	case int32:
 		typeOid = types.T_int32
-		col = []int32{val}
+		if isSrcConst {
+			vec = vector.NewConstFixed(typeOid.ToType(), 1, val)
+		} else {
+			vec = vector.NewWithFixed(typeOid.ToType(), []int32{val}, nil, nil)
+		}
+
 	case int64:
 		typeOid = types.T_int64
-		col = []int64{val}
+		if isSrcConst {
+			vec = vector.NewConstFixed(typeOid.ToType(), 1, val)
+		} else {
+			vec = vector.NewWithFixed(typeOid.ToType(), []int64{val}, nil, nil)
+		}
+
 	case uint8:
 		typeOid = types.T_uint8
-		col = []uint8{val}
+		if isSrcConst {
+			vec = vector.NewConstFixed(typeOid.ToType(), 1, val)
+		} else {
+			vec = vector.NewWithFixed(typeOid.ToType(), []uint8{val}, nil, nil)
+		}
+
 	case uint16:
 		typeOid = types.T_uint16
-		col = []uint16{val}
+		if isSrcConst {
+			vec = vector.NewConstFixed(typeOid.ToType(), 1, val)
+		} else {
+			vec = vector.NewWithFixed(typeOid.ToType(), []uint16{val}, nil, nil)
+		}
+
 	case uint32:
 		typeOid = types.T_uint32
-		col = []uint32{val}
+		if isSrcConst {
+			vec = vector.NewConstFixed(typeOid.ToType(), 1, val)
+		} else {
+			vec = vector.NewWithFixed(typeOid.ToType(), []uint32{val}, nil, nil)
+		}
+
 	case uint64:
 		typeOid = types.T_uint64
-		col = []uint64{val}
+		if isSrcConst {
+			vec = vector.NewConstFixed(typeOid.ToType(), 1, val)
+		} else {
+			vec = vector.NewWithFixed(typeOid.ToType(), []uint64{val}, nil, nil)
+		}
+
 	case float32:
 		typeOid = types.T_float32
-		col = []float32{val}
+		if isSrcConst {
+			vec = vector.NewConstFixed(typeOid.ToType(), 1, val)
+		} else {
+			vec = vector.NewWithFixed(typeOid.ToType(), []float32{val}, nil, nil)
+		}
+
 	case float64:
 		typeOid = types.T_float64
-		col = []float64{val}
+		if isSrcConst {
+			vec = vector.NewConstFixed(typeOid.ToType(), 1, val)
+		} else {
+			vec = vector.NewWithFixed(typeOid.ToType(), []float64{val}, nil, nil)
+		}
+
 	case types.Date:
 		typeOid = types.T_date
-		col = []types.Date{val}
+		if isSrcConst {
+			vec = vector.NewConstFixed(typeOid.ToType(), 1, val)
+		} else {
+			vec = vector.NewWithFixed(typeOid.ToType(), []types.Date{val}, nil, nil)
+		}
+
 	case types.Datetime:
 		typeOid = types.T_datetime
-		col = []types.Datetime{val}
+		if isSrcConst {
+			vec = vector.NewConstFixed(typeOid.ToType(), 1, val)
+		} else {
+			vec = vector.NewWithFixed(typeOid.ToType(), []types.Datetime{val}, nil, nil)
+		}
+
 	case types.Timestamp:
 		typeOid = types.T_timestamp
-		col = []types.Timestamp{val}
+		if isSrcConst {
+			vec = vector.NewConstFixed(typeOid.ToType(), 1, val)
+		} else {
+			vec = vector.NewWithFixed(typeOid.ToType(), []types.Timestamp{val}, nil, nil)
+		}
+
 	case bool:
 		typeOid = types.T_bool
-		col = []bool{val}
-
+		if isSrcConst {
+			vec = vector.NewConstFixed(typeOid.ToType(), 1, val)
+		} else {
+			vec = vector.NewWithFixed(typeOid.ToType(), []bool{val}, nil, nil)
+		}
 	}
-
-	return &vector.Vector{
-		Col:     col,
-		Nsp:     &nulls.Nulls{},
-		Typ:     types.Type{Oid: typeOid},
-		IsConst: isSrcConst,
-		Length:  1,
-	}
+	return vec
 }
 
 func makeScalarNullVector(srcType types.T) *vector.Vector {
-	nullVector := &vector.Vector{
-		Col:     nil,
-		Nsp:     &nulls.Nulls{},
-		Typ:     types.Type{Oid: srcType},
-		IsConst: true,
-		Length:  1,
-	}
-	nulls.Add(nullVector.Nsp, 0)
+	nullVector := vector.NewConstNull(srcType.ToType(), 1)
 	return nullVector
 }
 
 // make vector for type of char and varchar
 func makeStringVector(src string, t types.T, isConst bool) *vector.Vector {
-	srcBytes := &types.Bytes{
-		Data:    []byte(src),
-		Offsets: []uint32{0},
-		Lengths: []uint32{uint32(len(src))},
+	if isConst {
+		return vector.NewConstString(t.ToType(), 1, src)
+	} else {
+		return vector.NewWithStrings(t.ToType(), []string{src}, nil, nil)
 	}
-	if t == types.T_char {
-		return &vector.Vector{
-			Col:     srcBytes,
-			Nsp:     &nulls.Nulls{},
-			Typ:     types.Type{Oid: types.T_char, Size: 24},
-			IsConst: isConst,
-			Length:  1,
-		}
-	} else if t == types.T_varchar {
-		return &vector.Vector{
-			Col:     srcBytes,
-			Nsp:     &nulls.Nulls{},
-			Typ:     types.Type{Oid: types.T_varchar, Size: 24},
-			IsConst: isConst,
-			Length:  1,
-		}
-	} else if t == types.T_blob {
-		return &vector.Vector{
-			Col:     srcBytes,
-			Nsp:     &nulls.Nulls{},
-			Typ:     types.Type{Oid: types.T_blob, Size: 24},
-			IsConst: isConst,
-			Length:  1,
-		}
-	}
-	return nil
 }

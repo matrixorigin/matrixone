@@ -42,6 +42,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/vm/mempool"
+	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
 	"github.com/smartystreets/goconvey/convey"
 	"github.com/stretchr/testify/require"
@@ -1750,7 +1751,7 @@ func TestSendPrepareResponse(t *testing.T) {
 		if err != nil {
 			t.Error(err)
 		}
-		preparePlan, err := buildPlan(nil, st)
+		preparePlan, err := buildPlan(context.TODO(), nil, nil, st)
 		if err != nil {
 			t.Error(err)
 		}
@@ -1784,7 +1785,7 @@ func TestSendPrepareResponse(t *testing.T) {
 		if err != nil {
 			t.Error(err)
 		}
-		preparePlan, err := buildPlan(nil, st)
+		preparePlan, err := buildPlan(context.TODO(), nil, nil, st)
 		if err != nil {
 			t.Error(err)
 		}
@@ -1819,7 +1820,7 @@ func FuzzParseExecuteData(f *testing.F) {
 	if err != nil {
 		f.Error(err)
 	}
-	preparePlan, err := buildPlan(nil, st)
+	preparePlan, err := buildPlan(context.TODO(), nil, nil, st)
 	if err != nil {
 		f.Error(err)
 	}
@@ -1884,7 +1885,7 @@ func TestParseExecuteData(t *testing.T) {
 		if err != nil {
 			t.Error(err)
 		}
-		preparePlan, err := buildPlan(nil, st)
+		preparePlan, err := buildPlan(context.TODO(), nil, nil, st)
 		if err != nil {
 			t.Error(err)
 		}
@@ -1917,6 +1918,7 @@ func TestParseExecuteData(t *testing.T) {
 }
 
 func Test_resultset(t *testing.T) {
+	ctx := context.TODO()
 	convey.Convey("send result set batch row succ", t, func() {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
@@ -1931,6 +1933,18 @@ func Test_resultset(t *testing.T) {
 		}
 
 		proto := NewMysqlClientProtocol(0, ioses, 1024, sv)
+		eng := mock_frontend.NewMockEngine(ctrl)
+		txnClient := mock_frontend.NewMockTxnClient(ctrl)
+		pu, err := getParameterUnit("test/system_vars_config.toml", eng, txnClient)
+		if err != nil {
+			t.Error(err)
+		}
+		guestMmu := guest.New(pu.SV.GuestMmuLimitation, pu.HostMmu)
+		var gSys GlobalSystemVariables
+		InitGlobalSystemVariables(&gSys)
+		ses := NewSession(proto, guestMmu, pu.Mempool, pu, &gSys)
+		ses.SetRequestContext(ctx)
+		proto.ses = ses
 
 		res := make8ColumnsResultSet()
 
@@ -1952,6 +1966,18 @@ func Test_resultset(t *testing.T) {
 		}
 
 		proto := NewMysqlClientProtocol(0, ioses, 1024, sv)
+		eng := mock_frontend.NewMockEngine(ctrl)
+		txnClient := mock_frontend.NewMockTxnClient(ctrl)
+		pu, err := getParameterUnit("test/system_vars_config.toml", eng, txnClient)
+		if err != nil {
+			t.Error(err)
+		}
+		guestMmu := guest.New(pu.SV.GuestMmuLimitation, pu.HostMmu)
+		var gSys GlobalSystemVariables
+		InitGlobalSystemVariables(&gSys)
+		ses := NewSession(proto, guestMmu, pu.Mempool, pu, &gSys)
+		ses.SetRequestContext(ctx)
+		proto.ses = ses
 
 		res := make8ColumnsResultSet()
 
@@ -1973,6 +1999,18 @@ func Test_resultset(t *testing.T) {
 		}
 
 		proto := NewMysqlClientProtocol(0, ioses, 1024, sv)
+		eng := mock_frontend.NewMockEngine(ctrl)
+		txnClient := mock_frontend.NewMockTxnClient(ctrl)
+		pu, err := getParameterUnit("test/system_vars_config.toml", eng, txnClient)
+		if err != nil {
+			t.Error(err)
+		}
+		guestMmu := guest.New(pu.SV.GuestMmuLimitation, pu.HostMmu)
+		var gSys GlobalSystemVariables
+		InitGlobalSystemVariables(&gSys)
+		ses := NewSession(proto, guestMmu, pu.Mempool, pu, &gSys)
+		ses.SetRequestContext(ctx)
+		proto.ses = ses
 
 		res := make8ColumnsResultSet()
 
@@ -1980,6 +2018,40 @@ func Test_resultset(t *testing.T) {
 		convey.So(err, convey.ShouldBeNil)
 
 		err = proto.SendResultSetTextRow(res, 0)
+		convey.So(err, convey.ShouldBeNil)
+	})
+
+	convey.Convey("send binary result set succ", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+		ioses := mock_frontend.NewMockIOSession(ctrl)
+
+		ioses.EXPECT().OutBuf().Return(buf.NewByteBuf(1024)).AnyTimes()
+		ioses.EXPECT().Write(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+
+		sv, err := getSystemVariables("test/system_vars_config.toml")
+		if err != nil {
+			t.Error(err)
+		}
+
+		proto := NewMysqlClientProtocol(0, ioses, 1024, sv)
+		eng := mock_frontend.NewMockEngine(ctrl)
+		txnClient := mock_frontend.NewMockTxnClient(ctrl)
+		pu, err := getParameterUnit("test/system_vars_config.toml", eng, txnClient)
+		if err != nil {
+			t.Error(err)
+		}
+		guestMmu := guest.New(pu.SV.GuestMmuLimitation, pu.HostMmu)
+		var gSys GlobalSystemVariables
+		InitGlobalSystemVariables(&gSys)
+		ses := NewSession(proto, guestMmu, pu.Mempool, pu, &gSys)
+		ses.SetRequestContext(ctx)
+		ses.Cmd = int(COM_STMT_EXECUTE)
+		proto.ses = ses
+
+		res := make8ColumnsResultSet()
+
+		err = proto.SendResultSetTextBatchRowSpeedup(res, 0)
 		convey.So(err, convey.ShouldBeNil)
 	})
 }

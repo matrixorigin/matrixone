@@ -42,20 +42,23 @@ type TxnCtx struct {
 	StartTS, CommitTS, PrepareTS types.TS
 	Info                         []byte
 	State                        txnif.TxnState
-	Is2PC                        bool
+	Kind2PC                      bool
 }
 
 func NewTxnCtx(id uint64, start types.TS, info []byte) *TxnCtx {
 	ctx := &TxnCtx{
-		ID:       id,
-		IDCtx:    IDToIDCtx(id),
-		StartTS:  start,
-		CommitTS: txnif.UncommitTS,
-		Info:     info,
+		ID:        id,
+		IDCtx:     IDToIDCtx(id),
+		StartTS:   start,
+		PrepareTS: txnif.UncommitTS,
+		CommitTS:  txnif.UncommitTS,
+		Info:      info,
 	}
 	ctx.DoneCond = *sync.NewCond(ctx)
 	return ctx
 }
+
+func (ctx *TxnCtx) Is2PC() bool { return ctx.Kind2PC }
 
 func (ctx *TxnCtx) GetCtx() []byte {
 	return ctx.IDCtx
@@ -103,7 +106,7 @@ func (ctx *TxnCtx) resolveTxnState() txnif.TxnState {
 	ctx.DoneCond.L.Lock()
 	defer ctx.DoneCond.L.Unlock()
 	state := ctx.State
-	if state != txnif.TxnStateCommitting {
+	if state != txnif.TxnStatePreparing {
 		return state
 	}
 	ctx.DoneCond.Wait()
@@ -114,13 +117,13 @@ func (ctx *TxnCtx) resolveTxnState() txnif.TxnState {
 //
 // True when the txn state is committing, wait it to be committed or rollbacked. It
 // is used during snapshot reads. If TxnStateActive is currently returned, this value will
-// definitely not be used, because even if it becomes TxnStateCommitting later, the timestamp
+// definitely not be used, because even if it becomes TxnStatePreparing later, the timestamp
 // would be larger than the current read timestamp.
-func (ctx *TxnCtx) GetTxnState(waitIfcommitting bool) (state txnif.TxnState) {
+func (ctx *TxnCtx) GetTxnState(waitIfCommitting bool) (state txnif.TxnState) {
 	// Quick get the current txn state
-	// If waitIfcommitting is false, return the state
-	// If state is not txnif.TxnStateCommitting, return the state
-	if state = ctx.getTxnState(); !waitIfcommitting || state != txnif.TxnStateCommitting {
+	// If waitIfCommitting is false, return the state
+	// If state is not txnif.TxnStatePreparing, return the state
+	if state = ctx.getTxnState(); !waitIfCommitting || state != txnif.TxnStatePreparing {
 		return state
 	}
 
@@ -153,21 +156,8 @@ func (ctx *TxnCtx) ToPreparingLocked(ts types.TS) error {
 	return nil
 }
 
-func (ctx *TxnCtx) ToCommittingLocked(ts types.TS) error {
-	if ts.LessEq(ctx.StartTS) {
-		panic(fmt.Sprintf("start ts %d should be less than commit ts %d", ctx.StartTS, ts))
-	}
-	if !ctx.CommitTS.Equal(txnif.UncommitTS) {
-		return ErrTxnNotActive
-	}
-	ctx.CommitTS = ts
-	ctx.PrepareTS = ts
-	ctx.State = txnif.TxnStateCommitting
-	return nil
-}
-
 func (ctx *TxnCtx) ToCommittedLocked() error {
-	if ctx.State != txnif.TxnStateCommitting {
+	if ctx.State != txnif.TxnStatePreparing {
 		return ErrTxnNotCommitting
 	}
 	ctx.State = txnif.TxnStateCommitted
@@ -178,7 +168,7 @@ func (ctx *TxnCtx) ToRollbackingLocked(ts types.TS) error {
 	if ts.LessEq(ctx.StartTS) {
 		panic(fmt.Sprintf("start ts %d should be less than commit ts %d", ctx.StartTS, ts))
 	}
-	if (ctx.State != txnif.TxnStateActive) && (ctx.State != txnif.TxnStateCommitting) {
+	if (ctx.State != txnif.TxnStateActive) && (ctx.State != txnif.TxnStatePreparing) {
 		return ErrTxnCannotRollback
 	}
 	ctx.CommitTS = ts

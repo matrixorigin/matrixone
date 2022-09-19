@@ -56,17 +56,20 @@ type IOVector struct {
 	// s3:a/b/c S3:a/b/c represents the same file 'a/b/c' located in 'S3' service
 	FilePath string
 	// io entries
-	// empty Entries not allowed
+	// empty Entries is not allowed
+	// when writing, overlapping Entries is not allowed
 	Entries []IOEntry
 }
 
 type IOEntry struct {
-	// offset in file, [0, len(file) - 1]
-	Offset int
+	// offset in file
+	// when writing or mutating, offset can be arbitrary value, gaps between provided data are zero-filled
+	// when reading, valid offsets are in range [0, len(file) - 1]
+	Offset int64
 
 	// number of bytes to read or write, [1, len(file)]
 	// when reading, pass -1 to read to the end of file
-	Size int
+	Size int64
 
 	// raw content
 	// when reading, if len(Data) < Size, a new Size-lengthed byte slice will be allocated
@@ -90,12 +93,12 @@ type IOEntry struct {
 	// the io.Reader must be fully read before returning nil error
 	// return an *RC value to make the object pinnable
 	// cache implementations should not evict an *RC value with non-zero reference
-	ToObject func(r io.Reader) (object any, objectSize int, err error)
+	ToObject func(r io.Reader) (object any, objectSize int64, err error)
 
 	// ObjectSize indicates the memory bytes to hold the object
 	// set from ToObject returning value
 	// used in capacity limited caches
-	ObjectSize int
+	ObjectSize int64
 
 	// ignore indicates the entry should be ignored
 	// if true, implementations must not change any field
@@ -108,5 +111,5 @@ type DirEntry struct {
 	// file name, not full path
 	Name  string
 	IsDir bool
-	Size  int
+	Size  int64
 }

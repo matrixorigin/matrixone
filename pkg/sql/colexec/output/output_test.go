@@ -52,7 +52,7 @@ func init() {
 	gm := guest.New(1<<30, hm)
 	tcs = []outputTestCase{
 		{
-			proc: process.New(mheap.New(gm)),
+			proc: testutil.NewProcessWithMheap(mheap.New(gm)),
 			types: []types.Type{
 				{Oid: types.T_int8},
 			},
@@ -94,11 +94,11 @@ func TestOutput(t *testing.T) {
 		tc.proc.Reg.InputBatch = nil
 		_, err = Call(0, tc.proc, tc.arg)
 		require.NoError(t, err)
-		require.Equal(t, int64(0), mheap.Size(tc.proc.Mp))
+		require.Equal(t, int64(0), mheap.Size(tc.proc.Mp()))
 	}
 }
 
 // create a new block based on the type information
 func newBatch(t *testing.T, ts []types.Type, proc *process.Process, rows int64) *batch.Batch {
-	return testutil.NewBatch(ts, false, int(rows), proc.Mp)
+	return testutil.NewBatch(ts, false, int(rows), proc.Mp())
 }

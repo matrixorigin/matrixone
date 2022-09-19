@@ -283,6 +283,9 @@ type MysqlProtocolImpl struct {
 	//for encoding the length into bytes
 	lenEncBuffer []byte
 
+	//for encoding the null bytes in binary row
+	binaryNullBuffer []byte
+
 	rowHandler
 
 	SV *config.FrontendParameters
@@ -898,6 +901,24 @@ func (mp *MysqlProtocolImpl) appendUint8(data []byte, e uint8) []byte {
 	return mp.append(data, e)
 }
 
+func (mp *MysqlProtocolImpl) appendUint16(data []byte, e uint16) []byte {
+	buf := mp.lenEncBuffer[:2]
+	pos := mp.io.WriteUint16(buf, 0, e)
+	return mp.append(data, buf[:pos]...)
+}
+
+func (mp *MysqlProtocolImpl) appendUint32(data []byte, e uint32) []byte {
+	buf := mp.lenEncBuffer[:4]
+	pos := mp.io.WriteUint32(buf, 0, e)
+	return mp.append(data, buf[:pos]...)
+}
+
+func (mp *MysqlProtocolImpl) appendUint64(data []byte, e uint64) []byte {
+	buf := mp.lenEncBuffer[:8]
+	pos := mp.io.WriteUint64(buf, 0, e)
+	return mp.append(data, buf[:pos]...)
+}
+
 // write the count of zeros into the buffer at the position
 // return pos + count
 func (mp *MysqlProtocolImpl) writeZeros(data []byte, pos int, count int) int {
@@ -1062,8 +1083,8 @@ func (mp *MysqlProtocolImpl) handleHandshake(payload []byte) (bool, error) {
 	}
 
 	if err := mp.authenticateUser(authResponse); err != nil {
-		fail := errorMsgRefer[ER_ACCESS_DENIED_ERROR]
-		_ = mp.sendErrPacket(fail.errorCode, fail.sqlStates[0], "Access denied for user")
+		fail := moerr.MysqlErrorMsgRefer[moerr.ER_ACCESS_DENIED_ERROR]
+		_ = mp.sendErrPacket(fail.ErrorCode, fail.SqlStates[0], "Access denied for user")
 		return false, err
 	}
 
@@ -1632,6 +1653,128 @@ func (mp *MysqlProtocolImpl) sendColumns(mrs *MysqlResultSet, cmd int, warnings,
 }
 
 // the server convert every row of the result set into the format that mysql protocol needs
+func (mp *MysqlProtocolImpl) makeResultSetBinaryRow(data []byte, mrs *MysqlResultSet, rowIdx uint64) ([]byte, error) {
+	data = mp.append(data, defines.OKHeader) // append OkHeader
+
+	// get null buffer
+	buffer := mp.binaryNullBuffer[:0]
+	columnsLength := mrs.GetColumnCount()
+	numBytes4Null := (columnsLength + 7 + 2) / 8
+	for i := uint64(0); i < numBytes4Null; i++ {
+		buffer = append(buffer, 0)
+	}
+	for i := uint64(0); i < columnsLength; i++ {
+		if isNil, err := mrs.ColumnIsNull(rowIdx, i); err != nil {
+			return nil, err
+		} else if isNil {
+			bytePos := (i + 2) / 8
+			bitPos := byte((i + 2) % 8)
+			idx := int(bytePos)
+			buffer[idx] |= 1 << bitPos
+			continue
+		}
+	}
+	data = mp.append(data, buffer...)
+
+	for i := uint64(0); i < columnsLength; i++ {
+		if isNil, err := mrs.ColumnIsNull(rowIdx, i); err != nil {
+			return nil, err
+		} else if isNil {
+			continue
+		}
+
+		column, err := mrs.GetColumn(uint64(i))
+		if err != nil {
+			return nil, err
+		}
+		mysqlColumn, ok := column.(*MysqlColumn)
+		if !ok {
+			return nil, fmt.Errorf("sendColumn need MysqlColumn")
+		}
+
+		switch mysqlColumn.ColumnType() {
+		case defines.MYSQL_TYPE_TINY:
+			if value, err := mrs.GetInt64(rowIdx, i); err != nil {
+				return nil, err
+			} else {
+				data = mp.appendUint8(data, uint8(value))
+			}
+		case defines.MYSQL_TYPE_SHORT, defines.MYSQL_TYPE_YEAR:
+			if value, err := mrs.GetInt64(rowIdx, i); err != nil {
+				return nil, err
+			} else {
+				data = mp.appendUint16(data, uint16(value))
+			}
+		case defines.MYSQL_TYPE_INT24, defines.MYSQL_TYPE_LONG:
+			if value, err := mrs.GetInt64(rowIdx, i); err != nil {
+				return nil, err
+			} else {
+				buffer = mp.appendUint32(buffer, uint32(value))
+			}
+		case defines.MYSQL_TYPE_LONGLONG:
+			if value, err := mrs.GetUint64(rowIdx, i); err != nil {
+				return nil, err
+			} else {
+				buffer = mp.appendUint64(buffer, value)
+			}
+		case defines.MYSQL_TYPE_FLOAT:
+			if value, err := mrs.GetFloat64(rowIdx, i); err != nil {
+				return nil, err
+			} else {
+				buffer = mp.appendUint32(buffer, math.Float32bits(float32(value)))
+			}
+		case defines.MYSQL_TYPE_DOUBLE:
+			if value, err := mrs.GetFloat64(rowIdx, i); err != nil {
+				return nil, err
+			} else {
+				buffer = mp.appendUint64(buffer, math.Float64bits(value))
+			}
+		case defines.MYSQL_TYPE_VARCHAR, defines.MYSQL_TYPE_VAR_STRING, defines.MYSQL_TYPE_STRING, defines.MYSQL_TYPE_BLOB:
+			if value, err := mrs.GetString(rowIdx, i); err != nil {
+				return nil, err
+			} else {
+				data = mp.appendStringLenEnc(data, value)
+			}
+		// TODO: some type, we use string now. someday need fix it
+		case defines.MYSQL_TYPE_DECIMAL:
+			if value, err := mrs.GetString(rowIdx, i); err != nil {
+				return nil, err
+			} else {
+				data = mp.appendStringLenEnc(data, value)
+			}
+		case defines.MYSQL_TYPE_UUID:
+			if value, err := mrs.GetString(rowIdx, i); err != nil {
+				return nil, err
+			} else {
+				data = mp.appendStringLenEnc(data, value)
+			}
+		case defines.MYSQL_TYPE_DATE:
+			if value, err := mrs.GetString(rowIdx, i); err != nil {
+				return nil, err
+			} else {
+				data = mp.appendStringLenEnc(data, value)
+			}
+		case defines.MYSQL_TYPE_DATETIME:
+			if value, err := mrs.GetString(rowIdx, i); err != nil {
+				return nil, err
+			} else {
+				data = mp.appendStringLenEnc(data, value)
+			}
+		case defines.MYSQL_TYPE_TIMESTAMP:
+			if value, err := mrs.GetString(rowIdx, i); err != nil {
+				return nil, err
+			} else {
+				data = mp.appendStringLenEnc(data, value)
+			}
+		default:
+			return nil, moerr.NewError(moerr.INTERNAL_ERROR, "type is not supported in binary text result row")
+		}
+	}
+
+	return data, nil
+}
+
+// the server convert every row of the result set into the format that mysql protocol needs
 func (mp *MysqlProtocolImpl) makeResultSetTextRow(data []byte, mrs *MysqlResultSet, r uint64) ([]byte, error) {
 	for i := uint64(0); i < mrs.GetColumnCount(); i++ {
 		column, err := mrs.GetColumn(i)
@@ -1665,6 +1808,12 @@ func (mp *MysqlProtocolImpl) makeResultSetTextRow(data []byte, mrs *MysqlResultS
 				data = mp.appendStringLenEnc(data, value)
 			}
 		case defines.MYSQL_TYPE_DECIMAL:
+			if value, err2 := mrs.GetString(r, i); err2 != nil {
+				return nil, err2
+			} else {
+				data = mp.appendStringLenEnc(data, value)
+			}
+		case defines.MYSQL_TYPE_UUID:
 			if value, err2 := mrs.GetString(r, i); err2 != nil {
 				return nil, err2
 			} else {
@@ -1772,6 +1921,12 @@ func (mp *MysqlProtocolImpl) SendResultSetTextBatchRowSpeedup(mrs *MysqlResultSe
 	defer mp.GetLock().Unlock()
 	var err error = nil
 
+	binary := false
+	// XXX now we known COM_QUERY will use textRow, COM_STMT_EXECUTE use binaryRow
+	if mp.ses.Cmd == int(COM_STMT_EXECUTE) {
+		binary = true
+	}
+
 	//make rows into the batch
 	for i := uint64(0); i < cnt; i++ {
 		err = mp.openRow(nil)
@@ -1779,12 +1934,16 @@ func (mp *MysqlProtocolImpl) SendResultSetTextBatchRowSpeedup(mrs *MysqlResultSe
 			return err
 		}
 		//begin1 := time.Now()
-		_, err = mp.makeResultSetTextRow(nil, mrs, i)
+		if binary {
+			_, err = mp.makeResultSetBinaryRow(nil, mrs, i)
+		} else {
+			_, err = mp.makeResultSetTextRow(nil, mrs, i)
+		}
 		//mp.makeTime += time.Since(begin1)
 
 		if err != nil {
 			//ERR_Packet in case of error
-			err1 := mp.sendErrPacket(ER_UNKNOWN_ERROR, DefaultMySQLState, err.Error())
+			err1 := mp.sendErrPacket(moerr.ER_UNKNOWN_ERROR, DefaultMySQLState, err.Error())
 			if err1 != nil {
 				return err1
 			}
@@ -1992,7 +2151,7 @@ func (mp *MysqlProtocolImpl) sendResultSetTextRow(mrs *MysqlResultSet, r uint64)
 	}
 	if _, err = mp.makeResultSetTextRow(nil, mrs, r); err != nil {
 		//ERR_Packet in case of error
-		err1 := mp.sendErrPacket(ER_UNKNOWN_ERROR, DefaultMySQLState, err.Error())
+		err1 := mp.sendErrPacket(moerr.ER_UNKNOWN_ERROR, DefaultMySQLState, err.Error())
 		if err1 != nil {
 			return err1
 		}
@@ -2190,11 +2349,12 @@ func NewMysqlClientProtocol(connectionID uint32, tcp goetty.IOSession, maxBytesT
 			connectionID: connectionID,
 			established:  false,
 		},
-		sequenceId:    0,
-		charset:       "utf8mb4",
-		capability:    DefaultCapability,
-		strconvBuffer: make([]byte, 0, 16*1024),
-		lenEncBuffer:  make([]byte, 0, 10),
+		sequenceId:       0,
+		charset:          "utf8mb4",
+		capability:       DefaultCapability,
+		strconvBuffer:    make([]byte, 0, 16*1024),
+		lenEncBuffer:     make([]byte, 0, 10),
+		binaryNullBuffer: make([]byte, 0, 512),
 		rowHandler: rowHandler{
 			beginWriteIndex:           0,
 			bytesInOutBuffer:          0,

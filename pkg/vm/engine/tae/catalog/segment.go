@@ -219,8 +219,9 @@ func (entry *SegmentEntry) DropBlockEntry(id uint64, txn txnif.AsyncTxn) (delete
 		waitTxn.GetTxnState(true)
 		blk.Lock()
 	}
-	err = blk.DropEntryLocked(txn)
-	if err == nil {
+	var isNewNode bool
+	isNewNode, err = blk.DropEntryLocked(txn)
+	if err == nil && isNewNode {
 		deleted = blk
 	}
 	return
@@ -377,7 +378,7 @@ func (entry *SegmentEntry) IsActive() bool {
 	return !dropped
 }
 
-func (entry *SegmentEntry) TreeMaxDropCommitEntry() BaseEntryIf {
+func (entry *SegmentEntry) TreeMaxDropCommitEntry() BaseEntry {
 	table := entry.GetTable()
 	db := table.GetDB()
 	if db.IsDroppedCommitted() {

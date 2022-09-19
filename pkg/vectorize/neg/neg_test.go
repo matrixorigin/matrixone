@@ -53,10 +53,19 @@ func TestI64Sum(t *testing.T) {
 }
 
 func TestDecimal64Neg(t *testing.T) {
-	xs := []types.Decimal64{types.InitDecimal64(123), types.InitDecimal64(234), types.InitDecimal64(345), types.Decimal64_Zero, types.InitDecimal64(-234)}
+	d1, _ := types.InitDecimal64(123, 64, 0)
+	d2, _ := types.InitDecimal64(234, 64, 0)
+	d3, _ := types.InitDecimal64(345, 64, 0)
+	d4, _ := types.InitDecimal64(-234, 64, 0)
+	d5, _ := types.InitDecimal64(-123, 64, 0)
+	d6, _ := types.InitDecimal64(-234, 64, 0)
+	d7, _ := types.InitDecimal64(-345, 64, 0)
+	d8, _ := types.InitDecimal64(234, 64, 0)
+
+	xs := []types.Decimal64{d1, d2, d3, types.Decimal64_Zero, d4}
 	rs := make([]types.Decimal64, len(xs))
 	rs = Decimal64Neg(xs, rs)
-	expectedResult := []types.Decimal64{types.InitDecimal64(-123), types.InitDecimal64(-234), types.InitDecimal64(-345), types.Decimal64_Zero, types.InitDecimal64(234)}
+	expectedResult := []types.Decimal64{d5, d6, d7, types.Decimal64_Zero, d8}
 	for i, r := range rs {
 		require.True(t, r.Eq(expectedResult[i]))
 	}

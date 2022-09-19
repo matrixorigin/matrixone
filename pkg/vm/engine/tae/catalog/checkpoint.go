@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -41,13 +42,10 @@ type CheckpointItem interface {
 	StringLocked() string
 }
 
-func CheckpointSelectOp(entry BaseEntryIf, minTs, maxTs types.TS) bool {
+func CheckpointSelectOp(entry BaseEntry, minTs, maxTs types.TS) bool {
 	entry.RLock()
 	defer entry.RUnlock()
-	if entry.InTxnOrRollbacked() {
-		return false
-	}
-	return entry.ExistUpdate(minTs, maxTs)
+	return entry.HasCommittedNodeInRange(minTs, maxTs)
 }
 
 type CatalogEntry interface {

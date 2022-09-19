@@ -154,6 +154,14 @@ func initTypeCheckRelated() {
 			}
 		}
 
+		{
+			typ := types.T_uuid
+			for _, t1 := range strings {
+				convertRuleForBinaryTable = append(convertRuleForBinaryTable, [4]types.T{t1, typ, typ, typ})
+				convertRuleForBinaryTable = append(convertRuleForBinaryTable, [4]types.T{typ, t1, typ, typ})
+			}
+		}
+
 		convertRuleForBinaryTable = append(convertRuleForBinaryTable, [4]types.T{types.T_uint64, types.T_int64, types.T_int64, types.T_int64})
 		convertRuleForBinaryTable = append(convertRuleForBinaryTable, [4]types.T{types.T_int64, types.T_uint64, types.T_int64, types.T_int64})
 		convertRuleForBinaryTable = append(convertRuleForBinaryTable, [4]types.T{types.T_date, types.T_datetime, types.T_datetime, types.T_datetime})
@@ -360,12 +368,12 @@ func initTypeCheckRelated() {
 
 	// init preferredTypeConvert
 	preferredConversion := map[types.T][]types.T{
-		types.T_int8:       {types.T_int64, types.T_int32, types.T_int16, types.T_float64},
-		types.T_int16:      {types.T_int64, types.T_int32, types.T_float64},
+		types.T_int8:       {types.T_int64, types.T_int32, types.T_int16, types.T_float32, types.T_float64},
+		types.T_int16:      {types.T_int64, types.T_int32, types.T_float32, types.T_float64},
 		types.T_int32:      {types.T_int64, types.T_float64},
 		types.T_int64:      {types.T_float64},
-		types.T_uint8:      {types.T_uint64, types.T_uint32, types.T_uint16, types.T_float64},
-		types.T_uint16:     {types.T_uint64, types.T_uint32, types.T_float64},
+		types.T_uint8:      {types.T_uint64, types.T_uint32, types.T_uint16, types.T_float32, types.T_float64},
+		types.T_uint16:     {types.T_uint64, types.T_uint32, types.T_float32, types.T_float64},
 		types.T_uint32:     {types.T_uint64, types.T_float64},
 		types.T_uint64:     {types.T_int64, types.T_float64},
 		types.T_float32:    {types.T_float64},

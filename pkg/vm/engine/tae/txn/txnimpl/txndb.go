@@ -52,6 +52,7 @@ func (db *txnDB) SetCreateEntry(e txnif.TxnEntry) error {
 		panic("logic error")
 	}
 	db.store.IncreateWriteCnt()
+	db.store.dirtyMemo.recordCatalogChange()
 	db.createEntry = e
 	return nil
 }
@@ -61,6 +62,7 @@ func (db *txnDB) SetDropEntry(e txnif.TxnEntry) error {
 		panic("logic error")
 	}
 	db.store.IncreateWriteCnt()
+	db.store.dirtyMemo.recordCatalogChange()
 	db.dropEntry = e
 	return nil
 }
@@ -185,7 +187,7 @@ func (db *txnDB) CreateRelation(def any) (relation handle.Relation, err error) {
 }
 
 func (db *txnDB) DropRelationByName(name string) (relation handle.Relation, err error) {
-	meta, err := db.entry.DropTableEntry(name, db.store.txn)
+	hasNewTxnEntry, meta, err := db.entry.DropTableEntry(name, db.store.txn)
 	if err != nil {
 		return nil, err
 	}
@@ -194,7 +196,9 @@ func (db *txnDB) DropRelationByName(name string) (relation handle.Relation, err 
 		return nil, err
 	}
 	relation = newRelation(table)
-	err = table.SetDropEntry(meta)
+	if hasNewTxnEntry {
+		err = table.SetDropEntry(meta)
+	}
 	return
 }
 
@@ -300,7 +304,9 @@ func (db *txnDB) SoftDeleteSegment(id *common.ID) (err error) {
 	}
 	return table.SoftDeleteSegment(id.SegmentID)
 }
-
+func (db *txnDB) NeedRollback() bool {
+	return db.createEntry != nil && db.dropEntry != nil
+}
 func (db *txnDB) ApplyRollback() (err error) {
 	if db.createEntry != nil {
 		if err = db.createEntry.ApplyRollback(db.store.cmdMgr.MakeLogIndex(db.ddlCSN)); err != nil {
@@ -320,21 +326,15 @@ func (db *txnDB) ApplyRollback() (err error) {
 	return
 }
 
-// ApplyPrepare apply preparing for a 2PC distributed transaction
-func (db *txnDB) Apply2PCPrepare() (err error) {
-	now := time.Now()
+func (db *txnDB) WaitPrepared() (err error) {
 	for _, table := range db.tables {
 		table.WaitSynced()
 	}
-	logutil.Debugf("Txn-%d ApplyCommit Takes %s", db.store.txn.GetID(), time.Since(now))
 	return
 }
 
 func (db *txnDB) ApplyCommit() (err error) {
 	now := time.Now()
-	for _, table := range db.tables {
-		table.WaitSynced()
-	}
 	if db.createEntry != nil {
 		if err = db.createEntry.ApplyCommit(db.store.cmdMgr.MakeLogIndex(db.ddlCSN)); err != nil {
 			return
@@ -354,14 +354,22 @@ func (db *txnDB) ApplyCommit() (err error) {
 	return
 }
 
-func (db *txnDB) PreCommitOr2PCPrepare() (err error) {
+func (db *txnDB) PrePrepare() (err error) {
 	for _, table := range db.tables {
-		if err = table.PreCommitOr2PCPrepareDedup(); err != nil {
+		if table.NeedRollback() {
+			if err = table.PrepareRollback(); err != nil {
+				return
+			}
+			delete(db.tables, table.GetID())
+		}
+	}
+	for _, table := range db.tables {
+		if err = table.PrePrepareDedup(); err != nil {
 			return
 		}
 	}
 	for _, table := range db.tables {
-		if err = table.PreCommitOr2PCPrepare(); err != nil {
+		if err = table.PrePrepare(); err != nil {
 			panic(err)
 		}
 	}
@@ -391,39 +399,6 @@ func (db *txnDB) PrepareCommit() (err error) {
 	return
 }
 
-func (db *txnDB) Prepare2PCPrepare() (err error) {
-	now := time.Now()
-	if db.createEntry != nil {
-		if err = db.createEntry.Prepare2PCPrepare(); err != nil {
-			return
-		}
-	}
-	for _, table := range db.tables {
-		if err = table.Prepare2PCPrepare(); err != nil {
-			break
-		}
-	}
-	if db.dropEntry != nil {
-		if err = db.dropEntry.Prepare2PCPrepare(); err != nil {
-			return
-		}
-	}
-
-	logutil.Debugf("Txn-%d PrepareCommit Takes %s", db.store.txn.GetID(), time.Since(now))
-
-	return
-}
-
-func (db *txnDB) PreApply2PCPrepare() (err error) {
-	for _, table := range db.tables {
-		// table.ApplyAppend()
-		if err = table.PreApply2PCPrepare(); err != nil {
-			return
-		}
-	}
-	return
-}
-
 func (db *txnDB) PreApplyCommit() (err error) {
 	for _, table := range db.tables {
 		// table.ApplyAppend()
@@ -438,9 +413,6 @@ func (db *txnDB) CollectCmd(cmdMgr *commandManager) (err error) {
 	if db.createEntry != nil {
 		csn := cmdMgr.GetCSN()
 		entry := db.createEntry
-		if db.dropEntry != nil {
-			entry = db.createEntry.(*catalog.DBEntry).CloneCreateEntry()
-		}
 		cmd, err := entry.MakeCommand(csn)
 		if err != nil {
 			panic(err)

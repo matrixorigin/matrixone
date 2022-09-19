@@ -20,7 +20,7 @@ import (
 	"github.com/lni/dragonboat/v4/logger"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/logutil/logutil2"
-	"github.com/matrixorigin/matrixone/pkg/util/errors"
+	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"go.uber.org/zap"
@@ -42,12 +42,12 @@ func (l logOutputExecutor) Query(ctx context.Context, s string, _ ie.SessionOver
 func (l logOutputExecutor) ApplySessionOverride(ie.SessionOverrideOptions) {}
 
 func bootstrap(ctx context.Context) (context.Context, error) {
-	logutil.SetupMOLogger(&logutil.LogConfig{Format: "console", EnableStore: true})
+	logutil.SetupMOLogger(&logutil.LogConfig{Format: "console", DisableStore: false})
 	// init trace/log/error framework & BatchProcessor
 	return trace.Init(ctx,
 		trace.WithMOVersion("v0.6.0"),
 		// nodeType like CN/DN/LogService; id maybe in config.
-		trace.WithNode("node_uuid", trace.NodeTypeNode),
+		trace.WithNode("node_uuid", trace.NodeTypeStandalone),
 		// config[enableTrace], default: true
 		trace.EnableTracer(true),
 		// config[traceBatchProcessor], distributed node should use "FileService" in system_vars_config.toml
@@ -132,24 +132,18 @@ func errorUsage(ctx context.Context) {
 	logutil.Infof("base err: %v", base)
 
 	// case 1: WithMessage
-	outputError("WithMessage", errors.WithMessage(base, "new message"))
-	outputError("WithMessagef", errors.WithMessagef(base, "new %s", "world"))
+	// removed
 
 	// case 2: WithStack
-	outputError("WithStack", errors.WithStack(base))
+	// removed
 
 	// case 3: WithContext, store db & log
 	logutil.Info("WithContext with default action: 1) store in db; 2) gen log")
-	outputError("WithContext", errors.WithContext(newCtx, base))
-	outputError("Wrapf", errors.Wrapf(base, "extra message"))
+	outputError("WithContext", errutil.WithContext(newCtx, base))
+	outputError("Wrapf", errutil.Wrapf(base, "extra message"))
 
-	// case 4: New, store db & log
-	logutil.Info("errors.New without ctx, with default action: 1) store in db; 2) gen log")
-	outputError("New", errors.New("new"))
-
-	// case 5: NewWithContext, store db & log
-	logutil.Info("errors.New with ctx, with default action: 1) store in db; 2) gen log")
-	outputError("New", errors.NewWithContext(newCtx, "new with ctx"))
+	// case 4: NewWithContext, store db & log
+	// removed
 
 }
 
@@ -160,56 +154,34 @@ type FunctionRequest struct {
 type rpcRequest struct {
 	message []byte
 }
-type rpcResponse struct {
-	message string
-}
-type rpcServer struct {
-}
-type rpcClient struct {
-}
-
-var gServer = &rpcServer{}
 
 func rpcUsage(ctx context.Context) {
-	newCtx, span := trace.Start(ctx, "rpcUsage", trace.WithNewRoot(true))
+	ctx, span := trace.Start(ctx, "rpcUsage", trace.WithNewRoot(true))
 	defer span.End()
 	req := &FunctionRequest{
-		SpanContext: trace.SpanFromContext(newCtx).SpanContext(),
+		SpanContext: trace.SpanFromContext(ctx).SpanContext(),
 	}
-	logutil2.Info(newCtx, "client call Function")
-	_ = callFunction(newCtx, req)
-}
+	logutil2.Info(ctx, "client call Function")
 
-func callFunction(ctx context.Context, req *FunctionRequest) error {
-	rpcReq := &rpcRequest{message: make([]byte, 16)}
+	// serialize
+	rpcReq := &rpcRequest{message: make([]byte, 24)}
 	if _, err := req.SpanContext.MarshalTo(rpcReq.message); err != nil {
 		logutil.Errorf("callFunction: %v", err)
-		return err
+		panic(err)
 	}
+	logutil2.Infof(ctx, "message: %x", rpcReq.message)
 
-	client := &rpcClient{}
-	resp, err := client.Function(ctx, rpcReq)
-	logutil2.Infof(ctx, "resp: %s", resp.message)
-	return err
-}
-
-func (s *rpcClient) Function(ctx context.Context, req *rpcRequest) (*rpcResponse, error) {
-	return gServer.Function(ctx, req)
-}
-
-func (s *rpcServer) Function(ctx context.Context, req *rpcRequest) (*rpcResponse, error) {
-
+	// deserialize
 	var sc trace.SpanContext
-	if err := sc.Unmarshal(req.message); err != nil {
-		return &rpcResponse{message: "error"}, err
+	if err := sc.Unmarshal(rpcReq.message); err != nil {
+		panic(err)
 	}
-	rootCtx := trace.ContextWithSpanContext(ctx, sc)
-	logutil2.Info(rootCtx, "server accept request")
-	newCtx, span := trace.Start(rootCtx, "Function")
-	defer span.End()
+	svrRootCtx := trace.ContextWithSpanContext(ctx, sc)
+	logutil2.Info(svrRootCtx, "server accept request")
+	newCtx2, span2 := trace.Start(svrRootCtx, "Function")
+	defer span2.End()
 
-	logutil2.Info(newCtx, "server do Function, have same TraceId from client.")
-	return &rpcResponse{message: "success"}, nil
+	logutil2.Info(newCtx2, "server do Function, have same TraceId from client.")
 }
 
 func mixUsage(ctx context.Context) {
@@ -219,13 +191,13 @@ func mixUsage(ctx context.Context) {
 	logutil.Info("message", trace.ContextField(newCtx))
 
 	err := childFunc(newCtx)
-	trace.ReportError(newCtx, errors.Wrapf(err, "extra %s", "message"))
+	trace.ReportError(newCtx, errutil.Wrapf(err, "extra %s", "message"))
 
 }
 
 func childFunc(ctx context.Context) error {
 	err := goErrors.New("example: not found Database")
-	return errors.WithContext(ctx, err)
+	return errutil.WithContext(ctx, err)
 }
 
 func shutdown(ctx context.Context) {

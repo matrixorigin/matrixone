@@ -20,8 +20,8 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/config"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/moengine"
 	"github.com/matrixorigin/matrixone/pkg/vm/mempool"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
 )
@@ -49,10 +49,7 @@ type Routine struct {
 	routineMgr *RoutineManager
 
 	ses *Session
-	// TODO: The current protocol and mysql access code, designed to be
-	// confusing, will lead to multiple calls to Quit, here the use of
-	// sync.Once also just to solve the problem of multiple closures, the
-	// code needs to be refactored
+	// TODO: the initialization and closure of application in goetty should be clear in 0.7
 	closeOnce sync.Once
 }
 
@@ -91,7 +88,6 @@ func (routine *Routine) Loop(routineCtx context.Context) {
 	var req *Request = nil
 	var err error
 	var resp *Response
-	defer routine.Quit()
 	//session for the connection
 	for {
 		quit := false
@@ -117,9 +113,9 @@ func (routine *Routine) Loop(routineCtx context.Context) {
 		routine.executor.(*MysqlCmdExecutor).setCancelRequestFunc(cancelRequestFunc)
 		ses := routine.GetSession()
 		tenant := ses.GetTenantInfo()
-		tenantCtx := context.WithValue(cancelRequestCtx, moengine.TenantIDKey{}, tenant.GetTenantID())
-		tenantCtx = context.WithValue(tenantCtx, moengine.UserIDKey{}, tenant.GetUserID())
-		tenantCtx = context.WithValue(tenantCtx, moengine.RoleIDKey{}, tenant.GetDefaultRoleID())
+		tenantCtx := context.WithValue(cancelRequestCtx, defines.TenantIDKey{}, tenant.GetTenantID())
+		tenantCtx = context.WithValue(tenantCtx, defines.UserIDKey{}, tenant.GetUserID())
+		tenantCtx = context.WithValue(tenantCtx, defines.RoleIDKey{}, tenant.GetDefaultRoleID())
 		ses.SetRequestContext(tenantCtx)
 		routine.executor.PrepareSessionBeforeExecRequest(routine.GetSession())
 

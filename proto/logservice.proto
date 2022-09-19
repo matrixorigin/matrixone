@@ -36,10 +36,11 @@ enum NodeState {
 }
 
 message CNStore {
-  string    UUID           = 1;
-  string    ServiceAddress = 2;
-  uint64    Tick           = 3;
-  NodeState State          = 4;
+  string          UUID           = 1;
+  string          ServiceAddress = 2;
+  metadata.CNRole Role           = 3;
+  uint64          Tick           = 4;
+  NodeState       State          = 5;
 }
 
 message DNStore {
@@ -88,8 +89,9 @@ message LogReplicaInfo {
 
 // CNStoreHeartbeat is the periodic message sent tp the HAKeeper by CN stores.
 message CNStoreHeartbeat {
-  string UUID           = 1;
-  string ServiceAddress = 2;
+  string          UUID           = 1;
+  string          ServiceAddress = 2;
+  metadata.CNRole Role           = 3;
 }
 
 // LogStoreHeartbeat is the periodic message sent to the HAKeeper by Log Stores.
@@ -323,8 +325,9 @@ message CommandBatch {
 
 // CNStoreInfo contains information on a CN store.
 message CNStoreInfo {
-  uint64 Tick                 = 1;
-  string ServiceAddress       = 2;
+  uint64          Tick           = 1;
+  string          ServiceAddress = 2;
+  metadata.CNRole Role           = 3;
 }
 
 // CNState contains all CN details known to the HAKeeper.
@@ -395,7 +398,8 @@ message CheckerState {
   ClusterInfo ClusterInfo = 2 [(gogoproto.nullable) = false];
   DNState DNState         = 3 [(gogoproto.nullable) = false];
   LogState LogState       = 4 [(gogoproto.nullable) = false];
-  HAKeeperState State     = 5;
+  CNState CNState         = 5 [(gogoproto.nullable) = false];
+  HAKeeperState State     = 6;
 }
 
 // HAKeeperRSMState contains state maintained by HAKeeper's RSM.

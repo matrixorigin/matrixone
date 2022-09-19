@@ -75,6 +75,8 @@ func Open(dirname string, opts *options.Options) (db *DB, err error) {
 	txnStoreFactory := txnimpl.TxnStoreFactory(db.Opts.Catalog, db.Wal, txnBufMgr, dataFactory)
 	txnFactory := txnimpl.TxnFactory(db.Opts.Catalog)
 	db.TxnMgr = txnbase.NewTxnManager(txnStoreFactory, txnFactory, db.Opts.Clock)
+	db.LogtailMgr = NewLogtailMgr(db.Opts.LogtailCfg.PageSize, db.Opts.Clock)
+	db.TxnMgr.CommitListener.AddTxnCommitListener(db.LogtailMgr)
 
 	db.Replay(dataFactory)
 	db.Catalog.ReplayTableRows()

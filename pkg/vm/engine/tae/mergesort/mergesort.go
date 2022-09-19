@@ -16,6 +16,7 @@ package mergesort
 
 import (
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort/uuids"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -23,6 +24,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort/decimal128s"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort/decimal64s"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort/numerics"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort/rowid"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort/txnts"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort/varchar"
 )
 
@@ -62,6 +65,12 @@ func SortBlockColumns(cols []containers.Vector, pk int) ([]uint32, error) {
 		decimal128s.Sort(cols[pk], sortedIdx)
 	case types.T_timestamp:
 		numerics.Sort[types.Timestamp](cols[pk], sortedIdx)
+	case types.T_uuid:
+		uuids.Sort(cols[pk], sortedIdx)
+	case types.T_TS:
+		txnts.Sort(cols[pk], sortedIdx)
+	case types.T_Rowid:
+		rowid.Sort(cols[pk], sortedIdx)
 	case types.T_char, types.T_json, types.T_varchar, types.T_blob:
 		varchar.Sort(cols[pk], sortedIdx)
 	default:
@@ -109,8 +118,14 @@ func MergeSortedColumn(column []containers.Vector, sortedIdx *[]uint32, fromLayo
 		ret, mapping = decimal64s.Merge(column, sortedIdx, fromLayout, toLayout)
 	case types.T_decimal128:
 		ret, mapping = decimal128s.Merge(column, sortedIdx, fromLayout, toLayout)
+	case types.T_uuid:
+		ret, mapping = uuids.Merge(column, sortedIdx, fromLayout, toLayout)
 	case types.T_timestamp:
 		ret, mapping = numerics.Merge[types.Timestamp](column, sortedIdx, fromLayout, toLayout)
+	case types.T_TS:
+		ret, mapping = txnts.Merge(column, sortedIdx, fromLayout, toLayout)
+	case types.T_Rowid:
+		ret, mapping = rowid.Merge(column, sortedIdx, fromLayout, toLayout)
 	case types.T_char, types.T_json, types.T_varchar, types.T_blob:
 		ret, mapping = varchar.Merge(column, sortedIdx, fromLayout, toLayout)
 	default:

@@ -29,12 +29,12 @@ import (
 	"github.com/pierrec/lz4/v4"
 )
 
-func (r *relation) Rows() int64 {
-	return r.md.Rows
+func (r *relation) Rows(context.Context) (int64, error) {
+	return r.md.Rows, nil
 }
 
-func (*relation) Size(_ string) int64 {
-	return 0
+func (*relation) Size(context.Context, string) (int64, error) {
+	return 0, nil
 }
 
 func (r *relation) Ranges(_ context.Context) ([][]byte, error) {
@@ -120,7 +120,8 @@ func (r *relation) Write(_ context.Context, bat *batch.Batch) error {
 			if data, err = compress.Compress(v, data, compress.Lz4); err != nil {
 				return err
 			}
-			data = append(data, types.EncodeInt32(int32(len(v)))...)
+			lenV := int32(len(v))
+			data = append(data, types.EncodeInt32(&lenV)...)
 			v = data
 		}
 		if err := r.db.Set(key+"."+attr, v); err != nil {

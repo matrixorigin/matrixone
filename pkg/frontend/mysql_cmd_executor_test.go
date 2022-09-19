@@ -20,6 +20,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+
 	"github.com/fagongzi/goetty/v2/buf"
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -446,6 +448,7 @@ func Test_getDataFromPipeline(t *testing.T) {
 		ses := NewSession(proto, guestMmu, pu.Mempool, pu, &gSys)
 		ses.SetRequestContext(ctx)
 		ses.Mrs = &MysqlResultSet{}
+		proto.ses = ses
 
 		// mce := NewMysqlCmdExecutor()
 		// mce.PrepareSessionBeforeExecRequest(ses)
@@ -518,6 +521,7 @@ func Test_getDataFromPipeline(t *testing.T) {
 		ses := NewSession(proto, guestMmu, pu.Mempool, pu, &gSys)
 		ses.SetRequestContext(ctx)
 		ses.Mrs = &MysqlResultSet{}
+		proto.ses = ses
 
 		convey.So(getDataFromPipeline(ses, nil), convey.ShouldBeNil)
 
@@ -628,42 +632,7 @@ func allocTestBatch(attrName []string, tt []types.Type, batchSize int) *batch.Ba
 
 	//alloc space for vector
 	for i := 0; i < len(attrName); i++ {
-		vec := vector.New(tt[i])
-		switch vec.Typ.Oid {
-		case types.T_int8:
-			vec.Col = make([]int8, batchSize)
-		case types.T_int16:
-			vec.Col = make([]int16, batchSize)
-		case types.T_int32:
-			vec.Col = make([]int32, batchSize)
-		case types.T_int64:
-			vec.Col = make([]int64, batchSize)
-		case types.T_uint8:
-			vec.Col = make([]uint8, batchSize)
-		case types.T_uint16:
-			vec.Col = make([]uint16, batchSize)
-		case types.T_uint32:
-			vec.Col = make([]uint32, batchSize)
-		case types.T_uint64:
-			vec.Col = make([]uint64, batchSize)
-		case types.T_float32:
-			vec.Col = make([]float32, batchSize)
-		case types.T_float64:
-			vec.Col = make([]float64, batchSize)
-		case types.T_char, types.T_varchar, types.T_json:
-			vBytes := &types.Bytes{
-				Offsets: make([]uint32, batchSize),
-				Lengths: make([]uint32, batchSize),
-				Data:    nil,
-			}
-			vec.Col = vBytes
-		case types.T_date:
-			vec.Col = make([]types.Date, batchSize)
-		case types.T_datetime:
-			vec.Col = make([]types.Datetime, batchSize)
-		default:
-			panic("unsupported vector type")
-		}
+		vec := vector.PreAllocType(tt[i], batchSize, batchSize, nil)
 		batchData.Vecs[i] = vec
 	}
 
@@ -677,11 +646,11 @@ func allocTestBatch(attrName []string, tt []types.Type, batchSize int) *batch.Ba
 
 func Test_mysqlerror(t *testing.T) {
 	convey.Convey("mysql error", t, func() {
-		err := NewMysqlError(ER_BAD_DB_ERROR, "T")
-		convey.So(err.ErrorCode, convey.ShouldEqual, ER_BAD_DB_ERROR)
+		err := moerr.New(moerr.ER_BAD_DB_ERROR, "T")
+		convey.So(err.Code, convey.ShouldEqual, moerr.ER_BAD_DB_ERROR)
 
-		err2 := NewMysqlError(65535, "T")
-		convey.So(err2.ErrorCode, convey.ShouldEqual, ER_UNKNOWN_ERROR)
+		err2 := moerr.New(65535, "T")
+		convey.So(err2.Code, convey.ShouldEqual, moerr.ErrEnd)
 	})
 }
 
@@ -806,6 +775,7 @@ func Test_handleShowColumns(t *testing.T) {
 		ses.Data[0][1] = int32(1)
 		ses.Data[0][2] = int8(2)
 		ses.Data[0][primaryKeyPos] = []byte("p")
+		proto.ses = ses
 
 		ses.Mrs = &MysqlResultSet{}
 		err = handleShowColumns(ses)

@@ -15,7 +15,6 @@
 package unary
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/dayofyear"
@@ -25,7 +24,6 @@ import (
 func DayOfYear(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	inputVector := vectors[0]
 	resultType := types.Type{Oid: types.T_uint16, Size: 2}
-	resultElementSize := int(resultType.Size)
 	inputValues := vector.MustTCols[types.Date](inputVector)
 	if inputVector.IsScalar() {
 		if inputVector.ConstVectorIsNull() {
@@ -36,14 +34,12 @@ func DayOfYear(vectors []*vector.Vector, proc *process.Process) (*vector.Vector,
 		vector.SetCol(resultVector, dayofyear.GetDayOfYear(inputValues, resultValues))
 		return resultVector, nil
 	} else {
-		resultVector, err := proc.AllocVector(resultType, int64(resultElementSize*len(inputValues)))
+		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(inputValues)), inputVector.Nsp)
 		if err != nil {
 			return nil, err
 		}
-		resultValues := types.DecodeUint16Slice(resultVector.Data)
-		resultValues = resultValues[:len(inputValues)]
-		nulls.Set(resultVector.Nsp, inputVector.Nsp)
-		vector.SetCol(resultVector, dayofyear.GetDayOfYear(inputValues, resultValues))
+		resultValues := vector.MustTCols[uint16](resultVector)
+		dayofyear.GetDayOfYear(inputValues, resultValues)
 		return resultVector, nil
 	}
 }

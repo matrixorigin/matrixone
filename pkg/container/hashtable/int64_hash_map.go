@@ -62,7 +62,7 @@ func (ht *Int64HashMap) InsertBatch(n int, hashes []uint64, keysPtr unsafe.Point
 	}
 
 	if hashes[0] == 0 {
-		Crc32Int64BatchHash(keysPtr, &hashes[0], n)
+		Int64BatchHash(keysPtr, &hashes[0], n)
 	}
 
 	keys := unsafe.Slice((*uint64)(keysPtr), n)
@@ -85,7 +85,7 @@ func (ht *Int64HashMap) InsertBatchWithRing(n int, zValues []int64, hashes []uin
 	}
 
 	if hashes[0] == 0 {
-		Crc32Int64BatchHash(keysPtr, &hashes[0], n)
+		Int64BatchHash(keysPtr, &hashes[0], n)
 	}
 
 	keys := unsafe.Slice((*uint64)(keysPtr), n)
@@ -106,7 +106,7 @@ func (ht *Int64HashMap) InsertBatchWithRing(n int, zValues []int64, hashes []uin
 
 func (ht *Int64HashMap) FindBatch(n int, hashes []uint64, keysPtr unsafe.Pointer, values []uint64) {
 	if hashes[0] == 0 {
-		Crc32Int64BatchHash(keysPtr, &hashes[0], n)
+		Int64BatchHash(keysPtr, &hashes[0], n)
 	}
 
 	keys := unsafe.Slice((*uint64)(keysPtr), n)
@@ -118,7 +118,7 @@ func (ht *Int64HashMap) FindBatch(n int, hashes []uint64, keysPtr unsafe.Pointer
 
 func (ht *Int64HashMap) FindBatchWithRing(n int, zValues []int64, hashes []uint64, keysPtr unsafe.Pointer, values []uint64) {
 	if hashes[0] == 0 {
-		Crc32Int64BatchHash(keysPtr, &hashes[0], n)
+		Int64BatchHash(keysPtr, &hashes[0], n)
 	}
 
 	keys := unsafe.Slice((*uint64)(keysPtr), n)
@@ -188,7 +188,7 @@ func (ht *Int64HashMap) resizeOnDemand(n int, m *mheap.Mheap) error {
 	var i uint64
 	for i = 0; i < oldCellCnt; i += 256 {
 		cells := oldCells[i : i+256]
-		Crc32Int64CellBatchHash(unsafe.Pointer(&cells[0]), &hashes[0], 256)
+		Int64CellBatchHash(unsafe.Pointer(&cells[0]), &hashes[0], 256)
 		for j := range cells {
 			cell := &cells[j]
 			if cell.Mapped != 0 {

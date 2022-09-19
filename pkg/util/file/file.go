@@ -54,7 +54,7 @@ func WriteFile(fs fileservice.ReplaceableFileService, file string, data []byte) 
 		Entries: []fileservice.IOEntry{
 			{
 				Offset: 0,
-				Size:   len(data),
+				Size:   int64(len(data)),
 				Data:   data,
 			},
 		},

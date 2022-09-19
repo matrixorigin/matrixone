@@ -115,6 +115,7 @@ type catalogStatsMonitor struct {
 	unCheckpointedCnt  int64
 	minTs              types.TS
 	maxTs              types.TS
+	gcTs               types.TS
 	lastScheduleTime   time.Time
 	cntLimit           int64
 	intervalLimit      time.Duration
@@ -147,7 +148,8 @@ func newCatalogStatsMonitor(db *DB, cntLimit int64, intervalLimit time.Duration)
 func (monitor *catalogStatsMonitor) PreExecute() error {
 	monitor.unCheckpointedCnt = 0
 	monitor.minTs = monitor.db.Catalog.GetCheckpointed().MaxTS.Next()
-	monitor.maxTs = monitor.db.Scheduler.GetSafeTS()
+	monitor.maxTs = monitor.db.Scheduler.GetCheckpointTS()
+	monitor.gcTs = monitor.db.Scheduler.GetGCTS()
 	return nil
 }
 
@@ -180,10 +182,10 @@ func (monitor *catalogStatsMonitor) onBlock(entry *catalog.BlockEntry) (err erro
 	checkpointed := monitor.db.Scheduler.GetCheckpointedLSN()
 	gcNeeded := false
 	entry.RLock()
-	if entry.IsDroppedCommitted() && !entry.DeleteAfter(monitor.maxTs) {
+	if entry.IsDroppedCommitted() && !entry.DeleteAfter(monitor.gcTs) {
 		logIndex := entry.GetLogIndex()
 		if logIndex != nil {
-			gcNeeded = checkpointed >= logIndex[0].LSN
+			gcNeeded = checkpointed >= logIndex.LSN
 		}
 	}
 	entry.RUnlock()
@@ -220,10 +222,10 @@ func (monitor *catalogStatsMonitor) onSegment(entry *catalog.SegmentEntry) (err 
 	checkpointed := monitor.db.Scheduler.GetCheckpointedLSN()
 	gcNeeded := false
 	entry.RLock()
-	if entry.IsDroppedCommitted() {
+	if entry.IsDroppedCommitted() && !entry.DeleteAfter(monitor.gcTs) {
 		logIndex := entry.GetLogIndex()
 		if logIndex != nil {
-			gcNeeded = checkpointed >= logIndex[0].LSN
+			gcNeeded = checkpointed >= logIndex.LSN
 		}
 	}
 	entry.RUnlock()
@@ -251,9 +253,9 @@ func (monitor *catalogStatsMonitor) onTable(entry *catalog.TableEntry) (err erro
 	checkpointed := monitor.db.Scheduler.GetCheckpointedLSN()
 	gcNeeded := false
 	entry.RLock()
-	if entry.IsDroppedCommitted() {
+	if entry.IsDroppedCommitted() && !entry.DeleteAfter(monitor.gcTs) {
 		if logIndex := entry.GetLogIndex(); logIndex != nil {
-			gcNeeded = checkpointed >= logIndex[0].LSN
+			gcNeeded = checkpointed >= logIndex.LSN
 		}
 	}
 	entry.RUnlock()
@@ -281,9 +283,9 @@ func (monitor *catalogStatsMonitor) onDatabase(entry *catalog.DBEntry) (err erro
 	checkpointed := monitor.db.Scheduler.GetCheckpointedLSN()
 	gcNeeded := false
 	entry.RLock()
-	if entry.IsDroppedCommitted() {
+	if entry.IsDroppedCommitted() && !entry.DeleteAfter(monitor.gcTs) {
 		if logIndex := entry.GetLogIndex(); logIndex != nil {
-			gcNeeded = checkpointed >= logIndex[0].LSN
+			gcNeeded = checkpointed >= logIndex.LSN
 		}
 	}
 	entry.RUnlock()

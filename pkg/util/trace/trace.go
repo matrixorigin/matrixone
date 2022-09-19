@@ -1,4 +1,4 @@
-// Copyright 2022 Matrix Origin
+// Copyright The OpenTelemetry Authors
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,96 +12,147 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+// Portions of this file are additionally subject to the following
+// copyright.
+//
+// Copyright (C) 2022 Matrix Origin.
+//
+// Modified the behavior and the interface of the step.
+
 package trace
 
 import (
 	"context"
-	goErrors "errors"
+	"fmt"
 	"sync/atomic"
 	"unsafe"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/logutil/logutil2"
-	"github.com/matrixorigin/matrixone/pkg/util/errors"
+	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 	"github.com/matrixorigin/matrixone/pkg/util/export"
-
-	"go.uber.org/zap"
+	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 )
 
-var gTracerProvider *MOTracerProvider
+var gTracerProvider atomic.Value
 var gTracer Tracer
-var gTraceContext = context.Background()
+var gTraceContext atomic.Value
 var gSpanContext atomic.Value
 
+func init() {
+	SetDefaultContext(context.Background())
+	SetTracerProvider(newMOTracerProvider(EnableTracer(false)))
+}
+
+var inited uint32
+
 func Init(ctx context.Context, opts ...TracerProviderOption) (context.Context, error) {
+	// fix multi-init in standalone
+	if !atomic.CompareAndSwapUint32(&inited, 0, 1) {
+		return ContextWithSpanContext(ctx, *DefaultSpanContext()), nil
+	}
 
 	// init tool dependence
 	logutil.SetLogReporter(&logutil.TraceReporter{ReportLog: ReportLog, ReportZap: ReportZap, LevelSignal: SetLogLevel, ContextField: ContextField})
 	logutil.SpanFieldKey.Store(SpanFieldKey)
-	errors.SetErrorReporter(HandleError)
+	errutil.SetErrorReporter(HandleError)
 	export.SetDefaultContextFunc(DefaultContext)
 
 	// init TraceProvider
-	gTracerProvider = newMOTracerProvider(opts...)
-	config := &gTracerProvider.tracerProviderConfig
+	SetTracerProvider(newMOTracerProvider(opts...))
+	config := &GetTracerProvider().tracerProviderConfig
 
 	// init Tracer
-	gTracer = gTracerProvider.Tracer("MatrixOrigin")
+	gTracer = GetTracerProvider().Tracer("MatrixOrigin")
 
 	// init Node DefaultContext
 	var spanId SpanID
 	spanId.SetByUUID(config.getNodeResource().NodeUuid)
 	sc := SpanContextWithIDs(nilTraceID, spanId)
 	gSpanContext.Store(&sc)
-	gTraceContext = ContextWithSpanContext(ctx, sc)
+	SetDefaultContext(ContextWithSpanContext(ctx, sc))
 
-	initExport(ctx, config)
+	if err := initExport(ctx, config); err != nil {
+		return nil, err
+	}
 
-	errors.WithContext(DefaultContext(), goErrors.New("finish trace init"))
-
-	return gTraceContext, nil
+	return DefaultContext(), nil
 }
 
-func initExport(ctx context.Context, config *tracerProviderConfig) {
+func initExport(ctx context.Context, config *tracerProviderConfig) error {
 	if !config.IsEnable() {
 		logutil.Info("initExport pass.")
-		return
+		return nil
 	}
 	var p export.BatchProcessor
 	// init BatchProcess for trace/log/error
 	switch {
 	case config.batchProcessMode == InternalExecutor:
 		// init schema
-		InitSchemaByInnerExecutor(ctx, config.sqlExecutor)
+		if config.needInit {
+			if err := InitSchemaByInnerExecutor(ctx, config.sqlExecutor); err != nil {
+				return err
+			}
+		}
 		// register buffer pipe implements
 		export.Register(&MOSpan{}, NewBufferPipe2SqlWorker(
 			bufferWithSizeThreshold(MB),
 		))
 		export.Register(&MOLog{}, NewBufferPipe2SqlWorker())
-		export.Register(&MOZap{}, NewBufferPipe2SqlWorker())
+		export.Register(&MOZapLog{}, NewBufferPipe2SqlWorker())
 		export.Register(&StatementInfo{}, NewBufferPipe2SqlWorker())
 		export.Register(&MOErrorHolder{}, NewBufferPipe2SqlWorker())
-		logutil2.Infof(context.TODO(), "init GlobalBatchProcessor")
-		// init BatchProcessor for standalone mode.
-		p = export.NewMOCollector()
-		export.SetGlobalBatchProcessor(p)
-		p.Start()
 	case config.batchProcessMode == FileService:
-		// TODO: will write csv file.
+		if config.needInit {
+			// PS: only in standalone mode or CN node can init schema
+			if err := InitExternalTblSchema(ctx, config.sqlExecutor); err != nil {
+				return err
+			}
+		}
+		export.Register(&MOSpan{}, NewBufferPipe2CSVWorker())
+		export.Register(&MOLog{}, NewBufferPipe2CSVWorker())
+		export.Register(&MOZapLog{}, NewBufferPipe2CSVWorker())
+		export.Register(&StatementInfo{}, NewBufferPipe2CSVWorker())
+		export.Register(&MOErrorHolder{}, NewBufferPipe2CSVWorker())
+	default:
+		return moerr.NewPanicError(fmt.Errorf("unknown batchProcessMode: %s", config.batchProcessMode))
 	}
-	if p != nil {
-		config.spanProcessors = append(config.spanProcessors, NewBatchSpanProcessor(p))
-		logutil.Info("trace span processor")
-		logutil.Info("[Debug]", zap.String("operation", "value1"), zap.String("operation_1", "value2"))
+	logutil.Info("init GlobalBatchProcessor")
+	// init BatchProcessor for standalone mode.
+	p = export.NewMOCollector()
+	export.SetGlobalBatchProcessor(p)
+	if !p.Start() {
+		return moerr.NewPanicError("trace exporter already started")
 	}
+	config.spanProcessors = append(config.spanProcessors, NewBatchSpanProcessor(p))
+	logutil.Info("init trace span processor")
+	return nil
+}
+
+func InitSchema(ctx context.Context, sqlExecutor func() ie.InternalExecutor) error {
+	config := &GetTracerProvider().tracerProviderConfig
+	switch {
+	case config.batchProcessMode == InternalExecutor:
+		if err := InitSchemaByInnerExecutor(ctx, sqlExecutor); err != nil {
+			return err
+		}
+	case config.batchProcessMode == FileService:
+		// PS: only in standalone mode or CN node can init schema
+		if err := InitExternalTblSchema(ctx, sqlExecutor); err != nil {
+			return err
+		}
+	default:
+		return moerr.NewPanicError(fmt.Errorf("unknown batchProcessMode: %s", config.batchProcessMode))
+	}
+	return nil
 }
 
 func Shutdown(ctx context.Context) error {
-	if !gTracerProvider.IsEnable() {
+	if !GetTracerProvider().IsEnable() {
 		return nil
 	}
 
-	gTracerProvider.EnableTracer(false)
+	GetTracerProvider().EnableTracer(false)
 	tracer := noopTracer{}
 	_ = atomic.SwapPointer((*unsafe.Pointer)(unsafe.Pointer(gTracer.(*MOTracer))), unsafe.Pointer(&tracer))
 
@@ -113,8 +164,16 @@ func Start(ctx context.Context, spanName string, opts ...SpanOption) (context.Co
 	return gTracer.Start(ctx, spanName, opts...)
 }
 
+type contextHolder struct {
+	ctx context.Context
+}
+
+func SetDefaultContext(ctx context.Context) {
+	gTraceContext.Store(&contextHolder{ctx})
+}
+
 func DefaultContext() context.Context {
-	return gTraceContext
+	return gTraceContext.Load().(*contextHolder).ctx
 }
 
 func DefaultSpanContext() *SpanContext {
@@ -122,5 +181,12 @@ func DefaultSpanContext() *SpanContext {
 }
 
 func GetNodeResource() *MONodeResource {
-	return gTracerProvider.getNodeResource()
+	return GetTracerProvider().getNodeResource()
+}
+
+func SetTracerProvider(p *MOTracerProvider) {
+	gTracerProvider.Store(p)
+}
+func GetTracerProvider() *MOTracerProvider {
+	return gTracerProvider.Load().(*MOTracerProvider)
 }

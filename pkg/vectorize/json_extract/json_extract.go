@@ -15,32 +15,73 @@
 package json_extract
 
 import (
-	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 )
 
 var (
-	JsonExtract func(*types.Bytes, *types.Bytes, *types.Bytes) *types.Bytes
+	QueryByString func([][]byte, [][]byte, [][]byte) ([][]byte, error)
+	QueryByJson   func([][]byte, [][]byte, [][]byte) ([][]byte, error)
 )
 
 func init() {
-	JsonExtract = jsonExtract
+	QueryByString = byString
+	QueryByJson = byJson
 }
 
-func jsonExtract(json *types.Bytes, path *types.Bytes, result *types.Bytes) *types.Bytes {
-	logutil.Debugf("jsonExtract: json=%s, path=%s, result=%s", json, path, result)
-	for i := range json.Offsets {
-		jOff, jLen := json.Offsets[i], json.Lengths[i]
-		pOff, pLen := path.Offsets[i], path.Lengths[i]
-		result.AppendOnce(jsonExtractOne(json.Data[jOff:jOff+jLen], path.Data[pOff:pOff+pLen]))
+func byJson(json, path, result [][]byte) ([][]byte, error) {
+	// XXX The functoin only handles path is constant.
+	if len(path) != 1 {
+		panic("Json extract can only handle constant path for now.")
 	}
-	return result
-}
-func jsonExtractOne(jbytes, pbytes []byte) []byte {
-	bj, err := types.ParseSliceToByteJson(jbytes)
+	pStar, err := types.ParseStringToPath(string(path[0]))
 	if err != nil {
-		logutil.Debugf("jsonExtractOne: error:%v", err)
+		logutil.Infof("json extract: error:%v", err)
+		return nil, err
 	}
-	return []byte(fmt.Sprintf("%s: %s", bj.String(), string(pbytes)))
+	for i := range json {
+		ret, err := byJsonOne(json[i], &pStar)
+		if err != nil {
+			logutil.Infof("json extract: error:%v", err)
+			return nil, err
+		}
+		result = append(result, ret)
+	}
+	return result, nil
+}
+
+func byJsonOne(json []byte, path *bytejson.Path) ([]byte, error) {
+	//TODO check here
+	bj := types.DecodeJson(json)
+	return []byte(bj.Query(*path).String()), nil
+}
+
+func byString(json, path, result [][]byte) ([][]byte, error) {
+	// XXX The functoin only handles path is constant.
+	if len(path) != 1 {
+		panic("Json extract can only handle constant path for now.")
+	}
+	pStar, err := types.ParseStringToPath(string(path[0]))
+	if err != nil {
+		logutil.Infof("json qv: error:%v", err)
+		return nil, err
+	}
+	for i := range json {
+		ret, err := byStringOne(json[i], &pStar)
+		if err != nil {
+			logutil.Infof("json qv: error:%v", err)
+			return nil, err
+		}
+		result = append(result, ret)
+	}
+	return result, nil
+}
+func byStringOne(json []byte, path *bytejson.Path) ([]byte, error) {
+	bj, err := types.ParseSliceToByteJson(json)
+	if err != nil {
+		logutil.Debugf("json qvOne : error:%v", err)
+		return nil, err
+	}
+	return []byte(bj.Query(*path).String()), nil
 }

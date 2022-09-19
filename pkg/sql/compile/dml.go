@@ -96,6 +96,7 @@ func (s *Scope) InsertValues(c *Compile, stmt *tree.Insert) (uint64, error) {
 	return uint64(len(p.Columns[0].Column)), nil
 }
 
+// XXX: is this just fill batch with first vec.Col[0]?
 func fillBatch(bat *batch.Batch, p *plan.InsertValues, rows []tree.Exprs, proc *process.Process) error {
 	rowCount := len(p.Columns[0].Column)
 
@@ -104,8 +105,8 @@ func fillBatch(bat *batch.Batch, p *plan.InsertValues, rows []tree.Exprs, proc *
 
 	for i, v := range bat.Vecs {
 		switch v.Typ.Oid {
-		case types.T_json:
-			vs := make([][]byte, rowCount)
+		case types.T_uuid:
+			vs := make([]types.Uuid, rowCount)
 			{
 				for j, expr := range p.Columns[i].Column {
 					vec, err := colexec.EvalExpr(tmpBat, proc, expr)
@@ -115,11 +116,11 @@ func fillBatch(bat *batch.Batch, p *plan.InsertValues, rows []tree.Exprs, proc *
 					if nulls.Any(vec.Nsp) {
 						nulls.Add(v.Nsp, uint64(j))
 					} else {
-						vs[j] = vec.Col.(*types.Bytes).Data
+						vs[j] = vector.GetValueAt[types.Uuid](vec, 0)
 					}
 				}
 			}
-			if err := vector.Append(v, vs); err != nil {
+			if err := vector.AppendFixed(v, vs, proc.Mp()); err != nil {
 				return err
 			}
 		case types.T_bool:
@@ -133,11 +134,11 @@ func fillBatch(bat *batch.Batch, p *plan.InsertValues, rows []tree.Exprs, proc *
 					if nulls.Any(vec.Nsp) {
 						nulls.Add(v.Nsp, uint64(j))
 					} else {
-						vs[j] = vec.Col.([]bool)[0]
+						vs[j] = vector.GetValueAt[bool](vec, 0)
 					}
 				}
 			}
-			if err := vector.Append(v, vs); err != nil {
+			if err := vector.AppendFixed(v, vs, proc.Mp()); err != nil {
 				return err
 			}
 		case types.T_int8:
@@ -151,11 +152,11 @@ func fillBatch(bat *batch.Batch, p *plan.InsertValues, rows []tree.Exprs, proc *
 					if nulls.Any(vec.Nsp) {
 						nulls.Add(v.Nsp, uint64(j))
 					} else {
-						vs[j] = vec.Col.([]int8)[0]
+						vs[j] = vector.GetValueAt[int8](vec, 0)
 					}
 				}
 			}
-			if err := vector.Append(v, vs); err != nil {
+			if err := vector.AppendFixed(v, vs, proc.Mp()); err != nil {
 				return err
 			}
 		case types.T_int16:
@@ -169,11 +170,11 @@ func fillBatch(bat *batch.Batch, p *plan.InsertValues, rows []tree.Exprs, proc *
 					if nulls.Any(vec.Nsp) {
 						nulls.Add(v.Nsp, uint64(j))
 					} else {
-						vs[j] = vec.Col.([]int16)[0]
+						vs[j] = vector.GetValueAt[int16](vec, 0)
 					}
 				}
 			}
-			if err := vector.Append(v, vs); err != nil {
+			if err := vector.AppendFixed(v, vs, proc.Mp()); err != nil {
 				return err
 			}
 		case types.T_int32:
@@ -187,11 +188,11 @@ func fillBatch(bat *batch.Batch, p *plan.InsertValues, rows []tree.Exprs, proc *
 					if nulls.Any(vec.Nsp) {
 						nulls.Add(v.Nsp, uint64(j))
 					} else {
-						vs[j] = vec.Col.([]int32)[0]
+						vs[j] = vector.GetValueAt[int32](vec, 0)
 					}
 				}
 			}
-			if err := vector.Append(v, vs); err != nil {
+			if err := vector.AppendFixed(v, vs, proc.Mp()); err != nil {
 				return err
 			}
 		case types.T_int64:
@@ -205,11 +206,11 @@ func fillBatch(bat *batch.Batch, p *plan.InsertValues, rows []tree.Exprs, proc *
 					if nulls.Any(vec.Nsp) {
 						nulls.Add(v.Nsp, uint64(j))
 					} else {
-						vs[j] = vec.Col.([]int64)[0]
+						vs[j] = vector.GetValueAt[int64](vec, 0)
 					}
 				}
 			}
-			if err := vector.Append(v, vs); err != nil {
+			if err := vector.AppendFixed(v, vs, proc.Mp()); err != nil {
 				return err
 			}
 		case types.T_uint8:
@@ -223,11 +224,11 @@ func fillBatch(bat *batch.Batch, p *plan.InsertValues, rows []tree.Exprs, proc *
 					if nulls.Any(vec.Nsp) {
 						nulls.Add(v.Nsp, uint64(j))
 					} else {
-						vs[j] = vec.Col.([]uint8)[0]
+						vs[j] = vector.GetValueAt[uint8](vec, 0)
 					}
 				}
 			}
-			if err := vector.Append(v, vs); err != nil {
+			if err := vector.AppendFixed(v, vs, proc.Mp()); err != nil {
 				return err
 			}
 		case types.T_uint16:
@@ -241,11 +242,11 @@ func fillBatch(bat *batch.Batch, p *plan.InsertValues, rows []tree.Exprs, proc *
 					if nulls.Any(vec.Nsp) {
 						nulls.Add(v.Nsp, uint64(j))
 					} else {
-						vs[j] = vec.Col.([]uint16)[0]
+						vs[j] = vector.GetValueAt[uint16](vec, 0)
 					}
 				}
 			}
-			if err := vector.Append(v, vs); err != nil {
+			if err := vector.AppendFixed(v, vs, proc.Mp()); err != nil {
 				return err
 			}
 		case types.T_uint32:
@@ -259,11 +260,11 @@ func fillBatch(bat *batch.Batch, p *plan.InsertValues, rows []tree.Exprs, proc *
 					if nulls.Any(vec.Nsp) {
 						nulls.Add(v.Nsp, uint64(j))
 					} else {
-						vs[j] = vec.Col.([]uint32)[0]
+						vs[j] = vector.GetValueAt[uint32](vec, 0)
 					}
 				}
 			}
-			if err := vector.Append(v, vs); err != nil {
+			if err := vector.AppendFixed(v, vs, proc.Mp()); err != nil {
 				return err
 			}
 		case types.T_uint64:
@@ -277,11 +278,11 @@ func fillBatch(bat *batch.Batch, p *plan.InsertValues, rows []tree.Exprs, proc *
 					if nulls.Any(vec.Nsp) {
 						nulls.Add(v.Nsp, uint64(j))
 					} else {
-						vs[j] = vec.Col.([]uint64)[0]
+						vs[j] = vector.GetValueAt[uint64](vec, 0)
 					}
 				}
 			}
-			if err := vector.Append(v, vs); err != nil {
+			if err := vector.AppendFixed(v, vs, proc.Mp()); err != nil {
 				return err
 			}
 		case types.T_float32:
@@ -295,11 +296,11 @@ func fillBatch(bat *batch.Batch, p *plan.InsertValues, rows []tree.Exprs, proc *
 					if nulls.Any(vec.Nsp) {
 						nulls.Add(v.Nsp, uint64(j))
 					} else {
-						vs[j] = vec.Col.([]float32)[0]
+						vs[j] = vector.GetValueAt[float32](vec, 0)
 					}
 				}
 			}
-			if err := vector.Append(v, vs); err != nil {
+			if err := vector.AppendFixed(v, vs, proc.Mp()); err != nil {
 				return err
 			}
 		case types.T_float64:
@@ -313,14 +314,14 @@ func fillBatch(bat *batch.Batch, p *plan.InsertValues, rows []tree.Exprs, proc *
 					if nulls.Any(vec.Nsp) {
 						nulls.Add(v.Nsp, uint64(j))
 					} else {
-						vs[j] = vec.Col.([]float64)[0]
+						vs[j] = vector.GetValueAt[float64](vec, 0)
 					}
 				}
 			}
-			if err := vector.Append(v, vs); err != nil {
+			if err := vector.AppendFixed(v, vs, proc.Mp()); err != nil {
 				return err
 			}
-		case types.T_char, types.T_varchar, types.T_blob:
+		case types.T_char, types.T_varchar, types.T_json, types.T_blob:
 			vs := make([][]byte, rowCount)
 			{
 				for j, expr := range p.Columns[i].Column {
@@ -331,11 +332,11 @@ func fillBatch(bat *batch.Batch, p *plan.InsertValues, rows []tree.Exprs, proc *
 					if nulls.Any(vec.Nsp) {
 						nulls.Add(v.Nsp, uint64(j))
 					} else {
-						vs[j] = vec.Col.(*types.Bytes).Data
+						vs[j] = vec.GetBytes(0)
 					}
 				}
 			}
-			if err := vector.Append(v, vs); err != nil {
+			if err := vector.AppendBytes(v, vs, proc.Mp()); err != nil {
 				return err
 			}
 		case types.T_date:
@@ -349,11 +350,11 @@ func fillBatch(bat *batch.Batch, p *plan.InsertValues, rows []tree.Exprs, proc *
 					if nulls.Any(vec.Nsp) {
 						nulls.Add(v.Nsp, uint64(j))
 					} else {
-						vs[j] = vec.Col.([]types.Date)[0]
+						vs[j] = vector.GetValueAt[types.Date](vec, 0)
 					}
 				}
 			}
-			if err := vector.Append(v, vs); err != nil {
+			if err := vector.AppendFixed(v, vs, proc.Mp()); err != nil {
 				return err
 			}
 		case types.T_datetime:
@@ -367,11 +368,11 @@ func fillBatch(bat *batch.Batch, p *plan.InsertValues, rows []tree.Exprs, proc *
 					if nulls.Any(vec.Nsp) {
 						nulls.Add(v.Nsp, uint64(j))
 					} else {
-						vs[j] = vec.Col.([]types.Datetime)[0]
+						vs[j] = vector.GetValueAt[types.Datetime](vec, 0)
 					}
 				}
 			}
-			if err := vector.Append(v, vs); err != nil {
+			if err := vector.AppendFixed(v, vs, proc.Mp()); err != nil {
 				return err
 			}
 		case types.T_timestamp:
@@ -385,11 +386,11 @@ func fillBatch(bat *batch.Batch, p *plan.InsertValues, rows []tree.Exprs, proc *
 					if nulls.Any(vec.Nsp) {
 						nulls.Add(v.Nsp, uint64(j))
 					} else {
-						vs[j] = vec.Col.([]types.Timestamp)[0]
+						vs[j] = vector.GetValueAt[types.Timestamp](vec, 0)
 					}
 				}
 			}
-			if err := vector.Append(v, vs); err != nil {
+			if err := vector.AppendFixed(v, vs, proc.Mp()); err != nil {
 				return err
 			}
 		case types.T_decimal64:
@@ -403,11 +404,11 @@ func fillBatch(bat *batch.Batch, p *plan.InsertValues, rows []tree.Exprs, proc *
 					if nulls.Any(vec.Nsp) {
 						nulls.Add(v.Nsp, uint64(j))
 					} else {
-						vs[j] = vec.Col.([]types.Decimal64)[0]
+						vs[j] = vector.GetValueAt[types.Decimal64](vec, 0)
 					}
 				}
 			}
-			if err := vector.Append(v, vs); err != nil {
+			if err := vector.AppendFixed(v, vs, proc.Mp()); err != nil {
 				return err
 			}
 		case types.T_decimal128:
@@ -421,11 +422,11 @@ func fillBatch(bat *batch.Batch, p *plan.InsertValues, rows []tree.Exprs, proc *
 					if nulls.Any(vec.Nsp) {
 						nulls.Add(v.Nsp, uint64(j))
 					} else {
-						vs[j] = vec.Col.([]types.Decimal128)[0]
+						vs[j] = vector.GetValueAt[types.Decimal128](vec, 0)
 					}
 				}
 			}
-			if err := vector.Append(v, vs); err != nil {
+			if err := vector.AppendFixed(v, vs, proc.Mp()); err != nil {
 				return err
 			}
 		default:
@@ -452,11 +453,11 @@ func makeInsertBatch(p *plan.InsertValues) *batch.Batch {
 	bat := batch.New(true, attrs)
 	idx := 0
 	for _, col := range p.ExplicitCols {
-		bat.Vecs[idx] = vector.New(types.Type{Oid: types.T(col.Typ.GetId())})
+		bat.Vecs[idx] = vector.New(types.Type{Oid: types.T(col.Typ.GetId()), Scale: col.Typ.Scale, Width: col.Typ.Width})
 		idx++
 	}
 	for _, col := range p.OtherCols {
-		bat.Vecs[idx] = vector.New(types.Type{Oid: types.T(col.Typ.GetId())})
+		bat.Vecs[idx] = vector.New(types.Type{Oid: types.T(col.Typ.GetId()), Scale: col.Typ.Scale, Width: col.Typ.Width})
 		idx++
 	}
 

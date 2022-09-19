@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 	"go.uber.org/zap"
 	"unsafe"
 
@@ -27,7 +28,8 @@ import (
 	"github.com/cockroachdb/errors/errbase"
 )
 
-var _ IBuffer2SqlItem = &MOErrorHolder{}
+var _ IBuffer2SqlItem = (*MOErrorHolder)(nil)
+var _ CsvFields = (*MOErrorHolder)(nil)
 
 type MOErrorHolder struct {
 	Error     error         `json:"error"`
@@ -43,6 +45,28 @@ func (h MOErrorHolder) Size() int64 {
 }
 func (h MOErrorHolder) Free() {}
 
+func (h MOErrorHolder) CsvOptions() *CsvOptions {
+	return CommonCsvOptions
+}
+
+func (h MOErrorHolder) CsvFields() []string {
+	var span Span
+	if ct := errutil.GetContextTracer(h.Error); ct != nil && ct.Context() != nil {
+		span = SpanFromContext(ct.Context())
+	} else {
+		span = SpanFromContext(DefaultContext())
+	}
+	var result []string
+	result = append(result, span.SpanContext().TraceID.String())
+	result = append(result, span.SpanContext().SpanID.String())
+	result = append(result, GetNodeResource().NodeUuid)
+	result = append(result, GetNodeResource().NodeType)
+	result = append(result, h.Error.Error())
+	result = append(result, fmt.Sprintf(errorFormatter.Load().(string), h.Error))
+	result = append(result, nanoSec2DatetimeString(h.Timestamp))
+	return result
+}
+
 func (h *MOErrorHolder) Format(s fmt.State, verb rune) { errbase.FormatError(h.Error, s, verb) }
 
 // ReportError send to BatchProcessor
@@ -54,14 +78,14 @@ func ReportError(ctx context.Context, err error) {
 	export.GetGlobalBatchProcessor().Collect(ctx, e)
 }
 
-// HandleError api for pkg/util/errors as errorReporter
+// HandleError api for pkg/util/errutil as errorReporter
 func HandleError(ctx context.Context, err error, depth int) {
-	if !gTracerProvider.IsEnable() {
+	if !GetTracerProvider().IsEnable() {
 		return
 	}
 	if ctx == nil {
 		ctx = DefaultContext()
 	}
 	ReportError(ctx, err)
-	logutil.GetGlobalLogger().WithOptions(zap.AddCallerSkip(depth+1)).Info("error", ContextField(ctx), zap.Error(err))
+	logutil.GetSkip1Logger().Info("error", ContextField(ctx), zap.Error(err))
 }

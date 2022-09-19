@@ -15,7 +15,6 @@
 package multi
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/date_add"
@@ -30,7 +29,6 @@ func DateAdd(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, e
 	thirdValues := vector.MustTCols[int64](vectors[2])
 
 	resultType := types.Type{Oid: types.T_date, Size: 4}
-	resultElementSize := int(resultType.Size)
 	if firstVector.IsScalar() && secondVector.IsScalar() {
 		if firstVector.IsScalarNull() || secondVector.IsScalarNull() {
 			return proc.AllocScalarNullVector(resultType), nil
@@ -47,14 +45,12 @@ func DateAdd(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, e
 		} else {
 			maxLen = len(secondValues)
 		}
-		resultVector, err := proc.AllocVector(resultType, int64(resultElementSize*maxLen))
+		resultVector, err := proc.AllocVectorOfRows(resultType, int64(maxLen), nil)
 		if err != nil {
 			return nil, err
 		}
-		resultValues := types.DecodeDateSlice(resultVector.Data)
-		resultValues = resultValues[:maxLen]
-		res, err := date_add.DateAdd(firstValues, secondValues, thirdValues, firstVector.Nsp, secondVector.Nsp, resultVector.Nsp, resultValues)
-		vector.SetCol(resultVector, res)
+		resultValues := vector.MustTCols[types.Date](resultVector)
+		_, err = date_add.DateAdd(firstValues, secondValues, thirdValues, firstVector.Nsp, secondVector.Nsp, resultVector.Nsp, resultValues)
 		return resultVector, err
 	}
 }
@@ -73,7 +69,6 @@ func DatetimeAdd(vectors []*vector.Vector, proc *process.Process) (*vector.Vecto
 	}
 
 	resultType := types.Type{Oid: types.T_datetime, Precision: precision, Size: 8}
-	resultElementSize := int(resultType.Size)
 
 	if firstVector.IsScalar() && secondVector.IsScalar() {
 		if firstVector.IsScalarNull() || secondVector.IsScalarNull() {
@@ -91,14 +86,13 @@ func DatetimeAdd(vectors []*vector.Vector, proc *process.Process) (*vector.Vecto
 		} else {
 			maxLen = len(secondValues)
 		}
-		resultVector, err := proc.AllocVector(resultType, int64(resultElementSize*maxLen))
+		resultVector, err := proc.AllocVectorOfRows(resultType, int64(maxLen), nil)
 		if err != nil {
 			return nil, err
 		}
-		resultValues := types.DecodeDatetimeSlice(resultVector.Data)
+		resultValues := vector.MustTCols[types.Datetime](resultVector)
 		resultValues = resultValues[:maxLen]
-		res, err := date_add.DatetimeAdd(firstValues, secondValues, thirdValues, firstVector.Nsp, secondVector.Nsp, resultVector.Nsp, resultValues)
-		vector.SetCol(resultVector, res)
+		_, err = date_add.DatetimeAdd(firstValues, secondValues, thirdValues, firstVector.Nsp, secondVector.Nsp, resultVector.Nsp, resultValues)
 		return resultVector, err
 	}
 }
@@ -106,11 +100,10 @@ func DatetimeAdd(vectors []*vector.Vector, proc *process.Process) (*vector.Vecto
 func DateStringAdd(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	firstVector := vectors[0]
 	secondVector := vectors[1]
-	firstValues := vector.MustBytesCols(vectors[0])
+	firstValues := vector.MustStrCols(vectors[0])
 	secondValues := vector.MustTCols[int64](vectors[1])
 	thirdValues := vector.MustTCols[int64](vectors[2])
 	resultType := types.Type{Oid: types.T_datetime, Precision: 6, Size: 8}
-	resultElementSize := int(resultType.Size)
 
 	if firstVector.IsScalar() && secondVector.IsScalar() {
 		if firstVector.IsScalarNull() || secondVector.IsScalarNull() {
@@ -123,19 +116,18 @@ func DateStringAdd(vectors []*vector.Vector, proc *process.Process) (*vector.Vec
 		return resultVector, err
 	} else {
 		var maxLen int
-		if len(firstValues.Lengths) > len(secondValues) {
-			maxLen = len(firstValues.Lengths)
+		if len(firstValues) > len(secondValues) {
+			maxLen = len(firstValues)
 		} else {
 			maxLen = len(secondValues)
 		}
-		resultVector, err := proc.AllocVector(resultType, int64(resultElementSize*maxLen))
+		resultVector, err := proc.AllocVectorOfRows(resultType, int64(maxLen), nil)
 		if err != nil {
 			return nil, err
 		}
-		resultValues := types.DecodeDatetimeSlice(resultVector.Data)
+		resultValues := vector.MustTCols[types.Datetime](resultVector)
 		resultValues = resultValues[:maxLen]
-		res, err := date_add.DateStringAdd(firstValues, secondValues, thirdValues, firstVector.Nsp, secondVector.Nsp, resultVector.Nsp, resultValues)
-		vector.SetCol(resultVector, res)
+		_, err = date_add.DateStringAdd(firstValues, secondValues, thirdValues, firstVector.Nsp, secondVector.Nsp, resultVector.Nsp, resultValues)
 		return resultVector, err
 	}
 }
@@ -154,7 +146,6 @@ func TimeStampAdd(vectors []*vector.Vector, proc *process.Process) (*vector.Vect
 	}
 
 	resultType := types.Type{Oid: types.T_timestamp, Precision: precision, Size: 8}
-	resultElementSize := int(resultType.Size)
 
 	if firstVector.IsScalar() && secondVector.IsScalar() {
 		if firstVector.IsScalarNull() || secondVector.IsScalarNull() {
@@ -172,15 +163,12 @@ func TimeStampAdd(vectors []*vector.Vector, proc *process.Process) (*vector.Vect
 		} else {
 			maxLen = len(secondValues)
 		}
-		resultVector, err := proc.AllocVector(resultType, int64(resultElementSize*maxLen))
+		resultVector, err := proc.AllocVectorOfRows(resultType, int64(maxLen), firstVector.Nsp)
 		if err != nil {
 			return nil, err
 		}
-		resultValues := types.DecodeTimestampSlice(resultVector.Data)
-		resultValues = resultValues[:maxLen]
-		nulls.Set(resultVector.Nsp, firstVector.Nsp)
-		resultValues, err = date_add.TimestampAdd(proc.SessionInfo.TimeZone, firstValues, secondValues, thirdValues, firstVector.Nsp, secondVector.Nsp, resultVector.Nsp, resultValues)
-		vector.SetCol(resultVector, resultValues)
+		resultValues := vector.GetFixedVectorValues[types.Timestamp](resultVector)
+		_, err = date_add.TimestampAdd(proc.SessionInfo.TimeZone, firstValues, secondValues, thirdValues, firstVector.Nsp, secondVector.Nsp, resultVector.Nsp, resultValues)
 		return resultVector, err
 	}
 }
