@@ -24,7 +24,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
 func updatePartition(ctx context.Context, op client.TxnOperator, mvcc MVCC, dn DNStore, req api.SyncLogTailReq) error {
@@ -105,7 +104,7 @@ func genLogTailReq(dn DNStore, req api.SyncLogTailReq) ([]txn.TxnRequest, error)
 	for i, info := range dn.Shards {
 		reqs[i] = txn.TxnRequest{
 			CNRequest: &txn.CNOpRequest{
-				OpCode:  engine.OpGetLogTail,
+				OpCode:  uint32(api.OpCode_OpGetLogTail),
 				Payload: payload,
 				Target: metadata.DNShard{
 					DNShardRecord: metadata.DNShardRecord{

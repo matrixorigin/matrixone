@@ -43,6 +43,7 @@ func (s *service) initDistributedTAE(
 	// engine
 	pu.StorageEngine = disttae.New(
 		ctx,
+		client,
 		txnengine.GetClusterDetailsFromHAKeeper(
 			ctx,
 			hakeeper,
