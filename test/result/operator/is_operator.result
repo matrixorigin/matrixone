@@ -357,3 +357,24 @@ b	CASE  WHEN b is not NULL then 'found' ELSE 'not found' END
 2016-12-15	found
 null	not found
 null	not found
+select (null) is unknown;
+(null)
+true
+select null is unknown;
+null
+true
+select true is unknown;
+true
+false
+select false is unknown;
+false
+false
+drop table if exists t1;
+CREATE TABLE t1 (a bool);
+insert into t1 values (false), (null), (true), (null);
+select a is unknown from t1 order by a;
+a
+true
+true
+false
+false
