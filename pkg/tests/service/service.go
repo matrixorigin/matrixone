@@ -444,7 +444,7 @@ func (c *testCluster) DNStoreExpired(uuid string) (bool, error) {
 	}
 
 	hkcfg := c.GetHAKeeperConfig()
-	expired := hkcfg.DnStoreExpired(dnStore.Tick, state.Tick)
+	expired := hkcfg.DNStoreExpired(dnStore.Tick, state.Tick)
 
 	c.logger.Info(
 		"check dn store expired or not",
@@ -506,7 +506,7 @@ func (c *testCluster) CNStoreExpired(uuid string) (bool, error) {
 	}
 
 	hkcfg := c.GetHAKeeperConfig()
-	expired := hkcfg.CnStoreExpired(cnStore.Tick, state.Tick)
+	expired := hkcfg.CNStoreExpired(cnStore.Tick, state.Tick)
 
 	c.logger.Info(
 		"check cn store expired or not",

@@ -24,7 +24,7 @@ func parseCNStores(cfg hakeeper.Config, infos pb.CNState, currentTick uint64) ([
 	working := make([]string, 0)
 	expired := make([]string, 0)
 	for uuid, storeInfo := range infos.Stores {
-		if cfg.CnStoreExpired(storeInfo.Tick, currentTick) {
+		if cfg.CNStoreExpired(storeInfo.Tick, currentTick) {
 			expired = append(expired, uuid)
 		} else {
 			working = append(working, uuid)

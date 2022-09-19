@@ -51,7 +51,7 @@ func ParseReportedDNShardCount(
 	set := make(map[uint64]struct{})
 	for _, storeInfo := range state.Stores {
 		// ignore expired dn stores
-		if hkcfg.DnStoreExpired(storeInfo.Tick, currTick) {
+		if hkcfg.DNStoreExpired(storeInfo.Tick, currTick) {
 			continue
 		}
 
@@ -118,7 +118,7 @@ func ParseDNShardReportedSize(
 	set := make(map[uint64]struct{})
 	for _, storeInfo := range state.Stores {
 		// ignore expired dn stores
-		if hkcfg.DnStoreExpired(storeInfo.Tick, currTick) {
+		if hkcfg.DNStoreExpired(storeInfo.Tick, currTick) {
 			continue
 		}
 

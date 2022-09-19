@@ -81,7 +81,7 @@ func NewDriverWithStore(impl store.Store, own bool, ckpDuration time.Duration) D
 }
 
 func (driver *walDriver) GetCheckpointed() uint64 {
-	return driver.impl.GetCheckpointed(GroupC)
+	return driver.impl.GetCheckpointed(GroupPrepare)
 }
 func (driver *walDriver) replayhandle(handle store.ApplyHandle) store.ApplyHandle {
 	return func(group uint32, commitId uint64, payload []byte, typ uint16, info any) {
@@ -94,11 +94,11 @@ func (driver *walDriver) Replay(handle store.ApplyHandle) error {
 }
 
 func (driver *walDriver) GetPenddingCnt() uint64 {
-	return driver.impl.GetPendding(GroupC)
+	return driver.impl.GetPendding(GroupPrepare)
 }
 
 func (driver *walDriver) GetCurrSeqNum() uint64 {
-	return driver.impl.GetCurrSeqNum(GroupC)
+	return driver.impl.GetCurrSeqNum(GroupPrepare)
 }
 
 func (driver *walDriver) LoadEntry(groupID uint32, lsn uint64) (LogEntry, error) {
