@@ -21,7 +21,7 @@ import (
 )
 
 func (driver *walDriver) Checkpoint(indexes []*Index) (e LogEntry, err error) {
-	e, err = driver.impl.FuzzyCheckpoint(GroupC, indexes)
+	e, err = driver.impl.FuzzyCheckpoint(GroupPrepare, indexes)
 	return
 }
 
@@ -40,7 +40,7 @@ func (driver *walDriver) checkpointTicker() {
 
 // tid-lsn-ckped uclsn-tid,tid-clsn,cckped
 func (driver *walDriver) CkpUC() {
-	ckpedlsn := driver.impl.GetCheckpointed(GroupC)
+	ckpedlsn := driver.impl.GetCheckpointed(GroupPrepare)
 	ucLsn := driver.impl.GetCheckpointed(GroupUC)
 	maxLsn := driver.impl.GetSynced(GroupUC)
 	ckpedUC := ucLsn
