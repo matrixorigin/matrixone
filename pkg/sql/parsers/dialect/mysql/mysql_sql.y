@@ -1789,9 +1789,15 @@ explain_stmt:
     }
 |   explain_sym '(' utility_option_list ')' explainable_stmt
     {
-        explainStmt := tree.NewExplainStmt($5, "text")
-        explainStmt.Options = $3
-        $$ = explainStmt
+    	if tree.IsContainAnalyze($3) {
+    	     explainStmt := tree.NewExplainAnalyze($5, "text")
+	     explainStmt.Options = $3
+	     $$ = explainStmt
+    	} else {
+    	     explainStmt := tree.NewExplainStmt($5, "text")
+    	     explainStmt.Options = $3
+	     $$ = explainStmt
+    	}
     }
 
 explain_option_key:
