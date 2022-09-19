@@ -45,17 +45,22 @@ func init() {
 	trace.Init(context.Background(), trace.EnableTracer(false))
 }
 
+func mockRecordStatement(ctx context.Context) (context.Context, *gostub.Stubs) {
+	stm := &trace.StatementInfo{}
+	ctx = trace.ContextWithStatement(ctx, stm)
+	stubs := gostub.Stub(&RecordStatement, func(context.Context, *Session, *process.Process, ComputationWrapper, time.Time) context.Context {
+		return ctx
+	})
+	return ctx, stubs
+}
+
 func Test_mce(t *testing.T) {
 	ctx := context.TODO()
 	convey.Convey("boot mce succ", t, func() {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 
-		stm := &trace.StatementInfo{}
-		ctx := trace.ContextWithStatement(ctx, stm)
-		rsStubs := gostub.Stub(&RecordStatement, func(context.Context, *Session, *process.Process, ComputationWrapper, time.Time) context.Context {
-			return ctx
-		})
+		ctx, rsStubs := mockRecordStatement(ctx)
 		defer rsStubs.Reset()
 
 		eng := mock_frontend.NewMockEngine(ctrl)
@@ -333,6 +338,9 @@ func Test_mce_selfhandle(t *testing.T) {
 	convey.Convey("handleSelectDatabase/handleMaxAllowedPacket/handleVersionComment/handleCmdFieldList/handleSetVar", t, func() {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
+
+		ctx, rsStubs := mockRecordStatement(ctx)
+		defer rsStubs.Reset()
 
 		eng := mock_frontend.NewMockEngine(ctrl)
 		eng.EXPECT().Database(ctx, gomock.Any(), nil).Return(nil, nil).AnyTimes()
@@ -867,6 +875,9 @@ func Test_CMD_FIELD_LIST(t *testing.T) {
 
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
+
+		ctx, rsStubs := mockRecordStatement(ctx)
+		defer rsStubs.Reset()
 
 		eng := mock_frontend.NewMockEngine(ctrl)
 		db := mock_frontend.NewMockDatabase(ctrl)
