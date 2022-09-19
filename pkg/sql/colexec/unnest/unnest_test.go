@@ -33,7 +33,6 @@ import (
 type unnestTestCase struct {
 	arg        *Argument
 	proc       *process.Process
-	reg        *process.WaitRegister
 	isCol      bool
 	jsons      []string
 	inputTimes int
