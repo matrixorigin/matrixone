@@ -83,7 +83,7 @@ func (be *DBBaseEntry) CreateWithTS(ts types.TS) {
 			End:   ts,
 		},
 	}
-	be.InsertNode(node)
+	be.Insert(node)
 }
 
 func (be *DBBaseEntry) CreateWithTxn(txn txnif.AsyncTxn) {
@@ -100,17 +100,17 @@ func (be *DBBaseEntry) CreateWithTxn(txn txnif.AsyncTxn) {
 			Txn:   txn,
 		},
 	}
-	be.InsertNode(node)
+	be.Insert(node)
 }
 
 func (be *DBBaseEntry) getOrSetUpdateNode(txn txnif.TxnReader) (newNode bool, node *DBMVCCNode) {
-	entry := be.GetUpdateNodeLocked()
+	entry := be.GetNodeLocked()
 	if entry.IsSameTxn(txn.GetStartTS()) {
 		return false, entry.(*DBMVCCNode)
 	} else {
 		node := entry.CloneData().(*DBMVCCNode)
 		node.TxnMVCCNode = txnbase.NewTxnMVCCNodeWithTxn(txn)
-		be.InsertNode(node)
+		be.Insert(node)
 		return true, node
 	}
 }
@@ -131,7 +131,7 @@ func (be *DBBaseEntry) DeleteBefore(ts types.TS) bool {
 }
 
 func (be *DBBaseEntry) NeedWaitCommitting(startTS types.TS) (bool, txnif.TxnReader) {
-	un := be.GetUpdateNodeLocked()
+	un := be.GetNodeLocked()
 	if un == nil {
 		return false, nil
 	}
@@ -139,7 +139,7 @@ func (be *DBBaseEntry) NeedWaitCommitting(startTS types.TS) (bool, txnif.TxnRead
 }
 
 func (be *DBBaseEntry) IsCreating() bool {
-	un := be.GetUpdateNodeLocked()
+	un := be.GetNodeLocked()
 	if un == nil {
 		return true
 	}
@@ -248,7 +248,7 @@ func (be *DBBaseEntry) PrepareAdd(txn txnif.TxnReader) (err error) {
 }
 
 func (be *DBBaseEntry) DeleteAfter(ts types.TS) bool {
-	un := be.GetUpdateNodeLocked()
+	un := be.GetNodeLocked()
 	if un == nil {
 		return false
 	}
@@ -267,7 +267,7 @@ func (be *DBBaseEntry) CloneCommittedInRange(start, end types.TS) BaseEntry {
 }
 
 func (be *DBBaseEntry) GetCurrOp() OpT {
-	un := be.GetUpdateNodeLocked()
+	un := be.GetNodeLocked()
 	if un == nil {
 		return OpCreate
 	}
@@ -278,7 +278,7 @@ func (be *DBBaseEntry) GetCurrOp() OpT {
 }
 
 func (be *DBBaseEntry) GetCreatedAt() types.TS {
-	un := be.GetUpdateNodeLocked()
+	un := be.GetNodeLocked()
 	if un == nil {
 		return types.TS{}
 	}
@@ -286,7 +286,7 @@ func (be *DBBaseEntry) GetCreatedAt() types.TS {
 }
 
 func (be *DBBaseEntry) GetDeleteAt() types.TS {
-	un := be.GetUpdateNodeLocked()
+	un := be.GetNodeLocked()
 	if un == nil {
 		return types.TS{}
 	}

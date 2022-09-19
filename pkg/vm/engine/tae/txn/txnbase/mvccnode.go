@@ -29,7 +29,7 @@ type MVCCNode interface {
 
 	IsVisible(ts types.TS) (visible bool)
 	CheckConflict(ts types.TS) error
-	UpdateNode(o MVCCNode)
+	Update(o MVCCNode)
 
 	PreparedIn(minTS, maxTS types.TS) (in, before bool)
 	CommittedIn(minTS, maxTS types.TS) (in, before bool)
@@ -366,7 +366,7 @@ func CompareTxnMVCCNode(e, o *TxnMVCCNode) int {
 	return e.Compare(o)
 }
 
-func (un *TxnMVCCNode) UpdateNode(o *TxnMVCCNode) {
+func (un *TxnMVCCNode) Update(o *TxnMVCCNode) {
 	if !un.Start.Equal(o.Start) {
 		panic("logic err")
 	}

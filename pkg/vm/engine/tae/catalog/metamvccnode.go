@@ -77,7 +77,7 @@ func (e *MetadataMVCCNode) UpdateAttr(o *MetadataMVCCNode) {
 }
 
 // for create drop in one txn
-func (e *MetadataMVCCNode) UpdateNode(vun txnbase.MVCCNode) {
+func (e *MetadataMVCCNode) Update(vun txnbase.MVCCNode) {
 	un := vun.(*MetadataMVCCNode)
 	e.HasCreateOp = un.HasCreateOp
 	e.HasDeleteOp = un.HasDeleteOp
