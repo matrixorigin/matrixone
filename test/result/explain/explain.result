@@ -298,13 +298,13 @@ QUERY PLAN
 Project
   ->  Project
         ->  Table Scan on explain.t1
-              Filter Cond: (CAST(t1.dl AS DOUBLE) <> 4)
+              Filter Cond: (t1.dl <> 4)
 explain select * from (select ti as t,fl as f from t1 where dl <> 4) sub;
 QUERY PLAN
 Project
   ->  Project
         ->  Table Scan on explain.t1
-              Filter Cond: (CAST(t1.dl AS DOUBLE) <> 4)
+              Filter Cond: (t1.dl <> 4)
 explain select id,min(ti) from (select * from t1) sub group by id;
 QUERY PLAN
 Project
