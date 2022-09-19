@@ -54,11 +54,11 @@ type CommandInfo struct {
 	Size       uint32
 }
 type Info struct {
-	Group uint32
-	// CommitId    uint64 //0 for RollBack
-	TxnId       uint64 //0 for entrys not in txn
+	Group       uint32
+	TxnId       uint64
 	Checkpoints []*CkpRanges
 	Uncommits   uint64
+	// PrepareEntryLsn uint64
 
 	GroupLSN uint64
 
@@ -231,11 +231,6 @@ func (info *Info) ToString() string {
 		for _, ranges := range info.Checkpoints {
 			s = fmt.Sprintf("%s%s", s, ranges)
 		}
-		s = fmt.Sprintf("%s\n", s)
-		return s
-	case GTUncommit:
-		s := "uncommit entry"
-		s = fmt.Sprintf("%s %d", s, info.Uncommits)
 		s = fmt.Sprintf("%s\n", s)
 		return s
 	default:

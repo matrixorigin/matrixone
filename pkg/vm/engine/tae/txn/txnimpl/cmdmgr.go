@@ -23,7 +23,7 @@ import (
 )
 
 type commandManager struct {
-	cmd    *txnbase.ComposedCmd
+	cmd    *txnbase.TxnCmd
 	lsn    uint64
 	csn    uint32
 	driver wal.Driver
@@ -31,7 +31,7 @@ type commandManager struct {
 
 func newCommandManager(driver wal.Driver) *commandManager {
 	return &commandManager{
-		cmd:    txnbase.NewComposedCmd(),
+		cmd:    txnbase.NewTxnCmd(),
 		driver: driver,
 	}
 }
@@ -53,11 +53,12 @@ func (mgr *commandManager) MakeLogIndex(csn uint32) *wal.Index {
 	return &wal.Index{LSN: mgr.lsn, CSN: csn, Size: mgr.csn}
 }
 
-func (mgr *commandManager) ApplyTxnRecord(tid uint64) (logEntry entry.Entry, err error) {
+func (mgr *commandManager) ApplyTxnRecord(tid uint64, txn txnif.AsyncTxn) (logEntry entry.Entry, err error) {
 	if mgr.driver == nil {
 		return
 	}
 	mgr.cmd.SetCmdSize(mgr.csn)
+	mgr.cmd.SetTxn(txn)
 	var buf []byte
 	if buf, err = mgr.cmd.Marshal(); err != nil {
 		return
@@ -68,11 +69,11 @@ func (mgr *commandManager) ApplyTxnRecord(tid uint64) (logEntry entry.Entry, err
 		return
 	}
 	info := &entry.Info{
-		Group: wal.GroupC,
+		Group: wal.GroupPrepare,
 		TxnId: tid,
 	}
 	logEntry.SetInfo(info)
-	mgr.lsn, err = mgr.driver.AppendEntry(wal.GroupC, logEntry)
+	mgr.lsn, err = mgr.driver.AppendEntry(wal.GroupPrepare, logEntry)
 	logutil.Debugf("ApplyTxnRecord LSN=%d, Size=%d", mgr.lsn, len(buf))
 	return
 }
