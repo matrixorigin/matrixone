@@ -92,18 +92,6 @@ func (tbl *txnTable) WaitSynced() {
 
 func (tbl *txnTable) CollectCmd(cmdMgr *commandManager) (err error) {
 	tbl.csnStart = uint32(cmdMgr.GetCSN())
-	if tbl.createEntry != nil && tbl.dropEntry != nil {
-		cmd, err := tbl.dropEntry.MakeCommand(tbl.csnStart)
-		// logutil.Infof("%d-%d",csn,cmd.GetType())
-		if err != nil {
-			return err
-		}
-		if cmd == nil {
-			panic(tbl.dropEntry)
-		}
-		cmdMgr.AddCmd(cmd)
-		return nil
-	}
 	for _, txnEntry := range tbl.txnEntries {
 		csn := cmdMgr.GetCSN()
 		cmd, err := txnEntry.MakeCommand(csn)
@@ -550,7 +538,9 @@ func (tbl *txnTable) UncommittedRows() uint32 {
 	}
 	return tbl.localSegment.Rows()
 }
-
+func (tbl *txnTable) NeedRollback()bool{
+	return tbl.createEntry!=nil&&tbl.dropEntry!=nil
+}
 // PrePrepareDedup do deduplication check for 1PC Commit or 2PC Prepare
 func (tbl *txnTable) PrePrepareDedup() (err error) {
 	if tbl.localSegment == nil || !tbl.schema.HasPK() {

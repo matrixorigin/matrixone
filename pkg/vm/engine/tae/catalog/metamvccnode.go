@@ -103,6 +103,10 @@ func (e *MetadataMVCCNode) onReplayCommit(ts types.TS) (err error) {
 
 func (e *MetadataMVCCNode) PrepareCommit() (err error) {
 	_, err = e.TxnMVCCNode.PrepareCommit()
+	if err!=nil{
+		return
+	}
+	err=e.EntryMVCCNode.PrepareCommit()
 	return
 }
 

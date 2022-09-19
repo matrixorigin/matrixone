@@ -20,6 +20,7 @@ import (
 	"io"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 )
 
 type NodeOp uint16
@@ -58,7 +59,7 @@ func (un *EntryMVCCNode) GetDeletedAt() types.TS {
 }
 
 func (un *EntryMVCCNode) IsCreating() bool {
-	return un.CreatedAt.IsEmpty()
+	return un.CreatedAt.IsEmpty() || un.CreatedAt.Equal(txnif.UncommitTS)
 }
 
 func (un *EntryMVCCNode) Clone() *EntryMVCCNode {
@@ -98,19 +99,10 @@ func (un *EntryMVCCNode) ReadFrom(r io.Reader) (n int64, err error) {
 		return
 	}
 	n += 12
-	var hasCreateOp, hasDeleteOp uint8
-	if err = binary.Read(r, binary.BigEndian, &hasCreateOp); err != nil {
-		return
-	}
-	n += 1
-	if hasCreateOp == 1 {
+	if un.CreatedAt.Equal(txnif.UncommitTS) {
 		un.HasCreateOp = true
 	}
-	if err = binary.Read(r, binary.BigEndian, &hasDeleteOp); err != nil {
-		return
-	}
-	n += 1
-	if hasDeleteOp == 1 {
+	if un.DeletedAt.Equal(txnif.UncommitTS){
 		un.HasDeleteOp = true
 	}
 	return
@@ -124,24 +116,15 @@ func (un *EntryMVCCNode) WriteTo(w io.Writer) (n int64, err error) {
 		return
 	}
 	n += 12
-	var hasCreateOp, hasDeleteOp uint8
-	if un.HasCreateOp {
-		hasCreateOp = 1
-	}
-	if err = binary.Write(w, binary.BigEndian, hasCreateOp); err != nil {
-		return
-	}
-	n += 1
-	if un.HasDeleteOp {
-		hasDeleteOp = 1
-	}
-	if err = binary.Write(w, binary.BigEndian, hasDeleteOp); err != nil {
-		return
-	}
-	n += 1
 	return
 }
 func (un *EntryMVCCNode) PrepareCommit() (err error) {
+	if un.HasCreateOp{
+		un.CreatedAt=txnif.UncommitTS
+	}
+	if un.HasDeleteOp{
+		un.DeletedAt=txnif.UncommitTS
+	}
 	return nil
 }
 func (un *EntryMVCCNode) String() string {

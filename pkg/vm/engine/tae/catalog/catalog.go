@@ -695,7 +695,7 @@ func (catalog *Catalog) GetDBEntry(name string, txnCtx txnif.AsyncTxn) (*DBEntry
 	return n.GetPayload(), nil
 }
 
-func (catalog *Catalog) DropDBEntry(name string, txnCtx txnif.AsyncTxn) (deleted *DBEntry, err error) {
+func (catalog *Catalog) DropDBEntry(name string, txnCtx txnif.AsyncTxn) (newEntry bool, deleted *DBEntry, err error) {
 	if name == SystemDBName {
 		err = ErrNotPermitted
 		return
@@ -707,9 +707,8 @@ func (catalog *Catalog) DropDBEntry(name string, txnCtx txnif.AsyncTxn) (deleted
 	entry := dn.GetPayload()
 	entry.Lock()
 	defer entry.Unlock()
-	var isNewNode bool
-	isNewNode, err = entry.DropEntryLocked(txnCtx)
-	if err == nil && isNewNode{
+	newEntry, err = entry.DropEntryLocked(txnCtx)
+	if err == nil {
 		deleted = entry
 	}
 	return
