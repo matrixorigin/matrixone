@@ -23,17 +23,27 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 )
 
 type GetClusterDetailsFunc = func() (logservice.ClusterDetails, error)
 
 func New(
+	m *mheap.Mheap,
 	ctx context.Context,
+	cli client.TxnClient,
 	getClusterDetails GetClusterDetailsFunc,
 ) *Engine {
+	cluster, err := getClusterDetails()
+	if err != nil {
+		return nil
+	}
+	// engine cache
 	return &Engine{
-		db:                newDB(),
+		m:                 m,
+		cli:               cli,
 		getClusterDetails: getClusterDetails,
+		db:                newDB(cli, cluster.DNStores),
 		txns:              make(map[string]*Transaction),
 	}
 }
@@ -45,9 +55,14 @@ func (e *Engine) Create(ctx context.Context, name string, op client.TxnOperator)
 	if err != nil {
 		return err
 	}
+	bat, err := genCreateDatabaseTuple(name, e.m)
+	if err != nil {
+		return err
+	}
+	defer bat.Clean(e.m)
 	// non-io operations do not need to pass context
 	if err := txn.WriteBatch(INSERT, catalog.MO_CATALOG_ID, catalog.MO_DATABASE_ID,
-		catalog.MO_CATALOG, catalog.MO_DATABASE, genCreateDatabaseTuple(name)); err != nil {
+		catalog.MO_CATALOG, catalog.MO_DATABASE, bat); err != nil {
 		return err
 	}
 	return nil

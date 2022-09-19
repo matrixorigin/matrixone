@@ -70,7 +70,7 @@ func (cfg Config) LogStoreExpired(start, current uint64) bool {
 	return uint64(int(cfg.LogStoreTimeout/time.Second)*cfg.TickPerSecond)+start < current
 }
 
-func (cfg Config) DnStoreExpired(start, current uint64) bool {
+func (cfg Config) DNStoreExpired(start, current uint64) bool {
 	return uint64(int(cfg.DNStoreTimeout/time.Second)*cfg.TickPerSecond)+start < current
 }
 
