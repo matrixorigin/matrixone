@@ -76,7 +76,6 @@ func (be *TableBaseEntry) CreateWithTS(ts types.TS) {
 	node := &TableMVCCNode{
 		EntryMVCCNode: &EntryMVCCNode{
 			CreatedAt:   ts,
-			HasCreateOp: true,
 		},
 		TxnMVCCNode: &txnbase.TxnMVCCNode{
 			Start: ts,
@@ -93,7 +92,7 @@ func (be *TableBaseEntry) CreateWithTxn(txn txnif.AsyncTxn) {
 	}
 	node := &TableMVCCNode{
 		EntryMVCCNode: &EntryMVCCNode{
-			HasCreateOp: true,
+			CreatedAt: txnif.UncommitTS,
 		},
 		TxnMVCCNode: &txnbase.TxnMVCCNode{
 			Start: startTS,

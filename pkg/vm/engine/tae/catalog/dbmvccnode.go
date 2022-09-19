@@ -64,8 +64,6 @@ func (e *DBMVCCNode) String() string {
 // for create drop in one txn
 func (e *DBMVCCNode) UpdateNode(vun txnbase.MVCCNode) {
 	un := vun.(*DBMVCCNode)
-	e.HasCreateOp = un.HasCreateOp
-	e.HasDeleteOp = un.HasDeleteOp
 	e.CreatedAt = un.CreatedAt
 	e.DeletedAt = un.DeletedAt
 }

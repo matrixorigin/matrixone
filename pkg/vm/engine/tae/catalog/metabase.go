@@ -76,7 +76,6 @@ func (be *MetaBaseEntry) CreateWithTS(ts types.TS) {
 	node := &MetadataMVCCNode{
 		EntryMVCCNode: &EntryMVCCNode{
 			CreatedAt:   ts,
-			HasCreateOp: true,
 		},
 		TxnMVCCNode: &txnbase.TxnMVCCNode{
 			Start: ts,
@@ -93,7 +92,7 @@ func (be *MetaBaseEntry) CreateWithTxn(txn txnif.AsyncTxn) {
 	}
 	node := &MetadataMVCCNode{
 		EntryMVCCNode: &EntryMVCCNode{
-			HasCreateOp: true,
+			CreatedAt: txnif.UncommitTS,
 		},
 		TxnMVCCNode: &txnbase.TxnMVCCNode{
 			Start: startTS,
