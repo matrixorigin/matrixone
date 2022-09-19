@@ -437,7 +437,7 @@ func (s *stateMachine) handleClusterDetailsQuery(cfg Config) *pb.ClusterDetails 
 	}
 	for uuid, info := range s.state.DNState.Stores {
 		state := pb.NormalState
-		if cfg.DnStoreExpired(info.Tick, s.state.Tick) {
+		if cfg.DNStoreExpired(info.Tick, s.state.Tick) {
 			state = pb.TimeoutState
 		}
 		n := pb.DNStore{
