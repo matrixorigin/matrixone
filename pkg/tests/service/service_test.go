@@ -485,7 +485,7 @@ func TestNetworkPartition(t *testing.T) {
 	// dn service index: 0, 1
 	// log service index: 0, 1, 2, 3
 	// seperate dn service 1 from other services
-	partition1 := c.NewNetworkPartition([]uint32{1}, nil)
+	partition1 := c.NewNetworkPartition([]uint32{1}, nil, nil)
 	require.Equal(t, []uint32{1}, partition1.ListDNServiceIndex())
 	require.Nil(t, partition1.ListLogServiceIndex())
 
@@ -508,7 +508,7 @@ func TestNetworkPartition(t *testing.T) {
 	// dn service index: 0, 1
 	// log service index: 0, 1, 2, 3
 	// seperate log service 3 from other services
-	partition3 := c.NewNetworkPartition(nil, []uint32{3})
+	partition3 := c.NewNetworkPartition(nil, []uint32{3}, nil)
 	require.Nil(t, partition3.ListDNServiceIndex())
 	require.Equal(t, []uint32{3}, partition3.ListLogServiceIndex())
 

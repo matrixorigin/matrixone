@@ -63,7 +63,7 @@ func parseDnState(cfg hakeeper.Config,
 
 	for storeID, storeInfo := range dnState.Stores {
 		expired := false
-		if cfg.DnStoreExpired(storeInfo.Tick, currTick) {
+		if cfg.DNStoreExpired(storeInfo.Tick, currTick) {
 			expired = true
 		}
 
@@ -141,7 +141,7 @@ func checkInitiatingShards(
 
 	// list newly-created shards which had been waiting for a while
 	expired := waitingShards.listEligibleShards(func(start uint64) bool {
-		return cfg.DnStoreExpired(start, currTick)
+		return cfg.DNStoreExpired(start, currTick)
 	})
 
 	var ops []*operator.Operator
