@@ -48,7 +48,7 @@ const (
 	OpRead
 	OpCloseTableIter
 	OpTableStats
-	OpGetLogTail
+	OpGetLogTail = uint32(apipb.OpCode_OpGetLogTail)
 )
 
 func init() {
