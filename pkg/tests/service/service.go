@@ -42,7 +42,7 @@ var (
 	defaultWaitInterval = 100 * time.Millisecond
 )
 
-// Cluster describes behavior of test framwork.
+// Cluster describes behavior of test framework.
 type Cluster interface {
 	// Start starts svcs sequentially
 	Start() error
@@ -1233,6 +1233,9 @@ func (c *testCluster) initCNServices(fileservices *fileServices) []CNService {
 		}
 
 		cs, err := newCNService(cfg, context.TODO(), fs, opt)
+		if err != nil {
+			panic(err)
+		}
 
 		c.logger.Info(
 			"cn service initialized",
@@ -1378,7 +1381,7 @@ func (c *testCluster) getHAKeeperLeader() LogService {
 		}
 		c.logger.Info(
 			"hakeeper state",
-			zap.Bool("isleader", isLeader),
+			zap.Bool("isLeader", isLeader),
 			zap.Int("index", index),
 		)
 

@@ -37,6 +37,8 @@ const (
 
 	DefaultIOWorkers    = int(8)
 	DefaultAsyncWorkers = int(16)
+
+	DefaultLogtailTxnPageSize = 1024
 )
 
 type Options struct {
@@ -46,4 +48,5 @@ type Options struct {
 	SchedulerCfg  *SchedulerCfg  `toml:"scheduler-cfg"`
 	Catalog       *catalog.Catalog
 	Clock         clock.Clock
+	LogtailCfg    *LogtailCfg
 }

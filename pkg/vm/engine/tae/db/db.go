@@ -50,8 +50,9 @@ type DB struct {
 	MTBufMgr    base.INodeManager
 	TxnBufMgr   base.INodeManager
 
-	TxnMgr *txnbase.TxnManager
-	Wal    wal.Driver
+	TxnMgr     *txnbase.TxnManager
+	LogtailMgr *LogtailMgr
+	Wal        wal.Driver
 
 	CKPDriver checkpoint.Driver
 

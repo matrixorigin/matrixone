@@ -19,6 +19,7 @@ import (
 	"encoding/binary"
 	goErrors "errors"
 	"fmt"
+	"math"
 	"os"
 	"runtime/pprof"
 	"sort"
@@ -516,6 +517,21 @@ func extractRowFromEveryVector(ses *Session, dataSet *batch.Batch, j int64, oq o
 	return row, nil
 }
 
+func formatFloatNum[T types.Floats](num T, Typ types.Type) T {
+	if Typ.Precision == -1 || Typ.Width == 0 {
+		return num
+	}
+	pow := math.Pow10(int(Typ.Precision))
+	t := math.Abs(float64(num))
+	t *= pow
+	t = math.Round(t)
+	t /= pow
+	if num < 0 {
+		t = -1 * t
+	}
+	return T(t)
+}
+
 // extractRowFromVector gets the rowIndex row from the i vector
 func extractRowFromVector(ses *Session, vec *vector.Vector, i int, row []interface{}, rowIndex int64) error {
 	switch vec.Typ.Oid { //get col
@@ -640,25 +656,25 @@ func extractRowFromVector(ses *Session, vec *vector.Vector, i int, row []interfa
 	case types.T_float32:
 		if !nulls.Any(vec.Nsp) { //all data in this column are not null
 			vs := vec.Col.([]float32)
-			row[i] = vs[rowIndex]
+			row[i] = formatFloatNum[float32](vs[rowIndex], vec.Typ)
 		} else {
 			if nulls.Contains(vec.Nsp, uint64(rowIndex)) { //is null
 				row[i] = nil
 			} else {
 				vs := vec.Col.([]float32)
-				row[i] = vs[rowIndex]
+				row[i] = formatFloatNum[float32](vs[rowIndex], vec.Typ)
 			}
 		}
 	case types.T_float64:
 		if !nulls.Any(vec.Nsp) { //all data in this column are not null
 			vs := vec.Col.([]float64)
-			row[i] = vs[rowIndex]
+			row[i] = formatFloatNum[float64](vs[rowIndex], vec.Typ)
 		} else {
 			if nulls.Contains(vec.Nsp, uint64(rowIndex)) { //is null
 				row[i] = nil
 			} else {
 				vs := vec.Col.([]float64)
-				row[i] = vs[rowIndex]
+				row[i] = formatFloatNum[float64](vs[rowIndex], vec.Typ)
 			}
 		}
 	case types.T_char, types.T_varchar, types.T_blob:
@@ -1248,10 +1264,15 @@ func (mce *MysqlCmdExecutor) handleExplainStmt(stmt *tree.ExplainStmt) error {
 		return errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("build query plan and optimize failed:'%v'", err))
 	}
 
-	// build explain data buffer
-	buffer := explain.NewExplainDataBuffer()
+	if plan.GetQuery() == nil {
+		logutil.Errorf("The sql query plan does not support explain")
+		return errors.New(errno.SyntaxErrororAccessRuleViolation, "the sql query plan does not support explain.")
+	}
 	// generator query explain
 	explainQuery := explain.NewExplainQueryImpl(plan.GetQuery())
+
+	// build explain data buffer
+	buffer := explain.NewExplainDataBuffer()
 	err = explainQuery.ExplainPlan(buffer, es)
 	if err != nil {
 		logutil.Errorf("explain Query statement error: %v", err)
@@ -1394,6 +1415,21 @@ func (mce *MysqlCmdExecutor) handleCreateRole(ctx context.Context, cr *tree.Crea
 
 	//step1 : create the role
 	return InitRole(ctx, tenant, cr)
+}
+
+// handleGrantRole grants the role
+func (mce *MysqlCmdExecutor) handleGrantRole(ctx context.Context, gr *tree.GrantRole) error {
+	return doGrantRole(ctx, mce.GetSession(), gr)
+}
+
+// handleRevoke revokes the role
+func (mce *MysqlCmdExecutor) handleRevokeRole(ctx context.Context, rr *tree.RevokeRole) error {
+	return doRevokeRole(ctx, mce.GetSession(), rr)
+}
+
+// handleGrantRole grants the privilege to the role
+func (mce *MysqlCmdExecutor) handleGrantPrivilege(ctx context.Context, gp *tree.GrantPrivilege) error {
+	return doGrantPrivilege(ctx, mce.GetSession(), gp)
 }
 
 func GetExplainColumns(explainColName string) ([]interface{}, error) {
@@ -1913,15 +1949,41 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			if err = mce.handleCreateAccount(requestCtx, st); err != nil {
 				goto handleFailed
 			}
+		case *tree.DropAccount: //TODO
+		case *tree.AlterAccount: //TODO
 		case *tree.CreateUser:
 			selfHandle = true
 			if err = mce.handleCreateUser(requestCtx, st); err != nil {
 				goto handleFailed
 			}
+		case *tree.DropUser: //TODO
+		case *tree.AlterUser: //TODO
 		case *tree.CreateRole:
 			selfHandle = true
 			if err = mce.handleCreateRole(requestCtx, st); err != nil {
 				goto handleFailed
+			}
+		case *tree.DropRole: //TODO
+		case *tree.Grant:
+			selfHandle = true
+			switch st.Typ {
+			case tree.GrantTypeRole:
+				if err = mce.handleGrantRole(requestCtx, &st.GrantRole); err != nil {
+					goto handleFailed
+				}
+			case tree.GrantTypePrivilege:
+				if err = mce.handleGrantPrivilege(requestCtx, &st.GrantPrivilege); err != nil {
+					goto handleFailed
+				}
+			}
+		case *tree.Revoke:
+			selfHandle = true
+			switch st.Typ {
+			case tree.RevokeTypeRole:
+				if err = mce.handleRevokeRole(requestCtx, &st.RevokeRole); err != nil {
+					goto handleFailed
+				}
+			case tree.RevokeTypePrivilege:
 			}
 		}
 
@@ -2235,14 +2297,15 @@ func (mce *MysqlCmdExecutor) ExecRequest(requestCtx context.Context, req *Reques
 		return resp, nil
 
 	case COM_STMT_EXECUTE:
+		mce.ses.Cmd = int(COM_STMT_EXECUTE)
 		data := req.GetData().([]byte)
 		sql, err := mce.parseStmtExecute(data)
 		if err != nil {
-			return NewGeneralErrorResponse(COM_STMT_PREPARE, err), nil
+			return NewGeneralErrorResponse(COM_STMT_EXECUTE, err), nil
 		}
 		err = mce.doComQuery(requestCtx, sql)
 		if err != nil {
-			resp = NewGeneralErrorResponse(COM_STMT_PREPARE, err)
+			resp = NewGeneralErrorResponse(COM_STMT_EXECUTE, err)
 		}
 		return resp, nil
 

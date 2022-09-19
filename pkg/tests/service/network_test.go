@@ -39,7 +39,7 @@ func TestGetAvailablePort(t *testing.T) {
 func TestServiceAddress(t *testing.T) {
 	logServiceNum := 3
 	dnServiceNum := 2
-	cnServiceNum := 1
+	cnServiceNum := 2
 
 	address := newServiceAddresses(t, logServiceNum, dnServiceNum, cnServiceNum, "127.0.0.1")
 	address.assertDNService()
@@ -71,9 +71,9 @@ func TestServiceAddress(t *testing.T) {
 		// 1 address for every cn service now
 		require.Equal(t, 1, len(addrList))
 	}
-	// valid dn index: 0
-	// invalid dn index: 1
-	addrList = address.listCnServiceAddresses(1)
+	// valid dn index: 0, 1
+	// invalid dn index: 2
+	addrList = address.listCnServiceAddresses(2)
 	require.Equal(t, 0, len(addrList))
 
 	// ------------------------------
@@ -93,12 +93,12 @@ func TestServiceAddress(t *testing.T) {
 	addrSets := address.buildPartitionAddressSets(partition1, partition2)
 	// there are 2 address sets corresponding with 2 partitions
 	require.Equal(t, 2, len(addrSets))
-	// in partition 1, there are 1 dn service and 1 log service.
-	require.Equal(t, 3+1, len(addrSets[0]))
+	// in partition 1, there are 1 dn service, 1 log service and 1 cn service.
+	require.Equal(t, 3+1+1, len(addrSets[0]))
 	// in partition 1, there are 1 dn service, 1 cn service and 2 log service.
 	require.Equal(t, 3*2+1+1, len(addrSets[1]))
 
-	// the first address set should contains the following addresses.
+	// the first address set should contain the following addresses.
 	dnListenAddr := address.getDnListenAddress(int(dnIndex))
 	require.True(t, addrSets[0].contains(dnListenAddr))
 	logListenAddr := address.getLogListenAddress(int(logIndex))

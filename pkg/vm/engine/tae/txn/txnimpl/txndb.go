@@ -52,6 +52,7 @@ func (db *txnDB) SetCreateEntry(e txnif.TxnEntry) error {
 		panic("logic error")
 	}
 	db.store.IncreateWriteCnt()
+	db.store.dirtyMemo.recordCatalogChange()
 	db.createEntry = e
 	return nil
 }
@@ -61,6 +62,7 @@ func (db *txnDB) SetDropEntry(e txnif.TxnEntry) error {
 		panic("logic error")
 	}
 	db.store.IncreateWriteCnt()
+	db.store.dirtyMemo.recordCatalogChange()
 	db.dropEntry = e
 	return nil
 }
