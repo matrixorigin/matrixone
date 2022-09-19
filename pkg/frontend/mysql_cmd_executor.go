@@ -1422,7 +1422,7 @@ func (mce *MysqlCmdExecutor) handleGrantRole(ctx context.Context, gr *tree.Grant
 	return doGrantRole(ctx, mce.GetSession(), gr)
 }
 
-// handleRevoke revokes the role
+// handleRevokeRole revokes the role
 func (mce *MysqlCmdExecutor) handleRevokeRole(ctx context.Context, rr *tree.RevokeRole) error {
 	return doRevokeRole(ctx, mce.GetSession(), rr)
 }
@@ -1430,6 +1430,11 @@ func (mce *MysqlCmdExecutor) handleRevokeRole(ctx context.Context, rr *tree.Revo
 // handleGrantRole grants the privilege to the role
 func (mce *MysqlCmdExecutor) handleGrantPrivilege(ctx context.Context, gp *tree.GrantPrivilege) error {
 	return doGrantPrivilege(ctx, mce.GetSession(), gp)
+}
+
+// handleRevokePrivilege revokes the privilege from the user or role
+func (mce *MysqlCmdExecutor) handleRevokePrivilege(ctx context.Context, rp *tree.RevokePrivilege) error {
+	return doRevokePrivilege(ctx, mce.GetSession(), rp)
 }
 
 func GetExplainColumns(explainColName string) ([]interface{}, error) {
@@ -1984,6 +1989,9 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 					goto handleFailed
 				}
 			case tree.RevokeTypePrivilege:
+				if err = mce.handleRevokePrivilege(requestCtx, &st.RevokePrivilege); err != nil {
+					goto handleFailed
+				}
 			}
 		}
 
