@@ -19,10 +19,8 @@ import (
 )
 
 const (
-	GroupC        = entry.GTCommit
 	GroupCKP      = entry.GTCKp
 	GroupInternal = entry.GTInternal
-	GroupUC       = entry.GTUncommit
 )
 
 type Store interface {

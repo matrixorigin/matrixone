@@ -68,7 +68,7 @@ func appendGroupC(t *testing.T, driver Driver, tid uint64) entry.Entry {
 	err := e.SetPayload([]byte(strconv.Itoa(rand.Intn(10))))
 	assert.NoError(t, err)
 	e.SetInfo(info)
-	_, err = driver.AppendEntry(GroupC, e)
+	_, err = driver.AppendEntry(GroupPrepare, e)
 	assert.NoError(t, err)
 	return e
 }
