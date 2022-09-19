@@ -360,117 +360,6 @@ func handleShowColumns(ses *Session) error {
 	return nil
 }
 
-func getDateFromLocalBatch(obj interface{}, bat *batch.Batch) error {
-	ses := obj.(*Session)
-	if bat == nil {
-		return nil
-	}
-
-	goID := GetRoutineId()
-
-	logutil.Infof("goid %d \n", goID)
-	enableProfile := ses.Pu.SV.EnableProfileGetDataFromPipeline
-
-	var cpuf *os.File = nil
-	if enableProfile {
-		cpuf, _ = os.Create("cpu_profile")
-	}
-
-	begin := time.Now()
-
-	proto := ses.GetMysqlProtocol()
-	proto.PrepareBeforeProcessingResultSet()
-
-	//Create a new temporary resultset per pipeline thread.
-	mrs := &MysqlResultSet{}
-	//Warning: Don't change ResultColumns in this.
-	//Reference the shared ResultColumns of the session among multi-thread.
-	mrs.Columns = ses.Mrs.Columns
-	mrs.Name2Index = ses.Mrs.Name2Index
-
-	begin3 := time.Now()
-	countOfResultSet := 1
-	//group row
-	mrs.Data = make([][]interface{}, countOfResultSet)
-	for i := 0; i < countOfResultSet; i++ {
-		mrs.Data[i] = make([]interface{}, len(bat.Vecs))
-	}
-	allocateOutBufferTime := time.Since(begin3)
-
-	oq := NewOutputQueue(proto, mrs, uint64(countOfResultSet), ses.ep, ses.showStmtType)
-	oq.reset()
-
-	row2colTime := time.Duration(0)
-
-	procBatchBegin := time.Now()
-
-	n := vector.Length(bat.Vecs[0])
-
-	if enableProfile {
-		if err := pprof.StartCPUProfile(cpuf); err != nil {
-			return err
-		}
-	}
-	for j := 0; j < n; j++ { //row index
-		if oq.ep.Outfile {
-			select {
-			case <-ses.requestCtx.Done():
-				{
-					return nil
-				}
-			default:
-				{
-				}
-			}
-		}
-
-		if bat.Zs[j] <= 0 {
-			continue
-		}
-		row, err := extractRowFromEveryVector(ses, bat, int64(j), oq)
-		if err != nil {
-			return err
-		}
-		if oq.showStmtType == ShowColumns {
-			row2 := make([]interface{}, len(row))
-			copy(row2, row)
-			ses.Data = append(ses.Data, row2)
-		}
-	}
-
-	err := oq.flush()
-	if err != nil {
-		return err
-	}
-
-	if enableProfile {
-		pprof.StopCPUProfile()
-	}
-
-	procBatchTime := time.Since(procBatchBegin)
-	tTime := time.Since(begin)
-	logutil.Infof("rowCount %v \n"+
-		"time of getDataFromPipeline : %s \n"+
-		"processBatchTime %v \n"+
-		"row2colTime %v \n"+
-		"allocateOutBufferTime %v \n"+
-		"outputQueue.flushTime %v \n"+
-		"processBatchTime - row2colTime - allocateOutbufferTime - flushTime %v \n"+
-		"restTime(=tTime - row2colTime - allocateOutBufferTime) %v \n"+
-		"protoStats %s\n",
-		n,
-		tTime,
-		procBatchTime,
-		row2colTime,
-		allocateOutBufferTime,
-		oq.flushTime,
-		procBatchTime-row2colTime-allocateOutBufferTime-oq.flushTime,
-		tTime-row2colTime-allocateOutBufferTime,
-		proto.GetStats())
-
-	return nil
-}
-
 /*
 extract the data from the pipeline.
 obj: routine obj
@@ -481,10 +370,6 @@ Warning: The pipeline is the multi-thread environment. The getDataFromPipeline w
 */
 func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 	ses := obj.(*Session)
-
-	if ses.showStmtType == ExplainAnalyze {
-		return nil
-	}
 
 	if bat == nil {
 		return nil
@@ -1690,6 +1575,10 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 	cwft.proc.TxnOperator = txnHandler.GetTxn()
 	cwft.proc.FileService = cwft.ses.Pu.FileService
 	cwft.compile = compile.New(cwft.ses.GetDatabaseName(), cwft.ses.GetSql(), cwft.ses.GetUserName(), requestCtx, cwft.ses.GetStorage(), cwft.proc, cwft.stmt)
+
+	if _, ok := cwft.stmt.(*tree.ExplainAnalyze); ok {
+		fill = func(obj interface{}, bat *batch.Batch) error { return nil }
+	}
 	err = cwft.compile.Compile(cwft.plan, cwft.ses, fill)
 	if err != nil {
 		return nil, err
@@ -2304,7 +2193,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 					return errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("explain Query statement error:%v", err))
 				}
 
-				err = buildMoExplainQuery(explainColName, buffer, ses, getDateFromLocalBatch)
+				err = buildMoExplainQuery(explainColName, buffer, ses, getDataFromPipeline)
 				if err != nil {
 					return err
 				}
