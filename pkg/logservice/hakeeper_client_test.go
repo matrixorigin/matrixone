@@ -32,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
+	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 )
 
@@ -307,7 +308,7 @@ func testNotHAKeeperErrorIsHandled(t *testing.T, fn func(*testing.T, *managedHAK
 	cfg1.Fill()
 	service1, err := NewService(cfg1,
 		testutil.NewFS(),
-		nil,
+		taskservice.NewTaskService(taskservice.NewMemTaskStorage()),
 		WithBackendFilter(func(msg morpc.Message, backendAddr string) bool {
 			return true
 		}),
@@ -319,7 +320,7 @@ func testNotHAKeeperErrorIsHandled(t *testing.T, fn func(*testing.T, *managedHAK
 	cfg2.Fill()
 	service2, err := NewService(cfg2,
 		testutil.NewFS(),
-		nil,
+		taskservice.NewTaskService(taskservice.NewMemTaskStorage()),
 		WithBackendFilter(func(msg morpc.Message, backendAddr string) bool {
 			return true
 		}),
