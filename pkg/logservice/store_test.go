@@ -73,7 +73,7 @@ func TestStoreCanBeCreatedAndClosed(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 	cfg := getStoreTestConfig()
 	defer vfs.ReportLeakedFD(cfg.FS, t)
-	store, err := newLogStore(cfg)
+	store, err := newLogStore(cfg, nil)
 	assert.NoError(t, err)
 	plog.Infof("1")
 	defer func() {
@@ -83,7 +83,7 @@ func TestStoreCanBeCreatedAndClosed(t *testing.T) {
 }
 
 func getTestStore(cfg Config, startLogReplica bool) (*store, error) {
-	store, err := newLogStore(cfg)
+	store, err := newLogStore(cfg, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -102,7 +102,7 @@ func TestHAKeeperCanBeStarted(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 	cfg := getStoreTestConfig()
 	defer vfs.ReportLeakedFD(cfg.FS, t)
-	store, err := newLogStore(cfg)
+	store, err := newLogStore(cfg, nil)
 	assert.NoError(t, err)
 	peers := make(map[uint64]dragonboat.Target)
 	peers[2] = store.nh.ID()
@@ -427,7 +427,7 @@ func getTestStores() (*store, *store, error) {
 		GossipSeedAddresses: []string{"127.0.0.1:9011", "127.0.0.1:9012"},
 	}
 	cfg1.Fill()
-	store1, err := newLogStore(cfg1)
+	store1, err := newLogStore(cfg1, nil)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -442,7 +442,7 @@ func getTestStores() (*store, *store, error) {
 		GossipSeedAddresses: []string{"127.0.0.1:9011", "127.0.0.1:9012"},
 	}
 	cfg2.Fill()
-	store2, err := newLogStore(cfg2)
+	store2, err := newLogStore(cfg2, nil)
 	if err != nil {
 		return nil, nil, err
 	}

@@ -26,7 +26,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper"
-	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/util/toml"
 )
 
@@ -60,7 +59,7 @@ type Config struct {
 	// milliseconds.
 	RTTMillisecond uint64 `toml:"rttmillisecond"`
 	// DataDir is the name of the directory for storing all log service data. It
-	// should a locally mount partition with good write and fsync performance.
+	// should a locally mounted partition with good write and fsync performance.
 	DataDir string `toml:"data-dir"`
 	// ServiceAddress is log service's service address that can be reached by
 	// other nodes such as DN nodes.
@@ -154,8 +153,7 @@ type Config struct {
 
 	// HAKeeperClientConfig is the config for HAKeeperClient
 	HAKeeperClientConfig HAKeeperClientConfig
-	// TaskService is the interface for managing async tasks running on CNs.
-	TaskService taskservice.TaskService
+
 	// DisableWorkers disables the HAKeeper ticker and HAKeeper client in tests.
 	// Never set this field to true in production
 	DisableWorkers bool
@@ -296,9 +294,6 @@ func (c *Config) Validate() error {
 func (c *Config) Fill() {
 	if c.FS == nil {
 		c.FS = vfs.Default
-	}
-	if c.TaskService == nil {
-		c.TaskService = taskservice.NewTaskService(taskservice.NewMemTaskStorage())
 	}
 	if c.RTTMillisecond == 0 {
 		c.RTTMillisecond = 200

@@ -39,6 +39,7 @@ func NewTestService(fs vfs.FS) (*Service, ClientConfig, error) {
 	cfg.Fill()
 	service, err := NewService(cfg,
 		testutil.NewFS(),
+		nil,
 		WithBackendFilter(func(msg morpc.Message, backendAddr string) bool {
 			return true
 		}),

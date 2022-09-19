@@ -50,6 +50,7 @@ func TestBackgroundTickAndHeartbeat(t *testing.T) {
 	cfg.Fill()
 	service, err := NewService(cfg,
 		testutil.NewFS(),
+		nil,
 		WithBackendFilter(func(msg morpc.Message, backendAddr string) bool {
 			return true
 		}),
