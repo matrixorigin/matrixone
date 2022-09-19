@@ -335,6 +335,6 @@ type GetLogTailReq struct {
 }
 
 type GetLogTailResp struct {
-	ErrRelationNotFound ErrRelationNotFound
+	ErrRelationNotFound ErrorResp
 	Response            apipb.SyncLogTailResp
 }

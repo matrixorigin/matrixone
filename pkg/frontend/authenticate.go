@@ -1415,7 +1415,7 @@ func doGrantPrivilege(ctx context.Context, ses *Session, gp *tree.GrantPrivilege
 				goto handleFailed
 			}
 		default:
-			err = moerr.NewInternalError("in object type %s privilege level type %s is unsupported", gp.ObjType, gp.Level.Level)
+			err = moerr.NewInternalError("in object type %v privilege level type %v is unsupported", gp.ObjType, gp.Level.Level)
 			goto handleFailed
 		}
 	case tree.OBJECT_TYPE_DATABASE:
@@ -1434,7 +1434,7 @@ func doGrantPrivilege(ctx context.Context, ses *Session, gp *tree.GrantPrivilege
 				goto handleFailed
 			}
 		default:
-			err = moerr.NewInternalError("in object type %s privilege level type %s is unsupported", gp.ObjType.ToString(), gp.Level.Level)
+			err = moerr.NewInternalError("in object type %v privilege level type %v is unsupported", gp.ObjType.ToString(), gp.Level.Level)
 			goto handleFailed
 		}
 	case tree.OBJECT_TYPE_ACCOUNT:
@@ -1444,11 +1444,11 @@ func doGrantPrivilege(ctx context.Context, ses *Session, gp *tree.GrantPrivilege
 			privLevel = privilegeLevelStar
 			objId = objectIDAll
 		default:
-			err = moerr.NewInternalError("in object type %s privilege level type %s is unsupported", gp.ObjType, gp.Level.Level)
+			err = moerr.NewInternalError("in object type %v privilege level type %v is unsupported", gp.ObjType, gp.Level.Level)
 			goto handleFailed
 		}
 	default:
-		err = moerr.NewInternalError("object type %s is unsupported", gp.ObjType)
+		err = moerr.NewInternalError("object type %v is unsupported", gp.ObjType)
 		goto handleFailed
 	}
 
@@ -1759,14 +1759,14 @@ func doGrantRole(ctx context.Context, ses *Session, gr *tree.GrantRole) error {
 			sql := ""
 			if to.typ == roleType {
 				if from.id == to.id { //direct loop
-					err = moerr.NewWithContext(ctx, moerr.ER_ROLE_GRANTED_TO_ITSELF, from.name, to.name)
+					err = moerr.NewRoleGrantedToSelf(from.name, to.name)
 					goto handleFailed
 				} else {
 					//check the indirect loop
 					edgeId := checkLoopGraph.addEdge(from.id, to.id)
 					has := checkLoopGraph.hasLoop(from.id)
 					if has {
-						err = moerr.NewWithContext(ctx, moerr.ER_ROLE_GRANTED_TO_ITSELF, from.name, to.name)
+						err = moerr.NewRoleGrantedToSelf(from.name, to.name)
 						goto handleFailed
 					}
 					//restore the graph

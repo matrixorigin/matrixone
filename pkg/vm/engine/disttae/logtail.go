@@ -18,6 +18,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
@@ -116,9 +117,9 @@ func genLogTailReq(dn DNStore, req api.SyncLogTailReq) ([]txn.TxnRequest, error)
 				},
 			},
 			Options: &txn.TxnRequestOptions{
-				RetryCodes: []txn.ErrorCode{
+				RetryCodes: []int32{
 					// dn shard not found
-					txn.ErrorCode_DNShardNotFound,
+					int32(moerr.ErrDNShardNotFound),
 				},
 				RetryInterval: int64(time.Second),
 			},

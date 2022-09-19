@@ -65,6 +65,7 @@ const (
 	ErrParseError          uint16 = 20303
 	ErrConstraintViolation uint16 = 20304
 	ErrDuplicate           uint16 = 20305
+	ErrRoleGrantedToSelf   uint16 = 20306
 
 	// Group 4: unexpected state and io errors
 	ErrInvalidState                 uint16 = 20400
@@ -198,6 +199,7 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrParseError:          {ER_PARSE_ERROR, []string{MySQLDefaultSqlState}, "SQL parser error: %s"},
 	ErrConstraintViolation: {ER_CHECK_CONSTRAINT_VIOLATED, []string{MySQLDefaultSqlState}, "constraint vialation: %s"},
 	ErrDuplicate:           {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "tae data: duplicate"},
+	ErrRoleGrantedToSelf:   {ER_ROLE_GRANTED_TO_ITSELF, []string{MySQLDefaultSqlState}, "cannot grant role %s to %s"},
 
 	// Group 4: unexpected state or file io error
 	ErrInvalidState:                 {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "invalid state %s"},
@@ -780,6 +782,10 @@ func NewNotFound() *Error {
 
 func NewDuplicate() *Error {
 	return newWithDepth(Context(), ErrDuplicate)
+}
+
+func NewRoleGrantedToSelf(from, to string) *Error {
+	return newWithDepth(Context(), ErrRoleGrantedToSelf, from, to)
 }
 
 func NewTxnInternal() *Error {

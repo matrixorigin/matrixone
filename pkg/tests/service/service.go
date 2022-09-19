@@ -16,7 +16,6 @@ package service
 
 import (
 	"context"
-	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -414,7 +413,7 @@ func (c *testCluster) GetCNStoreInfo(ctx context.Context, uuid string) (logpb.CN
 	if storeInfo, ok := stores[uuid]; ok {
 		return storeInfo, nil
 	}
-	return logpb.CNStoreInfo{}, ErrServiceNotExist
+	return logpb.CNStoreInfo{}, moerr.NewNoService(uuid)
 }
 
 func (c *testCluster) GetCNStoreInfoIndexed(ctx context.Context, index int) (logpb.CNStoreInfo, error) {
@@ -503,7 +502,7 @@ func (c *testCluster) CNStoreExpired(uuid string) (bool, error) {
 
 	cnStore, ok := state.CNState.Stores[uuid]
 	if !ok {
-		return false, wrappedError(ErrStoreNotReported, uuid)
+		return false, moerr.NewShardNotReported(uuid, 0)
 	}
 
 	hkcfg := c.GetHAKeeperConfig()
@@ -907,7 +906,7 @@ func (c *testCluster) GetCNService(uuid string) (CNService, error) {
 			return svc, nil
 		}
 	}
-	return nil, wrappedError(ErrServiceNotExist, uuid)
+	return nil, moerr.NewNoService(uuid)
 }
 
 func (c *testCluster) GetDNServiceIndexed(index int) (DNService, error) {
@@ -935,9 +934,7 @@ func (c *testCluster) GetCNServiceIndexed(index int) (CNService, error) {
 	defer c.log.Unlock()
 
 	if index >= len(c.cn.svcs) || index < 0 {
-		return nil, wrappedError(
-			ErrInvalidServiceIndex, fmt.Sprintf("index: %d", index),
-		)
+		return nil, moerr.NewInvalidServiceIndex(index)
 	}
 	return c.cn.svcs[index], nil
 }

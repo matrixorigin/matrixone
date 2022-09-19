@@ -1763,7 +1763,7 @@ func (mp *MysqlProtocolImpl) makeResultSetBinaryRow(data []byte, mrs *MysqlResul
 				data = mp.appendStringLenEnc(data, value)
 			}
 		default:
-			return nil, moerr.NewError(moerr.INTERNAL_ERROR, "type is not supported in binary text result row")
+			return nil, moerr.NewInternalError("type is not supported in binary text result row")
 		}
 	}
 

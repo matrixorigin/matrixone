@@ -310,7 +310,7 @@ func buildTableDefs(defs tree.TableDefs, ctx CompilerContext, tableDef *TableDef
 				return err
 			}
 			if auto_incr && defaultValue.Expr != nil {
-				return moerr.NewError(moerr.ER_INVALID_DEFAULT, fmt.Sprintf("invalid default value for '%s'", def.Name.Parts[0]))
+				return moerr.NewInvalidInput("invalid default value for '%s'", def.Name.Parts[0])
 			}
 
 			onUpdateExpr, err := buildOnUpdate(def, colType)

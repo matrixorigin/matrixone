@@ -284,7 +284,7 @@ func (l *LocalETLFS) Read(ctx context.Context, vector *IOVector) error {
 				if err != nil {
 					return err
 				}
-				if n != entry.Size {
+				if int64(n) != entry.Size {
 					return moerr.NewUnexpectedEOF(path.File)
 				}
 			}

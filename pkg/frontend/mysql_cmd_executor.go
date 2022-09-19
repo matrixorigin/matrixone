@@ -654,25 +654,25 @@ func extractRowFromVector(ses *Session, vec *vector.Vector, i int, row []interfa
 	case types.T_float32:
 		if !nulls.Any(vec.Nsp) { //all data in this column are not null
 			vs := vec.Col.([]float32)
-			row[i] = formatFloatNum[float32](vs[rowIndex], vec.Typ)
+			row[i] = formatFloatNum(vs[rowIndex], vec.Typ)
 		} else {
 			if nulls.Contains(vec.Nsp, uint64(rowIndex)) { //is null
 				row[i] = nil
 			} else {
 				vs := vec.Col.([]float32)
-				row[i] = formatFloatNum[float32](vs[rowIndex], vec.Typ)
+				row[i] = formatFloatNum(vs[rowIndex], vec.Typ)
 			}
 		}
 	case types.T_float64:
 		if !nulls.Any(vec.Nsp) { //all data in this column are not null
 			vs := vec.Col.([]float64)
-			row[i] = formatFloatNum[float64](vs[rowIndex], vec.Typ)
+			row[i] = formatFloatNum(vs[rowIndex], vec.Typ)
 		} else {
 			if nulls.Contains(vec.Nsp, uint64(rowIndex)) { //is null
 				row[i] = nil
 			} else {
 				vs := vec.Col.([]float64)
-				row[i] = formatFloatNum[float64](vs[rowIndex], vec.Typ)
+				row[i] = formatFloatNum(vs[rowIndex], vec.Typ)
 			}
 		}
 	case types.T_char, types.T_varchar, types.T_blob:
