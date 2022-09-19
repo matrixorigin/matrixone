@@ -139,6 +139,21 @@ func TestGetLogListenAddress(t *testing.T) {
 	require.Equal(t, "", addr3)
 }
 
+func TestGetCnListenAddress(t *testing.T) {
+	cnNum := 3
+	address := newServiceAddresses(t, 1, 1, cnNum, "127.0.0.1")
+
+	addr0 := address.getCnListenAddress(0)
+	addr1 := address.getCnListenAddress(1)
+	addr2 := address.getCnListenAddress(2)
+	addr3 := address.getCnListenAddress(3)
+
+	require.NotEqual(t, addr0, addr1)
+	require.NotEqual(t, addr0, addr2)
+	require.NotEqual(t, addr1, addr2)
+	require.Equal(t, "", addr3)
+}
+
 func TestGetLogRaftAddress(t *testing.T) {
 	logNum := 3
 	address := newServiceAddresses(t, logNum, 1, 0, "127.0.0.1")
