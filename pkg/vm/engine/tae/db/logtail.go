@@ -559,9 +559,9 @@ type TableLogtailRespBuilder struct {
 	checkpoint    string
 	blkMetaBatch  *containers.Batch
 	dataInsSchema *catalog.Schema
-	dataDelSchema *catalog.Schema
-	dataInsBatch  *containers.Batch
-	dataDelBatch  *containers.Batch
+	// dataDelSchema *catalog.Schema
+	dataInsBatch *containers.Batch
+	// dataDelBatch  *containers.Batch
 }
 
 func NewTableLogtailRespBuilder(ckp string, start, end types.TS, tbl *catalog.TableEntry) *TableLogtailRespBuilder {
