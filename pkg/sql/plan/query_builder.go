@@ -700,11 +700,6 @@ func (builder *QueryBuilder) buildUnion(stmt *tree.UnionClause, astOrderBy tree.
 			}
 			return builder.buildSelect(&tree.Select{Select: sltStmt, Limit: astLimit, OrderBy: astOrderBy}, ctx, isRoot)
 		}
-		if slt, ok := selectStmts[0].(*tree.Select); ok {
-			return builder.buildSelect(slt, ctx, isRoot)
-		} else {
-			return builder.buildSelect(&tree.Select{Select: selectStmts[0]}, ctx, isRoot)
-		}
 	}
 
 	// build selects
