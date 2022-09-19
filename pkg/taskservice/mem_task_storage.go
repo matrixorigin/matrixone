@@ -175,7 +175,7 @@ func (s *memTaskStorage) UpdateCronTask(ctx context.Context, cron task.CronTask,
 	if _, ok := s.taskIndexes[value.Metadata.ID]; ok {
 		return 0, nil
 	}
-	if _, ok := s.cronTasks[cron.ID]; !ok {
+	if v, ok := s.cronTasks[cron.ID]; !ok || v.TriggerTimes != cron.TriggerTimes-1 {
 		return 0, nil
 	}
 

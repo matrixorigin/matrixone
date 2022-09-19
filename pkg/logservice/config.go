@@ -298,7 +298,7 @@ func (c *Config) Fill() {
 		c.FS = vfs.Default
 	}
 	if c.TaskService == nil {
-		c.TaskService = taskservice.NewTaskService(taskservice.NewMemTaskStorage())
+		c.TaskService = taskservice.NewTaskService(taskservice.NewMemTaskStorage(), nil)
 	}
 	if c.RTTMillisecond == 0 {
 		c.RTTMillisecond = 200

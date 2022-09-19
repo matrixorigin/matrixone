@@ -135,6 +135,8 @@ type TaskService interface {
 	QueryTask(context.Context, ...Condition) ([]task.Task, error)
 	// QueryCronTask returns all cron task metadata
 	QueryCronTask(context.Context) ([]task.CronTask, error)
+
+	StartTriggerCronTask()
 }
 
 // TaskExecutor which is responsible for the execution logic of a specific Task, and the function exits to
@@ -180,5 +182,7 @@ type TaskStorage interface {
 
 	// UpdateCronTask crontask generates tasks periodically, and this update
 	// needs to be in a transaction. Update cron task and insert a new task.
+	// This update must be transactional and needs to be done conditionally
+	// using CronTask.TriggerTimes and the task.Metadata.ID field.
 	UpdateCronTask(context.Context, task.CronTask, task.Task) (int, error)
 }
