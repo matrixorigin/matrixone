@@ -661,6 +661,43 @@ func (builder *QueryBuilder) buildUnion(stmt *tree.UnionClause, astOrderBy tree.
 	}
 
 	if len(selectStmts) == 1 {
+		switch sltStmt := selectStmts[0].(type) {
+		case *tree.Select:
+			// rewrite sltStmt to select distinct * from (sltStmt) a
+			tmpSltStmt := &tree.Select{
+				Select: &tree.SelectClause{
+					Distinct: true,
+					Exprs: []tree.SelectExpr{
+						{
+							Expr: &tree.UnqualifiedStar{},
+							As:   "",
+						},
+					},
+					From: &tree.From{
+						Tables: tree.TableExprs{
+							&tree.AliasedTableExpr{
+								Expr: &tree.Subquery{
+									Select: sltStmt,
+									Exists: false,
+								},
+								As: tree.AliasClause{
+									Alias: "a",
+								},
+							},
+						},
+					},
+				},
+				Limit:   astLimit,
+				OrderBy: astOrderBy,
+			}
+			return builder.buildSelect(tmpSltStmt, ctx, isRoot)
+
+		case *tree.SelectClause:
+			if !sltStmt.Distinct {
+				sltStmt.Distinct = true
+			}
+			return builder.buildSelect(&tree.Select{Select: sltStmt, Limit: astLimit, OrderBy: astOrderBy}, ctx, isRoot)
+		}
 		if slt, ok := selectStmts[0].(*tree.Select); ok {
 			return builder.buildSelect(slt, ctx, isRoot)
 		} else {
