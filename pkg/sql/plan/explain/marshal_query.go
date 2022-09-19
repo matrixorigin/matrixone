@@ -283,8 +283,11 @@ func (m MarshalNodeImpl) GetNodeLabels(options *ExplainOptions) ([]Label, error)
 			Value: fullTableName,
 		})
 
+		used := len(columns)
+		all := len(tableDef.Name2ColIndex)
+		colsName := "Columns(" + strconv.Itoa(used) + " / " + strconv.Itoa(all) + ")"
 		labels = append(labels, Label{
-			Name:  "Columns",
+			Name:  colsName,
 			Value: columns,
 		})
 	case plan.Node_PROJECT:

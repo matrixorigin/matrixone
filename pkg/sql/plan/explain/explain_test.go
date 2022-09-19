@@ -211,12 +211,12 @@ func TestCollectionQuery(t *testing.T) {
 
 func TestDMLInsert(t *testing.T) {
 	sqls := []string{
-		"explain INSERT NATION VALUES (1, 'NAME1',21, 'COMMENT1'), (2, 'NAME2', 22, 'COMMENT2')",
+		//"explain INSERT NATION VALUES (1, 'NAME1',21, 'COMMENT1'), (2, 'NAME2', 22, 'COMMENT2')",
 		//"explain verbose INSERT NATION VALUES (1, 'NAME1',21, 'COMMENT1'), (2, 'NAME2', 22, 'COMMENT2')",
 		//"explain INSERT NATION (N_NATIONKEY, N_REGIONKEY, N_NAME) VALUES (1, 21, 'NAME1'), (2, 22, 'NAME2')",
 		//"explain verbose INSERT NATION (N_NATIONKEY, N_REGIONKEY, N_NAME) VALUES (1, 21, 'NAME1'), (2, 22, 'NAME2')",
-		//"explain INSERT INTO NATION SELECT * FROM NATION2",
-		//"explain verbose INSERT INTO NATION SELECT * FROM NATION2",
+		"explain INSERT INTO NATION SELECT * FROM NATION2",
+		"explain verbose INSERT INTO NATION SELECT * FROM NATION2",
 	}
 	mockOptimizer := plan.NewMockOptimizer()
 	runTestShouldPass(mockOptimizer, t, sqls)
