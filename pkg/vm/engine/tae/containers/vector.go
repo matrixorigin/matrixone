@@ -326,7 +326,6 @@ func (vec *vector[T]) ReadFromColumn(f objectio.ColumnObject, buffer *bytes.Buff
 	var fsVector *fileservice.IOVector
 	stat := f.GetMeta()
 	if stat.GetAlg() != compress.None {
-		panic("stat.GetAlg()")
 		osize := int(stat.GetLocation().OriginSize())
 		size := stat.GetLocation().Length()
 		tmpNode := vec.GetAllocator().Alloc(int(size))
@@ -354,29 +353,6 @@ func (vec *vector[T]) ReadFromColumn(f objectio.ColumnObject, buffer *bytes.Buff
 			}
 			return
 		}
-	} else {
-		osize := int(stat.GetLocation().OriginSize())
-		size := stat.GetLocation().Length()
-		tmpNode := vec.GetAllocator().Alloc(int(size))
-		defer vec.GetAllocator().Free(tmpNode)
-		srcBuf := tmpNode.GetBuf()[:size]
-		fsVector, err = f.GetData()
-		if err != nil {
-			return
-		}
-
-		srcBuf = fsVector.Entries[0].Data
-		if buffer == nil {
-			n = vec.GetAllocator().Alloc(osize)
-			buf = n.GetBuf()[:osize]
-		} else {
-			buffer.Reset()
-			if osize > buffer.Cap() {
-				buffer.Grow(osize)
-			}
-			buf = buffer.Bytes()[:osize]
-		}
-		copy(buf, srcBuf)
 	}
 
 	vec.typ = types.DecodeType(buf[:types.TSize])

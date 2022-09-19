@@ -19,8 +19,11 @@ import (
 	"fmt"
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/stl"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
@@ -617,8 +620,18 @@ func (blk *dataBlock) LoadColumnData(
 	colIdx int,
 	buffer *bytes.Buffer) (vec containers.Vector, err error) {
 	def := blk.meta.GetSchema().ColDefs[colIdx]
-	vec = containers.MakeVector(def.Type, def.Nullable())
-	err = vec.ReadFromColumn(blk.colFiles[colIdx].GetDataObject(), buffer)
+	var fsVector *fileservice.IOVector
+	fsVector, err = blk.colFiles[colIdx].GetDataObject().GetData()
+	if err != nil {
+		return
+	}
+
+	srcBuf := fsVector.Entries[0].Data
+	vector := vector.New(def.Type)
+	vector.Read(srcBuf)
+	vec = objectio.MOToVectorTmp(vector, def.Nullable())
+	/*vec = containers.MakeVector(def.Type, def.Nullable())
+	err = vec.ReadFromColumn(blk.colFiles[colIdx].GetDataObject(), buffer)*/
 	return
 }
 
