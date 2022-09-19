@@ -66,30 +66,7 @@ func Atan[T constraints.Unsigned | constraints.Signed | constraints.Float](vs []
 	//If the vs's lenght is 1, just use the  function with one parameter
 	firstCol :=  vector.MustTCols[T](vs[0])
 	if len(vs) == 1 {
-		origVec := vs[0]
-		if origVec.IsScalar() {
-			if origVec.IsScalarNull() {
-				return proc.AllocScalarNullVector(types.Type{Oid: types.T_float64, Size: 8}), nil
-			} else {
-				resultVector := proc.AllocScalarVector(types.Type{Oid: types.T_float64, Size: 8})
-				resultValues := make([]float64, 1)
-				vector.SetCol(resultVector, resultValues)
-				if err := momath.AtanWithOneArg(firstCol, resultVector); err != nil {
-					return nil, err
-				}
-				return resultVector, nil
-			}
-		} else {
-			vecLen := int64(vector.Length(origVec))
-			resultVector, err := proc.AllocVectorOfRows(types.T_float64.ToType(), vecLen, origVec.Nsp)
-			if err != nil {
-				return nil, err
-			}
-			if err := momath.AtanWithOneArg(firstCol, resultVector); err != nil {
-				return nil, err
-			}
-			return resultVector, nil
-		}
+		return math1(vs, proc, momath.Atan)
 	}
 	//Otherwise 
 	//First if one of the parameters is a null value
