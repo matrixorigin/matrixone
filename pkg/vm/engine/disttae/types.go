@@ -26,11 +26,16 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 )
 
 const (
 	INSERT = iota
 	DELETE
+)
+
+const (
+	CacheSize = 1 << 20
 )
 
 type DNStore = logservice.DNStore
@@ -78,6 +83,7 @@ type MVCC interface {
 type Engine struct {
 	sync.RWMutex
 	db                *DB
+	m                 *mheap.Mheap
 	cli               client.TxnClient
 	getClusterDetails GetClusterDetailsFunc
 	txns              map[string]*Transaction

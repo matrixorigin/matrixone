@@ -20,6 +20,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	txnengine "github.com/matrixorigin/matrixone/pkg/vm/engine/txn"
+	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
+	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
 )
 
 func (s *service) initDistributedTAE(
@@ -40,8 +42,10 @@ func (s *service) initDistributedTAE(
 		return err
 	}
 
+	m := mheap.New(guest.New(pu.SV.GuestMmuLimitation, pu.HostMmu))
 	// engine
 	pu.StorageEngine = disttae.New(
+		m,
 		ctx,
 		client,
 		txnengine.GetClusterDetailsFromHAKeeper(
