@@ -23,15 +23,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 )
 
-type NodeOp uint16
-
-const (
-	NOpNoop NodeOp = iota
-	NOpCreate
-	NOpDelete
-	NOpCustomizedStart
-)
-
 type EntryMVCCNode struct {
 	CreatedAt, DeletedAt     types.TS
 	HasCreateOp, HasDeleteOp bool

@@ -26,10 +26,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 )
 
-const (
-	NOpUpdateAttr NodeOp = NOpCustomizedStart + iota
-)
-
 type MetaBaseEntry struct {
 	*txnbase.MVCCChain
 	ID uint64
