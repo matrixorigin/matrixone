@@ -189,7 +189,7 @@ func (catalog *Catalog) onReplayUpdateDatabase(cmd *EntryCommand, idx *wal.Index
 			observer.OnTimeStamp(cmd.GetTs())
 		}
 	}
-	un := cmd.entry.GetUpdateNodeLocked().(*DBMVCCNode)
+	un := cmd.entry.GetNodeLocked().(*DBMVCCNode)
 	if cmdType == txnif.CmdCommit {
 		un.onReplayCommit(commitTS)
 		return
@@ -206,7 +206,7 @@ func (catalog *Catalog) onReplayUpdateDatabase(cmd *EntryCommand, idx *wal.Index
 		}
 		cmd.DB.RWMutex = new(sync.RWMutex)
 		cmd.DB.catalog = catalog
-		cmd.entry.GetUpdateNodeLocked().AddLogIndex(idx)
+		cmd.entry.GetNodeLocked().AddLogIndex(idx)
 		err = catalog.AddEntryLocked(cmd.DB, nil)
 		if err != nil {
 			panic(err)
@@ -214,11 +214,11 @@ func (catalog *Catalog) onReplayUpdateDatabase(cmd *EntryCommand, idx *wal.Index
 		return
 	}
 
-	dbun := db.GetExactUpdateNodeByNode(un)
+	dbun := db.SearchNode(un)
 	if dbun == nil {
-		db.InsertNode(un) //TODO isvalid
+		db.Insert(un) //TODO isvalid
 	} else {
-		dbun.UpdateNode(un)
+		dbun.Update(un)
 	}
 }
 
@@ -239,11 +239,11 @@ func (catalog *Catalog) onReplayDatabase(cmd *EntryCommand) {
 
 	cmd.DB.MVCC.Loop(func(n *common.GenericDLNode[txnbase.MVCCNode]) bool {
 		un := n.GetPayload()
-		dbun := db.GetExactUpdateNodeByNode(un)
+		dbun := db.SearchNode(un)
 		if dbun == nil {
-			db.InsertNode(un) //TODO isvalid
+			db.Insert(un) //TODO isvalid
 		} else {
-			dbun.UpdateNode(un)
+			dbun.Update(un)
 		}
 		return true
 	}, true)
@@ -273,7 +273,7 @@ func (catalog *Catalog) onReplayUpdateTable(cmd *EntryCommand, dataFactory DataF
 	}
 	tbl, err := db.GetTableEntryByID(cmd.Table.ID)
 
-	un := cmd.entry.GetUpdateNodeLocked().(*TableMVCCNode)
+	un := cmd.entry.GetNodeLocked().(*TableMVCCNode)
 	if cmdType == txnif.CmdCommit {
 		un.onReplayCommit(commitTS)
 	}
@@ -291,11 +291,11 @@ func (catalog *Catalog) onReplayUpdateTable(cmd *EntryCommand, dataFactory DataF
 		}
 		return
 	}
-	tblun := tbl.GetExactUpdateNodeByNode(un)
+	tblun := tbl.SearchNode(un)
 	if tblun == nil {
-		tbl.InsertNode(un) //TODO isvalid
+		tbl.Insert(un) //TODO isvalid
 	} else {
-		tblun.UpdateNode(un)
+		tblun.Update(un)
 	}
 
 }
@@ -317,11 +317,11 @@ func (catalog *Catalog) onReplayTable(cmd *EntryCommand, dataFactory DataFactory
 	} else {
 		cmd.Table.MVCC.Loop(func(n *common.GenericDLNode[txnbase.MVCCNode]) bool {
 			un := n.GetPayload()
-			node := rel.GetExactUpdateNodeByNode(un)
+			node := rel.SearchNode(un)
 			if node == nil {
-				rel.InsertNode(un)
+				rel.Insert(un)
 			} else {
-				node.UpdateNode(un)
+				node.Update(un)
 			}
 			return true
 		}, true)
@@ -354,7 +354,7 @@ func (catalog *Catalog) onReplayUpdateSegment(
 		}
 	}
 
-	un := cmd.entry.GetUpdateNodeLocked().(*MetadataMVCCNode)
+	un := cmd.entry.GetNodeLocked().(*MetadataMVCCNode)
 	switch cmdType {
 	case txnif.CmdCommit:
 		un.onReplayCommit(commitTS)
@@ -379,11 +379,11 @@ func (catalog *Catalog) onReplayUpdateSegment(
 		cmd.Segment.segData = dataFactory.MakeSegmentFactory()(cmd.Segment)
 		tbl.AddEntryLocked(cmd.Segment)
 	} else {
-		node := seg.GetExactUpdateNodeByNode(un)
+		node := seg.SearchNode(un)
 		if node == nil {
-			seg.InsertNode(un)
+			seg.Insert(un)
 		} else {
-			node.UpdateNode(un)
+			node.Update(un)
 		}
 	}
 }
@@ -405,11 +405,11 @@ func (catalog *Catalog) onReplaySegment(cmd *EntryCommand, dataFactory DataFacto
 	} else {
 		cmd.Segment.MVCC.Loop(func(n *common.GenericDLNode[txnbase.MVCCNode]) bool {
 			un := n.GetPayload()
-			segun := seg.GetExactUpdateNodeByNode(un)
+			segun := seg.SearchNode(un)
 			if segun != nil {
-				segun.UpdateNode(un)
+				segun.Update(un)
 			} else {
-				seg.InsertNode(un)
+				seg.Insert(un)
 			}
 			return true
 		}, true)
@@ -452,7 +452,7 @@ func (catalog *Catalog) onReplayUpdateBlock(cmd *EntryCommand,
 		panic(err)
 	}
 	blk, err := seg.GetBlockEntryByID(cmd.Block.ID)
-	un := cmd.entry.GetUpdateNodeLocked().(*MetadataMVCCNode)
+	un := cmd.entry.GetNodeLocked().(*MetadataMVCCNode)
 	switch cmdType {
 	case txnif.CmdCommit:
 		un.onReplayCommit(commitTS)
@@ -463,11 +463,11 @@ func (catalog *Catalog) onReplayUpdateBlock(cmd *EntryCommand,
 		un.onReplayCommit(prepareTS)
 	}
 	if err == nil {
-		blkun := blk.GetExactUpdateNodeByNode(un)
+		blkun := blk.SearchNode(un)
 		if blkun != nil {
-			blkun.UpdateNode(un)
+			blkun.Update(un)
 		} else {
-			blk.InsertNode(un)
+			blk.Insert(un)
 		}
 		return
 	}
@@ -502,11 +502,11 @@ func (catalog *Catalog) onReplayBlock(cmd *EntryCommand, dataFactory DataFactory
 	} else {
 		cmd.Block.MVCC.Loop(func(n *common.GenericDLNode[txnbase.MVCCNode]) bool {
 			un := n.GetPayload()
-			blkun := blk.GetExactUpdateNodeByNode(un)
+			blkun := blk.SearchNode(un)
 			if blkun != nil {
-				blkun.UpdateNode(un)
+				blkun.Update(un)
 			}
-			blk.InsertNode(un)
+			blk.Insert(un)
 			return false
 		}, true)
 	}

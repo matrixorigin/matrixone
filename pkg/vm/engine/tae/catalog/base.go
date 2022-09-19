@@ -44,9 +44,9 @@ type BaseEntry interface {
 	GetCurrOp() OpT
 	GetLogIndex() []*wal.Index
 
-	InsertNode(un txnbase.MVCCNode)
+	Insert(un txnbase.MVCCNode)
 
-	GetUpdateNodeLocked() txnbase.MVCCNode
+	GetNodeLocked() txnbase.MVCCNode
 	IsVisible(ts types.TS, mu *sync.RWMutex) (ok bool, err error)
 
 	HasCommittedNodeInRange(minTs, MaxTs types.TS) bool

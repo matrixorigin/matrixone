@@ -82,7 +82,7 @@ func (be *MetaBaseEntry) CreateWithTS(ts types.TS) {
 			End:   ts,
 		},
 	}
-	be.InsertNode(node)
+	be.Insert(node)
 }
 
 func (be *MetaBaseEntry) CreateWithTxn(txn txnif.AsyncTxn) {
@@ -99,17 +99,17 @@ func (be *MetaBaseEntry) CreateWithTxn(txn txnif.AsyncTxn) {
 			Txn:   txn,
 		},
 	}
-	be.InsertNode(node)
+	be.Insert(node)
 }
 
 func (be *MetaBaseEntry) getOrSetUpdateNode(txn txnif.TxnReader) (newNode bool, node *MetadataMVCCNode) {
-	entry := be.GetUpdateNodeLocked()
+	entry := be.GetNodeLocked()
 	if entry.IsSameTxn(txn.GetStartTS()) {
 		return false, entry.(*MetadataMVCCNode)
 	} else {
 		node := entry.CloneData().(*MetadataMVCCNode)
 		node.TxnMVCCNode = txnbase.NewTxnMVCCNodeWithTxn(txn)
-		be.InsertNode(node)
+		be.Insert(node)
 		return true, node
 	}
 }
@@ -146,7 +146,7 @@ func (be *MetaBaseEntry) DeleteBefore(ts types.TS) bool {
 }
 
 func (be *MetaBaseEntry) NeedWaitCommitting(startTS types.TS) (bool, txnif.TxnReader) {
-	un := be.GetUpdateNodeLocked()
+	un := be.GetNodeLocked()
 	if un == nil {
 		return false, nil
 	}
@@ -154,7 +154,7 @@ func (be *MetaBaseEntry) NeedWaitCommitting(startTS types.TS) (bool, txnif.TxnRe
 }
 
 func (be *MetaBaseEntry) IsCreating() bool {
-	un := be.GetUpdateNodeLocked()
+	un := be.GetNodeLocked()
 	if un == nil {
 		return true
 	}
@@ -236,7 +236,7 @@ func (be *MetaBaseEntry) DropEntryLocked(txnCtx txnif.TxnReader) (isNewNode bool
 }
 
 func (be *MetaBaseEntry) DeleteAfter(ts types.TS) bool {
-	un := be.GetUpdateNodeLocked()
+	un := be.GetNodeLocked()
 	if un == nil {
 		return false
 	}
@@ -255,7 +255,7 @@ func (be *MetaBaseEntry) CloneCommittedInRange(start, end types.TS) BaseEntry {
 }
 
 func (be *MetaBaseEntry) GetCurrOp() OpT {
-	un := be.GetUpdateNodeLocked()
+	un := be.GetNodeLocked()
 	if un == nil {
 		return OpCreate
 	}
@@ -266,7 +266,7 @@ func (be *MetaBaseEntry) GetCurrOp() OpT {
 }
 
 func (be *MetaBaseEntry) GetCreatedAt() types.TS {
-	un := be.GetUpdateNodeLocked()
+	un := be.GetNodeLocked()
 	if un == nil {
 		return types.TS{}
 	}
@@ -274,7 +274,7 @@ func (be *MetaBaseEntry) GetCreatedAt() types.TS {
 }
 
 func (be *MetaBaseEntry) GetDeleteAt() types.TS {
-	un := be.GetUpdateNodeLocked()
+	un := be.GetNodeLocked()
 	if un == nil {
 		return types.TS{}
 	}

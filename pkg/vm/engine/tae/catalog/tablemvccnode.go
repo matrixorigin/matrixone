@@ -61,7 +61,7 @@ func (e *TableMVCCNode) String() string {
 }
 
 // for create drop in one txn
-func (e *TableMVCCNode) UpdateNode(vun txnbase.MVCCNode) {
+func (e *TableMVCCNode) Update(vun txnbase.MVCCNode) {
 	un := vun.(*TableMVCCNode)
 	e.CreatedAt = un.CreatedAt
 	e.DeletedAt = un.DeletedAt

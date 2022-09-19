@@ -82,7 +82,7 @@ func (be *TableBaseEntry) CreateWithTS(ts types.TS) {
 			End:   ts,
 		},
 	}
-	be.InsertNode(node)
+	be.Insert(node)
 }
 
 func (be *TableBaseEntry) CreateWithTxn(txn txnif.AsyncTxn) {
@@ -99,17 +99,17 @@ func (be *TableBaseEntry) CreateWithTxn(txn txnif.AsyncTxn) {
 			Txn:   txn,
 		},
 	}
-	be.InsertNode(node)
+	be.Insert(node)
 }
 
 func (be *TableBaseEntry) getOrSetUpdateNode(txn txnif.TxnReader) (newNode bool, node *TableMVCCNode) {
-	entry := be.GetUpdateNodeLocked()
+	entry := be.GetNodeLocked()
 	if entry.IsSameTxn(txn.GetStartTS()) {
 		return false, entry.(*TableMVCCNode)
 	} else {
 		node := entry.CloneData().(*TableMVCCNode)
 		node.TxnMVCCNode = txnbase.NewTxnMVCCNodeWithTxn(txn)
-		be.InsertNode(node)
+		be.Insert(node)
 		return true, node
 	}
 }
@@ -130,7 +130,7 @@ func (be *TableBaseEntry) DeleteBefore(ts types.TS) bool {
 }
 
 func (be *TableBaseEntry) NeedWaitCommitting(startTS types.TS) (bool, txnif.TxnReader) {
-	un := be.GetUpdateNodeLocked()
+	un := be.GetNodeLocked()
 	if un == nil {
 		return false, nil
 	}
@@ -138,7 +138,7 @@ func (be *TableBaseEntry) NeedWaitCommitting(startTS types.TS) (bool, txnif.TxnR
 }
 
 func (be *TableBaseEntry) IsCreating() bool {
-	un := be.GetUpdateNodeLocked()
+	un := be.GetNodeLocked()
 	if un == nil {
 		return true
 	}
@@ -251,7 +251,7 @@ func (be *TableBaseEntry) PrepareAdd(txn txnif.TxnReader) (err error) {
 }
 
 func (be *TableBaseEntry) DeleteAfter(ts types.TS) bool {
-	un := be.GetUpdateNodeLocked()
+	un := be.GetNodeLocked()
 	if un == nil {
 		return false
 	}
@@ -270,7 +270,7 @@ func (be *TableBaseEntry) CloneCommittedInRange(start, end types.TS) BaseEntry {
 }
 
 func (be *TableBaseEntry) GetCurrOp() OpT {
-	un := be.GetUpdateNodeLocked()
+	un := be.GetNodeLocked()
 	if un == nil {
 		return OpCreate
 	}
@@ -281,7 +281,7 @@ func (be *TableBaseEntry) GetCurrOp() OpT {
 }
 
 func (be *TableBaseEntry) GetCreatedAt() types.TS {
-	un := be.GetUpdateNodeLocked()
+	un := be.GetNodeLocked()
 	if un == nil {
 		return types.TS{}
 	}
@@ -289,7 +289,7 @@ func (be *TableBaseEntry) GetCreatedAt() types.TS {
 }
 
 func (be *TableBaseEntry) GetDeleteAt() types.TS {
-	un := be.GetUpdateNodeLocked()
+	un := be.GetNodeLocked()
 	if un == nil {
 		return types.TS{}
 	}

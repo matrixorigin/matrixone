@@ -100,7 +100,7 @@ func (node *AppendNode) CloneAll() txnbase.MVCCNode {
 func (node *AppendNode) CloneData() txnbase.MVCCNode {
 	panic("todo")
 }
-func (node *AppendNode) UpdateNode(txnbase.MVCCNode) {
+func (node *AppendNode) Update(txnbase.MVCCNode) {
 	panic("todo")
 }
 func (node *AppendNode) GeneralDesc() string {

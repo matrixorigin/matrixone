@@ -56,10 +56,10 @@ func (be *MVCCChain) StringLocked() string {
 
 // for replay
 func (be *MVCCChain) GetPrepareTs() types.TS {
-	return be.GetUpdateNodeLocked().GetPrepare()
+	return be.GetNodeLocked().GetPrepare()
 }
 
-func (be *MVCCChain) GetTxn() txnif.TxnReader { return be.GetUpdateNodeLocked().GetTxn() }
+func (be *MVCCChain) GetTxn() txnif.TxnReader { return be.GetNodeLocked().GetTxn() }
 
 func (be *MVCCChain) GetIndexes() []*wal.Index {
 	ret := make([]*wal.Index, 0)
@@ -71,7 +71,7 @@ func (be *MVCCChain) GetIndexes() []*wal.Index {
 	return ret
 }
 
-func (be *MVCCChain) InsertNode(vun MVCCNode) {
+func (be *MVCCChain) Insert(vun MVCCNode) {
 	un := vun
 	be.MVCC.Insert(un)
 }
@@ -113,10 +113,10 @@ func (be *MVCCChain) HasCommittedNodeInRange(start, end types.TS) (ok bool) {
 	return
 }
 
-// GetUpdateNode gets the latest UpdateNode.
+// GetNodeLocked gets the latest mvcc node.
 // It is useful in making command, apply state(e.g. ApplyCommit),
 // check confilct.
-func (be *MVCCChain) GetUpdateNodeLocked() MVCCNode {
+func (be *MVCCChain) GetNodeLocked() MVCCNode {
 	head := be.MVCC.GetHead()
 	if head == nil {
 		return nil
@@ -129,7 +129,7 @@ func (be *MVCCChain) GetUpdateNodeLocked() MVCCNode {
 	return entry
 }
 
-// GetCommittedNode gets the latest committed UpdateNode.
+// GetCommittedNode gets the latest committed mvcc node.
 // It's useful when check whether the catalog/metadata entry is deleted.
 func (be *MVCCChain) GetCommittedNode() (node MVCCNode) {
 	be.MVCC.Loop(func(n *common.GenericDLNode[MVCCNode]) bool {
@@ -143,9 +143,9 @@ func (be *MVCCChain) GetCommittedNode() (node MVCCNode) {
 	return
 }
 
-// GetVisibleNode gets UpdateNode according to the timestamp.
-// It returns the UpdateNode in the same txn as the read txn
-// or returns the latest UpdateNode with commitTS less than the timestamp.
+// GetVisibleNode gets mvcc node according to the timestamp.
+// It returns the mvcc node in the same txn as the read txn
+// or returns the latest mvcc node with commitTS less than the timestamp.
 func (be *MVCCChain) GetVisibleNode(ts types.TS) (node MVCCNode) {
 	be.MVCC.Loop(func(n *common.GenericDLNode[MVCCNode]) (goNext bool) {
 		un := n.GetPayload()
@@ -160,7 +160,7 @@ func (be *MVCCChain) GetVisibleNode(ts types.TS) (node MVCCNode) {
 }
 
 // It's only used in replay
-func (be *MVCCChain) GetExactUpdateNodeByNode(o MVCCNode) (node MVCCNode) {
+func (be *MVCCChain) SearchNode(o MVCCNode) (node MVCCNode) {
 	be.MVCC.Loop(func(n *common.GenericDLNode[MVCCNode]) bool {
 		un := n.GetPayload()
 		compare := be.comparefn(un, o)
@@ -175,7 +175,7 @@ func (be *MVCCChain) GetExactUpdateNodeByNode(o MVCCNode) (node MVCCNode) {
 }
 
 func (be *MVCCChain) NeedWaitCommitting(ts types.TS) (bool, txnif.TxnReader) {
-	un := be.GetUpdateNodeLocked()
+	un := be.GetNodeLocked()
 	if un == nil {
 		return false, nil
 	}
@@ -183,7 +183,7 @@ func (be *MVCCChain) NeedWaitCommitting(ts types.TS) (bool, txnif.TxnReader) {
 }
 
 func (be *MVCCChain) IsCreating() bool {
-	un := be.GetUpdateNodeLocked()
+	un := be.GetNodeLocked()
 	if un == nil {
 		return true
 	}
@@ -191,14 +191,14 @@ func (be *MVCCChain) IsCreating() bool {
 }
 
 func (be *MVCCChain) CheckConflict(txn txnif.TxnReader) (err error) {
-	node := be.GetUpdateNodeLocked()
+	node := be.GetNodeLocked()
 	err = node.CheckConflict(txn.GetStartTS())
 	return
 }
 
 func (be *MVCCChain) WriteOneNodeTo(w io.Writer) (n int64, err error) {
 	var n2 int64
-	n2, err = be.GetUpdateNodeLocked().WriteTo(w)
+	n2, err = be.GetNodeLocked().WriteTo(w)
 	if err != nil {
 		return
 	}
@@ -231,7 +231,7 @@ func (be *MVCCChain) ReadOneNodeFrom(r io.Reader) (n int64, err error) {
 	if err != nil {
 		return
 	}
-	be.InsertNode(un)
+	be.Insert(un)
 	n += n2
 	return
 }
@@ -263,18 +263,18 @@ func (be *MVCCChain) IsEmpty() bool {
 func (be *MVCCChain) ApplyRollback(index *wal.Index) error {
 	be.Lock()
 	defer be.Unlock()
-	return be.GetUpdateNodeLocked().ApplyRollback(index)
+	return be.GetNodeLocked().ApplyRollback(index)
 
 }
 
 func (be *MVCCChain) ApplyCommit(index *wal.Index) error {
 	be.Lock()
 	defer be.Unlock()
-	return be.GetUpdateNodeLocked().ApplyCommit(index)
+	return be.GetNodeLocked().ApplyCommit(index)
 }
 
 func (be *MVCCChain) GetLogIndex() []*wal.Index {
-	node := be.GetUpdateNodeLocked()
+	node := be.GetNodeLocked()
 	if node == nil {
 		return nil
 	}
@@ -286,9 +286,9 @@ func (be *MVCCChain) CloneLatestNode() (*MVCCChain, MVCCNode) {
 		MVCC:    common.NewGenericSortedDList(be.comparefn),
 		RWMutex: &sync.RWMutex{},
 	}
-	un := be.GetUpdateNodeLocked()
+	un := be.GetNodeLocked()
 	uncloned := un.CloneData()
-	cloned.InsertNode(uncloned)
+	cloned.Insert(uncloned)
 	return cloned, uncloned
 }
 
@@ -297,7 +297,7 @@ func (be *MVCCChain) CloneLatestNode() (*MVCCChain, MVCCNode) {
 // It's Committed when its state will never change, i.e. TxnStateCommitted and  TxnStateRollbacked.
 // It's Committing when it's in any other state, including TxnStateCommitting, TxnStateRollbacking, TxnStatePrepared and so on. When read or write an entry, if the last txn of the entry is Committing, we wait for it. When write on an Entry, if there's an Active txn, we report w-w conflict.
 func (be *MVCCChain) IsCommitting() bool {
-	node := be.GetUpdateNodeLocked()
+	node := be.GetNodeLocked()
 	if node == nil {
 		return false
 	}
@@ -307,7 +307,7 @@ func (be *MVCCChain) IsCommitting() bool {
 func (be *MVCCChain) PrepareCommit() error {
 	be.Lock()
 	defer be.Unlock()
-	return be.GetUpdateNodeLocked().PrepareCommit()
+	return be.GetNodeLocked().PrepareCommit()
 }
 
 func (be *MVCCChain) PrepareRollback() (bool, error) {
@@ -320,7 +320,7 @@ func (be *MVCCChain) PrepareRollback() (bool, error) {
 }
 
 func (be *MVCCChain) IsCommitted() bool {
-	un := be.GetUpdateNodeLocked()
+	un := be.GetNodeLocked()
 	if un == nil {
 		return false
 	}
@@ -341,7 +341,7 @@ func (be *MVCCChain) CloneCommittedInRange(start, end types.TS) (ret *MVCCChain)
 			if ret == nil {
 				ret = NewMVCCChain(be.comparefn, be.newnodefn)
 			}
-			ret.InsertNode(un.CloneAll())
+			ret.Insert(un.CloneAll())
 		} else if !before {
 			return false
 		}
