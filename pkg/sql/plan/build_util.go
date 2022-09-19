@@ -103,6 +103,12 @@ func getTypeFromAst(typ tree.ResolvableTypeReference) (*plan.Type, error) {
 			return &plan.Type{Id: int32(types.T_json)}, nil
 		case defines.MYSQL_TYPE_UUID:
 			return &plan.Type{Id: int32(types.T_uuid), Size: 16}, nil
+		case defines.MYSQL_TYPE_TINY_BLOB:
+			return &plan.Type{Id: int32(types.T_blob), Size: types.VarlenaSize}, nil
+		case defines.MYSQL_TYPE_MEDIUM_BLOB:
+			return &plan.Type{Id: int32(types.T_blob), Size: types.VarlenaSize}, nil
+		case defines.MYSQL_TYPE_LONG_BLOB:
+			return &plan.Type{Id: int32(types.T_blob), Size: types.VarlenaSize}, nil
 		default:
 			return nil, errors.New("", fmt.Sprintf("Data type: '%s', will be supported in future version.", tree.String(&n.InternalType, dialect.MYSQL)))
 		}
