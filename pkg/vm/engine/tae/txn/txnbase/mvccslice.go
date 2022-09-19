@@ -177,7 +177,7 @@ func (be *MVCCSlice) CloneIndexInRange(start, end types.TS, mu *sync.RWMutex) (i
 		return nil
 	}
 	for i := endOffset; i >= startOffset; i-- {
-		indexes = append(indexes, be.MVCC[i].GetLogIndex()...)
+		indexes = append(indexes, be.MVCC[i].GetLogIndex())
 	}
 	return
 }

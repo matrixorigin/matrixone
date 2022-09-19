@@ -259,7 +259,7 @@ func getAddressBatch(host string, batch int) ([]string, error) {
 	return addrs, nil
 }
 
-// getAvailablePort gets avwailable port on host address.
+// getAvailablePort gets available port on host address.
 func getAvailablePort(host string) (string, error) {
 	curPortMu.Lock()
 	defer curPortMu.Unlock()

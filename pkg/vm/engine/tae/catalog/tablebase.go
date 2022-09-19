@@ -65,7 +65,7 @@ func (be *TableBaseEntry) TryGetTerminatedTS(waitIfcommitting bool) (terminated 
 	if node == nil {
 		return
 	}
-	if node.(*TableMVCCNode).Deleted {
+	if node.(*TableMVCCNode).HasDropped() {
 		return true, node.(*TableMVCCNode).DeletedAt
 	}
 	return
@@ -82,7 +82,7 @@ func (be *TableBaseEntry) CreateWithTS(ts types.TS) {
 			End:   ts,
 		},
 	}
-	be.InsertNode(node)
+	be.Insert(node)
 }
 
 func (be *TableBaseEntry) CreateWithTxn(txn txnif.AsyncTxn) {
@@ -91,31 +91,33 @@ func (be *TableBaseEntry) CreateWithTxn(txn txnif.AsyncTxn) {
 		startTS = txn.GetStartTS()
 	}
 	node := &TableMVCCNode{
-		EntryMVCCNode: &EntryMVCCNode{},
+		EntryMVCCNode: &EntryMVCCNode{
+			CreatedAt: txnif.UncommitTS,
+		},
 		TxnMVCCNode: &txnbase.TxnMVCCNode{
 			Start: startTS,
 			Txn:   txn,
 		},
 	}
-	be.InsertNode(node)
+	be.Insert(node)
 }
 
-// TODO update create
-func (be *TableBaseEntry) DeleteLocked(txn txnif.TxnReader) (err error) {
-	entry := be.MVCC.GetHead().GetPayload()
-	if entry.IsCommitted() || entry.IsSameTxn(txn.GetStartTS()) {
-		if be.HasDropped() {
-			err = ErrNotFound
-			return
-		}
-		nbe := entry.CloneData()
-		nbe.(*TableMVCCNode).TxnMVCCNode = txnbase.NewTxnMVCCNodeWithTxn(txn)
-		be.InsertNode(nbe)
-		err = nbe.(*TableMVCCNode).ApplyDeleteLocked()
-		return
+func (be *TableBaseEntry) getOrSetUpdateNode(txn txnif.TxnReader) (newNode bool, node *TableMVCCNode) {
+	entry := be.GetNodeLocked()
+	if entry.IsSameTxn(txn.GetStartTS()) {
+		return false, entry.(*TableMVCCNode)
 	} else {
-		err = txnif.ErrTxnWWConflict
+		node := entry.CloneData().(*TableMVCCNode)
+		node.TxnMVCCNode = txnbase.NewTxnMVCCNodeWithTxn(txn)
+		be.Insert(node)
+		return true, node
 	}
+}
+
+func (be *TableBaseEntry) DeleteLocked(txn txnif.TxnReader) (isNewNode bool, err error) {
+	var entry *TableMVCCNode
+	isNewNode, entry = be.getOrSetUpdateNode(txn)
+	entry.Delete()
 	return
 }
 
@@ -128,7 +130,7 @@ func (be *TableBaseEntry) DeleteBefore(ts types.TS) bool {
 }
 
 func (be *TableBaseEntry) NeedWaitCommitting(startTS types.TS) (bool, txnif.TxnReader) {
-	un := be.GetUpdateNodeLocked()
+	un := be.GetNodeLocked()
 	if un == nil {
 		return false, nil
 	}
@@ -136,7 +138,7 @@ func (be *TableBaseEntry) NeedWaitCommitting(startTS types.TS) (bool, txnif.TxnR
 }
 
 func (be *TableBaseEntry) IsCreating() bool {
-	un := be.GetUpdateNodeLocked()
+	un := be.GetNodeLocked()
 	if un == nil {
 		return true
 	}
@@ -209,19 +211,16 @@ func (be *TableBaseEntry) CloneCreateEntry() BaseEntry {
 	}
 }
 
-func (be *TableBaseEntry) DropEntryLocked(txnCtx txnif.TxnReader) error {
-	err := be.CheckConflict(txnCtx)
+func (be *TableBaseEntry) DropEntryLocked(txnCtx txnif.TxnReader) (isNewNode bool, err error) {
+	err = be.CheckConflict(txnCtx)
 	if err != nil {
-		return err
+		return
 	}
 	if be.HasDropped() {
-		return ErrNotFound
+		return false, ErrNotFound
 	}
-	err = be.DeleteLocked(txnCtx)
-	if err != nil {
-		return err
-	}
-	return nil
+	isNewNode, err = be.DeleteLocked(txnCtx)
+	return
 }
 
 func (be *TableBaseEntry) PrepareAdd(txn txnif.TxnReader) (err error) {
@@ -252,7 +251,7 @@ func (be *TableBaseEntry) PrepareAdd(txn txnif.TxnReader) (err error) {
 }
 
 func (be *TableBaseEntry) DeleteAfter(ts types.TS) bool {
-	un := be.GetUpdateNodeLocked()
+	un := be.GetNodeLocked()
 	if un == nil {
 		return false
 	}
@@ -271,18 +270,18 @@ func (be *TableBaseEntry) CloneCommittedInRange(start, end types.TS) BaseEntry {
 }
 
 func (be *TableBaseEntry) GetCurrOp() OpT {
-	un := be.GetUpdateNodeLocked()
+	un := be.GetNodeLocked()
 	if un == nil {
 		return OpCreate
 	}
-	if !un.(*TableMVCCNode).Deleted {
+	if !un.(*TableMVCCNode).HasDropped() {
 		return OpCreate
 	}
 	return OpSoftDelete
 }
 
 func (be *TableBaseEntry) GetCreatedAt() types.TS {
-	un := be.GetUpdateNodeLocked()
+	un := be.GetNodeLocked()
 	if un == nil {
 		return types.TS{}
 	}
@@ -290,7 +289,7 @@ func (be *TableBaseEntry) GetCreatedAt() types.TS {
 }
 
 func (be *TableBaseEntry) GetDeleteAt() types.TS {
-	un := be.GetUpdateNodeLocked()
+	un := be.GetNodeLocked()
 	if un == nil {
 		return types.TS{}
 	}

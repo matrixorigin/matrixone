@@ -15,13 +15,55 @@
 package disttae
 
 import (
+	"fmt"
+
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 )
 
-func genCreateDatabaseTuple(name string) *batch.Batch {
-	return &batch.Batch{}
+func genCreateDatabaseTuple(name string, m *mheap.Mheap) (*batch.Batch, error) {
+	bat := batch.NewWithSize(len(catalog.MoDatabaseSchema))
+	bat.Attrs = append(bat.Attrs, catalog.MoDatabaseSchema...)
+	{
+		bat.Vecs[0] = vector.New(catalog.MoDatabaseTypes[0]) // dat_id
+		if err := bat.Vecs[0].Append(uint64(0), false, m); err != nil {
+			return nil, err
+		}
+		bat.Vecs[1] = vector.New(catalog.MoDatabaseTypes[1]) // datname
+		if err := bat.Vecs[1].Append([]byte(name), false, m); err != nil {
+			return nil, err
+		}
+		bat.Vecs[2] = vector.New(catalog.MoDatabaseTypes[2]) // dat_catalog_name
+		if err := bat.Vecs[2].Append([]byte(catalog.MO_CATALOG), false, m); err != nil {
+			return nil, err
+		}
+		bat.Vecs[3] = vector.New(catalog.MoDatabaseTypes[3]) // dat_createsql
+		if err := bat.Vecs[3].Append([]byte(fmt.Sprintf("create database %s", name)), false, m); err != nil {
+			return nil, err
+		}
+		bat.Vecs[4] = vector.New(catalog.MoDatabaseTypes[4]) // owner
+		if err := bat.Vecs[4].Append(uint32(0), false, m); err != nil {
+			return nil, err
+		}
+		bat.Vecs[5] = vector.New(catalog.MoDatabaseTypes[5]) // creator
+		if err := bat.Vecs[5].Append(uint32(0), false, m); err != nil {
+			return nil, err
+		}
+		bat.Vecs[6] = vector.New(catalog.MoDatabaseTypes[6]) // created_time
+		if err := bat.Vecs[6].Append(types.Timestamp(0), false, m); err != nil {
+			return nil, err
+		}
+		bat.Vecs[7] = vector.New(catalog.MoDatabaseTypes[7]) // account_id
+		if err := bat.Vecs[7].Append(uint32(0), false, m); err != nil {
+			return nil, err
+		}
+	}
+	return bat, nil
 }
 
 func genDropDatabaseTuple(name string) *batch.Batch {
