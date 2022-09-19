@@ -57,10 +57,11 @@ func TestGCBlock1(t *testing.T) {
 	err = meta.GetSegment().RemoveEntry(meta)
 	assert.Nil(t, err)
 	blkData := meta.GetBlockData()
-	assert.Equal(t, 2, tae.MTBufMgr.Count())
+	// 13 zonemap + 1 bloomfilter
+	assert.Equal(t, 14, tae.MTBufMgr.Count())
 	err = blkData.Destroy()
 	assert.Nil(t, err)
-	assert.Equal(t, 2, tae.MTBufMgr.Count())
+	assert.Equal(t, 14, tae.MTBufMgr.Count())
 
 	err = task.GetNewBlock().GetMeta().(*catalog.BlockEntry).GetBlockData().Destroy()
 	assert.Nil(t, err)
