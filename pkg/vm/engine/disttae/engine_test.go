@@ -27,6 +27,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
+	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
+	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
+	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
 	"github.com/stretchr/testify/require"
 )
 
@@ -38,8 +41,7 @@ func TestCache(t *testing.T) {
 	db := new(DB)
 	ctx := context.Background()
 	ts := newTimestamp(rand.Int63())
-	db.readTs = newTimestamp(rand.Int63())
-	_ = db.Update(ctx, nil, 0, 0, ts)
+	//	_ = db.Update(ctx, nil, 0, 0, ts)
 	_ = db.BlockList(ctx, nil, 0, 0, ts, nil)
 	_, _ = db.NewReader(ctx, 0, nil, nil, 0, 0, ts, nil)
 }
@@ -50,7 +52,8 @@ func TestEngine(t *testing.T) {
 		return
 	}
 	txnOp := newTestTxnOperator()
-	e := New(ctx, getClusterDetails)
+	m := mheap.New(guest.New(1<<20, host.New(1<<20)))
+	e := New(m, ctx, nil, getClusterDetails)
 	err := e.Create(ctx, "test", txnOp)
 	require.NoError(t, err)
 	err = e.Delete(ctx, "test", txnOp)
