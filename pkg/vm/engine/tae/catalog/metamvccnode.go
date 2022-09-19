@@ -21,6 +21,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 )
 
 type MetadataMVCCNode struct {
@@ -42,14 +43,16 @@ func CompareMetaBaseNode(e, o txnbase.MVCCNode) int {
 }
 
 func (e *MetadataMVCCNode) CloneAll() txnbase.MVCCNode {
-	node := e.CloneData()
-	node.(*MetadataMVCCNode).TxnMVCCNode = e.TxnMVCCNode.CloneAll()
+	node := &MetadataMVCCNode{
+		EntryMVCCNode: e.EntryMVCCNode.Clone(),
+		TxnMVCCNode:   e.TxnMVCCNode.CloneAll(),
+	}
 	return node
 }
 
 func (e *MetadataMVCCNode) CloneData() txnbase.MVCCNode {
 	return &MetadataMVCCNode{
-		EntryMVCCNode: e.EntryMVCCNode.Clone(),
+		EntryMVCCNode: e.EntryMVCCNode.CloneData(),
 		TxnMVCCNode:   &txnbase.TxnMVCCNode{},
 		MetaLoc:       e.MetaLoc,
 		DeltaLoc:      e.DeltaLoc,
@@ -58,64 +61,52 @@ func (e *MetadataMVCCNode) CloneData() txnbase.MVCCNode {
 
 func (e *MetadataMVCCNode) String() string {
 
-	return fmt.Sprintf("%s[C=%v,D=%v][Loc1=%s,Loc2=%s][Deleted?%v]",
+	return fmt.Sprintf("%s%s,MetaLoc=%s,DeltaLoc=%s",
 		e.TxnMVCCNode.String(),
-		e.CreatedAt,
-		e.DeletedAt,
+		e.EntryMVCCNode.String(),
 		e.MetaLoc,
-		e.DeltaLoc,
-		e.Deleted)
+		e.DeltaLoc)
+}
+func (e *MetadataMVCCNode) UpdateAttr(o *MetadataMVCCNode) {
+	if o.MetaLoc != "" {
+		e.MetaLoc = o.MetaLoc
+	}
+	if o.DeltaLoc != "" {
+		e.DeltaLoc = o.DeltaLoc
+	}
 }
 
 // for create drop in one txn
-func (e *MetadataMVCCNode) UpdateNode(vun txnbase.MVCCNode) {
+func (e *MetadataMVCCNode) Update(vun txnbase.MVCCNode) {
 	un := vun.(*MetadataMVCCNode)
+	e.CreatedAt = un.CreatedAt
 	e.DeletedAt = un.DeletedAt
-	e.Deleted = true
+	e.MetaLoc = un.MetaLoc
+	e.DeltaLoc = un.DeltaLoc
 }
 
-func (e *MetadataMVCCNode) ApplyUpdate(be *MetadataMVCCNode) (err error) {
-	// if e.Deleted {
-	// 	// TODO
-	// }
-	e.EntryMVCCNode = be.EntryMVCCNode.Clone()
-	e.MetaLoc = be.MetaLoc
-	e.DeltaLoc = be.DeltaLoc
-	return
-}
-
-func (e *MetadataMVCCNode) ApplyDelete() (err error) {
-	err = e.ApplyDeleteLocked()
-	return
-}
-
-func (e *MetadataMVCCNode) Prepare2PCPrepare() (err error) {
-	var ts types.TS
-	ts, err = e.TxnMVCCNode.Prepare2PCPrepare()
+func (e *MetadataMVCCNode) ApplyCommit(index *wal.Index) (err error) {
+	var commitTS types.TS
+	commitTS, err = e.TxnMVCCNode.ApplyCommit(index)
 	if err != nil {
 		return
 	}
-	if e.CreatedAt.IsEmpty() {
-		e.CreatedAt = ts
-	}
-	if e.Deleted {
-		e.DeletedAt = ts
-	}
+	e.EntryMVCCNode.ApplyCommit(commitTS)
+	return nil
+}
+
+func (e *MetadataMVCCNode) onReplayCommit(ts types.TS) (err error) {
+	err = e.EntryMVCCNode.ReplayCommit(ts)
+	e.TxnMVCCNode.OnReplayCommit(ts)
 	return
 }
 
 func (e *MetadataMVCCNode) PrepareCommit() (err error) {
-	var ts types.TS
-	ts, err = e.TxnMVCCNode.PrepareCommit()
+	_, err = e.TxnMVCCNode.PrepareCommit()
 	if err != nil {
 		return
 	}
-	if e.CreatedAt.IsEmpty() {
-		e.CreatedAt = ts
-	}
-	if e.Deleted {
-		e.DeletedAt = ts
-	}
+	err = e.EntryMVCCNode.PrepareCommit()
 	return
 }
 

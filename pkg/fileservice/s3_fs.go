@@ -54,7 +54,7 @@ func NewS3FS(
 	endpoint string,
 	bucket string,
 	keyPrefix string,
-	memCacheCapacity int,
+	memCacheCapacity int64,
 ) (*S3FS, error) {
 
 	u, err := url.Parse(endpoint)
@@ -87,7 +87,7 @@ func NewS3FSOnMinio(
 	endpoint string,
 	bucket string,
 	keyPrefix string,
-	memCacheCapacity int,
+	memCacheCapacity int64,
 ) (*S3FS, error) {
 
 	u, err := url.Parse(endpoint)
@@ -133,7 +133,7 @@ func newS3FS(
 	endpoint string,
 	bucket string,
 	keyPrefix string,
-	memCacheCapacity int,
+	memCacheCapacity int64,
 	options ...func(*s3.Options),
 ) (*S3FS, error) {
 
@@ -217,7 +217,7 @@ func (s *S3FS) List(ctx context.Context, dirPath string) (entries []DirEntry, er
 			entries = append(entries, DirEntry{
 				Name:  name,
 				IsDir: false,
-				Size:  int(obj.Size),
+				Size:  obj.Size,
 			})
 		}
 
@@ -336,8 +336,8 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector) error {
 		return err
 	}
 
-	min := math.MaxInt
-	max := 0
+	min := int64(math.MaxInt)
+	max := int64(0)
 	readToEnd := false
 	for _, entry := range vector.Entries {
 		if entry.ignore {
@@ -406,7 +406,7 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector) error {
 		}
 
 		start := entry.Offset - min
-		if start >= len(content) {
+		if start >= int64(len(content)) {
 			return ErrEmptyRange
 		}
 
@@ -416,7 +416,7 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector) error {
 			data = content[start:]
 		} else {
 			end := start + entry.Size
-			if end > len(content) {
+			if end > int64(len(content)) {
 				return ErrUnexpectedEOF
 			}
 			data = content[start:end]
@@ -441,7 +441,7 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector) error {
 		}
 
 		if setData {
-			if len(entry.Data) < entry.Size || entry.Size < 0 {
+			if int64(len(entry.Data)) < entry.Size || entry.Size < 0 {
 				entry.Data = data
 			} else {
 				copy(entry.Data, data)

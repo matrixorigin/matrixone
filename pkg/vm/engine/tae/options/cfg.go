@@ -38,3 +38,7 @@ type SchedulerCfg struct {
 	IOWorkers    int `toml:"io-workers"`
 	AsyncWorkers int `toml:"async-workers"`
 }
+
+type LogtailCfg struct {
+	PageSize int32 `toml:"page-size"`
+}

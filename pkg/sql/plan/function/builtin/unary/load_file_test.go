@@ -118,7 +118,7 @@ func TestLoadFile(t *testing.T) {
 		Entries: []fileservice.IOEntry{
 			{
 				Offset: 0,
-				Size:   size,
+				Size:   int64(size),
 				Data:   data,
 			},
 		},

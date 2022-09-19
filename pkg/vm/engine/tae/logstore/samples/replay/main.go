@@ -44,7 +44,7 @@ func main() {
 		tid := uint64(i)
 		e1 := entry.GetBase()
 		uncommitInfo := &entry.Info{
-			Group:     entry.GTUncommit,
+			Group:     10,
 			Uncommits: tid,
 		}
 		e1.SetType(entry.ETUncommitted)
@@ -55,7 +55,7 @@ func main() {
 		if err != nil {
 			panic(err)
 		}
-		_, err = s.Append(entry.GTUncommit, e1)
+		_, err = s.Append(10, e1)
 		if err != nil {
 			panic(err)
 		}

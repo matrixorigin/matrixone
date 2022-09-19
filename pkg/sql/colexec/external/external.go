@@ -192,6 +192,9 @@ const NULL_FLAG = "\\N"
 
 func judgeInterge(field string) bool {
 	for i := 0; i < len(field); i++ {
+		if field[i] == '-' || field[i] == '+' {
+			continue
+		}
 		if field[i] > '9' || field[i] < '0' {
 			return false
 		}
@@ -213,9 +216,29 @@ func makeBatch(param *ExternalParam, plh *ParseLineHandler) *batch.Batch {
 	return batchData
 }
 
+func deleteEnclosed(param *ExternalParam, plh *ParseLineHandler) {
+	close := param.extern.Tail.Fields.EnclosedBy
+	if close == '"' || close == 0 {
+		return
+	}
+	for rowIdx := 0; rowIdx < plh.batchSize; rowIdx++ {
+		Line := plh.simdCsvLineArray[rowIdx]
+		for i := 0; i < len(Line); i++ {
+			len := len(Line[i])
+			if len < 2 {
+				continue
+			}
+			if Line[i][0] == close && Line[i][len-1] == close {
+				Line[i] = Line[i][1 : len-1]
+			}
+		}
+	}
+}
+
 func GetBatchData(param *ExternalParam, plh *ParseLineHandler, proc *process.Process) (*batch.Batch, error) {
 	bat := makeBatch(param, plh)
 	var Line []string
+	deleteEnclosed(param, plh)
 	for rowIdx := 0; rowIdx < plh.batchSize; rowIdx++ {
 		Line = plh.simdCsvLineArray[rowIdx]
 		if len(Line) < len(param.Attrs) {
@@ -223,15 +246,16 @@ func GetBatchData(param *ExternalParam, plh *ParseLineHandler, proc *process.Pro
 		}
 		for colIdx := range param.Attrs {
 			field := Line[param.Name2ColIndex[param.Attrs[colIdx]]]
-			if types.T(param.Cols[colIdx].Typ.Id) != types.T_char && types.T(param.Cols[colIdx].Typ.Id) != types.T_varchar {
+			id := types.T(param.Cols[colIdx].Typ.Id)
+			if id != types.T_char && id != types.T_varchar {
 				field = strings.TrimSpace(field)
 			}
 			vec := bat.Vecs[colIdx]
 			isNullOrEmpty := field == NULL_FLAG
-			if types.T(param.Cols[colIdx].Typ.Id) != types.T_char && types.T(param.Cols[colIdx].Typ.Id) != types.T_varchar {
+			if id != types.T_char && id != types.T_varchar && id != types.T_json && id != types.T_blob {
 				isNullOrEmpty = isNullOrEmpty || len(field) == 0
 			}
-			switch types.T(param.Cols[colIdx].Typ.Id) {
+			switch id {
 			case types.T_bool:
 				cols := vec.Col.([]bool)
 				if isNullOrEmpty {

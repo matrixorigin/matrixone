@@ -26,6 +26,12 @@ option go_package = "github.com/matrixorigin/matrixone/pkg/pb/api";
 option (gogoproto.sizer_all) = false;
 option (gogoproto.protosizer_all) = true;
 
+enum OpCode {
+    Nop = 0;
+    OpGetLogTail = 1000;
+    Write = 1001;
+}
+
 message Vector {
     bytes data = 1;
     plan.Type  type = 2;
@@ -33,6 +39,7 @@ message Vector {
     bytes nsp = 4;
     bool is_const = 5;
     uint32 len = 6;
+    bytes area = 7;
 };
 
 message Batch {
