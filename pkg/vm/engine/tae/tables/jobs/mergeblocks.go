@@ -16,6 +16,7 @@ package jobs
 
 import (
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/objectio"
 	"unsafe"
 
 	"github.com/RoaringBitmap/roaring"
@@ -239,6 +240,7 @@ func (task *mergeBlocksTask) Execute() (err error) {
 	// Prepare new block placeholder
 	// Build and flush block index if sort key is defined
 	// Flush sort key it correlates to only one column
+	batchs := make([]*containers.Batch, 0)
 	for _, vec := range vecs {
 		toAddr = append(toAddr, uint32(length))
 		length += vec.Length()
@@ -247,6 +249,8 @@ func (task *mergeBlocksTask) Execute() (err error) {
 			return err
 		}
 		task.createdBlks = append(task.createdBlks, blk.GetMeta().(*catalog.BlockEntry))
+		batch := containers.NewBatch()
+		batchs = append(batchs, batch)
 		meta := blk.GetMeta().(*catalog.BlockEntry)
 
 		if !schema.HasSortKey() {
@@ -316,22 +320,32 @@ func (task *mergeBlocksTask) Execute() (err error) {
 		for i := range vecs {
 			defer vecs[i].Close()
 		}
-		for i := range vecs {
-			blk := task.createdBlks[i]
-			closure := blk.GetBlockData().FlushColumnDataClosure(ts, def.Idx, vecs[i], false)
-			flushTask, err = task.scheduler.ScheduleScopedFn(
-				tasks.WaitableCtx,
-				tasks.IOTask,
-				blk.AsCommonID(),
-				closure)
-			if err != nil {
-				return
-			}
-			if err = flushTask.WaitDone(); err != nil {
-				return
-			}
+		for i, vec := range vecs {
+			batchs[i].AddVector(def.Name, vec)
+
 		}
 	}
+	id := &common.ID{
+		TableID:   task.toSegEntry.GetTable().GetID(),
+		SegmentID: task.toSegEntry.GetID(),
+	}
+	writer := objectio.NewWriter(objectio.SegmentFactory.(*objectio.ObjectFactory).Fs, id)
+	for i, bat := range batchs {
+		block, err := writer.WriteBlock(bat)
+		if err != nil {
+			return err
+		}
+		node := catalog.NewEmptyMetadataMVCCNode()
+		node.(*catalog.MetadataMVCCNode).MetaLoc = fmt.Sprintf("%s:%d_%d_%d",
+			writer.GetName(),
+			block.GetExtent().Offset(),
+			block.GetExtent().Length(),
+			block.GetExtent().OriginSize(),
+		)
+		task.createdBlks[i].MetaBaseEntry.UpdateAttr(task.txn, node.(*catalog.MetadataMVCCNode))
+
+	}
+	writer.Sync()
 	for i, blk := range task.createdBlks {
 		closure := blk.GetBlockData().SyncBlockDataClosure(ts, rows[i])
 		flushTask, err = task.scheduler.ScheduleScopedFn(tasks.WaitableCtx, tasks.IOTask, blk.AsCommonID(), closure)

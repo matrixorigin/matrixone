@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/compress"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/tfs"
 	"os"
@@ -34,6 +35,7 @@ type ObjectFS struct {
 	lastId    uint64
 	lastInode uint64
 	seq       uint64
+	writers   map[string]objectio.Writer
 }
 
 type Attr struct {
@@ -48,6 +50,7 @@ func NewObjectFS(service fileservice.FileService) *ObjectFS {
 		},
 		nodes:   make(map[string]tfs.File),
 		service: service,
+		writers: make(map[string]objectio.Writer),
 	}
 	return fs
 }
@@ -67,6 +70,25 @@ func (o *ObjectFS) SetDir(dir string) {
 		panic(fmt.Sprintf("NewFileService failed: %s", err.Error()))
 	}
 	o.service = service
+}
+
+func (o *ObjectFS) GetWriter(name string) (objectio.Writer, error) {
+	o.Lock()
+	defer o.Unlock()
+	writer := o.writers[name]
+	if writer != nil {
+		return writer, nil
+	}
+	writer, err := objectio.NewObjectWriter(name, o.service)
+	if err != nil {
+		return nil, err
+	}
+	o.writers[name] = writer
+	return writer, err
+}
+
+func (o *ObjectFS) WriterEnd(name string) error {
+
 }
 
 func (o *ObjectFS) ReadDir(dir string) ([]common.FileInfo, error) {

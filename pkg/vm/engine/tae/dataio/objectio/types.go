@@ -31,6 +31,8 @@ const (
 	DeletesExt
 	IndexExt
 	MetaIndexExt
+	BlockExt
+	SegmentExt
 )
 
 var ExtName map[Extension]string = map[Extension]string{
@@ -40,6 +42,8 @@ var ExtName map[Extension]string = map[Extension]string{
 	DeletesExt:         "del",
 	IndexExt:           "idx",
 	MetaIndexExt:       "midx",
+	BlockExt:           "blk",
+	SegmentExt:         "seg",
 }
 
 func ExtensionName(ext Extension) (name string) {
@@ -58,7 +62,12 @@ func EncodeDir(id *common.ID) (dir string) {
 }
 
 func EncodeBlkName(id *common.ID) (name string) {
-	basename := fmt.Sprintf("%d-%d-%d.%s", id.TableID, id.SegmentID, id.BlockID, ExtensionName(ColumnBlockExt))
+	basename := fmt.Sprintf("%d-%d-%d.%s", id.TableID, id.SegmentID, id.BlockID, ExtensionName(BlockExt))
+	return basename
+}
+
+func EncodeSegName(id *common.ID) (name string) {
+	basename := fmt.Sprintf("%d-%d.%s", id.TableID, id.SegmentID, ExtensionName(SegmentExt))
 	return basename
 }
 

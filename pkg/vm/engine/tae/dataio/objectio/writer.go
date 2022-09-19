@@ -30,11 +30,24 @@ import (
 type Writer struct {
 	writer objectio.Writer
 	fs     *ObjectFS
+	name   string
 }
 
-func NewWriter(fs *ObjectFS) *Writer {
+func NewWriter(fs *ObjectFS, id *common.ID) *Writer {
+	var name string
+	if id.BlockID > 0 {
+		name = EncodeBlkName(id)
+	} else {
+		name = EncodeSegName(id)
+	}
+	writer, err := objectio.NewObjectWriter(name, fs.service)
+	if err != nil {
+		panic(any(err))
+	}
 	return &Writer{
-		fs: fs,
+		fs:     fs,
+		writer: writer,
+		name:   name,
 	}
 }
 
@@ -260,23 +273,19 @@ func MOToVectorTmp(v *vector.Vector, nullable bool) containers.Vector {
 	return vec
 }
 
-func (w *Writer) WriteBlock(
-	id *common.ID,
-	columns *containers.Batch) (block objectio.BlockObject, err error) {
-	name := EncodeBlkName(id)
-	writer, err := objectio.NewObjectWriter(name, w.fs.service)
-	if err != nil {
-		return
-	}
-	w.writer = writer
+func (w *Writer) WriteBlock(columns *containers.Batch) (block objectio.BlockObject, err error) {
 	bat := batch.New(true, columns.Attrs)
 	bat.Vecs = CopyToMoVectors(columns.Vecs)
 	block, err = w.writer.Write(bat)
 	if err != nil {
 		return
 	}
-	_, err = w.writer.WriteEnd()
 	return
+}
+
+func (w *Writer) Sync() error {
+	_, err := w.writer.WriteEnd()
+	return err
 }
 
 func (w *Writer) WriteIndex(
@@ -284,4 +293,8 @@ func (w *Writer) WriteIndex(
 	index objectio.IndexData) (err error) {
 	w.writer.WriteIndex(block, index)
 	return
+}
+
+func (w *Writer) GetName() string {
+	return w.name
 }

@@ -28,33 +28,33 @@ import (
 var SegmentFactory file.SegmentFactory
 
 func init() {
-	SegmentFactory = &segmentFactory{
-		fs:  NewObjectFS(nil),
+	SegmentFactory = &ObjectFactory{
+		Fs:  NewObjectFS(nil),
 		typ: file.ObjectDataIo,
 	}
 }
 
-type segmentFactory struct {
-	fs  *ObjectFS
+type ObjectFactory struct {
+	Fs  *ObjectFS
 	typ file.SegmentFactoryType
 }
 
-func (factory *segmentFactory) GetType() file.SegmentFactoryType {
+func (factory *ObjectFactory) GetType() file.SegmentFactoryType {
 	return factory.typ
 }
 
-func (factory *segmentFactory) EncodeName(id uint64) string {
+func (factory *ObjectFactory) EncodeName(id uint64) string {
 	return ""
 }
 
-func (factory *segmentFactory) DecodeName(name string) (id uint64, err error) {
+func (factory *ObjectFactory) DecodeName(name string) (id uint64, err error) {
 	return 0, nil
 }
 
-func (factory *segmentFactory) Build(dir string, id uint64) file.Segment {
+func (factory *ObjectFactory) Build(dir string, id uint64) file.Segment {
 	name := path.Join(dir, "data")
-	factory.fs.SetDir(name)
-	return openSegment(dir, id, factory.fs)
+	factory.Fs.SetDir(name)
+	return openSegment(dir, id, factory.Fs)
 }
 
 type segmentFile struct {

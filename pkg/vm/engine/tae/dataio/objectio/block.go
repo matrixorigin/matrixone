@@ -48,7 +48,6 @@ func newBlock(id uint64, seg *segmentFile, colCnt int, indexCnt map[int]int) *bl
 		columns: make([]*columnBlock, colCnt),
 	}
 	bf.reader = NewReader(seg.fs, bf)
-	bf.writer = NewWriter(seg.fs)
 	bf.OnZeroCB = bf.close
 	for i := range bf.columns {
 		cnt := 0
@@ -62,6 +61,7 @@ func newBlock(id uint64, seg *segmentFile, colCnt int, indexCnt map[int]int) *bl
 }
 
 func (bf *blockFile) WriteBatch(bat *containers.Batch, ts types.TS) (err error) {
+	bf.writer = NewWriter(bf.seg.fs, bf.id)
 	block, err := bf.writer.WriteBlock(bf.id, bat)
 	bf.meta = block
 	return err
@@ -166,7 +166,7 @@ func (bf *blockFile) Destroy() error {
 	return nil
 }
 
-func (bf *blockFile) Sync() error { return nil }
+func (bf *blockFile) Sync() error { return bf.writer.Sync() }
 
 func (bf *blockFile) LoadBatch(
 	colTypes []types.Type,
