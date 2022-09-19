@@ -168,7 +168,8 @@ func (m MarshalNodeImpl) GetNodeTitle(options *ExplainOptions) (string, error) {
 		} else {
 			return result, moerr.NewError(moerr.ERROR_SERIALIZE_PLAN_JSON, "Table definition not found when plan is serialized to json")
 		}
-	case plan.Node_PROJECT:
+	case plan.Node_PROJECT, plan.Node_VALUE_SCAN, plan.Node_UNION, plan.Node_UNION_ALL,
+		plan.Node_INTERSECT, plan.Node_INTERSECT_ALL, plan.Node_MINUS:
 		//"title" : "STORE.S_STORE_NAME,STORE.S_STORE_ID,WSS.D_WEEK_SEQ"
 		exprs := NewExprListDescribeImpl(m.node.ProjectList)
 		result, err = exprs.GetDescription(options)
@@ -210,45 +211,6 @@ func (m MarshalNodeImpl) GetNodeTitle(options *ExplainOptions) (string, error) {
 				return result, err
 			}
 			result += describe
-		}
-	case plan.Node_VALUE_SCAN:
-		//"title" : "STORE.S_STORE_NAME,STORE.S_STORE_ID,WSS.D_WEEK_SEQ"
-		exprs := NewExprListDescribeImpl(m.node.ProjectList)
-		result, err = exprs.GetDescription(options)
-		if err != nil {
-			return result, err
-		}
-	case plan.Node_UNION:
-		//"title" : "STORE.S_STORE_NAME,STORE.S_STORE_ID,WSS.D_WEEK_SEQ"
-		exprs := NewExprListDescribeImpl(m.node.ProjectList)
-		result, err = exprs.GetDescription(options)
-		if err != nil {
-			return result, err
-		}
-	case plan.Node_UNION_ALL:
-		//"title" : "STORE.S_STORE_NAME,STORE.S_STORE_ID,WSS.D_WEEK_SEQ"
-		exprs := NewExprListDescribeImpl(m.node.ProjectList)
-		result, err = exprs.GetDescription(options)
-		if err != nil {
-			return result, err
-		}
-	case plan.Node_INTERSECT:
-		exprs := NewExprListDescribeImpl(m.node.ProjectList)
-		result, err = exprs.GetDescription(options)
-		if err != nil {
-			return result, err
-		}
-	case plan.Node_INTERSECT_ALL:
-		exprs := NewExprListDescribeImpl(m.node.ProjectList)
-		result, err = exprs.GetDescription(options)
-		if err != nil {
-			return result, err
-		}
-	case plan.Node_MINUS:
-		exprs := NewExprListDescribeImpl(m.node.ProjectList)
-		result, err = exprs.GetDescription(options)
-		if err != nil {
-			return result, err
 		}
 	default:
 		return "", moerr.NewError(moerr.ERROR_SERIALIZE_PLAN_JSON, "Unsupported node type when plan is serialized to json")

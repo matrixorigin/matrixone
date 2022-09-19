@@ -2706,7 +2706,7 @@ func convertEngineTypeToMysqlType(engineType types.T, col *MysqlColumn) error {
 // build plan json when marhal plan error
 func BuildErrorJsonPlan(uuid uuid.UUID) []byte {
 	//`{"steps":null,"code":20104,"message":"An error occurred when plan is serialized to json","success":false,"uuid":"fd146c24-0770-4647-b690-f1fc98966898"}`
-	var json []byte = []byte{123, 34, 115, 116, 101, 112, 115, 34, 58, 110, 117, 108, 108, 44,
+	json := []byte{123, 34, 115, 116, 101, 112, 115, 34, 58, 110, 117, 108, 108, 44,
 		34, 99, 111, 100, 101, 34, 58, 50, 48, 49, 48, 52, 44, 34, 109, 101, 115, 115, 97, 103,
 		101, 34, 58, 34, 65, 110, 32, 101, 114, 114, 111, 114, 32, 111, 99, 99, 117, 114, 114,
 		101, 100, 32, 119, 104, 101, 110, 32, 112, 108, 97, 110, 32, 105, 115, 32, 115, 101,
