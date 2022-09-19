@@ -17,6 +17,7 @@ package mockio
 import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/file"
 )
@@ -28,6 +29,10 @@ type columnBlock struct {
 	indexes []*indexFile
 	updates *updatesFile
 	data    *dataFile
+}
+
+func (cb *columnBlock) GetDataObject() objectio.ColumnObject {
+	panic("implement me")
 }
 
 func newColumnBlock(block *blockFile, indexCnt int) *columnBlock {
