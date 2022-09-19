@@ -29,6 +29,42 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/sm"
 )
 
+type TxnCommitListener interface {
+	OnBeginPrePrepare(*OpTxn)
+	OnEndPrePrepare(*OpTxn)
+}
+
+type NoopCommitListener struct{}
+
+func (bl *NoopCommitListener) OnBeginPrePrepare(op *OpTxn) {}
+func (bl *NoopCommitListener) OnEndPrePrepare(op *OpTxn)   {}
+
+type batchTxnCommitListener struct {
+	listeners []TxnCommitListener
+}
+
+func newBatchCommitListener() *batchTxnCommitListener {
+	return &batchTxnCommitListener{
+		listeners: make([]TxnCommitListener, 0),
+	}
+}
+
+func (bl *batchTxnCommitListener) AddTxnCommitListener(l TxnCommitListener) {
+	bl.listeners = append(bl.listeners, l)
+}
+
+func (bl *batchTxnCommitListener) OnBeginPrePrepare(op *OpTxn) {
+	for _, l := range bl.listeners {
+		l.OnBeginPrePrepare(op)
+	}
+}
+
+func (bl *batchTxnCommitListener) OnEndPrePrepare(op *OpTxn) {
+	for _, l := range bl.listeners {
+		l.OnEndPrePrepare(op)
+	}
+}
+
 type TxnStoreFactory = func() txnif.TxnStore
 type TxnFactory = func(*TxnManager, txnif.TxnStore, uint64, types.TS, []byte) txnif.AsyncTxn
 
@@ -46,6 +82,7 @@ type TxnManager struct {
 	TxnFactory      TxnFactory
 	Active          *btree.Generic[types.TS]
 	Exception       *atomic.Value
+	CommitListener  *batchTxnCommitListener
 }
 
 func NewTxnManager(txnStoreFactory TxnStoreFactory, txnFactory TxnFactory, clock clock.Clock) *TxnManager {
@@ -58,10 +95,12 @@ func NewTxnManager(txnStoreFactory TxnStoreFactory, txnFactory TxnFactory, clock
 		TsAlloc:         types.NewTsAlloctor(clock),
 		TxnStoreFactory: txnStoreFactory,
 		TxnFactory:      txnFactory,
-		Active: btree.NewGeneric[types.TS](func(a, b types.TS) bool {
+		Active: btree.NewGeneric(func(a, b types.TS) bool {
 			return a.Less(b)
 		}),
-		Exception: new(atomic.Value)}
+		Exception:      new(atomic.Value),
+		CommitListener: newBatchCommitListener(),
+	}
 	pqueue := sm.NewSafeQueue(20000, 1000, mgr.dequeuePreparing)
 	fqueue := sm.NewSafeQueue(20000, 1000, mgr.dequeuePrepared)
 	mgr.PreparingSM = sm.NewStateMachine(new(sync.WaitGroup), mgr, pqueue, fqueue)
@@ -169,6 +208,8 @@ func (mgr *TxnManager) onPrePrepare(op *OpTxn) {
 		return
 	}
 
+	mgr.CommitListener.OnBeginPrePrepare(op)
+	defer mgr.CommitListener.OnEndPrePrepare(op)
 	// If txn is trying committing, call txn.PrePrepare()
 	now := time.Now()
 	op.Txn.SetError(op.Txn.PrePrepare())

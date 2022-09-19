@@ -42,12 +42,12 @@ type DatabaseRow struct {
 	Name      string
 }
 
-func (d DatabaseRow) PrimaryKey() Text {
+func (d DatabaseRow) Key() Text {
 	return Text(d.ID)
 }
 
-func (d DatabaseRow) Indexes() []AnyKey {
-	return []AnyKey{
+func (d DatabaseRow) Indexes() []Tuple {
+	return []Tuple{
 		{index_AccountID, Uint(d.AccountID)},
 		{index_AccountID_Name, Uint(d.AccountID), Text(d.Name)},
 	}
@@ -95,12 +95,12 @@ type RelationRow struct {
 	handler *MemHandler
 }
 
-func (r RelationRow) PrimaryKey() Text {
+func (r RelationRow) Key() Text {
 	return Text(r.ID)
 }
 
-func (r RelationRow) Indexes() []AnyKey {
-	return []AnyKey{
+func (r RelationRow) Indexes() []Tuple {
+	return []Tuple{
 		{index_DatabaseID, Text(r.DatabaseID)},
 		{index_DatabaseID_Name, Text(r.DatabaseID), Text(r.Name)},
 	}
@@ -168,12 +168,12 @@ type AttributeRow struct {
 	handler *MemHandler
 }
 
-func (a AttributeRow) PrimaryKey() Text {
+func (a AttributeRow) Key() Text {
 	return Text(a.ID)
 }
 
-func (a AttributeRow) Indexes() []AnyKey {
-	return []AnyKey{
+func (a AttributeRow) Indexes() []Tuple {
+	return []Tuple{
 		{index_RelationID, Text(a.RelationID)},
 		{index_RelationID_Name, Text(a.RelationID), Text(a.Name)},
 		{index_RelationID_IsPrimary, Text(a.RelationID), Bool(a.Primary)},
@@ -261,12 +261,12 @@ type IndexRow struct {
 	engine.IndexTableDef
 }
 
-func (i IndexRow) PrimaryKey() Text {
+func (i IndexRow) Key() Text {
 	return Text(i.ID)
 }
 
-func (i IndexRow) Indexes() []AnyKey {
-	return []AnyKey{
+func (i IndexRow) Indexes() []Tuple {
+	return []Tuple{
 		{index_RelationID, Text(i.RelationID)},
 		{index_RelationID_Name, Text(i.RelationID), Text(i.Name)},
 	}

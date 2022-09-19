@@ -173,4 +173,10 @@ type Handler interface {
 		req txnengine.TableStatsReq,
 		resp *txnengine.TableStatsResp,
 	) error
+
+	HandleGetLogTail(
+		meta txn.TxnMeta,
+		req txnengine.GetLogTailReq,
+		resp *txnengine.GetLogTailResp,
+	) error
 }

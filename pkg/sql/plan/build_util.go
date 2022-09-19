@@ -17,6 +17,8 @@ package plan
 import (
 	"fmt"
 
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -59,9 +61,9 @@ func getTypeFromAst(typ tree.ResolvableTypeReference) (*plan.Type, error) {
 			}
 			return &plan.Type{Id: int32(types.T_int64), Width: n.InternalType.Width, Size: 8}, nil
 		case defines.MYSQL_TYPE_FLOAT:
-			return &plan.Type{Id: int32(types.T_float32), Width: n.InternalType.Width, Size: 4, Precision: n.InternalType.Precision}, nil
+			return &plan.Type{Id: int32(types.T_float32), Width: n.InternalType.DisplayWith, Size: 4, Precision: n.InternalType.Precision}, nil
 		case defines.MYSQL_TYPE_DOUBLE:
-			return &plan.Type{Id: int32(types.T_float64), Width: n.InternalType.Width, Size: 8, Precision: n.InternalType.Precision}, nil
+			return &plan.Type{Id: int32(types.T_float64), Width: n.InternalType.DisplayWith, Size: 8, Precision: n.InternalType.Precision}, nil
 		case defines.MYSQL_TYPE_STRING:
 			width := n.InternalType.DisplayWith
 			if width == -1 {
@@ -102,6 +104,12 @@ func getTypeFromAst(typ tree.ResolvableTypeReference) (*plan.Type, error) {
 			return &plan.Type{Id: int32(types.T_json)}, nil
 		case defines.MYSQL_TYPE_UUID:
 			return &plan.Type{Id: int32(types.T_uuid), Size: 16}, nil
+		case defines.MYSQL_TYPE_TINY_BLOB:
+			return &plan.Type{Id: int32(types.T_blob), Size: types.VarlenaSize}, nil
+		case defines.MYSQL_TYPE_MEDIUM_BLOB:
+			return &plan.Type{Id: int32(types.T_blob), Size: types.VarlenaSize}, nil
+		case defines.MYSQL_TYPE_LONG_BLOB:
+			return &plan.Type{Id: int32(types.T_blob), Size: types.VarlenaSize}, nil
 		default:
 			return nil, errors.New("", fmt.Sprintf("Data type: '%s', will be supported in future version.", tree.String(&n.InternalType, dialect.MYSQL)))
 		}
@@ -163,6 +171,42 @@ func buildDefaultExpr(col *tree.ColumnTableDef, typ *plan.Type) (*plan.Default, 
 		Expr:         newExpr,
 		OriginString: tree.String(expr, dialect.MYSQL),
 	}, nil
+}
+
+func buildOnUpdate(col *tree.ColumnTableDef, typ *plan.Type) (*plan.Expr, error) {
+	var expr tree.Expr = nil
+
+	for _, attr := range col.Attributes {
+		if s, ok := attr.(*tree.AttributeOnUpdate); ok {
+			expr = s.Expr
+			break
+		}
+	}
+
+	if expr == nil {
+		return nil, nil
+	}
+
+	binder := NewDefaultBinder(nil, nil, typ)
+	planExpr, err := binder.BindExpr(expr, 0, false)
+	if err != nil {
+		return nil, err
+	}
+
+	onUpdateExpr, err := makePlan2CastExpr(planExpr, typ)
+	if err != nil {
+		return nil, err
+	}
+
+	// try to calculate on update value, return err if fails
+	bat := batch.NewWithSize(0)
+	bat.Zs = []int64{1}
+	_, err = colexec.EvalExpr(bat, nil, onUpdateExpr)
+	if err != nil {
+		return nil, err
+	}
+
+	return onUpdateExpr, nil
 }
 
 func isNullExpr(expr *plan.Expr) bool {

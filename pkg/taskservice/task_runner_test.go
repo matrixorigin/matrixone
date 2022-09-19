@@ -193,7 +193,7 @@ func TestCancelRunningTask(t *testing.T) {
 func runTaskRunnerTest(t *testing.T,
 	testFunc func(r *taskRunner, s TaskService, store TaskStorage),
 	opts ...RunnerOption) {
-	store := newMemTaskStorage()
+	store := NewMemTaskStorage()
 	s := NewTaskService(store)
 	defer func() {
 		assert.NoError(t, s.Close())
