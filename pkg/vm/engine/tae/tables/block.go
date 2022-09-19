@@ -59,6 +59,8 @@ const (
 	BS_NotAppendable
 )
 
+const DataIo = file.ObjectDataIo
+
 // The initial state of the block when scoring
 type statBlock struct {
 	rows      uint32
@@ -69,18 +71,19 @@ type dataBlock struct {
 	common.RefHelper
 	*sync.RWMutex
 	common.ClosedState
-	meta      *catalog.BlockEntry
-	node      *appendableNode
-	file      file.Block
-	colFiles  map[int]file.ColumnBlock
-	bufMgr    base.INodeManager
-	scheduler tasks.TaskScheduler
-	index     indexwrapper.Index
-	mvcc      *updates.MVCCHandle
-	score     *statBlock
-	ckpTs     atomic.Value
-	prefix    []byte
-	state     BlockState
+	meta       *catalog.BlockEntry
+	node       *appendableNode
+	file       file.Block
+	colFiles   map[int]common.IVFile
+	colObjects map[int]file.ColumnBlock
+	bufMgr     base.INodeManager
+	scheduler  tasks.TaskScheduler
+	index      indexwrapper.Index
+	mvcc       *updates.MVCCHandle
+	score      *statBlock
+	ckpTs      atomic.Value
+	prefix     []byte
+	state      BlockState
 }
 
 func newBlock(meta *catalog.BlockEntry, segFile file.Segment, bufMgr base.INodeManager, scheduler tasks.TaskScheduler) *dataBlock {
@@ -93,29 +96,40 @@ func newBlock(meta *catalog.BlockEntry, segFile file.Segment, bufMgr base.INodeM
 	if err != nil {
 		panic(err)
 	}
-	colFiles := make(map[int]file.ColumnBlock)
+	var colFiles map[int]common.IVFile
+	var colObjects map[int]file.ColumnBlock
+	if DataIo == file.ObjectDataIo {
+		colObjects = make(map[int]file.ColumnBlock)
+	} else {
+		colFiles = make(map[int]common.IVFile)
+	}
 	for i := 0; i < colCnt; i++ {
 		if colBlk, err := blockFile.OpenColumn(i); err != nil {
 			panic(err)
 		} else {
-			colFiles[i] = colBlk
-			if err != nil {
-				panic(err)
+			if DataIo == file.ObjectDataIo {
+				colObjects[i] = colBlk
+			} else {
+				colFiles[i], err = colBlk.OpenDataFile()
+				if err != nil {
+					panic(err)
+				}
 			}
-			//colBlk.Close()
+			colBlk.Close()
 		}
 	}
 	var node *appendableNode
 	//var zeroV types.TS
 	block := &dataBlock{
-		RWMutex:   new(sync.RWMutex),
-		meta:      meta,
-		file:      blockFile,
-		colFiles:  colFiles,
-		mvcc:      updates.NewMVCCHandle(meta),
-		scheduler: scheduler,
-		bufMgr:    bufMgr,
-		prefix:    meta.MakeKey(),
+		RWMutex:    new(sync.RWMutex),
+		meta:       meta,
+		file:       blockFile,
+		colFiles:   colFiles,
+		colObjects: colObjects,
+		mvcc:       updates.NewMVCCHandle(meta),
+		scheduler:  scheduler,
+		bufMgr:     bufMgr,
+		prefix:     meta.MakeKey(),
 	}
 	ts, _ := block.file.ReadTS()
 	block.mvcc.SetAppendListener(block.OnApplyAppend)
@@ -192,9 +206,13 @@ func (blk *dataBlock) Destroy() (err error) {
 		}
 	}
 	for _, file := range blk.colFiles {
+		file.Unref()
+	}
+	for _, file := range blk.colObjects {
 		file.Close()
 	}
-	blk.colFiles = make(map[int]file.ColumnBlock)
+	blk.colObjects = make(map[int]file.ColumnBlock)
+	blk.colFiles = make(map[int]common.IVFile)
 	if blk.index != nil {
 		if err = blk.index.Destroy(); err != nil {
 			return
@@ -620,18 +638,23 @@ func (blk *dataBlock) LoadColumnData(
 	colIdx int,
 	buffer *bytes.Buffer) (vec containers.Vector, err error) {
 	def := blk.meta.GetSchema().ColDefs[colIdx]
-	var fsVector *fileservice.IOVector
-	fsVector, err = blk.colFiles[colIdx].GetDataObject().GetData()
-	if err != nil {
+	if DataIo == file.ObjectDataIo {
+		var fsVector *fileservice.IOVector
+		fsVector, err = blk.colObjects[colIdx].GetDataObject().GetData()
+		if err != nil {
+			return
+		}
+
+		srcBuf := fsVector.Entries[0].Data
+		vector := vector.New(def.Type)
+		vector.Read(srcBuf)
+		vec = objectio.MOToVectorTmp(vector, def.Nullable())
 		return
+	} else {
+		vec = containers.MakeVector(def.Type, def.Nullable())
+		err = vec.ReadFromFile(blk.colFiles[colIdx], buffer)
 	}
 
-	srcBuf := fsVector.Entries[0].Data
-	vector := vector.New(def.Type)
-	vector.Read(srcBuf)
-	vec = objectio.MOToVectorTmp(vector, def.Nullable())
-	/*vec = containers.MakeVector(def.Type, def.Nullable())
-	err = vec.ReadFromColumn(blk.colFiles[colIdx].GetDataObject(), buffer)*/
 	return
 }
 

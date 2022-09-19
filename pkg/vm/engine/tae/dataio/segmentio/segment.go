@@ -36,10 +36,18 @@ const DELETE_SUFFIX = "del"
 var SegmentFactory file.SegmentFactory
 
 func init() {
-	SegmentFactory = new(segmentFactory)
+	SegmentFactory = &segmentFactory{
+		tye: file.SegmentDataIo,
+	}
 }
 
-type segmentFactory struct{}
+type segmentFactory struct {
+	tye file.SegmentFactoryType
+}
+
+func (factory *segmentFactory) GetType() file.SegmentFactoryType {
+	return factory.tye
+}
 
 func (factory *segmentFactory) Build(dir string, id uint64) file.Segment {
 	baseName := factory.EncodeName(id)

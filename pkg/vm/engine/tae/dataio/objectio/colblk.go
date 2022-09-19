@@ -27,7 +27,6 @@ type columnBlock struct {
 	ts      uint64
 	indexes int
 	id      *common.ID
-	data    objectio.ColumnObject
 }
 
 func newColumnBlock(block *blockFile, indexCnt int, col int) *columnBlock {

@@ -17,7 +17,6 @@ package containers
 import (
 	"bytes"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"io"
 
 	"github.com/RoaringBitmap/roaring"
@@ -57,11 +56,6 @@ func (win *windowBase) ResetWithData(*Bytes, *roaring64.Bitmap) { panic("cannot 
 type vectorWindow[T any] struct {
 	*windowBase
 	ref *vector[T]
-}
-
-func (win *vectorWindow[T]) ReadFromColumn(block objectio.ColumnObject, buffer *bytes.Buffer) error {
-	//TODO implement me
-	panic("implement me")
 }
 
 func (win *vectorWindow[T]) Equals(o Vector) bool {
