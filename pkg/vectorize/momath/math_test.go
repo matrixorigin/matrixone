@@ -146,8 +146,10 @@ func TestAtanWithTwoArg(t *testing.T){
 	firstCol:= []float64{-1, 1, 1, 1, 1.0, 1.0}
 	secondCol := []float64{1, 0, -1, 1, -1.0, 1.0}
 	resultCol := make([]float64, 6)
+	firstVec := testutil.MakeFloat64Vector(firstCol, nil)
+	secondVec := testutil.MakeFloat64Vector(secondCol, nil)
 	resultVector := testutil.MakeFloat64Vector(resultCol, nil)
-	err := AtanWithTwoArg(firstCol, secondCol, resultVector);
+	err := AtanWithTwoArg(firstVec, secondVec, resultVector);
 	if err != nil {
 		panic(err)
 	}

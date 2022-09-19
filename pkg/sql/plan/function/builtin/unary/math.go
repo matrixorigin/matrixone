@@ -21,7 +21,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/operator"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/momath"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"golang.org/x/exp/constraints"
 )
 
 type mathFn func(*vector.Vector, *vector.Vector) error
@@ -62,9 +61,8 @@ func Acos(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	return math1(vs, proc, momath.Acos)
 }
 
-func Atan[T constraints.Unsigned | constraints.Signed | constraints.Float](vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+func Atan(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	//If the vs's lenght is 1, just use the  function with one parameter
-	firstCol :=  vector.MustTCols[T](vs[0])
 	if len(vs) == 1 {
 		return math1(vs, proc, momath.Atan)
 	}
@@ -76,12 +74,11 @@ func Atan[T constraints.Unsigned | constraints.Signed | constraints.Float](vs []
 	}
 	
 	//Second if the vs is scalar
-	secondCol :=  vector.MustTCols[T](vs[1])
 	if vs[0].IsScalar() {
 		resultVector := proc.AllocScalarVector(types.Type{Oid: types.T_float64, Size: 8})
 		resultValues := make([]float64, 1)
 		vector.SetCol(resultVector, resultValues)
-		if err := momath.AtanWithTwoArg(firstCol, secondCol, resultVector); err != nil {
+		if err := momath.AtanWithTwoArg(vs[0], vs[1], resultVector); err != nil {
 			return nil, err
 		}
 		return resultVector, nil
@@ -91,7 +88,7 @@ func Atan[T constraints.Unsigned | constraints.Signed | constraints.Float](vs []
 		if err != nil {
 			return nil, err
 		}
-		if err := momath.AtanWithTwoArg(firstCol, secondCol, resultVector); err != nil {
+		if err := momath.AtanWithTwoArg(vs[0], vs[1], resultVector); err != nil {
 			return nil, err
 		}
 		return resultVector, nil
