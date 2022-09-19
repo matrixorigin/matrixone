@@ -68,7 +68,6 @@ func (w *StoreImpl) replayEntry(e *entry.Entry, h ApplyHandle) error {
 		return nil
 	case GroupCKP:
 		w.logCheckpointInfo(info)
-	case GroupC:
 	}
 	w.logDriverLsn(e)
 	w.onReplayLsn(info.Group, info.GroupLSN)

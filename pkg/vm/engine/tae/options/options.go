@@ -60,5 +60,11 @@ func (o *Options) FillDefaults(dirname string) *Options {
 		o.Clock = types.NewMockHLCClock(1)
 	}
 
+	if o.LogtailCfg == nil {
+		o.LogtailCfg = &LogtailCfg{
+			PageSize: DefaultLogtailTxnPageSize,
+		}
+	}
+
 	return o
 }

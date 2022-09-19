@@ -550,7 +550,7 @@ a    b
 12    12
 13    13
 truncate table t10;
-You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at position 9 near 'truncate'; 
+You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 8 near "truncate table t10;";
 insert into t10 values ();
 select * from t10 order by a;
 a    b
