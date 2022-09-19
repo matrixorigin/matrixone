@@ -526,19 +526,6 @@ func (c *Compile) compileUnnest(n *plan.Node, ss []*Scope) ([]*Scope, error) {
 	if err != nil {
 		return nil, err
 	}
-	if len(ss) != 1 {
-		return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, "unnest can only have one child")
-	}
-	//if len(ss) == 0 {
-	//	ds := &Scope{
-	//		Magic: Normal,
-	//		Proc:  process.NewWithAnalyze(c.proc, c.ctx, 0, c.anal.Nodes()),
-	//		DataSource: &Source{
-	//			Bat: batch.NewWithSize(0),
-	//		},
-	//	}
-	//	ss = append(ss, ds)
-	//}
 	for i := range ss {
 		ss[i].appendInstruction(vm.Instruction{
 			Op:  vm.Unnest,
