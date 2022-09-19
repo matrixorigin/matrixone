@@ -39,7 +39,6 @@ func Prepare(_ *process.Process, arg any) error {
 		param.isCol = true
 	}
 	param.seq = 0
-	param.end = false
 	var filters []string
 	for i := range param.Attrs {
 		denied := false
@@ -66,11 +65,11 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 }
 
 func callByStr(param *Param, proc *process.Process) (bool, error) {
-	if param.end {
-		proc.SetInputBatch(nil)
+	bat := proc.InputBatch()
+	if bat == nil {
 		return true, nil
 	}
-	json, err := types.ParseStringToByteJson(param.Extern.Origin.(string))
+	json, err := types.ParseStringToByteJson(bat.Vecs[0].GetString(0))
 	if err != nil {
 		return false, err
 	}
@@ -82,17 +81,16 @@ func callByStr(param *Param, proc *process.Process) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	bat := batch.New(false, param.Attrs)
+	rbat := batch.New(false, param.Attrs)
 	for i := range param.Cols {
-		bat.Vecs[i] = vector.New(dupType(param.Cols[i].Typ))
+		rbat.Vecs[i] = vector.New(dupType(param.Cols[i].Typ))
 	}
-	bat, err = makeBatch(bat, ures, param, proc)
+	rbat, err = makeBatch(rbat, ures, param, proc)
 	if err != nil {
 		return false, err
 	}
-	bat.InitZsOne(len(ures))
-	proc.SetInputBatch(bat)
-	param.end = true
+	rbat.InitZsOne(len(ures))
+	proc.SetInputBatch(rbat)
 	return false, nil
 }
 

@@ -126,21 +126,7 @@ func (builder *QueryBuilder) buildUnnest(tbl *tree.Unnest, ctx *BindContext) (in
 		},
 		BindingTags: []int32{tag},
 	}
-	//not this fault,for restrict.go bat not enough
-	//for i := 0; i < len(colDefs); i++ {
-	//	tmp := &plan.Expr{
-	//		Typ: colDefs[i].Typ,
-	//		Expr: &plan.Expr_Col{
-	//			Col: &plan.ColRef{
-	//				RelPos: tag,
-	//				ColPos: int32(i),
-	//				Name:   colDefs[i].Name,
-	//			},
-	//		},
-	//	}
-	//	node.ProjectList = append(node.ProjectList, tmp)
-	//	//node.FilterList = append(node.FilterList, tmp)
-	//}
+	var scanNode *plan.Node
 	switch o := tbl.Param.Origin.(type) {
 	case *tree.UnresolvedName:
 		schemaName, tableName, colName := o.GetNames()
@@ -151,7 +137,7 @@ func (builder *QueryBuilder) buildUnnest(tbl *tree.Unnest, ctx *BindContext) (in
 		if tableDef == nil {
 			return 0, fmt.Errorf("table %s not found", tableName)
 		}
-		scanNode := &plan.Node{
+		scanNode = &plan.Node{
 			NodeType:    plan.Node_TABLE_SCAN,
 			TableDef:    tableDef,
 			ObjRef:      objRef,
@@ -173,26 +159,32 @@ func (builder *QueryBuilder) buildUnnest(tbl *tree.Unnest, ctx *BindContext) (in
 				break
 			}
 		}
-		childId := builder.appendNode(scanNode, ctx)
-		node.Children = []int32{childId}
+	case string:
+		if len(o) == 0 {
+			return 0, fmt.Errorf("unnest param is empty")
+		}
+		scanNode = &plan.Node{
+			NodeType: plan.Node_VALUE_SCAN,
+			TableDef: &plan.TableDef{
+				TableFunctionParam: []byte(o),
+			},
+			ProjectList: []*plan.Expr{
+				{
+					Typ:  &plan.Type{Id: int32(types.T_varchar)},
+					Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}},
+				},
+			},
+		}
 	default:
-		break
-
+		return 0, fmt.Errorf("unsupport param type %T", o)
 	}
-
+	childId := builder.appendNode(scanNode, ctx)
+	node.Children = []int32{childId}
 	nodeID := builder.appendNode(node, ctx)
-	//ctx.hasSingleRow = true
-	//cols := _getDefaultCols()
-	//binding := NewBinding(tag, nodeID, tbl.String(), cols, _getDefaultPlanTypes())
-	//ctx.bindings = append(ctx.bindings, binding)
-	//ctx.bindingByTag[tag] = binding
-	//for _, col := range cols {
-	//	ctx.bindingByCol[col] = binding
-	//}
-	//ctx.bindingTree = &BindingTreeNode{
-	//	binding: binding,
-	//}
-	//ctx.bindingByTable[tbl.String()] = binding
-
 	return nodeID, nil
+}
+
+func IsUnnestValueScan(node *plan.Node) bool { // distinguish unnest value scan and normal value scan,maybe change to a better way in the future
+	// node must be a value scan
+	return node.TableDef != nil && len(node.TableDef.TableFunctionParam) > 0
 }

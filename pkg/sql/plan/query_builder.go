@@ -615,10 +615,12 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 
 	case plan.Node_VALUE_SCAN:
 		// VALUE_SCAN always have one column now
-		node.ProjectList = append(node.ProjectList, &plan.Expr{
-			Typ:  &plan.Type{Id: int32(types.T_int64)},
-			Expr: &plan.Expr_C{C: &plan.Const{Value: &plan.Const_Ival{Ival: 0}}},
-		})
+		if !IsUnnestValueScan(node) {
+			node.ProjectList = append(node.ProjectList, &plan.Expr{
+				Typ:  &plan.Type{Id: int32(types.T_int64)},
+				Expr: &plan.Expr_C{C: &plan.Const{Value: &plan.Const_Ival{Ival: 0}}},
+			})
+		}
 
 	default:
 		return nil, errors.New("", "unsupport node type")

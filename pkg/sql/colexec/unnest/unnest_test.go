@@ -16,6 +16,7 @@ package unnest
 
 import (
 	"bytes"
+	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -138,42 +139,56 @@ func TestString(t *testing.T) {
 }
 
 func TestUnnest(t *testing.T) {
-	for _, ut := range utc {
-		err := Prepare(ut.proc, ut.arg)
-		require.Nil(t, err)
-		if !ut.isCol {
-			end, err := Call(0, ut.proc, ut.arg)
+	for i, ut := range utc {
+		t.Run(fmt.Sprintf("%d", i), func(t *testing.T) {
+			err := Prepare(ut.proc, ut.arg)
 			require.Nil(t, err)
-			require.False(t, end)
-			require.True(t, ut.arg.Es.end)
-			require.NotNil(t, ut.proc.InputBatch())
-			ut.proc.SetInputBatch(nil)
-			end, err = Call(0, ut.proc, ut.arg)
+			if !ut.isCol {
+				ut.proc.Reg.InputBatch, err = makeTestBatch1(ut.arg.Es.Extern.Origin.(string), ut.proc)
+				require.Nil(t, err)
+				end, err := Call(0, ut.proc, ut.arg)
+				require.Nil(t, err)
+				require.False(t, end)
+				require.NotNil(t, ut.proc.InputBatch())
+				ut.proc.SetInputBatch(nil)
+				end, err = Call(0, ut.proc, ut.arg)
+				require.Nil(t, err)
+				require.True(t, end)
+				require.Nil(t, ut.proc.InputBatch())
+				return
+			}
+
+			for i := 0; i < ut.inputTimes; i++ {
+				ut.proc.Reg.InputBatch, err = makeTestBatch2(ut.jsons, ut.proc)
+				require.Nil(t, err)
+				end, err := Call(0, ut.proc, ut.arg)
+				require.Nil(t, err)
+				require.False(t, end)
+				require.Nil(t, err)
+				require.NotNil(t, ut.proc.InputBatch())
+			}
+			ut.proc.Reg.InputBatch = nil
+			end, err := Call(0, ut.proc, ut.arg)
 			require.Nil(t, err)
 			require.True(t, end)
-			require.True(t, ut.arg.Es.end)
-			require.Nil(t, ut.proc.InputBatch())
-			continue
-		}
-
-		for i := 0; i < ut.inputTimes; i++ {
-			ut.proc.Reg.InputBatch, err = makeTestBatch(ut.jsons, ut.proc)
-			require.Nil(t, err)
-			end, err := Call(0, ut.proc, ut.arg)
-			require.Nil(t, err)
-			require.False(t, end)
-			require.False(t, ut.arg.Es.end)
-			require.Nil(t, err)
-			require.NotNil(t, ut.proc.InputBatch())
-		}
-		ut.proc.Reg.InputBatch = nil
-		end, err := Call(0, ut.proc, ut.arg)
-		require.Nil(t, err)
-		require.True(t, end)
-		require.False(t, ut.arg.Es.end)
+		})
 	}
 }
-func makeTestBatch(jsons []string, proc *process.Process) (*batch.Batch, error) {
+
+func makeTestBatch1(json string, proc *process.Process) (*batch.Batch, error) {
+	bat := batch.New(true, []string{"src"})
+	bat.Vecs[0] = vector.New(types.Type{
+		Oid: types.T_varchar,
+	})
+	err := bat.Vecs[0].Append([]byte(json), false, proc.Mp())
+	if err != nil {
+		return nil, err
+	}
+	bat.InitZsOne(1)
+	return bat, nil
+}
+
+func makeTestBatch2(jsons []string, proc *process.Process) (*batch.Batch, error) {
 	bat := batch.New(true, []string{"a"})
 	for i := range bat.Vecs {
 		bat.Vecs[i] = vector.New(types.Type{
