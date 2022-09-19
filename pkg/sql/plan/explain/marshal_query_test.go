@@ -6,7 +6,6 @@ import (
 	plan2 "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
-	"github.com/smartystreets/goconvey/convey"
 	"testing"
 )
 
@@ -193,14 +192,6 @@ func TestDerivedTableQueryToJson(t *testing.T) {
 	}
 	mock := plan.NewMockOptimizer()
 	buildPlanMarshalTest(mock, t, sqls)
-}
-
-func TestBuildErrorJsonPlan(t *testing.T) {
-	uuid := uuid.New()
-	jsonPlan := BuildErrorJsonPlan(uuid)
-	//`{"steps":null,"code":20104,"message":"An error occurred when plan is serialized to json","success":false,"uuid":"fd146c24-0770-4647-b690-f1fc98966898"}`
-	var dest []byte = []byte{123, 34, 115, 116, 101, 112, 115, 34, 58, 110, 117, 108, 108, 44, 34, 99, 111, 100, 101, 34, 58, 50, 48, 49, 48, 52, 44, 34, 109, 101, 115, 115, 97, 103, 101, 34, 58, 34, 65, 110, 32, 101, 114, 114, 111, 114, 32, 111, 99, 99, 117, 114, 114, 101, 100, 32, 119, 104, 101, 110, 32, 112, 108, 97, 110, 32, 105, 115, 32, 115, 101, 114, 105, 97, 108, 105, 122, 101, 100, 32, 116, 111, 32, 106, 115, 111, 110, 34, 44, 34, 115, 117, 99, 99, 101, 115, 115, 34, 58, 102, 97, 108, 115, 101, 44, 34, 117, 117, 105, 100, 34, 58, 34, 50, 53, 51, 52, 53, 97, 48, 98, 45, 99, 97, 101, 97, 45, 52, 57, 54, 56, 45, 97, 101, 56, 52, 45, 54, 54, 101, 97, 54, 101, 100, 55, 99, 56, 57, 56, 34, 125}
-	convey.ShouldEqual(dest, jsonPlan)
 }
 
 func buildPlanMarshalTest(opt plan.Optimizer, t *testing.T, sqls []string) {
