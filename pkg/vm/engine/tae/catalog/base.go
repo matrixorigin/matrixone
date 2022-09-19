@@ -38,19 +38,18 @@ type BaseEntry interface {
 	StringLocked() string
 	PPString(common.PPLevel, int, string) string
 
-	GetTs() types.TS
 	GetTxn() txnif.TxnReader
 	GetID() uint64
 	GetIndexes() []*wal.Index
 	GetCurrOp() OpT
-	GetLogIndex() []*wal.Index
+	GetLogIndex() *wal.Index
 
-	InsertNode(un txnbase.MVCCNode)
+	Insert(un txnbase.MVCCNode)
 
-	GetUpdateNodeLocked() txnbase.MVCCNode
+	GetNodeLocked() txnbase.MVCCNode
 	IsVisible(ts types.TS, mu *sync.RWMutex) (ok bool, err error)
 
-	ExistUpdate(minTs, MaxTs types.TS) (exist bool)
+	HasCommittedNodeInRange(minTs, MaxTs types.TS) bool
 	IsCreating() bool
 	IsCommitting() bool
 	DeleteBefore(ts types.TS) bool
@@ -60,7 +59,6 @@ type BaseEntry interface {
 	CloneCommittedInRange(start, end types.TS) (ret BaseEntry)
 
 	PrepareCommit() error
-	Prepare2PCPrepare() error
 	PrepareRollback() (bool, error)
 	ApplyCommit(index *wal.Index) error
 	ApplyRollback(index *wal.Index) error

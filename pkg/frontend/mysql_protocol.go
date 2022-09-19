@@ -591,10 +591,6 @@ func (mp *MysqlProtocolImpl) ParseExecuteData(stmt *PrepareStmt, data []byte, po
 				}
 				pos = newPos
 				vars[i] = math.Float64frombits(val)
-				if len(paramValues) < (pos + 4) {
-					err = moerr.NewError(moerr.INVALID_INPUT, "malform packet")
-					return
-				}
 
 			case defines.MYSQL_TYPE_VARCHAR, defines.MYSQL_TYPE_VAR_STRING, defines.MYSQL_TYPE_STRING, defines.MYSQL_TYPE_DECIMAL,
 				defines.MYSQL_TYPE_ENUM, defines.MYSQL_TYPE_SET, defines.MYSQL_TYPE_GEOMETRY, defines.MYSQL_TYPE_BIT:
