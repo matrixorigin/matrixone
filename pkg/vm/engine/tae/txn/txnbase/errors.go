@@ -18,6 +18,7 @@ import "errors"
 
 var (
 	ErrTxnAlreadyCommitted = errors.New("tae: txn already committed")
+	ErrTxnNotPreparing     = errors.New("tae: txn not preparing")
 	ErrTxnNotCommitting    = errors.New("tae: txn not committing")
 	ErrTxnNotRollbacking   = errors.New("tae: txn not rollbacking")
 	ErrTxnNotActive        = errors.New("tae: txn not active")

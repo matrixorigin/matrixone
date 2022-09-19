@@ -156,9 +156,39 @@ func (ctx *TxnCtx) ToPreparingLocked(ts types.TS) error {
 	return nil
 }
 
+func (ctx *TxnCtx) ToPrepared() (err error) {
+	ctx.Lock()
+	defer ctx.Unlock()
+	return ctx.ToPreparedLocked()
+}
+
+func (ctx *TxnCtx) ToPreparedLocked() (err error) {
+	if ctx.State != txnif.TxnStatePreparing {
+		err = ErrTxnNotPreparing
+		return
+	}
+	ctx.State = txnif.TxnStatePrepared
+	return
+}
+
+func (ctx *TxnCtx) ToCommittingFinished() (err error) {
+	ctx.Lock()
+	defer ctx.Unlock()
+	return ctx.ToCommittingFinishedLocked()
+}
+
+func (ctx *TxnCtx) ToCommittingFinishedLocked() (err error) {
+	if ctx.State != txnif.TxnStatePrepared {
+		err = ErrTxnStateNotPrepared
+		return
+	}
+	ctx.State = txnif.TxnStateCommittingFinished
+	return
+}
+
 func (ctx *TxnCtx) ToCommittedLocked() error {
 	if ctx.State != txnif.TxnStatePreparing {
-		return ErrTxnNotCommitting
+		return ErrTxnNotPreparing
 	}
 	ctx.State = txnif.TxnStateCommitted
 	return nil

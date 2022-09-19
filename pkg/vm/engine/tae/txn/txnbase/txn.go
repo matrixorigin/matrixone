@@ -148,8 +148,9 @@ func (txn *Txn) Prepare() (err error) {
 	}
 	txn.Wait()
 	if txn.Err == nil {
-		//txn.State = txnif.TxnStatePrepared
-		atomic.StoreInt32((*int32)(&txn.State), (int32)(txnif.TxnStatePrepared))
+		if err = txn.ToPrepared(); err != nil {
+			panic(err)
+		}
 	} else {
 		//txn.Status = txnif.TxnStatusRollbacked
 		txn.Mgr.DeleteTxn(txn.GetID())
@@ -194,9 +195,11 @@ func (txn *Txn) Committing() (err error) {
 	txn.Add(1)
 	txn.Ch <- EventCommitting
 	txn.Wait()
-	//txn.Status = txnif.TxnStatusCommittingFinished
-	atomic.StoreInt32((*int32)(&txn.State), (int32)(txnif.TxnStateCommittingFinished))
-	return txn.Err
+	if err = txn.ToCommittingFinished(); err != nil {
+		panic(err)
+	}
+	err = txn.Err
+	return
 }
 
 // Commit is used to commit a 1PC or 2PC transaction running in Coordinator or running in Participant.
