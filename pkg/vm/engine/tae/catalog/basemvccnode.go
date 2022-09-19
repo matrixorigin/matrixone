@@ -24,7 +24,7 @@ import (
 )
 
 type EntryMVCCNode struct {
-	CreatedAt, DeletedAt     types.TS
+	CreatedAt, DeletedAt types.TS
 }
 
 func NewEntryMVCCNode() *EntryMVCCNode {
@@ -32,7 +32,7 @@ func NewEntryMVCCNode() *EntryMVCCNode {
 }
 
 func (un *EntryMVCCNode) HasDropped() bool {
-	return !un.DeletedAt.IsEmpty() 
+	return !un.DeletedAt.IsEmpty()
 }
 
 func (un *EntryMVCCNode) GetCreatedAt() types.TS {
@@ -49,8 +49,8 @@ func (un *EntryMVCCNode) IsCreating() bool {
 
 func (un *EntryMVCCNode) Clone() *EntryMVCCNode {
 	return &EntryMVCCNode{
-		CreatedAt:   un.CreatedAt,
-		DeletedAt:   un.DeletedAt,
+		CreatedAt: un.CreatedAt,
+		DeletedAt: un.DeletedAt,
 	}
 }
 
@@ -62,7 +62,7 @@ func (un *EntryMVCCNode) CloneData() *EntryMVCCNode {
 }
 
 func (un *EntryMVCCNode) Delete() {
-	un.DeletedAt=txnif.UncommitTS
+	un.DeletedAt = txnif.UncommitTS
 }
 
 func (un *EntryMVCCNode) ReadFrom(r io.Reader) (n int64, err error) {
@@ -94,20 +94,20 @@ func (un *EntryMVCCNode) String() string {
 	return fmt.Sprintf("CreatedAt=%v,DeletedAt=%v", un.CreatedAt, un.DeletedAt)
 }
 func (un *EntryMVCCNode) ApplyCommit(ts types.TS) (err error) {
-	if un.CreatedAt==txnif.UncommitTS {
+	if un.CreatedAt == txnif.UncommitTS {
 		un.CreatedAt = ts
 	}
-	if un.DeletedAt==txnif.UncommitTS {
+	if un.DeletedAt == txnif.UncommitTS {
 		un.DeletedAt = ts
 	}
 	return nil
 }
 
 func (un *EntryMVCCNode) ReplayCommit(ts types.TS) (err error) {
-	if un.CreatedAt==txnif.UncommitTS {
+	if un.CreatedAt == txnif.UncommitTS {
 		un.CreatedAt = ts
 	}
-	if un.DeletedAt==txnif.UncommitTS {
+	if un.DeletedAt == txnif.UncommitTS {
 		un.DeletedAt = ts
 	}
 	return nil

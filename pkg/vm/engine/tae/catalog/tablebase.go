@@ -75,7 +75,7 @@ func (be *TableBaseEntry) GetID() uint64 { return be.ID }
 func (be *TableBaseEntry) CreateWithTS(ts types.TS) {
 	node := &TableMVCCNode{
 		EntryMVCCNode: &EntryMVCCNode{
-			CreatedAt:   ts,
+			CreatedAt: ts,
 		},
 		TxnMVCCNode: &txnbase.TxnMVCCNode{
 			Start: ts,
