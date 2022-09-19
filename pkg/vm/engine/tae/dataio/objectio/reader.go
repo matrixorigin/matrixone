@@ -24,14 +24,22 @@ import (
 )
 
 type Reader struct {
-	block *blockFile
-	fs    *ObjectFS
+	reader objectio.Reader
+	block  *blockFile
+	fs     *ObjectFS
+	name   string
 }
 
-func NewReader(fs *ObjectFS, block *blockFile) *Reader {
+func NewReader(fs *ObjectFS, block *blockFile, name string) *Reader {
+	reader, err := objectio.NewObjectReader(name, fs.service)
+	if err != nil {
+		panic(any(err))
+	}
 	return &Reader{
-		fs:    fs,
-		block: block,
+		fs:     fs,
+		block:  block,
+		name:   name,
+		reader: reader,
 	}
 }
 
@@ -86,13 +94,11 @@ func (r *Reader) LoadBlkColumns(
 }
 
 func (r *Reader) ReadMeta(extent objectio.Extent) (objectio.BlockObject, error) {
-	name := EncodeBlkName(r.block.id)
-	reader, err := objectio.NewObjectReader(name, r.fs.service)
+	extents := make([]objectio.Extent, 1)
+	extents[0] = extent
+	block, err := r.reader.ReadMeta(extents)
 	if err != nil {
 		return nil, err
 	}
-	extents := make([]objectio.Extent, 1)
-	extents[0] = extent
-	block, err := reader.ReadMeta(extents)
 	return block[0], err
 }

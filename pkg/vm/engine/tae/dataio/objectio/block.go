@@ -47,7 +47,6 @@ func newBlock(id uint64, seg *segmentFile, colCnt int, indexCnt map[int]int) *bl
 		id:      blockID,
 		columns: make([]*columnBlock, colCnt),
 	}
-	bf.reader = NewReader(seg.fs, bf)
 	bf.OnZeroCB = bf.close
 	for i := range bf.columns {
 		cnt := 0
@@ -62,7 +61,7 @@ func newBlock(id uint64, seg *segmentFile, colCnt int, indexCnt map[int]int) *bl
 
 func (bf *blockFile) WriteBatch(bat *containers.Batch, ts types.TS) (err error) {
 	bf.writer = NewWriter(bf.seg.fs, bf.id)
-	block, err := bf.writer.WriteBlock(bf.id, bat)
+	block, err := bf.writer.WriteBlock(bat)
 	bf.meta = block
 	return err
 }
@@ -94,24 +93,25 @@ func (bf *blockFile) GetMeta(metaLoc string) objectio.BlockObject {
 	}
 	logutil.Infof("id: %v, metaLoc is %v", bf.Fingerprint(), metaLoc)
 	info := strings.Split(metaLoc, ":")
-	//name := info[0]
+	name := info[0]
 	location := strings.Split(info[1], "_")
-	extent := objectio.Extent{}
 	offset, err := strconv.ParseUint(location[0], 10, 32)
 	if err != nil {
 		panic(any(err))
 	}
-	extent.SetOffset(uint32(offset))
 	size, err := strconv.ParseUint(location[1], 10, 32)
 	if err != nil {
 		panic(any(err))
 	}
-	extent.SetLength(uint32(size))
 	osize, err := strconv.ParseUint(location[2], 10, 32)
 	if err != nil {
 		panic(any(err))
 	}
-	extent.SetOriginSize(uint32(osize))
+	extent := objectio.NewExtent(uint32(offset), uint32(size), uint32(osize))
+	if bf.reader == nil {
+		bf.reader = NewReader(bf.seg.fs, bf, name)
+	}
+	logutil.Infof("extent isss %d-%d-%d", extent.Offset(), extent.Length(), extent.OriginSize())
 	block, err := bf.reader.ReadMeta(extent)
 	if err != nil {
 		panic(any(err))
@@ -166,13 +166,28 @@ func (bf *blockFile) Destroy() error {
 	return nil
 }
 
-func (bf *blockFile) Sync() error { return bf.writer.Sync() }
+func (bf *blockFile) Sync() error {
+	_, err := bf.writer.Sync()
+	return err
+}
 
 func (bf *blockFile) LoadBatch(
 	colTypes []types.Type,
 	colNames []string,
 	nullables []bool,
 	opts *containers.Options) (bat *containers.Batch, err error) {
+	if bf.reader == nil {
+		bat = containers.NewBatch()
+
+		for i, _ := range bf.columns {
+			vec := containers.MakeVector(colTypes[i], nullables[i], opts)
+			bat.AddVector(colNames[i], vec)
+			if bf.meta == nil {
+				continue
+			}
+		}
+		return bat, err
+	}
 	return bf.reader.LoadBlkColumns(colTypes, colNames, nullables, opts)
 }
 

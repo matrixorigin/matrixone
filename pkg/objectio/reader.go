@@ -17,6 +17,7 @@ package objectio
 import (
 	"context"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 )
 
 type ObjectReader struct {
@@ -44,11 +45,13 @@ func (r *ObjectReader) ReadMeta(extents []Extent) ([]BlockObject, error) {
 	for i, extent := range extents {
 		metas.Entries[i] = fileservice.IOEntry{
 			Offset: int64(extent.offset),
-			Size:   int64(extent.Length()),
+			Size:   int64(extent.originSize),
 		}
+		logutil.Infof("offf %d-%d", extent.offset, extent.originSize)
 	}
 	err = r.object.fs.Read(context.Background(), metas)
 	if err != nil {
+		logutil.Infof("errerrerrerrerrerr%v", err.Error())
 		return nil, err
 	}
 	blocks := make([]BlockObject, len(extents))
@@ -56,6 +59,7 @@ func (r *ObjectReader) ReadMeta(extents []Extent) ([]BlockObject, error) {
 		blocks[i] = &Block{object: r.object}
 		err = blocks[i].(*Block).UnMarshalMeta(metas.Entries[i].Data)
 		if err != nil {
+			logutil.Infof("1232323232 %v", err.Error())
 			return nil, err
 		}
 	}

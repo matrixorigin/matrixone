@@ -87,10 +87,6 @@ func (o *ObjectFS) GetWriter(name string) (objectio.Writer, error) {
 	return writer, err
 }
 
-func (o *ObjectFS) WriterEnd(name string) error {
-
-}
-
 func (o *ObjectFS) ReadDir(dir string) ([]common.FileInfo, error) {
 	o.RWMutex.Lock()
 	defer o.RWMutex.Unlock()

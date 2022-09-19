@@ -21,6 +21,14 @@ type Extent struct {
 	originSize uint32
 }
 
+func NewExtent(offset, length, originSize uint32) Extent {
+	return Extent{
+		offset:     offset,
+		length:     length,
+		originSize: originSize,
+	}
+}
+
 func (ex Extent) Id() uint64 { return ex.id }
 
 func (ex Extent) End() uint32 { return ex.offset + ex.length }
@@ -30,11 +38,3 @@ func (ex Extent) Offset() uint32 { return ex.offset }
 func (ex Extent) Length() uint32 { return ex.length }
 
 func (ex Extent) OriginSize() uint32 { return ex.originSize }
-
-func (ex Extent) SetOffset(offset uint32) { ex.offset = offset }
-
-func (ex Extent) SetLength(size uint32) { ex.length = size }
-
-func (ex Extent) SetOriginSize(size uint32) { ex.originSize = size }
-
-func (ex Extent) SetId(id uint64) { ex.id = id }

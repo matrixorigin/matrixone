@@ -154,5 +154,6 @@ func (blk *dataBlock) SyncBlockData(ts types.TS, rows uint32) (err error) {
 	if err = blk.file.WriteTS(ts); err != nil {
 		return
 	}
-	return blk.file.Sync()
+	//return blk.file.Sync()
+	return nil
 }

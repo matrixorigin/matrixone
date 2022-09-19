@@ -48,10 +48,13 @@ func TestBlock1(t *testing.T) {
 	var ts types.TS
 	err := block.WriteBatch(data, ts)
 	assert.Nil(t, err)
+	bs, err := block.(*blockFile).writer.Sync()
+	assert.Nil(t, err)
+	assert.Equal(t, 1, len(bs))
 
 	col, err := block.OpenColumn(3)
 	assert.Nil(t, err)
-	iovector, err := col.GetDataObject().GetData()
+	iovector, err := col.GetDataObject("").GetData()
 	buf := iovector.Entries[0].Data
 	buf1, err := newbat.Vecs[3].Show()
 	assert.Nil(t, err)
