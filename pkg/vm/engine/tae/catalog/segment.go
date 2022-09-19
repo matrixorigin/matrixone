@@ -219,8 +219,9 @@ func (entry *SegmentEntry) DropBlockEntry(id uint64, txn txnif.AsyncTxn) (delete
 		waitTxn.GetTxnState(true)
 		blk.Lock()
 	}
-	err = blk.DropEntryLocked(txn)
-	if err == nil {
+	var isNewNode bool
+	isNewNode, err = blk.DropEntryLocked(txn)
+	if err == nil && isNewNode {
 		deleted = blk
 	}
 	return

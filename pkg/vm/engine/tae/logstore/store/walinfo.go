@@ -251,8 +251,8 @@ func (w *StoreInfo) getDriverCheckpointed() (gid uint32, driverLsn uint64) {
 	w.syncedMu.RUnlock()
 
 	w.checkpointedMu.RLock()
+	defer w.checkpointedMu.RUnlock()
 	if len(w.checkpointed) == 0 {
-		w.checkpointedMu.RUnlock()
 		return
 	}
 	driverLsn = math.MaxInt64
@@ -288,7 +288,6 @@ func (w *StoreInfo) getDriverCheckpointed() (gid uint32, driverLsn uint64) {
 			driverLsn = drLsn
 		}
 	}
-	w.checkpointedMu.RUnlock()
 	return
 }
 
