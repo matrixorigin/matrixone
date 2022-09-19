@@ -16,8 +16,6 @@ package plan
 
 import (
 	"fmt"
-	"strings"
-
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/errno"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -46,60 +44,11 @@ func runBuildSelectByBinder(stmtType plan.Query_StatementType, ctx CompilerConte
 }
 
 func buildExplainAnalyze(ctx CompilerContext, stmt *tree.ExplainAnalyze) (*Plan, error) {
-	es := &plan.ExplainOption{
-		Analyze: true,
-	}
-
-	for _, v := range stmt.Options {
-		if strings.EqualFold(v.Name, "VERBOSE") {
-			if strings.EqualFold(v.Value, "TRUE") || v.Value == "NULL" {
-				es.Verbose = true
-			} else if strings.EqualFold(v.Value, "FALSE") {
-				es.Verbose = false
-			} else {
-				return nil, errors.New(errno.InvalidOptionValue, fmt.Sprintf("%s requires a Boolean value", v.Name))
-			}
-		} else if strings.EqualFold(v.Name, "ANALYZE") {
-			if strings.EqualFold(v.Value, "TRUE") || v.Value == "NULL" {
-				es.Analyze = true
-			} else if strings.EqualFold(v.Value, "FALSE") {
-				es.Analyze = false
-			} else {
-				return nil, errors.New(errno.InvalidOptionValue, fmt.Sprintf("%s requires a Boolean value", v.Name))
-			}
-		} else if strings.EqualFold(v.Name, "FORMAT") {
-			if v.Name == "NULL" {
-				return nil, errors.New(errno.InvalidOptionValue, fmt.Sprintf("%s requires a parameter", v.Name))
-			} else if strings.EqualFold(v.Value, "TEXT") {
-				es.Format = plan.ExplainOption_TEXT
-			} else if strings.EqualFold(v.Value, "JSON") {
-				es.Format = plan.ExplainOption_JSON
-			} else if strings.EqualFold(v.Value, "DOT") {
-				es.Format = plan.ExplainOption_DOT
-			} else {
-				return nil, errors.New(errno.InvalidOptionValue, fmt.Sprintf("unrecognized value for EXPLAIN option \"%s\": \"%s\"", v.Name, v.Value))
-			}
-		} else {
-			return nil, errors.New(errno.InvalidOptionValue, fmt.Sprintf("unrecognized EXPLAIN option \"%s\"", v.Name))
-		}
-	}
-	/*
-		switch stmt.Statement.(type) {
-		case *tree.Delete:
-			mce.ses.GetTxnCompileCtx().SetQueryType(TXN_DELETE)
-		case *tree.Update:
-			mce.ses.GetTxnCompileCtx().SetQueryType(TXN_UPDATE)
-		default:
-			mce.ses.GetTxnCompileCtx().SetQueryType(TXN_DEFAULT)
-		}
-	*/
-
 	//get query optimizer and execute Optimize
 	plan, err := BuildPlan(ctx, stmt.Statement)
 	if err != nil {
 		return nil, err
 	}
-	plan.GetQuery().ExplainOption = es
 	return plan, nil
 }
 

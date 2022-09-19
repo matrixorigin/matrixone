@@ -350,18 +350,6 @@ message AnalyzeInfo {
     int64 memory_size = 6;
 }
 
-message ExplainOption {
-	bool Verbose = 1;
-	bool Analyze = 2;
-	enum FormatType {
-			TEXT = 0;
-			XML = 1;
-			JSON = 2;
-			DOT = 3;
-	}
-	FormatType format = 3;
-}
-
 message Node {
 	enum NodeType {
 		UNKNOWN = 0;
@@ -511,9 +499,6 @@ message Query {
 
 	// return head
 	repeated string headings = 5;
-
-	// explain opertion information
-	ExplainOption explain_option = 6;
 }
 
 message TransationControl {
