@@ -26,8 +26,7 @@ var (
 		input  string
 		output string
 	}{
-		input:  `grant show databases on account * to r1`,
-		output: "grant show databases on account * to r1",
+		input: "select password from t1",
 	}
 )
 
@@ -52,6 +51,8 @@ var (
 		input  string
 		output string
 	}{{
+		input: "select password from t1",
+	}, {
 		input:  "create table t1 (a datetime on update CURRENT_TIMESTAMP(1))",
 		output: "create table t1 (a datetime(26) on update current_timestamp(1))",
 	}, {
