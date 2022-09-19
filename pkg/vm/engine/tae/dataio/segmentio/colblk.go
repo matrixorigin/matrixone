@@ -17,6 +17,7 @@ package segmentio
 import (
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 
 	"github.com/matrixorigin/matrixone/pkg/compress"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -32,6 +33,10 @@ type columnBlock struct {
 	updates *updatesFile
 	data    *dataFile
 	col     int
+}
+
+func (cb *columnBlock) GetDataObject(location string) objectio.ColumnObject {
+	panic("implement me")
 }
 
 func newColumnBlock(block *blockFile, indexCnt int, col int) *columnBlock {

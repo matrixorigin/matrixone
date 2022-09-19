@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 )
@@ -82,4 +83,16 @@ func (r *Reader) LoadBlkColumns(
 		bat.Vecs[i] = vec
 	}
 	return bat, err
+}
+
+func (r *Reader) ReadMeta(extent objectio.Extent) (objectio.BlockObject, error) {
+	name := EncodeBlkName(r.block.id)
+	reader, err := objectio.NewObjectReader(name, r.fs.service)
+	if err != nil {
+		return nil, err
+	}
+	extents := make([]objectio.Extent, 1)
+	extents[0] = extent
+	block, err := reader.ReadMeta(extents)
+	return block[0], err
 }

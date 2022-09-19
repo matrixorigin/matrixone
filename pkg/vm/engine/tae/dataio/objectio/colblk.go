@@ -45,10 +45,10 @@ func newColumnBlock(block *blockFile, indexCnt int, col int) *columnBlock {
 	return cb
 }
 
-func (cb *columnBlock) GetDataObject() objectio.ColumnObject {
-	object, err := cb.block.meta.GetColumn(cb.id.Idx)
+func (cb *columnBlock) GetDataObject(metaLoc string) objectio.ColumnObject {
+	object, err := cb.block.GetMeta(metaLoc).GetColumn(cb.id.Idx)
 	if err != nil {
-		panic(err)
+		panic(any(err))
 	}
 	return object
 }

@@ -50,7 +50,7 @@ type Block interface {
 	WriteBatch(bat *containers.Batch, ts types.TS) error
 	LoadBatch([]types.Type, []string, []bool, *containers.Options) (bat *containers.Batch, err error)
 	WriteColumnVec(ts types.TS, colIdx int, vec containers.Vector) error
-	GetMeta() objectio.BlockObject
+	GetMeta(location string) objectio.BlockObject
 
 	Destroy() error
 }
@@ -72,5 +72,5 @@ type ColumnBlock interface {
 	OpenUpdateFile() (common.IRWFile, error)
 	OpenIndexFile(idx int) (common.IRWFile, error)
 	OpenDataFile() (common.IRWFile, error)
-	GetDataObject() objectio.ColumnObject
+	GetDataObject(location string) objectio.ColumnObject
 }

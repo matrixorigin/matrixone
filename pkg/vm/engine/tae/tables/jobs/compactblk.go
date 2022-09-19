@@ -16,6 +16,7 @@ package jobs
 
 import (
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/objectio"
 	"time"
 
 	"github.com/RoaringBitmap/roaring"
@@ -176,21 +177,19 @@ func (task *compactBlockTask) Execute() (err error) {
 	if err = ioTask.WaitDone(); err != nil {
 		return
 	}
-	/*if err = newBlkData.ReplayIndex(); err != nil {
+	if err = newBlkData.ReplayIndex(); err != nil {
 		return err
 	}
-	/*
-		// TODO:
-		MetaLoc := fmt.Sprintf("%s:%d_%d_%d",
-			objectio.EncodeBlkName(ioTask.file.Fingerprint()),
-			ioTask.file.GetMeta().GetExtent().Offset(),
-			ioTask.file.GetMeta().GetExtent().Length(),
-			ioTask.file.GetMeta().GetExtent().OriginSize(),
-		)
-		node := catalog.NewEmptyMetadataMVCCNode()
-		node.(*catalog.MetadataMVCCNode).MetaLoc = MetaLoc
-		newBlk.GetMeta().(*catalog.BlockEntry).MetaBaseEntry.UpdateAttr(task.txn, node)
-	*/
+	// TODO:
+	node := catalog.NewEmptyMetadataMVCCNode()
+	node.(*catalog.MetadataMVCCNode).MetaLoc = fmt.Sprintf("%s:%d_%d_%d",
+		objectio.EncodeBlkName(ioTask.file.Fingerprint()),
+		ioTask.file.GetMeta("").GetExtent().Offset(),
+		ioTask.file.GetMeta("").GetExtent().Length(),
+		ioTask.file.GetMeta("").GetExtent().OriginSize(),
+	)
+	logutil.Infof("node: %v", node.(*catalog.MetadataMVCCNode).MetaLoc)
+	newBlk.GetMeta().(*catalog.BlockEntry).MetaBaseEntry.UpdateAttr(task.txn, node.(*catalog.MetadataMVCCNode))
 	task.created = newBlk
 	table := task.meta.GetSegment().GetTable()
 	txnEntry := txnentries.NewCompactBlockEntry(task.txn, task.compacted, task.created, task.scheduler, task.mapping, task.deletes)

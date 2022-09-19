@@ -17,10 +17,13 @@ package objectio
 import (
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/file"
+	"strconv"
+	"strings"
 )
 
 type blockFile struct {
@@ -85,7 +88,35 @@ func (bf *blockFile) ReadRows() uint32 {
 	return bf.rows
 }
 
-func (bf *blockFile) GetMeta() objectio.BlockObject {
+func (bf *blockFile) GetMeta(metaLoc string) objectio.BlockObject {
+	if bf.meta != nil {
+		return bf.meta
+	}
+	logutil.Infof("id: %v, metaLoc is %v", bf.Fingerprint(), metaLoc)
+	info := strings.Split(metaLoc, ":")
+	//name := info[0]
+	location := strings.Split(info[1], "_")
+	extent := objectio.Extent{}
+	offset, err := strconv.ParseUint(location[0], 10, 32)
+	if err != nil {
+		panic(any(err))
+	}
+	extent.SetOffset(uint32(offset))
+	size, err := strconv.ParseUint(location[1], 10, 32)
+	if err != nil {
+		panic(any(err))
+	}
+	extent.SetLength(uint32(size))
+	osize, err := strconv.ParseUint(location[2], 10, 32)
+	if err != nil {
+		panic(any(err))
+	}
+	extent.SetOriginSize(uint32(osize))
+	block, err := bf.reader.ReadMeta(extent)
+	if err != nil {
+		panic(any(err))
+	}
+	bf.meta = block
 	return bf.meta
 }
 

@@ -117,7 +117,7 @@ func (index *immutableIndex) ReadFrom(blk data.Block) (err error) {
 	}
 	defer colFile.Close()
 	for _, meta := range metas.Metas {
-		idxFile := colFile.GetDataObject()
+		idxFile := colFile.GetDataObject(blk.GetMeta().(*catalog.BlockEntry).GetNodeLocked().(*catalog.MetadataMVCCNode).MetaLoc)
 		id := entry.AsCommonID()
 		id.PartID = uint32(meta.InternalIdx) + 1000
 		id.Idx = meta.ColIdx

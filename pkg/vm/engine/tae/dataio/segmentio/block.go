@@ -42,7 +42,7 @@ type blockFile struct {
 	destroy   sync.Mutex
 }
 
-func (bf *blockFile) GetMeta() objectio.BlockObject {
+func (bf *blockFile) GetMeta(location string) objectio.BlockObject {
 	return nil
 }
 
