@@ -159,7 +159,6 @@ func (c *managedHAKeeperClient) GetClusterDetails(ctx context.Context) (pb.Clust
 }
 
 func (c *managedHAKeeperClient) AllocateID(ctx context.Context) (uint64, error) {
-	batch := uint64(100) // TODO: configuration
 	c.mu.Lock()
 	if c.mu.nextID != c.mu.lastID {
 		v := c.mu.nextID
@@ -172,7 +171,7 @@ func (c *managedHAKeeperClient) AllocateID(ctx context.Context) (uint64, error) 
 		if err := c.prepareClient(ctx); err != nil {
 			return 0, err
 		}
-		firstID, err := c.client.sendCNAllocateID(ctx, batch)
+		firstID, err := c.client.sendCNAllocateID(ctx, c.cfg.AllocateIDBatch)
 		if err != nil {
 			c.resetClient()
 		}
@@ -181,7 +180,7 @@ func (c *managedHAKeeperClient) AllocateID(ctx context.Context) (uint64, error) 
 		}
 
 		c.mu.nextID = firstID + 1
-		c.mu.lastID = firstID + batch - 1
+		c.mu.lastID = firstID + c.cfg.AllocateIDBatch - 1
 		c.mu.Unlock()
 		return firstID, err
 	}
