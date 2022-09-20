@@ -29,13 +29,9 @@ select * from t2;
 
 -- test int type union all date type
 
--- @bvt:issue#4939
 (select a from t1 union all select col1 from t2) order by a;
--- @bvt:issue
 
--- @bvt:issue#4934
 (select a from t1 union all select col1 from t2) order by col1;
--- @bvt:issue
 
 select a from t1 union all select col1 from t2;
 
@@ -43,31 +39,21 @@ select a from t1 union all select col1 from t2;
 (select a from t1) union all (select col1 from t2 order by col1);
 (select a from t1 order by a) union all (select col1 from t2 order by col1);
 
--- @bvt:issue#4934
 (select a from t1 union all select col1 from t2) order by col1;
--- @bvt:issue
 
 -- test int type union datetime type
 
--- @bvt:issue#4939
 (select a from t1 union select col2 from t2) order by a;
--- @bvt:issue
 
--- @bvt:issue#4934
 (select a from t1 union select col2 from t2) order by col2;
--- @bvt:issue
 
 select a from t1 union select col2 from t2;
 
--- @bvt:issue#4940
 (select a from t1 order by a) union select col2 from t2;
 (select a from t1) union (select col2 from t2 order by col2);
 (select a from t1 order by a) union (select col2 from t2 order by col2);
--- @bvt:issue
 
--- @bvt:issue#4934
 (select a from t1 union select col2 from t2) order by col2;
--- @bvt:issue
 
 drop table t1;
 drop table t2;
@@ -97,15 +83,11 @@ insert into t4 values(200, 35, 127.44, 1);
 
 select a from t3 union select col1 from t4;
 
--- @bvt:issue#4940
 (select a from t3) union (select col2 from t4 order by col2);
--- @bvt:issue
 
 select a from t3 union select col2 from t4;
 
--- @bvt:issue#4943
 select a from t3 union select col3 from t4;
--- @bvt:issue
 
 -- @bvt:issue#4942
 select a from t3 union select col4 from t4;
@@ -157,20 +139,14 @@ b char (10) not null
 
 insert into t7 values(1,'a'),(2,'b'),(3,'c'),(3,'c');
 
--- @bvt:issue#4945
 select * from t7 union select * from t7 limit 2;
--- @bvt:issue
 
--- @bvt:issue#5028
 select * from (select * from t7 union select * from t7) a;
--- @bvt:issue
 
 select * from (select * from t7 union all select * from t7) a;
 
--- @bvt:issue#4948
 select * from (select * from t7 union all select * from t7 limit 2) a;
 select * from (select * from t7 union select * from t7 limit 2) a;
--- @bvt:issue
 
 select * from (select * from t7 union select * from t7 where a > 1) a;
 select * from (select * from t7 union all select * from t7 where a > 1) a;
@@ -225,9 +201,7 @@ SELECT CASE '1' WHEN '2' THEN 'BUG' ELSE 'nobug' END;
 select 'case+union+tet' union
 SELECT CASE '1' WHEN '1' THEN 'BUG' ELSE 'nobug' END;
 
--- @bvt:issue#4944
 SELECT 1, 2 UNION SELECT 'a', 'b';
--- @bvt:issue
 
 
 -- test union and concat function
@@ -330,17 +304,13 @@ INSERT INTO t16 (id, id_master, text15, text16) VALUES("2", "1", "foo2", "bar2")
 INSERT INTO t16 (id, id_master, text15, text16) VALUES("3", "1", NULL, "bar3");
 INSERT INTO t16 (id, id_master, text15, text16) VALUES("4", "1", "foo4", "bar4");
 
--- @bvt:issue#4916
 SELECT 1 AS id_master, 1 AS id, NULL AS text15, 'ABCDE' AS text16
 UNION
 SELECT id_master, t16.id, text15, text16 FROM t15 LEFT JOIN t16 ON t15.id = t16.id_master;
--- @bvt:issue
 
--- @bvt:issue#4954
 SELECT 1 AS id_master, 1 AS id, NULL AS text15, 'ABCDE' AS text16
 UNION ALL
 SELECT id_master, t16.id, text15, text16 FROM t15 LEFT JOIN t16 ON t15.id = t16.id_master;
--- @bvt:issue
 
 
 SELECT 1 AS id_master, 1 AS id, 'ABCDE' AS text15, 'ABCDE' AS text16
