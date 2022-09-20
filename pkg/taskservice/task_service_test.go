@@ -235,7 +235,8 @@ func TestCompletedWithInvalidEpoch(t *testing.T) {
 	v.Epoch = 2
 	mustUpdateTestTask(t, store, 1, []task.Task{v})
 
-	assert.Error(t, ErrInvalidTask, s.Complete(ctx, "r1", v,
+	v.Epoch = 1
+	assert.Equal(t, ErrInvalidTask, s.Complete(ctx, "r1", v,
 		task.ExecuteResult{Code: task.ResultCode_Failed, Error: "error"}))
 }
 
