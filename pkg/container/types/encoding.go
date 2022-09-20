@@ -536,6 +536,14 @@ func EncodeValue(val any, typ Type) []byte {
 	}
 }
 
+func EncodeTypeSlice(v []Type) []byte {
+	return EncodeFixedSlice(v, TSize)
+}
+
+func DecodeTypeSlice(data []byte) []Type {
+	return DecodeFixedSlice[Type](data, TSize)
+}
+
 func WriteValues(w io.Writer, vals ...any) (n int64, err error) {
 	var nr int
 	for _, val := range vals {

@@ -360,16 +360,32 @@ func (a *UnaryDistAgg[T1, T2]) MarshalBinary() ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	return types.Encode(&EncodeAggDistinct[T1]{
+	source := &EncodeAggDistinct[T1]{
 		Op:         a.op,
 		Private:    pData,
 		Es:         a.es,
-		Da:         a.da,
 		IsCount:    a.isCount,
 		InputType:  a.ityps,
 		OutputType: a.otyp,
 		Srcs:       a.srcs,
-	})
+	}
+	switch {
+	case types.IsString(a.otyp.Oid):
+		source.Da = types.EncodeStringSlice(getDistAggStrVs(a))
+	default:
+		source.Da = a.da
+	}
+
+	return types.Encode(source)
+}
+
+func getDistAggStrVs(strUnaryDistAgg any) []string {
+	agg := strUnaryDistAgg.(*UnaryDistAgg[[]byte, []byte])
+	result := make([]string, len(agg.vs))
+	for i := range result {
+		result[i] = string(agg.vs[i])
+	}
+	return result
 }
 
 func (a *UnaryDistAgg[T1, T2]) UnmarshalBinary(data []byte) error {
@@ -384,8 +400,23 @@ func (a *UnaryDistAgg[T1, T2]) UnmarshalBinary(data []byte) error {
 	a.otyp = decode.OutputType
 	a.es = decode.Es
 	a.da = decode.Da
-	a.vs = types.DecodeFixedSlice[T2](a.da, a.otyp.TypeSize())
+	setDistAggValues[T1, T2](a, a.otyp)
 	a.srcs = decode.Srcs
 
 	return a.priv.UnmarshalBinary(decode.Private)
+}
+
+func setDistAggValues[T1, T2 any](agg any, typ types.Type) {
+	switch {
+	case types.IsString(typ.Oid):
+		a := agg.(*UnaryDistAgg[[]byte, []byte])
+		values := types.DecodeStringSlice(a.da)
+		a.vs = make([][]byte, len(values))
+		for i := range a.vs {
+			a.vs[i] = []byte(values[i])
+		}
+	default:
+		a := agg.(*UnaryDistAgg[T1, T2])
+		a.vs = types.DecodeFixedSlice[T2](a.da, typ.TypeSize())
+	}
 }

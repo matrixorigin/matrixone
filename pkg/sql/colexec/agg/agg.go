@@ -15,7 +15,6 @@
 package agg
 
 import (
-	"bytes"
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -269,45 +268,31 @@ func (a *UnaryAgg[T1, T2]) MarshalBinary() ([]byte, error) {
 		return nil, err
 	}
 	// encode the input types.
-	var buf bytes.Buffer
-	i32 := int32(len(a.ityps))
-	buf.Write(types.EncodeInt32(&i32))
-	for _, it := range a.ityps {
-		buf.Write(types.EncodeType(&it))
-	}
-
 	source := &EncodeAgg{
 		Op:         a.op,
 		Private:    pData,
 		Es:         a.es,
-		InputTypes: buf.Bytes(),
+		InputTypes: types.EncodeTypeSlice(a.ityps),
 		OutputType: types.EncodeType(&a.otyp),
 		IsCount:    a.isCount,
 	}
-	if types.IsString(a.otyp.Oid) {
-		source.Da = types.EncodeStringSlice(getStrVs(a))
-	} else {
+	switch {
+	case types.IsString(a.otyp.Oid):
+		source.Da = types.EncodeStringSlice(getUnaryAggStrVs(a))
+	default:
 		source.Da = a.da
 	}
 
 	return types.Encode(source)
 }
 
-func getStrVs(strUnaryAgg any) []string {
+func getUnaryAggStrVs(strUnaryAgg any) []string {
 	agg := strUnaryAgg.(*UnaryAgg[[]byte, []byte])
 	result := make([]string, len(agg.vs))
 	for i := range result {
 		result[i] = string(agg.vs[i])
 	}
 	return result
-}
-
-func setStrVs(strUnaryAgg any, values []string) {
-	agg := strUnaryAgg.(*UnaryAgg[[]byte, []byte])
-	agg.vs = make([][]byte, len(values))
-	for i := range agg.vs {
-		agg.vs[i] = []byte(values[i])
-	}
 }
 
 func (a *UnaryAgg[T1, T2]) UnmarshalBinary(data []byte) error {
@@ -317,23 +302,27 @@ func (a *UnaryAgg[T1, T2]) UnmarshalBinary(data []byte) error {
 	}
 
 	// Recover data
-	inputTypesData := decoded.InputTypes
-	inputTypesLength := int(types.DecodeInt32(inputTypesData[:4]))
-	inputTypesData = inputTypesData[4:]
-	a.ityps = make([]types.Type, inputTypesLength)
-	for i := range a.ityps {
-		a.ityps[i] = types.DecodeType(inputTypesData[:types.TSize])
-		inputTypesData = inputTypesData[types.TSize:]
-	}
+	a.ityps = types.DecodeTypeSlice(decoded.InputTypes)
 	a.otyp = types.DecodeType(decoded.OutputType)
 	a.isCount = decoded.IsCount
 	a.es = decoded.Es
 	a.da = decoded.Da
-	if types.IsString(a.otyp.Oid) {
-		setStrVs(a, types.DecodeStringSlice(a.da))
-	} else {
-		a.vs = types.DecodeFixedSlice[T2](a.da, a.otyp.TypeSize())
-	}
+	setAggValues[T1, T2](a, a.otyp)
 
 	return a.priv.UnmarshalBinary(decoded.Private)
+}
+
+func setAggValues[T1, T2 any](agg any, typ types.Type) {
+	switch {
+	case types.IsString(typ.Oid):
+		a := agg.(*UnaryAgg[[]byte, []byte])
+		values := types.DecodeStringSlice(a.da)
+		a.vs = make([][]byte, len(values))
+		for i := range a.vs {
+			a.vs[i] = []byte(values[i])
+		}
+	default:
+		a := agg.(*UnaryAgg[T1, T2])
+		a.vs = types.DecodeFixedSlice[T2](a.da, typ.TypeSize())
+	}
 }
