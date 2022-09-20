@@ -8,7 +8,7 @@
 
 推荐硬件规格：x86 CPU；4核；32GB 内存，支持 CentOS 7+ 操作系统。
 
-更多关于硬件规格推荐，参见[操作系统要求](../FAQs/deployment-faqs.md)。
+更多关于硬件规格推荐，参见[硬件与操作系统要求](../FAQs/deployment-faqs.md)。
 
 ## <h2><a name="code_source">方法 1：使用源代码搭建</a></h2>
 
