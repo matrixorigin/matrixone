@@ -179,22 +179,15 @@ func InitNullMap(stmt *tree.Load) error {
 	for i := 0; i < len(stmt.Param.Tail.Assignments); i++ {
 		expr, ok := stmt.Param.Tail.Assignments[i].Expr.(*tree.FuncExpr)
 		if !ok {
-			return moerr.NewError(1, "the load set list is not FuncExpr form")
-		}
-		expr2, ok := expr.Func.FunctionReference.(*tree.UnresolvedName)
-		if !ok {
-			return moerr.NewError(1, "the load set list is not UnresolvedName form")
-		}
-		if expr2.Parts[0] != "nullif" {
-			return moerr.NewError(1, fmt.Sprintf("can't recognize '%s'", expr2.Parts[0]))
+			return moerr.NewError(moerr.INVALID_INPUT, "the load set list is not FuncExpr form")
 		}
 		if len(expr.Exprs) != 2 {
-			return moerr.NewError(1, "the nullif func need twp paramaters")
+			return moerr.NewError(moerr.INVALID_INPUT, "the nullif func need two paramaters")
 		}
 
 		expr3, ok := expr.Exprs[1].(*tree.NumVal)
 		if !ok {
-			return moerr.NewError(1, "the nullif func second param is not UnresolvedName form")
+			return moerr.NewError(moerr.INVALID_INPUT, "the nullif func second param is not UnresolvedName form")
 		}
 		for j := 0; j < len(stmt.Param.Tail.Assignments[i].Names); j++ {
 			col := stmt.Param.Tail.Assignments[i].Names[j].Parts[0]
