@@ -18,6 +18,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/hashtable"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 )
 
@@ -67,6 +68,7 @@ type JoinMap struct {
 	expr    *plan.Expr
 	mp      *StrHashMap
 	hasNull bool
+	idx     *index.LowCardinalityIndex
 }
 
 // StrHashMap key is []byte, value is an uint64 value (starting from 1)

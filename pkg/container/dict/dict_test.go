@@ -15,19 +15,20 @@
 package dict
 
 import (
+	"testing"
+
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
-	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"testing"
 )
 
 func TestDict_Cardinality(t *testing.T) {
 	dict, err := newTestDict(types.Type{Oid: types.T_int64})
-	require.Nil(t, err)
+	require.NoError(t, err)
+	defer dict.Free()
 
 	dict.unique.Col = []int64{5, 2, 3, 7}
 	require.Equal(t, uint64(4), dict.Cardinality())
@@ -35,13 +36,14 @@ func TestDict_Cardinality(t *testing.T) {
 
 func TestDict_InsertBatchFixedLen(t *testing.T) {
 	dict, err := newTestDict(types.Type{Oid: types.T_int64})
-	require.Nil(t, err)
+	require.NoError(t, err)
+	defer dict.Free()
 
 	v0 := vector.New(types.Type{Oid: types.T_int64})
 	v0.Col = []int64{5, 2, 3, 7, 3, 2}
 
 	ips, err := dict.InsertBatch(v0)
-	require.Nil(t, err)
+	require.NoError(t, err)
 	require.Equal(t, uint64(1), ips[0])
 	require.Equal(t, uint64(2), ips[1])
 	require.Equal(t, uint64(3), ips[2])
@@ -53,7 +55,7 @@ func TestDict_InsertBatchFixedLen(t *testing.T) {
 	v1.Col = []int64{4, 2, 1, 5}
 
 	ips, err = dict.InsertBatch(v1)
-	require.Nil(t, err)
+	require.NoError(t, err)
 	require.Equal(t, uint64(5), ips[0])
 	require.Equal(t, uint64(2), ips[1])
 	require.Equal(t, uint64(6), ips[2])
@@ -61,14 +63,15 @@ func TestDict_InsertBatchFixedLen(t *testing.T) {
 }
 
 func TestDict_FindBatchFixedLen(t *testing.T) {
-	dict, err := newTestDict(types.Type{Oid: types.T_int16})
-	require.Nil(t, err)
+	dict, err := newTestDict(types.Type{Oid: types.T_int32})
+	require.NoError(t, err)
+	defer dict.Free()
 
 	v0 := vector.New(types.Type{Oid: types.T_int16})
-	v0.Col = []int16{5, 2, 3, 7, 1, 4}
+	v0.Col = []int32{5, 2, 3, 7, 1, 4}
 
 	ips, err := dict.InsertBatch(v0)
-	require.Nil(t, err)
+	require.NoError(t, err)
 	require.Equal(t, uint64(1), ips[0])
 	require.Equal(t, uint64(2), ips[1])
 	require.Equal(t, uint64(3), ips[2])
@@ -77,7 +80,7 @@ func TestDict_FindBatchFixedLen(t *testing.T) {
 	require.Equal(t, uint64(6), ips[5])
 
 	v1 := vector.New(types.Type{Oid: types.T_int16})
-	v1.Col = []int16{7, 3, 8, 4, 6, 3}
+	v1.Col = []int32{7, 3, 8, 4, 6, 3}
 
 	poses := dict.FindBatch(v1)
 	require.Equal(t, uint64(4), poses[0])
@@ -90,13 +93,14 @@ func TestDict_FindBatchFixedLen(t *testing.T) {
 
 func TestDict_FindDataFixedLen(t *testing.T) {
 	dict, err := newTestDict(types.Type{Oid: types.T_int32})
-	require.Nil(t, err)
+	require.NoError(t, err)
+	defer dict.Free()
 
 	v0 := vector.New(types.Type{Oid: types.T_int32})
 	v0.Col = []int32{5, 3, 1, 7, 1, 3}
 
 	ips, err := dict.InsertBatch(v0)
-	require.Nil(t, err)
+	require.NoError(t, err)
 	require.Equal(t, uint64(1), ips[0])
 	require.Equal(t, uint64(2), ips[1])
 	require.Equal(t, uint64(3), ips[2])
@@ -119,10 +123,11 @@ func TestDict_FindDataFixedLen(t *testing.T) {
 
 func TestDict_InsertBatchVarLen(t *testing.T) {
 	dict, err := newTestDict(types.Type{Oid: types.T_varchar})
-	require.Nil(t, err)
+	require.NoError(t, err)
+	defer dict.Free()
 
 	v0 := vector.New(types.Type{Oid: types.T_varchar})
-	assert.Nil(t, vector.AppendBytes(v0, [][]byte{
+	require.NoError(t, vector.AppendBytes(v0, [][]byte{
 		[]byte("hello"),
 		[]byte("My"),
 		[]byte("name"),
@@ -131,7 +136,7 @@ func TestDict_InsertBatchVarLen(t *testing.T) {
 	}, nil))
 
 	ips, err := dict.InsertBatch(v0)
-	require.Nil(t, err)
+	require.NoError(t, err)
 	require.Equal(t, uint64(1), ips[0])
 	require.Equal(t, uint64(2), ips[1])
 	require.Equal(t, uint64(3), ips[2])
@@ -139,7 +144,7 @@ func TestDict_InsertBatchVarLen(t *testing.T) {
 	require.Equal(t, uint64(5), ips[4])
 
 	v1 := vector.New(types.Type{Oid: types.T_varchar})
-	assert.Nil(t, vector.AppendBytes(v1, [][]byte{
+	require.NoError(t, vector.AppendBytes(v1, [][]byte{
 		[]byte("Tom"),
 		[]byte("is"),
 		[]byte("My"),
@@ -147,7 +152,7 @@ func TestDict_InsertBatchVarLen(t *testing.T) {
 	}, nil))
 
 	ips, err = dict.InsertBatch(v1)
-	require.Nil(t, err)
+	require.NoError(t, err)
 	require.Equal(t, uint64(5), ips[0])
 	require.Equal(t, uint64(4), ips[1])
 	require.Equal(t, uint64(2), ips[2])
@@ -156,10 +161,11 @@ func TestDict_InsertBatchVarLen(t *testing.T) {
 
 func TestDict_FindBatchVarLen(t *testing.T) {
 	dict, err := newTestDict(types.Type{Oid: types.T_varchar})
-	require.Nil(t, err)
+	require.NoError(t, err)
+	defer dict.Free()
 
 	v0 := vector.New(types.Type{Oid: types.T_varchar})
-	assert.Nil(t, vector.AppendBytes(v0, [][]byte{
+	require.NoError(t, vector.AppendBytes(v0, [][]byte{
 		[]byte("hello"),
 		[]byte("My"),
 		[]byte("name"),
@@ -168,7 +174,7 @@ func TestDict_FindBatchVarLen(t *testing.T) {
 	}, nil))
 
 	ips, err := dict.InsertBatch(v0)
-	require.Nil(t, err)
+	require.NoError(t, err)
 	require.Equal(t, uint64(1), ips[0])
 	require.Equal(t, uint64(2), ips[1])
 	require.Equal(t, uint64(3), ips[2])
@@ -176,7 +182,7 @@ func TestDict_FindBatchVarLen(t *testing.T) {
 	require.Equal(t, uint64(5), ips[4])
 
 	v1 := vector.New(types.Type{Oid: types.T_varchar})
-	assert.Nil(t, vector.AppendBytes(v1, [][]byte{
+	require.NoError(t, vector.AppendBytes(v1, [][]byte{
 		[]byte("Jack"),
 		[]byte("is"),
 		[]byte("My"),
@@ -194,10 +200,11 @@ func TestDict_FindBatchVarLen(t *testing.T) {
 
 func TestDict_FindDataVarLen(t *testing.T) {
 	dict, err := newTestDict(types.Type{Oid: types.T_varchar})
-	require.Nil(t, err)
+	require.NoError(t, err)
+	defer dict.Free()
 
 	v0 := vector.New(types.Type{Oid: types.T_varchar})
-	assert.Nil(t, vector.AppendBytes(v0, [][]byte{
+	require.NoError(t, vector.AppendBytes(v0, [][]byte{
 		[]byte("thisisalonglonglonglongstring"),
 		[]byte("My"),
 		[]byte("name"),
@@ -208,7 +215,7 @@ func TestDict_FindDataVarLen(t *testing.T) {
 	}, nil))
 
 	ips, err := dict.InsertBatch(v0)
-	require.Nil(t, err)
+	require.NoError(t, err)
 	require.Equal(t, uint64(1), ips[0])
 	require.Equal(t, uint64(2), ips[1])
 	require.Equal(t, uint64(3), ips[2])

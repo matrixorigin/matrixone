@@ -29,7 +29,6 @@ type Dict struct {
 }
 
 func New(typ types.Type, m *mheap.Mheap) (*Dict, error) {
-	// typ cannot be `T_decimal128`, `T_json`
 	d := &Dict{
 		typ: typ,
 		m:   m,
@@ -42,12 +41,12 @@ func New(typ types.Type, m *mheap.Mheap) (*Dict, error) {
 		if idx, err = newFixedReverseIndex(m); err != nil {
 			return nil, err
 		}
-		d.unique = vector.New(types.Type{Oid: types.T_uint64})
+		d.unique = vector.New(types.T_uint64.ToType())
 	} else {
 		if idx, err = newVarReverseIndex(m); err != nil {
 			return nil, err
 		}
-		d.unique = vector.New(types.Type{Oid: types.T_varchar})
+		d.unique = vector.New(types.T_varchar.ToType())
 	}
 
 	d.idx = idx
@@ -107,6 +106,15 @@ func (d *Dict) FindData(pos uint64) *vector.Vector {
 	}
 }
 
+func (d *Dict) Free() {
+	if d.unique != nil {
+		d.unique.Free(d.m)
+	}
+	if d.idx != nil {
+		d.idx.free()
+	}
+}
+
 func (d *Dict) fixed() bool { return !d.typ.IsString() }
 
 func (d *Dict) encodeFixedData(data *vector.Vector) []uint64 {
@@ -119,16 +127,16 @@ func (d *Dict) encodeFixedData(data *vector.Vector) []uint64 {
 				us[i] = 1
 			}
 		}
-	case types.T_int8:
-		col := data.Col.([]int8)
-		for i, v := range col {
-			us[i] = uint64(v)
-		}
-	case types.T_int16:
-		col := data.Col.([]int16)
-		for i, v := range col {
-			us[i] = uint64(v)
-		}
+	//case types.T_int8:
+	//	col := data.Col.([]int8)
+	//	for i, v := range col {
+	//		us[i] = uint64(v)
+	//	}
+	//case types.T_int16:
+	//	col := data.Col.([]int16)
+	//	for i, v := range col {
+	//		us[i] = uint64(v)
+	//	}
 	case types.T_int32:
 		col := data.Col.([]int32)
 		for i, v := range col {
@@ -139,16 +147,16 @@ func (d *Dict) encodeFixedData(data *vector.Vector) []uint64 {
 		for i, v := range col {
 			us[i] = uint64(v)
 		}
-	case types.T_uint8:
-		col := data.Col.([]uint8)
-		for i, v := range col {
-			us[i] = uint64(v)
-		}
-	case types.T_uint16:
-		col := data.Col.([]uint16)
-		for i, v := range col {
-			us[i] = uint64(v)
-		}
+	//case types.T_uint8:
+	//	col := data.Col.([]uint8)
+	//	for i, v := range col {
+	//		us[i] = uint64(v)
+	//	}
+	//case types.T_uint16:
+	//	col := data.Col.([]uint16)
+	//	for i, v := range col {
+	//		us[i] = uint64(v)
+	//	}
 	case types.T_uint32:
 		col := data.Col.([]uint32)
 		for i, v := range col {
@@ -204,18 +212,18 @@ func (d *Dict) findFixedData(pos uint64) *vector.Vector {
 			val = true
 		}
 		v.Col.([]bool)[0] = val
-	case types.T_int8:
-		v.Col.([]int8)[0] = int8(data)
-	case types.T_int16:
-		v.Col.([]int16)[0] = int16(data)
+	//case types.T_int8:
+	//	v.Col.([]int8)[0] = int8(data)
+	//case types.T_int16:
+	//	v.Col.([]int16)[0] = int16(data)
 	case types.T_int32:
 		v.Col.([]int32)[0] = int32(data)
 	case types.T_int64:
 		v.Col.([]int64)[0] = int64(data)
-	case types.T_uint8:
-		v.Col.([]uint8)[0] = uint8(data)
-	case types.T_uint16:
-		v.Col.([]uint16)[0] = uint16(data)
+	//case types.T_uint8:
+	//	v.Col.([]uint8)[0] = uint8(data)
+	//case types.T_uint16:
+	//	v.Col.([]uint16)[0] = uint16(data)
 	case types.T_uint32:
 		v.Col.([]uint32)[0] = uint32(data)
 	case types.T_uint64:

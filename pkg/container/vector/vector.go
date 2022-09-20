@@ -51,6 +51,9 @@ type Vector struct {
 	// some attributes for const vector (a vector with a lot of rows of a same const value)
 	isConst bool
 	length  int
+
+	// idx for low cardinality scenario.
+	idx any
 }
 
 func (v *Vector) Length() int {
@@ -73,6 +76,18 @@ func (v *Vector) SetScalarLength(length int) {
 
 func (v *Vector) IsOriginal() bool {
 	return v.original
+}
+
+func (v *Vector) IsLowCardinality() bool {
+	return v.idx != nil
+}
+
+func (v *Vector) Index() any {
+	return v.idx
+}
+
+func (v *Vector) SetIndex(idx any) {
+	v.idx = idx
 }
 
 func DecodeFixedCol[T types.FixedSizeT](v *Vector, sz int) []T {

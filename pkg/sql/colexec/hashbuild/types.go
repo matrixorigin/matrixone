@@ -20,6 +20,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 )
 
 const (
@@ -45,6 +46,8 @@ type container struct {
 	vecs  []*vector.Vector
 
 	mp *hashmap.StrHashMap
+
+	idx *index.LowCardinalityIndex
 }
 
 type Argument struct {

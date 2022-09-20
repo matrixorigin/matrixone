@@ -21,11 +21,13 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
@@ -100,6 +102,111 @@ func TestJoin(t *testing.T) {
 		}
 		require.Equal(t, int64(0), mheap.Size(tc.proc.Mp()))
 	}
+}
+
+func TestLowCardinalityIndexJoin(t *testing.T) {
+	tc := newTestCase(testutil.NewMheap(), []bool{false}, []types.Type{types.T_varchar.ToType()}, []colexec.ResultPos{colexec.NewResultPos(1, 0)},
+		[][]*plan.Expr{
+			{
+				newExpr(0, types.T_varchar.ToType()),
+			},
+			{
+				newExpr(0, types.T_varchar.ToType()),
+			},
+		})
+	tc.arg.Cond = nil // only numeric type can be compared
+
+	err := hashbuild.Prepare(tc.proc, tc.barg)
+	require.NoError(t, err)
+
+	values0 := []string{"a", "b", "a", "c", "b", "c", "a", "a"}
+	v0 := testutil.NewVector(8, types.T_varchar.ToType(), tc.proc.Mp(), false, values0)
+	constructIndex(t, v0, v0.Typ, tc.proc.Mp())
+
+	tc.proc.Reg.MergeReceivers[0].Ch <- testutil.NewBatchWithVectors([]*vector.Vector{v0}, nil)
+	tc.proc.Reg.MergeReceivers[0].Ch <- nil
+	ok, err := hashbuild.Call(0, tc.proc, tc.barg)
+	require.NoError(t, err)
+	require.Equal(t, true, ok)
+
+	bat := tc.proc.Reg.InputBatch
+	err = Prepare(tc.proc, tc.arg)
+	require.NoError(t, err)
+
+	values1 := []string{"c", "d", "c", "c", "b", "a", "b", "d", "a", "b"}
+	v1 := testutil.NewVector(10, types.T_varchar.ToType(), tc.proc.Mp(), false, values1)
+
+	// only the join column of right table is indexed
+	tc.proc.Reg.MergeReceivers[0].Ch <- testutil.NewBatchWithVectors([]*vector.Vector{v1}, nil)
+	tc.proc.Reg.MergeReceivers[1].Ch <- bat
+	ok, err = Call(0, tc.proc, tc.arg)
+	require.NoError(t, err)
+	require.Equal(t, false, ok)
+
+	result := tc.proc.Reg.InputBatch.Vecs[0]
+	t.Log(vector.GetStrVectorValues(result))
+
+	require.NotNil(t, result.Index())
+	idx := result.Index().(*index.LowCardinalityIndex)
+	require.Equal(
+		t,
+		[]uint16{3, 3, 3, 3, 3, 3, 2, 2, 1, 1, 1, 1, 2, 2, 1, 1, 1, 1, 2, 2},
+		idx.GetPoses().Col.([]uint16),
+	)
+	t.Log(idx.GetPoses().Col.([]uint16))
+}
+
+func TestLowCardinalityIndexesJoin(t *testing.T) {
+	tc := newTestCase(testutil.NewMheap(), []bool{false}, []types.Type{types.T_varchar.ToType()}, []colexec.ResultPos{colexec.NewResultPos(0, 0)},
+		[][]*plan.Expr{
+			{
+				newExpr(0, types.T_varchar.ToType()),
+			},
+			{
+				newExpr(0, types.T_varchar.ToType()),
+			},
+		})
+	tc.arg.Cond = nil // only numeric type can be compared
+
+	err := hashbuild.Prepare(tc.proc, tc.barg)
+	require.NoError(t, err)
+
+	values0 := []string{"a", "b", "a", "c", "b", "c", "a", "a"}
+	v0 := testutil.NewVector(8, types.T_varchar.ToType(), tc.proc.Mp(), false, values0)
+	constructIndex(t, v0, v0.Typ, tc.proc.Mp())
+
+	tc.proc.Reg.MergeReceivers[0].Ch <- testutil.NewBatchWithVectors([]*vector.Vector{v0}, nil)
+	tc.proc.Reg.MergeReceivers[0].Ch <- nil
+	ok, err := hashbuild.Call(0, tc.proc, tc.barg)
+	require.NoError(t, err)
+	require.Equal(t, true, ok)
+
+	bat := tc.proc.Reg.InputBatch
+	err = Prepare(tc.proc, tc.arg)
+	require.NoError(t, err)
+
+	values1 := []string{"c", "d", "c", "c", "b", "a", "b", "d", "a", "b"}
+	v1 := testutil.NewVector(10, types.T_varchar.ToType(), tc.proc.Mp(), false, values1)
+	constructIndex(t, v1, v1.Typ, tc.proc.Mp())
+
+	// the join columns of both left table and right table are indexed
+	tc.proc.Reg.MergeReceivers[0].Ch <- testutil.NewBatchWithVectors([]*vector.Vector{v1}, nil)
+	tc.proc.Reg.MergeReceivers[1].Ch <- bat
+	ok, err = Call(0, tc.proc, tc.arg)
+	require.NoError(t, err)
+	require.Equal(t, false, ok)
+
+	result := tc.proc.Reg.InputBatch.Vecs[0]
+	t.Log(vector.GetStrVectorValues(result))
+
+	require.NotNil(t, result.Index())
+	idx := result.Index().(*index.LowCardinalityIndex)
+	require.Equal(
+		t,
+		[]uint16{1, 1, 1, 1, 1, 1, 3, 3, 4, 4, 4, 4, 3, 3, 4, 4, 4, 4, 3, 3},
+		idx.GetPoses().Col.([]uint16),
+	)
+	t.Log(idx.GetPoses().Col.([]uint16))
 }
 
 func BenchmarkJoin(b *testing.B) {
@@ -245,4 +352,23 @@ func hashBuild(t *testing.T, tc joinTestCase) *batch.Batch {
 // create a new block based on the type information, flgs[i] == ture: has null
 func newBatch(t *testing.T, flgs []bool, ts []types.Type, proc *process.Process, rows int64) *batch.Batch {
 	return testutil.NewBatch(ts, false, int(rows), proc.Mp())
+}
+
+func constructIndex(t *testing.T, v *vector.Vector, typ types.Type, m *mheap.Mheap) {
+	idx, err := index.NewLowCardinalityIndex(typ, m)
+	require.NoError(t, err)
+
+	dict := idx.GetDict()
+	ips, err := dict.InsertBatch(v)
+	require.NoError(t, err)
+
+	us := make([]uint16, len(ips))
+	for i, ip := range ips {
+		us[i] = uint16(ip)
+	}
+	poses := idx.GetPoses()
+	err = vector.AppendFixed(poses, us, m)
+	require.NoError(t, err)
+
+	v.SetIndex(idx)
 }

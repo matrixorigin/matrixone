@@ -22,8 +22,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
@@ -85,6 +87,37 @@ func TestBuild(t *testing.T) {
 		}
 		require.Equal(t, int64(0), mheap.Size(tc.proc.Mp()))
 	}
+}
+
+func TestLowCardinalityBuild(t *testing.T) {
+	tc := newTestCase(testutil.NewMheap(), []bool{false}, []types.Type{types.T_varchar.ToType()},
+		[]*plan.Expr{
+			newExpr(0, types.T_varchar.ToType()),
+		},
+	)
+	err := Prepare(tc.proc, tc.arg)
+	require.NoError(t, err)
+
+	values := []string{"a", "b", "a", "c", "b", "c", "a", "a"}
+	v := testutil.NewVector(8, types.T_varchar.ToType(), tc.proc.Mp(), false, values)
+	constructIndex(t, v, v.Typ, tc.proc.Mp())
+
+	tc.proc.Reg.MergeReceivers[0].Ch <- testutil.NewBatchWithVectors([]*vector.Vector{v}, nil)
+	tc.proc.Reg.MergeReceivers[0].Ch <- nil
+
+	ok, err := Call(0, tc.proc, tc.arg)
+	require.NoError(t, err)
+	require.Equal(t, true, ok)
+	mp := tc.proc.Reg.InputBatch.Ht.(*hashmap.JoinMap)
+	require.NotNil(t, mp.Index())
+
+	sels := mp.Sels()
+	require.Equal(t, []int64{0, 2, 6, 7}, sels[0])
+	require.Equal(t, []int64{1, 4}, sels[1])
+	require.Equal(t, []int64{3, 5}, sels[2])
+
+	mp.Free()
+	tc.proc.Reg.InputBatch.Clean(tc.proc.Mp())
 }
 
 func BenchmarkBuild(b *testing.B) {
@@ -155,4 +188,23 @@ func newTestCase(m *mheap.Mheap, flgs []bool, ts []types.Type, cs []*plan.Expr) 
 // create a new block based on the type information, flgs[i] == ture: has null
 func newBatch(t *testing.T, flgs []bool, ts []types.Type, proc *process.Process, rows int64) *batch.Batch {
 	return testutil.NewBatch(ts, false, int(rows), proc.Mp())
+}
+
+func constructIndex(t *testing.T, v *vector.Vector, typ types.Type, m *mheap.Mheap) {
+	idx, err := index.NewLowCardinalityIndex(typ, m)
+	require.NoError(t, err)
+
+	dict := idx.GetDict()
+	ips, err := dict.InsertBatch(v)
+	require.NoError(t, err)
+
+	us := make([]uint16, len(ips))
+	for i, ip := range ips {
+		us[i] = uint16(ip)
+	}
+	poses := idx.GetPoses()
+	err = vector.AppendFixed(poses, us, m)
+	require.NoError(t, err)
+
+	v.SetIndex(idx)
 }

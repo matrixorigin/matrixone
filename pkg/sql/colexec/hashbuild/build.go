@@ -16,12 +16,14 @@ package hashbuild
 
 import (
 	"bytes"
+	"math"
 
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -67,7 +69,7 @@ func Call(idx int, proc *process.Process, arg any) (bool, error) {
 		default:
 			if ctr.bat != nil {
 				if ap.NeedHashMap {
-					ctr.bat.Ht = hashmap.NewJoinMap(ctr.sels, nil, ctr.mp, ctr.hasNull)
+					ctr.bat.Ht = hashmap.NewJoinMap(ctr.sels, nil, ctr.mp, ctr.hasNull, ctr.idx)
 				}
 				proc.SetInputBatch(ctr.bat)
 				ctr.bat = nil
@@ -107,6 +109,10 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 	}
 	defer ctr.freeJoinCondition(proc)
 
+	if ctr.idx != nil {
+		return ctr.indexBuild()
+	}
+
 	itr := ctr.mp.NewIterator()
 	count := ctr.bat.Length()
 	for i := 0; i < count; i += hashmap.UnitLimit {
@@ -137,6 +143,28 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 	return nil
 }
 
+func (ctr *container) indexBuild() error {
+	// e.g. original data = ["a", "b", "a", "c", "b", "c", "a", "a"]
+	// => dictionary = ["a"->1, "b"->2, "c"->3]
+	// => poses = [1, 2, 1, 3, 2, 3, 1, 1]
+	//
+	// sels = [[0, 2, 6, 7], [1, 4], [3, 5]]
+	ctr.sels = make([][]int64, math.MaxUint16+1)
+	poses := ctr.idx.GetPoses().Col.([]uint16)
+	for k, v := range poses {
+		bucket := int(v) - 1
+		// TODO: prealloc memory for ctr.sels
+		// In my opinion, bucket will be highly similar at low cardinality scenario.
+		// So maybe it can prealloc memory for the ctr.sels[i].
+		// e.g.
+		// if len(ctr.sels[bucket]) == 0 {
+		//     ctr.sels[bucket] = make(ctr.sels[bucket], 0, 64)
+		// }
+		ctr.sels[bucket] = append(ctr.sels[bucket], int64(k))
+	}
+	return nil
+}
+
 func (ctr *container) evalJoinCondition(bat *batch.Batch, conds []*plan.Expr, proc *process.Process) error {
 	for i, cond := range conds {
 		vec, err := colexec.EvalExpr(bat, proc, cond)
@@ -155,6 +183,14 @@ func (ctr *container) evalJoinCondition(bat *batch.Batch, conds []*plan.Expr, pr
 			if bat.Vecs[j] == vec {
 				ctr.evecs[i].needFree = false
 				break
+			}
+		}
+
+		// 1. multiple equivalent conditions are not considered currently
+		// 2. do not want the condition to be an expression
+		if len(conds) == 1 && !ctr.evecs[i].needFree {
+			if idx, ok := ctr.vecs[i].Index().(*index.LowCardinalityIndex); ok {
+				ctr.idx = idx
 			}
 		}
 	}

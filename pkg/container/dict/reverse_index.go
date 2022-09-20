@@ -15,15 +15,20 @@
 package dict
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
+	"unsafe"
+
 	"github.com/matrixorigin/matrixone/pkg/container/hashtable"
 	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
-	"unsafe"
+)
+
+const (
+	unitLimit = 256
 )
 
 type reverseIndex interface {
 	insert(keys any) ([]uint64, error)
 	find(keys any) []uint64
+	free()
 }
 
 type fixedReverseIndex struct {
@@ -34,6 +39,7 @@ type fixedReverseIndex struct {
 func newFixedReverseIndex(m *mheap.Mheap) (*fixedReverseIndex, error) {
 	ht := &hashtable.Int64HashMap{}
 	if err := ht.Init(m); err != nil {
+		ht.Free(m)
 		return nil, err
 	}
 	return &fixedReverseIndex{
@@ -62,6 +68,10 @@ func (idx *fixedReverseIndex) find(keys any) []uint64 {
 	return values
 }
 
+func (idx *fixedReverseIndex) free() {
+	idx.ht.Free(idx.m)
+}
+
 type varReverseIndex struct {
 	m          *mheap.Mheap
 	ht         *hashtable.StringHashMap
@@ -71,12 +81,13 @@ type varReverseIndex struct {
 func newVarReverseIndex(m *mheap.Mheap) (*varReverseIndex, error) {
 	ht := &hashtable.StringHashMap{}
 	if err := ht.Init(m); err != nil {
+		ht.Free(m)
 		return nil, err
 	}
 	return &varReverseIndex{
 		m:          m,
 		ht:         ht,
-		hashStates: make([][3]uint64, hashmap.UnitLimit),
+		hashStates: make([][3]uint64, unitLimit),
 	}, nil
 }
 
@@ -94,6 +105,10 @@ func (idx *varReverseIndex) find(keys any) []uint64 {
 	values := make([]uint64, len(ks))
 	idx.ht.FindStringBatch(idx.hashStates, ks, values)
 	return values
+}
+
+func (idx *varReverseIndex) free() {
+	idx.ht.Free(idx.m)
 }
 
 // checkPadding checks if the length of each key is less than 16.

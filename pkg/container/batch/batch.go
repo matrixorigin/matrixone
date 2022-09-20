@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/errors"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/shuffle"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 )
 
@@ -220,6 +221,18 @@ func (bat *Batch) Append(mh *mheap.Mheap, b *Batch) (*Batch, error) {
 	for i := range bat.Vecs {
 		if err := vector.UnionBatch(bat.Vecs[i], b.Vecs[i], 0, vector.Length(b.Vecs[i]), flags[:vector.Length(b.Vecs[i])], mh); err != nil {
 			return bat, err
+		}
+		if b.Vecs[i].IsLowCardinality() {
+			idx := b.Vecs[i].Index().(*index.LowCardinalityIndex)
+			if bat.Vecs[i].Index() == nil {
+				bat.Vecs[i].SetIndex(idx.Dup())
+			}
+
+			dst := bat.Vecs[i].Index().(*index.LowCardinalityIndex).GetPoses()
+			src := idx.GetPoses()
+			if err := vector.UnionBatch(dst, src, 0, vector.Length(src), flags[:vector.Length(src)], mh); err != nil {
+				return bat, err
+			}
 		}
 	}
 	bat.Zs = append(bat.Zs, b.Zs...)
