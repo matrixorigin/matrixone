@@ -51,7 +51,7 @@ SELECT SINH(-0.001);
 sinh(-0.001)
 -0.001
 SELECT SINH("ABC");
-Can't cast 'ABC' from VARCHAR type to DOUBLE type.
+strconv.ParseFloat: parsing "ABC": invalid syntax
 SELECT SINH(NULL);
 sinh(null)
 null
@@ -61,7 +61,7 @@ insert into t1 values(71, 1, 2, 34, 5, 5.5, 341.13, 15.314, "2012-03-22", "2013-
 insert into t1 values(1, 1, 21, 4, 54, 53.5, 431.13, 14.394, "2011-03-12", "2015-03-12 10:03:12", "2002-03-12 13:03:12", "afbc", "dct5f");
 insert into t1 values(1, 71, 2, 34, 5, 5.5, 31.313, 124.314, "2012-01-12", "2019-03-12 10:03:12", "2013-03-12 13:03:12", "3abd1c", "dcvf");
 select SINH(a), SINH(b), SINH(c), SINH(d), SINH(e), SINH(f), SINH(g), SINH(h), SINH(i), SINH(j), SINH(k), SINH(l) from t1;
-Function 'sinh' with parameters [DATE] is not supported.
+invalid argument function sinh, bad value [DATE]
 drop table t1;
 Create table t1(a float);
 insert into t1 select (SINH(1));

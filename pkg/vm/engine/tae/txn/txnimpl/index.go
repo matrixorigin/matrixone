@@ -19,9 +19,9 @@ import (
 	"io"
 	"sync"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 )
 
 type TableIndex interface {
@@ -51,7 +51,7 @@ func DedupOp[T comparable](vs any, tree map[any]uint32) (err error) {
 	vals := vs.([]T)
 	for _, v := range vals {
 		if _, ok := tree[v]; ok {
-			return data.ErrDuplicate
+			return moerr.NewDuplicate()
 		}
 	}
 	return
@@ -63,7 +63,7 @@ func InsertOp[T comparable](input any, start, count int, fromRow uint32, dedupIn
 		set := make(map[T]bool)
 		for _, v := range vals[start : start+count] {
 			if _, ok := set[v]; ok {
-				return data.ErrDuplicate
+				return moerr.NewDuplicate()
 			}
 			set[v] = true
 		}
@@ -71,7 +71,7 @@ func InsertOp[T comparable](input any, start, count int, fromRow uint32, dedupIn
 	}
 	for _, v := range vals[start : start+count] {
 		if _, ok := tree[v]; ok {
-			return data.ErrDuplicate
+			return moerr.NewDuplicate()
 		}
 		tree[v] = fromRow
 		fromRow++
@@ -111,7 +111,7 @@ func (idx *simpleTableIndex) Insert(v any, row uint32) error {
 	defer idx.Unlock()
 	_, ok := idx.tree[v]
 	if ok {
-		return data.ErrDuplicate
+		return moerr.NewDuplicate()
 	}
 	idx.tree[v] = row
 	return nil
@@ -128,7 +128,7 @@ func (idx *simpleTableIndex) Delete(vv any) error {
 	}
 	_, ok := idx.tree[v]
 	if !ok {
-		return data.ErrNotFound
+		return moerr.NewDuplicate()
 	}
 	delete(idx.tree, v)
 	return nil
@@ -139,7 +139,7 @@ func (idx *simpleTableIndex) Search(v any) (uint32, error) {
 	defer idx.RUnlock()
 	row, ok := idx.tree[v]
 	if !ok {
-		return 0, data.ErrNotFound
+		return 0, moerr.NewNotFound()
 	}
 	return uint32(row), nil
 }
@@ -194,7 +194,7 @@ func (idx *simpleTableIndex) BatchInsert(col containers.Vector, start, count int
 				e := s + vs.Length[i+start]
 				v := string(vs.Data[s:e])
 				if _, ok := set[v]; ok {
-					return data.ErrDuplicate
+					return moerr.NewDuplicate()
 				}
 				set[v] = true
 			}
@@ -204,7 +204,7 @@ func (idx *simpleTableIndex) BatchInsert(col containers.Vector, start, count int
 			e := s + vs.Length[i+start]
 			v := string(vs.Data[s:e])
 			if _, ok := idx.tree[v]; ok {
-				return data.ErrDuplicate
+				return moerr.NewDuplicate()
 			}
 			idx.tree[v] = row
 			row++
@@ -263,7 +263,7 @@ func (idx *simpleTableIndex) BatchDedup(col containers.Vector) error {
 			e := s + vals.Length[i]
 			v := string(vals.Data[s:e])
 			if _, ok := idx.tree[v]; ok {
-				return data.ErrDuplicate
+				return moerr.NewDuplicate()
 			}
 		}
 	default:

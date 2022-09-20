@@ -104,16 +104,9 @@ func DeepCopyNode(node *plan.Node) *plan.Node {
 		}
 		for j, col := range updateCtx.UpdateCols {
 			newNode.UpdateCtxs[i].UpdateCols[j] = &plan.ColDef{
-				Name: col.Name,
-				Alg:  col.Alg,
-				Typ: &plan.Type{
-					Id:        col.Typ.Id,
-					Nullable:  col.Typ.Nullable,
-					Width:     col.Typ.Width,
-					Precision: col.Typ.Precision,
-					Size:      col.Typ.Size,
-					Scale:     col.Typ.Scale,
-				},
+				Name:    col.Name,
+				Alg:     col.Alg,
+				Typ:     DeepCopyTyp(col.Typ),
 				Default: DeepCopyDefault(col.Default),
 				Primary: col.Primary,
 				Pkidx:   col.Pkidx,
@@ -201,18 +194,22 @@ func DeepCopyDefault(def *plan.Default) *plan.Default {
 	}
 }
 
+func DeepCopyTyp(typ *plan.Type) *plan.Type {
+	return &plan.Type{
+		Id:        typ.Id,
+		Nullable:  typ.Nullable,
+		Width:     typ.Width,
+		Precision: typ.Precision,
+		Size:      typ.Size,
+		Scale:     typ.Scale,
+	}
+}
+
 func DeepCopyColDef(col *plan.ColDef) *plan.ColDef {
 	return &plan.ColDef{
-		Name: col.Name,
-		Alg:  col.Alg,
-		Typ: &plan.Type{
-			Id:        col.Typ.Id,
-			Nullable:  col.Typ.Nullable,
-			Width:     col.Typ.Width,
-			Precision: col.Typ.Precision,
-			Size:      col.Typ.Size,
-			Scale:     col.Typ.Scale,
-		},
+		Name:    col.Name,
+		Alg:     col.Alg,
+		Typ:     DeepCopyTyp(col.Typ),
 		Default: DeepCopyDefault(col.Default),
 		Primary: col.Primary,
 		Pkidx:   col.Pkidx,

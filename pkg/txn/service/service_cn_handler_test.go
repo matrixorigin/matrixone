@@ -21,10 +21,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
-	"github.com/matrixorigin/matrixone/pkg/txn/storage"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage/mem"
 	"github.com/stretchr/testify/assert"
 )
@@ -68,7 +68,7 @@ func TestReadWithDNShardNotMatch(t *testing.T) {
 
 	rTxn := NewTestTxn(1, 1)
 	resp := readTestData(t, sender, 1, rTxn, 1)
-	checkResponses(t, resp, newDNShardFoundError())
+	checkResponses(t, resp, newTxnError(moerr.ErrDNShardNotFound, "txn not active"))
 }
 
 func TestReadWithSelfWrite(t *testing.T) {
@@ -436,7 +436,7 @@ func TestWriteWithDNShardNotMatch(t *testing.T) {
 	sender.AddTxnService(s)
 
 	wTxn := NewTestTxn(1, 1)
-	checkResponses(t, writeTestData(t, sender, 1, wTxn, 1), newDNShardFoundError())
+	checkResponses(t, writeTestData(t, sender, 1, wTxn, 1), newTxnError(moerr.ErrDNShardNotFound, "txn not active"))
 }
 
 func TestWriteWithWWConflict(t *testing.T) {
@@ -457,8 +457,7 @@ func TestWriteWithWWConflict(t *testing.T) {
 	checkResponses(t, writeTestData(t, sender, 1, wTxn, 1))
 
 	wTxn2 := NewTestTxn(2, 1)
-	checkResponses(t, writeTestData(t, sender, 1, wTxn2, 1),
-		newTAEWriteError(storage.ErrWriteConflict))
+	checkResponses(t, writeTestData(t, sender, 1, wTxn2, 1), newTxnError(moerr.ErrTAEWrite, "write conlict"))
 }
 
 func TestCommitWithSingleDNShard(t *testing.T) {
@@ -521,7 +520,7 @@ func TestCommitWithDNShardNotMatch(t *testing.T) {
 	for i := byte(0); i < n; i++ {
 		checkResponses(t, writeTestData(t, sender, 1, wTxn, i))
 	}
-	checkResponses(t, commitWriteData(t, sender, wTxn), newDNShardFoundError())
+	checkResponses(t, commitWriteData(t, sender, wTxn), newTxnError(moerr.ErrDNShardNotFound, "txn not active"))
 }
 
 func TestCommitWithMultiDNShards(t *testing.T) {
@@ -595,7 +594,7 @@ func TestCommitWithRollbackIfAnyPrepareFailed(t *testing.T) {
 	w2 := addTestWaiter(t, s2, wTxn, txn.TxnStatus_Aborted)
 	defer w2.close()
 
-	checkResponses(t, commitWriteData(t, sender, wTxn), newTAEPrepareError(storage.ErrWriteConflict))
+	checkResponses(t, commitWriteData(t, sender, wTxn), newTxnError(moerr.ErrTAEPrepare, "cannot prepare"))
 
 	checkWaiter(t, w1, txn.TxnStatus_Aborted)
 	checkWaiter(t, w2, txn.TxnStatus_Aborted)
@@ -679,7 +678,7 @@ func TestRollbackWithDNShardNotFound(t *testing.T) {
 	wTxn.DNShards = append(wTxn.DNShards, NewTestDNShard(2))
 	checkResponses(t, writeTestData(t, sender, 2, wTxn, 2))
 
-	checkResponses(t, rollbackWriteData(t, sender, wTxn), newDNShardFoundError())
+	checkResponses(t, rollbackWriteData(t, sender, wTxn), newTxnError(moerr.ErrDNShardNotFound, ""))
 }
 
 func writeTestData(t *testing.T, sender rpc.TxnSender, toShard uint64, wTxn txn.TxnMeta, keys ...byte) []txn.TxnResponse {
@@ -747,7 +746,11 @@ func checkResponses(t *testing.T, response []txn.TxnResponse, expectErrors ...*t
 		expectErrors = make([]*txn.TxnError, len(response))
 	}
 	for idx, resp := range response {
-		assert.Equal(t, expectErrors[idx], resp.TxnError)
+		if resp.TxnError == nil {
+			assert.Equal(t, expectErrors[idx], resp.TxnError)
+		} else {
+			assert.Equal(t, expectErrors[idx].Code, resp.TxnError.Code)
+		}
 	}
 }
 

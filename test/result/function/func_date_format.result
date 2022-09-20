@@ -50,4 +50,4 @@ date_format(date('2004-04-03 13:11:10'),'%Y-%m-%d %H:%i:%s')    date_format(cast
 2004-04-03 00:00:00	2004-04-03 13:11:10
 drop table t_dates;
 SELECT DATE_FORMAT('123456', '%Y-%m-%d %H:%i:%s');
-Can't cast '123456' from VARCHAR type to DATETIME type.
+invalid input: invalid datatime value 123456

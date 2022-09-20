@@ -19,6 +19,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 )
@@ -35,13 +36,24 @@ func GetClusterDetailsFromHAKeeper(
 	var details logservicepb.ClusterDetails
 
 	update := func() {
-		ctx, cancel := context.WithTimeout(ctx, time.Second*17)
+		ctx, cancel := context.WithTimeout(ctx, time.Minute*5)
 		defer cancel()
-		ret, err := client.GetClusterDetails(ctx)
-		lock.Lock()
-		defer lock.Unlock()
-		detailsError = err
-		details = ret
+		for {
+
+			ret, err := client.GetClusterDetails(ctx)
+			if moerr.IsMoErrCode(err, moerr.ErrNoHAKeeper) {
+				// not ready or wrong configured, retry
+				time.Sleep(time.Second)
+				continue
+			}
+
+			lock.Lock()
+			detailsError = err
+			details = ret
+			lock.Unlock()
+
+			break
+		}
 	}
 	update()
 

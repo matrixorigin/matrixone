@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"sync"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
@@ -148,7 +149,7 @@ func (ctx *TxnCtx) ToPreparingLocked(ts types.TS) error {
 		panic(fmt.Sprintf("start ts %d should be less than commit ts %d", ctx.StartTS, ts))
 	}
 	if !ctx.CommitTS.Equal(txnif.UncommitTS) {
-		return ErrTxnNotActive
+		return moerr.NewTxnNotActive("")
 	}
 	ctx.PrepareTS = ts
 	ctx.CommitTS = ts
@@ -158,7 +159,7 @@ func (ctx *TxnCtx) ToPreparingLocked(ts types.TS) error {
 
 func (ctx *TxnCtx) ToCommittedLocked() error {
 	if ctx.State != txnif.TxnStatePreparing {
-		return ErrTxnNotCommitting
+		return moerr.NewTAECommit("ToCommittedLocked: state is not preapring")
 	}
 	ctx.State = txnif.TxnStateCommitted
 	return nil
@@ -169,7 +170,7 @@ func (ctx *TxnCtx) ToRollbackingLocked(ts types.TS) error {
 		panic(fmt.Sprintf("start ts %d should be less than commit ts %d", ctx.StartTS, ts))
 	}
 	if (ctx.State != txnif.TxnStateActive) && (ctx.State != txnif.TxnStatePreparing) {
-		return ErrTxnCannotRollback
+		return moerr.NewTAERollback("ToRollbackingLocked: state is not active or preparing")
 	}
 	ctx.CommitTS = ts
 	ctx.PrepareTS = ts
@@ -179,7 +180,7 @@ func (ctx *TxnCtx) ToRollbackingLocked(ts types.TS) error {
 
 func (ctx *TxnCtx) ToRollbackedLocked() error {
 	if ctx.State != txnif.TxnStateRollbacking {
-		return ErrTxnNotRollbacking
+		return moerr.NewTAERollback("state %s", txnif.TxnStrState(ctx.State))
 	}
 	ctx.State = txnif.TxnStateRollbacked
 	return nil

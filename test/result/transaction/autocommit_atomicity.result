@@ -52,7 +52,7 @@ Insert into test_11 values(4,2);
 rollback;
 set @@autocommit=1;
 select * from test_11 ;
-table "test_11" does not exist
+SQL parser error: table "test_11" does not exist
 set @@autocommit=0;
 create table test_11 (c int primary key,d int);
 Insert into test_11 values(1,1);
