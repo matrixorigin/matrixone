@@ -98,7 +98,13 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (
 		expr, err = b.bindFuncExprImplByAstExpr("isnull", []tree.Expr{exprImpl.Expr}, depth)
 
 	case *tree.IsNotNullExpr:
-		expr, err = b.bindFuncExprImplByAstExpr("not", []tree.Expr{tree.NewIsNullExpr(exprImpl.Expr)}, depth)
+		expr, err = b.bindFuncExprImplByAstExpr("isnotnull", []tree.Expr{exprImpl.Expr}, depth)
+
+	case *tree.IsUnknownExpr:
+		expr, err = b.bindFuncExprImplByAstExpr("isunknown", []tree.Expr{exprImpl.Expr}, depth)
+
+	case *tree.IsNotUnknownExpr:
+		expr, err = b.bindFuncExprImplByAstExpr("isnotunknown", []tree.Expr{exprImpl.Expr}, depth)
 
 	case *tree.Tuple:
 		exprs := make([]*Expr, 0, len(exprImpl.Exprs))

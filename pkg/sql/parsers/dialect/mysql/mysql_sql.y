@@ -5915,16 +5915,6 @@ expression:
 	{
         $$ = tree.NewComparisonExpr(tree.NOT_EQUAL, $1, $4)
     }
-|   boolean_primary IS UNKNOWN %prec IS
-	{
-		arg := tree.NewNumValWithType(constant.MakeString($3), "", false, tree.P_char)
-        $$ = tree.NewComparisonExpr(tree.EQUAL, $1, arg)
-    }
-|   boolean_primary IS NOT UNKNOWN %prec IS
-	{
-		arg := tree.NewNumValWithType(constant.MakeString($3), "", false, tree.P_char)
-        $$ = tree.NewComparisonExpr(tree.NOT_EQUAL, $1, arg)
-    }
 |   boolean_primary
     {
         $$ = $1
@@ -5938,6 +5928,14 @@ boolean_primary:
 |   boolean_primary IS NOT NULL %prec IS
     {
         $$ = tree.NewIsNotNullExpr($1)
+    }
+|    boolean_primary IS UNKNOWN %prec IS
+    {
+        $$ = tree.NewIsUnknownExpr($1)
+    }
+|   boolean_primary IS NOT UNKNOWN %prec IS
+    {
+        $$ = tree.NewIsNotUnknownExpr($1)
     }
 |   boolean_primary comparison_operator predicate %prec '='
     {

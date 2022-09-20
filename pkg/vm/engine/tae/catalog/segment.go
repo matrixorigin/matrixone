@@ -184,10 +184,15 @@ func (entry *SegmentEntry) GetAppendableBlockCnt() int {
 	}
 	return cnt
 }
-func (entry *SegmentEntry) GetLastBlock() (blk *BlockEntry) {
+func (entry *SegmentEntry) GetAppendableBlock() (blk *BlockEntry) {
 	it := entry.MakeBlockIt(false)
-	if it.Valid() {
-		blk = it.Get().GetPayload()
+	for it.Valid() {
+		itBlk := it.Get().GetPayload()
+		if itBlk.IsAppendable() {
+			blk = itBlk
+			break
+		}
+		it.Next()
 	}
 	return
 }
