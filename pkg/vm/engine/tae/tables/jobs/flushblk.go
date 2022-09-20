@@ -25,11 +25,10 @@ import (
 
 type flushBlkTask struct {
 	*tasks.BaseTask
-	data    *containers.Batch
-	sortCol containers.Vector
-	meta    *catalog.BlockEntry
-	file    file.Block
-	ts      types.TS
+	data *containers.Batch
+	meta *catalog.BlockEntry
+	file file.Block
+	ts   types.TS
 }
 
 func NewFlushBlkTask(
@@ -38,13 +37,12 @@ func NewFlushBlkTask(
 	ts types.TS,
 	meta *catalog.BlockEntry,
 	data *containers.Batch,
-	sortCol containers.Vector) *flushBlkTask {
+) *flushBlkTask {
 	task := &flushBlkTask{
-		ts:      ts,
-		data:    data,
-		meta:    meta,
-		file:    bf,
-		sortCol: sortCol,
+		ts:   ts,
+		data: data,
+		meta: meta,
+		file: bf,
 	}
 	task.BaseTask = tasks.NewBaseTask(task, tasks.IOTask, ctx)
 	return task
@@ -53,10 +51,8 @@ func NewFlushBlkTask(
 func (task *flushBlkTask) Scope() *common.ID { return task.meta.AsCommonID() }
 
 func (task *flushBlkTask) Execute() (err error) {
-	if task.sortCol != nil {
-		if err = BuildAndFlushIndex(task.file, task.meta, task.sortCol); err != nil {
-			return
-		}
+	if err = BuildBlockIndex(task.file, task.meta, task.data); err != nil {
+		return
 	}
 	if err = task.file.WriteBatch(task.data, task.ts); err != nil {
 		return

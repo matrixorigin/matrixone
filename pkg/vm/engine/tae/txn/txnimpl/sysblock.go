@@ -246,42 +246,46 @@ func (blk *txnSysBlock) getColumnTableData(colIdx int) (view *model.ColumnView, 
 	return
 }
 
+func FillTableRow(table *catalog.TableEntry, attr string, colData containers.Vector) {
+	schema := table.GetSchema()
+	switch attr {
+	case catalog.SystemRelAttr_ID:
+		colData.Append(table.GetID())
+	case catalog.SystemRelAttr_Name:
+		colData.Append([]byte(schema.Name))
+	case catalog.SystemRelAttr_DBName:
+		colData.Append([]byte(table.GetDB().GetName()))
+	case catalog.SystemRelAttr_DBID:
+		colData.Append(table.GetDB().GetID())
+	case catalog.SystemRelAttr_Comment:
+		colData.Append([]byte(table.GetSchema().Comment))
+	case catalog.SystemRelAttr_Partition:
+		colData.Append([]byte(table.GetSchema().Partition))
+	case catalog.SystemRelAttr_Persistence:
+		colData.Append([]byte(catalog.SystemPersistRel))
+	case catalog.SystemRelAttr_Kind:
+		colData.Append([]byte(table.GetSchema().Relkind))
+	case catalog.SystemRelAttr_CreateSQL:
+		colData.Append([]byte(table.GetSchema().Createsql))
+	case catalog.SystemRelAttr_Owner:
+		colData.Append(schema.AcInfo.RoleID)
+	case catalog.SystemRelAttr_Creator:
+		colData.Append(schema.AcInfo.UserID)
+	case catalog.SystemRelAttr_CreateAt:
+		colData.Append(schema.AcInfo.CreateAt)
+	case catalog.SystemRelAttr_AccID:
+		colData.Append(schema.AcInfo.TenantID)
+	default:
+		panic("unexpected")
+	}
+}
+
 func (blk *txnSysBlock) getRelTableData(colIdx int) (view *model.ColumnView, err error) {
 	view = model.NewColumnView(blk.Txn.GetStartTS(), colIdx)
 	colDef := catalog.SystemTableSchema.ColDefs[colIdx]
 	colData := containers.MakeVector(colDef.Type, colDef.Nullable())
 	tableFn := func(table *catalog.TableEntry) error {
-		schema := table.GetSchema()
-		switch colDef.Name {
-		case catalog.SystemRelAttr_ID:
-			colData.Append(table.GetID())
-		case catalog.SystemRelAttr_Name:
-			colData.Append([]byte(schema.Name))
-		case catalog.SystemRelAttr_DBName:
-			colData.Append([]byte(table.GetDB().GetName()))
-		case catalog.SystemRelAttr_DBID:
-			colData.Append(table.GetDB().GetID())
-		case catalog.SystemRelAttr_Comment:
-			colData.Append([]byte(table.GetSchema().Comment))
-		case catalog.SystemRelAttr_Partition:
-			colData.Append([]byte(table.GetSchema().Partition))
-		case catalog.SystemRelAttr_Persistence:
-			colData.Append([]byte(catalog.SystemPersistRel))
-		case catalog.SystemRelAttr_Kind:
-			colData.Append([]byte(table.GetSchema().Relkind))
-		case catalog.SystemRelAttr_CreateSQL:
-			colData.Append([]byte(table.GetSchema().Createsql))
-		case catalog.SystemRelAttr_Owner:
-			colData.Append(schema.AcInfo.RoleID)
-		case catalog.SystemRelAttr_Creator:
-			colData.Append(schema.AcInfo.UserID)
-		case catalog.SystemRelAttr_CreateAt:
-			colData.Append(schema.AcInfo.CreateAt)
-		case catalog.SystemRelAttr_AccID:
-			colData.Append(schema.AcInfo.TenantID)
-		default:
-			panic("unexpected")
-		}
+		FillTableRow(table, colDef.Name, colData)
 		return nil
 	}
 	dbFn := func(db *catalog.DBEntry) error {
@@ -294,31 +298,35 @@ func (blk *txnSysBlock) getRelTableData(colIdx int) (view *model.ColumnView, err
 	return
 }
 
+func FillDBRow(db *catalog.DBEntry, attr string, colData containers.Vector) {
+	switch attr {
+	case catalog.SystemDBAttr_ID:
+		colData.Append(db.GetID())
+	case catalog.SystemDBAttr_Name:
+		colData.Append([]byte(db.GetName()))
+	case catalog.SystemDBAttr_CatalogName:
+		colData.Append([]byte(catalog.SystemCatalogName))
+	case catalog.SystemDBAttr_CreateSQL:
+		colData.Append([]byte("todosql"))
+	case catalog.SystemDBAttr_Owner:
+		colData.Append(db.GetRoleID())
+	case catalog.SystemDBAttr_Creator:
+		colData.Append(db.GetUserID())
+	case catalog.SystemDBAttr_CreateAt:
+		colData.Append(db.GetCreateAt())
+	case catalog.SystemDBAttr_AccID:
+		colData.Append(db.GetTenantID())
+	default:
+		panic("unexpected")
+	}
+}
+
 func (blk *txnSysBlock) getDBTableData(colIdx int) (view *model.ColumnView, err error) {
 	view = model.NewColumnView(blk.Txn.GetStartTS(), colIdx)
 	colDef := catalog.SystemDBSchema.ColDefs[colIdx]
 	colData := containers.MakeVector(colDef.Type, colDef.Nullable())
 	fn := func(db *catalog.DBEntry) error {
-		switch colDef.Name {
-		case catalog.SystemDBAttr_ID:
-			colData.Append(db.GetID())
-		case catalog.SystemDBAttr_Name:
-			colData.Append([]byte(db.GetName()))
-		case catalog.SystemDBAttr_CatalogName:
-			colData.Append([]byte(catalog.SystemCatalogName))
-		case catalog.SystemDBAttr_CreateSQL:
-			colData.Append([]byte("todosql"))
-		case catalog.SystemDBAttr_Owner:
-			colData.Append(db.GetRoleID())
-		case catalog.SystemDBAttr_Creator:
-			colData.Append(db.GetUserID())
-		case catalog.SystemDBAttr_CreateAt:
-			colData.Append(db.GetCreateAt())
-		case catalog.SystemDBAttr_AccID:
-			colData.Append(db.GetTenantID())
-		default:
-			panic("unexpected")
-		}
+		FillDBRow(db, colDef.Name, colData)
 		return nil
 	}
 	if err = blk.processDB(fn, false); err != nil {
