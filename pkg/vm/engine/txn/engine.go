@@ -47,6 +47,18 @@ func New(
 
 var _ engine.Engine = new(Engine)
 
+func (e *Engine) New(_ context.Context, _ client.TxnOperator) error {
+	return nil
+}
+
+func (e *Engine) Commit(_ context.Context, _ client.TxnOperator) error {
+	return nil
+}
+
+func (e *Engine) Rollback(_ context.Context, _ client.TxnOperator) error {
+	return nil
+}
+
 func (e *Engine) Create(ctx context.Context, dbName string, txnOperator client.TxnOperator) error {
 
 	_, err := DoTxnRequest[CreateDatabaseResp](

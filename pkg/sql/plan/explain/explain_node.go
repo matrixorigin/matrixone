@@ -17,9 +17,8 @@ package explain
 import (
 	"strconv"
 
-	"github.com/matrixorigin/matrixone/pkg/errno"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/errors"
 )
 
 var _ NodeDescribe = &NodeDescribeImpl{}
@@ -210,9 +209,9 @@ func (ndesc *NodeDescribeImpl) GetNodeBasicInfo(options *ExplainOptions) (string
 			result += " " + costInfo
 		}
 	} else if options.Format == EXPLAIN_FORMAT_JSON {
-		return result, errors.New(errno.FeatureNotSupported, "unimplement explain format json")
+		return result, moerr.NewNYI("explain format json")
 	} else if options.Format == EXPLAIN_FORMAT_DOT {
-		return result, errors.New(errno.FeatureNotSupported, "unimplement explain format dot")
+		return result, moerr.NewNYI("explain format dot")
 	}
 	return result, nil
 }
@@ -347,9 +346,9 @@ func (ndesc *NodeDescribeImpl) GetFilterConditionInfo(options *ExplainOptions) (
 			result += descV
 		}
 	} else if options.Format == EXPLAIN_FORMAT_JSON {
-		return result, errors.New(errno.FeatureNotSupported, "unimplement explain format json")
+		return result, moerr.NewNYI("explain format json")
 	} else if options.Format == EXPLAIN_FORMAT_DOT {
-		return result, errors.New(errno.FeatureNotSupported, "unimplement explain format dot")
+		return result, moerr.NewNYI("explain format dot")
 	}
 	return result, nil
 }
@@ -370,9 +369,9 @@ func (ndesc *NodeDescribeImpl) GetGroupByInfo(options *ExplainOptions) (string, 
 			result += descV
 		}
 	} else if options.Format == EXPLAIN_FORMAT_JSON {
-		return result, errors.New(errno.FeatureNotSupported, "unimplement explain format json")
+		return result, moerr.NewNYI("explain format json")
 	} else if options.Format == EXPLAIN_FORMAT_DOT {
-		return result, errors.New(errno.FeatureNotSupported, "unimplement explain format dot")
+		return result, moerr.NewNYI("explain format dot")
 	}
 	return result, nil
 }
@@ -393,9 +392,9 @@ func (ndesc *NodeDescribeImpl) GetAggregationInfo(options *ExplainOptions) (stri
 			result += descV
 		}
 	} else if options.Format == EXPLAIN_FORMAT_JSON {
-		return result, errors.New(errno.FeatureNotSupported, "unimplement explain format json")
+		return result, moerr.NewNYI("explain format json")
 	} else if options.Format == EXPLAIN_FORMAT_DOT {
-		return result, errors.New(errno.FeatureNotSupported, "unimplement explain format dot")
+		return result, moerr.NewNYI("explain format dot")
 	}
 	return result, nil
 }
@@ -417,9 +416,9 @@ func (ndesc *NodeDescribeImpl) GetOrderByInfo(options *ExplainOptions) (string, 
 			result += describe
 		}
 	} else if options.Format == EXPLAIN_FORMAT_JSON {
-		return result, errors.New(errno.FeatureNotSupported, "unimplement explain format json")
+		return result, moerr.NewNYI("explain format json")
 	} else if options.Format == EXPLAIN_FORMAT_DOT {
-		return result, errors.New(errno.FeatureNotSupported, "unimplement explain format dot")
+		return result, moerr.NewNYI("explain format dot")
 	}
 	return result, nil
 }
@@ -480,9 +479,9 @@ func (e *ExprListDescribeImpl) GetDescription(options *ExplainOptions) (string, 
 			result += descV
 		}
 	} else if options.Format == EXPLAIN_FORMAT_JSON {
-		return result, errors.New(errno.FeatureNotSupported, "unimplement explain format json")
+		return result, moerr.NewNYI("explain format json")
 	} else if options.Format == EXPLAIN_FORMAT_DOT {
-		return result, errors.New(errno.FeatureNotSupported, "unimplement explain format dot")
+		return result, moerr.NewNYI("explain format dot")
 	}
 	return result, nil
 }

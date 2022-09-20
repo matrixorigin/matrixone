@@ -74,17 +74,17 @@ select substring('hello', -18446744073709551615, 1);
 substring(hello, -18446744073709551615, 1)
 
 select substring('hello', 18446744073709551615, 1);
-in function substring(str, start, lenth); start or length is overflow
+invalid argument function substring(str, start, lenth), bad value 18446744073709551615
 select substring('hello', -18446744073709551616, 1);
 substring(hello, -18446744073709551616, 1)
 
 select substring('hello', 18446744073709551616, 1);
-in function substring(str, start, lenth); start or length is overflow
+invalid argument function substring(str, start, lenth), bad value 1.8446744073709552e+19
 select substring('hello', -18446744073709551617, 1);
 substring(hello, -18446744073709551617, 1)
 
 select substring('hello', 18446744073709551617, 1);
-in function substring(str, start, lenth); start or length is overflow
+invalid argument function substring(str, start, lenth), bad value 1.8446744073709552e+19
 select substring('hello', 1, -1);
 substring(hello, 1, -1)
 
@@ -110,17 +110,17 @@ select substring('hello', 1, -18446744073709551615);
 substring(hello, 1, -18446744073709551615)
 
 select substring('hello', 1, 18446744073709551615);
-in function substring(str, start, lenth); start or length is overflow
+invalid argument function substring(str, start, lenth), bad value 18446744073709551615
 select substring('hello', 1, -18446744073709551616);
 substring(hello, 1, -18446744073709551616)
 
 select substring('hello', 1, 18446744073709551616);
-in function substring(str, start, lenth); start or length is overflow
+invalid argument function substring(str, start, lenth), bad value 1.8446744073709552e+19
 select substring('hello', 1, -18446744073709551617);
 substring(hello, 1, -18446744073709551617)
 
 select substring('hello', 1, 18446744073709551617);
-in function substring(str, start, lenth); start or length is overflow
+invalid argument function substring(str, start, lenth), bad value 1.8446744073709552e+19
 select substring('hello', -1, -1);
 substring(hello, -1, -1)
 
@@ -146,17 +146,17 @@ select substring('hello', -18446744073709551615, -18446744073709551615);
 substring(hello, -18446744073709551615, -18446744073709551615)
 
 select substring('hello', 18446744073709551615, 18446744073709551615);
-in function substring(str, start, lenth); start or length is overflow
+invalid argument function substring(str, start, lenth), bad value 18446744073709551615
 select substring('hello', -18446744073709551616, -18446744073709551616);
 substring(hello, -18446744073709551616, -18446744073709551616)
 
 select substring('hello', 18446744073709551616, 18446744073709551616);
-in function substring(str, start, lenth); start or length is overflow
+invalid argument function substring(str, start, lenth), bad value 1.8446744073709552e+19
 select substring('hello', -18446744073709551617, -18446744073709551617);
 substring(hello, -18446744073709551617, -18446744073709551617)
 
 select substring('hello', 18446744073709551617, 18446744073709551617);
-in function substring(str, start, lenth); start or length is overflow
+invalid argument function substring(str, start, lenth), bad value 1.8446744073709552e+19
 SELECT SUBSTRING('Sakila' FROM -4 FOR 2);
 substring(Sakila, -4, 2)
 ki
@@ -172,7 +172,7 @@ bc
 create table t1(f1 varchar(255));
 insert into t1 values ("123"),("456");
 select substring(f1,1,1) from t1 group by 1;
-column "t1.f1" must appear in the GROUP BY clause or be used in an aggregate function
+SQL syntax error: column "t1.f1" must appear in the GROUP BY clause or be used in an aggregate function
 drop table t1;
 SELECT '1' IN ('1', SUBSTRING(-9223372036854775809, 1));
 1 in (1, substring(-9223372036854775809, 1))
@@ -229,7 +229,7 @@ drop table t1;
 CREATE TABLE t1(a INT);
 INSERT INTO t1 VALUES (0),(0);
 SELECT 1 FROM t1 GROUP BY SUBSTRING('',1,'');
-Can't cast '' from VARCHAR type to BIGINT type.
+invalid argument cast to int, bad value 
 drop table t1;
 create table t1 (email varchar(50));
 insert into t1 values ('sasha@mysql.com'),('monty@mysql.com'),('foo@hotmail.com'),('foo@aol.com'),('bar@aol.com');

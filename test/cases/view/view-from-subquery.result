@@ -229,7 +229,7 @@ select max(ti)+10,min(si)-1,avg(fl) from (select * from t1) sub where id < 4 || 
 max(ti) + 10    min(si) - 1    avg(fl)
 18    1    4815.871616908482
 select substr from (select * from t1) sub where id < 4 || id > 5;
-Column 'substr' does not exist
+invalid input: column substr does not exist
 select ti,-si from (select * from t1) sub order by -si desc;
 ti    -si
 7    -1
@@ -257,7 +257,7 @@ create view v2 as select * from (select * from t1) sub where id > 1 limit 3;
 create view v3 as select max(ti),min(si),avg(fl) from (select * from t1) sub where id < 4 || id > 5;
 create view v4 as select max(ti)+10,min(si)-1,avg(fl) from (select * from t1) sub where id < 4 || id > 5;
 create view v5 as select substr from (select * from t1) sub where id < 4 || id > 5;
-Column 'substr' does not exist
+invalid input: column substr does not exist
 create view v6 as select ti,-si from (select * from t1) sub order by -si desc;
 create view v7 as select * from (select * from t1) sub where (ti=2 or si=3) and  (ch = 'bye' or vch = 'subquery');
 create view v8 as select * from (select * from (select * from (select id,ti,si,de from (select * from t1 ) sub3 where fl <> 4.5 ) sub2 where ti > 1) sub1 where id >2 ) sub where id > 4;
@@ -277,7 +277,7 @@ select * from v4;
 max(ti) + 10    min(si) - 1    avg(fl)
 18    1    4815.871616908482
 select * from v5;
-table "v5" does not exist
+SQL parser error: table "v5" does not exist
 select * from v6;
 ti    -si
 7    -1
@@ -305,7 +305,7 @@ drop view v2;
 drop view v3;
 drop view v4;
 drop view v5;
-view v5 is not exists
+invalid view view-from-subquery%!(EXTRA string=v5)
 drop view v6;
 drop view v7;
 drop view v8;
