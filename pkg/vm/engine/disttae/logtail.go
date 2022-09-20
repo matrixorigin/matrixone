@@ -44,7 +44,8 @@ func updatePartition(ctx context.Context, op client.TxnOperator, mvcc MVCC, dn D
 }
 
 func getLogTail(op client.TxnOperator, reqs []txn.TxnRequest) ([]*api.SyncLogTailResp, error) {
-	ctx := context.TODO() // TODO
+	ctx, cancel := context.WithTimeout(context.TODO(), time.Minute)
+	defer cancel()
 	result, err := op.Read(ctx, reqs)
 	if err != nil {
 		return nil, err
