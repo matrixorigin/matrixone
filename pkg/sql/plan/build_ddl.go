@@ -357,7 +357,7 @@ func buildTableDefs(defs tree.TableDefs, ctx CompilerContext, tableDef *TableDef
 				idxType = plan.IndexDef_ZONEMAP
 			default:
 				idxType = plan.IndexDef_ZONEMAP //default
-				// return errors.New(errno.InvalidTableDefinition, fmt.Sprintf("Invaild index type '%s'", def.KeyType.ToString()))
+				// return errors.New(errno.InvalidTableDefinition, fmt.Sprintf("Invaild index type '%s'", def.KeyType.String()))
 			}
 
 			idxDef := &plan.IndexDef{

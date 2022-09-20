@@ -406,13 +406,13 @@ func (pt PrivilegeType) String() string {
 	case PrivilegeTypeManageGrants:
 		return "manage grants"
 	case PrivilegeTypeAccountAll:
-		return "account all"
+		return "all"
 	case PrivilegeTypeAccountOwnership:
-		return "account ownership"
+		return "ownership"
 	case PrivilegeTypeUserOwnership:
-		return "user ownership"
+		return "ownership"
 	case PrivilegeTypeRoleOwnership:
-		return "role ownership"
+		return "ownership"
 	case PrivilegeTypeShowTables:
 		return "show tables"
 	case PrivilegeTypeCreateObject:
@@ -434,9 +434,9 @@ func (pt PrivilegeType) String() string {
 	case PrivilegeTypeAlterView:
 		return "alter view"
 	case PrivilegeTypeDatabaseAll:
-		return "database all"
+		return "all"
 	case PrivilegeTypeDatabaseOwnership:
-		return "database ownership"
+		return "ownership"
 	case PrivilegeTypeSelect:
 		return "select"
 	case PrivilegeTypeInsert:
@@ -450,11 +450,11 @@ func (pt PrivilegeType) String() string {
 	case PrivilegeTypeReference:
 		return "reference"
 	case PrivilegeTypeIndex:
-		return "create/alter/drop index"
+		return "index"
 	case PrivilegeTypeTableAll:
-		return "table all"
+		return "all"
 	case PrivilegeTypeTableOwnership:
-		return "table ownership"
+		return "ownership"
 	case PrivilegeTypeExecute:
 		return "execute"
 	}
@@ -1315,6 +1315,7 @@ func doRevokePrivilege(ctx context.Context, ses *Session, rp *tree.RevokePrivile
 	var privType PrivilegeType
 
 	verifiedRoles := make([]*verifiedRole, len(rp.Users))
+	checkedPrivilegeTypes := make([]PrivilegeType, len(rp.Privileges))
 
 	//put it into the single transaction
 	err = bh.Exec(ctx, "begin;")
@@ -1349,20 +1350,34 @@ func doRevokePrivilege(ctx context.Context, ses *Session, rp *tree.RevokePrivile
 		}
 	}
 
-	//step 2: decide the object type , the object id and the privilege_level
-	objType, privLevel, objId, err = checkPrivilegeObjectTypeAndPrivilegeLevel(ctx, ses, bh, rp.ObjType, *rp.Level)
+	//get the object type
+	objType, err = convertAstObjectTypeToObjectType(rp.ObjType)
 	if err != nil {
 		goto handleFailed
 	}
 
-	//step 3: delete the granted privilege
-	for _, priv := range rp.Privileges {
-		privType = convertAstPrivilegeTypeToPrivilegeType(priv.Type)
+	//check the privilege and the object type
+	for i, priv := range rp.Privileges {
+		privType, err = convertAstPrivilegeTypeToPrivilegeType(priv.Type, rp.ObjType)
+		if err != nil {
+			goto handleFailed
+		}
 		//check the match between the privilegeScope and the objectType
 		err = matchPrivilegeTypeWithObjectType(privType, objType)
 		if err != nil {
 			goto handleFailed
 		}
+		checkedPrivilegeTypes[i] = privType
+	}
+
+	//step 2: decide the object type , the object id and the privilege_level
+	privLevel, objId, err = checkPrivilegeObjectTypeAndPrivilegeLevel(ctx, ses, bh, rp.ObjType, *rp.Level)
+	if err != nil {
+		goto handleFailed
+	}
+
+	//step 3: delete the granted privilege
+	for _, privType = range checkedPrivilegeTypes {
 		for _, role := range verifiedRoles {
 			sql := getSqlForDeleteRolePrivs(role.id, objType.String(), objId, int64(privType), privLevel.String())
 
@@ -1422,30 +1437,46 @@ func getDatabaseOrTableId(ctx context.Context, bh BackgroundExec, isDb bool, dbN
 		return id, nil
 	}
 	if isDb {
-		return 0, moerr.NewInternalError("there is no database %s", dbName)
+		return 0, moerr.NewInternalError(`there is no database "%s"`, dbName)
 	} else {
-		return 0, moerr.NewInternalError("there is no table %s in database %s", tableName, dbName)
+		//TODO: check the database exists or not first
+		return 0, moerr.NewInternalError(`there is no table "%s" in database "%s"`, tableName, dbName)
 	}
+}
+
+// convertAstObjectTypeToObjectType gets the object type from the ast
+func convertAstObjectTypeToObjectType(ot tree.ObjectType) (objectType, error) {
+	var objType objectType
+	switch ot {
+	case tree.OBJECT_TYPE_TABLE:
+		objType = objectTypeTable
+	case tree.OBJECT_TYPE_DATABASE:
+		objType = objectTypeDatabase
+	case tree.OBJECT_TYPE_ACCOUNT:
+		objType = objectTypeAccount
+	default:
+		return 0, moerr.NewInternalError(`the object type "%s" is unsupported`, ot.String())
+	}
+	return objType, nil
 }
 
 // checkPrivilegeObjectTypeAndPrivilegeLevel checks the relationship among the privilege type, the object type and the privilege level.
 // it returns the converted object type, the privilege level and the object id.
 func checkPrivilegeObjectTypeAndPrivilegeLevel(ctx context.Context, ses *Session, bh BackgroundExec,
-	ot tree.ObjectType, pl tree.PrivilegeLevel) (objectType, privilegeLevelType, int64, error) {
-	var objType objectType
+	ot tree.ObjectType, pl tree.PrivilegeLevel) (privilegeLevelType, int64, error) {
 	var privLevel privilegeLevelType
 	var objId int64
 	var err error
+	var dbName string
 
 	switch ot {
 	case tree.OBJECT_TYPE_TABLE:
-		objType = objectTypeTable
 		switch pl.Level {
 		case tree.PRIVILEGE_LEVEL_TYPE_STAR:
 			privLevel = privilegeLevelStar
 			objId, err = getDatabaseOrTableId(ctx, bh, true, ses.GetDatabaseName(), "")
 			if err != nil {
-				return 0, 0, 0, err
+				return 0, 0, err
 			}
 		case tree.PRIVILEGE_LEVEL_TYPE_STAR_STAR:
 			privLevel = privilegeLevelStarStar
@@ -1454,26 +1485,25 @@ func checkPrivilegeObjectTypeAndPrivilegeLevel(ctx context.Context, ses *Session
 			privLevel = privilegeLevelDatabaseStar
 			objId, err = getDatabaseOrTableId(ctx, bh, true, pl.DbName, "")
 			if err != nil {
-				return 0, 0, 0, err
+				return 0, 0, err
 			}
 		case tree.PRIVILEGE_LEVEL_TYPE_DATABASE_TABLE:
 			privLevel = privilegeLevelDatabaseTable
 			objId, err = getDatabaseOrTableId(ctx, bh, false, pl.DbName, pl.TabName)
 			if err != nil {
-				return 0, 0, 0, err
+				return 0, 0, err
 			}
 		case tree.PRIVILEGE_LEVEL_TYPE_TABLE:
 			privLevel = privilegeLevelTable
 			objId, err = getDatabaseOrTableId(ctx, bh, false, ses.GetDatabaseName(), pl.TabName)
 			if err != nil {
-				return 0, 0, 0, err
+				return 0, 0, err
 			}
 		default:
-			err = moerr.NewInternalError("in object type %s privilege level type %s is unsupported", ot.ToString(), pl.Level)
-			return 0, 0, 0, err
+			err = moerr.NewInternalError(`in the object type "%s" the privilege level "%s" is unsupported`, ot.String(), pl.String())
+			return 0, 0, err
 		}
 	case tree.OBJECT_TYPE_DATABASE:
-		objType = objectTypeDatabase
 		switch pl.Level {
 		case tree.PRIVILEGE_LEVEL_TYPE_STAR:
 			privLevel = privilegeLevelStar
@@ -1481,32 +1511,40 @@ func checkPrivilegeObjectTypeAndPrivilegeLevel(ctx context.Context, ses *Session
 		case tree.PRIVILEGE_LEVEL_TYPE_STAR_STAR:
 			privLevel = privilegeLevelStarStar
 			objId = objectIDAll
+		case tree.PRIVILEGE_LEVEL_TYPE_TABLE:
+			//in the syntax, we can not distinguish the table name from the database name.
+			privLevel = privilegeLevelDatabase
+			dbName = pl.TabName
+			objId, err = getDatabaseOrTableId(ctx, bh, true, dbName, "")
+			if err != nil {
+				return 0, 0, err
+			}
 		case tree.PRIVILEGE_LEVEL_TYPE_DATABASE:
 			privLevel = privilegeLevelDatabase
-			objId, err = getDatabaseOrTableId(ctx, bh, true, pl.DbName, "")
+			dbName = pl.DbName
+			objId, err = getDatabaseOrTableId(ctx, bh, true, dbName, "")
 			if err != nil {
-				return 0, 0, 0, err
+				return 0, 0, err
 			}
 		default:
-			err = moerr.NewInternalError("in object type %s privilege level type %s is unsupported", ot.ToString(), pl.Level)
-			return 0, 0, 0, err
+			err = moerr.NewInternalError(`in the object type "%s" the privilege level "%s" is unsupported`, ot.String(), pl.String())
+			return 0, 0, err
 		}
 	case tree.OBJECT_TYPE_ACCOUNT:
-		objType = objectTypeAccount
 		switch pl.Level {
 		case tree.PRIVILEGE_LEVEL_TYPE_STAR:
 			privLevel = privilegeLevelStar
 			objId = objectIDAll
 		default:
-			err = moerr.NewInternalError("in object type %s privilege level type %s is unsupported", ot.ToString(), pl.Level)
-			return 0, 0, 0, err
+			err = moerr.NewInternalError(`in the object type "%s" the privilege level "%s" is unsupported`, ot.String(), pl.String())
+			return 0, 0, err
 		}
 	default:
-		err = moerr.NewInternalError("object type %s is unsupported", ot.ToString())
-		return 0, 0, 0, err
+		err = moerr.NewInternalError(`the object type "%s" is unsupported`, ot.String())
+		return 0, 0, err
 	}
 
-	return objType, privLevel, objId, err
+	return privLevel, objId, err
 }
 
 // matchPrivilegeTypeWithObjectType matches the privilege type with the object type
@@ -1515,19 +1553,19 @@ func matchPrivilegeTypeWithObjectType(privType PrivilegeType, objType objectType
 	switch privType.Scope() {
 	case PrivilegeScopeSys, PrivilegeScopeAccount, PrivilegeScopeUser, PrivilegeScopeRole:
 		if objType != objectTypeAccount {
-			err = moerr.NewInternalError("the privilege %s can not be granted to the object type account", privType)
+			err = moerr.NewInternalError(`the privilege "%s" can only be granted to the object type "account"`, privType)
 		}
 	case PrivilegeScopeDatabase:
 		if objType != objectTypeDatabase {
-			err = moerr.NewInternalError("the privilege %s can not be granted to the object type database", privType)
+			err = moerr.NewInternalError(`the privilege "%s" can only be granted to the object type "database"`, privType)
 		}
 	case PrivilegeScopeTable:
 		if objType != objectTypeTable {
-			err = moerr.NewInternalError("the privilege %s can not be granted to the object type table", privType)
+			err = moerr.NewInternalError(`the privilege "%s" can only be granted to the object type "table"`, privType)
 		}
 	case PrivilegeScopeRoutine:
 		if objType != objectTypeFunction {
-			err = moerr.NewInternalError("the privilege %s can not be granted to the object type function", privType)
+			err = moerr.NewInternalError(`the privilege "%s" can only be granted to the object type "function"`, privType)
 		}
 	}
 	return err
@@ -1551,6 +1589,7 @@ func doGrantPrivilege(ctx context.Context, ses *Session, gp *tree.GrantPrivilege
 	//Get primary keys
 	//step 1: get role_id
 	verifiedRoles := make([]*verifiedRole, len(gp.Roles))
+	checkedPrivilegeTypes := make([]PrivilegeType, len(gp.Privileges))
 
 	//put it into the single transaction
 	err = bh.Exec(ctx, "begin;")
@@ -1590,9 +1629,29 @@ func doGrantPrivilege(ctx context.Context, ses *Session, gp *tree.GrantPrivilege
 		}
 	}
 
+	//get the object type
+	objType, err = convertAstObjectTypeToObjectType(gp.ObjType)
+	if err != nil {
+		goto handleFailed
+	}
+
+	//check the privilege and the object type
+	for i, priv := range gp.Privileges {
+		privType, err = convertAstPrivilegeTypeToPrivilegeType(priv.Type, gp.ObjType)
+		if err != nil {
+			goto handleFailed
+		}
+		//check the match between the privilegeScope and the objectType
+		err = matchPrivilegeTypeWithObjectType(privType, objType)
+		if err != nil {
+			goto handleFailed
+		}
+		checkedPrivilegeTypes[i] = privType
+	}
+
 	//step 2: get obj_type, privilege_level
 	//step 3: get obj_id
-	objType, privLevel, objId, err = checkPrivilegeObjectTypeAndPrivilegeLevel(ctx, ses, bh, gp.ObjType, *gp.Level)
+	privLevel, objId, err = checkPrivilegeObjectTypeAndPrivilegeLevel(ctx, ses, bh, gp.ObjType, *gp.Level)
 	if err != nil {
 		goto handleFailed
 	}
@@ -1601,13 +1660,7 @@ func doGrantPrivilege(ctx context.Context, ses *Session, gp *tree.GrantPrivilege
 	//step 5: check exists
 	//step 6: update or insert
 
-	for _, priv := range gp.Privileges {
-		privType = convertAstPrivilegeTypeToPrivilegeType(priv.Type)
-		//check the match between the privilegeScope and the objectType
-		err = matchPrivilegeTypeWithObjectType(privType, objType)
-		if err != nil {
-			goto handleFailed
-		}
+	for _, privType = range checkedPrivilegeTypes {
 		for _, role := range verifiedRoles {
 			sql := getSqlForCheckRoleHasPrivilege(role.id, objType, objId, int64(privType))
 			//check exists
@@ -2641,9 +2694,13 @@ func authenticatePrivilegeOfStatementWithObjectTypeTable(ctx context.Context, se
 func formSqlFromGrantPrivilege(ctx context.Context, ses *Session, gp *tree.GrantPrivilege, priv *tree.Privilege) (string, error) {
 	tenant := ses.GetTenantInfo()
 	sql := ""
-	privType := convertAstPrivilegeTypeToPrivilegeType(priv.Type)
+	var privType PrivilegeType
+	var err error
+	privType, err = convertAstPrivilegeTypeToPrivilegeType(priv.Type, gp.ObjType)
+	if err != nil {
+		return "", err
+	}
 	switch gp.ObjType {
-
 	case tree.OBJECT_TYPE_TABLE:
 		switch gp.Level.Level {
 		case tree.PRIVILEGE_LEVEL_TYPE_STAR:
@@ -2665,6 +2722,9 @@ func formSqlFromGrantPrivilege(ctx context.Context, ses *Session, gp *tree.Grant
 			sql = getSqlForCheckWithGrantOptionForDatabaseStar(int64(tenant.GetDefaultRoleID()), privType)
 		case tree.PRIVILEGE_LEVEL_TYPE_STAR_STAR:
 			sql = getSqlForCheckWithGrantOptionForDatabaseStarStar(int64(tenant.GetDefaultRoleID()), privType)
+		case tree.PRIVILEGE_LEVEL_TYPE_TABLE:
+			//in the syntax, we can not distinguish the table name from the database name.
+			sql = getSqlForCheckWithGrantOptionForDatabaseDB(int64(tenant.GetDefaultRoleID()), privType, gp.Level.TabName)
 		case tree.PRIVILEGE_LEVEL_TYPE_DATABASE:
 			sql = getSqlForCheckWithGrantOptionForDatabaseDB(int64(tenant.GetDefaultRoleID()), privType, gp.Level.DbName)
 		default:
@@ -2848,69 +2908,80 @@ func determinePrivilegeHasWithGrantOption(ctx context.Context, ses *Session, gp 
 	return true, nil
 }
 
-func convertAstPrivilegeTypeToPrivilegeType(priv tree.PrivilegeType) PrivilegeType {
+func convertAstPrivilegeTypeToPrivilegeType(priv tree.PrivilegeType, ot tree.ObjectType) (PrivilegeType, error) {
+	var privType PrivilegeType
 	switch priv {
 	case tree.PRIVILEGE_TYPE_STATIC_CREATE_ACCOUNT:
-		return PrivilegeTypeCreateAccount
+		privType = PrivilegeTypeCreateAccount
 	case tree.PRIVILEGE_TYPE_STATIC_DROP_ACCOUNT:
-		return PrivilegeTypeDropAccount
+		privType = PrivilegeTypeDropAccount
 	case tree.PRIVILEGE_TYPE_STATIC_ALTER_ACCOUNT:
-		return PrivilegeTypeAlterAccount
+		privType = PrivilegeTypeAlterAccount
 	case tree.PRIVILEGE_TYPE_STATIC_CREATE_USER:
-		return PrivilegeTypeCreateUser
+		privType = PrivilegeTypeCreateUser
 	case tree.PRIVILEGE_TYPE_STATIC_DROP_USER:
-		return PrivilegeTypeDropUser
+		privType = PrivilegeTypeDropUser
 	case tree.PRIVILEGE_TYPE_STATIC_ALTER_USER:
-		return PrivilegeTypeAlterUser
+		privType = PrivilegeTypeAlterUser
 	case tree.PRIVILEGE_TYPE_STATIC_CREATE_ROLE:
-		return PrivilegeTypeCreateRole
+		privType = PrivilegeTypeCreateRole
 	case tree.PRIVILEGE_TYPE_STATIC_DROP_ROLE:
-		return PrivilegeTypeDropRole
+		privType = PrivilegeTypeDropRole
 	case tree.PRIVILEGE_TYPE_STATIC_ALTER_ROLE:
-		return PrivilegeTypeAlterRole
+		privType = PrivilegeTypeAlterRole
 	case tree.PRIVILEGE_TYPE_STATIC_CREATE_DATABASE:
-		return PrivilegeTypeCreateDatabase
+		privType = PrivilegeTypeCreateDatabase
 	case tree.PRIVILEGE_TYPE_STATIC_DROP_DATABASE:
-		return PrivilegeTypeDropDatabase
+		privType = PrivilegeTypeDropDatabase
 	case tree.PRIVILEGE_TYPE_STATIC_SHOW_DATABASES:
-		return PrivilegeTypeShowDatabases
+		privType = PrivilegeTypeShowDatabases
 	case tree.PRIVILEGE_TYPE_STATIC_CONNECT:
-		return PrivilegeTypeConnect
+		privType = PrivilegeTypeConnect
 	case tree.PRIVILEGE_TYPE_STATIC_MANAGE_GRANTS:
-		return PrivilegeTypeManageGrants
+		privType = PrivilegeTypeManageGrants
 	case tree.PRIVILEGE_TYPE_STATIC_ALL:
-		return PrivilegeTypeDatabaseAll //TODO: database ? table ? account ?
+		switch ot {
+		case tree.OBJECT_TYPE_ACCOUNT:
+			privType = PrivilegeTypeAccountAll
+		case tree.OBJECT_TYPE_DATABASE:
+			privType = PrivilegeTypeDatabaseAll
+		case tree.OBJECT_TYPE_TABLE:
+			privType = PrivilegeTypeTableAll
+		default:
+			return 0, moerr.NewInternalError(`the object type "%s" do not support the privilege "%s"`, ot.String(), priv.ToString())
+		}
 	case tree.PRIVILEGE_TYPE_STATIC_OWNERSHIP:
-		return PrivilegeTypeDatabaseOwnership //TODO
+		return 0, moerr.NewInternalError(`the privilege "ownership" can not be granted`)
 	case tree.PRIVILEGE_TYPE_STATIC_SHOW_TABLES:
-		return PrivilegeTypeShowTables
+		privType = PrivilegeTypeShowTables
 	case tree.PRIVILEGE_TYPE_STATIC_CREATE_TABLE:
-		return PrivilegeTypeCreateTable
+		privType = PrivilegeTypeCreateTable
 	case tree.PRIVILEGE_TYPE_STATIC_DROP_TABLE:
-		return PrivilegeTypeDropTable
+		privType = PrivilegeTypeDropTable
 	case tree.PRIVILEGE_TYPE_STATIC_CREATE_VIEW:
-		return PrivilegeTypeCreateView
+		privType = PrivilegeTypeCreateView
 	case tree.PRIVILEGE_TYPE_STATIC_DROP_VIEW:
-		return PrivilegeTypeDropView
+		privType = PrivilegeTypeDropView
 	case tree.PRIVILEGE_TYPE_STATIC_ALTER_VIEW:
-		return PrivilegeTypeAlterView
+		privType = PrivilegeTypeAlterView
 	case tree.PRIVILEGE_TYPE_STATIC_ALTER_TABLE:
-		return PrivilegeTypeAlterTable
+		privType = PrivilegeTypeAlterTable
 	case tree.PRIVILEGE_TYPE_STATIC_SELECT:
-		return PrivilegeTypeSelect
+		privType = PrivilegeTypeSelect
 	case tree.PRIVILEGE_TYPE_STATIC_INSERT:
-		return PrivilegeTypeInsert
+		privType = PrivilegeTypeInsert
 	case tree.PRIVILEGE_TYPE_STATIC_UPDATE:
-		return PrivilegeTypeUpdate
+		privType = PrivilegeTypeUpdate
 	case tree.PRIVILEGE_TYPE_STATIC_DELETE:
-		return PrivilegeTypeDelete
+		privType = PrivilegeTypeDelete
 	case tree.PRIVILEGE_TYPE_STATIC_INDEX:
-		return PrivilegeTypeIndex
+		privType = PrivilegeTypeIndex
 	case tree.PRIVILEGE_TYPE_STATIC_EXECUTE:
-		return PrivilegeTypeExecute
+		privType = PrivilegeTypeExecute
 	default:
-		panic(fmt.Sprintf("unsupported privilege type %s", priv.ToString()))
+		return 0, moerr.NewInternalError("unsupported privilege type %s", priv.ToString())
 	}
+	return privType, nil
 }
 
 // authenticatePrivilegeOfStatementWithObjectTypeNone decides the user has the privilege of executing the statement with object type none

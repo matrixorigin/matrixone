@@ -494,5 +494,8 @@ func init() {
 		"password_lock_time":       PASSWORD_LOCK_TIME,
 		"unbounded":                UNBOUNDED,
 		"secondary":                SECONDARY,
+		"connect":                  CONNECT,
+		"ownership":                OWNERSHIP,
+		"reference":                REFERENCE,
 	}
 }

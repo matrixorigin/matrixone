@@ -26,8 +26,8 @@ var (
 		input  string
 		output string
 	}{
-		input:  `grant show databases on account * to r1`,
-		output: "grant show databases on account * to r1",
+		input:  `grant reference on table * to role_r1`,
+		output: "grant reference on table * to role_r1;",
 	}
 )
 
