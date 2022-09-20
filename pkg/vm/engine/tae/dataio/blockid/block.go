@@ -21,6 +21,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/file"
+	"os"
+	"path"
 	"strconv"
 	"strings"
 )
@@ -168,7 +170,8 @@ func (bf *blockFile) Close() error {
 }
 
 func (bf *blockFile) Destroy() error {
-	return nil
+	name := path.Join(bf.writer.fs.attr.dir, bf.writer.name)
+	return os.Remove(name)
 }
 
 func (bf *blockFile) Sync() error {
