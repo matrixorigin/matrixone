@@ -19,16 +19,23 @@ import (
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 )
 
 const (
 	INSERT = iota
 	DELETE
+)
+
+const (
+	CacheSize = 1 << 20
 )
 
 type DNStore = logservice.DNStore
@@ -61,16 +68,44 @@ type Cache interface {
 		ts timestamp.Timestamp, entries [][]Entry) ([]engine.Reader, error)
 }
 
+// mvcc is the core data structure of cn and is used to
+// maintain multiple versions of logtail data for a table's partition
+type MVCC interface {
+	CheckPoint(ts timestamp.Timestamp) error
+	Insert(ctx context.Context, bat *api.Batch) error
+	Delete(ctx context.Context, bat *api.Batch) error
+	BlockList(ctx context.Context, ts timestamp.Timestamp,
+		entries [][]Entry) []BlockMeta
+	NewReader(ctx context.Context, readerNumber int, expr *plan.Expr,
+		ts timestamp.Timestamp, entries [][]Entry) ([]engine.Reader, error)
+}
+
 type Engine struct {
 	sync.RWMutex
-	getClusterDetails GetClusterDetailsFunc
 	db                *DB
+	m                 *mheap.Mheap
+	cli               client.TxnClient
+	getClusterDetails GetClusterDetailsFunc
 	txns              map[string]*Transaction
 }
 
 // DB is implementataion of cache
 type DB struct {
-	readTs timestamp.Timestamp
+	sync.RWMutex
+	dnMap  map[string]int
+	cli    client.TxnClient
+	tables map[[2]uint64]Partitions
+}
+
+type Partitions []*Partition
+
+// a partition corresponds to a dn
+type Partition struct {
+	sync.RWMutex
+	// multi-version data of logtail, implemented with reusee's memengine
+	data MVCC
+	// last updated timestamp
+	ts timestamp.Timestamp
 }
 
 // Transaction represents a transaction

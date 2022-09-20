@@ -203,6 +203,7 @@ import (
 %left <str> AND
 %right <str> NOT '!'
 %left <str> BETWEEN CASE WHEN THEN ELSE END
+%nonassoc LOWER_THAN_EQ
 %left <str> '=' '<' '>' LE GE NE NULL_SAFE_EQUAL IS LIKE REGEXP IN ASSIGNMENT
 %left <str> '|'
 %left <str> '&'
@@ -7184,7 +7185,6 @@ reserved_keyword:
 |   WHERE
 |   WEEK
 |   WITH
-|   PASSWORD
 |   TERMINATED
 |   OPTIONALLY
 |   ENCLOSED
@@ -7393,6 +7393,7 @@ non_reserved_keyword:
 |   TABLES
 |   EXTERNAL
 |   URL
+|   PASSWORD %prec LOWER_THAN_EQ
 
 func_not_keyword:
 	DATE_ADD
