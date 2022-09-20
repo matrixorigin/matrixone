@@ -131,7 +131,7 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 func FilterBatch(bat *batch.Batch, batLen int, proc *process.Process) (*batch.Batch, uint64) {
 	var cnt uint64 = 0
 	newBat := &batch.Batch{}
-	m := make(map[[16]byte]int, batLen)
+	m := make(map[[types.RowidSize]byte]int, batLen)
 
 	for _, vec := range bat.Vecs {
 		v := vector.New(vec.Typ)

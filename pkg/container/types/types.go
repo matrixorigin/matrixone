@@ -80,7 +80,7 @@ const (
 
 const (
 	TxnTsSize = 12
-	RowidSize = 16
+	RowidSize = 24
 )
 
 type Type struct {

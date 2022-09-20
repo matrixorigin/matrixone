@@ -187,7 +187,8 @@ func NewInsertNode(tbl *txnTable, mgr base.INodeManager, id *common.ID, driver w
 	impl.LoadFunc = impl.OnLoad
 	impl.table = tbl
 	impl.appends = make([]*appendInfo, 0)
-	impl.prefix = model.EncodeBlockKeyPrefix(id.SegmentID, id.BlockID)
+	nodeID := tbl.entry.GetDB().GetCatalog().NodeID
+	impl.prefix = model.EncodeBlockKeyPrefix(nodeID, id.SegmentID, id.BlockID)
 	mgr.RegisterNode(impl)
 	return impl
 }

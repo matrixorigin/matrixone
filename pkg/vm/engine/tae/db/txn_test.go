@@ -262,7 +262,7 @@ func (c *APP1Client) GetGoodRepetory(goodId uint64) (id *common.ID, offset uint3
 				return
 			}
 			id = blk.Fingerprint()
-			key := model.EncodePhyAddrKey(id.SegmentID, id.BlockID, uint32(row))
+			key := model.EncodePhyAddrKey(0, id.SegmentID, id.BlockID, uint32(row))
 			cntv, err := rel.GetValueByPhyAddrKey(key, 2)
 			if err != nil {
 				return

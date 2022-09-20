@@ -194,7 +194,8 @@ func (entry *BlockEntry) DestroyData() (err error) {
 }
 
 func (entry *BlockEntry) MakeKey() []byte {
-	return model.EncodeBlockKeyPrefix(entry.segment.ID, entry.ID)
+	nodeID := entry.GetCatalog().NodeID
+	return model.EncodeBlockKeyPrefix(nodeID, entry.segment.ID, entry.ID)
 }
 
 // IsActive is coarse API: no consistency check

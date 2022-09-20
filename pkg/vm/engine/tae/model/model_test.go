@@ -29,13 +29,13 @@ func TestPrepareHiddenData(t *testing.T) {
 		SegmentID: 2,
 		BlockID:   3,
 	}
-	prefix := EncodeBlockKeyPrefix(id.SegmentID, id.BlockID)
+	prefix := EncodeBlockKeyPrefix(0, id.SegmentID, id.BlockID)
 	data, err := PreparePhyAddrData(typ, prefix, 0, 20)
 	assert.NoError(t, err)
 	assert.Equal(t, 20, data.Length())
 	for i := 0; i < data.Length(); i++ {
 		v := data.Get(i)
-		sid, bid, off := DecodePhyAddrKey(v.(types.Rowid))
+		_, sid, bid, off := DecodePhyAddrKey(v.(types.Rowid))
 		assert.Equal(t, sid, id.SegmentID)
 		assert.Equal(t, bid, id.BlockID)
 		assert.Equal(t, off, uint32(i))

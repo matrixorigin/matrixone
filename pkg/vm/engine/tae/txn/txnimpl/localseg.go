@@ -402,7 +402,7 @@ func (seg *localSegment) Rows() uint32 {
 func (seg *localSegment) GetByFilter(filter *handle.Filter) (id *common.ID, offset uint32, err error) {
 	id = seg.entry.AsCommonID()
 	if !seg.table.schema.HasPK() {
-		_, _, offset = model.DecodePhyAddrKeyFromValue(filter.Val)
+		_, _, _, offset = model.DecodePhyAddrKeyFromValue(filter.Val)
 		return
 	}
 	if seg.table.schema.IsSinglePK() {

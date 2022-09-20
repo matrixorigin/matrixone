@@ -730,7 +730,7 @@ func (blk *dataBlock) GetByFilter(txn txnif.AsyncTxn, filter *handle.Filter) (of
 		panic("logic error")
 	}
 	if blk.meta.GetSchema().SortKey == nil {
-		_, _, offset = model.DecodePhyAddrKeyFromValue(filter.Val)
+		_, _, _, offset = model.DecodePhyAddrKeyFromValue(filter.Val)
 		return
 	}
 	ts := txn.GetStartTS()

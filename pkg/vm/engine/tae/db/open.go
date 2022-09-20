@@ -70,6 +70,8 @@ func Open(dirname string, opts *options.Options) (db *DB, err error) {
 		return
 	}
 	db.Catalog = db.Opts.Catalog
+	// TODO: init NodeID
+	// db.Catalog.NodeID = nodeID
 
 	// Init and start txn manager
 	txnStoreFactory := txnimpl.TxnStoreFactory(db.Opts.Catalog, db.Wal, txnBufMgr, dataFactory)

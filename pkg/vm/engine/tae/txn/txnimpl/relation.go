@@ -241,7 +241,7 @@ func (h *txnRelation) UpdateByFilter(filter *handle.Filter, col uint16, v any) (
 }
 
 func (h *txnRelation) UpdateByPhyAddrKey(key any, col int, v any) error {
-	sid, bid, row := model.DecodePhyAddrKeyFromValue(key)
+	_, sid, bid, row := model.DecodePhyAddrKeyFromValue(key)
 	id := &common.ID{
 		TableID:   h.table.entry.ID,
 		SegmentID: sid,
@@ -269,7 +269,7 @@ func (h *txnRelation) DeleteByPhyAddrKeys(keys containers.Vector) (err error) {
 	var row uint32
 	dbId := h.table.entry.GetDB().ID
 	err = keys.Foreach(func(key any, _ int) (err error) {
-		id.SegmentID, id.BlockID, row = model.DecodePhyAddrKeyFromValue(key)
+		_, id.SegmentID, id.BlockID, row = model.DecodePhyAddrKeyFromValue(key)
 		err = h.Txn.GetStore().RangeDelete(dbId, id, row, row, handle.DT_Normal)
 		return
 	}, nil)
@@ -277,7 +277,7 @@ func (h *txnRelation) DeleteByPhyAddrKeys(keys containers.Vector) (err error) {
 }
 
 func (h *txnRelation) DeleteByPhyAddrKey(key any) error {
-	sid, bid, row := model.DecodePhyAddrKeyFromValue(key)
+	_, sid, bid, row := model.DecodePhyAddrKeyFromValue(key)
 	id := &common.ID{
 		TableID:   h.table.entry.ID,
 		SegmentID: sid,
@@ -291,7 +291,7 @@ func (h *txnRelation) RangeDelete(id *common.ID, start, end uint32, dt handle.De
 }
 
 func (h *txnRelation) GetValueByPhyAddrKey(key any, col int) (any, error) {
-	sid, bid, row := model.DecodePhyAddrKeyFromValue(key)
+	_, sid, bid, row := model.DecodePhyAddrKeyFromValue(key)
 	id := &common.ID{
 		TableID:   h.table.entry.ID,
 		SegmentID: sid,
