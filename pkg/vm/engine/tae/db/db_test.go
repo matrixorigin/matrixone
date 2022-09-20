@@ -3089,6 +3089,8 @@ func TestGetLastAppender(t *testing.T) {
 	tae.compactBlocks(false)
 	t.Log(tae.Catalog.SimplePPString(3))
 
+	tae.restart()
+
 	txn, rel := tae.getRelation()
 	rel.Append(bats[1])
 	assert.NoError(t, txn.Commit())

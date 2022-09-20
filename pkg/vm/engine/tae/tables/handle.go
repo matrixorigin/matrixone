@@ -72,7 +72,7 @@ func (h *tableHandle) GetAppender() (appender data.BlockAppender, err error) {
 		}
 		blkEntry := segEntry.LastAppendableBlock()
 		if blkEntry == nil {
-			blk := segEntry.GetLastBlock()
+			blk := segEntry.GetAppendableBlock()
 			h.SetAppender(blk.AsCommonID())
 			err = data.ErrAppendableSegmentNotFound
 			return
