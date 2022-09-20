@@ -1,24 +1,24 @@
 SELECT 'a' LIKE 'ae';
-'a' LIKE 'ae'
-0
+a like ae
+false
 SELECT 'ae' LIKE 'a';
-'ae' LIKE 'a'
-0
+ae like a
+false
 SELECT 'MYSQL' LIKE 'mysql';
-'MYSQL' LIKE 'mysql'
-1
+MYSQL like mysql
+false
 SELECT 'David!' LIKE 'David_';
-'David!' LIKE 'David_'
-1
+David! like David_
+true
 SELECT 'David!' LIKE '%D%v%';
-'David!' LIKE '%D%v%'
-1
+David! like %D%v%
+true
 SELECT 'David!' LIKE 'David\_';
-'David!' LIKE 'David\_'
-0
+David! like David\_
+false
 SELECT 'David_' LIKE 'David\_';
-'David_' LIKE 'David\_'
-1
+David_ like David\_
+false
 DROP TABLE IF EXISTS like_test;
 CREATE TABLE like_test(
 str1 VARCHAR(50)
@@ -63,10 +63,6 @@ str1
 D:\System_files
 SELECT * FROM like_test WHERE str1 LIKE 'd%';
 str1
-D:
-D:\
-D:\System_files
-D:\System_files\
 SELECT * FROM like_test WHERE str1 LIKE '%%';
 str1
 D:
@@ -146,24 +142,24 @@ NULL
   A
 s _
 SELECT COUNT(*) FROM like_test WHERE str1 LIKE '%baz%';
-COUNT(*)
+count(*)
 0
 SELECT COUNT(*) FROM like_test WHERE str1 NOT LIKE '%baz%';
-COUNT(*)
+count(*)
 7
 SELECT COUNT(*) FROM like_test WHERE str1 NOT LIKE '%baz%' OR str1 IS NULL;
-COUNT(*)
+count(*)
 8
 SELECT str1, str1 LIKE '%\\' FROM like_test;
-str1    str1 LIKE '%\\'
-D:    0
-D:\    1
-D:\System_files    0
-D:\System_files\    1
+str1    str1 like %\\
+D:    false
+D:\    true
+D:\System_files    false
+D:\System_files\    true
 null    null
-NULL    0
-  A    0
-s _    0
+NULL    false
+  A    false
+s _    false
 SELECT str1, str1 LIKE '%\\\\' FROM like_test;
 [unknown result because it is related to issue#5078]
 DELETE FROM like_test;
@@ -194,6 +190,8 @@ INSERT INTO like_test VALUES('ABCD\\123');
 INSERT INTO like_test VALUES(' ');
 SELECT * FROM like_test WHERE str1 LIKE '%D\\%';
 str1
+123ABCD\
+ABCD\123
 SELECT * FROM like_test WHERE str1 LIKE '% ';
 str1
  
@@ -215,7 +213,7 @@ INSERT INTO like_test(str1, str2) VALUES(' ', '');
 INSERT INTO like_test(str1, str2) VALUES('', NULL);
 INSERT INTO like_test(str1, str2) VALUES('法的萨菲厄张三三三三三', '考虑理论可看见年年年年年年');
 SELECT NULL LIKE 'ABC', 'ABC' LIKE NULL;
-NULL LIKE 'ABC'    'ABC' LIKE NULL
+null like ABC    ABC like null
 null    null
 SELECT * FROM like_test WHERE str1 LIKE 'C%';
 str1    str2
@@ -226,9 +224,6 @@ DHINA IS OUR HOMELAN     THIS MAN PUSH HIM
      
 SELECT * FROM like_test WHERE str1 LIKE '%s%';
 str1    str2
-CHINA IS OUR HOMELAND    BEIJING IS THE CAPITAL
-DHINA IS OUR HOMELAN     THIS MAN PUSH HIM
- HINA IS OUR HOMELAND%    HE LIKE WHORE
 SELECT * FROM like_test WHERE str1 LIKE '%C%' AND str1 LIKE '%D%';
 str1    str2
 CHINA IS OUR HOMELAND    BEIJING IS THE CAPITAL
