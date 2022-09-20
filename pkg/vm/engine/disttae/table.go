@@ -39,15 +39,31 @@ func (tbl *table) Ranges(ctx context.Context) ([][]byte, error) {
 }
 
 func (tbl *table) TableDefs(ctx context.Context) ([]engine.TableDef, error) {
-	return nil, nil
+	return tbl.defs, nil
 }
 
 func (tbl *table) GetPrimaryKeys(ctx context.Context) ([]*engine.Attribute, error) {
-	return nil, nil
+	attrs := make([]*engine.Attribute, 0, 1)
+	for _, def := range tbl.defs {
+		if attr, ok := def.(*engine.AttributeDef); ok {
+			if attr.Attr.Primary {
+				attrs = append(attrs, &attr.Attr)
+			}
+		}
+	}
+	return attrs, nil
 }
 
 func (tbl *table) GetHideKeys(ctx context.Context) ([]*engine.Attribute, error) {
-	return nil, nil
+	attrs := make([]*engine.Attribute, 0, 1)
+	for _, def := range tbl.defs {
+		if attr, ok := def.(*engine.AttributeDef); ok {
+			if attr.Attr.IsHidden {
+				attrs = append(attrs, &attr.Attr)
+			}
+		}
+	}
+	return attrs, nil
 }
 
 func (tbl *table) Write(ctx context.Context, bat *batch.Batch) error {

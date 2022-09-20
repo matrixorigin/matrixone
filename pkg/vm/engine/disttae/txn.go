@@ -22,11 +22,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
 func (txn *Transaction) getTableList(ctx context.Context, databaseId uint64) ([]string, error) {
 	rows, err := txn.getRows(ctx, catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID, txn.dnStores[:1],
-		[]string{catalog.MoTablesSchema[catalog.MO_TABLES_REL_NAME_IDX]})
+		[]string{catalog.MoTablesSchema[catalog.MO_TABLES_REL_NAME_IDX]}, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -35,6 +36,30 @@ func (txn *Transaction) getTableList(ctx context.Context, databaseId uint64) ([]
 		tableList[i] = rows[i][0].(string)
 	}
 	return tableList, nil
+}
+
+func (txn *Transaction) getTableInfo(ctx context.Context, databaseId uint64,
+	name string) (uint64, []engine.TableDef, error) {
+	row, err := txn.getRow(ctx, catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID,
+		txn.dnStores[:1], catalog.MoTablesSchema,
+		genTableIdExpr(databaseId, name))
+	if err != nil {
+		return 0, nil, err
+	}
+	id := row[0].(uint64)
+	rows, err := txn.getRows(ctx, catalog.MO_CATALOG_ID, catalog.MO_COLUMNS_ID,
+		txn.dnStores[:1], catalog.MoColumnsSchema,
+		genColumnInfoExpr(databaseId, id))
+	if err != nil {
+		return 0, nil, err
+	}
+	cols := getColumnsFromRows(rows)
+	defs := make([]engine.TableDef, 0, len(cols))
+	defs = append(defs, genTableDefOfComment(string(row[6].([]byte))))
+	for _, col := range cols {
+		defs = append(defs, genTableDefOfColumn(col))
+	}
+	return id, defs, nil
 }
 
 func (txn *Transaction) getTableId(ctx context.Context, databaseId uint64,
@@ -50,7 +75,7 @@ func (txn *Transaction) getTableId(ctx context.Context, databaseId uint64,
 
 func (txn *Transaction) getDatabaseList(ctx context.Context) ([]string, error) {
 	rows, err := txn.getRows(ctx, catalog.MO_CATALOG_ID, catalog.MO_DATABASE_ID,
-		txn.dnStores[:1], []string{catalog.MoDatabaseSchema[catalog.MO_DATABASE_DAT_NAME_IDX]})
+		txn.dnStores[:1], []string{catalog.MoDatabaseSchema[catalog.MO_DATABASE_DAT_NAME_IDX]}, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -142,8 +167,8 @@ func (txn *Transaction) getRow(ctx context.Context, databaseId uint64, tableId u
 
 // getRows used to get rows of table
 func (txn *Transaction) getRows(ctx context.Context, databaseId uint64, tableId uint64,
-	dnList []DNStore, columns []string) ([][]any, error) {
-	bats, err := txn.readTable(ctx, databaseId, tableId, dnList, columns, nil)
+	dnList []DNStore, columns []string, expr *plan.Expr) ([][]any, error) {
+	bats, err := txn.readTable(ctx, databaseId, tableId, dnList, columns, expr)
 	if err != nil {
 		return nil, err
 	}

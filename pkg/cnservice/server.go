@@ -196,9 +196,6 @@ func (s *service) createMOServer(inputCtx context.Context, pu *config.ParameterU
 	moServerCtx := context.WithValue(inputCtx, config.ParameterUnitKey, pu)
 	s.mo = frontend.NewMOServer(moServerCtx, address, pu)
 
-	{ // debug
-		return
-	}
 	ieFactory := func() ie.InternalExecutor {
 		return frontend.NewInternalExecutor(pu)
 	}

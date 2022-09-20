@@ -28,14 +28,15 @@ func (db *database) Relations(ctx context.Context) ([]string, error) {
 }
 
 func (db *database) Relation(ctx context.Context, name string) (engine.Relation, error) {
-	id, err := db.txn.getTableId(ctx, db.databaseId, name)
+	id, defs, err := db.txn.getTableInfo(ctx, db.databaseId, name)
 	if err != nil {
 		return nil, err
 	}
 	return &table{
+		db:        db,
 		tableId:   id,
 		tableName: name,
-		db:        db,
+		defs:      defs,
 	}, nil
 }
 

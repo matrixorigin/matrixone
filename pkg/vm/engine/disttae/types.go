@@ -157,6 +157,7 @@ type table struct {
 	tableId   uint64
 	tableName string
 	db        *database
+	defs      []engine.TableDef
 }
 
 type column struct {

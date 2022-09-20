@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/compress"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -234,19 +235,27 @@ func genDropTableTuple(id uint64, m *mheap.Mheap) (*batch.Batch, error) {
 	return bat, nil
 }
 
+/*
 func genDropColumnsTuple(name string) *batch.Batch {
 	return &batch.Batch{}
 }
+*/
 
-// genDatabaseIdExpr generate an expression to find database id
+// genDatabaseIdExpr generate an expression to find database info
 // by database name
 func genDatabaseIdExpr(name string) *plan.Expr {
 	return nil
 }
 
-// genTableIdExpr generate an expression to find table id
+// genTableIdExpr generate an expression to find table info
 // by database id and table name
 func genTableIdExpr(databaseId uint64, name string) *plan.Expr {
+	return nil
+}
+
+// genColumnInfoExpr generate an expression to find column info list
+// by database id and table id
+func genColumnInfoExpr(databaseId, tableId uint64) *plan.Expr {
 	return nil
 }
 
@@ -450,6 +459,48 @@ func getTableComment(defs []engine.TableDef) string {
 		}
 	}
 	return ""
+}
+
+func genTableDefOfComment(comment string) engine.TableDef {
+	return &engine.CommentDef{
+		Comment: comment,
+	}
+}
+
+func getColumnsFromRows(rows [][]any) []column {
+	cols := make([]column, len(rows))
+	for i, row := range rows {
+		cols[i].name = string(row[6].([]byte))
+		cols[i].comment = string(row[17].([]byte))
+		cols[i].isHidden = row[18].(int8)
+		cols[i].isAutoIncrement = row[16].(int8)
+		cols[i].constraintType = string(row[14].([]byte))
+		cols[i].typ = row[7].([]byte)
+	}
+	return cols
+}
+
+func genTableDefOfColumn(col column) engine.TableDef {
+	var attr engine.Attribute
+
+	attr.Name = col.name
+	attr.Alg = compress.Lz4
+	attr.Comment = col.comment
+	attr.IsHidden = col.isHidden == 1
+	attr.AutoIncrement = col.isAutoIncrement == 1
+	if err := types.Decode(col.typ, &attr.Type); err != nil {
+		panic(err)
+	}
+	if col.hasDef == 1 {
+		attr.Default = new(plan.Default)
+		if err := types.Decode(col.defaultExpr, attr.Default); err != nil {
+			panic(err)
+		}
+	}
+	if col.constraintType == "p" {
+		attr.Primary = true
+	}
+	return &engine.AttributeDef{Attr: attr}
 }
 
 func genColumns(tableName, databaseName string, databaseId uint64,
