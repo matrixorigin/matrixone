@@ -43,8 +43,9 @@ type DNStore = logservice.DNStore
 // tae's block metadata, which is currently just an empty one,
 // does not serve any purpose When tae submits a concrete structure,
 // it will replace this structure with tae's code
-type BlockMeta struct {
-}
+// type BlockMeta struct {
+
+// }
 
 // Cache is a multi-version cache for maintaining some table data.
 // The cache is concurrently secure,  with multiple transactions accessing

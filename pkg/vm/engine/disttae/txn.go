@@ -19,7 +19,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 )
 
 func (txn *Transaction) getTableList(ctx context.Context, databaseId uint64) ([]string, error) {
@@ -188,8 +188,35 @@ func (txn *Transaction) readTable(ctx context.Context, databaseId uint64, tableI
 
 // needRead determine if a block needs to be read
 func needRead(expr *plan.Expr, blkInfo BlockMeta) bool {
-	//TODO
-	return false
+	// 1. check expr ismonotonically
+	isMonotonically := checkExprIsMonotonical(expr)
+	if !isMonotonically {
+		return true
+	}
+
+	bat := batch.NewWithSize(0)
+	bat.Zs = []int64{1}
+	var err error
+
+	// 3. eval expr with min, if true return true
+	tmpExpr := plan.DeepCopyExpr(expr)
+	tmpExpr = replaceColumnWithZonemap(tmpExpr, blkInfo, MinOrMax_Min)
+	exprReturn, err := evalFilterExpr(tmpExpr, bat)
+	if err != nil {
+		return true
+	}
+	if exprReturn {
+		return true
+	}
+
+	// 4. eval expr with max, if true return true else false
+	tmpExpr = plan.DeepCopyExpr(expr)
+	tmpExpr = replaceColumnWithZonemap(tmpExpr, blkInfo, MinOrMax_Max)
+	exprReturn, err = evalFilterExpr(tmpExpr, bat)
+	if err != nil {
+		return true
+	}
+	return exprReturn
 }
 
 // write a block to s3
