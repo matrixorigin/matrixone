@@ -84,7 +84,7 @@ type Global struct {
 }
 
 type Statistics struct {
-	Memory     []StatisticValue `json:"Memeory"`
+	Memory     []StatisticValue `json:"Memory"`
 	Throughput []StatisticValue `json:"Throughput"`
 	IO         []StatisticValue `json:"IO"`
 	Network    []StatisticValue `json:"Network"`
