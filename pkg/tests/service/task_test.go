@@ -16,14 +16,15 @@ package service
 
 import (
 	"context"
+	"testing"
+	"time"
+
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/stretchr/testify/require"
-	"testing"
-	"time"
 )
 
-func TestTaskScheduler(t *testing.T) {
+func TestTaskSchedulerCanAllocateTask(t *testing.T) {
 	taskService := taskservice.NewTaskService(taskservice.NewMemTaskStorage())
 
 	dnSvcNum := 1
@@ -40,12 +41,11 @@ func TestTaskScheduler(t *testing.T) {
 	err = c.Start()
 	require.NoError(t, err)
 
-	err = c.StartCnServiceIndexed(0)
+	err = taskService.Create(context.TODO(), task.TaskMetadata{ID: "a"})
 	require.NoError(t, err)
 
-	taskService.Create(context.TODO(), task.TaskMetadata{ID: "a"})
-
 	for i := 0; i < 100; i++ {
+		t.Logf("iteration: %d", i)
 		tasks, err := taskService.QueryTask(context.TODO(),
 			taskservice.WithTaskStatusCond(taskservice.EQ, task.TaskStatus_Running))
 		require.NoError(t, err)
@@ -54,7 +54,7 @@ func TestTaskScheduler(t *testing.T) {
 			t.Logf("task %d allocated on %s", tasks[0].ID, tasks[0].TaskRunner)
 			return
 		}
-		time.Sleep(50 * time.Millisecond)
+		time.Sleep(100 * time.Millisecond)
 	}
 	t.Fatalf("task not allocated")
 }

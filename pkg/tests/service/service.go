@@ -78,15 +78,15 @@ type ClusterOperation interface {
 	// StartLogServiceIndexed starts log service by its index.
 	StartLogServiceIndexed(index int) error
 
-	// CloseCnService closes log service by uuid.
-	CloseCnService(uuid string) error
-	// StartCnService starts log service by uuid.
-	StartCnService(uuid string) error
+	// CloseCNService closes cn service by uuid.
+	CloseCNService(uuid string) error
+	// StartCNService starts cn service by uuid.
+	StartCNService(uuid string) error
 
-	// CloseCnServiceIndexed closes log service by its index.
-	CloseCnServiceIndexed(index int) error
-	// StartCnServiceIndexed starts log service by its index.
-	StartCnServiceIndexed(index int) error
+	// CloseCNServiceIndexed closes cn service by its index.
+	CloseCNServiceIndexed(index int) error
+	// StartCNServiceIndexed starts cn service by its index.
+	StartCNServiceIndexed(index int) error
 
 	// NewNetworkPartition constructs network partition from service index.
 	NewNetworkPartition(dnIndexes, logIndexes, cnIndexes []uint32) NetworkPartition
@@ -307,6 +307,7 @@ func (c *testCluster) Start() error {
 		return err
 	}
 
+	time.Sleep(10 * time.Second)
 	if err := c.startCNServices(); err != nil {
 		return err
 	}
@@ -1029,7 +1030,7 @@ func (c *testCluster) StartLogServiceIndexed(index int) error {
 	return ls.Start()
 }
 
-func (c *testCluster) CloseCnService(uuid string) error {
+func (c *testCluster) CloseCNService(uuid string) error {
 	cs, err := c.GetCNService(uuid)
 	if err != nil {
 		return err
@@ -1037,7 +1038,7 @@ func (c *testCluster) CloseCnService(uuid string) error {
 	return cs.Close()
 }
 
-func (c *testCluster) StartCnService(uuid string) error {
+func (c *testCluster) StartCNService(uuid string) error {
 	cs, err := c.GetCNService(uuid)
 	if err != nil {
 		return err
@@ -1045,7 +1046,7 @@ func (c *testCluster) StartCnService(uuid string) error {
 	return cs.Start()
 }
 
-func (c *testCluster) CloseCnServiceIndexed(index int) error {
+func (c *testCluster) CloseCNServiceIndexed(index int) error {
 	cs, err := c.GetCNServiceIndexed(index)
 	if err != nil {
 		return err
@@ -1053,7 +1054,7 @@ func (c *testCluster) CloseCnServiceIndexed(index int) error {
 	return cs.Close()
 }
 
-func (c *testCluster) StartCnServiceIndexed(index int) error {
+func (c *testCluster) StartCNServiceIndexed(index int) error {
 	cs, err := c.GetCNServiceIndexed(index)
 	if err != nil {
 		return err
@@ -1208,7 +1209,7 @@ func (c *testCluster) initLogServices() []LogService {
 	for i := 0; i < batch; i++ {
 		cfg := c.log.cfgs[i]
 		opt := c.log.opts[i]
-		ls, err := newLogService(cfg, testutil.NewFS(), testutil.NewTaskService(), opt)
+		ls, err := newLogService(cfg, testutil.NewFS(), c.log.taskService, opt)
 		require.NoError(c.t, err)
 
 		c.logger.Info(
