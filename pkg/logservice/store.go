@@ -37,6 +37,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/hakeeper/task"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	"github.com/matrixorigin/matrixone/pkg/taskservice"
 )
 
 var (
@@ -142,7 +143,7 @@ type store struct {
 	}
 }
 
-func newLogStore(cfg Config) (*store, error) {
+func newLogStore(cfg Config, taskService taskservice.TaskService) (*store, error) {
 	nh, err := dragonboat.NewNodeHost(getNodeHostConfig(cfg))
 	if err != nil {
 		return nil, err
@@ -154,7 +155,7 @@ func newLogStore(cfg Config) (*store, error) {
 		cfg:           cfg,
 		nh:            nh,
 		checker:       checkers.NewCoordinator(hakeeperConfig),
-		taskScheduler: task.NewTaskScheduler(cfg.TaskService, hakeeperConfig),
+		taskScheduler: task.NewTaskScheduler(taskService, hakeeperConfig),
 		alloc:         newIDAllocator(),
 		stopper:       stopper.NewStopper("log-store"),
 		tickerStopper: stopper.NewStopper("hakeeper-ticker"),

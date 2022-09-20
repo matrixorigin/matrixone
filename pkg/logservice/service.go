@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
+	"github.com/matrixorigin/matrixone/pkg/taskservice"
 )
 
 var (
@@ -82,13 +83,14 @@ type Service struct {
 func NewService(
 	cfg Config,
 	fileService fileservice.FileService,
+	taskService taskservice.TaskService,
 	opts ...Option,
 ) (*Service, error) {
 	cfg.Fill()
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
-	store, err := newLogStore(cfg)
+	store, err := newLogStore(cfg, taskService)
 	if err != nil {
 		plog.Errorf("failed to create log store %v", err)
 		return nil, err

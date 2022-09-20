@@ -717,7 +717,16 @@ func (th *TxnHandler) NewTxn() error {
 	if err != nil {
 		return err
 	}
-	return nil
+	ctx := th.ses.GetRequestContext()
+	if ctx == nil {
+		panic("context should not be nil")
+	}
+	ctx, cancel := context.WithTimeout(
+		ctx,
+		th.storage.Hints().CommitOrRollbackTimeout,
+	)
+	defer cancel()
+	return th.storage.New(ctx, th.txn)
 }
 
 // IsValidTxn checks the transaction is true or not.
@@ -742,6 +751,9 @@ func (th *TxnHandler) CommitTxn() error {
 		th.storage.Hints().CommitOrRollbackTimeout,
 	)
 	defer cancel()
+	if err := th.storage.Commit(ctx, th.txn); err != nil {
+		return err
+	}
 	err := th.txn.Commit(ctx)
 	th.SetInvalid()
 	return err
@@ -760,6 +772,9 @@ func (th *TxnHandler) RollbackTxn() error {
 		th.storage.Hints().CommitOrRollbackTimeout,
 	)
 	defer cancel()
+	if err := th.storage.Rollback(ctx, th.txn); err != nil {
+		return err
+	}
 	err := th.txn.Rollback(ctx)
 	th.SetInvalid()
 	return err
