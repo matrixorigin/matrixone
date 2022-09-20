@@ -46,9 +46,6 @@ type GraphData struct {
 type Stats struct {
 }
 
-type AutoMaterializationStats struct {
-}
-
 type Node struct {
 	NodeId     string     `json:"id"`
 	Name       string     `json:"name"`
