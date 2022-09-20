@@ -20,6 +20,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"go.uber.org/zap"
@@ -216,7 +217,7 @@ func (c *client) getBackend(backend string) (Backend, error) {
 
 func (c *client) getBackendLocked(backend string) (Backend, error) {
 	if c.mu.closed {
-		return nil, errClientClosed
+		return nil, moerr.NewClientClosed()
 	}
 
 	if backends, ok := c.mu.backends[backend]; ok {
@@ -234,7 +235,7 @@ func (c *client) getBackendLocked(backend string) (Backend, error) {
 		// all backend inactived, trigger gc inactive.
 		if b == nil && n > 0 {
 			c.triggerGCInactive(backend)
-			return nil, errNoAvailableBackend
+			return nil, moerr.NewNoAvailableBackend()
 		}
 
 		c.maybeCreateLocked(backend)
@@ -385,7 +386,7 @@ func (c *client) createBackend(backend string) (Backend, error) {
 
 func (c *client) createBackendLocked(backend string) (Backend, error) {
 	if !c.canCreateLocked(backend) {
-		return nil, errNoAvailableBackend
+		return nil, moerr.NewNoAvailableBackend()
 	}
 
 	b, err := c.doCreate(backend)

@@ -16,15 +16,16 @@ package tables
 
 import (
 	"bytes"
+	"sync/atomic"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/file"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
-	"sync/atomic"
 )
 
 type appendableNode struct {
@@ -119,7 +120,7 @@ func (node *appendableNode) PrepareAppend(rows uint32) (n uint32, err error) {
 	}
 	left := node.block.meta.GetSchema().BlockMaxRows - node.rows
 	if left == 0 {
-		err = data.ErrNotAppendable
+		err = moerr.NewInternalError("not appendable")
 		return
 	}
 	if rows > left {

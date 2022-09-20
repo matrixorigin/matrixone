@@ -15,9 +15,9 @@
 package unary
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/sql/errors"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/operator"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/momath"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -97,7 +97,7 @@ func Log(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	vals := vs[0].Col.([]float64)
 	for i := range vals {
 		if vals[i] == float64(1) {
-			return nil, errors.New("", "Logarithm function base cannot be 1")
+			return nil, moerr.NewInvalidArg("log base", 1)
 		}
 	}
 	v1, err := math1([]*vector.Vector{vs[0]}, proc, momath.Ln)

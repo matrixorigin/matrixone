@@ -15,9 +15,8 @@
 package plan
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/errno"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/errors"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
@@ -38,13 +37,13 @@ func (p *PartitionBinder) BindColRef(name *tree.UnresolvedName, i int32, b bool)
 }
 
 func (p *PartitionBinder) BindAggFunc(s string, expr *tree.FuncExpr, i int32, b bool) (*plan.Expr, error) {
-	return nil, errors.New(errno.GroupingError, "aggregate functions not allowed here")
+	return nil, moerr.NewSyntaxError("aggregate functions not allowed in partition clause")
 }
 
 func (p *PartitionBinder) BindWinFunc(s string, expr *tree.FuncExpr, i int32, b bool) (*plan.Expr, error) {
-	return nil, errors.New(errno.WindowingError, "window functions not allowed here")
+	return nil, moerr.NewSyntaxError("window functions not allowed in partition clause")
 }
 
 func (p *PartitionBinder) BindSubquery(subquery *tree.Subquery, b bool) (*plan.Expr, error) {
-	return nil, errors.New(errno.InvalidColumnReference, "subquery not allowed here")
+	return nil, moerr.NewSyntaxError("subquery not allowed in partition clause")
 }

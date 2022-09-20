@@ -15,9 +15,8 @@
 package plan
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/errno"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/errors"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
@@ -39,13 +38,13 @@ func (b *DefaultBinder) BindColRef(astExpr *tree.UnresolvedName, depth int32, is
 }
 
 func (b *DefaultBinder) BindAggFunc(funcName string, astExpr *tree.FuncExpr, depth int32, isRoot bool) (*plan.Expr, error) {
-	return nil, errors.New(errno.GroupingError, "aggregate functions not allowed here")
+	return nil, moerr.NewInvalidInput("cannot bind agregate functions '%s'", funcName)
 }
 
 func (b *DefaultBinder) BindWinFunc(funcName string, astExpr *tree.FuncExpr, depth int32, isRoot bool) (*plan.Expr, error) {
-	return nil, errors.New(errno.WindowingError, "window functions not allowed here")
+	return nil, moerr.NewInvalidInput("cannot bind window functions '%s'", funcName)
 }
 
 func (b *DefaultBinder) BindSubquery(astExpr *tree.Subquery, isRoot bool) (*plan.Expr, error) {
-	return nil, errors.New(errno.WindowingError, "subquery in JOIN condition not yet supported")
+	return nil, moerr.NewNYI("subquery in JOIN condition")
 }
