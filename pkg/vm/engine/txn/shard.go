@@ -15,20 +15,58 @@
 package txnengine
 
 import (
+	"context"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 )
 
 type Shard = metadata.DNShard
 
+type getDefsFunc = func(context.Context) ([]engine.TableDef, error)
+
+func NewDefaultShardPolicy(heap *mheap.Mheap) ShardPolicy {
+	return FallbackShard{
+		NewHashShard(heap),
+		new(NoShard),
+	}
+}
+
 type ShardPolicy interface {
-	Vector(vec *vector.Vector, nodes []logservicepb.DNStore) ([]*ShardedVector, error)
-	Batch(batch *batch.Batch, nodes []logservicepb.DNStore) ([]*ShardedBatch, error)
-	Stores(stores []logservicepb.DNStore) ([]Shard, error)
+	Vector(
+		ctx context.Context,
+		tableID string,
+		getDefs getDefsFunc,
+		colName string,
+		vec *vector.Vector,
+		nodes []logservicepb.DNStore,
+	) (
+		sharded []*ShardedVector,
+		err error,
+	)
+
+	Batch(
+		ctx context.Context,
+		tableID string,
+		getDefs getDefsFunc,
+		batch *batch.Batch,
+		nodes []logservicepb.DNStore,
+	) (
+		sharded []*ShardedBatch,
+		err error,
+	)
+
+	Stores(
+		stores []logservicepb.DNStore,
+	) (
+		shards []Shard,
+		err error,
+	)
 }
 
 type ShardedVector struct {
@@ -70,12 +108,13 @@ func theseShards(shards []Shard) func() ([]Shard, error) {
 	}
 }
 
-type ShardToSingleStatic struct {
+// NoShard doesn't do sharding at all
+type NoShard struct {
 	setOnce sync.Once
 	shard   Shard
 }
 
-func (s *ShardToSingleStatic) setShard(nodes []logservicepb.DNStore) {
+func (s *NoShard) setShard(nodes []logservicepb.DNStore) {
 	s.setOnce.Do(func() {
 		node := nodes[0]
 		info := node.Shards[0]
@@ -89,9 +128,13 @@ func (s *ShardToSingleStatic) setShard(nodes []logservicepb.DNStore) {
 	})
 }
 
-var _ ShardPolicy = new(ShardToSingleStatic)
+var _ ShardPolicy = new(NoShard)
 
-func (s *ShardToSingleStatic) Vector(
+func (s *NoShard) Vector(
+	ctx context.Context,
+	tableID string,
+	getDefs getDefsFunc,
+	colName string,
 	vec *vector.Vector,
 	nodes []logservicepb.DNStore,
 ) (
@@ -106,7 +149,10 @@ func (s *ShardToSingleStatic) Vector(
 	return
 }
 
-func (s *ShardToSingleStatic) Batch(
+func (s *NoShard) Batch(
+	ctx context.Context,
+	tableID string,
+	getDefs getDefsFunc,
 	bat *batch.Batch,
 	nodes []logservicepb.DNStore,
 ) (
@@ -121,7 +167,7 @@ func (s *ShardToSingleStatic) Batch(
 	return
 }
 
-func (s *ShardToSingleStatic) Stores(stores []logservicepb.DNStore) (shards []Shard, err error) {
+func (s *NoShard) Stores(stores []logservicepb.DNStore) (shards []Shard, err error) {
 	for _, store := range stores {
 		info := store.Shards[0]
 		shards = append(shards, Shard{
