@@ -8,7 +8,7 @@ MatrixOne supports Linux and MacOS. You can install a standalone MatrixOne versi
 
 Recommended hardware specification: x86 CPU with 4 cores and 32GB memory, with CentOS 7+ OS.
 
-For more information on the required operating system versions for deploying MatrixOne, see [Operating system requirements](../FAQs/deployment-faqs.md)。
+For more information on the required operating system versions for deploying MatrixOne, see [Hardware and Operating system requirements](../FAQs/deployment-faqs.md)。
 
 ## <h2><a name="code_source">Method 1: Building from source</a></h2>
 
