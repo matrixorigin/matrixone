@@ -21,6 +21,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -585,7 +586,7 @@ func (catalog *Catalog) GetDatabaseByID(id uint64) (db *DBEntry, err error) {
 	defer catalog.RUnlock()
 	node := catalog.entries[id]
 	if node == nil {
-		err = ErrNotFound
+		err = moerr.NewNotFound()
 		return
 	}
 	db = node.GetPayload()
@@ -656,14 +657,14 @@ func (catalog *Catalog) PPString(level common.PPLevel, depth int, prefix string)
 func (catalog *Catalog) RemoveEntry(database *DBEntry) error {
 	if database.IsSystemDB() {
 		logutil.Warnf("system db cannot be removed")
-		return ErrNotPermitted
+		return moerr.NewTAEError("not permitted")
 	}
 	logutil.Info("[Catalog]", common.OperationField("remove"),
 		common.OperandField(database.String()))
 	catalog.Lock()
 	defer catalog.Unlock()
 	if n, ok := catalog.entries[database.GetID()]; !ok {
-		return ErrNotFound
+		return moerr.NewNotFound()
 	} else {
 		nn := catalog.nameNodes[database.GetFullName()]
 		nn.DeleteNode(database.GetID())
@@ -682,7 +683,7 @@ func (catalog *Catalog) txnGetNodeByNameLocked(name string, txnCtx txnif.AsyncTx
 	fullName := genDBFullName(txnCtx.GetTenantID(), name)
 	node := catalog.nameNodes[fullName]
 	if node == nil {
-		return nil, ErrNotFound
+		return nil, moerr.NewNotFound()
 	}
 	return node.TxnGetNodeLocked(txnCtx)
 }
@@ -697,7 +698,7 @@ func (catalog *Catalog) GetDBEntry(name string, txnCtx txnif.AsyncTxn) (*DBEntry
 
 func (catalog *Catalog) DropDBEntry(name string, txnCtx txnif.AsyncTxn) (newEntry bool, deleted *DBEntry, err error) {
 	if name == SystemDBName {
-		err = ErrNotPermitted
+		err = moerr.NewTAEError("not permitted")
 		return
 	}
 	dn, err := catalog.txnGetNodeByNameLocked(name, txnCtx)
@@ -735,7 +736,9 @@ func (catalog *Catalog) RecurLoop(processor Processor) (err error) {
 	for dbIt.Valid() {
 		dbEntry := dbIt.Get().GetPayload()
 		if err = processor.OnDatabase(dbEntry); err != nil {
-			if err == ErrStopCurrRecur {
+			// XXX: Performance problem.   Error should not be used
+			// to handle normal return code.
+			if moerr.IsMoErrCode(err, moerr.OkStopCurrRecur) {
 				err = nil
 				dbIt.Next()
 				continue
@@ -747,7 +750,7 @@ func (catalog *Catalog) RecurLoop(processor Processor) (err error) {
 		}
 		dbIt.Next()
 	}
-	if err == ErrStopCurrRecur {
+	if moerr.IsMoErrCode(err, moerr.OkStopCurrRecur) {
 		err = nil
 	}
 	return err
@@ -766,7 +769,7 @@ func (catalog *Catalog) PrepareCheckpoint(startTs, endTs types.TS) *CheckpointEn
 	}
 	processor.TableFn = func(table *TableEntry) (err error) {
 		if table.IsVirtual() {
-			err = ErrStopCurrRecur
+			err = moerr.GetOkStopCurrRecur()
 			return
 		}
 		CheckpointOp(ckpEntry, table, startTs, endTs)
@@ -806,7 +809,7 @@ func (catalog *Catalog) NeedCheckpoint(maxTS types.TS) (needCheckpoint bool, min
 	if len(catalog.checkpoints) != 0 {
 		lastMax := catalog.checkpoints[len(catalog.checkpoints)-1].MaxTS
 		if maxTS.Less(lastMax) {
-			err = ErrCheckpoint
+			err = moerr.NewTAEError("checkpint error maxTS less than lastMax")
 			return
 		}
 		if maxTS.Equal(lastMax) {

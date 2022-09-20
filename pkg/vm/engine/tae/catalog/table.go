@@ -20,6 +20,7 @@ import (
 	"io"
 	"sync/atomic"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -144,7 +145,7 @@ func (entry *TableEntry) GetSegmentByID(id uint64) (seg *SegmentEntry, err error
 	defer entry.RUnlock()
 	node := entry.entries[id]
 	if node == nil {
-		return nil, ErrNotFound
+		return nil, moerr.NewNotFound()
 	}
 	return node.GetPayload(), nil
 }
@@ -177,7 +178,7 @@ func (entry *TableEntry) AddEntryLocked(segment *SegmentEntry) {
 
 func (entry *TableEntry) deleteEntryLocked(segment *SegmentEntry) error {
 	if n, ok := entry.entries[segment.GetID()]; !ok {
-		return ErrNotFound
+		return moerr.NewNotFound()
 	} else {
 		entry.link.Delete(n)
 		delete(entry.entries, segment.GetID())
@@ -234,7 +235,10 @@ func (entry *TableEntry) LastAppendableSegmemt() (seg *SegmentEntry) {
 	it := entry.MakeSegmentIt(false)
 	for it.Valid() {
 		itSeg := it.Get().GetPayload()
-		if itSeg.IsAppendable() {
+		itSeg.RLock()
+		dropped := itSeg.HasDropped()
+		itSeg.RUnlock()
+		if itSeg.IsAppendable() && !dropped {
 			seg = itSeg
 			break
 		}
@@ -254,7 +258,7 @@ func (entry *TableEntry) RecurLoop(processor Processor) (err error) {
 	for segIt.Valid() {
 		segment := segIt.Get().GetPayload()
 		if err = processor.OnSegment(segment); err != nil {
-			if err == ErrStopCurrRecur {
+			if moerr.IsMoErrCode(err, moerr.OkStopCurrRecur) {
 				err = nil
 				segIt.Next()
 				continue
@@ -265,7 +269,7 @@ func (entry *TableEntry) RecurLoop(processor Processor) (err error) {
 		for blkIt.Valid() {
 			block := blkIt.Get().GetPayload()
 			if err = processor.OnBlock(block); err != nil {
-				if err == ErrStopCurrRecur {
+				if moerr.IsMoErrCode(err, moerr.OkStopCurrRecur) {
 					err = nil
 					blkIt.Next()
 					continue
@@ -279,7 +283,7 @@ func (entry *TableEntry) RecurLoop(processor Processor) (err error) {
 		}
 		segIt.Next()
 	}
-	if err == ErrStopCurrRecur {
+	if moerr.IsMoErrCode(err, moerr.OkStopCurrRecur) {
 		err = nil
 	}
 	return err

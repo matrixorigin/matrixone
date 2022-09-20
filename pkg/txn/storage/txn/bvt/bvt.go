@@ -23,6 +23,9 @@ import (
 	"math"
 	"net"
 	"net/http"
+	"os"
+	"os/signal"
+	"runtime/pprof"
 	"sync"
 	"time"
 
@@ -46,6 +49,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	txnengine "github.com/matrixorigin/matrixone/pkg/vm/engine/txn"
 	"github.com/matrixorigin/matrixone/pkg/vm/mempool"
+	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
 )
@@ -57,6 +61,24 @@ func init() {
 }
 
 func main() {
+
+	f, err := os.Create("cpu-profile")
+	check(err)
+	defer f.Close()
+	check(pprof.StartCPUProfile(f))
+	defer pprof.StopCPUProfile()
+
+	defer func() {
+		prof := pprof.Lookup("allocs")
+		if prof != nil {
+			f, err := os.Create("allocs-profile")
+			check(err)
+			defer f.Close()
+			err = prof.WriteTo(f, 0)
+			check(err)
+		}
+	}()
+
 	ctx, cancel := context.WithTimeout(
 		context.Background(),
 		time.Hour,
@@ -80,6 +102,11 @@ func main() {
 	}
 	frontendParameters.SetDefaultValues()
 
+	hostMMU := host.New(frontendParameters.HostMmuLimitation)
+	guestMMU := guest.New(frontendParameters.GuestMmuLimitation, hostMMU)
+	heap := mheap.New(guestMMU)
+	memoryPool := mempool.New()
+
 	shard := logservicepb.DNShardInfo{
 		ShardID:   2,
 		ReplicaID: 2,
@@ -94,7 +121,7 @@ func main() {
 	}
 	engine := txnengine.New(
 		ctx,
-		new(txnengine.ShardToSingleStatic),
+		txnengine.NewDefaultShardPolicy(heap),
 		func() (logservicepb.ClusterDetails, error) {
 			return logservicepb.ClusterDetails{
 				DNStores: []logservicepb.DNStore{
@@ -117,10 +144,6 @@ func main() {
 		clock,
 		storage,
 	)
-
-	hostMMU := host.New(frontendParameters.HostMmuLimitation)
-	guestMMU := guest.New(frontendParameters.GuestMmuLimitation, hostMMU)
-	memoryPool := mempool.New()
 
 	fs := testutil.NewFS()
 	pu := &config.ParameterUnit{
@@ -224,8 +247,13 @@ func main() {
 	err = rpcServer.Start()
 	check(err)
 
+	ctx, cancel = signal.NotifyContext(ctx, os.Interrupt)
+	defer cancel()
+
 	pt("OK\n")
-	select {}
+	<-ctx.Done()
+	pt(" Exit\n")
+
 }
 
 func check(err error) {

@@ -203,6 +203,7 @@ import (
 %left <str> AND
 %right <str> NOT '!'
 %left <str> BETWEEN CASE WHEN THEN ELSE END
+%nonassoc LOWER_THAN_EQ
 %left <str> '=' '<' '>' LE GE NE NULL_SAFE_EQUAL IS LIKE REGEXP IN ASSIGNMENT
 %left <str> '|'
 %left <str> '&'
@@ -5914,16 +5915,6 @@ expression:
 	{
         $$ = tree.NewComparisonExpr(tree.NOT_EQUAL, $1, $4)
     }
-|   boolean_primary IS UNKNOWN %prec IS
-	{
-		arg := tree.NewNumValWithType(constant.MakeString($3), "", false, tree.P_char)
-        $$ = tree.NewComparisonExpr(tree.EQUAL, $1, arg)
-    }
-|   boolean_primary IS NOT UNKNOWN %prec IS
-	{
-		arg := tree.NewNumValWithType(constant.MakeString($3), "", false, tree.P_char)
-        $$ = tree.NewComparisonExpr(tree.NOT_EQUAL, $1, arg)
-    }
 |   boolean_primary
     {
         $$ = $1
@@ -5937,6 +5928,14 @@ boolean_primary:
 |   boolean_primary IS NOT NULL %prec IS
     {
         $$ = tree.NewIsNotNullExpr($1)
+    }
+|    boolean_primary IS UNKNOWN %prec IS
+    {
+        $$ = tree.NewIsUnknownExpr($1)
+    }
+|   boolean_primary IS NOT UNKNOWN %prec IS
+    {
+        $$ = tree.NewIsNotUnknownExpr($1)
     }
 |   boolean_primary comparison_operator predicate %prec '='
     {
@@ -7042,7 +7041,6 @@ reserved_keyword:
 |   WHERE
 |   WEEK
 |   WITH
-|   PASSWORD
 |   TERMINATED
 |   OPTIONALLY
 |   ENCLOSED
@@ -7251,6 +7249,7 @@ non_reserved_keyword:
 |   TABLES
 |   EXTERNAL
 |   URL
+|   PASSWORD %prec LOWER_THAN_EQ
 
 func_not_keyword:
 	DATE_ADD

@@ -16,9 +16,9 @@ package txnengine
 
 import (
 	"context"
-	"fmt"
 	"strings"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
@@ -77,7 +77,7 @@ func (d *Database) Delete(ctx context.Context, relName string) error {
 func (d *Database) Relation(ctx context.Context, relName string) (engine.Relation, error) {
 
 	if relName == "" {
-		return nil, fmt.Errorf("empty relation name")
+		return nil, moerr.NewInvalidInput("no table name")
 	}
 
 	resps, err := DoTxnRequest[OpenRelationResp](
@@ -108,7 +108,7 @@ func (d *Database) Relation(ctx context.Context, relName string) (engine.Relatio
 		return table, nil
 
 	default:
-		panic(fmt.Errorf("unknown type: %+v", resp.Type))
+		panic(moerr.NewInternalError("unknown type: %+v", resp.Type))
 	}
 
 }

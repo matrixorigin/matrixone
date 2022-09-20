@@ -71,8 +71,7 @@ func Cot(arg, result *vector.Vector) error {
 	for i, v := range argCol {
 		if !nulls.Contains(arg.Nsp, (uint64)(i)) {
 			if v == 0 {
-				// panic or return error.   need refactor later.
-				panic(moerr.NewError(moerr.OUT_OF_RANGE, "cot(0) value out of range"))
+				panic(moerr.NewInvalidArg("cot", "cot(0)"))
 			} else {
 				resCol[i] = math.Tan(math.Pi/2.0 - v)
 			}
@@ -100,7 +99,7 @@ func Ln(arg, result *vector.Vector) error {
 	for i, v := range argCol {
 		if !nulls.Contains(arg.Nsp, (uint64)(i)) {
 			if v <= 0 {
-				return moerr.New(moerr.INVALID_ARGUMENT, "Natural Logarithm function input cannot be non positive")
+				return moerr.NewInvalidArg("ln", v)
 			} else {
 				resCol[i] = math.Log(v)
 			}

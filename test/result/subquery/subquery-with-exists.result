@@ -258,13 +258,13 @@ create table t2 (s1 int);
 insert into t1 values (1);
 insert into t2 values (1);
 select * from t1 where exists (select s1 from t2 group by s1 having max(t2.s1)=t1.s1);
-column "t1.s1" must appear in the GROUP BY clause or be used in an aggregate function
+SQL syntax error: column "t1.s1" must appear in the GROUP BY clause or be used in an aggregate function
 drop table if exists t1;
 drop table if exists t2;
 create table t1 (id int not null, text varchar(20) not null default '', primary key (id));
 insert into t1 (id, text) values (1, 'text1'), (2, 'text2'), (3, 'text3'), (4, 'text4'), (5, 'text5'), (6, 'text6'), (7, 'text7'), (8, 'text8'), (9, 'text9'), (10, 'text10'), (11, 'text11'), (12, 'text12');
 select * from t1 as tt where not exists (select id from t1 where id < 8 and (id = tt.id or id is null) having id is not null);
-column "t1.id" must appear in the GROUP BY clause or be used in an aggregate function
+SQL syntax error: column "t1.id" must appear in the GROUP BY clause or be used in an aggregate function
 drop table if exists t1;
 drop table if exists t2;
 drop table if exists t3;
@@ -298,7 +298,7 @@ a
 4
 SELECT a FROM t1 GROUP BY a
 HAVING EXISTS(SELECT c FROM t2 GROUP BY c HAVING SUM(a) = c);
-column "a" must appear in the GROUP BY clause or be used in an aggregate function
+SQL syntax error: column "a" must appear in the GROUP BY clause or be used in an aggregate function
 SELECT a FROM t1
 WHERE a < 3 AND
 EXISTS(SELECT c FROM t2 GROUP BY c HAVING SUM(a) != c) GROUP BY a;
@@ -345,13 +345,13 @@ id	st
 3	FL
 7	FL
 SELECT id, st FROM t1  WHERE st IN ('GA','FL') AND EXISTS(SELECT 1 FROM t2 WHERE t2.id=t1.id) GROUP BY id;
-column "t1.st" must appear in the GROUP BY clause or be used in an aggregate function
+SQL syntax error: column "t1.st" must appear in the GROUP BY clause or be used in an aggregate function
 SELECT id, st FROM t1 WHERE st IN ('GA','FL') AND NOT EXISTS(SELECT 1 FROM t2 WHERE t2.id=t1.id);
 id	st
 2	GA
 4	FL
 SELECT id, st FROM t1 WHERE st IN ('GA','FL') AND NOT EXISTS(SELECT 1 FROM t2 WHERE t2.id=t1.id) GROUP BY id;
-column "t1.st" must appear in the GROUP BY clause or be used in an aggregate function
+SQL syntax error: column "t1.st" must appear in the GROUP BY clause or be used in an aggregate function
 drop table if exists t1;
 drop table if exists t2;
 drop table if exists t3;
@@ -517,6 +517,6 @@ INSERT INTO t1 VALUES (1, 10), (3, 30), (2, 20);
 CREATE TABLE t2(pk INT PRIMARY KEY, a INT, b INT);
 INSERT INTO t2 VALUES (2, 20, 700), (1, 10, 200), (4, 10, 100);
 SELECT * FROM t1  WHERE EXISTS (SELECT DISTINCT a FROM t2 WHERE t1.a < t2.a ORDER BY b);
-for SELECT DISTINCT, ORDER BY expressions must appear in select list
+SQL syntax error: for SELECT DISTINCT, ORDER BY expressions must appear in select list
 drop table if exists t1;
 drop table if exists t2;
