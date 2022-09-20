@@ -15,6 +15,7 @@
 package disttae
 
 import (
+	"context"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -22,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -30,7 +32,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 )
 
-func genCreateDatabaseTuple(name string, m *mheap.Mheap) (*batch.Batch, error) {
+func genCreateDatabaseTuple(accountId, userId, roleId uint32, name string,
+	m *mheap.Mheap) (*batch.Batch, error) {
 	bat := batch.NewWithSize(len(catalog.MoDatabaseSchema))
 	bat.Attrs = append(bat.Attrs, catalog.MoDatabaseSchema...)
 	{
@@ -51,11 +54,11 @@ func genCreateDatabaseTuple(name string, m *mheap.Mheap) (*batch.Batch, error) {
 			return nil, err
 		}
 		bat.Vecs[4] = vector.New(catalog.MoDatabaseTypes[4]) // owner
-		if err := bat.Vecs[4].Append(uint32(0), false, m); err != nil {
+		if err := bat.Vecs[4].Append(roleId, false, m); err != nil {
 			return nil, err
 		}
 		bat.Vecs[5] = vector.New(catalog.MoDatabaseTypes[5]) // creator
-		if err := bat.Vecs[5].Append(uint32(0), false, m); err != nil {
+		if err := bat.Vecs[5].Append(userId, false, m); err != nil {
 			return nil, err
 		}
 		bat.Vecs[6] = vector.New(catalog.MoDatabaseTypes[6]) // created_time
@@ -63,7 +66,7 @@ func genCreateDatabaseTuple(name string, m *mheap.Mheap) (*batch.Batch, error) {
 			return nil, err
 		}
 		bat.Vecs[7] = vector.New(catalog.MoDatabaseTypes[7]) // account_id
-		if err := bat.Vecs[7].Append(uint32(0), false, m); err != nil {
+		if err := bat.Vecs[7].Append(accountId, false, m); err != nil {
 			return nil, err
 		}
 	}
@@ -82,8 +85,8 @@ func genDropDatabaseTuple(id uint64, m *mheap.Mheap) (*batch.Batch, error) {
 	return bat, nil
 }
 
-func genCreateTableTuple(name string, databaseId uint64, databaseName string,
-	comment string, m *mheap.Mheap) (*batch.Batch, error) {
+func genCreateTableTuple(accountId, userId, roleId uint32, name string, databaseId uint64,
+	databaseName string, comment string, m *mheap.Mheap) (*batch.Batch, error) {
 	bat := batch.NewWithSize(len(catalog.MoTablesSchema))
 	bat.Attrs = append(bat.Attrs, catalog.MoTablesSchema...)
 	{
@@ -124,15 +127,15 @@ func genCreateTableTuple(name string, databaseId uint64, databaseName string,
 			return nil, err
 		}
 		bat.Vecs[9] = vector.New(catalog.MoDatabaseTypes[9]) // creator
-		if err := bat.Vecs[9].Append(uint32(0), false, m); err != nil {
+		if err := bat.Vecs[9].Append(userId, false, m); err != nil {
 			return nil, err
 		}
 		bat.Vecs[10] = vector.New(catalog.MoDatabaseTypes[10]) // owner
-		if err := bat.Vecs[10].Append(uint32(0), false, m); err != nil {
+		if err := bat.Vecs[10].Append(roleId, false, m); err != nil {
 			return nil, err
 		}
 		bat.Vecs[11] = vector.New(catalog.MoDatabaseTypes[11]) // account_id
-		if err := bat.Vecs[11].Append(uint32(0), false, m); err != nil {
+		if err := bat.Vecs[11].Append(accountId, false, m); err != nil {
 			return nil, err
 		}
 	}
@@ -242,20 +245,32 @@ func genDropColumnsTuple(name string) *batch.Batch {
 */
 
 // genDatabaseIdExpr generate an expression to find database info
-// by database name
-func genDatabaseIdExpr(name string) *plan.Expr {
+// by database name and accountId
+func genDatabaseIdExpr(accountId uint32, name string) *plan.Expr {
+	return nil
+}
+
+// genDatabaseIdExpr generate an expression to find database list
+// by accountId
+func genDatabaseListExpr(accountId uint32) *plan.Expr {
 	return nil
 }
 
 // genTableIdExpr generate an expression to find table info
-// by database id and table name
-func genTableIdExpr(databaseId uint64, name string) *plan.Expr {
+// by database id and table name and accountId
+func genTableIdExpr(accountId uint32, databaseId uint64, name string) *plan.Expr {
+	return nil
+}
+
+// genTableListExpr generate an expression to find table list
+// by database id and accountId
+func genTableListExpr(accountId uint32, databaseId uint64) *plan.Expr {
 	return nil
 }
 
 // genColumnInfoExpr generate an expression to find column info list
-// by database id and table id
-func genColumnInfoExpr(databaseId, tableId uint64) *plan.Expr {
+// by database id and table id and accountId
+func genColumnInfoExpr(accountId uint32, databaseId, tableId uint64) *plan.Expr {
 	return nil
 }
 
@@ -549,4 +564,26 @@ func genColumns(tableName, databaseName string, databaseId uint64,
 		num++
 	}
 	return cols, nil
+}
+
+func getAccountId(ctx context.Context) uint32 {
+	if v := ctx.Value(defines.TenantIDKey{}); v != nil {
+		return v.(uint32)
+	}
+	return 0
+}
+
+func getAccessInfo(ctx context.Context) (uint32, uint32, uint32) {
+	var accountId, userId, roleId uint32
+
+	if v := ctx.Value(defines.TenantIDKey{}); v != nil {
+		accountId = v.(uint32)
+	}
+	if v := ctx.Value(defines.UserIDKey{}); v != nil {
+		userId = v.(uint32)
+	}
+	if v := ctx.Value(defines.RoleIDKey{}); v != nil {
+		roleId = v.(uint32)
+	}
+	return accountId, userId, roleId
 }

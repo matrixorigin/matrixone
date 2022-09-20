@@ -54,7 +54,8 @@ func (e *Engine) Create(ctx context.Context, name string, op client.TxnOperator)
 	if txn == nil {
 		return moerr.New(moerr.ErrTxnClosed, "the transaction has been committed or aborted")
 	}
-	bat, err := genCreateDatabaseTuple(name, e.m)
+	accountId, userId, roleId := getAccessInfo(ctx)
+	bat, err := genCreateDatabaseTuple(accountId, userId, roleId, name, e.m)
 	if err != nil {
 		return err
 	}

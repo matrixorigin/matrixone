@@ -63,8 +63,9 @@ func (db *database) Create(ctx context.Context, name string, defs []engine.Table
 		return err
 	}
 	{
-		bat, err := genCreateTableTuple(name, db.databaseId, db.databaseName,
-			comment, db.m)
+		accountId, userId, roleId := getAccessInfo(ctx)
+		bat, err := genCreateTableTuple(accountId, userId, roleId, name,
+			db.databaseId, db.databaseName, comment, db.m)
 		if err != nil {
 			return err
 		}
