@@ -45,7 +45,6 @@ type TxnReader interface {
 	GetCommitTS() types.TS
 	GetPrepareTS() types.TS
 	GetInfo() []byte
-	IsTerminated(bool) bool
 	IsVisible(o TxnReader) bool
 	GetTxnState(waitIfcommitting bool) TxnState
 	GetError() error
@@ -75,7 +74,6 @@ type TxnChanger interface {
 	RLock()
 	RUnlock()
 	ToCommittedLocked() error
-	ToCommittingLocked(ts types.TS) error
 	ToPreparingLocked(ts types.TS) error
 	ToRollbackedLocked() error
 	ToRollbackingLocked(ts types.TS) error
