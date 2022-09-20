@@ -52,7 +52,7 @@ var _ engine.Engine = new(Engine)
 func (e *Engine) Create(ctx context.Context, name string, op client.TxnOperator) error {
 	txn := e.getTransaction(op)
 	if txn == nil {
-		return moerr.New(moerr.ErrTxnClosed, "the transaction has been committed or aborted")
+		return moerr.NewTxnClosed()
 	}
 	accountId, userId, roleId := getAccessInfo(ctx)
 	bat, err := genCreateDatabaseTuple(accountId, userId, roleId, name, e.m)
@@ -72,7 +72,7 @@ func (e *Engine) Database(ctx context.Context, name string,
 	op client.TxnOperator) (engine.Database, error) {
 	txn := e.getTransaction(op)
 	if txn == nil {
-		return nil, moerr.New(moerr.ErrTxnClosed, "the transaction has been committed or aborted")
+		return nil, moerr.NewTxnClosed()
 	}
 	id, err := txn.getDatabaseId(ctx, name)
 	if err != nil {
@@ -90,7 +90,7 @@ func (e *Engine) Database(ctx context.Context, name string,
 func (e *Engine) Databases(ctx context.Context, op client.TxnOperator) ([]string, error) {
 	txn := e.getTransaction(op)
 	if txn == nil {
-		return nil, moerr.New(moerr.ErrTxnClosed, "the transaction has been committed or aborted")
+		return nil, moerr.NewTxnClosed()
 	}
 	return txn.getDatabaseList(ctx)
 }
@@ -98,7 +98,7 @@ func (e *Engine) Databases(ctx context.Context, op client.TxnOperator) ([]string
 func (e *Engine) Delete(ctx context.Context, name string, op client.TxnOperator) error {
 	txn := e.getTransaction(op)
 	if txn == nil {
-		return moerr.New(moerr.ErrTxnClosed, "the transaction has been committed or aborted")
+		return moerr.NewTxnClosed()
 	}
 	id, err := txn.getDatabaseId(ctx, name)
 	if err != nil {
