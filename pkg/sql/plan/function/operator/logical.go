@@ -23,10 +23,32 @@ import (
 
 type logicFn func(v1, v2, r *vector.Vector) error
 
-func Logic(vectors []*vector.Vector, proc *process.Process, cfn logicFn) (*vector.Vector, error) {
+type logicType int8
+
+const (
+	AND logicType = 0
+	OR  logicType = 1
+	XOR logicType = 2
+)
+
+func Logic(vectors []*vector.Vector, proc *process.Process, cfn logicFn, op logicType) (*vector.Vector, error) {
 	left, right := vectors[0], vectors[1]
 	if left.IsScalarNull() || right.IsScalarNull() {
-		return HandleAndNullCol(vectors, proc)
+		if op == AND {
+			return HandleAndNullCol(vectors, proc)
+		}
+
+		if op == OR {
+			return HandleOrNullCol(vectors, proc)
+		}
+
+		if op == XOR {
+			if left.IsScalarNull() {
+				return proc.AllocConstNullVector(boolType, vector.Length(right)), nil
+			} else {
+				return proc.AllocConstNullVector(boolType, vector.Length(left)), nil
+			}
+		}
 	}
 
 	if left.IsScalar() && right.IsScalar() {
@@ -51,15 +73,15 @@ func Logic(vectors []*vector.Vector, proc *process.Process, cfn logicFn) (*vecto
 }
 
 func LogicAnd(args []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	return Logic(args, proc, logical.And)
+	return Logic(args, proc, logical.And, AND)
 }
 
 func LogicOr(args []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	return Logic(args, proc, logical.Or)
+	return Logic(args, proc, logical.Or, OR)
 }
 
 func LogicXor(args []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	return Logic(args, proc, logical.Xor)
+	return Logic(args, proc, logical.Xor, XOR)
 }
 
 func LogicNot(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {

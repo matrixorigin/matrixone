@@ -661,10 +661,44 @@ func (builder *QueryBuilder) buildUnion(stmt *tree.UnionClause, astOrderBy tree.
 	}
 
 	if len(selectStmts) == 1 {
-		if slt, ok := selectStmts[0].(*tree.Select); ok {
-			return builder.buildSelect(slt, ctx, isRoot)
-		} else {
-			return builder.buildSelect(&tree.Select{Select: selectStmts[0]}, ctx, isRoot)
+		switch sltStmt := selectStmts[0].(type) {
+		case *tree.Select:
+			if sltClause, ok := sltStmt.Select.(*tree.SelectClause); ok {
+				sltClause.Distinct = true
+				return builder.buildSelect(sltStmt, ctx, isRoot)
+			} else {
+				// rewrite sltStmt to select distinct * from (sltStmt) a
+				tmpSltStmt := &tree.Select{
+					Select: &tree.SelectClause{
+						Distinct: true,
+
+						Exprs: []tree.SelectExpr{
+							{Expr: tree.StarExpr()},
+						},
+						From: &tree.From{
+							Tables: tree.TableExprs{
+								&tree.AliasedTableExpr{
+									Expr: &tree.ParenTableExpr{
+										Expr: sltStmt,
+									},
+									As: tree.AliasClause{
+										Alias: "a",
+									},
+								},
+							},
+						},
+					},
+					Limit:   astLimit,
+					OrderBy: astOrderBy,
+				}
+				return builder.buildSelect(tmpSltStmt, ctx, isRoot)
+			}
+
+		case *tree.SelectClause:
+			if !sltStmt.Distinct {
+				sltStmt.Distinct = true
+			}
+			return builder.buildSelect(&tree.Select{Select: sltStmt, Limit: astLimit, OrderBy: astOrderBy}, ctx, isRoot)
 		}
 	}
 
@@ -708,19 +742,41 @@ func (builder *QueryBuilder) buildUnion(stmt *tree.UnionClause, astOrderBy tree.
 	// reset all select's return Projection(type cast up)
 	// we use coalesce function's type check&type cast rule
 	for columnIdx, argsType := range projectTypList {
-		_, _, argsCastType, err := function.GetFunctionByName("coalesce", argsType)
-		if err != nil {
-			return 0, errors.New("", fmt.Sprintf("the %d column cann't cast to a same type", columnIdx))
+		// we don't cast null as any type in function
+		// but we will cast null as some target type in union/intersect/minus
+		var tmpArgsType []types.Type
+		for _, typ := range argsType {
+			if typ.Oid != types.T_any {
+				tmpArgsType = append(tmpArgsType, typ)
+			}
 		}
 
-		for idx, castType := range argsCastType {
-			if !argsType[idx].Eq(castType) && castType.Oid != types.T_any {
-				//  reset projectNode's projectList
-				typ := makePlan2Type(&castType)
-				node := builder.qry.Nodes[nodes[idx]]
-				node.ProjectList[columnIdx], err = appendCastBeforeExpr(node.ProjectList[columnIdx], typ)
-				if err != nil {
-					return 0, err
+		if len(tmpArgsType) > 0 {
+			_, _, argsCastType, err := function.GetFunctionByName("coalesce", tmpArgsType)
+			if err != nil {
+				return 0, errors.New("", fmt.Sprintf("the %d column cann't cast to a same type", columnIdx))
+			}
+			var targetType *plan.Type
+			var targetArgType types.Type
+			if len(argsCastType) == 0 {
+				targetType = makePlan2Type(&tmpArgsType[0])
+				targetArgType = tmpArgsType[0]
+			} else {
+				targetType = makePlan2Type(&argsCastType[0])
+				targetArgType = argsCastType[0]
+			}
+
+			for idx, tmpID := range nodes {
+				if !argsType[idx].Eq(targetArgType) {
+					node := builder.qry.Nodes[tmpID]
+					if argsType[idx].Oid == types.T_any {
+						node.ProjectList[columnIdx].Typ = targetType
+					} else {
+						node.ProjectList[columnIdx], err = appendCastBeforeExpr(node.ProjectList[columnIdx], targetType)
+						if err != nil {
+							return 0, err
+						}
+					}
 				}
 			}
 		}

@@ -63,7 +63,7 @@ func parseDnState(cfg hakeeper.Config,
 
 	for storeID, storeInfo := range dnState.Stores {
 		expired := false
-		if cfg.DnStoreExpired(storeInfo.Tick, currTick) {
+		if cfg.DNStoreExpired(storeInfo.Tick, currTick) {
 			expired = true
 		}
 
@@ -112,14 +112,14 @@ func checkReportedState(
 		}
 	}
 
-	log.Debugf("construct %d operator for reported dn shards", len(ops))
+	logger.Debug(fmt.Sprintf("construct %d operators for reported dn shards", len(ops)))
 
 	return ops
 }
 
-// checkInitatingState generates Operators for newly-created shards.
+// checkInitiatingShards generates Operators for newly-created shards.
 // NB: the order of list is deterministic.
-func checkInitatingShards(
+func checkInitiatingShards(
 	rs *reportedShards, mapper ShardMapper, workingStores []*util.Store, idAlloc util.IDAllocator,
 	cluster pb.ClusterInfo, cfg hakeeper.Config, currTick uint64,
 ) []*operator.Operator {
@@ -141,7 +141,7 @@ func checkInitatingShards(
 
 	// list newly-created shards which had been waiting for a while
 	expired := waitingShards.listEligibleShards(func(start uint64) bool {
-		return cfg.DnStoreExpired(start, currTick)
+		return cfg.DNStoreExpired(start, currTick)
 	})
 
 	var ops []*operator.Operator
@@ -154,7 +154,7 @@ func checkInitatingShards(
 		}
 	}
 
-	log.Infof("construct %d operator for initating dn shards", len(ops))
+	logger.Info(fmt.Sprintf("construct %d operators for initiating dn shards", len(ops)))
 
 	return ops
 }

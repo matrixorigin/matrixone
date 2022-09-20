@@ -50,6 +50,8 @@ type Attribute struct {
 	Type types.Type
 	// DefaultExpr default value of this attribute
 	Default *plan.Default
+	// to update col when define in create table
+	OnUpdate *plan.Expr
 	// Primary is primary key or not
 	Primary bool
 	// Comment of attribute

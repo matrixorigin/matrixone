@@ -26,7 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/batchpipe"
-	"github.com/matrixorigin/matrixone/pkg/util/errors"
+	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 )
 
 const etlFileServiceName = "ETL"
@@ -117,8 +117,8 @@ mkdirRetry:
 		FilePath: w.fileServiceName + fileservice.ServiceNameSeparator + path.Join(w.dir, w.filename) + csvExtension,
 		Entries: []fileservice.IOEntry{
 			{
-				Offset: w.offset,
-				Size:   n,
+				Offset: int64(w.offset),
+				Size:   int64(n),
 				Data:   p,
 			},
 		},
@@ -129,7 +129,7 @@ mkdirRetry:
 		mkdirTried = true
 		goto mkdirRetry
 	}
-	_ = errors.WithContext(w.ctx, err)
+	_ = errutil.WithContext(w.ctx, err)
 	return
 }
 

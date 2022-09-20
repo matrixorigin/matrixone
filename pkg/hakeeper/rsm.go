@@ -43,9 +43,10 @@ var (
 const (
 	// When bootstrapping, k8s will first bootstrap the HAKeeper by starting some
 	// Log stores with command line options specifying that those stores will be hosting
-	// a HAKeeper replicas. It will be k8s' responsibility to assign Replica IDs to those
+	// a HAKeeper replicas. It will be k8s's responsibility to assign Replica IDs to those
 	// HAKeeper replicas, and those IDs will have to be assigned from the range
 	// [K8SIDRangeStart, K8SIDRangeEnd)
+
 	K8SIDRangeStart uint64 = 131072
 	K8SIDRangeEnd   uint64 = 262144
 	// CheckDuration defines how often HAKeeper checks the health state of the cluster
@@ -271,7 +272,7 @@ func (s *stateMachine) handleGetIDCmd(cmd []byte) sm.Result {
 	count := parseGetIDCmd(cmd)
 	s.state.NextID++
 	v := s.state.NextID
-	s.state.NextID += (count - 1)
+	s.state.NextID += count - 1
 	return sm.Result{Value: v}
 }
 
@@ -401,6 +402,7 @@ func (s *stateMachine) handleStateQuery() interface{} {
 		ClusterInfo: s.state.ClusterInfo,
 		DNState:     s.state.DNState,
 		LogState:    s.state.LogState,
+		CNState:     s.state.CNState,
 		State:       s.state.State,
 	}
 	copied := deepcopy.Copy(internal)
@@ -435,7 +437,7 @@ func (s *stateMachine) handleClusterDetailsQuery(cfg Config) *pb.ClusterDetails 
 	}
 	for uuid, info := range s.state.DNState.Stores {
 		state := pb.NormalState
-		if cfg.DnStoreExpired(info.Tick, s.state.Tick) {
+		if cfg.DNStoreExpired(info.Tick, s.state.Tick) {
 			state = pb.TimeoutState
 		}
 		n := pb.DNStore{

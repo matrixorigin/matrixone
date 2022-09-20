@@ -53,8 +53,8 @@ func (cb *ColumnBlock) GetData() (*fileservice.IOVector, error) {
 		Entries:  make([]fileservice.IOEntry, 1),
 	}
 	data.Entries[0] = fileservice.IOEntry{
-		Offset: int(cb.meta.location.Offset()),
-		Size:   int(cb.meta.location.Length()),
+		Offset: int64(cb.meta.location.Offset()),
+		Size:   int64(cb.meta.location.Length()),
 	}
 	err = cb.object.fs.Read(context.Background(), data)
 	if err != nil {
@@ -73,8 +73,8 @@ func (cb *ColumnBlock) GetIndex(dataType IndexDataType) (IndexData, error) {
 			Entries:  make([]fileservice.IOEntry, 1),
 		}
 		data.Entries[0] = fileservice.IOEntry{
-			Offset: int(cb.meta.bloomFilter.Offset()),
-			Size:   int(cb.meta.bloomFilter.Length()),
+			Offset: int64(cb.meta.bloomFilter.Offset()),
+			Size:   int64(cb.meta.bloomFilter.Length()),
 		}
 		err = cb.object.fs.Read(context.Background(), data)
 		if err != nil {

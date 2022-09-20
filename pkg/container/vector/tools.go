@@ -15,7 +15,10 @@
 package vector
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 )
 
@@ -48,6 +51,59 @@ func MustStrCols(v *Vector) []string {
 		ret[i] = (&varcol[i]).GetString(v.area)
 	}
 	return ret
+}
+
+func VectorToProtoVector(vec *Vector) (*api.Vector, error) {
+	nsp, err := vec.Nsp.Show()
+	if err != nil {
+		return nil, err
+	}
+	return &api.Vector{
+		Nsp:      nsp,
+		Nullable: true,
+		Area:     vec.area,
+		IsConst:  vec.isConst,
+		Len:      uint32(vec.length),
+		Type:     TypeToProtoType(vec.Typ),
+		Data:     vec.encodeColToByteSlice(),
+	}, nil
+}
+
+func ProtoVectorToVector(vec *api.Vector) (*Vector, error) {
+	rvec := &Vector{
+		original: true,
+		data:     vec.Data,
+		area:     vec.Area,
+		isConst:  vec.IsConst,
+		length:   int(vec.Len),
+		Typ:      ProtoTypeToType(vec.Type),
+	}
+	rvec.Nsp = &nulls.Nulls{}
+	if err := rvec.Nsp.Read(vec.Nsp); err != nil {
+		return nil, err
+	}
+	rvec.colFromData()
+	return rvec, nil
+}
+
+func TypeToProtoType(typ types.Type) *plan.Type {
+	return &plan.Type{
+		Id:        int32(typ.Oid),
+		Width:     typ.Width,
+		Precision: typ.Precision,
+		Size:      typ.Size,
+		Scale:     typ.Scale,
+	}
+}
+
+func ProtoTypeToType(typ *plan.Type) types.Type {
+	return types.Type{
+		Oid:       types.T(typ.Id),
+		Size:      typ.Size,
+		Width:     typ.Width,
+		Scale:     typ.Scale,
+		Precision: typ.Precision,
+	}
 }
 
 func (v *Vector) colFromData() {

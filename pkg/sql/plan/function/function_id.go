@@ -237,6 +237,8 @@ const (
 	TRIGGER_FAULT_POINT // Trigger.
 	UUID
 
+	SERIAL
+
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
 	FUNCTION_END_NUMBER
@@ -390,6 +392,7 @@ var functionIdRegister = map[string]int32{
 	"uuid":                    UUID,
 	"load_file":               LOAD_FILE,
 	"hex":                     HEX,
+	"serial":                  SERIAL,
 }
 
 func GetFunctionIsWinfunByName(name string) bool {

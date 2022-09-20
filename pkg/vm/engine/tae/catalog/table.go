@@ -234,7 +234,10 @@ func (entry *TableEntry) LastAppendableSegmemt() (seg *SegmentEntry) {
 	it := entry.MakeSegmentIt(false)
 	for it.Valid() {
 		itSeg := it.Get().GetPayload()
-		if itSeg.IsAppendable() {
+		itSeg.RLock()
+		dropped := itSeg.HasDropped()
+		itSeg.RUnlock()
+		if itSeg.IsAppendable() && !dropped {
 			seg = itSeg
 			break
 		}
@@ -298,8 +301,9 @@ func (entry *TableEntry) DropSegmentEntry(id uint64, txn txnif.AsyncTxn) (delete
 		waitTxn.GetTxnState(true)
 		seg.Lock()
 	}
-	err = seg.DropEntryLocked(txn)
-	if err == nil {
+	var isNewNode bool
+	isNewNode, err = seg.DropEntryLocked(txn)
+	if err == nil && isNewNode {
 		deleted = seg
 	}
 	return

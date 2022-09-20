@@ -33,13 +33,13 @@ func (r *readCloser) Close() error {
 
 type countingReader struct {
 	R io.Reader
-	N int
+	N int64
 }
 
 var _ io.Reader = new(countingReader)
 
 func (c *countingReader) Read(data []byte) (int, error) {
 	n, err := c.R.Read(data)
-	c.N += n
+	c.N += int64(n)
 	return n, err
 }
