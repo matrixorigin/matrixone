@@ -55,7 +55,7 @@ type Node struct {
 	Title      string     `json:"title"`
 	Labels     []Label    `json:"labels"`
 	Statistics Statistics `json:"statistics"`
-	Cost       Cost       `json:"Cost"`
+	Cost       Cost       `json:"cost"`
 	TotalStats TotalStats `json:"totalStats"`
 }
 
