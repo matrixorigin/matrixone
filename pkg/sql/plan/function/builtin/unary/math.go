@@ -67,32 +67,11 @@ func Atan(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 		return math1(vs, proc, momath.Atan)
 	}
 	//Otherwise 
-	//First if one of the parameters is a null value
-	typ := vs[0].Typ.Oid.ToType() 
-	if vs[0].IsScalarNull() || vs[1].IsScalarNull(){
-		return proc.AllocScalarNullVector(typ), nil
-	}
-	
-	//Second if the vs is scalar
-	if vs[0].IsScalar() {
-		resultVector := proc.AllocScalarVector(types.Type{Oid: types.T_float64, Size: 8})
-		resultValues := make([]float64, 1)
-		vector.SetCol(resultVector, resultValues)
-		if err := momath.AtanWithTwoArg(vs[0], vs[1], resultVector); err != nil {
-			return nil, err
-		}
-		return resultVector, nil
-	}else{
-		vecLen := int64(vector.Length(vs[0]))
-		resultVector, err := proc.AllocVectorOfRows(types.T_float64.ToType(), vecLen, vs[0].Nsp)
-		if err != nil {
-			return nil, err
-		}
-		if err := momath.AtanWithTwoArg(vs[0], vs[1], resultVector); err != nil {
-			return nil, err
-		}
-		return resultVector, nil
-	}
+	newVs, err := operator.Arith[float64, float64](vs, proc, vs[0].GetType(), momath.AtanWithTwoArg)
+    if err != nil {
+		return nil, err
+    }
+	return newVs, nil
 }
 
 func Cos(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
