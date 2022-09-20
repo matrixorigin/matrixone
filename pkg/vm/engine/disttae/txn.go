@@ -16,8 +16,10 @@ package disttae
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
@@ -122,15 +124,20 @@ func (txn *Transaction) getRow(ctx context.Context, databaseId uint64, tableId u
 	dnList []DNStore, columns []string, expr *plan.Expr) ([]any, error) {
 	bats, err := txn.readTable(ctx, databaseId, tableId, dnList, columns, expr)
 	if err != nil {
-		return nil, nil
+		return nil, err
+	}
+	if len(bats) == 0 {
+		return nil, moerr.New(moerr.ERROR_START, fmt.Sprintf("empty table: %v.%v",
+			databaseId, tableId))
 	}
 	if len(bats) != 1 {
-		return nil, nil
+		return nil, moerr.New(moerr.ERROR_START, "table is not unique")
 	}
-	if bats[0].Length() != 1 {
-		return nil, nil
+	rows := genRows(bats[0])
+	if len(rows) != 1 {
+		return nil, moerr.New(moerr.ERROR_START, "table is not unique")
 	}
-	return nil, nil
+	return rows[0], nil
 }
 
 // getRows used to get rows of table
@@ -138,15 +145,17 @@ func (txn *Transaction) getRows(ctx context.Context, databaseId uint64, tableId 
 	dnList []DNStore, columns []string) ([][]any, error) {
 	bats, err := txn.readTable(ctx, databaseId, tableId, dnList, columns, nil)
 	if err != nil {
-		return nil, nil
+		return nil, err
 	}
 	if len(bats) == 0 {
-		return nil, nil
+		return nil, moerr.New(moerr.ERROR_START, fmt.Sprintf("empty table: %v.%v",
+			databaseId, tableId))
 	}
-	if bats[0].Length() != 1 {
-		return nil, nil
+	rows := make([][]any, 0, len(bats))
+	for _, bat := range bats {
+		rows = append(rows, genRows(bat)...)
 	}
-	return nil, nil
+	return rows, nil
 }
 
 // readTable used to get tuples of table based on a condition

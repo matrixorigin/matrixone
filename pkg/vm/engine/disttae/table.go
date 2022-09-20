@@ -51,7 +51,8 @@ func (tbl *table) GetHideKeys(ctx context.Context) ([]*engine.Attribute, error) 
 }
 
 func (tbl *table) Write(ctx context.Context, bat *batch.Batch) error {
-	return nil
+	return tbl.db.txn.WriteBatch(INSERT, tbl.db.databaseId, tbl.tableId,
+		tbl.db.databaseName, tbl.tableName, bat)
 }
 
 func (tbl *table) Update(ctx context.Context, bat *batch.Batch) error {
@@ -59,7 +60,10 @@ func (tbl *table) Update(ctx context.Context, bat *batch.Batch) error {
 }
 
 func (tbl *table) Delete(ctx context.Context, vec *vector.Vector, name string) error {
-	return nil
+	bat := batch.NewWithSize(1)
+	bat.Vecs[0] = vec
+	return tbl.db.txn.WriteBatch(INSERT, tbl.db.databaseId, tbl.tableId,
+		tbl.db.databaseName, tbl.tableName, bat)
 }
 
 func (tbl *table) Truncate(ctx context.Context) (uint64, error) {

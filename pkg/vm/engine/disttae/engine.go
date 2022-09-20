@@ -78,7 +78,9 @@ func (e *Engine) Database(ctx context.Context, name string,
 		return nil, err
 	}
 	return &database{
+		m:            e.m,
 		txn:          txn,
+		db:           e.db,
 		databaseId:   id,
 		databaseName: name,
 	}, nil
@@ -97,9 +99,18 @@ func (e *Engine) Delete(ctx context.Context, name string, op client.TxnOperator)
 	if txn == nil {
 		return moerr.New(moerr.ErrTxnClosed, "the transaction has been committed or aborted")
 	}
+	id, err := txn.getDatabaseId(ctx, name)
+	if err != nil {
+		return err
+	}
+	bat, err := genDropDatabaseTuple(id, e.m)
+	if err != nil {
+		return err
+	}
+	defer bat.Clean(e.m)
 	// non-io operations do not need to pass context
 	if err := txn.WriteBatch(DELETE, catalog.MO_CATALOG_ID, catalog.MO_DATABASE_ID,
-		catalog.MO_CATALOG, catalog.MO_DATABASE, genDropDatabaseTuple(name)); err != nil {
+		catalog.MO_CATALOG, catalog.MO_DATABASE, bat); err != nil {
 		return err
 	}
 	return nil
@@ -127,12 +138,18 @@ func (e *Engine) New(ctx context.Context, op client.TxnOperator) error {
 	e.newTransaction(op, txn)
 	if len(txn.dnStores) > 0 {
 		// update catalog's cache
-		e.db.Update(ctx, txn.dnStores[:1], catalog.MO_CATALOG_ID, catalog.MO_DATABASE_ID,
-			txn.meta.SnapshotTS)
-		e.db.Update(ctx, txn.dnStores[:1], catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID,
-			txn.meta.SnapshotTS)
-		e.db.Update(ctx, txn.dnStores[:1], catalog.MO_CATALOG_ID, catalog.MO_COLUMNS_ID,
-			txn.meta.SnapshotTS)
+		if err := e.db.Update(ctx, txn.dnStores[:1], catalog.MO_CATALOG_ID,
+			catalog.MO_DATABASE_ID, txn.meta.SnapshotTS); err != nil {
+			return err
+		}
+		if err := e.db.Update(ctx, txn.dnStores[:1], catalog.MO_CATALOG_ID,
+			catalog.MO_TABLES_ID, txn.meta.SnapshotTS); err != nil {
+			return err
+		}
+		if err := e.db.Update(ctx, txn.dnStores[:1], catalog.MO_CATALOG_ID,
+			catalog.MO_COLUMNS_ID, txn.meta.SnapshotTS); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -146,7 +163,12 @@ func (e *Engine) Commit(ctx context.Context, op client.TxnOperator) error {
 	if e.hasConflict(txn) {
 		return moerr.New(moerr.ErrTxnWriteConflict, "write conflict")
 	}
-	return nil
+	reqs, err := genWriteReqs(txn.writes)
+	if err != nil {
+		return err
+	}
+	_, err = op.Write(ctx, reqs)
+	return err
 }
 
 func (e *Engine) Rollback(ctx context.Context, op client.TxnOperator) error {
@@ -194,6 +216,11 @@ func (e *Engine) getTransaction(op client.TxnOperator) *Transaction {
 }
 
 func (e *Engine) delTransaction(txn *Transaction) {
+	for i := range txn.writes {
+		for j := range txn.writes[i] {
+			txn.writes[i][j].bat.Clean(e.m)
+		}
+	}
 	e.Lock()
 	defer e.Unlock()
 	delete(e.txns, string(txn.meta.ID))

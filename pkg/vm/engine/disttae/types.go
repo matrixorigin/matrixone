@@ -141,12 +141,15 @@ type Entry struct {
 	// blockId for s3 file
 	blockId uint64
 	// update or delete tuples
-	bat *batch.Batch
+	bat     *batch.Batch
+	dnStore DNStore
 }
 
 type database struct {
 	databaseId   uint64
 	databaseName string
+	db           *DB
+	m            *mheap.Mheap
 	txn          *Transaction
 }
 
@@ -154,4 +157,22 @@ type table struct {
 	tableId   uint64
 	tableName string
 	db        *database
+}
+
+type column struct {
+	databaseId uint64
+	// column name
+	name            string
+	tableName       string
+	databaseName    string
+	typ             []byte
+	typLen          int32
+	num             int32
+	comment         string
+	notNull         int8
+	hasDef          int8
+	defaultExpr     []byte
+	constraintType  string
+	isHidden        int8
+	isAutoIncrement int8
 }

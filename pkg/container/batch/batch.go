@@ -155,6 +155,10 @@ func (bat *Batch) Length() int {
 	return len(bat.Zs)
 }
 
+func (bat *Batch) VectorCount() int {
+	return len(bat.Vecs)
+}
+
 func (bat *Batch) Prefetch(poses []int32, vecs []*vector.Vector) {
 	for i, pos := range poses {
 		vecs[i] = bat.GetVector(pos)
