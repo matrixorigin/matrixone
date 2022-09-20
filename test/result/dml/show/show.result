@@ -23,4 +23,4 @@ str	CHAR	YES		NULL
 name	VARCHAR	YES		NULL		
 drop database if exists test01;
 show charset;
-unsupported statement: 'show charset'
+internal error: statement: 'show charset'

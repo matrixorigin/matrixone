@@ -105,4 +105,4 @@ country    city
 (select country,city from t1 intersect all select country,city from t2 where country='JAPAN') order by 1,2;
 country    city
 t1 intersect all select * from t2 ;
-You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 2 near "t1 intersect all select * from t2 ;";
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 2 near "t1 intersect all select * from t2 ;";
