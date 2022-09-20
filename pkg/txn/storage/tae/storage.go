@@ -68,14 +68,12 @@ func NewTAEStorage(
 	fs fileservice.FileService,
 	clock clock.Clock,
 ) (*TAEStorage, error) {
-
 	//open tae, just for test.
 	dir := "./store"
 	engine, err := openTAE(dir)
 	if err != nil {
 		return nil, err
 	}
-
 	storage := &TAEStorage{
 		shard:     shard,
 		logClient: logClient,
@@ -84,7 +82,6 @@ func NewTAEStorage(
 		tae:       engine,
 	}
 	storage.txns.idMap = make(map[string]txnif.AsyncTxn)
-
 	return storage, nil
 }
 
@@ -178,25 +175,3 @@ func (s *TAEStorage) Write(ctx context.Context, txnMeta txn.TxnMeta, op uint32, 
 	}
 	return nil, err
 }
-
-//func doHandleCmd(txn txnif.AsyncTxn, cmd *api.Entry) (err error) {
-//db, err := txn.GetDatabase(cmd.DatabaseName)
-//if err != nil {
-//	return  err
-//}
-//tb, err := db.GetRelationByName(cmd.TableName)
-//if err != nil {
-//	return err
-//}
-
-//if db.IsSysDB(cmd.DatabaseId) {
-//	if tb.IsSysTable(cmd.TableId) {
-
-//	}
-//}
-
-//if cmd.EntryType == api.Entry_Insert {
-
-//}
-//	return
-//}

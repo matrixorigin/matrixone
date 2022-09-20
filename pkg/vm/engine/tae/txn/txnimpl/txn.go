@@ -15,10 +15,13 @@
 package txnimpl
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
@@ -65,6 +68,33 @@ func (txn *txnImpl) LogTxnEntry(dbId, tableId uint64, entry txnif.TxnEntry, read
 	return txn.Store.LogTxnEntry(dbId, tableId, entry, readed)
 }
 
+// TODO::ref to MOToVectorTmp in moengine/utils.go
+func MOToTAEVector(v *vector.Vector, nullable bool) containers.Vector {
+	return nil
+}
+
+// TODO::
+func PBToMOVector(v *api.Vector, nullable bool) *vector.Vector {
+	return nil
+}
+
+func MOToTAEBatch(bat *batch.Batch, schema *catalog.Schema) *containers.Batch {
+	//schema := rel.handle.GetMeta().(*catalog.TableEntry).GetSchema()
+	allNullables := schema.AllNullables()
+	taeBatch := containers.NewEmptyBatch()
+	defer taeBatch.Close()
+	for i, vec := range bat.Vecs {
+		v := MOToTAEVector(vec, allNullables[i])
+		taeBatch.AddVector(bat.Attrs[i], v)
+	}
+	return taeBatch
+}
+
+// TODO::
+func PBToMOBatch(bat *api.Batch, schema *catalog.Schema) *batch.Batch {
+	return nil
+}
+
 func (txn *txnImpl) HandleCmd(cmd *api.Entry) (err error) {
 	db, err := txn.GetDatabase(cmd.DatabaseName)
 	if err != nil {
@@ -75,17 +105,21 @@ func (txn *txnImpl) HandleCmd(cmd *api.Entry) (err error) {
 		switch cmd.TableId {
 		case catalog.SystemTable_DB_ID:
 			if cmd.EntryType == api.Entry_Insert {
-				//TODO::parse database name from Entry.batch
-				_, err = txn.CreateDatabase("")
+				//TODO:: build schema of database.
+				//dbDef := BuildDbDefFrom(cmd.Bat)
+				//TODO::need to add interface:CreateDatabase(def Any)
+				//_, err = txn.CreateDatabase(dbDef)
 			} else {
+				//TODO::parse name from cmd.Batch.
 				_, err = txn.DropDatabase("")
 			}
 		case catalog.SystemTable_Table_ID:
 			if cmd.EntryType == api.Entry_Insert {
-				//TODO::
-				_, err = db.CreateRelation(nil)
+				//TODO::build schema of table
+				//tbDef := BuildTbDefFrom(cmd.Bat)
+				//_, err = db.CreateRelation(tbDef)
 			} else {
-				//TODO::
+				//TODO::parse table name from cmd.Batch
 				_, err = db.DropRelationByName("")
 			}
 		case catalog.SystemBlock_Columns_ID:
@@ -94,6 +128,36 @@ func (txn *txnImpl) HandleCmd(cmd *api.Entry) (err error) {
 		return err
 	}
 	//Handle DML
+	tb, err := db.GetRelationByName(cmd.TableName)
+	if err != nil {
+		return err
+	}
+	if cmd.EntryType == api.Entry_Insert {
+		//Append a block had been bulk-loaded into S3
+		if cmd.FileName != "" {
+			//TODO::Precommit a block from S3
+			//tb.PrecommitAppendBlock()
+			return
+		}
+		//Add a batch into table
+		moBat := PBToMOBatch(cmd.Bat, tb.GetMeta().(*catalog.TableEntry).GetSchema())
+		taeBat := MOToTAEBatch(moBat, tb.GetMeta().(*catalog.TableEntry).GetSchema())
+		//TODO::use PrecommitAppend, instead of Append.
+		err = tb.Append(taeBat)
+		return
+	}
 
+	// Handle Delete
+	//TODO:: handle delete rows of block had been bulk-loaded into S3.
+	//if ...{
+
+	//return
+	//}
+
+	//Delete a batch
+	moV := PBToMOVector(cmd.Bat.Vecs[0], false)
+	taeV := MOToTAEVector(moV, false)
+	//TODO::use PrecommitDeleteByPhyAddrKeys,instead of DeleteByPhyAddrKeys
+	err = tb.DeleteByPhyAddrKeys(taeV)
 	return
 }

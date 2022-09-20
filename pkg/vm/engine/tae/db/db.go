@@ -73,7 +73,7 @@ func (db *DB) StartTxn(info []byte) (txnif.AsyncTxn, error) {
 }
 
 // TODO::
-func (db *DB) StartTxnWithMeta(info []byte, start types.TS, tid types.TID) {
+func (db *DB) StartTxnWithMeta(info []byte, start types.TS, tid []byte) {
 
 }
 

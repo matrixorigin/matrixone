@@ -79,7 +79,7 @@ const (
 )
 
 const (
-	TxnTsSize  = 12
+	TxnTsSize  = 14
 	TxnTidSize = 32
 	RowidSize  = 16
 )
@@ -117,7 +117,6 @@ type Uuid [16]byte
 // timestamp for transaction: physical time (higher 8 bytes) + logical (lower 4 bytes)
 // See txts.go for impl.
 type TS [TxnTsSize]byte
-type TID [TxnTidSize]byte
 
 // Rowid
 type Rowid [RowidSize]byte
