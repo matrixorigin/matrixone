@@ -40,6 +40,7 @@ var gTraceContext atomic.Value
 var gSpanContext atomic.Value
 
 func init() {
+	SetDefaultSpanContext(&SpanContext{})
 	SetDefaultContext(context.Background())
 	SetTracerProvider(newMOTracerProvider(EnableTracer(false)))
 }
@@ -52,12 +53,6 @@ func Init(ctx context.Context, opts ...TracerProviderOption) (context.Context, e
 		return ContextWithSpanContext(ctx, *DefaultSpanContext()), nil
 	}
 
-	// init tool dependence
-	logutil.SetLogReporter(&logutil.TraceReporter{ReportLog: ReportLog, ReportZap: ReportZap, LevelSignal: SetLogLevel, ContextField: ContextField})
-	logutil.SpanFieldKey.Store(SpanFieldKey)
-	errutil.SetErrorReporter(HandleError)
-	export.SetDefaultContextFunc(DefaultContext)
-
 	// init TraceProvider
 	SetTracerProvider(newMOTracerProvider(opts...))
 	config := &GetTracerProvider().tracerProviderConfig
@@ -69,12 +64,18 @@ func Init(ctx context.Context, opts ...TracerProviderOption) (context.Context, e
 	var spanId SpanID
 	spanId.SetByUUID(config.getNodeResource().NodeUuid)
 	sc := SpanContextWithIDs(nilTraceID, spanId)
-	gSpanContext.Store(&sc)
+	SetDefaultSpanContext(&sc)
 	SetDefaultContext(ContextWithSpanContext(ctx, sc))
 
 	if err := initExport(ctx, config); err != nil {
 		return nil, err
 	}
+
+	// init tool dependence
+	logutil.SetLogReporter(&logutil.TraceReporter{ReportLog: ReportLog, ReportZap: ReportZap, LevelSignal: SetLogLevel, ContextField: ContextField})
+	logutil.SpanFieldKey.Store(SpanFieldKey)
+	errutil.SetErrorReporter(HandleError)
+	export.SetDefaultContextFunc(DefaultContext)
 
 	return DefaultContext(), nil
 }
@@ -174,6 +175,10 @@ func SetDefaultContext(ctx context.Context) {
 
 func DefaultContext() context.Context {
 	return gTraceContext.Load().(*contextHolder).ctx
+}
+
+func SetDefaultSpanContext(sc *SpanContext) {
+	gSpanContext.Store(sc)
 }
 
 func DefaultSpanContext() *SpanContext {
