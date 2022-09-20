@@ -16,7 +16,7 @@ package jobs
 
 import (
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/objectio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockid"
 	"time"
 
 	"github.com/RoaringBitmap/roaring"
@@ -183,7 +183,7 @@ func (task *compactBlockTask) Execute() (err error) {
 	// TODO:
 	node := catalog.NewEmptyMetadataMVCCNode()
 	node.(*catalog.MetadataMVCCNode).MetaLoc = fmt.Sprintf("%s:%d_%d_%d",
-		objectio.EncodeBlkName(ioTask.file.Fingerprint()),
+		blockid.EncodeBlkName(ioTask.file.Fingerprint()),
 		ioTask.file.GetMeta("").GetExtent().Offset(),
 		ioTask.file.GetMeta("").GetExtent().Length(),
 		ioTask.file.GetMeta("").GetExtent().OriginSize(),

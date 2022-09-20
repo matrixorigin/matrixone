@@ -16,7 +16,7 @@ package jobs
 
 import (
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/objectio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockid"
 	"unsafe"
 
 	"github.com/RoaringBitmap/roaring"
@@ -323,7 +323,7 @@ func (task *mergeBlocksTask) Execute() (err error) {
 		TableID:   task.toSegEntry.GetTable().GetID(),
 		SegmentID: task.toSegEntry.GetID(),
 	}
-	writer := objectio.NewWriter(objectio.SegmentFactory.(*objectio.ObjectFactory).Fs, id)
+	writer := blockid.NewWriter(blockid.SegmentFactory.(*blockid.ObjectFactory).Fs, id)
 	for _, bat := range batchs {
 		_, err := writer.WriteBlock(bat)
 		if err != nil {

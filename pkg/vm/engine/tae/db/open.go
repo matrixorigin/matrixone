@@ -15,7 +15,7 @@
 package db
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/objectio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockid"
 	"sync/atomic"
 	"time"
 
@@ -58,7 +58,7 @@ func Open(dirname string, opts *options.Options) (db *DB, err error) {
 		IndexBufMgr: indexBufMgr,
 		MTBufMgr:    mutBufMgr,
 		TxnBufMgr:   txnBufMgr,
-		FileFactory: objectio.SegmentFactory,
+		FileFactory: blockid.SegmentFactory,
 		Closed:      new(atomic.Value),
 	}
 
