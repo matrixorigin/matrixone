@@ -331,6 +331,9 @@ func (c *Config) Fill() {
 	if c.HAKeeperConfig.DNStoreTimeout.Duration == 0 {
 		c.HAKeeperConfig.DNStoreTimeout.Duration = hakeeper.DefaultDNStoreTimeout
 	}
+	if c.HAKeeperConfig.CNStoreTimeout.Duration == 0 {
+		c.HAKeeperConfig.CNStoreTimeout.Duration = hakeeper.DefaultCNStoreTimeout
+	}
 	if c.HeartbeatInterval.Duration == 0 {
 		c.HeartbeatInterval.Duration = defaultHeartbeatInterval
 	}

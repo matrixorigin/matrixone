@@ -138,6 +138,7 @@ func runHAKeeperStoreTest(t *testing.T, startLogReplica bool, fn func(*testing.T
 func runHakeeperTaskServiceTest(t *testing.T, fn func(*testing.T, *store, taskservice.TaskService)) {
 	defer leaktest.AfterTest(t)()
 	cfg := getStoreTestConfig()
+	cfg.HAKeeperConfig.CNStoreTimeout.Duration = 5 * time.Second
 	defer vfs.ReportLeakedFD(cfg.FS, t)
 
 	taskService := taskservice.NewTaskService(taskservice.NewMemTaskStorage())
@@ -169,6 +170,7 @@ func runHAKeeperClusterTest(t *testing.T, fn func(*testing.T, []*Service)) {
 	cfg1.HAKeeperConfig.TickPerSecond = 10
 	cfg1.HAKeeperConfig.LogStoreTimeout.Duration = 5 * time.Second
 	cfg1.HAKeeperConfig.DNStoreTimeout.Duration = 10 * time.Second
+	cfg1.HAKeeperConfig.CNStoreTimeout.Duration = 5 * time.Second
 	cfg2 := Config{
 		UUID:                uuid.New().String(),
 		FS:                  vfs.NewStrictMem(),
@@ -184,6 +186,7 @@ func runHAKeeperClusterTest(t *testing.T, fn func(*testing.T, []*Service)) {
 	cfg2.HAKeeperConfig.TickPerSecond = 10
 	cfg2.HAKeeperConfig.LogStoreTimeout.Duration = 5 * time.Second
 	cfg2.HAKeeperConfig.DNStoreTimeout.Duration = 10 * time.Second
+	cfg2.HAKeeperConfig.CNStoreTimeout.Duration = 5 * time.Second
 	cfg3 := Config{
 		UUID:                uuid.New().String(),
 		FS:                  vfs.NewStrictMem(),
@@ -199,6 +202,7 @@ func runHAKeeperClusterTest(t *testing.T, fn func(*testing.T, []*Service)) {
 	cfg3.HAKeeperConfig.TickPerSecond = 10
 	cfg3.HAKeeperConfig.LogStoreTimeout.Duration = 5 * time.Second
 	cfg3.HAKeeperConfig.DNStoreTimeout.Duration = 10 * time.Second
+	cfg3.HAKeeperConfig.CNStoreTimeout.Duration = 5 * time.Second
 	cfg4 := Config{
 		UUID:                uuid.New().String(),
 		FS:                  vfs.NewStrictMem(),
@@ -214,6 +218,7 @@ func runHAKeeperClusterTest(t *testing.T, fn func(*testing.T, []*Service)) {
 	cfg4.HAKeeperConfig.TickPerSecond = 10
 	cfg4.HAKeeperConfig.LogStoreTimeout.Duration = 5 * time.Second
 	cfg4.HAKeeperConfig.DNStoreTimeout.Duration = 10 * time.Second
+	cfg4.HAKeeperConfig.CNStoreTimeout.Duration = 5 * time.Second
 	cfg1.Fill()
 	service1, err := NewService(cfg1,
 		testutil.NewFS(),
@@ -464,7 +469,7 @@ func TestHAKeeperCanBootstrapAndRepairShards(t *testing.T) {
 						break
 					}
 				}
-				plog.Infof("dnRepairted %t, logRepaired %t", dnRepaired, logRepaired)
+				plog.Infof("dnRepaired %t, logRepaired %t", dnRepaired, logRepaired)
 				if !logRepaired || !dnRepaired {
 					return false, nil
 				} else {
@@ -694,6 +699,116 @@ func TestTaskSchedulerCanScheduleTasksToCNs(t *testing.T) {
 		tasks, err = taskService.QueryTask(ctx, taskservice.WithTaskRunnerCond(taskservice.EQ, cnUUID2))
 		assert.NoError(t, err)
 		assert.Equal(t, 1, len(tasks))
+	}
+	runHakeeperTaskServiceTest(t, fn)
+}
+
+func TestTaskSchedulerCanReScheduleExpiredTasks(t *testing.T) {
+	fn := func(t *testing.T, store *store, taskService taskservice.TaskService) {
+		state, err := store.getCheckerState()
+		require.NoError(t, err)
+		assert.Equal(t, pb.HAKeeperCreated, state.State)
+		require.NoError(t, store.setInitialClusterInfo(1, 1, 1))
+		state, err = store.getCheckerState()
+		require.NoError(t, err)
+		assert.Equal(t, pb.HAKeeperBootstrapping, state.State)
+		m := store.getHeartbeatMessage()
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		_, err = store.addLogStoreHeartbeat(ctx, m)
+		assert.NoError(t, err)
+
+		_, term, err := store.isLeaderHAKeeper()
+		require.NoError(t, err)
+
+		state, err = store.getCheckerState()
+		require.NoError(t, err)
+		store.bootstrap(term, state)
+
+		state, err = store.getCheckerState()
+		require.NoError(t, err)
+		assert.Equal(t, pb.HAKeeperBootstrapCommandsReceived, state.State)
+		assert.Equal(t, uint64(checkBootstrapCycles), store.bootstrapCheckCycles)
+		require.NotNil(t, store.bootstrapMgr)
+		assert.False(t, store.bootstrapMgr.CheckBootstrap(state.LogState))
+
+		cb, err := store.getCommandBatch(ctx, store.id())
+		require.NoError(t, err)
+		require.Equal(t, 1, len(cb.Commands))
+		assert.True(t, cb.Commands[0].Bootstrapping)
+		service := &Service{store: store}
+		service.handleStartReplica(cb.Commands[0])
+
+		for i := 0; i < 100; i++ {
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			m := store.getHeartbeatMessage()
+			_, err = store.addLogStoreHeartbeat(ctx, m)
+			assert.NoError(t, err)
+
+			state, err = store.getCheckerState()
+			require.NoError(t, err)
+			store.checkBootstrap(state)
+
+			state, err = store.getCheckerState()
+			require.NoError(t, err)
+			if state.State != pb.HAKeeperRunning {
+				time.Sleep(50 * time.Millisecond)
+			} else {
+				break
+			}
+			if i == 2999 {
+				t.Fatalf("failed to complete bootstrap")
+			}
+		}
+
+		cnUUID1 := uuid.New().String()
+		cnMsg1 := pb.CNStoreHeartbeat{UUID: cnUUID1}
+		err = store.addCNStoreHeartbeat(ctx, cnMsg1)
+		assert.NoError(t, err)
+		err = taskService.Create(ctx, task.TaskMetadata{ID: "a"})
+		assert.NoError(t, err)
+		state, err = store.getCheckerState()
+		require.NoError(t, err)
+		tasks, err := taskService.QueryTask(ctx, taskservice.WithTaskRunnerCond(taskservice.EQ, cnUUID1))
+		assert.NoError(t, err)
+		assert.Equal(t, 0, len(tasks))
+		store.taskSchedule(state)
+		tasks, err = taskService.QueryTask(ctx, taskservice.WithTaskRunnerCond(taskservice.EQ, cnUUID1))
+		assert.NoError(t, err)
+		assert.Equal(t, 1, len(tasks))
+
+		cnUUID2 := uuid.New().String()
+		for i := 0; i < 1000; i++ {
+			plog.Infof("iteration %d", i)
+			tn := func() bool {
+				ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+				defer cancel()
+				cnMsg2 := pb.CNStoreHeartbeat{UUID: cnUUID2}
+				err = store.addCNStoreHeartbeat(ctx, cnMsg2)
+				assert.NoError(t, err)
+				state, err = store.getCheckerState()
+				require.NoError(t, err)
+				store.taskSchedule(state)
+				tasks, err = taskService.QueryTask(ctx, taskservice.WithTaskRunnerCond(taskservice.EQ, cnUUID2))
+				assert.NoError(t, err)
+				if len(tasks) == 0 {
+					plog.Infof("no task found")
+					time.Sleep(50 * time.Millisecond)
+				} else {
+					tasks, err = taskService.QueryTask(ctx, taskservice.WithTaskRunnerCond(taskservice.EQ, cnUUID1))
+					assert.Equal(t, 0, len(tasks))
+					return true
+				}
+				return false
+			}
+			completed := tn()
+			if completed {
+				return
+			}
+			time.Sleep(100 * time.Millisecond)
+		}
+		t.Fatalf("failed to reschedule expired tasks")
 	}
 	runHakeeperTaskServiceTest(t, fn)
 }
