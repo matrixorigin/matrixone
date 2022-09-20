@@ -99,7 +99,7 @@ unzip mo-server-v0.5.1-darwin-x86_64.zip
 ```
 
 !!! info
-    MatrixOne 暂时对 ARM 不完全支持，MacOS系统 M1 芯片及以上可以使用上述所示 x86 的二进制包，某些 SQL 会产生错误。
+    MatrixOne 二进制包安装方式暂时对 ARM 处理器不能完全支持。MacOS系统 M1 芯片及以上可以使用源码方式安装 MatrixOne。
 
 ### 2. 启动 MatrixOne 服务
 
