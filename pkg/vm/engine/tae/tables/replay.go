@@ -94,13 +94,19 @@ func (blk *dataBlock) replayMutIndex() error {
 // replayImmutIndex load index meta to construct managed node
 func (blk *dataBlock) replayImmutIndex() error {
 	schema := blk.meta.GetSchema()
+	pkIdx := -1024
+	if schema.HasPK() {
+		pkIdx = schema.GetSingleSortKeyIdx()
+	}
 	for i, column := range blk.colObjects {
 		index := indexwrapper.NewImmutableIndex()
 		if err := index.ReadFrom(blk, schema.ColDefs[i], column); err != nil {
 			return err
 		}
 		blk.indexes[i] = index
-		blk.pkIndex = index
+		if i == pkIdx {
+			blk.pkIndex = index
+		}
 	}
 	return nil
 }
