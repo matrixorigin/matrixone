@@ -291,10 +291,13 @@ func (w *Writer) Sync() ([]objectio.BlockObject, error) {
 func (w *Writer) WriteIndex(
 	block objectio.BlockObject,
 	index objectio.IndexData) (err error) {
-	w.writer.WriteIndex(block, index)
-	return
+	return w.writer.WriteIndex(block, index)
 }
 
 func (w *Writer) GetName() string {
 	return w.name
+}
+
+func (w *Writer) GetWriter() objectio.Writer {
+	return w.writer
 }

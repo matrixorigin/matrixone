@@ -14,7 +14,9 @@
 
 package objectio
 
-import "errors"
+import (
+	"errors"
+)
 
 type IndexDataType uint8
 

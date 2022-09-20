@@ -43,11 +43,12 @@ type Block interface {
 
 	LoadIndexMeta() (any, error)
 	WriteIndexMeta(buf []byte) (err error)
+	WriteIndex(index objectio.IndexData) (err error)
 
 	OpenColumn(colIdx int) (ColumnBlock, error)
-	// WriteColumn(colIdx int, ts uint64, data []byte, updates []byte) (common.IVFile, error)
 
-	WriteBatch(bat *containers.Batch, ts types.TS) error
+	WriteBatch(bat *containers.Batch, ts types.TS) (objectio.BlockObject, error)
+	GetWriter() objectio.Writer
 	LoadBatch([]types.Type, []string, []bool, *containers.Options) (bat *containers.Batch, err error)
 	WriteColumnVec(ts types.TS, colIdx int, vec containers.Vector) error
 	GetMeta(location string) objectio.BlockObject
@@ -59,7 +60,7 @@ type ColumnBlock interface {
 	io.Closer
 	WriteTS(ts types.TS) error
 	WriteData(buf []byte) error
-	WriteIndex(idx int, buf []byte) error
+	WriteIndex(index objectio.IndexData) error
 	WriteUpdates(buf []byte) error
 
 	ReadTS() types.TS

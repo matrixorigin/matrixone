@@ -17,7 +17,6 @@ package blockid
 import (
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -59,11 +58,15 @@ func newBlock(id uint64, seg *segmentFile, colCnt int, indexCnt map[int]int) *bl
 	return bf
 }
 
-func (bf *blockFile) WriteBatch(bat *containers.Batch, ts types.TS) (err error) {
+func (bf *blockFile) WriteBatch(bat *containers.Batch, ts types.TS) (blk objectio.BlockObject, err error) {
 	bf.writer = NewWriter(bf.seg.fs, bf.id)
 	block, err := bf.writer.WriteBlock(bat)
 	bf.meta = block
-	return err
+	return block, err
+}
+
+func (bf *blockFile) GetWriter() objectio.Writer {
+	return bf.writer.writer
 }
 
 func (bf *blockFile) Fingerprint() *common.ID {
@@ -91,7 +94,6 @@ func (bf *blockFile) GetMeta(metaLoc string) objectio.BlockObject {
 	if bf.meta != nil {
 		return bf.meta
 	}
-	logutil.Infof("metaLoc: is %v", metaLoc)
 	info := strings.Split(metaLoc, ":")
 	name := info[0]
 	location := strings.Split(info[1], "_")
@@ -117,6 +119,10 @@ func (bf *blockFile) GetMeta(metaLoc string) objectio.BlockObject {
 	}
 	bf.meta = block
 	return bf.meta
+}
+
+func (bf *blockFile) WriteIndex(index objectio.IndexData) (err error) {
+	return bf.writer.WriteIndex(bf.meta, index)
 }
 
 func (bf *blockFile) WriteTS(ts types.TS) (err error) {

@@ -93,42 +93,14 @@ func (blk *dataBlock) replayMutIndex() error {
 
 // replayImmutIndex load index meta to construct managed node
 func (blk *dataBlock) replayImmutIndex() error {
-	file := blk.GetBlockFile()
-	idxMeta, err := file.LoadIndexMeta()
-	if err != nil {
-		return err
-	}
-	metas := idxMeta.(*indexwrapper.IndicesMeta)
-
-	pkIdx := -1024
 	schema := blk.meta.GetSchema()
-	if schema.HasPK() {
-		pkIdx = schema.GetSingleSortKeyIdx()
-	}
-	var prevPkMeta indexwrapper.IndexMeta
-	for _, meta := range metas.Metas {
-		colIdx := int(meta.ColIdx)
-		if colIdx == pkIdx {
-			if prevPkMeta.IdxType == indexwrapper.InvalidIndexType {
-				// found one meta, stash it for later use
-				prevPkMeta = meta
-			} else {
-				// found two meta, construct the pk index
-				index := indexwrapper.NewImmutableIndex()
-				if err = index.ReadFrom(blk, schema.ColDefs[pkIdx], prevPkMeta, meta); err != nil {
-					return err
-				}
-				blk.indexes[pkIdx] = index
-				blk.pkIndex = index
-			}
-		} else {
-			// non-pk column, construct index
-			index := indexwrapper.NewImmutableIndex()
-			if err = index.ReadFrom(blk, schema.ColDefs[meta.ColIdx], meta); err != nil {
-				return err
-			}
-			blk.indexes[colIdx] = index
+	for i, column := range blk.colObjects {
+		index := indexwrapper.NewImmutableIndex()
+		if err := index.ReadFrom(blk, schema.ColDefs[i], column); err != nil {
+			return err
 		}
+		blk.indexes[i] = index
+		blk.pkIndex = index
 	}
 	return nil
 }

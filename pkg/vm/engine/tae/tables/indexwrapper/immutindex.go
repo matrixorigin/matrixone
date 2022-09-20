@@ -19,6 +19,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/file"
 )
 
 var _ Index = (*immutableIndex)(nil)
@@ -96,15 +97,13 @@ func (index *immutableIndex) Destroy() (err error) {
 	return
 }
 
-func (index *immutableIndex) ReadFrom(blk data.Block, colDef *catalog.ColDef, metas ...IndexMeta) (err error) {
+func (index *immutableIndex) ReadFrom(blk data.Block, colDef *catalog.ColDef, col file.ColumnBlock) (err error) {
 	entry := blk.GetMeta().(*catalog.BlockEntry)
-	file := blk.GetBlockFile()
-	colFile, err := file.OpenColumn(colDef.Idx)
-	if err != nil {
-		return
-	}
-	defer colFile.Close()
-	for _, meta := range metas {
+	idxFile := col.GetDataObject(blk.GetMeta().(*catalog.BlockEntry).GetNodeLocked().(*catalog.MetadataMVCCNode).MetaLoc)
+	id := entry.AsCommonID()
+	id.Idx = uint16(colDef.Idx)
+	index.zmReader = NewZMReader(blk.GetBufMgr(), idxFile, id, colDef.Type)
+	/*for _, meta := range metas {
 		idxFile := colFile.GetDataObject(blk.GetMeta().(*catalog.BlockEntry).GetNodeLocked().(*catalog.MetadataMVCCNode).MetaLoc)
 		id := entry.AsCommonID()
 		id.PartID = uint32(meta.InternalIdx) + 1000
@@ -117,6 +116,6 @@ func (index *immutableIndex) ReadFrom(blk data.Block, colDef *catalog.ColDef, me
 		default:
 			panic("unsupported index type")
 		}
-	}
+	}*/
 	return
 }

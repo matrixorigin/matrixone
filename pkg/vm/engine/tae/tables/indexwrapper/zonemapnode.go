@@ -115,7 +115,8 @@ func (reader *ZMReader) Contains(key any) bool {
 
 type ZMWriter struct {
 	cType       CompressType
-	file        common.IRWFile
+	writer      objectio.Writer
+	block       objectio.BlockObject
 	zonemap     *index.ZoneMap
 	colIdx      uint16
 	internalIdx uint16
@@ -125,8 +126,9 @@ func NewZMWriter() *ZMWriter {
 	return &ZMWriter{}
 }
 
-func (writer *ZMWriter) Init(file common.IRWFile, cType CompressType, colIdx uint16, internalIdx uint16) error {
-	writer.file = file
+func (writer *ZMWriter) Init(wr objectio.Writer, block objectio.BlockObject, cType CompressType, colIdx uint16, internalIdx uint16) error {
+	writer.writer = wr
+	writer.block = block
 	writer.cType = cType
 	writer.colIdx = colIdx
 	writer.internalIdx = internalIdx
@@ -137,7 +139,7 @@ func (writer *ZMWriter) Finalize() (*IndexMeta, error) {
 	if writer.zonemap == nil {
 		panic("unexpected error")
 	}
-	appender := writer.file
+	appender := writer.writer
 	meta := NewEmptyIndexMeta()
 	meta.SetIndexType(BlockZoneMapIndex)
 	meta.SetCompressType(writer.cType)
@@ -149,11 +151,19 @@ func (writer *ZMWriter) Finalize() (*IndexMeta, error) {
 	if err != nil {
 		return nil, err
 	}
+	min := make([]byte, 32)
+	copy(min, iBuf[:31])
+	max := make([]byte, 32)
+	copy(max, iBuf[32:])
+	zonemap, err := objectio.NewZoneMap(writer.colIdx, min, max)
+	if err != nil {
+		return nil, err
+	}
 	rawSize := uint32(len(iBuf))
 	compressed := Compress(iBuf, writer.cType)
 	exactSize := uint32(len(compressed))
 	meta.SetSize(rawSize, exactSize)
-	_, err = appender.Write(compressed)
+	err = appender.WriteIndex(writer.block, zonemap)
 	if err != nil {
 		return nil, err
 	}

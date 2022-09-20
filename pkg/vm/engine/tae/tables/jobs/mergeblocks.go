@@ -20,7 +20,6 @@ import (
 	"unsafe"
 
 	"github.com/RoaringBitmap/roaring"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -145,40 +144,6 @@ func (task *mergeBlocksTask) MarshalLogObject(enc zapcore.ObjectEncoder) (err er
 	return
 }
 
-func (task *mergeBlocksTask) schedIOTask(scope *common.ID, closure func() error) error {
-	taskHandle, err := task.scheduler.ScheduleScopedFn(tasks.WaitableCtx, tasks.IOTask, scope, closure)
-	if err != nil {
-		return err
-	}
-	return taskHandle.WaitDone()
-}
-
-// processBlockColumn build index for a cloumn add meta to a metaReceiver, and flush data to the block
-func (task *mergeBlocksTask) processBlockColumn(
-	metaReceiver *indexwrapper.IndicesMeta,
-	ts types.TS,
-	blk *catalog.BlockEntry,
-	colDef *catalog.ColDef,
-	data containers.Vector,
-	isPk, isSorted bool) error {
-	return nil
-	// build index
-	file, err := blk.GetBlockData().GetBlockFile().OpenColumn(colDef.Idx)
-	if err != nil {
-		return err
-	}
-	defer file.Close()
-	metas, err := BuildColumnIndex(file, colDef, data, isPk, isSorted)
-	if err != nil {
-		return err
-	}
-	metaReceiver.AddIndex(metas...)
-
-	// write data
-	closure := blk.GetBlockData().FlushColumnDataClosure(ts, colDef.Idx, data, false)
-	return task.schedIOTask(blk.AsCommonID(), closure)
-}
-
 func (task *mergeBlocksTask) Execute() (err error) {
 	logutil.Info("[Start]", common.OperationField(fmt.Sprintf("[%d]mergeblocks", task.ID())),
 		common.OperandField(task))
@@ -253,8 +218,6 @@ func (task *mergeBlocksTask) Execute() (err error) {
 	}
 	// logutil.Infof("mapping is %v", mapping)
 	// logutil.Infof("sortedIdx is %v", sortedIdx)
-
-	ts := task.txn.GetStartTS()
 	length = 0
 	var blk handle.Block
 	toAddr := make([]uint32, 0, len(vecs))
@@ -279,28 +242,6 @@ func (task *mergeBlocksTask) Execute() (err error) {
 
 	// Build and flush block index if sort key is defined
 	// Flush sort key it correlates to only one column
-
-	if !sortColDef.IsPhyAddr() { // it is pk column
-		for i, blk := range task.createdBlks {
-			if err = task.processBlockColumn(indexMetas[i], ts, blk, sortColDef, vecs[i], true, true); err != nil {
-				return err
-			}
-		}
-	}
-
-	// Flush phyAddr column
-	phyAddr := schema.PhyAddrKey
-	for i, blk := range task.createdBlks {
-		vec, err := model.PreparePhyAddrData(phyAddr.Type, blk.MakeKey(), 0, uint32(vecs[i].Length()))
-		if err != nil {
-			return err
-		}
-		defer vec.Close()
-		closure := blk.GetBlockData().FlushColumnDataClosure(ts, phyAddr.Idx, vec, false)
-		if err = task.schedIOTask(blk.AsCommonID(), closure); err != nil {
-			return err
-		}
-	}
 
 	for _, def := range schema.ColDefs {
 		// Skip
@@ -334,10 +275,6 @@ func (task *mergeBlocksTask) Execute() (err error) {
 		}
 		for i, vec := range vecs {
 			batchs[i].AddVector(def.Name, vec)
-			blk := task.createdBlks[i]
-			if err = task.processBlockColumn(indexMetas[i], ts, blk, def, vecs[i], false, false); err != nil {
-				return err
-			}
 		}
 	}
 	id := &common.ID{
@@ -346,9 +283,12 @@ func (task *mergeBlocksTask) Execute() (err error) {
 	}
 	writer := blockid.NewWriter(blockid.SegmentFactory.(*blockid.ObjectFactory).Fs, id)
 	for _, bat := range batchs {
-		_, err = writer.WriteBlock(bat)
-		if err != nil {
-			return err
+		block, err := writer.WriteBlock(bat)
+		for idx, vec := range bat.Vecs {
+			_, err = BuildColumnIndex(writer.GetWriter(), block, schema.ColDefs[idx], vec, false, false)
+			if err != nil {
+				return err
+			}
 		}
 	}
 	blocks, err := writer.Sync()
@@ -365,24 +305,11 @@ func (task *mergeBlocksTask) Execute() (err error) {
 		)
 		task.createdBlks[i].MetaBaseEntry.UpdateAttr(task.txn, node.(*catalog.MetadataMVCCNode))
 	}
-
-	/*for i, blk := range task.createdBlks {
-		indexMetaBinary, err := indexMetas[i].Marshal()
-		if err != nil {
+	for _, blk := range task.createdBlks {
+		if err = blk.GetBlockData().ReplayIndex(); err != nil {
 			return err
 		}
-		blkData := blk.GetBlockData()
-		if err = blkData.GetBlockFile().WriteIndexMeta(indexMetaBinary); err != nil {
-			return err
-		}
-		closure := blkData.SyncBlockDataClosure(ts, rows[i])
-		if err = task.schedIOTask(blk.AsCommonID(), closure); err != nil {
-			return err
-		}
-		if err = blkData.ReplayIndex(); err != nil {
-			return err
-		}
-	}*/
+	}
 
 	for _, compacted := range task.compacted {
 		seg := compacted.GetSegment()
