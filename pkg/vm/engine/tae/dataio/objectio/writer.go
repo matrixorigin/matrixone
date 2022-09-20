@@ -283,7 +283,7 @@ func (w *Writer) WriteBlock(columns *containers.Batch) (block objectio.BlockObje
 	return
 }
 
-func (w *Writer) Sync() (map[uint32]objectio.BlockObject, error) {
+func (w *Writer) Sync() ([]objectio.BlockObject, error) {
 	blocks, err := w.writer.WriteEnd()
 	return blocks, err
 }

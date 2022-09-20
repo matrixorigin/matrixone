@@ -296,10 +296,9 @@ func (task *mergeBlocksTask) Execute() (err error) {
 			}
 			continue
 		}
-		if schema.IsSingleSortKey() && def.IsSortKey() {
+		/*if schema.IsSingleSortKey() && def.IsSortKey() {
 			logutil.Infof("schema.IsSingleSortKey() is %v", def.Name)
-			//continue
-		}
+		}*/
 		vecs = vecs[:0]
 		for _, block := range task.compacted {
 			if view, err = block.GetColumnDataById(def.Idx, nil); err != nil {
@@ -325,7 +324,6 @@ func (task *mergeBlocksTask) Execute() (err error) {
 		SegmentID: task.toSegEntry.GetID(),
 	}
 	writer := objectio.NewWriter(objectio.SegmentFactory.(*objectio.ObjectFactory).Fs, id)
-	logutil.Infof("batchs is %d", len(batchs))
 	for _, bat := range batchs {
 		_, err := writer.WriteBlock(bat)
 		if err != nil {
@@ -345,7 +343,6 @@ func (task *mergeBlocksTask) Execute() (err error) {
 			block.GetExtent().Length(),
 			block.GetExtent().OriginSize(),
 		)
-		logutil.Infof("meta loc: %v", node.(*catalog.MetadataMVCCNode).MetaLoc)
 		task.createdBlks[i].MetaBaseEntry.UpdateAttr(task.txn, node.(*catalog.MetadataMVCCNode))
 	}
 	for i, blk := range task.createdBlks {

@@ -17,7 +17,6 @@ package objectio
 import (
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -91,7 +90,6 @@ func (bf *blockFile) GetMeta(metaLoc string) objectio.BlockObject {
 	if bf.meta != nil {
 		return bf.meta
 	}
-	logutil.Infof("id: %v, metaLoc is %v", bf.Fingerprint(), metaLoc)
 	info := strings.Split(metaLoc, ":")
 	name := info[0]
 	location := strings.Split(info[1], "_")
@@ -111,7 +109,6 @@ func (bf *blockFile) GetMeta(metaLoc string) objectio.BlockObject {
 	if bf.reader == nil {
 		bf.reader = NewReader(bf.seg.fs, bf, name)
 	}
-	logutil.Infof("extent isss %d-%d-%d", extent.Offset(), extent.Length(), extent.OriginSize())
 	block, err := bf.reader.ReadMeta(extent)
 	if err != nil {
 		panic(any(err))

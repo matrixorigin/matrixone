@@ -35,8 +35,11 @@ type ColumnBlock struct {
 
 func NewColumnBlock(idx uint16, object *Object) ColumnObject {
 	meta := &ColumnMeta{
-		idx:         idx,
-		zoneMap:     ZoneMap{},
+		idx: idx,
+		zoneMap: ZoneMap{
+			min: make([]byte, 32),
+			max: make([]byte, 32),
+		},
 		bloomFilter: Extent{},
 	}
 	col := &ColumnBlock{
