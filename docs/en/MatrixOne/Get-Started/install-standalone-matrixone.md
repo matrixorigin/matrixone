@@ -99,8 +99,8 @@ unzip mo-server-v0.5.1-darwin-x86_64.zip
 ```
 
 !!! info
-    MatrixOne is not fully supported by ARM for now; MacOS M1 chips and above can use the x86 binary package shown above, and some SQL errors will occur.
-
+    MatrixOne is not fully supported by ARM for now; MacOS M1 chips and above can use source to build MatrixOne as shown above.
+    
 ### 2.Launch MatrixOne server
 
 ```
