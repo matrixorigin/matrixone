@@ -914,10 +914,8 @@ func NumericToBool[T constraints.Integer | constraints.Float](xs []T, rs []bool)
 	for i, x := range xs {
 		if x == 0 {
 			rs[i] = false
-		} else if x == 1 {
-			rs[i] = true
 		} else {
-			return nil, moerr.NewError(moerr.INVALID_ARGUMENT, fmt.Sprintf("Can't cast '%v' as boolean type.", x))
+			rs[i] = true
 		}
 	}
 	return rs, nil

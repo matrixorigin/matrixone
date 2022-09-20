@@ -243,10 +243,8 @@ func convertValueIntoBool(name string, args []*Expr, isLogic bool) error {
 			case *plan.Const_Ival:
 				if value.Ival == 0 {
 					ex.C.Value = &plan.Const_Bval{Bval: false}
-				} else if value.Ival == 1 {
-					ex.C.Value = &plan.Const_Bval{Bval: true}
 				} else {
-					return errors.New("", fmt.Sprintf("Can't cast '%v' as boolean type.", value.Ival))
+					ex.C.Value = &plan.Const_Bval{Bval: true}
 				}
 				arg.Typ.Id = int32(types.T_bool)
 			}
