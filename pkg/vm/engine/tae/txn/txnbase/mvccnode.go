@@ -75,6 +75,13 @@ func NewTxnMVCCNodeWithTxn(txn txnif.TxnReader) *TxnMVCCNode {
 		Txn:   txn,
 	}
 }
+func NewTxnMVCCNodeWithTS(ts types.TS) *TxnMVCCNode {
+	return &TxnMVCCNode{
+		Start:   ts,
+		Prepare: ts,
+		End:     ts,
+	}
+}
 
 // Check w-w confilct
 func (un *TxnMVCCNode) CheckConflict(ts types.TS) error {

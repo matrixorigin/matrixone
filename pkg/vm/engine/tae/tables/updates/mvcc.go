@@ -164,7 +164,7 @@ func (n *MVCCHandle) CreateDeleteNode(txn txnif.AsyncTxn, deleteType handle.Dele
 
 func (n *MVCCHandle) OnReplayDeleteNode(deleteNode txnif.DeleteNode) {
 	n.deletes.OnReplayNode(deleteNode.(*DeleteNode))
-	n.TrySetMaxVisible(deleteNode.(*DeleteNode).commitTs)
+	n.TrySetMaxVisible(deleteNode.(*DeleteNode).GetCommitTSLocked())
 }
 
 func (n *MVCCHandle) CreateUpdateNode(colIdx uint16, txn txnif.AsyncTxn) txnif.UpdateNode {
