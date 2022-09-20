@@ -16,6 +16,7 @@ package taestorage
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
@@ -103,7 +104,7 @@ func (s *TAEStorage) get(meta txn.TxnMeta) (txn txnif.AsyncTxn, err error) {
 	defer s.txns.Unlock()
 	txn, ok := s.txns.idMap[string(meta.ID)]
 	if !ok {
-		return nil, storage.ErrMissingTxn
+		return nil, moerr.NewMissingTxn()
 	}
 	return
 }
