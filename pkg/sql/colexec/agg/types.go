@@ -240,7 +240,6 @@ type EncodeAgg struct {
 	Private []byte
 	Es      []bool
 	Da      []byte
-	StrVs   [][]byte
 
 	InputTypes []byte
 	OutputType []byte

@@ -264,8 +264,6 @@ func (a *UnaryAgg[T1, T2]) GetInputTypes() []types.Type {
 }
 
 func (a *UnaryAgg[T1, T2]) MarshalBinary() ([]byte, error) {
-	var b []byte
-
 	pData, err := a.priv.MarshalBinary()
 	if err != nil {
 		return nil, err
@@ -287,17 +285,29 @@ func (a *UnaryAgg[T1, T2]) MarshalBinary() ([]byte, error) {
 		IsCount:    a.isCount,
 	}
 	if types.IsString(a.otyp.Oid) {
-		// TODO: 我不知道这块怎么弄
-		// source.StrVs
+		source.Da = types.EncodeStringSlice(getStrVs(a))
 	} else {
 		source.Da = a.da
 	}
 
-	b, err = types.Encode(source)
-	if err == nil {
-		return nil, err
+	return types.Encode(source)
+}
+
+func getStrVs(strUnaryAgg any) []string {
+	agg := strUnaryAgg.(*UnaryAgg[[]byte, []byte])
+	result := make([]string, len(agg.vs))
+	for i := range result {
+		result[i] = string(agg.vs[i])
 	}
-	return b, nil
+	return result
+}
+
+func setStrVs(strUnaryAgg any, values []string) {
+	agg := strUnaryAgg.(*UnaryAgg[[]byte, []byte])
+	agg.vs = make([][]byte, len(values))
+	for i := range agg.vs {
+		agg.vs[i] = []byte(values[i])
+	}
 }
 
 func (a *UnaryAgg[T1, T2]) UnmarshalBinary(data []byte) error {
@@ -320,7 +330,7 @@ func (a *UnaryAgg[T1, T2]) UnmarshalBinary(data []byte) error {
 	a.es = decoded.Es
 	a.da = decoded.Da
 	if types.IsString(a.otyp.Oid) {
-		//
+		setStrVs(a, types.DecodeStringSlice(a.da))
 	} else {
 		a.vs = types.DecodeFixedSlice[T2](a.da, a.otyp.TypeSize())
 	}
