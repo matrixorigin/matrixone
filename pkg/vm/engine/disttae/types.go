@@ -34,10 +34,6 @@ const (
 	DELETE
 )
 
-const (
-	CacheSize = 1 << 20
-)
-
 type DNStore = logservice.DNStore
 
 // tae's block metadata, which is currently just an empty one,
