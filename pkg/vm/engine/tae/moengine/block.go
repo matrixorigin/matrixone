@@ -19,6 +19,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 )
@@ -44,9 +45,9 @@ func (blk *txnBlock) Read(attrs []string, compressed []*bytes.Buffer, deCompress
 		}
 		view.ApplyDeletes()
 		if view.GetData().Allocated() > 0 {
-			bat.Vecs[i] = CopyToMoVector(view.GetData())
+			bat.Vecs[i] = containers.CopyToMoVector(view.GetData())
 		} else {
-			bat.Vecs[i] = VectorsToMO(view.GetData())
+			bat.Vecs[i] = containers.VectorsToMO(view.GetData())
 		}
 		view.Close()
 	}

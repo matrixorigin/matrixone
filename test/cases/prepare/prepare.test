@@ -49,3 +49,10 @@ execute stmt2;
 set @var_t1= 'aa';
 execute stmt2;
 deallocate prepare stmt2;
+
+create table t1 (a decimal(20,4), b int);
+insert into t1 values (12.2222, 1);
+prepare stmt1 from 'update t1 set a=a+? where b = 1';
+set @a=0.1111;
+execute stmt1 using @a;
+select a, b from t1;
