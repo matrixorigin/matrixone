@@ -71,7 +71,7 @@ type ColDef struct {
 	NullAbility   bool
 	AutoIncrement bool
 	Primary       bool
-	SortIdx       int8
+	SortIdx       int8 // indicates the its sequence in all sort keys
 	SortKey       bool
 	Comment       string
 	Default       Default
@@ -487,11 +487,12 @@ func (s *Schema) AppendSortKey(name string, typ types.Type, idx int, isPrimary b
 
 func (s *Schema) AppendPKCol(name string, typ types.Type, idx int) error {
 	def := &ColDef{
-		Name:    name,
-		Type:    typ,
-		SortIdx: int8(idx),
-		SortKey: true,
-		Primary: true,
+		Name:        name,
+		Type:        typ,
+		SortIdx:     int8(idx),
+		SortKey:     true,
+		Primary:     true,
+		NullAbility: false,
 	}
 	return s.AppendColDef(def)
 }
@@ -518,6 +519,7 @@ func (s *Schema) AppendPKColWithAttribute(attr engine.Attribute, idx int) error 
 		SortKey:       true,
 		Primary:       true,
 		Comment:       attr.Comment,
+		NullAbility:   attrDefault.NullAbility,
 		Default:       attrDefault,
 		AutoIncrement: attr.AutoIncrement,
 	}
@@ -526,19 +528,21 @@ func (s *Schema) AppendPKColWithAttribute(attr engine.Attribute, idx int) error 
 
 func (s *Schema) AppendCol(name string, typ types.Type) error {
 	def := &ColDef{
-		Name:    name,
-		Type:    typ,
-		SortIdx: -1,
+		Name:        name,
+		Type:        typ,
+		SortIdx:     -1,
+		NullAbility: true,
 	}
 	return s.AppendColDef(def)
 }
 
 func (s *Schema) AppendColWithDefault(name string, typ types.Type, val Default) error {
 	def := &ColDef{
-		Name:    name,
-		Type:    typ,
-		SortIdx: -1,
-		Default: val,
+		Name:        name,
+		Type:        typ,
+		SortIdx:     -1,
+		Default:     val,
+		NullAbility: val.NullAbility,
 	}
 	return s.AppendColDef(def)
 }
@@ -571,6 +575,7 @@ func (s *Schema) AppendColWithAttribute(attr engine.Attribute) error {
 		SortIdx:       -1,
 		Comment:       attr.Comment,
 		Default:       attrDefault,
+		NullAbility:   attrDefault.NullAbility,
 		AutoIncrement: attr.AutoIncrement,
 		OnUpdate:      ps,
 	}
@@ -654,46 +659,40 @@ func (s *Schema) Finalize(rebuild bool) (err error) {
 	}
 	if !rebuild {
 		phyAddrDef := &ColDef{
-			Name:    PhyAddrColumnName,
-			Comment: PhyAddrColumnComment,
-			Type:    PhyAddrColumnType,
-			Hidden:  true,
-			PhyAddr: true,
+			Name:        PhyAddrColumnName,
+			Comment:     PhyAddrColumnComment,
+			Type:        PhyAddrColumnType,
+			Hidden:      true,
+			NullAbility: false,
+			PhyAddr:     true,
 		}
 		if err = s.AppendColDef(phyAddrDef); err != nil {
 			return
 		}
 	}
 
+	// sortIdx means a sortkey's the position in ColDefs
 	sortIdx := make([]int, 0)
 	names := make(map[string]bool)
 	for idx, def := range s.ColDefs {
 		// Check column idx validility
 		if idx != def.Idx {
-			err = moerr.NewConstraintViolation("wrong column index %d specified for \"%s\"", def.Idx, def.Name)
-			return
+			return fmt.Errorf("%w: wrong column index %d specified for \"%s\"", ErrSchemaValidation, def.Idx, def.Name)
 		}
 		// Check unique name
-		_, ok := names[def.Name]
-		if ok {
-			err = moerr.NewConstraintViolation("duplicate column \"%s\"", def.Name)
-			return
+		if _, ok := names[def.Name]; ok {
+			return fmt.Errorf("%w: duplicate column \"%s\"", ErrSchemaValidation, def.Name)
 		}
 		names[def.Name] = true
+		// for now, sort key is pk
 		if def.IsSortKey() {
 			sortIdx = append(sortIdx, idx)
 		}
 		if def.IsPhyAddr() {
 			if s.PhyAddrKey != nil {
-				err = moerr.NewConstraintViolation("duplicate physical address column \"%s\"", def.Name)
-				return
+				return fmt.Errorf("%w: duplicated physical address column \"%s\"", ErrSchemaValidation, def.Name)
 			}
 			s.PhyAddrKey = def
-		}
-		if def.IsSortKey() || def.IsPhyAddr() {
-			def.NullAbility = false
-		} else {
-			def.NullAbility = true
 		}
 	}
 
