@@ -16,12 +16,12 @@ package logservice
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"math"
 	"sync/atomic"
 	"testing"
 	"time"
 
-	"github.com/cockroachdb/errors"
 	"github.com/google/uuid"
 	"github.com/lni/dragonboat/v4"
 	"github.com/lni/goutils/leaktest"
@@ -29,6 +29,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 )
@@ -73,7 +74,7 @@ func TestStoreCanBeCreatedAndClosed(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 	cfg := getStoreTestConfig()
 	defer vfs.ReportLeakedFD(cfg.FS, t)
-	store, err := newLogStore(cfg)
+	store, err := newLogStore(cfg, nil)
 	assert.NoError(t, err)
 	plog.Infof("1")
 	defer func() {
@@ -82,8 +83,8 @@ func TestStoreCanBeCreatedAndClosed(t *testing.T) {
 	plog.Infof("2")
 }
 
-func getTestStore(cfg Config, startLogReplica bool) (*store, error) {
-	store, err := newLogStore(cfg)
+func getTestStore(cfg Config, startLogReplica bool, taskService taskservice.TaskService) (*store, error) {
+	store, err := newLogStore(cfg, taskService)
 	if err != nil {
 		return nil, err
 	}
@@ -102,7 +103,7 @@ func TestHAKeeperCanBeStarted(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 	cfg := getStoreTestConfig()
 	defer vfs.ReportLeakedFD(cfg.FS, t)
-	store, err := newLogStore(cfg)
+	store, err := newLogStore(cfg, nil)
 	assert.NoError(t, err)
 	peers := make(map[uint64]dragonboat.Target)
 	peers[2] = store.nh.ID()
@@ -117,7 +118,7 @@ func TestStateMachineCanBeStarted(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 	cfg := getStoreTestConfig()
 	defer vfs.ReportLeakedFD(cfg.FS, t)
-	store, err := getTestStore(cfg, true)
+	store, err := getTestStore(cfg, true, nil)
 	assert.NoError(t, err)
 	defer func() {
 		assert.NoError(t, store.close())
@@ -129,7 +130,7 @@ func TestReplicaCanBeStopped(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 	cfg := getStoreTestConfig()
 	defer vfs.ReportLeakedFD(cfg.FS, t)
-	store, err := getTestStore(cfg, true)
+	store, err := getTestStore(cfg, true, nil)
 	assert.NoError(t, err)
 	defer func() {
 		assert.NoError(t, store.close())
@@ -143,7 +144,7 @@ func runStoreTest(t *testing.T, fn func(*testing.T, *store)) {
 	defer leaktest.AfterTest(t)()
 	cfg := getStoreTestConfig()
 	defer vfs.ReportLeakedFD(cfg.FS, t)
-	store, err := getTestStore(cfg, true)
+	store, err := getTestStore(cfg, true, nil)
 	assert.NoError(t, err)
 	defer func() {
 		assert.NoError(t, store.close())
@@ -191,7 +192,7 @@ func TestAppendLogIsRejectedForMismatchedLeaseHolderID(t *testing.T) {
 		binaryEnc.PutUint64(cmd[headerSize:], 101)
 		binaryEnc.PutUint64(cmd[headerSize+8:], 1234567890)
 		_, err := store.append(ctx, 1, cmd)
-		assert.True(t, errors.Is(err, ErrNotLeaseHolder))
+		assert.True(t, moerr.IsMoErrCode(err, moerr.ErrNotLeaseHolder))
 	}
 	runStoreTest(t, fn)
 }
@@ -220,7 +221,7 @@ func TestTruncateLog(t *testing.T) {
 		assert.NoError(t, err)
 		assert.NoError(t, store.truncateLog(ctx, 1, 4))
 		err = store.truncateLog(ctx, 1, 3)
-		assert.True(t, errors.Is(err, ErrInvalidTruncateLsn))
+		assert.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidTruncateLsn))
 	}
 	runStoreTest(t, fn)
 }
@@ -257,7 +258,7 @@ func TestQueryLog(t *testing.T) {
 		assert.Equal(t, 1, len(entries))
 		assert.Equal(t, uint64(4), lsn)
 		assert.Equal(t, entries[0].Data, cmd)
-		// lease holder ID update cmd at entry index 3
+		// leaseholder ID update cmd at entry index 3
 		entries, lsn, err = store.queryLog(ctx, 1, 3, math.MaxUint64)
 		assert.NoError(t, err)
 		assert.Equal(t, 2, len(entries))
@@ -427,7 +428,7 @@ func getTestStores() (*store, *store, error) {
 		GossipSeedAddresses: []string{"127.0.0.1:9011", "127.0.0.1:9012"},
 	}
 	cfg1.Fill()
-	store1, err := newLogStore(cfg1)
+	store1, err := newLogStore(cfg1, nil)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -442,7 +443,7 @@ func getTestStores() (*store, *store, error) {
 		GossipSeedAddresses: []string{"127.0.0.1:9011", "127.0.0.1:9012"},
 	}
 	cfg2.Fill()
-	store2, err := newLogStore(cfg2)
+	store2, err := newLogStore(cfg2, nil)
 	if err != nil {
 		return nil, nil, err
 	}

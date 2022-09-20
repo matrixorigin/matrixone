@@ -29,32 +29,32 @@ import (
 )
 
 var (
-	readTxnErrors = map[txn.ErrorCode]struct{}{
-		txn.ErrorCode_TAERead:      {},
-		txn.ErrorCode_RPCError:     {},
-		txn.ErrorCode_WaitTxn:      {},
-		txn.ErrorCode_TxnNotFound:  {},
-		txn.ErrorCode_TxnNotActive: {},
+	readTxnErrors = map[uint16]struct{}{
+		moerr.ErrTAERead:      {},
+		moerr.ErrRpcError:     {},
+		moerr.ErrWaitTxn:      {},
+		moerr.ErrTxnNotFound:  {},
+		moerr.ErrTxnNotActive: {},
 	}
-	writeTxnErrors = map[txn.ErrorCode]struct{}{
-		txn.ErrorCode_TAEWrite:     {},
-		txn.ErrorCode_RPCError:     {},
-		txn.ErrorCode_TxnNotFound:  {},
-		txn.ErrorCode_TxnNotActive: {},
+	writeTxnErrors = map[uint16]struct{}{
+		moerr.ErrTAEWrite:     {},
+		moerr.ErrRpcError:     {},
+		moerr.ErrTxnNotFound:  {},
+		moerr.ErrTxnNotActive: {},
 	}
-	commitTxnErrors = map[txn.ErrorCode]struct{}{
-		txn.ErrorCode_TAECommit:    {},
-		txn.ErrorCode_TAERollback:  {},
-		txn.ErrorCode_TAEPrepare:   {},
-		txn.ErrorCode_RPCError:     {},
-		txn.ErrorCode_TxnNotFound:  {},
-		txn.ErrorCode_TxnNotActive: {},
+	commitTxnErrors = map[uint16]struct{}{
+		moerr.ErrTAECommit:    {},
+		moerr.ErrTAERollback:  {},
+		moerr.ErrTAEPrepare:   {},
+		moerr.ErrRpcError:     {},
+		moerr.ErrTxnNotFound:  {},
+		moerr.ErrTxnNotActive: {},
 	}
-	rollbackTxnErrors = map[txn.ErrorCode]struct{}{
-		txn.ErrorCode_TAERollback:  {},
-		txn.ErrorCode_RPCError:     {},
-		txn.ErrorCode_TxnNotFound:  {},
-		txn.ErrorCode_TxnNotActive: {},
+	rollbackTxnErrors = map[uint16]struct{}{
+		moerr.ErrTAERollback:  {},
+		moerr.ErrRpcError:     {},
+		moerr.ErrTxnNotFound:  {},
+		moerr.ErrTxnNotActive: {},
 	}
 )
 
@@ -371,7 +371,7 @@ func (tc *txnOperator) checkStatus(locked bool) error {
 	}
 
 	if tc.mu.closed {
-		return moerr.New(moerr.ErrTxnClosed)
+		return moerr.NewTxnClosed()
 	}
 	return nil
 }
@@ -512,7 +512,7 @@ func (tc *txnOperator) checkResponseTxnStatusForReadWrite(resp txn.TxnResponse) 
 
 	txnMeta := resp.Txn
 	if txnMeta == nil {
-		return moerr.New(moerr.ErrTxnClosed)
+		return moerr.NewTxnClosed()
 	}
 
 	switch txnMeta.Status {
@@ -520,7 +520,7 @@ func (tc *txnOperator) checkResponseTxnStatusForReadWrite(resp txn.TxnResponse) 
 		return nil
 	case txn.TxnStatus_Aborted, txn.TxnStatus_Aborting,
 		txn.TxnStatus_Committed, txn.TxnStatus_Committing:
-		return moerr.New(moerr.ErrTxnClosed)
+		return moerr.NewTxnClosed()
 	default:
 		tc.logger.Fatal("invalid response status for read or write",
 			util.TxnField(*txnMeta))
@@ -528,22 +528,23 @@ func (tc *txnOperator) checkResponseTxnStatusForReadWrite(resp txn.TxnResponse) 
 	return nil
 }
 
-func (tc *txnOperator) checkTxnError(txnError *txn.TxnError, possibleErrorMap map[txn.ErrorCode]struct{}) error {
+func (tc *txnOperator) checkTxnError(txnError *txn.TxnError, possibleErrorMap map[uint16]struct{}) error {
 	if txnError == nil {
 		return nil
 	}
 
-	if txnError.Code == txn.ErrorCode_DNShardNotFound {
-		return moerr.NewError(moerr.ErrDNShardNotFound, txnError.Message)
+	txnCode := uint16(txnError.Code)
+
+	if txnCode == moerr.ErrDNShardNotFound {
+		// do we still have the uuid and shard id?
+		return moerr.NewDNShardNotFound("", 0xDEADBEAF)
 	}
 
-	if _, ok := possibleErrorMap[txnError.Code]; ok {
-		return moerr.NewError(moerr.ErrTxnError, txnError.Message)
+	if _, ok := possibleErrorMap[txnCode]; ok {
+		return moerr.NewTxnError("convert to txnerror, code %d, msg %s", txnCode, txnError.Message)
 	}
 
-	tc.logger.Fatal("invalid txn error",
-		zap.String("txn-error", txnError.DebugString()))
-	return nil
+	panic(moerr.NewInternalError("invalid txn error, code %d, msg %s", txnCode, txnError.DebugString()))
 }
 
 func (tc *txnOperator) checkResponseTxnStatusForCommit(resp txn.TxnResponse) error {
@@ -553,17 +554,15 @@ func (tc *txnOperator) checkResponseTxnStatusForCommit(resp txn.TxnResponse) err
 
 	txnMeta := resp.Txn
 	if txnMeta == nil {
-		return moerr.New(moerr.ErrTxnClosed)
+		return moerr.NewTxnClosed()
 	}
 
 	switch txnMeta.Status {
 	case txn.TxnStatus_Committed, txn.TxnStatus_Aborted:
 		return nil
 	default:
-		tc.logger.Fatal("invalid response status for commit",
-			util.TxnField(*txnMeta))
+		panic(moerr.NewInternalError("invalid respose status for commit, %v", txnMeta.Status))
 	}
-	return nil
 }
 
 func (tc *txnOperator) checkResponseTxnStatusForRollback(resp txn.TxnResponse) error {
@@ -573,17 +572,15 @@ func (tc *txnOperator) checkResponseTxnStatusForRollback(resp txn.TxnResponse) e
 
 	txnMeta := resp.Txn
 	if txnMeta == nil {
-		return moerr.New(moerr.ErrTxnClosed)
+		return moerr.NewTxnClosed()
 	}
 
 	switch txnMeta.Status {
 	case txn.TxnStatus_Aborted:
 		return nil
 	default:
-		tc.logger.Fatal("invalid response status for rollback",
-			util.TxnField(*txnMeta))
+		panic(moerr.NewInternalError("invalud response status for rollback %v", txnMeta.Status))
 	}
-	return nil
 }
 
 func (tc *txnOperator) trimResponses(result *rpc.SendResult, err error) (*rpc.SendResult, error) {

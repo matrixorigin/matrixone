@@ -20,6 +20,7 @@ import (
 	"io"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/stretchr/testify/assert"
 )
@@ -173,10 +174,7 @@ func testMVCC(
 		assert.NotNil(t, err)
 		assert.NotNil(t, res)
 		assert.Equal(t, 5, *res)
-		conflict, ok := err.(*ErrReadConflict)
-		assert.True(t, ok)
-		assert.Equal(t, tx2, conflict.ReadingTx)
-		assert.Equal(t, tx1, conflict.Stale)
+		assert.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnReadConflict))
 	default:
 		panic(fmt.Errorf("not handle: %v", isolationPolicy.Read))
 	}
@@ -185,25 +183,16 @@ func testMVCC(
 	i := 1
 	err = m.Insert(now, tx2, &i)
 	assert.NotNil(t, err)
-	writeConflict, ok := err.(*ErrWriteConflict)
-	assert.True(t, ok)
-	assert.Equal(t, tx2, writeConflict.WritingTx)
-	assert.Equal(t, tx1, writeConflict.Stale)
+	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnWriteConflict))
 
 	err = m.Delete(now, tx2)
 	assert.NotNil(t, err)
-	writeConflict, ok = err.(*ErrWriteConflict)
-	assert.True(t, ok)
-	assert.Equal(t, tx2, writeConflict.WritingTx)
-	assert.Equal(t, tx1, writeConflict.Stale)
+	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnWriteConflict))
 
 	i2 := 1
 	err = m.Update(now, tx2, &i2)
 	assert.NotNil(t, err)
-	writeConflict, ok = err.(*ErrWriteConflict)
-	assert.True(t, ok)
-	assert.Equal(t, tx2, writeConflict.WritingTx)
-	assert.Equal(t, tx1, writeConflict.Stale)
+	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnWriteConflict))
 
 	// new transactions
 	tx3 := NewTransaction("3", now, isolationPolicy)
@@ -215,27 +204,17 @@ func testMVCC(
 
 	err = m.Delete(now, tx4)
 	assert.NotNil(t, err)
-	writeConflict, ok = err.(*ErrWriteConflict)
-	assert.True(t, ok)
-	assert.Equal(t, tx4, writeConflict.WritingTx)
-	assert.Equal(t, tx3, writeConflict.Locked)
+	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnWriteConflict))
 
 	i3 := 1
 	err = m.Insert(now, tx4, &i3)
 	assert.NotNil(t, err)
-	writeConflict, ok = err.(*ErrWriteConflict)
-	assert.True(t, ok)
-	assert.Equal(t, tx4, writeConflict.WritingTx)
-	assert.Equal(t, tx3, writeConflict.Locked)
+	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnWriteConflict))
 
 	i4 := 1
 	err = m.Update(now, tx4, &i4)
 	assert.NotNil(t, err)
-	writeConflict, ok = err.(*ErrWriteConflict)
-	assert.True(t, ok)
-	assert.Equal(t, tx4, writeConflict.WritingTx)
-	assert.Equal(t, tx3, writeConflict.Locked)
-
+	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnWriteConflict))
 }
 
 func TestMVCC(t *testing.T) {

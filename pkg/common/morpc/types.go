@@ -20,14 +20,6 @@ import (
 
 	"github.com/fagongzi/goetty/v2/buf"
 	"github.com/fagongzi/goetty/v2/codec"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-)
-
-var (
-	errClientClosed       = moerr.NewError(moerr.ErrClientClosed, "client closed")
-	errBackendClosed      = moerr.NewError(moerr.ErrBackendClosed, "backend closed")
-	errNoAvailableBackend = moerr.NewError(moerr.ErrNoAvailableBackend, "no available backend")
-	errStreamClosed       = moerr.NewError(moerr.ErrStreamClosed, "stream closed")
 )
 
 // Message morpc is not a normal remote method call, rather it is a message-based asynchronous

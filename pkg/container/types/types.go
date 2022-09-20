@@ -529,7 +529,7 @@ func (t T) TypeLen() int {
 	case T_Rowid:
 		return RowidSize
 	}
-	panic(moerr.NewInternalError("Unknow type %s", t))
+	panic(moerr.NewInternalError(fmt.Sprintf("unknow type %d", t)))
 }
 
 // FixedLength dangerous code, use TypeLen() if you don't want -8, -16, -24
@@ -558,7 +558,7 @@ func (t T) FixedLength() int {
 	case T_char, T_varchar, T_blob, T_json:
 		return -24
 	}
-	panic(moerr.NewInternalError("Unknow type %s", t))
+	panic(moerr.NewInternalError(fmt.Sprintf("unknow type %d", t)))
 }
 
 // isUnsignedInt: return true if the types.T is UnSigned integer type

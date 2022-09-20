@@ -15,6 +15,7 @@
 package txnimpl
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
@@ -67,7 +68,7 @@ func newSysDB(db *txnDB) *txnSysDB {
 
 func (db *txnSysDB) DropRelationByName(name string) (rel handle.Relation, err error) {
 	if isSysTable(name) {
-		err = catalog.ErrNotPermitted
+		err = moerr.NewInternalError("drop relation %s is not permitted", name)
 		return
 	}
 	return db.txnDatabase.DropRelationByName(name)
@@ -75,7 +76,7 @@ func (db *txnSysDB) DropRelationByName(name string) (rel handle.Relation, err er
 
 func (db *txnSysDB) TruncateByName(name string) (rel handle.Relation, err error) {
 	if isSysTable(name) {
-		err = catalog.ErrNotPermitted
+		err = moerr.NewInternalError("truncate relation %s is not permitted", name)
 		return
 	}
 	return db.txnDatabase.TruncateByName(name)

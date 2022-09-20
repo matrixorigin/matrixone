@@ -21,13 +21,13 @@ import (
 	"sort"
 	"unsafe"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	taedata "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 )
 
@@ -270,7 +270,7 @@ func getBytesFromPrimaryVectorForHash(vec *vector.Vector, i int, typ types.Type)
 	}
 	if vec.GetNulls().Any() {
 		//TODO mimic to pass BVT
-		return nil, taedata.ErrDuplicate
+		return nil, moerr.NewDuplicate()
 		//panic("primary value vector should not contain nulls")
 	}
 	if vec.Typ.Oid.FixedLength() > 0 {

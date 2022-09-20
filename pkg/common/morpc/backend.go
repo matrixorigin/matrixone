@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/fagongzi/goetty/v2"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"go.uber.org/zap"
@@ -248,7 +249,7 @@ func (rb *remoteBackend) NewStream() (Stream, error) {
 	defer rb.stateMu.RUnlock()
 
 	if rb.stateMu.state == stateStopped {
-		return nil, errBackendClosed
+		return nil, moerr.NewBackendClosed()
 	}
 
 	rb.mu.Lock()
@@ -265,7 +266,7 @@ func (rb *remoteBackend) doSend(m backendSendMessage) error {
 		rb.stateMu.RLock()
 		if rb.stateMu.state == stateStopped {
 			rb.stateMu.RUnlock()
-			return errBackendClosed
+			return moerr.NewBackendClosed()
 		}
 
 		// The close method need acquire the write lock, so we cannot block at here.
@@ -570,7 +571,7 @@ func (rb *remoteBackend) resetConn() error {
 	sleep := time.Millisecond * 200
 	for {
 		if !rb.runningLocked() {
-			return errBackendClosed
+			return moerr.NewBackendClosed()
 		}
 
 		rb.logger.Info("start connect to remote")
@@ -589,7 +590,7 @@ func (rb *remoteBackend) resetConn() error {
 			time.Sleep(sleep)
 			duration += sleep
 			if time.Since(start) > rb.options.connectTimeout {
-				return errBackendClosed
+				return moerr.NewBackendClosed()
 			}
 			if duration >= wait {
 				break
@@ -747,7 +748,7 @@ func (s *stream) Send(ctx context.Context, request Message) error {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	if s.mu.closed {
-		return errStreamClosed
+		return moerr.NewStreamClosed()
 	}
 
 	return s.sendFunc(backendSendMessage{message: RPCMessage{Ctx: ctx, Message: request}})
@@ -757,7 +758,7 @@ func (s *stream) Receive() (chan Message, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	if s.mu.closed {
-		return nil, errStreamClosed
+		return nil, moerr.NewStreamClosed()
 	}
 	return s.c, nil
 }

@@ -16,12 +16,12 @@ package indexwrapper
 
 import (
 	"github.com/RoaringBitmap/roaring"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 )
 
@@ -174,7 +174,7 @@ func (writer *ZMWriter) AddValues(values containers.Vector) (err error) {
 		writer.zonemap = index.NewZoneMap(typ)
 	} else {
 		if writer.zonemap.GetType() != typ {
-			err = data.ErrWrongType
+			err = moerr.NewInternalError("wrong type")
 			return
 		}
 	}
@@ -190,7 +190,7 @@ func (writer *ZMWriter) SetMinMax(min, max any, typ types.Type) (err error) {
 		writer.zonemap = index.NewZoneMap(typ)
 	} else {
 		if writer.zonemap.GetType() != typ {
-			err = data.ErrWrongType
+			err = moerr.NewInternalError("wrong type")
 			return
 		}
 	}
