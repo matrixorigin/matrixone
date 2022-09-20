@@ -21,65 +21,90 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/indexwrapper"
 )
 
-func BuildAndFlushIndex(file file.Block, meta *catalog.BlockEntry, columnData containers.Vector) (err error) {
-	// write indexes, collect their meta, and refresh host's index holder
-	schema := meta.GetSchema()
-	sortCol, err := file.OpenColumn(schema.SortKey.Defs[0].Idx)
+func BuildColumnIndex(file file.ColumnBlock, colDef *catalog.ColDef, columnData containers.Vector, isPk, isSorted bool) (metas []indexwrapper.IndexMeta, err error) {
+	zmPos := 0
+	zmFile, err := file.OpenIndexFile(zmPos)
 	if err != nil {
 		return
 	}
-	defer sortCol.Close()
-	zmIdx := uint16(0)
-	sfIdx := uint16(1)
-	metas := indexwrapper.NewEmptyIndicesMeta()
+	defer zmFile.Unref()
 
 	zoneMapWriter := indexwrapper.NewZMWriter()
-	zmFile, err := sortCol.OpenIndexFile(int(zmIdx))
-	if err != nil {
-		return err
+	if err = zoneMapWriter.Init(zmFile, indexwrapper.Plain, uint16(colDef.Idx), uint16(zmPos)); err != nil {
+		return
 	}
-	defer zmFile.Unref()
-	err = zoneMapWriter.Init(zmFile, indexwrapper.Plain, uint16(schema.GetSingleSortKey().Idx), zmIdx)
-	if err != nil {
-		return err
+	if isSorted && columnData.Length() > 2 {
+		slimForZmVec := containers.MakeVector(columnData.GetType(), columnData.Nullable())
+		slimForZmVec.Append(columnData.Get(0))
+		slimForZmVec.Append(columnData.Get(columnData.Length() - 1))
+		err = zoneMapWriter.AddValues(slimForZmVec)
+	} else {
+		err = zoneMapWriter.AddValues(columnData)
 	}
-	err = zoneMapWriter.AddValues(columnData)
 	if err != nil {
-		return err
+		return
 	}
 	zmMeta, err := zoneMapWriter.Finalize()
 	if err != nil {
-		return err
+		return
 	}
-	metas.AddIndex(*zmMeta)
+	metas = append(metas, *zmMeta)
 
+	if !isPk {
+		return
+	}
+
+	bfPos := 1
 	bfWriter := indexwrapper.NewBFWriter()
-	sfFile, err := sortCol.OpenIndexFile(int(sfIdx))
+	bfFile, err := file.OpenIndexFile(bfPos)
 	if err != nil {
-		return err
+		return
 	}
-	defer sfFile.Unref()
-	err = bfWriter.Init(sfFile, indexwrapper.Plain, uint16(schema.GetSingleSortKey().Idx), sfIdx)
-	if err != nil {
-		return err
+	defer bfFile.Unref()
+	if err = bfWriter.Init(bfFile, indexwrapper.Plain, uint16(colDef.Idx), uint16(bfPos)); err != nil {
+		return
 	}
-	err = bfWriter.AddValues(columnData)
-	if err != nil {
-		return err
+	if err = bfWriter.AddValues(columnData); err != nil {
+		return
 	}
-	sfMeta, err := bfWriter.Finalize()
+	bfMeta, err := bfWriter.Finalize()
 	if err != nil {
-		return err
+		return
 	}
-	metas.AddIndex(*sfMeta)
-	metaBuf, err := metas.Marshal()
-	if err != nil {
-		return err
+	metas = append(metas, *bfMeta)
+	return
+}
+
+func BuildBlockIndex(file file.Block, meta *catalog.BlockEntry, columnsData *containers.Batch) (err error) {
+	schema := meta.GetSchema()
+	blkMetas := indexwrapper.NewEmptyIndicesMeta()
+	// ATTENTION: COMPOUNDPK
+	pkIdx := -10086
+	if schema.HasPK() {
+		pkIdx = schema.GetSingleSortKey().Idx
 	}
 
-	err = file.WriteIndexMeta(metaBuf)
+	for _, colDef := range schema.ColDefs {
+		if colDef.IsPhyAddr() {
+			continue
+		}
+		colBlock, err := file.OpenColumn(colDef.Idx)
+		if err != nil {
+			return err
+		}
+		defer colBlock.Close()
+		data := columnsData.GetVectorByName(colDef.GetName())
+		isPk := colDef.Idx == pkIdx
+		// FIXME: there are several sorted column if compound pk exists?
+		colMetas, err := BuildColumnIndex(colBlock, colDef, data, isPk, isPk)
+		if err != nil {
+			return err
+		}
+		blkMetas.AddIndex(colMetas...)
+	}
+	metaBuf, err := blkMetas.Marshal()
 	if err != nil {
 		return err
 	}
-	return nil
+	return file.WriteIndexMeta(metaBuf)
 }

@@ -21,7 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/indexwrapper"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/updates"
 )
 
@@ -64,47 +64,73 @@ func (blk *dataBlock) ReplayDelta() (err error) {
 
 func (blk *dataBlock) ReplayIndex() (err error) {
 	if blk.meta.IsAppendable() {
-		if !blk.meta.GetSchema().HasPK() {
-			return
+		return blk.replayMutIndex()
+	}
+	return blk.replayImmutIndex()
+}
+
+// replayMutIndex load column data to memory to construct index
+func (blk *dataBlock) replayMutIndex() error {
+	schema := blk.meta.GetSchema()
+	for _, colDef := range schema.ColDefs {
+		if colDef.IsPhyAddr() {
+			continue
 		}
 		keysCtx := new(index.KeysCtx)
-		var vec containers.Vector
-		if blk.meta.GetSchema().IsSinglePK() {
-			// TODO: use mempool
-			vec, err = blk.node.GetColumnDataCopy(blk.node.rows, blk.meta.GetSchema().GetSingleSortKeyIdx(), nil)
-			if err != nil {
-				return
-			}
-			// TODO: apply deletes
-			keysCtx.Keys = vec
-		} else {
-			sortKeys := blk.meta.GetSchema().SortKey
-			vs := make([]containers.Vector, sortKeys.Size())
-			for i := range vs {
-				vec, err = blk.node.GetColumnDataCopy(blk.node.rows, sortKeys.Defs[i].Idx, nil)
-				if err != nil {
-					return
-				}
-				// TODO: apply deletes
-				vs[i] = vec
-				defer vs[i].Close()
-			}
-			keysCtx.Keys = model.EncodeCompoundColumn(vs...)
-		}
+		vec, err := blk.node.GetColumnDataCopy(blk.node.rows, colDef.Idx, nil)
 		if err != nil {
-			return
+			return err
 		}
-		keysCtx.Start = 0
-		keysCtx.Count = keysCtx.Keys.Length()
+		// TODO: apply deletes
+		keysCtx.Keys = vec
+		keysCtx.Count = vec.Length()
 		defer keysCtx.Keys.Close()
 		var zeroV types.TS
-		_, err = blk.index.BatchUpsert(keysCtx, 0, zeroV)
-		return
+		blk.indexes[colDef.Idx].BatchUpsert(keysCtx, 0, zeroV)
 	}
-	if blk.meta.GetSchema().HasSortKey() {
-		err = blk.index.ReadFrom(blk)
+	return nil
+}
+
+// replayImmutIndex load index meta to construct managed node
+func (blk *dataBlock) replayImmutIndex() error {
+	file := blk.GetBlockFile()
+	idxMeta, err := file.LoadIndexMeta()
+	if err != nil {
+		return err
 	}
-	return
+	metas := idxMeta.(*indexwrapper.IndicesMeta)
+
+	pkIdx := -1024
+	schema := blk.meta.GetSchema()
+	if schema.HasPK() {
+		pkIdx = schema.GetSingleSortKeyIdx()
+	}
+	var prevPkMeta indexwrapper.IndexMeta
+	for _, meta := range metas.Metas {
+		colIdx := int(meta.ColIdx)
+		if colIdx == pkIdx {
+			if prevPkMeta.IdxType == indexwrapper.InvalidIndexType {
+				// found one meta, stash it for later use
+				prevPkMeta = meta
+			} else {
+				// found two meta, construct the pk index
+				index := indexwrapper.NewImmutableIndex()
+				if err = index.ReadFrom(blk, schema.ColDefs[pkIdx], prevPkMeta, meta); err != nil {
+					return err
+				}
+				blk.indexes[pkIdx] = index
+				blk.pkIndex = index
+			}
+		} else {
+			// non-pk column, construct index
+			index := indexwrapper.NewImmutableIndex()
+			if err = index.ReadFrom(blk, schema.ColDefs[meta.ColIdx], meta); err != nil {
+				return err
+			}
+			blk.indexes[colIdx] = index
+		}
+	}
+	return nil
 }
 
 func (blk *dataBlock) OnReplayDelete(node txnif.DeleteNode) (err error) {
