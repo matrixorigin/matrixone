@@ -16,6 +16,7 @@ package txnbase
 
 import (
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"sync"
 	"sync/atomic"
 
@@ -90,6 +91,10 @@ func NewTxn(mgr *TxnManager, store txnif.TxnStore, txnId uint64, start types.TS,
 	}
 	txn.TxnCtx = NewTxnCtx(txnId, start, info)
 	return txn
+}
+
+func (txn *Txn) HandleCmd(entry *api.Entry) (err error) {
+	return
 }
 
 func (txn *Txn) MockIncWriteCnt() int { return txn.Store.IncreateWriteCnt() }

@@ -15,6 +15,7 @@
 package txnif
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"io"
 	"sync"
 
@@ -67,6 +68,7 @@ type TxnHandle interface {
 	DropDatabase(name string) (handle.Database, error)
 	GetDatabase(name string) (handle.Database, error)
 	DatabaseNames() []string
+	HandleCmd(entry *api.Entry) error
 }
 
 type TxnChanger interface {

@@ -16,6 +16,7 @@ package txnimpl
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
@@ -62,4 +63,37 @@ func (txn *txnImpl) DatabaseNames() (names []string) {
 
 func (txn *txnImpl) LogTxnEntry(dbId, tableId uint64, entry txnif.TxnEntry, readed []*common.ID) (err error) {
 	return txn.Store.LogTxnEntry(dbId, tableId, entry, readed)
+}
+
+func (txn *txnImpl) HandleCmd(cmd *api.Entry) (err error) {
+	db, err := txn.GetDatabase(cmd.DatabaseName)
+	if err != nil {
+		return err
+	}
+	//Handle DDL
+	if cmd.DatabaseId == catalog.SystemDBID {
+		switch cmd.TableId {
+		case catalog.SystemTable_DB_ID:
+			if cmd.EntryType == api.Entry_Insert {
+				//TODO::parse database name from Entry.batch
+				_, err = txn.CreateDatabase("")
+			} else {
+				_, err = txn.DropDatabase("")
+			}
+		case catalog.SystemTable_Table_ID:
+			if cmd.EntryType == api.Entry_Insert {
+				//TODO::
+				_, err = db.CreateRelation(nil)
+			} else {
+				//TODO::
+				_, err = db.DropRelationByName("")
+			}
+		case catalog.SystemBlock_Columns_ID:
+
+		}
+		return err
+	}
+	//Handle DML
+
+	return
 }

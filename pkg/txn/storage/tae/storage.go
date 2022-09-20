@@ -16,6 +16,14 @@ package taestorage
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
+	"os"
+	"sync"
+	"syscall"
 
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
@@ -26,71 +34,169 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/storage"
 )
 
-type Storage struct {
+type TAEStorage struct {
 	shard     metadata.DNShard
 	logClient logservice.Client
 	fs        fileservice.FileService
 	clock     clock.Clock
+	tae       *db.DB
+	txns      struct {
+		sync.Mutex
+		idMap map[string]txnif.AsyncTxn
+	}
 }
 
-func New(
+func openTAE(targetDir string) (*db.DB, error) {
+	mask := syscall.Umask(0)
+	if err := os.MkdirAll(targetDir, os.FileMode(0755)); err != nil {
+		syscall.Umask(mask)
+		logutil.Infof("Recreate dir error:%v\n", err)
+		return nil, err
+	}
+	syscall.Umask(mask)
+	tae, err := db.Open(targetDir+"/tae", nil)
+	if err != nil {
+		logutil.Infof("Open tae failed. error:%v", err)
+		return nil, err
+	}
+	return tae, nil
+}
+
+func NewTAEStorage(
 	shard metadata.DNShard,
 	logClient logservice.Client,
 	fs fileservice.FileService,
 	clock clock.Clock,
-) (*Storage, error) {
+) (*TAEStorage, error) {
 
-	return &Storage{
+	//open tae, just for test.
+	dir := "./store"
+	engine, err := openTAE(dir)
+	if err != nil {
+		return nil, err
+	}
+
+	storage := &TAEStorage{
 		shard:     shard,
 		logClient: logClient,
 		fs:        fs,
 		clock:     clock,
-	}, nil
+		tae:       engine,
+	}
+	storage.txns.idMap = make(map[string]txnif.AsyncTxn)
+
+	return storage, nil
 }
 
-var _ storage.TxnStorage = new(Storage)
+var _ storage.TxnStorage = new(TAEStorage)
 
-// Close implements storage.TxnStorage
-func (*Storage) Close(ctx context.Context) error {
+func (s *TAEStorage) getOrCreate(meta txn.TxnMeta) (txn txnif.AsyncTxn, err error) {
+	s.txns.Lock()
+	defer s.txns.Unlock()
+	txn, ok := s.txns.idMap[string(meta.ID)]
+	if !ok {
+		//TODO::use StartTxnWithMeta, instead of StartTxn.
+		txn, err = s.tae.StartTxn(nil)
+	}
+	return
+}
+
+func (s *TAEStorage) get(meta txn.TxnMeta) (txn txnif.AsyncTxn, err error) {
+	s.txns.Lock()
+	defer s.txns.Unlock()
+	txn, ok := s.txns.idMap[string(meta.ID)]
+	if !ok {
+		return nil, storage.ErrMissingTxn
+	}
+	return
+}
+
+// Close implements storage.TxnTAEStorage
+func (s *TAEStorage) Close(ctx context.Context) error {
 	panic("unimplemented")
 }
 
-// Commit implements storage.TxnStorage
-func (*Storage) Commit(ctx context.Context, txnMeta txn.TxnMeta) error {
+// Commit implements storage.TxnTAEStorage
+func (s *TAEStorage) Commit(ctx context.Context, txnMeta txn.TxnMeta) error {
+	txnHandle, err := s.get(txnMeta)
+	if err != nil {
+		return err
+	}
+	return txnHandle.Commit()
+
+}
+
+// Committing implements storage.TxnTAEStorage
+func (s *TAEStorage) Committing(ctx context.Context, txnMeta txn.TxnMeta) error {
 	panic("unimplemented")
 }
 
-// Committing implements storage.TxnStorage
-func (*Storage) Committing(ctx context.Context, txnMeta txn.TxnMeta) error {
+// Destroy implements storage.TxnTAEStorage
+func (s *TAEStorage) Destroy(ctx context.Context) error {
 	panic("unimplemented")
 }
 
-// Destroy implements storage.TxnStorage
-func (*Storage) Destroy(ctx context.Context) error {
+// Prepare implements storage.TxnTAEStorage
+func (s *TAEStorage) Prepare(ctx context.Context, txnMeta txn.TxnMeta) (timestamp.Timestamp, error) {
 	panic("unimplemented")
 }
 
-// Prepare implements storage.TxnStorage
-func (*Storage) Prepare(ctx context.Context, txnMeta txn.TxnMeta) (timestamp.Timestamp, error) {
+// Read implements storage.TxnTAEStorage
+func (s *TAEStorage) Read(ctx context.Context, txnMeta txn.TxnMeta, op uint32, payload []byte) (storage.ReadResult, error) {
 	panic("unimplemented")
 }
 
-// Read implements storage.TxnStorage
-func (*Storage) Read(ctx context.Context, txnMeta txn.TxnMeta, op uint32, payload []byte) (storage.ReadResult, error) {
+// Rollback implements storage.TxnTAEStorage
+func (s *TAEStorage) Rollback(ctx context.Context, txnMeta txn.TxnMeta) error {
+	txnHandle, err := s.get(txnMeta)
+	if err != nil {
+		return err
+	}
+	return txnHandle.Rollback()
+}
+
+// StartRecovery implements storage.TxnTAEStorage
+func (s *TAEStorage) StartRecovery(context.Context, chan txn.TxnMeta) {
 	panic("unimplemented")
 }
 
-// Rollback implements storage.TxnStorage
-func (*Storage) Rollback(ctx context.Context, txnMeta txn.TxnMeta) error {
-	panic("unimplemented")
+// Write implements storage.TxnTAEStorage
+func (s *TAEStorage) Write(ctx context.Context, txnMeta txn.TxnMeta, op uint32, payload []byte) ([]byte, error) {
+	txnHandle, err := s.getOrCreate(txnMeta)
+	if err != nil {
+		return nil, err
+	}
+
+	precommitW := &api.PrecommitWriteCmd{}
+	err = types.Decode(payload, precommitW)
+	if err != nil {
+		return nil, err
+	}
+	for _, entry := range precommitW.EntryList {
+		//err = doHandleCmd(txnHandle, entry)
+		err = txnHandle.HandleCmd(entry)
+	}
+	return nil, err
 }
 
-// StartRecovery implements storage.TxnStorage
-func (*Storage) StartRecovery(context.Context, chan txn.TxnMeta) {
-	panic("unimplemented")
-}
+//func doHandleCmd(txn txnif.AsyncTxn, cmd *api.Entry) (err error) {
+//db, err := txn.GetDatabase(cmd.DatabaseName)
+//if err != nil {
+//	return  err
+//}
+//tb, err := db.GetRelationByName(cmd.TableName)
+//if err != nil {
+//	return err
+//}
 
-// Write implements storage.TxnStorage
-func (*Storage) Write(ctx context.Context, txnMeta txn.TxnMeta, op uint32, payload []byte) ([]byte, error) {
-	panic("unimplemented")
-}
+//if db.IsSysDB(cmd.DatabaseId) {
+//	if tb.IsSysTable(cmd.TableId) {
+
+//	}
+//}
+
+//if cmd.EntryType == api.Entry_Insert {
+
+//}
+//	return
+//}

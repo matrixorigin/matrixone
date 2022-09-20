@@ -16,6 +16,7 @@ package db
 
 import (
 	"errors"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"io"
 	"runtime"
 	"sync/atomic"
@@ -69,6 +70,11 @@ type DB struct {
 
 func (db *DB) StartTxn(info []byte) (txnif.AsyncTxn, error) {
 	return db.TxnMgr.StartTxn(info)
+}
+
+// TODO::
+func (db *DB) StartTxnWithMeta(info []byte, start types.TS, tid types.TID) {
+
 }
 
 func (db *DB) CommitTxn(txn txnif.AsyncTxn) (err error) {
