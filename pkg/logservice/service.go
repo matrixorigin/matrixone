@@ -217,6 +217,8 @@ func (s *Service) handle(ctx context.Context, req pb.Request,
 		return s.handleLogHeartbeat(ctx, req), pb.LogRecordResponse{}
 	case pb.CN_HEARTBEAT:
 		return s.handleCNHeartbeat(ctx, req), pb.LogRecordResponse{}
+	case pb.CN_ALLOCATE_ID:
+		return s.handleCNAllocateID(ctx, req), pb.LogRecordResponse{}
 	case pb.DN_HEARTBEAT:
 		return s.handleDNHeartbeat(ctx, req), pb.LogRecordResponse{}
 	case pb.CHECK_HAKEEPER:
@@ -351,6 +353,17 @@ func (s *Service) handleCNHeartbeat(ctx context.Context, req pb.Request) pb.Resp
 		return resp
 	}
 
+	return resp
+}
+
+func (s *Service) handleCNAllocateID(ctx context.Context, req pb.Request) pb.Response {
+	resp := getResponse(req)
+	firstID, err := s.store.cnAllocateID(ctx, *req.CNAllocateID)
+	if err != nil {
+		resp.ErrorCode, resp.ErrorMessage = toErrorCode(err)
+		return resp
+	}
+	resp.AllocateID = &pb.AllocateIDResponse{FirstID: firstID}
 	return resp
 }
 
