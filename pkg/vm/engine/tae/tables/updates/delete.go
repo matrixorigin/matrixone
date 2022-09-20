@@ -37,7 +37,9 @@ const (
 	NT_Merge
 )
 
-func compareDeleteNode(a, b *DeleteNode) int {
+func compareDeleteNode(va, vb txnbase.MVCCNode) int {
+	a := va.(*DeleteNode)
+	b := vb.(*DeleteNode)
 	a.RLock()
 	defer a.RUnlock()
 	b.RLock()
@@ -47,7 +49,7 @@ func compareDeleteNode(a, b *DeleteNode) int {
 
 type DeleteNode struct {
 	*sync.RWMutex
-	*common.GenericDLNode[*DeleteNode]
+	*common.GenericDLNode[txnbase.MVCCNode]
 	*txnbase.TxnMVCCNode
 	chain      *DeleteChain
 	logIndexes []*wal.Index
@@ -67,7 +69,15 @@ func NewMergedNode(commitTs types.TS) *DeleteNode {
 	}
 	return n
 }
-
+func NewEmptyDeleteNode() txnbase.MVCCNode {
+	n := &DeleteNode{
+		RWMutex:     new(sync.RWMutex),
+		TxnMVCCNode: txnbase.NewTxnMVCCNodeWithTxn(nil),
+		mask:        roaring.New(),
+		nt:          NT_Normal,
+	}
+	return n
+}
 func NewDeleteNode(txn txnif.AsyncTxn, dt handle.DeleteType) *DeleteNode {
 	n := &DeleteNode{
 		RWMutex:     new(sync.RWMutex),
@@ -78,6 +88,11 @@ func NewDeleteNode(txn txnif.AsyncTxn, dt handle.DeleteType) *DeleteNode {
 	}
 	return n
 }
+
+// todo
+func (node *DeleteNode) CloneAll() txnbase.MVCCNode  { panic("todo") }
+func (node *DeleteNode) CloneData() txnbase.MVCCNode { panic("todo") }
+func (node *DeleteNode) Update(txnbase.MVCCNode)     { panic("todo") }
 func (node *DeleteNode) GetPrepareTS() types.TS {
 	return node.TxnMVCCNode.GetPrepare()
 }
@@ -224,7 +239,7 @@ func (node *DeleteNode) WriteTo(w io.Writer) (n int64, err error) {
 	}
 	n += int64(sn) + 4
 	var sn2 int64
-	if sn2,err = node.TxnMVCCNode.WriteTo(w); err != nil {
+	if sn2, err = node.TxnMVCCNode.WriteTo(w); err != nil {
 		return
 	}
 	n += sn2
@@ -258,7 +273,7 @@ func (node *DeleteNode) ReadFrom(r io.Reader) (n int64, err error) {
 		return
 	}
 	var sn2 int64
-	if sn2,err = node.TxnMVCCNode.ReadFrom(r); err != nil {
+	if sn2, err = node.TxnMVCCNode.ReadFrom(r); err != nil {
 		return
 	}
 	n += sn2
