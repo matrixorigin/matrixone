@@ -30,6 +30,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
+	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 )
 
@@ -40,6 +41,7 @@ func runClientTest(t *testing.T,
 	defer vfs.ReportLeakedFD(cfg.FS, t)
 	service, err := NewService(cfg,
 		testutil.NewFS(),
+		taskservice.NewTaskService(taskservice.NewMemTaskStorage()),
 		WithBackendFilter(func(msg morpc.Message, backendAddr string) bool {
 			return true
 		}),
@@ -128,6 +130,7 @@ func TestClientCanBeConnectedByReverseProxy(t *testing.T) {
 	defer vfs.ReportLeakedFD(cfg.FS, t)
 	service, err := NewService(cfg,
 		testutil.NewFS(),
+		taskservice.NewTaskService(taskservice.NewMemTaskStorage()),
 		WithBackendFilter(func(msg morpc.Message, backendAddr string) bool {
 			return true
 		}),
