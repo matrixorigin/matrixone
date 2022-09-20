@@ -16,14 +16,15 @@ package indexwrapper
 
 import (
 	"github.com/RoaringBitmap/roaring"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 )
 
+var _ Index = (*immutableIndex)(nil)
+
 type immutableIndex struct {
+	defaultIndexImpl
 	zmReader *ZMReader
 	bfReader *BFReader
 }
@@ -32,55 +33,48 @@ func NewImmutableIndex() *immutableIndex {
 	return new(immutableIndex)
 }
 
-func (index *immutableIndex) IsKeyDeleted(any, types.TS) (bool, bool)        { panic("not supported") }
-func (index *immutableIndex) GetActiveRow(any) (uint32, error)               { panic("not supported") }
-func (index *immutableIndex) Delete(any, types.TS) error                     { panic("not supported") }
-func (index *immutableIndex) RevertUpsert(containers.Vector, types.TS) error { panic("not supported") }
-func (index *immutableIndex) BatchUpsert(*index.KeysCtx, int, types.TS) (*index.BatchResp, error) {
-	panic("not supported")
-}
-
 func (index *immutableIndex) Dedup(key any) (err error) {
 	exist := index.zmReader.Contains(key)
-	// 2. if not in [min, max], key is definitely not found
+	// 1. if not in [min, max], key is definitely not found
 	if !exist {
 		return
 	}
-	exist, err = index.bfReader.MayContainsKey(key)
-	// 3. check bloomfilter has some error. return err
-	if err != nil {
-		err = TranslateError(err)
-		return
+	if index.bfReader != nil {
+		exist, err = index.bfReader.MayContainsKey(key)
+		// 2. check bloomfilter has some error. return err
+		if err != nil {
+			err = TranslateError(err)
+			return
+		}
+		// 3. all keys were checked. definitely not
+		if !exist {
+			return
+		}
 	}
-	if exist {
-		err = data.ErrPossibleDuplicate
-	}
+
+	err = data.ErrPossibleDuplicate
 	return
 }
 
-func (index *immutableIndex) String() string {
-	panic("implement me")
-}
-func (index *immutableIndex) GetMaxDeleteTS() types.TS                    { panic("not supported") }
-func (index *immutableIndex) HasDeleteFrom(key any, fromTs types.TS) bool { panic("not supported") }
-
-func (index *immutableIndex) BatchDedup(keys containers.Vector,
-	rowmask *roaring.Bitmap) (keyselects *roaring.Bitmap, err error) {
+func (index *immutableIndex) BatchDedup(keys containers.Vector, rowmask *roaring.Bitmap) (keyselects *roaring.Bitmap, err error) {
 	keyselects, exist := index.zmReader.ContainsAny(keys)
 	// 1. all keys are not in [min, max]. definitely not
 	if !exist {
 		return
 	}
-	exist, keyselects, err = index.bfReader.MayContainsAnyKeys(keys, keyselects)
-	// 3. check bloomfilter has some unknown error. return err
-	if err != nil {
-		err = TranslateError(err)
-		return
+	if index.bfReader != nil {
+		exist, keyselects, err = index.bfReader.MayContainsAnyKeys(keys, keyselects)
+		// 2. check bloomfilter has some unknown error. return err
+		if err != nil {
+			err = TranslateError(err)
+			return
+		}
+		// 3. all keys were checked. definitely not
+		if !exist {
+			return
+		}
 	}
-	// 4. all keys were checked. definitely not
-	if !exist {
-		return
-	}
+
 	err = data.ErrPossibleDuplicate
 	return
 }
@@ -102,21 +96,15 @@ func (index *immutableIndex) Destroy() (err error) {
 	return
 }
 
-func (index *immutableIndex) ReadFrom(blk data.Block) (err error) {
+func (index *immutableIndex) ReadFrom(blk data.Block, colDef *catalog.ColDef, metas ...IndexMeta) (err error) {
 	entry := blk.GetMeta().(*catalog.BlockEntry)
 	file := blk.GetBlockFile()
-	idxMeta, err := file.LoadIndexMeta()
-	if err != nil {
-		return
-	}
-	metas := idxMeta.(*IndicesMeta)
-	colDef := entry.GetSchema().SortKey.Defs[0]
 	colFile, err := file.OpenColumn(colDef.Idx)
 	if err != nil {
 		return
 	}
 	defer colFile.Close()
-	for _, meta := range metas.Metas {
+	for _, meta := range metas {
 		idxFile, err := colFile.OpenIndexFile(int(meta.InternalIdx))
 		if err != nil {
 			return err
@@ -147,5 +135,3 @@ func (index *immutableIndex) ReadFrom(blk data.Block) (err error) {
 	}
 	return
 }
-
-func (index *immutableIndex) WriteTo(data.Block) error { panic("not supported") }
