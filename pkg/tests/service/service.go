@@ -35,6 +35,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	logpb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 )
 
@@ -228,6 +229,8 @@ type testCluster struct {
 		cfgs []logservice.Config
 		opts []logOptions
 		svcs []LogService
+
+		taskService taskservice.TaskService
 	}
 
 	cn struct {
@@ -253,7 +256,7 @@ type testCluster struct {
 }
 
 // NewCluster construct a cluster for integration test.
-func NewCluster(t *testing.T, opt Options) (Cluster, error) {
+func NewCluster(t *testing.T, opt Options, taskService taskservice.TaskService) (Cluster, error) {
 	opt.validate()
 
 	c := &testCluster{
@@ -272,6 +275,11 @@ func NewCluster(t *testing.T, opt Options) (Cluster, error) {
 
 	// build log service configurations
 	c.log.cfgs, c.log.opts = c.buildLogConfigs(c.network.addresses)
+	if taskService == nil {
+		c.log.taskService = taskservice.NewTaskService(taskservice.NewMemTaskStorage())
+	} else {
+		c.log.taskService = taskService
+	}
 
 	// build dn service configurations
 	c.dn.cfgs, c.dn.opts = c.buildDnConfigs(c.network.addresses)
