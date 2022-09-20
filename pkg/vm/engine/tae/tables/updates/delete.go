@@ -179,6 +179,9 @@ func (node *DeleteNode) ApplyCommit(index *wal.Index) (err error) {
 	node.Lock()
 	var ts types.TS
 	ts, err = node.TxnMVCCNode.ApplyCommit(index)
+	if err != nil {
+		return
+	}
 	if node.chain.mvcc != nil {
 		node.chain.mvcc.SetMaxVisible(ts)
 	}

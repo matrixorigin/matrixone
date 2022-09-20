@@ -377,10 +377,10 @@ func (un *TxnMVCCNode) CloneAll() *TxnMVCCNode {
 }
 
 func (un *TxnMVCCNode) String() string {
-	return fmt.Sprintf("[%v,%v,%v][logIndex=%v]",
-		un.Start,
-		un.Prepare,
-		un.End,
+	return fmt.Sprintf("[%s,%s,%s][logIndex=%v]",
+		un.Start.ToString(),
+		un.Prepare.ToString(),
+		un.End.ToString(),
 		un.LogIndex)
 }
 

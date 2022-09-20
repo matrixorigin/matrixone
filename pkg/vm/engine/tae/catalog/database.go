@@ -171,6 +171,19 @@ func (e *DBEntry) String() string {
 }
 
 func (e *DBEntry) StringLocked() string {
+	return e.StringWithlevelLocked(common.PPL1)
+}
+func (e *DBEntry) StringWithLevel(level common.PPLevel) string {
+	e.RLock()
+	defer e.RUnlock()
+	return e.StringWithlevelLocked(level)
+}
+
+func (e *DBEntry) StringWithlevelLocked(level common.PPLevel) string {
+	if level <= common.PPL1 {
+		return fmt.Sprintf("DB[%d][name=%s][CreateAt=%s,DeleteAt=%s]",
+			e.DBBaseEntry.ID, e.GetFullName(), e.GetCreatedAt().ToString(), e.GetDeleteAt().ToString())
+	}
 	return fmt.Sprintf("DB%s[name=%s]", e.DBBaseEntry.StringLocked(), e.GetFullName())
 }
 
@@ -182,7 +195,7 @@ func (e *DBEntry) MakeTableIt(reverse bool) *common.GenericSortedDListIt[*TableE
 
 func (e *DBEntry) PPString(level common.PPLevel, depth int, prefix string) string {
 	var w bytes.Buffer
-	_, _ = w.WriteString(fmt.Sprintf("%s%s%s", common.RepeatStr("\t", depth), prefix, e.String()))
+	_, _ = w.WriteString(fmt.Sprintf("%s%s%s", common.RepeatStr("\t", depth), prefix, e.StringWithLevel(level)))
 	if level == common.PPL0 {
 		return w.String()
 	}

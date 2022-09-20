@@ -46,7 +46,7 @@ func NewMetaBaseEntry(id uint64) *MetaBaseEntry {
 }
 
 func (be *MetaBaseEntry) StringLocked() string {
-	return fmt.Sprintf("[%d %p]%s", be.ID, be.RWMutex, be.MVCCChain.StringLocked())
+	return fmt.Sprintf("[%d]%s", be.ID, be.MVCCChain.StringLocked())
 }
 
 func (be *MetaBaseEntry) String() string {
