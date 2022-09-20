@@ -92,13 +92,12 @@ func uintToBinary(x uint64) string {
 	return string(b[i+1:])
 }
 
-
-func Bin[T constraints.Unsigned | constraints.Signed](intputVector, resultVector *vector.Vector, proc *process.Process) error{
+func Bin[T constraints.Unsigned | constraints.Signed](intputVector, resultVector *vector.Vector, proc *process.Process) error {
 	xs := vector.MustTCols[T](intputVector)
-	rs := make([]string,0)
+	rs := make([]string, 0)
 	for idx := range xs {
 		res := uintToBinary(uint64(xs[idx]))
-		rs = append(rs,res)
+		rs = append(rs, res)
 	}
 	vector.AppendString(resultVector, rs, proc.Mp())
 	return nil
@@ -106,14 +105,14 @@ func Bin[T constraints.Unsigned | constraints.Signed](intputVector, resultVector
 
 func BinFloat[T constraints.Float](intputVector, resultVector *vector.Vector, proc *process.Process) error {
 	xs := vector.MustTCols[T](intputVector)
-	rs := make([]string,0)
+	rs := make([]string, 0)
 	for idx := range xs {
 		val, err := strconv.ParseInt(fmt.Sprintf("%1.0f", xs[idx]), 10, 64)
 		if err != nil {
 			return err
 		}
 		res := uintToBinary(uint64(val))
-		rs = append(rs,res)
+		rs = append(rs, res)
 	}
 	vector.AppendString(resultVector, rs, proc.Mp())
 	return nil

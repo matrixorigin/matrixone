@@ -31,10 +31,11 @@ func Bin[T constraints.Unsigned | constraints.Signed](vectors []*vector.Vector, 
 			return proc.AllocScalarNullVector(resultType), nil
 		}
 		resultVector := proc.AllocScalarVector(resultType)
-		resultValues := make([]types.Varlena, 0)
+		vecLen := int64(vector.Length(inputVector))
+		resultValues := make([]types.Varlena, 0, vecLen)
 		vector.SetCol(resultVector, resultValues)
 		err := bin.Bin[T](inputVector, resultVector, proc)
-		if err != nil{
+		if err != nil {
 			return nil, err
 		}
 		return resultVector, nil
@@ -50,7 +51,6 @@ func Bin[T constraints.Unsigned | constraints.Signed](vectors []*vector.Vector, 
 	}
 }
 
-
 func BinFloat[T constraints.Float](vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	inputVector := vectors[0]
 	resultType := types.T_varchar.ToType()
@@ -59,10 +59,11 @@ func BinFloat[T constraints.Float](vectors []*vector.Vector, proc *process.Proce
 			return proc.AllocScalarNullVector(resultType), nil
 		}
 		resultVector := proc.AllocScalarVector(resultType)
-		resultValues := make([]types.Varlena, 0)
+		vecLen := int64(vector.Length(inputVector))
+		resultValues := make([]types.Varlena, 0, vecLen)
 		vector.SetCol(resultVector, resultValues)
 		err := bin.BinFloat[T](inputVector, resultVector, proc)
-		if err != nil{
+		if err != nil {
 			return nil, moerr.New(moerr.INVALID_ARGUMENT, "The input value is out of range")
 		}
 		return resultVector, nil
@@ -72,9 +73,9 @@ func BinFloat[T constraints.Float](vectors []*vector.Vector, proc *process.Proce
 			return nil, err
 		}
 		err = bin.BinFloat[T](inputVector, resultVector, proc)
-		if err != nil{
+		if err != nil {
 			return nil, moerr.New(moerr.INVALID_ARGUMENT, "The input value is out of range")
 		}
-		return resultVector,nil
+		return resultVector, nil
 	}
 }
