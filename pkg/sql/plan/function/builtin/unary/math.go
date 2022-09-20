@@ -65,13 +65,10 @@ func Atan(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	//If the vs's lenght is 1, just use the  function with one parameter
 	if len(vs) == 1 {
 		return math1(vs, proc, momath.Atan)
-	}
-	//Otherwise 
-	newVs, err := operator.Arith[float64, float64](vs, proc, vs[0].GetType(), momath.AtanWithTwoArg)
-	if err != nil {
-		return nil, err
-	}
-	return newVs, nil
+	}else{
+		return operator.Arith[float64, float64](vs, proc, vs[0].GetType(), momath.AtanWithTwoArg)
+	}	
+	
 }
 
 func Cos(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
