@@ -68,9 +68,9 @@ func Atan(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	}
 	//Otherwise 
 	newVs, err := operator.Arith[float64, float64](vs, proc, vs[0].GetType(), momath.AtanWithTwoArg)
-    if err != nil {
+	if err != nil {
 		return nil, err
-    }
+	}
 	return newVs, nil
 }
 
