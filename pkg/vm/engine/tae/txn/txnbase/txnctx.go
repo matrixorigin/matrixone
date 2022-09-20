@@ -194,9 +194,15 @@ func (ctx *TxnCtx) ToCommittedLocked() error {
 	return nil
 }
 
+func (ctx *TxnCtx) ToRollbacking(ts types.TS) error {
+	ctx.Lock()
+	defer ctx.Unlock()
+	return ctx.ToRollbackingLocked(ts)
+}
+
 func (ctx *TxnCtx) ToRollbackingLocked(ts types.TS) error {
-	if ts.LessEq(ctx.StartTS) {
-		panic(fmt.Sprintf("start ts %d should be less than commit ts %d", ctx.StartTS, ts))
+	if ts.Less(ctx.StartTS) {
+		panic(fmt.Sprintf("commit ts %d should not be less than start ts %d", ts, ctx.StartTS))
 	}
 	if (ctx.State != txnif.TxnStateActive) && (ctx.State != txnif.TxnStatePreparing) {
 		return ErrTxnCannotRollback

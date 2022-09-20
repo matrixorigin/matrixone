@@ -139,20 +139,14 @@ func (txn *Txn) Prepare() (err error) {
 	// TxnManager is closed
 	if err != nil {
 		txn.SetError(err)
-		txn.Lock()
-		_ = txn.ToRollbackingLocked(txn.GetStartTS().Next())
-		txn.Unlock()
+		txn.ToRollbacking(txn.GetStartTS())
 		_ = txn.PrepareRollback()
 		_ = txn.ApplyRollback()
-		txn.DoneWithErr(err)
+		txn.DoneWithErr(err, true)
 	}
 	txn.Wait()
-	if txn.Err == nil {
-		if err = txn.ToPrepared(); err != nil {
-			panic(err)
-		}
-	} else {
-		//txn.Status = txnif.TxnStatusRollbacked
+
+	if txn.Err != nil {
 		txn.Mgr.DeleteTxn(txn.GetID())
 	}
 	return txn.GetError()
@@ -192,9 +186,8 @@ func (txn *Txn) Committing() (err error) {
 		//txn.Err = ErrTxnStatusNotPrepared
 		return ErrTxnStateNotPrepared
 	}
-	txn.Add(1)
-	txn.Ch <- EventCommitting
-	txn.Wait()
+	// TODO:
+	// Make committing log entry and flush and wait
 	if err = txn.ToCommittingFinished(); err != nil {
 		panic(err)
 	}
@@ -230,33 +223,12 @@ func (txn *Txn) Event() (e int) {
 	return
 }
 
-func (txn *Txn) DoneWithErr(err error) {
+func (txn *Txn) DoneWithErr(err error, isAbort bool) {
 	if txn.Is2PC() {
-		// TODO
+		txn.done2PCWithErr(err, isAbort)
 		return
 	}
 	txn.done1PCWithErr(err)
-}
-
-func (txn *Txn) done1PCWithErr(err error) {
-	txn.DoneCond.L.Lock()
-	if err != nil {
-		txn.ToUnknownLocked()
-		txn.SetError(err)
-	} else {
-		if txn.State == txnif.TxnStatePreparing {
-			if err := txn.ToCommittedLocked(); err != nil {
-				txn.SetError(err)
-			}
-		} else {
-			if err := txn.ToRollbackedLocked(); err != nil {
-				txn.SetError(err)
-			}
-		}
-	}
-	txn.WaitGroup.Done()
-	txn.DoneCond.Broadcast()
-	txn.DoneCond.L.Unlock()
 }
 
 func (txn *Txn) PrepareCommit() (err error) {
@@ -336,9 +308,9 @@ func (txn *Txn) WaitPrepared() error {
 	return txn.Store.WaitPrepared()
 }
 
-func (txn *Txn) WaitDone(err error) error {
+func (txn *Txn) WaitDone(err error, isAbort bool) error {
 	// logutil.Infof("Wait %s Done", txn.String())
-	txn.DoneWithErr(err)
+	txn.DoneWithErr(err, isAbort)
 	return txn.Err
 }
 
