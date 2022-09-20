@@ -19,9 +19,9 @@ import (
 	"go/constant"
 	"strings"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/errors"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
@@ -131,7 +131,7 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (
 		expr, err = b.bindCaseExpr(exprImpl, depth, isRoot)
 
 	case *tree.IntervalExpr:
-		err = errors.New("", fmt.Sprintf("expr interval'%v' is not supported now", exprImpl))
+		err = moerr.NewNYI("expr interval'%v'", exprImpl)
 
 	case *tree.XorExpr:
 		expr, err = b.bindFuncExprImplByAstExpr("xor", []tree.Expr{exprImpl.Left, exprImpl.Right}, depth)
@@ -139,7 +139,7 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (
 	case *tree.Subquery:
 		if !isRoot && exprImpl.Exists {
 			// TODO: implement MARK join to better support non-scalar subqueries
-			return nil, errors.New("", "EXISTS subquery as non-root expression will be supported in future version")
+			return nil, moerr.NewNYI("EXISTS subquery as non-root expression")
 		}
 
 		expr, err = b.impl.BindSubquery(exprImpl, isRoot)
@@ -181,18 +181,18 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (
 		expr, err = b.baseBindParam(exprImpl, depth, isRoot)
 
 	case *tree.StrVal:
-		err = errors.New("", fmt.Sprintf("expr str'%v' is not supported now", exprImpl))
+		err = moerr.NewNYI("expr str'%v'", exprImpl)
 
 	case *tree.ExprList:
-		err = errors.New("", fmt.Sprintf("expr plan.ExprList'%v' is not supported now", exprImpl))
+		err = moerr.NewNYI("expr plan.ExprList'%v'", exprImpl)
 
 	case tree.UnqualifiedStar:
 		// select * from table
 		// * should only appear in SELECT clause
-		err = errors.New("", "unqualified star should only appear in SELECT clause")
+		err = moerr.NewInvalidInput("SELECT clause contains unqualified star")
 
 	default:
-		err = errors.New("", fmt.Sprintf("expr '%+v' is not supported now", exprImpl))
+		err = moerr.NewNYI("expr '%+v'", exprImpl)
 	}
 
 	return
@@ -228,7 +228,7 @@ func (b *baseBinder) baseBindVar(astExpr *tree.VarExpr, depth int32, isRoot bool
 
 func (b *baseBinder) baseBindColRef(astExpr *tree.UnresolvedName, depth int32, isRoot bool) (expr *plan.Expr, err error) {
 	if b.ctx == nil {
-		return nil, errors.New("", fmt.Sprintf("Column reference '%s' is ambiguous", astExpr.Parts[0]))
+		return nil, moerr.NewInvalidInput("ambigous column reference '%v'", astExpr.Parts[0])
 	}
 
 	col := astExpr.Parts[0]
@@ -247,30 +247,25 @@ func (b *baseBinder) baseBindColRef(astExpr *tree.UnresolvedName, depth int32, i
 				typ = binding.types[colPos]
 				table = binding.table
 			} else {
-				// return nil, errors.New("", fmt.Sprintf("column reference %q is ambiguous", name))
-				return nil, errors.New("", fmt.Sprintf("Column reference '%s' is ambiguous", name))
+				return nil, moerr.NewInvalidInput("ambiguouse column reference '%v'", name)
 			}
 		} else {
-			// err = errors.New("", fmt.Sprintf("column %q does not exist", name))
-			err = errors.New("", fmt.Sprintf("Column '%s' does not exist", name))
+			err = moerr.NewInvalidInput("column %s does not exist", name)
 		}
 	} else {
 		if binding, ok := b.ctx.bindingByTable[table]; ok {
 			colPos = binding.FindColumn(col)
 			if colPos == AmbiguousName {
-				// return nil, errors.New("", fmt.Sprintf("column reference %q is ambiguous", name))
-				return nil, errors.New("", fmt.Sprintf("Column reference '%s' is ambiguous", name))
+				return nil, moerr.NewInvalidInput("ambiguous column reference '%v'", name)
 			}
 			if colPos != NotFound {
 				typ = binding.types[colPos]
 				relPos = binding.tag
 			} else {
-				// err = errors.New("", fmt.Sprintf("column %q does not exist", name))
-				err = errors.New("", fmt.Sprintf("Column '%s' does not exist", name))
+				err = moerr.NewInvalidInput("column '%s' does not exist", name)
 			}
 		} else {
-			err = errors.New("", fmt.Sprintf(
-				"missing FROM-clause entry for table %q", table))
+			err = moerr.NewInvalidInput("missing FROM-clause entry for table '%v'", table)
 		}
 	}
 
@@ -321,7 +316,7 @@ func (b *baseBinder) baseBindColRef(astExpr *tree.UnresolvedName, depth int32, i
 
 func (b *baseBinder) baseBindSubquery(astExpr *tree.Subquery, isRoot bool) (*Expr, error) {
 	if b.ctx == nil {
-		return nil, errors.New("", "This field reference doesn't support SUBQUERY")
+		return nil, moerr.NewInvalidInput("field reference doesn't support SUBQUERY")
 	}
 	subCtx := NewBindContext(b.builder, b.ctx)
 
@@ -335,7 +330,7 @@ func (b *baseBinder) baseBindSubquery(astExpr *tree.Subquery, isRoot bool) (*Exp
 		}
 
 	default:
-		return nil, errors.New("", fmt.Sprintf("unsupported select statement: %s", tree.String(astExpr, dialect.MYSQL)))
+		return nil, moerr.NewNYI("unsupported select statement: %s", tree.String(astExpr, dialect.MYSQL))
 	}
 
 	rowSize := int32(len(subCtx.results))
@@ -412,9 +407,9 @@ func (b *baseBinder) bindUnaryExpr(astExpr *tree.UnaryExpr, depth int32, isRoot 
 	case tree.UNARY_TILDE:
 		return b.bindFuncExprImplByAstExpr("unary_tilde", []tree.Expr{astExpr.Expr}, depth)
 	case tree.UNARY_MARK:
-		return nil, errors.New("", fmt.Sprintf("'%v' is not supported now", astExpr))
+		return nil, moerr.NewNYI("'%v'", astExpr)
 	}
-	return nil, errors.New("", fmt.Sprintf("'%v' is not supported now", astExpr))
+	return nil, moerr.NewNYI("'%v'", astExpr)
 }
 
 func (b *baseBinder) bindBinaryExpr(astExpr *tree.BinaryExpr, depth int32, isRoot bool) (*Expr, error) {
@@ -442,7 +437,7 @@ func (b *baseBinder) bindBinaryExpr(astExpr *tree.BinaryExpr, depth int32, isRoo
 	case tree.RIGHT_SHIFT:
 		return b.bindFuncExprImplByAstExpr(">>", []tree.Expr{astExpr.Left, astExpr.Right}, depth)
 	}
-	return nil, errors.New("", fmt.Sprintf("'%v' operator is not supported now", astExpr.Op.ToString()))
+	return nil, moerr.NewNYI("'%v' operator", astExpr.Op.ToString())
 }
 
 func (b *baseBinder) bindComparisonExpr(astExpr *tree.ComparisonExpr, depth int32, isRoot bool) (*Expr, error) {
@@ -502,16 +497,16 @@ func (b *baseBinder) bindComparisonExpr(astExpr *tree.ComparisonExpr, depth int3
 			if subquery, ok := rightArg.Expr.(*plan.Expr_Sub); ok {
 				if !isRoot {
 					// TODO: implement MARK join to better support non-scalar subqueries
-					return nil, errors.New("", "IN subquery as non-root expression will be supported in future version")
+					return nil, moerr.NewNYI("IN subquery as non-root expression")
 				}
 
 				if list, ok := leftArg.Expr.(*plan.Expr_List); ok {
 					if len(list.List.List) != int(subquery.Sub.RowSize) {
-						return nil, errors.New("", fmt.Sprintf("subquery should return %d columns", len(list.List.List)))
+						return nil, moerr.NewNYI("subquery should return %d columns", len(list.List.List))
 					}
 				} else {
 					if subquery.Sub.RowSize > 1 {
-						return nil, errors.New("", "subquery should return 1 column")
+						return nil, moerr.NewInvalidInput("subquery returns more than 1 column")
 					}
 				}
 
@@ -551,16 +546,16 @@ func (b *baseBinder) bindComparisonExpr(astExpr *tree.ComparisonExpr, depth int3
 			if subquery, ok := rightArg.Expr.(*plan.Expr_Sub); ok {
 				if !isRoot {
 					// TODO: implement MARK join to better support non-scalar subqueries
-					return nil, errors.New("", "IN subquery as non-root expression will be supported in future version")
+					return nil, moerr.NewNYI("IN subquery as non-root expression will be supported in future version")
 				}
 
 				if list, ok := leftArg.Expr.(*plan.Expr_List); ok {
 					if len(list.List.List) != int(subquery.Sub.RowSize) {
-						return nil, errors.New("", fmt.Sprintf("subquery should return %d columns", len(list.List.List)))
+						return nil, moerr.NewInvalidInput("subquery should return %d columns", len(list.List.List))
 					}
 				} else {
 					if subquery.Sub.RowSize > 1 {
-						return nil, errors.New("", "subquery should return 1 column")
+						return nil, moerr.NewInvalidInput("subquery should return 1 column")
 					}
 				}
 
@@ -578,7 +573,7 @@ func (b *baseBinder) bindComparisonExpr(astExpr *tree.ComparisonExpr, depth int3
 		}
 
 	default:
-		return nil, errors.New("", fmt.Sprintf("'%v' is not supported now", astExpr))
+		return nil, moerr.NewNYI("'%v'", astExpr)
 	}
 
 	if astExpr.SubOp >= tree.ANY {
@@ -595,16 +590,16 @@ func (b *baseBinder) bindComparisonExpr(astExpr *tree.ComparisonExpr, depth int3
 		if subquery, ok := expr.Expr.(*plan.Expr_Sub); ok {
 			if !isRoot {
 				// TODO: implement MARK join to better support non-scalar subqueries
-				return nil, errors.New("", fmt.Sprintf("%q subquery as non-root expression will be supported in future version", strings.ToUpper(astExpr.SubOp.ToString())))
+				return nil, moerr.NewNYI("%q subquery as non-root expression", strings.ToUpper(astExpr.SubOp.ToString()))
 			}
 
 			if list, ok := child.Expr.(*plan.Expr_List); ok {
 				if len(list.List.List) != int(subquery.Sub.RowSize) {
-					return nil, errors.New("", fmt.Sprintf("subquery should return %d columns", len(list.List.List)))
+					return nil, moerr.NewInvalidInput("subquery should return %d columns", len(list.List.List))
 				}
 			} else {
 				if subquery.Sub.RowSize > 1 {
-					return nil, errors.New("", "subquery should return 1 column")
+					return nil, moerr.NewInvalidInput("subquery should return 1 column")
 				}
 			}
 
@@ -620,7 +615,7 @@ func (b *baseBinder) bindComparisonExpr(astExpr *tree.ComparisonExpr, depth int3
 
 			return expr, nil
 		} else {
-			return nil, errors.New("", fmt.Sprintf("%q can only quantify subquery", astExpr.SubOp.ToString()))
+			return nil, moerr.NewInvalidInput("subquery '%s' is not a quantifying subquery", astExpr.SubOp.ToString())
 		}
 	}
 
@@ -630,7 +625,7 @@ func (b *baseBinder) bindComparisonExpr(astExpr *tree.ComparisonExpr, depth int3
 func (b *baseBinder) bindFuncExpr(astExpr *tree.FuncExpr, depth int32, isRoot bool) (*Expr, error) {
 	funcRef, ok := astExpr.Func.FunctionReference.(*tree.UnresolvedName)
 	if !ok {
-		return nil, errors.New("", fmt.Sprintf("function expr '%v' is not supported now", astExpr))
+		return nil, moerr.NewNYI("function expr '%v'", astExpr)
 	}
 	funcName := funcRef.Parts[0]
 
@@ -649,7 +644,7 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 	case "nullif":
 		// rewrite 'nullif(expr1, expr2)' to 'case when expr1=expr2 then null else expr1'
 		if len(astArgs) != 2 {
-			return nil, errors.New("", "nullif function need two args")
+			return nil, moerr.NewInvalidArg("nullif need two args", len(astArgs))
 		}
 		elseExpr := astArgs[0]
 		thenExpr := tree.NewNumValWithType(constant.MakeUnknown(), "", false, tree.P_char)
@@ -659,7 +654,7 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 	case "ifnull":
 		// rewrite 'ifnull(expr1, expr2)' to 'case when isnull(expr1) then expr2 else null'
 		if len(astArgs) != 2 {
-			return nil, errors.New("", "ifnull function need two args")
+			return nil, moerr.NewInvalidArg("ifnull function need two args", len(astArgs))
 		}
 		elseExpr := tree.NewNumValWithType(constant.MakeUnknown(), "", false, tree.P_null)
 		thenExpr := astArgs[1]
@@ -667,13 +662,13 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 		astArgs = []tree.Expr{whenExpr, thenExpr, elseExpr}
 		name = "case"
 	//case "extract":
-	//	// ”extract(year from col_name)"  parser return year as UnresolvedName.
+	//	// "extract(year from col_name)"  parser return year as UnresolvedName.
 	//	// we must rewrite it to string。 because binder bind UnresolvedName as column name
 	//	unit := astArgs[0].(*tree.UnresolvedName).Parts[0]
 	//	astArgs[0] = tree.NewNumVal(constant.MakeString(unit), unit, false)
 	case "count":
 		if b.ctx == nil {
-			return nil, errors.New("", "This field reference doesn't support COUNT")
+			return nil, moerr.NewInvalidInput("invalid field reference to COUNT")
 		}
 		// we will rewrite "count(*)" to "starcount(col)"
 		// count(*) : astExprs[0].(type) is *tree.NumVal
@@ -760,7 +755,7 @@ func bindFuncExprImplByPlanExpr(name string, args []*Expr) (*plan.Expr, error) {
 		// rewrite date_add/date_sub function
 		// date_add(col_name, "1 day"), will rewrite to date_add(col_name, number, unit)
 		if len(args) != 2 {
-			return nil, errors.New("", "date_add/date_sub function need two args")
+			return nil, moerr.NewInvalidArg("date_add/date_sub function need two args", len(args))
 		}
 		args, err = resetDateFunctionArgs(args[0], args[1])
 		if err != nil {
@@ -768,7 +763,7 @@ func bindFuncExprImplByPlanExpr(name string, args []*Expr) (*plan.Expr, error) {
 		}
 	case "adddate", "subdate":
 		if len(args) != 2 {
-			return nil, errors.New("", "add_date/sub_date function need two args")
+			return nil, moerr.NewInvalidArg("adddate/subdate function need two args", len(args))
 		}
 		args, err = resetDateFunctionArgs2(args[0], args[1])
 		if err != nil {
@@ -781,7 +776,7 @@ func bindFuncExprImplByPlanExpr(name string, args []*Expr) (*plan.Expr, error) {
 		}
 	case "+":
 		if len(args) != 2 {
-			return nil, errors.New("", "operator function need two args")
+			return nil, moerr.NewInvalidArg("operator + need two args", len(args))
 		}
 		if isNullExpr(args[0]) {
 			return args[0], nil
@@ -815,7 +810,7 @@ func bindFuncExprImplByPlanExpr(name string, args []*Expr) (*plan.Expr, error) {
 		}
 	case "-":
 		if len(args) != 2 {
-			return nil, errors.New("", "operator function need two args")
+			return nil, moerr.NewInvalidArg("operator - need two args", len(args))
 		}
 		if isNullExpr(args[0]) {
 			return args[0], nil
@@ -839,7 +834,7 @@ func bindFuncExprImplByPlanExpr(name string, args []*Expr) (*plan.Expr, error) {
 		}
 	case "*", "/", "%":
 		if len(args) != 2 {
-			return nil, errors.New("", "operator function need two args")
+			return nil, moerr.NewInvalidArg(fmt.Sprintf("operator %s need two args", name), len(args))
 		}
 		if isNullExpr(args[0]) {
 			return args[0], nil
@@ -906,7 +901,7 @@ func bindFuncExprImplByPlanExpr(name string, args []*Expr) (*plan.Expr, error) {
 	}
 	if len(argsCastType) != 0 {
 		if len(argsCastType) != argsLength {
-			return nil, errors.New("", "cast types length not match args length")
+			return nil, moerr.NewInvalidArg("cast types length not match args length", "")
 		}
 		for idx, castType := range argsCastType {
 			if !argsType[idx].Eq(castType) && castType.Oid != types.T_any {
@@ -1011,7 +1006,7 @@ func (b *baseBinder) bindNumVal(astExpr *tree.NumVal, typ *Type) (*Expr, error) 
 	case tree.P_int64:
 		val, ok := constant.Int64Val(astExpr.Value)
 		if !ok {
-			return nil, errors.New("", "Parser error")
+			return nil, moerr.NewInvalidInput("invalid int value '%s'", astExpr.Value.String())
 		}
 		return &Expr{
 			Expr: &plan.Expr_C{
@@ -1031,7 +1026,7 @@ func (b *baseBinder) bindNumVal(astExpr *tree.NumVal, typ *Type) (*Expr, error) 
 	case tree.P_uint64:
 		val, ok := constant.Uint64Val(astExpr.Value)
 		if !ok {
-			return nil, errors.New("", "Parser error")
+			return nil, moerr.NewInvalidInput("invalid int value '%s'", astExpr.Value.String())
 		}
 		return &Expr{
 			Expr: &plan.Expr_C{
@@ -1088,7 +1083,7 @@ func (b *baseBinder) bindNumVal(astExpr *tree.NumVal, typ *Type) (*Expr, error) 
 		expr := getStringExpr(astExpr.String())
 		return expr, nil
 	default:
-		return nil, errors.New("", fmt.Sprintf("unsupport value: %v", astExpr.Value))
+		return nil, moerr.NewInvalidInput("unsupport value '%s'", astExpr.String())
 	}
 }
 

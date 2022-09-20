@@ -16,7 +16,6 @@ package main
 
 import (
 	"context"
-	"errors"
 	"flag"
 	"fmt"
 	"math/rand"
@@ -219,7 +218,7 @@ func startStandalone(
 	for {
 		var err error
 		client, err = logservice.NewCNHAKeeperClient(ctx, cfg.HAKeeperClient)
-		if errors.Is(err, logservice.ErrNotHAKeeper) {
+		if moerr.IsMoErrCode(err, moerr.ErrNoHAKeeper) {
 			// not ready
 			logutil.Info("hakeeper not ready, retry")
 			time.Sleep(time.Second)
@@ -283,7 +282,7 @@ func initTraceMetric(ctx context.Context, cfg *Config, stopper *stopper.Stopper,
 			nodeUUID = uuid.New()
 		}
 		if err := util.SetUUIDNodeID(nodeUUID[:]); err != nil {
-			return moerr.NewPanicError(err)
+			return moerr.ConvertPanicError(err)
 		}
 		UUID = nodeUUID.String()
 	case dnServiceType:

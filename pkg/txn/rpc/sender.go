@@ -179,7 +179,7 @@ func (s *sender) Send(ctx context.Context, requests []txn.TxnRequest) (*SendResu
 		}
 		v, ok := <-c
 		if !ok {
-			return nil, moerr.NewError(moerr.ErrStreamClosed, "stream closed")
+			return nil, moerr.NewStreamClosed()
 		}
 		resp := v.(*txn.TxnResponse)
 		sr.setResponse(resp, idx)
@@ -339,7 +339,7 @@ func (ls *localStream) start() {
 			response := v.responseFactory()
 			err := v.handleFunc(v.ctx, v.request.(*txn.TxnRequest), response)
 			if err != nil {
-				response.TxnError = &txn.TxnError{Code: txn.ErrorCode_RPCError, Message: err.Error()}
+				response.TxnError = &txn.TxnError{Code: int32(moerr.ErrRpcError), Message: err.Error()}
 			}
 			out <- response
 		}

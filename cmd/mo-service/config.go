@@ -41,8 +41,6 @@ const (
 	etlFileServiceName   = "ETL"
 )
 
-var ErrInvalidConfig = moerr.NewError(moerr.BAD_CONFIGURATION, "invalid log configuration")
-
 var (
 	supportServiceTypes = map[string]any{
 		cnServiceType:         cnServiceType,
@@ -147,7 +145,7 @@ func (c *Config) createFileService(defaultName string) (*fileservice.FileService
 	if !c.Observability.DisableMetric || !c.Observability.DisableTrace {
 		_, err = fileservice.Get[fileservice.FileService](fs, etlFileServiceName)
 		if err != nil {
-			return nil, moerr.NewPanicError(err)
+			return nil, moerr.ConvertPanicError(err)
 		}
 	}
 
@@ -203,7 +201,7 @@ func (c *Config) resolveGossipSeedAddresses() error {
 			}
 		}
 		if len(filtered) != 1 {
-			return ErrInvalidConfig
+			return moerr.NewBadConfig("GossipSeedAddress %s", addr)
 		}
 		result = append(result, net.JoinHostPort(filtered[0], port))
 	}
