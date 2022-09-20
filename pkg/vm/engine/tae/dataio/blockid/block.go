@@ -17,6 +17,7 @@ package blockid
 import (
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -90,6 +91,7 @@ func (bf *blockFile) GetMeta(metaLoc string) objectio.BlockObject {
 	if bf.meta != nil {
 		return bf.meta
 	}
+	logutil.Infof("metaLoc: is %v", metaLoc)
 	info := strings.Split(metaLoc, ":")
 	name := info[0]
 	location := strings.Split(info[1], "_")

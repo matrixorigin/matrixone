@@ -12,43 +12,283 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package txnstorage
+package txnengine
 
 import (
+	"context"
 	"fmt"
+	"hash/fnv"
+	"sort"
+	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	taedata "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 )
 
-type BatchIter func() (tuple []Nullable)
-
-func NewBatchIter(b *batch.Batch) BatchIter {
-	i := 0
-	iter := func() (tuple []Nullable) {
-		for {
-			if i >= b.Vecs[0].Length() {
-				return
-			}
-			if i < len(b.Zs) && b.Zs[i] == 0 {
-				i++
-				continue
-			}
-			break
-		}
-		for _, vec := range b.Vecs {
-			value := vectorAt(vec, i)
-			tuple = append(tuple, value)
-		}
-		i++
-		return
-	}
-	return iter
+type HashShard struct {
+	heap *mheap.Mheap
 }
 
-func vectorAt(vec *vector.Vector, i int) (value Nullable) {
+func NewHashShard(heap *mheap.Mheap) *HashShard {
+	return &HashShard{
+		heap: heap,
+	}
+}
+
+func (*HashShard) Batch(
+	ctx context.Context,
+	tableID string,
+	getDefs getDefsFunc,
+	bat *batch.Batch,
+	nodes []logservicepb.DNStore,
+) (
+	sharded []*ShardedBatch,
+	err error,
+) {
+
+	// get defs
+	defs, err := getDefs(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	// get shard key
+	var primaryAttrs []engine.Attribute
+	for _, def := range defs {
+		attr, ok := def.(*engine.AttributeDef)
+		if !ok {
+			continue
+		}
+		if attr.Attr.Primary {
+			primaryAttrs = append(primaryAttrs, attr.Attr)
+		}
+	}
+	sort.Slice(primaryAttrs, func(i, j int) bool {
+		return primaryAttrs[i].Name < primaryAttrs[j].Name
+	})
+	if len(primaryAttrs) == 0 {
+		// no shard key
+		return nil, nil
+	}
+	type keyInfo struct {
+		Attr  engine.Attribute
+		Index int
+	}
+	var infos []keyInfo
+	for _, attr := range primaryAttrs {
+		for i, name := range bat.Attrs {
+			if name == attr.Name {
+				infos = append(infos, keyInfo{
+					Attr:  attr,
+					Index: i,
+				})
+			}
+		}
+	}
+
+	// shards
+	var shards []*Shard
+	for _, store := range nodes {
+		for _, info := range store.Shards {
+			shards = append(shards, &Shard{
+				DNShardRecord: metadata.DNShardRecord{
+					ShardID: info.ShardID,
+				},
+				ReplicaID: info.ReplicaID,
+				Address:   store.ServiceAddress,
+			})
+		}
+	}
+	sort.Slice(shards, func(i, j int) bool {
+		return shards[i].DNShardRecord.ShardID < shards[j].DNShardRecord.ShardID
+	})
+	m := make(map[*Shard]*batch.Batch)
+	for _, shard := range shards {
+		batchCopy := *bat
+		for i := range batchCopy.Zs {
+			batchCopy.Zs[i] = 0
+		}
+		m[shard] = &batchCopy
+	}
+
+	// shard batch
+	for i := 0; i < bat.Length(); i++ {
+		hasher := fnv.New32()
+		for _, info := range infos {
+			vec := bat.Vecs[info.Index]
+			bs, err := getBytesFromPrimaryVectorForHash(vec, i, info.Attr.Type)
+			if err != nil {
+				return nil, err
+			}
+			_, err = hasher.Write(bs)
+			if err != nil {
+				panic(err)
+			}
+		}
+		n := int(hasher.Sum32())
+		shard := shards[n%len(shards)]
+		m[shard].Zs[i] = 1
+	}
+
+	for shard, bat := range m {
+		isEmpty := true
+		for _, i := range bat.Zs {
+			if i > 0 {
+				isEmpty = false
+				break
+			}
+		}
+		if isEmpty {
+			continue
+		}
+		sharded = append(sharded, &ShardedBatch{
+			Shard: *shard,
+			Batch: bat,
+		})
+	}
+
+	return
+}
+
+func (h *HashShard) Vector(
+	ctx context.Context,
+	tableID string,
+	getDefs getDefsFunc,
+	colName string,
+	vec *vector.Vector,
+	nodes []logservicepb.DNStore,
+) (
+	sharded []*ShardedVector,
+	err error,
+) {
+
+	//TODO use vector nulls mask
+
+	// get defs
+	defs, err := getDefs(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	// get shard key
+	var shardAttr *engine.Attribute
+	for _, def := range defs {
+		attr, ok := def.(*engine.AttributeDef)
+		if !ok {
+			continue
+		}
+		if attr.Attr.Primary {
+			if attr.Attr.Name == colName {
+				shardAttr = &attr.Attr
+				break
+			}
+		}
+	}
+	if shardAttr == nil {
+		// no shard key
+		return nil, nil
+	}
+
+	// shards
+	var shards []*Shard
+	for _, store := range nodes {
+		for _, info := range store.Shards {
+			shards = append(shards, &Shard{
+				DNShardRecord: metadata.DNShardRecord{
+					ShardID: info.ShardID,
+				},
+				ReplicaID: info.ReplicaID,
+				Address:   store.ServiceAddress,
+			})
+		}
+	}
+	sort.Slice(shards, func(i, j int) bool {
+		return shards[i].DNShardRecord.ShardID < shards[j].DNShardRecord.ShardID
+	})
+	m := make(map[*Shard]*vector.Vector)
+
+	// shard vector
+	for i := 0; i < vec.Length(); i++ {
+		hasher := fnv.New32()
+		bs, err := getBytesFromPrimaryVectorForHash(vec, i, shardAttr.Type)
+		if err != nil {
+			return nil, err
+		}
+		_, err = hasher.Write(bs)
+		if err != nil {
+			panic(err)
+		}
+		n := int(hasher.Sum32())
+		shard := shards[n%len(shards)]
+		shardVec, ok := m[shard]
+		if !ok {
+			shardVec = vector.New(shardAttr.Type)
+			m[shard] = shardVec
+		}
+		v := getNullableValueFromVector(vec, i)
+		appendNullableValueToVector(shardVec, v, h.heap)
+	}
+
+	for shard, vec := range m {
+		if vec.Length() == 0 {
+			continue
+		}
+		sharded = append(sharded, &ShardedVector{
+			Shard:  *shard,
+			Vector: vec,
+		})
+	}
+
+	return
+}
+
+var _ ShardPolicy = new(HashShard)
+
+func (h *HashShard) Stores(stores []logservicepb.DNStore) (shards []metadata.DNShard, err error) {
+	for _, store := range stores {
+		info := store.Shards[0]
+		shards = append(shards, Shard{
+			DNShardRecord: metadata.DNShardRecord{
+				ShardID: info.ShardID,
+			},
+			ReplicaID: info.ReplicaID,
+			Address:   store.ServiceAddress,
+		})
+	}
+	return
+}
+
+func getBytesFromPrimaryVectorForHash(vec *vector.Vector, i int, typ types.Type) ([]byte, error) {
+	if vec.IsConst() {
+		panic("primary value vector should not be const")
+	}
+	if vec.GetNulls().Any() {
+		//TODO mimic to pass BVT
+		return nil, taedata.ErrDuplicate
+		//panic("primary value vector should not contain nulls")
+	}
+	if vec.Typ.Oid.FixedLength() > 0 {
+		// is slice
+		size := vec.Typ.TypeSize()
+		l := vec.Length() * size
+		data := unsafe.Slice((*byte)(vector.GetPtrAt(vec, 0)), l)
+		return data[i*size : (i+1)*size], nil
+	}
+	return vec.GetBytes(int64(i)), nil
+}
+
+type Nullable struct {
+	IsNull bool
+	Value  any
+}
+
+func getNullableValueFromVector(vec *vector.Vector, i int) (value Nullable) {
 	if vec.IsConst() {
 		i = 0
 	}
@@ -346,7 +586,7 @@ func vectorAt(vec *vector.Vector, i int) (value Nullable) {
 	panic(fmt.Errorf("unknown column type: %v", vec.Typ))
 }
 
-func vectorAppend(vec *vector.Vector, value Nullable, heap *mheap.Mheap) {
+func appendNullableValueToVector(vec *vector.Vector, value Nullable, heap *mheap.Mheap) {
 	str, ok := value.Value.(string)
 	if ok {
 		value.Value = []byte(str)
@@ -355,20 +595,4 @@ func vectorAppend(vec *vector.Vector, value Nullable, heap *mheap.Mheap) {
 	if value.IsNull {
 		vec.GetNulls().Set(uint64(vec.Length() - 1))
 	}
-}
-
-func appendNamedRow(
-	tx *Transaction,
-	heap *mheap.Mheap,
-	bat *batch.Batch,
-	row NamedRow,
-) error {
-	for i, name := range bat.Attrs {
-		value, err := row.AttrByName(tx, name)
-		if err != nil {
-			return err
-		}
-		vectorAppend(bat.Vecs[i], value, heap)
-	}
-	return nil
 }
