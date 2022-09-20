@@ -230,8 +230,15 @@ func (txn *Txn) Event() (e int) {
 	return
 }
 
-// TODO::need to take 2PC txn account into.
 func (txn *Txn) DoneWithErr(err error) {
+	if txn.Is2PC() {
+		// TODO
+		return
+	}
+	txn.done1PCWithErr(err)
+}
+
+func (txn *Txn) done1PCWithErr(err error) {
 	txn.DoneCond.L.Lock()
 	if err != nil {
 		txn.ToUnknownLocked()
