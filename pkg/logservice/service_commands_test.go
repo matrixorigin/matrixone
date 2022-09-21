@@ -51,7 +51,7 @@ func TestBackgroundTickAndHeartbeat(t *testing.T) {
 	cfg.Fill()
 	service, err := NewService(cfg,
 		testutil.NewFS(),
-		taskservice.NewTaskService(taskservice.NewMemTaskStorage()),
+		taskservice.NewTaskService(taskservice.NewMemTaskStorage(), nil),
 		WithBackendFilter(func(msg morpc.Message, backendAddr string) bool {
 			return true
 		}),
