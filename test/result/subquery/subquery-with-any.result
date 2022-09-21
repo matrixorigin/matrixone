@@ -77,15 +77,15 @@ insert into t3 values (6),(7),(3);
 select * from t3 where a >= some (select b from t2);
 a
 select * from t3 where a >= some (select b from t2 group by 1);
-column "t2.b" must appear in the GROUP BY clause or be used in an aggregate function
+SQL syntax error: column "t2.b" must appear in the GROUP BY clause or be used in an aggregate function
 select * from t3 where NULL >= any (select b from t2);
 a
 select * from t3 where NULL >= any (select b from t2 group by 1);
-column "t2.b" must appear in the GROUP BY clause or be used in an aggregate function
+SQL syntax error: column "t2.b" must appear in the GROUP BY clause or be used in an aggregate function
 select * from t3 where NULL >= some (select b from t2);
 a
 select * from t3 where NULL >= some (select b from t2 group by 1);
-column "t2.b" must appear in the GROUP BY clause or be used in an aggregate function
+SQL syntax error: column "t2.b" must appear in the GROUP BY clause or be used in an aggregate function
 insert into t2 values (2,2), (2,1), (3,3), (3,1);
 DROP TABLE IF EXISTS t1;
 DROP TABLE IF EXISTS t2;
@@ -114,9 +114,9 @@ a
 1
 3
 SELECT a FROM t1 WHERE (1,2) > ANY (SELECT a FROM t1 WHERE b = 2);
-subquery should return 2 columns
+invalid input: subquery should return 2 columns
 SELECT a FROM t1 WHERE a > ANY (SELECT a,2 FROM t1 WHERE b = 2);
-subquery should return 1 column
+invalid input: subquery should return 1 column
 SELECT a FROM t1 WHERE (1,2) > ANY (SELECT a,2 FROM t1 WHERE b = 2);
 a
 SELECT a FROM t1 WHERE (1,2) <> ANY (SELECT a,2 FROM t1 WHERE b = 2);
@@ -125,23 +125,23 @@ a
 2
 3
 SELECT a FROM t1 WHERE (1,2) = ANY (SELECT a FROM t1 WHERE b = 2);
-subquery should return 2 columns
+invalid input: subquery should return 2 columns
 SELECT a FROM t1 WHERE a = ANY (SELECT a,2 FROM t1 WHERE b = 2);
-subquery should return 1 column
+invalid input: subquery should return 1 column
 SELECT a FROM t1 WHERE (1,2) = ANY (SELECT a,2 FROM t1 WHERE b = 2);
 a
 SELECT a FROM t1 WHERE (1,2) <> ALL (SELECT a FROM t1 WHERE b = 2);
-subquery should return 2 columns
+invalid input: subquery should return 2 columns
 SELECT a FROM t1 WHERE (a,1) = ANY (SELECT a,1 FROM t1 WHERE b = 2);
 a
 2
 SELECT a FROM t1 WHERE (a,1) = ANY (SELECT a,1 FROM t1 HAVING a = 2);
-column "t1.a" must appear in the GROUP BY clause or be used in an aggregate function
+SQL syntax error: column "t1.a" must appear in the GROUP BY clause or be used in an aggregate function
 SELECT a FROM t1 WHERE (a,1) = ANY (SELECT a,1 FROM t1 WHERE b = 2 UNION SELECT a,1 FROM t1 WHERE b = 2);
 a
 2
 SELECT a FROM t1 WHERE (a,1) = ANY (SELECT a,1 FROM t1 HAVING a = 2 UNION SELECT a,1 FROM t1 HAVING a = 2);
-column "t1.a" must appear in the GROUP BY clause or be used in an aggregate function
+SQL syntax error: column "t1.a" must appear in the GROUP BY clause or be used in an aggregate function
 DROP TABLE IF EXISTS t1;
 CREATE TABLE t1 ( a double, b double );
 INSERT INTO t1 VALUES (1,1),(2,2),(3,3);
@@ -195,7 +195,7 @@ DROP TABLE IF EXISTS t2;
 create table t1 (a1 int);
 create table t2 (b1 int);
 select * from t1 where a2 > any(select b1 from t2);
-Column 'a2' does not exist
+invalid input: column a2 does not exist
 select * from t1 where a1 > any(select b1 from t2);
 a1
 DROP TABLE IF EXISTS t1;
@@ -212,7 +212,7 @@ select * from t1 where (s1+1 = ANY (select s1 from t1));
 s1
 1
 select * from t1 where NOT(s1+1 = ANY (select s1 from t1));
-"ANY" subquery as non-root expression will be supported in future version
+"ANY" subquery as non-root expression is not yet implemented
 DROP TABLE IF EXISTS t1;
 DROP TABLE IF EXISTS t2;
 CREATE TABLE t1 (s1 CHAR(1));
@@ -275,17 +275,17 @@ DROP TABLE IF EXISTS t2;
 CREATE TABLE t1 ( a int, b int );
 INSERT INTO t1 VALUES (1,1),(2,2),(3,3);
 SELECT a FROM t1 WHERE a > ANY (SELECT a FROM t1 HAVING a = 2);
-column "t1.a" must appear in the GROUP BY clause or be used in an aggregate function
+SQL syntax error: column "t1.a" must appear in the GROUP BY clause or be used in an aggregate function
 SELECT a FROM t1 WHERE a < ANY (SELECT a FROM t1 HAVING a = 2);
-column "t1.a" must appear in the GROUP BY clause or be used in an aggregate function
+SQL syntax error: column "t1.a" must appear in the GROUP BY clause or be used in an aggregate function
 SELECT a FROM t1 WHERE a = ANY (SELECT a FROM t1 HAVING a = 2);
-column "t1.a" must appear in the GROUP BY clause or be used in an aggregate function
+SQL syntax error: column "t1.a" must appear in the GROUP BY clause or be used in an aggregate function
 SELECT a FROM t1 WHERE a >= ANY (SELECT a FROM t1 HAVING a = 2);
-column "t1.a" must appear in the GROUP BY clause or be used in an aggregate function
+SQL syntax error: column "t1.a" must appear in the GROUP BY clause or be used in an aggregate function
 SELECT a FROM t1 WHERE a <= ANY (SELECT a FROM t1 HAVING a = 2);
-column "t1.a" must appear in the GROUP BY clause or be used in an aggregate function
+SQL syntax error: column "t1.a" must appear in the GROUP BY clause or be used in an aggregate function
 SELECT a FROM t1 WHERE a <> ANY (SELECT a FROM t1 HAVING a = 2);
-column "t1.a" must appear in the GROUP BY clause or be used in an aggregate function
+SQL syntax error: column "t1.a" must appear in the GROUP BY clause or be used in an aggregate function
 SELECT a FROM t1 WHERE a > ANY (SELECT a FROM t1 WHERE b = 2 group by a);
 a
 3
@@ -355,7 +355,7 @@ FROM  t1
 GROUP BY field1, field2
 HAVING COUNT(*) < ANY (SELECT fieldB
 FROM t2 WHERE fieldA = field1);
-column "field1" must appear in the GROUP BY clause or be used in an aggregate function
+SQL syntax error: column "field1" must appear in the GROUP BY clause or be used in an aggregate function
 DROP TABLE IF EXISTS t1;
 DROP TABLE IF EXISTS t2;
 CREATE TABLE t1 (
@@ -419,17 +419,17 @@ a
 1
 3
 SELECT a FROM t1 WHERE a > ANY (SELECT a FROM t1 HAVING a = 2);
-column "t1.a" must appear in the GROUP BY clause or be used in an aggregate function
+SQL syntax error: column "t1.a" must appear in the GROUP BY clause or be used in an aggregate function
 SELECT a FROM t1 WHERE a < ANY (SELECT a FROM t1 HAVING a = 2);
-column "t1.a" must appear in the GROUP BY clause or be used in an aggregate function
+SQL syntax error: column "t1.a" must appear in the GROUP BY clause or be used in an aggregate function
 SELECT a FROM t1 WHERE a = ANY (SELECT a FROM t1 HAVING a = 2);
-column "t1.a" must appear in the GROUP BY clause or be used in an aggregate function
+SQL syntax error: column "t1.a" must appear in the GROUP BY clause or be used in an aggregate function
 SELECT a FROM t1 WHERE a >= ANY (SELECT a FROM t1 HAVING a = 2);
-column "t1.a" must appear in the GROUP BY clause or be used in an aggregate function
+SQL syntax error: column "t1.a" must appear in the GROUP BY clause or be used in an aggregate function
 SELECT a FROM t1 WHERE a <= ANY (SELECT a FROM t1 HAVING a = 2);
-column "t1.a" must appear in the GROUP BY clause or be used in an aggregate function
+SQL syntax error: column "t1.a" must appear in the GROUP BY clause or be used in an aggregate function
 SELECT a FROM t1 WHERE a <> ANY (SELECT a FROM t1 HAVING a = 2);
-column "t1.a" must appear in the GROUP BY clause or be used in an aggregate function
+SQL syntax error: column "t1.a" must appear in the GROUP BY clause or be used in an aggregate function
 DROP TABLE IF EXISTS t1;
 create table t1 (a int);
 insert into t1 values (1),(2),(3);
@@ -498,7 +498,7 @@ FROM
 t1s LEFT OUTER JOIN t2s ON t2s.i = t1s.i
 HAVING t2s.i = 999
 );
-column "t2s.i" must appear in the GROUP BY clause or be used in an aggregate function
+SQL syntax error: column "t2s.i" must appear in the GROUP BY clause or be used in an aggregate function
 DROP TABLE IF EXISTS t1;
 DROP TABLE IF EXISTS t1s;
 DROP TABLE IF EXISTS t2s;

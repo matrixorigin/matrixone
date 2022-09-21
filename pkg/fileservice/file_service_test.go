@@ -19,7 +19,6 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/gob"
-	"errors"
 	"fmt"
 	"io"
 	mrand "math/rand"
@@ -30,6 +29,7 @@ import (
 	"testing/iotest"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -304,7 +304,7 @@ func testFileService(
 		err := fs.Read(ctx, &IOVector{
 			FilePath: "foo",
 		})
-		assert.ErrorIs(t, err, ErrEmptyVector)
+		assert.True(t, moerr.IsMoErrCode(err, moerr.ErrEmptyVector))
 
 		err = fs.Read(ctx, &IOVector{
 			FilePath: "foo",
@@ -314,7 +314,7 @@ func testFileService(
 				},
 			},
 		})
-		assert.ErrorIs(t, err, ErrFileNotFound)
+		assert.True(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound))
 
 		err = fs.Write(ctx, IOVector{
 			FilePath: "foo",
@@ -329,7 +329,7 @@ func testFileService(
 		err = fs.Write(ctx, IOVector{
 			FilePath: "foo",
 		})
-		assert.ErrorIs(t, err, ErrFileExisted)
+		assert.True(t, moerr.IsMoErrCode(err, moerr.ErrFileAlreadyExists))
 
 		err = fs.Read(ctx, &IOVector{
 			FilePath: "foo",
@@ -340,7 +340,7 @@ func testFileService(
 				},
 			},
 		})
-		assert.ErrorIs(t, err, ErrUnexpectedEOF)
+		assert.True(t, moerr.IsMoErrCode(moerr.ConvertGoError(err), moerr.ErrUnexpectedEOF))
 
 		err = fs.Read(ctx, &IOVector{
 			FilePath: "foo",
@@ -351,7 +351,7 @@ func testFileService(
 				},
 			},
 		})
-		assert.ErrorIs(t, err, ErrEmptyRange)
+		assert.True(t, moerr.IsMoErrCode(err, moerr.ErrEmptyRange))
 
 		err = fs.Write(ctx, IOVector{
 			FilePath: "bar",
@@ -361,7 +361,7 @@ func testFileService(
 				},
 			},
 		})
-		assert.ErrorIs(t, err, ErrSizeNotMatch)
+		assert.True(t, moerr.IsMoErrCode(err, moerr.ErrSizeNotMatch))
 
 		err = fs.Write(ctx, IOVector{
 			FilePath: "foo",
@@ -371,7 +371,10 @@ func testFileService(
 				},
 			},
 		})
-		assert.Error(t, err, io.ErrNoProgress)
+		// fs leaking io error, but I don't know what this test really tests.
+		// assert.True(t, err == io.ErrNoProgress)
+		// assert.True(t, moerr.IsMoErrCode(moerr.ConvertGoError(err), moerr.ErrInternal))
+		assert.True(t, moerr.IsMoErrCode(err, moerr.ErrFileAlreadyExists))
 
 		vector := IOVector{
 			FilePath: joinPath(fsName, "a:b:c"),
@@ -380,14 +383,13 @@ func testFileService(
 			},
 		}
 		err = fs.Write(ctx, vector)
-		assert.ErrorIs(t, err, ErrInvalidPath)
+		assert.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidPath))
 		err = fs.Read(ctx, &vector)
-		assert.ErrorIs(t, err, ErrInvalidPath)
+		assert.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidPath))
 		_, err = fs.List(ctx, vector.FilePath)
-		assert.ErrorIs(t, err, ErrInvalidPath)
+		assert.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidPath))
 		err = fs.Delete(ctx, vector.FilePath)
-		assert.ErrorIs(t, err, ErrInvalidPath)
-
+		assert.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidPath))
 	})
 
 	t.Run("object", func(t *testing.T) {
@@ -531,12 +533,11 @@ func testFileService(
 		// bad name
 		vec.FilePath = joinPath(fs.Name()+"abc", "foo")
 		err = fs.Read(ctx, &vec)
-		assert.True(t, errors.Is(err, ErrWrongService) || errors.Is(err, ErrServiceNotFound))
+		assert.True(t, moerr.IsMoErrCode(err, moerr.ErrNoService) || moerr.IsMoErrCode(err, moerr.ErrWrongService))
 		err = fs.Write(ctx, vec)
-		assert.True(t, errors.Is(err, ErrWrongService) || errors.Is(err, ErrServiceNotFound))
+		assert.True(t, moerr.IsMoErrCode(err, moerr.ErrNoService) || moerr.IsMoErrCode(err, moerr.ErrWrongService))
 		err = fs.Delete(ctx, vec.FilePath)
-		assert.True(t, errors.Is(err, ErrWrongService) || errors.Is(err, ErrServiceNotFound))
-
+		assert.True(t, moerr.IsMoErrCode(err, moerr.ErrNoService) || moerr.IsMoErrCode(err, moerr.ErrWrongService))
 	})
 
 }

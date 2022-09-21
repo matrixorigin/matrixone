@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"io"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -111,10 +112,11 @@ func (entry *SegmentEntry) GetBlockEntryByID(id uint64) (blk *BlockEntry, err er
 	return entry.GetBlockEntryByIDLocked(id)
 }
 
+// XXX API like this, why do we need the error?   Isn't blk is nil enough?
 func (entry *SegmentEntry) GetBlockEntryByIDLocked(id uint64) (blk *BlockEntry, err error) {
 	node := entry.entries[id]
 	if node == nil {
-		err = ErrNotFound
+		err = moerr.NewNotFound()
 		return
 	}
 	blk = node.GetPayload()
@@ -184,10 +186,15 @@ func (entry *SegmentEntry) GetAppendableBlockCnt() int {
 	}
 	return cnt
 }
-func (entry *SegmentEntry) GetLastBlock() (blk *BlockEntry) {
+func (entry *SegmentEntry) GetAppendableBlock() (blk *BlockEntry) {
 	it := entry.MakeBlockIt(false)
-	if it.Valid() {
-		blk = it.Get().GetPayload()
+	for it.Valid() {
+		itBlk := it.Get().GetPayload()
+		if itBlk.IsAppendable() {
+			blk = itBlk
+			break
+		}
+		it.Next()
 	}
 	return
 }
@@ -267,7 +274,7 @@ func (entry *SegmentEntry) GetSegmentData() data.Segment { return entry.segData 
 
 func (entry *SegmentEntry) deleteEntryLocked(block *BlockEntry) error {
 	if n, ok := entry.entries[block.GetID()]; !ok {
-		return ErrNotFound
+		return moerr.NewNotFound()
 	} else {
 		entry.link.Delete(n)
 		delete(entry.entries, block.GetID())

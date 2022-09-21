@@ -54,7 +54,7 @@ func Run(ins Instructions, proc *process.Process) (end bool, err error) {
 
 	defer func() {
 		if e := recover(); e != nil {
-			err = moerr.NewPanicError(e)
+			err = moerr.ConvertPanicError(e)
 		}
 	}()
 	for _, in := range ins {

@@ -422,6 +422,40 @@ func NewIsNotNullExpr(e Expr) *IsNotNullExpr {
 	}
 }
 
+// is unknown expression
+type IsUnknownExpr struct {
+	exprImpl
+	Expr Expr
+}
+
+func (node *IsUnknownExpr) Format(ctx *FmtCtx) {
+	ctx.PrintExpr(node, node.Expr, true)
+	ctx.WriteString(" is unknown")
+}
+
+func NewIsUnknownExpr(e Expr) *IsUnknownExpr {
+	return &IsUnknownExpr{
+		Expr: e,
+	}
+}
+
+// is not unknown expression
+type IsNotUnknownExpr struct {
+	exprImpl
+	Expr Expr
+}
+
+func (node *IsNotUnknownExpr) Format(ctx *FmtCtx) {
+	ctx.PrintExpr(node, node.Expr, true)
+	ctx.WriteString(" is not unknown")
+}
+
+func NewIsNotUnknownExpr(e Expr) *IsNotUnknownExpr {
+	return &IsNotUnknownExpr{
+		Expr: e,
+	}
+}
+
 // subquery interface
 type SubqueryExpr interface {
 	Expr

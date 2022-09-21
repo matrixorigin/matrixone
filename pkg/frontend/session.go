@@ -27,7 +27,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/sql/errors"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -237,7 +236,7 @@ func (ses *Session) SetTenantInfo(ti *TenantInfo) {
 func (ses *Session) SetPrepareStmt(name string, prepareStmt *PrepareStmt) error {
 	if _, ok := ses.prepareStmts[name]; !ok {
 		if len(ses.prepareStmts) >= MaxPrepareNumberInOneSession {
-			return errors.New("", fmt.Sprintf("more than '%d' prepare statement in one session", MaxPrepareNumberInOneSession))
+			return moerr.NewInvalidState("too many prepared statement, max %d", MaxPrepareNumberInOneSession)
 		}
 	}
 	ses.prepareStmts[name] = prepareStmt
@@ -248,7 +247,7 @@ func (ses *Session) GetPrepareStmt(name string) (*PrepareStmt, error) {
 	if prepareStmt, ok := ses.prepareStmts[name]; ok {
 		return prepareStmt, nil
 	}
-	return nil, errors.New("", fmt.Sprintf("prepare statement '%s' does not exist", name))
+	return nil, moerr.NewInvalidState("prepared statement '%s' does not exist", name)
 }
 
 func (ses *Session) RemovePrepareStmt(name string) {
@@ -717,7 +716,16 @@ func (th *TxnHandler) NewTxn() error {
 	if err != nil {
 		return err
 	}
-	return nil
+	ctx := th.ses.GetRequestContext()
+	if ctx == nil {
+		panic("context should not be nil")
+	}
+	ctx, cancel := context.WithTimeout(
+		ctx,
+		th.storage.Hints().CommitOrRollbackTimeout,
+	)
+	defer cancel()
+	return th.storage.New(ctx, th.txn)
 }
 
 // IsValidTxn checks the transaction is true or not.
@@ -742,6 +750,9 @@ func (th *TxnHandler) CommitTxn() error {
 		th.storage.Hints().CommitOrRollbackTimeout,
 	)
 	defer cancel()
+	if err := th.storage.Commit(ctx, th.txn); err != nil {
+		return err
+	}
 	err := th.txn.Commit(ctx)
 	th.SetInvalid()
 	return err
@@ -760,6 +771,9 @@ func (th *TxnHandler) RollbackTxn() error {
 		th.storage.Hints().CommitOrRollbackTimeout,
 	)
 	defer cancel()
+	if err := th.storage.Rollback(ctx, th.txn); err != nil {
+		return err
+	}
 	err := th.txn.Rollback(ctx)
 	th.SetInvalid()
 	return err
@@ -864,7 +878,7 @@ func (tcc *TxnCompilerContext) ensureDatabaseIsNotEmpty(dbName string) (string, 
 		dbName = tcc.DefaultDatabase()
 	}
 	if len(dbName) == 0 {
-		return "", moerr.New(moerr.ER_NO_DB_ERROR)
+		return "", moerr.NewNoDB()
 	}
 	return dbName, nil
 }

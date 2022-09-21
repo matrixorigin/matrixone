@@ -18,8 +18,8 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/errors"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
@@ -30,10 +30,10 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext) (*Plan, error) {
 	dbName := string(stmt.Table.SchemaName)
 	objRef, tableDef := ctx.Resolve(dbName, tblName)
 	if tableDef == nil {
-		return nil, errors.New("", fmt.Sprintf("Invalid table name: %s", tree.String(stmt.Table, dialect.MYSQL)))
+		return nil, moerr.NewInvalidInput("load table '%s' does not exists", tree.String(stmt.Table, dialect.MYSQL))
 	}
 	if tableDef.TableType == catalog.SystemExternalRel {
-		return nil, fmt.Errorf("the external table is not support load operation")
+		return nil, moerr.NewInvalidInput("cannot load external table")
 	}
 
 	tableDef.Name2ColIndex = map[string]int32{}

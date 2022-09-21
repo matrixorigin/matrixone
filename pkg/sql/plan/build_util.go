@@ -15,16 +15,12 @@
 package plan
 
 import (
-	"fmt"
-
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
-
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
-	"github.com/matrixorigin/matrixone/pkg/errno"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/errors"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
@@ -111,10 +107,10 @@ func getTypeFromAst(typ tree.ResolvableTypeReference) (*plan.Type, error) {
 		case defines.MYSQL_TYPE_LONG_BLOB:
 			return &plan.Type{Id: int32(types.T_blob), Size: types.VarlenaSize}, nil
 		default:
-			return nil, errors.New("", fmt.Sprintf("Data type: '%s', will be supported in future version.", tree.String(&n.InternalType, dialect.MYSQL)))
+			return nil, moerr.NewNYI("data type: '%s'", tree.String(&n.InternalType, dialect.MYSQL))
 		}
 	}
-	return nil, errors.New(errno.IndeterminateDatatype, "Unknown data type.")
+	return nil, moerr.NewInternalError("unknown data type")
 }
 
 func buildDefaultExpr(col *tree.ColumnTableDef, typ *plan.Type) (*plan.Default, error) {
@@ -136,7 +132,7 @@ func buildDefaultExpr(col *tree.ColumnTableDef, typ *plan.Type) (*plan.Default, 
 	}
 
 	if !nullAbility && isNullAstExpr(expr) {
-		return nil, errors.New(errno.InvalidColumnDefinition, fmt.Sprintf("Invalid default value for '%s'", col.Name.Parts[0]))
+		return nil, moerr.NewInvalidInput("invalid default value for column '%s'", col.Name.Parts[0])
 	}
 
 	if expr == nil {
@@ -262,7 +258,7 @@ func getFunctionObjRef(funcID int64, name string) *ObjectRef {
 
 func getDefaultExpr(d *plan.Default, typ *plan.Type) (*Expr, error) {
 	if !d.NullAbility && d.Expr == nil {
-		return nil, errors.New("", "invalid default value")
+		return nil, moerr.NewInvalidInput("invalid default value")
 	}
 	if d.Expr == nil {
 		return &Expr{
