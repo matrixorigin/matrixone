@@ -222,7 +222,7 @@ func parseLogState(cfg hakeeper.Config, logState pb.LogState, currTick uint64) *
 func parseDnState(cfg hakeeper.Config, dnState pb.DNState, currTick uint64) *storeSet {
 	set := newStoreSet(pb.DnService)
 	for id, storeInfo := range dnState.Stores {
-		if cfg.DnStoreExpired(storeInfo.Tick, currTick) {
+		if cfg.DNStoreExpired(storeInfo.Tick, currTick) {
 			set.expired[id] = struct{}{}
 		} else {
 			set.working[id] = struct{}{}

@@ -140,7 +140,7 @@ func (h *mockDBHandle) TruncateByName(name string) (rel handle.Relation, err err
 }
 
 func (h *mockDBHandle) DropRelationByName(name string) (rel handle.Relation, err error) {
-	entry, err := h.entry.DropTableEntry(name, h.Txn)
+	_, entry, err := h.entry.DropTableEntry(name, h.Txn)
 	if err != nil {
 		return nil, err
 	}
@@ -193,7 +193,7 @@ func (txn *mockTxn) GetDatabase(name string) (handle.Database, error) {
 }
 
 func (txn *mockTxn) DropDatabase(name string) (handle.Database, error) {
-	entry, err := txn.catalog.DropDBEntry(name, txn)
+	_, entry, err := txn.catalog.DropDBEntry(name, txn)
 	if err != nil {
 		return nil, err
 	}

@@ -21,6 +21,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -131,7 +132,7 @@ func (catalog *Catalog) InitSystemDB() {
 
 func (catalog *Catalog) GetStore() store.Store { return catalog.store }
 
-func (catalog *Catalog) ReplayCmd(txncmd txnif.TxnCmd, dataFactory DataFactory, idxCtx *wal.Index, observer wal.ReplayObserver, cache *bytes.Buffer) {
+func (catalog *Catalog) ReplayCmd(txncmd txnif.TxnCmd, dataFactory DataFactory, idxCtx *wal.Index, observer wal.ReplayObserver, cache *bytes.Buffer, cmdType txnif.CmdType, commitTS types.TS) {
 	switch txncmd.GetType() {
 	case txnbase.CmdComposed:
 		cmds := txncmd.(*txnbase.ComposedCmd)
@@ -139,7 +140,7 @@ func (catalog *Catalog) ReplayCmd(txncmd txnif.TxnCmd, dataFactory DataFactory, 
 		for i, cmds := range cmds.Cmds {
 			idx := idxCtx.Clone()
 			idx.CSN = uint32(i)
-			catalog.ReplayCmd(cmds, dataFactory, idx, observer, cache)
+			catalog.ReplayCmd(cmds, dataFactory, idx, observer, cache, cmdType, commitTS)
 		}
 	case CmdLogBlock:
 		cmd := txncmd.(*EntryCommand)
@@ -155,58 +156,70 @@ func (catalog *Catalog) ReplayCmd(txncmd txnif.TxnCmd, dataFactory DataFactory, 
 		catalog.onReplayDatabase(cmd)
 	case CmdUpdateDatabase:
 		cmd := txncmd.(*EntryCommand)
-		catalog.onReplayUpdateDatabase(cmd, idxCtx, observer)
+		catalog.onReplayUpdateDatabase(cmd, idxCtx, observer, cmdType, commitTS)
 	case CmdUpdateTable:
 		cmd := txncmd.(*EntryCommand)
-		catalog.onReplayUpdateTable(cmd, dataFactory, idxCtx, observer)
+		catalog.onReplayUpdateTable(cmd, dataFactory, idxCtx, observer, cmdType, commitTS)
 	case CmdUpdateSegment:
 		cmd := txncmd.(*EntryCommand)
-		catalog.onReplayUpdateSegment(cmd, dataFactory, idxCtx, observer, cache)
+		catalog.onReplayUpdateSegment(cmd, dataFactory, idxCtx, observer, cache, cmdType, commitTS)
 	case CmdUpdateBlock:
 		cmd := txncmd.(*EntryCommand)
-		catalog.onReplayUpdateBlock(cmd, dataFactory, idxCtx, observer)
+		catalog.onReplayUpdateBlock(cmd, dataFactory, idxCtx, observer, cmdType, commitTS)
 	default:
 		panic("unsupport")
 	}
 }
 
-// 2,3 always stale
-// snapshot->ckped entry(must covered by ss)->unckped but in ss wal->wal
-func (catalog *Catalog) onReplayUpdateDatabase(cmd *EntryCommand, idx *wal.Index, observer wal.ReplayObserver) {
+func (catalog *Catalog) onReplayUpdateDatabase(cmd *EntryCommand, idx *wal.Index, observer wal.ReplayObserver, cmdType txnif.CmdType, commitTS types.TS) {
 	catalog.OnReplayDBID(cmd.DB.ID)
-	if cmd.GetTs().LessEq(catalog.GetCheckpointed().MaxTS) {
+	prepareTS := cmd.GetTs()
+	if (cmdType == txnif.CmdPrepare || cmdType == txnif.Cmd1PC) &&
+		prepareTS.LessEq(catalog.GetCheckpointed().MaxTS) {
 		if observer != nil {
 			observer.OnStaleIndex(idx)
 		}
 		return
 	}
 	var err error
+	if observer != nil {
+		switch cmdType {
+		case txnif.CmdCommit:
+			observer.OnTimeStamp(commitTS)
+		case txnif.CmdPrepare, txnif.Cmd1PC:
+			observer.OnTimeStamp(cmd.GetTs())
+		}
+	}
+	un := cmd.entry.GetNodeLocked().(*DBMVCCNode)
+	if cmdType == txnif.CmdCommit {
+		un.onReplayCommit(commitTS)
+		return
+	}
+	if cmdType == txnif.Cmd1PC {
+		un.onReplayCommit(prepareTS)
+	}
+	un.SetLogIndex(idx)
 
 	db, err := catalog.GetDatabaseByID(cmd.entry.GetID())
 	if err != nil {
+		if cmdType == txnif.CmdCommit {
+			panic("logic err")
+		}
 		cmd.DB.RWMutex = new(sync.RWMutex)
 		cmd.DB.catalog = catalog
-		cmd.entry.GetUpdateNodeLocked().AddLogIndex(idx)
+		cmd.entry.GetNodeLocked().SetLogIndex(idx)
 		err = catalog.AddEntryLocked(cmd.DB, nil)
 		if err != nil {
 			panic(err)
 		}
-		if observer != nil {
-			observer.OnTimeStamp(cmd.GetTs())
-		}
 		return
 	}
 
-	un := cmd.entry.GetUpdateNodeLocked()
-	un.AddLogIndex(idx)
-	dbun := db.GetExactUpdateNodeByNode(un)
+	dbun := db.SearchNode(un)
 	if dbun == nil {
-		db.InsertNode(un) //TODO isvalid
+		db.Insert(un) //TODO isvalid
 	} else {
-		dbun.UpdateNode(un)
-	}
-	if observer != nil {
-		observer.OnTimeStamp(cmd.GetTs())
+		dbun.Update(un)
 	}
 }
 
@@ -227,55 +240,65 @@ func (catalog *Catalog) onReplayDatabase(cmd *EntryCommand) {
 
 	cmd.DB.MVCC.Loop(func(n *common.GenericDLNode[txnbase.MVCCNode]) bool {
 		un := n.GetPayload()
-		dbun := db.GetExactUpdateNodeByNode(un)
+		dbun := db.SearchNode(un)
 		if dbun == nil {
-			db.InsertNode(un) //TODO isvalid
+			db.Insert(un) //TODO isvalid
 		} else {
-			dbun.UpdateNode(un)
+			dbun.Update(un)
 		}
 		return true
 	}, true)
 }
 
-func (catalog *Catalog) onReplayUpdateTable(cmd *EntryCommand, dataFactory DataFactory, idx *wal.Index, observer wal.ReplayObserver) {
+func (catalog *Catalog) onReplayUpdateTable(cmd *EntryCommand, dataFactory DataFactory, idx *wal.Index, observer wal.ReplayObserver, cmdType txnif.CmdType, commitTS types.TS) {
 	catalog.OnReplayTableID(cmd.Table.ID)
-	if cmd.GetTs().LessEq(catalog.GetCheckpointed().MaxTS) {
-		if observer != nil {
+	prepareTS := cmd.GetTs()
+	if (cmdType == txnif.CmdPrepare || cmdType == txnif.Cmd1PC) &&
+		prepareTS.LessEq(catalog.GetCheckpointed().MaxTS) {
+		if observer != nil && cmdType == txnif.CmdPrepare {
 			observer.OnStaleIndex(idx)
 		}
 		return
+	}
+	if observer != nil {
+		switch cmdType {
+		case txnif.CmdCommit:
+			observer.OnTimeStamp(commitTS)
+		case txnif.CmdPrepare, txnif.Cmd1PC:
+			observer.OnTimeStamp(cmd.GetTs())
+		}
 	}
 	db, err := catalog.GetDatabaseByID(cmd.DBID)
 	if err != nil {
 		panic(err)
 	}
 	tbl, err := db.GetTableEntryByID(cmd.Table.ID)
+
+	un := cmd.entry.GetNodeLocked().(*TableMVCCNode)
+	if cmdType == txnif.CmdCommit {
+		un.onReplayCommit(commitTS)
+	}
+	if cmdType == txnif.Cmd1PC {
+		un.onReplayCommit(prepareTS)
+	}
+	un.SetLogIndex(idx)
+
 	if err != nil {
 		cmd.Table.db = db
 		cmd.Table.tableData = dataFactory.MakeTableFactory()(cmd.Table)
-		cmd.entry.GetUpdateNodeLocked().AddLogIndex(idx)
 		err = db.AddEntryLocked(cmd.Table, nil)
 		if err != nil {
 			panic(err)
 		}
-		if observer != nil {
-			observer.OnTimeStamp(cmd.GetTs())
-		}
 		return
 	}
-
-	un := cmd.entry.GetUpdateNodeLocked()
-	tblun := tbl.GetExactUpdateNodeByNode(un)
-	un.AddLogIndex(idx)
+	tblun := tbl.SearchNode(un)
 	if tblun == nil {
-		tbl.InsertNode(un) //TODO isvalid
+		tbl.Insert(un) //TODO isvalid
 	} else {
-		tblun.UpdateNode(un)
+		tblun.Update(un)
 	}
 
-	if observer != nil {
-		observer.OnTimeStamp(cmd.GetTs())
-	}
 }
 
 func (catalog *Catalog) onReplayTable(cmd *EntryCommand, dataFactory DataFactory) {
@@ -295,26 +318,53 @@ func (catalog *Catalog) onReplayTable(cmd *EntryCommand, dataFactory DataFactory
 	} else {
 		cmd.Table.MVCC.Loop(func(n *common.GenericDLNode[txnbase.MVCCNode]) bool {
 			un := n.GetPayload()
-			node := rel.GetExactUpdateNodeByNode(un)
+			node := rel.SearchNode(un)
 			if node == nil {
-				rel.InsertNode(un)
+				rel.Insert(un)
 			} else {
-				node.UpdateNode(un)
+				node.Update(un)
 			}
 			return true
 		}, true)
 	}
 }
 
-func (catalog *Catalog) onReplayUpdateSegment(cmd *EntryCommand, dataFactory DataFactory, idx *wal.Index, observer wal.ReplayObserver, cache *bytes.Buffer) {
+func (catalog *Catalog) onReplayUpdateSegment(
+	cmd *EntryCommand,
+	dataFactory DataFactory,
+	idx *wal.Index,
+	observer wal.ReplayObserver,
+	cache *bytes.Buffer,
+	cmdType txnif.CmdType,
+	commitTS types.TS) {
 	catalog.OnReplaySegmentID(cmd.Segment.ID)
-	if cmd.GetTs().LessEq(catalog.GetCheckpointed().MaxTS) {
-		if observer != nil {
+	prepareTS := cmd.GetTs()
+	if (cmdType == txnif.CmdPrepare || cmdType == txnif.Cmd1PC) &&
+		prepareTS.LessEq(catalog.GetCheckpointed().MaxTS) {
+		if observer != nil && cmdType == txnif.CmdPrepare {
 			observer.OnStaleIndex(idx)
 		}
 		return
 	}
-	cmd.Segment.GetUpdateNodeLocked().AddLogIndex(idx)
+	if observer != nil {
+		switch cmdType {
+		case txnif.CmdCommit:
+			observer.OnTimeStamp(commitTS)
+		case txnif.CmdPrepare, txnif.Cmd1PC:
+			observer.OnTimeStamp(cmd.GetTs())
+		}
+	}
+
+	un := cmd.entry.GetNodeLocked().(*MetadataMVCCNode)
+	switch cmdType {
+	case txnif.CmdCommit:
+		un.onReplayCommit(commitTS)
+	case txnif.CmdPrepare:
+		un.SetLogIndex(idx)
+	case txnif.Cmd1PC:
+		un.SetLogIndex(idx)
+		un.onReplayCommit(prepareTS)
+	}
 	db, err := catalog.GetDatabaseByID(cmd.DBID)
 	if err != nil {
 		panic(err)
@@ -330,16 +380,12 @@ func (catalog *Catalog) onReplayUpdateSegment(cmd *EntryCommand, dataFactory Dat
 		cmd.Segment.segData = dataFactory.MakeSegmentFactory()(cmd.Segment)
 		tbl.AddEntryLocked(cmd.Segment)
 	} else {
-		un := cmd.entry.GetUpdateNodeLocked()
-		node := seg.GetExactUpdateNodeByNode(un)
+		node := seg.SearchNode(un)
 		if node == nil {
-			seg.InsertNode(un)
+			seg.Insert(un)
 		} else {
-			node.UpdateNode(un)
+			node.Update(un)
 		}
-	}
-	if observer != nil {
-		observer.OnTimeStamp(cmd.GetTs())
 	}
 }
 
@@ -360,24 +406,39 @@ func (catalog *Catalog) onReplaySegment(cmd *EntryCommand, dataFactory DataFacto
 	} else {
 		cmd.Segment.MVCC.Loop(func(n *common.GenericDLNode[txnbase.MVCCNode]) bool {
 			un := n.GetPayload()
-			segun := seg.GetExactUpdateNodeByNode(un)
+			segun := seg.SearchNode(un)
 			if segun != nil {
-				segun.UpdateNode(un)
+				segun.Update(un)
 			} else {
-				seg.InsertNode(un)
+				seg.Insert(un)
 			}
 			return true
 		}, true)
 	}
 }
 
-func (catalog *Catalog) onReplayUpdateBlock(cmd *EntryCommand, dataFactory DataFactory, idx *wal.Index, observer wal.ReplayObserver) {
+func (catalog *Catalog) onReplayUpdateBlock(cmd *EntryCommand,
+	dataFactory DataFactory,
+	idx *wal.Index,
+	observer wal.ReplayObserver,
+	cmdType txnif.CmdType,
+	commitTS types.TS) {
 	catalog.OnReplayBlockID(cmd.Block.ID)
-	if cmd.GetTs().LessEq(catalog.GetCheckpointed().MaxTS) {
-		if observer != nil {
+	prepareTS := cmd.GetTs()
+	if (cmdType == txnif.CmdPrepare || cmdType == txnif.Cmd1PC) &&
+		prepareTS.LessEq(catalog.GetCheckpointed().MaxTS) {
+		if observer != nil && cmdType == txnif.CmdPrepare {
 			observer.OnStaleIndex(idx)
 		}
 		return
+	}
+	if observer != nil {
+		switch cmdType {
+		case txnif.CmdCommit:
+			observer.OnTimeStamp(commitTS)
+		case txnif.CmdPrepare, txnif.Cmd1PC:
+			observer.OnTimeStamp(cmd.GetTs())
+		}
 	}
 	db, err := catalog.GetDatabaseByID(cmd.DBID)
 	if err != nil {
@@ -392,17 +453,22 @@ func (catalog *Catalog) onReplayUpdateBlock(cmd *EntryCommand, dataFactory DataF
 		panic(err)
 	}
 	blk, err := seg.GetBlockEntryByID(cmd.Block.ID)
-	un := cmd.entry.GetUpdateNodeLocked()
-	un.AddLogIndex(idx)
+	un := cmd.entry.GetNodeLocked().(*MetadataMVCCNode)
+	switch cmdType {
+	case txnif.CmdCommit:
+		un.onReplayCommit(commitTS)
+	case txnif.CmdPrepare:
+		un.SetLogIndex(idx)
+	case txnif.Cmd1PC:
+		un.SetLogIndex(idx)
+		un.onReplayCommit(prepareTS)
+	}
 	if err == nil {
-		blkun := blk.GetExactUpdateNodeByNode(un)
+		blkun := blk.SearchNode(un)
 		if blkun != nil {
-			blkun.UpdateNode(un)
+			blkun.Update(un)
 		} else {
-			blk.InsertNode(un)
-			if observer != nil {
-				observer.OnTimeStamp(un.GetEnd())
-			}
+			blk.Insert(un)
 		}
 		return
 	}
@@ -413,11 +479,7 @@ func (catalog *Catalog) onReplayUpdateBlock(cmd *EntryCommand, dataFactory DataF
 	if observer != nil {
 		observer.OnTimeStamp(ts)
 	}
-	un.AddLogIndex(idx)
 	seg.AddEntryLocked(cmd.Block)
-	if observer != nil {
-		observer.OnTimeStamp(un.GetEnd())
-	}
 }
 
 func (catalog *Catalog) onReplayBlock(cmd *EntryCommand, dataFactory DataFactory) {
@@ -441,11 +503,11 @@ func (catalog *Catalog) onReplayBlock(cmd *EntryCommand, dataFactory DataFactory
 	} else {
 		cmd.Block.MVCC.Loop(func(n *common.GenericDLNode[txnbase.MVCCNode]) bool {
 			un := n.GetPayload()
-			blkun := blk.GetExactUpdateNodeByNode(un)
+			blkun := blk.SearchNode(un)
 			if blkun != nil {
-				blkun.UpdateNode(un)
+				blkun.Update(un)
 			}
-			blk.InsertNode(un)
+			blk.Insert(un)
 			return false
 		}, true)
 	}
@@ -524,7 +586,7 @@ func (catalog *Catalog) GetDatabaseByID(id uint64) (db *DBEntry, err error) {
 	defer catalog.RUnlock()
 	node := catalog.entries[id]
 	if node == nil {
-		err = ErrNotFound
+		err = moerr.NewNotFound()
 		return
 	}
 	db = node.GetPayload()
@@ -595,14 +657,14 @@ func (catalog *Catalog) PPString(level common.PPLevel, depth int, prefix string)
 func (catalog *Catalog) RemoveEntry(database *DBEntry) error {
 	if database.IsSystemDB() {
 		logutil.Warnf("system db cannot be removed")
-		return ErrNotPermitted
+		return moerr.NewTAEError("not permitted")
 	}
 	logutil.Info("[Catalog]", common.OperationField("remove"),
 		common.OperandField(database.String()))
 	catalog.Lock()
 	defer catalog.Unlock()
 	if n, ok := catalog.entries[database.GetID()]; !ok {
-		return ErrNotFound
+		return moerr.NewNotFound()
 	} else {
 		nn := catalog.nameNodes[database.GetFullName()]
 		nn.DeleteNode(database.GetID())
@@ -621,7 +683,7 @@ func (catalog *Catalog) txnGetNodeByNameLocked(name string, txnCtx txnif.AsyncTx
 	fullName := genDBFullName(txnCtx.GetTenantID(), name)
 	node := catalog.nameNodes[fullName]
 	if node == nil {
-		return nil, ErrNotFound
+		return nil, moerr.NewNotFound()
 	}
 	return node.TxnGetNodeLocked(txnCtx)
 }
@@ -634,9 +696,9 @@ func (catalog *Catalog) GetDBEntry(name string, txnCtx txnif.AsyncTxn) (*DBEntry
 	return n.GetPayload(), nil
 }
 
-func (catalog *Catalog) DropDBEntry(name string, txnCtx txnif.AsyncTxn) (deleted *DBEntry, err error) {
+func (catalog *Catalog) DropDBEntry(name string, txnCtx txnif.AsyncTxn) (newEntry bool, deleted *DBEntry, err error) {
 	if name == SystemDBName {
-		err = ErrNotPermitted
+		err = moerr.NewTAEError("not permitted")
 		return
 	}
 	dn, err := catalog.txnGetNodeByNameLocked(name, txnCtx)
@@ -646,7 +708,7 @@ func (catalog *Catalog) DropDBEntry(name string, txnCtx txnif.AsyncTxn) (deleted
 	entry := dn.GetPayload()
 	entry.Lock()
 	defer entry.Unlock()
-	err = entry.DropEntryLocked(txnCtx)
+	newEntry, err = entry.DropEntryLocked(txnCtx)
 	if err == nil {
 		deleted = entry
 	}
@@ -674,7 +736,9 @@ func (catalog *Catalog) RecurLoop(processor Processor) (err error) {
 	for dbIt.Valid() {
 		dbEntry := dbIt.Get().GetPayload()
 		if err = processor.OnDatabase(dbEntry); err != nil {
-			if err == ErrStopCurrRecur {
+			// XXX: Performance problem.   Error should not be used
+			// to handle normal return code.
+			if moerr.IsMoErrCode(err, moerr.OkStopCurrRecur) {
 				err = nil
 				dbIt.Next()
 				continue
@@ -686,7 +750,7 @@ func (catalog *Catalog) RecurLoop(processor Processor) (err error) {
 		}
 		dbIt.Next()
 	}
-	if err == ErrStopCurrRecur {
+	if moerr.IsMoErrCode(err, moerr.OkStopCurrRecur) {
 		err = nil
 	}
 	return err
@@ -705,7 +769,7 @@ func (catalog *Catalog) PrepareCheckpoint(startTs, endTs types.TS) *CheckpointEn
 	}
 	processor.TableFn = func(table *TableEntry) (err error) {
 		if table.IsVirtual() {
-			err = ErrStopCurrRecur
+			err = moerr.GetOkStopCurrRecur()
 			return
 		}
 		CheckpointOp(ckpEntry, table, startTs, endTs)
@@ -745,7 +809,7 @@ func (catalog *Catalog) NeedCheckpoint(maxTS types.TS) (needCheckpoint bool, min
 	if len(catalog.checkpoints) != 0 {
 		lastMax := catalog.checkpoints[len(catalog.checkpoints)-1].MaxTS
 		if maxTS.Less(lastMax) {
-			err = ErrCheckpoint
+			err = moerr.NewTAEError("checkpint error maxTS less than lastMax")
 			return
 		}
 		if maxTS.Equal(lastMax) {

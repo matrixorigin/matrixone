@@ -21,16 +21,17 @@ import (
 	"github.com/lni/dragonboat/v4"
 	"github.com/stretchr/testify/assert"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 )
 
 func TestTimeoutError(t *testing.T) {
 	code, _ := toErrorCode(dragonboat.ErrTimeout)
-	assert.Equal(t, pb.Timeout, code)
+	assert.Equal(t, moerr.ErrDragonboatTimeout, uint16(code))
 	code, _ = toErrorCode(dragonboat.ErrTimeoutTooSmall)
-	assert.Equal(t, pb.Timeout, code)
+	assert.Equal(t, moerr.ErrDragonboatTimeout, uint16(code))
 	code, _ = toErrorCode(dragonboat.ErrInvalidDeadline)
-	assert.Equal(t, pb.Timeout, code)
+	assert.Equal(t, moerr.ErrDragonboatTimeout, uint16(code))
 }
 
 func TestErrorConversion(t *testing.T) {
@@ -39,7 +40,7 @@ func TestErrorConversion(t *testing.T) {
 		if rec.reverse {
 			code, msg := toErrorCode(rec.err)
 			resp := pb.Response{
-				ErrorCode:    code,
+				ErrorCode:    uint32(code),
 				ErrorMessage: msg,
 			}
 			err := toError(resp)
@@ -50,9 +51,8 @@ func TestErrorConversion(t *testing.T) {
 
 func TestUnknownErrorIsHandled(t *testing.T) {
 	err := errors.New("test error")
-	code, str := toErrorCode(err)
-	assert.Equal(t, pb.OtherSystemError, code)
-	assert.Equal(t, err.Error(), str)
+	code, _ := toErrorCode(err)
+	assert.Equal(t, moerr.ErrDragonboatOtherSystemError, uint16(code))
 }
 
 func TestIsTempError(t *testing.T) {
@@ -77,14 +77,8 @@ func TestIsTempError(t *testing.T) {
 		{dragonboat.ErrInvalidRange, false},
 		{dragonboat.ErrShardNotFound, true},
 
-		{ErrNotHAKeeper, true},
-
-		{ErrDeadlineNotSet, false},
-		{ErrInvalidDeadline, false},
-		{ErrInvalidTruncateLsn, false},
-		{ErrNotLeaseHolder, false},
-		{ErrOutOfRange, false},
-		{ErrInvalidShardID, false},
+		{moerr.NewNoHAKeeper(), true},
+		{moerr.NewNoDB(), false},
 	}
 	for _, tt := range tests {
 		assert.Equal(t, tt.temp, isTempError(tt.err))

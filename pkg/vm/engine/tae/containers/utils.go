@@ -19,6 +19,9 @@ import (
 
 	"github.com/RoaringBitmap/roaring"
 	"github.com/RoaringBitmap/roaring/roaring64"
+	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	movec "github.com/matrixorigin/matrixone/pkg/container/vector"
 )
 
 func ApplyUpdates(vec Vector, mask *roaring.Bitmap, vals map[uint32]any) {
@@ -68,4 +71,54 @@ func CloneWithBuffer(src Vector, buffer *bytes.Buffer, allocator ...MemAllocator
 	nbs := FillBufferWithBytes(bs, buffer)
 	cloned.ResetWithData(nbs, nulls)
 	return
+}
+
+func CopyToMoVector(vec Vector) *movec.Vector {
+	return VectorsToMO(vec)
+}
+
+// XXX VectorsToMo and CopyToMoVector.   The old impl. will move
+// vec.Data to movec.Data and keeps on sharing.   This is way too
+// fragile and error prone.
+//
+// Not just copy it.   Until profiler says I need to work harder.
+func VectorsToMO(vec Vector) *movec.Vector {
+	mov := movec.NewOriginal(vec.GetType())
+	data := vec.Data()
+	typ := vec.GetType()
+	mov.Typ = typ
+	if vec.HasNull() {
+		mov.Nsp.Np = bitmap.New(vec.Length())
+		mov.Nsp.Np.AddMany(vec.NullMask().ToArray())
+		//mov.Nsp.Np = vec.NullMask()
+	}
+
+	if vec.GetType().IsVarlen() {
+		bs := vec.Bytes()
+		nbs := len(bs.Offset)
+		bsv := make([][]byte, nbs)
+		for i := 0; i < nbs; i++ {
+			bsv[i] = bs.Data[bs.Offset[i] : bs.Offset[i]+bs.Length[i]]
+		}
+		movec.AppendBytes(mov, bsv, nil)
+	} else if vec.GetType().IsTuple() {
+		cnt := types.DecodeInt32(data)
+		if cnt != 0 {
+			if err := types.Decode(data, &mov.Col); err != nil {
+				panic(any(err))
+			}
+		}
+	} else {
+		movec.AppendFixedRaw(mov, data)
+	}
+
+	return mov
+}
+
+func CopyToMoVectors(vecs []Vector) []*movec.Vector {
+	movecs := make([]*movec.Vector, len(vecs))
+	for i := range movecs {
+		movecs[i] = CopyToMoVector(vecs[i])
+	}
+	return movecs
 }

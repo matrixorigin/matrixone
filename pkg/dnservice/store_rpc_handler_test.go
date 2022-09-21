@@ -19,6 +19,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/service"
 	"github.com/stretchr/testify/assert"
@@ -40,7 +41,7 @@ func TestHandleReadWithRetry(t *testing.T) {
 		req := service.NewTestReadRequest(1, service.NewTestTxn(1, 1, 1), 1)
 		req.CNRequest.Target.ReplicaID = 2
 		req.Options = &txn.TxnRequestOptions{
-			RetryCodes: []txn.ErrorCode{txn.ErrorCode_DNShardNotFound},
+			RetryCodes: []int32{int32(moerr.ErrDNShardNotFound)},
 		}
 		go func() {
 			time.Sleep(time.Second)
@@ -56,13 +57,13 @@ func TestHandleReadWithRetryWithTimeout(t *testing.T) {
 		req := service.NewTestReadRequest(1, service.NewTestTxn(1, 1, 1), 1)
 		req.CNRequest.Target.ReplicaID = 2
 		req.Options = &txn.TxnRequestOptions{
-			RetryCodes: []txn.ErrorCode{txn.ErrorCode_DNShardNotFound},
+			RetryCodes: []int32{int32(moerr.ErrDNShardNotFound)},
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
 		resp := &txn.TxnResponse{}
 		assert.NoError(t, s.handleRead(ctx, &req, resp))
-		assert.Equal(t, txn.ErrorCode_DNShardNotFound, resp.TxnError.Code)
+		assert.Equal(t, int32(moerr.ErrDNShardNotFound), resp.TxnError.Code)
 	})
 }
 
@@ -168,6 +169,6 @@ func TestHandleDNShardNotFound(t *testing.T) {
 		req := service.NewTestRollbackShardRequest(service.NewTestTxn(1, 1, 1))
 		resp := &txn.TxnResponse{}
 		assert.NoError(t, s.handleRollbackDNShard(context.Background(), &req, resp))
-		assert.Equal(t, txn.ErrorCode_DNShardNotFound, resp.TxnError.Code)
+		assert.Equal(t, int32(moerr.ErrDNShardNotFound), resp.TxnError.Code)
 	})
 }

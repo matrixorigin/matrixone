@@ -17,11 +17,12 @@ package trace
 import (
 	"context"
 	"fmt"
+	"strings"
+	"time"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil/logutil2"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
-	"strings"
-	"time"
 )
 
 const (
@@ -98,7 +99,7 @@ func InitSchemaByInnerExecutor(ctx context.Context, ieFactory func() ie.Internal
 	exec.ApplySessionOverride(ie.NewOptsBuilder().Database(StatsDatabase).Internal(true).Finish())
 	mustExec := func(sql string) error {
 		if err := exec.Exec(ctx, sql, ie.NewOptsBuilder().Finish()); err != nil {
-			return moerr.NewPanicError(fmt.Errorf("[Trace] init table error: %v, sql: %s", err, sql))
+			return moerr.NewInternalError("[Trace] init table error: %v, sql: %s", err, sql)
 		}
 		return nil
 	}
@@ -138,7 +139,7 @@ func InitExternalTblSchema(ctx context.Context, ieFactory func() ie.InternalExec
 	exec.ApplySessionOverride(ie.NewOptsBuilder().Database(StatsDatabase).Internal(true).Finish())
 	mustExec := func(sql string) error {
 		if err := exec.Exec(ctx, sql, ie.NewOptsBuilder().Finish()); err != nil {
-			return moerr.NewPanicError(fmt.Errorf("[Trace] init table error: %v, sql: %s", err, sql))
+			return moerr.NewInternalError("[Trace] init table error: %v, sql: %s", err, sql)
 		}
 		return nil
 	}
@@ -219,7 +220,7 @@ func GetOptionFactory(mode string) func(db, tbl string) TableOptions {
 			return &CsvTableOptions{formatter: infileFormatter, dbName: db, tblName: tbl}
 		}
 	default:
-		panic(moerr.NewPanicError(fmt.Errorf("unknown batch process mode: %s", mode)))
+		panic(moerr.NewInternalError("unknown batch process mode: %s", mode))
 	}
 }
 

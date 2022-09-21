@@ -20,10 +20,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/agg"
 	"sync/atomic"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/errno"
-	"github.com/matrixorigin/matrixone/pkg/sql/errors"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/shuffle"
 	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
@@ -198,6 +197,10 @@ func (bat *Batch) Length() int {
 	return len(bat.Zs)
 }
 
+func (bat *Batch) VectorCount() int {
+	return len(bat.Vecs)
+}
+
 func (bat *Batch) Prefetch(poses []int32, vecs []*vector.Vector) {
 	for i, pos := range poses {
 		vecs[i] = bat.GetVector(pos)
@@ -246,7 +249,7 @@ func (bat *Batch) Append(mh *mheap.Mheap, b *Batch) (*Batch, error) {
 		return b, nil
 	}
 	if len(bat.Vecs) != len(b.Vecs) {
-		return nil, errors.New(errno.InternalError, "unexpected error happens in batch append")
+		return nil, moerr.NewInternalError("unexpected error happens in batch append")
 	}
 	if len(bat.Vecs) == 0 {
 		return bat, nil
