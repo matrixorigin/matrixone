@@ -37,7 +37,7 @@ func (m *MemHandler) ensureAccount(
 	}
 	if len(keys) == 0 {
 		// create one
-		db := DatabaseRow{
+		db := &DatabaseRow{
 			ID:        txnengine.NewID(),
 			AccountID: accessInfo.AccountID,
 			Name:      catalog.SystemDBName,

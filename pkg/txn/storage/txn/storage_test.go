@@ -648,10 +648,6 @@ func testDatabase(
 		assert.Nil(t, resp.Batch)
 	}
 
-	t.Run("log tail", func(t *testing.T) {
-		testLogTail(t, newStorage)
-	})
-
 }
 
 func testRead[
