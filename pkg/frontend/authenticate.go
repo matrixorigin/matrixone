@@ -854,6 +854,15 @@ var (
 					and rp.role_id = %d
 					and rp.privilege_id = %d
 					and rp.privilege_level = "%s";`
+
+	//delete role from mo_role,mo_user_grant,mo_role_grant,mo_role_privs
+	deleteRoleFromMoRoleFormat = `delete from mo_catalog.mo_role where role_id = %d;`
+
+	deleteRoleFromMoUserGrantFormat = `delete from mo_catalog.mo_user_grant where role_id = %d;`
+
+	deleteRoleFromMoRoleGrantFormat = `delete from mo_catalog.mo_role_grant where granted_id = %d or grantee_id = %d;`
+
+	deleteRoleFromMoRolePrivsFormat = `delete from mo_catalog.mo_role_privs where role_id = %d;`
 )
 
 func getSqlForCheckTenant(tenant string) string {
@@ -994,6 +1003,15 @@ func getSqlForCheckDatabase(dbName string) string {
 
 func getSqlForCheckDatabaseTable(dbName, tableName string) string {
 	return fmt.Sprintf(checkDatabaseTableFormat, dbName, tableName)
+}
+
+func getSqlForDeleteRole(roleId int64) []string {
+	return []string{
+		fmt.Sprintf(deleteRoleFromMoRoleFormat, roleId),
+		fmt.Sprintf(deleteRoleFromMoUserGrantFormat, roleId),
+		fmt.Sprintf(deleteRoleFromMoRoleGrantFormat, roleId, roleId),
+		fmt.Sprintf(deleteRoleFromMoRolePrivsFormat, roleId),
+	}
 }
 
 type specialTag int
@@ -1301,6 +1319,73 @@ func (g *graph) hasLoop(start int64) bool {
 	return !g.toposort(start, visited)
 }
 
+// doDropRole accomplishes the DropRole statement
+func doDropRole(ctx context.Context, ses *Session, dr *tree.DropRole) error {
+	pu := ses.Pu
+	guestMMu := guest.New(pu.SV.GuestMmuLimitation, pu.HostMmu)
+	bh := NewBackgroundHandler(ctx, guestMMu, pu.Mempool, pu)
+	defer bh.Close()
+	var err error
+	var vr *verifiedRole
+	verifiedRoles := make([]*verifiedRole, len(dr.Roles))
+
+	//put it into the single transaction
+	err = bh.Exec(ctx, "begin;")
+	if err != nil {
+		goto handleFailed
+	}
+
+	//step1: check roles exists or not.
+	//handle "IF EXISTS"
+	for i, role := range dr.Roles {
+		sql := getSqlForRoleIdOfRole(role.UserName)
+		vr, err = verifyRoleFunc(ctx, bh, sql, role.UserName, roleType)
+		if err != nil {
+			goto handleFailed
+		}
+		verifiedRoles[i] = vr
+		if vr == nil {
+			if !dr.IfExists { //when the "IF EXISTS" is set, just skip it.
+				err = moerr.NewInternalError("there is no role %s", role.UserName)
+				goto handleFailed
+			}
+		}
+	}
+
+	//step2 : delete mo_role
+	//step3 : delete mo_user_grant
+	//step4 : delete mo_role_grant
+	//step5 : delete mo_role_privs
+	for _, role := range verifiedRoles {
+		if role == nil {
+			continue
+		}
+		sqls := getSqlForDeleteRole(role.id)
+		for _, sql := range sqls {
+			bh.ClearExecResultSet()
+			err = bh.Exec(ctx, sql)
+			if err != nil {
+				goto handleFailed
+			}
+		}
+	}
+
+	err = bh.Exec(ctx, "commit;")
+	if err != nil {
+		goto handleFailed
+	}
+
+	return err
+
+handleFailed:
+	//ROLLBACK the transaction
+	rbErr := bh.Exec(ctx, "rollback;")
+	if rbErr != nil {
+		return rbErr
+	}
+	return err
+}
+
 // doRevokePrivilege accomplishes the RevokePrivilege statement
 func doRevokePrivilege(ctx context.Context, ses *Session, rp *tree.RevokePrivilege) error {
 	pu := ses.Pu
@@ -1369,6 +1454,9 @@ func doRevokePrivilege(ctx context.Context, ses *Session, rp *tree.RevokePrivile
 	//step 3: delete the granted privilege
 	for _, privType = range checkedPrivilegeTypes {
 		for _, role := range verifiedRoles {
+			if role == nil {
+				continue
+			}
 			sql := getSqlForDeleteRolePrivs(role.id, objType.String(), objId, int64(privType), privLevel.String())
 
 			//insert or update

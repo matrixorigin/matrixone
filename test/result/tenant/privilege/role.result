@@ -175,5 +175,6 @@ revoke execute on table *.* from role_r1;
 revoke execute on table d.* from role_r1;
 revoke execute on table d.t from role_r1;
 revoke execute on table t from role_r1;
+drop role role_r1,role_r2,role_r3;
 drop database if exists t;
 drop database if exists d;

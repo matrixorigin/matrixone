@@ -1417,6 +1417,11 @@ func (mce *MysqlCmdExecutor) handleCreateRole(ctx context.Context, cr *tree.Crea
 	return InitRole(ctx, tenant, cr)
 }
 
+// handleDropRole drops the role
+func (mce *MysqlCmdExecutor) handleDropRole(ctx context.Context, dr *tree.DropRole) error {
+	return doDropRole(ctx, mce.GetSession(), dr)
+}
+
 // handleGrantRole grants the role
 func (mce *MysqlCmdExecutor) handleGrantRole(ctx context.Context, gr *tree.GrantRole) error {
 	return doGrantRole(ctx, mce.GetSession(), gr)
@@ -1968,7 +1973,11 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			if err = mce.handleCreateRole(requestCtx, st); err != nil {
 				goto handleFailed
 			}
-		case *tree.DropRole: //TODO
+		case *tree.DropRole:
+			selfHandle = true
+			if err = mce.handleDropRole(requestCtx, st); err != nil {
+				goto handleFailed
+			}
 		case *tree.Grant:
 			selfHandle = true
 			switch st.Typ {
