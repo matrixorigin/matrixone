@@ -46,7 +46,7 @@ import (
 )
 
 func String(arg any, buf *bytes.Buffer) {
-	buf.WriteString("sql output")
+	buf.WriteString("external output")
 }
 
 func Prepare(proc *process.Process, arg any) error {
@@ -466,7 +466,7 @@ func GetBatchData(param *ExternalParam, plh *ParseLineHandler, proc *process.Pro
 				if isNullOrEmpty {
 					nulls.Add(vec.Nsp, uint64(rowIdx))
 				} else {
-					d, err := strconv.ParseFloat(field, 32)
+					d, err := strconv.ParseFloat(field, 64)
 					if err != nil {
 						logutil.Errorf("parse field[%v] err:%v", field, err)
 						return nil, fmt.Errorf("the input value '%v' is not float64 type for column %d", field, colIdx)
@@ -528,7 +528,7 @@ func GetBatchData(param *ExternalParam, plh *ParseLineHandler, proc *process.Pro
 					d, err := types.Decimal64_FromString(field)
 					if err != nil {
 						// we tolerate loss of digits.
-						if !moerr.IsMoErrCode(err, moerr.DATA_TRUNCATED) {
+						if !moerr.IsMoErrCode(err, moerr.ErrDataTruncated) {
 							logutil.Errorf("parse field[%v] err:%v", field, err)
 							return nil, fmt.Errorf("the input value '%v' is not Decimal64 type for column %d", field, colIdx)
 						}
@@ -543,7 +543,7 @@ func GetBatchData(param *ExternalParam, plh *ParseLineHandler, proc *process.Pro
 					d, err := types.Decimal128_FromString(field)
 					if err != nil {
 						// we tolerate loss of digits.
-						if !moerr.IsMoErrCode(err, moerr.DATA_TRUNCATED) {
+						if !moerr.IsMoErrCode(err, moerr.ErrDataTruncated) {
 							logutil.Errorf("parse field[%v] err:%v", field, err)
 							return nil, fmt.Errorf("the input value '%v' is not Decimal128 type for column %d", field, colIdx)
 						}

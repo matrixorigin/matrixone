@@ -40,7 +40,7 @@ func NewDefaultShardPolicy(heap *mheap.Mheap) ShardPolicy {
 type ShardPolicy interface {
 	Vector(
 		ctx context.Context,
-		tableID string,
+		tableID ID,
 		getDefs getDefsFunc,
 		colName string,
 		vec *vector.Vector,
@@ -52,7 +52,7 @@ type ShardPolicy interface {
 
 	Batch(
 		ctx context.Context,
-		tableID string,
+		tableID ID,
 		getDefs getDefsFunc,
 		batch *batch.Batch,
 		nodes []logservicepb.DNStore,
@@ -132,7 +132,7 @@ var _ ShardPolicy = new(NoShard)
 
 func (s *NoShard) Vector(
 	ctx context.Context,
-	tableID string,
+	tableID ID,
 	getDefs getDefsFunc,
 	colName string,
 	vec *vector.Vector,
@@ -151,7 +151,7 @@ func (s *NoShard) Vector(
 
 func (s *NoShard) Batch(
 	ctx context.Context,
-	tableID string,
+	tableID ID,
 	getDefs getDefsFunc,
 	bat *batch.Batch,
 	nodes []logservicepb.DNStore,

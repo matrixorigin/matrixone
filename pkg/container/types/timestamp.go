@@ -38,17 +38,13 @@ import (
 	"time"
 	"unsafe"
 
-	"github.com/matrixorigin/matrixone/pkg/errno"
-	"github.com/matrixorigin/matrixone/pkg/sql/errors"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
 //const microSecondsDigits = 6
 
 var TimestampMinValue Timestamp
 var TimestampMaxValue Timestamp
-var (
-	ErrInvalidTimestampAddInterval = errors.New(errno.DataException, "Beyond the range of timestamp")
-)
 
 // the range for TIMESTAMP values is '1970-01-01 00:00:01.000000' to '2038-01-19 03:14:07.999999'.
 func init() {
@@ -84,11 +80,6 @@ func (ts Timestamp) Unix() int64 {
 	return (int64(ts) - unixEpoch) / microSecsPerSec
 }
 
-var (
-	errIncorrectTimestampValue = errors.New(errno.DataException, "Incorrect timestamp value")
-	errTimestampOutOfRange     = errors.New(errno.DataException, "timestamp out of range")
-)
-
 // this scaleTable stores the corresponding microseconds value for a precision
 var scaleTable = [...]uint32{1000000, 100000, 10000, 1000, 100, 10, 1}
 
@@ -104,7 +95,7 @@ func getMsec(msecStr string, precision int32) (uint32, uint32, error) {
 		} else if msecStr[precision] >= '0' && msecStr[precision] <= '4' {
 			msecCarry = 0
 		} else {
-			return 0, 0, ErrIncorrectDatetimeValue
+			return 0, 0, moerr.NewInvalidArg("get ms", msecStr)
 		}
 		msecStr = msecStr[:precision]
 	} else if len(msecStr) < int(precision) {
@@ -119,7 +110,7 @@ func getMsec(msecStr string, precision int32) (uint32, uint32, error) {
 	}
 	m, err := strconv.ParseUint(msecStr, 10, 32)
 	if err != nil {
-		return 0, 0, errIncorrectTimestampValue
+		return 0, 0, moerr.NewInvalidArg("get ms", msecStr)
 	}
 	msecs = (uint32(m) + msecCarry) * scaleTable[precision]
 	if msecs == OneSecInMicroSeconds {
@@ -137,12 +128,12 @@ func getMsec(msecStr string, precision int32) (uint32, uint32, error) {
 func ParseTimestamp(loc *time.Location, s string, precision int32) (Timestamp, error) {
 	dt, err := ParseDatetime(s, precision)
 	if err != nil {
-		return -1, errIncorrectTimestampValue
+		return -1, moerr.NewInvalidArg("parse timestamp", s)
 	}
 
 	result := dt.ToTimestamp(loc)
 	if result < TimestampMinValue {
-		return -1, errTimestampOutOfRange
+		return -1, moerr.NewInvalidArg("parse timestamp", s)
 	}
 
 	return result, nil

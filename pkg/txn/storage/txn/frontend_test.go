@@ -26,6 +26,7 @@ import (
 	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
+	"github.com/matrixorigin/matrixone/pkg/txn/storage/txn/memtable"
 	txnengine "github.com/matrixorigin/matrixone/pkg/vm/engine/txn"
 	"github.com/matrixorigin/matrixone/pkg/vm/mempool"
 	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
@@ -84,7 +85,7 @@ func TestFrontend(t *testing.T) {
 	}, math.MaxInt)
 	storage, err := NewMemoryStorage(
 		heap,
-		SnapshotIsolation,
+		memtable.SnapshotIsolation,
 		clock,
 	)
 	assert.Nil(t, err)

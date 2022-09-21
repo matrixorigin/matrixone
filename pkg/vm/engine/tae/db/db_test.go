@@ -22,6 +22,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
@@ -31,7 +32,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
@@ -211,7 +211,7 @@ func testCRUD(t *testing.T, tae *DB, schema *catalog.Schema) {
 
 	txn, rel := getDefaultRelation(t, tae, schema.Name)
 	err := rel.Append(bats[0])
-	assert.ErrorIs(t, err, data.ErrDuplicate)
+	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrDuplicate))
 	checkAllColRowsByScan(t, rel, bats[0].Length(), false)
 	v := bats[0].Vecs[schema.GetSingleSortKeyIdx()].Get(2)
 	filter := handle.NewEQFilter(v)
@@ -293,7 +293,7 @@ func TestTableHandle(t *testing.T) {
 	handle := table.GetHandle()
 	appender, err := handle.GetAppender()
 	assert.Nil(t, appender)
-	assert.Equal(t, data.ErrAppendableSegmentNotFound, err)
+	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrAppendableSegmentNotFound))
 }
 
 func TestCreateBlock(t *testing.T) {
@@ -1192,7 +1192,7 @@ func TestDelete1(t *testing.T) {
 		v := bat.Vecs[schema.GetSingleSortKeyIdx()].Get(0)
 		filter := handle.NewEQFilter(v)
 		_, _, err = rel.GetByFilter(filter)
-		assert.Equal(t, data.ErrNotFound, err)
+		assert.True(t, moerr.IsMoErrCode(err, moerr.ErrNotFound))
 		assert.NoError(t, txn.Commit())
 	}
 	{
@@ -1207,7 +1207,7 @@ func TestDelete1(t *testing.T) {
 		v := bat.Vecs[schema.GetSingleSortKeyIdx()].Get(0)
 		filter := handle.NewEQFilter(v)
 		_, _, err = rel.GetByFilter(filter)
-		assert.ErrorIs(t, err, data.ErrNotFound)
+		assert.True(t, moerr.IsMoErrCode(err, moerr.ErrNotFound))
 		_ = txn.Rollback()
 	}
 	t.Log(tae.Opts.Catalog.SimplePPString(common.PPL1))
@@ -1583,7 +1583,7 @@ func TestDedup(t *testing.T) {
 	assert.NoError(t, err)
 	err = rel.Append(bat)
 	t.Log(err)
-	assert.ErrorIs(t, err, data.ErrDuplicate)
+	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrDuplicate))
 	checkAllColRowsByScan(t, rel, 10, false)
 	err = txn.Rollback()
 	assert.NoError(t, err)
@@ -1870,7 +1870,7 @@ func TestChaos1(t *testing.T) {
 			atomic.AddUint32(&deleteCnt, uint32(1))
 			return
 		}
-		assert.Equal(t, data.ErrNotFound, err)
+		assert.True(t, moerr.IsMoErrCode(err, moerr.ErrNotFound))
 		err = rel.Append(bat)
 		// TODO: enable below check later
 		// assert.NotEqual(t, data.ErrDuplicate, err)
@@ -1943,14 +1943,14 @@ func TestSnapshotIsolation1(t *testing.T) {
 	// Step 4
 	err = rel1.UpdateByFilter(filter, 3, int64(1111))
 	t.Log(err)
-	assert.ErrorIs(t, err, txnif.ErrTxnWWConflict)
+	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict))
 
 	// Step 5
 	id, row, err := rel1.GetByFilter(filter)
 	assert.NoError(t, err)
 	err = rel1.RangeDelete(id, row, row, handle.DT_Normal)
 	t.Log(err)
-	assert.ErrorIs(t, err, txnif.ErrTxnWWConflict)
+	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict))
 	_ = txn1.Rollback()
 
 	// Step 6
@@ -2005,7 +2005,7 @@ func TestSnapshotIsolation2(t *testing.T) {
 	// Step 4
 	err = rel1.Append(bat)
 	t.Log(err)
-	assert.ErrorIs(t, err, txnif.ErrTxnWWConflict)
+	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict))
 	_ = txn1.Rollback()
 }
 
@@ -2659,9 +2659,9 @@ func TestTruncateZonemap(t *testing.T) {
 
 	checkMinMax := func(rel handle.Relation, minvOffset, maxvOffset uint32) {
 		_, _, err := rel.GetByFilter(handle.NewEQFilter(trickyMinv))
-		assert.Equal(t, err.Error(), data.ErrNotFound.Error())
+		assert.True(t, moerr.IsMoErrCode(err, moerr.ErrNotFound))
 		_, _, err = rel.GetByFilter(handle.NewEQFilter(trickyMaxv))
-		assert.Equal(t, err.Error(), data.ErrNotFound.Error())
+		assert.True(t, moerr.IsMoErrCode(err, moerr.ErrNotFound))
 		_, row, err := rel.GetByFilter(handle.NewEQFilter(minv))
 		assert.NoError(t, err)
 		assert.Equal(t, minvOffset, row)
@@ -3088,6 +3088,8 @@ func TestGetLastAppender(t *testing.T) {
 
 	tae.compactBlocks(false)
 	t.Log(tae.Catalog.SimplePPString(3))
+
+	tae.restart()
 
 	txn, rel := tae.getRelation()
 	rel.Append(bats[1])

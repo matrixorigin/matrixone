@@ -37,14 +37,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/hakeeper/task"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
-)
-
-var (
-	ErrInvalidTruncateLsn = moerr.NewError(moerr.INVALID_INPUT, "invalid input")
-	ErrNotLeaseHolder     = moerr.NewError(moerr.INVALID_STATE, "not lease holder")
-	ErrInvalidShardID     = moerr.NewError(moerr.INVALID_INPUT, "invalid shard ID")
-
-	ErrOutOfRange = dragonboat.ErrInvalidRange
+	"github.com/matrixorigin/matrixone/pkg/taskservice"
 )
 
 type storeMeta struct {
@@ -142,7 +135,7 @@ type store struct {
 	}
 }
 
-func newLogStore(cfg Config) (*store, error) {
+func newLogStore(cfg Config, taskService taskservice.TaskService) (*store, error) {
 	nh, err := dragonboat.NewNodeHost(getNodeHostConfig(cfg))
 	if err != nil {
 		return nil, err
@@ -154,7 +147,7 @@ func newLogStore(cfg Config) (*store, error) {
 		cfg:           cfg,
 		nh:            nh,
 		checker:       checkers.NewCoordinator(hakeeperConfig),
-		taskScheduler: task.NewTaskScheduler(cfg.TaskService, hakeeperConfig),
+		taskScheduler: task.NewTaskScheduler(taskService, hakeeperConfig),
 		alloc:         newIDAllocator(),
 		stopper:       stopper.NewStopper("log-store"),
 		tickerStopper: stopper.NewStopper("hakeeper-ticker"),
@@ -227,7 +220,7 @@ func (l *store) startHAKeeperReplica(replicaID uint64,
 func (l *store) startReplica(shardID uint64, replicaID uint64,
 	initialReplicas map[uint64]dragonboat.Target, join bool) error {
 	if shardID == hakeeper.DefaultHAKeeperShardID {
-		return ErrInvalidShardID
+		return moerr.NewInvalidInput("shardID %d does not match DefaultHAKeeperShardID %d", shardID, hakeeper.DefaultHAKeeperShardID)
 	}
 	cfg := getRaftConfig(shardID, replicaID)
 	if err := l.nh.StartReplica(initialReplicas, join, newStateMachine, cfg); err != nil {
@@ -359,7 +352,7 @@ func (l *store) truncateLog(ctx context.Context,
 	}
 	if result.Value > 0 {
 		plog.Errorf("shardID %d already truncated to index %d", shardID, result.Value)
-		return errors.Wrapf(ErrInvalidTruncateLsn, "already truncated to %d", result.Value)
+		return moerr.NewInvalidTruncateLsn(shardID, result.Value)
 	}
 	l.mu.Lock()
 	l.mu.pendingTruncate[shardID] = struct{}{}
@@ -378,11 +371,10 @@ func (l *store) append(ctx context.Context,
 	}
 	if len(result.Data) > 0 {
 		plog.Errorf("not current lease holder (%d)", binaryEnc.Uint64(result.Data))
-		return 0, errors.Wrapf(ErrNotLeaseHolder,
-			"current lease holder ID %d", binaryEnc.Uint64(result.Data))
+		return 0, moerr.NewNotLeaseHolder(binaryEnc.Uint64(result.Data))
 	}
 	if result.Value == 0 {
-		panic(moerr.NewError(moerr.INVALID_STATE, "unexpected Lsn value"))
+		panic(moerr.NewInvalidState("unexpected Lsn value"))
 	}
 	return result.Value, nil
 }
@@ -412,7 +404,7 @@ func handleNotHAKeeperError(err error) error {
 		return err
 	}
 	if errors.Is(err, dragonboat.ErrShardNotFound) {
-		return ErrNotHAKeeper
+		return moerr.NewNoHAKeeper()
 	}
 	return err
 }
@@ -442,6 +434,18 @@ func (l *store) addCNStoreHeartbeat(ctx context.Context,
 		return handleNotHAKeeperError(err)
 	}
 	return nil
+}
+
+func (l *store) cnAllocateID(ctx context.Context,
+	req pb.CNAllocateID) (uint64, error) {
+	cmd := hakeeper.GetGetIDCmd(req.Batch)
+	session := l.nh.GetNoOPSession(hakeeper.DefaultHAKeeperShardID)
+	result, err := l.propose(ctx, session, cmd)
+	if err != nil {
+		plog.Errorf("propose get id failed, %v", err)
+		return 0, err
+	}
+	return result.Value, nil
 }
 
 func (l *store) addDNStoreHeartbeat(ctx context.Context,
@@ -508,15 +512,15 @@ func (l *store) getLeaseHolderID(ctx context.Context,
 
 func (l *store) decodeCmd(e raftpb.Entry) []byte {
 	if e.Type == raftpb.ApplicationEntry {
-		panic(moerr.NewError(moerr.INVALID_STATE, "unexpected entry type"))
+		panic(moerr.NewInvalidState("unexpected entry type"))
 	}
 	if e.Type == raftpb.EncodedEntry {
 		if e.Cmd[0] != 0 {
-			panic(moerr.NewError(moerr.INVALID_STATE, "unexpected cmd header"))
+			panic(moerr.NewInvalidState("unexpected cmd header"))
 		}
 		return e.Cmd[1:]
 	}
-	panic(moerr.NewError(moerr.INVALID_STATE, "invalid cmd"))
+	panic(moerr.NewInvalidState("invalid cmd"))
 }
 
 func isRaftInternalEntry(e raftpb.Entry) bool {
@@ -615,9 +619,9 @@ func (l *store) queryLog(ctx context.Context, shardID uint64,
 		} else if v.RequestOutOfRange() {
 			// FIXME: add more details to the log, what is the available range
 			plog.Errorf("OutOfRange query found")
-			return nil, 0, ErrOutOfRange
+			return nil, 0, dragonboat.ErrInvalidRange
 		}
-		panic(moerr.NewError(moerr.INVALID_STATE, "unexpected rs state"))
+		panic(moerr.NewInvalidState("unexpected rs state"))
 	case <-ctx.Done():
 		return nil, 0, ctx.Err()
 	}

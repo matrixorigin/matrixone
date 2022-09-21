@@ -15,10 +15,8 @@
 package plan
 
 import (
-	"fmt"
-
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/errors"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
@@ -82,7 +80,7 @@ func (bc *BindContext) mergeContexts(left, right *BindContext) error {
 
 	for _, binding := range right.bindings {
 		if _, ok := bc.bindingByTable[binding.table]; ok {
-			return errors.New("", fmt.Sprintf("table name %q specified more than once", binding.table))
+			return moerr.NewInvalidInput("table '%s' specified more than once", binding.table)
 		}
 
 		bc.bindings = append(bc.bindings, binding)
@@ -113,18 +111,18 @@ func (bc *BindContext) mergeContexts(left, right *BindContext) error {
 func (bc *BindContext) addUsingCol(col string, typ plan.Node_JoinFlag, left, right *BindContext) (*plan.Expr, error) {
 	leftBinding, ok := left.bindingByCol[col]
 	if !ok {
-		return nil, errors.New("", fmt.Sprintf("column %q specified in USING clause does not exist in left table", col))
+		return nil, moerr.NewInvalidInput("column '%s' specified in USING clause does not exist in left table", col)
 	}
 	if leftBinding == nil {
-		return nil, errors.New("", fmt.Sprintf("common column name %q appears more than once in left table", col))
+		return nil, moerr.NewInvalidInput("common column '%s' appears more than once in left table", col)
 	}
 
 	rightBinding, ok := right.bindingByCol[col]
 	if !ok {
-		return nil, errors.New("", fmt.Sprintf("column %q specified in USING clause does not exist in right table", col))
+		return nil, moerr.NewInvalidInput("column '%s' specified in USING clause does not exist in right table", col)
 	}
 	if rightBinding == nil {
-		return nil, errors.New("", fmt.Sprintf("common column name %q appears more than once in right table", col))
+		return nil, moerr.NewInvalidInput("common column '%s' appears more than once in right table", col)
 	}
 
 	if typ != plan.Node_RIGHT {
@@ -180,7 +178,7 @@ func (bc *BindContext) unfoldStar(table string) ([]tree.SelectExpr, []string, er
 		// unfold tbl.*
 		binding, ok := bc.bindingByTable[table]
 		if !ok {
-			return nil, nil, errors.New("", fmt.Sprintf("missing FROM-clause entry for table %q", table))
+			return nil, nil, moerr.NewInvalidInput("missing FROM-clause entry for table '%s'", table)
 		}
 
 		exprs := make([]tree.SelectExpr, len(binding.cols))
@@ -314,8 +312,7 @@ func (bc *BindContext) qualifyColumnNames(astExpr tree.Expr, selectList tree.Sel
 					exprImpl.NumParts = 2
 					exprImpl.Parts[1] = binding.table
 				} else {
-					// return nil, errors.New("", fmt.Sprintf("column reference %q is ambiguous", col))
-					return nil, errors.New("", fmt.Sprintf("Column reference '%s' is ambiguous", col))
+					return nil, moerr.NewInvalidInput("ambiguouse column reference to '%s'", col)
 				}
 			}
 		}

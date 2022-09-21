@@ -21,7 +21,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/errors"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
@@ -35,10 +34,10 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext) (*Plan, error) {
 	dbName := string(stmt.Table.SchemaName)
 	objRef, tableDef := ctx.Resolve(dbName, tblName)
 	if tableDef == nil {
-		return nil, errors.New("", fmt.Sprintf("Invalid table name: %s", tree.String(stmt.Table, dialect.MYSQL)))
+		return nil, moerr.NewInvalidInput("load table '%s' does not exists", tree.String(stmt.Table, dialect.MYSQL))
 	}
 	if tableDef.TableType == catalog.SystemExternalRel {
-		return nil, fmt.Errorf("the external table is not support load operation")
+		return nil, moerr.NewInvalidInput("cannot load external table")
 	}
 
 	tableDef.Name2ColIndex = map[string]int32{}
@@ -179,15 +178,15 @@ func InitNullMap(stmt *tree.Load) error {
 	for i := 0; i < len(stmt.Param.Tail.Assignments); i++ {
 		expr, ok := stmt.Param.Tail.Assignments[i].Expr.(*tree.FuncExpr)
 		if !ok {
-			return moerr.NewError(moerr.INVALID_INPUT, "the load set list is not FuncExpr form")
+			return moerr.NewInvalidInput("the load set list is not FuncExpr form")
 		}
 		if len(expr.Exprs) != 2 {
-			return moerr.NewError(moerr.INVALID_INPUT, "the nullif func need two paramaters")
+			return moerr.NewInvalidInput("the nullif func need two paramaters")
 		}
 
 		expr3, ok := expr.Exprs[1].(*tree.NumVal)
 		if !ok {
-			return moerr.NewError(moerr.INVALID_INPUT, "the nullif func second param is not UnresolvedName form")
+			return moerr.NewInvalidInput("the nullif func second param is not UnresolvedName form")
 		}
 		for j := 0; j < len(stmt.Param.Tail.Assignments[i].Names); j++ {
 			col := stmt.Param.Tail.Assignments[i].Names[j].Parts[0]

@@ -15,6 +15,7 @@
 package tables
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
@@ -52,9 +53,9 @@ func (h *tableHandle) ThrowAppenderAndErr() (appender data.BlockAppender, err er
 	id := h.appender.GetID()
 	segEntry, _ := h.table.meta.GetSegmentByID(id.SegmentID)
 	if segEntry.GetAppendableBlockCnt() >= int(segEntry.GetTable().GetSchema().SegmentMaxBlocks) {
-		err = data.ErrAppendableSegmentNotFound
+		err = moerr.NewAppendableSegmentNotFound()
 	} else {
-		err = data.ErrAppendableBlockNotFound
+		err = moerr.NewAppendableBlockNotFound()
 		appender = h.appender
 	}
 	h.block = nil
@@ -67,14 +68,14 @@ func (h *tableHandle) GetAppender() (appender data.BlockAppender, err error) {
 	if h.appender == nil {
 		segEntry = h.table.meta.LastAppendableSegmemt()
 		if segEntry == nil {
-			err = data.ErrAppendableSegmentNotFound
+			err = moerr.NewAppendableSegmentNotFound()
 			return
 		}
 		blkEntry := segEntry.LastAppendableBlock()
 		if blkEntry == nil {
-			blk := segEntry.GetLastBlock()
+			blk := segEntry.GetAppendableBlock()
 			h.SetAppender(blk.AsCommonID())
-			err = data.ErrAppendableSegmentNotFound
+			err = moerr.NewAppendableSegmentNotFound()
 			return
 		}
 		h.block = blkEntry.GetBlockData().(*dataBlock)

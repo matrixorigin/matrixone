@@ -19,31 +19,32 @@ import (
 	"errors"
 	"math"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	apipb "github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
-	txnengine "github.com/matrixorigin/matrixone/pkg/vm/engine/txn"
+	"github.com/matrixorigin/matrixone/pkg/txn/storage/txn/memtable"
 )
 
 type LogTailEntry = apipb.Entry
 
-func (m *MemHandler) HandleGetLogTail(meta txn.TxnMeta, req txnengine.GetLogTailReq, resp *txnengine.GetLogTailResp) (err error) {
+func (m *MemHandler) HandleGetLogTail(meta txn.TxnMeta, req apipb.SyncLogTailReq, resp *apipb.SyncLogTailResp) (err error) {
+	tableID := ID(req.Table.TbId)
 
 	// tx
 	tx := m.getTx(meta)
 
 	// table and db infos
-	tableRow, err := m.relations.Get(tx, Text(req.TableID))
+	tableRow, err := m.relations.Get(tx, tableID)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			resp.ErrRelationNotFound.ID = req.TableID
-			return nil
+			return moerr.NewInternalError("invalid relation id %v", tableID)
 		}
 		return err
 	}
-	dbRow, err := m.databases.Get(tx, Text(tableRow.DatabaseID))
+	dbRow, err := m.databases.Get(tx, tableRow.DatabaseID)
 	if err != nil {
 		return err
 	}
@@ -52,14 +53,14 @@ func (m *MemHandler) HandleGetLogTail(meta txn.TxnMeta, req txnengine.GetLogTail
 	from := timestamp.Timestamp{
 		PhysicalTime: math.MinInt64,
 	}
-	if req.Request.CnHave != nil {
-		from = *req.Request.CnHave
+	if req.CnHave != nil {
+		from = *req.CnHave
 	}
 	to := timestamp.Timestamp{
 		PhysicalTime: math.MaxInt64,
 	}
-	if req.Request.CnWant != nil {
-		to = *req.Request.CnWant
+	if req.CnWant != nil {
+		to = *req.CnWant
 	}
 	fromTime := Time{
 		Timestamp: from,
@@ -69,21 +70,21 @@ func (m *MemHandler) HandleGetLogTail(meta txn.TxnMeta, req txnengine.GetLogTail
 	}
 
 	// attributes
-	rows, err := m.attributes.IndexRows(tx, Tuple{
+	attrs, err := m.attributes.Index(tx, Tuple{
 		index_RelationID,
-		Text(req.TableID),
+		tableID,
 	})
 	if err != nil {
 		return err
 	}
 	attrsMap := make(map[string]*AttributeRow)
-	insertNames := make([]string, 0, len(rows))
-	deleteNames := make([]string, 0, len(rows))
-	for _, row := range rows {
-		attrsMap[row.Name] = row
-		insertNames = append(insertNames, row.Name)
-		if row.Primary || row.IsRowId {
-			deleteNames = append(deleteNames, row.Name)
+	insertNames := make([]string, 0, len(attrs))
+	deleteNames := make([]string, 0, len(attrs))
+	for _, attr := range attrs {
+		attrsMap[attr.Value.Name] = attr.Value
+		insertNames = append(insertNames, attr.Value.Name)
+		if attr.Value.Primary || attr.Value.IsRowId {
+			deleteNames = append(deleteNames, attr.Value.Name)
 		}
 	}
 
@@ -99,33 +100,32 @@ func (m *MemHandler) HandleGetLogTail(meta txn.TxnMeta, req txnengine.GetLogTail
 
 	// iter
 	// we don't use m.data.NewIter because we want to see deleted rows
-	iter := m.data.rows.Iter()
-	defer iter.Release()
-	tableKey := &PhysicalRow[DataKey, DataRow]{
+	iter := m.data.NewPhysicalIter()
+	defer iter.Close()
+	tableKey := &memtable.PhysicalRow[DataKey, DataValue]{
 		Key: DataKey{
-			tableID:    req.TableID,
+			tableID:    tableID,
 			primaryKey: Tuple{},
 		},
 	}
 	for ok := iter.Seek(tableKey); ok; ok = iter.Next() {
 		physicalRow := iter.Item()
 
-		if physicalRow.Key.tableID != req.TableID {
+		if physicalRow.Key.tableID != tableID {
 			break
 		}
 
-		values := physicalRow.Values
-		values.RLock()
-		for i := len(values.Values) - 1; i >= 0; i-- {
-			value := values.Values[i]
+		physicalRow.Versions.RLock()
+		for i := len(physicalRow.Versions.List) - 1; i >= 0; i-- {
+			value := physicalRow.Versions.List[i]
 
 			if value.LockTx != nil &&
-				value.LockTx.State.Load() == Committed &&
+				value.LockTx.State.Load() == memtable.Committed &&
 				value.LockTime.After(fromTime) &&
 				value.LockTime.Before(toTime) {
 				// committed delete
 				namedRow := &NamedDataRow{
-					Row:      value.Value,
+					Value:    *value.Value,
 					AttrsMap: attrsMap,
 				}
 				if err := appendNamedRow(tx, m.mheap, deleteBatch, namedRow); err != nil {
@@ -133,12 +133,12 @@ func (m *MemHandler) HandleGetLogTail(meta txn.TxnMeta, req txnengine.GetLogTail
 				}
 				break
 
-			} else if value.BornTx.State.Load() == Committed &&
+			} else if value.BornTx.State.Load() == memtable.Committed &&
 				value.BornTime.After(fromTime) &&
 				value.BornTime.Before(toTime) {
 				// committed insert
 				namedRow := &NamedDataRow{
-					Row:      value.Value,
+					Value:    *value.Value,
 					AttrsMap: attrsMap,
 				}
 				if err := appendNamedRow(tx, m.mheap, insertBatch, namedRow); err != nil {
@@ -149,7 +149,7 @@ func (m *MemHandler) HandleGetLogTail(meta txn.TxnMeta, req txnengine.GetLogTail
 			}
 
 		}
-		values.RUnlock()
+		physicalRow.Versions.RUnlock()
 
 	}
 
@@ -158,27 +158,27 @@ func (m *MemHandler) HandleGetLogTail(meta txn.TxnMeta, req txnengine.GetLogTail
 		{
 			EntryType:    apipb.Entry_Insert,
 			Bat:          toPBBatch(insertBatch),
-			TableId:      tableRow.NumberID,
+			TableId:      uint64(tableRow.ID),
 			TableName:    tableRow.Name,
-			DatabaseId:   dbRow.NumberID,
+			DatabaseId:   uint64(dbRow.ID),
 			DatabaseName: dbRow.Name,
 		},
 		{
 			EntryType:    apipb.Entry_Delete,
 			Bat:          toPBBatch(deleteBatch),
-			TableId:      tableRow.NumberID,
+			TableId:      uint64(tableRow.ID),
 			TableName:    tableRow.Name,
-			DatabaseId:   dbRow.NumberID,
+			DatabaseId:   uint64(dbRow.ID),
 			DatabaseName: dbRow.Name,
 		},
 	}
 
-	resp.Response.Commands = entries
+	resp.Commands = entries
 
 	return nil
 }
 
-func (c *CatalogHandler) HandleGetLogTail(meta txn.TxnMeta, req txnengine.GetLogTailReq, resp *txnengine.GetLogTailResp) (err error) {
+func (c *CatalogHandler) HandleGetLogTail(meta txn.TxnMeta, req apipb.SyncLogTailReq, resp *apipb.SyncLogTailResp) (err error) {
 	return c.upstream.HandleGetLogTail(meta, req, resp)
 }
 
