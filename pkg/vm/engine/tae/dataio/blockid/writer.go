@@ -29,18 +29,18 @@ import (
 
 type Writer struct {
 	writer objectio.Writer
-	fs     *ObjectFS
+	fs     *objectio.ObjectFS
 	name   string
 }
 
-func NewWriter(fs *ObjectFS, id *common.ID) *Writer {
+func NewWriter(fs *objectio.ObjectFS, id *common.ID) *Writer {
 	var name string
 	if id.BlockID > 0 {
 		name = EncodeBlkName(id)
 	} else {
 		name = EncodeSegName(id)
 	}
-	writer, err := objectio.NewObjectWriter(name, fs.service)
+	writer, err := objectio.NewObjectWriter(name, fs.Service)
 	if err != nil {
 		panic(any(err))
 	}

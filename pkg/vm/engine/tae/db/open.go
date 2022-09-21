@@ -15,7 +15,9 @@
 package db
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockid"
+	"path"
 	"sync/atomic"
 	"time"
 
@@ -52,13 +54,19 @@ func Open(dirname string, opts *options.Options) (db *DB, err error) {
 	mutBufMgr := buffer.NewNodeManager(opts.CacheCfg.InsertCapacity, nil)
 	txnBufMgr := buffer.NewNodeManager(opts.CacheCfg.TxnCapacity, nil)
 
+	SegmentFactory := &blockid.ObjectFactory{
+		Fs: objectio.NewObjectFS(nil),
+	}
+	name := path.Join(dirname, "data")
+	SegmentFactory.Fs.SetDir(name)
+
 	db = &DB{
 		Dir:         dirname,
 		Opts:        opts,
 		IndexBufMgr: indexBufMgr,
 		MTBufMgr:    mutBufMgr,
 		TxnBufMgr:   txnBufMgr,
-		FileFactory: blockid.SegmentFactory,
+		FileFactory: SegmentFactory,
 		Closed:      new(atomic.Value),
 	}
 

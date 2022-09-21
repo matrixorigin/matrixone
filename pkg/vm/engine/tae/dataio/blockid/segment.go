@@ -17,7 +17,7 @@ package blockid
 import (
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"path"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -25,16 +25,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/file"
 )
 
-var SegmentFactory file.SegmentFactory
-
-func init() {
-	SegmentFactory = &ObjectFactory{
-		Fs: NewObjectFS(nil),
-	}
-}
-
 type ObjectFactory struct {
-	Fs *ObjectFS
+	Fs *objectio.ObjectFS
 }
 
 func (factory *ObjectFactory) EncodeName(id uint64) string {
@@ -45,10 +37,8 @@ func (factory *ObjectFactory) DecodeName(name string) (id uint64, err error) {
 	return 0, nil
 }
 
-func (factory *ObjectFactory) Build(dir string, id uint64) file.Segment {
-	name := path.Join(dir, "data")
-	factory.Fs.SetDir(name)
-	return openSegment(dir, id, factory.Fs)
+func (factory *ObjectFactory) Build(dir string, id, tid uint64, fs *objectio.ObjectFS) file.Segment {
+	return openSegment(dir, id, tid, fs)
 }
 
 type segmentFile struct {
@@ -58,16 +48,21 @@ type segmentFile struct {
 	ts     uint64
 	blocks map[uint64]*blockFile
 	name   string
-	fs     *ObjectFS
+	fs     *objectio.ObjectFS
 }
 
-func openSegment(name string, id uint64, fs *ObjectFS) *segmentFile {
+func (sf *segmentFile) GetFs() *objectio.ObjectFS {
+	return sf.fs
+}
+
+func openSegment(name string, id, tid uint64, fs *objectio.ObjectFS) *segmentFile {
 	sf := &segmentFile{
 		blocks: make(map[uint64]*blockFile),
 		name:   name,
 	}
 	sf.fs = fs
 	sf.id = &common.ID{
+		TableID:   tid,
 		SegmentID: id,
 	}
 	sf.Ref()

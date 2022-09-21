@@ -14,7 +14,10 @@
 
 package file
 
-import "github.com/matrixorigin/matrixone/pkg/container/types"
+import (
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
+)
 
 type Segment interface {
 	Base
@@ -24,4 +27,5 @@ type Segment interface {
 	ReadTS() types.TS
 	String() string
 	RemoveBlock(id uint64)
+	GetFs() *objectio.ObjectFS
 }

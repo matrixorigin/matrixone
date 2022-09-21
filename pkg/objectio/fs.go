@@ -12,22 +12,19 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package blockid
+package objectio
 
 import (
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"sync"
 )
 
 type ObjectFS struct {
 	sync.RWMutex
-	common.RefHelper
-	service fileservice.FileService
-	dir     string
-	writers map[string]objectio.Writer
+	Service fileservice.FileService
+	Dir     string
+	Writer  map[string]Writer
 }
 
 type Attr struct {
@@ -37,17 +34,17 @@ type Attr struct {
 
 func NewObjectFS(service fileservice.FileService) *ObjectFS {
 	fs := &ObjectFS{
-		service: service,
-		writers: make(map[string]objectio.Writer),
+		Service: service,
+		Writer:  make(map[string]Writer),
 	}
 	return fs
 }
 
 func (o *ObjectFS) SetDir(dir string) {
-	if o.dir != "" {
+	if o.Dir != "" {
 		return
 	}
-	o.dir = dir
+	o.Dir = dir
 	c := fileservice.Config{
 		Name:    "LOCAL",
 		Backend: "DISK",
@@ -57,20 +54,20 @@ func (o *ObjectFS) SetDir(dir string) {
 	if err != nil {
 		panic(any(fmt.Sprintf("NewFileService failed: %s", err.Error())))
 	}
-	o.service = service
+	o.Service = service
 }
 
-func (o *ObjectFS) GetWriter(name string) (objectio.Writer, error) {
+func (o *ObjectFS) GetWriter(name string) (Writer, error) {
 	o.Lock()
 	defer o.Unlock()
-	writer := o.writers[name]
+	writer := o.Writer[name]
 	if writer != nil {
 		return writer, nil
 	}
-	writer, err := objectio.NewObjectWriter(name, o.service)
+	writer, err := NewObjectWriter(name, o.Service)
 	if err != nil {
 		return nil, err
 	}
-	o.writers[name] = writer
+	o.Writer[name] = writer
 	return writer, err
 }

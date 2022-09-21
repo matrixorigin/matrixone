@@ -281,7 +281,7 @@ func (task *mergeBlocksTask) Execute() (err error) {
 		TableID:   task.toSegEntry.GetTable().GetID(),
 		SegmentID: task.toSegEntry.GetID(),
 	}
-	writer := blockid.NewWriter(blockid.SegmentFactory.(*blockid.ObjectFactory).Fs, id)
+	writer := blockid.NewWriter(task.toSegEntry.GetSegmentData().GetSegmentFile().GetFs(), id)
 	for _, bat := range batchs {
 		block, err := writer.WriteBlock(bat)
 		for idx, vec := range bat.Vecs {

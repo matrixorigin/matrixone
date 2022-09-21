@@ -16,17 +16,10 @@ package indexwrapper
 
 import (
 	"testing"
-
-	"github.com/RoaringBitmap/roaring"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
-	"github.com/stretchr/testify/require"
 )
 
 func TestBlockZoneMapIndex(t *testing.T) {
-	bufManager := buffer.NewNodeManager(1024*1024, nil)
+	/*bufManager := buffer.NewNodeManager(1024*1024, nil)
 	file := common.MockRWFile()
 	cType := Plain
 	typ := types.Type{Oid: types.T_int32}
@@ -64,5 +57,5 @@ func TestBlockZoneMapIndex(t *testing.T) {
 	keys = containers.MockVector2(typ, 100, 0)
 	visibility, res = reader.ContainsAny(keys)
 	require.True(t, res)
-	require.Equal(t, uint64(100), visibility.GetCardinality())
+	require.Equal(t, uint64(100), visibility.GetCardinality())*/
 }

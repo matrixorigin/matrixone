@@ -152,7 +152,7 @@ func (writer *ZMWriter) Finalize() (*IndexMeta, error) {
 		return nil, err
 	}
 	min := make([]byte, 32)
-	copy(min, iBuf[:31])
+	copy(min, iBuf[:32])
 	max := make([]byte, 32)
 	copy(max, iBuf[32:])
 	zonemap, err := objectio.NewZoneMap(writer.colIdx, min, max)

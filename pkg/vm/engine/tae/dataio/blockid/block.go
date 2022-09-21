@@ -40,6 +40,7 @@ type blockFile struct {
 
 func newBlock(id uint64, seg *segmentFile, colCnt int, indexCnt map[int]int) *blockFile {
 	blockID := &common.ID{
+		TableID:   seg.id.TableID,
 		SegmentID: seg.id.SegmentID,
 		BlockID:   id,
 	}
@@ -149,7 +150,7 @@ func (bf *blockFile) Destroy() error {
 	if bf.writer == nil {
 		return nil
 	}
-	name := path.Join(bf.writer.fs.dir, bf.writer.name)
+	name := path.Join(bf.writer.fs.Dir, bf.writer.name)
 	err := os.Remove(name)
 	if err != nil && os.IsNotExist(err) {
 		return nil

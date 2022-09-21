@@ -26,12 +26,12 @@ import (
 type Reader struct {
 	reader objectio.Reader
 	block  *blockFile
-	fs     *ObjectFS
+	fs     *objectio.ObjectFS
 	name   string
 }
 
-func NewReader(fs *ObjectFS, block *blockFile, name string) *Reader {
-	reader, err := objectio.NewObjectReader(name, fs.service)
+func NewReader(fs *objectio.ObjectFS, block *blockFile, name string) *Reader {
+	reader, err := objectio.NewObjectReader(name, fs.Service)
 	if err != nil {
 		panic(any(err))
 	}
