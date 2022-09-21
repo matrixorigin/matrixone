@@ -16,6 +16,7 @@ package agg
 
 import (
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -272,7 +273,7 @@ func (a *UnaryAgg[T1, T2]) MarshalBinary() ([]byte, error) {
 		Op:         a.op,
 		Private:    pData,
 		Es:         a.es,
-		InputTypes: types.EncodeTypeSlice(a.ityps),
+		InputTypes: types.EncodeSlice(a.ityps, types.TSize),
 		OutputType: types.EncodeType(&a.otyp),
 		IsCount:    a.isCount,
 	}
@@ -302,7 +303,7 @@ func (a *UnaryAgg[T1, T2]) UnmarshalBinary(data []byte) error {
 	}
 
 	// Recover data
-	a.ityps = types.DecodeTypeSlice(decoded.InputTypes)
+	a.ityps = types.DecodeSlice[types.Type](decoded.InputTypes, types.TSize)
 	a.otyp = types.DecodeType(decoded.OutputType)
 	a.isCount = decoded.IsCount
 	a.es = decoded.Es

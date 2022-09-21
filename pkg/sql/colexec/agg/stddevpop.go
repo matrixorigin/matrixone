@@ -103,12 +103,12 @@ func (s *StdD64) Fill(groupIndex int64, v1 types.Decimal64, v2 types.Decimal128,
 	return s.Variance.Fill(groupIndex, v1, v2, z, IsEmpty, hasNull)
 }
 
-func (sdp *StdD64) MarshalBinary() ([]byte, error) {
-	return types.Encode(sdp.Variance)
+func (s *StdD64) MarshalBinary() ([]byte, error) {
+	return types.Encode(s.Variance)
 }
 
-func (sdp *StdD64) UnmarshalBinary(data []byte) error {
-	types.Decode(data, sdp.Variance)
+func (s *StdD64) UnmarshalBinary(data []byte) error {
+	types.Decode(data, s.Variance)
 	return nil
 }
 
@@ -139,11 +139,11 @@ func (s *StdD128) Fill(groupIndex int64, v1 types.Decimal128, v2 types.Decimal12
 	return s.Variance.Fill(groupIndex, v1, v2, z, IsEmpty, hasNull)
 }
 
-func (sdp *StdD128) MarshalBinary() ([]byte, error) {
-	return types.Encode(sdp.Variance)
+func (s *StdD128) MarshalBinary() ([]byte, error) {
+	return types.Encode(s.Variance)
 }
 
-func (sdp *StdD128) UnmarshalBinary(data []byte) error {
-	types.Decode(data, sdp.Variance)
+func (s *StdD128) UnmarshalBinary(data []byte) error {
+	types.Decode(data, s.Variance)
 	return nil
 }
