@@ -678,11 +678,11 @@ func (s *Schema) Finalize(rebuild bool) (err error) {
 	for idx, def := range s.ColDefs {
 		// Check column idx validility
 		if idx != def.Idx {
-			return fmt.Errorf("%w: wrong column index %d specified for \"%s\"", ErrSchemaValidation, def.Idx, def.Name)
+			return moerr.NewInvalidInput(fmt.Sprintf("schema: wrong column index %d specified for \"%s\"", def.Idx, def.Name))
 		}
 		// Check unique name
 		if _, ok := names[def.Name]; ok {
-			return fmt.Errorf("%w: duplicate column \"%s\"", ErrSchemaValidation, def.Name)
+			return moerr.NewInvalidInput("schema: duplicate column \"%s\"", def.Name)
 		}
 		names[def.Name] = true
 		if def.IsSortKey() {
@@ -690,7 +690,7 @@ func (s *Schema) Finalize(rebuild bool) (err error) {
 		}
 		if def.IsPhyAddr() {
 			if s.PhyAddrKey != nil {
-				return fmt.Errorf("%w: duplicated physical address column \"%s\"", ErrSchemaValidation, def.Name)
+				return moerr.NewInvalidInput("schema: duplicated physical address column \"%s\"", def.Name)
 			}
 			s.PhyAddrKey = def
 		}
@@ -714,8 +714,7 @@ func (s *Schema) Finalize(rebuild bool) (err error) {
 		for _, idx := range sortIdx {
 			def := s.ColDefs[idx]
 			if ok := s.SortKey.AddDef(def); !ok { // Fixme: I guess it is impossible to be duplicated here because no duplicated idx?
-				err = fmt.Errorf("%w: duplicated sort idx specified", ErrSchemaValidation)
-				return
+				return moerr.NewInvalidInput("schema: duplicated sort idx specified")
 			}
 		}
 		isPrimary := s.SortKey.Defs[0].IsPrimary()
