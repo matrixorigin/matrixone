@@ -168,10 +168,26 @@ install-static-check-tools:
 
 
 .PHONY: static-check
-static-check: config cgo
+static-check: config cgo err-check
 	$(CGO_OPTS) go vet -vettool=`which molint` ./...
 	$(CGO_OPTS) license-eye -c .licenserc.yml header check
 	$(CGO_OPTS) license-eye -c .licenserc.yml dep check
 	$(CGO_OPTS) golangci-lint run -c .golangci.yml ./...
 
+fmtErrs := $(shell grep -onr 'fmt.Errorf' pkg/ --exclude-dir=.git --exclude-dir=vendor \
+				--exclude=*.pb.go --exclude=system_vars.go --exclude=Makefile)
+errNews := $(shell grep -onr 'errors.New' pkg/ --exclude-dir=.git --exclude-dir=vendor \
+				--exclude=*.pb.go --exclude=system_vars.go --exclude=Makefile)
 
+.PHONY: err-check
+err-check:
+ifneq ("$(strip $(fmtErrs))$(strip $(errNews))", "")
+	$(warning 'fmt.Errorf()' is found.)
+	$(warning 'errors.New()' is found.)
+	$(warning Use moerr instead.)
+	$(warning One of 'fmt.Errorf()' is called at: $(shell printf "%s\n" $(fmtErrs) | head -1))
+	$(warning One of 'errors.New()' is called at: $(shell printf "%s\n" $(errNews) | head -1))
+	$(error )
+else
+	$(info No 'fmt.Errorf()' nor 'errors.New()' found)
+endif

@@ -19,10 +19,11 @@ package metric
 
 import (
 	"context"
-	"errors"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
 // some tests will modify global variables, and something weird
@@ -45,7 +46,7 @@ func waitWgTimeout(wg *sync.WaitGroup, after time.Duration) error {
 	}()
 	select {
 	case <-time.After(time.Second):
-		return errors.New("timeout")
+		return moerr.NewInternalError("timeout")
 	case <-c:
 		return nil
 	}

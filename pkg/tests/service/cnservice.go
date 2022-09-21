@@ -17,10 +17,11 @@ package service
 import (
 	"context"
 	"fmt"
+	"sync"
+
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/cnservice"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
-	"sync"
 )
 
 // CNService describes expected behavior for dn service.

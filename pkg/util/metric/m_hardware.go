@@ -15,9 +15,9 @@
 package metric
 
 import (
-	"errors"
 	"strings"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	prom "github.com/prometheus/client_golang/prometheus"
 	"github.com/shirou/gopsutil/v3/cpu"
@@ -56,7 +56,7 @@ func (c cpuTotal) Desc() *prom.Desc {
 func (c cpuTotal) Metric(_ *statCaches) (prom.Metric, error) {
 	cpus, _ := cpu.Times(false)
 	if len(cpus) == 0 {
-		return nil, errors.New("empty cpu times")
+		return nil, moerr.NewInternalError("empty cpu times")
 	}
 	v := (cpus[0].Total() - cpus[0].Idle) / float64(logicalCore)
 	return prom.MustNewConstMetric(c.Desc(), prom.CounterValue, v), nil
@@ -78,7 +78,7 @@ func (c cpuPercent) Metric(_ *statCaches) (prom.Metric, error) {
 		return nil, err
 	}
 	if len(percents) == 0 {
-		return nil, errors.New("empty cpu percents")
+		return nil, moerr.NewInternalError("empty cpu percents")
 	}
 
 	return prom.MustNewConstMetric(c.Desc(), prom.GaugeValue, percents[0]), nil
@@ -108,7 +108,7 @@ func (m memUsed) Desc() *prom.Desc {
 func (m memUsed) Metric(s *statCaches) (prom.Metric, error) {
 	val := s.getOrInsert(cacheKeyMemStats, getMemStats)
 	if val == nil {
-		return nil, errors.New("empty available memomry")
+		return nil, moerr.NewInternalError("empty available memomry")
 	}
 	memostats := val.(*mem.VirtualMemoryStat)
 	return prom.MustNewConstMetric(m.Desc(), prom.GaugeValue, float64(memostats.Used)), nil
@@ -128,7 +128,7 @@ func (m memAvail) Desc() *prom.Desc {
 func (m memAvail) Metric(s *statCaches) (prom.Metric, error) {
 	val := s.getOrInsert(cacheKeyMemStats, getMemStats)
 	if val == nil {
-		return nil, errors.New("empty available memomry")
+		return nil, moerr.NewInternalError("empty available memomry")
 	}
 	memostats := val.(*mem.VirtualMemoryStat)
 	return prom.MustNewConstMetric(m.Desc(), prom.GaugeValue, float64(memostats.Available)), nil
@@ -172,7 +172,7 @@ func (d diskR) Desc() *prom.Desc {
 func (d diskR) Metric(s *statCaches) (prom.Metric, error) {
 	val := s.getOrInsert(cacheKeyDiskIO, getDiskStats)
 	if val == nil {
-		return nil, errors.New("empty available disk stats")
+		return nil, moerr.NewInternalError("empty available disk stats")
 	}
 	memostats := val.(*disk.IOCountersStat)
 	diskRead.Set(memostats.ReadBytes)
@@ -188,7 +188,7 @@ func (d diskW) Desc() *prom.Desc {
 func (d diskW) Metric(s *statCaches) (prom.Metric, error) {
 	val := s.getOrInsert(cacheKeyDiskIO, getDiskStats)
 	if val == nil {
-		return nil, errors.New("empty available disk stats")
+		return nil, moerr.NewInternalError("empty available disk stats")
 	}
 	memostats := val.(*disk.IOCountersStat)
 	diskWrite.Set(memostats.WriteBytes)
@@ -235,7 +235,7 @@ func (d netR) Desc() *prom.Desc {
 func (d netR) Metric(s *statCaches) (prom.Metric, error) {
 	val := s.getOrInsert(cacheKeyNetIO, getNetStats)
 	if val == nil {
-		return nil, errors.New("empty available net stats")
+		return nil, moerr.NewInternalError("empty available net stats")
 	}
 	memostats := val.(*net.IOCountersStat)
 	netRead.Set(memostats.BytesRecv)
@@ -251,7 +251,7 @@ func (d netW) Desc() *prom.Desc {
 func (d netW) Metric(s *statCaches) (prom.Metric, error) {
 	val := s.getOrInsert(cacheKeyNetIO, getNetStats)
 	if val == nil {
-		return nil, errors.New("empty available net stats")
+		return nil, moerr.NewInternalError("empty available net stats")
 	}
 	memostats := val.(*net.IOCountersStat)
 	netWrite.Set(memostats.BytesSent)

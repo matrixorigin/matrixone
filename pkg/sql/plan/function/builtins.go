@@ -1736,6 +1736,14 @@ var builtins = map[int]Functions{
 				ReturnTyp: types.T_float64,
 				Fn:        unary.Atan,
 			},
+			{
+				Index:     1,
+				Flag:      plan.Function_STRICT,
+				Layout:    STANDARD_FUNCTION,
+				Args:      []types.T{types.T_float64, types.T_float64},
+				ReturnTyp: types.T_float64,
+				Fn:        unary.Atan,
+			},
 		},
 	},
 	COS: {
@@ -2148,6 +2156,22 @@ var builtins = map[int]Functions{
 				Args:      []types.T{},
 				ReturnTyp: types.T_varchar,
 				Fn:        multi.Serial,
+			},
+		},
+	},
+	HASH: {
+		Id: HASH,
+		TypeCheckFn: func(_ []Function, typs []types.T) (int32, []types.T) {
+			return 0, typs
+		},
+		Overloads: []Function{
+			{
+				Index:     0,
+				Flag:      plan.Function_STRICT,
+				Layout:    STANDARD_FUNCTION,
+				Args:      []types.T{},
+				ReturnTyp: types.T_uint64,
+				Fn:        multi.Hash,
 			},
 		},
 	},

@@ -51,7 +51,7 @@ func testPhysicalRow(
 
 	// insert
 	n := 1
-	err := m.Insert(now, tx1, &n)
+	err := m.Insert(now, tx1, n)
 	assert.Nil(t, err)
 	assert.Equal(t, 1, len(m.Versions.List))
 	assert.Equal(t, tx1, m.Versions.List[0].BornTx)
@@ -60,7 +60,7 @@ func testPhysicalRow(
 	assert.True(t, m.Versions.List[0].LockTime.IsZero())
 
 	n2 := 2
-	err = m.Insert(now, tx2, &n2)
+	err = m.Insert(now, tx2, n2)
 	assert.Nil(t, err)
 	assert.Equal(t, 2, len(m.Versions.List))
 	assert.Equal(t, tx2, m.Versions.List[1].BornTx)
@@ -71,11 +71,11 @@ func testPhysicalRow(
 	// not readable now
 	res, err := m.Read(now, tx1)
 	assert.Equal(t, sql.ErrNoRows, err)
-	assert.Nil(t, res)
+	assert.Empty(t, res)
 
 	res, err = m.Read(now, tx2)
 	assert.Equal(t, sql.ErrNoRows, err)
-	assert.Nil(t, res)
+	assert.Empty(t, res)
 
 	tick()
 
@@ -83,12 +83,12 @@ func testPhysicalRow(
 	res, err = m.Read(now, tx1)
 	assert.Nil(t, err)
 	assert.NotNil(t, res)
-	assert.Equal(t, 1, *res)
+	assert.Equal(t, 1, res)
 
 	res, err = m.Read(now, tx2)
 	assert.Nil(t, err)
 	assert.NotNil(t, res)
-	assert.Equal(t, 2, *res)
+	assert.Equal(t, 2, res)
 
 	// delete
 	err = m.Delete(now, tx1)
@@ -100,13 +100,13 @@ func testPhysicalRow(
 	// not readable now by current tx
 	res, err = m.Read(now, tx1)
 	assert.Equal(t, sql.ErrNoRows, err)
-	assert.Nil(t, res)
+	assert.Empty(t, res)
 
 	// tx2 still readable
 	res, err = m.Read(now, tx2)
 	assert.Nil(t, err)
 	assert.NotNil(t, res)
-	assert.Equal(t, 2, *res)
+	assert.Equal(t, 2, res)
 
 	err = m.Delete(now, tx2)
 	assert.Nil(t, err)
@@ -116,13 +116,13 @@ func testPhysicalRow(
 
 	res, err = m.Read(now, tx2)
 	assert.Equal(t, sql.ErrNoRows, err)
-	assert.Nil(t, res)
+	assert.Empty(t, res)
 
 	tick()
 
 	// insert again
 	n3 := 3
-	err = m.Insert(now, tx1, &n3)
+	err = m.Insert(now, tx1, n3)
 	assert.Nil(t, err)
 	assert.Equal(t, 3, len(m.Versions.List))
 	assert.Equal(t, tx1, m.Versions.List[2].BornTx)
@@ -131,7 +131,7 @@ func testPhysicalRow(
 	assert.True(t, m.Versions.List[2].LockTime.IsZero())
 
 	n4 := 4
-	err = m.Insert(now, tx2, &n4)
+	err = m.Insert(now, tx2, n4)
 	assert.Nil(t, err)
 	assert.Equal(t, 4, len(m.Versions.List))
 	assert.Equal(t, tx2, m.Versions.List[3].BornTx)
@@ -143,7 +143,7 @@ func testPhysicalRow(
 
 	// update
 	n5 := 5
-	err = m.Update(now, tx1, &n5)
+	err = m.Update(now, tx1, n5)
 	assert.Nil(t, err)
 	assert.Equal(t, 5, len(m.Versions.List))
 	assert.Equal(t, tx1, m.Versions.List[2].LockTx)
@@ -164,16 +164,16 @@ func testPhysicalRow(
 	case ReadCommitted:
 		res, err = m.Read(now, tx2)
 		assert.Nil(t, err)
-		assert.Equal(t, 5, *res)
+		assert.Equal(t, 5, res)
 	case ReadSnapshot:
 		res, err = m.Read(now, tx2)
 		assert.Nil(t, err)
-		assert.Equal(t, 4, *res)
+		assert.Equal(t, 4, res)
 	case ReadNoStale:
 		res, err = m.Read(now, tx2)
 		assert.NotNil(t, err)
 		assert.NotNil(t, res)
-		assert.Equal(t, 5, *res)
+		assert.Equal(t, 5, res)
 		assert.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnReadConflict))
 	default:
 		panic(fmt.Sprintf("not handle: %v", isolationPolicy.Read))
@@ -181,7 +181,7 @@ func testPhysicalRow(
 
 	// write stale conflict
 	i := 1
-	err = m.Insert(now, tx2, &i)
+	err = m.Insert(now, tx2, i)
 	assert.NotNil(t, err)
 	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnWriteConflict))
 
@@ -190,7 +190,7 @@ func testPhysicalRow(
 	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnWriteConflict))
 
 	i2 := 1
-	err = m.Update(now, tx2, &i2)
+	err = m.Update(now, tx2, i2)
 	assert.NotNil(t, err)
 	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnWriteConflict))
 
@@ -207,12 +207,12 @@ func testPhysicalRow(
 	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnWriteConflict))
 
 	i3 := 1
-	err = m.Insert(now, tx4, &i3)
+	err = m.Insert(now, tx4, i3)
 	assert.NotNil(t, err)
 	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnWriteConflict))
 
 	i4 := 1
-	err = m.Update(now, tx4, &i4)
+	err = m.Update(now, tx4, i4)
 	assert.NotNil(t, err)
 	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnWriteConflict))
 }

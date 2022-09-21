@@ -127,7 +127,7 @@ insert into t2 values(2147483647, 'bbb');
 insert into t2 values(2147483648, 'bbb');
 tae data: duplicate
 insert into t2(d) values ('22222');
-auto_incrment column 'c' constant value 2147483648 overflows int
+internal error: auto_incrment column 'c' constant value 2147483648 overflows int
 select * from t2 order by c;
 c    d
 -2147483648    aaa
@@ -320,7 +320,7 @@ c    d
 -2147483648    aaa
 2147483647    bbb
 insert into t5(d) values ('22222');
-auto_incrment column 'c' constant value 2147483648 overflows int
+internal error: auto_incrment column 'c' constant value 2147483648 overflows int
 select * from t5 order by c;
 c    d
 -2147483648    aaa
@@ -609,3 +609,9 @@ create table t1(a int, b int default(10), c int auto_increment);
 show create table t1;
 Table    Create Table
 t1    CREATE TABLE `t1` (\n`a` INT DEFAULT NULL,\n`b` INT DEFAULT (10),\n`c` INT NOT NULL AUTO_INCREMENT\n)
+drop table if exists t1;
+create table t1 (a int not null auto_increment, b int);
+insert into t1(b) values (1);
+select * from t1;
+a    b   
+1    1
