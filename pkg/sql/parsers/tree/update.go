@@ -117,6 +117,7 @@ type ExternParam struct {
 	CompressType string
 	Tail         *TailParameter
 	FileService  fileservice.FileService
+	NullMap      map[string]([]string)
 }
 
 type TailParameter struct {
