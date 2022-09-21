@@ -88,11 +88,11 @@ type Statistics struct {
 }
 
 type Cost struct {
-	Start   float64 `json:"Start"`
-	Total   float64 `json:"Total"`
-	Card    float64 `json:"Card"`
-	Ndv     float64 `json:"Ndv"`
-	Rowsize float64 `json:"Rowsize"`
+	Start   float64 `json:"start"`
+	Total   float64 `json:"total"`
+	Card    float64 `json:"card"`
+	Ndv     float64 `json:"ndv"`
+	Rowsize float64 `json:"rowsize"`
 }
 
 type StatisticValue struct {

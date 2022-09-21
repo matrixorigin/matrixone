@@ -21,6 +21,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -54,12 +55,12 @@ func (factory *segmentFactory) EncodeName(id uint64) string {
 func (factory *segmentFactory) DecodeName(name string) (id uint64, err error) {
 	trimmed := strings.TrimSuffix(name, ".seg")
 	if trimmed == name {
-		err = fmt.Errorf("%w: %s", file.ErrInvalidName, name)
+		err = moerr.NewInternalError("%v: %s", file.ErrInvalidName, name)
 		return
 	}
 	id, err = strconv.ParseUint(trimmed, 10, 64)
 	if err != nil {
-		err = fmt.Errorf("%w: %s", file.ErrInvalidName, name)
+		err = moerr.NewInternalError("%v: %s", file.ErrInvalidName, name)
 	}
 	return
 }

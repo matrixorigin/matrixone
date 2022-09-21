@@ -15,10 +15,11 @@
 package mod
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"math"
 	"testing"
+
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 )
 
 func TestI32ModOf(t *testing.T) {

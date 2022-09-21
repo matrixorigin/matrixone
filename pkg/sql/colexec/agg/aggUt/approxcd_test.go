@@ -17,9 +17,8 @@ package aggut
 import (
 	"testing"
 
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/agg"
-
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/agg"
 )
 
 func TestApproxcdCount(t *testing.T) {

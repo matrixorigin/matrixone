@@ -15,10 +15,10 @@
 package metric
 
 import (
-	"errors"
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	prom "github.com/prometheus/client_golang/prometheus"
 	dto "github.com/prometheus/client_model/go"
 	. "github.com/smartystreets/goconvey/convey"
@@ -70,7 +70,7 @@ func (c errorMetric) Desc() *prom.Desc {
 }
 
 func (c errorMetric) Metric(_ *statCaches) (prom.Metric, error) {
-	return nil, errors.New("Something went wrong")
+	return nil, moerr.NewInternalError("Something went wrong")
 }
 
 func TestHardwareError(t *testing.T) {

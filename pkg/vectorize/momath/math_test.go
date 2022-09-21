@@ -15,11 +15,12 @@
 package momath
 
 import (
+	"math"
+	"testing"
+
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
-	"math"
-	"testing"
 )
 
 func TestLn(t *testing.T) {
