@@ -473,6 +473,10 @@ func GetOkExpectedEOF() *Error {
 	return &errOkExptededEOF
 }
 
+func New(code uint16, args ...any) *Error {
+	return newWithDepth(Context(), code, args...)
+}
+
 func NewInfo(msg string) *Error {
 	return newWithDepth(Context(), ErrInfo, msg)
 }

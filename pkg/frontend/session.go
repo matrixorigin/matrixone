@@ -38,6 +38,9 @@ import (
 
 const MaxPrepareNumberInOneSession = 64
 
+// TODO: this variable should be configure by set variable
+const MoDefaultErrorCount = 64
+
 type ShowStatementType int
 
 const (
@@ -114,6 +117,9 @@ type Session struct {
 	timeZone *time.Location
 
 	priv *privilege
+
+	moerrs   []*moerr.Error
+	moErrCnt int
 }
 
 func NewSession(proto Protocol, gm *guest.Mmu, mp *mempool.Mempool, PU *config.ParameterUnit, gSysVars *GlobalSystemVariables) *Session {
@@ -142,6 +148,7 @@ func NewSession(proto Protocol, gm *guest.Mmu, mp *mempool.Mempool, PU *config.P
 		prepareStmts:   make(map[string]*PrepareStmt),
 		outputCallback: getDataFromPipeline,
 		timeZone:       time.Local,
+		moErrCnt:       MoDefaultErrorCount,
 	}
 	ses.uuid, _ = uuid.NewUUID()
 	ses.SetOptionBits(OPTION_AUTOCOMMIT)
