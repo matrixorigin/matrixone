@@ -410,7 +410,6 @@ func (t batchCSVHandler) NewItemBuffer(name string) bp.ItemBuffer[bp.HasName, an
 	case MOStatementType:
 		opts = append(opts, bufferWithFilterItemFunc(filterTraceInsertSql))
 	case MOErrorType:
-	case MOStatsType:
 	default:
 		panic(fmt.Errorf("unknown type %s", name))
 	}

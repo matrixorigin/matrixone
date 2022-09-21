@@ -41,7 +41,6 @@ const (
 	MORawLogType    = "raw_log"
 	MOLogType       = "log"
 	MOErrorType     = "error"
-	MOStatsType     = "stats"
 )
 
 const (

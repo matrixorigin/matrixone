@@ -145,25 +145,22 @@ var EndStatement = func(ctx context.Context, err error) time.Time {
 		panic(moerr.NewInternalError("no statement info in context"))
 	}
 	endTime := util.NowNS()
-	if s.end {
-		goto endL
+	if !s.end {
+		// do report
+		s.mux.Lock()
+		defer s.mux.Unlock()
+		s.end = true
+		s.ResponseAt = endTime
+		s.Duration = s.ResponseAt - s.RequestAt
+		s.Status = StatementStatusSuccess
+		if err != nil {
+			s.Error = err
+			s.Status = StatementStatusFailed
+		}
+		if !s.reported || s.exported { // cooperate with s.mux
+			s.Report(ctx)
+		}
 	}
-	// do report
-	s.mux.Lock()
-	defer s.mux.Unlock()
-	s.end = true
-	s.ResponseAt = endTime
-	s.Duration = s.ResponseAt - s.RequestAt
-	s.Status = StatementStatusSuccess
-	if err != nil {
-		s.Error = err
-		s.Status = StatementStatusFailed
-	}
-	if !s.reported || s.exported { // cooperate with s.mux
-		s.Report(ctx)
-	}
-
-endL:
 	return util.Time(endTime)
 }
 
