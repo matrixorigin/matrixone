@@ -2148,7 +2148,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 					explainQuery := explain.NewExplainQueryImpl(queryPlan.GetQuery())
 					options := &explain.ExplainOptions{
 						Verbose: true,
-						Anzlyze: false,
+						Analyze: true,
 						Format:  explain.EXPLAIN_FORMAT_TEXT,
 					}
 					marshalPlan := explainQuery.BuildJsonPlan(cwft.uuid, options)
@@ -2206,7 +2206,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 					explainQuery := explain.NewExplainQueryImpl(queryPlan.GetQuery())
 					options := &explain.ExplainOptions{
 						Verbose: true,
-						Anzlyze: false,
+						Analyze: true,
 						Format:  explain.EXPLAIN_FORMAT_TEXT,
 					}
 					marshalPlan := explainQuery.BuildJsonPlan(cwft.uuid, options)
