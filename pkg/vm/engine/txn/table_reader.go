@@ -33,7 +33,7 @@ type TableReader struct {
 
 type IterInfo struct {
 	Shard  Shard
-	IterID string
+	IterID ID
 }
 
 func (t *Table) NewReader(
@@ -88,10 +88,10 @@ func (t *Table) NewReader(
 		return nil, err
 	}
 
-	iterIDSets := make([][]string, parallel)
+	iterIDSets := make([][]ID, parallel)
 	i := 0
 	for _, resp := range resps {
-		if resp.IterID != "" {
+		if resp.IterID != emptyID {
 			iterIDSets[i] = append(iterIDSets[i], resp.IterID)
 			i++
 			if i >= parallel {

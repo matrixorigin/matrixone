@@ -12,29 +12,24 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package txnstorage
+package memtable
 
-import (
-	"bytes"
-	"fmt"
-)
+import "sync/atomic"
 
-type Nullable struct {
-	IsNull bool
-	Value  any
+type Atomic[T any] struct {
+	value atomic.Value
 }
 
-func (n Nullable) Equal(n2 Nullable) bool {
-	if n.IsNull || n2.IsNull {
-		return false
-	}
-	bsA, ok := n.Value.([]byte)
-	if ok {
-		bsB, ok := n2.Value.([]byte)
-		if ok {
-			return bytes.Equal(bsA, bsB)
-		}
-		panic(fmt.Errorf("type not the same: %T %T", n.Value, n2.Value))
-	}
-	return n.Value == n2.Value
+func NewAtomic[T any](value T) *Atomic[T] {
+	t := new(Atomic[T])
+	t.value.Store(value)
+	return t
+}
+
+func (a *Atomic[T]) Load() T {
+	return a.value.Load().(T)
+}
+
+func (a *Atomic[T]) Store(value T) {
+	a.value.Store(value)
 }

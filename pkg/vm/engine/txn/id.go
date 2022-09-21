@@ -12,28 +12,36 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package txnstorage
+package txnengine
 
 import (
-	"math"
-	"testing"
-	"time"
-
-	"github.com/matrixorigin/matrixone/pkg/testutil"
-	"github.com/matrixorigin/matrixone/pkg/txn/clock"
-	"github.com/matrixorigin/matrixone/pkg/txn/storage/txn/memtable"
+	crand "crypto/rand"
+	"encoding/binary"
+	"math/rand"
 )
 
-func TestMemHandler(t *testing.T) {
-	testDatabase(t, func() (*Storage, error) {
-		return New(
-			NewMemHandler(
-				testutil.NewMheap(),
-				memtable.Serializable,
-				clock.NewHLCClock(func() int64 {
-					return time.Now().UnixNano()
-				}, math.MaxInt64),
-			),
-		)
-	})
+type ID int64
+
+func init() {
+	var seed int64
+	binary.Read(crand.Reader, binary.LittleEndian, &seed)
+	rand.Seed(seed)
 }
+
+func NewID() (id ID) {
+	//TODO will use an id generate service
+	id = ID(rand.Int63())
+	return
+}
+
+func (i ID) Less(than ID) bool {
+	return i < than
+}
+
+func (i ID) IsEmpty() bool {
+	return i == emptyID
+}
+
+var (
+	emptyID ID
+)
