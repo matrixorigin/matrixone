@@ -55,6 +55,10 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 		return false, nil
 	}
 	defer bat.Clean(proc.Mp())
+	ctx := context.TODO()
+	if err := colexec.UpdateInsertBatch(n.Engine, n.DB, ctx, proc, n.TargetColDefs, bat, n.TableID); err != nil {
+		return false, err
+	}
 	{
 		// do null value check
 		for i := range bat.Vecs {
@@ -73,10 +77,6 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 			bat.Attrs[i] = n.TargetColDefs[i].GetName()
 			bat.Vecs[i] = bat.Vecs[i].ConstExpand(proc.Mp())
 		}
-	}
-	ctx := context.TODO()
-	if err := colexec.UpdateInsertBatch(n.Engine, n.DB, ctx, proc, n.TargetColDefs, bat, n.TableID); err != nil {
-		return false, err
 	}
 	err := n.TargetTable.Write(ctx, bat)
 	n.Affected += uint64(len(bat.Zs))
