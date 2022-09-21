@@ -94,7 +94,7 @@ func startService(cfg *Config, stopper *stopper.Stopper) error {
 	}
 
 	// TODO: Use real task storage.
-	ts := taskservice.NewTaskService(taskservice.NewMemTaskStorage())
+	ts := taskservice.NewTaskService(taskservice.NewMemTaskStorage(), logutil.GetGlobalLogger())
 
 	if err = initTraceMetric(context.Background(), cfg, stopper, fs); err != nil {
 		return err

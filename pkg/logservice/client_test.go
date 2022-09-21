@@ -42,7 +42,7 @@ func runClientTest(t *testing.T,
 	defer vfs.ReportLeakedFD(cfg.FS, t)
 	service, err := NewService(cfg,
 		testutil.NewFS(),
-		taskservice.NewTaskService(taskservice.NewMemTaskStorage()),
+		taskservice.NewTaskService(taskservice.NewMemTaskStorage(), nil),
 		WithBackendFilter(func(msg morpc.Message, backendAddr string) bool {
 			return true
 		}),
@@ -130,7 +130,7 @@ func TestClientCanBeConnectedByReverseProxy(t *testing.T) {
 	defer vfs.ReportLeakedFD(cfg.FS, t)
 	service, err := NewService(cfg,
 		testutil.NewFS(),
-		taskservice.NewTaskService(taskservice.NewMemTaskStorage()),
+		taskservice.NewTaskService(taskservice.NewMemTaskStorage(), nil),
 		WithBackendFilter(func(msg morpc.Message, backendAddr string) bool {
 			return true
 		}),

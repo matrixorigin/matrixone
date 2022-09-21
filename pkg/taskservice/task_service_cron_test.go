@@ -16,10 +16,10 @@ package taskservice
 
 import (
 	"context"
-	"errors"
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	"github.com/stretchr/testify/assert"
@@ -47,7 +47,7 @@ func TestRetryScheduleCronTask(t *testing.T) {
 		store.preUpdateCron = func() error {
 			if n == 0 {
 				n++
-				return errors.New("error")
+				return moerr.NewInfo("test error")
 			}
 			return nil
 		}
