@@ -82,6 +82,14 @@ func (s *Sum[T1, T2]) Merge(_ int64, _ int64, x T2, y T2, xEmpty bool, yEmpty bo
 
 }
 
+func (s *Sum[T1, T2]) MarshalBinary() ([]byte, error) {
+	return nil, nil
+}
+
+func (s *Sum[T1, T2]) UnmarshalBinary(data []byte) error {
+	return nil
+}
+
 func NewD64Sum() *Decimal64Sum {
 	return &Decimal64Sum{}
 }
@@ -114,6 +122,14 @@ func (s *Decimal64Sum) BatchFill(rs, vs any, start, count int64, vps []uint64, z
 	return sum.Decimal64Sum(rs.([]types.Decimal64), vs.([]types.Decimal64), start, count, vps, zs, nsp)
 }
 
+func (s *Decimal64Sum) MarshalBinary() ([]byte, error) {
+	return nil, nil
+}
+
+func (s *Decimal64Sum) UnmarshalBinary(data []byte) error {
+	return nil
+}
+
 func NewD128Sum() *Decimal128Sum {
 	return &Decimal128Sum{}
 }
@@ -144,4 +160,12 @@ func (s *Decimal128Sum) Merge(_ int64, _ int64, x types.Decimal128, y types.Deci
 
 func (s *Decimal128Sum) BatchFill(rs, vs any, start, count int64, vps []uint64, zs []int64, nsp *nulls.Nulls) error {
 	return sum.Decimal128Sum(rs.([]types.Decimal128), vs.([]types.Decimal128), start, count, vps, zs, nsp)
+}
+
+func (s *Decimal128Sum) MarshalBinary() ([]byte, error) {
+	return nil, nil
+}
+
+func (s *Decimal128Sum) UnmarshalBinary(data []byte) error {
+	return nil
 }

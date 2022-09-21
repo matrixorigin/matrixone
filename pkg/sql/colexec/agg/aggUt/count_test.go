@@ -20,104 +20,106 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/agg"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/testutil"
-	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
-	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
-	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
-	"github.com/stretchr/testify/require"
 )
 
+// TODO: add uuid and decimal128 count distinct count test
 func TestCount(t *testing.T) {
-	c := agg.NewCount[int8](false)
-	m := mheap.New(guest.New(1<<30, host.New(1<<30)))
-	vec := testutil.NewVector(Rows, types.New(types.T_int8, 0, 0, 0), m, true, nil)
-	{
-		agg := agg.NewUnaryAgg(nil, true, types.New(types.T_int8, 0, 0, 0), types.New(types.T_int64, 0, 0, 0), c.Grows, c.Eval, c.Merge, c.Fill, nil)
-		err := agg.Grows(1, m)
-		require.NoError(t, err)
-		for i := 0; i < Rows; i++ {
-			agg.Fill(0, int64(i), 1, []*vector.Vector{vec})
-		}
-		v, err := agg.Eval(m)
-		require.NoError(t, err)
-		require.Equal(t, []int64{10}, vector.GetColumn[int64](v))
-		v.Free(m)
-	}
-	{
-		agg0 := agg.NewUnaryAgg(nil, true, types.New(types.T_int8, 0, 0, 0), types.New(types.T_int64, 0, 0, 0), c.Grows, c.Eval, c.Merge, c.Fill, nil)
-		err := agg0.Grows(1, m)
-		require.NoError(t, err)
-		for i := 0; i < Rows; i++ {
-			agg0.Fill(0, int64(i), 1, []*vector.Vector{vec})
-		}
-		agg1 := agg.NewUnaryAgg(nil, true, types.New(types.T_int8, 0, 0, 0), types.New(types.T_int64, 0, 0, 0), c.Grows, c.Eval, c.Merge, c.Fill, nil)
-		err = agg1.Grows(1, m)
-		require.NoError(t, err)
-		for i := 0; i < Rows; i++ {
-			agg1.Fill(0, int64(i), 1, []*vector.Vector{vec})
-		}
-		agg0.Merge(agg1, 0, 0)
-		{
-			v, err := agg0.Eval(m)
-			require.NoError(t, err)
-			require.Equal(t, []int64{20}, vector.GetColumn[int64](v))
-			v.Free(m)
-		}
-		{
-			v, err := agg1.Eval(m)
-			require.NoError(t, err)
-			require.Equal(t, []int64{10}, vector.GetColumn[int64](v))
-			v.Free(m)
-		}
-	}
-	vec.Free(m)
-	require.Equal(t, int64(0), m.Size())
-}
+	int8TestTyp := types.New(types.T_int8, 0, 0, 0)
+	boolTestTyp := types.New(types.T_bool, 0, 0, 0)
+	varcharTestTyp := types.New(types.T_varchar, 0, 0, 0)
 
-func TestCountDist(t *testing.T) {
-	c := agg.NewCount[int8](false)
-	m := mheap.New(guest.New(1<<30, host.New(1<<30)))
-	vec := testutil.NewVector(Rows, types.New(types.T_int8, 0, 0, 0), m, false, nil)
-	{
-		agg := agg.NewUnaryDistAgg(true, types.New(types.T_int8, 0, 0, 0), types.New(types.T_int64, 0, 0, 0), c.Grows, c.Eval, c.Merge, c.Fill)
-		err := agg.Grows(1, m)
-		require.NoError(t, err)
-		for i := 0; i < Rows; i++ {
-			agg.Fill(0, int64(i), 1, []*vector.Vector{vec})
-		}
-		v, err := agg.Eval(m)
-		require.NoError(t, err)
-		require.Equal(t, []int64{10}, vector.GetColumn[int64](v))
-		v.Free(m)
-	}
-	{
-		agg0 := agg.NewUnaryDistAgg(true, types.New(types.T_int8, 0, 0, 0), types.New(types.T_int64, 0, 0, 0), c.Grows, c.Eval, c.Merge, c.Fill)
-		err := agg0.Grows(1, m)
-		require.NoError(t, err)
-		for i := 0; i < Rows; i++ {
-			agg0.Fill(0, int64(i), 1, []*vector.Vector{vec})
-		}
-		agg1 := agg.NewUnaryDistAgg(true, types.New(types.T_int8, 0, 0, 0), types.New(types.T_int64, 0, 0, 0), c.Grows, c.Eval, c.Merge, c.Fill)
-		err = agg1.Grows(1, m)
-		require.NoError(t, err)
-		for i := 0; i < Rows; i++ {
-			agg1.Fill(0, int64(i), 1, []*vector.Vector{vec})
-		}
-		agg0.Merge(agg1, 0, 0)
+	testCases := []testCase{
 		{
-			v, err := agg0.Eval(m)
-			require.NoError(t, err)
-			require.Equal(t, []int64{10}, vector.GetColumn[int64](v))
-			v.Free(m)
-		}
+			op:         agg.AggregateCount,
+			isDistinct: false,
+			inputTyp:   int8TestTyp,
+
+			input:    []int8{9, 8, 7, 6, 5, 4, 3, 2, 1, 0},
+			inputNsp: nil,
+			expected: []int64{10},
+
+			mergeInput:  []int8{0, 1, 2, 3, 4, 5, 6, 7, 8, 9},
+			mergeNsp:    nil,
+			mergeExpect: []int64{20},
+
+			testMarshal: true,
+		},
 		{
-			v, err := agg1.Eval(m)
-			require.NoError(t, err)
-			require.Equal(t, []int64{10}, vector.GetColumn[int64](v))
-			v.Free(m)
-		}
+			op:         agg.AggregateCount,
+			isDistinct: true,
+			inputTyp:   int8TestTyp,
+
+			input:    []int8{9, 8, 7, 6, 5, 4, 3, 2, 1, 0},
+			inputNsp: nil,
+			expected: []int64{10},
+
+			mergeInput:  []int8{0, 1, 2, 3, 4, 5, 6, 7, 8, 9},
+			mergeNsp:    nil,
+			mergeExpect: []int64{10},
+
+			testMarshal: false,
+		},
+		{
+			op:         agg.AggregateCount,
+			isDistinct: true,
+			inputTyp:   int8TestTyp,
+
+			input:    []int8{1, 1, 2, 2, 3, 3, 4, 4, 5, 5},
+			inputNsp: nil,
+			expected: []int64{5},
+
+			mergeInput:  []int8{6, 6, 7, 7, 8, 8, 9, 9, 10, 10},
+			mergeNsp:    nil,
+			mergeExpect: []int64{10},
+
+			testMarshal: false,
+		},
+		{
+			op:         agg.AggregateCount,
+			isDistinct: false,
+			inputTyp:   boolTestTyp,
+
+			input:    []bool{true, true, false, true, false, true, false, true, false, true},
+			inputNsp: nil,
+			expected: []int64{10},
+
+			mergeInput:  []bool{false, false, false, false, false, false, false, false, false, false},
+			mergeNsp:    nil,
+			mergeExpect: []int64{20},
+
+			testMarshal: true,
+		},
+		{
+			op:         agg.AggregateCount,
+			isDistinct: false,
+			inputTyp:   varcharTestTyp,
+
+			input:    []string{"aa", "bb", "cc"},
+			inputNsp: nil,
+			expected: []int64{3},
+
+			mergeInput:  []string{"aa", "bb", "cc"},
+			mergeNsp:    nil,
+			mergeExpect: []int64{6},
+
+			testMarshal: true,
+		},
+		{
+			op:         agg.AggregateCount,
+			isDistinct: true,
+			inputTyp:   varcharTestTyp,
+
+			input:    []string{"aa", "bb", "cc"},
+			inputNsp: nil,
+			expected: []int64{3},
+
+			mergeInput:  []string{"aa", "bb", "cc"},
+			mergeNsp:    nil,
+			mergeExpect: []int64{3},
+
+			testMarshal: false,
+		},
 	}
-	vec.Free(m)
-	require.Equal(t, int64(0), m.Size())
+
+	RunTest(t, testCases)
 }
