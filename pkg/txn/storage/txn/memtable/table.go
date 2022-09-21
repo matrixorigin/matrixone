@@ -43,10 +43,6 @@ type Row[K any, V any] interface {
 	Indexes() []Tuple
 }
 
-type NamedRow interface {
-	AttrByName(tx *Transaction, name string) (Nullable, error)
-}
-
 type Ordered[To any] interface {
 	Less(to To) bool
 }
@@ -58,7 +54,7 @@ type IndexEntry[
 	Index     Tuple
 	Key       K
 	VersionID ID
-	Value     *V
+	Value     V
 }
 
 func NewTable[
@@ -106,19 +102,20 @@ func (t *Table[K, V, R]) Insert(
 		return err
 	}
 	if existed != nil {
-		return moerr.NewPrimaryKeyDuplicated(key)
+		//return moerr.NewPrimaryKeyDuplicated(key)
+		return moerr.NewDuplicate()
 	}
 
 	value := row.Value()
 	if err := physicalRow.Insert(
-		tx.Time, tx, &value,
+		tx.Time, tx, value,
 		func(versionID ID) {
 			for _, index := range row.Indexes() {
 				t.index.SetHint(&IndexEntry[K, V]{
 					Index:     index,
 					Key:       key,
 					VersionID: versionID,
-					Value:     &value,
+					Value:     value,
 				}, t.indexHint)
 			}
 		},
@@ -142,14 +139,14 @@ func (t *Table[K, V, R]) Update(
 
 	value := row.Value()
 	if err := physicalRow.Update(
-		tx.Time, tx, &value,
+		tx.Time, tx, value,
 		func(versionID ID) {
 			for _, index := range row.Indexes() {
 				t.index.SetHint(&IndexEntry[K, V]{
 					Index:     index,
 					Key:       key,
 					VersionID: versionID,
-					Value:     &value,
+					Value:     value,
 				}, t.indexHint)
 			}
 		},
@@ -188,7 +185,7 @@ func (t *Table[K, V, R]) Get(
 	tx *Transaction,
 	key K,
 ) (
-	value *V,
+	value V,
 	err error,
 ) {
 	physicalRow := t.getRowByKey(key)
@@ -300,7 +297,8 @@ func (t *Table[K, V, R]) CommitTx(tx *Transaction) error {
 				version.LockTx.State.Load() == Committed &&
 				version.LockTx.ID != tx.ID &&
 				version.LockTime.After(tx.BeginTime) {
-				err = moerr.NewPrimaryKeyDuplicated(physicalRow.Key)
+				//err = moerr.NewPrimaryKeyDuplicated(physicalRow.Key)
+				err = moerr.NewDuplicate()
 				break
 			}
 
@@ -308,7 +306,8 @@ func (t *Table[K, V, R]) CommitTx(tx *Transaction) error {
 			if version.BornTx.State.Load() == Committed &&
 				version.BornTx.ID != tx.ID &&
 				version.BornTime.After(tx.BeginTime) {
-				err = moerr.NewPrimaryKeyDuplicated(physicalRow.Key)
+				//err = moerr.NewPrimaryKeyDuplicated(physicalRow.Key)
+				err = moerr.NewDuplicate()
 				break
 			}
 

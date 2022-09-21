@@ -19,6 +19,11 @@ import (
 	"strings"
 )
 
+type NamedRow interface {
+	SetHandler(handler *MemHandler)
+	AttrByName(tx *Transaction, name string) (Nullable, error)
+}
+
 type DataKey struct {
 	tableID    ID
 	primaryKey Tuple
@@ -87,4 +92,7 @@ var _ NamedRow = new(NamedDataRow)
 
 func (n *NamedDataRow) AttrByName(tx *Transaction, name string) (Nullable, error) {
 	return n.Value[n.AttrsMap[name].Order], nil
+}
+
+func (n *NamedDataRow) SetHandler(handler *MemHandler) {
 }
