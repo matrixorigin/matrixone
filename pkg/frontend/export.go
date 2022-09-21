@@ -31,6 +31,7 @@ import (
 )
 
 var OpenFile = os.OpenFile
+var escape byte = '"'
 
 type CloseExportData struct {
 	stopExportData chan interface{}
@@ -214,6 +215,27 @@ var writeDataToCSVFile = func(ep *tree.ExportParam, output []byte) error {
 	return nil
 }
 
+func addEscapeToString(s []byte) []byte {
+	pos := make([]int, 0)
+	for i := 0; i < len(s); i++ {
+		if s[i] == escape {
+			pos = append(pos, i)
+		}
+	}
+	if len(pos) == 0 {
+		return s
+	}
+	ret := make([]byte, 0)
+	cur := 0
+	for i := 0; i < len(pos); i++ {
+		ret = append(ret, s[cur:pos[i]]...)
+		ret = append(ret, escape)
+		cur = pos[i]
+	}
+	ret = append(ret, s[cur:]...)
+	return ret
+}
+
 func exportDataToCSVFile(oq *outputQueue) error {
 	oq.ep.LineSize = 0
 
@@ -316,6 +338,7 @@ func exportDataToCSVFile(oq *outputQueue) error {
 			if err != nil {
 				return err
 			}
+			value = addEscapeToString(value.([]byte))
 			if err = formatOutputString(oq, value.([]byte), symbol[i], closeby, true); err != nil {
 				return err
 			}
