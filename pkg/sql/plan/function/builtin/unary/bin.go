@@ -45,8 +45,7 @@ func generalBin[T binT](vectors []*vector.Vector, proc *process.Process, cb binF
 			return proc.AllocScalarNullVector(resultType), nil
 		}
 		resultVector := proc.AllocScalarVector(resultType)
-		vecLen := int64(vector.Length(inputVector))
-		resultValues := make([]types.Varlena, 0, vecLen)
+		resultValues := make([]types.Varlena, 0, 1)
 		vector.SetCol(resultVector, resultValues)
 		err := cb(inputVector, resultVector, proc)
 		if err != nil {
