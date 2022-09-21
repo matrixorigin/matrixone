@@ -127,8 +127,6 @@ func startService(cfg *Config, stopper *stopper.Stopper) error {
 		return startDNService(cfg, stopper, fs)
 	case logServiceType:
 		return startLogService(cfg, stopper, fs, ts)
-	case standaloneServiceType:
-		return startStandalone(cfg, stopper, fs, ts)
 	default:
 		panic("unknown service type")
 	}
@@ -219,73 +217,6 @@ func startLogService(
 	})
 }
 
-func startStandalone(
-	cfg *Config,
-	stopper *stopper.Stopper,
-	fileService fileservice.FileService,
-	taskService taskservice.TaskService,
-) error {
-
-	// start log service
-	if err := startLogService(cfg, stopper, fileService, taskService); err != nil {
-		return err
-	}
-
-	// wait hakeeper ready
-	ctx, cancel := context.WithTimeout(context.TODO(), time.Second*30)
-	defer cancel()
-	var client logservice.CNHAKeeperClient
-	for {
-		var err error
-		client, err = logservice.NewCNHAKeeperClient(ctx, cfg.HAKeeperClient)
-		if moerr.IsMoErrCode(err, moerr.ErrNoHAKeeper) {
-			// not ready
-			logutil.Info("hakeeper not ready, retry")
-			time.Sleep(time.Second)
-			continue
-		}
-		if err != nil {
-			return err
-		}
-		break
-	}
-
-	// start DN
-	if err := startDNService(cfg, stopper, fileService); err != nil {
-		return err
-	}
-
-	// wait shard ready
-	for {
-		if ok, err := func() (bool, error) {
-			details, err := client.GetClusterDetails(ctx)
-			if err != nil {
-				return false, err
-			}
-			for _, store := range details.DNStores {
-				if len(store.Shards) > 0 {
-					return true, nil
-				}
-			}
-			logutil.Info("shard not ready")
-			return false, nil
-		}(); err != nil {
-			return err
-		} else if ok {
-			logutil.Info("shard ready")
-			break
-		}
-		time.Sleep(time.Second)
-	}
-
-	// start CN
-	if err := startCNService(cfg, stopper, fileService); err != nil {
-		return err
-	}
-
-	return nil
-}
-
 func initTraceMetric(ctx context.Context, cfg *Config, stopper *stopper.Stopper, fs fileservice.FileService) error {
 	var writerFactory export.FSWriterFactory
 	var err error
@@ -294,7 +225,7 @@ func initTraceMetric(ctx context.Context, cfg *Config, stopper *stopper.Stopper,
 
 	ServerType := strings.ToUpper(cfg.ServiceType)
 	switch ServerType {
-	case cnServiceType, standaloneServiceType:
+	case cnServiceType:
 		// validate node_uuid
 		var uuidErr error
 		var nodeUUID uuid.UUID
