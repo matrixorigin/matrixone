@@ -944,7 +944,7 @@ func bindFuncExprImplByPlanExpr(name string, args []*Expr) (*plan.Expr, error) {
 }
 
 func (b *baseBinder) bindNumVal(astExpr *tree.NumVal, typ *Type) (*Expr, error) {
-	// over_int64_err := errors.New("", "Constants over int64 will support in future version.")
+	// over_int64_err := moerr.NewInternalError("", "Constants over int64 will support in future version.")
 
 	getStringExpr := func(val string) *Expr {
 		return &Expr{

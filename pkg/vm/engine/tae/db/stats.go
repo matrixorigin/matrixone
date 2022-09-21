@@ -16,6 +16,7 @@ package db
 
 import (
 	"encoding/json"
+
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"

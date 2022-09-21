@@ -15,15 +15,15 @@
 package file
 
 import (
-	"errors"
 	"io"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 )
 
 var (
-	ErrInvalidParam = errors.New("tae: invalid param")
-	ErrInvalidName  = errors.New("tae: invalid name")
+	ErrInvalidParam = moerr.NewInternalError("tae: invalid param")
+	ErrInvalidName  = moerr.NewInternalError("tae: invalid name")
 )
 
 type Base interface {

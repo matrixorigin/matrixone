@@ -16,15 +16,15 @@ package moengine
 
 import (
 	"bytes"
-	"errors"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 )
 
-var ErrReadOnly = errors.New("tae moengine: read only")
+var ErrReadOnly = moerr.NewInternalError("tae moengine: read only")
 
 type Txn interface {
 	GetCtx() []byte

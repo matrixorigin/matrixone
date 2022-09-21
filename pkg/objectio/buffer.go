@@ -16,6 +16,7 @@ package objectio
 
 import (
 	"bytes"
+
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 )
 

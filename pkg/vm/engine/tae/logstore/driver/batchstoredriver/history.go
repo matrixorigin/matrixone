@@ -15,13 +15,14 @@
 package batchstoredriver
 
 import (
-	"errors"
 	"fmt"
 	"sync"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
 var (
-	ErrHistoryEntryNotFound = errors.New("tae: history not found")
+	ErrHistoryEntryNotFound = moerr.NewInternalError("tae: history not found")
 )
 
 type HistoryFactory func() History

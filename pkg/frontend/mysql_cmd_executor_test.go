@@ -302,7 +302,7 @@ func Test_mce_selfhandle(t *testing.T) {
 				if cnt == 1 {
 					return nil, nil
 				}
-				return nil, fmt.Errorf("fake error")
+				return nil, moerr.NewInternalError("fake error")
 			},
 		).AnyTimes()
 

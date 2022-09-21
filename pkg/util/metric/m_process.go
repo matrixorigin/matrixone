@@ -15,9 +15,9 @@
 package metric
 
 import (
-	"errors"
 	"os"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	prom "github.com/prometheus/client_golang/prometheus"
 	"github.com/shirou/gopsutil/v3/process"
@@ -56,7 +56,7 @@ func (c procCpuPercent) Desc() *prom.Desc {
 func (c procCpuPercent) Metric(s *statCaches) (prom.Metric, error) {
 	val := s.getOrInsert(cacheKeyProcess, getProcess)
 	if val == nil {
-		return nil, errors.New("empty process")
+		return nil, moerr.NewInternalError("empty process")
 	}
 	proc := val.(*process.Process)
 
@@ -81,7 +81,7 @@ func (c procMemUsage) Desc() *prom.Desc {
 func (c procMemUsage) Metric(s *statCaches) (prom.Metric, error) {
 	val := s.getOrInsert(cacheKeyProcess, getProcess)
 	if val == nil {
-		return nil, errors.New("empty process")
+		return nil, moerr.NewInternalError("empty process")
 	}
 	proc := val.(*process.Process)
 	if mem, err := proc.MemoryInfo(); err != nil {
@@ -104,7 +104,7 @@ func (c procOpenFds) Desc() *prom.Desc {
 func (c procOpenFds) Metric(s *statCaches) (prom.Metric, error) {
 	val := s.getOrInsert(cacheKeyProcess, getProcess)
 	if val == nil {
-		return nil, errors.New("empty process")
+		return nil, moerr.NewInternalError("empty process")
 	}
 	proc := val.(*process.Process)
 	if fds, err := proc.NumFDs(); err != nil {
@@ -127,7 +127,7 @@ func (c procFdsLimit) Desc() *prom.Desc {
 func (c procFdsLimit) Metric(s *statCaches) (prom.Metric, error) {
 	val := s.getOrInsert(cacheKeyProcess, getProcess)
 	if val == nil {
-		return nil, errors.New("empty process")
+		return nil, moerr.NewInternalError("empty process")
 	}
 	proc := val.(*process.Process)
 	if limits, err := proc.Rlimit(); err != nil {
@@ -138,6 +138,6 @@ func (c procFdsLimit) Metric(s *statCaches) (prom.Metric, error) {
 				return prom.MustNewConstMetric(c.Desc(), prom.GaugeValue, float64(limit.Soft)), nil
 			}
 		}
-		return nil, errors.New("empty limit")
+		return nil, moerr.NewInternalError("empty limit")
 	}
 }

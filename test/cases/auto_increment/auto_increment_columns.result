@@ -127,7 +127,7 @@ insert into t2 values(2147483647, 'bbb');
 insert into t2 values(2147483648, 'bbb');
 tae data: duplicate
 insert into t2(d) values ('22222');
-auto_incrment column 'c' constant value 2147483648 overflows int
+internal error: auto_incrment column 'c' constant value 2147483648 overflows int
 select * from t2 order by c;
 c    d
 -2147483648    aaa
@@ -320,7 +320,7 @@ c    d
 -2147483648    aaa
 2147483647    bbb
 insert into t5(d) values ('22222');
-auto_incrment column 'c' constant value 2147483648 overflows int
+internal error: auto_incrment column 'c' constant value 2147483648 overflows int
 select * from t5 order by c;
 c    d
 -2147483648    aaa

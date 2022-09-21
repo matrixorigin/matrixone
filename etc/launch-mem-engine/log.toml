@@ -1,4 +1,4 @@
-service-type = "STANDALONE"
+service-type = "LOG"
 
 [log]
 level = "debug"
@@ -28,7 +28,7 @@ uuid = "9c4dccb4-4d3c-41f8-b482-5251dc7a41bf"
 gossip-seed-addresses = [
   "127.0.0.1:32002",
 ]
-data-dir = "store/logservice"
+data-dir = "mo-data/logservice"
 
 [logservice.BootstrapConfig]
 bootstrap-cluster = true
@@ -50,5 +50,5 @@ backend = "MEM"
 [[fileservice]]
 name = "ETL"
 backend = "DISK-ETL"
-data-dir = "store"
+data-dir = "mo-data/etl/log"
 

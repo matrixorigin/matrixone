@@ -22,6 +22,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/util/batchpipe"
 )
@@ -237,7 +238,7 @@ loop:
 				if _, has := c.buffers[i.GetName()]; !has {
 					logutil.Debugf("doCollect %dth: init buffer done.", idx)
 					if impl, has := gPipeImplHolder.Get(i.GetName()); !has {
-						panic(fmt.Errorf("unknown item type: %s", i.GetName()))
+						panic(moerr.NewInternalError("unknown item type: %s", i.GetName()))
 					} else {
 						buf = newBufferHolder(i, impl, awakeBuffer(c))
 						c.buffers[i.GetName()] = buf

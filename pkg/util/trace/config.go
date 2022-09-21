@@ -19,15 +19,16 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
+	"io"
+	"sync"
+	"sync/atomic"
+
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/export"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
-	"io"
-	"sync"
-	"sync/atomic"
 )
 
 const (
