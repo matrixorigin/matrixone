@@ -15,8 +15,10 @@
 package db
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
@@ -54,14 +56,14 @@ func (processor *calibrationOp) PostExecute() error { return nil }
 
 func (processor *calibrationOp) onTable(tableEntry *catalog.TableEntry) (err error) {
 	if !tableEntry.IsActive() {
-		err = catalog.ErrStopCurrRecur
+		err = moerr.GetOkStopCurrRecur()
 	}
 	return
 }
 
 func (processor *calibrationOp) onSegment(segmentEntry *catalog.SegmentEntry) (err error) {
 	if !segmentEntry.IsActive() {
-		err = catalog.ErrStopCurrRecur
+		err = moerr.GetOkStopCurrRecur()
 	}
 	processor.blkCntOfSegment = 0
 	return
@@ -239,7 +241,7 @@ func (monitor *catalogStatsMonitor) onSegment(entry *catalog.SegmentEntry) (err 
 			// }
 			err = nil
 		} else {
-			err = catalog.ErrStopCurrRecur
+			err = moerr.GetOkStopCurrRecur()
 		}
 	}
 	return
@@ -270,7 +272,7 @@ func (monitor *catalogStatsMonitor) onTable(entry *catalog.TableEntry) (err erro
 	if err != nil {
 		err = nil
 	} else {
-		err = catalog.ErrStopCurrRecur
+		err = moerr.GetOkStopCurrRecur()
 	}
 	return
 }
@@ -300,7 +302,7 @@ func (monitor *catalogStatsMonitor) onDatabase(entry *catalog.DBEntry) (err erro
 	if err != nil {
 		err = nil
 	} else {
-		err = catalog.ErrStopCurrRecur
+		err = moerr.GetOkStopCurrRecur()
 	}
 	return
 }

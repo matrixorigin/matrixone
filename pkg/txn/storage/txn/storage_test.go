@@ -20,6 +20,7 @@ import (
 	"encoding/gob"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -54,73 +55,75 @@ func testDatabase(
 
 	// open database
 	{
-		resp := testRead[txnengine.OpenDatabaseResp](
+		_, err := testRead[txnengine.OpenDatabaseResp](
 			t, s, txnMeta,
 			txnengine.OpOpenDatabase,
 			txnengine.OpenDatabaseReq{
 				Name: "foo",
 			},
 		)
-		assert.Equal(t, "foo", resp.ErrNotFound.Name)
+		assert.True(t, moerr.IsMoErrCode(err, moerr.ErrNoDB))
 	}
 
 	// create database
 	{
-		resp := testWrite[txnengine.CreateDatabaseResp](
+		resp, err := testWrite[txnengine.CreateDatabaseResp](
 			t, s, txnMeta,
 			txnengine.OpCreateDatabase,
 			txnengine.CreateDatabaseReq{
 				Name: "foo",
 			},
 		)
-		assert.Equal(t, txnengine.ErrExisted(false), resp.ErrExisted)
+		assert.Nil(t, err)
 		assert.NotEmpty(t, resp.ID)
 	}
 
 	// get databases
 	{
-		resp := testRead[txnengine.GetDatabasesResp](
+		resp, err := testRead[txnengine.GetDatabasesResp](
 			t, s, txnMeta,
 			txnengine.OpGetDatabases,
 			txnengine.GetDatabasesReq{},
 		)
+		assert.Nil(t, err)
 		assert.Equal(t, 1, len(resp.Names))
 		assert.Equal(t, "foo", resp.Names[0])
 	}
 
 	// open database
-	var dbID string
+	var dbID ID
 	{
-		resp := testRead[txnengine.OpenDatabaseResp](
+		resp, err := testRead[txnengine.OpenDatabaseResp](
 			t, s, txnMeta,
 			txnengine.OpOpenDatabase,
 			txnengine.OpenDatabaseReq{
 				Name: "foo",
 			},
 		)
-		assert.Equal(t, "", resp.ErrNotFound.Name)
+		assert.Nil(t, err)
 		assert.NotNil(t, resp.ID)
 		dbID = resp.ID
 
 		// delete database
 		defer func() {
 			{
-				resp := testWrite[txnengine.DeleteDatabaseResp](
+				resp, err := testWrite[txnengine.DeleteDatabaseResp](
 					t, s, txnMeta,
 					txnengine.OpDeleteDatabase,
 					txnengine.DeleteDatabaseReq{
 						Name: "foo",
 					},
 				)
-				assert.Equal(t, "", resp.ErrNotFound.Name)
+				assert.Nil(t, err)
 				assert.NotEmpty(t, resp.ID)
 			}
 			{
-				resp := testRead[txnengine.GetDatabasesResp](
+				resp, err := testRead[txnengine.GetDatabasesResp](
 					t, s, txnMeta,
 					txnengine.OpGetDatabases,
 					txnengine.GetDatabasesReq{},
 				)
+				assert.Nil(t, err)
 				assert.Equal(t, 0, len(resp.Names))
 			}
 		}()
@@ -128,7 +131,7 @@ func testDatabase(
 
 	// open relation
 	{
-		resp := testRead[txnengine.OpenRelationResp](
+		_, err := testRead[txnengine.OpenRelationResp](
 			t, s, txnMeta,
 			txnengine.OpOpenRelation,
 			txnengine.OpenRelationReq{
@@ -136,12 +139,12 @@ func testDatabase(
 				Name:       "table",
 			},
 		)
-		assert.Equal(t, "table", resp.ErrNotFound.Name)
+		assert.True(t, moerr.IsMoErrCode(err, moerr.ErrNoSuchTable))
 	}
 
 	// create relation
 	{
-		resp := testWrite[txnengine.CreateRelationResp](
+		resp, err := testWrite[txnengine.CreateRelationResp](
 			t, s, txnMeta,
 			txnengine.OpCreateRelation,
 			txnengine.CreateRelationReq{
@@ -166,27 +169,28 @@ func testDatabase(
 				},
 			},
 		)
-		assert.Equal(t, txnengine.ErrExisted(false), resp.ErrExisted)
+		assert.Nil(t, err)
 		assert.NotEmpty(t, resp.ID)
 	}
 
 	// get relations
 	{
-		resp := testRead[txnengine.GetRelationsResp](
+		resp, err := testRead[txnengine.GetRelationsResp](
 			t, s, txnMeta,
 			txnengine.OpGetRelations,
 			txnengine.GetRelationsReq{
 				DatabaseID: dbID,
 			},
 		)
+		assert.Nil(t, err)
 		assert.Equal(t, 1, len(resp.Names))
 		assert.Equal(t, "table", resp.Names[0])
 	}
 
 	// open relation
-	var relID string
+	var relID ID
 	{
-		resp := testRead[txnengine.OpenRelationResp](
+		resp, err := testRead[txnengine.OpenRelationResp](
 			t, s, txnMeta,
 			txnengine.OpOpenRelation,
 			txnengine.OpenRelationReq{
@@ -194,7 +198,7 @@ func testDatabase(
 				Name:       "table",
 			},
 		)
-		assert.Equal(t, "", resp.ErrNotFound.Name)
+		assert.Nil(t, err)
 		assert.NotNil(t, resp.ID)
 		relID = resp.ID
 		assert.Equal(t, txnengine.RelationTable, resp.Type)
@@ -203,15 +207,14 @@ func testDatabase(
 
 	// get relation defs
 	{
-		resp := testRead[txnengine.GetTableDefsResp](
+		resp, err := testRead[txnengine.GetTableDefsResp](
 			t, s, txnMeta,
 			txnengine.OpGetTableDefs,
 			txnengine.GetTableDefsReq{
 				TableID: relID,
 			},
 		)
-		assert.Empty(t, resp.ErrTableNotFound.ID)
-		assert.Empty(t, resp.ErrTableNotFound.Name)
+		assert.Nil(t, err)
 		assert.Equal(t, 3, len(resp.Defs))
 	}
 
@@ -239,7 +242,7 @@ func testDatabase(
 		bat.Vecs[0] = colA
 		bat.Vecs[1] = colB
 		bat.InitZsOne(5)
-		resp := testWrite[txnengine.WriteResp](
+		_, err := testWrite[txnengine.WriteResp](
 			t, s, txnMeta,
 			txnengine.OpWrite,
 			txnengine.WriteReq{
@@ -247,26 +250,25 @@ func testDatabase(
 				Batch:   bat,
 			},
 		)
-		assert.Empty(t, resp.ErrReadOnly)
-		assert.Empty(t, resp.ErrTableNotFound)
+		assert.Nil(t, err)
 	}
 
 	// read
-	var iterID string
+	var iterID ID
 	{
-		resp := testRead[txnengine.NewTableIterResp](
+		resp, err := testRead[txnengine.NewTableIterResp](
 			t, s, txnMeta,
 			txnengine.OpNewTableIter,
 			txnengine.NewTableIterReq{
 				TableID: relID,
 			},
 		)
+		assert.Nil(t, err)
 		assert.NotEmpty(t, resp.IterID)
-		assert.Empty(t, resp.ErrTableNotFound)
 		iterID = resp.IterID
 	}
 	{
-		resp := testRead[txnengine.ReadResp](
+		resp, err := testRead[txnengine.ReadResp](
 			t, s, txnMeta,
 			txnengine.OpRead,
 			txnengine.ReadReq{
@@ -274,8 +276,7 @@ func testDatabase(
 				ColNames: []string{"a", "b"},
 			},
 		)
-		assert.Empty(t, resp.ErrIterNotFound)
-		assert.Empty(t, resp.ErrColumnNotFound)
+		assert.Nil(t, err)
 		assert.NotNil(t, resp.Batch)
 		assert.Equal(t, 5, resp.Batch.Length())
 	}
@@ -291,7 +292,7 @@ func testDatabase(
 				1,
 			},
 		)
-		resp := testWrite[txnengine.DeleteResp](
+		_, err := testWrite[txnengine.DeleteResp](
 			t, s, txnMeta,
 			txnengine.OpDelete,
 			txnengine.DeleteReq{
@@ -300,25 +301,24 @@ func testDatabase(
 				Vector:     colA,
 			},
 		)
-		assert.Empty(t, resp.ErrReadOnly)
-		assert.Empty(t, resp.ErrTableNotFound)
+		assert.Nil(t, err)
 	}
 
 	// read after delete
 	{
-		resp := testRead[txnengine.NewTableIterResp](
+		resp, err := testRead[txnengine.NewTableIterResp](
 			t, s, txnMeta,
 			txnengine.OpNewTableIter,
 			txnengine.NewTableIterReq{
 				TableID: relID,
 			},
 		)
+		assert.Nil(t, err)
 		assert.NotEmpty(t, resp.IterID)
-		assert.Empty(t, resp.ErrTableNotFound)
 		iterID = resp.IterID
 	}
 	{
-		resp := testRead[txnengine.ReadResp](
+		resp, err := testRead[txnengine.ReadResp](
 			t, s, txnMeta,
 			txnengine.OpRead,
 			txnengine.ReadReq{
@@ -326,8 +326,7 @@ func testDatabase(
 				ColNames: []string{"a", "b"},
 			},
 		)
-		assert.Empty(t, resp.ErrIterNotFound)
-		assert.Empty(t, resp.ErrColumnNotFound)
+		assert.Nil(t, err)
 		assert.NotNil(t, resp.Batch)
 		assert.Equal(t, 4, resp.Batch.Length())
 	}
@@ -343,7 +342,7 @@ func testDatabase(
 				8,
 			},
 		)
-		resp := testWrite[txnengine.DeleteResp](
+		_, err := testWrite[txnengine.DeleteResp](
 			t, s, txnMeta,
 			txnengine.OpDelete,
 			txnengine.DeleteReq{
@@ -352,25 +351,24 @@ func testDatabase(
 				Vector:     colB,
 			},
 		)
-		assert.Empty(t, resp.ErrReadOnly)
-		assert.Empty(t, resp.ErrTableNotFound)
+		assert.Nil(t, err)
 	}
 
 	// read after delete
 	{
-		resp := testRead[txnengine.NewTableIterResp](
+		resp, err := testRead[txnengine.NewTableIterResp](
 			t, s, txnMeta,
 			txnengine.OpNewTableIter,
 			txnengine.NewTableIterReq{
 				TableID: relID,
 			},
 		)
+		assert.Nil(t, err)
 		assert.NotEmpty(t, resp.IterID)
-		assert.Empty(t, resp.ErrTableNotFound)
 		iterID = resp.IterID
 	}
 	{
-		resp := testRead[txnengine.ReadResp](
+		resp, err := testRead[txnengine.ReadResp](
 			t, s, txnMeta,
 			txnengine.OpRead,
 			txnengine.ReadReq{
@@ -378,8 +376,7 @@ func testDatabase(
 				ColNames: []string{"a", "b"},
 			},
 		)
-		assert.Empty(t, resp.ErrIterNotFound)
-		assert.Empty(t, resp.ErrColumnNotFound)
+		assert.Nil(t, err)
 		assert.NotNil(t, resp.Batch)
 		assert.Equal(t, 3, resp.Batch.Length())
 	}
@@ -408,7 +405,7 @@ func testDatabase(
 		bat.Vecs[0] = colA
 		bat.Vecs[1] = colB
 		bat.InitZsOne(1)
-		resp := testWrite[txnengine.WriteResp](
+		_, err := testWrite[txnengine.WriteResp](
 			t, s, txnMeta,
 			txnengine.OpWrite,
 			txnengine.WriteReq{
@@ -416,13 +413,12 @@ func testDatabase(
 				Batch:   bat,
 			},
 		)
-		assert.Empty(t, resp.ErrReadOnly)
-		assert.Empty(t, resp.ErrTableNotFound)
+		assert.Nil(t, err)
 	}
 
 	// delete relation
 	{
-		resp := testWrite[txnengine.DeleteRelationResp](
+		resp, err := testWrite[txnengine.DeleteRelationResp](
 			t, s, txnMeta,
 			txnengine.OpDeleteRelation,
 			txnengine.DeleteRelationReq{
@@ -430,23 +426,24 @@ func testDatabase(
 				Name:       "table",
 			},
 		)
-		assert.Equal(t, "", resp.ErrNotFound.Name)
+		assert.Nil(t, err)
 		assert.NotEmpty(t, resp.ID)
 	}
 	{
-		resp := testRead[txnengine.GetRelationsResp](
+		resp, err := testRead[txnengine.GetRelationsResp](
 			t, s, txnMeta,
 			txnengine.OpGetRelations,
 			txnengine.GetRelationsReq{
 				DatabaseID: dbID,
 			},
 		)
+		assert.Nil(t, err)
 		assert.Equal(t, 0, len(resp.Names))
 	}
 
 	// new relation without primary key
 	{
-		resp := testWrite[txnengine.CreateRelationResp](
+		resp, err := testWrite[txnengine.CreateRelationResp](
 			t, s, txnMeta,
 			txnengine.OpCreateRelation,
 			txnengine.CreateRelationReq{
@@ -469,9 +466,7 @@ func testDatabase(
 				},
 			},
 		)
-		assert.Empty(t, resp.ErrReadOnly)
-		assert.Empty(t, resp.ErrDatabaseNotFound)
-		assert.Empty(t, resp.ErrExisted)
+		assert.Nil(t, err)
 		assert.NotEmpty(t, resp.ID)
 		relID = resp.ID
 	}
@@ -500,7 +495,7 @@ func testDatabase(
 		bat.Vecs[0] = colA
 		bat.Vecs[1] = colB
 		bat.InitZsOne(5)
-		resp := testWrite[txnengine.WriteResp](
+		_, err := testWrite[txnengine.WriteResp](
 			t, s, txnMeta,
 			txnengine.OpWrite,
 			txnengine.WriteReq{
@@ -508,8 +503,7 @@ func testDatabase(
 				Batch:   bat,
 			},
 		)
-		assert.Empty(t, resp.ErrReadOnly)
-		assert.Empty(t, resp.ErrTableNotFound)
+		assert.Nil(t, err)
 	}
 
 	// delete by primary key
@@ -523,7 +517,7 @@ func testDatabase(
 				1,
 			},
 		)
-		resp := testWrite[txnengine.DeleteResp](
+		_, err := testWrite[txnengine.DeleteResp](
 			t, s, txnMeta,
 			txnengine.OpDelete,
 			txnengine.DeleteReq{
@@ -532,25 +526,24 @@ func testDatabase(
 				Vector:     colA,
 			},
 		)
-		assert.Empty(t, resp.ErrReadOnly)
-		assert.Empty(t, resp.ErrTableNotFound)
+		assert.Nil(t, err)
 	}
 
 	// read after delete
 	{
-		resp := testRead[txnengine.NewTableIterResp](
+		resp, err := testRead[txnengine.NewTableIterResp](
 			t, s, txnMeta,
 			txnengine.OpNewTableIter,
 			txnengine.NewTableIterReq{
 				TableID: relID,
 			},
 		)
+		assert.Nil(t, err)
 		assert.NotEmpty(t, resp.IterID)
-		assert.Empty(t, resp.ErrTableNotFound)
 		iterID = resp.IterID
 	}
 	{
-		resp := testRead[txnengine.ReadResp](
+		resp, err := testRead[txnengine.ReadResp](
 			t, s, txnMeta,
 			txnengine.OpRead,
 			txnengine.ReadReq{
@@ -558,8 +551,7 @@ func testDatabase(
 				ColNames: []string{"a", "b"},
 			},
 		)
-		assert.Empty(t, resp.ErrIterNotFound)
-		assert.Empty(t, resp.ErrColumnNotFound)
+		assert.Nil(t, err)
 		assert.NotNil(t, resp.Batch)
 		assert.Equal(t, 4, resp.Batch.Length())
 	}
@@ -575,7 +567,7 @@ func testDatabase(
 				8,
 			},
 		)
-		resp := testWrite[txnengine.DeleteResp](
+		_, err := testWrite[txnengine.DeleteResp](
 			t, s, txnMeta,
 			txnengine.OpDelete,
 			txnengine.DeleteReq{
@@ -584,26 +576,25 @@ func testDatabase(
 				Vector:     colB,
 			},
 		)
-		assert.Empty(t, resp.ErrReadOnly)
-		assert.Empty(t, resp.ErrTableNotFound)
+		assert.Nil(t, err)
 	}
 
 	// read after delete
 	{
-		resp := testRead[txnengine.NewTableIterResp](
+		resp, err := testRead[txnengine.NewTableIterResp](
 			t, s, txnMeta,
 			txnengine.OpNewTableIter,
 			txnengine.NewTableIterReq{
 				TableID: relID,
 			},
 		)
+		assert.Nil(t, err)
 		assert.NotEmpty(t, resp.IterID)
-		assert.Empty(t, resp.ErrTableNotFound)
 		iterID = resp.IterID
 	}
 	var rowIDs *vector.Vector
 	{
-		resp := testRead[txnengine.ReadResp](
+		resp, err := testRead[txnengine.ReadResp](
 			t, s, txnMeta,
 			txnengine.OpRead,
 			txnengine.ReadReq{
@@ -611,8 +602,7 @@ func testDatabase(
 				ColNames: []string{"a", "b", rowIDColumnName},
 			},
 		)
-		assert.Empty(t, resp.ErrIterNotFound)
-		assert.Empty(t, resp.ErrColumnNotFound)
+		assert.Nil(t, err)
 		assert.NotNil(t, resp.Batch)
 		assert.Equal(t, 3, resp.Batch.Length())
 		rowIDs = resp.Batch.Vecs[2]
@@ -620,7 +610,7 @@ func testDatabase(
 
 	// delete by row id
 	{
-		resp := testWrite[txnengine.DeleteResp](
+		_, err := testWrite[txnengine.DeleteResp](
 			t, s, txnMeta,
 			txnengine.OpDelete,
 			txnengine.DeleteReq{
@@ -629,25 +619,24 @@ func testDatabase(
 				Vector:     rowIDs,
 			},
 		)
-		assert.Empty(t, resp.ErrReadOnly)
-		assert.Empty(t, resp.ErrTableNotFound)
+		assert.Nil(t, err)
 	}
 
 	// read after delete
 	{
-		resp := testRead[txnengine.NewTableIterResp](
+		resp, err := testRead[txnengine.NewTableIterResp](
 			t, s, txnMeta,
 			txnengine.OpNewTableIter,
 			txnengine.NewTableIterReq{
 				TableID: relID,
 			},
 		)
+		assert.Nil(t, err)
 		assert.NotEmpty(t, resp.IterID)
-		assert.Empty(t, resp.ErrTableNotFound)
 		iterID = resp.IterID
 	}
 	{
-		resp := testRead[txnengine.ReadResp](
+		resp, err := testRead[txnengine.ReadResp](
 			t, s, txnMeta,
 			txnengine.OpRead,
 			txnengine.ReadReq{
@@ -655,8 +644,7 @@ func testDatabase(
 				ColNames: []string{"a", "b", rowIDColumnName},
 			},
 		)
-		assert.Empty(t, resp.ErrIterNotFound)
-		assert.Empty(t, resp.ErrColumnNotFound)
+		assert.Nil(t, err)
 		assert.Nil(t, resp.Batch)
 	}
 
@@ -677,14 +665,17 @@ func testRead[
 	req Req,
 ) (
 	resp Resp,
+	err error,
 ) {
 
 	buf := new(bytes.Buffer)
-	err := gob.NewEncoder(buf).Encode(req)
+	err = gob.NewEncoder(buf).Encode(req)
 	assert.Nil(t, err)
 
 	res, err := s.Read(context.TODO(), txnMeta, op, buf.Bytes())
-	assert.Nil(t, err)
+	if err != nil {
+		return
+	}
 	data, err := res.Read()
 	assert.Nil(t, err)
 
@@ -705,14 +696,17 @@ func testWrite[
 	req Req,
 ) (
 	resp Resp,
+	err error,
 ) {
 
 	buf := new(bytes.Buffer)
-	err := gob.NewEncoder(buf).Encode(req)
+	err = gob.NewEncoder(buf).Encode(req)
 	assert.Nil(t, err)
 
 	data, err := s.Write(context.TODO(), txnMeta, op, buf.Bytes())
-	assert.Nil(t, err)
+	if err != nil {
+		return
+	}
 
 	err = gob.NewDecoder(bytes.NewReader(data)).Decode(&resp)
 	assert.Nil(t, err)

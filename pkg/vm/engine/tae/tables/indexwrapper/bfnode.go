@@ -16,11 +16,11 @@ package indexwrapper
 
 import (
 	"github.com/RoaringBitmap/roaring"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 )
 
@@ -181,7 +181,7 @@ func (writer *BFWriter) AddValues(values containers.Vector) error {
 		return nil
 	}
 	if writer.data.GetType() != values.GetType() {
-		return data.ErrWrongType
+		return moerr.NewInternalError("wrong type")
 	}
 	writer.data.Extend(values)
 	return nil

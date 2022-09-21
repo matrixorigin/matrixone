@@ -17,6 +17,8 @@ package fileservice
 import (
 	"bytes"
 	"io"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
 type ioEntriesReader struct {
@@ -74,12 +76,12 @@ func (i *ioEntriesReader) Read(buf []byte) (n int, err error) {
 				return
 			}
 			if int64(bytesRead) != numBytes {
-				err = ErrSizeNotMatch
+				err = moerr.NewSizeNotMatch("")
 				return
 			}
 		} else {
 			if int64(len(entry.Data)) != entry.Size {
-				err = ErrSizeNotMatch
+				err = moerr.NewSizeNotMatch("")
 				return
 			}
 			copy(buf, entry.Data[:numBytes])

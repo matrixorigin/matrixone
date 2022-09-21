@@ -1772,15 +1772,15 @@ explain_stmt:
     }
 |   explain_sym ANALYZE explainable_stmt
     {
-		explainStmt := tree.NewExplainStmt($3, "text")
-		optionElem := tree.MakeOptionElem("analyze", "NULL")
-        options := tree.MakeOptions(optionElem)
-        explainStmt.Options = options
-		$$ = explainStmt
+    		explainStmt := tree.NewExplainAnalyze($3, "text")
+    		optionElem := tree.MakeOptionElem("analyze", "NULL")
+    	options := tree.MakeOptions(optionElem)
+	explainStmt.Options = options
+	$$ = explainStmt
     }
 |   explain_sym ANALYZE VERBOSE explainable_stmt
     {
-        explainStmt := tree.NewExplainStmt($4, "text")
+        explainStmt := tree.NewExplainAnalyze($4, "text")
         optionElem1 := tree.MakeOptionElem("analyze", "NULL")
 		optionElem2 := tree.MakeOptionElem("verbose", "NULL")
 		options := tree.MakeOptions(optionElem1)
@@ -1790,9 +1790,15 @@ explain_stmt:
     }
 |   explain_sym '(' utility_option_list ')' explainable_stmt
     {
-        explainStmt := tree.NewExplainStmt($5, "text")
-        explainStmt.Options = $3
-        $$ = explainStmt
+    	if tree.IsContainAnalyze($3) {
+    	     explainStmt := tree.NewExplainAnalyze($5, "text")
+	     explainStmt.Options = $3
+	     $$ = explainStmt
+    	} else {
+    	     explainStmt := tree.NewExplainStmt($5, "text")
+    	     explainStmt.Options = $3
+	     $$ = explainStmt
+    	}
     }
 
 explain_option_key:
@@ -5915,16 +5921,6 @@ expression:
 	{
         $$ = tree.NewComparisonExpr(tree.NOT_EQUAL, $1, $4)
     }
-|   boolean_primary IS UNKNOWN %prec IS
-	{
-		arg := tree.NewNumValWithType(constant.MakeString($3), "", false, tree.P_char)
-        $$ = tree.NewComparisonExpr(tree.EQUAL, $1, arg)
-    }
-|   boolean_primary IS NOT UNKNOWN %prec IS
-	{
-		arg := tree.NewNumValWithType(constant.MakeString($3), "", false, tree.P_char)
-        $$ = tree.NewComparisonExpr(tree.NOT_EQUAL, $1, arg)
-    }
 |   boolean_primary
     {
         $$ = $1
@@ -5938,6 +5934,14 @@ boolean_primary:
 |   boolean_primary IS NOT NULL %prec IS
     {
         $$ = tree.NewIsNotNullExpr($1)
+    }
+|    boolean_primary IS UNKNOWN %prec IS
+    {
+        $$ = tree.NewIsUnknownExpr($1)
+    }
+|   boolean_primary IS NOT UNKNOWN %prec IS
+    {
+        $$ = tree.NewIsNotUnknownExpr($1)
     }
 |   boolean_primary comparison_operator predicate %prec '='
     {

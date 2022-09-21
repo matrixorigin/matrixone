@@ -35,6 +35,7 @@ type NodeDescribe interface {
 	GetOrderByInfo(options *ExplainOptions) (string, error)
 	GetGroupByInfo(options *ExplainOptions) (string, error)
 	GetTableDef(options *ExplainOptions) (string, error)
+	GetActualAnalyzeInfo(options *ExplainOptions) (string, error)
 }
 
 type NodeElemDescribe interface {

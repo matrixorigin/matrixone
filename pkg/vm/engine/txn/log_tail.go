@@ -32,7 +32,7 @@ func (t *Table) GetLogTail(
 	err error,
 ) {
 
-	resps, err := DoTxnRequest[GetLogTailResp](
+	resps, err := DoTxnRequest[apipb.SyncLogTailResp](
 		ctx,
 		t.engine,
 		t.txnOperator.Read,
@@ -40,12 +40,11 @@ func (t *Table) GetLogTail(
 			return t.engine.shardPolicy.Stores([]logservicepb.DNStore{targetStore})
 		},
 		OpGetLogTail,
-		GetLogTailReq{
-			TableID: t.id,
-			Request: apipb.SyncLogTailReq{
-				CnHave: from,
-				CnWant: to,
-				Table:  &apipb.TableID{}, // we dont use this
+		apipb.SyncLogTailReq{
+			CnHave: from,
+			CnWant: to,
+			Table: &apipb.TableID{
+				TbId: uint64(t.id),
 			},
 		},
 	)
@@ -53,5 +52,5 @@ func (t *Table) GetLogTail(
 		return nil, err
 	}
 
-	return &resps[0].Response, nil
+	return &resps[0], nil
 }

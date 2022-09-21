@@ -264,3 +264,11 @@ SELECT b,
        CASE  WHEN b is NULL then 'found' ELSE 'not found' END FROM t2;
 SELECT b,
        CASE  WHEN b is not NULL then 'found' ELSE 'not found' END FROM t2;
+select (null) is unknown;
+select null is unknown;
+select true is unknown;
+select false is unknown;
+drop table if exists t1;
+CREATE TABLE t1 (a bool);
+insert into t1 values (false), (null), (true), (null);
+select a is unknown from t1 order by a;
