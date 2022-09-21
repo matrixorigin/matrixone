@@ -259,7 +259,7 @@ func TestBinNegativeFloat(t *testing.T) {
 		"1111111111111111111111111111111111111111111111111111111110000000"}, tempC)
 }
 
-func TestBinNULL(t *testing.T) {
+func TestBinEmpty(t *testing.T) {
 	procs := testutil.NewProc()
 
 	as := []float64{}

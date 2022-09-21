@@ -24,34 +24,20 @@ import (
 )
 
 func Bin[T constraints.Unsigned | constraints.Signed](vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	inputVector := vectors[0]
-	resultType := types.T_varchar.ToType()
-	if inputVector.IsScalar() {
-		if inputVector.ConstVectorIsNull() {
-			return proc.AllocScalarNullVector(resultType), nil
-		}
-		resultVector := proc.AllocScalarVector(resultType)
-		vecLen := int64(vector.Length(inputVector))
-		resultValues := make([]types.Varlena, 0, vecLen)
-		vector.SetCol(resultVector, resultValues)
-		err := bin.Bin[T](inputVector, resultVector, proc)
-		if err != nil {
-			return nil, err
-		}
-		return resultVector, nil
-	} else {
-		resultVector, err := proc.AllocVectorOfRows(resultType, 0, inputVector.Nsp)
-		if err != nil {
-			return nil, err
-		}
-		if err = bin.Bin[T](inputVector, resultVector, proc); err != nil {
-			return nil, err
-		}
-		return resultVector, nil
-	}
+	return generalBin[T](vectors, proc, bin.Bin[T])
 }
 
 func BinFloat[T constraints.Float](vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	return generalBin[T](vectors, proc, bin.BinFloat[T])
+}
+
+type binT interface {
+	constraints.Unsigned | constraints.Signed | constraints.Float
+}
+
+type binFun[T binT] func(*vector.Vector, *vector.Vector, *process.Process) error
+
+func generalBin[T binT](vectors []*vector.Vector, proc *process.Process, cb binFun[T]) (*vector.Vector, error) {
 	inputVector := vectors[0]
 	resultType := types.T_varchar.ToType()
 	if inputVector.IsScalar() {
@@ -62,7 +48,7 @@ func BinFloat[T constraints.Float](vectors []*vector.Vector, proc *process.Proce
 		vecLen := int64(vector.Length(inputVector))
 		resultValues := make([]types.Varlena, 0, vecLen)
 		vector.SetCol(resultVector, resultValues)
-		err := bin.BinFloat[T](inputVector, resultVector, proc)
+		err := cb(inputVector, resultVector, proc)
 		if err != nil {
 			return nil, moerr.NewInvalidInput("The input value is out of range")
 		}
@@ -72,10 +58,11 @@ func BinFloat[T constraints.Float](vectors []*vector.Vector, proc *process.Proce
 		if err != nil {
 			return nil, err
 		}
-		err = bin.BinFloat[T](inputVector, resultVector, proc)
+		err = cb(inputVector, resultVector, proc)
 		if err != nil {
 			return nil, moerr.NewInvalidInput("The input value is out of range")
 		}
 		return resultVector, nil
 	}
+
 }
