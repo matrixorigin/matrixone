@@ -102,6 +102,7 @@ func (e *Engine) Database(ctx context.Context, dbName string, txnOperator client
 		engine:      e,
 		txnOperator: txnOperator,
 		id:          resp.ID,
+		name:        resp.Name,
 	}
 
 	return db, nil

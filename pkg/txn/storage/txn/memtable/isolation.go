@@ -12,24 +12,24 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package txnstorage
+package memtable
 
-import "sync/atomic"
-
-type Atomic[T any] struct {
-	value atomic.Value
+type IsolationPolicy struct {
+	Read ReadPolicy
 }
 
-func NewAtomic[T any](value T) *Atomic[T] {
-	t := new(Atomic[T])
-	t.value.Store(value)
-	return t
+type ReadPolicy uint8
+
+const (
+	ReadCommitted ReadPolicy = iota + 1
+	ReadSnapshot
+	ReadNoStale
+)
+
+var SnapshotIsolation = IsolationPolicy{
+	Read: ReadSnapshot,
 }
 
-func (a *Atomic[T]) Load() T {
-	return a.value.Load().(T)
-}
-
-func (a *Atomic[T]) Store(value T) {
-	a.value.Store(value)
+var Serializable = IsolationPolicy{
+	Read: ReadNoStale,
 }

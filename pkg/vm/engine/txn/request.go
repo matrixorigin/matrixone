@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/gob"
+	"fmt"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -27,8 +28,8 @@ import (
 )
 
 func DoTxnRequest[
-	Resp any,
-	Req any,
+	Resp Response,
+	Req Request,
 ](
 	ctx context.Context,
 	e engine.Engine,
@@ -79,10 +80,10 @@ func DoTxnRequest[
 	if err != nil {
 		return
 	}
-
 	for _, resp := range result.Responses {
 		if resp.TxnError != nil {
-			err = moerr.NewTxnError("resp txnError %s", resp.TxnError.Message)
+			//TODO no way to construct moerr.Error by code and message now
+			err = fmt.Errorf("code %v, message %v", resp.TxnError.Code, resp.TxnError.Message)
 			return
 		}
 	}
@@ -92,17 +93,6 @@ func DoTxnRequest[
 		if err = gob.NewDecoder(bytes.NewReader(res.CNOpResponse.Payload)).Decode(&resp); err != nil {
 			return
 		}
-
-		// XXX This code is beyond me.  Why do you need to use reflects and
-		// type implements for RPC code.
-		// respValue := reflect.ValueOf(resp)
-		// for i := 0; i < respValue.NumField(); i++ {
-		// 	field := respValue.Field(i)
-		// 	if field.Type().Implements(errorType) && !field.IsZero() {
-		// 		err = moerr.NewInternalError("txn request error %d req.  This error handling code is messed up.")
-		// 		return
-		// 	}
-		// }
 		resps = append(resps, resp)
 	}
 
