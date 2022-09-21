@@ -15,7 +15,6 @@
 package main
 
 import (
-	"fmt"
 	"net"
 	"os"
 	"strings"
@@ -81,7 +80,7 @@ type Config struct {
 
 func parseConfigFromFile(file string, cfg any) error {
 	if file == "" {
-		return fmt.Errorf("toml config file not set")
+		return moerr.NewInternalError("toml config file not set")
 	}
 	data, err := os.ReadFile(file)
 	if err != nil {
@@ -99,7 +98,7 @@ func parseFromString(data string, cfg any) error {
 
 func (c *Config) validate() error {
 	if _, ok := supportServiceTypes[strings.ToUpper(c.ServiceType)]; !ok {
-		return fmt.Errorf("service type %s not support", c.ServiceType)
+		return moerr.NewInternalError("service type %s not support", c.ServiceType)
 	}
 	return nil
 }

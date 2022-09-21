@@ -15,11 +15,11 @@
 package containers
 
 import (
-	"fmt"
 	"io"
 	"unsafe"
 
 	"github.com/RoaringBitmap/roaring"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/stl/containers"
@@ -35,7 +35,7 @@ func NewBatch() *Batch {
 
 func (bat *Batch) AddVector(attr string, vec Vector) {
 	if _, exist := bat.nameidx[attr]; exist {
-		panic(fmt.Errorf("duplicate vector %s", attr))
+		panic(moerr.NewInternalError("duplicate vector %s", attr))
 	}
 	idx := len(bat.Vecs)
 	bat.nameidx[attr] = idx

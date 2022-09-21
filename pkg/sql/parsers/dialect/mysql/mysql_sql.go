@@ -4,20 +4,15 @@
 package mysql
 
 import (
-	__yyfmt__ "fmt"
-	__yyunsafe__ "unsafe"
-)
-
-//line mysql_sql.y:16
-
-import (
 	"fmt"
+	__yyfmt__ "fmt"
 	"go/constant"
 	"strings"
+	__yyunsafe__ "unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers/util"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/util" //line mysql_sql.y:16
 )
 
 const LEX_ERROR = 57346

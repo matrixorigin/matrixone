@@ -15,11 +15,11 @@
 package frontend
 
 import (
-	"fmt"
 	"io"
 
 	"github.com/fagongzi/goetty/v2/buf"
 	"github.com/fagongzi/goetty/v2/codec"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
 const PacketHeaderLength = 4
@@ -72,7 +72,7 @@ func (c *sqlCodec) Encode(data interface{}, out *buf.ByteBuf, writer io.Writer) 
 		return err
 	}
 	if tlen != xlen {
-		return fmt.Errorf("len of written != len of the data")
+		return moerr.NewInternalError("len of written != len of the data")
 	}
 	return nil
 }

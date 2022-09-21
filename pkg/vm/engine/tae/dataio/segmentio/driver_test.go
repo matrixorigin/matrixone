@@ -18,12 +18,13 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
+	"path"
+	"testing"
+
 	"github.com/matrixorigin/matrixone/pkg/compress"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/stretchr/testify/assert"
-	"path"
-	"testing"
 )
 
 func mockData(size uint32) []byte {

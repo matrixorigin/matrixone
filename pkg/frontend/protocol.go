@@ -278,7 +278,7 @@ func (mp *MysqlProtocolImpl) SendResponse(resp *Response) error {
 		}
 		return mp.sendResultSet(mer.Mrs(), resp.cmd, mer.Warnings(), uint16(resp.status))
 	default:
-		return fmt.Errorf("unsupported response:%d ", resp.category)
+		return moerr.NewInternalError("unsupported response:%d ", resp.category)
 	}
 }
 
