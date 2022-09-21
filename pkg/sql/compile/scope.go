@@ -163,6 +163,8 @@ func (s *Scope) ParallelRun(c *Compile) error {
 	}
 	mcpu := s.NodeInfo.Mcpu
 	{
+		var err error
+
 		db, err := c.e.Database(c.ctx, s.DataSource.SchemaName, s.Proc.TxnOperator)
 		if err != nil {
 			return err
@@ -171,7 +173,9 @@ func (s *Scope) ParallelRun(c *Compile) error {
 		if err != nil {
 			return err
 		}
-		rds, _ = rel.NewReader(c.ctx, mcpu, nil, s.NodeInfo.Data)
+		if rds, err = rel.NewReader(c.ctx, mcpu, nil, s.NodeInfo.Data); err != nil {
+			return err
+		}
 	}
 	ss := make([]*Scope, mcpu)
 	for i := 0; i < mcpu; i++ {
