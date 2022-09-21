@@ -2310,10 +2310,10 @@ var operators = map[int]Functions{
 		Id: LIKE,
 		Overloads: []Function{
 			{
-				Index:     0,
-				Flag:      plan.Function_STRICT,
-				Layout:    BINARY_LOGICAL_OPERATOR,
-				Args:      []types.T{
+				Index:  0,
+				Flag:   plan.Function_STRICT,
+				Layout: BINARY_LOGICAL_OPERATOR,
+				Args: []types.T{
 					types.T_char,
 					types.T_char,
 				},
@@ -2321,10 +2321,10 @@ var operators = map[int]Functions{
 				Fn:        operator.Like,
 			},
 			{
-				Index:     1,
-				Flag:      plan.Function_STRICT,
-				Layout:    BINARY_LOGICAL_OPERATOR,
-				Args:      []types.T{
+				Index:  1,
+				Flag:   plan.Function_STRICT,
+				Layout: BINARY_LOGICAL_OPERATOR,
+				Args: []types.T{
 					types.T_varchar,
 					types.T_varchar,
 				},
@@ -2332,10 +2332,10 @@ var operators = map[int]Functions{
 				Fn:        operator.Like,
 			},
 			{
-				Index:     2,
-				Flag:      plan.Function_STRICT,
-				Layout:    BINARY_LOGICAL_OPERATOR,
-				Args:      []types.T{
+				Index:  2,
+				Flag:   plan.Function_STRICT,
+				Layout: BINARY_LOGICAL_OPERATOR,
+				Args: []types.T{
 					types.T_char,
 					types.T_char,
 				},
