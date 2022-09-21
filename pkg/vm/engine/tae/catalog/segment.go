@@ -132,7 +132,7 @@ func (entry *SegmentEntry) MakeCommand(id uint32) (cmd txnif.TxnCmd, err error) 
 
 func (entry *SegmentEntry) PPString(level common.PPLevel, depth int, prefix string) string {
 	var w bytes.Buffer
-	_, _ = w.WriteString(fmt.Sprintf("%s%s%s", common.RepeatStr("\t", depth), prefix, entry.String()))
+	_, _ = w.WriteString(fmt.Sprintf("%s%s%s", common.RepeatStr("\t", depth), prefix, entry.StringWithLevel(level)))
 	if level == common.PPL0 {
 		return w.String()
 	}
@@ -149,18 +149,32 @@ func (entry *SegmentEntry) PPString(level common.PPLevel, depth int, prefix stri
 }
 
 func (entry *SegmentEntry) StringLocked() string {
-	return fmt.Sprintf("[%s]SEGMENT%s", entry.state.Repr(), entry.MetaBaseEntry.StringLocked())
+	return entry.StringWithLevelLocked(common.PPL1)
 }
 
 func (entry *SegmentEntry) Repr() string {
 	id := entry.AsCommonID()
-	return fmt.Sprintf("[%s]SEGMENT[%s]", entry.state.Repr(), id.String())
+	return fmt.Sprintf("[%s]SEG[%s]", entry.state.Repr(), id.String())
 }
 
 func (entry *SegmentEntry) String() string {
 	entry.RLock()
 	defer entry.RUnlock()
 	return entry.StringLocked()
+}
+
+func (entry *SegmentEntry) StringWithLevel(level common.PPLevel) string {
+	entry.RLock()
+	defer entry.RUnlock()
+	return entry.StringWithLevelLocked(level)
+}
+
+func (entry *SegmentEntry) StringWithLevelLocked(level common.PPLevel) string {
+	if level <= common.PPL1 {
+		return fmt.Sprintf("[%s]SEG[%d][C@%s,D@%s]",
+			entry.state.Repr(), entry.ID, entry.GetCreatedAt().ToString(), entry.GetDeleteAt().ToString())
+	}
+	return fmt.Sprintf("[%s]SEG%s", entry.state.Repr(), entry.MetaBaseEntry.StringLocked())
 }
 
 func (entry *SegmentEntry) BlockCnt() int {
