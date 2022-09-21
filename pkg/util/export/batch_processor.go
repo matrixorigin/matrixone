@@ -24,7 +24,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/logutil/logutil2"
 	"github.com/matrixorigin/matrixone/pkg/util/batchpipe"
 )
 
@@ -206,7 +205,7 @@ func (c *MOCollector) Start() bool {
 	}
 	defer atomic.StoreUint32(&c.started, 1)
 
-	logutil2.Infof(DefaultContext(), "MOCollector Start")
+	logutil.Infof("MOCollector Start")
 	for i := 0; i < c.collectorCnt; i++ {
 		c.stopWait.Add(1)
 		go c.doCollect(i)

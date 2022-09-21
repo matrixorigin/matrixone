@@ -23,6 +23,7 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/export"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
@@ -59,7 +60,7 @@ type tracerProviderConfig struct {
 	// registered.
 	spanProcessors []SpanProcessor
 
-	enableTracer uint32 // see EnableTracer
+	enable uint32 // see SetEnable
 
 	// idGenerator is used to generate all Span and Trace IDs when needed.
 	idGenerator IDGenerator
@@ -95,16 +96,16 @@ func (cfg *tracerProviderConfig) getNodeResource() *MONodeResource {
 func (cfg *tracerProviderConfig) IsEnable() bool {
 	cfg.mux.RLock()
 	defer cfg.mux.RUnlock()
-	return atomic.LoadUint32(&cfg.enableTracer) == 1
+	return atomic.LoadUint32(&cfg.enable) == 1
 }
 
-func (cfg *tracerProviderConfig) EnableTracer(enable bool) {
+func (cfg *tracerProviderConfig) SetEnable(enable bool) {
 	cfg.mux.Lock()
 	defer cfg.mux.Unlock()
 	if enable {
-		atomic.StoreUint32(&cfg.enableTracer, 1)
+		atomic.StoreUint32(&cfg.enable, 1)
 	} else {
-		atomic.StoreUint32(&cfg.enableTracer, 0)
+		atomic.StoreUint32(&cfg.enable, 0)
 	}
 }
 
@@ -137,7 +138,7 @@ func WithNode(uuid string, t string) tracerProviderOptionFunc {
 
 func EnableTracer(enable bool) tracerProviderOptionFunc {
 	return func(cfg *tracerProviderConfig) {
-		cfg.EnableTracer(enable)
+		cfg.SetEnable(enable)
 	}
 }
 
@@ -206,13 +207,11 @@ var nilTraceID TraceID
 
 // IsZero checks whether the trace TraceID is 0 value.
 func (t TraceID) IsZero() bool {
-	return !bytes.Equal(t[:], nilTraceID[:])
+	return bytes.Equal(t[:], nilTraceID[:])
 }
 
 func (t TraceID) String() string {
-	var dst [36]byte
-	bytes2Uuid(dst[:], t)
-	return string(dst[:])
+	return uuid.UUID(t).String()
 }
 
 type SpanID [8]byte
@@ -220,40 +219,20 @@ type SpanID [8]byte
 var nilSpanID SpanID
 
 // SetByUUID use prefix of uuid as value
-func (s *SpanID) SetByUUID(uuid string) {
-	var dst [16]byte
-	uuid2Bytes(dst[:], uuid)
-	copy(s[:], dst[0:8])
+func (s *SpanID) SetByUUID(id string) {
+	if u, err := uuid.Parse(id); err == nil {
+		copy(s[:], u[:])
+	} else {
+		copy(s[:], []byte(id)[:])
+	}
+}
+
+func (s *SpanID) IsZero() bool {
+	return bytes.Equal(s[:], nilSpanID[:])
 }
 
 func (s SpanID) String() string {
 	return hex.EncodeToString(s[:])
-}
-
-func uuid2Bytes(dst []byte, uuid string) {
-	_ = dst[15]
-	l := len(uuid)
-	if l != 36 || uuid[8] != '-' || uuid[13] != '-' || uuid[18] != '-' || uuid[23] != '-' {
-		return
-	}
-	hex.Decode(dst[0:4], []byte(uuid[0:8]))
-	hex.Decode(dst[4:6], []byte(uuid[9:13]))
-	hex.Decode(dst[6:8], []byte(uuid[14:18]))
-	hex.Decode(dst[8:10], []byte(uuid[19:23]))
-	hex.Decode(dst[10:], []byte(uuid[24:]))
-}
-
-func bytes2Uuid(dst []byte, src [16]byte) {
-	_, _ = dst[35], src[15]
-	hex.Encode(dst[0:8], src[0:4])
-	hex.Encode(dst[9:13], src[4:6])
-	hex.Encode(dst[14:18], src[6:8])
-	hex.Encode(dst[19:23], src[8:10])
-	hex.Encode(dst[24:], src[10:])
-	dst[8] = '-'
-	dst[13] = '-'
-	dst[18] = '-'
-	dst[23] = '-'
 }
 
 var _ zapcore.ObjectMarshaler = (*SpanContext)(nil)
@@ -308,7 +287,7 @@ func (c *SpanContext) Reset() {
 }
 
 func (c *SpanContext) IsEmpty() bool {
-	return c.TraceID.IsZero()
+	return c.TraceID.IsZero() && c.SpanID.IsZero()
 }
 
 func (c *SpanContext) MarshalLogObject(enc zapcore.ObjectEncoder) error {
@@ -368,13 +347,24 @@ func WithNewRoot(newRoot bool) spanOptionFunc {
 	})
 }
 
+func WithTraceID(id TraceID) spanOptionFunc {
+	return spanOptionFunc(func(cfg *SpanConfig) {
+		cfg.TraceID = id
+	})
+}
+
+func WithSpanID(id SpanID) spanOptionFunc {
+	return spanOptionFunc(func(cfg *SpanConfig) {
+		cfg.SpanID = id
+	})
+}
+
 type Resource struct {
 	m map[string]any
 }
 
 func newResource() *Resource {
 	return &Resource{m: make(map[string]any)}
-
 }
 
 func (r *Resource) Put(key string, val any) {
