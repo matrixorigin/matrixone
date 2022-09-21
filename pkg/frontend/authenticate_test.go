@@ -4768,8 +4768,8 @@ func Test_doRevokePrivilege(t *testing.T) {
 			},
 			ObjType: tree.OBJECT_TYPE_ACCOUNT,
 			Level:   &tree.PrivilegeLevel{Level: tree.PRIVILEGE_LEVEL_TYPE_STAR},
-			Users: []*tree.User{
-				{Username: "r1"},
+			Roles: []*tree.Role{
+				{UserName: "r1"},
 			},
 		}
 		priv := determinePrivilegeSetOfStatement(stmt)
@@ -4781,8 +4781,8 @@ func Test_doRevokePrivilege(t *testing.T) {
 		bh.sql2result["rollback;"] = nil
 
 		//init from roles
-		for i, role := range stmt.Users {
-			sql := getSqlForRoleIdOfRole(role.Username)
+		for i, role := range stmt.Roles {
+			sql := getSqlForRoleIdOfRole(role.UserName)
 			mrs := newMrsForRoleIdOfRole([][]interface{}{
 				{i},
 			})
@@ -4792,7 +4792,7 @@ func Test_doRevokePrivilege(t *testing.T) {
 		for _, p := range stmt.Privileges {
 			privType, err := convertAstPrivilegeTypeToPrivilegeType(p.Type, tree.OBJECT_TYPE_ACCOUNT)
 			convey.So(err, convey.ShouldBeNil)
-			for j := range stmt.Users {
+			for j := range stmt.Roles {
 				sql := getSqlForCheckRoleHasPrivilege(int64(j), objectTypeAccount, objectIDAll, int64(privType))
 				mrs := newMrsForCheckRoleHasPrivilege([][]interface{}{})
 				bh.sql2result[sql] = mrs
@@ -4801,6 +4801,255 @@ func Test_doRevokePrivilege(t *testing.T) {
 
 		err := doRevokePrivilege(ses.GetRequestContext(), ses, stmt)
 		convey.So(err, convey.ShouldBeNil)
+	})
+	convey.Convey("revoke database, role succ", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		defer bhStub.Reset()
+
+		stmts := []*tree.RevokePrivilege{
+			{
+				Privileges: []*tree.Privilege{
+					{Type: tree.PRIVILEGE_TYPE_STATIC_SHOW_TABLES},
+				},
+				ObjType: tree.OBJECT_TYPE_DATABASE,
+				Level: &tree.PrivilegeLevel{
+					Level: tree.PRIVILEGE_LEVEL_TYPE_STAR,
+				},
+				Roles: []*tree.Role{
+					{UserName: "r1"},
+				},
+			},
+			{
+				Privileges: []*tree.Privilege{
+					{Type: tree.PRIVILEGE_TYPE_STATIC_SHOW_TABLES},
+				},
+				ObjType: tree.OBJECT_TYPE_DATABASE,
+				Level: &tree.PrivilegeLevel{
+					Level: tree.PRIVILEGE_LEVEL_TYPE_STAR_STAR,
+				},
+				Roles: []*tree.Role{
+					{UserName: "r1"},
+				},
+			},
+			{
+				Privileges: []*tree.Privilege{
+					{Type: tree.PRIVILEGE_TYPE_STATIC_SHOW_TABLES},
+				},
+				ObjType: tree.OBJECT_TYPE_DATABASE,
+				Level: &tree.PrivilegeLevel{
+					Level:  tree.PRIVILEGE_LEVEL_TYPE_DATABASE,
+					DbName: "d",
+				},
+				Roles: []*tree.Role{
+					{UserName: "r1"},
+				},
+			},
+			{
+				Privileges: []*tree.Privilege{
+					{Type: tree.PRIVILEGE_TYPE_STATIC_SHOW_TABLES},
+				},
+				ObjType: tree.OBJECT_TYPE_DATABASE,
+				Level: &tree.PrivilegeLevel{
+					Level:   tree.PRIVILEGE_LEVEL_TYPE_TABLE,
+					TabName: "d",
+				},
+				Roles: []*tree.Role{
+					{UserName: "r1"},
+				},
+			},
+		}
+
+		for _, stmt := range stmts {
+			priv := determinePrivilegeSetOfStatement(stmt)
+			ses := newSes(priv)
+
+			//no result set
+			bh.sql2result["begin;"] = nil
+			bh.sql2result["commit;"] = nil
+			bh.sql2result["rollback;"] = nil
+
+			//init from roles
+			for i, role := range stmt.Roles {
+				sql := getSqlForRoleIdOfRole(role.UserName)
+				mrs := newMrsForRoleIdOfRole([][]interface{}{
+					{i},
+				})
+				bh.sql2result[sql] = mrs
+			}
+
+			objType, err := convertAstObjectTypeToObjectType(stmt.ObjType)
+			convey.So(err, convey.ShouldBeNil)
+
+			if stmt.Level.Level == tree.PRIVILEGE_LEVEL_TYPE_DATABASE {
+				sql := getSqlForCheckDatabase(stmt.Level.DbName)
+				mrs := newMrsForCheckDatabase([][]interface{}{
+					{0},
+				})
+				bh.sql2result[sql] = mrs
+			} else if stmt.Level.Level == tree.PRIVILEGE_LEVEL_TYPE_TABLE {
+				sql := getSqlForCheckDatabase(stmt.Level.TabName)
+				mrs := newMrsForCheckDatabase([][]interface{}{
+					{0},
+				})
+				bh.sql2result[sql] = mrs
+			}
+
+			_, objId, err := checkPrivilegeObjectTypeAndPrivilegeLevel(context.TODO(), ses, bh, stmt.ObjType, *stmt.Level)
+			convey.So(err, convey.ShouldBeNil)
+
+			for _, p := range stmt.Privileges {
+				privType, err := convertAstPrivilegeTypeToPrivilegeType(p.Type, stmt.ObjType)
+				convey.So(err, convey.ShouldBeNil)
+				for j := range stmt.Roles {
+					sql := getSqlForCheckRoleHasPrivilege(int64(j), objType, objId, int64(privType))
+					mrs := newMrsForCheckRoleHasPrivilege([][]interface{}{})
+					bh.sql2result[sql] = mrs
+				}
+			}
+
+			err = doRevokePrivilege(ses.GetRequestContext(), ses, stmt)
+			convey.So(err, convey.ShouldBeNil)
+		}
+	})
+	convey.Convey("revoke table, role succ", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		defer bhStub.Reset()
+
+		dbName := "d"
+		tableName := "t"
+		stmts := []*tree.RevokePrivilege{
+			{
+				Privileges: []*tree.Privilege{
+					{Type: tree.PRIVILEGE_TYPE_STATIC_SELECT},
+				},
+				ObjType: tree.OBJECT_TYPE_TABLE,
+				Level: &tree.PrivilegeLevel{
+					Level: tree.PRIVILEGE_LEVEL_TYPE_STAR,
+				},
+				Roles: []*tree.Role{
+					{UserName: "r1"},
+				},
+			},
+			{
+				Privileges: []*tree.Privilege{
+					{Type: tree.PRIVILEGE_TYPE_STATIC_SELECT},
+				},
+				ObjType: tree.OBJECT_TYPE_TABLE,
+				Level: &tree.PrivilegeLevel{
+					Level: tree.PRIVILEGE_LEVEL_TYPE_STAR_STAR,
+				},
+				Roles: []*tree.Role{
+					{UserName: "r1"},
+				},
+			},
+			{
+				Privileges: []*tree.Privilege{
+					{Type: tree.PRIVILEGE_TYPE_STATIC_SELECT},
+				},
+				ObjType: tree.OBJECT_TYPE_TABLE,
+				Level: &tree.PrivilegeLevel{
+					Level:  tree.PRIVILEGE_LEVEL_TYPE_DATABASE_STAR,
+					DbName: dbName,
+				},
+				Roles: []*tree.Role{
+					{UserName: "r1"},
+				},
+			},
+			{
+				Privileges: []*tree.Privilege{
+					{Type: tree.PRIVILEGE_TYPE_STATIC_SELECT},
+				},
+				ObjType: tree.OBJECT_TYPE_TABLE,
+				Level: &tree.PrivilegeLevel{
+					Level:   tree.PRIVILEGE_LEVEL_TYPE_DATABASE_TABLE,
+					DbName:  dbName,
+					TabName: tableName,
+				},
+				Roles: []*tree.Role{
+					{UserName: "r1"},
+				},
+			},
+			{
+				Privileges: []*tree.Privilege{
+					{Type: tree.PRIVILEGE_TYPE_STATIC_SELECT},
+				},
+				ObjType: tree.OBJECT_TYPE_TABLE,
+				Level: &tree.PrivilegeLevel{
+					Level:   tree.PRIVILEGE_LEVEL_TYPE_TABLE,
+					TabName: tableName,
+				},
+				Roles: []*tree.Role{
+					{UserName: "r1"},
+				},
+			},
+		}
+
+		for _, stmt := range stmts {
+			priv := determinePrivilegeSetOfStatement(stmt)
+			ses := newSes(priv)
+			ses.SetDatabaseName("d")
+
+			//no result set
+			bh.sql2result["begin;"] = nil
+			bh.sql2result["commit;"] = nil
+			bh.sql2result["rollback;"] = nil
+
+			//init from roles
+			for i, role := range stmt.Roles {
+				sql := getSqlForRoleIdOfRole(role.UserName)
+				mrs := newMrsForRoleIdOfRole([][]interface{}{
+					{i},
+				})
+				bh.sql2result[sql] = mrs
+			}
+
+			objType, err := convertAstObjectTypeToObjectType(stmt.ObjType)
+			convey.So(err, convey.ShouldBeNil)
+
+			if stmt.Level.Level == tree.PRIVILEGE_LEVEL_TYPE_STAR ||
+				stmt.Level.Level == tree.PRIVILEGE_LEVEL_TYPE_DATABASE_STAR {
+				sql := getSqlForCheckDatabase(dbName)
+				mrs := newMrsForCheckDatabase([][]interface{}{
+					{0},
+				})
+				bh.sql2result[sql] = mrs
+			} else if stmt.Level.Level == tree.PRIVILEGE_LEVEL_TYPE_TABLE ||
+				stmt.Level.Level == tree.PRIVILEGE_LEVEL_TYPE_DATABASE_TABLE {
+				sql := getSqlForCheckDatabaseTable(dbName, tableName)
+				mrs := newMrsForCheckDatabaseTable([][]interface{}{
+					{0},
+				})
+				bh.sql2result[sql] = mrs
+			}
+
+			_, objId, err := checkPrivilegeObjectTypeAndPrivilegeLevel(context.TODO(), ses, bh, stmt.ObjType, *stmt.Level)
+			convey.So(err, convey.ShouldBeNil)
+
+			for _, p := range stmt.Privileges {
+				privType, err := convertAstPrivilegeTypeToPrivilegeType(p.Type, stmt.ObjType)
+				convey.So(err, convey.ShouldBeNil)
+				for j := range stmt.Roles {
+					sql := getSqlForCheckRoleHasPrivilege(int64(j), objType, objId, int64(privType))
+					mrs := newMrsForCheckRoleHasPrivilege([][]interface{}{})
+					bh.sql2result[sql] = mrs
+				}
+			}
+
+			err = doRevokePrivilege(ses.GetRequestContext(), ses, stmt)
+			convey.So(err, convey.ShouldBeNil)
+		}
 	})
 }
 

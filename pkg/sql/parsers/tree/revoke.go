@@ -48,7 +48,7 @@ type RevokePrivilege struct {
 	Privileges []*Privilege
 	ObjType    ObjectType
 	Level      *PrivilegeLevel
-	Users      []*User
+	Roles      []*Role
 }
 
 func (node *RevokePrivilege) Format(ctx *FmtCtx) {
@@ -75,12 +75,12 @@ func (node *RevokePrivilege) Format(ctx *FmtCtx) {
 		node.Level.Format(ctx)
 	}
 
-	if node.Users != nil {
+	if node.Roles != nil {
 		ctx.WriteString(" from")
 		prefix := " "
-		for _, u := range node.Users {
+		for _, r := range node.Roles {
 			ctx.WriteString(prefix)
-			u.Format(ctx)
+			r.Format(ctx)
 			prefix = ", "
 		}
 	}

@@ -26,8 +26,7 @@ var (
 		input  string
 		output string
 	}{
-		input:  `grant reference on table * to role_r1`,
-		output: "grant reference on table * to role_r1;",
+		input: "revoke all, all(a, b), create(a, b), select(a, b), super(a, b, c) on table db.a from u1, u2",
 	}
 )
 
@@ -866,15 +865,15 @@ var (
 			output: "grant super(a, b, c) on procedure db.func to h3",
 		},
 		{
-			input:  "revoke all, all(a, b), create(a, b), select(a, b), super(a, b, c) on table db.A from u1, 'u2'@'h2', ''@'h3'",
-			output: "revoke all, all(a, b), create(a, b), select(a, b), super(a, b, c) on table db.a from u1, u2@h2, @h3",
+			input:  "revoke all, all(a, b), create(a, b), select(a, b), super(a, b, c) on table db.A from u1, u2",
+			output: "revoke all, all(a, b), create(a, b), select(a, b), super(a, b, c) on table db.a from u1, u2",
 		}, {
 			input: "revoke r1, r2, r3 from u1, u2, u3",
 		}, {
 			input: "revoke super(a, b, c) on procedure db.func from h3",
 		}, {
-			input:  "revoke all on table db.A from u1, 'u2'@'h2', ''@'h3'",
-			output: "revoke all on table db.a from u1, u2@h2, @h3",
+			input:  "revoke all on table db.A from u1, u2",
+			output: "revoke all on table db.a from u1, u2",
 		}, {
 			input: "revoke all on table db.a from u1",
 		}, {
@@ -1344,15 +1343,15 @@ var (
 		}, {
 			input: "grant r1, r2 to u1@h1, u2@h2, r3",
 		}, {
-			input:  "revoke if exists all, all(a, b), create(a, b), select(a, b), super(a, b, c) on table db.A from u1, 'u2'@'h2', ''@'h3'",
-			output: "revoke if exists all, all(a, b), create(a, b), select(a, b), super(a, b, c) on table db.a from u1, u2@h2, @h3",
+			input:  "revoke if exists all, all(a, b), create(a, b), select(a, b), super(a, b, c) on table db.A from u1, u2",
+			output: "revoke if exists all, all(a, b), create(a, b), select(a, b), super(a, b, c) on table db.a from u1, u2",
 		}, {
 			input: "revoke if exists r1, r2, r3 from u1, u2, u3",
 		}, {
 			input: "revoke if exists super(a, b, c) on procedure db.func from h3",
 		}, {
-			input:  "revoke if exists all on table db.A from u1, 'u2'@'h2', ''@'h3'",
-			output: "revoke if exists all on table db.a from u1, u2@h2, @h3",
+			input:  "revoke if exists all on table db.A from u1, u2",
+			output: "revoke if exists all on table db.a from u1, u2",
 		}, {
 			input: "revoke if exists all on table db.a from u1",
 		}, {

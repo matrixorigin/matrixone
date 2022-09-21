@@ -967,7 +967,7 @@ grant_option_opt:
 // |	WITH MAX_USER_CONNECTIONS INTEGRAL
 
 revoke_stmt:
-    REVOKE exists_opt  priv_list ON object_type priv_level FROM user_spec_list
+    REVOKE exists_opt  priv_list ON object_type priv_level FROM role_spec_list
     {
         $$ = &tree.Revoke{
             Typ: tree.RevokeTypePrivilege,
@@ -976,7 +976,7 @@ revoke_stmt:
 		    Privileges: $3,
 		    ObjType: $5,
 		    Level: $6,
-		    Users: $8,
+		    Roles: $8,
             },
         }
     }

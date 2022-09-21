@@ -1314,7 +1314,7 @@ func doRevokePrivilege(ctx context.Context, ses *Session, rp *tree.RevokePrivile
 	var objId int64
 	var privType PrivilegeType
 
-	verifiedRoles := make([]*verifiedRole, len(rp.Users))
+	verifiedRoles := make([]*verifiedRole, len(rp.Roles))
 	checkedPrivilegeTypes := make([]PrivilegeType, len(rp.Privileges))
 
 	//put it into the single transaction
@@ -1324,28 +1324,18 @@ func doRevokePrivilege(ctx context.Context, ses *Session, rp *tree.RevokePrivile
 	}
 
 	//handle "IF EXISTS"
-	//step 1: check Users are roles or users . exists or not.
-	for i, user := range rp.Users {
-		sql := getSqlForRoleIdOfRole(user.Username)
-		vr, err = verifyRoleFunc(ctx, bh, sql, user.Username, roleType)
+	//step 1: check roles. exists or not.
+	for i, user := range rp.Roles {
+		sql := getSqlForRoleIdOfRole(user.UserName)
+		vr, err = verifyRoleFunc(ctx, bh, sql, user.UserName, roleType)
 		if err != nil {
 			goto handleFailed
 		}
-		if vr != nil {
-			verifiedRoles[i] = vr
-		} else {
-			//check user
-			sql = getSqlForPasswordOfUser(user.Username)
-			vr, err = verifyRoleFunc(ctx, bh, sql, user.Username, userType)
-			if err != nil {
+		verifiedRoles[i] = vr
+		if vr == nil {
+			if !rp.IfExists { //when the "IF EXISTS" is set, just skip it.
+				err = moerr.NewInternalError("there is no role %s", user.UserName)
 				goto handleFailed
-			}
-			verifiedRoles[i] = vr
-			if vr == nil {
-				if !rp.IfExists { //when the "IF EXISTS" is set, just skip it.
-					err = moerr.NewInternalError("there is no role or user %s", user.Username)
-					goto handleFailed
-				}
 			}
 		}
 	}
