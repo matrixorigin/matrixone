@@ -276,7 +276,7 @@ func NewCluster(t *testing.T, opt Options, taskService taskservice.TaskService) 
 	// build log service configurations
 	c.log.cfgs, c.log.opts = c.buildLogConfigs(c.network.addresses)
 	if taskService == nil {
-		c.log.taskService = taskservice.NewTaskService(taskservice.NewMemTaskStorage())
+		c.log.taskService = taskservice.NewTaskService(taskservice.NewMemTaskStorage(), nil)
 	} else {
 		c.log.taskService = taskService
 	}

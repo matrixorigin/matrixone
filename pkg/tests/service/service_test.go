@@ -46,7 +46,7 @@ func TestClusterStart(t *testing.T) {
 
 func TestAllocateID(t *testing.T) {
 	// initialize cluster
-	c, err := NewCluster(t, DefaultOptions())
+	c, err := NewCluster(t, DefaultOptions(), nil)
 	require.NoError(t, err)
 
 	// start the cluster

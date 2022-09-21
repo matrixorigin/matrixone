@@ -25,7 +25,7 @@ import (
 )
 
 func TestTaskSchedulerCanAllocateTask(t *testing.T) {
-	taskService := taskservice.NewTaskService(taskservice.NewMemTaskStorage())
+	taskService := taskservice.NewTaskService(taskservice.NewMemTaskStorage(), nil)
 
 	dnSvcNum := 1
 	cnSvcNum := 1
