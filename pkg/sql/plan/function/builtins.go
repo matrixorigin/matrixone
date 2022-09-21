@@ -2159,4 +2159,20 @@ var builtins = map[int]Functions{
 			},
 		},
 	},
+	HASH: {
+		Id: HASH,
+		TypeCheckFn: func(_ []Function, typs []types.T) (int32, []types.T) {
+			return 0, typs
+		},
+		Overloads: []Function{
+			{
+				Index:     0,
+				Flag:      plan.Function_STRICT,
+				Layout:    STANDARD_FUNCTION,
+				Args:      []types.T{},
+				ReturnTyp: types.T_uint64,
+				Fn:        multi.Hash,
+			},
+		},
+	},
 }
