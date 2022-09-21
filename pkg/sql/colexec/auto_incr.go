@@ -154,37 +154,37 @@ func getOneColRangeFromAutoIncrTable(param *AutoIncrParam, bat *batch.Batch, nam
 	case types.T_int8:
 		maxNum = getMaxnum[int8](vec, uint64(bat.Length()), maxNum, step)
 		if maxNum > math.MaxInt8 {
-			return 0, 0, moerr.NewOutOfRange("tinyint", "auto_incrment column constant value overflows tinyint", maxNum)
+			return 0, 0, moerr.NewOutOfRange("tinyint", "value %v", maxNum)
 		}
 	case types.T_int16:
 		maxNum = getMaxnum[int16](vec, uint64(bat.Length()), maxNum, step)
 		if maxNum > math.MaxInt16 {
-			return 0, 0, moerr.NewOutOfRange("smallint", "auto_incrment column constant value overflows smallint", maxNum)
+			return 0, 0, moerr.NewOutOfRange("smallint", "value %v", maxNum)
 		}
 	case types.T_int32:
 		maxNum = getMaxnum[int32](vec, uint64(bat.Length()), maxNum, step)
 		if maxNum > math.MaxInt32 {
-			return 0, 0, moerr.NewOutOfRange("int", "auto_incrment column constant value overflows int", maxNum)
+			return 0, 0, moerr.NewOutOfRange("int", "value %v", maxNum)
 		}
 	case types.T_int64:
 		maxNum = getMaxnum[int64](vec, uint64(bat.Length()), maxNum, step)
 		if maxNum > math.MaxInt64 {
-			return 0, 0, moerr.NewOutOfRange("bigint", "auto_incrment column constant value overflows bigint", maxNum)
+			return 0, 0, moerr.NewOutOfRange("bigint", "value %v", maxNum)
 		}
 	case types.T_uint8:
 		maxNum = getMaxnum[uint8](vec, uint64(bat.Length()), maxNum, step)
 		if maxNum > math.MaxUint8 {
-			return 0, 0, moerr.NewOutOfRange("tinyint unsigned", "auto_incrment column constant value overflows tinyint unsigned", maxNum)
+			return 0, 0, moerr.NewOutOfRange("tinyint unsigned", "value %v", maxNum)
 		}
 	case types.T_uint16:
 		maxNum = getMaxnum[uint16](vec, uint64(bat.Length()), maxNum, step)
 		if maxNum > math.MaxUint16 {
-			return 0, 0, moerr.NewOutOfRange("smallint unsigned", "auto_incrment column constant value overflows smallint unsigned", maxNum)
+			return 0, 0, moerr.NewOutOfRange("smallint unsigned", "value %v", maxNum)
 		}
 	case types.T_uint32:
 		maxNum = getMaxnum[uint32](vec, uint64(bat.Length()), maxNum, step)
 		if maxNum > math.MaxUint32 {
-			return 0, 0, moerr.NewOutOfRange("int unsigned", "auto_incrment column constant value overflows int unsigned", maxNum)
+			return 0, 0, moerr.NewOutOfRange("int unsigned", "value %v", maxNum)
 		}
 	case types.T_uint64:
 		maxNum = getMaxnum[uint64](vec, uint64(bat.Length()), maxNum, step)

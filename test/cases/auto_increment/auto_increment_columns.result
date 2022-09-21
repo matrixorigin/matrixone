@@ -105,7 +105,7 @@ insert into t1 values (9223372036854775807,'xefrsdfgds');
 insert into t1 values (9223372036854775808,'xefrsdfgds');
 truncated type BIGINT value 9223372036854775808 for column a, 1
 insert into t1(b) values ('eeeee');
-data out of range: data type bigint, auto_incrment column constant value overflows bigint%!(EXTRA uint64=9223372036854775808)
+data out of range: data type bigint, value 9223372036854775808
 drop table t1;
 drop table if exists t2;
 create table t2 (
@@ -127,7 +127,7 @@ insert into t2 values(2147483647, 'bbb');
 insert into t2 values(2147483648, 'bbb');
 tae data: duplicate
 insert into t2(d) values ('22222');
-data out of range: data type int, auto_incrment column constant value overflows int%!(EXTRA uint64=2147483648)
+data out of range: data type int, value 2147483648
 select * from t2 order by c;
 c    d
 -2147483648    aaa
@@ -295,7 +295,7 @@ insert into t4 values (9223372036854775807,'xefrsdfgds');
 insert into t4 values (9223372036854775808,'xefrsdfgds');
 truncated type BIGINT value 9223372036854775808 for column a, 1
 insert into t4(b) values ('eeeee');
-data out of range: data type bigint, auto_incrment column constant value overflows bigint%!(EXTRA uint64=9223372036854775808)
+data out of range: data type bigint, value 9223372036854775808
 drop table t4;
 drop table if exists t5;
 create table t5 (
@@ -320,7 +320,7 @@ c    d
 -2147483648    aaa
 2147483647    bbb
 insert into t5(d) values ('22222');
-data out of range: data type int, auto_incrment column constant value overflows int%!(EXTRA uint64=2147483648)
+data out of range: data type int, value 2147483648
 select * from t5 order by c;
 c    d
 -2147483648    aaa
@@ -622,7 +622,7 @@ a
 7
 127
 insert into t1 values();
-data out of range: data type tinyint, auto_incrment column constant value overflows tinyint%!(EXTRA uint64=128)
+data out of range: data type tinyint, value 128
 
 drop table t1;
 create table t1(a smallint auto_increment);
@@ -636,7 +636,7 @@ a
 7
 32767
 insert into t1 values();
-data out of range: data type smallint, auto_incrment column constant value overflows smallint%!(EXTRA uint64=32768)
+data out of range: data type smallint, value 32768
 
 drop table t1;
 create table t1(a int auto_increment);
@@ -650,7 +650,7 @@ a
 7
 2147483647
 insert into t1 values();
-data out of range: data type int, auto_incrment column constant value overflows int%!(EXTRA uint64=2147483648)
+data out of range: data type int, value 2147483648
 
 drop table t1;
 create table t1(a bigint auto_increment);
@@ -664,7 +664,7 @@ a
 7
 9223372036854775807
 insert into t1 values();
-data out of range: data type bigint, auto_incrment column constant value overflows bigint%!(EXTRA uint64=9223372036854775808)
+data out of range: data type bigint, value 9223372036854775808
 
 drop table t1;
 create table t1(a tinyint unsigned auto_increment);
@@ -678,7 +678,7 @@ a
 7
 255
 insert into t1 values();
-data out of range: data type tinyint unsigned, auto_incrment column constant value overflows tinyint unsigned%!(EXTRA uint64=256)
+data out of range: data type tinyint unsigned, value 256
 
 drop table t1;
 create table t1(a smallint unsigned auto_increment);
@@ -692,7 +692,7 @@ a
 7
 65535
 insert into t1 values();
-data out of range: data type smallint unsigned, auto_incrment column constant value overflows smallint unsigned%!(EXTRA uint64=65536)
+data out of range: data type smallint unsigned, value 65536
 
 drop table t1;
 create table t1(a int unsigned auto_increment);
@@ -706,7 +706,7 @@ a
 7
 4294967295
 insert into t1 values();
-data out of range: data type int unsigned, auto_incrment column constant value overflows int unsigned%!(EXTRA uint64=4294967296)
+data out of range: data type int unsigned, value 4294967296
 
 drop table t1;
 create table t1(a bigint unsigned auto_increment);
