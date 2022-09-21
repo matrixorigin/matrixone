@@ -32,7 +32,7 @@ const (
 
 func TestClusterStart(t *testing.T) {
 	// initialize cluster
-	c, err := NewCluster(t, DefaultOptions(), nil)
+	c, err := NewCluster(t, DefaultOptions())
 	require.NoError(t, err)
 
 	// start the cluster
@@ -46,7 +46,7 @@ func TestClusterStart(t *testing.T) {
 
 func TestAllocateID(t *testing.T) {
 	// initialize cluster
-	c, err := NewCluster(t, DefaultOptions(), nil)
+	c, err := NewCluster(t, DefaultOptions())
 	require.NoError(t, err)
 
 	// start the cluster
@@ -92,7 +92,7 @@ func TestClusterAwareness(t *testing.T) {
 		WithLogServiceNum(logSvcNum)
 
 	// initialize cluster
-	c, err := NewCluster(t, opt, nil)
+	c, err := NewCluster(t, opt)
 	require.NoError(t, err)
 
 	// start the cluster
@@ -151,7 +151,7 @@ func TestClusterOperation(t *testing.T) {
 		WithLogServiceNum(logSvcNum)
 
 	// initialize cluster
-	c, err := NewCluster(t, opt, nil)
+	c, err := NewCluster(t, opt)
 	require.NoError(t, err)
 
 	// start the cluster
@@ -305,7 +305,7 @@ func TestClusterState(t *testing.T) {
 		WithLogServiceNum(logSvcNum)
 
 	// initialize cluster
-	c, err := NewCluster(t, opt, nil)
+	c, err := NewCluster(t, opt)
 	require.NoError(t, err)
 
 	// start the cluster
@@ -429,7 +429,7 @@ func TestClusterWaitState(t *testing.T) {
 		WithLogServiceNum(logSvcNum)
 
 	// initialize cluster
-	c, err := NewCluster(t, opt, nil)
+	c, err := NewCluster(t, opt)
 	require.NoError(t, err)
 
 	// start the cluster
@@ -502,7 +502,7 @@ func TestNetworkPartition(t *testing.T) {
 		WithLogServiceNum(logSvcNum)
 
 	// initialize cluster
-	c, err := NewCluster(t, opt, nil)
+	c, err := NewCluster(t, opt)
 	require.NoError(t, err)
 
 	// start the cluster

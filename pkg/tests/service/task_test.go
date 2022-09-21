@@ -25,16 +25,18 @@ import (
 )
 
 func TestTaskSchedulerCanAllocateTask(t *testing.T) {
-	taskService := taskservice.NewTaskService(taskservice.NewMemTaskStorage(), nil)
+	taskStorage := taskservice.NewMemTaskStorage()
+	taskService := taskservice.NewTaskService(taskStorage, nil)
 
 	dnSvcNum := 1
 	cnSvcNum := 1
 	opt := DefaultOptions().
 		WithDNServiceNum(dnSvcNum).
-		WithCNServiceNum(cnSvcNum)
+		WithCNServiceNum(cnSvcNum).
+		WithTaskStorage(taskStorage)
 
 	// initialize cluster
-	c, err := NewCluster(t, opt, taskService)
+	c, err := NewCluster(t, opt)
 	require.NoError(t, err)
 
 	// start the cluster
@@ -43,6 +45,10 @@ func TestTaskSchedulerCanAllocateTask(t *testing.T) {
 
 	err = taskService.Create(context.TODO(), task.TaskMetadata{ID: "a"})
 	require.NoError(t, err)
+	tasks, err := taskService.QueryTask(context.TODO(),
+		taskservice.WithTaskStatusCond(taskservice.EQ, task.TaskStatus_Created))
+	require.NoError(t, err)
+	require.Equal(t, 1, len(tasks))
 
 	for i := 0; i < 100; i++ {
 		t.Logf("iteration: %d", i)

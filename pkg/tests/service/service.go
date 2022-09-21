@@ -256,7 +256,7 @@ type testCluster struct {
 }
 
 // NewCluster construct a cluster for integration test.
-func NewCluster(t *testing.T, opt Options, taskService taskservice.TaskService) (Cluster, error) {
+func NewCluster(t *testing.T, opt Options) (Cluster, error) {
 	opt.validate()
 
 	c := &testCluster{
@@ -275,11 +275,7 @@ func NewCluster(t *testing.T, opt Options, taskService taskservice.TaskService) 
 
 	// build log service configurations
 	c.log.cfgs, c.log.opts = c.buildLogConfigs(c.network.addresses)
-	if taskService == nil {
-		c.log.taskService = taskservice.NewTaskService(taskservice.NewMemTaskStorage(), nil)
-	} else {
-		c.log.taskService = taskService
-	}
+	c.log.taskService = taskservice.NewTaskService(opt.task.taskStorage, nil)
 
 	// build dn service configurations
 	c.dn.cfgs, c.dn.opts = c.buildDnConfigs(c.network.addresses)
@@ -307,9 +303,11 @@ func (c *testCluster) Start() error {
 		return err
 	}
 
-	time.Sleep(10 * time.Second)
-	if err := c.startCNServices(); err != nil {
-		return err
+	if c.opt.initial.cnServiceNum != 0 {
+		time.Sleep(10 * time.Second)
+		if err := c.startCNServices(); err != nil {
+			return err
+		}
 	}
 
 	c.mu.running = true

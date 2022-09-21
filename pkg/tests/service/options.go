@@ -15,6 +15,7 @@
 package service
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"time"
 
 	"go.uber.org/zap/zapcore"
@@ -29,8 +30,8 @@ const (
 	defaultLogServiceNum = 3
 	defaultLogShardNum   = 1
 	defaultLogReplicaNum = 3
-	defaultCNServiceNum  = 1
-	defaultCNShardNum    = 1
+	defaultCNServiceNum  = 0
+	defaultCNShardNum    = 0
 
 	// default configuration for services
 	defaultHostAddr    = "127.0.0.1"
@@ -87,6 +88,10 @@ type Options struct {
 		checkInterval   time.Duration
 		logStoreTimeout time.Duration
 		dnStoreTimeout  time.Duration
+	}
+
+	task struct {
+		taskStorage taskservice.TaskStorage
 	}
 }
 
@@ -152,6 +157,11 @@ func (opt *Options) validate() {
 	}
 	if opt.dn.heartbeatInterval == 0 {
 		opt.dn.heartbeatInterval = defaultDNHeartbeatInterval
+	}
+
+	// task configuration
+	if opt.task.taskStorage == nil {
+		opt.task.taskStorage = taskservice.NewMemTaskStorage()
 	}
 }
 
@@ -263,6 +273,11 @@ func (opt Options) WithDNHeartbeatInterval(interval time.Duration) Options {
 // WithLogHeartbeatInterval sets heartbeat interval fo log service.
 func (opt Options) WithLogHeartbeatInterval(interval time.Duration) Options {
 	opt.log.heartbeatInterval = interval
+	return opt
+}
+
+func (opt Options) WithTaskStorage(storage taskservice.TaskStorage) Options {
+	opt.task.taskStorage = storage
 	return opt
 }
 
