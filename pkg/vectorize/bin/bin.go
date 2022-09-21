@@ -111,6 +111,13 @@ func BinFloat[T constraints.Float](intputVector, resultVector *vector.Vector, pr
 		if err != nil {
 			return err
 		}
+		newVal, err := strconv.ParseInt(fmt.Sprintf("%1.0f", xs[idx]-T(val)), 10, 64)
+		if err != nil {
+			return err
+		}
+		if newVal != 0 {
+			val -= 1
+		}
 		res := uintToBinary(uint64(val))
 		rs = append(rs, res)
 	}
