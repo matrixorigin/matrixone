@@ -27,7 +27,7 @@ type FallbackShard []ShardPolicy
 
 var _ ShardPolicy = FallbackShard{}
 
-func (f FallbackShard) Batch(ctx context.Context, tableID string, getDefs func(context.Context) ([]engine.TableDef, error), batch *batch.Batch, nodes []logservicepb.DNStore) (sharded []*ShardedBatch, err error) {
+func (f FallbackShard) Batch(ctx context.Context, tableID ID, getDefs func(context.Context) ([]engine.TableDef, error), batch *batch.Batch, nodes []logservicepb.DNStore) (sharded []*ShardedBatch, err error) {
 	for _, policy := range f {
 		sharded, err := policy.Batch(ctx, tableID, getDefs, batch, nodes)
 		if err != nil {
@@ -41,7 +41,7 @@ func (f FallbackShard) Batch(ctx context.Context, tableID string, getDefs func(c
 	panic("all shard policy failed")
 }
 
-func (f FallbackShard) Vector(ctx context.Context, tableID string, getDefs func(context.Context) ([]engine.TableDef, error), colName string, vec *vector.Vector, nodes []logservicepb.DNStore) (sharded []*ShardedVector, err error) {
+func (f FallbackShard) Vector(ctx context.Context, tableID ID, getDefs func(context.Context) ([]engine.TableDef, error), colName string, vec *vector.Vector, nodes []logservicepb.DNStore) (sharded []*ShardedVector, err error) {
 	for _, policy := range f {
 		sharded, err := policy.Vector(ctx, tableID, getDefs, colName, vec, nodes)
 		if err != nil {

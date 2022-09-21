@@ -57,16 +57,19 @@ func Init(ctx context.Context, opts ...TracerProviderOption) (context.Context, e
 	config := &GetTracerProvider().tracerProviderConfig
 
 	// init Tracer
-	gTracer = GetTracerProvider().Tracer("MatrixOrigin")
+	gTracer = GetTracerProvider().Tracer("MatrixOne")
 
-	// init Node DefaultContext
+	// init DefaultContext / DefaultSpanContext
 	var spanId SpanID
 	spanId.SetByUUID(config.getNodeResource().NodeUuid)
-	sc := SpanContextWithIDs(nilTraceID, spanId)
+	_, span := gTracer.Start(ctx, "TraceInit", WithTraceID(nilTraceID), WithSpanID(spanId))
+	defer span.End()
+	sc := span.SpanContext()
 	SetDefaultSpanContext(&sc)
 	SetDefaultContext(ContextWithSpanContext(ctx, sc))
 
-	if err := initExport(ctx, config); err != nil {
+	// init Exporter
+	if err := initExporter(ctx, config); err != nil {
 		return nil, err
 	}
 
@@ -79,36 +82,26 @@ func Init(ctx context.Context, opts ...TracerProviderOption) (context.Context, e
 	return DefaultContext(), nil
 }
 
-func initExport(ctx context.Context, config *tracerProviderConfig) error {
+func initExporter(ctx context.Context, config *tracerProviderConfig) error {
 	if !config.IsEnable() {
-		logutil.Info("initExport pass.")
 		return nil
+	}
+	if config.needInit {
+		if err := InitSchema(ctx, config.sqlExecutor); err != nil {
+			return err
+		}
 	}
 	var p export.BatchProcessor
 	// init BatchProcess for trace/log/error
 	switch {
 	case config.batchProcessMode == InternalExecutor:
-		// init schema
-		if config.needInit {
-			if err := InitSchemaByInnerExecutor(ctx, config.sqlExecutor); err != nil {
-				return err
-			}
-		}
 		// register buffer pipe implements
-		export.Register(&MOSpan{}, NewBufferPipe2SqlWorker(
-			bufferWithSizeThreshold(MB),
-		))
+		export.Register(&MOSpan{}, NewBufferPipe2SqlWorker())
 		export.Register(&MOLog{}, NewBufferPipe2SqlWorker())
 		export.Register(&MOZapLog{}, NewBufferPipe2SqlWorker())
 		export.Register(&StatementInfo{}, NewBufferPipe2SqlWorker())
 		export.Register(&MOErrorHolder{}, NewBufferPipe2SqlWorker())
 	case config.batchProcessMode == FileService:
-		if config.needInit {
-			// PS: only in standalone mode or CN node can init schema
-			if err := InitExternalTblSchema(ctx, config.sqlExecutor); err != nil {
-				return err
-			}
-		}
 		export.Register(&MOSpan{}, NewBufferPipe2CSVWorker())
 		export.Register(&MOLog{}, NewBufferPipe2CSVWorker())
 		export.Register(&MOZapLog{}, NewBufferPipe2CSVWorker())
@@ -129,16 +122,13 @@ func initExport(ctx context.Context, config *tracerProviderConfig) error {
 	return nil
 }
 
+// InitSchema
+// PS: only in standalone or CN node can init schema
 func InitSchema(ctx context.Context, sqlExecutor func() ie.InternalExecutor) error {
 	config := &GetTracerProvider().tracerProviderConfig
-	switch {
-	case config.batchProcessMode == InternalExecutor:
-		if err := InitSchemaByInnerExecutor(ctx, sqlExecutor); err != nil {
-			return err
-		}
-	case config.batchProcessMode == FileService:
-		// PS: only in standalone mode or CN node can init schema
-		if err := InitExternalTblSchema(ctx, sqlExecutor); err != nil {
+	switch config.batchProcessMode {
+	case InternalExecutor, FileService:
+		if err := InitSchemaByInnerExecutor(ctx, sqlExecutor, config.batchProcessMode); err != nil {
 			return err
 		}
 	default:
@@ -152,7 +142,7 @@ func Shutdown(ctx context.Context) error {
 		return nil
 	}
 
-	GetTracerProvider().EnableTracer(false)
+	GetTracerProvider().SetEnable(false)
 	tracer := noopTracer{}
 	_ = atomic.SwapPointer((*unsafe.Pointer)(unsafe.Pointer(gTracer.(*MOTracer))), unsafe.Pointer(&tracer))
 

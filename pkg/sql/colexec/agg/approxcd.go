@@ -31,7 +31,7 @@ func NewApproxc[T any]() *ApproxCountDistic[T] {
 	return &ApproxCountDistic[T]{}
 }
 
-func (a *ApproxCountDistic[T1]) Grows(n int) {
+func (a *ApproxCountDistic[T]) Grows(n int) {
 	if len(a.Sk) == 0 {
 		a.Sk = make([]*hll.Sketch, 0)
 	}
@@ -107,4 +107,12 @@ func getTheBytes(value any) []byte {
 		panic("not support for type")
 	}
 	return data
+}
+
+func (a *ApproxCountDistic[T]) MarshalBinary() ([]byte, error) {
+	return types.Encode(&a.Sk)
+}
+
+func (a *ApproxCountDistic[T]) UnmarshalBinary(data []byte) error {
+	return types.Decode(data, &a.Sk)
 }

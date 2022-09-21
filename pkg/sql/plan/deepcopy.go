@@ -218,9 +218,12 @@ func DeepCopyColDef(col *plan.ColDef) *plan.ColDef {
 
 func DeepCopyTableDef(table *plan.TableDef) *plan.TableDef {
 	newTable := &plan.TableDef{
-		Name: table.Name,
-		Cols: make([]*plan.ColDef, len(table.Cols)),
-		Defs: make([]*plan.TableDef_DefType, len(table.Defs)),
+		Name:          table.Name,
+		Cols:          make([]*plan.ColDef, len(table.Cols)),
+		Defs:          make([]*plan.TableDef_DefType, len(table.Defs)),
+		TableType:     table.TableType,
+		Createsql:     table.Createsql,
+		Name2ColIndex: table.Name2ColIndex,
 	}
 
 	for idx, col := range table.Cols {

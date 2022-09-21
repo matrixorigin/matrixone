@@ -26,16 +26,29 @@ import (
 	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
+	"github.com/matrixorigin/matrixone/pkg/txn/storage/txn/memtable"
+	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	txnengine "github.com/matrixorigin/matrixone/pkg/vm/engine/txn"
 	"github.com/matrixorigin/matrixone/pkg/vm/mempool"
 	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/assert"
+
+	"github.com/prashantv/gostub"
 )
 
+func mockRecordStatement(ctx context.Context) (context.Context, *gostub.Stubs) {
+	stm := &trace.StatementInfo{}
+	ctx = trace.ContextWithStatement(ctx, stm)
+	stubs := gostub.Stub(&frontend.RecordStatement, func(context.Context, *frontend.Session, *process.Process, frontend.ComputationWrapper, time.Time) context.Context {
+		return ctx
+	})
+	return ctx, stubs
+}
+
 func TestFrontend(t *testing.T) {
-	t.Skip("Skip because of error handling refactor work.")
 	ctx, cancel := context.WithTimeout(
 		context.Background(),
 		time.Minute,
@@ -85,7 +98,7 @@ func TestFrontend(t *testing.T) {
 	}, math.MaxInt)
 	storage, err := NewMemoryStorage(
 		heap,
-		SnapshotIsolation,
+		memtable.SnapshotIsolation,
 		clock,
 	)
 	assert.Nil(t, err)
@@ -103,6 +116,9 @@ func TestFrontend(t *testing.T) {
 		FileService:   testutil.NewFS(),
 	}
 	ctx = context.WithValue(ctx, config.ParameterUnitKey, pu)
+
+	ctx, rsStubs := mockRecordStatement(ctx)
+	defer rsStubs.Reset()
 
 	err = frontend.InitSysTenant(ctx)
 	assert.Nil(t, err)
