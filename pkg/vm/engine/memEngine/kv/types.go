@@ -15,12 +15,13 @@
 package kv
 
 import (
-	"errors"
 	"sync"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
 var (
-	ErrNotExist = errors.New("not exist")
+	ErrNotExist = moerr.NewInternalError("not exist")
 )
 
 type KV struct {

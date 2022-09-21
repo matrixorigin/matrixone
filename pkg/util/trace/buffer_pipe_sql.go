@@ -85,7 +85,7 @@ func (t batchSqlHandler) NewItemBuffer(name string) bp.ItemBuffer[bp.HasName, an
 	case MOErrorType:
 		f = genErrorBatchSql
 	default:
-		panic(fmt.Errorf("unknown type %s", name))
+		panic(moerr.NewInternalError("unknown type %s", name))
 	}
 	opts = append(opts, bufferWithGenBatchFunc(f), bufferWithType(name))
 	opts = append(opts, t.defaultOpts...)
@@ -399,7 +399,7 @@ func (t batchCSVHandler) NewItemBuffer(name string) bp.ItemBuffer[bp.HasName, an
 		opts = append(opts, bufferWithFilterItemFunc(filterTraceInsertSql))
 	case MOErrorType:
 	default:
-		panic(fmt.Errorf("unknown type %s", name))
+		panic(moerr.NewInternalError("unknown type %s", name))
 	}
 	opts = append(opts, bufferWithGenBatchFunc(f), bufferWithType(name))
 	opts = append(opts, t.defaultOpts...)
@@ -430,7 +430,7 @@ func (t batchCSVHandler) NewItemBatchHandler(ctx context.Context) func(b any) {
 		defer span.End()
 		req, ok := b.(CSVRequest) // see genCsvData
 		if !ok {
-			panic(fmt.Errorf("batchCSVHandler meet unknown type: %v", reflect.ValueOf(b).Type()))
+			panic(moerr.NewInternalError("batchCSVHandler meet unknown type: %v", reflect.ValueOf(b).Type()))
 		}
 		if len(req.content) == 0 {
 			logutil.Warnf("meet empty csv content")

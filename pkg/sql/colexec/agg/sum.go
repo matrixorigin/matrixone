@@ -15,8 +15,7 @@
 package agg
 
 import (
-	"fmt"
-
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/sum"
@@ -51,7 +50,7 @@ func SumReturnType(typs []types.Type) types.Type {
 	case types.T_decimal128:
 		return typs[0]
 	}
-	panic(fmt.Errorf("unsupport type '%v' for sum", typs[0]))
+	panic(moerr.NewInternalError("unsupport type '%v' for sum", typs[0]))
 }
 
 func NewSum[T1 Numeric, T2 ReturnTyp]() *Sum[T1, T2] {

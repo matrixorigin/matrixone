@@ -18,15 +18,14 @@ import (
 	"fmt"
 	"sync/atomic"
 
-	"errors"
-
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	iops "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks/ops/base"
 	iw "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks/worker/base"
 )
 
-var ErrOpCancelled = errors.New("op cancelled")
+var ErrOpCancelled = moerr.NewInternalError("op cancelled")
 
 type Cmd = uint8
 

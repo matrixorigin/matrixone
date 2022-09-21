@@ -17,9 +17,10 @@ package logutil2
 import (
 	"context"
 	"fmt"
+	"testing"
+
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
-	"testing"
 )
 
 func TestLog(t *testing.T) {

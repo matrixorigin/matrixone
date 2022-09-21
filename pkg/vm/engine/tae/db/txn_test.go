@@ -16,7 +16,6 @@ package db
 
 import (
 	"bytes"
-	"errors"
 	"fmt"
 	"math/rand"
 	"sync"
@@ -51,7 +50,7 @@ var deal *catalog.Schema
 var repertory *catalog.Schema
 var app1Conf *APP1Conf
 
-var errNotEnoughRepertory = errors.New("not enough repertory")
+var errNotEnoughRepertory = moerr.NewInternalError("not enough repertory")
 
 type APP1Conf struct {
 	Users         int
@@ -270,7 +269,7 @@ func (c *APP1Client) GetGoodRepetory(goodId uint64) (id *common.ID, offset uint3
 			found = true
 			offset = uint32(row)
 			count = cntv.(uint64)
-			return fmt.Errorf("stop iteration")
+			return moerr.NewInternalError("stop iteration")
 		}, nil)
 		if found {
 			return

@@ -17,9 +17,10 @@ package segmentio
 import (
 	"bytes"
 	"encoding/binary"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"io"
 	"unsafe"
+
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 )
 
 type Log struct {

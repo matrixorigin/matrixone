@@ -95,7 +95,7 @@ func TestIsMoErrCode(t *testing.T) {
 	require.True(t, IsMoErrCode(err, ErrDivByZero))
 	require.False(t, IsMoErrCode(err, ErrOOM))
 
-	err2 := fmt.Errorf("what is this")
+	err2 := NewInternalError("what is this")
 	require.False(t, IsMoErrCode(err2, ErrDivByZero))
 	require.False(t, IsMoErrCode(err2, ErrOOM))
 }

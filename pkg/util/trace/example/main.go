@@ -17,6 +17,8 @@ package main
 import (
 	"context"
 	goErrors "errors"
+	"time"
+
 	"github.com/lni/dragonboat/v4/logger"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/logutil/logutil2"
@@ -24,7 +26,6 @@ import (
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"go.uber.org/zap"
-	"time"
 )
 
 var _ ie.InternalExecutor = &logOutputExecutor{}

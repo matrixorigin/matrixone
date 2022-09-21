@@ -1,4 +1,4 @@
-// Copyright 2021 Matrix Origin
+// Copyright 2022 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,31 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package common
-
-import (
-	"sync/atomic"
-
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-)
+package moerr
 
 var (
-	ErrClose = moerr.NewInternalError("closed")
+	ErrNoHardwareAddr     = NewInternalError("uuid: no Hardware address found")
+	ErrUUIDNodeIDTooShort = NewInternalError("uuid: nodeID too short")
 )
-
-type Closable interface {
-	IsClosed() bool
-	TryClose() bool
-}
-
-type ClosedState struct {
-	closed int32
-}
-
-func (c *ClosedState) IsClosed() bool {
-	return atomic.LoadInt32(&c.closed) == int32(1)
-}
-
-func (c *ClosedState) TryClose() bool {
-	return atomic.CompareAndSwapInt32(&c.closed, int32(0), int32(1))
-}

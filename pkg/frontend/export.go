@@ -16,13 +16,13 @@ package frontend
 
 import (
 	"bufio"
-	"errors"
 	"fmt"
 	"io"
 	"os"
 	"strconv"
 	"sync"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -93,7 +93,7 @@ var openNewFile = func(ep *tree.ExportParam, mrs *MysqlResultSet) error {
 		}
 		header += mrs.Columns[n-1].Name() + ep.Lines.TerminatedBy
 		if ep.MaxFileSize != 0 && uint64(len(header)) >= ep.MaxFileSize {
-			return errors.New("the header line size is over the maxFileSize")
+			return moerr.NewInternalError("the header line size is over the maxFileSize")
 		}
 		if err := writeDataToCSVFile(ep, []byte(header)); err != nil {
 			return err
@@ -166,7 +166,7 @@ var Write = func(ep *tree.ExportParam, output []byte) (int, error) {
 func writeToCSVFile(oq *outputQueue, output []byte) error {
 	if oq.ep.MaxFileSize != 0 && oq.ep.CurFileSize+uint64(len(output)) > oq.ep.MaxFileSize {
 		if oq.ep.Rows == 0 {
-			return errors.New("the OneLine size is over the maxFileSize")
+			return moerr.NewInternalError("the OneLine size is over the maxFileSize")
 		}
 		oq.ep.FileCnt++
 		if err := Flush(oq.ep); err != nil {
@@ -227,7 +227,7 @@ func exportDataToCSVFile(oq *outputQueue) error {
 		}
 		mysqlColumn, ok := column.(*MysqlColumn)
 		if !ok {
-			return fmt.Errorf("sendColumn need MysqlColumn")
+			return moerr.NewInternalError("sendColumn need MysqlColumn")
 		}
 		if isNil, err := oq.mrs.ColumnIsNull(0, i); err != nil {
 			return err
@@ -353,9 +353,9 @@ func exportDataToCSVFile(oq *outputQueue) error {
 				return err
 			}
 		case defines.MYSQL_TYPE_TIME:
-			return fmt.Errorf("unsupported DATE/DATETIME/TIMESTAMP/MYSQL_TYPE_TIME")
+			return moerr.NewInternalError("unsupported DATE/DATETIME/TIMESTAMP/MYSQL_TYPE_TIME")
 		default:
-			return fmt.Errorf("unsupported column type %d ", mysqlColumn.ColumnType())
+			return moerr.NewInternalError("unsupported column type %d ", mysqlColumn.ColumnType())
 		}
 	}
 	oq.ep.Rows++

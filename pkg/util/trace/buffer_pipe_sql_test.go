@@ -18,14 +18,17 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/stretchr/testify/require"
 	"io"
 	"os"
 	"reflect"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/util/stack"
+	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/util"
@@ -39,7 +42,7 @@ import (
 )
 
 var buf = new(bytes.Buffer)
-var err1 = fmt.Errorf("test1")
+var err1 = moerr.NewInternalError("test1")
 var err2 = errutil.Wrapf(err1, "test2")
 var testBaseBuffer2SqlOption = []buffer2SqlOption{bufferWithSizeThreshold(1 * KB)}
 var traceIDSpanIDColumnStr string
@@ -73,7 +76,7 @@ func init() {
 	traceIDSpanIDCsvStr = fmt.Sprintf(`%s,%s`, sc.TraceID.String(), sc.SpanID.String())
 
 	if err := agent.Listen(agent.Options{}); err != nil {
-		_ = fmt.Errorf("listen gops agent failed: %s", err)
+		_ = moerr.NewInternalError("listen gops agent failed: %s", err)
 		panic(err)
 	}
 	fmt.Println("Finish tests init.")
@@ -211,7 +214,7 @@ func Test_buffer2Sql_GetBatch_AllType(t *testing.T) {
 						SpanID:    _1SpanID,
 						Timestamp: uint64(0),
 						Level:     zapcore.InfoLevel,
-						Caller:    util.Caller(0),
+						Caller:    stack.Caller(0),
 						Message:   "info message",
 						Extra:     "{}",
 					},
@@ -233,7 +236,7 @@ func Test_buffer2Sql_GetBatch_AllType(t *testing.T) {
 						SpanID:    _1SpanID,
 						Timestamp: uint64(0),
 						Level:     zapcore.InfoLevel,
-						Caller:    util.Caller(0),
+						Caller:    stack.Caller(0),
 						Message:   "info message",
 						Extra:     "{}",
 					},
@@ -242,7 +245,7 @@ func Test_buffer2Sql_GetBatch_AllType(t *testing.T) {
 						SpanID:    _1SpanID,
 						Timestamp: uint64(time.Millisecond + time.Microsecond),
 						Level:     zapcore.DebugLevel,
-						Caller:    util.Caller(0),
+						Caller:    stack.Caller(0),
 						Message:   "debug message",
 						Extra:     "{}",
 					},
@@ -684,7 +687,7 @@ func Test_quote(t *testing.T) {
 			}
 		})
 	}
-	var err1 = errutil.WithContext(context.Background(), fmt.Errorf("test1"))
+	var err1 = errutil.WithContext(context.Background(), moerr.NewInternalError("test1"))
 	t.Logf("show quote(err): \"%s\"", quote(fmt.Sprintf("%+v", err1)))
 }
 
@@ -869,7 +872,7 @@ func Test_genCsvData(t *testing.T) {
 						SpanID:    _1SpanID,
 						Timestamp: uint64(0),
 						Level:     zapcore.InfoLevel,
-						Caller:    util.Caller(0),
+						Caller:    stack.Caller(0),
 						Message:   "info message",
 						Extra:     "{}",
 					},
@@ -888,7 +891,7 @@ func Test_genCsvData(t *testing.T) {
 						SpanID:    _1SpanID,
 						Timestamp: uint64(0),
 						Level:     zapcore.InfoLevel,
-						Caller:    util.Caller(0),
+						Caller:    stack.Caller(0),
 						Message:   "info message",
 						Extra:     "{}",
 					},
@@ -897,7 +900,7 @@ func Test_genCsvData(t *testing.T) {
 						SpanID:    _1SpanID,
 						Timestamp: uint64(time.Millisecond + time.Microsecond),
 						Level:     zapcore.DebugLevel,
-						Caller:    util.Caller(0),
+						Caller:    stack.Caller(0),
 						Message:   "debug message",
 						Extra:     "{}",
 					},

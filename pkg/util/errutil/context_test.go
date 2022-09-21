@@ -17,14 +17,15 @@ package errutil
 import (
 	"context"
 	goErrors "errors"
-	"github.com/matrixorigin/matrixone/pkg/util"
 	"reflect"
 	"testing"
+
+	"github.com/matrixorigin/matrixone/pkg/util/stack"
 )
 
 var ctx = context.Background()
 var testErr = goErrors.New("test error")
-var stackErr error = &withStack{cause: testErr, Stack: util.Callers(1)}
+var stackErr error = &withStack{cause: testErr, Stack: stack.Callers(1)}
 
 func TestGetContextTracer(t *testing.T) {
 	type args struct {

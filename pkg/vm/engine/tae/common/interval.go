@@ -15,15 +15,16 @@
 package common
 
 import (
-	"errors"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"sync/atomic"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 )
 
 var (
-	ErrIntervalNotContinous = errors.New("interval not continuous")
-	ErrIntervalInvalid      = errors.New("invalid interval")
+	ErrIntervalNotContinuous = moerr.NewInternalError("interval not continuous")
+	ErrIntervalInvalid       = moerr.NewInternalError("invalid interval")
 )
 
 type ClosedInterval struct {

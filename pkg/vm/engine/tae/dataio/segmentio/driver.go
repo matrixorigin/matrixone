@@ -17,11 +17,11 @@ package segmentio
 import (
 	"bytes"
 	"encoding/binary"
-	"errors"
 	"fmt"
 	"os"
 	"sync"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/compress"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/pierrec/lz4/v4"
@@ -38,8 +38,8 @@ const LOG_SIZE = INODE_NUM * INODE_SIZE
 const HOLE_SIZE = 512 * INODE_SIZE
 const MAGIC = 0xFFFFFFFF
 
-var ErrInodeLimit = errors.New("tae driver: Too many inodes")
-var ErrNoSpace = errors.New("tae driver: No space")
+var ErrInodeLimit = moerr.NewInternalError("tae driver: Too many inodes")
+var ErrNoSpace = moerr.NewInternalError("tae driver: No space")
 
 type SuperBlock struct {
 	version   uint64

@@ -15,8 +15,9 @@
 package aggut
 
 import (
-	agg2 "github.com/matrixorigin/matrixone/pkg/sql/colexec/agg"
 	"testing"
+
+	agg2 "github.com/matrixorigin/matrixone/pkg/sql/colexec/agg"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
