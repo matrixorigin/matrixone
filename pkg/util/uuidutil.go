@@ -35,7 +35,7 @@ var getDefaultHardwareAddr = func() (net.HardwareAddr, error) {
 			return iface.HardwareAddr, nil
 		}
 	}
-	return []byte{}, moerr.ErrNoHardwareAddr
+	return []byte{}, moerr.NewInternalError("uuid: no Hardware address found")
 }
 
 // docker mac addr range: [02:42:ac:11:00:00, 02:42:ac:11:ff:ff]
@@ -68,7 +68,7 @@ func SetUUIDNodeID(nodeUuid []byte) error {
 	var hash = make([]byte, 0, 16)
 	hash = hasher.Sum(hash[:])
 	if !uuid.SetNodeID(hash[:]) {
-		return moerr.ErrUUIDNodeIDTooShort
+		return moerr.NewInternalError("uuid: nodeID too short")
 	}
 	return nil
 }
