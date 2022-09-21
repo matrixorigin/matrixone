@@ -17,6 +17,7 @@ package txnstorage
 import (
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/stretchr/testify/assert"
 )
@@ -108,8 +109,7 @@ func TestTableIsolation(t *testing.T) {
 		value: 3,
 	})
 	assert.NotNil(t, err)
-	var dup *ErrPrimaryKeyDuplicated
-	assert.ErrorAs(t, err, &dup)
+	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrPrimaryKeyDuplicated))
 
 	// read committed
 	iter := table.NewIter(tx1)

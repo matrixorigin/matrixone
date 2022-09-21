@@ -16,7 +16,6 @@ package main
 
 import (
 	"context"
-	"errors"
 	"flag"
 	"fmt"
 	"math/rand"
@@ -41,6 +40,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/export"
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
+	"go.uber.org/zap"
 
 	"github.com/google/uuid"
 )
@@ -95,8 +95,9 @@ func startService(cfg *Config, stopper *stopper.Stopper) error {
 		return err
 	}
 
-	// TODO: Use real task storage.
-	ts := taskservice.NewTaskService(taskservice.NewMemTaskStorage())
+	// TODO: Use real task storage. And Each service initializes the logger with its own UUID
+	ts := taskservice.NewTaskService(taskservice.NewMemTaskStorage(),
+		logutil.GetGlobalLogger().With(zap.String("node", cfg.LogService.UUID)))
 
 	if err = initTraceMetric(context.Background(), cfg, stopper, fs); err != nil {
 		return err
@@ -220,7 +221,7 @@ func startStandalone(
 	for {
 		var err error
 		client, err = logservice.NewCNHAKeeperClient(ctx, cfg.HAKeeperClient)
-		if errors.Is(err, logservice.ErrNotHAKeeper) {
+		if moerr.IsMoErrCode(err, moerr.ErrNoHAKeeper) {
 			// not ready
 			logutil.Info("hakeeper not ready, retry")
 			time.Sleep(time.Second)
@@ -285,7 +286,7 @@ func initTraceMetric(ctx context.Context, cfg *Config, stopper *stopper.Stopper,
 			nodeUUID = uuid.New()
 		}
 		if err := util.SetUUIDNodeID(nodeUUID[:]); err != nil {
-			return moerr.NewPanicError(err)
+			return moerr.ConvertPanicError(err)
 		}
 		UUID = nodeUUID.String()
 	case dnServiceType:

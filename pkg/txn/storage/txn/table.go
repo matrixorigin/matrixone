@@ -20,6 +20,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/tidwall/btree"
 )
 
@@ -99,9 +100,7 @@ func (t *Table[K, R]) Insert(
 		return err
 	}
 	if existed != nil {
-		return &ErrPrimaryKeyDuplicated{
-			Key: key,
-		}
+		return moerr.NewPrimaryKeyDuplicated(key)
 	}
 
 	if err := physicalRow.Values.Insert(tx.Time, tx, &row); err != nil {
@@ -306,9 +305,7 @@ func (t *Table[K, R]) CommitTx(tx *Transaction) error {
 			if value.Visible(tx.Time, tx.ID) &&
 				value.BornTx.ID != tx.ID &&
 				value.BornTime.After(tx.BeginTime) {
-				err = &ErrPrimaryKeyDuplicated{
-					Key: physicalRow.Key,
-				}
+				err = moerr.NewPrimaryKeyDuplicated(physicalRow.Key)
 				break
 			}
 

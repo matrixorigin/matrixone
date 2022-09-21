@@ -15,8 +15,8 @@
 package plan
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/errors"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
@@ -67,7 +67,7 @@ func buildPrepare(stmt tree.Prepare, ctx CompilerContext) (*Plan, error) {
 			return nil, err
 		}
 		if len(stmts) > 1 {
-			return nil, errors.New("", "can't prepare from muti statements")
+			return nil, moerr.NewInvalidInput("cannot prepare multi statements")
 		}
 		stmtName = string(pstmt.Name)
 		preparePlan, err = getPreparePlan(ctx, stmts[0])
@@ -82,7 +82,7 @@ func buildPrepare(stmt tree.Prepare, ctx CompilerContext) (*Plan, error) {
 
 	switch pp := preparePlan.Plan.(type) {
 	case *plan.Plan_Tcl, *plan.Plan_Dcl:
-		return nil, errors.New("", "can't prepare from TCL and DCL statement")
+		return nil, moerr.NewInvalidInput("cannot prepare TCL and DCL statement")
 
 	case *plan.Plan_Ddl:
 		if pp.Ddl.Query != nil {
@@ -94,7 +94,7 @@ func buildPrepare(stmt tree.Prepare, ctx CompilerContext) (*Plan, error) {
 			}
 			// TODO : need confirm
 			if len(getParamRule.params) > 0 {
-				return nil, errors.New("", "ArgExpr is not support in DDL statement")
+				return nil, moerr.NewInvalidInput("cannot plan DDL statement")
 			}
 		}
 
@@ -202,7 +202,7 @@ func buildSetVariables(stmt *tree.SetVar, ctx CompilerContext) (*Plan, error) {
 			Name:   assignment.Name,
 		}
 		if assignment.Value == nil {
-			return nil, errors.New("", "value is required in SET statement")
+			return nil, moerr.NewInvalidInput("Set statement has no value")
 		}
 		item.Value, err = binder.baseBindExpr(assignment.Value, 0, true)
 		if err != nil {
