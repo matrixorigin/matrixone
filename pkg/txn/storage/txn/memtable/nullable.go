@@ -12,24 +12,29 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package txnstorage
+package memtable
 
-type IsolationPolicy struct {
-	Read ReadPolicy
-}
-
-type ReadPolicy uint8
-
-const (
-	ReadCommitted ReadPolicy = iota + 1
-	ReadSnapshot
-	ReadNoStale
+import (
+	"bytes"
+	"fmt"
 )
 
-var SnapshotIsolation = IsolationPolicy{
-	Read: ReadSnapshot,
+type Nullable struct {
+	IsNull bool
+	Value  any
 }
 
-var Serializable = IsolationPolicy{
-	Read: ReadNoStale,
+func (n Nullable) Equal(n2 Nullable) bool {
+	if n.IsNull || n2.IsNull {
+		return false
+	}
+	bsA, ok := n.Value.([]byte)
+	if ok {
+		bsB, ok := n2.Value.([]byte)
+		if ok {
+			return bytes.Equal(bsA, bsB)
+		}
+		panic(fmt.Sprintf("type not the same: %T %T", n.Value, n2.Value))
+	}
+	return n.Value == n2.Value
 }
