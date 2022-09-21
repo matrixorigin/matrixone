@@ -32,6 +32,18 @@ func New(db *kv.KV, n engine.Node) *MemEngine {
 	}
 }
 
+func (e *MemEngine) New(_ context.Context, _ client.TxnOperator) error {
+	return nil
+}
+
+func (e *MemEngine) Commit(_ context.Context, _ client.TxnOperator) error {
+	return nil
+}
+
+func (e *MemEngine) Rollback(_ context.Context, _ client.TxnOperator) error {
+	return nil
+}
+
 func (e *MemEngine) Delete(_ context.Context, _ string, _ client.TxnOperator) error {
 	return nil
 }

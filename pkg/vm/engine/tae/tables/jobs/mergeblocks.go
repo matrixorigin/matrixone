@@ -19,6 +19,7 @@ import (
 	"unsafe"
 
 	"github.com/RoaringBitmap/roaring"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -27,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/indexwrapper"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/txnentries"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 	"go.uber.org/zap/zapcore"
@@ -142,6 +144,39 @@ func (task *mergeBlocksTask) MarshalLogObject(enc zapcore.ObjectEncoder) (err er
 	return
 }
 
+func (task *mergeBlocksTask) schedIOTask(scope *common.ID, closure func() error) error {
+	taskHandle, err := task.scheduler.ScheduleScopedFn(tasks.WaitableCtx, tasks.IOTask, scope, closure)
+	if err != nil {
+		return err
+	}
+	return taskHandle.WaitDone()
+}
+
+// processBlockColumn build index for a cloumn add meta to a metaReceiver, and flush data to the block
+func (task *mergeBlocksTask) processBlockColumn(
+	metaReceiver *indexwrapper.IndicesMeta,
+	ts types.TS,
+	blk *catalog.BlockEntry,
+	colDef *catalog.ColDef,
+	data containers.Vector,
+	isPk, isSorted bool) error {
+	// build index
+	file, err := blk.GetBlockData().GetBlockFile().OpenColumn(colDef.Idx)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+	metas, err := BuildColumnIndex(file, colDef, data, isPk, isSorted)
+	if err != nil {
+		return err
+	}
+	metaReceiver.AddIndex(metas...)
+
+	// write data
+	closure := blk.GetBlockData().FlushColumnDataClosure(ts, colDef.Idx, data, false)
+	return task.schedIOTask(blk.AsCommonID(), closure)
+}
+
 func (task *mergeBlocksTask) Execute() (err error) {
 	logutil.Info("[Start]", common.OperationField(fmt.Sprintf("[%d]mergeblocks", task.ID())),
 		common.OperandField(task))
@@ -167,38 +202,23 @@ func (task *mergeBlocksTask) Execute() (err error) {
 	ids := make([]*common.ID, 0, len(task.compacted))
 	task.deletes = make([]*roaring.Bitmap, len(task.compacted))
 
-	// 1. Prepare sort key resources
+	// Prepare sort key resources
 	// If there's no sort key, use physical address key
+	var sortColDef *catalog.ColDef
+	if schema.HasSortKey() {
+		sortColDef = schema.GetSingleSortKey()
+	} else {
+		sortColDef = schema.PhyAddrKey
+	}
+
 	for i, block := range task.compacted {
-		var vec containers.Vector
-		if !schema.HasSortKey() {
-			if view, err = block.GetColumnDataById(schema.PhyAddrKey.Idx, nil); err != nil {
-				return
-			}
-			task.deletes[i] = view.DeleteMask
-			view.ApplyDeletes()
-			vec = view.Orphan()
-		} else if schema.SortKey.Size() == 1 {
-			if view, err = block.GetColumnDataById(schema.SortKey.Defs[0].Idx, nil); err != nil {
-				return
-			}
-			task.deletes[i] = view.DeleteMask
-			view.ApplyDeletes()
-			vec = view.Orphan()
-		} else {
-			cols := make([]containers.Vector, schema.SortKey.Size())
-			for idx := range cols {
-				if view, err = block.GetColumnDataById(schema.SortKey.Defs[idx].Idx, nil); err != nil {
-					return
-				}
-				task.deletes[i] = view.DeleteMask
-				view.ApplyDeletes()
-				cols[idx] = view.Orphan()
-				defer cols[idx].Close()
-			}
-			vec = model.EncodeCompoundColumn(cols...)
+		if view, err = block.GetColumnDataById(sortColDef.Idx, nil); err != nil {
+			return
 		}
 		defer view.Close()
+		task.deletes[i] = view.DeleteMask
+		view.ApplyDeletes()
+		vec := view.Orphan()
 		defer vec.Close()
 		vecs = append(vecs, vec)
 		rows[i] = uint32(vec.Length())
@@ -206,6 +226,7 @@ func (task *mergeBlocksTask) Execute() (err error) {
 		length += vec.Length()
 		ids = append(ids, block.Fingerprint())
 	}
+
 	to := make([]uint32, 0)
 	maxrow := schema.BlockMaxRows
 	totalRows := length
@@ -232,13 +253,12 @@ func (task *mergeBlocksTask) Execute() (err error) {
 	// logutil.Infof("sortedIdx is %v", sortedIdx)
 
 	ts := task.txn.GetStartTS()
-	var flushTask tasks.Task
 	length = 0
 	var blk handle.Block
 	toAddr := make([]uint32, 0, len(vecs))
+	// index meta for every created block
+	indexMetas := make([]*indexwrapper.IndicesMeta, 0, len(vecs))
 	// Prepare new block placeholder
-	// Build and flush block index if sort key is defined
-	// Flush sort key it correlates to only one column
 	for _, vec := range vecs {
 		toAddr = append(toAddr, uint32(length))
 		length += vec.Length()
@@ -247,33 +267,17 @@ func (task *mergeBlocksTask) Execute() (err error) {
 			return err
 		}
 		task.createdBlks = append(task.createdBlks, blk.GetMeta().(*catalog.BlockEntry))
-		meta := blk.GetMeta().(*catalog.BlockEntry)
+		indexMetas = append(indexMetas, indexwrapper.NewEmptyIndicesMeta())
+	}
 
-		if !schema.HasSortKey() {
-			continue
-		}
+	// Build and flush block index if sort key is defined
+	// Flush sort key it correlates to only one column
 
-		def := schema.SortKey.Defs[0]
-
-		// logutil.Infof("Flushing %s %v", meta.AsCommonID().String(), def)
-		// Flush sort key correlated column
-		if schema.SortKey.Size() == 1 {
-			closure := meta.GetBlockData().FlushColumnDataClosure(ts, def.Idx, vec, false)
-			flushTask, err = task.scheduler.ScheduleScopedFn(tasks.WaitableCtx, tasks.IOTask, meta.AsCommonID(), closure)
-			if err != nil {
-				return
+	if !sortColDef.IsPhyAddr() { // it is pk column
+		for i, blk := range task.createdBlks {
+			if err = task.processBlockColumn(indexMetas[i], ts, blk, sortColDef, vecs[i], true, true); err != nil {
+				return err
 			}
-			if err = flushTask.WaitDone(); err != nil {
-				return
-			}
-		}
-		// Flush index
-		if err = BuildAndFlushIndex(meta.GetBlockData().GetBlockFile(), meta, vec); err != nil {
-			return
-		}
-		// Replay index
-		if err = meta.GetBlockData().ReplayIndex(); err != nil {
-			return
 		}
 	}
 
@@ -286,14 +290,11 @@ func (task *mergeBlocksTask) Execute() (err error) {
 		}
 		defer vec.Close()
 		closure := blk.GetBlockData().FlushColumnDataClosure(ts, phyAddr.Idx, vec, false)
-		flushTask, err = task.scheduler.ScheduleScopedFn(tasks.WaitableCtx, tasks.IOTask, blk.AsCommonID(), closure)
-		if err != nil {
-			return err
-		}
-		if err = flushTask.WaitDone(); err != nil {
+		if err = task.schedIOTask(blk.AsCommonID(), closure); err != nil {
 			return err
 		}
 	}
+
 	for _, def := range schema.ColDefs {
 		// Skip
 		// PhyAddr column was processed before
@@ -318,30 +319,30 @@ func (task *mergeBlocksTask) Execute() (err error) {
 		}
 		for i := range vecs {
 			blk := task.createdBlks[i]
-			closure := blk.GetBlockData().FlushColumnDataClosure(ts, def.Idx, vecs[i], false)
-			flushTask, err = task.scheduler.ScheduleScopedFn(
-				tasks.WaitableCtx,
-				tasks.IOTask,
-				blk.AsCommonID(),
-				closure)
-			if err != nil {
-				return
-			}
-			if err = flushTask.WaitDone(); err != nil {
-				return
+			if err = task.processBlockColumn(indexMetas[i], ts, blk, def, vecs[i], false, false); err != nil {
+				return err
 			}
 		}
 	}
+
 	for i, blk := range task.createdBlks {
-		closure := blk.GetBlockData().SyncBlockDataClosure(ts, rows[i])
-		flushTask, err = task.scheduler.ScheduleScopedFn(tasks.WaitableCtx, tasks.IOTask, blk.AsCommonID(), closure)
+		indexMetaBinary, err := indexMetas[i].Marshal()
 		if err != nil {
-			return
+			return err
 		}
-		if err = flushTask.WaitDone(); err != nil {
-			return
+		blkData := blk.GetBlockData()
+		if err = blkData.GetBlockFile().WriteIndexMeta(indexMetaBinary); err != nil {
+			return err
+		}
+		closure := blkData.SyncBlockDataClosure(ts, rows[i])
+		if err = task.schedIOTask(blk.AsCommonID(), closure); err != nil {
+			return err
+		}
+		if err = blkData.ReplayIndex(); err != nil {
+			return err
 		}
 	}
+
 	for _, compacted := range task.compacted {
 		seg := compacted.GetSegment()
 		if err = seg.SoftDeleteBlock(compacted.Fingerprint().BlockID); err != nil {

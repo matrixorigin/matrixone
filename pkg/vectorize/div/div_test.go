@@ -104,12 +104,8 @@ func TestDec64DivByZero(t *testing.T) {
 	cv := testutil.MakeDecimal128Vector(cs, nil, types.T_decimal128.ToType())
 
 	err := Decimal64VecDiv(av, bv, cv)
-	if err == nil {
-		if moerror, ok := err.(*moerr.Error); ok {
-			if moerror.Code != moerr.DIVIVISION_BY_ZERO {
-				t.Fatalf("should have div by zero error.")
-			}
-		} else {
+	if err != nil {
+		if !moerr.IsMoErrCode(err, moerr.ErrDivByZero) {
 			t.Fatalf("should have div by zero error.")
 		}
 	}
@@ -129,12 +125,8 @@ func TestDec128DivByZero(t *testing.T) {
 	cv := testutil.MakeDecimal128Vector(cs, nil, types.T_decimal128.ToType())
 
 	err := Decimal128VecDiv(av, bv, cv)
-	if err == nil {
-		if moerror, ok := err.(*moerr.Error); ok {
-			if moerror.Code != moerr.DIVIVISION_BY_ZERO {
-				t.Fatalf("should have div by zero error.")
-			}
-		} else {
+	if err != nil {
+		if !moerr.IsMoErrCode(err, moerr.ErrDivByZero) {
 			t.Fatalf("should have div by zero error.")
 		}
 	}

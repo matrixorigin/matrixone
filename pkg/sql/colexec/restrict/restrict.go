@@ -18,8 +18,8 @@ import (
 	"bytes"
 	"fmt"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/sql/errors"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -54,11 +54,11 @@ func Call(idx int, proc *process.Process, arg any) (bool, error) {
 	}
 	defer vec.Free(proc.GetMheap())
 	if proc.OperatorOutofMemory(int64(vec.Size())) {
-		return false, errors.New("", "out of memory")
+		return false, moerr.NewOOM()
 	}
 	anal.Alloc(int64(vec.Size()))
 	if !vec.GetType().IsBoolean() {
-		return false, errors.New("", "Only bool expression can be used as filter condition.")
+		return false, moerr.NewInvalidInput("filter condition is not boolean")
 	}
 	bs := vector.GetColumn[bool](vec)
 	if vec.IsScalar() {

@@ -21,6 +21,7 @@ import (
 	"testing"
 
 	"github.com/RoaringBitmap/roaring"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -333,7 +334,7 @@ func getAvailablePort(host string) (string, error) {
 	}
 
 	if port == 0 {
-		return "", ErrFailAllocatePort
+		return "", moerr.NewInternalError("failed to allocate")
 	}
 	return strconv.Itoa(port), nil
 }

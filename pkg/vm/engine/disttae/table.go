@@ -39,19 +39,36 @@ func (tbl *table) Ranges(ctx context.Context) ([][]byte, error) {
 }
 
 func (tbl *table) TableDefs(ctx context.Context) ([]engine.TableDef, error) {
-	return nil, nil
+	return tbl.defs, nil
 }
 
 func (tbl *table) GetPrimaryKeys(ctx context.Context) ([]*engine.Attribute, error) {
-	return nil, nil
+	attrs := make([]*engine.Attribute, 0, 1)
+	for _, def := range tbl.defs {
+		if attr, ok := def.(*engine.AttributeDef); ok {
+			if attr.Attr.Primary {
+				attrs = append(attrs, &attr.Attr)
+			}
+		}
+	}
+	return attrs, nil
 }
 
 func (tbl *table) GetHideKeys(ctx context.Context) ([]*engine.Attribute, error) {
-	return nil, nil
+	attrs := make([]*engine.Attribute, 0, 1)
+	for _, def := range tbl.defs {
+		if attr, ok := def.(*engine.AttributeDef); ok {
+			if attr.Attr.IsHidden {
+				attrs = append(attrs, &attr.Attr)
+			}
+		}
+	}
+	return attrs, nil
 }
 
 func (tbl *table) Write(ctx context.Context, bat *batch.Batch) error {
-	return nil
+	return tbl.db.txn.WriteBatch(INSERT, tbl.db.databaseId, tbl.tableId,
+		tbl.db.databaseName, tbl.tableName, bat)
 }
 
 func (tbl *table) Update(ctx context.Context, bat *batch.Batch) error {
@@ -59,7 +76,10 @@ func (tbl *table) Update(ctx context.Context, bat *batch.Batch) error {
 }
 
 func (tbl *table) Delete(ctx context.Context, vec *vector.Vector, name string) error {
-	return nil
+	bat := batch.NewWithSize(1)
+	bat.Vecs[0] = vec
+	return tbl.db.txn.WriteBatch(INSERT, tbl.db.databaseId, tbl.tableId,
+		tbl.db.databaseName, tbl.tableName, bat)
 }
 
 func (tbl *table) Truncate(ctx context.Context) (uint64, error) {

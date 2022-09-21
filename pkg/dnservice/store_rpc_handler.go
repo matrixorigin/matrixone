@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
@@ -148,7 +149,7 @@ func (s *store) validDNShard(request *txn.TxnRequest, response *txn.TxnResponse)
 		s.mu.RLock()
 		defer s.mu.RUnlock()
 		response.TxnError = &txn.TxnError{
-			Code: txn.ErrorCode_DNShardNotFound,
+			Code: int32(moerr.ErrDNShardNotFound),
 			Message: fmt.Sprintf("DNShard[%s] not found on DNStore[%s]",
 				shard.DebugString(),
 				s.mu.metadata.UUID),
