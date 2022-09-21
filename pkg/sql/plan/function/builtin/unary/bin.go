@@ -64,7 +64,7 @@ func BinFloat[T constraints.Float](vectors []*vector.Vector, proc *process.Proce
 		vector.SetCol(resultVector, resultValues)
 		err := bin.BinFloat[T](inputVector, resultVector, proc)
 		if err != nil {
-			return nil, moerr.New(moerr.INVALID_ARGUMENT, "The input value is out of range")
+			return nil, moerr.NewInvalidInput("The input value is out of range")
 		}
 		return resultVector, nil
 	} else {
@@ -74,7 +74,7 @@ func BinFloat[T constraints.Float](vectors []*vector.Vector, proc *process.Proce
 		}
 		err = bin.BinFloat[T](inputVector, resultVector, proc)
 		if err != nil {
-			return nil, moerr.New(moerr.INVALID_ARGUMENT, "The input value is out of range")
+			return nil, moerr.NewInvalidInput("The input value is out of range")
 		}
 		return resultVector, nil
 	}
