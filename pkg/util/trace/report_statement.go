@@ -108,7 +108,6 @@ func (s *StatementInfo) CsvFields() []string {
 		result = append(result, fmt.Sprintf("%s", s.Error))
 	}
 	result = append(result, s.ExecPlan2Json())
-	result = append(result, s.ExecPlanStats2Json())
 
 	return result
 }
@@ -119,18 +118,7 @@ func (s *StatementInfo) ExecPlan2Json() string {
 	}
 	json, err := json.Marshal(s.ExecPlan)
 	if err != nil {
-		panic(moerr.NewPanicError(err))
-	}
-	return string(json)
-}
-
-func (s *StatementInfo) ExecPlanStats2Json() string {
-	if s.ExecPlanStats == nil {
-		return "{}"
-	}
-	json, err := json.Marshal(s.ExecPlanStats)
-	if err != nil {
-		panic(moerr.NewPanicError(err))
+		return fmt.Sprintf(`{"err": %q}`, err.Error())
 	}
 	return string(json)
 }
@@ -138,10 +126,6 @@ func (s *StatementInfo) ExecPlanStats2Json() string {
 // SetExecPlan record execPlan should be TxnComputationWrapper.plan obj, which support 2json.
 func (s *StatementInfo) SetExecPlan(execPlan any) {
 	s.ExecPlan = execPlan
-}
-
-func (s *StatementInfo) SetExecPlanStats(stats any) {
-	s.ExecPlanStats = stats
 }
 
 func (s *StatementInfo) SetTxnIDIsZero(id []byte) {
@@ -158,7 +142,7 @@ func (s *StatementInfo) Report(ctx context.Context) {
 var EndStatement = func(ctx context.Context, err error) time.Time {
 	s := StatementFromContext(ctx)
 	if s == nil {
-		panic(moerr.NewPanicError(fmt.Errorf("no statement info in context")))
+		panic(moerr.NewInternalError("no statement info in context"))
 	}
 	endTime := util.NowNS()
 	if s.end {

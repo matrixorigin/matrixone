@@ -36,7 +36,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/sql/errors"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
@@ -1615,10 +1614,6 @@ func (cwft *TxnComputationWrapper) Run(ts uint64) error {
 	return nil
 }
 
-func (cwft *TxnComputationWrapper) RecordExecPlanStats(ctx context.Context) error {
-	return cwft.compile.RecordExecPlanStats(ctx)
-}
-
 func buildPlan(requestCtx context.Context, ses *Session, ctx plan2.CompilerContext, stmt tree.Statement) (*plan2.Plan, error) {
 	var ret *plan2.Plan
 	var err error
@@ -2090,7 +2085,6 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			if err = runner.Run(0); err != nil {
 				goto handleFailed
 			}
-			_ = runner.RecordExecPlanStats(requestCtx)
 			if ses.showStmtType == ShowColumns {
 				if err = handleShowColumns(ses); err != nil {
 					goto handleFailed
@@ -2139,7 +2133,6 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			if err = runner.Run(0); err != nil {
 				goto handleFailed
 			}
-			_ = runner.RecordExecPlanStats(requestCtx)
 
 			if !ses.Pu.SV.DisableRecordTimeElapsedOfSqlRequest {
 				logutil.Infof("time of Exec.Run : %s", time.Since(runBegin).String())

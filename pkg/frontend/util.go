@@ -445,7 +445,7 @@ func (s statementStatus) String() string {
 func logStatementStatus(ctx context.Context, ses *Session, stmt tree.Statement, status statementStatus, err error) {
 	stm := trace.StatementFromContext(ctx)
 	if stm == nil {
-		panic(moerr.NewPanicError(fmt.Errorf("no statement info in context")))
+		panic(moerr.NewInternalError("no statement info in context"))
 	}
 	stmtStr := stm.Statement
 	logStatementStringStatus(ctx, ses, stmtStr, status, err)

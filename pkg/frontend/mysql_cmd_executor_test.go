@@ -94,7 +94,6 @@ func Test_mce(t *testing.T) {
 
 		runner := mock_frontend.NewMockComputationRunner(ctrl)
 		runner.EXPECT().Run(gomock.Any()).Return(nil).AnyTimes()
-		runner.EXPECT().RecordExecPlanStats(ctx).Return(nil).AnyTimes()
 
 		create_1 := mock_frontend.NewMockComputationWrapper(ctrl)
 		stmts, err = parsers.Parse(dialect.MYSQL, "create table A(a varchar(100),b int,c float)")

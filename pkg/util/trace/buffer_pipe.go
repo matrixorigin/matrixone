@@ -305,7 +305,6 @@ var genStatementBatchSql = func(in []IBuffer2SqlItem, buf *bytes.Buffer) any {
 	buf.WriteString(", `error`")
 	buf.WriteString(", `duration`")
 	buf.WriteString(", `exec_plan`")
-	buf.WriteString(", `exec_plan_stats`")
 	buf.WriteString(") values ")
 
 	moNode := GetNodeResource()
@@ -339,7 +338,6 @@ var genStatementBatchSql = func(in []IBuffer2SqlItem, buf *bytes.Buffer) any {
 			buf.WriteString(fmt.Sprintf(`, %q`, s.Error))
 		}
 		buf.WriteString(fmt.Sprintf(`, %q`, s.ExecPlan2Json()))
-		buf.WriteString(fmt.Sprintf(`, %q`, s.ExecPlanStats2Json()))
 		buf.WriteString("),")
 
 		s.exported = true
