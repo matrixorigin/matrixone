@@ -272,7 +272,7 @@ func initTraceMetric(ctx context.Context, cfg *Config, stopper *stopper.Stopper,
 	var writerFactory export.FSWriterFactory
 	var err error
 	var UUID string
-	var init sync.WaitGroup
+	var initWG sync.WaitGroup
 	SV := cfg.getObservabilityConfig()
 
 	ServerType := strings.ToUpper(cfg.ServiceType)
@@ -299,7 +299,7 @@ func initTraceMetric(ctx context.Context, cfg *Config, stopper *stopper.Stopper,
 		writerFactory = export.GetFSWriterFactory(fs, UUID, ServerType)
 	}
 	if !SV.DisableTrace {
-		init.Add(1)
+		initWG.Add(1)
 		stopper.RunNamedTask("trace", func(ctx context.Context) {
 			if ctx, err = trace.Init(ctx,
 				trace.WithMOVersion(SV.MoVersion),
@@ -312,7 +312,7 @@ func initTraceMetric(ctx context.Context, cfg *Config, stopper *stopper.Stopper,
 			); err != nil {
 				panic(err)
 			}
-			init.Done()
+			initWG.Done()
 			<-ctx.Done()
 			// flush trace/log/error framework
 			if err = trace.Shutdown(trace.DefaultContext()); err != nil {
@@ -320,7 +320,7 @@ func initTraceMetric(ctx context.Context, cfg *Config, stopper *stopper.Stopper,
 				panic(err)
 			}
 		})
-		init.Wait()
+		initWG.Wait()
 	}
 	if !SV.DisableMetric {
 		metric.InitMetric(ctx, nil, &SV, UUID, metric.ALL_IN_ONE_MODE, metric.WithWriterFactory(writerFactory))
