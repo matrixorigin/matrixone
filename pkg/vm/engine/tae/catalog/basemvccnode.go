@@ -91,7 +91,7 @@ func (un *EntryMVCCNode) PrepareCommit() (err error) {
 	return nil
 }
 func (un *EntryMVCCNode) String() string {
-	return fmt.Sprintf("CreatedAt=%v,DeletedAt=%v", un.CreatedAt, un.DeletedAt)
+	return fmt.Sprintf("[C@%s,D@%s]", un.CreatedAt.ToString(), un.DeletedAt.ToString())
 }
 func (un *EntryMVCCNode) ApplyCommit(ts types.TS) (err error) {
 	if un.CreatedAt == txnif.UncommitTS {

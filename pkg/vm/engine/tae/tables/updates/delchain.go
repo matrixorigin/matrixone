@@ -23,16 +23,15 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 
 	"github.com/RoaringBitmap/roaring"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 )
 
 type DeleteChain struct {
 	*sync.RWMutex
-	*common.GenericSortedDList[*DeleteNode]
+	*txnbase.MVCCChain
 	mvcc *MVCCHandle
 	cnt  uint32
 }
@@ -42,9 +41,9 @@ func NewDeleteChain(rwlocker *sync.RWMutex, mvcc *MVCCHandle) *DeleteChain {
 		rwlocker = new(sync.RWMutex)
 	}
 	chain := &DeleteChain{
-		RWMutex:            rwlocker,
-		GenericSortedDList: common.NewGenericSortedDList(compareDeleteNode),
-		mvcc:               mvcc,
+		RWMutex:   rwlocker,
+		MVCCChain: txnbase.NewMVCCChain(compareDeleteNode, NewEmptyDeleteNode),
+		mvcc:      mvcc,
 	}
 	return chain
 }
@@ -60,98 +59,77 @@ func (chain *DeleteChain) GetDeleteCnt() uint32 {
 func (chain *DeleteChain) StringLocked() string {
 	msg := "DeleteChain:"
 	line := 1
-	chain.LoopChainLocked(func(n *DeleteNode) bool {
+	chain.LoopChain(func(vn txnbase.MVCCNode) bool {
+		n := vn.(*DeleteNode)
 		n.RLock()
 		msg = fmt.Sprintf("%s\n%d. %s", msg, line, n.StringLocked())
 		n.RUnlock()
 		line++
 		return true
-	}, false)
+	})
 	return msg
 }
 
 func (chain *DeleteChain) GetController() *MVCCHandle { return chain.mvcc }
 
-func (chain *DeleteChain) LoopChainLocked(fn func(node *DeleteNode) bool, reverse bool) {
-	wrapped := func(n *common.GenericDLNode[*DeleteNode]) bool {
-		dnode := n.GetPayload()
-		return fn(dnode)
-	}
-	chain.Loop(wrapped, reverse)
-}
-
 func (chain *DeleteChain) IsDeleted(row uint32, ts types.TS, rwlocker *sync.RWMutex) (deleted bool, err error) {
-	chain.LoopChainLocked(func(n *DeleteNode) bool {
-		// Skip txn that started after ts
-		if n.GetStartTS().Greater(ts) {
-			return true
-		}
-		n.RLock()
-		// Skip txn that committed|committing after ts
-		if n.GetCommitTSLocked().Greater(ts) && !n.GetStartTS().Equal(ts) {
-			n.RUnlock()
-			return true
-		}
-		overlap := n.HasOverlapLocked(row, row)
-		txn := n.txn
-		n.RUnlock()
-
-		if overlap {
-			if txn == nil || txn.GetStartTS() == ts {
-				deleted = true
-			} else {
-				if rwlocker != nil {
+	chain.LoopChain(
+		func(vn txnbase.MVCCNode) (goNext bool) {
+			n := vn.(*DeleteNode)
+			if n.GetStartTS().Greater(ts) {
+				return true
+			}
+			n.RLock()
+			defer n.RUnlock()
+			if n.HasOverlapLocked(row, row) {
+				needWait, txnToWait := n.NeedWaitCommitting(ts)
+				if needWait {
+					n.RUnlock()
 					rwlocker.RUnlock()
-				}
-				state := txn.GetTxnState(true)
-				if rwlocker != nil {
+					txnToWait.GetTxnState(true)
 					rwlocker.RLock()
+					n.RLock()
 				}
-				// logutil.Infof("%d -- wait --> %s: %d", ts, txn.Repr(), state)
-				if state == txnif.TxnStateCommitted {
+				if n.IsVisible(ts) {
 					deleted = true
-				} else if state == txnif.TxnStatePreparing {
-					logutil.Fatal("txn state error")
-				} else if state == txnif.TxnStateUnknown {
-					err = moerr.NewTxnInternal()
 				}
 			}
-		}
-		if n.IsMerged() || deleted || err != nil {
-			return false
-		}
-		return true
-	}, false)
+			if n.IsMerged() || deleted || err != nil {
+				return false
+			}
+			return true
+		})
 	return
 }
 
 func (chain *DeleteChain) PrepareRangeDelete(start, end uint32, ts types.TS) (err error) {
-	chain.LoopChainLocked(func(n *DeleteNode) bool {
-		n.RLock()
-		defer n.RUnlock()
-		overlap := n.HasOverlapLocked(start, end)
-		if overlap {
-			if n.txn == nil || n.txn.GetStartTS().Equal(ts) {
-				err = moerr.NewNotFound()
-			} else {
-				err = moerr.NewTxnWWConflict()
+	chain.LoopChain(
+		func(vn txnbase.MVCCNode) bool {
+			n := vn.(*DeleteNode)
+			n.RLock()
+			defer n.RUnlock()
+			overlap := n.HasOverlapLocked(start, end)
+			if overlap {
+				err = n.CheckConflict(ts)
+				if err == nil {
+					err = moerr.NewNotFound()
+				}
+				return false
 			}
-			return false
-		}
-		return true
-	}, false)
+			return true
+		})
 	return
 }
 
 func (chain *DeleteChain) UpdateLocked(node *DeleteNode) {
-	chain.Update(node.GenericDLNode)
+	chain.MVCC.Update(node.GenericDLNode)
 }
 
 func (chain *DeleteChain) RemoveNodeLocked(node txnif.DeleteNode) {
-	chain.Delete(node.(*DeleteNode).GenericDLNode)
+	chain.MVCC.Delete(node.(*DeleteNode).GenericDLNode)
 }
 
-func (chain *DeleteChain) DepthLocked() int { return chain.GenericSortedDList.Depth() }
+func (chain *DeleteChain) DepthLocked() int { return chain.MVCC.Depth() }
 
 func (chain *DeleteChain) AddNodeLocked(txn txnif.AsyncTxn, deleteType handle.DeleteType) txnif.DeleteNode {
 	node := NewDeleteNode(txn, deleteType)
@@ -168,7 +146,8 @@ func (chain *DeleteChain) AddMergeNode() txnif.DeleteNode {
 	var merged *DeleteNode
 	chain.mvcc.RLock()
 	// chain.RLock()
-	chain.LoopChainLocked(func(n *DeleteNode) bool {
+	chain.LoopChain(func(vn txnbase.MVCCNode) bool {
+		n := vn.(*DeleteNode)
 		// Already have a latest merged node
 		if n.IsMerged() && merged == nil {
 			return false
@@ -177,17 +156,17 @@ func (chain *DeleteChain) AddMergeNode() txnif.DeleteNode {
 			return false
 		}
 		n.RLock()
-		txn := n.txn
+		txn := n.GetTxn()
 		n.RUnlock()
 		if txn != nil {
 			return true
 		}
 		if merged == nil {
-			merged = NewMergedNode(n.commitTs)
+			merged = NewMergedNode(n.GetCommitTSLocked())
 		}
 		merged.MergeLocked(n, true)
 		return true
-	}, false)
+	})
 	if merged != nil {
 		merged.AttachTo(chain)
 	}
@@ -232,7 +211,8 @@ func (chain *DeleteChain) CollectDeletesLocked(
 	rwlocker *sync.RWMutex) (txnif.DeleteNode, error) {
 	var merged *DeleteNode
 	var err error
-	chain.LoopChainLocked(func(n *DeleteNode) bool {
+	chain.LoopChain(func(vn txnbase.MVCCNode) bool {
+		n := vn.(*DeleteNode)
 		// Merged node is a loop breaker
 		if n.IsMerged() {
 			if n.GetCommitTSLocked().Greater(ts) {
@@ -245,60 +225,15 @@ func (chain *DeleteChain) CollectDeletesLocked(
 			return false
 		}
 		n.RLock()
-		txn := n.txn
-
-		if txn == nil {
-			if n.GetCommitTSLocked().LessEq(ts) {
-				if merged == nil {
-					merged = NewMergedNode(n.GetCommitTSLocked())
-				}
-				merged.MergeLocked(n, collectIndex)
-			}
+		needWait, txnToWait := n.NeedWaitCommitting(ts)
+		if needWait {
 			n.RUnlock()
-			return true
-		}
-
-		if txn.SameTxn(ts) {
-			// Use the delete from the same active txn
-			if merged == nil {
-				merged = NewMergedNode(n.GetCommitTSLocked())
-			}
-			merged.MergeLocked(n, collectIndex)
-		} else if txn.GetPrepareTS().Greater(ts) {
-			// Skip txn deletes committed after ts
-			n.RUnlock()
-			return true
-		} else {
-			// Wait committing txn with commit ts before ts
-			n.RUnlock()
-			if rwlocker != nil {
-				rwlocker.RUnlock()
-			}
-			state := txn.GetTxnState(true)
-			if state == txnif.TxnStateActive {
-				if rwlocker != nil {
-					rwlocker.RLock()
-				}
-				return true
-			}
-			// logutil.Infof("%d -- wait --> %s: %d", ts, txn.Repr(), state)
-			// If the txn is rollbacked. skip to the next
-			if state == txnif.TxnStateRollbacked || state == txnif.TxnStateRollbacking {
-				if rwlocker != nil {
-					rwlocker.RLock()
-				}
-				return true
-			} else if state == txnif.TxnStateUnknown {
-				err = moerr.NewTxnInternal()
-				if rwlocker != nil {
-					rwlocker.RLock()
-				}
-				return false
-			}
-			if rwlocker != nil {
-				rwlocker.RLock()
-			}
+			rwlocker.RUnlock()
+			txnToWait.GetTxnState(true)
+			rwlocker.RLock()
 			n.RLock()
+		}
+		if n.IsVisible(ts) {
 			if merged == nil {
 				merged = NewMergedNode(n.GetCommitTSLocked())
 			}
@@ -306,6 +241,6 @@ func (chain *DeleteChain) CollectDeletesLocked(
 		}
 		n.RUnlock()
 		return true
-	}, false)
+	})
 	return merged, err
 }
