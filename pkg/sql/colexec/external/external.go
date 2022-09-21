@@ -511,12 +511,12 @@ func GetBatchData(param *ExternalParam, plh *ParseLineHandler, proc *process.Pro
 				if isNullOrEmpty {
 					nulls.Add(vec.Nsp, uint64(rowIdx))
 				} else {
-					d, err := types.Decimal64_FromString(field)
+					d, err := types.Decimal64_FromStringWithScale(field, vec.Typ.Width, vec.Typ.Scale)
 					if err != nil {
 						// we tolerate loss of digits.
 						if !moerr.IsMoErrCode(err, moerr.ErrDataTruncated) {
 							logutil.Errorf("parse field[%v] err:%v", field, err)
-							return nil, moerr.NewInternalError("the input value '%v' is not Decimal64 type for column %d", field, colIdx)
+							return nil, moerr.NewInternalError("the input value '%v' is invalid Decimal64 type for column %d", field, colIdx)
 						}
 					}
 					cols[rowIdx] = d
@@ -526,12 +526,12 @@ func GetBatchData(param *ExternalParam, plh *ParseLineHandler, proc *process.Pro
 				if isNullOrEmpty {
 					nulls.Add(vec.Nsp, uint64(rowIdx))
 				} else {
-					d, err := types.Decimal128_FromString(field)
+					d, err := types.Decimal128_FromStringWithScale(field, vec.Typ.Width, vec.Typ.Scale)
 					if err != nil {
 						// we tolerate loss of digits.
 						if !moerr.IsMoErrCode(err, moerr.ErrDataTruncated) {
 							logutil.Errorf("parse field[%v] err:%v", field, err)
-							return nil, moerr.NewInternalError("the input value '%v' is not Decimal128 type for column %d", field, colIdx)
+							return nil, moerr.NewInternalError("the input value '%v' is invalid Decimal128 type for column %d", field, colIdx)
 						}
 					}
 					cols[rowIdx] = d
