@@ -23,9 +23,9 @@ select bin(-1);
 bin(-1)
 1111111111111111111111111111111111111111111111111111111111111111
 select bin(10e50);
-The input value is out of range
+invalid input: The input value is out of range
 select bin(-10e50);
-The input value is out of range
+invalid input: The input value is out of range
 select bin(0.00000000000000000000000001);
 bin(0.00000000000000000000000001)
 0
@@ -33,7 +33,7 @@ select bin(-0.00000000000000000000000001);
 bin(-0.00000000000000000000000001)
 0
 select bin("你好");
-Can't cast '你好' from VARCHAR type to BIGINT type.
+invalid argument cast to int, bad value 你好
 create table t1(a int);
 insert into t1 values();
 select bin(a) from t1;
