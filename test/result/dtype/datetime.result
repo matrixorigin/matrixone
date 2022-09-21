@@ -331,3 +331,7 @@ select * from t1;
 a	b
 2022-01-01 00:00:00	apple
 2022-01-02 00:00:00	apple
+drop table t1;
+create table t1(a datetime);
+insert into t1 values("9999-12-31 23:59:59.999999");
+truncated type DATETIME value 9999-12-31 23:59:59.999999 for column a, 1
