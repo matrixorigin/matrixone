@@ -1408,6 +1408,11 @@ func (mce *MysqlCmdExecutor) handleCreateUser(ctx context.Context, cu *tree.Crea
 	return InitUser(ctx, tenant, cu)
 }
 
+// handleDropUser drops the user for the tenant
+func (mce *MysqlCmdExecutor) handleDropUser(ctx context.Context, du *tree.DropUser) error {
+	return doDropUser(ctx, mce.ses, du)
+}
+
 // handleCreateRole creates the new role
 func (mce *MysqlCmdExecutor) handleCreateRole(ctx context.Context, cr *tree.CreateRole) error {
 	ses := mce.GetSession()
@@ -1966,7 +1971,11 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			if err = mce.handleCreateUser(requestCtx, st); err != nil {
 				goto handleFailed
 			}
-		case *tree.DropUser: //TODO
+		case *tree.DropUser:
+			selfHandle = true
+			if err = mce.handleDropUser(requestCtx, st); err != nil {
+				goto handleFailed
+			}
 		case *tree.AlterUser: //TODO
 		case *tree.CreateRole:
 			selfHandle = true

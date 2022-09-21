@@ -5202,6 +5202,154 @@ func Test_doDropRole(t *testing.T) {
 	})
 }
 
+func Test_doDropUser(t *testing.T) {
+	convey.Convey("drop user succ", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		defer bhStub.Reset()
+
+		stmt := &tree.DropUser{
+			Users: []*tree.User{
+				{Username: "u1"},
+				{Username: "u2"},
+				{Username: "u3"},
+			},
+		}
+		priv := determinePrivilegeSetOfStatement(stmt)
+		ses := newSes(priv)
+
+		//no result set
+		bh.sql2result["begin;"] = nil
+		bh.sql2result["commit;"] = nil
+		bh.sql2result["rollback;"] = nil
+
+		for i, user := range stmt.Users {
+			sql := getSqlForPasswordOfUser(user.Username)
+			mrs := newMrsForPasswordOfUser([][]interface{}{
+				{i, "111", "public"},
+			})
+			bh.sql2result[sql] = mrs
+		}
+
+		for i, _ := range stmt.Users {
+			sqls := getSqlForDeleteUser(int64(i))
+			for _, sql := range sqls {
+				bh.sql2result[sql] = nil
+			}
+		}
+
+		err := doDropUser(ses.GetRequestContext(), ses, stmt)
+		convey.So(err, convey.ShouldBeNil)
+	})
+	convey.Convey("drop user succ (if exists)", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		defer bhStub.Reset()
+
+		stmt := &tree.DropUser{
+			IfExists: true,
+			Users: []*tree.User{
+				{Username: "u1"},
+				{Username: "u2"},
+				{Username: "u3"},
+			},
+		}
+		priv := determinePrivilegeSetOfStatement(stmt)
+		ses := newSes(priv)
+
+		//no result set
+		bh.sql2result["begin;"] = nil
+		bh.sql2result["commit;"] = nil
+		bh.sql2result["rollback;"] = nil
+
+		var mrs *MysqlResultSet
+		//init from roles
+		for i, user := range stmt.Users {
+			sql := getSqlForPasswordOfUser(user.Username)
+			if i == 0 {
+				mrs = newMrsForPasswordOfUser([][]interface{}{})
+			} else {
+				mrs = newMrsForPasswordOfUser([][]interface{}{
+					{i, "111", "public"},
+				})
+			}
+
+			bh.sql2result[sql] = mrs
+		}
+
+		for i, _ := range stmt.Users {
+			sqls := getSqlForDeleteUser(int64(i))
+			for _, sql := range sqls {
+				bh.sql2result[sql] = nil
+			}
+		}
+
+		err := doDropUser(ses.GetRequestContext(), ses, stmt)
+		convey.So(err, convey.ShouldBeNil)
+	})
+	convey.Convey("drop user fail", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		defer bhStub.Reset()
+
+		stmt := &tree.DropUser{
+			IfExists: false,
+			Users: []*tree.User{
+				{Username: "u1"},
+				{Username: "u2"},
+				{Username: "u3"},
+			},
+		}
+		priv := determinePrivilegeSetOfStatement(stmt)
+		ses := newSes(priv)
+
+		//no result set
+		bh.sql2result["begin;"] = nil
+		bh.sql2result["commit;"] = nil
+		bh.sql2result["rollback;"] = nil
+
+		var mrs *MysqlResultSet
+		//init from roles
+		for i, user := range stmt.Users {
+			sql := getSqlForPasswordOfUser(user.Username)
+			if i == 0 {
+				mrs = newMrsForPasswordOfUser([][]interface{}{})
+			} else {
+				mrs = newMrsForPasswordOfUser([][]interface{}{
+					{i, "111", "public"},
+				})
+			}
+
+			bh.sql2result[sql] = mrs
+		}
+
+		for i, _ := range stmt.Users {
+			sqls := getSqlForDeleteUser(int64(i))
+			for _, sql := range sqls {
+				bh.sql2result[sql] = nil
+			}
+		}
+
+		err := doDropUser(ses.GetRequestContext(), ses, stmt)
+		convey.So(err, convey.ShouldBeError)
+	})
+}
+
 func generateGrantPrivilege(roleNames []string, withGrantOption bool) {
 	names := ""
 	for i, name := range roleNames {

@@ -863,6 +863,11 @@ var (
 	deleteRoleFromMoRoleGrantFormat = `delete from mo_catalog.mo_role_grant where granted_id = %d or grantee_id = %d;`
 
 	deleteRoleFromMoRolePrivsFormat = `delete from mo_catalog.mo_role_privs where role_id = %d;`
+
+	//delete user from mo_user,mo_user_grant
+	deleteUserFromMoUserFormat = `delete from mo_catalog.mo_user where user_id = %d;`
+
+	deleteUserFromMoUserGrantFormat = `delete from mo_catalog.mo_user_grant where user_id = %d;`
 )
 
 func getSqlForCheckTenant(tenant string) string {
@@ -1011,6 +1016,13 @@ func getSqlForDeleteRole(roleId int64) []string {
 		fmt.Sprintf(deleteRoleFromMoUserGrantFormat, roleId),
 		fmt.Sprintf(deleteRoleFromMoRoleGrantFormat, roleId, roleId),
 		fmt.Sprintf(deleteRoleFromMoRolePrivsFormat, roleId),
+	}
+}
+
+func getSqlForDeleteUser(userId int64) []string {
+	return []string{
+		fmt.Sprintf(deleteUserFromMoUserFormat, userId),
+		fmt.Sprintf(deleteUserFromMoUserGrantFormat, userId),
 	}
 }
 
@@ -1317,6 +1329,71 @@ func (g *graph) hasLoop(start int64) bool {
 	}
 
 	return !g.toposort(start, visited)
+}
+
+// doDropUser accomplishes the DropUser statement
+func doDropUser(ctx context.Context, ses *Session, du *tree.DropUser) error {
+	pu := ses.Pu
+	guestMMu := guest.New(pu.SV.GuestMmuLimitation, pu.HostMmu)
+	bh := NewBackgroundHandler(ctx, guestMMu, pu.Mempool, pu)
+	defer bh.Close()
+	var err error
+	var vr *verifiedRole
+	verifiedRoles := make([]*verifiedRole, len(du.Users))
+
+	//put it into the single transaction
+	err = bh.Exec(ctx, "begin;")
+	if err != nil {
+		goto handleFailed
+	}
+
+	//step1: check users exists or not.
+	//handle "IF EXISTS"
+	for i, user := range du.Users {
+		sql := getSqlForPasswordOfUser(user.Username)
+		vr, err = verifyRoleFunc(ctx, bh, sql, user.Username, roleType)
+		if err != nil {
+			goto handleFailed
+		}
+		verifiedRoles[i] = vr
+		if vr == nil {
+			if !du.IfExists { //when the "IF EXISTS" is set, just skip it.
+				err = moerr.NewInternalError("there is no user %s", user.Username)
+				goto handleFailed
+			}
+		}
+	}
+
+	//step2 : delete mo_user
+	//step3 : delete mo_user_grant
+	for _, user := range verifiedRoles {
+		if user == nil {
+			continue
+		}
+		sqls := getSqlForDeleteUser(user.id)
+		for _, sql := range sqls {
+			bh.ClearExecResultSet()
+			err = bh.Exec(ctx, sql)
+			if err != nil {
+				goto handleFailed
+			}
+		}
+	}
+
+	err = bh.Exec(ctx, "commit;")
+	if err != nil {
+		goto handleFailed
+	}
+
+	return err
+
+handleFailed:
+	//ROLLBACK the transaction
+	rbErr := bh.Exec(ctx, "rollback;")
+	if rbErr != nil {
+		return rbErr
+	}
+	return err
 }
 
 // doDropRole accomplishes the DropRole statement
