@@ -18,6 +18,7 @@ import (
 	"context"
 	"testing"
 
+	apipb "github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	txnengine "github.com/matrixorigin/matrixone/pkg/vm/engine/txn"
@@ -46,14 +47,16 @@ func testLogTail(
 
 	// test get log tail
 	{
-		resp := testRead[txnengine.GetLogTailResp](
+		resp, err := testRead[apipb.SyncLogTailResp](
 			t, s, txnMeta,
 			txnengine.OpGetLogTail,
-			txnengine.GetLogTailReq{
+			apipb.SyncLogTailReq{
+				Table: &apipb.TableID{},
 				//TODO args
 			},
 		)
 		//TODO asserts
+		_ = err
 		_ = resp
 	}
 }
