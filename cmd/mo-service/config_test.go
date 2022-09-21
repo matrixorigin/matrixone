@@ -172,6 +172,8 @@ service-addresses = [
 	cfg := &Config{}
 	err := parseFromString(data, cfg)
 	assert.NoError(t, err)
+	assert.NoError(t, cfg.validate())
+	assert.NoError(t, cfg.resolveGossipSeedAddresses())
 	assert.Equal(t, 1, len(cfg.LogService.GossipSeedAddresses))
 	assert.Equal(t, "127.0.0.1:32002", cfg.LogService.GossipSeedAddresses[0])
 }
