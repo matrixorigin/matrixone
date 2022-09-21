@@ -22,6 +22,7 @@ import (
 	"math"
 	"math/rand"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 	"unicode"
@@ -378,7 +379,7 @@ func (mp *MysqlProtocolImpl) SendPrepareResponse(stmt *PrepareStmt) error {
 	}
 	paramTypes := dcPrepare.Prepare.ParamTypes
 	numParams := len(paramTypes)
-	columns := plan2.GetResultColumnsFromPlan(stmt.PreparePlan)
+	columns := plan2.GetResultColumnsFromPlan(dcPrepare.Prepare.Plan)
 	numColumns := len(columns)
 
 	var data []byte
@@ -1745,16 +1746,28 @@ func (mp *MysqlProtocolImpl) makeResultSetBinaryRow(data []byte, mrs *MysqlResul
 				data = mp.appendStringLenEnc(data, value)
 			}
 		case defines.MYSQL_TYPE_DATE:
-			if value, err := mrs.GetString(rowIdx, i); err != nil {
+			if value, err := mrs.GetValue(rowIdx, i); err != nil {
 				return nil, err
 			} else {
-				data = mp.appendStringLenEnc(data, value)
+				data = mp.appendDate(data, value.(types.Date))
 			}
 		case defines.MYSQL_TYPE_DATETIME:
 			if value, err := mrs.GetString(rowIdx, i); err != nil {
 				return nil, err
 			} else {
-				data = mp.appendStringLenEnc(data, value)
+				var dt types.Datetime
+				var err error
+				idx := strings.Index(value, ".")
+				if idx == -1 {
+					dt, err = types.ParseDatetime(value, 0)
+				} else {
+					dt, err = types.ParseDatetime(value, int32(len(value)-idx-1))
+				}
+				if err != nil {
+					data = mp.appendStringLenEnc(data, value)
+				} else {
+					data = mp.appendDatetime(data, dt)
+				}
 			}
 		case defines.MYSQL_TYPE_TIMESTAMP:
 			if value, err := mrs.GetString(rowIdx, i); err != nil {
@@ -2127,6 +2140,35 @@ func (mp *MysqlProtocolImpl) append(_ []byte, elems ...byte) []byte {
 		panic(err)
 	}
 	return mp.tcpConn.OutBuf().RawBuf()
+}
+
+func (mp *MysqlProtocolImpl) appendDatetime(data []byte, dt types.Datetime) []byte {
+	if dt.MicroSec() != 0 {
+		data = mp.append(data, 11)
+		data = mp.appendUint16(data, uint16(dt.Year()))
+		data = mp.append(data, dt.Month(), dt.Day(), byte(dt.Hour()), byte(dt.Minute()), byte(dt.Sec()))
+		data = mp.appendUint32(data, uint32(dt.MicroSec()))
+	} else if dt.Hour() != 0 || dt.Minute() != 0 || dt.Sec() != 0 {
+		data = mp.append(data, 7)
+		data = mp.appendUint16(data, uint16(dt.Year()))
+		data = mp.append(data, dt.Month(), dt.Day(), byte(dt.Hour()), byte(dt.Minute()), byte(dt.Sec()))
+	} else {
+		data = mp.append(data, 4)
+		data = mp.appendUint16(data, uint16(dt.Year()))
+		data = mp.append(data, dt.Month(), dt.Day())
+	}
+	return data
+}
+
+func (mp *MysqlProtocolImpl) appendDate(data []byte, value types.Date) []byte {
+	if int32(value) == 0 {
+		data = mp.append(data, 0)
+	} else {
+		data = mp.append(data, 4)
+		data = mp.appendUint16(data, value.Year())
+		data = mp.append(data, value.Month(), value.Day())
+	}
+	return data
 }
 
 // the server send every row of the result set as an independent packet
