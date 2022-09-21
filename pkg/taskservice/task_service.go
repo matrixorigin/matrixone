@@ -16,22 +16,39 @@ package taskservice
 
 import (
 	"context"
+	"sync"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/stopper"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	"github.com/robfig/cron/v3"
+	"go.uber.org/zap"
 )
 
 type taskService struct {
 	store      TaskStorage
 	cronParser cron.Parser
+	logger     *zap.Logger
+
+	crons struct {
+		sync.Mutex
+
+		started  bool
+		stopper  *stopper.Stopper
+		cron     *cron.Cron
+		retryC   chan task.CronTask
+		jobs     map[uint64]*cronJob
+		entryIDs map[uint64]cron.EntryID
+	}
 }
 
 // NewTaskService create a task service based on a task storage.
-func NewTaskService(store TaskStorage) TaskService {
+func NewTaskService(store TaskStorage, logger *zap.Logger) TaskService {
 	return &taskService{
-		store: store,
+		store:  store,
+		logger: logutil.Adjust(logger),
 		cronParser: cron.NewParser(
 			cron.Second |
 				cron.Minute |
@@ -44,11 +61,7 @@ func NewTaskService(store TaskStorage) TaskService {
 }
 
 func (s *taskService) Create(ctx context.Context, value task.TaskMetadata) error {
-	_, err := s.store.Add(ctx, task.Task{
-		Metadata: value,
-		Status:   task.TaskStatus_Created,
-		CreateAt: time.Now().UnixMilli(),
-	})
+	_, err := s.store.Add(ctx, newTaskFromMetadata(value))
 	return err
 }
 
@@ -76,11 +89,12 @@ func (s *taskService) CreateCronTask(ctx context.Context, value task.TaskMetadat
 	next := sche.Next(time.UnixMilli(now))
 
 	_, err = s.store.AddCronTask(ctx, task.CronTask{
-		Metadata: value,
-		CronExpr: cronExpr,
-		NextTime: next.UnixMilli(),
-		CreateAt: now,
-		UpdateAt: now,
+		Metadata:     value,
+		CronExpr:     cronExpr,
+		NextTime:     next.UnixMilli(),
+		TriggerTimes: 0,
+		CreateAt:     now,
+		UpdateAt:     now,
 	})
 	return err
 }
