@@ -31,15 +31,15 @@ select variance(h) from t1;
 variance(h)
 2254.078699999999
 select variance(i) from t1;
-Aggregate function of 'variance' do not support implicit conversions for param of [DATE]
+invalid argument aggregate function variance, bad value [DATE]
 select variance(k) from t1;
-Aggregate function of 'variance' do not support implicit conversions for param of [DATETIME]
+invalid argument aggregate function variance, bad value [DATETIME]
 select variance(l) from t1;
-Aggregate function of 'variance' do not support implicit conversions for param of [TIMESTAMP]
+invalid argument aggregate function variance, bad value [TIMESTAMP]
 select variance(m) from t1;
-Aggregate function of 'variance' do not support implicit conversions for param of [CHAR]
+invalid argument aggregate function variance, bad value [CHAR]
 select variance(n) from t1;
-Aggregate function of 'variance' do not support implicit conversions for param of [VARCHAR]
+invalid argument aggregate function variance, bad value [VARCHAR]
 drop table t1;
 select variance(99999999999999999.99999);
 variance(99999999999999999.99999)
@@ -104,7 +104,7 @@ drop table t1;
 CREATE TABLE t1 (Fld1 int(11) default NULL,Fld2 int(11) default NULL);
 INSERT INTO t1 VALUES (1,10),(1,20),(2,NULL),(2,NULL),(3,50);
 select Fld1, variance(Fld2) as q from t1 group by Fld1 having q is not null;
-column "q" must appear in the GROUP BY clause or be used in an aggregate function
+SQL syntax error: column "q" must appear in the GROUP BY clause or be used in an aggregate function
 select Fld1, variance(Fld2) from t1 group by Fld1 having variance(Fld2) is not null;
 Fld1	variance(Fld2)
 1	25.0

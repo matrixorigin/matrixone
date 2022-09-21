@@ -23,6 +23,7 @@ import (
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 )
 
+// XXX WHY BIG ENDIAN?
 var (
 	binaryEnc = binary.BigEndian
 )

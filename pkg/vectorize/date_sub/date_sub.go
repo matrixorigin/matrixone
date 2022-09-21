@@ -16,6 +16,7 @@ package date_sub
 import (
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
@@ -48,7 +49,7 @@ func DateSub(xs []types.Date, ys []int64, zs []int64, xns *nulls.Nulls, yns *nul
 			if success {
 				rs[i] = date.ToDate()
 			} else {
-				return rs, types.ErrInvalidDateAddInterval
+				return rs, moerr.NewOutOfRange("date", "")
 			}
 		}
 	} else if len(xs) == 1 {
@@ -61,7 +62,7 @@ func DateSub(xs []types.Date, ys []int64, zs []int64, xns *nulls.Nulls, yns *nul
 			if success {
 				rs[i] = date.ToDate()
 			} else {
-				return rs, types.ErrInvalidDateAddInterval
+				return rs, moerr.NewOutOfRange("date", "")
 			}
 		}
 	} else if len(ys) == 1 {
@@ -74,7 +75,7 @@ func DateSub(xs []types.Date, ys []int64, zs []int64, xns *nulls.Nulls, yns *nul
 			if success {
 				rs[i] = date.ToDate()
 			} else {
-				return rs, types.ErrInvalidDateAddInterval
+				return rs, moerr.NewOutOfRange("date", "")
 			}
 		}
 	}
@@ -109,7 +110,7 @@ func DatetimeSub(xs []types.Datetime, ys []int64, zs []int64, xns *nulls.Nulls, 
 			if success {
 				rs[i] = date
 			} else {
-				return rs, types.ErrInvalidDatetimeAddInterval
+				return rs, moerr.NewOutOfRange("datetime", "")
 			}
 		}
 	} else if len(xs) == 1 {
@@ -122,7 +123,7 @@ func DatetimeSub(xs []types.Datetime, ys []int64, zs []int64, xns *nulls.Nulls, 
 			if success {
 				rs[i] = date
 			} else {
-				return rs, types.ErrInvalidDatetimeAddInterval
+				return rs, moerr.NewOutOfRange("datetime", "")
 			}
 		}
 	} else if len(ys) == 1 {
@@ -135,7 +136,7 @@ func DatetimeSub(xs []types.Datetime, ys []int64, zs []int64, xns *nulls.Nulls, 
 			if success {
 				rs[i] = date
 			} else {
-				return rs, types.ErrInvalidDatetimeAddInterval
+				return rs, moerr.NewOutOfRange("datetime", "")
 			}
 		}
 	}
@@ -182,7 +183,7 @@ func DateStringSub(xs []string, ys []int64, zs []int64, xns *nulls.Nulls, yns *n
 			if success {
 				rs[i] = date
 			} else {
-				return rs, types.ErrInvalidDatetimeAddInterval
+				return rs, moerr.NewOutOfRange("datetime", "")
 			}
 		}
 	} else if len(ds) == 1 {
@@ -195,7 +196,7 @@ func DateStringSub(xs []string, ys []int64, zs []int64, xns *nulls.Nulls, yns *n
 			if success {
 				rs[i] = date
 			} else {
-				return rs, types.ErrInvalidDatetimeAddInterval
+				return rs, moerr.NewOutOfRange("datetime", "")
 			}
 		}
 	} else if len(ys) == 1 {
@@ -208,7 +209,7 @@ func DateStringSub(xs []string, ys []int64, zs []int64, xns *nulls.Nulls, yns *n
 			if success {
 				rs[i] = date
 			} else {
-				return rs, types.ErrInvalidDatetimeAddInterval
+				return rs, moerr.NewOutOfRange("datetime", "")
 			}
 		}
 	}
@@ -247,11 +248,11 @@ func TimestampSub(loc *time.Location, xs []types.Timestamp, ys []int64, zs []int
 			if success {
 				ts := date.ToTimestamp(loc)
 				if ts < 0 {
-					return rs, types.ErrInvalidTimestampAddInterval
+					return rs, moerr.NewOutOfRange("timestamp", "")
 				}
 				rs[i] = ts
 			} else {
-				return rs, types.ErrInvalidTimestampAddInterval
+				return rs, moerr.NewOutOfRange("timestamp", "")
 			}
 		}
 	} else if len(xs) == 1 {
@@ -264,11 +265,11 @@ func TimestampSub(loc *time.Location, xs []types.Timestamp, ys []int64, zs []int
 			if success {
 				ts := date.ToTimestamp(loc)
 				if ts < 0 {
-					return rs, types.ErrInvalidTimestampAddInterval
+					return rs, moerr.NewOutOfRange("timestamp", "")
 				}
 				rs[i] = ts
 			} else {
-				return rs, types.ErrInvalidTimestampAddInterval
+				return rs, moerr.NewOutOfRange("timestamp", "")
 			}
 		}
 	} else if len(ys) == 1 {
@@ -281,11 +282,11 @@ func TimestampSub(loc *time.Location, xs []types.Timestamp, ys []int64, zs []int
 			if success {
 				ts := date.ToTimestamp(loc)
 				if ts < 0 {
-					return rs, types.ErrInvalidTimestampAddInterval
+					return rs, moerr.NewOutOfRange("timestamp", "")
 				}
 				rs[i] = ts
 			} else {
-				return rs, types.ErrInvalidTimestampAddInterval
+				return rs, moerr.NewOutOfRange("timestamp", "")
 			}
 		}
 	}

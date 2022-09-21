@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/compress"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -421,9 +422,9 @@ func genWriteReqs(writes [][]Entry) ([]txn.TxnRequest, error) {
 					},
 				},
 				Options: &txn.TxnRequestOptions{
-					RetryCodes: []txn.ErrorCode{
+					RetryCodes: []int32{
 						// dn shard not found
-						txn.ErrorCode_DNShardNotFound,
+						int32(moerr.ErrDNShardNotFound),
 					},
 					RetryInterval: int64(time.Second),
 				},

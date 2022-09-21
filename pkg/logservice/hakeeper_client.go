@@ -19,17 +19,10 @@ import (
 	"math/rand"
 	"sync"
 
-	"github.com/cockroachdb/errors"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
-)
-
-var (
-	// ErrNotHAKeeper is returned to indicate that HAKeeper can not be located.
-	ErrNotHAKeeper = moerr.NewError(moerr.INVALID_STATE, "failed to locate HAKeeper")
 )
 
 // CNHAKeeperClient is the HAKeeper client used by a CN store.
@@ -238,7 +231,7 @@ func (c *managedHAKeeperClient) SendLogHeartbeat(ctx context.Context,
 }
 
 func (c *managedHAKeeperClient) isRetryableError(err error) bool {
-	return errors.Is(err, ErrNotHAKeeper)
+	return moerr.IsMoErrCode(err, moerr.ErrNoHAKeeper)
 }
 
 func (c *managedHAKeeperClient) resetClient() {
@@ -288,7 +281,7 @@ func newHAKeeperClient(ctx context.Context,
 	if err != nil {
 		return nil, err
 	}
-	return nil, ErrNotHAKeeper
+	return nil, moerr.NewNoHAKeeper()
 }
 
 func connectByReverseProxy(ctx context.Context,
@@ -358,7 +351,7 @@ func connectToHAKeeper(ctx context.Context,
 	}
 	if e == nil {
 		// didn't encounter any error
-		return nil, ErrNotHAKeeper
+		return nil, moerr.NewNoHAKeeper()
 	}
 	return nil, e
 }
