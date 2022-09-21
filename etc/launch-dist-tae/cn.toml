@@ -1,0 +1,34 @@
+service-type = "CN"
+
+[log]
+level = "error"
+format = "json"
+max-size = 512
+
+[hakeeper-client]
+service-addresses = [
+  "127.0.0.1:32000",
+]
+
+[[fileservice]]
+name = "LOCAL"
+backend = "MEM"
+
+[[fileservice]]
+name = "S3"
+backend = "MEM"
+
+[[fileservice]]
+name = "ETL"
+backend = "DISK-ETL"
+data-dir = "mo-data/local/cn"
+
+[observability]
+disableTrace = true
+disableMetric = true
+
+[cn]
+uuid = "cn1"
+
+[cn.Engine]
+type = "distributed-tae"
