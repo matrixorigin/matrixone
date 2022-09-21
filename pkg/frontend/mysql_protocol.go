@@ -1746,8 +1746,8 @@ func (mp *MysqlProtocolImpl) makeResultSetBinaryRow(data []byte, mrs *MysqlResul
 				data = mp.appendStringLenEnc(data, value)
 			}
 		case defines.MYSQL_TYPE_DATE:
-			if value, err2 := mrs.GetValue(rowIdx, i); err2 != nil {
-				return nil, err2
+			if value, err := mrs.GetValue(rowIdx, i); err != nil {
+				return nil, err
 			} else {
 				data = mp.appendDate(data, value.(types.Date))
 			}
@@ -2161,13 +2161,12 @@ func (mp *MysqlProtocolImpl) appendDatetime(data []byte, dt types.Datetime) []by
 }
 
 func (mp *MysqlProtocolImpl) appendDate(data []byte, value types.Date) []byte {
-	if value == 0 {
+	if int32(value) == 0 {
 		data = mp.append(data, 0)
 	} else {
-		d := types.Date(value)
 		data = mp.append(data, 4)
-		data = mp.appendUint16(data, d.Year())
-		data = mp.append(data, d.Month(), d.Day())
+		data = mp.appendUint16(data, value.Year())
+		data = mp.append(data, value.Month(), value.Day())
 	}
 	return data
 }
