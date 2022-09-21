@@ -194,7 +194,7 @@ func runTaskRunnerTest(t *testing.T,
 	testFunc func(r *taskRunner, s TaskService, store TaskStorage),
 	opts ...RunnerOption) {
 	store := NewMemTaskStorage()
-	s := NewTaskService(store)
+	s := NewTaskService(store, nil)
 	defer func() {
 		assert.NoError(t, s.Close())
 	}()

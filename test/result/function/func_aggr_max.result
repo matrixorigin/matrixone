@@ -121,7 +121,7 @@ drop table t2;
 CREATE TABLE t1 (Fld1 int(11) default NULL,Fld2 int(11) default NULL);
 INSERT INTO t1 VALUES (1,10),(1,20),(2,NULL),(2,NULL),(3,50);
 select distinct Fld1,  max( Fld2) as q from t1 group by Fld1 having q is not null;
-column "q" must appear in the GROUP BY clause or be used in an aggregate function
+SQL syntax error: column "q" must appear in the GROUP BY clause or be used in an aggregate function
 select Fld1, max(Fld2) from t1 group by Fld1 having max(Fld2) is not null;
 Fld1	max(Fld2)
 1	20
@@ -404,9 +404,9 @@ drop table t2;
 create table t1 (a int);
 insert into t1 values (1);
 select max(a) as b from t1 having b=1;
-column "b" must appear in the GROUP BY clause or be used in an aggregate function
+SQL syntax error: column "b" must appear in the GROUP BY clause or be used in an aggregate function
 select a from t1 having a=1;
-column "t1.a" must appear in the GROUP BY clause or be used in an aggregate function
+SQL syntax error: column "t1.a" must appear in the GROUP BY clause or be used in an aggregate function
 drop table t1;
 CREATE TABLE t1 (a int primary key);
 INSERT INTO t1 VALUES (1),(2),(3),(4);
@@ -452,13 +452,13 @@ DROP TABLE t1;
 create table t1 (f1 int, f2 int, f3 date, f4 datetime);
 insert into t1 values(98,1998,"1998-01-01","1998-01-01 00:00:00");
 insert into t1 values('00',2000,20000101,"2000-01-01 00:00:01");
-Incorrect DATE value: '20000101' for column 'f3' at row 1
+truncated type DATE value 20000101 for column f3, 1
 insert into t1 values(02,2002,20020101,"2002-01-01 23:59:59");
-Incorrect DATE value: '20020101' for column 'f3' at row 1
+truncated type DATE value 20020101 for column f3, 1
 insert into t1 values(60,2060,20600101,"2060-01-01 11:11:11");
-Incorrect DATE value: '20600101' for column 'f3' at row 1
+truncated type DATE value 20600101 for column f3, 1
 insert into t1 values(70,1970,19700101,"1970-11-11 22:22:22");
-Incorrect DATE value: '19700101' for column 'f3' at row 1
+truncated type DATE value 19700101 for column f3, 1
 insert into t1 values(NULL,NULL,NULL,NULL);
 select min(f1),max(f1) from t1;
 min(f1)	max(f1)
@@ -473,7 +473,6 @@ select min(f4),max(f4) from t1;
 min(f4)	max(f4)
 0001-01-01 00:00:00	1998-01-01 00:00:00
 drop table t1;
-
 create table t1 (grp int, a bigint unsigned, c char(10) not null);
 insert into t1 values (1,1,"a");
 insert into t1 values (2,2,"b");

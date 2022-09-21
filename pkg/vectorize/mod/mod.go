@@ -22,11 +22,12 @@ package mod
 */
 import "C"
 import (
+	"unsafe"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"golang.org/x/exp/constraints"
-	"unsafe"
 )
 
 const (
@@ -47,7 +48,7 @@ func NumericModSigned[T constraints.Signed](xs, ys, rs *vector.Vector) error {
 	rc := C.SignedInt_VecMod(unsafe.Pointer(&rt[0]), unsafe.Pointer(&xt[0]), unsafe.Pointer(&yt[0]),
 		C.uint64_t(len(rt)), (*C.uint64_t)(nulls.Ptr(rs.Nsp)), C.int32_t(flag), C.int32_t(rs.Typ.TypeSize()))
 	if rc != 0 {
-		return moerr.NewError(moerr.OUT_OF_RANGE, "int mod zero modulus")
+		return moerr.NewOutOfRange("int", "int MOD")
 	}
 	return nil
 }
@@ -65,7 +66,7 @@ func NumericModUnsigned[T constraints.Unsigned](xs, ys, rs *vector.Vector) error
 	rc := C.UnsignedInt_VecMod(unsafe.Pointer(&rt[0]), unsafe.Pointer(&xt[0]), unsafe.Pointer(&yt[0]),
 		C.uint64_t(len(rt)), (*C.uint64_t)(nulls.Ptr(rs.Nsp)), C.int32_t(flag), C.int32_t(rs.Typ.TypeSize()))
 	if rc != 0 {
-		return moerr.NewError(moerr.OUT_OF_RANGE, "unsigned int mod zero modulus")
+		return moerr.NewOutOfRange("unsigned int", "unsigned int MOD")
 	}
 	return nil
 }
@@ -83,7 +84,7 @@ func NumericModFloat[T constraints.Float](xs, ys, rs *vector.Vector) error {
 	rc := C.Float_VecMod(unsafe.Pointer(&rt[0]), unsafe.Pointer(&xt[0]), unsafe.Pointer(&yt[0]),
 		C.uint64_t(len(rt)), (*C.uint64_t)(nulls.Ptr(rs.Nsp)), C.int32_t(flag), C.int32_t(rs.Typ.TypeSize()))
 	if rc != 0 {
-		return moerr.NewError(moerr.OUT_OF_RANGE, "float mod zero modulus")
+		return moerr.NewOutOfRange("float", "float MOD")
 	}
 	return nil
 }

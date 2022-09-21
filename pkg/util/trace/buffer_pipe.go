@@ -472,7 +472,7 @@ var QuoteFieldFunc = func(buf *bytes.Buffer, value string, enclose rune) string 
 	}
 	quotedClose, hasRule := replaceRules[enclose]
 	if !hasRule {
-		panic(moerr.NewPanicError(fmt.Errorf("not support csv enclose: %c", enclose)))
+		panic(moerr.NewInternalError("not support csv enclose: %c", enclose))
 	}
 	for _, c := range value {
 		if c == enclose {

@@ -94,6 +94,12 @@ message CNStoreHeartbeat {
   metadata.CNRole Role           = 3;
 }
 
+
+// CNAllocateID is the periodic message sent tp the HAKeeper by CN stores.
+message CNAllocateID {
+  uint64 Batch = 1;
+}
+
 // LogStoreHeartbeat is the periodic message sent to the HAKeeper by Log Stores.
 message LogStoreHeartbeat {
   // UUID is the uuid of the Log Store.
@@ -155,6 +161,7 @@ enum MethodType {
   CHECK_HAKEEPER = 10;
   GET_CLUSTER_DETAILS = 11;
   GET_SHARD_INFO = 12;
+  CN_ALLOCATE_ID = 13;
 };
 
 enum RecordType {
@@ -192,27 +199,7 @@ message Request {
   CNStoreHeartbeat CNHeartbeat   = 5;
   DNStoreHeartbeat DNHeartbeat   = 6;
   TsoRequest TsoRequest          = 7;
-};
-
-enum ErrorCode {
-  NoError               = 0;
-  Timeout               = 1;
-  Canceled              = 2;
-  InvalidShard          = 3;
-  InvalidTimeout        = 4;
-  InvalidPayload        = 5;
-  InvalidPayloadSize    = 6;
-  Rejected              = 7;
-  ShardNotReady         = 8;
-  SystemClosed          = 9;
-
-  LsnAlreadyTruncated   = 100;
-  OutOfRange            = 101;
-  NotLeaseHolder        = 102;
-  NotHAKeeper           = 103;
-  LogShardNotFound      = 104;
-
-  OtherSystemError      = 1000;
+  CNAllocateID CNAllocateID      = 8;
 };
 
 message LogResponse {
@@ -221,10 +208,14 @@ message LogResponse {
   uint64 LastLsn      = 3;
 }
 
+message AllocateIDResponse {
+  uint64 FirstID = 1;
+}
+
 message Response {
   uint64 RequestID               = 1;
   MethodType Method              = 2;
-  ErrorCode ErrorCode            = 3;
+  uint32 ErrorCode               = 3;
   string ErrorMessage            = 4;
   bool IsHAKeeper                = 5;
   LogResponse LogResponse        = 6 [(gogoproto.nullable) = false];
@@ -232,6 +223,7 @@ message Response {
   TsoResponse TsoResponse        = 8;
   ClusterDetails ClusterDetails  = 9;
   ShardInfoQueryResult ShardInfo = 10;
+  AllocateIDResponse AllocateID  = 11;
 };
 
 message LogRecordResponse {

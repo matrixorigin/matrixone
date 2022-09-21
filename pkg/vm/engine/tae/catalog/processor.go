@@ -14,6 +14,10 @@
 
 package catalog
 
+// XXX this API is broken.  In case of inplementing a cursor like interface
+// we cannot use error.  moerr is a very heavy mechanism.
+//
+// Return a int code.
 type Processor interface {
 	OnDatabase(database *DBEntry) error
 	OnTable(table *TableEntry) error

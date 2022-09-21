@@ -486,10 +486,14 @@ func DecodeValue(val []byte, typ Type) any {
 		return DecodeFixed[Decimal128](val)
 	case T_uuid:
 		return DecodeFixed[Uuid](val)
-	case T_char, T_varchar:
+	case T_TS:
+		return DecodeFixed[TS](val)
+	case T_Rowid:
+		return DecodeFixed[Rowid](val)
+	case T_char, T_varchar, T_blob, T_json:
 		return val
 	default:
-		panic("unsupported type")
+		panic(fmt.Sprintf("unsupported type %v", typ))
 	}
 }
 
@@ -513,26 +517,30 @@ func EncodeValue(val any, typ Type) []byte {
 		return EncodeFixed(val.(uint32))
 	case T_uint64:
 		return EncodeFixed(val.(uint64))
-	case T_decimal64:
-		return EncodeFixed(val.(Decimal64))
-	case T_decimal128:
-		return EncodeFixed(val.(Decimal128))
-	case T_uuid:
-		return EncodeFixed(val.(Uuid))
 	case T_float32:
 		return EncodeFixed(val.(float32))
 	case T_float64:
 		return EncodeFixed(val.(float64))
+	case T_decimal64:
+		return EncodeFixed(val.(Decimal64))
+	case T_decimal128:
+		return EncodeFixed(val.(Decimal128))
 	case T_date:
 		return EncodeFixed(val.(Date))
 	case T_timestamp:
 		return EncodeFixed(val.(Timestamp))
 	case T_datetime:
 		return EncodeFixed(val.(Datetime))
-	case T_char, T_varchar:
+	case T_uuid:
+		return EncodeFixed(val.(Uuid))
+	case T_TS:
+		return EncodeFixed(val.(TS))
+	case T_Rowid:
+		return EncodeFixed(val.(Rowid))
+	case T_char, T_varchar, T_blob, T_json:
 		return val.([]byte)
 	default:
-		panic("unsupported type")
+		panic(fmt.Sprintf("unsupported type %v", typ))
 	}
 }
 
@@ -626,6 +634,16 @@ func WriteValues(w io.Writer, vals ...any) (n int64, err error) {
 			}
 			n += int64(nr)
 		case Uuid:
+			if nr, err = w.Write(EncodeFixed(v)); err != nil {
+				return
+			}
+			n += int64(nr)
+		case TS:
+			if nr, err = w.Write(EncodeFixed(v)); err != nil {
+				return
+			}
+			n += int64(nr)
+		case Rowid:
 			if nr, err = w.Write(EncodeFixed(v)); err != nil {
 				return
 			}
