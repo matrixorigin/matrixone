@@ -78,27 +78,17 @@ func (be *DBBaseEntry) CreateWithTS(ts types.TS) {
 		EntryMVCCNode: &EntryMVCCNode{
 			CreatedAt: ts,
 		},
-		TxnMVCCNode: &txnbase.TxnMVCCNode{
-			Start: ts,
-			End:   ts,
-		},
+		TxnMVCCNode: txnbase.NewTxnMVCCNodeWithTS(ts),
 	}
 	be.Insert(node)
 }
 
 func (be *DBBaseEntry) CreateWithTxn(txn txnif.AsyncTxn) {
-	var startTS types.TS
-	if txn != nil {
-		startTS = txn.GetStartTS()
-	}
 	node := &DBMVCCNode{
 		EntryMVCCNode: &EntryMVCCNode{
 			CreatedAt: txnif.UncommitTS,
 		},
-		TxnMVCCNode: &txnbase.TxnMVCCNode{
-			Start: startTS,
-			Txn:   txn,
-		},
+		TxnMVCCNode: txnbase.NewTxnMVCCNodeWithTxn(txn),
 	}
 	be.Insert(node)
 }

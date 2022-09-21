@@ -72,8 +72,10 @@ func NewTxnMVCCNodeWithTxn(txn txnif.TxnReader) *TxnMVCCNode {
 		ts = txn.GetStartTS()
 	}
 	return &TxnMVCCNode{
-		Start: ts,
-		Txn:   txn,
+		Start:   ts,
+		Prepare: txnif.UncommitTS,
+		End:     txnif.UncommitTS,
+		Txn:     txn,
 	}
 }
 func NewTxnMVCCNodeWithTS(ts types.TS) *TxnMVCCNode {
