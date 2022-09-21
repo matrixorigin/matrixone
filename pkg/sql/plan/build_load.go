@@ -17,6 +17,7 @@ package plan
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -26,6 +27,9 @@ import (
 )
 
 func buildLoad(stmt *tree.Load, ctx CompilerContext) (*Plan, error) {
+	if err := InitNullMap(stmt); err != nil {
+		return nil, err
+	}
 	tblName := string(stmt.Table.ObjectName)
 	dbName := string(stmt.Table.SchemaName)
 	objRef, tableDef := ctx.Resolve(dbName, tblName)
@@ -165,6 +169,30 @@ func GetProjectNode(stmt *tree.Load, ctx CompilerContext, node *plan.Node, Name2
 			}
 		}
 		node.ProjectList[i] = tmp
+	}
+	return nil
+}
+
+func InitNullMap(stmt *tree.Load) error {
+	stmt.Param.NullMap = make(map[string][]string)
+	for i := 0; i < len(stmt.Param.Tail.Assignments); i++ {
+		expr, ok := stmt.Param.Tail.Assignments[i].Expr.(*tree.FuncExpr)
+		if !ok {
+			return moerr.NewInvalidInput("the load set list is not FuncExpr form")
+		}
+		if len(expr.Exprs) != 2 {
+			return moerr.NewInvalidInput("the nullif func need two paramaters")
+		}
+
+		expr3, ok := expr.Exprs[1].(*tree.NumVal)
+		if !ok {
+			return moerr.NewInvalidInput("the nullif func second param is not UnresolvedName form")
+		}
+		for j := 0; j < len(stmt.Param.Tail.Assignments[i].Names); j++ {
+			col := stmt.Param.Tail.Assignments[i].Names[j].Parts[0]
+			stmt.Param.NullMap[col] = append(stmt.Param.NullMap[col], strings.ToLower(expr3.String()))
+		}
+		stmt.Param.Tail.Assignments[i].Expr = nil
 	}
 	return nil
 }

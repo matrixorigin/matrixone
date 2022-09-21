@@ -15,6 +15,8 @@
 package agg
 
 import (
+	"encoding"
+
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -64,6 +66,9 @@ type Aggregate struct {
 
 // Agg agg interface
 type Agg[T any] interface {
+	encoding.BinaryMarshaler
+	encoding.BinaryUnmarshaler
+
 	// Dup will duplicate a new agg with the same type.
 	Dup() Agg[any]
 
@@ -112,15 +117,32 @@ type Agg[T any] interface {
 	// groupIndex2-group of agg2
 	Merge(agg2 Agg[any], groupIndex1 int64, groupIndex2 int64) error
 
-	// BatchAdd merges multi groups of agg1 and agg2
+	// BatchMerge merges multi groups of agg1 and agg2
 	//  agg1's (vps[i]-1)th group is related to agg2's (start+i)th group
 	// For more introduction of os, please refer to comments of Function BatchFill.
 	BatchMerge(agg2 Agg[any], start int64, os []uint8, vps []uint64) error
+
+	// GetInputTypes get types of aggregate's input arguments.
+	GetInputTypes() []types.Type
+
+	// GetOperatorId get types of aggregate's aggregate id.
+	GetOperatorId() int
+
+	IsDistinct() bool
+}
+
+type AggStruct interface {
+	encoding.BinaryMarshaler
+	encoding.BinaryUnmarshaler
 }
 
 // UnaryAgg generic aggregation function with one input vector and without distinct
 type UnaryAgg[T1, T2 any] struct {
-	priv any
+	// operation type of aggregate
+	op int
+
+	// aggregate struct
+	priv AggStruct
 
 	// vs is result value list
 	vs []T2
@@ -164,6 +186,12 @@ type UnaryAgg[T1, T2 any] struct {
 
 // UnaryDistAgg generic aggregation function with one input vector and with distinct
 type UnaryDistAgg[T1, T2 any] struct {
+	// operation type of aggregate
+	op int
+
+	// aggregate struct
+	priv AggStruct
+
 	// vs is result value list
 	vs []T2
 	// es, es[i] is true to indicate that this group has not yet been populated with any value
@@ -205,6 +233,30 @@ type UnaryDistAgg[T1, T2 any] struct {
 	//  fifth represents whether it is a new group
 	//  sixth represents whether the value to be fed is null
 	fill func(int64, T1, T2, int64, bool, bool) (T2, bool)
+}
+
+type EncodeAgg struct {
+	Op      int
+	Private []byte
+	Es      []bool
+	Da      []byte
+
+	InputTypes []byte
+	OutputType []byte
+	IsCount    bool
+}
+
+type EncodeAggDistinct[T any] struct {
+	Op      int
+	Private []byte
+	Es      []bool
+	Da      []byte
+
+	InputType  []types.Type
+	OutputType types.Type
+
+	IsCount bool
+	Srcs    [][]T
 }
 
 type Compare interface {
