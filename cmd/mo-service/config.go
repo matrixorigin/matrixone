@@ -49,6 +49,16 @@ var (
 	}
 )
 
+// LaunchConfig Start a MO cluster with launch
+type LaunchConfig struct {
+	// LogServiceConfigFiles log service config files
+	LogServiceConfigFiles []string `toml:"logservices"`
+	// DNServiceConfigsFiles log service config files
+	DNServiceConfigsFiles []string `toml:"dnservices"`
+	// CNServiceConfigsFiles log service config files
+	CNServiceConfigsFiles []string `toml:"cnservices"`
+}
+
 // Config mo-service configuration
 type Config struct {
 	// Log log config
@@ -70,29 +80,22 @@ type Config struct {
 	Observability config.ObservabilityParameters `toml:"observability"`
 }
 
-func parseConfigFromFile(file string) (*Config, error) {
+func parseConfigFromFile(file string, cfg any) error {
 	if file == "" {
-		return nil, moerr.NewInternalError("toml config file not set")
+		return moerr.NewInternalError("toml config file not set")
 	}
 	data, err := os.ReadFile(file)
 	if err != nil {
-		return nil, err
+		return err
 	}
-	return parseFromString(string(data))
+	return parseFromString(string(data), cfg)
 }
 
-func parseFromString(data string) (*Config, error) {
-	cfg := &Config{}
+func parseFromString(data string, cfg any) error {
 	if _, err := toml.Decode(data, cfg); err != nil {
-		return nil, err
+		return err
 	}
-	if err := cfg.validate(); err != nil {
-		return nil, err
-	}
-	if err := cfg.resolveGossipSeedAddresses(); err != nil {
-		return nil, err
-	}
-	return cfg, nil
+	return nil
 }
 
 func (c *Config) validate() error {
