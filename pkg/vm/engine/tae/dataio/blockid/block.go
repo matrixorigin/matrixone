@@ -27,12 +27,18 @@ import (
 	"strings"
 )
 
+type metaKey struct {
+	extent  objectio.Extent
+	metaLoc string
+	delta   string
+}
+
 type blockFile struct {
 	common.RefHelper
 	seg     *segmentFile
 	rows    uint32
 	id      *common.ID
-	meta    objectio.BlockObject
+	key     *metaKey
 	columns []*columnBlock
 	writer  *Writer
 	reader  *Reader
@@ -64,7 +70,9 @@ func newBlock(id uint64, seg *segmentFile, colCnt int, indexCnt map[int]int) *bl
 func (bf *blockFile) WriteBatch(bat *containers.Batch, ts types.TS) (blk objectio.BlockObject, err error) {
 	bf.writer = NewWriter(bf.seg.fs, bf.id)
 	block, err := bf.writer.WriteBlock(bat)
-	bf.meta = block
+	bf.key = &metaKey{
+		extent: block.GetExtent(),
+	}
 	return block, err
 }
 
@@ -94,8 +102,13 @@ func (bf *blockFile) ReadRows() uint32 {
 }
 
 func (bf *blockFile) GetMeta(metaLoc string) objectio.BlockObject {
-	if bf.meta != nil {
-		return bf.meta
+	if bf.key != nil {
+		bf.key.metaLoc = metaLoc
+		block, err := bf.reader.ReadMeta(bf.key.extent)
+		if err != nil {
+			panic(any(err))
+		}
+		return block
 	}
 	info := strings.Split(metaLoc, ":")
 	name := info[0]
@@ -120,8 +133,8 @@ func (bf *blockFile) GetMeta(metaLoc string) objectio.BlockObject {
 	if err != nil {
 		panic(any(err))
 	}
-	bf.meta = block
-	return bf.meta
+	bf.key.extent = extent
+	return block
 }
 
 func (bf *blockFile) WriteDeletes(buf []byte) (err error) {
@@ -174,7 +187,7 @@ func (bf *blockFile) LoadBatch(
 		for i, _ := range bf.columns {
 			vec := containers.MakeVector(colTypes[i], nullables[i], opts)
 			bat.AddVector(colNames[i], vec)
-			if bf.meta == nil {
+			if bf.key == nil {
 				continue
 			}
 		}
