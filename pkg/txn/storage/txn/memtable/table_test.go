@@ -12,11 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package txnstorage
+package memtable
 
 import (
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/stretchr/testify/assert"
 )
@@ -30,6 +31,10 @@ func (t TestRow) Key() Int {
 	return t.key
 }
 
+func (t TestRow) Value() int {
+	return t.value
+}
+
 func (t TestRow) Indexes() []Tuple {
 	return []Tuple{
 		{Text("foo"), Int(t.value)},
@@ -38,7 +43,7 @@ func (t TestRow) Indexes() []Tuple {
 
 func TestTable(t *testing.T) {
 
-	table := NewTable[Int, TestRow]()
+	table := NewTable[Int, int, TestRow]()
 	tx := NewTransaction("1", Time{}, Serializable)
 	row := TestRow{key: 42, value: 1}
 
@@ -49,7 +54,7 @@ func TestTable(t *testing.T) {
 	// get
 	r, err := table.Get(tx, Int(42))
 	assert.Nil(t, err)
-	assert.Equal(t, &row, r)
+	assert.Equal(t, 1, *r)
 
 	// update
 	row.value = 2
@@ -58,20 +63,21 @@ func TestTable(t *testing.T) {
 
 	r, err = table.Get(tx, Int(42))
 	assert.Nil(t, err)
-	assert.Equal(t, &row, r)
+	assert.Equal(t, 2, *r)
 
 	// index
-	keys, err := table.Index(tx, Tuple{
+	entries, err := table.Index(tx, Tuple{
 		Text("foo"), Int(1),
 	})
 	assert.Nil(t, err)
-	assert.Equal(t, 0, len(keys))
-	keys, err = table.Index(tx, Tuple{
+	assert.Equal(t, 0, len(entries))
+	entries, err = table.Index(tx, Tuple{
 		Text("foo"), Int(2),
 	})
 	assert.Nil(t, err)
-	assert.Equal(t, 1, len(keys))
-	assert.Equal(t, Int(42), keys[0])
+	assert.Equal(t, 1, len(entries))
+	assert.Equal(t, Int(42), entries[0].Key)
+	assert.Equal(t, 2, *entries[0].Value)
 
 	// delete
 	err = table.Delete(tx, Int(42))
@@ -81,7 +87,7 @@ func TestTable(t *testing.T) {
 
 func TestTableIsolation(t *testing.T) {
 
-	table := NewTable[Int, TestRow]()
+	table := NewTable[Int, int, TestRow]()
 
 	tx1 := NewTransaction("1", Time{
 		Timestamp: timestamp.Timestamp{
@@ -108,8 +114,7 @@ func TestTableIsolation(t *testing.T) {
 		value: 3,
 	})
 	assert.NotNil(t, err)
-	var dup *ErrPrimaryKeyDuplicated
-	assert.ErrorAs(t, err, &dup)
+	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrPrimaryKeyDuplicated))
 
 	// read committed
 	iter := table.NewIter(tx1)

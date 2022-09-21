@@ -12,12 +12,24 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package client
+package memtable
 
-import (
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-)
+import "sync/atomic"
 
-var (
-	errTxnClosed = moerr.NewError(moerr.ErrTxnClosed, "the transaction has been committed or aborted")
-)
+type Atomic[T any] struct {
+	value atomic.Value
+}
+
+func NewAtomic[T any](value T) *Atomic[T] {
+	t := new(Atomic[T])
+	t.value.Store(value)
+	return t
+}
+
+func (a *Atomic[T]) Load() T {
+	return a.value.Load().(T)
+}
+
+func (a *Atomic[T]) Store(value T) {
+	a.value.Store(value)
+}

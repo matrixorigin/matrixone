@@ -16,9 +16,9 @@ package indexwrapper
 
 import (
 	"github.com/RoaringBitmap/roaring"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 )
 
@@ -122,7 +122,7 @@ func (idx *mutableIndex) GetActiveRow(key any) (row uint32, err error) {
 	exist := idx.zonemap.Contains(key)
 	// 1. key is definitely not existed
 	if !exist {
-		err = data.ErrNotFound
+		err = moerr.NewNotFound()
 		return
 	}
 	// 2. search art tree for key
@@ -148,7 +148,7 @@ func (idx *mutableIndex) BatchDedup(keys containers.Vector,
 	ctx.SelectAll()
 	exist = idx.art.ContainsAny(ctx, rowmask)
 	if exist {
-		err = data.ErrDuplicate
+		err = moerr.NewDuplicate()
 	}
 	return
 }
@@ -196,7 +196,7 @@ func (idx *nonPkMutIndex) Dedup(key any) (err error) {
 	if !exist {
 		return
 	}
-	return data.ErrPossibleDuplicate
+	return moerr.NewTAEPossibleDuplicate()
 }
 
 func (idx *nonPkMutIndex) BatchDedup(keys containers.Vector, rowmask *roaring.Bitmap) (keyselects *roaring.Bitmap, err error) {
@@ -205,6 +205,6 @@ func (idx *nonPkMutIndex) BatchDedup(keys containers.Vector, rowmask *roaring.Bi
 	if !exist {
 		return
 	}
-	err = data.ErrPossibleDuplicate
+	err = moerr.NewTAEPossibleDuplicate()
 	return
 }

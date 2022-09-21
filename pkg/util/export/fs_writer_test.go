@@ -16,12 +16,12 @@ package export
 
 import (
 	"context"
-	"errors"
 	"os"
 	"path"
 	"path/filepath"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/util/batchpipe"
 	"github.com/stretchr/testify/require"
@@ -79,7 +79,7 @@ func TestLocalFSWriter(t *testing.T) {
 		},
 	})
 	t.Logf("write statement file error: %v", err)
-	require.Equal(t, errors.New("file existed"), err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrFileAlreadyExists))
 	// file result: (has checksum)
 	// 3f3f 3a3f 3132 3334 0a                   ??:?1234.
 	err = fs.Write(ctx, fileservice.IOVector{
@@ -129,7 +129,7 @@ func TestLocalETLFSWriter(t *testing.T) {
 		},
 	})
 	t.Logf("write statement file error: %v", err)
-	require.Equal(t, errors.New("file existed"), err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrFileAlreadyExists))
 
 	err = fs.Write(ctx, fileservice.IOVector{
 		FilePath: "span_node_uuid_20220818_000000_123456", // each file is only can open-write for one time.

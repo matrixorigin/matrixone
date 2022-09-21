@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package txnstorage
+package memtable
 
 import (
 	"github.com/tidwall/btree"
@@ -20,19 +20,19 @@ import (
 
 type TableIter[
 	K Ordered[K],
-	R Row[K],
+	V any,
 ] struct {
 	tx       *Transaction
-	iter     btree.GenericIter[*PhysicalRow[K, R]]
+	iter     btree.GenericIter[*PhysicalRow[K, V]]
 	readTime Time
 }
 
-func (t *Table[K, R]) NewIter(
+func (t *Table[K, V, R]) NewIter(
 	tx *Transaction,
 ) (
-	iter *TableIter[K, R],
+	iter *TableIter[K, V],
 ) {
-	iter = &TableIter[K, R]{
+	iter = &TableIter[K, V]{
 		tx:       tx,
 		iter:     t.rows.Copy().Iter(),
 		readTime: tx.Time,
@@ -40,27 +40,27 @@ func (t *Table[K, R]) NewIter(
 	return
 }
 
-func (t *TableIter[K, R]) Read() (key K, row *R, err error) {
+func (t *TableIter[K, V]) Read() (key K, value *V, err error) {
 	physicalRow := t.iter.Item()
 	key = physicalRow.Key
-	row, err = physicalRow.Values.Read(t.readTime, t.tx)
+	value, err = physicalRow.Read(t.readTime, t.tx)
 	if err != nil {
 		return
 	}
 	return
 }
 
-func (t *TableIter[K, R]) Item() (row *PhysicalRow[K, R]) {
+func (t *TableIter[K, V]) Item() (row *PhysicalRow[K, V]) {
 	return t.iter.Item()
 }
 
-func (t *TableIter[K, R]) Next() bool {
+func (t *TableIter[K, V]) Next() bool {
 	for {
 		if ok := t.iter.Next(); !ok {
 			return false
 		}
 		// skip unreadable values
-		value, _ := t.iter.Item().Values.Read(t.readTime, t.tx)
+		value, _ := t.iter.Item().Read(t.readTime, t.tx)
 		if value == nil {
 			continue
 		}
@@ -68,13 +68,13 @@ func (t *TableIter[K, R]) Next() bool {
 	}
 }
 
-func (t *TableIter[K, R]) First() bool {
+func (t *TableIter[K, V]) First() bool {
 	if ok := t.iter.First(); !ok {
 		return false
 	}
 	for {
 		// skip unreadable values
-		value, _ := t.iter.Item().Values.Read(t.readTime, t.tx)
+		value, _ := t.iter.Item().Read(t.readTime, t.tx)
 		if value == nil {
 			if ok := t.iter.Next(); !ok {
 				return false
@@ -85,8 +85,8 @@ func (t *TableIter[K, R]) First() bool {
 	}
 }
 
-func (t *TableIter[K, R]) Seek(key K) bool {
-	pivot := &PhysicalRow[K, R]{
+func (t *TableIter[K, V]) Seek(key K) bool {
+	pivot := &PhysicalRow[K, V]{
 		Key: key,
 	}
 	if ok := t.iter.Seek(pivot); !ok {
@@ -94,7 +94,7 @@ func (t *TableIter[K, R]) Seek(key K) bool {
 	}
 	for {
 		// skip unreadable values
-		value, _ := t.iter.Item().Values.Read(t.readTime, t.tx)
+		value, _ := t.iter.Item().Read(t.readTime, t.tx)
 		if value == nil {
 			if ok := t.iter.Next(); !ok {
 				return false
@@ -105,7 +105,7 @@ func (t *TableIter[K, R]) Seek(key K) bool {
 	}
 }
 
-func (t *TableIter[K, R]) Close() error {
+func (t *TableIter[K, V]) Close() error {
 	t.iter.Release()
 	return nil
 }

@@ -87,7 +87,7 @@ func NewFS() *fileservice.FileServices {
 }
 
 func NewTaskService() taskservice.TaskService {
-	return taskservice.NewTaskService(taskservice.NewMemTaskStorage())
+	return taskservice.NewTaskService(taskservice.NewMemTaskStorage(), nil)
 }
 
 func NewBatch(ts []types.Type, random bool, n int, m *mheap.Mheap) *batch.Batch {

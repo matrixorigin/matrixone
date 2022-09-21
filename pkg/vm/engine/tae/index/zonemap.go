@@ -76,8 +76,18 @@ func (zm *ZoneMap) GetType() types.Type {
 }
 
 func (zm *ZoneMap) init(v any) {
-	zm.min = v
-	zm.max = v
+	// We cannot just shallow copy v.
+	// If v is of type []byte, zm.min or zm.max will point to part of a
+	// memory buffer, which may be released later.
+	if src, ok := v.([]byte); ok {
+		dst := make([]byte, len(src))
+		copy(dst, src)
+		zm.min = dst
+		zm.max = dst
+	} else {
+		zm.min = v
+		zm.max = v
+	}
 	zm.inited = true
 }
 
@@ -90,9 +100,21 @@ func (zm *ZoneMap) Update(v any) (err error) {
 		return
 	}
 	if compute.CompareGeneric(v, zm.max, zm.typ) > 0 {
-		zm.max = v
+		if src, ok := v.([]byte); ok {
+			dst := make([]byte, len(src))
+			copy(dst, src)
+			zm.max = dst
+		} else {
+			zm.max = v
+		}
 	} else if compute.CompareGeneric(v, zm.min, zm.typ) < 0 {
-		zm.min = v
+		if src, ok := v.([]byte); ok {
+			dst := make([]byte, len(src))
+			copy(dst, src)
+			zm.min = dst
+		} else {
+			zm.min = v
+		}
 	}
 	return
 }

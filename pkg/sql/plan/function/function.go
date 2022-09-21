@@ -15,14 +15,12 @@
 package function
 
 import (
-	"fmt"
 	"math"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/errno"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/errors"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -146,7 +144,7 @@ func (f Function) ReturnType() (typ types.T, nullable bool) {
 
 func (f Function) VecFn(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	if f.Fn == nil {
-		return nil, errors.New(errno.AmbiguousFunction, "function doesn't implement its eval method")
+		return nil, moerr.NewInternalError("no function")
 	}
 	return f.Fn(vs, proc)
 }
@@ -170,7 +168,7 @@ func fromNameToFunctionId(name string) (int32, error) {
 	if fid, ok := functionIdRegister[name]; ok {
 		return fid, nil
 	}
-	return -1, errors.New(errno.UndefinedFunction, fmt.Sprintf("Function or operator '%s' will be implemented in future version.", name))
+	return -1, moerr.NewNotSupported("function or operator '%s'", name)
 }
 
 // EncodeOverloadID convert function-id and overload-index to be an overloadID
@@ -245,14 +243,14 @@ func GetFunctionByName(name string, args []types.Type) (int64, types.Type, []typ
 	case wrongFunctionParameters:
 		ArgsToPrint := getOidSlice(finalTypes) // arg information to print for error message
 		if len(fs.Overloads) > 0 && fs.Overloads[0].isFunction() {
-			return -1, emptyType, nil, errors.New(errno.UndefinedFunction, fmt.Sprintf("Function '%s' with parameters %v is not supported.", name, ArgsToPrint))
+			return -1, emptyType, nil, moerr.NewInvalidArg("function "+name, ArgsToPrint)
 		}
-		return -1, emptyType, nil, errors.New(errno.UndefinedFunction, fmt.Sprintf("Operator '%s' with parameters %v is not supported.", name, ArgsToPrint))
+		return -1, emptyType, nil, moerr.NewInvalidArg("operator "+name, ArgsToPrint)
 	case tooManyFunctionsMatched:
-		return -1, emptyType, nil, errors.New(errno.AmbiguousParameter, fmt.Sprintf("too many overloads matched for '%s%v'", name, args))
+		return -1, emptyType, nil, moerr.NewInvalidArg("too many overloads matched "+name, args)
 	case wrongFuncParamForAgg:
 		ArgsToPrint := getOidSlice(finalTypes)
-		return -1, emptyType, nil, errors.New(errno.UndefinedFunction, fmt.Sprintf("Aggregate function of '%s' do not support implicit conversions for param of %v", name, ArgsToPrint))
+		return -1, emptyType, nil, moerr.NewInvalidArg("aggregate function "+name, ArgsToPrint)
 	}
 
 	// make the real return type of function overload.

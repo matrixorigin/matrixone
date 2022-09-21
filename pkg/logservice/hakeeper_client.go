@@ -19,17 +19,10 @@ import (
 	"math/rand"
 	"sync"
 
-	"github.com/cockroachdb/errors"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
-)
-
-var (
-	// ErrNotHAKeeper is returned to indicate that HAKeeper can not be located.
-	ErrNotHAKeeper = moerr.NewError(moerr.INVALID_STATE, "failed to locate HAKeeper")
 )
 
 // CNHAKeeperClient is the HAKeeper client used by a CN store.
@@ -41,6 +34,8 @@ type CNHAKeeperClient interface {
 	GetClusterDetails(ctx context.Context) (pb.ClusterDetails, error)
 	// SendCNHeartbeat sends the specified heartbeat message to the HAKeeper.
 	SendCNHeartbeat(ctx context.Context, hb pb.CNStoreHeartbeat) error
+	// AllocateID allocate a globally unique ID
+	AllocateID(ctx context.Context) (uint64, error)
 }
 
 // DNHAKeeperClient is the HAKeeper client used by a DN store.
@@ -125,6 +120,12 @@ type managedHAKeeperClient struct {
 	// So we need to keep options for morpc.Client.
 	backendOptions []morpc.BackendOption
 	clientOptions  []morpc.ClientOption
+
+	mu struct {
+		sync.RWMutex
+		nextID uint64
+		lastID uint64
+	}
 }
 
 func (c *managedHAKeeperClient) Close() error {
@@ -147,6 +148,34 @@ func (c *managedHAKeeperClient) GetClusterDetails(ctx context.Context) (pb.Clust
 			continue
 		}
 		return cd, err
+	}
+}
+
+func (c *managedHAKeeperClient) AllocateID(ctx context.Context) (uint64, error) {
+	c.mu.Lock()
+	if c.mu.nextID != c.mu.lastID {
+		v := c.mu.nextID
+		c.mu.nextID++
+		c.mu.Unlock()
+		return v, nil
+	}
+
+	for {
+		if err := c.prepareClient(ctx); err != nil {
+			return 0, err
+		}
+		firstID, err := c.client.sendCNAllocateID(ctx, c.cfg.AllocateIDBatch)
+		if err != nil {
+			c.resetClient()
+		}
+		if c.isRetryableError(err) {
+			continue
+		}
+
+		c.mu.nextID = firstID + 1
+		c.mu.lastID = firstID + c.cfg.AllocateIDBatch - 1
+		c.mu.Unlock()
+		return firstID, err
 	}
 }
 
@@ -202,7 +231,7 @@ func (c *managedHAKeeperClient) SendLogHeartbeat(ctx context.Context,
 }
 
 func (c *managedHAKeeperClient) isRetryableError(err error) bool {
-	return errors.Is(err, ErrNotHAKeeper)
+	return moerr.IsMoErrCode(err, moerr.ErrNoHAKeeper)
 }
 
 func (c *managedHAKeeperClient) resetClient() {
@@ -252,7 +281,7 @@ func newHAKeeperClient(ctx context.Context,
 	if err != nil {
 		return nil, err
 	}
-	return nil, ErrNotHAKeeper
+	return nil, moerr.NewNoHAKeeper()
 }
 
 func connectByReverseProxy(ctx context.Context,
@@ -322,7 +351,7 @@ func connectToHAKeeper(ctx context.Context,
 	}
 	if e == nil {
 		// didn't encounter any error
-		return nil, ErrNotHAKeeper
+		return nil, moerr.NewNoHAKeeper()
 	}
 	return nil, e
 }
@@ -356,6 +385,18 @@ func (c *hakeeperClient) sendCNHeartbeat(ctx context.Context, hb pb.CNStoreHeart
 	}
 	_, err := c.sendHeartbeat(ctx, req)
 	return err
+}
+
+func (c *hakeeperClient) sendCNAllocateID(ctx context.Context, batch uint64) (uint64, error) {
+	req := pb.Request{
+		Method:       pb.CN_ALLOCATE_ID,
+		CNAllocateID: &pb.CNAllocateID{Batch: batch},
+	}
+	resp, err := c.request(ctx, req)
+	if err != nil {
+		return 0, err
+	}
+	return resp.AllocateID.FirstID, nil
 }
 
 func (c *hakeeperClient) sendDNHeartbeat(ctx context.Context,
