@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package txnstorage
+package memtable
 
 import "fmt"
 
@@ -78,8 +78,16 @@ func (t Tuple) Less(than Tuple) bool {
 				return false
 			}
 
+		case ID:
+			key2 := than[i].(ID)
+			if key.Less(key2) {
+				return true
+			} else if key2.Less(key) {
+				return false
+			}
+
 		default:
-			panic(fmt.Errorf("unknown key type: %T", key))
+			panic(fmt.Sprintf("unknown key type: %T", key))
 		}
 	}
 	// equal
