@@ -382,7 +382,7 @@ func (a *UnaryDistAgg[T1, T2]) UnmarshalBinary(data []byte) error {
 	if err != nil {
 		return err
 	}
-	newAgg := tmp.(*UnaryAgg[T1, T2])
+	newAgg := tmp.(*UnaryDistAgg[T1, T2])
 	a.priv = newAgg.priv
 	a.priv.UnmarshalBinary(decode.Private)
 	a.grows = newAgg.grows

@@ -110,9 +110,9 @@ func getTheBytes(value any) []byte {
 }
 
 func (a *ApproxCountDistic[T]) MarshalBinary() ([]byte, error) {
-	return types.Encode(a.Sk)
+	return types.Encode(&a.Sk)
 }
 
 func (a *ApproxCountDistic[T]) UnmarshalBinary(data []byte) error {
-	return types.Decode(data, a.Sk)
+	return types.Decode(data, &a.Sk)
 }
