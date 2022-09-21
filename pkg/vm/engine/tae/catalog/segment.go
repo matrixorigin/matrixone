@@ -154,7 +154,7 @@ func (entry *SegmentEntry) StringLocked() string {
 
 func (entry *SegmentEntry) Repr() string {
 	id := entry.AsCommonID()
-	return fmt.Sprintf("[%s]SEGMENT[%s]", entry.state.Repr(), id.String())
+	return fmt.Sprintf("[%s]SEG[%s]", entry.state.Repr(), id.String())
 }
 
 func (entry *SegmentEntry) String() string {
@@ -171,10 +171,10 @@ func (entry *SegmentEntry) StringWithLevel(level common.PPLevel) string {
 
 func (entry *SegmentEntry) StringWithLevelLocked(level common.PPLevel) string {
 	if level <= common.PPL1 {
-		return fmt.Sprintf("[%s]SEGMENT[%d][CreateAt=%s,DeleteAt=%s]",
+		return fmt.Sprintf("[%s]SEG[%d][C@%s,D@%s]",
 			entry.state.Repr(), entry.ID, entry.GetCreatedAt().ToString(), entry.GetDeleteAt().ToString())
 	}
-	return fmt.Sprintf("[%s]SEGMENT%s", entry.state.Repr(), entry.MetaBaseEntry.StringLocked())
+	return fmt.Sprintf("[%s]SEG%s", entry.state.Repr(), entry.MetaBaseEntry.StringLocked())
 }
 
 func (entry *SegmentEntry) BlockCnt() int {

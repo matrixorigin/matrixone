@@ -230,10 +230,10 @@ func (entry *TableEntry) StringWithLevel(level common.PPLevel) string {
 }
 func (entry *TableEntry) StringLockedWithLevel(level common.PPLevel) string {
 	if level <= common.PPL1 {
-		return fmt.Sprintf("TABLE[%d][name=%s][CreateAt=%s,DeleteAt=%s]",
+		return fmt.Sprintf("TBL[%d][name=%s][C@%s,D@%s]",
 			entry.ID, entry.schema.Name, entry.GetCreatedAt().ToString(), entry.GetDeleteAt().ToString())
 	}
-	return fmt.Sprintf("TABLE%s[name=%s]", entry.TableBaseEntry.StringLocked(), entry.schema.Name)
+	return fmt.Sprintf("TBL%s[name=%s]", entry.TableBaseEntry.StringLocked(), entry.schema.Name)
 }
 
 func (entry *TableEntry) StringLocked() string {

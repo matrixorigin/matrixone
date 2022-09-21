@@ -103,7 +103,7 @@ func (entry *BlockEntry) PPString(level common.PPLevel, depth int, prefix string
 
 func (entry *BlockEntry) Repr() string {
 	id := entry.AsCommonID()
-	return fmt.Sprintf("[%s]BLOCK[%s]", entry.state.Repr(), id.String())
+	return fmt.Sprintf("[%s]BLK[%s]", entry.state.Repr(), id.String())
 }
 
 func (entry *BlockEntry) String() string {
@@ -113,7 +113,7 @@ func (entry *BlockEntry) String() string {
 }
 
 func (entry *BlockEntry) StringLocked() string {
-	return fmt.Sprintf("[%s]BLOCK%s", entry.state.Repr(), entry.MetaBaseEntry.StringLocked())
+	return fmt.Sprintf("[%s]BLK%s", entry.state.Repr(), entry.MetaBaseEntry.StringLocked())
 }
 
 func (entry *BlockEntry) StringWithLevel(level common.PPLevel) string {
@@ -124,10 +124,10 @@ func (entry *BlockEntry) StringWithLevel(level common.PPLevel) string {
 
 func (entry *BlockEntry) StringWithLevelLocked(level common.PPLevel) string {
 	if level <= common.PPL1 {
-		return fmt.Sprintf("[%s]BLOCK[%d][CreateAt=%s,DeleteAt=%s]",
+		return fmt.Sprintf("[%s]BLK[%d][C@%s,D@%s]",
 			entry.state.Repr(), entry.ID, entry.GetCreatedAt().ToString(), entry.GetDeleteAt().ToString())
 	}
-	return fmt.Sprintf("[%s]BLOCK%s", entry.state.Repr(), entry.MetaBaseEntry.StringLocked())
+	return fmt.Sprintf("[%s]BLK%s", entry.state.Repr(), entry.MetaBaseEntry.StringLocked())
 }
 
 func (entry *BlockEntry) AsCommonID() *common.ID {
