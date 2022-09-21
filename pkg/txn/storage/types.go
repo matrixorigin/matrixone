@@ -17,18 +17,8 @@ package storage
 import (
 	"context"
 
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
-)
-
-var (
-	// ErrWriteConflict write conflict
-	ErrWriteConflict = moerr.NewError(moerr.ErrTxnWriteConflict, "write conflict")
-	// ErrUnreslovedConflict read unresoved conflict
-	ErrUnreslovedConflict = moerr.NewError(moerr.ErrMissingTxn, "unresloved conflict")
-	// ErrMissingTxn missing txn
-	ErrMissingTxn = moerr.NewError(moerr.ErrMissingTxn, "missing txn")
 )
 
 // TxnStorage In order for TxnService to implement distributed transactions based on Clock-SI on a stand-alone

@@ -62,7 +62,7 @@ func TestEngine(t *testing.T) {
 		err = e.Commit(ctx, txnOp)
 		require.NoError(t, err)
 		err = e.Rollback(ctx, txnOp)
-		require.Equal(t, moerr.New(moerr.ErrTxnClosed, "the transaction has been committed or aborted"), err)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnClosed))
 		_, err = e.Nodes()
 		require.NoError(t, err)
 		hints := e.Hints()

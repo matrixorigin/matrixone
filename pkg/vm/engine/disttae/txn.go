@@ -16,7 +16,6 @@ package disttae
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -158,15 +157,14 @@ func (txn *Transaction) getRow(ctx context.Context, databaseId uint64, tableId u
 		return nil, err
 	}
 	if len(bats) == 0 {
-		return nil, moerr.New(moerr.ERROR_START, fmt.Sprintf("empty table: %v.%v",
-			databaseId, tableId))
+		return nil, moerr.NewInvalidInput("empty table: %v.%v", databaseId, tableId)
 	}
 	if len(bats) != 1 {
-		return nil, moerr.New(moerr.ERROR_START, "table is not unique")
+		return nil, moerr.NewInvalidInput("table is not unique")
 	}
 	rows := genRows(bats[0])
 	if len(rows) != 1 {
-		return nil, moerr.New(moerr.ERROR_START, "table is not unique")
+		return nil, moerr.NewInvalidInput("table is not unique")
 	}
 	return rows[0], nil
 }
@@ -179,8 +177,7 @@ func (txn *Transaction) getRows(ctx context.Context, databaseId uint64, tableId 
 		return nil, err
 	}
 	if len(bats) == 0 {
-		return nil, moerr.New(moerr.ERROR_START, fmt.Sprintf("empty table: %v.%v",
-			databaseId, tableId))
+		return nil, moerr.NewInternalError("empty table: %v.%v", databaseId, tableId)
 	}
 	rows := make([][]any, 0, len(bats))
 	for _, bat := range bats {
