@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/RoaringBitmap/roaring"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -541,7 +542,7 @@ func (blk *dataBlock) ResolveABlkColumnMVCCData(
 
 func (blk *dataBlock) Update(txn txnif.AsyncTxn, row uint32, colIdx uint16, v any) (node txnif.UpdateNode, err error) {
 	if blk.meta.GetSchema().PhyAddrKey.Idx == int(colIdx) {
-		err = data.ErrUpdatePhyAddrKey
+		err = moerr.NewTAEError("update physical addr key")
 		return
 	}
 	return blk.updateWithFineLock(txn, row, colIdx, v)
@@ -619,7 +620,7 @@ func (blk *dataBlock) GetValue(txn txnif.AsyncTxn, row, col int) (v any, err err
 		chain.RLock()
 		v, err = chain.GetValueLocked(uint32(row), ts)
 		chain.RUnlock()
-		if err == txnif.ErrTxnInternal {
+		if moerr.IsMoErrCode(err, moerr.ErrTxnError) {
 			blk.mvcc.RUnlock()
 			return
 		}
@@ -628,7 +629,7 @@ func (blk *dataBlock) GetValue(txn txnif.AsyncTxn, row, col int) (v any, err err
 			err = nil
 		}
 	} else {
-		err = data.ErrNotFound
+		err = moerr.NewNotFound()
 	}
 	blk.mvcc.RUnlock()
 	if v != nil || err != nil {
@@ -668,7 +669,7 @@ func (blk *dataBlock) ablkGetByFilter(ts types.TS, filter *handle.Filter) (offse
 	defer blk.mvcc.RUnlock()
 	offset, err = blk.pkIndex.GetActiveRow(filter.Val)
 	// Unknow err. return fast
-	if err != nil && err != data.ErrNotFound {
+	if err != nil && !moerr.IsMoErrCode(err, moerr.ErrNotFound) {
 		return
 	}
 
@@ -690,7 +691,7 @@ func (blk *dataBlock) ablkGetByFilter(ts types.TS, filter *handle.Filter) (offse
 				return
 			}
 			if deleted {
-				err = data.ErrNotFound
+				err = moerr.NewNotFound()
 			}
 			return
 		}
@@ -700,7 +701,7 @@ func (blk *dataBlock) ablkGetByFilter(ts types.TS, filter *handle.Filter) (offse
 	// Check delete map
 	deleted, existed := blk.pkIndex.IsKeyDeleted(filter.Val, ts)
 	if !existed || deleted {
-		err = data.ErrNotFound
+		err = moerr.NewNotFound()
 		// panic(fmt.Sprintf("%v:%v %v:%s", existed, deleted, filter.Val, blk.index.String()))
 	}
 	return
@@ -709,10 +710,10 @@ func (blk *dataBlock) ablkGetByFilter(ts types.TS, filter *handle.Filter) (offse
 func (blk *dataBlock) blkGetByFilter(ts types.TS, filter *handle.Filter) (offset uint32, err error) {
 	err = blk.pkIndex.Dedup(filter.Val)
 	if err == nil {
-		err = data.ErrNotFound
+		err = moerr.NewNotFound()
 		return
 	}
-	if err != data.ErrPossibleDuplicate {
+	if !moerr.IsMoErrCode(err, moerr.ErrTAEPossibleDuplicate) {
 		return
 	}
 	err = nil
@@ -723,7 +724,7 @@ func (blk *dataBlock) blkGetByFilter(ts types.TS, filter *handle.Filter) (offset
 	defer sortKey.Close()
 	off, existed := compute.GetOffsetByVal(sortKey, filter.Val, nil)
 	if !existed {
-		err = data.ErrNotFound
+		err = moerr.NewNotFound()
 		return
 	}
 	offset = uint32(off)
@@ -735,7 +736,7 @@ func (blk *dataBlock) blkGetByFilter(ts types.TS, filter *handle.Filter) (offset
 		return
 	}
 	if deleted {
-		err = data.ErrNotFound
+		err = moerr.NewNotFound()
 	}
 	return
 }
@@ -849,7 +850,7 @@ func (blk *dataBlock) BatchDedup(txn txnif.AsyncTxn, pks containers.Vector, rowm
 			row := it.Next()
 			key := pks.Get(int(row))
 			if blk.pkIndex.HasDeleteFrom(key, ts) {
-				err = txnif.ErrTxnWWConflict
+				err = moerr.NewTxnWWConflict()
 				break
 			}
 		}
@@ -876,7 +877,7 @@ func (blk *dataBlock) BatchDedup(txn txnif.AsyncTxn, pks containers.Vector, rowm
 	defer sortKey.Close()
 	deduplicate := func(v any, _ int) error {
 		if _, existed := compute.GetOffsetByVal(sortKey.GetData(), v, sortKey.DeleteMask); existed {
-			return data.ErrDuplicate
+			return moerr.NewDuplicate()
 		}
 		return nil
 	}

@@ -361,7 +361,6 @@ func (n *insertNode) Append(data *containers.Batch, offset uint32) (an uint32, e
 		destVec.ExtendWithOffset(data.Vecs[def.Idx], int(offset), int(an))
 	}
 	n.rows = uint32(n.data.Length())
-	//err = n.FillPhyAddrColumn(from, uint32(data.Length())-offset)
 	err = n.FillPhyAddrColumn(from, an)
 	return
 }

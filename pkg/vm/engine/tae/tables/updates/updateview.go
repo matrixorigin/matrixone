@@ -17,12 +17,12 @@ package updates
 import (
 	"fmt"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 )
 
@@ -53,7 +53,7 @@ func (view *ColumnView) CollectUpdates(ts types.TS) (mask *roaring.Bitmap, vals 
 		if err == nil {
 			vals[row] = v
 			mask.Add(row)
-		} else if err == txnif.ErrTxnInternal {
+		} else if moerr.IsMoErrCode(err, moerr.ErrTxnInternal) {
 			break
 		}
 		err = nil
@@ -64,7 +64,7 @@ func (view *ColumnView) CollectUpdates(ts types.TS) (mask *roaring.Bitmap, vals 
 func (view *ColumnView) GetValue(key uint32, startTs types.TS) (v any, err error) {
 	link := view.links[key]
 	if link == nil {
-		err = data.ErrNotFound
+		err = moerr.NewNotFound()
 		return
 	}
 	head := link.GetHead()
@@ -106,7 +106,7 @@ func (view *ColumnView) GetValue(key uint32, startTs types.TS) (v any, err error
 				} else if state == txnif.TxnStatePreparing {
 					logutil.Fatal("txn state error")
 				} else if state == txnif.TxnStateUnknown {
-					err = txnif.ErrTxnInternal
+					err = moerr.NewTxnInternal()
 					v = nil
 					break
 				}
@@ -123,7 +123,7 @@ func (view *ColumnView) GetValue(key uint32, startTs types.TS) (v any, err error
 		break
 	}
 	if v == nil && err == nil {
-		err = data.ErrNotFound
+		err = moerr.NewNotFound()
 	}
 	return
 }
@@ -141,7 +141,7 @@ func (view *ColumnView) PrepapreInsert(key uint32, ts types.TS) (err error) {
 	if node.txn == nil {
 		// 1.1 The update was committed after txn start. w-w conflict
 		if node.GetCommitTSLocked().Greater(ts) {
-			err = txnif.ErrTxnWWConflict
+			err = moerr.NewTxnWWConflict()
 			node.RUnlock()
 			return
 		}
@@ -157,7 +157,7 @@ func (view *ColumnView) PrepapreInsert(key uint32, ts types.TS) (err error) {
 	// 3. The specified row has other uncommitted change
 	// Note: Here we have some overkill to proactivelly w-w with committing txn
 	node.RUnlock()
-	err = txnif.ErrTxnWWConflict
+	err = moerr.NewTxnWWConflict()
 	return
 }
 
@@ -179,7 +179,7 @@ func (view *ColumnView) Insert(key uint32, un txnif.UpdateNode) (err error) {
 	if node.txn == nil {
 		// 1.1 The update was committed after txn start. w-w conflict
 		if node.GetCommitTSLocked().Greater(n.GetStartTS()) {
-			err = txnif.ErrTxnWWConflict
+			err = moerr.NewTxnWWConflict()
 			node.RUnlock()
 			return
 		}
@@ -197,7 +197,7 @@ func (view *ColumnView) Insert(key uint32, un txnif.UpdateNode) (err error) {
 	// 3. The specified row has other uncommitted change
 	// Note: Here we have some overkill to proactivelly w-w with committing txn
 	node.RUnlock()
-	err = txnif.ErrTxnWWConflict
+	err = moerr.NewTxnWWConflict()
 	return
 }
 

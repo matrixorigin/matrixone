@@ -29,7 +29,7 @@ var usage = ""
 
 func ToDate(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	if !vectors[1].IsScalar() {
-		return nil, moerr.NewError(moerr.ERROR_FUNCTION_PARAMETER, "the second parameter of function to_date must be char/varchar constant\n"+usage)
+		return nil, moerr.NewInvalidArg("the second parameter of function to_date", "not constant")
 	}
 	inputBytes0 := vector.MustStrCols(vectors[0])
 	inputBytes1 := vector.MustStrCols(vectors[1])
@@ -78,14 +78,14 @@ func ToDateInputBytes(inputs []string, format string, inputNsp *nulls.Nulls, res
 		if val, ok := otherFormats[format]; ok {
 			t, err := time.Parse(val, inputs[i])
 			if err != nil {
-				return nil, nil, moerr.NewError(moerr.ERROR_FUNCTION_PARAMETER, inputs[i]+"is not is a valid "+format+" format.")
+				return nil, nil, moerr.NewInvalidArg("date format", format)
 			}
 			result[i] = t.Format("2006-01-02") // this is our output format
 		} else {
 			//  XXX the only diff from if branch is error message.  Is this really correct?
 			t, err := time.Parse(val, inputs[i])
 			if err != nil {
-				return nil, nil, moerr.NewError(moerr.ERROR_FUNCTION_PARAMETER, "invalid inputs for function 'to_date()'"+inputs[i]+" "+format)
+				return nil, nil, moerr.NewInvalidArg("date format", format)
 			}
 			result[i] = t.Format("2006-01-02") // this is our output format
 		}

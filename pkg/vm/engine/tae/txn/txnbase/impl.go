@@ -17,6 +17,7 @@ package txnbase
 import (
 	"sync/atomic"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 )
@@ -24,8 +25,7 @@ import (
 func (txn *Txn) rollback1PC() (err error) {
 	state := txn.GetTxnState(false)
 	if state != txnif.TxnStateActive {
-		logutil.Warnf("unexpected txn status : %s", txnif.TxnStrState(state))
-		return ErrTxnStateCannotRollback
+		return moerr.NewTAERollback("unexpected txn status : %s", txnif.TxnStrState(state))
 	}
 
 	txn.Add(1)
@@ -48,7 +48,7 @@ func (txn *Txn) commit1PC() (err error) {
 	state := txn.GetTxnState(false)
 	if state != txnif.TxnStateActive {
 		logutil.Warnf("unexpected txn state : %s", txnif.TxnStrState(state))
-		return ErrTxnStateCannotCommit
+		return moerr.NewTAECommit("invalid txn state %s", txnif.TxnStrState(state))
 	}
 	txn.Add(1)
 	err = txn.Mgr.OnOpTxn(&OpTxn{
@@ -76,8 +76,7 @@ func (txn *Txn) commit1PC() (err error) {
 func (txn *Txn) rollback2PC() (err error) {
 	state := txn.GetTxnState(false)
 	if state != txnif.TxnStateActive && state != txnif.TxnStatePrepared {
-		logutil.Warnf("unexpected txn state : %s", txnif.TxnStrState(state))
-		return ErrTxnStateCannotRollback
+		return moerr.NewInternalError("cannot rollback, unexpected txn state : %s", txnif.TxnStrState(state))
 	}
 
 	if state == txnif.TxnStateActive {
@@ -110,8 +109,7 @@ func (txn *Txn) rollback2PC() (err error) {
 func (txn *Txn) commit2PC() (err error) {
 	state := txn.GetTxnState(false)
 	if state != txnif.TxnStateCommittingFinished && state != txnif.TxnStatePrepared {
-		logutil.Warnf("unexpected txn state : %s", txnif.TxnStrState(state))
-		return ErrTxnStateCannotCommit
+		return moerr.NewInternalError("cannot commit, unexpected txn state : %s", txnif.TxnStrState(state))
 	}
 
 	if state == txnif.TxnStateCommittingFinished {

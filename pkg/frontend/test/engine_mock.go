@@ -488,6 +488,20 @@ func (m *MockEngine) EXPECT() *MockEngineMockRecorder {
 	return m.recorder
 }
 
+// Commit mocks base method.
+func (m *MockEngine) Commit(ctx context.Context, op client.TxnOperator) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "Commit", ctx, op)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// Commit indicates an expected call of Commit.
+func (mr *MockEngineMockRecorder) Commit(ctx, op interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Commit", reflect.TypeOf((*MockEngine)(nil).Commit), ctx, op)
+}
+
 // Create mocks base method.
 func (m *MockEngine) Create(ctx context.Context, databaseName string, op client.TxnOperator) error {
 	m.ctrl.T.Helper()
@@ -560,6 +574,20 @@ func (mr *MockEngineMockRecorder) Hints() *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Hints", reflect.TypeOf((*MockEngine)(nil).Hints))
 }
 
+// New mocks base method.
+func (m *MockEngine) New(ctx context.Context, op client.TxnOperator) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "New", ctx, op)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// New indicates an expected call of New.
+func (mr *MockEngineMockRecorder) New(ctx, op interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "New", reflect.TypeOf((*MockEngine)(nil).New), ctx, op)
+}
+
 // Nodes mocks base method.
 func (m *MockEngine) Nodes() (engine.Nodes, error) {
 	m.ctrl.T.Helper()
@@ -573,4 +601,18 @@ func (m *MockEngine) Nodes() (engine.Nodes, error) {
 func (mr *MockEngineMockRecorder) Nodes() *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Nodes", reflect.TypeOf((*MockEngine)(nil).Nodes))
+}
+
+// Rollback mocks base method.
+func (m *MockEngine) Rollback(ctx context.Context, op client.TxnOperator) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "Rollback", ctx, op)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// Rollback indicates an expected call of Rollback.
+func (mr *MockEngineMockRecorder) Rollback(ctx, op interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "Rollback", reflect.TypeOf((*MockEngine)(nil).Rollback), ctx, op)
 }

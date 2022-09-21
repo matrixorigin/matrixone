@@ -165,7 +165,7 @@ func getHeartbeatCmd(data []byte, tag pb.HAKeeperUpdateType) []byte {
 
 func NewStateMachine(shardID uint64, replicaID uint64) sm.IStateMachine {
 	if shardID != DefaultHAKeeperShardID {
-		panic(moerr.NewError(moerr.INVALID_INPUT, "invalid HAKeeper shard ID"))
+		panic(moerr.NewInvalidInput("HAKeeper shard ID %d does not match DefaultHAKeeperShardID %d", shardID, DefaultHAKeeperShardID))
 	}
 	return &stateMachine{
 		replicaID: replicaID,
@@ -392,7 +392,7 @@ func (s *stateMachine) Update(e sm.Entry) (sm.Result, error) {
 	case pb.InitialClusterUpdate:
 		return s.handleInitialClusterRequestCmd(cmd), nil
 	default:
-		panic(moerr.NewError(moerr.INVALID_INPUT, "unexpected haKeeper cmd"))
+		panic(moerr.NewInvalidInput("unknownn haKeeper cmd '%v'", cmd))
 	}
 }
 

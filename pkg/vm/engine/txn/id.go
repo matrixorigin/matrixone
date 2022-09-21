@@ -1,4 +1,4 @@
-// Copyright 2021 Matrix Origin
+// Copyright 2022 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,17 +12,36 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package catalog
+package txnengine
 
-import "errors"
+import (
+	crand "crypto/rand"
+	"encoding/binary"
+	"math/rand"
+)
+
+type ID int64
+
+func init() {
+	var seed int64
+	binary.Read(crand.Reader, binary.LittleEndian, &seed)
+	rand.Seed(seed)
+}
+
+func NewID() (id ID) {
+	//TODO will use an id generate service
+	id = ID(rand.Int63())
+	return
+}
+
+func (i ID) Less(than ID) bool {
+	return i < than
+}
+
+func (i ID) IsEmpty() bool {
+	return i == emptyID
+}
 
 var (
-	ErrNotFound     = errors.New("tae catalog: not found")
-	ErrDuplicate    = errors.New("tae catalog: duplicate")
-	ErrCheckpoint   = errors.New("tae catalog: checkpoint")
-	ErrNotPermitted = errors.New("tae catalog: operation not permitted")
-
-	ErrSchemaValidation = errors.New("tae catalog: schema validation")
-
-	ErrStopCurrRecur = errors.New("tae catalog: stop current recursion")
+	emptyID ID
 )

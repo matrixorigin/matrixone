@@ -16,6 +16,7 @@ package indexwrapper
 
 import (
 	"github.com/RoaringBitmap/roaring"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
@@ -53,7 +54,7 @@ func (index *immutableIndex) Dedup(key any) (err error) {
 		}
 	}
 
-	err = data.ErrPossibleDuplicate
+	err = moerr.NewTAEPossibleDuplicate()
 	return
 }
 
@@ -75,8 +76,7 @@ func (index *immutableIndex) BatchDedup(keys containers.Vector, rowmask *roaring
 			return
 		}
 	}
-
-	err = data.ErrPossibleDuplicate
+	err = moerr.NewTAEPossibleDuplicate()
 	return
 }
 

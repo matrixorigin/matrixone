@@ -1,4 +1,4 @@
-// Copyright 2021 Matrix Origin
+// Copyright 2022 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,16 +12,24 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package errors
+package memtable
 
-import "fmt"
+import "github.com/tidwall/btree"
 
-type SqlError struct {
-	code  string
-	cause string
+type TablePhysicalIter[
+	K Ordered[K],
+	V any,
+] struct {
+	btree.GenericIter[*PhysicalRow[K, V]]
 }
 
-var _ error = (*SqlError)(nil)
+func (t *Table[K, V, R]) NewPhysicalIter() *TablePhysicalIter[K, V] {
+	return &TablePhysicalIter[K, V]{
+		GenericIter: t.rows.Iter(),
+	}
+}
 
-func (e *SqlError) Code() string  { return e.code }
-func (e *SqlError) Error() string { return fmt.Sprintf("%v", e.cause) }
+func (t *TablePhysicalIter[K, V]) Close() error {
+	t.GenericIter.Release()
+	return nil
+}
