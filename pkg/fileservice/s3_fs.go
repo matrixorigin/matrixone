@@ -165,7 +165,7 @@ func newS3FS(
 		Bucket: ptrTo(bucket),
 	})
 	if err != nil {
-		return nil, moerr.NewInternalError("bad s3 config: %w", err)
+		return nil, moerr.NewInternalError("bad s3 config: %v", err)
 	}
 
 	fs := &S3FS{

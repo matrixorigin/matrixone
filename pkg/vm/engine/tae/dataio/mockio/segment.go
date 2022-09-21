@@ -51,12 +51,12 @@ func (factory *segmentFactory) EncodeName(id uint64) string {
 func (factory *segmentFactory) DecodeName(name string) (id uint64, err error) {
 	trimmed := strings.TrimSuffix(name, ".seg")
 	if trimmed == name {
-		err = moerr.NewInternalError("%w: %s", file.ErrInvalidName, name)
+		err = moerr.NewInternalError("%v: %s", file.ErrInvalidName, name)
 		return
 	}
 	id, err = strconv.ParseUint(trimmed, 10, 64)
 	if err != nil {
-		err = moerr.NewInternalError("%w: %s", file.ErrInvalidName, name)
+		err = moerr.NewInternalError("%v: %s", file.ErrInvalidName, name)
 	}
 	return
 }
