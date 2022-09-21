@@ -1736,6 +1736,14 @@ var builtins = map[int]Functions{
 				ReturnTyp: types.T_float64,
 				Fn:        unary.Atan,
 			},
+			{
+				Index:     1,
+				Flag:      plan.Function_STRICT,
+				Layout:    STANDARD_FUNCTION,
+				Args:      []types.T{types.T_float64, types.T_float64},
+				ReturnTyp: types.T_float64,
+				Fn:        unary.Atan,
+			},
 		},
 	},
 	COS: {
