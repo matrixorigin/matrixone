@@ -343,7 +343,7 @@ func vectorAt(vec *vector.Vector, i int) (value Nullable) {
 
 	}
 
-	panic(fmt.Errorf("unknown column type: %v", vec.Typ))
+	panic(fmt.Sprintf("unknown column type: %v", vec.Typ))
 }
 
 func vectorAppend(vec *vector.Vector, value Nullable, heap *mheap.Mheap) {
