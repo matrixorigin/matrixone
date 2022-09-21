@@ -18,6 +18,7 @@ import (
 	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/txn/storage/txn/memtable"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	txnengine "github.com/matrixorigin/matrixone/pkg/vm/engine/txn"
@@ -35,15 +36,24 @@ var (
 	index_RowID                = Text("row id")
 )
 
+type (
+	DatabaseRowIter  = Iter[ID, DatabaseRow]
+	RelationRowIter  = Iter[ID, RelationRow]
+	AttributeRowIter = Iter[ID, AttributeRow]
+)
+
 type DatabaseRow struct {
-	ID        string
-	NumberID  uint64
+	ID        ID
 	AccountID uint32 // 0 is the sys account
 	Name      string
 }
 
-func (d DatabaseRow) Key() Text {
-	return Text(d.ID)
+func (d DatabaseRow) Key() ID {
+	return d.ID
+}
+
+func (d DatabaseRow) Value() DatabaseRow {
+	return d
 }
 
 func (d DatabaseRow) Indexes() []Tuple {
@@ -61,8 +71,8 @@ func (d DatabaseRow) AttrByName(tx *Transaction, name string) (ret Nullable, err
 			if attr.Name != name {
 				continue
 			}
-			if !typeMatch(ret.Value, attr.Type.Oid) {
-				panic(fmt.Errorf("%s should be %v typed", name, attr.Type))
+			if !memtable.TypeMatch(ret.Value, attr.Type.Oid) {
+				panic(fmt.Sprintf("%s should be %v typed", name, attr.Type))
 			}
 		}
 	}()
@@ -74,17 +84,16 @@ func (d DatabaseRow) AttrByName(tx *Transaction, name string) (ret Nullable, err
 	case catalog.SystemDBAttr_CreateSQL:
 		ret.Value = ""
 	case catalog.SystemDBAttr_ID:
-		ret.Value = d.NumberID
+		ret.Value = uint64(d.ID)
 	default:
-		panic(fmt.Errorf("fixme: %s", name))
+		panic(fmt.Sprintf("fixme: %s", name))
 	}
 	return
 }
 
 type RelationRow struct {
-	ID           string
-	NumberID     uint64
-	DatabaseID   string
+	ID           ID
+	DatabaseID   ID
 	Name         string
 	Type         txnengine.RelationType
 	Comments     string
@@ -95,14 +104,18 @@ type RelationRow struct {
 	handler *MemHandler
 }
 
-func (r RelationRow) Key() Text {
-	return Text(r.ID)
+func (r RelationRow) Key() ID {
+	return r.ID
+}
+
+func (r RelationRow) Value() RelationRow {
+	return r
 }
 
 func (r RelationRow) Indexes() []Tuple {
 	return []Tuple{
-		{index_DatabaseID, Text(r.DatabaseID)},
-		{index_DatabaseID_Name, Text(r.DatabaseID), Text(r.Name)},
+		{index_DatabaseID, r.DatabaseID},
+		{index_DatabaseID_Name, r.DatabaseID, Text(r.Name)},
 	}
 }
 
@@ -114,22 +127,22 @@ func (r RelationRow) AttrByName(tx *Transaction, name string) (ret Nullable, err
 			if attr.Name != name {
 				continue
 			}
-			if !typeMatch(ret.Value, attr.Type.Oid) {
-				panic(fmt.Errorf("%s should be %v typed", name, attr.Type))
+			if !memtable.TypeMatch(ret.Value, attr.Type.Oid) {
+				panic(fmt.Sprintf("%s should be %v typed", name, attr.Type))
 			}
 		}
 	}()
 	switch name {
 	case catalog.SystemRelAttr_ID:
-		ret.Value = r.NumberID
+		ret.Value = uint64(r.ID)
 	case catalog.SystemRelAttr_Name:
 		ret.Value = r.Name
 	case catalog.SystemRelAttr_DBName:
-		if r.DatabaseID == "" {
+		if r.DatabaseID.IsEmpty() {
 			ret.Value = ""
 			return
 		}
-		db, err := r.handler.databases.Get(tx, Text(r.DatabaseID))
+		db, err := r.handler.databases.Get(tx, r.DatabaseID)
 		if err != nil {
 			return ret, err
 		}
@@ -143,24 +156,24 @@ func (r RelationRow) AttrByName(tx *Transaction, name string) (ret Nullable, err
 	case catalog.SystemRelAttr_CreateSQL:
 		ret.Value = ""
 	case catalog.SystemRelAttr_DBID:
-		if r.DatabaseID == "" {
+		if r.DatabaseID.IsEmpty() {
 			ret.Value = ""
 			return
 		}
-		db, err := r.handler.databases.Get(tx, Text(r.DatabaseID))
+		db, err := r.handler.databases.Get(tx, r.DatabaseID)
 		if err != nil {
 			return ret, err
 		}
-		ret.Value = db.NumberID
+		ret.Value = uint64(db.ID)
 	default:
-		panic(fmt.Errorf("fixme: %s", name))
+		panic(fmt.Sprintf("fixme: %s", name))
 	}
 	return
 }
 
 type AttributeRow struct {
-	ID         string
-	RelationID string
+	ID         ID
+	RelationID ID
 	Order      int
 	Nullable   bool
 	engine.Attribute
@@ -168,16 +181,20 @@ type AttributeRow struct {
 	handler *MemHandler
 }
 
-func (a AttributeRow) Key() Text {
-	return Text(a.ID)
+func (a AttributeRow) Key() ID {
+	return a.ID
+}
+
+func (a AttributeRow) Value() AttributeRow {
+	return a
 }
 
 func (a AttributeRow) Indexes() []Tuple {
 	return []Tuple{
-		{index_RelationID, Text(a.RelationID)},
-		{index_RelationID_Name, Text(a.RelationID), Text(a.Name)},
-		{index_RelationID_IsPrimary, Text(a.RelationID), Bool(a.Primary)},
-		{index_RelationID_IsHidden, Text(a.RelationID), Bool(a.IsHidden)},
+		{index_RelationID, a.RelationID},
+		{index_RelationID_Name, a.RelationID, Text(a.Name)},
+		{index_RelationID_IsPrimary, a.RelationID, Bool(a.Primary)},
+		{index_RelationID_IsHidden, a.RelationID, Bool(a.IsHidden)},
 	}
 }
 
@@ -189,28 +206,28 @@ func (a AttributeRow) AttrByName(tx *Transaction, name string) (ret Nullable, er
 			if attr.Name != name {
 				continue
 			}
-			if !typeMatch(ret.Value, attr.Type.Oid) {
-				panic(fmt.Errorf("%s should be %v typed", name, attr.Type))
+			if !memtable.TypeMatch(ret.Value, attr.Type.Oid) {
+				panic(fmt.Sprintf("%s should be %v typed", name, attr.Type))
 			}
 		}
 	}()
 	switch name {
 	case catalog.SystemColAttr_DBName:
-		rel, err := a.handler.relations.Get(tx, Text(a.RelationID))
+		rel, err := a.handler.relations.Get(tx, a.RelationID)
 		if err != nil {
 			return ret, err
 		}
-		if rel.DatabaseID == "" {
+		if rel.DatabaseID.IsEmpty() {
 			ret.Value = ""
 			return ret, nil
 		}
-		db, err := a.handler.databases.Get(tx, Text(rel.DatabaseID))
+		db, err := a.handler.databases.Get(tx, rel.DatabaseID)
 		if err != nil {
 			return ret, err
 		}
 		ret.Value = db.Name
 	case catalog.SystemColAttr_RelName:
-		rel, err := a.handler.relations.Get(tx, Text(a.RelationID))
+		rel, err := a.handler.relations.Get(tx, a.RelationID)
 		if err != nil {
 			return ret, err
 		}
@@ -250,24 +267,28 @@ func (a AttributeRow) AttrByName(tx *Transaction, name string) (ret Nullable, er
 	case catalog.SystemColAttr_IsHidden:
 		ret.Value = boolToInt8(a.IsHidden)
 	default:
-		panic(fmt.Errorf("fixme: %s", name))
+		panic(fmt.Sprintf("fixme: %s", name))
 	}
 	return
 }
 
 type IndexRow struct {
-	ID         string
-	RelationID string
+	ID         ID
+	RelationID ID
 	engine.IndexTableDef
 }
 
-func (i IndexRow) Key() Text {
-	return Text(i.ID)
+func (i IndexRow) Key() ID {
+	return i.ID
+}
+
+func (i IndexRow) Value() IndexRow {
+	return i
 }
 
 func (i IndexRow) Indexes() []Tuple {
 	return []Tuple{
-		{index_RelationID, Text(i.RelationID)},
-		{index_RelationID_Name, Text(i.RelationID), Text(i.Name)},
+		{index_RelationID, i.RelationID},
+		{index_RelationID_Name, i.RelationID, Text(i.Name)},
 	}
 }

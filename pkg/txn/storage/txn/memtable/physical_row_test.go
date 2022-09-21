@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package txnstorage
+package memtable
 
 import (
 	"database/sql"
@@ -25,13 +25,13 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func testMVCC(
+func testPhysicalRow(
 	t *testing.T,
 	isolationPolicy IsolationPolicy,
 ) {
 
 	// new
-	m := new(MVCC[int])
+	m := new(PhysicalRow[Int, int])
 	m.dump(io.Discard)
 
 	// time
@@ -53,20 +53,20 @@ func testMVCC(
 	n := 1
 	err := m.Insert(now, tx1, &n)
 	assert.Nil(t, err)
-	assert.Equal(t, 1, len(m.Values))
-	assert.Equal(t, tx1, m.Values[0].BornTx)
-	assert.Equal(t, now, m.Values[0].BornTime)
-	assert.Nil(t, m.Values[0].LockTx)
-	assert.True(t, m.Values[0].LockTime.IsZero())
+	assert.Equal(t, 1, len(m.Versions.List))
+	assert.Equal(t, tx1, m.Versions.List[0].BornTx)
+	assert.Equal(t, now, m.Versions.List[0].BornTime)
+	assert.Nil(t, m.Versions.List[0].LockTx)
+	assert.True(t, m.Versions.List[0].LockTime.IsZero())
 
 	n2 := 2
 	err = m.Insert(now, tx2, &n2)
 	assert.Nil(t, err)
-	assert.Equal(t, 2, len(m.Values))
-	assert.Equal(t, tx2, m.Values[1].BornTx)
-	assert.Equal(t, now, m.Values[1].BornTime)
-	assert.Nil(t, m.Values[1].LockTx)
-	assert.True(t, m.Values[1].LockTime.IsZero())
+	assert.Equal(t, 2, len(m.Versions.List))
+	assert.Equal(t, tx2, m.Versions.List[1].BornTx)
+	assert.Equal(t, now, m.Versions.List[1].BornTime)
+	assert.Nil(t, m.Versions.List[1].LockTx)
+	assert.True(t, m.Versions.List[1].LockTime.IsZero())
 
 	// not readable now
 	res, err := m.Read(now, tx1)
@@ -93,9 +93,9 @@ func testMVCC(
 	// delete
 	err = m.Delete(now, tx1)
 	assert.Nil(t, err)
-	assert.Equal(t, 2, len(m.Values))
-	assert.Equal(t, tx1, m.Values[0].LockTx)
-	assert.Equal(t, now, m.Values[0].LockTime)
+	assert.Equal(t, 2, len(m.Versions.List))
+	assert.Equal(t, tx1, m.Versions.List[0].LockTx)
+	assert.Equal(t, now, m.Versions.List[0].LockTime)
 
 	// not readable now by current tx
 	res, err = m.Read(now, tx1)
@@ -110,9 +110,9 @@ func testMVCC(
 
 	err = m.Delete(now, tx2)
 	assert.Nil(t, err)
-	assert.Equal(t, 2, len(m.Values))
-	assert.Equal(t, tx2, m.Values[1].LockTx)
-	assert.Equal(t, now, m.Values[1].LockTime)
+	assert.Equal(t, 2, len(m.Versions.List))
+	assert.Equal(t, tx2, m.Versions.List[1].LockTx)
+	assert.Equal(t, now, m.Versions.List[1].LockTime)
 
 	res, err = m.Read(now, tx2)
 	assert.Equal(t, sql.ErrNoRows, err)
@@ -124,20 +124,20 @@ func testMVCC(
 	n3 := 3
 	err = m.Insert(now, tx1, &n3)
 	assert.Nil(t, err)
-	assert.Equal(t, 3, len(m.Values))
-	assert.Equal(t, tx1, m.Values[2].BornTx)
-	assert.Equal(t, now, m.Values[2].BornTime)
-	assert.Nil(t, m.Values[2].LockTx)
-	assert.True(t, m.Values[2].LockTime.IsZero())
+	assert.Equal(t, 3, len(m.Versions.List))
+	assert.Equal(t, tx1, m.Versions.List[2].BornTx)
+	assert.Equal(t, now, m.Versions.List[2].BornTime)
+	assert.Nil(t, m.Versions.List[2].LockTx)
+	assert.True(t, m.Versions.List[2].LockTime.IsZero())
 
 	n4 := 4
 	err = m.Insert(now, tx2, &n4)
 	assert.Nil(t, err)
-	assert.Equal(t, 4, len(m.Values))
-	assert.Equal(t, tx2, m.Values[3].BornTx)
-	assert.Equal(t, now, m.Values[3].BornTime)
-	assert.Nil(t, m.Values[3].LockTx)
-	assert.True(t, m.Values[3].LockTime.IsZero())
+	assert.Equal(t, 4, len(m.Versions.List))
+	assert.Equal(t, tx2, m.Versions.List[3].BornTx)
+	assert.Equal(t, now, m.Versions.List[3].BornTime)
+	assert.Nil(t, m.Versions.List[3].LockTx)
+	assert.True(t, m.Versions.List[3].LockTime.IsZero())
 
 	tick()
 
@@ -145,13 +145,13 @@ func testMVCC(
 	n5 := 5
 	err = m.Update(now, tx1, &n5)
 	assert.Nil(t, err)
-	assert.Equal(t, 5, len(m.Values))
-	assert.Equal(t, tx1, m.Values[2].LockTx)
-	assert.Equal(t, now, m.Values[2].LockTime)
-	assert.Equal(t, tx1, m.Values[4].BornTx)
-	assert.Equal(t, now, m.Values[4].BornTime)
-	assert.Nil(t, m.Values[4].LockTx)
-	assert.True(t, m.Values[4].LockTime.IsZero())
+	assert.Equal(t, 5, len(m.Versions.List))
+	assert.Equal(t, tx1, m.Versions.List[2].LockTx)
+	assert.Equal(t, now, m.Versions.List[2].LockTime)
+	assert.Equal(t, tx1, m.Versions.List[4].BornTx)
+	assert.Equal(t, now, m.Versions.List[4].BornTime)
+	assert.Nil(t, m.Versions.List[4].LockTx)
+	assert.True(t, m.Versions.List[4].LockTime.IsZero())
 
 	// commit tx1
 	err = tx1.Commit()
@@ -176,7 +176,7 @@ func testMVCC(
 		assert.Equal(t, 5, *res)
 		assert.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnReadConflict))
 	default:
-		panic(fmt.Errorf("not handle: %v", isolationPolicy.Read))
+		panic(fmt.Sprintf("not handle: %v", isolationPolicy.Read))
 	}
 
 	// write stale conflict
@@ -217,18 +217,18 @@ func testMVCC(
 	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnWriteConflict))
 }
 
-func TestMVCC(t *testing.T) {
+func TestPhysicalRow(t *testing.T) {
 	t.Run("read committed", func(t *testing.T) {
-		testMVCC(t, IsolationPolicy{
+		testPhysicalRow(t, IsolationPolicy{
 			Read: ReadCommitted,
 		})
 	})
 
 	t.Run("snapshot isolation", func(t *testing.T) {
-		testMVCC(t, SnapshotIsolation)
+		testPhysicalRow(t, SnapshotIsolation)
 	})
 
 	t.Run("serializable", func(t *testing.T) {
-		testMVCC(t, Serializable)
+		testPhysicalRow(t, Serializable)
 	})
 }

@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
+	"github.com/matrixorigin/matrixone/pkg/txn/storage/txn/memtable"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	txnengine "github.com/matrixorigin/matrixone/pkg/vm/engine/txn"
 	"github.com/stretchr/testify/assert"
@@ -41,7 +42,7 @@ func TestCatalogHandler(t *testing.T) {
 		NewCatalogHandler(
 			NewMemHandler(
 				testutil.NewMheap(),
-				Serializable,
+				memtable.Serializable,
 				clock,
 			),
 		),
@@ -60,7 +61,7 @@ func TestCatalogHandler(t *testing.T) {
 	}
 
 	// system db
-	var dbID string
+	var dbID ID
 	{
 		var resp txnengine.OpenDatabaseResp
 		err = handler.HandleOpenDatabase(meta, txnengine.OpenDatabaseReq{
@@ -82,7 +83,7 @@ func TestCatalogHandler(t *testing.T) {
 	}
 
 	// mo_database
-	var tableID string
+	var tableID ID
 	{
 		var resp txnengine.OpenRelationResp
 		err = handler.HandleOpenRelation(meta, txnengine.OpenRelationReq{
@@ -93,7 +94,7 @@ func TestCatalogHandler(t *testing.T) {
 		tableID = resp.ID
 		assert.NotEmpty(t, tableID)
 	}
-	var iterID string
+	var iterID ID
 	{
 		var resp txnengine.NewTableIterResp
 		err = handler.HandleNewTableIter(meta, txnengine.NewTableIterReq{
