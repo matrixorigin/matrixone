@@ -913,10 +913,8 @@ func NumericToBool[T constraints.Integer | constraints.Float](xs []T, rs []bool)
 	for i, x := range xs {
 		if x == 0 {
 			rs[i] = false
-		} else if x == 1 {
-			rs[i] = true
 		} else {
-			return nil, moerr.NewInvalidArg("cast to bool", x)
+			rs[i] = true
 		}
 	}
 	return rs, nil
