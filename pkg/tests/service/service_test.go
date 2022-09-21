@@ -19,8 +19,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/matrixorigin/matrixone/pkg/logservice"
 	logpb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 )
 
@@ -40,6 +42,46 @@ func TestClusterStart(t *testing.T) {
 	// close the cluster
 	err = c.Close()
 	require.NoError(t, err)
+}
+
+func TestAllocateID(t *testing.T) {
+	// initialize cluster
+	c, err := NewCluster(t, DefaultOptions())
+	require.NoError(t, err)
+
+	// start the cluster
+	err = c.Start()
+	require.NoError(t, err)
+	defer func() {
+		// close the cluster
+		err = c.Close()
+		require.NoError(t, err)
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+	defer cancel()
+	c.WaitHAKeeperState(ctx, logpb.HAKeeperRunning)
+
+	cfg := logservice.HAKeeperClientConfig{
+		ServiceAddresses: []string{c.(*testCluster).network.addresses.logAddresses[0].listenAddr},
+		AllocateIDBatch:  10,
+	}
+	hc, err := logservice.NewCNHAKeeperClient(ctx, cfg)
+	require.NoError(t, err)
+	defer func() {
+		assert.NoError(t, hc.Close())
+	}()
+
+	last := uint64(0)
+	for i := 0; i < int(cfg.AllocateIDBatch)-1; i++ {
+		v, err := hc.AllocateID(ctx)
+		require.NoError(t, err)
+		assert.True(t, v > 0)
+		if last != 0 {
+			assert.Equal(t, v, last+1, i)
+		}
+		last = v
+	}
 }
 
 func TestClusterAwareness(t *testing.T) {
@@ -485,7 +527,7 @@ func TestNetworkPartition(t *testing.T) {
 	// dn service index: 0, 1
 	// log service index: 0, 1, 2, 3
 	// seperate dn service 1 from other services
-	partition1 := c.NewNetworkPartition([]uint32{1}, nil)
+	partition1 := c.NewNetworkPartition([]uint32{1}, nil, nil)
 	require.Equal(t, []uint32{1}, partition1.ListDNServiceIndex())
 	require.Nil(t, partition1.ListLogServiceIndex())
 
@@ -508,7 +550,7 @@ func TestNetworkPartition(t *testing.T) {
 	// dn service index: 0, 1
 	// log service index: 0, 1, 2, 3
 	// seperate log service 3 from other services
-	partition3 := c.NewNetworkPartition(nil, []uint32{3})
+	partition3 := c.NewNetworkPartition(nil, []uint32{3}, nil)
 	require.Nil(t, partition3.ListDNServiceIndex())
 	require.Equal(t, []uint32{3}, partition3.ListLogServiceIndex())
 

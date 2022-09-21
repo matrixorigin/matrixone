@@ -26,8 +26,7 @@ var (
 		input  string
 		output string
 	}{
-		input:  "create table t1 (a datetime on update current_timestamp(0))",
-		output: "create table t1 (a datetime(26) on update current_timestamp(0))",
+		input: "select password from t1",
 	}
 )
 
@@ -52,6 +51,8 @@ var (
 		input  string
 		output string
 	}{{
+		input: "select password from t1",
+	}, {
 		input:  "create table t1 (a datetime on update CURRENT_TIMESTAMP(1))",
 		output: "create table t1 (a datetime(26) on update current_timestamp(1))",
 	}, {
@@ -247,6 +248,12 @@ var (
 	}, {
 		input:  "SELECT (rpad(1.0, 2048,1)) IS NOT FALSE;",
 		output: "select (rpad(1.0, 2048, 1)) != false",
+	}, {
+		input:  "SELECT 1 is unknown;",
+		output: "select 1 is unknown",
+	}, {
+		input:  "SELECT false is not unknown;",
+		output: "select false is not unknown",
 	}, {
 		input:  "SELECT FROM_UNIXTIME(99999999999999999999999999999999999999999999999999999999999999999);",
 		output: "select from_unixtime(99999999999999999999999999999999999999999999999999999999999999999)",
@@ -1322,21 +1329,21 @@ var (
 		}, {
 			input: "grant all, all(a, b), create(a, b), select(a, b), super(a, b, c) on table db.a to u1, u2 with grant option",
 		}, {
-			input: "grant all, all(a, b) on *.* to u1, u2 with grant option",
+			input: "grant all, all(a, b) on table *.* to u1, u2 with grant option",
 		}, {
-			input: "grant all, all(a, b) on db.a to u1, u2 with grant option",
+			input: "grant all, all(a, b) on table db.a to u1, u2 with grant option",
 		}, {
-			input: "grant all, all(a, b) on db.* to u1, u2 with grant option",
+			input: "grant all, all(a, b) on table db.* to u1, u2 with grant option",
 		}, {
-			input: "grant all, all(a, b) on * to u1, u2 with grant option",
+			input: "grant all, all(a, b) on database * to u1, u2 with grant option",
 		}, {
-			input: "grant all, all(a, b) on *.* to u1, u2 with grant option",
+			input: "grant all, all(a, b) on table *.* to u1, u2 with grant option",
 		}, {
-			input: "grant all, all(a, b) on db1.* to u1, u2 with grant option",
+			input: "grant all, all(a, b) on table db1.* to u1, u2 with grant option",
 		}, {
-			input: "grant all, all(a, b) on db1.tb1 to u1, u2 with grant option",
+			input: "grant all, all(a, b) on table db1.tb1 to u1, u2 with grant option",
 		}, {
-			input: "grant all, all(a, b) on tb1 to u1, u2 with grant option",
+			input: "grant all, all(a, b) on table tb1 to u1, u2 with grant option",
 		}, {
 			input: "grant r1, r2 to u1, u2, r3 with grant option",
 		}, {

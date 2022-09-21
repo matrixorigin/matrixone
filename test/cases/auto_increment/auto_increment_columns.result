@@ -100,12 +100,12 @@ a    b
 201    xefrsdfgds
 insert into t1 values (-9223372036854775808,'xefrsdfgds');
 insert into t1 values (-9223372036854775809,'xefrsdfgds');
-Incorrect BIGINT value: '-9223372036854775809' for column 'a' at row 1
+truncated type BIGINT value -9223372036854775809 for column a, 1
 insert into t1 values (9223372036854775807,'xefrsdfgds');
 insert into t1 values (9223372036854775808,'xefrsdfgds');
-Incorrect BIGINT value: '9223372036854775808' for column 'a' at row 1
+truncated type BIGINT value 9223372036854775808 for column a, 1
 insert into t1(b) values ('eeeee');
-auto_incrment column constant value overflows bigint
+invalid input: invalid auto_incrment maxNum -9223372036854775808
 drop table t1;
 drop table if exists t2;
 create table t2 (
@@ -293,9 +293,9 @@ insert into t4 values (-9223372036854775808,'xefrsdfgds');
 insert into t4 values (-9223372036854775809,'xefrsdfgds');
 insert into t4 values (9223372036854775807,'xefrsdfgds');
 insert into t4 values (9223372036854775808,'xefrsdfgds');
-Incorrect BIGINT value: '9223372036854775808' for column 'a' at row 1
+truncated type BIGINT value 9223372036854775808 for column a, 1
 insert into t4(b) values ('eeeee');
-auto_incrment column constant value overflows bigint
+invalid input: invalid auto_incrment maxNum -9223372036854775808
 drop table t4;
 drop table if exists t5;
 create table t5 (
@@ -420,7 +420,7 @@ a    b    c    d    e
 101    401    200    200    200
 102    402    200    400    600
 insert into t6 values ('a','a','a','a','a');
-Incorrect INT value: 'a' for column 'a' at row 1
+truncated type INT value a for column a, 1
 select * from t6 order by a;
 a    b    c    d    e
 0    0    0    0    0
@@ -550,7 +550,7 @@ a    b
 12    12
 13    13
 truncate table t10;
-You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at position 9 near 'truncate'; 
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 8 near "truncate table t10;";
 insert into t10 values ();
 select * from t10 order by a;
 a    b
@@ -597,15 +597,14 @@ a    b    c
 5    5    'ccc'
 6    6    '%%'
 drop table t13;
-
 create table t1(a int default(-1) auto_increment);
-invalid default value for 'a'
+invalid input: invalid default value for 'a'
 create table t1(a int primary key default(-1) auto_increment);
-invalid default value for 'a'
+invalid input: invalid default value for 'a'
 create table t1(a bigint default(-1) auto_increment);
-invalid default value for 'a'
+invalid input: invalid default value for 'a'
 create table t1(a bigint primary key default(-1) auto_increment);
-invalid default value for 'a'
+invalid input: invalid default value for 'a'
 create table t1(a int, b int default(10), c int auto_increment);
 show create table t1;
 Table    Create Table

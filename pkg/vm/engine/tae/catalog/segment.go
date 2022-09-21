@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"io"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -111,10 +112,11 @@ func (entry *SegmentEntry) GetBlockEntryByID(id uint64) (blk *BlockEntry, err er
 	return entry.GetBlockEntryByIDLocked(id)
 }
 
+// XXX API like this, why do we need the error?   Isn't blk is nil enough?
 func (entry *SegmentEntry) GetBlockEntryByIDLocked(id uint64) (blk *BlockEntry, err error) {
 	node := entry.entries[id]
 	if node == nil {
-		err = ErrNotFound
+		err = moerr.NewNotFound()
 		return
 	}
 	blk = node.GetPayload()
@@ -184,8 +186,7 @@ func (entry *SegmentEntry) GetAppendableBlockCnt() int {
 	}
 	return cnt
 }
-
-func (entry *SegmentEntry) LastAppendableBlock() (blk *BlockEntry) {
+func (entry *SegmentEntry) GetAppendableBlock() (blk *BlockEntry) {
 	it := entry.MakeBlockIt(false)
 	for it.Valid() {
 		itBlk := it.Get().GetPayload()
@@ -195,7 +196,22 @@ func (entry *SegmentEntry) LastAppendableBlock() (blk *BlockEntry) {
 		}
 		it.Next()
 	}
-	return blk
+	return
+}
+func (entry *SegmentEntry) LastAppendableBlock() (blk *BlockEntry) {
+	it := entry.MakeBlockIt(false)
+	for it.Valid() {
+		itBlk := it.Get().GetPayload()
+		itBlk.RLock()
+		dropped := itBlk.HasDropped()
+		itBlk.RUnlock()
+		if itBlk.IsAppendable() && !dropped {
+			blk = itBlk
+			break
+		}
+		it.Next()
+	}
+	return
 }
 
 func (entry *SegmentEntry) CreateBlock(txn txnif.AsyncTxn, state EntryState, dataFactory BlockDataFactory) (created *BlockEntry, err error) {
@@ -219,8 +235,9 @@ func (entry *SegmentEntry) DropBlockEntry(id uint64, txn txnif.AsyncTxn) (delete
 		waitTxn.GetTxnState(true)
 		blk.Lock()
 	}
-	err = blk.DropEntryLocked(txn)
-	if err == nil {
+	var isNewNode bool
+	isNewNode, err = blk.DropEntryLocked(txn)
+	if err == nil && isNewNode {
 		deleted = blk
 	}
 	return
@@ -257,7 +274,7 @@ func (entry *SegmentEntry) GetSegmentData() data.Segment { return entry.segData 
 
 func (entry *SegmentEntry) deleteEntryLocked(block *BlockEntry) error {
 	if n, ok := entry.entries[block.GetID()]; !ok {
-		return ErrNotFound
+		return moerr.NewNotFound()
 	} else {
 		entry.link.Delete(n)
 		delete(entry.entries, block.GetID())

@@ -17,6 +17,7 @@ package multi
 import (
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -84,35 +85,35 @@ func TestDateStringAdd(t *testing.T) {
 		vecs []*vector.Vector
 		proc *process.Process
 		want string
-		err  error
+		err  uint16
 	}{
 		{
 			name: "TEST01",
 			vecs: makeDateStringAddVectors("2022-01-01", true, 1, types.Day),
 			proc: testutil.NewProc(),
 			want: "2022-01-02 00:00:00",
-			err:  nil,
+			err:  0,
 		},
 		{
 			name: "TEST02",
 			vecs: makeDateStringAddVectors("2022-01-01 00:00:00", true, 1, types.Day),
 			proc: testutil.NewProc(),
 			want: "2022-01-02 00:00:00",
-			err:  nil,
+			err:  0,
 		},
 		{
 			name: "TEST03",
 			vecs: makeDateStringAddVectors("2022-01-01", true, 1, types.Second),
 			proc: testutil.NewProc(),
 			want: "2022-01-01 00:00:01",
-			err:  nil,
+			err:  0,
 		},
 		{
 			name: "TEST04",
 			vecs: makeDateStringAddVectors("xxxx", true, 1, types.Second),
 			proc: testutil.NewProc(),
 			want: "0001-01-01 00:00:00",
-			err:  types.ErrIncorrectDatetimeValue,
+			err:  moerr.ErrInvalidInput,
 		},
 	}
 
@@ -120,7 +121,7 @@ func TestDateStringAdd(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			date, err := DateStringAdd(c.vecs, c.proc)
 			require.Equal(t, c.want, date.Col.([]types.Datetime)[0].String())
-			require.Equal(t, c.err, err)
+			require.True(t, moerr.IsMoErrCode(err, c.err))
 		})
 	}
 

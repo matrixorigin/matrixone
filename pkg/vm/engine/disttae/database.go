@@ -28,37 +28,59 @@ func (db *database) Relations(ctx context.Context) ([]string, error) {
 }
 
 func (db *database) Relation(ctx context.Context, name string) (engine.Relation, error) {
-	id, err := db.txn.getTableId(ctx, db.databaseId, name)
+	id, defs, err := db.txn.getTableInfo(ctx, db.databaseId, name)
 	if err != nil {
-		return nil, nil
+		return nil, err
 	}
 	return &table{
+		db:        db,
 		tableId:   id,
 		tableName: name,
-		db:        db,
+		defs:      defs,
 	}, nil
 }
 
 func (db *database) Delete(ctx context.Context, name string) error {
-	if err := db.txn.WriteBatch(DELETE, catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID,
-		catalog.MO_CATALOG, catalog.MO_TABLES, genDropTableTuple(name)); err != nil {
+	id, err := db.txn.getTableId(ctx, db.databaseId, name)
+	if err != nil {
 		return err
 	}
-	if err := db.txn.WriteBatch(DELETE, catalog.MO_CATALOG_ID, catalog.MO_COLUMNS_ID,
-		catalog.MO_CATALOG, catalog.MO_COLUMNS, genDropColumnsTuple(name)); err != nil {
+	bat, err := genDropTableTuple(id, db.m)
+	if err != nil {
+		return err
+	}
+	if err := db.txn.WriteBatch(DELETE, catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID,
+		catalog.MO_CATALOG, catalog.MO_TABLES, bat); err != nil {
 		return err
 	}
 	return nil
 }
 
 func (db *database) Create(ctx context.Context, name string, defs []engine.TableDef) error {
-	if err := db.txn.WriteBatch(INSERT, catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID,
-		catalog.MO_CATALOG, catalog.MO_TABLES, genCreateTableTuple(name)); err != nil {
+	comment := getTableComment(defs)
+	cols, err := genColumns(name, db.databaseName, db.databaseId, defs)
+	if err != nil {
 		return err
 	}
-	for _, def := range defs {
+	{
+		accountId, userId, roleId := getAccessInfo(ctx)
+		bat, err := genCreateTableTuple(accountId, userId, roleId, name,
+			db.databaseId, db.databaseName, comment, db.m)
+		if err != nil {
+			return err
+		}
+		if err := db.txn.WriteBatch(INSERT, catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID,
+			catalog.MO_CATALOG, catalog.MO_TABLES, bat); err != nil {
+			return err
+		}
+	}
+	for _, col := range cols {
+		bat, err := genCreateColumnTuple(col, db.m)
+		if err != nil {
+			return err
+		}
 		if err := db.txn.WriteBatch(INSERT, catalog.MO_CATALOG_ID, catalog.MO_COLUMNS_ID,
-			catalog.MO_CATALOG, catalog.MO_COLUMNS, genCreateColumnTuple(def)); err != nil {
+			catalog.MO_CATALOG, catalog.MO_COLUMNS, bat); err != nil {
 			return err
 		}
 	}

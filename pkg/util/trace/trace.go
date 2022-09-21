@@ -23,13 +23,12 @@ package trace
 
 import (
 	"context"
-	"fmt"
 	"sync/atomic"
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/util/errors"
+	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 	"github.com/matrixorigin/matrixone/pkg/util/export"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 )
@@ -55,7 +54,7 @@ func Init(ctx context.Context, opts ...TracerProviderOption) (context.Context, e
 	// init tool dependence
 	logutil.SetLogReporter(&logutil.TraceReporter{ReportLog: ReportLog, ReportZap: ReportZap, LevelSignal: SetLogLevel, ContextField: ContextField})
 	logutil.SpanFieldKey.Store(SpanFieldKey)
-	errors.SetErrorReporter(HandleError)
+	errutil.SetErrorReporter(HandleError)
 	export.SetDefaultContextFunc(DefaultContext)
 
 	// init TraceProvider
@@ -115,14 +114,14 @@ func initExport(ctx context.Context, config *tracerProviderConfig) error {
 		export.Register(&StatementInfo{}, NewBufferPipe2CSVWorker())
 		export.Register(&MOErrorHolder{}, NewBufferPipe2CSVWorker())
 	default:
-		return moerr.NewPanicError(fmt.Errorf("unknown batchProcessMode: %s", config.batchProcessMode))
+		return moerr.NewInternalError("unknown batchProcessMode: %s", config.batchProcessMode)
 	}
 	logutil.Info("init GlobalBatchProcessor")
 	// init BatchProcessor for standalone mode.
 	p = export.NewMOCollector()
 	export.SetGlobalBatchProcessor(p)
 	if !p.Start() {
-		return moerr.NewPanicError("trace exporter already started")
+		return moerr.NewInternalError("trace exporter already started")
 	}
 	config.spanProcessors = append(config.spanProcessors, NewBatchSpanProcessor(p))
 	logutil.Info("init trace span processor")
@@ -142,7 +141,7 @@ func InitSchema(ctx context.Context, sqlExecutor func() ie.InternalExecutor) err
 			return err
 		}
 	default:
-		return moerr.NewPanicError(fmt.Errorf("unknown batchProcessMode: %s", config.batchProcessMode))
+		return moerr.NewInternalError("unknown batchProcessMode: %s", config.batchProcessMode)
 	}
 	return nil
 }

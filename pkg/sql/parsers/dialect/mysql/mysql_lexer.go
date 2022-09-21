@@ -84,7 +84,13 @@ func (l *Lexer) Lex(lval *yySymType) int {
 
 func (l *Lexer) Error(err string) {
 	errMsg := fmt.Sprintf("You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. %s", err)
-	l.scanner.LastError = PositionedErr{Err: errMsg, Pos: l.scanner.Pos + 1, Near: l.scanner.LastToken}
+	near := l.scanner.buf[l.scanner.PrePos:]
+	var lenStr string
+	if len(near) > 1024 {
+		lenStr = " (total length " + strconv.Itoa(len(lenStr)) + ")"
+		near = near[:1024]
+	}
+	l.scanner.LastError = PositionedErr{Err: errMsg, Line: l.scanner.Line, Col: l.scanner.Col, Near: near, LenStr: lenStr}
 }
 
 func (l *Lexer) AppendStmt(stmt tree.Statement) {

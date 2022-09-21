@@ -15,7 +15,6 @@
 package txnstorage
 
 import (
-	"errors"
 	"fmt"
 	"math"
 	"sync"
@@ -28,8 +27,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
-	taedata "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/moengine"
 	txnengine "github.com/matrixorigin/matrixone/pkg/vm/engine/txn"
 )
@@ -189,7 +186,7 @@ func NewCatalogHandler(upstream *MemHandler) *CatalogHandler {
 func (c *CatalogHandler) HandleAddTableDef(meta txn.TxnMeta, req txnengine.AddTableDefReq, resp *txnengine.AddTableDefResp) (err error) {
 	if name, ok := c.sysRelationIDs[req.TableID]; ok {
 		defer logReq("catalog", req, meta, resp, &err)()
-		resp.ErrReadOnly.Why = fmt.Sprintf("%s is system table", name)
+		resp.ErrResp.Why = fmt.Sprintf("%s is system table", name)
 		return nil
 	}
 	return c.upstream.HandleAddTableDef(meta, req, resp)
@@ -233,7 +230,6 @@ func (c *CatalogHandler) HandleCloseTableIter(meta txn.TxnMeta, req txnengine.Cl
 
 func (c *CatalogHandler) HandleCommit(meta txn.TxnMeta) error {
 	err := c.upstream.HandleCommit(meta)
-	err = toTAEError(err)
 	return err
 }
 
@@ -250,7 +246,7 @@ func (c *CatalogHandler) HandleCreateDatabase(meta txn.TxnMeta, req txnengine.Cr
 
 	if req.Name == catalog.SystemDBName {
 		defer logReq("catalog", req, meta, resp, &err)()
-		resp.ErrReadOnly.Why = req.Name + " is system database"
+		resp.ErrResp.Why = req.Name + " is system database"
 		return nil
 	}
 	return c.upstream.HandleCreateDatabase(meta, req, resp)
@@ -263,7 +259,7 @@ func (c *CatalogHandler) HandleCreateRelation(meta txn.TxnMeta, req txnengine.Cr
 func (c *CatalogHandler) HandleDelTableDef(meta txn.TxnMeta, req txnengine.DelTableDefReq, resp *txnengine.DelTableDefResp) (err error) {
 	if name, ok := c.sysRelationIDs[req.TableID]; ok {
 		defer logReq("catalog", req, meta, resp, &err)()
-		resp.ErrReadOnly.Why = fmt.Sprintf("%s is system table", name)
+		resp.ErrResp.Why = fmt.Sprintf("%s is system table", name)
 		return nil
 	}
 	return c.upstream.HandleDelTableDef(meta, req, resp)
@@ -272,7 +268,7 @@ func (c *CatalogHandler) HandleDelTableDef(meta txn.TxnMeta, req txnengine.DelTa
 func (c *CatalogHandler) HandleDelete(meta txn.TxnMeta, req txnengine.DeleteReq, resp *txnengine.DeleteResp) (err error) {
 	if name, ok := c.sysRelationIDs[req.TableID]; ok {
 		defer logReq("catalog", req, meta, resp, &err)()
-		resp.ErrReadOnly.Why = fmt.Sprintf("%s is system table", name)
+		resp.ErrResp.Why = fmt.Sprintf("%s is system table", name)
 		return nil
 	}
 	return c.upstream.HandleDelete(meta, req, resp)
@@ -287,7 +283,7 @@ func (c *CatalogHandler) HandleDeleteDatabase(meta txn.TxnMeta, req txnengine.De
 
 	if req.Name == catalog.SystemDBName {
 		defer logReq("catalog", req, meta, resp, &err)()
-		resp.ErrReadOnly.Why = fmt.Sprintf("%s is system database", req.Name)
+		resp.ErrResp.Why = fmt.Sprintf("%s is system database", req.Name)
 		return nil
 	}
 	return c.upstream.HandleDeleteDatabase(meta, req, resp)
@@ -298,7 +294,7 @@ func (c *CatalogHandler) HandleDeleteRelation(meta txn.TxnMeta, req txnengine.De
 		for _, name := range c.sysRelationIDs {
 			if req.Name == name {
 				defer logReq("catalog", req, meta, resp, &err)()
-				resp.ErrReadOnly.Why = "can't delete this system table"
+				resp.ErrResp.Why = "can't delete this system table"
 				return nil
 			}
 		}
@@ -415,6 +411,7 @@ func (c *CatalogHandler) HandlePrepare(meta txn.TxnMeta) (timestamp.Timestamp, e
 
 func (c *CatalogHandler) HandleRead(meta txn.TxnMeta, req txnengine.ReadReq, resp *txnengine.ReadResp) (err error) {
 	tx := c.upstream.getTx(meta)
+	resp.SetHeap(c.upstream.mheap)
 
 	c.iterators.Lock()
 	v, ok := c.iterators.Map[req.IterID]
@@ -546,7 +543,7 @@ func (c *CatalogHandler) HandleStartRecovery(ch chan txn.TxnMeta) {
 func (c *CatalogHandler) HandleTruncate(meta txn.TxnMeta, req txnengine.TruncateReq, resp *txnengine.TruncateResp) (err error) {
 	if name, ok := c.sysRelationIDs[req.TableID]; ok {
 		defer logReq("catalog", req, meta, resp, &err)()
-		resp.ErrReadOnly.Why = fmt.Sprintf("%s is system table", name)
+		resp.ErrResp.Why = fmt.Sprintf("%s is system table", name)
 	}
 	return c.upstream.HandleTruncate(meta, req, resp)
 }
@@ -554,7 +551,7 @@ func (c *CatalogHandler) HandleTruncate(meta txn.TxnMeta, req txnengine.Truncate
 func (c *CatalogHandler) HandleUpdate(meta txn.TxnMeta, req txnengine.UpdateReq, resp *txnengine.UpdateResp) (err error) {
 	if name, ok := c.sysRelationIDs[req.TableID]; ok {
 		defer logReq("catalog", req, meta, resp, &err)()
-		resp.ErrReadOnly.Why = fmt.Sprintf("%s is system table", name)
+		resp.ErrResp.Why = fmt.Sprintf("%s is system table", name)
 	}
 	return c.upstream.HandleUpdate(meta, req, resp)
 }
@@ -562,28 +559,12 @@ func (c *CatalogHandler) HandleUpdate(meta txn.TxnMeta, req txnengine.UpdateReq,
 func (c *CatalogHandler) HandleWrite(meta txn.TxnMeta, req txnengine.WriteReq, resp *txnengine.WriteResp) (err error) {
 	if name, ok := c.sysRelationIDs[req.TableID]; ok {
 		defer logReq("catalog", req, meta, resp, &err)()
-		resp.ErrReadOnly.Why = fmt.Sprintf("%s is system table", name)
+		resp.ErrResp.Why = fmt.Sprintf("%s is system table", name)
 	}
 	err = c.upstream.HandleWrite(meta, req, resp)
-	err = toTAEError(err)
 	return
 }
 
 func (c *CatalogHandler) HandleTableStats(meta txn.TxnMeta, req txnengine.TableStatsReq, resp *txnengine.TableStatsResp) (err error) {
 	return c.upstream.HandleTableStats(meta, req, resp)
-}
-
-func toTAEError(err error) error {
-	if err == nil {
-		return nil
-	}
-	var dup *ErrPrimaryKeyDuplicated
-	if errors.As(err, &dup) {
-		err = taedata.ErrDuplicate
-	}
-	var writeConflict *ErrWriteConflict
-	if errors.As(err, &writeConflict) {
-		err = txnif.ErrTxnWWConflict
-	}
-	return err
 }

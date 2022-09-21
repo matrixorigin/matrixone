@@ -22,10 +22,10 @@ import (
 
 	// "github.com/matrixorigin/matrixone/pkg/logutil"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
@@ -40,7 +40,6 @@ var (
 type txnTable struct {
 	store        *txnStore
 	createEntry  txnif.TxnEntry
-	createIdx    int
 	dropEntry    txnif.TxnEntry
 	localSegment *localSegment
 	updateNodes  map[common.ID]txnif.UpdateNode
@@ -93,10 +92,7 @@ func (tbl *txnTable) WaitSynced() {
 
 func (tbl *txnTable) CollectCmd(cmdMgr *commandManager) (err error) {
 	tbl.csnStart = uint32(cmdMgr.GetCSN())
-	for i, txnEntry := range tbl.txnEntries {
-		if tbl.createEntry != nil && tbl.dropEntry != nil && i == tbl.createIdx {
-			txnEntry = txnEntry.(*catalog.TableEntry).CloneCreateEntry()
-		}
+	for _, txnEntry := range tbl.txnEntries {
 		csn := cmdMgr.GetCSN()
 		cmd, err := txnEntry.MakeCommand(csn)
 		// logutil.Infof("%d-%d",csn,cmd.GetType())
@@ -129,7 +125,7 @@ func (tbl *txnTable) GetSegment(id uint64) (seg handle.Segment, err error) {
 		return
 	}
 	if !ok {
-		err = data.ErrNotFound
+		err = moerr.NewNotFound()
 		return
 	}
 	seg = newSegment(tbl, meta)
@@ -142,38 +138,34 @@ func (tbl *txnTable) SoftDeleteSegment(id uint64) (err error) {
 		return
 	}
 	tbl.store.IncreateWriteCnt()
-	tbl.txnEntries = append(tbl.txnEntries, txnEntry)
+	if txnEntry != nil {
+		tbl.txnEntries = append(tbl.txnEntries, txnEntry)
+	}
+	tbl.store.dirtyMemo.recordSeg(tbl.entry.ID, id)
 	tbl.store.warChecker.ReadTable(tbl.entry.GetDB().ID, tbl.entry.AsCommonID())
 	return
 }
 
-func (tbl *txnTable) CreateNonAppendableSegment() (seg handle.Segment, err error) {
-	var meta *catalog.SegmentEntry
-	var factory catalog.SegmentDataFactory
-	if tbl.store.dataFactory != nil {
-		factory = tbl.store.dataFactory.MakeSegmentFactory()
-	}
-	if meta, err = tbl.entry.CreateSegment(tbl.store.txn, catalog.ES_NotAppendable, factory); err != nil {
-		return
-	}
-	seg = newSegment(tbl, meta)
-	tbl.store.IncreateWriteCnt()
-	tbl.txnEntries = append(tbl.txnEntries, meta)
-	tbl.store.warChecker.ReadTable(tbl.entry.GetDB().ID, meta.GetTable().AsCommonID())
-	return
+func (tbl *txnTable) CreateSegment() (seg handle.Segment, err error) {
+	return tbl.createSegment(catalog.ES_Appendable)
 }
 
-func (tbl *txnTable) CreateSegment() (seg handle.Segment, err error) {
+func (tbl *txnTable) CreateNonAppendableSegment() (seg handle.Segment, err error) {
+	return tbl.createSegment(catalog.ES_NotAppendable)
+}
+
+func (tbl *txnTable) createSegment(state catalog.EntryState) (seg handle.Segment, err error) {
 	var meta *catalog.SegmentEntry
 	var factory catalog.SegmentDataFactory
 	if tbl.store.dataFactory != nil {
 		factory = tbl.store.dataFactory.MakeSegmentFactory()
 	}
-	if meta, err = tbl.entry.CreateSegment(tbl.store.txn, catalog.ES_Appendable, factory); err != nil {
+	if meta, err = tbl.entry.CreateSegment(tbl.store.txn, state, factory); err != nil {
 		return
 	}
 	seg = newSegment(tbl, meta)
 	tbl.store.IncreateWriteCnt()
+	tbl.store.dirtyMemo.recordSeg(tbl.entry.ID, meta.ID)
 	tbl.txnEntries = append(tbl.txnEntries, meta)
 	tbl.store.warChecker.ReadTable(tbl.entry.GetDB().ID, meta.GetTable().AsCommonID())
 	return
@@ -189,7 +181,10 @@ func (tbl *txnTable) SoftDeleteBlock(id *common.ID) (err error) {
 		return
 	}
 	tbl.store.IncreateWriteCnt()
-	tbl.txnEntries = append(tbl.txnEntries, meta)
+	tbl.store.dirtyMemo.recordBlk(*id)
+	if meta != nil {
+		tbl.txnEntries = append(tbl.txnEntries, meta)
+	}
 	tbl.store.warChecker.ReadSegment(tbl.entry.GetDB().ID, seg.AsCommonID())
 	return
 }
@@ -230,7 +225,7 @@ func (tbl *txnTable) createBlock(sid uint64, state catalog.EntryState) (blk hand
 		return
 	}
 	if !seg.IsAppendable() && state == catalog.ES_Appendable {
-		err = data.ErrNotAppendable
+		err = moerr.NewInternalError("not appendable")
 		return
 	}
 	var factory catalog.BlockDataFactory
@@ -243,6 +238,7 @@ func (tbl *txnTable) createBlock(sid uint64, state catalog.EntryState) (blk hand
 		return
 	}
 	tbl.store.IncreateWriteCnt()
+	tbl.store.dirtyMemo.recordBlk(*meta.AsCommonID())
 	tbl.txnEntries = append(tbl.txnEntries, meta)
 	tbl.store.warChecker.ReadSegment(tbl.entry.GetDB().ID, seg.AsCommonID())
 	return buildBlock(tbl, meta), err
@@ -253,8 +249,8 @@ func (tbl *txnTable) SetCreateEntry(e txnif.TxnEntry) {
 		panic("logic error")
 	}
 	tbl.store.IncreateWriteCnt()
+	tbl.store.dirtyMemo.recordCatalogChange()
 	tbl.createEntry = e
-	tbl.createIdx = len(tbl.txnEntries)
 	tbl.txnEntries = append(tbl.txnEntries, e)
 	tbl.store.warChecker.ReadDB(tbl.entry.GetDB().GetID())
 }
@@ -264,6 +260,7 @@ func (tbl *txnTable) SetDropEntry(e txnif.TxnEntry) error {
 		panic("logic error")
 	}
 	tbl.store.IncreateWriteCnt()
+	tbl.store.dirtyMemo.recordCatalogChange()
 	tbl.dropEntry = e
 	tbl.txnEntries = append(tbl.txnEntries, e)
 	tbl.store.warChecker.ReadDB(tbl.entry.GetDB().GetID())
@@ -308,6 +305,7 @@ func (tbl *txnTable) AddDeleteNode(id *common.ID, node txnif.DeleteNode) error {
 	}
 	tbl.deleteNodes[nid] = node
 	tbl.store.IncreateWriteCnt()
+	tbl.store.dirtyMemo.recordBlk(*id)
 	tbl.txnEntries = append(tbl.txnEntries, node)
 	return nil
 }
@@ -441,7 +439,7 @@ func (tbl *txnTable) GetByFilter(filter *handle.Filter) (id *common.ID, offset u
 		blockIt.Next()
 	}
 	if err == nil && id == nil {
-		err = data.ErrNotFound
+		err = moerr.NewNotFound()
 	}
 	return
 }
@@ -484,7 +482,7 @@ func (tbl *txnTable) updateWithFineLock(node txnif.UpdateNode, txn txnif.AsyncTx
 
 func (tbl *txnTable) Update(id *common.ID, row uint32, col uint16, v any) (err error) {
 	if tbl.entry.GetSchema().IsPartOfPK(int(col)) {
-		err = data.ErrUpdateUniqueKey
+		err = moerr.NewTAEError("update unique key")
 		return
 	}
 	if isLocalSegment(id) {
@@ -539,6 +537,9 @@ func (tbl *txnTable) UncommittedRows() uint32 {
 	}
 	return tbl.localSegment.Rows()
 }
+func (tbl *txnTable) NeedRollback() bool {
+	return tbl.createEntry != nil && tbl.dropEntry != nil
+}
 
 // PrePrepareDedup do deduplication check for 1PC Commit or 2PC Prepare
 func (tbl *txnTable) PrePrepareDedup() (err error) {
@@ -575,7 +576,7 @@ func (tbl *txnTable) DoDedup(pks containers.Vector, preCommit bool) (err error) 
 		}
 		segData := seg.GetSegmentData()
 		// TODO: Add a new batch dedup method later
-		if err = segData.BatchDedup(tbl.store.txn, pks); err == data.ErrDuplicate {
+		if err = segData.BatchDedup(tbl.store.txn, pks); moerr.IsMoErrCode(err, moerr.ErrDuplicate) {
 			return
 		}
 		if err == nil {

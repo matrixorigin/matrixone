@@ -17,11 +17,14 @@ package txnengine
 import (
 	"encoding/gob"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	apipb "github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 )
 
 const (
@@ -46,6 +49,7 @@ const (
 	OpRead
 	OpCloseTableIter
 	OpTableStats
+	OpGetLogTail = uint32(apipb.OpCode_OpGetLogTail)
 )
 
 func init() {
@@ -105,15 +109,21 @@ func init() {
 
 }
 
+type ErrorResp struct {
+	ErrExisted bool
+	ID         string
+	Name       string
+	Why        string
+}
+
 type CreateDatabaseReq struct {
 	AccessInfo AccessInfo
 	Name       string
 }
 
 type CreateDatabaseResp struct {
-	ID          string
-	ErrReadOnly ErrReadOnly
-	ErrExisted  ErrExisted
+	ID      string
+	ErrResp ErrorResp
 }
 
 type OpenDatabaseReq struct {
@@ -122,8 +132,8 @@ type OpenDatabaseReq struct {
 }
 
 type OpenDatabaseResp struct {
-	ID          string
-	ErrNotFound ErrDatabaseNotFound
+	ID      string
+	ErrResp ErrorResp
 }
 
 type GetDatabasesReq struct {
@@ -140,9 +150,8 @@ type DeleteDatabaseReq struct {
 }
 
 type DeleteDatabaseResp struct {
-	ID          string
-	ErrReadOnly ErrReadOnly
-	ErrNotFound ErrDatabaseNotFound
+	ID      string
+	ErrResp ErrorResp
 }
 
 type CreateRelationReq struct {
@@ -153,10 +162,8 @@ type CreateRelationReq struct {
 }
 
 type CreateRelationResp struct {
-	ID                  string
-	ErrReadOnly         ErrReadOnly
-	ErrDatabaseNotFound ErrDatabaseNotFound
-	ErrExisted          ErrExisted
+	ID      string
+	ErrResp ErrorResp
 }
 
 type DeleteRelationReq struct {
@@ -165,9 +172,8 @@ type DeleteRelationReq struct {
 }
 
 type DeleteRelationResp struct {
-	ID          string
-	ErrReadOnly ErrReadOnly
-	ErrNotFound ErrRelationNotFound
+	ID      string
+	ErrResp ErrorResp
 }
 
 type OpenRelationReq struct {
@@ -176,9 +182,9 @@ type OpenRelationReq struct {
 }
 
 type OpenRelationResp struct {
-	ID          string
-	Type        RelationType
-	ErrNotFound ErrRelationNotFound
+	ID      string
+	Type    RelationType
+	ErrResp ErrorResp
 }
 
 type GetRelationsReq struct {
@@ -195,10 +201,7 @@ type AddTableDefReq struct {
 }
 
 type AddTableDefResp struct {
-	ErrReadOnly       ErrReadOnly
-	ErrTableNotFound  ErrRelationNotFound
-	ErrExisted        ErrExisted
-	ErrColumnNotFound ErrColumnNotFound
+	ErrResp ErrorResp
 }
 
 type DelTableDefReq struct {
@@ -207,9 +210,7 @@ type DelTableDefReq struct {
 }
 
 type DelTableDefResp struct {
-	ErrReadOnly      ErrReadOnly
-	ErrTableNotFound ErrRelationNotFound
-	ErrDefNotFound   ErrDefNotFound
+	ErrResp ErrorResp
 }
 
 type DeleteReq struct {
@@ -219,9 +220,7 @@ type DeleteReq struct {
 }
 
 type DeleteResp struct {
-	ErrReadOnly       ErrReadOnly
-	ErrTableNotFound  ErrRelationNotFound
-	ErrColumnNotFound ErrColumnNotFound
+	ErrResp ErrorResp
 }
 
 type GetPrimaryKeysReq struct {
@@ -229,8 +228,8 @@ type GetPrimaryKeysReq struct {
 }
 
 type GetPrimaryKeysResp struct {
-	Attrs            []*engine.Attribute
-	ErrTableNotFound ErrRelationNotFound
+	Attrs   []*engine.Attribute
+	ErrResp ErrorResp
 }
 
 type GetTableDefsReq struct {
@@ -238,8 +237,8 @@ type GetTableDefsReq struct {
 }
 
 type GetTableDefsResp struct {
-	Defs             []engine.TableDef
-	ErrTableNotFound ErrRelationNotFound
+	Defs    []engine.TableDef
+	ErrResp ErrorResp
 }
 
 type GetHiddenKeysReq struct {
@@ -247,8 +246,8 @@ type GetHiddenKeysReq struct {
 }
 
 type GetHiddenKeysResp struct {
-	Attrs            []*engine.Attribute
-	ErrTableNotFound ErrRelationNotFound
+	Attrs   []*engine.Attribute
+	ErrResp ErrorResp
 }
 
 type TruncateReq struct {
@@ -256,9 +255,8 @@ type TruncateReq struct {
 }
 
 type TruncateResp struct {
-	ErrReadOnly      ErrReadOnly
-	AffectedRows     int64
-	ErrTableNotFound ErrRelationNotFound
+	AffectedRows int64
+	ErrResp      ErrorResp
 }
 
 type UpdateReq struct {
@@ -267,8 +265,8 @@ type UpdateReq struct {
 }
 
 type UpdateResp struct {
-	ErrReadOnly      ErrReadOnly
-	ErrTableNotFound ErrRelationNotFound
+	ErrReadOnly moerr.Error
+	ErrResp     ErrorResp
 }
 
 type WriteReq struct {
@@ -277,8 +275,7 @@ type WriteReq struct {
 }
 
 type WriteResp struct {
-	ErrReadOnly      ErrReadOnly
-	ErrTableNotFound ErrRelationNotFound
+	ErrResp ErrorResp
 }
 
 type NewTableIterReq struct {
@@ -288,8 +285,8 @@ type NewTableIterReq struct {
 }
 
 type NewTableIterResp struct {
-	IterID           string
-	ErrTableNotFound ErrRelationNotFound
+	IterID  string
+	ErrResp ErrorResp
 }
 
 type ReadReq struct {
@@ -298,9 +295,21 @@ type ReadReq struct {
 }
 
 type ReadResp struct {
-	Batch             *batch.Batch
-	ErrIterNotFound   ErrIterNotFound
-	ErrColumnNotFound ErrColumnNotFound
+	Batch   *batch.Batch
+	ErrResp ErrorResp
+
+	heap *mheap.Mheap
+}
+
+func (r *ReadResp) Close() error {
+	if r.Batch != nil {
+		r.Batch.Clean(r.heap)
+	}
+	return nil
+}
+
+func (r *ReadResp) SetHeap(heap *mheap.Mheap) {
+	r.heap = heap
 }
 
 type CloseTableIterReq struct {
@@ -308,7 +317,7 @@ type CloseTableIterReq struct {
 }
 
 type CloseTableIterResp struct {
-	ErrIterNotFound ErrIterNotFound
+	ErrResp ErrorResp
 }
 
 type TableStatsReq struct {
@@ -316,6 +325,16 @@ type TableStatsReq struct {
 }
 
 type TableStatsResp struct {
-	Rows             int
-	ErrTableNotFound ErrRelationNotFound
+	Rows    int
+	ErrResp ErrorResp
+}
+
+type GetLogTailReq struct {
+	TableID string
+	Request apipb.SyncLogTailReq
+}
+
+type GetLogTailResp struct {
+	ErrRelationNotFound ErrorResp
+	Response            apipb.SyncLogTailResp
 }

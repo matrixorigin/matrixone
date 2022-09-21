@@ -22,21 +22,9 @@ import (
 
 	"github.com/cockroachdb/errors"
 	"github.com/lni/dragonboat/v4"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
-)
-
-var (
-	ErrLogServiceNotReady = moerr.NewError(moerr.LOG_SERVICE_NOT_READY, "log service not ready")
-	// ErrDeadlineNotSet is returned when deadline is not set in the context.
-	ErrDeadlineNotSet = moerr.NewError(moerr.INVALID_INPUT, "deadline not set")
-	// ErrInvalidDeadline is returned when the specified deadline is invalid, e.g.
-	// deadline is in the past.
-	ErrInvalidDeadline = moerr.NewError(moerr.INVALID_INPUT, "invalid deadline")
-	// ErrIncompatibleClient is returned when write requests are made on read-only clients.
-	ErrIncompatibleClient = moerr.NewError(moerr.INVALID_INPUT, "incompatible client")
 )
 
 const (
@@ -212,10 +200,19 @@ func (c *managedClient) GetTSOTimestamp(ctx context.Context, count uint64) (uint
 }
 
 func (c *managedClient) isRetryableError(err error) bool {
-	if errors.Is(err, dragonboat.ErrTimeout) {
-		return false
+	/*
+		old code, obviously strange
+		if errors.Is(err, dragonboat.ErrTimeout) {
+			return false
+		}
+		return errors.Is(err, dragonboat.ErrShardNotFound)
+	*/
+
+	// Dragonboat error leaked here
+	if errors.Is(err, dragonboat.ErrShardNotFound) {
+		return true
 	}
-	return errors.Is(err, dragonboat.ErrShardNotFound)
+	return moerr.IsMoErrCode(err, moerr.ErrDragonboatShardNotFound)
 }
 
 func (c *managedClient) resetClient() {
@@ -259,7 +256,7 @@ func newClient(ctx context.Context, cfg ClientConfig) (*client, error) {
 	if err != nil {
 		return nil, err
 	}
-	return nil, ErrLogServiceNotReady
+	return nil, moerr.NewLogServiceNotReady()
 }
 
 func connectToLogServiceByReverseProxy(ctx context.Context,
@@ -269,7 +266,7 @@ func connectToLogServiceByReverseProxy(ctx context.Context,
 		return nil, err
 	}
 	if !ok {
-		return nil, ErrLogServiceNotReady
+		return nil, moerr.NewLogServiceNotReady()
 	}
 	addresses := make([]string, 0)
 	leaderAddress, ok := si.Replicas[si.ReplicaID]
@@ -347,7 +344,7 @@ func (c *client) close() error {
 
 func (c *client) append(ctx context.Context, rec pb.LogRecord) (Lsn, error) {
 	if c.readOnly() {
-		return 0, ErrIncompatibleClient
+		return 0, moerr.NewInvalidInput("incompatible client")
 	}
 	// TODO: check piggybacked hint on whether we are connected to the leader node
 	return c.doAppend(ctx, rec)
@@ -360,7 +357,7 @@ func (c *client) read(ctx context.Context,
 
 func (c *client) truncate(ctx context.Context, lsn Lsn) error {
 	if c.readOnly() {
-		return ErrIncompatibleClient
+		return moerr.NewInvalidInput("incompatible client")
 	}
 	return c.doTruncate(ctx, lsn)
 }
@@ -379,7 +376,7 @@ func (c *client) readOnly() bool {
 
 func (c *client) connectReadWrite(ctx context.Context) error {
 	if c.readOnly() {
-		panic(ErrIncompatibleClient)
+		panic(moerr.NewInvalidInput("incompatible client"))
 	}
 	return c.connect(ctx, pb.CONNECT)
 }

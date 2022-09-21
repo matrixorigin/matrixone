@@ -122,7 +122,7 @@ func (m *MemHandler) HandleAddTableDef(meta txn.TxnMeta, req txnengine.AddTableD
 		// update comments
 		row, err := m.relations.Get(tx, Text(req.TableID))
 		if errors.Is(err, sql.ErrNoRows) {
-			resp.ErrTableNotFound.ID = req.TableID
+			resp.ErrResp.ID = req.TableID
 			return nil
 		}
 		if err != nil {
@@ -137,7 +137,7 @@ func (m *MemHandler) HandleAddTableDef(meta txn.TxnMeta, req txnengine.AddTableD
 		// update
 		row, err := m.relations.Get(tx, Text(req.TableID))
 		if errors.Is(err, sql.ErrNoRows) {
-			resp.ErrTableNotFound.ID = req.TableID
+			resp.ErrResp.ID = req.TableID
 			return nil
 		}
 		if err != nil {
@@ -152,7 +152,7 @@ func (m *MemHandler) HandleAddTableDef(meta txn.TxnMeta, req txnengine.AddTableD
 		// update
 		row, err := m.relations.Get(tx, Text(req.TableID))
 		if errors.Is(err, sql.ErrNoRows) {
-			resp.ErrTableNotFound.ID = req.TableID
+			resp.ErrResp.ID = req.TableID
 			return nil
 		}
 		if err != nil {
@@ -175,7 +175,7 @@ func (m *MemHandler) HandleAddTableDef(meta txn.TxnMeta, req txnengine.AddTableD
 			return err
 		}
 		if len(keys) > 0 {
-			resp.ErrExisted = true
+			resp.ErrResp.ErrExisted = true
 			return nil
 		}
 		// insert
@@ -202,7 +202,7 @@ func (m *MemHandler) HandleAddTableDef(meta txn.TxnMeta, req txnengine.AddTableD
 			return err
 		}
 		if len(keys) > 0 {
-			resp.ErrExisted = true
+			resp.ErrResp.ErrExisted = true
 			return nil
 		}
 		// insert
@@ -219,7 +219,7 @@ func (m *MemHandler) HandleAddTableDef(meta txn.TxnMeta, req txnengine.AddTableD
 		// update properties
 		row, err := m.relations.Get(tx, Text(req.TableID))
 		if errors.Is(err, sql.ErrNoRows) {
-			resp.ErrTableNotFound.ID = req.TableID
+			resp.ErrResp.ID = req.TableID
 			return nil
 		}
 		for _, prop := range def.Properties {
@@ -267,7 +267,7 @@ func (m *MemHandler) HandleCloseTableIter(meta txn.TxnMeta, req txnengine.CloseT
 	defer m.iterators.Unlock()
 	iter, ok := m.iterators.Map[req.IterID]
 	if !ok {
-		resp.ErrIterNotFound.ID = req.IterID
+		resp.ErrResp.ID = req.IterID
 		return nil
 	}
 	delete(m.iterators.Map, req.IterID)
@@ -289,7 +289,7 @@ func (m *MemHandler) HandleCreateDatabase(meta txn.TxnMeta, req txnengine.Create
 		return err
 	}
 	if len(keys) > 0 {
-		resp.ErrExisted = true
+		resp.ErrResp.ErrExisted = true
 		return nil
 	}
 
@@ -315,7 +315,7 @@ func (m *MemHandler) HandleCreateRelation(meta txn.TxnMeta, req txnengine.Create
 	if req.DatabaseID != "" {
 		_, err := m.databases.Get(tx, Text(req.DatabaseID))
 		if errors.Is(err, sql.ErrNoRows) {
-			resp.ErrDatabaseNotFound.ID = req.DatabaseID
+			resp.ErrResp.ID = req.DatabaseID
 			return nil
 		}
 		if err != nil {
@@ -333,7 +333,7 @@ func (m *MemHandler) HandleCreateRelation(meta txn.TxnMeta, req txnengine.Create
 		return err
 	}
 	if len(keys) > 0 {
-		resp.ErrExisted = true
+		resp.ErrResp.ErrExisted = true
 		return nil
 	}
 
@@ -448,7 +448,7 @@ func (m *MemHandler) HandleDelTableDef(meta txn.TxnMeta, req txnengine.DelTableD
 		// del comments
 		row, err := m.relations.Get(tx, Text(req.TableID))
 		if errors.Is(err, sql.ErrNoRows) {
-			resp.ErrTableNotFound.ID = req.TableID
+			resp.ErrResp.ID = req.TableID
 			return nil
 		}
 		if err != nil {
@@ -495,7 +495,7 @@ func (m *MemHandler) HandleDelTableDef(meta txn.TxnMeta, req txnengine.DelTableD
 		// delete properties
 		row, err := m.relations.Get(tx, Text(req.TableID))
 		if errors.Is(err, sql.ErrNoRows) {
-			resp.ErrTableNotFound.ID = req.TableID
+			resp.ErrResp.ID = req.TableID
 			return nil
 		}
 		for _, prop := range def.Properties {
@@ -593,7 +593,7 @@ func (m *MemHandler) HandleDelete(meta txn.TxnMeta, req txnengine.DeleteReq, res
 		return err
 	}
 	if len(rows) != 1 {
-		resp.ErrColumnNotFound.Name = req.ColumnName
+		resp.ErrResp.Name = req.ColumnName
 		return nil
 	}
 	attrID := rows[0].ID
@@ -640,7 +640,7 @@ func (m *MemHandler) HandleDeleteDatabase(meta txn.TxnMeta, req txnengine.Delete
 		return err
 	}
 	if len(rows) == 0 {
-		resp.ErrNotFound.Name = req.Name
+		resp.ErrResp.Name = req.Name
 		return nil
 	}
 
@@ -938,7 +938,7 @@ func (m *MemHandler) HandleOpenDatabase(meta txn.TxnMeta, req txnengine.OpenData
 		return nil
 	}
 
-	resp.ErrNotFound.Name = req.Name
+	resp.ErrResp.Name = req.Name
 	return nil
 }
 
@@ -957,16 +957,18 @@ func (m *MemHandler) HandleOpenRelation(meta txn.TxnMeta, req txnengine.OpenRela
 		resp.Type = row.Type
 		return nil
 	}
-	resp.ErrNotFound.Name = req.Name
+	resp.ErrResp.Name = req.Name
 	return nil
 }
 
 func (m *MemHandler) HandleRead(meta txn.TxnMeta, req txnengine.ReadReq, resp *txnengine.ReadResp) error {
+	resp.SetHeap(m.mheap)
+
 	m.iterators.Lock()
 	iter, ok := m.iterators.Map[req.IterID]
 	if !ok {
 		m.iterators.Unlock()
-		resp.ErrIterNotFound.ID = req.IterID
+		resp.ErrResp.ID = req.IterID
 		return nil
 	}
 	m.iterators.Unlock()
@@ -1047,7 +1049,7 @@ func (m *MemHandler) HandleTruncate(meta txn.TxnMeta, req txnengine.TruncateReq,
 	tx := m.getTx(meta)
 	_, err := m.relations.Get(tx, Text(req.TableID))
 	if errors.Is(err, sql.ErrNoRows) {
-		resp.ErrTableNotFound.ID = req.TableID
+		resp.ErrResp.ID = req.TableID
 		return nil
 	}
 	iter := m.data.NewIter(tx)
@@ -1077,7 +1079,7 @@ func (m *MemHandler) HandleUpdate(meta txn.TxnMeta, req txnengine.UpdateReq, res
 		tx,
 		req.TableID,
 		req.Batch,
-		&resp.ErrTableNotFound,
+		&resp.ErrResp,
 		func(
 			row *DataRow,
 			rowID types.Rowid,
@@ -1101,7 +1103,7 @@ func (m *MemHandler) HandleWrite(meta txn.TxnMeta, req txnengine.WriteReq, resp 
 		tx,
 		req.TableID,
 		req.Batch,
-		&resp.ErrTableNotFound,
+		&resp.ErrResp,
 		func(
 			row *DataRow,
 			rowID types.Rowid,
@@ -1122,7 +1124,7 @@ func (m *MemHandler) rangeBatchPhysicalRows(
 	tx *Transaction,
 	tableID string,
 	b *batch.Batch,
-	errTableNotFound *txnengine.ErrRelationNotFound,
+	resp *txnengine.ErrorResp,
 	fn func(
 		*DataRow,
 		types.Rowid,
@@ -1142,7 +1144,7 @@ func (m *MemHandler) rangeBatchPhysicalRows(
 	}
 
 	if len(nameToAttrs) == 0 {
-		errTableNotFound.ID = tableID
+		resp.ID = tableID
 		return nil
 	}
 

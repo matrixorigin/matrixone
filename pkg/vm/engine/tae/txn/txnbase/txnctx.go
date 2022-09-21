@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"sync"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
@@ -47,11 +48,12 @@ type TxnCtx struct {
 
 func NewTxnCtx(id uint64, start types.TS, info []byte) *TxnCtx {
 	ctx := &TxnCtx{
-		ID:       id,
-		IDCtx:    IDToIDCtx(id),
-		StartTS:  start,
-		CommitTS: txnif.UncommitTS,
-		Info:     info,
+		ID:        id,
+		IDCtx:     IDToIDCtx(id),
+		StartTS:   start,
+		PrepareTS: txnif.UncommitTS,
+		CommitTS:  txnif.UncommitTS,
+		Info:      info,
 	}
 	ctx.DoneCond = *sync.NewCond(ctx)
 	return ctx
@@ -105,7 +107,7 @@ func (ctx *TxnCtx) resolveTxnState() txnif.TxnState {
 	ctx.DoneCond.L.Lock()
 	defer ctx.DoneCond.L.Unlock()
 	state := ctx.State
-	if state != txnif.TxnStateCommitting {
+	if state != txnif.TxnStatePreparing {
 		return state
 	}
 	ctx.DoneCond.Wait()
@@ -116,13 +118,13 @@ func (ctx *TxnCtx) resolveTxnState() txnif.TxnState {
 //
 // True when the txn state is committing, wait it to be committed or rollbacked. It
 // is used during snapshot reads. If TxnStateActive is currently returned, this value will
-// definitely not be used, because even if it becomes TxnStateCommitting later, the timestamp
+// definitely not be used, because even if it becomes TxnStatePreparing later, the timestamp
 // would be larger than the current read timestamp.
-func (ctx *TxnCtx) GetTxnState(waitIfcommitting bool) (state txnif.TxnState) {
+func (ctx *TxnCtx) GetTxnState(waitIfCommitting bool) (state txnif.TxnState) {
 	// Quick get the current txn state
-	// If waitIfcommitting is false, return the state
-	// If state is not txnif.TxnStateCommitting, return the state
-	if state = ctx.getTxnState(); !waitIfcommitting || state != txnif.TxnStateCommitting {
+	// If waitIfCommitting is false, return the state
+	// If state is not txnif.TxnStatePreparing, return the state
+	if state = ctx.getTxnState(); !waitIfCommitting || state != txnif.TxnStatePreparing {
 		return state
 	}
 
@@ -147,7 +149,7 @@ func (ctx *TxnCtx) ToPreparingLocked(ts types.TS) error {
 		panic(fmt.Sprintf("start ts %d should be less than commit ts %d", ctx.StartTS, ts))
 	}
 	if !ctx.CommitTS.Equal(txnif.UncommitTS) {
-		return ErrTxnNotActive
+		return moerr.NewTxnNotActive("")
 	}
 	ctx.PrepareTS = ts
 	ctx.CommitTS = ts
@@ -155,22 +157,9 @@ func (ctx *TxnCtx) ToPreparingLocked(ts types.TS) error {
 	return nil
 }
 
-func (ctx *TxnCtx) ToCommittingLocked(ts types.TS) error {
-	if ts.LessEq(ctx.StartTS) {
-		panic(fmt.Sprintf("start ts %d should be less than commit ts %d", ctx.StartTS, ts))
-	}
-	if !ctx.CommitTS.Equal(txnif.UncommitTS) {
-		return ErrTxnNotActive
-	}
-	ctx.CommitTS = ts
-	ctx.PrepareTS = ts
-	ctx.State = txnif.TxnStateCommitting
-	return nil
-}
-
 func (ctx *TxnCtx) ToCommittedLocked() error {
-	if ctx.State != txnif.TxnStateCommitting {
-		return ErrTxnNotCommitting
+	if ctx.State != txnif.TxnStatePreparing {
+		return moerr.NewTAECommit("ToCommittedLocked: state is not preapring")
 	}
 	ctx.State = txnif.TxnStateCommitted
 	return nil
@@ -180,8 +169,8 @@ func (ctx *TxnCtx) ToRollbackingLocked(ts types.TS) error {
 	if ts.LessEq(ctx.StartTS) {
 		panic(fmt.Sprintf("start ts %d should be less than commit ts %d", ctx.StartTS, ts))
 	}
-	if (ctx.State != txnif.TxnStateActive) && (ctx.State != txnif.TxnStateCommitting) {
-		return ErrTxnCannotRollback
+	if (ctx.State != txnif.TxnStateActive) && (ctx.State != txnif.TxnStatePreparing) {
+		return moerr.NewTAERollback("ToRollbackingLocked: state is not active or preparing")
 	}
 	ctx.CommitTS = ts
 	ctx.PrepareTS = ts
@@ -191,7 +180,7 @@ func (ctx *TxnCtx) ToRollbackingLocked(ts types.TS) error {
 
 func (ctx *TxnCtx) ToRollbackedLocked() error {
 	if ctx.State != txnif.TxnStateRollbacking {
-		return ErrTxnNotRollbacking
+		return moerr.NewTAERollback("state %s", txnif.TxnStrState(ctx.State))
 	}
 	ctx.State = txnif.TxnStateRollbacked
 	return nil

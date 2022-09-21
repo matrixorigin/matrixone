@@ -19,6 +19,7 @@ import (
 
 	"go.uber.org/zap"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper/checkers/util"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper/operator"
@@ -184,7 +185,7 @@ func extraWorkingReplicas(shard *dnShard) []*dnReplica {
 // NB: the returned result should be deterministic.
 func consumeLeastSpareStore(working []*util.Store) (string, error) {
 	if len(working) == 0 {
-		return "", errNoWorkingStore
+		return "", moerr.NewNoWorkingStore()
 	}
 
 	// the least shards, the higher priority
