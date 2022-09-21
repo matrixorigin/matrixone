@@ -31,8 +31,10 @@ type memTaskStorage struct {
 	taskIndexes     map[string]uint64
 	cronTasks       map[uint64]task.CronTask
 	cronTaskIndexes map[string]uint64
-	preUpdate       func()
-	preUpdateCron   func() error
+
+	// Used for testing. Make some changes to the data before updating.
+	preUpdate     func()
+	preUpdateCron func() error
 }
 
 func NewMemTaskStorage() TaskStorage {
