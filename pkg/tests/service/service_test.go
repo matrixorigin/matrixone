@@ -73,7 +73,7 @@ func TestAllocateID(t *testing.T) {
 	}()
 
 	last := uint64(0)
-	for i := 0; i < int(cfg.AllocateIDBatch); i++ {
+	for i := 0; i < int(cfg.AllocateIDBatch)-1; i++ {
 		v, err := hc.AllocateID(ctx)
 		require.NoError(t, err)
 		assert.True(t, v > 0)
