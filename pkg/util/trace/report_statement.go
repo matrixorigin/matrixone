@@ -15,13 +15,21 @@
 package trace
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
+	"github.com/google/uuid"
+	"sync"
+	"time"
 	"unsafe"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/export"
 )
+
+var nilTxnID [16]byte
 
 var _ IBuffer2SqlItem = (*StatementInfo)(nil)
 var _ CsvFields = (*StatementInfo)(nil)
@@ -30,8 +38,6 @@ type StatementInfo struct {
 	StatementID          [16]byte      `json:"statement_id"`
 	TransactionID        [16]byte      `json:"transaction_id"`
 	SessionID            [16]byte      `jons:"session_id"`
-	TenantID             uint32        `json:"tenant_id"`
-	UserID               uint32        `json:"user_id"`
 	Account              string        `json:"account"`
 	User                 string        `json:"user"`
 	Host                 string        `json:"host"`
@@ -40,37 +46,49 @@ type StatementInfo struct {
 	StatementFingerprint string        `json:"statement_fingerprint"`
 	StatementTag         string        `json:"statement_tag"`
 	RequestAt            util.TimeNano `json:"request_at"` // see WithRequestAt
-	ExecPlan             string        `json:"exec_plan"`
+	ExecPlan             any           `json:"exec_plan"`
+
+	// after
+	Status        StatementInfoStatus `json:"status"`
+	Error         error               `json:"error"`
+	ResponseAt    util.TimeNano       `json:"response_at"`
+	Duration      uint64              `json:"duration"` // unit: ns
+	ExecPlanStats any                 `json:"exec_plan_stats"`
+
+	// flow ctrl
+	end bool
+	mux sync.Mutex
+	// mark reported
+	reported bool
+	// mark exported
+	exported bool
 }
 
-func (s StatementInfo) GetName() string {
+func (s *StatementInfo) GetName() string {
 	return MOStatementType
 }
 
-func (s StatementInfo) Size() int64 {
+func (s *StatementInfo) Size() int64 {
 	return int64(unsafe.Sizeof(s)) + int64(
 		len(s.Account)+len(s.User)+len(s.Host)+
 			len(s.Database)+len(s.Statement)+len(s.StatementFingerprint)+len(s.StatementTag),
 	)
 }
 
-func (s StatementInfo) Free() {}
+func (s *StatementInfo) Free() {}
 
-func (s StatementInfo) CsvOptions() *CsvOptions {
+func (s *StatementInfo) CsvOptions() *CsvOptions {
 	return CommonCsvOptions
 }
 
-func (s StatementInfo) CsvFields() []string {
-	var uuid = make([]byte, 36)
+func (s *StatementInfo) CsvFields() []string {
+	s.mux.Lock()
+	defer s.mux.Unlock()
+	s.exported = true
 	var result []string
-	bytes2Uuid(uuid, s.StatementID)
-	result = append(result, string(uuid[:]))
-	bytes2Uuid(uuid, s.TransactionID)
-	result = append(result, string(uuid[:]))
-	bytes2Uuid(uuid, s.SessionID)
-	result = append(result, string(uuid[:]))
-	result = append(result, fmt.Sprintf("%d", s.TenantID))
-	result = append(result, fmt.Sprintf("%d", s.UserID))
+	result = append(result, uuid.UUID(s.StatementID).String())
+	result = append(result, uuid.UUID(s.TransactionID).String())
+	result = append(result, uuid.UUID(s.SessionID).String())
 	result = append(result, s.Account)
 	result = append(result, s.User)
 	result = append(result, s.Host)
@@ -81,8 +99,69 @@ func (s StatementInfo) CsvFields() []string {
 	result = append(result, GetNodeResource().NodeUuid)
 	result = append(result, GetNodeResource().NodeType)
 	result = append(result, nanoSec2DatetimeString(s.RequestAt))
-	result = append(result, s.ExecPlan)
+	result = append(result, nanoSec2DatetimeString(s.ResponseAt))
+	result = append(result, fmt.Sprintf("%d", s.Duration))
+	result = append(result, s.Status.String())
+	if s.Error == nil {
+		result = append(result, "")
+	} else {
+		result = append(result, fmt.Sprintf("%s", s.Error))
+	}
+	result = append(result, s.ExecPlan2Json())
+
 	return result
+}
+
+func (s *StatementInfo) ExecPlan2Json() string {
+	if s.ExecPlan == nil {
+		return "{}"
+	}
+	json, err := json.Marshal(s.ExecPlan)
+	if err != nil {
+		return fmt.Sprintf(`{"err": %q}`, err.Error())
+	}
+	return string(json)
+}
+
+// SetExecPlan record execPlan should be TxnComputationWrapper.plan obj, which support 2json.
+func (s *StatementInfo) SetExecPlan(execPlan any) {
+	s.ExecPlan = execPlan
+}
+
+func (s *StatementInfo) SetTxnIDIsZero(id []byte) {
+	if bytes.Equal(s.TransactionID[:], nilTxnID[:]) {
+		copy(s.TransactionID[:], id)
+	}
+}
+
+func (s *StatementInfo) Report(ctx context.Context) {
+	s.reported = true
+	ReportStatement(ctx, s)
+}
+
+var EndStatement = func(ctx context.Context, err error) time.Time {
+	s := StatementFromContext(ctx)
+	if s == nil {
+		panic(moerr.NewInternalError("no statement info in context"))
+	}
+	endTime := util.NowNS()
+	if !s.end {
+		// do report
+		s.mux.Lock()
+		defer s.mux.Unlock()
+		s.end = true
+		s.ResponseAt = endTime
+		s.Duration = s.ResponseAt - s.RequestAt
+		s.Status = StatementStatusSuccess
+		if err != nil {
+			s.Error = err
+			s.Status = StatementStatusFailed
+		}
+		if !s.reported || s.exported { // cooperate with s.mux
+			s.Report(ctx)
+		}
+	}
+	return util.Time(endTime)
 }
 
 type StatementInfoStatus int
@@ -111,7 +190,7 @@ type StatementOption interface {
 
 type StatementOptionFunc func(*StatementInfo)
 
-func ReportStatement(ctx context.Context, s *StatementInfo) error {
+var ReportStatement = func(ctx context.Context, s *StatementInfo) error {
 	if !GetTracerProvider().IsEnable() {
 		return nil
 	}
