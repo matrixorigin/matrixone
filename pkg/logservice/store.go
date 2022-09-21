@@ -436,6 +436,18 @@ func (l *store) addCNStoreHeartbeat(ctx context.Context,
 	return nil
 }
 
+func (l *store) cnAllocateID(ctx context.Context,
+	req pb.CNAllocateID) (uint64, error) {
+	cmd := hakeeper.GetGetIDCmd(req.Batch)
+	session := l.nh.GetNoOPSession(hakeeper.DefaultHAKeeperShardID)
+	result, err := l.propose(ctx, session, cmd)
+	if err != nil {
+		plog.Errorf("propose get id failed, %v", err)
+		return 0, err
+	}
+	return result.Value, nil
+}
+
 func (l *store) addDNStoreHeartbeat(ctx context.Context,
 	hb pb.DNStoreHeartbeat) (pb.CommandBatch, error) {
 	data := MustMarshal(&hb)
