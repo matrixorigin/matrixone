@@ -62,3 +62,11 @@ func (bx *BitXor[T1]) Fill(_ int64, v1 T1, v2 uint64, z int64, IsEmpty bool, has
 		return uint64(v1) ^ v2, false
 	}
 }
+
+func (bx *BitXor[T1]) MarshalBinary() ([]byte, error) {
+	return nil, nil
+}
+
+func (bx *BitXor[T1]) UnmarshalBinary(data []byte) error {
+	return nil
+}

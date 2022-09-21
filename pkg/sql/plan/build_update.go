@@ -113,7 +113,7 @@ func buildUpdate(stmt *tree.Update, ctx CompilerContext) (*Plan, error) {
 		for _, col := range ct.UpdateCols {
 			if c := lastNode.ProjectList[idx].GetC(); c != nil {
 				if c.GetDefaultval() {
-					if lastNode.ProjectList[idx], err = getDefaultExpr(col.Default, col.Typ); err != nil {
+					if lastNode.ProjectList[idx], err = getDefaultExpr(col); err != nil {
 						return nil, err
 					}
 					idx++

@@ -98,11 +98,9 @@ func ReportLog(ctx context.Context, level zapcore.Level, depth int, formatter st
 	_, newSpan := Start(DefaultContext(), "ReportLog")
 	defer newSpan.End()
 
-	span := SpanFromContext(ctx)
-	sc := span.SpanContext()
+	sc := SpanFromContext(ctx).SpanContext()
 	if sc.IsEmpty() {
-		span = SpanFromContext(DefaultContext())
-		sc = span.SpanContext()
+		sc = *DefaultSpanContext()
 	}
 	log := newMOLog()
 	log.TraceID = sc.TraceID

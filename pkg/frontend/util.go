@@ -18,7 +18,8 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"go/constant"
 	"os"
 	"runtime"
@@ -442,9 +443,11 @@ func (s statementStatus) String() string {
 
 // logStatementStatus prints the status of the statement into the log.
 func logStatementStatus(ctx context.Context, ses *Session, stmt tree.Statement, status statementStatus, err error) {
-	fmtCtx := tree.NewFmtCtx(dialect.MYSQL)
-	stmt.Format(fmtCtx)
-	stmtStr := fmtCtx.String()
+	stm := trace.StatementFromContext(ctx)
+	if stm == nil {
+		panic(moerr.NewInternalError("no statement info in context"))
+	}
+	stmtStr := stm.Statement
 	logStatementStringStatus(ctx, ses, stmtStr, status, err)
 }
 
