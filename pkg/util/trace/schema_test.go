@@ -97,21 +97,18 @@ func TestInitSchemaByInnerExecutor(t *testing.T) {
 			go func() {
 			loop:
 				for {
-					select {
-					case sql, ok := <-tt.args.ch:
-						wg.Done()
-						if ok {
-							t.Logf("exec sql: %s", sql)
-							if sql == "create database if not exists system" {
-								continue
-							}
-							idx := strings.Index(sql, "CREATE EXTERNAL TABLE")
-							require.Equal(t, 0, idx)
-						} else {
-							t.Log("exec sql Done.")
-							break loop
+					sql, ok := <-tt.args.ch
+					wg.Done()
+					if ok {
+						t.Logf("exec sql: %s", sql)
+						if sql == "create database if not exists system" {
+							continue
 						}
-
+						idx := strings.Index(sql, "CREATE EXTERNAL TABLE")
+						require.Equal(t, 0, idx)
+					} else {
+						t.Log("exec sql Done.")
+						break loop
 					}
 				}
 			}()
