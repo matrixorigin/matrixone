@@ -80,7 +80,6 @@ const (
  ` + "`status`" + ` varchar(32) default 'Running' COMMENT 'sql statement running status, enum: Running, Success, Failed',
  error TEXT NOT NULL COMMENT 'error message',
  exec_plan JSON NOT NULL COMMENT "sql execution plan",
- exec_plan_stats JSON NOT NULL COMMENT "sql execution plan with stats info",
 PRIMARY KEY (statement_id)
 )`
 	sqlCreateErrorInfoTable = `CREATE TABLE IF NOT EXISTS error_info(
