@@ -1220,9 +1220,9 @@ func (mce *MysqlCmdExecutor) handleExplainStmt(stmt *tree.ExplainStmt) error {
 			}
 		} else if strings.EqualFold(v.Name, "ANALYZE") {
 			if strings.EqualFold(v.Value, "TRUE") || v.Value == "NULL" {
-				es.Anzlyze = true
+				es.Analyze = true
 			} else if strings.EqualFold(v.Value, "FALSE") {
-				es.Anzlyze = false
+				es.Analyze = false
 			} else {
 				return moerr.NewInvalidInput("invalid explain option '%s', valud '%s'", v.Name, v.Value)
 			}
@@ -1454,9 +1454,9 @@ func getExplainOption(stmt *tree.ExplainAnalyze) (*explain.ExplainOptions, error
 			}
 		} else if strings.EqualFold(v.Name, "ANALYZE") {
 			if strings.EqualFold(v.Value, "TRUE") || v.Value == "NULL" {
-				es.Anzlyze = true
+				es.Analyze = true
 			} else if strings.EqualFold(v.Value, "FALSE") {
-				es.Anzlyze = false
+				es.Analyze = false
 			} else {
 				return nil, moerr.NewInvalidInput("%s requires a Boolean value", v.Name)
 			}
@@ -2148,7 +2148,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 					explainQuery := explain.NewExplainQueryImpl(queryPlan.GetQuery())
 					options := &explain.ExplainOptions{
 						Verbose: true,
-						Anzlyze: false,
+						Analyze: true,
 						Format:  explain.EXPLAIN_FORMAT_TEXT,
 					}
 					marshalPlan := explainQuery.BuildJsonPlan(cwft.uuid, options)
@@ -2206,7 +2206,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 					explainQuery := explain.NewExplainQueryImpl(queryPlan.GetQuery())
 					options := &explain.ExplainOptions{
 						Verbose: true,
-						Anzlyze: false,
+						Analyze: true,
 						Format:  explain.EXPLAIN_FORMAT_TEXT,
 					}
 					marshalPlan := explainQuery.BuildJsonPlan(cwft.uuid, options)
