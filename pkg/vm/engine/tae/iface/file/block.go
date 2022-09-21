@@ -43,7 +43,6 @@ type Block interface {
 
 	LoadIndexMeta() (any, error)
 	WriteIndexMeta(buf []byte) (err error)
-	WriteIndex(index objectio.IndexData) (err error)
 
 	OpenColumn(colIdx int) (ColumnBlock, error)
 
@@ -60,7 +59,6 @@ type ColumnBlock interface {
 	io.Closer
 	WriteTS(ts types.TS) error
 	WriteData(buf []byte) error
-	WriteIndex(index objectio.IndexData) error
 	WriteUpdates(buf []byte) error
 
 	ReadTS() types.TS

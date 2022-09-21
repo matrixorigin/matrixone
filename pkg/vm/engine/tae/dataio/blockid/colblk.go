@@ -65,10 +65,6 @@ func (cb *columnBlock) WriteUpdates(buf []byte) (err error) {
 	return
 }
 
-func (cb *columnBlock) WriteIndex(index objectio.IndexData) (err error) {
-	return cb.block.writer.WriteIndex(cb.block.meta, index)
-}
-
 func (cb *columnBlock) ReadTS() (ts types.TS) {
 	return
 }

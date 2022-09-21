@@ -122,11 +122,6 @@ func (bf *blockFile) GetMeta(metaLoc string) objectio.BlockObject {
 	bf.meta = block
 	return bf.meta
 }
-
-func (bf *blockFile) WriteIndex(index objectio.IndexData) (err error) {
-	return bf.writer.WriteIndex(bf.meta, index)
-}
-
 func (bf *blockFile) WriteTS(ts types.TS) (err error) {
 	return
 }
