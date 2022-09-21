@@ -454,3 +454,7 @@ insert into t1 values(null), (3), (null), (6), (null), (18446744073709551615);
 select * from t1;
 insert into t1 values();
 drop table t1;
+drop table if exists t1;
+create table t1 (a int not null auto_increment, b int);
+insert into t1(b) values (1);
+select * from t1;

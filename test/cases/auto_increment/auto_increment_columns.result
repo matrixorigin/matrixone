@@ -722,3 +722,9 @@ a
 insert into t1 values();
 data out of range: data type bigint unsigned, auto_incrment column constant value overflows bigint unsigned
 drop table t1;
+drop table if exists t1;
+create table t1 (a int not null auto_increment, b int);
+insert into t1(b) values (1);
+select * from t1;
+a    b   
+1    1

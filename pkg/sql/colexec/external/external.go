@@ -236,6 +236,17 @@ func deleteEnclosed(param *ExternalParam, plh *ParseLineHandler) {
 	}
 }
 
+func getNullFlag(param *ExternalParam, attr, field string) bool {
+	list := param.extern.NullMap[attr]
+	for i := 0; i < len(list); i++ {
+		field = strings.ToLower(field)
+		if list[i] == field {
+			return true
+		}
+	}
+	return false
+}
+
 func GetBatchData(param *ExternalParam, plh *ParseLineHandler, proc *process.Process) (*batch.Batch, error) {
 	bat := makeBatch(param, plh)
 	var Line []string
@@ -256,6 +267,7 @@ func GetBatchData(param *ExternalParam, plh *ParseLineHandler, proc *process.Pro
 			if id != types.T_char && id != types.T_varchar && id != types.T_json && id != types.T_blob {
 				isNullOrEmpty = isNullOrEmpty || len(field) == 0
 			}
+			isNullOrEmpty = isNullOrEmpty || (getNullFlag(param, param.Attrs[colIdx], field))
 			switch id {
 			case types.T_bool:
 				cols := vec.Col.([]bool)
