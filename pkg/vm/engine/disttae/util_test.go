@@ -15,6 +15,7 @@
 package disttae
 
 import (
+	"encoding/binary"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -23,8 +24,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 )
 
-func makeColExpr(idx int32, typ int32) *plan.Expr {
-	containerType := types.T(typ).ToType()
+func makeColExpr(idx int32, typ types.T) *plan.Expr {
+	containerType := typ.ToType()
 	exprType := plan2.MakePlan2Type(&containerType)
 
 	return &plan.Expr{
@@ -61,6 +62,106 @@ func makeFunctionExpr(name string, args []*plan.Expr) *plan.Expr {
 	}
 }
 
-func TestCheckExprIsMonotonical(t *testing.T) {
+func makeColumnMeta(typ types.T, min []byte, max []byte) *ColumnMeta {
+	return &ColumnMeta{
+		typ: uint8(typ),
+		idx: 0,
+		alg: 0,
+		location: Extent{
+			id:         0,
+			offset:     0,
+			length:     0,
+			originSize: 0,
+		},
+		zoneMap: ZoneMap{
+			idx: 0,
+			min: min,
+			max: max,
+		},
+		bloomFilter: Extent{
+			id:         0,
+			offset:     0,
+			length:     0,
+			originSize: 0,
+		},
+		dummy:    [32]byte{},
+		checksum: 0,
+	}
+}
 
+func makeTestMeta() BlockMeta {
+	column1Min := make([]byte, 8)
+	column1Max := make([]byte, 8)
+	column2Min := make([]byte, 8)
+	column2Max := make([]byte, 8)
+
+	binary.LittleEndian.PutUint64(column1Min, 10)
+	binary.LittleEndian.PutUint64(column1Max, 100)
+	binary.LittleEndian.PutUint64(column2Min, 200)
+	binary.LittleEndian.PutUint64(column2Max, 1000)
+
+	return BlockMeta{
+		header: BlockHeader{},
+		columns: []*ColumnMeta{
+			makeColumnMeta(types.T_uint64, column1Min, column1Max),
+			makeColumnMeta(types.T_uint64, column2Min, column2Max),
+		},
+	}
+}
+
+func TestCheckExprIsMonotonical(t *testing.T) {
+	testExprs := []*plan.Expr{
+		// a > 1  -> true
+		makeFunctionExpr(">", []*plan.Expr{
+			makeColExpr(0, types.T_int64),
+			plan2.MakePlan2Int64ConstExprWithType(10),
+		}),
+		// a >= b -> true
+		makeFunctionExpr(">=", []*plan.Expr{
+			makeColExpr(0, types.T_int64),
+			makeColExpr(1, types.T_int64),
+		}),
+		// abs(a) -> false
+		makeFunctionExpr("abs", []*plan.Expr{
+			makeColExpr(0, types.T_int64),
+		}),
+	}
+
+	expected := []bool{true, true, false}
+
+	t.Run("test checkExprIsMonotonical", func(t *testing.T) {
+		for i, expr := range testExprs {
+			isMonotonical := checkExprIsMonotonical(expr)
+			if isMonotonical != expected[i] {
+				t.Fatalf("checkExprIsMonotonical testExprs[%d] is different with expected", i)
+			}
+		}
+	})
+}
+
+func TestNeedRead(t *testing.T) {
+	blockMeta := makeTestMeta()
+
+	testExprs := []*plan.Expr{
+		// a > 1  -> true
+		makeFunctionExpr(">", []*plan.Expr{
+			makeColExpr(0, types.T_int64),
+			plan2.MakePlan2Int64ConstExprWithType(10),
+		}),
+		makeFunctionExpr(">=", []*plan.Expr{
+			makeColExpr(0, types.T_int64),
+			makeColExpr(1, types.T_int64),
+		}),
+	}
+
+	expected := []bool{true, true, false}
+
+	t.Run("test needRead", func(t *testing.T) {
+		for i, expr := range testExprs {
+			result := needRead(expr, blockMeta)
+			if result != expected[i] {
+				t.Fatalf("test needRead at cases[%d], get result is different with expected", i)
+			}
+		}
+	})
 }

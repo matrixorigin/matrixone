@@ -14,6 +14,9 @@
 
 package disttae
 
+// tae's block metadata, which is currently just an empty one,
+// does not serve any purpose When tae submits a concrete structure,
+// it will replace this structure with tae's code
 type BlockMeta struct {
 	header  BlockHeader
 	columns []*ColumnMeta

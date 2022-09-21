@@ -161,8 +161,11 @@ func (txn *Transaction) readTable(ctx context.Context, databaseId uint64, tableI
 	}
 	blkInfos := txn.db.BlockList(ctx, dnList, databaseId, tableId, txn.meta.SnapshotTS, writes)
 	bats := make([]*batch.Batch, 0, len(blkInfos))
+
+	isMonotonically := checkExprIsMonotonical(expr)
+
 	for _, blkInfo := range blkInfos {
-		if !needRead(expr, blkInfo) {
+		if isMonotonically || !needRead(expr, blkInfo) {
 			continue
 		}
 		bat, err := blockRead(ctx, columns, blkInfo)
@@ -188,17 +191,11 @@ func (txn *Transaction) readTable(ctx context.Context, databaseId uint64, tableI
 
 // needRead determine if a block needs to be read
 func needRead(expr *plan.Expr, blkInfo BlockMeta) bool {
-	// 1. check expr ismonotonically
-	isMonotonically := checkExprIsMonotonical(expr)
-	if !isMonotonically {
-		return true
-	}
-
 	bat := batch.NewWithSize(0)
 	bat.Zs = []int64{1}
 	var err error
 
-	// 3. eval expr with min, if true return true
+	// 1. eval expr with min, if true return true
 	tmpExpr := plan.DeepCopyExpr(expr)
 	tmpExpr = replaceColumnWithZonemap(tmpExpr, blkInfo, MinOrMax_Min)
 	exprReturn, err := evalFilterExpr(tmpExpr, bat)
@@ -209,7 +206,7 @@ func needRead(expr *plan.Expr, blkInfo BlockMeta) bool {
 		return true
 	}
 
-	// 4. eval expr with max, if true return true else false
+	// 2. eval expr with max, if true return true else false
 	tmpExpr = plan.DeepCopyExpr(expr)
 	tmpExpr = replaceColumnWithZonemap(tmpExpr, blkInfo, MinOrMax_Max)
 	exprReturn, err = evalFilterExpr(tmpExpr, bat)
