@@ -2155,19 +2155,24 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			if cwft, ok := cw.(*TxnComputationWrapper); ok {
 				queryPlan := cwft.plan
 				// generator query explain
-				explainQuery := explain.NewExplainQueryImpl(queryPlan.GetQuery())
-				options := &explain.ExplainOptions{
-					Verbose: true,
-					Anzlyze: false,
-					Format:  explain.EXPLAIN_FORMAT_TEXT,
+				if queryPlan == nil && queryPlan.GetQuery() != nil {
+					explainQuery := explain.NewExplainQueryImpl(queryPlan.GetQuery())
+					options := &explain.ExplainOptions{
+						Verbose: true,
+						Anzlyze: false,
+						Format:  explain.EXPLAIN_FORMAT_TEXT,
+					}
+					marshalPlan := explainQuery.BuildJsonPlan(cwft.uuid, options)
+					// data transform to json datastruct
+					marshal, err3 := json.Marshal(marshalPlan)
+					if err3 != nil {
+						marshal = BuildErrorJsonPlan(cwft.uuid, moerr.ERROR_SERIALIZE_PLAN_JSON, "An error occurred when plan is serialized to json")
+					}
+					logutil.Infof("json of sql plan is : %s", string(marshal))
+				} else {
+					marshal := BuildErrorJsonPlan(cwft.uuid, moerr.ERROR_SERIALIZE_PLAN_JSON, "sql has no corresponding query execution plan")
+					logutil.Infof("json of sql plan is : %s", string(marshal))
 				}
-				marshalPlan := explainQuery.BuildJsonPlan(cwft.uuid, options)
-				// data transform to json datastruct
-				marshal, err3 := json.Marshal(marshalPlan)
-				if err3 != nil {
-					marshal = BuildErrorJsonPlan(cwft.uuid)
-				}
-				logutil.Infof("json of sql plan is : %s", string(marshal))
 			}
 		//just status, no result set
 		case *tree.CreateTable, *tree.DropTable, *tree.CreateDatabase, *tree.DropDatabase,
@@ -2199,9 +2204,36 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			if !ses.Pu.SV.DisableRecordTimeElapsedOfSqlRequest {
 				logutil.Infof("time of SendResponse %s", time.Since(echoTime).String())
 			}
+
+			/*
+				Step 4: Serialize the execution plan by json
+			*/
+			if cwft, ok := cw.(*TxnComputationWrapper); ok {
+				queryPlan := cwft.plan
+				// generator query explain
+				if queryPlan == nil && queryPlan.GetQuery() != nil {
+					explainQuery := explain.NewExplainQueryImpl(queryPlan.GetQuery())
+					options := &explain.ExplainOptions{
+						Verbose: true,
+						Anzlyze: false,
+						Format:  explain.EXPLAIN_FORMAT_TEXT,
+					}
+					marshalPlan := explainQuery.BuildJsonPlan(cwft.uuid, options)
+					// data transform to json datastruct
+					marshal, err3 := json.Marshal(marshalPlan)
+					if err3 != nil {
+						marshal = BuildErrorJsonPlan(cwft.uuid, moerr.ERROR_SERIALIZE_PLAN_JSON, "An error occurred when plan is serialized to json")
+					}
+					logutil.Infof("json of sql plan is : %s", string(marshal))
+				} else {
+					marshal := BuildErrorJsonPlan(cwft.uuid, moerr.ERROR_SERIALIZE_PLAN_JSON, "sql has no corresponding query execution plan")
+					logutil.Infof("json of sql plan is : %s", string(marshal))
+				}
+			}
 		case *tree.ExplainAnalyze:
 			explainColName := "QUERY PLAN"
-			columns, err := GetExplainColumns(explainColName)
+			var columns []interface{}
+			columns, err = GetExplainColumns(explainColName)
 			if err != nil {
 				logutil.Errorf("GetColumns from ExplainColumns handler failed, error: %v", err)
 				return err
@@ -2221,7 +2253,6 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			for _, c := range columns {
 				mysqlc := c.(Column)
 				ses.Mrs.AddColumn(mysqlc)
-
 				/*
 					mysql COM_QUERY response: send the column definition per column
 				*/
@@ -2230,7 +2261,6 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 					goto handleFailed
 				}
 			}
-
 			/*
 				mysql COM_QUERY response: End after the column has been sent.
 				send EOF packet
@@ -2254,13 +2284,13 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 
 			if cwft, ok := cw.(*TxnComputationWrapper); ok {
 				queryPlan := cwft.plan
-
 				// generator query explain
 				explainQuery := explain.NewExplainQueryImpl(queryPlan.GetQuery())
 
 				// build explain data buffer
 				buffer := explain.NewExplainDataBuffer()
-				option, err := getExplainOption(cw.GetAst().(*tree.ExplainAnalyze))
+				var option *explain.ExplainOptions
+				option, err = getExplainOption(cw.GetAst().(*tree.ExplainAnalyze))
 				if err != nil {
 					logutil.Errorf("explain Query statement option error: %v", err)
 					return errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("explain Query statement option error: %v", err))
@@ -2704,15 +2734,13 @@ func convertEngineTypeToMysqlType(engineType types.T, col *MysqlColumn) error {
 }
 
 // build plan json when marhal plan error
-func BuildErrorJsonPlan(uuid uuid.UUID) []byte {
-	//`{"steps":null,"code":20104,"message":"An error occurred when plan is serialized to json","success":false,"uuid":"fd146c24-0770-4647-b690-f1fc98966898"}`
-	json := []byte{123, 34, 115, 116, 101, 112, 115, 34, 58, 110, 117, 108, 108, 44,
-		34, 99, 111, 100, 101, 34, 58, 50, 48, 49, 48, 52, 44, 34, 109, 101, 115, 115, 97, 103,
-		101, 34, 58, 34, 65, 110, 32, 101, 114, 114, 111, 114, 32, 111, 99, 99, 117, 114, 114,
-		101, 100, 32, 119, 104, 101, 110, 32, 112, 108, 97, 110, 32, 105, 115, 32, 115, 101,
-		114, 105, 97, 108, 105, 122, 101, 100, 32, 116, 111, 32, 106, 115, 111, 110, 34, 44,
-		34, 115, 117, 99, 99, 101, 115, 115, 34, 58, 102, 97, 108, 115, 101, 44, 34, 117, 117,
-		105, 100, 34, 58, 34, 50, 53, 51, 52, 53, 97, 48, 98, 45, 99, 97, 101, 97, 45, 52, 57,
-		54, 56, 45, 97, 101, 56, 52, 45, 54, 54, 101, 97, 54, 101, 100, 55, 99, 56, 57, 56, 34, 125}
-	return json
+func BuildErrorJsonPlan(uuid uuid.UUID, errcode uint16, msg string) []byte {
+	explainData := explain.ExplainData{
+		Code:    errcode,
+		Message: msg,
+		Success: false,
+		Uuid:    uuid.String(),
+	}
+	marshal, _ := json.Marshal(explainData)
+	return marshal
 }
