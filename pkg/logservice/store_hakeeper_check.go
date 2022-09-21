@@ -113,29 +113,33 @@ func (l *store) hakeeperCheck() {
 		return
 	}
 
-	if isLeader {
-		state, err := l.getCheckerState()
-		if err != nil {
-			// TODO: check whether this is temp error
-			plog.Errorf("failed to get checker state, %v", err)
-			return
-		}
-		switch state.State {
-		case pb.HAKeeperCreated:
-			plog.Warningf("waiting for initial cluster info to be set, check skipped")
-			return
-		case pb.HAKeeperBootstrapping:
-			l.bootstrap(term, state)
-		case pb.HAKeeperBootstrapCommandsReceived:
-			l.checkBootstrap(state)
-		case pb.HAKeeperBootstrapFailed:
-			l.handleBootstrapFailure()
-		case pb.HAKeeperRunning:
-			l.healthCheck(term, state)
-			l.taskSchedule(state)
-		default:
-			panic("unknown HAKeeper state")
-		}
+	if !isLeader {
+		l.taskScheduler.StopScheduleCronTask()
+		return
+	}
+
+	l.taskScheduler.StartScheduleCronTask()
+	state, err := l.getCheckerState()
+	if err != nil {
+		// TODO: check whether this is temp error
+		plog.Errorf("failed to get checker state, %v", err)
+		return
+	}
+	switch state.State {
+	case pb.HAKeeperCreated:
+		plog.Warningf("waiting for initial cluster info to be set, check skipped")
+		return
+	case pb.HAKeeperBootstrapping:
+		l.bootstrap(term, state)
+	case pb.HAKeeperBootstrapCommandsReceived:
+		l.checkBootstrap(state)
+	case pb.HAKeeperBootstrapFailed:
+		l.handleBootstrapFailure()
+	case pb.HAKeeperRunning:
+		l.healthCheck(term, state)
+		l.taskSchedule(state)
+	default:
+		panic("unknown HAKeeper state")
 	}
 }
 
