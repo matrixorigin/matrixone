@@ -15,131 +15,144 @@
 package aggut
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/agg"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/agg"
+
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/testutil"
-	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
-	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
-	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
-	"github.com/stretchr/testify/require"
 )
 
 const (
 	Rows = 10
 )
 
-// TODO: add decimal128 and more type test.
 func TestAnyvalue(t *testing.T) {
-	testTyp := types.New(types.T_int64, 0, 0, 0)
-	a := agg.NewAnyValue[int64]()
-	a2 := agg.NewAnyValue[int64]()
-	a3 := agg.NewAnyValue[int64]()
-	m := mheap.New(guest.New(1<<30, host.New(1<<30)))
-	vs := []int64{0, 1, -2, 3, 14, 5, -6, 7, 8, 9}
-	vs2 := []int64{29, 8, 7, -6, 5, 14, -3, 2, 1, 0}
-	vec := testutil.NewVector(Rows, testTyp, m, false, vs)
-	vec2 := testutil.NewVector(Rows, testTyp, m, false, vs2)
-	{
-		// test single agg with Grow & Fill function
-		agg := agg.NewUnaryAgg(a, true, testTyp, testTyp, a.Grows, a.Eval, a.Merge, a.Fill, nil)
-		err := agg.Grows(1, m)
-		require.NoError(t, err)
-		for i := 0; i < Rows; i++ {
-			agg.Fill(0, int64(i), 1, []*vector.Vector{vec})
-		}
-		v, err := agg.Eval(m)
-		require.NoError(t, err)
-		require.Equal(t, []int64{0}, vector.GetColumn[int64](v))
-		v.Free(m)
-	}
-	{
-		// test two agg with Merge function
-		agg0 := agg.NewUnaryAgg(a2, true, testTyp, testTyp, a2.Grows, a2.Eval, a2.Merge, a2.Fill, nil)
-		err := agg0.Grows(1, m)
-		require.NoError(t, err)
-		for i := 0; i < Rows; i++ {
-			agg0.Fill(0, int64(i), 1, []*vector.Vector{vec})
-		}
-		agg1 := agg.NewUnaryAgg(a3, true, testTyp, testTyp, a3.Grows, a3.Eval, a3.Merge, a3.Fill, nil)
-		err = agg1.Grows(1, m)
-		require.NoError(t, err)
-		for i := 0; i < Rows; i++ {
-			agg1.Fill(0, int64(i), 1, []*vector.Vector{vec2})
-		}
-		agg0.Merge(agg1, 0, 0)
-		{
-			v, err := agg0.Eval(m)
-			require.NoError(t, err)
-			require.Equal(t, []int64{0}, vector.GetColumn[int64](v))
-			v.Free(m)
-		}
-		{
-			v, err := agg1.Eval(m)
-			require.NoError(t, err)
-			require.Equal(t, []int64{29}, vector.GetColumn[int64](v))
-			v.Free(m)
-		}
-	}
-	vec.Free(m)
-	vec2.Free(m)
-	require.Equal(t, int64(0), m.Size())
-}
+	int8TestTyp := types.New(types.T_int8, 0, 0, 0)
+	decimalTestTyp := types.New(types.T_decimal128, 0, 0, 0)
+	boolTestTyp := types.New(types.T_bool, 0, 0, 0)
+	varcharTestTyp := types.New(types.T_varchar, 0, 0, 0)
+	uuidTestTyp := types.New(types.T_uuid, 0, 0, 0)
 
-func TestDecimalAnyva(t *testing.T) {
-	testTyp := types.New(types.T_decimal128, 0, 0, 0)
-	da := agg.NewAnyValue[types.Decimal128]()
-	da2 := agg.NewAnyValue[types.Decimal128]()
-	da3 := agg.NewAnyValue[types.Decimal128]()
-	m := mheap.New(guest.New(1<<30, host.New(1<<30)))
-	input1 := []int64{1, 12, 3, 4, 5, 26, 7, 8, 9, 10}
-	input2 := []int64{14, 5, 6, 7, 8, 29, 30, 1, 2, 3}
-	vec := testutil.MakeDecimal128Vector(input1, nil, testTyp)
-	vec2 := testutil.MakeDecimal128Vector(input2, nil, testTyp)
-	{
-		// test single agg with Grow & Fill function
-		agg := agg.NewUnaryAgg(da, true, testTyp, testTyp, da.Grows, da.Eval, da.Merge, da.Fill, nil)
-		err := agg.Grows(1, m)
-		require.NoError(t, err)
-		for i := 0; i < Rows; i++ {
-			agg.Fill(0, int64(i), 1, []*vector.Vector{vec})
-		}
-		v, err := agg.Eval(m)
-		require.NoError(t, err)
-		require.Equal(t, testutil.MakeDecimal128ArrByInt64Arr([]int64{1}), vector.GetColumn[types.Decimal128](v))
-		v.Free(m)
-	}
-	{
-		// test two agg with Merge function
-		agg0 := agg.NewUnaryAgg(da2, true, testTyp, testTyp, da2.Grows, da2.Eval, da2.Merge, da2.Fill, nil)
-		err := agg0.Grows(1, m)
-		require.NoError(t, err)
-		for i := 0; i < Rows; i++ {
-			agg0.Fill(0, int64(i), 1, []*vector.Vector{vec})
-		}
-		agg1 := agg.NewUnaryAgg(da3, true, testTyp, testTyp, da3.Grows, da3.Eval, da3.Merge, da3.Fill, nil)
-		err = agg1.Grows(1, m)
-		require.NoError(t, err)
-		for i := 0; i < Rows; i++ {
-			agg1.Fill(0, int64(i), 1, []*vector.Vector{vec2})
-		}
-		agg0.Merge(agg1, 0, 0)
+	testCases := []testCase{
+		// int8 anyvalue test
 		{
-			v, err := agg0.Eval(m)
-			require.NoError(t, err)
-			require.Equal(t, testutil.MakeDecimal128ArrByInt64Arr([]int64{1}), vector.GetColumn[types.Decimal128](v))
-			v.Free(m)
-		}
+			op:         agg.AggregateAnyValue,
+			isDistinct: false,
+			inputTyp:   int8TestTyp,
+
+			input:    []int8{9, 8, 7, 6, 5, 4, 3, 2, 1, 0},
+			inputNsp: nil,
+			expected: []int8{9},
+
+			mergeInput:  []int8{0, 1, 2, 3, 4, 5, 6, 7, 8, 9},
+			mergeNsp:    nil,
+			mergeExpect: []int8{9},
+
+			testMarshal: true,
+		},
+		// int8 distinct anyvalue test
 		{
-			v, err := agg1.Eval(m)
-			require.NoError(t, err)
-			require.Equal(t, testutil.MakeDecimal128ArrByInt64Arr([]int64{14}), vector.GetColumn[types.Decimal128](v))
-			v.Free(m)
-		}
+			op:         agg.AggregateAnyValue,
+			isDistinct: true,
+			inputTyp:   int8TestTyp,
+
+			input:    []int8{9, 8, 7, 6, 5, 4, 3, 2, 1, 0},
+			inputNsp: nil,
+			expected: []int8{9},
+
+			mergeInput:  []int8{0, 1, 2, 3, 4, 5, 6, 7, 8, 9},
+			mergeNsp:    nil,
+			mergeExpect: []int8{9},
+
+			testMarshal: false,
+		},
+		// decimal128 anyvalue test
+		{
+			op:         agg.AggregateAnyValue,
+			isDistinct: false,
+			inputTyp:   decimalTestTyp,
+
+			input:    []int64{9, 8, 7, 6, 5, 4, 3, 2, 1, 0},
+			inputNsp: nil,
+			expected: []int64{9},
+
+			mergeInput:  []int64{0, 1, 2, 3, 4, 5, 6, 7, 8, 9},
+			mergeNsp:    nil,
+			mergeExpect: []int64{9},
+
+			testMarshal: true,
+		},
+		// bool anyvalue test
+		{
+			op:         agg.AggregateAnyValue,
+			isDistinct: false,
+			inputTyp:   boolTestTyp,
+
+			input:    []bool{true, true, false, true, false, true, false, true, false, true},
+			inputNsp: nil,
+			expected: []bool{true},
+
+			mergeInput:  []bool{false, false, false, false, false, false, false, false, false, false},
+			mergeNsp:    nil,
+			mergeExpect: []bool{true},
+
+			testMarshal: true,
+		},
+		// varchar anyvalue test
+		{
+			op:         agg.AggregateAnyValue,
+			isDistinct: false,
+			inputTyp:   varcharTestTyp,
+
+			input:    []string{"ab", "ac", "bc", "bcdd", "c", "za", "mo", "momo", "zb", "z"},
+			inputNsp: nil,
+			expected: []string{"ab"},
+
+			mergeInput:  []string{"ss", "ac", "bc", "bcdd", "c", "za", "mo", "momo", "zb", "z"},
+			mergeNsp:    nil,
+			mergeExpect: []string{"ab"},
+
+			testMarshal: true,
+		},
+		// uuid anyvalue test
+		{
+			op:         agg.AggregateAnyValue,
+			isDistinct: true,
+			inputTyp:   uuidTestTyp,
+
+			input: []string{
+				"1ef96142-2d0d-11ed-940f-000c29847904",
+				"f6355110-2d0c-11ed-940f-000c29847904",
+				"117a0bd5-2d0d-11ed-940f-000c29847904",
+				"18b21c70-2d0d-11ed-940f-000c29847904",
+				"1b50c129-2dba-11ed-940f-000c29847904",
+				"ad9f83eb-2dbd-11ed-940f-000c29847904",
+				"6d1b1fdb-2dbf-11ed-940f-000c29847904",
+				"6d1b1fdb-2dbf-11ed-940f-000c29847904",
+				"1b50c129-2dba-11ed-940f-000c29847904",
+				"ad9f83eb-2dbd-11ed-940f-000c29847904",
+			},
+			inputNsp: nil,
+			expected: []string{"1ef96142-2d0d-11ed-940f-000c29847904"},
+
+			mergeInput: []string{
+				"550e8400-e29b-41d4-a716-446655440000",
+				"3e350a5c-222a-11eb-abef-0242ac110002",
+				"9e7862b3-2f69-11ed-8ec0-000c29847904",
+				"6d1b1f73-2dbf-11ed-940f-000c29847904",
+				"ad9f809f-2dbd-11ed-940f-000c29847904",
+				"1b50c137-2dba-11ed-940f-000c29847904",
+				"149e3f0f-2de4-11ed-940f-000c29847904",
+				"1b50c137-2dba-11ed-940f-000c29847904",
+				"9e7862b3-2f69-11ed-8ec0-000c29847904",
+				"3F2504E0-4F89-11D3-9A0C-0305E82C3301",
+			},
+			mergeNsp:    nil,
+			mergeExpect: []string{"1ef96142-2d0d-11ed-940f-000c29847904"},
+
+			testMarshal: false,
+		},
 	}
-	vec.Free(m)
-	vec2.Free(m)
-	require.Equal(t, int64(0), m.Size())
+
+	RunTest(t, testCases)
 }

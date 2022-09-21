@@ -37,7 +37,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/logutil/logutil2"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
@@ -147,8 +146,15 @@ func (mce *MysqlCmdExecutor) GetRoutineManager() *RoutineManager {
 	return mce.routineMgr
 }
 
-func (mce *MysqlCmdExecutor) RecordStatement(ctx context.Context, ses *Session, proc *process.Process, cw ComputationWrapper, beginIns time.Time) context.Context {
+var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Process, cw ComputationWrapper, beginIns time.Time) context.Context {
+	if !trace.GetTracerProvider().IsEnable() {
+		return ctx
+	}
 	sessInfo := proc.SessionInfo
+	tenant := ses.GetTenantInfo()
+	if tenant == nil {
+		tenant, _ = GetTenantInfo("internal")
+	}
 	var stmID uuid.UUID
 	copy(stmID[:], cw.GetUUID())
 	var txnID uuid.UUID
@@ -159,23 +165,29 @@ func (mce *MysqlCmdExecutor) RecordStatement(ctx context.Context, ses *Session, 
 	copy(sesID[:], ses.GetUUID())
 	fmtCtx := tree.NewFmtCtx(dialect.MYSQL, tree.WithQuoteString(true))
 	cw.GetAst().Format(fmtCtx)
-	trace.ReportStatement(
-		ctx,
-		&trace.StatementInfo{
-			StatementID:          stmID,
-			TransactionID:        txnID,
-			SessionID:            sesID,
-			Account:              "account", //fixme: sessInfo.GetAccount()
-			User:                 sessInfo.GetUser(),
-			Host:                 sessInfo.GetHost(),
-			Database:             sessInfo.GetDatabase(),
-			Statement:            fmtCtx.String(),
-			StatementFingerprint: "", // fixme
-			StatementTag:         "", // fixme
-			RequestAt:            util.NowNS(),
-		},
-	)
-	return trace.ContextWithSpanContext(ctx, trace.SpanContextWithID(trace.TraceID(stmID)))
+	stm := &trace.StatementInfo{
+		StatementID:          stmID,
+		TransactionID:        txnID,
+		SessionID:            sesID,
+		Account:              tenant.GetTenant(),
+		User:                 tenant.GetUser(),
+		Host:                 sessInfo.GetHost(),
+		Database:             sessInfo.GetDatabase(),
+		Statement:            fmtCtx.String(),
+		StatementFingerprint: "", // fixme: (Reserved)
+		StatementTag:         "", // fixme: (Reserved)
+		RequestAt:            util.NowNS(),
+	}
+	sc := trace.SpanContextWithID(trace.TraceID(stmID))
+	return trace.ContextWithStatement(trace.ContextWithSpanContext(ctx, sc), stm)
+}
+
+func (mce *MysqlCmdExecutor) RecordStatementTxnID(ctx context.Context, ses *Session) {
+	if stm := trace.StatementFromContext(ctx); stm == nil {
+		return
+	} else if handler := ses.GetTxnHandler(); handler.IsValidTxn() {
+		stm.SetTxnIDIsZero(handler.GetTxn().Txn().ID)
+	}
 }
 
 // outputPool outputs the data
@@ -1626,6 +1638,17 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 	return cwft.compile, err
 }
 
+func (cwft *TxnComputationWrapper) RecordExecPlan(ctx context.Context) error {
+	if stm := trace.StatementFromContext(ctx); stm != nil {
+		if handler := cwft.ses.GetTxnHandler(); handler.IsValidTxn() {
+			stm.SetTxnIDIsZero(handler.GetTxn().Txn().ID)
+		}
+		stm.SetExecPlan(cwft.plan)
+		stm.Report(ctx)
+	}
+	return nil
+}
+
 func (cwft *TxnComputationWrapper) GetUUID() []byte {
 	return cwft.uuid[:]
 }
@@ -1797,31 +1820,31 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 	for _, cw := range cws {
 		ses.SetMysqlResultSet(&MysqlResultSet{})
 		stmt := cw.GetAst()
-		ctx := mce.RecordStatement(requestCtx, ses, proc, cw, beginInstant)
+		requestCtx = RecordStatement(requestCtx, ses, proc, cw, beginInstant)
 
 		if ses.GetTenantInfo() != nil {
 			ses.SetPrivilege(determinePrivilegeSetOfStatement(stmt))
 			havePrivilege, err2 = authenticatePrivilegeOfStatementWithObjectTypeAccountAndDatabase(requestCtx, ses, stmt)
 			if err2 != nil {
-				logStatementStatus(ctx, ses, stmt, fail, err2)
+				logStatementStatus(requestCtx, ses, stmt, fail, err2)
 				return err2
 			}
 
 			if !havePrivilege {
 				retErr = moerr.NewInternalError("do not have privilege to execute the statement")
-				logStatementStatus(ctx, ses, stmt, fail, retErr)
+				logStatementStatus(requestCtx, ses, stmt, fail, retErr)
 				return retErr
 			}
 
 			havePrivilege, err2 = authenticatePrivilegeOfStatementWithObjectTypeNone(requestCtx, ses, stmt)
 			if err2 != nil {
-				logStatementStatus(ctx, ses, stmt, fail, err2)
+				logStatementStatus(requestCtx, ses, stmt, fail, err2)
 				return err2
 			}
 
 			if !havePrivilege {
 				retErr = moerr.NewInternalError("do not have privilege to execute the statement")
-				logStatementStatus(ctx, ses, stmt, fail, retErr)
+				logStatementStatus(requestCtx, ses, stmt, fail, retErr)
 				return retErr
 			}
 		}
@@ -1845,19 +1868,19 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 				//is ddl statement
 				if IsDDL(stmt) {
 					retErr = errorOnlyCreateStatement
-					logStatementStatus(ctx, ses, stmt, fail, retErr)
+					logStatementStatus(requestCtx, ses, stmt, fail, retErr)
 					return retErr
 				} else if IsAdministrativeStatement(stmt) {
 					retErr = errorAdministrativeStatement
-					logStatementStatus(ctx, ses, stmt, fail, retErr)
+					logStatementStatus(requestCtx, ses, stmt, fail, retErr)
 					return retErr
 				} else if IsParameterModificationStatement(stmt) {
 					retErr = errorParameterModificationInTxn
-					logStatementStatus(ctx, ses, stmt, fail, retErr)
+					logStatementStatus(requestCtx, ses, stmt, fail, retErr)
 					return retErr
 				} else {
 					retErr = errorUnclassifiedStatement
-					logStatementStatus(ctx, ses, stmt, fail, retErr)
+					logStatementStatus(requestCtx, ses, stmt, fail, retErr)
 					return retErr
 				}
 			}
@@ -1870,6 +1893,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			if err != nil {
 				goto handleFailed
 			}
+			mce.RecordStatementTxnID(requestCtx, ses)
 		case *tree.CommitTransaction:
 			err = ses.TxnCommit()
 			if err != nil {
@@ -2041,10 +2065,11 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			goto handleFailed
 		}
 		stmt = cw.GetAst()
+		cw.RecordExecPlan(requestCtx)
 
 		runner = ret.(ComputationRunner)
 		if !ses.Pu.SV.DisableRecordTimeElapsedOfSqlRequest {
-			logutil2.Infof(ctx, "time of Exec.Build : %s", time.Since(cmpBegin).String())
+			logutil.Infof("time of Exec.Build : %s", time.Since(cmpBegin).String())
 		}
 
 		// cw.Compile might rewrite sql, here we fetch the latest version
@@ -2315,7 +2340,8 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		if !fromLoadData {
 			txnErr = ses.TxnCommitSingleStatement(stmt)
 			if txnErr != nil {
-				logStatementStatus(ctx, ses, stmt, fail, txnErr)
+				trace.EndStatement(requestCtx, txnErr)
+				logStatementStatus(requestCtx, ses, stmt, fail, txnErr)
 				return txnErr
 			}
 			switch stmt.(type) {
@@ -2329,40 +2355,45 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 				*tree.Deallocate:
 				resp := NewOkResponse(rspLen, 0, 0, 0, int(COM_QUERY), "")
 				if err := mce.GetSession().protocol.SendResponse(resp); err != nil {
+					trace.EndStatement(requestCtx, err)
 					retErr = fmt.Errorf("routine send response failed. error:%v ", err)
-					logStatementStatus(ctx, ses, stmt, fail, retErr)
+					logStatementStatus(requestCtx, ses, stmt, fail, retErr)
 					return retErr
 				}
 
 			case *tree.PrepareStmt, *tree.PrepareString:
 				if mce.ses.Cmd == int(COM_STMT_PREPARE) {
 					if err := mce.ses.protocol.SendPrepareResponse(prepareStmt); err != nil {
+						trace.EndStatement(requestCtx, err)
 						retErr = fmt.Errorf("routine send response failed. error:%v ", err)
-						logStatementStatus(ctx, ses, stmt, fail, retErr)
+						logStatementStatus(requestCtx, ses, stmt, fail, retErr)
 						return retErr
 					}
 				} else {
 					resp := NewOkResponse(rspLen, 0, 0, 0, int(COM_QUERY), "")
 					if err := mce.GetSession().protocol.SendResponse(resp); err != nil {
+						trace.EndStatement(requestCtx, err)
 						retErr = fmt.Errorf("routine send response failed. error:%v ", err)
-						logStatementStatus(ctx, ses, stmt, fail, retErr)
+						logStatementStatus(requestCtx, ses, stmt, fail, retErr)
 						return retErr
 					}
 				}
 			}
 		}
-		logStatementStatus(ctx, ses, stmt, success, nil)
+		trace.EndStatement(requestCtx, nil)
+		logStatementStatus(requestCtx, ses, stmt, success, nil)
 		goto handleNext
 	handleFailed:
+		trace.EndStatement(requestCtx, err)
 		logutil.Error(err.Error())
 		if !fromLoadData {
 			txnErr = ses.TxnRollbackSingleStatement(stmt)
 			if txnErr != nil {
-				logStatementStatus(ctx, ses, stmt, fail, txnErr)
+				logStatementStatus(requestCtx, ses, stmt, fail, txnErr)
 				return txnErr
 			}
 		}
-		logStatementStatus(ctx, ses, stmt, fail, err)
+		logStatementStatus(requestCtx, ses, stmt, fail, err)
 		return err
 	handleNext:
 	} // end of for
