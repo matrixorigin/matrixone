@@ -59,48 +59,6 @@ func newDummyExecutorFactory(sqlch chan string) func() ie.InternalExecutor {
 
 func TestInitSchemaByInnerExecutor(t *testing.T) {
 	type args struct {
-		ieFactory func() ie.InternalExecutor
-	}
-	c := make(chan string, 10)
-	tests := []struct {
-		name string
-		args args
-	}{
-		{
-			name: "fake",
-			args: args{newDummyExecutorFactory(c)},
-		},
-	}
-	wg := sync.WaitGroup{}
-	startedC := make(chan struct{}, 1)
-	wg.Add(1)
-	go func() {
-		startedC <- struct{}{}
-	loop:
-		for {
-			sql, ok := <-c
-			if ok {
-				t.Logf("exec sql: %s", sql)
-			} else {
-				t.Log("exec sql Done.")
-				break loop
-			}
-		}
-		wg.Done()
-	}()
-	<-startedC
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			err := InitSchemaByInnerExecutor(context.TODO(), tt.args.ieFactory, InternalExecutor)
-			require.Equal(t, nil, err)
-		})
-	}
-	close(c)
-	wg.Wait()
-}
-
-func TestInitExternalTblSchema(t *testing.T) {
-	type args struct {
 		ctx  context.Context
 		ch   chan string
 		mode string
@@ -134,7 +92,7 @@ func TestInitExternalTblSchema(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			var wg sync.WaitGroup
 			wg.Add(1 + len(initDDLs))
-			err := InitExternalTblSchema(tt.args.ctx, newDummyExecutorFactory(tt.args.ch), tt.args.mode)
+			err := InitSchemaByInnerExecutor(tt.args.ctx, newDummyExecutorFactory(tt.args.ch), tt.args.mode)
 			require.Equal(t, nil, err)
 			go func() {
 			loop:
