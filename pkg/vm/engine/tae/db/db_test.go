@@ -348,7 +348,7 @@ func TestNonAppendableBlock(t *testing.T) {
 		assert.Nil(t, err)
 		dataBlk := blk.GetMeta().(*catalog.BlockEntry).GetBlockData()
 		blockFile := dataBlk.GetBlockFile()
-		err = blockFile.WriteBatch(bat, txn.GetStartTS())
+		_, err = blockFile.WriteBatch(bat, txn.GetStartTS())
 		assert.Nil(t, err)
 
 		v, err := dataBlk.GetValue(txn, 4, 2)

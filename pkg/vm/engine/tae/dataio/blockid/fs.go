@@ -16,26 +16,18 @@ package blockid
 
 import (
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/compress"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/tfs"
-	"os"
-	"strings"
 	"sync"
 )
 
 type ObjectFS struct {
 	sync.RWMutex
 	common.RefHelper
-	service   fileservice.FileService
-	nodes     map[string]tfs.File
-	attr      *Attr
-	lastId    uint64
-	lastInode uint64
-	seq       uint64
-	writers   map[string]objectio.Writer
+	service fileservice.FileService
+	dir     string
+	writers map[string]objectio.Writer
 }
 
 type Attr struct {
@@ -45,10 +37,6 @@ type Attr struct {
 
 func NewObjectFS(service fileservice.FileService) *ObjectFS {
 	fs := &ObjectFS{
-		attr: &Attr{
-			algo: compress.Lz4,
-		},
-		nodes:   make(map[string]tfs.File),
 		service: service,
 		writers: make(map[string]objectio.Writer),
 	}
@@ -56,10 +44,10 @@ func NewObjectFS(service fileservice.FileService) *ObjectFS {
 }
 
 func (o *ObjectFS) SetDir(dir string) {
-	if o.attr.dir != "" {
+	if o.dir != "" {
 		return
 	}
-	o.attr.dir = dir
+	o.dir = dir
 	c := fileservice.Config{
 		Name:    "LOCAL",
 		Backend: "DISK",
@@ -67,7 +55,7 @@ func (o *ObjectFS) SetDir(dir string) {
 	}
 	service, err := fileservice.NewFileService(c)
 	if err != nil {
-		panic(fmt.Sprintf("NewFileService failed: %s", err.Error()))
+		panic(any(fmt.Sprintf("NewFileService failed: %s", err.Error())))
 	}
 	o.service = service
 }
@@ -85,34 +73,4 @@ func (o *ObjectFS) GetWriter(name string) (objectio.Writer, error) {
 	}
 	o.writers[name] = writer
 	return writer, err
-}
-
-func (o *ObjectFS) ReadDir(dir string) ([]common.FileInfo, error) {
-	o.RWMutex.Lock()
-	defer o.RWMutex.Unlock()
-	fileInfos := make([]common.FileInfo, 0)
-	entry := o.nodes[dir]
-	info := entry.Stat()
-	fileInfos = append(fileInfos, info)
-	return fileInfos, nil
-}
-
-func (o *ObjectFS) Remove(name string) error {
-	o.RWMutex.Lock()
-	defer o.RWMutex.Unlock()
-	fileName := strings.Split(name, "/")
-	dir := o.nodes[fileName[0]]
-	if dir == nil {
-		return os.ErrNotExist
-	}
-	//return dir.(*ObjectDir).Remove(fileName[1])
-	return nil
-}
-
-func (o *ObjectFS) RemoveAll(dir string) error {
-	return nil
-}
-
-func (o *ObjectFS) MountInfo() *tfs.MountInfo {
-	return nil
 }

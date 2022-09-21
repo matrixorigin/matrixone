@@ -26,7 +26,7 @@ import (
 )
 
 const (
-	ModuleName = "OBJECTIO"
+	ModuleName = "BlockIO"
 )
 
 func TestBlock1(t *testing.T) {
@@ -46,7 +46,7 @@ func TestBlock1(t *testing.T) {
 	seg := SegmentFactory.Build(dir, id).(*segmentFile)
 	block = newBlock(common.NextGlobalSeqNum(), seg, colCnt, indexCnt)
 	var ts types.TS
-	err := block.WriteBatch(data, ts)
+	_, err := block.WriteBatch(data, ts)
 	assert.Nil(t, err)
 	bs, err := block.(*blockFile).writer.Sync()
 	assert.Nil(t, err)

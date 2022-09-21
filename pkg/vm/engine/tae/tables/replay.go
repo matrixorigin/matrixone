@@ -31,22 +31,6 @@ func (blk *dataBlock) ReplayDelta() (err error) {
 	}
 	an := updates.NewCommittedAppendNode(blk.ckpTs.Load().(types.TS), 0, blk.node.rows, blk.mvcc)
 	blk.mvcc.OnReplayAppendNode(an)
-	masks, vals := blk.file.LoadUpdates()
-	for colIdx, mask := range masks {
-		logutil.Info("[Start]",
-			common.TimestampField(blk.ckpTs.Load().(types.TS)),
-			common.OperationField("install-update"),
-			common.OperandNameSpace(),
-			common.AnyField("rows", blk.node.rows),
-			common.AnyField("col", colIdx),
-			common.CountField(int(mask.GetCardinality())))
-		un := updates.NewCommittedColumnUpdateNode(blk.ckpTs.Load().(types.TS), blk.ckpTs.Load().(types.TS), blk.meta.AsCommonID(), nil)
-		un.SetMask(mask)
-		un.SetValues(vals[colIdx])
-		if err = blk.OnReplayUpdate(uint16(colIdx), un); err != nil {
-			return
-		}
-	}
 	deletes, err := blk.file.LoadDeletes()
 	if err != nil || deletes == nil {
 		return

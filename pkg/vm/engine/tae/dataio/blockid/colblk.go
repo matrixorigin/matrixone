@@ -15,7 +15,6 @@
 package blockid
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -53,57 +52,8 @@ func (cb *columnBlock) GetDataObject(metaLoc string) objectio.ColumnObject {
 	return object
 }
 
-func (cb *columnBlock) WriteTS(ts types.TS) (err error) {
-	return
-}
-
-func (cb *columnBlock) WriteData(buf []byte) (err error) {
-	return
-}
-
-func (cb *columnBlock) WriteUpdates(buf []byte) (err error) {
-	return
-}
-
-func (cb *columnBlock) ReadTS() (ts types.TS) {
-	return
-}
-
-func (cb *columnBlock) ReadData(buf []byte) (err error) {
-	return
-}
-
-func (cb *columnBlock) ReadUpdates(buf []byte) (err error) {
-	return
-}
-
-func (cb *columnBlock) ReadIndex(idx int, buf []byte) (err error) {
-	return
-}
-
-func (cb *columnBlock) GetDataFileStat() (stat common.FileInfo) {
-	return nil
-}
-
-func (cb *columnBlock) OpenIndexFile(idx int) (vfile common.IRWFile, err error) {
-	return nil, nil
-}
-
-func (cb *columnBlock) OpenUpdateFile() (vfile common.IRWFile, err error) {
-	return nil, nil
-}
-
-func (cb *columnBlock) OpenDataFile() (vfile common.IRWFile, err error) {
-	return nil, nil
-}
-
 func (cb *columnBlock) Close() error {
 	cb.Unref()
-	// cb.data.Unref()
-	// cb.updates.Unref()
-	// for _, index := range cb.indexes {
-	// 	index.Unref()
-	// }
 	return nil
 }
 

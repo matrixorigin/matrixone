@@ -32,7 +32,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/mockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
@@ -44,7 +43,6 @@ const (
 )
 
 func initDB(t *testing.T, opts *options.Options) *db.DB {
-	mockio.ResetFS()
 	dir := testutils.InitTestEnv(ModuleName, t)
 	db, _ := db.Open(dir, opts)
 	return db

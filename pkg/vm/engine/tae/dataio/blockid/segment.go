@@ -29,18 +29,12 @@ var SegmentFactory file.SegmentFactory
 
 func init() {
 	SegmentFactory = &ObjectFactory{
-		Fs:  NewObjectFS(nil),
-		typ: file.ObjectDataIo,
+		Fs: NewObjectFS(nil),
 	}
 }
 
 type ObjectFactory struct {
-	Fs  *ObjectFS
-	typ file.SegmentFactoryType
-}
-
-func (factory *ObjectFactory) GetType() file.SegmentFactoryType {
-	return factory.typ
+	Fs *ObjectFS
 }
 
 func (factory *ObjectFactory) EncodeName(id uint64) string {

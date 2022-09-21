@@ -122,13 +122,6 @@ func (bf *blockFile) GetMeta(metaLoc string) objectio.BlockObject {
 	bf.meta = block
 	return bf.meta
 }
-func (bf *blockFile) WriteTS(ts types.TS) (err error) {
-	return
-}
-
-func (bf *blockFile) ReadTS() (ts types.TS, err error) {
-	return
-}
 
 func (bf *blockFile) WriteDeletes(buf []byte) (err error) {
 	return
@@ -136,18 +129,6 @@ func (bf *blockFile) WriteDeletes(buf []byte) (err error) {
 
 func (bf *blockFile) ReadDeletes(buf []byte) (err error) {
 	return
-}
-
-func (bf *blockFile) GetDeletesFileStat() (stat common.FileInfo) {
-	return nil
-}
-
-func (bf *blockFile) WriteIndexMeta(buf []byte) (err error) {
-	return
-}
-
-func (bf *blockFile) LoadIndexMeta() (any, error) {
-	return nil, nil
 }
 
 func (bf *blockFile) OpenColumn(colIdx int) (colBlk file.ColumnBlock, err error) {
@@ -165,8 +146,15 @@ func (bf *blockFile) Close() error {
 }
 
 func (bf *blockFile) Destroy() error {
-	name := path.Join(bf.writer.fs.attr.dir, bf.writer.name)
-	return os.Remove(name)
+	if bf.writer == nil {
+		return nil
+	}
+	name := path.Join(bf.writer.fs.dir, bf.writer.name)
+	err := os.Remove(name)
+	if err != nil && os.IsNotExist(err) {
+		return nil
+	}
+	return err
 }
 
 func (bf *blockFile) Sync() error {
@@ -194,14 +182,6 @@ func (bf *blockFile) LoadBatch(
 	return bf.reader.LoadBlkColumns(colTypes, colNames, nullables, opts)
 }
 
-func (bf *blockFile) WriteColumnVec(_ types.TS, colIdx int, vec containers.Vector) (err error) {
-	return
-}
-
 func (bf *blockFile) LoadDeletes() (mask *roaring.Bitmap, err error) {
 	return bf.reader.LoadDeletes(bf.id)
-}
-
-func (bf *blockFile) LoadUpdates() (masks map[uint16]*roaring.Bitmap, vals map[uint16]map[uint32]any) {
-	return
 }

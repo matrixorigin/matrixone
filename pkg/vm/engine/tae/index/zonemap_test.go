@@ -90,7 +90,7 @@ func TestZoneMapNumeric(t *testing.T) {
 	buf, err := zm.Marshal()
 	require.NoError(t, err)
 	zm1 := NewZoneMap(typ)
-	err = zm1.Unmarshal(buf)
+	err = zm1.Unmarshal(buf[:32], buf[32:])
 	require.NoError(t, err)
 
 	rows = 500
@@ -172,7 +172,7 @@ func TestZoneMapString(t *testing.T) {
 	buf, err := zm.Marshal()
 	require.NoError(t, err)
 	zm1 := NewZoneMap(typ)
-	err = zm1.Unmarshal(buf)
+	err = zm1.Unmarshal(buf[:32], buf[32:])
 	require.NoError(t, err)
 
 	yes = zm.Contains([]byte("z1"))
@@ -196,7 +196,7 @@ func TestZMEmptyString(t *testing.T) {
 
 	zmNoInit := NewZoneMap(typ)
 	data, _ := zm.Marshal()
-	_ = zmNoInit.Unmarshal(data)
+	_ = zmNoInit.Unmarshal(data[:32], data[32:])
 	require.False(t, zm.Contains(nil))
 	_, existed = zm.ContainsAny(nil)
 	require.False(t, existed)
@@ -212,7 +212,7 @@ func TestZMEmptyString(t *testing.T) {
 
 	data, _ = zm.Marshal()
 	zm1 := NewZoneMap(typ)
-	_ = zm1.Unmarshal(data)
+	_ = zm1.Unmarshal(data[:32], data[32:])
 
 	require.True(t, zm1.Contains([]byte("")))
 	require.True(t, zm1.Contains([]byte{0, 0}))
@@ -252,7 +252,7 @@ func TestZMTruncatedString(t *testing.T) {
 
 	data, _ := zm.Marshal()
 	zm1 := NewZoneMap(typ)
-	_ = zm1.Unmarshal(data)
+	_ = zm1.Unmarshal(data[:32], data[32:])
 
 	require.True(t, zm1.Contains(edgeMin))
 	require.True(t, zm1.Contains(edgeMax))
@@ -260,7 +260,7 @@ func TestZMTruncatedString(t *testing.T) {
 	zm.SetMax(mockBytes(0xff, 33)) // isInf is true
 	data, _ = zm.Marshal()
 	zm2 := NewZoneMap(typ)
-	zm2.Unmarshal(data)
+	zm2.Unmarshal(data[:32], data[32:])
 	require.True(t, zm2.isInf)
 	require.True(t, zm2.Contains(mockBytes(0xff, 100)))
 

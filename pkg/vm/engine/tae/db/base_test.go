@@ -22,7 +22,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/mockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
@@ -171,7 +170,6 @@ func (e *testEngine) truncate() {
 }
 
 func initDB(t *testing.T, opts *options.Options) *DB {
-	mockio.ResetFS()
 	dir := testutils.InitTestEnv(ModuleName, t)
 	db, _ := Open(dir, opts)
 	return db

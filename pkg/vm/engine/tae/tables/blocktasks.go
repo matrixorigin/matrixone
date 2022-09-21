@@ -138,20 +138,11 @@ func (blk *dataBlock) ABlkCheckpointWAL(currTs types.TS) (err error) {
 }
 
 func (blk *dataBlock) FlushColumnData(ts types.TS, colIdx int, colData containers.Vector, sync bool) (err error) {
-	if err = blk.file.WriteColumnVec(ts, colIdx, colData); err != nil {
-		return err
-	}
-	if sync {
-		err = blk.file.Sync()
-	}
 	return
 }
 
 func (blk *dataBlock) SyncBlockData(ts types.TS, rows uint32) (err error) {
 	if err = blk.file.WriteRows(rows); err != nil {
-		return
-	}
-	if err = blk.file.WriteTS(ts); err != nil {
 		return
 	}
 	//return blk.file.Sync()

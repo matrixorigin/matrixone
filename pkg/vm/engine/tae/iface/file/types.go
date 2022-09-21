@@ -26,15 +26,6 @@ var (
 	ErrInvalidName  = errors.New("tae: invalid name")
 )
 
-type SegmentFactoryType int8
-
-// BlockState is the state of the data block, which is different from the state of the mate
-const (
-	SegmentDataIo SegmentFactoryType = iota
-	ObjectDataIo
-	MockDataIo
-)
-
 type Base interface {
 	common.IRef
 	io.Closer
@@ -45,5 +36,4 @@ type SegmentFactory interface {
 	Build(dir string, id uint64) Segment
 	EncodeName(id uint64) string
 	DecodeName(name string) (id uint64, err error)
-	GetType() SegmentFactoryType
 }

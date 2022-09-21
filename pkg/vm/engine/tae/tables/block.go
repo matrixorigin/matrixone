@@ -61,8 +61,6 @@ const (
 	BS_NotAppendable
 )
 
-const DataIo = file.ObjectDataIo
-
 // The initial state of the block when scoring
 type statBlock struct {
 	rows      uint32
@@ -134,7 +132,7 @@ func newBlock(meta *catalog.BlockEntry, segFile file.Segment, bufMgr base.INodeM
 		bufMgr:     bufMgr,
 		prefix:     meta.MakeKey(),
 	}
-	ts, _ := block.file.ReadTS()
+	ts := block.ReadTS()
 	block.mvcc.SetAppendListener(block.OnApplyAppend)
 	if meta.IsAppendable() {
 		block.mvcc.SetDeletesListener(block.ABlkApplyDelete)
@@ -171,6 +169,7 @@ func newBlock(meta *catalog.BlockEntry, segFile file.Segment, bufMgr base.INodeM
 	return block
 }
 
+func (blk *dataBlock) ReadTS() (ts types.TS)        { return }
 func (blk *dataBlock) GetMeta() any                 { return blk.meta }
 func (blk *dataBlock) GetBufMgr() base.INodeManager { return blk.bufMgr }
 func (blk *dataBlock) SetNotAppendable() {
