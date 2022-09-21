@@ -58,7 +58,7 @@ func AtanWithTwoArg(firstArg, secondArg, result *vector.Vector) error {
 	resCol := vector.MustTCols[float64](result)
 	for i, v := range firstCol {
 		if v == 0 {
-			return moerr.New(moerr.INVALID_ARGUMENT, "Atan function first input cannot be 0")
+			return moerr.NewInvalidArg("Atan first input", 0)
 		}
 		resCol[i] = math.Atan(secondCol[i] / v)
 	}
