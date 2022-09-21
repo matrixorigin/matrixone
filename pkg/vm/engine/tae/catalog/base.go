@@ -18,7 +18,6 @@ import (
 	"io"
 	"sync"
 
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
@@ -72,5 +71,3 @@ func CompareUint64(left, right uint64) int {
 	}
 	return 0
 }
-
-var ErrTxnActive = moerr.NewInternalError("txn is active")

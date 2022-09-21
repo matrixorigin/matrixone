@@ -25,8 +25,6 @@ import (
 	iw "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks/worker/base"
 )
 
-var ErrOpCancelled = moerr.NewInternalError("op cancelled")
-
 type Cmd = uint8
 
 const (
@@ -206,7 +204,7 @@ func (w *OpWorker) SendOp(op iops.IOp) bool {
 }
 
 func (w *OpWorker) opCancelOp(op iops.IOp) {
-	op.SetError(ErrOpCancelled)
+	op.SetError(moerr.NewInternalError("op cancelled"))
 }
 
 func (w *OpWorker) onOp(op iops.IOp) {

@@ -49,7 +49,7 @@ func TestErrorConversion(t *testing.T) {
 }
 
 func TestUnknownErrorIsHandled(t *testing.T) {
-	err := moerr.NewInternalError("test error")
+	err := moerr.NewDragonboatOtherSystemError("test error")
 	code, _ := toErrorCode(err)
 	assert.Equal(t, moerr.ErrDragonboatOtherSystemError, uint16(code))
 }

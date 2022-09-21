@@ -38,9 +38,6 @@ const LOG_SIZE = INODE_NUM * INODE_SIZE
 const HOLE_SIZE = 512 * INODE_SIZE
 const MAGIC = 0xFFFFFFFF
 
-var ErrInodeLimit = moerr.NewInternalError("tae driver: Too many inodes")
-var ErrNoSpace = moerr.NewInternalError("tae driver: No space")
-
 type SuperBlock struct {
 	version   uint64
 	blockSize uint32
@@ -267,7 +264,7 @@ func (s *Driver) Append(fd *DriverFile, pl []byte) (err error) {
 	offset, allocated := s.allocator.Allocate(uint64(len(buf)))
 	if allocated == 0 {
 		//panic(any("no space"))
-		return ErrNoSpace
+		return moerr.NewInternalError("tae driver: No space")
 	}
 	err = fd.Append(DATA_START+offset, buf, uint32(len(pl)))
 	if err != nil {

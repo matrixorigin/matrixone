@@ -22,11 +22,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 )
 
-var (
-	ErrIntervalNotContinuous = moerr.NewInternalError("interval not continuous")
-	ErrIntervalInvalid       = moerr.NewInternalError("invalid interval")
-)
-
 type ClosedInterval struct {
 	Start, End uint64
 }
@@ -43,7 +38,7 @@ func (i *ClosedInterval) Append(id uint64) error {
 	}
 	if id != i.End+1 {
 		logutil.Infof("invalid interval %v %v", i, id)
-		return ErrIntervalInvalid
+		return moerr.NewInternalError("invalid interval")
 	}
 	i.End = id
 	return nil

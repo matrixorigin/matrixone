@@ -186,7 +186,7 @@ func Test_buffer2Sql_GetBatch_AllType(t *testing.T) {
 			wantFunc: genErrorBatchSql,
 			want: `insert into system.error_info (` +
 				"`statement_id`, `span_id`, `node_uuid`, `node_type`, `err_code`, `stack`, `timestamp`" +
-				`) values (` + traceIDSpanIDColumnStr + `, "node_uuid", "Standalone", "test1", "test1", "1970-01-01 00:00:00.000000")`,
+				`) values (` + traceIDSpanIDColumnStr + `, "node_uuid", "Standalone", "internal error: test1", "internal error: test1", "1970-01-01 00:00:00.000000")`,
 		},
 		{
 			name:   "multi_error",
@@ -201,8 +201,8 @@ func Test_buffer2Sql_GetBatch_AllType(t *testing.T) {
 			wantFunc: genErrorBatchSql,
 			want: `insert into system.error_info (` +
 				"`statement_id`, `span_id`, `node_uuid`, `node_type`, `err_code`, `stack`, `timestamp`" +
-				`) values (` + traceIDSpanIDColumnStr + `, "node_uuid", "Standalone", "test1", "test1", "1970-01-01 00:00:00.000000")` +
-				`,(` + traceIDSpanIDColumnStr + `, "node_uuid", "Standalone", "test2: test1", "test2: test1", "1970-01-01 00:00:00.001001")`,
+				`) values (` + traceIDSpanIDColumnStr + `, "node_uuid", "Standalone", "internal error: test1", "internal error: test1", "1970-01-01 00:00:00.000000")` +
+				`,(` + traceIDSpanIDColumnStr + `, "node_uuid", "Standalone", "test2: internal error: test1", "test2: internal error: test1", "1970-01-01 00:00:00.001001")`,
 		},
 		{
 			name:   "single_log",
@@ -1030,7 +1030,7 @@ func Test_genCsvData(t *testing.T) {
 				},
 				buf: buf,
 			},
-			want: traceIDSpanIDCsvStr + `,node_uuid,Standalone,test1,test1,1970-01-01 00:00:00.000000
+			want: traceIDSpanIDCsvStr + `,node_uuid,Standalone,internal error: test1,internal error: test1,1970-01-01 00:00:00.000000
 `,
 		},
 		{
@@ -1042,8 +1042,8 @@ func Test_genCsvData(t *testing.T) {
 				},
 				buf: buf,
 			},
-			want: traceIDSpanIDCsvStr + `,node_uuid,Standalone,test1,test1,1970-01-01 00:00:00.000000
-` + traceIDSpanIDCsvStr + `,node_uuid,Standalone,test2: test1,test2: test1,1970-01-01 00:00:00.001001
+			want: traceIDSpanIDCsvStr + `,node_uuid,Standalone,internal error: test1,internal error: test1,1970-01-01 00:00:00.000000
+` + traceIDSpanIDCsvStr + `,node_uuid,Standalone,test2: internal error: test1,test2: internal error: test1,1970-01-01 00:00:00.001001
 `,
 		},
 	}

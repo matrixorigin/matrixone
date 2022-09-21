@@ -125,7 +125,7 @@ func TestIeProto(t *testing.T) {
 func TestIeResult(t *testing.T) {
 	set := mockResultSet()
 	result := &internalExecResult{affectedRows: 1, resultSet: set, err: moerr.NewInternalError("random")}
-	require.Equal(t, "random", result.Error().Error())
+	require.Equal(t, "internal error: random", result.Error().Error())
 	require.Equal(t, uint64(1), result.ColumnCount())
 	require.Equal(t, uint64(1), result.RowCount())
 	n, ty, s, e := result.Column(0)
