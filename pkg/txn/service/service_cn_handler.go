@@ -20,6 +20,7 @@ import (
 	"math"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/util"
@@ -27,12 +28,12 @@ import (
 )
 
 var (
-	rollbackIngoreErrorCodes = map[txn.ErrorCode]struct{}{
-		txn.ErrorCode_TxnNotFound: {},
+	rollbackIngoreErrorCodes = map[uint16]struct{}{
+		moerr.ErrTxnNotFound: {},
 	}
 
-	prepareIngoreErrorCodes = map[txn.ErrorCode]struct{}{
-		txn.ErrorCode_TxnNotFound: {},
+	prepareIngoreErrorCodes = map[uint16]struct{}{
+		moerr.ErrTxnNotFound: {},
 	}
 )
 
@@ -45,7 +46,7 @@ func (s *service) Read(ctx context.Context, request *txn.TxnRequest, response *t
 	response.CNOpResponse = &txn.CNOpResponse{}
 	s.checkCNRequest(request)
 	if !s.validDNShard(request.GetTargetDN()) {
-		response.TxnError = newDNShardFoundError()
+		response.TxnError = newTxnError(moerr.ErrDNShardNotFound, "")
 		return nil
 	}
 
@@ -57,7 +58,7 @@ func (s *service) Read(ctx context.Context, request *txn.TxnRequest, response *t
 	result, err := s.storage.Read(ctx, request.Txn, request.CNRequest.OpCode, request.CNRequest.Payload)
 	if err != nil {
 		util.LogTxnReadFailed(s.logger, request.Txn, err)
-		response.TxnError = newTAEReadError(err)
+		response.TxnError = newTxnError(moerr.ErrTAERead, err.Error())
 		return nil
 	}
 	defer result.Release()
@@ -97,7 +98,7 @@ func (s *service) Read(ctx context.Context, request *txn.TxnRequest, response *t
 
 		if err != nil {
 			util.LogTxnWaitUncommittedTxnsFailed(s.logger, request.Txn, result.WaitTxns(), err)
-			response.TxnError = newWaitTxnError(err)
+			response.TxnError = newTxnError(moerr.ErrWaitTxn, err.Error())
 			return nil
 		}
 	}
@@ -105,7 +106,7 @@ func (s *service) Read(ctx context.Context, request *txn.TxnRequest, response *t
 	data, err := result.Read()
 	if err != nil {
 		util.LogTxnReadFailed(s.logger, request.Txn, err)
-		response.TxnError = newTAEReadError(err)
+		response.TxnError = newTxnError(moerr.ErrTAERead, err.Error())
 		return nil
 	}
 
@@ -124,7 +125,7 @@ func (s *service) Write(ctx context.Context, request *txn.TxnRequest, response *
 	response.CNOpResponse = &txn.CNOpResponse{}
 	s.checkCNRequest(request)
 	if !s.validDNShard(request.GetTargetDN()) {
-		response.TxnError = newDNShardFoundError()
+		response.TxnError = newTxnError(moerr.ErrDNShardNotFound, "")
 		return nil
 	}
 
@@ -134,7 +135,7 @@ func (s *service) Write(ctx context.Context, request *txn.TxnRequest, response *
 	// only commit and rollback can held write Lock
 	if !txnCtx.mu.TryRLock() {
 		util.LogTxnNotFoundOn(s.logger, request.Txn, s.shard)
-		response.TxnError = newTxnNotFoundError()
+		response.TxnError = newTxnError(moerr.ErrDNShardNotFound, "")
 		return nil
 	}
 	defer txnCtx.mu.RUnlock()
@@ -142,21 +143,21 @@ func (s *service) Write(ctx context.Context, request *txn.TxnRequest, response *
 	newTxn := txnCtx.getTxnLocked()
 	if !bytes.Equal(newTxn.ID, txnID) {
 		util.LogTxnNotFoundOn(s.logger, request.Txn, s.shard)
-		response.TxnError = newTxnNotFoundError()
+		response.TxnError = newTxnError(moerr.ErrTxnNotFound, "")
 		return nil
 	}
 
 	response.Txn = &newTxn
 	if newTxn.Status != txn.TxnStatus_Active {
 		util.LogTxnWriteOnInvalidStatus(s.logger, newTxn)
-		response.TxnError = newTxnNotActiveError()
+		response.TxnError = newTxnError(moerr.ErrTxnNotActive, "")
 		return nil
 	}
 
 	data, err := s.storage.Write(ctx, request.Txn, request.CNRequest.OpCode, request.CNRequest.Payload)
 	if err != nil {
 		util.LogTxnWriteFailed(s.logger, newTxn, err)
-		response.TxnError = newTAEWriteError(err)
+		response.TxnError = newTxnError(moerr.ErrTAEWrite, err.Error())
 		return nil
 	}
 
@@ -172,7 +173,7 @@ func (s *service) Commit(ctx context.Context, request *txn.TxnRequest, response 
 
 	response.CommitResponse = &txn.TxnCommitResponse{}
 	if !s.validDNShard(request.GetTargetDN()) {
-		response.TxnError = newDNShardFoundError()
+		response.TxnError = newTxnError(moerr.ErrDNShardNotFound, "")
 		return nil
 	}
 
@@ -184,7 +185,7 @@ func (s *service) Commit(ctx context.Context, request *txn.TxnRequest, response 
 	txnCtx := s.getTxnContext(txnID)
 	if txnCtx == nil {
 		util.LogTxnNotFoundOn(s.logger, request.Txn, s.shard)
-		response.TxnError = newTxnNotFoundError()
+		response.TxnError = newTxnError(moerr.ErrDNShardNotFound, "")
 		return nil
 	}
 
@@ -195,7 +196,7 @@ func (s *service) Commit(ctx context.Context, request *txn.TxnRequest, response 
 	newTxn := txnCtx.getTxnLocked()
 	if !bytes.Equal(newTxn.ID, txnID) {
 		util.LogTxnNotFoundOn(s.logger, request.Txn, s.shard)
-		response.TxnError = newTxnNotFoundError()
+		response.TxnError = newTxnError(moerr.ErrDNShardNotFound, "")
 		return nil
 	}
 
@@ -211,7 +212,7 @@ func (s *service) Commit(ctx context.Context, request *txn.TxnRequest, response 
 	response.Txn = &newTxn
 	if newTxn.Status != txn.TxnStatus_Active {
 		util.LogTxnCommitOnInvalidStatus(s.logger, newTxn)
-		response.TxnError = newTxnNotActiveError()
+		response.TxnError = newTxnError(moerr.ErrTxnNotActive, "")
 		return nil
 	}
 
@@ -229,7 +230,7 @@ func (s *service) Commit(ctx context.Context, request *txn.TxnRequest, response 
 		util.LogTxnStart1PCCommit(s.logger, newTxn)
 		if err := s.storage.Commit(ctx, newTxn); err != nil {
 			util.LogTxnStart1PCCommitFailed(s.logger, newTxn, err)
-			response.TxnError = newTAECommitError(err)
+			response.TxnError = newTxnError(moerr.ErrTAECommit, err.Error())
 			changeStatus(txn.TxnStatus_Aborted)
 		} else {
 			changeStatus(txn.TxnStatus_Committed)
@@ -263,7 +264,7 @@ func (s *service) Commit(ctx context.Context, request *txn.TxnRequest, response 
 		util.LogTxnParallelPrepareFailed(s.logger, newTxn, err)
 
 		changeStatus(txn.TxnStatus_Aborted)
-		response.TxnError = newRPCError(err)
+		response.TxnError = newTxnError(moerr.ErrRpcError, err.Error())
 		s.startAsyncRollbackTask(newTxn)
 		return nil
 	}
@@ -318,7 +319,7 @@ func (s *service) Rollback(ctx context.Context, request *txn.TxnRequest, respons
 
 	response.RollbackResponse = &txn.TxnRollbackResponse{}
 	if !s.validDNShard(request.GetTargetDN()) {
-		response.TxnError = newDNShardFoundError()
+		response.TxnError = newTxnError(moerr.ErrDNShardNotFound, "")
 		return nil
 	}
 
@@ -330,7 +331,7 @@ func (s *service) Rollback(ctx context.Context, request *txn.TxnRequest, respons
 	txnCtx := s.getTxnContext(txnID)
 	if txnCtx == nil {
 		util.LogTxnNotFoundOn(s.logger, request.Txn, s.shard)
-		response.TxnError = newTxnNotFoundError()
+		response.TxnError = newTxnError(moerr.ErrTxnNotFound, "")
 		return nil
 	}
 
@@ -340,7 +341,7 @@ func (s *service) Rollback(ctx context.Context, request *txn.TxnRequest, respons
 	newTxn := txnCtx.getTxnLocked()
 	if !bytes.Equal(newTxn.ID, txnID) {
 		util.LogTxnNotFoundOn(s.logger, request.Txn, s.shard)
-		response.TxnError = newTxnNotFoundError()
+		response.TxnError = newTxnError(moerr.ErrTxnNotFound, "")
 		return nil
 	}
 

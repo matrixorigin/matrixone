@@ -28,6 +28,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
@@ -41,7 +42,7 @@ func runClientTest(t *testing.T,
 	defer vfs.ReportLeakedFD(cfg.FS, t)
 	service, err := NewService(cfg,
 		testutil.NewFS(),
-		taskservice.NewTaskService(taskservice.NewMemTaskStorage()),
+		taskservice.NewTaskService(taskservice.NewMemTaskStorage(), nil),
 		WithBackendFilter(func(msg morpc.Message, backendAddr string) bool {
 			return true
 		}),
@@ -77,7 +78,7 @@ func TestClientConfigIsValidated(t *testing.T) {
 	cfg := ClientConfig{}
 	cc, err := NewClient(context.TODO(), cfg)
 	assert.Nil(t, cc)
-	assert.True(t, errors.Is(err, ErrInvalidConfig))
+	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrBadConfig))
 }
 
 func TestClientCanBeReset(t *testing.T) {
@@ -109,7 +110,6 @@ func TestLogShardNotFoundErrorIsConsideredAsTempError(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
 		_, err := c.GetTSOTimestamp(ctx, 100)
-		require.Equal(t, dragonboat.ErrShardNotFound, err)
 		assert.True(t, isTempError(err))
 		client := c.(*managedClient)
 		assert.True(t, client.isRetryableError(err))
@@ -130,7 +130,7 @@ func TestClientCanBeConnectedByReverseProxy(t *testing.T) {
 	defer vfs.ReportLeakedFD(cfg.FS, t)
 	service, err := NewService(cfg,
 		testutil.NewFS(),
-		taskservice.NewTaskService(taskservice.NewMemTaskStorage()),
+		taskservice.NewTaskService(taskservice.NewMemTaskStorage(), nil),
 		WithBackendFilter(func(msg morpc.Message, backendAddr string) bool {
 			return true
 		}),
@@ -216,7 +216,7 @@ func TestClientAppend(t *testing.T) {
 		cmd := make([]byte, 16+headerSize+8)
 		cmd = getAppendCmd(cmd, cfg.DNReplicaID+1)
 		_, err = c.Append(ctx, pb.LogRecord{Data: cmd})
-		assert.Equal(t, ErrNotLeaseHolder, err)
+		assert.True(t, moerr.IsMoErrCode(err, moerr.ErrNotLeaseHolder))
 	}
 	runClientTest(t, false, fn)
 }
@@ -262,7 +262,7 @@ func TestClientRead(t *testing.T) {
 		assert.Equal(t, rec2.Data, recs[1].Data)
 
 		_, _, err = c.Read(ctx, 6, math.MaxUint64)
-		assert.Equal(t, ErrOutOfRange, err)
+		assert.True(t, errors.Is(err, dragonboat.ErrInvalidRange))
 	}
 	runClientTest(t, false, fn)
 }
@@ -282,7 +282,8 @@ func TestClientTruncate(t *testing.T) {
 		assert.NoError(t, err)
 		assert.Equal(t, Lsn(4), lsn)
 
-		assert.Equal(t, ErrInvalidTruncateLsn, c.Truncate(ctx, 3))
+		err = c.Truncate(ctx, 3)
+		assert.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidTruncateLsn))
 	}
 	runClientTest(t, false, fn)
 }
@@ -294,8 +295,9 @@ func TestReadOnlyClientRejectWriteRequests(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
 		_, err := c.Append(ctx, rec)
-		require.Equal(t, ErrIncompatibleClient, err)
-		require.Equal(t, ErrIncompatibleClient, c.Truncate(ctx, 4))
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
+		err = c.Truncate(ctx, 4)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
 	}
 	runClientTest(t, true, fn)
 }

@@ -20,14 +20,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
-var (
-	// ErrDeadlineNotSet is returned when deadline is not set in the context.
-	ErrDeadlineNotSet = moerr.NewError(moerr.INVALID_INPUT, "deadline not set")
-	// ErrInvalidDeadline is returned when the specified deadline is invalid, e.g.
-	// deadline is in the past.
-	ErrInvalidDeadline = moerr.NewError(moerr.INVALID_INPUT, "invalid deadline")
-)
-
 // Timeout return true if the message is timeout
 func (m RPCMessage) Timeout() bool {
 	select {
@@ -42,11 +34,11 @@ func (m RPCMessage) Timeout() bool {
 func (m RPCMessage) GetTimeoutFromContext() (time.Duration, error) {
 	d, ok := m.Ctx.Deadline()
 	if !ok {
-		return 0, ErrDeadlineNotSet
+		return 0, moerr.NewInvalidInput("timeout deadline not set")
 	}
 	now := time.Now()
 	if now.After(d) {
-		return 0, ErrInvalidDeadline
+		return 0, moerr.NewInvalidInput("timeout has invalid deadline")
 	}
 	return d.Sub(now), nil
 }

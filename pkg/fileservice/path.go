@@ -15,8 +15,9 @@
 package fileservice
 
 import (
-	"fmt"
 	"strings"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
 const ServiceNameSeparator = ":"
@@ -53,7 +54,7 @@ func ParsePath(s string) (path Path, err error) {
 		case '!', '-', '_', '.', '*', '\'', '(', ')':
 			continue
 		}
-		err = fmt.Errorf("%w: invalid file path %s", ErrInvalidPath, path.File)
+		err = moerr.NewInvalidPath(path.File)
 		return
 	}
 
@@ -69,7 +70,7 @@ func ParsePathAtService(s string, serviceName string) (path Path, err error) {
 	if serviceName != "" &&
 		path.Service != "" &&
 		!strings.EqualFold(path.Service, serviceName) {
-		err = fmt.Errorf("%w: expecting %s, got %s", ErrWrongService, serviceName, path.Service)
+		err = moerr.NewWrongService(serviceName, path.Service)
 		return
 	}
 	return

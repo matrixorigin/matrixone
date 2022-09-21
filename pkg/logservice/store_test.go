@@ -22,7 +22,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/cockroachdb/errors"
 	"github.com/google/uuid"
 	"github.com/lni/dragonboat/v4"
 	"github.com/lni/goutils/leaktest"
@@ -30,6 +29,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 )
@@ -192,7 +192,7 @@ func TestAppendLogIsRejectedForMismatchedLeaseHolderID(t *testing.T) {
 		binaryEnc.PutUint64(cmd[headerSize:], 101)
 		binaryEnc.PutUint64(cmd[headerSize+8:], 1234567890)
 		_, err := store.append(ctx, 1, cmd)
-		assert.True(t, errors.Is(err, ErrNotLeaseHolder))
+		assert.True(t, moerr.IsMoErrCode(err, moerr.ErrNotLeaseHolder))
 	}
 	runStoreTest(t, fn)
 }
@@ -221,7 +221,7 @@ func TestTruncateLog(t *testing.T) {
 		assert.NoError(t, err)
 		assert.NoError(t, store.truncateLog(ctx, 1, 4))
 		err = store.truncateLog(ctx, 1, 3)
-		assert.True(t, errors.Is(err, ErrInvalidTruncateLsn))
+		assert.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidTruncateLsn))
 	}
 	runStoreTest(t, fn)
 }

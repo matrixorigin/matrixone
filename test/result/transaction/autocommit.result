@@ -21,7 +21,7 @@ create table t2(a int);
 insert into t2 values (1);
 rollback;
 select * from t2;
-table "t2" does not exist
+SQL parser error: table "t2" does not exist
 start transaction;
 use autocommit;
 start transaction;
@@ -60,7 +60,7 @@ insert into t1 values(3);
 create table t2 (a int);
 rollback;
 select * from t2;
-table "t2" does not exist
+SQL parser error: table "t2" does not exist
 insert into t1 values(3);
 use autocommit;
 show tables;

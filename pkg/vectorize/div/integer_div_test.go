@@ -15,9 +15,10 @@
 package div
 
 import (
+	"testing"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
-	"testing"
 )
 
 func TestF32IntegerDivByZero(t *testing.T) {
@@ -33,12 +34,8 @@ func TestF32IntegerDivByZero(t *testing.T) {
 	cv := testutil.MakeInt64Vector(cs, nil)
 
 	err := NumericIntegerDivFloat[float32](av, bv, cv)
-	if err == nil {
-		if moerror, ok := err.(*moerr.Error); ok {
-			if moerror.Code != moerr.DIVIVISION_BY_ZERO {
-				t.Fatalf("should have div by zero error.")
-			}
-		} else {
+	if err != nil {
+		if !moerr.IsMoErrCode(err, moerr.ErrDivByZero) {
 			t.Fatalf("should have div by zero error.")
 		}
 	}
@@ -57,12 +54,8 @@ func TestF64IntegerDivByZero(t *testing.T) {
 	cv := testutil.MakeInt64Vector(cs, nil)
 
 	err := NumericIntegerDivFloat[float64](av, bv, cv)
-	if err == nil {
-		if moerror, ok := err.(*moerr.Error); ok {
-			if moerror.Code != moerr.DIVIVISION_BY_ZERO {
-				t.Fatalf("should have div by zero error.")
-			}
-		} else {
+	if err != nil {
+		if !moerr.IsMoErrCode(err, moerr.ErrDivByZero) {
 			t.Fatalf("should have div by zero error.")
 		}
 	}
