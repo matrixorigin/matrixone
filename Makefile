@@ -187,5 +187,5 @@ ifneq ("$(strip $(fmtErrs))$(strip $(errNews))", "")
 	$(warning Use moerr instead.)
 	$(warning One of 'fmt.Errorf()' is called at: $(shell printf "%s\n" $(fmtErrs) | head -1))
 	$(warning One of 'errors.New()' is called at: $(shell printf "%s\n" $(errNews) | head -1))
-	$(info)
+	$(error )
 endif
