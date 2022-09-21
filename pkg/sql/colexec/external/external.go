@@ -46,7 +46,7 @@ import (
 )
 
 func String(arg any, buf *bytes.Buffer) {
-	buf.WriteString("sql output")
+	buf.WriteString("external output")
 }
 
 func Prepare(proc *process.Process, arg any) error {

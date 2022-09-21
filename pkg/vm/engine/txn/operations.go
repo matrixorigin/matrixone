@@ -17,7 +17,6 @@ package txnengine
 import (
 	"encoding/gob"
 
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -109,11 +108,54 @@ func init() {
 
 }
 
-type ErrorResp struct {
-	ErrExisted bool
-	ID         string
-	Name       string
-	Why        string
+type Request interface {
+	CreateDatabaseReq |
+		OpenDatabaseReq |
+		GetDatabasesReq |
+		DeleteDatabaseReq |
+		CreateRelationReq |
+		DeleteRelationReq |
+		OpenRelationReq |
+		GetRelationsReq |
+		AddTableDefReq |
+		DelTableDefReq |
+		DeleteReq |
+		GetPrimaryKeysReq |
+		GetTableDefsReq |
+		GetHiddenKeysReq |
+		TruncateReq |
+		UpdateReq |
+		WriteReq |
+		NewTableIterReq |
+		ReadReq |
+		CloseTableIterReq |
+		TableStatsReq |
+		apipb.SyncLogTailReq
+}
+
+type Response interface {
+	CreateDatabaseResp |
+		OpenDatabaseResp |
+		GetDatabasesResp |
+		DeleteDatabaseResp |
+		CreateRelationResp |
+		DeleteRelationResp |
+		OpenRelationResp |
+		GetRelationsResp |
+		AddTableDefResp |
+		DelTableDefResp |
+		DeleteResp |
+		GetPrimaryKeysResp |
+		GetTableDefsResp |
+		GetHiddenKeysResp |
+		TruncateResp |
+		UpdateResp |
+		WriteResp |
+		NewTableIterResp |
+		ReadResp |
+		CloseTableIterResp |
+		TableStatsResp |
+		apipb.SyncLogTailResp
 }
 
 type CreateDatabaseReq struct {
@@ -122,8 +164,7 @@ type CreateDatabaseReq struct {
 }
 
 type CreateDatabaseResp struct {
-	ID      string
-	ErrResp ErrorResp
+	ID ID
 }
 
 type OpenDatabaseReq struct {
@@ -132,8 +173,8 @@ type OpenDatabaseReq struct {
 }
 
 type OpenDatabaseResp struct {
-	ID      string
-	ErrResp ErrorResp
+	ID   ID
+	Name string
 }
 
 type GetDatabasesReq struct {
@@ -150,45 +191,46 @@ type DeleteDatabaseReq struct {
 }
 
 type DeleteDatabaseResp struct {
-	ID      string
-	ErrResp ErrorResp
+	ID ID
 }
 
 type CreateRelationReq struct {
-	DatabaseID string
-	Name       string
-	Type       RelationType
-	Defs       []engine.TableDef
+	DatabaseID   ID
+	DatabaseName string
+	Name         string
+	Type         RelationType
+	Defs         []engine.TableDef
 }
 
 type CreateRelationResp struct {
-	ID      string
-	ErrResp ErrorResp
+	ID ID
 }
 
 type DeleteRelationReq struct {
-	DatabaseID string
-	Name       string
+	DatabaseID   ID
+	DatabaseName string
+	Name         string
 }
 
 type DeleteRelationResp struct {
-	ID      string
-	ErrResp ErrorResp
+	ID ID
 }
 
 type OpenRelationReq struct {
-	DatabaseID string
-	Name       string
+	DatabaseID   ID
+	DatabaseName string
+	Name         string
 }
 
 type OpenRelationResp struct {
-	ID      string
-	Type    RelationType
-	ErrResp ErrorResp
+	ID           ID
+	Type         RelationType
+	DatabaseName string
+	RelationName string
 }
 
 type GetRelationsReq struct {
-	DatabaseID string
+	DatabaseID ID
 }
 
 type GetRelationsResp struct {
@@ -196,107 +238,108 @@ type GetRelationsResp struct {
 }
 
 type AddTableDefReq struct {
-	TableID string
+	TableID ID
 	Def     engine.TableDef
+
+	DatabaseName string
+	TableName    string
 }
 
 type AddTableDefResp struct {
-	ErrResp ErrorResp
 }
 
 type DelTableDefReq struct {
-	TableID string
-	Def     engine.TableDef
+	TableID      ID
+	DatabaseName string
+	TableName    string
+	Def          engine.TableDef
 }
 
 type DelTableDefResp struct {
-	ErrResp ErrorResp
 }
 
 type DeleteReq struct {
-	TableID    string
-	ColumnName string
-	Vector     *vector.Vector
+	TableID      ID
+	DatabaseName string
+	TableName    string
+	ColumnName   string
+	Vector       *vector.Vector
 }
 
 type DeleteResp struct {
-	ErrResp ErrorResp
 }
 
 type GetPrimaryKeysReq struct {
-	TableID string
+	TableID ID
 }
 
 type GetPrimaryKeysResp struct {
-	Attrs   []*engine.Attribute
-	ErrResp ErrorResp
+	Attrs []*engine.Attribute
 }
 
 type GetTableDefsReq struct {
-	TableID string
+	TableID ID
 }
 
 type GetTableDefsResp struct {
-	Defs    []engine.TableDef
-	ErrResp ErrorResp
+	Defs []engine.TableDef
 }
 
 type GetHiddenKeysReq struct {
-	TableID string
+	TableID ID
 }
 
 type GetHiddenKeysResp struct {
-	Attrs   []*engine.Attribute
-	ErrResp ErrorResp
+	Attrs []*engine.Attribute
 }
 
 type TruncateReq struct {
-	TableID string
+	TableID      ID
+	DatabaseName string
+	TableName    string
 }
 
 type TruncateResp struct {
 	AffectedRows int64
-	ErrResp      ErrorResp
 }
 
 type UpdateReq struct {
-	TableID string
-	Batch   *batch.Batch
+	TableID      ID
+	DatabaseName string
+	TableName    string
+	Batch        *batch.Batch
 }
 
 type UpdateResp struct {
-	ErrReadOnly moerr.Error
-	ErrResp     ErrorResp
 }
 
 type WriteReq struct {
-	TableID string
-	Batch   *batch.Batch
+	TableID      ID
+	DatabaseName string
+	TableName    string
+	Batch        *batch.Batch
 }
 
 type WriteResp struct {
-	ErrResp ErrorResp
 }
 
 type NewTableIterReq struct {
-	TableID string
+	TableID ID
 	Expr    *plan.Expr
 	Shards  [][]byte
 }
 
 type NewTableIterResp struct {
-	IterID  string
-	ErrResp ErrorResp
+	IterID ID
 }
 
 type ReadReq struct {
-	IterID   string
+	IterID   ID
 	ColNames []string
 }
 
 type ReadResp struct {
-	Batch   *batch.Batch
-	ErrResp ErrorResp
+	Batch *batch.Batch
 
 	heap *mheap.Mheap
 }
@@ -313,28 +356,16 @@ func (r *ReadResp) SetHeap(heap *mheap.Mheap) {
 }
 
 type CloseTableIterReq struct {
-	IterID string
+	IterID ID
 }
 
 type CloseTableIterResp struct {
-	ErrResp ErrorResp
 }
 
 type TableStatsReq struct {
-	TableID string
+	TableID ID
 }
 
 type TableStatsResp struct {
-	Rows    int
-	ErrResp ErrorResp
-}
-
-type GetLogTailReq struct {
-	TableID string
-	Request apipb.SyncLogTailReq
-}
-
-type GetLogTailResp struct {
-	ErrRelationNotFound ErrorResp
-	Response            apipb.SyncLogTailResp
+	Rows int
 }

@@ -12,24 +12,34 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package txnstorage
+package memtable
 
 import (
 	"database/sql"
 	"fmt"
 	"io"
 	"sync"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	txnengine "github.com/matrixorigin/matrixone/pkg/vm/engine/txn"
 )
 
-type MVCC[T any] struct {
-	//TODO use lock-free linked list
-	sync.RWMutex
-	Values []*MVCCValue[T]
+type PhysicalRow[
+	K Ordered[K],
+	V any,
+] struct {
+	Key        K
+	LastUpdate *Atomic[time.Time]
+	Versions   struct {
+		sync.RWMutex
+		List []*Version[V]
+		//TODO version GC
+	}
 }
 
-type MVCCValue[T any] struct {
+type Version[T any] struct {
+	ID       ID
 	BornTx   *Transaction
 	BornTime Time
 	LockTx   *Transaction
@@ -39,15 +49,23 @@ type MVCCValue[T any] struct {
 
 // Read reads the visible value from Values
 // readTime's logical time should be monotonically increasing in one transaction to reflect commands order
-func (m *MVCC[T]) Read(now Time, tx *Transaction) (*T, error) {
+func (p *PhysicalRow[K, V]) Read(now Time, tx *Transaction) (value *V, err error) {
+	version, err := p.readVersion(now, tx)
+	if version != nil {
+		value = version.Value
+	}
+	return
+}
+
+func (p *PhysicalRow[K, V]) readVersion(now Time, tx *Transaction) (*Version[V], error) {
 	if tx.State.Load() != Active {
 		panic("should not call Read")
 	}
 
-	m.RLock()
-	defer m.RUnlock()
-	for i := len(m.Values) - 1; i >= 0; i-- {
-		value := m.Values[i]
+	p.Versions.RLock()
+	defer p.Versions.RUnlock()
+	for i := len(p.Versions.List) - 1; i >= 0; i-- {
+		value := p.Versions.List[i]
 		if value.Visible(now, tx.ID) {
 			switch tx.IsolationPolicy.Read {
 			case ReadCommitted:
@@ -59,10 +77,10 @@ func (m *MVCC[T]) Read(now Time, tx *Transaction) (*T, error) {
 			case ReadNoStale:
 				// BornTx must be committed to be visible here
 				if value.BornTx.ID != tx.ID && value.BornTime.After(tx.BeginTime) {
-					return value.Value, moerr.NewTxnReadConflict("%s %s", tx.ID, value.BornTx.ID)
+					return value, moerr.NewTxnReadConflict("%s %s", tx.ID, value.BornTx.ID)
 				}
 			}
-			return value.Value, nil
+			return value, nil
 		}
 	}
 
@@ -70,15 +88,15 @@ func (m *MVCC[T]) Read(now Time, tx *Transaction) (*T, error) {
 }
 
 // ReadVisible reads a committed value despite the tx's isolation policy
-func (m *MVCC[T]) ReadVisible(now Time, tx *Transaction) (*MVCCValue[T], error) {
+func (p *PhysicalRow[K, V]) ReadVisible(now Time, tx *Transaction) (*Version[V], error) {
 	if tx.State.Load() != Active {
 		panic("should not call Read")
 	}
 
-	m.RLock()
-	defer m.RUnlock()
-	for i := len(m.Values) - 1; i >= 0; i-- {
-		value := m.Values[i]
+	p.Versions.RLock()
+	defer p.Versions.RUnlock()
+	for i := len(p.Versions.List) - 1; i >= 0; i-- {
+		value := p.Versions.List[i]
 		if value.Visible(now, tx.ID) {
 			return value, nil
 		}
@@ -87,39 +105,39 @@ func (m *MVCC[T]) ReadVisible(now Time, tx *Transaction) (*MVCCValue[T], error) 
 	return nil, sql.ErrNoRows
 }
 
-func (m *MVCCValue[T]) Visible(now Time, txID string) bool {
+func (v *Version[T]) Visible(now Time, txID string) bool {
 
 	// the following algorithm is from https://momjian.us/main/writings/pgsql/mvcc.pdf
 	// "[Mike Olson] says 17 march 1993: the tests in this routine are correct; if you think they’re not, you’re wrongand you should think about it again. i know, it happened to me."
 
 	// inserted by current tx
-	if m.BornTx.ID == txID {
+	if v.BornTx.ID == txID {
 		// inserted before the read time
-		if m.BornTime.Before(now) {
+		if v.BornTime.Before(now) {
 			// not been deleted
-			if m.LockTx == nil {
+			if v.LockTx == nil {
 				return true
 			}
 			// deleted by current tx after the read time
-			if m.LockTx.ID == txID && m.LockTime.After(now) {
+			if v.LockTx.ID == txID && v.LockTime.After(now) {
 				return true
 			}
 		}
 	}
 
 	// inserted by a committed tx
-	if m.BornTx.State.Load() == Committed {
+	if v.BornTx.State.Load() == Committed {
 		// not been deleted
-		if m.LockTx == nil {
+		if v.LockTx == nil {
 			// for isolation levels stricter than read-committed, instead of checking timestamps here, let the caller do it.
 			return true
 		}
 		// being deleted by current tx after the read time
-		if m.LockTx.ID == txID && m.LockTime.After(now) {
+		if v.LockTx.ID == txID && v.LockTime.After(now) {
 			return true
 		}
 		// deleted by another tx but not committed
-		if m.LockTx.ID != txID && m.LockTx.State.Load() != Committed {
+		if v.LockTx.ID != txID && v.LockTx.State.Load() != Committed {
 			return true
 		}
 	}
@@ -127,16 +145,16 @@ func (m *MVCCValue[T]) Visible(now Time, txID string) bool {
 	return false
 }
 
-func (m *MVCC[T]) Insert(now Time, tx *Transaction, value *T) error {
+func (p *PhysicalRow[K, V]) Insert(now Time, tx *Transaction, value *V, callbacks ...any) error {
 	if tx.State.Load() != Active {
 		panic("should not call Insert")
 	}
 
-	m.Lock()
-	defer m.Unlock()
+	p.Versions.Lock()
+	defer p.Versions.Unlock()
 
-	for i := len(m.Values) - 1; i >= 0; i-- {
-		value := m.Values[i]
+	for i := len(p.Versions.List) - 1; i >= 0; i-- {
+		value := p.Versions.List[i]
 		if value.Visible(now, tx.ID) {
 			if value.LockTx != nil && value.LockTx.State.Load() != Aborted {
 				// locked by active or committed tx
@@ -148,25 +166,36 @@ func (m *MVCC[T]) Insert(now Time, tx *Transaction, value *T) error {
 		}
 	}
 
-	m.Values = append(m.Values, &MVCCValue[T]{
+	id := txnengine.NewID()
+	p.Versions.List = append(p.Versions.List, &Version[V]{
+		ID:       id,
 		BornTx:   tx,
 		BornTime: now,
 		Value:    value,
 	})
 
+	for _, callback := range callbacks {
+		switch callback := callback.(type) {
+		case func(ID): // version id
+			callback(id)
+		default:
+			panic(fmt.Sprintf("unknown type: %T", callback))
+		}
+	}
+
 	return nil
 }
 
-func (m *MVCC[T]) Delete(now Time, tx *Transaction) error {
+func (p *PhysicalRow[K, V]) Delete(now Time, tx *Transaction) error {
 	if tx.State.Load() != Active {
 		panic("should not call Delete")
 	}
 
-	m.Lock()
-	defer m.Unlock()
+	p.Versions.Lock()
+	defer p.Versions.Unlock()
 
-	for i := len(m.Values) - 1; i >= 0; i-- {
-		value := m.Values[i]
+	for i := len(p.Versions.List) - 1; i >= 0; i-- {
+		value := p.Versions.List[i]
 		if value.Visible(now, tx.ID) {
 			if value.LockTx != nil && value.LockTx.State.Load() != Aborted {
 				return moerr.NewTxnWriteConflict("%s %s", tx.ID, value.LockTx.ID)
@@ -183,30 +212,45 @@ func (m *MVCC[T]) Delete(now Time, tx *Transaction) error {
 	return sql.ErrNoRows
 }
 
-func (m *MVCC[T]) Update(now Time, tx *Transaction, newValue *T) error {
+func (p *PhysicalRow[K, V]) Update(now Time, tx *Transaction, newValue *V, callbacks ...any) error {
 	if tx.State.Load() != Active {
 		panic("should not call Update")
 	}
 
-	m.Lock()
-	defer m.Unlock()
+	p.Versions.Lock()
+	defer p.Versions.Unlock()
 
-	for i := len(m.Values) - 1; i >= 0; i-- {
-		value := m.Values[i]
+	for i := len(p.Versions.List) - 1; i >= 0; i-- {
+		value := p.Versions.List[i]
 		if value.Visible(now, tx.ID) {
+
 			if value.LockTx != nil && value.LockTx.State.Load() != Aborted {
 				return moerr.NewTxnWriteConflict("%s %s", tx.ID, value.LockTx.ID)
 			}
+
 			if value.BornTx.ID != tx.ID && value.BornTime.After(tx.BeginTime) {
 				return moerr.NewTxnWriteConflict("%s %s", tx.ID, value.BornTx.ID)
 			}
+
 			value.LockTx = tx
 			value.LockTime = now
-			m.Values = append(m.Values, &MVCCValue[T]{
+			id := txnengine.NewID()
+			p.Versions.List = append(p.Versions.List, &Version[V]{
+				ID:       id,
 				BornTx:   tx,
 				BornTime: now,
 				Value:    newValue,
 			})
+
+			for _, callback := range callbacks {
+				switch callback := callback.(type) {
+				case func(ID): // version id
+					callback(id)
+				default:
+					panic(fmt.Sprintf("unknown type: %T", callback))
+				}
+			}
+
 			return nil
 		}
 	}
@@ -214,8 +258,10 @@ func (m *MVCC[T]) Update(now Time, tx *Transaction, newValue *T) error {
 	return sql.ErrNoRows
 }
 
-func (m *MVCC[T]) dump(w io.Writer) {
-	for _, value := range m.Values {
+func (p *PhysicalRow[K, V]) dump(w io.Writer) {
+	p.Versions.RLock()
+	defer p.Versions.RUnlock()
+	for _, value := range p.Versions.List {
 		fmt.Fprintf(w, "born tx %s, born time %s, value %v",
 			value.BornTx.ID,
 			value.BornTime.String(),
