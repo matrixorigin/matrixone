@@ -1006,7 +1006,7 @@ func Test_genCsvData(t *testing.T) {
 						ResponseAt:           util.TimeNano(time.Microsecond + time.Second),
 						Duration:             uint64(time.Microsecond + time.Second),
 						Status:               StatementStatusFailed,
-						Error:                fmt.Errorf("test error"),
+						Error:                moerr.NewInternalError("test error"),
 						ExecPlan:             nil,
 					},
 				},
