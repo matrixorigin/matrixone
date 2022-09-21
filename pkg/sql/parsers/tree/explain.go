@@ -16,6 +16,7 @@ package tree
 
 import (
 	"strconv"
+	"strings"
 )
 
 type Explain interface {
@@ -78,8 +79,37 @@ type ExplainAnalyze struct {
 }
 
 func (node *ExplainAnalyze) Format(ctx *FmtCtx) {
-	ctx.WriteString("explain analyze ")
-	node.explainImpl.Statement.Format(ctx)
+	ctx.WriteString("explain")
+	if node.Options != nil && len(node.Options) > 0 {
+		ctx.WriteString(" (")
+		var temp string
+		for _, v := range node.Options {
+			temp += v.Name
+			if v.Value != "NULL" {
+				temp += " " + v.Value
+			}
+			temp += ","
+		}
+		ctx.WriteString(temp[:len(temp)-1] + ")")
+	}
+
+	stmt := node.explainImpl.Statement
+	switch st := stmt.(type) {
+	case *ShowColumns:
+		if st.Table != nil {
+			ctx.WriteByte(' ')
+			st.Table.ToTableName().Format(ctx)
+		}
+		if st.ColName != nil {
+			ctx.WriteByte(' ')
+			st.ColName.Format(ctx)
+		}
+	default:
+		if stmt != nil {
+			ctx.WriteByte(' ')
+			stmt.Format(ctx)
+		}
+	}
 }
 
 func NewExplainAnalyze(stmt Statement, f string) *ExplainAnalyze {
@@ -122,4 +152,15 @@ func MakeOptions(elem OptionElem) []OptionElem {
 	var options = make([]OptionElem, 1)
 	options[0] = elem
 	return options
+}
+
+func IsContainAnalyze(options []OptionElem) bool {
+	if len(options) > 0 {
+		for _, option := range options {
+			if strings.EqualFold(option.Name, "analyze") && strings.EqualFold(option.Value, "true") {
+				return true
+			}
+		}
+	}
+	return false
 }
