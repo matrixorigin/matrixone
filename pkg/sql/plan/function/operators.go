@@ -67,6 +67,66 @@ var operators = map[int]Functions{
 			},
 		},
 	},
+	ISTRUE: {
+		Id: ISTRUE,
+		Overloads: []Function{
+			{
+				Index:  0,
+				Flag:   plan.Function_STRICT,
+				Layout: IS_NULL_EXPRESSION,
+				Args: []types.T{
+					types.T_bool,
+				},
+				ReturnTyp: types.T_bool,
+				Fn:        operator.IsTrue,
+			},
+		},
+	},
+	ISNOTTRUE: {
+		Id: ISNOTTRUE,
+		Overloads: []Function{
+			{
+				Index:  0,
+				Flag:   plan.Function_STRICT,
+				Layout: IS_NULL_EXPRESSION,
+				Args: []types.T{
+					types.T_bool,
+				},
+				ReturnTyp: types.T_bool,
+				Fn:        operator.IsNotTrue,
+			},
+		},
+	},
+	ISFALSE: {
+		Id: ISFALSE,
+		Overloads: []Function{
+			{
+				Index:  0,
+				Flag:   plan.Function_STRICT,
+				Layout: IS_NULL_EXPRESSION,
+				Args: []types.T{
+					types.T_bool,
+				},
+				ReturnTyp: types.T_bool,
+				Fn:        operator.IsFalse,
+			},
+		},
+	},
+	ISNOTFALSE: {
+		Id: ISNOTFALSE,
+		Overloads: []Function{
+			{
+				Index:  0,
+				Flag:   plan.Function_STRICT,
+				Layout: IS_NULL_EXPRESSION,
+				Args: []types.T{
+					types.T_bool,
+				},
+				ReturnTyp: types.T_bool,
+				Fn:        operator.IsNotFalse,
+			},
+		},
+	},
 	// is null operator
 	ISNULL: {
 		Id: ISNULL,
