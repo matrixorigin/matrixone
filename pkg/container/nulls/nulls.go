@@ -221,7 +221,7 @@ func Filter(n *Nulls, sels []int64) *Nulls {
 	if len(sels) > 0 {
 		sp = unsafe.Slice((*uint64)(unsafe.Pointer(&sels[0])), cap(sels))[:len(sels)]
 	}
-	np := bitmap.New(int(sels[len(sels)-1]))
+	np := bitmap.New(len(sels))
 	for i, sel := range sp {
 		if n.Np.Contains(sel) {
 			np.Add(uint64(i))

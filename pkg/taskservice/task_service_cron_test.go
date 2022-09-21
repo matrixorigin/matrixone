@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 )
 
@@ -91,20 +92,14 @@ func TestRemovedCronTask(t *testing.T) {
 		s.StartScheduleCronTask()
 		defer s.StopScheduleCronTask()
 
-		time.Sleep(fetchInterval * 2)
-		s.crons.Lock()
-		assert.Equal(t, 1, len(s.crons.jobs))
-		s.crons.Unlock()
+		waitJobsCount(t, 1, s, time.Second*10)
 
 		store.Lock()
 		store.cronTaskIndexes = make(map[string]uint64)
 		store.cronTasks = make(map[uint64]task.CronTask)
 		store.Unlock()
 
-		time.Sleep(fetchInterval * 2)
-		s.crons.Lock()
-		assert.Equal(t, 0, len(s.crons.jobs))
-		s.crons.Unlock()
+		waitJobsCount(t, 0, s, time.Second*10)
 	}, time.Millisecond, time.Millisecond)
 
 }
@@ -124,4 +119,26 @@ func runScheduleCronTaskTest(t *testing.T,
 	ctx, cancel := context.WithTimeout(context.TODO(), time.Second*10)
 	defer cancel()
 	testFunc(store, s, ctx)
+}
+
+func waitJobsCount(t *testing.T, n int, s *taskService, timeout time.Duration) {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	for {
+		select {
+		case <-ctx.Done():
+			require.Fail(t, "wait jobs count failed")
+			return
+		default:
+			s.crons.Lock()
+			v := len(s.crons.jobs)
+			s.crons.Unlock()
+
+			if v == n {
+				return
+			}
+		}
+		time.Sleep(time.Millisecond * 10)
+	}
 }

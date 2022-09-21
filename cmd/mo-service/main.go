@@ -22,9 +22,11 @@ import (
 	"os"
 	"os/signal"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/cnservice"
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -40,12 +42,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"go.uber.org/zap"
-
-	"github.com/google/uuid"
 )
 
 var (
 	configFile = flag.String("cfg", "./mo.toml", "toml configuration used to start mo-service")
+	launchFile = flag.String("launch", "", "toml configuration used to launch mo cluster")
 	version    = flag.Bool("version", false, "print version information")
 )
 
@@ -60,24 +61,32 @@ func main() {
 	if *allocsProfilePathFlag != "" {
 		defer writeAllocsProfile()
 	}
-
 	rand.Seed(time.Now().UnixNano())
-	cfg, err := parseConfigFromFile(*configFile)
-	if err != nil {
-		panic(fmt.Sprintf("failed to parse config from %s, error: %s", *configFile, err.Error()))
-	}
-
-	setupLogger(cfg)
 
 	stopper := stopper.NewStopper("main", stopper.WithLogger(logutil.GetGlobalLogger()))
-	if err := startService(cfg, stopper); err != nil {
-		panic(err)
+	if *launchFile != "" {
+		if err := startCluster(stopper); err != nil {
+			panic(err)
+		}
+	} else if *configFile != "" {
+		cfg := &Config{}
+		if err := parseConfigFromFile(*configFile, cfg); err != nil {
+			panic(fmt.Sprintf("failed to parse config from %s, error: %s", *configFile, err.Error()))
+		}
+		if err := startService(cfg, stopper); err != nil {
+			panic(err)
+		}
 	}
+
 	waitSignalToStop(stopper)
 }
 
+var setupOnce sync.Once
+
 func setupLogger(cfg *Config) {
-	logutil.SetupMOLogger(&cfg.Log)
+	setupOnce.Do(func() {
+		logutil.SetupMOLogger(&cfg.Log)
+	})
 }
 
 func waitSignalToStop(stopper *stopper.Stopper) {
@@ -88,6 +97,15 @@ func waitSignalToStop(stopper *stopper.Stopper) {
 }
 
 func startService(cfg *Config, stopper *stopper.Stopper) error {
+	if err := cfg.validate(); err != nil {
+		return err
+	}
+	if err := cfg.resolveGossipSeedAddresses(); err != nil {
+		return err
+	}
+
+	// FIXME: Initialize the logger with the service's own logging configuration
+	setupLogger(cfg)
 
 	fs, err := cfg.createFileService(localFileServiceName)
 	if err != nil {
