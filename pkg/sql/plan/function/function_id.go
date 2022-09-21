@@ -51,6 +51,10 @@ const (
 	ISNOTNULL                 //ISNOTNULL
 	ISUNKNOWN                 //ISUNKNOWN
 	ISNOTUNKNOWN              //ISNOTUNKNOWN
+	ISTRUE                    //ISTRUE
+	ISNOTTRUE                 //ISNOTTRUE
+	ISFALSE                   //ISFALSE
+	ISNOTFALSE                //ISNOTTRUE
 	OP_BIT_AND                // &
 	OP_BIT_OR                 // |
 	OP_BIT_XOR                // ^
@@ -287,6 +291,10 @@ var functionIdRegister = map[string]int32{
 	"isnotnull":    ISNOTNULL,
 	"isunknown":    ISUNKNOWN,
 	"isnotunknown": ISNOTUNKNOWN,
+	"istrue":       ISTRUE,
+	"isnottrue":    ISNOTTRUE,
+	"isfalse":      ISFALSE,
+	"isnotfalse":   ISNOTFALSE,
 	"&":            OP_BIT_AND,
 	"|":            OP_BIT_OR,
 	"^":            OP_BIT_XOR,
