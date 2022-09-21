@@ -27,12 +27,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/errno"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/output"
-	"github.com/matrixorigin/matrixone/pkg/sql/errors"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -58,7 +56,7 @@ func New(db string, sql string, uid string, ctx context.Context,
 func (c *Compile) Compile(pn *plan.Plan, u any, fill func(any, *batch.Batch) error) (err error) {
 	defer func() {
 		if e := recover(); e != nil {
-			err = moerr.NewPanicError(e)
+			err = moerr.ConvertPanicError(e)
 		}
 	}()
 	c.u = u
@@ -194,12 +192,12 @@ func (c *Compile) compileScope(pn *plan.Plan) (*Scope, error) {
 			Plan:  pn,
 		}, nil
 	}
-	return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("query '%s' not support now", pn))
+	return nil, moerr.NewNYI(fmt.Sprintf("query '%s'", pn))
 }
 
 func (c *Compile) compileQuery(qry *plan.Query) (*Scope, error) {
 	if len(qry.Steps) != 1 {
-		return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("query '%s' not support now", qry))
+		return nil, moerr.NewNYI(fmt.Sprintf("query '%s'", qry))
 	}
 	var err error
 	c.cnList, err = c.e.Nodes()
@@ -473,7 +471,7 @@ func (c *Compile) compilePlanScope(n *plan.Node, ns []*plan.Node) ([]*Scope, err
 		}
 		return ss, nil
 	default:
-		return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("query '%s' not support now", n))
+		return nil, moerr.NewNYI(fmt.Sprintf("query '%s'", n))
 	}
 }
 
@@ -714,7 +712,7 @@ func (c *Compile) compileJoin(n, right *plan.Node, ss []*Scope, children []*Scop
 			}
 		}
 	default:
-		panic(errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("join typ '%v' not support now", n.JoinType)))
+		panic(moerr.NewNYI(fmt.Sprintf("join typ '%v'", n.JoinType)))
 	}
 	return rs
 }
@@ -1083,7 +1081,7 @@ func joinType(n *plan.Node, ns []*plan.Node) (bool, plan.Node_JoinFlag) {
 	case plan.Node_MARK:
 		return false, plan.Node_MARK
 	default:
-		panic(errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("join typ '%v' not support now", n.JoinType)))
+		panic(moerr.NewNYI(fmt.Sprintf("join typ '%v'", n.JoinType)))
 	}
 }
 

@@ -17,13 +17,7 @@ package taskservice
 import (
 	"context"
 
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
-)
-
-var (
-	// ErrInvalidTask task does not belong to the current task runner
-	ErrInvalidTask = moerr.New(moerr.INVALID_STATE, "task does not belong to the current task runner")
 )
 
 // Condition options for query tasks

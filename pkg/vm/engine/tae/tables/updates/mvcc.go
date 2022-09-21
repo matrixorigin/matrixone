@@ -19,6 +19,7 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 
 	"github.com/RoaringBitmap/roaring"
@@ -261,7 +262,7 @@ func (n *MVCCHandle) GetMaxVisibleRowLocked(ts types.TS) (row uint32, visible bo
 		state := txn.GetTxnState(true)
 		n.RLock()
 		if state == txnif.TxnStateUnknown {
-			err = txnif.ErrTxnInternal
+			err = moerr.NewTxnInternal()
 			return
 		} else if state == txnif.TxnStateRollbacked || state == txnif.TxnStatePreparing {
 			panic("append node shoul not be rollbacked")

@@ -19,6 +19,8 @@ import (
 	"fmt"
 	"io"
 	"sync"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
 type MVCC[T any] struct {
@@ -57,10 +59,7 @@ func (m *MVCC[T]) Read(now Time, tx *Transaction) (*T, error) {
 			case ReadNoStale:
 				// BornTx must be committed to be visible here
 				if value.BornTx.ID != tx.ID && value.BornTime.After(tx.BeginTime) {
-					return value.Value, &ErrReadConflict{
-						ReadingTx: tx,
-						Stale:     value.BornTx,
-					}
+					return value.Value, moerr.NewTxnReadConflict("%s %s", tx.ID, value.BornTx.ID)
 				}
 			}
 			return value.Value, nil
@@ -141,16 +140,10 @@ func (m *MVCC[T]) Insert(now Time, tx *Transaction, value *T) error {
 		if value.Visible(now, tx.ID) {
 			if value.LockTx != nil && value.LockTx.State.Load() != Aborted {
 				// locked by active or committed tx
-				return &ErrWriteConflict{
-					WritingTx: tx,
-					Locked:    value.LockTx,
-				}
+				return moerr.NewTxnWriteConflict("%s %s", tx.ID, value.LockTx.ID)
 			}
 			if value.BornTx.ID != tx.ID && value.BornTime.After(tx.BeginTime) {
-				return &ErrWriteConflict{
-					WritingTx: tx,
-					Stale:     value.BornTx,
-				}
+				return moerr.NewTxnWriteConflict("%s %s", tx.ID, value.BornTx.ID)
 			}
 		}
 	}
@@ -176,16 +169,10 @@ func (m *MVCC[T]) Delete(now Time, tx *Transaction) error {
 		value := m.Values[i]
 		if value.Visible(now, tx.ID) {
 			if value.LockTx != nil && value.LockTx.State.Load() != Aborted {
-				return &ErrWriteConflict{
-					WritingTx: tx,
-					Locked:    value.LockTx,
-				}
+				return moerr.NewTxnWriteConflict("%s %s", tx.ID, value.LockTx.ID)
 			}
 			if value.BornTx.ID != tx.ID && value.BornTime.After(tx.BeginTime) {
-				return &ErrWriteConflict{
-					WritingTx: tx,
-					Stale:     value.BornTx,
-				}
+				return moerr.NewTxnWriteConflict("%s %s", tx.ID, value.BornTx.ID)
 			}
 			value.LockTx = tx
 			value.LockTime = now
@@ -208,16 +195,10 @@ func (m *MVCC[T]) Update(now Time, tx *Transaction, newValue *T) error {
 		value := m.Values[i]
 		if value.Visible(now, tx.ID) {
 			if value.LockTx != nil && value.LockTx.State.Load() != Aborted {
-				return &ErrWriteConflict{
-					WritingTx: tx,
-					Locked:    value.LockTx,
-				}
+				return moerr.NewTxnWriteConflict("%s %s", tx.ID, value.LockTx.ID)
 			}
 			if value.BornTx.ID != tx.ID && value.BornTime.After(tx.BeginTime) {
-				return &ErrWriteConflict{
-					WritingTx: tx,
-					Stale:     value.BornTx,
-				}
+				return moerr.NewTxnWriteConflict("%s %s", tx.ID, value.BornTx.ID)
 			}
 			value.LockTx = tx
 			value.LockTime = now

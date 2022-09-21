@@ -21,6 +21,7 @@ import (
 	"io"
 	"sync"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -233,7 +234,7 @@ func (e *DBEntry) GetTableEntryByID(id uint64) (table *TableEntry, err error) {
 	defer e.RUnlock()
 	node := e.entries[id]
 	if node == nil {
-		return nil, ErrNotFound
+		return nil, moerr.NewNotFound()
 	}
 	table = node.GetPayload()
 	return
@@ -246,7 +247,7 @@ func (e *DBEntry) txnGetNodeByName(name string,
 	fullName := genTblFullName(txnCtx.GetTenantID(), name)
 	node := e.nameNodes[fullName]
 	if node == nil {
-		return nil, ErrNotFound
+		return nil, moerr.NewNotFound()
 	}
 	return node.TxnGetNodeLocked(txnCtx)
 }
@@ -305,7 +306,7 @@ func (e *DBEntry) RemoveEntry(table *TableEntry) (err error) {
 	e.Lock()
 	defer e.Unlock()
 	if n, ok := e.entries[table.GetID()]; !ok {
-		return ErrNotFound
+		return moerr.NewNotFound()
 	} else {
 		nn := e.nameNodes[table.GetFullName()]
 		nn.DeleteNode(table.GetID())
@@ -377,7 +378,7 @@ func (e *DBEntry) RecurLoop(processor Processor) (err error) {
 	for tableIt.Valid() {
 		table := tableIt.Get().GetPayload()
 		if err = processor.OnTable(table); err != nil {
-			if err == ErrStopCurrRecur {
+			if moerr.IsMoErrCode(err, moerr.OkStopCurrRecur) {
 				err = nil
 				tableIt.Next()
 				continue
@@ -389,7 +390,7 @@ func (e *DBEntry) RecurLoop(processor Processor) (err error) {
 		}
 		tableIt.Next()
 	}
-	if err == ErrStopCurrRecur {
+	if moerr.IsMoErrCode(err, moerr.OkStopCurrRecur) {
 		err = nil
 	}
 	return err

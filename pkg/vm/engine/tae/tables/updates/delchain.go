@@ -15,17 +15,14 @@
 package updates
 
 import (
-	// "fmt"
 	"fmt"
 	"sync"
 	"sync/atomic"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 
 	"github.com/RoaringBitmap/roaring"
-	// "github.com/matrixorigin/matrixone/pkg/logutil"
-	// "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
@@ -115,7 +112,7 @@ func (chain *DeleteChain) PrepareRangeDelete(start, end uint32, ts types.TS) (er
 			if overlap {
 				err = n.CheckConflict(ts)
 				if err == nil {
-					err = data.ErrNotFound
+					err = moerr.NewNotFound()
 				}
 				return false
 			}

@@ -21,6 +21,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
@@ -439,7 +440,7 @@ func (r *taskRunner) doTaskDone(ctx context.Context, rt runningTask) bool {
 			return false
 		default:
 			err := r.service.Complete(rt.ctx, r.runnerID, rt.task, *rt.task.ExecuteResult)
-			if err == nil || err == ErrInvalidTask {
+			if err == nil || moerr.IsMoErrCode(err, moerr.ErrInvalidTask) {
 				r.removeRunningTask(rt.task.ID)
 				return true
 			}
@@ -479,7 +480,7 @@ func (r *taskRunner) doHeartbeat(ctx context.Context) {
 
 	for _, rt := range tasks {
 		if err := r.service.Heartbeat(ctx, rt.task); err != nil {
-			if err == ErrInvalidTask {
+			if moerr.IsMoErrCode(err, moerr.ErrInvalidTask) {
 				r.removeRunningTask(rt.task.ID)
 				rt.cancel()
 			}

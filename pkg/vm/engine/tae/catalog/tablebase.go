@@ -20,6 +20,7 @@ import (
 	"io"
 	"sync"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
@@ -217,7 +218,7 @@ func (be *TableBaseEntry) DropEntryLocked(txnCtx txnif.TxnReader) (isNewNode boo
 		return
 	}
 	if be.HasDropped() {
-		return false, ErrNotFound
+		return false, moerr.NewNotFound()
 	}
 	isNewNode, err = be.DeleteLocked(txnCtx)
 	return
@@ -240,11 +241,11 @@ func (be *TableBaseEntry) PrepareAdd(txn txnif.TxnReader) (err error) {
 	}
 	if txn == nil || be.GetTxn() != txn {
 		if !be.HasDropped() {
-			return ErrDuplicate
+			return moerr.NewDuplicate()
 		}
 	} else {
 		if be.ensureVisibleAndNotDropped(txn.GetStartTS()) {
-			return ErrDuplicate
+			return moerr.NewDuplicate()
 		}
 	}
 	return

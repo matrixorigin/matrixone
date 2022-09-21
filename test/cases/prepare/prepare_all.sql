@@ -54,16 +54,13 @@ CREATE TABLE test_table
  dou DOUBLE
 );
 
--- @bvt:issue#4484
 set @float1_num=1.2345678;
 set @float2_num=1.8765432;
 set @double_num1=1.223344556677889900;
 set @double_num2=1.223344556677889900;
 INSERT INTO test_table VALUES(0, @float1_num, @double_num1), (1, @float2_num, @double_num2);
--- @bvt:issue
 
 
--- @bvt:issue#4487
 INSERT INTO test_table VALUES(0, 1.2345678, 1.223344556677889900), (1, 1.876599999432, 1.223344556677889900);
 select * from test_table;
 select * from test_table where fl=1.2345678;
@@ -87,7 +84,6 @@ EXECUTE s2 USING @dou_not_hit;
 
 DEALLOCATE PREPARE s1;
 DEALLOCATE PREPARE s2;
--- @bvt:issue
 
 DROP TABLE test_table;
 
@@ -130,7 +126,6 @@ select * from t1;
 DEALLOCATE PREPARE s2;
 
 
--- @bvt:issue#4526
 prepare s3 from 'select * from t1 where str1 like ?';
 prepare s4 from 'select * from t1 where str2 not like ?';
 
@@ -139,7 +134,6 @@ execute s3 using @a;
 
 DEALLOCATE PREPARE s3;
 DEALLOCATE PREPARE s4;
--- @bvt:issue
 
 prepare s5 from 'select * from t1 where str2=?';
 
