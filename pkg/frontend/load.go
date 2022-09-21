@@ -456,11 +456,7 @@ func collectWriteBatchResult(handler *ParseLineHandler, wh *WriteBatchHandler, e
 }
 
 func makeParsedFailedError(tp, field, column string, line uint64, offset int) *moerr.Error {
-	return moerr.New(moerr.ER_TRUNCATED_WRONG_VALUE_FOR_FIELD,
-		tp,
-		field,
-		column,
-		line+uint64(offset))
+	return moerr.NewDataTruncated(tp, "value '%s' for column '%s' at row '%d'", field, column, line+uint64(offset))
 }
 
 func errorCanBeIgnored(err error) bool {
@@ -930,7 +926,7 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool, 
 						d, err := types.Decimal64_FromString(field)
 						if err != nil {
 							// we tolerate loss of digits.
-							if !moerr.IsMoErrCode(err, moerr.DATA_TRUNCATED) {
+							if !moerr.IsMoErrCode(err, moerr.ErrDataTruncated) {
 								logutil.Errorf("parse field[%v] err:%v", field, err)
 								if !ignoreFieldError {
 									return makeParsedFailedError(vec.Typ.String(), field, vecAttr, base, offset)
@@ -949,9 +945,11 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool, 
 						d, err := types.Decimal128_FromString(field)
 						if err != nil {
 							// we tolerate loss of digits.
-							if !moerr.IsMoErrCode(err, moerr.DATA_TRUNCATED) {
+							if !moerr.IsMoErrCode(err, moerr.ErrDataTruncated) {
 								logutil.Errorf("parse field[%v] err:%v", field, err)
 								if !ignoreFieldError {
+									// XXX recreate another moerr, this may have side effect of
+									// another error log.
 									return makeParsedFailedError(vec.Typ.String(), field, vecAttr, base, offset)
 								}
 								result.Warnings++
@@ -2053,7 +2051,7 @@ func (mce *MysqlCmdExecutor) LoadLoop(requestCtx context.Context, load *tree.Loa
 			select {
 			case <-requestCtx.Done():
 				logutil.Info("cancel the load")
-				retErr = moerr.New(moerr.ER_QUERY_INTERRUPTED)
+				retErr = moerr.NewQueryInterrupted()
 				quit = true
 			case ne = <-handler.simdCsvNotiyEventChan:
 				switch ne.neType {

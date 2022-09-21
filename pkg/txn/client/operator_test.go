@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/fagongzi/util/protoc"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
@@ -197,8 +198,7 @@ func TestWriteOnClosedTxnWillPanic(t *testing.T) {
 	runOperatorTests(t, func(ctx context.Context, tc *txnOperator, _ *testTxnSender) {
 		tc.mu.closed = true
 		_, err := tc.Write(ctx, nil)
-		assert.Error(t, err)
-		assert.Equal(t, errTxnClosed, err)
+		assert.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnClosed))
 	})
 }
 
@@ -206,8 +206,7 @@ func TestReadOnClosedTxnWillPanic(t *testing.T) {
 	runOperatorTests(t, func(ctx context.Context, tc *txnOperator, _ *testTxnSender) {
 		tc.mu.closed = true
 		_, err := tc.Read(ctx, nil)
-		assert.Error(t, err)
-		assert.Equal(t, errTxnClosed, err)
+		assert.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnClosed))
 	})
 }
 
@@ -262,8 +261,7 @@ func TestReadOnAbortedTxn(t *testing.T) {
 			return result, err
 		})
 		responses, err := tc.Read(ctx, []txn.TxnRequest{txn.NewTxnRequest(&txn.CNOpRequest{OpCode: 1})})
-		assert.Error(t, err)
-		assert.Equal(t, errTxnClosed, err)
+		assert.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnClosed))
 		assert.Empty(t, responses)
 	})
 }
@@ -277,8 +275,7 @@ func TestWriteOnAbortedTxn(t *testing.T) {
 			return result, err
 		})
 		result, err := tc.Write(ctx, []txn.TxnRequest{txn.NewTxnRequest(&txn.CNOpRequest{OpCode: 1})})
-		assert.Error(t, err)
-		assert.Equal(t, errTxnClosed, err)
+		assert.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnClosed))
 		assert.Empty(t, result)
 	})
 }
@@ -292,8 +289,7 @@ func TestWriteOnCommittedTxn(t *testing.T) {
 			return result, err
 		})
 		result, err := tc.Write(ctx, []txn.TxnRequest{txn.NewTxnRequest(&txn.CNOpRequest{OpCode: 1})})
-		assert.Error(t, err)
-		assert.Equal(t, errTxnClosed, err)
+		assert.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnClosed))
 		assert.Empty(t, result)
 	})
 }
@@ -307,8 +303,7 @@ func TestWriteOnCommittingTxn(t *testing.T) {
 			return result, err
 		})
 		result, err := tc.Write(ctx, []txn.TxnRequest{txn.NewTxnRequest(&txn.CNOpRequest{OpCode: 1})})
-		assert.Error(t, err)
-		assert.Equal(t, errTxnClosed, err)
+		assert.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnClosed))
 		assert.Empty(t, result)
 	})
 }

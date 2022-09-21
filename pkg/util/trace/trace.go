@@ -23,7 +23,6 @@ package trace
 
 import (
 	"context"
-	"fmt"
 	"sync/atomic"
 	"unsafe"
 
@@ -115,14 +114,14 @@ func initExport(ctx context.Context, config *tracerProviderConfig) error {
 		export.Register(&StatementInfo{}, NewBufferPipe2CSVWorker())
 		export.Register(&MOErrorHolder{}, NewBufferPipe2CSVWorker())
 	default:
-		return moerr.NewPanicError(fmt.Errorf("unknown batchProcessMode: %s", config.batchProcessMode))
+		return moerr.NewInternalError("unknown batchProcessMode: %s", config.batchProcessMode)
 	}
 	logutil.Info("init GlobalBatchProcessor")
 	// init BatchProcessor for standalone mode.
 	p = export.NewMOCollector()
 	export.SetGlobalBatchProcessor(p)
 	if !p.Start() {
-		return moerr.NewPanicError("trace exporter already started")
+		return moerr.NewInternalError("trace exporter already started")
 	}
 	config.spanProcessors = append(config.spanProcessors, NewBatchSpanProcessor(p))
 	logutil.Info("init trace span processor")
@@ -142,7 +141,7 @@ func InitSchema(ctx context.Context, sqlExecutor func() ie.InternalExecutor) err
 			return err
 		}
 	default:
-		return moerr.NewPanicError(fmt.Errorf("unknown batchProcessMode: %s", config.batchProcessMode))
+		return moerr.NewInternalError("unknown batchProcessMode: %s", config.batchProcessMode)
 	}
 	return nil
 }

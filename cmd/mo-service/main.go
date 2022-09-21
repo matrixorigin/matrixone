@@ -16,7 +16,6 @@ package main
 
 import (
 	"context"
-	"errors"
 	"flag"
 	"fmt"
 	"math/rand"
@@ -26,18 +25,16 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
-	"github.com/matrixorigin/matrixone/pkg/fileservice"
-	"github.com/matrixorigin/matrixone/pkg/sql/compile"
-
 	"github.com/matrixorigin/matrixone/pkg/cnservice"
-
+	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/dnservice"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/sql/compile"
+	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/export"
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
@@ -96,6 +93,9 @@ func startService(cfg *Config, stopper *stopper.Stopper) error {
 		return err
 	}
 
+	// TODO: Use real task storage.
+	ts := taskservice.NewTaskService(taskservice.NewMemTaskStorage())
+
 	if err = initTraceMetric(context.Background(), cfg, stopper, fs); err != nil {
 		return err
 	}
@@ -106,9 +106,9 @@ func startService(cfg *Config, stopper *stopper.Stopper) error {
 	case dnServiceType:
 		return startDNService(cfg, stopper, fs)
 	case logServiceType:
-		return startLogService(cfg, stopper, fs)
+		return startLogService(cfg, stopper, fs, ts)
 	case standaloneServiceType:
-		return startStandalone(cfg, stopper, fs)
+		return startStandalone(cfg, stopper, fs, ts)
 	default:
 		panic("unknown service type")
 	}
@@ -174,9 +174,10 @@ func startLogService(
 	cfg *Config,
 	stopper *stopper.Stopper,
 	fileService fileservice.FileService,
+	taskService taskservice.TaskService,
 ) error {
 	lscfg := cfg.getLogServiceConfig()
-	s, err := logservice.NewService(lscfg, fileService)
+	s, err := logservice.NewService(lscfg, fileService, taskService)
 	if err != nil {
 		panic(err)
 	}
@@ -202,10 +203,11 @@ func startStandalone(
 	cfg *Config,
 	stopper *stopper.Stopper,
 	fileService fileservice.FileService,
+	taskService taskservice.TaskService,
 ) error {
 
 	// start log service
-	if err := startLogService(cfg, stopper, fileService); err != nil {
+	if err := startLogService(cfg, stopper, fileService, taskService); err != nil {
 		return err
 	}
 
@@ -216,7 +218,7 @@ func startStandalone(
 	for {
 		var err error
 		client, err = logservice.NewCNHAKeeperClient(ctx, cfg.HAKeeperClient)
-		if errors.Is(err, logservice.ErrNotHAKeeper) {
+		if moerr.IsMoErrCode(err, moerr.ErrNoHAKeeper) {
 			// not ready
 			logutil.Info("hakeeper not ready, retry")
 			time.Sleep(time.Second)
@@ -280,7 +282,7 @@ func initTraceMetric(ctx context.Context, cfg *Config, stopper *stopper.Stopper,
 			nodeUUID = uuid.New()
 		}
 		if err := util.SetUUIDNodeID(nodeUUID[:]); err != nil {
-			return moerr.NewPanicError(err)
+			return moerr.ConvertPanicError(err)
 		}
 		UUID = nodeUUID.String()
 	case dnServiceType:

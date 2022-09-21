@@ -19,6 +19,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
@@ -104,7 +105,7 @@ func (s *taskService) Allocate(ctx context.Context, value task.Task, taskRunner 
 		return nil
 	}
 	if len(exists) != 1 {
-		return ErrInvalidTask
+		return moerr.NewInvalidTask(value.TaskRunner, value.ID)
 	}
 
 	old := exists[0]
@@ -119,7 +120,7 @@ func (s *taskService) Allocate(ctx context.Context, value task.Task, taskRunner 
 		old.TaskRunner = taskRunner
 		old.LastHeartbeat = time.Now().UnixMilli()
 	default:
-		return ErrInvalidTask
+		return moerr.NewInvalidTask(value.TaskRunner, value.ID)
 	}
 
 	n, err := s.store.Update(ctx,
@@ -129,7 +130,7 @@ func (s *taskService) Allocate(ctx context.Context, value task.Task, taskRunner 
 		return err
 	}
 	if n == 0 {
-		return ErrInvalidTask
+		return moerr.NewInvalidTask(value.TaskRunner, value.ID)
 	}
 	return nil
 }
@@ -150,7 +151,7 @@ func (s *taskService) Complete(
 		return err
 	}
 	if n == 0 {
-		return ErrInvalidTask
+		return moerr.NewInvalidTask(value.TaskRunner, value.ID)
 	}
 	return nil
 }
@@ -165,7 +166,7 @@ func (s *taskService) Heartbeat(ctx context.Context, value task.Task) error {
 		return err
 	}
 	if n == 0 {
-		return ErrInvalidTask
+		return moerr.NewInvalidTask(value.TaskRunner, value.ID)
 	}
 	return nil
 }

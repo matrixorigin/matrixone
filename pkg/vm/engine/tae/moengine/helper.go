@@ -16,9 +16,9 @@ package moengine
 
 import (
 	"context"
-	"fmt"
 	"strings"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil/logutil2"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -173,7 +173,7 @@ func DefsToSchema(name string, defs []engine.TableDef) (schema *catalog.Schema, 
 		return
 	}
 	if schema.IsCompoundSortKey() {
-		err = fmt.Errorf("%w: compound idx not supported yet", catalog.ErrSchemaValidation)
+		err = moerr.NewNYI("compound idx")
 	}
 	return
 }

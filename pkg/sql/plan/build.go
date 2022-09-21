@@ -15,12 +15,9 @@
 package plan
 
 import (
-	"fmt"
-
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/errno"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/errors"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
@@ -113,7 +110,7 @@ func BuildPlan(ctx CompilerContext, stmt tree.Statement) (*Plan, error) {
 	case *tree.PrepareStmt, *tree.PrepareString:
 		return buildPrepare(stmt, ctx)
 	default:
-		return nil, errors.New(errno.SQLStatementNotYetComplete, fmt.Sprintf("unsupported statement: '%v'", tree.String(stmt, dialect.MYSQL)))
+		return nil, moerr.NewInternalError("statement: '%v'", tree.String(stmt, dialect.MYSQL))
 	}
 }
 

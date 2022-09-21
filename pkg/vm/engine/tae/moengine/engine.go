@@ -34,6 +34,18 @@ func NewEngine(impl *db.DB) *txnEngine {
 	}
 }
 
+func (e *txnEngine) New(_ context.Context, _ client.TxnOperator) error {
+	return nil
+}
+
+func (e *txnEngine) Commit(_ context.Context, _ client.TxnOperator) error {
+	return nil
+}
+
+func (e *txnEngine) Rollback(_ context.Context, _ client.TxnOperator) error {
+	return nil
+}
+
 func (e *txnEngine) Delete(ctx context.Context, name string, txnOp client.TxnOperator) (err error) {
 	var txn txnif.AsyncTxn
 	if txn, err = e.impl.GetTxnByCtx(txnOp); err != nil {

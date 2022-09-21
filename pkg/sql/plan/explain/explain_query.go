@@ -15,10 +15,9 @@
 package explain
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/errno"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/errors"
 )
 
 var _ ExplainQuery = &ExplainQueryImpl{}
@@ -109,9 +108,9 @@ func explainStep(step *plan.Node, settings *FormatSettings, options *ExplainOpti
 			settings.buffer.PushNewLine(line, false, settings.level)
 		}
 	} else if options.Format == EXPLAIN_FORMAT_JSON {
-		return errors.New(errno.FeatureNotSupported, "unimplement explain format json")
+		return moerr.NewNYI("explain format json")
 	} else if options.Format == EXPLAIN_FORMAT_DOT {
-		return errors.New(errno.FeatureNotSupported, "unimplement explain format dot")
+		return moerr.NewNYI("explain format dot")
 	}
 	return nil
 }
@@ -149,5 +148,5 @@ func serachNodeIndex(nodeID int32, Nodes []*plan.Node) (int32, error) {
 			return int32(i), nil
 		}
 	}
-	return -1, errors.New(errno.InternalError, "Invalid Plan nodeID")
+	return -1, moerr.NewInvalidInput("invliad plan nodeID %d", nodeID)
 }

@@ -23,11 +23,12 @@ package div
 import "C"
 
 import (
+	"unsafe"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"golang.org/x/exp/constraints"
-	"unsafe"
 )
 
 const (
@@ -48,7 +49,7 @@ func NumericDivFloat[T constraints.Float](xs, ys, rs *vector.Vector) error {
 	rc := C.Float_VecDiv(unsafe.Pointer(&rt[0]), unsafe.Pointer(&xt[0]), unsafe.Pointer(&yt[0]),
 		C.uint64_t(len(rt)), (*C.uint64_t)(nulls.Ptr(rs.Nsp)), C.int32_t(flag), C.int32_t(rs.Typ.TypeSize()))
 	if rc != 0 {
-		return moerr.NewError(moerr.DIVIVISION_BY_ZERO, "division by zero")
+		return moerr.NewDivByZero()
 	}
 	return nil
 }
@@ -66,7 +67,7 @@ func NumericIntegerDivFloat[T constraints.Float](xs, ys, rs *vector.Vector) erro
 	rc := C.Float_VecIntegerDiv(unsafe.Pointer(&rt[0]), unsafe.Pointer(&xt[0]), unsafe.Pointer(&yt[0]),
 		C.uint64_t(len(rt)), (*C.uint64_t)(nulls.Ptr(rs.Nsp)), C.int32_t(flag), C.int32_t(rs.Typ.TypeSize()))
 	if rc != 0 {
-		return moerr.NewError(moerr.DIVIVISION_BY_ZERO, "division by zero")
+		return moerr.NewDivByZero()
 	}
 	return nil
 }
