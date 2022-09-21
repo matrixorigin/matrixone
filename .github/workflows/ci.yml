@@ -353,3 +353,24 @@ jobs:
           cd $GITHUB_WORKSPACE
           make static-check
           
+            - name: Clone test-tool repository
+        uses: actions/checkout@v3
+        with:
+          repository: matrixorigin/matrixone
+          path: ./old/matrixone
+          ref: main
+
+      - name: Calculate old error types
+        id: errors
+        run: |
+          cd ./old/matrixone && \
+          ERRORS=`grep -or "fmt.Errorf" . --exclude-dir=vendor --exclude=*.pd.go --exclude=system_vars.go | wc -l`
+          echo ::set-output name=oldErrs::${ERRORS}
+
+      - name: Calculate error types
+        run: |
+          cd $GITHUB_WORKSPACE && \
+          NEW=`grep -or "fmt.Errorf" . --exclude-dir=vendor --exclude=*.pd.go --exclude=system_vars.go | wc -l`
+          if [ ${{ steps.errors.outputs.oldErrs }} != $NEW ]; then
+            echo "SHOULD NOT ADD NEW ERROR IS NOT MOERROR!!!"
+            exit 0;
