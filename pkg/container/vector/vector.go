@@ -723,7 +723,7 @@ func SetTAt[T types.FixedSizeT](v *Vector, idx int, t T) error {
 		idx = len(vacol) + idx
 	}
 	if idx < 0 || idx >= len(vacol) {
-		return moerr.NewError(moerr.INTERNAL_ERROR, "vector idx out of range")
+		return moerr.NewInternalError("vector idx out of range")
 	}
 	vacol[idx] = t
 	return nil
@@ -888,7 +888,7 @@ func AppendString(v *Vector, arg []string, m *mheap.Mheap) error {
 
 func AppendTuple(v *Vector, arg [][]interface{}) error {
 	if v.GetType().IsTuple() {
-		return moerr.NewError(moerr.INTERNAL_ERROR, "append tuple to non tuple vector")
+		return moerr.NewInternalError("append tuple to non tuple vector")
 	}
 	v.Col = append(v.Col.([][]interface{}), arg...)
 	return nil
@@ -1155,7 +1155,7 @@ func Copy(v, w *Vector, vi, wi int64, m *mheap.Mheap) error {
 // we don't want to horrible type switch.
 func UnionOne(v, w *Vector, sel int64, m *mheap.Mheap) (err error) {
 	if v.original {
-		return moerr.NewError(moerr.INTERNAL_ERROR, "UnionOne cannot be performed on orig vector")
+		return moerr.NewInternalError("UnionOne cannot be performed on orig vector")
 	}
 
 	if err = v.extend(1, m); err != nil {
@@ -1198,11 +1198,11 @@ func UnionOne(v, w *Vector, sel int64, m *mheap.Mheap) (err error) {
 // clear people want to amortize alloc/grow, or it is a bug.
 func UnionNull(v, _ *Vector, m *mheap.Mheap) error {
 	if v.original {
-		return moerr.NewError(moerr.INTERNAL_ERROR, "UnionNull cannot be performed on orig vector")
+		return moerr.NewInternalError("UnionNull cannot be performed on orig vector")
 	}
 
 	if v.Typ.IsTuple() {
-		panic("unionnull of tuple vector")
+		panic(moerr.NewInternalError("unionnull of tuple vector"))
 	}
 
 	if err := v.extend(1, m); err != nil {
@@ -1227,7 +1227,7 @@ func UnionNull(v, _ *Vector, m *mheap.Mheap) error {
 // Union is just append.
 func Union(v, w *Vector, sels []int64, m *mheap.Mheap) (err error) {
 	if v.original {
-		return moerr.NewError(moerr.INTERNAL_ERROR, "Union cannot be performed on orig vector")
+		return moerr.NewInternalError("Union cannot be performed on orig vector")
 	}
 
 	if err = v.extend(len(sels), m); err != nil {
@@ -1260,7 +1260,7 @@ func Union(v, w *Vector, sels []int64, m *mheap.Mheap) (err error) {
 // XXX Old UnionBatch is FUBAR.
 func UnionBatch(v, w *Vector, offset int64, cnt int, flags []uint8, m *mheap.Mheap) (err error) {
 	if v.original {
-		return moerr.NewError(moerr.INTERNAL_ERROR, "UnionBatch cannot be performed on orig vector")
+		return moerr.NewInternalError("UnionBatch cannot be performed on orig vector")
 	}
 
 	curIdx := v.Length()

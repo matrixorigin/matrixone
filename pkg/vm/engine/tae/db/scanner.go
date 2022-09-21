@@ -16,6 +16,7 @@ package db
 
 import (
 	"github.com/RoaringBitmap/roaring"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks/worker/base"
@@ -128,7 +129,7 @@ func (scanner *dbScanner) onSegment(entry *catalog.SegmentEntry) (err error) {
 			continue
 		}
 		err = op.OnSegment(entry)
-		if err == catalog.ErrStopCurrRecur {
+		if moerr.IsMoErrCode(err, moerr.OkStopCurrRecur) {
 			scanner.segmask.Add(uint32(i))
 		}
 		if err = scanner.errHandler.OnSegmentErr(entry, err); err != nil {
@@ -136,7 +137,7 @@ func (scanner *dbScanner) onSegment(entry *catalog.SegmentEntry) (err error) {
 		}
 	}
 	if scanner.segmask.GetCardinality() == uint64(len(scanner.ops)) {
-		err = catalog.ErrStopCurrRecur
+		err = moerr.GetOkStopCurrRecur()
 		logutil.Infof("StopRecurScanSegment: %s", entry.String())
 	}
 	return
@@ -144,7 +145,7 @@ func (scanner *dbScanner) onSegment(entry *catalog.SegmentEntry) (err error) {
 
 func (scanner *dbScanner) onTable(entry *catalog.TableEntry) (err error) {
 	if entry.IsVirtual() {
-		err = catalog.ErrStopCurrRecur
+		err = moerr.GetOkStopCurrRecur()
 		return
 	}
 	scanner.tablemask.Clear()
@@ -155,7 +156,7 @@ func (scanner *dbScanner) onTable(entry *catalog.TableEntry) (err error) {
 			continue
 		}
 		err = op.OnTable(entry)
-		if err == catalog.ErrStopCurrRecur {
+		if moerr.IsMoErrCode(err, moerr.OkStopCurrRecur) {
 			scanner.tablemask.Add(uint32(i))
 		}
 		if err = scanner.errHandler.OnTableErr(entry, err); err != nil {
@@ -163,7 +164,7 @@ func (scanner *dbScanner) onTable(entry *catalog.TableEntry) (err error) {
 		}
 	}
 	if scanner.tablemask.GetCardinality() == uint64(len(scanner.ops)) {
-		err = catalog.ErrStopCurrRecur
+		err = moerr.GetOkStopCurrRecur()
 		logutil.Infof("StopRecurScanTable: %s", entry.String())
 	}
 	return
@@ -177,7 +178,7 @@ func (scanner *dbScanner) onDatabase(entry *catalog.DBEntry) (err error) {
 	scanner.dbmask.Clear()
 	for i, op := range scanner.ops {
 		err = op.OnDatabase(entry)
-		if err == catalog.ErrStopCurrRecur {
+		if moerr.IsMoErrCode(err, moerr.OkStopCurrRecur) {
 			scanner.dbmask.Add(uint32(i))
 		}
 		if err = scanner.errHandler.OnDatabaseErr(entry, err); err != nil {
@@ -185,7 +186,7 @@ func (scanner *dbScanner) onDatabase(entry *catalog.DBEntry) (err error) {
 		}
 	}
 	if scanner.dbmask.GetCardinality() == uint64(len(scanner.ops)) {
-		err = catalog.ErrStopCurrRecur
+		err = moerr.GetOkStopCurrRecur()
 		logutil.Infof("StopRecurScanDatabase: %s", entry.String())
 	}
 	return

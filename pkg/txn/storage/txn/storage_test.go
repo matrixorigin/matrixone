@@ -61,7 +61,7 @@ func testDatabase(
 				Name: "foo",
 			},
 		)
-		assert.Equal(t, "foo", resp.ErrNotFound.Name)
+		assert.Equal(t, "foo", resp.ErrResp.Name)
 	}
 
 	// create database
@@ -73,7 +73,7 @@ func testDatabase(
 				Name: "foo",
 			},
 		)
-		assert.Equal(t, txnengine.ErrExisted(false), resp.ErrExisted)
+		assert.Equal(t, false, resp.ErrResp.ErrExisted)
 		assert.NotEmpty(t, resp.ID)
 	}
 
@@ -98,7 +98,7 @@ func testDatabase(
 				Name: "foo",
 			},
 		)
-		assert.Equal(t, "", resp.ErrNotFound.Name)
+		assert.Equal(t, "", resp.ErrResp.Name)
 		assert.NotNil(t, resp.ID)
 		dbID = resp.ID
 
@@ -112,7 +112,7 @@ func testDatabase(
 						Name: "foo",
 					},
 				)
-				assert.Equal(t, "", resp.ErrNotFound.Name)
+				assert.Equal(t, "", resp.ErrResp.Name)
 				assert.NotEmpty(t, resp.ID)
 			}
 			{
@@ -136,7 +136,7 @@ func testDatabase(
 				Name:       "table",
 			},
 		)
-		assert.Equal(t, "table", resp.ErrNotFound.Name)
+		assert.Equal(t, "table", resp.ErrResp.Name)
 	}
 
 	// create relation
@@ -166,7 +166,7 @@ func testDatabase(
 				},
 			},
 		)
-		assert.Equal(t, txnengine.ErrExisted(false), resp.ErrExisted)
+		assert.Equal(t, false, resp.ErrResp.ErrExisted)
 		assert.NotEmpty(t, resp.ID)
 	}
 
@@ -194,7 +194,7 @@ func testDatabase(
 				Name:       "table",
 			},
 		)
-		assert.Equal(t, "", resp.ErrNotFound.Name)
+		assert.Equal(t, "", resp.ErrResp.Name)
 		assert.NotNil(t, resp.ID)
 		relID = resp.ID
 		assert.Equal(t, txnengine.RelationTable, resp.Type)
@@ -210,8 +210,8 @@ func testDatabase(
 				TableID: relID,
 			},
 		)
-		assert.Empty(t, resp.ErrTableNotFound.ID)
-		assert.Empty(t, resp.ErrTableNotFound.Name)
+		assert.Empty(t, resp.ErrResp.ID)
+		assert.Empty(t, resp.ErrResp.Name)
 		assert.Equal(t, 3, len(resp.Defs))
 	}
 
@@ -247,8 +247,8 @@ func testDatabase(
 				Batch:   bat,
 			},
 		)
-		assert.Empty(t, resp.ErrReadOnly)
-		assert.Empty(t, resp.ErrTableNotFound)
+		assert.Empty(t, resp.ErrResp)
+		assert.Empty(t, resp.ErrResp)
 	}
 
 	// read
@@ -262,7 +262,7 @@ func testDatabase(
 			},
 		)
 		assert.NotEmpty(t, resp.IterID)
-		assert.Empty(t, resp.ErrTableNotFound)
+		assert.Empty(t, resp.ErrResp)
 		iterID = resp.IterID
 	}
 	{
@@ -274,8 +274,8 @@ func testDatabase(
 				ColNames: []string{"a", "b"},
 			},
 		)
-		assert.Empty(t, resp.ErrIterNotFound)
-		assert.Empty(t, resp.ErrColumnNotFound)
+		assert.Empty(t, resp.ErrResp)
+		assert.Empty(t, resp.ErrResp)
 		assert.NotNil(t, resp.Batch)
 		assert.Equal(t, 5, resp.Batch.Length())
 	}
@@ -300,8 +300,8 @@ func testDatabase(
 				Vector:     colA,
 			},
 		)
-		assert.Empty(t, resp.ErrReadOnly)
-		assert.Empty(t, resp.ErrTableNotFound)
+		assert.Empty(t, resp.ErrResp)
+		assert.Empty(t, resp.ErrResp)
 	}
 
 	// read after delete
@@ -314,7 +314,7 @@ func testDatabase(
 			},
 		)
 		assert.NotEmpty(t, resp.IterID)
-		assert.Empty(t, resp.ErrTableNotFound)
+		assert.Empty(t, resp.ErrResp)
 		iterID = resp.IterID
 	}
 	{
@@ -326,8 +326,8 @@ func testDatabase(
 				ColNames: []string{"a", "b"},
 			},
 		)
-		assert.Empty(t, resp.ErrIterNotFound)
-		assert.Empty(t, resp.ErrColumnNotFound)
+		assert.Empty(t, resp.ErrResp)
+		assert.Empty(t, resp.ErrResp)
 		assert.NotNil(t, resp.Batch)
 		assert.Equal(t, 4, resp.Batch.Length())
 	}
@@ -352,8 +352,8 @@ func testDatabase(
 				Vector:     colB,
 			},
 		)
-		assert.Empty(t, resp.ErrReadOnly)
-		assert.Empty(t, resp.ErrTableNotFound)
+		assert.Empty(t, resp.ErrResp)
+		assert.Empty(t, resp.ErrResp)
 	}
 
 	// read after delete
@@ -366,7 +366,7 @@ func testDatabase(
 			},
 		)
 		assert.NotEmpty(t, resp.IterID)
-		assert.Empty(t, resp.ErrTableNotFound)
+		assert.Empty(t, resp.ErrResp)
 		iterID = resp.IterID
 	}
 	{
@@ -378,8 +378,8 @@ func testDatabase(
 				ColNames: []string{"a", "b"},
 			},
 		)
-		assert.Empty(t, resp.ErrIterNotFound)
-		assert.Empty(t, resp.ErrColumnNotFound)
+		assert.Empty(t, resp.ErrResp)
+		assert.Empty(t, resp.ErrResp)
 		assert.NotNil(t, resp.Batch)
 		assert.Equal(t, 3, resp.Batch.Length())
 	}
@@ -416,8 +416,8 @@ func testDatabase(
 				Batch:   bat,
 			},
 		)
-		assert.Empty(t, resp.ErrReadOnly)
-		assert.Empty(t, resp.ErrTableNotFound)
+		assert.Empty(t, resp.ErrResp)
+		assert.Empty(t, resp.ErrResp)
 	}
 
 	// delete relation
@@ -430,7 +430,7 @@ func testDatabase(
 				Name:       "table",
 			},
 		)
-		assert.Equal(t, "", resp.ErrNotFound.Name)
+		assert.Equal(t, "", resp.ErrResp.Name)
 		assert.NotEmpty(t, resp.ID)
 	}
 	{
@@ -469,9 +469,7 @@ func testDatabase(
 				},
 			},
 		)
-		assert.Empty(t, resp.ErrReadOnly)
-		assert.Empty(t, resp.ErrDatabaseNotFound)
-		assert.Empty(t, resp.ErrExisted)
+		assert.Empty(t, resp.ErrResp)
 		assert.NotEmpty(t, resp.ID)
 		relID = resp.ID
 	}
@@ -508,8 +506,8 @@ func testDatabase(
 				Batch:   bat,
 			},
 		)
-		assert.Empty(t, resp.ErrReadOnly)
-		assert.Empty(t, resp.ErrTableNotFound)
+		assert.Empty(t, resp.ErrResp)
+		assert.Empty(t, resp.ErrResp)
 	}
 
 	// delete by primary key
@@ -532,8 +530,8 @@ func testDatabase(
 				Vector:     colA,
 			},
 		)
-		assert.Empty(t, resp.ErrReadOnly)
-		assert.Empty(t, resp.ErrTableNotFound)
+		assert.Empty(t, resp.ErrResp)
+		assert.Empty(t, resp.ErrResp)
 	}
 
 	// read after delete
@@ -546,7 +544,7 @@ func testDatabase(
 			},
 		)
 		assert.NotEmpty(t, resp.IterID)
-		assert.Empty(t, resp.ErrTableNotFound)
+		assert.Empty(t, resp.ErrResp)
 		iterID = resp.IterID
 	}
 	{
@@ -558,8 +556,8 @@ func testDatabase(
 				ColNames: []string{"a", "b"},
 			},
 		)
-		assert.Empty(t, resp.ErrIterNotFound)
-		assert.Empty(t, resp.ErrColumnNotFound)
+		assert.Empty(t, resp.ErrResp)
+		assert.Empty(t, resp.ErrResp)
 		assert.NotNil(t, resp.Batch)
 		assert.Equal(t, 4, resp.Batch.Length())
 	}
@@ -584,8 +582,8 @@ func testDatabase(
 				Vector:     colB,
 			},
 		)
-		assert.Empty(t, resp.ErrReadOnly)
-		assert.Empty(t, resp.ErrTableNotFound)
+		assert.Empty(t, resp.ErrResp)
+		assert.Empty(t, resp.ErrResp)
 	}
 
 	// read after delete
@@ -598,7 +596,7 @@ func testDatabase(
 			},
 		)
 		assert.NotEmpty(t, resp.IterID)
-		assert.Empty(t, resp.ErrTableNotFound)
+		assert.Empty(t, resp.ErrResp)
 		iterID = resp.IterID
 	}
 	var rowIDs *vector.Vector
@@ -611,8 +609,8 @@ func testDatabase(
 				ColNames: []string{"a", "b", rowIDColumnName},
 			},
 		)
-		assert.Empty(t, resp.ErrIterNotFound)
-		assert.Empty(t, resp.ErrColumnNotFound)
+		assert.Empty(t, resp.ErrResp)
+		assert.Empty(t, resp.ErrResp)
 		assert.NotNil(t, resp.Batch)
 		assert.Equal(t, 3, resp.Batch.Length())
 		rowIDs = resp.Batch.Vecs[2]
@@ -629,8 +627,8 @@ func testDatabase(
 				Vector:     rowIDs,
 			},
 		)
-		assert.Empty(t, resp.ErrReadOnly)
-		assert.Empty(t, resp.ErrTableNotFound)
+		assert.Empty(t, resp.ErrResp)
+		assert.Empty(t, resp.ErrResp)
 	}
 
 	// read after delete
@@ -643,7 +641,7 @@ func testDatabase(
 			},
 		)
 		assert.NotEmpty(t, resp.IterID)
-		assert.Empty(t, resp.ErrTableNotFound)
+		assert.Empty(t, resp.ErrResp)
 		iterID = resp.IterID
 	}
 	{
@@ -655,8 +653,8 @@ func testDatabase(
 				ColNames: []string{"a", "b", rowIDColumnName},
 			},
 		)
-		assert.Empty(t, resp.ErrIterNotFound)
-		assert.Empty(t, resp.ErrColumnNotFound)
+		assert.Empty(t, resp.ErrResp)
+		assert.Empty(t, resp.ErrResp)
 		assert.Nil(t, resp.Batch)
 	}
 

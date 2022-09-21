@@ -15,12 +15,10 @@
 package explain
 
 import (
-	"fmt"
 	"strings"
 	"testing"
 
-	"github.com/matrixorigin/matrixone/pkg/errno"
-	"github.com/matrixorigin/matrixone/pkg/sql/errors"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -273,7 +271,7 @@ func runOneStmt(opt plan.Optimizer, t *testing.T, sql string) error {
 				} else if strings.EqualFold(v.Value, "FALSE") {
 					es.Verbose = false
 				} else {
-					return errors.New(errno.InvalidOptionValue, fmt.Sprintf("%s requires a Boolean value", v.Name))
+					return moerr.NewInvalidInput("boolean value %v", v.Value)
 				}
 			} else if strings.EqualFold(v.Name, "ANALYZE") {
 				if strings.EqualFold(v.Value, "TRUE") || v.Value == "NULL" {
@@ -281,20 +279,20 @@ func runOneStmt(opt plan.Optimizer, t *testing.T, sql string) error {
 				} else if strings.EqualFold(v.Value, "FALSE") {
 					es.Anzlyze = false
 				} else {
-					return errors.New(errno.InvalidOptionValue, fmt.Sprintf("%s requires a Boolean value", v.Name))
+					return moerr.NewInvalidInput("boolean value %v", v.Value)
 				}
 			} else if strings.EqualFold(v.Name, "FORMAT") {
 				if v.Name == "NULL" {
-					return errors.New(errno.InvalidOptionValue, fmt.Sprintf("%s requires a parameter", v.Name))
+					return moerr.NewInvalidInput("parameter name %v", v.Name)
 				} else if strings.EqualFold(v.Value, "TEXT") {
 					es.Format = EXPLAIN_FORMAT_TEXT
 				} else if strings.EqualFold(v.Value, "JSON") {
 					es.Format = EXPLAIN_FORMAT_JSON
 				} else {
-					return errors.New(errno.InvalidOptionValue, fmt.Sprintf("unrecognized value for EXPLAIN option \"%s\": \"%s\"", v.Name, v.Value))
+					return moerr.NewInvalidInput("explain format %v", v.Value)
 				}
 			} else {
-				return errors.New(errno.InvalidOptionValue, fmt.Sprintf("unrecognized EXPLAIN option \"%s\"", v.Name))
+				return moerr.NewInvalidInput("EXPLAIN option %v", v.Name)
 			}
 		}
 

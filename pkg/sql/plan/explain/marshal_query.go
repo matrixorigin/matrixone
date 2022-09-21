@@ -149,7 +149,7 @@ func (m MarshalNodeImpl) GetNodeName() (string, error) {
 	case plan.Node_MINUS_ALL:
 		name = "Minus All"
 	default:
-		return name, moerr.NewError(moerr.ERROR_SERIALIZE_PLAN_JSON, "Unsupported node type when plan is serialized to json")
+		return name, moerr.NewInternalError("Unsupported node type when plan is serialized to json")
 	}
 	return name, nil
 }
@@ -166,7 +166,7 @@ func (m MarshalNodeImpl) GetNodeTitle(options *ExplainOptions) (string, error) {
 		} else if m.node.TableDef != nil {
 			result += m.node.TableDef.GetName()
 		} else {
-			return result, moerr.NewError(moerr.ERROR_SERIALIZE_PLAN_JSON, "Table definition not found when plan is serialized to json")
+			return result, moerr.NewInternalError("Table definition not found when plan is serialized to json")
 		}
 	case plan.Node_PROJECT, plan.Node_VALUE_SCAN, plan.Node_UNION, plan.Node_UNION_ALL,
 		plan.Node_INTERSECT, plan.Node_INTERSECT_ALL, plan.Node_MINUS:
@@ -213,7 +213,7 @@ func (m MarshalNodeImpl) GetNodeTitle(options *ExplainOptions) (string, error) {
 			result += describe
 		}
 	default:
-		return "", moerr.NewError(moerr.ERROR_SERIALIZE_PLAN_JSON, "Unsupported node type when plan is serialized to json")
+		return "", moerr.NewInternalError("Unsupported node type when plan is serialized to json")
 	}
 	return result, nil
 }
@@ -232,7 +232,7 @@ func (m MarshalNodeImpl) GetNodeLabels(options *ExplainOptions) ([]Label, error)
 		} else if tableDef != nil {
 			fullTableName += tableDef.GetName()
 		} else {
-			return nil, moerr.NewError(moerr.ERROR_SERIALIZE_PLAN_JSON, "Table definition not found when plan is serialized to json")
+			return nil, moerr.NewInternalError("Table definition not found when plan is serialized to json")
 		}
 		// "name" : "Columns (2 / 28)",
 		columns := make([]string, len(tableDef.Cols))
@@ -390,7 +390,7 @@ func (m MarshalNodeImpl) GetNodeLabels(options *ExplainOptions) ([]Label, error)
 			Value: value,
 		})
 	default:
-		return nil, moerr.NewError(moerr.ERROR_SERIALIZE_PLAN_JSON, "Unsupported node type when plan is serialized to json")
+		return nil, moerr.NewInternalError("Unsupported node type when plan is serialized to json")
 	}
 
 	// Get Limit And Offset info

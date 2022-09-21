@@ -99,7 +99,7 @@ func GetShardInfo(address string, shardID uint64) (ShardInfo, bool, error) {
 func (s *Service) getShardInfo(shardID uint64) (pb.ShardInfoQueryResult, bool) {
 	r, ok := s.store.nh.GetNodeHostRegistry()
 	if !ok {
-		panic(moerr.NewError(moerr.INVALID_STATE, "gossip registry not enabled"))
+		panic(moerr.NewInvalidState("gossip registry not enabled"))
 	}
 	shard, ok := r.GetShardInfo(shardID)
 	if !ok {

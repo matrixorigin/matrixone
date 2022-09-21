@@ -17,10 +17,8 @@ package explain
 import (
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/errno"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/errors"
 )
 
 var _ ExplainQuery = &ExplainQueryImpl{}
@@ -62,10 +60,10 @@ func (e *ExplainQueryImpl) BuildJsonPlan(uuid uuid.UUID, options *ExplainOptions
 		if err != nil {
 			var errdata *ExplainData
 			if moErr, ok := err.(*moerr.Error); ok {
-				errdata = NewExplainDataFail(uuid, moErr.Code, moErr.Message)
+				errdata = NewExplainDataFail(uuid, moErr.MySQLCode(), moErr.Error())
 			} else {
-				newError := moerr.NewError(moerr.ERROR_SERIALIZE_PLAN_JSON, "An error occurred when plan is serialized to json")
-				errdata = NewExplainDataFail(uuid, newError.Code, newError.Message)
+				newError := moerr.NewInternalError("An error occurred when plan is serialized to json")
+				errdata = NewExplainDataFail(uuid, newError.MySQLCode(), newError.Error())
 			}
 			return errdata
 		}
@@ -86,8 +84,8 @@ func explainStep(step *plan.Node, settings *FormatSettings, options *ExplainOpti
 	nodedescImpl := NewNodeDescriptionImpl(step)
 
 	if options.Format == EXPLAIN_FORMAT_TEXT {
-		basicNodeInfo, err := nodedescImpl.GetNodeBasicInfo(options)
-		if err != nil {
+		basicNodeInfo, err1 := nodedescImpl.GetNodeBasicInfo(options)
+		if err1 != nil {
 			return nil
 		}
 		settings.buffer.PushNewLine(basicNodeInfo, true, settings.level)
@@ -146,9 +144,9 @@ func explainStep(step *plan.Node, settings *FormatSettings, options *ExplainOpti
 			settings.buffer.PushNewLine(line, false, settings.level)
 		}
 	} else if options.Format == EXPLAIN_FORMAT_JSON {
-		return errors.New(errno.FeatureNotSupported, "unimplement explain format json")
+		return moerr.NewNYI("explain format json")
 	} else if options.Format == EXPLAIN_FORMAT_DOT {
-		return errors.New(errno.FeatureNotSupported, "unimplement explain format dot")
+		return moerr.NewNYI("explain format dot")
 	}
 	return nil
 }
@@ -157,9 +155,9 @@ func traversalPlan(node *plan.Node, Nodes []*plan.Node, settings *FormatSettings
 	if node == nil {
 		return nil
 	}
-	err := explainStep(node, settings, options)
-	if err != nil {
-		return err
+	err1 := explainStep(node, settings, options)
+	if err1 != nil {
+		return err1
 	}
 	settings.level++
 	// Recursive traversal Query Plan
@@ -186,7 +184,7 @@ func serachNodeIndex(nodeID int32, Nodes []*plan.Node) (int32, error) {
 			return int32(i), nil
 		}
 	}
-	return -1, errors.New(errno.InternalError, "Invalid Plan nodeID")
+	return -1, moerr.NewInvalidInput("invliad plan nodeID %d", nodeID)
 }
 
 // ----------------------------------------------------------------------------------------------------------

@@ -661,11 +661,8 @@ func allocTestBatch(attrName []string, tt []types.Type, batchSize int) *batch.Ba
 
 func Test_mysqlerror(t *testing.T) {
 	convey.Convey("mysql error", t, func() {
-		err := moerr.New(moerr.ER_BAD_DB_ERROR, "T")
-		convey.So(err.Code, convey.ShouldEqual, moerr.ER_BAD_DB_ERROR)
-
-		err2 := moerr.New(65535, "T")
-		convey.So(err2.Code, convey.ShouldEqual, moerr.ErrEnd)
+		err := moerr.NewBadDB("T")
+		convey.So(err.MySQLCode(), convey.ShouldEqual, moerr.ER_BAD_DB_ERROR)
 	})
 }
 

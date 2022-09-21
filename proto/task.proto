@@ -104,8 +104,10 @@
      string        CronExpr      = 3;
      // NextTime the next time it should be scheduled for execution. Unix timestamp in ms
      int64         NextTime      = 4;
+     // TriggerTimes the number of times it was triggered
+     uint64        TriggerTimes  = 5;
      // CreateAt time of the cron task created. Unix timestamp in ms
-     int64         CreateAt      = 5;
+     int64         CreateAt      = 6;
      // CreateAt time of the cron task created. Unix timestamp in ms
-     int64         UpdateAt      = 6;
+     int64         UpdateAt      = 7;
  }

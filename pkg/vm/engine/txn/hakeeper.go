@@ -16,10 +16,10 @@ package txnengine
 
 import (
 	"context"
-	"errors"
 	"sync"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 )
@@ -41,7 +41,7 @@ func GetClusterDetailsFromHAKeeper(
 		for {
 
 			ret, err := client.GetClusterDetails(ctx)
-			if errors.Is(err, logservice.ErrNotHAKeeper) {
+			if moerr.IsMoErrCode(err, moerr.ErrNoHAKeeper) {
 				// not ready or wrong configured, retry
 				time.Sleep(time.Second)
 				continue

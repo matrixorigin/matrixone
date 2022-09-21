@@ -136,48 +136,48 @@ a
 7
 3
 select * from t3 where a >= some (select b from t2 group by 1);
-column "t2.b" must appear in the GROUP BY clause or be used in an aggregate function
+SQL syntax error: column "t2.b" must appear in the GROUP BY clause or be used in an aggregate function
 select * from t3 where NULL >= any (select b from t2);
 a
 select * from t3 where NULL >= any (select b from t2 group by 1);
-column "t2.b" must appear in the GROUP BY clause or be used in an aggregate function
+SQL syntax error: column "t2.b" must appear in the GROUP BY clause or be used in an aggregate function
 select * from t3 where NULL >= some (select b from t2);
 a
 select * from t3 where NULL >= some (select b from t2 group by 1);
-column "t2.b" must appear in the GROUP BY clause or be used in an aggregate function
+SQL syntax error: column "t2.b" must appear in the GROUP BY clause or be used in an aggregate function
 create view v1 as select * from t3 where a >= some (select b from t2);
 create view v2 as select * from t3 where a >= some (select b from t2 group by 1);
-column "t2.b" must appear in the GROUP BY clause or be used in an aggregate function
+SQL syntax error: column "t2.b" must appear in the GROUP BY clause or be used in an aggregate function
 create view v3 as select * from t3 where NULL >= any (select b from t2);
 create view v4 as select * from t3 where NULL >= any (select b from t2 group by 1);
-column "t2.b" must appear in the GROUP BY clause or be used in an aggregate function
+SQL syntax error: column "t2.b" must appear in the GROUP BY clause or be used in an aggregate function
 create view v5 as select * from t3 where NULL >= some (select b from t2);
 create view v6 as select * from t3 where NULL >= some (select b from t2 group by 1);
-column "t2.b" must appear in the GROUP BY clause or be used in an aggregate function
+SQL syntax error: column "t2.b" must appear in the GROUP BY clause or be used in an aggregate function
 select * from v1;
 a
 6
 7
 3
 select * from v2;
-table "v2" does not exist
+SQL parser error: table "v2" does not exist
 select * from v3;
 a
 select * from v4;
-table "v4" does not exist
+SQL parser error: table "v4" does not exist
 select * from v5;
 a
 select * from v6;
-table "v6" does not exist
+SQL parser error: table "v6" does not exist
 drop view v1;
 drop view v2;
-view v2 is not exists
+invalid view view-subquery-with-any%!(EXTRA string=v2)
 drop view v3;
 drop view v4;
-view v4 is not exists
+invalid view view-subquery-with-any%!(EXTRA string=v4)
 drop view v5;
 drop view v6;
-view v6 is not exists
+invalid view view-subquery-with-any%!(EXTRA string=v6)
 DROP TABLE IF EXISTS t1;
 DROP TABLE IF EXISTS t2;
 DROP TABLE IF EXISTS t3;
@@ -205,9 +205,9 @@ a
 1
 3
 SELECT a FROM t1 WHERE (1,2) > ANY (SELECT a FROM t1 WHERE b = 2);
-subquery should return 2 columns
+invalid input: subquery should return 2 columns
 SELECT a FROM t1 WHERE a > ANY (SELECT a,2 FROM t1 WHERE b = 2);
-subquery should return 1 column
+invalid input: subquery should return 1 column
 SELECT a FROM t1 WHERE (1,2) > ANY (SELECT a,2 FROM t1 WHERE b = 2);
 a
 SELECT a FROM t1 WHERE (1,2) <> ANY (SELECT a,2 FROM t1 WHERE b = 2);
@@ -216,23 +216,23 @@ a
 2
 3
 SELECT a FROM t1 WHERE (1,2) = ANY (SELECT a FROM t1 WHERE b = 2);
-subquery should return 2 columns
+invalid input: subquery should return 2 columns
 SELECT a FROM t1 WHERE a = ANY (SELECT a,2 FROM t1 WHERE b = 2);
-subquery should return 1 column
+invalid input: subquery should return 1 column
 SELECT a FROM t1 WHERE (1,2) = ANY (SELECT a,2 FROM t1 WHERE b = 2);
 a
 SELECT a FROM t1 WHERE (1,2) <> ALL (SELECT a FROM t1 WHERE b = 2);
-subquery should return 2 columns
+invalid input: subquery should return 2 columns
 SELECT a FROM t1 WHERE (a,1) = ANY (SELECT a,1 FROM t1 WHERE b = 2);
 a
 2
 SELECT a FROM t1 WHERE (a,1) = ANY (SELECT a,1 FROM t1 HAVING a = 2);
-column "t1.a" must appear in the GROUP BY clause or be used in an aggregate function
+SQL syntax error: column "t1.a" must appear in the GROUP BY clause or be used in an aggregate function
 SELECT a FROM t1 WHERE (a,1) = ANY (SELECT a,1 FROM t1 WHERE b = 2 UNION SELECT a,1 FROM t1 WHERE b = 2);
 a
 2
 SELECT a FROM t1 WHERE (a,1) = ANY (SELECT a,1 FROM t1 HAVING a = 2 UNION SELECT a,1 FROM t1 HAVING a = 2);
-column "t1.a" must appear in the GROUP BY clause or be used in an aggregate function
+SQL syntax error: column "t1.a" must appear in the GROUP BY clause or be used in an aggregate function
 create view v1 as SELECT a FROM t1 WHERE a > ANY ( SELECT a FROM t1 WHERE b = 2 );
 create view v2 as SELECT a FROM t1 WHERE a < ANY ( SELECT a FROM t1 WHERE b = 2 );
 create view v3 as SELECT a FROM t1 WHERE a = ANY ( SELECT a FROM t1 WHERE b = 2 );
@@ -240,24 +240,24 @@ create view v4 as SELECT a FROM t1 WHERE a >= ANY ( SELECT a FROM t1 WHERE b = 2
 create view v5 as SELECT a FROM t1 WHERE a <= ANY ( SELECT a FROM t1 WHERE b = 2 );
 create view v6 as SELECT a FROM t1 WHERE a <> ANY ( SELECT a FROM t1 WHERE b = 2 );
 create view v7 as SELECT a FROM t1 WHERE (1,2) > ANY (SELECT a FROM t1 WHERE b = 2);
-subquery should return 2 columns
+invalid input: subquery should return 2 columns
 create view v8 as SELECT a FROM t1 WHERE a > ANY (SELECT a,2 FROM t1 WHERE b = 2);
-subquery should return 1 column
+invalid input: subquery should return 1 column
 create view v9 as SELECT a FROM t1 WHERE (1,2) > ANY (SELECT a,2 FROM t1 WHERE b = 2);
 create view v10 as SELECT a FROM t1 WHERE (1,2) <> ANY (SELECT a,2 FROM t1 WHERE b = 2);
 create view v11 as SELECT a FROM t1 WHERE (1,2) = ANY (SELECT a FROM t1 WHERE b = 2);
-subquery should return 2 columns
+invalid input: subquery should return 2 columns
 create view v12 as SELECT a FROM t1 WHERE a = ANY (SELECT a,2 FROM t1 WHERE b = 2);
-subquery should return 1 column
+invalid input: subquery should return 1 column
 create view v13 as SELECT a FROM t1 WHERE (1,2) = ANY (SELECT a,2 FROM t1 WHERE b = 2);
 create view v14 as SELECT a FROM t1 WHERE (1,2) <> ALL (SELECT a FROM t1 WHERE b = 2);
-subquery should return 2 columns
+invalid input: subquery should return 2 columns
 create view v15 as SELECT a FROM t1 WHERE (a,1) = ANY (SELECT a,1 FROM t1 WHERE b = 2);
 create view v16 as SELECT a FROM t1 WHERE (a,1) = ANY (SELECT a,1 FROM t1 HAVING a = 2);
-column "t1.a" must appear in the GROUP BY clause or be used in an aggregate function
+SQL syntax error: column "t1.a" must appear in the GROUP BY clause or be used in an aggregate function
 create view v17 as SELECT a FROM t1 WHERE (a,1) = ANY (SELECT a,1 FROM t1 WHERE b = 2 UNION SELECT a,1 FROM t1 WHERE b = 2);
 create view v18 as SELECT a FROM t1 WHERE (a,1) = ANY (SELECT a,1 FROM t1 HAVING a = 2 UNION SELECT a,1 FROM t1 HAVING a = 2);
-column "t1.a" must appear in the GROUP BY clause or be used in an aggregate function
+SQL syntax error: column "t1.a" must appear in the GROUP BY clause or be used in an aggregate function
 select * from v1;
 a
 3
@@ -280,9 +280,9 @@ a
 1
 3
 select * from v7;
-table "v7" does not exist
+SQL parser error: table "v7" does not exist
 select * from v8;
-table "v8" does not exist
+SQL parser error: table "v8" does not exist
 select * from v9;
 a
 select * from v10;
@@ -291,23 +291,23 @@ a
 2
 3
 select * from v11;
-table "v11" does not exist
+SQL parser error: table "v11" does not exist
 select * from v12;
-table "v12" does not exist
+SQL parser error: table "v12" does not exist
 select * from v13;
 a
 select * from v14;
-table "v14" does not exist
+SQL parser error: table "v14" does not exist
 select * from v15;
 a
 2
 select * from v16;
-table "v16" does not exist
+SQL parser error: table "v16" does not exist
 select * from v17;
 a
 2
 select * from v18;
-table "v18" does not exist
+SQL parser error: table "v18" does not exist
 drop view v1;
 drop view v2;
 drop view v3;
@@ -315,24 +315,24 @@ drop view v4;
 drop view v5;
 drop view v6;
 drop view v7;
-view v7 is not exists
+invalid view view-subquery-with-any%!(EXTRA string=v7)
 drop view v8;
-view v8 is not exists
+invalid view view-subquery-with-any%!(EXTRA string=v8)
 drop view v9;
 drop view v10;
 drop view v11;
-view v11 is not exists
+invalid view view-subquery-with-any%!(EXTRA string=v11)
 drop view v12;
-view v12 is not exists
+invalid view view-subquery-with-any%!(EXTRA string=v12)
 drop view v13;
 drop view v14;
-view v14 is not exists
+invalid view view-subquery-with-any%!(EXTRA string=v14)
 drop view v15;
 drop view v16;
-view v16 is not exists
+invalid view view-subquery-with-any%!(EXTRA string=v16)
 drop view v17;
 drop view v18;
-view v18 is not exists
+invalid view view-subquery-with-any%!(EXTRA string=v18)
 DROP TABLE IF EXISTS t1;
 CREATE TABLE t1 ( a double, b double );
 INSERT INTO t1 VALUES (1,1),(2,2),(3,3);
@@ -452,18 +452,18 @@ DROP TABLE IF EXISTS t2;
 create table t1 (a1 int);
 create table t2 (b1 int);
 select * from t1 where a2 > any(select b1 from t2);
-Column 'a2' does not exist
+invalid input: column a2 does not exist
 select * from t1 where a1 > any(select b1 from t2);
 a1
 create view v1 as select * from t1 where a2 > any(select b1 from t2);
-Column 'a2' does not exist
+invalid input: column a2 does not exist
 create view v2 as select * from t1 where a1 > any(select b1 from t2);
 select * from v1;
-table "v1" does not exist
+SQL parser error: table "v1" does not exist
 select * from v2;
 a1
 drop view v1;
-view v1 is not exists
+invalid view view-subquery-with-any%!(EXTRA string=v1)
 drop view v2;
 DROP TABLE IF EXISTS t1;
 DROP TABLE IF EXISTS t2;
@@ -481,26 +481,26 @@ select * from t1 where (s1+1 = ANY (select s1 from t1));
 s1
 1
 select * from t1 where NOT(s1+1 = ANY (select s1 from t1));
-"ANY" subquery as non-root expression will be supported in future version
+"ANY" subquery as non-root expression is not yet implemented
 create view v3 as select * from t1 where (s1+1 = ANY (select s1 from t1));
 create view v4 as select * from t1 where NOT(s1+1 = ANY (select s1 from t1));
-"ANY" subquery as non-root expression will be supported in future version
+"ANY" subquery as non-root expression is not yet implemented
 select * from v1;
 s1
 1
 select * from v2;
-table "v2" does not exist
+SQL parser error: table "v2" does not exist
 select * from v3;
 s1
 1
 select * from v4;
-table "v4" does not exist
+SQL parser error: table "v4" does not exist
 drop view v1;
 drop view v2;
-view v2 is not exists
+invalid view view-subquery-with-any%!(EXTRA string=v2)
 drop view v3;
 drop view v4;
-view v4 is not exists
+invalid view view-subquery-with-any%!(EXTRA string=v4)
 DROP TABLE IF EXISTS t1;
 DROP TABLE IF EXISTS t2;
 CREATE TABLE t1 (s1 CHAR(1));
@@ -609,17 +609,17 @@ DROP TABLE IF EXISTS t2;
 CREATE TABLE t1 ( a int, b int );
 INSERT INTO t1 VALUES (1,1),(2,2),(3,3);
 SELECT a FROM t1 WHERE a > ANY (SELECT a FROM t1 HAVING a = 2);
-column "t1.a" must appear in the GROUP BY clause or be used in an aggregate function
+SQL syntax error: column "t1.a" must appear in the GROUP BY clause or be used in an aggregate function
 SELECT a FROM t1 WHERE a < ANY (SELECT a FROM t1 HAVING a = 2);
-column "t1.a" must appear in the GROUP BY clause or be used in an aggregate function
+SQL syntax error: column "t1.a" must appear in the GROUP BY clause or be used in an aggregate function
 SELECT a FROM t1 WHERE a = ANY (SELECT a FROM t1 HAVING a = 2);
-column "t1.a" must appear in the GROUP BY clause or be used in an aggregate function
+SQL syntax error: column "t1.a" must appear in the GROUP BY clause or be used in an aggregate function
 SELECT a FROM t1 WHERE a >= ANY (SELECT a FROM t1 HAVING a = 2);
-column "t1.a" must appear in the GROUP BY clause or be used in an aggregate function
+SQL syntax error: column "t1.a" must appear in the GROUP BY clause or be used in an aggregate function
 SELECT a FROM t1 WHERE a <= ANY (SELECT a FROM t1 HAVING a = 2);
-column "t1.a" must appear in the GROUP BY clause or be used in an aggregate function
+SQL syntax error: column "t1.a" must appear in the GROUP BY clause or be used in an aggregate function
 SELECT a FROM t1 WHERE a <> ANY (SELECT a FROM t1 HAVING a = 2);
-column "t1.a" must appear in the GROUP BY clause or be used in an aggregate function
+SQL syntax error: column "t1.a" must appear in the GROUP BY clause or be used in an aggregate function
 SELECT a FROM t1 WHERE a > ANY (SELECT a FROM t1 WHERE b = 2 group by a);
 a
 3
@@ -663,17 +663,17 @@ a
 1
 3
 create view v1 as SELECT a FROM t1 WHERE a > ANY (SELECT a FROM t1 HAVING a = 2);
-column "t1.a" must appear in the GROUP BY clause or be used in an aggregate function
+SQL syntax error: column "t1.a" must appear in the GROUP BY clause or be used in an aggregate function
 create view v2 as SELECT a FROM t1 WHERE a < ANY (SELECT a FROM t1 HAVING a = 2);
-column "t1.a" must appear in the GROUP BY clause or be used in an aggregate function
+SQL syntax error: column "t1.a" must appear in the GROUP BY clause or be used in an aggregate function
 create view v3 as SELECT a FROM t1 WHERE a = ANY (SELECT a FROM t1 HAVING a = 2);
-column "t1.a" must appear in the GROUP BY clause or be used in an aggregate function
+SQL syntax error: column "t1.a" must appear in the GROUP BY clause or be used in an aggregate function
 create view v4 as SELECT a FROM t1 WHERE a >= ANY (SELECT a FROM t1 HAVING a = 2);
-column "t1.a" must appear in the GROUP BY clause or be used in an aggregate function
+SQL syntax error: column "t1.a" must appear in the GROUP BY clause or be used in an aggregate function
 create view v5 as SELECT a FROM t1 WHERE a <= ANY (SELECT a FROM t1 HAVING a = 2);
-column "t1.a" must appear in the GROUP BY clause or be used in an aggregate function
+SQL syntax error: column "t1.a" must appear in the GROUP BY clause or be used in an aggregate function
 create view v6 as SELECT a FROM t1 WHERE a <> ANY (SELECT a FROM t1 HAVING a = 2);
-column "t1.a" must appear in the GROUP BY clause or be used in an aggregate function
+SQL syntax error: column "t1.a" must appear in the GROUP BY clause or be used in an aggregate function
 create view v7 as SELECT a FROM t1 WHERE a > ANY (SELECT a FROM t1 WHERE b = 2 group by a);
 create view v8 as SELECT a FROM t1 WHERE a < ANY (SELECT a FROM t1 WHERE b = 2 group by a);
 create view v9 as SELECT a FROM t1 WHERE a = ANY (SELECT a FROM t1 WHERE b = 2 group by a);
@@ -687,17 +687,17 @@ create view v16 as SELECT a FROM t1 WHERE a >= ANY (SELECT a FROM t1 group by a 
 create view v17 as SELECT a FROM t1 WHERE a <= ANY (SELECT a FROM t1 group by a HAVING a = 2);
 create view v18 as SELECT a FROM t1 WHERE a <> ANY (SELECT a FROM t1 group by a HAVING a = 2);
 select * from v1;
-table "v1" does not exist
+SQL parser error: table "v1" does not exist
 select * from v2;
-table "v2" does not exist
+SQL parser error: table "v2" does not exist
 select * from v3;
-table "v3" does not exist
+SQL parser error: table "v3" does not exist
 select * from v4;
-table "v4" does not exist
+SQL parser error: table "v4" does not exist
 select * from v5;
-table "v5" does not exist
+SQL parser error: table "v5" does not exist
 select * from v6;
-table "v6" does not exist
+SQL parser error: table "v6" does not exist
 select * from v7;
 a
 3
@@ -741,17 +741,17 @@ a
 1
 3
 drop view v1;
-view v1 is not exists
+invalid view view-subquery-with-any%!(EXTRA string=v1)
 drop view v2;
-view v2 is not exists
+invalid view view-subquery-with-any%!(EXTRA string=v2)
 drop view v3;
-view v3 is not exists
+invalid view view-subquery-with-any%!(EXTRA string=v3)
 drop view v4;
-view v4 is not exists
+invalid view view-subquery-with-any%!(EXTRA string=v4)
 drop view v5;
-view v5 is not exists
+invalid view view-subquery-with-any%!(EXTRA string=v5)
 drop view v6;
-view v6 is not exists
+invalid view view-subquery-with-any%!(EXTRA string=v6)
 drop view v7;
 drop view v8;
 drop view v9;
@@ -853,17 +853,17 @@ a
 1
 3
 SELECT a FROM t1 WHERE a > ANY (SELECT a FROM t1 HAVING a = 2);
-column "t1.a" must appear in the GROUP BY clause or be used in an aggregate function
+SQL syntax error: column "t1.a" must appear in the GROUP BY clause or be used in an aggregate function
 SELECT a FROM t1 WHERE a < ANY (SELECT a FROM t1 HAVING a = 2);
-column "t1.a" must appear in the GROUP BY clause or be used in an aggregate function
+SQL syntax error: column "t1.a" must appear in the GROUP BY clause or be used in an aggregate function
 SELECT a FROM t1 WHERE a = ANY (SELECT a FROM t1 HAVING a = 2);
-column "t1.a" must appear in the GROUP BY clause or be used in an aggregate function
+SQL syntax error: column "t1.a" must appear in the GROUP BY clause or be used in an aggregate function
 SELECT a FROM t1 WHERE a >= ANY (SELECT a FROM t1 HAVING a = 2);
-column "t1.a" must appear in the GROUP BY clause or be used in an aggregate function
+SQL syntax error: column "t1.a" must appear in the GROUP BY clause or be used in an aggregate function
 SELECT a FROM t1 WHERE a <= ANY (SELECT a FROM t1 HAVING a = 2);
-column "t1.a" must appear in the GROUP BY clause or be used in an aggregate function
+SQL syntax error: column "t1.a" must appear in the GROUP BY clause or be used in an aggregate function
 SELECT a FROM t1 WHERE a <> ANY (SELECT a FROM t1 HAVING a = 2);
-column "t1.a" must appear in the GROUP BY clause or be used in an aggregate function
+SQL syntax error: column "t1.a" must appear in the GROUP BY clause or be used in an aggregate function
 create view v1 as SELECT a FROM t1 WHERE a > ANY (SELECT a FROM t1 WHERE b = 2);
 create view v2 as SELECT a FROM t1 WHERE a < ANY (SELECT a FROM t1 WHERE b = 2);
 create view v3 as SELECT a FROM t1 WHERE a = ANY (SELECT a FROM t1 WHERE b = 2);
@@ -871,17 +871,17 @@ create view v4 as SELECT a FROM t1 WHERE a >= ANY (SELECT a FROM t1 WHERE b = 2)
 create view v5 as SELECT a FROM t1 WHERE a <= ANY (SELECT a FROM t1 WHERE b = 2);
 create view v6 as SELECT a FROM t1 WHERE a <> ANY (SELECT a FROM t1 WHERE b = 2);
 create view v7 as SELECT a FROM t1 WHERE a > ANY (SELECT a FROM t1 HAVING a = 2);
-column "t1.a" must appear in the GROUP BY clause or be used in an aggregate function
+SQL syntax error: column "t1.a" must appear in the GROUP BY clause or be used in an aggregate function
 create view v8 as SELECT a FROM t1 WHERE a < ANY (SELECT a FROM t1 HAVING a = 2);
-column "t1.a" must appear in the GROUP BY clause or be used in an aggregate function
+SQL syntax error: column "t1.a" must appear in the GROUP BY clause or be used in an aggregate function
 create view v9 as SELECT a FROM t1 WHERE a = ANY (SELECT a FROM t1 HAVING a = 2);
-column "t1.a" must appear in the GROUP BY clause or be used in an aggregate function
+SQL syntax error: column "t1.a" must appear in the GROUP BY clause or be used in an aggregate function
 create view v10 as SELECT a FROM t1 WHERE a >= ANY (SELECT a FROM t1 HAVING a = 2);
-column "t1.a" must appear in the GROUP BY clause or be used in an aggregate function
+SQL syntax error: column "t1.a" must appear in the GROUP BY clause or be used in an aggregate function
 create view v11 as SELECT a FROM t1 WHERE a <= ANY (SELECT a FROM t1 HAVING a = 2);
-column "t1.a" must appear in the GROUP BY clause or be used in an aggregate function
+SQL syntax error: column "t1.a" must appear in the GROUP BY clause or be used in an aggregate function
 create view v12 as SELECT a FROM t1 WHERE a <> ANY (SELECT a FROM t1 HAVING a = 2);
-column "t1.a" must appear in the GROUP BY clause or be used in an aggregate function
+SQL syntax error: column "t1.a" must appear in the GROUP BY clause or be used in an aggregate function
 select * from v1;
 a
 3
@@ -904,17 +904,17 @@ a
 1
 3
 select * from v7;
-table "v7" does not exist
+SQL parser error: table "v7" does not exist
 select * from v8;
-table "v8" does not exist
+SQL parser error: table "v8" does not exist
 select * from v9;
-table "v9" does not exist
+SQL parser error: table "v9" does not exist
 select * from v10;
-table "v10" does not exist
+SQL parser error: table "v10" does not exist
 select * from v11;
-table "v11" does not exist
+SQL parser error: table "v11" does not exist
 select * from v12;
-table "v12" does not exist
+SQL parser error: table "v12" does not exist
 drop view v1;
 drop view v2;
 drop view v3;
@@ -922,17 +922,17 @@ drop view v4;
 drop view v5;
 drop view v6;
 drop view v7;
-view v7 is not exists
+invalid view view-subquery-with-any%!(EXTRA string=v7)
 drop view v8;
-view v8 is not exists
+invalid view view-subquery-with-any%!(EXTRA string=v8)
 drop view v9;
-view v9 is not exists
+invalid view view-subquery-with-any%!(EXTRA string=v9)
 drop view v10;
-view v10 is not exists
+invalid view view-subquery-with-any%!(EXTRA string=v10)
 drop view v11;
-view v11 is not exists
+invalid view view-subquery-with-any%!(EXTRA string=v11)
 drop view v12;
-view v12 is not exists
+invalid view view-subquery-with-any%!(EXTRA string=v12)
 DROP TABLE IF EXISTS t1;
 create table t1 (a int);
 insert into t1 values (1),(2),(3);
@@ -1025,11 +1025,11 @@ SELECT * FROM t1 WHERE a = ANY ( SELECT 1 UNION SELECT 1 UNION SELECT 1 );
 a
 1
 create view v1 as SELECT * FROM t1 WHERE a = ANY ( SELECT 1 UNION ( SELECT 1 UNION SELECT 1 ) );
-table 'v1' already exists
+table v1 already exists
 create view v2 as SELECT * FROM t1 WHERE a = ANY ( ( SELECT 1 UNION SELECT 1 )  UNION SELECT 1 );
 create view v3 as SELECT * FROM t1 WHERE a = ANY ( SELECT 1 UNION SELECT 1 UNION SELECT 1 );
 select * from v1;
-Column 's1' does not exist
+invalid input: column s1 does not exist
 select * from v2;
 a
 1
