@@ -208,6 +208,16 @@ func TestDerivedTableQueryToJson(t *testing.T) {
 	buildPlanMarshalTest(mock, t, sqls)
 }
 
+func TestDMLToJson(t *testing.T) {
+	sqls := []string{
+		"INSERT INTO NATION SELECT * FROM NATION2",
+		"UPDATE NATION SET N_NAME ='U1', N_REGIONKEY=N_REGIONKEY+2 WHERE N_NATIONKEY > 10 LIMIT 20",
+		"DELETE FROM NATION WHERE N_NATIONKEY > 10",
+	}
+	mock := plan.NewMockOptimizer()
+	buildPlanMarshalTest(mock, t, sqls)
+}
+
 func buildPlanMarshalTest(opt plan.Optimizer, t *testing.T, sqls []string) {
 	for _, sql := range sqls {
 		t.Logf("sql: %s \n", sql)
@@ -232,7 +242,7 @@ func buildPlanMarshalTest(opt plan.Optimizer, t *testing.T, sqls []string) {
 		explainQuery := NewExplainQueryImpl(queryPlan)
 		options := &ExplainOptions{
 			Verbose: true,
-			Anzlyze: false,
+			Analyze: false,
 			Format:  EXPLAIN_FORMAT_TEXT,
 		}
 
