@@ -35,7 +35,7 @@ func DisableFaultInjection(vecs []*vector.Vector, proc *process.Process) (*vecto
 func AddFaultPoint(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	for i := 0; i < 5; i++ {
 		if vecs[i].IsScalarNull() || !vecs[i].IsScalar() {
-			return nil, moerr.NewError(moerr.INVALID_ARGUMENT, "AddFaultPoint can only take scalar args")
+			return nil, moerr.NewInvalidArg("AddFaultPoint", "not scalar")
 		}
 	}
 
@@ -54,7 +54,7 @@ func AddFaultPoint(vecs []*vector.Vector, proc *process.Process) (*vector.Vector
 
 func RemoveFaultPoint(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	if vecs[0].IsScalarNull() || !vecs[0].IsScalar() {
-		return nil, moerr.NewError(moerr.INVALID_ARGUMENT, "RemoveFaultPoint can only take scalar args")
+		return nil, moerr.NewInvalidArg("RemoveFaultPoint", "not scalar")
 	}
 
 	name := vecs[0].GetString(0)
@@ -66,7 +66,7 @@ func RemoveFaultPoint(vecs []*vector.Vector, proc *process.Process) (*vector.Vec
 
 func TriggerFaultPoint(vecs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	if vecs[0].IsScalarNull() || !vecs[0].IsScalar() {
-		return nil, moerr.NewError(moerr.INVALID_ARGUMENT, "TriggerFaultPoint can only take scalar args")
+		return nil, moerr.NewInvalidArg("TriggerFaultPoint", "not scalar")
 	}
 
 	name := vecs[0].GetString(0)

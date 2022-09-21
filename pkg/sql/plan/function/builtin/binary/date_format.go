@@ -24,8 +24,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/errno"
-	"github.com/matrixorigin/matrixone/pkg/sql/errors"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -82,7 +80,7 @@ func DateFormat(vectors []*vector.Vector, proc *process.Process) (*vector.Vector
 
 	resultType := types.T_varchar.ToType()
 	if !formatVector.IsScalar() {
-		return nil, moerr.NewError(moerr.ERROR_FUNCTION_PARAMETER, "the second parameter of function to_date must be char/varchar constant\n"+usage)
+		return nil, moerr.NewInvalidArg("to_date format", "not constant")
 	}
 
 	if dateVector.IsScalarNull() || formatVector.IsScalarNull() {
@@ -158,13 +156,13 @@ func makeDateFormat(t types.Datetime, b rune, buf *bytes.Buffer) error {
 	case 'b':
 		m := t.Month()
 		if m == 0 || m > 12 {
-			return errors.New(errno.InvalidOptionValue, "the input paraemter value is in wrong format")
+			return moerr.NewInvalidInput("invalud date format for month '%d'", m)
 		}
 		buf.WriteString(MonthNames[m-1][:3])
 	case 'M':
 		m := t.Month()
 		if m == 0 || m > 12 {
-			return errors.New(errno.InvalidOptionValue, "the input paraemter value is in wrong format")
+			return moerr.NewInvalidInput("invalud date format for month '%d'", m)
 		}
 		buf.WriteString(MonthNames[m-1])
 	case 'm':

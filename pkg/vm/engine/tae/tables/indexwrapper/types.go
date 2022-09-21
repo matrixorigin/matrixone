@@ -15,8 +15,10 @@
 package indexwrapper
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"io"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
@@ -30,13 +32,13 @@ func TranslateError(err error) error {
 		return err
 	}
 	if err == index.ErrDuplicate {
-		return data.ErrDuplicate
+		return moerr.NewDuplicate()
 	}
 	if err == index.ErrNotFound {
-		return data.ErrNotFound
+		return moerr.NewNotFound()
 	}
 	if err == index.ErrWrongType {
-		return data.ErrWrongType
+		return moerr.NewInternalError("wrong type")
 	}
 	return err
 }

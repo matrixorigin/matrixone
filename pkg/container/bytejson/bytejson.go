@@ -18,11 +18,11 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/errno"
-	"github.com/matrixorigin/matrixone/pkg/sql/errors"
 	"math"
 	"sort"
 	"strconv"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
 func (bj ByteJson) String() string {
@@ -109,7 +109,7 @@ func (bj ByteJson) to(buf []byte) ([]byte, error) {
 	case TpCodeString:
 		buf = bj.toString(buf)
 	default:
-		err = errors.New(errno.UnSupportedJsonType, fmt.Sprintf("invalid type:%d", bj.Type))
+		err = moerr.NewInvalidInput("invalid json type '%v'", bj.Type)
 	}
 	return buf, err
 }
@@ -364,7 +364,7 @@ func (bj ByteJson) queryWithSubPath(keys []string, vals []ByteJson, path *Path, 
 	return keys, vals
 }
 
-func (bj ByteJson) unnestWithParams(out []UnnestResult, outer, recursive bool, mode string, pathStr string, this *ByteJson, filters []string) ([]UnnestResult, error) {
+func (bj ByteJson) unnestWithParams(out []UnnestResult, outer, recursive bool, mode string, pathStr string, this *ByteJson, filters []string) []UnnestResult {
 	if !bj.canUnnest() {
 		index, key := genIndexOrKey(pathStr)
 		tmp := UnnestResult{}
@@ -374,7 +374,7 @@ func (bj ByteJson) unnestWithParams(out []UnnestResult, outer, recursive bool, m
 		maybePut(tmp, "key", key, filters)
 		maybePut(tmp, "this", this.String(), filters)
 		out = append(out, tmp)
-		return out, nil
+		return out
 	}
 	if bj.Type == TpCodeObject && mode != "array" {
 		cnt := bj.GetElemCnt()
@@ -389,13 +389,8 @@ func (bj ByteJson) unnestWithParams(out []UnnestResult, outer, recursive bool, m
 			maybePut(tmp, "this", this.String(), filters)
 			out = append(out, tmp)
 			if val.canUnnest() && recursive {
-				var err error
-				out, err = val.unnestWithParams(out, outer, recursive, mode, newPathStr, &val, filters)
-				if err != nil {
-					return nil, err
-				}
+				out = val.unnestWithParams(out, outer, recursive, mode, newPathStr, &val, filters)
 			}
-
 		}
 	}
 	if bj.Type == TpCodeArray && mode != "object" {
@@ -410,15 +405,11 @@ func (bj ByteJson) unnestWithParams(out []UnnestResult, outer, recursive bool, m
 			maybePut(tmp, "this", this.String(), filters)
 			out = append(out, tmp)
 			if val.canUnnest() && recursive {
-				var err error
-				out, err = val.unnestWithParams(out, outer, recursive, mode, newPathStr, &val, filters)
-				if err != nil {
-					return nil, err
-				}
+				out = val.unnestWithParams(out, outer, recursive, mode, newPathStr, &val, filters)
 			}
 		}
 	}
-	return out, nil
+	return out
 }
 
 func (bj ByteJson) unnest(out []UnnestResult, path *Path, outer, recursive bool, mode string, filters []string) ([]UnnestResult, error) {
@@ -427,15 +418,11 @@ func (bj ByteJson) unnest(out []UnnestResult, path *Path, outer, recursive bool,
 	vals := make([]ByteJson, 0, 1)
 	keys, vals = bj.queryWithSubPath(keys, vals, path, "$")
 	if len(keys) != len(vals) {
-		return nil, errors.New("keys and vals are not equal", "")
+		return nil, moerr.NewInvalidInput("len(key) and len(val) are not equal, len(key)=%d, len(val)=%d", len(keys), len(vals))
 	}
 	for i := 0; i < len(keys); i++ {
-		var err error
 		if vals[i].canUnnest() {
-			out, err = vals[i].unnestWithParams(out, outer, recursive, mode, keys[i], &vals[i], filters)
-			if err != nil {
-				return nil, err
-			}
+			out = vals[i].unnestWithParams(out, outer, recursive, mode, keys[i], &vals[i], filters)
 		}
 	}
 	if len(out) == 0 && outer {
@@ -452,7 +439,7 @@ func (bj ByteJson) unnest(out []UnnestResult, path *Path, outer, recursive bool,
 // Unnest returns a slice of UnnestResult, each UnnestResult contains filtered data, if param filters is nil, return all fields.
 func (bj ByteJson) Unnest(path *Path, outer, recursive bool, mode string, filters []string) ([]UnnestResult, error) {
 	if !checkMode(mode) {
-		return nil, errors.New(errno.InvalidUnnestMode, fmt.Sprintf("invalid unnest mode %s", mode))
+		return nil, moerr.NewInvalidInput("mode must be one of [object, array, both]")
 	}
 	out := make([]UnnestResult, 0, 1)
 	out, err := bj.unnest(out, path, outer, recursive, mode, filters)

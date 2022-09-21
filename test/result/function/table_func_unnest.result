@@ -7,11 +7,11 @@ select * from unnest('{"a":1}', '$.a', true) as f;
 col	seq	key	path	index	value	this
 UNNEST_DEFAULT	0	null	$.a	null	null	1
 select * from unnest('{"a":1}');
-No tables used
+SQL parser error: No tables used
 select * from unnest('{"a":1}', '$.a');
-No tables used
+SQL parser error: No tables used
 select * from unnest('{"a":1}', '$.a', true);
-No tables used
+SQL parser error: No tables used
 drop table if exists t1;
 create table t1 (a json,b int);
 insert into t1 values ('{"a":1,"b":[{"c":2,"d":3},false,4],"e":{"f":true,"g":[null,true,1.1]}}',1);
@@ -43,11 +43,11 @@ select * from unnest(t1.a, "$.a", true) as f;
 col	seq	key	path	index	value	this
 a	0	null	$.a	null	null	1
 select * from unnest(t1.a);
-No tables used
+SQL parser error: No tables used
 select * from unnest(t1.a, "$.b");
-No tables used
+SQL parser error: No tables used
 select * from unnest(t1.a, "$.a");
-No tables used
+SQL parser error: No tables used
 select * from unnest(t1.a, "$.a", true) as f;
 col	seq	key	path	index	value	this
 a	0	null	$.a	null	null	1

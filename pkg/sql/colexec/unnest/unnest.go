@@ -16,7 +16,7 @@ package unnest
 
 import (
 	"bytes"
-	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -100,11 +100,11 @@ func callByCol(param *Param, proc *process.Process) (bool, error) {
 		return true, nil
 	}
 	if len(bat.Vecs) != 1 {
-		return false, fmt.Errorf("unnest: invalid input batch,len(vecs)[%d] != 1", len(bat.Vecs))
+		return false, moerr.NewInvalidArg("unnest: invalid input batch,len(vecs)[%d] != 1", len(bat.Vecs))
 	}
 	vec := bat.GetVector(0)
 	if vec.Typ.Oid != types.T_json {
-		return false, fmt.Errorf("unnest: invalid column type:%s", vec.Typ)
+		return false, moerr.NewInvalidArg("unnest: invalid column type:%s", vec.Typ)
 	}
 	path, err := types.ParseStringToPath(param.Extern.Path)
 	if err != nil {
@@ -155,7 +155,7 @@ func makeBatch(bat *batch.Batch, ures []bytejson.UnnestResult, param *Param, pro
 				val, ok := ures[i][param.Attrs[j]]
 				err = vec.Append([]byte(val), !ok, proc.Mp())
 			default:
-				err = fmt.Errorf("unnest: invalid column name:%s", param.Attrs[j])
+				err = moerr.NewInvalidArg("unnest: invalid column name:%s", param.Attrs[j])
 			}
 			if err != nil {
 				return nil, err

@@ -15,12 +15,10 @@
 package types
 
 import (
-	"fmt"
 	"go/constant"
 	"strings"
 
-	"github.com/matrixorigin/matrixone/pkg/errno"
-	"github.com/matrixorigin/matrixone/pkg/sql/errors"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
@@ -35,7 +33,7 @@ func ParseValueToBool(num *tree.NumVal) (bool, error) {
 			return true, nil
 		}
 	}
-	return false, errors.New(errno.IndeterminateDatatype, fmt.Sprintf("unsupport value: %v", str))
+	return false, moerr.NewInvalidInput("'%s' is not a valid bool expression", str)
 }
 
 func AppendBoolToByteArray(b bool, arr []byte) []byte {
@@ -54,7 +52,7 @@ func ParseBool(s string) (bool, error) {
 	} else if s == "false" || s == "0" {
 		return false, nil
 	} else {
-		return false, errors.New(errno.IndeterminateDatatype, fmt.Sprintf("the input value '%s' is not bool type", s))
+		return false, moerr.NewInvalidInput("'%s' is not a valid bool expression", s)
 	}
 }
 

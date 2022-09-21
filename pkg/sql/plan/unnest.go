@@ -15,7 +15,7 @@
 package plan
 
 import (
-	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -132,10 +132,10 @@ func (builder *QueryBuilder) buildUnnest(tbl *tree.Unnest, ctx *BindContext) (in
 		schemaName, tableName, colName := o.GetNames()
 		objRef, tableDef := builder.compCtx.Resolve(schemaName, tableName)
 		if objRef == nil {
-			return 0, fmt.Errorf("schema %s not found", schemaName)
+			return 0, moerr.NewSyntaxError("schema %s not found", schemaName)
 		}
 		if tableDef == nil {
-			return 0, fmt.Errorf("table %s not found", tableName)
+			return 0, moerr.NewSyntaxError("table %s not found", tableName)
 		}
 		scanNode = &plan.Node{
 			NodeType:    plan.Node_TABLE_SCAN,
@@ -161,7 +161,7 @@ func (builder *QueryBuilder) buildUnnest(tbl *tree.Unnest, ctx *BindContext) (in
 		}
 	case string:
 		if len(o) == 0 {
-			return 0, fmt.Errorf("unnest param is empty")
+			return 0, moerr.NewInvalidInput("unnest param is empty")
 		}
 		scanNode = &plan.Node{
 			NodeType: plan.Node_VALUE_SCAN,
@@ -176,7 +176,7 @@ func (builder *QueryBuilder) buildUnnest(tbl *tree.Unnest, ctx *BindContext) (in
 			},
 		}
 	default:
-		return 0, fmt.Errorf("unsupport param type %T", o)
+		return 0, moerr.NewInvalidInput("unsupported unnest param type: %T", o)
 	}
 	childId := builder.appendNode(scanNode, ctx)
 	node.Children = []int32{childId}

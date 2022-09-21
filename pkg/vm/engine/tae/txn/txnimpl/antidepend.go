@@ -15,6 +15,7 @@
 package txnimpl
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
@@ -137,7 +138,7 @@ func (checker *warChecker) check() (err error) {
 			}
 			if entry.DeleteBefore(commitTs) {
 				entry.RUnlock()
-				return txnif.ErrTxnRWConflict
+				return moerr.NewTxnRWConflict()
 			}
 			entry.RUnlock()
 		}

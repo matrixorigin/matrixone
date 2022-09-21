@@ -249,6 +249,12 @@ var (
 		input:  "SELECT (rpad(1.0, 2048,1)) IS NOT FALSE;",
 		output: "select (rpad(1.0, 2048, 1)) != false",
 	}, {
+		input:  "SELECT 1 is unknown;",
+		output: "select 1 is unknown",
+	}, {
+		input:  "SELECT false is not unknown;",
+		output: "select false is not unknown",
+	}, {
 		input:  "SELECT FROM_UNIXTIME(99999999999999999999999999999999999999999999999999999999999999999);",
 		output: "select from_unixtime(99999999999999999999999999999999999999999999999999999999999999999)",
 	}, {

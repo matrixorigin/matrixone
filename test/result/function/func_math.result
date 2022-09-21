@@ -23,7 +23,7 @@ null	null
 null	null
 1.5707963267948966	1.5707963267948966
 select cot(d),cot(fl) from t1;
-cot(0) value out of range
+invalid argument cot, bad value cot(0)
 select cot(d),cot(fl) from t1 where d <> 0;
 cot(d)	cot(fl)
 0.6420926159343306	1.8340266997618755

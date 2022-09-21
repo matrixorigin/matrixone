@@ -18,9 +18,9 @@ import (
 	"bytes"
 	"context"
 	"encoding/gob"
-	"reflect"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -63,9 +63,9 @@ func DoTxnRequest[
 				Target:  shard,
 			},
 			Options: &txn.TxnRequestOptions{
-				RetryCodes: []txn.ErrorCode{
+				RetryCodes: []int32{
 					// dn shard not found
-					txn.ErrorCode_DNShardNotFound,
+					int32(moerr.ErrDNShardNotFound),
 				},
 				RetryInterval: int64(time.Second),
 			},
@@ -79,31 +79,31 @@ func DoTxnRequest[
 	if err != nil {
 		return
 	}
-	if err = errorFromTxnResponses(result.Responses); err != nil {
-		return
+
+	for _, resp := range result.Responses {
+		if resp.TxnError != nil {
+			err = moerr.NewTxnError("resp txnError %s", resp.TxnError.Message)
+			return
+		}
 	}
 
-	var respErrors Errors
 	for _, res := range result.Responses {
 		var resp Resp
 		if err = gob.NewDecoder(bytes.NewReader(res.CNOpResponse.Payload)).Decode(&resp); err != nil {
 			return
 		}
 
-		respValue := reflect.ValueOf(resp)
-		for i := 0; i < respValue.NumField(); i++ {
-			field := respValue.Field(i)
-			if field.Type().Implements(errorType) &&
-				!field.IsZero() {
-				respErrors = append(respErrors, field.Interface().(error))
-			}
-		}
-
+		// XXX This code is beyond me.  Why do you need to use reflects and
+		// type implements for RPC code.
+		// respValue := reflect.ValueOf(resp)
+		// for i := 0; i < respValue.NumField(); i++ {
+		// 	field := respValue.Field(i)
+		// 	if field.Type().Implements(errorType) && !field.IsZero() {
+		// 		err = moerr.NewInternalError("txn request error %d req.  This error handling code is messed up.")
+		// 		return
+		// 	}
+		// }
 		resps = append(resps, resp)
-	}
-
-	if len(respErrors) > 0 {
-		err = respErrors
 	}
 
 	return
