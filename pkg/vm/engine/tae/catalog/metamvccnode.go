@@ -61,7 +61,7 @@ func (e *MetadataMVCCNode) CloneData() txnbase.MVCCNode {
 
 func (e *MetadataMVCCNode) String() string {
 
-	return fmt.Sprintf("%s%s,MetaLoc=%s,DeltaLoc=%s",
+	return fmt.Sprintf("%s%s[MetaLoc=\"%s\",DeltaLoc=\"%s\"]",
 		e.TxnMVCCNode.String(),
 		e.EntryMVCCNode.String(),
 		e.MetaLoc,
