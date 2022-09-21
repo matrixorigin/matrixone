@@ -22,6 +22,7 @@ var (
 			Help:      "Counter of executed sql statement",
 		},
 		[]string{constTenantKey, "type"},
+		true,
 	)
 
 	TransactionErrorsFactory = NewCounterVec(
@@ -31,6 +32,7 @@ var (
 			Help:      "Counter of errors on execute commit/rollback statement",
 		},
 		[]string{constTenantKey, "type"},
+		false,
 	)
 
 	StatementErrorsFactory = NewCounterVec(
@@ -40,6 +42,7 @@ var (
 			Help:      "Counter of executed sql statement failed.",
 		},
 		[]string{constTenantKey, "type"},
+		false,
 	)
 )
 
