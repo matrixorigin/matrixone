@@ -378,3 +378,33 @@ true
 true
 false
 false
+select null is false;
+null
+false
+select null is true;
+null
+false
+select null is not false;
+null
+true
+select null is not true;
+null
+true
+select 1 is true;
+1
+true
+select 1 is false;
+1
+false
+select 1 is not true;
+1
+false
+select 1 is not false;
+1
+true
+select a is true from t1 order by a;
+a
+false
+false
+false
+true

@@ -5907,14 +5907,6 @@ expression:
     {
     	$$ = tree.NewMaxValue()
     }
-|   boolean_primary IS true_or_false %prec IS
-	{
-        $$ = tree.NewComparisonExpr(tree.EQUAL, $1, $3)
-    }
-|   boolean_primary IS NOT true_or_false %prec IS
-	{
-        $$ = tree.NewComparisonExpr(tree.NOT_EQUAL, $1, $4)
-    }
 |   boolean_primary
     {
         $$ = $1
@@ -5936,6 +5928,22 @@ boolean_primary:
 |   boolean_primary IS NOT UNKNOWN %prec IS
     {
         $$ = tree.NewIsNotUnknownExpr($1)
+    }
+|    boolean_primary IS TRUE %prec IS
+    {
+        $$ = tree.NewIsTrueExpr($1)
+    }
+|   boolean_primary IS NOT TRUE %prec IS
+    {
+        $$ = tree.NewIsNotTrueExpr($1)
+    }
+|    boolean_primary IS FALSE %prec IS
+    {
+        $$ = tree.NewIsFalseExpr($1)
+    }
+|   boolean_primary IS NOT FALSE %prec IS
+    {
+        $$ = tree.NewIsNotFalseExpr($1)
     }
 |   boolean_primary comparison_operator predicate %prec '='
     {
