@@ -27,27 +27,6 @@ type NodeDescribeImpl struct {
 	Node *plan.Node
 }
 
-func (ndesc *NodeDescribeImpl) GetTableDef(options *ExplainOptions) (string, error) {
-	result := "Table: "
-	if ndesc.Node.NodeType == plan.Node_TABLE_SCAN {
-		tableDef := ndesc.Node.TableDef
-		result += "'" + tableDef.Name + "' ("
-		first := true
-		for i, col := range tableDef.Cols {
-			if !first {
-				result += ", "
-			}
-			first = false
-			//result += "'" + col.Name + "':" + col.Typ.Id.String()
-			result += strconv.Itoa(i) + ":'" + col.Name + "'"
-		}
-		result += ")"
-	} else {
-		panic("implement me")
-	}
-	return result, nil
-}
-
 func NewNodeDescriptionImpl(node *plan.Node) *NodeDescribeImpl {
 	return &NodeDescribeImpl{
 		Node: node,
@@ -118,6 +97,14 @@ func (ndesc *NodeDescribeImpl) GetNodeBasicInfo(options *ExplainOptions) (string
 		pname = "Update"
 	case plan.Node_DELETE:
 		pname = "Delete"
+	case plan.Node_INTERSECT:
+		pname = "Intersect"
+	case plan.Node_INTERSECT_ALL:
+		pname = "Intersect All"
+	case plan.Node_MINUS:
+		pname = "Minus"
+	case plan.Node_MINUS_ALL:
+		pname = "Minus All"
 	default:
 		panic("error node type")
 	}
@@ -190,7 +177,6 @@ func (ndesc *NodeDescribeImpl) GetNodeBasicInfo(options *ExplainOptions) (string
 		case plan.Node_UNKNOWN:
 			fallthrough
 		default:
-
 		}
 	}
 
@@ -212,6 +198,42 @@ func (ndesc *NodeDescribeImpl) GetNodeBasicInfo(options *ExplainOptions) (string
 		return result, moerr.NewNYI("explain format json")
 	} else if options.Format == EXPLAIN_FORMAT_DOT {
 		return result, moerr.NewNYI("explain format dot")
+	}
+	return result, nil
+}
+
+func (ndesc *NodeDescribeImpl) GetActualAnalyzeInfo(options *ExplainOptions) (string, error) {
+	result := "Analyze: "
+	if ndesc.Node.AnalyzeInfo != nil {
+		impl := NewAnalyzeInfoDescribeImpl(ndesc.Node.AnalyzeInfo)
+		describe, err := impl.GetDescription(options)
+		if err != nil {
+			return result, err
+		}
+		result += describe
+	} else {
+		result += "timeConsumed=xxms  inputRows=xx  outputRows=xx inputSize=xxbytes outputSize:xxbytes, memorySize=xxbytes"
+	}
+	return result, nil
+}
+
+func (ndesc *NodeDescribeImpl) GetTableDef(options *ExplainOptions) (string, error) {
+	result := "Table: "
+	if ndesc.Node.NodeType == plan.Node_TABLE_SCAN {
+		tableDef := ndesc.Node.TableDef
+		result += "'" + tableDef.Name + "' ("
+		first := true
+		for i, col := range tableDef.Cols {
+			if !first {
+				result += ", "
+			}
+			first = false
+			//result += "'" + col.Name + "':" + col.Typ.Id.String()
+			result += strconv.Itoa(i) + ":'" + col.Name + "'"
+		}
+		result += ")"
+	} else {
+		panic("implement me")
 	}
 	return result, nil
 }
@@ -429,6 +451,27 @@ var _ NodeElemDescribe = &OrderByDescribeImpl{}
 var _ NodeElemDescribe = &WinSpecDescribeImpl{}
 var _ NodeElemDescribe = &RowsetDataDescribeImpl{}
 var _ NodeElemDescribe = &UpdateListDescribeImpl{}
+var _ NodeElemDescribe = &AnalyzeInfoDescribeImpl{}
+
+type AnalyzeInfoDescribeImpl struct {
+	AnalyzeInfo *plan.AnalyzeInfo
+}
+
+func NewAnalyzeInfoDescribeImpl(analyze *plan.AnalyzeInfo) *AnalyzeInfoDescribeImpl {
+	return &AnalyzeInfoDescribeImpl{
+		AnalyzeInfo: analyze,
+	}
+}
+
+func (a AnalyzeInfoDescribeImpl) GetDescription(options *ExplainOptions) (string, error) {
+	result := "timeConsumed=" + strconv.FormatInt(a.AnalyzeInfo.TimeConsumed, 10) + "us" +
+		" inputRows=" + strconv.FormatInt(a.AnalyzeInfo.InputRows, 10) +
+		" outputRows=" + strconv.FormatInt(a.AnalyzeInfo.OutputRows, 10) +
+		" inputSize=" + strconv.FormatInt(a.AnalyzeInfo.InputSize, 10) + "bytes" +
+		" outputSize=" + strconv.FormatInt(a.AnalyzeInfo.OutputSize, 10) + "bytes" +
+		" memorySize=" + strconv.FormatInt(a.AnalyzeInfo.OutputSize, 10) + "bytes"
+	return result, nil
+}
 
 type CostDescribeImpl struct {
 	Cost *plan.Cost
@@ -441,7 +484,7 @@ func (c *CostDescribeImpl) GetDescription(options *ExplainOptions) (string, erro
 		result = " (cost=0.0..0.0 rows=0 ndv=0 rowsize=0)"
 		//result = " (cost=%.2f..%.2f rows=%.2f ndv=%.2f rowsize=%.f)"
 	} else {
-		result = "(cost=" +
+		result = " (cost=" +
 			strconv.FormatFloat(c.Cost.Start, 'f', 2, 64) +
 			".." + strconv.FormatFloat(c.Cost.Total, 'f', 2, 64) +
 			" card=" + strconv.FormatFloat(c.Cost.Card, 'f', 2, 64) +
