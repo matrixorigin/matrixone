@@ -319,8 +319,11 @@ func (c *LogtailCollector) collectCatalogDB() error {
 	}
 	dbIt := c.catalog.MakeDBIt(true)
 	for dbIt.Valid() {
-		if err := c.visitor.VisitDB(dbIt.Get().GetPayload()); err != nil {
-			return err
+		dbentry := dbIt.Get().GetPayload()
+		if !dbentry.IsSystemDB() {
+			if err := c.visitor.VisitDB(dbentry); err != nil {
+				return err
+			}
 		}
 		dbIt.Next()
 	}
@@ -334,6 +337,10 @@ func (c *LogtailCollector) collectCatalogTbl() error {
 	dbIt := c.catalog.MakeDBIt(true)
 	for dbIt.Valid() {
 		db := dbIt.Get().GetPayload()
+		if db.IsSystemDB() {
+			dbIt.Next()
+			continue
+		}
 		tblIt := db.MakeTableIt(true)
 		for tblIt.Valid() {
 			if err := c.visitor.VisitTbl(tblIt.Get().GetPayload()); err != nil {
