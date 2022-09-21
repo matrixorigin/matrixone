@@ -27,37 +27,30 @@ type CompoundKeyEncoder = func(*bytes.Buffer, ...any) []byte
 
 const (
 	// bit size
-	NodeSize   = 8
-	SegSize    = 6
-	BlkSize    = 6
+	NodeSize   = 4
+	SegSize    = 8
+	BlkSize    = 8
 	OffsetSize = 4
 	PrefixSize = NodeSize + SegSize + BlkSize
 )
 
-// EncodeBlockKeyPrefix [64 Bit (NodeID) + 48 Bit (BlockID) + 48 Bit (SegmentID)]
-func EncodeBlockKeyPrefix(nodeId, segmentId, blockId uint64) []byte {
+// EncodeBlockKeyPrefix [32 Bit (NodeID) + 64 Bit (BlockID) + 64 Bit (SegmentID)]
+func EncodeBlockKeyPrefix(nodeId uint32, segmentId, blockId uint64) []byte {
 	buf := make([]byte, PrefixSize)
-	tempBuf := make([]byte, 8)
-	binary.BigEndian.PutUint64(tempBuf, nodeId)
-	copy(buf[0:], tempBuf)
-	binary.BigEndian.PutUint64(tempBuf, segmentId)
-	copy(buf[NodeSize:], tempBuf[2:])
-	binary.BigEndian.PutUint64(tempBuf, blockId)
-	copy(buf[NodeSize+SegSize:], tempBuf[2:])
+	binary.BigEndian.PutUint32(buf, nodeId)
+	binary.BigEndian.PutUint64(buf[NodeSize:], segmentId)
+	binary.BigEndian.PutUint64(buf[NodeSize+SegSize:], blockId)
 	return buf
 }
 
-func DecodeBlockKeyPrefix(rowid types.Rowid) (nodeId, segmentId, blockId uint64) {
-	nodeId = binary.BigEndian.Uint64(rowid[:NodeSize])
-	tempBuf := make([]byte, 8)
-	copy(tempBuf[2:], rowid[NodeSize:NodeSize+SegSize])
-	segmentId = binary.BigEndian.Uint64(tempBuf)
-	copy(tempBuf[2:], rowid[NodeSize+SegSize:PrefixSize])
-	blockId = binary.BigEndian.Uint64(tempBuf)
+func DecodeBlockKeyPrefix(rowid types.Rowid) (nodeId uint32, segmentId, blockId uint64) {
+	nodeId = binary.BigEndian.Uint32(rowid[:NodeSize])
+	segmentId = binary.BigEndian.Uint64(rowid[NodeSize : NodeSize+SegSize])
+	blockId = binary.BigEndian.Uint64(rowid[NodeSize+SegSize : PrefixSize])
 	return
 }
 
-func EncodePhyAddrKey(nodeId, segmentId, blockId uint64, offset uint32) types.Rowid {
+func EncodePhyAddrKey(nodeId uint32, segmentId, blockId uint64, offset uint32) types.Rowid {
 	prefix := EncodeBlockKeyPrefix(nodeId, segmentId, blockId)
 	return EncodePhyAddrKeyWithPrefix(prefix, offset)
 }
@@ -69,12 +62,12 @@ func EncodePhyAddrKeyWithPrefix(prefix []byte, offset uint32) types.Rowid {
 	return rowid
 }
 
-func DecodePhyAddrKeyFromValue(v any) (nodeId, segmentId, blockId uint64, offset uint32) {
+func DecodePhyAddrKeyFromValue(v any) (nodeId uint32, segmentId, blockId uint64, offset uint32) {
 	rowid := v.(types.Rowid)
 	return DecodePhyAddrKey(rowid)
 }
 
-func DecodePhyAddrKey(src types.Rowid) (nodeId, segmentId, blockId uint64, offset uint32) {
+func DecodePhyAddrKey(src types.Rowid) (nodeId uint32, segmentId, blockId uint64, offset uint32) {
 	nodeId, segmentId, blockId = DecodeBlockKeyPrefix(src)
 	offset = binary.BigEndian.Uint32(src[PrefixSize:])
 	return

@@ -63,7 +63,7 @@ type Catalog struct {
 
 	tableCnt  int32
 	columnCnt int32
-	NodeID    uint64
+	NodeID    uint32
 }
 
 func genDBFullName(tenantID uint32, name string) string {
