@@ -15,6 +15,9 @@
 package memtable
 
 import (
+	"database/sql"
+	"errors"
+
 	"github.com/tidwall/btree"
 )
 
@@ -40,7 +43,7 @@ func (t *Table[K, V, R]) NewIter(
 	return
 }
 
-func (t *TableIter[K, V]) Read() (key K, value *V, err error) {
+func (t *TableIter[K, V]) Read() (key K, value V, err error) {
 	physicalRow := t.iter.Item()
 	key = physicalRow.Key
 	value, err = physicalRow.Read(t.readTime, t.tx)
@@ -60,8 +63,8 @@ func (t *TableIter[K, V]) Next() bool {
 			return false
 		}
 		// skip unreadable values
-		value, _ := t.iter.Item().Read(t.readTime, t.tx)
-		if value == nil {
+		_, err := t.iter.Item().Read(t.readTime, t.tx)
+		if errors.Is(err, sql.ErrNoRows) {
 			continue
 		}
 		return true
@@ -74,8 +77,8 @@ func (t *TableIter[K, V]) First() bool {
 	}
 	for {
 		// skip unreadable values
-		value, _ := t.iter.Item().Read(t.readTime, t.tx)
-		if value == nil {
+		_, err := t.iter.Item().Read(t.readTime, t.tx)
+		if errors.Is(err, sql.ErrNoRows) {
 			if ok := t.iter.Next(); !ok {
 				return false
 			}
@@ -94,8 +97,8 @@ func (t *TableIter[K, V]) Seek(key K) bool {
 	}
 	for {
 		// skip unreadable values
-		value, _ := t.iter.Item().Read(t.readTime, t.tx)
-		if value == nil {
+		_, err := t.iter.Item().Read(t.readTime, t.tx)
+		if errors.Is(err, sql.ErrNoRows) {
 			if ok := t.iter.Next(); !ok {
 				return false
 			}
