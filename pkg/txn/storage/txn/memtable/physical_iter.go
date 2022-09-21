@@ -12,28 +12,24 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package txnstorage
+package memtable
 
-import (
-	"math"
-	"testing"
-	"time"
+import "github.com/tidwall/btree"
 
-	"github.com/matrixorigin/matrixone/pkg/testutil"
-	"github.com/matrixorigin/matrixone/pkg/txn/clock"
-	"github.com/matrixorigin/matrixone/pkg/txn/storage/txn/memtable"
-)
+type TablePhysicalIter[
+	K Ordered[K],
+	V any,
+] struct {
+	btree.GenericIter[*PhysicalRow[K, V]]
+}
 
-func TestMemHandler(t *testing.T) {
-	testDatabase(t, func() (*Storage, error) {
-		return New(
-			NewMemHandler(
-				testutil.NewMheap(),
-				memtable.Serializable,
-				clock.NewHLCClock(func() int64 {
-					return time.Now().UnixNano()
-				}, math.MaxInt64),
-			),
-		)
-	})
+func (t *Table[K, V, R]) NewPhysicalIter() *TablePhysicalIter[K, V] {
+	return &TablePhysicalIter[K, V]{
+		GenericIter: t.rows.Iter(),
+	}
+}
+
+func (t *TablePhysicalIter[K, V]) Close() error {
+	t.GenericIter.Release()
+	return nil
 }
