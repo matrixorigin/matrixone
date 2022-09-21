@@ -174,9 +174,9 @@ static-check: config cgo err-check
 	$(CGO_OPTS) license-eye -c .licenserc.yml dep check
 	$(CGO_OPTS) golangci-lint run -c .golangci.yml ./...
 
-fmtErrs := $(shell grep -onr 'fmt.Errorf' . --exclude-dir=.git --exclude-dir=vendor \
+fmtErrs := $(shell grep -onr 'fmt.Errorf' pkg/ --exclude-dir=.git --exclude-dir=vendor \
 				--exclude=*.pb.go --exclude=system_vars.go --exclude=Makefile)
-errNews := $(shell grep -onr 'errors.New' . --exclude-dir=.git --exclude-dir=vendor \
+errNews := $(shell grep -onr 'errors.New' pkg/ --exclude-dir=.git --exclude-dir=vendor \
 				--exclude=*.pb.go --exclude=system_vars.go --exclude=Makefile)
 
 .PHONY: err-check
@@ -188,4 +188,6 @@ ifneq ("$(strip $(fmtErrs))$(strip $(errNews))", "")
 	$(warning One of 'fmt.Errorf()' is called at: $(shell printf "%s\n" $(fmtErrs) | head -1))
 	$(warning One of 'errors.New()' is called at: $(shell printf "%s\n" $(errNews) | head -1))
 	$(error )
+else
+	$(info No 'fmt.Errorf()' nor 'errors.New()' found)
 endif
