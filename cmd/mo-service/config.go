@@ -30,10 +30,9 @@ import (
 )
 
 const (
-	cnServiceType         = "CN"
-	dnServiceType         = "DN"
-	logServiceType        = "LOG"
-	standaloneServiceType = "STANDALONE"
+	cnServiceType  = "CN"
+	dnServiceType  = "DN"
+	logServiceType = "LOG"
 
 	s3FileServiceName    = "S3"
 	localFileServiceName = "LOCAL"
@@ -42,10 +41,9 @@ const (
 
 var (
 	supportServiceTypes = map[string]any{
-		cnServiceType:         cnServiceType,
-		dnServiceType:         dnServiceType,
-		logServiceType:        logServiceType,
-		standaloneServiceType: standaloneServiceType,
+		cnServiceType:  cnServiceType,
+		dnServiceType:  dnServiceType,
+		logServiceType: logServiceType,
 	}
 )
 
