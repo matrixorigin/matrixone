@@ -203,7 +203,7 @@ func (entry *TableEntry) GetDB() *DBEntry {
 
 func (entry *TableEntry) PPString(level common.PPLevel, depth int, prefix string) string {
 	var w bytes.Buffer
-	_, _ = w.WriteString(fmt.Sprintf("%s%s%s", common.RepeatStr("\t", depth), prefix, entry.String()))
+	_, _ = w.WriteString(fmt.Sprintf("%s%s%s", common.RepeatStr("\t", depth), prefix, entry.StringWithLevel(level)))
 	if level == common.PPL0 {
 		return w.String()
 	}
@@ -223,8 +223,21 @@ func (entry *TableEntry) String() string {
 	return entry.StringLocked()
 }
 
+func (entry *TableEntry) StringWithLevel(level common.PPLevel) string {
+	entry.RLock()
+	defer entry.RUnlock()
+	return entry.StringLockedWithLevel(level)
+}
+func (entry *TableEntry) StringLockedWithLevel(level common.PPLevel) string {
+	if level <= common.PPL1 {
+		return fmt.Sprintf("TBL[%d][name=%s][C@%s,D@%s]",
+			entry.ID, entry.schema.Name, entry.GetCreatedAt().ToString(), entry.GetDeleteAt().ToString())
+	}
+	return fmt.Sprintf("TBL%s[name=%s]", entry.TableBaseEntry.StringLocked(), entry.schema.Name)
+}
+
 func (entry *TableEntry) StringLocked() string {
-	return fmt.Sprintf("TABLE%s[name=%s]", entry.TableBaseEntry.StringLocked(), entry.schema.Name)
+	return entry.StringLockedWithLevel(common.PPL1)
 }
 
 func (entry *TableEntry) GetCatalog() *Catalog { return entry.db.catalog }
