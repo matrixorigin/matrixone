@@ -24,7 +24,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/errors"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"golang.org/x/exp/constraints"
@@ -146,7 +145,7 @@ func getOneColRangeFromAutoIncrTable(param *AutoIncrParam, bat *batch.Batch, nam
 		if err2 := txnOperator.Rollback(ctx); err2 != nil {
 			return 0, 0, err2
 		}
-		return 0, 0, err
+		return 0, 0, moerr.NewInternalError("GetIndex from auto_increment table fail")
 	}
 
 	vec := bat.Vecs[pos]
@@ -155,45 +154,45 @@ func getOneColRangeFromAutoIncrTable(param *AutoIncrParam, bat *batch.Batch, nam
 	case types.T_int8:
 		maxNum = getMaxnum[int8](vec, uint64(bat.Length()), maxNum, step)
 		if maxNum > math.MaxInt8 {
-			return 0, 0, moerr.NewError(moerr.OUT_OF_RANGE, "auto_incrment column constant value overflows tinyint")
+			return 0, 0, moerr.NewOutOfRange("tinyint", "auto_incrment column constant value overflows tinyint", maxNum)
 		}
 	case types.T_int16:
 		maxNum = getMaxnum[int16](vec, uint64(bat.Length()), maxNum, step)
 		if maxNum > math.MaxInt16 {
-			return 0, 0, moerr.NewError(moerr.OUT_OF_RANGE, "auto_incrment column constant value overflows smallint")
+			return 0, 0, moerr.NewOutOfRange("smallint", "auto_incrment column constant value overflows smallint", maxNum)
 		}
 	case types.T_int32:
 		maxNum = getMaxnum[int32](vec, uint64(bat.Length()), maxNum, step)
 		if maxNum > math.MaxInt32 {
-			return 0, 0, moerr.NewError(moerr.OUT_OF_RANGE, "auto_incrment column constant value overflows int")
+			return 0, 0, moerr.NewOutOfRange("int", "auto_incrment column constant value overflows int", maxNum)
 		}
 	case types.T_int64:
 		maxNum = getMaxnum[int64](vec, uint64(bat.Length()), maxNum, step)
 		if maxNum > math.MaxInt64 {
-			return 0, 0, moerr.NewError(moerr.OUT_OF_RANGE, "auto_incrment column constant value overflows bigint")
+			return 0, 0, moerr.NewOutOfRange("bigint", "auto_incrment column constant value overflows bigint", maxNum)
 		}
 	case types.T_uint8:
 		maxNum = getMaxnum[uint8](vec, uint64(bat.Length()), maxNum, step)
 		if maxNum > math.MaxUint8 {
-			return 0, 0, moerr.NewError(moerr.OUT_OF_RANGE, "auto_incrment column constant value overflows tinyint unsigned")
+			return 0, 0, moerr.NewOutOfRange("tinyint unsigned", "auto_incrment column constant value overflows tinyint unsigned", maxNum)
 		}
 	case types.T_uint16:
 		maxNum = getMaxnum[uint16](vec, uint64(bat.Length()), maxNum, step)
 		if maxNum > math.MaxUint16 {
-			return 0, 0, moerr.NewError(moerr.OUT_OF_RANGE, "auto_incrment column constant value overflows smallint unsigned")
+			return 0, 0, moerr.NewOutOfRange("smallint unsigned", "auto_incrment column constant value overflows smallint unsigned", maxNum)
 		}
 	case types.T_uint32:
 		maxNum = getMaxnum[uint32](vec, uint64(bat.Length()), maxNum, step)
 		if maxNum > math.MaxUint32 {
-			return 0, 0, moerr.NewError(moerr.OUT_OF_RANGE, "auto_incrment column constant value overflows int unsigned")
+			return 0, 0, moerr.NewOutOfRange("int unsigned", "auto_incrment column constant value overflows int unsigned", maxNum)
 		}
 	case types.T_uint64:
 		maxNum = getMaxnum[uint64](vec, uint64(bat.Length()), maxNum, step)
 		if maxNum < oriNum {
-			return 0, 0, moerr.NewError(moerr.OUT_OF_RANGE, "auto_incrment column constant value overflows bigint unsigned")
+			return 0, 0, moerr.NewOutOfRange("bigint unsigned", "auto_incrment column constant value overflows bigint unsigned")
 		}
 	default:
-		return 0, 0, moerr.NewError(moerr.ER_CHECK_CONSTRAINT_REFERS_AUTO_INCREMENT_COLUMN, "the auto_incr col is not integer type")
+		return 0, 0, moerr.NewInvalidInput("the auto_incr col is not integer type")
 	}
 
 	if err := updateAutoIncrTable(param, maxNum, name); err != nil {
@@ -247,7 +246,7 @@ func updateBatchImpl(ColDefs []*plan.ColDef, bat *batch.Batch, offset, step []ui
 		case types.T_uint64:
 			updateVector[uint64](vec, uint64(bat.Length()), curNum, stepNum)
 		default:
-			return moerr.NewError(moerr.ER_CHECK_CONSTRAINT_REFERS_AUTO_INCREMENT_COLUMN, "the auto_incr col is not integer type")
+			return moerr.NewInvalidInput("invalid auto_increment type '%v'", vec.Typ.Oid)
 		}
 	}
 	return nil
@@ -258,10 +257,10 @@ func getCurrentIndex(param *AutoIncrParam, colName string) (uint64, uint64, erro
 	for {
 		bat, err := rds[0].Read(AUTO_INCR_TABLE_COLNAME, nil, param.proc.Mp())
 		if err != nil || bat == nil {
-			return 0, 0, moerr.NewError(moerr.ER_TABLE_CANT_HANDLE_AUTO_INCREMENT, "can not find the auto col")
+			return 0, 0, moerr.NewInvalidInput("can not find the auto col")
 		}
 		if len(bat.Vecs) < 2 {
-			panic(errors.New("", "the mo_increment_columns col num is not two"))
+			panic(moerr.NewInternalError("the mo_increment_columns col num is not two"))
 		}
 		vs2 := vector.MustTCols[uint64](bat.Vecs[1])
 		vs3 := vector.MustTCols[uint64](bat.Vecs[2])

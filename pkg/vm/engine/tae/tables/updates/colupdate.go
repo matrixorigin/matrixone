@@ -22,10 +22,10 @@ import (
 
 	"github.com/RoaringBitmap/roaring"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
@@ -145,7 +145,7 @@ func (node *ColumnUpdateNode) GetValues() map[uint32]any {
 func (node *ColumnUpdateNode) GetValueLocked(row uint32) (v any, err error) {
 	v = node.vals[row]
 	if v == nil {
-		err = data.ErrNotFound
+		err = moerr.NewNotFound()
 	}
 	return
 }

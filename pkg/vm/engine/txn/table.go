@@ -103,6 +103,10 @@ func (t *Table) Delete(ctx context.Context, vec *vector.Vector, colName string) 
 		return err
 	}
 	shards, err := t.engine.shardPolicy.Vector(
+		ctx,
+		t.id,
+		t.TableDefs,
+		colName,
 		vec,
 		clusterDetails.DNStores,
 	)
@@ -225,7 +229,12 @@ func (t *Table) Update(ctx context.Context, data *batch.Batch) error {
 		return err
 	}
 
+	data.InitZsOne(data.Length())
+
 	shards, err := t.engine.shardPolicy.Batch(
+		ctx,
+		t.id,
+		t.TableDefs,
 		data,
 		clusterDetails.DNStores,
 	)
@@ -260,7 +269,12 @@ func (t *Table) Write(ctx context.Context, data *batch.Batch) error {
 		return err
 	}
 
+	data.InitZsOne(data.Length())
+
 	shards, err := t.engine.shardPolicy.Batch(
+		ctx,
+		t.id,
+		t.TableDefs,
 		data,
 		clusterDetails.DNStores,
 	)

@@ -26,6 +26,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	txnstorage "github.com/matrixorigin/matrixone/pkg/txn/storage/txn"
 	txnengine "github.com/matrixorigin/matrixone/pkg/vm/engine/txn"
+	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
+	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
 )
 
 func (s *service) initMemoryEngine(
@@ -47,9 +49,11 @@ func (s *service) initMemoryEngine(
 	}
 
 	// engine
+	guestMMU := guest.New(pu.SV.GuestMmuLimitation, pu.HostMmu)
+	heap := mheap.New(guestMMU)
 	pu.StorageEngine = txnengine.New(
 		ctx,
-		new(txnengine.ShardToSingleStatic), //TODO use hashing shard policy
+		txnengine.NewDefaultShardPolicy(heap),
 		txnengine.GetClusterDetailsFromHAKeeper(
 			ctx,
 			hakeeper,
@@ -95,9 +99,11 @@ func (s *service) initMemoryEngineNonDist(
 		ServiceAddress: "1",
 		Shards:         shards,
 	}
+	guestMMU := guest.New(pu.SV.GuestMmuLimitation, pu.HostMmu)
+	heap := mheap.New(guestMMU)
 	engine := txnengine.New(
 		ctx,
-		new(txnengine.ShardToSingleStatic),
+		txnengine.NewDefaultShardPolicy(heap),
 		func() (logservicepb.ClusterDetails, error) {
 			return logservicepb.ClusterDetails{
 				DNStores: []logservicepb.DNStore{

@@ -20,12 +20,12 @@ import (
 	"runtime"
 	"sync/atomic"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/file"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
@@ -79,7 +79,7 @@ func (db *DB) GetTxnByCtx(txnOperator client.TxnOperator) (txn txnif.AsyncTxn, e
 	txnID := txnOperator.Txn().ID
 	txn = db.TxnMgr.GetTxnByCtx(txnID)
 	if txn == nil {
-		err = data.ErrNotFound
+		err = moerr.NewNotFound()
 	}
 	return
 }
@@ -87,7 +87,7 @@ func (db *DB) GetTxnByCtx(txnOperator client.TxnOperator) (txn txnif.AsyncTxn, e
 func (db *DB) GetTxn(id uint64) (txn txnif.AsyncTxn, err error) {
 	txn = db.TxnMgr.GetTxn(id)
 	if txn == nil {
-		err = data.ErrNotFound
+		err = moerr.NewNotFound()
 	}
 	return
 }

@@ -40,7 +40,7 @@ null
 2022-01-01
 30
 (select a from t1 union all select col1 from t2) order by col1;
-Unknown column 'col1' in 'order clause'
+invalid input: column col1 does not exist
 select a from t1 union all select col1 from t2;
 a
 30
@@ -82,7 +82,7 @@ null
 2022-01-01
 2022-01-01
 (select a from t1 union all select col1 from t2) order by col1;
-Unknown column 'col1' in 'order clause'
+invalid input: column col1 does not exist
 (select a from t1 union select col2 from t2) order by a;
 a
 null
@@ -91,7 +91,7 @@ null
 2022-01-01 00:00:00
 30
 (select a from t1 union select col2 from t2) order by col2;
-Unknown column 'col2' in 'order clause'
+invalid input: column col2 does not exist
 select a from t1 union select col2 from t2;
 a
 30
@@ -121,7 +121,7 @@ a
 null
 2022-01-01 00:00:00
 (select a from t1 union select col2 from t2) order by col2;
-Unknown column 'col2' in 'order clause'
+invalid input: column col2 does not exist
 drop table t1;
 drop table t2;
 drop table if exists t3;
@@ -394,9 +394,7 @@ case+union+tet
 case+union+tet
 BUG
 SELECT 1, 2 UNION SELECT 'a', 'b';
-1    2
-1    2
-a    b
+invalid argument cast to int, bad value a
 select 'a' union select concat('a', -4);
 a
 a

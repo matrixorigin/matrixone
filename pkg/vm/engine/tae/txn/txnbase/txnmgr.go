@@ -243,13 +243,12 @@ func (mgr *TxnManager) onBindPrepareTimeStamp(op *OpTxn) (ts types.TS) {
 	if op.Txn.GetError() != nil {
 		op.Op = OpRollback
 	}
-	if op.Op == OpCommit {
-		// Should not fail here
-		_ = op.Txn.ToCommittingLocked(ts)
-	} else if op.Op == OpRollback {
+
+	if op.Op == OpRollback {
 		// Should not fail here
 		_ = op.Txn.ToRollbackingLocked(ts)
-	} else if op.Op == OpPrepare {
+	} else {
+		// Should not fail here
 		_ = op.Txn.ToPreparingLocked(ts)
 	}
 	return

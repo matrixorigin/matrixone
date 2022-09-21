@@ -19,20 +19,52 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
-func newDB() *DB {
-	return &DB{
-		readTs: timestamp.Timestamp{
-			PhysicalTime: 0,
-			LogicalTime:  0,
-		},
+func newDB(cli client.TxnClient, dnList []DNStore) *DB {
+	dnMap := make(map[string]int)
+	for i := range dnList {
+		dnMap[dnList[i].UUID] = i
 	}
+	db := &DB{
+		cli:    cli,
+		dnMap:  dnMap,
+		tables: make(map[[2]uint64]Partitions),
+	}
+	return db
 }
 
 func (db *DB) Update(ctx context.Context, dnList []DNStore,
 	databaseId, tableId uint64, ts timestamp.Timestamp) error {
+	op, err := db.cli.New()
+	if err != nil {
+		return err
+	}
+	db.Lock()
+	parts, ok := db.tables[[2]uint64{databaseId, tableId}]
+	if !ok { // create a new table
+		parts = make(Partitions, len(db.dnMap))
+		for i := range parts {
+			parts[i] = new(Partition)
+		}
+		db.tables[[2]uint64{databaseId, tableId}] = parts
+	}
+	db.Unlock()
+	for _, dn := range dnList {
+		part := parts[db.dnMap[dn.UUID]]
+		part.Lock()
+		if part.ts.Less(ts) {
+			if err := updatePartition(ctx, op, part.data, dn,
+				genSyncLogTailReq(part.ts, ts, databaseId, tableId)); err != nil {
+				part.Unlock()
+				return err
+			}
+			part.ts = ts
+		}
+		part.Unlock()
+	}
 	return nil
 }
 

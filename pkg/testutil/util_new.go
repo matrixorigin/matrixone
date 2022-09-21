@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
@@ -83,6 +84,10 @@ func NewFS() *fileservice.FileServices {
 		panic(err)
 	}
 	return fs
+}
+
+func NewTaskService() taskservice.TaskService {
+	return taskservice.NewTaskService(taskservice.NewMemTaskStorage(), nil)
 }
 
 func NewBatch(ts []types.Type, random bool, n int, m *mheap.Mheap) *batch.Batch {

@@ -37,7 +37,6 @@ func TestCreateBackendLocked(t *testing.T) {
 
 	b, err = c.createBackendLocked("b1")
 	assert.Error(t, err)
-	assert.Equal(t, errNoAvailableBackend, err)
 	assert.Nil(t, b)
 	assert.Equal(t, 1, len(c.mu.backends["b1"]))
 }
@@ -50,7 +49,6 @@ func TestGetBackendLockedWithClosed(t *testing.T) {
 
 	b, err := c.getBackendLocked("b1")
 	assert.Error(t, err)
-	assert.Equal(t, errClientClosed, err)
 	assert.Nil(t, b)
 }
 
@@ -252,8 +250,7 @@ func TestGetBackendsWithAllInactiveAndWillCreateNew(t *testing.T) {
 	assert.NotNil(t, b)
 
 	b.(*testBackend).activeTime = time.Time{}
-	b, err = c.getBackend("b1")
-	assert.Equal(t, errNoAvailableBackend, err)
+	b, _ = c.getBackend("b1")
 	assert.Nil(t, b)
 
 	for {

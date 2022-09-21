@@ -16,7 +16,6 @@ package service
 
 import (
 	"context"
-	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -25,6 +24,8 @@ import (
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 
+	"github.com/matrixorigin/matrixone/pkg/cnservice"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/dnservice"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -76,8 +77,18 @@ type ClusterOperation interface {
 	// StartLogServiceIndexed starts log service by its index.
 	StartLogServiceIndexed(index int) error
 
+	// CloseCnService closes log service by uuid.
+	CloseCnService(uuid string) error
+	// StartCnService starts log service by uuid.
+	StartCnService(uuid string) error
+
+	// CloseCnServiceIndexed closes log service by its index.
+	CloseCnServiceIndexed(index int) error
+	// StartCnServiceIndexed starts log service by its index.
+	StartCnServiceIndexed(index int) error
+
 	// NewNetworkPartition constructs network partition from service index.
-	NewNetworkPartition(dnIndexes, logIndexes []uint32) NetworkPartition
+	NewNetworkPartition(dnIndexes, logIndexes, cnIndexes []uint32) NetworkPartition
 	// RemainingNetworkPartition returns partition for the remaining services.
 	RemainingNetworkPartition(partitions ...NetworkPartition) NetworkPartition
 	// StartNetworkPartition enables network partition feature.
@@ -92,6 +103,8 @@ type ClusterAwareness interface {
 	ListDNServices() []string
 	// ListLogServices lists uuid of all log services.
 	ListLogServices() []string
+	// ListCnServices lists uuid of all cn services.
+	ListCnServices() []string
 	// ListHAKeeperServices lists all hakeeper log services.
 	ListHAKeeperServices() []LogService
 
@@ -103,6 +116,10 @@ type ClusterAwareness interface {
 	GetDNServiceIndexed(index int) (DNService, error)
 	// GetLogServiceIndexed fetches log service instance by index.
 	GetLogServiceIndexed(index int) (LogService, error)
+	// GetCNService fetches cn service instance by index.
+	GetCNService(uuid string) (CNService, error)
+	// GetCNServiceIndexed fetches cn service instance by index.
+	GetCNServiceIndexed(index int) (CNService, error)
 
 	// GetClusterState fetches current cluster state
 	GetClusterState(ctx context.Context) (*logpb.CheckerState, error)
@@ -120,10 +137,15 @@ type ClusterState interface {
 	// GetDNStoreInfoIndexed gets dn store information by index.
 	GetDNStoreInfoIndexed(ctx context.Context, index int) (logpb.DNStoreInfo, error)
 
-	// GetLogStoreInfo gets dn store information by uuid.
+	// GetLogStoreInfo gets log store information by uuid.
 	GetLogStoreInfo(ctx context.Context, uuid string) (logpb.LogStoreInfo, error)
-	// GetLogStoreInfoIndexed gets dn store information by index.
+	// GetLogStoreInfoIndexed gets log store information by index.
 	GetLogStoreInfoIndexed(ctx context.Context, index int) (logpb.LogStoreInfo, error)
+
+	// GetCNStoreInfo gets cn store information by uuid.
+	GetCNStoreInfo(ctx context.Context, uuid string) (logpb.CNStoreInfo, error)
+	// GetCNStoreInfoIndexed gets cn store information by index.
+	GetCNStoreInfoIndexed(ctx context.Context, index int) (logpb.CNStoreInfo, error)
 
 	// GetHAKeeperState returns hakeeper state from running hakeeper.
 	GetHAKeeperState() logpb.HAKeeperState
@@ -138,6 +160,10 @@ type ClusterState interface {
 	LogStoreExpired(uuid string) (bool, error)
 	// LogStoreExpiredIndexed checks log store expired or not by index.
 	LogStoreExpiredIndexed(index int) (bool, error)
+	// CNStoreExpired checks cn store expired or not by uuid.
+	CNStoreExpired(uuid string) (bool, error)
+	// CNStoreExpiredIndexed checks cn store expired or not by index.
+	CNStoreExpiredIndexed(index int) (bool, error)
 
 	// IsClusterHealthy checks whether cluster is healthy or not.
 	IsClusterHealthy() bool
@@ -204,6 +230,13 @@ type testCluster struct {
 		svcs []LogService
 	}
 
+	cn struct {
+		sync.Mutex
+		cfgs []*cnservice.Config
+		opts []cnOptions
+		svcs []CNService
+	}
+
 	network struct {
 		addresses serviceAddresses
 
@@ -243,6 +276,8 @@ func NewCluster(t *testing.T, opt Options) (Cluster, error) {
 	// build dn service configurations
 	c.dn.cfgs, c.dn.opts = c.buildDnConfigs(c.network.addresses)
 
+	c.cn.cfgs, c.cn.opts = c.buildCNConfigs(c.network.addresses)
+
 	return c, nil
 }
 
@@ -261,6 +296,10 @@ func (c *testCluster) Start() error {
 
 	// start dn services
 	if err := c.startDNServices(); err != nil {
+		return err
+	}
+
+	if err := c.startCNServices(); err != nil {
 		return err
 	}
 
@@ -283,6 +322,10 @@ func (c *testCluster) Close() error {
 
 	// close all log services
 	if err := c.closeLogServices(); err != nil {
+		return err
+	}
+
+	if err := c.closeCNServices(); err != nil {
 		return err
 	}
 
@@ -324,7 +367,7 @@ func (c *testCluster) GetDNStoreInfo(
 	if storeInfo, ok := stores[uuid]; ok {
 		return storeInfo, nil
 	}
-	return logpb.DNStoreInfo{}, ErrServiceNotExist
+	return logpb.DNStoreInfo{}, moerr.NewNoService(uuid)
 }
 
 func (c *testCluster) GetDNStoreInfoIndexed(
@@ -348,7 +391,7 @@ func (c *testCluster) GetLogStoreInfo(
 	if storeInfo, ok := stores[uuid]; ok {
 		return storeInfo, nil
 	}
-	return logpb.LogStoreInfo{}, ErrServiceNotExist
+	return logpb.LogStoreInfo{}, moerr.NewNoService(uuid)
 }
 
 func (c *testCluster) GetLogStoreInfoIndexed(
@@ -359,6 +402,26 @@ func (c *testCluster) GetLogStoreInfoIndexed(
 		return logpb.LogStoreInfo{}, err
 	}
 	return c.GetLogStoreInfo(ctx, ls.ID())
+}
+
+func (c *testCluster) GetCNStoreInfo(ctx context.Context, uuid string) (logpb.CNStoreInfo, error) {
+	state, err := c.GetClusterState(ctx)
+	if err != nil {
+		return logpb.CNStoreInfo{}, err
+	}
+	stores := state.CNState.Stores
+	if storeInfo, ok := stores[uuid]; ok {
+		return storeInfo, nil
+	}
+	return logpb.CNStoreInfo{}, moerr.NewNoService(uuid)
+}
+
+func (c *testCluster) GetCNStoreInfoIndexed(ctx context.Context, index int) (logpb.CNStoreInfo, error) {
+	ls, err := c.GetCNServiceIndexed(index)
+	if err != nil {
+		return logpb.CNStoreInfo{}, err
+	}
+	return c.GetCNStoreInfo(ctx, ls.ID())
 }
 
 func (c *testCluster) GetHAKeeperState() logpb.HAKeeperState {
@@ -377,11 +440,11 @@ func (c *testCluster) DNStoreExpired(uuid string) (bool, error) {
 
 	dnStore, ok := state.DNState.Stores[uuid]
 	if !ok {
-		return false, wrappedError(ErrStoreNotReported, uuid)
+		return false, moerr.NewShardNotReported(uuid, 0xDEADBEEF)
 	}
 
 	hkcfg := c.GetHAKeeperConfig()
-	expired := hkcfg.DnStoreExpired(dnStore.Tick, state.Tick)
+	expired := hkcfg.DNStoreExpired(dnStore.Tick, state.Tick)
 
 	c.logger.Info(
 		"check dn store expired or not",
@@ -408,7 +471,7 @@ func (c *testCluster) LogStoreExpired(uuid string) (bool, error) {
 
 	logStore, ok := state.LogState.Stores[uuid]
 	if !ok {
-		return false, wrappedError(ErrStoreNotReported, uuid)
+		return false, moerr.NewShardNotReported(uuid, 0xDEADBEEF)
 	}
 
 	hkcfg := c.GetHAKeeperConfig()
@@ -431,6 +494,37 @@ func (c *testCluster) LogStoreExpiredIndexed(index int) (bool, error) {
 		return false, err
 	}
 	return c.LogStoreExpired(ls.ID())
+}
+
+func (c *testCluster) CNStoreExpired(uuid string) (bool, error) {
+	state := c.getClusterState()
+	require.NotNil(c.t, state)
+
+	cnStore, ok := state.CNState.Stores[uuid]
+	if !ok {
+		return false, moerr.NewShardNotReported(uuid, 0)
+	}
+
+	hkcfg := c.GetHAKeeperConfig()
+	expired := hkcfg.CNStoreExpired(cnStore.Tick, state.Tick)
+
+	c.logger.Info(
+		"check cn store expired or not",
+		zap.Any("hakeeper config", hkcfg),
+		zap.Uint64("cn store tick", cnStore.Tick),
+		zap.Uint64("current tick", state.Tick),
+		zap.Bool("expired", expired),
+	)
+
+	return expired, nil
+}
+
+func (c *testCluster) CNStoreExpiredIndexed(index int) (bool, error) {
+	cs, err := c.GetCNServiceIndexed(index)
+	if err != nil {
+		return false, err
+	}
+	return c.CNStoreExpired(cs.ID())
 }
 
 func (c *testCluster) IsClusterHealthy() bool {
@@ -767,6 +861,14 @@ func (c *testCluster) ListLogServices() []string {
 	return ids
 }
 
+func (c *testCluster) ListCnServices() []string {
+	ids := make([]string, 0, len(c.cn.svcs))
+	for _, svc := range c.cn.svcs {
+		ids = append(ids, svc.ID())
+	}
+	return ids
+}
+
 func (c *testCluster) ListHAKeeperServices() []LogService {
 	return c.selectHAkeeperServices()
 }
@@ -780,7 +882,7 @@ func (c *testCluster) GetDNService(uuid string) (DNService, error) {
 			return c.dn.svcs[i], nil
 		}
 	}
-	return nil, wrappedError(ErrServiceNotExist, uuid)
+	return nil, moerr.NewNoService(uuid)
 }
 
 func (c *testCluster) GetLogService(uuid string) (LogService, error) {
@@ -792,7 +894,19 @@ func (c *testCluster) GetLogService(uuid string) (LogService, error) {
 			return svc, nil
 		}
 	}
-	return nil, wrappedError(ErrServiceNotExist, uuid)
+	return nil, moerr.NewNoService(uuid)
+}
+
+func (c *testCluster) GetCNService(uuid string) (CNService, error) {
+	c.log.Lock()
+	defer c.log.Unlock()
+
+	for _, svc := range c.cn.svcs {
+		if svc.ID() == uuid {
+			return svc, nil
+		}
+	}
+	return nil, moerr.NewNoService(uuid)
 }
 
 func (c *testCluster) GetDNServiceIndexed(index int) (DNService, error) {
@@ -800,9 +914,7 @@ func (c *testCluster) GetDNServiceIndexed(index int) (DNService, error) {
 	defer c.dn.Unlock()
 
 	if index >= len(c.dn.svcs) || index < 0 {
-		return nil, wrappedError(
-			ErrInvalidServiceIndex, fmt.Sprintf("index: %d", index),
-		)
+		return nil, moerr.NewInvalidServiceIndex(index)
 	}
 	return c.dn.svcs[index], nil
 }
@@ -812,11 +924,19 @@ func (c *testCluster) GetLogServiceIndexed(index int) (LogService, error) {
 	defer c.log.Unlock()
 
 	if index >= len(c.log.svcs) || index < 0 {
-		return nil, wrappedError(
-			ErrInvalidServiceIndex, fmt.Sprintf("index: %d", index),
-		)
+		return nil, moerr.NewInvalidServiceIndex(index)
 	}
 	return c.log.svcs[index], nil
+}
+
+func (c *testCluster) GetCNServiceIndexed(index int) (CNService, error) {
+	c.log.Lock()
+	defer c.log.Unlock()
+
+	if index >= len(c.cn.svcs) || index < 0 {
+		return nil, moerr.NewInvalidServiceIndex(index)
+	}
+	return c.cn.svcs[index], nil
 }
 
 // NB: we could also fetch cluster state from non-leader hakeeper.
@@ -895,23 +1015,52 @@ func (c *testCluster) StartLogServiceIndexed(index int) error {
 	return ls.Start()
 }
 
+func (c *testCluster) CloseCnService(uuid string) error {
+	cs, err := c.GetCNService(uuid)
+	if err != nil {
+		return err
+	}
+	return cs.Close()
+}
+
+func (c *testCluster) StartCnService(uuid string) error {
+	cs, err := c.GetCNService(uuid)
+	if err != nil {
+		return err
+	}
+	return cs.Start()
+}
+
+func (c *testCluster) CloseCnServiceIndexed(index int) error {
+	cs, err := c.GetCNServiceIndexed(index)
+	if err != nil {
+		return err
+	}
+	return cs.Close()
+}
+
+func (c *testCluster) StartCnServiceIndexed(index int) error {
+	cs, err := c.GetCNServiceIndexed(index)
+	if err != nil {
+		return err
+	}
+	return cs.Start()
+}
+
 func (c *testCluster) NewNetworkPartition(
-	dnIndexes, logIndexes []uint32,
+	dnIndexes, logIndexes, cnIndexes []uint32,
 ) NetworkPartition {
 	return newNetworkPartition(
 		c.opt.initial.logServiceNum, logIndexes,
 		c.opt.initial.dnServiceNum, dnIndexes,
+		c.opt.initial.cnServiceNum, cnIndexes,
 	)
 }
 
 func (c *testCluster) RemainingNetworkPartition(
 	partitions ...NetworkPartition,
 ) NetworkPartition {
-	return remainingNetworkPartition(
-		c.opt.initial.logServiceNum,
-		c.opt.initial.dnServiceNum,
-		partitions...,
-	)
+	return remainingNetworkPartition(c.opt.initial.logServiceNum, c.opt.initial.dnServiceNum, 0, partitions...)
 }
 
 func (c *testCluster) StartNetworkPartition(parts ...NetworkPartition) {
@@ -935,12 +1084,8 @@ func (c *testCluster) CloseNetworkPartition() {
 
 // buildServiceAddresses builds addresses for all services.
 func (c *testCluster) buildServiceAddresses() serviceAddresses {
-	return newServiceAddresses(
-		c.t,
-		c.opt.initial.logServiceNum,
-		c.opt.initial.dnServiceNum,
-		c.opt.hostAddr,
-	)
+	return newServiceAddresses(c.t, c.opt.initial.logServiceNum,
+		c.opt.initial.dnServiceNum, c.opt.initial.cnServiceNum, c.opt.hostAddr)
 }
 
 // buildFileServices builds all file services.
@@ -981,6 +1126,23 @@ func (c *testCluster) buildLogConfigs(
 
 		localAddr := cfg.ServiceAddress
 		opt := buildLogOptions(cfg, c.backendFilterFactory(localAddr))
+		opts = append(opts, opt)
+	}
+	return cfgs, opts
+}
+
+func (c *testCluster) buildCNConfigs(
+	address serviceAddresses,
+) ([]*cnservice.Config, []cnOptions) {
+	batch := c.opt.initial.dnServiceNum
+
+	cfgs := make([]*cnservice.Config, 0, batch)
+	opts := make([]cnOptions, 0, batch)
+	for i := 0; i < batch; i++ {
+		cfg := buildCnConfig(i, c.opt, address)
+		cfgs = append(cfgs, cfg)
+
+		opt := buildCnOptions()
 		opts = append(opts, opt)
 	}
 	return cfgs, opts
@@ -1032,7 +1194,7 @@ func (c *testCluster) initLogServices() []LogService {
 	for i := 0; i < batch; i++ {
 		cfg := c.log.cfgs[i]
 		opt := c.log.opts[i]
-		ls, err := newLogService(cfg, testutil.NewFS(), opt)
+		ls, err := newLogService(cfg, testutil.NewFS(), testutil.NewTaskService(), opt)
 		require.NoError(c.t, err)
 
 		c.logger.Info(
@@ -1042,6 +1204,40 @@ func (c *testCluster) initLogServices() []LogService {
 		)
 
 		svcs = append(svcs, ls)
+	}
+	return svcs
+}
+
+func (c *testCluster) initCNServices(fileservices *fileServices) []CNService {
+	batch := c.opt.initial.cnServiceNum
+
+	c.logger.Info("initialize cn services", zap.Int("batch", batch))
+
+	svcs := make([]CNService, 0, batch)
+	for i := 0; i < batch; i++ {
+		cfg := c.cn.cfgs[i]
+		opt := c.cn.opts[i]
+		fs, err := fileservice.NewFileServices(
+			"LOCAL",
+			fileservices.getLocalFileService(i),
+			fileservices.getS3FileService(),
+		)
+		if err != nil {
+			panic(err)
+		}
+
+		cs, err := newCNService(cfg, context.TODO(), fs, opt)
+		if err != nil {
+			panic(err)
+		}
+
+		c.logger.Info(
+			"cn service initialized",
+			zap.Int("index", i),
+			zap.Any("config", cfg),
+		)
+
+		svcs = append(svcs, cs)
 	}
 	return svcs
 }
@@ -1086,6 +1282,17 @@ func (c *testCluster) startLogServices() error {
 	return nil
 }
 
+func (c *testCluster) startCNServices() error {
+	c.cn.svcs = c.initCNServices(c.fileservices)
+
+	for _, cs := range c.cn.svcs {
+		if err := cs.Start(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // closeDNServices closes all dn services.
 func (c *testCluster) closeDNServices() error {
 	c.logger.Info("start to close dn services")
@@ -1111,6 +1318,20 @@ func (c *testCluster) closeLogServices() error {
 			return err
 		}
 		c.logger.Info("log service closed", zap.Int("index", i))
+	}
+
+	return nil
+}
+
+func (c *testCluster) closeCNServices() error {
+	c.logger.Info("start to close cn services")
+
+	for i, cs := range c.cn.svcs {
+		c.logger.Info("close cn service", zap.Int("index", i))
+		if err := cs.Close(); err != nil {
+			return err
+		}
+		c.logger.Info("cn service closed", zap.Int("index", i))
 	}
 
 	return nil

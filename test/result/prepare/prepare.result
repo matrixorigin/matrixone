@@ -22,8 +22,7 @@ a	b
 3	33
 deallocate prepare stmt1;
 execute stmt1 using @a_var;
-prepare statement 'stmt1' does not exist
-
+invalid state prepared statement 'stmt1' does not exist
 prepare stmt1 from 'update t1 set a=999 where b = ?';
 set @b_var = 33;
 execute stmt1 using @b_var;
@@ -33,7 +32,6 @@ a	b
 2	22
 999	33
 deallocate prepare stmt1;
-
 prepare stmt1 from 'delete from t1 where b = ?';
 execute stmt1 using @b_var;
 select * from t1;
@@ -41,7 +39,6 @@ a	b
 1	11
 2	22
 deallocate prepare stmt1;
-
 prepare stmt1 from "insert into t1 values (?, ?), (?, 99)";
 set @a_var=5;
 set @b_var=55;
@@ -54,9 +51,7 @@ a	b
 5	55
 9	99
 deallocate prepare stmt1;
-
 drop table t1;
-
 create table t1(a timestamp);
 prepare stmt1 from "insert into t1 values (current_timestamp())";
 execute stmt1;
@@ -65,7 +60,6 @@ select count(*) from (select distinct a from t1) t;
 count(*)
 2
 drop table t1;
-
 prepare stmt2 from 'select @var_t1';
 set @var_t1 = 0;
 execute stmt2;
@@ -76,3 +70,11 @@ execute stmt2;
 @var_t1
 aa
 deallocate prepare stmt2;
+create table t1 (a decimal(20,4), b int);
+insert into t1 values (12.2222, 1);
+prepare stmt1 from 'update t1 set a=a+? where b = 1';
+set @a=0.1111;
+execute stmt1 using @a;
+select a, b from t1;
+a	b
+12.3333	1

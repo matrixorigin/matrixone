@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"sort"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper/checkers/util"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper/operator"
@@ -51,7 +52,7 @@ func (d dnShardToLogShard) getLogShardID(dnShardID uint64) (uint64, error) {
 	if logShardID, ok := d[dnShardID]; ok {
 		return logShardID, nil
 	}
-	return 0, errShardNotRecorded
+	return 0, moerr.NewInvalidState("shard %d not recorded", dnShardID)
 }
 
 // parseDnState parses cluster dn state.
@@ -63,7 +64,7 @@ func parseDnState(cfg hakeeper.Config,
 
 	for storeID, storeInfo := range dnState.Stores {
 		expired := false
-		if cfg.DnStoreExpired(storeInfo.Tick, currTick) {
+		if cfg.DNStoreExpired(storeInfo.Tick, currTick) {
 			expired = true
 		}
 
@@ -128,7 +129,7 @@ func checkInitiatingShards(
 		shardID := record.ShardID
 		_, err := rs.getShard(shardID)
 		if err != nil {
-			if err == errShardNotReported {
+			if moerr.IsMoErrCode(err, moerr.ErrShardNotReported) {
 				// if a shard not reported, register it,
 				// and launch its replica after a while.
 				waitingShards.register(shardID, currTick)
@@ -141,7 +142,7 @@ func checkInitiatingShards(
 
 	// list newly-created shards which had been waiting for a while
 	expired := waitingShards.listEligibleShards(func(start uint64) bool {
-		return cfg.DnStoreExpired(start, currTick)
+		return cfg.DNStoreExpired(start, currTick)
 	})
 
 	var ops []*operator.Operator
@@ -245,7 +246,7 @@ func (rs *reportedShards) getShard(shardID uint64) (*dnShard, error) {
 	if shard, ok := rs.shards[shardID]; ok {
 		return shard, nil
 	}
-	return nil, errShardNotReported
+	return nil, moerr.NewShardNotReported("", shardID)
 }
 
 // dnShard records metadata for dn shard.

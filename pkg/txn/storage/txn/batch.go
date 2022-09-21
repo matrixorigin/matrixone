@@ -28,8 +28,15 @@ type BatchIter func() (tuple []Nullable)
 func NewBatchIter(b *batch.Batch) BatchIter {
 	i := 0
 	iter := func() (tuple []Nullable) {
-		if i >= b.Vecs[0].Length() {
-			return
+		for {
+			if i >= b.Vecs[0].Length() {
+				return
+			}
+			if i < len(b.Zs) && b.Zs[i] == 0 {
+				i++
+				continue
+			}
+			break
 		}
 		for _, vec := range b.Vecs {
 			value := vectorAt(vec, i)
