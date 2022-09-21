@@ -125,7 +125,7 @@ func explainStep(step *plan.Node, settings *FormatSettings, options *ExplainOpti
 		}
 
 		// print out the actual operation information
-		if options.Anzlyze {
+		if options.Analyze {
 			if nodedescImpl.Node.AnalyzeInfo != nil {
 				analyze, err := nodedescImpl.GetActualAnalyzeInfo(options)
 				if err != nil {
