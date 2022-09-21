@@ -12,14 +12,11 @@ SELECT LOG(10,100);
 LOG(10,100)
 2.0
 SELECT LOG(1,100);
-LOG(1,100)
-null
+invalid argument log base, bad value 1
 select log(2,-1);
-log(2,-1)
-null
+invalid argument log input, bad value <= 0
 select log(-2,1);
-log(-2,1)
-null
+invalid argument log input, bad value <= 0
 select log(0.00000000000000001);
 log(0.00000000000000001)
 -39.14394658089878
@@ -30,8 +27,7 @@ select log(0.141241241241313, 124314124124.12412341);
 log(0.141241241241313, 124314124124.12412341)
 -13.051786251584149
 select log(-0.141241241241313, -124314124124.12412341);
-log(-0.141241241241313, -124314124124.12412341)
-null
+invalid argument log input, bad value <= 0
 select log(null,2);
 log(null,2)
 null
