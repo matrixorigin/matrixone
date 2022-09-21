@@ -101,11 +101,10 @@ func TestInitSchemaByInnerExecutor(t *testing.T) {
 
 func TestInitExternalTblSchema(t *testing.T) {
 	type args struct {
-		ctx       context.Context
-		ieFactory func() ie.InternalExecutor
-		mode      string
+		ctx  context.Context
+		ch   chan string
+		mode string
 	}
-	c := make(chan string, 10)
 	tests := []struct {
 		name string
 		args args
@@ -113,57 +112,55 @@ func TestInitExternalTblSchema(t *testing.T) {
 		{
 			name: "dummy",
 			args: args{
-				ctx:       context.Background(),
-				ieFactory: newDummyExecutorFactory(c),
-				mode:      FileService,
+				ctx:  context.Background(),
+				ch:   make(chan string, 10),
+				mode: FileService,
 			},
 		},
 		{
 			name: "dummyS3",
 			args: args{
-				ctx:       context.Background(),
-				ieFactory: newDummyExecutorFactory(c),
-				mode:      FileService,
+				ctx:  context.Background(),
+				ch:   make(chan string, 10),
+				mode: FileService,
 			},
 		},
 	}
 
-	wg := sync.WaitGroup{}
-	// 1: want goroutine started
-	wg.Add(1)
-	go func() {
-		wg.Done() // started
-	loop:
-		for {
-			sql, ok := <-c
-			wg.Done()
-			if ok {
-				t.Logf("exec sql: %s", sql)
-				if sql == "create database if not exists system" {
-					continue
-				}
-				idx := strings.Index(sql, "CREATE EXTERNAL TABLE")
-				require.Equal(t, 0, idx)
-			} else {
-				t.Log("exec sql Done.")
-				break loop
-			}
-		}
-	}()
-	wg.Wait()
-
 	// (1 + 4) * n + 1
 	// 1: create database ...
 	// 4: create EXTERNAL table
-	// 1: close
-	wg.Add(1)
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			var wg sync.WaitGroup
 			wg.Add(5)
-			err := InitExternalTblSchema(tt.args.ctx, tt.args.ieFactory)
+			err := InitExternalTblSchema(tt.args.ctx, newDummyExecutorFactory(tt.args.ch))
 			require.Equal(t, nil, err)
+			go func() {
+			loop:
+				for {
+					select {
+					case sql, ok := <-tt.args.ch:
+						wg.Done()
+						if ok {
+							t.Logf("exec sql: %s", sql)
+							if sql == "create database if not exists system" {
+								continue
+							}
+							idx := strings.Index(sql, "CREATE EXTERNAL TABLE")
+							require.Equal(t, 0, idx)
+						} else {
+							t.Log("exec sql Done.")
+							break loop
+						}
+
+					}
+				}
+			}()
+			wg.Wait()
+			wg.Add(1)
+			close(tt.args.ch)
+			wg.Wait()
 		})
 	}
-	close(c)
-	wg.Wait()
 }
