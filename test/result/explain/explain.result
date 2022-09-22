@@ -362,7 +362,7 @@ explain select count(*) from (select * from t1) sub where id > 4 ;
 QUERY PLAN
 Project
   ->  Aggregate
-        Aggregate Functions: starcount(sub.id)
+        Aggregate Functions: starcount(1)
         ->  Project
               ->  Table Scan on explain.t1
                     Filter Cond: (CAST(t1.id AS BIGINT) > 4)
