@@ -18,6 +18,10 @@ import (
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"os"
+	"path"
+	"strconv"
+	"strings"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -34,7 +38,17 @@ func (factory *ObjectFactory) EncodeName(id uint64) string {
 }
 
 func (factory *ObjectFactory) DecodeName(name string) (id uint64, err error) {
-	return 0, nil
+	trimmed := strings.TrimSuffix(name, ".seg")
+	if trimmed == name {
+		err = fmt.Errorf("%w: %s", file.ErrInvalidName, name)
+		return
+	}
+	info := strings.Split(trimmed, "-")
+	id, err = strconv.ParseUint(info[1], 10, 64)
+	if err != nil {
+		err = fmt.Errorf("%w: %s", file.ErrInvalidName, name)
+	}
+	return
 }
 
 func (factory *ObjectFactory) Build(dir string, id, tid uint64, fs *objectio.ObjectFS) file.Segment {
@@ -98,6 +112,8 @@ func (sf *segmentFile) Destroy() {
 			panic(any(err))
 		}
 	}
+	name := path.Join(sf.fs.Dir, EncodeSegName(sf.id))
+	os.Remove(name)
 	sf.fs = nil
 }
 

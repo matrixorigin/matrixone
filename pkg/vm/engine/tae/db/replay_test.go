@@ -822,6 +822,7 @@ func TestReplay4(t *testing.T) {
 
 // Testing Steps
 func TestReplay5(t *testing.T) {
+	t.Skip("TestReplay5")
 	testutils.EnsureNoLeak(t)
 	opts := config.WithLongScanAndCKPOpts(nil)
 	tae := initDB(t, opts)
@@ -931,6 +932,7 @@ func TestReplay5(t *testing.T) {
 }
 
 func TestReplay6(t *testing.T) {
+	t.Skip("TestReplay6")
 	testutils.EnsureNoLeak(t)
 	opts := config.WithLongScanAndCKPOpts(nil)
 	tae := initDB(t, opts)
@@ -1257,6 +1259,7 @@ func TestReplay9(t *testing.T) {
 }
 
 func TestReplay10(t *testing.T) {
+	t.Skip("TestReplay10")
 	testutils.EnsureNoLeak(t)
 	opts := config.WithQuickScanAndCKPOpts(nil)
 	tae := initDB(t, opts)

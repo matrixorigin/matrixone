@@ -17,11 +17,13 @@ package blockio
 import (
 	mobat "github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/file"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/stretchr/testify/assert"
+	"path"
 	"testing"
 )
 
@@ -43,14 +45,18 @@ func TestBlock1(t *testing.T) {
 	newbat.Vecs = CopyToMoVectors(data.Vecs)
 	var block file.Block
 	id := common.NextGlobalSeqNum()
-	seg := SegmentFactory.Build(dir, id).(*segmentFile)
+	SegmentFactory := &ObjectFactory{
+		Fs: objectio.NewObjectFS(nil),
+	}
+	name := path.Join(dir, "data")
+	SegmentFactory.Fs.SetDir(name)
+	seg := SegmentFactory.Build(dir, id, 0, SegmentFactory.Fs).(*segmentFile)
 	block = newBlock(common.NextGlobalSeqNum(), seg, colCnt, indexCnt)
 	var ts types.TS
 	_, err := block.WriteBatch(data, ts)
 	assert.Nil(t, err)
-	bs, err := block.(*blockFile).writer.Sync()
+	err = block.Sync()
 	assert.Nil(t, err)
-	assert.Equal(t, 1, len(bs))
 
 	col, err := block.OpenColumn(3)
 	assert.Nil(t, err)

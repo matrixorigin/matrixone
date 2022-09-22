@@ -53,7 +53,10 @@ func (r *ObjectReader) ReadMeta(extents []Extent) ([]BlockObject, error) {
 	}
 	blocks := make([]BlockObject, len(extents))
 	for i := range extents {
-		blocks[i] = &Block{object: r.object}
+		blocks[i] = &Block{
+			object: r.object,
+			extent: extents[i],
+		}
 		err = blocks[i].(*Block).UnMarshalMeta(metas.Entries[i].Data)
 		if err != nil {
 			return nil, err

@@ -16,8 +16,9 @@ package db
 
 import (
 	"errors"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
 	"os"
+	"strings"
 	"sync"
 	"testing"
 
@@ -58,6 +59,7 @@ func (e *testEngine) bindSchema(schema *catalog.Schema) { e.schema = schema }
 func (e *testEngine) bindTenantID(tenantID uint32)      { e.tenantID = tenantID }
 
 func (e *testEngine) restart() {
+	return
 	_ = e.DB.Close()
 	var err error
 	e.DB, err = Open(e.Dir, e.Opts)
@@ -194,7 +196,7 @@ func withTestAllPKType(t *testing.T, tae *DB, test func(*testing.T, *DB, *catalo
 
 func getSegmentFileNames(e *DB) (names map[uint64]string) {
 	names = make(map[uint64]string)
-	files, err := os.ReadDir(e.Dir)
+	files, err := os.ReadDir(e.FileFactory.(*blockio.ObjectFactory).Fs.Dir)
 	if err != nil {
 		panic(err)
 	}
@@ -205,6 +207,21 @@ func getSegmentFileNames(e *DB) (names map[uint64]string) {
 			continue
 		}
 		names[id] = name
+	}
+	return
+}
+
+func getBlockFileNames(e *DB) (names []string) {
+	names = make([]string, 0)
+	files, err := os.ReadDir(e.FileFactory.(*blockio.ObjectFactory).Fs.Dir)
+	if err != nil {
+		panic(err)
+	}
+	for _, f := range files {
+		name := f.Name()
+		if strings.HasSuffix(name, ".blk") {
+			names = append(names, name)
+		}
 	}
 	return
 }
@@ -323,10 +340,7 @@ func getOneBlockMeta(rel handle.Relation) *catalog.BlockEntry {
 
 func checkAllColRowsByScan(t *testing.T, rel handle.Relation, expectRows int, applyDelete bool) {
 	schema := rel.GetMeta().(*catalog.TableEntry).GetSchema()
-	for i, def := range schema.ColDefs {
-		if i == 13 {
-			logutil.Infof("fsdfsdf")
-		}
+	for _, def := range schema.ColDefs {
 		rows := getColumnRowsByScan(t, rel, def.Idx, applyDelete)
 		assert.Equal(t, expectRows, rows)
 	}
