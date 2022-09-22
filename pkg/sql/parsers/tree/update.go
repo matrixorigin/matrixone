@@ -131,6 +131,9 @@ type TailParameter struct {
 	ColumnList []LoadColumn
 	//set col_name
 	Assignments UpdateExprs
+
+	//jsonline tag
+	FromJsonLine bool
 }
 
 // Load data statement
@@ -195,6 +198,9 @@ func (node *Load) Format(ctx *FmtCtx) {
 	if node.Param.Tail.Assignments != nil {
 		ctx.WriteString(" set ")
 		node.Param.Tail.Assignments.Format(ctx)
+	}
+	if node.Param.Tail.FromJsonLine {
+		ctx.WriteString(" from_jsonline")
 	}
 }
 

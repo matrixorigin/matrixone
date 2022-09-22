@@ -281,7 +281,7 @@ import (
 %token <str> FORMAT VERBOSE CONNECTION
 
 // Load
-%token <str> LOAD INFILE TERMINATED OPTIONALLY ENCLOSED ESCAPED STARTING LINES ROWS
+%token <str> LOAD INFILE TERMINATED OPTIONALLY ENCLOSED ESCAPED STARTING LINES ROWS FROM_JSONLINE
 
 // Supported SHOW tokens
 %token <str> DATABASES TABLES EXTENDED FULL PROCESSLIST FIELDS COLUMNS OPEN ERRORS WARNINGS INDEXES SCHEMAS
@@ -347,6 +347,7 @@ import (
 %type <exportParm> export_data_param_opt
 %type <loadParam> load_param_opt load_param_opt_2
 %type <tailParam> tail_param_opt
+%type <boolVal> from_jsonline_opt
 
 %type <select> select_stmt select_no_parens
 %type <selectStatement> simple_select select_with_parens simple_select_clause
@@ -4041,7 +4042,7 @@ load_param_opt:
     }
 
 tail_param_opt:
-    load_fields load_lines ignore_lines columns_or_variable_list_opt load_set_spec_opt
+    load_fields load_lines ignore_lines columns_or_variable_list_opt load_set_spec_opt from_jsonline_opt
     {
         $$ = &tree.TailParameter{
             Fields: $1,
@@ -4049,7 +4050,17 @@ tail_param_opt:
             IgnoredLines: uint64($3),
             ColumnList: $4,
             Assignments: $5,
+            FromJsonLine: $6,
         }
+    }
+
+from_jsonline_opt:
+    {
+	$$ = false
+    }
+|   FROM_JSONLINE
+    {
+    	$$ = true
     }
 
 temporary_opt:

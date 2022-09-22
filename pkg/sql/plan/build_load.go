@@ -86,6 +86,9 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext) (*Plan, error) {
 	tableDef.Createsql = string(json_byte)
 	node1.TableDef = tableDef
 	node1.ObjRef = objRef
+	if stmt.Param.Tail.FromJsonLine {
+		node1.ExtraOptions = "jsonline"
+	}
 
 	nodes := make([]*plan.Node, 3)
 	nodes[0] = node1

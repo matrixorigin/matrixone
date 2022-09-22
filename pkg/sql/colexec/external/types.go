@@ -16,6 +16,7 @@ package external
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"io"
 	"sync/atomic"
 
@@ -23,6 +24,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/simdcsv"
 )
+
+var errColumnCntLarger = moerr.NewInternalError("the table column is larger than input data column")
 
 // Use for External table scan param
 type ExternalParam struct {
@@ -36,12 +39,13 @@ type ExternalParam struct {
 	IgnoreLine    int
 	IgnoreLineTag int
 	// tag indicate the fileScan is finished
-	End       bool
-	FileCnt   int
-	FileIndex int
-	FileList  []string
-	batchSize int
-	reader    io.ReadCloser
+	End          bool
+	FromJsonLine bool
+	FileCnt      int
+	FileIndex    int
+	FileList     []string
+	batchSize    int
+	reader       io.ReadCloser
 }
 
 type Argument struct {

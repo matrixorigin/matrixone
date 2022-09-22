@@ -494,5 +494,6 @@ func init() {
 		"password_lock_time":       PASSWORD_LOCK_TIME,
 		"unbounded":                UNBOUNDED,
 		"secondary":                SECONDARY,
+		"from_jsonline":            FROM_JSONLINE,
 	}
 }

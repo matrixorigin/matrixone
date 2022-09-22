@@ -1394,6 +1394,13 @@ var (
 			input: `create table t2 (a uuid primary key, b varchar(10))`,
 		}, {
 			input: `create table t3 (a int, b uuid, primary key idx (a, b))`,
+		}, {
+			input:  `load data infile '***' into table t1(a,b) from_jsonline`,
+			output: `load data infile *** into table t1 (a, b) from_jsonline`,
+		},
+		{
+			input:  `load data infile '***' into table t1 from_jsonline`,
+			output: `load data infile *** into table t1 from_jsonline`,
 		},
 	}
 )
