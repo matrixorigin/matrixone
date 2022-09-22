@@ -67,6 +67,7 @@ var (
 		"creator",
 		"owner",
 		"account_id",
+		"partition",
 	}
 	MoColumnsSchema = []string{
 		"att_uniq_name",
@@ -112,6 +113,7 @@ var (
 		types.New(types.T_uint32, 0, 0, 0),    // creator
 		types.New(types.T_uint32, 0, 0, 0),    // owner
 		types.New(types.T_uint32, 0, 0, 0),    // account_id
+		types.New(types.T_blob, 0, 0, 0),      // partition
 	}
 	MoColumnsTypes = []types.Type{
 		types.New(types.T_varchar, 256, 0, 0),  // att_uniq_name

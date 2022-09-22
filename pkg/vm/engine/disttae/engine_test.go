@@ -20,7 +20,6 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
@@ -54,9 +53,9 @@ func TestEngine(t *testing.T) {
 	e := New(m, ctx, nil, getClusterDetails)
 	err := e.New(ctx, txnOp)
 	require.NoError(t, err)
-	err = e.Create(ctx, "test", txnOp)
-	require.NoError(t, err)
 	/*
+		err = e.Create(ctx, "test", txnOp)
+		require.NoError(t, err)
 		err = e.Delete(ctx, "test", txnOp)
 		require.NoError(t, err)
 		err = e.Commit(ctx, txnOp)
@@ -79,12 +78,14 @@ func TestTransaction(t *testing.T) {
 	txn.writes = append(txn.writes, make([]Entry, 0, 1))
 	ro := txn.ReadOnly()
 	require.Equal(t, false, ro)
-	err := txn.WriteBatch(INSERT, 0, 0, "test", "test", new(batch.Batch))
-	require.NoError(t, err)
-	txn.IncStatementId()
-	txn.RegisterFile("test")
-	err = txn.WriteFile(DELETE, 0, 0, "test", "test", "test")
-	require.NoError(t, err)
+	/*
+		err := txn.WriteBatch(INSERT, 0, 0, "test", "test", new(batch.Batch))
+		require.NoError(t, err)
+		txn.IncStatementId()
+		txn.RegisterFile("test")
+		err = txn.WriteFile(DELETE, 0, 0, "test", "test", "test")
+		require.NoError(t, err)
+	*/
 	ctx := context.TODO()
 	blockWrite(ctx, BlockMeta{}, nil)
 	_, _ = txn.getRow(ctx, 0, 0, nil, nil, nil)

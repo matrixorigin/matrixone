@@ -114,8 +114,8 @@ func (txn *Transaction) IncStatementId() {
 // Write used to write data to the transaction buffer
 // insert/delete/update all use this api
 func (txn *Transaction) WriteBatch(typ int, databaseId, tableId uint64,
-	databaseName, tableName string, bat *batch.Batch) error {
-	txn.readOnly = true
+	databaseName, tableName string, bat *batch.Batch, dnStore DNStore) error {
+	txn.readOnly = false
 	txn.writes[txn.statementId] = append(txn.writes[txn.statementId], Entry{
 		typ:          typ,
 		bat:          bat,
@@ -123,6 +123,7 @@ func (txn *Transaction) WriteBatch(typ int, databaseId, tableId uint64,
 		databaseId:   databaseId,
 		tableName:    tableName,
 		databaseName: databaseName,
+		dnStore:      dnStore,
 	})
 	return nil
 }
@@ -136,7 +137,7 @@ func (txn *Transaction) RegisterFile(fileName string) {
 // insert/delete/update all use this api
 func (txn *Transaction) WriteFile(typ int, databaseId, tableId uint64,
 	databaseName, tableName string, fileName string) error {
-	txn.readOnly = true
+	txn.readOnly = false
 	txn.writes[txn.statementId] = append(txn.writes[txn.statementId], Entry{
 		typ:          typ,
 		tableId:      tableId,

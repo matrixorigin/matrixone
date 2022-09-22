@@ -32,11 +32,15 @@ func (db *database) Relation(ctx context.Context, name string) (engine.Relation,
 	if err != nil {
 		return nil, err
 	}
+	parts := db.txn.db.getPartitions(db.databaseId, id)
 	return &table{
-		db:        db,
-		tableId:   id,
-		tableName: name,
-		defs:      defs,
+		db:         db,
+		tableId:    id,
+		parts:      parts,
+		tableName:  name,
+		defs:       defs,
+		insertExpr: genInsertExpr(defs),
+		deleteExpr: genDeleteExpr(defs),
 	}, nil
 }
 
@@ -50,7 +54,7 @@ func (db *database) Delete(ctx context.Context, name string) error {
 		return err
 	}
 	if err := db.txn.WriteBatch(DELETE, catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID,
-		catalog.MO_CATALOG, catalog.MO_TABLES, bat); err != nil {
+		catalog.MO_CATALOG, catalog.MO_TABLES, bat, db.txn.dnStores[0]); err != nil {
 		return err
 	}
 	return nil
@@ -63,14 +67,15 @@ func (db *database) Create(ctx context.Context, name string, defs []engine.Table
 		return err
 	}
 	{
+		sql := getSql(ctx)
 		accountId, userId, roleId := getAccessInfo(ctx)
-		bat, err := genCreateTableTuple(accountId, userId, roleId, name,
+		bat, err := genCreateTableTuple(sql, accountId, userId, roleId, name,
 			db.databaseId, db.databaseName, comment, db.m)
 		if err != nil {
 			return err
 		}
 		if err := db.txn.WriteBatch(INSERT, catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID,
-			catalog.MO_CATALOG, catalog.MO_TABLES, bat); err != nil {
+			catalog.MO_CATALOG, catalog.MO_TABLES, bat, db.txn.dnStores[0]); err != nil {
 			return err
 		}
 	}
@@ -80,7 +85,7 @@ func (db *database) Create(ctx context.Context, name string, defs []engine.Table
 			return err
 		}
 		if err := db.txn.WriteBatch(INSERT, catalog.MO_CATALOG_ID, catalog.MO_COLUMNS_ID,
-			catalog.MO_CATALOG, catalog.MO_COLUMNS, bat); err != nil {
+			catalog.MO_CATALOG, catalog.MO_COLUMNS, bat, db.txn.dnStores[0]); err != nil {
 			return err
 		}
 	}

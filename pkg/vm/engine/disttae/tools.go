@@ -29,11 +29,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func genCreateDatabaseTuple(accountId, userId, roleId uint32, name string,
+func genCreateDatabaseTuple(sql string, accountId, userId, roleId uint32, name string,
 	m *mheap.Mheap) (*batch.Batch, error) {
 	bat := batch.NewWithSize(len(catalog.MoDatabaseSchema))
 	bat.Attrs = append(bat.Attrs, catalog.MoDatabaseSchema...)
@@ -50,8 +52,8 @@ func genCreateDatabaseTuple(accountId, userId, roleId uint32, name string,
 		if err := bat.Vecs[2].Append([]byte(catalog.MO_CATALOG), false, m); err != nil {
 			return nil, err
 		}
-		bat.Vecs[3] = vector.New(catalog.MoDatabaseTypes[3])             // dat_createsql
-		if err := bat.Vecs[3].Append([]byte(""), false, m); err != nil { // TODO
+		bat.Vecs[3] = vector.New(catalog.MoDatabaseTypes[3])              // dat_createsql
+		if err := bat.Vecs[3].Append([]byte(sql), false, m); err != nil { // TODO
 			return nil, err
 		}
 		bat.Vecs[4] = vector.New(catalog.MoDatabaseTypes[4]) // owner
@@ -86,8 +88,8 @@ func genDropDatabaseTuple(id uint64, m *mheap.Mheap) (*batch.Batch, error) {
 	return bat, nil
 }
 
-func genCreateTableTuple(accountId, userId, roleId uint32, name string, databaseId uint64,
-	databaseName string, comment string, m *mheap.Mheap) (*batch.Batch, error) {
+func genCreateTableTuple(sql string, accountId, userId, roleId uint32, name string,
+	databaseId uint64, databaseName string, comment string, m *mheap.Mheap) (*batch.Batch, error) {
 	bat := batch.NewWithSize(len(catalog.MoTablesSchema))
 	bat.Attrs = append(bat.Attrs, catalog.MoTablesSchema...)
 	{
@@ -120,23 +122,27 @@ func genCreateTableTuple(accountId, userId, roleId uint32, name string, database
 			return nil, err
 		}
 		bat.Vecs[7] = vector.New(catalog.MoTablesTypes[7]) // rel_createsql
-		if err := bat.Vecs[4].Append([]byte(""), false, m); err != nil {
+		if err := bat.Vecs[4].Append([]byte(sql), false, m); err != nil {
 			return nil, err
 		}
 		bat.Vecs[8] = vector.New(catalog.MoTablesTypes[8]) // created_time
 		if err := bat.Vecs[8].Append(types.Timestamp(time.Now().Unix()), false, m); err != nil {
 			return nil, err
 		}
-		bat.Vecs[9] = vector.New(catalog.MoDatabaseTypes[9]) // creator
+		bat.Vecs[9] = vector.New(catalog.MoTablesTypes[9]) // creator
 		if err := bat.Vecs[9].Append(userId, false, m); err != nil {
 			return nil, err
 		}
-		bat.Vecs[10] = vector.New(catalog.MoDatabaseTypes[10]) // owner
+		bat.Vecs[10] = vector.New(catalog.MoTablesTypes[10]) // owner
 		if err := bat.Vecs[10].Append(roleId, false, m); err != nil {
 			return nil, err
 		}
-		bat.Vecs[11] = vector.New(catalog.MoDatabaseTypes[11]) // account_id
+		bat.Vecs[11] = vector.New(catalog.MoTablesTypes[11]) // account_id
 		if err := bat.Vecs[11].Append(accountId, false, m); err != nil {
+			return nil, err
+		}
+		bat.Vecs[12] = vector.New(catalog.MoTablesTypes[12]) // partition
+		if err := bat.Vecs[12].Append([]byte(""), false, m); err != nil {
 			return nil, err
 		}
 	}
@@ -275,111 +281,123 @@ func genColumnInfoExpr(accountId uint32, databaseId, tableId uint64) *plan.Expr 
 	return nil
 }
 
+// genInsertExpr used to generate an expression to partition table data
+func genInsertExpr(defs []engine.TableDef) *plan.Expr {
+	return nil
+}
+
+// genDeleteExpr used to generate an expression to partition table data
+func genDeleteExpr(defs []engine.TableDef) *plan.Expr {
+	return nil
+}
+
 func genRows(bat *batch.Batch) [][]any {
-	rows := make([][]any, bat.VectorCount())
+	rows := make([][]any, bat.Length())
+	for i := 0; i < bat.Length(); i++ {
+		rows[i] = make([]any, bat.VectorCount())
+	}
 	for i := 0; i < bat.VectorCount(); i++ {
 		vec := bat.GetVector(int32(i))
-		rows[i] = make([]any, vec.Length())
 		switch vec.GetType().Oid {
 		case types.T_bool:
 			col := vector.GetFixedVectorValues[bool](vec)
 			for j := 0; j < vec.Length(); j++ {
-				rows[i][j] = col[j]
+				rows[j][i] = col[j]
 			}
 		case types.T_int8:
 			col := vector.GetFixedVectorValues[int8](vec)
 			for j := 0; j < vec.Length(); j++ {
-				rows[i][j] = col[j]
+				rows[j][i] = col[j]
 			}
 		case types.T_int16:
 			col := vector.GetFixedVectorValues[int16](vec)
 			for j := 0; j < vec.Length(); j++ {
-				rows[i][j] = col[j]
+				rows[j][i] = col[j]
 			}
 		case types.T_int32:
 			col := vector.GetFixedVectorValues[int32](vec)
 			for j := 0; j < vec.Length(); j++ {
-				rows[i][j] = col[j]
+				rows[j][i] = col[j]
 			}
 		case types.T_int64:
 			col := vector.GetFixedVectorValues[int64](vec)
 			for j := 0; j < vec.Length(); j++ {
-				rows[i][j] = col[j]
+				rows[j][i] = col[j]
 			}
 		case types.T_uint8:
 			col := vector.GetFixedVectorValues[uint8](vec)
 			for j := 0; j < vec.Length(); j++ {
-				rows[i][j] = col[j]
+				rows[j][i] = col[j]
 			}
 		case types.T_uint16:
 			col := vector.GetFixedVectorValues[uint16](vec)
 			for j := 0; j < vec.Length(); j++ {
-				rows[i][j] = col[j]
+				rows[j][i] = col[j]
 			}
 		case types.T_uint32:
 			col := vector.GetFixedVectorValues[uint32](vec)
 			for j := 0; j < vec.Length(); j++ {
-				rows[i][j] = col[j]
+				rows[j][i] = col[j]
 			}
 		case types.T_uint64:
 			col := vector.GetFixedVectorValues[uint64](vec)
 			for j := 0; j < vec.Length(); j++ {
-				rows[i][j] = col[j]
+				rows[j][i] = col[j]
 			}
 		case types.T_float32:
 			col := vector.GetFixedVectorValues[float32](vec)
 			for j := 0; j < vec.Length(); j++ {
-				rows[i][j] = col[j]
+				rows[j][i] = col[j]
 			}
 		case types.T_float64:
 			col := vector.GetFixedVectorValues[float64](vec)
 			for j := 0; j < vec.Length(); j++ {
-				rows[i][j] = col[j]
+				rows[j][i] = col[j]
 			}
 		case types.T_date:
 			col := vector.GetFixedVectorValues[types.Date](vec)
 			for j := 0; j < vec.Length(); j++ {
-				rows[i][j] = col[j]
+				rows[j][i] = col[j]
 			}
 		case types.T_datetime:
 			col := vector.GetFixedVectorValues[types.Datetime](vec)
 			for j := 0; j < vec.Length(); j++ {
-				rows[i][j] = col[j]
+				rows[j][i] = col[j]
 			}
 		case types.T_timestamp:
 			col := vector.GetFixedVectorValues[types.Timestamp](vec)
 			for j := 0; j < vec.Length(); j++ {
-				rows[i][j] = col[j]
+				rows[j][i] = col[j]
 			}
 		case types.T_decimal64:
 			col := vector.GetFixedVectorValues[types.Decimal64](vec)
 			for j := 0; j < vec.Length(); j++ {
-				rows[i][j] = col[j]
+				rows[j][i] = col[j]
 			}
 		case types.T_decimal128:
 			col := vector.GetFixedVectorValues[types.Decimal128](vec)
 			for j := 0; j < vec.Length(); j++ {
-				rows[i][j] = col[j]
+				rows[j][i] = col[j]
 			}
 		case types.T_uuid:
 			col := vector.GetFixedVectorValues[types.Uuid](vec)
 			for j := 0; j < vec.Length(); j++ {
-				rows[i][j] = col[j]
+				rows[j][i] = col[j]
 			}
 		case types.T_TS:
 			col := vector.GetFixedVectorValues[types.TS](vec)
 			for j := 0; j < vec.Length(); j++ {
-				rows[i][j] = col[j]
+				rows[j][i] = col[j]
 			}
 		case types.T_Rowid:
 			col := vector.GetFixedVectorValues[types.Rowid](vec)
 			for j := 0; j < vec.Length(); j++ {
-				rows[i][j] = col[j]
+				rows[j][i] = col[j]
 			}
 		case types.T_char, types.T_varchar, types.T_blob, types.T_json:
 			col := vector.GetBytesVectorValues(vec)
 			for j := 0; j < vec.Length(); j++ {
-				rows[i][j] = col[j]
+				rows[j][i] = col[j]
 			}
 		}
 	}
@@ -567,6 +585,13 @@ func genColumns(tableName, databaseName string, databaseId uint64,
 	return cols, nil
 }
 
+func getSql(ctx context.Context) string {
+	if v := ctx.Value(defines.SqlKey{}); v != nil {
+		return v.(string)
+	}
+	return ""
+}
+
 func getAccountId(ctx context.Context) uint32 {
 	if v := ctx.Value(defines.TenantIDKey{}); v != nil {
 		return v.(uint32)
@@ -587,4 +612,33 @@ func getAccessInfo(ctx context.Context) (uint32, uint32, uint32) {
 		roleId = v.(uint32)
 	}
 	return accountId, userId, roleId
+}
+
+func partitionBatch(bat *batch.Batch, expr *plan.Expr, m *mheap.Mheap, dnNum int) ([]*batch.Batch, error) {
+	proc := process.New(nil, m, nil, nil, nil)
+	pvec, err := colexec.EvalExpr(bat, proc, expr)
+	if err != nil {
+		return nil, err
+	}
+	defer pvec.Free(m)
+	bats := make([]*batch.Batch, dnNum)
+	for i := range bats {
+		bats[i] = batch.New(true, bat.Attrs)
+		for j := range bats[i].Vecs {
+			bat.SetVector(int32(j), vector.New(bat.Vecs[j].Typ))
+		}
+	}
+	vs := vector.GetFixedVectorValues[int64](pvec)
+	for i := range bat.Vecs {
+		vec := bat.GetVector(int32(i))
+		for j, v := range vs {
+			if err := vector.UnionOne(bats[v].GetVector(int32(i)), vec, int64(j), m); err != nil {
+				for _, bat := range bats {
+					bat.Clean(m)
+				}
+				return nil, err
+			}
+		}
+	}
+	return bats, nil
 }

@@ -67,7 +67,8 @@ type Cache interface {
 // mvcc is the core data structure of cn and is used to
 // maintain multiple versions of logtail data for a table's partition
 type MVCC interface {
-	CheckPoint(ts timestamp.Timestamp) error
+	RowsCount(ctx context.Context, ts timestamp.Timestamp) int64
+	CheckPoint(ctx context.Context, ts timestamp.Timestamp) error
 	Insert(ctx context.Context, bat *api.Batch) error
 	Delete(ctx context.Context, bat *api.Batch) error
 	BlockList(ctx context.Context, ts timestamp.Timestamp,
@@ -150,10 +151,13 @@ type database struct {
 }
 
 type table struct {
-	tableId   uint64
-	tableName string
-	db        *database
-	defs      []engine.TableDef
+	tableId    uint64
+	tableName  string
+	db         *database
+	parts      Partitions
+	defs       []engine.TableDef
+	insertExpr *plan.Expr
+	deleteExpr *plan.Expr
 }
 
 type column struct {

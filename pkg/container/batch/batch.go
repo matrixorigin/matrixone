@@ -168,6 +168,10 @@ func (bat *Batch) GetVector(pos int32) *vector.Vector {
 	return bat.Vecs[pos]
 }
 
+func (bat *Batch) SetVector(pos int32, vec *vector.Vector) {
+	bat.Vecs[pos] = vec
+}
+
 func (bat *Batch) Clean(m *mheap.Mheap) {
 	if atomic.AddInt64(&bat.Cnt, -1) != 0 {
 		return
