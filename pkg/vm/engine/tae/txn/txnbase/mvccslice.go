@@ -205,7 +205,6 @@ func (be *MVCCSlice) LoopOffsetRange(start, end int, fn func(MVCCNode) bool) {
 			break
 		}
 	}
-	return
 }
 
 func (be *MVCCSlice) GetNodeByOffset(offset int) MVCCNode {

@@ -99,7 +99,7 @@ func (node *appendableNode) GetColumnDataCopy(
 		}
 		vec = containers.CloneWithBuffer(win, buffer, containers.DefaultAllocator)
 	} else {
-		vec = node.data.Vecs[colIdx].CloneWindow(0, int(maxRow), containers.DefaultAllocator)
+		vec = node.data.Vecs[colIdx].CloneWindow(int(minRow), int(maxRow-minRow), containers.DefaultAllocator)
 	}
 	node.block.RUnlock()
 	return

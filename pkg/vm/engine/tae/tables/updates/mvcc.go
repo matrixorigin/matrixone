@@ -317,12 +317,19 @@ func (n *MVCCHandle) CollectAppend(start, end types.TS) (minRow, maxRow uint32, 
 		endOffset,
 		func(m txnbase.MVCCNode) bool {
 			n := m.(*AppendNode)
-			n.GetTxn().GetTxnState(true) //todo rwlock
-			for i := 0; i < int(n.maxRow-n.startRow+1); i++ {
+			n.RLock()
+			txn:=n.GetTxn()
+			if txn!=nil{
+				n.RUnlock()
+				txn.GetTxnState(true)
+				n.RLock()
+			}
+			for i := 0; i < int(n.maxRow-n.startRow); i++ {
 				commitTSVec.Append(n.GetCommitTS())
 				abortVec.Append(n.abort)
 			}
-			return false
+			n.RUnlock()
+			return true
 		})
 	return
 }

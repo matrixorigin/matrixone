@@ -912,8 +912,9 @@ const (
 )
 
 // data, commit ts, abort
-func (blk *dataBlock) CollectInsert(start, end types.TS, schema *catalog.Schema, buffer *bytes.Buffer) *containers.Batch {
+func (blk *dataBlock) CollectInsert(start, end types.TS, buffer *bytes.Buffer) *containers.Batch {
 	batch := containers.NewBatch()
+	schema:=blk.meta.GetSchema()
 
 	//collect range
 	minRow, maxRow, commitTSVec, abortVec := blk.mvcc.CollectAppend(start, end)

@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -3094,4 +3095,65 @@ func TestGetLastAppender(t *testing.T) {
 	txn, rel := tae.getRelation()
 	rel.Append(bats[1])
 	assert.NoError(t, txn.Commit())
+}
+
+// txn1[s1,p1,e1] append1
+// txn2[s2,p2,e2] append2
+// txn3[s3,p3,e3] append3
+// collect [0,p1] [0,p2] [p1+1,p2] [p1+1,p3]
+// check data, row count, commit ts
+// TODO 1. in2pc committs!=preparets; 2. abort
+func TestCollectAppend(t *testing.T) {
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := newTestEngine(t, opts)
+	defer tae.Close()
+	schema := catalog.MockSchemaAll(1, -1) //2
+	schema.BlockMaxRows = 10
+	tae.bindSchema(schema)
+	bat := catalog.MockBatch(schema, 9)
+	bats := bat.Split(3)
+
+	tae.createRelAndAppend(bats[0], true)
+
+	p1 := tae.TxnMgr.TsAlloc.Get()
+	logutil.Infof("p1= %v",p1.ToString())
+
+	txn2, rel := tae.getRelation()
+	assert.NoError(t, rel.Append(bats[1]))
+	assert.NoError(t, txn2.Commit())
+
+	p2 := txn2.GetPrepareTS()
+	logutil.Infof("p2= %v",p2.ToString())
+
+	txn3, rel := tae.getRelation()
+	assert.NoError(t, rel.Append(bats[1]))
+	assert.NoError(t, txn3.Commit())
+
+	p3 := txn3.GetPrepareTS()
+	logutil.Infof("p3= %v",p3.ToString())
+
+	_, rel = tae.getRelation()
+	blkit := rel.MakeBlockIt()
+	blkdata := blkit.GetBlock().GetMeta().(*catalog.BlockEntry).GetBlockData()
+
+	batch := blkdata.CollectInsert(types.TS{}, p1, nil)
+	logutil.Infof("************")
+	for _,vec:=range batch.Vecs{
+		logutil.Infof("%v",vec)
+	}
+	batch = blkdata.CollectInsert(types.TS{}, p2, nil)
+	logutil.Infof("************")
+	for _,vec:=range batch.Vecs{
+		logutil.Infof("%v",vec)
+	}
+	batch = blkdata.CollectInsert(p1.Next(), p2, nil)
+	logutil.Infof("************")
+	for _,vec:=range batch.Vecs{
+		logutil.Infof("%v",vec)
+	}
+	batch = blkdata.CollectInsert(p1.Next(), p3, nil)
+	logutil.Infof("************")
+	for _,vec:=range batch.Vecs{
+		logutil.Infof("%v",vec)
+	}
 }
