@@ -6,7 +6,7 @@ Make sure you have already [installed MatrixOne](install-standalone-matrixone.md
 
 ## **1. Install MySQL client**
 
-MatrixOne supports the MySQL wire protocol, so you can use MySQL client drivers to connect from various languages. For more information on connecting to MatrixOne through a MySQL client, see[Connect to the MatrixOne server through a client](../Develop/connect-mo/client-connect-to-matrixone.md)。
+MatrixOne supports the MySQL wire protocol, so you can use MySQL client drivers to connect from various languages. For more information on connecting to MatrixOne through a MySQL client, see[Connect to the MatrixOne server through a client](../Develop/connect-mo/client-connect-to-matrixone.md).
 
 Currently, MatrixOne is only compatible with the Oracle MySQL client. This means that some features might not work with the MariaDB client or Percona client.
 

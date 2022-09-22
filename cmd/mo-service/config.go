@@ -15,7 +15,6 @@
 package main
 
 import (
-	"fmt"
 	"net"
 	"os"
 	"strings"
@@ -31,26 +30,32 @@ import (
 )
 
 const (
-	cnServiceType         = "CN"
-	dnServiceType         = "DN"
-	logServiceType        = "LOG"
-	standaloneServiceType = "STANDALONE"
+	cnServiceType  = "CN"
+	dnServiceType  = "DN"
+	logServiceType = "LOG"
 
 	s3FileServiceName    = "S3"
 	localFileServiceName = "LOCAL"
 	etlFileServiceName   = "ETL"
 )
 
-var ErrInvalidConfig = moerr.NewError(moerr.BAD_CONFIGURATION, "invalid log configuration")
-
 var (
 	supportServiceTypes = map[string]any{
-		cnServiceType:         cnServiceType,
-		dnServiceType:         dnServiceType,
-		logServiceType:        logServiceType,
-		standaloneServiceType: standaloneServiceType,
+		cnServiceType:  cnServiceType,
+		dnServiceType:  dnServiceType,
+		logServiceType: logServiceType,
 	}
 )
+
+// LaunchConfig Start a MO cluster with launch
+type LaunchConfig struct {
+	// LogServiceConfigFiles log service config files
+	LogServiceConfigFiles []string `toml:"logservices"`
+	// DNServiceConfigsFiles log service config files
+	DNServiceConfigsFiles []string `toml:"dnservices"`
+	// CNServiceConfigsFiles log service config files
+	CNServiceConfigsFiles []string `toml:"cnservices"`
+}
 
 // Config mo-service configuration
 type Config struct {
@@ -73,34 +78,27 @@ type Config struct {
 	Observability config.ObservabilityParameters `toml:"observability"`
 }
 
-func parseConfigFromFile(file string) (*Config, error) {
+func parseConfigFromFile(file string, cfg any) error {
 	if file == "" {
-		return nil, fmt.Errorf("toml config file not set")
+		return moerr.NewInternalError("toml config file not set")
 	}
 	data, err := os.ReadFile(file)
 	if err != nil {
-		return nil, err
+		return err
 	}
-	return parseFromString(string(data))
+	return parseFromString(string(data), cfg)
 }
 
-func parseFromString(data string) (*Config, error) {
-	cfg := &Config{}
+func parseFromString(data string, cfg any) error {
 	if _, err := toml.Decode(data, cfg); err != nil {
-		return nil, err
+		return err
 	}
-	if err := cfg.validate(); err != nil {
-		return nil, err
-	}
-	if err := cfg.resolveGossipSeedAddresses(); err != nil {
-		return nil, err
-	}
-	return cfg, nil
+	return nil
 }
 
 func (c *Config) validate() error {
 	if _, ok := supportServiceTypes[strings.ToUpper(c.ServiceType)]; !ok {
-		return fmt.Errorf("service type %s not support", c.ServiceType)
+		return moerr.NewInternalError("service type %s not support", c.ServiceType)
 	}
 	return nil
 }
@@ -147,7 +145,7 @@ func (c *Config) createFileService(defaultName string) (*fileservice.FileService
 	if !c.Observability.DisableMetric || !c.Observability.DisableTrace {
 		_, err = fileservice.Get[fileservice.FileService](fs, etlFileServiceName)
 		if err != nil {
-			return nil, moerr.NewPanicError(err)
+			return nil, moerr.ConvertPanicError(err)
 		}
 	}
 
@@ -203,7 +201,7 @@ func (c *Config) resolveGossipSeedAddresses() error {
 			}
 		}
 		if len(filtered) != 1 {
-			return ErrInvalidConfig
+			return moerr.NewBadConfig("GossipSeedAddress %s", addr)
 		}
 		result = append(result, net.JoinHostPort(filtered[0], port))
 	}

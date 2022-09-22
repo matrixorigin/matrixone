@@ -20,7 +20,7 @@ coalesce(a, 1)
 1
 1
 select coalesce(b, 1) from t1;
-Can't cast column from VARCHAR type to BIGINT type because of one or more values in that column.
+invalid argument cast to int, bad value a
 select coalesce(b, '1') from t1;
 coalesce(b, 1)
 a
@@ -130,7 +130,12 @@ false
 true
 false
 select coalesce(a, 200) from t3;
-Can't cast '200' from BIGINT type to BOOL type.
+coalesce(a, 200)
+false
+true
+true
+true
+true
 select coalesce(b, '1') from t3;
 coalesce(b, 1)
 a

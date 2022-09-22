@@ -37,38 +37,23 @@ const (
 	NT_Merge
 )
 
-func compareDeleteNode(a, b *DeleteNode) int {
+func compareDeleteNode(va, vb txnbase.MVCCNode) int {
+	a := va.(*DeleteNode)
+	b := vb.(*DeleteNode)
 	a.RLock()
 	defer a.RUnlock()
 	b.RLock()
 	defer b.RUnlock()
-	if a.commitTs == b.commitTs {
-		if a.startTs.Less(b.startTs) {
-			return -1
-		} else if a.startTs.Greater(b.startTs) {
-			return 1
-		}
-		return 0
-	}
-	if a.commitTs.Equal(txnif.UncommitTS) {
-		return 1
-	} else if b.commitTs.Equal(txnif.UncommitTS) {
-		return -1
-	}
-	return 0
+	return a.TxnMVCCNode.Compare(b.TxnMVCCNode)
 }
 
 type DeleteNode struct {
 	*sync.RWMutex
-	*common.GenericDLNode[*DeleteNode]
+	*common.GenericDLNode[txnbase.MVCCNode]
+	*txnbase.TxnMVCCNode
 	chain      *DeleteChain
-	txn        txnif.AsyncTxn
-	logIndex   *wal.Index
 	logIndexes []*wal.Index
 	mask       *roaring.Bitmap
-	startTs    types.TS
-	commitTs   types.TS
-	prepareTs  types.TS
 	nt         NodeType
 	id         *common.ID
 	dt         handle.DeleteType
@@ -76,29 +61,43 @@ type DeleteNode struct {
 
 func NewMergedNode(commitTs types.TS) *DeleteNode {
 	n := &DeleteNode{
-		RWMutex:    new(sync.RWMutex),
-		commitTs:   commitTs,
-		startTs:    commitTs,
-		mask:       roaring.New(),
-		nt:         NT_Merge,
-		logIndexes: make([]*wal.Index, 0),
+		RWMutex:     new(sync.RWMutex),
+		TxnMVCCNode: txnbase.NewTxnMVCCNodeWithTS(commitTs),
+		mask:        roaring.New(),
+		nt:          NT_Merge,
+		logIndexes:  make([]*wal.Index, 0),
+	}
+	return n
+}
+func NewEmptyDeleteNode() txnbase.MVCCNode {
+	n := &DeleteNode{
+		RWMutex:     new(sync.RWMutex),
+		TxnMVCCNode: txnbase.NewTxnMVCCNodeWithTxn(nil),
+		mask:        roaring.New(),
+		nt:          NT_Normal,
+	}
+	return n
+}
+func NewDeleteNode(txn txnif.AsyncTxn, dt handle.DeleteType) *DeleteNode {
+	n := &DeleteNode{
+		RWMutex:     new(sync.RWMutex),
+		TxnMVCCNode: txnbase.NewTxnMVCCNodeWithTxn(txn),
+		mask:        roaring.New(),
+		nt:          NT_Normal,
+		dt:          dt,
 	}
 	return n
 }
 
-func NewDeleteNode(txn txnif.AsyncTxn, dt handle.DeleteType) *DeleteNode {
-	n := &DeleteNode{
-		RWMutex: new(sync.RWMutex),
-		mask:    roaring.New(),
-		txn:     txn,
-		nt:      NT_Normal,
-		dt:      dt,
-	}
-	if txn != nil {
-		n.startTs = txn.GetStartTS()
-		n.commitTs = txn.GetCommitTS()
-	}
-	return n
+// todo
+func (node *DeleteNode) CloneAll() txnbase.MVCCNode  { panic("todo") }
+func (node *DeleteNode) CloneData() txnbase.MVCCNode { panic("todo") }
+func (node *DeleteNode) Update(txnbase.MVCCNode)     { panic("todo") }
+func (node *DeleteNode) GetPrepareTS() types.TS {
+	return node.TxnMVCCNode.GetPrepare()
+}
+func (node *DeleteNode) OnReplayCommit(ts types.TS) {
+	node.TxnMVCCNode.OnReplayCommit(ts)
 }
 func (node *DeleteNode) GetID() *common.ID {
 	return node.id
@@ -145,16 +144,16 @@ func (node *DeleteNode) MergeLocked(o *DeleteNode, collectIndex bool) {
 	}
 	node.mask.Or(o.mask)
 	if collectIndex {
-		if o.logIndex != nil {
-			node.AddLogIndexLocked(o.logIndex)
+		if o.GetLogIndex() != nil {
+			node.AddLogIndexLocked(o.GetLogIndex())
 		}
 		if o.logIndexes != nil {
 			node.AddLogIndexesLocked(o.logIndexes)
 		}
 	}
 }
-func (node *DeleteNode) GetCommitTSLocked() types.TS { return node.commitTs }
-func (node *DeleteNode) GetStartTS() types.TS        { return node.startTs }
+func (node *DeleteNode) GetCommitTSLocked() types.TS { return node.TxnMVCCNode.GetEnd() }
+func (node *DeleteNode) GetStartTS() types.TS        { return node.TxnMVCCNode.GetStart() }
 
 func (node *DeleteNode) IsDeletedLocked(row uint32) bool {
 	return node.mask.Contains(row)
@@ -165,39 +164,26 @@ func (node *DeleteNode) RangeDeleteLocked(start, end uint32) {
 }
 func (node *DeleteNode) GetCardinalityLocked() uint32 { return uint32(node.mask.GetCardinality()) }
 
-func (node *DeleteNode) Prepare2PCPrepare() (err error) {
-	node.chain.mvcc.Lock()
-	defer node.chain.mvcc.Unlock()
-	if node.commitTs != txnif.UncommitTS {
-		return
-	}
-	node.commitTs = node.txn.GetPrepareTS()
-	node.prepareTs = node.txn.GetPrepareTS()
-	node.chain.UpdateLocked(node)
-	return
-}
-
 func (node *DeleteNode) PrepareCommit() (err error) {
 	node.chain.mvcc.Lock()
 	defer node.chain.mvcc.Unlock()
-	if node.commitTs != txnif.UncommitTS {
+	_, err = node.TxnMVCCNode.PrepareCommit()
+	if err != nil {
 		return
 	}
-	node.commitTs = node.txn.GetCommitTS()
-	node.prepareTs = node.txn.GetCommitTS()
 	node.chain.UpdateLocked(node)
 	return
 }
 
 func (node *DeleteNode) ApplyCommit(index *wal.Index) (err error) {
 	node.Lock()
-	if node.txn == nil {
-		panic("DeleteNode | ApplyCommit | LogicErr")
+	var ts types.TS
+	ts, err = node.TxnMVCCNode.ApplyCommit(index)
+	if err != nil {
+		return
 	}
-	node.txn = nil
-	node.logIndex = index
 	if node.chain.mvcc != nil {
-		node.chain.mvcc.SetMaxVisible(node.commitTs)
+		node.chain.mvcc.SetMaxVisible(ts)
 	}
 	node.chain.AddDeleteCnt(uint32(node.mask.GetCardinality()))
 	node.chain.mvcc.IncChangeNodeCnt()
@@ -207,23 +193,21 @@ func (node *DeleteNode) ApplyCommit(index *wal.Index) (err error) {
 
 func (node *DeleteNode) ApplyRollback(index *wal.Index) (err error) {
 	node.Lock()
-	if node.txn == nil {
-		panic("DeleteNode | ApplyCommit | LogicErr")
-	}
-	node.logIndex = index
+	defer node.Unlock()
+	err = node.TxnMVCCNode.ApplyRollback(index)
 	return
 }
 
 func (node *DeleteNode) GeneralString() string {
-	return fmt.Sprintf("TS=%d;Cnt=%d;LogIndex%v", node.commitTs, node.mask.GetCardinality(), node.logIndex)
+	return fmt.Sprintf("%s;Cnt=%d", node.TxnMVCCNode.String(), node.mask.GetCardinality())
 }
 
 func (node *DeleteNode) GeneralDesc() string {
-	return fmt.Sprintf("TS=%d;Cnt=%d", node.commitTs, node.mask.GetCardinality())
+	return fmt.Sprintf("%s;Cnt=%d", node.TxnMVCCNode.String(), node.mask.GetCardinality())
 }
 
 func (node *DeleteNode) GeneralVerboseString() string {
-	return fmt.Sprintf("TS=%d;%v;Cnt=%d;Deletes=%v", node.commitTs, node.logIndex, node.mask.GetCardinality(), node.mask)
+	return fmt.Sprintf("%s;Cnt=%d;Deletes=%v", node.TxnMVCCNode.String(), node.mask.GetCardinality(), node.mask)
 }
 
 func (node *DeleteNode) StringLocked() string {
@@ -232,10 +216,10 @@ func (node *DeleteNode) StringLocked() string {
 		ntype = "MERGE"
 	}
 	commitState := "C"
-	if node.commitTs == txnif.UncommitTS {
+	if node.GetEnd() == txnif.UncommitTS {
 		commitState = "UC"
 	}
-	s := fmt.Sprintf("[%s:%s](%d-%d)[%d:%s]%s", ntype, commitState, node.startTs, node.commitTs, node.mask.GetCardinality(), node.mask.String(), node.logIndex.String())
+	s := fmt.Sprintf("[%s:%s][%d:%s]%s", ntype, commitState, node.mask.GetCardinality(), node.mask.String(), node.TxnMVCCNode.String())
 	return s
 }
 
@@ -257,10 +241,11 @@ func (node *DeleteNode) WriteTo(w io.Writer) (n int64, err error) {
 		return
 	}
 	n += int64(sn) + 4
-	if err = binary.Write(w, binary.BigEndian, node.commitTs); err != nil {
+	var sn2 int64
+	if sn2, err = node.TxnMVCCNode.WriteTo(w); err != nil {
 		return
 	}
-	n += 8
+	n += sn2
 	return
 }
 
@@ -290,14 +275,15 @@ func (node *DeleteNode) ReadFrom(r io.Reader) (n int64, err error) {
 	if err != nil {
 		return
 	}
-	if err = binary.Read(r, binary.BigEndian, &node.commitTs); err != nil {
+	var sn2 int64
+	if sn2, err = node.TxnMVCCNode.ReadFrom(r); err != nil {
 		return
 	}
-	n += 4
+	n += sn2
 	return
 }
 func (node *DeleteNode) SetLogIndex(idx *wal.Index) {
-	node.logIndex = idx
+	node.TxnMVCCNode.SetLogIndex(idx)
 }
 func (node *DeleteNode) MakeCommand(id uint32) (cmd txnif.TxnCmd, err error) {
 	cmd = NewDeleteCmd(id, node)
@@ -317,7 +303,7 @@ func (node *DeleteNode) OnApply() (err error) {
 		if listener == nil {
 			return
 		}
-		err = listener(node.mask.GetCardinality(), node.mask.Iterator(), node.commitTs)
+		err = listener(node.mask.GetCardinality(), node.mask.Iterator(), node.GetCommitTSLocked())
 	}
 	return
 }

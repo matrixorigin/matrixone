@@ -15,11 +15,9 @@
 package plan
 
 import (
-	"fmt"
-
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/errors"
 )
 
 var (
@@ -73,7 +71,7 @@ func (builder *QueryBuilder) flattenSubquery(nodeID int32, subquery *plan.Subque
 	filterPreds, joinPreds := decreaseDepthAndDispatch(preds)
 
 	if len(filterPreds) > 0 && subquery.Typ >= plan.SubqueryRef_SCALAR {
-		return 0, nil, errors.New("", fmt.Sprintf("correlated columns in %s subquery deeper than 1 level will be supported in future version", subquery.Typ.String()))
+		return 0, nil, moerr.NewNYI("correlated columns in %s subquery deeper than 1 level will be supported in future version", subquery.Typ.String())
 	}
 
 	switch subquery.Typ {
@@ -217,7 +215,7 @@ func (builder *QueryBuilder) flattenSubquery(nodeID int32, subquery *plan.Subque
 		return nodeID, nil, nil
 
 	default:
-		return 0, nil, errors.New("", fmt.Sprintf("%s subquery not supported", subquery.Typ.String()))
+		return 0, nil, moerr.NewNotSupported("%s subquery not supported", subquery.Typ.String())
 	}
 }
 
@@ -317,7 +315,7 @@ func (builder *QueryBuilder) generateComparison(op string, child *plan.Expr, ctx
 			return builder.generateRecursiveComparison(">", op, childList, ctx, 0)
 
 		default:
-			return nil, errors.New("", "row constructor only support comparison operators")
+			return nil, moerr.NewNotSupported("row constructor only support comparison operators")
 		}
 
 	default:

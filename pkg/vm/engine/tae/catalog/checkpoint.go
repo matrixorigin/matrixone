@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -44,7 +45,7 @@ type CheckpointItem interface {
 func CheckpointSelectOp(entry BaseEntry, minTs, maxTs types.TS) bool {
 	entry.RLock()
 	defer entry.RUnlock()
-	return entry.ExistUpdate(minTs, maxTs)
+	return entry.HasCommittedNodeInRange(minTs, maxTs)
 }
 
 type CatalogEntry interface {
@@ -77,9 +78,9 @@ type Checkpoint struct {
 
 func (ckp *Checkpoint) String() string {
 	if ckp == nil {
-		return "CommitId=0,MaxTS=0,LSN=0"
+		return "CommitId=0,MaxTS=0-0,LSN=0"
 	}
-	return fmt.Sprintf("CommitId=%d,MaxTS=%d,LSN=%d", ckp.CommitId, ckp.MaxTS, ckp.LSN)
+	return fmt.Sprintf("CommitId=%d,MaxTS=%s,LSN=%d", ckp.CommitId, ckp.MaxTS.ToString(), ckp.LSN)
 }
 
 type CheckpointEntry struct {

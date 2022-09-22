@@ -17,7 +17,7 @@ package errutil
 import (
 	"fmt"
 
-	"github.com/matrixorigin/matrixone/pkg/util"
+	"github.com/matrixorigin/matrixone/pkg/util/stack"
 
 	"github.com/cockroachdb/errors/errbase"
 )
@@ -25,7 +25,7 @@ import (
 // StackTracer retrieves the StackTrace
 // Generally you would want to use the GetStackTracer function to do that.
 type StackTracer interface {
-	StackTrace() util.StackTrace
+	StackTrace() stack.StackTrace
 }
 
 func GetStackTracer(inErr error) StackTracer {
@@ -47,7 +47,7 @@ func HasStack(err error) bool {
 type withStack struct {
 	cause error
 
-	*util.Stack
+	*stack.Stack
 }
 
 var _ error = (*withStack)(nil)

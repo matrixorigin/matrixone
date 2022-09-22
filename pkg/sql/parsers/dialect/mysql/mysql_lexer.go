@@ -15,11 +15,11 @@
 package mysql
 
 import (
-	"errors"
 	"fmt"
 	"math"
 	"strconv"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
@@ -38,7 +38,7 @@ func ParseOne(sql string) (tree.Statement, error) {
 		return nil, lexer.scanner.LastError
 	}
 	if len(lexer.stmts) != 1 {
-		return nil, errors.New("syntax error, or too many sql to parse")
+		return nil, moerr.NewInternalError("syntax error, or too many sql to parse")
 	}
 	return lexer.stmts[0], nil
 }
@@ -84,7 +84,13 @@ func (l *Lexer) Lex(lval *yySymType) int {
 
 func (l *Lexer) Error(err string) {
 	errMsg := fmt.Sprintf("You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. %s", err)
-	l.scanner.LastError = PositionedErr{Err: errMsg, Pos: l.scanner.Pos + 1, Near: l.scanner.LastToken}
+	near := l.scanner.buf[l.scanner.PrePos:]
+	var lenStr string
+	if len(near) > 1024 {
+		lenStr = " (total length " + strconv.Itoa(len(lenStr)) + ")"
+		near = near[:1024]
+	}
+	l.scanner.LastError = PositionedErr{Err: errMsg, Line: l.scanner.Line, Col: l.scanner.Col, Near: near, LenStr: lenStr}
 }
 
 func (l *Lexer) AppendStmt(stmt tree.Statement) {

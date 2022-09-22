@@ -19,7 +19,6 @@ import (
 	"context"
 	"database/sql"
 	"encoding/binary"
-	"errors"
 	"fmt"
 	"math"
 	"reflect"
@@ -35,6 +34,7 @@ import (
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/golang/mock/gomock"
 	fuzz "github.com/google/gofuzz"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -42,6 +42,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/vm/mempool"
+	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
 	"github.com/smartystreets/goconvey/convey"
 	"github.com/stretchr/testify/require"
@@ -995,12 +996,12 @@ func (tRM *TestRoutineManager) resultsetHandler(rs goetty.IOSession, msg interfa
 
 	pro := routine.protocol.(*MysqlProtocolImpl)
 	if !ok {
-		return errors.New("routine does not exist")
+		return moerr.NewInternalError("routine does not exist")
 	}
 	packet, ok := msg.(*Packet)
 	pro.sequenceId = uint8(packet.SequenceID + 1)
 	if !ok {
-		return errors.New("message is not Packet")
+		return moerr.NewInternalError("message is not Packet")
 	}
 
 	length := packet.Length
@@ -1009,12 +1010,12 @@ func (tRM *TestRoutineManager) resultsetHandler(rs goetty.IOSession, msg interfa
 		var err error
 		msg, err = pro.tcpConn.Read(goetty.ReadOptions{})
 		if err != nil {
-			return errors.New("read msg error")
+			return moerr.NewInternalError("read msg error")
 		}
 
 		packet, ok = msg.(*Packet)
 		if !ok {
-			return errors.New("message is not Packet")
+			return moerr.NewInternalError("message is not Packet")
 		}
 
 		pro.sequenceId = uint8(packet.SequenceID + 1)
@@ -1476,7 +1477,7 @@ func do_query_resp_resultset(t *testing.T, db *sql.DB, wantErr bool, skipResults
 						x := value.(types.Datetime).String()
 						data = []byte(x)
 					default:
-						require.NoError(t, fmt.Errorf("unsupported type %v", col.ColumnType()))
+						require.NoError(t, moerr.NewInternalError("unsupported type %v", col.ColumnType()))
 					}
 					//check
 					ret := reflect.DeepEqual(data, val)
@@ -1525,7 +1526,7 @@ func Test_writePackets(t *testing.T) {
 				return nil
 			} else {
 				cnt++
-				return fmt.Errorf("write and flush failed.")
+				return moerr.NewInternalError("write and flush failed.")
 			}
 		}).AnyTimes()
 
@@ -1545,7 +1546,7 @@ func Test_writePackets(t *testing.T) {
 		ioses := mock_frontend.NewMockIOSession(ctrl)
 
 		ioses.EXPECT().Write(gomock.Any(), gomock.Any()).DoAndReturn(func(msg interface{}, opts goetty.WriteOptions) error {
-			return fmt.Errorf("write and flush failed.")
+			return moerr.NewInternalError("write and flush failed.")
 		}).AnyTimes()
 
 		sv, err := getSystemVariables("test/system_vars_config.toml")
@@ -1917,6 +1918,7 @@ func TestParseExecuteData(t *testing.T) {
 }
 
 func Test_resultset(t *testing.T) {
+	ctx := context.TODO()
 	convey.Convey("send result set batch row succ", t, func() {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
@@ -1931,6 +1933,18 @@ func Test_resultset(t *testing.T) {
 		}
 
 		proto := NewMysqlClientProtocol(0, ioses, 1024, sv)
+		eng := mock_frontend.NewMockEngine(ctrl)
+		txnClient := mock_frontend.NewMockTxnClient(ctrl)
+		pu, err := getParameterUnit("test/system_vars_config.toml", eng, txnClient)
+		if err != nil {
+			t.Error(err)
+		}
+		guestMmu := guest.New(pu.SV.GuestMmuLimitation, pu.HostMmu)
+		var gSys GlobalSystemVariables
+		InitGlobalSystemVariables(&gSys)
+		ses := NewSession(proto, guestMmu, pu.Mempool, pu, &gSys)
+		ses.SetRequestContext(ctx)
+		proto.ses = ses
 
 		res := make8ColumnsResultSet()
 
@@ -1952,6 +1966,18 @@ func Test_resultset(t *testing.T) {
 		}
 
 		proto := NewMysqlClientProtocol(0, ioses, 1024, sv)
+		eng := mock_frontend.NewMockEngine(ctrl)
+		txnClient := mock_frontend.NewMockTxnClient(ctrl)
+		pu, err := getParameterUnit("test/system_vars_config.toml", eng, txnClient)
+		if err != nil {
+			t.Error(err)
+		}
+		guestMmu := guest.New(pu.SV.GuestMmuLimitation, pu.HostMmu)
+		var gSys GlobalSystemVariables
+		InitGlobalSystemVariables(&gSys)
+		ses := NewSession(proto, guestMmu, pu.Mempool, pu, &gSys)
+		ses.SetRequestContext(ctx)
+		proto.ses = ses
 
 		res := make8ColumnsResultSet()
 
@@ -1973,6 +1999,18 @@ func Test_resultset(t *testing.T) {
 		}
 
 		proto := NewMysqlClientProtocol(0, ioses, 1024, sv)
+		eng := mock_frontend.NewMockEngine(ctrl)
+		txnClient := mock_frontend.NewMockTxnClient(ctrl)
+		pu, err := getParameterUnit("test/system_vars_config.toml", eng, txnClient)
+		if err != nil {
+			t.Error(err)
+		}
+		guestMmu := guest.New(pu.SV.GuestMmuLimitation, pu.HostMmu)
+		var gSys GlobalSystemVariables
+		InitGlobalSystemVariables(&gSys)
+		ses := NewSession(proto, guestMmu, pu.Mempool, pu, &gSys)
+		ses.SetRequestContext(ctx)
+		proto.ses = ses
 
 		res := make8ColumnsResultSet()
 
@@ -1980,6 +2018,40 @@ func Test_resultset(t *testing.T) {
 		convey.So(err, convey.ShouldBeNil)
 
 		err = proto.SendResultSetTextRow(res, 0)
+		convey.So(err, convey.ShouldBeNil)
+	})
+
+	convey.Convey("send binary result set succ", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+		ioses := mock_frontend.NewMockIOSession(ctrl)
+
+		ioses.EXPECT().OutBuf().Return(buf.NewByteBuf(1024)).AnyTimes()
+		ioses.EXPECT().Write(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+
+		sv, err := getSystemVariables("test/system_vars_config.toml")
+		if err != nil {
+			t.Error(err)
+		}
+
+		proto := NewMysqlClientProtocol(0, ioses, 1024, sv)
+		eng := mock_frontend.NewMockEngine(ctrl)
+		txnClient := mock_frontend.NewMockTxnClient(ctrl)
+		pu, err := getParameterUnit("test/system_vars_config.toml", eng, txnClient)
+		if err != nil {
+			t.Error(err)
+		}
+		guestMmu := guest.New(pu.SV.GuestMmuLimitation, pu.HostMmu)
+		var gSys GlobalSystemVariables
+		InitGlobalSystemVariables(&gSys)
+		ses := NewSession(proto, guestMmu, pu.Mempool, pu, &gSys)
+		ses.SetRequestContext(ctx)
+		ses.Cmd = int(COM_STMT_EXECUTE)
+		proto.ses = ses
+
+		res := make8ColumnsResultSet()
+
+		err = proto.SendResultSetTextBatchRowSpeedup(res, 0)
 		convey.So(err, convey.ShouldBeNil)
 	})
 }

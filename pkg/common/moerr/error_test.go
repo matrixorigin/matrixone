@@ -15,9 +15,7 @@
 package moerr
 
 import (
-	"context"
-	goErrors "errors"
-	"reflect"
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -32,13 +30,13 @@ func pf2(a, b int) int {
 }
 
 func pf3() {
-	panic(NewInternalError("%s %s %s %d", "foo", "bar", "zoo", 2))
+	panic(NewInternalError(fmt.Sprintf("%s %s %s %d", "foo", "bar", "zoo", 2)))
 }
 
 func PanicF(i int) (err *Error) {
 	defer func() {
 		if e := recover(); e != nil {
-			err = NewPanicError(e)
+			err = ConvertPanicError(e)
 		}
 	}()
 	switch i {
@@ -66,364 +64,48 @@ func TestPanicError(t *testing.T) {
 			if err == nil {
 				t.Errorf("Uncaught panic")
 			}
-			if err.Ok() {
+			if err.Succeeded() {
 				t.Errorf("Caught OK panic")
 			}
 		}
 	}
 }
 
-func TestNew(t *testing.T) {
-	type args struct {
-		code uint16
-		args []any
-	}
-	tests := []struct {
-		name string
-		args args
-		want *Error
-	}{
-		{
-			name: "DIVISION_BY_ZERO",
-			args: args{code: DIVIVISION_BY_ZERO, args: []any{}},
-			want: &Error{Code: DIVIVISION_BY_ZERO, SqlState: MySQLDefaultSqlState, Message: "division by zero"},
-		},
-		{
-			name: "OUT_OF_RANGE",
-			args: args{code: OUT_OF_RANGE, args: []any{"double", "bigint"}},
-			want: &Error{Code: OUT_OF_RANGE, SqlState: MySQLDefaultSqlState, Message: "overflow from double to bigint"},
-		},
-		{
-			name: "DATA_TRUNCATED",
-			args: args{code: DATA_TRUNCATED, args: []any{"decimal128"}},
-			want: &Error{Code: DATA_TRUNCATED, SqlState: MySQLDefaultSqlState, Message: "decimal128 data truncated"},
-		},
-		{
-			name: "BAD_CONFIGURATION",
-			args: args{code: BAD_CONFIGURATION, args: []any{"log"}},
-			want: &Error{Code: BAD_CONFIGURATION, SqlState: MySQLDefaultSqlState, Message: "invalid log configuration"},
-		},
-		{
-			name: "LOG_SERVICE_NOT_READY",
-			args: args{code: LOG_SERVICE_NOT_READY, args: []any{}},
-			want: &Error{Code: LOG_SERVICE_NOT_READY, SqlState: MySQLDefaultSqlState, Message: "log service not ready"},
-		},
-		{
-			name: "ErrClientClosed",
-			args: args{code: ErrClientClosed, args: []any{}},
-			want: &Error{Code: ErrClientClosed, SqlState: MySQLDefaultSqlState, Message: "client closed"},
-		},
-		{
-			name: "ErrBackendClosed",
-			args: args{code: ErrBackendClosed, args: []any{}},
-			want: &Error{Code: ErrBackendClosed, SqlState: MySQLDefaultSqlState, Message: "backend closed"},
-		},
-		{
-			name: "ErrStreamClosed",
-			args: args{code: ErrStreamClosed, args: []any{}},
-			want: &Error{Code: ErrStreamClosed, SqlState: MySQLDefaultSqlState, Message: "stream closed"},
-		},
-		{
-			name: "ErrNoAvailableBackend",
-			args: args{code: ErrNoAvailableBackend, args: []any{}},
-			want: &Error{Code: ErrNoAvailableBackend, SqlState: MySQLDefaultSqlState, Message: "no available backend"},
-		},
-		{
-			name: "ErrTxnClosed",
-			args: args{code: ErrTxnClosed, args: []any{}},
-			want: &Error{Code: ErrTxnClosed, SqlState: MySQLDefaultSqlState, Message: "the transaction has been committed or aborted"},
-		},
-		{
-			name: "ErrTxnWriteConflict",
-			args: args{code: ErrTxnWriteConflict, args: []any{}},
-			want: &Error{Code: ErrTxnWriteConflict, SqlState: MySQLDefaultSqlState, Message: "write conflict"},
-		},
-		{
-			name: "ErrMissingTxn",
-			args: args{code: ErrMissingTxn, args: []any{}},
-			want: &Error{Code: ErrMissingTxn, SqlState: MySQLDefaultSqlState, Message: "missing txn"},
-		},
-		{
-			name: "ErrUnresolvedConflict",
-			args: args{code: ErrUnresolvedConflict, args: []any{}},
-			want: &Error{Code: ErrUnresolvedConflict, SqlState: MySQLDefaultSqlState, Message: "unresolved conflict"},
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := New(tt.args.code, tt.args.args...)
-			require.Equal(t, tt.want, got)
-			require.Equal(t, tt.want.Message, got.Error())
-		})
-	}
-}
-
-func TestNewError(t *testing.T) {
-	type args struct {
-		code uint16
-		msg  string
-	}
-	tests := []struct {
-		name string
-		args args
-		want *Error
-	}{
-		{
-			name: "DIVISION_BY_ZERO",
-			want: New(DIVIVISION_BY_ZERO),
-			args: args{code: DIVIVISION_BY_ZERO, msg: "division by zero"},
-		},
-		{
-			name: "OUT_OF_RANGE",
-			want: New(OUT_OF_RANGE, "double", "bigint"),
-			args: args{code: OUT_OF_RANGE, msg: "overflow from double to bigint"},
-		},
-		{
-			name: "DATA_TRUNCATED",
-			want: New(DATA_TRUNCATED, "decimal128"),
-			args: args{code: DATA_TRUNCATED, msg: "decimal128 data truncated"},
-		},
-		{
-			name: "BAD_CONFIGURATION",
-			want: New(BAD_CONFIGURATION, "log"),
-			args: args{code: BAD_CONFIGURATION, msg: "invalid log configuration"},
-		},
-		{
-			name: "LOG_SERVICE_NOT_READY",
-			want: New(LOG_SERVICE_NOT_READY),
-			args: args{code: LOG_SERVICE_NOT_READY, msg: "log service not ready"},
-		},
-		{
-			name: "ErrClientClosed",
-			want: New(ErrClientClosed),
-			args: args{code: ErrClientClosed, msg: "client closed"},
-		},
-		{
-			name: "ErrBackendClosed",
-			want: New(ErrBackendClosed),
-			args: args{code: ErrBackendClosed, msg: "backend closed"},
-		},
-		{
-			name: "ErrStreamClosed",
-			want: New(ErrStreamClosed),
-			args: args{code: ErrStreamClosed, msg: "stream closed"},
-		},
-		{
-			name: "ErrNoAvailableBackend",
-			want: New(ErrNoAvailableBackend),
-			args: args{code: ErrNoAvailableBackend, msg: "no available backend"},
-		},
-		{
-			name: "ErrTxnClosed",
-			want: New(ErrTxnClosed),
-			args: args{code: ErrTxnClosed, msg: "the transaction has been committed or aborted"},
-		},
-		{
-			name: "ErrTxnWriteConflict",
-			want: New(ErrTxnWriteConflict),
-			args: args{code: ErrTxnWriteConflict, msg: "write conflict"},
-		},
-		{
-			name: "ErrMissingTxn",
-			want: New(ErrMissingTxn),
-			args: args{code: ErrMissingTxn, msg: "missing txn"},
-		},
-		{
-			name: "ErrUnresolvedConflict",
-			want: New(ErrUnresolvedConflict),
-			args: args{code: ErrUnresolvedConflict, msg: "unresolved conflict"},
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := NewError(tt.args.code, tt.args.msg)
-			require.Equal(t, tt.want, got)
-			require.Equal(t, tt.want.Message, got.Error())
-			require.Equal(t, IsMoErrCode(got, tt.want.Code), true)
-		})
-	}
-}
-
 func TestNew_panic(t *testing.T) {
-	type args struct {
-		code uint16
-		msg  string
-	}
-	tests := []struct {
-		name string
-		args args
-		want string
-	}{
-		{
-			name: "panic",
-			args: args{code: 65534},
-			want: "not exist MOErrorCode: 65534",
-		},
-	}
 	defer func() {
 		var err any
 		if err = recover(); err != nil {
-			require.Equal(t, tests[0].want, err.(error).Error())
+			require.Equal(t, "foobarzoo is not yet implemented", err.(*Error).Error())
 			t.Logf("err: %+v", err)
 		}
 	}()
-	for _, tt := range tests {
-		got := New(tt.args.code, tt.args.msg)
-		require.Equal(t, nil, got)
-	}
+	panic(NewNYI("foobarzoo"))
 }
 
 func TestNew_MyErrorCode(t *testing.T) {
-	type args struct {
-		code uint16
-		args []any
-	}
-	tests := []struct {
-		name string
-		args args
-		want uint16
-	}{
-		{
-			name: "hasMysqlErrorCode",
-			args: args{code: ER_NO_DB_ERROR, args: []any{}},
-			want: 1046,
-		},
-	}
-	for _, tt := range tests {
-		got := New(tt.args.code, tt.args.args...)
-		require.Equal(t, got.Code, tt.want)
-	}
-}
+	err := NewDivByZero()
+	require.Equal(t, ER_DIVISION_BY_ZERO, err.MySQLCode())
 
-func TestNewError_panic(t *testing.T) {
-	type args struct {
-		code uint16
-		msg  string
-	}
-	tests := []struct {
-		name string
-		args args
-		want string
-	}{
-		{
-			name: "panic",
-			args: args{code: 65534, msg: "not exist error code"},
-			want: "not exist MOErrorCode: 65534",
-		},
-	}
-	defer func() {
-		var err any
-		if err = recover(); err != nil {
-			require.Equal(t, tests[0].want, err.(error).Error())
-			t.Logf("err: %+v", err)
-		}
-	}()
-	for _, tt := range tests {
-		got := NewError(tt.args.code, tt.args.msg)
-		require.Equal(t, nil, got)
-	}
-}
-
-func TestNewInfo(t *testing.T) {
-	type args struct {
-		msg string
-	}
-	tests := []struct {
-		name string
-		args args
-		want *Error
-	}{
-		{
-			name: "normal",
-			args: args{msg: "info msg"},
-			want: New(INFO, "info msg"),
-		},
-	}
-	for _, tt := range tests {
-		got := NewInfo(tt.args.msg)
-		require.Equal(t, tt.want, got)
-		require.Equal(t, tt.want.Message, got.Error())
-		require.Equal(t, IsMoErrCode(got, tt.want.Code), true)
-	}
-}
-
-func TestNewWarn(t *testing.T) {
-	type args struct {
-		msg string
-	}
-	tests := []struct {
-		name string
-		args args
-		want *Error
-	}{
-		{
-			name: "normal",
-			args: args{msg: "error msg"},
-			want: New(WARN, "error msg"),
-		},
-	}
-	for _, tt := range tests {
-		got := NewWarn(tt.args.msg)
-		require.Equal(t, tt.want, got)
-		require.Equal(t, tt.want.Message, got.Error())
-		require.Equal(t, tt.want.Code, got.(*Error).Code)
-		require.Equal(t, "HY000", got.(*Error).SqlState)
-		require.Equal(t, IsMoErrCode(got, tt.want.Code), true)
-	}
+	err = NewOutOfRange("int8", "1111")
+	require.Equal(t, ER_DATA_OUT_OF_RANGE, err.MySQLCode())
 }
 
 func TestIsMoErrCode(t *testing.T) {
-	type args struct {
-		e  error
-		rc uint16
-	}
-	tests := []struct {
-		name string
-		args args
-		want bool
-	}{
-		{
-			name: "not Error",
-			args: args{e: goErrors.New("raw error"), rc: INFO},
-			want: false,
-		},
-		{
-			name: "End Error",
-			args: args{e: New(ErrEnd, "max value of MOError"), rc: ErrEnd},
-			want: true,
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := IsMoErrCode(tt.args.e, tt.args.rc); got != tt.want {
-				t.Errorf("IsMoErrCode() = %v, want %v", got, tt.want)
-			}
-		})
-	}
+	err := NewDivByZero()
+	require.True(t, IsMoErrCode(err, ErrDivByZero))
+	require.False(t, IsMoErrCode(err, ErrOOM))
+
+	err2 := NewInternalError("what is this")
+	require.False(t, IsMoErrCode(err2, ErrDivByZero))
+	require.False(t, IsMoErrCode(err2, ErrOOM))
 }
 
-func TestNewWithContext(t *testing.T) {
-	type args struct {
-		ctx  context.Context
-		code uint16
-		args []any
-	}
-	tests := []struct {
-		name string
-		args args
-		want *Error
-	}{
-		{
-			name: "normal",
-			args: args{ctx: context.Background(), code: DIVIVISION_BY_ZERO, args: []any{}},
-			want: &Error{Code: DIVIVISION_BY_ZERO, SqlState: MySQLDefaultSqlState, Message: "division by zero"},
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := NewWithContext(tt.args.ctx, tt.args.code, tt.args.args...); !reflect.DeepEqual(got, tt.want) {
-				t.Errorf("NewWithContext() = %v, want %v", got, tt.want)
-			}
-		})
-	}
+func TestEncoding(t *testing.T) {
+	e := NewDivByZero()
+	data, err := e.MarshalBinary()
+	require.Nil(t, err)
+	e2 := new(Error)
+	err = e2.UnmarshalBinary(data)
+	require.Nil(t, err)
+	require.Equal(t, e, e2)
 }

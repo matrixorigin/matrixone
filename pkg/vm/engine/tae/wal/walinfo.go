@@ -37,7 +37,7 @@ func newWalInfo() *walInfo {
 }
 
 func (w *walInfo) logEntry(info *entry.Info) {
-	if info.Group == GroupC {
+	if info.Group == GroupPrepare {
 		w.cmu.Lock()
 		w.cTidLsnMap[info.TxnId] = info.GroupLSN
 		w.cmu.Unlock()

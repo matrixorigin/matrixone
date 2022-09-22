@@ -16,9 +16,9 @@ package frontend
 
 import (
 	"context"
-	"fmt"
 	"strings"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -50,6 +50,8 @@ type ComputationWrapper interface {
 	Compile(requestCtx context.Context, u interface{}, fill func(interface{}, *batch.Batch) error) (interface{}, error)
 
 	GetUUID() []byte
+
+	RecordExecPlan(ctx context.Context) error
 }
 
 type ColumnInfo interface {
@@ -104,7 +106,7 @@ func makeCmdFieldListSql(query string) string {
 // parseCmdFieldList parses the internal cmd field list
 func parseCmdFieldList(sql string) (*InternalCmdFieldList, error) {
 	if !isCmdFieldListSql(sql) {
-		return nil, fmt.Errorf("it is not the CMD_FIELD_LIST")
+		return nil, moerr.NewInternalError("it is not the CMD_FIELD_LIST")
 	}
 	rest := strings.TrimSpace(sql[len(cmdFieldListSql):])
 	//find null
@@ -116,7 +118,7 @@ func parseCmdFieldList(sql string) (*InternalCmdFieldList, error) {
 		//wildcard := payload[nullIdx+1:]
 		return &InternalCmdFieldList{tableName: tableName}, nil
 	} else {
-		return nil, fmt.Errorf("wrong format for COM_FIELD_LIST")
+		return nil, moerr.NewInternalError("wrong format for COM_FIELD_LIST")
 	}
 }
 

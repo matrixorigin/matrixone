@@ -16,18 +16,23 @@ package catalog
 
 import (
 	"encoding/binary"
+	"fmt"
 	"io"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 )
 
 type EntryMVCCNode struct {
 	CreatedAt, DeletedAt types.TS
-	Deleted              bool
+}
+
+func NewEntryMVCCNode() *EntryMVCCNode {
+	return &EntryMVCCNode{}
 }
 
 func (un *EntryMVCCNode) HasDropped() bool {
-	return un.Deleted
+	return !un.DeletedAt.IsEmpty()
 }
 
 func (un *EntryMVCCNode) GetCreatedAt() types.TS {
@@ -39,23 +44,25 @@ func (un *EntryMVCCNode) GetDeletedAt() types.TS {
 }
 
 func (un *EntryMVCCNode) IsCreating() bool {
-	return un.CreatedAt.IsEmpty()
+	return un.CreatedAt.Equal(txnif.UncommitTS)
 }
 
 func (un *EntryMVCCNode) Clone() *EntryMVCCNode {
 	return &EntryMVCCNode{
 		CreatedAt: un.CreatedAt,
 		DeletedAt: un.DeletedAt,
-		Deleted:   un.Deleted,
 	}
 }
 
-func (un *EntryMVCCNode) ApplyDeleteLocked() (err error) {
-	if un.Deleted {
-		panic("cannot apply delete to deleted node")
+func (un *EntryMVCCNode) CloneData() *EntryMVCCNode {
+	return &EntryMVCCNode{
+		CreatedAt: un.CreatedAt,
+		DeletedAt: un.DeletedAt,
 	}
-	un.Deleted = true
-	return
+}
+
+func (un *EntryMVCCNode) Delete() {
+	un.DeletedAt = txnif.UncommitTS
 }
 
 func (un *EntryMVCCNode) ReadFrom(r io.Reader) (n int64, err error) {
@@ -67,9 +74,6 @@ func (un *EntryMVCCNode) ReadFrom(r io.Reader) (n int64, err error) {
 		return
 	}
 	n += 12
-	if !un.DeletedAt.IsEmpty() {
-		un.Deleted = true
-	}
 	return
 }
 func (un *EntryMVCCNode) WriteTo(w io.Writer) (n int64, err error) {
@@ -82,4 +86,29 @@ func (un *EntryMVCCNode) WriteTo(w io.Writer) (n int64, err error) {
 	}
 	n += 12
 	return
+}
+func (un *EntryMVCCNode) PrepareCommit() (err error) {
+	return nil
+}
+func (un *EntryMVCCNode) String() string {
+	return fmt.Sprintf("[C@%s,D@%s]", un.CreatedAt.ToString(), un.DeletedAt.ToString())
+}
+func (un *EntryMVCCNode) ApplyCommit(ts types.TS) (err error) {
+	if un.CreatedAt == txnif.UncommitTS {
+		un.CreatedAt = ts
+	}
+	if un.DeletedAt == txnif.UncommitTS {
+		un.DeletedAt = ts
+	}
+	return nil
+}
+
+func (un *EntryMVCCNode) ReplayCommit(ts types.TS) (err error) {
+	if un.CreatedAt == txnif.UncommitTS {
+		un.CreatedAt = ts
+	}
+	if un.DeletedAt == txnif.UncommitTS {
+		un.DeletedAt = ts
+	}
+	return nil
 }

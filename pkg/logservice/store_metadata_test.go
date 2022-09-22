@@ -90,7 +90,7 @@ func TestStartReplicas(t *testing.T) {
 	cfg.Fill()
 	require.NoError(t, mkdirAll(cfg.DataDir, cfg.FS))
 	func() {
-		store, err := getTestStore(cfg, false)
+		store, err := getTestStore(cfg, false, nil)
 		require.NoError(t, err)
 		members := make(map[uint64]dragonboat.Target)
 		members[1] = store.id()
@@ -101,7 +101,7 @@ func TestStartReplicas(t *testing.T) {
 		require.NoError(t, store.startReplica(20, 1, members, false))
 	}()
 
-	store, err := getTestStore(cfg, false)
+	store, err := getTestStore(cfg, false, nil)
 	require.NoError(t, err)
 	defer func() {
 		require.NoError(t, store.close())

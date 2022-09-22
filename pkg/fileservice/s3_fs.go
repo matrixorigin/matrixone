@@ -31,6 +31,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws/transport/http"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
 // S3FS is a FileService implementation backed by S3
@@ -138,10 +139,10 @@ func newS3FS(
 ) (*S3FS, error) {
 
 	if endpoint == "" {
-		return nil, fmt.Errorf("%w: empty endpoint", ErrBadS3Config)
+		moerr.NewBadS3Config("empty endpoint")
 	}
 	if bucket == "" {
-		return nil, fmt.Errorf("%w: empty bucket", ErrBadS3Config)
+		moerr.NewBadS3Config("empty bucket")
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*17)
@@ -164,7 +165,7 @@ func newS3FS(
 		Bucket: ptrTo(bucket),
 	})
 	if err != nil {
-		return nil, fmt.Errorf("bad s3 config: %w", err)
+		return nil, moerr.NewInternalError("bad s3 config: %v", err)
 	}
 
 	fs := &S3FS{
@@ -256,7 +257,7 @@ func (s *S3FS) Write(ctx context.Context, vector IOVector) error {
 		},
 	)
 	err = s.mapError(err)
-	if errors.Is(err, ErrFileNotFound) {
+	if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
 		// key not exists
 		err = nil
 	}
@@ -266,7 +267,7 @@ func (s *S3FS) Write(ctx context.Context, vector IOVector) error {
 	}
 	if output != nil {
 		// key existed
-		return ErrFileExisted
+		return moerr.NewFileAlreadyExists(path.File)
 	}
 
 	return s.write(ctx, vector)
@@ -315,7 +316,7 @@ func (s *S3FS) write(ctx context.Context, vector IOVector) error {
 func (s *S3FS) Read(ctx context.Context, vector *IOVector) error {
 
 	if len(vector.Entries) == 0 {
-		return ErrEmptyVector
+		return moerr.NewEmptyVector()
 	}
 
 	if s.memCache == nil {
@@ -407,7 +408,7 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector) error {
 
 		start := entry.Offset - min
 		if start >= int64(len(content)) {
-			return ErrEmptyRange
+			return moerr.NewEmptyRange(path.File)
 		}
 
 		var data []byte
@@ -417,12 +418,12 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector) error {
 		} else {
 			end := start + entry.Size
 			if end > int64(len(content)) {
-				return ErrUnexpectedEOF
+				return moerr.NewUnexpectedEOF(path.File)
 			}
 			data = content[start:end]
 		}
 		if len(data) == 0 {
-			return ErrEmptyRange
+			return moerr.NewEmptyRange(path.File)
 		}
 
 		setData := true
@@ -495,7 +496,7 @@ func (s *S3FS) mapError(err error) error {
 	var httpError *http.ResponseError
 	if errors.As(err, &httpError) {
 		if httpError.Response.StatusCode == 404 {
-			return ErrFileNotFound
+			return moerr.NewFileNotFound("")
 		}
 	}
 	return err

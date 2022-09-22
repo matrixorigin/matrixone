@@ -151,19 +151,19 @@ func newDBCmd(id uint32, cmdType int16, entry *DBEntry) *EntryCommand {
 }
 
 func (cmd *EntryCommand) Desc() string {
-	s := fmt.Sprintf("CmdName=%s;%s;TS=%d;CSN=%d", CmdName(cmd.cmdType), cmd.IDString(), cmd.GetTs(), cmd.ID)
+	s := fmt.Sprintf("CmdName=%s;%s;TS=%s;CSN=%d", CmdName(cmd.cmdType), cmd.IDString(), cmd.GetTs().ToString(), cmd.ID)
 	return s
 }
 
-func (cmd *EntryCommand) GetLogIndex() []*wal.Index {
+func (cmd *EntryCommand) GetLogIndex() *wal.Index {
 	if cmd.entry == nil {
 		return nil
 	}
-	return cmd.entry.GetUpdateNodeLocked().GetLogIndex()
+	return cmd.entry.GetNodeLocked().GetLogIndex()
 }
 
 func (cmd *EntryCommand) GetTs() types.TS {
-	ts := cmd.entry.GetUpdateNodeLocked().GetEnd()
+	ts := cmd.entry.GetNodeLocked().GetPrepare()
 	return ts
 }
 func (cmd *EntryCommand) IDString() string {

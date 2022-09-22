@@ -24,6 +24,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 
@@ -466,7 +467,7 @@ func (s *Schema) AppendColDef(def *ColDef) (err error) {
 	s.ColDefs = append(s.ColDefs, def)
 	_, existed := s.NameIndex[def.Name]
 	if existed {
-		err = fmt.Errorf("%w: duplicate column \"%s\"", ErrSchemaValidation, def.Name)
+		err = moerr.NewConstraintViolation("duplicate column \"%s\"", def.Name)
 		return
 	}
 	s.NameIndex[def.Name] = def.Idx
@@ -644,11 +645,11 @@ func (s *Schema) AllNames() []string {
 
 func (s *Schema) Finalize(rebuild bool) (err error) {
 	if s == nil {
-		err = fmt.Errorf("%w: nil schema", ErrSchemaValidation)
+		err = moerr.NewConstraintViolation("no schema")
 		return
 	}
 	if len(s.ColDefs) == 0 {
-		err = fmt.Errorf("%w: empty schema", ErrSchemaValidation)
+		err = moerr.NewConstraintViolation("no schema")
 		return
 	}
 	if !rebuild {
@@ -669,13 +670,13 @@ func (s *Schema) Finalize(rebuild bool) (err error) {
 	for idx, def := range s.ColDefs {
 		// Check column idx validility
 		if idx != def.Idx {
-			err = fmt.Errorf("%w: wrong column index %d specified for \"%s\"", ErrSchemaValidation, def.Idx, def.Name)
+			err = moerr.NewConstraintViolation("wrong column index %d specified for \"%s\"", def.Idx, def.Name)
 			return
 		}
 		// Check unique name
 		_, ok := names[def.Name]
 		if ok {
-			err = fmt.Errorf("%w: duplicate column \"%s\"", ErrSchemaValidation, def.Name)
+			err = moerr.NewConstraintViolation("duplicate column \"%s\"", def.Name)
 			return
 		}
 		names[def.Name] = true
@@ -684,7 +685,7 @@ func (s *Schema) Finalize(rebuild bool) (err error) {
 		}
 		if def.IsPhyAddr() {
 			if s.PhyAddrKey != nil {
-				err = fmt.Errorf("%w: duplicated physical address column \"%s\"", ErrSchemaValidation, def.Name)
+				err = moerr.NewConstraintViolation("duplicate physical address column \"%s\"", def.Name)
 				return
 			}
 			s.PhyAddrKey = def
@@ -699,7 +700,7 @@ func (s *Schema) Finalize(rebuild bool) (err error) {
 	if len(sortIdx) == 1 {
 		def := s.ColDefs[sortIdx[0]]
 		if def.SortIdx != 0 {
-			err = fmt.Errorf("%w: bad sort idx %d, should be 0", ErrSchemaValidation, def.SortIdx)
+			err = moerr.NewConstraintViolation("bad sort idx %d, should be 0", def.SortIdx)
 			return
 		}
 		s.SortKey = NewSortKey()
@@ -709,22 +710,22 @@ func (s *Schema) Finalize(rebuild bool) (err error) {
 		for _, idx := range sortIdx {
 			def := s.ColDefs[idx]
 			if def.Idx != idx {
-				err = fmt.Errorf("%w: bad column def", ErrSchemaValidation)
+				err = moerr.NewConstraintViolation("bad column def")
 				return
 			}
 			if ok := s.SortKey.AddDef(def); !ok {
-				err = fmt.Errorf("%w: duplicated sort idx specified", ErrSchemaValidation)
+				err = moerr.NewConstraintViolation("duplicated sort idx specified")
 				return
 			}
 		}
 		isPrimary := s.SortKey.Defs[0].IsPrimary()
 		for i, def := range s.SortKey.Defs {
 			if int(def.SortIdx) != i {
-				err = fmt.Errorf("%w: duplicated sort idx specified", ErrSchemaValidation)
+				err = moerr.NewConstraintViolation("duplicated sort idx specified")
 				return
 			}
 			if def.IsPrimary() != isPrimary {
-				err = fmt.Errorf("%w: duplicated sort idx specified", ErrSchemaValidation)
+				err = moerr.NewConstraintViolation("duplicated sort idx specified")
 				return
 			}
 		}

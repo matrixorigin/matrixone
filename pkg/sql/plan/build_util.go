@@ -15,15 +15,12 @@
 package plan
 
 import (
-	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
-
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
-	"github.com/matrixorigin/matrixone/pkg/errno"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/errors"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
@@ -60,9 +57,9 @@ func getTypeFromAst(typ tree.ResolvableTypeReference) (*plan.Type, error) {
 			}
 			return &plan.Type{Id: int32(types.T_int64), Width: n.InternalType.Width, Size: 8}, nil
 		case defines.MYSQL_TYPE_FLOAT:
-			return &plan.Type{Id: int32(types.T_float32), Width: n.InternalType.Width, Size: 4, Precision: n.InternalType.Precision}, nil
+			return &plan.Type{Id: int32(types.T_float32), Width: n.InternalType.DisplayWith, Size: 4, Precision: n.InternalType.Precision}, nil
 		case defines.MYSQL_TYPE_DOUBLE:
-			return &plan.Type{Id: int32(types.T_float64), Width: n.InternalType.Width, Size: 8, Precision: n.InternalType.Precision}, nil
+			return &plan.Type{Id: int32(types.T_float64), Width: n.InternalType.DisplayWith, Size: 8, Precision: n.InternalType.Precision}, nil
 		case defines.MYSQL_TYPE_STRING:
 			width := n.InternalType.DisplayWith
 			if width == -1 {
@@ -103,11 +100,17 @@ func getTypeFromAst(typ tree.ResolvableTypeReference) (*plan.Type, error) {
 			return &plan.Type{Id: int32(types.T_json)}, nil
 		case defines.MYSQL_TYPE_UUID:
 			return &plan.Type{Id: int32(types.T_uuid), Size: 16}, nil
+		case defines.MYSQL_TYPE_TINY_BLOB:
+			return &plan.Type{Id: int32(types.T_blob), Size: types.VarlenaSize}, nil
+		case defines.MYSQL_TYPE_MEDIUM_BLOB:
+			return &plan.Type{Id: int32(types.T_blob), Size: types.VarlenaSize}, nil
+		case defines.MYSQL_TYPE_LONG_BLOB:
+			return &plan.Type{Id: int32(types.T_blob), Size: types.VarlenaSize}, nil
 		default:
-			return nil, errors.New("", fmt.Sprintf("Data type: '%s', will be supported in future version.", tree.String(&n.InternalType, dialect.MYSQL)))
+			return nil, moerr.NewNYI("data type: '%s'", tree.String(&n.InternalType, dialect.MYSQL))
 		}
 	}
-	return nil, errors.New(errno.IndeterminateDatatype, "Unknown data type.")
+	return nil, moerr.NewInternalError("unknown data type")
 }
 
 func buildDefaultExpr(col *tree.ColumnTableDef, typ *plan.Type) (*plan.Default, error) {
@@ -129,7 +132,7 @@ func buildDefaultExpr(col *tree.ColumnTableDef, typ *plan.Type) (*plan.Default, 
 	}
 
 	if !nullAbility && isNullAstExpr(expr) {
-		return nil, errors.New(errno.InvalidColumnDefinition, fmt.Sprintf("Invalid default value for '%s'", col.Name.Parts[0]))
+		return nil, moerr.NewInvalidInput("invalid default value for column '%s'", col.Name.Parts[0])
 	}
 
 	if expr == nil {
@@ -236,10 +239,8 @@ func convertValueIntoBool(name string, args []*Expr, isLogic bool) error {
 			case *plan.Const_Ival:
 				if value.Ival == 0 {
 					ex.C.Value = &plan.Const_Bval{Bval: false}
-				} else if value.Ival == 1 {
-					ex.C.Value = &plan.Const_Bval{Bval: true}
 				} else {
-					return errors.New("", fmt.Sprintf("Can't cast '%v' as boolean type.", value.Ival))
+					ex.C.Value = &plan.Const_Bval{Bval: true}
 				}
 				arg.Typ.Id = int32(types.T_bool)
 			}
@@ -255,11 +256,11 @@ func getFunctionObjRef(funcID int64, name string) *ObjectRef {
 	}
 }
 
-func getDefaultExpr(d *plan.Default, typ *plan.Type) (*Expr, error) {
-	if !d.NullAbility && d.Expr == nil {
-		return nil, errors.New("", "invalid default value")
+func getDefaultExpr(d *plan.ColDef) (*Expr, error) {
+	if !d.Default.NullAbility && d.Default.Expr == nil && !d.AutoIncrement {
+		return nil, moerr.NewInvalidInput("invalid default value")
 	}
-	if d.Expr == nil {
+	if d.Default.Expr == nil {
 		return &Expr{
 			Expr: &plan.Expr_C{
 				C: &Const{
@@ -267,10 +268,10 @@ func getDefaultExpr(d *plan.Default, typ *plan.Type) (*Expr, error) {
 				},
 			},
 			Typ: &plan.Type{
-				Id:       typ.Id,
+				Id:       d.Typ.Id,
 				Nullable: true,
 			},
 		}, nil
 	}
-	return d.Expr, nil
+	return d.Default.Expr, nil
 }

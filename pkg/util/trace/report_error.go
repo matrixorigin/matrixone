@@ -17,10 +17,11 @@ package trace
 import (
 	"context"
 	"fmt"
+	"unsafe"
+
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 	"go.uber.org/zap"
-	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/export"

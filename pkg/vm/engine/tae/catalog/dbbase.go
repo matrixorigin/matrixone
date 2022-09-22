@@ -20,6 +20,7 @@ import (
 	"io"
 	"sync"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
@@ -46,7 +47,7 @@ func NewDBBaseEntry(id uint64) *DBBaseEntry {
 }
 
 func (be *DBBaseEntry) StringLocked() string {
-	return fmt.Sprintf("[%d %p]%s", be.ID, be.RWMutex, be.MVCCChain.StringLocked())
+	return fmt.Sprintf("[%d]%s", be.ID, be.MVCCChain.StringLocked())
 }
 
 func (be *DBBaseEntry) String() string {
@@ -65,7 +66,7 @@ func (be *DBBaseEntry) TryGetTerminatedTS(waitIfcommitting bool) (terminated boo
 	if node == nil {
 		return
 	}
-	if node.(*DBMVCCNode).Deleted {
+	if node.(*DBMVCCNode).HasDropped() {
 		return true, node.(*DBMVCCNode).DeletedAt
 	}
 	return
@@ -77,45 +78,37 @@ func (be *DBBaseEntry) CreateWithTS(ts types.TS) {
 		EntryMVCCNode: &EntryMVCCNode{
 			CreatedAt: ts,
 		},
-		TxnMVCCNode: &txnbase.TxnMVCCNode{
-			Start: ts,
-			End:   ts,
-		},
+		TxnMVCCNode: txnbase.NewTxnMVCCNodeWithTS(ts),
 	}
-	be.InsertNode(node)
+	be.Insert(node)
 }
 
 func (be *DBBaseEntry) CreateWithTxn(txn txnif.AsyncTxn) {
-	var startTS types.TS
-	if txn != nil {
-		startTS = txn.GetStartTS()
-	}
 	node := &DBMVCCNode{
-		EntryMVCCNode: &EntryMVCCNode{},
-		TxnMVCCNode: &txnbase.TxnMVCCNode{
-			Start: startTS,
-			Txn:   txn,
+		EntryMVCCNode: &EntryMVCCNode{
+			CreatedAt: txnif.UncommitTS,
 		},
+		TxnMVCCNode: txnbase.NewTxnMVCCNodeWithTxn(txn),
 	}
-	be.InsertNode(node)
+	be.Insert(node)
 }
 
-// TODO update create
-func (be *DBBaseEntry) DeleteLocked(txn txnif.TxnReader) (err error) {
-	entry := be.MVCC.GetHead().GetPayload()
-	if entry.IsCommitted() || entry.IsSameTxn(txn.GetStartTS()) {
-		if be.HasDropped() {
-			err = ErrNotFound
-			return
-		}
-		nbe := entry.CloneData()
-		nbe.(*DBMVCCNode).TxnMVCCNode = txnbase.NewTxnMVCCNodeWithTxn(txn)
-		be.InsertNode(nbe)
-		err = nbe.(*DBMVCCNode).ApplyDeleteLocked()
-		return
+func (be *DBBaseEntry) getOrSetUpdateNode(txn txnif.TxnReader) (newNode bool, node *DBMVCCNode) {
+	entry := be.GetNodeLocked()
+	if entry.IsSameTxn(txn.GetStartTS()) {
+		return false, entry.(*DBMVCCNode)
 	} else {
-		err = txnif.ErrTxnWWConflict
+		node := entry.CloneData().(*DBMVCCNode)
+		node.TxnMVCCNode = txnbase.NewTxnMVCCNodeWithTxn(txn)
+		be.Insert(node)
+		return true, node
 	}
+}
+
+func (be *DBBaseEntry) DeleteLocked(txn txnif.TxnReader) (isNewNode bool, err error) {
+	var entry *DBMVCCNode
+	isNewNode, entry = be.getOrSetUpdateNode(txn)
+	entry.Delete()
 	return
 }
 
@@ -128,7 +121,7 @@ func (be *DBBaseEntry) DeleteBefore(ts types.TS) bool {
 }
 
 func (be *DBBaseEntry) NeedWaitCommitting(startTS types.TS) (bool, txnif.TxnReader) {
-	un := be.GetUpdateNodeLocked()
+	un := be.GetNodeLocked()
 	if un == nil {
 		return false, nil
 	}
@@ -136,7 +129,7 @@ func (be *DBBaseEntry) NeedWaitCommitting(startTS types.TS) (bool, txnif.TxnRead
 }
 
 func (be *DBBaseEntry) IsCreating() bool {
-	un := be.GetUpdateNodeLocked()
+	un := be.GetNodeLocked()
 	if un == nil {
 		return true
 	}
@@ -205,19 +198,16 @@ func (be *DBBaseEntry) CloneCreateEntry() BaseEntry {
 	}
 }
 
-func (be *DBBaseEntry) DropEntryLocked(txnCtx txnif.TxnReader) error {
-	err := be.CheckConflict(txnCtx)
+func (be *DBBaseEntry) DropEntryLocked(txnCtx txnif.TxnReader) (isNewNode bool, err error) {
+	err = be.CheckConflict(txnCtx)
 	if err != nil {
-		return err
+		return
 	}
 	if be.HasDropped() {
-		return ErrNotFound
+		return false, moerr.NewNotFound()
 	}
-	err = be.DeleteLocked(txnCtx)
-	if err != nil {
-		return err
-	}
-	return nil
+	isNewNode, err = be.DeleteLocked(txnCtx)
+	return
 }
 
 func (be *DBBaseEntry) PrepareAdd(txn txnif.TxnReader) (err error) {
@@ -237,18 +227,18 @@ func (be *DBBaseEntry) PrepareAdd(txn txnif.TxnReader) (err error) {
 	}
 	if txn == nil || be.GetTxn() != txn {
 		if !be.HasDropped() {
-			return ErrDuplicate
+			return moerr.NewDuplicate()
 		}
 	} else {
 		if be.ensureVisibleAndNotDropped(txn.GetStartTS()) {
-			return ErrDuplicate
+			return moerr.NewDuplicate()
 		}
 	}
 	return
 }
 
 func (be *DBBaseEntry) DeleteAfter(ts types.TS) bool {
-	un := be.GetUpdateNodeLocked()
+	un := be.GetNodeLocked()
 	if un == nil {
 		return false
 	}
@@ -267,18 +257,18 @@ func (be *DBBaseEntry) CloneCommittedInRange(start, end types.TS) BaseEntry {
 }
 
 func (be *DBBaseEntry) GetCurrOp() OpT {
-	un := be.GetUpdateNodeLocked()
+	un := be.GetNodeLocked()
 	if un == nil {
 		return OpCreate
 	}
-	if !un.(*DBMVCCNode).Deleted {
+	if !un.(*DBMVCCNode).HasDropped() {
 		return OpCreate
 	}
 	return OpSoftDelete
 }
 
 func (be *DBBaseEntry) GetCreatedAt() types.TS {
-	un := be.GetUpdateNodeLocked()
+	un := be.GetNodeLocked()
 	if un == nil {
 		return types.TS{}
 	}
@@ -286,7 +276,7 @@ func (be *DBBaseEntry) GetCreatedAt() types.TS {
 }
 
 func (be *DBBaseEntry) GetDeleteAt() types.TS {
-	un := be.GetUpdateNodeLocked()
+	un := be.GetNodeLocked()
 	if un == nil {
 		return types.TS{}
 	}

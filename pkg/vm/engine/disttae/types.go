@@ -19,11 +19,14 @@ import (
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 )
 
 const (
@@ -61,16 +64,44 @@ type Cache interface {
 		ts timestamp.Timestamp, entries [][]Entry) ([]engine.Reader, error)
 }
 
+// mvcc is the core data structure of cn and is used to
+// maintain multiple versions of logtail data for a table's partition
+type MVCC interface {
+	CheckPoint(ts timestamp.Timestamp) error
+	Insert(ctx context.Context, bat *api.Batch) error
+	Delete(ctx context.Context, bat *api.Batch) error
+	BlockList(ctx context.Context, ts timestamp.Timestamp,
+		entries [][]Entry) []BlockMeta
+	NewReader(ctx context.Context, readerNumber int, expr *plan.Expr,
+		ts timestamp.Timestamp, entries [][]Entry) ([]engine.Reader, error)
+}
+
 type Engine struct {
 	sync.RWMutex
-	getClusterDetails GetClusterDetailsFunc
 	db                *DB
+	m                 *mheap.Mheap
+	cli               client.TxnClient
+	getClusterDetails GetClusterDetailsFunc
 	txns              map[string]*Transaction
 }
 
 // DB is implementataion of cache
 type DB struct {
-	readTs timestamp.Timestamp
+	sync.RWMutex
+	dnMap  map[string]int
+	cli    client.TxnClient
+	tables map[[2]uint64]Partitions
+}
+
+type Partitions []*Partition
+
+// a partition corresponds to a dn
+type Partition struct {
+	sync.RWMutex
+	// multi-version data of logtail, implemented with reusee's memengine
+	data MVCC
+	// last updated timestamp
+	ts timestamp.Timestamp
 }
 
 // Transaction represents a transaction
@@ -106,12 +137,15 @@ type Entry struct {
 	// blockId for s3 file
 	blockId uint64
 	// update or delete tuples
-	bat *batch.Batch
+	bat     *batch.Batch
+	dnStore DNStore
 }
 
 type database struct {
 	databaseId   uint64
 	databaseName string
+	db           *DB
+	m            *mheap.Mheap
 	txn          *Transaction
 }
 
@@ -119,4 +153,23 @@ type table struct {
 	tableId   uint64
 	tableName string
 	db        *database
+	defs      []engine.TableDef
+}
+
+type column struct {
+	databaseId uint64
+	// column name
+	name            string
+	tableName       string
+	databaseName    string
+	typ             []byte
+	typLen          int32
+	num             int32
+	comment         string
+	notNull         int8
+	hasDef          int8
+	defaultExpr     []byte
+	constraintType  string
+	isHidden        int8
+	isAutoIncrement int8
 }

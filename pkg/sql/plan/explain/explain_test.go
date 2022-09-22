@@ -15,12 +15,10 @@
 package explain
 
 import (
-	"fmt"
 	"strings"
 	"testing"
 
-	"github.com/matrixorigin/matrixone/pkg/errno"
-	"github.com/matrixorigin/matrixone/pkg/sql/errors"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -189,7 +187,25 @@ func TestDerivedTableQuery(t *testing.T) {
 
 // Collection query
 func TestCollectionQuery(t *testing.T) {
-
+	sqls := []string{
+		"explain verbose select 2 intersect select 2 union all select 22222",
+		"explain verbose select 1 union select 2",
+		"explain verbose select 1 union (select 2 union select 3)",
+		"explain verbose (select 1 union select 2) union select 3 intersect select 4 order by 1",
+		"explain verbose select 1 union select null",
+		"explain verbose select n_name from nation intersect select n_name from nation2",
+		"explain verbose select n_name from nation minus select n_name from nation2",
+		"explain verbose select 1 union select 2 intersect select 2 union all select 1.1 minus select 22222",
+		"explain verbose select 1 as a union select 2 order by a limit 1",
+		"explain verbose select n_name from nation union select n_comment from nation order by n_name",
+		"explain verbose with qn (foo, bar) as (select 1 as col, 2 as coll union select 4, 5) select qn1.bar from qn qn1",
+		"explain verbose select n_name, n_comment from nation union all select n_name, n_comment from nation2",
+		"explain verbose select n_name from nation intersect all select n_name from nation2",
+		"explain verbose SELECT distinct(l.L_ORDERKEY) FROM LINEITEM AS l WHERE l.L_SHIPINSTRUCT='DELIVER IN PERSON' UNION SELECT distinct(l.L_ORDERKEY) FROM LINEITEM AS l WHERE l.L_SHIPMODE='AIR' OR  l.L_SHIPMODE='AIR REG'",
+		"explain verbose SELECT distinct(l.L_ORDERKEY) FROM LINEITEM AS l WHERE l.L_SHIPMODE IN ('AIR','AIR REG') EXCEPT SELECT distinct(l.L_ORDERKEY) FROM LINEITEM AS l WHERE l.L_SHIPINSTRUCT='DELIVER IN PERSON'",
+	}
+	mockOptimizer := plan.NewMockOptimizer()
+	runTestShouldPass(mockOptimizer, t, sqls)
 }
 
 func TestDMLInsert(t *testing.T) {
@@ -256,28 +272,28 @@ func runOneStmt(opt plan.Optimizer, t *testing.T, sql string) error {
 				} else if strings.EqualFold(v.Value, "FALSE") {
 					es.Verbose = false
 				} else {
-					return errors.New(errno.InvalidOptionValue, fmt.Sprintf("%s requires a Boolean value", v.Name))
+					return moerr.NewInvalidInput("boolean value %v", v.Value)
 				}
 			} else if strings.EqualFold(v.Name, "ANALYZE") {
 				if strings.EqualFold(v.Value, "TRUE") || v.Value == "NULL" {
-					es.Anzlyze = true
+					es.Analyze = true
 				} else if strings.EqualFold(v.Value, "FALSE") {
-					es.Anzlyze = false
+					es.Analyze = false
 				} else {
-					return errors.New(errno.InvalidOptionValue, fmt.Sprintf("%s requires a Boolean value", v.Name))
+					return moerr.NewInvalidInput("boolean value %v", v.Value)
 				}
 			} else if strings.EqualFold(v.Name, "FORMAT") {
 				if v.Name == "NULL" {
-					return errors.New(errno.InvalidOptionValue, fmt.Sprintf("%s requires a parameter", v.Name))
+					return moerr.NewInvalidInput("parameter name %v", v.Name)
 				} else if strings.EqualFold(v.Value, "TEXT") {
 					es.Format = EXPLAIN_FORMAT_TEXT
 				} else if strings.EqualFold(v.Value, "JSON") {
 					es.Format = EXPLAIN_FORMAT_JSON
 				} else {
-					return errors.New(errno.InvalidOptionValue, fmt.Sprintf("unrecognized value for EXPLAIN option \"%s\": \"%s\"", v.Name, v.Value))
+					return moerr.NewInvalidInput("explain format %v", v.Value)
 				}
 			} else {
-				return errors.New(errno.InvalidOptionValue, fmt.Sprintf("unrecognized EXPLAIN option \"%s\"", v.Name))
+				return moerr.NewInvalidInput("EXPLAIN option %v", v.Name)
 			}
 		}
 

@@ -15,8 +15,9 @@
 package hashtable
 
 import (
-	"errors"
 	"unsafe"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 )
@@ -223,7 +224,7 @@ func (it *Int64HashMapIterator) Next() (cell *Int64HashMapCell, err error) {
 	}
 
 	if it.pos >= it.table.cellCnt {
-		err = errors.New("out of range")
+		err = moerr.NewInternalError("out of range")
 		return
 	}
 

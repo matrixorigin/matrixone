@@ -20,6 +20,7 @@ import (
 	"io"
 	"sync/atomic"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -144,7 +145,7 @@ func (entry *TableEntry) GetSegmentByID(id uint64) (seg *SegmentEntry, err error
 	defer entry.RUnlock()
 	node := entry.entries[id]
 	if node == nil {
-		return nil, ErrNotFound
+		return nil, moerr.NewNotFound()
 	}
 	return node.GetPayload(), nil
 }
@@ -177,7 +178,7 @@ func (entry *TableEntry) AddEntryLocked(segment *SegmentEntry) {
 
 func (entry *TableEntry) deleteEntryLocked(segment *SegmentEntry) error {
 	if n, ok := entry.entries[segment.GetID()]; !ok {
-		return ErrNotFound
+		return moerr.NewNotFound()
 	} else {
 		entry.link.Delete(n)
 		delete(entry.entries, segment.GetID())
@@ -202,7 +203,7 @@ func (entry *TableEntry) GetDB() *DBEntry {
 
 func (entry *TableEntry) PPString(level common.PPLevel, depth int, prefix string) string {
 	var w bytes.Buffer
-	_, _ = w.WriteString(fmt.Sprintf("%s%s%s", common.RepeatStr("\t", depth), prefix, entry.String()))
+	_, _ = w.WriteString(fmt.Sprintf("%s%s%s", common.RepeatStr("\t", depth), prefix, entry.StringWithLevel(level)))
 	if level == common.PPL0 {
 		return w.String()
 	}
@@ -222,8 +223,21 @@ func (entry *TableEntry) String() string {
 	return entry.StringLocked()
 }
 
+func (entry *TableEntry) StringWithLevel(level common.PPLevel) string {
+	entry.RLock()
+	defer entry.RUnlock()
+	return entry.StringLockedWithLevel(level)
+}
+func (entry *TableEntry) StringLockedWithLevel(level common.PPLevel) string {
+	if level <= common.PPL1 {
+		return fmt.Sprintf("TBL[%d][name=%s][C@%s,D@%s]",
+			entry.ID, entry.schema.Name, entry.GetCreatedAt().ToString(), entry.GetDeleteAt().ToString())
+	}
+	return fmt.Sprintf("TBL%s[name=%s]", entry.TableBaseEntry.StringLocked(), entry.schema.Name)
+}
+
 func (entry *TableEntry) StringLocked() string {
-	return fmt.Sprintf("TABLE%s[name=%s]", entry.TableBaseEntry.StringLocked(), entry.schema.Name)
+	return entry.StringLockedWithLevel(common.PPL1)
 }
 
 func (entry *TableEntry) GetCatalog() *Catalog { return entry.db.catalog }
@@ -234,7 +248,10 @@ func (entry *TableEntry) LastAppendableSegmemt() (seg *SegmentEntry) {
 	it := entry.MakeSegmentIt(false)
 	for it.Valid() {
 		itSeg := it.Get().GetPayload()
-		if itSeg.IsAppendable() {
+		itSeg.RLock()
+		dropped := itSeg.HasDropped()
+		itSeg.RUnlock()
+		if itSeg.IsAppendable() && !dropped {
 			seg = itSeg
 			break
 		}
@@ -254,7 +271,7 @@ func (entry *TableEntry) RecurLoop(processor Processor) (err error) {
 	for segIt.Valid() {
 		segment := segIt.Get().GetPayload()
 		if err = processor.OnSegment(segment); err != nil {
-			if err == ErrStopCurrRecur {
+			if moerr.IsMoErrCode(err, moerr.OkStopCurrRecur) {
 				err = nil
 				segIt.Next()
 				continue
@@ -265,7 +282,7 @@ func (entry *TableEntry) RecurLoop(processor Processor) (err error) {
 		for blkIt.Valid() {
 			block := blkIt.Get().GetPayload()
 			if err = processor.OnBlock(block); err != nil {
-				if err == ErrStopCurrRecur {
+				if moerr.IsMoErrCode(err, moerr.OkStopCurrRecur) {
 					err = nil
 					blkIt.Next()
 					continue
@@ -279,7 +296,7 @@ func (entry *TableEntry) RecurLoop(processor Processor) (err error) {
 		}
 		segIt.Next()
 	}
-	if err == ErrStopCurrRecur {
+	if moerr.IsMoErrCode(err, moerr.OkStopCurrRecur) {
 		err = nil
 	}
 	return err
@@ -298,8 +315,9 @@ func (entry *TableEntry) DropSegmentEntry(id uint64, txn txnif.AsyncTxn) (delete
 		waitTxn.GetTxnState(true)
 		seg.Lock()
 	}
-	err = seg.DropEntryLocked(txn)
-	if err == nil {
+	var isNewNode bool
+	isNewNode, err = seg.DropEntryLocked(txn)
+	if err == nil && isNewNode {
 		deleted = seg
 	}
 	return

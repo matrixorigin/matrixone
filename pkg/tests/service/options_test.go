@@ -77,7 +77,7 @@ func TestWithHostAddress(t *testing.T) {
 
 func TestWithLogLevel(t *testing.T) {
 	lvl := zapcore.WarnLevel
-	opt := Options{}.WithLogLvel(lvl)
+	opt := Options{}.WithLogLevel(lvl)
 	require.Equal(t, lvl, opt.logLevel)
 }
 

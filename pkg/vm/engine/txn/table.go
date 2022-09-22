@@ -16,6 +16,7 @@ package txnengine
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -24,9 +25,11 @@ import (
 )
 
 type Table struct {
-	engine      *Engine
-	txnOperator client.TxnOperator
-	id          string
+	id           ID
+	engine       *Engine
+	txnOperator  client.TxnOperator
+	databaseName string
+	tableName    string
 }
 
 var _ engine.Relation = new(Table)
@@ -65,8 +68,10 @@ func (t *Table) AddTableDef(ctx context.Context, def engine.TableDef) error {
 		t.engine.allNodesShards,
 		OpAddTableDef,
 		AddTableDefReq{
-			TableID: t.id,
-			Def:     def,
+			TableID:      t.id,
+			Def:          def,
+			DatabaseName: t.databaseName,
+			TableName:    t.tableName,
 		},
 	)
 	if err != nil {
@@ -85,8 +90,10 @@ func (t *Table) DelTableDef(ctx context.Context, def engine.TableDef) error {
 		t.engine.allNodesShards,
 		OpDelTableDef,
 		DelTableDefReq{
-			TableID: t.id,
-			Def:     def,
+			TableID:      t.id,
+			DatabaseName: t.databaseName,
+			TableName:    t.tableName,
+			Def:          def,
 		},
 	)
 	if err != nil {
@@ -103,6 +110,10 @@ func (t *Table) Delete(ctx context.Context, vec *vector.Vector, colName string) 
 		return err
 	}
 	shards, err := t.engine.shardPolicy.Vector(
+		ctx,
+		t.id,
+		t.TableDefs,
+		colName,
 		vec,
 		clusterDetails.DNStores,
 	)
@@ -118,9 +129,11 @@ func (t *Table) Delete(ctx context.Context, vec *vector.Vector, colName string) 
 			thisShard(shard.Shard),
 			OpDelete,
 			DeleteReq{
-				TableID:    t.id,
-				ColumnName: colName,
-				Vector:     shard.Vector,
+				TableID:      t.id,
+				DatabaseName: t.databaseName,
+				TableName:    t.tableName,
+				ColumnName:   colName,
+				Vector:       shard.Vector,
 			},
 		)
 		if err != nil {
@@ -203,7 +216,9 @@ func (t *Table) Truncate(ctx context.Context) (uint64, error) {
 		t.engine.allNodesShards,
 		OpTruncate,
 		TruncateReq{
-			TableID: t.id,
+			TableID:      t.id,
+			DatabaseName: t.databaseName,
+			TableName:    t.tableName,
 		},
 	)
 	if err != nil {
@@ -225,7 +240,12 @@ func (t *Table) Update(ctx context.Context, data *batch.Batch) error {
 		return err
 	}
 
+	data.InitZsOne(data.Length())
+
 	shards, err := t.engine.shardPolicy.Batch(
+		ctx,
+		t.id,
+		t.TableDefs,
 		data,
 		clusterDetails.DNStores,
 	)
@@ -241,8 +261,10 @@ func (t *Table) Update(ctx context.Context, data *batch.Batch) error {
 			thisShard(shard.Shard),
 			OpUpdate,
 			UpdateReq{
-				TableID: t.id,
-				Batch:   shard.Batch,
+				TableID:      t.id,
+				DatabaseName: t.databaseName,
+				TableName:    t.tableName,
+				Batch:        shard.Batch,
 			},
 		)
 		if err != nil {
@@ -260,7 +282,12 @@ func (t *Table) Write(ctx context.Context, data *batch.Batch) error {
 		return err
 	}
 
+	data.InitZsOne(data.Length())
+
 	shards, err := t.engine.shardPolicy.Batch(
+		ctx,
+		t.id,
+		t.TableDefs,
 		data,
 		clusterDetails.DNStores,
 	)
@@ -276,8 +303,10 @@ func (t *Table) Write(ctx context.Context, data *batch.Batch) error {
 			thisShard(shard.Shard),
 			OpWrite,
 			WriteReq{
-				TableID: t.id,
-				Batch:   shard.Batch,
+				TableID:      t.id,
+				DatabaseName: t.databaseName,
+				TableName:    t.tableName,
+				Batch:        shard.Batch,
 			},
 		)
 		if err != nil {
@@ -309,5 +338,5 @@ func (t *Table) GetHideKeys(ctx context.Context) (attrs []*engine.Attribute, err
 }
 
 func (t *Table) GetTableID(ctx context.Context) string {
-	return t.id
+	return fmt.Sprintf("%x", t.id)
 }

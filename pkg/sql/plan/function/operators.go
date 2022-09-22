@@ -37,6 +37,96 @@ func initOperators() {
 
 // operators contains the operator function indexed by function id.
 var operators = map[int]Functions{
+	ISUNKNOWN: {
+		Id: ISUNKNOWN,
+		Overloads: []Function{
+			{
+				Index:  0,
+				Flag:   plan.Function_STRICT,
+				Layout: IS_NULL_EXPRESSION,
+				Args: []types.T{
+					types.T_bool,
+				},
+				ReturnTyp: types.T_bool,
+				Fn:        operator.IsUnknown,
+			},
+		},
+	},
+	ISNOTUNKNOWN: {
+		Id: ISNOTUNKNOWN,
+		Overloads: []Function{
+			{
+				Index:  0,
+				Flag:   plan.Function_STRICT,
+				Layout: IS_NULL_EXPRESSION,
+				Args: []types.T{
+					types.T_bool,
+				},
+				ReturnTyp: types.T_bool,
+				Fn:        operator.IsNotUnknown,
+			},
+		},
+	},
+	ISTRUE: {
+		Id: ISTRUE,
+		Overloads: []Function{
+			{
+				Index:  0,
+				Flag:   plan.Function_STRICT,
+				Layout: IS_NULL_EXPRESSION,
+				Args: []types.T{
+					types.T_bool,
+				},
+				ReturnTyp: types.T_bool,
+				Fn:        operator.IsTrue,
+			},
+		},
+	},
+	ISNOTTRUE: {
+		Id: ISNOTTRUE,
+		Overloads: []Function{
+			{
+				Index:  0,
+				Flag:   plan.Function_STRICT,
+				Layout: IS_NULL_EXPRESSION,
+				Args: []types.T{
+					types.T_bool,
+				},
+				ReturnTyp: types.T_bool,
+				Fn:        operator.IsNotTrue,
+			},
+		},
+	},
+	ISFALSE: {
+		Id: ISFALSE,
+		Overloads: []Function{
+			{
+				Index:  0,
+				Flag:   plan.Function_STRICT,
+				Layout: IS_NULL_EXPRESSION,
+				Args: []types.T{
+					types.T_bool,
+				},
+				ReturnTyp: types.T_bool,
+				Fn:        operator.IsFalse,
+			},
+		},
+	},
+	ISNOTFALSE: {
+		Id: ISNOTFALSE,
+		Overloads: []Function{
+			{
+				Index:  0,
+				Flag:   plan.Function_STRICT,
+				Layout: IS_NULL_EXPRESSION,
+				Args: []types.T{
+					types.T_bool,
+				},
+				ReturnTyp: types.T_bool,
+				Fn:        operator.IsNotFalse,
+			},
+		},
+	},
 	// is null operator
 	ISNULL: {
 		Id: ISNULL,
@@ -2278,25 +2368,37 @@ var operators = map[int]Functions{
 
 	LIKE: {
 		Id: LIKE,
-		TypeCheckFn: func(_ []Function, inputs []types.T) (overloadIndex int32, _ []types.T) {
-			if len(inputs) != 2 {
-				return wrongFunctionParameters, nil
-			}
-			typ1, typ2 := inputs[0], inputs[1]
-			if typ1 != types.T_char && typ1 != types.T_varchar && typ1 != types.T_blob {
-				return wrongFunctionParameters, nil
-			}
-			if typ2 != types.T_char && typ2 != types.T_varchar && typ2 != types.T_blob {
-				return wrongFunctionParameters, nil
-			}
-			return 0, nil
-		},
 		Overloads: []Function{
 			{
-				Index:     0,
-				Flag:      plan.Function_STRICT,
-				Layout:    BINARY_LOGICAL_OPERATOR,
-				Args:      nil,
+				Index:  0,
+				Flag:   plan.Function_STRICT,
+				Layout: BINARY_LOGICAL_OPERATOR,
+				Args: []types.T{
+					types.T_char,
+					types.T_char,
+				},
+				ReturnTyp: types.T_bool,
+				Fn:        operator.Like,
+			},
+			{
+				Index:  1,
+				Flag:   plan.Function_STRICT,
+				Layout: BINARY_LOGICAL_OPERATOR,
+				Args: []types.T{
+					types.T_varchar,
+					types.T_varchar,
+				},
+				ReturnTyp: types.T_bool,
+				Fn:        operator.Like,
+			},
+			{
+				Index:  2,
+				Flag:   plan.Function_STRICT,
+				Layout: BINARY_LOGICAL_OPERATOR,
+				Args: []types.T{
+					types.T_char,
+					types.T_char,
+				},
 				ReturnTyp: types.T_bool,
 				Fn:        operator.Like,
 			},

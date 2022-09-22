@@ -16,14 +16,13 @@ package compile
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/fileservice"
-	"time"
-
+	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
@@ -66,6 +65,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"time"
 )
 
 // messageHandleHelper a structure records some elements to help handle messages.
@@ -104,8 +104,8 @@ func CnServerMessageHandler(ctx context.Context, message morpc.Message,
 	if err != nil {
 		errStr = err.Error()
 		if me, ok := err.(*moerr.Error); ok {
-			errCode = uint32(me.Code)
-			errStr = me.Message
+			errCode = uint32(me.ErrorCode())
+			errStr = me.Error()
 		}
 	}
 	return cs.Write(ctx, &pipeline.Message{Id: message.GetID(), Sid: pipeline.MessageEnd, ErrCode: errCode, ErrStr: errStr, Analyse: analysis})
@@ -208,7 +208,7 @@ func (s *Scope) remoteRun(c *Compile) error {
 	for {
 		select {
 		case <-c.ctx.Done():
-			return moerr.NewError(moerr.ErrRPCTimeout, "cn-client context has been canceled.")
+			return moerr.NewInternalError("cn-client context has been canceled.")
 		case val = <-messagesReceive:
 		}
 
@@ -216,7 +216,7 @@ func (s *Scope) remoteRun(c *Compile) error {
 
 		errMessage := m.GetErrStr()
 		if len(errMessage) > 0 {
-			return moerr.NewError(uint16(m.GetErrCode()), errMessage)
+			return moerr.NewInternalError(errMessage)
 		}
 
 		sid := m.GetSid()
@@ -734,7 +734,7 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 			MarkMeaning:  t.MarkMeaning,
 		}
 	default:
-		return -1, nil, moerr.New(moerr.INTERNAL_ERROR, "unexpected operator: %v", opr.Op)
+		return -1, nil, moerr.NewInternalError(fmt.Sprintf("unexpected operator: %v", opr.Op))
 	}
 	return ctxId, in, nil
 }
@@ -934,7 +934,7 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext) (vm.In
 			Fs: convertToColExecField(opr.OrderBy),
 		}
 	default:
-		return v, moerr.New(moerr.INTERNAL_ERROR, "unexpected operator: %v", opr.Op)
+		return v, moerr.NewInternalError(fmt.Sprintf("unexpected operator: %v", opr.Op))
 	}
 	return v, nil
 }

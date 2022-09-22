@@ -24,11 +24,12 @@ package trace
 import (
 	"context"
 	"fmt"
+	"reflect"
+	"testing"
+
 	"github.com/matrixorigin/matrixone/pkg/util/batchpipe"
 	"github.com/matrixorigin/matrixone/pkg/util/export"
 	"github.com/stretchr/testify/assert"
-	"reflect"
-	"testing"
 )
 
 var _ export.BatchProcessor = &noopBatchProcessor{}
