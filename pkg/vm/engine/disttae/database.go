@@ -49,7 +49,7 @@ func (db *database) Delete(ctx context.Context, name string) error {
 	if err != nil {
 		return err
 	}
-	bat, err := genDropTableTuple(id, db.m)
+	bat, err := genDropTableTuple(id, db.databaseId, name, db.databaseName, db.m)
 	if err != nil {
 		return err
 	}

@@ -163,7 +163,7 @@ func (txn *Transaction) getRow(ctx context.Context, databaseId uint64, tableId u
 	if len(bats) != 1 {
 		return nil, moerr.NewInvalidInput("table is not unique")
 	}
-	rows := genRows(bats[0])
+	rows := catalog.GenRows(bats[0])
 	if len(rows) != 1 {
 		return nil, moerr.NewInvalidInput("table is not unique")
 	}
@@ -182,7 +182,7 @@ func (txn *Transaction) getRows(ctx context.Context, databaseId uint64, tableId 
 	}
 	rows := make([][]any, 0, len(bats))
 	for _, bat := range bats {
-		rows = append(rows, genRows(bat)...)
+		rows = append(rows, catalog.GenRows(bat)...)
 	}
 	return rows, nil
 }

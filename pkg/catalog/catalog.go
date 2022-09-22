@@ -16,7 +16,11 @@ package catalog
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/compress"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
@@ -44,4 +48,253 @@ func newAttributeDef(name string, typ types.Type, isPrimary bool) engine.TableDe
 			Alg:     compress.Lz4,
 		},
 	}
+}
+
+// consume a set of entries and return a command and the remaining entries
+func ParseEntryList(es []*api.Entry) (any, []*api.Entry, error) {
+	if len(es) == 0 {
+		return nil, nil, nil
+	}
+	e := es[0]
+	if e.DatabaseId != MO_CATALOG_ID {
+		return e, es[1:], nil
+	}
+	switch e.TableId {
+	case MO_DATABASE_ID:
+		bat, err := batch.ProtoBatchToBatch(e.Bat)
+		if err != nil {
+			return nil, nil, err
+		}
+		if e.EntryType == api.Entry_Insert {
+			return genCreateDatabases(GenRows(bat)), es[1:], nil
+		}
+		return genDropDatabases(GenRows(bat)), es[:1], nil
+	case MO_TABLES_ID:
+		bat, err := batch.ProtoBatchToBatch(e.Bat)
+		if err != nil {
+			return nil, nil, err
+		}
+		if e.EntryType == api.Entry_Delete {
+			return genDropTables(GenRows(bat)), es[:1], nil
+		}
+		cmds := genCreateTables(GenRows(bat))
+		idx := 0
+		for i := range cmds {
+			cmds[i].Defs = append(cmds[i].Defs, &engine.CommentDef{
+				Comment: cmds[i].Comment,
+			})
+			if err = fillCreateTable(&idx, &cmds[i], es); err != nil {
+				return nil, nil, err
+			}
+		}
+		return cmds, es[:idx], nil
+	default:
+		return e, es[1:], nil
+	}
+}
+
+func genCreateDatabases(rows [][]any) []CreateDatabase {
+	cmds := make([]CreateDatabase, len(rows))
+	for i, row := range rows {
+		cmds[i].Name = string(row[1].([]byte))
+		cmds[i].Owner = row[4].(uint32)
+		cmds[i].Creator = row[5].(uint32)
+		cmds[i].AccountId = row[7].(uint32)
+		cmds[i].CreatedTime = row[6].(types.Timestamp)
+		cmds[i].CreateSql = string(row[3].([]byte))
+	}
+	return cmds
+}
+
+func genDropDatabases(rows [][]any) []DropDatabase {
+	cmds := make([]DropDatabase, len(rows))
+	for i, row := range rows {
+		cmds[i].Id = row[0].(uint64)
+		cmds[i].Name = string(row[1].([]byte))
+	}
+	return cmds
+}
+
+func genCreateTables(rows [][]any) []CreateTable {
+	cmds := make([]CreateTable, len(rows))
+	for i, row := range rows {
+		cmds[i].Name = string(row[1].([]byte))
+		cmds[i].CreateSql = string(row[7].([]byte))
+		cmds[i].Owner = row[10].(uint32)
+		cmds[i].Creator = row[9].(uint32)
+		cmds[i].AccountId = row[11].(uint32)
+		cmds[i].DatabaseId = row[3].(uint64)
+		cmds[i].DatabaseName = string(row[2].([]byte))
+		cmds[i].Comment = string(row[6].([]byte))
+		cmds[i].Partition = string(row[12].([]byte))
+	}
+	return cmds
+}
+
+func genDropTables(rows [][]any) []DropTable {
+	cmds := make([]DropTable, len(rows))
+	for i, row := range rows {
+		cmds[i].Id = row[0].(uint64)
+		cmds[i].Name = string(row[1].([]byte))
+		cmds[i].DatabaseId = row[2].(uint64)
+		cmds[i].DatabaseName = string(row[3].([]byte))
+	}
+	return cmds
+}
+
+func fillCreateTable(idx *int, cmd *CreateTable, es []*api.Entry) error {
+	for i, e := range es {
+		bat, err := batch.ProtoBatchToBatch(e.Bat)
+		if err != nil {
+			return err
+		}
+		rows := GenRows(bat)
+		for _, row := range rows {
+			if string(row[5].([]byte)) == cmd.Name {
+				def, err := genTableDefs(row)
+				if err != nil {
+					return err
+				}
+				cmd.Defs = append(cmd.Defs, def)
+				if i > *idx {
+					*idx = i
+				}
+			}
+		}
+	}
+	return nil
+}
+
+func genTableDefs(row []any) (engine.TableDef, error) {
+	var attr engine.Attribute
+
+	attr.Name = string(row[6].([]byte))
+	attr.Alg = compress.Lz4
+	if err := types.Decode(row[7].([]byte), &attr.Type); err != nil {
+		return nil, err
+	}
+	if row[11].(int8) == 1 {
+		attr.Default = new(plan.Default)
+		if err := types.Decode(row[12].([]byte), attr.Default); err != nil {
+			return nil, err
+		}
+	}
+	attr.Comment = string(row[17].([]byte))
+	attr.IsHidden = row[18].(int8) == 1
+	attr.AutoIncrement = row[16].(int8) == 1
+	attr.Primary = string(row[14].([]byte)) == "p"
+	return &engine.AttributeDef{Attr: attr}, nil
+}
+
+func GenRows(bat *batch.Batch) [][]any {
+	rows := make([][]any, bat.Length())
+	for i := 0; i < bat.Length(); i++ {
+		rows[i] = make([]any, bat.VectorCount())
+	}
+	for i := 0; i < bat.VectorCount(); i++ {
+		vec := bat.GetVector(int32(i))
+		switch vec.GetType().Oid {
+		case types.T_bool:
+			col := vector.GetFixedVectorValues[bool](vec)
+			for j := 0; j < vec.Length(); j++ {
+				rows[j][i] = col[j]
+			}
+		case types.T_int8:
+			col := vector.GetFixedVectorValues[int8](vec)
+			for j := 0; j < vec.Length(); j++ {
+				rows[j][i] = col[j]
+			}
+		case types.T_int16:
+			col := vector.GetFixedVectorValues[int16](vec)
+			for j := 0; j < vec.Length(); j++ {
+				rows[j][i] = col[j]
+			}
+		case types.T_int32:
+			col := vector.GetFixedVectorValues[int32](vec)
+			for j := 0; j < vec.Length(); j++ {
+				rows[j][i] = col[j]
+			}
+		case types.T_int64:
+			col := vector.GetFixedVectorValues[int64](vec)
+			for j := 0; j < vec.Length(); j++ {
+				rows[j][i] = col[j]
+			}
+		case types.T_uint8:
+			col := vector.GetFixedVectorValues[uint8](vec)
+			for j := 0; j < vec.Length(); j++ {
+				rows[j][i] = col[j]
+			}
+		case types.T_uint16:
+			col := vector.GetFixedVectorValues[uint16](vec)
+			for j := 0; j < vec.Length(); j++ {
+				rows[j][i] = col[j]
+			}
+		case types.T_uint32:
+			col := vector.GetFixedVectorValues[uint32](vec)
+			for j := 0; j < vec.Length(); j++ {
+				rows[j][i] = col[j]
+			}
+		case types.T_uint64:
+			col := vector.GetFixedVectorValues[uint64](vec)
+			for j := 0; j < vec.Length(); j++ {
+				rows[j][i] = col[j]
+			}
+		case types.T_float32:
+			col := vector.GetFixedVectorValues[float32](vec)
+			for j := 0; j < vec.Length(); j++ {
+				rows[j][i] = col[j]
+			}
+		case types.T_float64:
+			col := vector.GetFixedVectorValues[float64](vec)
+			for j := 0; j < vec.Length(); j++ {
+				rows[j][i] = col[j]
+			}
+		case types.T_date:
+			col := vector.GetFixedVectorValues[types.Date](vec)
+			for j := 0; j < vec.Length(); j++ {
+				rows[j][i] = col[j]
+			}
+		case types.T_datetime:
+			col := vector.GetFixedVectorValues[types.Datetime](vec)
+			for j := 0; j < vec.Length(); j++ {
+				rows[j][i] = col[j]
+			}
+		case types.T_timestamp:
+			col := vector.GetFixedVectorValues[types.Timestamp](vec)
+			for j := 0; j < vec.Length(); j++ {
+				rows[j][i] = col[j]
+			}
+		case types.T_decimal64:
+			col := vector.GetFixedVectorValues[types.Decimal64](vec)
+			for j := 0; j < vec.Length(); j++ {
+				rows[j][i] = col[j]
+			}
+		case types.T_decimal128:
+			col := vector.GetFixedVectorValues[types.Decimal128](vec)
+			for j := 0; j < vec.Length(); j++ {
+				rows[j][i] = col[j]
+			}
+		case types.T_uuid:
+			col := vector.GetFixedVectorValues[types.Uuid](vec)
+			for j := 0; j < vec.Length(); j++ {
+				rows[j][i] = col[j]
+			}
+		case types.T_TS:
+			col := vector.GetFixedVectorValues[types.TS](vec)
+			for j := 0; j < vec.Length(); j++ {
+				rows[j][i] = col[j]
+			}
+		case types.T_Rowid:
+			col := vector.GetFixedVectorValues[types.Rowid](vec)
+			for j := 0; j < vec.Length(); j++ {
+				rows[j][i] = col[j]
+			}
+		case types.T_char, types.T_varchar, types.T_blob, types.T_json:
+			col := vector.GetBytesVectorValues(vec)
+			for j := 0; j < vec.Length(); j++ {
+				rows[j][i] = col[j]
+			}
+		}
+	}
+	return rows
 }

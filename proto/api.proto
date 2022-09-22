@@ -29,7 +29,8 @@ option (gogoproto.protosizer_all) = true;
 enum OpCode {
     Nop = 0;
     OpGetLogTail = 1000;
-    Write = 1001;
+    OpWrite = 1001;
+    OpPreCommit = 1002;
 }
 
 message Vector {
@@ -158,7 +159,10 @@ message SyncLogTailResp {
 
 
 message PrecommitWriteCmd {
-    repeated Entry entry_list = 1;
+    uint32 user_id = 1;
+    uint32 role_id = 2;
+    uint32 account_id = 3;
+    repeated Entry entry_list = 4;
 };
 
 // CN--->DN, DDL

@@ -43,6 +43,43 @@ const (
 	MO_TABLES_REL_NAME_IDX   = 1
 )
 
+// used for memengine and tae
+// tae and memengine do not make the catalog into a table
+// for its convenience, a conversion interface is provided to ensure easy use.
+type CreateDatabase struct {
+	Name        string
+	CreateSql   string
+	Owner       uint32
+	Creator     uint32
+	AccountId   uint32
+	CreatedTime types.Timestamp
+}
+
+type DropDatabase struct {
+	Id   uint64
+	Name string
+}
+
+type CreateTable struct {
+	Name         string
+	CreateSql    string
+	Owner        uint32
+	Creator      uint32
+	AccountId    uint32
+	DatabaseId   uint64
+	DatabaseName string
+	Comment      string
+	Partition    string
+	Defs         []engine.TableDef
+}
+
+type DropTable struct {
+	Id           uint64
+	Name         string
+	DatabaseId   uint64
+	DatabaseName string
+}
+
 var (
 	MoDatabaseSchema = []string{
 		"dat_id",

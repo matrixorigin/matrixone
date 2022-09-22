@@ -48,6 +48,7 @@ const (
 	OpRead
 	OpCloseTableIter
 	OpTableStats
+	OpPreCommit  = uint32(apipb.OpCode_OpPreCommit)
 	OpGetLogTail = uint32(apipb.OpCode_OpGetLogTail)
 )
 

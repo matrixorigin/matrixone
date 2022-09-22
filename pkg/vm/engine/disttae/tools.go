@@ -76,12 +76,16 @@ func genCreateDatabaseTuple(sql string, accountId, userId, roleId uint32, name s
 	return bat, nil
 }
 
-func genDropDatabaseTuple(id uint64, m *mheap.Mheap) (*batch.Batch, error) {
-	bat := batch.NewWithSize(1)
-	bat.Attrs = append(bat.Attrs, catalog.MoDatabaseSchema[:1]...)
+func genDropDatabaseTuple(id uint64, name string, m *mheap.Mheap) (*batch.Batch, error) {
+	bat := batch.NewWithSize(2)
+	bat.Attrs = append(bat.Attrs, catalog.MoDatabaseSchema[:2]...)
 	{
 		bat.Vecs[0] = vector.New(catalog.MoDatabaseTypes[0]) // dat_id
 		if err := bat.Vecs[0].Append(id, false, m); err != nil {
+			return nil, err
+		}
+		bat.Vecs[1] = vector.New(catalog.MoDatabaseTypes[1]) // datname
+		if err := bat.Vecs[1].Append([]byte(name), false, m); err != nil {
 			return nil, err
 		}
 	}
@@ -233,12 +237,25 @@ func genCreateColumnTuple(col column, m *mheap.Mheap) (*batch.Batch, error) {
 	return bat, nil
 }
 
-func genDropTableTuple(id uint64, m *mheap.Mheap) (*batch.Batch, error) {
-	bat := batch.NewWithSize(1)
-	bat.Attrs = append(bat.Attrs, catalog.MoTablesSchema[:1]...)
+func genDropTableTuple(id, databaseId uint64, name, databaseName string,
+	m *mheap.Mheap) (*batch.Batch, error) {
+	bat := batch.NewWithSize(4)
+	bat.Attrs = append(bat.Attrs, catalog.MoTablesSchema[:4]...)
 	{
 		bat.Vecs[0] = vector.New(catalog.MoTablesTypes[0]) // rel_id
 		if err := bat.Vecs[0].Append(id, false, m); err != nil {
+			return nil, err
+		}
+		bat.Vecs[1] = vector.New(catalog.MoTablesTypes[1]) // relname
+		if err := bat.Vecs[1].Append([]byte(name), false, m); err != nil {
+			return nil, err
+		}
+		bat.Vecs[2] = vector.New(catalog.MoTablesTypes[2]) // reldatabase
+		if err := bat.Vecs[1].Append([]byte(databaseName), false, m); err != nil {
+			return nil, err
+		}
+		bat.Vecs[3] = vector.New(catalog.MoTablesTypes[3]) // reldatabase_id
+		if err := bat.Vecs[3].Append(databaseId, false, m); err != nil {
 			return nil, err
 		}
 	}
@@ -291,119 +308,6 @@ func genDeleteExpr(defs []engine.TableDef) *plan.Expr {
 	return nil
 }
 
-func genRows(bat *batch.Batch) [][]any {
-	rows := make([][]any, bat.Length())
-	for i := 0; i < bat.Length(); i++ {
-		rows[i] = make([]any, bat.VectorCount())
-	}
-	for i := 0; i < bat.VectorCount(); i++ {
-		vec := bat.GetVector(int32(i))
-		switch vec.GetType().Oid {
-		case types.T_bool:
-			col := vector.GetFixedVectorValues[bool](vec)
-			for j := 0; j < vec.Length(); j++ {
-				rows[j][i] = col[j]
-			}
-		case types.T_int8:
-			col := vector.GetFixedVectorValues[int8](vec)
-			for j := 0; j < vec.Length(); j++ {
-				rows[j][i] = col[j]
-			}
-		case types.T_int16:
-			col := vector.GetFixedVectorValues[int16](vec)
-			for j := 0; j < vec.Length(); j++ {
-				rows[j][i] = col[j]
-			}
-		case types.T_int32:
-			col := vector.GetFixedVectorValues[int32](vec)
-			for j := 0; j < vec.Length(); j++ {
-				rows[j][i] = col[j]
-			}
-		case types.T_int64:
-			col := vector.GetFixedVectorValues[int64](vec)
-			for j := 0; j < vec.Length(); j++ {
-				rows[j][i] = col[j]
-			}
-		case types.T_uint8:
-			col := vector.GetFixedVectorValues[uint8](vec)
-			for j := 0; j < vec.Length(); j++ {
-				rows[j][i] = col[j]
-			}
-		case types.T_uint16:
-			col := vector.GetFixedVectorValues[uint16](vec)
-			for j := 0; j < vec.Length(); j++ {
-				rows[j][i] = col[j]
-			}
-		case types.T_uint32:
-			col := vector.GetFixedVectorValues[uint32](vec)
-			for j := 0; j < vec.Length(); j++ {
-				rows[j][i] = col[j]
-			}
-		case types.T_uint64:
-			col := vector.GetFixedVectorValues[uint64](vec)
-			for j := 0; j < vec.Length(); j++ {
-				rows[j][i] = col[j]
-			}
-		case types.T_float32:
-			col := vector.GetFixedVectorValues[float32](vec)
-			for j := 0; j < vec.Length(); j++ {
-				rows[j][i] = col[j]
-			}
-		case types.T_float64:
-			col := vector.GetFixedVectorValues[float64](vec)
-			for j := 0; j < vec.Length(); j++ {
-				rows[j][i] = col[j]
-			}
-		case types.T_date:
-			col := vector.GetFixedVectorValues[types.Date](vec)
-			for j := 0; j < vec.Length(); j++ {
-				rows[j][i] = col[j]
-			}
-		case types.T_datetime:
-			col := vector.GetFixedVectorValues[types.Datetime](vec)
-			for j := 0; j < vec.Length(); j++ {
-				rows[j][i] = col[j]
-			}
-		case types.T_timestamp:
-			col := vector.GetFixedVectorValues[types.Timestamp](vec)
-			for j := 0; j < vec.Length(); j++ {
-				rows[j][i] = col[j]
-			}
-		case types.T_decimal64:
-			col := vector.GetFixedVectorValues[types.Decimal64](vec)
-			for j := 0; j < vec.Length(); j++ {
-				rows[j][i] = col[j]
-			}
-		case types.T_decimal128:
-			col := vector.GetFixedVectorValues[types.Decimal128](vec)
-			for j := 0; j < vec.Length(); j++ {
-				rows[j][i] = col[j]
-			}
-		case types.T_uuid:
-			col := vector.GetFixedVectorValues[types.Uuid](vec)
-			for j := 0; j < vec.Length(); j++ {
-				rows[j][i] = col[j]
-			}
-		case types.T_TS:
-			col := vector.GetFixedVectorValues[types.TS](vec)
-			for j := 0; j < vec.Length(); j++ {
-				rows[j][i] = col[j]
-			}
-		case types.T_Rowid:
-			col := vector.GetFixedVectorValues[types.Rowid](vec)
-			for j := 0; j < vec.Length(); j++ {
-				rows[j][i] = col[j]
-			}
-		case types.T_char, types.T_varchar, types.T_blob, types.T_json:
-			col := vector.GetBytesVectorValues(vec)
-			for j := 0; j < vec.Length(); j++ {
-				rows[j][i] = col[j]
-			}
-		}
-	}
-	return rows
-}
-
 func genWriteReqs(writes [][]Entry) ([]txn.TxnRequest, error) {
 	mq := make(map[string]DNStore)
 	mp := make(map[string][]*api.Entry)
@@ -429,7 +333,7 @@ func genWriteReqs(writes [][]Entry) ([]txn.TxnRequest, error) {
 		for _, info := range dn.Shards {
 			reqs = append(reqs, txn.TxnRequest{
 				CNRequest: &txn.CNOpRequest{
-					OpCode:  uint32(api.OpCode_OpGetLogTail),
+					OpCode:  uint32(api.OpCode_OpPreCommit),
 					Payload: payload,
 					Target: metadata.DNShard{
 						DNShardRecord: metadata.DNShardRecord{
