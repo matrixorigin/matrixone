@@ -66,6 +66,7 @@ func Prepare(proc *process.Process, arg any) error {
 	}
 
 	if len(fileList) == 0 {
+		logutil.Warnf("no such file '%s'", param.extern.Filepath)
 		param.End = true
 	}
 	param.FileList = fileList
