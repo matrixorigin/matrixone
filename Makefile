@@ -182,12 +182,16 @@ errNews := $(shell grep -onr 'errors.New' pkg/ --exclude-dir=.git --exclude-dir=
 .PHONY: err-check
 err-check:
 ifneq ("$(strip $(fmtErrs))$(strip $(errNews))", "")
-	$(warning 'fmt.Errorf()' is found.)
-	$(warning 'errors.New()' is found.)
-	$(warning Use moerr instead.)
-	$(warning One of 'fmt.Errorf()' is called at: $(shell printf "%s\n" $(fmtErrs) | head -1))
-	$(warning One of 'errors.New()' is called at: $(shell printf "%s\n" $(errNews) | head -1))
-	$(error )
+ ifneq ("$(strip $(fmtErrs))", "")
+		$(warning 'fmt.Errorf()' is found.)
+		$(warning One of 'fmt.Errorf()' is called at: $(shell printf "%s\n" $(fmtErrs) | head -1))
+ endif
+ ifneq ("$(strip $(errNews))", "")
+		$(warning 'errors.New()' is found.)
+		$(warning One of 'errors.New()' is called at: $(shell printf "%s\n" $(errNews) | head -1))
+ endif
+
+	$(error Use moerr instead.)
 else
-	$(info No 'fmt.Errorf()' nor 'errors.New()' found)
+	$(info Neither 'fmt.Errorf()' nor 'errors.New()' is found)
 endif

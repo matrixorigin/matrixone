@@ -68,7 +68,11 @@ func UpdateInsertValueBatch(e engine.Engine, ctx context.Context, proc *process.
 	if err != nil {
 		return err
 	}
-	return UpdateInsertBatch(e, db, ctx, proc, ColDefs, bat, p.TblName+"_"+p.DbName)
+	rel, err := db.Relation(ctx, p.TblName)
+	if err != nil {
+		return err
+	}
+	return UpdateInsertBatch(e, db, ctx, proc, ColDefs, bat, rel.GetTableID(ctx))
 }
 
 func getRangeFromAutoIncrTable(param *AutoIncrParam, bat *batch.Batch, tableID string) ([]uint64, []uint64, error) {
