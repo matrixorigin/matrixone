@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"github.com/smartystreets/goconvey/convey"
 	"github.com/stretchr/testify/require"
 )
 
@@ -85,4 +86,57 @@ func TestLength(t *testing.T) {
 
 		})
 	}
+}
+
+func TestBlobLength(t *testing.T) {
+	makeBlobVector := func(src []byte, srcIsScalar bool, procs *process.Process) *vector.Vector {
+		inputType := types.New(types.T_blob, 0, 0, 0)
+		var inputVector *vector.Vector
+		if srcIsScalar {
+			inputVector = vector.NewConst(inputType, 1)
+		} else {
+			inputVector = vector.New(inputType)
+		}
+		err := inputVector.Append(src, false, procs.GetMheap())
+		if err != nil {
+			t.Fatal(err)
+		}
+		return inputVector
+	}
+
+	procs := testutil.NewProcess()
+	cases := []struct {
+		name     string
+		ctx      []byte
+		want     []int64
+		isScalar bool
+	}{
+		{
+			name:     "Normal Case",
+			ctx:      []byte("12345678"),
+			want:     []int64{8},
+			isScalar: false,
+		},
+		{
+			name:     "Empty Case",
+			ctx:      []byte(""),
+			want:     []int64{0},
+			isScalar: false,
+		},
+		{
+			name:     "Scalar Case",
+			ctx:      []byte("12345678"),
+			want:     []int64{8},
+			isScalar: true,
+		},
+	}
+	for _, c := range cases {
+		convey.Convey(c.name, t, func() {
+			res, err := Length([]*vector.Vector{makeBlobVector(c.ctx, c.isScalar, procs)}, procs)
+			convey.So(err, convey.ShouldBeNil)
+			convey.So(res.Col, convey.ShouldResemble, c.want)
+			convey.So(res.IsScalar(), convey.ShouldEqual, c.isScalar)
+		})
+	}
+
 }
