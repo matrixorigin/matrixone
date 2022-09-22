@@ -38,10 +38,11 @@ const (
 
 // add unit tests for cases
 type externalTestCase struct {
-	arg    *Argument
-	types  []types.Type
-	proc   *process.Process
-	cancel context.CancelFunc
+	arg      *Argument
+	types    []types.Type
+	proc     *process.Process
+	cancel   context.CancelFunc
+	fromjson bool
 }
 
 var (
@@ -59,11 +60,11 @@ func newTestCase(gm *guest.Mmu, all, jsonline bool) externalTestCase {
 		},
 		arg: &Argument{
 			Es: &ExternalParam{
-				Ctx:          ctx,
-				FromJsonLine: jsonline,
+				Ctx: ctx,
 			},
 		},
-		cancel: cancel,
+		cancel:   cancel,
+		fromjson: jsonline,
 	}
 }
 
@@ -86,12 +87,11 @@ func Test_Prepare(t *testing.T) {
 			convey.So(err, convey.ShouldNotBeNil)
 			convey.So(param.extern, convey.ShouldNotBeNil)
 			convey.So(param.End, convey.ShouldBeTrue)
-
 			extern := &tree.ExternParam{
 				Filepath: "",
 				Tail: &tree.TailParameter{
 					IgnoredLines: 0,
-					FromJsonLine: tcs.arg.Es.FromJsonLine,
+					FromJsonLine: tcs.fromjson,
 				},
 				FileService: tcs.proc.FileService,
 			}
@@ -126,7 +126,7 @@ func Test_Call(t *testing.T) {
 				Filepath: "",
 				Tail: &tree.TailParameter{
 					IgnoredLines: 0,
-					FromJsonLine: tcs.arg.Es.FromJsonLine,
+					FromJsonLine: param.extern.Tail.FromJsonLine,
 				},
 				FileService: tcs.proc.FileService,
 			}
@@ -411,18 +411,18 @@ func Test_GetBatchData(t *testing.T) {
 		}
 
 		//test jsonline
-		param.FromJsonLine = true
+		param.extern.Tail.FromJsonLine = true
 		param.Attrs = atrrs
 		param.Cols = cols
 		plh.simdCsvLineArray = [][]string{jsonline}
 		_, err = GetBatchData(param, plh, proc)
 		convey.So(err, convey.ShouldBeNil)
 
-		param.FromJsonLine = false
+		param.extern.Tail.FromJsonLine = false
 		_, err = GetBatchData(param, plh, proc)
 		convey.So(err, convey.ShouldNotBeNil)
 
-		param.FromJsonLine = true
+		param.extern.Tail.FromJsonLine = true
 		param.Attrs = append(param.Attrs, "test")
 		param.Cols = append(param.Cols, param.Cols[0])
 		_, err = GetBatchData(param, plh, proc)

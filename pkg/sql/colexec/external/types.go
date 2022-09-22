@@ -39,13 +39,12 @@ type ExternalParam struct {
 	IgnoreLine    int
 	IgnoreLineTag int
 	// tag indicate the fileScan is finished
-	End          bool
-	FromJsonLine bool
-	FileCnt      int
-	FileIndex    int
-	FileList     []string
-	batchSize    int
-	reader       io.ReadCloser
+	End       bool
+	FileCnt   int
+	FileIndex int
+	FileList  []string
+	batchSize int
+	reader    io.ReadCloser
 }
 
 type Argument struct {

@@ -254,7 +254,7 @@ func GetBatchData(param *ExternalParam, plh *ParseLineHandler, proc *process.Pro
 	deleteEnclosed(param, plh)
 	for rowIdx := 0; rowIdx < plh.batchSize; rowIdx++ {
 		Line = plh.simdCsvLineArray[rowIdx]
-		if param.FromJsonLine {
+		if param.extern.Tail.FromJsonLine {
 			Line, err = transJson2Lines(Line[0], param.Attrs)
 			if err != nil {
 				return nil, err

@@ -345,7 +345,6 @@ func constructExternal(n *plan.Node, ctx context.Context) *external.Argument {
 			Name2ColIndex: n.TableDef.Name2ColIndex,
 			CreateSql:     n.TableDef.Createsql,
 			Ctx:           ctx,
-			FromJsonLine:  n.ExtraOptions == "jsonline",
 		},
 	}
 }
