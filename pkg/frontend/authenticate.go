@@ -554,7 +554,7 @@ var (
 	//Wrap them in a transaction
 	createSqls = []string{
 		`create table mo_user(
-				user_id int,
+				user_id int unsigned,
 				user_host varchar(100),
 				user_name varchar(100),
 				authentication_string varchar(100),
@@ -562,48 +562,48 @@ var (
 				created_time  timestamp,
 				expired_time timestamp,
 				login_type  varchar(16),
-				creator int,
-				owner int,
-				default_role int
+				creator int unsigned,
+				owner int unsigned,
+				default_role int unsigned
     		);`,
 		`create table mo_account(
-				account_id int,
+				account_id int unsigned,
 				account_name varchar(100),
 				status varchar(100),
 				created_time timestamp,
 				comments varchar(256)
 			);`,
 		`create table mo_role(
-				role_id int,
+				role_id int unsigned,
 				role_name varchar(100),
-				creator int,
-				owner int,
+				creator int unsigned,
+				owner int unsigned,
 				created_time timestamp,
 				comments text
 			);`,
 		`create table mo_user_grant(
-				role_id int,
-				user_id int,
+				role_id int unsigned,
+				user_id int unsigned,
 				granted_time timestamp,
 				with_grant_option bool
 			);`,
 		`create table mo_role_grant(
-				granted_id int,
-				grantee_id int,
-				operation_role_id int,
-				operation_user_id int,
+				granted_id int unsigned,
+				grantee_id int unsigned,
+				operation_role_id int unsigned,
+				operation_user_id int unsigned,
 				granted_time timestamp,
 				with_grant_option bool
 			);`,
 		`create table mo_role_privs(
-				role_id int,
+				role_id int unsigned,
 				role_name  varchar(100),
 				obj_type  varchar(16),
-				obj_id int,
+				obj_id bigint unsigned,
 				privilege_id int,
 				privilege_name varchar(100),
 				privilege_level varchar(100),
-				operation_user_id int,
+				operation_user_id int unsigned,
 				granted_time timestamp,
 				with_grant_option bool
 			);`,
@@ -3839,7 +3839,7 @@ func InitUser(ctx context.Context, tenant *TenantInfo, cu *tree.CreateUser) erro
 
 		//TODO: get comment or attribute. there is no field in mo_user to store it.
 		//TODO: to get the user id from the auto_increment table
-		newUserId := rand.Int31()
+		newUserId := uint32(rand.Int31())
 		initMoUser1 := fmt.Sprintf(initMoUserFormat, newUserId, rootHost, user.Username, password, status,
 			types.CurrentTimestamp().String2(time.UTC, 0), rootExpiredTime, rootLoginType,
 			tenant.GetUserID(), tenant.GetDefaultRoleID(), newRoleId)
@@ -3923,7 +3923,7 @@ func InitRole(ctx context.Context, tenant *TenantInfo, cr *tree.CreateRole) erro
 			return moerr.NewInternalError("the role %s exists", r.UserName)
 		}
 
-		newRoleId := rand.Int31()
+		newRoleId := uint32(rand.Int31())
 		initMoRole := fmt.Sprintf(initMoRoleFormat, newRoleId, r.UserName, tenant.GetUserID(), tenant.GetDefaultRoleID(),
 			types.CurrentTimestamp().String2(time.UTC, 0), "")
 		appendSql(initMoRole)
