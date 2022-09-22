@@ -218,17 +218,19 @@ func DeepCopyColDef(col *plan.ColDef) *plan.ColDef {
 
 func DeepCopyTableDef(table *plan.TableDef) *plan.TableDef {
 	newTable := &plan.TableDef{
-		Name:          table.Name,
-		Cols:          make([]*plan.ColDef, len(table.Cols)),
-		Defs:          make([]*plan.TableDef_DefType, len(table.Defs)),
-		TableType:     table.TableType,
-		Createsql:     table.Createsql,
-		Name2ColIndex: table.Name2ColIndex,
+		Name:               table.Name,
+		Cols:               make([]*plan.ColDef, len(table.Cols)),
+		Defs:               make([]*plan.TableDef_DefType, len(table.Defs)),
+		TableType:          table.TableType,
+		Createsql:          table.Createsql,
+		Name2ColIndex:      table.Name2ColIndex,
+		TableFunctionParam: make([]byte, len(table.TableFunctionParam)),
 	}
 
 	for idx, col := range table.Cols {
 		newTable.Cols[idx] = DeepCopyColDef(col)
 	}
+	copy(newTable.TableFunctionParam, table.TableFunctionParam)
 	// FIX ME: don't support now
 	// for idx, def := range table.Defs {
 	// 	newTable.Cols[idx] = &plan.TableDef_DefType{}
