@@ -302,7 +302,7 @@ func newParallelScope(c *Compile, s *Scope, ss []*Scope) *Scope {
 			s.Instructions[0] = vm.Instruction{
 				Op: vm.MergeGroup,
 				Arg: &mergegroup.Argument{
-					NeedEval: true,
+					NeedEval: false,
 				},
 			}
 			for i := range ss {
