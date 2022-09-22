@@ -16,6 +16,7 @@ package logservice
 
 import (
 	"context"
+	"go.uber.org/zap"
 	"math/rand"
 	"sync"
 	"time"
@@ -220,7 +221,7 @@ func (c *managedClient) resetClient() {
 		cc := c.client
 		c.client = nil
 		if err := cc.close(); err != nil {
-			plog.Errorf("failed to close client %v", err)
+			logger.Error("failed to close client", zap.Error(err))
 		}
 	}
 }
@@ -318,7 +319,7 @@ func connectToLogService(ctx context.Context,
 				return c, nil
 			} else {
 				if err := c.close(); err != nil {
-					plog.Errorf("failed to close the client %v", err)
+					logger.Error("failed to close the client", zap.Error(err))
 				}
 				e = err
 			}
@@ -329,7 +330,7 @@ func connectToLogService(ctx context.Context,
 				return c, nil
 			} else {
 				if err := c.close(); err != nil {
-					plog.Errorf("failed to close the client %v", err)
+					logger.Error("failed to close the client", zap.Error(err))
 				}
 				e = err
 			}
