@@ -15,9 +15,9 @@
 package extract
 
 import (
-	"errors"
 	"fmt"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
@@ -75,7 +75,7 @@ func ExtractFromOneDate(unit string, date types.Date) uint32 {
 
 func ExtractFromDate(unit string, dates []types.Date, results []uint32) ([]uint32, error) {
 	if _, ok := validDateUnit[unit]; !ok {
-		return []uint32{}, errors.New("invalid unit")
+		return []uint32{}, moerr.NewInternalError("invalid unit")
 	}
 	switch unit {
 	case "day":
@@ -108,7 +108,7 @@ func ExtractFromDate(unit string, dates []types.Date, results []uint32) ([]uint3
 
 func ExtractFromDatetime(unit string, datetimes []types.Datetime, results []string) ([]string, error) {
 	if _, ok := validDatetimeUnit[unit]; !ok {
-		return nil, errors.New("invalid unit")
+		return nil, moerr.NewInternalError("invalid unit")
 	}
 	switch unit {
 	case "microsecond":

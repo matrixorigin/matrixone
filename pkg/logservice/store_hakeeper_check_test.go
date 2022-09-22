@@ -141,7 +141,7 @@ func runHakeeperTaskServiceTest(t *testing.T, fn func(*testing.T, *store, taskse
 	cfg.HAKeeperConfig.CNStoreTimeout.Duration = 5 * time.Second
 	defer vfs.ReportLeakedFD(cfg.FS, t)
 
-	taskService := taskservice.NewTaskService(taskservice.NewMemTaskStorage())
+	taskService := taskservice.NewTaskService(taskservice.NewMemTaskStorage(), nil)
 	store, err := getTestStore(cfg, false, taskService)
 	assert.NoError(t, err)
 	defer func() {
@@ -222,7 +222,7 @@ func runHAKeeperClusterTest(t *testing.T, fn func(*testing.T, []*Service)) {
 	cfg1.Fill()
 	service1, err := NewService(cfg1,
 		testutil.NewFS(),
-		taskservice.NewTaskService(taskservice.NewMemTaskStorage()),
+		taskservice.NewTaskService(taskservice.NewMemTaskStorage(), nil),
 		WithBackendFilter(func(msg morpc.Message, backendAddr string) bool {
 			return true
 		}),
@@ -234,7 +234,7 @@ func runHAKeeperClusterTest(t *testing.T, fn func(*testing.T, []*Service)) {
 	cfg2.Fill()
 	service2, err := NewService(cfg2,
 		testutil.NewFS(),
-		taskservice.NewTaskService(taskservice.NewMemTaskStorage()),
+		taskservice.NewTaskService(taskservice.NewMemTaskStorage(), nil),
 		WithBackendFilter(func(msg morpc.Message, backendAddr string) bool {
 			return true
 		}),
@@ -246,7 +246,7 @@ func runHAKeeperClusterTest(t *testing.T, fn func(*testing.T, []*Service)) {
 	cfg3.Fill()
 	service3, err := NewService(cfg3,
 		testutil.NewFS(),
-		taskservice.NewTaskService(taskservice.NewMemTaskStorage()),
+		taskservice.NewTaskService(taskservice.NewMemTaskStorage(), nil),
 		WithBackendFilter(func(msg morpc.Message, backendAddr string) bool {
 			return true
 		}),
@@ -258,7 +258,7 @@ func runHAKeeperClusterTest(t *testing.T, fn func(*testing.T, []*Service)) {
 	cfg4.Fill()
 	service4, err := NewService(cfg4,
 		testutil.NewFS(),
-		taskservice.NewTaskService(taskservice.NewMemTaskStorage()),
+		taskservice.NewTaskService(taskservice.NewMemTaskStorage(), nil),
 		WithBackendFilter(func(msg morpc.Message, backendAddr string) bool {
 			return true
 		}),

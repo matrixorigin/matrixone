@@ -15,11 +15,11 @@
 package logutil
 
 import (
-	"fmt"
 	"os"
 	"sync/atomic"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 	"gopkg.in/natefinch/lumberjack.v2"
@@ -162,7 +162,7 @@ func getLoggerEncoder(format string) zapcore.Encoder {
 	case "console":
 		return zapcore.NewConsoleEncoder(encoderConfig)
 	default:
-		panic(fmt.Errorf("unsupported log format: %s", format))
+		panic(moerr.NewInternalError("unsupported log format: %s", format))
 	}
 }
 

@@ -43,7 +43,7 @@ func NewHashShard(heap *mheap.Mheap) *HashShard {
 
 func (*HashShard) Batch(
 	ctx context.Context,
-	tableID string,
+	tableID ID,
 	getDefs getDefsFunc,
 	bat *batch.Batch,
 	nodes []logservicepb.DNStore,
@@ -158,7 +158,7 @@ func (*HashShard) Batch(
 
 func (h *HashShard) Vector(
 	ctx context.Context,
-	tableID string,
+	tableID ID,
 	getDefs getDefsFunc,
 	colName string,
 	vec *vector.Vector,
@@ -583,7 +583,7 @@ func getNullableValueFromVector(vec *vector.Vector, i int) (value Nullable) {
 
 	}
 
-	panic(fmt.Errorf("unknown column type: %v", vec.Typ))
+	panic(fmt.Sprintf("unknown column type: %v", vec.Typ))
 }
 
 func appendNullableValueToVector(vec *vector.Vector, value Nullable, heap *mheap.Mheap) {

@@ -45,11 +45,23 @@ func init() {
 	trace.Init(context.Background(), trace.EnableTracer(false))
 }
 
+func mockRecordStatement(ctx context.Context) (context.Context, *gostub.Stubs) {
+	stm := &trace.StatementInfo{}
+	ctx = trace.ContextWithStatement(ctx, stm)
+	stubs := gostub.Stub(&RecordStatement, func(context.Context, *Session, *process.Process, ComputationWrapper, time.Time) context.Context {
+		return ctx
+	})
+	return ctx, stubs
+}
+
 func Test_mce(t *testing.T) {
 	ctx := context.TODO()
 	convey.Convey("boot mce succ", t, func() {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
+
+		ctx, rsStubs := mockRecordStatement(ctx)
+		defer rsStubs.Reset()
 
 		eng := mock_frontend.NewMockEngine(ctrl)
 		eng.EXPECT().New(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
@@ -78,6 +90,7 @@ func Test_mce(t *testing.T) {
 			t.Error(err)
 		}
 		use_t.EXPECT().GetAst().Return(stmts[0]).AnyTimes()
+		use_t.EXPECT().RecordExecPlan(ctx).Return(nil).AnyTimes()
 
 		runner := mock_frontend.NewMockComputationRunner(ctrl)
 		runner.EXPECT().Run(gomock.Any()).Return(nil).AnyTimes()
@@ -93,6 +106,7 @@ func Test_mce(t *testing.T) {
 		create_1.EXPECT().Compile(gomock.Any(), gomock.Any(), gomock.Any()).Return(runner, nil).AnyTimes()
 		create_1.EXPECT().Run(gomock.Any()).Return(nil).AnyTimes()
 		create_1.EXPECT().GetAffectedRows().Return(uint64(0)).AnyTimes()
+		create_1.EXPECT().RecordExecPlan(ctx).Return(nil).AnyTimes()
 
 		select_1 := mock_frontend.NewMockComputationWrapper(ctrl)
 		stmts, err = parsers.Parse(dialect.MYSQL, "select a,b,c from A")
@@ -104,6 +118,7 @@ func Test_mce(t *testing.T) {
 		select_1.EXPECT().SetDatabaseName(gomock.Any()).Return(nil).AnyTimes()
 		select_1.EXPECT().Compile(gomock.Any(), gomock.Any(), gomock.Any()).Return(runner, nil).AnyTimes()
 		select_1.EXPECT().Run(gomock.Any()).Return(nil).AnyTimes()
+		select_1.EXPECT().RecordExecPlan(ctx).Return(nil).AnyTimes()
 
 		cola := &MysqlColumn{}
 		cola.SetName("a")
@@ -184,6 +199,7 @@ func Test_mce(t *testing.T) {
 			select_2.EXPECT().Run(gomock.Any()).Return(nil).AnyTimes()
 			select_2.EXPECT().GetAffectedRows().Return(uint64(0)).AnyTimes()
 			select_2.EXPECT().GetColumns().Return(self_handle_sql_columns[i], nil).AnyTimes()
+			select_2.EXPECT().RecordExecPlan(ctx).Return(nil).AnyTimes()
 			cws = append(cws, select_2)
 		}
 
@@ -286,7 +302,7 @@ func Test_mce_selfhandle(t *testing.T) {
 				if cnt == 1 {
 					return nil, nil
 				}
-				return nil, fmt.Errorf("fake error")
+				return nil, moerr.NewInternalError("fake error")
 			},
 		).AnyTimes()
 
@@ -327,6 +343,9 @@ func Test_mce_selfhandle(t *testing.T) {
 	convey.Convey("handleSelectDatabase/handleMaxAllowedPacket/handleVersionComment/handleCmdFieldList/handleSetVar", t, func() {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
+
+		ctx, rsStubs := mockRecordStatement(ctx)
+		defer rsStubs.Reset()
 
 		eng := mock_frontend.NewMockEngine(ctrl)
 		eng.EXPECT().New(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
@@ -879,6 +898,9 @@ func Test_CMD_FIELD_LIST(t *testing.T) {
 
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
+
+		ctx, rsStubs := mockRecordStatement(ctx)
+		defer rsStubs.Reset()
 
 		eng := mock_frontend.NewMockEngine(ctrl)
 		eng.EXPECT().New(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()

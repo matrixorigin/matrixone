@@ -24,10 +24,10 @@ import (
 )
 
 type Database struct {
+	id          ID
+	name        string
 	engine      *Engine
 	txnOperator client.TxnOperator
-
-	id string
 }
 
 var _ engine.Database = new(Database)
@@ -41,10 +41,11 @@ func (d *Database) Create(ctx context.Context, relName string, defs []engine.Tab
 		d.engine.allNodesShards,
 		OpCreateRelation,
 		CreateRelationReq{
-			DatabaseID: d.id,
-			Type:       RelationTable,
-			Name:       strings.ToLower(relName),
-			Defs:       defs,
+			DatabaseID:   d.id,
+			DatabaseName: d.name,
+			Type:         RelationTable,
+			Name:         strings.ToLower(relName),
+			Defs:         defs,
 		},
 	)
 	if err != nil {
@@ -63,8 +64,9 @@ func (d *Database) Delete(ctx context.Context, relName string) error {
 		d.engine.allNodesShards,
 		OpDeleteRelation,
 		DeleteRelationReq{
-			DatabaseID: d.id,
-			Name:       strings.ToLower(relName),
+			DatabaseID:   d.id,
+			DatabaseName: d.name,
+			Name:         strings.ToLower(relName),
 		},
 	)
 	if err != nil {
@@ -87,8 +89,9 @@ func (d *Database) Relation(ctx context.Context, relName string) (engine.Relatio
 		d.engine.firstNodeShard,
 		OpOpenRelation,
 		OpenRelationReq{
-			DatabaseID: d.id,
-			Name:       strings.ToLower(relName),
+			DatabaseID:   d.id,
+			DatabaseName: d.name,
+			Name:         strings.ToLower(relName),
 		},
 	)
 	if err != nil {
@@ -101,9 +104,11 @@ func (d *Database) Relation(ctx context.Context, relName string) (engine.Relatio
 
 	case RelationTable, RelationView:
 		table := &Table{
-			engine:      d.engine,
-			txnOperator: d.txnOperator,
-			id:          resp.ID,
+			engine:       d.engine,
+			txnOperator:  d.txnOperator,
+			id:           resp.ID,
+			databaseName: resp.DatabaseName,
+			tableName:    resp.RelationName,
 		}
 		return table, nil
 

@@ -55,3 +55,11 @@ func (bo *BitOr[T1]) Fill(_ int64, v1 T1, v2 uint64, _ int64, IsEmpty bool, hasN
 		return uint64(v1) | v2, false
 	}
 }
+
+func (bo *BitOr[T1]) MarshalBinary() ([]byte, error) {
+	return nil, nil
+}
+
+func (bo *BitOr[T1]) UnmarshalBinary(data []byte) error {
+	return nil
+}

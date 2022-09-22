@@ -344,12 +344,18 @@ type HAKeeperClientConfig struct {
 	DiscoveryAddress string `toml:"discovery-address"`
 	// ServiceAddresses is a list of well known Log Services' service addresses.
 	ServiceAddresses []string `toml:"service-addresses"`
+	// AllocateIDBatch how many IDs are assigned from hakeeper each time. Default is
+	// 100.
+	AllocateIDBatch uint64 `toml:"allocate-id-batch"`
 }
 
 // Validate validates the HAKeeperClientConfig.
 func (c *HAKeeperClientConfig) Validate() error {
 	if len(c.DiscoveryAddress) == 0 && len(c.ServiceAddresses) == 0 {
 		return moerr.NewBadConfig("HAKeeperClientConfig not set")
+	}
+	if c.AllocateIDBatch == 0 {
+		c.AllocateIDBatch = 100
 	}
 	return nil
 }

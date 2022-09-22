@@ -130,7 +130,12 @@ false
 true
 false
 select coalesce(a, 200) from t3;
-invalid argument cast to bool, bad value 200
+coalesce(a, 200)
+false
+true
+true
+true
+true
 select coalesce(b, '1') from t3;
 coalesce(b, 1)
 a

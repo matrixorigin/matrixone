@@ -15,7 +15,6 @@
 package db
 
 import (
-	"errors"
 	"io"
 	"runtime"
 	"sync/atomic"
@@ -37,7 +36,7 @@ import (
 )
 
 var (
-	ErrClosed = errors.New("tae: closed")
+	ErrClosed = moerr.NewInternalError("tae: closed")
 )
 
 type DB struct {
