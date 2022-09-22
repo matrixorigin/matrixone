@@ -27,7 +27,6 @@ type Reader struct {
 	reader objectio.Reader
 	block  *blockFile
 	fs     *objectio.ObjectFS
-	name   string
 }
 
 func NewReader(fs *objectio.ObjectFS, block *blockFile, name string) *Reader {
@@ -38,7 +37,6 @@ func NewReader(fs *objectio.ObjectFS, block *blockFile, name string) *Reader {
 	return &Reader{
 		fs:     fs,
 		block:  block,
-		name:   name,
 		reader: reader,
 	}
 }

@@ -35,6 +35,7 @@ type metaKey struct {
 
 type blockFile struct {
 	common.RefHelper
+	name    string
 	seg     *segmentFile
 	rows    uint32
 	id      *common.ID
@@ -50,10 +51,12 @@ func newBlock(id uint64, seg *segmentFile, colCnt int, indexCnt map[int]int) *bl
 		SegmentID: seg.id.SegmentID,
 		BlockID:   id,
 	}
+	name := EncodeBlkName(blockID)
 	bf := &blockFile{
 		seg:     seg,
 		id:      blockID,
 		columns: make([]*columnBlock, colCnt),
+		name:    name,
 	}
 	bf.OnZeroCB = bf.close
 	for i := range bf.columns {
@@ -68,7 +71,7 @@ func newBlock(id uint64, seg *segmentFile, colCnt int, indexCnt map[int]int) *bl
 }
 
 func (bf *blockFile) WriteBatch(bat *containers.Batch, ts types.TS) (blk objectio.BlockObject, err error) {
-	bf.writer = NewWriter(bf.seg.fs, bf.id)
+	bf.writer = NewWriter(bf.seg.fs, bf.name)
 	block, err := bf.writer.WriteBlock(bat)
 	return block, err
 }
@@ -102,7 +105,7 @@ func (bf *blockFile) GetMeta(metaLoc string) objectio.BlockObject {
 	if bf.key != nil {
 		bf.key.metaLoc = metaLoc
 		if bf.reader == nil {
-			bf.reader = NewReader(bf.seg.fs, bf, bf.writer.name)
+			bf.reader = NewReader(bf.seg.fs, bf, bf.name)
 		}
 		block, err := bf.reader.ReadMeta(bf.key.extent)
 		if err != nil {
@@ -166,7 +169,7 @@ func (bf *blockFile) Destroy() error {
 	if bf.writer == nil {
 		return nil
 	}
-	name := path.Join(bf.writer.fs.Dir, bf.writer.name)
+	name := path.Join(bf.writer.fs.Dir, bf.name)
 	err := os.Remove(name)
 	if err != nil && os.IsNotExist(err) {
 		return nil

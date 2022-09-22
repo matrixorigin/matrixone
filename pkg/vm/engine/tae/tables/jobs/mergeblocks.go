@@ -286,7 +286,8 @@ func (task *mergeBlocksTask) Execute() (err error) {
 		TableID:   task.toSegEntry.GetTable().GetID(),
 		SegmentID: task.toSegEntry.GetID(),
 	}
-	writer := blockio.NewWriter(task.toSegEntry.GetSegmentData().GetSegmentFile().GetFs(), id)
+	name := blockio.EncodeSegName(id)
+	writer := blockio.NewWriter(task.toSegEntry.GetSegmentData().GetSegmentFile().GetFs(), name)
 	for _, bat := range batchs {
 		block, err := writer.WriteBlock(bat)
 		for idx, vec := range bat.Vecs {
@@ -306,7 +307,7 @@ func (task *mergeBlocksTask) Execute() (err error) {
 	for i, block := range blocks {
 		node := catalog.NewEmptyMetadataMVCCNode()
 		node.(*catalog.MetadataMVCCNode).MetaLoc = fmt.Sprintf("%s:%d_%d_%d",
-			writer.GetName(),
+			name,
 			block.GetExtent().Offset(),
 			block.GetExtent().Length(),
 			block.GetExtent().OriginSize(),

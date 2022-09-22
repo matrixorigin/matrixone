@@ -30,16 +30,9 @@ import (
 type Writer struct {
 	writer objectio.Writer
 	fs     *objectio.ObjectFS
-	name   string
 }
 
-func NewWriter(fs *objectio.ObjectFS, id *common.ID) *Writer {
-	var name string
-	if id.BlockID > 0 {
-		name = EncodeBlkName(id)
-	} else {
-		name = EncodeSegName(id)
-	}
+func NewWriter(fs *objectio.ObjectFS, name string) *Writer {
 	writer, err := objectio.NewObjectWriter(name, fs.Service)
 	if err != nil {
 		panic(any(err))
@@ -47,7 +40,6 @@ func NewWriter(fs *objectio.ObjectFS, id *common.ID) *Writer {
 	return &Writer{
 		fs:     fs,
 		writer: writer,
-		name:   name,
 	}
 }
 
@@ -292,10 +284,6 @@ func (w *Writer) WriteIndex(
 	block objectio.BlockObject,
 	index objectio.IndexData) (err error) {
 	return w.writer.WriteIndex(block, index)
-}
-
-func (w *Writer) GetName() string {
-	return w.name
 }
 
 func (w *Writer) GetWriter() objectio.Writer {

@@ -22,8 +22,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 )
 
-type Extension int16
-
 const (
 	BlockExt   = "blk"
 	SegmentExt = "seg"
