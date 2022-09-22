@@ -267,7 +267,3 @@ func initTraceMetric(ctx context.Context, cfg *Config, stopper *stopper.Stopper,
 	}
 	return nil
 }
-
-func setupDefaultComponents() {
-
-}
