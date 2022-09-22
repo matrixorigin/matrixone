@@ -57,6 +57,7 @@ func (s *taskService) StartScheduleCronTask() {
 func (s *taskService) StopScheduleCronTask() {
 	s.crons.Lock()
 	if !s.crons.started {
+		s.crons.Unlock()
 		return
 	}
 	stopper := s.crons.stopper
