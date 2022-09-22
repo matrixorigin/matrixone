@@ -227,10 +227,10 @@ Project
         Group Key:t1.city, t1.libname1
         Aggregate Functions: count(t1.libname1)
         ->  Join
-              Join Type: INNER
+              Join Type: INNER on Primary Key
               Join Cond: (t3.isbn3 = t2.isbn2)
               ->  Join
-                    Join Type: INNER
+                    Join Type: INNER on Primary Key
                     Join Cond: (t1.libname1 = t3.libname3)
                     ->  Table Scan on explain.t3
                     ->  Table Scan on explain.t1
@@ -242,10 +242,10 @@ Project
         Group Key:t1.city, t1.libname1
         Aggregate Functions: count(t1.libname1)
         ->  Join
-              Join Type: INNER
+              Join Type: INNER on Primary Key
               Join Cond: (t3.isbn3 = t2.isbn2)
               ->  Join
-                    Join Type: INNER
+                    Join Type: INNER on Primary Key
                     Join Cond: (t1.libname1 = t3.libname3)
                     ->  Table Scan on explain.t3
                     ->  Table Scan on explain.t1
@@ -257,10 +257,10 @@ Project
         Group Key:t1.city, t1.libname1
         Aggregate Functions: count(t1.libname1)
         ->  Join
-              Join Type: INNER
+              Join Type: INNER on Primary Key
               Join Cond: (t3.isbn3 = t2.isbn2)
               ->  Join
-                    Join Type: INNER
+                    Join Type: INNER on Primary Key
                     Join Cond: (t1.libname1 = t3.libname3)
                     ->  Table Scan on explain.t3
                     ->  Table Scan on explain.t1

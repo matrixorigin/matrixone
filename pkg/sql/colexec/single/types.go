@@ -55,4 +55,5 @@ type Argument struct {
 	Cond       *plan.Expr
 	Conditions [][]*plan.Expr
 	Result     []colexec.ResultPos
+	HasPk      bool
 }

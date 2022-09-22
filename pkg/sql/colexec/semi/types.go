@@ -54,4 +54,5 @@ type Argument struct {
 	Typs       []types.Type
 	Cond       *plan.Expr
 	Conditions [][]*plan.Expr
+	HasPk      bool
 }

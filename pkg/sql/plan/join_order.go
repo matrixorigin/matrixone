@@ -457,6 +457,7 @@ func (builder *QueryBuilder) buildSubJoinTree(vertices []*joinVertex, vid int32)
 			NodeType: plan.Node_JOIN,
 			Children: []int32{vertex.node.NodeId, child.node.NodeId},
 			JoinType: plan.Node_INNER,
+			JoinOnPk: true,
 		}, nil)
 
 		vertex.card *= child.pkSelRate

@@ -406,23 +406,14 @@ message Node {
 	}
 
 	enum JoinFlag {
-		//INNER = 0;
-		//OUTER = 1;
-		//SEMI = 2;
-		//ANTI = 4;
-		//SINGLE = 8;
-		//MARK = 16;
-		//APPLY = 32;
-
 		INNER	= 0;
-		LEFT	= 1;
-		RIGHT	= 2;
-		OUTER	= 3;
-		SEMI	= 4;
-		ANTI	= 5;
-		SINGLE	= 6;
-		MARK	= 7;
-		APPLY	= 8;
+		OUTER	= 1;
+		SEMI	= 2;
+		ANTI	= 4;
+		SINGLE	= 8;
+		MARK	= 16;
+		LEFT	= 32;
+		RIGHT	= 64;
 	}
 
 	enum AggMode {
@@ -438,26 +429,27 @@ message Node {
 	repeated Expr project_list = 4;
 	repeated int32 children = 5;
 	JoinFlag join_type = 6;
-	repeated Expr on_list = 7;
-	repeated Expr filter_list = 8;
-	repeated Expr group_by = 9;
-	repeated Expr grouping_set = 10;
-	repeated Expr agg_list = 11;
-	repeated OrderBySpec order_by = 12;
-	repeated UpdateCtx update_ctxs = 13;
-	WindowSpec win_spec = 14;
-	Expr limit = 15;
-	Expr offset = 16;
-	TableDef table_def = 17;
-	repeated TableDef table_def_vec = 18;
-	ObjectRef obj_ref = 19;
-	RowsetData rowset_data = 20;
-	string extra_options = 21;
-	repeated DeleteTableCtx deleteTablesCtx = 22;
+	bool join_on_pk = 7;
+	repeated Expr on_list = 8;
+	repeated Expr filter_list = 9;
+	repeated Expr group_by = 10;
+	repeated Expr grouping_set = 11;
+	repeated Expr agg_list = 12;
+	repeated OrderBySpec order_by = 13;
+	repeated UpdateCtx update_ctxs = 14;
+	WindowSpec win_spec = 15;
+	Expr limit = 16;
+	Expr offset = 17;
+	TableDef table_def = 18;
+	repeated TableDef table_def_vec = 19;
+	ObjectRef obj_ref = 20;
+	RowsetData rowset_data = 21;
+	string extra_options = 22;
+	repeated DeleteTableCtx deleteTablesCtx = 23;
 
-	repeated int32 binding_tags = 23;
+	repeated int32 binding_tags = 24;
 
-    AnalyzeInfo analyze_info = 24;
+    AnalyzeInfo analyze_info = 25;
 }
 
 message DeleteTableCtx {

@@ -338,6 +338,9 @@ func (ndesc *NodeDescribeImpl) GetProjectListInfo(options *ExplainOptions) (stri
 
 func (ndesc *NodeDescribeImpl) GetJoinTypeInfo(options *ExplainOptions) (string, error) {
 	result := "Join Type: " + ndesc.Node.JoinType.String()
+	if ndesc.Node.JoinOnPk {
+		result += " on Primary Key"
+	}
 	return result, nil
 }
 

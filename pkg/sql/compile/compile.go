@@ -711,6 +711,14 @@ func (c *Compile) compileJoin(n, right *plan.Node, ss []*Scope, children []*Scop
 				})
 			}
 		}
+	case plan.Node_MARK:
+		for i := range rs {
+			rs[i].appendInstruction(vm.Instruction{
+				Op:  vm.Mark,
+				Idx: c.anal.curr,
+				Arg: constructMark(n, typs, c.proc, n.OnList),
+			})
+		}
 	default:
 		panic(moerr.NewNYI(fmt.Sprintf("join typ '%v'", n.JoinType)))
 	}

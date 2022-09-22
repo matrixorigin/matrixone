@@ -68,7 +68,8 @@ func Call(idx int, proc *process.Process, arg any) (bool, error) {
 			}
 			if ctr.bat == nil || ctr.bat.Length() == 0 {
 				bat.Clean(proc.GetMheap())
-				continue
+				proc.SetInputBatch(nil)
+				return false, nil
 			}
 			if err := ctr.probe(bat, ap, proc, anal); err != nil {
 				ctr.state = End
@@ -106,6 +107,8 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 	count := bat.Length()
 	mSels := ctr.mp.Sels()
 	itr := ctr.mp.Map().NewIterator()
+	pkSels := []int64{0}
+	var sels []int64
 	for i := 0; i < count; i += hashmap.UnitLimit {
 		n := count - i
 		if n > hashmap.UnitLimit {
@@ -119,7 +122,12 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 			}
 			if ap.Cond != nil {
 				matched := false // mark if any tuple satisfies the condition
-				sels := mSels[vals[k]-1]
+				if ap.HasPk {
+					pkSels[0] = int64(vals[k]) - 1
+					sels = pkSels
+				} else {
+					sels = mSels[vals[k]-1]
+				}
 				for _, sel := range sels {
 					vec, err := colexec.JoinFilterEvalExprInBucket(bat, ctr.bat, i+k, int(sel), proc, ap.Cond)
 					if err != nil {

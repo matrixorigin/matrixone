@@ -119,6 +119,9 @@ func (ctr *container) build(ap *Argument, proc *process.Process, anal process.An
 		if err != nil {
 			return err
 		}
+		if ap.HasPk {
+			continue
+		}
 		for k, v := range vals[:n] {
 			if zvals[k] == 0 {
 				ctr.hasNull = true

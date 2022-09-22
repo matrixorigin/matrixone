@@ -98,6 +98,7 @@ func dupInstruction(in vm.Instruction) vm.Instruction {
 			Cond:       arg.Cond,
 			Result:     arg.Result,
 			Conditions: arg.Conditions,
+			HasPk:      arg.HasPk,
 		}
 	case *semi.Argument:
 		rin.Arg = &semi.Argument{
@@ -105,6 +106,7 @@ func dupInstruction(in vm.Instruction) vm.Instruction {
 			Cond:       arg.Cond,
 			Result:     arg.Result,
 			Conditions: arg.Conditions,
+			HasPk:      arg.HasPk,
 		}
 	case *left.Argument:
 		rin.Arg = &left.Argument{
@@ -112,6 +114,7 @@ func dupInstruction(in vm.Instruction) vm.Instruction {
 			Cond:       arg.Cond,
 			Result:     arg.Result,
 			Conditions: arg.Conditions,
+			HasPk:      arg.HasPk,
 		}
 	case *group.Argument:
 		rin.Arg = &group.Argument{
@@ -127,6 +130,7 @@ func dupInstruction(in vm.Instruction) vm.Instruction {
 			Cond:       arg.Cond,
 			Result:     arg.Result,
 			Conditions: arg.Conditions,
+			HasPk:      arg.HasPk,
 		}
 	case *product.Argument:
 		rin.Arg = &product.Argument{
@@ -139,19 +143,16 @@ func dupInstruction(in vm.Instruction) vm.Instruction {
 			Cond:       arg.Cond,
 			Result:     arg.Result,
 			Conditions: arg.Conditions,
+			HasPk:      arg.HasPk,
 		}
 	case *mark.Argument:
 		{
 			rin.Arg = &mark.Argument{
-				Typs:         arg.Typs,
-				Cond:         arg.Cond,
-				Result:       arg.Result,
-				Conditions:   arg.Conditions,
-				OutputNull:   arg.OutputNull,
-				OutputMark:   arg.OutputMark,
-				MarkMeaning:  arg.MarkMeaning,
-				OutputAnyway: arg.OutputAnyway,
-				OnList:       arg.OnList,
+				Typs:       arg.Typs,
+				Cond:       arg.Cond,
+				Result:     arg.Result,
+				Conditions: arg.Conditions,
+				OnList:     arg.OnList,
 			}
 		}
 	case *offset.Argument:
@@ -378,6 +379,7 @@ func constructJoin(n *plan.Node, typs []types.Type, proc *process.Process) *join
 		Result:     result,
 		Cond:       cond,
 		Conditions: constructJoinConditions(conds),
+		HasPk:      n.JoinOnPk,
 	}
 }
 
@@ -457,22 +459,22 @@ func constructMark(n *plan.Node, typs []types.Type, proc *process.Process, onLis
 	result := make([]int32, len(n.ProjectList))
 	for i, expr := range n.ProjectList {
 		rel, pos := constructJoinResult(expr)
-		if rel != 0 {
+		switch rel {
+		case -1:
+			result[i] = -1
+		case 0:
+			result[i] = pos
+		default:
 			panic(moerr.NewNYI("mark result '%s'", expr))
 		}
-		result[i] = pos
 	}
 	cond, conds := extraJoinConditions(n.OnList)
 	return &mark.Argument{
-		Typs:         typs,
-		Result:       result,
-		Cond:         cond,
-		Conditions:   constructJoinConditions(conds),
-		OutputMark:   false,
-		OutputNull:   false,
-		MarkMeaning:  false,
-		OutputAnyway: false,
-		OnList:       onList,
+		Typs:       typs,
+		Result:     result,
+		Cond:       cond,
+		Conditions: constructJoinConditions(conds),
+		OnList:     onList,
 	}
 }
 
@@ -711,6 +713,7 @@ func constructHashBuild(in vm.Instruction) *hashbuild.Argument {
 			NeedHashMap: true,
 			Typs:        arg.Typs,
 			Conditions:  arg.Conditions[1],
+			HasPk:       arg.HasPk,
 		}
 	case vm.Mark:
 		arg := in.Arg.(*mark.Argument)
@@ -725,6 +728,7 @@ func constructHashBuild(in vm.Instruction) *hashbuild.Argument {
 			NeedHashMap: true,
 			Typs:        arg.Typs,
 			Conditions:  arg.Conditions[1],
+			HasPk:       arg.HasPk,
 		}
 	case vm.Left:
 		arg := in.Arg.(*left.Argument)
@@ -732,6 +736,7 @@ func constructHashBuild(in vm.Instruction) *hashbuild.Argument {
 			NeedHashMap: true,
 			Typs:        arg.Typs,
 			Conditions:  arg.Conditions[1],
+			HasPk:       arg.HasPk,
 		}
 	case vm.Semi:
 		arg := in.Arg.(*semi.Argument)
@@ -739,6 +744,7 @@ func constructHashBuild(in vm.Instruction) *hashbuild.Argument {
 			NeedHashMap: true,
 			Typs:        arg.Typs,
 			Conditions:  arg.Conditions[1],
+			HasPk:       arg.HasPk,
 		}
 	case vm.Single:
 		arg := in.Arg.(*single.Argument)
@@ -746,6 +752,7 @@ func constructHashBuild(in vm.Instruction) *hashbuild.Argument {
 			NeedHashMap: true,
 			Typs:        arg.Typs,
 			Conditions:  arg.Conditions[1],
+			HasPk:       arg.HasPk,
 		}
 	case vm.Product:
 		arg := in.Arg.(*product.Argument)

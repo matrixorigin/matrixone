@@ -56,4 +56,5 @@ type Argument struct {
 	Nbucket     uint64
 	Typs        []types.Type
 	Conditions  []*plan.Expr
+	HasPk       bool
 }

@@ -110,6 +110,8 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 	count := bat.Length()
 	mSels := ctr.mp.Sels()
 	itr := ctr.mp.Map().NewIterator()
+	pkSels := []int64{0}
+	var sels []int64
 	for i := 0; i < count; i += hashmap.UnitLimit {
 		n := count - i
 		if n > hashmap.UnitLimit {
@@ -121,7 +123,12 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 			if ctr.inBuckets[k] == 0 || zvals[k] == 0 || vals[k] == 0 {
 				continue
 			}
-			sels := mSels[vals[k]-1]
+			if ap.HasPk {
+				pkSels[0] = int64(vals[k]) - 1
+				sels = pkSels
+			} else {
+				sels = mSels[vals[k]-1]
+			}
 			for _, sel := range sels {
 				if ap.Cond != nil {
 					vec, err := colexec.JoinFilterEvalExprInBucket(bat, ctr.bat, i+k, int(sel), proc, ap.Cond)
