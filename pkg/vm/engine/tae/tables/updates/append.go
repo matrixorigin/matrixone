@@ -36,7 +36,6 @@ type AppendNode struct {
 	maxRow   uint32
 	mvcc     *MVCCHandle
 	id       *common.ID
-	abort    bool
 }
 
 func CompareAppendNode(e, o txnbase.MVCCNode) int {

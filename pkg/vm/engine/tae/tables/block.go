@@ -953,7 +953,7 @@ func (blk *dataBlock) CollectDelete(start, end types.TS, buffer *bytes.Buffer) (
 	if schema.HasPK() {
 		batch.AddVector(schema.GetSingleSortKey().Name, pk)
 	}
-	batch.AddVector("row_id", rowID)
+	batch.AddVector(catalog.PhyAddrColumnName, rowID)
 	batch.AddVector("commit_ts", ts)
 	batch.AddVector("aborted", abort)
 	return batch, nil

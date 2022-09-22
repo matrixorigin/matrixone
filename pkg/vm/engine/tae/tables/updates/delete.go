@@ -57,7 +57,6 @@ type DeleteNode struct {
 	nt         NodeType
 	id         *common.ID
 	dt         handle.DeleteType
-	abort      bool
 }
 
 func NewMergedNode(commitTs types.TS) *DeleteNode {

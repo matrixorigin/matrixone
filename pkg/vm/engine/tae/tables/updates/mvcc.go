@@ -325,7 +325,7 @@ func (n *MVCCHandle) CollectAppend(start, end types.TS) (minRow, maxRow uint32, 
 			}
 			for i := 0; i < int(n.maxRow-n.startRow); i++ {
 				commitTSVec.Append(n.GetCommitTS())
-				abortVec.Append(n.abort)
+				abortVec.Append(n.IsAborted())
 			}
 			return true
 		})
@@ -358,7 +358,7 @@ func (n *MVCCHandle) CollectDelete(rawPkVec containers.Vector, start, end types.
 					}
 					rowIDVec.Append(row)
 					commitTSVec.Append(n.GetEnd())
-					abortVec.Append(n.abort)
+					abortVec.Append(n.IsAborted())
 				}
 			}
 			return !before
