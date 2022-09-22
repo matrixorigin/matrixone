@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	movec "github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 )
 
@@ -124,6 +125,15 @@ func CopyToMoVectors(vecs []Vector) []*movec.Vector {
 		movecs[i] = CopyToMoVector(vecs[i])
 	}
 	return movecs
+}
+
+func ProtoVectorToTAE(v *api.Vector, nullable bool) Vector {
+	moV, err := movec.ProtoVectorToVector(v)
+	if err != nil {
+		panic(err)
+	}
+	taeV := MOToTAEVector(moV, nullable)
+	return taeV
 }
 
 func MOToTAEVector(v *movec.Vector, nullable bool) Vector {

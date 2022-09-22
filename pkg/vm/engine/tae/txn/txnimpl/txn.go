@@ -321,11 +321,7 @@ func (txn *txnImpl) HandleCmd(cmd *api.Entry) (err error) {
 	//TODO:: handle delete rows of block had been bulk-loaded into S3.
 
 	//Delete a batch
-	moV, err := vector.ProtoVectorToVector(cmd.Bat.Vecs[0])
-	if err != nil {
-		panic(err)
-	}
-	taeV := containers.MOToTAEVector(moV, false)
-	err = tb.DeleteByPhyAddrKeys(taeV)
+	err = tb.DeleteByPhyAddrKeys(containers.ProtoVectorToTAE(cmd.Bat.Vecs[0],
+		false))
 	return
 }
