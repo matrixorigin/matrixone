@@ -910,24 +910,7 @@ func (blk *dataBlock) CollectAppendInRange(start, end types.TS) (*containers.Bat
 	if blk.meta.IsAppendable() {
 		return blk.collectAblkAppendInRange(start, end)
 	}
-	return blk.collectAppendInRange(start, end)
-}
-
-func (blk *dataBlock) collectAppendInRange(start, end types.TS) (*containers.Batch, error) {
-	batch, err := blk.node.GetDataCopy(0, blk.meta.GetSchema().BlockMaxRows)
-	if err != nil {
-		return nil, err
-	}
-	commitTSVec := containers.MakeVector(types.T_TS.ToType(), false)
-	abortVec := containers.MakeVector(types.T_bool.ToType(), false)
-	commitTs := blk.meta.GetCreatedAt()
-	for i := 0; i < int(blk.meta.GetSchema().BlockMaxRows); i++ {
-		commitTSVec.Append(commitTs)
-		abortVec.Append(false)
-	}
-	batch.AddVector(catalog.AttrCommitTs, commitTSVec)
-	batch.AddVector(catalog.AttrAborted, abortVec)
-	return batch, nil
+	return nil, nil
 }
 
 func (blk *dataBlock) collectAblkAppendInRange(start, end types.TS) (*containers.Batch, error) {
