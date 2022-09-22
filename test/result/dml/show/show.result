@@ -24,3 +24,16 @@ name	VARCHAR	YES		NULL
 drop database if exists test01;
 show charset;
 internal error: statement: 'show charset'
+
+drop database if exists test02;
+create database test02;
+use test02;
+create table t1(a tinyint, b smallint, c int, d bigint);
+create database test01;
+use test01;
+show columns from test02.t1;
+Field    Type    Null    Key    Default    Comment
+a    TINYINT    YES        NULL
+b    SMALLINT    YES        NULL
+c    INT    YES        NULL
+d    BIGINT    YES        NULL
