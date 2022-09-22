@@ -21,7 +21,6 @@ import (
 	"fmt"
 	"github.com/google/uuid"
 	"sync"
-	"time"
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -139,7 +138,10 @@ func (s *StatementInfo) Report(ctx context.Context) {
 	ReportStatement(ctx, s)
 }
 
-var EndStatement = func(ctx context.Context, err error) time.Time {
+var EndStatement = func(ctx context.Context, err error) {
+	if !GetTracerProvider().IsEnable() {
+		return
+	}
 	s := StatementFromContext(ctx)
 	if s == nil {
 		panic(moerr.NewInternalError("no statement info in context"))
@@ -161,7 +163,6 @@ var EndStatement = func(ctx context.Context, err error) time.Time {
 			s.Report(ctx)
 		}
 	}
-	return util.Time(endTime)
 }
 
 type StatementInfoStatus int
