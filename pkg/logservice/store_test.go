@@ -77,11 +77,11 @@ func TestStoreCanBeCreatedAndClosed(t *testing.T) {
 	defer vfs.ReportLeakedFD(cfg.FS, t)
 	store, err := newLogStore(cfg, nil)
 	assert.NoError(t, err)
-	plog.Infof("1")
+	logger.Info("1")
 	defer func() {
 		assert.NoError(t, store.close())
 	}()
-	plog.Infof("2")
+	logger.Info("2")
 }
 
 func getTestStore(cfg Config, startLogReplica bool, taskService taskservice.TaskService) (*store, error) {
@@ -472,7 +472,7 @@ func getTestStores() (*store, *store, error) {
 		}
 		if ok && leaderID != 1 {
 			if err := store1.requestLeaderTransfer(1, 1); err != nil {
-				plog.Errorf("failed to transfer leader")
+				logger.Error("failed to transfer leader")
 			}
 		}
 		time.Sleep(time.Millisecond)
