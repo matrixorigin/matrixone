@@ -15,7 +15,10 @@
 package compile
 
 import (
+	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/sql/util"
+
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -83,10 +86,33 @@ func (s *Scope) InsertValues(c *Compile, stmt *tree.Insert) (uint64, error) {
 	if err := fillBatch(bat, p, stmt.Rows.Select.(*tree.ValuesClause).Rows, c.proc); err != nil {
 		return 0, err
 	}
+	// do null value check
+	for i := range bat.Vecs {
+		if p.ExplicitCols[i].Primary && !p.ExplicitCols[i].AutoIncrement {
+			if nulls.Any(bat.Vecs[i].Nsp) {
+				return 0, moerr.NewConstraintViolation(fmt.Sprintf("Column '%s' cannot be null", p.ExplicitCols[i].Name))
+			}
+		}
+	}
 	batch.Reorder(bat, p.OrderAttrs)
 
 	if err = colexec.UpdateInsertValueBatch(c.e, c.ctx, c.proc, p, bat); err != nil {
 		return 0, err
+	}
+	if p.CompositePkey != nil {
+		err := util.FillCompositePKeyBatch(bat, p.CompositePkey, c.proc)
+		if err != nil {
+			names := util.SplitCompositePrimaryKeyColumnName(p.CompositePkey.Name)
+			for i := range bat.Vecs {
+				for _, name := range names {
+					if p.OrderAttrs[i] == name {
+						if nulls.Any(bat.Vecs[i].Nsp) {
+							return 0, moerr.NewConstraintViolation(fmt.Sprintf("Column '%s' cannot be null", p.OrderAttrs[i]))
+						}
+					}
+				}
+			}
+		}
 	}
 	if err := relation.Write(c.ctx, bat); err != nil {
 		return 0, err

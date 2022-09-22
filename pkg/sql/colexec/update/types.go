@@ -38,4 +38,5 @@ type UpdateCtx struct {
 	OtherAttrs  []string
 	OrderAttrs  []string
 	TableSource engine.Relation
+	CPkeyColDef *plan.ColDef
 }
