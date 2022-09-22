@@ -17,15 +17,14 @@ package txnstorage
 import (
 	"database/sql"
 	"errors"
-	"math"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	apipb "github.com/matrixorigin/matrixone/pkg/pb/api"
-	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage/txn/memtable"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 )
 
 type LogTailEntry = apipb.Entry
@@ -50,23 +49,17 @@ func (m *MemHandler) HandleGetLogTail(meta txn.TxnMeta, req apipb.SyncLogTailReq
 	}
 
 	// time range
-	from := timestamp.Timestamp{
-		PhysicalTime: math.MinInt64,
-	}
+	var fromTime *Time
 	if req.CnHave != nil {
-		from = *req.CnHave
+		fromTime = &Time{
+			Timestamp: *req.CnHave,
+		}
 	}
-	to := timestamp.Timestamp{
-		PhysicalTime: math.MaxInt64,
-	}
+	var toTime *Time
 	if req.CnWant != nil {
-		to = *req.CnWant
-	}
-	fromTime := Time{
-		Timestamp: from,
-	}
-	toTime := Time{
-		Timestamp: to,
+		toTime = &Time{
+			Timestamp: *req.CnWant,
+		}
 	}
 
 	// attributes
@@ -97,83 +90,179 @@ func (m *MemHandler) HandleGetLogTail(meta txn.TxnMeta, req apipb.SyncLogTailReq
 	for i, name := range deleteNames {
 		deleteBatch.Vecs[i] = vector.New(attrsMap[name].Type)
 	}
-
-	// iter
-	// we don't use m.data.NewIter because we want to see deleted rows
-	iter := m.data.NewPhysicalIter()
-	defer iter.Close()
-	tableKey := &memtable.PhysicalRow[DataKey, DataValue]{
-		Key: DataKey{
-			tableID:    tableID,
-			primaryKey: Tuple{},
-		},
+	appendInsert := func(row NamedRow) error {
+		if err := appendNamedRow(tx, m, insertBatch, row); err != nil {
+			return err
+		}
+		return nil
 	}
-	for ok := iter.Seek(tableKey); ok; ok = iter.Next() {
-		physicalRow := iter.Item()
+	appendDelete := func(row NamedRow) error {
+		if err := appendNamedRow(tx, m, deleteBatch, row); err != nil {
+			return err
+		}
+		return nil
+	}
 
-		if physicalRow.Key.tableID != tableID {
-			break
+	if tableID == ID(catalog.SystemTable_DB_ID) {
+		// databases
+		if err := logTailHandleSystemTable(
+			m.databases,
+			fromTime,
+			toTime,
+			appendInsert,
+			appendDelete,
+		); err != nil {
+			return err
 		}
 
-		physicalRow.Versions.RLock()
-		for i := len(physicalRow.Versions.List) - 1; i >= 0; i-- {
-			value := physicalRow.Versions.List[i]
+	} else if tableID == ID(catalog.SystemTable_Table_ID) {
+		// relations
+		if err := logTailHandleSystemTable(
+			m.relations,
+			fromTime,
+			toTime,
+			appendInsert,
+			appendDelete,
+		); err != nil {
+			return err
+		}
 
-			if value.LockTx != nil &&
-				value.LockTx.State.Load() == memtable.Committed &&
-				value.LockTime.After(fromTime) &&
-				value.LockTime.Before(toTime) {
-				// committed delete
-				namedRow := &NamedDataRow{
-					Value:    *value.Value,
-					AttrsMap: attrsMap,
-				}
-				if err := appendNamedRow(tx, m.mheap, deleteBatch, namedRow); err != nil {
-					return err
-				}
+	} else if tableID == ID(catalog.SystemTable_Columns_ID) {
+		// attributes
+		if err := logTailHandleSystemTable(
+			m.attributes,
+			fromTime,
+			toTime,
+			appendInsert,
+			appendDelete,
+		); err != nil {
+			return err
+		}
+
+	} else {
+		// non-system table data
+		iter := m.data.NewPhysicalIter()
+		defer iter.Close()
+
+		tableKey := &memtable.PhysicalRow[DataKey, DataValue]{
+			Key: DataKey{
+				tableID:    tableID,
+				primaryKey: Tuple{},
+			},
+		}
+		for ok := iter.Seek(tableKey); ok; ok = iter.Next() {
+			physicalRow := iter.Item()
+
+			if physicalRow.Key.tableID != tableID {
 				break
-
-			} else if value.BornTx.State.Load() == memtable.Committed &&
-				value.BornTime.After(fromTime) &&
-				value.BornTime.Before(toTime) {
-				// committed insert
-				namedRow := &NamedDataRow{
-					Value:    *value.Value,
-					AttrsMap: attrsMap,
-				}
-				if err := appendNamedRow(tx, m.mheap, insertBatch, namedRow); err != nil {
-					return err
-				}
-				break
-
 			}
 
-		}
-		physicalRow.Versions.RUnlock()
+			physicalRow.Versions.RLock()
+			for i := len(physicalRow.Versions.List) - 1; i >= 0; i-- {
+				value := physicalRow.Versions.List[i]
 
+				if value.LockTx != nil &&
+					value.LockTx.State.Load() == memtable.Committed &&
+					(fromTime == nil || value.LockTime.After(*fromTime)) &&
+					(toTime == nil || value.LockTime.Before(*toTime)) {
+					// committed delete
+					if err := appendDelete(&NamedDataRow{
+						Value:    value.Value,
+						AttrsMap: attrsMap,
+					}); err != nil {
+						return err
+					}
+					break
+
+				} else if value.BornTx.State.Load() == memtable.Committed &&
+					(fromTime == nil || value.BornTime.After(*fromTime)) &&
+					(toTime == nil || value.BornTime.Before(*toTime)) {
+					// committed insert
+					if err := appendInsert(&NamedDataRow{
+						Value:    value.Value,
+						AttrsMap: attrsMap,
+					}); err != nil {
+						return err
+					}
+					break
+				}
+
+			}
+			physicalRow.Versions.RUnlock()
+
+		}
 	}
 
+	insertBatch.InitZsOne(insertBatch.Vecs[0].Length())
+	deleteBatch.InitZsOne(deleteBatch.Vecs[0].Length())
+
 	// entries
-	entries := []*LogTailEntry{
-		{
+	if insertBatch.Length() > 0 {
+		resp.Commands = append(resp.Commands, &LogTailEntry{
 			EntryType:    apipb.Entry_Insert,
 			Bat:          toPBBatch(insertBatch),
 			TableId:      uint64(tableRow.ID),
 			TableName:    tableRow.Name,
 			DatabaseId:   uint64(dbRow.ID),
 			DatabaseName: dbRow.Name,
-		},
-		{
+		})
+	}
+	if deleteBatch.Length() > 0 {
+		resp.Commands = append(resp.Commands, &LogTailEntry{
 			EntryType:    apipb.Entry_Delete,
 			Bat:          toPBBatch(deleteBatch),
 			TableId:      uint64(tableRow.ID),
 			TableName:    tableRow.Name,
 			DatabaseId:   uint64(dbRow.ID),
 			DatabaseName: dbRow.Name,
-		},
+		})
 	}
 
-	resp.Commands = entries
+	return nil
+}
+
+func logTailHandleSystemTable[
+	K memtable.Ordered[K],
+	V NamedRow,
+	R memtable.Row[K, V],
+](
+	table *memtable.Table[K, V, R],
+	fromTime *Time,
+	toTime *Time,
+	appendInsert func(row NamedRow) error,
+	appendDelete func(row NamedRow) error,
+) error {
+
+	iter := table.NewPhysicalIter()
+	for ok := iter.First(); ok; ok = iter.Next() {
+		physicalRow := iter.Item()
+		physicalRow.Versions.RLock()
+		for i := len(physicalRow.Versions.List) - 1; i >= 0; i-- {
+			value := physicalRow.Versions.List[i]
+
+			if value.LockTx != nil &&
+				value.LockTx.State.Load() == memtable.Committed &&
+				(fromTime == nil || value.LockTime.After(*fromTime)) &&
+				(toTime == nil || value.LockTime.Before(*toTime)) {
+				// committed delete
+				if err := appendDelete(value.Value); err != nil {
+					return err
+				}
+				break
+
+			} else if value.BornTx.State.Load() == memtable.Committed &&
+				(fromTime == nil || value.BornTime.After(*fromTime)) &&
+				(toTime == nil || value.BornTime.Before(*toTime)) {
+				// committed insert
+				if err := appendInsert(value.Value); err != nil {
+					return err
+				}
+				break
+			}
+
+		}
+		physicalRow.Versions.RUnlock()
+	}
 
 	return nil
 }

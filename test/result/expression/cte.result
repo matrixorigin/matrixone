@@ -172,7 +172,7 @@ null
 WITH qn AS (SELECT b as a FROM t1)
 SELECT (WITH qn2 AS (SELECT a FROM qn WHERE a IS NULL or a>0)
 SELECT qn2.a FROM qn2) FROM qn;
-scalar subquery returns more than 1 row
+internal error: scalar subquery returns more than 1 row
 WITH qn AS (select "outer" as a)
 SELECT (WITH qn AS (SELECT "inner" as a) SELECT a from qn),
 qn.a

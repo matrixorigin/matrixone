@@ -17,9 +17,10 @@ package segmentio
 import (
 	"bytes"
 	"encoding/binary"
+	"io"
+
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"io"
 )
 
 type DriverFile struct {

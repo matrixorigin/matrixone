@@ -307,7 +307,7 @@ func newWithDepth(ctx context.Context, code uint16, args ...any) *Error {
 	} else {
 		item, has := errorMsgRefer[code]
 		if !has {
-			panic(fmt.Errorf("not exist MOErrorCode: %d", code))
+			panic(NewInternalError("not exist MOErrorCode: %d", code))
 		}
 		if len(args) == 0 {
 			err = &Error{

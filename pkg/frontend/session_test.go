@@ -16,10 +16,10 @@ package frontend
 
 import (
 	"context"
-	"errors"
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -47,7 +47,7 @@ func TestTxnHandler_NewTxn(t *testing.T) {
 				if cnt%2 != 0 {
 					return txnOperator, nil
 				} else {
-					return nil, errors.New("startTxn failed")
+					return nil, moerr.NewInternalError("startTxn failed")
 				}
 			}).AnyTimes()
 		eng := mock_frontend.NewMockEngine(ctrl)
@@ -88,7 +88,7 @@ func TestTxnHandler_CommitTxn(t *testing.T) {
 				if cnt%2 != 0 {
 					return nil
 				} else {
-					return errors.New("commit failed")
+					return moerr.NewInternalError("commit failed")
 				}
 			}).AnyTimes()
 
@@ -132,7 +132,7 @@ func TestTxnHandler_RollbackTxn(t *testing.T) {
 				if cnt%2 != 0 {
 					return nil
 				} else {
-					return errors.New("rollback failed")
+					return moerr.NewInternalError("rollback failed")
 				}
 			}).AnyTimes()
 

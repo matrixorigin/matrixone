@@ -119,14 +119,14 @@ const (
 
 type ExplainOptions struct {
 	Verbose bool
-	Anzlyze bool
+	Analyze bool
 	Format  ExplainFormat
 }
 
 func NewExplainDefaultOptions() *ExplainOptions {
 	return &ExplainOptions{
 		Verbose: false,
-		Anzlyze: false,
+		Analyze: false,
 		Format:  EXPLAIN_FORMAT_TEXT,
 	}
 }

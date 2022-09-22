@@ -15,9 +15,9 @@
 package plan
 
 import (
-	"errors"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
@@ -40,12 +40,12 @@ func TestExpr_1(t *testing.T) {
 			}
 			query, ok := pl.Plan.(*plan.Plan_Query)
 			if !ok {
-				t.Fatalf("%+v", errors.New("return type is not right"))
+				t.Fatalf("%+v", moerr.NewInternalError("return type is not right"))
 			}
 			expr := query.Query.Nodes[1].ProjectList[0]
 			exprF, ok := expr.Expr.(*plan.Expr_F)
 			if !ok {
-				t.Fatalf("%+v", errors.New("the parse expr type is not right"))
+				t.Fatalf("%+v", moerr.NewInternalError("the parse expr type is not right"))
 			}
 			convey.So(expr.Typ.Id, convey.ShouldEqual, types.T_bool)
 			convey.So(exprF.F.Func.ObjName, convey.ShouldEqual, "and")
@@ -53,11 +53,11 @@ func TestExpr_1(t *testing.T) {
 				convey.So(arg.Typ.Id, convey.ShouldEqual, types.T_bool)
 				exprC, ok := arg.Expr.(*plan.Expr_C)
 				if !ok {
-					t.Fatalf("%+v", errors.New("the parse expr type is not right"))
+					t.Fatalf("%+v", moerr.NewInternalError("the parse expr type is not right"))
 				}
 				constB, ok := exprC.C.Value.(*plan.Const_Bval)
 				if !ok {
-					t.Fatalf("%+v", errors.New("the parse expr type is not right"))
+					t.Fatalf("%+v", moerr.NewInternalError("the parse expr type is not right"))
 				}
 				convey.So(constB.Bval, convey.ShouldEqual, params[j])
 			}
@@ -81,12 +81,12 @@ func TestExpr_2(t *testing.T) {
 			}
 			query, ok := pl.Plan.(*plan.Plan_Query)
 			if !ok {
-				t.Fatalf("%+v", errors.New("return type is not right"))
+				t.Fatalf("%+v", moerr.NewInternalError("return type is not right"))
 			}
 			expr := query.Query.Nodes[1].ProjectList[0]
 			exprF, ok := expr.Expr.(*plan.Expr_F)
 			if !ok {
-				t.Fatalf("%+v", errors.New("the parse expr type is not right"))
+				t.Fatalf("%+v", moerr.NewInternalError("the parse expr type is not right"))
 			}
 			convey.So(expr.Typ.Id, convey.ShouldEqual, types.T_bool)
 			convey.So(exprF.F.Func.ObjName, convey.ShouldEqual, "or")
@@ -94,11 +94,11 @@ func TestExpr_2(t *testing.T) {
 				convey.So(arg.Typ.Id, convey.ShouldEqual, types.T_bool)
 				exprC, ok := arg.Expr.(*plan.Expr_C)
 				if !ok {
-					t.Fatalf("%+v", errors.New("the parse expr type is not right"))
+					t.Fatalf("%+v", moerr.NewInternalError("the parse expr type is not right"))
 				}
 				constB, ok := exprC.C.Value.(*plan.Const_Bval)
 				if !ok {
-					t.Fatalf("%+v", errors.New("the parse expr type is not right"))
+					t.Fatalf("%+v", moerr.NewInternalError("the parse expr type is not right"))
 				}
 				convey.So(constB.Bval, convey.ShouldEqual, params[j])
 			}
@@ -122,12 +122,12 @@ func TestExpr_3(t *testing.T) {
 			}
 			query, ok := pl.Plan.(*plan.Plan_Query)
 			if !ok {
-				t.Fatalf("%+v", errors.New("return type is not right"))
+				t.Fatalf("%+v", moerr.NewInternalError("return type is not right"))
 			}
 			expr := query.Query.Nodes[1].ProjectList[0]
 			exprF, ok := expr.Expr.(*plan.Expr_F)
 			if !ok {
-				t.Fatalf("%+v", errors.New("the parse expr type is not right"))
+				t.Fatalf("%+v", moerr.NewInternalError("the parse expr type is not right"))
 			}
 			convey.So(expr.Typ.Id, convey.ShouldEqual, types.T_bool)
 			convey.So(exprF.F.Func.ObjName, convey.ShouldEqual, "not")
@@ -135,11 +135,11 @@ func TestExpr_3(t *testing.T) {
 				convey.So(arg.Typ.Id, convey.ShouldEqual, types.T_bool)
 				exprC, ok := arg.Expr.(*plan.Expr_C)
 				if !ok {
-					t.Fatalf("%+v", errors.New("the parse expr type is not right"))
+					t.Fatalf("%+v", moerr.NewInternalError("the parse expr type is not right"))
 				}
 				constB, ok := exprC.C.Value.(*plan.Const_Bval)
 				if !ok {
-					t.Fatalf("%+v", errors.New("the parse expr type is not right"))
+					t.Fatalf("%+v", moerr.NewInternalError("the parse expr type is not right"))
 				}
 				convey.So(constB.Bval, convey.ShouldEqual, params[i])
 			}
@@ -164,12 +164,12 @@ func TestExpr_4(t *testing.T) {
 			}
 			query, ok := pl.Plan.(*plan.Plan_Query)
 			if !ok {
-				t.Fatalf("%+v", errors.New("return type is not right"))
+				t.Fatalf("%+v", moerr.NewInternalError("return type is not right"))
 			}
 			expr := query.Query.Nodes[1].ProjectList[0]
 			exprF, ok := expr.Expr.(*plan.Expr_F)
 			if !ok {
-				t.Fatalf("%+v", errors.New("the parse expr type is not right"))
+				t.Fatalf("%+v", moerr.NewInternalError("the parse expr type is not right"))
 			}
 			convey.So(expr.Typ.Id, convey.ShouldEqual, types.T_bool)
 			convey.So(exprF.F.Func.ObjName, convey.ShouldEqual, "=")
@@ -192,12 +192,12 @@ func TestExpr_5(t *testing.T) {
 			}
 			query, ok := pl.Plan.(*plan.Plan_Query)
 			if !ok {
-				t.Fatalf("%+v", errors.New("return type is not right"))
+				t.Fatalf("%+v", moerr.NewInternalError("return type is not right"))
 			}
 			expr := query.Query.Nodes[1].ProjectList[0]
 			exprF, ok := expr.Expr.(*plan.Expr_F)
 			if !ok {
-				t.Fatalf("%+v", errors.New("the parse expr type is not right"))
+				t.Fatalf("%+v", moerr.NewInternalError("the parse expr type is not right"))
 			}
 			convey.So(expr.Typ.Id, convey.ShouldEqual, types.T_bool)
 			convey.So(exprF.F.Func.ObjName, convey.ShouldEqual, "<")
@@ -220,12 +220,12 @@ func TestExpr_6(t *testing.T) {
 			}
 			query, ok := pl.Plan.(*plan.Plan_Query)
 			if !ok {
-				t.Fatalf("%+v", errors.New("return type is not right"))
+				t.Fatalf("%+v", moerr.NewInternalError("return type is not right"))
 			}
 			expr := query.Query.Nodes[1].ProjectList[0]
 			exprF, ok := expr.Expr.(*plan.Expr_F)
 			if !ok {
-				t.Fatalf("%+v", errors.New("the parse expr type is not right"))
+				t.Fatalf("%+v", moerr.NewInternalError("the parse expr type is not right"))
 			}
 			convey.So(expr.Typ.Id, convey.ShouldEqual, types.T_bool)
 			convey.So(exprF.F.Func.ObjName, convey.ShouldEqual, "<=")
@@ -248,12 +248,12 @@ func TestExpr_7(t *testing.T) {
 			}
 			query, ok := pl.Plan.(*plan.Plan_Query)
 			if !ok {
-				t.Fatalf("%+v", errors.New("return type is not right"))
+				t.Fatalf("%+v", moerr.NewInternalError("return type is not right"))
 			}
 			expr := query.Query.Nodes[1].ProjectList[0]
 			exprF, ok := expr.Expr.(*plan.Expr_F)
 			if !ok {
-				t.Fatalf("%+v", errors.New("the parse expr type is not right"))
+				t.Fatalf("%+v", moerr.NewInternalError("the parse expr type is not right"))
 			}
 			convey.So(expr.Typ.Id, convey.ShouldEqual, types.T_bool)
 			convey.So(exprF.F.Func.ObjName, convey.ShouldEqual, ">")
@@ -276,12 +276,12 @@ func TestExpr_8(t *testing.T) {
 			}
 			query, ok := pl.Plan.(*plan.Plan_Query)
 			if !ok {
-				t.Fatalf("%+v", errors.New("return type is not right"))
+				t.Fatalf("%+v", moerr.NewInternalError("return type is not right"))
 			}
 			expr := query.Query.Nodes[1].ProjectList[0]
 			exprF, ok := expr.Expr.(*plan.Expr_F)
 			if !ok {
-				t.Fatalf("%+v", errors.New("the parse expr type is not right"))
+				t.Fatalf("%+v", moerr.NewInternalError("the parse expr type is not right"))
 			}
 			convey.So(expr.Typ.Id, convey.ShouldEqual, types.T_bool)
 			convey.So(exprF.F.Func.ObjName, convey.ShouldEqual, ">=")
@@ -307,12 +307,12 @@ func TestExpr_9(t *testing.T) {
 			}
 			query, ok := pl.Plan.(*plan.Plan_Query)
 			if !ok {
-				t.Fatalf("%+v", errors.New("return type is not right"))
+				t.Fatalf("%+v", moerr.NewInternalError("return type is not right"))
 			}
 			expr := query.Query.Nodes[1].ProjectList[0]
 			exprF, ok := expr.Expr.(*plan.Expr_F)
 			if !ok {
-				t.Fatalf("%+v", errors.New("the parse expr type is not right"))
+				t.Fatalf("%+v", moerr.NewInternalError("the parse expr type is not right"))
 			}
 			convey.So(expr.Typ.Id, convey.ShouldEqual, types.T_bool)
 			convey.So(exprF.F.Func.ObjName, convey.ShouldEqual, "<>")
@@ -335,12 +335,12 @@ func TestExpr_A(t *testing.T) {
 			}
 			query, ok := pl.Plan.(*plan.Plan_Query)
 			if !ok {
-				t.Fatalf("%+v", errors.New("return type is not right"))
+				t.Fatalf("%+v", moerr.NewInternalError("return type is not right"))
 			}
 			expr := query.Query.Nodes[1].ProjectList[0]
 			exprF, ok := expr.Expr.(*plan.Expr_F)
 			if !ok {
-				t.Fatalf("%+v", errors.New("the parse expr type is not right"))
+				t.Fatalf("%+v", moerr.NewInternalError("the parse expr type is not right"))
 			}
 			convey.So(expr.Typ.Id, convey.ShouldEqual, types.T_bool)
 			convey.So(exprF.F.Func.ObjName, convey.ShouldEqual, name[i])
@@ -363,12 +363,12 @@ func TestExpr_B(t *testing.T) {
 			}
 			query, ok := pl.Plan.(*plan.Plan_Query)
 			if !ok {
-				t.Fatalf("%+v", errors.New("return type is not right"))
+				t.Fatalf("%+v", moerr.NewInternalError("return type is not right"))
 			}
 			expr := query.Query.Nodes[1].ProjectList[0]
 			exprF, ok := expr.Expr.(*plan.Expr_F)
 			if !ok {
-				t.Fatalf("%+v", errors.New("the parse expr type is not right"))
+				t.Fatalf("%+v", moerr.NewInternalError("the parse expr type is not right"))
 			}
 			convey.So(expr.Typ.Id, convey.ShouldEqual, types.T_bool)
 			convey.So(exprF.F.Func.ObjName, convey.ShouldEqual, "and")
