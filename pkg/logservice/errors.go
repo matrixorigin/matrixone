@@ -15,6 +15,7 @@
 package logservice
 
 import (
+	"fmt"
 	"net"
 
 	"github.com/cockroachdb/errors"
@@ -56,7 +57,7 @@ func toErrorCode(err error) (uint32, string) {
 	}
 	for _, rec := range errorToCodeMappings {
 		if errors.Is(err, rec.err) {
-			plog.Errorf("error: %v, converted to code %d", err, rec.code)
+			logger.Error(fmt.Sprintf("error: %v, converted to code %d", err, rec.code))
 			return uint32(rec.code), ""
 		}
 	}
@@ -90,7 +91,7 @@ func toError(resp pb.Response) error {
 		// hoder id get lost?
 		return moerr.NewNotLeaseHolder(0xDEADBEEF)
 	} else {
-		// will plog.Panicf panic?
+		// will logger.Panicf panic?
 		panic(moerr.NewInternalError("unknown error code: %d", resp.ErrorCode))
 	}
 	// will never reach here
