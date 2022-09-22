@@ -31,6 +31,9 @@ import (
 
 func TestLogTail(t *testing.T) {
 
+	ctx, cancel := context.WithTimeout(context.Background(), time.Hour)
+	defer cancel()
+
 	clock := clock.NewHLCClock(func() int64 {
 		return time.Now().Unix()
 	}, math.MaxInt)
@@ -40,7 +43,7 @@ func TestLogTail(t *testing.T) {
 		clock,
 	)
 	assert.Nil(t, err)
-	defer storage.Close(context.TODO())
+	defer storage.Close(ctx)
 
 	// txn
 	txnMeta := txn.TxnMeta{
@@ -56,7 +59,7 @@ func TestLogTail(t *testing.T) {
 	{
 		for _, tableID := range []uint64{1, 2, 3} {
 			resp, err := testRead[apipb.SyncLogTailResp](
-				t, storage, txnMeta,
+				ctx, t, storage, txnMeta,
 				txnengine.OpGetLogTail,
 				apipb.SyncLogTailReq{
 					Table: &apipb.TableID{
