@@ -16,6 +16,7 @@ package logservice
 
 import (
 	"context"
+	"fmt"
 	"math"
 	"math/rand"
 	"testing"
@@ -232,7 +233,7 @@ func TestClientAppendAlloc(t *testing.T) {
 			_, err := c.Append(ctx, rec)
 			require.NoError(t, err)
 		})
-		plog.Infof("ac: %f", ac)
+		logger.Info(fmt.Sprintf("ac: %f", ac))
 	}
 	runClientTest(t, false, fn)
 }
