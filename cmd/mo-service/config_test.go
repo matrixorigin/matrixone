@@ -61,7 +61,8 @@ func TestParseDNConfig(t *testing.T) {
 	# txn storage backend implementation. [TAE|MEM]
 	backend = "MEM"
 	`
-	cfg, err := parseFromString(data)
+	cfg := &Config{}
+	err := parseFromString(data, cfg)
 	assert.NoError(t, err)
 	assert.Equal(t, "MEM", cfg.DN.Txn.Storage.Backend)
 	assert.Equal(t, 2, len(cfg.FileServices))
@@ -168,8 +169,11 @@ service-addresses = [
   "127.0.0.1:32000",
 ]
 	`
-	cfg, err := parseFromString(data)
+	cfg := &Config{}
+	err := parseFromString(data, cfg)
 	assert.NoError(t, err)
+	assert.NoError(t, cfg.validate())
+	assert.NoError(t, cfg.resolveGossipSeedAddresses())
 	assert.Equal(t, 1, len(cfg.LogService.GossipSeedAddresses))
 	assert.Equal(t, "127.0.0.1:32002", cfg.LogService.GossipSeedAddresses[0])
 }

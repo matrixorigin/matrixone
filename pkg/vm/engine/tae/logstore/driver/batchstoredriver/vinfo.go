@@ -16,20 +16,20 @@ package batchstoredriver
 
 import (
 	"context"
-	"errors"
 	"sync"
 
 	// "github.com/matrixorigin/matrixone/pkg/logutil"
 	// "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
 
 	"github.com/RoaringBitmap/roaring/roaring64"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
 var (
-	ErrVFileGroupNotExist = errors.New("vfile: group not existed")
-	ErrVFileLsnNotExist   = errors.New("vfile: lsn not existed")
-	ErrVFileOffsetTimeOut = errors.New("get vfile offset timeout")
-	ErrReadMetaFailed     = errors.New("read meta failed")
+	ErrVFileGroupNotExist = moerr.NewInternalError("vfile: group not existed")
+	ErrVFileLsnNotExist   = moerr.NewInternalError("vfile: lsn not existed")
+	ErrVFileOffsetTimeOut = moerr.NewInternalError("get vfile offset timeout")
+	ErrReadMetaFailed     = moerr.NewInternalError("read meta failed")
 )
 
 type vInfo struct {

@@ -22,8 +22,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/logutil/logutil2"
 	"github.com/matrixorigin/matrixone/pkg/util/batchpipe"
 )
 
@@ -205,7 +205,7 @@ func (c *MOCollector) Start() bool {
 	}
 	defer atomic.StoreUint32(&c.started, 1)
 
-	logutil2.Infof(DefaultContext(), "MOCollector Start")
+	logutil.Infof("MOCollector Start")
 	for i := 0; i < c.collectorCnt; i++ {
 		c.stopWait.Add(1)
 		go c.doCollect(i)
@@ -238,7 +238,7 @@ loop:
 				if _, has := c.buffers[i.GetName()]; !has {
 					logutil.Debugf("doCollect %dth: init buffer done.", idx)
 					if impl, has := gPipeImplHolder.Get(i.GetName()); !has {
-						panic(fmt.Errorf("unknown item type: %s", i.GetName()))
+						panic(moerr.NewInternalError("unknown item type: %s", i.GetName()))
 					} else {
 						buf = newBufferHolder(i, impl, awakeBuffer(c))
 						c.buffers[i.GetName()] = buf

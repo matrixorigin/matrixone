@@ -15,13 +15,14 @@
 package bootstrap
 
 import (
-	"errors"
 	"fmt"
+	"testing"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper/checkers/util"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/stretchr/testify/assert"
-	"testing"
 )
 
 func TestNewBootstrapManager(t *testing.T) {
@@ -357,7 +358,7 @@ func TestIssue3814(t *testing.T) {
 				}},
 			},
 			log:      pb.LogState{},
-			expected: errors.New("not enough log stores"),
+			expected: moerr.NewInternalError("not enough log stores"),
 		},
 		{
 			desc: "case not enough dn stores",

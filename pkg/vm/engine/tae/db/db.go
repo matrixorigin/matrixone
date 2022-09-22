@@ -15,7 +15,7 @@
 package db
 
 import (
-	"errors"
+
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"io"
 	"runtime"
@@ -38,7 +38,7 @@ import (
 )
 
 var (
-	ErrClosed = errors.New("tae: closed")
+	ErrClosed = moerr.NewInternalError("tae: closed")
 )
 
 type DB struct {
@@ -74,7 +74,7 @@ func (db *DB) StartTxn(info []byte) (txnif.AsyncTxn, error) {
 
 // TODO::
 func (db *DB) StartTxnWithMeta(info []byte, start types.TS, tid []byte) {
-
+	panic(moerr.NewNYI("StartTxnWithMeta is not implemented yet"))
 }
 
 func (db *DB) CommitTxn(txn txnif.AsyncTxn) (err error) {

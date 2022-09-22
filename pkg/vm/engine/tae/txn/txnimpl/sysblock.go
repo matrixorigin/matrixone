@@ -164,7 +164,7 @@ func (blk *txnSysBlock) isPrimaryKey(schema *catalog.Schema, colIdx int) bool {
 	attrName := schema.ColDefs[colIdx].Name
 	switch schema.Name {
 	case catalog.SystemTable_Columns_Name:
-		return attrName == catalog.SystemColAttr_Name || attrName == catalog.SystemColAttr_RelID
+		return attrName == catalog.SystemColAttr_UniqName
 	case catalog.SystemTable_Table_Name:
 		return attrName == catalog.SystemRelAttr_ID
 	case catalog.SystemTable_DB_Name:

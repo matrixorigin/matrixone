@@ -21,6 +21,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
+	"github.com/matrixorigin/matrixone/pkg/txn/storage/txn/memtable"
 )
 
 func TestMemHandler(t *testing.T) {
@@ -28,7 +29,7 @@ func TestMemHandler(t *testing.T) {
 		return New(
 			NewMemHandler(
 				testutil.NewMheap(),
-				Serializable,
+				memtable.Serializable,
 				clock.NewHLCClock(func() int64 {
 					return time.Now().UnixNano()
 				}, math.MaxInt64),

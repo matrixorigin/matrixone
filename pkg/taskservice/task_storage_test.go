@@ -189,6 +189,11 @@ func TestUpdateCronTask(t *testing.T) {
 
 			n, err = s.UpdateCronTask(ctx, v1, v3)
 			assert.NoError(t, err)
+			assert.Equal(t, 0, n)
+
+			v1.TriggerTimes++
+			n, err = s.UpdateCronTask(ctx, v1, v3)
+			assert.NoError(t, err)
 			assert.Equal(t, 2, n)
 		})
 	}

@@ -120,14 +120,14 @@ func (db *txnDatabase) DropRelationByID(id uint64) (rel handle.Relation, err err
 func (db *txnDatabase) TruncateByName(name string) (rel handle.Relation, err error) {
 	old, err := db.DropRelationByName(name)
 	if err != nil {
-		err = fmt.Errorf("%w: truncate %s error", err, name)
+		err = moerr.NewInternalError("%v: truncate %s error", err, name)
 		return
 	}
 	meta := old.GetMeta().(*catalog.TableEntry)
 	schema := meta.GetSchema().Clone()
 	rel, err = db.CreateRelation(schema)
 	if err != nil {
-		err = fmt.Errorf("%w: truncate %s error", err, name)
+		err = moerr.NewInternalError("%v: truncate %s error", err, name)
 	}
 	return
 }
