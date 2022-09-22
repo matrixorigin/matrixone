@@ -24,7 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 )
 
-func makeColExpr(idx int32, typ types.T) *plan.Expr {
+func makeColExprForTest(idx int32, typ types.T) *plan.Expr {
 	containerType := typ.ToType()
 	exprType := plan2.MakePlan2Type(&containerType)
 
@@ -40,7 +40,7 @@ func makeColExpr(idx int32, typ types.T) *plan.Expr {
 	}
 }
 
-func makeFunctionExpr(name string, args []*plan.Expr) *plan.Expr {
+func makeFunctionExprForTest(name string, args []*plan.Expr) *plan.Expr {
 	argTypes := make([]types.Type, len(args))
 	for i, arg := range args {
 		argTypes[i] = plan2.MakeTypeByPlan2Expr(arg)
@@ -62,7 +62,7 @@ func makeFunctionExpr(name string, args []*plan.Expr) *plan.Expr {
 	}
 }
 
-func makeColumnMeta(typ types.T, min []byte, max []byte) *ColumnMeta {
+func makeColumnMetaForTest(typ types.T, min []byte, max []byte) *ColumnMeta {
 	return &ColumnMeta{
 		typ: uint8(typ),
 		idx: 0,
@@ -89,7 +89,7 @@ func makeColumnMeta(typ types.T, min []byte, max []byte) *ColumnMeta {
 	}
 }
 
-func makeTestMeta() BlockMeta {
+func makeBlockMetaForTest() BlockMeta {
 	column1Min := make([]byte, 8)
 	column1Max := make([]byte, 8)
 	column2Min := make([]byte, 8)
@@ -107,9 +107,9 @@ func makeTestMeta() BlockMeta {
 	return BlockMeta{
 		header: BlockHeader{},
 		columns: []*ColumnMeta{
-			makeColumnMeta(types.T_uint64, column1Min, column1Max),
-			makeColumnMeta(types.T_uint64, column2Min, column2Max),
-			makeColumnMeta(types.T_uint64, column3Min, column3Max),
+			makeColumnMetaForTest(types.T_uint64, column1Min, column1Max),
+			makeColumnMetaForTest(types.T_uint64, column2Min, column2Max),
+			makeColumnMetaForTest(types.T_uint64, column3Min, column3Max),
 		},
 	}
 }
@@ -117,18 +117,18 @@ func makeTestMeta() BlockMeta {
 func TestCheckExprIsMonotonical(t *testing.T) {
 	testExprs := []*plan.Expr{
 		// a > 1  -> true
-		makeFunctionExpr(">", []*plan.Expr{
-			makeColExpr(0, types.T_int64),
+		makeFunctionExprForTest(">", []*plan.Expr{
+			makeColExprForTest(0, types.T_int64),
 			plan2.MakePlan2Int64ConstExprWithType(10),
 		}),
 		// a >= b -> true
-		makeFunctionExpr(">=", []*plan.Expr{
-			makeColExpr(0, types.T_int64),
-			makeColExpr(1, types.T_int64),
+		makeFunctionExprForTest(">=", []*plan.Expr{
+			makeColExprForTest(0, types.T_int64),
+			makeColExprForTest(1, types.T_int64),
 		}),
 		// abs(a) -> false
-		makeFunctionExpr("abs", []*plan.Expr{
-			makeColExpr(0, types.T_int64),
+		makeFunctionExprForTest("abs", []*plan.Expr{
+			makeColExprForTest(0, types.T_int64),
 		}),
 	}
 
@@ -145,12 +145,12 @@ func TestCheckExprIsMonotonical(t *testing.T) {
 }
 
 func TestNeedRead(t *testing.T) {
-	blockMeta := makeTestMeta()
+	blockMeta := makeBlockMetaForTest()
 
 	testExprs := []*plan.Expr{
 		// a > 1  -> true
-		makeFunctionExpr(">", []*plan.Expr{
-			makeColExpr(0, types.T_int64),
+		makeFunctionExprForTest(">", []*plan.Expr{
+			makeColExprForTest(0, types.T_int64),
 			plan2.MakePlan2Int64ConstExprWithType(10),
 		}),
 		// makeFunctionExpr(">=", []*plan.Expr{
@@ -163,7 +163,7 @@ func TestNeedRead(t *testing.T) {
 
 	t.Run("test needRead", func(t *testing.T) {
 		for i, expr := range testExprs {
-			result := needRead(expr, blockMeta)
+			result := needRead(expr, blockMeta, getMoTableTableDef([]string{"rel_id"}))
 			if result != expected[i] {
 				t.Fatalf("test needRead at cases[%d], get result is different with expected", i)
 			}

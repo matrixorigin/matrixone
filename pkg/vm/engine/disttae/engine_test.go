@@ -87,8 +87,8 @@ func TestTransaction(t *testing.T) {
 	require.NoError(t, err)
 	ctx := context.TODO()
 	blockWrite(ctx, BlockMeta{}, nil)
-	_, _ = txn.getRow(ctx, 0, 0, nil, nil, nil)
-	_, _ = txn.getRows(ctx, 0, 0, nil, nil, nil)
+	_, _ = txn.getRow(ctx, 0, 0, nil, nil, nil, nil)
+	_, _ = txn.getRows(ctx, 0, 0, nil, nil, nil, nil)
 }
 
 func TestTable(t *testing.T) {

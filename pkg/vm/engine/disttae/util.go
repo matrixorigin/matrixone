@@ -17,6 +17,7 @@ import (
 	"encoding/binary"
 	"math"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -83,13 +84,14 @@ func decodeMinMaxFromZonemap(typ types.T, value []byte) *plan.Expr {
 	}
 }
 
-func getZonemapByExprAndMeta(columns []int32, meta BlockMeta) map[int32][]*plan.Expr {
-	exprs := make(map[int32][]*plan.Expr, len(columns))
-	for _, column := range columns {
+func getZonemapByExprAndMeta(columns []int32, meta BlockMeta, tableDef *plan.TableDef) [][2]*plan.Expr {
+	exprs := make([][2]*plan.Expr, len(columns))
+
+	for i, column := range columns {
 		columnMeta := meta.columns[column]
 		typ := types.T(columnMeta.typ)
 
-		exprs[column] = []*plan.Expr{
+		exprs[i] = [2]*plan.Expr{
 			decodeMinMaxFromZonemap(typ, columnMeta.zoneMap.min),
 			decodeMinMaxFromZonemap(typ, columnMeta.zoneMap.max),
 		}
@@ -130,4 +132,42 @@ func evalFilterExpr(expr *plan.Expr, bat *batch.Batch) (bool, error) {
 	}
 
 	return false, moerr.NewInternalError("cannot eval filter expr")
+}
+
+func getMoDatabaseTableDef(columns []string) *plan.TableDef {
+	return _getTableDefBySchemaAndType(catalog.MO_DATABASE, columns, catalog.MoDatabaseSchema, catalog.MoDatabaseTypes)
+}
+
+func getMoTableTableDef(columns []string) *plan.TableDef {
+	return _getTableDefBySchemaAndType(catalog.MO_TABLES, columns, catalog.MoTablesSchema, catalog.MoTablesTypes)
+}
+
+func getMoColumnTableDef(columns []string) *plan.TableDef {
+	return _getTableDefBySchemaAndType(catalog.MO_COLUMNS, columns, catalog.MoColumnsSchema, catalog.MoColumnsTypes)
+}
+
+func _getTableDefBySchemaAndType(name string, columns []string, schema []string, types []types.Type) *plan.TableDef {
+	columnsMap := make(map[string]struct{})
+	for _, col := range columns {
+		columnsMap[col] = struct{}{}
+	}
+
+	var cols []*plan.ColDef
+	nameToIndex := make(map[string]int32)
+
+	for i, col := range schema {
+		if _, ok := columnsMap[col]; ok {
+			cols = append(cols, &plan.ColDef{
+				Name: col,
+				Typ:  plan2.MakePlan2Type(&types[i]),
+			})
+		}
+		nameToIndex[col] = int32(i)
+	}
+
+	return &plan.TableDef{
+		Name:          name,
+		Cols:          cols,
+		Name2ColIndex: nameToIndex,
+	}
 }

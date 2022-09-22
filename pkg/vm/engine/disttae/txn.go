@@ -26,9 +26,10 @@ import (
 )
 
 func (txn *Transaction) getTableList(ctx context.Context, databaseId uint64) ([]string, error) {
+	columns := []string{catalog.MoTablesSchema[catalog.MO_TABLES_REL_NAME_IDX]}
+	expr := genTableListExpr(getAccountId(ctx), databaseId)
 	rows, err := txn.getRows(ctx, catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID, txn.dnStores[:1],
-		[]string{catalog.MoTablesSchema[catalog.MO_TABLES_REL_NAME_IDX]},
-		genTableListExpr(getAccountId(ctx), databaseId))
+		columns, expr, getMoTableTableDef(columns))
 	if err != nil {
 		return nil, err
 	}
@@ -42,16 +43,16 @@ func (txn *Transaction) getTableList(ctx context.Context, databaseId uint64) ([]
 func (txn *Transaction) getTableInfo(ctx context.Context, databaseId uint64,
 	name string) (uint64, []engine.TableDef, error) {
 	accountId := getAccountId(ctx)
+	columns := catalog.MoTablesSchema
 	row, err := txn.getRow(ctx, catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID,
-		txn.dnStores[:1], catalog.MoTablesSchema,
-		genTableIdExpr(accountId, databaseId, name))
+		txn.dnStores[:1], columns, genTableIdExpr(accountId, databaseId, name), getMoTableTableDef(columns))
 	if err != nil {
 		return 0, nil, err
 	}
 	id := row[0].(uint64)
 	rows, err := txn.getRows(ctx, catalog.MO_CATALOG_ID, catalog.MO_COLUMNS_ID,
 		txn.dnStores[:1], catalog.MoColumnsSchema,
-		genColumnInfoExpr(accountId, databaseId, id))
+		genColumnInfoExpr(accountId, databaseId, id), getMoColumnTableDef(catalog.MoColumnsSchema))
 	if err != nil {
 		return 0, nil, err
 	}
@@ -67,9 +68,11 @@ func (txn *Transaction) getTableInfo(ctx context.Context, databaseId uint64,
 func (txn *Transaction) getTableId(ctx context.Context, databaseId uint64,
 	name string) (uint64, error) {
 	accountId := getAccountId(ctx)
+	columns := []string{catalog.MoTablesSchema[catalog.MO_TABLES_REL_ID_IDX]}
+
 	row, err := txn.getRow(ctx, catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID,
-		txn.dnStores[:1], []string{catalog.MoTablesSchema[catalog.MO_TABLES_REL_ID_IDX]},
-		genTableIdExpr(accountId, databaseId, name))
+		txn.dnStores[:1], columns,
+		genTableIdExpr(accountId, databaseId, name), getMoTableTableDef(columns))
 	if err != nil {
 		return 0, err
 	}
@@ -77,9 +80,10 @@ func (txn *Transaction) getTableId(ctx context.Context, databaseId uint64,
 }
 
 func (txn *Transaction) getDatabaseList(ctx context.Context) ([]string, error) {
+	columns := []string{catalog.MoDatabaseSchema[catalog.MO_DATABASE_DAT_NAME_IDX]}
+
 	rows, err := txn.getRows(ctx, catalog.MO_CATALOG_ID, catalog.MO_DATABASE_ID,
-		txn.dnStores[:1], []string{catalog.MoDatabaseSchema[catalog.MO_DATABASE_DAT_NAME_IDX]},
-		genDatabaseListExpr(getAccountId(ctx)))
+		txn.dnStores[:1], columns, genDatabaseListExpr(getAccountId(ctx)), getMoDatabaseTableDef(columns))
 	if err != nil {
 		return nil, err
 	}
@@ -92,9 +96,9 @@ func (txn *Transaction) getDatabaseList(ctx context.Context) ([]string, error) {
 
 func (txn *Transaction) getDatabaseId(ctx context.Context, name string) (uint64, error) {
 	accountId := getAccountId(ctx)
+	columns := []string{catalog.MoDatabaseSchema[catalog.MO_DATABASE_DAT_ID_IDX]}
 	row, err := txn.getRow(ctx, catalog.MO_CATALOG_ID, catalog.MO_DATABASE_ID, txn.dnStores[:1],
-		[]string{catalog.MoDatabaseSchema[catalog.MO_DATABASE_DAT_ID_IDX]},
-		genDatabaseIdExpr(accountId, name))
+		columns, genDatabaseIdExpr(accountId, name), getMoDatabaseTableDef(columns))
 	if err != nil {
 		return 0, err
 	}
@@ -152,8 +156,8 @@ func (txn *Transaction) WriteFile(typ int, databaseId, tableId uint64,
 
 // getRow used to get a row of table based on a condition
 func (txn *Transaction) getRow(ctx context.Context, databaseId uint64, tableId uint64,
-	dnList []DNStore, columns []string, expr *plan.Expr) ([]any, error) {
-	bats, err := txn.readTable(ctx, databaseId, tableId, dnList, columns, expr)
+	dnList []DNStore, columns []string, expr *plan.Expr, tableDef *plan.TableDef) ([]any, error) {
+	bats, err := txn.readTable(ctx, databaseId, tableId, dnList, columns, expr, tableDef)
 	if err != nil {
 		return nil, err
 	}
@@ -172,8 +176,8 @@ func (txn *Transaction) getRow(ctx context.Context, databaseId uint64, tableId u
 
 // getRows used to get rows of table
 func (txn *Transaction) getRows(ctx context.Context, databaseId uint64, tableId uint64,
-	dnList []DNStore, columns []string, expr *plan.Expr) ([][]any, error) {
-	bats, err := txn.readTable(ctx, databaseId, tableId, dnList, columns, expr)
+	dnList []DNStore, columns []string, expr *plan.Expr, tableDef *plan.TableDef) ([][]any, error) {
+	bats, err := txn.readTable(ctx, databaseId, tableId, dnList, columns, expr, tableDef)
 	if err != nil {
 		return nil, err
 	}
@@ -190,7 +194,7 @@ func (txn *Transaction) getRows(ctx context.Context, databaseId uint64, tableId 
 // readTable used to get tuples of table based on a condition
 // only used to read data from catalog, for which the execution is currently single-core
 func (txn *Transaction) readTable(ctx context.Context, databaseId uint64, tableId uint64,
-	dnList []DNStore, columns []string, expr *plan.Expr) ([]*batch.Batch, error) {
+	dnList []DNStore, columns []string, expr *plan.Expr, tableDef *plan.TableDef) ([]*batch.Batch, error) {
 	var writes [][]Entry
 
 	// consider halloween problem
@@ -203,7 +207,7 @@ func (txn *Transaction) readTable(ctx context.Context, databaseId uint64, tableI
 	isMonotonically := checkExprIsMonotonical(expr)
 	if isMonotonically {
 		for _, blkInfo := range blkInfos {
-			if !needRead(expr, blkInfo) {
+			if !needRead(expr, blkInfo, tableDef) {
 				continue
 			}
 			bat, err := blockRead(ctx, columns, blkInfo)
@@ -238,7 +242,7 @@ func (txn *Transaction) readTable(ctx context.Context, databaseId uint64, tableI
 }
 
 // needRead determine if a block needs to be read
-func needRead(expr *plan.Expr, blkInfo BlockMeta) bool {
+func needRead(expr *plan.Expr, blkInfo BlockMeta, tableDef *plan.TableDef) bool {
 	bat := batch.NewWithSize(0)
 	bat.Zs = []int64{1}
 	var err error
@@ -256,11 +260,12 @@ func needRead(expr *plan.Expr, blkInfo BlockMeta) bool {
 	}
 
 	// we take columns[0] for base, test expr by columns[0].min/max with other columns
-	minMaxExprs := getZonemapByExprAndMeta(columns, blkInfo)
+	minMaxExprs := getZonemapByExprAndMeta(columns, blkInfo, tableDef)
 	baseColumn := columns[0]
 	baseMin := minMaxExprs[baseColumn][0]
 	baseMax := minMaxExprs[baseColumn][1]
-	delete(minMaxExprs, baseColumn)
+	// minMaxExprs = minMaxExprs[1:]
+
 	// we build vectors for other columns
 	// buildVectors :=
 
