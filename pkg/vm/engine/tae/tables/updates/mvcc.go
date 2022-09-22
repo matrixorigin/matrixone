@@ -319,16 +319,14 @@ func (n *MVCCHandle) CollectAppend(start, end types.TS) (minRow, maxRow uint32, 
 			n := m.(*AppendNode)
 			n.RLock()
 			txn := n.GetTxn()
+			n.RUnlock()
 			if txn != nil {
-				n.RUnlock()
 				txn.GetTxnState(true)
-				n.RLock()
 			}
 			for i := 0; i < int(n.maxRow-n.startRow); i++ {
 				commitTSVec.Append(n.GetCommitTS())
 				abortVec.Append(n.abort)
 			}
-			n.RUnlock()
 			return true
 		})
 	return
@@ -344,6 +342,12 @@ func (n *MVCCHandle) CollectDelete(rawPkVec containers.Vector, start, end types.
 	n.deletes.LoopChain(
 		func(m txnbase.MVCCNode) bool {
 			n := m.(*DeleteNode)
+			n.RLock()
+			txn := n.GetTxn()
+			n.RUnlock()
+			if txn != nil {
+				txn.GetTxnState(true)
+			}
 			in, before := n.PreparedIn(start, end)
 			if in {
 				it := n.mask.Iterator()
