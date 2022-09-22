@@ -906,17 +906,10 @@ func (blk *dataBlock) GetSortColumns(schema *catalog.Schema, data *containers.Ba
 	return vs
 }
 
-const (
-	attrCommitTs = "commit_ts"
-	attrAborted  = "aborted"
-)
-
-// data, commit ts, abort
 func (blk *dataBlock) CollectInsert(start, end types.TS, buffer *bytes.Buffer) *containers.Batch {
 	batch := containers.NewBatch()
-	schema:=blk.meta.GetSchema()
+	schema := blk.meta.GetSchema()
 
-	//collect range
 	minRow, maxRow, commitTSVec, abortVec := blk.mvcc.CollectAppend(start, end)
 	attrs := schema.Attrs()
 	for i, attr := range attrs {
@@ -926,25 +919,28 @@ func (blk *dataBlock) CollectInsert(start, end types.TS, buffer *bytes.Buffer) *
 		}
 		batch.AddVector(attr, vec)
 	}
-	batch.AddVector(attrCommitTs, commitTSVec)
-	batch.AddVector(attrAborted, abortVec)
+	batch.AddVector("commit_ts", commitTSVec)
+	batch.AddVector("aborted", abortVec)
 	return batch
 }
 
-// (pk), rowid, commit ts, abort
 func (blk *dataBlock) CollectDelete(start, end types.TS, buffer *bytes.Buffer) (*containers.Batch, error) {
 	schema := blk.meta.GetSchema()
 	var rawPk containers.Vector
 	var err error
+	maxRow, visible, err := blk.mvcc.GetMaxVisibleRowLocked(end)
+	if err != nil || !visible {
+		return nil, err
+	}
 	if schema.IsSinglePK() {
-		rawPk, err = blk.LoadColumnData(schema.GetSingleSortKeyIdx(), buffer)
+		rawPk, err = blk.node.GetColumnDataCopy(0, maxRow, schema.GetSingleSortKeyIdx(), buffer)
 		if err != nil {
 			return nil, err
 		}
 	} else if blk.meta.GetSchema().IsCompoundPK() {
 		cols := make([]containers.Vector, 0)
 		for _, def := range schema.SortKey.Defs {
-			col, err := blk.LoadColumnData(def.Idx, buffer)
+			col, err := blk.node.GetColumnDataCopy(0, maxRow, def.Idx, buffer)
 			if err != nil {
 				return nil, err
 			}
@@ -954,9 +950,11 @@ func (blk *dataBlock) CollectDelete(start, end types.TS, buffer *bytes.Buffer) (
 	}
 	pk, rowID, ts, abort := blk.mvcc.CollectDelete(rawPk, start, end)
 	batch := containers.NewBatch()
-	batch.AddVector("pk", pk)
-	batch.AddVector("rowID", rowID)
-	batch.AddVector("ts", ts)
-	batch.AddVector("abort", abort)
+	if schema.HasPK() {
+		batch.AddVector(schema.GetSingleSortKey().Name, pk)
+	}
+	batch.AddVector("row_id", rowID)
+	batch.AddVector("commit_ts", ts)
+	batch.AddVector("aborted", abort)
 	return batch, nil
 }

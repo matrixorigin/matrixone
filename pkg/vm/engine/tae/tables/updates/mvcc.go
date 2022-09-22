@@ -303,11 +303,11 @@ func (n *MVCCHandle) CollectAppend(start, end types.TS) (minRow, maxRow uint32, 
 	if node != nil && node.GetPrepare().Less(start) {
 		startOffset++
 	}
-	minRow = n.appends.GetNodeByOffset(startOffset).(*AppendNode).startRow
 	endOffset, node := n.appends.GetNodeToReadByPrepareTS(end)
-	if node == nil {
+	if node == nil || startOffset > endOffset {
 		return 0, 0, nil, nil
 	}
+	minRow = n.appends.GetNodeByOffset(startOffset).(*AppendNode).startRow
 	maxRow = node.(*AppendNode).maxRow
 
 	commitTSVec = containers.MakeVector(types.T_TS.ToType(), true)
@@ -318,8 +318,8 @@ func (n *MVCCHandle) CollectAppend(start, end types.TS) (minRow, maxRow uint32, 
 		func(m txnbase.MVCCNode) bool {
 			n := m.(*AppendNode)
 			n.RLock()
-			txn:=n.GetTxn()
-			if txn!=nil{
+			txn := n.GetTxn()
+			if txn != nil {
 				n.RUnlock()
 				txn.GetTxnState(true)
 				n.RLock()
@@ -344,17 +344,20 @@ func (n *MVCCHandle) CollectDelete(rawPkVec containers.Vector, start, end types.
 	n.deletes.LoopChain(
 		func(m txnbase.MVCCNode) bool {
 			n := m.(*DeleteNode)
-			it := n.mask.Iterator()
-			for it.HasNext() {
-				row := it.Next()
-				if rawPkVec != nil {
-					pkVec.Append(rawPkVec.Get(int(row)))
+			in, before := n.PreparedIn(start, end)
+			if in {
+				it := n.mask.Iterator()
+				for it.HasNext() {
+					row := it.Next()
+					if rawPkVec != nil {
+						pkVec.Append(rawPkVec.Get(int(row)))
+					}
+					rowIDVec.Append(row)
+					commitTSVec.Append(n.GetEnd())
+					abortVec.Append(n.abort)
 				}
-				rowIDVec.Append(row)
-				commitTSVec.Append(n.GetEnd())
-				abortVec.Append(n.abort)
 			}
-			return true
+			return !before
 		})
 	return
 }

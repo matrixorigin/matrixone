@@ -25,7 +25,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -3103,57 +3102,137 @@ func TestGetLastAppender(t *testing.T) {
 // collect [0,p1] [0,p2] [p1+1,p2] [p1+1,p3]
 // check data, row count, commit ts
 // TODO 1. in2pc committs!=preparets; 2. abort
-func TestCollectAppend(t *testing.T) {
+func TestCollectInsert(t *testing.T) {
 	opts := config.WithLongScanAndCKPOpts(nil)
 	tae := newTestEngine(t, opts)
 	defer tae.Close()
-	schema := catalog.MockSchemaAll(1, -1) //2
-	schema.BlockMaxRows = 10
+	schema := catalog.MockSchemaAll(1, -1)
+	schema.BlockMaxRows = 20
 	tae.bindSchema(schema)
-	bat := catalog.MockBatch(schema, 9)
-	bats := bat.Split(3)
+	bat := catalog.MockBatch(schema, 12)
+	bats := bat.Split(4)
 
 	tae.createRelAndAppend(bats[0], true)
 
-	p1 := tae.TxnMgr.TsAlloc.Get()
-	logutil.Infof("p1= %v",p1.ToString())
+	txn1, rel := tae.getRelation()
+	assert.NoError(t, rel.Append(bats[1]))
+	assert.NoError(t, txn1.Commit())
+
+	p1 := txn1.GetPrepareTS()
+	t.Logf("p1= %v", p1.ToString())
 
 	txn2, rel := tae.getRelation()
-	assert.NoError(t, rel.Append(bats[1]))
+	assert.NoError(t, rel.Append(bats[2]))
 	assert.NoError(t, txn2.Commit())
 
 	p2 := txn2.GetPrepareTS()
-	logutil.Infof("p2= %v",p2.ToString())
+	t.Logf("p2= %v", p2.ToString())
 
 	txn3, rel := tae.getRelation()
-	assert.NoError(t, rel.Append(bats[1]))
+	assert.NoError(t, rel.Append(bats[3]))
 	assert.NoError(t, txn3.Commit())
 
 	p3 := txn3.GetPrepareTS()
-	logutil.Infof("p3= %v",p3.ToString())
+	t.Logf("p3= %v", p3.ToString())
 
 	_, rel = tae.getRelation()
 	blkit := rel.MakeBlockIt()
 	blkdata := blkit.GetBlock().GetMeta().(*catalog.BlockEntry).GetBlockData()
 
 	batch := blkdata.CollectInsert(types.TS{}, p1, nil)
-	logutil.Infof("************")
-	for _,vec:=range batch.Vecs{
-		logutil.Infof("%v",vec)
+	t.Log((batch.Attrs))
+	for _, vec := range batch.Vecs {
+		t.Log(vec)
+		assert.Equal(t, 6, vec.Length())
 	}
 	batch = blkdata.CollectInsert(types.TS{}, p2, nil)
-	logutil.Infof("************")
-	for _,vec:=range batch.Vecs{
-		logutil.Infof("%v",vec)
+	t.Log((batch.Attrs))
+	for _, vec := range batch.Vecs {
+		t.Log(vec)
+		assert.Equal(t, 9, vec.Length())
 	}
 	batch = blkdata.CollectInsert(p1.Next(), p2, nil)
-	logutil.Infof("************")
-	for _,vec:=range batch.Vecs{
-		logutil.Infof("%v",vec)
+	t.Log((batch.Attrs))
+	for _, vec := range batch.Vecs {
+		t.Log(vec)
+		assert.Equal(t, 3, vec.Length())
 	}
 	batch = blkdata.CollectInsert(p1.Next(), p3, nil)
-	logutil.Infof("************")
-	for _,vec:=range batch.Vecs{
-		logutil.Infof("%v",vec)
+	t.Log((batch.Attrs))
+	for _, vec := range batch.Vecs {
+		t.Log(vec)
+		assert.Equal(t, 6, vec.Length())
+	}
+}
+
+// txn0 append
+// txn1[s1,p1,e1] delete
+// txn1[s2,p2,e2] delete
+// txn1[s3,p3,e3] delete
+// collect [0,p1] [0,p2] [p1+1,p2] [p1+1,p3]
+func TestCollectDelete(t *testing.T) {
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := newTestEngine(t, opts)
+	defer tae.Close()
+	schema := catalog.MockSchemaAll(2, 1)
+	schema.BlockMaxRows = 20
+	tae.bindSchema(schema)
+	bat := catalog.MockBatch(schema, 12)
+
+	tae.createRelAndAppend(bat, true)
+
+	_, rel := tae.getRelation()
+	blkit := rel.MakeBlockIt()
+	blkID := blkit.GetBlock().GetMeta().(*catalog.BlockEntry).AsCommonID()
+
+	txn1, rel := tae.getRelation()
+	assert.NoError(t, rel.RangeDelete(blkID, 0, 0, handle.DT_Normal))
+	assert.NoError(t, txn1.Commit())
+	p1 := txn1.GetPrepareTS()
+	t.Logf("p1= %v", p1.ToString())
+
+	txn2, rel := tae.getRelation()
+	assert.NoError(t, rel.RangeDelete(blkID, 1, 3, handle.DT_Normal))
+	assert.NoError(t, txn2.Commit())
+	p2 := txn2.GetPrepareTS()
+	t.Logf("p2= %v", p2.ToString())
+
+	txn3, rel := tae.getRelation()
+	assert.NoError(t, rel.RangeDelete(blkID, 4, 5, handle.DT_Normal))
+	assert.NoError(t, txn3.Commit())
+	p3 := txn3.GetPrepareTS()
+	t.Logf("p3= %v", p3.ToString())
+
+	_, rel = tae.getRelation()
+	blkit = rel.MakeBlockIt()
+	blkdata := blkit.GetBlock().GetMeta().(*catalog.BlockEntry).GetBlockData()
+
+	batch, err := blkdata.CollectDelete(types.TS{}, p1, nil)
+	assert.NoError(t, err)
+	t.Log((batch.Attrs))
+	for _, vec := range batch.Vecs {
+		t.Log(vec)
+		assert.Equal(t, 1, vec.Length())
+	}
+	batch, err = blkdata.CollectDelete(types.TS{}, p2, nil)
+	assert.NoError(t, err)
+	t.Log((batch.Attrs))
+	for _, vec := range batch.Vecs {
+		t.Log(vec)
+		assert.Equal(t, 4, vec.Length())
+	}
+	batch, err = blkdata.CollectDelete(p1.Next(), p2, nil)
+	assert.NoError(t, err)
+	t.Log((batch.Attrs))
+	for _, vec := range batch.Vecs {
+		t.Log(vec)
+		assert.Equal(t, 3, vec.Length())
+	}
+	batch, err = blkdata.CollectDelete(p1.Next(), p3, nil)
+	assert.NoError(t, err)
+	t.Log((batch.Attrs))
+	for _, vec := range batch.Vecs {
+		t.Log(vec)
+		assert.Equal(t, 5, vec.Length())
 	}
 }
