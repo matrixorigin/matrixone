@@ -16,10 +16,10 @@ package containers
 
 import (
 	"bytes"
-	"fmt"
 	"github.com/RoaringBitmap/roaring"
 	"github.com/RoaringBitmap/roaring/roaring64"
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	movec "github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -292,7 +292,7 @@ func MOToTAEVector(v *movec.Vector, nullable bool) Vector {
 			}
 		}
 	default:
-		panic(any(fmt.Errorf("%s not supported", v.Typ.String())))
+		panic(moerr.NewNotSupported("type is not supported"))
 	}
 	if v.Nsp.Np != nil {
 		np := &roaring64.Bitmap{}
@@ -306,7 +306,6 @@ func MOToTAEVector(v *movec.Vector, nullable bool) Vector {
 }
 
 func MOToTAEBatch(bat *batch.Batch, allNullables []bool) *Batch {
-	//allNullables := schema.AllNullables()
 	taeBatch := NewEmptyBatch()
 	defer taeBatch.Close()
 	for i, vec := range bat.Vecs {
