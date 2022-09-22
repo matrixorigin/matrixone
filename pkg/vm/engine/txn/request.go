@@ -18,7 +18,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/gob"
-	"fmt"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -73,7 +72,7 @@ func DoTxnRequest[
 		})
 	}
 
-	ctx, cancel := context.WithTimeout(ctx, time.Minute) //TODO get from config or argument
+	ctx, cancel := context.WithTimeout(ctx, time.Minute*10)
 	defer cancel()
 
 	result, err := reqFunc(ctx, requests)
@@ -83,7 +82,7 @@ func DoTxnRequest[
 	for _, resp := range result.Responses {
 		if resp.TxnError != nil {
 			//TODO no way to construct moerr.Error by code and message now
-			err = fmt.Errorf("code %v, message %v", resp.TxnError.Code, resp.TxnError.Message)
+			err = moerr.NewInternalError(resp.TxnError.Message)
 			return
 		}
 	}

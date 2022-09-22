@@ -18,6 +18,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"strconv"
+	"strings"
 )
 
 func ConvertNode(node *plan.Node, options *ExplainOptions) (*Node, error) {
@@ -68,13 +69,16 @@ func NewMarshalNodeImpl(node *plan.Node) *MarshalNodeImpl {
 }
 
 func (m MarshalNodeImpl) GetCost() Cost {
-	c := m.node.Cost
-	return Cost{
-		Start:   c.Start,
-		Total:   c.Total,
-		Card:    c.Card,
-		Ndv:     c.Ndv,
-		Rowsize: c.Rowsize,
+	if m.node.Cost != nil {
+		return Cost{
+			Start:   m.node.Cost.Start,
+			Total:   m.node.Cost.Total,
+			Card:    m.node.Cost.Card,
+			Ndv:     m.node.Cost.Ndv,
+			Rowsize: m.node.Cost.Rowsize,
+		}
+	} else {
+		return Cost{}
 	}
 }
 
@@ -215,7 +219,7 @@ func (m MarshalNodeImpl) GetNodeTitle(options *ExplainOptions) (string, error) {
 	default:
 		return "", moerr.NewInternalError("Unsupported node type when plan is serialized to json")
 	}
-	return result, nil
+	return strings.TrimSpace(result), nil
 }
 
 func (m MarshalNodeImpl) GetNodeLabels(options *ExplainOptions) ([]Label, error) {
@@ -258,7 +262,7 @@ func (m MarshalNodeImpl) GetNodeLabels(options *ExplainOptions) ([]Label, error)
 			return nil, err
 		}
 		labels = append(labels, Label{
-			Name:  "List of Expressions",
+			Name:  "List of expressions",
 			Value: value,
 		})
 	case plan.Node_AGG:
@@ -270,7 +274,7 @@ func (m MarshalNodeImpl) GetNodeLabels(options *ExplainOptions) ([]Label, error)
 				return nil, err
 			}
 			labels = append(labels, Label{
-				Name:  "Grouping Keys",
+				Name:  "Grouping keys",
 				Value: value,
 			})
 		}
@@ -282,7 +286,7 @@ func (m MarshalNodeImpl) GetNodeLabels(options *ExplainOptions) ([]Label, error)
 				return nil, err
 			}
 			labels = append(labels, Label{
-				Name:  "Aggregate Functions",
+				Name:  "Aggregate functions",
 				Value: value,
 			})
 		}
@@ -298,7 +302,7 @@ func (m MarshalNodeImpl) GetNodeLabels(options *ExplainOptions) ([]Label, error)
 	case plan.Node_JOIN:
 		// Get Join type
 		labels = append(labels, Label{
-			Name:  "Join Type",
+			Name:  "Join type",
 			Value: m.node.JoinType.String(),
 		})
 
@@ -314,11 +318,11 @@ func (m MarshalNodeImpl) GetNodeLabels(options *ExplainOptions) ([]Label, error)
 			})
 		}
 		labels = append(labels, Label{
-			Name:  "Left Node Id",
+			Name:  "Left node id",
 			Value: m.node.Children[0],
 		})
 		labels = append(labels, Label{
-			Name:  "Right Node Id",
+			Name:  "Right node id",
 			Value: m.node.Children[1],
 		})
 	case plan.Node_SORT:
@@ -341,7 +345,7 @@ func (m MarshalNodeImpl) GetNodeLabels(options *ExplainOptions) ([]Label, error)
 			return nil, err
 		}
 		labels = append(labels, Label{
-			Name:  "List of Values",
+			Name:  "List of values",
 			Value: value,
 		})
 	case plan.Node_UNION:
@@ -359,7 +363,7 @@ func (m MarshalNodeImpl) GetNodeLabels(options *ExplainOptions) ([]Label, error)
 			return nil, err
 		}
 		labels = append(labels, Label{
-			Name:  "Union All expressions",
+			Name:  "Union all expressions",
 			Value: value,
 		})
 	case plan.Node_INTERSECT:

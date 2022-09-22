@@ -16,10 +16,11 @@ package errutil
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/util"
-	"github.com/stretchr/testify/require"
 	"reflect"
 	"testing"
+
+	"github.com/matrixorigin/matrixone/pkg/util/stack"
+	"github.com/stretchr/testify/require"
 )
 
 func TestGetStackTracer(t *testing.T) {
@@ -30,7 +31,7 @@ func TestGetStackTracer(t *testing.T) {
 		name           string
 		args           args
 		hasStackTracer bool
-		want           util.StackTrace
+		want           stack.StackTrace
 	}{
 		{
 			name: "normal",
@@ -106,7 +107,7 @@ func TestHasStack(t *testing.T) {
 func Test_withStack_Cause(t *testing.T) {
 	type fields struct {
 		cause error
-		Stack *util.Stack
+		Stack *stack.Stack
 	}
 	tests := []struct {
 		name    string
@@ -154,7 +155,7 @@ func Test_withStack_Cause(t *testing.T) {
 func Test_WithStack_HasStack(t *testing.T) {
 	type fields struct {
 		cause error
-		Stack *util.Stack
+		Stack *stack.Stack
 	}
 	tests := []struct {
 		name   string

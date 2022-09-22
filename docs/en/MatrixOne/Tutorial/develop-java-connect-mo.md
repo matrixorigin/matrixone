@@ -6,11 +6,11 @@ This tutorial will show you how to connect to a MatrixOne service using a JDBC c
 
 ### Preparation 1: Install basic software
 
-- Download and install [JDBC Connector](https://dev.mysql.com/downloads/connector/j/)。
+- Download and install [JDBC Connector](https://dev.mysql.com/downloads/connector/j/).
 
-- Download and install [JDK](https://www.oracle.com/java/technologies/javase-downloads.html)。
+- Download and install [JDK](https://www.oracle.com/java/technologies/javase-downloads.html).
 
-- Download and install [Eclipse](http://www.eclipse.org/home/index.php)。
+- Download and install [Eclipse](http://www.eclipse.org/home/index.php).
 
 - Make sure you have already [installed and launched MatrixOne](../Get-Started/install-standalone-matrixone.md).
 
@@ -59,63 +59,63 @@ import java.sql.*;
 
 public class demo {
 
-	    //test为数据库名称
-	    // MySQL 8.0 以下版本选择
+	    //The database name is "test"
+	    // MySQL 8.0 and earlier version, configuration as below:
 	    //static final String JdbcDriver = "com.mysql.jdbc.Driver";  
 	    //static final String Url = "jdbc:mysql://localhost:3306/test";
 
-	    // MySQL 8.0 以上版本选择
+	    // MySQL 8.0 and later version, configuration as below:
 	    static final String JdbcDriver = "com.mysql.cj.jdbc.Driver";  
 	    static final String Url = "jdbc:mysql://127.0.0.1:6001/test?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC";
 
 
-	    //输入连接数据库的用户名与密码
-	    static final String User = "dump";//输入你的数据库库名
-	    static final String PassWord = "111";//输入你的数据库连接密码
+	    //Enter the username and password to connect to database
+	    static final String User = "dump";//Enter the database name
+	    static final String PassWord = "111";//Enter the password
 
 	    public static void main(String[] args) {
 	        Connection conn = null;
 	        Statement stmt = null;
 	        try{
-	            // 注册 JDBC 驱动
+	            // Register JDBC driver
 	            Class.forName(JdbcDriver);
 
-	            // 打开链接
-	            System.out.println("连接数据库...");
+	            // Open the link
+	            System.out.println("Connect to database...");
 	            conn = DriverManager.getConnection(Url,User,PassWord);
 
-	            // 执行查询
-	            System.out.println("输入sql语句后并执行...");
+	            // Run query
+	            System.out.println("Enter the sql statements and run sql...");
 	            stmt = conn.createStatement();
 	            String sql;
-	            sql = "select * from user";// 这里填写需要的sql语句
-	            //执行sql语句
+	            sql = "select * from user";// Enter the sql statements
+	            //Run sql
 	            ResultSet rs = stmt.executeQuery(sql);
 
-	            // 展开结果集数据库
+	            // Export database
 	            while(rs.next()){
-	                // 通过字段检索
-	                int id  = rs.getInt("id");//获取id值
-	                String name = rs.getString("user_name");//获取user_name值
-	                String sex = rs.getString("sex");//获取sex值
+	                // Retrieval by field
+	                int id  = rs.getInt("id");//Get id value
+	                String name = rs.getString("user_name");//Get user_name value
+	                String sex = rs.getString("sex");//Get sex value
 
-	                // 输出数据
+	                // Export data
 	                System.out.println("id: " + id);
-	                System.out.println("名字: " + name);
-	                System.out.println("性别: " + sex);
+	                System.out.println("Name: " + name);
+	                System.out.println("Sex: " + sex);
 	            }
-	            // 完成后关闭
+	            // Close
 	            rs.close();
 	            stmt.close();
 	            conn.close();
 	        }catch(SQLException se){
-	            // 处理 JDBC 错误
+	            // Fix JDBC error
 	            se.printStackTrace();
 	        }catch(Exception e){
-	            // 处理 Class.forName 错误
+	            // Fix Class.forName error
 	            e.printStackTrace();
 	        }finally{
-	            // 关闭资源
+	            // Close the source
 	            try{
 	                if(stmt!=null) stmt.close();
 	            }catch(SQLException se2){
@@ -126,7 +126,7 @@ public class demo {
 	                se.printStackTrace();
 	            }
 	        }
-	        System.out.println("\n执行成功！");
+	        System.out.println("\nSuccessed!");
 	    }
 }
 ```
@@ -134,17 +134,17 @@ public class demo {
 ## Expected result
 
 ```
-连接数据库...
-输入sql语句后并执行...
+Connect to database...
+Enter the sql statements and run sql...
 id: 1
-名字: weder
-性别: man
+Name: weder
+Sex: man
 id: 2
-名字: tom
-性别: man
+Name: tom
+Sex: man
 id: 3
-名字: wederTom
-性别: man
+Name: wederTom
+Sex: man
 
-执行成功！
+Successed!
 ```

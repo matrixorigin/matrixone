@@ -15,7 +15,6 @@
 package logservice
 
 import (
-	"errors"
 	"testing"
 
 	"github.com/lni/dragonboat/v4"
@@ -50,7 +49,7 @@ func TestErrorConversion(t *testing.T) {
 }
 
 func TestUnknownErrorIsHandled(t *testing.T) {
-	err := errors.New("test error")
+	err := moerr.NewDragonboatOtherSystemError("test error")
 	code, _ := toErrorCode(err)
 	assert.Equal(t, moerr.ErrDragonboatOtherSystemError, uint16(code))
 }

@@ -15,12 +15,12 @@
 package metric
 
 import (
-	"errors"
 	"math"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	prom "github.com/prometheus/client_golang/prometheus"
 	dto "github.com/prometheus/client_model/go"
 )
@@ -36,9 +36,9 @@ func NewCounter(opts prom.CounterOpts) *ratecounter {
 	return newRateCounter(opts)
 }
 
-func NewCounterVec(opts CounterOpts, lvs []string) *rateCounterVec {
+func NewCounterVec(opts CounterOpts, lvs []string, doAvg bool) *rateCounterVec {
 	mustValidLbls(opts.Name, opts.ConstLabels, lvs)
-	return newRateCounterVec(opts, lvs)
+	return newRateCounterVec(opts, lvs, doAvg)
 }
 
 type counter struct {
@@ -76,6 +76,7 @@ type ratecounter struct {
 		sync.Mutex
 		prevV float64
 		prevT time.Time
+		doAvg bool
 	}
 
 	desc       *prom.Desc
@@ -91,18 +92,19 @@ func newRateCounter(opts CounterOpts) *ratecounter {
 		nil,
 		opts.ConstLabels,
 	)
-	return newRateCounterBase(desc)
+	return newRateCounterBase(desc, true)
 }
 
-func newRateCounterBase(desc *prom.Desc, lvs ...string) *ratecounter {
+func newRateCounterBase(desc *prom.Desc, doAvg bool, lvs ...string) *ratecounter {
 	c := &ratecounter{desc: desc, labelPairs: prom.MakeLabelPairs(desc, lvs), now: time.Now}
+	c.mu.doAvg = doAvg
 	c.compat = &compatCounter{c}
 	return c
 }
 
 func (c *ratecounter) Add(v float64) {
 	if v < 0 {
-		panic(errors.New("counter cannot decrease in value"))
+		panic(moerr.NewInternalError("counter cannot decrease in value"))
 	}
 
 	ival := uint64(v)
@@ -143,8 +145,11 @@ func (c *ratecounter) Write(out *dto.Metric) error {
 	defer c.mu.Unlock()
 	if c.mu.prevT.IsZero() {
 		out.Counter = &dto.Counter{Value: &zeroValue}
-	} else {
+	} else if c.mu.doAvg {
 		rate := (val - c.mu.prevV) / instant.Sub(c.mu.prevT).Seconds()
+		out.Counter = &dto.Counter{Value: &rate}
+	} else {
+		rate := val - c.mu.prevV
 		out.Counter = &dto.Counter{Value: &rate}
 	}
 
@@ -196,7 +201,7 @@ type rateCounterVec struct {
 	inner  *prom.MetricVec
 }
 
-func newRateCounterVec(opts CounterOpts, labelNames []string) *rateCounterVec {
+func newRateCounterVec(opts CounterOpts, labelNames []string, doAvg bool) *rateCounterVec {
 	desc := prom.NewDesc(
 		prom.BuildFQName(opts.Namespace, opts.Subsystem, opts.Name),
 		opts.Help,
@@ -206,7 +211,7 @@ func newRateCounterVec(opts CounterOpts, labelNames []string) *rateCounterVec {
 
 	vec := &rateCounterVec{
 		inner: prom.NewMetricVec(desc, func(lvs ...string) prom.Metric {
-			return newRateCounterBase(desc, lvs...)
+			return newRateCounterBase(desc, doAvg, lvs...)
 		})}
 
 	vec.compat = &compatCounterVec{vec}

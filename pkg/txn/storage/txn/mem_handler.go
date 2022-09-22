@@ -41,10 +41,10 @@ import (
 type MemHandler struct {
 
 	// catalog
-	databases  *memtable.Table[ID, DatabaseRow, DatabaseRow]
-	relations  *memtable.Table[ID, RelationRow, RelationRow]
-	attributes *memtable.Table[ID, AttributeRow, AttributeRow]
-	indexes    *memtable.Table[ID, IndexRow, IndexRow]
+	databases  *memtable.Table[ID, *DatabaseRow, *DatabaseRow]
+	relations  *memtable.Table[ID, *RelationRow, *RelationRow]
+	attributes *memtable.Table[ID, *AttributeRow, *AttributeRow]
+	indexes    *memtable.Table[ID, *IndexRow, *IndexRow]
 
 	// data
 	data *memtable.Table[DataKey, DataValue, DataRow]
@@ -88,10 +88,10 @@ func NewMemHandler(
 	clock clock.Clock,
 ) *MemHandler {
 	h := &MemHandler{
-		databases:              memtable.NewTable[ID, DatabaseRow, DatabaseRow](),
-		relations:              memtable.NewTable[ID, RelationRow, RelationRow](),
-		attributes:             memtable.NewTable[ID, AttributeRow, AttributeRow](),
-		indexes:                memtable.NewTable[ID, IndexRow, IndexRow](),
+		databases:              memtable.NewTable[ID, *DatabaseRow, *DatabaseRow](),
+		relations:              memtable.NewTable[ID, *RelationRow, *RelationRow](),
+		attributes:             memtable.NewTable[ID, *AttributeRow, *AttributeRow](),
+		indexes:                memtable.NewTable[ID, *IndexRow, *IndexRow](),
 		data:                   memtable.NewTable[DataKey, DataValue, DataRow](),
 		mheap:                  mheap,
 		defaultIsolationPolicy: defaultIsolationPolicy,
@@ -132,7 +132,7 @@ func (m *MemHandler) HandleAddTableDef(meta txn.TxnMeta, req txnengine.AddTableD
 			return err
 		}
 		row.Comments = def.Comment
-		if err := m.relations.Update(tx, *row); err != nil {
+		if err := m.relations.Update(tx, row); err != nil {
 			return err
 		}
 
@@ -146,7 +146,7 @@ func (m *MemHandler) HandleAddTableDef(meta txn.TxnMeta, req txnengine.AddTableD
 			return err
 		}
 		row.PartitionDef = def.Partition
-		if err := m.relations.Update(tx, *row); err != nil {
+		if err := m.relations.Update(tx, row); err != nil {
 			return err
 		}
 
@@ -160,7 +160,7 @@ func (m *MemHandler) HandleAddTableDef(meta txn.TxnMeta, req txnengine.AddTableD
 			return err
 		}
 		row.ViewDef = def.View
-		if err := m.relations.Update(tx, *row); err != nil {
+		if err := m.relations.Update(tx, row); err != nil {
 			return err
 		}
 
@@ -179,7 +179,7 @@ func (m *MemHandler) HandleAddTableDef(meta txn.TxnMeta, req txnengine.AddTableD
 			return moerr.NewDuplicate()
 		}
 		// insert
-		attrRow := AttributeRow{
+		attrRow := &AttributeRow{
 			ID:         txnengine.NewID(),
 			RelationID: req.TableID,
 			Order:      maxAttributeOrder + 1,
@@ -205,7 +205,7 @@ func (m *MemHandler) HandleAddTableDef(meta txn.TxnMeta, req txnengine.AddTableD
 			return moerr.NewDuplicate()
 		}
 		// insert
-		idxRow := IndexRow{
+		idxRow := &IndexRow{
 			ID:            txnengine.NewID(),
 			RelationID:    req.TableID,
 			IndexTableDef: *def,
@@ -223,7 +223,7 @@ func (m *MemHandler) HandleAddTableDef(meta txn.TxnMeta, req txnengine.AddTableD
 		for _, prop := range def.Properties {
 			row.Properties[prop.Key] = prop.Value
 		}
-		if err := m.relations.Update(tx, *row); err != nil {
+		if err := m.relations.Update(tx, row); err != nil {
 			return err
 		}
 
@@ -243,7 +243,7 @@ func (m *MemHandler) HandleAddTableDef(meta txn.TxnMeta, req txnengine.AddTableD
 					return nil
 				}
 				row.Primary = isPrimary
-				if err := m.attributes.Update(tx, *row); err != nil {
+				if err := m.attributes.Update(tx, row); err != nil {
 					return err
 				}
 				return nil
@@ -290,7 +290,7 @@ func (m *MemHandler) HandleCreateDatabase(meta txn.TxnMeta, req txnengine.Create
 	}
 
 	id := txnengine.NewID()
-	err = m.databases.Insert(tx, DatabaseRow{
+	err = m.databases.Insert(tx, &DatabaseRow{
 		ID:        id,
 		AccountID: req.AccessInfo.AccountID,
 		Name:      req.Name,
@@ -331,7 +331,7 @@ func (m *MemHandler) HandleCreateRelation(meta txn.TxnMeta, req txnengine.Create
 	}
 
 	// row
-	row := RelationRow{
+	row := &RelationRow{
 		ID:         txnengine.NewID(),
 		DatabaseID: req.DatabaseID,
 		Name:       req.Name,
@@ -397,7 +397,7 @@ func (m *MemHandler) HandleCreateRelation(meta txn.TxnMeta, req txnengine.Create
 			}
 			attr.Primary = isPrimary
 		}
-		attrRow := AttributeRow{
+		attrRow := &AttributeRow{
 			ID:         txnengine.NewID(),
 			RelationID: row.ID,
 			Order:      i + 1,
@@ -411,7 +411,7 @@ func (m *MemHandler) HandleCreateRelation(meta txn.TxnMeta, req txnengine.Create
 
 	// insert relation indexes
 	for _, idx := range relIndexes {
-		idxRow := IndexRow{
+		idxRow := &IndexRow{
 			ID:            txnengine.NewID(),
 			RelationID:    row.ID,
 			IndexTableDef: idx,
@@ -446,7 +446,7 @@ func (m *MemHandler) HandleDelTableDef(meta txn.TxnMeta, req txnengine.DelTableD
 			return err
 		}
 		row.Comments = ""
-		if err := m.relations.Update(tx, *row); err != nil {
+		if err := m.relations.Update(tx, row); err != nil {
 			return err
 		}
 
@@ -492,7 +492,7 @@ func (m *MemHandler) HandleDelTableDef(meta txn.TxnMeta, req txnengine.DelTableD
 		for _, prop := range def.Properties {
 			delete(row.Properties, prop.Key)
 		}
-		if err := m.relations.Update(tx, *row); err != nil {
+		if err := m.relations.Update(tx, row); err != nil {
 			return err
 		}
 
@@ -505,7 +505,7 @@ func (m *MemHandler) HandleDelTableDef(meta txn.TxnMeta, req txnengine.DelTableD
 					return nil
 				}
 				row.Primary = false
-				if err := m.attributes.Update(tx, *row); err != nil {
+				if err := m.attributes.Update(tx, row); err != nil {
 					return err
 				}
 				return nil
@@ -602,11 +602,11 @@ func (m *MemHandler) HandleDelete(meta txn.TxnMeta, req txnengine.DeleteReq, res
 		}
 		for i := 0; i < reqVecLen; i++ {
 			value := vectorAt(req.Vector, i)
-			if attrIndex >= len(*dataValue) {
+			if attrIndex >= len(dataValue) {
 				// attr not in row
 				continue
 			}
-			attrInRow := (*dataValue)[attrIndex]
+			attrInRow := dataValue[attrIndex]
 			if value.Equal(attrInRow) {
 				if err := m.data.Delete(tx, key); err != nil {
 					return err
@@ -661,7 +661,9 @@ func (m *MemHandler) deleteRelationsByDBID(tx *Transaction, dbID ID) error {
 		if err := m.deleteAttributesByRelationID(tx, entry.Value.ID); err != nil {
 			return err
 		}
-		//TODO delete data
+		if err := m.deleteRelationData(tx, entry.Value.ID); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -676,6 +678,27 @@ func (m *MemHandler) deleteAttributesByRelationID(tx *Transaction, relationID ID
 	}
 	for _, entry := range entries {
 		if err := m.attributes.Delete(tx, entry.Key); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (m *MemHandler) deleteRelationData(tx *Transaction, relationID ID) error {
+	iter := m.data.NewIter(tx)
+	defer iter.Close()
+	tableKey := DataKey{
+		tableID: relationID,
+	}
+	for ok := iter.Seek(tableKey); ok; ok = iter.Next() {
+		key, _, err := iter.Read()
+		if err != nil {
+			return err
+		}
+		if key.tableID != relationID {
+			break
+		}
+		if err := m.data.Delete(tx, key); err != nil {
 			return err
 		}
 	}
@@ -984,7 +1007,7 @@ func (m *MemHandler) HandleRead(meta txn.TxnMeta, req txnengine.ReadReq, resp *t
 
 	maxRows := 4096
 	type Row struct {
-		Value       *DataValue
+		Value       DataValue
 		PhysicalRow *memtable.PhysicalRow[DataKey, DataValue]
 	}
 	var rows []Row
@@ -1023,10 +1046,10 @@ func (m *MemHandler) HandleRead(meta txn.TxnMeta, req txnengine.ReadReq, resp *t
 	tx := m.getTx(meta)
 	for _, row := range rows {
 		namedRow := &NamedDataRow{
-			Value:    *row.Value,
+			Value:    row.Value,
 			AttrsMap: iter.AttrsMap,
 		}
-		if err := appendNamedRow(tx, m.mheap, b, namedRow); err != nil {
+		if err := appendNamedRow(tx, m, b, namedRow); err != nil {
 			return err
 		}
 	}
@@ -1048,24 +1071,7 @@ func (m *MemHandler) HandleTruncate(meta txn.TxnMeta, req txnengine.TruncateReq,
 	if errors.Is(err, sql.ErrNoRows) {
 		return moerr.NewNoSuchTable(req.DatabaseName, req.TableName)
 	}
-	iter := m.data.NewIter(tx)
-	defer iter.Close()
-	tableKey := DataKey{
-		tableID: req.TableID,
-	}
-	for ok := iter.Seek(tableKey); ok; ok = iter.Next() {
-		key, _, err := iter.Read()
-		if err != nil {
-			return err
-		}
-		if key.tableID != req.TableID {
-			break
-		}
-		if err := m.data.Delete(tx, key); err != nil {
-			return err
-		}
-	}
-	return nil
+	return m.deleteRelationData(tx, req.TableID)
 }
 
 func (m *MemHandler) HandleUpdate(meta txn.TxnMeta, req txnengine.UpdateReq, resp *txnengine.UpdateResp) error {
