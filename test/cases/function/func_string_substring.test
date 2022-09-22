@@ -174,4 +174,10 @@ drop table t1;
 drop table t2;
 
 
-
+#BLOB
+drop table if exists t1;
+create table t1(a blob);
+insert into t1 values('ab'), ('abc'), ('abcd'), ('abcde');
+SELECT SUBSTRING(a,1,4), LENGTH(a) FROM t1 GROUP BY a;
+SELECT SUBSTRING(a,-1) FROM t1;
+drop table t1;

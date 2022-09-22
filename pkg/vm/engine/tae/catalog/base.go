@@ -15,7 +15,6 @@
 package catalog
 
 import (
-	"errors"
 	"io"
 	"sync"
 
@@ -44,8 +43,6 @@ type BaseEntry interface {
 	GetCurrOp() OpT
 	GetLogIndex() *wal.Index
 
-	Insert(un txnbase.MVCCNode)
-
 	GetNodeLocked() txnbase.MVCCNode
 	IsVisible(ts types.TS, mu *sync.RWMutex) (ok bool, err error)
 
@@ -72,5 +69,3 @@ func CompareUint64(left, right uint64) int {
 	}
 	return 0
 }
-
-var ErrTxnActive = errors.New("txn is active")

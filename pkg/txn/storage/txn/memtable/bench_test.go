@@ -43,7 +43,7 @@ func BenchmarkTable(b *testing.B) {
 		if err != nil {
 			b.Fatal(err)
 		}
-		if *p != i {
+		if p != i {
 			b.Fatal()
 		}
 		entries, err := table.Index(tx, Tuple{

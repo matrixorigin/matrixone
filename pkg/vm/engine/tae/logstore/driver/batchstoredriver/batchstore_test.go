@@ -15,12 +15,12 @@
 package batchstoredriver
 
 import (
-	"fmt"
 	"os"
 	"sync"
 	"testing"
 
 	// "github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/entry"
 	storeEntry "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
@@ -55,7 +55,7 @@ func restartStore(s *baseStore, t *testing.T) *baseStore {
 	tempLsn := uint64(0)
 	err = s.Replay(func(e *entry.Entry) {
 		if e.Lsn < tempLsn {
-			panic(fmt.Errorf("logic error %d<%d", e.Lsn, tempLsn))
+			panic(moerr.NewInternalError("logic error %d<%d", e.Lsn, tempLsn))
 		}
 		tempLsn = e.Lsn
 		_, err = s.Read(e.Lsn)

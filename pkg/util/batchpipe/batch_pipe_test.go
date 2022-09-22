@@ -17,7 +17,6 @@ package batchpipe
 import (
 	"bytes"
 	"context"
-	"errors"
 	"fmt"
 	"sort"
 	"strconv"
@@ -27,6 +26,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
 func waitChTimeout[T any](
@@ -38,7 +39,7 @@ func waitChTimeout[T any](
 	for {
 		select {
 		case <-timeout:
-			return errors.New("timeout")
+			return moerr.NewInternalError("timeout")
 		case item, ok := <-ch:
 			goOn, err := onRecvCheck(item, !ok)
 			if err != nil {
@@ -293,7 +294,7 @@ func TestBaseReminder(t *testing.T) {
 	require.Panics(t, func() { registry.Register("1", 1*ms) })
 	checkOneRecevied := func(_ string, closed bool) (goOn bool, err error) {
 		if closed {
-			err = errors.New("unexpected close")
+			err = moerr.NewInternalError("unexpected close")
 		}
 		return
 	}

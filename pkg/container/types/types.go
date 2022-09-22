@@ -16,8 +16,6 @@ package types
 
 import (
 	"fmt"
-	"strings"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"golang.org/x/exp/constraints"
 )
@@ -88,9 +86,9 @@ type Type struct {
 	// XXX Dummies.  T is uint8, make it 4 bytes aligned, otherwise, it may contain
 	// garbage data.  In theory these unused garbage should not be a problem, but
 	// it is.  Give it a name will zero fill it ...
-	dummy1 uint8
-	dummy2 uint8
-	dummy3 uint8
+	Charset uint8
+	dummy1  uint8
+	dummy2  uint8
 
 	// Width means max Display width for float and double, char and varchar
 	// todo: need to add new attribute DisplayWidth ?
@@ -203,6 +201,18 @@ func New(oid T, width, scale, precision int32) Type {
 		Scale:     scale,
 		Precision: precision,
 		Size:      int32(TypeSize(oid)),
+		Charset:   CharsetType(oid),
+	}
+}
+
+func CharsetType(oid T) uint8 {
+	switch oid {
+	case T_blob:
+		// binary charset
+		return 1
+	default:
+		// utf8 charset
+		return 0
 	}
 }
 
@@ -379,8 +389,6 @@ func (t T) String() string {
 	return fmt.Sprintf("unexpected type: %d", t)
 }
 
-// functions only used to generate pkg/sql/colexec/extend/overload
-
 // OidString returns T string
 func (t T) OidString() string {
 	switch t {
@@ -432,62 +440,6 @@ func (t T) OidString() string {
 		return "T_Rowid"
 	}
 	return "unknown_type"
-}
-
-// GoType returns go type string for T
-func (t T) GoType() string {
-	switch t {
-	case T_bool:
-		return "bool"
-	case T_int64:
-		return "int64"
-	case T_int32:
-		return "int32"
-	case T_int16:
-		return "int16"
-	case T_int8:
-		return "int8"
-	case T_float64:
-		return "float64"
-	case T_float32:
-		return "float32"
-	case T_uint8:
-		return "uint8"
-	case T_uint16:
-		return "uint16"
-	case T_uint32:
-		return "uint32"
-	case T_uint64:
-		return "uint64"
-	case T_char:
-		return "string"
-	case T_varchar:
-		return "string"
-	case T_date:
-		return "date"
-	case T_datetime:
-		return "datetime"
-	case T_timestamp:
-		return "timestamp"
-	case T_decimal64:
-		return "decimal64"
-	case T_decimal128:
-		return "decimal128"
-	case T_blob:
-		return "string"
-	case T_uuid:
-		return "uuid"
-	}
-	return "unknown type"
-}
-
-// GoGoType returns special go type string for T
-func (t T) GoGoType() string {
-	if t == T_char || t == T_varchar || t == T_blob || t == T_json {
-		return "Str"
-	}
-	k := t.GoType()
-	return strings.ToUpper(k[:1]) + k[1:]
 }
 
 // TypeLen returns type's length whose type oid is T

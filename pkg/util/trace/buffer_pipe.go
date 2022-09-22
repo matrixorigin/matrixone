@@ -85,7 +85,7 @@ func (t batchSqlHandler) NewItemBuffer(name string) bp.ItemBuffer[bp.HasName, an
 	case MOErrorType:
 		f = genErrorBatchSql
 	default:
-		panic(fmt.Errorf("unknown type %s", name))
+		panic(moerr.NewInternalError("unknown type %s", name))
 	}
 	opts = append(opts, bufferWithGenBatchFunc(f), bufferWithType(name))
 	opts = append(opts, t.defaultOpts...)
@@ -263,22 +263,22 @@ func genZapLogBatchSql(in []IBuffer2SqlItem, buf *bytes.Buffer) any {
 		}
 
 		buf.WriteString("(")
-		buf.WriteString(fmt.Sprintf(`"%s"`, s.SpanContext.SpanID.String()))
-		buf.WriteString(fmt.Sprintf(`, "%s"`, s.SpanContext.TraceID.String()))
-		buf.WriteString(fmt.Sprintf(`, "%s"`, moNode.NodeUuid))                        // node_uuid
-		buf.WriteString(fmt.Sprintf(`, "%s"`, moNode.NodeType))                        // node_type
-		buf.WriteString(fmt.Sprintf(`, "%s"`, s.Timestamp.Format(timestampFormatter))) // timestamp
-		buf.WriteString(fmt.Sprintf(`, "%s"`, s.LoggerName))                           // name
-		buf.WriteString(fmt.Sprintf(`, "%s"`, s.Level.String()))                       // log level
-		buf.WriteString(fmt.Sprintf(`, "%s"`, s.Caller))                               // caller
-		buf.WriteString(fmt.Sprintf(`, "%s"`, quote(s.Message)))                       // message
-		buf.WriteString(fmt.Sprintf(`, "%s"`, quote(s.Extra)))                         // extra
+		buf.WriteString(fmt.Sprintf(`%q`, s.SpanContext.SpanID.String()))
+		buf.WriteString(fmt.Sprintf(`, %q`, s.SpanContext.TraceID.String()))
+		buf.WriteString(fmt.Sprintf(`, %q`, moNode.NodeUuid))                        // node_uuid
+		buf.WriteString(fmt.Sprintf(`, %q`, moNode.NodeType))                        // node_type
+		buf.WriteString(fmt.Sprintf(`, %q`, s.Timestamp.Format(timestampFormatter))) // timestamp
+		buf.WriteString(fmt.Sprintf(`, %q`, s.LoggerName))                           // name
+		buf.WriteString(fmt.Sprintf(`, %q`, s.Level.String()))                       // log level
+		buf.WriteString(fmt.Sprintf(`, %q`, s.Caller))                               // caller
+		buf.WriteString(fmt.Sprintf(`, %q`, s.Message))                              // message
+		buf.WriteString(fmt.Sprintf(`, %q`, s.Extra))                                // extra
 		buf.WriteString("),")
 	}
 	return string(buf.Next(buf.Len() - 1))
 }
 
-func genStatementBatchSql(in []IBuffer2SqlItem, buf *bytes.Buffer) any {
+var genStatementBatchSql = func(in []IBuffer2SqlItem, buf *bytes.Buffer) any {
 	buf.Reset()
 	if len(in) == 0 {
 		logutil.Debugf("genStatementBatchSql empty")
@@ -290,8 +290,6 @@ func genStatementBatchSql(in []IBuffer2SqlItem, buf *bytes.Buffer) any {
 	buf.WriteString("`statement_id`")
 	buf.WriteString(", `transaction_id`")
 	buf.WriteString(", `session_id`")
-	buf.WriteString(", `tenant_id`")
-	buf.WriteString(", `user_id`")
 	buf.WriteString(", `account`")
 	buf.WriteString(", `user`")
 	buf.WriteString(", `host`")
@@ -302,6 +300,10 @@ func genStatementBatchSql(in []IBuffer2SqlItem, buf *bytes.Buffer) any {
 	buf.WriteString(", `node_uuid`")
 	buf.WriteString(", `node_type`")
 	buf.WriteString(", `request_at`")
+	buf.WriteString(", `response_at`")
+	buf.WriteString(", `status`")
+	buf.WriteString(", `error`")
+	buf.WriteString(", `duration`")
 	buf.WriteString(", `exec_plan`")
 	buf.WriteString(") values ")
 
@@ -312,24 +314,34 @@ func genStatementBatchSql(in []IBuffer2SqlItem, buf *bytes.Buffer) any {
 		if !ok {
 			panic("Not StatementInfo")
 		}
+		s.mux.Lock()
 		buf.WriteString("(")
-		buf.WriteString(fmt.Sprintf(`"%s"`, uuid.UUID(s.StatementID).String()))
-		buf.WriteString(fmt.Sprintf(`, "%s"`, uuid.UUID(s.TransactionID).String()))
-		buf.WriteString(fmt.Sprintf(`, "%s"`, uuid.UUID(s.SessionID).String()))
-		buf.WriteString(fmt.Sprintf(`, %d`, s.TenantID))
-		buf.WriteString(fmt.Sprintf(`, %d`, s.UserID))
-		buf.WriteString(fmt.Sprintf(`, "%s"`, quote(s.Account)))
-		buf.WriteString(fmt.Sprintf(`, "%s"`, quote(s.User)))
-		buf.WriteString(fmt.Sprintf(`, "%s"`, quote(s.Host)))
-		buf.WriteString(fmt.Sprintf(`, "%s"`, quote(s.Database)))
-		buf.WriteString(fmt.Sprintf(`, "%s"`, quote(s.Statement)))
-		buf.WriteString(fmt.Sprintf(`, "%s"`, quote(s.StatementFingerprint)))
-		buf.WriteString(fmt.Sprintf(`, "%s"`, quote(s.StatementTag)))
-		buf.WriteString(fmt.Sprintf(`, "%s"`, moNode.NodeUuid))
-		buf.WriteString(fmt.Sprintf(`, "%s"`, moNode.NodeType))
-		buf.WriteString(fmt.Sprintf(`, "%s"`, nanoSec2DatetimeString(s.RequestAt)))
-		buf.WriteString(fmt.Sprintf(`, "%s"`, quote(s.ExecPlan)))
+		buf.WriteString(fmt.Sprintf(`%q`, uuid.UUID(s.StatementID).String()))
+		buf.WriteString(fmt.Sprintf(`, %q`, uuid.UUID(s.TransactionID).String()))
+		buf.WriteString(fmt.Sprintf(`, %q`, uuid.UUID(s.SessionID).String()))
+		buf.WriteString(fmt.Sprintf(`, %q`, s.Account))
+		buf.WriteString(fmt.Sprintf(`, %q`, s.User))
+		buf.WriteString(fmt.Sprintf(`, %q`, s.Host))
+		buf.WriteString(fmt.Sprintf(`, %q`, s.Database))
+		buf.WriteString(fmt.Sprintf(`, %q`, s.Statement))
+		buf.WriteString(fmt.Sprintf(`, %q`, s.StatementFingerprint))
+		buf.WriteString(fmt.Sprintf(`, %q`, s.StatementTag))
+		buf.WriteString(fmt.Sprintf(`, %q`, moNode.NodeUuid))
+		buf.WriteString(fmt.Sprintf(`, %q`, moNode.NodeType))
+		buf.WriteString(fmt.Sprintf(`, %q`, nanoSec2DatetimeString(s.RequestAt)))
+		buf.WriteString(fmt.Sprintf(`, %q`, nanoSec2DatetimeString(s.ResponseAt)))
+		buf.WriteString(fmt.Sprintf(`, %d`, s.Duration))
+		buf.WriteString(fmt.Sprintf(`, %q`, s.Status.String()))
+		if s.Error == nil {
+			buf.WriteString(`, ""`)
+		} else {
+			buf.WriteString(fmt.Sprintf(`, %q`, s.Error))
+		}
+		buf.WriteString(fmt.Sprintf(`, %q`, s.ExecPlan2Json()))
 		buf.WriteString("),")
+
+		s.exported = true
+		s.mux.Unlock()
 	}
 	return string(buf.Next(buf.Len() - 1))
 }
@@ -399,7 +411,7 @@ func (t batchCSVHandler) NewItemBuffer(name string) bp.ItemBuffer[bp.HasName, an
 		opts = append(opts, bufferWithFilterItemFunc(filterTraceInsertSql))
 	case MOErrorType:
 	default:
-		panic(fmt.Errorf("unknown type %s", name))
+		panic(moerr.NewInternalError("unknown type %s", name))
 	}
 	opts = append(opts, bufferWithGenBatchFunc(f), bufferWithType(name))
 	opts = append(opts, t.defaultOpts...)
@@ -430,7 +442,7 @@ func (t batchCSVHandler) NewItemBatchHandler(ctx context.Context) func(b any) {
 		defer span.End()
 		req, ok := b.(CSVRequest) // see genCsvData
 		if !ok {
-			panic(fmt.Errorf("batchCSVHandler meet unknown type: %v", reflect.ValueOf(b).Type()))
+			panic(moerr.NewInternalError("batchCSVHandler meet unknown type: %v", reflect.ValueOf(b).Type()))
 		}
 		if len(req.content) == 0 {
 			logutil.Warnf("meet empty csv content")
@@ -541,7 +553,7 @@ func newBuffer2Sql(opts ...buffer2SqlOption) *buffer2Sql {
 	b := &buffer2Sql{
 		Reminder:       bp.NewConstantClock(defaultClock),
 		buf:            make([]IBuffer2SqlItem, 0, 10240),
-		sizeThreshold:  1 * MB,
+		sizeThreshold:  10 * MB,
 		filterItemFunc: noopFilterItemFunc,
 		genBatchFunc:   noopGenBatchSQL,
 	}

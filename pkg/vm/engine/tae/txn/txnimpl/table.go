@@ -15,7 +15,6 @@
 package txnimpl
 
 import (
-	"errors"
 	"fmt"
 
 	"github.com/RoaringBitmap/roaring"
@@ -34,7 +33,7 @@ import (
 )
 
 var (
-	ErrDuplicateNode = errors.New("tae: duplicate node")
+	ErrDuplicateNode = moerr.NewInternalError("tae: duplicate node")
 )
 
 type txnTable struct {

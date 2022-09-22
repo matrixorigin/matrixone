@@ -15,8 +15,9 @@
 package db
 
 import (
-	"errors"
 	"fmt"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -26,8 +27,8 @@ import (
 )
 
 var (
-	ErrTaskDuplicated = errors.New("tae task: duplicated task found")
-	ErrTaskNotFound   = errors.New("tae task: task not found")
+	ErrTaskDuplicated = moerr.NewInternalError("tae task: duplicated task found")
+	ErrTaskNotFound   = moerr.NewInternalError("tae task: task not found")
 )
 
 type taskScheduler struct {

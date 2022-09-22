@@ -15,14 +15,23 @@
 package batch
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/agg"
 )
 
 type EncodeBatch struct {
-	Zs    []int64
-	Vecs  []*vector.Vector
-	Attrs []string
+	Zs       []int64
+	Vecs     []*vector.Vector
+	Attrs    []string
+	AggInfos []aggInfo
+}
+
+type aggInfo struct {
+	Op         int
+	Dist       bool
+	inputTypes types.Type
+	Agg        agg.Agg[any]
 }
 
 // Batch represents a part of a relationship
