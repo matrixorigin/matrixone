@@ -83,6 +83,7 @@ func (node *appendableNode) GetDataCopy(maxRow uint32) (columns *containers.Batc
 }
 
 func (node *appendableNode) GetColumnDataCopy(
+	minRow uint32,
 	maxRow uint32,
 	colIdx int,
 	buffer *bytes.Buffer) (vec containers.Vector, err error) {
@@ -94,7 +95,7 @@ func (node *appendableNode) GetColumnDataCopy(
 	if buffer != nil {
 		win := node.data.Vecs[colIdx]
 		if maxRow < uint32(node.data.Vecs[colIdx].Length()) {
-			win = win.Window(0, int(maxRow))
+			win = win.Window(int(minRow), int(maxRow))
 		}
 		vec = containers.CloneWithBuffer(win, buffer, containers.DefaultAllocator)
 	} else {

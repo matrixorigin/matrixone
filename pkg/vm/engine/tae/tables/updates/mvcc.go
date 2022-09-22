@@ -25,6 +25,7 @@ import (
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
@@ -287,7 +288,7 @@ func (n *MVCCHandle) GetTotalRow() uint32 {
 //
 //	would not be increased monotonically.
 func (n *MVCCHandle) getMaxVisibleRowLocked(ts types.TS) (int, uint32, bool, error) {
-	offset, vnode := n.appends.GetNodeToRead(ts)
+	offset, vnode := n.appends.GetNodeToReadByPrepareTS(ts)
 	if vnode == nil {
 		return 0, 0, false, nil
 	}
@@ -295,4 +296,58 @@ func (n *MVCCHandle) getMaxVisibleRowLocked(ts types.TS) (int, uint32, bool, err
 	node.RLock()
 	defer node.RUnlock()
 	return offset, node.GetMaxRow(), true, nil
+}
+
+func (n *MVCCHandle) CollectAppend(start, end types.TS) (minRow, maxRow uint32, commitTSVec, abortVec containers.Vector) {
+	startOffset, node := n.appends.GetNodeToReadByPrepareTS(start)
+	if node != nil && node.GetPrepare().Less(start) {
+		startOffset++
+	}
+	minRow = n.appends.GetNodeByOffset(startOffset).(*AppendNode).startRow
+	endOffset, node := n.appends.GetNodeToReadByPrepareTS(end)
+	if node == nil {
+		return 0, 0, nil, nil
+	}
+	maxRow = node.(*AppendNode).maxRow
+
+	commitTSVec = containers.MakeVector(types.T_TS.ToType(), true)
+	abortVec = containers.MakeVector(types.T_bool.ToType(), true)
+	n.appends.LoopOffsetRange(
+		startOffset,
+		endOffset,
+		func(m txnbase.MVCCNode) bool {
+			n := m.(*AppendNode)
+			n.GetTxn().GetTxnState(true) //todo rwlock
+			for i := 0; i < int(n.maxRow-n.startRow+1); i++ {
+				commitTSVec.Append(n.GetCommitTS())
+				abortVec.Append(n.abort)
+			}
+			return false
+		})
+	return
+}
+
+func (n *MVCCHandle) CollectDelete(rawPkVec containers.Vector, start, end types.TS) (pkVec, rowIDVec, commitTSVec, abortVec containers.Vector) {
+	if rawPkVec != nil {
+		pkVec = containers.MakeVector(rawPkVec.GetType(), rawPkVec.Nullable())
+	}
+	rowIDVec = containers.MakeVector(types.T_uint32.ToType(), true)
+	commitTSVec = containers.MakeVector(types.T_TS.ToType(), true)
+	abortVec = containers.MakeVector(types.T_bool.ToType(), true)
+	n.deletes.LoopChain(
+		func(m txnbase.MVCCNode) bool {
+			n := m.(*DeleteNode)
+			it := n.mask.Iterator()
+			for it.HasNext() {
+				row := it.Next()
+				if rawPkVec != nil {
+					pkVec.Append(rawPkVec.Get(int(row)))
+				}
+				rowIDVec.Append(row)
+				commitTSVec.Append(n.GetEnd())
+				abortVec.Append(n.abort)
+			}
+			return true
+		})
+	return
 }

@@ -512,7 +512,7 @@ func (blk *dataBlock) ResolveABlkColumnMVCCData(
 
 	view = model.NewColumnView(ts, colIdx)
 	var data containers.Vector
-	data, err = blk.node.GetColumnDataCopy(maxRow, colIdx, buffer)
+	data, err = blk.node.GetColumnDataCopy(0, maxRow, colIdx, buffer)
 	if err != nil {
 		return
 	}
@@ -904,4 +904,58 @@ func (blk *dataBlock) GetSortColumns(schema *catalog.Schema, data *containers.Ba
 		vs[i] = data.Vecs[schema.SortKey.Defs[i].Idx]
 	}
 	return vs
+}
+
+const (
+	attrCommitTs = "commit_ts"
+	attrAborted  = "aborted"
+)
+
+// data, commit ts, abort
+func (blk *dataBlock) CollectInsert(start, end types.TS, schema *catalog.Schema, buffer *bytes.Buffer) *containers.Batch {
+	batch := containers.NewBatch()
+
+	//collect range
+	minRow, maxRow, commitTSVec, abortVec := blk.mvcc.CollectAppend(start, end)
+	attrs := schema.Attrs()
+	for i, attr := range attrs {
+		vec, err := blk.node.GetColumnDataCopy(minRow, maxRow, i, buffer)
+		if err != nil {
+			return nil
+		}
+		batch.AddVector(attr, vec)
+	}
+	batch.AddVector(attrCommitTs, commitTSVec)
+	batch.AddVector(attrAborted, abortVec)
+	return batch
+}
+
+// (pk), rowid, commit ts, abort
+func (blk *dataBlock) CollectDelete(start, end types.TS, buffer *bytes.Buffer) (*containers.Batch, error) {
+	schema := blk.meta.GetSchema()
+	var rawPk containers.Vector
+	var err error
+	if schema.IsSinglePK() {
+		rawPk, err = blk.LoadColumnData(schema.GetSingleSortKeyIdx(), buffer)
+		if err != nil {
+			return nil, err
+		}
+	} else if blk.meta.GetSchema().IsCompoundPK() {
+		cols := make([]containers.Vector, 0)
+		for _, def := range schema.SortKey.Defs {
+			col, err := blk.LoadColumnData(def.Idx, buffer)
+			if err != nil {
+				return nil, err
+			}
+			cols = append(cols, col)
+		}
+		rawPk = model.EncodeCompoundColumn(cols...)
+	}
+	pk, rowID, ts, abort := blk.mvcc.CollectDelete(rawPk, start, end)
+	batch := containers.NewBatch()
+	batch.AddVector("pk", pk)
+	batch.AddVector("rowID", rowID)
+	batch.AddVector("ts", ts)
+	batch.AddVector("abort", abort)
+	return batch, nil
 }
