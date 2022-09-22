@@ -1751,7 +1751,7 @@ func (mp *MysqlProtocolImpl) makeResultSetBinaryRow(data []byte, mrs *MysqlResul
 			} else {
 				data = mp.appendDate(data, value.(types.Date))
 			}
-		case defines.MYSQL_TYPE_DATETIME:
+		case defines.MYSQL_TYPE_DATETIME, defines.MYSQL_TYPE_TIMESTAMP:
 			if value, err := mrs.GetString(rowIdx, i); err != nil {
 				return nil, err
 			} else {
@@ -1769,12 +1769,12 @@ func (mp *MysqlProtocolImpl) makeResultSetBinaryRow(data []byte, mrs *MysqlResul
 					data = mp.appendDatetime(data, dt)
 				}
 			}
-		case defines.MYSQL_TYPE_TIMESTAMP:
-			if value, err := mrs.GetString(rowIdx, i); err != nil {
-				return nil, err
-			} else {
-				data = mp.appendStringLenEnc(data, value)
-			}
+		// case defines.MYSQL_TYPE_TIMESTAMP:
+		// 	if value, err := mrs.GetString(rowIdx, i); err != nil {
+		// 		return nil, err
+		// 	} else {
+		// 		data = mp.appendStringLenEnc(data, value)
+		// 	}
 		default:
 			return nil, moerr.NewInternalError("type is not supported in binary text result row")
 		}
