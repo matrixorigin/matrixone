@@ -919,8 +919,8 @@ func (blk *dataBlock) CollectInsert(start, end types.TS, buffer *bytes.Buffer) *
 		}
 		batch.AddVector(attr, vec)
 	}
-	batch.AddVector("commit_ts", commitTSVec)
-	batch.AddVector("aborted", abortVec)
+	batch.AddVector(catalog.AttrCommitTs, commitTSVec)
+	batch.AddVector(catalog.AttrAborted, abortVec)
 	return batch
 }
 
@@ -954,7 +954,7 @@ func (blk *dataBlock) CollectDelete(start, end types.TS, buffer *bytes.Buffer) (
 		batch.AddVector(schema.GetSingleSortKey().Name, pk)
 	}
 	batch.AddVector(catalog.PhyAddrColumnName, rowID)
-	batch.AddVector("commit_ts", ts)
-	batch.AddVector("aborted", abort)
+	batch.AddVector(catalog.AttrCommitTs, ts)
+	batch.AddVector(catalog.AttrAborted, abort)
 	return batch, nil
 }
