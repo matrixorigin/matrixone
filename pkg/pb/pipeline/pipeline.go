@@ -15,7 +15,7 @@
 package pipeline
 
 import (
-	"errors"
+	errors2 "errors"
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
@@ -78,7 +78,7 @@ func DecodeMessageError(m *Message) error {
 			return err
 		} else {
 			// handle errors returned by calling methods provided by third-party libraries or go language official libraries.
-			return errors.New(string(errData))
+			return errors2.New(string(errData))
 		}
 	}
 	return nil
