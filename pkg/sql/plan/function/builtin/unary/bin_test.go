@@ -17,7 +17,6 @@ package unary
 import (
 	"testing"
 
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
@@ -259,17 +258,3 @@ func TestBinNegativeInt(t *testing.T) {
 		"1111111111111111111111111111111111111111111111111111111110000000"}, tempC)
 }
 
-func TestBinEmpty(t *testing.T) {
-	procs := testutil.NewProc()
-
-	as := []float64{}
-	vecs := make([]*vector.Vector, 1)
-	vecs[0] = testutil.MakeFloat64Vector(as, nil)
-
-	resultV, err := BinFloat[float64](vecs, procs)
-	resultC := vector.MustTCols[types.Varlena](resultV)
-	if err != nil {
-		panic(err)
-	}
-	require.Equal(t, []types.Varlena{}, resultC)
-}
