@@ -405,6 +405,7 @@ var functionIdRegister = map[string]int32{
 	"load_file":               LOAD_FILE,
 	"hex":                     HEX,
 	"serial":                  SERIAL,
+	"hash_value":              HASH,
 	"bin":                     BIN,
 }
 
