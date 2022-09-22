@@ -27,7 +27,7 @@ import (
 
 func TestCreate(t *testing.T) {
 	store := NewMemTaskStorage()
-	s := NewTaskService(store)
+	s := NewTaskService(store, nil)
 	defer func() {
 		assert.NoError(t, s.Close())
 	}()
@@ -52,7 +52,7 @@ func TestCreate(t *testing.T) {
 
 func TestCreateBatch(t *testing.T) {
 	store := NewMemTaskStorage()
-	s := NewTaskService(store)
+	s := NewTaskService(store, nil)
 	defer func() {
 		assert.NoError(t, s.Close())
 	}()
@@ -86,7 +86,7 @@ func TestCreateBatch(t *testing.T) {
 
 func TestAllocate(t *testing.T) {
 	store := NewMemTaskStorage()
-	s := NewTaskService(store)
+	s := NewTaskService(store, nil)
 	defer func() {
 		assert.NoError(t, s.Close())
 	}()
@@ -107,7 +107,7 @@ func TestAllocate(t *testing.T) {
 
 func TestReAllocate(t *testing.T) {
 	store := NewMemTaskStorage()
-	s := NewTaskService(store)
+	s := NewTaskService(store, nil)
 	defer func() {
 		assert.NoError(t, s.Close())
 	}()
@@ -137,7 +137,7 @@ func TestReAllocate(t *testing.T) {
 
 func TestAllocateWithNotExistTask(t *testing.T) {
 	store := NewMemTaskStorage()
-	s := NewTaskService(store)
+	s := NewTaskService(store, nil)
 	defer func() {
 		assert.NoError(t, s.Close())
 	}()
@@ -151,7 +151,7 @@ func TestAllocateWithNotExistTask(t *testing.T) {
 
 func TestAllocateWithInvalidEpoch(t *testing.T) {
 	store := NewMemTaskStorage().(*memTaskStorage)
-	s := NewTaskService(store)
+	s := NewTaskService(store, nil)
 	defer func() {
 		assert.NoError(t, s.Close())
 	}()
@@ -177,7 +177,7 @@ func TestAllocateWithInvalidEpoch(t *testing.T) {
 
 func TestCompleted(t *testing.T) {
 	store := NewMemTaskStorage()
-	s := NewTaskService(store)
+	s := NewTaskService(store, nil)
 	defer func() {
 		assert.NoError(t, s.Close())
 	}()
@@ -200,7 +200,7 @@ func TestCompleted(t *testing.T) {
 
 func TestCompletedWithInvalidStatus(t *testing.T) {
 	store := NewMemTaskStorage()
-	s := NewTaskService(store)
+	s := NewTaskService(store, nil)
 	defer func() {
 		assert.NoError(t, s.Close())
 	}()
@@ -222,9 +222,8 @@ func TestCompletedWithInvalidStatus(t *testing.T) {
 }
 
 func TestCompletedWithInvalidEpoch(t *testing.T) {
-	t.Skip("Skip due to error refactor work")
 	store := NewMemTaskStorage()
-	s := NewTaskService(store)
+	s := NewTaskService(store, nil)
 	defer func() {
 		assert.NoError(t, s.Close())
 	}()
@@ -248,7 +247,7 @@ func TestCompletedWithInvalidEpoch(t *testing.T) {
 
 func TestCompletedWithInvalidTaskRunner(t *testing.T) {
 	store := NewMemTaskStorage()
-	s := NewTaskService(store)
+	s := NewTaskService(store, nil)
 	defer func() {
 		assert.NoError(t, s.Close())
 	}()
@@ -268,7 +267,7 @@ func TestCompletedWithInvalidTaskRunner(t *testing.T) {
 
 func TestHeartbeat(t *testing.T) {
 	store := NewMemTaskStorage()
-	s := NewTaskService(store)
+	s := NewTaskService(store, nil)
 	defer func() {
 		assert.NoError(t, s.Close())
 	}()
@@ -291,7 +290,7 @@ func TestHeartbeat(t *testing.T) {
 
 func TestHeartbeatWithSmallEpoch(t *testing.T) {
 	store := NewMemTaskStorage()
-	s := NewTaskService(store)
+	s := NewTaskService(store, nil)
 	defer func() {
 		assert.NoError(t, s.Close())
 	}()
@@ -314,7 +313,7 @@ func TestHeartbeatWithSmallEpoch(t *testing.T) {
 
 func TestHeartbeatWithBiggerEpochShouldSuccess(t *testing.T) {
 	store := NewMemTaskStorage()
-	s := NewTaskService(store)
+	s := NewTaskService(store, nil)
 	defer func() {
 		assert.NoError(t, s.Close())
 	}()
@@ -336,7 +335,7 @@ func TestHeartbeatWithBiggerEpochShouldSuccess(t *testing.T) {
 
 func TestCreateCronTask(t *testing.T) {
 	store := NewMemTaskStorage()
-	s := NewTaskService(store)
+	s := NewTaskService(store, nil)
 	defer func() {
 		assert.NoError(t, s.Close())
 	}()
@@ -349,7 +348,7 @@ func TestCreateCronTask(t *testing.T) {
 
 func TestQueryCronTask(t *testing.T) {
 	store := NewMemTaskStorage()
-	s := NewTaskService(store)
+	s := NewTaskService(store, nil)
 	defer func() {
 		assert.NoError(t, s.Close())
 	}()
@@ -368,7 +367,7 @@ func TestQueryCronTask(t *testing.T) {
 
 func TestQueryTask(t *testing.T) {
 	store := NewMemTaskStorage()
-	s := NewTaskService(store)
+	s := NewTaskService(store, nil)
 	defer func() {
 		assert.NoError(t, s.Close())
 	}()

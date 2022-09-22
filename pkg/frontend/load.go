@@ -18,7 +18,6 @@ import (
 	"context"
 	"encoding/csv"
 	"errors"
-	"fmt"
 	"math"
 	"os"
 	"runtime"
@@ -338,14 +337,14 @@ func initParseLineHandler(requestCtx context.Context, handler *ParseLineHandler)
 			case *tree.UnresolvedName:
 				tid, ok := tableName2ColumnId[realCol.Parts[0]]
 				if !ok {
-					return fmt.Errorf("no such column %s", realCol.Parts[0])
+					return moerr.NewInternalError("no such column %s", realCol.Parts[0])
 				}
 				dataColumnId2TableColumnId[i] = tid
 			case *tree.VarExpr:
 				//NOTE:variable like '@abc' will be passed by.
 				dataColumnId2TableColumnId[i] = -1
 			default:
-				return fmt.Errorf("unsupported column type %v", realCol)
+				return moerr.NewInternalError("unsupported column type %v", realCol)
 			}
 		}
 	}
@@ -588,7 +587,7 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool, 
 						} else if field == "false" || field == "0" {
 							cols[rowIdx] = false
 						} else {
-							return fmt.Errorf("the input value '%s' is not bool type", field)
+							return moerr.NewInternalError("the input value '%s' is not bool type", field)
 						}
 					}
 				case types.T_int8:
@@ -1050,7 +1049,7 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool, 
 						} else if field == "false" || field == "0" {
 							cols[i] = false
 						} else {
-							return fmt.Errorf("the input value '%s' is not bool type", field)
+							return moerr.NewInternalError("the input value '%s' is not bool type", field)
 						}
 					}
 				}
@@ -1586,7 +1585,7 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool, 
 	//
 	//	if minLen != maxLen{
 	//		logutil.Errorf("vector length mis equal %d %d",minLen,maxLen)
-	//		return fmt.Errorf("vector length mis equal %d %d",minLen,maxLen)
+	//		return moerr.NewInternalError("vector length mis equal %d %d",minLen,maxLen)
 	//	}
 	//}
 
@@ -1615,7 +1614,7 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool, 
 	}
 
 	if allFetchCnt != countOfLineArray {
-		return fmt.Errorf("allFetchCnt %d != countOfLineArray %d ", allFetchCnt, countOfLineArray)
+		return moerr.NewInternalError("allFetchCnt %d != countOfLineArray %d ", allFetchCnt, countOfLineArray)
 	}
 	return nil
 }

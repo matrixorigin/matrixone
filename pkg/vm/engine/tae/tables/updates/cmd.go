@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"io"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
@@ -120,7 +121,7 @@ func (c *UpdateCmd) Desc() string {
 	} else if c.cmdType == txnbase.CmdDelete {
 		return fmt.Sprintf("CmdName=Delete;Dest=%s;%s;CSN=%d", c.dest.BlockString(), c.delete.GeneralDesc(), c.ID)
 	}
-	panic(fmt.Errorf("unknown cmd type: %d", c.cmdType))
+	panic(moerr.NewInternalError("unknown cmd type: %d", c.cmdType))
 }
 
 func (c *UpdateCmd) String() string {
@@ -131,7 +132,7 @@ func (c *UpdateCmd) String() string {
 	} else if c.cmdType == txnbase.CmdDelete {
 		return fmt.Sprintf("CmdName=Delete;Dest=%s;%s;CSN=%d", c.dest.BlockString(), c.delete.GeneralString(), c.ID)
 	}
-	panic(fmt.Errorf("unknown cmd type: %d", c.cmdType))
+	panic(moerr.NewInternalError("unknown cmd type: %d", c.cmdType))
 }
 
 func (c *UpdateCmd) VerboseString() string {
@@ -142,7 +143,7 @@ func (c *UpdateCmd) VerboseString() string {
 	} else if c.cmdType == txnbase.CmdDelete {
 		return fmt.Sprintf("CmdName=Delete;Dest=%s;CSN=%d;%s", c.dest.BlockString(), c.ID, c.delete.GeneralVerboseString())
 	}
-	panic(fmt.Errorf("unknown cmd type: %d", c.cmdType))
+	panic(moerr.NewInternalError("unknown cmd type: %d", c.cmdType))
 }
 
 func (c *UpdateCmd) GetType() int16 { return c.cmdType }

@@ -343,7 +343,7 @@ func vectorAt(vec *vector.Vector, i int) (value Nullable) {
 
 	}
 
-	panic(fmt.Errorf("unknown column type: %v", vec.Typ))
+	panic(fmt.Sprintf("unknown column type: %v", vec.Typ))
 }
 
 func vectorAppend(vec *vector.Vector, value Nullable, heap *mheap.Mheap) {
@@ -359,16 +359,17 @@ func vectorAppend(vec *vector.Vector, value Nullable, heap *mheap.Mheap) {
 
 func appendNamedRow(
 	tx *Transaction,
-	heap *mheap.Mheap,
+	handler *MemHandler,
 	bat *batch.Batch,
 	row NamedRow,
 ) error {
+	row.SetHandler(handler)
 	for i, name := range bat.Attrs {
 		value, err := row.AttrByName(tx, name)
 		if err != nil {
 			return err
 		}
-		vectorAppend(bat.Vecs[i], value, heap)
+		vectorAppend(bat.Vecs[i], value, handler.mheap)
 	}
 	return nil
 }

@@ -94,6 +94,12 @@ message CNStoreHeartbeat {
   metadata.CNRole Role           = 3;
 }
 
+
+// CNAllocateID is the periodic message sent tp the HAKeeper by CN stores.
+message CNAllocateID {
+  uint64 Batch = 1;
+}
+
 // LogStoreHeartbeat is the periodic message sent to the HAKeeper by Log Stores.
 message LogStoreHeartbeat {
   // UUID is the uuid of the Log Store.
@@ -155,6 +161,7 @@ enum MethodType {
   CHECK_HAKEEPER = 10;
   GET_CLUSTER_DETAILS = 11;
   GET_SHARD_INFO = 12;
+  CN_ALLOCATE_ID = 13;
 };
 
 enum RecordType {
@@ -192,12 +199,17 @@ message Request {
   CNStoreHeartbeat CNHeartbeat   = 5;
   DNStoreHeartbeat DNHeartbeat   = 6;
   TsoRequest TsoRequest          = 7;
+  CNAllocateID CNAllocateID      = 8;
 };
 
 message LogResponse {
   uint64 ShardID      = 1;
   uint64 Lsn          = 2;
   uint64 LastLsn      = 3;
+}
+
+message AllocateIDResponse {
+  uint64 FirstID = 1;
 }
 
 message Response {
@@ -211,6 +223,7 @@ message Response {
   TsoResponse TsoResponse        = 8;
   ClusterDetails ClusterDetails  = 9;
   ShardInfoQueryResult ShardInfo = 10;
+  AllocateIDResponse AllocateID  = 11;
 };
 
 message LogRecordResponse {
