@@ -15,7 +15,6 @@
 package db
 
 import (
-
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"io"
 	"runtime"

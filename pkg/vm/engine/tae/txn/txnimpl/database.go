@@ -15,7 +15,6 @@
 package txnimpl
 
 import (
-	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"sync"
 
