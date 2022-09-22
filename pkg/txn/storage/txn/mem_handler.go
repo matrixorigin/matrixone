@@ -661,7 +661,9 @@ func (m *MemHandler) deleteRelationsByDBID(tx *Transaction, dbID ID) error {
 		if err := m.deleteAttributesByRelationID(tx, entry.Value.ID); err != nil {
 			return err
 		}
-		//TODO delete data
+		if err := m.deleteRelationData(tx, entry.Value.ID); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -676,6 +678,27 @@ func (m *MemHandler) deleteAttributesByRelationID(tx *Transaction, relationID ID
 	}
 	for _, entry := range entries {
 		if err := m.attributes.Delete(tx, entry.Key); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (m *MemHandler) deleteRelationData(tx *Transaction, relationID ID) error {
+	iter := m.data.NewIter(tx)
+	defer iter.Close()
+	tableKey := DataKey{
+		tableID: relationID,
+	}
+	for ok := iter.Seek(tableKey); ok; ok = iter.Next() {
+		key, _, err := iter.Read()
+		if err != nil {
+			return err
+		}
+		if key.tableID != relationID {
+			break
+		}
+		if err := m.data.Delete(tx, key); err != nil {
 			return err
 		}
 	}
@@ -1048,24 +1071,7 @@ func (m *MemHandler) HandleTruncate(meta txn.TxnMeta, req txnengine.TruncateReq,
 	if errors.Is(err, sql.ErrNoRows) {
 		return moerr.NewNoSuchTable(req.DatabaseName, req.TableName)
 	}
-	iter := m.data.NewIter(tx)
-	defer iter.Close()
-	tableKey := DataKey{
-		tableID: req.TableID,
-	}
-	for ok := iter.Seek(tableKey); ok; ok = iter.Next() {
-		key, _, err := iter.Read()
-		if err != nil {
-			return err
-		}
-		if key.tableID != req.TableID {
-			break
-		}
-		if err := m.data.Delete(tx, key); err != nil {
-			return err
-		}
-	}
-	return nil
+	return m.deleteRelationData(tx, req.TableID)
 }
 
 func (m *MemHandler) HandleUpdate(meta txn.TxnMeta, req txnengine.UpdateReq, resp *txnengine.UpdateResp) error {
