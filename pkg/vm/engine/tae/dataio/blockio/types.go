@@ -16,6 +16,8 @@ package blockio
 
 import (
 	"fmt"
+	"strconv"
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 )
@@ -35,4 +37,49 @@ func EncodeBlkName(id *common.ID) (name string) {
 func EncodeSegName(id *common.ID) (name string) {
 	basename := fmt.Sprintf("%d-%d.%s", id.TableID, id.SegmentID, SegmentExt)
 	return basename
+}
+
+func DecodeName(name string) []string {
+	fileName := strings.Split(name, ".")
+	info := strings.Split(fileName[0], "-")
+	return info
+}
+
+func DecodeBlkName(name string) (id *common.ID, err error) {
+	info := DecodeName(name)
+	tid, err := strconv.ParseUint(info[0], 10, 32)
+	if err != nil {
+		return
+	}
+	sid, err := strconv.ParseUint(info[1], 10, 32)
+	if err != nil {
+		return
+	}
+	bid, err := strconv.ParseUint(info[2], 10, 32)
+	if err != nil {
+		return
+	}
+	id = &common.ID{
+		TableID:   tid,
+		SegmentID: sid,
+		BlockID:   bid,
+	}
+	return
+}
+
+func DecodeSegName(name string) (id *common.ID, err error) {
+	info := DecodeName(name)
+	tid, err := strconv.ParseUint(info[0], 10, 32)
+	if err != nil {
+		return
+	}
+	sid, err := strconv.ParseUint(info[1], 10, 32)
+	if err != nil {
+		return
+	}
+	id = &common.ID{
+		TableID:   tid,
+		SegmentID: sid,
+	}
+	return
 }

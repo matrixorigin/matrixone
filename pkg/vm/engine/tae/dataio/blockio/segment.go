@@ -20,11 +20,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"os"
 	"path"
-	"strconv"
-	"strings"
 	"sync"
-
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -35,22 +31,25 @@ type ObjectFactory struct {
 	Fs *objectio.ObjectFS
 }
 
+func NewObjectFactory(dirname string) file.SegmentFactory {
+	serviceDir := path.Join(dirname, "data")
+	service := objectio.TmpNewFileservice(path.Join(dirname, "data"))
+	SegmentFactory := &ObjectFactory{
+		Fs: objectio.NewObjectFS(service, serviceDir),
+	}
+	return SegmentFactory
+}
+
 func (factory *ObjectFactory) EncodeName(id uint64) string {
 	return ""
 }
 
-func (factory *ObjectFactory) DecodeName(name string) (id uint64, err error) {
-	trimmed := strings.TrimSuffix(name, ".seg")
-	if trimmed == name {
-		err = moerr.NewInternalError("%v: %s", file.ErrInvalidName, name)
-		return
-	}
-	info := strings.Split(trimmed, "-")
-	id, err = strconv.ParseUint(info[1], 10, 64)
+func (factory *ObjectFactory) DecodeName(name string) (uint64, error) {
+	id, err := DecodeSegName(name)
 	if err != nil {
-		err = moerr.NewInternalError("%v: %s", file.ErrInvalidName, name)
+		return 0, err
 	}
-	return
+	return id.SegmentID, err
 }
 
 func (factory *ObjectFactory) Build(dir string, id, tid uint64, fs *objectio.ObjectFS) file.Segment {

@@ -27,24 +27,7 @@ type ObjectFS struct {
 	Writer  map[string]Writer
 }
 
-type Attr struct {
-	algo uint8
-	dir  string
-}
-
-func NewObjectFS(service fileservice.FileService) *ObjectFS {
-	fs := &ObjectFS{
-		Service: service,
-		Writer:  make(map[string]Writer),
-	}
-	return fs
-}
-
-func (o *ObjectFS) SetDir(dir string) {
-	if o.Dir != "" {
-		return
-	}
-	o.Dir = dir
+func TmpNewFileservice(dir string) fileservice.FileService {
 	c := fileservice.Config{
 		Name:    "LOCAL",
 		Backend: "DISK",
@@ -54,7 +37,16 @@ func (o *ObjectFS) SetDir(dir string) {
 	if err != nil {
 		panic(any(fmt.Sprintf("NewFileService failed: %s", err.Error())))
 	}
-	o.Service = service
+	return service
+}
+
+func NewObjectFS(service fileservice.FileService, dir string) *ObjectFS {
+	fs := &ObjectFS{
+		Service: service,
+		Writer:  make(map[string]Writer),
+		Dir:     dir,
+	}
+	return fs
 }
 
 func (o *ObjectFS) GetWriter(name string) (Writer, error) {
