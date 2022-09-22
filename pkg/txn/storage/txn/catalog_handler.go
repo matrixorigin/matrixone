@@ -33,8 +33,6 @@ import (
 	txnengine "github.com/matrixorigin/matrixone/pkg/vm/engine/txn"
 )
 
-//TODO system table accessing for non-sys account
-
 // CatalogHandler handles read-only requests for catalog
 type CatalogHandler struct {
 	upstream       *MemHandler
