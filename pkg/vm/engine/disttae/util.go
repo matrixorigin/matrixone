@@ -53,39 +53,64 @@ func checkExprIsMonotonical(expr *plan.Expr) bool {
 	}
 }
 
-func replaceColumnWithZonemap(expr *plan.Expr, blkInfo BlockMeta, minOrMax MinOrMax) *plan.Expr {
+func getColumnsByExpr(expr *plan.Expr, columns *[]int32) {
+	switch exprImpl := expr.Expr.(type) {
+	case *plan.Expr_F:
+		for _, arg := range exprImpl.F.Args {
+			getColumnsByExpr(arg, columns)
+		}
+	case *plan.Expr_Col:
+		idx := exprImpl.Col.ColPos
+		*columns = append(*columns, idx)
+	}
+}
+
+func decodeMinMaxFromZonemap(typ types.T, value []byte) *plan.Expr {
+	// TODO need decoder to decode the []byte to target type
+	if typ.ToType().IsIntOrUint() {
+		intVal := int64(binary.LittleEndian.Uint64(value))
+		return plan2.MakePlan2Int64ConstExprWithType(intVal)
+
+	} else if typ.ToType().IsFloat() {
+		bits := binary.LittleEndian.Uint64(value)
+		floatVal := math.Float64frombits(bits)
+		return plan2.MakePlan2Float64ConstExprWithType(floatVal)
+
+	} else {
+		// TODO other type decode as what??
+		strVal := string(value)
+		return plan2.MakePlan2StringConstExprWithType(strVal)
+	}
+}
+
+func getZonemapByExprAndMeta(columns []int32, meta BlockMeta) map[int32][]*plan.Expr {
+	exprs := make(map[int32][]*plan.Expr, len(columns))
+	for _, column := range columns {
+		columnMeta := meta.columns[column]
+		typ := types.T(columnMeta.typ)
+
+		exprs[column] = []*plan.Expr{
+			decodeMinMaxFromZonemap(typ, columnMeta.zoneMap.min),
+			decodeMinMaxFromZonemap(typ, columnMeta.zoneMap.max),
+		}
+	}
+
+	return exprs
+}
+
+func replaceColumnWithZonemap(expr *plan.Expr, columnIdx int32, columnExpr *plan.Expr) *plan.Expr {
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_F:
 		for i, arg := range exprImpl.F.Args {
-			exprImpl.F.Args[i] = replaceColumnWithZonemap(arg, blkInfo, minOrMax)
+			exprImpl.F.Args[i] = replaceColumnWithZonemap(arg, columnIdx, columnExpr)
 		}
 		return expr
 	case *plan.Expr_Col:
 		idx := exprImpl.Col.ColPos
-
-		var val []byte
-		if minOrMax == MinOrMax_Max {
-			val = blkInfo.columns[idx].zoneMap.max
-		} else {
-			val = blkInfo.columns[idx].zoneMap.min
+		if idx == columnIdx {
+			return columnExpr
 		}
-
-		// TODO need decoder to decode the []byte to target type
-		typ := types.T(blkInfo.columns[idx].typ)
-		if typ.ToType().IsIntOrUint() {
-			intVal := int64(binary.LittleEndian.Uint64(val))
-			return plan2.MakePlan2Int64ConstExprWithType(intVal)
-
-		} else if typ.ToType().IsFloat() {
-			bits := binary.LittleEndian.Uint64(val)
-			floatVal := math.Float64frombits(bits)
-			return plan2.MakePlan2Float64ConstExprWithType(floatVal)
-
-		} else {
-			// TODO other type decode as what??
-			strVal := string(val)
-			return plan2.MakePlan2StringConstExprWithType(strVal)
-		}
+		return expr
 
 	default:
 		return expr

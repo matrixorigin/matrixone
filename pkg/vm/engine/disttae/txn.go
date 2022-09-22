@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
@@ -200,17 +201,27 @@ func (txn *Transaction) readTable(ctx context.Context, databaseId uint64, tableI
 	bats := make([]*batch.Batch, 0, len(blkInfos))
 
 	isMonotonically := checkExprIsMonotonical(expr)
-
-	for _, blkInfo := range blkInfos {
-		if isMonotonically || !needRead(expr, blkInfo) {
-			continue
+	if isMonotonically {
+		for _, blkInfo := range blkInfos {
+			if !needRead(expr, blkInfo) {
+				continue
+			}
+			bat, err := blockRead(ctx, columns, blkInfo)
+			if err != nil {
+				return nil, err
+			}
+			bats = append(bats, bat)
 		}
-		bat, err := blockRead(ctx, columns, blkInfo)
-		if err != nil {
-			return nil, err
+	} else {
+		for _, blkInfo := range blkInfos {
+			bat, err := blockRead(ctx, columns, blkInfo)
+			if err != nil {
+				return nil, err
+			}
+			bats = append(bats, bat)
 		}
-		bats = append(bats, bat)
 	}
+
 	rds, err := txn.db.NewReader(ctx, 1, expr, dnList, databaseId,
 		tableId, txn.meta.SnapshotTS, writes)
 	if err != nil {
@@ -232,9 +243,30 @@ func needRead(expr *plan.Expr, blkInfo BlockMeta) bool {
 	bat.Zs = []int64{1}
 	var err error
 
+	var columns []int32
+	getColumnsByExpr(expr, &columns)
+
+	// if expr match no columns, just eval expr
+	if len(columns) == 0 {
+		ifNeed, err := evalFilterExpr(expr, bat)
+		if err != nil {
+			return true
+		}
+		return ifNeed
+	}
+
+	// we take columns[0] for base, test expr by columns[0].min/max with other columns
+	minMaxExprs := getZonemapByExprAndMeta(columns, blkInfo)
+	baseColumn := columns[0]
+	baseMin := minMaxExprs[baseColumn][0]
+	baseMax := minMaxExprs[baseColumn][1]
+	delete(minMaxExprs, baseColumn)
+	// we build vectors for other columns
+	// buildVectors :=
+
 	// 1. eval expr with min, if true return true
-	tmpExpr := plan.DeepCopyExpr(expr)
-	tmpExpr = replaceColumnWithZonemap(tmpExpr, blkInfo, MinOrMax_Min)
+	tmpExpr := plan2.DeepCopyExpr(expr)
+	tmpExpr = replaceColumnWithZonemap(tmpExpr, baseColumn, baseMin)
 	exprReturn, err := evalFilterExpr(tmpExpr, bat)
 	if err != nil {
 		return true
@@ -244,8 +276,8 @@ func needRead(expr *plan.Expr, blkInfo BlockMeta) bool {
 	}
 
 	// 2. eval expr with max, if true return true else false
-	tmpExpr = plan.DeepCopyExpr(expr)
-	tmpExpr = replaceColumnWithZonemap(tmpExpr, blkInfo, MinOrMax_Max)
+	tmpExpr = plan2.DeepCopyExpr(expr)
+	tmpExpr = replaceColumnWithZonemap(tmpExpr, baseColumn, baseMax)
 	exprReturn, err = evalFilterExpr(tmpExpr, bat)
 	if err != nil {
 		return true

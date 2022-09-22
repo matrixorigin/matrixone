@@ -94,17 +94,22 @@ func makeTestMeta() BlockMeta {
 	column1Max := make([]byte, 8)
 	column2Min := make([]byte, 8)
 	column2Max := make([]byte, 8)
+	column3Min := make([]byte, 8)
+	column3Max := make([]byte, 8)
 
 	binary.LittleEndian.PutUint64(column1Min, 10)
 	binary.LittleEndian.PutUint64(column1Max, 100)
-	binary.LittleEndian.PutUint64(column2Min, 200)
-	binary.LittleEndian.PutUint64(column2Max, 1000)
+	binary.LittleEndian.PutUint64(column2Min, 20)
+	binary.LittleEndian.PutUint64(column2Max, 200)
+	binary.LittleEndian.PutUint64(column3Min, 30)
+	binary.LittleEndian.PutUint64(column3Max, 300)
 
 	return BlockMeta{
 		header: BlockHeader{},
 		columns: []*ColumnMeta{
 			makeColumnMeta(types.T_uint64, column1Min, column1Max),
 			makeColumnMeta(types.T_uint64, column2Min, column2Max),
+			makeColumnMeta(types.T_uint64, column3Min, column3Max),
 		},
 	}
 }
@@ -148,10 +153,10 @@ func TestNeedRead(t *testing.T) {
 			makeColExpr(0, types.T_int64),
 			plan2.MakePlan2Int64ConstExprWithType(10),
 		}),
-		makeFunctionExpr(">=", []*plan.Expr{
-			makeColExpr(0, types.T_int64),
-			makeColExpr(1, types.T_int64),
-		}),
+		// makeFunctionExpr(">=", []*plan.Expr{
+		// 	makeColExpr(0, types.T_int64),
+		// 	makeColExpr(1, types.T_int64),
+		// }),
 	}
 
 	expected := []bool{true, true, false}
