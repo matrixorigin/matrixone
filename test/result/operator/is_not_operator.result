@@ -1,9 +1,9 @@
 SELECT 1 IS TRUE, 0 IS FALSE;
-1 = true    0 = false
+1 is true    0 is false
 true    true
 SELECT NULL IS TRUE;
-null = true
-null
+null is true
+false
 SELECT 1 IS NULL, 0 IS NULL, NULL IS NULL;
 1 is null    0 is null    null is null
 false    false    true
@@ -32,6 +32,7 @@ NULL    null    0001-01-01    2022-02-01 13:46:02    1994-03-02 00:00:00
 0    0    null    null    null
 SELECT d1, d2 FROM is_test WHERE str2 IS NOT FALSE;
 d1    d2
+0001-01-01    2022-02-01 13:46:02
 null    null
 null    null
 SELECT * FROM is_test WHERE str2 IS TRUE;
@@ -80,16 +81,16 @@ INSERT INTO is_test(float_32, float_64) VALUES(0.0, 0.00000000000000000000001);
 INSERT INTO is_test(float_32, float_64) VALUES(1.0, 0.4999999999999);
 INSERT INTO is_test(float_32, float_64) VALUES(0.51, -0.00000000000000000000001);
 SELECT -1 IS TRUE;
--1 = true
-false
+-1 is true
+true
 SELECT 0 IS TRUE;
-0 = true
+0 is true
 false
 SELECT -1 IS TRUE;
--1 = true
-false
+-1 is true
+true
 SELECT 1 IS TRUE;
-1 = true
+1 is true
 true
 SELECT 2 IS TRUE;
 [unknown result because it is related to issue#5113]
@@ -100,6 +101,7 @@ tiny    small    int_test    big    tiny_un    small_un    int_test_un    big_un
 SELECT small_un FROM is_test WHERE small_un IS TRUE;
 small_un
 1
+2
 SELECT float_32, float_64 FROM is_test WHERE float_32 > 0 IS FALSE;
 float_32    float_64
 0.0    1.0E-23
@@ -130,6 +132,7 @@ b1    b2
 true    false
 true    false
 true    null
+null    false
 SELECT * FROM is_test WHERE b2 IS FALSE;
 b1    b2
 true    false
@@ -139,6 +142,7 @@ SELECT * FROM is_test WHERE b2 IS NOT FALSE;
 b1    b2
 false    true
 false    true
+true    null
 DELETE FROM is_test;
 DROP TABLE IF EXISTS is_test;
 DROP TABLE IF EXISTS t1;
@@ -172,6 +176,9 @@ TOM    0
 SELECT id, name, class FROM t1 WHERE CAST(SUBSTRING(id, 4) AS TINYINT) IS TRUE;
 id    name    class
 1001    JACK    
+1002    TOM    0
+1003    1    5
+1004         9
 SELECT t1.id, t1.name, t2.nation FROM t1 INNER JOIN t2 ON t1.id = t2.id WHERE t1.class IS NOT FALSE AND t2.major IS NOT TRUE;
 id    name    nation
 1003    1    TRUE
@@ -188,6 +195,8 @@ SELECT * FROM t1 WHERE LENGTH(name) IS FALSE;
 id    name    class
 SELECT id FROM t1 WHERE LENGTH(name) IS TRUE;
 id
+1001
+1002
 1003
 1004
 SELECT * FROM t2 WHERE STARTSWITH(id, '1') IS TRUE;
@@ -227,6 +236,7 @@ INSERT INTO t2 VALUES('9992', '7322', '1023', 0, 9.99);
 INSERT INTO t2 VALUES('9993', '7323', '1024', 18, 0.0);
 SELECT user_id, user_name FROM t1 WHERE pay_status IS NOT TRUE;
 user_id    user_name
+7322    小红
 7324     
 SELECT user_id, user_name FROM t1 WHERE YEAR(order_time) > 1 IS TRUE;
 user_id    user_name
@@ -257,6 +267,7 @@ LEFT JOIN t2 ON t1.user_id = t2.user_id
 WHERE STARTSWITH(order_id, '9') IS TRUE AND number IS TRUE;
 user_name    order_time    product_id
 小明    2022-09-18 13:33:56    
+小刘    2022-11-11 23:49:02    1024
 SELECT
 t1.user_name, order_time, number, price
 FROM
@@ -265,6 +276,7 @@ RIGHT JOIN t2 ON t1.user_id = t2.user_id
 WHERE number IS TRUE AND pay_status IS NOT FALSE;
 user_name    order_time    number    price
 小明    2022-09-18 13:33:56    1    0.01
+小刘    2022-11-11 23:49:02    18    0.0
 DROP TABLE IF EXISTS t1;
 DROP TABLE IF EXISTS t2;
 CREATE TABLE temp(
@@ -290,3 +302,4 @@ SELECT * FROM (SELECT * FROM temp WHERE tiny IS FALSE) AS t WHERE b IS NOT TRUE;
 tiny    str    b    int_test
 SELECT * FROM (SELECT * FROM temp WHERE tiny IS TRUE) AS t WHERE str IS TRUE;
 tiny    str    b    int_test
+-1    1    false    0
