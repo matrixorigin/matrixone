@@ -15,7 +15,6 @@
 package bin
 
 import (
-	"math"
 	"math/bits"
 
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -105,27 +104,13 @@ func Bin[T constraints.Unsigned | constraints.Signed](intputVector, resultVector
 
 func BinFloat[T constraints.Float](intputVector, resultVector *vector.Vector, proc *process.Process) error {
 	xs := vector.MustTCols[T](intputVector)
-	us := make([]uint64, len(xs))
-	as := make([]float64, len(xs))
-	rs := make([]string, len(xs))
-	for idx, v := range xs {
-		var  val uint64
-		if v >= 0{
-			val = uint64(math.Floor(float64(v)))
-		}else{
-			val = uint64(math.Round(float64(v)))
-		}
-		
-		us[idx] = val
-		as[idx] = math.Abs(float64(v))
-	}
-	err := binary.NumericToNumericOverflow(as, us)
-	if err != nil{
+	err := binary.NumericToNumericOverflow(xs, []int64{})
+	if err != nil {
 		return err
 	}
-	for idx := range us{
-		val := uintToBinary(us[idx])
-		rs[idx] = val
+	rs := make([]string, len(xs))
+	for idx, v := range xs {
+		rs[idx] = uintToBinary(uint64(int64(v)))
 	}
 	vector.AppendString(resultVector, rs, proc.Mp())
 	return nil
