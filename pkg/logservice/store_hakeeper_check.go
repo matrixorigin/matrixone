@@ -16,6 +16,8 @@ package logservice
 
 import (
 	"context"
+	"fmt"
+	"go.uber.org/zap"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/hakeeper"
@@ -79,14 +81,14 @@ func (l *store) setInitialClusterInfo(numOfLogShards uint64,
 	session := l.nh.GetNoOPSession(hakeeper.DefaultHAKeeperShardID)
 	result, err := l.propose(ctx, session, cmd)
 	if err != nil {
-		plog.Errorf("failed to propose initial cluster info, %v", err)
+		logger.Error("failed to propose initial cluster info", zap.Error(err))
 		return err
 	}
 	if result.Value == uint64(pb.HAKeeperBootstrapFailed) {
 		panic("bootstrap failed")
 	}
 	if result.Value != uint64(pb.HAKeeperCreated) {
-		plog.Errorf("initial cluster info already set")
+		logger.Error("initial cluster info already set")
 	}
 	return nil
 }
@@ -98,7 +100,7 @@ func (l *store) updateIDAlloc(count uint64) error {
 	session := l.nh.GetNoOPSession(hakeeper.DefaultHAKeeperShardID)
 	result, err := l.propose(ctx, session, cmd)
 	if err != nil {
-		plog.Errorf("propose get id failed, %v", err)
+		logger.Error("propose get id failed", zap.Error(err))
 		return err
 	}
 	// TODO: add a test for this
@@ -109,7 +111,7 @@ func (l *store) updateIDAlloc(count uint64) error {
 func (l *store) hakeeperCheck() {
 	isLeader, term, err := l.isLeaderHAKeeper()
 	if err != nil {
-		plog.Errorf("failed to get HAKeeper Leader ID, %v", err)
+		logger.Error("failed to get HAKeeper Leader ID", zap.Error(err))
 		return
 	}
 
@@ -117,12 +119,12 @@ func (l *store) hakeeperCheck() {
 		state, err := l.getCheckerState()
 		if err != nil {
 			// TODO: check whether this is temp error
-			plog.Errorf("failed to get checker state, %v", err)
+			logger.Error("failed to get checker state", zap.Error(err))
 			return
 		}
 		switch state.State {
 		case pb.HAKeeperCreated:
-			plog.Warningf("waiting for initial cluster info to be set, check skipped")
+			logger.Warn("waiting for initial cluster info to be set, check skipped")
 			return
 		case pb.HAKeeperBootstrapping:
 			l.bootstrap(term, state)
@@ -143,11 +145,13 @@ func (l *store) assertHAKeeperState(s pb.HAKeeperState) {
 	state, err := l.getCheckerState()
 	if err != nil {
 		// TODO: check whether this is temp error
-		plog.Errorf("failed to get checker state, %v", err)
+		logger.Error("failed to get checker state", zap.Error(err))
 		return
 	}
 	if state.State != s {
-		plog.Panicf("expected state %s, got %s", s, state.State)
+		logger.Panic("unexpected state",
+			zap.String("expected", s.String()),
+			zap.String("got", state.State.String()))
 	}
 }
 
@@ -160,19 +164,19 @@ func (l *store) healthCheck(term uint64, state *pb.CheckerState) {
 	defer l.assertHAKeeperState(pb.HAKeeperRunning)
 	cmds, err := l.getScheduleCommand(true, term, state)
 	if err != nil {
-		plog.Errorf("failed to get check schedule commands, %v", err)
+		logger.Error("failed to get check schedule commands", zap.Error(err))
 		return
 	}
-	plog.Infof("cluster health check generated %d schedule commands", len(cmds))
+	logger.Info(fmt.Sprintf("cluster health check generated %d schedule commands", len(cmds)))
 	if len(cmds) > 0 {
 		ctx, cancel := context.WithTimeout(context.Background(), hakeeperDefaultTimeout)
 		defer cancel()
 		for _, cmd := range cmds {
-			plog.Infof("adding schedule command to hakeeper: %s", cmd.LogString())
+			logger.Info("adding schedule command to hakeeper", zap.String("command", cmd.LogString()))
 		}
 		if err := l.addScheduleCommands(ctx, term, cmds); err != nil {
 			// TODO: check whether this is temp error
-			plog.Infof("failed to add schedule commands, %v", err)
+			logger.Info("failed to add schedule commands", zap.Error(err))
 			return
 		}
 	}
@@ -188,18 +192,18 @@ func (l *store) taskSchedule(state *pb.CheckerState) {
 func (l *store) bootstrap(term uint64, state *pb.CheckerState) {
 	cmds, err := l.getScheduleCommand(false, term, state)
 	if err != nil {
-		plog.Errorf("failed to get bootstrap schedule commands, %v", err)
+		logger.Error("failed to get bootstrap schedule commands", zap.Error(err))
 		return
 	}
 	if len(cmds) > 0 {
 		for _, c := range cmds {
-			plog.Infof("bootstrap cmd: %s", c.LogString())
+			logger.Info("bootstrap cmd", zap.String("cmd", c.LogString()))
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), hakeeperDefaultTimeout)
 		defer cancel()
 		if err := l.addScheduleCommands(ctx, term, cmds); err != nil {
 			// TODO: check whether this is temp error
-			plog.Infof("failed to add schedule commands, %v", err)
+			logger.Info("failed to add schedule commands", zap.Error(err))
 			return
 		}
 		l.bootstrapCheckCycles = checkBootstrapCycles
