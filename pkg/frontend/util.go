@@ -18,8 +18,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"go/constant"
 	"os"
 	"runtime"
@@ -29,12 +27,12 @@ import (
 
 	"github.com/BurntSushi/toml"
 
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-
-	"github.com/matrixorigin/matrixone/pkg/container/types"
-
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	mo_config "github.com/matrixorigin/matrixone/pkg/config"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/mempool"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"

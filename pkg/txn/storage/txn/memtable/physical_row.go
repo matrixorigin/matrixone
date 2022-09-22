@@ -44,12 +44,12 @@ type Version[T any] struct {
 	BornTime Time
 	LockTx   *Transaction
 	LockTime Time
-	Value    *T
+	Value    T
 }
 
 // Read reads the visible value from Values
 // readTime's logical time should be monotonically increasing in one transaction to reflect commands order
-func (p *PhysicalRow[K, V]) Read(now Time, tx *Transaction) (value *V, err error) {
+func (p *PhysicalRow[K, V]) Read(now Time, tx *Transaction) (value V, err error) {
 	version, err := p.readVersion(now, tx)
 	if version != nil {
 		value = version.Value
@@ -145,7 +145,7 @@ func (v *Version[T]) Visible(now Time, txID string) bool {
 	return false
 }
 
-func (p *PhysicalRow[K, V]) Insert(now Time, tx *Transaction, value *V, callbacks ...any) error {
+func (p *PhysicalRow[K, V]) Insert(now Time, tx *Transaction, value V, callbacks ...any) error {
 	if tx.State.Load() != Active {
 		panic("should not call Insert")
 	}
@@ -212,7 +212,7 @@ func (p *PhysicalRow[K, V]) Delete(now Time, tx *Transaction) error {
 	return sql.ErrNoRows
 }
 
-func (p *PhysicalRow[K, V]) Update(now Time, tx *Transaction, newValue *V, callbacks ...any) error {
+func (p *PhysicalRow[K, V]) Update(now Time, tx *Transaction, newValue V, callbacks ...any) error {
 	if tx.State.Load() != Active {
 		panic("should not call Update")
 	}
@@ -265,7 +265,7 @@ func (p *PhysicalRow[K, V]) dump(w io.Writer) {
 		fmt.Fprintf(w, "born tx %s, born time %s, value %v",
 			value.BornTx.ID,
 			value.BornTime.String(),
-			*value.Value,
+			value.Value,
 		)
 		if value.LockTx != nil {
 			fmt.Fprintf(w, " lock tx %s, lock time %s",

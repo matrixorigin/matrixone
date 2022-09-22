@@ -15,10 +15,11 @@
 package ceil
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"math"
 	"strconv"
 	"strings"
+
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 
 	"github.com/matrixorigin/matrixone/pkg/vectorize/floor"
 )

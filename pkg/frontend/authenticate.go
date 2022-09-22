@@ -126,7 +126,7 @@ func GetTenantInfo(userInput string) (*TenantInfo, error) {
 		tenant := userInput[:p]
 		tenant = strings.TrimSpace(tenant)
 		if len(tenant) == 0 {
-			return &TenantInfo{}, fmt.Errorf("invalid tenant name '%s'", tenant)
+			return &TenantInfo{}, moerr.NewInternalError("invalid tenant name '%s'", tenant)
 		}
 		userRole := userInput[p+1:]
 		p2 := strings.IndexByte(userRole, ':')
@@ -135,7 +135,7 @@ func GetTenantInfo(userInput string) (*TenantInfo, error) {
 			user := userRole
 			user = strings.TrimSpace(user)
 			if len(user) == 0 {
-				return &TenantInfo{}, fmt.Errorf("invalid user name '%s'", user)
+				return &TenantInfo{}, moerr.NewInternalError("invalid user name '%s'", user)
 			}
 			return &TenantInfo{
 				Tenant:      strings.ToLower(tenant),
@@ -146,12 +146,12 @@ func GetTenantInfo(userInput string) (*TenantInfo, error) {
 			user := userRole[:p2]
 			user = strings.TrimSpace(user)
 			if len(user) == 0 {
-				return &TenantInfo{}, fmt.Errorf("invalid user name '%s'", user)
+				return &TenantInfo{}, moerr.NewInternalError("invalid user name '%s'", user)
 			}
 			role := userRole[p2+1:]
 			role = strings.TrimSpace(role)
 			if len(role) == 0 {
-				return &TenantInfo{}, fmt.Errorf("invalid role name '%s'", role)
+				return &TenantInfo{}, moerr.NewInternalError("invalid role name '%s'", role)
 			}
 			return &TenantInfo{
 				Tenant:      strings.ToLower(tenant),
