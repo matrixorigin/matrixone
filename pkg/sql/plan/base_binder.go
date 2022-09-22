@@ -106,6 +106,18 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (
 	case *tree.IsNotUnknownExpr:
 		expr, err = b.bindFuncExprImplByAstExpr("isnotunknown", []tree.Expr{exprImpl.Expr}, depth)
 
+	case *tree.IsTrueExpr:
+		expr, err = b.bindFuncExprImplByAstExpr("istrue", []tree.Expr{exprImpl.Expr}, depth)
+
+	case *tree.IsNotTrueExpr:
+		expr, err = b.bindFuncExprImplByAstExpr("isnottrue", []tree.Expr{exprImpl.Expr}, depth)
+
+	case *tree.IsFalseExpr:
+		expr, err = b.bindFuncExprImplByAstExpr("isfalse", []tree.Expr{exprImpl.Expr}, depth)
+
+	case *tree.IsNotFalseExpr:
+		expr, err = b.bindFuncExprImplByAstExpr("isnotfalse", []tree.Expr{exprImpl.Expr}, depth)
+
 	case *tree.Tuple:
 		exprs := make([]*Expr, 0, len(exprImpl.Exprs))
 		var planItem *Expr
@@ -932,7 +944,7 @@ func bindFuncExprImplByPlanExpr(name string, args []*Expr) (*plan.Expr, error) {
 }
 
 func (b *baseBinder) bindNumVal(astExpr *tree.NumVal, typ *Type) (*Expr, error) {
-	// over_int64_err := errors.New("", "Constants over int64 will support in future version.")
+	// over_int64_err := moerr.NewInternalError("", "Constants over int64 will support in future version.")
 
 	getStringExpr := func(val string) *Expr {
 		return &Expr{

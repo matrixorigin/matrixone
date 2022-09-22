@@ -16,9 +16,10 @@ package export
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/util/batchpipe"
 	"reflect"
 	"testing"
+
+	"github.com/matrixorigin/matrixone/pkg/util/batchpipe"
 )
 
 type dummyContextKey int

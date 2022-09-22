@@ -24,6 +24,8 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/file"
@@ -40,13 +42,13 @@ func (factory *ObjectFactory) EncodeName(id uint64) string {
 func (factory *ObjectFactory) DecodeName(name string) (id uint64, err error) {
 	trimmed := strings.TrimSuffix(name, ".seg")
 	if trimmed == name {
-		err = fmt.Errorf("%w: %s", file.ErrInvalidName, name)
+		err = moerr.NewInternalError("%v: %s", file.ErrInvalidName, name)
 		return
 	}
 	info := strings.Split(trimmed, "-")
 	id, err = strconv.ParseUint(info[1], 10, 64)
 	if err != nil {
-		err = fmt.Errorf("%w: %s", file.ErrInvalidName, name)
+		err = moerr.NewInternalError("%v: %s", file.ErrInvalidName, name)
 	}
 	return
 }

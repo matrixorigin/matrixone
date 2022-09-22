@@ -16,6 +16,7 @@ package objectio
 
 import (
 	"encoding/binary"
+
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 )

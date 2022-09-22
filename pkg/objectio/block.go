@@ -17,6 +17,7 @@ package objectio
 import (
 	"bytes"
 	"encoding/binary"
+
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 )
 

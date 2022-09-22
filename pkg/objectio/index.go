@@ -15,7 +15,7 @@
 package objectio
 
 import (
-	"errors"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
 type IndexDataType uint8
@@ -41,7 +41,7 @@ type ZoneMap struct {
 
 func NewZoneMap(idx uint16, min, max []byte) (IndexData, error) {
 	if len(min) != ZoneMapMinSize || len(max) != ZoneMapMaxSize {
-		return nil, errors.New("object io: New ZoneMap failed")
+		return nil, moerr.NewInternalError("object io: New ZoneMap failed")
 	}
 	zoneMap := &ZoneMap{
 		idx: idx,

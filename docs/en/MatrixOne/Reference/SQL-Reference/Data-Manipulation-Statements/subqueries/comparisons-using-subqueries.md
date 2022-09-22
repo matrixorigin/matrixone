@@ -32,13 +32,17 @@ Where comparison_operator is one of these operators:
 > insert into t4 values (4,8),(3,8),(5,9);
 > insert into t3 values (6),(7),(3);
 > select * from t3 where a = (select b from t2);
+ERROR 1105 (HY000): scalar subquery returns more than 1 row
+> select * from t3 where a = (select distinct b from t2);
 +------+
 | a    |
 +------+
 |    7 |
-|    7 |
 +------+
-2 rows in set (0.01 sec)
+1 rows in set (0.01 sec)
+
+> select a,b from t4 where a > ( select a ,b from t2 where a>1);
+ERROR 1105 (HY000): Internal error: Unknow type TUPLE
 ```
 
 ## **Constraints**

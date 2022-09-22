@@ -23,8 +23,8 @@ type Decimal128AndString interface {
 }
 
 type Count[T1 types.OrderedT | Decimal128AndString] struct {
-	// isStar is true: count(*)
-	isStar bool
+	// IsStar is true: count(*)
+	IsStar bool
 }
 
 func CountReturnType(_ []types.Type) types.Type {
@@ -32,7 +32,7 @@ func CountReturnType(_ []types.Type) types.Type {
 }
 
 func NewCount[T1 types.OrderedT | Decimal128AndString](isStar bool) *Count[T1] {
-	return &Count[T1]{isStar: isStar}
+	return &Count[T1]{IsStar: isStar}
 }
 
 func (c *Count[T1]) Grows(_ int) {
@@ -48,11 +48,20 @@ func (c *Count[T1]) Merge(_, _ int64, x, y int64, _ bool, _ bool, _ any) (int64,
 
 func (c *Count[T1]) Fill(_ int64, _ T1, v int64, z int64, _ bool, hasNull bool) (int64, bool) {
 	if hasNull {
-		if !c.isStar {
+		if !c.IsStar {
 			return v, false
 		} else {
 			return v + z, false
 		}
 	}
 	return v + z, false
+}
+
+func (c *Count[T1]) MarshalBinary() ([]byte, error) {
+	return types.EncodeBool(&c.IsStar), nil
+}
+
+func (c *Count[T1]) UnmarshalBinary(data []byte) error {
+	c.IsStar = types.DecodeBool(data)
+	return nil
 }

@@ -405,3 +405,7 @@ create table t1(a bigint default(-1) auto_increment);
 create table t1(a bigint primary key default(-1) auto_increment);
 create table t1(a int, b int default(10), c int auto_increment);
 show create table t1;
+drop table if exists t1;
+create table t1 (a int not null auto_increment, b int);
+insert into t1(b) values (1);
+select * from t1;
