@@ -405,11 +405,7 @@ var functionIdRegister = map[string]int32{
 	"load_file":               LOAD_FILE,
 	"hex":                     HEX,
 	"serial":                  SERIAL,
-<<<<<<< HEAD
 	"bin":                     BIN,
-=======
-	"hash_value":              HASH,
->>>>>>> bfd080d991ed0381da63601c548fe9723644cbb4
 }
 
 func GetFunctionIsWinfunByName(name string) bool {

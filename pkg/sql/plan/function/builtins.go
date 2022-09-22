@@ -2199,22 +2199,13 @@ var builtins = map[int]Functions{
 			},
 		},
 	},
-<<<<<<< HEAD
 	BIN: {
 		Id: BIN,
-=======
-	HASH: {
-		Id: HASH,
-		TypeCheckFn: func(_ []Function, typs []types.T) (int32, []types.T) {
-			return 0, typs
-		},
->>>>>>> bfd080d991ed0381da63601c548fe9723644cbb4
 		Overloads: []Function{
 			{
 				Index:     0,
 				Flag:      plan.Function_STRICT,
 				Layout:    STANDARD_FUNCTION,
-<<<<<<< HEAD
 				Args:      []types.T{types.T_uint8},
 				ReturnTyp: types.T_varchar,
 				Fn:        unary.Bin[uint8],
@@ -2290,11 +2281,6 @@ var builtins = map[int]Functions{
 				Args:      []types.T{types.T_float64},
 				ReturnTyp: types.T_varchar,
 				Fn:        unary.BinFloat[float64],
-=======
-				Args:      []types.T{},
-				ReturnTyp: types.T_uint64,
-				Fn:        multi.Hash,
->>>>>>> bfd080d991ed0381da63601c548fe9723644cbb4
 			},
 		},
 	},

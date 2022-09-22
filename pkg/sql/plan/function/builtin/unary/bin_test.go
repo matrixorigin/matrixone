@@ -231,7 +231,7 @@ func TestBinFloat64(t *testing.T) {
 	require.Equal(t, []string{"10", "100", "110", "1000", "10000", "100000", "1000000", "10000000"}, tempC)
 }
 
-func TestBinNegativeFloat(t *testing.T) {
+func TestBinNegativeInt(t *testing.T) {
 	procs := testutil.NewProc()
 
 	as := []int64{-2, -4, -6, -8, -16, -32, -64, -128}

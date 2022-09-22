@@ -15,11 +15,11 @@
 package bin
 
 import (
-	"fmt"
+	"math"
 	"math/bits"
-	"strconv"
 
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/builtin/binary"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"golang.org/x/exp/constraints"
 )
@@ -94,10 +94,10 @@ func uintToBinary(x uint64) string {
 
 func Bin[T constraints.Unsigned | constraints.Signed](intputVector, resultVector *vector.Vector, proc *process.Process) error {
 	xs := vector.MustTCols[T](intputVector)
-	rs := make([]string, 0)
+	rs := make([]string, len(xs))
 	for idx := range xs {
 		res := uintToBinary(uint64(xs[idx]))
-		rs = append(rs, res)
+		rs[idx] = res
 	}
 	vector.AppendString(resultVector, rs, proc.Mp())
 	return nil
@@ -105,21 +105,27 @@ func Bin[T constraints.Unsigned | constraints.Signed](intputVector, resultVector
 
 func BinFloat[T constraints.Float](intputVector, resultVector *vector.Vector, proc *process.Process) error {
 	xs := vector.MustTCols[T](intputVector)
-	rs := make([]string, 0)
-	for idx := range xs {
-		val, err := strconv.ParseInt(fmt.Sprintf("%1.0f", xs[idx]), 10, 64)
-		if err != nil {
-			return err
+	us := make([]uint64, len(xs))
+	as := make([]float64, len(xs))
+	rs := make([]string, len(xs))
+	for idx, v := range xs {
+		var  val uint64
+		if v >= 0{
+			val = uint64(math.Floor(float64(v)))
+		}else{
+			val = uint64(math.Round(float64(v)))
 		}
-		newVal, err := strconv.ParseInt(fmt.Sprintf("%1.0f", xs[idx]-T(val)), 10, 64)
-		if err != nil {
-			return err
-		}
-		if newVal != 0 {
-			val -= 1
-		}
-		res := uintToBinary(uint64(val))
-		rs = append(rs, res)
+		
+		us[idx] = val
+		as[idx] = math.Abs(float64(v))
+	}
+	err := binary.NumericToNumericOverflow(as, us)
+	if err != nil{
+		return err
+	}
+	for idx := range us{
+		val := uintToBinary(us[idx])
+		rs[idx] = val
 	}
 	vector.AppendString(resultVector, rs, proc.Mp())
 	return nil
