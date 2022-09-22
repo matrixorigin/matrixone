@@ -16,7 +16,6 @@ package compile
 
 import (
 	"context"
-	"errors"
 	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
@@ -147,7 +146,7 @@ func (s *Scope) remoteRun(c *Compile) error {
 
 		errMessage := m.GetCode()
 		if len(errMessage) > 0 {
-			return errors.New(string(errMessage))
+			return moerr.NewInternalError(string(errMessage))
 		}
 
 		sid := m.GetID()

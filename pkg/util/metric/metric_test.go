@@ -125,8 +125,9 @@ func TestDescExtra(t *testing.T) {
 
 type dummyTableOptions struct{}
 
-func (o dummyTableOptions) GetCreateOptions() string { return "" }
-func (o dummyTableOptions) GetTableOptions() string  { return "" }
+func (o dummyTableOptions) FormatDdl(ddl string) string { return ddl }
+func (o dummyTableOptions) GetCreateOptions() string    { return "" }
+func (o dummyTableOptions) GetTableOptions() string     { return "" }
 
 var dummyOptionsFactory = func(db, tbl string) trace.TableOptions {
 	return &dummyTableOptions{}
@@ -137,13 +138,13 @@ func TestCreateTable(t *testing.T) {
 	name := "sql_test_counter"
 	sql := createTableSqlFromMetricFamily(prom.NewDesc(name, "", []string{"zzz", "aaa"}, nil), buf, dummyOptionsFactory)
 	assert.Equal(t, sql, fmt.Sprintf(
-		"create table if not exists %s.%s (`%s` datetime, `%s` double, `%s` varchar(36), `%s` varchar(20), `aaa` varchar(20), `zzz` varchar(20))",
+		"create table if not exists %s.%s (`%s` datetime(6), `%s` double, `%s` varchar(36), `%s` varchar(20), `aaa` varchar(20), `zzz` varchar(20))",
 		MetricDBConst, name, lblTimeConst, lblValueConst, lblNodeConst, lblRoleConst,
 	))
 
 	sql = createTableSqlFromMetricFamily(prom.NewDesc(name, "", nil, nil), buf, dummyOptionsFactory)
 	assert.Equal(t, sql, fmt.Sprintf(
-		"create table if not exists %s.%s (`%s` datetime, `%s` double, `%s` varchar(36), `%s` varchar(20))",
+		"create table if not exists %s.%s (`%s` datetime(6), `%s` double, `%s` varchar(36), `%s` varchar(20))",
 		MetricDBConst, name, lblTimeConst, lblValueConst, lblNodeConst, lblRoleConst,
 	))
 }

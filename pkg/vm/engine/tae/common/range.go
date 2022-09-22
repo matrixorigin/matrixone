@@ -15,13 +15,14 @@
 package common
 
 import (
-	"errors"
 	"fmt"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
 var (
-	ErrRangeNotContinous = errors.New("tae: range not continuous")
-	ErrRangeInvalid      = errors.New("tae: invalid range")
+	ErrRangeNotContinuous = moerr.NewInternalError("tae: range not continuous")
+	ErrRangeInvalid       = moerr.NewInternalError("tae: invalid range")
 )
 
 type Range struct {
@@ -74,7 +75,7 @@ func (r *Range) CommitLeft(left uint64) bool {
 
 func (r *Range) Union(o *Range) error {
 	if o.Left > r.Right+1 || r.Left > o.Right+1 {
-		return ErrRangeNotContinous
+		return ErrRangeNotContinuous
 	}
 	if r.Left > o.Left {
 		r.Left = o.Left

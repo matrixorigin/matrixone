@@ -20,13 +20,12 @@ import (
 	"sync"
 	"time"
 
-	"errors"
-
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 )
 
 var (
-	ErrNoSpace = errors.New("buffer: no space left")
+	ErrNoSpace = moerr.NewInternalError("buffer: no space left")
 )
 
 type MemoryFreeFunc func(IMemoryNode)

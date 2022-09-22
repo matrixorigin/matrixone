@@ -15,8 +15,7 @@
 package operator
 
 import (
-	"errors"
-
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -25,7 +24,7 @@ import (
 )
 
 var (
-	errUnexpected = errors.New("unexpected case for LIKE operator")
+	errUnexpected = moerr.NewInternalError("unexpected case for LIKE operator")
 )
 
 func Like(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {

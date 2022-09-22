@@ -415,7 +415,7 @@ import (
 %type <userMiscOption> pwd_or_lck pwd_or_lck_opt
 //%type <userMiscOptions> pwd_or_lck_list
 
-%type <expr> literal true_or_false
+%type <expr> literal
 %type <expr> predicate
 %type <expr> bit_expr interval_expr
 %type <expr> simple_expr else_opt
@@ -6055,14 +6055,6 @@ expression:
     {
     	$$ = tree.NewMaxValue()
     }
-|   boolean_primary IS true_or_false %prec IS
-	{
-        $$ = tree.NewComparisonExpr(tree.EQUAL, $1, $3)
-    }
-|   boolean_primary IS NOT true_or_false %prec IS
-	{
-        $$ = tree.NewComparisonExpr(tree.NOT_EQUAL, $1, $4)
-    }
 |   boolean_primary
     {
         $$ = $1
@@ -6085,6 +6077,22 @@ boolean_primary:
     {
         $$ = tree.NewIsNotUnknownExpr($1)
     }
+|    boolean_primary IS TRUE %prec IS
+    {
+        $$ = tree.NewIsTrueExpr($1)
+    }
+|   boolean_primary IS NOT TRUE %prec IS
+    {
+        $$ = tree.NewIsNotTrueExpr($1)
+    }
+|    boolean_primary IS FALSE %prec IS
+    {
+        $$ = tree.NewIsFalseExpr($1)
+    }
+|   boolean_primary IS NOT FALSE %prec IS
+    {
+        $$ = tree.NewIsNotFalseExpr($1)
+    }
 |   boolean_primary comparison_operator predicate %prec '='
     {
         $$ = tree.NewComparisonExpr($2, $1, $3)
@@ -6094,16 +6102,6 @@ boolean_primary:
         $$ = tree.NewSubqueryComparisonExpr($2, $3, $1, $4)
     }
 |   predicate
-
-true_or_false:
-	TRUE
-    {
-        $$ = tree.NewNumValWithType(constant.MakeBool(true), "", false, tree.P_bool)
-    }
-|   FALSE
-    {
-        $$ = tree.NewNumValWithType(constant.MakeBool(false), "", false, tree.P_bool)
-    }
 
 predicate:
     bit_expr IN col_tuple

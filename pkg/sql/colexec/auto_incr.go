@@ -16,7 +16,6 @@ package colexec
 
 import (
 	"context"
-	"fmt"
 	"math"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -186,7 +185,7 @@ func updateBatchImpl(ColDefs []*plan.ColDef, bat *batch.Batch, offset, step []in
 					nulls.Del(vec.Nsp, uint64(rowIndex))
 					curNum += stepNum
 					if curNum > math.MaxInt32 {
-						return fmt.Errorf("auto_incrment column '%s' constant value %d overflows int", col.Name, curNum)
+						return moerr.NewInternalError("auto_incrment column '%s' constant value %d overflows int", col.Name, curNum)
 					}
 					vs[rowIndex] = int32(curNum)
 				} else if vs[rowIndex] >= int32(curNum) {

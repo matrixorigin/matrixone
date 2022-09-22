@@ -16,11 +16,12 @@ package logservice
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"math"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/taskservice"
 
 	"github.com/google/uuid"
 	"github.com/lni/dragonboat/v4"
