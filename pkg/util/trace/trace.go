@@ -39,6 +39,7 @@ var gTraceContext atomic.Value
 var gSpanContext atomic.Value
 
 func init() {
+	SetDefaultSpanContext(&SpanContext{})
 	SetDefaultContext(context.Background())
 	SetTracerProvider(newMOTracerProvider(EnableTracer(false)))
 }
@@ -50,12 +51,6 @@ func Init(ctx context.Context, opts ...TracerProviderOption) (context.Context, e
 	if !atomic.CompareAndSwapUint32(&inited, 0, 1) {
 		return ContextWithSpanContext(ctx, *DefaultSpanContext()), nil
 	}
-
-	// init tool dependence
-	logutil.SetLogReporter(&logutil.TraceReporter{ReportLog: ReportLog, ReportZap: ReportZap, LevelSignal: SetLogLevel, ContextField: ContextField})
-	logutil.SpanFieldKey.Store(SpanFieldKey)
-	errutil.SetErrorReporter(HandleError)
-	export.SetDefaultContextFunc(DefaultContext)
 
 	// init TraceProvider
 	SetTracerProvider(newMOTracerProvider(opts...))
@@ -77,6 +72,12 @@ func Init(ctx context.Context, opts ...TracerProviderOption) (context.Context, e
 	if err := initExporter(ctx, config); err != nil {
 		return nil, err
 	}
+
+	// init tool dependence
+	logutil.SetLogReporter(&logutil.TraceReporter{ReportLog: ReportLog, ReportZap: ReportZap, LevelSignal: SetLogLevel, ContextField: ContextField})
+	logutil.SpanFieldKey.Store(SpanFieldKey)
+	errutil.SetErrorReporter(HandleError)
+	export.SetDefaultContextFunc(DefaultContext)
 
 	return DefaultContext(), nil
 }
