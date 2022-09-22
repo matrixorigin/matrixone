@@ -807,6 +807,7 @@ func TestTaskSchedulerCanReScheduleExpiredTasks(t *testing.T) {
 			}
 			completed := tn()
 			if completed {
+				store.taskScheduler.StopScheduleCronTask()
 				return
 			}
 			time.Sleep(100 * time.Millisecond)
