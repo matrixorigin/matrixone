@@ -609,6 +609,15 @@ var (
 			);`,
 	}
 
+	//drop tables for the tenant
+	dropSqls = []string{
+		`drop table mo_catalog.mo_user;`,
+		`drop table mo_catalog.mo_role;`,
+		`drop table mo_catalog.mo_user_grant;`,
+		`drop table mo_catalog.mo_role_grant;`,
+		`drop table mo_catalog.mo_role_privs;`,
+	}
+
 	initMoAccountFormat = `insert into mo_catalog.mo_account(
 				account_id,
 				account_name,
@@ -659,6 +668,8 @@ var (
 var (
 	//privilege verification
 	checkTenantFormat = `select account_id,account_name from mo_catalog.mo_account where account_name = "%s";`
+
+	deleteAccountFromMoAccountFormat = `delete from mo_catalog.mo_account where account_name = "%s";`
 
 	getPasswordOfUserFormat = `select user_id,authentication_string,default_role from mo_catalog.mo_user where user_name = "%s";`
 
@@ -874,6 +885,10 @@ func getSqlForCheckTenant(tenant string) string {
 	return fmt.Sprintf(checkTenantFormat, tenant)
 }
 
+func getSqlForDeleteAccountFromMoAccount(account string) string {
+	return fmt.Sprintf(deleteAccountFromMoAccountFormat, account)
+}
+
 func getSqlForPasswordOfUser(user string) string {
 	return fmt.Sprintf(getPasswordOfUserFormat, user)
 }
@@ -1017,6 +1032,10 @@ func getSqlForDeleteRole(roleId int64) []string {
 		fmt.Sprintf(deleteRoleFromMoRoleGrantFormat, roleId, roleId),
 		fmt.Sprintf(deleteRoleFromMoRolePrivsFormat, roleId),
 	}
+}
+
+func getSqlForDropTablesOfAccount() []string {
+	return dropSqls
 }
 
 func getSqlForDeleteUser(userId int64) []string {
@@ -1329,6 +1348,94 @@ func (g *graph) hasLoop(start int64) bool {
 	}
 
 	return !g.toposort(start, visited)
+}
+
+// doDropAccount accomplishes the DropAccount statement
+func doDropAccount(ctx context.Context, ses *Session, da *tree.DropAccount) error {
+	pu := ses.Pu
+	guestMMu := guest.New(pu.SV.GuestMmuLimitation, pu.HostMmu)
+	bh := NewBackgroundHandler(ctx, guestMMu, pu.Mempool, pu)
+	defer bh.Close()
+	var err error
+	var sql string
+	var rsset []ExecResult
+	var results []interface{}
+	var deleteCtx context.Context
+	var accountId int64
+	var noSuchAccount bool
+
+	err = bh.Exec(ctx, "begin;")
+	if err != nil {
+		goto handleFailed
+	}
+
+	//check the account exists or not
+	sql = getSqlForCheckTenant(da.Name)
+	bh.ClearExecResultSet()
+	err = bh.Exec(ctx, sql)
+	if err != nil {
+		goto handleFailed
+	}
+
+	results = bh.GetExecResultSet()
+	rsset, err = convertIntoResultSet(results)
+	if err != nil {
+		goto handleFailed
+	}
+
+	if len(rsset) != 0 && rsset[0].GetRowCount() != 0 {
+		accountId, err = rsset[0].GetInt64(0, 0)
+		if err != nil {
+			goto handleFailed
+		}
+	} else {
+		//no such account
+		if !da.IfExists { //when the "IF EXISTS" is set, just skip it.
+			err = moerr.NewInternalError("there is no account %s", da.Name)
+			goto handleFailed
+		}
+		noSuchAccount = true
+	}
+
+	//step 1 : delete the account in the mo_account of the sys account
+	sql = getSqlForDeleteAccountFromMoAccount(da.Name)
+	err = bh.Exec(ctx, sql)
+	if err != nil {
+		goto handleFailed
+	}
+
+	err = bh.Exec(ctx, "commit;")
+	if err != nil {
+		goto handleFailed
+	}
+
+	if !noSuchAccount {
+		//NOTE!!!: single DDL drop statement per single transaction
+		//SWITCH TO THE CONTEXT of the deleted context
+		deleteCtx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(accountId))
+
+		//step 2 : drop table mo_user
+		//step 3 : drop table mo_role
+		//step 4 : drop table mo_user_grant
+		//step 5 : drop table mo_role_grant
+		//step 6 : drop table mo_role_privs
+		for _, sql = range getSqlForDropTablesOfAccount() {
+			err = bh.Exec(deleteCtx, sql)
+			if err != nil {
+				return err
+			}
+		}
+	}
+
+	//TODO: drop other databases
+	return err
+handleFailed:
+	//ROLLBACK the transaction
+	rbErr := bh.Exec(ctx, "rollback;")
+	if rbErr != nil {
+		return rbErr
+	}
+	return err
 }
 
 // doDropUser accomplishes the DropUser statement
@@ -3336,8 +3443,8 @@ func createTablesInMoCatalog(ctx context.Context, tenant *TenantInfo, pu *config
 
 	//step 2:add new role entries to the mo_role
 
-	initMoRole1 := fmt.Sprintf(initMoRoleFormat, moAdminRoleID, moAdminRoleName, rootID, moAdminRoleID, types.CurrentTimestamp().String2(time.UTC, 0), moAdminRoleComment)
-	initMoRole2 := fmt.Sprintf(initMoRoleFormat, publicRoleID, publicRoleName, rootID, moAdminRoleID, types.CurrentTimestamp().String2(time.UTC, 0), publicRoleComment)
+	initMoRole1 := fmt.Sprintf(initMoRoleFormat, moAdminRoleID, moAdminRoleName, rootID, moAdminRoleID, types.CurrentTimestamp().String2(time.UTC, 0), "")
+	initMoRole2 := fmt.Sprintf(initMoRoleFormat, publicRoleID, publicRoleName, rootID, moAdminRoleID, types.CurrentTimestamp().String2(time.UTC, 0), "")
 	addSqlIntoSet(initMoRole1)
 	addSqlIntoSet(initMoRole2)
 
@@ -3517,8 +3624,8 @@ func createTablesInMoCatalogOfGeneralTenant(ctx context.Context, tenant *TenantI
 
 	//step 2:add new role entries to the mo_role
 
-	initMoRole1 := fmt.Sprintf(initMoRoleFormat, accountAdminRoleID, accountAdminRoleName, tenant.GetUserID(), tenant.GetDefaultRoleID(), types.CurrentTimestamp().String2(time.UTC, 0), accountAdminRoleComment)
-	initMoRole2 := fmt.Sprintf(initMoRoleFormat, publicRoleID, publicRoleName, tenant.GetUserID(), tenant.GetDefaultRoleID(), types.CurrentTimestamp().String2(time.UTC, 0), publicRoleComment)
+	initMoRole1 := fmt.Sprintf(initMoRoleFormat, accountAdminRoleID, accountAdminRoleName, tenant.GetUserID(), tenant.GetDefaultRoleID(), types.CurrentTimestamp().String2(time.UTC, 0), "")
+	initMoRole2 := fmt.Sprintf(initMoRoleFormat, publicRoleID, publicRoleName, tenant.GetUserID(), tenant.GetDefaultRoleID(), types.CurrentTimestamp().String2(time.UTC, 0), "")
 	addSqlIntoSet(initMoRole1)
 	addSqlIntoSet(initMoRole2)
 
@@ -3571,7 +3678,8 @@ func createTablesInMoCatalogOfGeneralTenant(ctx context.Context, tenant *TenantI
 	}
 
 	//step5: add new entries to the mo_user_grant
-
+	initMoUserGrant1 := fmt.Sprintf(initMoUserGrantFormat, accountAdminRoleID, newUserId, types.CurrentTimestamp().String2(time.UTC, 0), true)
+	addSqlIntoSet(initMoUserGrant1)
 	initMoUserGrant2 := fmt.Sprintf(initMoUserGrantFormat, publicRoleID, newUserId, types.CurrentTimestamp().String2(time.UTC, 0), true)
 	addSqlIntoSet(initMoUserGrant2)
 	addSqlIntoSet("commit;")

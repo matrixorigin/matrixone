@@ -5350,6 +5350,117 @@ func Test_doDropUser(t *testing.T) {
 	})
 }
 
+func Test_doDropAccount(t *testing.T) {
+	convey.Convey("drop account", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		defer bhStub.Reset()
+
+		stmt := &tree.DropAccount{
+			Name: "acc",
+		}
+		priv := determinePrivilegeSetOfStatement(stmt)
+		ses := newSes(priv)
+
+		//no result set
+		bh.sql2result["begin;"] = nil
+		bh.sql2result["commit;"] = nil
+		bh.sql2result["rollback;"] = nil
+
+		sql := getSqlForCheckTenant(stmt.Name)
+		mrs := newMrsForCheckTenant([][]interface{}{
+			{0},
+		})
+		bh.sql2result[sql] = mrs
+
+		sql = getSqlForDeleteAccountFromMoAccount(stmt.Name)
+		bh.sql2result[sql] = nil
+
+		for _, sql = range getSqlForDropTablesOfAccount() {
+			bh.sql2result[sql] = nil
+		}
+
+		err := doDropAccount(ses.GetRequestContext(), ses, stmt)
+		convey.So(err, convey.ShouldBeNil)
+	})
+	convey.Convey("drop account (if exists)", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		defer bhStub.Reset()
+
+		stmt := &tree.DropAccount{
+			IfExists: true,
+			Name:     "acc",
+		}
+		priv := determinePrivilegeSetOfStatement(stmt)
+		ses := newSes(priv)
+
+		//no result set
+		bh.sql2result["begin;"] = nil
+		bh.sql2result["commit;"] = nil
+		bh.sql2result["rollback;"] = nil
+
+		sql := getSqlForCheckTenant(stmt.Name)
+		mrs := newMrsForCheckTenant([][]interface{}{})
+		bh.sql2result[sql] = mrs
+
+		sql = getSqlForDeleteAccountFromMoAccount(stmt.Name)
+		bh.sql2result[sql] = nil
+
+		for _, sql = range getSqlForDropTablesOfAccount() {
+			bh.sql2result[sql] = nil
+		}
+
+		err := doDropAccount(ses.GetRequestContext(), ses, stmt)
+		convey.So(err, convey.ShouldBeNil)
+	})
+	convey.Convey("drop account fail", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		bh := &backgroundExecTest{}
+		bh.init()
+
+		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		defer bhStub.Reset()
+
+		stmt := &tree.DropAccount{
+			Name: "acc",
+		}
+		priv := determinePrivilegeSetOfStatement(stmt)
+		ses := newSes(priv)
+
+		//no result set
+		bh.sql2result["begin;"] = nil
+		bh.sql2result["commit;"] = nil
+		bh.sql2result["rollback;"] = nil
+
+		sql := getSqlForCheckTenant(stmt.Name)
+		mrs := newMrsForCheckTenant([][]interface{}{})
+		bh.sql2result[sql] = mrs
+
+		sql = getSqlForDeleteAccountFromMoAccount(stmt.Name)
+		bh.sql2result[sql] = nil
+
+		for _, sql = range getSqlForDropTablesOfAccount() {
+			bh.sql2result[sql] = nil
+		}
+
+		err := doDropAccount(ses.GetRequestContext(), ses, stmt)
+		convey.So(err, convey.ShouldBeError)
+	})
+}
+
 func generateGrantPrivilege(roleNames []string, withGrantOption bool) {
 	names := ""
 	for i, name := range roleNames {
@@ -5695,6 +5806,26 @@ func newMrsForCheckDatabaseTable(rows [][]interface{}) *MysqlResultSet {
 	col1.SetColumnType(defines.MYSQL_TYPE_LONGLONG)
 
 	mrs.AddColumn(col1)
+
+	for _, row := range rows {
+		mrs.AddRow(row)
+	}
+
+	return mrs
+}
+
+func newMrsForCheckTenant(rows [][]interface{}) *MysqlResultSet {
+	mrs := &MysqlResultSet{}
+
+	col1 := &MysqlColumn{}
+	col1.SetName("account_id")
+	col1.SetColumnType(defines.MYSQL_TYPE_LONGLONG)
+
+	col2 := &MysqlColumn{}
+	col2.SetName("account_name")
+	col2.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+	mrs.AddColumn(col1)
+	mrs.AddColumn(col2)
 
 	for _, row := range rows {
 		mrs.AddRow(row)
