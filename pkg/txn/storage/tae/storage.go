@@ -47,6 +47,7 @@ type TAEStorage struct {
 	}
 }
 
+// just for test
 func openTAE(targetDir string) (*db.DB, error) {
 	mask := syscall.Umask(0)
 	if err := os.MkdirAll(targetDir, os.FileMode(0755)); err != nil {
@@ -111,7 +112,7 @@ func (s *TAEStorage) get(meta txn.TxnMeta) (txn txnif.AsyncTxn, err error) {
 
 // Close implements storage.TxnTAEStorage
 func (s *TAEStorage) Close(ctx context.Context) error {
-	panic("unimplemented")
+	panic(moerr.NewNYI("Close is not implemented yet"))
 }
 
 // Commit implements storage.TxnTAEStorage
@@ -126,22 +127,22 @@ func (s *TAEStorage) Commit(ctx context.Context, txnMeta txn.TxnMeta) error {
 
 // Committing implements storage.TxnTAEStorage
 func (s *TAEStorage) Committing(ctx context.Context, txnMeta txn.TxnMeta) error {
-	panic("unimplemented")
+	panic(moerr.NewNYI("Committing is not implemented yet"))
 }
 
 // Destroy implements storage.TxnTAEStorage
 func (s *TAEStorage) Destroy(ctx context.Context) error {
-	panic("unimplemented")
+	panic(moerr.NewNYI("Destroy is not implemented yet"))
 }
 
 // Prepare implements storage.TxnTAEStorage
 func (s *TAEStorage) Prepare(ctx context.Context, txnMeta txn.TxnMeta) (timestamp.Timestamp, error) {
-	panic("unimplemented")
+	panic(moerr.NewNYI("Prepare is not implemented yet"))
 }
 
 // Read implements storage.TxnTAEStorage
 func (s *TAEStorage) Read(ctx context.Context, txnMeta txn.TxnMeta, op uint32, payload []byte) (storage.ReadResult, error) {
-	panic("unimplemented")
+	panic(moerr.NewNYI("Read is not implemented yet"))
 }
 
 // Rollback implements storage.TxnTAEStorage
@@ -155,7 +156,7 @@ func (s *TAEStorage) Rollback(ctx context.Context, txnMeta txn.TxnMeta) error {
 
 // StartRecovery implements storage.TxnTAEStorage
 func (s *TAEStorage) StartRecovery(context.Context, chan txn.TxnMeta) {
-	panic("unimplemented")
+	panic(moerr.NewNYI("StartRecovery is not implemented yet"))
 }
 
 // Write implements storage.TxnTAEStorage

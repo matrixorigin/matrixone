@@ -79,9 +79,8 @@ const (
 )
 
 const (
-	TxnTsSize  = 14
-	TxnTidSize = 32
-	RowidSize  = 16
+	TxnTsSize = 12
+	RowidSize = 16
 )
 
 type Type struct {

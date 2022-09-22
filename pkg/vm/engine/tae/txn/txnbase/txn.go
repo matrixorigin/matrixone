@@ -355,7 +355,15 @@ func (txn *Txn) CreateDatabase(name string) (db handle.Database, err error) {
 	return
 }
 
+func (txn *Txn) CreateDatabaseByDef(def any) (db handle.Database, err error) {
+	return
+}
+
 func (txn *Txn) DropDatabase(name string) (db handle.Database, err error) {
+	return
+}
+
+func (txn *Txn) DropDatabaseByID(id uint64) (db handle.Database, err error) {
 	return
 }
 

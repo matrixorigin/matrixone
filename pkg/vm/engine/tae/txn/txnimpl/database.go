@@ -16,6 +16,7 @@ package txnimpl
 
 import (
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
@@ -110,6 +111,10 @@ func (db *txnDatabase) CreateRelation(def any) (rel handle.Relation, err error) 
 
 func (db *txnDatabase) DropRelationByName(name string) (rel handle.Relation, err error) {
 	return db.Txn.GetStore().DropRelationByName(db.txnDB.entry.ID, name)
+}
+
+func (db *txnDatabase) DropRelationByID(id uint64) (rel handle.Relation, err error) {
+	panic(moerr.NewNYI("DropRelationByID is not implemented yet"))
 }
 
 func (db *txnDatabase) TruncateByName(name string) (rel handle.Relation, err error) {

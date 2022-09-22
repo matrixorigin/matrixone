@@ -12,25 +12,22 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package handle
+package batch
 
-import "io"
+import (
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
+)
 
-type Database interface {
-	io.Closer
-
-	GetID() uint64
-	GetName() string
-	CreateRelation(def any) (Relation, error)
-	DropRelationByName(name string) (Relation, error)
-	DropRelationByID(id uint64) (Relation, error)
-	TruncateByName(name string) (Relation, error)
-
-	GetRelationByName(name string) (Relation, error)
-	RelationCnt() int64
-	Relations() []Relation
-
-	MakeRelationIt() RelationIt
-	String() string
-	GetMeta() any
+func ProtoToMOBatch(bat *api.Batch) *Batch {
+	rbat := New(true, bat.Attrs)
+	for i, v := range bat.Vecs {
+		moV, err := vector.ProtoVectorToVector(v)
+		if err != nil {
+			panic(err)
+		}
+		rbat.SetVector(int32(i), moV)
+	}
+	rbat.InitZsOne(rbat.GetVector(0).Length())
+	return rbat
 }
