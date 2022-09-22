@@ -124,12 +124,12 @@ func (l *store) hakeeperCheck() {
 	state, err := l.getCheckerState()
 	if err != nil {
 		// TODO: check whether this is temp error
-		plog.Errorf("failed to get checker state, %v", err)
+		logger.Error("failed to get checker state", zap.Error(err))
 		return
 	}
 	switch state.State {
 	case pb.HAKeeperCreated:
-		plog.Warningf("waiting for initial cluster info to be set, check skipped")
+		logger.Warn("waiting for initial cluster info to be set, check skipped")
 		return
 	case pb.HAKeeperBootstrapping:
 		l.bootstrap(term, state)
