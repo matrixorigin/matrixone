@@ -91,7 +91,7 @@ type Config struct {
 	HAKeeperCheckInterval toml.Duration `toml:"hakeeper-check-interval"`
 
 	// BootstrapConfig is the configuration specified for the bootstrapping
-	// procedure. It only need to be specified for Log Stores selected to host
+	// procedure. It only needs to be specified for Log Stores selected to host
 	// initial HAKeeper replicas during bootstrapping.
 	BootstrapConfig struct {
 		// BootstrapCluster indicates whether the cluster should be bootstrapped.
