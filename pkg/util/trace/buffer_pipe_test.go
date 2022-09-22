@@ -18,14 +18,17 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/stretchr/testify/require"
 	"io"
 	"os"
 	"reflect"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/util/stack"
+	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/util"
@@ -39,7 +42,7 @@ import (
 )
 
 var buf = new(bytes.Buffer)
-var err1 = fmt.Errorf("test1")
+var err1 = moerr.NewInternalError("test1")
 var err2 = errutil.Wrapf(err1, "test2")
 var testBaseBuffer2SqlOption = []buffer2SqlOption{bufferWithSizeThreshold(1 * KB)}
 var traceIDSpanIDColumnStr string
@@ -73,7 +76,7 @@ func init() {
 	traceIDSpanIDCsvStr = fmt.Sprintf(`%s,%s`, sc.TraceID.String(), sc.SpanID.String())
 
 	if err := agent.Listen(agent.Options{}); err != nil {
-		_ = fmt.Errorf("listen gops agent failed: %s", err)
+		_ = moerr.NewInternalError("listen gops agent failed: %s", err)
 		panic(err)
 	}
 	fmt.Println("Finish tests init.")
@@ -183,7 +186,7 @@ func Test_buffer2Sql_GetBatch_AllType(t *testing.T) {
 			wantFunc: genErrorBatchSql,
 			want: `insert into system.error_info (` +
 				"`statement_id`, `span_id`, `node_uuid`, `node_type`, `err_code`, `stack`, `timestamp`" +
-				`) values (` + traceIDSpanIDColumnStr + `, "node_uuid", "Standalone", "test1", "test1", "1970-01-01 00:00:00.000000")`,
+				`) values (` + traceIDSpanIDColumnStr + `, "node_uuid", "Standalone", "internal error: test1", "internal error: test1", "1970-01-01 00:00:00.000000")`,
 		},
 		{
 			name:   "multi_error",
@@ -198,8 +201,8 @@ func Test_buffer2Sql_GetBatch_AllType(t *testing.T) {
 			wantFunc: genErrorBatchSql,
 			want: `insert into system.error_info (` +
 				"`statement_id`, `span_id`, `node_uuid`, `node_type`, `err_code`, `stack`, `timestamp`" +
-				`) values (` + traceIDSpanIDColumnStr + `, "node_uuid", "Standalone", "test1", "test1", "1970-01-01 00:00:00.000000")` +
-				`,(` + traceIDSpanIDColumnStr + `, "node_uuid", "Standalone", "test2: test1", "test2: test1", "1970-01-01 00:00:00.001001")`,
+				`) values (` + traceIDSpanIDColumnStr + `, "node_uuid", "Standalone", "internal error: test1", "internal error: test1", "1970-01-01 00:00:00.000000")` +
+				`,(` + traceIDSpanIDColumnStr + `, "node_uuid", "Standalone", "test2: internal error: test1", "test2: internal error: test1", "1970-01-01 00:00:00.001001")`,
 		},
 		{
 			name:   "single_log",
@@ -211,7 +214,7 @@ func Test_buffer2Sql_GetBatch_AllType(t *testing.T) {
 						SpanID:    _1SpanID,
 						Timestamp: uint64(0),
 						Level:     zapcore.InfoLevel,
-						Caller:    util.Caller(0),
+						Caller:    stack.Caller(0),
 						Message:   "info message",
 						Extra:     "{}",
 					},
@@ -233,7 +236,7 @@ func Test_buffer2Sql_GetBatch_AllType(t *testing.T) {
 						SpanID:    _1SpanID,
 						Timestamp: uint64(0),
 						Level:     zapcore.InfoLevel,
-						Caller:    util.Caller(0),
+						Caller:    stack.Caller(0),
 						Message:   "info message",
 						Extra:     "{}",
 					},
@@ -242,7 +245,7 @@ func Test_buffer2Sql_GetBatch_AllType(t *testing.T) {
 						SpanID:    _1SpanID,
 						Timestamp: uint64(time.Millisecond + time.Microsecond),
 						Level:     zapcore.DebugLevel,
-						Caller:    util.Caller(0),
+						Caller:    stack.Caller(0),
 						Message:   "debug message",
 						Extra:     "{}",
 					},
@@ -680,7 +683,7 @@ func Test_quote(t *testing.T) {
 			}
 		})
 	}
-	var err1 = errutil.WithContext(context.Background(), fmt.Errorf("test1"))
+	var err1 = errutil.WithContext(context.Background(), moerr.NewInternalError("test1"))
 	t.Logf("show quote(err): \"%s\"", quote(fmt.Sprintf("%+v", err1)))
 }
 
@@ -865,7 +868,7 @@ func Test_genCsvData(t *testing.T) {
 						SpanID:    _1SpanID,
 						Timestamp: uint64(0),
 						Level:     zapcore.InfoLevel,
-						Caller:    util.Caller(0),
+						Caller:    stack.Caller(0),
 						Message:   "info message",
 						Extra:     "{}",
 					},
@@ -884,7 +887,7 @@ func Test_genCsvData(t *testing.T) {
 						SpanID:    _1SpanID,
 						Timestamp: uint64(0),
 						Level:     zapcore.InfoLevel,
-						Caller:    util.Caller(0),
+						Caller:    stack.Caller(0),
 						Message:   "info message",
 						Extra:     "{}",
 					},
@@ -893,7 +896,7 @@ func Test_genCsvData(t *testing.T) {
 						SpanID:    _1SpanID,
 						Timestamp: uint64(time.Millisecond + time.Microsecond),
 						Level:     zapcore.DebugLevel,
-						Caller:    util.Caller(0),
+						Caller:    stack.Caller(0),
 						Message:   "debug message",
 						Extra:     "{}",
 					},
@@ -1003,14 +1006,14 @@ func Test_genCsvData(t *testing.T) {
 						ResponseAt:           util.TimeNano(time.Microsecond + time.Second),
 						Duration:             uint64(time.Microsecond + time.Second),
 						Status:               StatementStatusFailed,
-						Error:                fmt.Errorf("test error"),
+						Error:                moerr.NewInternalError("test error"),
 						ExecPlan:             nil,
 					},
 				},
 				buf: buf,
 			},
 			want: `00000000-0000-0000-0000-000000000001,00000000-0000-0000-0000-000000000001,00000000-0000-0000-0000-000000000001,MO,moroot,,system,show tables,,show tables,node_uuid,Standalone,1970-01-01 00:00:00.000000,1970-01-01 00:00:00.000000,0,Running,,{}
-00000000-0000-0000-0000-000000000002,00000000-0000-0000-0000-000000000001,00000000-0000-0000-0000-000000000001,MO,moroot,,system,show databases,dcl,show databases,node_uuid,Standalone,1970-01-01 00:00:00.000001,1970-01-01 00:00:01.000001,1000001000,Failed,test error,{}
+00000000-0000-0000-0000-000000000002,00000000-0000-0000-0000-000000000001,00000000-0000-0000-0000-000000000001,MO,moroot,,system,show databases,dcl,show databases,node_uuid,Standalone,1970-01-01 00:00:00.000001,1970-01-01 00:00:01.000001,1000001000,Failed,internal error: test error,{}
 `,
 		},
 		{
@@ -1021,7 +1024,7 @@ func Test_genCsvData(t *testing.T) {
 				},
 				buf: buf,
 			},
-			want: traceIDSpanIDCsvStr + `,node_uuid,Standalone,test1,test1,1970-01-01 00:00:00.000000
+			want: traceIDSpanIDCsvStr + `,node_uuid,Standalone,internal error: test1,internal error: test1,1970-01-01 00:00:00.000000
 `,
 		},
 		{
@@ -1033,8 +1036,8 @@ func Test_genCsvData(t *testing.T) {
 				},
 				buf: buf,
 			},
-			want: traceIDSpanIDCsvStr + `,node_uuid,Standalone,test1,test1,1970-01-01 00:00:00.000000
-` + traceIDSpanIDCsvStr + `,node_uuid,Standalone,test2: test1,test2: test1,1970-01-01 00:00:00.001001
+			want: traceIDSpanIDCsvStr + `,node_uuid,Standalone,internal error: test1,internal error: test1,1970-01-01 00:00:00.000000
+` + traceIDSpanIDCsvStr + `,node_uuid,Standalone,test2: internal error: test1,test2: internal error: test1,1970-01-01 00:00:00.001001
 `,
 		},
 	}

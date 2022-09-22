@@ -16,9 +16,10 @@ package logutil
 
 import (
 	"fmt"
+	"testing"
+
 	"github.com/lni/dragonboat/v4/logger"
 	"github.com/stretchr/testify/require"
-	"testing"
 )
 
 func init() {

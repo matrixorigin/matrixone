@@ -15,7 +15,6 @@
 package morpc
 
 import (
-	"fmt"
 	"io"
 	"sync"
 
@@ -23,6 +22,7 @@ import (
 	"github.com/fagongzi/goetty/v2/buf"
 	"github.com/fagongzi/goetty/v2/codec"
 	"github.com/fagongzi/goetty/v2/codec/length"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
 var (
@@ -127,7 +127,7 @@ func (c *baseCodec) Decode(in *buf.ByteBuf) (any, bool, error) {
 		}
 		actulChecksum := checksum.Sum64()
 		if actulChecksum != expectChecksum {
-			return nil, false, fmt.Errorf("checksum mismatch, expect %d, got %d",
+			return nil, false, moerr.NewInternalError("checksum mismatch, expect %d, got %d",
 				expectChecksum,
 				actulChecksum)
 		}
@@ -257,7 +257,7 @@ func (c *baseCodec) Encode(data interface{}, out *buf.ByteBuf, conn io.Writer) e
 		return nil
 	}
 
-	return fmt.Errorf("not support %T %+v", data, data)
+	return moerr.NewInternalError("not support %T %+v", data, data)
 }
 
 var (

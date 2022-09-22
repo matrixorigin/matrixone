@@ -16,7 +16,6 @@ package frontend
 
 import (
 	"context"
-	"fmt"
 	"strings"
 	"time"
 
@@ -609,7 +608,7 @@ func (ses *Session) AuthenticateUser(userInput string) ([]byte, error) {
 		return nil, err
 	}
 	if len(rsset) < 1 || rsset[0].GetRowCount() < 1 {
-		return nil, fmt.Errorf("there is no tenant %s", tenant.GetTenant())
+		return nil, moerr.NewInternalError("there is no tenant %s", tenant.GetTenant())
 	}
 
 	tenantID, err := rsset[0].GetInt64(0, 0)
@@ -630,7 +629,7 @@ func (ses *Session) AuthenticateUser(userInput string) ([]byte, error) {
 		return nil, err
 	}
 	if len(rsset) < 1 || rsset[0].GetRowCount() < 1 {
-		return nil, fmt.Errorf("there is no user %s", tenant.GetUser())
+		return nil, moerr.NewInternalError("there is no user %s", tenant.GetUser())
 	}
 
 	userID, err := rsset[0].GetInt64(0, 0)
@@ -671,7 +670,7 @@ func (ses *Session) AuthenticateUser(userInput string) ([]byte, error) {
 			return nil, err
 		}
 		if len(rsset) < 1 || rsset[0].GetRowCount() < 1 {
-			return nil, fmt.Errorf("there is no role %s of the user %s", tenant.GetDefaultRole(), tenant.GetUser())
+			return nil, moerr.NewInternalError("there is no role %s of the user %s", tenant.GetDefaultRole(), tenant.GetUser())
 		}
 
 		defaultRoleID, err = rsset[0].GetInt64(0, 0)

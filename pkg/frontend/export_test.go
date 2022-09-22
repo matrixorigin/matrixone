@@ -16,10 +16,10 @@ package frontend
 
 import (
 	"bufio"
-	"errors"
 	"os"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -62,7 +62,7 @@ func Test_openNewFile(t *testing.T) {
 				FilePath: "test/export.csv",
 			},
 		}
-		stubs := gostub.StubFunc(&OpenFile, nil, errors.New("can not open file"))
+		stubs := gostub.StubFunc(&OpenFile, nil, moerr.NewInternalError("can not open file"))
 		defer stubs.Reset()
 		convey.So(openNewFile(oq.ep, oq.mrs), convey.ShouldNotBeNil)
 	})
@@ -108,7 +108,7 @@ func Test_formatOutputString(t *testing.T) {
 				LineSize: 1,
 			},
 		}
-		stubs := gostub.StubFunc(&writeDataToCSVFile, errors.New("write err"))
+		stubs := gostub.StubFunc(&writeDataToCSVFile, moerr.NewInternalError("write err"))
 		defer stubs.Reset()
 		convey.So(formatOutputString(oq, nil, nil, '\n', true), convey.ShouldNotBeNil)
 
@@ -137,7 +137,7 @@ func Test_writeToCSVFile(t *testing.T) {
 		convey.So(writeToCSVFile(oq, output), convey.ShouldNotBeNil)
 
 		oq.ep.Rows = 1
-		stubs := gostub.StubFunc(&Flush, errors.New("Flush error"))
+		stubs := gostub.StubFunc(&Flush, moerr.NewInternalError("Flush error"))
 		defer stubs.Reset()
 
 		convey.So(writeToCSVFile(oq, output), convey.ShouldNotBeNil)
@@ -145,38 +145,38 @@ func Test_writeToCSVFile(t *testing.T) {
 		stubs = gostub.StubFunc(&Flush, nil)
 		defer stubs.Reset()
 
-		stubs = gostub.StubFunc(&Seek, int64(0), errors.New("Seek error"))
+		stubs = gostub.StubFunc(&Seek, int64(0), moerr.NewInternalError("Seek error"))
 		defer stubs.Reset()
 		convey.So(writeToCSVFile(oq, output), convey.ShouldNotBeNil)
 
 		stubs = gostub.StubFunc(&Seek, int64(0), nil)
 		defer stubs.Reset()
-		stubs = gostub.StubFunc(&Read, 0, errors.New("Read error"))
+		stubs = gostub.StubFunc(&Read, 0, moerr.NewInternalError("Read error"))
 		defer stubs.Reset()
 		convey.So(writeToCSVFile(oq, output), convey.ShouldNotBeNil)
 
 		stubs = gostub.StubFunc(&Read, 1, nil)
 		defer stubs.Reset()
 
-		stubs = gostub.StubFunc(&Truncate, errors.New("Truncate error"))
+		stubs = gostub.StubFunc(&Truncate, moerr.NewInternalError("Truncate error"))
 		defer stubs.Reset()
 		convey.So(writeToCSVFile(oq, output), convey.ShouldNotBeNil)
 
 		stubs = gostub.StubFunc(&Truncate, nil)
 		defer stubs.Reset()
-		stubs = gostub.StubFunc(&Close, errors.New("Close error"))
+		stubs = gostub.StubFunc(&Close, moerr.NewInternalError("Close error"))
 		defer stubs.Reset()
 		convey.So(writeToCSVFile(oq, output), convey.ShouldNotBeNil)
 
 		stubs = gostub.StubFunc(&Close, nil)
 		defer stubs.Reset()
-		stubs = gostub.StubFunc(&openNewFile, errors.New("openNewFile error"))
+		stubs = gostub.StubFunc(&openNewFile, moerr.NewInternalError("openNewFile error"))
 		defer stubs.Reset()
 		convey.So(writeToCSVFile(oq, output), convey.ShouldNotBeNil)
 
 		stubs = gostub.StubFunc(&openNewFile, nil)
 		defer stubs.Reset()
-		stubs = gostub.StubFunc(&writeDataToCSVFile, errors.New("writeDataToCSVFile error"))
+		stubs = gostub.StubFunc(&writeDataToCSVFile, moerr.NewInternalError("writeDataToCSVFile error"))
 		defer stubs.Reset()
 		convey.So(writeToCSVFile(oq, output), convey.ShouldNotBeNil)
 
@@ -200,7 +200,7 @@ func Test_writeDataToCSVFile(t *testing.T) {
 			},
 		}
 		var output = []byte{'1', '2'}
-		stubs := gostub.StubFunc(&Write, 0, errors.New("writeDataToCSVFile error"))
+		stubs := gostub.StubFunc(&Write, 0, moerr.NewInternalError("writeDataToCSVFile error"))
 		defer stubs.Reset()
 
 		convey.So(writeDataToCSVFile(oq.ep, output), convey.ShouldNotBeNil)

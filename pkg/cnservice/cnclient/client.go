@@ -16,10 +16,11 @@ package cnclient
 
 import (
 	"context"
+	"sync"
+
 	"github.com/fagongzi/goetty/v2"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
-	"sync"
 )
 
 var Client *CNClient

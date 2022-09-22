@@ -16,11 +16,12 @@ package trace
 
 import (
 	"context"
-	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
-	"github.com/stretchr/testify/require"
 	"strings"
 	"sync"
 	"testing"
+
+	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
+	"github.com/stretchr/testify/require"
 )
 
 func Test_showSchema(t *testing.T) {

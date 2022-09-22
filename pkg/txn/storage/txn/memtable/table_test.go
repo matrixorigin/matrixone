@@ -54,7 +54,7 @@ func TestTable(t *testing.T) {
 	// get
 	r, err := table.Get(tx, Int(42))
 	assert.Nil(t, err)
-	assert.Equal(t, 1, *r)
+	assert.Equal(t, 1, r)
 
 	// update
 	row.value = 2
@@ -63,7 +63,7 @@ func TestTable(t *testing.T) {
 
 	r, err = table.Get(tx, Int(42))
 	assert.Nil(t, err)
-	assert.Equal(t, 2, *r)
+	assert.Equal(t, 2, r)
 
 	// index
 	entries, err := table.Index(tx, Tuple{
@@ -77,7 +77,7 @@ func TestTable(t *testing.T) {
 	assert.Nil(t, err)
 	assert.Equal(t, 1, len(entries))
 	assert.Equal(t, Int(42), entries[0].Key)
-	assert.Equal(t, 2, *entries[0].Value)
+	assert.Equal(t, 2, entries[0].Value)
 
 	// delete
 	err = table.Delete(tx, Int(42))
@@ -114,7 +114,7 @@ func TestTableIsolation(t *testing.T) {
 		value: 3,
 	})
 	assert.NotNil(t, err)
-	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrPrimaryKeyDuplicated))
+	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrDuplicate))
 
 	// read committed
 	iter := table.NewIter(tx1)

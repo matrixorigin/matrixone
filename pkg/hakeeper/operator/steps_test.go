@@ -22,9 +22,10 @@ package operator
 
 import (
 	"fmt"
+	"testing"
+
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/stretchr/testify/assert"
-	"testing"
 )
 
 func TestIsFinish(t *testing.T) {
