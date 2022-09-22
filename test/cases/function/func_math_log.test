@@ -51,9 +51,7 @@ drop table t1;
 create table t1(a tinyint, b SMALLINT, c bigint, d INT, e BIGINT, f FLOAT, g DOUBLE, h decimal(38,19), i DATE, k datetime, l TIMESTAMP, m char(255), n varchar(255));
 insert into t1 values(1, 1, 2, 4, 5, 5.5, 31.13, 14.314, "2012-03-12", "2012-03-12 10:03:12", "2012-03-12 13:03:12", "abc", "dcf");
 select log(a),log(b),log(c),log(d),log(e),log(f),log(g),log(h),log(i),log(k),log(l),log(m),log(n) from t1;
--- @bvt:issue#3608
 select log(a,b), log(b,c),log(c,d),log(d,e),log(e,f),log(f,g),log(g,h), log(h,i), log(i,k),log(k,l),log(l,m),log(m,n) from t1;
--- @bvt:issue
 drop table t1;
 
 

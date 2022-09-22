@@ -52,8 +52,7 @@ insert into t1 values(1, 1, 2, 4, 5, 5.5, 31.13, 14.314, "2012-03-12", "2012-03-
 select log(a),log(b),log(c),log(d),log(e),log(f),log(g),log(h),log(i),log(k),log(l),log(m),log(n) from t1;
 invalid argument function log, bad value [DATE]
 select log(a,b), log(b,c),log(c,d),log(d,e),log(e,f),log(f,g),log(g,h), log(h,i), log(i,k),log(k,l),log(l,m),log(m,n) from t1;
-log(a,b)	log(b,c)	log(c,d)	log(d,e)	log(e,f)	log(f,g)	log(g,h)	log(h,i)	log(i,k)	log(k,l)	log(l,m)	log(m,n)
-null	null	2.0	1.160964047443681	1.059219544331585	2.0168211362765116	0.7740270385977794	6.319329540915667	1.8215087746921308	1.0000000000486744	null	null
+invalid argument function log, bad value [DECIMAL128 DATE]
 drop table t1;
 select log(123.54-123.03);
 log(123.54-123.03)
