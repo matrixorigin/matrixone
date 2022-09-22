@@ -651,7 +651,8 @@ func (blk *dataBlock) LoadColumnData(
 	buffer *bytes.Buffer) (vec containers.Vector, err error) {
 	def := blk.meta.GetSchema().ColDefs[colIdx]
 	var fsVector *fileservice.IOVector
-	fsVector, err = blk.colObjects[colIdx].GetDataObject(blk.meta.GetNodeLocked().(*catalog.MetadataMVCCNode).MetaLoc).GetData()
+	metaLoc := blk.meta.GetNodeLocked().(*catalog.MetadataMVCCNode).MetaLoc
+	fsVector, err = blk.colObjects[colIdx].GetDataObject(metaLoc).GetData()
 	if err != nil {
 		return
 	}
