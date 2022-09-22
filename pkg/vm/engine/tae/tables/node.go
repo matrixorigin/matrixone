@@ -71,13 +71,13 @@ func (node *appendableNode) CheckUnloadable() bool {
 	return !node.block.mvcc.HasActiveAppendNode()
 }
 
-func (node *appendableNode) GetDataCopy(maxRow uint32) (columns *containers.Batch, err error) {
+func (node *appendableNode) GetDataCopy(minRow, maxRow uint32) (columns *containers.Batch, err error) {
 	if exception := node.exception.Load(); exception != nil {
 		err = exception.(error)
 		return
 	}
 	node.block.RLock()
-	columns = node.data.CloneWindow(0, int(maxRow), containers.DefaultAllocator)
+	columns = node.data.CloneWindow(int(minRow), int(maxRow-minRow), containers.DefaultAllocator)
 	node.block.RUnlock()
 	return
 }

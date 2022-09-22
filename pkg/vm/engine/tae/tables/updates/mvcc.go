@@ -299,6 +299,8 @@ func (n *MVCCHandle) getMaxVisibleRowLocked(ts types.TS) (int, uint32, bool, err
 }
 
 func (n *MVCCHandle) CollectAppend(start, end types.TS) (minRow, maxRow uint32, commitTSVec, abortVec containers.Vector) {
+	n.RLock()
+	defer n.RUnlock()
 	startOffset, node := n.appends.GetNodeToReadByPrepareTS(start)
 	if node != nil && node.GetPrepare().Less(start) {
 		startOffset++
@@ -310,22 +312,24 @@ func (n *MVCCHandle) CollectAppend(start, end types.TS) (minRow, maxRow uint32, 
 	minRow = n.appends.GetNodeByOffset(startOffset).(*AppendNode).startRow
 	maxRow = node.(*AppendNode).maxRow
 
-	commitTSVec = containers.MakeVector(types.T_TS.ToType(), true)
-	abortVec = containers.MakeVector(types.T_bool.ToType(), true)
+	commitTSVec = containers.MakeVector(types.T_TS.ToType(), false)
+	abortVec = containers.MakeVector(types.T_bool.ToType(), false)
 	n.appends.LoopOffsetRange(
 		startOffset,
 		endOffset,
 		func(m txnbase.MVCCNode) bool {
-			n := m.(*AppendNode)
-			n.RLock()
-			txn := n.GetTxn()
-			n.RUnlock()
+			node := m.(*AppendNode)
+			node.RLock()
+			txn := node.GetTxn()
+			node.RUnlock()
 			if txn != nil {
+				n.RUnlock()
 				txn.GetTxnState(true)
+				n.RLock()
 			}
-			for i := 0; i < int(n.maxRow-n.startRow); i++ {
-				commitTSVec.Append(n.GetCommitTS())
-				abortVec.Append(n.IsAborted())
+			for i := 0; i < int(node.maxRow-node.startRow); i++ {
+				commitTSVec.Append(node.GetCommitTS())
+				abortVec.Append(node.IsAborted())
 			}
 			return true
 		})
@@ -336,29 +340,33 @@ func (n *MVCCHandle) CollectDelete(rawPkVec containers.Vector, start, end types.
 	if rawPkVec != nil {
 		pkVec = containers.MakeVector(rawPkVec.GetType(), rawPkVec.Nullable())
 	}
-	rowIDVec = containers.MakeVector(types.T_uint32.ToType(), true)
-	commitTSVec = containers.MakeVector(types.T_TS.ToType(), true)
-	abortVec = containers.MakeVector(types.T_bool.ToType(), true)
+	rowIDVec = containers.MakeVector(types.T_uint32.ToType(), false)
+	commitTSVec = containers.MakeVector(types.T_TS.ToType(), false)
+	abortVec = containers.MakeVector(types.T_bool.ToType(), false)
+	n.RLock()
+	defer n.RUnlock()
 	n.deletes.LoopChain(
 		func(m txnbase.MVCCNode) bool {
-			n := m.(*DeleteNode)
-			n.RLock()
-			txn := n.GetTxn()
-			n.RUnlock()
+			node := m.(*DeleteNode)
+			node.RLock()
+			txn := node.GetTxn()
+			node.RUnlock()
 			if txn != nil {
+				n.RUnlock()
 				txn.GetTxnState(true)
+				n.RLock()
 			}
-			in, before := n.PreparedIn(start, end)
+			in, before := node.PreparedIn(start, end)
 			if in {
-				it := n.mask.Iterator()
+				it := node.mask.Iterator()
 				for it.HasNext() {
 					row := it.Next()
 					if rawPkVec != nil {
 						pkVec.Append(rawPkVec.Get(int(row)))
 					}
 					rowIDVec.Append(row)
-					commitTSVec.Append(n.GetEnd())
-					abortVec.Append(n.IsAborted())
+					commitTSVec.Append(node.GetEnd())
+					abortVec.Append(node.IsAborted())
 				}
 			}
 			return !before

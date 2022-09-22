@@ -3139,25 +3139,29 @@ func TestCollectInsert(t *testing.T) {
 	blkit := rel.MakeBlockIt()
 	blkdata := blkit.GetBlock().GetMeta().(*catalog.BlockEntry).GetBlockData()
 
-	batch := blkdata.CollectInsert(types.TS{}, p1, nil)
+	batch, err := blkdata.CollectAppendInRange(types.TS{}, p1)
+	assert.NoError(t, err)
 	t.Log((batch.Attrs))
 	for _, vec := range batch.Vecs {
 		t.Log(vec)
 		assert.Equal(t, 6, vec.Length())
 	}
-	batch = blkdata.CollectInsert(types.TS{}, p2, nil)
+	batch, err = blkdata.CollectAppendInRange(types.TS{}, p2)
+	assert.NoError(t, err)
 	t.Log((batch.Attrs))
 	for _, vec := range batch.Vecs {
 		t.Log(vec)
 		assert.Equal(t, 9, vec.Length())
 	}
-	batch = blkdata.CollectInsert(p1.Next(), p2, nil)
+	batch, err = blkdata.CollectAppendInRange(p1.Next(), p2)
+	assert.NoError(t, err)
 	t.Log((batch.Attrs))
 	for _, vec := range batch.Vecs {
 		t.Log(vec)
 		assert.Equal(t, 3, vec.Length())
 	}
-	batch = blkdata.CollectInsert(p1.Next(), p3, nil)
+	batch, err = blkdata.CollectAppendInRange(p1.Next(), p3)
+	assert.NoError(t, err)
 	t.Log((batch.Attrs))
 	for _, vec := range batch.Vecs {
 		t.Log(vec)
@@ -3207,28 +3211,28 @@ func TestCollectDelete(t *testing.T) {
 	blkit = rel.MakeBlockIt()
 	blkdata := blkit.GetBlock().GetMeta().(*catalog.BlockEntry).GetBlockData()
 
-	batch, err := blkdata.CollectDelete(types.TS{}, p1, nil)
+	batch, err := blkdata.CollectDeleteInRange(types.TS{}, p1)
 	assert.NoError(t, err)
 	t.Log((batch.Attrs))
 	for _, vec := range batch.Vecs {
 		t.Log(vec)
 		assert.Equal(t, 1, vec.Length())
 	}
-	batch, err = blkdata.CollectDelete(types.TS{}, p2, nil)
+	batch, err = blkdata.CollectDeleteInRange(types.TS{}, p2)
 	assert.NoError(t, err)
 	t.Log((batch.Attrs))
 	for _, vec := range batch.Vecs {
 		t.Log(vec)
 		assert.Equal(t, 4, vec.Length())
 	}
-	batch, err = blkdata.CollectDelete(p1.Next(), p2, nil)
+	batch, err = blkdata.CollectDeleteInRange(p1.Next(), p2)
 	assert.NoError(t, err)
 	t.Log((batch.Attrs))
 	for _, vec := range batch.Vecs {
 		t.Log(vec)
 		assert.Equal(t, 3, vec.Length())
 	}
-	batch, err = blkdata.CollectDelete(p1.Next(), p3, nil)
+	batch, err = blkdata.CollectDeleteInRange(p1.Next(), p3)
 	assert.NoError(t, err)
 	t.Log((batch.Attrs))
 	for _, vec := range batch.Vecs {

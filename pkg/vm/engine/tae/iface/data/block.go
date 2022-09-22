@@ -98,6 +98,6 @@ type Block interface {
 	Destroy() error
 	ReplayIndex() error
 	Close()
-	CollectInsert(start, end types.TS, buffer *bytes.Buffer) *containers.Batch
-	CollectDelete(start, end types.TS, buffer *bytes.Buffer) (*containers.Batch, error)
+	CollectAppendInRange(start, end types.TS) (*containers.Batch, error)
+	CollectDeleteInRange(start, end types.TS) (*containers.Batch, error)
 }

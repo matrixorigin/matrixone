@@ -906,25 +906,42 @@ func (blk *dataBlock) GetSortColumns(schema *catalog.Schema, data *containers.Ba
 	return vs
 }
 
-func (blk *dataBlock) CollectInsert(start, end types.TS, buffer *bytes.Buffer) *containers.Batch {
-	batch := containers.NewBatch()
-	schema := blk.meta.GetSchema()
+func (blk *dataBlock) CollectAppendInRange(start, end types.TS) (*containers.Batch, error) {
+	if blk.meta.IsAppendable() {
+		return blk.collectAblkAppendInRange(start, end)
+	}
+	return blk.collectAppendInRange(start, end)
+}
 
-	minRow, maxRow, commitTSVec, abortVec := blk.mvcc.CollectAppend(start, end)
-	attrs := schema.Attrs()
-	for i, attr := range attrs {
-		vec, err := blk.node.GetColumnDataCopy(minRow, maxRow, i, buffer)
-		if err != nil {
-			return nil
-		}
-		batch.AddVector(attr, vec)
+func (blk *dataBlock) collectAppendInRange(start, end types.TS) (*containers.Batch, error) {
+	batch, err := blk.node.GetDataCopy(0, blk.meta.GetSchema().BlockMaxRows)
+	if err != nil {
+		return nil, err
+	}
+	commitTSVec := containers.MakeVector(types.T_TS.ToType(), false)
+	abortVec := containers.MakeVector(types.T_bool.ToType(), false)
+	commitTs := blk.meta.GetCreatedAt()
+	for i := 0; i < int(blk.meta.GetSchema().BlockMaxRows); i++ {
+		commitTSVec.Append(commitTs)
+		abortVec.Append(false)
 	}
 	batch.AddVector(catalog.AttrCommitTs, commitTSVec)
 	batch.AddVector(catalog.AttrAborted, abortVec)
-	return batch
+	return batch, nil
 }
 
-func (blk *dataBlock) CollectDelete(start, end types.TS, buffer *bytes.Buffer) (*containers.Batch, error) {
+func (blk *dataBlock) collectAblkAppendInRange(start, end types.TS) (*containers.Batch, error) {
+	minRow, maxRow, commitTSVec, abortVec := blk.mvcc.CollectAppend(start, end)
+	batch, err := blk.node.GetDataCopy(minRow, maxRow)
+	if err != nil {
+		return nil, err
+	}
+	batch.AddVector(catalog.AttrCommitTs, commitTSVec)
+	batch.AddVector(catalog.AttrAborted, abortVec)
+	return batch, nil
+}
+
+func (blk *dataBlock) CollectDeleteInRange(start, end types.TS) (*containers.Batch, error) {
 	schema := blk.meta.GetSchema()
 	var rawPk containers.Vector
 	var err error
@@ -933,14 +950,14 @@ func (blk *dataBlock) CollectDelete(start, end types.TS, buffer *bytes.Buffer) (
 		return nil, err
 	}
 	if schema.IsSinglePK() {
-		rawPk, err = blk.node.GetColumnDataCopy(0, maxRow, schema.GetSingleSortKeyIdx(), buffer)
+		rawPk, err = blk.node.GetColumnDataCopy(0, maxRow, schema.GetSingleSortKeyIdx(), nil)
 		if err != nil {
 			return nil, err
 		}
 	} else if blk.meta.GetSchema().IsCompoundPK() {
 		cols := make([]containers.Vector, 0)
 		for _, def := range schema.SortKey.Defs {
-			col, err := blk.node.GetColumnDataCopy(0, maxRow, def.Idx, buffer)
+			col, err := blk.node.GetColumnDataCopy(0, maxRow, def.Idx, nil)
 			if err != nil {
 				return nil, err
 			}
