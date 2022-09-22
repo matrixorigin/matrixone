@@ -16,8 +16,8 @@ package dnservice
 
 import (
 	"context"
-	"fmt"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
@@ -61,7 +61,7 @@ func (s *store) createClock() (clock.Clock, error) {
 	case localClockBackend:
 		return s.newLocalClock(), nil
 	default:
-		return nil, fmt.Errorf("not implment for %s", s.cfg.Txn.Clock.Backend)
+		return nil, moerr.NewInternalError("not implment for %s", s.cfg.Txn.Clock.Backend)
 	}
 }
 
@@ -97,7 +97,7 @@ func (s *store) createTxnStorage(shard metadata.DNShard) (storage.TxnStorage, er
 		}
 		return ts, nil
 	default:
-		return nil, fmt.Errorf("not implment for %s", s.cfg.Txn.Storage.Backend)
+		return nil, moerr.NewInternalError("not implment for %s", s.cfg.Txn.Storage.Backend)
 	}
 }
 

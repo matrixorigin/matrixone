@@ -48,7 +48,7 @@ func (a *driverAppender) append() {
 	defer cancel()
 	size := a.entry.prepareRecord()
 	// if size > int(common.K)*20 { //todo
-	// 	panic(fmt.Errorf("record size %d, larger than max size 20K", size))
+	// 	panic(moerr.NewInternalError("record size %d, larger than max size 20K", size))
 	// }
 	record := a.client.record
 	copy(record.Payload(), a.entry.payload)

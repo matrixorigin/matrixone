@@ -222,7 +222,6 @@ func TestCompletedWithInvalidStatus(t *testing.T) {
 }
 
 func TestCompletedWithInvalidEpoch(t *testing.T) {
-	t.Skip("Skip due to error refactor work")
 	store := NewMemTaskStorage()
 	s := NewTaskService(store, nil)
 	defer func() {

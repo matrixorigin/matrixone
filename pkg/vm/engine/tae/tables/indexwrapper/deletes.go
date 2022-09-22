@@ -15,9 +15,9 @@
 package indexwrapper
 
 import (
-	"fmt"
 	"sort"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
@@ -71,11 +71,11 @@ func (m *DeletesMap) RemoveOne(key any, row uint32) {
 
 func (m *DeletesMap) RemoveTs(ts types.TS) {
 	if _, existed := m.tssIdx[ts]; !existed {
-		panic(fmt.Errorf("RemoveTs cannot found ts %d", ts))
+		panic(moerr.NewInternalError("RemoveTs cannot found ts %d", ts))
 	}
 	pos := compute.BinarySearchTs(m.tss, ts)
 	if pos == -1 {
-		panic(fmt.Errorf("RemoveTs cannot found ts %d", ts))
+		panic(moerr.NewInternalError("RemoveTs cannot found ts %d", ts))
 	}
 	m.tss = append(m.tss[:pos], m.tss[pos+1:]...)
 	delete(m.tssIdx, ts)

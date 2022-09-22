@@ -16,11 +16,12 @@ package trace
 
 import (
 	"context"
-	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
-	"github.com/stretchr/testify/require"
 	"strings"
 	"sync"
 	"testing"
+
+	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
+	"github.com/stretchr/testify/require"
 )
 
 func Test_showSchema(t *testing.T) {
@@ -91,7 +92,7 @@ func TestInitSchemaByInnerExecutor(t *testing.T) {
 	<-startedC
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := InitSchemaByInnerExecutor(context.TODO(), tt.args.ieFactory)
+			err := InitSchemaByInnerExecutor(context.TODO(), tt.args.ieFactory, InternalExecutor)
 			require.Equal(t, nil, err)
 		})
 	}
@@ -159,8 +160,8 @@ func TestInitExternalTblSchema(t *testing.T) {
 	wg.Add(1)
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			wg.Add(5)
-			err := InitExternalTblSchema(tt.args.ctx, tt.args.ieFactory)
+			wg.Add(1 + len(initDDLs))
+			err := InitSchemaByInnerExecutor(tt.args.ctx, tt.args.ieFactory, tt.args.mode)
 			require.Equal(t, nil, err)
 		})
 	}
