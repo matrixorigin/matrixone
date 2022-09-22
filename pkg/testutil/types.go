@@ -15,8 +15,9 @@
 package testutil
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"math/rand"
+
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
 var (

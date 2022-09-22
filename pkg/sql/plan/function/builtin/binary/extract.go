@@ -15,8 +15,7 @@
 package binary
 
 import (
-	"errors"
-
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/extract"
@@ -40,11 +39,11 @@ func ExtractFromString(vectors []*vector.Vector, proc *process.Process) (*vector
 		unit := string(leftValues.Data)
 		inputDate, err := types.ParseDate(string(rightValues.Get(0)))
 		if err != nil {
-			return nil, errors.New("invalid input")
+			return nil, moerr.NewInternalError("invalid input")
 		}
 		resultValues, err = extract.ExtractFromDate(unit, []types.Date{inputDate}, resultValues)
 		if err != nil {
-			return nil, errors.New("invalid input")
+			return nil, moerr.NewInternalError("invalid input")
 		}
 		vector.SetCol(resultVector, resultValues)
 		return resultVector, nil
@@ -60,7 +59,7 @@ func ExtractFromString(vectors []*vector.Vector, proc *process.Process) (*vector
 		result, resultNsp, err := extract.ExtractFromInputBytes(unit, rightValues, right.Nsp, )
 
 	default:
-		return nil, errors.New("invalid input")
+		return nil, moerr.NewInternalError("invalid input")
 	}
 }
 */
@@ -80,7 +79,7 @@ func ExtractFromDate(vectors []*vector.Vector, proc *process.Process) (*vector.V
 		unit := leftValues[0]
 		_, err := extract.ExtractFromDate(unit, rightValues, resultValues)
 		if err != nil {
-			return nil, errors.New("invalid input")
+			return nil, moerr.NewInternalError("invalid input")
 		}
 		return resultVector, nil
 	case left.IsScalar() && !right.IsScalar():
@@ -99,7 +98,7 @@ func ExtractFromDate(vectors []*vector.Vector, proc *process.Process) (*vector.V
 		}
 		return resultVector, nil
 	default:
-		return nil, errors.New("invalid input")
+		return nil, moerr.NewInternalError("invalid input")
 	}
 }
 
@@ -116,7 +115,7 @@ func ExtractFromDatetime(vectors []*vector.Vector, proc *process.Process) (*vect
 		unit := leftValues[0]
 		resultValues, err := extract.ExtractFromDatetime(unit, rightValues, resultValues)
 		if err != nil {
-			return nil, errors.New("invalid input")
+			return nil, moerr.NewInternalError("invalid input")
 		}
 		return vector.NewConstString(resultType, 1, resultValues[0]), nil
 	case left.IsScalar() && !right.IsScalar():
@@ -131,6 +130,6 @@ func ExtractFromDatetime(vectors []*vector.Vector, proc *process.Process) (*vect
 		}
 		return vector.NewWithStrings(resultType, resultValues, right.Nsp, proc.Mp()), nil
 	default:
-		return nil, errors.New("invalid input")
+		return nil, moerr.NewInternalError("invalid input")
 	}
 }

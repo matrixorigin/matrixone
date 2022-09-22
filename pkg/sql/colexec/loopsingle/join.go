@@ -16,8 +16,8 @@ package loopsingle
 
 import (
 	"bytes"
-	"errors"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
@@ -136,7 +136,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 		if len(bs) == 1 {
 			if bs[0] {
 				if len(ctr.bat.Zs) > 1 {
-					return errors.New("scalar subquery returns more than 1 row")
+					return moerr.NewInternalError("scalar subquery returns more than 1 row")
 				}
 				unmatched = false
 				for k, rp := range ap.Result {
@@ -152,7 +152,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 			for j, b := range bs {
 				if b {
 					if !unmatched {
-						return errors.New("scalar subquery returns more than 1 row")
+						return moerr.NewInternalError("scalar subquery returns more than 1 row")
 					}
 					unmatched = false
 					for k, rp := range ap.Result {
