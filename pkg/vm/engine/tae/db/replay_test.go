@@ -904,10 +904,10 @@ func TestReplay5(t *testing.T) {
 	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrDuplicate))
 	assert.NoError(t, txn.Commit())
 	testutils.WaitExpect(3000, func() bool {
-		return tae.Wal.GetCheckpointed() == tae.Wal.GetCurrSeqNum()/2
+		return tae.Wal.GetCheckpointed() == tae.Wal.GetCurrSeqNum()/2+1
 	})
 	printCheckpointStats(t, tae)
-	assert.Equal(t, tae.Wal.GetCurrSeqNum()/2, tae.Wal.GetCheckpointed())
+	assert.Equal(t, tae.Wal.GetCurrSeqNum()/2+1, tae.Wal.GetCheckpointed())
 	mergeBlocks(t, 0, tae, defaultTestDB, schema, false)
 
 	_ = tae.Close()
@@ -931,7 +931,6 @@ func TestReplay5(t *testing.T) {
 }
 
 func TestReplay6(t *testing.T) {
-	t.Skip("TestReplay6")
 	testutils.EnsureNoLeak(t)
 	opts := config.WithLongScanAndCKPOpts(nil)
 	tae := initDB(t, opts)
@@ -1258,7 +1257,6 @@ func TestReplay9(t *testing.T) {
 }
 
 func TestReplay10(t *testing.T) {
-	t.Skip("TestReplay10")
 	testutils.EnsureNoLeak(t)
 	opts := config.WithQuickScanAndCKPOpts(nil)
 	tae := initDB(t, opts)

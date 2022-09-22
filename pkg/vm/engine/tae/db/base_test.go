@@ -59,7 +59,6 @@ func (e *testEngine) bindSchema(schema *catalog.Schema) { e.schema = schema }
 func (e *testEngine) bindTenantID(tenantID uint32)      { e.tenantID = tenantID }
 
 func (e *testEngine) restart() {
-	return
 	_ = e.DB.Close()
 	var err error
 	e.DB, err = Open(e.Dir, e.Opts)

@@ -17,6 +17,7 @@ package indexwrapper
 import (
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
@@ -99,7 +100,9 @@ func (index *immutableIndex) Destroy() (err error) {
 
 func (index *immutableIndex) ReadFrom(blk data.Block, colDef *catalog.ColDef, col file.ColumnBlock) (err error) {
 	entry := blk.GetMeta().(*catalog.BlockEntry)
-	idxFile := col.GetDataObject(blk.GetMeta().(*catalog.BlockEntry).GetNodeLocked().(*catalog.MetadataMVCCNode).MetaLoc)
+	metaLoc := blk.GetMeta().(*catalog.BlockEntry).GetNodeLocked().(*catalog.MetadataMVCCNode).MetaLoc
+	logutil.Infof("MetaLoc is %s", metaLoc)
+	idxFile := col.GetDataObject(metaLoc)
 	id := entry.AsCommonID()
 	id.Idx = uint16(colDef.Idx)
 	index.zmReader = NewZMReader(blk.GetBufMgr(), idxFile, id, colDef.Type)
