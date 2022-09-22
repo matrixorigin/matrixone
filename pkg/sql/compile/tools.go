@@ -79,6 +79,8 @@ var magicNames = map[int]string{
 	InsertValues:   "InsertValues",
 }
 
+var _ = ShowScopes
+
 // ShowScopes show information of a scope structure.
 func ShowScopes(ss []*Scope) string {
 	receiverMap := make(map[*process.WaitRegister]int)
