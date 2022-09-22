@@ -16,15 +16,12 @@ package compile
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
-	plan2 "github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan"
-
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/limit"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergegroup"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergelimit"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergeoffset"
@@ -122,53 +119,19 @@ func (s *Scope) MergeRun(c *Compile) error {
 	return nil
 }
 
-// RemoteRun send the scope to a remote node (if target node is itself, it is same to function ParallelRun) and run it.
+// RemoteRun send the scope to a remote node for execution.
+// if no target node information, just execute it at local.
 func (s *Scope) RemoteRun(c *Compile) error {
-	// TODO: This is a temporary solution that will need to be redesigned
-	//  when distributed transactions are supported.
-	// if not select, just run it locally
-	if c.scope.Plan == nil {
+	// if send to itself, just run it parallel at local.
+	if len(s.NodeInfo.Addr) == 0 || !cnclient.IsCNClientReady() {
 		return s.ParallelRun(c)
-	}
-	if query, ok := c.scope.Plan.Plan.(*plan.Plan_Query); ok {
-		switch query.Query.StmtType {
-		case plan2.Query_INSERT, plan2.Query_UPDATE, plan2.Query_DELETE:
-			return s.ParallelRun(c)
-		case plan2.Query_SELECT:
-		case plan2.Query_MERGE:
-		case plan2.Query_UNKNOWN:
-		}
 	}
 
-	// if address itself, just run it parallel at local.
-	//	return s.ParallelRun(c)
-	if len(s.NodeInfo.Addr) == 0 {
-		s.NodeInfo.Addr = "127.0.0.1:1234"
-	}
-	if !cnclient.Client.Ready() {
-		return s.ParallelRun(c)
-	}
 	err := s.remoteRun(c)
-	// tell to connect operator that it's over
+	// tell connect operator that it's over
 	arg := s.Instructions[len(s.Instructions)-1].Arg.(*connector.Argument)
 	sendToConnectOperator(arg, nil)
 	return err
-	/*
-		// just for test serialization codes.
-		n := len(s.Instructions) - 1
-		in := s.Instructions[n]
-		s.Instructions = s.Instructions[:n]
-		data, err := encodeScope(s)
-		if err != nil {
-			return err
-		}
-		rs, err := decodeScope(data, s.Proc)
-		if err != nil {
-			return err
-		}
-		rs.Instructions = append(rs.Instructions, in)
-	*/
-	// return s.ParallelRun(c)
 }
 
 // ParallelRun try to execute the scope in parallel way.

@@ -160,7 +160,7 @@ func startCNService(
 		if err := s.Close(); err != nil {
 			panic(err)
 		}
-		if err := cnclient.Client.Close(); err != nil {
+		if err := cnclient.CloseCNClient(); err != nil {
 			panic(err)
 		}
 	})

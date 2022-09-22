@@ -85,7 +85,6 @@ func NewService(
 	if err = srv.initMOServer(ctx, pu); err != nil {
 		return nil, err
 	}
-	srv.cfg.ListenAddress = "127.0.0.1:1234"
 
 	server, err := morpc.NewRPCServer("cn-server", cfg.ListenAddress,
 		morpc.NewMessageCodec(srv.acquireMessage, cfg.PayLoadCopyBufferSize),

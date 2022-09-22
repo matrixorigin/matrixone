@@ -24,7 +24,22 @@ import (
 	"time"
 )
 
-var Client *CNClient
+// client each node will hold only one client.
+// It is responsible for sending messages to other nodes. and messages were received
+// and handled by cn-server.
+var client *CNClient
+
+func CloseCNClient() error {
+	return client.Close()
+}
+
+func GetStreamSender(backend string) (morpc.Stream, error) {
+	return client.NewStream(backend)
+}
+
+func IsCNClientReady() bool {
+	return client != nil && client.ready
+}
 
 type CNClient struct {
 	ready  bool
@@ -33,10 +48,6 @@ type CNClient struct {
 
 	// pool for send message
 	requestPool *sync.Pool
-}
-
-func (c *CNClient) Ready() bool {
-	return c != nil && c.ready
 }
 
 func (c *CNClient) Send(ctx context.Context, backend string, request morpc.Message) (*morpc.Future, error) {
@@ -75,10 +86,10 @@ type ClientConfig struct {
 func NewCNClient(cfg *ClientConfig) error {
 	var err error
 	cfg.Fill()
-	Client = &CNClient{config: cfg}
-	Client.requestPool = &sync.Pool{New: func() any { return &pipeline.Message{} }}
+	client = &CNClient{config: cfg}
+	client.requestPool = &sync.Pool{New: func() any { return &pipeline.Message{} }}
 
-	codec := morpc.NewMessageCodec(Client.acquireMessage, cfg.PayLoadCopyBufferSize)
+	codec := morpc.NewMessageCodec(client.acquireMessage, cfg.PayLoadCopyBufferSize)
 	factory := morpc.NewGoettyBasedBackendFactory(codec,
 		morpc.WithBackendConnectWhenCreate(),
 		morpc.WithBackendGoettyOptions(goetty.WithSessionRWBUfferSize(
@@ -86,10 +97,10 @@ func NewCNClient(cfg *ClientConfig) error {
 		morpc.WithBackendConnectTimeout(cfg.TimeOutForEachConnect),
 	)
 
-	Client.client, err = morpc.NewClient(factory,
+	client.client, err = morpc.NewClient(factory,
 		morpc.WithClientMaxBackendPerHost(cfg.MaxSenderNumber),
 	)
-	Client.ready = true
+	client.ready = true
 	return err
 }
 

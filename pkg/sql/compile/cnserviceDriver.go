@@ -92,8 +92,8 @@ type processHelper struct {
 func CnServerMessageHandler(ctx context.Context, message morpc.Message,
 	cs morpc.ClientSession,
 	storeEngine engine.Engine, fileService fileservice.FileService, cli client.TxnClient) error {
-	var errCode uint32 = 0
-	var errStr string
+	var errData []byte
+	isMoErr := false
 	// structure to help handle the message.
 	helper := &messageHandleHelper{
 		storeEngine: storeEngine,
@@ -102,13 +102,16 @@ func CnServerMessageHandler(ctx context.Context, message morpc.Message,
 	// decode message and run it, get final analysis information and err info.
 	analysis, err := pipelineMessageHandle(ctx, message, cs, helper, cli)
 	if err != nil {
-		errStr = err.Error()
-		if me, ok := err.(*moerr.Error); ok {
-			errCode = uint32(me.ErrorCode())
-			errStr = me.Error()
-		}
+		errData, isMoErr = pipeline.EncodedMessageError(err)
 	}
-	return cs.Write(ctx, &pipeline.Message{Id: message.GetID(), Sid: pipeline.MessageEnd, ErrCode: errCode, ErrStr: errStr, Analyse: analysis})
+	backMessage := &pipeline.Message{
+		Id:      message.GetID(),
+		Sid:     pipeline.MessageEnd,
+		IsMoErr: isMoErr,
+		Err:     errData,
+		Analyse: analysis,
+	}
+	return cs.Write(ctx, backMessage)
 }
 
 func pipelineMessageHandle(ctx context.Context, message morpc.Message, cs morpc.ClientSession, messageHelper *messageHandleHelper, cli client.TxnClient) (anaData []byte, err error) {
@@ -151,9 +154,9 @@ func pipelineMessageHandle(ctx context.Context, message morpc.Message, cs morpc.
 
 // remoteRun sends a scope to remote node for execution, and wait to receive the back message.
 // the back message is always *pipeline.Message but contains three cases.
-// 1. ErrMessage
-// 2. End Message with the result of analysis
-// 3. Batch Message
+// 1. Message with error information
+// 2. Message with end flag and the result of analysis
+// 3. Batch Message with batch data
 func (s *Scope) remoteRun(c *Compile) error {
 	// encode the scope
 	// the last instruction of remote-run scope must be `connect`, it doesn't need serialization work.
@@ -161,7 +164,6 @@ func (s *Scope) remoteRun(c *Compile) error {
 	n := len(s.Instructions) - 1
 	con := s.Instructions[n]
 	s.Instructions = s.Instructions[:n]
-	// s.Plan = c.scope.Plan
 	sData, errEncode := encodeScope(s)
 	if errEncode != nil {
 		return errEncode
@@ -175,7 +177,7 @@ func (s *Scope) remoteRun(c *Compile) error {
 	}
 
 	// get the stream-sender
-	streamSender, errStream := cnclient.Client.NewStream(s.NodeInfo.Addr)
+	streamSender, errStream := cnclient.GetStreamSender(s.NodeInfo.Addr)
 	if errStream != nil {
 		return errStream
 	}
@@ -184,8 +186,8 @@ func (s *Scope) remoteRun(c *Compile) error {
 	}(streamSender)
 
 	// send encoded message
-	// mo-rpc send message requires ctx has its own timeout.
-	// TODO: move these code to front-end, get dead time from config file may suitable.
+	// mo-rpc send message requires that context should have its own timeout.
+	// TODO: get dead time from config file may suitable.
 	if _, ok := c.ctx.Deadline(); !ok {
 		var cancel context.CancelFunc
 		c.ctx, cancel = context.WithTimeout(c.ctx, time.Second*10000)
@@ -208,21 +210,16 @@ func (s *Scope) remoteRun(c *Compile) error {
 	for {
 		select {
 		case <-c.ctx.Done():
-			return moerr.NewInternalError("cn-client context has been canceled.")
+			return moerr.NewRPCTimeout()
 		case val = <-messagesReceive:
 		}
 
 		m := val.(*pipeline.Message)
-
-		errMessage := m.GetErrStr()
-		if len(errMessage) > 0 {
-			return moerr.NewInternalError(errMessage)
+		if err := pipeline.DecodeMessageError(m); err != nil {
+			return err
 		}
 
-		sid := m.GetSid()
-		// check if it's the last message
-		if sid == pipeline.MessageEnd {
-			// get analyse information
+		if m.IsEndMessage() {
 			anaData := m.GetAnalyse()
 			if len(anaData) > 0 {
 				// decode analyse
@@ -277,6 +274,7 @@ func decodeScope(data []byte, proc *process.Process) (*Scope, error) {
 	return s, fillInstructionsForScope(s, ctx, p)
 }
 
+// encodeProcessInfo get needed information from proc, and do serialization work.
 func encodeProcessInfo(proc *process.Process) ([]byte, error) {
 	procInfo := &pipeline.ProcessInfo{}
 	{
@@ -312,6 +310,7 @@ func encodeProcessInfo(proc *process.Process) ([]byte, error) {
 	return procInfo.Marshal()
 }
 
+// generateProcessHelper generate the processHelper by encoded process info.
 func generateProcessHelper(data []byte, cli client.TxnClient) (*processHelper, error) {
 	procInfo := &pipeline.ProcessInfo{}
 	err := procInfo.Unmarshal(data)
@@ -1157,7 +1156,7 @@ func decodeBatch(_ *process.Process, msg *pipeline.Message) (*batch.Batch, error
 	// TODO: allocate the memory from process may suitable.
 	bat := new(batch.Batch)
 	err := types.Decode(msg.GetData(), bat)
-	// set all vectors to be origin, and they can be freed by process.
+	// set all vectors to be origin, and they can be freed by process then.
 	for i := range bat.Vecs {
 		bat.Vecs[i].SetOriginal(true)
 	}
