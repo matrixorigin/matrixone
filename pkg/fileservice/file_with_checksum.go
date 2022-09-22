@@ -16,10 +16,11 @@ package fileservice
 
 import (
 	"encoding/binary"
-	"errors"
 	"hash/crc32"
 	"io"
 	"os"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
 // FileWithChecksum maps file contents to blocks with checksum
@@ -38,7 +39,7 @@ const (
 var (
 	crcTable = crc32.MakeTable(crc32.Castagnoli)
 
-	ErrChecksumNotMatch = errors.New("checksum not match")
+	ErrChecksumNotMatch = moerr.NewInternalError("checksum not match")
 )
 
 func NewFileWithChecksum[T FileLike](

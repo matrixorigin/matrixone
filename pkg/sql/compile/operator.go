@@ -281,14 +281,14 @@ func constructInsert(n *plan.Node, eg engine.Engine, txnOperator TxnOperator) (*
 		TargetColDefs: n.TableDef.Cols,
 		Engine:        eg,
 		DB:            db,
-		TableDB:       n.TableDef.Name + "_" + n.ObjRef.SchemaName,
+		TableID:       relation.GetTableID(ctx),
 	}, nil
 }
 
 func constructUpdate(n *plan.Node, eg engine.Engine, txnOperator TxnOperator) (*update.Argument, error) {
 	ctx := context.TODO()
 	us := make([]*update.UpdateCtx, len(n.UpdateCtxs))
-	tableDB := make([]string, len(n.UpdateCtxs))
+	tableID := make([]string, len(n.UpdateCtxs))
 	db := make([]engine.Database, len(n.UpdateCtxs))
 	for i, updateCtx := range n.UpdateCtxs {
 		dbSource, err := eg.Database(ctx, updateCtx.DbName, txnOperator)
@@ -301,7 +301,7 @@ func constructUpdate(n *plan.Node, eg engine.Engine, txnOperator TxnOperator) (*
 			return nil, err
 		}
 
-		tableDB[i] = updateCtx.TblName + "_" + updateCtx.DbName
+		tableID[i] = relation.GetTableID(ctx)
 		colNames := make([]string, 0, len(updateCtx.UpdateCols))
 		for _, col := range updateCtx.UpdateCols {
 			colNames = append(colNames, col.Name)
@@ -322,7 +322,7 @@ func constructUpdate(n *plan.Node, eg engine.Engine, txnOperator TxnOperator) (*
 		UpdateCtxs:  us,
 		Engine:      eg,
 		DB:          db,
-		TableDB:     tableDB,
+		TableID:     tableID,
 		TableDefVec: n.TableDefVec,
 	}, nil
 }

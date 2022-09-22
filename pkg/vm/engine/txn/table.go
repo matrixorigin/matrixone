@@ -16,6 +16,7 @@ package txnengine
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -334,4 +335,8 @@ func (t *Table) GetHideKeys(ctx context.Context) (attrs []*engine.Attribute, err
 	resp := resps[0]
 
 	return resp.Attrs, nil
+}
+
+func (t *Table) GetTableID(ctx context.Context) string {
+	return fmt.Sprintf("%x", t.id)
 }

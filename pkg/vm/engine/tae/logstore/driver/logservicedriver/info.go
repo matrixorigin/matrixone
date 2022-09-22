@@ -15,18 +15,18 @@
 package logservicedriver
 
 import (
-	"errors"
 	"math"
 	"sync"
 	"time"
 
 	"github.com/RoaringBitmap/roaring/roaring64"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 )
 
-var ErrDriverLsnNotFound = errors.New("driver info: driver lsn not found")
-var ErrRetryTimeOut = errors.New("driver info: retry time out")
+var ErrDriverLsnNotFound = moerr.NewInternalError("driver info: driver lsn not found")
+var ErrRetryTimeOut = moerr.NewInternalError("driver info: retry time out")
 
 type driverInfo struct {
 	addr        map[uint64]*common.ClosedIntervals //logservicelsn-driverlsn TODO drop on truncate

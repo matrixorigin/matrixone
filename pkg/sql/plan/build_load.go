@@ -16,7 +16,6 @@ package plan
 
 import (
 	"encoding/json"
-	"fmt"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -111,10 +110,10 @@ func GetProjectNode(stmt *tree.Load, ctx CompilerContext, node *plan.Node, Name2
 	dbName := string(stmt.Table.SchemaName)
 	_, tableDef := ctx.Resolve(dbName, tblName)
 	if tableDef == nil {
-		return fmt.Errorf("invalid table name: %s", string(stmt.Table.ObjectName))
+		return moerr.NewInternalError("invalid table name: %s", string(stmt.Table.ObjectName))
 	}
 	if len(stmt.Param.Tail.ColumnList) > len(tableDef.Cols) {
-		return fmt.Errorf("the load data colnum list is larger than table colnum")
+		return moerr.NewInternalError("the load data colnum list is larger than table colnum")
 	}
 	colToIndex := make(map[int32]string, 0)
 	if len(stmt.Param.Tail.ColumnList) == 0 {
@@ -126,13 +125,13 @@ func GetProjectNode(stmt *tree.Load, ctx CompilerContext, node *plan.Node, Name2
 			switch realCol := col.(type) {
 			case *tree.UnresolvedName:
 				if _, ok := Name2ColIndex[realCol.Parts[0]]; !ok {
-					return fmt.Errorf("column '%s' does not exist", realCol.Parts[0])
+					return moerr.NewInternalError("column '%s' does not exist", realCol.Parts[0])
 				}
 				colToIndex[int32(i)] = realCol.Parts[0]
 			case *tree.VarExpr:
 				//NOTE:variable like '@abc' will be passed by.
 			default:
-				return fmt.Errorf("unsupported column type %v", realCol)
+				return moerr.NewInternalError("unsupported column type %v", realCol)
 			}
 		}
 	}

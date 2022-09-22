@@ -34,10 +34,11 @@ N >= 0, floor to the Nth placeholder after decimal point
 */
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"math"
 	"strconv"
 	"strings"
+
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
 var (

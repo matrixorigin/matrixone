@@ -16,6 +16,7 @@ package disttae
 
 import (
 	"context"
+	"strconv"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -91,6 +92,10 @@ func (tbl *table) AddTableDef(ctx context.Context, def engine.TableDef) error {
 
 func (tbl *table) DelTableDef(ctx context.Context, def engine.TableDef) error {
 	return nil
+}
+
+func (tbl *table) GetTableID(ctx context.Context) string {
+	return strconv.FormatUint(tbl.tableId, 10)
 }
 
 func (tbl *table) NewReader(ctx context.Context, num int, expr *plan.Expr,

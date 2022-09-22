@@ -29,7 +29,6 @@ type (
 	Uint            = memtable.Uint
 	Bool            = memtable.Bool
 	Time            = memtable.Time
-	NamedRow        = memtable.NamedRow
 )
 
 var (

@@ -15,7 +15,6 @@
 package moengine
 
 import (
-	"fmt"
 	"strconv"
 
 	"github.com/RoaringBitmap/roaring/roaring64"
@@ -27,6 +26,7 @@ import (
 
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -350,7 +350,7 @@ func UpdateValue(col *vector.Vector, row uint32, val any) {
 	case types.T_varchar, types.T_char, types.T_json, types.T_blob:
 		GenericUpdateBytes(col, row, val)
 	default:
-		panic(fmt.Errorf("%v not supported", col.Typ))
+		panic(moerr.NewInternalError("%v not supported", col.Typ))
 	}
 }
 
@@ -541,7 +541,7 @@ func MOToVector(v *vector.Vector, nullable bool) containers.Vector {
 			bs.Data = types.EncodeFixedSlice(v.Col.([]types.Rowid), types.RowidSize)
 
 		default:
-			panic(any(fmt.Errorf("%s not supported", v.Typ.String())))
+			panic(any(moerr.NewInternalError("%s not supported", v.Typ.String())))
 		}
 	}
 	if v.Nsp.Np != nil {
@@ -721,7 +721,7 @@ func MOToVectorTmp(v *vector.Vector, nullable bool) containers.Vector {
 			}
 		}
 	default:
-		panic(any(fmt.Errorf("%s not supported", v.Typ.String())))
+		panic(any(moerr.NewInternalError("%s not supported", v.Typ.String())))
 	}
 	if v.Nsp.Np != nil {
 		np := &roaring64.Bitmap{}

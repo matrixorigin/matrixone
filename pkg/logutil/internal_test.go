@@ -15,13 +15,15 @@
 package logutil
 
 import (
-	"fmt"
-	"github.com/stretchr/testify/require"
-	"go.uber.org/zap"
-	"go.uber.org/zap/zapcore"
 	"path"
 	"regexp"
 	"testing"
+
+	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
+	"go.uber.org/zap/zapcore"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
 func TestLogConfig_getter(t *testing.T) {
@@ -165,7 +167,7 @@ func TestSetupMOLogger_panic(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			defer func() {
 				if err := recover(); err != nil {
-					require.Equal(t, fmt.Errorf("unsupported log format: %s", tt.args.conf.Format), err)
+					require.Equal(t, moerr.NewInternalError("unsupported log format: %s", tt.args.conf.Format), err)
 				} else {
 					t.Errorf("not receive panic")
 				}
