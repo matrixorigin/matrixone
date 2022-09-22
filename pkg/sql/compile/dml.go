@@ -15,8 +15,7 @@
 package compile
 
 import (
-	"fmt"
-
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -430,7 +429,7 @@ func fillBatch(bat *batch.Batch, p *plan.InsertValues, rows []tree.Exprs, proc *
 				return err
 			}
 		default:
-			return fmt.Errorf("data truncation: type of '%v' doesn't implement", v.Typ)
+			return moerr.NewInternalError("data truncation: type of '%v' doesn't implement", v.Typ)
 		}
 	}
 	bat.Zs = make([]int64, len(rows))

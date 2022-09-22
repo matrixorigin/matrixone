@@ -18,10 +18,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
-	"errors"
+	"sync"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
-	"sync"
 )
 
 type ObjectWriter struct {
@@ -92,7 +93,7 @@ func (w *ObjectWriter) WriteIndex(fd BlockObject, index IndexData) error {
 
 	block := w.GetBlock(fd.GetID())
 	if block == nil || block.columns[index.GetIdx()] == nil {
-		return errors.New("object io: not found")
+		return moerr.NewInternalError("object io: not found")
 	}
 	err = index.Write(w, block)
 	return err

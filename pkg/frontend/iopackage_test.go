@@ -15,7 +15,6 @@
 package frontend
 
 import (
-	"errors"
 	"fmt"
 	"sync"
 	"sync/atomic"
@@ -25,6 +24,7 @@ import (
 	"github.com/fagongzi/goetty/v2"
 	"github.com/fagongzi/goetty/v2/codec"
 	"github.com/fagongzi/goetty/v2/codec/simple"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/smartystreets/goconvey/convey"
 )
@@ -236,7 +236,7 @@ func setServer(val int32) {
 func echoHandler(session goetty.IOSession, msg interface{}, received uint64) error {
 	value, ok := msg.(string)
 	if !ok {
-		return errors.New("convert to string failed")
+		return moerr.NewInternalError("convert to string failed")
 	}
 
 	err := session.Write(value, goetty.WriteOptions{Flush: true})

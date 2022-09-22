@@ -17,8 +17,9 @@ package errutil
 import (
 	"context"
 	"fmt"
+
 	"github.com/cockroachdb/errors/errbase"
-	"github.com/matrixorigin/matrixone/pkg/util"
+	"github.com/matrixorigin/matrixone/pkg/util/stack"
 )
 
 // WithContext annotates err with a stack info and a context, which should contain span info.
@@ -33,7 +34,7 @@ func WithContextWithDepth(ctx context.Context, err error, depth int) error {
 		return nil
 	}
 	if _, ok := err.(StackTracer); !ok {
-		err = &withStack{cause: err, Stack: util.Callers(depth + 1)}
+		err = &withStack{cause: err, Stack: stack.Callers(depth + 1)}
 	}
 	err = &withContext{cause: err, ctx: ctx}
 	GetReportErrorFunc()(ctx, err, depth+1)

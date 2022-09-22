@@ -188,6 +188,7 @@ func TestDerivedTableQuery(t *testing.T) {
 // Collection query
 func TestCollectionQuery(t *testing.T) {
 	sqls := []string{
+		"explain verbose select 2 intersect select 2 union all select 22222",
 		"explain verbose select 1 union select 2",
 		"explain verbose select 1 union (select 2 union select 3)",
 		"explain verbose (select 1 union select 2) union select 3 intersect select 4 order by 1",
@@ -275,9 +276,9 @@ func runOneStmt(opt plan.Optimizer, t *testing.T, sql string) error {
 				}
 			} else if strings.EqualFold(v.Name, "ANALYZE") {
 				if strings.EqualFold(v.Value, "TRUE") || v.Value == "NULL" {
-					es.Anzlyze = true
+					es.Analyze = true
 				} else if strings.EqualFold(v.Value, "FALSE") {
-					es.Anzlyze = false
+					es.Analyze = false
 				} else {
 					return moerr.NewInvalidInput("boolean value %v", v.Value)
 				}

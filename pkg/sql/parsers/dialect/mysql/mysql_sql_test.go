@@ -247,13 +247,25 @@ var (
 		output: "select ltrim(a), rtrim(a), trim(both, , a), trim(both,  , a)",
 	}, {
 		input:  "SELECT (rpad(1.0, 2048,1)) IS NOT FALSE;",
-		output: "select (rpad(1.0, 2048, 1)) != false",
+		output: "select (rpad(1.0, 2048, 1)) is not false",
 	}, {
 		input:  "SELECT 1 is unknown;",
 		output: "select 1 is unknown",
 	}, {
 		input:  "SELECT false is not unknown;",
 		output: "select false is not unknown",
+	}, {
+		input:  "SELECT 1 is true;",
+		output: "select 1 is true",
+	}, {
+		input:  "SELECT false is not true;",
+		output: "select false is not true",
+	}, {
+		input:  "SELECT 1 is false;",
+		output: "select 1 is false",
+	}, {
+		input:  "SELECT false is not false;",
+		output: "select false is not false",
 	}, {
 		input:  "SELECT FROM_UNIXTIME(99999999999999999999999999999999999999999999999999999999999999999);",
 		output: "select from_unixtime(99999999999999999999999999999999999999999999999999999999999999999)",
@@ -271,7 +283,7 @@ var (
 		output: "select 2007-01-01 + interval(a, day) from t1",
 	}, {
 		input:  "SELECT CAST(COALESCE(t0.c0, -1) AS UNSIGNED) IS TRUE FROM t0;",
-		output: "select cast(coalesce(t0.c0, -1) as unsigned) = true from t0",
+		output: "select cast(coalesce(t0.c0, -1) as unsigned) is true from t0",
 	}, {
 		input:  "select Fld1, variance(Fld2) as q from t1 group by Fld1 having q is not null;",
 		output: "select fld1, variance(fld2) as q from t1 group by fld1 having q is not null",

@@ -32,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
 
 	"github.com/fagongzi/goetty/v2"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -184,7 +185,7 @@ func (s *service) initEngine(
 		}
 
 	default:
-		return fmt.Errorf("unknown engine type: %s", s.cfg.Engine.Type)
+		return moerr.NewInternalError("unknown engine type: %s", s.cfg.Engine.Type)
 
 	}
 

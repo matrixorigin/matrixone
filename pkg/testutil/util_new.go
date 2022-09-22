@@ -16,11 +16,11 @@ package testutil
 
 import (
 	"context"
-	"fmt"
 	"math/rand"
 	"strconv"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -217,7 +217,7 @@ func NewVector(n int, typ types.Type, m *mheap.Mheap, random bool, Values interf
 		}
 		return NewStringVector(n, typ, m, random, nil)
 	default:
-		panic(fmt.Errorf("unsupport vector's type '%v", typ))
+		panic(moerr.NewInternalError("unsupport vector's type '%v", typ))
 	}
 }
 

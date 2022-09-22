@@ -16,13 +16,13 @@ package like
 
 import (
 	"bytes"
-	"errors"
 	"fmt"
 	"regexp"
 	"strings"
 	"unicode/utf8"
 	"unsafe"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 )
 
@@ -154,7 +154,7 @@ func BtConstAndConst(s string, expr []byte) (bool, error) {
 // <source column> like <rule column>
 func BtSliceAndSlice(xs []string, exprs [][]byte, rs []bool) ([]bool, error) {
 	if len(xs) != len(exprs) {
-		return nil, errors.New("unexpected error when LIKE operator")
+		return nil, moerr.NewInternalError("unexpected error when LIKE operator")
 	}
 
 	for i := range xs {
