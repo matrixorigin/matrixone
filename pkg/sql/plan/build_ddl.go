@@ -56,7 +56,7 @@ func buildCreateView(stmt *tree.CreateView, ctx CompilerContext) (*Plan, error) 
 			Alg:  plan.CompressType_Lz4,
 			Typ:  expr.Typ,
 			Default: &plan.Default{
-				NullAbility:  false,
+				NullAbility:  true,
 				Expr:         nil,
 				OriginString: "",
 			},
