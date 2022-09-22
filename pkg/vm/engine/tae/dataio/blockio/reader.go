@@ -68,7 +68,7 @@ func (r *Reader) LoadBlkColumns(
 	opts *containers.Options) (bat *containers.Batch, err error) {
 	bat = containers.NewBatch()
 
-	for i, _ := range r.block.columns {
+	for i := range r.block.columns {
 		vec := containers.MakeVector(colTypes[i], nullables[i], opts)
 		bat.AddVector(colNames[i], vec)
 		if r.block.key == nil {

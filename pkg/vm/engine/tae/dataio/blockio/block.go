@@ -195,7 +195,7 @@ func (bf *blockFile) LoadBatch(
 	if bf.reader == nil {
 		bat = containers.NewBatch()
 
-		for i, _ := range bf.columns {
+		for i := range bf.columns {
 			vec := containers.MakeVector(colTypes[i], nullables[i], opts)
 			bat.AddVector(colNames[i], vec)
 			if bf.key == nil {

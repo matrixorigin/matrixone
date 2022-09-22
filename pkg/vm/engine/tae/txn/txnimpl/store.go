@@ -195,6 +195,18 @@ func (store *txnStore) RangeDelete(dbId uint64, id *common.ID, start, end uint32
 	return db.RangeDelete(id, start, end, dt)
 }
 
+func (store *txnStore) UpdateMetadata(dbId uint64, id *common.ID, vun handle.MetaUpdateNode) (err error) {
+	un := vun.(*catalog.MetadataMVCCNode)
+	db, err := store.getOrSetDB(dbId)
+	if err != nil {
+		return err
+	}
+	// if table.IsDeleted() {
+	// 	return txnbase.ErrNotFound
+	// }
+	return db.UpdateMetadata(id, un)
+}
+
 func (store *txnStore) GetByFilter(dbId, tid uint64, filter *handle.Filter) (id *common.ID, offset uint32, err error) {
 	db, err := store.getOrSetDB(dbId)
 	if err != nil {

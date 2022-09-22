@@ -121,7 +121,10 @@ func (be *MetaBaseEntry) UpdateAttr(txn txnif.TxnReader, node *MetadataMVCCNode)
 		txnToWait.GetTxnState(true)
 		be.RLock()
 	}
-	be.CheckConflict(txn)
+	err = be.CheckConflict(txn)
+	if err != nil {
+		return
+	}
 	var entry *MetadataMVCCNode
 	isNewNode, entry = be.getOrSetUpdateNode(txn)
 	entry.UpdateAttr(node)

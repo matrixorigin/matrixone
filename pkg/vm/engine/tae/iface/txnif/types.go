@@ -217,6 +217,7 @@ type TxnStore interface {
 	CreateNonAppendableBlock(dbId uint64, id *common.ID) (handle.Block, error)
 	SoftDeleteSegment(dbId uint64, id *common.ID) error
 	SoftDeleteBlock(dbId uint64, id *common.ID) error
+	UpdateMetadata(dbId uint64, id *common.ID, un handle.MetaUpdateNode) (err error)
 
 	AddTxnEntry(TxnEntryType, TxnEntry)
 

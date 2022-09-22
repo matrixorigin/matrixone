@@ -312,7 +312,9 @@ func (task *mergeBlocksTask) Execute() (err error) {
 			block.GetExtent().Length(),
 			block.GetExtent().OriginSize(),
 		)
-		task.createdBlks[i].MetaBaseEntry.UpdateAttr(task.txn, node.(*catalog.MetadataMVCCNode))
+		blkID := task.createdBlks[i].AsCommonID()
+		dbid := task.createdBlks[i].GetSegment().GetTable().GetDB().GetID()
+		task.txn.GetStore().UpdateMetadata(dbid, blkID, node)
 	}
 	for _, blk := range task.createdBlks {
 		if err = blk.GetBlockData().ReplayIndex(); err != nil {

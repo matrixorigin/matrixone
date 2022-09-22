@@ -31,6 +31,8 @@ type BlockIt interface {
 
 type FilterOp int16
 
+type MetaUpdateNode interface{}
+
 const (
 	FilterEq FilterOp = iota
 	FilterBatchEq

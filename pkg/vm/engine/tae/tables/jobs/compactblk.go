@@ -170,7 +170,9 @@ func (task *compactBlockTask) Execute() (err error) {
 		ioTask.file.GetMeta("").GetExtent().OriginSize(),
 	)
 	logutil.Infof("node: %v", node.(*catalog.MetadataMVCCNode).MetaLoc)
-	newBlk.GetMeta().(*catalog.BlockEntry).MetaBaseEntry.UpdateAttr(task.txn, node.(*catalog.MetadataMVCCNode))
+	blkID := newBlk.Fingerprint()
+	dbid := newBlk.GetMeta().(*catalog.BlockEntry).GetSegment().GetTable().GetDB().GetID()
+	task.txn.GetStore().UpdateMetadata(dbid, blkID, node)
 	if err = newBlkData.ReplayIndex(); err != nil {
 		return err
 	}

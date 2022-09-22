@@ -47,6 +47,8 @@ func (e *MetadataMVCCNode) CloneAll() txnbase.MVCCNode {
 	node := &MetadataMVCCNode{
 		EntryMVCCNode: e.EntryMVCCNode.Clone(),
 		TxnMVCCNode:   e.TxnMVCCNode.CloneAll(),
+		MetaLoc:       e.MetaLoc,
+		DeltaLoc:      e.DeltaLoc,
 	}
 	return node
 }

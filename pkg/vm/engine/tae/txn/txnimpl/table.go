@@ -518,6 +518,25 @@ func (tbl *txnTable) Update(id *common.ID, row uint32, col uint16, v any) (err e
 	return
 }
 
+func (tbl *txnTable) UpdateMetadata(id *common.ID, un *catalog.MetadataMVCCNode) (err error) {
+	segMeta, err := tbl.entry.GetSegmentByID(id.SegmentID)
+	if err != nil {
+		panic(err)
+	}
+	meta, err := segMeta.GetBlockEntryByID(id.BlockID)
+	if err != nil {
+		panic(err)
+	}
+	isNewNode, err := meta.UpdateAttr(tbl.store.txn, un)
+	if err != nil {
+		return
+	}
+	if isNewNode {
+		tbl.txnEntries = append(tbl.txnEntries, meta)
+	}
+	return
+}
+
 // 1. Get insert node and offset in node
 // 2. Get row
 // 3. Build a new row
