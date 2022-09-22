@@ -352,6 +352,10 @@ func TestNonAppendableBlock(t *testing.T) {
 		blockFile := dataBlk.GetBlockFile()
 		_, err = blockFile.WriteBatch(bat, txn.GetStartTS())
 		assert.Nil(t, err)
+		err = blockFile.Sync()
+		assert.Nil(t, err)
+		err = blockFile.WriteRows(uint32(bat.Length()))
+		assert.Nil(t, err)
 
 		v, err := dataBlk.GetValue(txn, 4, 2)
 		assert.Nil(t, err)

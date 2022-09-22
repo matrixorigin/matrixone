@@ -239,25 +239,29 @@ func (task *mergeBlocksTask) Execute() (err error) {
 		batch := containers.NewBatch()
 		batchs = append(batchs, batch)
 	}
-
+	phyAddrVecs := make([]containers.Vector, 0)
+	phyAddr := schema.PhyAddrKey
+	for i, blk := range task.createdBlks {
+		vec, err := model.PreparePhyAddrData(phyAddr.Type, blk.MakeKey(), 0, uint32(vecs[i].Length()))
+		if err != nil {
+			return err
+		}
+		phyAddrVecs = append(phyAddrVecs, vec)
+		//batchs[i].AddVector(phyAddr.Name, vec)
+	}
 	// Build and flush block index if sort key is defined
 	// Flush sort key it correlates to only one column
 
 	for _, def := range schema.ColDefs {
-		// Skip
-		// PhyAddr column was processed before
-		// If only one single sort key, it was processed before
 		if def.IsPhyAddr() {
-			phyAddr := schema.PhyAddrKey
-			for i, blk := range task.createdBlks {
-				vec, err := model.PreparePhyAddrData(phyAddr.Type, blk.MakeKey(), 0, uint32(vecs[i].Length()))
-				if err != nil {
-					return err
-				}
-				batchs[i].AddVector(def.Name, vec)
+			for i := range task.createdBlks {
+				batchs[i].AddVector(phyAddr.Name, phyAddrVecs[i])
 			}
 			continue
 		}
+		// Skip
+		// PhyAddr column was processed before
+		// If only one single sort key, it was processed before
 		vecs = vecs[:0]
 		for _, block := range task.compacted {
 			if view, err = block.GetColumnDataById(def.Idx, nil); err != nil {
@@ -277,6 +281,7 @@ func (task *mergeBlocksTask) Execute() (err error) {
 			batchs[i].AddVector(def.Name, vec)
 		}
 	}
+
 	id := &common.ID{
 		TableID:   task.toSegEntry.GetTable().GetID(),
 		SegmentID: task.toSegEntry.GetID(),
@@ -285,6 +290,9 @@ func (task *mergeBlocksTask) Execute() (err error) {
 	for _, bat := range batchs {
 		block, err := writer.WriteBlock(bat)
 		for idx, vec := range bat.Vecs {
+			if phyAddr.Idx == idx {
+				continue
+			}
 			_, err = BuildColumnIndex(writer.GetWriter(), block, schema.ColDefs[idx], vec, false, false)
 			if err != nil {
 				return err

@@ -16,6 +16,7 @@ package db
 
 import (
 	"errors"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"os"
 	"sync"
 	"testing"
@@ -322,7 +323,10 @@ func getOneBlockMeta(rel handle.Relation) *catalog.BlockEntry {
 
 func checkAllColRowsByScan(t *testing.T, rel handle.Relation, expectRows int, applyDelete bool) {
 	schema := rel.GetMeta().(*catalog.TableEntry).GetSchema()
-	for _, def := range schema.ColDefs {
+	for i, def := range schema.ColDefs {
+		if i == 13 {
+			logutil.Infof("fsdfsdf")
+		}
 		rows := getColumnRowsByScan(t, rel, def.Idx, applyDelete)
 		assert.Equal(t, expectRows, rows)
 	}
