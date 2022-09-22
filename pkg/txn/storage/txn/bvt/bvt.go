@@ -131,17 +131,19 @@ func main() {
 		},
 	)
 
-	clock := clock.NewHLCClock(func() int64 {
+	ck := clock.NewHLCClock(func() int64 {
 		return time.Now().Unix()
 	}, math.MaxInt)
+	clock.SetupDefaultClock(ck)
+
 	storage, err := txnstorage.NewMemoryStorage(
 		testutil.NewMheap(),
 		txnstorage.SnapshotIsolation,
-		clock,
+		ck,
 	)
 	check(err)
 	txnClient := txnstorage.NewStorageTxnClient(
-		clock,
+		ck,
 		storage,
 	)
 
