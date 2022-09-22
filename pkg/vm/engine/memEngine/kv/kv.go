@@ -14,7 +14,10 @@
 
 package kv
 
-import "bytes"
+import (
+	"bytes"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+)
 
 func New() *KV {
 	return &KV{mp: make(map[string][]byte)}
@@ -43,7 +46,7 @@ func (a *KV) Get(k string, buf *bytes.Buffer) ([]byte, error) {
 	defer a.Unlock()
 	v, ok := a.mp[k]
 	if !ok {
-		return nil, ErrNotExist
+		return nil, moerr.NewInternalError("not exist")
 	}
 	buf.Reset()
 	if len(v) > buf.Cap() {

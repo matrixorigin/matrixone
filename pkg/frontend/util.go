@@ -18,7 +18,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"go/constant"
 	"os"
 	"runtime"
@@ -28,12 +27,12 @@ import (
 
 	"github.com/BurntSushi/toml"
 
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-
-	"github.com/matrixorigin/matrixone/pkg/container/types"
-
 	mo_config "github.com/matrixorigin/matrixone/pkg/config"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/mempool"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
@@ -442,9 +441,15 @@ func (s statementStatus) String() string {
 
 // logStatementStatus prints the status of the statement into the log.
 func logStatementStatus(ctx context.Context, ses *Session, stmt tree.Statement, status statementStatus, err error) {
-	fmtCtx := tree.NewFmtCtx(dialect.MYSQL)
-	stmt.Format(fmtCtx)
-	stmtStr := fmtCtx.String()
+	var stmtStr string
+	stm := trace.StatementFromContext(ctx)
+	if stm == nil {
+		fmtCtx := tree.NewFmtCtx(dialect.MYSQL)
+		stmt.Format(fmtCtx)
+		stmtStr = fmtCtx.String()
+	} else {
+		stmtStr = stm.Statement
+	}
 	logStatementStringStatus(ctx, ses, stmtStr, status, err)
 }
 

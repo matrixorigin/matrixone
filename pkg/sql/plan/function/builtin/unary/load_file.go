@@ -16,9 +16,9 @@ package unary
 
 import (
 	"context"
-	"errors"
 	"io"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -45,7 +45,7 @@ func LoadFile(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, 
 	ctx, err := io.ReadAll(r)
 	defer r.Close()
 	if len(ctx) > blobsize {
-		return nil, errors.New("Data too long for blob")
+		return nil, moerr.NewInternalError("Data too long for blob")
 	}
 	var isNull bool
 	if len(ctx) == 0 {

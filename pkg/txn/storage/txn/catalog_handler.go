@@ -33,8 +33,6 @@ import (
 	txnengine "github.com/matrixorigin/matrixone/pkg/vm/engine/txn"
 )
 
-//TODO system table accessing for non-sys account
-
 // CatalogHandler handles read-only requests for catalog
 type CatalogHandler struct {
 	upstream       *MemHandler
@@ -58,7 +56,7 @@ func NewCatalogHandler(upstream *MemHandler) *CatalogHandler {
 
 	now := Time{
 		Timestamp: timestamp.Timestamp{
-			PhysicalTime: math.MinInt,
+			PhysicalTime: math.MinInt64,
 		},
 	}
 	tx := memtable.NewTransaction(uuid.NewString(), now, memtable.SnapshotIsolation)
@@ -69,7 +67,7 @@ func NewCatalogHandler(upstream *MemHandler) *CatalogHandler {
 	}()
 
 	// database
-	db := DatabaseRow{
+	db := &DatabaseRow{
 		ID:        ID(catalog.SystemDBID),
 		AccountID: 0,
 		Name:      catalog.SystemDBName,
@@ -80,7 +78,7 @@ func NewCatalogHandler(upstream *MemHandler) *CatalogHandler {
 	handler.dbID = db.ID
 
 	// relations
-	databasesRelRow := RelationRow{
+	databasesRelRow := &RelationRow{
 		ID:         ID(catalog.SystemTable_DB_ID),
 		DatabaseID: db.ID,
 		Name:       catalog.SystemTable_DB_Name,
@@ -91,7 +89,7 @@ func NewCatalogHandler(upstream *MemHandler) *CatalogHandler {
 	}
 	handler.sysRelationIDs[databasesRelRow.ID] = databasesRelRow.Name
 
-	tablesRelRow := RelationRow{
+	tablesRelRow := &RelationRow{
 		ID:         ID(catalog.SystemTable_Table_ID),
 		DatabaseID: db.ID,
 		Name:       catalog.SystemTable_Table_Name,
@@ -102,7 +100,7 @@ func NewCatalogHandler(upstream *MemHandler) *CatalogHandler {
 	}
 	handler.sysRelationIDs[tablesRelRow.ID] = tablesRelRow.Name
 
-	attributesRelRow := RelationRow{
+	attributesRelRow := &RelationRow{
 		ID:         ID(catalog.SystemTable_Columns_ID),
 		DatabaseID: db.ID,
 		Name:       catalog.SystemTable_Columns_Name,
@@ -124,7 +122,7 @@ func NewCatalogHandler(upstream *MemHandler) *CatalogHandler {
 		if !ok {
 			continue
 		}
-		row := AttributeRow{
+		row := &AttributeRow{
 			ID:         txnengine.NewID(),
 			RelationID: databasesRelRow.ID,
 			Order:      i,
@@ -145,7 +143,7 @@ func NewCatalogHandler(upstream *MemHandler) *CatalogHandler {
 		if !ok {
 			continue
 		}
-		row := AttributeRow{
+		row := &AttributeRow{
 			ID:         txnengine.NewID(),
 			RelationID: tablesRelRow.ID,
 			Order:      i,
@@ -166,7 +164,7 @@ func NewCatalogHandler(upstream *MemHandler) *CatalogHandler {
 		if !ok {
 			continue
 		}
-		row := AttributeRow{
+		row := &AttributeRow{
 			ID:         txnengine.NewID(),
 			RelationID: attributesRelRow.ID,
 			Order:      i,
@@ -420,7 +418,7 @@ func (c *CatalogHandler) HandleRead(meta txn.TxnMeta, req txnengine.ReadReq, res
 		) (bool, error) {
 			if err := appendNamedRow(
 				tx,
-				c.upstream.mheap,
+				c.upstream,
 				b,
 				row,
 			); err != nil {
@@ -472,7 +470,6 @@ func (c *CatalogHandler) HandleRead(meta txn.TxnMeta, req txnengine.ReadReq, res
 				if err != nil {
 					return err
 				}
-				row.handler = c.upstream
 				if end, err := handleRow(row); err != nil {
 					return err
 				} else if end {
@@ -498,7 +495,6 @@ func (c *CatalogHandler) HandleRead(meta txn.TxnMeta, req txnengine.ReadReq, res
 				if row.IsHidden {
 					continue
 				}
-				row.handler = c.upstream
 				if end, err := handleRow(row); err != nil {
 					return err
 				} else if end {

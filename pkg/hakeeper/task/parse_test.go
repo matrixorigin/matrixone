@@ -15,11 +15,12 @@
 package task
 
 import (
+	"testing"
+	"time"
+
 	"github.com/matrixorigin/matrixone/pkg/hakeeper"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/stretchr/testify/assert"
-	"testing"
-	"time"
 )
 
 var expiredTick = uint64(hakeeper.DefaultCNStoreTimeout / time.Second * hakeeper.DefaultTickPerSecond)

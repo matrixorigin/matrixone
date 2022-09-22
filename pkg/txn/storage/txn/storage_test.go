@@ -19,6 +19,7 @@ import (
 	"context"
 	"encoding/gob"
 	"testing"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -37,11 +38,13 @@ func testDatabase(
 	newStorage func() (*Storage, error),
 ) {
 	heap := testutil.NewMheap()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Hour)
+	defer cancel()
 
 	// new
 	s, err := newStorage()
 	assert.Nil(t, err)
-	defer s.Close(context.TODO())
+	defer s.Close(ctx)
 
 	// txn
 	txnMeta := txn.TxnMeta{
@@ -56,7 +59,7 @@ func testDatabase(
 	// open database
 	{
 		_, err := testRead[txnengine.OpenDatabaseResp](
-			t, s, txnMeta,
+			ctx, t, s, txnMeta,
 			txnengine.OpOpenDatabase,
 			txnengine.OpenDatabaseReq{
 				Name: "foo",
@@ -68,7 +71,7 @@ func testDatabase(
 	// create database
 	{
 		resp, err := testWrite[txnengine.CreateDatabaseResp](
-			t, s, txnMeta,
+			ctx, t, s, txnMeta,
 			txnengine.OpCreateDatabase,
 			txnengine.CreateDatabaseReq{
 				Name: "foo",
@@ -81,7 +84,7 @@ func testDatabase(
 	// get databases
 	{
 		resp, err := testRead[txnengine.GetDatabasesResp](
-			t, s, txnMeta,
+			ctx, t, s, txnMeta,
 			txnengine.OpGetDatabases,
 			txnengine.GetDatabasesReq{},
 		)
@@ -94,7 +97,7 @@ func testDatabase(
 	var dbID ID
 	{
 		resp, err := testRead[txnengine.OpenDatabaseResp](
-			t, s, txnMeta,
+			ctx, t, s, txnMeta,
 			txnengine.OpOpenDatabase,
 			txnengine.OpenDatabaseReq{
 				Name: "foo",
@@ -108,7 +111,7 @@ func testDatabase(
 		defer func() {
 			{
 				resp, err := testWrite[txnengine.DeleteDatabaseResp](
-					t, s, txnMeta,
+					ctx, t, s, txnMeta,
 					txnengine.OpDeleteDatabase,
 					txnengine.DeleteDatabaseReq{
 						Name: "foo",
@@ -119,7 +122,7 @@ func testDatabase(
 			}
 			{
 				resp, err := testRead[txnengine.GetDatabasesResp](
-					t, s, txnMeta,
+					ctx, t, s, txnMeta,
 					txnengine.OpGetDatabases,
 					txnengine.GetDatabasesReq{},
 				)
@@ -132,7 +135,7 @@ func testDatabase(
 	// open relation
 	{
 		_, err := testRead[txnengine.OpenRelationResp](
-			t, s, txnMeta,
+			ctx, t, s, txnMeta,
 			txnengine.OpOpenRelation,
 			txnengine.OpenRelationReq{
 				DatabaseID: dbID,
@@ -145,7 +148,7 @@ func testDatabase(
 	// create relation
 	{
 		resp, err := testWrite[txnengine.CreateRelationResp](
-			t, s, txnMeta,
+			ctx, t, s, txnMeta,
 			txnengine.OpCreateRelation,
 			txnengine.CreateRelationReq{
 				DatabaseID: dbID,
@@ -176,7 +179,7 @@ func testDatabase(
 	// get relations
 	{
 		resp, err := testRead[txnengine.GetRelationsResp](
-			t, s, txnMeta,
+			ctx, t, s, txnMeta,
 			txnengine.OpGetRelations,
 			txnengine.GetRelationsReq{
 				DatabaseID: dbID,
@@ -191,7 +194,7 @@ func testDatabase(
 	var relID ID
 	{
 		resp, err := testRead[txnengine.OpenRelationResp](
-			t, s, txnMeta,
+			ctx, t, s, txnMeta,
 			txnengine.OpOpenRelation,
 			txnengine.OpenRelationReq{
 				DatabaseID: dbID,
@@ -208,7 +211,7 @@ func testDatabase(
 	// get relation defs
 	{
 		resp, err := testRead[txnengine.GetTableDefsResp](
-			t, s, txnMeta,
+			ctx, t, s, txnMeta,
 			txnengine.OpGetTableDefs,
 			txnengine.GetTableDefsReq{
 				TableID: relID,
@@ -243,7 +246,7 @@ func testDatabase(
 		bat.Vecs[1] = colB
 		bat.InitZsOne(5)
 		_, err := testWrite[txnengine.WriteResp](
-			t, s, txnMeta,
+			ctx, t, s, txnMeta,
 			txnengine.OpWrite,
 			txnengine.WriteReq{
 				TableID: relID,
@@ -257,7 +260,7 @@ func testDatabase(
 	var iterID ID
 	{
 		resp, err := testRead[txnengine.NewTableIterResp](
-			t, s, txnMeta,
+			ctx, t, s, txnMeta,
 			txnengine.OpNewTableIter,
 			txnengine.NewTableIterReq{
 				TableID: relID,
@@ -269,7 +272,7 @@ func testDatabase(
 	}
 	{
 		resp, err := testRead[txnengine.ReadResp](
-			t, s, txnMeta,
+			ctx, t, s, txnMeta,
 			txnengine.OpRead,
 			txnengine.ReadReq{
 				IterID:   iterID,
@@ -293,7 +296,7 @@ func testDatabase(
 			},
 		)
 		_, err := testWrite[txnengine.DeleteResp](
-			t, s, txnMeta,
+			ctx, t, s, txnMeta,
 			txnengine.OpDelete,
 			txnengine.DeleteReq{
 				TableID:    relID,
@@ -307,7 +310,7 @@ func testDatabase(
 	// read after delete
 	{
 		resp, err := testRead[txnengine.NewTableIterResp](
-			t, s, txnMeta,
+			ctx, t, s, txnMeta,
 			txnengine.OpNewTableIter,
 			txnengine.NewTableIterReq{
 				TableID: relID,
@@ -319,7 +322,7 @@ func testDatabase(
 	}
 	{
 		resp, err := testRead[txnengine.ReadResp](
-			t, s, txnMeta,
+			ctx, t, s, txnMeta,
 			txnengine.OpRead,
 			txnengine.ReadReq{
 				IterID:   iterID,
@@ -343,7 +346,7 @@ func testDatabase(
 			},
 		)
 		_, err := testWrite[txnengine.DeleteResp](
-			t, s, txnMeta,
+			ctx, t, s, txnMeta,
 			txnengine.OpDelete,
 			txnengine.DeleteReq{
 				TableID:    relID,
@@ -357,7 +360,7 @@ func testDatabase(
 	// read after delete
 	{
 		resp, err := testRead[txnengine.NewTableIterResp](
-			t, s, txnMeta,
+			ctx, t, s, txnMeta,
 			txnengine.OpNewTableIter,
 			txnengine.NewTableIterReq{
 				TableID: relID,
@@ -369,7 +372,7 @@ func testDatabase(
 	}
 	{
 		resp, err := testRead[txnengine.ReadResp](
-			t, s, txnMeta,
+			ctx, t, s, txnMeta,
 			txnengine.OpRead,
 			txnengine.ReadReq{
 				IterID:   iterID,
@@ -406,7 +409,7 @@ func testDatabase(
 		bat.Vecs[1] = colB
 		bat.InitZsOne(1)
 		_, err := testWrite[txnengine.WriteResp](
-			t, s, txnMeta,
+			ctx, t, s, txnMeta,
 			txnengine.OpWrite,
 			txnengine.WriteReq{
 				TableID: relID,
@@ -419,7 +422,7 @@ func testDatabase(
 	// delete relation
 	{
 		resp, err := testWrite[txnengine.DeleteRelationResp](
-			t, s, txnMeta,
+			ctx, t, s, txnMeta,
 			txnengine.OpDeleteRelation,
 			txnengine.DeleteRelationReq{
 				DatabaseID: dbID,
@@ -431,7 +434,7 @@ func testDatabase(
 	}
 	{
 		resp, err := testRead[txnengine.GetRelationsResp](
-			t, s, txnMeta,
+			ctx, t, s, txnMeta,
 			txnengine.OpGetRelations,
 			txnengine.GetRelationsReq{
 				DatabaseID: dbID,
@@ -444,7 +447,7 @@ func testDatabase(
 	// new relation without primary key
 	{
 		resp, err := testWrite[txnengine.CreateRelationResp](
-			t, s, txnMeta,
+			ctx, t, s, txnMeta,
 			txnengine.OpCreateRelation,
 			txnengine.CreateRelationReq{
 				DatabaseID: dbID,
@@ -496,7 +499,7 @@ func testDatabase(
 		bat.Vecs[1] = colB
 		bat.InitZsOne(5)
 		_, err := testWrite[txnengine.WriteResp](
-			t, s, txnMeta,
+			ctx, t, s, txnMeta,
 			txnengine.OpWrite,
 			txnengine.WriteReq{
 				TableID: relID,
@@ -518,7 +521,7 @@ func testDatabase(
 			},
 		)
 		_, err := testWrite[txnengine.DeleteResp](
-			t, s, txnMeta,
+			ctx, t, s, txnMeta,
 			txnengine.OpDelete,
 			txnengine.DeleteReq{
 				TableID:    relID,
@@ -532,7 +535,7 @@ func testDatabase(
 	// read after delete
 	{
 		resp, err := testRead[txnengine.NewTableIterResp](
-			t, s, txnMeta,
+			ctx, t, s, txnMeta,
 			txnengine.OpNewTableIter,
 			txnengine.NewTableIterReq{
 				TableID: relID,
@@ -544,7 +547,7 @@ func testDatabase(
 	}
 	{
 		resp, err := testRead[txnengine.ReadResp](
-			t, s, txnMeta,
+			ctx, t, s, txnMeta,
 			txnengine.OpRead,
 			txnengine.ReadReq{
 				IterID:   iterID,
@@ -568,7 +571,7 @@ func testDatabase(
 			},
 		)
 		_, err := testWrite[txnengine.DeleteResp](
-			t, s, txnMeta,
+			ctx, t, s, txnMeta,
 			txnengine.OpDelete,
 			txnengine.DeleteReq{
 				TableID:    relID,
@@ -582,7 +585,7 @@ func testDatabase(
 	// read after delete
 	{
 		resp, err := testRead[txnengine.NewTableIterResp](
-			t, s, txnMeta,
+			ctx, t, s, txnMeta,
 			txnengine.OpNewTableIter,
 			txnengine.NewTableIterReq{
 				TableID: relID,
@@ -595,7 +598,7 @@ func testDatabase(
 	var rowIDs *vector.Vector
 	{
 		resp, err := testRead[txnengine.ReadResp](
-			t, s, txnMeta,
+			ctx, t, s, txnMeta,
 			txnengine.OpRead,
 			txnengine.ReadReq{
 				IterID:   iterID,
@@ -611,7 +614,7 @@ func testDatabase(
 	// delete by row id
 	{
 		_, err := testWrite[txnengine.DeleteResp](
-			t, s, txnMeta,
+			ctx, t, s, txnMeta,
 			txnengine.OpDelete,
 			txnengine.DeleteReq{
 				TableID:    relID,
@@ -625,7 +628,7 @@ func testDatabase(
 	// read after delete
 	{
 		resp, err := testRead[txnengine.NewTableIterResp](
-			t, s, txnMeta,
+			ctx, t, s, txnMeta,
 			txnengine.OpNewTableIter,
 			txnengine.NewTableIterReq{
 				TableID: relID,
@@ -637,7 +640,7 @@ func testDatabase(
 	}
 	{
 		resp, err := testRead[txnengine.ReadResp](
-			t, s, txnMeta,
+			ctx, t, s, txnMeta,
 			txnengine.OpRead,
 			txnengine.ReadReq{
 				IterID:   iterID,
@@ -648,16 +651,13 @@ func testDatabase(
 		assert.Nil(t, resp.Batch)
 	}
 
-	t.Run("log tail", func(t *testing.T) {
-		testLogTail(t, newStorage)
-	})
-
 }
 
 func testRead[
 	Resp any,
 	Req any,
 ](
+	ctx context.Context,
 	t *testing.T,
 	s *Storage,
 	txnMeta txn.TxnMeta,
@@ -672,7 +672,7 @@ func testRead[
 	err = gob.NewEncoder(buf).Encode(req)
 	assert.Nil(t, err)
 
-	res, err := s.Read(context.TODO(), txnMeta, op, buf.Bytes())
+	res, err := s.Read(ctx, txnMeta, op, buf.Bytes())
 	if err != nil {
 		return
 	}
@@ -689,6 +689,7 @@ func testWrite[
 	Resp any,
 	Req any,
 ](
+	ctx context.Context,
 	t *testing.T,
 	s *Storage,
 	txnMeta txn.TxnMeta,
@@ -703,7 +704,7 @@ func testWrite[
 	err = gob.NewEncoder(buf).Encode(req)
 	assert.Nil(t, err)
 
-	data, err := s.Write(context.TODO(), txnMeta, op, buf.Bytes())
+	data, err := s.Write(ctx, txnMeta, op, buf.Bytes())
 	if err != nil {
 		return
 	}

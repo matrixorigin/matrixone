@@ -24,10 +24,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 )
 
-func NewUnaryDistAgg[T1, T2 any](isCount bool, ityp, otyp types.Type, grows func(int),
+func NewUnaryDistAgg[T1, T2 any](op int, priv AggStruct, isCount bool, ityp, otyp types.Type, grows func(int),
 	eval func([]T2) []T2, merge func(int64, int64, T2, T2, bool, bool, any) (T2, bool),
 	fill func(int64, T1, T2, int64, bool, bool) (T2, bool)) Agg[*UnaryDistAgg[T1, T2]] {
 	return &UnaryDistAgg[T1, T2]{
+		op:      op,
+		priv:    priv,
 		otyp:    otyp,
 		eval:    eval,
 		fill:    fill,
@@ -339,4 +341,82 @@ func (a *UnaryDistAgg[T1, T2]) Eval(m *mheap.Mheap) (*vector.Vector, error) {
 		return vec, nil
 	}
 	return vector.NewWithData(a.otyp, a.da, a.eval(a.vs), nsp), nil
+}
+
+func (a *UnaryDistAgg[T1, T2]) IsDistinct() bool {
+	return true
+}
+
+func (a *UnaryDistAgg[T1, T2]) GetOperatorId() int {
+	return a.op
+}
+
+func (a *UnaryDistAgg[T1, T2]) GetInputTypes() []types.Type {
+	return a.ityps
+}
+
+func (a *UnaryDistAgg[T1, T2]) MarshalBinary() ([]byte, error) {
+	pData, err := a.priv.MarshalBinary()
+	if err != nil {
+		return nil, err
+	}
+	source := &EncodeAggDistinct[T1]{
+		Op:         a.op,
+		Private:    pData,
+		Es:         a.es,
+		IsCount:    a.isCount,
+		InputType:  a.ityps,
+		OutputType: a.otyp,
+		Srcs:       a.srcs,
+	}
+	switch {
+	case types.IsString(a.otyp.Oid):
+		source.Da = types.EncodeStringSlice(getDistAggStrVs(a))
+	default:
+		source.Da = a.da
+	}
+
+	return types.Encode(source)
+}
+
+func getDistAggStrVs(strUnaryDistAgg any) []string {
+	agg := strUnaryDistAgg.(*UnaryDistAgg[[]byte, []byte])
+	result := make([]string, len(agg.vs))
+	for i := range result {
+		result[i] = string(agg.vs[i])
+	}
+	return result
+}
+
+func (a *UnaryDistAgg[T1, T2]) UnmarshalBinary(data []byte) error {
+	decode := new(EncodeAggDistinct[T1])
+	if err := types.Decode(data, decode); err != nil {
+		return err
+	}
+
+	// Recover data
+	a.op = decode.Op
+	a.ityps = decode.InputType
+	a.otyp = decode.OutputType
+	a.es = decode.Es
+	a.da = decode.Da
+	setDistAggValues[T1, T2](a, a.otyp)
+	a.srcs = decode.Srcs
+
+	return a.priv.UnmarshalBinary(decode.Private)
+}
+
+func setDistAggValues[T1, T2 any](agg any, typ types.Type) {
+	switch {
+	case types.IsString(typ.Oid):
+		a := agg.(*UnaryDistAgg[[]byte, []byte])
+		values := types.DecodeStringSlice(a.da)
+		a.vs = make([][]byte, len(values))
+		for i := range a.vs {
+			a.vs[i] = []byte(values[i])
+		}
+	default:
+		a := agg.(*UnaryDistAgg[T1, T2])
+		a.vs = types.DecodeFixedSlice[T2](a.da, typ.TypeSize())
+	}
 }
