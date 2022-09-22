@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 )
 
 func (txn *Transaction) getTableList(ctx context.Context, databaseId uint64) ([]string, error) {
@@ -207,7 +208,7 @@ func (txn *Transaction) readTable(ctx context.Context, databaseId uint64, tableI
 	isMonotonically := checkExprIsMonotonical(expr)
 	if isMonotonically {
 		for _, blkInfo := range blkInfos {
-			if !needRead(expr, blkInfo, tableDef) {
+			if !needRead(expr, blkInfo, tableDef, txn.mp) {
 				continue
 			}
 			bat, err := blockRead(ctx, columns, blkInfo)
@@ -242,13 +243,12 @@ func (txn *Transaction) readTable(ctx context.Context, databaseId uint64, tableI
 }
 
 // needRead determine if a block needs to be read
-func needRead(expr *plan.Expr, blkInfo BlockMeta, tableDef *plan.TableDef) bool {
+func needRead(expr *plan.Expr, blkInfo BlockMeta, tableDef *plan.TableDef, mp *mheap.Mheap) bool {
 	bat := batch.NewWithSize(0)
 	bat.Zs = []int64{1}
 	var err error
 
-	var columns []int32
-	getColumnsByExpr(expr, &columns)
+	columns := getColumnsByExpr(expr)
 
 	// if expr match no columns, just eval expr
 	if len(columns) == 0 {
@@ -260,18 +260,19 @@ func needRead(expr *plan.Expr, blkInfo BlockMeta, tableDef *plan.TableDef) bool 
 	}
 
 	// we take columns[0] for base, test expr by columns[0].min/max with other columns
-	minMaxExprs := getZonemapByExprAndMeta(columns, blkInfo, tableDef)
-	baseColumn := columns[0]
-	baseMin := minMaxExprs[baseColumn][0]
-	baseMax := minMaxExprs[baseColumn][1]
-	// minMaxExprs = minMaxExprs[1:]
+	baseMinMaxExprs, lastValues, lastTypes := getZonemapByExprAndMeta(columns, blkInfo, tableDef)
+	baseMin := baseMinMaxExprs[0]
+	baseMax := baseMinMaxExprs[1]
 
-	// we build vectors for other columns
-	// buildVectors :=
+	// we build vectors for other columns.
+	if len(lastValues) > 0 {
+		buildVectors := buildVectorsLastValues(lastValues, lastTypes, mp)
+		bat.Vecs = buildVectors
+	}
 
 	// 1. eval expr with min, if true return true
 	tmpExpr := plan2.DeepCopyExpr(expr)
-	tmpExpr = replaceColumnWithZonemap(tmpExpr, baseColumn, baseMin)
+	tmpExpr = replaceColumnWithZonemap(tmpExpr, columns[0], baseMin)
 	exprReturn, err := evalFilterExpr(tmpExpr, bat)
 	if err != nil {
 		return true
@@ -282,12 +283,13 @@ func needRead(expr *plan.Expr, blkInfo BlockMeta, tableDef *plan.TableDef) bool 
 
 	// 2. eval expr with max, if true return true else false
 	tmpExpr = plan2.DeepCopyExpr(expr)
-	tmpExpr = replaceColumnWithZonemap(tmpExpr, baseColumn, baseMax)
+	tmpExpr = replaceColumnWithZonemap(tmpExpr, columns[0], baseMax)
 	exprReturn, err = evalFilterExpr(tmpExpr, bat)
 	if err != nil {
 		return true
 	}
 	return exprReturn
+
 }
 
 // write a block to s3

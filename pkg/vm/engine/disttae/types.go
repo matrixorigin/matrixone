@@ -124,6 +124,7 @@ type Transaction struct {
 	// every statement is an element
 	writes   [][]Entry
 	dnStores []DNStore
+	mp       *mheap.Mheap
 }
 
 // Entry represents a delete/insert

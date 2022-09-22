@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 )
 
 func makeColExprForTest(idx int32, typ types.T) *plan.Expr {
@@ -96,6 +97,8 @@ func makeBlockMetaForTest() BlockMeta {
 	column2Max := make([]byte, 8)
 	column3Min := make([]byte, 8)
 	column3Max := make([]byte, 8)
+	column4Min := make([]byte, 8)
+	column4Max := make([]byte, 8)
 
 	binary.LittleEndian.PutUint64(column1Min, 10)
 	binary.LittleEndian.PutUint64(column1Max, 100)
@@ -103,6 +106,8 @@ func makeBlockMetaForTest() BlockMeta {
 	binary.LittleEndian.PutUint64(column2Max, 200)
 	binary.LittleEndian.PutUint64(column3Min, 30)
 	binary.LittleEndian.PutUint64(column3Max, 300)
+	binary.LittleEndian.PutUint64(column4Min, 1)
+	binary.LittleEndian.PutUint64(column4Max, 8)
 
 	return BlockMeta{
 		header: BlockHeader{},
@@ -110,8 +115,20 @@ func makeBlockMetaForTest() BlockMeta {
 			makeColumnMetaForTest(types.T_uint64, column1Min, column1Max),
 			makeColumnMetaForTest(types.T_uint64, column2Min, column2Max),
 			makeColumnMetaForTest(types.T_uint64, column3Min, column3Max),
+			makeColumnMetaForTest(types.T_uint64, column4Min, column4Max),
 		},
 	}
+}
+
+func makeTableDefForTest(columns []string) *plan.TableDef {
+	schema := []string{"a", "b", "c", "d"}
+	types := []types.Type{
+		types.T_int64.ToType(),
+		types.T_int64.ToType(),
+		types.T_int64.ToType(),
+		types.T_int64.ToType(),
+	}
+	return _getTableDefBySchemaAndType("t1", columns, schema, types)
 }
 
 func TestCheckExprIsMonotonical(t *testing.T) {
@@ -148,22 +165,39 @@ func TestNeedRead(t *testing.T) {
 	blockMeta := makeBlockMetaForTest()
 
 	testExprs := []*plan.Expr{
-		// a > 1  -> true
-		makeFunctionExprForTest(">", []*plan.Expr{
-			makeColExprForTest(0, types.T_int64),
-			plan2.MakePlan2Int64ConstExprWithType(10),
-		}),
-		// makeFunctionExpr(">=", []*plan.Expr{
-		// 	makeColExpr(0, types.T_int64),
-		// 	makeColExpr(1, types.T_int64),
+		// makeFunctionExprForTest(">", []*plan.Expr{
+		// 	makeColExprForTest(0, types.T_int64),
+		// 	plan2.MakePlan2Int64ConstExprWithType(20),
 		// }),
+		// makeFunctionExprForTest("<", []*plan.Expr{
+		// 	makeColExprForTest(0, types.T_int64),
+		// 	plan2.MakePlan2Int64ConstExprWithType(-1),
+		// }),
+		// makeFunctionExprForTest(">", []*plan.Expr{
+		// 	makeColExprForTest(0, types.T_int64),
+		// 	plan2.MakePlan2Int64ConstExprWithType(3000000),
+		// }),
+		makeFunctionExprForTest("<", []*plan.Expr{
+			makeColExprForTest(0, types.T_int64),
+			makeColExprForTest(1, types.T_int64),
+		}),
 	}
-
-	expected := []bool{true, true, false}
+	testColumns := [][]string{
+		// {"a"},
+		// {"a"},
+		// {"a"},
+		{"a", "d"},
+	}
+	expected := []bool{
+		// true,
+		// false,
+		// false,
+		false,
+	}
 
 	t.Run("test needRead", func(t *testing.T) {
 		for i, expr := range testExprs {
-			result := needRead(expr, blockMeta, getMoTableTableDef([]string{"rel_id"}))
+			result := needRead(expr, blockMeta, makeTableDefForTest(testColumns[i]), testutil.NewMheap())
 			if result != expected[i] {
 				t.Fatalf("test needRead at cases[%d], get result is different with expected", i)
 			}

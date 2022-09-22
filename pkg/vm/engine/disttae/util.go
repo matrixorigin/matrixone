@@ -21,9 +21,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 )
 
 type MinOrMax = uint8
@@ -54,19 +56,47 @@ func checkExprIsMonotonical(expr *plan.Expr) bool {
 	}
 }
 
-func getColumnsByExpr(expr *plan.Expr, columns *[]int32) {
+func _getColumnMapByExpr(expr *plan.Expr, columnMap map[int32]struct{}) {
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_F:
 		for _, arg := range exprImpl.F.Args {
-			getColumnsByExpr(arg, columns)
+			_getColumnMapByExpr(arg, columnMap)
 		}
 	case *plan.Expr_Col:
 		idx := exprImpl.Col.ColPos
-		*columns = append(*columns, idx)
+		columnMap[idx] = struct{}{}
 	}
 }
 
-func decodeMinMaxFromZonemap(typ types.T, value []byte) *plan.Expr {
+func getColumnsByExpr(expr *plan.Expr) []int32 {
+	columnMap := make(map[int32]struct{})
+	_getColumnMapByExpr(expr, columnMap)
+
+	columns := make([]int32, len(columnMap))
+	i := 0
+	for k := range columnMap {
+		columns[i] = k
+		i++
+	}
+	return columns
+}
+
+func decodeMinMax(typ types.T, value []byte) any {
+	// TODO need decoder to decode the []byte to target type
+	if typ.ToType().IsIntOrUint() {
+		return int64(binary.LittleEndian.Uint64(value))
+
+	} else if typ.ToType().IsFloat() {
+		bits := binary.LittleEndian.Uint64(value)
+		return math.Float64frombits(bits)
+
+	} else {
+		// TODO other type decode as what??
+		return string(value)
+	}
+}
+
+func decodeMinMaxToExpr(typ types.T, value []byte) *plan.Expr {
 	// TODO need decoder to decode the []byte to target type
 	if typ.ToType().IsIntOrUint() {
 		intVal := int64(binary.LittleEndian.Uint64(value))
@@ -84,20 +114,36 @@ func decodeMinMaxFromZonemap(typ types.T, value []byte) *plan.Expr {
 	}
 }
 
-func getZonemapByExprAndMeta(columns []int32, meta BlockMeta, tableDef *plan.TableDef) [][2]*plan.Expr {
-	exprs := make([][2]*plan.Expr, len(columns))
+func getZonemapByExprAndMeta(columns []int32, meta BlockMeta, tableDef *plan.TableDef) ([2]*plan.Expr, [][2]any, []uint8) {
+	var columnMeta *ColumnMeta
 
-	for i, column := range columns {
-		columnMeta := meta.columns[column]
-		typ := types.T(columnMeta.typ)
+	// changeColumnIdxToMetaIdx := func(idx int) int {
+	// 	tableDef.Name2ColIndex
+	// }
 
-		exprs[i] = [2]*plan.Expr{
-			decodeMinMaxFromZonemap(typ, columnMeta.zoneMap.min),
-			decodeMinMaxFromZonemap(typ, columnMeta.zoneMap.max),
+	columnMeta = meta.columns[columns[0]]
+	typ := types.T(columnMeta.typ)
+	exprs := [2]*plan.Expr{
+		decodeMinMaxToExpr(typ, columnMeta.zoneMap.min),
+		decodeMinMaxToExpr(typ, columnMeta.zoneMap.max),
+	}
+
+	lastItemLength := len(columns) - 1
+
+	datas := make([][2]any, lastItemLength)
+	types := make([]uint8, lastItemLength)
+
+	for i := 1; i < len(columns); i++ {
+		columnMeta = meta.columns[columns[i]]
+		types = append(types, columnMeta.typ)
+
+		datas[i-1] = [2]any{
+			decodeMinMax(typ, columnMeta.zoneMap.min),
+			decodeMinMax(typ, columnMeta.zoneMap.max),
 		}
 	}
 
-	return exprs
+	return exprs, datas, types
 }
 
 func replaceColumnWithZonemap(expr *plan.Expr, columnIdx int32, columnExpr *plan.Expr) *plan.Expr {
@@ -170,4 +216,29 @@ func _getTableDefBySchemaAndType(name string, columns []string, schema []string,
 		Cols:          cols,
 		Name2ColIndex: nameToIndex,
 	}
+}
+
+func exchangeVectors(datas [][2]any, depth int, tmpResult []any, result *[]*vector.Vector, mp *mheap.Mheap) {
+	for i := 0; i < len(datas[depth]); i++ {
+		tmpResult[depth] = datas[depth][i]
+		if depth != len(datas)-1 {
+			exchangeVectors(datas, depth+1, tmpResult, result, mp)
+		} else {
+			for i, val := range tmpResult {
+				(*result)[i].Append(val, false, mp)
+			}
+		}
+	}
+}
+
+func buildVectorsLastValues(lastValues [][2]any, lastTypes []uint8, mp *mheap.Mheap) []*vector.Vector {
+	vectors := make([]*vector.Vector, len(lastTypes))
+	for i, typ := range lastTypes {
+		vectors[i].Typ = types.T(typ).ToType()
+	}
+
+	tmpResult := make([]any, len(lastValues))
+	exchangeVectors(lastValues, 0, tmpResult, &vectors, mp)
+
+	return vectors
 }
