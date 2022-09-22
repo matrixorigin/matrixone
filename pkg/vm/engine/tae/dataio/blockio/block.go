@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package blockid
+package blockio
 
 import (
 	"github.com/RoaringBitmap/roaring"
@@ -70,9 +70,6 @@ func newBlock(id uint64, seg *segmentFile, colCnt int, indexCnt map[int]int) *bl
 func (bf *blockFile) WriteBatch(bat *containers.Batch, ts types.TS) (blk objectio.BlockObject, err error) {
 	bf.writer = NewWriter(bf.seg.fs, bf.id)
 	block, err := bf.writer.WriteBlock(bat)
-	bf.key = &metaKey{
-		extent: block.GetExtent(),
-	}
 	return block, err
 }
 
@@ -104,6 +101,9 @@ func (bf *blockFile) ReadRows() uint32 {
 func (bf *blockFile) GetMeta(metaLoc string) objectio.BlockObject {
 	if bf.key != nil {
 		bf.key.metaLoc = metaLoc
+		if bf.reader == nil {
+			bf.reader = NewReader(bf.seg.fs, bf, bf.writer.name)
+		}
 		block, err := bf.reader.ReadMeta(bf.key.extent)
 		if err != nil {
 			panic(any(err))
@@ -133,7 +133,10 @@ func (bf *blockFile) GetMeta(metaLoc string) objectio.BlockObject {
 	if err != nil {
 		panic(any(err))
 	}
-	bf.key.extent = extent
+	bf.key = &metaKey{
+		metaLoc: metaLoc,
+		extent:  extent,
+	}
 	return block
 }
 
@@ -172,7 +175,12 @@ func (bf *blockFile) Destroy() error {
 }
 
 func (bf *blockFile) Sync() error {
-	_, err := bf.writer.Sync()
+	blocks, err := bf.writer.Sync()
+	if bf.key == nil {
+		bf.key = &metaKey{
+			extent: blocks[0].GetExtent(),
+		}
+	}
 	return err
 }
 

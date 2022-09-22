@@ -28,7 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockid"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/stl"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
@@ -659,7 +659,7 @@ func (blk *dataBlock) LoadColumnData(
 	srcBuf := fsVector.Entries[0].Data
 	vector := vector.New(def.Type)
 	vector.Read(srcBuf)
-	vec = blockid.MOToVectorTmp(vector, def.Nullable())
+	vec = blockio.MOToVectorTmp(vector, def.Nullable())
 	return
 }
 
