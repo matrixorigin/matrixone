@@ -90,3 +90,7 @@ func SetUnresolvedObjectName(num int, parts [3]string) *UnresolvedObjectName {
 		Parts:    parts,
 	}
 }
+
+func (node *UnresolvedObjectName) GetDBName() string {
+	return node.Parts[1]
+}

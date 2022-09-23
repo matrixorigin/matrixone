@@ -125,8 +125,12 @@ func (bat *Batch) Window(offset, length int) *Batch {
 
 func (bat *Batch) CloneWindow(offset, length int, allocator ...MemAllocator) (cloned *Batch) {
 	cloned = NewEmptyBatch()
-	cloned.Attrs = bat.Attrs
-	cloned.nameidx = bat.nameidx
+	cloned.Attrs = make([]string, len(bat.Attrs))
+	copy(cloned.Attrs, bat.Attrs)
+	cloned.nameidx = make(map[string]int)
+	for k, v := range bat.nameidx {
+		cloned.nameidx[k] = v
+	}
 	if bat.Deletes != nil {
 		cloned.Deletes = common.BM32Window(bat.Deletes, offset, offset+length)
 	}
