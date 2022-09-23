@@ -26,8 +26,8 @@ import (
 
 func Test_EndsWith(t *testing.T) {
 	convey.Convey("Test EndsWith succ", t, func() {
-		var charVecBase = []string{"123-", "321", "123+", "8", ""}
-		var charVecBase2 = []string{"-", "+", "1", ""}
+		var charVecBase = []string{"123-", "321", "123+", "8", "123*"}
+		var charVecBase2 = []string{"-", "+", "1", "*"}
 		var nsp1, nsp2 []uint64
 		var origVecs = make([]*vector.Vector, 2)
 		var proc = testutil.NewProc()
@@ -54,7 +54,7 @@ func Test_EndsWith(t *testing.T) {
 		if !ok {
 			log.Fatal(errors.New("the Endswith function return value type is not []uint8"))
 		}
-		compVec := []uint8{1, 0, 0, 1, 0, 0, 1, 1, 0, 1, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1}
+		compVec := []uint8{1, 0, 0, 0, 0, 0, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1}
 		compNsp := []int64{3, 7, 11, 15, 16, 17, 18, 19}
 
 		for i := 0; i < len(compVec); i++ {

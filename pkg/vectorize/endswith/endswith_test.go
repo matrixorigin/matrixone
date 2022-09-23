@@ -62,18 +62,11 @@ func TestEndsWith(t *testing.T) {
 			rs:   make([]uint8, 4),
 			want: []uint8{1, 1, 0, 0},
 		},
-		{
-			name: "Special Match",
-			lv:   []string{"Hello", "  ", " 你好", ""},
-			rv:   []string{"", " ", "好", ""},
-			rs:   make([]uint8, 4),
-			want: []uint8{1, 1, 1, 1},
-		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := EndsWith(tt.lv, tt.rv, tt.rs); !reflect.DeepEqual(got, tt.want) {
+			if got := EndsWith(tt.lv, tt.rv, tt.rs); !reflect.DeepEqual(tt.rs, tt.want) {
 				t.Errorf("EndsWith() = %v, want %v", got, tt.want)
 			}
 		})
@@ -99,7 +92,7 @@ func TestEndsWithRightConst(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := EndsWithRightConst(tt.lv, tt.rv, tt.rs); !reflect.DeepEqual(got, tt.want) {
+			if got := EndsWithRightConst(tt.lv, tt.rv, tt.rs); !reflect.DeepEqual(tt.rs, tt.want) {
 				t.Errorf("EndsWithRightConst() = %v, want %v", got, tt.want)
 			}
 		})
@@ -117,7 +110,7 @@ func TestEndsWithLeftConst(t *testing.T) {
 		{
 			name: "Left Const",
 			lv:   []string{"Hello"},
-			rv:   []string{"lo", "Hello", "", "HHello"},
+			rv:   []string{"lo", "Hello", "llo", "HHello"},
 			rs:   make([]uint8, 4),
 			want: []uint8{1, 1, 1, 0},
 		},
@@ -125,7 +118,7 @@ func TestEndsWithLeftConst(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := EndsWithLeftConst(tt.lv, tt.rv, tt.rs); !reflect.DeepEqual(got, tt.want) {
+			if got := EndsWithLeftConst(tt.lv, tt.rv, tt.rs); !reflect.DeepEqual(tt.rs, tt.want) {
 				t.Errorf("EndsWithLeftConst() = %v, want %v", got, tt.want)
 			}
 		})
@@ -158,7 +151,7 @@ func TestEndsWithAllConst(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := EndsWithAllConst(tt.lv, tt.rv, tt.rs); !reflect.DeepEqual(got, tt.want) {
+			if got := EndsWithAllConst(tt.lv, tt.rv, tt.rs); !reflect.DeepEqual(tt.rs, tt.want) {
 				t.Errorf("EndsWithAllConst() = %v, want %v", got, tt.want)
 			}
 		})
