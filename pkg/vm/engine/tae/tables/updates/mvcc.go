@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 )
@@ -340,9 +341,11 @@ func (n *MVCCHandle) CollectDelete(rawPkVec containers.Vector, start, end types.
 	if rawPkVec != nil {
 		pkVec = containers.MakeVector(rawPkVec.GetType(), rawPkVec.Nullable())
 	}
-	rowIDVec = containers.MakeVector(types.T_uint32.ToType(), false)
+	rowIDVec = containers.MakeVector(types.T_Rowid.ToType(), false)
 	commitTSVec = containers.MakeVector(types.T_TS.ToType(), false)
 	abortVec = containers.MakeVector(types.T_bool.ToType(), false)
+	prefix := n.meta.MakeKey()
+
 	n.RLock()
 	defer n.RUnlock()
 	n.deletes.LoopChain(
@@ -364,7 +367,7 @@ func (n *MVCCHandle) CollectDelete(rawPkVec containers.Vector, start, end types.
 					if rawPkVec != nil {
 						pkVec.Append(rawPkVec.Get(int(row)))
 					}
-					rowIDVec.Append(row)
+					rowIDVec.Append(model.EncodePhyAddrKeyWithPrefix(prefix, row))
 					commitTSVec.Append(node.GetEnd())
 					abortVec.Append(node.IsAborted())
 				}
