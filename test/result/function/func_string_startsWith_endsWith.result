@@ -1,3 +1,26 @@
+select startswith("aabb", 'a');
+startswith(aabb, a)
+1
+select startswith("aabb", "aa");
+startswith(aabb, aa)
+1
+select startswith("aabb", "aaa");
+startswith(aabb, aaa)
+0
+select startswith("aabb", '');
+invalid argument StartsWith input, bad value empty string
+select startswith('a', '');
+invalid argument StartsWith input, bad value empty string
+select startswith('', 'a');
+invalid argument StartsWith input, bad value empty string
+select startswith('', '');
+invalid argument StartsWith input, bad value empty string
+select startswith("aaa", null);
+invalid argument StartsWith input, bad value empty string
+select startswith(null, "aaa");
+invalid argument StartsWith input, bad value empty string
+select startswith(null, null);
+invalid argument StartsWith input, bad value empty string
 drop table if exists t1;
 create table t1(a int,b varchar(100),c char(20));
 insert into t1 values

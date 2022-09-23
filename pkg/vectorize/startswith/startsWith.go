@@ -29,7 +29,7 @@ func hasPrefix(b1, b2 []byte) uint8 {
 
 func StartsWith(lv, rv []string, rs []uint8) error {
 	for i := range lv {
-		if rv[i] == "" {
+		if lv[i] == "" || rv[i] == "" {
 			return moerr.NewInvalidArg("StartsWith input", "empty string")
 		}
 		rs[i] = hasPrefix([]byte(lv[i]), []byte(rv[i]))
@@ -42,12 +42,18 @@ func StartsWithRightConst(lv []string, rv string, rs []uint8) error {
 		return moerr.NewInvalidArg("StartsWith input", "empty string")
 	}
 	for i := range lv {
+		if lv[i] == "" {
+			return moerr.NewInvalidArg("StartsWith input", "empty string")
+		}
 		rs[i] = hasPrefix([]byte(lv[i]), []byte(rv))
 	}
 	return nil
 }
 
 func StartsWithLeftConst(lv string, rv []string, rs []uint8) error {
+	if lv == "" {
+		return moerr.NewInvalidArg("StartsWith input", "empty string")
+	}
 	for i := range rv {
 		if rv[i] == "" {
 			return moerr.NewInvalidArg("StartsWith input", "empty string")
@@ -58,7 +64,7 @@ func StartsWithLeftConst(lv string, rv []string, rs []uint8) error {
 }
 
 func StartsWithAllConst(lv, rv string, rs []uint8) error {
-	if rv == "" {
+	if rv == "" || lv == "" {
 		return moerr.NewInvalidArg("StartsWith input", "empty string")
 	}
 	rs[0] = hasPrefix([]byte(lv), []byte(rv))

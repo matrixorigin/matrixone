@@ -15,6 +15,7 @@
 package binary
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -29,18 +30,18 @@ func Startswith(vectors []*vector.Vector, proc *process.Process) (*vector.Vector
 	switch {
 	case left.IsScalar() && right.IsScalar():
 		if left.ConstVectorIsNull() || right.ConstVectorIsNull() {
-			return proc.AllocScalarNullVector(resultType), nil
+			return nil, moerr.NewInvalidArg("StartsWith input", "empty string")
 		}
 		resultVector := vector.NewConst(resultType, 1)
 		resultValues := vector.MustTCols[uint8](resultVector)
 		err := startswith.StartsWithAllConst(leftValues[0], rightValues[0], resultValues)
-		if err != nil{
+		if err != nil {
 			return nil, err
 		}
 		return resultVector, nil
 	case left.IsScalar() && !right.IsScalar():
-		if left.ConstVectorIsNull(){
-			return proc.AllocScalarNullVector(resultType), nil
+		if left.ConstVectorIsNull() {
+			return nil, moerr.NewInvalidArg("StartsWith input", "empty string")
 		}
 		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(rightValues)), right.Nsp)
 		if err != nil {
@@ -48,13 +49,13 @@ func Startswith(vectors []*vector.Vector, proc *process.Process) (*vector.Vector
 		}
 		resultValues := vector.MustTCols[uint8](resultVector)
 		err = startswith.StartsWithLeftConst(leftValues[0], rightValues, resultValues)
-		if err != nil{
+		if err != nil {
 			return nil, err
 		}
 		return resultVector, nil
 	case !left.IsScalar() && right.IsScalar():
 		if right.ConstVectorIsNull() {
-			return proc.AllocScalarNullVector(resultType), nil
+			return nil, moerr.NewInvalidArg("StartsWith input", "empty string")
 		}
 		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(leftValues)), left.Nsp)
 		if err != nil {
@@ -62,7 +63,7 @@ func Startswith(vectors []*vector.Vector, proc *process.Process) (*vector.Vector
 		}
 		resultValues := vector.MustTCols[uint8](resultVector)
 		err = startswith.StartsWithRightConst(leftValues, rightValues[0], resultValues)
-		if err != nil{
+		if err != nil {
 			return nil, err
 		}
 		return resultVector, nil
@@ -74,7 +75,7 @@ func Startswith(vectors []*vector.Vector, proc *process.Process) (*vector.Vector
 	resultValues := vector.MustTCols[uint8](resultVector)
 	nulls.Or(left.Nsp, right.Nsp, resultVector.Nsp)
 	err = startswith.StartsWith(leftValues, rightValues, resultValues)
-	if err != nil{
+	if err != nil {
 		return nil, err
 	}
 
