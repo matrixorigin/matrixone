@@ -210,11 +210,11 @@ jobs:
           path: ./mo-tester
           ref: main
 
-      - name: Set up JDK 8 for x64
+      - name: Set up JDK 8 for arm64
         uses: actions/setup-java@v3
         with:
           java-version: '8'
-          distribution: 'adopt'
+          distribution: 'zulu'
           architecture: arm64
 
       - name: Start BVT Test
