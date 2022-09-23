@@ -65,18 +65,11 @@ func TestStartsWith(t *testing.T) {
 			rs:   make([]uint8, 4),
 			want: []uint8{1, 1, 0, 0},
 		},
-		{
-			name: "Special Match",
-			lv:   makeBytes([]string{"Hello", "  ", " 你好", ""}),
-			rv:   makeBytes([]string{"", " ", " 你", ""}),
-			rs:   make([]uint8, 4),
-			want: []uint8{1, 1, 1, 1},
-		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := StartsWith(tt.lv, tt.rv, tt.rs); !reflect.DeepEqual(got, tt.want) {
+			if got := StartsWith(tt.lv, tt.rv, tt.rs); !reflect.DeepEqual(tt.rs, tt.want) {
 				t.Errorf("StartsWith() = %v, want %v", got, tt.want)
 			}
 		})
@@ -101,7 +94,7 @@ func TestStartsWithRightConst(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := StartsWithRightConst(tt.lv, tt.rv[0], tt.rs); !reflect.DeepEqual(got, tt.want) {
+			if got := StartsWithRightConst(tt.lv, tt.rv[0], tt.rs); !reflect.DeepEqual(tt.rs, tt.want) {
 				t.Errorf("StartsWithRightConst() = %v, want %v", got, tt.want)
 			}
 		})
@@ -118,15 +111,15 @@ func TestStartsWithLeftConst(t *testing.T) {
 		{
 			name: "Left Const",
 			lv:   makeBytes([]string{"Hello"}),
-			rv:   makeBytes([]string{"He", "Hello", "", "Helloo"}),
-			rs:   make([]uint8, 4),
-			want: []uint8{1, 1, 1, 0},
+			rv:   makeBytes([]string{"He", "Hello", "Helloo"}),
+			rs:   make([]uint8, 3),
+			want: []uint8{1, 1, 0},
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := StartsWithLeftConst(tt.lv[0], tt.rv, tt.rs); !reflect.DeepEqual(got, tt.want) {
+			if got := StartsWithLeftConst(tt.lv[0], tt.rv, tt.rs); !reflect.DeepEqual(tt.rs, tt.want) {
 				t.Errorf("StartsWithLeftConst() = %v, want %v", got, tt.want)
 			}
 		})
@@ -158,7 +151,7 @@ func TestStartsWithAllConst(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := StartsWithAllConst(tt.lv[0], tt.rv[0], tt.rs); !reflect.DeepEqual(got, tt.want) {
+			if got := StartsWithAllConst(tt.lv[0], tt.rv[0], tt.rs); !reflect.DeepEqual(tt.rs, tt.want) {
 				t.Errorf("StartsWithAllConst() = %v, want %v", got, tt.want)
 			}
 		})
