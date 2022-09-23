@@ -354,9 +354,6 @@ func (c *LogtailCollector) collectCatalogTbl() error {
 }
 
 const (
-	attrCommitTs = "commit_ts"
-	attrAborted  = "aborted"
-
 	blkMetaAttrBlockID    = "block_id"
 	blkMetaAttrEntryState = "entry_state"
 	blkMetaAttrCreateAt   = "create_at"
@@ -522,8 +519,8 @@ func catalogEntry2Batch[T *catalog.DBEntry | *catalog.TableEntry](
 	for _, col := range schema.ColDefs {
 		fillDataRow(e, col.Name, dstBatch.GetVectorByName(col.Name))
 	}
-	dstBatch.GetVectorByName(attrCommitTs).Append(commitTs)
-	dstBatch.GetVectorByName(attrAborted).Append(aborted)
+	dstBatch.GetVectorByName(catalog.AttrCommitTs).Append(commitTs)
+	dstBatch.GetVectorByName(catalog.AttrAborted).Append(aborted)
 }
 
 // make batch, append necessary field like commit ts
@@ -535,8 +532,8 @@ func makeRespBatchFromSchema(schema *catalog.Schema) *containers.Batch {
 	for i, attr := range attrs {
 		batch.AddVector(attr, containers.MakeVector(typs[i], true))
 	}
-	batch.AddVector(attrCommitTs, containers.MakeVector(types.T_TS.ToType(), true))
-	batch.AddVector(attrAborted, containers.MakeVector(types.T_bool.ToType(), true))
+	batch.AddVector(catalog.AttrCommitTs, containers.MakeVector(types.T_TS.ToType(), true))
+	batch.AddVector(catalog.AttrAborted, containers.MakeVector(types.T_bool.ToType(), true))
 	return batch
 }
 
@@ -605,8 +602,8 @@ func (b *TableLogtailRespBuilder) visitBlkMeta(e *catalog.BlockEntry) {
 		b.blkMetaBatch.GetVectorByName(blkMetaAttrDeleteAt).Append(metaNode.DeletedAt)
 		b.blkMetaBatch.GetVectorByName(blkMetaAttrMetaLoc).Append([]byte(metaNode.MetaLoc))
 		b.blkMetaBatch.GetVectorByName(blkMetaAttrDeltaLoc).Append([]byte(metaNode.DeltaLoc))
-		b.blkMetaBatch.GetVectorByName(attrCommitTs).Append(metaNode.GetEnd())
-		b.blkMetaBatch.GetVectorByName(attrAborted).Append(false)
+		b.blkMetaBatch.GetVectorByName(catalog.AttrCommitTs).Append(metaNode.GetEnd())
+		b.blkMetaBatch.GetVectorByName(catalog.AttrAborted).Append(false)
 	}
 }
 
