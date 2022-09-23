@@ -183,7 +183,7 @@ func (m *MemHandler) HandleAddTableDef(meta txn.TxnMeta, req txnengine.AddTableD
 			ID:         txnengine.NewID(),
 			RelationID: req.TableID,
 			Order:      maxAttributeOrder + 1,
-			Nullable:   true, //TODO fix
+			Nullable:   def.Attr.Default != nil && def.Attr.Default.NullAbility,
 			Attribute:  def.Attr,
 		}
 		if err := m.attributes.Insert(tx, attrRow); err != nil {
@@ -401,7 +401,7 @@ func (m *MemHandler) HandleCreateRelation(meta txn.TxnMeta, req txnengine.Create
 			ID:         txnengine.NewID(),
 			RelationID: row.ID,
 			Order:      i + 1,
-			Nullable:   true, //TODO fix
+			Nullable:   attr.Default != nil && attr.Default.NullAbility,
 			Attribute:  attr,
 		}
 		if err := m.attributes.Insert(tx, attrRow); err != nil {
