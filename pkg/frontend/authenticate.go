@@ -543,12 +543,13 @@ var (
 		"system_metrics":     0,
 	}
 	sysWantedTables = map[string]int8{
-		"mo_user":       0,
-		"mo_account":    0,
-		"mo_role":       0,
-		"mo_user_grant": 0,
-		"mo_role_grant": 0,
-		"mo_role_privs": 0,
+		"mo_user":                 0,
+		"mo_account":              0,
+		"mo_role":                 0,
+		"mo_user_grant":           0,
+		"mo_role_grant":           0,
+		"mo_role_privs":           0,
+		"%!%mo_increment_columns": 0,
 	}
 	//the sqls creating many tables for the tenant.
 	//Wrap them in a transaction
@@ -607,6 +608,7 @@ var (
 				granted_time timestamp,
 				with_grant_option bool
 			);`,
+		"create table `%!%mo_increment_columns`(name varchar(100) primary key, offset bigint, step bigint);",
 	}
 
 	initMoAccountFormat = `insert into mo_catalog.mo_account(

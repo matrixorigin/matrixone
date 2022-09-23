@@ -3,3 +3,7 @@ create table table01(a int);
 drop table table01;
 show tables;
 tables_in_drop_table
+use mo_catalog;
+drop table if exists t1;
+create table t1 (a int auto_increment);
+drop table t1;
