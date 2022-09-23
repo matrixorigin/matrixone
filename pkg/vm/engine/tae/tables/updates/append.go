@@ -74,13 +74,14 @@ func NewAppendNode(
 	mvcc *MVCCHandle) *AppendNode {
 	var ts types.TS
 	if txn != nil {
-		ts = txn.GetCommitTS()
+		ts = txn.GetPrepareTS()
 	}
 	n := &AppendNode{
 		TxnMVCCNode: &txnbase.TxnMVCCNode{
-			Start: ts,
-			End:   ts,
-			Txn:   txn,
+			Start:   ts,
+			Prepare: ts,
+			End:     txnif.UncommitTS,
+			Txn:     txn,
 		},
 		startRow: startRow,
 		maxRow:   maxRow,

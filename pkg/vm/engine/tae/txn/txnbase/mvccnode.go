@@ -40,6 +40,7 @@ type MVCCNode interface {
 	IsActive() bool
 	IsCommitting() bool
 	IsCommitted() bool
+	IsAborted() bool
 
 	GetEnd() types.TS
 	GetPrepare() types.TS
@@ -61,7 +62,7 @@ type MVCCNode interface {
 type TxnMVCCNode struct {
 	Start, Prepare, End types.TS
 	Txn                 txnif.TxnReader
-	//Aborted bool
+	Aborted             bool
 	//State txnif.TxnState
 	LogIndex *wal.Index
 }
@@ -84,6 +85,9 @@ func NewTxnMVCCNodeWithTS(ts types.TS) *TxnMVCCNode {
 		Prepare: ts,
 		End:     ts,
 	}
+}
+func (un *TxnMVCCNode) IsAborted() bool {
+	return un.Aborted
 }
 
 // Check w-w confilct
