@@ -120,6 +120,7 @@ func (s *service) Close() error {
 		return err
 	}
 	s.cancelMoServerFunc()
+	s.stopper.Stop()
 	return s.server.Close()
 }
 

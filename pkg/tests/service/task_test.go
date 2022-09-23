@@ -64,3 +64,64 @@ func TestTaskSchedulerCanAllocateTask(t *testing.T) {
 	}
 	t.Fatalf("task not allocated")
 }
+
+func TestTaskSchedulerCanReallocateTask(t *testing.T) {
+	taskStorage := taskservice.NewMemTaskStorage()
+	taskService := taskservice.NewTaskService(taskStorage, nil)
+
+	dnSvcNum := 1
+	cnSvcNum := 2
+	opt := DefaultOptions().
+		WithDNServiceNum(dnSvcNum).
+		WithCNServiceNum(cnSvcNum).
+		WithTaskStorage(taskStorage)
+
+	// initialize cluster
+	c, err := NewCluster(t, opt)
+	require.NoError(t, err)
+
+	// start the cluster
+	err = c.Start()
+	require.NoError(t, err)
+
+	err = taskService.Create(context.TODO(), task.TaskMetadata{ID: "a"})
+	require.NoError(t, err)
+	tasks, err := taskService.QueryTask(context.TODO(),
+		taskservice.WithTaskStatusCond(taskservice.EQ, task.TaskStatus_Created))
+	require.NoError(t, err)
+	require.Equal(t, 1, len(tasks))
+
+	var uuid1 string
+	for i := 0; i < 100; i++ {
+		t.Logf("iteration: %d", i)
+		tasks, err := taskService.QueryTask(context.TODO(),
+			taskservice.WithTaskStatusCond(taskservice.EQ, task.TaskStatus_Running))
+		require.NoError(t, err)
+
+		if len(tasks) == 1 {
+			t.Logf("task %d allocated on %s", tasks[0].ID, tasks[0].TaskRunner)
+			uuid1 = tasks[0].TaskRunner
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	err = c.CloseCNService(uuid1)
+	require.NoError(t, err)
+	for i := 0; i < 100; i++ {
+		t.Logf("iteration: %d", i)
+		tasks, err := taskService.QueryTask(context.TODO(),
+			taskservice.WithTaskStatusCond(taskservice.EQ, task.TaskStatus_Running))
+		require.NoError(t, err)
+		require.Equal(t, 1, len(tasks))
+		if tasks[0].TaskRunner == uuid1 {
+			t.Logf("task %d is still on %s", tasks[0].ID, tasks[0].TaskRunner)
+			time.Sleep(1 * time.Second)
+			continue
+		} else {
+			t.Logf("task %d reallocated on %s", tasks[0].ID, tasks[0].TaskRunner)
+			return
+		}
+	}
+
+	t.Fatalf("task not reallocated")
+}
