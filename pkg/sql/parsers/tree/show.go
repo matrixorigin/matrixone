@@ -216,6 +216,40 @@ func NewShowTables(e bool, f bool, n string, l *ComparisonExpr, w *Where) *ShowT
 	}
 }
 
+// SHOW TABLE STATUS statement
+type ShowTableStatus struct {
+	showImpl
+	Ext    bool
+	Open   bool
+	Full   bool
+	DBName string
+	Like   *ComparisonExpr
+	Where  *Where
+}
+
+func (node *ShowTableStatus) Format(ctx *FmtCtx) {
+	ctx.WriteString("show")
+	if node.Open {
+		ctx.WriteString(" open")
+	}
+	if node.Full {
+		ctx.WriteString(" full")
+	}
+	ctx.WriteString(" table status")
+	if node.DBName != "" {
+		ctx.WriteString(" from ")
+		ctx.WriteString(node.DBName)
+	}
+	if node.Like != nil {
+		ctx.WriteByte(' ')
+		node.Like.Format(ctx)
+	}
+	if node.Where != nil {
+		ctx.WriteByte(' ')
+		node.Where.Format(ctx)
+	}
+}
+
 // SHOW PROCESSLIST
 type ShowProcessList struct {
 	showImpl

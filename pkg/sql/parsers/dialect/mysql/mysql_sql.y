@@ -2114,6 +2114,27 @@ show_tables_stmt:
             Where: $7,
         }
     }
+|   SHOW full_opt TABLE STATUS database_name_opt like_opt where_expression_opt
+    {
+        fmt.Println("wangjian test0 is")
+        $$ = &tree.ShowTableStatus{
+            Open: false,
+            Full: $2,
+            DBName: $5,
+            Like: $6,
+            Where: $7,
+        }
+    }
+|   SHOW OPEN full_opt TABLE STATUS database_name_opt like_opt where_expression_opt
+    {
+        $$ = &tree.ShowTableStatus{
+            Open: true,
+            Full: $3,
+            DBName: $6,
+            Like: $7,
+            Where: $8,
+        }
+    }
 
 show_databases_stmt:
     SHOW DATABASES like_opt where_expression_opt

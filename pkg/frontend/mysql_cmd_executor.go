@@ -2099,7 +2099,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		case *tree.Select,
 			*tree.ShowCreateTable, *tree.ShowCreateDatabase, *tree.ShowTables, *tree.ShowDatabases, *tree.ShowColumns,
 			*tree.ShowProcessList, *tree.ShowErrors, *tree.ShowWarnings, *tree.ShowVariables, *tree.ShowStatus,
-			*tree.ShowIndex, *tree.ShowCreateView,
+			*tree.ShowIndex, *tree.ShowCreateView, *tree.ShowTableStatus,
 			*tree.ExplainFor:
 			columns, err2 := cw.GetColumns()
 			if err2 != nil {

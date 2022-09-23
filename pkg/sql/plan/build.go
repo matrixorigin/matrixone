@@ -96,6 +96,8 @@ func BuildPlan(ctx CompilerContext, stmt tree.Statement) (*Plan, error) {
 		return buildShowDatabases(stmt, ctx)
 	case *tree.ShowTables:
 		return buildShowTables(stmt, ctx)
+	case *tree.ShowTableStatus:
+		return buildShowTableStatus(stmt, ctx)
 	case *tree.ShowColumns:
 		return buildShowColumns(stmt, ctx)
 	case *tree.ShowIndex:

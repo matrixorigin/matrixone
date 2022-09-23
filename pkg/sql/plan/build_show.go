@@ -259,6 +259,43 @@ func buildShowTables(stmt *tree.ShowTables, ctx CompilerContext) (*Plan, error) 
 	return returnByRewriteSQL(ctx, sql, ddlType)
 }
 
+func buildShowTableStatus(stmt *tree.ShowTableStatus, ctx CompilerContext) (*Plan, error) {
+	if stmt.Like != nil && stmt.Where != nil {
+		return nil, moerr.NewSyntaxError("like clause and where clause cannot exist at the same time")
+	}
+
+	if stmt.Full || stmt.Open {
+		return nil, moerr.NewNYI("statement: '%v'", tree.String(stmt, dialect.MYSQL))
+	}
+
+	dbName := stmt.DBName
+	if stmt.DBName == "" {
+		dbName = ctx.DefaultDatabase()
+	} else if !ctx.DatabaseExists(dbName) {
+		return nil, moerr.NewBadDB(dbName)
+	}
+
+	if dbName == "" {
+		return nil, moerr.NewNoDB()
+	}
+
+	ddlType := plan.DataDefinition_SHOW_TABLES
+	sql := fmt.Sprintf("select relname as Name, NULL as Engine, NULL as Version, NULL as Row_format, 0 as `Rows`, 0 as Avg_row_length, 0 as Data_length, 0 as Max_data_length, 0 as Index_length, 0 as Data_free, NULL as `Auto_increment`, created_time as Create_time, NULL as Update_time, NULL as Check_time, NULL as `Collation`, 0 as Checksum, NULL as Create_options, rel_comment as Comment FROM %s.mo_tables WHERE reldatabase = '%s' and relname != '%s'", MO_CATALOG_DB_NAME, dbName, "%!%mo_increment_columns")
+
+	if stmt.Where != nil {
+		return returnByWhereAndBaseSQL(ctx, sql, stmt.Where, ddlType)
+	}
+
+	if stmt.Like != nil {
+		// append filter [AND relname like stmt.Like] to WHERE clause
+		likeExpr := stmt.Like
+		likeExpr.Left = tree.SetUnresolvedName("relname")
+		return returnByLikeAndSQL(ctx, sql, likeExpr, ddlType)
+	}
+
+	return returnByRewriteSQL(ctx, sql, ddlType)
+}
+
 func buildShowColumns(stmt *tree.ShowColumns, ctx CompilerContext) (*Plan, error) {
 	if stmt.Like != nil && stmt.Where != nil {
 		return nil, moerr.NewSyntaxError("like clause and where clause cannot exist at the same time")
