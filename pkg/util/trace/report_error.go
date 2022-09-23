@@ -20,13 +20,12 @@ import (
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/util/errutil"
-	"go.uber.org/zap"
-
 	"github.com/matrixorigin/matrixone/pkg/util"
+	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 	"github.com/matrixorigin/matrixone/pkg/util/export"
 
 	"github.com/cockroachdb/errors/errbase"
+	"go.uber.org/zap"
 )
 
 var _ IBuffer2SqlItem = (*MOErrorHolder)(nil)
@@ -81,6 +80,8 @@ func ReportError(ctx context.Context, err error) {
 
 // HandleError api for pkg/util/errutil as errorReporter
 func HandleError(ctx context.Context, err error, depth int) {
+	msg := fmt.Sprintf("error: %v", err)
+	logutil.GetGlobalLogger().WithOptions(zap.AddCallerSkip(depth+1)).Info(msg, ContextField(ctx))
 	if !GetTracerProvider().IsEnable() {
 		return
 	}
@@ -88,5 +89,4 @@ func HandleError(ctx context.Context, err error, depth int) {
 		ctx = DefaultContext()
 	}
 	ReportError(ctx, err)
-	logutil.GetSkip1Logger().Info("error", ContextField(ctx), zap.Error(err))
 }

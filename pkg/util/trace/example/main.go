@@ -17,10 +17,14 @@ package main
 import (
 	"context"
 	goErrors "errors"
+	"fmt"
+	"io"
 	"time"
 
 	"github.com/lni/dragonboat/v4/logger"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/util/batchpipe"
 	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
@@ -41,6 +45,16 @@ func (l logOutputExecutor) Query(ctx context.Context, s string, _ ie.SessionOver
 }
 func (l logOutputExecutor) ApplySessionOverride(ie.SessionOverrideOptions) {}
 
+type dummyStringWriter struct{}
+
+func (w *dummyStringWriter) WriteString(s string) (n int, err error) {
+	return fmt.Printf("dummyStringWriter: %s\n", s)
+}
+
+var dummyFSWriterFactory = func(context.Context, string, batchpipe.HasName) io.StringWriter {
+	return &dummyStringWriter{}
+}
+
 func bootstrap(ctx context.Context) (context.Context, error) {
 	logutil.SetupMOLogger(&logutil.LogConfig{Format: "console", DisableStore: false})
 	// init trace/log/error framework & BatchProcessor
@@ -53,6 +67,8 @@ func bootstrap(ctx context.Context) (context.Context, error) {
 		// config[traceBatchProcessor], distributed node should use "FileService" in system_vars_config.toml
 		// "FileService" is not implement yet
 		trace.WithBatchProcessMode("InternalExecutor"),
+		// WithFSWriterFactory for config[traceBatchProcessor] = "FileService"
+		trace.WithFSWriterFactory(dummyFSWriterFactory),
 		// WithSQLExecutor for config[traceBatchProcessor] = "InternalExecutor"
 		trace.WithSQLExecutor(func() ie.InternalExecutor {
 			return &logOutputExecutor{}
@@ -146,6 +162,44 @@ func errorUsage(ctx context.Context) {
 
 }
 
+func pf1() {
+	panic("foo")
+}
+
+func pf2(a, b int) int {
+	return a / b
+}
+
+func pf3() {
+	panic(moerr.NewInternalError(fmt.Sprintf("%s %s %s %d", "foo", "bar", "zoo", 2)))
+}
+
+func PanicF(i int) (err *moerr.Error) {
+	defer func() {
+		if e := recover(); e != nil {
+			err = moerr.ConvertPanicError(e)
+		}
+	}()
+	switch i {
+	case 1:
+		pf1()
+	case 2:
+		foo := pf2(1, 0)
+		panic(foo)
+	case 3:
+		pf3()
+	default:
+		return nil
+	}
+	return
+}
+
+func moerrPanic(ctx context.Context) {
+	for i := 0; i <= 3; i++ {
+		_ = PanicF(i)
+	}
+}
+
 type FunctionRequest struct {
 	trace.SpanContext
 }
@@ -221,6 +275,8 @@ func main() {
 	logUsage(rootCtx)
 
 	errorUsage(rootCtx)
+
+	moerrPanic(rootCtx)
 
 	rpcUsage(rootCtx)
 
