@@ -194,7 +194,14 @@ func (s *Scope) remoteRun(c *Compile) error {
 		_ = cancel
 	}
 
-	message := &pipeline.Message{Id: streamSender.ID(), Data: sData, ProcInfoData: pData}
+	message := cnclient.AcquireMessage()
+	{
+		message.Id = streamSender.ID()
+		message.Data = sData
+		message.ProcInfoData = pData
+	}
+	defer cnclient.ReleaseMessage(message)
+
 	errSend := streamSender.Send(c.ctx, message)
 	if errSend != nil {
 		return errSend

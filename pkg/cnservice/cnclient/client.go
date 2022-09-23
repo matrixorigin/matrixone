@@ -37,6 +37,14 @@ func GetStreamSender(backend string) (morpc.Stream, error) {
 	return client.NewStream(backend)
 }
 
+func AcquireMessage() *pipeline.Message {
+	return client.acquireMessage().(*pipeline.Message)
+}
+
+func ReleaseMessage(m *pipeline.Message) {
+	client.releaseMessage(m)
+}
+
 func IsCNClientReady() bool {
 	return client != nil && client.ready
 }
@@ -106,6 +114,17 @@ func NewCNClient(cfg *ClientConfig) error {
 
 func (c *CNClient) acquireMessage() morpc.Message {
 	return c.requestPool.Get().(*pipeline.Message)
+}
+
+func (c *CNClient) releaseMessage(m *pipeline.Message) {
+	if c.requestPool != nil {
+		m.Sid = 0
+		m.Err = nil
+		m.Data = nil
+		m.ProcInfoData = nil
+		m.Analyse = nil
+		c.requestPool.Put(m)
+	}
 }
 
 // Fill set some default value for client config.
