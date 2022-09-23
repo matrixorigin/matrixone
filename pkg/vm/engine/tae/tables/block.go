@@ -105,7 +105,7 @@ func newBlock(meta *catalog.BlockEntry, segFile file.Segment, bufMgr base.INodeM
 		pkIdx = schema.GetSingleSortKeyIdx()
 		indexCnt[pkIdx] += 1
 	}
-	blockFile, err := segFile.OpenBlock(meta.GetID(), colCnt, indexCnt)
+	blockFile, err := segFile.OpenBlock(meta.GetID(), colCnt)
 	if err != nil {
 		panic(err)
 	}

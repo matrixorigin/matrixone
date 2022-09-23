@@ -118,12 +118,12 @@ func (sf *segmentFile) Destroy() {
 	sf.fs = nil
 }
 
-func (sf *segmentFile) OpenBlock(id uint64, colCnt int, indexCnt map[int]int) (block file.Block, err error) {
+func (sf *segmentFile) OpenBlock(id uint64, colCnt int) (block file.Block, err error) {
 	sf.Lock()
 	defer sf.Unlock()
 	bf := sf.blocks[id]
 	if bf == nil {
-		bf = newBlock(id, sf, colCnt, indexCnt)
+		bf = newBlock(id, sf, colCnt)
 		sf.blocks[id] = bf
 	}
 	block = bf

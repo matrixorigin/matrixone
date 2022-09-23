@@ -22,22 +22,19 @@ import (
 
 type columnBlock struct {
 	common.RefHelper
-	block   *blockFile
-	ts      uint64
-	indexes int
-	id      *common.ID
+	block *blockFile
+	id    *common.ID
 }
 
-func newColumnBlock(block *blockFile, indexCnt int, col int) *columnBlock {
+func newColumnBlock(block *blockFile, col int) *columnBlock {
 	cId := &common.ID{
 		SegmentID: block.id.SegmentID,
 		BlockID:   block.id.BlockID,
 		Idx:       uint16(col),
 	}
 	cb := &columnBlock{
-		block:   block,
-		indexes: indexCnt,
-		id:      cId,
+		block: block,
+		id:    cId,
 	}
 	cb.OnZeroCB = cb.close
 	cb.Ref()
@@ -62,5 +59,5 @@ func (cb *columnBlock) close() {
 }
 
 func (cb *columnBlock) Destroy() {
-	logutil.Infof("Destroying Block %d Col @ TS %d", cb.block.id, cb.ts)
+	logutil.Infof("Destroying Block %d Col", cb.block.id)
 }

@@ -45,7 +45,7 @@ type blockFile struct {
 	reader  *Reader
 }
 
-func newBlock(id uint64, seg *segmentFile, colCnt int, indexCnt map[int]int) *blockFile {
+func newBlock(id uint64, seg *segmentFile, colCnt int) *blockFile {
 	blockID := &common.ID{
 		TableID:   seg.id.TableID,
 		SegmentID: seg.id.SegmentID,
@@ -60,11 +60,7 @@ func newBlock(id uint64, seg *segmentFile, colCnt int, indexCnt map[int]int) *bl
 	}
 	bf.OnZeroCB = bf.close
 	for i := range bf.columns {
-		cnt := 0
-		if indexCnt != nil {
-			cnt = indexCnt[i]
-		}
-		bf.columns[i] = newColumnBlock(bf, cnt, i)
+		bf.columns[i] = newColumnBlock(bf, i)
 	}
 	bf.Ref()
 	return bf

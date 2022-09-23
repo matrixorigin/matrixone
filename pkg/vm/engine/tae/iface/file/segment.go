@@ -22,7 +22,7 @@ import (
 type Segment interface {
 	Base
 	Name() string
-	OpenBlock(id uint64, colCnt int, indexCnt map[int]int) (Block, error)
+	OpenBlock(id uint64, colCnt int) (Block, error)
 	WriteTS(ts types.TS) error
 	ReadTS() types.TS
 	String() string
