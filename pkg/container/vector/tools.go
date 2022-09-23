@@ -296,5 +296,7 @@ func (v *Vector) extend(rows int, m *mheap.Mheap) error {
 	}
 	// Setup v.Col
 	v.setupColFromData(0, tgtSz/v.GetType().TypeSize())
+	// extend the null map
+	nulls.TryExpand(v.Nsp, tgtSz)
 	return nil
 }
