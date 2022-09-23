@@ -1,0 +1,192 @@
+-- @suit
+
+-- @case
+-- @desc:test for BETWEEN...AND and NOT BETWEEN...AND operator
+-- @label:bvt
+
+SELECT 2 BETWEEN 1 AND 3, 2 BETWEEN 3 and 1;
+SELECT 1 BETWEEN 2 AND 3;
+SELECT 'b' BETWEEN 'a' AND 'c';
+SELECT 2 BETWEEN 2 AND '3';
+
+DROP TABLE IF EXISTS between_and_test;
+CREATE TABLE between_and_test(
+    int_test_max INT,
+    int_test_min INT,
+    str1 VARCHAR(20),
+    str2 CHAR(20),
+    float_32 FLOAT,
+    float_64 DOUBLE
+);
+
+INSERT INTO between_and_test() VALUES(2147483647, -2147483648, 'A', 'Z', 0.0000000000000000000000001, -1.1);
+INSERT INTO between_and_test() VALUES(2147483647, -2147483648, 'a', 'z', 0.002, 0.00003);
+INSERT INTO between_and_test(float_32, float_64) VALUES(2147483648, 16542147483647);
+
+-- MO is strictly case sensitive, Ex : 'A' is not seem to 'a';
+SELECT * FROM between_and_test WHERE 'A' BETWEEN str1 AND str2;
+SELECT * FROM between_and_test WHERE 'Z' BETWEEN str1 AND str2;
+SELECT * FROM between_and_test WHERE 'a' BETWEEN str1 AND str2;
+SELECT * FROM between_and_test WHERE 'z' BETWEEN str1 AND str2;
+SELECT * FROM between_and_test WHERE 'ABc' BETWEEN str1 AND str2;
+SELECT * FROM between_and_test WHERE 'B' BETWEEN str1 AND str2;
+SELECT * FROM between_and_test WHERE '' BETWEEN str1 AND str2;
+SELECT * FROM between_and_test WHERE ' ' BETWEEN str1 AND str2;
+SELECT * FROM between_and_test WHERE NULL BETWEEN str1 AND str2;
+SELECT int_test_max, int_test_min FROM between_and_test WHERE 2147483647 BETWEEN int_test_min AND int_test_max;
+SELECT int_test_max, int_test_min FROM between_and_test WHERE -2147483649 BETWEEN int_test_min AND int_test_max;
+SELECT int_test_max, int_test_min FROM between_and_test WHERE 0 BETWEEN int_test_min AND int_test_max;
+SELECT float_32, float_64 FROM between_and_test WHERE float_64 BETWEEN -1.1 AND 0.00003;
+SELECT float_32, float_64 FROM between_and_test WHERE -0.0 BETWEEN -1.1 AND 0.00003;
+SELECT * FROM between_and_test WHERE float_32 BETWEEN int_test_min AND int_test_max;
+SELECT * FROM between_and_test WHERE float_64 BETWEEN int_test_max AND int_test_min;
+
+SELECT * FROM between_and_test WHERE NULL NOT BETWEEN 'A' AND 'z';
+SELECT * FROM between_and_test WHERE '#' NOT BETWEEN 'A' AND 'z';
+SELECT * FROM between_and_test WHERE 'A' NOT BETWEEN str1 AND str2;
+SELECT * FROM between_and_test WHERE 'a' NOT BETWEEN str1 AND str2;
+SELECT * FROM between_and_test WHERE float_32 NOT BETWEEN -2147483648 AND 2147483647;
+SELECT * FROM between_and_test WHERE float_64 NOT BETWEEN -2147483648 AND 2147483647;
+
+DELETE FROM between_and_test;
+DROP TABLE IF EXISTS between_and_test;
+
+CREATE TABLE between_and_test(
+    d1 DATE,
+    d2 DATETIME,
+    d3 TIMESTAMP
+);
+
+INSERT INTO between_and_test() VALUES('2022-06-06','2022-06-09 13:13:16', '2022-08-11 15:56:16.4561');
+INSERT INTO between_and_test() VALUES('2022-06-30','2022-07-31 00:00:00', '2022-08-11 15:56:16.4561');
+INSERT INTO between_and_test() VALUES('2021-06-30','2022-07-31 00:00:01', '2022-09-01 13:03:13.65456');
+SELECT * FROM between_and_test WHERE d1 BETWEEN '2022-06-01' AND '2022-06-30';
+SELECT * FROM between_and_test WHERE d1 BETWEEN '2022-06-01' AND NULL;
+SELECT * FROM between_and_test WHERE d1 BETWEEN NULL AND '2022-06-30';
+SELECT * FROM between_and_test WHERE d1 BETWEEN NULL AND NULL;
+SELECT * FROM between_and_test WHERE d1 BETWEEN CAST('2022-06-01' AS DATE) AND '2022-06-30';
+SELECT * FROM between_and_test WHERE d2 BETWEEN CAST('2022-07-01' AS DATE) AND CAST('2022-07-31 00:00:00' AS DATETIME);
+SELECT d2 FROM between_and_test WHERE d2 BETWEEN '2022-06-01' AND '2022-07-30 23:59:59';
+SELECT d2 FROM between_and_test WHERE 6 BETWEEN MONTH('2022-06-09 13:13:16') AND MONTH('2022-07-31 00:00:00')-1;
+
+SELECT * FROM between_and_test WHERE d1 NOT BETWEEN '2022-06-01' AND '2022-06-15';
+SELECT * FROM between_and_test WHERE d1 NOT BETWEEN '2022-06-15' AND '2022-06-01';
+SELECT d2 FROM between_and_test WHERE d2 NOT BETWEEN '2022-06-09 00:13:16' AND '2022-06-9 14:00:00';
+SELECT d2 FROM between_and_test WHERE d2 BETWEEN '2022-07-31' AND '2022-07-31';
+SELECT d2 FROM between_and_test WHERE d2 NOT BETWEEN '2022-07-31' AND '2022-07-31';
+
+DELETE FROM between_and_test;
+DROP TABLE IF EXISTS between_and_test;
+
+CREATE TABLE t1(
+    id INT,
+    str VARCHAR(20)
+);
+
+CREATE TABLE t2(
+    id INT,
+    order_time DATE
+);
+
+INSERT INTO t1 VALUES(0, 'honda'), (-1, 'toyota'), (1, ' '), (-2, 'NULL');
+INSERT INTO t2 VALUES(0, '2022-09-21'), (-1, '2022-09-11'), (1, '2021-09-21'), (-2, '2021-09-11');
+INSERT INTO t1 VALUES(2, '#$%@RETE');
+
+SELECT * FROM t1 WHERE id BETWEEN '0' AND '2';
+SELECT id,str FROM t1 WHERE id BETWEEN 0 AND 0 AND str BETWEEN 'A' AND 'Z';
+SELECT * FROM (SELECT * FROM t1 WHERE str BETWEEN 'a' AND 'x') AS t WHERE id BETWEEN 0 AND 1;
+SELECT * FROM (SELECT * FROM t1 WHERE str BETWEEN '' AND 'z') AS t WHERE id BETWEEN -1 AND 1;
+
+SELECT t1.id, str, order_time
+FROM t1 INNER JOIN t2 ON t1.id = t2.id
+WHERE t1.id BETWEEN -2 AND 2 AND t2.order_time BETWEEN '2022-09-11' AND '2022-09-21';
+
+SELECT t1.id, str, order_time
+FROM t1 INNER JOIN t2 ON t1.id = t2.id
+WHERE YEAR(order_time) BETWEEN '2021' AND '2022';
+
+DROP TABLE IF EXISTS t1;
+DROP TABLE IF EXISTS t2;
+
+CREATE TABLE t1(
+    id VARCHAR(20),
+    name VARCHAR(20)
+);
+
+CREATE TABLE t2(
+    id VARCHAR(20),
+    n1 INT,
+    n2 FLOAT
+);
+
+INSERT INTO t1 VALUES('0001', 'Smi'), ('1111', 'Fri'), ('2222', '22TOM');
+INSERT INTO t2 VALUES('0001', 0001, 0.01), ('1111', 1111, -0.01), ('2222', 2222, NULL);
+
+SELECT * FROM t1 WHERE id BETWEEN 0 AND 2;
+SELECT * FROM t1 WHERE name BETWEEN '0' AND '2';
+SELECT * FROM t1 WHERE id NOT BETWEEN '0' AND '2';
+
+-- @bvt:issue#5150
+SELECT t1.id, name, n1, n2
+FROM t1 LEFT JOIN t2 ON t1.id = t2.id
+WHERE id NOT BETWEEN '0' AND '2' AND n2 BETWEEN NULL AND NULL;
+-- @bvt:issue
+
+SELECT t1.id, name, n1, n2
+FROM t1 LEFT JOIN t2 ON t1.id = t2.id
+WHERE t1.id NOT BETWEEN '0' AND '2' AND n2 BETWEEN NULL AND NULL;
+
+SELECT t1.id, name, n1, n2
+FROM t1 RIGHT JOIN t2 ON t1.id = t2.id
+WHERE t1.id NOT BETWEEN 'a' AND 'Z' AND n2 BETWEEN -0.01 AND 0.01;
+
+SELECT t1.id, name, n1, n2
+FROM t1 INNER JOIN t2 ON t1.id = t2.id
+WHERE t1.id BETWEEN '0' AND '1' AND n1 BETWEEN '0' AND 1111;
+
+DROP TABLE IF EXISTS t1;
+DROP TABLE IF EXISTS t2;
+
+-- @case
+-- @desc:test for BETWEEH...AND operator in function
+-- @label:bvt
+CREATE TABLE t1(
+    str1 VARCHAR(50),
+    b BOOL
+);
+
+INSERT INTO t1(str1) VALUES('This product is merged some high tech.');
+INSERT INTO t1(str1) VALUES('&^%$#@ has some error');
+INSERT INTO t1() VALUES('many years age, joe smith always', TRUE);
+INSERT INTO t1(b) VALUES(TRUE), (FALSE), (NULL);
+
+SELECT * FROM t1 WHERE SUBSTRING(str1,LENGTH(str1)) BETWEEN 'A' AND 'z';
+SELECT * FROM t1 WHERE SUBSTRING(str1,LENGTH(str1) - (LENGTH(str1)-1)) BETWEEN 'A' AND 'z';
+SELECT * FROM t1 WHERE SUBSTRING(str1,LENGTH(str1) - (LENGTH(str1)-1)) NOT BETWEEN 'A' AND 'z';
+SELECT * FROM t1 WHERE str1 NOT BETWEEN 'm' AND 'T';
+SELECT * FROM t1 WHERE b BETWEEN TRUE AND FALSE;
+SELECT * FROM t1 WHERE b NOT BETWEEN TRUE AND FALSE;
+SELECT * FROM t1 WHERE LENGTH(str1) BETWEEN 25 AND 50;
+SELECT * FROM t1 WHERE LENGTH(str1) BETWEEN '25'+5 AND 50;
+SELECT * FROM t1 WHERE LENGTH(str1) NOT BETWEEN 25 AND 50;
+
+DROP TABLE IF EXISTS t1;
+
+CREATE TABLE t1(
+    d1 DATE,
+    d2 DATETIME
+);
+
+INSERT INTO t1 VALUES('2022-09-11', '2029-12-16 01:21:34');
+INSERT INTO t1 VALUES('2021-11-11', '2028-11-06 00:21:34');
+INSERT INTO t1 VALUES('2222-12-11', '1999-05-16 21:21:34');
+
+SELECT * FROM t1 WHERE DATE_ADD(d1, INTERVAL 2 MONTH) BETWEEN '2022-01-01' AND '2022-12-31';
+SELECT * FROM t1 WHERE DATE_SUB(d1, INTERVAL 10 DAY) BETWEEN '2021-11-11' AND '2022-12-31';
+SELECT * FROM t1 WHERE d1 BETWEEN DATE_SUB('2022-09-11', INTERVAL 10 DAY) AND DATE_SUB('2222-12-11', INTERVAL -200 YEAR);
+SELECT * FROM t1 WHERE d1 NOT BETWEEN DATE_SUB('2022-09-11', INTERVAL 10 DAY) AND DATE_SUB('2222-12-11', INTERVAL -200 YEAR);
+SELECT * FROM t1 WHERE MONTH(d1) - 2 BETWEEN 9 AND 12;
+SELECT * FROM t1 WHERE YEAR(d2) BETWEEN 0 AND '2020';
+SELECT * FROM t1 WHERE YEAR(d2) NOT BETWEEN 0 AND '2020';
+SELECT * FROM t1 WHERE DATE_ADD(d2, INTERVAL 2 HOUR) BETWEEN '2028-11-06' AND '2029-12-16';
+SELECT * FROM t1 WHERE DATE_ADD(d2, INTERVAL 2 HOUR) NOT BETWEEN '2028-11-06' AND '2029-12-16';
