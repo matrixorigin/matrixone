@@ -47,10 +47,7 @@ insert into t1 values(NULL, NULL);
 insert into t1 values('a',null);
 insert into t1 values(null, 'b');
 select startswith(a,b) from t1;
-startswith(a, b)
-null
-null
-null
+invalid argument StartsWith input, bad value empty string
 drop table t1;
 drop table if exists t1;
 create table t1(a varchar(255),b char(255));

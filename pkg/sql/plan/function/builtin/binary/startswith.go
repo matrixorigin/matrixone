@@ -24,7 +24,7 @@ import (
 
 func Startswith(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	left, right := vectors[0], vectors[1]
-	resultType := types.Type{Oid: types.T_uint8, Size: 1}
+	resultType := types.T_uint8.ToType()
 	leftValues, rightValues := vector.MustStrCols(left), vector.MustStrCols(right)
 	switch {
 	case left.IsScalar() && right.IsScalar():
@@ -33,10 +33,13 @@ func Startswith(vectors []*vector.Vector, proc *process.Process) (*vector.Vector
 		}
 		resultVector := vector.NewConst(resultType, 1)
 		resultValues := vector.MustTCols[uint8](resultVector)
-		startswith.StartsWithAllConst(leftValues[0], rightValues[0], resultValues)
+		err := startswith.StartsWithAllConst(leftValues[0], rightValues[0], resultValues)
+		if err != nil{
+			return nil, err
+		}
 		return resultVector, nil
 	case left.IsScalar() && !right.IsScalar():
-		if left.ConstVectorIsNull() {
+		if left.ConstVectorIsNull(){
 			return proc.AllocScalarNullVector(resultType), nil
 		}
 		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(rightValues)), right.Nsp)
@@ -44,7 +47,10 @@ func Startswith(vectors []*vector.Vector, proc *process.Process) (*vector.Vector
 			return nil, err
 		}
 		resultValues := vector.MustTCols[uint8](resultVector)
-		startswith.StartsWithLeftConst(leftValues[0], rightValues, resultValues)
+		err = startswith.StartsWithLeftConst(leftValues[0], rightValues, resultValues)
+		if err != nil{
+			return nil, err
+		}
 		return resultVector, nil
 	case !left.IsScalar() && right.IsScalar():
 		if right.ConstVectorIsNull() {
@@ -55,7 +61,10 @@ func Startswith(vectors []*vector.Vector, proc *process.Process) (*vector.Vector
 			return nil, err
 		}
 		resultValues := vector.MustTCols[uint8](resultVector)
-		startswith.StartsWithRightConst(leftValues, rightValues[0], resultValues)
+		err = startswith.StartsWithRightConst(leftValues, rightValues[0], resultValues)
+		if err != nil{
+			return nil, err
+		}
 		return resultVector, nil
 	}
 	resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(leftValues)), nil)
@@ -64,6 +73,10 @@ func Startswith(vectors []*vector.Vector, proc *process.Process) (*vector.Vector
 	}
 	resultValues := vector.MustTCols[uint8](resultVector)
 	nulls.Or(left.Nsp, right.Nsp, resultVector.Nsp)
-	startswith.StartsWith(leftValues, rightValues, resultValues)
+	err = startswith.StartsWith(leftValues, rightValues, resultValues)
+	if err != nil{
+		return nil, err
+	}
+
 	return resultVector, nil
 }

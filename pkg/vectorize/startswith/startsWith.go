@@ -16,6 +16,8 @@ package startswith
 
 import (
 	"bytes"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
 func hasPrefix(b1, b2 []byte) uint8 {
@@ -25,28 +27,40 @@ func hasPrefix(b1, b2 []byte) uint8 {
 	return 0
 }
 
-func StartsWith(lv, rv []string, rs []uint8) []uint8 {
+func StartsWith(lv, rv []string, rs []uint8) error {
 	for i := range lv {
+		if rv[i] == "" {
+			return moerr.NewInvalidArg("StartsWith input", "empty string")
+		}
 		rs[i] = hasPrefix([]byte(lv[i]), []byte(rv[i]))
 	}
-	return rs
+	return nil
 }
 
-func StartsWithRightConst(lv []string, rv string, rs []uint8) []uint8 {
+func StartsWithRightConst(lv []string, rv string, rs []uint8) error {
+	if rv == "" {
+		return moerr.NewInvalidArg("StartsWith input", "empty string")
+	}
 	for i := range lv {
 		rs[i] = hasPrefix([]byte(lv[i]), []byte(rv))
 	}
-	return rs
+	return nil
 }
 
-func StartsWithLeftConst(lv string, rv []string, rs []uint8) []uint8 {
+func StartsWithLeftConst(lv string, rv []string, rs []uint8) error {
 	for i := range rv {
+		if rv[i] == "" {
+			return moerr.NewInvalidArg("StartsWith input", "empty string")
+		}
 		rs[i] = hasPrefix([]byte(lv), []byte(rv[i]))
 	}
-	return rs
+	return nil
 }
 
-func StartsWithAllConst(lv, rv string, rs []uint8) []uint8 {
+func StartsWithAllConst(lv, rv string, rs []uint8) error {
+	if rv == "" {
+		return moerr.NewInvalidArg("StartsWith input", "empty string")
+	}
 	rs[0] = hasPrefix([]byte(lv), []byte(rv))
-	return rs
+	return nil
 }
