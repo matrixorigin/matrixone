@@ -235,42 +235,13 @@ select * from t1 where endswith(c,'y') = 1 and endswith(vc,'ge') = 1;
 id	c	vc
 3	Cowboy	Lifeontherange
 select startswith(c,'B'),startswith(vc,'A') from t1;
-startswith(c, B)	startswith(vc, A)
-0	1
-0	1
-1	1
-0	0
-0	0
-1	0
-1	0
-0	0
-0	0
-1	0
-null	null
-0	0
+invalid argument StartsWith input, bad value empty string
 select startswith(c,'y'),startswith(vc,'e') from t1;
-startswith(c, y)	startswith(vc, e)
-0	0
-0	0
-0	0
-0	0
-0	0
-0	0
-0	0
-0	0
-0	0
-0	0
-null	null
-0	0
+invalid argument StartsWith input, bad value empty string
 select * from t1 where startswith(c,'B') = 1;
-id	c	vc
-2	Bugs	Arabbitlife
-5	BestSeller	OneHeckuvabook
-5	BestSeller	OneHeckuvabook
-8	BerkAuthor	Cool.Berkly.the.book
+invalid argument StartsWith input, bad value empty string
 select * from t1 where startswith(c,'B') = 1 and startswith(vc,'A') = 1;
-id	c	vc
-2	Bugs	Arabbitlife
+invalid argument StartsWith input, bad value empty string
 select lpad(c,0,'*') from t1;
 lpad(c,0,'*')
 
