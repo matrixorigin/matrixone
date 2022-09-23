@@ -40,7 +40,7 @@ func (t *Table) Rows(ctx context.Context) (int64, error) {
 		ctx,
 		t.engine,
 		t.txnOperator.Read,
-		t.engine.firstNodeShard,
+		t.engine.anyShard,
 		OpTableStats,
 		TableStatsReq{
 			TableID: t.id,
@@ -65,7 +65,7 @@ func (t *Table) AddTableDef(ctx context.Context, def engine.TableDef) error {
 		ctx,
 		t.engine,
 		t.txnOperator.Write,
-		t.engine.allNodesShards,
+		t.engine.allShards,
 		OpAddTableDef,
 		AddTableDefReq{
 			TableID:      t.id,
@@ -87,7 +87,7 @@ func (t *Table) DelTableDef(ctx context.Context, def engine.TableDef) error {
 		ctx,
 		t.engine,
 		t.txnOperator.Write,
-		t.engine.allNodesShards,
+		t.engine.allShards,
 		OpDelTableDef,
 		DelTableDefReq{
 			TableID:      t.id,
@@ -158,7 +158,7 @@ func (t *Table) GetPrimaryKeys(ctx context.Context) ([]*engine.Attribute, error)
 		ctx,
 		t.engine,
 		t.txnOperator.Read,
-		t.engine.firstNodeShard,
+		t.engine.anyShard,
 		OpGetPrimaryKeys,
 		GetPrimaryKeysReq{
 			TableID: t.id,
@@ -173,26 +173,13 @@ func (t *Table) GetPrimaryKeys(ctx context.Context) ([]*engine.Attribute, error)
 	return resp.Attrs, nil
 }
 
-func (t *Table) Ranges(ctx context.Context) ([][]byte, error) {
-	clusterDetails, err := t.engine.getClusterDetails()
-	if err != nil {
-		return nil, err
-	}
-	nodes := clusterDetails.DNStores
-	shards := make([][]byte, 0, len(nodes))
-	for _, node := range nodes {
-		shards = append(shards, []byte(node.UUID))
-	}
-	return shards, nil
-}
-
 func (t *Table) TableDefs(ctx context.Context) ([]engine.TableDef, error) {
 
 	resps, err := DoTxnRequest[GetTableDefsResp](
 		ctx,
 		t.engine,
 		t.txnOperator.Read,
-		t.engine.firstNodeShard,
+		t.engine.anyShard,
 		OpGetTableDefs,
 		GetTableDefsReq{
 			TableID: t.id,
@@ -213,7 +200,7 @@ func (t *Table) Truncate(ctx context.Context) (uint64, error) {
 		ctx,
 		t.engine,
 		t.txnOperator.Write,
-		t.engine.allNodesShards,
+		t.engine.allShards,
 		OpTruncate,
 		TruncateReq{
 			TableID:      t.id,
@@ -322,7 +309,7 @@ func (t *Table) GetHideKeys(ctx context.Context) (attrs []*engine.Attribute, err
 		ctx,
 		t.engine,
 		t.txnOperator.Read,
-		t.engine.firstNodeShard,
+		t.engine.anyShard,
 		OpGetHiddenKeys,
 		GetHiddenKeysReq{
 			TableID: t.id,

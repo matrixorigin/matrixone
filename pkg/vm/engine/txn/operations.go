@@ -326,7 +326,6 @@ type WriteResp struct {
 type NewTableIterReq struct {
 	TableID ID
 	Expr    *plan.Expr
-	Shards  [][]byte
 }
 
 type NewTableIterResp struct {
