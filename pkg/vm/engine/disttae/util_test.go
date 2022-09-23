@@ -112,10 +112,10 @@ func makeBlockMetaForTest() BlockMeta {
 	return BlockMeta{
 		header: BlockHeader{},
 		columns: []*ColumnMeta{
-			makeColumnMetaForTest(types.T_uint64, column1Min, column1Max),
-			makeColumnMetaForTest(types.T_uint64, column2Min, column2Max),
-			makeColumnMetaForTest(types.T_uint64, column3Min, column3Max),
-			makeColumnMetaForTest(types.T_uint64, column4Min, column4Max),
+			makeColumnMetaForTest(types.T_int64, column1Min, column1Max),
+			makeColumnMetaForTest(types.T_int64, column2Min, column2Max),
+			makeColumnMetaForTest(types.T_int64, column3Min, column3Max),
+			makeColumnMetaForTest(types.T_int64, column4Min, column4Max),
 		},
 	}
 }
@@ -165,39 +165,54 @@ func TestNeedRead(t *testing.T) {
 	blockMeta := makeBlockMetaForTest()
 
 	testExprs := []*plan.Expr{
-		// makeFunctionExprForTest(">", []*plan.Expr{
-		// 	makeColExprForTest(0, types.T_int64),
-		// 	plan2.MakePlan2Int64ConstExprWithType(20),
-		// }),
-		// makeFunctionExprForTest("<", []*plan.Expr{
-		// 	makeColExprForTest(0, types.T_int64),
-		// 	plan2.MakePlan2Int64ConstExprWithType(-1),
-		// }),
-		// makeFunctionExprForTest(">", []*plan.Expr{
-		// 	makeColExprForTest(0, types.T_int64),
-		// 	plan2.MakePlan2Int64ConstExprWithType(3000000),
-		// }),
+		makeFunctionExprForTest(">", []*plan.Expr{
+			makeColExprForTest(0, types.T_int64),
+			plan2.MakePlan2Int64ConstExprWithType(20),
+		}),
+		makeFunctionExprForTest("<", []*plan.Expr{
+			makeColExprForTest(0, types.T_int64),
+			plan2.MakePlan2Int64ConstExprWithType(-1),
+		}),
+		makeFunctionExprForTest(">", []*plan.Expr{
+			makeColExprForTest(0, types.T_int64),
+			plan2.MakePlan2Int64ConstExprWithType(3000000),
+		}),
 		makeFunctionExprForTest("<", []*plan.Expr{
 			makeColExprForTest(0, types.T_int64),
 			makeColExprForTest(1, types.T_int64),
 		}),
+		makeFunctionExprForTest(">", []*plan.Expr{
+			makeColExprForTest(0, types.T_int64),
+			makeColExprForTest(1, types.T_int64),
+		}),
+		makeFunctionExprForTest(">", []*plan.Expr{
+			makeColExprForTest(0, types.T_int64),
+			makeFunctionExprForTest("+", []*plan.Expr{
+				makeColExprForTest(1, types.T_int64),
+				makeColExprForTest(2, types.T_int64),
+			}),
+		}),
 	}
 	testColumns := [][]string{
-		// {"a"},
-		// {"a"},
-		// {"a"},
+		{"a"},
+		{"a"},
+		{"a"},
 		{"a", "d"},
+		{"a", "d"},
+		{"c", "a", "d"}, // c > (a + d)
 	}
 	expected := []bool{
-		// true,
-		// false,
-		// false,
+		true,
 		false,
+		false,
+		false,
+		true,
+		true,
 	}
 
 	t.Run("test needRead", func(t *testing.T) {
 		for i, expr := range testExprs {
-			result := needRead(expr, blockMeta, makeTableDefForTest(testColumns[i]), testutil.NewMheap())
+			result := needRead(expr, blockMeta, makeTableDefForTest(testColumns[i]), testutil.NewProc())
 			if result != expected[i] {
 				t.Fatalf("test needRead at cases[%d], get result is different with expected", i)
 			}

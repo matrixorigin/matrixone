@@ -21,9 +21,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 func (txn *Transaction) getTableList(ctx context.Context, databaseId uint64) ([]string, error) {
@@ -208,7 +207,7 @@ func (txn *Transaction) readTable(ctx context.Context, databaseId uint64, tableI
 	isMonotonically := checkExprIsMonotonical(expr)
 	if isMonotonically {
 		for _, blkInfo := range blkInfos {
-			if !needRead(expr, blkInfo, tableDef, txn.mp) {
+			if !needRead(expr, blkInfo, tableDef, txn.proc) {
 				continue
 			}
 			bat, err := blockRead(ctx, columns, blkInfo)
@@ -243,52 +242,35 @@ func (txn *Transaction) readTable(ctx context.Context, databaseId uint64, tableI
 }
 
 // needRead determine if a block needs to be read
-func needRead(expr *plan.Expr, blkInfo BlockMeta, tableDef *plan.TableDef, mp *mheap.Mheap) bool {
-	bat := batch.NewWithSize(0)
-	bat.Zs = []int64{1}
+func needRead(expr *plan.Expr, blkInfo BlockMeta, tableDef *plan.TableDef, proc *process.Process) bool {
 	var err error
-
 	columns := getColumnsByExpr(expr)
 
 	// if expr match no columns, just eval expr
 	if len(columns) == 0 {
-		ifNeed, err := evalFilterExpr(expr, bat)
+		bat := batch.NewWithSize(0)
+		ifNeed, err := evalFilterExpr(expr, bat, proc, true)
 		if err != nil {
 			return true
 		}
 		return ifNeed
 	}
 
-	// we take columns[0] for base, test expr by columns[0].min/max with other columns
-	baseMinMaxExprs, lastValues, lastTypes := getZonemapByExprAndMeta(columns, blkInfo, tableDef)
-	baseMin := baseMinMaxExprs[0]
-	baseMax := baseMinMaxExprs[1]
+	// get
+	datas, dataTypes := getZonemapDataFromMeta(columns, blkInfo, tableDef)
 
 	// we build vectors for other columns.
-	if len(lastValues) > 0 {
-		buildVectors := buildVectorsLastValues(lastValues, lastTypes, mp)
-		bat.Vecs = buildVectors
-	}
+	buildVectors := buildVectorsByData(datas, dataTypes, proc.GetMheap())
+	bat := batch.NewWithSize(len(columns))
+	bat.Zs = make([]int64, buildVectors[0].Length())
+	bat.Vecs = buildVectors
 
-	// 1. eval expr with min, if true return true
-	tmpExpr := plan2.DeepCopyExpr(expr)
-	tmpExpr = replaceColumnWithZonemap(tmpExpr, columns[0], baseMin)
-	exprReturn, err := evalFilterExpr(tmpExpr, bat)
+	ifNeed, err := evalFilterExpr(expr, bat, proc, false)
 	if err != nil {
 		return true
 	}
-	if exprReturn {
-		return true
-	}
 
-	// 2. eval expr with max, if true return true else false
-	tmpExpr = plan2.DeepCopyExpr(expr)
-	tmpExpr = replaceColumnWithZonemap(tmpExpr, columns[0], baseMax)
-	exprReturn, err = evalFilterExpr(tmpExpr, bat)
-	if err != nil {
-		return true
-	}
-	return exprReturn
+	return ifNeed
 
 }
 
