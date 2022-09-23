@@ -2748,14 +2748,13 @@ func serializePlanToJson(queryPlan *plan2.Plan, uuid uuid.UUID) []byte {
 		if err != nil {
 			moError := moerr.NewInternalError("serialize plan to json error: %s", err.Error())
 			jsonBytes = buildErrorJsonPlan(uuid, moError.MySQLCode(), moError.Error())
+		} else {
+			jsonBytes = buffer.Bytes()
 		}
-		jsonBytes = buffer.Bytes()
-		logutil.Infof("json of sql plan is : %s", string(jsonBytes))
 	} else {
 		moError := moerr.NewInternalError("sql query execution plan not found")
 		jsonBytes = buildErrorJsonPlan(uuid, moError.MySQLCode(), moError.Error())
-		logutil.Infof("json of sql plan is : %s", string(jsonBytes))
 	}
+	logutil.Infof("json of sql plan is : %s", string(jsonBytes))
 	return jsonBytes
-
 }

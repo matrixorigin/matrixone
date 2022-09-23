@@ -260,7 +260,7 @@ func buildPlanMarshalTest(opt plan.Optimizer, t *testing.T, sqls []string) {
 		if err != nil {
 			panic(err)
 		}
-		t.Logf("SQL plan to json : %s\n", string(buffer.Bytes()))
+		t.Logf("SQL plan to json : %s\n", buffer.String())
 
 	}
 }
