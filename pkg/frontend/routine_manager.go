@@ -35,6 +35,7 @@ type RoutineManager struct {
 	pu            *config.ParameterUnit
 	skipCheckUser bool
 	tlsConfig     *tls.Config
+	connCount     map[string]*int32
 }
 
 func (rm *RoutineManager) SetSkipCheckUser(b bool) {
@@ -91,6 +92,18 @@ func (rm *RoutineManager) Closed(rs goetty.IOSession) {
 	}
 	logutil.Infof("will close iosession")
 	rt.Quit()
+}
+
+func (rm *RoutineManager) CountConn(account string, delta int32) {
+	rm.rwlock.Lock()
+	defer rm.rwlock.Unlock()
+	if v, has := rm.connCount[account]; !has {
+		v = new(int32)
+		*v = delta
+		rm.connCount[account] = v
+	} else {
+		*v += delta
+	}
 }
 
 /*
@@ -216,6 +229,8 @@ func NewRoutineManager(ctx context.Context, pu *config.ParameterUnit) (*RoutineM
 		ctx:     ctx,
 		clients: make(map[goetty.IOSession]*Routine),
 		pu:      pu,
+
+		connCount: make(map[string]*int32),
 	}
 	if pu.SV.EnableTls {
 		err := initTlsConfig(rm, pu.SV)

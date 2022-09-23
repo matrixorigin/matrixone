@@ -88,6 +88,7 @@ func (routine *Routine) Loop(routineCtx context.Context) {
 	var req *Request = nil
 	var err error
 	var resp *Response
+	var counted bool
 	//session for the connection
 	for {
 		quit := false
@@ -95,7 +96,14 @@ func (routine *Routine) Loop(routineCtx context.Context) {
 		case <-routineCtx.Done():
 			logutil.Infof("-----cancel routine")
 			quit = true
+			if counted {
+				routine.routineMgr.CountConn(routine.GetSession().GetTenantInfo().Tenant, -1)
+			}
 		case req = <-routine.requestChan:
+			if !counted {
+				counted = true
+				routine.routineMgr.CountConn(routine.GetSession().GetTenantInfo().Tenant, 1)
+			}
 		}
 
 		if quit {
