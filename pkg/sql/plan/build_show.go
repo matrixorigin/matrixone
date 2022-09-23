@@ -268,8 +268,8 @@ func buildShowColumns(stmt *tree.ShowColumns, ctx CompilerContext) (*Plan, error
 		return nil, moerr.NewNotSupported("statement '%v'", tree.String(stmt, dialect.MYSQL))
 	}
 
-	dbName := stmt.DBName
-	if stmt.DBName == "" {
+	dbName := stmt.Table.GetDBName()
+	if dbName == "" {
 		dbName = ctx.DefaultDatabase()
 	} else if !ctx.DatabaseExists(dbName) {
 		return nil, moerr.NewBadDB(dbName)

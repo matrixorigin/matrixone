@@ -259,7 +259,7 @@ func (b *baseBinder) baseBindColRef(astExpr *tree.UnresolvedName, depth int32, i
 				typ = binding.types[colPos]
 				table = binding.table
 			} else {
-				return nil, moerr.NewInvalidInput("ambiguouse column reference '%v'", name)
+				return nil, moerr.NewInvalidInput("ambiguous column reference '%v'", name)
 			}
 		} else {
 			err = moerr.NewInvalidInput("column %s does not exist", name)
@@ -695,12 +695,7 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 					// rewrite count(*) to starcount(col_name)
 					name = "starcount"
 
-					var newCountCol *tree.UnresolvedName
-					newCountCol, err := tree.NewUnresolvedName(b.ctx.bindings[0].cols[0])
-					if err != nil {
-						return nil, err
-					}
-					astArgs[0] = newCountCol
+					astArgs[0] = tree.NewNumValWithType(constant.MakeInt64(1), "1", false, tree.P_int64)
 				}
 			}
 		}

@@ -1754,6 +1754,25 @@ func incStatementCounter(tenant string, stmt tree.Statement) {
 	}
 }
 
+func incTransactionErrorsCounter(tenant string, t metric.SQLType) {
+	metric.TransactionErrorsCounter(tenant, t).Inc()
+}
+
+func incStatementErrorsCounter(tenant string, stmt tree.Statement) {
+	switch stmt.(type) {
+	case *tree.Select:
+		metric.StatementErrorsCounter(tenant, metric.SQLTypeSelect).Inc()
+	case *tree.Insert:
+		metric.StatementErrorsCounter(tenant, metric.SQLTypeInsert).Inc()
+	case *tree.Delete:
+		metric.StatementErrorsCounter(tenant, metric.SQLTypeDelete).Inc()
+	case *tree.Update:
+		metric.StatementErrorsCounter(tenant, metric.SQLTypeUpdate).Inc()
+	default:
+		metric.StatementErrorsCounter(tenant, metric.SQLTypeOther).Inc()
+	}
+}
+
 func (mce *MysqlCmdExecutor) beforeRun(stmt tree.Statement) {
 	// incStatementCounter(sess.GetTenantInfo().Tenant, stmt, sess.IsInternal)
 	incStatementCounter("0", stmt)
@@ -1896,11 +1915,13 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		case *tree.CommitTransaction:
 			err = ses.TxnCommit()
 			if err != nil {
+				incTransactionErrorsCounter(ses.GetTenantInfo().GetTenant(), metric.SQLTypeCommit)
 				goto handleFailed
 			}
 		case *tree.RollbackTransaction:
 			err = ses.TxnRollback()
 			if err != nil {
+				incTransactionErrorsCounter(ses.GetTenantInfo().GetTenant(), metric.SQLTypeRollback)
 				goto handleFailed
 			}
 		}
@@ -2339,6 +2360,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		if !fromLoadData {
 			txnErr = ses.TxnCommitSingleStatement(stmt)
 			if txnErr != nil {
+				incTransactionErrorsCounter(ses.GetTenantInfo().GetTenant(), metric.SQLTypeCommit)
 				trace.EndStatement(requestCtx, txnErr)
 				logStatementStatus(requestCtx, ses, stmt, fail, txnErr)
 				return txnErr
@@ -2383,11 +2405,13 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		logStatementStatus(requestCtx, ses, stmt, success, nil)
 		goto handleNext
 	handleFailed:
+		incStatementErrorsCounter(ses.GetTenantInfo().GetTenant(), stmt)
 		trace.EndStatement(requestCtx, err)
 		logutil.Error(err.Error())
 		if !fromLoadData {
 			txnErr = ses.TxnRollbackSingleStatement(stmt)
 			if txnErr != nil {
+				incTransactionErrorsCounter(ses.GetTenantInfo().GetTenant(), metric.SQLTypeRollback)
 				logStatementStatus(requestCtx, ses, stmt, fail, txnErr)
 				return txnErr
 			}
