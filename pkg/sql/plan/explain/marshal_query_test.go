@@ -15,6 +15,7 @@
 package explain
 
 import (
+	"bytes"
 	"encoding/json"
 	"github.com/google/uuid"
 	plan2 "github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -212,7 +213,9 @@ func TestDMLToJson(t *testing.T) {
 	sqls := []string{
 		"INSERT INTO NATION SELECT * FROM NATION2",
 		"UPDATE NATION SET N_NAME ='U1', N_REGIONKEY=N_REGIONKEY+2 WHERE N_NATIONKEY > 10 LIMIT 20",
+		"UPDATE NATION,NATION2 SET NATION.N_NAME ='U1',NATION2.N_NATIONKEY=15 WHERE NATION.N_NATIONKEY = NATION2.N_NATIONKEY",
 		"DELETE FROM NATION WHERE N_NATIONKEY > 10",
+		"DELETE FROM a1, a2 USING NATION AS a1 INNER JOIN NATION2 AS a2 WHERE a1.N_NATIONKEY=a2.N_NATIONKEY",
 	}
 	mock := plan.NewMockOptimizer()
 	buildPlanMarshalTest(mock, t, sqls)
@@ -242,16 +245,23 @@ func buildPlanMarshalTest(opt plan.Optimizer, t *testing.T, sqls []string) {
 		explainQuery := NewExplainQueryImpl(queryPlan)
 		options := &ExplainOptions{
 			Verbose: true,
-			Analyze: false,
+			Analyze: true,
 			Format:  EXPLAIN_FORMAT_TEXT,
 		}
 
 		marshalPlan := explainQuery.BuildJsonPlan(uuid.New(), options)
-		marshal, err := json.Marshal(marshalPlan)
+		//marshal, err := json.Marshal(marshalPlan)
+
+		buffer := &bytes.Buffer{}
+		encoder := json.NewEncoder(buffer)
+		encoder.SetEscapeHTML(false)
+		err = encoder.Encode(marshalPlan)
+
 		if err != nil {
 			panic(err)
 		}
-		t.Logf("SQL plan to json : %s\n", string(marshal))
+		t.Logf("SQL plan to json : %s\n", string(buffer.Bytes()))
+
 	}
 }
 
