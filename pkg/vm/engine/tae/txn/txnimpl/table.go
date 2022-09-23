@@ -518,7 +518,7 @@ func (tbl *txnTable) Update(id *common.ID, row uint32, col uint16, v any) (err e
 	return
 }
 
-func (tbl *txnTable) UpdateMetadata(id *common.ID, un *catalog.MetadataMVCCNode) (err error) {
+func (tbl *txnTable) UpdateMetaLoc(id *common.ID, metaloc string) (err error) {
 	segMeta, err := tbl.entry.GetSegmentByID(id.SegmentID)
 	if err != nil {
 		panic(err)
@@ -527,7 +527,26 @@ func (tbl *txnTable) UpdateMetadata(id *common.ID, un *catalog.MetadataMVCCNode)
 	if err != nil {
 		panic(err)
 	}
-	isNewNode, err := meta.UpdateAttr(tbl.store.txn, un)
+	isNewNode, err := meta.UpdateMetaLoc(tbl.store.txn, metaloc)
+	if err != nil {
+		return
+	}
+	if isNewNode {
+		tbl.txnEntries = append(tbl.txnEntries, meta)
+	}
+	return
+}
+
+func (tbl *txnTable) UpdateDeltaLoc(id *common.ID, deltaloc string) (err error) {
+	segMeta, err := tbl.entry.GetSegmentByID(id.SegmentID)
+	if err != nil {
+		panic(err)
+	}
+	meta, err := segMeta.GetBlockEntryByID(id.BlockID)
+	if err != nil {
+		panic(err)
+	}
+	isNewNode, err := meta.UpdateDeltaLoc(tbl.store.txn, deltaloc)
 	if err != nil {
 		return
 	}

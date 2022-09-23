@@ -162,17 +162,16 @@ func (task *compactBlockTask) Execute() (err error) {
 		return
 	}
 	// TODO:
-	node := catalog.NewEmptyMetadataMVCCNode()
-	node.(*catalog.MetadataMVCCNode).MetaLoc = fmt.Sprintf("%s:%d_%d_%d",
+	metaLoc := fmt.Sprintf("%s:%d_%d_%d",
 		blockio.EncodeBlkName(ioTask.file.Fingerprint()),
 		ioTask.file.GetMeta("").GetExtent().Offset(),
 		ioTask.file.GetMeta("").GetExtent().Length(),
 		ioTask.file.GetMeta("").GetExtent().OriginSize(),
 	)
-	logutil.Infof("node: %v", node.(*catalog.MetadataMVCCNode).MetaLoc)
-	blkID := newBlk.Fingerprint()
-	dbid := newBlk.GetMeta().(*catalog.BlockEntry).GetSegment().GetTable().GetDB().GetID()
-	task.txn.GetStore().UpdateMetadata(dbid, blkID, node)
+	logutil.Infof("node: %v", metaLoc)
+	if err = newBlk.UpdateMetaLoc(metaLoc); err != nil {
+		return err
+	}
 	if err = newBlkData.ReplayIndex(); err != nil {
 		return err
 	}

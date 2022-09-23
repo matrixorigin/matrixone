@@ -227,6 +227,7 @@ func (task *mergeBlocksTask) Execute() (err error) {
 	// Build and flush block index if sort key is defined
 	// Flush sort key it correlates to only one column
 	batchs := make([]*containers.Batch, 0)
+	blockHandles := make([]handle.Block, 0)
 	for _, vec := range vecs {
 		toAddr = append(toAddr, uint32(length))
 		length += vec.Length()
@@ -235,6 +236,7 @@ func (task *mergeBlocksTask) Execute() (err error) {
 			return err
 		}
 		task.createdBlks = append(task.createdBlks, blk.GetMeta().(*catalog.BlockEntry))
+		blockHandles = append(blockHandles, blk)
 		indexMetas = append(indexMetas, indexwrapper.NewEmptyIndicesMeta())
 		batch := containers.NewBatch()
 		batchs = append(batchs, batch)
@@ -305,16 +307,13 @@ func (task *mergeBlocksTask) Execute() (err error) {
 		return err
 	}
 	for i, block := range blocks {
-		node := catalog.NewEmptyMetadataMVCCNode()
-		node.(*catalog.MetadataMVCCNode).MetaLoc = fmt.Sprintf("%s:%d_%d_%d",
+		metaLoc := fmt.Sprintf("%s:%d_%d_%d",
 			name,
 			block.GetExtent().Offset(),
 			block.GetExtent().Length(),
 			block.GetExtent().OriginSize(),
 		)
-		blkID := task.createdBlks[i].AsCommonID()
-		dbid := task.createdBlks[i].GetSegment().GetTable().GetDB().GetID()
-		task.txn.GetStore().UpdateMetadata(dbid, blkID, node)
+		err = blockHandles[i].UpdateMetaLoc(metaLoc)
 	}
 	for _, blk := range task.createdBlks {
 		if err = blk.GetBlockData().ReplayIndex(); err != nil {

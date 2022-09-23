@@ -2911,10 +2911,7 @@ func TestUpdateAttr(t *testing.T) {
 	assert.NoError(t, err)
 	seg, err := rel.CreateSegment()
 	assert.NoError(t, err)
-	un := &catalog.MetadataMVCCNode{
-		MetaLoc: "test_1",
-	}
-	seg.GetMeta().(*catalog.SegmentEntry).UpdateAttr(txn, un)
+	seg.GetMeta().(*catalog.SegmentEntry).UpdateMetaLoc(txn, "test_1")
 	assert.NoError(t, txn.Commit())
 
 	txn, err = tae.StartTxn(nil)
@@ -2925,10 +2922,7 @@ func TestUpdateAttr(t *testing.T) {
 	assert.NoError(t, err)
 	seg, err = rel.GetSegment(seg.GetID())
 	assert.NoError(t, err)
-	un = &catalog.MetadataMVCCNode{
-		DeltaLoc: "test_2",
-	}
-	seg.GetMeta().(*catalog.SegmentEntry).UpdateAttr(txn, un)
+	seg.GetMeta().(*catalog.SegmentEntry).UpdateDeltaLoc(txn, "test_2")
 	rel.SoftDeleteSegment(seg.GetID())
 	assert.NoError(t, txn.Commit())
 

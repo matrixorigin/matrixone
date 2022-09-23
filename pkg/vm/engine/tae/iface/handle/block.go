@@ -60,6 +60,8 @@ type BlockReader interface {
 	GetColumnDataByName(string, *bytes.Buffer) (*model.ColumnView, error)
 	GetColumnDataById(int, *bytes.Buffer) (*model.ColumnView, error)
 	GetMeta() any
+	GetMetaLoc() string
+	GetDeltaLoc() string
 	Fingerprint() *common.ID
 	Rows() int
 
@@ -82,6 +84,8 @@ type BlockWriter interface {
 	Append(data *containers.Batch, offset uint32) (uint32, error)
 	Update(row uint32, col uint16, v any) error
 	RangeDelete(start, end uint32, dt DeleteType) error
+	UpdateMetaLoc(metaLoc string) error
+	UpdateDeltaLoc(deltaLoc string) error
 
 	PushDeleteOp(filter Filter) error
 	PushUpdateOp(filter Filter, attr string, val any) error
