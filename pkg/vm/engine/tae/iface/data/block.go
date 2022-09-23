@@ -98,4 +98,6 @@ type Block interface {
 	Destroy() error
 	ReplayIndex() error
 	Close()
+	CollectAppendInRange(start, end types.TS) (*containers.Batch, error)
+	CollectDeleteInRange(start, end types.TS) (*containers.Batch, error)
 }
