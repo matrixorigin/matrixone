@@ -244,7 +244,7 @@ func mixUsage(ctx context.Context) {
 	logutil.Info("message", trace.ContextField(newCtx))
 
 	err := childFunc(newCtx)
-	trace.ReportError(newCtx, errutil.Wrapf(err, "extra %s", "message"))
+	trace.ReportError(newCtx, errutil.Wrapf(err, "extra %s", "message"), 0)
 
 }
 

@@ -70,16 +70,7 @@ func (h MOErrorHolder) CsvFields() []string {
 func (h *MOErrorHolder) Format(s fmt.State, verb rune) { errbase.FormatError(h.Error, s, verb) }
 
 // ReportError send to BatchProcessor
-func ReportError(ctx context.Context, err error) {
-	if ctx == nil {
-		ctx = DefaultContext()
-	}
-	e := &MOErrorHolder{Error: err, Timestamp: util.NowNS()}
-	export.GetGlobalBatchProcessor().Collect(ctx, e)
-}
-
-// HandleError api for pkg/util/errutil as errorReporter
-func HandleError(ctx context.Context, err error, depth int) {
+func ReportError(ctx context.Context, err error, depth int) {
 	msg := fmt.Sprintf("error: %v", err)
 	logutil.GetGlobalLogger().WithOptions(zap.AddCallerSkip(depth+1)).Info(msg, ContextField(ctx))
 	if !GetTracerProvider().IsEnable() {
@@ -88,5 +79,6 @@ func HandleError(ctx context.Context, err error, depth int) {
 	if ctx == nil {
 		ctx = DefaultContext()
 	}
-	ReportError(ctx, err)
+	e := &MOErrorHolder{Error: err, Timestamp: util.NowNS()}
+	export.GetGlobalBatchProcessor().Collect(ctx, e)
 }

@@ -76,7 +76,7 @@ func Init(ctx context.Context, opts ...TracerProviderOption) (context.Context, e
 	// init tool dependence
 	logutil.SetLogReporter(&logutil.TraceReporter{ReportLog: ReportLog, ReportZap: ReportZap, LevelSignal: SetLogLevel, ContextField: ContextField})
 	logutil.SpanFieldKey.Store(SpanFieldKey)
-	errutil.SetErrorReporter(HandleError)
+	errutil.SetErrorReporter(ReportError)
 	export.SetDefaultContextFunc(DefaultContext)
 
 	return DefaultContext(), nil
