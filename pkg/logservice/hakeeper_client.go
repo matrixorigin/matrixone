@@ -16,6 +16,8 @@ package logservice
 
 import (
 	"context"
+	"fmt"
+	"go.uber.org/zap"
 	"math/rand"
 	"sync"
 
@@ -239,7 +241,7 @@ func (c *managedHAKeeperClient) resetClient() {
 		cc := c.client
 		c.client = nil
 		if err := cc.close(); err != nil {
-			plog.Errorf("failed to close client %v", err)
+			logger.Error("failed to close client", zap.Error(err))
 		}
 	}
 }
@@ -339,14 +341,14 @@ func connectToHAKeeper(ctx context.Context,
 		c.addr = addr
 		c.client = cc
 		isHAKeeper, err := c.checkIsHAKeeper(ctx)
-		plog.Infof("isHAKeeper: %t, err: %v", isHAKeeper, err)
+		logger.Info(fmt.Sprintf("isHAKeeper: %t, err: %v", isHAKeeper, err))
 		if err == nil && isHAKeeper {
 			return c, nil
 		} else if err != nil {
 			e = err
 		}
 		if err := cc.Close(); err != nil {
-			plog.Errorf("failed to close the client %v", err)
+			logger.Error("failed to close the client", zap.Error(err))
 		}
 	}
 	if e == nil {
@@ -419,7 +421,7 @@ func (c *hakeeperClient) sendLogHeartbeat(ctx context.Context,
 		return pb.CommandBatch{}, err
 	}
 	for _, cmd := range cb.Commands {
-		plog.Infof("hakeeper client received cmd: %s", cmd.LogString())
+		logger.Info("hakeeper client received cmd", zap.String("cmd", cmd.LogString()))
 	}
 	return cb, nil
 }
