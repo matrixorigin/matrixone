@@ -158,6 +158,15 @@ func newBlock(meta *catalog.BlockEntry, segFile file.Segment, bufMgr base.INodeM
 	}
 	block.mvcc.SetMaxVisible(ts)
 	block.ckpTs.Store(ts)
+	if meta.GetNodeLocked() != nil &&
+		meta.GetNodeLocked().(*catalog.MetadataMVCCNode).MetaLoc != "" {
+		if err := block.ReplayIndex(); err != nil {
+			panic(err)
+		}
+		if err := block.ReplayDelta(); err != nil {
+			panic(err)
+		}
+	}
 	return block
 }
 
@@ -700,14 +709,6 @@ func (blk *dataBlock) ablkGetByFilter(ts types.TS, filter *handle.Filter) (offse
 }
 
 func (blk *dataBlock) blkGetByFilter(ts types.TS, filter *handle.Filter) (offset uint32, err error) {
-	if blk.pkIndex == nil {
-		if err := blk.ReplayIndex(); err != nil {
-			panic(err)
-		}
-		if err := blk.ReplayDelta(); err != nil {
-			panic(err)
-		}
-	}
 	err = blk.pkIndex.Dedup(filter.Val)
 	if err == nil {
 		err = moerr.NewNotFound()
@@ -859,14 +860,6 @@ func (blk *dataBlock) BatchDedup(txn txnif.AsyncTxn, pks containers.Vector, rowm
 	}
 	if blk.indexes == nil {
 		panic("index not found")
-	}
-	if blk.pkIndex == nil {
-		if err := blk.ReplayIndex(); err != nil {
-			panic(err)
-		}
-		if err := blk.ReplayDelta(); err != nil {
-			panic(err)
-		}
 	}
 	keyselects, err := blk.pkIndex.BatchDedup(pks, rowmask)
 	if err == nil {
