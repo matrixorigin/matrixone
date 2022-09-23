@@ -36,7 +36,7 @@ func Endswith(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, 
 		resultVector := vector.NewConst(resultType, 1)
 		resultValues := make([]uint8, 1)
 		err := endswith.EndsWithAllConst(leftValues, rightValues, resultValues)
-		if err != nil{
+		if err != nil {
 			return nil, err
 		}
 		return resultVector, nil
@@ -50,7 +50,7 @@ func Endswith(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, 
 		}
 		resultValues := vector.MustTCols[uint8](resultVector)
 		err = endswith.EndsWithLeftConst(leftValues, rightValues, resultValues)
-		if err != nil{
+		if err != nil {
 			return nil, err
 		}
 		return resultVector, nil
@@ -64,7 +64,7 @@ func Endswith(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, 
 		}
 		resultValues := vector.MustTCols[uint8](resultVector)
 		err = endswith.EndsWithRightConst(leftValues, rightValues, resultValues)
-		if err != nil{
+		if err != nil {
 			return nil, err
 		}
 		return resultVector, nil
@@ -77,7 +77,7 @@ func Endswith(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, 
 	nulls.Or(left.Nsp, right.Nsp, resultVector.Nsp)
 	resultValues := vector.MustTCols[uint8](resultVector)
 	err = endswith.EndsWith(leftValues, rightValues, resultValues)
-	if err != nil{
+	if err != nil {
 		return nil, err
 	}
 	return resultVector, nil
