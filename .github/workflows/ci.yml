@@ -215,7 +215,7 @@ jobs:
         with:
           java-version: '8'
           distribution: 'adopt'
-          architecture: x64
+          architecture: arm64
 
       - name: Start BVT Test
         id: bvt_on_pr_version
