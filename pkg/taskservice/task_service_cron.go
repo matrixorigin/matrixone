@@ -35,7 +35,7 @@ func (s *taskService) StartScheduleCronTask() {
 	s.crons.Lock()
 	defer s.crons.Unlock()
 
-	if s.crons.started {
+	if s.crons.started || s.crons.stopping {
 		return
 	}
 
@@ -62,6 +62,7 @@ func (s *taskService) StopScheduleCronTask() {
 	}
 	stopper := s.crons.stopper
 	s.crons.started = false
+	s.crons.stopping = true
 	s.crons.stopper = nil
 	s.crons.Unlock()
 
@@ -76,6 +77,7 @@ func (s *taskService) StopScheduleCronTask() {
 	close(s.crons.retryC)
 	s.crons.jobs = nil
 	s.crons.entryIDs = nil
+	s.crons.stopping = false
 }
 
 func (s *taskService) fetchCronTasks(ctx context.Context) {

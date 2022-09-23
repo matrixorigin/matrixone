@@ -484,6 +484,9 @@ func TestHAKeeperCanBootstrapAndRepairShards(t *testing.T) {
 				t.Fatalf("unexpected error %v", err)
 			}
 			if completed {
+				for _, s := range services[:3] {
+					s.store.taskScheduler.StopScheduleCronTask()
+				}
 				return
 			}
 			time.Sleep(5 * time.Millisecond)
@@ -805,6 +808,7 @@ func TestTaskSchedulerCanReScheduleExpiredTasks(t *testing.T) {
 			}
 			completed := tn()
 			if completed {
+				store.taskScheduler.StopScheduleCronTask()
 				return
 			}
 			time.Sleep(100 * time.Millisecond)
