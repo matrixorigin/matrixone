@@ -16,6 +16,8 @@ package endswith
 
 import (
 	"bytes"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
 func isEqualSuffix(b1, b2 string) uint8 {
@@ -25,29 +27,47 @@ func isEqualSuffix(b1, b2 string) uint8 {
 	return 0
 }
 
-func EndsWith(lv, rv []string, rs []uint8) []uint8 {
+func EndsWith(lv, rv []string, rs []uint8) error {
 	for i := range lv {
+		if lv[i] == "" || rv[i] == ""{
+			return moerr.NewInvalidArg("Endswith input", "empty string")
+		}
 		rs[i] = isEqualSuffix(lv[i], rv[i])
 	}
-	return rs
+	return nil
 }
 
-func EndsWithRightConst(lv, rv []string, rs []uint8) []uint8 {
+func EndsWithRightConst(lv, rv []string, rs []uint8) error {
+	if rv[0] == ""{
+		return moerr.NewInvalidArg("Endswith input", "empty string")
+	}
 	for i := range lv {
+		if lv[i] == ""{
+			return moerr.NewInvalidArg("Endswith input", "empty string")
+		}
 		rs[i] = isEqualSuffix(lv[i], rv[0])
 	}
-	return rs
+	return nil
 }
 
-func EndsWithLeftConst(lv, rv []string, rs []uint8) []uint8 {
+func EndsWithLeftConst(lv, rv []string, rs []uint8) error{
+	if lv[0] == ""{
+		return moerr.NewInvalidArg("Endswith input", "empty string")
+	}
 	for i := range rv {
+		if rv[i] == ""{
+			return moerr.NewInvalidArg("Endswith input", "empty string")
+		}
 		rs[i] = isEqualSuffix(lv[0], rv[i])
 	}
 
-	return rs
+	return nil
 }
 
-func EndsWithAllConst(lv, rv []string, rs []uint8) []uint8 {
+func EndsWithAllConst(lv, rv []string, rs []uint8) error {
+	if lv[0] == "" || rv[0] == ""{
+		return moerr.NewInvalidArg("Endswith input", "empty string")
+	}
 	rs[0] = isEqualSuffix(lv[0], rv[0])
-	return rs
+	return nil
 }

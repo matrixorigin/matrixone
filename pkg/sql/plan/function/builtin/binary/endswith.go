@@ -15,6 +15,7 @@
 package binary
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -25,38 +26,47 @@ import (
 func Endswith(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	left, right := vectors[0], vectors[1]
 	// XXX Why result type is uint8, not bool?
-	resultType := types.Type{Oid: types.T_uint8, Size: 1}
+	resultType := types.T_uint8.ToType()
 	leftValues, rightValues := vector.MustStrCols(left), vector.MustStrCols(right)
 	switch {
 	case left.IsScalar() && right.IsScalar():
 		if left.ConstVectorIsNull() || right.ConstVectorIsNull() {
-			return proc.AllocScalarNullVector(resultType), nil
+			return nil, moerr.NewInvalidArg("Endswith input", "empty string")
 		}
 		resultVector := vector.NewConst(resultType, 1)
 		resultValues := make([]uint8, 1)
-		endswith.EndsWithAllConst(leftValues, rightValues, resultValues)
+		err := endswith.EndsWithAllConst(leftValues, rightValues, resultValues)
+		if err != nil{
+			return nil, err
+		}
 		return resultVector, nil
 	case left.IsScalar() && !right.IsScalar():
 		if left.ConstVectorIsNull() {
-			return proc.AllocScalarNullVector(resultType), nil
+			return nil, moerr.NewInvalidArg("Endswith input", "empty string")
 		}
 		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(rightValues)), right.Nsp)
 		if err != nil {
 			return nil, err
 		}
 		resultValues := vector.MustTCols[uint8](resultVector)
-		endswith.EndsWithLeftConst(leftValues, rightValues, resultValues)
+		err = endswith.EndsWithLeftConst(leftValues, rightValues, resultValues)
+		if err != nil{
+			return nil, err
+		}
 		return resultVector, nil
 	case !left.IsScalar() && right.IsScalar():
 		if right.ConstVectorIsNull() {
-			return proc.AllocScalarNullVector(resultType), nil
+			return nil, moerr.NewInvalidArg("Endswith input", "empty string")
 		}
 		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(leftValues)), left.Nsp)
 		if err != nil {
 			return nil, err
 		}
 		resultValues := vector.MustTCols[uint8](resultVector)
-		endswith.EndsWithRightConst(leftValues, rightValues, resultValues)
+		err = endswith.EndsWithRightConst(leftValues, rightValues, resultValues)
+		if err != nil{
+			return nil, err
+		}
 		return resultVector, nil
 	}
 
@@ -66,6 +76,9 @@ func Endswith(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, 
 	}
 	nulls.Or(left.Nsp, right.Nsp, resultVector.Nsp)
 	resultValues := vector.MustTCols[uint8](resultVector)
-	endswith.EndsWith(leftValues, rightValues, resultValues)
+	err = endswith.EndsWith(leftValues, rightValues, resultValues)
+	if err != nil{
+		return nil, err
+	}
 	return resultVector, nil
 }
