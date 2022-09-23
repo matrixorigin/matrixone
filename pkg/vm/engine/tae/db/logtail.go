@@ -247,6 +247,8 @@ const (
 	CollectModeDB CollectMode = iota + 1
 	// changes for mo_tables
 	CollectModeTbl
+	// changes for mo_columns
+	CollectModeCol
 	// changes for user tables
 	CollectModeSegAndBlk
 )
@@ -271,7 +273,7 @@ func (c *LogtailCollector) Collect() error {
 	switch c.mode {
 	case CollectModeDB:
 		return c.collectCatalogDB()
-	case CollectModeTbl:
+	case CollectModeTbl, CollectModeCol:
 		return c.collectCatalogTbl()
 	case CollectModeSegAndBlk:
 		return c.collectUserTbl()
@@ -413,11 +415,15 @@ func NewCatalogLogtailRespBuilder(mode CollectMode, ckp string, start, end types
 		end:        end,
 		checkpoint: ckp,
 	}
-	if mode == CollectModeDB {
+	switch mode {
+	case CollectModeDB:
 		b.schema = catalog.SystemDBSchema
-	} else {
+	case CollectModeTbl:
 		b.schema = catalog.SystemTableSchema
+	case CollectModeCol:
+		b.schema = catalog.SystemColumnSchema
 	}
+
 	b.insBatch = makeRespBatchFromSchema(b.schema)
 	b.delBatch = makeRespBatchFromSchema(b.schema)
 	return b
@@ -452,7 +458,11 @@ func (b *CatalogLogtailRespBuilder) VisitTbl(entry *catalog.TableEntry) error {
 		} else {
 			dstBatch = b.insBatch
 		}
-		catalogEntry2Batch(dstBatch, entry, b.schema, txnimpl.FillTableRow, tblNode.GetEnd(), tblNode.IsAborted())
+		if b.mode == CollectModeCol {
+			catalogEntry2Batch(dstBatch, entry, b.schema, txnimpl.FillColumnRow, tblNode.GetEnd(), tblNode.IsAborted())
+		} else {
+			catalogEntry2Batch(dstBatch, entry, b.schema, txnimpl.FillTableRow, tblNode.GetEnd(), tblNode.IsAborted())
+		}
 	}
 	return nil
 }
@@ -702,18 +712,21 @@ func LogtailHandler(db *DB, req api.SyncLogTailReq) (api.SyncLogTailResp, error)
 	// get a collector with a read only view for txns
 	collector := db.LogtailMgr.GetLogtailCollector(start, end, did, tid)
 
-	mode := CollectModeSegAndBlk
-	if tid == catalog.SystemTable_DB_ID {
+	var mode CollectMode
+	switch tid {
+	case catalog.SystemTable_DB_ID:
 		mode = CollectModeDB
-	} else if tid == catalog.SystemTable_Table_ID {
+	case catalog.SystemTable_Table_ID:
 		mode = CollectModeTbl
+	case catalog.SystemTable_Columns_ID:
+		mode = CollectModeCol
+	default:
+		mode = CollectModeSegAndBlk
 	}
 
 	var respBuilder RespBuilder
 
-	if mode == CollectModeDB || mode == CollectModeTbl {
-		respBuilder = NewCatalogLogtailRespBuilder(mode, verifiedCheckpoint, start, end)
-	} else {
+	if mode == CollectModeSegAndBlk {
 		var tableEntry *catalog.TableEntry
 		// table logtail needs information about this table, so give it the table entry.
 		if db, err := db.Catalog.GetDatabaseByID(did); err != nil {
@@ -722,6 +735,8 @@ func LogtailHandler(db *DB, req api.SyncLogTailReq) (api.SyncLogTailResp, error)
 			return api.SyncLogTailResp{}, err
 		}
 		respBuilder = NewTableLogtailRespBuilder(verifiedCheckpoint, start, end, tableEntry)
+	} else {
+		respBuilder = NewCatalogLogtailRespBuilder(mode, verifiedCheckpoint, start, end)
 	}
 
 	collector.BindCollectEnv(mode, db.Catalog, respBuilder)

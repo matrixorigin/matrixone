@@ -3054,6 +3054,7 @@ func TestLogtailBasic(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, 2, len(resp.Commands)) // insert and delete
 	assert.Equal(t, api.Entry_Insert, resp.Commands[0].EntryType)
+	assert.Equal(t, len(catalog.SystemDBSchema.ColDefs)+2, len(resp.Commands[0].Bat.Vecs))
 	datname, err := vector.ProtoVectorToVector(resp.Commands[0].Bat.Vecs[1]) // datname column
 	assert.NoError(t, err)
 	assert.Equal(t, 2, datname.Length()) // 2 db
@@ -3074,9 +3075,26 @@ func TestLogtailBasic(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, 1, len(resp.Commands)) // insert
 	assert.Equal(t, api.Entry_Insert, resp.Commands[0].EntryType)
+	assert.Equal(t, len(catalog.SystemTableSchema.ColDefs)+2, len(resp.Commands[0].Bat.Vecs))
 	relname, err := vector.ProtoVectorToVector(resp.Commands[0].Bat.Vecs[1]) // relname column
 	assert.NoError(t, err)
 	assert.Equal(t, 2, relname.Length()) // 2 tables
+	assert.Equal(t, schema.Name, relname.GetString(0))
+	assert.Equal(t, schema.Name, relname.GetString(1))
+
+	// get columns catalog change
+	resp, err = LogtailHandler(tae.DB, api.SyncLogTailReq{
+		CnHave: tots(minTs),
+		CnWant: tots(catalogDropTs),
+		Table:  &api.TableID{DbId: catalog.SystemDBID, TbId: catalog.SystemTable_Columns_ID},
+	})
+	assert.NoError(t, err)
+	assert.Equal(t, 1, len(resp.Commands)) // insert
+	assert.Equal(t, api.Entry_Insert, resp.Commands[0].EntryType)
+	assert.Equal(t, len(catalog.SystemColumnSchema.ColDefs)+2, len(resp.Commands[0].Bat.Vecs))
+	attrUniqName, err := vector.ProtoVectorToVector(resp.Commands[0].Bat.Vecs[0]) // attr uniq name column
+	assert.NoError(t, err)
+	assert.Equal(t, len(schema.ColDefs)*2, attrUniqName.Length()) // 2 tables
 	assert.Equal(t, schema.Name, relname.GetString(0))
 	assert.Equal(t, schema.Name, relname.GetString(1))
 
@@ -3096,10 +3114,10 @@ func TestLogtailBasic(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, 9, blockids.Length()) // 9 blocks, because the first write is excluded.
 
-	// TODO: check data change
+	// check data change
 	insDataEntry := resp.Commands[1]
 	assert.Equal(t, api.Entry_Insert, insDataEntry.EntryType)
-	assert.Equal(t, 5, len(insDataEntry.Bat.Vecs)) // 5 columns, 2 visibile + 1 rowid + commit_ts + aborted
+	assert.Equal(t, len(schema.ColDefs)+2, len(insDataEntry.Bat.Vecs)) // 5 columns, 2 visibile + 1 rowid + commit_ts + aborted
 	rowids, err := vector.ProtoVectorToVector(insDataEntry.Bat.Vecs[2])
 	assert.NoError(t, err)
 	assert.Equal(t, 99, rowids.Length()) // 99 rows, because the first write is excluded.
