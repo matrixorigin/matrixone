@@ -34,7 +34,7 @@ func DoTxnRequest[
 	e engine.Engine,
 	// TxnOperator.Read or TxnOperator.Write
 	reqFunc func(context.Context, []txn.TxnRequest) (*rpc.SendResult, error),
-	shardsFunc func() ([]Shard, error),
+	shardsFunc shardsFunc,
 	op uint32,
 	req Req,
 ) (
