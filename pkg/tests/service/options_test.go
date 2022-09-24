@@ -47,7 +47,7 @@ func TestWithLogShardNum(t *testing.T) {
 
 func TestWithDnShardNum(t *testing.T) {
 	num := uint64(5)
-	opt := Options{}.WithDnShardNum(num)
+	opt := Options{}.WithDNShardNum(num)
 	require.Equal(t, num, opt.initial.dnShardNum)
 }
 
@@ -155,4 +155,9 @@ func TestBuildHAKeeperConfig(t *testing.T) {
 	require.Equal(t, opt.hakeeper.tickPerSecond, cfg.TickPerSecond)
 	require.Equal(t, opt.hakeeper.logStoreTimeout, cfg.LogStoreTimeout)
 	require.Equal(t, opt.hakeeper.dnStoreTimeout, cfg.DNStoreTimeout)
+}
+
+func TestTaskStorage(t *testing.T) {
+	opt := DefaultOptions()
+	require.NotNil(t, opt.task.taskStorage)
 }

@@ -103,7 +103,7 @@ func TestSingleTableQueryPrune(t *testing.T) {
 			wantTableCol: []Entry[string, []string]{
 				{
 					tableName: "nation",
-					colNames:  []string{"n_nationkey", "n_name"},
+					colNames:  []string{"n_name"},
 				},
 			},
 		},
