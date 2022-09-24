@@ -181,14 +181,14 @@ func (blk *txnBlock) GetDeltaLoc() (deltaloc string) {
 func (blk *txnBlock) UpdateMetaLoc(metaloc string) (err error) {
 	blkID := blk.Fingerprint()
 	dbid := blk.GetMeta().(*catalog.BlockEntry).GetSegment().GetTable().GetDB().GetID()
-	blk.Txn.GetStore().UpdateMetadata(dbid, blkID, metaloc)
+	err = blk.Txn.GetStore().UpdateMetaLoc(dbid, blkID, metaloc)
 	return
 }
 
 func (blk *txnBlock) UpdateDeltaLoc(deltaloc string) (err error) {
 	blkID := blk.Fingerprint()
 	dbid := blk.GetMeta().(*catalog.BlockEntry).GetSegment().GetTable().GetDB().GetID()
-	blk.Txn.GetStore().UpdateMetadata(dbid, blkID, deltaloc)
+	err = blk.Txn.GetStore().UpdateMetaLoc(dbid, blkID, deltaloc)
 	return
 }
 

@@ -68,13 +68,11 @@ func (store *NoopTxnStore) CreateNonAppendableBlock(dbId uint64, id *common.ID) 
 	return
 }
 
-func (store *NoopTxnStore) UpdateMetadata(dbId uint64, id *common.ID, un handle.MetaUpdateNode) (err error) {
-	return
-}
-
-func (store *NoopTxnStore) SoftDeleteBlock(dbId uint64, id *common.ID) (err error)      { return }
-func (store *NoopTxnStore) SoftDeleteSegment(dbId uint64, id *common.ID) (err error)    { return }
-func (store *NoopTxnStore) BatchDedup(uint64, uint64, ...containers.Vector) (err error) { return }
+func (store *NoopTxnStore) UpdateMetaLoc(dbId uint64, id *common.ID, un string) (err error)  { return }
+func (store *NoopTxnStore) UpdateDeltaLoc(dbId uint64, id *common.ID, un string) (err error) { return }
+func (store *NoopTxnStore) SoftDeleteBlock(dbId uint64, id *common.ID) (err error)           { return }
+func (store *NoopTxnStore) SoftDeleteSegment(dbId uint64, id *common.ID) (err error)         { return }
+func (store *NoopTxnStore) BatchDedup(uint64, uint64, ...containers.Vector) (err error)      { return }
 func (store *NoopTxnStore) Update(uint64, *common.ID, uint32, uint16, any) (err error) {
 	return
 }
