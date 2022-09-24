@@ -17,10 +17,11 @@ package service
 import (
 	"context"
 	"fmt"
+	"sync"
+
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/cnservice"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
-	"sync"
 )
 
 // CNService describes expected behavior for dn service.
@@ -121,7 +122,7 @@ func buildCnConfig(index int, opt Options, address serviceAddresses) *cnservice.
 	cfg.HAKeeper.ClientConfig.ServiceAddresses = address.listHAKeeperListenAddresses()
 	cfg.HAKeeper.HeatbeatDuration.Duration = opt.dn.heartbeatInterval
 
-	cfg.Engine.Type = "memory"
+	cfg.Engine.Type = cnservice.EngineMemory
 
 	// We need the filled version of configuration.
 	// It's necessary when building cnservice.Option.

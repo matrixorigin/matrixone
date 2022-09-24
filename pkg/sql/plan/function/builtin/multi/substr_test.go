@@ -434,6 +434,211 @@ func TestSubStrUTF(t *testing.T) {
 	}
 }
 
+func TestSubStrBlob(t *testing.T) {
+	procs := testutil.NewProc()
+	cases := []struct {
+		name       string
+		vecs       []*vector.Vector
+		proc       *process.Process
+		wantBytes  []byte
+		wantScalar bool
+	}{
+		{
+			name:       "TEST01",
+			vecs:       makeSubStrBlobVectors([]byte("abcdefghijklmnopqrstuvwxyzqwertyuiopasdfghjklzxcvbnm"), 5, 0, false, procs),
+			proc:       procs,
+			wantBytes:  []byte("efghijklmnopqrstuvwxyzqwertyuiopasdfghjklzxcvbnm"),
+			wantScalar: true,
+		},
+		{
+			name:       "TEST02",
+			vecs:       makeSubStrBlobVectors([]byte("abcdefghijklmnopqrstuvwxyzqwertyuiopasdfghjklzxcvbnm"), 27, 0, false, procs),
+			proc:       procs,
+			wantBytes:  []byte("qwertyuiopasdfghjklzxcvbnm"),
+			wantScalar: true,
+		},
+		{
+			name:       "TEST03",
+			vecs:       makeSubStrBlobVectors([]byte("abcdefghijklmnopqrstuvwxyzqwertyuiopasdfghjklzxcvbnm"), 50, 0, false, procs),
+			proc:       procs,
+			wantBytes:  []byte("bnm"),
+			wantScalar: true,
+		},
+		{
+			name:       "TEST04",
+			vecs:       makeSubStrBlobVectors([]byte("abcdefghijklmnopqrstuvwxyzqwertyuiopasdfghjklzxcvbnm"), 53, 0, false, procs),
+			proc:       procs,
+			wantBytes:  []byte(""),
+			wantScalar: true,
+		},
+		{
+			name:       "TEST05",
+			vecs:       makeSubStrBlobVectors([]byte("abcdefghijklmnopqrstuvwxyzqwertyuiopasdfghjklzxcvbnm"), 5, 6, true, procs),
+			proc:       procs,
+			wantBytes:  []byte("efghij"),
+			wantScalar: true,
+		},
+		{
+			name:       "TEST06",
+			vecs:       makeSubStrBlobVectors([]byte("abcdefghijklmnopqrstuvwxyzqwertyuiopasdfghjklzxcvbnm"), 5, 10, true, procs),
+			proc:       procs,
+			wantBytes:  []byte("efghijklmn"),
+			wantScalar: true,
+		},
+		{
+			name:       "TEST07",
+			vecs:       makeSubStrBlobVectors([]byte("abcdefghijklmnopqrstuvwxyzqwertyuiopasdfghjklzxcvbnm"), 5, 0, true, procs),
+			proc:       procs,
+			wantBytes:  []byte(""),
+			wantScalar: true,
+		},
+		{
+			name:       "TEST08",
+			vecs:       makeSubStrBlobVectors([]byte("abcdefghijklmnopqrstuvwxyzqwertyuiopasdfghjklzxcvbnm"), 6, -8, true, procs),
+			proc:       procs,
+			wantBytes:  []byte(""),
+			wantScalar: true,
+		},
+		{
+			name:       "TEST09",
+			vecs:       makeSubStrBlobVectors([]byte("abcdefghijklmnopqrstuvwxyzqwertyuiopasdfghjklzxcvbnm"), 6, -9, true, procs),
+			proc:       procs,
+			wantBytes:  []byte(""),
+			wantScalar: true,
+		},
+		{
+			name:       "TEST09",
+			vecs:       makeSubStrBlobVectors([]byte("abcdefghijklmnopqrstuvwxyzqwertyuiopasdfghjklzxcvbnm"), 6, -4, true, procs),
+			proc:       procs,
+			wantBytes:  []byte(""),
+			wantScalar: true,
+		},
+		{
+			name:       "TEST10",
+			vecs:       makeSubStrBlobVectors([]byte("abcdefghijklmnopqrstuvwxyzqwertyuiopasdfghjklzxcvbnm"), 6, -1, true, procs),
+			proc:       procs,
+			wantBytes:  []byte(""),
+			wantScalar: true,
+		},
+		{
+			name:       "Test11",
+			vecs:       makeSubStrBlobVectors([]byte("abcdefghijklmnopqrstuvwxyzqwertyuiopasdfghjklzxcvbnm"), -4, 0, false, procs),
+			proc:       procs,
+			wantBytes:  []byte("vbnm"),
+			wantScalar: true,
+		},
+		{
+			name:       "Test12",
+			vecs:       makeSubStrBlobVectors([]byte("abcdefghijklmnopqrstuvwxyzqwertyuiopasdfghjklzxcvbnm"), -14, 0, false, procs),
+			proc:       procs,
+			wantBytes:  []byte("dfghjklzxcvbnm"),
+			wantScalar: true,
+		},
+		{
+			name:       "Test13",
+			vecs:       makeSubStrBlobVectors([]byte("abcdefghijklmnopqrstuvwxyzqwertyuiopasdfghjklzxcvbnm"), -50, 0, false, procs),
+			proc:       procs,
+			wantBytes:  []byte("cdefghijklmnopqrstuvwxyzqwertyuiopasdfghjklzxcvbnm"),
+			wantScalar: true,
+		},
+		{
+			name:       "Test14",
+			vecs:       makeSubStrBlobVectors([]byte("abcdefghijklmnopqrstuvwxyzqwertyuiopasdfghjklzxcvbnm"), -4, 3, true, procs),
+			proc:       procs,
+			wantBytes:  []byte("vbn"),
+			wantScalar: true,
+		},
+		{
+			name:       "Test15",
+			vecs:       makeSubStrBlobVectors([]byte("abcdefghijklmnopqrstuvwxyzqwertyuiopasdfghjklzxcvbnm"), -26, 10, true, procs),
+			proc:       procs,
+			wantBytes:  []byte("qwertyuiop"),
+			wantScalar: true,
+		},
+		{
+			name:       "Test16",
+			vecs:       makeSubStrBlobVectors([]byte("abcdefghijklmnopqrstuvwxyzqwertyuiopasdfghjklzxcvbnm"), -14, 15, true, procs),
+			proc:       procs,
+			wantBytes:  []byte("dfghjklzxcvbnm"),
+			wantScalar: true,
+		},
+		{
+			name:       "Test17",
+			vecs:       makeSubStrBlobVectors([]byte("abcdefghijklmnopqrstuvwxyzqwertyuiopasdfghjklzxcvbnm"), -53, 10, true, procs),
+			proc:       procs,
+			wantBytes:  []byte(""),
+			wantScalar: true,
+		},
+		{
+			name:       "Test18",
+			vecs:       makeSubStrBlobVectors([]byte("abcdefghijklmnopqrstuvwxyzqwertyuiopasdfghjklzxcvbnm"), -53, 20, true, procs),
+			proc:       procs,
+			wantBytes:  []byte(""),
+			wantScalar: true,
+		},
+		{
+			name:       "Test19",
+			vecs:       makeSubStrBlobVectors([]byte("abcdefghijklmnopqrstuvwxyzqwertyuiopasdfghjklzxcvbnm"), -53, 2, true, procs),
+			proc:       procs,
+			wantBytes:  []byte(""),
+			wantScalar: true,
+		},
+		{
+			name:       "Test20",
+			vecs:       makeSubStrBlobVectors([]byte("abcdefghijklmnopqrstuvwxyzqwertyuiopasdfghjklzxcvbnm"), -50, 2, true, procs),
+			proc:       procs,
+			wantBytes:  []byte("cd"),
+			wantScalar: true,
+		},
+		{
+			name:       "Test21",
+			vecs:       makeSubStrBlobVectors([]byte("abcdefghijklmnopqrstuvwxyzqwertyuiopasdfghjklzxcvbnm"), -12, 14, true, procs),
+			proc:       procs,
+			wantBytes:  []byte("ghjklzxcvbnm"),
+			wantScalar: true,
+		},
+		{
+			name:       "Test22",
+			vecs:       makeSubStrBlobVectors([]byte("abcdefghijklmnopqrstuvwxyzqwertyuiopasdfghjklzxcvbnm"), -12, 0, true, procs),
+			proc:       procs,
+			wantBytes:  []byte(""),
+			wantScalar: true,
+		},
+		{
+			name:       "Test23",
+			vecs:       makeSubStrBlobVectors([]byte("abcdefghijklmnopqrstuvwxyzqwertyuiopasdfghjklzxcvbnm"), -6, -5, true, procs),
+			proc:       procs,
+			wantBytes:  []byte(""),
+			wantScalar: true,
+		},
+		{
+			name:       "Test24",
+			vecs:       makeSubStrBlobVectors([]byte("abcdefghijklmnopqrstuvwxyzqwertyuiopasdfghjklzxcvbnm"), -6, -10, true, procs),
+			proc:       procs,
+			wantBytes:  []byte(""),
+			wantScalar: true,
+		},
+		{
+			name:       "Test25",
+			vecs:       makeSubStrBlobVectors([]byte("abcdefghijklmnopqrstuvwxyzqwertyuiopasdfghjklzxcvbnm"), -6, 0, true, procs),
+			proc:       procs,
+			wantBytes:  []byte(""),
+			wantScalar: true,
+		},
+	}
+
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			substr, err := Substring(c.vecs, c.proc)
+			if err != nil {
+				t.Fatal(err)
+			}
+			require.Equal(t, c.wantBytes, substr.GetBytes(0))
+			require.Equal(t, c.wantScalar, substr.IsScalar())
+		})
+	}
+}
+
 // Construct vector parameter of substring function
 func makeSubStrVectors(src string, start int64, length int64, withLength bool) []*vector.Vector {
 	vec := make([]*vector.Vector, 2)
@@ -444,4 +649,17 @@ func makeSubStrVectors(src string, start int64, length int64, withLength bool) [
 		vec = append(vec, lvec)
 	}
 	return vec
+}
+
+func makeSubStrBlobVectors(src []byte, start int64, length int64, withLength bool, procs *process.Process) []*vector.Vector {
+	inputVector := make([]*vector.Vector, 2)
+	inputType := types.New(types.T_blob, 0, 0, 0)
+	inputVector[0] = vector.NewConst(inputType, 1)
+	inputVector[0].Append(src, false, procs.GetMheap())
+	inputVector[1] = vector.NewConstFixed(types.T_int64.ToType(), 10, start)
+	if withLength {
+		lvec := vector.NewConstFixed(types.T_int64.ToType(), 10, length)
+		inputVector = append(inputVector, lvec)
+	}
+	return inputVector
 }

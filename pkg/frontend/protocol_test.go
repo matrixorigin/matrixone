@@ -15,13 +15,13 @@
 package frontend
 
 import (
-	"errors"
 	"testing"
 
 	"github.com/fagongzi/goetty/v2"
 	"github.com/fagongzi/goetty/v2/buf"
 	"github.com/fagongzi/goetty/v2/codec/simple"
 	"github.com/golang/mock/gomock"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/smartystreets/goconvey/convey"
 )
@@ -71,7 +71,7 @@ func Test_SendResponse(t *testing.T) {
 		err := mp.SendResponse(resp)
 		convey.So(err, convey.ShouldBeNil)
 
-		resp.SetData(errors.New(""))
+		resp.SetData(moerr.NewInternalError(""))
 		resp.category = ErrorResponse
 		err = mp.SendResponse(resp)
 		convey.So(err, convey.ShouldBeNil)

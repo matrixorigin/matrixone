@@ -89,7 +89,6 @@ func NewDeleteNode(txn txnif.AsyncTxn, dt handle.DeleteType) *DeleteNode {
 	return n
 }
 
-// todo
 func (node *DeleteNode) CloneAll() txnbase.MVCCNode  { panic("todo") }
 func (node *DeleteNode) CloneData() txnbase.MVCCNode { panic("todo") }
 func (node *DeleteNode) Update(txnbase.MVCCNode)     { panic("todo") }

@@ -16,6 +16,7 @@ package mergesort
 
 import (
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort/uuids"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"

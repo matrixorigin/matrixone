@@ -16,9 +16,9 @@ package plan
 
 import (
 	"encoding/json"
-	"errors"
 	"strings"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -46,7 +46,7 @@ func (m *MockCompilerContext) ResolveVariable(varName string, isSystemVar, isGlo
 		return result, nil
 	}
 
-	return nil, errors.New("var not found")
+	return nil, moerr.NewInternalError("var not found")
 }
 
 type col struct {
