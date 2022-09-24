@@ -595,6 +595,8 @@ func (node *FuncType) ToString() string {
 		return "distinct"
 	case FUNC_TYPE_ALL:
 		return "all"
+	case FUNC_TYPE_TABLE:
+		return "table function"
 	default:
 		return "Unknown FuncType"
 	}
@@ -604,6 +606,7 @@ const (
 	FUNC_TYPE_DEFAULT FuncType = iota
 	FUNC_TYPE_DISTINCT
 	FUNC_TYPE_ALL
+	FUNC_TYPE_TABLE
 )
 
 // AggType specifies the type of aggregation.
@@ -653,7 +656,7 @@ func (node *FuncExpr) Format(ctx *FmtCtx) {
 	node.Func.Format(ctx)
 
 	ctx.WriteString("(")
-	if node.Type != FUNC_TYPE_DEFAULT {
+	if node.Type != FUNC_TYPE_DEFAULT && node.Type != FUNC_TYPE_TABLE {
 		ctx.WriteString(node.Type.ToString())
 		ctx.WriteByte(' ')
 	}

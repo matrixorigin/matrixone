@@ -475,7 +475,7 @@ func (c *Compile) compilePlanScope(n *plan.Node, ns []*plan.Node) ([]*Scope, err
 			return nil, err
 		}
 		return ss, nil
-	case plan.Node_UNNEST:
+	case plan.Node_TABLE_FUNCTION:
 		var (
 			pre []*Scope
 			err error
@@ -487,7 +487,7 @@ func (c *Compile) compilePlanScope(n *plan.Node, ns []*plan.Node) ([]*Scope, err
 			return nil, err
 		}
 		c.anal.curr = curr
-		ss, err := c.compileUnnest(n, pre)
+		ss, err := c.compileTableFunction(n, pre)
 		if err != nil {
 			return nil, err
 		}
@@ -518,17 +518,26 @@ func (c *Compile) compileExternScan(n *plan.Node) []*Scope {
 	return ss
 }
 
-func (c *Compile) compileUnnest(n *plan.Node, ss []*Scope) ([]*Scope, error) {
-	args := &tree.UnnestParam{}
-	err := args.Unmarshal(n.TableDef.TableFunctionParam)
+func (c *Compile) compileTableFunction(n *plan.Node, ss []*Scope) ([]*Scope, error) {
+	param := &tree.TableFunctionParam{}
+	err := param.Unmarshal(n.TableDef.TableFunctionParam)
 	if err != nil {
 		return nil, err
 	}
+	switch param.Name {
+	case "unnest":
+		return c.compileUnnest(n, param, ss)
+	default:
+		return nil, moerr.NewNYI(fmt.Sprintf("table function '%s' not supported", param.Name))
+	}
+}
+
+func (c *Compile) compileUnnest(n *plan.Node, param *tree.TableFunctionParam, ss []*Scope) ([]*Scope, error) {
 	for i := range ss {
 		ss[i].appendInstruction(vm.Instruction{
 			Op:  vm.Unnest,
 			Idx: c.anal.curr,
-			Arg: constructUnnest(n, c.ctx, args),
+			Arg: constructUnnest(n, c.ctx, param),
 		})
 	}
 	return ss, nil

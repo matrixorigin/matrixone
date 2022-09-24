@@ -108,26 +108,26 @@ func _getDefaultColDefs() []*plan.ColDef {
 	return ret
 }
 
-func (builder *QueryBuilder) buildUnnest(tbl *tree.Unnest, ctx *BindContext) (int32, error) {
+func (builder *QueryBuilder) buildUnnest(tbl *tree.TableFunction, ctx *BindContext) (int32, error) {
 	tag := builder.genNewTag()
-	paramData, err := tbl.Param.Marshal()
+	paramData, err := tbl.MarshalParam()
 	if err != nil {
 		return 0, err
 	}
 	colDefs := _getDefaultColDefs()
 	node := &plan.Node{
-		NodeType: plan.Node_UNNEST,
+		NodeType: plan.Node_TABLE_FUNCTION,
 		Cost:     &plan.Cost{},
 		TableDef: &plan.TableDef{
 			TableType:          catalog.SystemViewRel, //test if ok
-			Name:               tbl.String(),
+			//Name:               tbl.String(),
 			TableFunctionParam: paramData,
 			Cols:               colDefs,
 		},
 		BindingTags: []int32{tag},
 	}
 	var scanNode *plan.Node
-	switch o := tbl.Param.Origin.(type) {
+	switch o := tbl.Func.Exprs[0].(type) {
 	case *tree.UnresolvedName:
 		schemaName, tableName, colName := o.GetNames()
 		objRef, tableDef := builder.compCtx.Resolve(schemaName, tableName)
@@ -159,14 +159,15 @@ func (builder *QueryBuilder) buildUnnest(tbl *tree.Unnest, ctx *BindContext) (in
 				break
 			}
 		}
-	case string:
-		if len(o) == 0 {
+	case *tree.NumVal:
+		jsonStr :=o.String()
+		if len(jsonStr) == 0 {
 			return 0, moerr.NewInvalidInput("unnest param is empty")
 		}
 		scanNode = &plan.Node{
 			NodeType: plan.Node_VALUE_SCAN,
 			TableDef: &plan.TableDef{
-				TableFunctionParam: []byte(o),
+				TableFunctionParam: []byte(jsonStr),
 			},
 			ProjectList: []*plan.Expr{
 				{

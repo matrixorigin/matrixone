@@ -22,11 +22,13 @@ import (
 type Param struct {
 	Attrs   []string
 	Cols    []*plan.ColDef
-	Extern  *tree.UnnestParam
+	Extern  *tree.TableFunctionParam
 	filters []string
 	colName string
 	seq     int32
 	isCol   bool // use to mark the unnest args is from column in table
+	path   string
+	outer bool
 }
 
 type Argument struct {

@@ -807,7 +807,7 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext) (vm.In
 			Fs: convertToColExecField(opr.OrderBy),
 		}
 	case vm.Unnest:
-		param := &tree.UnnestParam{}
+		param := &tree.TableFunctionParam{}
 		err := param.Unmarshal(opr.Unnest.Extern)
 		if err != nil {
 			return v, err
