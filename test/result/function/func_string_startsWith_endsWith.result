@@ -1,3 +1,26 @@
+select endswith("aabb", 'b');
+endswith(aabb, b)
+1
+select endswith("aabb", "bb");
+endswith(aabb, bb)
+1
+select endswith("aabb", "bbb");
+endswith(aabb, bbb)
+0
+select endswith("aabb", '');
+invalid argument Endswith input, bad value empty string
+select endswith('a', '');
+invalid argument Endswith input, bad value empty string
+select endswith('', 'a');
+invalid argument Endswith input, bad value empty string
+select endswith('', '');
+invalid argument Endswith input, bad value empty string
+select endswith("aaa", null);
+invalid argument Endswith input, bad value empty string
+select endswith(null, "aaa");
+invalid argument Endswith input, bad value empty string
+select endswith(null, null);
+invalid argument Endswith input, bad value empty string
 drop table if exists t1;
 create table t1(a int,b varchar(100),c char(20));
 insert into t1 values
@@ -58,8 +81,5 @@ insert into t1 values(NULL, NULL);
 insert into t1 values('a',null);
 insert into t1 values(null, 'b');
 select endsWith(a,b) from t1;
-endswith(a, b)
-null
-null
-null
+invalid argument Endswith input, bad value empty string
 drop table t1;

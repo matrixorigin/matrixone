@@ -34,7 +34,7 @@ func Endswith(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, 
 			return nil, moerr.NewInvalidArg("Endswith input", "empty string")
 		}
 		resultVector := vector.NewConst(resultType, 1)
-		resultValues := make([]uint8, 1)
+		resultValues := vector.MustTCols[uint8](resultVector)
 		err := endswith.EndsWithAllConst(leftValues, rightValues, resultValues)
 		if err != nil {
 			return nil, err

@@ -199,41 +199,13 @@ nnabuythisbook?
 ol.Berkly.the.book
 ucklife
 select endswith(c,'a'),endswith(vc,'a') from t1;
-endswith(c, a)	endswith(vc, a)
-0	0
-0	0
-0	0
-0	0
-0	0
-0	0
-0	0
-0	0
-0	0
-0	0
-null	null
-0	0
+invalid argument Endswith input, bad value empty string
 select endswith(c,'y'),endswith(vc,'e') from t1;
-endswith(c, y)	endswith(vc, e)
-1	1
-1	1
-0	1
-1	1
-0	0
-0	0
-0	0
-0	0
-0	1
-0	0
-null	null
-0	0
+invalid argument Endswith input, bad value empty string
 select * from t1 where endswith(c,'y') = 1;
-id	c	vc
-1	Daffy	Aducklife
-1	Daffy	Aducklife
-3	Cowboy	Lifeontherange
+invalid argument Endswith input, bad value empty string
 select * from t1 where endswith(c,'y') = 1 and endswith(vc,'ge') = 1;
-id	c	vc
-3	Cowboy	Lifeontherange
+invalid argument Endswith input, bad value empty string
 select startswith(c,'B'),startswith(vc,'A') from t1;
 startswith(c, B)	startswith(vc, A)
 0	1

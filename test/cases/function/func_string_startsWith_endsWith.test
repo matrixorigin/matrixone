@@ -1,5 +1,16 @@
 #starsWith,endsWith函数在MySQL里没有，是模仿Clickhouse语义的函数，只能在MO里测试
 
+select endswith("aabb", 'b');
+select endswith("aabb", "bb");
+select endswith("aabb", "bbb");
+select endswith("aabb", '');
+select endswith('a', '');
+select endswith('', 'a');
+select endswith('', '');
+select endswith("aaa", null);
+select endswith(null, "aaa");
+select endswith(null, null);
+
 #SELECT,data type
 drop table if exists t1;
 create table t1(a int,b varchar(100),c char(20));
