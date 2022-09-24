@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	tomlutil "github.com/matrixorigin/matrixone/pkg/util/toml"
 )
 
 const (
@@ -76,6 +77,14 @@ type Config struct {
 	CN cnservice.Config `toml:"cn"`
 	// Observability parameters for the metric/trace
 	Observability config.ObservabilityParameters `toml:"observability"`
+
+	// Clock txn clock type. [LOCAL|HLC]. Default is LOCAL.
+	Clock struct {
+		// Backend clock backend implementation. [LOCAL|HLC], default LOCAL.
+		Backend string `toml:"source"`
+		// MaxClockOffset max clock offset between two nodes. Default is 500ms
+		MaxClockOffset tomlutil.Duration `toml:"max-clock-offset"`
+	}
 }
 
 func parseConfigFromFile(file string, cfg any) error {
@@ -99,6 +108,15 @@ func parseFromString(data string, cfg any) error {
 func (c *Config) validate() error {
 	if _, ok := supportServiceTypes[strings.ToUpper(c.ServiceType)]; !ok {
 		return moerr.NewInternalError("service type %s not support", c.ServiceType)
+	}
+	if c.Clock.MaxClockOffset.Duration == 0 {
+		c.Clock.MaxClockOffset.Duration = defaultMaxClockOffset
+	}
+	if c.Clock.Backend == "" {
+		c.Clock.Backend = localClockBackend
+	}
+	if _, ok := supportTxnClockBackends[strings.ToUpper(c.Clock.Backend)]; !ok {
+		return moerr.NewInternalError("%s clock backend not support", c.Clock.Backend)
 	}
 	return nil
 }
