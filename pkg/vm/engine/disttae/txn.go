@@ -16,10 +16,15 @@ package disttae
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -210,7 +215,7 @@ func (txn *Transaction) readTable(ctx context.Context, databaseId uint64, tableI
 			if !needRead(expr, blkInfo, tableDef, txn.proc) {
 				continue
 			}
-			bat, err := blockRead(ctx, columns, blkInfo)
+			bat, err := blockRead(ctx, columns, blkInfo, txn.fs, tableDef)
 			if err != nil {
 				return nil, err
 			}
@@ -218,7 +223,7 @@ func (txn *Transaction) readTable(ctx context.Context, databaseId uint64, tableI
 		}
 	} else {
 		for _, blkInfo := range blkInfos {
-			bat, err := blockRead(ctx, columns, blkInfo)
+			bat, err := blockRead(ctx, columns, blkInfo, txn.fs, tableDef)
 			if err != nil {
 				return nil, err
 			}
@@ -256,10 +261,10 @@ func needRead(expr *plan.Expr, blkInfo BlockMeta, tableDef *plan.TableDef, proc 
 		return ifNeed
 	}
 
-	// get
+	// get min max data from Meta
 	datas, dataTypes := getZonemapDataFromMeta(columns, blkInfo, tableDef)
 
-	// we build vectors for other columns.
+	// use all min/max data to build []vectors.
 	buildVectors := buildVectorsByData(datas, dataTypes, proc.GetMheap())
 	bat := batch.NewWithSize(len(columns))
 	bat.Zs = make([]int64, buildVectors[0].Length())
@@ -275,13 +280,90 @@ func needRead(expr *plan.Expr, blkInfo BlockMeta, tableDef *plan.TableDef, proc 
 }
 
 // write a block to s3
-func blockWrite(ctx context.Context, blkInfo BlockMeta, bat *batch.Batch) error {
-	//TODO
-	return nil
+func blockWrite(ctx context.Context, blkInfo BlockMeta, bat *batch.Batch, fs fileservice.FileService) error {
+	// 1. check columns length, check types
+	if len(blkInfo.columns) != len(bat.Vecs) {
+		return moerr.NewInternalError(fmt.Sprintf("write block error: need %v columns, get %v columns", len(blkInfo.columns), len(bat.Vecs)))
+	}
+	for i, vec := range bat.Vecs {
+		if blkInfo.columns[i].typ != uint8(vec.Typ.Oid) {
+			return moerr.NewInternalError(fmt.Sprintf("write block error: column[%v]'s type is not match", i))
+		}
+	}
+
+	// 2. write bat
+	s3FileName := getNameFromMeta(blkInfo)
+	writer, err := objectio.NewObjectWriter(s3FileName, fs)
+	if err != nil {
+		return err
+	}
+	fd, err := writer.Write(bat)
+	if err != nil {
+		return err
+	}
+
+	// 3. write index (index and zonemap)
+	for i, vec := range bat.Vecs {
+		bloomFilter, zoneMap, err := getIndexDataFromVec(uint16(i), vec)
+		if err != nil {
+			return err
+		}
+		err = writer.WriteIndex(fd, bloomFilter)
+		if err != nil {
+			return err
+		}
+		err = writer.WriteIndex(fd, zoneMap)
+		if err != nil {
+			return err
+		}
+	}
+
+	// 4. get return
+	_, err = writer.WriteEnd()
+	// TODO what will return?
+	return err
 }
 
 // read a block from s3
-func blockRead(ctx context.Context, columns []string, blkInfo BlockMeta) (*batch.Batch, error) {
-	//TODO
-	return nil, nil
+func blockRead(ctx context.Context, columns []string, blkInfo BlockMeta, fs fileservice.FileService, tableDef *plan.TableDef) (*batch.Batch, error) {
+	// 1. get extent from meta
+	extent := getExtentFromMeta(blkInfo)
+
+	// 2. get idxs
+	columnLength := len(columns)
+	idxs := make([]uint16, columnLength)
+	columnTypes := make([]types.Type, columnLength)
+	for i, column := range columns {
+		idxs[i] = uint16(tableDef.Name2ColIndex[column])
+		columnTypes[i] = types.T(blkInfo.columns[idxs[i]].typ).ToType()
+	}
+
+	// 2. read data
+	s3FileName := getNameFromMeta(blkInfo)
+	reader, err := objectio.NewObjectReader(s3FileName, fs)
+	if err != nil {
+		return nil, err
+	}
+	ioVec, err := reader.Read(extent, idxs)
+	if err != nil {
+		return nil, err
+	}
+
+	// 3. fill Batch
+	bat := batch.NewWithSize(columnLength)
+	bat.Attrs = columns
+	bat.Vecs = make([]*vector.Vector, columnLength)
+	vecs := make([]*vector.Vector, columnLength)
+	for i, entry := range ioVec.Entries {
+		vec := vector.New(columnTypes[i])
+		err := vec.Read(entry.Data)
+		if err != nil {
+			return nil, err
+		}
+		vecs[i] = vec
+	}
+	bat.Zs = make([]int64, int64(vecs[0].Length()))
+	bat.Vecs = append(bat.Vecs, vecs...)
+
+	return bat, nil
 }

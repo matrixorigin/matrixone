@@ -19,6 +19,7 @@ import (
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -126,6 +127,7 @@ type Transaction struct {
 	writes   [][]Entry
 	dnStores []DNStore
 	proc     *process.Process
+	fs       fileservice.FileService
 }
 
 // Entry represents a delete/insert

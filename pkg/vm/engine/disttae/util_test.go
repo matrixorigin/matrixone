@@ -64,6 +64,8 @@ func makeFunctionExprForTest(name string, args []*plan.Expr) *plan.Expr {
 }
 
 func makeColumnMetaForTest(typ types.T, min []byte, max []byte) *ColumnMeta {
+	zm, _ := NewZoneMap(0, min, max)
+	bf := NewBloomFilter(0, 0, []byte{})
 	return &ColumnMeta{
 		typ: uint8(typ),
 		idx: 0,
@@ -74,19 +76,10 @@ func makeColumnMetaForTest(typ types.T, min []byte, max []byte) *ColumnMeta {
 			length:     0,
 			originSize: 0,
 		},
-		zoneMap: ZoneMap{
-			idx: 0,
-			min: min,
-			max: max,
-		},
-		bloomFilter: Extent{
-			id:         0,
-			offset:     0,
-			length:     0,
-			originSize: 0,
-		},
-		dummy:    [32]byte{},
-		checksum: 0,
+		zoneMap:     zm,
+		bloomFilter: bf,
+		dummy:       [32]byte{},
+		checksum:    0,
 	}
 }
 
@@ -132,29 +125,31 @@ func makeTableDefForTest(columns []string) *plan.TableDef {
 }
 
 func TestCheckExprIsMonotonical(t *testing.T) {
-	testExprs := []*plan.Expr{
+	type asserts = struct {
+		result bool
+		expr   *plan.Expr
+	}
+	testCases := []asserts{
 		// a > 1  -> true
-		makeFunctionExprForTest(">", []*plan.Expr{
+		{true, makeFunctionExprForTest(">", []*plan.Expr{
 			makeColExprForTest(0, types.T_int64),
 			plan2.MakePlan2Int64ConstExprWithType(10),
-		}),
+		})},
 		// a >= b -> true
-		makeFunctionExprForTest(">=", []*plan.Expr{
+		{true, makeFunctionExprForTest(">=", []*plan.Expr{
 			makeColExprForTest(0, types.T_int64),
 			makeColExprForTest(1, types.T_int64),
-		}),
+		})},
 		// abs(a) -> false
-		makeFunctionExprForTest("abs", []*plan.Expr{
+		{false, makeFunctionExprForTest("abs", []*plan.Expr{
 			makeColExprForTest(0, types.T_int64),
-		}),
+		})},
 	}
 
-	expected := []bool{true, true, false}
-
 	t.Run("test checkExprIsMonotonical", func(t *testing.T) {
-		for i, expr := range testExprs {
-			isMonotonical := checkExprIsMonotonical(expr)
-			if isMonotonical != expected[i] {
+		for i, testCase := range testCases {
+			isMonotonical := checkExprIsMonotonical(testCase.expr)
+			if isMonotonical != testCase.result {
 				t.Fatalf("checkExprIsMonotonical testExprs[%d] is different with expected", i)
 			}
 		}
@@ -162,58 +157,48 @@ func TestCheckExprIsMonotonical(t *testing.T) {
 }
 
 func TestNeedRead(t *testing.T) {
+	type asserts = struct {
+		result  bool
+		columns []string
+		expr    *plan.Expr
+	}
 	blockMeta := makeBlockMetaForTest()
 
-	testExprs := []*plan.Expr{
-		makeFunctionExprForTest(">", []*plan.Expr{
+	testCases := []asserts{
+		{true, []string{"a"}, makeFunctionExprForTest(">", []*plan.Expr{
 			makeColExprForTest(0, types.T_int64),
 			plan2.MakePlan2Int64ConstExprWithType(20),
-		}),
-		makeFunctionExprForTest("<", []*plan.Expr{
+		})},
+		{false, []string{"a"}, makeFunctionExprForTest("<", []*plan.Expr{
 			makeColExprForTest(0, types.T_int64),
 			plan2.MakePlan2Int64ConstExprWithType(-1),
-		}),
-		makeFunctionExprForTest(">", []*plan.Expr{
+		})},
+		{false, []string{"a"}, makeFunctionExprForTest(">", []*plan.Expr{
 			makeColExprForTest(0, types.T_int64),
 			plan2.MakePlan2Int64ConstExprWithType(3000000),
-		}),
-		makeFunctionExprForTest("<", []*plan.Expr{
+		})},
+		{false, []string{"a", "d"}, makeFunctionExprForTest("<", []*plan.Expr{
 			makeColExprForTest(0, types.T_int64),
 			makeColExprForTest(1, types.T_int64),
-		}),
-		makeFunctionExprForTest(">", []*plan.Expr{
+		})},
+		{true, []string{"a", "d"}, makeFunctionExprForTest(">", []*plan.Expr{
 			makeColExprForTest(0, types.T_int64),
 			makeColExprForTest(1, types.T_int64),
-		}),
-		makeFunctionExprForTest(">", []*plan.Expr{
+		})},
+		// c > (a + d) => true
+		{true, []string{"c", "a", "d"}, makeFunctionExprForTest(">", []*plan.Expr{
 			makeColExprForTest(0, types.T_int64),
 			makeFunctionExprForTest("+", []*plan.Expr{
 				makeColExprForTest(1, types.T_int64),
 				makeColExprForTest(2, types.T_int64),
 			}),
-		}),
-	}
-	testColumns := [][]string{
-		{"a"},
-		{"a"},
-		{"a"},
-		{"a", "d"},
-		{"a", "d"},
-		{"c", "a", "d"}, // c > (a + d)
-	}
-	expected := []bool{
-		true,
-		false,
-		false,
-		false,
-		true,
-		true,
+		})},
 	}
 
 	t.Run("test needRead", func(t *testing.T) {
-		for i, expr := range testExprs {
-			result := needRead(expr, blockMeta, makeTableDefForTest(testColumns[i]), testutil.NewProc())
-			if result != expected[i] {
+		for i, testCase := range testCases {
+			result := needRead(testCase.expr, blockMeta, makeTableDefForTest(testCase.columns), testutil.NewProc())
+			if result != testCase.result {
 				t.Fatalf("test needRead at cases[%d], get result is different with expected", i)
 			}
 		}

@@ -36,8 +36,8 @@ type ColumnMeta struct {
 	idx         uint16
 	alg         uint8
 	location    Extent
-	zoneMap     ZoneMap
-	bloomFilter Extent
+	zoneMap     *ZoneMap
+	bloomFilter *BloomFilter
 	dummy       [32]byte
 	checksum    uint32
 }
@@ -59,4 +59,40 @@ type ZoneMap struct {
 	idx uint16
 	min []byte
 	max []byte
+}
+
+func NewZoneMap(idx uint16, min, max []byte) (*ZoneMap, error) {
+	zoneMap := &ZoneMap{
+		idx: idx,
+		min: min,
+		max: max,
+	}
+	return zoneMap, nil
+}
+
+func (z *ZoneMap) GetIdx() uint16 {
+	return z.idx
+}
+
+func (z *ZoneMap) GetMin() []byte {
+	return z.min
+}
+
+func (z *ZoneMap) GetMax() []byte {
+	return z.max
+}
+
+type BloomFilter struct {
+	idx uint16
+	alg uint8
+	buf []byte
+}
+
+func NewBloomFilter(idx uint16, alg uint8, buf []byte) *BloomFilter {
+	bloomFilter := &BloomFilter{
+		idx: idx,
+		alg: alg,
+		buf: buf,
+	}
+	return bloomFilter
 }

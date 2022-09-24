@@ -15,13 +15,16 @@ package disttae
 
 import (
 	"encoding/binary"
+	"fmt"
 	"math"
+	"sort"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -51,7 +54,7 @@ func checkExprIsMonotonical(expr *plan.Expr) bool {
 	}
 }
 
-func _getColumnMapByExpr(expr *plan.Expr, columnMap map[int32]struct{}) {
+func _getColumnMapByExpr(expr *plan.Expr, columnMap map[int]struct{}) {
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_F:
 		for _, arg := range exprImpl.F.Args {
@@ -59,20 +62,21 @@ func _getColumnMapByExpr(expr *plan.Expr, columnMap map[int32]struct{}) {
 		}
 	case *plan.Expr_Col:
 		idx := exprImpl.Col.ColPos
-		columnMap[idx] = struct{}{}
+		columnMap[int(idx)] = struct{}{}
 	}
 }
 
-func getColumnsByExpr(expr *plan.Expr) []int32 {
-	columnMap := make(map[int32]struct{})
+func getColumnsByExpr(expr *plan.Expr) []int {
+	columnMap := make(map[int]struct{})
 	_getColumnMapByExpr(expr, columnMap)
 
-	columns := make([]int32, len(columnMap))
+	columns := make([]int, len(columnMap))
 	i := 0
 	for k := range columnMap {
 		columns[i] = k
 		i++
 	}
+	sort.Ints(columns)
 	return columns
 }
 
@@ -91,25 +95,20 @@ func decodeMinMax(typ types.T, value []byte) any {
 	}
 }
 
-// func decodeMinMaxToExpr(typ types.T, value []byte) *plan.Expr {
-// 	// TODO need decoder to decode the []byte to target type
-// 	if typ.ToType().IsIntOrUint() {
-// 		intVal := int64(binary.LittleEndian.Uint64(value))
-// 		return plan2.MakePlan2Int64ConstExprWithType(intVal)
+func getIndexDataFromVec(idx uint16, vec *vector.Vector) (objectio.IndexData, objectio.IndexData, error) {
+	var min, max []byte
+	var alg uint8
+	var buf []byte
 
-// 	} else if typ.ToType().IsFloat() {
-// 		bits := binary.LittleEndian.Uint64(value)
-// 		floatVal := math.Float64frombits(bits)
-// 		return plan2.MakePlan2Float64ConstExprWithType(floatVal)
+	bf := objectio.NewBloomFilter(idx, alg, buf)
+	zm, err := objectio.NewZoneMap(idx, min, max)
+	if err != nil {
+		return nil, nil, err
+	}
+	return bf, zm, nil
+}
 
-// 	} else {
-// 		// TODO other type decode as what??
-// 		strVal := string(value)
-// 		return plan2.MakePlan2StringConstExprWithType(strVal)
-// 	}
-// }
-
-func getZonemapDataFromMeta(columns []int32, meta BlockMeta, tableDef *plan.TableDef) ([][2]any, []uint8) {
+func getZonemapDataFromMeta(columns []int, meta BlockMeta, tableDef *plan.TableDef) ([][2]any, []uint8) {
 	var columnMeta *ColumnMeta
 
 	getIdx := func(idx int) int {
@@ -127,32 +126,13 @@ func getZonemapDataFromMeta(columns []int32, meta BlockMeta, tableDef *plan.Tabl
 		typ := types.T(columnMeta.typ)
 
 		datas[i] = [2]any{
-			decodeMinMax(typ, columnMeta.zoneMap.min),
-			decodeMinMax(typ, columnMeta.zoneMap.max),
+			decodeMinMax(typ, columnMeta.zoneMap.GetMin()),
+			decodeMinMax(typ, columnMeta.zoneMap.GetMax()),
 		}
 	}
 
 	return datas, dataTypes
 }
-
-// func replaceColumnWithZonemap(expr *plan.Expr, columnIdx int32, columnExpr *plan.Expr) *plan.Expr {
-// 	switch exprImpl := expr.Expr.(type) {
-// 	case *plan.Expr_F:
-// 		for i, arg := range exprImpl.F.Args {
-// 			exprImpl.F.Args[i] = replaceColumnWithZonemap(arg, columnIdx, columnExpr)
-// 		}
-// 		return expr
-// 	case *plan.Expr_Col:
-// 		idx := exprImpl.Col.ColPos
-// 		if idx == columnIdx {
-// 			return columnExpr
-// 		}
-// 		return expr
-
-// 	default:
-// 		return expr
-// 	}
-// }
 
 func evalFilterExpr(expr *plan.Expr, bat *batch.Batch, proc *process.Process, isConstant bool) (bool, error) {
 	if isConstant {
@@ -246,4 +226,14 @@ func buildVectorsByData(datas [][2]any, dataTypes []uint8, mp *mheap.Mheap) []*v
 	exchangeVectors(datas, 0, tmpResult, &vectors, mp)
 
 	return vectors
+}
+
+// getNameFromMeta  TODO change later
+func getNameFromMeta(blkInfo BlockMeta) string {
+	return fmt.Sprintf("%s:%d_%d_%d", "blk", blkInfo.header.blockId, blkInfo.header.segmentId, blkInfo.header.tableId)
+}
+
+// getExtentFromMeta  TODO change later
+func getExtentFromMeta(blkInfo BlockMeta) objectio.Extent {
+	return objectio.Extent{}
 }

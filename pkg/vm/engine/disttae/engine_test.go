@@ -86,7 +86,7 @@ func TestTransaction(t *testing.T) {
 	err = txn.WriteFile(DELETE, 0, 0, "test", "test", "test")
 	require.NoError(t, err)
 	ctx := context.TODO()
-	blockWrite(ctx, BlockMeta{}, nil)
+	blockWrite(ctx, BlockMeta{}, nil, nil)
 	_, _ = txn.getRow(ctx, 0, 0, nil, nil, nil, nil)
 	_, _ = txn.getRows(ctx, 0, 0, nil, nil, nil, nil)
 }
