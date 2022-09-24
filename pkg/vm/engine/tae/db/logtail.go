@@ -563,14 +563,6 @@ func containersBatchToProtoBatch(batch *containers.Batch) (*api.Batch, error) {
 	return protoBatch, nil
 }
 
-// extend vector with same name, consume src batch
-func extendBatch(dst, src *containers.Batch) {
-	for i, vec := range dst.Vecs {
-		vec.Extend(src.GetVectorByName(dst.Attrs[i]))
-	}
-	src.Close()
-}
-
 type TableLogtailRespBuilder struct {
 	noopEntryVisitor
 	start, end    types.TS
@@ -601,12 +593,10 @@ func NewTableLogtailRespBuilder(ckp string, start, end types.TS, tbl *catalog.Ta
 	b.dname = tbl.GetDB().GetName()
 	b.tname = b.dataInsSchema.Name
 
-	// dataDelBatch, return rowid anyway, if has pk, carry pk too
+	// dataDelBatch, return rowid anyway
 	dataDelSchema := catalog.NewEmptySchema("dataDel")
-	if schema.IsSinglePK() {
-		dataDelSchema.AppendColDef(schema.GetSingleSortKey())
-	}
-	dataDelSchema.Finalize(false) // with PADDR column, TODO: return error if no coldef
+
+	dataDelSchema.Finalize(false) // with PADDR column
 	b.dataDelSchema = dataDelSchema
 	b.dataDelBatch = makeRespBatchFromSchema(dataDelSchema)
 
@@ -638,15 +628,15 @@ func (b *TableLogtailRespBuilder) visitBlkData(e *catalog.BlockEntry) (err error
 	if err != nil {
 		return
 	}
-	if insBatch.Length() > 0 {
-		extendBatch(b.dataInsBatch, insBatch)
+	if insBatch != nil && insBatch.Length() > 0 {
+		b.dataInsBatch.Extend(insBatch)
 	}
 	delBatch, err := block.CollectDeleteInRange(b.start, b.end)
 	if err != nil {
 		return
 	}
-	if delBatch.Length() > 0 {
-		extendBatch(b.dataDelBatch, delBatch)
+	if delBatch != nil && delBatch.Length() > 0 {
+		b.dataDelBatch.Extend(delBatch)
 	}
 	return nil
 }
