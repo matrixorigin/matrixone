@@ -23,8 +23,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/file"
 	"os"
 	"path"
-	"strconv"
-	"strings"
 )
 
 type metaKey struct {
@@ -39,7 +37,7 @@ type blockFile struct {
 	seg     *segmentFile
 	rows    uint32
 	id      *common.ID
-	key     *metaKey
+	metaKey objectio.Extent
 	columns []*columnBlock
 	writer  *Writer
 	reader  *Reader
@@ -97,34 +95,22 @@ func (bf *blockFile) ReadRows() uint32 {
 	return bf.rows
 }
 
-func (bf *blockFile) GetMeta(metaLoc string) objectio.BlockObject {
-	if bf.key != nil {
-		bf.key.metaLoc = metaLoc
-		if bf.reader == nil {
-			bf.reader = NewReader(bf.seg.fs, bf, bf.name)
-		}
-		block, err := bf.reader.ReadMeta(bf.key.extent)
-		if err != nil {
-			panic(any(err))
-		}
-		return block
+func (bf *blockFile) GetMeta() objectio.BlockObject {
+	if bf.metaKey.End() == 0 {
+		panic(any("block meta key err"))
 	}
-	info := strings.Split(metaLoc, ":")
-	name := info[0]
-	location := strings.Split(info[1], "_")
-	offset, err := strconv.ParseUint(location[0], 10, 32)
+	if bf.reader == nil {
+		bf.reader = NewReader(bf.seg.fs, bf, bf.name)
+	}
+	block, err := bf.reader.ReadMeta(bf.metaKey)
 	if err != nil {
 		panic(any(err))
 	}
-	size, err := strconv.ParseUint(location[1], 10, 32)
-	if err != nil {
-		panic(any(err))
-	}
-	osize, err := strconv.ParseUint(location[2], 10, 32)
-	if err != nil {
-		panic(any(err))
-	}
-	extent := objectio.NewExtent(uint32(offset), uint32(size), uint32(osize))
+	return block
+}
+
+func (bf *blockFile) GetMetaFormKey(metaLoc string) objectio.BlockObject {
+	name, extent := DecodeMetaLoc(metaLoc)
 	if bf.reader == nil {
 		bf.reader = NewReader(bf.seg.fs, bf, name)
 	}
@@ -132,10 +118,7 @@ func (bf *blockFile) GetMeta(metaLoc string) objectio.BlockObject {
 	if err != nil {
 		panic(any(err))
 	}
-	bf.key = &metaKey{
-		metaLoc: metaLoc,
-		extent:  extent,
-	}
+	bf.metaKey = block.GetExtent()
 	return block
 }
 
@@ -175,11 +158,7 @@ func (bf *blockFile) Destroy() error {
 
 func (bf *blockFile) Sync() error {
 	blocks, err := bf.writer.Sync()
-	if bf.key == nil {
-		bf.key = &metaKey{
-			extent: blocks[0].GetExtent(),
-		}
-	}
+	bf.metaKey = blocks[0].GetExtent()
 	return err
 }
 
@@ -194,7 +173,7 @@ func (bf *blockFile) LoadBatch(
 		for i := range bf.columns {
 			vec := containers.MakeVector(colTypes[i], nullables[i], opts)
 			bat.AddVector(colNames[i], vec)
-			if bf.key == nil {
+			if bf.metaKey.End() == 0 {
 				continue
 			}
 		}

@@ -71,10 +71,10 @@ func (r *Reader) LoadBlkColumns(
 	for i := range r.block.columns {
 		vec := containers.MakeVector(colTypes[i], nullables[i], opts)
 		bat.AddVector(colNames[i], vec)
-		if r.block.key == nil {
+		if r.block.metaKey.End() == 0 {
 			continue
 		}
-		col, err := r.block.GetMeta(r.block.key.metaLoc).GetColumn(uint16(i))
+		col, err := r.block.GetMeta().GetColumn(uint16(i))
 		if err != nil {
 			return bat, err
 		}

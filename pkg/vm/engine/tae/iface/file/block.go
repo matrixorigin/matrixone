@@ -40,7 +40,8 @@ type Block interface {
 	WriteBatch(bat *containers.Batch, ts types.TS) (objectio.BlockObject, error)
 	GetWriter() objectio.Writer
 	LoadBatch([]types.Type, []string, []bool, *containers.Options) (bat *containers.Batch, err error)
-	GetMeta(location string) objectio.BlockObject
+	GetMeta() objectio.BlockObject
+	GetMetaFormKey(location string) objectio.BlockObject
 
 	Destroy() error
 }

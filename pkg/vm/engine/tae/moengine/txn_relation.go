@@ -16,6 +16,7 @@ package moengine
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/util"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -47,7 +48,7 @@ func (rel *txnRelation) Write(_ context.Context, bat *batch.Batch) error {
 	taeBatch := containers.NewEmptyBatch()
 	defer taeBatch.Close()
 	for i, vec := range bat.Vecs {
-		v := MOToVectorTmp(vec, allNullables[i])
+		v := util.MOToVectorTmp(vec, allNullables[i])
 		//v := MOToVector(vec, allNullables[i])
 		taeBatch.AddVector(bat.Attrs[i], v)
 	}
@@ -66,7 +67,7 @@ func (rel *txnRelation) Update(_ context.Context, data *batch.Batch) error {
 			logutil.Warn("[Moengine]", common.OperationField("Update"),
 				common.OperandField("Col type is any"))
 		}
-		v := MOToVectorTmp(vec, allNullables[idx])
+		v := util.MOToVectorTmp(vec, allNullables[idx])
 		bat.AddVector(data.Attrs[i], v)
 	}
 	phyAddrIdx := catalog.GetAttrIdx(data.Attrs, schema.PhyAddrKey.Name)
@@ -96,7 +97,7 @@ func (rel *txnRelation) Delete(_ context.Context, data *vector.Vector, col strin
 		logutil.Warn("[Moengine]", common.OperationField("Delete"),
 			common.OperandField("Col type is any"))
 	}
-	vec := MOToVectorTmp(data, allNullables[idx])
+	vec := util.MOToVectorTmp(data, allNullables[idx])
 	defer vec.Close()
 	if schema.PhyAddrKey.Name == col {
 		return rel.handle.DeleteByPhyAddrKeys(vec)

@@ -17,6 +17,7 @@ package tables
 import (
 	"bytes"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/util"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -28,7 +29,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/stl"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
@@ -132,7 +132,6 @@ func newBlock(meta *catalog.BlockEntry, segFile file.Segment, bufMgr base.INodeM
 		bufMgr:     bufMgr,
 		prefix:     meta.MakeKey(),
 	}
-	ts := block.ReadTS()
 	block.mvcc.SetAppendListener(block.OnApplyAppend)
 	if meta.IsAppendable() {
 		block.mvcc.SetDeletesListener(block.ABlkApplyDelete)
@@ -156,8 +155,6 @@ func newBlock(meta *catalog.BlockEntry, segFile file.Segment, bufMgr base.INodeM
 		// if this block is created to do compact or merge, no need to new index
 		// if this block is loaded from storage, ReplayIndex will create index
 	}
-	block.mvcc.SetMaxVisible(ts)
-	block.ckpTs.Store(ts)
 	if meta.GetNodeLocked() != nil &&
 		meta.GetNodeLocked().(*catalog.MetadataMVCCNode).MetaLoc != "" {
 		if err := block.ReplayIndex(); err != nil {
@@ -661,7 +658,7 @@ func (blk *dataBlock) LoadColumnData(
 	srcBuf := fsVector.Entries[0].Data
 	vector := vector.New(def.Type)
 	vector.Read(srcBuf)
-	vec = blockio.MOToVectorTmp(vector, def.Nullable())
+	vec = util.MOToVectorTmp(vector, def.Nullable())
 	return
 }
 

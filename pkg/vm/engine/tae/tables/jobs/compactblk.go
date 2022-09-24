@@ -161,13 +161,8 @@ func (task *compactBlockTask) Execute() (err error) {
 	if err = ioTask.WaitDone(); err != nil {
 		return
 	}
-	// TODO:
-	metaLoc := fmt.Sprintf("%s:%d_%d_%d",
-		blockio.EncodeBlkName(ioTask.file.Fingerprint()),
-		ioTask.file.GetMeta("").GetExtent().Offset(),
-		ioTask.file.GetMeta("").GetExtent().Length(),
-		ioTask.file.GetMeta("").GetExtent().OriginSize(),
-	)
+	metaLoc := blockio.EncodeBlkMetaLoc(ioTask.file.Fingerprint(),
+		ioTask.file.GetMeta().GetExtent())
 	logutil.Infof("node: %v", metaLoc)
 	if err = newBlk.UpdateMetaLoc(metaLoc); err != nil {
 		return err

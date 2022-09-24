@@ -16,6 +16,7 @@ package moengine
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/util"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -254,7 +255,7 @@ func TestEngineAllType(t *testing.T) {
 		assert.Nil(t, err)
 		if bat != nil {
 			assert.Equal(t, 80, vector.Length(bat.Vecs[0]))
-			vec := MOToVector(bat.Vecs[12], false)
+			vec := util.MOToVector(bat.Vecs[12], false)
 			assert.Equal(t, vec.Get(0), basebat.Vecs[12].Get(20))
 		}
 	}
@@ -512,7 +513,7 @@ func TestCopy1(t *testing.T) {
 	v1.Update(5, types.Null{})
 	mv1 := containers.CopyToMoVector(v1)
 	for i := 0; i < v1.Length(); i++ {
-		assert.Equal(t, v1.Get(i), GetValue(mv1, uint32(i)))
+		assert.Equal(t, v1.Get(i), util.GetValue(mv1, uint32(i)))
 	}
 
 	t2 := types.T_date.ToType()
@@ -521,10 +522,10 @@ func TestCopy1(t *testing.T) {
 	v2.Update(6, types.Null{})
 	mv2 := containers.CopyToMoVector(v2)
 	for i := 0; i < v2.Length(); i++ {
-		assert.Equal(t, v2.Get(i), GetValue(mv2, uint32(i)))
+		assert.Equal(t, v2.Get(i), util.GetValue(mv2, uint32(i)))
 	}
 
-	v3 := MOToVector(mv2, true)
+	v3 := util.MOToVector(mv2, true)
 	t.Log(v3.String())
 	for i := 0; i < v3.Length(); i++ {
 		assert.Equal(t, v2.Get(i), v3.Get(i))

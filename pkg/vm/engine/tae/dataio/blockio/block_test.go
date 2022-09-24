@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/file"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/util"
 	"github.com/stretchr/testify/assert"
 	"testing"
 )
@@ -40,7 +41,7 @@ func TestBlock1(t *testing.T) {
 	}
 	data := catalog.MockBatch(schema, int(schema.BlockMaxRows*2))
 	newbat := mobat.New(true, data.Attrs)
-	newbat.Vecs = CopyToMoVectors(data.Vecs)
+	newbat.Vecs = util.CopyToMoVectors(data.Vecs)
 	var block file.Block
 	id := common.NextGlobalSeqNum()
 	SegmentFactory := NewObjectFactory(dir)
