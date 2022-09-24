@@ -925,11 +925,6 @@ func (blk *dataBlock) collectAblkAppendInRange(start, end types.TS) (*containers
 }
 
 func (blk *dataBlock) CollectDeleteInRange(start, end types.TS) (*containers.Batch, error) {
-	var err error
-	_, visible, err := blk.mvcc.GetMaxVisibleRowLocked(end)
-	if err != nil || !visible {
-		return nil, err
-	}
 	rowID, ts, abort := blk.mvcc.CollectDelete(start, end)
 	if rowID == nil {
 		return nil, nil
