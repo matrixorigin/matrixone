@@ -17,7 +17,6 @@ package file
 import (
 	"bytes"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"io"
 
 	"github.com/RoaringBitmap/roaring"
@@ -44,5 +43,5 @@ type Block interface {
 type ColumnBlock interface {
 	io.Closer
 	GetDataObject(location string) objectio.ColumnObject
-	GetData(def *catalog.ColDef, metaLoc string, buffer *bytes.Buffer) (containers.Vector, error)
+	GetData(metaLoc string, NullAbility bool, typ types.Type, _ *bytes.Buffer) (vec containers.Vector, err error)
 }

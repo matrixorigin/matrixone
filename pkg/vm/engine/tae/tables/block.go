@@ -655,7 +655,7 @@ func (blk *dataBlock) LoadColumnData(
 	def := blk.meta.GetSchema().ColDefs[colIdx]
 	// FIXME "GetMetaLoc()"
 	metaLoc := blk.meta.GetMetaLoc()
-	return blk.colObjects[colIdx].GetData(def, metaLoc, buffer)
+	return blk.colObjects[colIdx].GetData(metaLoc, def.NullAbility, def.Type, buffer)
 }
 
 func (blk *dataBlock) ablkGetByFilter(ts types.TS, filter *handle.Filter) (offset uint32, err error) {

@@ -16,11 +16,11 @@ package blockio
 
 import (
 	"bytes"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/util"
@@ -62,16 +62,22 @@ func (cb *columnBlock) GetDataObject(metaLoc string) objectio.ColumnObject {
 	return object
 }
 
-func (cb *columnBlock) GetData(def *catalog.ColDef, metaLoc string, _ *bytes.Buffer) (vec containers.Vector, err error) {
+func (cb *columnBlock) GetData(
+	metaLoc string,
+	NullAbility bool,
+	typ types.Type,
+	_ *bytes.Buffer,
+) (vec containers.Vector, err error) {
 	var fsVector *fileservice.IOVector
 	fsVector, err = cb.GetDataObject(metaLoc).GetData()
 	if err != nil {
 		return
 	}
+
 	srcBuf := fsVector.Entries[0].Data
-	vector := vector.New(def.Type)
+	vector := vector.New(typ)
 	vector.Read(srcBuf)
-	vec = util.MOToVectorTmp(vector, def.Nullable())
+	vec = util.MOToVectorTmp(vector, NullAbility)
 	return
 }
 
