@@ -759,10 +759,6 @@ func (s *Schema) Finalize(rebuild bool) (err error) {
 		err = moerr.NewConstraintViolation("no schema")
 		return
 	}
-	if len(s.ColDefs) == 0 {
-		err = moerr.NewConstraintViolation("no schema")
-		return
-	}
 	if !rebuild {
 		phyAddrDef := &ColDef{
 			Name:        PhyAddrColumnName,
@@ -775,6 +771,10 @@ func (s *Schema) Finalize(rebuild bool) (err error) {
 		if err = s.AppendColDef(phyAddrDef); err != nil {
 			return
 		}
+	}
+	if len(s.ColDefs) == 0 {
+		err = moerr.NewConstraintViolation("no schema")
+		return
 	}
 
 	// sortIdx is sort key index list. as of now, sort key is pk

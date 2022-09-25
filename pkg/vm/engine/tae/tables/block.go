@@ -512,7 +512,7 @@ func (blk *dataBlock) ResolveABlkColumnMVCCData(
 
 	view = model.NewColumnView(ts, colIdx)
 	var data containers.Vector
-	data, err = blk.node.GetColumnDataCopy(maxRow, colIdx, buffer)
+	data, err = blk.node.GetColumnDataCopy(0, maxRow, colIdx, buffer)
 	if err != nil {
 		return
 	}
@@ -904,4 +904,34 @@ func (blk *dataBlock) GetSortColumns(schema *catalog.Schema, data *containers.Ba
 		vs[i] = data.Vecs[schema.SortKey.Defs[i].Idx]
 	}
 	return vs
+}
+
+func (blk *dataBlock) CollectAppendInRange(start, end types.TS) (*containers.Batch, error) {
+	if blk.meta.IsAppendable() {
+		return blk.collectAblkAppendInRange(start, end)
+	}
+	return nil, nil
+}
+
+func (blk *dataBlock) collectAblkAppendInRange(start, end types.TS) (*containers.Batch, error) {
+	minRow, maxRow, commitTSVec, abortVec := blk.mvcc.CollectAppend(start, end)
+	batch, err := blk.node.GetDataCopy(minRow, maxRow)
+	if err != nil {
+		return nil, err
+	}
+	batch.AddVector(catalog.AttrCommitTs, commitTSVec)
+	batch.AddVector(catalog.AttrAborted, abortVec)
+	return batch, nil
+}
+
+func (blk *dataBlock) CollectDeleteInRange(start, end types.TS) (*containers.Batch, error) {
+	rowID, ts, abort := blk.mvcc.CollectDelete(start, end)
+	if rowID == nil {
+		return nil, nil
+	}
+	batch := containers.NewBatch()
+	batch.AddVector(catalog.PhyAddrColumnName, rowID)
+	batch.AddVector(catalog.AttrCommitTs, ts)
+	batch.AddVector(catalog.AttrAborted, abort)
+	return batch, nil
 }
