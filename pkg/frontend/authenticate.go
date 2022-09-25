@@ -611,11 +611,11 @@ var (
 
 	//drop tables for the tenant
 	dropSqls = []string{
-		`drop table mo_catalog.mo_user;`,
-		`drop table mo_catalog.mo_role;`,
-		`drop table mo_catalog.mo_user_grant;`,
-		`drop table mo_catalog.mo_role_grant;`,
-		`drop table mo_catalog.mo_role_privs;`,
+		`drop table if exists mo_catalog.mo_user;`,
+		`drop table if exists mo_catalog.mo_role;`,
+		`drop table if exists mo_catalog.mo_user_grant;`,
+		`drop table if exists mo_catalog.mo_role_grant;`,
+		`drop table if exists mo_catalog.mo_role_privs;`,
 	}
 
 	initMoAccountFormat = `insert into mo_catalog.mo_account(
@@ -1362,7 +1362,7 @@ func doDropAccount(ctx context.Context, ses *Session, da *tree.DropAccount) erro
 	var results []interface{}
 	var deleteCtx context.Context
 	var accountId int64
-	var noSuchAccount bool
+	var hasAccount bool = true
 
 	err = bh.Exec(ctx, "begin;")
 	if err != nil {
@@ -1394,14 +1394,7 @@ func doDropAccount(ctx context.Context, ses *Session, da *tree.DropAccount) erro
 			err = moerr.NewInternalError("there is no account %s", da.Name)
 			goto handleFailed
 		}
-		noSuchAccount = true
-	}
-
-	//step 1 : delete the account in the mo_account of the sys account
-	sql = getSqlForDeleteAccountFromMoAccount(da.Name)
-	err = bh.Exec(ctx, sql)
-	if err != nil {
-		goto handleFailed
+		hasAccount = false
 	}
 
 	err = bh.Exec(ctx, "commit;")
@@ -1409,7 +1402,8 @@ func doDropAccount(ctx context.Context, ses *Session, da *tree.DropAccount) erro
 		goto handleFailed
 	}
 
-	if !noSuchAccount {
+	//drop tables of the tenant
+	if hasAccount {
 		//NOTE!!!: single DDL drop statement per single transaction
 		//SWITCH TO THE CONTEXT of the deleted context
 		deleteCtx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(accountId))
@@ -1427,8 +1421,11 @@ func doDropAccount(ctx context.Context, ses *Session, da *tree.DropAccount) erro
 		}
 	}
 
-	//TODO: drop other databases
+	//step 1 : delete the account in the mo_account of the sys account
+	sql = getSqlForDeleteAccountFromMoAccount(da.Name)
+	err = bh.Exec(ctx, sql)
 	return err
+
 handleFailed:
 	//ROLLBACK the transaction
 	rbErr := bh.Exec(ctx, "rollback;")
