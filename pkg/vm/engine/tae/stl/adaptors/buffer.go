@@ -24,10 +24,8 @@ func NewBuffer(buf []byte) *Buffer {
 		storage: containers.NewStdVector[byte](),
 	}
 	if len(buf) > 0 {
-		bs := new(stl.BinaryData)
-		bs.Payload = buf
-		bs.FixedTypeSize = 1
-		bs.FixedType = true
+		bs := stl.NewFixedTypeBytes[byte]()
+		bs.Storage = buf
 		b.storage.ReadData(bs, true)
 	}
 	return b

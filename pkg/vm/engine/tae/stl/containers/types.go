@@ -22,7 +22,7 @@ import (
 type Options struct {
 	Capacity  int
 	Allocator stl.MemAllocator
-	Data      *stl.BinaryData
+	Data      *stl.Bytes
 }
 
 func (opts *Options) HasData() bool { return opts.Data != nil }
@@ -30,7 +30,7 @@ func (opts *Options) DataSize() int {
 	if opts.Data == nil {
 		return 0
 	}
-	return opts.Data.AreaSize()
+	return opts.Data.StorageSize()
 }
 
 type StdVector[T any] struct {

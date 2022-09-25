@@ -18,15 +18,15 @@ func NewStrVector2[T any](opts ...*Options) *StrVector2[T] {
 		capacity = opt.Capacity
 		alloc = opt.Allocator
 		if opt.HasData() {
-			if opt.Data.VAreaSize() > 0 {
-				vdataOpt.Data = new(stl.BinaryData)
-				vdataOpt.Data.Payload = opt.Data.VAreaBuf()
+			if opt.Data.HeaderSize() > 0 {
+				vdataOpt.Data = new(stl.Bytes)
+				vdataOpt.Data.Storage = opt.Data.HeaderBuf()
 				vdataOpt.Capacity = opt.Data.Length()
 			}
-			if opt.Data.AreaSize() > 0 {
-				areaOpt.Data = new(stl.BinaryData)
-				areaOpt.Data.Payload = opt.Data.AreaBuf()
-				areaOpt.Capacity = opt.Data.AreaSize()
+			if opt.Data.StorageSize() > 0 {
+				areaOpt.Data = new(stl.Bytes)
+				areaOpt.Data.Storage = opt.Data.StorageBuf()
+				areaOpt.Capacity = opt.Data.StorageSize()
 			}
 		}
 	}
@@ -46,9 +46,6 @@ func NewStrVector2[T any](opts ...*Options) *StrVector2[T] {
 		vdata: vdata,
 	}
 }
-
-func (vec *StrVector2[T]) Bytes() *stl.Bytes                   { panic("not supported") }
-func (vec *StrVector2[T]) ReadBytes(bs *stl.Bytes, share bool) { panic("not supported") }
 
 func (vec *StrVector2[T]) Close() {
 	if vec.vdata != nil {
@@ -73,21 +70,21 @@ func (vec *StrVector2[T]) Allocated() int {
 func (vec *StrVector2[T]) IsView() bool                         { return false }
 func (vec *StrVector2[T]) Data() []byte                         { panic("not support") }
 func (vec *StrVector2[T]) DataWindow(offset, length int) []byte { panic("not support") }
-func (vec *StrVector2[T]) BinaryData() *stl.BinaryData {
-	bdata := &stl.BinaryData{}
-	bdata.VarlenData = vec.vdata.Slice()
-	bdata.Payload = vec.area.Slice()
+func (vec *StrVector2[T]) Bytes() *stl.Bytes {
+	bdata := &stl.Bytes{}
+	bdata.Header = vec.vdata.Slice()
+	bdata.Storage = vec.area.Slice()
 	return bdata
 }
 func (vec *StrVector2[T]) Slice() []T               { panic("not support") }
 func (vec *StrVector2[T]) SliceWindow(_, _ int) []T { panic("not support") }
-func (vec *StrVector2[T]) BinaryDataWindow(offset, length int) *stl.BinaryData {
+func (vec *StrVector2[T]) BinaryDataWindow(offset, length int) *stl.Bytes {
 	if offset == 0 && length == vec.vdata.Length() {
-		return vec.BinaryData()
+		return vec.Bytes()
 	}
 	end := offset + length
-	bdata := &stl.BinaryData{}
-	bdata.VarlenData = vec.vdata.Slice()[offset:end]
+	bdata := &stl.Bytes{}
+	bdata.Header = vec.vdata.Slice()[offset:end]
 
 	// If vec has no data stored in area, skip to prepare area data
 	if vec.area.Length() == 0 {
@@ -103,7 +100,7 @@ func (vec *StrVector2[T]) BinaryDataWindow(offset, length int) *stl.BinaryData {
 	}
 
 	// Window the area data in [min, max)
-	bdata.Payload = vec.area.SliceWindow(min, max-min)
+	bdata.Storage = vec.area.SliceWindow(min, max-min)
 	return bdata
 }
 func (vec *StrVector2[T]) Desc() string {
@@ -337,19 +334,17 @@ func (vec *StrVector2[T]) Reset() {
 	}
 }
 
-func (vec *StrVector2[T]) ReadData(data *stl.BinaryData, share bool) {
+func (vec *StrVector2[T]) ReadData(data *stl.Bytes, share bool) {
 	if data == nil {
 		return
 	}
-	d1 := new(stl.BinaryData)
-	d1.FixedType = true
-	d1.FixedTypeSize = types.VarlenaSize
-	d1.Payload = data.VAreaBuf()
+	d1 := stl.NewFixedTypeBytes[types.Varlena]()
+	d1.Storage = data.HeaderBuf()
 	vec.vdata.ReadData(d1, share)
 
-	d1.FixedTypeSize = 1
-	d1.Payload = data.AreaBuf()
-	vec.area.ReadData(d1, share)
+	d2 := stl.NewFixedTypeBytes[byte]()
+	d2.Storage = data.StorageBuf()
+	vec.area.ReadData(d2, share)
 }
 
 func (vec *StrVector2[T]) InitFromSharedBuf(buf []byte) (n int64, err error) {

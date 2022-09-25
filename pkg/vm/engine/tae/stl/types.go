@@ -31,26 +31,19 @@ func SizeOfMany[T any](cnt int) int {
 	return int(unsafe.Sizeof(v)) * cnt
 }
 
-func GetVarlenOffAndLen(v types.Varlena) (off, lenth uint32) {
-	ptr := unsafe.Slice((*uint32)(unsafe.Pointer(&v[0])), 6)
-	return ptr[1], ptr[2]
-}
-
-func VarlenAsU32Slice(v types.Varlena) []uint32 {
-	return unsafe.Slice((*uint32)(unsafe.Pointer(&v[0])), 6)
-}
-
 type Bytes struct {
-	Data   []byte
-	Offset []uint32
-	Length []uint32
-}
+	IsFixedType bool
 
-type BinaryData struct {
-	VarlenData    []types.Varlena
-	Payload       []byte
-	FixedType     bool
+	// Specify fixed type size if IsFixedType is true
 	FixedTypeSize int
+
+	// Used only when IsFixedType is false
+	// Header store data if the size is less than VarlenaSize
+	Header []types.Varlena
+
+	// When IsFixedType is true, here is the data storage
+	// When IsFixedType is false, here is the data storage for big data
+	Storage []byte
 }
 
 type Vector[T any] interface {
@@ -66,7 +59,7 @@ type Vector[T any] interface {
 
 	// If share is true, vector release allocated memory and use the buf and its data storage
 	// If share is false, vector will copy the data from buf to its own data storage
-	ReadData(data *BinaryData, share bool)
+	ReadData(data *Bytes, share bool)
 
 	// Reset resets the buffer to be empty
 	// but it retains the underlying storage for use by future writes
@@ -76,7 +69,7 @@ type Vector[T any] interface {
 	IsView() bool
 
 	// TODO
-	BinaryData() *BinaryData
+	Bytes() *Bytes
 
 	// Data returns the underlying data storage buffer
 	// For Vector[[]byte], it only returns the data buffer

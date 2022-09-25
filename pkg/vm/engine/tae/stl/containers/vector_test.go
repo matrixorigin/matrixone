@@ -202,9 +202,9 @@ func TestVector6(t *testing.T) {
 	buf := w.Bytes()
 	t.Logf("cap:%d,size:%d", cap(buf), len(buf))
 	opts := &Options{
-		Data: &stl.BinaryData{
-			Payload:       buf,
-			FixedType:     true,
+		Data: &stl.Bytes{
+			Storage:       buf,
+			IsFixedType:   true,
 			FixedTypeSize: stl.Sizeof[int64](),
 		},
 	}
@@ -255,7 +255,7 @@ func TestVector7(t *testing.T) {
 	vec2.Append([]byte("hh2"))
 	vec2.Append([]byte("hhh3"))
 	vec2.Append([]byte("hhhh4"))
-	bs := vec2.BinaryData()
+	bs := vec2.Bytes()
 	t.Log(vec2.String())
 
 	allocated := allocator.Usage()
@@ -341,7 +341,7 @@ func TestVector10(t *testing.T) {
 	vec.Append([]byte(h3))
 	vec.Append([]byte(h4))
 
-	data := vec.BinaryData()
+	data := vec.Bytes()
 
 	vec2 := NewVector[[]byte](opts)
 	vec2.ReadData(data, true)
@@ -503,7 +503,7 @@ func TestStrVector2(t *testing.T) {
 	vec.Append([]byte(h3))
 	vec.Append([]byte(h4))
 
-	data := vec.BinaryData()
+	data := vec.Bytes()
 
 	vec3 := NewStrVector2[[]byte](opts)
 	vec3.ReadData(data, true)
