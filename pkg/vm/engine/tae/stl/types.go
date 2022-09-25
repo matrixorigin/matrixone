@@ -70,6 +70,7 @@ type Vector[T any] interface {
 
 	// TODO
 	Bytes() *Bytes
+	WindowAsBytes(offset, length int) *Bytes
 
 	// Data returns the underlying data storage buffer
 	// For Vector[[]byte], it only returns the data buffer

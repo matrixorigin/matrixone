@@ -232,6 +232,14 @@ func (vec *StdVector[T]) Reset() {
 	vec.buf = vec.buf[:0]
 }
 
+func (vec *StdVector[T]) WindowAsBytes(offset, length int) *stl.Bytes {
+	bs := stl.NewFixedTypeBytes[T]()
+	start := offset * stl.Sizeof[T]()
+	end := start + length*stl.Sizeof[T]()
+	bs.Storage = vec.buf[start:end]
+	return bs
+}
+
 func (vec *StdVector[T]) Bytes() *stl.Bytes {
 	bs := stl.NewFixedTypeBytes[T]()
 	bs.Storage = vec.buf

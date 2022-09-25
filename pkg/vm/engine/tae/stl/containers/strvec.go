@@ -71,24 +71,24 @@ func (vec *StrVector[T]) IsView() bool                         { return false }
 func (vec *StrVector[T]) Data() []byte                         { panic("not support") }
 func (vec *StrVector[T]) DataWindow(offset, length int) []byte { panic("not support") }
 func (vec *StrVector[T]) Bytes() *stl.Bytes {
-	bdata := &stl.Bytes{}
-	bdata.Header = vec.vdata.Slice()
-	bdata.Storage = vec.area.Slice()
-	return bdata
+	bs := &stl.Bytes{}
+	bs.Header = vec.vdata.Slice()
+	bs.Storage = vec.area.Slice()
+	return bs
 }
 func (vec *StrVector[T]) Slice() []T               { panic("not support") }
 func (vec *StrVector[T]) SliceWindow(_, _ int) []T { panic("not support") }
-func (vec *StrVector[T]) BinaryDataWindow(offset, length int) *stl.Bytes {
+func (vec *StrVector[T]) WindowAsBytes(offset, length int) *stl.Bytes {
 	if offset == 0 && length == vec.vdata.Length() {
 		return vec.Bytes()
 	}
 	end := offset + length
-	bdata := &stl.Bytes{}
-	bdata.Header = vec.vdata.Slice()[offset:end]
+	bs := &stl.Bytes{}
+	bs.Header = vec.vdata.Slice()[offset:end]
 
 	// If vec has no data stored in area, skip to prepare area data
 	if vec.area.Length() == 0 {
-		return bdata
+		return bs
 	}
 
 	// Get area data range in between [offset, offset+length)
@@ -96,12 +96,12 @@ func (vec *StrVector[T]) BinaryDataWindow(offset, length int) *stl.Bytes {
 
 	// If min == max, no area data is stored in between [offset, offset+length)
 	if min == max {
-		return bdata
+		return bs
 	}
 
 	// Window the area data in [min, max)
-	bdata.Storage = vec.area.SliceWindow(min, max-min)
-	return bdata
+	bs.Storage = vec.area.SliceWindow(min, max-min)
+	return bs
 }
 func (vec *StrVector[T]) Desc() string {
 	s := fmt.Sprintf("StrVector:Len=%d[Rows];Cap=%d[Rows];Allocted:%d[Bytes]",
