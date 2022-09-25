@@ -17,7 +17,6 @@ package tables
 import (
 	"bytes"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/util"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -25,8 +24,6 @@ import (
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
@@ -656,18 +653,9 @@ func (blk *dataBlock) LoadColumnData(
 	colIdx int,
 	buffer *bytes.Buffer) (vec containers.Vector, err error) {
 	def := blk.meta.GetSchema().ColDefs[colIdx]
-	var fsVector *fileservice.IOVector
+	// FIXME "GetMetaLoc()"
 	metaLoc := blk.meta.GetMetaLoc()
-	fsVector, err = blk.colObjects[colIdx].GetDataObject(metaLoc).GetData()
-	if err != nil {
-		return
-	}
-
-	srcBuf := fsVector.Entries[0].Data
-	vector := vector.New(def.Type)
-	vector.Read(srcBuf)
-	vec = util.MOToVectorTmp(vector, def.Nullable())
-	return
+	return blk.colObjects[colIdx].GetData(def, metaLoc, buffer)
 }
 
 func (blk *dataBlock) ablkGetByFilter(ts types.TS, filter *handle.Filter) (offset uint32, err error) {
