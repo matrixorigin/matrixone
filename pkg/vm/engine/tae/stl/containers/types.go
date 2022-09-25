@@ -41,13 +41,7 @@ type StdVector[T any] struct {
 	capacity int
 }
 
-// type StrVector[T any] struct {
-// 	offsets *StdVector[uint32]
-// 	lengths *StdVector[uint32]
-// 	data    *StdVector[byte]
-// }
-
-type StrVector2[T any] struct {
+type StrVector[T any] struct {
 	vdata *StdVector[types.Varlena]
 	area  *StdVector[byte]
 }
