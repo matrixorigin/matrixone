@@ -20,7 +20,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
-	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
@@ -52,20 +51,6 @@ func (f FallbackShard) Vector(ctx context.Context, tableID ID, getDefs func(cont
 			continue
 		}
 		return sharded, nil
-	}
-	panic("all shard policy failed")
-}
-
-func (f FallbackShard) Stores(stores []logservicepb.DNStore) (shards []metadata.DNShard, err error) {
-	for _, policy := range f {
-		shards, err = policy.Stores(stores)
-		if err != nil {
-			return nil, err
-		}
-		if len(shards) == 0 {
-			continue
-		}
-		return shards, nil
 	}
 	panic("all shard policy failed")
 }
