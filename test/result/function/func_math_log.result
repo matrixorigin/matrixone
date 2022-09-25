@@ -1,10 +1,10 @@
 select log(exp(10)),log(-1),log(NULL),log(1,1),log(3,9),log(-1,2),log(NULL,2);
-Natural Logarithm function input cannot be non positive
+invalid argument ln, bad value -1
 SELECT LOG(2);
 LOG(2)
 0.6931471805599453
 SELECT LOG(-2);
-Natural Logarithm function input cannot be non positive
+invalid argument ln, bad value -2
 SELECT LOG(2,65536);
 LOG(2,65536)
 16.0
@@ -12,14 +12,11 @@ SELECT LOG(10,100);
 LOG(10,100)
 2.0
 SELECT LOG(1,100);
-LOG(1,100)
-null
+invalid argument log base, bad value 1
 select log(2,-1);
-log(2,-1)
-null
+invalid argument log input, bad value <= 0
 select log(-2,1);
-log(-2,1)
-null
+invalid argument log input, bad value <= 0
 select log(0.00000000000000001);
 log(0.00000000000000001)
 -39.14394658089878
@@ -30,8 +27,7 @@ select log(0.141241241241313, 124314124124.12412341);
 log(0.141241241241313, 124314124124.12412341)
 -13.051786251584149
 select log(-0.141241241241313, -124314124124.12412341);
-log(-0.141241241241313, -124314124124.12412341)
-null
+invalid argument log input, bad value <= 0
 select log(null,2);
 log(null,2)
 null
@@ -54,10 +50,9 @@ drop table t1;
 create table t1(a tinyint, b SMALLINT, c bigint, d INT, e BIGINT, f FLOAT, g DOUBLE, h decimal(38,19), i DATE, k datetime, l TIMESTAMP, m char(255), n varchar(255));
 insert into t1 values(1, 1, 2, 4, 5, 5.5, 31.13, 14.314, "2012-03-12", "2012-03-12 10:03:12", "2012-03-12 13:03:12", "abc", "dcf");
 select log(a),log(b),log(c),log(d),log(e),log(f),log(g),log(h),log(i),log(k),log(l),log(m),log(n) from t1;
-Function 'log' with parameters [DATE] is not supported.
+invalid argument function log, bad value [DATE]
 select log(a,b), log(b,c),log(c,d),log(d,e),log(e,f),log(f,g),log(g,h), log(h,i), log(i,k),log(k,l),log(l,m),log(m,n) from t1;
-log(a,b)	log(b,c)	log(c,d)	log(d,e)	log(e,f)	log(f,g)	log(g,h)	log(h,i)	log(i,k)	log(k,l)	log(l,m)	log(m,n)
-null	null	2.0	1.160964047443681	1.059219544331585	2.0168211362765116	0.7740270385977794	6.319329540915667	1.8215087746921308	1.0000000000486744	null	null
+invalid argument function log, bad value [DECIMAL128 DATE]
 drop table t1;
 select log(123.54-123.03);
 log(123.54-123.03)

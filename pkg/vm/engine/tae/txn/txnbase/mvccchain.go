@@ -41,9 +41,11 @@ func NewMVCCChain(comparefn func(MVCCNode, MVCCNode) int, newnodefn func() MVCCN
 		newnodefn: newnodefn,
 	}
 }
+func (be *MVCCChain) Depth() int {
+	return be.MVCC.Depth()
+}
 func (be *MVCCChain) StringLocked() string {
 	var w bytes.Buffer
-
 	it := common.NewGenericSortedDListIt(nil, be.MVCC, false)
 	for it.Valid() {
 		version := it.Get().GetPayload()
@@ -71,9 +73,10 @@ func (be *MVCCChain) GetIndexes() []*wal.Index {
 	return ret
 }
 
-func (be *MVCCChain) Insert(vun MVCCNode) {
+func (be *MVCCChain) Insert(vun MVCCNode) (node *common.GenericDLNode[MVCCNode]) {
 	un := vun
-	be.MVCC.Insert(un)
+	node = be.MVCC.Insert(un)
+	return
 }
 
 // [start, end]
@@ -172,6 +175,13 @@ func (be *MVCCChain) SearchNode(o MVCCNode) (node MVCCNode) {
 		return true
 	}, false)
 	return
+}
+
+func (be *MVCCChain) LoopChain(fn func(MVCCNode) bool) {
+	be.MVCC.Loop(func(n *common.GenericDLNode[MVCCNode]) bool {
+		un := n.GetPayload()
+		return fn(un)
+	}, false)
 }
 
 func (be *MVCCChain) NeedWaitCommitting(ts types.TS) (bool, txnif.TxnReader) {
@@ -342,6 +352,29 @@ func (be *MVCCChain) CloneCommittedInRange(start, end types.TS) (ret *MVCCChain)
 				ret = NewMVCCChain(be.comparefn, be.newnodefn)
 			}
 			ret.Insert(un.CloneAll())
+		} else if !before {
+			return false
+		}
+		return true
+	}, true)
+	return
+}
+
+func (be *MVCCChain) ClonePreparedInRange(start, end types.TS) (ret []MVCCNode) {
+	needWait, txn := be.NeedWaitCommitting(end.Next())
+	if needWait {
+		be.RUnlock()
+		txn.GetTxnState(true)
+		be.RLock()
+	}
+	be.MVCC.Loop(func(n *common.GenericDLNode[MVCCNode]) bool {
+		un := n.GetPayload()
+		in, before := un.PreparedIn(start, end)
+		if in {
+			if ret == nil {
+				ret = make([]MVCCNode, 0)
+			}
+			ret = append(ret, un.CloneAll())
 		} else if !before {
 			return false
 		}

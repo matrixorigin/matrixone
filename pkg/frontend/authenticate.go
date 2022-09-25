@@ -126,7 +126,7 @@ func GetTenantInfo(userInput string) (*TenantInfo, error) {
 		tenant := userInput[:p]
 		tenant = strings.TrimSpace(tenant)
 		if len(tenant) == 0 {
-			return &TenantInfo{}, fmt.Errorf("invalid tenant name '%s'", tenant)
+			return &TenantInfo{}, moerr.NewInternalError("invalid tenant name '%s'", tenant)
 		}
 		userRole := userInput[p+1:]
 		p2 := strings.IndexByte(userRole, ':')
@@ -135,7 +135,7 @@ func GetTenantInfo(userInput string) (*TenantInfo, error) {
 			user := userRole
 			user = strings.TrimSpace(user)
 			if len(user) == 0 {
-				return &TenantInfo{}, fmt.Errorf("invalid user name '%s'", user)
+				return &TenantInfo{}, moerr.NewInternalError("invalid user name '%s'", user)
 			}
 			return &TenantInfo{
 				Tenant:      strings.ToLower(tenant),
@@ -146,12 +146,12 @@ func GetTenantInfo(userInput string) (*TenantInfo, error) {
 			user := userRole[:p2]
 			user = strings.TrimSpace(user)
 			if len(user) == 0 {
-				return &TenantInfo{}, fmt.Errorf("invalid user name '%s'", user)
+				return &TenantInfo{}, moerr.NewInternalError("invalid user name '%s'", user)
 			}
 			role := userRole[p2+1:]
 			role = strings.TrimSpace(role)
 			if len(role) == 0 {
-				return &TenantInfo{}, fmt.Errorf("invalid role name '%s'", role)
+				return &TenantInfo{}, moerr.NewInternalError("invalid role name '%s'", role)
 			}
 			return &TenantInfo{
 				Tenant:      strings.ToLower(tenant),
@@ -2201,14 +2201,14 @@ func doGrantRole(ctx context.Context, ses *Session, gr *tree.GrantRole) error {
 			sql := ""
 			if to.typ == roleType {
 				if from.id == to.id { //direct loop
-					err = moerr.NewWithContext(ctx, moerr.ER_ROLE_GRANTED_TO_ITSELF, from.name, to.name)
+					err = moerr.NewRoleGrantedToSelf(from.name, to.name)
 					goto handleFailed
 				} else {
 					//check the indirect loop
 					edgeId := checkLoopGraph.addEdge(from.id, to.id)
 					has := checkLoopGraph.hasLoop(from.id)
 					if has {
-						err = moerr.NewWithContext(ctx, moerr.ER_ROLE_GRANTED_TO_ITSELF, from.name, to.name)
+						err = moerr.NewRoleGrantedToSelf(from.name, to.name)
 						goto handleFailed
 					}
 					//restore the graph
@@ -2975,7 +2975,7 @@ func formSqlFromGrantPrivilege(ctx context.Context, ses *Session, gp *tree.Grant
 		case tree.PRIVILEGE_LEVEL_TYPE_TABLE:
 			sql = getSqlForCheckWithGrantOptionForTableDatabaseTable(int64(tenant.GetDefaultRoleID()), privType, ses.GetDatabaseName(), gp.Level.TabName)
 		default:
-			return "", moerr.NewInternalError("in object type %s privilege level type %s is unsupported", gp.ObjType, gp.Level.Level)
+			return "", moerr.NewInternalError("in object type %v privilege level type %v is unsupported", gp.ObjType, gp.Level.Level)
 		}
 	case tree.OBJECT_TYPE_DATABASE:
 		switch gp.Level.Level {
@@ -2989,17 +2989,17 @@ func formSqlFromGrantPrivilege(ctx context.Context, ses *Session, gp *tree.Grant
 		case tree.PRIVILEGE_LEVEL_TYPE_DATABASE:
 			sql = getSqlForCheckWithGrantOptionForDatabaseDB(int64(tenant.GetDefaultRoleID()), privType, gp.Level.DbName)
 		default:
-			return "", moerr.NewInternalError("in object type %s privilege level type %s is unsupported", gp.ObjType, gp.Level.Level)
+			return "", moerr.NewInternalError("in object type %v privilege level type %v is unsupported", gp.ObjType, gp.Level.Level)
 		}
 	case tree.OBJECT_TYPE_ACCOUNT:
 		switch gp.Level.Level {
 		case tree.PRIVILEGE_LEVEL_TYPE_STAR:
 			sql = getSqlForCheckWithGrantOptionForAccountStar(int64(tenant.GetDefaultRoleID()), privType)
 		default:
-			return "", moerr.NewInternalError("in object type %s privilege level type %s is unsupported", gp.ObjType, gp.Level.Level)
+			return "", moerr.NewInternalError("in object type %v privilege level type %v is unsupported", gp.ObjType, gp.Level.Level)
 		}
 	default:
-		return "", moerr.NewInternalError("object type %s is unsupported", gp.ObjType)
+		return "", moerr.NewInternalError("object type %v is unsupported", gp.ObjType)
 	}
 	return sql, nil
 }

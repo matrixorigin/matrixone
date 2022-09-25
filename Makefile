@@ -51,7 +51,7 @@ GO_VERSION=$(shell go version)
 BRANCH_NAME=$(shell git rev-parse --abbrev-ref HEAD)
 LAST_COMMIT_ID=$(shell git rev-parse HEAD)
 BUILD_TIME=$(shell date)
-MO_VERSION=$(shell git describe --tags $(shell git rev-list --tags --max-count=1))
+MO_VERSION=$(shell git describe --always --tags $(shell git rev-list --tags --max-count=1))
 
 # cross compilation has been disabled for now
 ifneq ($(GOARCH)$(TARGET_ARCH)$(GOOS)$(TARGET_OS),)
@@ -168,10 +168,30 @@ install-static-check-tools:
 
 
 .PHONY: static-check
-static-check: config cgo
+static-check: config cgo err-check
 	$(CGO_OPTS) go vet -vettool=`which molint` ./...
 	$(CGO_OPTS) license-eye -c .licenserc.yml header check
 	$(CGO_OPTS) license-eye -c .licenserc.yml dep check
 	$(CGO_OPTS) golangci-lint run -c .golangci.yml ./...
 
+fmtErrs := $(shell grep -onr 'fmt.Errorf' pkg/ --exclude-dir=.git --exclude-dir=vendor \
+				--exclude=*.pb.go --exclude=system_vars.go --exclude=Makefile)
+errNews := $(shell grep -onr 'errors.New' pkg/ --exclude-dir=.git --exclude-dir=vendor \
+				--exclude=*.pb.go --exclude=system_vars.go --exclude=Makefile)
 
+.PHONY: err-check
+err-check:
+ifneq ("$(strip $(fmtErrs))$(strip $(errNews))", "")
+ ifneq ("$(strip $(fmtErrs))", "")
+		$(warning 'fmt.Errorf()' is found.)
+		$(warning One of 'fmt.Errorf()' is called at: $(shell printf "%s\n" $(fmtErrs) | head -1))
+ endif
+ ifneq ("$(strip $(errNews))", "")
+		$(warning 'errors.New()' is found.)
+		$(warning One of 'errors.New()' is called at: $(shell printf "%s\n" $(errNews) | head -1))
+ endif
+
+	$(error Use moerr instead.)
+else
+	$(info Neither 'fmt.Errorf()' nor 'errors.New()' is found)
+endif

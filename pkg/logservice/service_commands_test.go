@@ -27,6 +27,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
+	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 )
 
@@ -50,6 +51,7 @@ func TestBackgroundTickAndHeartbeat(t *testing.T) {
 	cfg.Fill()
 	service, err := NewService(cfg,
 		testutil.NewFS(),
+		taskservice.NewTaskService(taskservice.NewMemTaskStorage(), nil),
 		WithBackendFilter(func(msg morpc.Message, backendAddr string) bool {
 			return true
 		}),

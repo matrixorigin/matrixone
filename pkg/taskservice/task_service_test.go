@@ -20,13 +20,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	"github.com/stretchr/testify/assert"
 )
 
 func TestCreate(t *testing.T) {
 	store := NewMemTaskStorage()
-	s := NewTaskService(store)
+	s := NewTaskService(store, nil)
 	defer func() {
 		assert.NoError(t, s.Close())
 	}()
@@ -51,7 +52,7 @@ func TestCreate(t *testing.T) {
 
 func TestCreateBatch(t *testing.T) {
 	store := NewMemTaskStorage()
-	s := NewTaskService(store)
+	s := NewTaskService(store, nil)
 	defer func() {
 		assert.NoError(t, s.Close())
 	}()
@@ -85,7 +86,7 @@ func TestCreateBatch(t *testing.T) {
 
 func TestAllocate(t *testing.T) {
 	store := NewMemTaskStorage()
-	s := NewTaskService(store)
+	s := NewTaskService(store, nil)
 	defer func() {
 		assert.NoError(t, s.Close())
 	}()
@@ -106,7 +107,7 @@ func TestAllocate(t *testing.T) {
 
 func TestReAllocate(t *testing.T) {
 	store := NewMemTaskStorage()
-	s := NewTaskService(store)
+	s := NewTaskService(store, nil)
 	defer func() {
 		assert.NoError(t, s.Close())
 	}()
@@ -136,7 +137,7 @@ func TestReAllocate(t *testing.T) {
 
 func TestAllocateWithNotExistTask(t *testing.T) {
 	store := NewMemTaskStorage()
-	s := NewTaskService(store)
+	s := NewTaskService(store, nil)
 	defer func() {
 		assert.NoError(t, s.Close())
 	}()
@@ -144,12 +145,13 @@ func TestAllocateWithNotExistTask(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.TODO(), time.Second*10)
 	defer cancel()
 
-	assert.Equal(t, ErrInvalidTask, s.Allocate(ctx, task.Task{ID: 1}, "r1"))
+	err := s.Allocate(ctx, task.Task{ID: 1}, "r1")
+	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidTask))
 }
 
 func TestAllocateWithInvalidEpoch(t *testing.T) {
 	store := NewMemTaskStorage().(*memTaskStorage)
-	s := NewTaskService(store)
+	s := NewTaskService(store, nil)
 	defer func() {
 		assert.NoError(t, s.Close())
 	}()
@@ -169,12 +171,13 @@ func TestAllocateWithInvalidEpoch(t *testing.T) {
 
 	assert.NoError(t, s.Create(ctx, newTestTaskMetadata("t1")))
 	v := mustGetTestTask(t, store, 1)[0]
-	assert.Equal(t, ErrInvalidTask, s.Allocate(ctx, v, "r2"))
+	err := s.Allocate(ctx, v, "r2")
+	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidTask))
 }
 
 func TestCompleted(t *testing.T) {
 	store := NewMemTaskStorage()
-	s := NewTaskService(store)
+	s := NewTaskService(store, nil)
 	defer func() {
 		assert.NoError(t, s.Close())
 	}()
@@ -197,7 +200,7 @@ func TestCompleted(t *testing.T) {
 
 func TestCompletedWithInvalidStatus(t *testing.T) {
 	store := NewMemTaskStorage()
-	s := NewTaskService(store)
+	s := NewTaskService(store, nil)
 	defer func() {
 		assert.NoError(t, s.Close())
 	}()
@@ -213,13 +216,14 @@ func TestCompletedWithInvalidStatus(t *testing.T) {
 	v.Status = task.TaskStatus_Created
 	mustUpdateTestTask(t, store, 1, []task.Task{v})
 
-	assert.Error(t, ErrInvalidTask, s.Complete(ctx, "r1", v,
-		task.ExecuteResult{Code: task.ResultCode_Failed, Error: "error"}))
+	err := s.Complete(ctx, "r1", v,
+		task.ExecuteResult{Code: task.ResultCode_Failed, Error: "error"})
+	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidTask))
 }
 
 func TestCompletedWithInvalidEpoch(t *testing.T) {
 	store := NewMemTaskStorage()
-	s := NewTaskService(store)
+	s := NewTaskService(store, nil)
 	defer func() {
 		assert.NoError(t, s.Close())
 	}()
@@ -235,13 +239,15 @@ func TestCompletedWithInvalidEpoch(t *testing.T) {
 	v.Epoch = 2
 	mustUpdateTestTask(t, store, 1, []task.Task{v})
 
-	assert.Error(t, ErrInvalidTask, s.Complete(ctx, "r1", v,
-		task.ExecuteResult{Code: task.ResultCode_Failed, Error: "error"}))
+	v.Epoch = 1
+	err := s.Complete(ctx, "r1", v,
+		task.ExecuteResult{Code: task.ResultCode_Failed, Error: "error"})
+	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidTask))
 }
 
 func TestCompletedWithInvalidTaskRunner(t *testing.T) {
 	store := NewMemTaskStorage()
-	s := NewTaskService(store)
+	s := NewTaskService(store, nil)
 	defer func() {
 		assert.NoError(t, s.Close())
 	}()
@@ -254,13 +260,14 @@ func TestCompletedWithInvalidTaskRunner(t *testing.T) {
 	assert.NoError(t, s.Allocate(ctx, v, "r1"))
 
 	v = mustGetTestTask(t, store, 1)[0]
-	assert.Error(t, ErrInvalidTask, s.Complete(ctx, "r2", v,
-		task.ExecuteResult{Code: task.ResultCode_Failed, Error: "error"}))
+	err := s.Complete(ctx, "r2", v,
+		task.ExecuteResult{Code: task.ResultCode_Failed, Error: "error"})
+	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidTask))
 }
 
 func TestHeartbeat(t *testing.T) {
 	store := NewMemTaskStorage()
-	s := NewTaskService(store)
+	s := NewTaskService(store, nil)
 	defer func() {
 		assert.NoError(t, s.Close())
 	}()
@@ -283,7 +290,7 @@ func TestHeartbeat(t *testing.T) {
 
 func TestHeartbeatWithSmallEpoch(t *testing.T) {
 	store := NewMemTaskStorage()
-	s := NewTaskService(store)
+	s := NewTaskService(store, nil)
 	defer func() {
 		assert.NoError(t, s.Close())
 	}()
@@ -300,12 +307,13 @@ func TestHeartbeatWithSmallEpoch(t *testing.T) {
 	mustUpdateTestTask(t, store, 1, []task.Task{v})
 
 	v.Epoch = 1
-	assert.Equal(t, ErrInvalidTask, s.Heartbeat(ctx, v))
+	err := s.Heartbeat(ctx, v)
+	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidTask))
 }
 
 func TestHeartbeatWithBiggerEpochShouldSuccess(t *testing.T) {
 	store := NewMemTaskStorage()
-	s := NewTaskService(store)
+	s := NewTaskService(store, nil)
 	defer func() {
 		assert.NoError(t, s.Close())
 	}()
@@ -327,7 +335,7 @@ func TestHeartbeatWithBiggerEpochShouldSuccess(t *testing.T) {
 
 func TestCreateCronTask(t *testing.T) {
 	store := NewMemTaskStorage()
-	s := NewTaskService(store)
+	s := NewTaskService(store, nil)
 	defer func() {
 		assert.NoError(t, s.Close())
 	}()
@@ -340,7 +348,7 @@ func TestCreateCronTask(t *testing.T) {
 
 func TestQueryCronTask(t *testing.T) {
 	store := NewMemTaskStorage()
-	s := NewTaskService(store)
+	s := NewTaskService(store, nil)
 	defer func() {
 		assert.NoError(t, s.Close())
 	}()
@@ -359,7 +367,7 @@ func TestQueryCronTask(t *testing.T) {
 
 func TestQueryTask(t *testing.T) {
 	store := NewMemTaskStorage()
-	s := NewTaskService(store)
+	s := NewTaskService(store, nil)
 	defer func() {
 		assert.NoError(t, s.Close())
 	}()

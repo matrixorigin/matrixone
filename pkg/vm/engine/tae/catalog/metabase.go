@@ -20,6 +20,7 @@ import (
 	"io"
 	"sync"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
@@ -46,7 +47,7 @@ func NewMetaBaseEntry(id uint64) *MetaBaseEntry {
 }
 
 func (be *MetaBaseEntry) StringLocked() string {
-	return fmt.Sprintf("[%d %p]%s", be.ID, be.RWMutex, be.MVCCChain.StringLocked())
+	return fmt.Sprintf("[%d]%s", be.ID, be.MVCCChain.StringLocked())
 }
 
 func (be *MetaBaseEntry) String() string {
@@ -77,27 +78,17 @@ func (be *MetaBaseEntry) CreateWithTS(ts types.TS) {
 		EntryMVCCNode: &EntryMVCCNode{
 			CreatedAt: ts,
 		},
-		TxnMVCCNode: &txnbase.TxnMVCCNode{
-			Start: ts,
-			End:   ts,
-		},
+		TxnMVCCNode: txnbase.NewTxnMVCCNodeWithTS(ts),
 	}
 	be.Insert(node)
 }
 
 func (be *MetaBaseEntry) CreateWithTxn(txn txnif.AsyncTxn) {
-	var startTS types.TS
-	if txn != nil {
-		startTS = txn.GetStartTS()
-	}
 	node := &MetadataMVCCNode{
 		EntryMVCCNode: &EntryMVCCNode{
 			CreatedAt: txnif.UncommitTS,
 		},
-		TxnMVCCNode: &txnbase.TxnMVCCNode{
-			Start: startTS,
-			Txn:   txn,
-		},
+		TxnMVCCNode: txnbase.NewTxnMVCCNodeWithTxn(txn),
 	}
 	be.Insert(node)
 }
@@ -229,7 +220,7 @@ func (be *MetaBaseEntry) DropEntryLocked(txnCtx txnif.TxnReader) (isNewNode bool
 		return
 	}
 	if be.HasDropped() {
-		return false, ErrNotFound
+		return false, moerr.NewNotFound()
 	}
 	isNewNode, err = be.DeleteLocked(txnCtx)
 	return

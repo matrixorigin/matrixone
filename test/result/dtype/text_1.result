@@ -9,9 +9,9 @@ create table t2(
 a int,
 b text primary key
 );
-Type text don't support primary key
+not supported: text type in primary key
 drop table t2;
-table t2 is not exists
+no such table text_1.t2
 drop table if exists t3;
 create table t3 (
 col1 bigint,
@@ -52,7 +52,7 @@ col2 datetime,
 col3 timestamp
 );
 insert into t6 values ('2022-02-01', '2022-02-01:23:59 59.999999', '2037-09-08 23:59:59.999999');
-Incorrect DATETIME value: '2022-02-01:23:59 59.999999' for column 'col2' at row 1
+truncated type DATETIME value 2022-02-01:23:59 59.999999 for column col2, 1
 select cast(col1 as text), cast(col2 as text), cast(col3 as text) from t6;
 cast(col1 as text)    cast(col2 as text)    cast(col3 as text)
 drop table t6;
@@ -97,11 +97,11 @@ cast(col1 as tinyint)
 127
 insert into t8(col1) values ('-129');
 select cast(col1 as tinyint) from t8;
-Can't cast column from TEXT type to TINYINT type because of one or more values in that column.
+data out of range: data type int, value '-129'
 delete from t8 where col1='-129';
 insert into t8(col1) values ('128');
 select cast(col1 as tinyint) from t8;
-Can't cast column from TEXT type to TINYINT type because of one or more values in that column.
+data out of range: data type int, value '128'
 delete from t8 where col1 is not NULL;
 insert into t8(col2) values ('-32768');
 insert into t8(col2) values ('32767');
@@ -115,11 +115,11 @@ cast(col2 as smallint)
 32767
 insert into t8(col2) values ('-32769');
 select cast(col2 as smallint) from t8;
-Can't cast column from TEXT type to SMALLINT type because of one or more values in that column.
+data out of range: data type int, value '-32769'
 delete from t8 where col2 is not NULL;
 insert into t8(col2) values ('32768');
 select cast(col2 as smallint) from t8;
-Can't cast column from TEXT type to SMALLINT type because of one or more values in that column.
+data out of range: data type int, value '32768'
 delete from t8 where col2 is not NULL;
 insert into t8(col3) values ('-2147483648');
 insert into t8(col3) values ('2147483647');
@@ -133,11 +133,11 @@ cast(col3 as int)
 2147483647
 insert into t8(col3) values ('-2147483649');
 select cast(col3 as int) from t8;
-Can't cast column from TEXT type to INT type because of one or more values in that column.
+data out of range: data type int, value '-2147483649'
 delete from t8 where col3 is not NULL;
 insert into t8(col3) values ('2147483648');
 select cast(col3 as int) from t8;
-Can't cast column from TEXT type to INT type because of one or more values in that column.
+data out of range: data type int, value '2147483648'
 delete from t8 where col3 is not NULL;
 insert into t8(col4) values ('-9223372036854775808');
 insert into t8(col4) values ('9223372036854775807');
@@ -151,11 +151,11 @@ cast(col4 as bigint)
 9223372036854775807
 insert into t8(col4) values ('-9223372036854775809');
 select cast(col4 as bigint) from t8;
-Can't cast column from TEXT type to BIGINT type because of one or more values in that column.
+data out of range: data type int, value '-9223372036854775809'
 delete from t8 where col4 is not NULL;
 insert into t8(col4) values ('9223372036854775808');
 select cast(col4 as bigint) from t8;
-Can't cast column from TEXT type to BIGINT type because of one or more values in that column.
+data out of range: data type int, value '9223372036854775808'
 delete from t8 where col4 is not NULL;
 insert into t8(col5) values ('0');
 insert into t8(col5) values ('255');
@@ -169,11 +169,11 @@ cast(col5 as tinyint unsigned)
 255
 insert into t8(col5) values ('-1');
 select cast(col5 as tinyint unsigned) from t8;
-Can't cast column from TEXT type to TINYINT UNSIGNED type because of one or more values in that column.
+invalid argument cast to uint, bad value -1
 delete from t8 where col5 is not NULL;
 insert into t8(col5) values ('256');
 select cast(col5 as tinyint unsigned) from t8;
-Can't cast column from TEXT type to TINYINT UNSIGNED type because of one or more values in that column.
+data out of range: data type uint, value '256'
 delete from t8 where col5 is not NULL;
 insert into t8(col6) values ('0');
 insert into t8(col6) values ('65535');
@@ -187,11 +187,11 @@ cast(col6 as smallint unsigned)
 65535
 insert into t8(col6) values ('-1');
 select cast(col6 as smallint unsigned) from t8;
-Can't cast column from TEXT type to SMALLINT UNSIGNED type because of one or more values in that column.
+invalid argument cast to uint, bad value -1
 delete from t8 where col6 is not NULL;
 insert into t8(col6) values ('65636');
 select cast(col6 as smallint unsigned) from t8;
-Can't cast column from TEXT type to SMALLINT UNSIGNED type because of one or more values in that column.
+data out of range: data type uint, value '65636'
 delete from t8 where col6 is not NULL;
 insert into t8(col7) values ('0');
 insert into t8(col7) values ('4294967295');
@@ -205,11 +205,11 @@ cast(col7 as int unsigned)
 4294967295
 insert into t8(col7) values ('-1');
 select cast(col7 as int unsigned) from t8;
-Can't cast column from TEXT type to INT UNSIGNED type because of one or more values in that column.
+invalid argument cast to uint, bad value -1
 delete from t8 where col7 is not NULL;
 insert into t8(col7) values ('4294967296');
 select cast(col7 as int unsigned) from t8;
-Can't cast column from TEXT type to INT UNSIGNED type because of one or more values in that column.
+data out of range: data type uint, value '4294967296'
 delete from t8 where col7 is not NULL;
 insert into t8(col8) values ('0');
 insert into t8(col8) values ('18446744073709551615');
@@ -221,11 +221,11 @@ cast(col8 as bigint unsigned)
 18446744073709551615
 insert into t8(col8) values ('-1');
 select cast(col8 as bigint unsigned) from t8;
-Can't cast column from TEXT type to BIGINT UNSIGNED type because of one or more values in that column.
+invalid argument cast to uint, bad value -1
 delete from t8 where col8 is not NULL;
 insert into t8(col8) values ('18446744073709551616');
 select cast(col8 as bigint unsigned) from t8;
-Can't cast column from TEXT type to BIGINT UNSIGNED type because of one or more values in that column.
+data out of range: data type uint, value '18446744073709551616'
 delete from t8 where col8 is not NULL;
 insert into t8(col9) values ('1.234567890434546457475756856');
 insert into t8(col9) values ('111.222333344445556667777888899999000008998');
@@ -247,7 +247,7 @@ delete from t8 where col9 is not NULL;
 insert into  t8(col9) values ('1000000000000000000000000000000000000000');
 insert into  t8(col9) values (1000000000000000000000000000000000000000);
 select cast(col9 as float) from t8;
-Can't cast column from TEXT type to FLOAT type because of one or more values in that column.
+strconv.ParseFloat: parsing "1000000000000000000000000000000000000000": value out of range
 select cast(col9 as double) from t8;
 cast(col9 as double)
 1.0E39
@@ -374,7 +374,7 @@ find_in_set(bbb, b)
 delete from t9 where a is not NULL;
 insert into t9 values ('', 'abcd');
 insert into t1 values ('1111', '');
-Invalid table name: t1
+invalid input: insert table is invalid 't1'
 select empty(a),empty(b) from t9;
 empty(a)    empty(b)
 1    0
@@ -475,7 +475,7 @@ insert into t10 values (10, 'aabsdfsb', 'aabdsfsfsdb');
 insert into t10 values (10, 'aa,bb', 'aa,bb');
 insert into t10 values (10, 'aa%bb', 'aa%bb');
 select * from t10 where c=1;
-Can't cast column from TEXT type to BIGINT type because of one or more values in that column.
+invalid argument cast to int, bad value 
 update t10 set c=10000 where a=10;
 update t10 set c=true where a=10;
 update t10 set c='true' where a=10;
@@ -519,7 +519,7 @@ a    b    c
 1    1    1
 100    100    100
 select * from t10 where c=<'2';
-You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 27 near "<'2';";
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 27 near "<'2';";
 select * from t10 where c is NULL;
 a    b    c
 select * from t10 where c='';

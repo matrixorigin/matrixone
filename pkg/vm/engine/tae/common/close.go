@@ -15,12 +15,13 @@
 package common
 
 import (
-	"errors"
 	"sync/atomic"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
 var (
-	ErrClose = errors.New("closed")
+	ErrClose = moerr.NewInternalError("closed")
 )
 
 type Closable interface {

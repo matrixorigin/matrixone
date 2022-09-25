@@ -23,7 +23,7 @@ select cast('2000-01-01' as datetime(0));
 cast(2000-01-01 as datetime(0))
 2000-01-01 00:00:00
 select cast('2022-01-01 25:00:00' as datetime(0));
-Can't cast '2022-01-01 25:00:00' from VARCHAR type to DATETIME type.
+invalid input: invalid datatime value 2022-01-01 25:00:00
 select cast('2000-01-01' as datetime(0))+1;
 cast(2000-01-01 as datetime(0))+1
 20000101000001
@@ -331,3 +331,7 @@ select * from t1;
 a	b
 2022-01-01 00:00:00	apple
 2022-01-02 00:00:00	apple
+drop table t1;
+create table t1(a datetime);
+insert into t1 values("9999-12-31 23:59:59.999999");
+truncated type DATETIME value 9999-12-31 23:59:59.999999 for column a, 1

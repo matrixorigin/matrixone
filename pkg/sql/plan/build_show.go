@@ -20,10 +20,9 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/errno"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/errors"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -34,7 +33,7 @@ const MO_CATALOG_DB_NAME = "mo_catalog"
 
 func buildShowCreateDatabase(stmt *tree.ShowCreateDatabase, ctx CompilerContext) (*Plan, error) {
 	if !ctx.DatabaseExists(stmt.Name) {
-		return nil, errors.New(errno.InvalidDatabaseDefinition, fmt.Sprintf("database '%v' is not exist", stmt.Name))
+		return nil, moerr.NewBadDB(stmt.Name)
 	}
 
 	// get data from schema
@@ -59,7 +58,7 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 
 	_, tableDef := ctx.Resolve(dbName, tblName)
 	if tableDef == nil {
-		return nil, errors.New(errno.UndefinedTable, fmt.Sprintf("table '%v' doesn't exist", tblName))
+		return nil, moerr.NewBadDB(tblName)
 	}
 	if tableDef.TableType == catalog.SystemViewRel {
 		newStmt := tree.NewShowCreateView(tree.SetUnresolvedObjectName(1, [3]string{tblName, "", ""}))
@@ -178,7 +177,7 @@ func buildShowCreateView(stmt *tree.ShowCreateView, ctx CompilerContext) (*Plan,
 
 	_, tableDef := ctx.Resolve(dbName, tblName)
 	if tableDef == nil || tableDef.TableType != catalog.SystemViewRel {
-		return nil, errors.New(errno.UndefinedTable, fmt.Sprintf("view '%v' doesn't exist", tblName))
+		return nil, moerr.NewInvalidInput("show view '%s' is not a valid view", tblName)
 	}
 	sqlStr := "select \"%s\" as `View`, \"%s\" as `Create View`"
 	var viewStr string
@@ -208,7 +207,7 @@ func buildShowCreateView(stmt *tree.ShowCreateView, ctx CompilerContext) (*Plan,
 
 func buildShowDatabases(stmt *tree.ShowDatabases, ctx CompilerContext) (*Plan, error) {
 	if stmt.Like != nil && stmt.Where != nil {
-		return nil, errors.New(errno.SyntaxError, "like clause and where clause cannot exist at the same time")
+		return nil, moerr.NewSyntaxError("like clause and where clause cannot exist at the same time")
 	}
 	ddlType := plan.DataDefinition_SHOW_DATABASES
 	sql := fmt.Sprintf("SELECT datname `Database` FROM %s.mo_database", MO_CATALOG_DB_NAME)
@@ -229,20 +228,23 @@ func buildShowDatabases(stmt *tree.ShowDatabases, ctx CompilerContext) (*Plan, e
 
 func buildShowTables(stmt *tree.ShowTables, ctx CompilerContext) (*Plan, error) {
 	if stmt.Like != nil && stmt.Where != nil {
-		return nil, errors.New(errno.SyntaxError, "like clause and where clause cannot exist at the same time")
+		return nil, moerr.NewSyntaxError("like clause and where clause cannot exist at the same time")
 	}
 
 	if stmt.Full || stmt.Open {
-		return nil, errors.New(errno.SQLStatementNotYetComplete, fmt.Sprintf("unsupport statement: '%v'", tree.String(stmt, dialect.MYSQL)))
+		return nil, moerr.NewNYI("statement: '%v'", tree.String(stmt, dialect.MYSQL))
 	}
 
 	dbName := stmt.DBName
 	if stmt.DBName == "" {
 		dbName = ctx.DefaultDatabase()
 	} else if !ctx.DatabaseExists(dbName) {
-		return nil, errors.New(errno.InvalidDatabaseDefinition, fmt.Sprintf("database '%v' is not exist", dbName))
+		return nil, moerr.NewBadDB(dbName)
 	}
 
+	if dbName == "" {
+		return nil, moerr.NewNoDB()
+	}
 	ddlType := plan.DataDefinition_SHOW_TABLES
 	sql := fmt.Sprintf("SELECT relname as Tables_in_%s FROM %s.mo_tables WHERE reldatabase = '%s' and relname != '%s'", dbName, MO_CATALOG_DB_NAME, dbName, "%!%mo_increment_columns")
 
@@ -262,24 +264,24 @@ func buildShowTables(stmt *tree.ShowTables, ctx CompilerContext) (*Plan, error) 
 
 func buildShowColumns(stmt *tree.ShowColumns, ctx CompilerContext) (*Plan, error) {
 	if stmt.Like != nil && stmt.Where != nil {
-		return nil, errors.New(errno.SyntaxError, "like clause and where clause cannot exist at the same time")
+		return nil, moerr.NewSyntaxError("like clause and where clause cannot exist at the same time")
 	}
 
 	if stmt.Full {
-		return nil, errors.New(errno.SQLStatementNotYetComplete, fmt.Sprintf("unsupport statement: '%v'", tree.String(stmt, dialect.MYSQL)))
+		return nil, moerr.NewNotSupported("statement '%v'", tree.String(stmt, dialect.MYSQL))
 	}
 
-	dbName := stmt.DBName
-	if stmt.DBName == "" {
+	dbName := stmt.Table.GetDBName()
+	if dbName == "" {
 		dbName = ctx.DefaultDatabase()
 	} else if !ctx.DatabaseExists(dbName) {
-		return nil, errors.New(errno.InvalidDatabaseDefinition, fmt.Sprintf("database '%v' is not exist", dbName))
+		return nil, moerr.NewBadDB(dbName)
 	}
 
 	tblName := string(stmt.Table.ToTableName().ObjectName)
 	_, tableDef := ctx.Resolve(dbName, tblName)
 	if tableDef == nil {
-		return nil, errors.New(errno.UndefinedTable, fmt.Sprintf("table '%v' doesn't exist", tblName))
+		return nil, moerr.NewNoSuchTable(dbName, tblName)
 	}
 
 	ddlType := plan.DataDefinition_SHOW_COLUMNS
@@ -302,12 +304,12 @@ func buildShowColumns(stmt *tree.ShowColumns, ctx CompilerContext) (*Plan, error
 }
 
 func buildShowIndex(stmt *tree.ShowIndex, ctx CompilerContext) (*Plan, error) {
-	return nil, errors.New(errno.SQLStatementNotYetComplete, fmt.Sprintf("unsupport statement: '%v'", tree.String(stmt, dialect.MYSQL)))
+	return nil, moerr.NewNotSupported("statement: '%v'", tree.String(stmt, dialect.MYSQL))
 }
 
 func buildShowVariables(stmt *tree.ShowVariables, ctx CompilerContext) (*Plan, error) {
 	if stmt.Like != nil && stmt.Where != nil {
-		return nil, errors.New(errno.SyntaxError, "like clause and where clause cannot exist at the same time")
+		return nil, moerr.NewSyntaxError("like clause and where clause cannot exist at the same time")
 	}
 
 	builder := NewQueryBuilder(plan.Query_SELECT, ctx)
@@ -344,19 +346,19 @@ func buildShowVariables(stmt *tree.ShowVariables, ctx CompilerContext) (*Plan, e
 }
 
 func buildShowWarnings(stmt *tree.ShowWarnings, ctx CompilerContext) (*Plan, error) {
-	return nil, errors.New(errno.SQLStatementNotYetComplete, fmt.Sprintf("unsupport statement: '%v'", tree.String(stmt, dialect.MYSQL)))
+	return nil, moerr.NewNotSupported("statement: '%v'", tree.String(stmt, dialect.MYSQL))
 }
 
 func buildShowErrors(stmt *tree.ShowErrors, ctx CompilerContext) (*Plan, error) {
-	return nil, errors.New(errno.SQLStatementNotYetComplete, fmt.Sprintf("unsupport statement: '%v'", tree.String(stmt, dialect.MYSQL)))
+	return nil, moerr.NewNotSupported("statement: '%v'", tree.String(stmt, dialect.MYSQL))
 }
 
 func buildShowStatus(stmt *tree.ShowStatus, ctx CompilerContext) (*Plan, error) {
-	return nil, errors.New(errno.SQLStatementNotYetComplete, fmt.Sprintf("unsupport statement: '%v'", tree.String(stmt, dialect.MYSQL)))
+	return nil, moerr.NewNotSupported("statement: '%v'", tree.String(stmt, dialect.MYSQL))
 }
 
 func buildShowProcessList(stmt *tree.ShowProcessList, ctx CompilerContext) (*Plan, error) {
-	return nil, errors.New(errno.SQLStatementNotYetComplete, fmt.Sprintf("unsupport statement: '%v'", tree.String(stmt, dialect.MYSQL)))
+	return nil, moerr.NewNotSupported("statement: '%v'", tree.String(stmt, dialect.MYSQL))
 }
 
 func returnByRewriteSQL(ctx CompilerContext, sql string, ddlType plan.DataDefinition_DdlType) (*Plan, error) {
@@ -412,7 +414,7 @@ func getRewriteSQLStmt(sql string) (tree.Statement, error) {
 		return nil, err
 	}
 	if len(newStmts) != 1 {
-		return nil, errors.New(errno.InvalidTableDefinition, "rewrite sql is not one statement")
+		return nil, moerr.NewInvalidInput("rewrite can only contain one statement, %d provided", len(newStmts))
 	}
 	return newStmts[0], nil
 }

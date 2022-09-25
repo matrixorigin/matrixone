@@ -16,7 +16,6 @@ package db
 
 import (
 	"bytes"
-	"errors"
 	"fmt"
 	"math/rand"
 	"sync"
@@ -24,6 +23,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
@@ -50,7 +50,7 @@ var deal *catalog.Schema
 var repertory *catalog.Schema
 var app1Conf *APP1Conf
 
-var errNotEnoughRepertory = errors.New("not enough repertory")
+var errNotEnoughRepertory = moerr.NewInternalError("not enough repertory")
 
 type APP1Conf struct {
 	Users         int
@@ -269,14 +269,14 @@ func (c *APP1Client) GetGoodRepetory(goodId uint64) (id *common.ID, offset uint3
 			found = true
 			offset = uint32(row)
 			count = cntv.(uint64)
-			return fmt.Errorf("stop iteration")
+			return moerr.NewInternalError("stop iteration")
 		}, nil)
 		if found {
 			return
 		}
 		blockIt.Next()
 	}
-	err = catalog.ErrNotFound
+	err = moerr.NewNotFound()
 	return
 }
 
@@ -325,13 +325,13 @@ func (g *APP1Goods) String() string {
 
 func MockWarehouses(dbName string, num uint8, txn txnif.AsyncTxn) (err error) {
 	db, err := txn.GetDatabase(dbName)
-	if err == catalog.ErrNotFound {
+	if moerr.IsMoErrCode(err, moerr.ErrNotFound) {
 		if db, err = txn.CreateDatabase(dbName); err != nil {
 			return
 		}
 	}
 	rel, err := db.GetRelationByName(wareHouse.Name)
-	if err == catalog.ErrNotFound {
+	if moerr.IsMoErrCode(err, moerr.ErrNotFound) {
 		if rel, err = db.CreateRelation(wareHouse); err != nil {
 			return
 		}
@@ -350,7 +350,7 @@ func GetWarehouseRelation(dbName string, txn txnif.AsyncTxn) (rel handle.Relatio
 
 func GetOrCreateDatabase(name string, txn txnif.AsyncTxn) handle.Database {
 	db, err := txn.GetDatabase(name)
-	if err == catalog.ErrNotFound {
+	if moerr.IsMoErrCode(err, moerr.ErrNotFound) {
 		if db, err = txn.CreateDatabase(name); err != nil {
 			panic(err)
 		}

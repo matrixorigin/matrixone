@@ -17,16 +17,18 @@ package tables
 import (
 	"bytes"
 	"fmt"
+	"sync"
+	"sync/atomic"
+	"time"
+
 	"github.com/RoaringBitmap/roaring"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/compute"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/stl"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
-	"sync"
-	"sync/atomic"
-	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/indexwrapper"
@@ -72,7 +74,8 @@ type dataBlock struct {
 	colFiles  map[int]common.IRWFile
 	bufMgr    base.INodeManager
 	scheduler tasks.TaskScheduler
-	index     indexwrapper.Index
+	indexes   map[int]indexwrapper.Index
+	pkIndex   indexwrapper.Index // a shortcut, nil if no pk column
 	mvcc      *updates.MVCCHandle
 	score     *statBlock
 	ckpTs     atomic.Value
@@ -83,8 +86,20 @@ type dataBlock struct {
 func newBlock(meta *catalog.BlockEntry, segFile file.Segment, bufMgr base.INodeManager, scheduler tasks.TaskScheduler) *dataBlock {
 	colCnt := len(meta.GetSchema().ColDefs)
 	indexCnt := make(map[int]int)
-	if meta.GetSchema().HasSortKey() {
-		indexCnt[meta.GetSchema().SortKey.Defs[0].Idx] = 2
+	// every column has a zonemap
+	schema := meta.GetSchema()
+	for _, colDef := range schema.ColDefs {
+		if colDef.IsPhyAddr() {
+			continue
+		}
+		indexCnt[colDef.Idx] = 1
+	}
+	// ATTENTION: COMPOUNDPK
+	// pk column has another bloomfilter
+	pkIdx := -1024
+	if schema.HasPK() {
+		pkIdx = schema.GetSingleSortKeyIdx()
+		indexCnt[pkIdx] += 1
 	}
 	file, err := segFile.OpenBlock(meta.GetID(), colCnt, indexCnt)
 	if err != nil {
@@ -111,6 +126,7 @@ func newBlock(meta *catalog.BlockEntry, segFile file.Segment, bufMgr base.INodeM
 		colFiles:  colFiles,
 		mvcc:      updates.NewMVCCHandle(meta),
 		scheduler: scheduler,
+		indexes:   make(map[int]indexwrapper.Index),
 		bufMgr:    bufMgr,
 		prefix:    meta.MakeKey(),
 	}
@@ -120,13 +136,23 @@ func newBlock(meta *catalog.BlockEntry, segFile file.Segment, bufMgr base.INodeM
 		block.mvcc.SetDeletesListener(block.ABlkApplyDelete)
 		node = newNode(bufMgr, block, file)
 		block.node = node
-		if meta.GetSchema().HasPK() {
-			block.index = indexwrapper.NewMutableIndex(meta.GetSchema().GetSortKeyType())
+		// if this block is created to receive data, create mutable index first
+		for _, colDef := range schema.ColDefs {
+			if colDef.IsPhyAddr() {
+				continue
+			}
+			if colDef.Idx == pkIdx {
+				block.indexes[colDef.Idx] = indexwrapper.NewPkMutableIndex(colDef.Type)
+				block.pkIndex = block.indexes[colDef.Idx]
+			} else {
+				block.indexes[colDef.Idx] = indexwrapper.NewMutableIndex(colDef.Type)
+			}
 		}
 		block.state = BS_Appendable
 	} else {
 		block.mvcc.SetDeletesListener(block.BlkApplyDelete)
-		block.index = indexwrapper.NewImmutableIndex()
+		// if this block is created to do compact or merge, no need to new index
+		// if this block is loaded from storage, ReplayIndex will create index
 	}
 	block.mvcc.SetMaxVisible(ts)
 	block.ckpTs.Store(ts)
@@ -192,8 +218,8 @@ func (blk *dataBlock) Destroy() (err error) {
 		file.Unref()
 	}
 	blk.colFiles = make(map[int]common.IRWFile)
-	if blk.index != nil {
-		if err = blk.index.Destroy(); err != nil {
+	for _, index := range blk.indexes {
+		if err = index.Destroy(); err != nil {
 			return
 		}
 	}
@@ -486,7 +512,7 @@ func (blk *dataBlock) ResolveABlkColumnMVCCData(
 
 	view = model.NewColumnView(ts, colIdx)
 	var data containers.Vector
-	data, err = blk.node.GetColumnDataCopy(maxRow, colIdx, buffer)
+	data, err = blk.node.GetColumnDataCopy(0, maxRow, colIdx, buffer)
 	if err != nil {
 		return
 	}
@@ -508,7 +534,7 @@ func (blk *dataBlock) ResolveABlkColumnMVCCData(
 
 func (blk *dataBlock) Update(txn txnif.AsyncTxn, row uint32, colIdx uint16, v any) (node txnif.UpdateNode, err error) {
 	if blk.meta.GetSchema().PhyAddrKey.Idx == int(colIdx) {
-		err = data.ErrUpdatePhyAddrKey
+		err = moerr.NewTAEError("update physical addr key")
 		return
 	}
 	return blk.updateWithFineLock(txn, row, colIdx, v)
@@ -586,7 +612,7 @@ func (blk *dataBlock) GetValue(txn txnif.AsyncTxn, row, col int) (v any, err err
 		chain.RLock()
 		v, err = chain.GetValueLocked(uint32(row), ts)
 		chain.RUnlock()
-		if err == txnif.ErrTxnInternal {
+		if moerr.IsMoErrCode(err, moerr.ErrTxnError) {
 			blk.mvcc.RUnlock()
 			return
 		}
@@ -595,7 +621,7 @@ func (blk *dataBlock) GetValue(txn txnif.AsyncTxn, row, col int) (v any, err err
 			err = nil
 		}
 	} else {
-		err = data.ErrNotFound
+		err = moerr.NewNotFound()
 	}
 	blk.mvcc.RUnlock()
 	if v != nil || err != nil {
@@ -625,9 +651,9 @@ func (blk *dataBlock) LoadColumnData(
 func (blk *dataBlock) ablkGetByFilter(ts types.TS, filter *handle.Filter) (offset uint32, err error) {
 	blk.mvcc.RLock()
 	defer blk.mvcc.RUnlock()
-	offset, err = blk.index.GetActiveRow(filter.Val)
+	offset, err = blk.pkIndex.GetActiveRow(filter.Val)
 	// Unknow err. return fast
-	if err != nil && err != data.ErrNotFound {
+	if err != nil && !moerr.IsMoErrCode(err, moerr.ErrNotFound) {
 		return
 	}
 
@@ -649,7 +675,7 @@ func (blk *dataBlock) ablkGetByFilter(ts types.TS, filter *handle.Filter) (offse
 				return
 			}
 			if deleted {
-				err = data.ErrNotFound
+				err = moerr.NewNotFound()
 			}
 			return
 		}
@@ -657,21 +683,21 @@ func (blk *dataBlock) ablkGetByFilter(ts types.TS, filter *handle.Filter) (offse
 	err = nil
 
 	// Check delete map
-	deleted, existed := blk.index.IsKeyDeleted(filter.Val, ts)
+	deleted, existed := blk.pkIndex.IsKeyDeleted(filter.Val, ts)
 	if !existed || deleted {
-		err = data.ErrNotFound
+		err = moerr.NewNotFound()
 		// panic(fmt.Sprintf("%v:%v %v:%s", existed, deleted, filter.Val, blk.index.String()))
 	}
 	return
 }
 
 func (blk *dataBlock) blkGetByFilter(ts types.TS, filter *handle.Filter) (offset uint32, err error) {
-	err = blk.index.Dedup(filter.Val)
+	err = blk.pkIndex.Dedup(filter.Val)
 	if err == nil {
-		err = data.ErrNotFound
+		err = moerr.NewNotFound()
 		return
 	}
-	if err != data.ErrPossibleDuplicate {
+	if !moerr.IsMoErrCode(err, moerr.ErrTAEPossibleDuplicate) {
 		return
 	}
 	err = nil
@@ -682,7 +708,7 @@ func (blk *dataBlock) blkGetByFilter(ts types.TS, filter *handle.Filter) (offset
 	defer sortKey.Close()
 	off, existed := compute.GetOffsetByVal(sortKey, filter.Val, nil)
 	if !existed {
-		err = data.ErrNotFound
+		err = moerr.NewNotFound()
 		return
 	}
 	offset = uint32(off)
@@ -694,7 +720,7 @@ func (blk *dataBlock) blkGetByFilter(ts types.TS, filter *handle.Filter) (offset
 		return
 	}
 	if deleted {
-		err = data.ErrNotFound
+		err = moerr.NewNotFound()
 	}
 	return
 }
@@ -742,9 +768,9 @@ func (blk *dataBlock) ABlkApplyDelete(deleted uint64, gen common.RowGen, ts type
 		for gen.HasNext() {
 			row = gen.Next()
 			v := vecview.Get(int(row))
-			currRow, err = blk.index.GetActiveRow(v)
+			currRow, err = blk.pkIndex.GetActiveRow(v)
 			if err != nil || currRow == row {
-				if err = blk.index.Delete(v, ts); err != nil {
+				if err = blk.pkIndex.Delete(v, ts); err != nil {
 					return
 				}
 			}
@@ -775,9 +801,9 @@ func (blk *dataBlock) ABlkApplyDelete(deleted uint64, gen common.RowGen, ts type
 				vals[i] = vecs[i].Get(int(row))
 			}
 			v := model.EncodeTypedVals(&w, vals...)
-			currRow, err = blk.index.GetActiveRow(v)
+			currRow, err = blk.pkIndex.GetActiveRow(v)
 			if err != nil || currRow == row {
-				if err = blk.index.Delete(v, ts); err != nil {
+				if err = blk.pkIndex.Delete(v, ts); err != nil {
 					return
 				}
 			}
@@ -792,7 +818,7 @@ func (blk *dataBlock) BatchDedup(txn txnif.AsyncTxn, pks containers.Vector, rowm
 		ts := txn.GetStartTS()
 		blk.mvcc.RLock()
 		defer blk.mvcc.RUnlock()
-		keyselects, err := blk.index.BatchDedup(pks, rowmask)
+		keyselects, err := blk.pkIndex.BatchDedup(pks, rowmask)
 		// If duplicated with active rows
 		// TODO: index should store ts to identify w-w
 		if err != nil {
@@ -800,25 +826,25 @@ func (blk *dataBlock) BatchDedup(txn txnif.AsyncTxn, pks containers.Vector, rowm
 		}
 		// Check with deletes map
 		// If txn start ts is bigger than deletes max ts, skip scanning deletes
-		if ts.Greater(blk.index.GetMaxDeleteTS()) {
+		if ts.Greater(blk.pkIndex.GetMaxDeleteTS()) {
 			return err
 		}
 		it := keyselects.Iterator()
 		for it.HasNext() {
 			row := it.Next()
 			key := pks.Get(int(row))
-			if blk.index.HasDeleteFrom(key, ts) {
-				err = txnif.ErrTxnWWConflict
+			if blk.pkIndex.HasDeleteFrom(key, ts) {
+				err = moerr.NewTxnWWConflict()
 				break
 			}
 		}
 
 		return err
 	}
-	if blk.index == nil {
+	if blk.indexes == nil {
 		panic("index not found")
 	}
-	keyselects, err := blk.index.BatchDedup(pks, rowmask)
+	keyselects, err := blk.pkIndex.BatchDedup(pks, rowmask)
 	if err == nil {
 		return
 	}
@@ -835,7 +861,7 @@ func (blk *dataBlock) BatchDedup(txn txnif.AsyncTxn, pks containers.Vector, rowm
 	defer sortKey.Close()
 	deduplicate := func(v any, _ int) error {
 		if _, existed := compute.GetOffsetByVal(sortKey.GetData(), v, sortKey.DeleteMask); existed {
-			return data.ErrDuplicate
+			return moerr.NewDuplicate()
 		}
 		return nil
 	}
@@ -878,4 +904,34 @@ func (blk *dataBlock) GetSortColumns(schema *catalog.Schema, data *containers.Ba
 		vs[i] = data.Vecs[schema.SortKey.Defs[i].Idx]
 	}
 	return vs
+}
+
+func (blk *dataBlock) CollectAppendInRange(start, end types.TS) (*containers.Batch, error) {
+	if blk.meta.IsAppendable() {
+		return blk.collectAblkAppendInRange(start, end)
+	}
+	return nil, nil
+}
+
+func (blk *dataBlock) collectAblkAppendInRange(start, end types.TS) (*containers.Batch, error) {
+	minRow, maxRow, commitTSVec, abortVec := blk.mvcc.CollectAppend(start, end)
+	batch, err := blk.node.GetDataCopy(minRow, maxRow)
+	if err != nil {
+		return nil, err
+	}
+	batch.AddVector(catalog.AttrCommitTs, commitTSVec)
+	batch.AddVector(catalog.AttrAborted, abortVec)
+	return batch, nil
+}
+
+func (blk *dataBlock) CollectDeleteInRange(start, end types.TS) (*containers.Batch, error) {
+	rowID, ts, abort := blk.mvcc.CollectDelete(start, end)
+	if rowID == nil {
+		return nil, nil
+	}
+	batch := containers.NewBatch()
+	batch.AddVector(catalog.PhyAddrColumnName, rowID)
+	batch.AddVector(catalog.AttrCommitTs, ts)
+	batch.AddVector(catalog.AttrAborted, abort)
+	return batch, nil
 }

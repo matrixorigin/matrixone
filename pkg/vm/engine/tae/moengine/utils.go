@@ -15,7 +15,6 @@
 package moengine
 
 import (
-	"fmt"
 	"strconv"
 
 	"github.com/RoaringBitmap/roaring/roaring64"
@@ -27,6 +26,7 @@ import (
 
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -350,7 +350,7 @@ func UpdateValue(col *vector.Vector, row uint32, val any) {
 	case types.T_varchar, types.T_char, types.T_json, types.T_blob:
 		GenericUpdateBytes(col, row, val)
 	default:
-		panic(fmt.Errorf("%v not supported", col.Typ))
+		panic(moerr.NewInternalError("%v not supported", col.Typ))
 	}
 }
 
@@ -541,7 +541,7 @@ func MOToVector(v *vector.Vector, nullable bool) containers.Vector {
 			bs.Data = types.EncodeFixedSlice(v.Col.([]types.Rowid), types.RowidSize)
 
 		default:
-			panic(any(fmt.Errorf("%s not supported", v.Typ.String())))
+			panic(any(moerr.NewInternalError("%s not supported", v.Typ.String())))
 		}
 	}
 	if v.Nsp.Np != nil {
@@ -721,7 +721,7 @@ func MOToVectorTmp(v *vector.Vector, nullable bool) containers.Vector {
 			}
 		}
 	default:
-		panic(any(fmt.Errorf("%s not supported", v.Typ.String())))
+		panic(any(moerr.NewInternalError("%s not supported", v.Typ.String())))
 	}
 	if v.Nsp.Np != nil {
 		np := &roaring64.Bitmap{}
@@ -732,54 +732,4 @@ func MOToVectorTmp(v *vector.Vector, nullable bool) containers.Vector {
 	}
 	vec.ResetWithData(bs, nil)
 	return vec
-}
-
-func CopyToMoVector(vec containers.Vector) *vector.Vector {
-	return VectorsToMO(vec)
-}
-
-// XXX VectorsToMo and CopyToMoVector.   The old impl. will move
-// vec.Data to movec.Data and keeps on sharing.   This is way too
-// fragile and error prone.
-//
-// Not just copy it.   Until profiler says I need to work harder.
-func VectorsToMO(vec containers.Vector) *vector.Vector {
-	mov := vector.NewOriginal(vec.GetType())
-	data := vec.Data()
-	typ := vec.GetType()
-	mov.Typ = typ
-	if vec.HasNull() {
-		mov.Nsp.Np = bitmap.New(vec.Length())
-		mov.Nsp.Np.AddMany(vec.NullMask().ToArray())
-		//mov.Nsp.Np = vec.NullMask()
-	}
-
-	if vec.GetType().IsVarlen() {
-		bs := vec.Bytes()
-		nbs := len(bs.Offset)
-		bsv := make([][]byte, nbs)
-		for i := 0; i < nbs; i++ {
-			bsv[i] = bs.Data[bs.Offset[i] : bs.Offset[i]+bs.Length[i]]
-		}
-		vector.AppendBytes(mov, bsv, nil)
-	} else if vec.GetType().IsTuple() {
-		cnt := types.DecodeInt32(data)
-		if cnt != 0 {
-			if err := types.Decode(data, &mov.Col); err != nil {
-				panic(any(err))
-			}
-		}
-	} else {
-		vector.AppendFixedRaw(mov, data)
-	}
-
-	return mov
-}
-
-func CopyToMoVectors(vecs []containers.Vector) []*vector.Vector {
-	movecs := make([]*vector.Vector, len(vecs))
-	for i := range movecs {
-		movecs[i] = CopyToMoVector(vecs[i])
-	}
-	return movecs
 }

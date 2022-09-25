@@ -18,13 +18,14 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
 // LocalFS is a FileService implementation backed by local file system
@@ -80,7 +81,7 @@ func NewLocalFS(
 			// not empty, check sentinel file
 			_, err := os.Stat(filepath.Join(rootPath, sentinelFileName))
 			if os.IsNotExist(err) {
-				return nil, fmt.Errorf("%s is not a file service dir", rootPath)
+				return nil, moerr.NewInternalError("%s is not a file service dir", rootPath)
 			} else if err != nil {
 				return nil, err
 			}
@@ -119,7 +120,7 @@ func (l *LocalFS) Write(ctx context.Context, vector IOVector) error {
 	_, err = os.Stat(nativePath)
 	if err == nil {
 		// existed
-		return ErrFileExisted
+		return moerr.NewFileAlreadyExists(path.File)
 	}
 
 	return l.write(ctx, vector)
@@ -158,7 +159,7 @@ func (l *LocalFS) write(ctx context.Context, vector IOVector) error {
 		return err
 	}
 	if n != size {
-		return ErrSizeNotMatch
+		return moerr.NewSizeNotMatch(path.File)
 	}
 	if err := f.Sync(); err != nil {
 		return err
@@ -189,7 +190,7 @@ func (l *LocalFS) write(ctx context.Context, vector IOVector) error {
 func (l *LocalFS) Read(ctx context.Context, vector *IOVector) error {
 
 	if len(vector.Entries) == 0 {
-		return ErrEmptyVector
+		return moerr.NewEmptyVector()
 	}
 
 	if l.memCache == nil {
@@ -214,7 +215,7 @@ func (l *LocalFS) read(ctx context.Context, vector *IOVector) error {
 
 	file, err := os.Open(nativePath)
 	if os.IsNotExist(err) {
-		return ErrFileNotFound
+		return moerr.NewFileNotFound(path.File)
 	}
 	if err != nil {
 		return nil
@@ -223,7 +224,7 @@ func (l *LocalFS) read(ctx context.Context, vector *IOVector) error {
 
 	for i, entry := range vector.Entries {
 		if entry.Size == 0 {
-			return ErrEmptyRange
+			return moerr.NewEmptyRange(path.File)
 		}
 
 		if entry.ignore {
@@ -256,7 +257,7 @@ func (l *LocalFS) read(ctx context.Context, vector *IOVector) error {
 				vector.Entries[i].Object = obj
 				vector.Entries[i].ObjectSize = size
 				if cr.N != entry.Size {
-					return ErrUnexpectedEOF
+					return moerr.NewUnexpectedEOF(path.File)
 				}
 
 			} else {
@@ -265,14 +266,14 @@ func (l *LocalFS) read(ctx context.Context, vector *IOVector) error {
 					return err
 				}
 				if n != int64(entry.Size) {
-					return ErrUnexpectedEOF
+					return moerr.NewUnexpectedEOF(path.File)
 				}
 			}
 
 		} else if entry.ReadCloserForRead != nil {
 			file, err := os.Open(nativePath)
 			if os.IsNotExist(err) {
-				return ErrFileNotFound
+				return moerr.NewFileNotFound(path.File)
 			}
 			if err != nil {
 				return nil
@@ -343,7 +344,7 @@ func (l *LocalFS) read(ctx context.Context, vector *IOVector) error {
 					return err
 				}
 				if int64(n) != entry.Size {
-					return ErrUnexpectedEOF
+					return moerr.NewUnexpectedEOF(path.File)
 				}
 			}
 
@@ -416,7 +417,7 @@ func (l *LocalFS) Delete(ctx context.Context, filePath string) error {
 
 	_, err = os.Stat(nativePath)
 	if os.IsNotExist(err) {
-		return ErrFileNotFound
+		return moerr.NewFileNotFound(path.File)
 	}
 	if err != nil {
 		return err
@@ -522,7 +523,7 @@ func (l *LocalFS) NewMutator(filePath string) (Mutator, error) {
 	nativePath := l.toNativeFilePath(path.File)
 	f, err := os.OpenFile(nativePath, os.O_RDWR, 0644)
 	if os.IsNotExist(err) {
-		return nil, ErrFileNotFound
+		return nil, moerr.NewFileNotFound(path.File)
 	}
 	return &LocalFSMutator{
 		osFile:           f,
@@ -562,8 +563,8 @@ func (l *LocalFSMutator) mutate(ctx context.Context, baseOffset int64, entries .
 			if err != nil {
 				return err
 			}
-			if n != entry.Size {
-				return ErrSizeNotMatch
+			if int64(n) != entry.Size {
+				return moerr.NewSizeNotMatch("")
 			}
 
 		} else {
@@ -573,10 +574,9 @@ func (l *LocalFSMutator) mutate(ctx context.Context, baseOffset int64, entries .
 				return err
 			}
 			if int64(n) != entry.Size {
-				return ErrSizeNotMatch
+				return moerr.NewSizeNotMatch("")
 			}
 		}
-
 	}
 
 	return nil

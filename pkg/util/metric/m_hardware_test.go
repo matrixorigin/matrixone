@@ -15,10 +15,10 @@
 package metric
 
 import (
-	"errors"
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	prom "github.com/prometheus/client_golang/prometheus"
 	dto "github.com/prometheus/client_model/go"
 	. "github.com/smartystreets/goconvey/convey"
@@ -44,7 +44,7 @@ func TestHardwareCPU(t *testing.T) {
 		deltaBusy := mf2[1].Metric[0].Counter.GetValue() - mf[1].Metric[0].Counter.GetValue()
 		deltaPercent := mf2[0].Metric[0].Gauge.GetValue()
 
-		So(deltaBusy*100, ShouldAlmostEqual, deltaPercent, 20 /* 20% diff will be ok anyway */)
+		So(deltaBusy*100, ShouldAlmostEqual, deltaPercent, 40 /* 40% diff will be ok anyway */)
 	})
 }
 
@@ -70,7 +70,7 @@ func (c errorMetric) Desc() *prom.Desc {
 }
 
 func (c errorMetric) Metric(_ *statCaches) (prom.Metric, error) {
-	return nil, errors.New("Something went wrong")
+	return nil, moerr.NewInternalError("Something went wrong")
 }
 
 func TestHardwareError(t *testing.T) {

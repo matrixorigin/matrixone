@@ -16,6 +16,7 @@ package logservice
 
 import (
 	"context"
+	"go.uber.org/zap"
 	"reflect"
 	"sync"
 	"time"
@@ -47,7 +48,7 @@ func GetShardInfo(address string, shardID uint64) (ShardInfo, bool, error) {
 	}
 	defer func() {
 		if err := cc.Close(); err != nil {
-			plog.Errorf("failed to close client %v", err)
+			logger.Error("failed to close client", zap.Error(err))
 		}
 	}()
 	req := pb.Request{
@@ -99,7 +100,7 @@ func GetShardInfo(address string, shardID uint64) (ShardInfo, bool, error) {
 func (s *Service) getShardInfo(shardID uint64) (pb.ShardInfoQueryResult, bool) {
 	r, ok := s.store.nh.GetNodeHostRegistry()
 	if !ok {
-		panic(moerr.NewError(moerr.INVALID_STATE, "gossip registry not enabled"))
+		panic(moerr.NewInvalidState("gossip registry not enabled"))
 	}
 	shard, ok := r.GetShardInfo(shardID)
 	if !ok {

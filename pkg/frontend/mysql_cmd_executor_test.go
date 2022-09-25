@@ -45,13 +45,28 @@ func init() {
 	trace.Init(context.Background(), trace.EnableTracer(false))
 }
 
+func mockRecordStatement(ctx context.Context) (context.Context, *gostub.Stubs) {
+	stm := &trace.StatementInfo{}
+	ctx = trace.ContextWithStatement(ctx, stm)
+	stubs := gostub.Stub(&RecordStatement, func(context.Context, *Session, *process.Process, ComputationWrapper, time.Time) context.Context {
+		return ctx
+	})
+	return ctx, stubs
+}
+
 func Test_mce(t *testing.T) {
 	ctx := context.TODO()
 	convey.Convey("boot mce succ", t, func() {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 
+		ctx, rsStubs := mockRecordStatement(ctx)
+		defer rsStubs.Reset()
+
 		eng := mock_frontend.NewMockEngine(ctrl)
+		eng.EXPECT().New(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+		eng.EXPECT().Commit(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+		eng.EXPECT().Rollback(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 		eng.EXPECT().Hints().Return(engine.Hints{
 			CommitOrRollbackTimeout: time.Second,
 		}).AnyTimes()
@@ -75,6 +90,7 @@ func Test_mce(t *testing.T) {
 			t.Error(err)
 		}
 		use_t.EXPECT().GetAst().Return(stmts[0]).AnyTimes()
+		use_t.EXPECT().RecordExecPlan(ctx).Return(nil).AnyTimes()
 
 		runner := mock_frontend.NewMockComputationRunner(ctrl)
 		runner.EXPECT().Run(gomock.Any()).Return(nil).AnyTimes()
@@ -90,6 +106,7 @@ func Test_mce(t *testing.T) {
 		create_1.EXPECT().Compile(gomock.Any(), gomock.Any(), gomock.Any()).Return(runner, nil).AnyTimes()
 		create_1.EXPECT().Run(gomock.Any()).Return(nil).AnyTimes()
 		create_1.EXPECT().GetAffectedRows().Return(uint64(0)).AnyTimes()
+		create_1.EXPECT().RecordExecPlan(ctx).Return(nil).AnyTimes()
 
 		select_1 := mock_frontend.NewMockComputationWrapper(ctrl)
 		stmts, err = parsers.Parse(dialect.MYSQL, "select a,b,c from A")
@@ -101,6 +118,7 @@ func Test_mce(t *testing.T) {
 		select_1.EXPECT().SetDatabaseName(gomock.Any()).Return(nil).AnyTimes()
 		select_1.EXPECT().Compile(gomock.Any(), gomock.Any(), gomock.Any()).Return(runner, nil).AnyTimes()
 		select_1.EXPECT().Run(gomock.Any()).Return(nil).AnyTimes()
+		select_1.EXPECT().RecordExecPlan(ctx).Return(nil).AnyTimes()
 
 		cola := &MysqlColumn{}
 		cola.SetName("a")
@@ -181,6 +199,7 @@ func Test_mce(t *testing.T) {
 			select_2.EXPECT().Run(gomock.Any()).Return(nil).AnyTimes()
 			select_2.EXPECT().GetAffectedRows().Return(uint64(0)).AnyTimes()
 			select_2.EXPECT().GetColumns().Return(self_handle_sql_columns[i], nil).AnyTimes()
+			select_2.EXPECT().RecordExecPlan(ctx).Return(nil).AnyTimes()
 			cws = append(cws, select_2)
 		}
 
@@ -270,6 +289,9 @@ func Test_mce_selfhandle(t *testing.T) {
 		defer ctrl.Finish()
 
 		eng := mock_frontend.NewMockEngine(ctrl)
+		eng.EXPECT().New(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+		eng.EXPECT().Commit(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+		eng.EXPECT().Rollback(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 		eng.EXPECT().Hints().Return(engine.Hints{
 			CommitOrRollbackTimeout: time.Second,
 		}).AnyTimes()
@@ -280,7 +302,7 @@ func Test_mce_selfhandle(t *testing.T) {
 				if cnt == 1 {
 					return nil, nil
 				}
-				return nil, fmt.Errorf("fake error")
+				return nil, moerr.NewInternalError("fake error")
 			},
 		).AnyTimes()
 
@@ -322,7 +344,13 @@ func Test_mce_selfhandle(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 
+		ctx, rsStubs := mockRecordStatement(ctx)
+		defer rsStubs.Reset()
+
 		eng := mock_frontend.NewMockEngine(ctrl)
+		eng.EXPECT().New(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+		eng.EXPECT().Commit(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+		eng.EXPECT().Rollback(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 		eng.EXPECT().Database(ctx, gomock.Any(), nil).Return(nil, nil).AnyTimes()
 		txnClient := mock_frontend.NewMockTxnClient(ctrl)
 
@@ -426,6 +454,9 @@ func Test_getDataFromPipeline(t *testing.T) {
 		defer ctrl.Finish()
 
 		eng := mock_frontend.NewMockEngine(ctrl)
+		eng.EXPECT().New(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+		eng.EXPECT().Commit(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+		eng.EXPECT().Rollback(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 		eng.EXPECT().Database(ctx, gomock.Any(), nil).Return(nil, nil).AnyTimes()
 		txnClient := mock_frontend.NewMockTxnClient(ctrl)
 
@@ -504,6 +535,9 @@ func Test_getDataFromPipeline(t *testing.T) {
 		defer ctrl.Finish()
 
 		eng := mock_frontend.NewMockEngine(ctrl)
+		eng.EXPECT().New(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+		eng.EXPECT().Commit(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+		eng.EXPECT().Rollback(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 		ioses := mock_frontend.NewMockIOSession(ctrl)
 		txnClient := mock_frontend.NewMockTxnClient(ctrl)
 
@@ -646,11 +680,8 @@ func allocTestBatch(attrName []string, tt []types.Type, batchSize int) *batch.Ba
 
 func Test_mysqlerror(t *testing.T) {
 	convey.Convey("mysql error", t, func() {
-		err := moerr.New(moerr.ER_BAD_DB_ERROR, "T")
-		convey.So(err.Code, convey.ShouldEqual, moerr.ER_BAD_DB_ERROR)
-
-		err2 := moerr.New(65535, "T")
-		convey.So(err2.Code, convey.ShouldEqual, moerr.ErrEnd)
+		err := moerr.NewBadDB("T")
+		convey.So(err.MySQLCode(), convey.ShouldEqual, moerr.ER_BAD_DB_ERROR)
 	})
 }
 
@@ -661,6 +692,9 @@ func Test_handleSelectVariables(t *testing.T) {
 		defer ctrl.Finish()
 
 		eng := mock_frontend.NewMockEngine(ctrl)
+		eng.EXPECT().New(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+		eng.EXPECT().Commit(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+		eng.EXPECT().Rollback(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 		eng.EXPECT().Database(ctx, gomock.Any(), nil).Return(nil, nil).AnyTimes()
 		txnClient := mock_frontend.NewMockTxnClient(ctrl)
 
@@ -701,6 +735,9 @@ func Test_handleShowVariables(t *testing.T) {
 		defer ctrl.Finish()
 
 		eng := mock_frontend.NewMockEngine(ctrl)
+		eng.EXPECT().New(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+		eng.EXPECT().Commit(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+		eng.EXPECT().Rollback(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 		eng.EXPECT().Database(ctx, gomock.Any(), nil).Return(nil, nil).AnyTimes()
 		txnClient := mock_frontend.NewMockTxnClient(ctrl)
 
@@ -758,6 +795,9 @@ func Test_handleShowColumns(t *testing.T) {
 		ioses.EXPECT().Write(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 
 		eng := mock_frontend.NewMockEngine(ctrl)
+		eng.EXPECT().New(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+		eng.EXPECT().Commit(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+		eng.EXPECT().Rollback(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 		txnClient := mock_frontend.NewMockTxnClient(ctrl)
 		pu, err := getParameterUnit("test/system_vars_config.toml", eng, txnClient)
 		if err != nil {
@@ -791,6 +831,9 @@ func runTestHandle(funName string, t *testing.T, handleFun func(*MysqlCmdExecuto
 		defer ctrl.Finish()
 
 		eng := mock_frontend.NewMockEngine(ctrl)
+		eng.EXPECT().New(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+		eng.EXPECT().Commit(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+		eng.EXPECT().Rollback(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 		eng.EXPECT().Database(ctx, gomock.Any(), nil).Return(nil, nil).AnyTimes()
 		txnClient := mock_frontend.NewMockTxnClient(ctrl)
 
@@ -856,7 +899,13 @@ func Test_CMD_FIELD_LIST(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 
+		ctx, rsStubs := mockRecordStatement(ctx)
+		defer rsStubs.Reset()
+
 		eng := mock_frontend.NewMockEngine(ctrl)
+		eng.EXPECT().New(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+		eng.EXPECT().Commit(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+		eng.EXPECT().Rollback(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 		db := mock_frontend.NewMockDatabase(ctrl)
 		db.EXPECT().Relations(ctx).Return([]string{"t"}, nil).AnyTimes()
 
@@ -963,6 +1012,9 @@ func Test_handleLoadData(t *testing.T) {
 		defer ctrl.Finish()
 
 		eng := mock_frontend.NewMockEngine(ctrl)
+		eng.EXPECT().New(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+		eng.EXPECT().Commit(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+		eng.EXPECT().Rollback(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 		eng.EXPECT().Database(ctx, gomock.Any(), nil).Return(nil, nil).AnyTimes()
 		txnClient := mock_frontend.NewMockTxnClient(ctrl)
 

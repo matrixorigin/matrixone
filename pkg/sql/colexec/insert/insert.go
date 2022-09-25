@@ -19,11 +19,10 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
-	"github.com/matrixorigin/matrixone/pkg/errno"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
-	"github.com/matrixorigin/matrixone/pkg/sql/errors"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -56,13 +55,16 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 		return false, nil
 	}
 	defer bat.Clean(proc.Mp())
+	ctx := context.TODO()
+	if err := colexec.UpdateInsertBatch(n.Engine, n.DB, ctx, proc, n.TargetColDefs, bat, n.TableID); err != nil {
+		return false, err
+	}
 	{
 		// do null value check
 		for i := range bat.Vecs {
 			if n.TargetColDefs[i].Primary {
 				if nulls.Any(bat.Vecs[i].Nsp) {
-					return false, errors.New(errno.IntegrityConstraintViolation,
-						fmt.Sprintf("Column '%s' cannot be null", n.TargetColDefs[i].GetName()))
+					return false, moerr.NewConstraintViolation(fmt.Sprintf("Column '%s' cannot be null", n.TargetColDefs[i].GetName()))
 				}
 			}
 		}
@@ -75,10 +77,6 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 			bat.Attrs[i] = n.TargetColDefs[i].GetName()
 			bat.Vecs[i] = bat.Vecs[i].ConstExpand(proc.Mp())
 		}
-	}
-	ctx := context.TODO()
-	if err := colexec.UpdateInsertBatch(n.Engine, n.DB, ctx, proc, n.TargetColDefs, bat, n.TableID); err != nil {
-		return false, err
 	}
 	err := n.TargetTable.Write(ctx, bat)
 	n.Affected += uint64(len(bat.Zs))

@@ -422,6 +422,108 @@ func NewIsNotNullExpr(e Expr) *IsNotNullExpr {
 	}
 }
 
+// is unknown expression
+type IsUnknownExpr struct {
+	exprImpl
+	Expr Expr
+}
+
+func (node *IsUnknownExpr) Format(ctx *FmtCtx) {
+	ctx.PrintExpr(node, node.Expr, true)
+	ctx.WriteString(" is unknown")
+}
+
+func NewIsUnknownExpr(e Expr) *IsUnknownExpr {
+	return &IsUnknownExpr{
+		Expr: e,
+	}
+}
+
+// is not unknown expression
+type IsNotUnknownExpr struct {
+	exprImpl
+	Expr Expr
+}
+
+func (node *IsNotUnknownExpr) Format(ctx *FmtCtx) {
+	ctx.PrintExpr(node, node.Expr, true)
+	ctx.WriteString(" is not unknown")
+}
+
+func NewIsNotUnknownExpr(e Expr) *IsNotUnknownExpr {
+	return &IsNotUnknownExpr{
+		Expr: e,
+	}
+}
+
+// is true expression
+type IsTrueExpr struct {
+	exprImpl
+	Expr Expr
+}
+
+func (node *IsTrueExpr) Format(ctx *FmtCtx) {
+	ctx.PrintExpr(node, node.Expr, true)
+	ctx.WriteString(" is true")
+}
+
+func NewIsTrueExpr(e Expr) *IsTrueExpr {
+	return &IsTrueExpr{
+		Expr: e,
+	}
+}
+
+// is not true expression
+type IsNotTrueExpr struct {
+	exprImpl
+	Expr Expr
+}
+
+func (node *IsNotTrueExpr) Format(ctx *FmtCtx) {
+	ctx.PrintExpr(node, node.Expr, true)
+	ctx.WriteString(" is not true")
+}
+
+func NewIsNotTrueExpr(e Expr) *IsNotTrueExpr {
+	return &IsNotTrueExpr{
+		Expr: e,
+	}
+}
+
+// is false expression
+type IsFalseExpr struct {
+	exprImpl
+	Expr Expr
+}
+
+func (node *IsFalseExpr) Format(ctx *FmtCtx) {
+	ctx.PrintExpr(node, node.Expr, true)
+	ctx.WriteString(" is false")
+}
+
+func NewIsFalseExpr(e Expr) *IsFalseExpr {
+	return &IsFalseExpr{
+		Expr: e,
+	}
+}
+
+// is not false expression
+type IsNotFalseExpr struct {
+	exprImpl
+	Expr Expr
+}
+
+func (node *IsNotFalseExpr) Format(ctx *FmtCtx) {
+	ctx.PrintExpr(node, node.Expr, true)
+	ctx.WriteString(" is not false")
+}
+
+func NewIsNotFalseExpr(e Expr) *IsNotFalseExpr {
+	return &IsNotFalseExpr{
+		Expr: e,
+	}
+}
+
 // subquery interface
 type SubqueryExpr interface {
 	Expr

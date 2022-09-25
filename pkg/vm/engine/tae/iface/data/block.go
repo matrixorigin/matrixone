@@ -16,6 +16,7 @@ package data
 
 import (
 	"bytes"
+
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 
 	"github.com/RoaringBitmap/roaring"
@@ -97,4 +98,6 @@ type Block interface {
 	Destroy() error
 	ReplayIndex() error
 	Close()
+	CollectAppendInRange(start, end types.TS) (*containers.Batch, error)
+	CollectDeleteInRange(start, end types.TS) (*containers.Batch, error)
 }

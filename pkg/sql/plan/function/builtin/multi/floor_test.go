@@ -15,11 +15,11 @@
 package multi
 
 import (
-	"errors"
 	"log"
 	"math"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/smartystreets/goconvey/convey"
@@ -38,7 +38,7 @@ func Test_FloorUint64(t *testing.T) {
 		}
 		data, ok := vec.Col.([]uint64)
 		if !ok {
-			log.Fatal(errors.New("the AbsUint64 function return value type is not []uint64"))
+			log.Fatal(moerr.NewInternalError("the AbsUint64 function return value type is not []uint64"))
 		}
 		compVec := []uint64{1, 4, 8, 16, 32, math.MaxUint64, 0}
 		compNsp := []int64{6}
@@ -76,7 +76,7 @@ func Test_FloorInt64(t *testing.T) {
 		}
 		data, ok := vec.Col.([]int64)
 		if !ok {
-			log.Fatal(errors.New("the AbsUint64 function return value type is not []int64"))
+			log.Fatal(moerr.NewInternalError("the AbsUint64 function return value type is not []int64"))
 		}
 		compVec := []int64{math.MinInt64 + 1, math.MinInt64 + 2, -100, -1, 0, 1, 4, 8, 16, 32, 64, math.MaxInt64, 0}
 		compNsp := []int64{12}
@@ -114,7 +114,7 @@ func Test_FloorFloat64(t *testing.T) {
 		}
 		data, ok := vec.Col.([]float64)
 		if !ok {
-			log.Fatal(errors.New("the AbsUint64 function return value type is not []int64"))
+			log.Fatal(moerr.NewInternalError("the AbsUint64 function return value type is not []int64"))
 		}
 		compVec := []float64{0, -2, -3, math.MinInt64 + 1, math.MinInt64 + 2, -101, -2, 0,
 			0, 1, 4, 8, 16, 32, 64, math.MaxInt64, math.MaxFloat64, 0}

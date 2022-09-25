@@ -15,17 +15,16 @@
 package txnimpl
 
 import (
-	"errors"
 	"fmt"
 
 	"github.com/RoaringBitmap/roaring"
 
 	// "github.com/matrixorigin/matrixone/pkg/logutil"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
@@ -34,7 +33,7 @@ import (
 )
 
 var (
-	ErrDuplicateNode = errors.New("tae: duplicate node")
+	ErrDuplicateNode = moerr.NewInternalError("tae: duplicate node")
 )
 
 type txnTable struct {
@@ -125,7 +124,7 @@ func (tbl *txnTable) GetSegment(id uint64) (seg handle.Segment, err error) {
 		return
 	}
 	if !ok {
-		err = data.ErrNotFound
+		err = moerr.NewNotFound()
 		return
 	}
 	seg = newSegment(tbl, meta)
@@ -225,7 +224,7 @@ func (tbl *txnTable) createBlock(sid uint64, state catalog.EntryState) (blk hand
 		return
 	}
 	if !seg.IsAppendable() && state == catalog.ES_Appendable {
-		err = data.ErrNotAppendable
+		err = moerr.NewInternalError("not appendable")
 		return
 	}
 	var factory catalog.BlockDataFactory
@@ -439,7 +438,7 @@ func (tbl *txnTable) GetByFilter(filter *handle.Filter) (id *common.ID, offset u
 		blockIt.Next()
 	}
 	if err == nil && id == nil {
-		err = data.ErrNotFound
+		err = moerr.NewNotFound()
 	}
 	return
 }
@@ -482,7 +481,7 @@ func (tbl *txnTable) updateWithFineLock(node txnif.UpdateNode, txn txnif.AsyncTx
 
 func (tbl *txnTable) Update(id *common.ID, row uint32, col uint16, v any) (err error) {
 	if tbl.entry.GetSchema().IsPartOfPK(int(col)) {
-		err = data.ErrUpdateUniqueKey
+		err = moerr.NewTAEError("update unique key")
 		return
 	}
 	if isLocalSegment(id) {
@@ -576,7 +575,7 @@ func (tbl *txnTable) DoDedup(pks containers.Vector, preCommit bool) (err error) 
 		}
 		segData := seg.GetSegmentData()
 		// TODO: Add a new batch dedup method later
-		if err = segData.BatchDedup(tbl.store.txn, pks); err == data.ErrDuplicate {
+		if err = segData.BatchDedup(tbl.store.txn, pks); moerr.IsMoErrCode(err, moerr.ErrDuplicate) {
 			return
 		}
 		if err == nil {

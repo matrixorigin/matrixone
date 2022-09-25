@@ -131,9 +131,9 @@ select substring(c,1,-1),substr(vc,3,-2) from t1 where id = 4 ;
 substring(c,1,-1)	substr(vc,3,-2)
 
 select substring(c,1,a),substr(vc,3,1) from t1 where id = 4 ;
-Column 'a' does not exist
+invalid input: column a does not exist
 select substring(c,1,2),substr(vc,a,1) from t1 where id = 4 ;
-Column 'a' does not exist
+invalid input: column a does not exist
 select max(substr(c,2)) from t1;
 max(substr(c,2))
 veryoneBu

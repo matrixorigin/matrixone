@@ -18,23 +18,23 @@ import (
 	"bytes"
 	"context"
 	"encoding/gob"
-	"reflect"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
 func DoTxnRequest[
-	Resp any,
-	Req any,
+	Resp Response,
+	Req Request,
 ](
 	ctx context.Context,
 	e engine.Engine,
 	// TxnOperator.Read or TxnOperator.Write
 	reqFunc func(context.Context, []txn.TxnRequest) (*rpc.SendResult, error),
-	shardsFunc func() ([]Shard, error),
+	shardsFunc shardsFunc,
 	op uint32,
 	req Req,
 ) (
@@ -63,47 +63,36 @@ func DoTxnRequest[
 				Target:  shard,
 			},
 			Options: &txn.TxnRequestOptions{
-				RetryCodes: []txn.ErrorCode{
+				RetryCodes: []int32{
 					// dn shard not found
-					txn.ErrorCode_DNShardNotFound,
+					int32(moerr.ErrDNShardNotFound),
 				},
 				RetryInterval: int64(time.Second),
 			},
 		})
 	}
 
-	ctx, cancel := context.WithTimeout(ctx, time.Minute) //TODO get from config or argument
+	ctx, cancel := context.WithTimeout(ctx, time.Minute*10)
 	defer cancel()
 
 	result, err := reqFunc(ctx, requests)
 	if err != nil {
 		return
 	}
-	if err = errorFromTxnResponses(result.Responses); err != nil {
-		return
+	for _, resp := range result.Responses {
+		if resp.TxnError != nil {
+			//TODO no way to construct moerr.Error by code and message now
+			err = moerr.NewInternalError(resp.TxnError.Message)
+			return
+		}
 	}
 
-	var respErrors Errors
 	for _, res := range result.Responses {
 		var resp Resp
 		if err = gob.NewDecoder(bytes.NewReader(res.CNOpResponse.Payload)).Decode(&resp); err != nil {
 			return
 		}
-
-		respValue := reflect.ValueOf(resp)
-		for i := 0; i < respValue.NumField(); i++ {
-			field := respValue.Field(i)
-			if field.Type().Implements(errorType) &&
-				!field.IsZero() {
-				respErrors = append(respErrors, field.Interface().(error))
-			}
-		}
-
 		resps = append(resps, resp)
-	}
-
-	if len(respErrors) > 0 {
-		err = respErrors
 	}
 
 	return

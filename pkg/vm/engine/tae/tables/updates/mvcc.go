@@ -19,13 +19,16 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 )
@@ -164,7 +167,7 @@ func (n *MVCCHandle) CreateDeleteNode(txn txnif.AsyncTxn, deleteType handle.Dele
 
 func (n *MVCCHandle) OnReplayDeleteNode(deleteNode txnif.DeleteNode) {
 	n.deletes.OnReplayNode(deleteNode.(*DeleteNode))
-	n.TrySetMaxVisible(deleteNode.(*DeleteNode).commitTs)
+	n.TrySetMaxVisible(deleteNode.(*DeleteNode).GetCommitTSLocked())
 }
 
 func (n *MVCCHandle) CreateUpdateNode(colIdx uint16, txn txnif.AsyncTxn) txnif.UpdateNode {
@@ -261,7 +264,7 @@ func (n *MVCCHandle) GetMaxVisibleRowLocked(ts types.TS) (row uint32, visible bo
 		state := txn.GetTxnState(true)
 		n.RLock()
 		if state == txnif.TxnStateUnknown {
-			err = txnif.ErrTxnInternal
+			err = moerr.NewTxnInternal()
 			return
 		} else if state == txnif.TxnStateRollbacked || state == txnif.TxnStatePreparing {
 			panic("append node shoul not be rollbacked")
@@ -286,7 +289,7 @@ func (n *MVCCHandle) GetTotalRow() uint32 {
 //
 //	would not be increased monotonically.
 func (n *MVCCHandle) getMaxVisibleRowLocked(ts types.TS) (int, uint32, bool, error) {
-	offset, vnode := n.appends.GetNodeToRead(ts)
+	offset, vnode := n.appends.GetNodeToReadByPrepareTS(ts)
 	if vnode == nil {
 		return 0, 0, false, nil
 	}
@@ -294,4 +297,109 @@ func (n *MVCCHandle) getMaxVisibleRowLocked(ts types.TS) (int, uint32, bool, err
 	node.RLock()
 	defer node.RUnlock()
 	return offset, node.GetMaxRow(), true, nil
+}
+
+func (n *MVCCHandle) CollectAppend(start, end types.TS) (minRow, maxRow uint32, commitTSVec, abortVec containers.Vector) {
+	n.RLock()
+	defer n.RUnlock()
+	startOffset, node := n.appends.GetNodeToReadByPrepareTS(start)
+	if node != nil && node.GetPrepare().Less(start) {
+		startOffset++
+	}
+	endOffset, node := n.appends.GetNodeToReadByPrepareTS(end)
+	if node == nil || startOffset > endOffset {
+		return 0, 0, nil, nil
+	}
+	minRow = n.appends.GetNodeByOffset(startOffset).(*AppendNode).startRow
+	maxRow = node.(*AppendNode).maxRow
+
+	commitTSVec = containers.MakeVector(types.T_TS.ToType(), false)
+	abortVec = containers.MakeVector(types.T_bool.ToType(), false)
+	n.appends.LoopOffsetRange(
+		startOffset,
+		endOffset,
+		func(m txnbase.MVCCNode) bool {
+			node := m.(*AppendNode)
+			node.RLock()
+			txn := node.GetTxn()
+			node.RUnlock()
+			if txn != nil {
+				n.RUnlock()
+				txn.GetTxnState(true)
+				n.RLock()
+			}
+			for i := 0; i < int(node.maxRow-node.startRow); i++ {
+				commitTSVec.Append(node.GetCommitTS())
+				abortVec.Append(node.IsAborted())
+			}
+			return true
+		})
+	return
+}
+
+func (n *MVCCHandle) CollectDelete(start, end types.TS) (rowIDVec, commitTSVec, abortVec containers.Vector) {
+	if n.deletes.IsEmpty() {
+		return
+	}
+	if !n.ExistDeleteInRange(start, end) {
+		return
+	}
+
+	rowIDVec = containers.MakeVector(types.T_Rowid.ToType(), false)
+	commitTSVec = containers.MakeVector(types.T_TS.ToType(), false)
+	abortVec = containers.MakeVector(types.T_bool.ToType(), false)
+	prefix := n.meta.MakeKey()
+
+	n.RLock()
+	defer n.RUnlock()
+	n.deletes.LoopChain(
+		func(m txnbase.MVCCNode) bool {
+			node := m.(*DeleteNode)
+			node.RLock()
+			needWait, txn := node.NeedWaitCommitting(end.Next())
+			if needWait {
+				node.RLock()
+				n.RUnlock()
+				txn.GetTxnState(true)
+				n.RLock()
+				node.RUnlock()
+			}
+			in, before := node.PreparedIn(start, end)
+			node.RUnlock()
+			if in {
+				it := node.mask.Iterator()
+				for it.HasNext() {
+					row := it.Next()
+					rowIDVec.Append(model.EncodePhyAddrKeyWithPrefix(prefix, row))
+					commitTSVec.Append(node.GetEnd())
+					abortVec.Append(node.IsAborted())
+				}
+			}
+			return !before
+		})
+	return
+}
+
+func (n *MVCCHandle) ExistDeleteInRange(start, end types.TS) (exist bool) {
+	n.RLock()
+	defer n.RUnlock()
+	n.deletes.LoopChain(
+		func(m txnbase.MVCCNode) bool {
+			node := m.(*DeleteNode)
+			node.RLock()
+			needWait, txn := node.NeedWaitCommitting(end.Next())
+			if needWait {
+				n.RUnlock()
+				txn.GetTxnState(true)
+				n.RLock()
+			}
+			in, before := node.PreparedIn(start, end)
+			node.RUnlock()
+			if in {
+				exist = true
+				return false
+			}
+			return !before
+		})
+	return
 }

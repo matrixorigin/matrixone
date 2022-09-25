@@ -15,7 +15,6 @@
 package txnstorage
 
 import (
-	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	txnengine "github.com/matrixorigin/matrixone/pkg/vm/engine/txn"
 )
@@ -38,9 +37,8 @@ func (m *MemHandler) ensureAccount(
 	}
 	if len(keys) == 0 {
 		// create one
-		db := DatabaseRow{
-			ID:        uuid.NewString(),
-			NumberID:  catalog.SystemDBID,
+		db := &DatabaseRow{
+			ID:        txnengine.NewID(),
 			AccountID: accessInfo.AccountID,
 			Name:      catalog.SystemDBName,
 		}

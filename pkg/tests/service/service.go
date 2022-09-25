@@ -16,7 +16,6 @@ package service
 
 import (
 	"context"
-	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -26,7 +25,9 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/cnservice"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
+	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/dnservice"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper"
@@ -35,7 +36,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	logpb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 )
 
 var (
@@ -77,15 +80,15 @@ type ClusterOperation interface {
 	// StartLogServiceIndexed starts log service by its index.
 	StartLogServiceIndexed(index int) error
 
-	// CloseCnService closes log service by uuid.
-	CloseCnService(uuid string) error
-	// StartCnService starts log service by uuid.
-	StartCnService(uuid string) error
+	// CloseCNService closes cn service by uuid.
+	CloseCNService(uuid string) error
+	// StartCNService starts cn service by uuid.
+	StartCNService(uuid string) error
 
-	// CloseCnServiceIndexed closes log service by its index.
-	CloseCnServiceIndexed(index int) error
-	// StartCnServiceIndexed starts log service by its index.
-	StartCnServiceIndexed(index int) error
+	// CloseCNServiceIndexed closes cn service by its index.
+	CloseCNServiceIndexed(index int) error
+	// StartCNServiceIndexed starts cn service by its index.
+	StartCNServiceIndexed(index int) error
 
 	// NewNetworkPartition constructs network partition from service index.
 	NewNetworkPartition(dnIndexes, logIndexes, cnIndexes []uint32) NetworkPartition
@@ -210,9 +213,11 @@ type ClusterWaitState interface {
 
 // testCluster simulates a cluster with dn and log service.
 type testCluster struct {
-	t      *testing.T
-	opt    Options
-	logger *zap.Logger
+	t       *testing.T
+	opt     Options
+	logger  *zap.Logger
+	stopper *stopper.Stopper
+	clock   clock.Clock
 
 	dn struct {
 		sync.Mutex
@@ -228,6 +233,8 @@ type testCluster struct {
 		cfgs []logservice.Config
 		opts []logOptions
 		svcs []LogService
+
+		taskService taskservice.TaskService
 	}
 
 	cn struct {
@@ -257,12 +264,18 @@ func NewCluster(t *testing.T, opt Options) (Cluster, error) {
 	opt.validate()
 
 	c := &testCluster{
-		t:   t,
-		opt: opt,
+		t:       t,
+		opt:     opt,
+		stopper: stopper.NewStopper("test-cluster"),
 	}
 	c.logger = logutil.Adjust(c.logger).With(
 		zap.String("tests", "service"),
 	)
+
+	if c.clock == nil {
+		c.clock = clock.NewUnixNanoHLCClockWithStopper(c.stopper, time.Millisecond*500)
+	}
+	clock.SetupDefaultClock(c.clock)
 
 	// build addresses for all services
 	c.network.addresses = c.buildServiceAddresses()
@@ -272,6 +285,7 @@ func NewCluster(t *testing.T, opt Options) (Cluster, error) {
 
 	// build log service configurations
 	c.log.cfgs, c.log.opts = c.buildLogConfigs(c.network.addresses)
+	c.log.taskService = taskservice.NewTaskService(opt.task.taskStorage, nil)
 
 	// build dn service configurations
 	c.dn.cfgs, c.dn.opts = c.buildDnConfigs(c.network.addresses)
@@ -299,8 +313,11 @@ func (c *testCluster) Start() error {
 		return err
 	}
 
-	if err := c.startCNServices(); err != nil {
-		return err
+	if c.opt.initial.cnServiceNum != 0 {
+		time.Sleep(10 * time.Second)
+		if err := c.startCNServices(); err != nil {
+			return err
+		}
 	}
 
 	c.mu.running = true
@@ -330,6 +347,7 @@ func (c *testCluster) Close() error {
 	}
 
 	c.mu.running = false
+	c.stopper.Stop()
 	return nil
 }
 
@@ -367,7 +385,7 @@ func (c *testCluster) GetDNStoreInfo(
 	if storeInfo, ok := stores[uuid]; ok {
 		return storeInfo, nil
 	}
-	return logpb.DNStoreInfo{}, ErrServiceNotExist
+	return logpb.DNStoreInfo{}, moerr.NewNoService(uuid)
 }
 
 func (c *testCluster) GetDNStoreInfoIndexed(
@@ -391,7 +409,7 @@ func (c *testCluster) GetLogStoreInfo(
 	if storeInfo, ok := stores[uuid]; ok {
 		return storeInfo, nil
 	}
-	return logpb.LogStoreInfo{}, ErrServiceNotExist
+	return logpb.LogStoreInfo{}, moerr.NewNoService(uuid)
 }
 
 func (c *testCluster) GetLogStoreInfoIndexed(
@@ -413,7 +431,7 @@ func (c *testCluster) GetCNStoreInfo(ctx context.Context, uuid string) (logpb.CN
 	if storeInfo, ok := stores[uuid]; ok {
 		return storeInfo, nil
 	}
-	return logpb.CNStoreInfo{}, ErrServiceNotExist
+	return logpb.CNStoreInfo{}, moerr.NewNoService(uuid)
 }
 
 func (c *testCluster) GetCNStoreInfoIndexed(ctx context.Context, index int) (logpb.CNStoreInfo, error) {
@@ -440,7 +458,7 @@ func (c *testCluster) DNStoreExpired(uuid string) (bool, error) {
 
 	dnStore, ok := state.DNState.Stores[uuid]
 	if !ok {
-		return false, wrappedError(ErrStoreNotReported, uuid)
+		return false, moerr.NewShardNotReported(uuid, 0xDEADBEEF)
 	}
 
 	hkcfg := c.GetHAKeeperConfig()
@@ -471,7 +489,7 @@ func (c *testCluster) LogStoreExpired(uuid string) (bool, error) {
 
 	logStore, ok := state.LogState.Stores[uuid]
 	if !ok {
-		return false, wrappedError(ErrStoreNotReported, uuid)
+		return false, moerr.NewShardNotReported(uuid, 0xDEADBEEF)
 	}
 
 	hkcfg := c.GetHAKeeperConfig()
@@ -502,7 +520,7 @@ func (c *testCluster) CNStoreExpired(uuid string) (bool, error) {
 
 	cnStore, ok := state.CNState.Stores[uuid]
 	if !ok {
-		return false, wrappedError(ErrStoreNotReported, uuid)
+		return false, moerr.NewShardNotReported(uuid, 0)
 	}
 
 	hkcfg := c.GetHAKeeperConfig()
@@ -882,7 +900,7 @@ func (c *testCluster) GetDNService(uuid string) (DNService, error) {
 			return c.dn.svcs[i], nil
 		}
 	}
-	return nil, wrappedError(ErrServiceNotExist, uuid)
+	return nil, moerr.NewNoService(uuid)
 }
 
 func (c *testCluster) GetLogService(uuid string) (LogService, error) {
@@ -894,7 +912,7 @@ func (c *testCluster) GetLogService(uuid string) (LogService, error) {
 			return svc, nil
 		}
 	}
-	return nil, wrappedError(ErrServiceNotExist, uuid)
+	return nil, moerr.NewNoService(uuid)
 }
 
 func (c *testCluster) GetCNService(uuid string) (CNService, error) {
@@ -906,7 +924,7 @@ func (c *testCluster) GetCNService(uuid string) (CNService, error) {
 			return svc, nil
 		}
 	}
-	return nil, wrappedError(ErrServiceNotExist, uuid)
+	return nil, moerr.NewNoService(uuid)
 }
 
 func (c *testCluster) GetDNServiceIndexed(index int) (DNService, error) {
@@ -914,9 +932,7 @@ func (c *testCluster) GetDNServiceIndexed(index int) (DNService, error) {
 	defer c.dn.Unlock()
 
 	if index >= len(c.dn.svcs) || index < 0 {
-		return nil, wrappedError(
-			ErrInvalidServiceIndex, fmt.Sprintf("index: %d", index),
-		)
+		return nil, moerr.NewInvalidServiceIndex(index)
 	}
 	return c.dn.svcs[index], nil
 }
@@ -926,9 +942,7 @@ func (c *testCluster) GetLogServiceIndexed(index int) (LogService, error) {
 	defer c.log.Unlock()
 
 	if index >= len(c.log.svcs) || index < 0 {
-		return nil, wrappedError(
-			ErrInvalidServiceIndex, fmt.Sprintf("index: %d", index),
-		)
+		return nil, moerr.NewInvalidServiceIndex(index)
 	}
 	return c.log.svcs[index], nil
 }
@@ -938,9 +952,7 @@ func (c *testCluster) GetCNServiceIndexed(index int) (CNService, error) {
 	defer c.log.Unlock()
 
 	if index >= len(c.cn.svcs) || index < 0 {
-		return nil, wrappedError(
-			ErrInvalidServiceIndex, fmt.Sprintf("index: %d", index),
-		)
+		return nil, moerr.NewInvalidServiceIndex(index)
 	}
 	return c.cn.svcs[index], nil
 }
@@ -1021,7 +1033,7 @@ func (c *testCluster) StartLogServiceIndexed(index int) error {
 	return ls.Start()
 }
 
-func (c *testCluster) CloseCnService(uuid string) error {
+func (c *testCluster) CloseCNService(uuid string) error {
 	cs, err := c.GetCNService(uuid)
 	if err != nil {
 		return err
@@ -1029,7 +1041,7 @@ func (c *testCluster) CloseCnService(uuid string) error {
 	return cs.Close()
 }
 
-func (c *testCluster) StartCnService(uuid string) error {
+func (c *testCluster) StartCNService(uuid string) error {
 	cs, err := c.GetCNService(uuid)
 	if err != nil {
 		return err
@@ -1037,7 +1049,7 @@ func (c *testCluster) StartCnService(uuid string) error {
 	return cs.Start()
 }
 
-func (c *testCluster) CloseCnServiceIndexed(index int) error {
+func (c *testCluster) CloseCNServiceIndexed(index int) error {
 	cs, err := c.GetCNServiceIndexed(index)
 	if err != nil {
 		return err
@@ -1045,7 +1057,7 @@ func (c *testCluster) CloseCnServiceIndexed(index int) error {
 	return cs.Close()
 }
 
-func (c *testCluster) StartCnServiceIndexed(index int) error {
+func (c *testCluster) StartCNServiceIndexed(index int) error {
 	cs, err := c.GetCNServiceIndexed(index)
 	if err != nil {
 		return err
@@ -1200,7 +1212,7 @@ func (c *testCluster) initLogServices() []LogService {
 	for i := 0; i < batch; i++ {
 		cfg := c.log.cfgs[i]
 		opt := c.log.opts[i]
-		ls, err := newLogService(cfg, testutil.NewFS(), opt)
+		ls, err := newLogService(cfg, testutil.NewFS(), c.log.taskService, opt)
 		require.NoError(c.t, err)
 
 		c.logger.Info(

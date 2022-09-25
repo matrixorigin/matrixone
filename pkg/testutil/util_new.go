@@ -16,16 +16,17 @@ package testutil
 
 import (
 	"context"
-	"fmt"
 	"math/rand"
 	"strconv"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
@@ -83,6 +84,10 @@ func NewFS() *fileservice.FileServices {
 		panic(err)
 	}
 	return fs
+}
+
+func NewTaskService() taskservice.TaskService {
+	return taskservice.NewTaskService(taskservice.NewMemTaskStorage(), nil)
 }
 
 func NewBatch(ts []types.Type, random bool, n int, m *mheap.Mheap) *batch.Batch {
@@ -212,7 +217,7 @@ func NewVector(n int, typ types.Type, m *mheap.Mheap, random bool, Values interf
 		}
 		return NewStringVector(n, typ, m, random, nil)
 	default:
-		panic(fmt.Errorf("unsupport vector's type '%v", typ))
+		panic(moerr.NewInternalError("unsupport vector's type '%v", typ))
 	}
 }
 

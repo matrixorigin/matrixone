@@ -17,6 +17,8 @@ package frontend
 import (
 	"context"
 	"fmt"
+	"testing"
+
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -28,7 +30,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
 	"github.com/prashantv/gostub"
 	"github.com/smartystreets/goconvey/convey"
-	"testing"
 )
 
 func TestGetTenantInfo(t *testing.T) {

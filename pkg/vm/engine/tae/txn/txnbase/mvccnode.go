@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"io"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/store"
@@ -39,6 +40,7 @@ type MVCCNode interface {
 	IsActive() bool
 	IsCommitting() bool
 	IsCommitted() bool
+	IsAborted() bool
 
 	GetEnd() types.TS
 	GetPrepare() types.TS
@@ -60,7 +62,7 @@ type MVCCNode interface {
 type TxnMVCCNode struct {
 	Start, Prepare, End types.TS
 	Txn                 txnif.TxnReader
-	//Aborted bool
+	Aborted             bool
 	//State txnif.TxnState
 	LogIndex *wal.Index
 }
@@ -71,9 +73,21 @@ func NewTxnMVCCNodeWithTxn(txn txnif.TxnReader) *TxnMVCCNode {
 		ts = txn.GetStartTS()
 	}
 	return &TxnMVCCNode{
-		Start: ts,
-		Txn:   txn,
+		Start:   ts,
+		Prepare: txnif.UncommitTS,
+		End:     txnif.UncommitTS,
+		Txn:     txn,
 	}
+}
+func NewTxnMVCCNodeWithTS(ts types.TS) *TxnMVCCNode {
+	return &TxnMVCCNode{
+		Start:   ts,
+		Prepare: ts,
+		End:     ts,
+	}
+}
+func (un *TxnMVCCNode) IsAborted() bool {
+	return un.Aborted
 }
 
 // Check w-w confilct
@@ -84,14 +98,14 @@ func (un *TxnMVCCNode) CheckConflict(ts types.TS) error {
 		if un.IsSameTxn(ts) {
 			return nil
 		}
-		return txnif.ErrTxnWWConflict
+		return moerr.NewTxnWWConflict()
 	}
 
 	// For a committed node, it is w-w conflict if ts is lt the node commit ts
 	// -------+-------------+-------------------->
 	//        ts         CommitTs            time
 	if un.End.Greater(ts) {
-		return txnif.ErrTxnWWConflict
+		return moerr.NewTxnWWConflict()
 	}
 	return nil
 }
@@ -370,10 +384,10 @@ func (un *TxnMVCCNode) CloneAll() *TxnMVCCNode {
 }
 
 func (un *TxnMVCCNode) String() string {
-	return fmt.Sprintf("[%v,%v,%v][logIndex=%v]",
-		un.Start,
-		un.Prepare,
-		un.End,
+	return fmt.Sprintf("[%s,%s,%s][%v]",
+		un.Start.ToString(),
+		un.Prepare.ToString(),
+		un.End.ToString(),
 		un.LogIndex)
 }
 

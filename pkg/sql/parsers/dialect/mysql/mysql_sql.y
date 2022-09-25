@@ -203,6 +203,7 @@ import (
 %left <str> AND
 %right <str> NOT '!'
 %left <str> BETWEEN CASE WHEN THEN ELSE END
+%nonassoc LOWER_THAN_EQ
 %left <str> '=' '<' '>' LE GE NE NULL_SAFE_EQUAL IS LIKE REGEXP IN ASSIGNMENT
 %left <str> '|'
 %left <str> '&'
@@ -411,7 +412,7 @@ import (
 %type <userMiscOption> pwd_or_lck pwd_or_lck_opt
 //%type <userMiscOptions> pwd_or_lck_list
 
-%type <expr> literal true_or_false
+%type <expr> literal
 %type <expr> predicate
 %type <expr> bit_expr interval_expr
 %type <expr> simple_expr else_opt
@@ -1771,15 +1772,15 @@ explain_stmt:
     }
 |   explain_sym ANALYZE explainable_stmt
     {
-		explainStmt := tree.NewExplainStmt($3, "text")
-		optionElem := tree.MakeOptionElem("analyze", "NULL")
-        options := tree.MakeOptions(optionElem)
-        explainStmt.Options = options
-		$$ = explainStmt
+    		explainStmt := tree.NewExplainAnalyze($3, "text")
+    		optionElem := tree.MakeOptionElem("analyze", "NULL")
+    	options := tree.MakeOptions(optionElem)
+	explainStmt.Options = options
+	$$ = explainStmt
     }
 |   explain_sym ANALYZE VERBOSE explainable_stmt
     {
-        explainStmt := tree.NewExplainStmt($4, "text")
+        explainStmt := tree.NewExplainAnalyze($4, "text")
         optionElem1 := tree.MakeOptionElem("analyze", "NULL")
 		optionElem2 := tree.MakeOptionElem("verbose", "NULL")
 		options := tree.MakeOptions(optionElem1)
@@ -1789,9 +1790,15 @@ explain_stmt:
     }
 |   explain_sym '(' utility_option_list ')' explainable_stmt
     {
-        explainStmt := tree.NewExplainStmt($5, "text")
-        explainStmt.Options = $3
-        $$ = explainStmt
+    	if tree.IsContainAnalyze($3) {
+    	     explainStmt := tree.NewExplainAnalyze($5, "text")
+	     explainStmt.Options = $3
+	     $$ = explainStmt
+    	} else {
+    	     explainStmt := tree.NewExplainStmt($5, "text")
+    	     explainStmt.Options = $3
+	     $$ = explainStmt
+    	}
     }
 
 explain_option_key:
@@ -5906,24 +5913,6 @@ expression:
     {
     	$$ = tree.NewMaxValue()
     }
-|   boolean_primary IS true_or_false %prec IS
-	{
-        $$ = tree.NewComparisonExpr(tree.EQUAL, $1, $3)
-    }
-|   boolean_primary IS NOT true_or_false %prec IS
-	{
-        $$ = tree.NewComparisonExpr(tree.NOT_EQUAL, $1, $4)
-    }
-|   boolean_primary IS UNKNOWN %prec IS
-	{
-		arg := tree.NewNumValWithType(constant.MakeString($3), "", false, tree.P_char)
-        $$ = tree.NewComparisonExpr(tree.EQUAL, $1, arg)
-    }
-|   boolean_primary IS NOT UNKNOWN %prec IS
-	{
-		arg := tree.NewNumValWithType(constant.MakeString($3), "", false, tree.P_char)
-        $$ = tree.NewComparisonExpr(tree.NOT_EQUAL, $1, arg)
-    }
 |   boolean_primary
     {
         $$ = $1
@@ -5938,6 +5927,30 @@ boolean_primary:
     {
         $$ = tree.NewIsNotNullExpr($1)
     }
+|    boolean_primary IS UNKNOWN %prec IS
+    {
+        $$ = tree.NewIsUnknownExpr($1)
+    }
+|   boolean_primary IS NOT UNKNOWN %prec IS
+    {
+        $$ = tree.NewIsNotUnknownExpr($1)
+    }
+|    boolean_primary IS TRUE %prec IS
+    {
+        $$ = tree.NewIsTrueExpr($1)
+    }
+|   boolean_primary IS NOT TRUE %prec IS
+    {
+        $$ = tree.NewIsNotTrueExpr($1)
+    }
+|    boolean_primary IS FALSE %prec IS
+    {
+        $$ = tree.NewIsFalseExpr($1)
+    }
+|   boolean_primary IS NOT FALSE %prec IS
+    {
+        $$ = tree.NewIsNotFalseExpr($1)
+    }
 |   boolean_primary comparison_operator predicate %prec '='
     {
         $$ = tree.NewComparisonExpr($2, $1, $3)
@@ -5947,16 +5960,6 @@ boolean_primary:
         $$ = tree.NewSubqueryComparisonExpr($2, $3, $1, $4)
     }
 |   predicate
-
-true_or_false:
-	TRUE
-    {
-        $$ = tree.NewNumValWithType(constant.MakeBool(true), "", false, tree.P_bool)
-    }
-|   FALSE
-    {
-        $$ = tree.NewNumValWithType(constant.MakeBool(false), "", false, tree.P_bool)
-    }
 
 predicate:
     bit_expr IN col_tuple
@@ -7042,7 +7045,6 @@ reserved_keyword:
 |   WHERE
 |   WEEK
 |   WITH
-|   PASSWORD
 |   TERMINATED
 |   OPTIONALLY
 |   ENCLOSED
@@ -7251,6 +7253,7 @@ non_reserved_keyword:
 |   TABLES
 |   EXTERNAL
 |   URL
+|   PASSWORD %prec LOWER_THAN_EQ
 
 func_not_keyword:
 	DATE_ADD

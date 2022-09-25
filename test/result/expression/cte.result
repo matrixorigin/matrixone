@@ -17,13 +17,13 @@ null
 3
 WITH qn AS (SELECT a FROM t1), qn as (select b from t1)
 SELECT 1 FROM qn;
-WITH query name "qn" specified more than once
+SQL syntax error: WITH query name "qn" specified more than once
 with test.qn as (select "with") select * from test.qn;
-You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 10 near ".qn as (select "with") select * from test.qn;";
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 10 near ".qn as (select "with") select * from test.qn;";
 with qn as (select "with" as a)
 with qn2 as (select "with" as a)
 select a from qn;
-You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 2 column 5 near "
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 2 column 5 near "
 with qn2 as (select "with" as a)
 select a from qn;";
 with qne as (select a from t1),
@@ -80,15 +80,15 @@ with qn0 as (select 1), qn1 as (select * from qn0), qn2 as (select 1), qn3 as (s
 WITH qn2 AS (SELECT a FROM qn WHERE a IS NULL or a>0),
 qn AS (SELECT b as a FROM t1)
 SELECT qn2.a  FROM qn2;
-table "qn" does not exist
+SQL parser error: table "qn" does not exist
 with qn1 as (with qn3 as (select * from qn2) select * from qn3),
 qn2 as (select 1)
 select * from qn1;
-table "qn2" does not exist
+SQL parser error: table "qn2" does not exist
 WITH qn2 AS (SELECT a FROM qn WHERE a IS NULL or a>0),
 qn AS (SELECT b as a FROM qn2)
 SELECT qn.a  FROM qn;
-table "qn" does not exist
+SQL parser error: table "qn" does not exist
 drop table if exists t1;
 create table t1(a int, b int, c int);
 insert into t1 values(null,null,null),(2,3,4);
@@ -172,7 +172,7 @@ null
 WITH qn AS (SELECT b as a FROM t1)
 SELECT (WITH qn2 AS (SELECT a FROM qn WHERE a IS NULL or a>0)
 SELECT qn2.a FROM qn2) FROM qn;
-scalar subquery returns more than 1 row
+internal error: scalar subquery returns more than 1 row
 WITH qn AS (select "outer" as a)
 SELECT (WITH qn AS (SELECT "inner" as a) SELECT a from qn),
 qn.a
@@ -235,27 +235,27 @@ create table t1(a int, b int, c int);
 insert into t1 values(null,null,null),(2,3,4),(4,5,6);
 with qn as (select a, b from t1)
 select b from qn group by a;
-column "qn.b" must appear in the GROUP BY clause or be used in an aggregate function
+SQL syntax error: column "qn.b" must appear in the GROUP BY clause or be used in an aggregate function
 with qn as (select a, b from t1 where a=b)
 select b from qn group by a;
-column "qn.b" must appear in the GROUP BY clause or be used in an aggregate function
+SQL syntax error: column "qn.b" must appear in the GROUP BY clause or be used in an aggregate function
 with qn as (select a, sum(b) as s from t1 group by a)
 select s from qn group by a;
-column "qn.s" must appear in the GROUP BY clause or be used in an aggregate function
+SQL syntax error: column "qn.s" must appear in the GROUP BY clause or be used in an aggregate function
 drop table if exists t1;
 drop table if exists t2;
 create table t1(a int, b int, c int);
 insert into t1 values(null,null,null),(2,3,4),(4,5,6),(4,5,6),(8,9,10);
 with qn () as (select 1) select * from qn, qn qn1;
-You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 10 near ") as (select 1) select * from qn, qn qn1;";
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 10 near ") as (select 1) select * from qn, qn qn1;";
 with qn (foo, bar) as (select 1) select * from qn, qn qn1;
-table "qn" has 1 columns available but 2 columns specified
+SQL syntax error: table "qn" has 1 columns available but 2 columns specified
 with qn as (select 1,1) select * from qn;
-Column reference 'qn.1' is ambiguous
+invalid input: ambiguous column reference 'qn.1'
 with qn as (select 1,1 from t1) select * from qn;
-Column reference 'qn.1' is ambiguous
+invalid input: ambiguous column reference 'qn.1'
 with qn (foo, foo) as (select 1,2) select * from qn;
-Column reference 'qn.foo' is ambiguous
+invalid input: ambiguous column reference 'qn.foo'
 with qn (foo, bar) as (select 1,1 from t1) select * from qn;
 foo	bar
 1	1
