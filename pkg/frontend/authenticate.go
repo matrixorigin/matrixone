@@ -17,7 +17,6 @@ package frontend
 import (
 	"context"
 	"fmt"
-	"math/rand"
 	"strings"
 	"time"
 
@@ -163,12 +162,12 @@ func GetTenantInfo(userInput string) (*TenantInfo, error) {
 }
 
 const (
-	//	createMoUserIndex      = 0
-	createMoAccountIndex = 1
-	//createMoRoleIndex      = 2
-	//createMoUserGrantIndex = 3
-	//createMoRoleGrantIndex = 4
-	//createMoRolePrivIndex  = 5
+// createMoUserIndex      = 0
+// createMoAccountIndex = 1
+// createMoRoleIndex      = 2
+// createMoUserGrantIndex = 3
+// createMoRoleGrantIndex = 4
+// createMoRolePrivIndex  = 5
 )
 
 const (
@@ -179,15 +178,15 @@ const (
 	sysAccountComments = "system account"
 
 	//role
-	moAdminRoleID           = 0
-	moAdminRoleName         = "moadmin"
-	moAdminRoleComment      = "super admin role"
-	publicRoleID            = 1
-	publicRoleName          = "public"
-	publicRoleComment       = "public role"
-	accountAdminRoleID      = 2
-	accountAdminRoleName    = "accountadmin"
-	accountAdminRoleComment = "account admin role"
+	moAdminRoleID   = 0
+	moAdminRoleName = "moadmin"
+	//	moAdminRoleComment      = "super admin role"
+	publicRoleID   = 1
+	publicRoleName = "public"
+	//	publicRoleComment       = "public role"
+	accountAdminRoleID   = 2
+	accountAdminRoleName = "accountadmin"
+	//	accountAdminRoleComment = "account admin role"
 
 	//user
 	userStatusLock   = "lock"
@@ -543,18 +542,20 @@ var (
 		"system_metrics":     0,
 	}
 	sysWantedTables = map[string]int8{
-		"mo_user":       0,
-		"mo_account":    0,
-		"mo_role":       0,
-		"mo_user_grant": 0,
-		"mo_role_grant": 0,
-		"mo_role_privs": 0,
+		"mo_user":                 0,
+		"mo_account":              0,
+		"mo_role":                 0,
+		"mo_user_grant":           0,
+		"mo_role_grant":           0,
+		"mo_role_privs":           0,
+		`%!%mo_increment_columns`: 0,
 	}
 	//the sqls creating many tables for the tenant.
 	//Wrap them in a transaction
 	createSqls = []string{
+		"create table `%!%mo_increment_columns`(name varchar(770) primary key, offset bigint, step bigint);",
 		`create table mo_user(
-				user_id int unsigned,
+				user_id int signed auto_increment,
 				user_host varchar(100),
 				user_name varchar(100),
 				authentication_string varchar(100),
@@ -562,41 +563,41 @@ var (
 				created_time  timestamp,
 				expired_time timestamp,
 				login_type  varchar(16),
-				creator int unsigned,
-				owner int unsigned,
-				default_role int unsigned
+				creator int signed,
+				owner int signed,
+				default_role int signed
     		);`,
 		`create table mo_account(
-				account_id int unsigned,
+				account_id int signed auto_increment,
 				account_name varchar(100),
 				status varchar(100),
 				created_time timestamp,
 				comments varchar(256)
 			);`,
 		`create table mo_role(
-				role_id int unsigned,
+				role_id int signed auto_increment,
 				role_name varchar(100),
-				creator int unsigned,
-				owner int unsigned,
+				creator int signed,
+				owner int signed,
 				created_time timestamp,
 				comments text
 			);`,
 		`create table mo_user_grant(
-				role_id int unsigned,
-				user_id int unsigned,
+				role_id int signed,
+				user_id int signed,
 				granted_time timestamp,
 				with_grant_option bool
 			);`,
 		`create table mo_role_grant(
-				granted_id int unsigned,
-				grantee_id int unsigned,
-				operation_role_id int unsigned,
-				operation_user_id int unsigned,
+				granted_id int signed,
+				grantee_id int signed,
+				operation_role_id int signed,
+				operation_user_id int signed,
 				granted_time timestamp,
 				with_grant_option bool
 			);`,
 		`create table mo_role_privs(
-				role_id int unsigned,
+				role_id int signed,
 				role_name  varchar(100),
 				obj_type  varchar(16),
 				obj_id bigint unsigned,
@@ -607,7 +608,6 @@ var (
 				granted_time timestamp,
 				with_grant_option bool
 			);`,
-		"create table `%!%mo_increment_columns`(name varchar(770), offset bigint, step bigint);",
 	}
 
 	//drop tables for the tenant
@@ -617,7 +617,7 @@ var (
 		`drop table if exists mo_catalog.mo_user_grant;`,
 		`drop table if exists mo_catalog.mo_role_grant;`,
 		`drop table if exists mo_catalog.mo_role_privs;`,
-		"drop table if exists mo_catalog.`%!%mo_increment_columns`;",
+		//"drop table if exists mo_catalog.`%!%mo_increment_columns`;",
 	}
 
 	initMoAccountFormat = `insert into mo_catalog.mo_account(
@@ -626,6 +626,11 @@ var (
 				status,
 				created_time,
 				comments) values (%d,"%s","%s","%s","%s");`
+	initMoAccountWithoutIDFormat = `insert into mo_catalog.mo_account(
+				account_name,
+				status,
+				created_time,
+				comments) values ("%s","%s","%s","%s");`
 	initMoRoleFormat = `insert into mo_catalog.mo_role(
 				role_id,
 				role_name,
@@ -634,6 +639,13 @@ var (
 				created_time,
 				comments
 			) values (%d,"%s",%d,%d,"%s","%s");`
+	initMoRoleWithoutIDFormat = `insert into mo_catalog.mo_role(
+				role_name,
+				creator,
+				owner,
+				created_time,
+				comments
+			) values ("%s",%d,%d,"%s","%s");`
 	initMoUserFormat = `insert into mo_catalog.mo_user(
 				user_id,
 				user_host,
@@ -647,6 +659,18 @@ var (
 				owner,
 				default_role
     		) values(%d,%s,"%s","%s","%s","%s",%s,"%s",%d,%d,%d);`
+	initMoUserWithoutIDFormat = `insert into mo_catalog.mo_user(
+				user_host,
+				user_name,
+				authentication_string,
+				status,
+				created_time,
+				expired_time,
+				login_type,
+				creator,
+				owner,
+				default_role
+    		) values(%s,"%s","%s","%s","%s",%s,"%s",%d,%d,%d);`
 	initMoRolePrivFormat = `insert into mo_catalog.mo_role_privs(
 				role_id,
 				role_name,
@@ -1364,7 +1388,7 @@ func doDropAccount(ctx context.Context, ses *Session, da *tree.DropAccount) erro
 	var results []interface{}
 	var deleteCtx context.Context
 	var accountId int64
-	var hasAccount bool = true
+	var hasAccount = true
 
 	err = bh.Exec(ctx, "begin;")
 	if err != nil {
@@ -3550,9 +3574,9 @@ func InitGeneralTenant(ctx context.Context, tenant *TenantInfo, ca *tree.CreateA
 		return moerr.NewInternalError("tenant %s user %s role %s do not have the privilege to create the new account", tenant.GetTenant(), tenant.GetUser(), tenant.GetDefaultRole())
 	}
 
-	ctx = context.WithValue(ctx, defines.TenantIDKey{}, tenant.GetTenantID())
-	ctx = context.WithValue(ctx, defines.UserIDKey{}, tenant.GetUserID())
-	ctx = context.WithValue(ctx, defines.RoleIDKey{}, tenant.GetDefaultRoleID())
+	ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(tenant.GetTenantID()))
+	ctx = context.WithValue(ctx, defines.UserIDKey{}, uint32(tenant.GetUserID()))
+	ctx = context.WithValue(ctx, defines.RoleIDKey{}, uint32(tenant.GetDefaultRoleID()))
 
 	exists, err = checkTenantExistsOrNot(ctx, pu, ca.Name)
 	if err != nil {
@@ -3582,71 +3606,132 @@ func InitGeneralTenant(ctx context.Context, tenant *TenantInfo, ca *tree.CreateA
 
 // createTablesInMoCatalogOfGeneralTenant creates catalog tables in the database mo_catalog.
 func createTablesInMoCatalogOfGeneralTenant(ctx context.Context, tenant *TenantInfo, pu *config.ParameterUnit, ca *tree.CreateAccount) (*TenantInfo, error) {
+	guestMMu := guest.New(pu.SV.GuestMmuLimitation, pu.HostMmu)
+	bh := NewBackgroundHandler(ctx, guestMMu, pu.Mempool, pu)
+	defer bh.Close()
 	var err error
 	var initMoAccount string
+	var results []interface{}
+	var rsset []ExecResult
+	var newTenantID int64
+	var newUserId int64
+	var comment = ""
 	var initDataSqls []string
+	var initMoRole1 string
+	var initMoRole2 string
+	var initMoUser1 string
+	var initMoUserGrant1 string
+	var initMoUserGrant2 string
+	var newTenant *TenantInfo
+	var name, password, status string
+	var newTenantCtx context.Context
 
 	addSqlIntoSet := func(sql string) {
 		initDataSqls = append(initDataSqls, sql)
 	}
 
 	//USE the mo_catalog
-	addSqlIntoSet("use mo_catalog;")
+	err = bh.Exec(ctx, "use mo_catalog;")
+	if err != nil {
+		return nil, err
+	}
 
 	//BEGIN the transaction
-	addSqlIntoSet("begin;")
+	err = bh.Exec(ctx, "begin;")
+	if err != nil {
+		goto handleFailed
+	}
 
 	//!!!NOTE : Insert into mo_account with original context.
 	// Other operations with a new context with new tenant info
 	//step 1: add new tenant entry to the mo_account
-	//TODO: use auto increment
-	comment := ""
 	if ca.Comment.Exist {
 		comment = ca.Comment.Comment
 	}
-	newTenantID := uint32(rand.Int31())
-	initMoAccount = fmt.Sprintf(initMoAccountFormat, newTenantID, ca.Name, sysAccountStatus, types.CurrentTimestamp().String2(time.UTC, 0), comment)
 
-	insertIntoMoAccountSqlIdx := len(initDataSqls)
-	addSqlIntoSet(initMoAccount)
+	initMoAccount = fmt.Sprintf(initMoAccountWithoutIDFormat, ca.Name, sysAccountStatus, types.CurrentTimestamp().String2(time.UTC, 0), comment)
+	//execute the insert
+	err = bh.Exec(ctx, initMoAccount)
+	if err != nil {
+		goto handleFailed
+	}
+
+	//query the tenant id
+	bh.ClearExecResultSet()
+	err = bh.Exec(ctx, getSqlForCheckTenant(ca.Name))
+	if err != nil {
+		goto handleFailed
+	}
+
+	results = bh.GetExecResultSet()
+	rsset, err = convertIntoResultSet(results)
+	if err != nil {
+		goto handleFailed
+	}
+
+	if len(rsset) != 0 && rsset[0].GetRowCount() != 0 {
+		newTenantID, err = rsset[0].GetInt64(0, 0)
+		if err != nil {
+			goto handleFailed
+		}
+	} else {
+		err = moerr.NewInternalError("get the id of tenant %s failed", ca.Name)
+		goto handleFailed
+	}
+
+	newTenant = &TenantInfo{
+		Tenant:        ca.Name,
+		User:          ca.AuthOption.AdminName,
+		DefaultRole:   publicRoleName,
+		TenantID:      uint32(newTenantID),
+		UserID:        uint32(newUserId),
+		DefaultRoleID: publicRoleID,
+	}
+
+	//with new tenant
+	newTenantCtx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(newTenantID))
+	newUserId = dumpID + 1
+	newTenantCtx = context.WithValue(newTenantCtx, defines.UserIDKey{}, uint32(newUserId))
+	newTenantCtx = context.WithValue(newTenantCtx, defines.RoleIDKey{}, uint32(publicRoleID))
 
 	//create tables for the tenant
-	for i, sql := range createSqls {
+	for _, sql := range createSqls {
 		//only the SYS tenant has the table mo_account
-		if i == createMoAccountIndex {
+		if strings.HasPrefix(sql, "create table mo_account") {
 			continue
 		}
-		addSqlIntoSet(sql)
+		err = bh.Exec(newTenantCtx, sql)
+		if err != nil {
+			goto handleFailed
+		}
 	}
 
 	//initialize the default data of tables for the tenant
 
 	//step 2:add new role entries to the mo_role
-
-	initMoRole1 := fmt.Sprintf(initMoRoleFormat, accountAdminRoleID, accountAdminRoleName, tenant.GetUserID(), tenant.GetDefaultRoleID(), types.CurrentTimestamp().String2(time.UTC, 0), "")
-	initMoRole2 := fmt.Sprintf(initMoRoleFormat, publicRoleID, publicRoleName, tenant.GetUserID(), tenant.GetDefaultRoleID(), types.CurrentTimestamp().String2(time.UTC, 0), "")
+	initMoRole1 = fmt.Sprintf(initMoRoleFormat, accountAdminRoleID, accountAdminRoleName, tenant.GetUserID(), tenant.GetDefaultRoleID(), types.CurrentTimestamp().String2(time.UTC, 0), "")
+	initMoRole2 = fmt.Sprintf(initMoRoleFormat, publicRoleID, publicRoleName, tenant.GetUserID(), tenant.GetDefaultRoleID(), types.CurrentTimestamp().String2(time.UTC, 0), "")
 	addSqlIntoSet(initMoRole1)
 	addSqlIntoSet(initMoRole2)
 
 	//step 3:add new user entry to the mo_user
-	//TODO:use auto_increment column for the userid
 	if ca.AuthOption.IdentifiedType.Typ != tree.AccountIdentifiedByPassword {
 		return nil, moerr.NewInternalError("only support password verification now")
 	}
-	name := ca.AuthOption.AdminName
-	password := ca.AuthOption.IdentifiedType.Str
+	name = ca.AuthOption.AdminName
+	password = ca.AuthOption.IdentifiedType.Str
 	if len(password) == 0 {
 		return nil, moerr.NewInternalError("password is empty string")
 	}
-	status := rootStatus
+	status = rootStatus
 	//TODO: fix the status of user or account
 	if ca.StatusOption.Exist {
 		if ca.StatusOption.Option == tree.AccountStatusSuspend {
 			status = "suspend"
 		}
 	}
-	newUserId := uint32(rand.Int31())
-	initMoUser1 := fmt.Sprintf(initMoUserFormat, newUserId, rootHost, name, password, status,
+	//the first user id in the general tenant
+	initMoUser1 = fmt.Sprintf(initMoUserFormat, newUserId, rootHost, name, password, status,
 		types.CurrentTimestamp().String2(time.UTC, 0), rootExpiredTime, rootLoginType,
 		tenant.GetUserID(), tenant.GetDefaultRoleID(), publicRoleID)
 	addSqlIntoSet(initMoUser1)
@@ -3677,37 +3762,16 @@ func createTablesInMoCatalogOfGeneralTenant(ctx context.Context, tenant *TenantI
 	}
 
 	//step5: add new entries to the mo_user_grant
-	initMoUserGrant1 := fmt.Sprintf(initMoUserGrantFormat, accountAdminRoleID, newUserId, types.CurrentTimestamp().String2(time.UTC, 0), true)
+	initMoUserGrant1 = fmt.Sprintf(initMoUserGrantFormat, accountAdminRoleID, newUserId, types.CurrentTimestamp().String2(time.UTC, 0), true)
 	addSqlIntoSet(initMoUserGrant1)
-	initMoUserGrant2 := fmt.Sprintf(initMoUserGrantFormat, publicRoleID, newUserId, types.CurrentTimestamp().String2(time.UTC, 0), true)
+	initMoUserGrant2 = fmt.Sprintf(initMoUserGrantFormat, publicRoleID, newUserId, types.CurrentTimestamp().String2(time.UTC, 0), true)
 	addSqlIntoSet(initMoUserGrant2)
 	addSqlIntoSet("commit;")
 
-	//with new tenant
-	//TODO: when we have the auto_increment column, we need new strategy.
-	newTenantCtx := context.WithValue(ctx, defines.TenantIDKey{}, newTenantID)
-	newTenantCtx = context.WithValue(newTenantCtx, defines.UserIDKey{}, newUserId)
-	newTenantCtx = context.WithValue(newTenantCtx, defines.RoleIDKey{}, uint32(publicRoleID))
-
-	newTenant := &TenantInfo{
-		Tenant:        ca.Name,
-		User:          ca.AuthOption.AdminName,
-		DefaultRole:   publicRoleName,
-		TenantID:      newTenantID,
-		UserID:        newUserId,
-		DefaultRoleID: publicRoleID,
-	}
-
-	//fill the mo_account, mo_role, mo_user, mo_role_privs, mo_user_grant
-	guestMMu := guest.New(pu.SV.GuestMmuLimitation, pu.HostMmu)
-	bh := NewBackgroundHandler(ctx, guestMMu, pu.Mempool, pu)
-	defer bh.Close()
-	for i, sql := range initDataSqls {
-		inputCtx := ctx
-		if insertIntoMoAccountSqlIdx != i {
-			inputCtx = newTenantCtx
-		}
-		err = bh.Exec(inputCtx, sql)
+	//fill the mo_role, mo_user, mo_role_privs, mo_user_grant, mo_role_grant
+	for _, sql := range initDataSqls {
+		bh.ClearExecResultSet()
+		err = bh.Exec(newTenantCtx, sql)
 		if err != nil {
 			goto handleFailed
 		}
@@ -3762,6 +3826,7 @@ func InitUser(ctx context.Context, tenant *TenantInfo, cu *tree.CreateUser) erro
 	var err error
 	var exists bool
 	var rsset []ExecResult
+	var newUserId int64
 	pu := config.GetParameterUnit(ctx)
 
 	var initUserSqls []string
@@ -3808,7 +3873,10 @@ func InitUser(ctx context.Context, tenant *TenantInfo, cu *tree.CreateUser) erro
 		}
 	}
 
-	appendSql("begin;")
+	err = bh.Exec(ctx, "begin;")
+	if err != nil {
+		goto handleFailed
+	}
 
 	for _, user := range cu.Users {
 		exists, err = checkUserExistsOrNot(ctx, pu, user.Username)
@@ -3837,13 +3905,37 @@ func InitUser(ctx context.Context, tenant *TenantInfo, cu *tree.CreateUser) erro
 		}
 
 		//TODO: get comment or attribute. there is no field in mo_user to store it.
-		//TODO: to get the user id from the auto_increment table
-		newUserId := uint32(rand.Int31())
-		initMoUser1 := fmt.Sprintf(initMoUserFormat, newUserId, rootHost, user.Username, password, status,
+		initMoUser1 := fmt.Sprintf(initMoUserWithoutIDFormat, rootHost, user.Username, password, status,
 			types.CurrentTimestamp().String2(time.UTC, 0), rootExpiredTime, rootLoginType,
 			tenant.GetUserID(), tenant.GetDefaultRoleID(), newRoleId)
 
-		appendSql(initMoUser1)
+		bh.ClearExecResultSet()
+		err = bh.Exec(ctx, initMoUser1)
+		if err != nil {
+			goto handleFailed
+		}
+
+		//query the id
+		bh.ClearExecResultSet()
+		err = bh.Exec(ctx, getSqlForPasswordOfUser(user.Username))
+		if err != nil {
+			goto handleFailed
+		}
+
+		values := bh.GetExecResultSet()
+		rsset, err = convertIntoResultSet(values)
+		if err != nil {
+			goto handleFailed
+		}
+
+		if len(rsset) < 1 || rsset[0].GetRowCount() < 1 {
+			err = moerr.NewInternalError("get the id of user %s failed", user.Username)
+			goto handleFailed
+		}
+		newUserId, err = rsset[0].GetInt64(0, 0)
+		if err != nil {
+			goto handleFailed
+		}
 
 		initMoUserGrant1 := fmt.Sprintf(initMoUserGrantFormat, newRoleId, newUserId, types.CurrentTimestamp().String2(time.UTC, 0), true)
 		appendSql(initMoUserGrant1)
@@ -3922,8 +4014,7 @@ func InitRole(ctx context.Context, tenant *TenantInfo, cr *tree.CreateRole) erro
 			return moerr.NewInternalError("the role %s exists", r.UserName)
 		}
 
-		newRoleId := uint32(rand.Int31())
-		initMoRole := fmt.Sprintf(initMoRoleFormat, newRoleId, r.UserName, tenant.GetUserID(), tenant.GetDefaultRoleID(),
+		initMoRole := fmt.Sprintf(initMoRoleWithoutIDFormat, r.UserName, tenant.GetUserID(), tenant.GetDefaultRoleID(),
 			types.CurrentTimestamp().String2(time.UTC, 0), "")
 		appendSql(initMoRole)
 	}

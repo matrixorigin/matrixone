@@ -5089,7 +5089,7 @@ func Test_doDropRole(t *testing.T) {
 			bh.sql2result[sql] = mrs
 		}
 
-		for i, _ := range stmt.Roles {
+		for i := range stmt.Roles {
 			sqls := getSqlForDeleteRole(int64(i))
 			for _, sql := range sqls {
 				bh.sql2result[sql] = nil
@@ -5140,7 +5140,7 @@ func Test_doDropRole(t *testing.T) {
 			bh.sql2result[sql] = mrs
 		}
 
-		for i, _ := range stmt.Roles {
+		for i := range stmt.Roles {
 			sqls := getSqlForDeleteRole(int64(i))
 			for _, sql := range sqls {
 				bh.sql2result[sql] = nil
@@ -5191,7 +5191,7 @@ func Test_doDropRole(t *testing.T) {
 			bh.sql2result[sql] = mrs
 		}
 
-		for i, _ := range stmt.Roles {
+		for i := range stmt.Roles {
 			sqls := getSqlForDeleteRole(int64(i))
 			for _, sql := range sqls {
 				bh.sql2result[sql] = nil
@@ -5237,7 +5237,7 @@ func Test_doDropUser(t *testing.T) {
 			bh.sql2result[sql] = mrs
 		}
 
-		for i, _ := range stmt.Users {
+		for i := range stmt.Users {
 			sqls := getSqlForDeleteUser(int64(i))
 			for _, sql := range sqls {
 				bh.sql2result[sql] = nil
@@ -5288,7 +5288,7 @@ func Test_doDropUser(t *testing.T) {
 			bh.sql2result[sql] = mrs
 		}
 
-		for i, _ := range stmt.Users {
+		for i := range stmt.Users {
 			sqls := getSqlForDeleteUser(int64(i))
 			for _, sql := range sqls {
 				bh.sql2result[sql] = nil
@@ -5339,7 +5339,7 @@ func Test_doDropUser(t *testing.T) {
 			bh.sql2result[sql] = mrs
 		}
 
-		for i, _ := range stmt.Users {
+		for i := range stmt.Users {
 			sqls := getSqlForDeleteUser(int64(i))
 			for _, sql := range sqls {
 				bh.sql2result[sql] = nil
