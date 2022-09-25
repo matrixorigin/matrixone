@@ -29,7 +29,6 @@ type blockFile struct {
 	common.RefHelper
 	name    string
 	seg     *segmentFile
-	rows    uint32
 	id      *common.ID
 	metaKey objectio.Extent
 	columns []*columnBlock

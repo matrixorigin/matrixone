@@ -29,7 +29,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/jobs"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/panjf2000/ants/v2"
 	"github.com/stretchr/testify/assert"
@@ -528,7 +527,7 @@ func mergeBlocks(t *testing.T, tenantID uint32, e *DB, dbName string, schema *ca
 	}
 }
 
-func compactSegs(t *testing.T, e *DB, schema *catalog.Schema) {
+/*func compactSegs(t *testing.T, e *DB, schema *catalog.Schema) {
 	txn, rel := getDefaultRelation(t, e, schema.Name)
 	segs := make([]*catalog.SegmentEntry, 0)
 	it := rel.MakeSegmentIt()
@@ -550,7 +549,7 @@ func compactSegs(t *testing.T, e *DB, schema *catalog.Schema) {
 		assert.NoError(t, err)
 	}
 	assert.NoError(t, txn.Commit())
-}
+}*/
 
 func getSingleSortKeyValue(bat *containers.Batch, schema *catalog.Schema, row int) (v any) {
 	v = bat.Vecs[schema.GetSingleSortKeyIdx()].Get(row)

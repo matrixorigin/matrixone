@@ -109,8 +109,7 @@ func newBlock(meta *catalog.BlockEntry, segFile file.Segment, bufMgr base.INodeM
 	if err != nil {
 		panic(err)
 	}
-	var colObjects map[int]file.ColumnBlock
-	colObjects = make(map[int]file.ColumnBlock)
+	colObjects := make(map[int]file.ColumnBlock)
 	for i := 0; i < colCnt; i++ {
 		if colBlk, err := blockFile.OpenColumn(i); err != nil {
 			panic(err)

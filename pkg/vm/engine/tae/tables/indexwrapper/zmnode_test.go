@@ -19,7 +19,6 @@ import (
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -115,10 +114,4 @@ func newBatch() *batch.Batch {
 		{Oid: types.T_uint64},
 	}
 	return testutil.NewBatch(types, false, int(40000*2), mp)
-}
-
-func newVector(tye types.Type, buf []byte) *vector.Vector {
-	vector := vector.New(tye)
-	vector.Read(buf)
-	return vector
 }

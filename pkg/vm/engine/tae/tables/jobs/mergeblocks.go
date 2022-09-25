@@ -28,7 +28,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/indexwrapper"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/txnentries"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 	"go.uber.org/zap/zapcore"
@@ -222,7 +221,6 @@ func (task *mergeBlocksTask) Execute() (err error) {
 	var blk handle.Block
 	toAddr := make([]uint32, 0, len(vecs))
 	// index meta for every created block
-	indexMetas := make([]*indexwrapper.IndicesMeta, 0, len(vecs))
 	// Prepare new block placeholder
 	// Build and flush block index if sort key is defined
 	// Flush sort key it correlates to only one column
@@ -237,7 +235,6 @@ func (task *mergeBlocksTask) Execute() (err error) {
 		}
 		task.createdBlks = append(task.createdBlks, blk.GetMeta().(*catalog.BlockEntry))
 		blockHandles = append(blockHandles, blk)
-		indexMetas = append(indexMetas, indexwrapper.NewEmptyIndicesMeta())
 		batch := containers.NewBatch()
 		batchs = append(batchs, batch)
 	}
@@ -292,6 +289,9 @@ func (task *mergeBlocksTask) Execute() (err error) {
 	writer := blockio.NewWriter(task.toSegEntry.GetSegmentData().GetSegmentFile().GetFs(), name)
 	for _, bat := range batchs {
 		block, err := writer.WriteBlock(bat)
+		if err != nil {
+			return err
+		}
 		for idx, vec := range bat.Vecs {
 			if phyAddr.Idx == idx {
 				continue

@@ -102,6 +102,7 @@ func TestNewObjectWriter(t *testing.T) {
 		extents[i] = NewExtent(blk.GetExtent().offset, blk.GetExtent().length, blk.GetExtent().originSize)
 	}
 	bs, err := objectReader.ReadMeta(extents)
+	assert.Nil(t, err)
 	assert.Equal(t, 2, len(bs))
 	idxs := make([]uint16, 3)
 	idxs[0] = 0
