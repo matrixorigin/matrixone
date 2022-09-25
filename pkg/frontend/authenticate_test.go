@@ -296,6 +296,11 @@ func Test_createTablesInMoCatalogOfGeneralTenant(t *testing.T) {
 		bh := mock_frontend.NewMockBackgroundExec(ctrl)
 		bh.EXPECT().Close().Return().AnyTimes()
 		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+		bh.EXPECT().ClearExecResultSet().Return().AnyTimes()
+		msr := newMrsForCheckTenant([][]interface{}{
+			{1, "test"},
+		})
+		bh.EXPECT().GetExecResultSet().Return([]interface{}{msr}).AnyTimes()
 
 		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
 		defer bhStub.Reset()
@@ -341,6 +346,7 @@ func Test_checkUserExistsOrNot(t *testing.T) {
 		bh := mock_frontend.NewMockBackgroundExec(ctrl)
 		bh.EXPECT().Close().Return().AnyTimes()
 		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+		bh.EXPECT().ClearExecResultSet().Return().AnyTimes()
 
 		mrs1 := mock_frontend.NewMockExecResult(ctrl)
 		mrs1.EXPECT().GetRowCount().Return(uint64(1)).AnyTimes()
@@ -379,37 +385,7 @@ func Test_initUser(t *testing.T) {
 		pu.HostMmu = host.New(pu.SV.HostMmuLimitation)
 		pu.Mempool = mempool.New()
 		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-
-		bh := mock_frontend.NewMockBackgroundExec(ctrl)
-		bh.EXPECT().ClearExecResultSet().AnyTimes()
-		bh.EXPECT().Close().Return().AnyTimes()
-		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
-		rs := mock_frontend.NewMockExecResult(ctrl)
-		//first time, return 1,
-		//second time, return 0,
-		cnt := 0
-		rs.EXPECT().GetRowCount().DoAndReturn(func() uint64 {
-			cnt++
-			if cnt == 1 {
-				return 1
-			} else {
-				return 0
-			}
-		}).AnyTimes()
-		rs.EXPECT().GetInt64(gomock.Any(), gomock.Any()).Return(int64(10), nil).AnyTimes()
-		bh.EXPECT().GetExecResultSet().Return([]interface{}{rs}).AnyTimes()
-
-		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
-		defer bhStub.Reset()
-
-		tenant := &TenantInfo{
-			Tenant:        sysAccountName,
-			User:          rootName,
-			DefaultRole:   moAdminRoleName,
-			TenantID:      sysAccountID,
-			UserID:        rootID,
-			DefaultRoleID: moAdminRoleID,
-		}
+		sql2result := make(map[string]ExecResult)
 
 		cu := &tree.CreateUser{
 			IfNotExists: true,
@@ -427,8 +403,39 @@ func Test_initUser(t *testing.T) {
 			MiscOpt: &tree.UserMiscOptionAccountUnlock{},
 		}
 
+		mrs := newMrsForRoleIdOfRole([][]interface{}{
+			{10},
+		})
+
+		sql := getSqlForRoleIdOfRole(cu.Role.UserName)
+		sql2result[sql] = mrs
+
+		for _, user := range cu.Users {
+			sql = getSqlForPasswordOfUser(user.Username)
+			mrs = newMrsForPasswordOfUser([][]interface{}{})
+			sql2result[sql] = mrs
+
+			sql = getSqlForRoleIdOfRole(user.Username)
+			mrs = newMrsForRoleIdOfRole([][]interface{}{})
+			sql2result[sql] = mrs
+		}
+
+		bh := newBh(ctrl, sql2result)
+
+		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
+		defer bhStub.Reset()
+
+		tenant := &TenantInfo{
+			Tenant:        sysAccountName,
+			User:          rootName,
+			DefaultRole:   moAdminRoleName,
+			TenantID:      sysAccountID,
+			UserID:        rootID,
+			DefaultRoleID: moAdminRoleID,
+		}
+
 		err := InitUser(ctx, tenant, cu)
-		convey.So(err, convey.ShouldBeNil)
+		convey.So(err, convey.ShouldBeError)
 	})
 }
 
