@@ -202,7 +202,11 @@ func TestVector6(t *testing.T) {
 	buf := w.Bytes()
 	t.Logf("cap:%d,size:%d", cap(buf), len(buf))
 	opts := &Options{
-		Data: &stl.Bytes{Data: buf},
+		BinaryData: &stl.BinaryData{
+			Payload:       buf,
+			FixedType:     true,
+			FixedTypeSize: stl.Sizeof[int64](),
+		},
 	}
 	vec := NewVector[int64](opts)
 	t.Log(vec.String())
@@ -251,17 +255,14 @@ func TestVector7(t *testing.T) {
 	vec2.Append([]byte("hh2"))
 	vec2.Append([]byte("hhh3"))
 	vec2.Append([]byte("hhhh4"))
-	bs := vec2.Bytes()
-	assert.Equal(t, 14, len(bs.Data))
-	assert.Equal(t, 4, len(bs.Offset))
-	assert.Equal(t, 4, len(bs.Length))
+	bs := vec2.BinaryData()
 	t.Log(vec2.String())
 
 	allocated := allocator.Usage()
 
 	opt2 := new(Options)
 	opt2.Allocator = allocator
-	opt2.Data = bs
+	opt2.BinaryData = bs
 
 	vec4 := NewVector[[]byte](opt2)
 	assert.Equal(t, vec2.Length(), vec4.Length())
@@ -308,7 +309,6 @@ func TestVector9(t *testing.T) {
 	vec.AppendMany([]byte("h1"), []byte("hh2"),
 		[]byte("hhh3"), []byte("hhhh4"))
 	vec.Delete(1)
-	assert.Equal(t, 11, len(vec.Data()))
 	assert.Equal(t, 3, vec.Length())
 	w := new(bytes.Buffer)
 	_, err := vec.WriteTo(w)
@@ -320,7 +320,6 @@ func TestVector9(t *testing.T) {
 	_, err = vec2.ReadFrom(r)
 	assert.NoError(t, err)
 	t.Log(vec2.String())
-	assert.Equal(t, 11, len(vec2.Data()))
 	assert.Equal(t, 3, vec2.Length())
 	assert.Equal(t, vec.Get(0), vec2.Get(0))
 	assert.Equal(t, vec.Get(1), vec2.Get(1))
@@ -342,10 +341,10 @@ func TestVector10(t *testing.T) {
 	vec.Append([]byte(h3))
 	vec.Append([]byte(h4))
 
-	bs := vec.Bytes()
+	data := vec.BinaryData()
 
 	vec2 := NewVector[[]byte](opts)
-	vec2.ReadBytes(bs, true)
+	vec2.ReadData(data, true)
 	t.Log(vec2.String())
 	assert.Equal(t, vec.Length(), vec2.Length())
 	assert.Equal(t, vec.Capacity(), vec2.Capacity())
@@ -356,7 +355,7 @@ func TestVector10(t *testing.T) {
 	assert.Zero(t, vec2.Allocated())
 
 	vec3 := NewVector[[]byte](opts)
-	vec3.ReadBytes(bs, false)
+	vec3.ReadData(data, false)
 	t.Log(vec3.String())
 	assert.Equal(t, vec.Allocated(), vec3.Allocated())
 	assert.Equal(t, vec.Length(), vec3.Length())

@@ -34,8 +34,8 @@ func NewStdVector[T any](opts ...*Options) *StdVector[T] {
 		opt := opts[0]
 		capacity = opt.Capacity
 		vec.alloc = opt.Allocator
-		if opt.DataSize() > 0 {
-			buf = opt.Data.Data
+		if opt.HasBinaryData() {
+			buf = opt.BinaryData.Payload
 			capacity = len(buf) / stl.Sizeof[T]()
 		}
 	}
@@ -232,9 +232,11 @@ func (vec *StdVector[T]) Reset() {
 	vec.buf = vec.buf[:0]
 }
 
-func (vec *StdVector[T]) Bytes() *stl.Bytes {
-	bs := new(stl.Bytes)
-	bs.Data = vec.buf
+func (vec *StdVector[T]) BinaryData() *stl.BinaryData {
+	bs := new(stl.BinaryData)
+	bs.FixedType = true
+	bs.FixedTypeSize = stl.Sizeof[T]()
+	bs.Payload = vec.buf
 	return bs
 }
 
@@ -247,17 +249,6 @@ func (vec *StdVector[T]) ReadData(data *stl.BinaryData, share bool) {
 		return
 	}
 	vec.readBytesNotShared(data.AreaBuf())
-}
-
-func (vec *StdVector[T]) ReadBytes(bs *stl.Bytes, share bool) {
-	if bs == nil {
-		return
-	}
-	if share {
-		vec.readBytesShared(bs.Data)
-		return
-	}
-	vec.readBytesNotShared(bs.Data)
 }
 
 func (vec *StdVector[T]) readBytesNotShared(bs []byte) {
@@ -298,9 +289,11 @@ func (vec *StdVector[T]) InitFromSharedBuf(buf []byte) (n int64, err error) {
 		return
 	}
 	buf = buf[stl.Sizeof[uint32]():]
-	bs := stl.NewBytes()
-	bs.Data = buf[:size]
-	vec.ReadBytes(bs, true)
+	bs := new(stl.BinaryData)
+	bs.Payload = buf[:size]
+	bs.FixedType = true
+	bs.FixedTypeSize = stl.Sizeof[T]()
+	vec.ReadData(bs, true)
 	n += int64(size)
 	return
 }
