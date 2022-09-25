@@ -19,12 +19,12 @@ package logservice
 
 import (
 	"context"
+	"go.uber.org/zap"
 	"sync"
 	"sync/atomic"
 
 	"github.com/fagongzi/goetty/v2"
 	"github.com/lni/dragonboat/v4"
-	"github.com/lni/dragonboat/v4/logger"
 
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
@@ -35,7 +35,7 @@ import (
 )
 
 var (
-	plog = logger.GetLogger("LogService")
+	logger = logutil.GetGlobalLogger().Named("LogService")
 )
 
 const (
@@ -52,11 +52,6 @@ func firstError(err1 error, err2 error) error {
 		return err1
 	}
 	return err2
-}
-
-func init() {
-	// avoid multi call logger.SetLoggerFactory in UT
-	logger.SetLoggerFactory(logutil.DragonboatFactory)
 }
 
 // Service is the top layer component of a log service node. It manages the
@@ -92,7 +87,7 @@ func NewService(
 	}
 	store, err := newLogStore(cfg, taskService)
 	if err != nil {
-		plog.Errorf("failed to create log store %v", err)
+		logger.Error("failed to create log store", zap.Error(err))
 		return nil, err
 	}
 	if err := store.loadMetadata(); err != nil {
@@ -137,16 +132,16 @@ func NewService(
 	// TODO: before making the service available to the outside world, restore all
 	// replicas already known to the local store
 	if err := server.Start(); err != nil {
-		plog.Errorf("failed to start the server %v", err)
+		logger.Error("failed to start the server", zap.Error(err))
 		if err := store.close(); err != nil {
-			plog.Errorf("failed to close the store, %v", err)
+			logger.Error("failed to close the store", zap.Error(err))
 		}
 		return nil, err
 	}
 	// start the heartbeat worker
 	if !cfg.DisableWorkers {
 		if err := service.stopper.RunNamedTask("log-heartbeat-worker", func(ctx context.Context) {
-			plog.Infof("logservice heartbeat worker started")
+			logger.Info("logservice heartbeat worker started")
 
 			// transfer morpc options via context
 			ctx = SetBackendOptions(ctx, service.getBackendOptions()...)

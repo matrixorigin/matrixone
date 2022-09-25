@@ -36,6 +36,7 @@ type taskService struct {
 		sync.Mutex
 
 		started  bool
+		stopping bool
 		stopper  *stopper.Stopper
 		cron     *cron.Cron
 		retryC   chan task.CronTask

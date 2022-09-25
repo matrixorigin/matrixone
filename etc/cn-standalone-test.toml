@@ -3,7 +3,7 @@ service-type = "CN"
 
 [log]
 level = "debug"
-format = "json"
+format = "console"
 max-size = 512
 
 [hakeeper-client]
@@ -11,6 +11,11 @@ service-addresses = [
     "1",
     "2"
 ]
+
+[clock]
+# Due to the poor performance of ci machines, which can cause timers that detect clock 
+# drift to be delayed in scheduling execution, the configuration is larger.
+max-clock-offset = "1s"
 
 [[fileservice]]
 name = "LOCAL"

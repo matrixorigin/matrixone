@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/cnservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
+	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/dnservice"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper"
@@ -37,6 +38,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 )
 
 var (
@@ -211,9 +213,11 @@ type ClusterWaitState interface {
 
 // testCluster simulates a cluster with dn and log service.
 type testCluster struct {
-	t      *testing.T
-	opt    Options
-	logger *zap.Logger
+	t       *testing.T
+	opt     Options
+	logger  *zap.Logger
+	stopper *stopper.Stopper
+	clock   clock.Clock
 
 	dn struct {
 		sync.Mutex
@@ -260,12 +264,18 @@ func NewCluster(t *testing.T, opt Options) (Cluster, error) {
 	opt.validate()
 
 	c := &testCluster{
-		t:   t,
-		opt: opt,
+		t:       t,
+		opt:     opt,
+		stopper: stopper.NewStopper("test-cluster"),
 	}
 	c.logger = logutil.Adjust(c.logger).With(
 		zap.String("tests", "service"),
 	)
+
+	if c.clock == nil {
+		c.clock = clock.NewUnixNanoHLCClockWithStopper(c.stopper, time.Millisecond*500)
+	}
+	clock.SetupDefaultClock(c.clock)
 
 	// build addresses for all services
 	c.network.addresses = c.buildServiceAddresses()
@@ -337,6 +347,7 @@ func (c *testCluster) Close() error {
 	}
 
 	c.mu.running = false
+	c.stopper.Stop()
 	return nil
 }
 
