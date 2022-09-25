@@ -22,7 +22,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"strconv"
 )
@@ -35,12 +34,12 @@ func Prepare(_ *process.Process, arg any) error {
 	var err error
 	param := arg.(*Argument).Es
 	param.colName = "UNNEST_DEFAULT"
-	if uName, ok := param.Extern.Exprs[0].(*tree.UnresolvedName); ok {
-		_, _, param.colName = uName.GetNames()
+	if len(param.Extern.ColName) != 0 {
+		param.colName = param.Extern.ColName
 		param.isCol = true
 	}
-	param.path = param.Extern.Exprs[1].(*tree.NumVal).String()
-	param.outer, err = types.ParseValueToBool(param.Extern.Exprs[2].(*tree.NumVal))
+	param.path = param.Extern.Path
+	param.outer = param.Extern.Outer
 	if err != nil {
 		return err
 	}

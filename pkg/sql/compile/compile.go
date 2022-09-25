@@ -16,7 +16,9 @@ package compile
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/unnest"
 	"runtime"
 	"sync/atomic"
 
@@ -331,7 +333,7 @@ func (c *Compile) compilePlanScope(n *plan.Node, ns []*plan.Node) ([]*Scope, err
 		ds := &Scope{Magic: Normal}
 		ds.Proc = process.NewWithAnalyze(c.proc, c.ctx, 0, c.anal.Nodes())
 		bat := batch.NewWithSize(1)
-		if plan2.IsUnnestValueScan(n) {
+		if plan2.IsTableFunctionValueScan(n) {
 			bat.Vecs[0] = vector.NewConst(types.Type{Oid: types.T_varchar}, 1)
 			err := bat.Vecs[0].Append(n.TableDef.TableFunctionParam, false, c.proc.Mp())
 			if err != nil {
@@ -519,25 +521,24 @@ func (c *Compile) compileExternScan(n *plan.Node) []*Scope {
 }
 
 func (c *Compile) compileTableFunction(n *plan.Node, ss []*Scope) ([]*Scope, error) {
-	param := &tree.TableFunctionParam{}
-	err := param.Unmarshal(n.TableDef.TableFunctionParam)
-	if err != nil {
-		return nil, err
-	}
-	switch param.Name {
+	switch n.TableDef.TableFunctionName {
 	case "unnest":
-		return c.compileUnnest(n, param, ss)
+		return c.compileUnnest(n, n.TableDef.TableFunctionParam, ss)
 	default:
-		return nil, moerr.NewNYI(fmt.Sprintf("table function '%s' not supported", param.Name))
+		return nil, moerr.NewNYI(fmt.Sprintf("table function '%s' not supported", n.TableDef.TableFunctionName))
 	}
 }
 
-func (c *Compile) compileUnnest(n *plan.Node, param *tree.TableFunctionParam, ss []*Scope) ([]*Scope, error) {
+func (c *Compile) compileUnnest(n *plan.Node, dt []byte, ss []*Scope) ([]*Scope, error) {
+	externParam := &unnest.ExternalParam{}
+	if err := json.Unmarshal(dt, externParam); err != nil {
+		return nil, err
+	}
 	for i := range ss {
 		ss[i].appendInstruction(vm.Instruction{
 			Op:  vm.Unnest,
 			Idx: c.anal.curr,
-			Arg: constructUnnest(n, c.ctx, param),
+			Arg: constructUnnest(n, c.ctx, externParam),
 		})
 	}
 	return ss, nil

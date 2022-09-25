@@ -14,21 +14,6 @@
 
 package tree
 
-import (
-	"bytes"
-	"encoding/gob"
-)
-
-var (
-	// use this to avoid the error: gob: type not registered for interface: tree.UnresolvedName
-	registered = false
-)
-
-type TableFunctionParam struct {
-	Name  string
-	Exprs Exprs
-}
-
 type TableFunction struct {
 	statementImpl
 	Func *FuncExpr
@@ -41,38 +26,4 @@ func (t *TableFunction) Format(ctx *FmtCtx) {
 func (t TableFunction) Id() string {
 	_, _, name := t.Func.Func.FunctionReference.(*UnresolvedName).GetNames()
 	return name
-}
-
-func (t TableFunction) MarshalParam() ([]byte, error) {
-	maybeRegister()
-	dt := &TableFunctionParam{
-		Name:  t.Id(),
-		Exprs: t.Func.Exprs,
-	}
-	return dt.Marshal()
-}
-
-func (tp TableFunctionParam) Marshal() ([]byte, error) {
-	maybeRegister()
-	buf := new(bytes.Buffer)
-	enc := gob.NewEncoder(buf)
-	err := enc.Encode(tp)
-	//logutil.Infof("TableFunctionParam.Marshal: %v, dt:%v", tp, string(buf.Bytes()))
-	return buf.Bytes(), err
-}
-
-func (tp *TableFunctionParam) Unmarshal(dt []byte) error {
-	maybeRegister()
-	dec := gob.NewDecoder(bytes.NewBuffer(dt))
-	return dec.Decode(tp)
-}
-
-func maybeRegister() {
-	if registered {
-		return
-	}
-	gob.Register(&UnresolvedName{})
-	gob.Register(&NumVal{})
-	gob.Register(&StrVal{})
-	registered = true
 }

@@ -106,7 +106,7 @@ func (ndesc *NodeDescribeImpl) GetNodeBasicInfo(options *ExplainOptions) (string
 	case plan.Node_MINUS_ALL:
 		pname = "Minus All"
 	case plan.Node_TABLE_FUNCTION:
-		pname = "Table Function"
+		pname = ndesc.Node.TableDef.TableFunctionName
 	default:
 		panic("error node type")
 	}

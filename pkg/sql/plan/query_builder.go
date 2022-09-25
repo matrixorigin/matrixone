@@ -96,6 +96,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 			Name2ColIndex:      node.TableDef.Name2ColIndex,
 			Createsql:          node.TableDef.Createsql,
 			TableFunctionParam: node.TableDef.TableFunctionParam,
+			TableFunctionName:  node.TableDef.TableFunctionName,
 		}
 
 		for i, col := range node.TableDef.Cols {
@@ -613,7 +614,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 
 	case plan.Node_VALUE_SCAN:
 		// VALUE_SCAN always have one column now
-		if !IsUnnestValueScan(node) {
+		if !IsTableFunctionValueScan(node) {
 			node.ProjectList = append(node.ProjectList, &plan.Expr{
 				Typ:  &plan.Type{Id: int32(types.T_int64)},
 				Expr: &plan.Expr_C{C: &plan.Const{Value: &plan.Const_Ival{Ival: 0}}},
@@ -2183,6 +2184,6 @@ func (builder *QueryBuilder) buildTableFunction(tbl *tree.TableFunction, ctx *Bi
 	case "unnest":
 		return builder.buildUnnest(tbl, ctx)
 	default:
-		return 0, moerr.NewNYI("table function not supported: %s", id)
+		return 0, moerr.NewNYI("table function '%s' not supported", id)
 	}
 }

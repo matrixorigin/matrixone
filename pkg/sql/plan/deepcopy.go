@@ -225,6 +225,7 @@ func DeepCopyTableDef(table *plan.TableDef) *plan.TableDef {
 		Createsql:          table.Createsql,
 		Name2ColIndex:      table.Name2ColIndex,
 		TableFunctionParam: make([]byte, len(table.TableFunctionParam)),
+		TableFunctionName:  table.TableFunctionName,
 	}
 
 	for idx, col := range table.Cols {

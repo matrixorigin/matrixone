@@ -282,6 +282,7 @@ message TableDef {
 	string createsql 		= 5;
 	map<string, int32> name2col_index = 6;
 	bytes table_function_param = 7;
+	string table_function_name = 8;
 }
 
 message Cost {
