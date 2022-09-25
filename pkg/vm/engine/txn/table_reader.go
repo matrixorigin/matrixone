@@ -16,8 +16,10 @@ package txnengine
 
 import (
 	"context"
+	"encoding/binary"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -40,69 +42,79 @@ func (t *Table) NewReader(
 	ctx context.Context,
 	parallel int,
 	expr *plan.Expr,
-	shards [][]byte,
+	shardIDs [][]byte,
 ) (
 	readers []engine.Reader,
 	err error,
 ) {
 
-	clusterDetails, err := t.engine.getClusterDetails()
-	if err != nil {
-		return nil, err
-	}
-
 	readers = make([]engine.Reader, parallel)
-	stores := clusterDetails.DNStores
 
-	if len(shards) > 0 {
-		uuidSet := make(map[string]bool)
-		for _, shard := range shards {
-			uuidSet[string(shard)] = true
+	var shards []Shard
+	if len(shardIDs) == 0 {
+		// all
+		var err error
+		shards, err = t.engine.allShards()
+		if err != nil {
+			return nil, err
 		}
-		filteredNodes := stores[:0]
-		for _, node := range stores {
-			if uuidSet[node.UUID] {
-				filteredNodes = append(filteredNodes, node)
+
+	} else {
+		// some
+		idSet := make(map[uint64]bool)
+		for _, bs := range shardIDs {
+			id := binary.LittleEndian.Uint64(bs)
+			idSet[id] = true
+		}
+		clusterDetails, err := t.engine.getClusterDetails()
+		if err != nil {
+			return nil, err
+		}
+		for _, store := range clusterDetails.DNStores {
+			for _, shard := range store.Shards {
+				if !idSet[shard.ShardID] {
+					continue
+				}
+				shards = append(shards, Shard{
+					DNShardRecord: metadata.DNShardRecord{
+						ShardID: shard.ShardID,
+					},
+					ReplicaID: shard.ReplicaID,
+					Address:   store.ServiceAddress,
+				})
 			}
 		}
-		stores = filteredNodes
-	}
-	dnShards, err := t.engine.shardPolicy.Stores(stores)
-	if err != nil {
-		return nil, err
 	}
 
 	resps, err := DoTxnRequest[NewTableIterResp](
 		ctx,
 		t.engine,
 		t.txnOperator.Read,
-		theseShards(dnShards),
+		theseShards(shards),
 		OpNewTableIter,
 		NewTableIterReq{
 			TableID: t.id,
 			Expr:    expr,
-			Shards:  shards,
 		},
 	)
 	if err != nil {
 		return nil, err
 	}
 
-	iterIDSets := make([][]ID, parallel)
-	i := 0
-	for _, resp := range resps {
-		if resp.IterID != emptyID {
-			iterIDSets[i] = append(iterIDSets[i], resp.IterID)
-			i++
-			if i >= parallel {
-				// round
-				i = 0
-			}
+	iterInfoSets := make([][]IterInfo, parallel)
+	for i, resp := range resps {
+		if resp.IterID == emptyID {
+			continue
 		}
+		iterInfo := IterInfo{
+			Shard:  shards[i],
+			IterID: resp.IterID,
+		}
+		iterInfoSets[i%parallel] = append(iterInfoSets[i%parallel], iterInfo)
 	}
 
-	for i, idSet := range iterIDSets {
-		if len(idSet) == 0 {
+	for i, set := range iterInfoSets {
+		if len(set) == 0 {
 			readers[i] = new(TableReader)
 			continue
 		}
@@ -110,12 +122,7 @@ func (t *Table) NewReader(
 			engine:      t.engine,
 			txnOperator: t.txnOperator,
 			ctx:         ctx,
-		}
-		for _, iterID := range idSet {
-			reader.iterInfos = append(reader.iterInfos, IterInfo{
-				Shard:  dnShards[i],
-				IterID: iterID,
-			})
+			iterInfos:   set,
 		}
 		readers[i] = reader
 	}
@@ -182,4 +189,22 @@ func (t *TableReader) Close() error {
 		_ = err // ignore error
 	}
 	return nil
+}
+
+func (t *Table) Ranges(ctx context.Context) ([][]byte, error) {
+	// return encoded shard ids
+	clusterDetails, err := t.engine.getClusterDetails()
+	if err != nil {
+		return nil, err
+	}
+	nodes := clusterDetails.DNStores
+	shards := make([][]byte, 0, len(nodes))
+	for _, node := range nodes {
+		for _, shard := range node.Shards {
+			id := make([]byte, 8)
+			binary.LittleEndian.PutUint64(id, shard.ShardID)
+			shards = append(shards, id)
+		}
+	}
+	return shards, nil
 }
