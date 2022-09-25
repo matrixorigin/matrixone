@@ -18,25 +18,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 )
 
 func (blk *dataBlock) CheckpointWALClosure(currTs types.TS) tasks.FuncT {
 	return func() error {
 		return blk.CheckpointWAL(currTs)
-	}
-}
-
-func (blk *dataBlock) SyncBlockDataClosure(ts types.TS, rows uint32) tasks.FuncT {
-	return func() error {
-		return blk.SyncBlockData(ts, rows)
-	}
-}
-
-func (blk *dataBlock) FlushColumnDataClosure(ts types.TS, colIdx int, colData containers.Vector, sync bool) tasks.FuncT {
-	return func() error {
-		return blk.FlushColumnData(ts, colIdx, colData, sync)
 	}
 }
 
@@ -135,16 +122,4 @@ func (blk *dataBlock) ABlkCheckpointWAL(currTs types.TS) (err error) {
 	// }
 	blk.SetMaxCheckpointTS(currTs)
 	return
-}
-
-func (blk *dataBlock) FlushColumnData(ts types.TS, colIdx int, colData containers.Vector, sync bool) (err error) {
-	return
-}
-
-func (blk *dataBlock) SyncBlockData(ts types.TS, rows uint32) (err error) {
-	if err = blk.file.WriteRows(rows); err != nil {
-		return
-	}
-	//return blk.file.Sync()
-	return nil
 }

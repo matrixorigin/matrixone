@@ -83,27 +83,29 @@ func DecodeSegName(name string) (id *common.ID, err error) {
 	return
 }
 
-func EncodeBlkMetaLoc(id *common.ID, extent objectio.Extent) string {
-	metaLoc := fmt.Sprintf("%s:%d_%d_%d",
+func EncodeBlkMetaLoc(id *common.ID, extent objectio.Extent, rows uint32) string {
+	metaLoc := fmt.Sprintf("%s:%d_%d_%d:%d",
 		EncodeBlkName(id),
 		extent.Offset(),
 		extent.Length(),
 		extent.OriginSize(),
+		rows,
 	)
 	return metaLoc
 }
 
-func EncodeSegMetaLoc(id *common.ID, extent objectio.Extent) string {
-	metaLoc := fmt.Sprintf("%s:%d_%d_%d",
+func EncodeSegMetaLoc(id *common.ID, extent objectio.Extent, rows uint32) string {
+	metaLoc := fmt.Sprintf("%s:%d_%d_%d:%d",
 		EncodeSegName(id),
 		extent.Offset(),
 		extent.Length(),
 		extent.OriginSize(),
+		rows,
 	)
 	return metaLoc
 }
 
-func DecodeMetaLoc(metaLoc string) (string, objectio.Extent) {
+func DecodeMetaLoc(metaLoc string) (string, objectio.Extent, uint32) {
 	info := strings.Split(metaLoc, ":")
 	name := info[0]
 	location := strings.Split(info[1], "_")
@@ -119,6 +121,10 @@ func DecodeMetaLoc(metaLoc string) (string, objectio.Extent) {
 	if err != nil {
 		panic(any(err))
 	}
+	rows, err := strconv.ParseUint(info[2], 10, 32)
+	if err != nil {
+		panic(any(err))
+	}
 	extent := objectio.NewExtent(uint32(offset), uint32(size), uint32(osize))
-	return name, extent
+	return name, extent, uint32(rows)
 }

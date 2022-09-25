@@ -93,8 +93,6 @@ type Block interface {
 	GetMaxVisibleTS() types.TS
 
 	CheckpointWALClosure(endTs types.TS) tasks.FuncT
-	SyncBlockDataClosure(ts types.TS, rows uint32) tasks.FuncT
-	FlushColumnDataClosure(ts types.TS, colIdx int, colData containers.Vector, sync bool) tasks.FuncT
 	Destroy() error
 	ReplayIndex() error
 	Close()

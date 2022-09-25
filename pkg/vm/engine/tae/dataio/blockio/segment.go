@@ -16,10 +16,12 @@ package blockio
 
 import (
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"os"
 	"path"
+	"strings"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -45,6 +47,9 @@ func (factory *ObjectFactory) EncodeName(id uint64) string {
 }
 
 func (factory *ObjectFactory) DecodeName(name string) (uint64, error) {
+	if !strings.HasSuffix(name, ".seg") {
+		return 0, moerr.NewInternalError("blockio: segment name is illegal")
+	}
 	id, err := DecodeSegName(name)
 	if err != nil {
 		return 0, err

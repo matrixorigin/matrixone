@@ -132,6 +132,7 @@ func newBlock(meta *catalog.BlockEntry, segFile file.Segment, bufMgr base.INodeM
 		bufMgr:     bufMgr,
 		prefix:     meta.MakeKey(),
 	}
+	ts := block.ReadTS()
 	block.mvcc.SetAppendListener(block.OnApplyAppend)
 	if meta.IsAppendable() {
 		block.mvcc.SetDeletesListener(block.ABlkApplyDelete)
@@ -155,6 +156,8 @@ func newBlock(meta *catalog.BlockEntry, segFile file.Segment, bufMgr base.INodeM
 		// if this block is created to do compact or merge, no need to new index
 		// if this block is loaded from storage, ReplayIndex will create index
 	}
+	block.mvcc.SetMaxVisible(ts)
+	block.ckpTs.Store(ts)
 	if meta.GetNodeLocked() != nil &&
 		meta.GetNodeLocked().(*catalog.MetadataMVCCNode).MetaLoc != "" {
 		if err := block.ReplayIndex(); err != nil {
@@ -382,13 +385,20 @@ func (blk *dataBlock) Rows(txn txnif.AsyncTxn, coarse bool) int {
 		rows := int(blk.node.Rows(txn, coarse))
 		return rows
 	}
-	return int(blk.file.ReadRows())
+	metaLoc := blk.meta.GetMetaLoc()
+	if len(metaLoc) == 0 {
+		return 0
+	}
+	return int(blk.file.ReadRows(blk.meta.GetMetaLoc()))
 }
 
 // for replay
 func (blk *dataBlock) GetRowsOnReplay() uint64 {
 	rows := uint64(blk.mvcc.GetTotalRow())
-	fileRows := uint64(blk.file.ReadRows())
+	if len(blk.meta.GetMetaLoc()) == 0 {
+		return rows
+	}
+	fileRows := uint64(blk.file.ReadRows(blk.meta.GetMetaLoc()))
 	if rows > fileRows {
 		return rows
 	}

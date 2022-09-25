@@ -162,7 +162,8 @@ func (task *compactBlockTask) Execute() (err error) {
 		return
 	}
 	metaLoc := blockio.EncodeBlkMetaLoc(ioTask.file.Fingerprint(),
-		ioTask.file.GetMeta().GetExtent())
+		ioTask.file.GetMeta().GetExtent(),
+		uint32(preparer.Columns.Length()))
 	logutil.Infof("node: %v", metaLoc)
 	if err = newBlk.UpdateMetaLoc(metaLoc); err != nil {
 		return err

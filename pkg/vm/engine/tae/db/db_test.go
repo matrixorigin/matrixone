@@ -16,6 +16,7 @@ package db
 
 import (
 	"bytes"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
 	"reflect"
 	"sync"
 	"sync/atomic"
@@ -354,9 +355,11 @@ func TestNonAppendableBlock(t *testing.T) {
 		assert.Nil(t, err)
 		err = blockFile.Sync()
 		assert.Nil(t, err)
-		err = blockFile.WriteRows(uint32(bat.Length()))
-		assert.Nil(t, err)
-
+		metaLoc := blockio.EncodeBlkMetaLoc(
+			blockFile.Fingerprint(),
+			blockFile.GetMeta().GetExtent(),
+			uint32(bat.Length()))
+		blk.UpdateMetaLoc(metaLoc)
 		v, err := dataBlk.GetValue(txn, 4, 2)
 		assert.Nil(t, err)
 		expectVal := bat.Vecs[2].Get(4)

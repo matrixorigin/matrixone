@@ -25,12 +25,6 @@ import (
 	"path"
 )
 
-type metaKey struct {
-	extent  objectio.Extent
-	metaLoc string
-	delta   string
-}
-
 type blockFile struct {
 	common.RefHelper
 	name    string
@@ -91,8 +85,9 @@ func (bf *blockFile) WriteRows(rows uint32) (err error) {
 	return nil
 }
 
-func (bf *blockFile) ReadRows() uint32 {
-	return bf.rows
+func (bf *blockFile) ReadRows(metaLoc string) uint32 {
+	_, _, rows := DecodeMetaLoc(metaLoc)
+	return rows
 }
 
 func (bf *blockFile) GetMeta() objectio.BlockObject {
@@ -110,7 +105,7 @@ func (bf *blockFile) GetMeta() objectio.BlockObject {
 }
 
 func (bf *blockFile) GetMetaFormKey(metaLoc string) objectio.BlockObject {
-	name, extent := DecodeMetaLoc(metaLoc)
+	name, extent, _ := DecodeMetaLoc(metaLoc)
 	if bf.reader == nil {
 		bf.reader = NewReader(bf.seg.fs, bf, name)
 	}

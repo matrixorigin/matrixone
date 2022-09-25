@@ -28,7 +28,7 @@ type Block interface {
 	Sync() error
 	// IsAppendable() bool
 	WriteRows(rows uint32) error
-	ReadRows() uint32
+	ReadRows(meta string) uint32
 
 	// OpenDeletesFile() common.IRWFile
 	WriteDeletes(buf []byte) error
