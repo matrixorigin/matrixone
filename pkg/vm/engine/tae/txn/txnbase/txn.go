@@ -124,18 +124,18 @@ func (txn *Txn) SetApplyRollbackFn(fn func(txnif.AsyncTxn) error)   { txn.ApplyR
 // TODO: 1. How to handle the case in which log service timed out?
 //  2. For a 2pc transaction, Rollback message may arrive before Prepare message,
 //     should handle this case by TxnStorage?
-func (txn *Txn) Prepare() (err error) {
+func (txn *Txn) Prepare() (pts types.TS, err error) {
 	//TODO::should handle this by TxnStorage?
 	if txn.Mgr.GetTxn(txn.GetID()) == nil {
 		logutil.Warn("tae : txn is not found in TxnManager")
 		//txn.Err = ErrTxnNotFound
-		return moerr.NewTxnNotFound()
+		return types.TS{}, moerr.NewTxnNotFound()
 	}
 	state := txn.GetTxnState(false)
 	if state != txnif.TxnStateActive {
 		logutil.Warnf("unexpected txn status : %s", txnif.TxnStrState(state))
 		txn.Err = moerr.NewTxnNotActive(txnif.TxnStrState(state))
-		return txn.Err
+		return types.TS{}, txn.Err
 	}
 	txn.Add(1)
 	err = txn.Mgr.OnOpTxn(&OpTxn{
@@ -160,7 +160,7 @@ func (txn *Txn) Prepare() (err error) {
 		//txn.Status = txnif.TxnStatusRollbacked
 		txn.Mgr.DeleteTxn(txn.GetID())
 	}
-	return txn.GetError()
+	return txn.GetPrepareTS(), txn.GetError()
 }
 
 // Rollback is used to roll back a 1PC or 2PC transaction.
@@ -355,15 +355,7 @@ func (txn *Txn) CreateDatabase(name string) (db handle.Database, err error) {
 	return
 }
 
-func (txn *Txn) CreateDatabaseByDef(def any) (db handle.Database, err error) {
-	return
-}
-
 func (txn *Txn) DropDatabase(name string) (db handle.Database, err error) {
-	return
-}
-
-func (txn *Txn) DropDatabaseByID(id uint64) (db handle.Database, err error) {
 	return
 }
 

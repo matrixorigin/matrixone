@@ -74,10 +74,6 @@ func (db *txnSysDB) DropRelationByName(name string) (rel handle.Relation, err er
 	return db.txnDatabase.DropRelationByName(name)
 }
 
-func (db *txnSysDB) DropRelationByID(id uint64) (rel handle.Relation, err error) {
-	panic(moerr.NewNYI("DropRelationByID is not implemented yet"))
-}
-
 func (db *txnSysDB) TruncateByName(name string) (rel handle.Relation, err error) {
 	if isSysTable(name) {
 		err = moerr.NewInternalError("truncate relation %s is not permitted", name)

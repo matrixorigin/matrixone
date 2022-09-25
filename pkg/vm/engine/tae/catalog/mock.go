@@ -150,10 +150,6 @@ func (h *mockDBHandle) DropRelationByName(name string) (rel handle.Relation, err
 	return
 }
 
-func (h *mockDBHandle) DropRelationByID(id uint64) (rel handle.Relation, err error) {
-	panic(moerr.NewNYI("DropRelationById is not implemented yet"))
-}
-
 func (h *mockDBHandle) String() string {
 	return h.entry.String()
 }

@@ -15,7 +15,7 @@
 package db
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"io"
 	"runtime"
 	"sync/atomic"
@@ -71,11 +71,6 @@ func (db *DB) StartTxn(info []byte) (txnif.AsyncTxn, error) {
 	return db.TxnMgr.StartTxn(info)
 }
 
-// TODO::
-func (db *DB) StartTxnWithMeta(info []byte, start types.TS, tid []byte) {
-	panic(moerr.NewNYI("StartTxnWithMeta is not implemented yet"))
-}
-
 func (db *DB) CommitTxn(txn txnif.AsyncTxn) (err error) {
 	return txn.Commit()
 }
@@ -87,6 +82,14 @@ func (db *DB) GetTxnByCtx(txnOperator client.TxnOperator) (txn txnif.AsyncTxn, e
 		err = moerr.NewNotFound()
 	}
 	return
+}
+
+func (db *DB) GetOrCreateTxnWithMeta(info []byte, meta txn.TxnMeta) (txn txnif.AsyncTxn, err error) {
+	panic(moerr.NewNYI("GetTxnWithMeta is not implemented yet "))
+}
+
+func (db *DB) GetTxnByMeta(info []byte, meta txn.TxnMeta) (txn txnif.AsyncTxn, err error) {
+	panic(moerr.NewNYI("GetTxnByMeta is not implemented yet "))
 }
 
 func (db *DB) GetTxn(id uint64) (txn txnif.AsyncTxn, err error) {

@@ -16,16 +16,6 @@ package taestorage
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/pb/api"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
-	"os"
-	"sync"
-	"syscall"
-
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
@@ -33,35 +23,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/rpchandle"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 )
 
-type TAEStorage struct {
-	shard     metadata.DNShard
-	logClient logservice.Client
-	fs        fileservice.FileService
-	clock     clock.Clock
-	tae       *db.DB
-	txns      struct {
-		sync.Mutex
-		idMap map[string]txnif.AsyncTxn
-	}
-}
-
-// just for test
-func openTAE(targetDir string) (*db.DB, error) {
-	mask := syscall.Umask(0)
-	if err := os.MkdirAll(targetDir, os.FileMode(0755)); err != nil {
-		syscall.Umask(mask)
-		logutil.Infof("Recreate dir error:%v\n", err)
-		return nil, err
-	}
-	syscall.Umask(mask)
-	tae, err := db.Open(targetDir+"/tae", nil)
-	if err != nil {
-		logutil.Infof("Open tae failed. error:%v", err)
-		return nil, err
-	}
-	return tae, nil
+type taeStorage struct {
+	taeHandler rpchandle.Handler
 }
 
 func NewTAEStorage(
@@ -69,111 +37,53 @@ func NewTAEStorage(
 	logClient logservice.Client,
 	fs fileservice.FileService,
 	clock clock.Clock,
-) (*TAEStorage, error) {
-	//open tae, just for test.
-	dir := "./store"
-	engine, err := openTAE(dir)
-	if err != nil {
-		return nil, err
+) (*taeStorage, error) {
+
+	opt := &options.Options{
+		Clock: clock,
+		Fs:    fs,
+		Lc:    logClient,
+		Shard: shard,
 	}
-	storage := &TAEStorage{
-		shard:     shard,
-		logClient: logClient,
-		fs:        fs,
-		clock:     clock,
-		tae:       engine,
+	storage := &taeStorage{
+		taeHandler: db.NewTAEHandle(opt),
 	}
-	storage.txns.idMap = make(map[string]txnif.AsyncTxn)
 	return storage, nil
 }
 
-var _ storage.TxnStorage = new(TAEStorage)
-
-func (s *TAEStorage) getOrCreate(meta txn.TxnMeta) (txn txnif.AsyncTxn, err error) {
-	s.txns.Lock()
-	defer s.txns.Unlock()
-	txn, ok := s.txns.idMap[string(meta.ID)]
-	if !ok {
-		//TODO::use StartTxnWithMeta, instead of StartTxn.
-		txn, err = s.tae.StartTxn(nil)
-	}
-	return
-}
-
-func (s *TAEStorage) get(meta txn.TxnMeta) (txn txnif.AsyncTxn, err error) {
-	s.txns.Lock()
-	defer s.txns.Unlock()
-	txn, ok := s.txns.idMap[string(meta.ID)]
-	if !ok {
-		return nil, moerr.NewMissingTxn()
-	}
-	return
-}
+var _ storage.TxnStorage = new(taeStorage)
 
 // Close implements storage.TxnTAEStorage
-func (s *TAEStorage) Close(ctx context.Context) error {
-	panic(moerr.NewNYI("Close is not implemented yet"))
+func (s *taeStorage) Close(ctx context.Context) error {
+	return s.taeHandler.HandleClose()
 }
 
 // Commit implements storage.TxnTAEStorage
-func (s *TAEStorage) Commit(ctx context.Context, txnMeta txn.TxnMeta) error {
-	txnHandle, err := s.get(txnMeta)
-	if err != nil {
-		return err
-	}
-	return txnHandle.Commit()
-
+func (s *taeStorage) Commit(ctx context.Context, txnMeta txn.TxnMeta) error {
+	return s.taeHandler.HandleCommit(txnMeta)
 }
 
 // Committing implements storage.TxnTAEStorage
-func (s *TAEStorage) Committing(ctx context.Context, txnMeta txn.TxnMeta) error {
-	panic(moerr.NewNYI("Committing is not implemented yet"))
+func (s *taeStorage) Committing(ctx context.Context, txnMeta txn.TxnMeta) error {
+	return s.taeHandler.HandleCommitting(txnMeta)
 }
 
 // Destroy implements storage.TxnTAEStorage
-func (s *TAEStorage) Destroy(ctx context.Context) error {
-	panic(moerr.NewNYI("Destroy is not implemented yet"))
+func (s *taeStorage) Destroy(ctx context.Context) error {
+	return s.taeHandler.HandleDestroy()
 }
 
 // Prepare implements storage.TxnTAEStorage
-func (s *TAEStorage) Prepare(ctx context.Context, txnMeta txn.TxnMeta) (timestamp.Timestamp, error) {
-	panic(moerr.NewNYI("Prepare is not implemented yet"))
-}
-
-// Read implements storage.TxnTAEStorage
-func (s *TAEStorage) Read(ctx context.Context, txnMeta txn.TxnMeta, op uint32, payload []byte) (storage.ReadResult, error) {
-	panic(moerr.NewNYI("Read is not implemented yet"))
+func (s *taeStorage) Prepare(ctx context.Context, txnMeta txn.TxnMeta) (timestamp.Timestamp, error) {
+	return s.taeHandler.HandlePrepare(txnMeta)
 }
 
 // Rollback implements storage.TxnTAEStorage
-func (s *TAEStorage) Rollback(ctx context.Context, txnMeta txn.TxnMeta) error {
-	txnHandle, err := s.get(txnMeta)
-	if err != nil {
-		return err
-	}
-	return txnHandle.Rollback()
+func (s *taeStorage) Rollback(ctx context.Context, txnMeta txn.TxnMeta) error {
+	return s.taeHandler.HandleRollback(txnMeta)
 }
 
 // StartRecovery implements storage.TxnTAEStorage
-func (s *TAEStorage) StartRecovery(context.Context, chan txn.TxnMeta) {
-	panic(moerr.NewNYI("StartRecovery is not implemented yet"))
-}
-
-// Write implements storage.TxnTAEStorage
-func (s *TAEStorage) Write(ctx context.Context, txnMeta txn.TxnMeta, op uint32, payload []byte) ([]byte, error) {
-	txnHandle, err := s.getOrCreate(txnMeta)
-	if err != nil {
-		return nil, err
-	}
-
-	precommitW := &api.PrecommitWriteCmd{}
-	err = types.Decode(payload, precommitW)
-	if err != nil {
-		return nil, err
-	}
-	for _, entry := range precommitW.EntryList {
-		//err = doHandleCmd(txnHandle, entry)
-		err = txnHandle.HandleCmd(entry)
-	}
-	return nil, err
+func (s *taeStorage) StartRecovery(ctx context.Context, ch chan txn.TxnMeta) {
+	s.taeHandler.HandleStartRecovery(ch)
 }

@@ -112,10 +112,6 @@ func (db *txnDatabase) DropRelationByName(name string) (rel handle.Relation, err
 	return db.Txn.GetStore().DropRelationByName(db.txnDB.entry.ID, name)
 }
 
-func (db *txnDatabase) DropRelationByID(id uint64) (rel handle.Relation, err error) {
-	panic(moerr.NewNYI("DropRelationByID is not implemented yet"))
-}
-
 func (db *txnDatabase) TruncateByName(name string) (rel handle.Relation, err error) {
 	old, err := db.DropRelationByName(name)
 	if err != nil {

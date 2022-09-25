@@ -19,15 +19,30 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 )
 
-func ProtoToMOBatch(bat *api.Batch) *Batch {
-	rbat := New(true, bat.Attrs)
-	for i, v := range bat.Vecs {
-		moV, err := vector.ProtoVectorToVector(v)
+func BatchToProtoBatch(bat *Batch) (*api.Batch, error) {
+	rbat := new(api.Batch)
+	rbat.Attrs = bat.Attrs
+	for _, vec := range bat.Vecs {
+		pbVector, err := vector.VectorToProtoVector(vec)
 		if err != nil {
-			panic(err)
+			return nil, err
 		}
-		rbat.SetVector(int32(i), moV)
+		rbat.Vecs = append(rbat.Vecs, pbVector)
+	}
+	return rbat, nil
+
+}
+
+func ProtoBatchToBatch(bat *api.Batch) (*Batch, error) {
+	rbat := NewWithSize(len(bat.Attrs))
+	rbat.Attrs = append(rbat.Attrs, bat.Attrs...)
+	for i, v := range bat.Vecs {
+		vec, err := vector.ProtoVectorToVector(v)
+		if err != nil {
+			return nil, err
+		}
+		rbat.SetVector(int32(i), vec)
 	}
 	rbat.InitZsOne(rbat.GetVector(0).Length())
-	return rbat
+	return rbat, nil
 }

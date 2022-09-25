@@ -19,9 +19,11 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"io"
 	"math/rand"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -30,6 +32,109 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 )
+
+// ParseEntryList consume a set of entries and return a command and the remaining entries
+// TODO:: it 'll be removed, instead use pkg/catalog.ParseEntryList
+func ParseEntryList(es []*api.Entry) (any, []*api.Entry, error) {
+	panic(moerr.NewNYI("ParseEntryList is not implemented yet"))
+}
+
+// TODO:: it 'll be removed, instead use pkg/catalog.CreateDatabase
+type CreateDatabase struct {
+	Name        string
+	CreateSql   string
+	Owner       uint32
+	Creator     uint32
+	AccountId   uint32
+	CreatedTime types.Timestamp
+}
+
+// TODO:: it 'll be removed, instead use pkg/catalog.DropDatabase
+type DropDatabase struct {
+	Id   uint64
+	Name string
+}
+
+// TODO:: it 'll be removed, instead use pkg/catalog.CreateTable
+type CreateTable struct {
+	Name         string
+	CreateSql    string
+	Owner        uint32
+	Creator      uint32
+	AccountId    uint32
+	DatabaseId   uint64
+	DatabaseName string
+	Comment      string
+	Partition    string
+	Defs         []engine.TableDef
+}
+
+// TODO:: it 'll be removed, instead use pkg/catalog.DropTable
+type DropTable struct {
+	Id           uint64
+	Name         string
+	DatabaseId   uint64
+	DatabaseName string
+}
+
+// FIXME:: which package should this function go into?
+//
+//	it's copy of DefsToSchema of help.go.
+func DefsToSchema(name string, defs []engine.TableDef) (schema *Schema, err error) {
+	schema = NewEmptySchema(name)
+	pkMap := make(map[string]int)
+	for _, def := range defs {
+		if pkDef, ok := def.(*engine.PrimaryIndexDef); ok {
+			for i, name := range pkDef.Names {
+				pkMap[name] = i
+			}
+			break
+		}
+	}
+	for _, def := range defs {
+		switch defVal := def.(type) {
+		case *engine.AttributeDef:
+			if idx, ok := pkMap[defVal.Attr.Name]; ok {
+				if err = schema.AppendPKColWithAttribute(defVal.Attr, idx); err != nil {
+					return
+				}
+			} else {
+				if err = schema.AppendColWithAttribute(defVal.Attr); err != nil {
+					return
+				}
+			}
+
+		case *engine.PropertiesDef:
+			for _, property := range defVal.Properties {
+				switch strings.ToLower(property.Key) {
+				case SystemRelAttr_Comment:
+					schema.Comment = property.Value
+				case SystemRelAttr_Kind:
+					schema.Relkind = property.Value
+				case SystemRelAttr_CreateSQL:
+					schema.Createsql = property.Value
+				default:
+				}
+			}
+
+		case *engine.PartitionDef:
+			schema.Partition = defVal.Partition
+
+		case *engine.ViewDef:
+			schema.View = defVal.View
+
+		default:
+			// We will not deal with other cases for the time being
+		}
+	}
+	if err = schema.Finalize(false); err != nil {
+		return
+	}
+	if schema.IsCompoundSortKey() {
+		err = moerr.NewNYI("compound idx")
+	}
+	return
+}
 
 type IndexT uint16
 

@@ -65,9 +65,7 @@ type TxnHandle interface {
 	GetTenantID() uint32
 	GetUserAndRoleID() (uint32, uint32)
 	CreateDatabase(name string) (handle.Database, error)
-	CreateDatabaseByDef(def any) (handle.Database, error)
 	DropDatabase(name string) (handle.Database, error)
-	DropDatabaseByID(id uint64) (handle.Database, error)
 	GetDatabase(name string) (handle.Database, error)
 	DatabaseNames() []string
 	HandleCmd(entry *api.Entry) error
@@ -82,7 +80,7 @@ type TxnChanger interface {
 	ToRollbackedLocked() error
 	ToRollbackingLocked(ts types.TS) error
 	ToUnknownLocked()
-	Prepare() error
+	Prepare() (types.TS, error)
 	Committing() error
 	Commit() error
 	Rollback() error
