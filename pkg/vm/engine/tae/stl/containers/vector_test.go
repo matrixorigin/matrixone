@@ -595,3 +595,30 @@ func TestStrVector3(t *testing.T) {
 	vec.Close()
 	assert.Zero(t, opts.Allocator.Usage())
 }
+
+func getBytes(i int) []byte {
+	if i%2 == 0 {
+		return []byte("hhhhhhhhhhhhhhhhhxxxxxxxxxe")
+	}
+	return []byte("yyyk")
+}
+
+func TestStrVector4(t *testing.T) {
+	opts := withAllocator(nil)
+	vec := NewStrVector2[[]byte](opts)
+	for i := 0; i < 10000; i++ {
+		vec.Append(getBytes(i))
+	}
+	now := time.Now()
+
+	i := 0
+	vec.Update(i, getBytes(1))
+	vec.Update(i, getBytes(0))
+	vec.Update(i, getBytes(1))
+	vec.Update(i, getBytes(0))
+	vec.Delete(i)
+
+	t.Log(time.Since(now))
+	vec.Close()
+	assert.Zero(t, opts.Allocator.Usage())
+}
