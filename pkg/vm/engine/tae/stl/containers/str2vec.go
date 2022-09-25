@@ -17,16 +17,16 @@ func NewStrVector2[T any](opts ...*Options) *StrVector2[T] {
 		opt := opts[0]
 		capacity = opt.Capacity
 		alloc = opt.Allocator
-		if opt.HasBinaryData() {
-			if opt.BinaryData.VAreaSize() > 0 {
-				vdataOpt.BinaryData = new(stl.BinaryData)
-				vdataOpt.BinaryData.Payload = opt.BinaryData.VAreaBuf()
-				vdataOpt.Capacity = opt.BinaryData.Length()
+		if opt.HasData() {
+			if opt.Data.VAreaSize() > 0 {
+				vdataOpt.Data = new(stl.BinaryData)
+				vdataOpt.Data.Payload = opt.Data.VAreaBuf()
+				vdataOpt.Capacity = opt.Data.Length()
 			}
-			if opt.BinaryData.AreaSize() > 0 {
-				areaOpt.BinaryData = new(stl.BinaryData)
-				areaOpt.BinaryData.Payload = opt.BinaryData.AreaBuf()
-				areaOpt.Capacity = opt.BinaryData.AreaSize()
+			if opt.Data.AreaSize() > 0 {
+				areaOpt.Data = new(stl.BinaryData)
+				areaOpt.Data.Payload = opt.Data.AreaBuf()
+				areaOpt.Capacity = opt.Data.AreaSize()
 			}
 		}
 	}

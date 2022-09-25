@@ -34,8 +34,8 @@ func NewStdVector[T any](opts ...*Options) *StdVector[T] {
 		opt := opts[0]
 		capacity = opt.Capacity
 		vec.alloc = opt.Allocator
-		if opt.HasBinaryData() {
-			buf = opt.BinaryData.Payload
+		if opt.HasData() {
+			buf = opt.Data.AreaBuf()
 			capacity = len(buf) / stl.Sizeof[T]()
 		}
 	}

@@ -202,7 +202,7 @@ func TestVector6(t *testing.T) {
 	buf := w.Bytes()
 	t.Logf("cap:%d,size:%d", cap(buf), len(buf))
 	opts := &Options{
-		BinaryData: &stl.BinaryData{
+		Data: &stl.BinaryData{
 			Payload:       buf,
 			FixedType:     true,
 			FixedTypeSize: stl.Sizeof[int64](),
@@ -262,7 +262,7 @@ func TestVector7(t *testing.T) {
 
 	opt2 := new(Options)
 	opt2.Allocator = allocator
-	opt2.BinaryData = bs
+	opt2.Data = bs
 
 	vec4 := NewVector[[]byte](opt2)
 	assert.Equal(t, vec2.Length(), vec4.Length())
