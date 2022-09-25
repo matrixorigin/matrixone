@@ -17,7 +17,6 @@ package indexwrapper
 import (
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
@@ -101,24 +100,12 @@ func (index *immutableIndex) Destroy() (err error) {
 func (index *immutableIndex) ReadFrom(blk data.Block, colDef *catalog.ColDef, col file.ColumnBlock) (err error) {
 	entry := blk.GetMeta().(*catalog.BlockEntry)
 	metaLoc := entry.GetMetaLoc()
-	logutil.Infof("MetaLoc is %s", metaLoc)
 	idxFile := col.GetDataObject(metaLoc)
 	id := entry.AsCommonID()
 	id.Idx = uint16(colDef.Idx)
 	index.zmReader = NewZMReader(idxFile, colDef.Type)
-	/*for _, meta := range metas {
-		idxFile := colFile.GetDataObject(blk.GetMeta().(*catalog.BlockEntry).GetNodeLocked().(*catalog.MetadataMVCCNode).MetaLoc)
-		id := entry.AsCommonID()
-		id.PartID = uint32(meta.InternalIdx) + 1000
-		id.Idx = meta.ColIdx
-		switch meta.IdxType {
-		case BlockZoneMapIndex:
-			index.zmReader = NewZMReader(blk.GetBufMgr(), idxFile, id, colDef.Type)
-		case StaticFilterIndex:
-			index.bfReader = NewBFReader(blk.GetBufMgr(), idxFile, id)
-		default:
-			panic("unsupported index type")
-		}
-	}*/
+	if idxFile.GetMeta().GetBloomFilter().End() > 0 {
+		index.bfReader = NewBFReader(idxFile)
+	}
 	return
 }

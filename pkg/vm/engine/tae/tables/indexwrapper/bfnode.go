@@ -17,43 +17,45 @@ package indexwrapper
 import (
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
+	"sync"
 )
 
-type bloomFilterNode struct {
-	*buffer.Node
-	mgr  base.INodeManager
-	file objectio.ColumnObject
-	impl index.StaticFilter
+type BFReader struct {
+	sync.Mutex
+	file    objectio.ColumnObject
+	impl    index.StaticFilter
+	dataTyp types.Type
 }
 
-func newBloomFilterNode(mgr base.INodeManager, file objectio.ColumnObject, id *common.ID) *bloomFilterNode {
-	impl := new(bloomFilterNode)
-	impl.Node = buffer.NewNode(impl, mgr, *id, uint64(file.GetMeta().GetLocation().Length()))
-	impl.LoadFunc = impl.OnLoad
-	impl.UnloadFunc = impl.OnUnload
-	impl.DestroyFunc = impl.OnDestroy
-	impl.file = file
-	//impl.meta = meta
-	impl.mgr = mgr
-	mgr.RegisterNode(impl)
-	return impl
+func NewBFReader(file objectio.ColumnObject) *BFReader {
+	return &BFReader{
+		file: file,
+	}
 }
 
-func (n *bloomFilterNode) OnLoad() {
-	if n.impl != nil {
+func (reader *BFReader) Destroy() (err error) {
+	reader.Lock()
+	defer reader.Unlock()
+	reader.impl = nil
+	return nil
+}
+
+func (reader *BFReader) readIndex() {
+	reader.Lock()
+	defer reader.Unlock()
+	if reader.impl != nil {
 		// no-op
 		return
 	}
 	//startOffset := n.meta.StartOffset
-	stat := n.file.GetMeta()
+	stat := reader.file.GetMeta()
 	compressTyp := stat.GetAlg()
-	fsData, err := n.file.GetIndex(objectio.BloomFilterType)
+	fsData, err := reader.file.GetIndex(objectio.BloomFilterType)
 	if err != nil {
 		panic(err)
 	}
@@ -63,59 +65,20 @@ func (n *bloomFilterNode) OnLoad() {
 	if err = Decompress(data, buf, CompressType(compressTyp)); err != nil {
 		panic(err)
 	}
-	n.impl, err = index.NewBinaryFuseFilterFromSource(buf)
+	reader.impl, err = index.NewBinaryFuseFilterFromSource(buf)
 	if err != nil {
 		panic(err)
 	}
 }
 
-func (n *bloomFilterNode) OnUnload() {
-	if n.impl == nil {
-		// no-op
-		return
-	}
-	n.impl = nil
-}
-
-func (n *bloomFilterNode) OnDestroy() {
-	//n.file.Unref()
-}
-
-func (n *bloomFilterNode) Close() (err error) {
-	if err = n.Node.Close(); err != nil {
-		return err
-	}
-	n.impl = nil
-	return nil
-}
-
-type BFReader struct {
-	node *bloomFilterNode
-}
-
-func NewBFReader(mgr base.INodeManager, file objectio.ColumnObject, id *common.ID) *BFReader {
-	return &BFReader{
-		node: newBloomFilterNode(mgr, file, id),
-	}
-}
-
-func (reader *BFReader) Destroy() (err error) {
-	if err = reader.node.Close(); err != nil {
-		return err
-	}
-	return nil
-}
-
 func (reader *BFReader) MayContainsKey(key any) (bool, error) {
-	handle := reader.node.mgr.Pin(reader.node)
-	defer handle.Close()
-	return reader.node.impl.MayContainsKey(key)
+	reader.readIndex()
+	return reader.impl.MayContainsKey(key)
 }
 
 func (reader *BFReader) MayContainsAnyKeys(keys containers.Vector, visibility *roaring.Bitmap) (bool, *roaring.Bitmap, error) {
-	handle := reader.node.mgr.Pin(reader.node)
-	defer handle.Close()
-	return reader.node.impl.MayContainsAnyKeys(keys, visibility)
+	reader.readIndex()
+	return reader.impl.MayContainsAnyKeys(keys, visibility)
 }
 
 type BFWriter struct {

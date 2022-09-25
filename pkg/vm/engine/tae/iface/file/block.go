@@ -26,23 +26,16 @@ import (
 type Block interface {
 	Base
 	Sync() error
-	// IsAppendable() bool
-	WriteRows(rows uint32) error
 	ReadRows(meta string) uint32
-
-	// OpenDeletesFile() common.IRWFile
 	WriteDeletes(buf []byte) error
 	ReadDeletes(buf []byte) error
 	LoadDeletes() (*roaring.Bitmap, error)
-
 	OpenColumn(colIdx int) (ColumnBlock, error)
-
 	WriteBatch(bat *containers.Batch, ts types.TS) (objectio.BlockObject, error)
 	GetWriter() objectio.Writer
 	LoadBatch([]types.Type, []string, []bool, *containers.Options) (bat *containers.Batch, err error)
 	GetMeta() objectio.BlockObject
 	GetMetaFormKey(location string) objectio.BlockObject
-
 	Destroy() error
 }
 

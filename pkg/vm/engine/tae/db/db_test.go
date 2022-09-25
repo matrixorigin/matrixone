@@ -1138,7 +1138,6 @@ func TestUnload2(t *testing.T) {
 }
 
 func TestDelete1(t *testing.T) {
-	return
 	testutils.EnsureNoLeak(t)
 	tae := initDB(t, nil)
 	defer tae.Close()

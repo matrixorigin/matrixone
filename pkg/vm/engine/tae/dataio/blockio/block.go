@@ -80,11 +80,6 @@ func (bf *blockFile) close() {
 	}
 }
 
-func (bf *blockFile) WriteRows(rows uint32) (err error) {
-	bf.rows = rows
-	return nil
-}
-
 func (bf *blockFile) ReadRows(metaLoc string) uint32 {
 	_, _, rows := DecodeMetaLoc(metaLoc)
 	return rows
