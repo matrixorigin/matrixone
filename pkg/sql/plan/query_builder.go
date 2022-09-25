@@ -91,12 +91,11 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 
 		tag := node.BindingTags[0]
 		newTableDef := &plan.TableDef{
-			Name:               node.TableDef.Name,
-			Defs:               node.TableDef.Defs,
-			Name2ColIndex:      node.TableDef.Name2ColIndex,
-			Createsql:          node.TableDef.Createsql,
-			TableFunctionParam: node.TableDef.TableFunctionParam,
-			TableFunctionName:  node.TableDef.TableFunctionName,
+			Name:          node.TableDef.Name,
+			Defs:          node.TableDef.Defs,
+			Name2ColIndex: node.TableDef.Name2ColIndex,
+			Createsql:     node.TableDef.Createsql,
+			TblFunc:       node.TableDef.TblFunc,
 		}
 
 		for i, col := range node.TableDef.Cols {

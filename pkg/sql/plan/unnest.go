@@ -131,9 +131,11 @@ func (builder *QueryBuilder) buildUnnest(tbl *tree.TableFunction, ctx *BindConte
 		TableDef: &plan.TableDef{
 			TableType: catalog.SystemViewRel, //test if ok
 			//Name:               tbl.String(),
-			Cols:               colDefs,
-			TableFunctionParam: externParamData,
-			TableFunctionName:  "unnest",
+			Cols: colDefs,
+			TblFunc: &plan.TableFunction{
+				Name:  "unnest",
+				Param: externParamData,
+			},
 		},
 		BindingTags: []int32{tag},
 	}
@@ -177,9 +179,7 @@ func (builder *QueryBuilder) buildUnnest(tbl *tree.TableFunction, ctx *BindConte
 		}
 		scanNode = &plan.Node{
 			NodeType: plan.Node_VALUE_SCAN,
-			TableDef: &plan.TableDef{
-				TableFunctionParam: []byte(jsonStr),
-			},
+			TableDef: &plan.TableDef{TblFunc: &plan.TableFunction{Param: []byte(jsonStr)}},
 			ProjectList: []*plan.Expr{
 				{
 					Typ:  &plan.Type{Id: int32(types.T_varchar)},

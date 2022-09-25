@@ -335,7 +335,7 @@ func (c *Compile) compilePlanScope(n *plan.Node, ns []*plan.Node) ([]*Scope, err
 		bat := batch.NewWithSize(1)
 		if plan2.IsTableFunctionValueScan(n) {
 			bat.Vecs[0] = vector.NewConst(types.Type{Oid: types.T_varchar}, 1)
-			err := bat.Vecs[0].Append(n.TableDef.TableFunctionParam, false, c.proc.Mp())
+			err := bat.Vecs[0].Append(n.TableDef.TblFunc.Param, false, c.proc.Mp())
 			if err != nil {
 				return nil, err
 			}
@@ -521,11 +521,11 @@ func (c *Compile) compileExternScan(n *plan.Node) []*Scope {
 }
 
 func (c *Compile) compileTableFunction(n *plan.Node, ss []*Scope) ([]*Scope, error) {
-	switch n.TableDef.TableFunctionName {
+	switch n.TableDef.TblFunc.Name {
 	case "unnest":
-		return c.compileUnnest(n, n.TableDef.TableFunctionParam, ss)
+		return c.compileUnnest(n, n.TableDef.TblFunc.Param, ss)
 	default:
-		return nil, moerr.NewNYI(fmt.Sprintf("table function '%s' not supported", n.TableDef.TableFunctionName))
+		return nil, moerr.NewNYI(fmt.Sprintf("table function '%s' not supported", n.TableDef.TblFunc.Name))
 	}
 }
 

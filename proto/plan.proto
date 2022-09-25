@@ -281,9 +281,14 @@ message TableDef {
 	string table_type 		= 4;
 	string createsql 		= 5;
 	map<string, int32> name2col_index = 6;
-	bytes table_function_param = 7;
-	string table_function_name = 8;
+  TableFunction tbl_func = 7;
 }
+
+message TableFunction{
+	string name = 1;
+	bytes param = 2;
+}
+
 
 message Cost {
 	double card		= 1;
