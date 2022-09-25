@@ -222,6 +222,7 @@ func init() {
 		"rows":                     ROWS,
 		"linestring":               LINESTRING,
 		"load":                     LOAD,
+		"import":                   IMPORT,
 		"localtime":                LOCALTIME,
 		"localtimestamp":           LOCALTIMESTAMP,
 		"lock":                     LOCK,

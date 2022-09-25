@@ -20,7 +20,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
-	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage/mem"
 	taestorage "github.com/matrixorigin/matrixone/pkg/txn/storage/tae"
@@ -36,9 +35,6 @@ const (
 	memKVStorageBackend = "MEMKV"
 	taeStorageBackend   = "TAE"
 
-	localClockBackend = "LOCAL"
-	hlcClockBackend   = "HLC"
-
 	s3FileServiceName    = "S3"
 	localFileServiceName = "LOCAL"
 	etlFileServiceName   = "ETL"
@@ -49,21 +45,7 @@ var (
 		memStorageBackend: {},
 		taeStorageBackend: {},
 	}
-
-	supportTxnClockBackends = map[string]struct{}{
-		localClockBackend: {},
-		hlcClockBackend:   {},
-	}
 )
-
-func (s *store) createClock() (clock.Clock, error) {
-	switch s.cfg.Txn.Clock.Backend {
-	case localClockBackend:
-		return s.newLocalClock(), nil
-	default:
-		return nil, moerr.NewInternalError("not implment for %s", s.cfg.Txn.Clock.Backend)
-	}
-}
 
 func (s *store) createTxnStorage(shard metadata.DNShard) (storage.TxnStorage, error) {
 	logClient, err := s.createLogServiceClient(shard)
@@ -117,10 +99,6 @@ func (s *store) newLogServiceClient(shard metadata.DNShard) (logservice.Client, 
 		DNReplicaID:      shard.ReplicaID,
 		ServiceAddresses: s.cfg.HAKeeper.ClientConfig.ServiceAddresses,
 	})
-}
-
-func (s *store) newLocalClock() clock.Clock {
-	return clock.NewUnixNanoHLCClockWithStopper(s.stopper, s.cfg.Txn.Clock.MaxClockOffset.Duration)
 }
 
 func (s *store) newMemTxnStorage(shard metadata.DNShard, logClient logservice.Client) (storage.TxnStorage, error) {
