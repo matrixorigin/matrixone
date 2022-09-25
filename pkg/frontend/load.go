@@ -1995,7 +1995,7 @@ func (mce *MysqlCmdExecutor) LoadLoop(requestCtx context.Context, load *tree.Imp
 		rune(load.Param.Tail.Fields.Terminated[0]),
 		'#',
 		true,
-		false)
+		true)
 
 	/*
 		error channel
