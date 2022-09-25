@@ -34,24 +34,19 @@ func ApplyUpdates(vec Vector, mask *roaring.Bitmap, vals map[uint32]any) {
 
 func FillBufferWithBytes(bs *Bytes, buffer *bytes.Buffer) *Bytes {
 	buffer.Reset()
-	offBuf := bs.OffsetBuf()
-	lenBuf := bs.LengthBuf()
-	dataBuf := bs.Data
-	size := len(offBuf) + len(lenBuf) + len(dataBuf)
+	size := bs.Size()
 	if buffer.Cap() < size {
 		buffer.Grow(size)
 	}
 	nbs := NewBytes()
+	nbs.FixedTypeSize = bs.FixedTypeSize
+	nbs.IsFixedType = bs.IsFixedType
 	buf := buffer.Bytes()[:size]
-	copy(buf, dataBuf)
-	nbs.Data = buf[:len(dataBuf)]
-	if len(offBuf) == 0 {
-		return nbs
-	}
-	copy(buf[len(dataBuf):], offBuf)
-	copy(buf[len(dataBuf)+len(offBuf):], lenBuf)
-	nbs.SetOffsetBuf(buf[len(dataBuf) : len(dataBuf)+len(offBuf)])
-	nbs.SetLengthBuf(buf[len(dataBuf)+len(offBuf) : size])
+	copy(buf, bs.StorageBuf())
+	copy(buf[bs.StorageSize():], bs.HeaderBuf())
+
+	nbs.SetStorageBuf(buf[:bs.StorageSize()])
+	nbs.SetHeaderBuf(buf[bs.StorageSize():bs.Size()])
 	return nbs
 }
 

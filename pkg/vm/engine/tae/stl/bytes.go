@@ -20,11 +20,19 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
+func NewBytes() *Bytes {
+	return new(Bytes)
+}
+
 func NewFixedTypeBytes[T any]() *Bytes {
 	return &Bytes{
 		IsFixedType:   true,
 		FixedTypeSize: Sizeof[T](),
 	}
+}
+
+func (bs *Bytes) Size() int {
+	return bs.StorageSize() + bs.HeaderSize()
 }
 
 func (bs *Bytes) Length() int {
@@ -52,4 +60,15 @@ func (bs *Bytes) HeaderBuf() (buf []byte) {
 	}
 	buf = unsafe.Slice((*byte)(unsafe.Pointer(&bs.Header[0])), bs.HeaderSize())
 	return
+}
+
+func (bs *Bytes) SetHeaderBuf(buf []byte) {
+	if len(buf) == 0 {
+		return
+	}
+	bs.Header = unsafe.Slice((*types.Varlena)(unsafe.Pointer(&buf[0])), len(buf)/Sizeof[types.Varlena]())
+}
+
+func (bs *Bytes) SetStorageBuf(buf []byte) {
+	bs.Storage = buf
 }
