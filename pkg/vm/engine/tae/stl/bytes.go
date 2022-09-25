@@ -104,7 +104,7 @@ func (data *BinaryData) AreaBuf() []byte {
 }
 
 func (data *BinaryData) VAreaSize() int {
-	return len(data.VarlenData) * types.VarlenaInlineSize
+	return len(data.VarlenData) * types.VarlenaSize
 }
 
 func (data *BinaryData) VAreaBuf() (buf []byte) {

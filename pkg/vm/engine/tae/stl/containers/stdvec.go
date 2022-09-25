@@ -243,9 +243,10 @@ func (vec *StdVector[T]) ReadData(data *stl.BinaryData, share bool) {
 		return
 	}
 	if share {
-		vec.readDataShared(data)
+		vec.readBytesShared(data.AreaBuf())
+		return
 	}
-	vec.readDataNotShared(data)
+	vec.readBytesNotShared(data.AreaBuf())
 }
 
 func (vec *StdVector[T]) ReadBytes(bs *stl.Bytes, share bool) {
@@ -253,66 +254,37 @@ func (vec *StdVector[T]) ReadBytes(bs *stl.Bytes, share bool) {
 		return
 	}
 	if share {
-		vec.readBytesShared(bs)
+		vec.readBytesShared(bs.Data)
 		return
 	}
-	vec.readBytesNotShared(bs)
+	vec.readBytesNotShared(bs.Data)
 }
 
-func (vec *StdVector[T]) readDataNotShared(data *stl.BinaryData) {
+func (vec *StdVector[T]) readBytesNotShared(bs []byte) {
 	vec.Reset()
-	nsize := len(data.Payload)
-	if nsize == 0 {
-		return
-	}
-	ncap := nsize / stl.Sizeof[T]()
-	vec.tryExpand(ncap)
-	vec.buf = vec.node.GetBuf()[:nsize]
-	copy(vec.buf[0:], data.Payload)
-	vec.slice = unsafe.Slice((*T)(unsafe.Pointer(&vec.buf[0])), vec.capacity)
-}
-
-func (vec *StdVector[T]) readDataShared(data *stl.BinaryData) {
-	if vec.node != nil {
-		vec.alloc.Free(vec.node)
-		vec.node = nil
-	}
-	vec.capacity = 0
-	if data.Length() == 0 {
-		vec.buf = vec.buf[:0]
-		vec.slice = vec.slice[:0]
-		return
-	}
-	vec.buf = data.Payload
-	vec.capacity = data.Length()
-	vec.slice = unsafe.Slice((*T)(unsafe.Pointer(&vec.buf[0])), vec.capacity)
-}
-
-func (vec *StdVector[T]) readBytesNotShared(bs *stl.Bytes) {
-	vec.Reset()
-	newSize := bs.DataSize()
+	newSize := len(bs)
 	if newSize == 0 {
 		return
 	}
 	capacity := newSize / stl.Sizeof[T]()
 	vec.tryExpand(capacity)
 	vec.buf = vec.node.GetBuf()[:newSize]
-	copy(vec.buf[0:], bs.Data)
+	copy(vec.buf[0:], bs)
 	vec.slice = unsafe.Slice((*T)(unsafe.Pointer(&vec.buf[0])), vec.capacity)
 }
 
-func (vec *StdVector[T]) readBytesShared(bs *stl.Bytes) {
+func (vec *StdVector[T]) readBytesShared(bs []byte) {
 	if vec.node != nil {
 		vec.alloc.Free(vec.node)
 		vec.node = nil
 	}
 	vec.capacity = 0
-	if bs.DataSize() == 0 {
+	if len(bs) == 0 {
 		vec.buf = vec.buf[:0]
 		vec.slice = vec.slice[:0]
 		return
 	}
-	vec.buf = bs.Data
+	vec.buf = bs
 	vec.capacity = len(vec.buf) / stl.Sizeof[T]()
 	vec.slice = unsafe.Slice((*T)(unsafe.Pointer(&vec.buf[0])), vec.capacity)
 }

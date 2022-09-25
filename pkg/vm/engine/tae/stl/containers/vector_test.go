@@ -491,3 +491,38 @@ func TestStrVector1(t *testing.T) {
 	vec.Close()
 	assert.Zero(t, opts.Allocator.Usage())
 }
+
+func TestStrVector2(t *testing.T) {
+	opts := withAllocator(nil)
+	vec := NewStrVector2[[]byte](opts)
+	h1 := "h1"
+	h2 := "hh2"
+	h3 := "hhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhh3"
+	h4 := "hhhh4"
+	vec.Append([]byte(h1))
+	vec.Append([]byte(h2))
+	vec.Append([]byte(h3))
+	vec.Append([]byte(h4))
+
+	data := vec.BinaryData()
+
+	vec3 := NewStrVector2[[]byte](opts)
+	vec3.ReadData(data, true)
+	assert.Zero(t, vec3.Allocated())
+	for i := 0; i < vec.Length(); i++ {
+		assert.Equal(t, vec.Get(i), vec3.Get(i))
+	}
+
+	vec4 := NewStrVector2[[]byte](opts)
+	vec4.ReadData(data, false)
+	assert.NotZero(t, vec4.Allocated())
+	for i := 0; i < vec.Length(); i++ {
+		assert.Equal(t, vec.Get(i), vec4.Get(i))
+	}
+	t.Log(vec4.String())
+
+	vec4.Close()
+	vec3.Close()
+	vec.Close()
+	assert.Zero(t, opts.Allocator.Usage())
+}
