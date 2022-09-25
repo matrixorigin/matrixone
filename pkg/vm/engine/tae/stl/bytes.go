@@ -16,6 +16,8 @@ package stl
 
 import (
 	"unsafe"
+
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
 func NewBytes() *Bytes {
@@ -84,4 +86,31 @@ func (bs *Bytes) SetOffsetBuf(buf []byte) {
 		return
 	}
 	bs.Offset = unsafe.Slice((*uint32)(unsafe.Pointer(&buf[0])), len(buf)/Sizeof[uint32]())
+}
+
+func (data *BinaryData) Length() int {
+	if data.FixedType {
+		return len(data.Payload) / data.FixedTypeSize
+	}
+	return len(data.VarlenData)
+}
+
+func (data *BinaryData) AreaSize() int {
+	return len(data.Payload)
+}
+
+func (data *BinaryData) AreaBuf() []byte {
+	return data.Payload
+}
+
+func (data *BinaryData) VAreaSize() int {
+	return len(data.VarlenData) * types.VarlenaInlineSize
+}
+
+func (data *BinaryData) VAreaBuf() (buf []byte) {
+	if len(data.VarlenData) == 0 {
+		return
+	}
+	buf = unsafe.Slice((*byte)(unsafe.Pointer(&data.VarlenData[0])), data.VAreaSize())
+	return
 }

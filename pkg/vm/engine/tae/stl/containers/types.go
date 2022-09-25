@@ -15,16 +15,25 @@
 package containers
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/stl"
 )
 
 type Options struct {
-	Capacity  int
-	Allocator stl.MemAllocator
-	Data      *stl.Bytes
+	Capacity   int
+	Allocator  stl.MemAllocator
+	Data       *stl.Bytes
+	BinaryData *stl.BinaryData
 }
 
-func (opts *Options) HasData() bool { return opts.Data != nil }
+func (opts *Options) HasBinaryData() bool { return opts.BinaryData != nil }
+func (opts *Options) HasData() bool       { return opts.Data != nil }
+func (opts *Options) BinaryAreaSize() int {
+	if opts.BinaryData == nil {
+		return 0
+	}
+	return opts.BinaryData.AreaSize()
+}
 func (opts *Options) DataSize() int {
 	if opts.Data == nil {
 		return 0
@@ -44,6 +53,11 @@ type StrVector[T any] struct {
 	offsets *StdVector[uint32]
 	lengths *StdVector[uint32]
 	data    *StdVector[byte]
+}
+
+type StrVector2[T any] struct {
+	vdata *StdVector[types.Varlena]
+	area  *StdVector[byte]
 }
 
 type Vector[T any] struct {

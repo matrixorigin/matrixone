@@ -238,6 +238,16 @@ func (vec *StdVector[T]) Bytes() *stl.Bytes {
 	return bs
 }
 
+func (vec *StdVector[T]) ReadData(data *stl.BinaryData, share bool) {
+	if data == nil {
+		return
+	}
+	if share {
+		vec.readDataShared(data)
+	}
+	vec.readDataNotShared(data)
+}
+
 func (vec *StdVector[T]) ReadBytes(bs *stl.Bytes, share bool) {
 	if bs == nil {
 		return
@@ -247,6 +257,35 @@ func (vec *StdVector[T]) ReadBytes(bs *stl.Bytes, share bool) {
 		return
 	}
 	vec.readBytesNotShared(bs)
+}
+
+func (vec *StdVector[T]) readDataNotShared(data *stl.BinaryData) {
+	vec.Reset()
+	nsize := len(data.Payload)
+	if nsize == 0 {
+		return
+	}
+	ncap := nsize / stl.Sizeof[T]()
+	vec.tryExpand(ncap)
+	vec.buf = vec.node.GetBuf()[:nsize]
+	copy(vec.buf[0:], data.Payload)
+	vec.slice = unsafe.Slice((*T)(unsafe.Pointer(&vec.buf[0])), vec.capacity)
+}
+
+func (vec *StdVector[T]) readDataShared(data *stl.BinaryData) {
+	if vec.node != nil {
+		vec.alloc.Free(vec.node)
+		vec.node = nil
+	}
+	vec.capacity = 0
+	if data.Length() == 0 {
+		vec.buf = vec.buf[:0]
+		vec.slice = vec.slice[:0]
+		return
+	}
+	vec.buf = data.Payload
+	vec.capacity = data.Length()
+	vec.slice = unsafe.Slice((*T)(unsafe.Pointer(&vec.buf[0])), vec.capacity)
 }
 
 func (vec *StdVector[T]) readBytesNotShared(bs *stl.Bytes) {

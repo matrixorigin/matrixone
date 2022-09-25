@@ -17,6 +17,8 @@ package stl
 import (
 	"io"
 	"unsafe"
+
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
 func Sizeof[T any]() int {
@@ -29,10 +31,26 @@ func SizeOfMany[T any](cnt int) int {
 	return int(unsafe.Sizeof(v)) * cnt
 }
 
+func GetVarlenOffAndLen(v types.Varlena) (off, lenth uint32) {
+	ptr := unsafe.Slice((*uint32)(unsafe.Pointer(&v[0])), 6)
+	return ptr[1], ptr[2]
+}
+
+func VarlenAsU32Slice(v types.Varlena) []uint32 {
+	return unsafe.Slice((*uint32)(unsafe.Pointer(&v[0])), 6)
+}
+
 type Bytes struct {
 	Data   []byte
 	Offset []uint32
 	Length []uint32
+}
+
+type BinaryData struct {
+	VarlenData    []types.Varlena
+	Payload       []byte
+	FixedType     bool
+	FixedTypeSize int
 }
 
 type Vector[T any] interface {
@@ -70,8 +88,6 @@ type Vector[T any] interface {
 	// Get returns the specified element at i
 	// Note: If T is []byte, make sure not to use v after the vector is closed
 	Get(i int) (v T)
-	// GetCopy returns the copy of the specified element at i
-	GetCopy(i int) (v T)
 	// Append appends a element into the vector
 	// If the prediction length is large than Capacity, it will cause the underlying memory reallocation.
 	// Reallocation:
