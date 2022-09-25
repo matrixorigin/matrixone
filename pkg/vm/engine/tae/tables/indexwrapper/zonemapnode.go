@@ -19,98 +19,59 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer/base"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
+	"sync"
 )
 
-type zonemapNode struct {
-	*buffer.Node
-	mgr     base.INodeManager
+type ZMReader struct {
+	sync.Mutex
 	file    objectio.ColumnObject
 	zonemap *index.ZoneMap
 	dataTyp types.Type
 }
 
-func newZonemapNode(mgr base.INodeManager, file objectio.ColumnObject, id *common.ID, typ types.Type) *zonemapNode {
-	impl := new(zonemapNode)
-	impl.Node = buffer.NewNode(impl, mgr, *id, uint64(file.GetMeta().GetLocation().Length()))
-	impl.LoadFunc = impl.OnLoad
-	impl.UnloadFunc = impl.OnUnload
-	impl.DestroyFunc = impl.OnDestroy
-	impl.file = file
-	impl.mgr = mgr
-	impl.dataTyp = typ
-	mgr.RegisterNode(impl)
-	return impl
-}
-
-func (n *zonemapNode) OnLoad() {
-	if n.zonemap != nil {
-		// no-op
-		return
-	}
-	fsData, err := n.file.GetIndex(objectio.ZoneMapType)
-	if err != nil {
-		panic(err)
-	}
-	data := fsData.(*objectio.ZoneMap)
-	n.zonemap = index.NewZoneMap(n.dataTyp)
-	err = n.zonemap.Unmarshal(data.GetMin(), data.GetMax())
-	if err != nil {
-		panic(err)
-	}
-}
-
-func (n *zonemapNode) OnUnload() {
-	if n.zonemap == nil {
-		// no-op
-		return
-	}
-	n.zonemap = nil
-}
-
-func (n *zonemapNode) OnDestroy() {
-	//n.file.Unref()
-}
-
-func (n *zonemapNode) Close() (err error) {
-	if err = n.Node.Close(); err != nil {
-		return err
-	}
-	n.zonemap = nil
-	return nil
-}
-
-type ZMReader struct {
-	node *zonemapNode
-}
-
-func NewZMReader(mgr base.INodeManager, file objectio.ColumnObject, id *common.ID, typ types.Type) *ZMReader {
+func NewZMReader(file objectio.ColumnObject, typ types.Type) *ZMReader {
 	return &ZMReader{
-		node: newZonemapNode(mgr, file, id, typ),
+		file:    file,
+		dataTyp: typ,
 	}
 }
 
 func (reader *ZMReader) Destroy() (err error) {
-	if err = reader.node.Close(); err != nil {
-		return err
-	}
+	reader.Lock()
+	defer reader.Unlock()
+	reader.zonemap = nil
 	return nil
 }
 
+func (reader *ZMReader) readIndex() {
+	reader.Lock()
+	defer reader.Unlock()
+	if reader.zonemap != nil {
+		// no-op
+		return
+	}
+	fsData, err := reader.file.GetIndex(objectio.ZoneMapType)
+	if err != nil {
+		panic(err)
+	}
+	data := fsData.(*objectio.ZoneMap)
+	reader.zonemap = index.NewZoneMap(reader.dataTyp)
+	err = reader.zonemap.Unmarshal(data.GetMin(), data.GetMax())
+	if err != nil {
+		panic(err)
+	}
+}
+
 func (reader *ZMReader) ContainsAny(keys containers.Vector) (visibility *roaring.Bitmap, ok bool) {
-	handle := reader.node.mgr.Pin(reader.node)
-	defer handle.Close()
-	return reader.node.zonemap.ContainsAny(keys)
+	reader.readIndex()
+	return reader.zonemap.ContainsAny(keys)
 }
 
 func (reader *ZMReader) Contains(key any) bool {
-	handle := reader.node.mgr.Pin(reader.node)
-	defer handle.Close()
-	return reader.node.zonemap.Contains(key)
+	reader.readIndex()
+	return reader.zonemap.Contains(key)
 }
 
 type ZMWriter struct {

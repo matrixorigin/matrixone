@@ -158,8 +158,7 @@ func newBlock(meta *catalog.BlockEntry, segFile file.Segment, bufMgr base.INodeM
 	}
 	block.mvcc.SetMaxVisible(ts)
 	block.ckpTs.Store(ts)
-	if meta.GetNodeLocked() != nil &&
-		meta.GetNodeLocked().(*catalog.MetadataMVCCNode).MetaLoc != "" {
+	if len(meta.GetMetaLoc()) > 0 {
 		if err := block.ReplayIndex(); err != nil {
 			panic(err)
 		}
@@ -659,7 +658,7 @@ func (blk *dataBlock) LoadColumnData(
 	buffer *bytes.Buffer) (vec containers.Vector, err error) {
 	def := blk.meta.GetSchema().ColDefs[colIdx]
 	var fsVector *fileservice.IOVector
-	metaLoc := blk.meta.GetNodeLocked().(*catalog.MetadataMVCCNode).MetaLoc
+	metaLoc := blk.meta.GetMetaLoc()
 	fsVector, err = blk.colObjects[colIdx].GetDataObject(metaLoc).GetData()
 	if err != nil {
 		return

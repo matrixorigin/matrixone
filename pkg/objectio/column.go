@@ -36,11 +36,8 @@ type ColumnBlock struct {
 
 func NewColumnBlock(idx uint16, object *Object) ColumnObject {
 	meta := &ColumnMeta{
-		idx: idx,
-		zoneMap: ZoneMap{
-			min: make([]byte, 32),
-			max: make([]byte, 32),
-		},
+		idx:         idx,
+		zoneMap:     ZoneMap{},
 		bloomFilter: Extent{},
 	}
 	col := &ColumnBlock{
@@ -116,8 +113,14 @@ func (cb *ColumnBlock) MarshalMeta() ([]byte, error) {
 	if err = binary.Write(&buffer, endian, cb.meta.location.OriginSize()); err != nil {
 		return nil, err
 	}
+	if cb.meta.zoneMap.min == nil {
+		cb.meta.zoneMap.min = make([]byte, 32)
+	}
 	if err = binary.Write(&buffer, endian, cb.meta.zoneMap.min); err != nil {
 		return nil, err
+	}
+	if cb.meta.zoneMap.max == nil {
+		cb.meta.zoneMap.max = make([]byte, 32)
 	}
 	if err = binary.Write(&buffer, endian, cb.meta.zoneMap.max); err != nil {
 		return nil, err

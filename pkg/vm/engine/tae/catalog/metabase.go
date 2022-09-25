@@ -63,12 +63,18 @@ func (be *MetaBaseEntry) PPString(level common.PPLevel, depth int, prefix string
 func (be *MetaBaseEntry) GetMetaLoc() string {
 	be.RLock()
 	defer be.RUnlock()
+	if be.GetNodeLocked() == nil {
+		return ""
+	}
 	str := be.GetNodeLocked().(*MetadataMVCCNode).MetaLoc
 	return str
 }
 func (be *MetaBaseEntry) GetDeltaLoc() string {
 	be.RLock()
 	defer be.RUnlock()
+	if be.GetNodeLocked() == nil {
+		return ""
+	}
 	str := be.GetNodeLocked().(*MetadataMVCCNode).DeltaLoc
 	return str
 }

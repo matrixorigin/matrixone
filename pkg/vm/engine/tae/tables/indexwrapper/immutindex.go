@@ -100,12 +100,12 @@ func (index *immutableIndex) Destroy() (err error) {
 
 func (index *immutableIndex) ReadFrom(blk data.Block, colDef *catalog.ColDef, col file.ColumnBlock) (err error) {
 	entry := blk.GetMeta().(*catalog.BlockEntry)
-	metaLoc := blk.GetMeta().(*catalog.BlockEntry).GetNodeLocked().(*catalog.MetadataMVCCNode).MetaLoc
+	metaLoc := entry.GetMetaLoc()
 	logutil.Infof("MetaLoc is %s", metaLoc)
 	idxFile := col.GetDataObject(metaLoc)
 	id := entry.AsCommonID()
 	id.Idx = uint16(colDef.Idx)
-	index.zmReader = NewZMReader(blk.GetBufMgr(), idxFile, id, colDef.Type)
+	index.zmReader = NewZMReader(idxFile, colDef.Type)
 	/*for _, meta := range metas {
 		idxFile := colFile.GetDataObject(blk.GetMeta().(*catalog.BlockEntry).GetNodeLocked().(*catalog.MetadataMVCCNode).MetaLoc)
 		id := entry.AsCommonID()

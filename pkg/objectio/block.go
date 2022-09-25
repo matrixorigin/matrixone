@@ -27,7 +27,7 @@ type Block struct {
 	// id is the serial number of the block in the object
 	id uint32
 
-	// header is the metadata of the block, such as tableid, blockio, column count...
+	// header is the metadata of the block, such as tableid, blockid, column count...
 	header BlockHeader
 
 	// columns is the vector in the batch
