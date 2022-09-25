@@ -607,6 +607,7 @@ var (
 				granted_time timestamp,
 				with_grant_option bool
 			);`,
+		"create table `%!%mo_increment_columns`(name varchar(770), offset bigint, step bigint);",
 	}
 
 	//drop tables for the tenant
@@ -616,6 +617,7 @@ var (
 		`drop table if exists mo_catalog.mo_user_grant;`,
 		`drop table if exists mo_catalog.mo_role_grant;`,
 		`drop table if exists mo_catalog.mo_role_privs;`,
+		"drop table if exists mo_catalog.`%!%mo_increment_columns`;",
 	}
 
 	initMoAccountFormat = `insert into mo_catalog.mo_account(
