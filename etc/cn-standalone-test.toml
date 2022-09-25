@@ -12,6 +12,11 @@ service-addresses = [
     "2"
 ]
 
+[clock]
+# Due to the poor performance of ci machines, which can cause timers that detect clock 
+# drift to be delayed in scheduling execution, the configuration is larger.
+max-clock-offset = "1s"
+
 [[fileservice]]
 name = "LOCAL"
 backend = "MEM"
