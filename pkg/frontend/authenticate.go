@@ -193,7 +193,7 @@ const (
 	userStatusUnlock = "unlock"
 
 	rootID            = 0
-	rootHost          = "NULL"
+	rootHost          = "localhost"
 	rootName          = "root"
 	rootPassword      = "111"
 	rootStatus        = userStatusUnlock
@@ -204,7 +204,7 @@ const (
 	rootDefaultRoleID = moAdminRoleID
 
 	dumpID            = 1
-	dumpHost          = "NULL"
+	dumpHost          = "localhost"
 	dumpName          = "dump"
 	dumpPassword      = "111"
 	dumpStatus        = userStatusUnlock
@@ -658,7 +658,7 @@ var (
 				creator,
 				owner,
 				default_role
-    		) values(%d,%s,"%s","%s","%s","%s",%s,"%s",%d,%d,%d);`
+    		) values(%d,"%s","%s","%s","%s","%s",%s,"%s",%d,%d,%d);`
 	initMoUserWithoutIDFormat = `insert into mo_catalog.mo_user(
 				user_host,
 				user_name,
@@ -670,7 +670,7 @@ var (
 				creator,
 				owner,
 				default_role
-    		) values(%s,"%s","%s","%s","%s",%s,"%s",%d,%d,%d);`
+    		) values("%s","%s","%s","%s","%s",%s,"%s",%d,%d,%d);`
 	initMoRolePrivFormat = `insert into mo_catalog.mo_role_privs(
 				role_id,
 				role_name,
@@ -1374,6 +1374,19 @@ func (g *graph) hasLoop(start int64) bool {
 	}
 
 	return !g.toposort(start, visited)
+}
+
+// nameIsInvalid checks the name of account/user/role is valid or not
+func nameIsInvalid(name string) bool {
+	if len(name) == 0 {
+		return true
+	}
+	if !(strings.HasPrefix(name, "`") && strings.HasSuffix(name, "`")) {
+		if strings.Contains(name, ":") {
+			return true
+		}
+	}
+	return false
 }
 
 // doDropAccount accomplishes the DropAccount statement
@@ -3630,6 +3643,14 @@ func createTablesInMoCatalogOfGeneralTenant(ctx context.Context, tenant *TenantI
 		initDataSqls = append(initDataSqls, sql)
 	}
 
+	if nameIsInvalid(ca.Name) {
+		return nil, moerr.NewInternalError("the account name is invalid")
+	}
+
+	if nameIsInvalid(ca.AuthOption.AdminName) {
+		return nil, moerr.NewInternalError("the admin name is invalid")
+	}
+
 	//USE the mo_catalog
 	err = bh.Exec(ctx, "use mo_catalog;")
 	if err != nil {
@@ -3824,16 +3845,12 @@ func checkUserExistsOrNot(ctx context.Context, pu *config.ParameterUnit, tenantN
 // InitUser creates new user for the tenant
 func InitUser(ctx context.Context, tenant *TenantInfo, cu *tree.CreateUser) error {
 	var err error
-	var exists bool
+	var exists int
 	var rsset []ExecResult
 	var newUserId int64
+	var host string
+	var values []interface{}
 	pu := config.GetParameterUnit(ctx)
-
-	var initUserSqls []string
-
-	appendSql := func(sql string) {
-		initUserSqls = append(initUserSqls, sql)
-	}
 
 	guestMMu := guest.New(pu.SV.GuestMmuLimitation, pu.HostMmu)
 	bh := NewBackgroundHandler(ctx, guestMMu, pu.Mempool, pu)
@@ -3842,6 +3859,9 @@ func InitUser(ctx context.Context, tenant *TenantInfo, cu *tree.CreateUser) erro
 	//TODO: get role and the id of role
 	newRoleId := publicRoleID
 	if cu.Role != nil {
+		if nameIsInvalid(cu.Role.UserName) {
+			return moerr.NewInternalError("the role name is invalid")
+		}
 		if strings.ToLower(cu.Role.UserName) != publicRoleName {
 			sqlForRoleIdOfRole := getSqlForRoleIdOfRole(cu.Role.UserName)
 			bh.ClearExecResultSet()
@@ -3879,33 +3899,80 @@ func InitUser(ctx context.Context, tenant *TenantInfo, cu *tree.CreateUser) erro
 	}
 
 	for _, user := range cu.Users {
-		exists, err = checkUserExistsOrNot(ctx, pu, user.Username)
-		if err != nil {
-			return err
+		if nameIsInvalid(user.Username) {
+			err = moerr.NewInternalError("the user name is invalid")
+			goto handleFailed
 		}
 
-		if exists {
+		//dedup with user
+		sql := getSqlForPasswordOfUser(user.Username)
+		bh.ClearExecResultSet()
+		err = bh.Exec(ctx, sql)
+		if err != nil {
+			goto handleFailed
+		}
+		values = bh.GetExecResultSet()
+		rsset, err = convertIntoResultSet(values)
+		if err != nil {
+			goto handleFailed
+		}
+		if len(rsset) >= 1 && rsset[0].GetRowCount() >= 1 {
+			exists = 1
+		}
+
+		//dedup with the role
+		if exists == 0 {
+			sqlForRoleIdOfRole := getSqlForRoleIdOfRole(user.Username)
+			bh.ClearExecResultSet()
+			err = bh.Exec(ctx, sqlForRoleIdOfRole)
+			if err != nil {
+				goto handleFailed
+			}
+			values = bh.GetExecResultSet()
+			rsset, err = convertIntoResultSet(values)
+			if err != nil {
+				goto handleFailed
+			}
+			if len(rsset) >= 1 && rsset[0].GetRowCount() >= 1 {
+				exists = 2
+			}
+		}
+
+		if exists != 0 {
 			if cu.IfNotExists { //do nothing
 				continue
 			}
-			return moerr.NewInternalError("the user %s exists", user.Username)
+			if exists == 1 {
+				err = moerr.NewInternalError("the user %s exists", user.Username)
+			} else if exists == 2 {
+				err = moerr.NewInternalError("there is a role with the same name as the user")
+			}
+
+			goto handleFailed
 		}
 
 		if user.AuthOption == nil {
-			return moerr.NewInternalError("the user %s misses the auth_option", user.Username)
+			err = moerr.NewInternalError("the user %s misses the auth_option", user.Username)
+			goto handleFailed
 		}
 
 		if user.AuthOption.Typ != tree.AccountIdentifiedByPassword {
-			return moerr.NewInternalError("only support password verification now")
+			err = moerr.NewInternalError("only support password verification now")
+			goto handleFailed
 		}
 
 		password := user.AuthOption.Str
 		if len(password) == 0 {
-			return moerr.NewInternalError("password is empty string")
+			err = moerr.NewInternalError("password is empty string")
+			goto handleFailed
 		}
 
 		//TODO: get comment or attribute. there is no field in mo_user to store it.
-		initMoUser1 := fmt.Sprintf(initMoUserWithoutIDFormat, rootHost, user.Username, password, status,
+		host = user.Hostname
+		if len(user.Hostname) == 0 || user.Hostname == "%" {
+			host = rootHost
+		}
+		initMoUser1 := fmt.Sprintf(initMoUserWithoutIDFormat, host, user.Username, password, status,
 			types.CurrentTimestamp().String2(time.UTC, 0), rootExpiredTime, rootLoginType,
 			tenant.GetUserID(), tenant.GetDefaultRoleID(), newRoleId)
 
@@ -3922,7 +3989,7 @@ func InitUser(ctx context.Context, tenant *TenantInfo, cu *tree.CreateUser) erro
 			goto handleFailed
 		}
 
-		values := bh.GetExecResultSet()
+		values = bh.GetExecResultSet()
 		rsset, err = convertIntoResultSet(values)
 		if err != nil {
 			goto handleFailed
@@ -3938,25 +4005,25 @@ func InitUser(ctx context.Context, tenant *TenantInfo, cu *tree.CreateUser) erro
 		}
 
 		initMoUserGrant1 := fmt.Sprintf(initMoUserGrantFormat, newRoleId, newUserId, types.CurrentTimestamp().String2(time.UTC, 0), true)
-		appendSql(initMoUserGrant1)
+		err = bh.Exec(ctx, initMoUserGrant1)
+		if err != nil {
+			goto handleFailed
+		}
 
 		//if it is not public role, just insert the record for public
 		if newRoleId != publicRoleID {
 			initMoUserGrant2 := fmt.Sprintf(initMoUserGrantFormat, publicRoleID, newUserId, types.CurrentTimestamp().String2(time.UTC, 0), true)
-			appendSql(initMoUserGrant2)
+			err = bh.Exec(ctx, initMoUserGrant2)
+			if err != nil {
+				goto handleFailed
+			}
 		}
 	}
 
-	appendSql("commit;")
-
-	//fill the mo_user
-	for _, sql := range initUserSqls {
-		err = bh.Exec(ctx, sql)
-		if err != nil {
-			goto handleFailed
-		}
+	err = bh.Exec(ctx, "commit;")
+	if err != nil {
+		goto handleFailed
 	}
-
 	return err
 
 handleFailed:
@@ -3971,66 +4038,89 @@ handleFailed:
 // InitRole creates the new role
 func InitRole(ctx context.Context, tenant *TenantInfo, cr *tree.CreateRole) error {
 	var err error
-	var exists bool
+	var exists int
 	var rsset []ExecResult
 	pu := config.GetParameterUnit(ctx)
-
-	var initRoleSqls []string
-
-	appendSql := func(sql string) {
-		initRoleSqls = append(initRoleSqls, sql)
-	}
 
 	guestMMu := guest.New(pu.SV.GuestMmuLimitation, pu.HostMmu)
 	bh := NewBackgroundHandler(ctx, guestMMu, pu.Mempool, pu)
 	defer bh.Close()
 
-	appendSql("begin;")
+	err = bh.Exec(ctx, "begin;")
+	if err != nil {
+		goto handleFailed
+	}
 
 	for _, r := range cr.Roles {
+		if nameIsInvalid(r.UserName) {
+			err = moerr.NewInternalError("the role name is invalid")
+			goto handleFailed
+		}
 		if strings.ToLower(r.UserName) == publicRoleName {
-			exists = true
+			exists = 1
 		} else {
+			//dedup with role
 			sqlForRoleIdOfRole := getSqlForRoleIdOfRole(r.UserName)
 			bh.ClearExecResultSet()
 			err = bh.Exec(ctx, sqlForRoleIdOfRole)
 			if err != nil {
-				return err
+				goto handleFailed
 			}
 			values := bh.GetExecResultSet()
 			rsset, err = convertIntoResultSet(values)
 			if err != nil {
-				return err
+				goto handleFailed
 			}
 			if len(rsset) >= 1 && rsset[0].GetRowCount() >= 1 {
-				exists = true
+				exists = 1
+			}
+
+			//dedup with user
+			if exists == 0 {
+				sql := getSqlForPasswordOfUser(r.UserName)
+				bh.ClearExecResultSet()
+				err = bh.Exec(ctx, sql)
+				if err != nil {
+					goto handleFailed
+				}
+				values = bh.GetExecResultSet()
+				rsset, err = convertIntoResultSet(values)
+				if err != nil {
+					goto handleFailed
+				}
+				if len(rsset) >= 1 && rsset[0].GetRowCount() >= 1 {
+					exists = 2
+				}
 			}
 		}
 
-		if exists {
+		if exists != 0 {
 			if cr.IfNotExists {
 				continue
 			}
-			return moerr.NewInternalError("the role %s exists", r.UserName)
+			if exists == 1 {
+				err = moerr.NewInternalError("the role %s exists", r.UserName)
+			} else if exists == 2 {
+				err = moerr.NewInternalError("there is a user with the same name as the role")
+			}
+
+			goto handleFailed
 		}
 
 		initMoRole := fmt.Sprintf(initMoRoleWithoutIDFormat, r.UserName, tenant.GetUserID(), tenant.GetDefaultRoleID(),
 			types.CurrentTimestamp().String2(time.UTC, 0), "")
-		appendSql(initMoRole)
-	}
-
-	appendSql("commit;")
-
-	//fill the mo_user
-	for _, sql := range initRoleSqls {
-		err = bh.Exec(ctx, sql)
+		err = bh.Exec(ctx, initMoRole)
 		if err != nil {
 			goto handleFailed
 		}
 	}
 
-	return err
+	err = bh.Exec(ctx, "commit;")
+	if err != nil {
+		goto handleFailed
+	}
 
+	return err
 handleFailed:
 	//ROLLBACK the transaction
 	rbErr := bh.Exec(ctx, "rollback;")
