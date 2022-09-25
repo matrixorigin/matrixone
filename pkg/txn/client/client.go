@@ -15,8 +15,6 @@
 package client
 
 import (
-	"time"
-
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
@@ -72,9 +70,10 @@ func (client *txnClient) adjust() {
 	}
 
 	if client.clock == nil {
-		client.clock = clock.NewHLCClock(func() int64 {
-			return time.Now().Unix()
-		}, time.Millisecond*500)
+		client.clock = clock.DefaultClock()
+	}
+	if client.clock == nil {
+		panic("txn clock not set")
 	}
 }
 
