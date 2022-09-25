@@ -67,22 +67,24 @@ func (s *service) initMemoryEngineNonDist(
 	ctx context.Context,
 	pu *config.ParameterUnit,
 ) error {
-
-	clock := clock.NewHLCClock(func() int64 {
-		return time.Now().Unix()
-	}, math.MaxInt)
+	ck := clock.DefaultClock()
+	if ck == nil {
+		ck = clock.NewHLCClock(func() int64 {
+			return time.Now().Unix()
+		}, math.MaxInt)
+	}
 
 	storage, err := txnstorage.NewMemoryStorage(
 		testutil.NewMheap(),
 		txnstorage.SnapshotIsolation,
-		clock,
+		ck,
 	)
 	if err != nil {
 		return err
 	}
 
 	txnClient := txnstorage.NewStorageTxnClient(
-		clock,
+		ck,
 		storage,
 	)
 	pu.TxnClient = txnClient
