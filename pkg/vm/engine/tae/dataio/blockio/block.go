@@ -16,6 +16,7 @@ package blockio
 
 import (
 	"github.com/RoaringBitmap/roaring"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -105,6 +106,10 @@ func (bf *blockFile) GetMetaFormKey(metaLoc string) objectio.BlockObject {
 	}
 	block, err := bf.reader.ReadMeta(extent)
 	if err != nil {
+		// FIXME: Now the block that is gc will also be replayed, here is a work around
+		if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
+			return nil
+		}
 		panic(any(err))
 	}
 	bf.metaKey = block.GetExtent()

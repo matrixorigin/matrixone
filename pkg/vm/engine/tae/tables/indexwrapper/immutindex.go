@@ -101,6 +101,10 @@ func (index *immutableIndex) ReadFrom(blk data.Block, colDef *catalog.ColDef, co
 	entry := blk.GetMeta().(*catalog.BlockEntry)
 	metaLoc := entry.GetMetaLoc()
 	idxFile := col.GetDataObject(metaLoc)
+	if idxFile == nil {
+		// FIXME: Now the block that is gc will also be replayed, here is a work around
+		return
+	}
 	id := entry.AsCommonID()
 	id.Idx = uint16(colDef.Idx)
 	index.zmReader = NewZMReader(idxFile, colDef.Type)

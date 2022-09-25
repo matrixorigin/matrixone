@@ -55,7 +55,13 @@ func (cb *columnBlock) GetDataObject(metaLoc string) objectio.ColumnObject {
 		}
 		return object
 	}
-	object, err := cb.block.GetMetaFormKey(metaLoc).GetColumn(cb.id.Idx)
+
+	// FIXME: Now the block that is gc will also be replayed, here is a work around
+	block := cb.block.GetMetaFormKey(metaLoc)
+	if block == nil {
+		return nil
+	}
+	object, err := block.GetColumn(cb.id.Idx)
 	if err != nil {
 		panic(any(err))
 	}

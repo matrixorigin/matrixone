@@ -17,7 +17,6 @@ package blockio
 import (
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"os"
 	"path"
@@ -65,7 +64,6 @@ type segmentFile struct {
 	sync.RWMutex
 	common.RefHelper
 	id     *common.ID
-	ts     uint64
 	blocks map[uint64]*blockFile
 	name   string
 	fs     *objectio.ObjectFS
@@ -91,16 +89,6 @@ func openSegment(name string, id, tid uint64, fs *objectio.ObjectFS) *segmentFil
 }
 
 func (sf *segmentFile) Name() string { return sf.name }
-
-func (sf *segmentFile) RemoveBlock(id uint64) {
-	sf.Lock()
-	defer sf.Unlock()
-	block := sf.blocks[id]
-	if block == nil {
-		return
-	}
-	delete(sf.blocks, id)
-}
 
 func (sf *segmentFile) Fingerprint() *common.ID { return sf.id }
 func (sf *segmentFile) Close() error            { return nil }
@@ -135,16 +123,8 @@ func (sf *segmentFile) OpenBlock(id uint64, colCnt int) (block file.Block, err e
 	return
 }
 
-func (sf *segmentFile) WriteTS(ts types.TS) error {
-	return nil
-}
-
-func (sf *segmentFile) ReadTS() (ts types.TS) {
-	return
-}
-
 func (sf *segmentFile) String() string {
-	s := fmt.Sprintf("SegmentFile[%d][\"%s\"][TS=%d][BCnt=%d]", sf.id, sf.name, sf.ts, len(sf.blocks))
+	s := fmt.Sprintf("SegmentFile[%d][\"%s\"][BCnt=%d]", sf.id, sf.name, len(sf.blocks))
 	return s
 }
 
