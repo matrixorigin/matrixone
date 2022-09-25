@@ -572,6 +572,26 @@ func TestStrVector3(t *testing.T) {
 	assert.Equal(t, h5, string(vec.Get(2)))
 	assert.Equal(t, h6, string(vec.Get(3)))
 
+	vec.Update(2, []byte(h3))
+	for i := 0; i < vec.Length(); i++ {
+		t.Logf("%s", vec.Get(i))
+	}
+	assert.Equal(t, 4, vec.Length())
+	assert.Equal(t, h1, string(vec.Get(0)))
+	assert.Equal(t, h2, string(vec.Get(1)))
+	assert.Equal(t, h3, string(vec.Get(2)))
+	assert.Equal(t, h6, string(vec.Get(3)))
+
+	vec.Update(2, []byte(h5))
+	for i := 0; i < vec.Length(); i++ {
+		t.Logf("%s", vec.Get(i))
+	}
+	assert.Equal(t, 4, vec.Length())
+	assert.Equal(t, h1, string(vec.Get(0)))
+	assert.Equal(t, h2, string(vec.Get(1)))
+	assert.Equal(t, h5, string(vec.Get(2)))
+	assert.Equal(t, h6, string(vec.Get(3)))
+
 	vec.Close()
 	assert.Zero(t, opts.Allocator.Usage())
 }

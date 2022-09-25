@@ -209,6 +209,17 @@ func (vec *StrVector2[T]) Update(i int, v T) {
 		vec.vdata.Update(i, newVdata)
 		vec.adjustOffsetLen(i+1, nlen)
 		return
+	} else {
+		// If both the old and new are not small and not equal
+
+		offset := int(oldOff + oldLen)
+		tail := vec.area.Slice()[offset:]
+		val = append(val, tail...)
+		vec.area.RangeDelete(int(oldOff), vec.area.Length()-int(oldOff))
+		vec.area.AppendMany(val...)
+		newVdata.SetOffsetLen(oldOff, uint32(nlen))
+		vec.vdata.Update(i, newVdata)
+		vec.adjustOffsetLen(i+1, nlen-int(oldLen))
 	}
 }
 
