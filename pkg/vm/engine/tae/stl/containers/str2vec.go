@@ -5,7 +5,6 @@ import (
 	"io"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/stl"
 )
 
@@ -190,11 +189,11 @@ func (vec *StrVector2[T]) Update(i int, v T) {
 		newVdata[0] = byte(nlen)
 		copy(newVdata[1:1+nlen], val)
 		vec.vdata.Update(i, newVdata)
+		// 3. Adjust offset
+		vec.adjustOffsetLen(i+1, -int(oldLen))
 		return
-	} else {
-		// } else if oldVdata.IsSmall() && nlen > types.VarlenaInlineSize {
+	} else if oldVdata.IsSmall() && nlen > types.VarlenaInlineSize {
 		// If the old is small and the new is not
-
 		var offset int
 		min, max := vec.getAreaRange(0, i)
 		if min == max {
@@ -208,6 +207,7 @@ func (vec *StrVector2[T]) Update(i int, v T) {
 		vec.area.AppendMany(val...)
 		newVdata.SetOffsetLen(uint32(offset), uint32(nlen))
 		vec.vdata.Update(i, newVdata)
+		vec.adjustOffsetLen(i+1, nlen)
 		return
 	}
 }
@@ -250,19 +250,45 @@ func (vec *StrVector2[T]) rangeDeleteNoArea(offset, length int) {
 	vec.vdata.RangeDelete(offset, length)
 }
 
+func (vec *StrVector2[T]) adjustOffsetLen(from int, delta int) {
+	pos := from
+	slice := vec.vdata.Slice()
+	areaLen := uint32(vec.area.Length())
+	var newOff uint32
+	for pos < vec.Length() {
+		if slice[pos].IsSmall() {
+			pos++
+			continue
+		}
+		oldOff, oldLen := slice[pos].OffsetLen()
+		if delta >= 0 {
+			newOff = oldOff + uint32(delta)
+		} else {
+			newOff = oldOff - uint32(-delta)
+		}
+		slice[pos].SetOffsetLen(newOff, oldLen)
+		if newOff+oldLen == areaLen {
+			break
+		}
+		pos++
+	}
+}
+
 func (vec *StrVector2[T]) RangeDelete(offset, length int) {
 	if vec.area.Length() == 0 {
 		vec.rangeDeleteNoArea(offset, length)
 		return
 	}
 	min, max := vec.getAreaRange(offset, length)
-	logutil.Infof("xxxxx %d,%d", min, max)
 	if min == max {
 		vec.rangeDeleteNoArea(offset, length)
 		return
 	}
-
+	// logutil.Infof("xxxxx %d,%d, %s, %s", min, max, vec.area.SliceWindow(min, max-min), vec.area.Slice())
 	vec.area.RangeDelete(min, max-min)
+	// logutil.Infof("xxxxx %d,%d, %s", min, max, vec.area.Slice())
+	vec.rangeDeleteNoArea(offset, length)
+	vec.adjustOffsetLen(offset, -(max - min))
 }
 
 func (vec *StrVector2[T]) AppendMany(vals ...T) {

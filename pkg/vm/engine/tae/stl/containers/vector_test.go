@@ -526,3 +526,52 @@ func TestStrVector2(t *testing.T) {
 	vec.Close()
 	assert.Zero(t, opts.Allocator.Usage())
 }
+
+func TestStrVector3(t *testing.T) {
+	opts := withAllocator(nil)
+	vec := NewStrVector2[[]byte](opts)
+	h1 := "h1"
+	h2 := "hh2"
+	h3 := "hhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhh3"
+	h4 := "hhhh4"
+	h5 := "hhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhxy5"
+	h6 := "hhhhhh6"
+	vec.Append([]byte(h1))
+	vec.Append([]byte(h2))
+	vec.Append([]byte(h3))
+	vec.Append([]byte(h4))
+	vec.Append([]byte(h5))
+	vec.Append([]byte(h6))
+
+	assert.Equal(t, 6, vec.Length())
+	vec.RangeDelete(1, 2)
+	assert.Equal(t, 4, vec.Length())
+	assert.Equal(t, h1, string(vec.Get(0)))
+	assert.Equal(t, h4, string(vec.Get(1)))
+	assert.Equal(t, h5, string(vec.Get(2)))
+	assert.Equal(t, h6, string(vec.Get(3)))
+
+	vec.Update(1, []byte(h3))
+	for i := 0; i < vec.Length(); i++ {
+		t.Logf("%s", vec.Get(i))
+	}
+
+	assert.Equal(t, 4, vec.Length())
+	assert.Equal(t, h1, string(vec.Get(0)))
+	assert.Equal(t, h3, string(vec.Get(1)))
+	assert.Equal(t, h5, string(vec.Get(2)))
+	assert.Equal(t, h6, string(vec.Get(3)))
+
+	vec.Update(1, []byte(h2))
+	for i := 0; i < vec.Length(); i++ {
+		t.Logf("%s", vec.Get(i))
+	}
+	assert.Equal(t, 4, vec.Length())
+	assert.Equal(t, h1, string(vec.Get(0)))
+	assert.Equal(t, h2, string(vec.Get(1)))
+	assert.Equal(t, h5, string(vec.Get(2)))
+	assert.Equal(t, h6, string(vec.Get(3)))
+
+	vec.Close()
+	assert.Zero(t, opts.Allocator.Usage())
+}
