@@ -2781,7 +2781,7 @@ func serializePlanToJson(queryPlan *plan2.Plan, uuid uuid.UUID) []byte {
 			jsonBytes = buffer.Bytes()
 		}
 	} else {
-		jsonBytes = buildErrorJsonPlan(uuid, moerr.ErrInternal, "sql query has no execution plan")
+		jsonBytes = buildErrorJsonPlan(uuid, moerr.ErrInternal, "sql query no record execution plan")
 	}
 	return jsonBytes
 }
