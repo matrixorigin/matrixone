@@ -71,7 +71,6 @@ type dataBlock struct {
 	meta       *catalog.BlockEntry
 	node       *appendableNode
 	file       file.Block
-	colFiles   map[int]common.IVFile
 	colObjects map[int]file.ColumnBlock
 	bufMgr     base.INodeManager
 	scheduler  tasks.TaskScheduler
@@ -213,14 +212,10 @@ func (blk *dataBlock) Destroy() (err error) {
 			return
 		}
 	}
-	for _, file := range blk.colFiles {
-		file.Unref()
-	}
 	for _, file := range blk.colObjects {
 		file.Close()
 	}
 	blk.colObjects = make(map[int]file.ColumnBlock)
-	blk.colFiles = make(map[int]common.IVFile)
 	for _, index := range blk.indexes {
 		if err = index.Destroy(); err != nil {
 			return

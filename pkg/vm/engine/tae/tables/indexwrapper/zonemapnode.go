@@ -58,7 +58,7 @@ func (reader *ZMReader) readIndex() {
 	}
 	data := fsData.(*objectio.ZoneMap)
 	reader.zonemap = index.NewZoneMap(reader.dataTyp)
-	err = reader.zonemap.Unmarshal(data.GetMin(), data.GetMax())
+	err = reader.zonemap.Unmarshal(data.GetData())
 	if err != nil {
 		panic(err)
 	}
@@ -112,11 +112,7 @@ func (writer *ZMWriter) Finalize() (*IndexMeta, error) {
 	if err != nil {
 		return nil, err
 	}
-	min := make([]byte, 32)
-	copy(min, iBuf[:32])
-	max := make([]byte, 32)
-	copy(max, iBuf[32:])
-	zonemap, err := objectio.NewZoneMap(writer.colIdx, min, max)
+	zonemap, err := objectio.NewZoneMap(writer.colIdx, iBuf)
 	if err != nil {
 		return nil, err
 	}

@@ -256,7 +256,126 @@ func (zm *ZoneMap) Marshal() (buf []byte, err error) {
 	return
 }
 
-func (zm *ZoneMap) Unmarshal(min, max []byte) error {
+func (zm *ZoneMap) Unmarshal(buf []byte) error {
+	init := buf[31] & constZMInited
+	if init == 0 {
+		zm.inited = false
+		return nil
+	}
+	zm.inited = true
+	switch zm.typ.Oid {
+	case types.T_bool:
+		zm.min = types.DecodeFixed[bool](buf[:1])
+		buf = buf[32:]
+		zm.max = types.DecodeFixed[bool](buf[:1])
+		return nil
+	case types.T_int8:
+		zm.min = types.DecodeFixed[int8](buf[:1])
+		buf = buf[32:]
+		zm.max = types.DecodeFixed[int8](buf[:1])
+		return nil
+	case types.T_int16:
+		zm.min = types.DecodeFixed[int16](buf[:2])
+		buf = buf[32:]
+		zm.max = types.DecodeFixed[int16](buf[:2])
+		return nil
+	case types.T_int32:
+		zm.min = types.DecodeFixed[int32](buf[:4])
+		buf = buf[32:]
+		zm.max = types.DecodeFixed[int32](buf[:4])
+		return nil
+	case types.T_int64:
+		zm.min = types.DecodeFixed[int64](buf[:8])
+		buf = buf[32:]
+		zm.max = types.DecodeFixed[int64](buf[:8])
+		return nil
+	case types.T_uint8:
+		zm.min = types.DecodeFixed[uint8](buf[:1])
+		buf = buf[32:]
+		zm.max = types.DecodeFixed[uint8](buf[:1])
+		return nil
+	case types.T_uint16:
+		zm.min = types.DecodeFixed[uint16](buf[:2])
+		buf = buf[32:]
+		zm.max = types.DecodeFixed[uint16](buf[:2])
+		return nil
+	case types.T_uint32:
+		zm.min = types.DecodeFixed[uint32](buf[:4])
+		buf = buf[32:]
+		zm.max = types.DecodeFixed[uint32](buf[:4])
+		return nil
+	case types.T_uint64:
+		zm.min = types.DecodeFixed[uint64](buf[:8])
+		buf = buf[32:]
+		zm.max = types.DecodeFixed[uint64](buf[:8])
+		return nil
+	case types.T_float32:
+		zm.min = types.DecodeFixed[float32](buf[:4])
+		buf = buf[32:]
+		zm.max = types.DecodeFixed[float32](buf[:4])
+		return nil
+	case types.T_float64:
+		zm.min = types.DecodeFixed[float64](buf[:8])
+		buf = buf[32:]
+		zm.max = types.DecodeFixed[float64](buf[:8])
+		return nil
+	case types.T_date:
+		zm.min = types.DecodeFixed[types.Date](buf[:4])
+		buf = buf[32:]
+		zm.max = types.DecodeFixed[types.Date](buf[:4])
+		return nil
+	case types.T_datetime:
+		zm.min = types.DecodeFixed[types.Datetime](buf[:8])
+		buf = buf[32:]
+		zm.max = types.DecodeFixed[types.Datetime](buf[:8])
+		return nil
+	case types.T_timestamp:
+		zm.min = types.DecodeFixed[types.Timestamp](buf[:8])
+		buf = buf[32:]
+		zm.max = types.DecodeFixed[types.Timestamp](buf[:8])
+		return nil
+	case types.T_decimal64:
+		zm.min = types.DecodeFixed[types.Decimal64](buf[:8])
+		buf = buf[32:]
+		zm.max = types.DecodeFixed[types.Decimal64](buf[:8])
+		return nil
+	case types.T_decimal128:
+		zm.min = types.DecodeFixed[types.Decimal128](buf[:16])
+		buf = buf[32:]
+		zm.max = types.DecodeFixed[types.Decimal128](buf[:16])
+		return nil
+	case types.T_uuid:
+		zm.min = types.DecodeFixed[types.Uuid](buf[:16])
+		buf = buf[32:]
+		zm.max = types.DecodeFixed[types.Uuid](buf[:16])
+		return nil
+	case types.T_TS:
+		zm.min = buf[:types.TxnTsSize]
+		buf = buf[32:]
+		zm.max = buf[:types.TxnTsSize]
+		return nil
+	case types.T_Rowid:
+		zm.min = buf[:types.RowidSize]
+		buf = buf[32:]
+		zm.max = buf[:types.RowidSize]
+		return nil
+	case types.T_char, types.T_varchar, types.T_json, types.T_blob:
+		minBuf := make([]byte, buf[31]&0x7f)
+		copy(minBuf, buf[0:32])
+		maxBuf := make([]byte, 32)
+		copy(maxBuf, buf[32:64])
+		zm.min = minBuf
+		zm.max = maxBuf
+
+		zm.isInf = is32BytesMax(maxBuf)
+		return nil
+
+	default:
+		panic("unsupported type")
+	}
+}
+
+/*func (zm *ZoneMap) Unmarshal(min, max []byte) error {
 	init := min[31] & constZMInited
 	if init == 0 {
 		zm.inited = false
@@ -356,6 +475,7 @@ func (zm *ZoneMap) Unmarshal(min, max []byte) error {
 		panic("unsupported type")
 	}
 }
+*/
 
 func (zm *ZoneMap) GetMemoryUsage() uint64 {
 	return 64

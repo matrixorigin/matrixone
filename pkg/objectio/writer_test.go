@@ -81,11 +81,10 @@ func TestNewObjectWriter(t *testing.T) {
 		err = objectWriter.WriteIndex(fd, index)
 		assert.Nil(t, err)
 
-		min := make([]byte, 32)
-		min[31] = 1
-		max := make([]byte, 32)
-		max[31] = 10
-		index, err = NewZoneMap(uint16(i), min, max)
+		zbuf := make([]byte, 64)
+		zbuf[31] = 1
+		zbuf[63] = 10
+		index, err = NewZoneMap(uint16(i), zbuf)
 		assert.Nil(t, err)
 		err = objectWriter.WriteIndex(fd, index)
 		assert.Nil(t, err)
@@ -123,8 +122,8 @@ func TestNewObjectWriter(t *testing.T) {
 	indexes, err = objectReader.ReadIndex(blocks[0].GetExtent(), idxs, ZoneMapType)
 	assert.Nil(t, err)
 	assert.Equal(t, 3, len(indexes))
-	assert.Equal(t, uint8(0x1), indexes[0].(*ZoneMap).min[31])
-	assert.Equal(t, uint8(0xa), indexes[0].(*ZoneMap).max[31])
+	assert.Equal(t, uint8(0x1), indexes[0].(*ZoneMap).buf[31])
+	assert.Equal(t, uint8(0xa), indexes[0].(*ZoneMap).buf[63])
 }
 
 func newBatch() *batch.Batch {

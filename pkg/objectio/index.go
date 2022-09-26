@@ -35,18 +35,16 @@ type IndexData interface {
 
 type ZoneMap struct {
 	idx uint16
-	min []byte
-	max []byte
+	buf []byte
 }
 
-func NewZoneMap(idx uint16, min, max []byte) (IndexData, error) {
-	if len(min) != ZoneMapMinSize || len(max) != ZoneMapMaxSize {
+func NewZoneMap(idx uint16, buf []byte) (IndexData, error) {
+	if len(buf) != ZoneMapMinSize+ZoneMapMaxSize {
 		return nil, moerr.NewInternalError("object io: New ZoneMap failed")
 	}
 	zoneMap := &ZoneMap{
 		idx: idx,
-		min: min,
-		max: max,
+		buf: buf,
 	}
 	return zoneMap, nil
 }
@@ -61,12 +59,8 @@ func (z *ZoneMap) Write(_ *ObjectWriter, block *Block) error {
 	return err
 }
 
-func (z *ZoneMap) GetMin() []byte {
-	return z.min
-}
-
-func (z *ZoneMap) GetMax() []byte {
-	return z.max
+func (z *ZoneMap) GetData() []byte {
+	return z.buf
 }
 
 type BloomFilter struct {
