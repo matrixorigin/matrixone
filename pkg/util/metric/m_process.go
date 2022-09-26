@@ -16,6 +16,7 @@ package metric
 
 import (
 	"os"
+	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -142,13 +143,38 @@ func (c procFdsLimit) Metric(s *statCaches) (prom.Metric, error) {
 	}
 }
 
+var ProcConnections = &batchMetricVec{multiSimpleEntry: &procConnections{}}
+
+type procConnections struct{}
+
+func (c procConnections) Desc() *prom.Desc {
+	return prom.NewDesc(
+		"connections",
+		"Number of process connections",
+		[]string{constTenantKey}, nil,
+	)
+}
+
+func (c procConnections) Metrics() ([]prom.Metric, error) {
+	if gConnectionCollector.Load() == nil {
+		return nil, nil
+	} else {
+		var result []prom.Metric
+		counters := gConnectionCollector.Load().(ConnectionCounter).GetConnCounters()
+		for account, count := range counters {
+			m := prom.MustNewConstMetric(c.Desc(), prom.GaugeValue, float64(count), account)
+			result = append(result, m)
+		}
+		return result, nil
+	}
+}
+
+var gConnectionCollector atomic.Value
+
+type ConnectionCounter interface {
+	GetConnCounters() map[string]int32
+}
+
 func SetConnectionCounter(counter ConnectionCounter) {
 	gConnectionCollector.Store(counter)
 }
-
-// this percent may exceeds 100% on multicore platform
-var procConnections = NewBatchMetricVec(&procConnectionCollector{}, prom.HistogramOpts{
-	Subsystem: "process",
-	Name:      "connections",
-	Help:      "Number of process connections",
-}, []string{constTenantKey})

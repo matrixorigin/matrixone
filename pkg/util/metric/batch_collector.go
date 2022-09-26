@@ -16,7 +16,6 @@ package metric
 
 import (
 	"sync"
-	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	prom "github.com/prometheus/client_golang/prometheus"
@@ -132,53 +131,34 @@ type MultiVal struct {
 	lvs []string
 }
 
-type rawMetricCollector interface {
-	DoCollect() []MultiVal
+type multiSimpleEntry interface {
+	Desc() *prom.Desc
+	Metrics() ([]prom.Metric, error)
 }
 
 type batchMetricVec struct {
-	rawMetricCollector
-	*RawHistVec
+	selfAsPromCollector
+	multiSimpleEntry
+
+	mux sync.Mutex
 }
 
-func NewBatchMetricVec(c rawMetricCollector, opts prom.HistogramOpts, labelNames []string) *batchMetricVec {
-	return &batchMetricVec{
-		rawMetricCollector: c,
-		RawHistVec:         NewRawHistVec(opts, labelNames),
-	}
+// Describe returns all descriptions of the collector.
+func (c *batchMetricVec) Describe(ch chan<- *prom.Desc) {
+	ch <- c.multiSimpleEntry.Desc()
 }
 
-func (v *batchMetricVec) Collect(ch chan<- prom.Metric) {
-	// generate data
-	if vals := v.rawMetricCollector.DoCollect(); vals != nil {
-		for _, val := range vals {
-			v.RawHistVec.WithLabelValues(val.lvs...).Observe(val.val)
-		}
-	}
-	// export
-	v.inner.Collect(ch)
-}
+func (c *batchMetricVec) Collect(ch chan<- prom.Metric) {
+	c.mux.Lock()
+	defer c.mux.Unlock()
 
-var _ rawMetricCollector = (*procConnectionCollector)(nil)
-
-type procConnectionCollector struct{}
-
-func (p *procConnectionCollector) DoCollect() (result []MultiVal) {
-	if gConnectionCollector.Load() == nil {
-		return nil
+	if ms, err := c.multiSimpleEntry.Metrics(); err != nil {
+		logutil.Warnf("[Metric] %s collect a error: %v", c.Desc().String(), err)
 	} else {
-		counters := gConnectionCollector.Load().(ConnectionCounter).GetConnCounters()
-		for account, count := range counters {
-			result = append(result, MultiVal{val: float64(count), lvs: []string{account}})
+		for _, m := range ms {
+			ch <- m
 		}
-		return
 	}
-}
-
-var gConnectionCollector atomic.Value
-
-type ConnectionCounter interface {
-	GetConnCounters() map[string]int32
 }
 
 /*

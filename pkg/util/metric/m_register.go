@@ -27,7 +27,7 @@ var initCollectors = []Collector{
 	StatementErrorsFactory,
 	processCollector,
 	hardwareStatsCollector,
-	procConnections,
+	ProcConnections,
 }
 
 // register all defined collector here
