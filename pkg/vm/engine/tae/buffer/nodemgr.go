@@ -85,6 +85,20 @@ func (mgr *nodeManager) Count() int {
 	return len(mgr.nodes)
 }
 
+func (mgr *nodeManager) Add(node base.INode) (err error) {
+	if !node.IsLoaded() {
+		mgr.RegisterNode(node)
+		return
+	}
+	ok := mgr.MakeRoom(node.Size())
+	if !ok {
+		err = base.ErrNoSpace
+		return
+	}
+	mgr.RegisterNode(node)
+	return
+}
+
 func (mgr *nodeManager) RegisterNode(node base.INode) {
 	id := node.GetID()
 	mgr.Lock()
