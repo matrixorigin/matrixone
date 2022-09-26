@@ -19,6 +19,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -43,6 +44,13 @@ var (
 func WithLogger(logger *zap.Logger) Option {
 	return func(s *store) {
 		s.logger = logger
+	}
+}
+
+// WithClock set clock
+func WithClock(clock clock.Clock) Option {
+	return func(s *store) {
+		s.clock = clock
 	}
 }
 
@@ -359,11 +367,13 @@ func (s *store) initTxnServer() error {
 }
 
 func (s *store) initClocker() error {
-	v, err := s.createClock()
-	if err != nil {
-		return err
+	if s.clock == nil {
+		s.clock = clock.DefaultClock()
 	}
-	s.clock = v
+
+	if s.clock == nil {
+		return moerr.NewBadConfig("missing txn clock")
+	}
 	return nil
 }
 
