@@ -147,9 +147,9 @@ func (be *MetaBaseEntry) UpdateMetaLoc(txn txnif.TxnReader, metaloc string) (isN
 	defer be.Unlock()
 	needWait, txnToWait := be.NeedWaitCommitting(txn.GetStartTS())
 	if needWait {
-		be.RUnlock()
+		be.Unlock()
 		txnToWait.GetTxnState(true)
-		be.RLock()
+		be.Lock()
 	}
 	err = be.CheckConflict(txn)
 	if err != nil {
@@ -166,9 +166,9 @@ func (be *MetaBaseEntry) UpdateDeltaLoc(txn txnif.TxnReader, deltaloc string) (i
 	defer be.Unlock()
 	needWait, txnToWait := be.NeedWaitCommitting(txn.GetStartTS())
 	if needWait {
-		be.RUnlock()
+		be.Unlock()
 		txnToWait.GetTxnState(true)
-		be.RLock()
+		be.Lock()
 	}
 	err = be.CheckConflict(txn)
 	if err != nil {
