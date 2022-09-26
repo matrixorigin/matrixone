@@ -71,18 +71,19 @@ func (node *appendableNode) CheckUnloadable() bool {
 	return !node.block.mvcc.HasActiveAppendNode()
 }
 
-func (node *appendableNode) GetDataCopy(maxRow uint32) (columns *containers.Batch, err error) {
+func (node *appendableNode) GetDataCopy(minRow, maxRow uint32) (columns *containers.Batch, err error) {
 	if exception := node.exception.Load(); exception != nil {
 		err = exception.(error)
 		return
 	}
 	node.block.RLock()
-	columns = node.data.CloneWindow(0, int(maxRow), containers.DefaultAllocator)
+	columns = node.data.CloneWindow(int(minRow), int(maxRow-minRow), containers.DefaultAllocator)
 	node.block.RUnlock()
 	return
 }
 
 func (node *appendableNode) GetColumnDataCopy(
+	minRow uint32,
 	maxRow uint32,
 	colIdx int,
 	buffer *bytes.Buffer) (vec containers.Vector, err error) {
@@ -94,11 +95,11 @@ func (node *appendableNode) GetColumnDataCopy(
 	if buffer != nil {
 		win := node.data.Vecs[colIdx]
 		if maxRow < uint32(node.data.Vecs[colIdx].Length()) {
-			win = win.Window(0, int(maxRow))
+			win = win.Window(int(minRow), int(maxRow))
 		}
 		vec = containers.CloneWithBuffer(win, buffer, containers.DefaultAllocator)
 	} else {
-		vec = node.data.Vecs[colIdx].CloneWindow(0, int(maxRow), containers.DefaultAllocator)
+		vec = node.data.Vecs[colIdx].CloneWindow(int(minRow), int(maxRow-minRow), containers.DefaultAllocator)
 	}
 	node.block.RUnlock()
 	return
