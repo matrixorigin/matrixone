@@ -112,6 +112,8 @@ func TestTaskSchedulerCanReallocateTask(t *testing.T) {
 	opt := DefaultOptions().
 		WithDNServiceNum(dnSvcNum).
 		WithCNServiceNum(cnSvcNum).
+		WithHKDNStoreTimeout(15 * time.Second).
+		WithHKLogStoreTimeout(30 * time.Second).
 		WithTaskStorage(taskStorage)
 
 	// initialize cluster

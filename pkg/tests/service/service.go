@@ -623,7 +623,7 @@ func (c *testCluster) WaitAnyShardReady() error {
 			logutil.Info("shard ready")
 			return nil
 		}
-		time.Sleep(time.Second)
+		time.Sleep(3 * time.Second)
 	}
 }
 
