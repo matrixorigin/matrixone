@@ -22,7 +22,7 @@ import (
 	"strings"
 )
 
-var instructionNames = map[int]string{
+var debugInstructionNames = map[int]string{
 	vm.Top:          "top",
 	vm.Join:         "join",
 	vm.Semi:         "semi",
@@ -61,7 +61,7 @@ var instructionNames = map[int]string{
 	vm.HashBuild:    "hash build",
 }
 
-var magicNames = map[int]string{
+var debugMagicNames = map[int]string{
 	Merge:          "Merge",
 	Normal:         "Normal",
 	Remote:         "Remote",
@@ -79,65 +79,32 @@ var magicNames = map[int]string{
 	InsertValues:   "InsertValues",
 }
 
-var _ = ShowScopes
+var _ = DebugShowScopes
 
-// ShowScopes show information of a scope structure.
-func ShowScopes(ss []*Scope) string {
+// DebugShowScopes show information of a scope structure.
+func DebugShowScopes(ss []*Scope) string {
+	var generateReceiverMap func(*Scope, map[*process.WaitRegister]int)
+	generateReceiverMap = func(s *Scope, mp map[*process.WaitRegister]int) {
+		for i := range s.PreScopes {
+			generateReceiverMap(s.PreScopes[i], mp)
+		}
+		if s.Proc == nil {
+			return
+		}
+		for i := range s.Proc.Reg.MergeReceivers {
+			mp[s.Proc.Reg.MergeReceivers[i]] = len(mp)
+		}
+	}
+
 	receiverMap := make(map[*process.WaitRegister]int)
 	for i := range ss {
 		generateReceiverMap(ss[i], receiverMap)
 	}
 
-	return showScopes(ss, 0, receiverMap)
+	return debugShowScopes(ss, 0, receiverMap)
 }
 
-func magicShow(magic int) string {
-	name, ok := magicNames[magic]
-	if ok {
-		return name
-	}
-	return "unknown"
-}
-
-func showInstruction(instruction vm.Instruction, mp map[*process.WaitRegister]int) string {
-	id := instruction.Op
-	name, ok := instructionNames[id]
-	if ok {
-		str := name
-		if id == vm.Connector {
-			var receiver = "unknown"
-			arg := instruction.Arg.(*connector.Argument)
-			if receiverId, okk := mp[arg.Reg]; okk {
-				receiver = fmt.Sprintf("%d", receiverId)
-			}
-			str += fmt.Sprintf(" to MergeReceiver %s", receiver)
-		}
-		return str
-	}
-	return "unknown"
-}
-
-func getDataSource(source *Source) string {
-	if source == nil {
-		return "nil"
-	}
-	s := fmt.Sprintf("%s.%s%s", source.SchemaName, source.RelationName, source.Attributes)
-	return strings.TrimLeft(s, ".")
-}
-
-func generateReceiverMap(s *Scope, mp map[*process.WaitRegister]int) {
-	for i := range s.PreScopes {
-		generateReceiverMap(s.PreScopes[i], mp)
-	}
-	if s.Proc == nil {
-		return
-	}
-	for i := range s.Proc.Reg.MergeReceivers {
-		mp[s.Proc.Reg.MergeReceivers[i]] = len(mp)
-	}
-}
-
-func showScopes(ss []*Scope, gap int, rmp map[*process.WaitRegister]int) string {
+func debugShowScopes(ss []*Scope, gap int, rmp map[*process.WaitRegister]int) string {
 	// new line and start with n space
 	gapNextLine := func() string {
 		str := "\n"
@@ -173,6 +140,43 @@ func showScopes(ss []*Scope, gap int, rmp map[*process.WaitRegister]int) string 
 		return str
 	}
 
+	// convert magic to its string name
+	magicShow := func(magic int) string {
+		name, ok := debugMagicNames[magic]
+		if ok {
+			return name
+		}
+		return "unknown"
+	}
+
+	// explain the datasource
+	showDataSource := func(source *Source) string {
+		if source == nil {
+			return "nil"
+		}
+		s := fmt.Sprintf("%s.%s%s", source.SchemaName, source.RelationName, source.Attributes)
+		return strings.TrimLeft(s, ".")
+	}
+
+	// explain the operator information
+	showInstruction := func(instruction vm.Instruction, mp map[*process.WaitRegister]int) string {
+		id := instruction.Op
+		name, ok := debugInstructionNames[id]
+		if ok {
+			str := name
+			if id == vm.Connector {
+				var receiver = "unknown"
+				arg := instruction.Arg.(*connector.Argument)
+				if receiverId, okk := mp[arg.Reg]; okk {
+					receiver = fmt.Sprintf("%d", receiverId)
+				}
+				str += fmt.Sprintf(" to MergeReceiver %s", receiver)
+			}
+			return str
+		}
+		return "unknown"
+	}
+
 	var result string
 	for i := range ss {
 		str := addGap()
@@ -190,12 +194,12 @@ func showScopes(ss []*Scope, gap int, rmp map[*process.WaitRegister]int) string 
 		str += "]"
 		if ss[i].DataSource != nil {
 			str += gapNextLine()
-			str += fmt.Sprintf("DataSource: %s,", getDataSource(ss[i].DataSource))
+			str += fmt.Sprintf("DataSource: %s,", showDataSource(ss[i].DataSource))
 		}
 		if len(ss[i].PreScopes) > 0 {
 			str += gapNextLine()
 			str += "  PreScopes: {"
-			str += showScopes(ss[i].PreScopes, gap+2, rmp)
+			str += debugShowScopes(ss[i].PreScopes, gap+2, rmp)
 			str += gapNextLine()
 			str += "}"
 		}
