@@ -107,10 +107,8 @@ func TestTaskSchedulerCanReallocateTask(t *testing.T) {
 	taskStorage := taskservice.NewMemTaskStorage()
 	taskService := taskservice.NewTaskService(taskStorage, nil)
 
-	dnSvcNum := 1
 	cnSvcNum := 2
 	opt := DefaultOptions().
-		WithDNServiceNum(dnSvcNum).
 		WithCNServiceNum(cnSvcNum).
 		WithTaskStorage(taskStorage)
 

@@ -128,7 +128,7 @@ func checkInitiatingShards(
 	fmt.Println("DNShards:", cluster.DNShards)
 	for _, record := range cluster.DNShards {
 		shardID := record.ShardID
-		_, err := rs.getShard(shardID)
+		shard, err := rs.getShard(shardID)
 		if err != nil {
 			if moerr.IsMoErrCode(err, moerr.ErrShardNotReported) {
 				// if a shard not reported, register it,
@@ -139,6 +139,7 @@ func checkInitiatingShards(
 			continue
 		}
 		// shard reported via heartbeat, no need to wait
+		fmt.Println(shard)
 		waitingShards.remove(shardID)
 	}
 
