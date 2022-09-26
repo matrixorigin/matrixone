@@ -519,7 +519,7 @@ func getAccessInfo(ctx context.Context) (uint32, uint32, uint32) {
 }
 
 func partitionBatch(bat *batch.Batch, expr *plan.Expr, m *mheap.Mheap, dnNum int) ([]*batch.Batch, error) {
-	proc := process.New(nil, m, nil, nil, nil)
+	proc := process.New(context.TODO(), m, nil, nil, nil)
 	pvec, err := colexec.EvalExpr(bat, proc, expr)
 	if err != nil {
 		return nil, err
