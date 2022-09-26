@@ -3,7 +3,7 @@ service-type = "CN"
 
 [log]
 level = "debug"
-format = "json"
+format = "console"
 max-size = 512
 
 [hakeeper-client]

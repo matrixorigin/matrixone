@@ -1034,7 +1034,7 @@ func Test_handleLoadData(t *testing.T) {
 			protocol: proto,
 		}
 		mce.ses = ses
-		load := &tree.Load{
+		load := &tree.Import{
 			Local: true,
 		}
 		err = mce.handleLoadData(ctx, load)
