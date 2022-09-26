@@ -17,14 +17,11 @@ package objectio
 import (
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
-	"sync"
 )
 
 type ObjectFS struct {
-	sync.RWMutex
 	Service fileservice.FileService
 	Dir     string
-	Writer  map[string]Writer
 }
 
 func TmpNewFileservice(dir string) fileservice.FileService {
@@ -43,23 +40,7 @@ func TmpNewFileservice(dir string) fileservice.FileService {
 func NewObjectFS(service fileservice.FileService, dir string) *ObjectFS {
 	fs := &ObjectFS{
 		Service: service,
-		Writer:  make(map[string]Writer),
 		Dir:     dir,
 	}
 	return fs
-}
-
-func (o *ObjectFS) GetWriter(name string) (Writer, error) {
-	o.Lock()
-	defer o.Unlock()
-	writer := o.Writer[name]
-	if writer != nil {
-		return writer, nil
-	}
-	writer, err := NewObjectWriter(name, o.Service)
-	if err != nil {
-		return nil, err
-	}
-	o.Writer[name] = writer
-	return writer, err
 }
