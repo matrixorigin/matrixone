@@ -188,6 +188,7 @@ func getUnCompressReader(param *tree.ExternParam, r io.ReadCloser) (io.ReadClose
 
 const NULL_FLAG = "\\N"
 
+// judge the file is whether integer num
 func judgeInterge(field string) bool {
 	for i := 0; i < len(field); i++ {
 		if field[i] == '-' || field[i] == '+' {
