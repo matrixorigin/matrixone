@@ -42,14 +42,15 @@ type externalTestCase struct {
 	types    []types.Type
 	proc     *process.Process
 	cancel   context.CancelFunc
-	fromjson bool
+	format   string
+	jsondata string
 }
 
 var (
 	cases []externalTestCase
 )
 
-func newTestCase(gm *guest.Mmu, all, jsonline bool) externalTestCase {
+func newTestCase(gm *guest.Mmu, all bool, format, jsondata string) externalTestCase {
 	proc := testutil.NewProcess()
 	proc.FileService = testutil.NewFS()
 	ctx, cancel := context.WithCancel(context.Background())
@@ -64,14 +65,19 @@ func newTestCase(gm *guest.Mmu, all, jsonline bool) externalTestCase {
 			},
 		},
 		cancel:   cancel,
-		fromjson: jsonline,
+		format:   format,
+		jsondata: jsondata,
 	}
 }
 
 func init() {
 	hm := host.New(1 << 30)
 	gm := guest.New(1<<30, hm)
-	cases = []externalTestCase{newTestCase(gm, true, false), newTestCase(gm, true, true)}
+	cases = []externalTestCase{
+		newTestCase(gm, true, tree.CSV, ""),
+		newTestCase(gm, true, tree.JSONLINE, tree.OBJECT),
+		newTestCase(gm, true, tree.JSONLINE, tree.ARRAY),
+	}
 }
 
 func Test_String(t *testing.T) {
@@ -91,9 +97,10 @@ func Test_Prepare(t *testing.T) {
 				Filepath: "",
 				Tail: &tree.TailParameter{
 					IgnoredLines: 0,
-					FromJsonLine: tcs.fromjson,
 				},
 				FileService: tcs.proc.FileService,
+				Format:      tcs.format,
+				JsonData:    tcs.jsondata,
 			}
 			json_byte, err := json.Marshal(extern)
 			if err != nil {
@@ -105,15 +112,47 @@ func Test_Prepare(t *testing.T) {
 			convey.So(param.FileList, convey.ShouldBeNil)
 			convey.So(param.FileCnt, convey.ShouldEqual, 0)
 
+			//json_byte, err = json.Marshal(extern)
+			//if err != nil {
+			//	panic(err)
+			//}
+			//param.CreateSql = string(json_byte)
+			//err = Prepare(tcs.proc, tcs.arg)
+			//convey.So(err, convey.ShouldNotBeNil)
+			//convey.So(param.FileList, convey.ShouldBeNil)
+			//convey.So(param.FileCnt, convey.ShouldEqual, 0)
+
+			extern.Format = "test"
 			json_byte, err = json.Marshal(extern)
-			if err != nil {
-				panic(err)
-			}
+			convey.So(err, convey.ShouldBeNil)
 			param.CreateSql = string(json_byte)
 			err = Prepare(tcs.proc, tcs.arg)
 			convey.So(err, convey.ShouldNotBeNil)
-			convey.So(param.FileList, convey.ShouldBeNil)
-			convey.So(param.FileCnt, convey.ShouldEqual, 0)
+
+			if tcs.format == tree.JSONLINE {
+				extern = &tree.ExternParam{
+					Filepath: "",
+					Tail: &tree.TailParameter{
+						IgnoredLines: 0,
+					},
+					Format: tcs.format,
+				}
+				extern.JsonData = tcs.jsondata
+				json_byte, err = json.Marshal(extern)
+				convey.So(err, convey.ShouldBeNil)
+				param.CreateSql = string(json_byte)
+				err = Prepare(tcs.proc, tcs.arg)
+				convey.So(err, convey.ShouldNotBeNil)
+				convey.So(param.FileList, convey.ShouldBeNil)
+				convey.So(param.FileCnt, convey.ShouldEqual, 0)
+
+				extern.JsonData = "test"
+				json_byte, err = json.Marshal(extern)
+				convey.So(err, convey.ShouldBeNil)
+				param.CreateSql = string(json_byte)
+				err = Prepare(tcs.proc, tcs.arg)
+				convey.So(err, convey.ShouldNotBeNil)
+			}
 		}
 	})
 }
@@ -126,9 +165,10 @@ func Test_Call(t *testing.T) {
 				Filepath: "",
 				Tail: &tree.TailParameter{
 					IgnoredLines: 0,
-					FromJsonLine: param.extern.Tail.FromJsonLine,
 				},
 				FileService: tcs.proc.FileService,
+				Format:      tcs.format,
+				JsonData:    tcs.jsondata,
 			}
 			param.extern = extern
 			param.End = false
@@ -245,7 +285,37 @@ func Test_GetBatchData(t *testing.T) {
 			}
 		}
 		buf.WriteString("}")
-		jsonline := []string{buf.String()}
+		jsonline_object := []string{buf.String()}
+		buf.Reset()
+		buf.WriteString("[")
+		for idx := range line {
+			buf.WriteString(fmt.Sprintf("\"%s\"", line[idx]))
+			if idx != len(atrrs)-1 {
+				buf.WriteString(",")
+			}
+		}
+		buf.WriteString("]")
+		jsonline_array := []string{buf.String()}
+		buf.Reset()
+		buf.WriteString("{")
+		for i := 0; i < len(line)-1; i++ {
+			buf.WriteString(fmt.Sprintf("\"%s\":\"%s\",", atrrs[i], line[i]))
+			if i != len(line)-2 {
+				buf.WriteString(",")
+			}
+		}
+		buf.WriteString("}")
+		jsonline_object_less := []string{buf.String()}
+		buf.Reset()
+		buf.WriteString("[")
+		for i := 0; i < len(line)-1; i++ {
+			buf.WriteString(fmt.Sprintf("\"%s\"", line[i]))
+			if i != len(line)-2 {
+				buf.WriteString(",")
+			}
+		}
+		buf.WriteString("]")
+		jsonline_array_less := []string{buf.String()}
 
 		cols := []*plan.ColDef{
 			{
@@ -350,6 +420,7 @@ func Test_GetBatchData(t *testing.T) {
 				Tail: &tree.TailParameter{
 					Fields: &tree.Fields{},
 				},
+				Format: tree.CSV,
 			},
 		}
 		param.Name2ColIndex = make(map[string]int32)
@@ -411,22 +482,33 @@ func Test_GetBatchData(t *testing.T) {
 		}
 
 		//test jsonline
-		param.extern.Tail.FromJsonLine = true
+		param.extern.Format = tree.JSONLINE
+		param.extern.JsonData = tree.OBJECT
 		param.Attrs = atrrs
 		param.Cols = cols
-		plh.simdCsvLineArray = [][]string{jsonline}
+		plh.simdCsvLineArray = [][]string{jsonline_object}
+		_, err = GetBatchData(param, plh, proc)
+		convey.So(err, convey.ShouldBeNil)
+		plh.simdCsvLineArray = [][]string{jsonline_object_less}
+		_, err = GetBatchData(param, plh, proc)
+		convey.So(err, convey.ShouldNotBeNil)
+
+		param.extern.Format = tree.CSV
+		_, err = GetBatchData(param, plh, proc)
+		convey.So(err, convey.ShouldNotBeNil)
+
+		param.extern.Format = tree.JSONLINE
+		param.extern.JsonData = tree.ARRAY
+		plh.simdCsvLineArray = [][]string{jsonline_array}
 		_, err = GetBatchData(param, plh, proc)
 		convey.So(err, convey.ShouldBeNil)
 
-		param.extern.Tail.FromJsonLine = false
+		param.extern.JsonData = "test"
 		_, err = GetBatchData(param, plh, proc)
 		convey.So(err, convey.ShouldNotBeNil)
 
-		param.extern.Tail.FromJsonLine = true
-		param.Attrs = append(param.Attrs, "test")
-		param.Cols = append(param.Cols, param.Cols[0])
+		plh.simdCsvLineArray = [][]string{jsonline_array_less}
 		_, err = GetBatchData(param, plh, proc)
 		convey.So(err, convey.ShouldNotBeNil)
-
 	})
 }
