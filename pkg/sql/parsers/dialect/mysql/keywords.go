@@ -222,6 +222,7 @@ func init() {
 		"rows":                     ROWS,
 		"linestring":               LINESTRING,
 		"load":                     LOAD,
+		"import":                   IMPORT,
 		"localtime":                LOCALTIME,
 		"localtimestamp":           LOCALTIMESTAMP,
 		"lock":                     LOCK,
@@ -494,5 +495,8 @@ func init() {
 		"password_lock_time":       PASSWORD_LOCK_TIME,
 		"unbounded":                UNBOUNDED,
 		"secondary":                SECONDARY,
+		"connect":                  CONNECT,
+		"ownership":                OWNERSHIP,
+		"reference":                REFERENCE,
 	}
 }

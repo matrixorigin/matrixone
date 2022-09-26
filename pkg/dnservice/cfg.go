@@ -27,7 +27,6 @@ import (
 var (
 	defaultListenAddress    = "0.0.0.0:22000"
 	defaultServiceAddress   = "127.0.0.1:22000"
-	defaultMaxClockOffset   = time.Millisecond * 500
 	defaultZombieTimeout    = time.Hour
 	defaultDiscoveryTimeout = time.Second * 30
 	defaultHeatbeatDuration = time.Second
@@ -86,14 +85,6 @@ type Config struct {
 			Mem struct {
 			}
 		}
-
-		// Clock txn clock type. [LOCAL|HLC]. Default is LOCAL.
-		Clock struct {
-			// Backend clock backend implementation. [LOCAL|HLC], default LOCAL.
-			Backend string `toml:"source"`
-			// MaxClockOffset max clock offset between two nodes. Default is 500ms
-			MaxClockOffset toml.Duration `toml:"max-clock-offset"`
-		}
 	}
 }
 
@@ -107,15 +98,6 @@ func (c *Config) Validate() error {
 	}
 	if c.ServiceAddress == "" {
 		c.ServiceAddress = c.ListenAddress
-	}
-	if c.Txn.Clock.MaxClockOffset.Duration == 0 {
-		c.Txn.Clock.MaxClockOffset.Duration = defaultMaxClockOffset
-	}
-	if c.Txn.Clock.Backend == "" {
-		c.Txn.Clock.Backend = localClockBackend
-	}
-	if _, ok := supportTxnClockBackends[strings.ToUpper(c.Txn.Clock.Backend)]; !ok {
-		return moerr.NewInternalError("%s clock backend not support", c.Txn.Storage)
 	}
 	if c.Txn.Storage.Backend == "" {
 		c.Txn.Storage.Backend = taeStorageBackend
