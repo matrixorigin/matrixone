@@ -153,7 +153,7 @@ func newBlock(meta *catalog.BlockEntry, segFile file.Segment, bufMgr base.INodeM
 	}
 	block.mvcc.SetMaxVisible(ts)
 	block.ckpTs.Store(ts)
-	if len(meta.GetMetaLoc()) > 0 {
+	if meta.GetMetaLoc() != "" {
 		if err := block.ReplayIndex(); err != nil {
 			panic(err)
 		}
@@ -376,19 +376,20 @@ func (blk *dataBlock) Rows(txn txnif.AsyncTxn, coarse bool) int {
 		return rows
 	}
 	metaLoc := blk.meta.GetMetaLoc()
-	if len(metaLoc) == 0 {
+	if metaLoc == "" {
 		return 0
 	}
-	return int(blk.file.ReadRows(blk.meta.GetMetaLoc()))
+	return int(blk.file.ReadRows(metaLoc))
 }
 
 // for replay
 func (blk *dataBlock) GetRowsOnReplay() uint64 {
 	rows := uint64(blk.mvcc.GetTotalRow())
-	if len(blk.meta.GetMetaLoc()) == 0 {
+	metaLoc := blk.meta.GetMetaLoc()
+	if metaLoc == "" {
 		return rows
 	}
-	fileRows := uint64(blk.file.ReadRows(blk.meta.GetMetaLoc()))
+	fileRows := uint64(blk.file.ReadRows(metaLoc))
 	if rows > fileRows {
 		return rows
 	}
