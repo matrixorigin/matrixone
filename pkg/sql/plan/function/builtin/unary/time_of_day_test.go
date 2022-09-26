@@ -15,10 +15,16 @@
 package unary
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
+	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
+	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/smartystreets/goconvey/convey"
+	"github.com/stretchr/testify/require"
 	"testing"
 )
 
@@ -27,8 +33,11 @@ type testPair struct {
 	want uint8
 }
 
-func TestTimeOfDay(t *testing.T) {
+const (
+	Rows = 8000 // default test rows
+)
 
+func TestTimeOfDay(t *testing.T) {
 	convey.Convey("HourOfDayDatetimeCase", t, func() {
 
 		pairs := []testPair{
@@ -61,7 +70,6 @@ func TestTimeOfDay(t *testing.T) {
 		compare := testutil.CompareVectors(wantVector, res)
 		convey.So(compare, convey.ShouldBeTrue)
 	})
-
 	convey.Convey("HourOfDayTimestampCase", t, func() {
 
 		pairs := []testPair{
@@ -94,7 +102,6 @@ func TestTimeOfDay(t *testing.T) {
 		compare := testutil.CompareVectors(wantVector, res)
 		convey.So(compare, convey.ShouldBeTrue)
 	})
-
 	convey.Convey("MinuteOfDayDatetimeCase", t, func() {
 
 		pairs := []testPair{
@@ -127,7 +134,6 @@ func TestTimeOfDay(t *testing.T) {
 		compare := testutil.CompareVectors(wantVector, res)
 		convey.So(compare, convey.ShouldBeTrue)
 	})
-
 	convey.Convey("MinuteOfDayTimestampCase", t, func() {
 
 		pairs := []testPair{
@@ -160,7 +166,6 @@ func TestTimeOfDay(t *testing.T) {
 		compare := testutil.CompareVectors(wantVector, res)
 		convey.So(compare, convey.ShouldBeTrue)
 	})
-
 	convey.Convey("SecondOfDayDatetimeCase", t, func() {
 
 		pairs := []testPair{
@@ -197,7 +202,6 @@ func TestTimeOfDay(t *testing.T) {
 		compare := testutil.CompareVectors(wantVector, res)
 		convey.So(compare, convey.ShouldBeTrue)
 	})
-
 	convey.Convey("SecondOfDayTimestampCase", t, func() {
 
 		pairs := []testPair{
@@ -234,7 +238,6 @@ func TestTimeOfDay(t *testing.T) {
 		compare := testutil.CompareVectors(wantVector, res)
 		convey.So(compare, convey.ShouldBeTrue)
 	})
-
 	convey.Convey("TimeOfDayCaseScalar", t, func() {
 
 		hourPairs := testPair{
@@ -313,7 +316,6 @@ func TestTimeOfDay(t *testing.T) {
 		}
 
 	})
-
 	convey.Convey("TimeOfDayCaseScalarNull", t, func() {
 
 		//Hour Test
@@ -377,5 +379,49 @@ func TestTimeOfDay(t *testing.T) {
 		}
 
 	})
+}
 
+type benchmarkTestCase struct {
+	flags []bool // flags[i] == true: nullable
+	types []types.Type
+	proc  *process.Process
+}
+
+var (
+	tcs []benchmarkTestCase
+)
+
+func init() {
+	hm := host.New(1 << 30)
+	gm := guest.New(1<<30, hm)
+	tcs = []benchmarkTestCase{
+		newTestCase(mheap.New(gm), []bool{false}, []types.Type{{Oid: types.T_datetime}}),
+	}
+}
+
+func newTestCase(m *mheap.Mheap, flgs []bool, ts []types.Type) benchmarkTestCase {
+	return benchmarkTestCase{
+		types: ts,
+		flags: flgs,
+		proc:  testutil.NewProcessWithMheap(m),
+	}
+}
+
+// create a new block based on the type information, flags[i] == ture: has null
+func newBatch(t *testing.T, flgs []bool, ts []types.Type, proc *process.Process, rows int64) *batch.Batch {
+	return testutil.NewBatch(ts, false, int(rows), proc.Mp())
+}
+
+func BenchmarkDatetimeToHour(b *testing.B) {
+	t := new(testing.T)
+	for i := 0; i < b.N; i++ {
+		for _, tc := range tcs {
+			bat := newBatch(t, tc.flags, tc.types, tc.proc, Rows)
+			vec, err := DatetimeToHour(bat.Vecs, tc.proc)
+			require.NoError(t, err)
+			bat.Clean(tc.proc.GetMheap())
+			vec.Free(tc.proc.GetMheap())
+			require.Equal(t, int64(0), mheap.Size(tc.proc.Mp()))
+		}
+	}
 }
