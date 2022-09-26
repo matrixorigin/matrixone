@@ -125,12 +125,6 @@ func (c *batchStatsCollector) Collect(ch chan<- prom.Metric) {
 	c.collected = true
 }
 
-// MultiVal handle multi instance value
-type MultiVal struct {
-	val float64
-	lvs []string
-}
-
 type multiSimpleEntry interface {
 	Desc() *prom.Desc
 	Metrics() ([]prom.Metric, error)
