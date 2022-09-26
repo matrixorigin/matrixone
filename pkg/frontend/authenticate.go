@@ -17,7 +17,6 @@ package frontend
 import (
 	"context"
 	"fmt"
-	"math/rand"
 	"strings"
 	"time"
 
@@ -163,12 +162,12 @@ func GetTenantInfo(userInput string) (*TenantInfo, error) {
 }
 
 const (
-	//	createMoUserIndex      = 0
-	createMoAccountIndex = 1
-	//createMoRoleIndex      = 2
-	//createMoUserGrantIndex = 3
-	//createMoRoleGrantIndex = 4
-	//createMoRolePrivIndex  = 5
+// createMoUserIndex      = 0
+// createMoAccountIndex = 1
+// createMoRoleIndex      = 2
+// createMoUserGrantIndex = 3
+// createMoRoleGrantIndex = 4
+// createMoRolePrivIndex  = 5
 )
 
 const (
@@ -179,22 +178,22 @@ const (
 	sysAccountComments = "system account"
 
 	//role
-	moAdminRoleID           = 0
-	moAdminRoleName         = "moadmin"
-	moAdminRoleComment      = "super admin role"
-	publicRoleID            = 1
-	publicRoleName          = "public"
-	publicRoleComment       = "public role"
-	accountAdminRoleID      = 2
-	accountAdminRoleName    = "accountadmin"
-	accountAdminRoleComment = "account admin role"
+	moAdminRoleID   = 0
+	moAdminRoleName = "moadmin"
+	//	moAdminRoleComment      = "super admin role"
+	publicRoleID   = 1
+	publicRoleName = "public"
+	//	publicRoleComment       = "public role"
+	accountAdminRoleID   = 2
+	accountAdminRoleName = "accountadmin"
+	//	accountAdminRoleComment = "account admin role"
 
 	//user
 	userStatusLock   = "lock"
 	userStatusUnlock = "unlock"
 
 	rootID            = 0
-	rootHost          = "NULL"
+	rootHost          = "localhost"
 	rootName          = "root"
 	rootPassword      = "111"
 	rootStatus        = userStatusUnlock
@@ -205,7 +204,7 @@ const (
 	rootDefaultRoleID = moAdminRoleID
 
 	dumpID            = 1
-	dumpHost          = "NULL"
+	dumpHost          = "localhost"
 	dumpName          = "dump"
 	dumpPassword      = "111"
 	dumpStatus        = userStatusUnlock
@@ -406,13 +405,13 @@ func (pt PrivilegeType) String() string {
 	case PrivilegeTypeManageGrants:
 		return "manage grants"
 	case PrivilegeTypeAccountAll:
-		return "account all"
+		return "all"
 	case PrivilegeTypeAccountOwnership:
-		return "account ownership"
+		return "ownership"
 	case PrivilegeTypeUserOwnership:
-		return "user ownership"
+		return "ownership"
 	case PrivilegeTypeRoleOwnership:
-		return "role ownership"
+		return "ownership"
 	case PrivilegeTypeShowTables:
 		return "show tables"
 	case PrivilegeTypeCreateObject:
@@ -434,9 +433,9 @@ func (pt PrivilegeType) String() string {
 	case PrivilegeTypeAlterView:
 		return "alter view"
 	case PrivilegeTypeDatabaseAll:
-		return "database all"
+		return "all"
 	case PrivilegeTypeDatabaseOwnership:
-		return "database ownership"
+		return "ownership"
 	case PrivilegeTypeSelect:
 		return "select"
 	case PrivilegeTypeInsert:
@@ -450,11 +449,11 @@ func (pt PrivilegeType) String() string {
 	case PrivilegeTypeReference:
 		return "reference"
 	case PrivilegeTypeIndex:
-		return "create/alter/drop index"
+		return "index"
 	case PrivilegeTypeTableAll:
-		return "table all"
+		return "all"
 	case PrivilegeTypeTableOwnership:
-		return "table ownership"
+		return "ownership"
 	case PrivilegeTypeExecute:
 		return "execute"
 	}
@@ -543,18 +542,20 @@ var (
 		"system_metrics":     0,
 	}
 	sysWantedTables = map[string]int8{
-		"mo_user":       0,
-		"mo_account":    0,
-		"mo_role":       0,
-		"mo_user_grant": 0,
-		"mo_role_grant": 0,
-		"mo_role_privs": 0,
+		"mo_user":                 0,
+		"mo_account":              0,
+		"mo_role":                 0,
+		"mo_user_grant":           0,
+		"mo_role_grant":           0,
+		"mo_role_privs":           0,
+		`%!%mo_increment_columns`: 0,
 	}
 	//the sqls creating many tables for the tenant.
 	//Wrap them in a transaction
 	createSqls = []string{
+		"create table `%!%mo_increment_columns`(name varchar(770) primary key, offset bigint, step bigint);",
 		`create table mo_user(
-				user_id int,
+				user_id int signed auto_increment,
 				user_host varchar(100),
 				user_name varchar(100),
 				authentication_string varchar(100),
@@ -562,51 +563,61 @@ var (
 				created_time  timestamp,
 				expired_time timestamp,
 				login_type  varchar(16),
-				creator int,
-				owner int,
-				default_role int
+				creator int signed,
+				owner int signed,
+				default_role int signed
     		);`,
 		`create table mo_account(
-				account_id int,
+				account_id int signed auto_increment,
 				account_name varchar(100),
 				status varchar(100),
 				created_time timestamp,
 				comments varchar(256)
 			);`,
 		`create table mo_role(
-				role_id int,
+				role_id int signed auto_increment,
 				role_name varchar(100),
-				creator int,
-				owner int,
+				creator int signed,
+				owner int signed,
 				created_time timestamp,
 				comments text
 			);`,
 		`create table mo_user_grant(
-				role_id int,
-				user_id int,
+				role_id int signed,
+				user_id int signed,
 				granted_time timestamp,
 				with_grant_option bool
 			);`,
 		`create table mo_role_grant(
-				granted_id int,
-				grantee_id int,
-				operation_role_id int,
-				operation_user_id int,
+				granted_id int signed,
+				grantee_id int signed,
+				operation_role_id int signed,
+				operation_user_id int signed,
 				granted_time timestamp,
 				with_grant_option bool
 			);`,
 		`create table mo_role_privs(
-				role_id int,
+				role_id int signed,
 				role_name  varchar(100),
 				obj_type  varchar(16),
-				obj_id int,
+				obj_id bigint unsigned,
 				privilege_id int,
 				privilege_name varchar(100),
 				privilege_level varchar(100),
-				operation_user_id int,
+				operation_user_id int unsigned,
 				granted_time timestamp,
 				with_grant_option bool
 			);`,
+	}
+
+	//drop tables for the tenant
+	dropSqls = []string{
+		`drop table if exists mo_catalog.mo_user;`,
+		`drop table if exists mo_catalog.mo_role;`,
+		`drop table if exists mo_catalog.mo_user_grant;`,
+		`drop table if exists mo_catalog.mo_role_grant;`,
+		`drop table if exists mo_catalog.mo_role_privs;`,
+		//"drop table if exists mo_catalog.`%!%mo_increment_columns`;",
 	}
 
 	initMoAccountFormat = `insert into mo_catalog.mo_account(
@@ -615,6 +626,11 @@ var (
 				status,
 				created_time,
 				comments) values (%d,"%s","%s","%s","%s");`
+	initMoAccountWithoutIDFormat = `insert into mo_catalog.mo_account(
+				account_name,
+				status,
+				created_time,
+				comments) values ("%s","%s","%s","%s");`
 	initMoRoleFormat = `insert into mo_catalog.mo_role(
 				role_id,
 				role_name,
@@ -623,6 +639,13 @@ var (
 				created_time,
 				comments
 			) values (%d,"%s",%d,%d,"%s","%s");`
+	initMoRoleWithoutIDFormat = `insert into mo_catalog.mo_role(
+				role_name,
+				creator,
+				owner,
+				created_time,
+				comments
+			) values ("%s",%d,%d,"%s","%s");`
 	initMoUserFormat = `insert into mo_catalog.mo_user(
 				user_id,
 				user_host,
@@ -635,7 +658,19 @@ var (
 				creator,
 				owner,
 				default_role
-    		) values(%d,%s,"%s","%s","%s","%s",%s,"%s",%d,%d,%d);`
+    		) values(%d,"%s","%s","%s","%s","%s",%s,"%s",%d,%d,%d);`
+	initMoUserWithoutIDFormat = `insert into mo_catalog.mo_user(
+				user_host,
+				user_name,
+				authentication_string,
+				status,
+				created_time,
+				expired_time,
+				login_type,
+				creator,
+				owner,
+				default_role
+    		) values("%s","%s","%s","%s","%s",%s,"%s",%d,%d,%d);`
 	initMoRolePrivFormat = `insert into mo_catalog.mo_role_privs(
 				role_id,
 				role_name,
@@ -659,6 +694,8 @@ var (
 var (
 	//privilege verification
 	checkTenantFormat = `select account_id,account_name from mo_catalog.mo_account where account_name = "%s";`
+
+	deleteAccountFromMoAccountFormat = `delete from mo_catalog.mo_account where account_name = "%s";`
 
 	getPasswordOfUserFormat = `select user_id,authentication_string,default_role from mo_catalog.mo_user where user_name = "%s";`
 
@@ -698,6 +735,13 @@ var (
 
 	insertRolePrivsFormat = `insert into mo_catalog.mo_role_privs(role_id,role_name,obj_type,obj_id,privilege_id,privilege_name,privilege_level,operation_user_id,granted_time,with_grant_option) 
 								values (%d,"%s","%s",%d,%d,"%s","%s",%d,"%s",%v);`
+
+	deleteRolePrivsFormat = `delete from mo_catalog.mo_role_privs 
+       									where role_id = %d 
+       									    and obj_type = "%s" 
+       									    and obj_id = %d 
+       									    and privilege_id = %d 
+       									    and privilege_level = "%s";`
 
 	checkDatabaseFormat = `select dat_id from mo_catalog.mo_database where datname = "%s";`
 
@@ -847,10 +891,28 @@ var (
 					and rp.role_id = %d
 					and rp.privilege_id = %d
 					and rp.privilege_level = "%s";`
+
+	//delete role from mo_role,mo_user_grant,mo_role_grant,mo_role_privs
+	deleteRoleFromMoRoleFormat = `delete from mo_catalog.mo_role where role_id = %d;`
+
+	deleteRoleFromMoUserGrantFormat = `delete from mo_catalog.mo_user_grant where role_id = %d;`
+
+	deleteRoleFromMoRoleGrantFormat = `delete from mo_catalog.mo_role_grant where granted_id = %d or grantee_id = %d;`
+
+	deleteRoleFromMoRolePrivsFormat = `delete from mo_catalog.mo_role_privs where role_id = %d;`
+
+	//delete user from mo_user,mo_user_grant
+	deleteUserFromMoUserFormat = `delete from mo_catalog.mo_user where user_id = %d;`
+
+	deleteUserFromMoUserGrantFormat = `delete from mo_catalog.mo_user_grant where user_id = %d;`
 )
 
 func getSqlForCheckTenant(tenant string) string {
 	return fmt.Sprintf(checkTenantFormat, tenant)
+}
+
+func getSqlForDeleteAccountFromMoAccount(account string) string {
+	return fmt.Sprintf(deleteAccountFromMoAccountFormat, account)
 }
 
 func getSqlForPasswordOfUser(user string) string {
@@ -925,6 +987,10 @@ func getSqlForInsertRolePrivs(roleId int64, roleName, objType string, objId, pri
 	return fmt.Sprintf(insertRolePrivsFormat, roleId, roleName, objType, objId, privilegeId, privilegeName, privilegeLevel, operationUserId, grantedTime, withGrantOption)
 }
 
+func getSqlForDeleteRolePrivs(roleId int64, objType string, objId, privilegeId int64, privilegeLevel string) string {
+	return fmt.Sprintf(deleteRolePrivsFormat, roleId, objType, objId, privilegeId, privilegeLevel)
+}
+
 func getSqlForCheckWithGrantOptionForTableStarStar(roleId int64, privId PrivilegeType) string {
 	return fmt.Sprintf(checkWithGrantOptionForTableStarStar, objectTypeTable, roleId, privId, privilegeLevelStarStar)
 }
@@ -983,6 +1049,26 @@ func getSqlForCheckDatabase(dbName string) string {
 
 func getSqlForCheckDatabaseTable(dbName, tableName string) string {
 	return fmt.Sprintf(checkDatabaseTableFormat, dbName, tableName)
+}
+
+func getSqlForDeleteRole(roleId int64) []string {
+	return []string{
+		fmt.Sprintf(deleteRoleFromMoRoleFormat, roleId),
+		fmt.Sprintf(deleteRoleFromMoUserGrantFormat, roleId),
+		fmt.Sprintf(deleteRoleFromMoRoleGrantFormat, roleId, roleId),
+		fmt.Sprintf(deleteRoleFromMoRolePrivsFormat, roleId),
+	}
+}
+
+func getSqlForDropTablesOfAccount() []string {
+	return dropSqls
+}
+
+func getSqlForDeleteUser(userId int64) []string {
+	return []string{
+		fmt.Sprintf(deleteUserFromMoUserFormat, userId),
+		fmt.Sprintf(deleteUserFromMoUserGrantFormat, userId),
+	}
 }
 
 type specialTag int
@@ -1290,6 +1376,499 @@ func (g *graph) hasLoop(start int64) bool {
 	return !g.toposort(start, visited)
 }
 
+// nameIsInvalid checks the name of account/user/role is valid or not
+func nameIsInvalid(name string) bool {
+	if len(name) == 0 {
+		return true
+	}
+	if !(strings.HasPrefix(name, "`") && strings.HasSuffix(name, "`")) {
+		if strings.Contains(name, ":") {
+			return true
+		}
+	}
+	return false
+}
+
+// doDropAccount accomplishes the DropAccount statement
+func doDropAccount(ctx context.Context, ses *Session, da *tree.DropAccount) error {
+	pu := ses.Pu
+	guestMMu := guest.New(pu.SV.GuestMmuLimitation, pu.HostMmu)
+	bh := NewBackgroundHandler(ctx, guestMMu, pu.Mempool, pu)
+	defer bh.Close()
+	var err error
+	var sql string
+	var rsset []ExecResult
+	var results []interface{}
+	var deleteCtx context.Context
+	var accountId int64
+	var hasAccount = true
+
+	err = bh.Exec(ctx, "begin;")
+	if err != nil {
+		goto handleFailed
+	}
+
+	//check the account exists or not
+	sql = getSqlForCheckTenant(da.Name)
+	bh.ClearExecResultSet()
+	err = bh.Exec(ctx, sql)
+	if err != nil {
+		goto handleFailed
+	}
+
+	results = bh.GetExecResultSet()
+	rsset, err = convertIntoResultSet(results)
+	if err != nil {
+		goto handleFailed
+	}
+
+	if len(rsset) != 0 && rsset[0].GetRowCount() != 0 {
+		accountId, err = rsset[0].GetInt64(0, 0)
+		if err != nil {
+			goto handleFailed
+		}
+	} else {
+		//no such account
+		if !da.IfExists { //when the "IF EXISTS" is set, just skip it.
+			err = moerr.NewInternalError("there is no account %s", da.Name)
+			goto handleFailed
+		}
+		hasAccount = false
+	}
+
+	err = bh.Exec(ctx, "commit;")
+	if err != nil {
+		goto handleFailed
+	}
+
+	//drop tables of the tenant
+	if hasAccount {
+		//NOTE!!!: single DDL drop statement per single transaction
+		//SWITCH TO THE CONTEXT of the deleted context
+		deleteCtx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(accountId))
+
+		//step 2 : drop table mo_user
+		//step 3 : drop table mo_role
+		//step 4 : drop table mo_user_grant
+		//step 5 : drop table mo_role_grant
+		//step 6 : drop table mo_role_privs
+		for _, sql = range getSqlForDropTablesOfAccount() {
+			err = bh.Exec(deleteCtx, sql)
+			if err != nil {
+				return err
+			}
+		}
+	}
+
+	//step 1 : delete the account in the mo_account of the sys account
+	sql = getSqlForDeleteAccountFromMoAccount(da.Name)
+	err = bh.Exec(ctx, sql)
+	return err
+
+handleFailed:
+	//ROLLBACK the transaction
+	rbErr := bh.Exec(ctx, "rollback;")
+	if rbErr != nil {
+		return rbErr
+	}
+	return err
+}
+
+// doDropUser accomplishes the DropUser statement
+func doDropUser(ctx context.Context, ses *Session, du *tree.DropUser) error {
+	pu := ses.Pu
+	guestMMu := guest.New(pu.SV.GuestMmuLimitation, pu.HostMmu)
+	bh := NewBackgroundHandler(ctx, guestMMu, pu.Mempool, pu)
+	defer bh.Close()
+	var err error
+	var vr *verifiedRole
+	verifiedRoles := make([]*verifiedRole, len(du.Users))
+
+	//put it into the single transaction
+	err = bh.Exec(ctx, "begin;")
+	if err != nil {
+		goto handleFailed
+	}
+
+	//step1: check users exists or not.
+	//handle "IF EXISTS"
+	for i, user := range du.Users {
+		sql := getSqlForPasswordOfUser(user.Username)
+		vr, err = verifyRoleFunc(ctx, bh, sql, user.Username, roleType)
+		if err != nil {
+			goto handleFailed
+		}
+		verifiedRoles[i] = vr
+		if vr == nil {
+			if !du.IfExists { //when the "IF EXISTS" is set, just skip it.
+				err = moerr.NewInternalError("there is no user %s", user.Username)
+				goto handleFailed
+			}
+		}
+	}
+
+	//step2 : delete mo_user
+	//step3 : delete mo_user_grant
+	for _, user := range verifiedRoles {
+		if user == nil {
+			continue
+		}
+		sqls := getSqlForDeleteUser(user.id)
+		for _, sql := range sqls {
+			bh.ClearExecResultSet()
+			err = bh.Exec(ctx, sql)
+			if err != nil {
+				goto handleFailed
+			}
+		}
+	}
+
+	err = bh.Exec(ctx, "commit;")
+	if err != nil {
+		goto handleFailed
+	}
+
+	return err
+
+handleFailed:
+	//ROLLBACK the transaction
+	rbErr := bh.Exec(ctx, "rollback;")
+	if rbErr != nil {
+		return rbErr
+	}
+	return err
+}
+
+// doDropRole accomplishes the DropRole statement
+func doDropRole(ctx context.Context, ses *Session, dr *tree.DropRole) error {
+	pu := ses.Pu
+	guestMMu := guest.New(pu.SV.GuestMmuLimitation, pu.HostMmu)
+	bh := NewBackgroundHandler(ctx, guestMMu, pu.Mempool, pu)
+	defer bh.Close()
+	var err error
+	var vr *verifiedRole
+	verifiedRoles := make([]*verifiedRole, len(dr.Roles))
+
+	//put it into the single transaction
+	err = bh.Exec(ctx, "begin;")
+	if err != nil {
+		goto handleFailed
+	}
+
+	//step1: check roles exists or not.
+	//handle "IF EXISTS"
+	for i, role := range dr.Roles {
+		sql := getSqlForRoleIdOfRole(role.UserName)
+		vr, err = verifyRoleFunc(ctx, bh, sql, role.UserName, roleType)
+		if err != nil {
+			goto handleFailed
+		}
+		verifiedRoles[i] = vr
+		if vr == nil {
+			if !dr.IfExists { //when the "IF EXISTS" is set, just skip it.
+				err = moerr.NewInternalError("there is no role %s", role.UserName)
+				goto handleFailed
+			}
+		}
+	}
+
+	//step2 : delete mo_role
+	//step3 : delete mo_user_grant
+	//step4 : delete mo_role_grant
+	//step5 : delete mo_role_privs
+	for _, role := range verifiedRoles {
+		if role == nil {
+			continue
+		}
+		sqls := getSqlForDeleteRole(role.id)
+		for _, sql := range sqls {
+			bh.ClearExecResultSet()
+			err = bh.Exec(ctx, sql)
+			if err != nil {
+				goto handleFailed
+			}
+		}
+	}
+
+	err = bh.Exec(ctx, "commit;")
+	if err != nil {
+		goto handleFailed
+	}
+
+	return err
+
+handleFailed:
+	//ROLLBACK the transaction
+	rbErr := bh.Exec(ctx, "rollback;")
+	if rbErr != nil {
+		return rbErr
+	}
+	return err
+}
+
+// doRevokePrivilege accomplishes the RevokePrivilege statement
+func doRevokePrivilege(ctx context.Context, ses *Session, rp *tree.RevokePrivilege) error {
+	pu := ses.Pu
+	guestMMu := guest.New(pu.SV.GuestMmuLimitation, pu.HostMmu)
+	bh := NewBackgroundHandler(ctx, guestMMu, pu.Mempool, pu)
+	defer bh.Close()
+	var err error
+	var vr *verifiedRole
+	var objType objectType
+	var privLevel privilegeLevelType
+	var objId int64
+	var privType PrivilegeType
+
+	verifiedRoles := make([]*verifiedRole, len(rp.Roles))
+	checkedPrivilegeTypes := make([]PrivilegeType, len(rp.Privileges))
+
+	//put it into the single transaction
+	err = bh.Exec(ctx, "begin;")
+	if err != nil {
+		goto handleFailed
+	}
+
+	//handle "IF EXISTS"
+	//step 1: check roles. exists or not.
+	for i, user := range rp.Roles {
+		sql := getSqlForRoleIdOfRole(user.UserName)
+		vr, err = verifyRoleFunc(ctx, bh, sql, user.UserName, roleType)
+		if err != nil {
+			goto handleFailed
+		}
+		verifiedRoles[i] = vr
+		if vr == nil {
+			if !rp.IfExists { //when the "IF EXISTS" is set, just skip it.
+				err = moerr.NewInternalError("there is no role %s", user.UserName)
+				goto handleFailed
+			}
+		}
+	}
+
+	//get the object type
+	objType, err = convertAstObjectTypeToObjectType(rp.ObjType)
+	if err != nil {
+		goto handleFailed
+	}
+
+	//check the privilege and the object type
+	for i, priv := range rp.Privileges {
+		privType, err = convertAstPrivilegeTypeToPrivilegeType(priv.Type, rp.ObjType)
+		if err != nil {
+			goto handleFailed
+		}
+		//check the match between the privilegeScope and the objectType
+		err = matchPrivilegeTypeWithObjectType(privType, objType)
+		if err != nil {
+			goto handleFailed
+		}
+		checkedPrivilegeTypes[i] = privType
+	}
+
+	//step 2: decide the object type , the object id and the privilege_level
+	privLevel, objId, err = checkPrivilegeObjectTypeAndPrivilegeLevel(ctx, ses, bh, rp.ObjType, *rp.Level)
+	if err != nil {
+		goto handleFailed
+	}
+
+	//step 3: delete the granted privilege
+	for _, privType = range checkedPrivilegeTypes {
+		for _, role := range verifiedRoles {
+			if role == nil {
+				continue
+			}
+			sql := getSqlForDeleteRolePrivs(role.id, objType.String(), objId, int64(privType), privLevel.String())
+
+			//insert or update
+			bh.ClearExecResultSet()
+			err = bh.Exec(ctx, sql)
+			if err != nil {
+				goto handleFailed
+			}
+		}
+	}
+
+	err = bh.Exec(ctx, "commit;")
+	if err != nil {
+		goto handleFailed
+	}
+
+	return err
+
+handleFailed:
+	//ROLLBACK the transaction
+	rbErr := bh.Exec(ctx, "rollback;")
+	if rbErr != nil {
+		return rbErr
+	}
+	return err
+}
+
+// getDatabaseOrTableId gets the id of the database or the table
+func getDatabaseOrTableId(ctx context.Context, bh BackgroundExec, isDb bool, dbName, tableName string) (int64, error) {
+	var err error
+	var sql string
+	var rsset []ExecResult
+	var id int64
+	if isDb {
+		sql = getSqlForCheckDatabase(dbName)
+	} else {
+		sql = getSqlForCheckDatabaseTable(dbName, tableName)
+	}
+	bh.ClearExecResultSet()
+	err = bh.Exec(ctx, sql)
+	if err != nil {
+		return 0, err
+	}
+
+	results := bh.GetExecResultSet()
+	rsset, err = convertIntoResultSet(results)
+	if err != nil {
+		return 0, err
+	}
+
+	if len(rsset) != 0 && rsset[0].GetRowCount() != 0 {
+		id, err = rsset[0].GetInt64(0, 0)
+		if err != nil {
+			return 0, err
+		}
+		return id, nil
+	}
+	if isDb {
+		return 0, moerr.NewInternalError(`there is no database "%s"`, dbName)
+	} else {
+		//TODO: check the database exists or not first
+		return 0, moerr.NewInternalError(`there is no table "%s" in database "%s"`, tableName, dbName)
+	}
+}
+
+// convertAstObjectTypeToObjectType gets the object type from the ast
+func convertAstObjectTypeToObjectType(ot tree.ObjectType) (objectType, error) {
+	var objType objectType
+	switch ot {
+	case tree.OBJECT_TYPE_TABLE:
+		objType = objectTypeTable
+	case tree.OBJECT_TYPE_DATABASE:
+		objType = objectTypeDatabase
+	case tree.OBJECT_TYPE_ACCOUNT:
+		objType = objectTypeAccount
+	default:
+		return 0, moerr.NewInternalError(`the object type "%s" is unsupported`, ot.String())
+	}
+	return objType, nil
+}
+
+// checkPrivilegeObjectTypeAndPrivilegeLevel checks the relationship among the privilege type, the object type and the privilege level.
+// it returns the converted object type, the privilege level and the object id.
+func checkPrivilegeObjectTypeAndPrivilegeLevel(ctx context.Context, ses *Session, bh BackgroundExec,
+	ot tree.ObjectType, pl tree.PrivilegeLevel) (privilegeLevelType, int64, error) {
+	var privLevel privilegeLevelType
+	var objId int64
+	var err error
+	var dbName string
+
+	switch ot {
+	case tree.OBJECT_TYPE_TABLE:
+		switch pl.Level {
+		case tree.PRIVILEGE_LEVEL_TYPE_STAR:
+			privLevel = privilegeLevelStar
+			objId, err = getDatabaseOrTableId(ctx, bh, true, ses.GetDatabaseName(), "")
+			if err != nil {
+				return 0, 0, err
+			}
+		case tree.PRIVILEGE_LEVEL_TYPE_STAR_STAR:
+			privLevel = privilegeLevelStarStar
+			objId = objectIDAll
+		case tree.PRIVILEGE_LEVEL_TYPE_DATABASE_STAR:
+			privLevel = privilegeLevelDatabaseStar
+			objId, err = getDatabaseOrTableId(ctx, bh, true, pl.DbName, "")
+			if err != nil {
+				return 0, 0, err
+			}
+		case tree.PRIVILEGE_LEVEL_TYPE_DATABASE_TABLE:
+			privLevel = privilegeLevelDatabaseTable
+			objId, err = getDatabaseOrTableId(ctx, bh, false, pl.DbName, pl.TabName)
+			if err != nil {
+				return 0, 0, err
+			}
+		case tree.PRIVILEGE_LEVEL_TYPE_TABLE:
+			privLevel = privilegeLevelTable
+			objId, err = getDatabaseOrTableId(ctx, bh, false, ses.GetDatabaseName(), pl.TabName)
+			if err != nil {
+				return 0, 0, err
+			}
+		default:
+			err = moerr.NewInternalError(`in the object type "%s" the privilege level "%s" is unsupported`, ot.String(), pl.String())
+			return 0, 0, err
+		}
+	case tree.OBJECT_TYPE_DATABASE:
+		switch pl.Level {
+		case tree.PRIVILEGE_LEVEL_TYPE_STAR:
+			privLevel = privilegeLevelStar
+			objId = objectIDAll
+		case tree.PRIVILEGE_LEVEL_TYPE_STAR_STAR:
+			privLevel = privilegeLevelStarStar
+			objId = objectIDAll
+		case tree.PRIVILEGE_LEVEL_TYPE_TABLE:
+			//in the syntax, we can not distinguish the table name from the database name.
+			privLevel = privilegeLevelDatabase
+			dbName = pl.TabName
+			objId, err = getDatabaseOrTableId(ctx, bh, true, dbName, "")
+			if err != nil {
+				return 0, 0, err
+			}
+		case tree.PRIVILEGE_LEVEL_TYPE_DATABASE:
+			privLevel = privilegeLevelDatabase
+			dbName = pl.DbName
+			objId, err = getDatabaseOrTableId(ctx, bh, true, dbName, "")
+			if err != nil {
+				return 0, 0, err
+			}
+		default:
+			err = moerr.NewInternalError(`in the object type "%s" the privilege level "%s" is unsupported`, ot.String(), pl.String())
+			return 0, 0, err
+		}
+	case tree.OBJECT_TYPE_ACCOUNT:
+		switch pl.Level {
+		case tree.PRIVILEGE_LEVEL_TYPE_STAR:
+			privLevel = privilegeLevelStar
+			objId = objectIDAll
+		default:
+			err = moerr.NewInternalError(`in the object type "%s" the privilege level "%s" is unsupported`, ot.String(), pl.String())
+			return 0, 0, err
+		}
+	default:
+		err = moerr.NewInternalError(`the object type "%s" is unsupported`, ot.String())
+		return 0, 0, err
+	}
+
+	return privLevel, objId, err
+}
+
+// matchPrivilegeTypeWithObjectType matches the privilege type with the object type
+func matchPrivilegeTypeWithObjectType(privType PrivilegeType, objType objectType) error {
+	var err error
+	switch privType.Scope() {
+	case PrivilegeScopeSys, PrivilegeScopeAccount, PrivilegeScopeUser, PrivilegeScopeRole:
+		if objType != objectTypeAccount {
+			err = moerr.NewInternalError(`the privilege "%s" can only be granted to the object type "account"`, privType)
+		}
+	case PrivilegeScopeDatabase:
+		if objType != objectTypeDatabase {
+			err = moerr.NewInternalError(`the privilege "%s" can only be granted to the object type "database"`, privType)
+		}
+	case PrivilegeScopeTable:
+		if objType != objectTypeTable {
+			err = moerr.NewInternalError(`the privilege "%s" can only be granted to the object type "table"`, privType)
+		}
+	case PrivilegeScopeRoutine:
+		if objType != objectTypeFunction {
+			err = moerr.NewInternalError(`the privilege "%s" can only be granted to the object type "function"`, privType)
+		}
+	}
+	return err
+}
+
 // doGrantPrivilege accomplishes the GrantPrivilege statement
 func doGrantPrivilege(ctx context.Context, ses *Session, gp *tree.GrantPrivilege) error {
 	pu := ses.Pu
@@ -1304,44 +1883,11 @@ func doGrantPrivilege(ctx context.Context, ses *Session, gp *tree.GrantPrivilege
 	var objType objectType
 	var privLevel privilegeLevelType
 	var objId int64
-	var id int64
-
-	getDatabaseOrTableId := func(ctx context.Context, isDb bool, dbName, tableName string) (int64, error) {
-		var sql string
-		if isDb {
-			sql = getSqlForCheckDatabase(dbName)
-		} else {
-			sql = getSqlForCheckDatabaseTable(dbName, tableName)
-		}
-		bh.ClearExecResultSet()
-		err = bh.Exec(ctx, sql)
-		if err != nil {
-			return 0, err
-		}
-
-		results := bh.GetExecResultSet()
-		rsset, err = convertIntoResultSet(results)
-		if err != nil {
-			return 0, err
-		}
-
-		if len(rsset) != 0 && rsset[0].GetRowCount() != 0 {
-			id, err = rsset[0].GetInt64(0, 0)
-			if err != nil {
-				return 0, err
-			}
-			return id, nil
-		}
-		if isDb {
-			return 0, moerr.NewInternalError("there is no database %s", dbName)
-		} else {
-			return 0, moerr.NewInternalError("there is no table %s in database %s", tableName, dbName)
-		}
-	}
 
 	//Get primary keys
 	//step 1: get role_id
 	verifiedRoles := make([]*verifiedRole, len(gp.Roles))
+	checkedPrivilegeTypes := make([]PrivilegeType, len(gp.Privileges))
 
 	//put it into the single transaction
 	err = bh.Exec(ctx, "begin;")
@@ -1381,105 +1927,38 @@ func doGrantPrivilege(ctx context.Context, ses *Session, gp *tree.GrantPrivilege
 		}
 	}
 
+	//get the object type
+	objType, err = convertAstObjectTypeToObjectType(gp.ObjType)
+	if err != nil {
+		goto handleFailed
+	}
+
+	//check the privilege and the object type
+	for i, priv := range gp.Privileges {
+		privType, err = convertAstPrivilegeTypeToPrivilegeType(priv.Type, gp.ObjType)
+		if err != nil {
+			goto handleFailed
+		}
+		//check the match between the privilegeScope and the objectType
+		err = matchPrivilegeTypeWithObjectType(privType, objType)
+		if err != nil {
+			goto handleFailed
+		}
+		checkedPrivilegeTypes[i] = privType
+	}
+
 	//step 2: get obj_type, privilege_level
 	//step 3: get obj_id
-	switch gp.ObjType {
-	case tree.OBJECT_TYPE_TABLE:
-		objType = objectTypeTable
-		switch gp.Level.Level {
-		case tree.PRIVILEGE_LEVEL_TYPE_STAR:
-			privLevel = privilegeLevelStar
-			objId, err = getDatabaseOrTableId(ctx, true, ses.GetDatabaseName(), "")
-			if err != nil {
-				goto handleFailed
-			}
-		case tree.PRIVILEGE_LEVEL_TYPE_STAR_STAR:
-			privLevel = privilegeLevelStarStar
-			objId = objectIDAll
-		case tree.PRIVILEGE_LEVEL_TYPE_DATABASE_STAR:
-			privLevel = privilegeLevelDatabaseStar
-			objId, err = getDatabaseOrTableId(ctx, true, gp.Level.DbName, "")
-			if err != nil {
-				goto handleFailed
-			}
-		case tree.PRIVILEGE_LEVEL_TYPE_DATABASE_TABLE:
-			privLevel = privilegeLevelDatabaseTable
-			objId, err = getDatabaseOrTableId(ctx, false, gp.Level.DbName, gp.Level.TabName)
-			if err != nil {
-				goto handleFailed
-			}
-		case tree.PRIVILEGE_LEVEL_TYPE_TABLE:
-			privLevel = privilegeLevelTable
-			objId, err = getDatabaseOrTableId(ctx, false, ses.GetDatabaseName(), gp.Level.TabName)
-			if err != nil {
-				goto handleFailed
-			}
-		default:
-			err = moerr.NewInternalError("in object type %v privilege level type %v is unsupported", gp.ObjType, gp.Level.Level)
-			goto handleFailed
-		}
-	case tree.OBJECT_TYPE_DATABASE:
-		objType = objectTypeDatabase
-		switch gp.Level.Level {
-		case tree.PRIVILEGE_LEVEL_TYPE_STAR:
-			privLevel = privilegeLevelStar
-			objId = objectIDAll
-		case tree.PRIVILEGE_LEVEL_TYPE_STAR_STAR:
-			privLevel = privilegeLevelStarStar
-			objId = objectIDAll
-		case tree.PRIVILEGE_LEVEL_TYPE_DATABASE:
-			privLevel = privilegeLevelDatabase
-			objId, err = getDatabaseOrTableId(ctx, true, gp.Level.DbName, "")
-			if err != nil {
-				goto handleFailed
-			}
-		default:
-			err = moerr.NewInternalError("in object type %v privilege level type %v is unsupported", gp.ObjType.ToString(), gp.Level.Level)
-			goto handleFailed
-		}
-	case tree.OBJECT_TYPE_ACCOUNT:
-		objType = objectTypeAccount
-		switch gp.Level.Level {
-		case tree.PRIVILEGE_LEVEL_TYPE_STAR:
-			privLevel = privilegeLevelStar
-			objId = objectIDAll
-		default:
-			err = moerr.NewInternalError("in object type %v privilege level type %v is unsupported", gp.ObjType, gp.Level.Level)
-			goto handleFailed
-		}
-	default:
-		err = moerr.NewInternalError("object type %v is unsupported", gp.ObjType)
+	privLevel, objId, err = checkPrivilegeObjectTypeAndPrivilegeLevel(ctx, ses, bh, gp.ObjType, *gp.Level)
+	if err != nil {
 		goto handleFailed
 	}
 
 	//step 4: get privilege_id
 	//step 5: check exists
 	//step 6: update or insert
-	for _, priv := range gp.Privileges {
-		privType = convertAstPrivilegeTypeToPrivilegeType(priv.Type)
-		//check the match between the privilegeScope and the objectType
-		switch privType.Scope() {
-		case PrivilegeScopeSys, PrivilegeScopeAccount, PrivilegeScopeUser, PrivilegeScopeRole:
-			if objType != objectTypeAccount {
-				err = moerr.NewInternalError("the privilege %s can not be granted to the object type account", priv.Type.ToString())
-				goto handleFailed
-			}
-		case PrivilegeScopeDatabase:
-			if objType != objectTypeDatabase {
-				err = moerr.NewInternalError("the privilege %s can not be granted to the object type database", priv.Type.ToString())
-				goto handleFailed
-			}
-		case PrivilegeScopeTable:
-			if objType != objectTypeTable {
-				err = moerr.NewInternalError("the privilege %s can not be granted to the object type table", priv.Type.ToString())
-				goto handleFailed
-			}
-		case PrivilegeScopeRoutine:
-			if objType != objectTypeFunction {
-				err = moerr.NewInternalError("the privilege %s can not be granted to the object type function", priv.Type.ToString())
-				goto handleFailed
-			}
-		}
+
+	for _, privType = range checkedPrivilegeTypes {
 		for _, role := range verifiedRoles {
 			sql := getSqlForCheckRoleHasPrivilege(role.id, objType, objId, int64(privType))
 			//check exists
@@ -2513,9 +2992,13 @@ func authenticatePrivilegeOfStatementWithObjectTypeTable(ctx context.Context, se
 func formSqlFromGrantPrivilege(ctx context.Context, ses *Session, gp *tree.GrantPrivilege, priv *tree.Privilege) (string, error) {
 	tenant := ses.GetTenantInfo()
 	sql := ""
-	privType := convertAstPrivilegeTypeToPrivilegeType(priv.Type)
+	var privType PrivilegeType
+	var err error
+	privType, err = convertAstPrivilegeTypeToPrivilegeType(priv.Type, gp.ObjType)
+	if err != nil {
+		return "", err
+	}
 	switch gp.ObjType {
-
 	case tree.OBJECT_TYPE_TABLE:
 		switch gp.Level.Level {
 		case tree.PRIVILEGE_LEVEL_TYPE_STAR:
@@ -2537,6 +3020,9 @@ func formSqlFromGrantPrivilege(ctx context.Context, ses *Session, gp *tree.Grant
 			sql = getSqlForCheckWithGrantOptionForDatabaseStar(int64(tenant.GetDefaultRoleID()), privType)
 		case tree.PRIVILEGE_LEVEL_TYPE_STAR_STAR:
 			sql = getSqlForCheckWithGrantOptionForDatabaseStarStar(int64(tenant.GetDefaultRoleID()), privType)
+		case tree.PRIVILEGE_LEVEL_TYPE_TABLE:
+			//in the syntax, we can not distinguish the table name from the database name.
+			sql = getSqlForCheckWithGrantOptionForDatabaseDB(int64(tenant.GetDefaultRoleID()), privType, gp.Level.TabName)
 		case tree.PRIVILEGE_LEVEL_TYPE_DATABASE:
 			sql = getSqlForCheckWithGrantOptionForDatabaseDB(int64(tenant.GetDefaultRoleID()), privType, gp.Level.DbName)
 		default:
@@ -2720,69 +3206,80 @@ func determinePrivilegeHasWithGrantOption(ctx context.Context, ses *Session, gp 
 	return true, nil
 }
 
-func convertAstPrivilegeTypeToPrivilegeType(priv tree.PrivilegeType) PrivilegeType {
+func convertAstPrivilegeTypeToPrivilegeType(priv tree.PrivilegeType, ot tree.ObjectType) (PrivilegeType, error) {
+	var privType PrivilegeType
 	switch priv {
 	case tree.PRIVILEGE_TYPE_STATIC_CREATE_ACCOUNT:
-		return PrivilegeTypeCreateAccount
+		privType = PrivilegeTypeCreateAccount
 	case tree.PRIVILEGE_TYPE_STATIC_DROP_ACCOUNT:
-		return PrivilegeTypeDropAccount
+		privType = PrivilegeTypeDropAccount
 	case tree.PRIVILEGE_TYPE_STATIC_ALTER_ACCOUNT:
-		return PrivilegeTypeAlterAccount
+		privType = PrivilegeTypeAlterAccount
 	case tree.PRIVILEGE_TYPE_STATIC_CREATE_USER:
-		return PrivilegeTypeCreateUser
+		privType = PrivilegeTypeCreateUser
 	case tree.PRIVILEGE_TYPE_STATIC_DROP_USER:
-		return PrivilegeTypeDropUser
+		privType = PrivilegeTypeDropUser
 	case tree.PRIVILEGE_TYPE_STATIC_ALTER_USER:
-		return PrivilegeTypeAlterUser
+		privType = PrivilegeTypeAlterUser
 	case tree.PRIVILEGE_TYPE_STATIC_CREATE_ROLE:
-		return PrivilegeTypeCreateRole
+		privType = PrivilegeTypeCreateRole
 	case tree.PRIVILEGE_TYPE_STATIC_DROP_ROLE:
-		return PrivilegeTypeDropRole
+		privType = PrivilegeTypeDropRole
 	case tree.PRIVILEGE_TYPE_STATIC_ALTER_ROLE:
-		return PrivilegeTypeAlterRole
+		privType = PrivilegeTypeAlterRole
 	case tree.PRIVILEGE_TYPE_STATIC_CREATE_DATABASE:
-		return PrivilegeTypeCreateDatabase
+		privType = PrivilegeTypeCreateDatabase
 	case tree.PRIVILEGE_TYPE_STATIC_DROP_DATABASE:
-		return PrivilegeTypeDropDatabase
+		privType = PrivilegeTypeDropDatabase
 	case tree.PRIVILEGE_TYPE_STATIC_SHOW_DATABASES:
-		return PrivilegeTypeShowDatabases
+		privType = PrivilegeTypeShowDatabases
 	case tree.PRIVILEGE_TYPE_STATIC_CONNECT:
-		return PrivilegeTypeConnect
+		privType = PrivilegeTypeConnect
 	case tree.PRIVILEGE_TYPE_STATIC_MANAGE_GRANTS:
-		return PrivilegeTypeManageGrants
+		privType = PrivilegeTypeManageGrants
 	case tree.PRIVILEGE_TYPE_STATIC_ALL:
-		return PrivilegeTypeDatabaseAll //TODO: database ? table ? account ?
+		switch ot {
+		case tree.OBJECT_TYPE_ACCOUNT:
+			privType = PrivilegeTypeAccountAll
+		case tree.OBJECT_TYPE_DATABASE:
+			privType = PrivilegeTypeDatabaseAll
+		case tree.OBJECT_TYPE_TABLE:
+			privType = PrivilegeTypeTableAll
+		default:
+			return 0, moerr.NewInternalError(`the object type "%s" do not support the privilege "%s"`, ot.String(), priv.ToString())
+		}
 	case tree.PRIVILEGE_TYPE_STATIC_OWNERSHIP:
-		return PrivilegeTypeDatabaseOwnership //TODO
+		return 0, moerr.NewInternalError(`the privilege "ownership" can not be granted`)
 	case tree.PRIVILEGE_TYPE_STATIC_SHOW_TABLES:
-		return PrivilegeTypeShowTables
+		privType = PrivilegeTypeShowTables
 	case tree.PRIVILEGE_TYPE_STATIC_CREATE_TABLE:
-		return PrivilegeTypeCreateTable
+		privType = PrivilegeTypeCreateTable
 	case tree.PRIVILEGE_TYPE_STATIC_DROP_TABLE:
-		return PrivilegeTypeDropTable
+		privType = PrivilegeTypeDropTable
 	case tree.PRIVILEGE_TYPE_STATIC_CREATE_VIEW:
-		return PrivilegeTypeCreateView
+		privType = PrivilegeTypeCreateView
 	case tree.PRIVILEGE_TYPE_STATIC_DROP_VIEW:
-		return PrivilegeTypeDropView
+		privType = PrivilegeTypeDropView
 	case tree.PRIVILEGE_TYPE_STATIC_ALTER_VIEW:
-		return PrivilegeTypeAlterView
+		privType = PrivilegeTypeAlterView
 	case tree.PRIVILEGE_TYPE_STATIC_ALTER_TABLE:
-		return PrivilegeTypeAlterTable
+		privType = PrivilegeTypeAlterTable
 	case tree.PRIVILEGE_TYPE_STATIC_SELECT:
-		return PrivilegeTypeSelect
+		privType = PrivilegeTypeSelect
 	case tree.PRIVILEGE_TYPE_STATIC_INSERT:
-		return PrivilegeTypeInsert
+		privType = PrivilegeTypeInsert
 	case tree.PRIVILEGE_TYPE_STATIC_UPDATE:
-		return PrivilegeTypeUpdate
+		privType = PrivilegeTypeUpdate
 	case tree.PRIVILEGE_TYPE_STATIC_DELETE:
-		return PrivilegeTypeDelete
+		privType = PrivilegeTypeDelete
 	case tree.PRIVILEGE_TYPE_STATIC_INDEX:
-		return PrivilegeTypeIndex
+		privType = PrivilegeTypeIndex
 	case tree.PRIVILEGE_TYPE_STATIC_EXECUTE:
-		return PrivilegeTypeExecute
+		privType = PrivilegeTypeExecute
 	default:
-		panic(fmt.Sprintf("unsupported privilege type %s", priv.ToString()))
+		return 0, moerr.NewInternalError("unsupported privilege type %s", priv.ToString())
 	}
+	return privType, nil
 }
 
 // authenticatePrivilegeOfStatementWithObjectTypeNone decides the user has the privilege of executing the statement with object type none
@@ -2982,8 +3479,8 @@ func createTablesInMoCatalog(ctx context.Context, tenant *TenantInfo, pu *config
 
 	//step 2:add new role entries to the mo_role
 
-	initMoRole1 := fmt.Sprintf(initMoRoleFormat, moAdminRoleID, moAdminRoleName, rootID, moAdminRoleID, types.CurrentTimestamp().String2(time.UTC, 0), moAdminRoleComment)
-	initMoRole2 := fmt.Sprintf(initMoRoleFormat, publicRoleID, publicRoleName, rootID, moAdminRoleID, types.CurrentTimestamp().String2(time.UTC, 0), publicRoleComment)
+	initMoRole1 := fmt.Sprintf(initMoRoleFormat, moAdminRoleID, moAdminRoleName, rootID, moAdminRoleID, types.CurrentTimestamp().String2(time.UTC, 0), "")
+	initMoRole2 := fmt.Sprintf(initMoRoleFormat, publicRoleID, publicRoleName, rootID, moAdminRoleID, types.CurrentTimestamp().String2(time.UTC, 0), "")
 	addSqlIntoSet(initMoRole1)
 	addSqlIntoSet(initMoRole2)
 
@@ -3090,9 +3587,9 @@ func InitGeneralTenant(ctx context.Context, tenant *TenantInfo, ca *tree.CreateA
 		return moerr.NewInternalError("tenant %s user %s role %s do not have the privilege to create the new account", tenant.GetTenant(), tenant.GetUser(), tenant.GetDefaultRole())
 	}
 
-	ctx = context.WithValue(ctx, defines.TenantIDKey{}, tenant.GetTenantID())
-	ctx = context.WithValue(ctx, defines.UserIDKey{}, tenant.GetUserID())
-	ctx = context.WithValue(ctx, defines.RoleIDKey{}, tenant.GetDefaultRoleID())
+	ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(tenant.GetTenantID()))
+	ctx = context.WithValue(ctx, defines.UserIDKey{}, uint32(tenant.GetUserID()))
+	ctx = context.WithValue(ctx, defines.RoleIDKey{}, uint32(tenant.GetDefaultRoleID()))
 
 	exists, err = checkTenantExistsOrNot(ctx, pu, ca.Name)
 	if err != nil {
@@ -3122,71 +3619,140 @@ func InitGeneralTenant(ctx context.Context, tenant *TenantInfo, ca *tree.CreateA
 
 // createTablesInMoCatalogOfGeneralTenant creates catalog tables in the database mo_catalog.
 func createTablesInMoCatalogOfGeneralTenant(ctx context.Context, tenant *TenantInfo, pu *config.ParameterUnit, ca *tree.CreateAccount) (*TenantInfo, error) {
+	guestMMu := guest.New(pu.SV.GuestMmuLimitation, pu.HostMmu)
+	bh := NewBackgroundHandler(ctx, guestMMu, pu.Mempool, pu)
+	defer bh.Close()
 	var err error
 	var initMoAccount string
+	var results []interface{}
+	var rsset []ExecResult
+	var newTenantID int64
+	var newUserId int64
+	var comment = ""
 	var initDataSqls []string
+	var initMoRole1 string
+	var initMoRole2 string
+	var initMoUser1 string
+	var initMoUserGrant1 string
+	var initMoUserGrant2 string
+	var newTenant *TenantInfo
+	var name, password, status string
+	var newTenantCtx context.Context
 
 	addSqlIntoSet := func(sql string) {
 		initDataSqls = append(initDataSqls, sql)
 	}
 
+	if nameIsInvalid(ca.Name) {
+		return nil, moerr.NewInternalError("the account name is invalid")
+	}
+
+	if nameIsInvalid(ca.AuthOption.AdminName) {
+		return nil, moerr.NewInternalError("the admin name is invalid")
+	}
+
 	//USE the mo_catalog
-	addSqlIntoSet("use mo_catalog;")
+	err = bh.Exec(ctx, "use mo_catalog;")
+	if err != nil {
+		return nil, err
+	}
 
 	//BEGIN the transaction
-	addSqlIntoSet("begin;")
+	err = bh.Exec(ctx, "begin;")
+	if err != nil {
+		goto handleFailed
+	}
 
 	//!!!NOTE : Insert into mo_account with original context.
 	// Other operations with a new context with new tenant info
 	//step 1: add new tenant entry to the mo_account
-	//TODO: use auto increment
-	comment := ""
 	if ca.Comment.Exist {
 		comment = ca.Comment.Comment
 	}
-	newTenantID := uint32(rand.Int31())
-	initMoAccount = fmt.Sprintf(initMoAccountFormat, newTenantID, ca.Name, sysAccountStatus, types.CurrentTimestamp().String2(time.UTC, 0), comment)
 
-	insertIntoMoAccountSqlIdx := len(initDataSqls)
-	addSqlIntoSet(initMoAccount)
+	initMoAccount = fmt.Sprintf(initMoAccountWithoutIDFormat, ca.Name, sysAccountStatus, types.CurrentTimestamp().String2(time.UTC, 0), comment)
+	//execute the insert
+	err = bh.Exec(ctx, initMoAccount)
+	if err != nil {
+		goto handleFailed
+	}
+
+	//query the tenant id
+	bh.ClearExecResultSet()
+	err = bh.Exec(ctx, getSqlForCheckTenant(ca.Name))
+	if err != nil {
+		goto handleFailed
+	}
+
+	results = bh.GetExecResultSet()
+	rsset, err = convertIntoResultSet(results)
+	if err != nil {
+		goto handleFailed
+	}
+
+	if len(rsset) != 0 && rsset[0].GetRowCount() != 0 {
+		newTenantID, err = rsset[0].GetInt64(0, 0)
+		if err != nil {
+			goto handleFailed
+		}
+	} else {
+		err = moerr.NewInternalError("get the id of tenant %s failed", ca.Name)
+		goto handleFailed
+	}
+
+	newTenant = &TenantInfo{
+		Tenant:        ca.Name,
+		User:          ca.AuthOption.AdminName,
+		DefaultRole:   publicRoleName,
+		TenantID:      uint32(newTenantID),
+		UserID:        uint32(newUserId),
+		DefaultRoleID: publicRoleID,
+	}
+
+	//with new tenant
+	newTenantCtx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(newTenantID))
+	newUserId = dumpID + 1
+	newTenantCtx = context.WithValue(newTenantCtx, defines.UserIDKey{}, uint32(newUserId))
+	newTenantCtx = context.WithValue(newTenantCtx, defines.RoleIDKey{}, uint32(publicRoleID))
 
 	//create tables for the tenant
-	for i, sql := range createSqls {
+	for _, sql := range createSqls {
 		//only the SYS tenant has the table mo_account
-		if i == createMoAccountIndex {
+		if strings.HasPrefix(sql, "create table mo_account") {
 			continue
 		}
-		addSqlIntoSet(sql)
+		err = bh.Exec(newTenantCtx, sql)
+		if err != nil {
+			goto handleFailed
+		}
 	}
 
 	//initialize the default data of tables for the tenant
 
 	//step 2:add new role entries to the mo_role
-
-	initMoRole1 := fmt.Sprintf(initMoRoleFormat, accountAdminRoleID, accountAdminRoleName, tenant.GetUserID(), tenant.GetDefaultRoleID(), types.CurrentTimestamp().String2(time.UTC, 0), accountAdminRoleComment)
-	initMoRole2 := fmt.Sprintf(initMoRoleFormat, publicRoleID, publicRoleName, tenant.GetUserID(), tenant.GetDefaultRoleID(), types.CurrentTimestamp().String2(time.UTC, 0), publicRoleComment)
+	initMoRole1 = fmt.Sprintf(initMoRoleFormat, accountAdminRoleID, accountAdminRoleName, tenant.GetUserID(), tenant.GetDefaultRoleID(), types.CurrentTimestamp().String2(time.UTC, 0), "")
+	initMoRole2 = fmt.Sprintf(initMoRoleFormat, publicRoleID, publicRoleName, tenant.GetUserID(), tenant.GetDefaultRoleID(), types.CurrentTimestamp().String2(time.UTC, 0), "")
 	addSqlIntoSet(initMoRole1)
 	addSqlIntoSet(initMoRole2)
 
 	//step 3:add new user entry to the mo_user
-	//TODO:use auto_increment column for the userid
 	if ca.AuthOption.IdentifiedType.Typ != tree.AccountIdentifiedByPassword {
 		return nil, moerr.NewInternalError("only support password verification now")
 	}
-	name := ca.AuthOption.AdminName
-	password := ca.AuthOption.IdentifiedType.Str
+	name = ca.AuthOption.AdminName
+	password = ca.AuthOption.IdentifiedType.Str
 	if len(password) == 0 {
 		return nil, moerr.NewInternalError("password is empty string")
 	}
-	status := rootStatus
+	status = rootStatus
 	//TODO: fix the status of user or account
 	if ca.StatusOption.Exist {
 		if ca.StatusOption.Option == tree.AccountStatusSuspend {
 			status = "suspend"
 		}
 	}
-	newUserId := uint32(rand.Int31())
-	initMoUser1 := fmt.Sprintf(initMoUserFormat, newUserId, rootHost, name, password, status,
+	//the first user id in the general tenant
+	initMoUser1 = fmt.Sprintf(initMoUserFormat, newUserId, rootHost, name, password, status,
 		types.CurrentTimestamp().String2(time.UTC, 0), rootExpiredTime, rootLoginType,
 		tenant.GetUserID(), tenant.GetDefaultRoleID(), publicRoleID)
 	addSqlIntoSet(initMoUser1)
@@ -3217,36 +3783,16 @@ func createTablesInMoCatalogOfGeneralTenant(ctx context.Context, tenant *TenantI
 	}
 
 	//step5: add new entries to the mo_user_grant
-
-	initMoUserGrant2 := fmt.Sprintf(initMoUserGrantFormat, publicRoleID, newUserId, types.CurrentTimestamp().String2(time.UTC, 0), true)
+	initMoUserGrant1 = fmt.Sprintf(initMoUserGrantFormat, accountAdminRoleID, newUserId, types.CurrentTimestamp().String2(time.UTC, 0), true)
+	addSqlIntoSet(initMoUserGrant1)
+	initMoUserGrant2 = fmt.Sprintf(initMoUserGrantFormat, publicRoleID, newUserId, types.CurrentTimestamp().String2(time.UTC, 0), true)
 	addSqlIntoSet(initMoUserGrant2)
 	addSqlIntoSet("commit;")
 
-	//with new tenant
-	//TODO: when we have the auto_increment column, we need new strategy.
-	newTenantCtx := context.WithValue(ctx, defines.TenantIDKey{}, newTenantID)
-	newTenantCtx = context.WithValue(newTenantCtx, defines.UserIDKey{}, newUserId)
-	newTenantCtx = context.WithValue(newTenantCtx, defines.RoleIDKey{}, uint32(publicRoleID))
-
-	newTenant := &TenantInfo{
-		Tenant:        ca.Name,
-		User:          ca.AuthOption.AdminName,
-		DefaultRole:   publicRoleName,
-		TenantID:      newTenantID,
-		UserID:        newUserId,
-		DefaultRoleID: publicRoleID,
-	}
-
-	//fill the mo_account, mo_role, mo_user, mo_role_privs, mo_user_grant
-	guestMMu := guest.New(pu.SV.GuestMmuLimitation, pu.HostMmu)
-	bh := NewBackgroundHandler(ctx, guestMMu, pu.Mempool, pu)
-	defer bh.Close()
-	for i, sql := range initDataSqls {
-		inputCtx := ctx
-		if insertIntoMoAccountSqlIdx != i {
-			inputCtx = newTenantCtx
-		}
-		err = bh.Exec(inputCtx, sql)
+	//fill the mo_role, mo_user, mo_role_privs, mo_user_grant, mo_role_grant
+	for _, sql := range initDataSqls {
+		bh.ClearExecResultSet()
+		err = bh.Exec(newTenantCtx, sql)
 		if err != nil {
 			goto handleFailed
 		}
@@ -3299,15 +3845,12 @@ func checkUserExistsOrNot(ctx context.Context, pu *config.ParameterUnit, tenantN
 // InitUser creates new user for the tenant
 func InitUser(ctx context.Context, tenant *TenantInfo, cu *tree.CreateUser) error {
 	var err error
-	var exists bool
+	var exists int
 	var rsset []ExecResult
+	var newUserId int64
+	var host string
+	var values []interface{}
 	pu := config.GetParameterUnit(ctx)
-
-	var initUserSqls []string
-
-	appendSql := func(sql string) {
-		initUserSqls = append(initUserSqls, sql)
-	}
 
 	guestMMu := guest.New(pu.SV.GuestMmuLimitation, pu.HostMmu)
 	bh := NewBackgroundHandler(ctx, guestMMu, pu.Mempool, pu)
@@ -3316,6 +3859,9 @@ func InitUser(ctx context.Context, tenant *TenantInfo, cu *tree.CreateUser) erro
 	//TODO: get role and the id of role
 	newRoleId := publicRoleID
 	if cu.Role != nil {
+		if nameIsInvalid(cu.Role.UserName) {
+			return moerr.NewInternalError("the role name is invalid")
+		}
 		if strings.ToLower(cu.Role.UserName) != publicRoleName {
 			sqlForRoleIdOfRole := getSqlForRoleIdOfRole(cu.Role.UserName)
 			bh.ClearExecResultSet()
@@ -3347,63 +3893,137 @@ func InitUser(ctx context.Context, tenant *TenantInfo, cu *tree.CreateUser) erro
 		}
 	}
 
-	appendSql("begin;")
-
-	for _, user := range cu.Users {
-		exists, err = checkUserExistsOrNot(ctx, pu, user.Username)
-		if err != nil {
-			return err
-		}
-
-		if exists {
-			if cu.IfNotExists { //do nothing
-				continue
-			}
-			return moerr.NewInternalError("the user %s exists", user.Username)
-		}
-
-		if user.AuthOption == nil {
-			return moerr.NewInternalError("the user %s misses the auth_option", user.Username)
-		}
-
-		if user.AuthOption.Typ != tree.AccountIdentifiedByPassword {
-			return moerr.NewInternalError("only support password verification now")
-		}
-
-		password := user.AuthOption.Str
-		if len(password) == 0 {
-			return moerr.NewInternalError("password is empty string")
-		}
-
-		//TODO: get comment or attribute. there is no field in mo_user to store it.
-		//TODO: to get the user id from the auto_increment table
-		newUserId := rand.Int31()
-		initMoUser1 := fmt.Sprintf(initMoUserFormat, newUserId, rootHost, user.Username, password, status,
-			types.CurrentTimestamp().String2(time.UTC, 0), rootExpiredTime, rootLoginType,
-			tenant.GetUserID(), tenant.GetDefaultRoleID(), newRoleId)
-
-		appendSql(initMoUser1)
-
-		initMoUserGrant1 := fmt.Sprintf(initMoUserGrantFormat, newRoleId, newUserId, types.CurrentTimestamp().String2(time.UTC, 0), true)
-		appendSql(initMoUserGrant1)
-
-		//if it is not public role, just insert the record for public
-		if newRoleId != publicRoleID {
-			initMoUserGrant2 := fmt.Sprintf(initMoUserGrantFormat, publicRoleID, newUserId, types.CurrentTimestamp().String2(time.UTC, 0), true)
-			appendSql(initMoUserGrant2)
-		}
+	err = bh.Exec(ctx, "begin;")
+	if err != nil {
+		goto handleFailed
 	}
 
-	appendSql("commit;")
+	for _, user := range cu.Users {
+		if nameIsInvalid(user.Username) {
+			err = moerr.NewInternalError("the user name is invalid")
+			goto handleFailed
+		}
 
-	//fill the mo_user
-	for _, sql := range initUserSqls {
+		//dedup with user
+		sql := getSqlForPasswordOfUser(user.Username)
+		bh.ClearExecResultSet()
 		err = bh.Exec(ctx, sql)
 		if err != nil {
 			goto handleFailed
 		}
+		values = bh.GetExecResultSet()
+		rsset, err = convertIntoResultSet(values)
+		if err != nil {
+			goto handleFailed
+		}
+		if len(rsset) >= 1 && rsset[0].GetRowCount() >= 1 {
+			exists = 1
+		}
+
+		//dedup with the role
+		if exists == 0 {
+			sqlForRoleIdOfRole := getSqlForRoleIdOfRole(user.Username)
+			bh.ClearExecResultSet()
+			err = bh.Exec(ctx, sqlForRoleIdOfRole)
+			if err != nil {
+				goto handleFailed
+			}
+			values = bh.GetExecResultSet()
+			rsset, err = convertIntoResultSet(values)
+			if err != nil {
+				goto handleFailed
+			}
+			if len(rsset) >= 1 && rsset[0].GetRowCount() >= 1 {
+				exists = 2
+			}
+		}
+
+		if exists != 0 {
+			if cu.IfNotExists { //do nothing
+				continue
+			}
+			if exists == 1 {
+				err = moerr.NewInternalError("the user %s exists", user.Username)
+			} else if exists == 2 {
+				err = moerr.NewInternalError("there is a role with the same name as the user")
+			}
+
+			goto handleFailed
+		}
+
+		if user.AuthOption == nil {
+			err = moerr.NewInternalError("the user %s misses the auth_option", user.Username)
+			goto handleFailed
+		}
+
+		if user.AuthOption.Typ != tree.AccountIdentifiedByPassword {
+			err = moerr.NewInternalError("only support password verification now")
+			goto handleFailed
+		}
+
+		password := user.AuthOption.Str
+		if len(password) == 0 {
+			err = moerr.NewInternalError("password is empty string")
+			goto handleFailed
+		}
+
+		//TODO: get comment or attribute. there is no field in mo_user to store it.
+		host = user.Hostname
+		if len(user.Hostname) == 0 || user.Hostname == "%" {
+			host = rootHost
+		}
+		initMoUser1 := fmt.Sprintf(initMoUserWithoutIDFormat, host, user.Username, password, status,
+			types.CurrentTimestamp().String2(time.UTC, 0), rootExpiredTime, rootLoginType,
+			tenant.GetUserID(), tenant.GetDefaultRoleID(), newRoleId)
+
+		bh.ClearExecResultSet()
+		err = bh.Exec(ctx, initMoUser1)
+		if err != nil {
+			goto handleFailed
+		}
+
+		//query the id
+		bh.ClearExecResultSet()
+		err = bh.Exec(ctx, getSqlForPasswordOfUser(user.Username))
+		if err != nil {
+			goto handleFailed
+		}
+
+		values = bh.GetExecResultSet()
+		rsset, err = convertIntoResultSet(values)
+		if err != nil {
+			goto handleFailed
+		}
+
+		if len(rsset) < 1 || rsset[0].GetRowCount() < 1 {
+			err = moerr.NewInternalError("get the id of user %s failed", user.Username)
+			goto handleFailed
+		}
+		newUserId, err = rsset[0].GetInt64(0, 0)
+		if err != nil {
+			goto handleFailed
+		}
+
+		initMoUserGrant1 := fmt.Sprintf(initMoUserGrantFormat, newRoleId, newUserId, types.CurrentTimestamp().String2(time.UTC, 0), true)
+		err = bh.Exec(ctx, initMoUserGrant1)
+		if err != nil {
+			goto handleFailed
+		}
+
+		//if it is not public role, just insert the record for public
+		if newRoleId != publicRoleID {
+			initMoUserGrant2 := fmt.Sprintf(initMoUserGrantFormat, publicRoleID, newUserId, types.CurrentTimestamp().String2(time.UTC, 0), true)
+			err = bh.Exec(ctx, initMoUserGrant2)
+			if err != nil {
+				goto handleFailed
+			}
+		}
 	}
 
+	err = bh.Exec(ctx, "commit;")
+	if err != nil {
+		goto handleFailed
+	}
 	return err
 
 handleFailed:
@@ -3418,67 +4038,89 @@ handleFailed:
 // InitRole creates the new role
 func InitRole(ctx context.Context, tenant *TenantInfo, cr *tree.CreateRole) error {
 	var err error
-	var exists bool
+	var exists int
 	var rsset []ExecResult
 	pu := config.GetParameterUnit(ctx)
-
-	var initRoleSqls []string
-
-	appendSql := func(sql string) {
-		initRoleSqls = append(initRoleSqls, sql)
-	}
 
 	guestMMu := guest.New(pu.SV.GuestMmuLimitation, pu.HostMmu)
 	bh := NewBackgroundHandler(ctx, guestMMu, pu.Mempool, pu)
 	defer bh.Close()
 
-	appendSql("begin;")
+	err = bh.Exec(ctx, "begin;")
+	if err != nil {
+		goto handleFailed
+	}
 
 	for _, r := range cr.Roles {
+		if nameIsInvalid(r.UserName) {
+			err = moerr.NewInternalError("the role name is invalid")
+			goto handleFailed
+		}
 		if strings.ToLower(r.UserName) == publicRoleName {
-			exists = true
+			exists = 1
 		} else {
+			//dedup with role
 			sqlForRoleIdOfRole := getSqlForRoleIdOfRole(r.UserName)
 			bh.ClearExecResultSet()
 			err = bh.Exec(ctx, sqlForRoleIdOfRole)
 			if err != nil {
-				return err
+				goto handleFailed
 			}
 			values := bh.GetExecResultSet()
 			rsset, err = convertIntoResultSet(values)
 			if err != nil {
-				return err
+				goto handleFailed
 			}
 			if len(rsset) >= 1 && rsset[0].GetRowCount() >= 1 {
-				exists = true
+				exists = 1
+			}
+
+			//dedup with user
+			if exists == 0 {
+				sql := getSqlForPasswordOfUser(r.UserName)
+				bh.ClearExecResultSet()
+				err = bh.Exec(ctx, sql)
+				if err != nil {
+					goto handleFailed
+				}
+				values = bh.GetExecResultSet()
+				rsset, err = convertIntoResultSet(values)
+				if err != nil {
+					goto handleFailed
+				}
+				if len(rsset) >= 1 && rsset[0].GetRowCount() >= 1 {
+					exists = 2
+				}
 			}
 		}
 
-		if exists {
+		if exists != 0 {
 			if cr.IfNotExists {
 				continue
 			}
-			return moerr.NewInternalError("the role %s exists", r.UserName)
+			if exists == 1 {
+				err = moerr.NewInternalError("the role %s exists", r.UserName)
+			} else if exists == 2 {
+				err = moerr.NewInternalError("there is a user with the same name as the role")
+			}
+
+			goto handleFailed
 		}
 
-		newRoleId := rand.Int31()
-		initMoRole := fmt.Sprintf(initMoRoleFormat, newRoleId, r.UserName, tenant.GetUserID(), tenant.GetDefaultRoleID(),
+		initMoRole := fmt.Sprintf(initMoRoleWithoutIDFormat, r.UserName, tenant.GetUserID(), tenant.GetDefaultRoleID(),
 			types.CurrentTimestamp().String2(time.UTC, 0), "")
-		appendSql(initMoRole)
-	}
-
-	appendSql("commit;")
-
-	//fill the mo_user
-	for _, sql := range initRoleSqls {
-		err = bh.Exec(ctx, sql)
+		err = bh.Exec(ctx, initMoRole)
 		if err != nil {
 			goto handleFailed
 		}
 	}
 
-	return err
+	err = bh.Exec(ctx, "commit;")
+	if err != nil {
+		goto handleFailed
+	}
 
+	return err
 handleFailed:
 	//ROLLBACK the transaction
 	rbErr := bh.Exec(ctx, "rollback;")
