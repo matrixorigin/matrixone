@@ -15,13 +15,11 @@
 package vector
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
-	"golang.org/x/exp/constraints"
 )
 
 func MustTCols[T types.FixedSizeT](v *Vector) []T {
@@ -299,92 +297,4 @@ func (v *Vector) extend(rows int, m *mheap.Mheap) error {
 	// Setup v.Col
 	v.setupColFromData(0, tgtSz/v.GetType().TypeSize())
 	return nil
-}
-
-func (v *Vector) GetMinMaxValue() (int, []byte, []byte, error) {
-	switch v.Typ.Oid {
-	case types.T_int8:
-		return compNumber[int8](v)
-	case types.T_int16:
-		return compNumber[int16](v)
-	case types.T_int32:
-		return compNumber[int32](v)
-	case types.T_int64:
-		return compNumber[int64](v)
-	case types.T_uint8:
-		return compNumber[uint8](v)
-	case types.T_uint16:
-		return compNumber[uint16](v)
-	case types.T_uint32:
-		return compNumber[uint32](v)
-	case types.T_uint64:
-		return compNumber[uint64](v)
-	case types.T_float32:
-		return compNumber[float32](v)
-	case types.T_float64:
-		return compNumber[float64](v)
-	case types.T_date:
-		return compNumber[types.Date](v)
-	case types.T_datetime:
-		return compNumber[types.Datetime](v)
-	case types.T_timestamp:
-		return compNumber[types.Timestamp](v)
-	case types.T_decimal64:
-		return compGeneral(v, func(v1, v2 types.Decimal64) bool {
-			return v1.Lt(v2)
-		}, func(v1, v2 types.Decimal64) bool {
-			return v1.Gt(v2)
-		})
-	case types.T_decimal128:
-		return compGeneral(v, func(v1, v2 types.Decimal128) bool {
-			return v1.Lt(v2)
-		}, func(v1, v2 types.Decimal128) bool {
-			return v1.Gt(v2)
-		})
-	case types.T_uuid:
-		return compGeneral(v, func(v1, v2 types.Uuid) bool {
-			return v1.Lt(v2)
-		}, func(v1, v2 types.Uuid) bool {
-			return v1.Gt(v2)
-		})
-	default:
-		return 0, nil, nil, moerr.NewInternalError("can not get MinMax:unsupport type")
-	}
-}
-
-type compT interface {
-	constraints.Integer | constraints.Float | types.Decimal64 | types.Decimal128 |
-		types.Date | types.Datetime | types.Timestamp | types.Uuid
-}
-
-type compLt[T compT] func(T, T) bool
-type compGt[T compT] func(T, T) bool
-
-func compGeneral[T compT](v *Vector, ltFun compLt[T], gtFun compGt[T]) (int, []byte, []byte, error) {
-	cols := MustTCols[T](v)
-	colLength := len(cols)
-	if colLength == 0 {
-		return 0, nil, nil, nil
-	}
-
-	min := cols[0]
-	max := cols[0]
-	for i := 1; i < colLength; i++ {
-		// if cols[i] < min
-		if ltFun(cols[i], min) {
-			min = cols[i]
-			// if cols[i] > max
-		} else if gtFun(cols[i], max) {
-			max = cols[i]
-		}
-	}
-	return colLength, types.EncodeValue(min, v.Typ), types.EncodeValue(max, v.Typ), nil
-}
-
-func compNumber[T constraints.Integer | constraints.Float](v *Vector) (int, []byte, []byte, error) {
-	return compGeneral(v, func(v1, v2 T) bool {
-		return v1 < v2
-	}, func(v1, v2 T) bool {
-		return v1 > v2
-	})
 }

@@ -27,6 +27,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/moengine"
 	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -79,25 +81,34 @@ func getColumnsByExpr(expr *plan.Expr) []int {
 }
 
 func getIndexDataFromVec(idx uint16, vec *vector.Vector) (objectio.IndexData, objectio.IndexData, error) {
-	var min, max []byte
-
 	var bloomFilter, zoneMap objectio.IndexData
-
-	// TODO :build bloomFilter from vec
-	// var alg uint8
-	// var buf []byte
-	// bloomFilter = objectio.NewBloomFilter(idx, alg, buf)
+	var err error
 
 	// get min/max from  vector
-	dataLen, min, max, err := vec.GetMinMaxValue()
-	if err != nil {
-		return nil, nil, err
-	}
-	if dataLen > 0 {
+	if vec.Length() > 0 {
+		// create zone map
+		zm := index.NewZoneMap(vec.Typ)
+		for _, v := range vector.GetColumn[any](vec) {
+			zm.Update(v)
+		}
+		min := types.EncodeValue(zm.GetMin(), vec.Typ)
+		max := types.EncodeValue(zm.GetMax(), vec.Typ)
 		zoneMap, err = objectio.NewZoneMap(idx, min, max)
 		if err != nil {
 			return nil, nil, err
 		}
+
+		// create bloomfilter
+		sf, err := index.NewBinaryFuseFilter(moengine.MOToVector(vec, true))
+		if err != nil {
+			return nil, nil, err
+		}
+		bf, err := sf.Marshal()
+		if err != nil {
+			return nil, nil, err
+		}
+		alg := uint8(0)
+		bloomFilter = objectio.NewBloomFilter(idx, alg, bf)
 	}
 	return bloomFilter, zoneMap, nil
 }
@@ -143,6 +154,8 @@ func evalFilterExpr(expr *plan.Expr, bat *batch.Batch, proc *process.Process, is
 		}
 		return false, moerr.NewInternalError("cannot eval filter expr")
 	} else {
+		// how to deal with equal?
+
 		vec, err := colexec.EvalExpr(bat, proc, expr)
 		if err != nil {
 			return false, err

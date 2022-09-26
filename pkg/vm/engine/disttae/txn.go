@@ -308,13 +308,17 @@ func blockWrite(ctx context.Context, blkInfo BlockMeta, bat *batch.Batch, fs fil
 		if err != nil {
 			return err
 		}
-		err = writer.WriteIndex(fd, bloomFilter)
-		if err != nil {
-			return err
+		if bloomFilter != nil {
+			err = writer.WriteIndex(fd, bloomFilter)
+			if err != nil {
+				return err
+			}
 		}
-		err = writer.WriteIndex(fd, zoneMap)
-		if err != nil {
-			return err
+		if zoneMap != nil {
+			err = writer.WriteIndex(fd, zoneMap)
+			if err != nil {
+				return err
+			}
 		}
 	}
 
