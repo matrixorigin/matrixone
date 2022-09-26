@@ -602,10 +602,14 @@ func (b *buffer2Sql) isEmpty() bool {
 }
 
 func (b *buffer2Sql) ShouldFlush() bool {
+	b.mux.Lock()
+	defer b.mux.Unlock()
 	return b.size > b.sizeThreshold
 }
 
 func (b *buffer2Sql) Size() int64 {
+	b.mux.Lock()
+	defer b.mux.Unlock()
 	return b.size
 }
 

@@ -23,7 +23,6 @@ import (
 	"io"
 	"os"
 	"reflect"
-	"sync"
 	"testing"
 	"time"
 
@@ -54,6 +53,7 @@ func noopReportLog(context.Context, zapcore.Level, int, string, ...any) {}
 func noopReportError(context.Context, error, int)                       {}
 
 func init() {
+	time.Local = time.FixedZone("CST", 0) // set time-zone +0000
 	if _, err := Init(
 		context.Background(),
 		EnableTracer(true),
@@ -155,7 +155,6 @@ func Test_batchSqlHandler_NewItemBuffer_Check_genBatchFunc(t1 *testing.T) {
 }
 
 func Test_buffer2Sql_GetBatch_AllType(t *testing.T) {
-	time.Local = time.FixedZone("CST", 0) // set time-zone +0000
 	type fields struct {
 		Reminder      batchpipe.Reminder
 		sizeThreshold int64
@@ -775,35 +774,21 @@ func Test_batchSqlHandler_NewItemBatchHandler(t1 *testing.T) {
 				defaultOpts: tt.fields.defaultOpts,
 			}
 
-			wg := sync.WaitGroup{}
-			startedC := make(chan struct{}, 1)
-			wg.Add(1)
-			go func() {
-				startedC <- struct{}{}
-			loop:
-				for {
-					batch, ok := <-tt.fields.ch
-					if ok {
-						require.Equal(t1, tt.args.batch, batch)
-					} else {
-						t1.Log("exec sql Done.")
-						break loop
-					}
-				}
-				wg.Done()
-			}()
-			<-startedC
 			got := t.NewItemBatchHandler(context.TODO())
-			got(tt.args.batch)
+			go got(tt.args.batch)
+			batch, ok := <-tt.fields.ch
+			if ok {
+				require.Equal(t1, tt.args.batch, batch)
+			} else {
+				t1.Log("exec sql Done.")
+			}
 			close(tt.fields.ch)
-			wg.Wait()
 		})
 	}
 	WithSQLExecutor(func() internalExecutor.InternalExecutor { return nil }).apply(&GetTracerProvider().tracerProviderConfig)
 }
 
 func Test_genCsvData(t *testing.T) {
-	time.Local = time.FixedZone("CST", 0) // set time-zone +0000
 	errorFormatter.Store("%v")
 	logStackFormatter.Store("%n")
 	type args struct {
@@ -1067,7 +1052,6 @@ var dummySerializeExecPlan = func(plan any, _ uuid.UUID) []byte {
 }
 
 func Test_genCsvData_LongQueryTIme(t *testing.T) {
-	time.Local = time.FixedZone("CST", 0) // set time-zone +0000
 	errorFormatter.Store("%v")
 	logStackFormatter.Store("%n")
 	type args struct {
