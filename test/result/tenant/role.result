@@ -4,9 +4,6 @@ select role_name from mo_catalog.mo_role;
 role_name
 moadmin
 public
-role_r1
-role_r2
-role_r3
 r1
 r2
 r3

@@ -1401,6 +1401,11 @@ func (mce *MysqlCmdExecutor) handleCreateAccount(ctx context.Context, ca *tree.C
 	return InitGeneralTenant(ctx, tenant, ca)
 }
 
+// handleDropAccount drops a new user-level tenant
+func (mce *MysqlCmdExecutor) handleDropAccount(ctx context.Context, da *tree.DropAccount) error {
+	return doDropAccount(ctx, mce.GetSession(), da)
+}
+
 // handleCreateUser creates the user for the tenant
 func (mce *MysqlCmdExecutor) handleCreateUser(ctx context.Context, cu *tree.CreateUser) error {
 	ses := mce.GetSession()
@@ -1408,6 +1413,11 @@ func (mce *MysqlCmdExecutor) handleCreateUser(ctx context.Context, cu *tree.Crea
 
 	//step1 : create the user
 	return InitUser(ctx, tenant, cu)
+}
+
+// handleDropUser drops the user for the tenant
+func (mce *MysqlCmdExecutor) handleDropUser(ctx context.Context, du *tree.DropUser) error {
+	return doDropUser(ctx, mce.GetSession(), du)
 }
 
 // handleCreateRole creates the new role
@@ -1419,12 +1429,17 @@ func (mce *MysqlCmdExecutor) handleCreateRole(ctx context.Context, cr *tree.Crea
 	return InitRole(ctx, tenant, cr)
 }
 
+// handleDropRole drops the role
+func (mce *MysqlCmdExecutor) handleDropRole(ctx context.Context, dr *tree.DropRole) error {
+	return doDropRole(ctx, mce.GetSession(), dr)
+}
+
 // handleGrantRole grants the role
 func (mce *MysqlCmdExecutor) handleGrantRole(ctx context.Context, gr *tree.GrantRole) error {
 	return doGrantRole(ctx, mce.GetSession(), gr)
 }
 
-// handleRevoke revokes the role
+// handleRevokeRole revokes the role
 func (mce *MysqlCmdExecutor) handleRevokeRole(ctx context.Context, rr *tree.RevokeRole) error {
 	return doRevokeRole(ctx, mce.GetSession(), rr)
 }
@@ -1432,6 +1447,11 @@ func (mce *MysqlCmdExecutor) handleRevokeRole(ctx context.Context, rr *tree.Revo
 // handleGrantRole grants the privilege to the role
 func (mce *MysqlCmdExecutor) handleGrantPrivilege(ctx context.Context, gp *tree.GrantPrivilege) error {
 	return doGrantPrivilege(ctx, mce.GetSession(), gp)
+}
+
+// handleRevokePrivilege revokes the privilege from the user or role
+func (mce *MysqlCmdExecutor) handleRevokePrivilege(ctx context.Context, rp *tree.RevokePrivilege) error {
+	return doRevokePrivilege(ctx, mce.GetSession(), rp)
 }
 
 func GetExplainColumns(explainColName string) ([]interface{}, error) {
@@ -1840,8 +1860,9 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		ses.SetMysqlResultSet(&MysqlResultSet{})
 		stmt := cw.GetAst()
 		requestCtx = RecordStatement(requestCtx, ses, proc, cw, beginInstant)
-
+		tenant := "0"
 		if ses.GetTenantInfo() != nil {
+			tenant = ses.GetTenantInfo().GetTenant()
 			ses.SetPrivilege(determinePrivilegeSetOfStatement(stmt))
 			havePrivilege, err2 = authenticatePrivilegeOfStatementWithObjectTypeAccountAndDatabase(requestCtx, ses, stmt)
 			if err2 != nil {
@@ -1916,13 +1937,13 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		case *tree.CommitTransaction:
 			err = ses.TxnCommit()
 			if err != nil {
-				incTransactionErrorsCounter(ses.GetTenantInfo().GetTenant(), metric.SQLTypeCommit)
+				incTransactionErrorsCounter(tenant, metric.SQLTypeCommit)
 				goto handleFailed
 			}
 		case *tree.RollbackTransaction:
 			err = ses.TxnRollback()
 			if err != nil {
-				incTransactionErrorsCounter(ses.GetTenantInfo().GetTenant(), metric.SQLTypeRollback)
+				incTransactionErrorsCounter(tenant, metric.SQLTypeRollback)
 				goto handleFailed
 			}
 		}
@@ -2035,21 +2056,33 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			if err = mce.handleCreateAccount(requestCtx, st); err != nil {
 				goto handleFailed
 			}
-		case *tree.DropAccount: //TODO
+		case *tree.DropAccount:
+			selfHandle = true
+			if err = mce.handleDropAccount(requestCtx, st); err != nil {
+				goto handleFailed
+			}
 		case *tree.AlterAccount: //TODO
 		case *tree.CreateUser:
 			selfHandle = true
 			if err = mce.handleCreateUser(requestCtx, st); err != nil {
 				goto handleFailed
 			}
-		case *tree.DropUser: //TODO
+		case *tree.DropUser:
+			selfHandle = true
+			if err = mce.handleDropUser(requestCtx, st); err != nil {
+				goto handleFailed
+			}
 		case *tree.AlterUser: //TODO
 		case *tree.CreateRole:
 			selfHandle = true
 			if err = mce.handleCreateRole(requestCtx, st); err != nil {
 				goto handleFailed
 			}
-		case *tree.DropRole: //TODO
+		case *tree.DropRole:
+			selfHandle = true
+			if err = mce.handleDropRole(requestCtx, st); err != nil {
+				goto handleFailed
+			}
 		case *tree.Grant:
 			selfHandle = true
 			switch st.Typ {
@@ -2070,6 +2103,9 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 					goto handleFailed
 				}
 			case tree.RevokeTypePrivilege:
+				if err = mce.handleRevokePrivilege(requestCtx, &st.RevokePrivilege); err != nil {
+					goto handleFailed
+				}
 			}
 		}
 
@@ -2361,7 +2397,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		if !fromLoadData {
 			txnErr = ses.TxnCommitSingleStatement(stmt)
 			if txnErr != nil {
-				incTransactionErrorsCounter(ses.GetTenantInfo().GetTenant(), metric.SQLTypeCommit)
+				incTransactionErrorsCounter(tenant, metric.SQLTypeCommit)
 				trace.EndStatement(requestCtx, txnErr)
 				logStatementStatus(requestCtx, ses, stmt, fail, txnErr)
 				return txnErr
@@ -2406,13 +2442,13 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		logStatementStatus(requestCtx, ses, stmt, success, nil)
 		goto handleNext
 	handleFailed:
-		incStatementErrorsCounter(ses.GetTenantInfo().GetTenant(), stmt)
+		incStatementErrorsCounter(tenant, stmt)
 		trace.EndStatement(requestCtx, err)
 		logutil.Error(err.Error())
 		if !fromLoadData {
 			txnErr = ses.TxnRollbackSingleStatement(stmt)
 			if txnErr != nil {
-				incTransactionErrorsCounter(ses.GetTenantInfo().GetTenant(), metric.SQLTypeRollback)
+				incTransactionErrorsCounter(tenant, metric.SQLTypeRollback)
 				logStatementStatus(requestCtx, ses, stmt, fail, txnErr)
 				return txnErr
 			}
