@@ -132,7 +132,6 @@ func checkInitiatingShards(
 			if moerr.IsMoErrCode(err, moerr.ErrShardNotReported) {
 				// if a shard not reported, register it,
 				// and launch its replica after a while.
-				fmt.Println("Not registered")
 				waitingShards.register(shardID, currTick)
 			}
 			continue

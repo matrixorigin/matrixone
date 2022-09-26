@@ -311,7 +311,9 @@ func (c *testCluster) Start() error {
 	}
 
 	if c.opt.initial.cnServiceNum != 0 {
-		if err := c.WaitAnyShardReady(); err != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+		defer cancel()
+		if err := c.WaitAnyShardReady(ctx); err != nil {
 			return err
 		}
 		if err := c.startCNServices(); err != nil {
@@ -605,25 +607,31 @@ func (c *testCluster) WaitHAKeeperState(
 	}
 }
 
-func (c *testCluster) WaitAnyShardReady() error {
+func (c *testCluster) WaitAnyShardReady(ctx context.Context) error {
 	// wait shard ready
 	for {
-		if ok, err := func() (bool, error) {
-			details := c.getClusterState()
-			for _, store := range details.DNState.Stores {
-				if len(store.Shards) > 0 {
-					return true, nil
+		select {
+		case <-ctx.Done():
+			assert.FailNow(c.t, "shard is not found")
+		default:
+			if ok, err := func() (bool, error) {
+				details := c.getClusterState()
+				for _, store := range details.DNState.Stores {
+					if len(store.Shards) > 0 {
+						return true, nil
+					}
 				}
+				logutil.Info("shard not ready")
+				return false, nil
+			}(); err != nil {
+				return err
+			} else if ok {
+				logutil.Info("shard ready")
+				return nil
 			}
-			logutil.Info("shard not ready")
-			return false, nil
-		}(); err != nil {
-			return err
-		} else if ok {
-			logutil.Info("shard ready")
-			return nil
+			time.Sleep(3 * time.Second)
 		}
-		time.Sleep(3 * time.Second)
+
 	}
 }
 
