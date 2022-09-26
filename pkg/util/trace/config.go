@@ -82,6 +82,8 @@ type tracerProviderConfig struct {
 	needInit bool // see WithInitAction
 
 	exportInterval time.Duration // see WithExportInterval
+	// longQueryTime unit ns
+	longQueryTime int64 // see WithLongQueryTime
 
 	mux sync.RWMutex
 }
@@ -154,6 +156,12 @@ func WithFSWriterFactory(f export.FSWriterFactory) tracerProviderOptionFunc {
 func WithExportInterval(secs int) tracerProviderOptionFunc {
 	return tracerProviderOptionFunc(func(cfg *tracerProviderConfig) {
 		cfg.exportInterval = time.Second * time.Duration(secs)
+	})
+}
+
+func WithLongQueryTime(secs float64) tracerProviderOptionFunc {
+	return tracerProviderOptionFunc(func(cfg *tracerProviderConfig) {
+		cfg.longQueryTime = int64(float64(time.Second) * secs)
 	})
 }
 

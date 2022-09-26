@@ -342,8 +342,11 @@ type ObservabilityParameters struct {
 	//default is false. With true, system will check all the children span is ended, which belong to the closing span.
 	EnableTraceDebug bool `toml:"enableTraceDebug"`
 
-	// default is 15s.
+	//default is 15s.
 	TraceExportInterval int `toml:"trace_export_interval"`
+
+	//default is 0.0 sec. if 0.0f, record every query. Record with exec time longer than LongQueryTime.
+	LongQueryTime float64 `toml:"long_query_time"`
 }
 
 func (op *ObservabilityParameters) SetDefaultValues(version string) {
