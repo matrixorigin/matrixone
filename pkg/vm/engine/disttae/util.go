@@ -14,9 +14,7 @@
 package disttae
 
 import (
-	"encoding/binary"
 	"fmt"
-	"math"
 	"sort"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -80,32 +78,28 @@ func getColumnsByExpr(expr *plan.Expr) []int {
 	return columns
 }
 
-func decodeMinMax(typ types.T, value []byte) any {
-	// TODO need zonemap decoder to decode the []byte to target type
-	if typ.ToType().IsIntOrUint() {
-		return int64(binary.LittleEndian.Uint64(value))
-
-	} else if typ.ToType().IsFloat() {
-		bits := binary.LittleEndian.Uint64(value)
-		return math.Float64frombits(bits)
-
-	} else {
-		// TODO other type decode as what??
-		return string(value)
-	}
-}
-
 func getIndexDataFromVec(idx uint16, vec *vector.Vector) (objectio.IndexData, objectio.IndexData, error) {
 	var min, max []byte
-	var alg uint8
-	var buf []byte
 
-	bf := objectio.NewBloomFilter(idx, alg, buf)
-	zm, err := objectio.NewZoneMap(idx, min, max)
+	var bloomFilter, zoneMap objectio.IndexData
+
+	// TODO :build bloomFilter from vec
+	// var alg uint8
+	// var buf []byte
+	// bloomFilter = objectio.NewBloomFilter(idx, alg, buf)
+
+	// get min/max from  vector
+	dataLen, min, max, err := vec.GetMinMaxValue()
 	if err != nil {
 		return nil, nil, err
 	}
-	return bf, zm, nil
+	if dataLen > 0 {
+		zoneMap, err = objectio.NewZoneMap(idx, min, max)
+		if err != nil {
+			return nil, nil, err
+		}
+	}
+	return bloomFilter, zoneMap, nil
 }
 
 func getZonemapDataFromMeta(columns []int, meta BlockMeta, tableDef *plan.TableDef) ([][2]any, []uint8) {
@@ -123,11 +117,12 @@ func getZonemapDataFromMeta(columns []int, meta BlockMeta, tableDef *plan.TableD
 	for i := 0; i < dataLength; i++ {
 		columnMeta = meta.columns[getIdx(i)]
 		dataTypes[i] = columnMeta.typ
-		typ := types.T(columnMeta.typ)
+		typ := types.T(columnMeta.typ).ToType()
 
+		// TODO : use types Encoder/Decoder?
 		datas[i] = [2]any{
-			decodeMinMax(typ, columnMeta.zoneMap.GetMin()),
-			decodeMinMax(typ, columnMeta.zoneMap.GetMax()),
+			types.DecodeValue(columnMeta.zoneMap.GetMin(), typ),
+			types.DecodeValue(columnMeta.zoneMap.GetMax(), typ),
 		}
 	}
 

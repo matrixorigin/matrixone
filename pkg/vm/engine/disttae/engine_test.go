@@ -21,9 +21,13 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/logservice"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
@@ -86,9 +90,21 @@ func TestTransaction(t *testing.T) {
 	err = txn.WriteFile(DELETE, 0, 0, "test", "test", "test")
 	require.NoError(t, err)
 	ctx := context.TODO()
-	blockWrite(ctx, BlockMeta{}, nil, nil)
-	_, _ = txn.getRow(ctx, 0, 0, nil, nil, nil, nil)
-	_, _ = txn.getRows(ctx, 0, 0, nil, nil, nil, nil)
+
+	blockWrite(ctx, BlockMeta{}, testutil.NewBatch([]types.Type{
+		types.T_int64.ToType(),
+		types.T_int64.ToType(),
+		types.T_int64.ToType(),
+		types.T_int64.ToType(),
+	}, true, 20, testutil.NewMheap()), testutil.NewFS())
+	_, _ = txn.getRow(ctx, 0, 0, nil, nil, makeFunctionExprForTest(">", []*plan.Expr{
+		makeColExprForTest(0, types.T_int64),
+		plan2.MakePlan2Int64ConstExprWithType(20),
+	}), nil)
+	_, _ = txn.getRows(ctx, 0, 0, nil, nil, makeFunctionExprForTest(">", []*plan.Expr{
+		makeColExprForTest(0, types.T_int64),
+		plan2.MakePlan2Int64ConstExprWithType(20),
+	}), nil)
 }
 
 func TestTable(t *testing.T) {
