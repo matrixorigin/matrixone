@@ -77,7 +77,7 @@ type DebugTime struct {
 
 type SharePart struct {
 	//load reference
-	load *tree.Load
+	load *tree.Import
 	//how to handle errors during converting field
 	ignoreFieldError bool
 
@@ -563,13 +563,19 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool, 
 					continue
 				}
 
-				field := strings.TrimSpace(lineStr)
-
-				isNullOrEmpty := len(field) == 0 || field == NULL_FLAG
-
 				//put it into batch
 				vec := batchData.Vecs[colIdx]
 				vecAttr := batchData.Attrs[colIdx]
+				field := strings.TrimSpace(lineStr)
+
+				id := types.T(vec.Typ.Oid)
+				if id != types.T_char && id != types.T_varchar {
+					field = strings.TrimSpace(field)
+				}
+				isNullOrEmpty := field == NULL_FLAG
+				if id != types.T_char && id != types.T_varchar && id != types.T_json && id != types.T_blob {
+					isNullOrEmpty = isNullOrEmpty || len(field) == 0
+				}
 
 				//record colIdx
 				columnFLags[colIdx] = 1
@@ -859,7 +865,7 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool, 
 						}
 						cols[rowIdx] = d
 					}
-				case types.T_char, types.T_varchar:
+				case types.T_char, types.T_varchar, types.T_blob:
 					if isNullOrEmpty {
 						nulls.Add(vec.Nsp, uint64(rowIdx))
 					} else {
@@ -1755,7 +1761,7 @@ func writeBatchToStorage(handler *WriteBatchHandler, force bool) error {
 					case types.T_float64:
 						cols := vector.MustTCols[float64](vec)
 						vec.Col = cols[:needLen]
-					case types.T_char, types.T_varchar, types.T_json: //bytes is different
+					case types.T_char, types.T_varchar, types.T_json, types.T_blob: //bytes is different
 						cols := vector.MustTCols[types.Varlena](vec)
 						vec.Col = cols[:needLen]
 					case types.T_date:
@@ -1909,7 +1915,7 @@ func PrintThreadInfo(handler *ParseLineHandler, close *CloseFlag, a time.Duratio
 /*
 LoadLoop reads data from stream, extracts the fields, and saves into the table
 */
-func (mce *MysqlCmdExecutor) LoadLoop(requestCtx context.Context, load *tree.Load, dbHandler engine.Database, tableHandler engine.Relation, dbName string) (*LoadResult, error) {
+func (mce *MysqlCmdExecutor) LoadLoop(requestCtx context.Context, load *tree.Import, dbHandler engine.Database, tableHandler engine.Relation, dbName string) (*LoadResult, error) {
 	ses := mce.GetSession()
 
 	//begin:=  time.Now()
@@ -1989,7 +1995,7 @@ func (mce *MysqlCmdExecutor) LoadLoop(requestCtx context.Context, load *tree.Loa
 		rune(load.Param.Tail.Fields.Terminated[0]),
 		'#',
 		true,
-		false)
+		true)
 
 	/*
 		error channel
