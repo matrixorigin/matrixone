@@ -15,6 +15,7 @@
 package dnservice
 
 import (
+	"fmt"
 	"sort"
 
 	"go.uber.org/zap"
@@ -50,6 +51,7 @@ func Check(
 	currTick uint64,
 ) []*operator.Operator {
 	stores, reportedShards := parseDnState(cfg, dnState, currTick)
+	fmt.Println("check parameters:", dnState, *reportedShards)
 	if len(stores.WorkingStores()) < 1 {
 		logger.Warn("no working dn stores")
 		return nil
