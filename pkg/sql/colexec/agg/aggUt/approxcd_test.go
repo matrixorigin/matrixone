@@ -24,6 +24,7 @@ import (
 func TestApproxcdCount(t *testing.T) {
 	int8TestTyp := types.New(types.T_int8, 0, 0, 0)
 	decimal64Typ := types.New(types.T_decimal64, 0, 0, 0)
+	decimal128Typ := types.New(types.T_decimal128, 0, 0, 0)
 	testCases := []testCase{
 		{
 			op:         agg.AggregateApproxCountDistinct,
@@ -54,6 +55,51 @@ func TestApproxcdCount(t *testing.T) {
 			mergeExpect: []uint64{10},
 
 			testMarshal: true,
+		},
+		{
+			op:         agg.AggregateApproxCountDistinct,
+			isDistinct: true,
+			inputTyp:   decimal64Typ,
+
+			input:    []int64{9, 8, 7, 6, 5, 4, 3, 2, 1, 0},
+			inputNsp: nil,
+			expected: []uint64{10},
+
+			mergeInput:  []int64{0, 1, 2, 3, 4, 5, 6, 7, 8, 9},
+			mergeNsp:    nil,
+			mergeExpect: []uint64{10},
+
+			testMarshal: false,
+		},
+		{
+			op:         agg.AggregateApproxCountDistinct,
+			isDistinct: false,
+			inputTyp:   decimal128Typ,
+
+			input:    []int64{9, 8, 7, 6, 5, 4, 3, 2, 1, 0},
+			inputNsp: nil,
+			expected: []uint64{10},
+
+			mergeInput:  []int64{0, 1, 2, 3, 4, 5, 6, 7, 8, 9},
+			mergeNsp:    nil,
+			mergeExpect: []uint64{10},
+
+			testMarshal: true,
+		},
+		{
+			op:         agg.AggregateApproxCountDistinct,
+			isDistinct: true,
+			inputTyp:   decimal128Typ,
+
+			input:    []int64{9, 8, 7, 6, 5, 4, 3, 2, 1, 0},
+			inputNsp: nil,
+			expected: []uint64{10},
+
+			mergeInput:  []int64{0, 1, 2, 3, 4, 5, 6, 7, 8, 9},
+			mergeNsp:    nil,
+			mergeExpect: []uint64{10},
+
+			testMarshal: false,
 		},
 	}
 
