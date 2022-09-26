@@ -24,6 +24,7 @@ package trace
 import (
 	"context"
 	"sync/atomic"
+	"time"
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -79,6 +80,8 @@ func Init(ctx context.Context, opts ...TracerProviderOption) (context.Context, e
 	logutil.SpanFieldKey.Store(SpanFieldKey)
 	errutil.SetErrorReporter(HandleError)
 	export.SetDefaultContextFunc(DefaultContext)
+
+	logutil.Infof("trace with LongQueryTime: %v", time.Duration(GetTracerProvider().longQueryTime))
 
 	return DefaultContext(), nil
 }

@@ -17,7 +17,9 @@ package trace
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
+	"github.com/google/uuid"
 	"io"
 	"os"
 	"reflect"
@@ -1049,6 +1051,106 @@ func Test_genCsvData(t *testing.T) {
 			require.Equal(t, true, ok)
 			assert.Equalf(t, tt.want, req.content, "genCsvData(%v, %v)", req.content, tt.args.buf)
 			t.Logf("%s", tt.want)
+		})
+	}
+}
+
+var dummySerializeExecPlan = func(plan any, _ uuid.UUID) []byte {
+	if plan == nil {
+		return []byte(`{"code":200,"message":"no exec plan"}`)
+	}
+	json, err := json.Marshal(plan)
+	if err != nil {
+		return []byte(fmt.Sprintf(`{"err": %q}`, err.Error()))
+	}
+	return json
+}
+
+func Test_genCsvData_LongQueryTIme(t *testing.T) {
+	time.Local = time.FixedZone("CST", 0) // set time-zone +0000
+	errorFormatter.Store("%v")
+	logStackFormatter.Store("%n")
+	type args struct {
+		in     []IBuffer2SqlItem
+		buf    *bytes.Buffer
+		queryT int64
+	}
+	tests := []struct {
+		name string
+		args args
+		want any
+	}{
+		{
+			name: "multi_statement",
+			args: args{
+				in: []IBuffer2SqlItem{
+					&StatementInfo{
+						StatementID:          _1TraceID,
+						TransactionID:        _1TxnID,
+						SessionID:            _1SesID,
+						Account:              "MO",
+						User:                 "moroot",
+						Database:             "system",
+						Statement:            "show tables",
+						StatementFingerprint: "show tables",
+						StatementTag:         "",
+						RequestAt:            util.TimeNano(0),
+						ExecPlan:             nil,
+						Duration:             uint64(time.Second) - 1,
+					},
+					&StatementInfo{
+						StatementID:          _1TraceID,
+						TransactionID:        _1TxnID,
+						SessionID:            _1SesID,
+						Account:              "MO",
+						User:                 "moroot",
+						Database:             "system",
+						Statement:            "show tables",
+						StatementFingerprint: "show tables",
+						StatementTag:         "",
+						RequestAt:            util.TimeNano(0),
+						ExecPlan:             nil,
+						Duration:             uint64(time.Second) - 1,
+						SerializeExecPlan:    dummySerializeExecPlan,
+					},
+					&StatementInfo{
+						StatementID:          _2TraceID,
+						TransactionID:        _1TxnID,
+						SessionID:            _1SesID,
+						Account:              "MO",
+						User:                 "moroot",
+						Database:             "system",
+						Statement:            "show databases",
+						StatementFingerprint: "show databases",
+						StatementTag:         "dcl",
+						RequestAt:            util.TimeNano(time.Microsecond),
+						ResponseAt:           util.TimeNano(time.Microsecond + time.Second),
+						Duration:             uint64(time.Second),
+						Status:               StatementStatusFailed,
+						Error:                moerr.NewInternalError("test error"),
+						ExecPlan:             map[string]string{"key": "val"},
+						SerializeExecPlan:    dummySerializeExecPlan,
+					},
+				},
+				buf:    buf,
+				queryT: int64(time.Second),
+			},
+			want: `00000000-0000-0000-0000-000000000001,00000000-0000-0000-0000-000000000001,00000000-0000-0000-0000-000000000001,MO,moroot,,system,show tables,,show tables,node_uuid,Standalone,1970-01-01 00:00:00.000000,1970-01-01 00:00:00.000000,999999999,Running,,"{""code"":200,""message"":""sql query no record execution plan"",""steps"":null,""success"":false,""uuid:""00000000-0000-0000-0000-000000000001""}"
+00000000-0000-0000-0000-000000000001,00000000-0000-0000-0000-000000000001,00000000-0000-0000-0000-000000000001,MO,moroot,,system,show tables,,show tables,node_uuid,Standalone,1970-01-01 00:00:00.000000,1970-01-01 00:00:00.000000,999999999,Running,,"{""code"":200,""message"":""no exec plan""}"
+00000000-0000-0000-0000-000000000002,00000000-0000-0000-0000-000000000001,00000000-0000-0000-0000-000000000001,MO,moroot,,system,show databases,dcl,show databases,node_uuid,Standalone,1970-01-01 00:00:00.000001,1970-01-01 00:00:01.000001,1000000000,Failed,internal error: test error,"{""key"":""val""}"
+`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			GetTracerProvider().longQueryTime = tt.args.queryT
+			got := genCsvData(tt.args.in, tt.args.buf)
+			require.NotEqual(t, nil, got)
+			req, ok := got.(CSVRequest)
+			require.Equal(t, true, ok)
+			assert.Equalf(t, tt.want, req.content, "genCsvData(%v, %v)", req.content, tt.args.buf)
+			t.Logf("%s", tt.want)
+			GetTracerProvider().longQueryTime = 0
 		})
 	}
 }

@@ -121,7 +121,7 @@ func (s *StatementInfo) ExecPlan2Json() string {
 		logutil.Warnf("statement has no execPlan Serialize function, statement_id: %s", uuidStr)
 		return fmt.Sprintf(`{"code":200,"message":"sql query no record execution plan","steps":null,"success":false,"uuid:"%s"}`, uuidStr)
 	}
-	if queryTime := GetTracerProvider().longQueryTime; queryTime >= int64(s.Duration) {
+	if queryTime := GetTracerProvider().longQueryTime; queryTime > int64(s.Duration) {
 		json = s.SerializeExecPlan(nil, uuid.UUID(s.StatementID))
 	} else {
 		json = s.SerializeExecPlan(s.ExecPlan, uuid.UUID(s.StatementID))
