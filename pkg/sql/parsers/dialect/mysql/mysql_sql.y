@@ -4064,8 +4064,8 @@ load_param_opt:
 	$$ = &tree.ExternParam{
 	    Filepath: $5,
 	    CompressType: tree.AUTO,
-	    Format: $9,
-	    JsonData: $13,
+	    Format: strings.ToLower($9),
+	    JsonData: strings.ToLower($13),
 	}
     }
 |   INFILE '{' STRING '=' STRING ',' STRING '=' STRING ',' STRING '=' STRING ',' STRING '=' STRING '}'
@@ -4077,8 +4077,8 @@ load_param_opt:
     	$$ = &tree.ExternParam{
     	    Filepath: $5,
     	    CompressType: $9,
-    	    Format: $13,
-    	    JsonData: $17,
+    	    Format: strings.ToLower($13),
+    	    JsonData: strings.ToLower($17),
     	}
     }
 

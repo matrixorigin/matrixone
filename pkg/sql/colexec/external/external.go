@@ -292,7 +292,7 @@ func GetBatchData(param *ExternalParam, plh *ParseLineHandler, proc *process.Pro
 	return bat, nil
 }
 
-// get file reader from external file
+// GetSimdcsvReader get file reader from external file
 func GetSimdcsvReader(param *ExternalParam) (*ParseLineHandler, error) {
 	var err error
 	param.reader, err = ReadFile(param.extern)
@@ -324,7 +324,7 @@ func GetSimdcsvReader(param *ExternalParam) (*ParseLineHandler, error) {
 	return plh, nil
 }
 
-// read batch data from external file
+// ScanFileData read batch data from external file
 func ScanFileData(param *ExternalParam, proc *process.Process) (*batch.Batch, error) {
 	var bat *batch.Batch
 	var err error

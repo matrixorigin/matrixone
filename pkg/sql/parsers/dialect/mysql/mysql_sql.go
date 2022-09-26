@@ -10338,8 +10338,8 @@ yydefault:
 			yyLOCAL = &tree.ExternParam{
 				Filepath:     yyDollar[5].str,
 				CompressType: tree.AUTO,
-				Format:       yyDollar[9].str,
-				JsonData:     yyDollar[13].str,
+				Format:       strings.ToLower(yyDollar[9].str),
+				JsonData:     strings.ToLower(yyDollar[13].str),
 			}
 		}
 		yyVAL.union = yyLOCAL
@@ -10355,8 +10355,8 @@ yydefault:
 			yyLOCAL = &tree.ExternParam{
 				Filepath:     yyDollar[5].str,
 				CompressType: yyDollar[9].str,
-				Format:       yyDollar[13].str,
-				JsonData:     yyDollar[17].str,
+				Format:       strings.ToLower(yyDollar[13].str),
+				JsonData:     strings.ToLower(yyDollar[17].str),
 			}
 		}
 		yyVAL.union = yyLOCAL
