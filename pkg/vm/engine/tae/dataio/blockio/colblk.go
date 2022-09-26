@@ -23,7 +23,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/util"
 )
 
 type columnBlock struct {
@@ -83,7 +82,7 @@ func (cb *columnBlock) GetData(
 	srcBuf := fsVector.Entries[0].Data
 	vector := vector.New(typ)
 	vector.Read(srcBuf)
-	vec = util.MOToVectorTmp(vector, NullAbility)
+	vec = containers.MOToVectorTmp(vector, NullAbility)
 	return
 }
 
