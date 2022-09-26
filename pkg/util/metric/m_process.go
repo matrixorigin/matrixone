@@ -163,11 +163,6 @@ func newProcConnections() *procConnections {
 		lvs,
 		opts.ConstLabels,
 	)
-	// prom.NewDesc(
-	// 	"connections",
-	// 	"Number of process connections",
-	// 	[]string{constTenantKey}, make(prom.Labels),
-	// )
 	c := &procConnections{
 		desc: desc,
 	}

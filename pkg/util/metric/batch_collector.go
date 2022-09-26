@@ -162,25 +162,3 @@ func (c *batchMetricVec) Collect(ch chan<- prom.Metric) {
 		}
 	}
 }
-
-/*
-type batchMetricVec struct {
-	inner *prom.MetricVec
-}
-
-func (bmv *batchMetricVec) GetMetricWithLabelValues(lvs ...string) (Observer, error) {
-	metric, err := bmv.inner.GetMetricWithLabelValues(lvs...)
-	if metric != nil {
-		return metric.(prom.Observer), err
-	}
-	return nil, err
-}
-
-// Describe implements Collector.
-func (bmv *batchMetricVec) Describe(ch chan<- *prom.Desc) { bmv.inner.Describe(ch) }
-
-// Collect implements Collector.
-func (bmv *batchMetricVec) Collect(ch chan<- prom.Metric) {
-	bmv.inner.Collect(ch)
-}
-*/
