@@ -17,6 +17,9 @@ package frontend
 import (
 	"context"
 	"fmt"
+	"github.com/google/uuid"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"testing"
 	"time"
 
@@ -1037,4 +1040,41 @@ func Test_handleLoadData(t *testing.T) {
 		err = mce.handleLoadData(ctx, load)
 		convey.So(err, convey.ShouldNotBeNil)
 	})
+}
+
+func TestSerializePlanToJson(t *testing.T) {
+	sqls := []string{
+		"SELECT N_NAME, N_REGIONKEY FROM NATION WHERE N_REGIONKEY > 0 AND N_NAME LIKE '%AA' ORDER BY N_NAME DESC, N_REGIONKEY LIMIT 10, 20",
+		"SELECT N_NAME, N_REGIONKEY a FROM NATION WHERE N_REGIONKEY > 0 ORDER BY a DESC",                                                                                  //test alias
+		"SELECT N_NAME, count(distinct N_REGIONKEY) FROM NATION group by N_NAME",                                                                                          //test distinct agg function
+		"SELECT N_NAME, MAX(N_REGIONKEY) FROM NATION GROUP BY N_NAME HAVING MAX(N_REGIONKEY) > 10",                                                                        //test agg
+		"SELECT N_REGIONKEY + 2 as a, N_REGIONKEY/2, N_REGIONKEY* N_NATIONKEY, N_REGIONKEY % N_NATIONKEY, N_REGIONKEY - N_NATIONKEY FROM NATION WHERE -N_NATIONKEY < -20", //test more expr
+		"SELECT N_REGIONKEY FROM NATION where N_REGIONKEY >= N_NATIONKEY or (N_NAME like '%ddd' and N_REGIONKEY >0.5)",                                                    //test more expr
+		"SELECT N_NAME,N_REGIONKEY FROM NATION join REGION on NATION.N_REGIONKEY = REGION.R_REGIONKEY",
+		"SELECT N_NAME, N_REGIONKEY FROM NATION join REGION on NATION.N_REGIONKEY = REGION.R_REGIONKEY WHERE NATION.N_REGIONKEY > 0",
+		"SELECT N_NAME, NATION2.R_REGIONKEY FROM NATION2 join REGION using(R_REGIONKEY) WHERE NATION2.R_REGIONKEY > 0",
+		"select n_name from nation intersect all select n_name from nation2",
+		"select col1 from (select c_custkey, count(C_NATIONKEY) ff from CUSTOMER group by c_custkey ) a(col1, col2) where col2 > 0 order by col1",
+		"select c_custkey from (select c_custkey, count(C_NATIONKEY) ff from CUSTOMER group by c_custkey ) a join NATION b on a.c_custkey = b.N_REGIONKEY where b.N_NATIONKEY > 10",
+	}
+
+	for _, sql := range sqls {
+		mock := plan.NewMockOptimizer()
+		plan, err := buildSingleSql(mock, t, sql)
+		if err != nil {
+			t.Fatalf("%+v", err)
+		}
+		json := serializePlanToJson(plan, uuid.New())
+		t.Logf("SQL plan to json : %s\n", string(json))
+	}
+}
+
+func buildSingleSql(opt plan.Optimizer, t *testing.T, sql string) (*plan.Plan, error) {
+	stmts, err := mysql.Parse(sql)
+	if err != nil {
+		t.Fatalf("%+v", err)
+	}
+	// this sql always return one stmt
+	ctx := opt.CurrentContext()
+	return plan.BuildPlan(ctx, stmts[0])
 }
