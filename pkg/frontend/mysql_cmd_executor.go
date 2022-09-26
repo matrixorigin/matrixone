@@ -848,7 +848,7 @@ func (mce *MysqlCmdExecutor) handleSelectVariables(ve *tree.VarExpr) error {
 /*
 handle Load DataSource statement
 */
-func (mce *MysqlCmdExecutor) handleLoadData(requestCtx context.Context, load *tree.Load) error {
+func (mce *MysqlCmdExecutor) handleLoadData(requestCtx context.Context, load *tree.Import) error {
 	var err error
 	ses := mce.GetSession()
 	proto := ses.protocol
@@ -861,7 +861,7 @@ func (mce *MysqlCmdExecutor) handleLoadData(requestCtx context.Context, load *tr
 		return moerr.NewInternalError("LOCAL is unsupported now")
 	}
 	if load.Param.Tail.Fields == nil || len(load.Param.Tail.Fields.Terminated) == 0 {
-		return moerr.NewInternalError("load need FIELDS TERMINATED BY ")
+		load.Param.Tail.Fields = &tree.Fields{Terminated: ","}
 	}
 
 	if load.Param.Tail.Fields != nil && load.Param.Tail.Fields.EscapedBy != 0 {
@@ -1959,13 +1959,13 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			if string(st.Name) == ses.GetDatabaseName() {
 				ses.SetUserName("")
 			}
-		/*case *tree.Load:
-		fromLoadData = true
-		selfHandle = true
-		err = mce.handleLoadData(requestCtx, st)
-		if err != nil {
-			goto handleFailed
-		}*/
+		case *tree.Import:
+			fromLoadData = true
+			selfHandle = true
+			err = mce.handleLoadData(requestCtx, st)
+			if err != nil {
+				goto handleFailed
+			}
 		case *tree.PrepareStmt:
 			selfHandle = true
 			prepareStmt, err = mce.handlePrepareStmt(st)
