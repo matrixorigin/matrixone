@@ -29,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
 
+	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -605,17 +606,17 @@ func TestSysRelation(t *testing.T) {
 	txn, err := e.StartTxn(nil)
 	assert.Nil(t, err)
 	txnOperator := TxnToTxnOperator(txn)
-	err = e.Create(ctx, catalog.SystemTable_DB_Name, txnOperator)
+	err = e.Create(ctx, pkgcatalog.MO_DATABASE, txnOperator)
 	assert.Nil(t, err)
 	names, _ := e.Databases(ctx, txnOperator)
 	assert.Equal(t, 2, len(names))
-	dbase, err := e.Database(ctx, catalog.SystemTable_DB_Name, txnOperator)
+	dbase, err := e.Database(ctx, pkgcatalog.MO_DATABASE, txnOperator)
 	assert.Nil(t, err)
 	schema := catalog.MockSchema(13, 12)
-	checkSysTable(t, catalog.SystemTable_DB_Name, dbase, txn, 1, schema)
+	checkSysTable(t, pkgcatalog.MO_DATABASE, dbase, txn, 1, schema)
 	schema = catalog.MockSchema(14, 13)
-	checkSysTable(t, catalog.SystemTable_Table_Name, dbase, txn, 2, schema)
+	checkSysTable(t, pkgcatalog.MO_TABLES, dbase, txn, 2, schema)
 	schema = catalog.MockSchema(15, 14)
-	checkSysTable(t, catalog.SystemTable_Columns_Name, dbase, txn, 3, schema)
+	checkSysTable(t, pkgcatalog.MO_COLUMNS, dbase, txn, 3, schema)
 	assert.Nil(t, txn.Commit())
 }
