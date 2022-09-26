@@ -49,6 +49,8 @@ var testBaseBuffer2SqlOption = []bufferOption{bufferWithSizeThreshold(1 * KB)}
 var traceIDSpanIDColumnStr string
 var traceIDSpanIDCsvStr string
 
+var gCtrlSqlCh = make(chan struct{}, 1)
+
 func noopReportLog(context.Context, zapcore.Level, int, string, ...any) {}
 func noopReportError(context.Context, error, int)                       {}
 
@@ -155,6 +157,7 @@ func Test_batchSqlHandler_NewItemBuffer_Check_genBatchFunc(t1 *testing.T) {
 }
 
 func Test_buffer2Sql_GetBatch_AllType(t *testing.T) {
+	gCtrlSqlCh <- struct{}{}
 	type fields struct {
 		Reminder      batchpipe.Reminder
 		sizeThreshold int64
@@ -453,6 +456,7 @@ func Test_buffer2Sql_GetBatch_AllType(t *testing.T) {
 			t.Logf("GetBatch() = %v", got)
 		})
 	}
+	<-gCtrlSqlCh
 }
 
 func Test_buffer2Sql_IsEmpty(t *testing.T) {
@@ -741,6 +745,7 @@ func Test_withSizeThreshold(t *testing.T) {
 }
 
 func Test_batchSqlHandler_NewItemBatchHandler(t1 *testing.T) {
+	gCtrlSqlCh <- struct{}{}
 	type fields struct {
 		defaultOpts []bufferOption
 		ch          chan string
@@ -782,10 +787,11 @@ func Test_batchSqlHandler_NewItemBatchHandler(t1 *testing.T) {
 			} else {
 				t1.Log("exec sql Done.")
 			}
-			close(tt.fields.ch)
+			//close(tt.fields.ch)
 		})
 	}
 	WithSQLExecutor(func() internalExecutor.InternalExecutor { return nil }).apply(&GetTracerProvider().tracerProviderConfig)
+	<-gCtrlSqlCh
 }
 
 func Test_genCsvData(t *testing.T) {
