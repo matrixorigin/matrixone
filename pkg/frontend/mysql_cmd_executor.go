@@ -2791,6 +2791,5 @@ func serializePlanToJson(queryPlan *plan2.Plan, uuid uuid.UUID) []byte {
 		moError := moerr.NewInternalError("sql query execution plan not found")
 		jsonBytes = buildErrorJsonPlan(uuid, moError.MySQLCode(), moError.Error())
 	}
-	logutil.Infof("json of sql plan is : %s", string(jsonBytes))
 	return jsonBytes
 }
