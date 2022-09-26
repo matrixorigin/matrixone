@@ -22,6 +22,7 @@ import (
 	"io"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/util"
@@ -79,6 +80,8 @@ type tracerProviderConfig struct {
 	sqlExecutor func() ie.InternalExecutor // see WithSQLExecutor
 	// needInit control table schema create
 	needInit bool // see WithInitAction
+
+	exportInterval time.Duration // see WithExportInterval
 
 	mux sync.RWMutex
 }
@@ -145,6 +148,12 @@ func EnableTracer(enable bool) tracerProviderOptionFunc {
 func WithFSWriterFactory(f export.FSWriterFactory) tracerProviderOptionFunc {
 	return tracerProviderOptionFunc(func(cfg *tracerProviderConfig) {
 		cfg.writerFactory = f
+	})
+}
+
+func WithExportInterval(secs int) tracerProviderOptionFunc {
+	return tracerProviderOptionFunc(func(cfg *tracerProviderConfig) {
+		cfg.exportInterval = time.Second * time.Duration(secs)
 	})
 }
 

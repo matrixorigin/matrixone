@@ -44,7 +44,7 @@ import (
 var buf = new(bytes.Buffer)
 var err1 = moerr.NewInternalError("test1")
 var err2 = errutil.Wrapf(err1, "test2")
-var testBaseBuffer2SqlOption = []buffer2SqlOption{bufferWithSizeThreshold(1 * KB)}
+var testBaseBuffer2SqlOption = []bufferOption{bufferWithSizeThreshold(1 * KB)}
 var traceIDSpanIDColumnStr string
 var traceIDSpanIDCsvStr string
 
@@ -97,7 +97,7 @@ func Test_newBuffer2Sql_base(t *testing.T) {
 
 func TestNewSpanBufferPipeWorker(t *testing.T) {
 	type args struct {
-		opt []buffer2SqlOption
+		opt []bufferOption
 	}
 	opts := testBaseBuffer2SqlOption[:]
 	tests := []struct {
@@ -124,7 +124,7 @@ func TestNewSpanBufferPipeWorker(t *testing.T) {
 
 func Test_batchSqlHandler_NewItemBuffer_Check_genBatchFunc(t1 *testing.T) {
 	type args struct {
-		opt  []buffer2SqlOption
+		opt  []bufferOption
 		name string
 	}
 	opts := testBaseBuffer2SqlOption[:]
@@ -741,7 +741,7 @@ func Test_withSizeThreshold(t *testing.T) {
 
 func Test_batchSqlHandler_NewItemBatchHandler(t1 *testing.T) {
 	type fields struct {
-		defaultOpts []buffer2SqlOption
+		defaultOpts []bufferOption
 		ch          chan string
 	}
 	type args struct {
@@ -757,7 +757,7 @@ func Test_batchSqlHandler_NewItemBatchHandler(t1 *testing.T) {
 		{
 			name: "nil",
 			fields: fields{
-				defaultOpts: []buffer2SqlOption{bufferWithSizeThreshold(GB)},
+				defaultOpts: []bufferOption{bufferWithSizeThreshold(GB)},
 				ch:          make(chan string, 10),
 			},
 			args: args{

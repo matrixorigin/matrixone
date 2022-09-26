@@ -99,8 +99,11 @@ var (
 	//statusPort defines which port the mo status server (for metric etc.) listens on and clients connect to
 	defaultStatusPort = 7001
 
-	//default is InternalExecutor. if InternalExecutor, use internal sql executor, FileService will implement soon.
+	//default is FileService. if InternalExecutor, use internal sql executor, FileService will implement soon.
 	defaultBatchProcessor = "FileService"
+
+	//default: 15 sec.
+	defaultTraceExportInterval = 15
 )
 
 // FrontendParameters of the frontend
@@ -333,11 +336,14 @@ type ObservabilityParameters struct {
 	//default is false. if false, enable trace at booting
 	DisableTrace bool `toml:"disableTrace"`
 
-	//default is InternalExecutor. if InternalExecutor, use internal sql executor, FileService will implement soon.
+	//default is FileService. if InternalExecutor, use internal sql executor, FileService will implement soon.
 	BatchProcessor string `toml:"batchProcessor"`
 
 	//default is false. With true, system will check all the children span is ended, which belong to the closing span.
 	EnableTraceDebug bool `toml:"enableTraceDebug"`
+
+	// default is 15s.
+	TraceExportInterval int `toml:"trace_export_interval"`
 }
 
 func (op *ObservabilityParameters) SetDefaultValues(version string) {
@@ -353,6 +359,10 @@ func (op *ObservabilityParameters) SetDefaultValues(version string) {
 
 	if op.BatchProcessor == "" {
 		op.BatchProcessor = defaultBatchProcessor
+	}
+
+	if op.TraceExportInterval == 0 {
+		op.TraceExportInterval = defaultTraceExportInterval
 	}
 }
 
