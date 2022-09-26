@@ -3427,6 +3427,7 @@ func InitSysTenant(ctx context.Context) error {
 	ctx = context.WithValue(ctx, defines.UserIDKey{}, uint32(rootID))
 	ctx = context.WithValue(ctx, defines.RoleIDKey{}, uint32(moAdminRoleID))
 
+	//TODO: put it into the same transaction
 	exists, err = checkSysExistsOrNot(ctx, pu)
 	if err != nil {
 		return err
@@ -3591,6 +3592,7 @@ func InitGeneralTenant(ctx context.Context, tenant *TenantInfo, ca *tree.CreateA
 	ctx = context.WithValue(ctx, defines.UserIDKey{}, uint32(tenant.GetUserID()))
 	ctx = context.WithValue(ctx, defines.RoleIDKey{}, uint32(tenant.GetDefaultRoleID()))
 
+	//TODO: put it into the same transaction
 	exists, err = checkTenantExistsOrNot(ctx, pu, ca.Name)
 	if err != nil {
 		return err
@@ -3850,52 +3852,55 @@ func InitUser(ctx context.Context, tenant *TenantInfo, cu *tree.CreateUser) erro
 	var newUserId int64
 	var host string
 	var values []interface{}
+	var newRoleId int64
+	var status string
 	pu := config.GetParameterUnit(ctx)
 
 	guestMMu := guest.New(pu.SV.GuestMmuLimitation, pu.HostMmu)
 	bh := NewBackgroundHandler(ctx, guestMMu, pu.Mempool, pu)
 	defer bh.Close()
 
+	err = bh.Exec(ctx, "begin;")
+	if err != nil {
+		goto handleFailed
+	}
+
 	//TODO: get role and the id of role
-	newRoleId := publicRoleID
+	newRoleId = publicRoleID
 	if cu.Role != nil {
 		if nameIsInvalid(cu.Role.UserName) {
-			return moerr.NewInternalError("the role name is invalid")
+			err = moerr.NewInternalError("the role name is invalid")
+			goto handleFailed
 		}
 		if strings.ToLower(cu.Role.UserName) != publicRoleName {
 			sqlForRoleIdOfRole := getSqlForRoleIdOfRole(cu.Role.UserName)
 			bh.ClearExecResultSet()
 			err = bh.Exec(ctx, sqlForRoleIdOfRole)
 			if err != nil {
-				return err
+				goto handleFailed
 			}
-			values := bh.GetExecResultSet()
+			values = bh.GetExecResultSet()
 			rsset, err = convertIntoResultSet(values)
 			if err != nil {
-				return err
+				goto handleFailed
 			}
 			if len(rsset) < 1 || rsset[0].GetRowCount() < 1 {
-				return moerr.NewInternalError("there is no role %s", cu.Role.UserName)
+				err = moerr.NewInternalError("there is no role %s", cu.Role.UserName)
+				goto handleFailed
 			}
-			roleId, err := rsset[0].GetInt64(0, 0)
+			newRoleId, err = rsset[0].GetInt64(0, 0)
 			if err != nil {
-				return err
+				goto handleFailed
 			}
-			newRoleId = int(roleId)
 		}
 	}
 
 	//TODO: get password_option or lock_option. there is no field in mo_user to store it.
-	status := userStatusUnlock
+	status = userStatusUnlock
 	if cu.MiscOpt != nil {
 		if _, ok := cu.MiscOpt.(*tree.UserMiscOptionAccountLock); ok {
 			status = userStatusLock
 		}
-	}
-
-	err = bh.Exec(ctx, "begin;")
-	if err != nil {
-		goto handleFailed
 	}
 
 	for _, user := range cu.Users {
