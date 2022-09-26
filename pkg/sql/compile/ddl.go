@@ -28,18 +28,19 @@ import (
 
 func (s *Scope) CreateDatabase(c *Compile) error {
 	dbName := s.Plan.GetDdl().GetCreateDatabase().GetDatabase()
-	if _, err := c.e.Database(c.ctx, dbName, c.proc.TxnOperator); err == nil {
-		if s.Plan.GetDdl().GetCreateDatabase().GetIfNotExists() {
-			return nil
-		}
-		return moerr.NewDBAlreadyExists(dbName)
-	}
+	//if _, err := c.e.Database(c.ctx, dbName, c.proc.TxnOperator); err == nil {
+	//	if s.Plan.GetDdl().GetCreateDatabase().GetIfNotExists() {
+	//		return nil
+	//	}
+	//	return moerr.NewDBAlreadyExists(dbName)
+	//}
 	err := c.e.Create(context.WithValue(c.ctx, defines.SqlKey{}, c.sql),
 		dbName, c.proc.TxnOperator)
-	if err != nil {
-		return err
-	}
-	return colexec.CreateAutoIncrTable(c.e, c.ctx, c.proc, dbName)
+	//if err != nil {
+	//	return err
+	//}
+	//return colexec.CreateAutoIncrTable(c.e, c.ctx, c.proc, dbName)
+	return err
 }
 
 func (s *Scope) DropDatabase(c *Compile) error {
