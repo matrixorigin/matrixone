@@ -57,6 +57,14 @@ func Prepare(proc *process.Process, arg any) error {
 		param.End = true
 		return err
 	}
+	if param.extern.Format != tree.CSV && param.extern.Format != tree.JSONLINE {
+		return moerr.NewNotSupported("the format '%s' is not supported now", param.extern.Format)
+	}
+	if param.extern.Format == tree.JSONLINE {
+		if param.extern.JsonData != tree.OBJECT && param.extern.JsonData != tree.ARRAY {
+			return moerr.NewNotSupported("the jsonline format '%s' is not supported now", param.extern.JsonData)
+		}
+	}
 	param.extern.FileService = proc.FileService
 	param.IgnoreLineTag = int(param.extern.Tail.IgnoredLines)
 	param.IgnoreLine = param.IgnoreLineTag
@@ -254,8 +262,8 @@ func GetBatchData(param *ExternalParam, plh *ParseLineHandler, proc *process.Pro
 	deleteEnclosed(param, plh)
 	for rowIdx := 0; rowIdx < plh.batchSize; rowIdx++ {
 		Line = plh.simdCsvLineArray[rowIdx]
-		if param.extern.Tail.FromJsonLine {
-			Line, err = transJson2Lines(Line[0], param.Attrs)
+		if param.extern.Format == tree.JSONLINE {
+			Line, err = transJson2Lines(Line[0], param.Attrs, param.extern.JsonData)
 			if err != nil {
 				return nil, err
 			}
@@ -302,7 +310,7 @@ func GetSimdcsvReader(param *ExternalParam) (*ParseLineHandler, error) {
 	if param.extern.Tail.Fields == nil {
 		param.extern.Tail.Fields = &tree.Fields{Terminated: ","}
 	}
-	if param.extern.Tail.FromJsonLine {
+	if param.extern.Format == tree.JSONLINE {
 		param.extern.Tail.Fields.Terminated = "\t"
 	}
 	plh.simdCsvReader = simdcsv.NewReaderWithOptions(param.reader,
@@ -369,7 +377,7 @@ func getData(bat *batch.Batch, Line []string, rowIdx int, param *ExternalParam) 
 		isNullOrEmpty = isNullOrEmpty || (getNullFlag(param, param.Attrs[colIdx], field))
 		switch id {
 		case types.T_bool:
-			cols := vec.Col.([]bool)
+			cols := vector.MustTCols[bool](vec)
 			if isNullOrEmpty {
 				nulls.Add(vec.Nsp, uint64(rowIdx))
 			} else {
@@ -382,7 +390,8 @@ func getData(bat *batch.Batch, Line []string, rowIdx int, param *ExternalParam) 
 				}
 			}
 		case types.T_int8:
-			cols := vec.Col.([]int8)
+			//cols := vec.Col.([]int8)
+			cols := vector.MustTCols[int8](vec)
 			if isNullOrEmpty {
 				nulls.Add(vec.Nsp, uint64(rowIdx))
 			} else {
@@ -403,7 +412,8 @@ func getData(bat *batch.Batch, Line []string, rowIdx int, param *ExternalParam) 
 				}
 			}
 		case types.T_int16:
-			cols := vec.Col.([]int16)
+			//cols := vec.Col.([]int16)
+			cols := vector.MustTCols[int16](vec)
 			if isNullOrEmpty {
 				nulls.Add(vec.Nsp, uint64(rowIdx))
 			} else {
@@ -424,7 +434,8 @@ func getData(bat *batch.Batch, Line []string, rowIdx int, param *ExternalParam) 
 				}
 			}
 		case types.T_int32:
-			cols := vec.Col.([]int32)
+			//cols := vec.Col.([]int32)
+			cols := vector.MustTCols[int32](vec)
 			if isNullOrEmpty {
 				nulls.Add(vec.Nsp, uint64(rowIdx))
 			} else {
@@ -445,7 +456,8 @@ func getData(bat *batch.Batch, Line []string, rowIdx int, param *ExternalParam) 
 				}
 			}
 		case types.T_int64:
-			cols := vec.Col.([]int64)
+			//cols := vec.Col.([]int64)
+			cols := vector.MustTCols[int64](vec)
 			if isNullOrEmpty {
 				nulls.Add(vec.Nsp, uint64(rowIdx))
 			} else {
@@ -466,7 +478,8 @@ func getData(bat *batch.Batch, Line []string, rowIdx int, param *ExternalParam) 
 				}
 			}
 		case types.T_uint8:
-			cols := vec.Col.([]uint8)
+			//cols := vec.Col.([]uint8)
+			cols := vector.MustTCols[uint8](vec)
 			if isNullOrEmpty {
 				nulls.Add(vec.Nsp, uint64(rowIdx))
 			} else {
@@ -487,7 +500,8 @@ func getData(bat *batch.Batch, Line []string, rowIdx int, param *ExternalParam) 
 				}
 			}
 		case types.T_uint16:
-			cols := vec.Col.([]uint16)
+			//cols := vec.Col.([]uint16)
+			cols := vector.MustTCols[uint16](vec)
 			if isNullOrEmpty {
 				nulls.Add(vec.Nsp, uint64(rowIdx))
 			} else {
@@ -508,7 +522,8 @@ func getData(bat *batch.Batch, Line []string, rowIdx int, param *ExternalParam) 
 				}
 			}
 		case types.T_uint32:
-			cols := vec.Col.([]uint32)
+			//cols := vec.Col.([]uint32)
+			cols := vector.MustTCols[uint32](vec)
 			if isNullOrEmpty {
 				nulls.Add(vec.Nsp, uint64(rowIdx))
 			} else {
@@ -529,7 +544,8 @@ func getData(bat *batch.Batch, Line []string, rowIdx int, param *ExternalParam) 
 				}
 			}
 		case types.T_uint64:
-			cols := vec.Col.([]uint64)
+			//cols := vec.Col.([]uint64)
+			cols := vector.MustTCols[uint64](vec)
 			if isNullOrEmpty {
 				nulls.Add(vec.Nsp, uint64(rowIdx))
 			} else {
@@ -550,7 +566,8 @@ func getData(bat *batch.Batch, Line []string, rowIdx int, param *ExternalParam) 
 				}
 			}
 		case types.T_float32:
-			cols := vec.Col.([]float32)
+			//cols := vec.Col.([]float32)
+			cols := vector.MustTCols[float32](vec)
 			if isNullOrEmpty {
 				nulls.Add(vec.Nsp, uint64(rowIdx))
 			} else {
@@ -562,7 +579,8 @@ func getData(bat *batch.Batch, Line []string, rowIdx int, param *ExternalParam) 
 				cols[rowIdx] = float32(d)
 			}
 		case types.T_float64:
-			cols := vec.Col.([]float64)
+			//cols := vec.Col.([]float64)
+			cols := vector.MustTCols[float64](vec)
 			if isNullOrEmpty {
 				nulls.Add(vec.Nsp, uint64(rowIdx))
 			} else {
@@ -597,7 +615,8 @@ func getData(bat *batch.Batch, Line []string, rowIdx int, param *ExternalParam) 
 				vector.SetBytesAt(vec, rowIdx, jsonBytes, nil)
 			}
 		case types.T_date:
-			cols := vec.Col.([]types.Date)
+			//cols := vec.Col.([]types.Date)
+			cols := vector.MustTCols[types.Date](vec)
 			if isNullOrEmpty {
 				nulls.Add(vec.Nsp, uint64(rowIdx))
 			} else {
@@ -609,7 +628,8 @@ func getData(bat *batch.Batch, Line []string, rowIdx int, param *ExternalParam) 
 				cols[rowIdx] = d
 			}
 		case types.T_datetime:
-			cols := vec.Col.([]types.Datetime)
+			//cols := vec.Col.([]types.Datetime)
+			cols := vector.MustTCols[types.Datetime](vec)
 			if isNullOrEmpty {
 				nulls.Add(vec.Nsp, uint64(rowIdx))
 			} else {
@@ -621,7 +641,8 @@ func getData(bat *batch.Batch, Line []string, rowIdx int, param *ExternalParam) 
 				cols[rowIdx] = d
 			}
 		case types.T_decimal64:
-			cols := vec.Col.([]types.Decimal64)
+			//cols := vec.Col.([]types.Decimal64)
+			cols := vector.MustTCols[types.Decimal64](vec)
 			if isNullOrEmpty {
 				nulls.Add(vec.Nsp, uint64(rowIdx))
 			} else {
@@ -636,7 +657,8 @@ func getData(bat *batch.Batch, Line []string, rowIdx int, param *ExternalParam) 
 				cols[rowIdx] = d
 			}
 		case types.T_decimal128:
-			cols := vec.Col.([]types.Decimal128)
+			//cols := vec.Col.([]types.Decimal128)
+			cols := vector.MustTCols[types.Decimal128](vec)
 			if isNullOrEmpty {
 				nulls.Add(vec.Nsp, uint64(rowIdx))
 			} else {
@@ -651,7 +673,8 @@ func getData(bat *batch.Batch, Line []string, rowIdx int, param *ExternalParam) 
 				cols[rowIdx] = d
 			}
 		case types.T_timestamp:
-			cols := vec.Col.([]types.Timestamp)
+			//cols := vec.Col.([]types.Timestamp)
+			cols := vector.MustTCols[types.Timestamp](vec)
 			if isNullOrEmpty {
 				nulls.Add(vec.Nsp, uint64(rowIdx))
 			} else {
@@ -669,7 +692,18 @@ func getData(bat *batch.Batch, Line []string, rowIdx int, param *ExternalParam) 
 	return nil
 }
 
-func transJson2Lines(str string, attrs []string) ([]string, error) {
+func transJson2Lines(str string, attrs []string, jsonData string) ([]string, error) {
+	switch jsonData {
+	case tree.OBJECT:
+		return transJsonObject2Lines(str, attrs)
+	case tree.ARRAY:
+		return transJsonArray2Lines(str, attrs)
+	default:
+		return nil, moerr.NewNotSupported("the jsonline format '%s' is not support now", jsonData)
+	}
+}
+
+func transJsonObject2Lines(str string, attrs []string) ([]string, error) {
 	var (
 		err error
 		res = make([]string, 0, len(attrs))
@@ -689,6 +723,26 @@ func transJson2Lines(str string, attrs []string) ([]string, error) {
 		} else {
 			return nil, moerr.NewInvalidInput("the attr %s is not in json", attr)
 		}
+	}
+	return res, nil
+}
+
+func transJsonArray2Lines(str string, attrs []string) ([]string, error) {
+	var (
+		err error
+		res = make([]string, 0, len(attrs))
+	)
+	var jsonArray []interface{}
+	err = json.Unmarshal([]byte(str), &jsonArray)
+	if err != nil {
+		logutil.Errorf("json unmarshal err:%v", err)
+		return nil, err
+	}
+	if len(jsonArray) < len(attrs) {
+		return nil, errColumnCntLarger
+	}
+	for idx := range attrs {
+		res = append(res, fmt.Sprintf("%v", jsonArray[idx]))
 	}
 	return res, nil
 }

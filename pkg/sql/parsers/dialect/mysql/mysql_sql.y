@@ -347,7 +347,6 @@ import (
 %type <exportParm> export_data_param_opt
 %type <loadParam> load_param_opt load_param_opt_2
 %type <tailParam> tail_param_opt
-%type <boolVal> from_jsonline_opt
 
 %type <select> select_stmt select_no_parens
 %type <selectStatement> simple_select select_with_parens simple_select_clause
@@ -4029,6 +4028,7 @@ load_param_opt:
         $$ = &tree.ExternParam{
             Filepath: $2,
             CompressType: tree.AUTO,
+            Format: tree.CSV,
         }
     }
 |   INFILE '{' STRING '=' STRING '}'
@@ -4040,6 +4040,7 @@ load_param_opt:
         $$ = &tree.ExternParam{
             Filepath: $5,
             CompressType: tree.AUTO,
+            Format: tree.CSV,
         }
     }
 |   INFILE '{' STRING '=' STRING ',' STRING '=' STRING '}'
@@ -4051,11 +4052,38 @@ load_param_opt:
         $$ = &tree.ExternParam{
             Filepath: $5,
             CompressType: $9,
+            Format: tree.CSV,
         }
+    }
+|   INFILE '{' STRING '=' STRING ',' STRING '=' STRING ',' STRING '=' STRING '}'
+    {
+	if strings.ToLower($3) != "filepath" || strings.ToLower($7) != "format" || strings.ToLower($11) != "jsondata" {
+		yylex.Error(fmt.Sprintf("can not recognize the '%s' or '%s' or '%s'", $3, $7, $11))
+		return 1
+	    }
+	$$ = &tree.ExternParam{
+	    Filepath: $5,
+	    CompressType: tree.AUTO,
+	    Format: $9,
+	    JsonData: $13,
+	}
+    }
+|   INFILE '{' STRING '=' STRING ',' STRING '=' STRING ',' STRING '=' STRING ',' STRING '=' STRING '}'
+    {
+    	if strings.ToLower($3) != "filepath" || strings.ToLower($7) != "compression" || strings.ToLower($11) != "format" || strings.ToLower($15) != "jsondata" {
+    		yylex.Error(fmt.Sprintf("can not recognize the '%s' or '%s' or '%s' or '%s'", $3, $7, $11, $15))
+    		return 1
+    	    }
+    	$$ = &tree.ExternParam{
+    	    Filepath: $5,
+    	    CompressType: $9,
+    	    Format: $13,
+    	    JsonData: $17,
+    	}
     }
 
 tail_param_opt:
-    load_fields load_lines ignore_lines columns_or_variable_list_opt load_set_spec_opt from_jsonline_opt
+    load_fields load_lines ignore_lines columns_or_variable_list_opt load_set_spec_opt
     {
         $$ = &tree.TailParameter{
             Fields: $1,
@@ -4063,17 +4091,7 @@ tail_param_opt:
             IgnoredLines: uint64($3),
             ColumnList: $4,
             Assignments: $5,
-            FromJsonLine: $6,
         }
-    }
-
-from_jsonline_opt:
-    {
-	$$ = false
-    }
-|   FROM_JSONLINE
-    {
-    	$$ = true
     }
 
 temporary_opt:
