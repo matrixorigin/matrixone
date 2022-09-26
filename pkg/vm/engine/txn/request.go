@@ -34,7 +34,7 @@ func DoTxnRequest[
 	e engine.Engine,
 	// TxnOperator.Read or TxnOperator.Write
 	reqFunc func(context.Context, []txn.TxnRequest) (*rpc.SendResult, error),
-	shardsFunc func() ([]Shard, error),
+	shardsFunc shardsFunc,
 	op uint32,
 	req Req,
 ) (
@@ -72,7 +72,7 @@ func DoTxnRequest[
 		})
 	}
 
-	ctx, cancel := context.WithTimeout(ctx, time.Minute) //TODO get from config or argument
+	ctx, cancel := context.WithTimeout(ctx, time.Minute*10)
 	defer cancel()
 
 	result, err := reqFunc(ctx, requests)
@@ -82,7 +82,7 @@ func DoTxnRequest[
 	for _, resp := range result.Responses {
 		if resp.TxnError != nil {
 			//TODO no way to construct moerr.Error by code and message now
-			err = moerr.NewInternalError("code %v, message %v", resp.TxnError.Code, resp.TxnError.Message)
+			err = moerr.NewInternalError(resp.TxnError.Message)
 			return
 		}
 	}

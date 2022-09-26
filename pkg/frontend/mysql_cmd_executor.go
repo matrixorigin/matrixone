@@ -848,7 +848,7 @@ func (mce *MysqlCmdExecutor) handleSelectVariables(ve *tree.VarExpr) error {
 /*
 handle Load DataSource statement
 */
-func (mce *MysqlCmdExecutor) handleLoadData(requestCtx context.Context, load *tree.Load) error {
+func (mce *MysqlCmdExecutor) handleLoadData(requestCtx context.Context, load *tree.Import) error {
 	var err error
 	ses := mce.GetSession()
 	proto := ses.protocol
@@ -861,7 +861,7 @@ func (mce *MysqlCmdExecutor) handleLoadData(requestCtx context.Context, load *tr
 		return moerr.NewInternalError("LOCAL is unsupported now")
 	}
 	if load.Param.Tail.Fields == nil || len(load.Param.Tail.Fields.Terminated) == 0 {
-		return moerr.NewInternalError("load need FIELDS TERMINATED BY ")
+		load.Param.Tail.Fields = &tree.Fields{Terminated: ","}
 	}
 
 	if load.Param.Tail.Fields != nil && load.Param.Tail.Fields.EscapedBy != 0 {
@@ -1755,6 +1755,25 @@ func incStatementCounter(tenant string, stmt tree.Statement) {
 	}
 }
 
+func incTransactionErrorsCounter(tenant string, t metric.SQLType) {
+	metric.TransactionErrorsCounter(tenant, t).Inc()
+}
+
+func incStatementErrorsCounter(tenant string, stmt tree.Statement) {
+	switch stmt.(type) {
+	case *tree.Select:
+		metric.StatementErrorsCounter(tenant, metric.SQLTypeSelect).Inc()
+	case *tree.Insert:
+		metric.StatementErrorsCounter(tenant, metric.SQLTypeInsert).Inc()
+	case *tree.Delete:
+		metric.StatementErrorsCounter(tenant, metric.SQLTypeDelete).Inc()
+	case *tree.Update:
+		metric.StatementErrorsCounter(tenant, metric.SQLTypeUpdate).Inc()
+	default:
+		metric.StatementErrorsCounter(tenant, metric.SQLTypeOther).Inc()
+	}
+}
+
 func (mce *MysqlCmdExecutor) beforeRun(stmt tree.Statement) {
 	// incStatementCounter(sess.GetTenantInfo().Tenant, stmt, sess.IsInternal)
 	incStatementCounter("0", stmt)
@@ -1897,11 +1916,13 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		case *tree.CommitTransaction:
 			err = ses.TxnCommit()
 			if err != nil {
+				incTransactionErrorsCounter(ses.GetTenantInfo().GetTenant(), metric.SQLTypeCommit)
 				goto handleFailed
 			}
 		case *tree.RollbackTransaction:
 			err = ses.TxnRollback()
 			if err != nil {
+				incTransactionErrorsCounter(ses.GetTenantInfo().GetTenant(), metric.SQLTypeRollback)
 				goto handleFailed
 			}
 		}
@@ -1938,13 +1959,13 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			if string(st.Name) == ses.GetDatabaseName() {
 				ses.SetUserName("")
 			}
-		/*case *tree.Load:
-		fromLoadData = true
-		selfHandle = true
-		err = mce.handleLoadData(requestCtx, st)
-		if err != nil {
-			goto handleFailed
-		}*/
+		case *tree.Import:
+			fromLoadData = true
+			selfHandle = true
+			err = mce.handleLoadData(requestCtx, st)
+			if err != nil {
+				goto handleFailed
+			}
 		case *tree.PrepareStmt:
 			selfHandle = true
 			prepareStmt, err = mce.handlePrepareStmt(st)
@@ -2340,6 +2361,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		if !fromLoadData {
 			txnErr = ses.TxnCommitSingleStatement(stmt)
 			if txnErr != nil {
+				incTransactionErrorsCounter(ses.GetTenantInfo().GetTenant(), metric.SQLTypeCommit)
 				trace.EndStatement(requestCtx, txnErr)
 				logStatementStatus(requestCtx, ses, stmt, fail, txnErr)
 				return txnErr
@@ -2384,11 +2406,13 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		logStatementStatus(requestCtx, ses, stmt, success, nil)
 		goto handleNext
 	handleFailed:
+		incStatementErrorsCounter(ses.GetTenantInfo().GetTenant(), stmt)
 		trace.EndStatement(requestCtx, err)
 		logutil.Error(err.Error())
 		if !fromLoadData {
 			txnErr = ses.TxnRollbackSingleStatement(stmt)
 			if txnErr != nil {
+				incTransactionErrorsCounter(ses.GetTenantInfo().GetTenant(), metric.SQLTypeRollback)
 				logStatementStatus(requestCtx, ses, stmt, fail, txnErr)
 				return txnErr
 			}

@@ -81,14 +81,6 @@ func main() {
 	waitSignalToStop(stopper)
 }
 
-var setupOnce sync.Once
-
-func setupLogger(cfg *Config) {
-	setupOnce.Do(func() {
-		logutil.SetupMOLogger(&cfg.Log)
-	})
-}
-
 func waitSignalToStop(stopper *stopper.Stopper) {
 	sigchan := make(chan os.Signal, 1)
 	signal.Notify(sigchan, syscall.SIGTERM, syscall.SIGINT)
@@ -104,8 +96,7 @@ func startService(cfg *Config, stopper *stopper.Stopper) error {
 		return err
 	}
 
-	// FIXME: Initialize the logger with the service's own logging configuration
-	setupLogger(cfg)
+	setupGlobalComponents(cfg, stopper)
 
 	fs, err := cfg.createFileService(localFileServiceName)
 	if err != nil {
@@ -221,6 +212,7 @@ func initTraceMetric(ctx context.Context, cfg *Config, stopper *stopper.Stopper,
 	var writerFactory export.FSWriterFactory
 	var err error
 	var UUID string
+	var initWG sync.WaitGroup
 	SV := cfg.getObservabilityConfig()
 
 	ServerType := strings.ToUpper(cfg.ServiceType)
@@ -247,6 +239,7 @@ func initTraceMetric(ctx context.Context, cfg *Config, stopper *stopper.Stopper,
 		writerFactory = export.GetFSWriterFactory(fs, UUID, ServerType)
 	}
 	if !SV.DisableTrace {
+		initWG.Add(1)
 		stopper.RunNamedTask("trace", func(ctx context.Context) {
 			if ctx, err = trace.Init(ctx,
 				trace.WithMOVersion(SV.MoVersion),
@@ -259,6 +252,7 @@ func initTraceMetric(ctx context.Context, cfg *Config, stopper *stopper.Stopper,
 			); err != nil {
 				panic(err)
 			}
+			initWG.Done()
 			<-ctx.Done()
 			// flush trace/log/error framework
 			if err = trace.Shutdown(trace.DefaultContext()); err != nil {
@@ -266,6 +260,7 @@ func initTraceMetric(ctx context.Context, cfg *Config, stopper *stopper.Stopper,
 				panic(err)
 			}
 		})
+		initWG.Wait()
 	}
 	if !SV.DisableMetric {
 		metric.InitMetric(ctx, nil, &SV, UUID, ServerType, metric.WithWriterFactory(writerFactory))

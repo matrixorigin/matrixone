@@ -281,6 +281,7 @@ func DeepCopyInsertValues(insert *plan.InsertValues) *plan.InsertValues {
 		ExplicitCols: make([]*plan.ColDef, len(insert.ExplicitCols)),
 		OtherCols:    make([]*plan.ColDef, len(insert.OtherCols)),
 		Columns:      make([]*plan.Column, len(insert.Columns)),
+		OrderAttrs:   make([]string, len(insert.OrderAttrs)),
 	}
 
 	for idx, col := range insert.ExplicitCols {

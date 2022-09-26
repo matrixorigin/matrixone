@@ -23,6 +23,8 @@ var sysTenantID = prom.Labels{constTenantKey: "sys"}
 
 var initCollectors = []Collector{
 	StatementCounterFactory,
+	TransactionErrorsFactory,
+	StatementErrorsFactory,
 	processCollector,
 	hardwareStatsCollector,
 }

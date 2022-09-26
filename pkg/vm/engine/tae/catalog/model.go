@@ -37,6 +37,9 @@ const (
 	PhyAddrColumnComment = "Physical address"
 	SortKeyNamePrefx     = "_SORT_"
 
+	AttrCommitTs = "commit_ts"
+	AttrAborted  = "aborted"
+
 	TenantSysID = uint32(0)
 
 	SystemDBID               = uint64(1)
@@ -87,12 +90,12 @@ const (
 	SystemRelAttr_Persistence = "relpersistence"
 	SystemRelAttr_Kind        = "relkind"
 	SystemRelAttr_Comment     = "rel_comment"
-	SystemRelAttr_Partition   = "rel_partition"
 	SystemRelAttr_CreateSQL   = "rel_createsql"
-	SystemRelAttr_Owner       = "owner"
-	SystemRelAttr_Creator     = "creator"
 	SystemRelAttr_CreateAt    = "created_time"
+	SystemRelAttr_Creator     = "creator"
+	SystemRelAttr_Owner       = "owner"
 	SystemRelAttr_AccID       = "account_id"
+	SystemRelAttr_Partition   = "partitioned"
 
 	SystemColAttr_UniqName        = "att_uniq_name"
 	SystemColAttr_AccID           = "account_id"
@@ -142,6 +145,7 @@ func init() {
 	ttimestamp := types.T_timestamp.ToType()
 	tvarchar := types.T_varchar.ToType()
 	tsinglechar := types.T_char.ToType()
+	ttext := types.T_blob.ToType()
 
 	/*
 
@@ -207,22 +211,22 @@ func init() {
 	if err = SystemTableSchema.AppendCol(SystemRelAttr_Comment, tvarchar); err != nil {
 		panic(err)
 	}
-	if err = SystemTableSchema.AppendCol(SystemRelAttr_Partition, tvarchar); err != nil {
-		panic(err)
-	}
 	if err = SystemTableSchema.AppendCol(SystemRelAttr_CreateSQL, tvarchar); err != nil {
-		panic(err)
-	}
-	if err = SystemTableSchema.AppendCol(SystemRelAttr_Owner, tu32); err != nil {
-		panic(err)
-	}
-	if err = SystemTableSchema.AppendCol(SystemRelAttr_Creator, tu32); err != nil {
 		panic(err)
 	}
 	if err = SystemTableSchema.AppendCol(SystemRelAttr_CreateAt, ttimestamp); err != nil {
 		panic(err)
 	}
+	if err = SystemTableSchema.AppendCol(SystemRelAttr_Creator, tu32); err != nil {
+		panic(err)
+	}
+	if err = SystemTableSchema.AppendCol(SystemRelAttr_Owner, tu32); err != nil {
+		panic(err)
+	}
 	if err = SystemTableSchema.AppendCol(SystemRelAttr_AccID, tu32); err != nil {
+		panic(err)
+	}
+	if err = SystemTableSchema.AppendCol(SystemRelAttr_Partition, ttext); err != nil {
 		panic(err)
 	}
 	if err = SystemTableSchema.Finalize(true); err != nil {

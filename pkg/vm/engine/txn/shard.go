@@ -28,6 +28,8 @@ import (
 
 type Shard = metadata.DNShard
 
+type shardsFunc = func() ([]Shard, error)
+
 type getDefsFunc = func(context.Context) ([]engine.TableDef, error)
 
 func NewDefaultShardPolicy(heap *mheap.Mheap) ShardPolicy {
@@ -60,13 +62,6 @@ type ShardPolicy interface {
 		sharded []*ShardedBatch,
 		err error,
 	)
-
-	Stores(
-		stores []logservicepb.DNStore,
-	) (
-		shards []Shard,
-		err error,
-	)
 }
 
 type ShardedVector struct {
@@ -79,20 +74,41 @@ type ShardedBatch struct {
 	Batch *batch.Batch
 }
 
-func (e *Engine) allNodesShards() ([]Shard, error) {
+func (e *Engine) allShards() (shards []Shard, err error) {
 	clusterDetails, err := e.getClusterDetails()
 	if err != nil {
 		return nil, err
 	}
-	return e.shardPolicy.Stores(clusterDetails.DNStores)
+	for _, store := range clusterDetails.DNStores {
+		info := store.Shards[0]
+		shards = append(shards, Shard{
+			DNShardRecord: metadata.DNShardRecord{
+				ShardID: info.ShardID,
+			},
+			ReplicaID: info.ReplicaID,
+			Address:   store.ServiceAddress,
+		})
+	}
+	return
 }
 
-func (e *Engine) firstNodeShard() ([]Shard, error) {
+func (e *Engine) anyShard() (shards []Shard, err error) {
 	clusterDetails, err := e.getClusterDetails()
 	if err != nil {
 		return nil, err
 	}
-	return e.shardPolicy.Stores(clusterDetails.DNStores[:1])
+	for _, store := range clusterDetails.DNStores {
+		info := store.Shards[0]
+		shards = append(shards, Shard{
+			DNShardRecord: metadata.DNShardRecord{
+				ShardID: info.ShardID,
+			},
+			ReplicaID: info.ReplicaID,
+			Address:   store.ServiceAddress,
+		})
+		return
+	}
+	return
 }
 
 func thisShard(shard Shard) func() ([]Shard, error) {
