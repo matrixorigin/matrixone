@@ -22,7 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
-// TODO: add decimal128 distinct test
+// TODO: add decimal128 distinct
 func TestAvg(t *testing.T) {
 	int8Typ := types.New(types.T_int8, 0, 0, 0)
 	decimal64Typ := types.New(types.T_decimal64, 0, 0, 0)
@@ -92,6 +92,22 @@ func TestAvg(t *testing.T) {
 			mergeExpect: []float64{4.5},
 
 			testMarshal: true,
+		},
+		// decimal128 distinct avg test
+		{
+			op:         agg.AggregateAvg,
+			isDistinct: true,
+			inputTyp:   decimal128Typ,
+
+			input:    []int64{9, 8, 7, 6, 5, 4, 3, 2, 1, 0},
+			inputNsp: nil,
+			expected: []float64{4.5},
+
+			mergeInput:  []int64{0, 1, 2, 3, 4, 5, 6, 7, 8, 9},
+			mergeNsp:    nil,
+			mergeExpect: []float64{4.5},
+
+			testMarshal: false,
 		},
 	}
 

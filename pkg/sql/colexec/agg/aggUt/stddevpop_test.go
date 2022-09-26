@@ -76,6 +76,21 @@ func TestStddevpop(t *testing.T) {
 
 			testMarshal: true,
 		},
+		{
+			op:         agg.AggregateStdDevPop,
+			isDistinct: true,
+			inputTyp:   decimal64Typ,
+
+			input:    []int64{9, 8, 7, 6, 5, 4, 3, 2, 1, 0},
+			inputNsp: nil,
+			expected: []float64{2.8722813232690143},
+
+			mergeInput:  []int64{0, 1, 2, 3, 4, 5, 6, 7, 8, 9},
+			mergeNsp:    nil,
+			mergeExpect: []float64{2.8722813232690143},
+
+			testMarshal: false,
+		},
 		// decimal128 StdDevPop test
 		{
 			op:         agg.AggregateStdDevPop,
@@ -91,6 +106,21 @@ func TestStddevpop(t *testing.T) {
 			mergeExpect: []float64{2.8722813232690143},
 
 			testMarshal: true,
+		},
+		{
+			op:         agg.AggregateStdDevPop,
+			isDistinct: true,
+			inputTyp:   decimal128Typ,
+
+			input:    []int64{9, 8, 7, 6, 5, 4, 3, 2, 1, 0},
+			inputNsp: nil,
+			expected: []float64{2.8722813232690143},
+
+			mergeInput:  []int64{0, 1, 2, 3, 4, 5, 6, 7, 8, 9},
+			mergeNsp:    nil,
+			mergeExpect: []float64{2.8722813232690143},
+
+			testMarshal: false,
 		},
 	}
 
