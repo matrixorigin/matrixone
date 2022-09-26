@@ -178,7 +178,7 @@ import (
 %token LEX_ERROR
 %nonassoc EMPTY
 %left <str> UNION EXCEPT INTERSECT MINUS
-%token <str> SELECT STREAM INSERT UPDATE DELETE FROM WHERE GROUP HAVING ORDER BY LIMIT OFFSET FOR CONNECT MANAGE GRANTS OWNERSHIP
+%token <str> SELECT STREAM INSERT UPDATE DELETE FROM WHERE GROUP HAVING ORDER BY LIMIT OFFSET FOR CONNECT MANAGE GRANTS OWNERSHIP REFERENCE
 %nonassoc LOWER_THAN_SET
 %nonassoc <str> SET
 %token <str> ALL DISTINCT DISTINCTROW AS EXISTS ASC DESC INTO DUPLICATE DEFAULT LOCK KEYS
@@ -281,7 +281,7 @@ import (
 %token <str> FORMAT VERBOSE CONNECTION
 
 // Load
-%token <str> LOAD INFILE TERMINATED OPTIONALLY ENCLOSED ESCAPED STARTING LINES ROWS
+%token <str> LOAD INFILE TERMINATED OPTIONALLY ENCLOSED ESCAPED STARTING LINES ROWS IMPORT
 
 // Supported SHOW tokens
 %token <str> DATABASES TABLES EXTENDED FULL PROCESSLIST FIELDS COLUMNS OPEN ERRORS WARNINGS INDEXES SCHEMAS
@@ -341,7 +341,7 @@ import (
 %type <statement> explain_stmt explainable_stmt
 %type <statement> set_stmt set_variable_stmt set_password_stmt set_role_stmt set_default_role_stmt
 %type <statement> revoke_stmt grant_stmt
-%type <statement> load_data_stmt
+%type <statement> load_data_stmt import_data_stmt
 %type <statement> analyze_stmt
 %type <statement> prepare_stmt prepareable_stmt deallocate_stmt execute_stmt
 %type <exportParm> export_data_param_opt
@@ -572,6 +572,7 @@ stmt:
 |   revoke_stmt
 |   grant_stmt
 |   load_data_stmt
+|   import_data_stmt
 |   select_stmt
     {
         $$ = $1
@@ -579,6 +580,18 @@ stmt:
 |   /* EMPTY */
     {
         $$ = tree.Statement(nil)
+    }
+
+import_data_stmt:
+    IMPORT DATA local_opt load_param_opt duplicate_opt INTO TABLE table_name tail_param_opt
+    {
+        $$ = &tree.Import{
+            Local: $3,
+            Param: $4,
+            DuplicateHandling: $5,
+            Table: $8,
+        }
+        $$.(*tree.Import).Param.Tail = $9
     }
 
 load_data_stmt:
@@ -968,7 +981,7 @@ grant_option_opt:
 // |	WITH MAX_USER_CONNECTIONS INTEGRAL
 
 revoke_stmt:
-    REVOKE exists_opt  priv_list ON object_type priv_level FROM user_spec_list
+    REVOKE exists_opt  priv_list ON object_type priv_level FROM role_spec_list
     {
         $$ = &tree.Revoke{
             Typ: tree.RevokeTypePrivilege,
@@ -977,7 +990,7 @@ revoke_stmt:
 		    Privileges: $3,
 		    ObjType: $5,
 		    Level: $6,
-		    Users: $8,
+		    Roles: $8,
             },
         }
     }
@@ -6995,6 +7008,7 @@ reserved_keyword:
 |   LOCALTIMESTAMP
 |   LOCK
 |   LOAD
+|   IMPORT
 |   MATCH
 |   MAXVALUE
 |   MOD

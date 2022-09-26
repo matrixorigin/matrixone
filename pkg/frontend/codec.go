@@ -15,6 +15,7 @@
 package frontend
 
 import (
+	"fmt"
 	"io"
 
 	"github.com/fagongzi/goetty/v2/buf"
@@ -45,6 +46,10 @@ func (c *sqlCodec) Decode(in *buf.ByteBuf) (interface{}, bool, error) {
 
 	header := in.PeekN(0, PacketHeaderLength)
 	length := int32(uint32(header[0]) | uint32(header[1])<<8 | uint32(header[2])<<16)
+	if length == 0 {
+		return nil, false, moerr.NewInvalidInput(fmt.Sprintf("invalid length %d", length))
+	}
+
 	sequenceID := int8(header[3])
 
 	if readable < int(length)+PacketHeaderLength {
