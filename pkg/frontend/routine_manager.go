@@ -106,6 +106,16 @@ func (rm *RoutineManager) CountConn(account string, delta int32) {
 	}
 }
 
+func (rm *RoutineManager) GetConnCounters() map[string]int32 {
+	rm.rwlock.RLock()
+	defer rm.rwlock.Unlock()
+	m := make(map[string]int32, len(rm.connCount))
+	for k, v := range rm.connCount {
+		m[k] = *v
+	}
+	return m
+}
+
 /*
 KILL statement
 */

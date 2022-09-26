@@ -16,6 +16,7 @@ package metric
 
 import (
 	"sync"
+	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	prom "github.com/prometheus/client_golang/prometheus"
@@ -125,8 +126,59 @@ func (c *batchStatsCollector) Collect(ch chan<- prom.Metric) {
 	c.collected = true
 }
 
+// MultiVal handle multi instance value
+type MultiVal struct {
+	val float64
+	lvs []string
+}
+
+type rawMetricCollector interface {
+	DoCollect() []MultiVal
+}
+
 type batchMetricVec struct {
-	*rawHist
+	rawMetricCollector
+	*RawHistVec
+}
+
+func NewBatchMetricVec(c rawMetricCollector, opts prom.HistogramOpts, labelNames []string) *batchMetricVec {
+	return &batchMetricVec{
+		rawMetricCollector: c,
+		RawHistVec:         NewRawHistVec(opts, labelNames),
+	}
+}
+
+func (v *batchMetricVec) Collect(ch chan<- prom.Metric) {
+	// generate data
+	if vals := v.rawMetricCollector.DoCollect(); vals != nil {
+		for _, val := range vals {
+			v.RawHistVec.WithLabelValues(val.lvs...).Observe(val.val)
+		}
+	}
+	// export
+	v.inner.Collect(ch)
+}
+
+var _ rawMetricCollector = (*procConnectionCollector)(nil)
+
+type procConnectionCollector struct{}
+
+func (p *procConnectionCollector) DoCollect() (result []MultiVal) {
+	if gConnectionCollector.Load() == nil {
+		return nil
+	} else {
+		counters := gConnectionCollector.Load().(ConnectionCounter).GetConnCounters()
+		for account, count := range counters {
+			result = append(result, MultiVal{val: float64(count), lvs: []string{account}})
+		}
+		return
+	}
+}
+
+var gConnectionCollector atomic.Value
+
+type ConnectionCounter interface {
+	GetConnCounters() map[string]int32
 }
 
 /*

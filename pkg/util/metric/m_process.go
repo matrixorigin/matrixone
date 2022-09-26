@@ -142,28 +142,13 @@ func (c procFdsLimit) Metric(s *statCaches) (prom.Metric, error) {
 	}
 }
 
+func SetConnectionCounter(counter ConnectionCounter) {
+	gConnectionCollector.Store(counter)
+}
+
 // this percent may exceeds 100% on multicore platform
-type procConnections struct{}
-
-func (c procConnections) Desc() *prom.Desc {
-	return prom.NewDesc(
-		"process_connections",
-		"Number of tcp Connections",
-		nil, sysTenantID,
-	)
-}
-
-func (c procConnections) Metric(s *statCaches) (prom.Metric, error) {
-	val := s.getOrInsert(cacheKeyProcess, getProcess)
-	if val == nil {
-		return nil, moerr.NewInternalError("empty process")
-	}
-	proc := val.(*process.Process)
-
-	// Percent use cpuStats.Total because cpuStats in process has no Idel field
-	if percent, err := proc.CPUPercent(); err != nil {
-		return nil, err
-	} else {
-		return prom.MustNewConstMetric(c.Desc(), prom.GaugeValue, percent), nil
-	}
-}
+var procConnections = NewBatchMetricVec(&procConnectionCollector{}, prom.HistogramOpts{
+	Subsystem: "process",
+	Name:      "connections",
+	Help:      "Number of process connections",
+}, []string{constTenantKey})
