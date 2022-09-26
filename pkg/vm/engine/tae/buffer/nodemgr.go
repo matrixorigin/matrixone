@@ -106,13 +106,11 @@ func (mgr *nodeManager) UnregisterNode(node base.INode) {
 
 func (mgr *nodeManager) MakeRoom(size uint64) bool {
 	ok := mgr.sizeLimiter.ApplyQuota(size)
+	nodes := make([]base.IEvictHandle, 0)
 	for !ok {
 		evicted := mgr.evicter.Dequeue()
 		if evicted == nil {
 			return false
-		}
-		if evicted.Handle.IsClosed() {
-			continue
 		}
 
 		if !evicted.Unloadable(evicted.Handle) {
@@ -121,6 +119,10 @@ func (mgr *nodeManager) MakeRoom(size uint64) bool {
 
 		{
 			evicted.Handle.Lock()
+			if evicted.Handle.IsClosed() {
+				evicted.Handle.Unlock()
+				continue
+			}
 			if !evicted.Unloadable(evicted.Handle) {
 				evicted.Handle.Unlock()
 				continue
@@ -130,12 +132,45 @@ func (mgr *nodeManager) MakeRoom(size uint64) bool {
 				continue
 			}
 			evicted.Handle.Unload()
+			if evicted.Handle.HardEvictable() {
+				nodes = append(nodes, evicted.Handle)
+			}
 			evicted.Handle.Unlock()
 		}
 		ok = mgr.sizeLimiter.ApplyQuota(size)
 	}
+	for _, enode := range nodes {
+		enode.TryClose()
+	}
 
 	return ok
+}
+
+func (mgr *nodeManager) GetNodeByID(id common.ID) (n base.INode, err error) {
+	mgr.RLock()
+	defer mgr.RUnlock()
+	n = mgr.nodes[id]
+	if n == nil {
+		err = base.ErrNotFound
+	}
+	return
+}
+
+func (mgr *nodeManager) PinByID(id common.ID) (h base.INodeHandle, err error) {
+	n, err := mgr.GetNodeByID(id)
+	if err != nil {
+		return
+	}
+	h = mgr.Pin(n)
+	return
+}
+
+func (mgr *nodeManager) TryPinByID(id common.ID, timeout time.Duration) (h base.INodeHandle, err error) {
+	n, err := mgr.GetNodeByID(id)
+	if err != nil {
+		return
+	}
+	return mgr.TryPin(n, timeout)
 }
 
 func (mgr *nodeManager) TryPin(node base.INode, timeout time.Duration) (h base.INodeHandle, err error) {
@@ -173,6 +208,9 @@ func (mgr *nodeManager) Pin(node base.INode) base.INodeHandle {
 
 	node.Lock()
 	defer node.Unlock()
+	if node.IsClosed() {
+		return nil
+	}
 	if node.IsLoaded() {
 		node.Ref()
 		return node.MakeHandle()

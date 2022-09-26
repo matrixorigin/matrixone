@@ -52,17 +52,18 @@ func (h *nodeHandle) Close() error {
 type Node struct {
 	common.RefHelper
 	sync.RWMutex
-	mgr            base.INodeManager
-	id             common.ID
-	state          base.NodeState
-	size           uint64
-	iter           uint64
-	closed         bool
-	impl           base.INode
-	DestroyFunc    func()
-	LoadFunc       func()
-	UnloadableFunc func() bool
-	UnloadFunc     func()
+	mgr               base.INodeManager
+	id                common.ID
+	state             base.NodeState
+	size              uint64
+	iter              uint64
+	closed            bool
+	impl              base.INode
+	HardEvictableFunc func() bool
+	DestroyFunc       func()
+	LoadFunc          func()
+	UnloadableFunc    func() bool
+	UnloadFunc        func()
 }
 
 func NewNode(impl base.INode, mgr base.INodeManager, id common.ID, size uint64) *Node {
@@ -89,6 +90,24 @@ func (n *Node) MakeHandle() base.INodeHandle {
 	return newNodeHandle(n, n.mgr)
 }
 
+func (n *Node) TryClose() (closed bool) {
+	n.Lock()
+	if n.RefCount() > 0 {
+		return false
+	}
+	if n.closed {
+		n.Unlock()
+		return true
+	}
+	n.closed = true
+	if n.state == base.NodeLoaded {
+		n.Unload()
+	}
+	n.Unlock()
+	n.mgr.UnregisterNode(n)
+	return true
+}
+
 func (n *Node) Close() error {
 	n.Lock()
 	if n.closed {
@@ -105,9 +124,14 @@ func (n *Node) Close() error {
 }
 
 func (n *Node) IsClosed() bool {
-	n.RLock()
-	defer n.RUnlock()
 	return n.closed
+}
+
+func (n *Node) HardEvictable() bool {
+	if n.HardEvictableFunc != nil {
+		return n.HardEvictableFunc()
+	}
+	return false
 }
 
 func (n *Node) Destroy() {

@@ -25,7 +25,8 @@ import (
 )
 
 var (
-	ErrNoSpace = moerr.NewInternalError("buffer: no space left")
+	ErrNoSpace  = moerr.NewInternalError("buffer: no space left")
+	ErrNotFound = moerr.NewInternalError("buffer: node not found")
 )
 
 type MemoryFreeFunc func(IMemoryNode)
@@ -59,11 +60,13 @@ type INode interface {
 	IsLoaded() bool
 	Load()
 	MakeHandle() INodeHandle
+	HardEvictable() bool
 	Destroy()
 	Size() uint64
 	Iteration() uint64
 	IncIteration() uint64
 	IsClosed() bool
+	TryClose() bool
 	GetState() NodeState
 	Expand(uint64, func() error) error
 }
@@ -79,6 +82,7 @@ type INodeManager interface {
 	UnregisterNode(INode)
 	Pin(INode) INodeHandle
 	TryPin(INode, time.Duration) (INodeHandle, error)
+	TryPinByID(common.ID, time.Duration) (INodeHandle, error)
 	Unpin(INode)
 	MakeRoom(uint64) bool
 }
@@ -92,8 +96,10 @@ type ISizeLimiter interface {
 type IEvictHandle interface {
 	sync.Locker
 	IsClosed() bool
+	TryClose() bool
 	Unload()
 	Unloadable() bool
+	HardEvictable() bool
 	Iteration() uint64
 }
 
