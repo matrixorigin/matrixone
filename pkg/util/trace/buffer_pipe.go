@@ -95,12 +95,13 @@ func (t batchSqlHandler) NewItemBuffer(name string) bp.ItemBuffer[bp.HasName, an
 // NewItemBatchHandler implement batchpipe.PipeImpl
 func (t batchSqlHandler) NewItemBatchHandler(ctx context.Context) func(batch any) {
 	var f = func(b any) {}
-	if GetTracerProvider().sqlExecutor == nil {
+	sqlExecutor := GetTracerProvider().GetSqlExecutor()
+	if sqlExecutor == nil {
 		// fixme: handle error situation, should panic
 		logutil.Errorf("[Trace] no SQL Executor.")
 		return f
 	}
-	exec := GetTracerProvider().sqlExecutor()
+	exec := sqlExecutor()
 	if exec == nil {
 		// fixme: handle error situation, should panic
 		logutil.Errorf("[Trace] no SQL Executor.")
