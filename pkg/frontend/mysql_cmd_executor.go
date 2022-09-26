@@ -1831,7 +1831,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		ses.SetMysqlResultSet(&MysqlResultSet{})
 		stmt := cw.GetAst()
 		requestCtx = RecordStatement(requestCtx, ses, proc, cw, beginInstant)
-		tenant := "0"
+		tenant := sysAccountName
 		if ses.GetTenantInfo() != nil {
 			tenant = ses.GetTenantInfo().GetTenant()
 			ses.SetPrivilege(determinePrivilegeSetOfStatement(stmt))
