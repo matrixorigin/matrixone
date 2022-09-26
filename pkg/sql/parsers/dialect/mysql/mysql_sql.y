@@ -178,7 +178,7 @@ import (
 %token LEX_ERROR
 %nonassoc EMPTY
 %left <str> UNION EXCEPT INTERSECT MINUS
-%token <str> SELECT STREAM INSERT UPDATE DELETE FROM WHERE GROUP HAVING ORDER BY LIMIT OFFSET FOR CONNECT MANAGE GRANTS OWNERSHIP
+%token <str> SELECT STREAM INSERT UPDATE DELETE FROM WHERE GROUP HAVING ORDER BY LIMIT OFFSET FOR CONNECT MANAGE GRANTS OWNERSHIP REFERENCE
 %nonassoc LOWER_THAN_SET
 %nonassoc <str> SET
 %token <str> ALL DISTINCT DISTINCTROW AS EXISTS ASC DESC INTO DUPLICATE DEFAULT LOCK KEYS
@@ -981,7 +981,7 @@ grant_option_opt:
 // |	WITH MAX_USER_CONNECTIONS INTEGRAL
 
 revoke_stmt:
-    REVOKE exists_opt  priv_list ON object_type priv_level FROM user_spec_list
+    REVOKE exists_opt  priv_list ON object_type priv_level FROM role_spec_list
     {
         $$ = &tree.Revoke{
             Typ: tree.RevokeTypePrivilege,
@@ -990,7 +990,7 @@ revoke_stmt:
 		    Privileges: $3,
 		    ObjType: $5,
 		    Level: $6,
-		    Users: $8,
+		    Roles: $8,
             },
         }
     }
