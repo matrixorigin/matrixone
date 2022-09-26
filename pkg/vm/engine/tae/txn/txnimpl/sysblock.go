@@ -160,7 +160,7 @@ func (blk *txnSysBlock) Rows() int {
 	}
 }
 
-func (blk *txnSysBlock) isPrimaryKey(schema *catalog.Schema, colIdx int) bool {
+func isPrimaryKey(schema *catalog.Schema, colIdx int) bool {
 	attrName := schema.ColDefs[colIdx].Name
 	switch schema.Name {
 	case catalog.SystemTable_Columns_Name:
@@ -173,66 +173,70 @@ func (blk *txnSysBlock) isPrimaryKey(schema *catalog.Schema, colIdx int) bool {
 	return schema.IsPartOfPK(colIdx)
 }
 
+func FillColumnRow(table *catalog.TableEntry, attr string, colData containers.Vector) {
+	schema := table.GetSchema()
+	tableID := table.GetID()
+	for i, colDef := range table.GetSchema().ColDefs {
+		switch attr {
+		case catalog.SystemColAttr_UniqName:
+			colData.Append([]byte(fmt.Sprintf("%d-%s", tableID, colDef.Name)))
+		case catalog.SystemColAttr_AccID:
+			colData.Append(schema.AcInfo.TenantID)
+		case catalog.SystemColAttr_Name:
+			colData.Append([]byte(colDef.Name))
+		case catalog.SystemColAttr_Num:
+			colData.Append(int32(i + 1))
+		case catalog.SystemColAttr_Type:
+			colData.Append(int32(colDef.Type.Oid))
+		case catalog.SystemColAttr_DBID:
+			colData.Append(table.GetDB().GetID())
+		case catalog.SystemColAttr_DBName:
+			colData.Append([]byte(table.GetDB().GetName()))
+		case catalog.SystemColAttr_RelID:
+			colData.Append(tableID)
+		case catalog.SystemColAttr_RelName:
+			colData.Append([]byte(table.GetSchema().Name))
+		case catalog.SystemColAttr_ConstraintType:
+			if isPrimaryKey(table.GetSchema(), i) {
+				colData.Append([]byte(catalog.SystemColPKConstraint))
+			} else {
+				colData.Append([]byte(catalog.SystemColNoConstraint))
+			}
+		case catalog.SystemColAttr_Length:
+			colData.Append(int32(colDef.Type.Width))
+		case catalog.SystemColAttr_NullAbility:
+			colData.Append(bool2i8(colDef.NullAbility))
+		case catalog.SystemColAttr_HasExpr:
+			colData.Append(int8(0)) // TODO
+		case catalog.SystemColAttr_DefaultExpr:
+			colData.Append([]byte("")) // TODO
+		case catalog.SystemColAttr_IsDropped:
+			colData.Append(int8(0)) // TODO
+		case catalog.SystemColAttr_IsHidden:
+			colData.Append(bool2i8(colDef.Hidden))
+		case catalog.SystemColAttr_IsUnsigned:
+			v := int8(0)
+			switch colDef.Type.Oid {
+			case types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64:
+				v = int8(1)
+			}
+			colData.Append(v)
+		case catalog.SystemColAttr_IsAutoIncrement:
+			colData.Append(bool2i8(colDef.AutoIncrement))
+		case catalog.SystemColAttr_Comment:
+			colData.Append([]byte(colDef.Comment))
+		default:
+			panic("unexpected")
+		}
+	}
+}
+
 func (blk *txnSysBlock) getColumnTableData(colIdx int) (view *model.ColumnView, err error) {
 	view = model.NewColumnView(blk.Txn.GetStartTS(), colIdx)
 	col := catalog.SystemColumnSchema.ColDefs[colIdx]
 	colData := containers.MakeVector(col.Type, col.Nullable())
 	tableFn := func(table *catalog.TableEntry) error {
-		schema := table.GetSchema()
-		tableID := table.GetID()
-		for i, colDef := range table.GetSchema().ColDefs {
-			switch col.Name {
-			case catalog.SystemColAttr_UniqName:
-				colData.Append([]byte(fmt.Sprintf("%d-%s", tableID, colDef.Name)))
-			case catalog.SystemColAttr_AccID:
-				colData.Append(schema.AcInfo.TenantID)
-			case catalog.SystemColAttr_Name:
-				colData.Append([]byte(colDef.Name))
-			case catalog.SystemColAttr_Num:
-				colData.Append(int32(i + 1))
-			case catalog.SystemColAttr_Type:
-				colData.Append(int32(colDef.Type.Oid))
-			case catalog.SystemColAttr_DBID:
-				colData.Append(table.GetDB().GetID())
-			case catalog.SystemColAttr_DBName:
-				colData.Append([]byte(table.GetDB().GetName()))
-			case catalog.SystemColAttr_RelID:
-				colData.Append(tableID)
-			case catalog.SystemColAttr_RelName:
-				colData.Append([]byte(table.GetSchema().Name))
-			case catalog.SystemColAttr_ConstraintType:
-				if blk.isPrimaryKey(table.GetSchema(), i) {
-					colData.Append([]byte(catalog.SystemColPKConstraint))
-				} else {
-					colData.Append([]byte(catalog.SystemColNoConstraint))
-				}
-			case catalog.SystemColAttr_Length:
-				colData.Append(int32(colDef.Type.Width))
-			case catalog.SystemColAttr_NullAbility:
-				colData.Append(bool2i8(colDef.NullAbility)) // TODO
-			case catalog.SystemColAttr_HasExpr:
-				colData.Append(int8(0)) // TODO
-			case catalog.SystemColAttr_DefaultExpr:
-				colData.Append([]byte("")) // TODO
-			case catalog.SystemColAttr_IsDropped:
-				colData.Append(int8(0)) // TODO
-			case catalog.SystemColAttr_IsHidden:
-				colData.Append(bool2i8(colDef.Hidden))
-			case catalog.SystemColAttr_IsUnsigned:
-				v := int8(0)
-				switch colDef.Type.Oid {
-				case types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64:
-					v = int8(1)
-				}
-				colData.Append(v) // TODO
-			case catalog.SystemColAttr_IsAutoIncrement:
-				colData.Append(bool2i8(colDef.AutoIncrement)) // TODO
-			case catalog.SystemColAttr_Comment:
-				colData.Append([]byte(colDef.Comment)) // TODO
-			default:
-				panic("unexpected")
-			}
-		}
+		FillColumnRow(table, col.Name, colData)
 		return nil
 	}
 	dbFn := func(db *catalog.DBEntry) error {

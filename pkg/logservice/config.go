@@ -29,10 +29,11 @@ import (
 )
 
 const (
-	defaultDataDir        = "mo-data/logservice"
-	defaultServiceAddress = "0.0.0.0:32000"
-	defaultRaftAddress    = "0.0.0.0:32001"
-	defaultGossipAddress  = "0.0.0.0:32002"
+	defaultDataDir           = "mo-data/logservice"
+	defaultServiceAddress    = "0.0.0.0:32000"
+	defaultRaftAddress       = "0.0.0.0:32001"
+	defaultGossipAddress     = "0.0.0.0:32002"
+	defaultGossipSeedAddress = "127.0.0.1:32002"
 
 	defaultGossipProbeInterval = 50 * time.Millisecond
 	defaultHeartbeatInterval   = time.Second

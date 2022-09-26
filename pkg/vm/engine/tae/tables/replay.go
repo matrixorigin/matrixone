@@ -77,7 +77,7 @@ func (blk *dataBlock) replayMutIndex() error {
 			continue
 		}
 		keysCtx := new(index.KeysCtx)
-		vec, err := blk.node.GetColumnDataCopy(blk.node.rows, colDef.Idx, nil)
+		vec, err := blk.node.GetColumnDataCopy(0, blk.node.rows, colDef.Idx, nil)
 		if err != nil {
 			return err
 		}
