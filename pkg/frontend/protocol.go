@@ -209,8 +209,15 @@ func (cpi *ProtocolImpl) ConnectionID() uint32 {
 	return cpi.connectionID
 }
 
+// Quit kill tcpConn still connected.
+// before calling NewMysqlClientProtocol, tcpConn.Connected() must be true
+// please check goetty/application.go::doStart() and goetty/application.go::NewIOSession(...) for details
 func (cpi *ProtocolImpl) Quit() {
 	if cpi.tcpConn != nil {
+		if !cpi.tcpConn.Connected() {
+			logutil.Warn("close tcp meet conn not Connected")
+			return
+		}
 		err := cpi.tcpConn.Close()
 		if err != nil {
 			logutil.Errorf("close tcp conn failed. error:%v", err)
