@@ -166,11 +166,14 @@ func NewStatistics() *Statistics {
 }
 
 func buildEdge(parentNode *plan.Node, childNode *plan.Node, index int32) *Edge {
-	return &Edge{
-		Id:     "E" + strconv.Itoa(int(index)),
-		Src:    strconv.FormatInt(int64(childNode.NodeId), 10),
-		Dst:    strconv.FormatInt(int64(parentNode.NodeId), 10),
-		Output: childNode.AnalyzeInfo.OutputRows,
-		Unit:   "count",
+	edge := &Edge{
+		Id:   "E" + strconv.Itoa(int(index)),
+		Src:  strconv.FormatInt(int64(childNode.NodeId), 10),
+		Dst:  strconv.FormatInt(int64(parentNode.NodeId), 10),
+		Unit: "count",
 	}
+	if childNode.AnalyzeInfo != nil {
+		edge.Output = childNode.AnalyzeInfo.OutputRows
+	}
+	return edge
 }
