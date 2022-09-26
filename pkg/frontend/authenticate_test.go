@@ -194,7 +194,7 @@ func Test_checkSysExistsOrNot(t *testing.T) {
 		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
 		defer bhStub.Reset()
 
-		exists, err := checkSysExistsOrNot(ctx, pu)
+		exists, err := checkSysExistsOrNot(ctx, bh, pu)
 		convey.So(exists, convey.ShouldBeTrue)
 		convey.So(err, convey.ShouldBeNil)
 
@@ -231,10 +231,10 @@ func Test_createTablesInMoCatalog(t *testing.T) {
 			DefaultRoleID: moAdminRoleID,
 		}
 
-		err := createTablesInMoCatalog(ctx, tenant, pu)
+		err := createTablesInMoCatalog(ctx, bh, tenant, pu)
 		convey.So(err, convey.ShouldBeNil)
 
-		err = createTablesInInformationSchema(ctx, tenant, pu)
+		err = createTablesInInformationSchema(ctx, bh, tenant, pu)
 		convey.So(err, convey.ShouldBeNil)
 	})
 }
@@ -259,11 +259,12 @@ func Test_checkTenantExistsOrNot(t *testing.T) {
 		mrs1.EXPECT().GetRowCount().Return(uint64(1)).AnyTimes()
 
 		bh.EXPECT().GetExecResultSet().Return([]interface{}{mrs1}).AnyTimes()
+		bh.EXPECT().ClearExecResultSet().Return().AnyTimes()
 
 		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
 		defer bhStub.Reset()
 
-		exists, err := checkTenantExistsOrNot(ctx, pu, "test")
+		exists, err := checkTenantExistsOrNot(ctx, bh, pu, "test")
 		convey.So(exists, convey.ShouldBeTrue)
 		convey.So(err, convey.ShouldBeNil)
 
@@ -323,10 +324,10 @@ func Test_createTablesInMoCatalogOfGeneralTenant(t *testing.T) {
 			Comment: tree.AccountComment{Exist: true, Comment: "test acccount"},
 		}
 
-		newTi, err := createTablesInMoCatalogOfGeneralTenant(ctx, tenant, pu, ca)
+		newTi, err := createTablesInMoCatalogOfGeneralTenant(ctx, bh, tenant, pu, ca)
 		convey.So(err, convey.ShouldBeNil)
 
-		err = createTablesInInformationSchemaOfGeneralTenant(ctx, tenant, pu, newTi)
+		err = createTablesInInformationSchemaOfGeneralTenant(ctx, bh, tenant, pu, newTi)
 		convey.So(err, convey.ShouldBeNil)
 	})
 }

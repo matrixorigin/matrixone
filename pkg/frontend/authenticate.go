@@ -3339,22 +3339,23 @@ func authenticatePrivilegeOfStatementWithObjectTypeNone(ctx context.Context, ses
 }
 
 // checkSysExistsOrNot checks the SYS tenant exists or not.
-func checkSysExistsOrNot(ctx context.Context, pu *config.ParameterUnit) (bool, error) {
-	guestMMu := guest.New(pu.SV.GuestMmuLimitation, pu.HostMmu)
-	bh := NewBackgroundHandler(ctx, guestMMu, pu.Mempool, pu)
-	defer bh.Close()
+func checkSysExistsOrNot(ctx context.Context, bh BackgroundExec, pu *config.ParameterUnit) (bool, error) {
+	var results []interface{}
 	var rsset []ExecResult
+	var err error
+	var tableNames []string
+	var tableName string
 
 	dbSql := "show databases;"
 	bh.ClearExecResultSet()
-	err := bh.Exec(ctx, dbSql)
+	err = bh.Exec(ctx, dbSql)
 	if err != nil {
 		return false, err
 	}
 
-	results := bh.GetExecResultSet()
+	results = bh.GetExecResultSet()
 	if len(results) != 1 {
-		panic("it must have result set")
+		return false, moerr.NewInternalError("it must have result set")
 	}
 
 	rsset, err = convertIntoResultSet(results)
@@ -3363,13 +3364,11 @@ func checkSysExistsOrNot(ctx context.Context, pu *config.ParameterUnit) (bool, e
 	}
 
 	for i := uint64(0); i < rsset[0].GetRowCount(); i++ {
-		_, err := rsset[0].GetString(i, 0)
+		_, err = rsset[0].GetString(i, 0)
 		if err != nil {
 			return false, err
 		}
 	}
-
-	bh.ClearExecResultSet()
 
 	sql := "show tables from mo_catalog;"
 	bh.ClearExecResultSet()
@@ -3380,7 +3379,7 @@ func checkSysExistsOrNot(ctx context.Context, pu *config.ParameterUnit) (bool, e
 
 	results = bh.GetExecResultSet()
 	if len(results) != 1 {
-		panic("it must have result set")
+		return false, moerr.NewInternalError("it must have result set")
 	}
 
 	rsset, err = convertIntoResultSet(results)
@@ -3388,9 +3387,8 @@ func checkSysExistsOrNot(ctx context.Context, pu *config.ParameterUnit) (bool, e
 		return false, err
 	}
 
-	tableNames := []string{}
 	for i := uint64(0); i < rsset[0].GetRowCount(); i++ {
-		tableName, err := rsset[0].GetString(i, 0)
+		tableName, err = rsset[0].GetString(i, 0)
 		if err != nil {
 			return false, err
 		}
@@ -3427,30 +3425,54 @@ func InitSysTenant(ctx context.Context) error {
 	ctx = context.WithValue(ctx, defines.UserIDKey{}, uint32(rootID))
 	ctx = context.WithValue(ctx, defines.RoleIDKey{}, uint32(moAdminRoleID))
 
-	//TODO: put it into the same transaction
-	exists, err = checkSysExistsOrNot(ctx, pu)
-	if err != nil {
-		return err
-	}
-	if exists {
-		return nil
-	}
+	guestMMu := guest.New(pu.SV.GuestMmuLimitation, pu.HostMmu)
+	bh := NewBackgroundHandler(ctx, guestMMu, pu.Mempool, pu)
+	defer bh.Close()
 
-	err = createTablesInMoCatalog(ctx, tenant, pu)
+	//USE the mo_catalog
+	err = bh.Exec(ctx, "use mo_catalog;")
 	if err != nil {
 		return err
 	}
 
-	err = createTablesInInformationSchema(ctx, tenant, pu)
+	err = bh.Exec(ctx, "begin;")
 	if err != nil {
-		return err
+		goto handleFailed
 	}
 
-	return nil
+	exists, err = checkSysExistsOrNot(ctx, bh, pu)
+	if err != nil {
+		goto handleFailed
+	}
+
+	if !exists {
+		err = createTablesInMoCatalog(ctx, bh, tenant, pu)
+		if err != nil {
+			goto handleFailed
+		}
+
+		err = createTablesInInformationSchema(ctx, bh, tenant, pu)
+		if err != nil {
+			goto handleFailed
+		}
+	}
+
+	err = bh.Exec(ctx, "commit;")
+	if err != nil {
+		goto handleFailed
+	}
+	return err
+handleFailed:
+	//ROLLBACK the transaction
+	rbErr := bh.Exec(ctx, "rollback;")
+	if rbErr != nil {
+		return rbErr
+	}
+	return err
 }
 
 // createTablesInMoCatalog creates catalog tables in the database mo_catalog.
-func createTablesInMoCatalog(ctx context.Context, tenant *TenantInfo, pu *config.ParameterUnit) error {
+func createTablesInMoCatalog(ctx context.Context, bh BackgroundExec, tenant *TenantInfo, pu *config.ParameterUnit) error {
 	var err error
 	var initMoAccount string
 	var initDataSqls []string
@@ -3461,12 +3483,6 @@ func createTablesInMoCatalog(ctx context.Context, tenant *TenantInfo, pu *config
 	addSqlIntoSet := func(sql string) {
 		initDataSqls = append(initDataSqls, sql)
 	}
-
-	//USE the mo_catalog
-	addSqlIntoSet("use mo_catalog;")
-
-	//BEGIN the transaction
-	addSqlIntoSet("begin;")
 
 	//create tables for the tenant
 	for _, sql := range createSqls {
@@ -3526,12 +3542,7 @@ func createTablesInMoCatalog(ctx context.Context, tenant *TenantInfo, pu *config
 	initMoUserGrant4 := fmt.Sprintf(initMoUserGrantFormat, publicRoleID, dumpID, types.CurrentTimestamp().String2(time.UTC, 0), true)
 	addSqlIntoSet(initMoUserGrant4)
 
-	addSqlIntoSet("commit;")
-
 	//fill the mo_account, mo_role, mo_user, mo_role_privs, mo_user_grant
-	guestMMu := guest.New(pu.SV.GuestMmuLimitation, pu.HostMmu)
-	bh := NewBackgroundHandler(ctx, guestMMu, pu.Mempool, pu)
-	defer bh.Close()
 	for _, sql := range initDataSqls {
 		err = bh.Exec(ctx, sql)
 		if err != nil {
@@ -3539,22 +3550,12 @@ func createTablesInMoCatalog(ctx context.Context, tenant *TenantInfo, pu *config
 		}
 	}
 
-	return err
-
 handleFailed:
-	//ROLLBACK the transaction
-	rbErr := bh.Exec(ctx, "rollback;")
-	if rbErr != nil {
-		return rbErr
-	}
 	return err
 }
 
 // createTablesInInformationSchema creates the database information_schema and the views or tables.
-func createTablesInInformationSchema(ctx context.Context, tenant *TenantInfo, pu *config.ParameterUnit) error {
-	guestMMu := guest.New(pu.SV.GuestMmuLimitation, pu.HostMmu)
-	bh := NewBackgroundHandler(ctx, guestMMu, pu.Mempool, pu)
-	defer bh.Close()
+func createTablesInInformationSchema(ctx context.Context, bh BackgroundExec, tenant *TenantInfo, pu *config.ParameterUnit) error {
 	err := bh.Exec(ctx, "create database information_schema;")
 	if err != nil {
 		return err
@@ -3562,26 +3563,35 @@ func createTablesInInformationSchema(ctx context.Context, tenant *TenantInfo, pu
 	return err
 }
 
-func checkTenantExistsOrNot(ctx context.Context, pu *config.ParameterUnit, userName string) (bool, error) {
-	guestMMu := guest.New(pu.SV.GuestMmuLimitation, pu.HostMmu)
-
-	sqlForCheckTenant := getSqlForCheckTenant(userName)
-	rsset, err := executeSQLInBackgroundSession(ctx, guestMMu, pu.Mempool, pu, sqlForCheckTenant)
+func checkTenantExistsOrNot(ctx context.Context, bh BackgroundExec, pu *config.ParameterUnit, userName string) (bool, error) {
+	var sqlForCheckTenant string
+	var results []interface{}
+	var rsset []ExecResult
+	var err error
+	sqlForCheckTenant = getSqlForCheckTenant(userName)
+	bh.ClearExecResultSet()
+	err = bh.Exec(ctx, sqlForCheckTenant)
 	if err != nil {
 		return false, err
 	}
 
-	if len(rsset) < 1 || rsset[0].GetRowCount() < 1 {
-		return false, nil
+	results = bh.GetExecResultSet()
+	rsset, err = convertIntoResultSet(results)
+	if err != nil {
+		return false, err
 	}
 
-	return true, nil
+	if len(rsset) >= 1 && rsset[0].GetRowCount() >= 1 {
+		return true, nil
+	}
+	return false, nil
 }
 
 // InitGeneralTenant initializes the application level tenant
 func InitGeneralTenant(ctx context.Context, tenant *TenantInfo, ca *tree.CreateAccount) error {
 	var err error
 	var exists bool
+	var newTenant *TenantInfo
 	pu := config.GetParameterUnit(ctx)
 
 	if !(tenant.IsSysTenant() && tenant.IsMoAdminRole()) {
@@ -3592,38 +3602,59 @@ func InitGeneralTenant(ctx context.Context, tenant *TenantInfo, ca *tree.CreateA
 	ctx = context.WithValue(ctx, defines.UserIDKey{}, uint32(tenant.GetUserID()))
 	ctx = context.WithValue(ctx, defines.RoleIDKey{}, uint32(tenant.GetDefaultRoleID()))
 
-	//TODO: put it into the same transaction
-	exists, err = checkTenantExistsOrNot(ctx, pu, ca.Name)
-	if err != nil {
-		return err
-	}
-
-	if exists {
-		if ca.IfNotExists { //do nothing
-			return nil
-		}
-		return moerr.NewInternalError("the tenant %s exists", ca.Name)
-	}
-
-	var newTenant *TenantInfo
-	newTenant, err = createTablesInMoCatalogOfGeneralTenant(ctx, tenant, pu, ca)
-	if err != nil {
-		return err
-	}
-
-	err = createTablesInInformationSchemaOfGeneralTenant(ctx, tenant, pu, newTenant)
-	if err != nil {
-		return err
-	}
-
-	return nil
-}
-
-// createTablesInMoCatalogOfGeneralTenant creates catalog tables in the database mo_catalog.
-func createTablesInMoCatalogOfGeneralTenant(ctx context.Context, tenant *TenantInfo, pu *config.ParameterUnit, ca *tree.CreateAccount) (*TenantInfo, error) {
 	guestMMu := guest.New(pu.SV.GuestMmuLimitation, pu.HostMmu)
 	bh := NewBackgroundHandler(ctx, guestMMu, pu.Mempool, pu)
 	defer bh.Close()
+
+	//USE the mo_catalog
+	err = bh.Exec(ctx, "use mo_catalog;")
+	if err != nil {
+		return err
+	}
+
+	err = bh.Exec(ctx, "begin;")
+	if err != nil {
+		goto handleFailed
+	}
+
+	exists, err = checkTenantExistsOrNot(ctx, bh, pu, ca.Name)
+	if err != nil {
+		goto handleFailed
+	}
+
+	if exists {
+		if !ca.IfNotExists { //do nothing
+			err = moerr.NewInternalError("the tenant %s exists", ca.Name)
+			goto handleFailed
+		}
+	} else {
+		newTenant, err = createTablesInMoCatalogOfGeneralTenant(ctx, bh, tenant, pu, ca)
+		if err != nil {
+			goto handleFailed
+		}
+
+		err = createTablesInInformationSchemaOfGeneralTenant(ctx, bh, tenant, pu, newTenant)
+		if err != nil {
+			goto handleFailed
+		}
+	}
+
+	err = bh.Exec(ctx, "commit;")
+	if err != nil {
+		goto handleFailed
+	}
+	return err
+handleFailed:
+	//ROLLBACK the transaction
+	rbErr := bh.Exec(ctx, "rollback;")
+	if rbErr != nil {
+		return rbErr
+	}
+	return err
+}
+
+// createTablesInMoCatalogOfGeneralTenant creates catalog tables in the database mo_catalog.
+func createTablesInMoCatalogOfGeneralTenant(ctx context.Context, bh BackgroundExec, tenant *TenantInfo, pu *config.ParameterUnit, ca *tree.CreateAccount) (*TenantInfo, error) {
 	var err error
 	var initMoAccount string
 	var results []interface{}
@@ -3646,22 +3677,12 @@ func createTablesInMoCatalogOfGeneralTenant(ctx context.Context, tenant *TenantI
 	}
 
 	if nameIsInvalid(ca.Name) {
-		return nil, moerr.NewInternalError("the account name is invalid")
+		err = moerr.NewInternalError("the account name is invalid")
+		goto handleFailed
 	}
 
 	if nameIsInvalid(ca.AuthOption.AdminName) {
-		return nil, moerr.NewInternalError("the admin name is invalid")
-	}
-
-	//USE the mo_catalog
-	err = bh.Exec(ctx, "use mo_catalog;")
-	if err != nil {
-		return nil, err
-	}
-
-	//BEGIN the transaction
-	err = bh.Exec(ctx, "begin;")
-	if err != nil {
+		err = moerr.NewInternalError("the admin name is invalid")
 		goto handleFailed
 	}
 
@@ -3739,12 +3760,14 @@ func createTablesInMoCatalogOfGeneralTenant(ctx context.Context, tenant *TenantI
 
 	//step 3:add new user entry to the mo_user
 	if ca.AuthOption.IdentifiedType.Typ != tree.AccountIdentifiedByPassword {
-		return nil, moerr.NewInternalError("only support password verification now")
+		err = moerr.NewInternalError("only support password verification now")
+		goto handleFailed
 	}
 	name = ca.AuthOption.AdminName
 	password = ca.AuthOption.IdentifiedType.Str
 	if len(password) == 0 {
-		return nil, moerr.NewInternalError("password is empty string")
+		err = moerr.NewInternalError("password is empty string")
+		goto handleFailed
 	}
 	status = rootStatus
 	//TODO: fix the status of user or account
@@ -3789,7 +3812,6 @@ func createTablesInMoCatalogOfGeneralTenant(ctx context.Context, tenant *TenantI
 	addSqlIntoSet(initMoUserGrant1)
 	initMoUserGrant2 = fmt.Sprintf(initMoUserGrantFormat, publicRoleID, newUserId, types.CurrentTimestamp().String2(time.UTC, 0), true)
 	addSqlIntoSet(initMoUserGrant2)
-	addSqlIntoSet("commit;")
 
 	//fill the mo_role, mo_user, mo_role_privs, mo_user_grant, mo_role_grant
 	for _, sql := range initDataSqls {
@@ -3800,27 +3822,18 @@ func createTablesInMoCatalogOfGeneralTenant(ctx context.Context, tenant *TenantI
 		}
 	}
 
-	return newTenant, err
-
 handleFailed:
-	//ROLLBACK the transaction
-	rbErr := bh.Exec(ctx, "rollback;")
-	if rbErr != nil {
-		return nil, rbErr
-	}
 	return newTenant, err
 }
 
 // createTablesInInformationSchemaOfGeneralTenant creates the database information_schema and the views or tables.
-func createTablesInInformationSchemaOfGeneralTenant(ctx context.Context, tenant *TenantInfo, pu *config.ParameterUnit, newTenant *TenantInfo) error {
-	guestMMu := guest.New(pu.SV.GuestMmuLimitation, pu.HostMmu)
+func createTablesInInformationSchemaOfGeneralTenant(ctx context.Context, bh BackgroundExec, tenant *TenantInfo, pu *config.ParameterUnit, newTenant *TenantInfo) error {
 	//with new tenant
 	//TODO: when we have the auto_increment column, we need new strategy.
 	ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(newTenant.GetTenantID()))
 	ctx = context.WithValue(ctx, defines.UserIDKey{}, uint32(newTenant.GetUserID()))
 	ctx = context.WithValue(ctx, defines.RoleIDKey{}, uint32(newTenant.GetDefaultRoleID()))
-	bh := NewBackgroundHandler(ctx, guestMMu, pu.Mempool, pu)
-	defer bh.Close()
+
 	err := bh.Exec(ctx, "create database information_schema;")
 	if err != nil {
 		return err
