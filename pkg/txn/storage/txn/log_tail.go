@@ -144,20 +144,11 @@ func (m *MemHandler) HandleGetLogTail(meta txn.TxnMeta, req apipb.SyncLogTailReq
 		iter := m.data.NewPhysicalIter()
 		defer iter.Close()
 
-		tableKey := &memtable.PhysicalRow[DataKey, DataValue]{
-			Key: DataKey{
-				tableID:    tableID,
-				primaryKey: Tuple{},
-			},
-		}
-		for ok := iter.Seek(tableKey); ok; ok = iter.Next() {
-			physicalRow := iter.Item()
-
-			if physicalRow.Key.tableID != tableID {
-				break
-			}
-
+		handleRow := func(
+			physicalRow *memtable.PhysicalRow[DataKey, DataValue],
+		) error {
 			physicalRow.Versions.RLock()
+			defer physicalRow.Versions.RUnlock()
 			for i := len(physicalRow.Versions.List) - 1; i >= 0; i-- {
 				value := physicalRow.Versions.List[i]
 
@@ -188,9 +179,25 @@ func (m *MemHandler) HandleGetLogTail(meta txn.TxnMeta, req apipb.SyncLogTailReq
 				}
 
 			}
-			physicalRow.Versions.RUnlock()
-
+			return nil
 		}
+
+		tableKey := &memtable.PhysicalRow[DataKey, DataValue]{
+			Key: DataKey{
+				tableID:    tableID,
+				primaryKey: Tuple{},
+			},
+		}
+		for ok := iter.Seek(tableKey); ok; ok = iter.Next() {
+			physicalRow := iter.Item()
+			if physicalRow.Key.tableID != tableID {
+				break
+			}
+			if err := handleRow(physicalRow); err != nil {
+				return err
+			}
+		}
+
 	}
 
 	insertBatch.InitZsOne(insertBatch.Vecs[0].Length())
@@ -233,10 +240,11 @@ func logTailHandleSystemTable[
 	appendDelete func(row NamedRow) error,
 ) error {
 
-	iter := table.NewPhysicalIter()
-	for ok := iter.First(); ok; ok = iter.Next() {
-		physicalRow := iter.Item()
+	handleRow := func(
+		physicalRow *memtable.PhysicalRow[K, V],
+	) error {
 		physicalRow.Versions.RLock()
+		defer physicalRow.Versions.RUnlock()
 		for i := len(physicalRow.Versions.List) - 1; i >= 0; i-- {
 			value := physicalRow.Versions.List[i]
 
@@ -261,7 +269,16 @@ func logTailHandleSystemTable[
 			}
 
 		}
-		physicalRow.Versions.RUnlock()
+		return nil
+	}
+
+	iter := table.NewPhysicalIter()
+	defer iter.Close()
+	for ok := iter.First(); ok; ok = iter.Next() {
+		physicalRow := iter.Item()
+		if err := handleRow(physicalRow); err != nil {
+			return err
+		}
 	}
 
 	return nil
