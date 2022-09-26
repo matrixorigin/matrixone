@@ -925,34 +925,11 @@ func (blk *dataBlock) collectAblkAppendInRange(start, end types.TS) (*containers
 }
 
 func (blk *dataBlock) CollectDeleteInRange(start, end types.TS) (*containers.Batch, error) {
-	schema := blk.meta.GetSchema()
-	var rawPk containers.Vector
-	var err error
-	maxRow, visible, err := blk.mvcc.GetMaxVisibleRowLocked(end)
-	if err != nil || !visible {
-		return nil, err
+	rowID, ts, abort := blk.mvcc.CollectDelete(start, end)
+	if rowID == nil {
+		return nil, nil
 	}
-	if schema.IsSinglePK() {
-		rawPk, err = blk.node.GetColumnDataCopy(0, maxRow, schema.GetSingleSortKeyIdx(), nil)
-		if err != nil {
-			return nil, err
-		}
-	} else if blk.meta.GetSchema().IsCompoundPK() {
-		cols := make([]containers.Vector, 0)
-		for _, def := range schema.SortKey.Defs {
-			col, err := blk.node.GetColumnDataCopy(0, maxRow, def.Idx, nil)
-			if err != nil {
-				return nil, err
-			}
-			cols = append(cols, col)
-		}
-		rawPk = model.EncodeCompoundColumn(cols...)
-	}
-	pk, rowID, ts, abort := blk.mvcc.CollectDelete(rawPk, start, end)
 	batch := containers.NewBatch()
-	if schema.HasPK() {
-		batch.AddVector(schema.GetSingleSortKey().Name, pk)
-	}
 	batch.AddVector(catalog.PhyAddrColumnName, rowID)
 	batch.AddVector(catalog.AttrCommitTs, ts)
 	batch.AddVector(catalog.AttrAborted, abort)

@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils/config"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
@@ -2939,7 +2940,7 @@ func TestLogtailBasic(t *testing.T) {
 	logMgr := tae.LogtailMgr
 	defer tae.Close()
 
-	// at first, we can't see nothing
+	// at first, we can see nothing
 	minTs, maxTs := types.BuildTS(0, 0), types.BuildTS(1000, 1000)
 	view := logMgr.GetLogtailView(minTs, maxTs, 1000)
 	assert.False(t, view.HasCatalogChanges())
@@ -2966,28 +2967,51 @@ func TestLogtailBasic(t *testing.T) {
 	txn2.Commit()
 	catalogDropTs := txn2.GetPrepareTS()
 
-	var firstWriteTs, lastWriteTs types.TS
+	writeTs := make([]types.TS, 0, 120)
+	deleteRowIDs := make([]types.Rowid, 0, 10)
 
 	wg := new(sync.WaitGroup)
 	wg.Add(1)
 	go func() {
+		// insert 100 rows
 		for i := 0; i < 100; i++ {
-			txn, _ = tae.StartTxn(nil)
+			txn, _ := tae.StartTxn(nil)
 			db, _ := txn.GetDatabase("db")
 			tbl, _ := db.GetRelationByName("test")
 			tbl.Append(catalog.MockBatch(schema, 1))
 			assert.NoError(t, txn.Commit())
-			if i == 0 {
-				firstWriteTs = txn.GetPrepareTS()
+			writeTs = append(writeTs, txn.GetPrepareTS())
+		}
+		// delete the row whose offset is 5 for every block
+		{
+			// collect rowid
+			txn, _ := tae.StartTxn(nil)
+			db, _ := txn.GetDatabase("db")
+			tbl, _ := db.GetRelationByName("test")
+			blkIt := tbl.MakeBlockIt()
+			for ; blkIt.Valid(); blkIt.Next() {
+				prefix := blkIt.GetBlock().GetMeta().(*catalog.BlockEntry).MakeKey()
+				deleteRowIDs = append(deleteRowIDs, model.EncodePhyAddrKeyWithPrefix(prefix, 5))
 			}
-			if i == 99 {
-				lastWriteTs = txn.GetPrepareTS()
+			assert.NoError(t, txn.Commit())
+		}
+
+		// delete two 2 rows one time. no special reason, it just comes up
+		for i := 0; i < len(deleteRowIDs); i += 2 {
+			txn, _ := tae.StartTxn(nil)
+			db, _ := txn.GetDatabase("db")
+			tbl, _ := db.GetRelationByName("test")
+			assert.NoError(t, tbl.DeleteByPhyAddrKey(deleteRowIDs[i]))
+			if i+1 < len(deleteRowIDs) {
+				tbl.DeleteByPhyAddrKey(deleteRowIDs[i+1])
 			}
+			assert.NoError(t, txn.Commit())
+			writeTs = append(writeTs, txn.GetPrepareTS())
 		}
 		wg.Done()
 	}()
 
-	// test race
+	// concurrent read to test race
 	for i := 0; i < 5; i++ {
 		wg.Add(1)
 		go func() {
@@ -3001,6 +3025,8 @@ func TestLogtailBasic(t *testing.T) {
 	}
 
 	wg.Wait()
+
+	firstWriteTs, lastWriteTs := writeTs[0], writeTs[len(writeTs)-1]
 
 	view = logMgr.GetLogtailView(firstWriteTs, lastWriteTs.Next(), tableID)
 	assert.False(t, view.HasCatalogChanges())
@@ -3020,7 +3046,7 @@ func TestLogtailBasic(t *testing.T) {
 	}
 
 	// get db catalog change
-	resp, err := logtailSampleHandler(tae.DB, api.SyncLogTailReq{
+	resp, err := LogtailHandler(tae.DB, api.SyncLogTailReq{
 		CnHave: tots(minTs),
 		CnWant: tots(catalogDropTs),
 		Table:  &api.TableID{DbId: catalog.SystemDBID, TbId: catalog.SystemTable_DB_ID},
@@ -3028,6 +3054,7 @@ func TestLogtailBasic(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, 2, len(resp.Commands)) // insert and delete
 	assert.Equal(t, api.Entry_Insert, resp.Commands[0].EntryType)
+	assert.Equal(t, len(catalog.SystemDBSchema.ColDefs)+2, len(resp.Commands[0].Bat.Vecs))
 	datname, err := vector.ProtoVectorToVector(resp.Commands[0].Bat.Vecs[1]) // datname column
 	assert.NoError(t, err)
 	assert.Equal(t, 2, datname.Length()) // 2 db
@@ -3040,7 +3067,7 @@ func TestLogtailBasic(t *testing.T) {
 	assert.Equal(t, "todrop", datname.GetString(0))
 
 	// get table catalog change
-	resp, err = logtailSampleHandler(tae.DB, api.SyncLogTailReq{
+	resp, err = LogtailHandler(tae.DB, api.SyncLogTailReq{
 		CnHave: tots(minTs),
 		CnWant: tots(catalogDropTs),
 		Table:  &api.TableID{DbId: catalog.SystemDBID, TbId: catalog.SystemTable_Table_ID},
@@ -3048,25 +3075,78 @@ func TestLogtailBasic(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, 1, len(resp.Commands)) // insert
 	assert.Equal(t, api.Entry_Insert, resp.Commands[0].EntryType)
+	assert.Equal(t, len(catalog.SystemTableSchema.ColDefs)+2, len(resp.Commands[0].Bat.Vecs))
 	relname, err := vector.ProtoVectorToVector(resp.Commands[0].Bat.Vecs[1]) // relname column
 	assert.NoError(t, err)
 	assert.Equal(t, 2, relname.Length()) // 2 tables
 	assert.Equal(t, schema.Name, relname.GetString(0))
 	assert.Equal(t, schema.Name, relname.GetString(1))
 
+	// get columns catalog change
+	resp, err = LogtailHandler(tae.DB, api.SyncLogTailReq{
+		CnHave: tots(minTs),
+		CnWant: tots(catalogDropTs),
+		Table:  &api.TableID{DbId: catalog.SystemDBID, TbId: catalog.SystemTable_Columns_ID},
+	})
+	assert.NoError(t, err)
+	assert.Equal(t, 1, len(resp.Commands)) // insert
+	assert.Equal(t, api.Entry_Insert, resp.Commands[0].EntryType)
+	assert.Equal(t, len(catalog.SystemColumnSchema.ColDefs)+2, len(resp.Commands[0].Bat.Vecs))
+	attrUniqName, err := vector.ProtoVectorToVector(resp.Commands[0].Bat.Vecs[0]) // attr uniq name column
+	assert.NoError(t, err)
+	assert.Equal(t, len(schema.ColDefs)*2, attrUniqName.Length()) // 2 tables
+	assert.Equal(t, schema.Name, relname.GetString(0))
+	assert.Equal(t, schema.Name, relname.GetString(1))
+
 	// get user table change
-	resp, err = logtailSampleHandler(tae.DB, api.SyncLogTailReq{
-		CnHave: tots(firstWriteTs),
+	resp, err = LogtailHandler(tae.DB, api.SyncLogTailReq{
+		CnHave: tots(firstWriteTs.Next()), // skip the first write deliberately,
 		CnWant: tots(lastWriteTs),
 		Table:  &api.TableID{DbId: dbID, TbId: tableID},
 	})
 	assert.NoError(t, err)
-	assert.Equal(t, 1, len(resp.Commands)) // insert meta only for now
-	assert.Equal(t, api.Entry_Insert, resp.Commands[0].EntryType)
-	blockids, err := vector.ProtoVectorToVector(resp.Commands[0].Bat.Vecs[0])
-	assert.NoError(t, err)
-	assert.Equal(t, 10, blockids.Length()) // 10 blocks
+	assert.Equal(t, 3, len(resp.Commands)) // insert meta, insert data and delete data
 
+	// blk meta change
+	blkMetaEntry := resp.Commands[0]
+	assert.Equal(t, api.Entry_Insert, blkMetaEntry.EntryType)
+	blockids, err := vector.ProtoVectorToVector(blkMetaEntry.Bat.Vecs[0])
+	assert.NoError(t, err)
+	assert.Equal(t, 9, blockids.Length()) // 9 blocks, because the first write is excluded.
+
+	// check data change
+	insDataEntry := resp.Commands[1]
+	assert.Equal(t, api.Entry_Insert, insDataEntry.EntryType)
+	assert.Equal(t, len(schema.ColDefs)+2, len(insDataEntry.Bat.Vecs)) // 5 columns, 2 visibile + 1 rowid + commit_ts + aborted
+	rowids, err := vector.ProtoVectorToVector(insDataEntry.Bat.Vecs[2])
+	assert.NoError(t, err)
+	assert.Equal(t, 99, rowids.Length()) // 99 rows, because the first write is excluded.
+	// test first col, this is probably fragile, it depends on the details of MockSchema
+	// if something changes, delete this is okay.
+	firstCol, err := vector.ProtoVectorToVector(insDataEntry.Bat.Vecs[0]) // int8
+	assert.Equal(t, types.T_int8, firstCol.GetType().Oid)
+	assert.NoError(t, err)
+
+	delDataEntry := resp.Commands[2]
+	assert.Equal(t, api.Entry_Delete, delDataEntry.EntryType)
+	assert.Equal(t, 3, len(delDataEntry.Bat.Vecs)) // 3 columns, 1 rowid + commit_ts + aborted
+	// check delete rowids are exactly what we want
+	rowids, err = vector.ProtoVectorToVector(delDataEntry.Bat.Vecs[0])
+	assert.NoError(t, err)
+	assert.Equal(t, types.T_Rowid, rowids.GetType().Oid)
+	assert.Equal(t, 10, rowids.Length())
+	rowidMap := make(map[types.Rowid]int)
+	for _, id := range deleteRowIDs {
+		rowidMap[id] = 1
+	}
+	for i := int64(0); i < 10; i++ {
+		id := vector.GetValueAt[types.Rowid](rowids, i)
+		rowidMap[id] = rowidMap[id] + 1
+	}
+	assert.Equal(t, 10, len(rowidMap))
+	for _, v := range rowidMap {
+		assert.Equal(t, 2, v)
+	}
 }
 
 // txn1: create relation and append, half blk

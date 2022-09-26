@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 )
@@ -336,38 +337,67 @@ func (n *MVCCHandle) CollectAppend(start, end types.TS) (minRow, maxRow uint32, 
 	return
 }
 
-func (n *MVCCHandle) CollectDelete(rawPkVec containers.Vector, start, end types.TS) (pkVec, rowIDVec, commitTSVec, abortVec containers.Vector) {
-	if rawPkVec != nil {
-		pkVec = containers.MakeVector(rawPkVec.GetType(), rawPkVec.Nullable())
+func (n *MVCCHandle) CollectDelete(start, end types.TS) (rowIDVec, commitTSVec, abortVec containers.Vector) {
+	if n.deletes.IsEmpty() {
+		return
 	}
-	rowIDVec = containers.MakeVector(types.T_uint32.ToType(), false)
+	if !n.ExistDeleteInRange(start, end) {
+		return
+	}
+
+	rowIDVec = containers.MakeVector(types.T_Rowid.ToType(), false)
 	commitTSVec = containers.MakeVector(types.T_TS.ToType(), false)
 	abortVec = containers.MakeVector(types.T_bool.ToType(), false)
+	prefix := n.meta.MakeKey()
+
 	n.RLock()
 	defer n.RUnlock()
 	n.deletes.LoopChain(
 		func(m txnbase.MVCCNode) bool {
 			node := m.(*DeleteNode)
 			node.RLock()
-			txn := node.GetTxn()
+			needWait, txn := node.NeedWaitCommitting(end.Next())
+			if needWait {
+				node.RLock()
+				n.RUnlock()
+				txn.GetTxnState(true)
+				n.RLock()
+				node.RUnlock()
+			}
+			in, before := node.PreparedIn(start, end)
 			node.RUnlock()
-			if txn != nil {
+			if in {
+				it := node.mask.Iterator()
+				for it.HasNext() {
+					row := it.Next()
+					rowIDVec.Append(model.EncodePhyAddrKeyWithPrefix(prefix, row))
+					commitTSVec.Append(node.GetEnd())
+					abortVec.Append(node.IsAborted())
+				}
+			}
+			return !before
+		})
+	return
+}
+
+func (n *MVCCHandle) ExistDeleteInRange(start, end types.TS) (exist bool) {
+	n.RLock()
+	defer n.RUnlock()
+	n.deletes.LoopChain(
+		func(m txnbase.MVCCNode) bool {
+			node := m.(*DeleteNode)
+			node.RLock()
+			needWait, txn := node.NeedWaitCommitting(end.Next())
+			if needWait {
 				n.RUnlock()
 				txn.GetTxnState(true)
 				n.RLock()
 			}
 			in, before := node.PreparedIn(start, end)
+			node.RUnlock()
 			if in {
-				it := node.mask.Iterator()
-				for it.HasNext() {
-					row := it.Next()
-					if rawPkVec != nil {
-						pkVec.Append(rawPkVec.Get(int(row)))
-					}
-					rowIDVec.Append(row)
-					commitTSVec.Append(node.GetEnd())
-					abortVec.Append(node.IsAborted())
-				}
+				exist = true
+				return false
 			}
 			return !before
 		})
