@@ -22,14 +22,13 @@ import (
 
 func DatetimeToHour(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	inputVector := vectors[0]
-	resultType := types.New(types.T_uint8, 0, 0, 0)
+	resultType := types.T_uint8.ToType()
 	inputValues := vector.MustTCols[types.Datetime](inputVector)
 	if inputVector.IsScalar() {
 		if inputVector.IsScalarNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
-		resultVector := vector.NewConst(resultType, 1)
-		vector.SetCol(resultVector, []uint8{uint8(inputValues[0].Hour())})
+		resultVector := vector.NewConstFixed[uint8](resultType, 1, uint8(inputValues[0].Hour()))
 		return resultVector, nil
 	} else {
 		resultVector := vector.New(resultType)
@@ -51,20 +50,21 @@ func DatetimeToHour(vectors []*vector.Vector, proc *process.Process) (*vector.Ve
 
 func TimestampToHour(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	inputVector := vectors[0]
-	resultType := types.New(types.T_uint8, 0, 0, 0)
+	resultType := types.T_uint8.ToType()
 	inputValues := vector.MustTCols[types.Timestamp](inputVector)
-	tmp := make([]types.Datetime, len(inputValues))
-	types.TimestampToDatetime(proc.SessionInfo.TimeZone, inputValues, tmp)
+	convertedInputValues := make([]types.Datetime, len(inputValues))
+	if _, err := types.TimestampToDatetime(proc.SessionInfo.TimeZone, inputValues, convertedInputValues); err != nil {
+		return nil, err
+	}
 	if inputVector.IsScalar() {
 		if inputVector.IsScalarNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
-		resultVector := vector.NewConst(resultType, 1)
-		vector.SetCol(resultVector, []uint8{uint8(tmp[0].Hour())})
+		resultVector := vector.NewConstFixed[uint8](resultType, 1, uint8(convertedInputValues[0].Hour()))
 		return resultVector, nil
 	} else {
 		resultVector := vector.New(resultType)
-		for i, v := range tmp {
+		for i, v := range convertedInputValues {
 			if inputVector.GetNulls().Contains(uint64(i)) {
 				resultVector.GetNulls().Set(uint64(i))
 				if err := resultVector.Append(uint8(0), true, proc.GetMheap()); err != nil {
@@ -82,14 +82,14 @@ func TimestampToHour(vectors []*vector.Vector, proc *process.Process) (*vector.V
 
 func DatetimeToMinute(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	inputVector := vectors[0]
-	resultType := types.New(types.T_uint8, 0, 0, 0)
+	resultType := types.T_uint8.ToType()
 	inputValues := vector.MustTCols[types.Datetime](inputVector)
+
 	if inputVector.IsScalar() {
 		if inputVector.IsScalarNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
-		resultVector := vector.NewConst(resultType, 1)
-		vector.SetCol(resultVector, []uint8{uint8(inputValues[0].Minute())})
+		resultVector := vector.NewConstFixed[uint8](resultType, 1, uint8(inputValues[0].Minute()))
 		return resultVector, nil
 	} else {
 		resultVector := vector.New(resultType)
@@ -111,20 +111,21 @@ func DatetimeToMinute(vectors []*vector.Vector, proc *process.Process) (*vector.
 
 func TimestampToMinute(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	inputVector := vectors[0]
-	resultType := types.New(types.T_uint8, 0, 0, 0)
+	resultType := types.T_uint8.ToType()
 	inputValues := vector.MustTCols[types.Timestamp](inputVector)
-	tmp := make([]types.Datetime, len(inputValues))
-	types.TimestampToDatetime(proc.SessionInfo.TimeZone, inputValues, tmp)
+	convertedInputValues := make([]types.Datetime, len(inputValues))
+	if _, err := types.TimestampToDatetime(proc.SessionInfo.TimeZone, inputValues, convertedInputValues); err != nil {
+		return nil, err
+	}
 	if inputVector.IsScalar() {
 		if inputVector.IsScalarNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
-		resultVector := vector.NewConst(resultType, 1)
-		vector.SetCol(resultVector, []uint8{uint8(tmp[0].Minute())})
+		resultVector := vector.NewConstFixed[uint8](resultType, 1, uint8(convertedInputValues[0].Minute()))
 		return resultVector, nil
 	} else {
 		resultVector := vector.New(resultType)
-		for i, v := range tmp {
+		for i, v := range convertedInputValues {
 			if inputVector.GetNulls().Contains(uint64(i)) {
 				resultVector.GetNulls().Set(uint64(i))
 				if err := resultVector.Append(uint8(0), true, proc.GetMheap()); err != nil {
@@ -142,14 +143,13 @@ func TimestampToMinute(vectors []*vector.Vector, proc *process.Process) (*vector
 
 func DatetimeToSecond(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	inputVector := vectors[0]
-	resultType := types.New(types.T_uint8, 0, 0, 0)
+	resultType := types.T_uint8.ToType()
 	inputValues := vector.MustTCols[types.Datetime](inputVector)
 	if inputVector.IsScalar() {
 		if inputVector.IsScalarNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
-		resultVector := vector.NewConst(resultType, 1)
-		vector.SetCol(resultVector, []uint8{uint8(inputValues[0].Sec())})
+		resultVector := vector.NewConstFixed[uint8](resultType, 1, uint8(inputValues[0].Sec()))
 		return resultVector, nil
 	} else {
 		resultVector := vector.New(resultType)
@@ -171,20 +171,21 @@ func DatetimeToSecond(vectors []*vector.Vector, proc *process.Process) (*vector.
 
 func TimestampToSecond(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	inputVector := vectors[0]
-	resultType := types.New(types.T_uint8, 0, 0, 0)
+	resultType := types.T_uint8.ToType()
 	inputValues := vector.MustTCols[types.Timestamp](inputVector)
-	tmp := make([]types.Datetime, len(inputValues))
-	types.TimestampToDatetime(proc.SessionInfo.TimeZone, inputValues, tmp)
+	convertedInputValues := make([]types.Datetime, len(inputValues))
+	if _, err := types.TimestampToDatetime(proc.SessionInfo.TimeZone, inputValues, convertedInputValues); err != nil {
+		return nil, err
+	}
 	if inputVector.IsScalar() {
 		if inputVector.IsScalarNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
-		resultVector := vector.NewConst(resultType, 1)
-		vector.SetCol(resultVector, []uint8{uint8(tmp[0].Sec())})
+		resultVector := vector.NewConstFixed[uint8](resultType, 1, uint8(convertedInputValues[0].Sec()))
 		return resultVector, nil
 	} else {
 		resultVector := vector.New(resultType)
-		for i, v := range tmp {
+		for i, v := range convertedInputValues {
 			if inputVector.GetNulls().Contains(uint64(i)) {
 				resultVector.GetNulls().Set(uint64(i))
 				if err := resultVector.Append(uint8(0), true, proc.GetMheap()); err != nil {
