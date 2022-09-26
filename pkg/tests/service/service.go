@@ -311,7 +311,9 @@ func (c *testCluster) Start() error {
 	}
 
 	if c.opt.initial.cnServiceNum != 0 {
-		time.Sleep(10 * time.Second)
+		if err := c.WaitAnyShardReady(); err != nil {
+			return err
+		}
 		if err := c.startCNServices(); err != nil {
 			return err
 		}
@@ -600,6 +602,28 @@ func (c *testCluster) WaitHAKeeperState(
 				return
 			}
 		}
+	}
+}
+
+func (c *testCluster) WaitAnyShardReady() error {
+	// wait shard ready
+	for {
+		if ok, err := func() (bool, error) {
+			details := c.getClusterState()
+			for _, store := range details.DNState.Stores {
+				if len(store.Shards) > 0 {
+					return true, nil
+				}
+			}
+			logutil.Info("shard not ready")
+			return false, nil
+		}(); err != nil {
+			return err
+		} else if ok {
+			logutil.Info("shard ready")
+			return nil
+		}
+		time.Sleep(time.Second)
 	}
 }
 
