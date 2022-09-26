@@ -25,7 +25,7 @@ type TablePhysicalIter[
 
 func (t *Table[K, V, R]) NewPhysicalIter() *TablePhysicalIter[K, V] {
 	return &TablePhysicalIter[K, V]{
-		GenericIter: t.rows.Iter(),
+		GenericIter: t.rows.Copy().Iter(),
 	}
 }
 
