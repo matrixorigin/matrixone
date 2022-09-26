@@ -7045,7 +7045,6 @@ reserved_keyword:
 |   TO
 |   TRUE
 |   TRUNCATE
-|   TIME
 |   UNION
 |   UNIQUE
 |   UPDATE
@@ -7235,6 +7234,7 @@ non_reserved_keyword:
 |   TEXT
 |   THAN
 |   TINYBLOB
+|   TIME %prec LOWER_THAN_STRING
 |   TINYINT
 |   TINYTEXT
 |   TRANSACTION
