@@ -1,4 +1,3 @@
-DROP TABLE IF EXISTS update_test;
 CREATE TABLE product(
 id VARCHAR(20),
 product_id VARCHAR(20),
@@ -295,3 +294,5 @@ n2    n2
 0    1.0
 0    1.0
 0    1.0
+DROP TABLE IF EXISTS t1;
+DROP TABLE IF EXISTS t2;

@@ -4,13 +4,13 @@
 -- @desc:test for UPDATE for multiple table
 -- @label:bvt
 
-DROP TABLE IF EXISTS update_test;
 CREATE TABLE product(
     id VARCHAR(20),
     product_id VARCHAR(20),
     product_name VARCHAR(50),
     price FLOAT
 );
+
 CREATE TABLE product_price(
     id VARCHAR(20),
     product_id VARCHAR(20),
@@ -158,3 +158,10 @@ UPDATE t1,t2 SET t1.n2 = EXP(1), t2.n2 = SIN(3) WHERE t1.n1 = t2.n1;
 SELECT t1.n2, t2.n2 FROM t1, t2;
 UPDATE t1,t2 SET t1.n2 = POWER(5, -1), t2.n2 = POWER(0,0) WHERE t1.n3 BETWEEN 0 AND 3;
 SELECT t1.n2, t2.n2 FROM t1, t2;
+
+DROP TABLE IF EXISTS t1;
+DROP TABLE IF EXISTS t2;
+
+
+
+
