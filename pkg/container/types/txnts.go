@@ -254,6 +254,10 @@ func (c *MockHLCClock) MaxOffset() time.Duration {
 	return c.maxOffset
 }
 
+func (c *MockHLCClock) SetNodeID(id uint16) {
+	// nothing to do.
+}
+
 func MockColTypes(colCnt int) (ct []Type) {
 	for i := 0; i < colCnt; i++ {
 		var typ Type

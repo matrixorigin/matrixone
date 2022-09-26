@@ -33,6 +33,10 @@ type Clock interface {
 	Now() (timestamp.Timestamp, timestamp.Timestamp)
 	// Update updates the clock based on the received timestamp.
 	Update(ts timestamp.Timestamp)
+
+	// SetNodeID set node id. Just used to compatible with TAE some constraint to guaranteed
+	// unique timestamp.
+	SetNodeID(id uint16)
 }
 
 var (
