@@ -26,7 +26,7 @@ var (
 		input  string
 		output string
 	}{
-		input: "revoke all, all(a, b), create(a, b), select(a, b), super(a, b, c) on table db.a from u1, u2",
+		input: "select time from t1 as value",
 	}
 )
 
@@ -51,6 +51,8 @@ var (
 		input  string
 		output string
 	}{{
+		input: "select time from t1 as value",
+	}, {
 		input: "select password from t1",
 	}, {
 		input:  "create table t1 (a datetime on update CURRENT_TIMESTAMP(1))",
