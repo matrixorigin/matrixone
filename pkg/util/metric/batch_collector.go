@@ -132,9 +132,17 @@ type multiSimpleEntry interface {
 
 type batchMetricVec struct {
 	selfAsPromCollector
-	multiSimpleEntry
 
+	multiSimpleEntry
 	mux sync.Mutex
+}
+
+func newBatchMetricVec(e multiSimpleEntry) *batchMetricVec {
+	c := &batchMetricVec{
+		multiSimpleEntry: e,
+	}
+	c.init(c)
+	return c
 }
 
 // Describe returns all descriptions of the collector.

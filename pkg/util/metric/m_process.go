@@ -143,19 +143,42 @@ func (c procFdsLimit) Metric(s *statCaches) (prom.Metric, error) {
 	}
 }
 
-var ProcConnections = &batchMetricVec{multiSimpleEntry: &procConnections{}}
+var ProcConnections = newBatchMetricVec(newProcConnections())
 
-type procConnections struct{}
-
-func (c procConnections) Desc() *prom.Desc {
-	return prom.NewDesc(
-		"connections",
-		"Number of process connections",
-		[]string{constTenantKey}, make(prom.Labels),
-	)
+type procConnections struct {
+	desc *prom.Desc
 }
 
-func (c procConnections) Metrics() ([]prom.Metric, error) {
+func newProcConnections() *procConnections {
+	opts := CounterOpts{
+		Subsystem: "process",
+		Name:      "connections",
+		Help:      "Number of process connections",
+	}
+	lvs := []string{constTenantKey}
+	mustValidLbls(opts.Name, opts.ConstLabels, lvs)
+	desc := prom.NewDesc(
+		prom.BuildFQName(opts.Namespace, opts.Subsystem, opts.Name),
+		opts.Help,
+		lvs,
+		opts.ConstLabels,
+	)
+	// prom.NewDesc(
+	// 	"connections",
+	// 	"Number of process connections",
+	// 	[]string{constTenantKey}, make(prom.Labels),
+	// )
+	c := &procConnections{
+		desc: desc,
+	}
+	return c
+}
+
+func (c *procConnections) Desc() *prom.Desc {
+	return c.desc
+}
+
+func (c *procConnections) Metrics() ([]prom.Metric, error) {
 	if gConnectionCollector.Load() == nil {
 		return nil, nil
 	} else {
