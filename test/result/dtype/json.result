@@ -38,7 +38,6 @@ a	b
 {"t1": "a"}	1
 {"t1": "b"}	2
 select * from t1 into outfile '$resources/json/export_2.csv' fields terminated by '\t';
-open $resources/json/export_2.csv: file exists
 load data local infile '$resources/json/export_2.csv' into table t1 fields terminated by '\t' ignore 1 lines;
 load data local infile '$resources/json/export_2.csv' into table t2 fields terminated by '\t' ignore 1 lines;
 select * from t1;
