@@ -125,6 +125,7 @@ func checkInitiatingShards(
 	cluster pb.ClusterInfo, cfg hakeeper.Config, currTick uint64,
 ) []*operator.Operator {
 	// update the registered newly-created shards
+	fmt.Println("DNShards:", cluster.DNShards)
 	for _, record := range cluster.DNShards {
 		shardID := record.ShardID
 		_, err := rs.getShard(shardID)
@@ -132,6 +133,7 @@ func checkInitiatingShards(
 			if moerr.IsMoErrCode(err, moerr.ErrShardNotReported) {
 				// if a shard not reported, register it,
 				// and launch its replica after a while.
+				fmt.Println("shard not registered in waitingShards, now register it.")
 				waitingShards.register(shardID, currTick)
 			}
 			continue
@@ -189,8 +191,8 @@ func (w *initialShards) register(shardID, currTick uint64) bool {
 
 // remove deletes shard from the recorded fresh shards.
 func (w *initialShards) remove(shardID uint64) bool {
-	fmt.Println(shardID, "removed from initialShards")
 	if _, ok := w.shards[shardID]; ok {
+		fmt.Println(shardID, "removed from initialShards")
 		delete(w.shards, shardID)
 		return true
 	}
