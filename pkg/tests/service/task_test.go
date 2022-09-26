@@ -53,20 +53,21 @@ func waitTaskRescheduled(t *testing.T, ctx context.Context, taskService taskserv
 		select {
 		case <-ctx.Done():
 			assert.FailNow(t, "task not reallocated")
-		}
-		t.Logf("iteration: %d", i)
-		tasks, err := taskService.QueryTask(context.TODO(),
-			taskservice.WithTaskStatusCond(taskservice.EQ, task.TaskStatus_Running))
-		require.NoError(t, err)
-		require.Equal(t, 1, len(tasks))
-		if tasks[0].TaskRunner == uuid {
-			t.Logf("task %d is still on %s", tasks[0].ID, tasks[0].TaskRunner)
-			time.Sleep(1 * time.Second)
-			i++
-			continue
-		} else {
-			t.Logf("task %d reallocated on %s", tasks[0].ID, tasks[0].TaskRunner)
-			return
+		default:
+			t.Logf("iteration: %d", i)
+			tasks, err := taskService.QueryTask(context.TODO(),
+				taskservice.WithTaskStatusCond(taskservice.EQ, task.TaskStatus_Running))
+			require.NoError(t, err)
+			require.Equal(t, 1, len(tasks))
+			if tasks[0].TaskRunner == uuid {
+				t.Logf("task %d is still on %s", tasks[0].ID, tasks[0].TaskRunner)
+				time.Sleep(1 * time.Second)
+				i++
+				continue
+			} else {
+				t.Logf("task %d reallocated on %s", tasks[0].ID, tasks[0].TaskRunner)
+				return
+			}
 		}
 	}
 }
