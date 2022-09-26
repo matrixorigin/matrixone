@@ -1228,7 +1228,7 @@ func resetDateFunctionArgs(dateExpr *Expr, intervalExpr *Expr) ([]*Expr, error) 
 }
 
 func resetDateFunctionArgs2(dateExpr *Expr, intervalExpr *Expr) ([]*Expr, error) {
-	switch intervalExpr.Expr.(type){
+	switch intervalExpr.Expr.(type) {
 	case *plan.Expr_List:
 		return resetDateFunctionArgs(dateExpr, intervalExpr)
 	}
