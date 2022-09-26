@@ -151,7 +151,7 @@ func (c procConnections) Desc() *prom.Desc {
 	return prom.NewDesc(
 		"connections",
 		"Number of process connections",
-		[]string{constTenantKey}, nil,
+		[]string{constTenantKey}, make(prom.Labels),
 	)
 }
 
