@@ -99,10 +99,10 @@ var (
 	//statusPort defines which port the mo status server (for metric etc.) listens on and clients connect to
 	defaultStatusPort = 7001
 
-	//default is FileService. if InternalExecutor, use internal sql executor, FileService will implement soon.
+	// defaultBatchProcessor default is FileService. if InternalExecutor, use internal sql executor, FileService will implement soon.
 	defaultBatchProcessor = "FileService"
 
-	//default: 15 sec.
+	// defaultTraceExportInterval default: 15 sec.
 	defaultTraceExportInterval = 15
 )
 
@@ -321,31 +321,31 @@ type ObservabilityParameters struct {
 	// MoVersion, see SetDefaultValues
 	MoVersion string
 
-	//listening ip. normally same as FrontendParameters.Host
+	// Host listening ip. normally same as FrontendParameters.Host
 	Host string `toml:"host"`
 
-	//statusPort defines which port the mo status server (for metric etc.) listens on and clients connect to
+	// StatusPort defines which port the mo status server (for metric etc.) listens on and clients connect to
 	StatusPort int64 `toml:"statusPort"`
 
-	//default is false. if false, metrics can be scraped through host:status/metrics endpoint
+	// DisableMetricToProm default is false. if false, metrics can be scraped through host:status/metrics endpoint
 	DisableMetricToProm bool `toml:"disableMetricToProm"`
 
-	//default is false. if false, enable metric at booting
+	// DisableMetric default is false. if false, enable metric at booting
 	DisableMetric bool `toml:"disableMetric"`
 
-	//default is false. if false, enable trace at booting
+	// DisableTrace default is false. if false, enable trace at booting
 	DisableTrace bool `toml:"disableTrace"`
 
-	//default is FileService. if InternalExecutor, use internal sql executor, FileService will implement soon.
+	// EnableTraceDebug default is FileService. if InternalExecutor, use internal sql executor, FileService will implement soon.
 	BatchProcessor string `toml:"batchProcessor"`
 
-	//default is false. With true, system will check all the children span is ended, which belong to the closing span.
+	// EnableTraceDebug default is false. With true, system will check all the children span is ended, which belong to the closing span.
 	EnableTraceDebug bool `toml:"enableTraceDebug"`
 
-	//default is 15s.
+	// TraceExportInterval default is 15s.
 	TraceExportInterval int `toml:"trace_export_interval"`
 
-	//default is 0.0 sec. if 0.0f, record every query. Record with exec time longer than LongQueryTime.
+	// LongQueryTime default is 0.0 sec. if 0.0f, record every query. Record with exec time longer than LongQueryTime.
 	LongQueryTime float64 `toml:"long_query_time"`
 }
 
