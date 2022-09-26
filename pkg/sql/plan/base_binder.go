@@ -764,7 +764,7 @@ func bindFuncExprImplByPlanExpr(name string, args []*Expr) (*plan.Expr, error) {
 		if len(args) != 2 {
 			return nil, moerr.NewInvalidArg("date_add/date_sub function need two args", len(args))
 		}
-		args, err = resetDateFunction(args[0], args[1])
+		args, err = resetDateFunctionArgs2(args[0], args[1])
 		if err != nil {
 			return nil, err
 		}
@@ -772,7 +772,7 @@ func bindFuncExprImplByPlanExpr(name string, args []*Expr) (*plan.Expr, error) {
 		if len(args) != 2 {
 			return nil, moerr.NewInvalidArg("adddate/subdate function need two args", len(args))
 		}
-		args, err = resetDateFunction(args[0], args[1])
+		args, err = resetDateFunctionArgs2(args[0], args[1])
 		if err != nil {
 			return nil, err
 		}
@@ -1125,15 +1125,6 @@ func appendCastBeforeExpr(expr *Expr, toType *Type) (*Expr, error) {
 	}, nil
 }
 
-func resetDateFunction(dateExpr *Expr, intervalExpr *Expr)([]*Expr, error){
-
-	switch intervalExpr.Expr.(type){
-	case *plan.Expr_List:
-		return resetDateFunctionArgs(dateExpr, intervalExpr)
-	}
-	return resetDateFunctionArgs2(dateExpr, intervalExpr)
-}
-
 func resetDateFunctionArgs(dateExpr *Expr, intervalExpr *Expr) ([]*Expr, error) {
 
 	firstExpr := intervalExpr.Expr.(*plan.Expr_List).List.List[0]
@@ -1237,6 +1228,10 @@ func resetDateFunctionArgs(dateExpr *Expr, intervalExpr *Expr) ([]*Expr, error) 
 }
 
 func resetDateFunctionArgs2(dateExpr *Expr, intervalExpr *Expr) ([]*Expr, error) {
+	switch intervalExpr.Expr.(type){
+	case *plan.Expr_List:
+		return resetDateFunctionArgs(dateExpr, intervalExpr)
+	}
 	list := &plan.ExprList{
 		List: make([]*Expr, 2),
 	}
