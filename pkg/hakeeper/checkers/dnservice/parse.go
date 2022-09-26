@@ -132,6 +132,7 @@ func checkInitiatingShards(
 			if moerr.IsMoErrCode(err, moerr.ErrShardNotReported) {
 				// if a shard not reported, register it,
 				// and launch its replica after a while.
+				fmt.Println("Not registered")
 				waitingShards.register(shardID, currTick)
 			}
 			continue
@@ -189,6 +190,7 @@ func (w *initialShards) register(shardID, currTick uint64) bool {
 
 // remove deletes shard from the recorded fresh shards.
 func (w *initialShards) remove(shardID uint64) bool {
+	fmt.Println(shardID, "removed from initialShards")
 	if _, ok := w.shards[shardID]; ok {
 		delete(w.shards, shardID)
 		return true
