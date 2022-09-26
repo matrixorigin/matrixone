@@ -602,11 +602,11 @@ func (b *buffer2Sql) isEmpty() bool {
 }
 
 func (b *buffer2Sql) ShouldFlush() bool {
-	return atomic.LoadInt64(&b.size) > b.sizeThreshold
+	return b.size > b.sizeThreshold
 }
 
 func (b *buffer2Sql) Size() int64 {
-	return atomic.LoadInt64(&b.size)
+	return b.size
 }
 
 func (b *buffer2Sql) GetBufferType() string {
