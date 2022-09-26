@@ -21,8 +21,55 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func waitTaskScheduled(t *testing.T, ctx context.Context, taskService taskservice.TaskService) string {
+	i := 0
+	for {
+		select {
+		case <-ctx.Done():
+			assert.FailNow(t, "task not allocated")
+		default:
+			t.Logf("iteration: %d", i)
+			tasks, err := taskService.QueryTask(context.TODO(),
+				taskservice.WithTaskStatusCond(taskservice.EQ, task.TaskStatus_Running))
+			require.NoError(t, err)
+
+			if len(tasks) == 1 {
+				t.Logf("task %d allocated on %s", tasks[0].ID, tasks[0].TaskRunner)
+				return tasks[0].TaskRunner
+			}
+			time.Sleep(300 * time.Millisecond)
+			i++
+		}
+	}
+}
+
+func waitTaskRescheduled(t *testing.T, ctx context.Context, taskService taskservice.TaskService, uuid string) {
+	i := 0
+	for {
+		select {
+		case <-ctx.Done():
+			assert.FailNow(t, "task not reallocated")
+		}
+		t.Logf("iteration: %d", i)
+		tasks, err := taskService.QueryTask(context.TODO(),
+			taskservice.WithTaskStatusCond(taskservice.EQ, task.TaskStatus_Running))
+		require.NoError(t, err)
+		require.Equal(t, 1, len(tasks))
+		if tasks[0].TaskRunner == uuid {
+			t.Logf("task %d is still on %s", tasks[0].ID, tasks[0].TaskRunner)
+			time.Sleep(1 * time.Second)
+			i++
+			continue
+		} else {
+			t.Logf("task %d reallocated on %s", tasks[0].ID, tasks[0].TaskRunner)
+			return
+		}
+	}
+}
 
 func TestTaskSchedulerCanAllocateTask(t *testing.T) {
 	taskStorage := taskservice.NewMemTaskStorage()
@@ -50,19 +97,9 @@ func TestTaskSchedulerCanAllocateTask(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 1, len(tasks))
 
-	for i := 0; i < 100; i++ {
-		t.Logf("iteration: %d", i)
-		tasks, err := taskService.QueryTask(context.TODO(),
-			taskservice.WithTaskStatusCond(taskservice.EQ, task.TaskStatus_Running))
-		require.NoError(t, err)
-
-		if len(tasks) == 1 {
-			t.Logf("task %d allocated on %s", tasks[0].ID, tasks[0].TaskRunner)
-			return
-		}
-		time.Sleep(100 * time.Millisecond)
-	}
-	t.Fatalf("task not allocated")
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	waitTaskScheduled(t, ctx, taskService)
 }
 
 func TestTaskSchedulerCanReallocateTask(t *testing.T) {
@@ -91,37 +128,14 @@ func TestTaskSchedulerCanReallocateTask(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 1, len(tasks))
 
-	var uuid1 string
-	for i := 0; i < 100; i++ {
-		t.Logf("iteration: %d", i)
-		tasks, err := taskService.QueryTask(context.TODO(),
-			taskservice.WithTaskStatusCond(taskservice.EQ, task.TaskStatus_Running))
-		require.NoError(t, err)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	uuid1 := waitTaskScheduled(t, ctx, taskService)
 
-		if len(tasks) == 1 {
-			t.Logf("task %d allocated on %s", tasks[0].ID, tasks[0].TaskRunner)
-			uuid1 = tasks[0].TaskRunner
-			break
-		}
-		time.Sleep(100 * time.Millisecond)
-	}
 	err = c.CloseCNService(uuid1)
 	require.NoError(t, err)
-	for i := 0; i < 100; i++ {
-		t.Logf("iteration: %d", i)
-		tasks, err := taskService.QueryTask(context.TODO(),
-			taskservice.WithTaskStatusCond(taskservice.EQ, task.TaskStatus_Running))
-		require.NoError(t, err)
-		require.Equal(t, 1, len(tasks))
-		if tasks[0].TaskRunner == uuid1 {
-			t.Logf("task %d is still on %s", tasks[0].ID, tasks[0].TaskRunner)
-			time.Sleep(1 * time.Second)
-			continue
-		} else {
-			t.Logf("task %d reallocated on %s", tasks[0].ID, tasks[0].TaskRunner)
-			return
-		}
-	}
 
-	t.Fatalf("task not reallocated")
+	ctx1, cancel1 := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel1()
+	waitTaskRescheduled(t, ctx1, taskService, uuid1)
 }
