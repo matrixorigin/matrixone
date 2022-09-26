@@ -38,7 +38,7 @@ func (d *Database) Create(ctx context.Context, relName string, defs []engine.Tab
 		ctx,
 		d.engine,
 		d.txnOperator.Write,
-		d.engine.allNodesShards,
+		d.engine.allShards,
 		OpCreateRelation,
 		CreateRelationReq{
 			DatabaseID:   d.id,
@@ -61,7 +61,7 @@ func (d *Database) Delete(ctx context.Context, relName string) error {
 		ctx,
 		d.engine,
 		d.txnOperator.Write,
-		d.engine.allNodesShards,
+		d.engine.allShards,
 		OpDeleteRelation,
 		DeleteRelationReq{
 			DatabaseID:   d.id,
@@ -86,7 +86,7 @@ func (d *Database) Relation(ctx context.Context, relName string) (engine.Relatio
 		ctx,
 		d.engine,
 		d.txnOperator.Read,
-		d.engine.firstNodeShard,
+		d.engine.allShards,
 		OpOpenRelation,
 		OpenRelationReq{
 			DatabaseID:   d.id,
@@ -124,7 +124,7 @@ func (d *Database) Relations(ctx context.Context) ([]string, error) {
 		ctx,
 		d.engine,
 		d.txnOperator.Read,
-		d.engine.firstNodeShard,
+		d.engine.allShards,
 		OpGetRelations,
 		GetRelationsReq{
 			DatabaseID: d.id,
