@@ -87,49 +87,21 @@ var (
 	}
 
 	MakeDecimal64Vector = func(values []int64, nsp []uint64, _ types.Type) *vector.Vector {
-		vec := vector.New(decimal64Type)
 		cols := make([]types.Decimal64, len(values))
-		if nsp == nil {
-			for i, v := range values {
-				cols[i], _ = types.Decimal64_FromInt64(v, 64, 0)
-			}
-		} else {
-			for _, n := range nsp {
-				nulls.Add(vec.Nsp, n)
-			}
-			for i, v := range values {
-				if nulls.Contains(vec.Nsp, uint64(i)) {
-					continue
-				}
-				cols[i], _ = types.Decimal64_FromInt64(v, 64, 0)
-			}
+		for i, v := range values {
+			d, _ := types.InitDecimal64(v, 64, 0)
+			cols[i] = d
 		}
-		vec.Col = cols
-		return vec
+		return makeVector(cols, nsp, decimal64Type)
 	}
 
 	MakeDecimal128Vector = func(values []int64, nsp []uint64, _ types.Type) *vector.Vector {
-		vec := vector.New(decimal128Type)
 		cols := make([]types.Decimal128, len(values))
-		if nsp == nil {
-			for i, v := range values {
-				d, _ := types.InitDecimal128(v, 64, 0)
-				cols[i] = d
-			}
-		} else {
-			for _, n := range nsp {
-				nulls.Add(vec.Nsp, n)
-			}
-			for i, v := range values {
-				if nulls.Contains(vec.Nsp, uint64(i)) {
-					continue
-				}
-				d, _ := types.InitDecimal128(v, 64, 0)
-				cols[i] = d
-			}
+		for i, v := range values {
+			d, _ := types.InitDecimal128(v, 64, 0)
+			cols[i] = d
 		}
-		vec.Col = cols
-		return vec
+		return makeVector(cols, nsp, decimal128Type)
 	}
 
 	MakeDateVector = func(values []string, nsp []uint64) *vector.Vector {
