@@ -18,6 +18,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 )
@@ -127,9 +128,57 @@ func (builder *QueryBuilder) buildUnnest(tbl *tree.Unnest, ctx *BindContext) (in
 		BindingTags: []int32{tag},
 	}
 	var scanNode *plan.Node
+	var childId int32 = -1
 	switch o := tbl.Param.Origin.(type) {
 	case *tree.UnresolvedName:
 		schemaName, tableName, colName := o.GetNames()
+		if len(schemaName) == 0 {
+			cteRef := ctx.findCTE(tableName)
+			if cteRef != nil {
+				subCtx := NewBindContext(builder, ctx)
+				subCtx.maskedCTEs = cteRef.maskedCTEs
+				subCtx.cteName = tableName
+				//reset defaultDatabase
+				if len(cteRef.defaultDatabase) > 0 {
+					subCtx.defaultDatabase = cteRef.defaultDatabase
+				}
+
+				switch stmt := cteRef.ast.Stmt.(type) {
+				case *tree.Select:
+					childId, err = builder.buildSelect(stmt, subCtx, false)
+
+				case *tree.ParenSelect:
+					childId, err = builder.buildSelect(stmt.Select, subCtx, false)
+
+				default:
+					err = moerr.NewParseError("unexpected statement: '%v'", tree.String(stmt, dialect.MYSQL))
+				}
+
+				if err != nil {
+					return 0, err
+				}
+
+				if subCtx.isCorrelated {
+					return 0, moerr.NewNYI("correlated column in CTE")
+				}
+
+				if subCtx.hasSingleRow {
+					ctx.hasSingleRow = true
+				}
+
+				cols := cteRef.ast.Name.Cols
+
+				if len(cols) > len(subCtx.headings) {
+					return 0, moerr.NewSyntaxError("table %q has %d columns available but %d columns specified", tableName, len(subCtx.headings), len(cols))
+				}
+
+				for i, col := range cols {
+					subCtx.headings[i] = string(col)
+				}
+				break
+			}
+			schemaName = ctx.defaultDatabase
+		}
 		objRef, tableDef := builder.compCtx.Resolve(schemaName, tableName)
 		if objRef == nil {
 			return 0, moerr.NewSyntaxError("schema %s not found", schemaName)
@@ -178,7 +227,9 @@ func (builder *QueryBuilder) buildUnnest(tbl *tree.Unnest, ctx *BindContext) (in
 	default:
 		return 0, moerr.NewInvalidInput("unsupported unnest param type: %T", o)
 	}
-	childId := builder.appendNode(scanNode, ctx)
+	if scanNode != nil {
+		childId = builder.appendNode(scanNode, ctx)
+	}
 	node.Children = []int32{childId}
 	nodeID := builder.appendNode(node, ctx)
 	return nodeID, nil
