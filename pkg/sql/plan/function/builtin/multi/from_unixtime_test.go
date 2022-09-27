@@ -242,7 +242,7 @@ func TestFromUnixTimeFloat64Format(t *testing.T) {
 }
 
 func TestFromUnixTimeFloat64Null(t *testing.T) {
-	convey.Convey("test FromUnixTime Float64", t, func() {
+	convey.Convey("test FromUnixTime Float64 null", t, func() {
 		kases := []struct {
 			num float64
 		}{
@@ -277,7 +277,7 @@ func TestFromUnixTimeFloat64Null(t *testing.T) {
 }
 
 func TestFromUnixTimeInt64Null(t *testing.T) {
-	convey.Convey("test FromUnixTime Int64 Fromat", t, func() {
+	convey.Convey("test FromUnixTime Int64 null", t, func() {
 		kases := []struct {
 			num int64
 		}{
@@ -312,7 +312,7 @@ func TestFromUnixTimeInt64Null(t *testing.T) {
 }
 
 func TestFromUnixTimeInt64FormatNull(t *testing.T) {
-	convey.Convey("test FromUnixTime Int64 NUll", t, func() {
+	convey.Convey("test FromUnixTime Int64 format NUll", t, func() {
 		kases := []struct {
 			num int64
 		}{
@@ -348,7 +348,7 @@ func TestFromUnixTimeInt64FormatNull(t *testing.T) {
 }
 
 func TestFromUnixTimeFloat64FormatNull(t *testing.T) {
-	convey.Convey("test FromUnixTime Int64 NUll", t, func() {
+	convey.Convey("test FromUnixTime float64 NUll", t, func() {
 		kases := []struct {
 			num float64
 		}{
