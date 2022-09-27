@@ -114,6 +114,13 @@ INSERT INTO t1 (a,b,c) VALUES (4,5,6)
   ON DUPLICATE KEY UPDATE c=9;
 ```
 
+If the result of `INSERT ... ON DUPLICATE KEY UPDATE` is incorrect such as the following example, there should be notified error messages to users and this statement failed.
+
+```
+INSERT INTO t1 (a,b,c) VALUES (1,2,3)
+  ON DUPLICATE KEY UPDATE c='a';
+```
+
 ### 2. REPLACE Statement
 
 `REPLACE` works exactly like `INSERT` , except that if an old row in the table has the same value as a new row for a `PRIMARY KEY` or a `UNIQUE` index, the old row is deleted before the new row is inserted.
