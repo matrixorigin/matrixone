@@ -525,7 +525,7 @@ func TestCopy1(t *testing.T) {
 		assert.Equal(t, v2.Get(i), containers.GetValue(mv2, uint32(i)))
 	}
 
-	v3 := containers.MOToVector(mv2, true)
+	v3 := containers.MOToTAEVector(mv2, true)
 	t.Log(v3.String())
 	for i := 0; i < v3.Length(); i++ {
 		assert.Equal(t, v2.Get(i), v3.Get(i))
