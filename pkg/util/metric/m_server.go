@@ -1,4 +1,4 @@
-// Copyright 2021 Matrix Origin
+// Copyright 2022 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,16 +12,19 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package segmentio
+package metric
 
-type fileStat struct {
-	name       string
-	size       int64
-	originSize int64
-	algo       uint8
+var (
+	ConnFactory = NewGaugeVec(
+		GaugeOpts{
+			Subsystem: "server",
+			Name:      "connections",
+			Help:      "Number of process connections",
+		},
+		[]string{constTenantKey},
+	)
+)
+
+func ConnectionCounter(account string) Gauge {
+	return ConnFactory.WithLabelValues(account)
 }
-
-func (stat *fileStat) Name() string      { return stat.name }
-func (stat *fileStat) Size() int64       { return stat.size }
-func (stat *fileStat) OriginSize() int64 { return stat.originSize }
-func (stat *fileStat) CompressAlgo() int { return int(stat.algo) }

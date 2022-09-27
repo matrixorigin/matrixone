@@ -296,7 +296,20 @@ func (db *txnDB) SoftDeleteBlock(id *common.ID) (err error) {
 	}
 	return table.SoftDeleteBlock(id)
 }
-
+func (db *txnDB) UpdateMetaLoc(id *common.ID, metaLoc string) (err error) {
+	var table *txnTable
+	if table, err = db.getOrSetTable(id.TableID); err != nil {
+		return
+	}
+	return table.UpdateMetaLoc(id, metaLoc)
+}
+func (db *txnDB) UpdateDeltaLoc(id *common.ID, deltaLoc string) (err error) {
+	var table *txnTable
+	if table, err = db.getOrSetTable(id.TableID); err != nil {
+		return
+	}
+	return table.UpdateDeltaLoc(id, deltaLoc)
+}
 func (db *txnDB) SoftDeleteSegment(id *common.ID) (err error) {
 	var table *txnTable
 	if table, err = db.getOrSetTable(id.TableID); err != nil {

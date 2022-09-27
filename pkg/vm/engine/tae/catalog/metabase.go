@@ -60,7 +60,37 @@ func (be *MetaBaseEntry) PPString(level common.PPLevel, depth int, prefix string
 	s := fmt.Sprintf("%s%s%s", common.RepeatStr("\t", depth), prefix, be.StringLocked())
 	return s
 }
+func (be *MetaBaseEntry) GetMetaLoc() string {
+	be.RLock()
+	defer be.RUnlock()
+	if be.GetNodeLocked() == nil {
+		return ""
+	}
+	str := be.GetNodeLocked().(*MetadataMVCCNode).MetaLoc
+	return str
+}
+func (be *MetaBaseEntry) GetDeltaLoc() string {
+	be.RLock()
+	defer be.RUnlock()
+	if be.GetNodeLocked() == nil {
+		return ""
+	}
+	str := be.GetNodeLocked().(*MetadataMVCCNode).DeltaLoc
+	return str
+}
 
+func (be *MetaBaseEntry) GetVisibleMetaLoc(ts types.TS) string {
+	be.RLock()
+	defer be.RUnlock()
+	str := be.GetVisibleNode(ts).(*MetadataMVCCNode).MetaLoc
+	return str
+}
+func (be *MetaBaseEntry) GetVisibleDeltaLoc(ts types.TS) string {
+	be.RLock()
+	defer be.RUnlock()
+	str := be.GetVisibleNode(ts).(*MetadataMVCCNode).DeltaLoc
+	return str
+}
 func (be *MetaBaseEntry) TryGetTerminatedTS(waitIfcommitting bool) (terminated bool, TS types.TS) {
 	node := be.GetCommittedNode()
 	if node == nil {
@@ -112,19 +142,41 @@ func (be *MetaBaseEntry) DeleteLocked(txn txnif.TxnReader) (isNewNode bool, err 
 	return
 }
 
-func (be *MetaBaseEntry) UpdateAttr(txn txnif.TxnReader, node *MetadataMVCCNode) (isNewNode bool, err error) {
+func (be *MetaBaseEntry) UpdateMetaLoc(txn txnif.TxnReader, metaloc string) (isNewNode bool, err error) {
 	be.Lock()
 	defer be.Unlock()
 	needWait, txnToWait := be.NeedWaitCommitting(txn.GetStartTS())
 	if needWait {
-		be.RUnlock()
+		be.Unlock()
 		txnToWait.GetTxnState(true)
-		be.RLock()
+		be.Lock()
 	}
-	be.CheckConflict(txn)
+	err = be.CheckConflict(txn)
+	if err != nil {
+		return
+	}
 	var entry *MetadataMVCCNode
 	isNewNode, entry = be.getOrSetUpdateNode(txn)
-	entry.UpdateAttr(node)
+	entry.UpdateMetaLoc(metaloc)
+	return
+}
+
+func (be *MetaBaseEntry) UpdateDeltaLoc(txn txnif.TxnReader, deltaloc string) (isNewNode bool, err error) {
+	be.Lock()
+	defer be.Unlock()
+	needWait, txnToWait := be.NeedWaitCommitting(txn.GetStartTS())
+	if needWait {
+		be.Unlock()
+		txnToWait.GetTxnState(true)
+		be.Lock()
+	}
+	err = be.CheckConflict(txn)
+	if err != nil {
+		return
+	}
+	var entry *MetadataMVCCNode
+	isNewNode, entry = be.getOrSetUpdateNode(txn)
+	entry.UpdateDeltaLoc(deltaloc)
 	return
 }
 

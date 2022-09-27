@@ -18,13 +18,13 @@ import (
 	"database/sql"
 	"errors"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	apipb "github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage/txn/memtable"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 )
 
 type LogTailEntry = apipb.Entry
@@ -103,7 +103,7 @@ func (m *MemHandler) HandleGetLogTail(meta txn.TxnMeta, req apipb.SyncLogTailReq
 		return nil
 	}
 
-	if tableID == ID(catalog.SystemTable_DB_ID) {
+	if tableID == ID(catalog.MO_DATABASE_ID) {
 		// databases
 		if err := logTailHandleSystemTable(
 			m.databases,
@@ -115,7 +115,7 @@ func (m *MemHandler) HandleGetLogTail(meta txn.TxnMeta, req apipb.SyncLogTailReq
 			return err
 		}
 
-	} else if tableID == ID(catalog.SystemTable_Table_ID) {
+	} else if tableID == ID(catalog.MO_TABLES_ID) {
 		// relations
 		if err := logTailHandleSystemTable(
 			m.relations,
@@ -127,7 +127,7 @@ func (m *MemHandler) HandleGetLogTail(meta txn.TxnMeta, req apipb.SyncLogTailReq
 			return err
 		}
 
-	} else if tableID == ID(catalog.SystemTable_Columns_ID) {
+	} else if tableID == ID(catalog.MO_COLUMNS_ID) {
 		// attributes
 		if err := logTailHandleSystemTable(
 			m.attributes,

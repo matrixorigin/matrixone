@@ -744,6 +744,7 @@ func Test_withSizeThreshold(t *testing.T) {
 	}
 }
 
+/*
 func Test_batchSqlHandler_NewItemBatchHandler(t1 *testing.T) {
 	gCtrlSqlCh <- struct{}{}
 	type fields struct {
@@ -792,7 +793,7 @@ func Test_batchSqlHandler_NewItemBatchHandler(t1 *testing.T) {
 	}
 	WithSQLExecutor(func() internalExecutor.InternalExecutor { return nil }).apply(&GetTracerProvider().tracerProviderConfig)
 	<-gCtrlSqlCh
-}
+}*/
 
 func Test_genCsvData(t *testing.T) {
 	errorFormatter.Store("%v")

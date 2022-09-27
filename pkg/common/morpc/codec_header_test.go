@@ -16,10 +16,12 @@ package morpc
 
 import (
 	"context"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/fagongzi/goetty/v2/buf"
+	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/stretchr/testify/assert"
 )
@@ -73,4 +75,32 @@ func TestEncodeAndDecodeTrace(t *testing.T) {
 	assert.NoError(t, err)
 
 	assert.Equal(t, span, trace.SpanFromContext(msg.Ctx).SpanContext())
+}
+
+func TestEncodeAndDecodeClock(t *testing.T) {
+	var n1, n2 int64
+	f1 := func() int64 {
+		return atomic.LoadInt64(&n1)
+	}
+	f2 := func() int64 {
+		return atomic.LoadInt64(&n2)
+	}
+	c1 := &hlcCodec{clock: clock.NewHLCClock(f1, 0)}
+	c2 := &hlcCodec{clock: clock.NewHLCClock(f2, 0)}
+
+	n1 = 1
+	n2 = 2
+
+	out := buf.NewByteBuf(8)
+	n, err := c1.Encode(nil, out)
+	assert.NoError(t, err)
+	assert.Equal(t, 12, n)
+
+	_, data := out.ReadBytes(out.Readable())
+	n, err = c2.Decode(nil, data)
+	assert.NoError(t, err)
+	assert.Equal(t, 12, n)
+
+	now, _ := c2.clock.Now()
+	assert.Equal(t, n2, now.PhysicalTime)
 }

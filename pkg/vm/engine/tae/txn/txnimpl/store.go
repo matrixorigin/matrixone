@@ -195,6 +195,28 @@ func (store *txnStore) RangeDelete(dbId uint64, id *common.ID, start, end uint32
 	return db.RangeDelete(id, start, end, dt)
 }
 
+func (store *txnStore) UpdateMetaLoc(dbId uint64, id *common.ID, metaLoc string) (err error) {
+	db, err := store.getOrSetDB(dbId)
+	if err != nil {
+		return err
+	}
+	// if table.IsDeleted() {
+	// 	return txnbase.ErrNotFound
+	// }
+	return db.UpdateMetaLoc(id, metaLoc)
+}
+
+func (store *txnStore) UpdateDeltaLoc(dbId uint64, id *common.ID, deltaLoc string) (err error) {
+	db, err := store.getOrSetDB(dbId)
+	if err != nil {
+		return err
+	}
+	// if table.IsDeleted() {
+	// 	return txnbase.ErrNotFound
+	// }
+	return db.UpdateDeltaLoc(id, deltaLoc)
+}
+
 func (store *txnStore) GetByFilter(dbId, tid uint64, filter *handle.Filter) (id *common.ID, offset uint32, err error) {
 	db, err := store.getOrSetDB(dbId)
 	if err != nil {
