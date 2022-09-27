@@ -101,6 +101,9 @@ func TestTaskSchedulerCanAllocateTask(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	waitTaskScheduled(t, ctx, taskService)
+	if err = c.Close(); err != nil {
+		assert.FailNow(t, "testCluster close failed")
+	}
 }
 
 func TestTaskSchedulerCanReallocateTask(t *testing.T) {
