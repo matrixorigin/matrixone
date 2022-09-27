@@ -476,7 +476,7 @@ func (c *Compile) compilePlanScope(n *plan.Node, ns []*plan.Node) ([]*Scope, err
 }
 
 func (c *Compile) compileExternScan(n *plan.Node) []*Scope {
-	ds := &Scope{Magic: Normal}
+	ds := &Scope{Magic: External}
 	ds.Proc = process.NewWithAnalyze(c.proc, c.ctx, 0, c.anal.Nodes())
 	bat := batch.NewWithSize(1)
 	{

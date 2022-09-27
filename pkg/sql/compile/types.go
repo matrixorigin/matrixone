@@ -51,6 +51,7 @@ const (
 	Insert
 	Update
 	InsertValues
+	External
 )
 
 // Source contains information of a relation which will be used in execution,

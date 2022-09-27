@@ -17,6 +17,7 @@ package external
 import (
 	"context"
 	"io"
+	"sync"
 	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -36,12 +37,14 @@ type ExternalParam struct {
 	IgnoreLine    int
 	IgnoreLineTag int
 	// tag indicate the fileScan is finished
-	End       bool
+	ScanEnd   bool
+	Prepare   bool
 	FileCnt   int
 	FileIndex int
 	FileList  []string
 	batchSize int
 	reader    io.ReadCloser
+	mu        sync.Mutex
 }
 
 type Argument struct {
