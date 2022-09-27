@@ -22,7 +22,6 @@
 package trace
 
 import (
-	"context"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -37,6 +36,7 @@ var _1SpanID SpanID = [8]byte{0, 0, 0, 0, 0, 0, 0, 1}
 var _2SpanID SpanID = [8]byte{0, 0, 0, 0, 0, 0, 0, 2}
 var _16SpanID SpanID = [8]byte{0, 0, 0, 0, 0, 0x12, 0x34, 0x56}
 
+/*
 func TestMOTracer_Start(t1 *testing.T) {
 	type fields struct {
 		TracerConfig TracerConfig
@@ -106,7 +106,7 @@ func TestMOTracer_Start(t1 *testing.T) {
 			}
 		})
 	}
-}
+}*/
 
 func TestSpanContext_MarshalTo(t *testing.T) {
 	type fields struct {
