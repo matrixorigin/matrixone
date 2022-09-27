@@ -74,6 +74,14 @@ func (ti *TenantInfo) GetDefaultRole() string {
 	return ti.DefaultRole
 }
 
+func (ti *TenantInfo) SetDefaultRole(r string) {
+	ti.DefaultRole = r
+}
+
+func (ti *TenantInfo) HasDefaultRole() bool {
+	return len(ti.GetDefaultRole()) != 0
+}
+
 func (ti *TenantInfo) GetDefaultRoleID() uint32 {
 	return ti.DefaultRoleID
 }
@@ -117,9 +125,8 @@ func GetTenantInfo(userInput string) (*TenantInfo, error) {
 	p := strings.IndexByte(userInput, ':')
 	if p == -1 {
 		return &TenantInfo{
-			Tenant:      GetDefaultTenant(),
-			User:        userInput,
-			DefaultRole: GetDefaultRole(),
+			Tenant: GetDefaultTenant(),
+			User:   userInput,
 		}, nil
 	} else {
 		tenant := userInput[:p]
@@ -137,9 +144,8 @@ func GetTenantInfo(userInput string) (*TenantInfo, error) {
 				return &TenantInfo{}, moerr.NewInternalError("invalid user name '%s'", user)
 			}
 			return &TenantInfo{
-				Tenant:      strings.ToLower(tenant),
-				User:        strings.ToLower(user),
-				DefaultRole: GetDefaultRole(),
+				Tenant: strings.ToLower(tenant),
+				User:   strings.ToLower(user),
 			}, nil
 		} else {
 			user := userRole[:p2]
@@ -701,6 +707,8 @@ var (
 
 	checkRoleExistsFormat = `select role_id from mo_catalog.mo_role where role_id = %d and role_name = "%s";`
 
+	roleNameOfRoleIdFormat = `select role_name from mo_catalog.mo_role where role_id = %d;`
+
 	roleIdOfRoleFormat = `select role_id from mo_catalog.mo_role where role_name = "%s";`
 
 	//operations on the mo_user_grant
@@ -921,6 +929,10 @@ func getSqlForPasswordOfUser(user string) string {
 
 func getSqlForCheckRoleExists(roleID int, roleName string) string {
 	return fmt.Sprintf(checkRoleExistsFormat, roleID, roleName)
+}
+
+func getSqlForRoleNameOfRoleId(roleId int64) string {
+	return fmt.Sprintf(roleNameOfRoleIdFormat, roleId)
 }
 
 func getSqlForRoleIdOfRole(roleName string) string {
@@ -1378,15 +1390,58 @@ func (g *graph) hasLoop(start int64) bool {
 
 // nameIsInvalid checks the name of account/user/role is valid or not
 func nameIsInvalid(name string) bool {
-	if len(name) == 0 {
+	s := strings.TrimSpace(name)
+	if len(s) == 0 {
 		return true
 	}
-	if !(strings.HasPrefix(name, "`") && strings.HasSuffix(name, "`")) {
-		if strings.Contains(name, ":") {
-			return true
+	return strings.Contains(s, ":")
+}
+
+// normalizeName normalizes and checks the name
+func normalizeName(name string) (string, error) {
+	s := strings.TrimSpace(name)
+	if nameIsInvalid(s) {
+		return "", moerr.NewInternalError(`the name "%s" is invalid`, name)
+	}
+	return s, nil
+}
+
+// normalizeNameOfRole normalizes the name
+func normalizeNameOfRole(role *tree.Role) error {
+	var err error
+	role.UserName, err = normalizeName(role.UserName)
+	return err
+}
+
+// normalizeNamesOfRoles normalizes the names and checks them
+func normalizeNamesOfRoles(roles []*tree.Role) error {
+	var err error
+	for i := 0; i < len(roles); i++ {
+		err = normalizeNameOfRole(roles[i])
+		if err != nil {
+			return err
 		}
 	}
-	return false
+	return nil
+}
+
+// normalizeNameOfUser normalizes the name
+func normalizeNameOfUser(user *tree.User) error {
+	var err error
+	user.Username, err = normalizeName(user.Username)
+	return err
+}
+
+// normalizeNamesOfUsers normalizes the names and checks them
+func normalizeNamesOfUsers(users []*tree.User) error {
+	var err error
+	for i := 0; i < len(users); i++ {
+		err = normalizeNameOfUser(users[i])
+		if err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // doDropAccount accomplishes the DropAccount statement
@@ -1402,6 +1457,11 @@ func doDropAccount(ctx context.Context, ses *Session, da *tree.DropAccount) erro
 	var deleteCtx context.Context
 	var accountId int64
 	var hasAccount = true
+
+	da.Name, err = normalizeName(da.Name)
+	if err != nil {
+		return err
+	}
 
 	err = bh.Exec(ctx, "begin;")
 	if err != nil {
@@ -1476,12 +1536,17 @@ handleFailed:
 
 // doDropUser accomplishes the DropUser statement
 func doDropUser(ctx context.Context, ses *Session, du *tree.DropUser) error {
+	var err error
+	var vr *verifiedRole
+	err = normalizeNamesOfUsers(du.Users)
+	if err != nil {
+		return err
+	}
 	pu := ses.Pu
 	guestMMu := guest.New(pu.SV.GuestMmuLimitation, pu.HostMmu)
 	bh := NewBackgroundHandler(ctx, guestMMu, pu.Mempool, pu)
 	defer bh.Close()
-	var err error
-	var vr *verifiedRole
+
 	verifiedRoles := make([]*verifiedRole, len(du.Users))
 
 	//put it into the single transaction
@@ -1541,12 +1606,17 @@ handleFailed:
 
 // doDropRole accomplishes the DropRole statement
 func doDropRole(ctx context.Context, ses *Session, dr *tree.DropRole) error {
+	var err error
+	var vr *verifiedRole
+	err = normalizeNamesOfRoles(dr.Roles)
+	if err != nil {
+		return err
+	}
 	pu := ses.Pu
 	guestMMu := guest.New(pu.SV.GuestMmuLimitation, pu.HostMmu)
 	bh := NewBackgroundHandler(ctx, guestMMu, pu.Mempool, pu)
 	defer bh.Close()
-	var err error
-	var vr *verifiedRole
+
 	verifiedRoles := make([]*verifiedRole, len(dr.Roles))
 
 	//put it into the single transaction
@@ -1608,16 +1678,21 @@ handleFailed:
 
 // doRevokePrivilege accomplishes the RevokePrivilege statement
 func doRevokePrivilege(ctx context.Context, ses *Session, rp *tree.RevokePrivilege) error {
-	pu := ses.Pu
-	guestMMu := guest.New(pu.SV.GuestMmuLimitation, pu.HostMmu)
-	bh := NewBackgroundHandler(ctx, guestMMu, pu.Mempool, pu)
-	defer bh.Close()
 	var err error
 	var vr *verifiedRole
 	var objType objectType
 	var privLevel privilegeLevelType
 	var objId int64
 	var privType PrivilegeType
+	err = normalizeNamesOfRoles(rp.Roles)
+	if err != nil {
+		return err
+	}
+
+	pu := ses.Pu
+	guestMMu := guest.New(pu.SV.GuestMmuLimitation, pu.HostMmu)
+	bh := NewBackgroundHandler(ctx, guestMMu, pu.Mempool, pu)
+	defer bh.Close()
 
 	verifiedRoles := make([]*verifiedRole, len(rp.Roles))
 	checkedPrivilegeTypes := make([]PrivilegeType, len(rp.Privileges))
@@ -1871,11 +1946,6 @@ func matchPrivilegeTypeWithObjectType(privType PrivilegeType, objType objectType
 
 // doGrantPrivilege accomplishes the GrantPrivilege statement
 func doGrantPrivilege(ctx context.Context, ses *Session, gp *tree.GrantPrivilege) error {
-	pu := ses.Pu
-	account := ses.GetTenantInfo()
-	guestMMu := guest.New(pu.SV.GuestMmuLimitation, pu.HostMmu)
-	bh := NewBackgroundHandler(ctx, guestMMu, pu.Mempool, pu)
-	defer bh.Close()
 	var err error
 	var rsset []ExecResult
 	var roleId int64
@@ -1883,6 +1953,17 @@ func doGrantPrivilege(ctx context.Context, ses *Session, gp *tree.GrantPrivilege
 	var objType objectType
 	var privLevel privilegeLevelType
 	var objId int64
+
+	err = normalizeNamesOfRoles(gp.Roles)
+	if err != nil {
+		return err
+	}
+
+	pu := ses.Pu
+	account := ses.GetTenantInfo()
+	guestMMu := guest.New(pu.SV.GuestMmuLimitation, pu.HostMmu)
+	bh := NewBackgroundHandler(ctx, guestMMu, pu.Mempool, pu)
+	defer bh.Close()
 
 	//Get primary keys
 	//step 1: get role_id
@@ -2024,11 +2105,19 @@ handleFailed:
 
 // doRevokeRole accomplishes the RevokeRole statement
 func doRevokeRole(ctx context.Context, ses *Session, rr *tree.RevokeRole) error {
+	var err error
+	err = normalizeNamesOfRoles(rr.Roles)
+	if err != nil {
+		return err
+	}
+	err = normalizeNamesOfUsers(rr.Users)
+	if err != nil {
+		return err
+	}
 	pu := ses.Pu
 	guestMMu := guest.New(pu.SV.GuestMmuLimitation, pu.HostMmu)
 	bh := NewBackgroundHandler(ctx, guestMMu, pu.Mempool, pu)
 	defer bh.Close()
-	var err error
 
 	//step1 : check Roles exists or not
 	var vr *verifiedRole
@@ -2124,14 +2213,22 @@ handleFailed:
 
 // doGrantRole accomplishes the GrantRole statement
 func doGrantRole(ctx context.Context, ses *Session, gr *tree.GrantRole) error {
+	var rsset []ExecResult
+	var err error
+	var withGrantOption int64
+	err = normalizeNamesOfRoles(gr.Roles)
+	if err != nil {
+		return err
+	}
+	err = normalizeNamesOfUsers(gr.Users)
+	if err != nil {
+		return err
+	}
 	pu := ses.Pu
 	account := ses.GetTenantInfo()
 	guestMMu := guest.New(pu.SV.GuestMmuLimitation, pu.HostMmu)
 	bh := NewBackgroundHandler(ctx, guestMMu, pu.Mempool, pu)
 	defer bh.Close()
-	var rsset []ExecResult
-	var err error
-	var withGrantOption int64
 
 	//step1 : check Roles exists or not
 	var vr *verifiedRole
@@ -3598,6 +3695,16 @@ func InitGeneralTenant(ctx context.Context, tenant *TenantInfo, ca *tree.CreateA
 		return moerr.NewInternalError("tenant %s user %s role %s do not have the privilege to create the new account", tenant.GetTenant(), tenant.GetUser(), tenant.GetDefaultRole())
 	}
 
+	//normalize the name
+	ca.Name, err = normalizeName(ca.Name)
+	if err != nil {
+		return err
+	}
+
+	ca.AuthOption.AdminName, err = normalizeName(ca.AuthOption.AdminName)
+	if err != nil {
+		return err
+	}
 	ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(tenant.GetTenantID()))
 	ctx = context.WithValue(ctx, defines.UserIDKey{}, uint32(tenant.GetUserID()))
 	ctx = context.WithValue(ctx, defines.RoleIDKey{}, uint32(tenant.GetDefaultRoleID()))
@@ -3867,6 +3974,19 @@ func InitUser(ctx context.Context, tenant *TenantInfo, cu *tree.CreateUser) erro
 	var values []interface{}
 	var newRoleId int64
 	var status string
+
+	err = normalizeNamesOfUsers(cu.Users)
+	if err != nil {
+		return err
+	}
+
+	if cu.Role != nil {
+		err = normalizeNameOfRole(cu.Role)
+		if err != nil {
+			return err
+		}
+	}
+
 	pu := config.GetParameterUnit(ctx)
 
 	guestMMu := guest.New(pu.SV.GuestMmuLimitation, pu.HostMmu)
@@ -4058,6 +4178,10 @@ func InitRole(ctx context.Context, tenant *TenantInfo, cr *tree.CreateRole) erro
 	var err error
 	var exists int
 	var rsset []ExecResult
+	err = normalizeNamesOfRoles(cr.Roles)
+	if err != nil {
+		return err
+	}
 	pu := config.GetParameterUnit(ctx)
 
 	guestMMu := guest.New(pu.SV.GuestMmuLimitation, pu.HostMmu)

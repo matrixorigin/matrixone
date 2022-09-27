@@ -40,8 +40,8 @@ func TestGetTenantInfo(t *testing.T) {
 			wantErr bool
 		}
 		args := []input{
-			{"u1", "{tenantInfo sys:u1:moadmin -- 0:0:0}", false},
-			{"tenant1:u1", "{tenantInfo tenant1:u1:moadmin -- 0:0:0}", false},
+			{"u1", "{tenantInfo sys:u1: -- 0:0:0}", false},
+			{"tenant1:u1", "{tenantInfo tenant1:u1: -- 0:0:0}", false},
 			{"tenant1:u1:r1", "{tenantInfo tenant1:u1:r1 -- 0:0:0}", false},
 			{":u1:r1", "{tenantInfo tenant1:u1:r1 -- 0:0:0}", true},
 			{"tenant1:u1:", "{tenantInfo tenant1:u1:moadmin -- 0:0:0}", true},
@@ -5538,6 +5538,42 @@ func generateGrantPrivilege(roleNames []string, withGrantOption bool) {
 func Test_generateGrantPrivilege(t *testing.T) {
 	convey.Convey("grant privilege combination", t, func() {
 		generateGrantPrivilege([]string{"role_r1"}, false)
+	})
+}
+
+func Test_Name(t *testing.T) {
+	convey.Convey("test", t, func() {
+		type arg struct {
+			input string
+			want  string
+		}
+
+		args := []arg{
+			{" abc ", "abc"},
+		}
+
+		for _, a := range args {
+			ret, _ := normalizeName(a.input)
+			convey.So(ret == a.want, convey.ShouldBeTrue)
+		}
+	})
+
+	convey.Convey("test2", t, func() {
+		type arg struct {
+			input string
+			want  bool
+		}
+
+		args := []arg{
+			{"abc", false},
+			{"a:bc", true},
+			{"  a:bc  ", true},
+		}
+
+		for _, a := range args {
+			ret := nameIsInvalid(a.input)
+			convey.So(ret == a.want, convey.ShouldBeTrue)
+		}
 	})
 }
 
