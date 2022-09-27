@@ -71,3 +71,6 @@ func DateDiff(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, 
 	return resultVector, nil
 }
 
+func TimeStampDiff(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	return nil, nil
+}
