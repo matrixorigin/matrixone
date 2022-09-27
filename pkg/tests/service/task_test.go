@@ -110,6 +110,7 @@ func TestTaskSchedulerCanReallocateTask(t *testing.T) {
 	cnSvcNum := 2
 	opt := DefaultOptions().
 		WithCNServiceNum(cnSvcNum).
+		WithHKDNStoreTimeout(10 * time.Second).
 		WithTaskStorage(taskStorage)
 
 	// initialize cluster
