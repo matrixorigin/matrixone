@@ -17,10 +17,13 @@ package main
 import (
 	"context"
 	goErrors "errors"
+	"fmt"
+	"io"
 	"time"
 
 	"github.com/lni/dragonboat/v4/logger"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/util/batchpipe"
 	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
@@ -41,6 +44,16 @@ func (l logOutputExecutor) Query(ctx context.Context, s string, _ ie.SessionOver
 }
 func (l logOutputExecutor) ApplySessionOverride(ie.SessionOverrideOptions) {}
 
+type dummyStringWriter struct{}
+
+func (w *dummyStringWriter) WriteString(s string) (n int, err error) {
+	return fmt.Printf("dummyStringWriter: %s\n", s)
+}
+
+var dummyFSWriterFactory = func(context.Context, string, batchpipe.HasName) io.StringWriter {
+	return &dummyStringWriter{}
+}
+
 func bootstrap(ctx context.Context) (context.Context, error) {
 	logutil.SetupMOLogger(&logutil.LogConfig{Format: "console", DisableStore: false})
 	// init trace/log/error framework & BatchProcessor
@@ -53,6 +66,8 @@ func bootstrap(ctx context.Context) (context.Context, error) {
 		// config[traceBatchProcessor], distributed node should use "FileService" in system_vars_config.toml
 		// "FileService" is not implement yet
 		trace.WithBatchProcessMode("InternalExecutor"),
+		// WithFSWriterFactory for config[traceBatchProcessor] = "FileService"
+		trace.WithFSWriterFactory(dummyFSWriterFactory),
 		// WithSQLExecutor for config[traceBatchProcessor] = "InternalExecutor"
 		trace.WithSQLExecutor(func() ie.InternalExecutor {
 			return &logOutputExecutor{}
@@ -190,7 +205,7 @@ func mixUsage(ctx context.Context) {
 	logutil.Info("message", trace.ContextField(newCtx))
 
 	err := childFunc(newCtx)
-	trace.ReportError(newCtx, errutil.Wrapf(err, "extra %s", "message"))
+	trace.ReportError(newCtx, errutil.Wrapf(err, "extra %s", "message"), 0)
 
 }
 

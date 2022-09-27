@@ -16,19 +16,19 @@ package db
 
 import (
 	"errors"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
 	"os"
+	"strings"
 	"sync"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/mockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/jobs"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/panjf2000/ants/v2"
 	"github.com/stretchr/testify/assert"
@@ -171,7 +171,6 @@ func (e *testEngine) truncate() {
 }
 
 func initDB(t *testing.T, opts *options.Options) *DB {
-	mockio.ResetFS()
 	dir := testutils.InitTestEnv(ModuleName, t)
 	db, _ := Open(dir, opts)
 	return db
@@ -195,7 +194,7 @@ func withTestAllPKType(t *testing.T, tae *DB, test func(*testing.T, *DB, *catalo
 
 func getSegmentFileNames(e *DB) (names map[uint64]string) {
 	names = make(map[uint64]string)
-	files, err := os.ReadDir(e.Dir)
+	files, err := os.ReadDir(e.FileFactory.(*blockio.ObjectFactory).Fs.Dir)
 	if err != nil {
 		panic(err)
 	}
@@ -206,6 +205,21 @@ func getSegmentFileNames(e *DB) (names map[uint64]string) {
 			continue
 		}
 		names[id] = name
+	}
+	return
+}
+
+func getBlockFileNames(e *DB) (names []string) {
+	names = make([]string, 0)
+	files, err := os.ReadDir(e.FileFactory.(*blockio.ObjectFactory).Fs.Dir)
+	if err != nil {
+		panic(err)
+	}
+	for _, f := range files {
+		name := f.Name()
+		if strings.HasSuffix(name, ".blk") {
+			names = append(names, name)
+		}
 	}
 	return
 }
@@ -513,7 +527,7 @@ func mergeBlocks(t *testing.T, tenantID uint32, e *DB, dbName string, schema *ca
 	}
 }
 
-func compactSegs(t *testing.T, e *DB, schema *catalog.Schema) {
+/*func compactSegs(t *testing.T, e *DB, schema *catalog.Schema) {
 	txn, rel := getDefaultRelation(t, e, schema.Name)
 	segs := make([]*catalog.SegmentEntry, 0)
 	it := rel.MakeSegmentIt()
@@ -535,7 +549,7 @@ func compactSegs(t *testing.T, e *DB, schema *catalog.Schema) {
 		assert.NoError(t, err)
 	}
 	assert.NoError(t, txn.Commit())
-}
+}*/
 
 func getSingleSortKeyValue(bat *containers.Batch, schema *catalog.Schema, row int) (v any) {
 	v = bat.Vecs[schema.GetSingleSortKeyIdx()].Get(row)

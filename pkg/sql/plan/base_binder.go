@@ -259,7 +259,7 @@ func (b *baseBinder) baseBindColRef(astExpr *tree.UnresolvedName, depth int32, i
 				typ = binding.types[colPos]
 				table = binding.table
 			} else {
-				return nil, moerr.NewInvalidInput("ambiguouse column reference '%v'", name)
+				return nil, moerr.NewInvalidInput("ambiguous column reference '%v'", name)
 			}
 		} else {
 			err = moerr.NewInvalidInput("column %s does not exist", name)
@@ -695,12 +695,7 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 					// rewrite count(*) to starcount(col_name)
 					name = "starcount"
 
-					var newCountCol *tree.UnresolvedName
-					newCountCol, err := tree.NewUnresolvedName(b.ctx.bindings[0].cols[0])
-					if err != nil {
-						return nil, err
-					}
-					astArgs[0] = newCountCol
+					astArgs[0] = tree.NewNumValWithType(constant.MakeInt64(1), "1", false, tree.P_int64)
 				}
 			}
 		}
@@ -769,7 +764,7 @@ func bindFuncExprImplByPlanExpr(name string, args []*Expr) (*plan.Expr, error) {
 		if len(args) != 2 {
 			return nil, moerr.NewInvalidArg("date_add/date_sub function need two args", len(args))
 		}
-		args, err = resetDateFunctionArgs(args[0], args[1])
+		args, err = resetDateFunction(args[0], args[1])
 		if err != nil {
 			return nil, err
 		}
@@ -777,7 +772,7 @@ func bindFuncExprImplByPlanExpr(name string, args []*Expr) (*plan.Expr, error) {
 		if len(args) != 2 {
 			return nil, moerr.NewInvalidArg("adddate/subdate function need two args", len(args))
 		}
-		args, err = resetDateFunctionArgs2(args[0], args[1])
+		args, err = resetDateFunction(args[0], args[1])
 		if err != nil {
 			return nil, err
 		}
@@ -1232,7 +1227,7 @@ func resetDateFunctionArgs(dateExpr *Expr, intervalExpr *Expr) ([]*Expr, error) 
 	}, nil
 }
 
-func resetDateFunctionArgs2(dateExpr *Expr, intervalExpr *Expr) ([]*Expr, error) {
+func resetDateFunction(dateExpr *Expr, intervalExpr *Expr) ([]*Expr, error) {
 	switch intervalExpr.Expr.(type) {
 	case *plan.Expr_List:
 		return resetDateFunctionArgs(dateExpr, intervalExpr)

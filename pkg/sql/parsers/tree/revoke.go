@@ -14,7 +14,10 @@
 
 package tree
 
-import "fmt"
+import (
+	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
+)
 
 type RevokeType int
 
@@ -45,7 +48,7 @@ type RevokePrivilege struct {
 	Privileges []*Privilege
 	ObjType    ObjectType
 	Level      *PrivilegeLevel
-	Users      []*User
+	Roles      []*Role
 }
 
 func (node *RevokePrivilege) Format(ctx *FmtCtx) {
@@ -65,19 +68,19 @@ func (node *RevokePrivilege) Format(ctx *FmtCtx) {
 	ctx.WriteString(" on")
 	if node.ObjType != OBJECT_TYPE_NONE {
 		ctx.WriteByte(' ')
-		ctx.WriteString(node.ObjType.ToString())
+		ctx.WriteString(node.ObjType.String())
 	}
 	if node.Level != nil {
 		ctx.WriteByte(' ')
 		node.Level.Format(ctx)
 	}
 
-	if node.Users != nil {
+	if node.Roles != nil {
 		ctx.WriteString(" from")
 		prefix := " "
-		for _, u := range node.Users {
+		for _, r := range node.Roles {
 			ctx.WriteString(prefix)
-			u.Format(ctx)
+			r.Format(ctx)
 			prefix = ", "
 		}
 	}
@@ -141,6 +144,12 @@ func (node *PrivilegeLevel) Format(ctx *FmtCtx) {
 	}
 }
 
+func (node *PrivilegeLevel) String() string {
+	fmtCtx := NewFmtCtx(dialect.MYSQL)
+	node.Format(fmtCtx)
+	return fmtCtx.String()
+}
+
 func NewPrivilegeLevel(l PrivilegeLevelType, d, t, r string) *PrivilegeLevel {
 	return &PrivilegeLevel{
 		Level:       l,
@@ -193,7 +202,7 @@ func NewPrivilege(t PrivilegeType, c []*UnresolvedName) *Privilege {
 
 type ObjectType int
 
-func (node *ObjectType) ToString() string {
+func (node *ObjectType) String() string {
 	switch *node {
 	case OBJECT_TYPE_TABLE:
 		return "table"
@@ -292,6 +301,10 @@ func (node *PrivilegeType) ToString() string {
 		return "update"
 	case PRIVILEGE_TYPE_STATIC_USAGE:
 		return "usage"
+	case PRIVILEGE_TYPE_STATIC_CONNECT:
+		return "connect"
+	case PRIVILEGE_TYPE_STATIC_OWNERSHIP:
+		return "ownership"
 	default:
 		return "Unknown PrivilegeType"
 	}

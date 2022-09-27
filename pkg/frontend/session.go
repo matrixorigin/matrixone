@@ -16,10 +16,12 @@ package frontend
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -29,7 +31,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/moengine"
 	"github.com/matrixorigin/matrixone/pkg/vm/mempool"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
@@ -903,6 +904,10 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string) (*plan2.
 	var TableType, Createsql string
 	for _, def := range engineDefs {
 		if attr, ok := def.(*engine.AttributeDef); ok {
+			isCPkey := util.JudgeIsCompositePrimaryKeyColumn(attr.Attr.Name)
+			if isCPkey {
+				continue
+			}
 			cols = append(cols, &plan2.ColDef{
 				Name: attr.Attr.Name,
 				Typ: &plan2.Type{
@@ -1035,6 +1040,7 @@ func (tcc *TxnCompilerContext) GetPrimaryKeyDef(dbName string, tableName string)
 
 	priDefs := make([]*plan2.ColDef, 0, len(priKeys))
 	for _, key := range priKeys {
+		isCPkey := util.JudgeIsCompositePrimaryKeyColumn(key.Name)
 		priDefs = append(priDefs, &plan2.ColDef{
 			Name: key.Name,
 			Typ: &plan2.Type{
@@ -1045,6 +1051,7 @@ func (tcc *TxnCompilerContext) GetPrimaryKeyDef(dbName string, tableName string)
 				Size:      key.Type.Size,
 			},
 			Primary: key.Primary,
+			IsCPkey: isCPkey,
 		})
 	}
 	return priDefs

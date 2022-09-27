@@ -103,7 +103,6 @@ func (t *MOTracer) Start(ctx context.Context, name string, opts ...SpanOption) (
 		span.parent = parent
 	}
 
-	span.init(name, opts...)
 	return ContextWithSpan(ctx, span), span
 }
 

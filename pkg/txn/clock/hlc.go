@@ -111,8 +111,10 @@ func NewUnixNanoHLCClockWithStopper(stopper *stopper.Stopper, maxOffset time.Dur
 		physicalClock: physicalClock,
 		maxOffset:     maxOffset,
 	}
-	if err := stopper.RunTask(clock.offsetMonitor); err != nil {
-		panic(err)
+	if maxOffset > 0 {
+		if err := stopper.RunTask(clock.offsetMonitor); err != nil {
+			panic(err)
+		}
 	}
 	return clock
 }
@@ -208,7 +210,7 @@ func (c *HLCClock) handleClockJump(oldPts int64, newPts int64) {
 		jump = newPts - oldPts
 	}
 
-	if jump > int64(c.maxClockForwardOffset()) {
+	if jump > int64(c.maxClockForwardOffset()+c.clockOffsetMonitoringInterval()) {
 		log.Fatalf("big clock jump observed, %d microseconds", toMicrosecond(jump))
 	}
 }
