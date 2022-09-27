@@ -181,15 +181,23 @@ func buildInsertValues(stmt *tree.Insert, ctx CompilerContext) (p *Plan, err err
 		}
 	}
 
+	pKeyCols := ctx.GetPrimaryKeyDef(dbName, tblName)
+	var cPkey *ColDef = nil
+	if len(pKeyCols) > 0 && pKeyCols[0].IsCPkey {
+		// build composite primary key
+		cPkey = pKeyCols[0]
+	}
+
 	return &Plan{
 		Plan: &plan.Plan_Ins{
 			Ins: &plan.InsertValues{
-				DbName:       dbName,
-				TblName:      tblName,
-				ExplicitCols: explicitCols,
-				OtherCols:    otherCols,
-				OrderAttrs:   orderAttrs,
-				Columns:      columns,
+				DbName:        dbName,
+				TblName:       tblName,
+				ExplicitCols:  explicitCols,
+				OtherCols:     otherCols,
+				OrderAttrs:    orderAttrs,
+				Columns:       columns,
+				CompositePkey: cPkey,
 			},
 		},
 	}, nil
@@ -324,6 +332,10 @@ func getInsertTable(stmt tree.TableExpr, ctx CompilerContext) (*ObjectRef, *Tabl
 		objRef, tableDef := ctx.Resolve(dbName, tblName)
 		if tableDef == nil {
 			return nil, nil, moerr.NewInvalidInput("insert target table '%s' does not exist", tblName)
+		}
+		pkeyColDef := ctx.GetPrimaryKeyDef(dbName, tblName)
+		if len(pkeyColDef) > 0 && pkeyColDef[0].IsCPkey {
+			tableDef.CompositePkey = pkeyColDef[0]
 		}
 		return objRef, tableDef, nil
 	case *tree.ParenTableExpr:

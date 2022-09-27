@@ -222,6 +222,9 @@ func buildCtxAndProjection(updateColsArray [][]updateCol, updateExprsArray []tre
 		var priKeyIdx int32 = -1
 		priKeys := ctx.GetPrimaryKeyDef(updateCols[0].dbName, updateCols[0].tblName)
 		for _, key := range priKeys {
+			if key.IsCPkey {
+				break
+			}
 			for _, updateCol := range updateCols {
 				if key.Name == updateCol.colDef.Name {
 					e, _ := tree.NewUnresolvedName(updateCol.dbName, updateCol.aliasTblName, key.Name)
@@ -301,6 +304,9 @@ func buildCtxAndProjection(updateColsArray [][]updateCol, updateExprsArray []tre
 		}
 		for _, u := range onUpdateCols {
 			ct.UpdateCols = append(ct.UpdateCols, u.colDef)
+		}
+		if len(priKeys) > 0 && priKeys[0].IsCPkey {
+			ct.CompositePkey = priKeys[0]
 		}
 		updateCtxs = append(updateCtxs, ct)
 

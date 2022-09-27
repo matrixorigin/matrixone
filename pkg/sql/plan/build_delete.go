@@ -252,6 +252,9 @@ func buildUseProjection(stmt *tree.Delete, ps tree.SelectExprs, objRef *ObjectRe
 	isHideKey := false
 	priKeys := ctx.GetPrimaryKeyDef(objRef.SchemaName, tableDef.Name)
 	for _, key := range priKeys {
+		if key.IsCPkey {
+			break
+		}
 		e := tree.SetUnresolvedName(tf.baseNameMap[tableDef.Name], key.Name)
 		if isContainNameInFilter(stmt, key.Name) {
 			ps = append(ps, tree.SelectExpr{Expr: e})
