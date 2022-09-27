@@ -17,6 +17,9 @@ package bin
 import (
 	"math/bits"
 
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/builtin/binary"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"golang.org/x/exp/constraints"
 )
 
@@ -86,4 +89,29 @@ func uintToBinary(x uint64) string {
 	}
 
 	return string(b[i+1:])
+}
+
+func Bin[T constraints.Unsigned | constraints.Signed](intputVector, resultVector *vector.Vector, proc *process.Process) error {
+	xs := vector.MustTCols[T](intputVector)
+	rs := make([]string, len(xs))
+	for idx := range xs {
+		res := uintToBinary(uint64(xs[idx]))
+		rs[idx] = res
+	}
+	vector.AppendString(resultVector, rs, proc.Mp())
+	return nil
+}
+
+func BinFloat[T constraints.Float](intputVector, resultVector *vector.Vector, proc *process.Process) error {
+	xs := vector.MustTCols[T](intputVector)
+	err := binary.NumericToNumericOverflow(xs, []int64{})
+	if err != nil {
+		return err
+	}
+	rs := make([]string, len(xs))
+	for idx, v := range xs {
+		rs[idx] = uintToBinary(uint64(int64(v)))
+	}
+	vector.AppendString(resultVector, rs, proc.Mp())
+	return nil
 }

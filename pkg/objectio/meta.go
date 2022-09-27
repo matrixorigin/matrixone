@@ -38,6 +38,10 @@ type BlockMeta struct {
 	header BlockHeader
 }
 
+func (bm *BlockMeta) GetHeader() BlockHeader {
+	return bm.header
+}
+
 type BlockHeader struct {
 	tableId     uint64
 	segmentId   uint64
@@ -45,6 +49,19 @@ type BlockHeader struct {
 	columnCount uint16
 	dummy       [34]byte
 	checksum    uint32
+}
+
+func (bh *BlockHeader) GetTableId() uint64 {
+	return bh.tableId
+}
+func (bh *BlockHeader) GetSegmentId() uint64 {
+	return bh.segmentId
+}
+func (bh *BlockHeader) GetBlockId() uint64 {
+	return bh.blockId
+}
+func (bh *BlockHeader) GetColumnCount() uint16 {
+	return bh.columnCount
 }
 
 // +---------------------------------------------------------------------------------------------------------------+
@@ -77,6 +94,30 @@ type ColumnMeta struct {
 	bloomFilter Extent
 	dummy       [32]byte
 	checksum    uint32
+}
+
+func (cm *ColumnMeta) GetType() uint8 {
+	return cm.typ
+}
+
+func (cm *ColumnMeta) GetIdx() uint16 {
+	return cm.idx
+}
+
+func (cm *ColumnMeta) GetAlg() uint8 {
+	return cm.alg
+}
+
+func (cm *ColumnMeta) GetLocation() Extent {
+	return cm.location
+}
+
+func (cm *ColumnMeta) GetZoneMap() ZoneMap {
+	return cm.zoneMap
+}
+
+func (cm *ColumnMeta) GetBloomFilter() Extent {
+	return cm.bloomFilter
 }
 
 type Header struct {

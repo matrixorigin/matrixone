@@ -21,6 +21,7 @@ import (
 	"io"
 	"sync"
 
+	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -122,11 +123,10 @@ func NewDBEntryByTS(catalog *Catalog, name string, ts types.TS) *DBEntry {
 }
 
 func NewSystemDBEntry(catalog *Catalog) *DBEntry {
-	id := SystemDBID
 	entry := &DBEntry{
-		DBBaseEntry: NewDBBaseEntry(id),
+		DBBaseEntry: NewDBBaseEntry(pkgcatalog.MO_CATALOG_ID),
 		catalog:     catalog,
-		name:        SystemDBName,
+		name:        pkgcatalog.MO_CATALOG,
 		entries:     make(map[uint64]*common.GenericDLNode[*TableEntry]),
 		nameNodes:   make(map[string]*nodeList[*TableEntry]),
 		link:        common.NewGenericSortedDList(compareTableFn),

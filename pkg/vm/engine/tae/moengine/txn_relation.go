@@ -29,7 +29,6 @@ import (
 
 var (
 	_ engine.Relation = (*txnRelation)(nil)
-	_ Relation        = (*txnRelation)(nil)
 )
 
 func newRelation(h handle.Relation) *txnRelation {
