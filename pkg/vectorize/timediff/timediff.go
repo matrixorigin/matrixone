@@ -19,34 +19,34 @@ import (
 
 func TimeDiff(lv, rv []types.Datetime, rs []string) []string {
 	for i := range lv {
-		rs[i] = DateTimeToString(lv[i] - rv[i])
+		rs[i] = DateTimeToString(lv[i], rv[i])
 	}
 	return rs
 }
 
 func TimeDiffRightConst(lv []types.Datetime, rv types.Datetime, rs []string) []string {
 	for i := range lv {
-		rs[i] = DateTimeToString(lv[i] - rv)
+		rs[i] = DateTimeToString(lv[i], rv)
 	}
 	return rs
 }
 
 func TimeDiffLeftConst(lv types.Datetime, rv []types.Datetime, rs []string) []string {
 	for i := range rv {
-		rs[i] = DateTimeToString(lv - rv[i])
+		rs[i] = DateTimeToString(lv, rv[i])
 	}
 	return rs
 }
 
 func TimeDiffAllConst(lv, rv types.Datetime, rs []string) []string {
-	rs[0] = DateTimeToString(lv - rv)
+	rs[0] = DateTimeToString(lv, rv)
 	return rs
 }
 
-func DateTimeToString(datetime types.Datetime) string {
-	if datetime < 0 {
-		return "-" + datetime.String2(6)
+func DateTimeToString(ldate, rdate types.Datetime) string {
+	if ldate-rdate < 0 {
+		return "-" + (rdate - ldate).String2(6)
 	} else {
-		return datetime.String2(6)
+		return (ldate - rdate).String2(6)
 	}
 }
