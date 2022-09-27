@@ -14,29 +14,17 @@
 
 package metric
 
-import prom "github.com/prometheus/client_golang/prometheus"
+var (
+	ConnFactory = NewGaugeVec(
+		GaugeOpts{
+			Subsystem: "server",
+			Name:      "connections",
+			Help:      "Number of process connections",
+		},
+		[]string{constTenantKey},
+	)
+)
 
-const constTenantKey = "account"
-
-// this constant lable is used for sys_* and process_* table
-var sysTenantID = prom.Labels{constTenantKey: "sys"}
-
-var initCollectors = []Collector{
-	// sql metric
-	StatementCounterFactory,
-	TransactionErrorsFactory,
-	StatementErrorsFactory,
-	// server metric
-	ConnFactory,
-	// process metric
-	processCollector,
-	// sys metric
-	hardwareStatsCollector,
-}
-
-// register all defined collector here
-func registerAllMetrics() {
-	for _, c := range initCollectors {
-		mustRegister(c)
-	}
+func ConnectionCounter(account string) Gauge {
+	return ConnFactory.WithLabelValues(account)
 }

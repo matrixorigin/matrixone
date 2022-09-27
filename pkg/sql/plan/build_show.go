@@ -18,8 +18,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"strings"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -27,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"strings"
 )
 
 const MO_CATALOG_DB_NAME = "mo_catalog"
@@ -303,8 +302,94 @@ func buildShowColumns(stmt *tree.ShowColumns, ctx CompilerContext) (*Plan, error
 	return returnByRewriteSQL(ctx, sql, ddlType)
 }
 
+func buildShowTableStatus(stmt *tree.ShowTableStatus, ctx CompilerContext) (*Plan, error) {
+	if stmt.Like != nil && stmt.Where != nil {
+		return nil, moerr.NewSyntaxError("like clause and where clause cannot exist at the same time")
+	}
+
+	dbName := stmt.DbName
+	if stmt.DbName == "" {
+		dbName = ctx.DefaultDatabase()
+		if dbName == "" {
+			return nil, moerr.NewNoDB()
+		}
+	} else if !ctx.DatabaseExists(dbName) {
+		return nil, moerr.NewBadDB(dbName)
+	}
+
+	ddlType := plan.DataDefinition_SHOW_TABLE_STATUS
+	sql := "select relname as `Name`, 'Tae' as `Engine`, 'Dynamic' as `Row_format`, 0 as `Rows`, 0 as `Avg_row_length`, 0 as `Data_length`, 0 as `Max_data_length`, 0 as `Index_length`, 'NULL' as `Data_free`, 0 as `Auto_increment`, created_time as `Create_time`, 'NULL' as `Update_time`, 'NULL' as `Check_time`, 'utf-8' as `Collation`, 'NULL' as `Checksum`, '' as `Create_options`, rel_comment as `Comment` from %s.mo_tables where reldatabase = '%s' and relname != '%s';"
+
+	sql = fmt.Sprintf(sql, MO_CATALOG_DB_NAME, dbName, "%!%mo_increment_columns")
+
+	if stmt.Where != nil {
+		return returnByWhereAndBaseSQL(ctx, sql, stmt.Where, ddlType)
+	}
+
+	if stmt.Like != nil {
+		// append filter [AND ma.relname like stmt.Like] to WHERE clause
+		likeExpr := stmt.Like
+		likeExpr.Left = tree.SetUnresolvedName("relname")
+		return returnByLikeAndSQL(ctx, sql, likeExpr, ddlType)
+	}
+
+	return returnByRewriteSQL(ctx, sql, ddlType)
+}
+
+// TODO: Implement show target
+func buildShowTarget(stmt *tree.ShowTarget, ctx CompilerContext) (*Plan, error) {
+	ddlType := plan.DataDefinition_SHOW_TARGET
+	sql := ""
+	switch stmt.Type {
+	case tree.ShowCharset:
+		sql = "select '' as `Charset`, '' as `Description`, '' as `Default collation`, '' as `Maxlen` where 0"
+	default:
+		sql = "select 1 where 0"
+	}
+	return returnByRewriteSQL(ctx, sql, ddlType)
+}
+
 func buildShowIndex(stmt *tree.ShowIndex, ctx CompilerContext) (*Plan, error) {
-	return nil, moerr.NewNotSupported("statement: '%v'", tree.String(stmt, dialect.MYSQL))
+	dbName := string(stmt.TableName.Schema())
+	if dbName == "" {
+		dbName = ctx.DefaultDatabase()
+		if dbName == "" {
+			return nil, moerr.NewNoDB()
+		}
+	} else if !ctx.DatabaseExists(dbName) {
+		return nil, moerr.NewBadDB(dbName)
+	}
+
+	tblName := string(stmt.TableName.Name())
+	_, tableDef := ctx.Resolve(dbName, tblName)
+	if tableDef == nil {
+		return nil, moerr.NewNoSuchTable(dbName, tblName)
+	}
+
+	ddlType := plan.DataDefinition_SHOW_INDEX
+	sql := "select att_relname as `Table`,  iff(att_constraint_type = 'p', 1, 0) as `Non_unique`,  iff(att_constraint_type = 'p', 'PRIMARY', attname) as `Key_name`,  1 as `Seq_in_index`, attname as `Column_name`, 'A' as `Collation`, 0 as `Cardinality`, 'NULL' as `Sub_part`, 'NULL' as `Packed`, iff(attnotnull = 0, 'YES', 'NO') as `Null`, '' as 'Index_type', att_comment as `Comment`,  iff(att_is_hidden = 0, 'YES', 'NO') as `Visible`, 'NULL' as `Expression` FROM %s.mo_columns WHERE  att_database = '%s' AND att_relname = '%s'"
+
+	sql = fmt.Sprintf(sql, MO_CATALOG_DB_NAME, dbName, tblName)
+
+	if stmt.Where != nil {
+		return returnByWhereAndBaseSQL(ctx, sql, stmt.Where, ddlType)
+	}
+
+	return returnByRewriteSQL(ctx, sql, ddlType)
+}
+
+// TODO: Improve SQL. Currently, Lack of the mata of grants
+func buildShowGrants(stmt *tree.ShowGrants, ctx CompilerContext) (*Plan, error) {
+	ddlType := plan.DataDefinition_SHOW_TARGET
+	sql := ""
+	if stmt.Username == "" {
+		sql = "select concat(\"GRANT \", p.privilege_level, ' ON ', p.obj_type,  \" `root`\", \"@\", \"`localhost`\")  as `Grants for test@localhost` from mo_catalog.mo_user as u, mo_catalog.mo_role_privs as p, mo_catalog.mo_user_grant as g where g.role_id = p.role_id and g.user_id = u.user_id"
+	} else {
+		sql = "select concat(\"GRANT\", p.privilege_level, 'ON', p.obj_type,  \"`%s`\", \"@\", \"`%s`\")  as `Grants for test@localhost` from mo_catalog.mo_user as u, mo_catalog.mo_role_privs as p, mo_catalog.mo_user_grant as g where g.role_id = p.role_id and g.user_id = u.user_id and u.user_name = '%s' and u.user_host = '%s';"
+		sql = fmt.Sprintf(sql, stmt.Username, stmt.Hostname, stmt.Username, stmt.Hostname)
+	}
+
+	return returnByRewriteSQL(ctx, sql, ddlType)
 }
 
 func buildShowVariables(stmt *tree.ShowVariables, ctx CompilerContext) (*Plan, error) {
@@ -345,20 +430,16 @@ func buildShowVariables(stmt *tree.ShowVariables, ctx CompilerContext) (*Plan, e
 	}, nil
 }
 
-func buildShowWarnings(stmt *tree.ShowWarnings, ctx CompilerContext) (*Plan, error) {
-	return nil, moerr.NewNotSupported("statement: '%v'", tree.String(stmt, dialect.MYSQL))
-}
-
-func buildShowErrors(stmt *tree.ShowErrors, ctx CompilerContext) (*Plan, error) {
-	return nil, moerr.NewNotSupported("statement: '%v'", tree.String(stmt, dialect.MYSQL))
-}
-
 func buildShowStatus(stmt *tree.ShowStatus, ctx CompilerContext) (*Plan, error) {
-	return nil, moerr.NewNotSupported("statement: '%v'", tree.String(stmt, dialect.MYSQL))
+	ddlType := plan.DataDefinition_SHOW_STATUS
+	sql := "select '' as `Variable_name`, '' as `Value` where 0"
+	return returnByRewriteSQL(ctx, sql, ddlType)
 }
 
 func buildShowProcessList(stmt *tree.ShowProcessList, ctx CompilerContext) (*Plan, error) {
-	return nil, moerr.NewNotSupported("statement: '%v'", tree.String(stmt, dialect.MYSQL))
+	ddlType := plan.DataDefinition_SHOW_PROCESSLIST
+	sql := "select '' as `Id`, '' as `User`, '' as `Host`, '' as `db` , '' as `Command`, '' as `Time` , '' as `State`, '' as `Info` where 0"
+	return returnByRewriteSQL(ctx, sql, ddlType)
 }
 
 func returnByRewriteSQL(ctx CompilerContext, sql string, ddlType plan.DataDefinition_DdlType) (*Plan, error) {

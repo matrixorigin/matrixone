@@ -26,7 +26,7 @@ var (
 		input  string
 		output string
 	}{
-		input: "select time from t1 as value",
+		input: "show profiles",
 	}
 )
 
@@ -52,6 +52,33 @@ var (
 		output string
 	}{{
 		input: "select time from t1 as value",
+	}, {
+		input: "show profiles",
+	}, {
+		input: "show privileges",
+	}, {
+		input: "show events from db1",
+	}, {
+		input: "show plugins",
+	}, {
+		input: "show procedure status",
+	}, {
+		input: "show triggers from db1 where 1",
+	}, {
+		input: "show engines",
+	}, {
+		input: "show config",
+	}, {
+		input: "show grants",
+	}, {
+		input:  "show grants for 'test'@'localhost'",
+		output: "show grants for test@localhost",
+	}, {
+		input: "show table status from t1",
+	}, {
+		input: "show table status from t1",
+	}, {
+		input: "grant connect on account * to role_r1",
 	}, {
 		input: "select password from t1",
 	}, {
