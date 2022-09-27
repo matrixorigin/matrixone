@@ -56,17 +56,67 @@ func TestFromUnixTimeInt64(t *testing.T) {
 			},
 		}
 
-		var floats []int64
+		var nums []int64
 		var wants []string
 		for _, kase := range kases {
-			floats = append(floats, kase.num)
+			nums = append(nums, kase.num)
 			wants = append(wants, kase.want)
 		}
 
-		float64Vector := testutil.MakeInt64Vector(floats, nil)
+		int64Vector := testutil.MakeInt64Vector(nums, nil)
 		wantVector := testutil.MakeDateTimeVector(wants, nil)
 		proc := testutil.NewProc()
-		res, err := FromUnixTimeInt64([]*vector.Vector{float64Vector}, proc)
+		res, err := FromUnixTimeInt64([]*vector.Vector{int64Vector}, proc)
+		convey.So(err, convey.ShouldBeNil)
+		cols1 := vector.MustTCols[types.Datetime](wantVector)
+		cols2 := vector.MustTCols[types.Datetime](res)
+		require.Equal(t, cols1, cols2)
+	})
+}
+
+func TestFromUnixTimeUint64(t *testing.T) {
+	convey.Convey("test FromUnixTime UInt64", t, func() {
+		kases := []struct {
+			num  uint64
+			want string
+		}{
+			{
+				num:  0,
+				want: "1970-01-01 08:00:00",
+			},
+			{
+				num:  1451606400,
+				want: "2016-01-01 08:00:00",
+			},
+			{
+				num:  2451606400,
+				want: "2047-09-09 09:46:40",
+			},
+			{
+				num:  1451606488,
+				want: "2016-01-01 08:01:28",
+			},
+			{
+				num:  32536771199,
+				want: "3001-01-19 07:59:59",
+			},
+			{
+				num:  1447430881,
+				want: "2015-11-14 00:08:01",
+			},
+		}
+
+		var nums []uint64
+		var wants []string
+		for _, kase := range kases {
+			nums = append(nums, kase.num)
+			wants = append(wants, kase.want)
+		}
+
+		uint64Vector := testutil.MakeUint64Vector(nums, nil)
+		wantVector := testutil.MakeDateTimeVector(wants, nil)
+		proc := testutil.NewProc()
+		res, err := FromUnixTimeUint64([]*vector.Vector{uint64Vector}, proc)
 		convey.So(err, convey.ShouldBeNil)
 		cols1 := vector.MustTCols[types.Datetime](wantVector)
 		cols2 := vector.MustTCols[types.Datetime](res)
@@ -172,12 +222,73 @@ func TestFromUnixTimeInt64Format(t *testing.T) {
 			wants = append(wants, kase.want)
 		}
 
-		float64Vector := testutil.MakeInt64Vector(nums, nil)
+		int64Vector := testutil.MakeInt64Vector(nums, nil)
 		formatVector := testutil.MakeScalarVarchar(formats[0], 5)
 		wantVector := testutil.MakeVarcharVector(wants, nil)
 
 		process := testutil.NewProc()
-		res, err := FromUnixTimeInt64Format([]*vector.Vector{float64Vector, formatVector}, process)
+		res, err := FromUnixTimeInt64Format([]*vector.Vector{int64Vector, formatVector}, process)
+		convey.So(err, convey.ShouldBeNil)
+		cols1 := vector.MustStrCols(wantVector)
+		cols2 := vector.MustStrCols(res)
+		require.Equal(t, cols1, cols2)
+	})
+}
+
+func TestFromUnixTimeUint64Format(t *testing.T) {
+	convey.Convey("test FromUnixTime Int64 Fromat", t, func() {
+		kases := []struct {
+			num    uint64
+			format string
+			want   string
+		}{
+			{
+				num:    0,
+				format: "%b %M %m %c %D %d %e %j %k %h %i %p %r %T %s %f %v %x %Y %y",
+				want:   "Jan January 01 1 1st 01 1 001 8 08 00 AM 08:00:00 AM 08:00:00 00 000000 01 1970 1970 70",
+			},
+			{
+				num:    1451606400,
+				format: "%b %M %m %c %D %d %e %j %k %h %i %p %r %T %s %f %v %x %Y %y",
+				want:   "Jan January 01 1 1st 01 1 001 8 08 00 AM 08:00:00 AM 08:00:00 00 000000 53 2015 2016 16",
+			},
+			{
+				num:    2451606400,
+				format: "%b %M %m %c %D %d %e %j %k %h %i %p %r %T %s %f %v %x %Y %y",
+				want:   "Sep September 09 9 9th 09 9 252 9 09 46 AM 09:46:40 AM 09:46:40 40 000000 37 2047 2047 47",
+			},
+			{
+				num:    1451606267,
+				format: "%b %M %m %c %D %d %e %j %k %h %i %p %r %T %s %f %v %x %Y %y",
+				want:   "Jan January 01 1 1st 01 1 001 7 07 57 AM 07:57:47 AM 07:57:47 47 000000 53 2015 2016 16",
+			},
+			{
+				num:    32536771199,
+				format: "%b %M %m %c %D %d %e %j %k %h %i %p %r %T %s %f %v %x %Y %y",
+				want:   "Jan January 01 1 19th 19 19 019 7 07 59 AM 07:59:59 AM 07:59:59 59 000000 04 3001 3001 01",
+			},
+			{
+				num:    2447430881,
+				format: "%b %M %m %c %D %d %e %j %k %h %i %p %r %T %s %f %v %x %Y %y",
+				want:   "Jul July 07 7 23rd 23 23 204 1 01 54 AM 01:54:41 AM 01:54:41 41 000000 30 2047 2047 47",
+			},
+		}
+
+		var nums []uint64
+		var formats []string
+		var wants []string
+		for _, kase := range kases {
+			nums = append(nums, kase.num)
+			formats = append(formats, kase.format)
+			wants = append(wants, kase.want)
+		}
+
+		uint64Vector := testutil.MakeUint64Vector(nums, nil)
+		formatVector := testutil.MakeScalarVarchar(formats[0], 5)
+		wantVector := testutil.MakeVarcharVector(wants, nil)
+
+		process := testutil.NewProc()
+		res, err := FromUnixTimeUint64Format([]*vector.Vector{uint64Vector, formatVector}, process)
 		convey.So(err, convey.ShouldBeNil)
 		cols1 := vector.MustStrCols(wantVector)
 		cols2 := vector.MustStrCols(res)
