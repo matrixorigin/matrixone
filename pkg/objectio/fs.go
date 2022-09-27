@@ -12,29 +12,37 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package file
+package objectio
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"io"
-
+	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 )
 
-var (
-	ErrInvalidParam = moerr.NewInternalError("tae: invalid param")
-	ErrInvalidName  = moerr.NewInternalError("tae: invalid name")
-)
-
-type Base interface {
-	common.IRef
-	io.Closer
-	Fingerprint() *common.ID
+type ObjectFS struct {
+	Service fileservice.FileService
+	Dir     string
 }
 
-type SegmentFactory interface {
-	Build(dir string, id, tableId uint64, fs *objectio.ObjectFS) Segment
-	EncodeName(id uint64) string
-	DecodeName(name string) (id uint64, err error)
+func TmpNewFileservice(dir string) fileservice.FileService {
+	c := fileservice.Config{
+		Name:    "LOCAL",
+		Backend: "DISK",
+		DataDir: dir,
+	}
+	service, err := fileservice.NewFileService(c)
+	if err != nil {
+		err = moerr.NewInternalError(fmt.Sprintf("NewFileService failed: %s", err.Error()))
+		panic(any(err))
+	}
+	return service
+}
+
+func NewObjectFS(service fileservice.FileService, dir string) *ObjectFS {
+	fs := &ObjectFS{
+		Service: service,
+		Dir:     dir,
+	}
+	return fs
 }

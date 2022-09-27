@@ -37,7 +37,7 @@ type Writer interface {
 
 	// WriteEnd is to write multiple batches written to
 	// the buffer to the fileservice at one time
-	WriteEnd() (map[uint32]BlockObject, error)
+	WriteEnd() ([]BlockObject, error)
 }
 
 // Reader is to read data from fileservice
