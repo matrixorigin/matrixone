@@ -17,10 +17,10 @@ package txnstorage
 import (
 	"fmt"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage/txn/memtable"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	txnengine "github.com/matrixorigin/matrixone/pkg/vm/engine/txn"
 )
 
@@ -86,7 +86,7 @@ func (d *DatabaseRow) AttrByName(tx *Transaction, name string) (ret Nullable, er
 	default:
 		panic(fmt.Sprintf("fixme: %s", name))
 	}
-	verifyAttr(catalog.SystemDBSchema.ColDefs, name, ret.Value)
+	verifyAttr(catalog.MoDatabaseSchema, catalog.MoDatabaseTypes, name, ret.Value)
 	return
 }
 
@@ -170,7 +170,7 @@ func (r *RelationRow) AttrByName(tx *Transaction, name string) (ret Nullable, er
 	default:
 		panic(fmt.Sprintf("fixme: %s", name))
 	}
-	verifyAttr(catalog.SystemTableSchema.ColDefs, name, ret.Value)
+	verifyAttr(catalog.MoTablesSchema, catalog.MoTablesTypes, name, ret.Value)
 	return
 }
 
@@ -260,9 +260,13 @@ func (a *AttributeRow) AttrByName(tx *Transaction, name string) (ret Nullable, e
 	case catalog.SystemColAttr_NullAbility:
 		ret.Value = boolToInt8(a.Nullable)
 	case catalog.SystemColAttr_HasExpr:
-		ret.Value = boolToInt8(a.Default.Expr != nil)
+		ret.Value = boolToInt8(a.Default != nil && a.Default.Expr != nil)
 	case catalog.SystemColAttr_DefaultExpr:
-		ret.Value = a.Default.Expr.String()
+		if a.Default != nil && a.Default.Expr != nil {
+			ret.Value = a.Default.Expr.String()
+		} else {
+			ret.Value = ""
+		}
 	case catalog.SystemColAttr_IsDropped:
 		ret.Value = boolToInt8(false)
 	case catalog.SystemColAttr_ConstraintType:
@@ -286,7 +290,7 @@ func (a *AttributeRow) AttrByName(tx *Transaction, name string) (ret Nullable, e
 	default:
 		panic(fmt.Sprintf("fixme: %s", name))
 	}
-	verifyAttr(catalog.SystemColumnSchema.ColDefs, name, ret.Value)
+	verifyAttr(catalog.MoColumnsSchema, catalog.MoColumnsTypes, name, ret.Value)
 	return
 }
 
@@ -316,19 +320,20 @@ func (i *IndexRow) Indexes() []Tuple {
 }
 
 func verifyAttr(
-	defs []*catalog.ColDef,
+	names []string,
+	types []types.Type,
 	name string,
 	value any,
 ) {
-	for _, attr := range defs {
-		if attr.Name != name {
+	for i, attrName := range names {
+		if attrName != name {
 			continue
 		}
 		if value == nil {
-			panic(fmt.Sprintf("%s should not be nil", attr.Name))
+			panic(fmt.Sprintf("%s should not be nil", attrName))
 		}
-		if !memtable.TypeMatch(value, attr.Type.Oid) {
-			panic(fmt.Sprintf("%s should be %v typed", name, attr.Type))
+		if !memtable.TypeMatch(value, types[i].Oid) {
+			panic(fmt.Sprintf("%s should be %v typed", name, types[i]))
 		}
 	}
 }
