@@ -202,7 +202,6 @@ func (w *initialShards) register(shardID, currTick uint64) bool {
 // remove deletes shard from the recorded fresh shards.
 func (w *initialShards) remove(shardID uint64) bool {
 	if _, ok := w.shards[shardID]; ok {
-		fmt.Println(shardID, "removed from initialShards")
 		delete(w.shards, shardID)
 		return true
 	}
