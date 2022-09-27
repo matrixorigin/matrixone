@@ -113,10 +113,10 @@ func (cb *ColumnBlock) MarshalMeta() ([]byte, error) {
 	if err = binary.Write(&buffer, endian, cb.meta.location.OriginSize()); err != nil {
 		return nil, err
 	}
-	if err = binary.Write(&buffer, endian, cb.meta.zoneMap.min); err != nil {
-		return nil, err
+	if cb.meta.zoneMap.buf == nil {
+		cb.meta.zoneMap.buf = make([]byte, ZoneMapMinSize+ZoneMapMaxSize)
 	}
-	if err = binary.Write(&buffer, endian, cb.meta.zoneMap.max); err != nil {
+	if err = binary.Write(&buffer, endian, cb.meta.zoneMap.buf); err != nil {
 		return nil, err
 	}
 	if err = binary.Write(&buffer, endian, cb.meta.bloomFilter.Offset()); err != nil {
@@ -160,13 +160,9 @@ func (cb *ColumnBlock) UnMarshalMate(cache *bytes.Buffer) error {
 	}
 	cb.meta.zoneMap = ZoneMap{
 		idx: cb.meta.idx,
-		min: make([]byte, ZoneMapMinSize),
-		max: make([]byte, ZoneMapMaxSize),
+		buf: make([]byte, ZoneMapMinSize+ZoneMapMaxSize),
 	}
-	if err = binary.Read(cache, endian, &cb.meta.zoneMap.min); err != nil {
-		return err
-	}
-	if err = binary.Read(cache, endian, &cb.meta.zoneMap.max); err != nil {
+	if err = binary.Read(cache, endian, &cb.meta.zoneMap.buf); err != nil {
 		return err
 	}
 	cb.meta.bloomFilter = Extent{}

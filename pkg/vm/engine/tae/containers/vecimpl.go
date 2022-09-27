@@ -16,7 +16,6 @@ package containers
 
 import (
 	"fmt"
-
 	"github.com/RoaringBitmap/roaring"
 	"github.com/RoaringBitmap/roaring/roaring64"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
