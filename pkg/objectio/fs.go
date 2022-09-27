@@ -16,6 +16,7 @@ package objectio
 
 import (
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 )
 
@@ -32,7 +33,8 @@ func TmpNewFileservice(dir string) fileservice.FileService {
 	}
 	service, err := fileservice.NewFileService(c)
 	if err != nil {
-		panic(any(fmt.Sprintf("NewFileService failed: %s", err.Error())))
+		err = moerr.NewInternalError(fmt.Sprintf("NewFileService failed: %s", err.Error()))
+		panic(any(err))
 	}
 	return service
 }
