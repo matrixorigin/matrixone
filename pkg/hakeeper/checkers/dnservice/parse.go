@@ -125,9 +125,9 @@ func checkInitiatingShards(
 	rs *reportedShards, mapper ShardMapper, workingStores []*util.Store, idAlloc util.IDAllocator,
 	cluster pb.ClusterInfo, cfg hakeeper.Config, currTick uint64,
 ) []*operator.Operator {
+	logger.Debug("cluster expected information", zap.Any("dn shards expected", cluster.DNShards))
+
 	// update the registered newly-created shards
-	logger.Info("=====> cluster expected state", zap.Any("expected dn shards", cluster.DNShards))
-	logger.Info("=====> cluster reported state", zap.Any("reported dn shards", *rs))
 	for _, record := range cluster.DNShards {
 		shardID := record.ShardID
 		_, err := rs.getShard(shardID)
@@ -135,24 +135,24 @@ func checkInitiatingShards(
 			if moerr.IsMoErrCode(err, moerr.ErrShardNotReported) {
 				// if a shard not reported, register it,
 				// and launch its replica after a while.
-				logger.Info("=====> dn shard not reported", zap.Uint64("shard ID", shardID))
+				logger.Debug("dn shard not reported", zap.Uint64("shard ID", shardID))
 				waitingShards.register(shardID, currTick)
 			}
 			continue
 		}
 		// shard reported via heartbeat, no need to wait
-		logger.Info("=====> dn shard reported, remote from waiting shards", zap.Uint64("shard ID", shardID))
+		logger.Debug("dn shard reported, remove from waiting shards", zap.Uint64("shard ID", shardID))
 		waitingShards.remove(shardID)
 	}
 
-	logger.Info("=====> cluster initiating shards:", zap.Any("shards", waitingShards.shards))
+	logger.Debug("cluster initiating shards:", zap.Any("shards", waitingShards.shards))
 
 	// list newly-created shards which had been waiting for a while
 	expired := waitingShards.listEligibleShards(func(start uint64) bool {
-		logger.Info("=====> check expired or not",
-			zap.Uint64("registered", start),
-			zap.Uint64("current", currTick),
-			zap.Bool("expired", cfg.DNStoreExpired(start, currTick)),
+		logger.Debug("check initiating shard expired or not",
+			zap.Uint64("recorded tick", start),
+			zap.Uint64("current tick", currTick),
+			zap.Bool("is expired", cfg.DNStoreExpired(start, currTick)),
 		)
 		return cfg.DNStoreExpired(start, currTick)
 	})
@@ -202,7 +202,6 @@ func (w *initialShards) register(shardID, currTick uint64) bool {
 // remove deletes shard from the recorded fresh shards.
 func (w *initialShards) remove(shardID uint64) bool {
 	if _, ok := w.shards[shardID]; ok {
-		fmt.Println(shardID, "removed from initialShards")
 		delete(w.shards, shardID)
 		return true
 	}

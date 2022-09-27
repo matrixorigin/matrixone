@@ -15,7 +15,6 @@
 package dnservice
 
 import (
-	"fmt"
 	"sort"
 
 	"go.uber.org/zap"
@@ -50,8 +49,17 @@ func Check(
 	dnState pb.DNState,
 	currTick uint64,
 ) []*operator.Operator {
+	logger.Debug("dn checker entrance",
+		zap.Any("cluster information", cluster),
+		zap.Any("dn state", dnState),
+		zap.Uint64("current tick", currTick),
+	)
+
 	stores, reportedShards := parseDnState(cfg, dnState, currTick)
-	fmt.Println("check parameters:", dnState, *reportedShards)
+	logger.Debug("reported dn shards in cluster",
+		zap.Any("dn shard IDs", reportedShards.shardIDs),
+		zap.Any("dn shards", reportedShards.shards),
+	)
 	if len(stores.WorkingStores()) < 1 {
 		logger.Warn("no working dn stores")
 		return nil
