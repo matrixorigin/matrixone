@@ -58,10 +58,10 @@ func TestGCBlock1(t *testing.T) {
 	assert.Nil(t, err)
 	blkData := meta.GetBlockData()
 	// 13 zonemap + 1 bloomfilter
-	assert.Equal(t, 14, tae.MTBufMgr.Count())
+	assert.Equal(t, 0, tae.MTBufMgr.Count())
 	err = blkData.Destroy()
 	assert.Nil(t, err)
-	assert.Equal(t, 14, tae.MTBufMgr.Count())
+	assert.Equal(t, 0, tae.MTBufMgr.Count())
 
 	err = task.GetNewBlock().GetMeta().(*catalog.BlockEntry).GetBlockData().Destroy()
 	assert.Nil(t, err)
@@ -148,11 +148,11 @@ func TestGCTable(t *testing.T) {
 	db, _ = createRelationAndAppend(t, 0, tae, "db", schema, bats[0], false)
 
 	testutils.WaitExpect(2000, func() bool {
-		names := getSegmentFileNames(tae)
-		return len(names) == 1
+		blocksnames := getBlockFileNames(tae)
+		return len(blocksnames) == 1
 	})
-	names := getSegmentFileNames(tae)
-	assert.Equal(t, 1, len(names))
+	blocksnames := getBlockFileNames(tae)
+	assert.Equal(t, 1, len(blocksnames))
 
 	// 4. Drop the table
 	dropRelation(t, tae, "db", schema.Name)
@@ -165,18 +165,25 @@ func TestGCTable(t *testing.T) {
 	assert.Equal(t, 0, dbEntry.CoarseTableCnt())
 	t.Logf("Takes: %s", time.Since(now))
 	printCheckpointStats(t, tae)
-	names = getSegmentFileNames(tae)
+	names := getSegmentFileNames(tae)
 	assert.Equal(t, 0, len(names))
 
 	// 5. Create a table and append 3 block
 	createRelationAndAppend(t, 0, tae, "db", schema, bat, false)
 	testutils.WaitExpect(2000, func() bool {
 		names = getSegmentFileNames(tae)
-		return len(names) == 2
+		return len(names) == 1
+	})
+	testutils.WaitExpect(2000, func() bool {
+		blocksnames = getBlockFileNames(tae)
+		return len(blocksnames) == 1
 	})
 	names = getSegmentFileNames(tae)
 	t.Log(names)
-	assert.Equal(t, 2, len(names))
+	assert.Equal(t, 1, len(names))
+	blocksnames = getBlockFileNames(tae)
+	t.Log(names)
+	assert.Equal(t, 1, len(blocksnames))
 	printCheckpointStats(t, tae)
 
 	compactBlocks(t, 0, tae, "db", schema, true)

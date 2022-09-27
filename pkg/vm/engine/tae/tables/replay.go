@@ -31,22 +31,6 @@ func (blk *dataBlock) ReplayDelta() (err error) {
 	}
 	an := updates.NewCommittedAppendNode(blk.ckpTs.Load().(types.TS), 0, blk.node.rows, blk.mvcc)
 	blk.mvcc.OnReplayAppendNode(an)
-	masks, vals := blk.file.LoadUpdates()
-	for colIdx, mask := range masks {
-		logutil.Info("[Start]",
-			common.TimestampField(blk.ckpTs.Load().(types.TS)),
-			common.OperationField("install-update"),
-			common.OperandNameSpace(),
-			common.AnyField("rows", blk.node.rows),
-			common.AnyField("col", colIdx),
-			common.CountField(int(mask.GetCardinality())))
-		un := updates.NewCommittedColumnUpdateNode(blk.ckpTs.Load().(types.TS), blk.ckpTs.Load().(types.TS), blk.meta.AsCommonID(), nil)
-		un.SetMask(mask)
-		un.SetValues(vals[colIdx])
-		if err = blk.OnReplayUpdate(uint16(colIdx), un); err != nil {
-			return
-		}
-	}
 	deletes, err := blk.file.LoadDeletes()
 	if err != nil || deletes == nil {
 		return
@@ -93,41 +77,19 @@ func (blk *dataBlock) replayMutIndex() error {
 
 // replayImmutIndex load index meta to construct managed node
 func (blk *dataBlock) replayImmutIndex() error {
-	file := blk.GetBlockFile()
-	idxMeta, err := file.LoadIndexMeta()
-	if err != nil {
-		return err
-	}
-	metas := idxMeta.(*indexwrapper.IndicesMeta)
-
-	pkIdx := -1024
 	schema := blk.meta.GetSchema()
+	pkIdx := -1024
 	if schema.HasPK() {
 		pkIdx = schema.GetSingleSortKeyIdx()
 	}
-	var prevPkMeta indexwrapper.IndexMeta
-	for _, meta := range metas.Metas {
-		colIdx := int(meta.ColIdx)
-		if colIdx == pkIdx {
-			if prevPkMeta.IdxType == indexwrapper.InvalidIndexType {
-				// found one meta, stash it for later use
-				prevPkMeta = meta
-			} else {
-				// found two meta, construct the pk index
-				index := indexwrapper.NewImmutableIndex()
-				if err = index.ReadFrom(blk, schema.ColDefs[pkIdx], prevPkMeta, meta); err != nil {
-					return err
-				}
-				blk.indexes[pkIdx] = index
-				blk.pkIndex = index
-			}
-		} else {
-			// non-pk column, construct index
-			index := indexwrapper.NewImmutableIndex()
-			if err = index.ReadFrom(blk, schema.ColDefs[meta.ColIdx], meta); err != nil {
-				return err
-			}
-			blk.indexes[colIdx] = index
+	for i, column := range blk.colObjects {
+		index := indexwrapper.NewImmutableIndex()
+		if err := index.ReadFrom(blk, schema.ColDefs[i], column); err != nil {
+			return err
+		}
+		blk.indexes[i] = index
+		if i == pkIdx {
+			blk.pkIndex = index
 		}
 	}
 	return nil
