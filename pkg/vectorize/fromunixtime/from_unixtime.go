@@ -21,16 +21,25 @@ import (
 )
 
 var (
-	UnixToDatetime func(*time.Location, []int64, []types.Datetime) []types.Datetime
+	UnixToDatetime         func(*time.Location, []int64, []types.Datetime) []types.Datetime
+	UnixToDateTimeWithNsec func(*time.Location, []int64, []int64, []types.Datetime) []types.Datetime
 )
 
 func init() {
 	UnixToDatetime = unixToDatetime
+	UnixToDateTimeWithNsec = unixToDateTimeWithNsec
 }
 
 func unixToDatetime(loc *time.Location, xs []int64, rs []types.Datetime) []types.Datetime {
 	for i := range xs {
 		rs[i] = types.FromUnix(loc, xs[i])
+	}
+	return rs
+}
+
+func unixToDateTimeWithNsec(loc *time.Location, xs []int64, ns []int64, rs []types.Datetime) []types.Datetime {
+	for i := range xs {
+		rs[i] = types.FromUnixWithNsec(loc, xs[i], ns[i])
 	}
 	return rs
 }
