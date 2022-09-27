@@ -31,9 +31,7 @@ type Table[
 ] struct {
 	sync.Mutex
 	rows      *btree.BTreeG[*PhysicalRow[K, V]]
-	rowsHint  *btree.PathHint
 	index     *btree.BTreeG[*IndexEntry[K, V]]
-	indexHint *btree.PathHint
 	writeSets map[*Transaction]map[*PhysicalRow[K, V]]struct{}
 }
 
@@ -66,7 +64,6 @@ func NewTable[
 		rows: btree.NewBTreeG(func(a, b *PhysicalRow[K, V]) bool {
 			return a.Key.Less(b.Key)
 		}),
-		rowsHint: new(btree.PathHint),
 		index: btree.NewBTreeG(func(a, b *IndexEntry[K, V]) bool {
 			if a.Index.Less(b.Index) {
 				return true
@@ -82,7 +79,6 @@ func NewTable[
 			}
 			return a.VersionID.Less(b.VersionID)
 		}),
-		indexHint: new(btree.PathHint),
 		writeSets: make(map[*Transaction]map[*PhysicalRow[K, V]]struct{}),
 	}
 }
@@ -111,12 +107,12 @@ func (t *Table[K, V, R]) Insert(
 		tx.Time, tx, value,
 		func(versionID ID) {
 			for _, index := range row.Indexes() {
-				t.index.SetHint(&IndexEntry[K, V]{
+				t.index.Set(&IndexEntry[K, V]{
 					Index:     index,
 					Key:       key,
 					VersionID: versionID,
 					Value:     value,
-				}, t.indexHint)
+				})
 			}
 		},
 	); err != nil {
@@ -142,12 +138,12 @@ func (t *Table[K, V, R]) Update(
 		tx.Time, tx, value,
 		func(versionID ID) {
 			for _, index := range row.Indexes() {
-				t.index.SetHint(&IndexEntry[K, V]{
+				t.index.Set(&IndexEntry[K, V]{
 					Index:     index,
 					Key:       key,
 					VersionID: versionID,
 					Value:     value,
-				}, t.indexHint)
+				})
 			}
 		},
 	); err != nil {
@@ -204,7 +200,7 @@ func (t *Table[K, V, R]) getRowByKey(key K) *PhysicalRow[K, V] {
 	pivot := &PhysicalRow[K, V]{
 		Key: key,
 	}
-	row, _ := t.rows.GetHint(pivot, t.rowsHint)
+	row, _ := t.rows.Get(pivot)
 	return row
 }
 
@@ -212,7 +208,7 @@ func (t *Table[K, V, R]) getOrSetRowByKey(key K) *PhysicalRow[K, V] {
 	pivot := &PhysicalRow[K, V]{
 		Key: key,
 	}
-	if row, _ := t.rows.GetHint(pivot, t.rowsHint); row != nil {
+	if row, _ := t.rows.Get(pivot); row != nil {
 		return row
 	}
 	return t.getOrSetRowByKeySlow(pivot)
@@ -221,11 +217,11 @@ func (t *Table[K, V, R]) getOrSetRowByKey(key K) *PhysicalRow[K, V] {
 func (t *Table[K, V, R]) getOrSetRowByKeySlow(pivot *PhysicalRow[K, V]) *PhysicalRow[K, V] {
 	t.Lock()
 	defer t.Unlock()
-	if row, _ := t.rows.GetHint(pivot, t.rowsHint); row != nil {
+	if row, _ := t.rows.Get(pivot); row != nil {
 		return row
 	}
 	pivot.LastUpdate = NewAtomic(time.Now())
-	t.rows.SetHint(pivot, t.rowsHint)
+	t.rows.Set(pivot)
 	return pivot
 }
 
