@@ -11,32 +11,42 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-package datetimediff
+package timediff
 
-import "github.com/matrixorigin/matrixone/pkg/container/types"
+import (
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+)
 
-func DateTimeDiff(lv, rv []types.Datetime, rs []int64) []int64 {
+func TimeDiff(lv, rv []types.Datetime, rs []string) []string {
 	for i := range lv {
-		rs[i] = int64(lv[i] - rv[i])
+		rs[i] = DateTimeToString(lv[i] - rv[i])
 	}
 	return rs
 }
 
-func DateTimeDiffRightConst(lv []types.Date, rv types.Date, rs []int64) []int64 {
+func TimeDiffRightConst(lv []types.Datetime, rv types.Datetime, rs []string) []string {
 	for i := range lv {
-		rs[i] = int64(lv[i] - rv)
+		rs[i] = DateTimeToString(lv[i] - rv)
 	}
 	return rs
 }
 
-func DateTimeDiffLeftConst(lv types.Date, rv []types.Date, rs []int64) []int64 {
+func TimeDiffLeftConst(lv types.Datetime, rv []types.Datetime, rs []string) []string {
 	for i := range rv {
-		rs[i] = int64(lv - rv[i])
+		rs[i] = DateTimeToString(lv - rv[i])
 	}
 	return rs
 }
 
-func DateTimeDiffAllConst(lv, rv types.Date, rs []int64) []int64 {
-	rs[0] = int64(lv - rv)
+func TimeDiffAllConst(lv, rv types.Datetime, rs []string) []string {
+	rs[0] = DateTimeToString(lv - rv)
 	return rs
+}
+
+func DateTimeToString(datetime types.Datetime) string {
+	if datetime < 0 {
+		return "-" + datetime.String2(6)
+	} else {
+		return datetime.String2(6)
+	}
 }

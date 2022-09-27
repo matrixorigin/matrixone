@@ -2314,8 +2314,8 @@ var builtins = map[int]Functions{
 			},
 		},
 	},
-	DATETIMEDIFF: {
-		Id: DATETIMEDIFF,
+	TIMEDIFF: {
+		Id: TIMEDIFF,
 		Overloads: []Function{
 			{
 				Index:     0,
@@ -2324,7 +2324,7 @@ var builtins = map[int]Functions{
 				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_datetime, types.T_datetime},
 				ReturnTyp: types.T_varchar,
-				Fn:        binary.DateTimeDiff,
+				Fn:        binary.TimeDiff,
 			},
 		},
 	},
