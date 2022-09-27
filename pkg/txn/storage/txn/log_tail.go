@@ -147,10 +147,8 @@ func (m *MemHandler) HandleGetLogTail(meta txn.TxnMeta, req apipb.SyncLogTailReq
 		handleRow := func(
 			physicalRow *memtable.PhysicalRow[DataKey, DataValue],
 		) error {
-			physicalRow.Versions.RLock()
-			defer physicalRow.Versions.RUnlock()
-			for i := len(physicalRow.Versions.List) - 1; i >= 0; i-- {
-				value := physicalRow.Versions.List[i]
+			for i := len(physicalRow.Versions) - 1; i >= 0; i-- {
+				value := physicalRow.Versions[i]
 
 				if value.LockTx != nil &&
 					value.LockTx.State.Load() == memtable.Committed &&
@@ -243,10 +241,8 @@ func logTailHandleSystemTable[
 	handleRow := func(
 		physicalRow *memtable.PhysicalRow[K, V],
 	) error {
-		physicalRow.Versions.RLock()
-		defer physicalRow.Versions.RUnlock()
-		for i := len(physicalRow.Versions.List) - 1; i >= 0; i-- {
-			value := physicalRow.Versions.List[i]
+		for i := len(physicalRow.Versions) - 1; i >= 0; i-- {
+			value := physicalRow.Versions[i]
 
 			if value.LockTx != nil &&
 				value.LockTx.State.Load() == memtable.Committed &&

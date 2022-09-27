@@ -26,25 +26,35 @@ type TableIter[
 	V any,
 ] struct {
 	tx       *Transaction
-	iter     btree.GenericIter[*PhysicalRow[K, V]]
+	iter     btree.GenericIter[*TreeItem[K, V]]
 	readTime Time
 }
 
-func (t *Table[K, V, R]) NewIter(
-	tx *Transaction,
-) (
-	iter *TableIter[K, V],
-) {
-	iter = &TableIter[K, V]{
+func (t *Table[K, V, R]) NewIter(tx *Transaction) *TableIter[K, V] {
+	iter := t.tree.Load().Iter()
+	ret := &TableIter[K, V]{
 		tx:       tx,
-		iter:     t.rows.Copy().Iter(),
+		iter:     iter,
 		readTime: tx.Time,
 	}
-	return
+	ret.seekFirst()
+	return ret
+}
+
+func (t *TableIter[K, V]) seekFirst() {
+	var zero K
+	t.iter.Seek(&TreeItem[K, V]{
+		Row: &PhysicalRow[K, V]{
+			Key: zero,
+		},
+	})
 }
 
 func (t *TableIter[K, V]) Read() (key K, value V, err error) {
-	physicalRow := t.iter.Item()
+	physicalRow := t.iter.Item().Row
+	if physicalRow == nil {
+		panic("impossible")
+	}
 	key = physicalRow.Key
 	value, err = physicalRow.Read(t.readTime, t.tx)
 	if err != nil {
@@ -54,7 +64,7 @@ func (t *TableIter[K, V]) Read() (key K, value V, err error) {
 }
 
 func (t *TableIter[K, V]) Item() (row *PhysicalRow[K, V]) {
-	return t.iter.Item()
+	return t.iter.Item().Row
 }
 
 func (t *TableIter[K, V]) Next() bool {
@@ -63,7 +73,11 @@ func (t *TableIter[K, V]) Next() bool {
 			return false
 		}
 		// skip unreadable values
-		_, err := t.iter.Item().Read(t.readTime, t.tx)
+		item := t.iter.Item()
+		if item.Row == nil {
+			return false
+		}
+		_, err := item.Row.Read(t.readTime, t.tx)
 		if errors.Is(err, sql.ErrNoRows) {
 			continue
 		}
@@ -75,9 +89,14 @@ func (t *TableIter[K, V]) First() bool {
 	if ok := t.iter.First(); !ok {
 		return false
 	}
+	t.seekFirst()
 	for {
 		// skip unreadable values
-		_, err := t.iter.Item().Read(t.readTime, t.tx)
+		item := t.iter.Item()
+		if item.Row == nil {
+			return false
+		}
+		_, err := item.Row.Read(t.readTime, t.tx)
 		if errors.Is(err, sql.ErrNoRows) {
 			if ok := t.iter.Next(); !ok {
 				return false
@@ -89,15 +108,21 @@ func (t *TableIter[K, V]) First() bool {
 }
 
 func (t *TableIter[K, V]) Seek(key K) bool {
-	pivot := &PhysicalRow[K, V]{
-		Key: key,
+	pivot := &TreeItem[K, V]{
+		Row: &PhysicalRow[K, V]{
+			Key: key,
+		},
 	}
 	if ok := t.iter.Seek(pivot); !ok {
 		return false
 	}
 	for {
 		// skip unreadable values
-		_, err := t.iter.Item().Read(t.readTime, t.tx)
+		item := t.iter.Item()
+		if item.Row == nil {
+			return false
+		}
+		_, err := item.Row.Read(t.readTime, t.tx)
 		if errors.Is(err, sql.ErrNoRows) {
 			if ok := t.iter.Next(); !ok {
 				return false
