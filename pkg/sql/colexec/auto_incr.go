@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"golang.org/x/exp/constraints"
 )
 
 var AUTO_INCR_TABLE = "%!%mo_increment_columns"
@@ -74,14 +75,14 @@ func UpdateInsertValueBatch(e engine.Engine, ctx context.Context, proc *process.
 	return UpdateInsertBatch(e, db, ctx, proc, ColDefs, bat, rel.GetTableID(ctx))
 }
 
-func getRangeFromAutoIncrTable(param *AutoIncrParam, bat *batch.Batch, tableID string) ([]int64, []int64, error) {
-	offset, step := make([]int64, 0), make([]int64, 0)
+func getRangeFromAutoIncrTable(param *AutoIncrParam, bat *batch.Batch, tableID string) ([]uint64, []uint64, error) {
+	offset, step := make([]uint64, 0), make([]uint64, 0)
 	var err error
 	for i, col := range param.colDefs {
 		if !col.AutoIncrement {
 			continue
 		}
-		var d, s int64
+		var d, s uint64
 		param.rel, err = param.db.Relation(param.ctx, AUTO_INCR_TABLE)
 		if err != nil {
 			return nil, nil, err
@@ -95,14 +96,51 @@ func getRangeFromAutoIncrTable(param *AutoIncrParam, bat *batch.Batch, tableID s
 	return offset, step, nil
 }
 
-func getOneColRangeFromAutoIncrTable(param *AutoIncrParam, bat *batch.Batch, name string, pos int) (int64, int64, error) {
+func getMaxnum[T constraints.Integer](vec *vector.Vector, length, maxNum, step uint64) uint64 {
+	vs := vector.MustTCols[T](vec)
+	rowIndex := uint64(0)
+	for rowIndex = 0; rowIndex < length; rowIndex++ {
+		if nulls.Contains(vec.Nsp, rowIndex) {
+			maxNum += step
+		} else {
+			if vs[rowIndex] < 0 {
+				continue
+			}
+			if uint64(vs[rowIndex]) > maxNum {
+				maxNum = uint64(vs[rowIndex])
+			}
+		}
+	}
+	return maxNum
+}
+
+func updateVector[T constraints.Integer](vec *vector.Vector, length, curNum, stepNum uint64) {
+	vs := vector.MustTCols[T](vec)
+	rowIndex := uint64(0)
+	for rowIndex = 0; rowIndex < length; rowIndex++ {
+		if nulls.Contains(vec.Nsp, uint64(rowIndex)) {
+			nulls.Del(vec.Nsp, rowIndex)
+			curNum += stepNum
+			vs[rowIndex] = T(curNum)
+		} else {
+			if vs[rowIndex] < 0 {
+				continue
+			}
+			if uint64(vs[rowIndex]) > curNum {
+				curNum = uint64(vs[rowIndex])
+			}
+		}
+	}
+}
+
+func getOneColRangeFromAutoIncrTable(param *AutoIncrParam, bat *batch.Batch, name string, pos int) (uint64, uint64, error) {
 	txnOperator, err := param.proc.TxnClient.New()
 	if err != nil {
 		return 0, 0, err
 	}
 
-	oriNum, step := getCurrentIndex(param, name)
-	if oriNum < 0 {
+	oriNum, step, err := getCurrentIndex(param, name)
+	if err != nil {
 		ctx, cancel := context.WithTimeout(
 			param.ctx,
 			param.eg.Hints().CommitOrRollbackTimeout,
@@ -117,33 +155,50 @@ func getOneColRangeFromAutoIncrTable(param *AutoIncrParam, bat *batch.Batch, nam
 	vec := bat.Vecs[pos]
 	maxNum := oriNum
 	switch vec.Typ.Oid {
+	case types.T_int8:
+		maxNum = getMaxnum[int8](vec, uint64(bat.Length()), maxNum, step)
+		if maxNum > math.MaxInt8 {
+			return 0, 0, moerr.NewOutOfRange("tinyint", "value %v", maxNum)
+		}
+	case types.T_int16:
+		maxNum = getMaxnum[int16](vec, uint64(bat.Length()), maxNum, step)
+		if maxNum > math.MaxInt16 {
+			return 0, 0, moerr.NewOutOfRange("smallint", "value %v", maxNum)
+		}
 	case types.T_int32:
-		vs := vec.Col.([]int32)
-		for rowIndex := 0; rowIndex < bat.Length(); rowIndex++ {
-			if nulls.Contains(vec.Nsp, uint64(rowIndex)) {
-				maxNum += step
-			} else {
-				if int64(vs[rowIndex]) > maxNum {
-					maxNum = int64(vs[rowIndex])
-				}
-			}
+		maxNum = getMaxnum[int32](vec, uint64(bat.Length()), maxNum, step)
+		if maxNum > math.MaxInt32 {
+			return 0, 0, moerr.NewOutOfRange("int", "value %v", maxNum)
 		}
 	case types.T_int64:
-		vs := vec.Col.([]int64)
-		for rowIndex := 0; rowIndex < bat.Length(); rowIndex++ {
-			if nulls.Contains(vec.Nsp, uint64(rowIndex)) {
-				maxNum += step
-			} else {
-				if vs[rowIndex] > maxNum {
-					maxNum = vs[rowIndex]
-				}
-			}
+		maxNum = getMaxnum[int64](vec, uint64(bat.Length()), maxNum, step)
+		if maxNum > math.MaxInt64 {
+			return 0, 0, moerr.NewOutOfRange("bigint", "value %v", maxNum)
 		}
+	case types.T_uint8:
+		maxNum = getMaxnum[uint8](vec, uint64(bat.Length()), maxNum, step)
+		if maxNum > math.MaxUint8 {
+			return 0, 0, moerr.NewOutOfRange("tinyint unsigned", "value %v", maxNum)
+		}
+	case types.T_uint16:
+		maxNum = getMaxnum[uint16](vec, uint64(bat.Length()), maxNum, step)
+		if maxNum > math.MaxUint16 {
+			return 0, 0, moerr.NewOutOfRange("smallint unsigned", "value %v", maxNum)
+		}
+	case types.T_uint32:
+		maxNum = getMaxnum[uint32](vec, uint64(bat.Length()), maxNum, step)
+		if maxNum > math.MaxUint32 {
+			return 0, 0, moerr.NewOutOfRange("int unsigned", "value %v", maxNum)
+		}
+	case types.T_uint64:
+		maxNum = getMaxnum[uint64](vec, uint64(bat.Length()), maxNum, step)
+		if maxNum < oriNum {
+			return 0, 0, moerr.NewOutOfRange("bigint unsigned", "auto_incrment column constant value overflows bigint unsigned")
+		}
+	default:
+		return 0, 0, moerr.NewInvalidInput("the auto_incr col is not integer type")
 	}
 
-	if maxNum < 0 {
-		return 0, 0, moerr.NewInvalidInput("invalid auto_incrment maxNum %d", maxNum)
-	}
 	if err := updateAutoIncrTable(param, maxNum, name); err != nil {
 		ctx, cancel := context.WithTimeout(
 			param.ctx,
@@ -167,7 +222,7 @@ func getOneColRangeFromAutoIncrTable(param *AutoIncrParam, bat *batch.Batch, nam
 	return oriNum, step, nil
 }
 
-func updateBatchImpl(ColDefs []*plan.ColDef, bat *batch.Batch, offset, step []int64) error {
+func updateBatchImpl(ColDefs []*plan.ColDef, bat *batch.Batch, offset, step []uint64) error {
 	pos := 0
 	for i, col := range ColDefs {
 		if !col.AutoIncrement {
@@ -178,31 +233,22 @@ func updateBatchImpl(ColDefs []*plan.ColDef, bat *batch.Batch, offset, step []in
 		stepNum := step[pos]
 		pos++
 		switch vec.Typ.Oid {
+		case types.T_int8:
+			updateVector[int8](vec, uint64(bat.Length()), curNum, stepNum)
+		case types.T_int16:
+			updateVector[int16](vec, uint64(bat.Length()), curNum, stepNum)
 		case types.T_int32:
-			vs := vec.Col.([]int32)
-			for rowIndex := 0; rowIndex < bat.Length(); rowIndex++ {
-				if nulls.Contains(vec.Nsp, uint64(rowIndex)) {
-					nulls.Del(vec.Nsp, uint64(rowIndex))
-					curNum += stepNum
-					if curNum > math.MaxInt32 {
-						return moerr.NewInternalError("auto_incrment column '%s' constant value %d overflows int", col.Name, curNum)
-					}
-					vs[rowIndex] = int32(curNum)
-				} else if vs[rowIndex] >= int32(curNum) {
-					curNum = int64(vs[rowIndex])
-				}
-			}
+			updateVector[int32](vec, uint64(bat.Length()), curNum, stepNum)
 		case types.T_int64:
-			vs := vec.Col.([]int64)
-			for rowIndex := 0; rowIndex < bat.Length(); rowIndex++ {
-				if nulls.Contains(vec.Nsp, uint64(rowIndex)) {
-					nulls.Del(vec.Nsp, uint64(rowIndex))
-					curNum += stepNum
-					vs[rowIndex] = curNum
-				} else if vs[rowIndex] >= curNum {
-					curNum = int64(vs[rowIndex])
-				}
-			}
+			updateVector[int64](vec, uint64(bat.Length()), curNum, stepNum)
+		case types.T_uint8:
+			updateVector[uint8](vec, uint64(bat.Length()), curNum, stepNum)
+		case types.T_uint16:
+			updateVector[uint16](vec, uint64(bat.Length()), curNum, stepNum)
+		case types.T_uint32:
+			updateVector[uint32](vec, uint64(bat.Length()), curNum, stepNum)
+		case types.T_uint64:
+			updateVector[uint64](vec, uint64(bat.Length()), curNum, stepNum)
 		default:
 			return moerr.NewInvalidInput("invalid auto_increment type '%v'", vec.Typ.Oid)
 		}
@@ -210,18 +256,18 @@ func updateBatchImpl(ColDefs []*plan.ColDef, bat *batch.Batch, offset, step []in
 	return nil
 }
 
-func getCurrentIndex(param *AutoIncrParam, colName string) (int64, int64) {
+func getCurrentIndex(param *AutoIncrParam, colName string) (uint64, uint64, error) {
 	rds, _ := param.rel.NewReader(param.ctx, 1, nil, nil)
 	for {
 		bat, err := rds[0].Read(AUTO_INCR_TABLE_COLNAME, nil, param.proc.Mp())
 		if err != nil || bat == nil {
-			return -1, 0
+			return 0, 0, moerr.NewInvalidInput("can not find the auto col")
 		}
 		if len(bat.Vecs) < 2 {
 			panic(moerr.NewInternalError("the mo_increment_columns col num is not two"))
 		}
-		vs2 := vector.MustTCols[int64](bat.Vecs[1])
-		vs3 := vector.MustTCols[int64](bat.Vecs[2])
+		vs2 := vector.MustTCols[uint64](bat.Vecs[1])
+		vs3 := vector.MustTCols[uint64](bat.Vecs[2])
 		var rowIndex int64
 		for rowIndex = 0; rowIndex < int64(bat.Length()); rowIndex++ {
 			str := bat.Vecs[0].GetString(rowIndex)
@@ -230,12 +276,12 @@ func getCurrentIndex(param *AutoIncrParam, colName string) (int64, int64) {
 			}
 		}
 		if rowIndex < int64(bat.Length()) {
-			return vs2[rowIndex], vs3[rowIndex]
+			return vs2[rowIndex], vs3[rowIndex], nil
 		}
 	}
 }
 
-func updateAutoIncrTable(param *AutoIncrParam, curNum int64, name string) error {
+func updateAutoIncrTable(param *AutoIncrParam, curNum uint64, name string) error {
 	bat := makeAutoIncrBatch(name, curNum, 1)
 	err := param.rel.Delete(param.ctx, bat.GetVector(0), AUTO_INCR_TABLE_COLNAME[0])
 	if err != nil {
@@ -248,10 +294,10 @@ func updateAutoIncrTable(param *AutoIncrParam, curNum int64, name string) error 
 	return nil
 }
 
-func makeAutoIncrBatch(name string, num, step int64) *batch.Batch {
+func makeAutoIncrBatch(name string, num, step uint64) *batch.Batch {
 	vec := vector.NewWithStrings(types.T_varchar.ToType(), []string{name}, nil, nil)
-	vec2 := vector.NewWithFixed(types.T_int64.ToType(), []int64{num}, nil, nil)
-	vec3 := vector.NewWithFixed(types.T_int64.ToType(), []int64{step}, nil, nil)
+	vec2 := vector.NewWithFixed(types.T_uint64.ToType(), []uint64{num}, nil, nil)
+	vec3 := vector.NewWithFixed(types.T_uint64.ToType(), []uint64{step}, nil, nil)
 	bat := &batch.Batch{
 		Attrs: AUTO_INCR_TABLE_COLNAME,
 		Vecs:  []*vector.Vector{vec, vec2, vec3},
@@ -337,8 +383,8 @@ func getAutoIncrTableDef() []engine.TableDef {
 		| Attribute |     Type     | Primary Key |             Note         |
 		| -------   | ------------ | ----------- | ------------------------ |
 		|   name    | varchar(770) |             | Name of the db_table_col |
-		|  offset   |    int64     |             |   current index number   |
-		|   step    |    int64     |             |   every increase step    |
+		|  offset   |    uint64     |             |   current index number   |
+		|   step    |    uint64     |             |   every increase step    |
 	*/
 
 	nameAttr := &engine.AttributeDef{Attr: engine.Attribute{
@@ -352,7 +398,7 @@ func getAutoIncrTableDef() []engine.TableDef {
 	numAttr := &engine.AttributeDef{Attr: engine.Attribute{
 		Name:    AUTO_INCR_TABLE_COLNAME[1],
 		Alg:     0,
-		Type:    types.T_int64.ToType(),
+		Type:    types.T_uint64.ToType(),
 		Default: &plan.Default{},
 		Primary: false,
 	}}
@@ -360,7 +406,7 @@ func getAutoIncrTableDef() []engine.TableDef {
 	stepAttr := &engine.AttributeDef{Attr: engine.Attribute{
 		Name:    AUTO_INCR_TABLE_COLNAME[2],
 		Alg:     0,
-		Type:    types.T_int64.ToType(),
+		Type:    types.T_uint64.ToType(),
 		Default: &plan.Default{},
 		Primary: false,
 	}}
