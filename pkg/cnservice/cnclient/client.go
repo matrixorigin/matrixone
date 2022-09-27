@@ -41,10 +41,6 @@ func AcquireMessage() *pipeline.Message {
 	return client.acquireMessage().(*pipeline.Message)
 }
 
-func ReleaseMessage(m *pipeline.Message) {
-	client.releaseMessage(m)
-}
-
 func IsCNClientReady() bool {
 	return client != nil && client.ready
 }
@@ -100,8 +96,13 @@ func NewCNClient(cfg *ClientConfig) error {
 	codec := morpc.NewMessageCodec(client.acquireMessage, cfg.PayLoadCopyBufferSize)
 	factory := morpc.NewGoettyBasedBackendFactory(codec,
 		morpc.WithBackendConnectWhenCreate(),
-		morpc.WithBackendGoettyOptions(goetty.WithSessionRWBUfferSize(
-			cfg.ReadBufferSize, cfg.WriteBufferSize)),
+		morpc.WithBackendGoettyOptions(
+			goetty.WithSessionRWBUfferSize(cfg.ReadBufferSize, cfg.WriteBufferSize),
+			goetty.WithSessionReleaseMsgFunc(func(v any) {
+				m := v.(*pipeline.Message)
+				client.releaseMessage(m)
+			}),
+		),
 		morpc.WithBackendConnectTimeout(cfg.TimeOutForEachConnect),
 	)
 

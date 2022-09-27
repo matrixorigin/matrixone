@@ -88,7 +88,13 @@ func NewService(
 
 	server, err := morpc.NewRPCServer("cn-server", cfg.ListenAddress,
 		morpc.NewMessageCodec(srv.acquireMessage, cfg.PayLoadCopyBufferSize),
-		morpc.WithServerGoettyOptions(goetty.WithSessionRWBUfferSize(cfg.ReadBufferSize, cfg.WriteBufferSize)),
+		morpc.WithServerGoettyOptions(
+			goetty.WithSessionRWBUfferSize(cfg.ReadBufferSize, cfg.WriteBufferSize),
+			goetty.WithSessionReleaseMsgFunc(func(v any) {
+				m := v.(*pipeline.Message)
+				srv.releaseMessage(m)
+			}),
+		),
 		morpc.WithServerDisableAutoCancelContext())
 	if err != nil {
 		return nil, err
@@ -130,6 +136,17 @@ func (s *service) Close() error {
 
 func (s *service) acquireMessage() morpc.Message {
 	return s.responsePool.Get().(*pipeline.Message)
+}
+
+func (s *service) releaseMessage(m *pipeline.Message) {
+	if s.responsePool != nil {
+		m.Sid = 0
+		m.Err = nil
+		m.Data = nil
+		m.ProcInfoData = nil
+		m.Analyse = nil
+		s.responsePool.Put(m)
+	}
 }
 
 func (s *service) handleRequest(ctx context.Context, req morpc.Message, _ uint64, cs morpc.ClientSession) error {

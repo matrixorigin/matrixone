@@ -198,7 +198,6 @@ func (s *Scope) remoteRun(c *Compile) error {
 		message.Data = sData
 		message.ProcInfoData = pData
 	}
-	defer cnclient.ReleaseMessage(message)
 
 	errSend := streamSender.Send(c.ctx, message)
 	if errSend != nil {
