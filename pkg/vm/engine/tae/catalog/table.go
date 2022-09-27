@@ -20,6 +20,7 @@ import (
 	"io"
 	"sync/atomic"
 
+	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -49,7 +50,7 @@ type TableEntry struct {
 }
 
 func genTblFullName(tenantID uint32, name string) string {
-	if name == SystemTable_DB_Name || name == SystemTable_Table_Name || name == SystemTable_Columns_Name {
+	if name == pkgcatalog.MO_DATABASE || name == pkgcatalog.MO_TABLES || name == pkgcatalog.MO_COLUMNS {
 		tenantID = 0
 	}
 	return fmt.Sprintf("%d-%s", tenantID, name)
@@ -123,9 +124,9 @@ func (entry *TableEntry) IsVirtual() bool {
 	if !entry.db.IsSystemDB() {
 		return false
 	}
-	return entry.schema.Name == SystemTable_DB_Name ||
-		entry.schema.Name == SystemTable_Table_Name ||
-		entry.schema.Name == SystemTable_Columns_Name
+	return entry.schema.Name == pkgcatalog.MO_DATABASE ||
+		entry.schema.Name == pkgcatalog.MO_TABLES ||
+		entry.schema.Name == pkgcatalog.MO_COLUMNS
 }
 
 func (entry *TableEntry) GetRows() uint64 {

@@ -72,7 +72,6 @@ const (
 	dfConnectTimeout        = 5 * time.Second
 	dfClientReadBufferSize  = 1 << 10
 	dfClientWriteBufferSize = 1 << 10
-	dfPayLoadCopyBufferSize = 1 << 20
 )
 
 // ClientConfig a config to init a CNClient
@@ -82,9 +81,8 @@ type ClientConfig struct {
 	// TimeOutForEachConnect is the out time for each tcp connect.
 	TimeOutForEachConnect time.Duration
 	// related buffer size.
-	PayLoadCopyBufferSize int
-	ReadBufferSize        int
-	WriteBufferSize       int
+	ReadBufferSize  int
+	WriteBufferSize int
 }
 
 func NewCNClient(cfg *ClientConfig) error {
@@ -93,7 +91,7 @@ func NewCNClient(cfg *ClientConfig) error {
 	client = &CNClient{config: cfg}
 	client.requestPool = &sync.Pool{New: func() any { return &pipeline.Message{} }}
 
-	codec := morpc.NewMessageCodec(client.acquireMessage, cfg.PayLoadCopyBufferSize)
+	codec := morpc.NewMessageCodec(client.acquireMessage)
 	factory := morpc.NewGoettyBasedBackendFactory(codec,
 		morpc.WithBackendConnectWhenCreate(),
 		morpc.WithBackendGoettyOptions(
@@ -114,6 +112,7 @@ func NewCNClient(cfg *ClientConfig) error {
 }
 
 func (c *CNClient) acquireMessage() morpc.Message {
+	// TODO: pipeline.Message has many []byte fields, maybe can use PayloadMessage to avoid mem copy.
 	return c.requestPool.Get().(*pipeline.Message)
 }
 
@@ -130,9 +129,6 @@ func (c *CNClient) releaseMessage(m *pipeline.Message) {
 
 // Fill set some default value for client config.
 func (cfg *ClientConfig) Fill() {
-	if cfg.PayLoadCopyBufferSize < 0 {
-		cfg.PayLoadCopyBufferSize = dfPayLoadCopyBufferSize
-	}
 	if cfg.MaxSenderNumber <= 0 {
 		cfg.MaxSenderNumber = dfMaxSenderNumber
 	}
