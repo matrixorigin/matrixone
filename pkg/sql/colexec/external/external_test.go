@@ -112,16 +112,6 @@ func Test_Prepare(t *testing.T) {
 			convey.So(param.FileList, convey.ShouldBeNil)
 			convey.So(param.FileCnt, convey.ShouldEqual, 0)
 
-			//json_byte, err = json.Marshal(extern)
-			//if err != nil {
-			//	panic(err)
-			//}
-			//param.CreateSql = string(json_byte)
-			//err = Prepare(tcs.proc, tcs.arg)
-			//convey.So(err, convey.ShouldNotBeNil)
-			//convey.So(param.FileList, convey.ShouldBeNil)
-			//convey.So(param.FileCnt, convey.ShouldEqual, 0)
-
 			extern.Format = "test"
 			json_byte, err = json.Marshal(extern)
 			convey.So(err, convey.ShouldBeNil)
@@ -181,6 +171,11 @@ func Test_Call(t *testing.T) {
 			end, err = Call(1, tcs.proc, tcs.arg)
 			convey.So(err, convey.ShouldNotBeNil)
 			convey.So(end, convey.ShouldBeFalse)
+
+			param.End = true
+			end, err = Call(1, tcs.proc, tcs.arg)
+			convey.So(err, convey.ShouldBeNil)
+			convey.So(end, convey.ShouldBeTrue)
 		}
 	})
 }
@@ -286,6 +281,18 @@ func Test_GetBatchData(t *testing.T) {
 		}
 		buf.WriteString("}")
 		jsonline_object := []string{buf.String()}
+		buf.Reset()
+		for idx, attr := range atrrs {
+			if idx == 0 {
+				buf.WriteString(fmt.Sprintf("\"%s\":\"%s\"", line[idx], line[idx]))
+			} else {
+				buf.WriteString(fmt.Sprintf("\"%s\":\"%s\"", attr, line[idx]))
+			}
+			if idx != len(atrrs)-1 {
+				buf.WriteString(",")
+			}
+		}
+		jsonline_object_key_not_match := []string{"{" + buf.String() + "}"}
 		buf.Reset()
 		buf.WriteString("[")
 		for idx := range line {
@@ -464,6 +471,10 @@ func Test_GetBatchData(t *testing.T) {
 			convey.So(err, convey.ShouldNotBeNil)
 		}
 
+		param.extern.Tail.Fields.EnclosedBy = 't'
+		_, err = GetBatchData(param, plh, proc)
+		convey.So(err, convey.ShouldNotBeNil)
+
 		line[1] = "128.9"
 		line[2] = "32768.9"
 		line[3] = "2147483648.9"
@@ -492,6 +503,9 @@ func Test_GetBatchData(t *testing.T) {
 		plh.simdCsvLineArray = [][]string{jsonline_object_less}
 		_, err = GetBatchData(param, plh, proc)
 		convey.So(err, convey.ShouldNotBeNil)
+		plh.simdCsvLineArray = [][]string{jsonline_object_key_not_match}
+		_, err = GetBatchData(param, plh, proc)
+		convey.So(err, convey.ShouldNotBeNil)
 
 		param.extern.Format = tree.CSV
 		_, err = GetBatchData(param, plh, proc)
@@ -508,6 +522,15 @@ func Test_GetBatchData(t *testing.T) {
 		convey.So(err, convey.ShouldNotBeNil)
 
 		plh.simdCsvLineArray = [][]string{jsonline_array_less}
+		_, err = GetBatchData(param, plh, proc)
+		convey.So(err, convey.ShouldNotBeNil)
+
+		jsonline_array_less[0] = jsonline_object_less[0][1:]
+		plh.simdCsvLineArray = [][]string{jsonline_array_less}
+		_, err = GetBatchData(param, plh, proc)
+		convey.So(err, convey.ShouldNotBeNil)
+		jsonline_array = append(jsonline_array, jsonline_array_less...)
+		plh.simdCsvLineArray = [][]string{jsonline_array}
 		_, err = GetBatchData(param, plh, proc)
 		convey.So(err, convey.ShouldNotBeNil)
 	})
