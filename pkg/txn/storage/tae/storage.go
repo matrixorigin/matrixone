@@ -23,9 +23,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/rpchandle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/rpc"
 )
 
 type taeStorage struct {
@@ -46,7 +46,7 @@ func NewTAEStorage(
 		Shard: shard,
 	}
 	storage := &taeStorage{
-		taeHandler: db.NewTAEHandle(opt),
+		taeHandler: rpc.NewTAEHandle(opt),
 	}
 	return storage, nil
 }

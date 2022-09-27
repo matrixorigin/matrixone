@@ -12,9 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package db
+package rpc
 
 import (
+	"context"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -23,14 +24,15 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/moengine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"os"
 	"syscall"
 )
 
 type Handle struct {
-	db *DB
+	eng moengine.TxnEngine
 }
 
 func NewTAEHandle(opt *options.Options) *Handle {
@@ -40,13 +42,14 @@ func NewTAEHandle(opt *options.Options) *Handle {
 	if err != nil {
 		panic(err)
 	}
+
 	h := &Handle{
-		db: tae,
+		eng: moengine.NewEngine(tae),
 	}
 	return h
 }
 func (h *Handle) HandleCommit(meta txn.TxnMeta) (err error) {
-	txn, err := h.db.GetTxnByMeta(nil, meta)
+	txn, err := h.eng.GetTxnByMeta(meta)
 	if err != nil {
 		return err
 	}
@@ -55,16 +58,16 @@ func (h *Handle) HandleCommit(meta txn.TxnMeta) (err error) {
 }
 
 func (h *Handle) HandleRollback(meta txn.TxnMeta) (err error) {
-	txn, err := h.db.GetTxnByMeta(nil, meta)
+	txn, err := h.eng.GetTxnByMeta(meta)
 	if err != nil {
 		return err
 	}
-	err = txn.Commit()
+	err = txn.Rollback()
 	return
 }
 
 func (h *Handle) HandleCommitting(meta txn.TxnMeta) (err error) {
-	txn, err := h.db.GetTxnByMeta(nil, meta)
+	txn, err := h.eng.GetTxnByMeta(meta)
 	if err != nil {
 		return err
 	}
@@ -73,7 +76,7 @@ func (h *Handle) HandleCommitting(meta txn.TxnMeta) (err error) {
 }
 
 func (h *Handle) HandlePrepare(meta txn.TxnMeta) (pts timestamp.Timestamp, err error) {
-	txn, err := h.db.GetTxnByMeta(nil, meta)
+	txn, err := h.eng.GetTxnByMeta(meta)
 	if err != nil {
 		return timestamp.Timestamp{}, err
 	}
@@ -105,6 +108,7 @@ func (h *Handle) HandleGetLogTail(
 	panic(moerr.NewNYI("HandleDestroy is not implemented yet"))
 }
 
+// TODO:: need to handle resp.
 func (h *Handle) HandlePreCommit(
 	meta txn.TxnMeta,
 	req apipb.PrecommitWriteCmd,
@@ -122,56 +126,56 @@ func (h *Handle) HandlePreCommit(
 		//TODO:: use pkg/catalog.CreateDatabase
 		case []catalog.CreateDatabase:
 			for _, cmd := range cmds {
-				req := CreateDatabaseReq{
+				req := db.CreateDatabaseReq{
 					Name: cmd.Name,
-					AccessInfo: AccessInfo{
+					AccessInfo: db.AccessInfo{
 						UserID:    cmd.Owner,
 						RoleID:    cmd.Creator,
 						AccountID: cmd.AccountId,
 					},
 				}
 				if err = h.HandleCreateDatabase(meta, req,
-					new(CreateDatabaseResp)); err != nil {
+					new(db.CreateDatabaseResp)); err != nil {
 					return err
 				}
 			}
 		case []catalog.CreateTable:
 			for _, cmd := range cmds {
-				req := CreateRelationReq{
+				req := db.CreateRelationReq{
 					Name:         cmd.Name,
 					DatabaseName: cmd.DatabaseName,
 					DatabaseID:   cmd.DatabaseId,
 					Defs:         cmd.Defs,
 				}
 				if err = h.HandleCreateRelation(meta, req,
-					new(CreateRelationResp)); err != nil {
+					new(db.CreateRelationResp)); err != nil {
 					return err
 				}
 			}
 		case []catalog.DropDatabase:
 			for _, cmd := range cmds {
-				req := DeleteDatabaseReq{
+				req := db.DeleteDatabaseReq{
 					Name: cmd.Name,
-					AccessInfo: AccessInfo{
+					AccessInfo: db.AccessInfo{
 						UserID:    req.UserId,
 						RoleID:    req.RoleId,
 						AccountID: req.AccountId,
 					},
 				}
 				if err = h.HandleDeleteDatabase(meta, req,
-					new(DeleteDatabaseResp)); err != nil {
+					new(db.DeleteDatabaseResp)); err != nil {
 					return err
 				}
 			}
 		case []catalog.DropTable:
 			for _, cmd := range cmds {
-				req := DeleteRelationReq{
+				req := db.DeleteRelationReq{
 					Name:         cmd.Name,
 					DatabaseName: cmd.DatabaseName,
 					DatabaseID:   cmd.DatabaseId,
 				}
 				if err = h.HandleDeleteRelation(meta, req,
-					new(DeleteRelationResp)); err != nil {
+					new(db.DeleteRelationResp)); err != nil {
 					return err
 				}
 			}
@@ -181,15 +185,15 @@ func (h *Handle) HandlePreCommit(
 			if err != nil {
 				panic(err)
 			}
-			req := WriteReq{
-				Type:         EntryType(e.(*apipb.Entry).EntryType),
+			req := db.WriteReq{
+				Type:         db.EntryType(e.(*apipb.Entry).EntryType),
 				TableID:      e.(*apipb.Entry).TableId,
 				DatabaseName: e.(*apipb.Entry).DatabaseName,
 				TableName:    e.(*apipb.Entry).TableName,
 				Batch:        moBat,
 			}
 			if err = h.HandleWrite(meta, req,
-				new(WriteResp)); err != nil {
+				new(db.WriteResp)); err != nil {
 				return err
 			}
 		default:
@@ -204,148 +208,149 @@ func (h *Handle) HandlePreCommit(
 
 func (h *Handle) HandleCreateDatabase(
 	meta txn.TxnMeta,
-	req CreateDatabaseReq,
-	resp *CreateDatabaseResp) (err error) {
+	req db.CreateDatabaseReq,
+	resp *db.CreateDatabaseResp) (err error) {
 
-	txn, err := h.db.GetOrCreateTxnWithMeta(nil, meta)
+	txn, err := h.eng.GetOrCreateTxnWithMeta(nil, meta)
 	if err != nil {
 		return err
 	}
-
-	txn.BindAccessInfo(
-		req.AccessInfo.AccountID,
-		req.AccessInfo.UserID,
-		req.AccessInfo.RoleID)
-
-	db, err := txn.CreateDatabase(req.Name)
+	//txnop := moengine.TxnToTxnOperator(txn)
+	err = h.eng.CreateDatabase(context.TODO(), req.Name, txn)
 	if err != nil {
 		return
 	}
-	resp.ID = db.GetID()
+	db, err := h.eng.GetDatabase(context.TODO(), req.Name, txn)
+	if err != nil {
+		return
+	}
+	resp.ID = db.GetDatabaseID(context.TODO())
 	return
 }
 
 func (h *Handle) HandleDeleteDatabase(
 	meta txn.TxnMeta,
-	req DeleteDatabaseReq,
-	resp *DeleteDatabaseResp) (err error) {
+	req db.DeleteDatabaseReq,
+	resp *db.DeleteDatabaseResp) (err error) {
 
-	txn, err := h.db.GetOrCreateTxnWithMeta(nil, meta)
+	txn, err := h.eng.GetOrCreateTxnWithMeta(nil, meta)
 	if err != nil {
 		return err
 	}
-
-	db, err := txn.DropDatabase(req.Name)
+	//txnop := moengine.TxnToTxnOperator(txn)
+	err = h.eng.DropDatabase(context.TODO(), req.Name, txn)
 	if err != nil {
 		return
 	}
-	resp.ID = db.GetID()
+
+	db, err := h.eng.GetDatabase(context.TODO(), req.Name, txn)
+	if err != nil {
+		return
+	}
+	resp.ID = db.GetDatabaseID(context.TODO())
 	return
 }
 
 func (h *Handle) HandleCreateRelation(
 	meta txn.TxnMeta,
-	req CreateRelationReq,
-	resp *CreateRelationResp) (err error) {
+	req db.CreateRelationReq,
+	resp *db.CreateRelationResp) (err error) {
 
-	txn, err := h.db.GetOrCreateTxnWithMeta(nil, meta)
+	txn, err := h.eng.GetOrCreateTxnWithMeta(nil, meta)
+	if err != nil {
+		return
+	}
+	//txnop := moengine.TxnToTxnOperator(txn)
+	db, err := h.eng.GetDatabase(context.TODO(), req.DatabaseName, txn)
+	if err != nil {
+		return
+	}
+	err = db.CreateRelation(context.TODO(), req.Name, req.Defs)
 	if err != nil {
 		return
 	}
 
-	db, err := txn.GetDatabase(req.DatabaseName)
+	tb, err := db.GetRelation(context.TODO(), req.Name)
 	if err != nil {
 		return
 	}
-	schema, err := catalog.DefsToSchema(req.Name, req.Defs)
-	if err != nil {
-		return
-	}
-	schema.BlockMaxRows = 40000
-	schema.SegmentMaxBlocks = 20
-	tb, err := db.CreateRelation(schema)
-	if err != nil {
-		return
-	}
-	resp.ID = tb.ID()
+	resp.ID = tb.GetRelationID(context.TODO())
 	return
 }
 
 func (h *Handle) HandleDeleteRelation(
 	meta txn.TxnMeta,
-	req DeleteRelationReq,
-	resp *DeleteRelationResp) (err error) {
+	req db.DeleteRelationReq,
+	resp *db.DeleteRelationResp) (err error) {
 
-	txn, err := h.db.GetOrCreateTxnWithMeta(nil, meta)
+	txn, err := h.eng.GetOrCreateTxnWithMeta(nil, meta)
+	if err != nil {
+		return
+	}
+	//txnop := moengine.TxnToTxnOperator(txn)
+	db, err := h.eng.GetDatabase(context.TODO(), req.DatabaseName, txn)
 	if err != nil {
 		return
 	}
 
-	db, err := txn.GetDatabase(req.DatabaseName)
+	tb, err := db.GetRelation(context.TODO(), req.Name)
 	if err != nil {
 		return
 	}
-	tb, err := db.DropRelationByName(req.Name)
+	resp.ID = tb.GetRelationID(context.TODO())
+
+	err = db.DropRelation(context.TODO(), req.Name)
 	if err != nil {
 		return
 	}
-	resp.ID = tb.ID()
 	return
 }
 
-//Handle DML commands
-
+// HandleWrite Handle DML commands
 func (h *Handle) HandleWrite(
 	meta txn.TxnMeta,
-	req WriteReq,
-	resp *WriteResp) (err error) {
+	req db.WriteReq,
+	resp *db.WriteResp) (err error) {
 
-	txn, err := h.db.GetOrCreateTxnWithMeta(nil, meta)
+	txn, err := h.eng.GetOrCreateTxnWithMeta(nil, meta)
 	if err != nil {
 		return err
 	}
 
-	db, err := txn.GetDatabase(req.DatabaseName)
+	//txnop := moengine.TxnToTxnOperator(txn)
+	dbase, err := h.eng.GetDatabase(context.TODO(), req.DatabaseName, txn)
 	if err != nil {
 		return
 	}
 
-	tb, err := db.GetRelationByName(req.TableName)
+	tb, err := dbase.GetRelation(context.TODO(), req.TableName)
 	if err != nil {
 		return
 	}
 
-	if req.Type == EntryInsert {
+	if req.Type == db.EntryInsert {
 		//Append a block had been bulk-loaded into S3
 		if req.FileName != "" {
 			//TODO::Precommit a block from S3
-			//tb.PrecommitAppendBlock()
+			//tb.AppendBlock()
 			panic(moerr.NewNYI("Precommit a block is not implemented yet"))
 		}
 		//Add a batch into table
-		taeBat := containers.MOToTAEBatch(
-			req.Batch,
-			tb.GetMeta().(*catalog.TableEntry).GetSchema().
-				AllNullables(),
-		)
-		//TODO::use PrecommitAppend, instead of Append.
-		err = tb.Append(taeBat)
+		//TODO::add a parameter to Append for PreCommit-Append?
+		err = tb.Write(context.TODO(), req.Batch)
 		return
 	}
 
 	//TODO:: handle delete rows of block had been bulk-loaded into S3.
 
-	//Delete a batch
-	err = tb.DeleteByPhyAddrKeys(
-		containers.MOToTAEVector(
-			req.Batch.Vecs[0],
-			false),
-	)
+	//Vecs[0]--> rowid
+	//Vecs[1]--> PrimaryKey
+	err = tb.DeleteByPhyAddrKeys(context.TODO(), req.Batch.GetVector(0))
 	return
 
 }
 
-func openTAE(targetDir string, opt *options.Options) (tae *DB, err error) {
+func openTAE(targetDir string, opt *options.Options) (tae *db.DB, err error) {
 
 	if targetDir != "" {
 		mask := syscall.Umask(0)
@@ -355,7 +360,7 @@ func openTAE(targetDir string, opt *options.Options) (tae *DB, err error) {
 			return nil, err
 		}
 		syscall.Umask(mask)
-		tae, err = Open(targetDir+"/tae", nil)
+		tae, err = db.Open(targetDir+"/tae", nil)
 		if err != nil {
 			logutil.Infof("Open tae failed. error:%v", err)
 			return nil, err
@@ -363,7 +368,7 @@ func openTAE(targetDir string, opt *options.Options) (tae *DB, err error) {
 		return tae, nil
 	}
 
-	tae, err = Open(targetDir, opt)
+	tae, err = db.Open(targetDir, opt)
 	if err != nil {
 		logutil.Infof("Open tae failed. error:%v", err)
 		return nil, err

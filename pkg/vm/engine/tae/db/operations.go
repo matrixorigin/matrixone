@@ -67,6 +67,7 @@ type Request interface {
 		DeleteDatabaseReq |
 		CreateRelationReq |
 		DeleteRelationReq |
+		WriteReq |
 		apipb.SyncLogTailReq
 }
 
@@ -75,6 +76,7 @@ type Response interface {
 		DeleteDatabaseResp |
 		CreateRelationResp |
 		DeleteRelationResp |
+		WriteResp |
 		apipb.SyncLogTailResp
 }
 

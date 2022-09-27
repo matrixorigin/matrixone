@@ -23,7 +23,6 @@ import (
 	"io"
 	"math/rand"
 	"sort"
-	"strings"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -75,65 +74,6 @@ type DropTable struct {
 	Name         string
 	DatabaseId   uint64
 	DatabaseName string
-}
-
-// FIXME:: which package should this function go into?
-//
-//	it's copy of DefsToSchema of help.go.
-func DefsToSchema(name string, defs []engine.TableDef) (schema *Schema, err error) {
-	schema = NewEmptySchema(name)
-	pkMap := make(map[string]int)
-	for _, def := range defs {
-		if pkDef, ok := def.(*engine.PrimaryIndexDef); ok {
-			for i, name := range pkDef.Names {
-				pkMap[name] = i
-			}
-			break
-		}
-	}
-	for _, def := range defs {
-		switch defVal := def.(type) {
-		case *engine.AttributeDef:
-			if idx, ok := pkMap[defVal.Attr.Name]; ok {
-				if err = schema.AppendPKColWithAttribute(defVal.Attr, idx); err != nil {
-					return
-				}
-			} else {
-				if err = schema.AppendColWithAttribute(defVal.Attr); err != nil {
-					return
-				}
-			}
-
-		case *engine.PropertiesDef:
-			for _, property := range defVal.Properties {
-				switch strings.ToLower(property.Key) {
-				case SystemRelAttr_Comment:
-					schema.Comment = property.Value
-				case SystemRelAttr_Kind:
-					schema.Relkind = property.Value
-				case SystemRelAttr_CreateSQL:
-					schema.Createsql = property.Value
-				default:
-				}
-			}
-
-		case *engine.PartitionDef:
-			schema.Partition = defVal.Partition
-
-		case *engine.ViewDef:
-			schema.View = defVal.View
-
-		default:
-			// We will not deal with other cases for the time being
-		}
-	}
-	if err = schema.Finalize(false); err != nil {
-		return
-	}
-	if schema.IsCompoundSortKey() {
-		err = moerr.NewNYI("compound idx")
-	}
-	return
 }
 
 type IndexT uint16

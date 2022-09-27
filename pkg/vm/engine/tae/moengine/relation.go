@@ -123,3 +123,7 @@ func (rel *baseRelation) NewReader(_ context.Context, num int, _ *plan.Expr, _ [
 func (rel *baseRelation) GetTableID(_ context.Context) string {
 	return fmt.Sprintf("%d", rel.handle.ID())
 }
+
+func (rel *baseRelation) GetRelationID(_ context.Context) uint64 {
+	return rel.handle.ID()
+}

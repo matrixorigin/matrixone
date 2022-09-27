@@ -88,10 +88,11 @@ func (db *DB) GetOrCreateTxnWithMeta(info []byte, meta txn.TxnMeta) (txn txnif.A
 	panic(moerr.NewNYI("GetTxnWithMeta is not implemented yet "))
 }
 
-func (db *DB) GetTxnByMeta(info []byte, meta txn.TxnMeta) (txn txnif.AsyncTxn, err error) {
+func (db *DB) GetTxnByMeta(meta txn.TxnMeta) (txn txnif.AsyncTxn, err error) {
 	panic(moerr.NewNYI("GetTxnByMeta is not implemented yet "))
 }
 
+// TODO:: change type of id to be []byte.
 func (db *DB) GetTxn(id uint64) (txn txnif.AsyncTxn, err error) {
 	txn = db.TxnMgr.GetTxn(id)
 	if txn == nil {

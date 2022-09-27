@@ -16,7 +16,6 @@ package moengine
 
 import (
 	"context"
-
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -30,6 +29,7 @@ import (
 
 var (
 	_ engine.Relation = (*txnRelation)(nil)
+	_ Relation        = (*txnRelation)(nil)
 )
 
 func newRelation(h handle.Relation) *txnRelation {
@@ -84,6 +84,12 @@ func (rel *txnRelation) Update(_ context.Context, data *batch.Batch) error {
 		}
 	}
 	return nil
+}
+
+func (rel *txnRelation) DeleteByPhyAddrKeys(_ context.Context, keys *vector.Vector) error {
+	tvec := containers.MOToTAEVector(keys, false)
+	defer tvec.Close()
+	return rel.handle.DeleteByPhyAddrKey(tvec)
 }
 
 func (rel *txnRelation) Delete(_ context.Context, data *vector.Vector, col string) error {

@@ -24,7 +24,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	movec "github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 )
 
@@ -127,173 +126,164 @@ func CopyToMoVectors(vecs []Vector) []*movec.Vector {
 	return movecs
 }
 
-func ProtoVectorToTAE(v *api.Vector, nullable bool) Vector {
-	moV, err := movec.ProtoVectorToVector(v)
-	if err != nil {
-		panic(err)
-	}
-	taeV := MOToTAEVector(moV, nullable)
-	return taeV
-}
-
 func MOToTAEVector(v *movec.Vector, nullable bool) Vector {
 	vec := MakeVector(v.Typ, nullable)
 	bs := NewBytes()
 	switch v.Typ.Oid {
 	case types.T_bool:
-		if v.Col == nil || len(v.Col.([]bool)) == 0 {
+		if vs := len(movec.MustTCols[bool](v)); vs == 0 {
 			bs.Data = make([]byte, v.Length())
 			logutil.Warn("[Moengine]", common.OperationField("MOToVector"),
 				common.OperandField("Col length is 0"))
 		} else {
-			bs.Data = types.EncodeFixedSlice(v.Col.([]bool), 1)
+			bs.Data = types.EncodeFixedSlice(movec.MustTCols[bool](v), 1)
 		}
 	case types.T_int8:
-		if v.Col == nil || len(v.Col.([]int8)) == 0 {
+		if vs := len(movec.MustTCols[int8](v)); vs == 0 {
 			bs.Data = make([]byte, v.Length())
 			logutil.Warn("[Moengine]", common.OperationField("MOToVector"),
 				common.OperandField("Col length is 0"))
 		} else {
-			bs.Data = types.EncodeFixedSlice(v.Col.([]int8), 1)
+			bs.Data = types.EncodeFixedSlice(movec.MustTCols[int8](v), 1)
 		}
 	case types.T_int16:
-		if v.Col == nil || len(v.Col.([]int16)) == 0 {
+		if vs := len(movec.MustTCols[int16](v)); vs == 0 {
 			bs.Data = make([]byte, v.Length()*2)
 			logutil.Warn("[Moengine]", common.OperationField("MOToVector"),
 				common.OperandField("Col length is 0"))
 		} else {
-			bs.Data = types.EncodeFixedSlice(v.Col.([]int16), 2)
+			bs.Data = types.EncodeFixedSlice(movec.MustTCols[int16](v), 2)
 		}
 	case types.T_int32:
-		if v.Col == nil || len(v.Col.([]int32)) == 0 {
+		if vs := len(movec.MustTCols[int32](v)); vs == 0 {
 			bs.Data = make([]byte, v.Length()*4)
 			logutil.Warn("[Moengine]", common.OperationField("MOToVector"),
 				common.OperandField("Col length is 0"))
 		} else {
-			bs.Data = types.EncodeFixedSlice(v.Col.([]int32), 4)
+			bs.Data = types.EncodeFixedSlice(movec.MustTCols[int32](v), 4)
 		}
 	case types.T_int64:
-		if v.Col == nil || len(v.Col.([]int64)) == 0 {
+		if vs := len(movec.MustTCols[int64](v)); vs == 0 {
 			bs.Data = make([]byte, v.Length()*8)
 			logutil.Warn("[Moengine]", common.OperationField("MOToVector"),
 				common.OperandField("Col length is 0"))
 		} else {
-			bs.Data = types.EncodeFixedSlice(v.Col.([]int64), 8)
+			bs.Data = types.EncodeFixedSlice(movec.MustTCols[int64](v), 8)
 		}
 	case types.T_uint8:
-		if v.Col == nil || len(v.Col.([]uint8)) == 0 {
+		if vs := len(movec.MustTCols[uint8](v)); vs == 0 {
 			bs.Data = make([]byte, v.Length())
 			logutil.Warn("[Moengine]", common.OperationField("MOToVector"),
 				common.OperandField("Col length is 0"))
 		} else {
-			bs.Data = types.EncodeFixedSlice(v.Col.([]uint8), 1)
+			bs.Data = types.EncodeFixedSlice(movec.MustTCols[uint8](v), 1)
 		}
 	case types.T_uint16:
-		if v.Col == nil || len(v.Col.([]uint16)) == 0 {
+		if vs := len(movec.MustTCols[uint16](v)); vs == 0 {
 			bs.Data = make([]byte, v.Length()*2)
 			logutil.Warn("[Moengine]", common.OperationField("MOToVector"),
 				common.OperandField("Col length is 0"))
 		} else {
-			bs.Data = types.EncodeFixedSlice(v.Col.([]uint16), 2)
+			bs.Data = types.EncodeFixedSlice(movec.MustTCols[uint16](v), 2)
 		}
 	case types.T_uint32:
-		if v.Col == nil || len(v.Col.([]uint32)) == 0 {
+		if vs := len(movec.MustTCols[uint32](v)); vs == 0 {
 			bs.Data = make([]byte, v.Length()*4)
 			logutil.Warn("[Moengine]", common.OperationField("MOToVector"),
 				common.OperandField("Col length is 0"))
 		} else {
-			bs.Data = types.EncodeFixedSlice(v.Col.([]uint32), 4)
+			bs.Data = types.EncodeFixedSlice(movec.MustTCols[uint32](v), 4)
 		}
 	case types.T_uint64:
-		if v.Col == nil || len(v.Col.([]uint64)) == 0 {
+		if vs := len(movec.MustTCols[uint64](v)); vs == 0 {
 			bs.Data = make([]byte, v.Length()*8)
 			logutil.Warn("[Moengine]", common.OperationField("MOToVector"),
 				common.OperandField("Col length is 0"))
 		} else {
-			bs.Data = types.EncodeFixedSlice(v.Col.([]uint64), 8)
+			bs.Data = types.EncodeFixedSlice(movec.MustTCols[uint64](v), 8)
 		}
 	case types.T_float32:
-		if v.Col == nil || len(v.Col.([]float32)) == 0 {
+		if vs := len(movec.MustTCols[float32](v)); vs == 0 {
 			bs.Data = make([]byte, v.Length()*4)
 			logutil.Warn("[Moengine]", common.OperationField("MOToVector"),
 				common.OperandField("Col length is 0"))
 		} else {
-			bs.Data = types.EncodeFixedSlice(v.Col.([]float32), 4)
+			bs.Data = types.EncodeFixedSlice(movec.MustTCols[float32](v), 4)
 		}
 	case types.T_float64:
-		if v.Col == nil || len(v.Col.([]float64)) == 0 {
+		if vs := len(movec.MustTCols[float64](v)); vs == 0 {
 			bs.Data = make([]byte, v.Length()*8)
 			logutil.Warn("[Moengine]", common.OperationField("MOToVector"),
 				common.OperandField("Col length is 0"))
 		} else {
-			bs.Data = types.EncodeFixedSlice(v.Col.([]float64), 8)
+			bs.Data = types.EncodeFixedSlice(movec.MustTCols[float64](v), 8)
 		}
 	case types.T_date:
-		if v.Col == nil || len(v.Col.([]types.Date)) == 0 {
+		if vs := len(movec.MustTCols[types.Date](v)); vs == 0 {
 			bs.Data = make([]byte, v.Length()*4)
 			logutil.Warn("[Moengine]", common.OperationField("MOToVector"),
 				common.OperandField("Col length is 0"))
 		} else {
-			bs.Data = types.EncodeFixedSlice(v.Col.([]types.Date), 4)
+			bs.Data = types.EncodeFixedSlice(movec.MustTCols[types.Date](v), 4)
 		}
 	case types.T_datetime:
-		if v.Col == nil || len(v.Col.([]types.Datetime)) == 0 {
+		if vs := len(movec.MustTCols[types.Datetime](v)); vs == 0 {
 			bs.Data = make([]byte, v.Length()*8)
 			logutil.Warn("[Moengine]", common.OperationField("MOToVector"),
 				common.OperandField("Col length is 0"))
 		} else {
-			bs.Data = types.EncodeFixedSlice(v.Col.([]types.Datetime), 8)
+			bs.Data = types.EncodeFixedSlice(movec.MustTCols[types.Datetime](v), 8)
 		}
 	case types.T_timestamp:
-		if v.Col == nil || len(v.Col.([]types.Timestamp)) == 0 {
+		if vs := len(movec.MustTCols[types.Timestamp](v)); vs == 0 {
 			bs.Data = make([]byte, v.Length()*8)
 			logutil.Warn("[Moengine]", common.OperationField("MOToVector"),
 				common.OperandField("Col length is 0"))
 		} else {
-			bs.Data = types.EncodeFixedSlice(v.Col.([]types.Timestamp), 8)
+			bs.Data = types.EncodeFixedSlice(movec.MustTCols[types.Timestamp](v), 8)
 		}
 	case types.T_decimal64:
-		if v.Col == nil || len(v.Col.([]types.Decimal64)) == 0 {
+		if vs := len(movec.MustTCols[types.Decimal64](v)); vs == 0 {
 			bs.Data = make([]byte, v.Length()*8)
 			logutil.Warn("[Moengine]", common.OperationField("MOToVector"),
 				common.OperandField("Col length is 0"))
 		} else {
-			bs.Data = types.EncodeFixedSlice(v.Col.([]types.Decimal64), 8)
+			bs.Data = types.EncodeFixedSlice(movec.MustTCols[types.Decimal64](v), 8)
 		}
 	case types.T_decimal128:
-		if v.Col == nil || len(v.Col.([]types.Decimal128)) == 0 {
+		if vs := len(movec.MustTCols[types.Decimal128](v)); vs == 0 {
 			bs.Data = make([]byte, v.Length()*16)
 			logutil.Warn("[Moengine]", common.OperationField("MOToVector"),
 				common.OperandField("Col length is 0"))
 		} else {
-			bs.Data = types.EncodeFixedSlice(v.Col.([]types.Decimal128), 16)
+			bs.Data = types.EncodeFixedSlice(movec.MustTCols[types.Decimal128](v), 16)
 		}
 	case types.T_uuid:
-		if v.Col == nil || len(v.Col.([]types.Uuid)) == 0 {
+		if vs := len(movec.MustTCols[types.Uuid](v)); vs == 0 {
 			bs.Data = make([]byte, v.Length()*16)
 			logutil.Warn("[Moengine]", common.OperationField("MOToVector"),
 				common.OperandField("Col length is 0"))
 		} else {
-			bs.Data = types.EncodeFixedSlice(v.Col.([]types.Uuid), 16)
+			bs.Data = types.EncodeFixedSlice(movec.MustTCols[types.Uuid](v), 16)
 		}
 	case types.T_TS:
-		if v.Col == nil || len(v.Col.([]types.TS)) == 0 {
+		if vs := len(movec.MustTCols[types.TS](v)); vs == 0 {
 			bs.Data = make([]byte, v.Length()*types.TxnTsSize)
 			logutil.Warn("[Moengine]", common.OperationField("MOToVector"),
 				common.OperandField("Col length is 0"))
 		} else {
-			bs.Data = types.EncodeFixedSlice(v.Col.([]types.TS), types.TxnTsSize)
+			bs.Data = types.EncodeFixedSlice(movec.MustTCols[types.TS](v), types.TxnTsSize)
 		}
 	case types.T_Rowid:
-		if v.Col == nil || len(v.Col.([]types.Rowid)) == 0 {
+		if vs := len(movec.MustTCols[types.Rowid](v)); vs == 0 {
 			bs.Data = make([]byte, v.Length()*types.RowidSize)
 			logutil.Warn("[Moengine]", common.OperationField("MOToVector"),
 				common.OperandField("Col length is 0"))
 		} else {
-			bs.Data = types.EncodeFixedSlice(v.Col.([]types.Rowid), types.RowidSize)
+			bs.Data = types.EncodeFixedSlice(movec.MustTCols[types.Rowid](v), types.RowidSize)
 		}
 	case types.T_char, types.T_varchar, types.T_json, types.T_blob:
-		if v.Col == nil {
+		if v.Length() == 0 {
 			bs.Data = make([]byte, 0)
 		} else {
 			vbs := movec.GetBytesVectorValues(v)

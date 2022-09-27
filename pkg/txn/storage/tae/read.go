@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/gob"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	apipb "github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage"
@@ -34,16 +35,15 @@ func (s *taeStorage) Read(
 
 	switch op {
 
-	//case ...
-
 	case uint32(apipb.OpCode_OpGetLogTail):
 		return handleRead(
 			s, txnMeta, payload,
 			s.taeHandler.HandleGetLogTail,
 		)
+	default:
+		panic(moerr.NewInfo("op is not supported"))
 	}
 
-	return
 }
 
 func handleRead[Req any, Resp any](

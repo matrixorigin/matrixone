@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/gob"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	apipb "github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 )
@@ -32,17 +33,18 @@ func (s *taeStorage) Write(
 
 	switch op {
 
-	//case ...
-
 	case uint32(apipb.OpCode_OpPreCommit):
 
 		return handleWrite(
 			s, txnMeta, payload,
 			s.taeHandler.HandlePreCommit,
 		)
+
+	default:
+		panic(moerr.NewInfo("OpCode is not supported"))
+
 	}
 
-	return
 }
 
 func handleWrite[

@@ -16,6 +16,7 @@ package moengine
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
@@ -24,6 +25,7 @@ import (
 
 var (
 	_ engine.Database = (*txnDatabase)(nil)
+	_ Database        = (*txnDatabase)(nil)
 )
 
 func newDatabase(h handle.Database) *txnDatabase {
@@ -33,6 +35,17 @@ func newDatabase(h handle.Database) *txnDatabase {
 }
 
 func (db *txnDatabase) Relations(_ context.Context) ([]string, error) {
+	var names []string
+
+	it := db.handle.MakeRelationIt()
+	for it.Valid() {
+		names = append(names, it.GetRelation().GetMeta().(*catalog.TableEntry).GetSchema().Name)
+		it.Next()
+	}
+	return names, nil
+}
+
+func (db *txnDatabase) RelationNames(_ context.Context) ([]string, error) {
 	var names []string
 
 	it := db.handle.MakeRelationIt()
@@ -59,7 +72,34 @@ func (db *txnDatabase) Relation(_ context.Context, name string) (engine.Relation
 	return rel, nil
 }
 
+func (db *txnDatabase) GetRelation(_ context.Context, name string) (Relation, error) {
+	var err error
+	var rel Relation
+
+	h, err := db.handle.GetRelationByName(name)
+	if err != nil {
+		return nil, err
+	}
+	if isSysRelation(name) {
+		rel = newSysRelation(h)
+		return rel, nil
+	}
+	rel = newRelation(h)
+	return rel, nil
+}
+
 func (db *txnDatabase) Create(_ context.Context, name string, defs []engine.TableDef) error {
+	schema, err := DefsToSchema(name, defs)
+	if err != nil {
+		return err
+	}
+	schema.BlockMaxRows = 40000
+	schema.SegmentMaxBlocks = 20
+	_, err = db.handle.CreateRelation(schema)
+	return err
+}
+
+func (db *txnDatabase) CreateRelation(_ context.Context, name string, defs []engine.TableDef) error {
 	schema, err := DefsToSchema(name, defs)
 	if err != nil {
 		return err
@@ -73,4 +113,13 @@ func (db *txnDatabase) Create(_ context.Context, name string, defs []engine.Tabl
 func (db *txnDatabase) Delete(_ context.Context, name string) error {
 	_, err := db.handle.DropRelationByName(name)
 	return err
+}
+
+func (db *txnDatabase) DropRelation(_ context.Context, name string) error {
+	_, err := db.handle.DropRelationByName(name)
+	return err
+}
+
+func (db *txnDatabase) GetDatabaseID(_ context.Context) uint64 {
+	panic(moerr.NewNYI("Pls implement me !"))
 }
