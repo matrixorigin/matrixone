@@ -37,6 +37,14 @@ var (
 	LT = Op(4)
 	// LT record <= condition
 	LE = Op(5)
+
+	OpName = map[Op]string{
+		EQ: "=",
+		GT: ">",
+		GE: ">=",
+		LT: "<",
+		LE: "<=",
+	}
 )
 
 type conditions struct {
