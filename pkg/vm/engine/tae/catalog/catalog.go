@@ -21,6 +21,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -66,7 +67,7 @@ type Catalog struct {
 }
 
 func genDBFullName(tenantID uint32, name string) string {
-	if name == SystemDBName {
+	if name == pkgcatalog.MO_CATALOG {
 		tenantID = 0
 	}
 	return fmt.Sprintf("%d-%s", tenantID, name)
@@ -112,9 +113,9 @@ func OpenCatalog(dir, name string, cfg *batchstoredriver.StoreCfg, scheduler tas
 
 func (catalog *Catalog) InitSystemDB() {
 	sysDB := NewSystemDBEntry(catalog)
-	dbTables := NewSystemTableEntry(sysDB, SystemTable_DB_ID, SystemDBSchema)
-	tableTables := NewSystemTableEntry(sysDB, SystemTable_Table_ID, SystemTableSchema)
-	columnTables := NewSystemTableEntry(sysDB, SystemTable_Columns_ID, SystemColumnSchema)
+	dbTables := NewSystemTableEntry(sysDB, pkgcatalog.MO_DATABASE_ID, SystemDBSchema)
+	tableTables := NewSystemTableEntry(sysDB, pkgcatalog.MO_TABLES_ID, SystemTableSchema)
+	columnTables := NewSystemTableEntry(sysDB, pkgcatalog.MO_COLUMNS_ID, SystemColumnSchema)
 	err := sysDB.AddEntryLocked(dbTables, nil)
 	if err != nil {
 		panic(err)
@@ -525,7 +526,7 @@ func (catalog *Catalog) ReplayTableRows() {
 	}
 	processor := new(LoopProcessor)
 	processor.TableFn = func(tbl *TableEntry) error {
-		if tbl.db.name == SystemDBName {
+		if tbl.db.name == pkgcatalog.MO_CATALOG {
 			return nil
 		}
 		rows = 0
@@ -697,7 +698,7 @@ func (catalog *Catalog) GetDBEntry(name string, txnCtx txnif.AsyncTxn) (*DBEntry
 }
 
 func (catalog *Catalog) DropDBEntry(name string, txnCtx txnif.AsyncTxn) (newEntry bool, deleted *DBEntry, err error) {
-	if name == SystemDBName {
+	if name == pkgcatalog.MO_CATALOG {
 		err = moerr.NewTAEError("not permitted")
 		return
 	}
