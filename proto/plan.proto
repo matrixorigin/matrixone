@@ -281,6 +281,7 @@ message TableDef {
 	string table_type 		= 4;
 	string createsql 		= 5;
 	map<string, int32> name2col_index = 6;
+	ColDef composite_pkey = 7;
 }
 
 message Cost {
@@ -339,6 +340,7 @@ message UpdateCtx {
 	repeated ColDef update_cols = 7;
 	repeated string other_attrs = 8;
 	repeated string order_attrs = 9;
+	ColDef composite_pkey = 10;
 }
 
 message AnalyzeInfo {

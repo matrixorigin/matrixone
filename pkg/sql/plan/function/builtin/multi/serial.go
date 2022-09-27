@@ -25,11 +25,11 @@ import (
 func Serial(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	for _, v := range vectors {
 		if nulls.Any(v.Nsp) {
-			return nil, moerr.NewInvalidInput("serial function don't support null value")
+			return nil, moerr.NewConstraintViolation("serial function don't support null value")
 		}
 
 		if v.IsScalar() {
-			return nil, moerr.NewInvalidInput("serial function don't support const value")
+			return nil, moerr.NewConstraintViolation("serial function don't support constant value")
 		}
 	}
 
