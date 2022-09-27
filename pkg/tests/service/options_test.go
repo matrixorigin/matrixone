@@ -108,6 +108,15 @@ func TestWithHKDNStoreTimeout(t *testing.T) {
 	require.Equal(t, timeout, opt.hakeeper.dnStoreTimeout)
 }
 
+func TestWithHKCNStoreTimeout(t *testing.T) {
+	opt := DefaultOptions()
+	require.Equal(t, defaultCNStoreTimeout, opt.hakeeper.cnStoreTimeout)
+
+	timeout := 20 * time.Second
+	opt = opt.WithHKCNStoreTimeout(timeout)
+	require.Equal(t, timeout, opt.hakeeper.cnStoreTimeout)
+}
+
 func TestWithDNHeartbeatInterval(t *testing.T) {
 	opt := DefaultOptions()
 	require.Equal(t, defaultDNHeartbeatInterval, opt.dn.heartbeatInterval)
