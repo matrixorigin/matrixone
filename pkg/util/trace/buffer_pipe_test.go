@@ -17,11 +17,12 @@ package trace
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
+	"github.com/google/uuid"
 	"io"
 	"os"
 	"reflect"
-	"sync"
 	"testing"
 	"time"
 
@@ -44,14 +45,17 @@ import (
 var buf = new(bytes.Buffer)
 var err1 = moerr.NewInternalError("test1")
 var err2 = errutil.Wrapf(err1, "test2")
-var testBaseBuffer2SqlOption = []buffer2SqlOption{bufferWithSizeThreshold(1 * KB)}
+var testBaseBuffer2SqlOption = []bufferOption{bufferWithSizeThreshold(1 * KB)}
 var traceIDSpanIDColumnStr string
 var traceIDSpanIDCsvStr string
+
+var gCtrlSqlCh = make(chan struct{}, 1)
 
 func noopReportLog(context.Context, zapcore.Level, int, string, ...any) {}
 func noopReportError(context.Context, error, int)                       {}
 
 func init() {
+	time.Local = time.FixedZone("CST", 0) // set time-zone +0000
 	if _, err := Init(
 		context.Background(),
 		EnableTracer(true),
@@ -97,7 +101,7 @@ func Test_newBuffer2Sql_base(t *testing.T) {
 
 func TestNewSpanBufferPipeWorker(t *testing.T) {
 	type args struct {
-		opt []buffer2SqlOption
+		opt []bufferOption
 	}
 	opts := testBaseBuffer2SqlOption[:]
 	tests := []struct {
@@ -124,7 +128,7 @@ func TestNewSpanBufferPipeWorker(t *testing.T) {
 
 func Test_batchSqlHandler_NewItemBuffer_Check_genBatchFunc(t1 *testing.T) {
 	type args struct {
-		opt  []buffer2SqlOption
+		opt  []bufferOption
 		name string
 	}
 	opts := testBaseBuffer2SqlOption[:]
@@ -153,7 +157,7 @@ func Test_batchSqlHandler_NewItemBuffer_Check_genBatchFunc(t1 *testing.T) {
 }
 
 func Test_buffer2Sql_GetBatch_AllType(t *testing.T) {
-	time.Local = time.FixedZone("CST", 0) // set time-zone +0000
+	gCtrlSqlCh <- struct{}{}
 	type fields struct {
 		Reminder      batchpipe.Reminder
 		sizeThreshold int64
@@ -333,7 +337,7 @@ func Test_buffer2Sql_GetBatch_AllType(t *testing.T) {
 			wantFunc: genStatementBatchSql,
 			want: `insert into system.statement_info (` +
 				"`statement_id`, `transaction_id`, `session_id`, `account`, `user`, `host`, `database`, `statement`, `statement_tag`, `statement_fingerprint`, `node_uuid`, `node_type`, `request_at`, `response_at`, `status`, `error`, `duration`, `exec_plan`" +
-				`) values ("00000000-0000-0000-0000-000000000001", "00000000-0000-0000-0000-000000000001", "00000000-0000-0000-0000-000000000001", "MO", "moroot", "", "system", "show tables", "show tables", "", "node_uuid", "Standalone", "1970-01-01 00:00:00.000000", "1970-01-01 00:00:00.000000", 0, "Running", "", "{}")`,
+				`) values ("00000000-0000-0000-0000-000000000001", "00000000-0000-0000-0000-000000000001", "00000000-0000-0000-0000-000000000001", "MO", "moroot", "", "system", "show tables", "show tables", "", "node_uuid", "Standalone", "1970-01-01 00:00:00.000000", "1970-01-01 00:00:00.000000", 0, "Running", "", "{\"code\":200,\"message\":\"sql query no record execution plan\",\"steps\":null,\"success\":false,\"uuid:\"00000000-0000-0000-0000-000000000001\"}")`,
 		},
 		{
 			name:   "multi_statement",
@@ -374,8 +378,8 @@ func Test_buffer2Sql_GetBatch_AllType(t *testing.T) {
 			wantFunc: genStatementBatchSql,
 			want: `insert into system.statement_info (` +
 				"`statement_id`, `transaction_id`, `session_id`, `account`, `user`, `host`, `database`, `statement`, `statement_tag`, `statement_fingerprint`, `node_uuid`, `node_type`, `request_at`, `response_at`, `status`, `error`, `duration`, `exec_plan`" +
-				`) values ("00000000-0000-0000-0000-000000000001", "00000000-0000-0000-0000-000000000001", "00000000-0000-0000-0000-000000000001", "MO", "moroot", "", "system", "show tables", "show tables", "", "node_uuid", "Standalone", "1970-01-01 00:00:00.000000", "1970-01-01 00:00:00.000000", 0, "Running", "", "{}")` +
-				`,("00000000-0000-0000-0000-000000000002", "00000000-0000-0000-0000-000000000001", "00000000-0000-0000-0000-000000000001", "MO", "moroot", "", "system", "show databases", "show databases", "dcl", "node_uuid", "Standalone", "1970-01-01 00:00:00.000001", "1970-01-01 00:00:01.000001", 1000000000, "Running", "", "{}")`,
+				`) values ("00000000-0000-0000-0000-000000000001", "00000000-0000-0000-0000-000000000001", "00000000-0000-0000-0000-000000000001", "MO", "moroot", "", "system", "show tables", "show tables", "", "node_uuid", "Standalone", "1970-01-01 00:00:00.000000", "1970-01-01 00:00:00.000000", 0, "Running", "", "{\"code\":200,\"message\":\"sql query no record execution plan\",\"steps\":null,\"success\":false,\"uuid:\"00000000-0000-0000-0000-000000000001\"}")` +
+				`,("00000000-0000-0000-0000-000000000002", "00000000-0000-0000-0000-000000000001", "00000000-0000-0000-0000-000000000001", "MO", "moroot", "", "system", "show databases", "show databases", "dcl", "node_uuid", "Standalone", "1970-01-01 00:00:00.000001", "1970-01-01 00:00:01.000001", 1000000000, "Running", "", "{\"code\":200,\"message\":\"sql query no record execution plan\",\"steps\":null,\"success\":false,\"uuid:\"00000000-0000-0000-0000-000000000002\"}")`,
 		},
 		{
 			name:   "single_zap",
@@ -452,6 +456,7 @@ func Test_buffer2Sql_GetBatch_AllType(t *testing.T) {
 			t.Logf("GetBatch() = %v", got)
 		})
 	}
+	<-gCtrlSqlCh
 }
 
 func Test_buffer2Sql_IsEmpty(t *testing.T) {
@@ -740,8 +745,9 @@ func Test_withSizeThreshold(t *testing.T) {
 }
 
 func Test_batchSqlHandler_NewItemBatchHandler(t1 *testing.T) {
+	gCtrlSqlCh <- struct{}{}
 	type fields struct {
-		defaultOpts []buffer2SqlOption
+		defaultOpts []bufferOption
 		ch          chan string
 	}
 	type args struct {
@@ -757,7 +763,7 @@ func Test_batchSqlHandler_NewItemBatchHandler(t1 *testing.T) {
 		{
 			name: "nil",
 			fields: fields{
-				defaultOpts: []buffer2SqlOption{bufferWithSizeThreshold(GB)},
+				defaultOpts: []bufferOption{bufferWithSizeThreshold(GB)},
 				ch:          make(chan string, 10),
 			},
 			args: args{
@@ -773,35 +779,22 @@ func Test_batchSqlHandler_NewItemBatchHandler(t1 *testing.T) {
 				defaultOpts: tt.fields.defaultOpts,
 			}
 
-			wg := sync.WaitGroup{}
-			startedC := make(chan struct{}, 1)
-			wg.Add(1)
-			go func() {
-				startedC <- struct{}{}
-			loop:
-				for {
-					batch, ok := <-tt.fields.ch
-					if ok {
-						require.Equal(t1, tt.args.batch, batch)
-					} else {
-						t1.Log("exec sql Done.")
-						break loop
-					}
-				}
-				wg.Done()
-			}()
-			<-startedC
 			got := t.NewItemBatchHandler(context.TODO())
-			got(tt.args.batch)
-			close(tt.fields.ch)
-			wg.Wait()
+			go got(tt.args.batch)
+			batch, ok := <-tt.fields.ch
+			if ok {
+				require.Equal(t1, tt.args.batch, batch)
+			} else {
+				t1.Log("exec sql Done.")
+			}
+			//close(tt.fields.ch)
 		})
 	}
 	WithSQLExecutor(func() internalExecutor.InternalExecutor { return nil }).apply(&GetTracerProvider().tracerProviderConfig)
+	<-gCtrlSqlCh
 }
 
 func Test_genCsvData(t *testing.T) {
-	time.Local = time.FixedZone("CST", 0) // set time-zone +0000
 	errorFormatter.Store("%v")
 	logStackFormatter.Store("%n")
 	type args struct {
@@ -972,7 +965,7 @@ func Test_genCsvData(t *testing.T) {
 				},
 				buf: buf,
 			},
-			want: `00000000-0000-0000-0000-000000000001,00000000-0000-0000-0000-000000000001,00000000-0000-0000-0000-000000000001,MO,moroot,,system,show tables,,show tables,node_uuid,Standalone,1970-01-01 00:00:00.000000,1970-01-01 00:00:00.000000,0,Running,,{}
+			want: `00000000-0000-0000-0000-000000000001,00000000-0000-0000-0000-000000000001,00000000-0000-0000-0000-000000000001,MO,moroot,,system,show tables,,show tables,node_uuid,Standalone,1970-01-01 00:00:00.000000,1970-01-01 00:00:00.000000,0,Running,,"{""code"":200,""message"":""sql query no record execution plan"",""steps"":null,""success"":false,""uuid:""00000000-0000-0000-0000-000000000001""}"
 `,
 		},
 		{
@@ -1012,8 +1005,8 @@ func Test_genCsvData(t *testing.T) {
 				},
 				buf: buf,
 			},
-			want: `00000000-0000-0000-0000-000000000001,00000000-0000-0000-0000-000000000001,00000000-0000-0000-0000-000000000001,MO,moroot,,system,show tables,,show tables,node_uuid,Standalone,1970-01-01 00:00:00.000000,1970-01-01 00:00:00.000000,0,Running,,{}
-00000000-0000-0000-0000-000000000002,00000000-0000-0000-0000-000000000001,00000000-0000-0000-0000-000000000001,MO,moroot,,system,show databases,dcl,show databases,node_uuid,Standalone,1970-01-01 00:00:00.000001,1970-01-01 00:00:01.000001,1000001000,Failed,internal error: test error,{}
+			want: `00000000-0000-0000-0000-000000000001,00000000-0000-0000-0000-000000000001,00000000-0000-0000-0000-000000000001,MO,moroot,,system,show tables,,show tables,node_uuid,Standalone,1970-01-01 00:00:00.000000,1970-01-01 00:00:00.000000,0,Running,,"{""code"":200,""message"":""sql query no record execution plan"",""steps"":null,""success"":false,""uuid:""00000000-0000-0000-0000-000000000001""}"
+00000000-0000-0000-0000-000000000002,00000000-0000-0000-0000-000000000001,00000000-0000-0000-0000-000000000001,MO,moroot,,system,show databases,dcl,show databases,node_uuid,Standalone,1970-01-01 00:00:00.000001,1970-01-01 00:00:01.000001,1000001000,Failed,internal error: test error,"{""code"":200,""message"":""sql query no record execution plan"",""steps"":null,""success"":false,""uuid:""00000000-0000-0000-0000-000000000002""}"
 `,
 		},
 		{
@@ -1049,6 +1042,105 @@ func Test_genCsvData(t *testing.T) {
 			require.Equal(t, true, ok)
 			assert.Equalf(t, tt.want, req.content, "genCsvData(%v, %v)", req.content, tt.args.buf)
 			t.Logf("%s", tt.want)
+		})
+	}
+}
+
+var dummySerializeExecPlan = func(plan any, _ uuid.UUID) []byte {
+	if plan == nil {
+		return []byte(`{"code":200,"message":"no exec plan"}`)
+	}
+	json, err := json.Marshal(plan)
+	if err != nil {
+		return []byte(fmt.Sprintf(`{"err": %q}`, err.Error()))
+	}
+	return json
+}
+
+func Test_genCsvData_LongQueryTIme(t *testing.T) {
+	errorFormatter.Store("%v")
+	logStackFormatter.Store("%n")
+	type args struct {
+		in     []IBuffer2SqlItem
+		buf    *bytes.Buffer
+		queryT int64
+	}
+	tests := []struct {
+		name string
+		args args
+		want any
+	}{
+		{
+			name: "multi_statement",
+			args: args{
+				in: []IBuffer2SqlItem{
+					&StatementInfo{
+						StatementID:          _1TraceID,
+						TransactionID:        _1TxnID,
+						SessionID:            _1SesID,
+						Account:              "MO",
+						User:                 "moroot",
+						Database:             "system",
+						Statement:            "show tables",
+						StatementFingerprint: "show tables",
+						StatementTag:         "",
+						RequestAt:            util.TimeNano(0),
+						ExecPlan:             nil,
+						Duration:             uint64(time.Second) - 1,
+					},
+					&StatementInfo{
+						StatementID:          _1TraceID,
+						TransactionID:        _1TxnID,
+						SessionID:            _1SesID,
+						Account:              "MO",
+						User:                 "moroot",
+						Database:             "system",
+						Statement:            "show tables",
+						StatementFingerprint: "show tables",
+						StatementTag:         "",
+						RequestAt:            util.TimeNano(0),
+						ExecPlan:             nil,
+						Duration:             uint64(time.Second) - 1,
+						SerializeExecPlan:    dummySerializeExecPlan,
+					},
+					&StatementInfo{
+						StatementID:          _2TraceID,
+						TransactionID:        _1TxnID,
+						SessionID:            _1SesID,
+						Account:              "MO",
+						User:                 "moroot",
+						Database:             "system",
+						Statement:            "show databases",
+						StatementFingerprint: "show databases",
+						StatementTag:         "dcl",
+						RequestAt:            util.TimeNano(time.Microsecond),
+						ResponseAt:           util.TimeNano(time.Microsecond + time.Second),
+						Duration:             uint64(time.Second),
+						Status:               StatementStatusFailed,
+						Error:                moerr.NewInternalError("test error"),
+						ExecPlan:             map[string]string{"key": "val"},
+						SerializeExecPlan:    dummySerializeExecPlan,
+					},
+				},
+				buf:    buf,
+				queryT: int64(time.Second),
+			},
+			want: `00000000-0000-0000-0000-000000000001,00000000-0000-0000-0000-000000000001,00000000-0000-0000-0000-000000000001,MO,moroot,,system,show tables,,show tables,node_uuid,Standalone,1970-01-01 00:00:00.000000,1970-01-01 00:00:00.000000,999999999,Running,,"{""code"":200,""message"":""sql query no record execution plan"",""steps"":null,""success"":false,""uuid:""00000000-0000-0000-0000-000000000001""}"
+00000000-0000-0000-0000-000000000001,00000000-0000-0000-0000-000000000001,00000000-0000-0000-0000-000000000001,MO,moroot,,system,show tables,,show tables,node_uuid,Standalone,1970-01-01 00:00:00.000000,1970-01-01 00:00:00.000000,999999999,Running,,"{""code"":200,""message"":""no exec plan""}"
+00000000-0000-0000-0000-000000000002,00000000-0000-0000-0000-000000000001,00000000-0000-0000-0000-000000000001,MO,moroot,,system,show databases,dcl,show databases,node_uuid,Standalone,1970-01-01 00:00:00.000001,1970-01-01 00:00:01.000001,1000000000,Failed,internal error: test error,"{""key"":""val""}"
+`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			GetTracerProvider().longQueryTime = tt.args.queryT
+			got := genCsvData(tt.args.in, tt.args.buf)
+			require.NotEqual(t, nil, got)
+			req, ok := got.(CSVRequest)
+			require.Equal(t, true, ok)
+			assert.Equalf(t, tt.want, req.content, "genCsvData(%v, %v)", req.content, tt.args.buf)
+			t.Logf("%s", tt.want)
+			GetTracerProvider().longQueryTime = 0
 		})
 	}
 }

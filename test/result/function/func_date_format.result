@@ -51,3 +51,18 @@ date_format(date('2004-04-03 13:11:10'),'%Y-%m-%d %H:%i:%s')    date_format(cast
 drop table t_dates;
 SELECT DATE_FORMAT('123456', '%Y-%m-%d %H:%i:%s');
 invalid input: invalid datatime value 123456
+select date_format('19980021000000', '%H|%I|%k|%l|%i|%p|%r|%S|%T| %M|%W|%D|%Y|%y|%a|%b|%j|%m|%d|%h|%s|%W');
+invalid input: invalid datatime value 19980021000000
+select date_format('19980131131415', '%H|%I|%k|%l|%i|%p|%r|%S|%T| %M|%W|%D|%Y|%y|%a|%b|%j|%m|%d|%h|%s|%W');
+date_format(19980131131415, %H|%I|%k|%l|%i|%p|%r|%S|%T| %M|%W|%D|%Y|%y|%a|%b|%j|%m|%d|%h|%s|%W)
+13|01|13|1|14|PM|01:14:15 PM|15|13:14:15| January|Saturday|31st|1998|98|Sat|Jan|031|01|31|01|15|Saturday
+select date_format('19981321000000', '%H|%I|%k|%l|%i|%p|%r|%S|%T| %M|%W|%D|%Y|%y|%a|%b|%j|%m|%d|%h|%s|%W');
+invalid input: invalid datatime value 19981321000000
+select date_format('19981021000000', '%H|%I|%k|%l|%i|%p|%r|%S|%T| %M|%W|%D|%Y|%y|%a|%b|%j|%m|%d|%h|%s|%W');
+date_format(19981021000000, %H|%I|%k|%l|%i|%p|%r|%S|%T| %M|%W|%D|%Y|%y|%a|%b|%j|%m|%d|%h|%s|%W)
+00|12|0|12|00|AM|12:00:00 AM|00|00:00:00| October|Wednesday|21st|1998|98|Wed|Oct|294|10|21|12|00|Wednesday
+select date_format('19981033000000', '%H|%I|%k|%l|%i|%p|%r|%S|%T| %M|%W|%D|%Y|%y|%a|%b|%j|%m|%d|%h|%s|%W');
+invalid input: invalid datatime value 19981033000000
+select date_format('19981031000000', '%H|%I|%k|%l|%i|%p|%r|%S|%T| %M|%W|%D|%Y|%y|%a|%b|%j|%m|%d|%h|%s|%W');
+date_format(19981031000000, %H|%I|%k|%l|%i|%p|%r|%S|%T| %M|%W|%D|%Y|%y|%a|%b|%j|%m|%d|%h|%s|%W)
+00|12|0|12|00|AM|12:00:00 AM|00|00:00:00| October|Saturday|31st|1998|98|Sat|Oct|304|10|31|12|00|Saturday
