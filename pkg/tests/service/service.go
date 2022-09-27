@@ -313,9 +313,7 @@ func (c *testCluster) Start() error {
 	if c.opt.initial.cnServiceNum != 0 {
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 		defer cancel()
-		if err := c.WaitAnyShardReady(ctx); err != nil {
-			return err
-		}
+		c.WaitDNShardsReported(ctx)
 		if err := c.startCNServices(); err != nil {
 			return err
 		}
@@ -604,35 +602,6 @@ func (c *testCluster) WaitHAKeeperState(
 				return
 			}
 		}
-	}
-}
-
-func (c *testCluster) WaitAnyShardReady(ctx context.Context) error {
-	// wait shard ready
-	for {
-		select {
-		case <-ctx.Done():
-			assert.FailNow(c.t, "shard is not found")
-		default:
-			if ok, err := func() (bool, error) {
-				details := c.getClusterState()
-				for _, store := range details.DNState.Stores {
-					c.logger.Info("=====> check reported shards", zap.Any("dn store", store), zap.Int("reported shards", len(store.Shards)))
-					if len(store.Shards) > 0 {
-						return true, nil
-					}
-				}
-				logutil.Info("shard not ready")
-				return false, nil
-			}(); err != nil {
-				return err
-			} else if ok {
-				logutil.Info("shard ready")
-				return nil
-			}
-			time.Sleep(3 * time.Second)
-		}
-
 	}
 }
 

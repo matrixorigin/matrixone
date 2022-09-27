@@ -150,7 +150,7 @@ func checkInitiatingShards(
 	// list newly-created shards which had been waiting for a while
 	expired := waitingShards.listEligibleShards(func(start uint64) bool {
 		logger.Info("=====> check expired or not",
-			zap.Uint64("registerd", start),
+			zap.Uint64("registered", start),
 			zap.Uint64("current", currTick),
 			zap.Bool("expired", cfg.DNStoreExpired(start, currTick)),
 		)

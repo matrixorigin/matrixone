@@ -15,7 +15,6 @@
 package hakeeper
 
 import (
-	"fmt"
 	"time"
 )
 
@@ -72,7 +71,6 @@ func (cfg Config) LogStoreExpired(start, current uint64) bool {
 }
 
 func (cfg Config) DNStoreExpired(start, current uint64) bool {
-	fmt.Println(cfg.DNStoreTimeout, start, current)
 	return uint64(int(cfg.DNStoreTimeout/time.Second)*cfg.TickPerSecond)+start < current
 }
 
