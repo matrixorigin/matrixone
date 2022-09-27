@@ -2,7 +2,7 @@
 
 ### 语法规则
 
-首先我们可以通过 MySQL 8.0 的文档（https://dev.mysql.com/doc/refman/8.0/en/clone.html），CLONE 的语法规则如下：
+首先我们可以通过 MySQL 8.0 的文档（<https://dev.mysql.com/doc/refman/8.0/en/clone.html>），CLONE 的语法规则如下：
 
 ```sqs q
 CLONE clone_action
@@ -31,7 +31,7 @@ INSTANCE FROM 'user'@'host':port
     [REQUIRE [NO] SSL]
 ```
 
-本文会举例添加第一个 clone_action 的规则，在第一个 clone_action 规则中，LOCAL, DATA, DIRECTORY 是 MySQL 中的关键字 （https://dev.mysql.com/doc/refman/8.0/en/keywords.html）。 [=] 是可选项，可以有等号或者没有，'clone_dir' 是字符串。对于这些 token， 词法分析阶段都会做区分。
+本文会举例添加第一个 clone_action 的规则，在第一个 clone_action 规则中，LOCAL, DATA, DIRECTORY 是 MySQL 中的关键字 （<https://dev.mysql.com/doc/refman/8.0/en/keywords.html>）。 [=] 是可选项，可以有等号或者没有，'clone_dir' 是字符串。对于这些 token， 词法分析阶段都会做区分。
 
 我们可以先定义语法树，因为 CLONE 是新语句，我们可以在 tree 目录创建 clone.go 然后定义：
 
@@ -92,7 +92,7 @@ non_reserved_keyword:
 
 其中 LOCAL, DATA, DIRECTORY 关键字是已经定义好的。
 
-只需要定义新的关键字 CLONE，可以参考其中一个是怎么定义的。注意要在 MySQL 文档 https://dev.mysql.com/doc/refman/8.0/en/keywords.html 中查看，是保留关键字，还是非保留关键字。然后在 keywords.go 中添加：
+只需要定义新的关键字 CLONE，可以参考其中一个是怎么定义的。注意要在 MySQL 文档 <https://dev.mysql.com/doc/refman/8.0/en/keywords.html> 中查看，是保留关键字，还是非保留关键字。然后在 keywords.go 中添加：
 
 ```
 	keywords = map[string]int{
@@ -117,7 +117,7 @@ equal_opt:
     }
 ```
 
-## 生成解析器：
+## 生成解析器
 
 MO parser 写了 Makefile ，通过 goyacc 生成语法分析器。可以直接进入到 parsers 目录下，直接
 
@@ -141,7 +141,7 @@ func (node *Clone) Format(ctx *FmtCtx) {
 }
 ```
 
-## 测试：
+## 测试
 
 MO parser 的测试主要是单侧，我们可以在 mysql_test.go 中添加
 
