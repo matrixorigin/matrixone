@@ -110,6 +110,7 @@ const (
 	DATE_PART         // DATE_PART
 	DATEADD           // DATEADD
 	DATEDIFF          // DATEDIFF
+	DATETIMEDIFF      // DATETIMEDIFF
 	DENSE_RANK        // DENSE_RANK
 	EMPTY
 	ENDSWITH // ENDSWITH
@@ -407,6 +408,8 @@ var functionIdRegister = map[string]int32{
 	"serial":                  SERIAL,
 	"hash_value":              HASH,
 	"bin":                     BIN,
+	"datediff":                DATEDIFF,
+	"datetimediff":            DATETIMEDIFF,
 }
 
 func GetFunctionIsWinfunByName(name string) bool {
