@@ -156,7 +156,7 @@ func TestExternal(t *testing.T) {
 		case types.T_bool:
 			rs := make([]bool, len(test))
 			test, err = TrimSpace(test)
-			require.NotNil(t, err)
+			require.Nil(t, err)
 			nsp := ParseNullFlagNormal(test, []string{"true"})
 
 			InsertNsp(nsp, &nulls.Nulls{})
@@ -170,7 +170,7 @@ func TestExternal(t *testing.T) {
 		case types.T_int8:
 			rs := make([]int8, len(test))
 			test, err = TrimSpace(test)
-			require.NotNil(t, err)
+			require.Nil(t, err)
 			ParseNullFlagNormal(test, []string{"1212"})
 			rs, err = ParseInt8(test, &nulls.Nulls{}, rs)
 			if status == "success" {
