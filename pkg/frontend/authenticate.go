@@ -553,7 +553,7 @@ var (
 	//the sqls creating many tables for the tenant.
 	//Wrap them in a transaction
 	createSqls = []string{
-		"create table `%!%mo_increment_columns`(name varchar(770) primary key, offset bigint, step bigint);",
+		"create table `%!%mo_increment_columns`(name varchar(770) primary key, offset bigint unsigned, step bigint unsigned);",
 		`create table mo_user(
 				user_id int signed auto_increment,
 				user_host varchar(100),
