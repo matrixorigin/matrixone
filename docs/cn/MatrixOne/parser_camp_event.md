@@ -5,9 +5,11 @@
 ### 1. Make sure your golang environment
 
 To build MatrixOne locally, golang 1.19 is required. You can follow these steps to make sure your golang whether is ready.
+
 ```
 $ go version
 ```
+
 If the result is like `'go version go1.19 xxxxxx'` , you can skip step 2 and build your MatrixOne. If lower than go 1.19 or no golang, your can follow step 2 to configure your own golang 1.19 environment locally.
 
 ### 2. Configure your golang environment
@@ -33,7 +35,7 @@ After these, your can check your golang version with go version.
 
 ### 3. Build and run your own MatrixOne
 
-You can get the code from https://github.com/matrixorigin/matrixone. 
+You can get the code from <https://github.com/matrixorigin/matrixone>. 
 After download with git clone command, then run the these commands to run MatrixOne instance in the diretory of matrixone. 
 
 ```
@@ -53,7 +55,7 @@ After the MySQL client installation, you can use this command to access your Mat
 $ mysql -P6001 -h127.0.0.1 -udump -p111
 ```
 
-When you are in mysql command line, you can start your MatrixOne experience. More details can be found in http://doc.matrixorigin.cn
+When you are in mysql command line, you can start your MatrixOne experience. More details can be found in <http://doc.matrixorigin.cn>
 
 ## Features Tasks
 
@@ -96,7 +98,7 @@ If column b is also unique, the INSERT is equivalent to this UPDATE statement in
 UPDATE t1 SET c=c+1 WHERE a=1 OR b=2 LIMIT 1;
 ```
 
-In assignment value expressions in the `ON DUPLICATE KEY UPDATE` clause, you can use the `VALUES(col_name)` function to refer to column values from the INSERT portion of the `INSERT ... ON DUPLICATE KEY UPDATE` statement. In other words, `VALUES(col_name)` in the `ON DUPLICATE KEY UPDATE `clause refers to the value of col_name that would be inserted, had no duplicate-key conflict occurred. This function is especially useful in multiple-row inserts. The `VALUES()` function is meaningful only in the `ON DUPLICATE KEY UPDATE` clause or `INSERT` statements and returns NULL otherwise. Example:
+In assignment value expressions in the `ON DUPLICATE KEY UPDATE` clause, you can use the `VALUES(col_name)` function to refer to column values from the INSERT portion of the `INSERT ... ON DUPLICATE KEY UPDATE` statement. In other words, `VALUES(col_name)` in the `ON DUPLICATE KEY UPDATE` clause refers to the value of col_name that would be inserted, had no duplicate-key conflict occurred. This function is especially useful in multiple-row inserts. The `VALUES()` function is meaningful only in the `ON DUPLICATE KEY UPDATE` clause or `INSERT` statements and returns NULL otherwise. Example:
 
 ```
 INSERT INTO t1 (a,b,c) VALUES (1,2,3),(4,5,6)
@@ -153,7 +155,6 @@ mysql> SELECT * FROM test;
 |  1 | New  | 2014-08-20 18:47:42 |
 +----+------+---------------------+
 1 row in set (0.00 sec)
-
 ```
 
 Now we create a second table almost identical to the first, except that the primary key now covers 2 columns, as shown here (emphasized text):
@@ -459,9 +460,7 @@ trigger_order: { FOLLOWS | PRECEDES } other_trigger_name
 `INSERT` : The trigger activates whenever a new row is inserted into the table (for example, through INSERT, LOAD DATA, and REPLACE statements).
 `UPDATE`: The trigger activates whenever a row is modified (for example, through `UPDATE` statements).
 `DELETE` : The trigger activates whenever a row is deleted from the table (for example, through DELETE and REPLACE statements). `DROP TABLE` and `TRUNCATE TABLE` statements on the table do not activate this trigger, because they do not use `DELETE` . Dropping a partition does not activate `DELETE` triggers, either.
-
 The `trigger_event` does not represent a literal type of SQL statement that activates the trigger so much as it represents a type of table operation. For example, an `INSERT` trigger activates not only for `INSERT` statements but also `LOAD DATA` statements because both statements insert rows into a table.
-
 `trigger_body` is the statement to execute when the trigger activates. To execute multiple statements, use the `BEGIN ... END` compound statement construct.
 
 ```
@@ -487,5 +486,3 @@ KILL [CONNECTION | QUERY] processlist_id
 ```
 
 Each connection to mysqld runs in a separate thread. You can kill a thread with the `KILL processlist_id` statement.
-
-
