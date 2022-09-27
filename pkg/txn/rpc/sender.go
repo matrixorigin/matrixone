@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
+	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"go.uber.org/zap"
 )
 
@@ -57,6 +58,7 @@ func WithSenderLocalDispatch(localDispatch LocalDispatch) SenderOption {
 
 type sender struct {
 	logger *zap.Logger
+	clock  clock.Clock
 	client morpc.RPCClient
 
 	options struct {
@@ -74,17 +76,22 @@ type sender struct {
 }
 
 // NewSenderWithConfig create a txn sender by config and options
-func NewSenderWithConfig(cfg Config, logger *zap.Logger, options ...SenderOption) (TxnSender, error) {
+func NewSenderWithConfig(cfg Config,
+	clock clock.Clock,
+	logger *zap.Logger,
+	options ...SenderOption) (TxnSender, error) {
 	cfg.adjust()
 	options = append(options, WithSenderBackendOptions(cfg.getBackendOptions(logger)...))
 	options = append(options, WithSenderClientOptions(cfg.getClientOptions(logger)...))
-	return NewSender(logger, options...)
+	return NewSender(clock, logger, options...)
 }
 
 // NewSender create a txn sender
-func NewSender(logger *zap.Logger, options ...SenderOption) (TxnSender, error) {
+func NewSender(clock clock.Clock,
+	logger *zap.Logger,
+	options ...SenderOption) (TxnSender, error) {
 	logger = logutil.Adjust(logger)
-	s := &sender{logger: logger}
+	s := &sender{logger: logger, clock: clock}
 	for _, opt := range options {
 		opt(s)
 	}
@@ -110,8 +117,10 @@ func NewSender(logger *zap.Logger, options ...SenderOption) (TxnSender, error) {
 		},
 	}
 
-	codec := morpc.NewMessageCodecWithChecksum(func() morpc.Message { return s.acquireResponse() },
-		s.options.payloadCopyBufferSize)
+	codec := morpc.NewMessageCodec(func() morpc.Message { return s.acquireResponse() },
+		morpc.WithCodecIntegrationHLC(s.clock),
+		morpc.WithCodecPayloadCopyBufferSize(s.options.payloadCopyBufferSize),
+		morpc.WithCodecEnableChecksum())
 	bf := morpc.NewGoettyBasedBackendFactory(codec, s.options.backendCreateOptions...)
 	client, err := morpc.NewClient(bf, s.options.clientOptions...)
 	if err != nil {
