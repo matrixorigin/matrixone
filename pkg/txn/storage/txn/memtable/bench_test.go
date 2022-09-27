@@ -20,21 +20,44 @@ import (
 	"github.com/google/uuid"
 )
 
-func BenchmarkTable(b *testing.B) {
+func BenchmarkDelete(b *testing.B) {
 	tx := NewTransaction(uuid.NewString(), Time{}, SnapshotIsolation)
 	table := NewTable[Int, int, TestRow]()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		key := Int(i)
-		tx.Time.Timestamp.PhysicalTime++
 		if err := table.Delete(tx, key); err != nil {
 			b.Fatal(err)
 		}
+	}
+}
+
+func BenchmarkInsert(b *testing.B) {
+	tx := NewTransaction(uuid.NewString(), Time{}, SnapshotIsolation)
+	table := NewTable[Int, int, TestRow]()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		key := Int(i)
 		row := TestRow{
 			key:   key,
 			value: i,
 		}
-		tx.Time.Timestamp.PhysicalTime++
+		if err := table.Insert(tx, row); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkInsertAndGet(b *testing.B) {
+	tx := NewTransaction(uuid.NewString(), Time{}, SnapshotIsolation)
+	table := NewTable[Int, int, TestRow]()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		key := Int(i)
+		row := TestRow{
+			key:   key,
+			value: i,
+		}
 		if err := table.Insert(tx, row); err != nil {
 			b.Fatal(err)
 		}
@@ -46,6 +69,23 @@ func BenchmarkTable(b *testing.B) {
 		if p != i {
 			b.Fatal()
 		}
+	}
+}
+
+func BenchmarkInsertAndIndex(b *testing.B) {
+	tx := NewTransaction(uuid.NewString(), Time{}, SnapshotIsolation)
+	table := NewTable[Int, int, TestRow]()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		key := Int(i)
+		row := TestRow{
+			key:   key,
+			value: i,
+		}
+		if err := table.Insert(tx, row); err != nil {
+			b.Fatal(err)
+		}
+		tx.Time.Timestamp.PhysicalTime++
 		entries, err := table.Index(tx, Tuple{
 			Text("foo"), Int(i),
 		})

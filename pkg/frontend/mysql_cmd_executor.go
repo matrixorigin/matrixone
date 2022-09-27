@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"math"
 	"os"
+	"reflect"
 	"runtime/pprof"
 	"sort"
 	"strconv"
@@ -183,11 +184,12 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 	return trace.ContextWithStatement(trace.ContextWithSpanContext(ctx, sc), stm)
 }
 
-func (mce *MysqlCmdExecutor) RecordStatementTxnID(ctx context.Context, ses *Session) {
-	if stm := trace.StatementFromContext(ctx); stm == nil {
-		return
-	} else if handler := ses.GetTxnHandler(); handler.IsValidTxn() {
-		stm.SetTxnIDIsZero(handler.GetTxn().Txn().ID)
+// RecordStatementTxnID record txnID after TxnBegin or Compile(autocommit=1)
+var RecordStatementTxnID = func(ctx context.Context, ses *Session) {
+	if stm := trace.StatementFromContext(ctx); ses != nil && stm != nil && !stm.IsZeroTxnID() {
+		if handler := ses.GetTxnHandler(); handler.IsValidTxn() {
+			stm.SetTxnID(handler.GetTxn().Txn().ID)
+		}
 	}
 }
 
@@ -1627,16 +1629,13 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 	if err != nil {
 		return nil, err
 	}
+	RecordStatementTxnID(requestCtx, cwft.ses)
 	return cwft.compile, err
 }
 
 func (cwft *TxnComputationWrapper) RecordExecPlan(ctx context.Context) error {
 	if stm := trace.StatementFromContext(ctx); stm != nil {
-		if handler := cwft.ses.GetTxnHandler(); handler.IsValidTxn() {
-			stm.SetTxnIDIsZero(handler.GetTxn().Txn().ID)
-		}
-		stm.SetExecPlan(cwft.plan)
-		stm.Report(ctx)
+		stm.SetExecPlan(cwft.plan, SerializeExecPlan)
 	}
 	return nil
 }
@@ -1832,7 +1831,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		ses.SetMysqlResultSet(&MysqlResultSet{})
 		stmt := cw.GetAst()
 		requestCtx = RecordStatement(requestCtx, ses, proc, cw, beginInstant)
-		tenant := "0"
+		tenant := sysAccountName
 		if ses.GetTenantInfo() != nil {
 			tenant = ses.GetTenantInfo().GetTenant()
 			ses.SetPrivilege(determinePrivilegeSetOfStatement(stmt))
@@ -1905,7 +1904,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			if err != nil {
 				goto handleFailed
 			}
-			mce.RecordStatementTxnID(requestCtx, ses)
+			RecordStatementTxnID(requestCtx, ses)
 		case *tree.CommitTransaction:
 			err = ses.TxnCommit()
 			if err != nil {
@@ -2094,7 +2093,6 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			goto handleFailed
 		}
 		stmt = cw.GetAst()
-		cw.RecordExecPlan(requestCtx)
 
 		runner = ret.(ComputationRunner)
 		if !ses.Pu.SV.DisableRecordTimeElapsedOfSqlRequest {
@@ -2192,14 +2190,12 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			if err != nil {
 				goto handleFailed
 			}
+
 			/*
 				Step 4: Serialize the execution plan by json
 			*/
 			if cwft, ok := cw.(*TxnComputationWrapper); ok {
-				queryPlan := cwft.plan
-				// data transform to json datastruct
-				jsonbytes := serializePlanToJson(queryPlan, cwft.uuid)
-				logutil.Infof("the json corresponding to the sql plan is : %s", string(jsonbytes))
+				cwft.RecordExecPlan(requestCtx)
 			}
 		//just status, no result set
 		case *tree.CreateTable, *tree.DropTable, *tree.CreateDatabase, *tree.DropDatabase,
@@ -2236,10 +2232,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 				Step 4: Serialize the execution plan by json
 			*/
 			if cwft, ok := cw.(*TxnComputationWrapper); ok {
-				queryPlan := cwft.plan
-				// data transform to json datastruct
-				jsonbytes := serializePlanToJson(queryPlan, cwft.uuid)
-				logutil.Infof("the json corresponding to the sql plan is : %s", string(jsonbytes))
+				cwft.RecordExecPlan(requestCtx)
 			}
 		case *tree.ExplainAnalyze:
 			explainColName := "QUERY PLAN"
@@ -2783,13 +2776,25 @@ func serializePlanToJson(queryPlan *plan2.Plan, uuid uuid.UUID) []byte {
 		err := encoder.Encode(marshalPlan)
 		if err != nil {
 			moError := moerr.NewInternalError("serialize plan to json error: %s", err.Error())
-			jsonBytes = buildErrorJsonPlan(uuid, moError.MySQLCode(), moError.Error())
+			jsonBytes = buildErrorJsonPlan(uuid, moError.ErrorCode(), moError.Error())
 		} else {
 			jsonBytes = buffer.Bytes()
 		}
 	} else {
-		moError := moerr.NewInternalError("sql query execution plan not found")
-		jsonBytes = buildErrorJsonPlan(uuid, moError.MySQLCode(), moError.Error())
+		jsonBytes = buildErrorJsonPlan(uuid, moerr.ErrWarn, "sql query no record execution plan")
 	}
 	return jsonBytes
+}
+
+// SerializeExecPlan Serialize the execution plan by json
+var SerializeExecPlan = func(plan any, uuid uuid.UUID) []byte {
+	if plan == nil {
+		return serializePlanToJson(nil, uuid)
+	} else if queryPlan, ok := plan.(*plan2.Plan); !ok {
+		moError := moerr.NewInternalError("execPlan not type of plan2.Plan: %s", reflect.ValueOf(plan).Type().Name())
+		return buildErrorJsonPlan(uuid, moError.ErrorCode(), moError.Error())
+	} else {
+		// data transform to json dataStruct
+		return serializePlanToJson(queryPlan, uuid)
+	}
 }

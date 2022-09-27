@@ -410,3 +410,36 @@ select date(a),date(b) from t1;
 select date(a),date(date(a)) as dda from t1;
 
 drop table t1;
+
+-- @suite
+-- @setup
+drop table if exists t1;
+create table t1(a datetime, b timestamp);
+insert into t1 values("2022-07-01", "2011-01-31 12:00:00");
+insert into t1 values("2011-01-31 12:32:11", "1979-10-22");
+insert into t1 values(NULL, "2022-08-01 23:10:11");
+insert into t1 values("2011-01-31", NULL);
+insert into t1 values("2022-06-01 14:11:09","2022-07-01 00:00:00");
+insert into t1 values("2022-12-31","2011-01-31 12:00:00");
+insert into t1 values("2022-06-12","2022-07-01 00:00:00");
+
+-- @case
+-- @desc:test for func hour() select
+select hour(a),hour(b) from t1;
+select * from t1 where hour(a)>hour(b);
+select * from t1 where hour(a) between 10 and 16;
+
+-- @case
+-- @desc:test for func minute() select
+select minute(a),minute(b) from t1;
+select * from t1 where minute(a)<=minute(b);
+select * from t1 where minute(a) between 10 and 36;
+
+-- @case
+-- @desc:test for func second() select
+select second(a),second(b) from t1;
+select * from t1 where second(a)>=second(b);
+select * from t1 where second(a) between 10 and 36;
+
+-- @teardown
+drop table if exists t1;
