@@ -554,7 +554,13 @@ func GetBatchData(param *ExternalParam, plh *ParseLineHandler, proc *process.Pro
 				if isNullOrEmpty {
 					nulls.Add(vec.Nsp, uint64(rowIdx))
 				} else {
-					d, err := types.ParseTimestamp(time.UTC, field, vec.Typ.Precision)
+					var t *time.Location
+					if proc == nil {
+						t = time.Local
+					} else {
+						t = proc.SessionInfo.TimeZone
+					}
+					d, err := types.ParseTimestamp(t, field, vec.Typ.Precision)
 					if err != nil {
 						logutil.Errorf("parse field[%v] err:%v", field, err)
 						return nil, moerr.NewInternalError("the input value '%v' is not Timestamp type for column %d", field, colIdx)
