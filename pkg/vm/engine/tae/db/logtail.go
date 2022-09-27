@@ -17,6 +17,7 @@ import (
 	"sync"
 	"sync/atomic"
 
+	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
@@ -471,12 +472,16 @@ func (b *CatalogLogtailRespBuilder) BuildResp() (api.SyncLogTailResp, error) {
 	entries := make([]*api.Entry, 0)
 	var tblID uint64
 	var tblName string
-	if b.mode == CollectModeDB {
-		tblID = catalog.SystemTable_DB_ID
-		tblName = catalog.SystemTable_DB_Name
-	} else {
-		tblID = catalog.SystemTable_Table_ID
-		tblName = catalog.SystemTable_Table_Name
+	switch b.mode {
+	case CollectModeDB:
+		tblID = pkgcatalog.MO_DATABASE_ID
+		tblName = pkgcatalog.MO_DATABASE
+	case CollectModeTbl:
+		tblID = pkgcatalog.MO_TABLES_ID
+		tblName = pkgcatalog.MO_TABLES
+	case CollectModeCol:
+		tblID = pkgcatalog.MO_COLUMNS_ID
+		tblName = pkgcatalog.MO_COLUMNS
 	}
 
 	if b.insBatch.Length() > 0 {
@@ -488,8 +493,8 @@ func (b *CatalogLogtailRespBuilder) BuildResp() (api.SyncLogTailResp, error) {
 			EntryType:    api.Entry_Insert,
 			TableId:      tblID,
 			TableName:    tblName,
-			DatabaseId:   catalog.SystemDBID,
-			DatabaseName: catalog.SystemDBName,
+			DatabaseId:   pkgcatalog.MO_CATALOG_ID,
+			DatabaseName: pkgcatalog.MO_CATALOG,
 			Bat:          bat,
 		}
 		entries = append(entries, insEntry)
@@ -503,8 +508,8 @@ func (b *CatalogLogtailRespBuilder) BuildResp() (api.SyncLogTailResp, error) {
 			EntryType:    api.Entry_Delete,
 			TableId:      tblID,
 			TableName:    tblName,
-			DatabaseId:   catalog.SystemDBID,
-			DatabaseName: catalog.SystemDBName,
+			DatabaseId:   pkgcatalog.MO_CATALOG_ID,
+			DatabaseName: pkgcatalog.MO_CATALOG,
 			Bat:          bat,
 		}
 		entries = append(entries, delEntry)
@@ -704,11 +709,11 @@ func LogtailHandler(db *DB, req api.SyncLogTailReq) (api.SyncLogTailResp, error)
 
 	var mode CollectMode
 	switch tid {
-	case catalog.SystemTable_DB_ID:
+	case pkgcatalog.MO_DATABASE_ID:
 		mode = CollectModeDB
-	case catalog.SystemTable_Table_ID:
+	case pkgcatalog.MO_TABLES_ID:
 		mode = CollectModeTbl
-	case catalog.SystemTable_Columns_ID:
+	case pkgcatalog.MO_COLUMNS_ID:
 		mode = CollectModeCol
 	default:
 		mode = CollectModeSegAndBlk
