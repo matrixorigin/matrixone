@@ -34,12 +34,9 @@ func (m *Message) SetID(id uint64) {
 }
 
 func (m *Message) DebugString() string {
-	errStr := string(m.Err)
-	if m.IsMoErr {
-		me := moerr.Error{}
-		_ = me.UnmarshalBinary(m.Err)
-		errStr = me.Error()
-	}
+	me := moerr.Error{}
+	_ = me.UnmarshalBinary(m.Err)
+	errStr := me.Error()
 	return fmt.Sprintf("sid: %v, cmd: %v, data: %s, err: %s", m.Sid, m.Cmd, m.Data, errStr)
 }
 
@@ -47,41 +44,33 @@ func (m *Message) IsEndMessage() bool {
 	return m.Sid == MessageEnd
 }
 
-func EncodedMessageError(err error) ([]byte, bool) {
+func EncodedMessageError(err error) []byte {
 	var errData []byte
-	var isMoErr = false
 	if err == nil {
-		return nil, false
+		return nil
 	}
 	if me, ok := err.(*moerr.Error); ok {
 		if ed, err1 := me.MarshalBinary(); err1 == nil {
-			isMoErr = true
 			errData = ed
 		} else {
-			errData = []byte(err1.Error())
+			errData, _ = err1.(*moerr.Error).MarshalBinary()
 		}
 	} else {
-		// XXX we should avoid such this situation
-		errData = []byte(err.Error())
+		// XXXXX It's so bad that if we still received non mo err here. Just convert all them to be mo err now.
+		// once we eliminate all the hidden dangers brought by non mo err, should delete these code.
+		errData, _ = moerr.ConvertGoError(err).(*moerr.Error).MarshalBinary()
 	}
-	return errData, isMoErr
+	return errData
 }
 
 func DecodeMessageError(m *Message) error {
 	errData := m.GetErr()
 	if len(errData) > 0 {
-		if m.IsMoErr {
-			err := &moerr.Error{}
-			if errUnmarshal := err.UnmarshalBinary(errData); errUnmarshal != nil {
-				return errUnmarshal
-			}
-			return err
-		} else {
-			// XXX It's so bad that we still received non mo err here. Just convert all them to be mo err now.
-			// If we eliminate all the hidden dangers brought by non mo err.
-			// should delete these code.
-			return moerr.NewInternalError(string(m.Err))
+		err := &moerr.Error{}
+		if errUnmarshal := err.UnmarshalBinary(errData); errUnmarshal != nil {
+			return errUnmarshal
 		}
+		return err
 	}
 	return nil
 }

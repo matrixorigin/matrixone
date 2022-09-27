@@ -33,7 +33,6 @@ message Message {
     bytes   proc_info_data = 5;
     bytes   analyse = 6;
     uint64  id = 7;
-    bool    is_mo_err = 8;
 }
 
 message Connector {

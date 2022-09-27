@@ -93,7 +93,6 @@ func CnServerMessageHandler(ctx context.Context, message morpc.Message,
 	cs morpc.ClientSession,
 	storeEngine engine.Engine, fileService fileservice.FileService, cli client.TxnClient) error {
 	var errData []byte
-	isMoErr := false
 	// structure to help handle the message.
 	helper := &messageHandleHelper{
 		storeEngine: storeEngine,
@@ -102,12 +101,11 @@ func CnServerMessageHandler(ctx context.Context, message morpc.Message,
 	// decode message and run it, get final analysis information and err info.
 	analysis, err := pipelineMessageHandle(ctx, message, cs, helper, cli)
 	if err != nil {
-		errData, isMoErr = pipeline.EncodedMessageError(err)
+		errData = pipeline.EncodedMessageError(err)
 	}
 	backMessage := &pipeline.Message{
 		Id:      message.GetID(),
 		Sid:     pipeline.MessageEnd,
-		IsMoErr: isMoErr,
 		Err:     errData,
 		Analyse: analysis,
 	}
