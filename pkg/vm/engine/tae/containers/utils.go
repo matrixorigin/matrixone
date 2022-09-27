@@ -129,173 +129,58 @@ func CopyToMoVectors(vecs []Vector) []*movec.Vector {
 	return movecs
 }
 
-func MOToTAEVector(v *movec.Vector, nullable bool) Vector {
+func MOToVector(v *movec.Vector, nullable bool) Vector {
 	vec := MakeVector(v.Typ, nullable)
 	bs := NewBytes()
-	switch v.Typ.Oid {
-	case types.T_bool:
-		if vs := len(movec.MustTCols[bool](v)); vs == 0 {
-			bs.Data = make([]byte, v.Length())
-			logutil.Warn("[Moengine]", common.OperationField("MOToVector"),
-				common.OperandField("Col length is 0"))
-		} else {
-			bs.Data = types.EncodeFixedSlice(movec.MustTCols[bool](v), 1)
+	if v.Typ.IsVarlen() {
+		vbs := movec.GetBytesVectorValues(v)
+		for _, v := range vbs {
+			bs.Append(v)
 		}
-	case types.T_int8:
-		if vs := len(movec.MustTCols[int8](v)); vs == 0 {
-			bs.Data = make([]byte, v.Length())
-			logutil.Warn("[Moengine]", common.OperationField("MOToVector"),
-				common.OperandField("Col length is 0"))
-		} else {
-			bs.Data = types.EncodeFixedSlice(movec.MustTCols[int8](v), 1)
+	} else {
+		switch v.Typ.Oid {
+		case types.T_bool:
+			bs.Data = types.EncodeFixedSlice(v.Col.([]bool), 1)
+		case types.T_int8:
+			bs.Data = types.EncodeFixedSlice(v.Col.([]int8), 1)
+		case types.T_int16:
+			bs.Data = types.EncodeFixedSlice(v.Col.([]int16), 2)
+		case types.T_int32:
+			bs.Data = types.EncodeFixedSlice(v.Col.([]int32), 4)
+		case types.T_int64:
+			bs.Data = types.EncodeFixedSlice(v.Col.([]int64), 8)
+		case types.T_uint8:
+			bs.Data = types.EncodeFixedSlice(v.Col.([]uint8), 1)
+		case types.T_uint16:
+			bs.Data = types.EncodeFixedSlice(v.Col.([]uint16), 2)
+		case types.T_uint32:
+			bs.Data = types.EncodeFixedSlice(v.Col.([]uint32), 4)
+		case types.T_uint64:
+			bs.Data = types.EncodeFixedSlice(v.Col.([]uint64), 8)
+		case types.T_float32:
+			bs.Data = types.EncodeFixedSlice(v.Col.([]float32), 4)
+		case types.T_float64:
+			bs.Data = types.EncodeFixedSlice(v.Col.([]float64), 8)
+		case types.T_date:
+			bs.Data = types.EncodeFixedSlice(v.Col.([]types.Date), 4)
+		case types.T_datetime:
+			bs.Data = types.EncodeFixedSlice(v.Col.([]types.Datetime), 8)
+		case types.T_timestamp:
+			bs.Data = types.EncodeFixedSlice(v.Col.([]types.Timestamp), 8)
+		case types.T_decimal64:
+			bs.Data = types.EncodeFixedSlice(v.Col.([]types.Decimal64), 8)
+		case types.T_decimal128:
+			bs.Data = types.EncodeFixedSlice(v.Col.([]types.Decimal128), 16)
+		case types.T_uuid:
+			bs.Data = types.EncodeFixedSlice(v.Col.([]types.Uuid), 16)
+		case types.T_TS:
+			bs.Data = types.EncodeFixedSlice(v.Col.([]types.TS), types.TxnTsSize)
+		case types.T_Rowid:
+			bs.Data = types.EncodeFixedSlice(v.Col.([]types.Rowid), types.RowidSize)
+
+		default:
+			panic(any(moerr.NewInternalError("%s not supported", v.Typ.String())))
 		}
-	case types.T_int16:
-		if vs := len(movec.MustTCols[int16](v)); vs == 0 {
-			bs.Data = make([]byte, v.Length()*2)
-			logutil.Warn("[Moengine]", common.OperationField("MOToVector"),
-				common.OperandField("Col length is 0"))
-		} else {
-			bs.Data = types.EncodeFixedSlice(movec.MustTCols[int16](v), 2)
-		}
-	case types.T_int32:
-		if vs := len(movec.MustTCols[int32](v)); vs == 0 {
-			bs.Data = make([]byte, v.Length()*4)
-			logutil.Warn("[Moengine]", common.OperationField("MOToVector"),
-				common.OperandField("Col length is 0"))
-		} else {
-			bs.Data = types.EncodeFixedSlice(movec.MustTCols[int32](v), 4)
-		}
-	case types.T_int64:
-		if vs := len(movec.MustTCols[int64](v)); vs == 0 {
-			bs.Data = make([]byte, v.Length()*8)
-			logutil.Warn("[Moengine]", common.OperationField("MOToVector"),
-				common.OperandField("Col length is 0"))
-		} else {
-			bs.Data = types.EncodeFixedSlice(movec.MustTCols[int64](v), 8)
-		}
-	case types.T_uint8:
-		if vs := len(movec.MustTCols[uint8](v)); vs == 0 {
-			bs.Data = make([]byte, v.Length())
-			logutil.Warn("[Moengine]", common.OperationField("MOToVector"),
-				common.OperandField("Col length is 0"))
-		} else {
-			bs.Data = types.EncodeFixedSlice(movec.MustTCols[uint8](v), 1)
-		}
-	case types.T_uint16:
-		if vs := len(movec.MustTCols[uint16](v)); vs == 0 {
-			bs.Data = make([]byte, v.Length()*2)
-			logutil.Warn("[Moengine]", common.OperationField("MOToVector"),
-				common.OperandField("Col length is 0"))
-		} else {
-			bs.Data = types.EncodeFixedSlice(movec.MustTCols[uint16](v), 2)
-		}
-	case types.T_uint32:
-		if vs := len(movec.MustTCols[uint32](v)); vs == 0 {
-			bs.Data = make([]byte, v.Length()*4)
-			logutil.Warn("[Moengine]", common.OperationField("MOToVector"),
-				common.OperandField("Col length is 0"))
-		} else {
-			bs.Data = types.EncodeFixedSlice(movec.MustTCols[uint32](v), 4)
-		}
-	case types.T_uint64:
-		if vs := len(movec.MustTCols[uint64](v)); vs == 0 {
-			bs.Data = make([]byte, v.Length()*8)
-			logutil.Warn("[Moengine]", common.OperationField("MOToVector"),
-				common.OperandField("Col length is 0"))
-		} else {
-			bs.Data = types.EncodeFixedSlice(movec.MustTCols[uint64](v), 8)
-		}
-	case types.T_float32:
-		if vs := len(movec.MustTCols[float32](v)); vs == 0 {
-			bs.Data = make([]byte, v.Length()*4)
-			logutil.Warn("[Moengine]", common.OperationField("MOToVector"),
-				common.OperandField("Col length is 0"))
-		} else {
-			bs.Data = types.EncodeFixedSlice(movec.MustTCols[float32](v), 4)
-		}
-	case types.T_float64:
-		if vs := len(movec.MustTCols[float64](v)); vs == 0 {
-			bs.Data = make([]byte, v.Length()*8)
-			logutil.Warn("[Moengine]", common.OperationField("MOToVector"),
-				common.OperandField("Col length is 0"))
-		} else {
-			bs.Data = types.EncodeFixedSlice(movec.MustTCols[float64](v), 8)
-		}
-	case types.T_date:
-		if vs := len(movec.MustTCols[types.Date](v)); vs == 0 {
-			bs.Data = make([]byte, v.Length()*4)
-			logutil.Warn("[Moengine]", common.OperationField("MOToVector"),
-				common.OperandField("Col length is 0"))
-		} else {
-			bs.Data = types.EncodeFixedSlice(movec.MustTCols[types.Date](v), 4)
-		}
-	case types.T_datetime:
-		if vs := len(movec.MustTCols[types.Datetime](v)); vs == 0 {
-			bs.Data = make([]byte, v.Length()*8)
-			logutil.Warn("[Moengine]", common.OperationField("MOToVector"),
-				common.OperandField("Col length is 0"))
-		} else {
-			bs.Data = types.EncodeFixedSlice(movec.MustTCols[types.Datetime](v), 8)
-		}
-	case types.T_timestamp:
-		if vs := len(movec.MustTCols[types.Timestamp](v)); vs == 0 {
-			bs.Data = make([]byte, v.Length()*8)
-			logutil.Warn("[Moengine]", common.OperationField("MOToVector"),
-				common.OperandField("Col length is 0"))
-		} else {
-			bs.Data = types.EncodeFixedSlice(movec.MustTCols[types.Timestamp](v), 8)
-		}
-	case types.T_decimal64:
-		if vs := len(movec.MustTCols[types.Decimal64](v)); vs == 0 {
-			bs.Data = make([]byte, v.Length()*8)
-			logutil.Warn("[Moengine]", common.OperationField("MOToVector"),
-				common.OperandField("Col length is 0"))
-		} else {
-			bs.Data = types.EncodeFixedSlice(movec.MustTCols[types.Decimal64](v), 8)
-		}
-	case types.T_decimal128:
-		if vs := len(movec.MustTCols[types.Decimal128](v)); vs == 0 {
-			bs.Data = make([]byte, v.Length()*16)
-			logutil.Warn("[Moengine]", common.OperationField("MOToVector"),
-				common.OperandField("Col length is 0"))
-		} else {
-			bs.Data = types.EncodeFixedSlice(movec.MustTCols[types.Decimal128](v), 16)
-		}
-	case types.T_uuid:
-		if vs := len(movec.MustTCols[types.Uuid](v)); vs == 0 {
-			bs.Data = make([]byte, v.Length()*16)
-			logutil.Warn("[Moengine]", common.OperationField("MOToVector"),
-				common.OperandField("Col length is 0"))
-		} else {
-			bs.Data = types.EncodeFixedSlice(movec.MustTCols[types.Uuid](v), 16)
-		}
-	case types.T_TS:
-		if vs := len(movec.MustTCols[types.TS](v)); vs == 0 {
-			bs.Data = make([]byte, v.Length()*types.TxnTsSize)
-			logutil.Warn("[Moengine]", common.OperationField("MOToVector"),
-				common.OperandField("Col length is 0"))
-		} else {
-			bs.Data = types.EncodeFixedSlice(movec.MustTCols[types.TS](v), types.TxnTsSize)
-		}
-	case types.T_Rowid:
-		if vs := len(movec.MustTCols[types.Rowid](v)); vs == 0 {
-			bs.Data = make([]byte, v.Length()*types.RowidSize)
-			logutil.Warn("[Moengine]", common.OperationField("MOToVector"),
-				common.OperandField("Col length is 0"))
-		} else {
-			bs.Data = types.EncodeFixedSlice(movec.MustTCols[types.Rowid](v), types.RowidSize)
-		}
-	case types.T_char, types.T_varchar, types.T_json, types.T_blob:
-		if v.Length() == 0 {
-			bs.Data = make([]byte, 0)
-		} else {
-			vbs := movec.GetBytesVectorValues(v)
-			for _, v := range vbs {
-				bs.Append(v)
-			}
-		}
-	default:
-		panic(moerr.NewNotSupported("type is not supported"))
 	}
 	if v.Nsp.Np != nil {
 		np := &roaring64.Bitmap{}
@@ -308,14 +193,183 @@ func MOToTAEVector(v *movec.Vector, nullable bool) Vector {
 	return vec
 }
 
-func MOToTAEBatch(bat *batch.Batch, allNullables []bool) *Batch {
-	taeBatch := NewEmptyBatch()
-	defer taeBatch.Close()
-	for i, vec := range bat.Vecs {
-		v := MOToTAEVector(vec, allNullables[i])
-		taeBatch.AddVector(bat.Attrs[i], v)
+func MOToVectorTmp(v *movec.Vector, nullable bool) Vector {
+	vec := MakeVector(v.Typ, nullable)
+	bs := NewBytes()
+	switch v.Typ.Oid {
+	case types.T_bool:
+		if v.Col == nil || len(v.Col.([]bool)) == 0 {
+			bs.Data = make([]byte, v.Length())
+			logutil.Warn("[Moengine]", common.OperationField("MOToVector"),
+				common.OperandField("Col length is 0"))
+		} else {
+			bs.Data = types.EncodeFixedSlice(v.Col.([]bool), 1)
+		}
+	case types.T_int8:
+		if v.Col == nil || len(v.Col.([]int8)) == 0 {
+			bs.Data = make([]byte, v.Length())
+			logutil.Warn("[Moengine]", common.OperationField("MOToVector"),
+				common.OperandField("Col length is 0"))
+		} else {
+			bs.Data = types.EncodeFixedSlice(v.Col.([]int8), 1)
+		}
+	case types.T_int16:
+		if v.Col == nil || len(v.Col.([]int16)) == 0 {
+			bs.Data = make([]byte, v.Length()*2)
+			logutil.Warn("[Moengine]", common.OperationField("MOToVector"),
+				common.OperandField("Col length is 0"))
+		} else {
+			bs.Data = types.EncodeFixedSlice(v.Col.([]int16), 2)
+		}
+	case types.T_int32:
+		if v.Col == nil || len(v.Col.([]int32)) == 0 {
+			bs.Data = make([]byte, v.Length()*4)
+			logutil.Warn("[Moengine]", common.OperationField("MOToVector"),
+				common.OperandField("Col length is 0"))
+		} else {
+			bs.Data = types.EncodeFixedSlice(v.Col.([]int32), 4)
+		}
+	case types.T_int64:
+		if v.Col == nil || len(v.Col.([]int64)) == 0 {
+			bs.Data = make([]byte, v.Length()*8)
+			logutil.Warn("[Moengine]", common.OperationField("MOToVector"),
+				common.OperandField("Col length is 0"))
+		} else {
+			bs.Data = types.EncodeFixedSlice(v.Col.([]int64), 8)
+		}
+	case types.T_uint8:
+		if v.Col == nil || len(v.Col.([]uint8)) == 0 {
+			bs.Data = make([]byte, v.Length())
+			logutil.Warn("[Moengine]", common.OperationField("MOToVector"),
+				common.OperandField("Col length is 0"))
+		} else {
+			bs.Data = types.EncodeFixedSlice(v.Col.([]uint8), 1)
+		}
+	case types.T_uint16:
+		if v.Col == nil || len(v.Col.([]uint16)) == 0 {
+			bs.Data = make([]byte, v.Length()*2)
+			logutil.Warn("[Moengine]", common.OperationField("MOToVector"),
+				common.OperandField("Col length is 0"))
+		} else {
+			bs.Data = types.EncodeFixedSlice(v.Col.([]uint16), 2)
+		}
+	case types.T_uint32:
+		if v.Col == nil || len(v.Col.([]uint32)) == 0 {
+			bs.Data = make([]byte, v.Length()*4)
+			logutil.Warn("[Moengine]", common.OperationField("MOToVector"),
+				common.OperandField("Col length is 0"))
+		} else {
+			bs.Data = types.EncodeFixedSlice(v.Col.([]uint32), 4)
+		}
+	case types.T_uint64:
+		if v.Col == nil || len(v.Col.([]uint64)) == 0 {
+			bs.Data = make([]byte, v.Length()*8)
+			logutil.Warn("[Moengine]", common.OperationField("MOToVector"),
+				common.OperandField("Col length is 0"))
+		} else {
+			bs.Data = types.EncodeFixedSlice(v.Col.([]uint64), 8)
+		}
+	case types.T_float32:
+		if v.Col == nil || len(v.Col.([]float32)) == 0 {
+			bs.Data = make([]byte, v.Length()*4)
+			logutil.Warn("[Moengine]", common.OperationField("MOToVector"),
+				common.OperandField("Col length is 0"))
+		} else {
+			bs.Data = types.EncodeFixedSlice(v.Col.([]float32), 4)
+		}
+	case types.T_float64:
+		if v.Col == nil || len(v.Col.([]float64)) == 0 {
+			bs.Data = make([]byte, v.Length()*8)
+			logutil.Warn("[Moengine]", common.OperationField("MOToVector"),
+				common.OperandField("Col length is 0"))
+		} else {
+			bs.Data = types.EncodeFixedSlice(v.Col.([]float64), 8)
+		}
+	case types.T_date:
+		if v.Col == nil || len(v.Col.([]types.Date)) == 0 {
+			bs.Data = make([]byte, v.Length()*4)
+			logutil.Warn("[Moengine]", common.OperationField("MOToVector"),
+				common.OperandField("Col length is 0"))
+		} else {
+			bs.Data = types.EncodeFixedSlice(v.Col.([]types.Date), 4)
+		}
+	case types.T_datetime:
+		if v.Col == nil || len(v.Col.([]types.Datetime)) == 0 {
+			bs.Data = make([]byte, v.Length()*8)
+			logutil.Warn("[Moengine]", common.OperationField("MOToVector"),
+				common.OperandField("Col length is 0"))
+		} else {
+			bs.Data = types.EncodeFixedSlice(v.Col.([]types.Datetime), 8)
+		}
+	case types.T_timestamp:
+		if v.Col == nil || len(v.Col.([]types.Timestamp)) == 0 {
+			bs.Data = make([]byte, v.Length()*8)
+			logutil.Warn("[Moengine]", common.OperationField("MOToVector"),
+				common.OperandField("Col length is 0"))
+		} else {
+			bs.Data = types.EncodeFixedSlice(v.Col.([]types.Timestamp), 8)
+		}
+	case types.T_decimal64:
+		if v.Col == nil || len(v.Col.([]types.Decimal64)) == 0 {
+			bs.Data = make([]byte, v.Length()*8)
+			logutil.Warn("[Moengine]", common.OperationField("MOToVector"),
+				common.OperandField("Col length is 0"))
+		} else {
+			bs.Data = types.EncodeFixedSlice(v.Col.([]types.Decimal64), 8)
+		}
+	case types.T_decimal128:
+		if v.Col == nil || len(v.Col.([]types.Decimal128)) == 0 {
+			bs.Data = make([]byte, v.Length()*16)
+			logutil.Warn("[Moengine]", common.OperationField("MOToVector"),
+				common.OperandField("Col length is 0"))
+		} else {
+			bs.Data = types.EncodeFixedSlice(v.Col.([]types.Decimal128), 16)
+		}
+	case types.T_uuid:
+		if v.Col == nil || len(v.Col.([]types.Uuid)) == 0 {
+			bs.Data = make([]byte, v.Length()*16)
+			logutil.Warn("[Moengine]", common.OperationField("MOToVector"),
+				common.OperandField("Col length is 0"))
+		} else {
+			bs.Data = types.EncodeFixedSlice(v.Col.([]types.Uuid), 16)
+		}
+	case types.T_TS:
+		if v.Col == nil || len(v.Col.([]types.TS)) == 0 {
+			bs.Data = make([]byte, v.Length()*types.TxnTsSize)
+			logutil.Warn("[Moengine]", common.OperationField("MOToVector"),
+				common.OperandField("Col length is 0"))
+		} else {
+			bs.Data = types.EncodeFixedSlice(v.Col.([]types.TS), types.TxnTsSize)
+		}
+	case types.T_Rowid:
+		if v.Col == nil || len(v.Col.([]types.Rowid)) == 0 {
+			bs.Data = make([]byte, v.Length()*types.RowidSize)
+			logutil.Warn("[Moengine]", common.OperationField("MOToVector"),
+				common.OperandField("Col length is 0"))
+		} else {
+			bs.Data = types.EncodeFixedSlice(v.Col.([]types.Rowid), types.RowidSize)
+		}
+	case types.T_char, types.T_varchar, types.T_json, types.T_blob:
+		if v.Col == nil {
+			bs.Data = make([]byte, 0)
+		} else {
+			vbs := movec.GetBytesVectorValues(v)
+			for _, v := range vbs {
+				bs.Append(v)
+			}
+		}
+	default:
+		panic(any(moerr.NewInternalError("%s not supported", v.Typ.String())))
 	}
-	return taeBatch
+	if v.Nsp.Np != nil {
+		np := &roaring64.Bitmap{}
+		np.AddMany(v.Nsp.Np.ToArray())
+		logutil.Infof("sie : %d", np.GetCardinality())
+		vec.ResetWithData(bs, np)
+		return vec
+	}
+	vec.ResetWithData(bs, nil)
+	return vec
 }
 
 func SplitBatch(bat *batch.Batch, cnt int) []*batch.Batch {

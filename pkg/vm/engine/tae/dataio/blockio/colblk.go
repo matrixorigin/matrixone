@@ -82,7 +82,7 @@ func (cb *columnBlock) GetData(
 	srcBuf := fsVector.Entries[0].Data
 	vector := vector.New(typ)
 	vector.Read(srcBuf)
-	vec = containers.MOToTAEVector(vector, NullAbility)
+	vec = containers.MOToVectorTmp(vector, NullAbility)
 	return
 }
 
