@@ -19,7 +19,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/datediff"
-	"github.com/matrixorigin/matrixone/pkg/vectorize/timediff"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -72,59 +71,3 @@ func DateDiff(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, 
 	return resultVector, nil
 }
 
-func TimeDiff(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	left := vectors[0]
-	right := vectors[1]
-	leftValues := vector.MustTCols[types.Datetime](vectors[0])
-	rightValues := vector.MustTCols[types.Datetime](vectors[1])
-
-	resultType := types.T_varchar.ToType()
-	switch {
-	case left.IsScalar() && right.IsScalar():
-		if left.ConstVectorIsNull() || right.ConstVectorIsNull() {
-			return proc.AllocScalarNullVector(resultType), nil
-		}
-		resultVector := vector.NewConst(resultType, 1)
-		resultValues := make([]types.Varlena, 0, len(leftValues))
-		vector.SetCol(resultVector, resultValues)
-		rs := timediff.TimeDiffAllConst(leftValues[0], rightValues[0], make([]string, len(leftValues)))
-		vector.AppendString(resultVector, rs, proc.Mp())
-		return resultVector, nil
-	case left.IsScalar() && !right.IsScalar():
-		if left.ConstVectorIsNull() {
-			return proc.AllocScalarNullVector(resultType), nil
-		}
-		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(rightValues)), right.Nsp)
-		if err != nil {
-			return nil, err
-		}
-		resultValues := make([]types.Varlena, 0, len(rightValues))
-		vector.SetCol(resultVector, resultValues)
-		rs := timediff.TimeDiffLeftConst(leftValues[0], rightValues, make([]string, len(rightValues)))
-		vector.AppendString(resultVector, rs, proc.Mp())
-		return resultVector, nil
-	case !left.IsScalar() && right.IsScalar():
-		if right.ConstVectorIsNull() {
-			return proc.AllocScalarNullVector(resultType), nil
-		}
-		resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(leftValues)), left.Nsp)
-		if err != nil {
-			return nil, err
-		}
-		resultValues := make([]types.Varlena, 0, len(leftValues))
-		vector.SetCol(resultVector, resultValues)
-		rs := timediff.TimeDiffRightConst(leftValues, rightValues[0], make([]string, len(leftValues)))
-		vector.AppendString(resultVector, rs, proc.Mp())
-		return resultVector, nil
-	}
-	resultVector, err := proc.AllocVectorOfRows(resultType, int64(len(leftValues)), nil)
-	if err != nil {
-		return nil, err
-	}
-	resultValues := make([]types.Varlena, 0, len(leftValues))
-	vector.SetCol(resultVector, resultValues)
-	nulls.Or(left.Nsp, right.Nsp, resultVector.Nsp)
-	rs := timediff.TimeDiff(leftValues, rightValues, make([]string, len(leftValues)))
-	vector.AppendString(resultVector, rs, proc.Mp())
-	return resultVector, nil
-}

@@ -110,7 +110,8 @@ const (
 	DATE_PART         // DATE_PART
 	DATEADD           // DATEADD
 	DATEDIFF          // DATEDIFF
-	TIMEDIFF          // DATETIMEDIFF
+	TIMEDIFF          // TIMEDIFF
+	TIMESTAMPDIFF     // TIMESTAMPDIFF
 	DENSE_RANK        // DENSE_RANK
 	EMPTY
 	ENDSWITH // ENDSWITH
@@ -409,7 +410,7 @@ var functionIdRegister = map[string]int32{
 	"hash_value":              HASH,
 	"bin":                     BIN,
 	"datediff":                DATEDIFF,
-	"timediff":                TIMEDIFF,
+	"timestampdiff":           TIMESTAMPDIFF,
 }
 
 func GetFunctionIsWinfunByName(name string) bool {
