@@ -1139,11 +1139,11 @@ func (mce *MysqlCmdExecutor) handleShowErrors() error {
 	ses.Mrs.AddColumn(CodeCol)
 	ses.Mrs.AddColumn(MsgCol)
 
-	for i := len(ses.moerrs) - 1; i >= 0; i-- {
+	for i := ses.errInfo.length() - 1; i >= 0; i-- {
 		row := make([]interface{}, 3)
 		row[0] = "Error"
-		row[1] = ses.moerrs[i].ErrorCode()
-		row[2] = ses.moerrs[i].Error()
+		row[1] = ses.errInfo.codes[i]
+		row[2] = ses.errInfo.msgs[i]
 		ses.Mrs.AddRow(row)
 	}
 

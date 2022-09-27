@@ -304,17 +304,17 @@ func buildShowColumns(stmt *tree.ShowColumns, ctx CompilerContext) (*Plan, error
 
 func buildShowTableStatus(stmt *tree.ShowTableStatus, ctx CompilerContext) (*Plan, error) {
 	if stmt.Like != nil && stmt.Where != nil {
-		return nil, moerr.New(moerr.ER_PARSE_ERROR, "syntax error", "like clause and where clause cannot exist at the same time")
+		return nil, moerr.NewSyntaxError("like clause and where clause cannot exist at the same time")
 	}
 
 	dbName := stmt.DbName
 	if stmt.DbName == "" {
 		dbName = ctx.DefaultDatabase()
 		if dbName == "" {
-			return nil, moerr.New(moerr.ER_NO_DB_ERROR)
+			return nil, moerr.NewNoDB()
 		}
 	} else if !ctx.DatabaseExists(dbName) {
-		return nil, moerr.New(moerr.ER_BAD_DB_ERROR, dbName)
+		return nil, moerr.NewBadDB(dbName)
 	}
 
 	ddlType := plan.DataDefinition_SHOW_TABLE_STATUS
@@ -354,16 +354,16 @@ func buildShowIndex(stmt *tree.ShowIndex, ctx CompilerContext) (*Plan, error) {
 	if dbName == "" {
 		dbName = ctx.DefaultDatabase()
 		if dbName == "" {
-			return nil, moerr.New(moerr.ER_NO_DB_ERROR)
+			return nil, moerr.NewNoDB()
 		}
 	} else if !ctx.DatabaseExists(dbName) {
-		return nil, moerr.New(moerr.ER_BAD_DB_ERROR, dbName)
+		return nil, moerr.NewBadDB(dbName)
 	}
 
 	tblName := string(stmt.TableName.Name())
 	_, tableDef := ctx.Resolve(dbName, tblName)
 	if tableDef == nil {
-		return nil, moerr.New(moerr.ER_NO_SUCH_TABLE, tblName)
+		return nil, moerr.NewNoSuchTable(dbName, tblName)
 	}
 
 	ddlType := plan.DataDefinition_SHOW_INDEX
