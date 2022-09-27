@@ -224,6 +224,7 @@ func DeepCopyTableDef(table *plan.TableDef) *plan.TableDef {
 		TableType:     table.TableType,
 		Createsql:     table.Createsql,
 		Name2ColIndex: table.Name2ColIndex,
+		CompositePkey: table.CompositePkey,
 	}
 
 	for idx, col := range table.Cols {

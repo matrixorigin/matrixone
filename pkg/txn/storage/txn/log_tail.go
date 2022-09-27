@@ -18,13 +18,13 @@ import (
 	"database/sql"
 	"errors"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	apipb "github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage/txn/memtable"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 )
 
 type LogTailEntry = apipb.Entry
@@ -103,7 +103,7 @@ func (m *MemHandler) HandleGetLogTail(meta txn.TxnMeta, req apipb.SyncLogTailReq
 		return nil
 	}
 
-	if tableID == ID(catalog.SystemTable_DB_ID) {
+	if tableID == ID(catalog.MO_DATABASE_ID) {
 		// databases
 		if err := logTailHandleSystemTable(
 			m.databases,
@@ -115,7 +115,7 @@ func (m *MemHandler) HandleGetLogTail(meta txn.TxnMeta, req apipb.SyncLogTailReq
 			return err
 		}
 
-	} else if tableID == ID(catalog.SystemTable_Table_ID) {
+	} else if tableID == ID(catalog.MO_TABLES_ID) {
 		// relations
 		if err := logTailHandleSystemTable(
 			m.relations,
@@ -127,7 +127,7 @@ func (m *MemHandler) HandleGetLogTail(meta txn.TxnMeta, req apipb.SyncLogTailReq
 			return err
 		}
 
-	} else if tableID == ID(catalog.SystemTable_Columns_ID) {
+	} else if tableID == ID(catalog.MO_COLUMNS_ID) {
 		// attributes
 		if err := logTailHandleSystemTable(
 			m.attributes,
@@ -144,20 +144,11 @@ func (m *MemHandler) HandleGetLogTail(meta txn.TxnMeta, req apipb.SyncLogTailReq
 		iter := m.data.NewPhysicalIter()
 		defer iter.Close()
 
-		tableKey := &memtable.PhysicalRow[DataKey, DataValue]{
-			Key: DataKey{
-				tableID:    tableID,
-				primaryKey: Tuple{},
-			},
-		}
-		for ok := iter.Seek(tableKey); ok; ok = iter.Next() {
-			physicalRow := iter.Item()
-
-			if physicalRow.Key.tableID != tableID {
-				break
-			}
-
+		handleRow := func(
+			physicalRow *memtable.PhysicalRow[DataKey, DataValue],
+		) error {
 			physicalRow.Versions.RLock()
+			defer physicalRow.Versions.RUnlock()
 			for i := len(physicalRow.Versions.List) - 1; i >= 0; i-- {
 				value := physicalRow.Versions.List[i]
 
@@ -188,9 +179,25 @@ func (m *MemHandler) HandleGetLogTail(meta txn.TxnMeta, req apipb.SyncLogTailReq
 				}
 
 			}
-			physicalRow.Versions.RUnlock()
-
+			return nil
 		}
+
+		tableKey := &memtable.PhysicalRow[DataKey, DataValue]{
+			Key: DataKey{
+				tableID:    tableID,
+				primaryKey: Tuple{},
+			},
+		}
+		for ok := iter.Seek(tableKey); ok; ok = iter.Next() {
+			physicalRow := iter.Item()
+			if physicalRow.Key.tableID != tableID {
+				break
+			}
+			if err := handleRow(physicalRow); err != nil {
+				return err
+			}
+		}
+
 	}
 
 	insertBatch.InitZsOne(insertBatch.Vecs[0].Length())
@@ -233,10 +240,11 @@ func logTailHandleSystemTable[
 	appendDelete func(row NamedRow) error,
 ) error {
 
-	iter := table.NewPhysicalIter()
-	for ok := iter.First(); ok; ok = iter.Next() {
-		physicalRow := iter.Item()
+	handleRow := func(
+		physicalRow *memtable.PhysicalRow[K, V],
+	) error {
 		physicalRow.Versions.RLock()
+		defer physicalRow.Versions.RUnlock()
 		for i := len(physicalRow.Versions.List) - 1; i >= 0; i-- {
 			value := physicalRow.Versions.List[i]
 
@@ -261,7 +269,16 @@ func logTailHandleSystemTable[
 			}
 
 		}
-		physicalRow.Versions.RUnlock()
+		return nil
+	}
+
+	iter := table.NewPhysicalIter()
+	defer iter.Close()
+	for ok := iter.First(); ok; ok = iter.Next() {
+		physicalRow := iter.Item()
+		if err := handleRow(physicalRow); err != nil {
+			return err
+		}
 	}
 
 	return nil

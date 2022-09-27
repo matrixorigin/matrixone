@@ -20,6 +20,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/file"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/jobs"
@@ -38,7 +39,7 @@ func newSegment(meta *catalog.SegmentEntry,
 	factory file.SegmentFactory,
 	bufMgr base.INodeManager,
 	dir string) *dataSegment {
-	segFile := factory.Build(dir, meta.GetID())
+	segFile := factory.Build(dir, meta.GetID(), meta.GetTable().GetID(), factory.(*blockio.ObjectFactory).Fs)
 	seg := &dataSegment{
 		meta:      meta,
 		file:      segFile,

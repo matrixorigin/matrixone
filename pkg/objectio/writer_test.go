@@ -16,31 +16,51 @@ package objectio
 
 import (
 	"fmt"
-	"path"
-	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
 	"github.com/stretchr/testify/assert"
+	"os"
+	"path"
+	"path/filepath"
+	"testing"
 )
 
 const (
 	ModuleName = "ObjectIo"
 )
 
+func GetDefaultTestPath(module string, t *testing.T) string {
+	return filepath.Join("/tmp", module, t.Name())
+}
+
+func MakeDefaultTestPath(module string, t *testing.T) string {
+	path := GetDefaultTestPath(module, t)
+	err := os.MkdirAll(path, os.FileMode(0755))
+	assert.Nil(t, err)
+	return path
+}
+
+func RemoveDefaultTestPath(module string, t *testing.T) {
+	path := GetDefaultTestPath(module, t)
+	os.RemoveAll(path)
+}
+
+func InitTestEnv(module string, t *testing.T) string {
+	RemoveDefaultTestPath(module, t)
+	return MakeDefaultTestPath(module, t)
+}
+
 func TestNewObjectWriter(t *testing.T) {
-	dir := testutils.InitTestEnv(ModuleName, t)
+	dir := InitTestEnv(ModuleName, t)
 	dir = path.Join(dir, "/local")
-	id := common.NextGlobalSeqNum()
+	id := 1
 	name := fmt.Sprintf("%d.blk", id)
 	bat := newBatch()
 	c := fileservice.Config{
@@ -61,30 +81,33 @@ func TestNewObjectWriter(t *testing.T) {
 		err = objectWriter.WriteIndex(fd, index)
 		assert.Nil(t, err)
 
-		min := make([]byte, 32)
-		min[31] = 1
-		max := make([]byte, 32)
-		max[31] = 10
-		index, err = NewZoneMap(uint16(i), min, max)
+		zbuf := make([]byte, 64)
+		zbuf[31] = 1
+		zbuf[63] = 10
+		index, err = NewZoneMap(uint16(i), zbuf)
 		assert.Nil(t, err)
 		err = objectWriter.WriteIndex(fd, index)
 		assert.Nil(t, err)
 	}
 	_, err = objectWriter.Write(bat)
 	assert.Nil(t, err)
-	extents, err := objectWriter.WriteEnd()
+	blocks, err := objectWriter.WriteEnd()
 	assert.Nil(t, err)
-	assert.Equal(t, 2, len(extents))
-	// Sync is for testing
-	err = objectWriter.(*ObjectWriter).Sync(dir)
-	assert.Nil(t, err)
+	assert.Equal(t, 2, len(blocks))
 
 	objectReader, _ := NewObjectReader(name, service)
+	extents := make([]Extent, 2)
+	for i, blk := range blocks {
+		extents[i] = NewExtent(blk.GetExtent().offset, blk.GetExtent().length, blk.GetExtent().originSize)
+	}
+	bs, err := objectReader.ReadMeta(extents)
+	assert.Nil(t, err)
+	assert.Equal(t, 2, len(bs))
 	idxs := make([]uint16, 3)
 	idxs[0] = 0
 	idxs[1] = 2
 	idxs[2] = 3
-	vec, err := objectReader.Read(extents[0].GetExtent(), idxs)
+	vec, err := objectReader.Read(blocks[0].GetExtent(), idxs)
 	assert.Nil(t, err)
 	vector1 := newVector(types.Type{Oid: types.T_int8}, vec.Entries[0].Data)
 	assert.Equal(t, int8(3), vector1.Col.([]int8)[3])
@@ -92,15 +115,15 @@ func TestNewObjectWriter(t *testing.T) {
 	assert.Equal(t, int32(3), vector2.Col.([]int32)[3])
 	vector3 := newVector(types.Type{Oid: types.T_int64}, vec.Entries[2].Data)
 	assert.Equal(t, int64(3), vector3.Col.([]int64)[3])
-	indexes, err := objectReader.ReadIndex(extents[0].GetExtent(), idxs, BloomFilterType)
+	indexes, err := objectReader.ReadIndex(blocks[0].GetExtent(), idxs, BloomFilterType)
 	assert.Nil(t, err)
 	assert.Equal(t, 3, len(indexes))
 	assert.Equal(t, "test index 0", string(indexes[0].(*BloomFilter).buf))
-	indexes, err = objectReader.ReadIndex(extents[0].GetExtent(), idxs, ZoneMapType)
+	indexes, err = objectReader.ReadIndex(blocks[0].GetExtent(), idxs, ZoneMapType)
 	assert.Nil(t, err)
 	assert.Equal(t, 3, len(indexes))
-	assert.Equal(t, uint8(0x1), indexes[0].(*ZoneMap).min[31])
-	assert.Equal(t, uint8(0xa), indexes[0].(*ZoneMap).max[31])
+	assert.Equal(t, uint8(0x1), indexes[0].(*ZoneMap).buf[31])
+	assert.Equal(t, uint8(0xa), indexes[0].(*ZoneMap).buf[63])
 }
 
 func newBatch() *batch.Batch {
@@ -117,7 +140,7 @@ func newBatch() *batch.Batch {
 		{Oid: types.T_uint8},
 		{Oid: types.T_uint64},
 	}
-	return testutil.NewBatch(types, false, int(options.DefaultBlockMaxRows*2), mp)
+	return testutil.NewBatch(types, false, int(40000*2), mp)
 }
 
 func newVector(tye types.Type, buf []byte) *vector.Vector {

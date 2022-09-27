@@ -91,7 +91,7 @@ func TestGet(t *testing.T) {
 	f.init(1, ctx)
 	defer f.Close()
 
-	f.done(req)
+	f.done(req, nil)
 	resp, err := f.Get()
 	assert.Nil(t, err)
 	assert.Equal(t, req, resp)
@@ -119,7 +119,7 @@ func TestGetWithInvalidResponse(t *testing.T) {
 	f.init(1, ctx)
 	defer f.Close()
 
-	f.done(newTestMessage(2))
+	f.done(newTestMessage(2), nil)
 	assert.Equal(t, 0, len(f.c))
 }
 
