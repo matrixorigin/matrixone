@@ -97,6 +97,15 @@ func (be *MVCCSlice) DeleteNode(node MVCCNode) {
 		}
 	}
 }
+func (be *MVCCSlice) SearchNode(o MVCCNode) (node MVCCNode) {
+	for _, n := range be.MVCC {
+		if be.comparefn(n, o) == 0 {
+			node = n
+			break
+		}
+	}
+	return
+}
 
 // GetNodeToRead gets UpdateNode according to the timestamp.
 // It returns the UpdateNode in the same txn as the read txn
