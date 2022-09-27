@@ -192,8 +192,9 @@ func RunBaseMarshalTest(t *testing.T, c *testCase) {
 		}
 		v.Free(m)
 	}
+
 	// Merge() Test
-	{
+	if c.mergeInput != nil {
 		// create an agg for marshal and unmarshal
 		agg0, _ := agg.New(c.op, c.isDistinct, c.inputTyp)
 		agg0.Grows(1, m)

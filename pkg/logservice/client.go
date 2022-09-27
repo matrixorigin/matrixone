@@ -16,10 +16,11 @@ package logservice
 
 import (
 	"context"
-	"go.uber.org/zap"
 	"math/rand"
 	"sync"
 	"time"
+
+	"go.uber.org/zap"
 
 	"github.com/cockroachdb/errors"
 	"github.com/lni/dragonboat/v4"
@@ -502,6 +503,7 @@ func getRPCClient(ctx context.Context, target string, pool *sync.Pool) (morpc.RP
 	backendOpts := []morpc.BackendOption{
 		morpc.WithBackendConnectWhenCreate(),
 		morpc.WithBackendConnectTimeout(time.Second),
+		morpc.WithBackendHasPayloadResponse(),
 	}
 	backendOpts = append(backendOpts, GetBackendOptions(ctx)...)
 
