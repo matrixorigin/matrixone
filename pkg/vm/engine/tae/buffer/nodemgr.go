@@ -30,7 +30,7 @@ import (
 type nodeManager struct {
 	sync.RWMutex
 	sizeLimiter
-	nodes           map[common.ID]base.INode
+	nodes           map[any]base.INode
 	evicter         IEvictHolder
 	unregistertimes int64
 	loadtimes       int64
@@ -43,7 +43,7 @@ func NewNodeManager(maxsize uint64, evicter IEvictHolder) *nodeManager {
 	}
 	mgr := &nodeManager{
 		sizeLimiter: *newSizeLimiter(maxsize),
-		nodes:       make(map[common.ID]base.INode),
+		nodes:       make(map[any]base.INode),
 		evicter:     evicter,
 	}
 	return mgr
@@ -61,13 +61,13 @@ func (mgr *nodeManager) String() string {
 		atomic.LoadInt64(&mgr.evicttimes),
 		atomic.LoadInt64(&mgr.unregistertimes)))
 	for _, node := range mgr.nodes {
-		id := node.GetID()
+		key := node.Key()
 		_ = w.WriteByte('\n')
 		node.RLock()
-		_, _ = w.WriteString(fmt.Sprintf("\t%s | %s | Size: %d ",
-			id.String(),
-			base.NodeStateString(mgr.nodes[node.GetID()].GetState()),
-			mgr.nodes[node.GetID()].Size()))
+		_, _ = w.WriteString(fmt.Sprintf("\t%v | %s | Size: %d ",
+			key,
+			base.NodeStateString(mgr.nodes[key].GetState()),
+			mgr.nodes[key].Size()))
 		if node.GetState() == base.NodeLoaded {
 			loaded++
 		}
@@ -100,21 +100,21 @@ func (mgr *nodeManager) Add(node base.INode) (err error) {
 }
 
 func (mgr *nodeManager) RegisterNode(node base.INode) {
-	id := node.GetID()
+	key := node.Key()
 	mgr.Lock()
 	defer mgr.Unlock()
-	_, ok := mgr.nodes[id]
+	_, ok := mgr.nodes[key]
 	if ok {
-		panic(fmt.Sprintf("Duplicate node: %s", id.BlockString()))
+		panic(fmt.Sprintf("Duplicate node: %v", key))
 	}
-	mgr.nodes[id] = node
+	mgr.nodes[key] = node
 }
 
 func (mgr *nodeManager) UnregisterNode(node base.INode) {
 	mgr.Lock()
 	defer mgr.Unlock()
 	atomic.AddInt64(&mgr.unregistertimes, int64(1))
-	delete(mgr.nodes, node.GetID())
+	delete(mgr.nodes, node.Key())
 	node.Destroy()
 }
 
@@ -160,18 +160,18 @@ func (mgr *nodeManager) MakeRoom(size uint64) bool {
 	return ok
 }
 
-func (mgr *nodeManager) GetNodeByID(id common.ID) (n base.INode, err error) {
+func (mgr *nodeManager) GetNodeByKey(key any) (n base.INode, err error) {
 	mgr.RLock()
 	defer mgr.RUnlock()
-	n = mgr.nodes[id]
+	n = mgr.nodes[key]
 	if n == nil {
 		err = base.ErrNotFound
 	}
 	return
 }
 
-func (mgr *nodeManager) PinByID(id common.ID) (h base.INodeHandle, err error) {
-	n, err := mgr.GetNodeByID(id)
+func (mgr *nodeManager) PinByKey(key any) (h base.INodeHandle, err error) {
+	n, err := mgr.GetNodeByKey(key)
 	if err != nil {
 		return
 	}
@@ -179,8 +179,8 @@ func (mgr *nodeManager) PinByID(id common.ID) (h base.INodeHandle, err error) {
 	return
 }
 
-func (mgr *nodeManager) TryPinByID(id common.ID, timeout time.Duration) (h base.INodeHandle, err error) {
-	n, err := mgr.GetNodeByID(id)
+func (mgr *nodeManager) TryPinByKey(key any, timeout time.Duration) (h base.INodeHandle, err error) {
+	n, err := mgr.GetNodeByKey(key)
 	if err != nil {
 		return
 	}
@@ -205,8 +205,8 @@ func (mgr *nodeManager) TryPin(node base.INode, timeout time.Duration) (h base.I
 			}
 			return
 		}, ctx)
-		id := node.GetID()
-		logutil.Warnf("DoRetry Pin Node %s Times %d: %v", id.String(), times, err)
+		key := node.Key()
+		logutil.Warnf("DoRetry Pin Node %v Times %d: %v", key, times, err)
 	}
 	return
 }

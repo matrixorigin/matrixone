@@ -36,8 +36,8 @@ func newNodeHandle(n base.INode, mgr base.INodeManager) *nodeHandle {
 	}
 }
 
-func (h *nodeHandle) GetID() common.ID {
-	return h.n.GetID()
+func (h *nodeHandle) Key() any {
+	return h.n.Key()
 }
 
 func (h *nodeHandle) GetNode() base.INode {
@@ -53,7 +53,7 @@ type Node struct {
 	common.RefHelper
 	sync.RWMutex
 	mgr               base.INodeManager
-	id                common.ID
+	key               any
 	state             base.NodeState
 	size              uint64
 	iter              uint64
@@ -66,10 +66,10 @@ type Node struct {
 	UnloadFunc        func()
 }
 
-func NewNode(impl base.INode, mgr base.INodeManager, id common.ID, size uint64) *Node {
+func NewNode(impl base.INode, mgr base.INodeManager, key any, size uint64) *Node {
 	return &Node{
 		mgr:  mgr,
-		id:   id,
+		key:  key,
 		size: size,
 		impl: impl,
 	}
@@ -79,8 +79,8 @@ func (n *Node) Size() uint64 {
 	return n.size
 }
 
-func (n *Node) GetID() common.ID {
-	return n.id
+func (n *Node) Key() any {
+	return n.key
 }
 
 func (n *Node) MakeHandle() base.INodeHandle {

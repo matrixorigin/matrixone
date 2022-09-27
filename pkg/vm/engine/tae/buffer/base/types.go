@@ -44,7 +44,7 @@ type IMemoryNode interface {
 
 type INodeHandle interface {
 	io.Closer
-	GetID() common.ID
+	Key() any
 	GetNode() INode
 }
 
@@ -54,7 +54,7 @@ type INode interface {
 	common.IRef
 	RLock()
 	RUnlock()
-	GetID() common.ID
+	Key() any
 
 	// unload the data return the size quota back
 	Unload()
@@ -107,9 +107,9 @@ type INodeManager interface {
 	RegisterNode(INode)
 	UnregisterNode(INode)
 	Pin(INode) INodeHandle
-	PinByID(common.ID) (INodeHandle, error)
+	PinByKey(any) (INodeHandle, error)
 	TryPin(INode, time.Duration) (INodeHandle, error)
-	TryPinByID(common.ID, time.Duration) (INodeHandle, error)
+	TryPinByKey(any, time.Duration) (INodeHandle, error)
 	Unpin(INode)
 	MakeRoom(uint64) bool
 }
