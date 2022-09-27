@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/fagongzi/goetty/v2/buf"
+	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -46,8 +47,8 @@ func TestEncodeAndDecode(t *testing.T) {
 func TestEncodeAndDecodeAndChecksum(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.TODO(), time.Hour*10)
 	defer cancel()
-
-	codec := newTestCodecWithChecksum()
+	codec := newTestCodec(WithCodecEnableChecksum(),
+		WithCodecIntegrationHLC(clock.NewHLCClock(func() int64 { return 0 }, 0)))
 	buf1 := buf.NewByteBuf(32)
 
 	msg := newTestMessage(1)
@@ -64,7 +65,7 @@ func TestEncodeAndDecodeAndChecksumMismatch(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.TODO(), time.Hour*10)
 	defer cancel()
 
-	codec := newTestCodecWithChecksum()
+	codec := newTestCodec(WithCodecEnableChecksum())
 	buf1 := buf.NewByteBuf(32)
 
 	msg := RPCMessage{Ctx: ctx, Message: newTestMessage(1)}
@@ -104,7 +105,7 @@ func TestEncodeAndDecodeWithPayloadAndChecksum(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.TODO(), time.Hour*10)
 	defer cancel()
 
-	codec := newTestCodecWithChecksum()
+	codec := newTestCodec(WithCodecEnableChecksum())
 	buf1 := buf.NewByteBuf(32)
 	buf2 := buf.NewByteBuf(32)
 
@@ -125,7 +126,7 @@ func TestEncodeAndDecodeWithEmptyPayloadAndChecksum(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.TODO(), time.Hour*10)
 	defer cancel()
 
-	codec := newTestCodecWithChecksum()
+	codec := newTestCodec(WithCodecEnableChecksum())
 	buf1 := buf.NewByteBuf(32)
 	buf2 := buf.NewByteBuf(32)
 
@@ -146,7 +147,7 @@ func TestEncodeAndDecodeWithEmptyPayloadAndChecksumMismatch(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.TODO(), time.Hour*10)
 	defer cancel()
 
-	codec := newTestCodecWithChecksum()
+	codec := newTestCodec(WithCodecEnableChecksum())
 	buf1 := buf.NewByteBuf(32)
 	buf2 := buf.NewByteBuf(32)
 

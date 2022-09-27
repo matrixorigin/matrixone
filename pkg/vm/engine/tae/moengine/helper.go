@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 
+	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
@@ -108,12 +109,12 @@ func SchemaToDefs(schema *catalog.Schema) (defs []engine.TableDef, err error) {
 	}
 	pro := new(engine.PropertiesDef)
 	pro.Properties = append(pro.Properties, engine.Property{
-		Key:   catalog.SystemRelAttr_Kind,
+		Key:   pkgcatalog.SystemRelAttr_Kind,
 		Value: string(schema.Relkind),
 	})
 	if schema.Createsql != "" {
 		pro.Properties = append(pro.Properties, engine.Property{
-			Key:   catalog.SystemRelAttr_CreateSQL,
+			Key:   pkgcatalog.SystemRelAttr_CreateSQL,
 			Value: schema.Createsql,
 		})
 	}
@@ -149,11 +150,11 @@ func DefsToSchema(name string, defs []engine.TableDef) (schema *catalog.Schema, 
 		case *engine.PropertiesDef:
 			for _, property := range defVal.Properties {
 				switch strings.ToLower(property.Key) {
-				case catalog.SystemRelAttr_Comment:
+				case pkgcatalog.SystemRelAttr_Comment:
 					schema.Comment = property.Value
-				case catalog.SystemRelAttr_Kind:
+				case pkgcatalog.SystemRelAttr_Kind:
 					schema.Relkind = property.Value
-				case catalog.SystemRelAttr_CreateSQL:
+				case pkgcatalog.SystemRelAttr_CreateSQL:
 					schema.Createsql = property.Value
 				default:
 				}

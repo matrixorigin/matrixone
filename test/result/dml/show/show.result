@@ -23,8 +23,7 @@ str	CHAR	YES		NULL
 name	VARCHAR	YES		NULL		
 drop database if exists test01;
 show charset;
-internal error: statement: 'show charset'
-
+Charset    Description    Default collation    Maxlen
 drop database if exists test02;
 create database test02;
 use test02;
@@ -37,3 +36,9 @@ a    TINYINT    YES        NULL
 b    SMALLINT    YES        NULL
 c    INT    YES        NULL
 d    BIGINT    YES        NULL
+create database if not exists db11111111111;
+show table status from db11111111111;
+Name    Engine    Row_format    Rows    Avg_row_length    Data_length    Max_data_length    Index_length    Data_free    Auto_increment    Create_time    Update_time    Check_time    Collation    Checksum    Create_options    Comment
+drop database db11111111111;
+show grants for 'test'@'localhost';
+Grants for test@localhost

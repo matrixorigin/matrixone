@@ -344,7 +344,9 @@ func (s *store) getReplica(id uint64) *replica {
 }
 
 func (s *store) initTxnSender() error {
-	sender, err := rpc.NewSenderWithConfig(s.cfg.RPC, s.logger,
+	sender, err := rpc.NewSenderWithConfig(s.cfg.RPC,
+		s.clock,
+		s.logger,
 		rpc.WithSenderBackendOptions(morpc.WithBackendFilter(func(m morpc.Message, backendAddr string) bool {
 			return s.options.backendFilter == nil || s.options.backendFilter(m.(*txn.TxnRequest), backendAddr)
 		})),
@@ -357,7 +359,7 @@ func (s *store) initTxnSender() error {
 }
 
 func (s *store) initTxnServer() error {
-	server, err := rpc.NewTxnServer(s.cfg.ListenAddress, s.logger)
+	server, err := rpc.NewTxnServer(s.cfg.ListenAddress, s.clock, s.logger)
 	if err != nil {
 		return err
 	}

@@ -171,7 +171,9 @@ func (c *HLCClock) offsetMonitor(ctx context.Context) {
 func (c *HLCClock) getPhysicalClock() int64 {
 	newPts := c.physicalClock()
 	oldPts := c.keepPhysicalClock(newPts)
-	c.handleClockJump(oldPts, newPts)
+	if c.maxOffset > 0 {
+		c.handleClockJump(oldPts, newPts)
+	}
 
 	return newPts
 }

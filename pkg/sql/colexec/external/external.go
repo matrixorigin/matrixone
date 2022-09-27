@@ -82,7 +82,7 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 	}
 	param.extern.Filepath = param.FileList[param.FileIndex]
 	bat, err := ScanFileData(param, proc)
-	if err != nil || bat == nil {
+	if err != nil {
 		param.End = true
 		return false, err
 	}
@@ -554,7 +554,13 @@ func GetBatchData(param *ExternalParam, plh *ParseLineHandler, proc *process.Pro
 				if isNullOrEmpty {
 					nulls.Add(vec.Nsp, uint64(rowIdx))
 				} else {
-					d, err := types.ParseTimestamp(time.UTC, field, vec.Typ.Precision)
+					var t *time.Location
+					if proc == nil {
+						t = time.Local
+					} else {
+						t = proc.SessionInfo.TimeZone
+					}
+					d, err := types.ParseTimestamp(t, field, vec.Typ.Precision)
 					if err != nil {
 						logutil.Errorf("parse field[%v] err:%v", field, err)
 						return nil, moerr.NewInternalError("the input value '%v' is not Timestamp type for column %d", field, colIdx)
@@ -621,7 +627,7 @@ func ScanFileData(param *ExternalParam, proc *process.Process) (*batch.Batch, er
 	}
 	plh := param.plh
 	plh.simdCsvLineArray, err = plh.simdCsvReader.Read(param.batchSize, param.Ctx)
-	if err != nil || plh.simdCsvLineArray == nil {
+	if err != nil {
 		return nil, err
 	}
 	if len(plh.simdCsvLineArray) < param.batchSize {
@@ -638,7 +644,11 @@ func ScanFileData(param *ExternalParam, proc *process.Process) (*batch.Batch, er
 		}
 	}
 	if param.IgnoreLine != 0 {
-		plh.simdCsvLineArray = plh.simdCsvLineArray[param.IgnoreLine:]
+		if len(plh.simdCsvLineArray) >= param.IgnoreLine {
+			plh.simdCsvLineArray = plh.simdCsvLineArray[param.IgnoreLine:]
+		} else {
+			plh.simdCsvLineArray = nil
+		}
 		param.IgnoreLine = 0
 	}
 	plh.batchSize = len(plh.simdCsvLineArray)
