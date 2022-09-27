@@ -19,6 +19,7 @@
         [STARTING BY 'string']
         [TERMINATED BY 'string']
     ]
+    [IGNORE number {LINES | ROWS}]
 ```
 
 * `TERMINATED BY`，`ENCLOSED BY`等分隔符的意义与`SELECT INTO`一致。
