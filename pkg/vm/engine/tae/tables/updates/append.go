@@ -97,6 +97,9 @@ func NewEmptyAppendNode() txnbase.MVCCNode {
 		TxnMVCCNode: &txnbase.TxnMVCCNode{},
 	}
 }
+func (node *AppendNode) String() string {
+	return node.GeneralDesc()
+}
 func (node *AppendNode) CloneAll() txnbase.MVCCNode {
 	panic("todo")
 }
@@ -161,6 +164,7 @@ func (node *AppendNode) ApplyCommit(index *wal.Index) error {
 	if node.mvcc != nil {
 		logutil.Debugf("Set MaxCommitTS=%v, MaxVisibleRow=%d", node.GetEndLocked(), node.GetMaxRow())
 		node.mvcc.SetMaxVisible(node.GetEndLocked())
+		node.mvcc.Maxrow = node.maxRow
 	}
 	// logutil.Infof("Apply1Index %s TS=%d", index.String(), n.commitTs)
 	listener := node.mvcc.GetAppendListener()

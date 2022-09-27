@@ -500,7 +500,7 @@ func (blk *dataBlock) ResolveABlkColumnMVCCData(
 	)
 	blk.mvcc.RLock()
 	if ts.GreaterEq(blk.GetMaxVisibleTS()) {
-		maxRow = blk.node.rows
+		maxRow = blk.mvcc.Maxrow
 		visible = true
 	} else {
 		maxRow, visible, err = blk.mvcc.GetMaxVisibleRowLocked(ts)

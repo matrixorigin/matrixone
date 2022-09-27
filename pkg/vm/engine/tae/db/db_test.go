@@ -3321,10 +3321,6 @@ func TestCollectDelete(t *testing.T) {
 	}
 }
 
-// t2 preprepare
-// t1 preprepare
-// t2 commit
-// t1 commit
 func TestAppendnode(t *testing.T) {
 	opts := config.WithLongScanAndCKPOpts(nil)
 	tae := newTestEngine(t, opts)

@@ -40,6 +40,7 @@ type MVCCHandle struct {
 	holes           *roaring.Bitmap
 	meta            *catalog.BlockEntry
 	maxVisible      atomic.Value
+	Maxrow uint32
 	appends         *txnbase.MVCCSlice
 	changes         uint32
 	deletesListener func(uint64, common.RowGen, types.TS) error
@@ -208,6 +209,12 @@ func (n *MVCCHandle) OnReplayAppendNode(an *AppendNode) {
 	an.mvcc = n
 	n.appends.InsertNode(an)
 	n.TrySetMaxVisible(an.GetCommitTS())
+	n.TrySetMaxRow(an.maxRow)
+}
+func (n *MVCCHandle) TrySetMaxRow(row uint32){
+	if n.Maxrow<row{
+		n.Maxrow=row
+	}
 }
 func (n *MVCCHandle) TrySetMaxVisible(ts types.TS) {
 	if ts.Greater(n.maxVisible.Load().(types.TS)) {
