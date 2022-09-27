@@ -30,18 +30,27 @@ type fileServices struct {
 
 	t            *testing.T
 	dnServiceNum int
+	cnServiceNum int
 
-	localFSs []fileservice.FileService
-	s3FS     fileservice.FileService
+	dnLocalFSs []fileservice.FileService
+	cnLocalFSs []fileservice.FileService
+	s3FS       fileservice.FileService
 }
 
 // newFileServices constructs an instance of fileServices.
-func newFileServices(t *testing.T, dnServiceNum int) *fileServices {
-	locals := make([]fileservice.FileService, 0, dnServiceNum)
+func newFileServices(t *testing.T, dnServiceNum int, cnServiceNum int) *fileServices {
+	dnLocals := make([]fileservice.FileService, 0, dnServiceNum)
 	for i := 0; i < dnServiceNum; i++ {
 		fs, err := fileservice.NewMemoryFS("LOCAL")
 		require.NoError(t, err)
-		locals = append(locals, fs)
+		dnLocals = append(dnLocals, fs)
+	}
+
+	cnLocals := make([]fileservice.FileService, 0, cnServiceNum)
+	for i := 0; i < cnServiceNum; i++ {
+		fs, err := fileservice.NewMemoryFS("LOCAL")
+		require.NoError(t, err)
+		cnLocals = append(cnLocals, fs)
 	}
 
 	s3fs, err := fileservice.NewMemoryFS("S3")
@@ -50,27 +59,42 @@ func newFileServices(t *testing.T, dnServiceNum int) *fileServices {
 	return &fileServices{
 		t:            t,
 		dnServiceNum: dnServiceNum,
-		localFSs:     locals,
+		cnServiceNum: cnServiceNum,
+		dnLocalFSs:   dnLocals,
+		cnLocalFSs:   cnLocals,
 		s3FS:         s3fs,
 	}
 }
 
 // assertFileServiceLocked asserts constructed file services.
 func (f *fileServices) assertFileServiceLocked() {
-	assert.Equal(f.t, f.dnServiceNum, len(f.localFSs))
+	assert.Equal(f.t, f.dnServiceNum, len(f.dnLocalFSs))
+	assert.Equal(f.t, f.cnServiceNum, len(f.cnLocalFSs))
 }
 
-// getLocalFileService gets local FileService for DN service.
-func (f *fileServices) getLocalFileService(index int) fileservice.FileService {
+// getDNLocalFileService gets local FileService for DN service.
+func (f *fileServices) getDNLocalFileService(index int) fileservice.FileService {
 	f.RLock()
 	defer f.RUnlock()
 
 	f.assertFileServiceLocked()
 
-	if index >= len(f.localFSs) {
+	if index >= len(f.dnLocalFSs) {
 		return nil
 	}
-	return f.localFSs[index]
+	return f.dnLocalFSs[index]
+}
+
+func (f *fileServices) getCNLocalFileService(index int) fileservice.FileService {
+	f.RLock()
+	defer f.RUnlock()
+
+	f.assertFileServiceLocked()
+
+	if index >= len(f.cnLocalFSs) {
+		return nil
+	}
+	return f.cnLocalFSs[index]
 }
 
 // getS3FileService gets S3 FileService for all DN services.
