@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/hakeeper/checkers/util"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper/operator"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
+	"go.uber.org/zap"
 )
 
 const (
@@ -125,8 +126,8 @@ func checkInitiatingShards(
 	cluster pb.ClusterInfo, cfg hakeeper.Config, currTick uint64,
 ) []*operator.Operator {
 	// update the registered newly-created shards
-	fmt.Println("DNShards:", cluster.DNShards)
-	fmt.Println("rs:", *rs)
+	logger.Info("=====> cluster expected state", zap.Any("expected dn shards", cluster.DNShards))
+	logger.Info("=====> cluster reported state", zap.Any("reported dn shards", *rs))
 	for _, record := range cluster.DNShards {
 		shardID := record.ShardID
 		_, err := rs.getShard(shardID)
@@ -134,17 +135,25 @@ func checkInitiatingShards(
 			if moerr.IsMoErrCode(err, moerr.ErrShardNotReported) {
 				// if a shard not reported, register it,
 				// and launch its replica after a while.
-				fmt.Println("shard not registered in waitingShards, now register it.")
+				logger.Info("=====> dn shard not reported", zap.Uint64("shard ID", shardID))
 				waitingShards.register(shardID, currTick)
 			}
 			continue
 		}
 		// shard reported via heartbeat, no need to wait
+		logger.Info("=====> dn shard reported, remote from waiting shards", zap.Uint64("shard ID", shardID))
 		waitingShards.remove(shardID)
 	}
 
+	logger.Info("=====> cluster initiating shards:", zap.Any("shards", waitingShards.shards))
+
 	// list newly-created shards which had been waiting for a while
 	expired := waitingShards.listEligibleShards(func(start uint64) bool {
+		logger.Info("=====> check expired or not",
+			zap.Uint64("registerd", start),
+			zap.Uint64("current", currTick),
+			zap.Bool("expired", cfg.DNStoreExpired(start, currTick)),
+		)
 		return cfg.DNStoreExpired(start, currTick)
 	})
 

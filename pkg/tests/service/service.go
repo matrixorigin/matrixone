@@ -617,6 +617,7 @@ func (c *testCluster) WaitAnyShardReady(ctx context.Context) error {
 			if ok, err := func() (bool, error) {
 				details := c.getClusterState()
 				for _, store := range details.DNState.Stores {
+					c.logger.Info("=====> check reported shards", zap.Any("dn store", store), zap.Int("reported shards", len(store.Shards)))
 					if len(store.Shards) > 0 {
 						return true, nil
 					}
