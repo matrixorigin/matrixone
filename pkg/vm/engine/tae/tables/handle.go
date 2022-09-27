@@ -52,7 +52,8 @@ func (h *tableHandle) SetAppender(id *common.ID) (appender data.BlockAppender) {
 func (h *tableHandle) ThrowAppenderAndErr() (appender data.BlockAppender, err error) {
 	id := h.appender.GetID()
 	segEntry, _ := h.table.meta.GetSegmentByID(id.SegmentID)
-	if segEntry.GetAppendableBlockCnt() >= int(segEntry.GetTable().GetSchema().SegmentMaxBlocks) {
+	if segEntry == nil ||
+		segEntry.GetAppendableBlockCnt() >= int(segEntry.GetTable().GetSchema().SegmentMaxBlocks) {
 		err = moerr.NewAppendableSegmentNotFound()
 	} else {
 		err = moerr.NewAppendableBlockNotFound()

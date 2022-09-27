@@ -41,3 +41,10 @@ select date_format(date('2004-04-03 13:11:10'),'%Y-%m-%d %H:%i:%s'),date_format(
 
 drop table t_dates;
 SELECT DATE_FORMAT('123456', '%Y-%m-%d %H:%i:%s');
+
+select date_format('19980021000000', '%H|%I|%k|%l|%i|%p|%r|%S|%T| %M|%W|%D|%Y|%y|%a|%b|%j|%m|%d|%h|%s|%W');
+select date_format('19980131131415', '%H|%I|%k|%l|%i|%p|%r|%S|%T| %M|%W|%D|%Y|%y|%a|%b|%j|%m|%d|%h|%s|%W');
+select date_format('19981321000000', '%H|%I|%k|%l|%i|%p|%r|%S|%T| %M|%W|%D|%Y|%y|%a|%b|%j|%m|%d|%h|%s|%W');
+select date_format('19981021000000', '%H|%I|%k|%l|%i|%p|%r|%S|%T| %M|%W|%D|%Y|%y|%a|%b|%j|%m|%d|%h|%s|%W');
+select date_format('19981033000000', '%H|%I|%k|%l|%i|%p|%r|%S|%T| %M|%W|%D|%Y|%y|%a|%b|%j|%m|%d|%h|%s|%W');
+select date_format('19981031000000', '%H|%I|%k|%l|%i|%p|%r|%S|%T| %M|%W|%D|%Y|%y|%a|%b|%j|%m|%d|%h|%s|%W');

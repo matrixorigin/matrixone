@@ -16,7 +16,6 @@ package disttae
 
 import (
 	"context"
-	"fmt"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -60,12 +59,6 @@ func (e *Engine) Create(ctx context.Context, name string, op client.TxnOperator)
 	bat, err := genCreateDatabaseTuple(sql, accountId, userId, roleId, name, e.m)
 	if err != nil {
 		return err
-	}
-	{ // debug
-		fmt.Printf("sql: %v, accountId: %v, userId: %v, roleID: %v\n", sql, accountId, userId, roleId)
-		for i, vec := range bat.Vecs {
-			fmt.Printf("\t[%v] = %v\n", i, vec.String())
-		}
 	}
 	// non-io operations do not need to pass context
 	if err := txn.WriteBatch(INSERT, catalog.MO_CATALOG_ID, catalog.MO_DATABASE_ID,
@@ -162,9 +155,6 @@ func (e *Engine) New(ctx context.Context, op client.TxnOperator) error {
 }
 
 func (e *Engine) Commit(ctx context.Context, op client.TxnOperator) error {
-	{
-		fmt.Printf("++++begin commit\n")
-	}
 	txn := e.getTransaction(op)
 	if txn == nil {
 		return moerr.NewTxnClosed()
@@ -181,9 +171,6 @@ func (e *Engine) Commit(ctx context.Context, op client.TxnOperator) error {
 		return err
 	}
 	_, err = op.Write(ctx, reqs)
-	{
-		fmt.Printf("++++++en commit: %v\n", err)
-	}
 	return err
 }
 
