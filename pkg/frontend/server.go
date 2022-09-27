@@ -22,7 +22,6 @@ import (
 	"github.com/fagongzi/goetty/v2"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/util/metric"
 )
 
 // RelationName counter for the new connection
@@ -66,7 +65,6 @@ func NewMOServer(ctx context.Context, addr string, pu *config.ParameterUnit) *MO
 	if err != nil {
 		logutil.Panicf("start server failed with %+v", err)
 	}
-	metric.SetConnectionCounter(rm)
 	// TODO asyncFlushBatch
 	app, err := goetty.NewApplication(addr, rm.Handler,
 		goetty.WithAppLogger(logutil.GetGlobalLogger()),

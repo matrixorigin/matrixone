@@ -16,7 +16,6 @@ package metric
 
 import (
 	"os"
-	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -141,58 +140,4 @@ func (c procFdsLimit) Metric(s *statCaches) (prom.Metric, error) {
 		}
 		return nil, moerr.NewInternalError("empty limit")
 	}
-}
-
-var ProcConnections = newBatchMetricVec(newProcConnections())
-
-type procConnections struct {
-	desc *prom.Desc
-}
-
-func newProcConnections() *procConnections {
-	opts := CounterOpts{
-		Subsystem: "process",
-		Name:      "connections",
-		Help:      "Number of process connections",
-	}
-	lvs := []string{constTenantKey}
-	mustValidLbls(opts.Name, opts.ConstLabels, lvs)
-	desc := prom.NewDesc(
-		prom.BuildFQName(opts.Namespace, opts.Subsystem, opts.Name),
-		opts.Help,
-		lvs,
-		opts.ConstLabels,
-	)
-	c := &procConnections{
-		desc: desc,
-	}
-	return c
-}
-
-func (c *procConnections) Desc() *prom.Desc {
-	return c.desc
-}
-
-func (c *procConnections) Metrics() ([]prom.Metric, error) {
-	if gConnectionCollector.Load() == nil {
-		return nil, nil
-	} else {
-		var result []prom.Metric
-		counters := gConnectionCollector.Load().(ConnectionCounter).GetConnCounters()
-		for account, count := range counters {
-			m := prom.MustNewConstMetric(c.Desc(), prom.GaugeValue, float64(count), account)
-			result = append(result, m)
-		}
-		return result, nil
-	}
-}
-
-var gConnectionCollector atomic.Value
-
-type ConnectionCounter interface {
-	GetConnCounters() map[string]int32
-}
-
-func SetConnectionCounter(counter ConnectionCounter) {
-	gConnectionCollector.Store(counter)
 }

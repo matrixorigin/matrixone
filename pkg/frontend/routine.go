@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/util/metric"
 	"github.com/matrixorigin/matrixone/pkg/vm/mempool"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
 )
@@ -97,12 +98,12 @@ func (routine *Routine) Loop(routineCtx context.Context) {
 			logutil.Infof("-----cancel routine")
 			quit = true
 			if counted {
-				routine.routineMgr.CountConn(routine.GetSession().GetTenantInfo().Tenant, -1)
+				metric.ConnectionCounter(routine.GetSession().GetTenantInfo().Tenant).Dec()
 			}
 		case req = <-routine.requestChan:
 			if !counted {
 				counted = true
-				routine.routineMgr.CountConn(routine.GetSession().GetTenantInfo().Tenant, 1)
+				metric.ConnectionCounter(routine.GetSession().GetTenantInfo().Tenant).Inc()
 			}
 		}
 
