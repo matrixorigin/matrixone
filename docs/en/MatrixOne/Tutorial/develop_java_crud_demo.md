@@ -2,7 +2,7 @@
 
 !Note: The source code of this demo can be downloaded at [github](https://github.com/matrixorigin/matrixone_java_crud_example).  
 
-## Setup your environment.
+## Setup your environment
 
 Before you start, make sure you have downloaded and installed the following software.
 
@@ -131,8 +131,6 @@ PRIMARY KEY (`id`)
 +---------+-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
 1 row in set (0.01 sec)
 ```
-
-
 
 #### Insert
 
@@ -285,6 +283,3 @@ public class Select {
 Execution result:
 
 ![image-20220927113440917](https://github.com/matrixorigin/artwork/blob/main/docs/reference/jdbc_select.png?raw=true)
-
-
-
