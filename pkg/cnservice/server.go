@@ -91,8 +91,8 @@ func NewService(
 		morpc.WithServerGoettyOptions(
 			goetty.WithSessionRWBUfferSize(cfg.ReadBufferSize, cfg.WriteBufferSize),
 			goetty.WithSessionReleaseMsgFunc(func(v any) {
-				m := v.(*pipeline.Message)
-				srv.releaseMessage(m)
+				m := v.(morpc.RPCMessage)
+				srv.releaseMessage(m.Message.(*pipeline.Message))
 			}),
 		),
 		morpc.WithServerDisableAutoCancelContext())
@@ -104,7 +104,7 @@ func NewService(
 	srv.storeEngine = pu.StorageEngine
 	srv._txnClient = pu.TxnClient
 
-	srv.requestHandler = func(ctx context.Context, message morpc.Message, cs morpc.ClientSession, engine engine.Engine, fService fileservice.FileService, cli client.TxnClient) error {
+	srv.requestHandler = func(ctx context.Context, message morpc.Message, cs morpc.ClientSession, engine engine.Engine, fService fileservice.FileService, cli client.TxnClient, messageAcquirer func() morpc.Message) error {
 		return nil
 	}
 	for _, opt := range options {
@@ -150,7 +150,7 @@ func (s *service) releaseMessage(m *pipeline.Message) {
 }
 
 func (s *service) handleRequest(ctx context.Context, req morpc.Message, _ uint64, cs morpc.ClientSession) error {
-	go s.requestHandler(ctx, req, cs, s.storeEngine, s.fileService, s._txnClient)
+	go s.requestHandler(ctx, req, cs, s.storeEngine, s.fileService, s._txnClient, s.acquireMessage)
 	return nil
 }
 
@@ -283,7 +283,8 @@ func (s *service) getTxnClient() (c client.TxnClient, err error) {
 	return
 }
 
-func WithMessageHandle(f func(ctx context.Context, message morpc.Message, cs morpc.ClientSession, engine engine.Engine, fs fileservice.FileService, cli client.TxnClient) error) Options {
+func WithMessageHandle(f func(ctx context.Context, message morpc.Message,
+	cs morpc.ClientSession, engine engine.Engine, fs fileservice.FileService, cli client.TxnClient, mAcquirer func() morpc.Message) error) Options {
 	return func(s *service) {
 		s.requestHandler = f
 	}

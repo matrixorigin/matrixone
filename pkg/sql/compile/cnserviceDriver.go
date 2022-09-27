@@ -72,6 +72,7 @@ import (
 type messageHandleHelper struct {
 	storeEngine engine.Engine
 	fileService fileservice.FileService
+	acquirer    func() morpc.Message
 }
 
 // processHelper a structure records information about source process. and to help
@@ -91,24 +92,24 @@ type processHelper struct {
 // write back Analysis Information and error info if error occurs to client.
 func CnServerMessageHandler(ctx context.Context, message morpc.Message,
 	cs morpc.ClientSession,
-	storeEngine engine.Engine, fileService fileservice.FileService, cli client.TxnClient) error {
+	storeEngine engine.Engine, fileService fileservice.FileService, cli client.TxnClient, messageAcquirer func() morpc.Message) error {
 	var errData []byte
 	// structure to help handle the message.
 	helper := &messageHandleHelper{
 		storeEngine: storeEngine,
 		fileService: fileService,
+		acquirer:    messageAcquirer,
 	}
 	// decode message and run it, get final analysis information and err info.
 	analysis, err := pipelineMessageHandle(ctx, message, cs, helper, cli)
 	if err != nil {
 		errData = pipeline.EncodedMessageError(err)
 	}
-	backMessage := &pipeline.Message{
-		Id:      message.GetID(),
-		Sid:     pipeline.MessageEnd,
-		Err:     errData,
-		Analyse: analysis,
-	}
+	backMessage := messageAcquirer().(*pipeline.Message)
+	backMessage.Id = message.GetID()
+	backMessage.Sid = pipeline.MessageEnd
+	backMessage.Err = errData
+	backMessage.Analyse = analysis
 	return cs.Write(ctx, backMessage)
 }
 
@@ -972,7 +973,10 @@ func newCompile(ctx context.Context, message morpc.Message, pHelper *processHelp
 		if errEncode != nil {
 			return errEncode
 		}
-		return cs.Write(ctx, &pipeline.Message{Id: message.GetID(), Data: encodeData})
+		m := mHelper.acquirer().(*pipeline.Message)
+		m.Id = message.GetID()
+		m.Data = encodeData
+		return cs.Write(ctx, m)
 	}
 	return c
 }

@@ -122,12 +122,13 @@ func (c *Config) Validate() error {
 }
 
 type service struct {
-	metadata               metadata.CNStore
-	cfg                    *Config
-	responsePool           *sync.Pool
-	logger                 *zap.Logger
-	server                 morpc.RPCServer
-	requestHandler         func(ctx context.Context, message morpc.Message, cs morpc.ClientSession, engine engine.Engine, fService fileservice.FileService, cli client.TxnClient) error
+	metadata       metadata.CNStore
+	cfg            *Config
+	responsePool   *sync.Pool
+	logger         *zap.Logger
+	server         morpc.RPCServer
+	requestHandler func(ctx context.Context, message morpc.Message, cs morpc.ClientSession, engine engine.Engine, fService fileservice.FileService, cli client.TxnClient,
+		messageAcquirer func() morpc.Message) error
 	cancelMoServerFunc     context.CancelFunc
 	mo                     *frontend.MOServer
 	initHakeeperClientOnce sync.Once

@@ -99,8 +99,8 @@ func NewCNClient(cfg *ClientConfig) error {
 		morpc.WithBackendGoettyOptions(
 			goetty.WithSessionRWBUfferSize(cfg.ReadBufferSize, cfg.WriteBufferSize),
 			goetty.WithSessionReleaseMsgFunc(func(v any) {
-				m := v.(*pipeline.Message)
-				client.releaseMessage(m)
+				m := v.(morpc.RPCMessage)
+				client.releaseMessage(m.Message.(*pipeline.Message))
 			}),
 		),
 		morpc.WithBackendConnectTimeout(cfg.TimeOutForEachConnect),
