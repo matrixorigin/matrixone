@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
+	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -33,7 +34,7 @@ func TestHandleMessageWithSender(t *testing.T) {
 			return nil
 		})
 
-		cli, err := NewSender(s.logger)
+		cli, err := NewSender(newTestClock(), s.logger)
 		assert.NoError(t, err)
 		defer func() {
 			assert.NoError(t, cli.Close())
@@ -130,7 +131,9 @@ func TestTimeoutRequestCannotHandled(t *testing.T) {
 
 func runTestTxnServer(t *testing.T, addr string, testFunc func(s *server)) {
 	assert.NoError(t, os.RemoveAll(addr[7:]))
-	s, err := NewTxnServer(addr, logutil.GetPanicLogger())
+	s, err := NewTxnServer(addr,
+		clock.NewHLCClock(func() int64 { return 0 }, 0),
+		logutil.GetPanicLogger())
 	assert.NoError(t, err)
 	defer func() {
 		assert.NoError(t, s.Close())
@@ -153,4 +156,8 @@ func newTestClientSession(c chan morpc.Message) *testClientSession {
 func (cs *testClientSession) Write(ctx context.Context, response morpc.Message) error {
 	cs.c <- response
 	return nil
+}
+
+func newTestClock() clock.Clock {
+	return clock.NewHLCClock(func() int64 { return 0 }, 0)
 }
