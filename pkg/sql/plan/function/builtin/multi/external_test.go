@@ -199,7 +199,7 @@ func TestExternal(t *testing.T) {
 		case types.T_decimal128:
 			bat.Vecs[i], err = ParseDecimal128(vectors, proc)
 		case types.T_char, types.T_varchar, types.T_blob:
-			bat.Vecs[i] = ParseString(vectors, proc)
+			bat.Vecs[i], err = ParseString(vectors, proc)
 		case types.T_json:
 			bat.Vecs[i], err = ParseJson(vectors, proc)
 		case types.T_date:

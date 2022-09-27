@@ -263,18 +263,21 @@ func ParseFloat64(vectors []*vector.Vector, proc *process.Process) (*vector.Vect
 	return outputVec, nil
 }
 
-func ParseString(vectors []*vector.Vector, proc *process.Process) *vector.Vector {
+func ParseString(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	inputVec := vectors[0]
 	outputVec := vectors[1]
 	nullVec := vectors[2]
 	xs := vector.MustStrCols(inputVec)
-	rs := vector.MustStrCols(outputVec)
 	nullList := vector.MustStrCols(nullVec)
 	nullFlags := external.ParseNullFlagStrings(xs, nullList)
 	external.InsertNsp(nullFlags, outputVec.Nsp)
-	copy(rs, xs)
-	vector.SetCol(outputVec, rs)
-	return outputVec
+	for i, r := range xs {
+		err := vector.SetStringAt(outputVec, i, r, proc.Mp())
+		if err != nil {
+			return nil, err
+		}
+	}
+	return outputVec, nil
 }
 
 func ParseJson(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
@@ -285,13 +288,19 @@ func ParseJson(vectors []*vector.Vector, proc *process.Process) (*vector.Vector,
 	xs := vector.MustStrCols(inputVec)
 	rs := vector.MustBytesCols(outputVec)
 	nullList := vector.MustStrCols(nullVec)
-	nullFlags := external.ParseNullFlagNormal(xs, nullList)
+	xs, err = external.TrimSpace(xs)
+	nullFlags := external.ParseNullFlagStrings(xs, nullList)
 	external.InsertNsp(nullFlags, outputVec.Nsp)
 	rs, err = external.ParseJson(xs, outputVec.Nsp, rs)
 	if err != nil {
 		return nil, err
 	}
-	vector.SetCol(outputVec, rs)
+	for i, r := range rs {
+		err = vector.SetBytesAt(outputVec, i, r, proc.Mp())
+		if err != nil {
+			return nil, err
+		}
+	}
 	return outputVec, nil
 }
 

@@ -294,7 +294,7 @@ func GetBatchData(param *ExternalParam, plh *ParseLineHandler, proc *process.Pro
 		case types.T_decimal128:
 			bat.Vecs[i], err = multi.ParseDecimal128(vectors, proc)
 		case types.T_char, types.T_varchar, types.T_blob:
-			bat.Vecs[i] = multi.ParseString(vectors, proc)
+			bat.Vecs[i], err = multi.ParseString(vectors, proc)
 		case types.T_json:
 			bat.Vecs[i], err = multi.ParseJson(vectors, proc)
 		case types.T_date:
@@ -306,9 +306,9 @@ func GetBatchData(param *ExternalParam, plh *ParseLineHandler, proc *process.Pro
 		default:
 			err = moerr.NewNotSupported("the value type %d is not support now", param.Cols[i].Typ.Id)
 		}
-	}
-	if err != nil {
-		return nil, err
+		if err != nil {
+			return nil, err
+		}
 	}
 	n := vector.Length(bat.Vecs[0])
 	sels := proc.Mp().GetSels()
