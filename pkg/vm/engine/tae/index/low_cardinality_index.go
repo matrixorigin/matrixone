@@ -16,8 +16,7 @@ var (
 type LowCardinalityIndex struct {
 	typ types.Type
 
-	m *mheap.Mheap
-	// TODO: need ref count?
+	m    *mheap.Mheap
 	dict *dict.Dict
 	// poses is the positions of original data in the dictionary.
 	// Currently, the type of poses[i] is `T_uint16` which means
@@ -56,7 +55,7 @@ func (idx *LowCardinalityIndex) Dup() *LowCardinalityIndex {
 	return &LowCardinalityIndex{
 		typ:   idx.typ,
 		m:     idx.m,
-		dict:  idx.dict, // TODO: can it use pointer copy?
+		dict:  idx.dict.Dup(),
 		poses: vector.New(types.T_uint16.ToType()),
 	}
 }
@@ -69,4 +68,9 @@ func (idx *LowCardinalityIndex) Encode(dst, src *vector.Vector) error {
 		col[i] = uint16(pos)
 	}
 	return vector.AppendFixed(dst, col, idx.m)
+}
+
+func (idx *LowCardinalityIndex) Free() {
+	idx.poses.Free(idx.m)
+	idx.dict.Free()
 }

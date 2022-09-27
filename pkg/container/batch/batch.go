@@ -176,6 +176,9 @@ func (bat *Batch) Clean(m *mheap.Mheap) {
 	for _, vec := range bat.Vecs {
 		if vec != nil {
 			vec.Free(m)
+			if vec.IsLowCardinality() {
+				vec.Index().(*index.LowCardinalityIndex).Free()
+			}
 		}
 	}
 	for _, agg := range bat.Aggs {

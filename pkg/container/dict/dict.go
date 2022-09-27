@@ -26,6 +26,8 @@ type Dict struct {
 	m      *mheap.Mheap
 	idx    reverseIndex
 	unique *vector.Vector
+
+	ref int
 }
 
 func New(typ types.Type, m *mheap.Mheap) (*Dict, error) {
@@ -50,6 +52,7 @@ func New(typ types.Type, m *mheap.Mheap) (*Dict, error) {
 	}
 
 	d.idx = idx
+	d.ref = 1
 	return d, nil
 }
 
@@ -59,6 +62,11 @@ func (d *Dict) GetUnique() *vector.Vector {
 
 func (d *Dict) Cardinality() uint64 {
 	return uint64(d.unique.Length())
+}
+
+func (d *Dict) Dup() *Dict {
+	d.ref++
+	return d
 }
 
 func (d *Dict) InsertBatch(data *vector.Vector) ([]uint64, error) {
@@ -107,6 +115,14 @@ func (d *Dict) FindData(pos uint64) *vector.Vector {
 }
 
 func (d *Dict) Free() {
+	if d.ref == 0 {
+		return
+	}
+	d.ref--
+	if d.ref > 0 {
+		return
+	}
+
 	if d.unique != nil {
 		d.unique.Free(d.m)
 	}
