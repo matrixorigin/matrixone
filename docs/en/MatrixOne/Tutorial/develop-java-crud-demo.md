@@ -12,7 +12,7 @@ Before you start, make sure you have downloaded and installed the following soft
 mysql> CREATE DATABASE TEST;
 ```
 
-* [lntelIiJ IDEA(2022.2.1 or later version)]()
+* [lntelIiJ IDEA(2022.2.1 or later version)](https://www.jetbrains.com/idea/download/).
 * [JDK 8+ version](https://www.oracle.com/sg/java/technologies/javase/javase8-archive-downloads.html): Choose the version according to your OS.
 * [MySQL JDBC connector 8.0+ version](https://dev.mysql.com/downloads/connector/j/): It's recommanded to download the platform independent version, and unzip the downloaded file. 
 
