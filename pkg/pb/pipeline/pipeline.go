@@ -15,7 +15,6 @@
 package pipeline
 
 import (
-	errors2 "errors"
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
@@ -62,6 +61,7 @@ func EncodedMessageError(err error) ([]byte, bool) {
 			errData = []byte(err1.Error())
 		}
 	} else {
+		// XXX we should avoid such this situation
 		errData = []byte(err.Error())
 	}
 	return errData, isMoErr
@@ -77,8 +77,10 @@ func DecodeMessageError(m *Message) error {
 			}
 			return err
 		} else {
-			// handle errors returned by calling methods provided by third-party libraries or go language official libraries.
-			return errors2.New(string(errData))
+			// XXX It's so bad that we still received non mo err here. Just convert all them to be mo err now.
+			// If we eliminate all the hidden dangers brought by non mo err.
+			// should delete these code.
+			return moerr.NewInternalError(string(m.Err))
 		}
 	}
 	return nil
