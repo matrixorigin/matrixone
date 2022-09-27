@@ -319,10 +319,12 @@ func GetBatchData(param *ExternalParam, plh *ParseLineHandler, proc *process.Pro
 		case types.T_timestamp:
 			bat.Vecs[i], err = ParseTimeStamp(vectors, proc)
 		default:
-			return nil, moerr.NewNotSupported("the value type %d is not support now", param.Cols[i].Typ.Id)
+			err = moerr.NewNotSupported("the value type %d is not support now", param.Cols[i].Typ.Id)
 		}
 	}
-
+	if err != nil {
+		return nil, err
+	}
 	n := vector.Length(bat.Vecs[0])
 	sels := proc.Mp().GetSels()
 	if n > cap(sels) {
