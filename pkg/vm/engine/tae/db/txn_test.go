@@ -23,6 +23,7 @@ import (
 	"testing"
 	"time"
 
+	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -625,14 +626,14 @@ func TestTxn8(t *testing.T) {
 	bats := bat.Split(2)
 
 	txn, _ := tae.StartTxn(nil)
-	db, _ := txn.GetDatabase(catalog.SystemDBName)
+	db, _ := txn.GetDatabase(pkgcatalog.MO_CATALOG)
 	rel, _ := db.CreateRelation(schema)
 	err := rel.Append(bats[0])
 	assert.NoError(t, err)
 	assert.NoError(t, txn.Commit())
 
 	txn, _ = tae.StartTxn(nil)
-	db, _ = txn.GetDatabase(catalog.SystemDBName)
+	db, _ = txn.GetDatabase(pkgcatalog.MO_CATALOG)
 	rel, _ = db.GetRelationByName(schema.Name)
 	err = rel.Append(bats[1])
 	assert.NoError(t, err)
