@@ -140,3 +140,25 @@ a    b
 100     2
 101     5
 102     6
+drop table if exists t1;
+create table t1(a int, b int, primary key(a));
+insert into t1 values(null, 1);
+constraint vialation: Column 'a' cannot be null
+drop table if exists t1;
+create table t1(a int, b int, primary key(a, b));
+insert into t1 values(null, 1);
+constraint vialation: Column 'a' cannot be null
+drop table if exists t1;
+create table t1(a int, b varchar(20), primary key(a, b));
+insert into t1 values(1, '2');
+insert into t1 values(1, '3');
+insert into t1 values(2, '2');
+insert into t1 values(2, '3');
+select * from t1;
+a    b
+1    2
+1    3
+2    2
+2    3
+insert into t1 values(2, '3');
+tae data: duplicate

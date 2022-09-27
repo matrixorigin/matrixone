@@ -16,13 +16,13 @@ package plan
 
 import (
 	"encoding/json"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/operator"
+	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 )
 
@@ -386,13 +386,37 @@ func buildTableDefs(defs tree.TableDefs, ctx CompilerContext, tableDef *TableDef
 	}
 
 	if len(primaryKeys) > 0 {
-		tableDef.Defs = append(tableDef.Defs, &plan.TableDef_DefType{
-			Def: &plan.TableDef_DefType_Pk{
-				Pk: &plan.PrimaryKeyDef{
-					Names: primaryKeys,
+		if len(primaryKeys) == 1 {
+			tableDef.Defs = append(tableDef.Defs, &plan.TableDef_DefType{
+				Def: &plan.TableDef_DefType_Pk{
+					Pk: &plan.PrimaryKeyDef{
+						Names: primaryKeys,
+					},
 				},
-			},
-		})
+			})
+		} else {
+			cPkeyName := util.BuildCompositePrimaryKeyColumnName(primaryKeys)
+			tableDef.Cols = append(tableDef.Cols, &ColDef{
+				Name: cPkeyName,
+				Alg:  plan.CompressType_Lz4,
+				Typ: &Type{
+					Id:   int32(types.T_varchar),
+					Size: types.VarlenaSize,
+				},
+				Default: &plan.Default{
+					NullAbility:  false,
+					Expr:         nil,
+					OriginString: "",
+				},
+			})
+			tableDef.Defs = append(tableDef.Defs, &plan.TableDef_DefType{
+				Def: &plan.TableDef_DefType_Pk{
+					Pk: &plan.PrimaryKeyDef{
+						Names: []string{cPkeyName},
+					},
+				},
+			})
+		}
 	}
 
 	// check index invalid on the type
