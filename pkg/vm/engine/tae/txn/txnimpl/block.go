@@ -172,6 +172,26 @@ func (blk *txnBlock) RangeDelete(start, end uint32, dt handle.DeleteType) (err e
 	return blk.Txn.GetStore().RangeDelete(blk.getDBID(), blk.entry.AsCommonID(), start, end, dt)
 }
 
+func (blk *txnBlock) GetMetaLoc() (metaloc string) {
+	return blk.entry.GetVisibleMetaLoc(blk.Txn.GetStartTS())
+}
+func (blk *txnBlock) GetDeltaLoc() (deltaloc string) {
+	return blk.entry.GetVisibleDeltaLoc(blk.Txn.GetStartTS())
+}
+func (blk *txnBlock) UpdateMetaLoc(metaloc string) (err error) {
+	blkID := blk.Fingerprint()
+	dbid := blk.GetMeta().(*catalog.BlockEntry).GetSegment().GetTable().GetDB().GetID()
+	err = blk.Txn.GetStore().UpdateMetaLoc(dbid, blkID, metaloc)
+	return
+}
+
+func (blk *txnBlock) UpdateDeltaLoc(deltaloc string) (err error) {
+	blkID := blk.Fingerprint()
+	dbid := blk.GetMeta().(*catalog.BlockEntry).GetSegment().GetTable().GetDB().GetID()
+	err = blk.Txn.GetStore().UpdateMetaLoc(dbid, blkID, deltaloc)
+	return
+}
+
 func (blk *txnBlock) Update(row uint32, col uint16, v any) (err error) {
 	return blk.Txn.GetStore().Update(blk.getDBID(), blk.entry.AsCommonID(), row, col, v)
 }
