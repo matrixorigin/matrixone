@@ -75,11 +75,6 @@ func (e *ExplainQueryImpl) BuildJsonPlan(uuid uuid.UUID, options *ExplainOptions
 	return expdata
 }
 
-func (e *ExplainQueryImpl) ExplainAnalyze(buffer *ExplainDataBuffer, options *ExplainOptions) error {
-	// TODO implement me
-	panic("implement me")
-}
-
 func explainStep(step *plan.Node, settings *FormatSettings, options *ExplainOptions) error {
 	nodedescImpl := NewNodeDescriptionImpl(step)
 
@@ -120,6 +115,19 @@ func explainStep(step *plan.Node, settings *FormatSettings, options *ExplainOpti
 						return err
 					}
 					settings.buffer.PushNewLine(rowsetInfo, false, settings.level)
+				}
+			}
+
+			if nodedescImpl.Node.NodeType == plan.Node_UPDATE {
+				if nodedescImpl.Node.UpdateCtxs != nil {
+					updateCtxsDescImpl := &UpdateCtxsDescribeImpl{
+						UpdateCtxs: nodedescImpl.Node.UpdateCtxs,
+					}
+					updateCols, err := updateCtxsDescImpl.GetDescription(options)
+					if err != nil {
+						return err
+					}
+					settings.buffer.PushNewLine(updateCols, false, settings.level)
 				}
 			}
 		}
@@ -187,7 +195,6 @@ func serachNodeIndex(nodeID int32, Nodes []*plan.Node) (int32, error) {
 	return -1, moerr.NewInvalidInput("invliad plan nodeID %d", nodeID)
 }
 
-// ----------------------------------------------------------------------------------------------------------
 func PreOrderPlan(node *plan.Node, Nodes []*plan.Node, graphData *GraphData, options *ExplainOptions) error {
 	if node != nil {
 		newNode, err := ConvertNode(node, options)
@@ -197,9 +204,9 @@ func PreOrderPlan(node *plan.Node, Nodes []*plan.Node, graphData *GraphData, opt
 		graphData.Nodes = append(graphData.Nodes, *newNode)
 		if len(node.Children) > 0 {
 			for _, childNodeID := range node.Children {
-				index, err := serachNodeIndex(childNodeID, Nodes)
-				if err != nil {
-					return err
+				index, err2 := serachNodeIndex(childNodeID, Nodes)
+				if err2 != nil {
+					return err2
 				}
 
 				edge := buildEdge(node, Nodes[index], index)

@@ -189,7 +189,9 @@ select * from t1;
 
 drop table if exists t1;
 create table if not exists t1(a tinyint auto_increment);
+drop table if exists t1;
 create table if not exists t1(a smallint auto_increment);
+drop table if exists t1;
 create table if not exists t1(a int auto_increment);
 select * from t1;
 show columns from t1;

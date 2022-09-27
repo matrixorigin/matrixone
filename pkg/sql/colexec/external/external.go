@@ -73,8 +73,8 @@ func Prepare(proc *process.Process, arg any) error {
 	}
 
 	if len(fileList) == 0 {
+		logutil.Warnf("no such file '%s'", param.extern.Filepath)
 		param.End = true
-		return moerr.NewInternalError("no such file '%s'", param.extern.Filepath)
 	}
 	param.FileList = fileList
 	param.FileCnt = len(fileList)
@@ -376,6 +376,7 @@ func ScanFileData(param *ExternalParam, proc *process.Process) (*batch.Batch, er
 		if err != nil {
 			logutil.Errorf("close file failed. err:%v", err)
 		}
+		plh.simdCsvReader.Close()
 		param.plh = nil
 		param.FileIndex++
 		param.IgnoreLine = param.IgnoreLineTag
@@ -384,7 +385,11 @@ func ScanFileData(param *ExternalParam, proc *process.Process) (*batch.Batch, er
 		}
 	}
 	if param.IgnoreLine != 0 {
-		plh.simdCsvLineArray = plh.simdCsvLineArray[param.IgnoreLine:]
+		if len(plh.simdCsvLineArray) >= param.IgnoreLine {
+			plh.simdCsvLineArray = plh.simdCsvLineArray[param.IgnoreLine:]
+		} else {
+			plh.simdCsvLineArray = nil
+		}
 		param.IgnoreLine = 0
 	}
 	plh.batchSize = len(plh.simdCsvLineArray)

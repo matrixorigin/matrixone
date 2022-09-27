@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"go.uber.org/zap"
+	"sync/atomic"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/hakeeper"
@@ -116,10 +117,11 @@ func (l *store) hakeeperCheck() {
 	}
 
 	if !isLeader {
+		logger.Info("I am not leader.", zap.Uint64("uuid", atomic.LoadUint64(&l.haKeeperReplicaID)))
 		l.taskScheduler.StopScheduleCronTask()
 		return
 	}
-
+	logger.Info("I am leader.", zap.Uint64("uuid", atomic.LoadUint64(&l.haKeeperReplicaID)))
 	l.taskScheduler.StartScheduleCronTask()
 	state, err := l.getCheckerState()
 	if err != nil {

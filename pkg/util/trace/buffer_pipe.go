@@ -60,16 +60,16 @@ type IBuffer2SqlItem interface {
 var _ bp.PipeImpl[bp.HasName, any] = &batchSqlHandler{}
 
 type batchSqlHandler struct {
-	defaultOpts []buffer2SqlOption
+	defaultOpts []bufferOption
 }
 
-func NewBufferPipe2SqlWorker(opt ...buffer2SqlOption) bp.PipeImpl[bp.HasName, any] {
+func NewBufferPipe2SqlWorker(opt ...bufferOption) bp.PipeImpl[bp.HasName, any] {
 	return &batchSqlHandler{opt}
 }
 
 // NewItemBuffer implement batchpipe.PipeImpl
 func (t batchSqlHandler) NewItemBuffer(name string) bp.ItemBuffer[bp.HasName, any] {
-	var opts []buffer2SqlOption
+	var opts []bufferOption
 	var f genBatchFunc
 	logutil.Debugf("NewItemBuffer name: %s", name)
 	switch name {
@@ -95,12 +95,13 @@ func (t batchSqlHandler) NewItemBuffer(name string) bp.ItemBuffer[bp.HasName, an
 // NewItemBatchHandler implement batchpipe.PipeImpl
 func (t batchSqlHandler) NewItemBatchHandler(ctx context.Context) func(batch any) {
 	var f = func(b any) {}
-	if GetTracerProvider().sqlExecutor == nil {
+	sqlExecutor := GetTracerProvider().GetSqlExecutor()
+	if sqlExecutor == nil {
 		// fixme: handle error situation, should panic
 		logutil.Errorf("[Trace] no SQL Executor.")
 		return f
 	}
-	exec := GetTracerProvider().sqlExecutor()
+	exec := sqlExecutor()
 	if exec == nil {
 		// fixme: handle error situation, should panic
 		logutil.Errorf("[Trace] no SQL Executor.")
@@ -391,16 +392,16 @@ func genErrorBatchSql(in []IBuffer2SqlItem, buf *bytes.Buffer) any {
 }
 
 type batchCSVHandler struct {
-	defaultOpts []buffer2SqlOption
+	defaultOpts []bufferOption
 }
 
-func NewBufferPipe2CSVWorker(opt ...buffer2SqlOption) bp.PipeImpl[bp.HasName, any] {
+func NewBufferPipe2CSVWorker(opt ...bufferOption) bp.PipeImpl[bp.HasName, any] {
 	return &batchCSVHandler{opt}
 }
 
 // NewItemBuffer implement batchpipe.PipeImpl
 func (t batchCSVHandler) NewItemBuffer(name string) bp.ItemBuffer[bp.HasName, any] {
-	var opts []buffer2SqlOption
+	var opts []bufferOption
 	var f genBatchFunc = genCsvData
 	logutil.Debugf("NewItemBuffer name: %s", name)
 	switch name {
@@ -549,7 +550,7 @@ type genBatchFunc func([]IBuffer2SqlItem, *bytes.Buffer) any
 var noopFilterItemFunc = func(IBuffer2SqlItem) {}
 var noopGenBatchSQL = genBatchFunc(func([]IBuffer2SqlItem, *bytes.Buffer) any { return "" })
 
-func newBuffer2Sql(opts ...buffer2SqlOption) *buffer2Sql {
+func newBuffer2Sql(opts ...bufferOption) *buffer2Sql {
 	b := &buffer2Sql{
 		Reminder:       bp.NewConstantClock(defaultClock),
 		buf:            make([]IBuffer2SqlItem, 0, 10240),
@@ -601,11 +602,15 @@ func (b *buffer2Sql) isEmpty() bool {
 }
 
 func (b *buffer2Sql) ShouldFlush() bool {
-	return atomic.LoadInt64(&b.size) > b.sizeThreshold
+	b.mux.Lock()
+	defer b.mux.Unlock()
+	return b.size > b.sizeThreshold
 }
 
 func (b *buffer2Sql) Size() int64 {
-	return atomic.LoadInt64(&b.size)
+	b.mux.Lock()
+	defer b.mux.Unlock()
+	return b.size
 }
 
 func (b *buffer2Sql) GetBufferType() string {
@@ -625,7 +630,7 @@ func (b *buffer2Sql) GetBatch(buf *bytes.Buffer) any {
 	return b.genBatchFunc(b.buf, buf)
 }
 
-type buffer2SqlOption interface {
+type bufferOption interface {
 	apply(*buffer2Sql)
 }
 
@@ -635,31 +640,31 @@ func (f buffer2SqlOptionFunc) apply(b *buffer2Sql) {
 	f(b)
 }
 
-func bufferWithReminder(reminder bp.Reminder) buffer2SqlOption {
+func bufferWithReminder(reminder bp.Reminder) bufferOption {
 	return buffer2SqlOptionFunc(func(b *buffer2Sql) {
 		b.Reminder = reminder
 	})
 }
 
-func bufferWithType(name string) buffer2SqlOption {
+func bufferWithType(name string) bufferOption {
 	return buffer2SqlOptionFunc(func(b *buffer2Sql) {
 		b.bufferType = name
 	})
 }
 
-func bufferWithSizeThreshold(size int64) buffer2SqlOption {
+func bufferWithSizeThreshold(size int64) bufferOption {
 	return buffer2SqlOptionFunc(func(b *buffer2Sql) {
 		b.sizeThreshold = size
 	})
 }
 
-func bufferWithFilterItemFunc(f filterItemFunc) buffer2SqlOption {
+func bufferWithFilterItemFunc(f filterItemFunc) bufferOption {
 	return buffer2SqlOptionFunc(func(b *buffer2Sql) {
 		b.filterItemFunc = f
 	})
 }
 
-func bufferWithGenBatchFunc(f genBatchFunc) buffer2SqlOption {
+func bufferWithGenBatchFunc(f genBatchFunc) bufferOption {
 	return buffer2SqlOptionFunc(func(b *buffer2Sql) {
 		b.genBatchFunc = f
 	})

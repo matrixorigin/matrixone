@@ -132,7 +132,7 @@ func Test_Prepare(t *testing.T) {
 				convey.So(err, convey.ShouldBeNil)
 				param.CreateSql = string(json_byte)
 				err = Prepare(tcs.proc, tcs.arg)
-				convey.So(err, convey.ShouldNotBeNil)
+				convey.So(err, convey.ShouldBeNil)
 				convey.So(param.FileList, convey.ShouldBeNil)
 				convey.So(param.FileCnt, convey.ShouldEqual, 0)
 

@@ -98,14 +98,16 @@ func BuildPlan(ctx CompilerContext, stmt tree.Statement) (*Plan, error) {
 		return buildShowTables(stmt, ctx)
 	case *tree.ShowColumns:
 		return buildShowColumns(stmt, ctx)
+	case *tree.ShowTableStatus:
+		return buildShowTableStatus(stmt, ctx)
+	case *tree.ShowTarget:
+		return buildShowTarget(stmt, ctx)
 	case *tree.ShowIndex:
 		return buildShowIndex(stmt, ctx)
+	case *tree.ShowGrants:
+		return buildShowGrants(stmt, ctx)
 	case *tree.ShowVariables:
 		return buildShowVariables(stmt, ctx)
-	case *tree.ShowWarnings:
-		return buildShowWarnings(stmt, ctx)
-	case *tree.ShowErrors:
-		return buildShowErrors(stmt, ctx)
 	case *tree.ShowStatus:
 		return buildShowStatus(stmt, ctx)
 	case *tree.ShowProcessList:
