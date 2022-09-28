@@ -29,4 +29,8 @@ message Timestamp {
   // according to the HLC algorithm. The HLC paper further establishes that its
   // value will not overflow in a real production environment. 
   uint32 LogicalTime  = 2;
+  // NodeID just used to compatible with TAE some constraint to guaranteed unique 
+  // timestamp. uint16 is not defined, so use uint32, but only 2 bytes. The field 
+  // is not used for comparing the timestamps.
+  uint32 NodeID       = 3;
 }
