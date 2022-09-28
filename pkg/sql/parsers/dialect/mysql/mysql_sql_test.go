@@ -1426,6 +1426,15 @@ var (
 			input: `create table t2 (a uuid primary key, b varchar(10))`,
 		}, {
 			input: `create table t3 (a int, b uuid, primary key idx (a, b))`,
+		}, {
+			input:  `DO SLEEP(5)`,
+			output: `do sleep(5)`,
+		}, {
+			input:  `DECLARE @a, @b`,
+			output: `declare a, b`,
+		}, {
+			input:  `DECLARE @a, @b DEFAULT 1`,
+			output: `declare a, b = 1`,
 		},
 	}
 )

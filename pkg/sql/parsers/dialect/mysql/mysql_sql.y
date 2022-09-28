@@ -326,6 +326,12 @@ import (
 
 %token <str> UNUSED BINDINGS
 
+// Do
+%token <str> DO
+
+// Declare
+%token <str> DECLARE
+
 %type <statement> stmt
 %type <statements> stmt_list
 %type <statement> create_stmt insert_stmt delete_stmt drop_stmt alter_stmt
@@ -345,6 +351,8 @@ import (
 %type <statement> load_data_stmt import_data_stmt
 %type <statement> analyze_stmt
 %type <statement> prepare_stmt prepareable_stmt deallocate_stmt execute_stmt
+%type <statement> do_stmt
+%type <statement> declare_stmt
 %type <exportParm> export_data_param_opt
 %type <loadParam> load_param_opt load_param_opt_2
 %type <tailParam> tail_param_opt
@@ -495,7 +503,7 @@ import (
 %type <str> field_terminator starting_opt lines_terminated_opt
 %type <lines> load_lines export_lines_opt
 %type <int64Val> ignore_lines
-%type <varExpr> user_variable variable system_variable
+%type <varExpr> user_variable variable system_variable local_variable
 %type <varExprs> variable_list
 %type <loadColumn> columns_or_variable
 %type <loadColumns> columns_or_variable_list columns_or_variable_list_opt
@@ -574,6 +582,8 @@ stmt:
 |   grant_stmt
 |   load_data_stmt
 |   import_data_stmt
+|   do_stmt
+|   declare_stmt
 |   select_stmt
     {
         $$ = $1
@@ -718,6 +728,10 @@ variable:
     {
         $$ = $1
     }
+|   local_variable
+    {
+        $$ = $1
+    }
 
 system_variable:
     AT_AT_ID
@@ -756,6 +770,16 @@ user_variable:
 //        	yylex.Error("variable syntax error")
 //            return 1
 //        }
+        $$ = &tree.VarExpr{
+            Name: $1,
+            System: false,
+            Global: false,
+        }
+    }
+
+local_variable:
+    ID
+    {
         $$ = &tree.VarExpr{
             Name: $1,
             System: false,
@@ -6854,7 +6878,30 @@ char_type:
     }
 }
 
+do_stmt:
+    DO expression_list
+    {
+        $$ = &tree.Do {
+            Exprs: $2,
+        }
+    }
 
+declare_stmt:
+    DECLARE variable_list
+    {
+        $$ = &tree.Declare {
+            Variables: $2,
+            DefaultVal: tree.NewNumValWithType(constant.MakeUnknown(), "null", false, tree.P_null),
+        }
+    }
+    |
+    DECLARE variable_list DEFAULT expression
+    {
+        $$ = &tree.Declare {
+            Variables: $2,
+            DefaultVal: $4,
+        }
+    }
 
 spatial_type:
     GEOMETRY
@@ -7178,6 +7225,7 @@ reserved_keyword:
 |   PASSWORD_LOCK_TIME
 |   UNBOUNDED
 |   SECONDARY
+|   DECLARE
 
 non_reserved_keyword:
     ACCOUNT
@@ -7210,6 +7258,7 @@ non_reserved_keyword:
 |   DECIMAL
 |   DYNAMIC
 |   DISK
+|   DO
 |   DOUBLE
 |   DIRECTORY
 |   DUPLICATE
