@@ -19,10 +19,10 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/export"
 
@@ -116,17 +116,35 @@ func (s *StatementInfo) CsvFields() []string {
 
 func (s *StatementInfo) ExecPlan2Json() string {
 	var json []byte
-	if s.SerializeExecPlan == nil {
-		uuidStr := uuid.UUID(s.StatementID).String()
-		logutil.Warnf("statement has no execPlan Serialize function, statement_id: %s", uuidStr)
-		return fmt.Sprintf(`{"code":200,"message":"sql query no record execution plan","steps":null,"success":false,"uuid:"%s"}`, uuidStr)
-	}
-	if queryTime := GetTracerProvider().longQueryTime; queryTime > int64(s.Duration) {
+	if s.ExecPlan == nil && s.SerializeExecPlan == nil {
+		if f := getDefaultSerializeExecPlan(); f == nil {
+			uuidStr := uuid.UUID(s.StatementID).String()
+			return fmt.Sprintf(`{"code":200,"message":"sql query no record execution plan","steps":null,"success":false,"uuid":"%s"}`, uuidStr)
+		} else {
+			json = f(nil, uuid.UUID(s.StatementID))
+		}
+	} else if queryTime := GetTracerProvider().longQueryTime; queryTime > int64(s.Duration) {
 		json = s.SerializeExecPlan(nil, uuid.UUID(s.StatementID))
 	} else {
 		json = s.SerializeExecPlan(s.ExecPlan, uuid.UUID(s.StatementID))
 	}
 	return string(json)
+}
+
+var defaultSerializeExecPlan atomic.Value
+
+type SerializeExecPlanFunc func(plan any, uuid2 uuid.UUID) []byte
+
+func SetDefaultSerializeExecPlan(f SerializeExecPlanFunc) {
+	defaultSerializeExecPlan.Store(f)
+}
+
+func getDefaultSerializeExecPlan() SerializeExecPlanFunc {
+	if defaultSerializeExecPlan.Load() == nil {
+		return nil
+	} else {
+		return defaultSerializeExecPlan.Load().(SerializeExecPlanFunc)
+	}
 }
 
 // SetExecPlan record execPlan should be TxnComputationWrapper.plan obj, which support 2json.
