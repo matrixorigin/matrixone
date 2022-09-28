@@ -350,22 +350,127 @@ func genDatabaseListExpr(accountId uint32) *plan.Expr {
 	return plantool.MakeExpr("eq", args)
 }
 
+// genTableInfoExpr generate an expression to find table info
+// by database id and table name and accountId
+func genTableInfoExpr(accountId uint32, databaseId uint64, name string) *plan.Expr {
+	var left, right *plan.Expr
+
+	{
+		var args []*plan.Expr
+
+		args = append(args, newColumnExpr(catalog.MO_TABLES_REL_NAME_IDX, types.T_varchar,
+			catalog.MoTablesSchema[catalog.MO_TABLES_REL_NAME_IDX]))
+		args = append(args, newStringConstVal(name))
+		left = plantool.MakeExpr("eq", args)
+	}
+	{
+		var args []*plan.Expr
+
+		args = append(args, newColumnExpr(catalog.MO_TABLES_RELDATABASE_ID_IDX, types.T_uint64,
+			catalog.MoTablesSchema[catalog.MO_TABLES_RELDATABASE_ID_IDX]))
+		args = append(args, newIntConstVal(types.T_uint64, databaseId))
+		right = plantool.MakeExpr("eq", args)
+		left = plantool.MakeExpr("and", []*plan.Expr{left, right})
+	}
+	{
+		var args []*plan.Expr
+
+		args = append(args, newColumnExpr(catalog.MO_TABLES_ACCOUNT_ID_IDX, types.T_uint32,
+			catalog.MoTablesSchema[catalog.MO_TABLES_ACCOUNT_ID_IDX]))
+		args = append(args, newIntConstVal(types.T_uint32, accountId))
+		right = plantool.MakeExpr("eq", args)
+	}
+	return plantool.MakeExpr("and", []*plan.Expr{left, right})
+}
+
 // genTableIdExpr generate an expression to find table info
 // by database id and table name and accountId
 func genTableIdExpr(accountId uint32, databaseId uint64, name string) *plan.Expr {
-	return nil
+	var left, right *plan.Expr
+
+	{
+		var args []*plan.Expr
+
+		args = append(args, newColumnExpr(MO_TABLE_ID_NAME_IDX, types.T_varchar,
+			catalog.MoTablesSchema[catalog.MO_TABLES_REL_NAME_IDX]))
+		args = append(args, newStringConstVal(name))
+		left = plantool.MakeExpr("eq", args)
+	}
+	{
+		var args []*plan.Expr
+
+		args = append(args, newColumnExpr(MO_TABLE_ID_DATABASE_ID_IDX, types.T_uint64,
+			catalog.MoTablesSchema[catalog.MO_TABLES_RELDATABASE_ID_IDX]))
+		args = append(args, newIntConstVal(types.T_uint64, databaseId))
+		right = plantool.MakeExpr("eq", args)
+		left = plantool.MakeExpr("and", []*plan.Expr{left, right})
+	}
+	{
+		var args []*plan.Expr
+
+		args = append(args, newColumnExpr(MO_TABLE_ID_ACCOUNT_IDX, types.T_uint32,
+			catalog.MoTablesSchema[catalog.MO_TABLES_ACCOUNT_ID_IDX]))
+		args = append(args, newIntConstVal(types.T_uint32, accountId))
+		right = plantool.MakeExpr("eq", args)
+	}
+	return plantool.MakeExpr("and", []*plan.Expr{left, right})
 }
 
 // genTableListExpr generate an expression to find table list
 // by database id and accountId
 func genTableListExpr(accountId uint32, databaseId uint64) *plan.Expr {
-	return nil
+	var left, right *plan.Expr
+
+	{
+		var args []*plan.Expr
+
+		args = append(args, newColumnExpr(MO_TABLE_LIST_DATABASE_ID_IDX, types.T_uint64,
+			catalog.MoTablesSchema[catalog.MO_TABLES_RELDATABASE_ID_IDX]))
+		args = append(args, newIntConstVal(types.T_uint64, databaseId))
+		left = plantool.MakeExpr("eq", args)
+	}
+	{
+		var args []*plan.Expr
+
+		args = append(args, newColumnExpr(MO_TABLE_LIST_ACCOUNT_IDX, types.T_uint32,
+			catalog.MoTablesSchema[catalog.MO_TABLES_ACCOUNT_ID_IDX]))
+		args = append(args, newIntConstVal(types.T_uint32, accountId))
+		right = plantool.MakeExpr("eq", args)
+	}
+	return plantool.MakeExpr("and", []*plan.Expr{left, right})
 }
 
 // genColumnInfoExpr generate an expression to find column info list
 // by database id and table id and accountId
 func genColumnInfoExpr(accountId uint32, databaseId, tableId uint64) *plan.Expr {
-	return nil
+	var left, right *plan.Expr
+
+	{
+		var args []*plan.Expr
+
+		args = append(args, newColumnExpr(catalog.MO_COLUMNS_ATT_DATABASE_ID_IDX, types.T_varchar,
+			catalog.MoColumnsSchema[catalog.MO_COLUMNS_ATT_DATABASE_ID_IDX]))
+		args = append(args, newIntConstVal(types.T_uint64, databaseId))
+		left = plantool.MakeExpr("eq", args)
+	}
+	{
+		var args []*plan.Expr
+
+		args = append(args, newColumnExpr(catalog.MO_COLUMNS_ATT_RELNAME_ID_IDX, types.T_uint64,
+			catalog.MoTablesSchema[catalog.MO_COLUMNS_ATT_RELNAME_ID_IDX]))
+		args = append(args, newIntConstVal(types.T_uint64, tableId))
+		right = plantool.MakeExpr("eq", args)
+		left = plantool.MakeExpr("and", []*plan.Expr{left, right})
+	}
+	{
+		var args []*plan.Expr
+
+		args = append(args, newColumnExpr(catalog.MO_COLUMNS_ACCOUNT_ID_IDX, types.T_uint32,
+			catalog.MoTablesSchema[catalog.MO_COLUMNS_ACCOUNT_ID_IDX]))
+		args = append(args, newIntConstVal(types.T_uint32, accountId))
+		right = plantool.MakeExpr("eq", args)
+	}
+	return plantool.MakeExpr("and", []*plan.Expr{left, right})
 }
 
 // genInsertExpr used to generate an expression to partition table data

@@ -20,13 +20,20 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 func (txn *Transaction) getTableList(ctx context.Context, databaseId uint64) ([]string, error) {
 	rows, err := txn.getRows(ctx, catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID, txn.dnStores[:1],
-		[]string{catalog.MoTablesSchema[catalog.MO_TABLES_REL_NAME_IDX]},
+		[]string{
+			catalog.MoTablesSchema[catalog.MO_TABLES_REL_NAME_IDX],
+			catalog.MoTablesSchema[catalog.MO_TABLES_RELDATABASE_ID_IDX],
+			catalog.MoTablesSchema[catalog.MO_TABLES_ACCOUNT_ID_IDX],
+		},
 		genTableListExpr(getAccountId(ctx), databaseId))
 	if err != nil {
 		return nil, err
@@ -43,7 +50,7 @@ func (txn *Transaction) getTableInfo(ctx context.Context, databaseId uint64,
 	accountId := getAccountId(ctx)
 	row, err := txn.getRow(ctx, catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID,
 		txn.dnStores[:1], catalog.MoTablesSchema,
-		genTableIdExpr(accountId, databaseId, name))
+		genTableInfoExpr(accountId, databaseId, name))
 	if err != nil {
 		return 0, nil, err
 	}
@@ -67,7 +74,12 @@ func (txn *Transaction) getTableId(ctx context.Context, databaseId uint64,
 	name string) (uint64, error) {
 	accountId := getAccountId(ctx)
 	row, err := txn.getRow(ctx, catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID,
-		txn.dnStores[:1], []string{catalog.MoTablesSchema[catalog.MO_TABLES_REL_ID_IDX]},
+		txn.dnStores[:1], []string{
+			catalog.MoTablesSchema[catalog.MO_TABLES_REL_ID_IDX],
+			catalog.MoTablesSchema[catalog.MO_TABLES_REL_NAME_IDX],
+			catalog.MoTablesSchema[catalog.MO_TABLES_RELDATABASE_ID_IDX],
+			catalog.MoTablesSchema[catalog.MO_TABLES_ACCOUNT_ID_IDX],
+		},
 		genTableIdExpr(accountId, databaseId, name))
 	if err != nil {
 		return 0, err
@@ -169,7 +181,12 @@ func (txn *Transaction) getRow(ctx context.Context, databaseId uint64, tableId u
 	if len(bats) != 1 {
 		return nil, moerr.NewInvalidInput("table is not unique")
 	}
-	rows := catalog.GenRows(bats[0])
+	rows := make([][]any, 0, len(bats))
+	for _, bat := range bats {
+		if bat.Length() > 0 {
+			rows = append(rows, catalog.GenRows(bat)...)
+		}
+	}
 	if len(rows) != 1 {
 		return nil, moerr.NewInvalidInput("table is not unique")
 	}
@@ -188,7 +205,9 @@ func (txn *Transaction) getRows(ctx context.Context, databaseId uint64, tableId 
 	}
 	rows := make([][]any, 0, len(bats))
 	for _, bat := range bats {
-		rows = append(rows, catalog.GenRows(bat)...)
+		if bat.Length() > 0 {
+			rows = append(rows, catalog.GenRows(bat)...)
+		}
 	}
 	return rows, nil
 }
@@ -226,6 +245,30 @@ func (txn *Transaction) readTable(ctx context.Context, databaseId uint64, tableI
 			return nil, err
 		}
 		bats = append(bats, bat)
+	}
+	proc := process.New(context.Background(), txn.m, nil, nil, nil)
+	for i, bat := range bats {
+		vec, err := colexec.EvalExpr(bat, proc, expr)
+		if err != nil {
+			return nil, err
+		}
+		bs := vector.GetColumn[bool](vec)
+		if vec.IsScalar() {
+			if !bs[0] {
+				bat.Shrink(nil)
+			}
+		} else {
+			sels := txn.m.GetSels()
+			for i, b := range bs {
+				if b {
+					sels = append(sels, int64(i))
+				}
+			}
+			bat.Shrink(sels)
+			txn.m.PutSels(sels)
+		}
+		vec.Free(txn.m)
+		bats[i] = bat
 	}
 	return bats, nil
 }
