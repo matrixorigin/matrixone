@@ -15,6 +15,7 @@
 package memtable
 
 import (
+	"sync/atomic"
 	"testing"
 
 	"github.com/google/uuid"
@@ -46,6 +47,26 @@ func BenchmarkInsert(b *testing.B) {
 			b.Fatal(err)
 		}
 	}
+}
+
+func BenchmarkParallelInsert(b *testing.B) {
+	table := NewTable[Int, int, TestRow]()
+	b.ResetTimer()
+	var i int64
+	b.RunParallel(func(pb *testing.PB) {
+		tx := NewTransaction(uuid.NewString(), Time{}, SnapshotIsolation)
+		for pb.Next() {
+			i := atomic.AddInt64(&i, 1)
+			key := Int(i)
+			row := TestRow{
+				key:   key,
+				value: int(i),
+			}
+			if err := table.Insert(tx, row); err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
 }
 
 func BenchmarkInsertAndGet(b *testing.B) {

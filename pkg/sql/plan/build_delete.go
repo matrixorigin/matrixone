@@ -17,11 +17,11 @@ package plan
 import (
 	"strings"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 )
 
 func buildDelete(stmt *tree.Delete, ctx CompilerContext) (*Plan, error) {
@@ -252,6 +252,9 @@ func buildUseProjection(stmt *tree.Delete, ps tree.SelectExprs, objRef *ObjectRe
 	isHideKey := false
 	priKeys := ctx.GetPrimaryKeyDef(objRef.SchemaName, tableDef.Name)
 	for _, key := range priKeys {
+		if key.IsCPkey {
+			break
+		}
 		e := tree.SetUnresolvedName(tf.baseNameMap[tableDef.Name], key.Name)
 		if isContainNameInFilter(stmt, key.Name) {
 			ps = append(ps, tree.SelectExpr{Expr: e})

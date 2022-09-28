@@ -19,9 +19,10 @@ package logservice
 
 import (
 	"context"
-	"go.uber.org/zap"
 	"sync"
 	"sync/atomic"
+
+	"go.uber.org/zap"
 
 	"github.com/fagongzi/goetty/v2"
 	"github.com/lni/dragonboat/v4"
@@ -108,7 +109,9 @@ func NewService(
 		return pool.Get().(*RPCRequest)
 	}
 	// TODO: check and fix all these magic numbers
-	codec := morpc.NewMessageCodecWithChecksum(mf, 16*1024)
+	codec := morpc.NewMessageCodec(mf,
+		morpc.WithCodecPayloadCopyBufferSize(16*1024),
+		morpc.WithCodecEnableChecksum())
 	server, err := morpc.NewRPCServer(LogServiceRPCName, cfg.ServiceListenAddress, codec,
 		morpc.WithServerGoettyOptions(goetty.WithSessionReleaseMsgFunc(func(i interface{}) {
 			respPool.Put(i.(morpc.RPCMessage).Message)

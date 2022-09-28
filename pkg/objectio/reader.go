@@ -45,7 +45,7 @@ func (r *ObjectReader) ReadMeta(extents []Extent) ([]BlockObject, error) {
 	for i, extent := range extents {
 		metas.Entries[i] = fileservice.IOEntry{
 			Offset: int64(extent.offset),
-			Size:   int64(extent.Length()),
+			Size:   int64(extent.originSize),
 		}
 	}
 	err = r.object.fs.Read(context.Background(), metas)
@@ -54,7 +54,10 @@ func (r *ObjectReader) ReadMeta(extents []Extent) ([]BlockObject, error) {
 	}
 	blocks := make([]BlockObject, len(extents))
 	for i := range extents {
-		blocks[i] = &Block{object: r.object}
+		blocks[i] = &Block{
+			object: r.object,
+			extent: extents[i],
+		}
 		err = blocks[i].(*Block).UnMarshalMeta(metas.Entries[i].Data)
 		if err != nil {
 			return nil, err

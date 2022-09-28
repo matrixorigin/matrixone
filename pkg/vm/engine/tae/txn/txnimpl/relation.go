@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"sync"
 
+	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -140,11 +141,11 @@ func (h *txnRelation) GetSchema() any { return h.table.entry.GetSchema() }
 
 func (h *txnRelation) Rows() int64 {
 	if h.table.entry.GetDB().IsSystemDB() && h.table.entry.IsVirtual() {
-		if h.table.entry.GetSchema().Name == catalog.SystemTable_DB_Name {
+		if h.table.entry.GetSchema().Name == pkgcatalog.MO_DATABASE {
 			return int64(h.table.entry.GetCatalog().CoarseDBCnt())
-		} else if h.table.entry.GetSchema().Name == catalog.SystemTable_Table_Name {
+		} else if h.table.entry.GetSchema().Name == pkgcatalog.MO_TABLES {
 			return int64(h.table.entry.GetCatalog().CoarseTableCnt())
-		} else if h.table.entry.GetSchema().Name == catalog.SystemTable_Columns_Name {
+		} else if h.table.entry.GetSchema().Name == pkgcatalog.MO_COLUMNS {
 			return int64(h.table.entry.GetCatalog().CoarseColumnCnt())
 		}
 		panic("logic error")

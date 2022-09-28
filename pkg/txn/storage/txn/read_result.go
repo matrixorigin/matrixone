@@ -30,6 +30,6 @@ func (*readResult) Release() {
 }
 
 func (*readResult) WaitTxns() [][]byte {
-	//TODO
+	//TODO return wait txns
 	return nil
 }

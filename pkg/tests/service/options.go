@@ -51,6 +51,7 @@ const (
 	defaultTickPerSecond   = 10
 	defaultLogStoreTimeout = 4 * time.Second
 	defaultDNStoreTimeout  = 3 * time.Second
+	defaultCNStoreTimeout  = 3 * time.Second
 	defaultCheckInterval   = 1 * time.Second
 
 	// default heartbeat configuration
@@ -88,6 +89,7 @@ type Options struct {
 		checkInterval   time.Duration
 		logStoreTimeout time.Duration
 		dnStoreTimeout  time.Duration
+		cnStoreTimeout  time.Duration
 	}
 
 	task struct {
@@ -147,6 +149,9 @@ func (opt *Options) validate() {
 	if opt.hakeeper.dnStoreTimeout == 0 {
 		opt.hakeeper.dnStoreTimeout = defaultDNStoreTimeout
 	}
+	if opt.hakeeper.cnStoreTimeout == 0 {
+		opt.hakeeper.cnStoreTimeout = defaultCNStoreTimeout
+	}
 	if opt.hakeeper.checkInterval == 0 {
 		opt.hakeeper.checkInterval = defaultCheckInterval
 	}
@@ -173,6 +178,7 @@ func (opt Options) BuildHAKeeperConfig() hakeeper.Config {
 		TickPerSecond:   opt.hakeeper.tickPerSecond,
 		LogStoreTimeout: opt.hakeeper.logStoreTimeout,
 		DNStoreTimeout:  opt.hakeeper.dnStoreTimeout,
+		CNStoreTimeout:  opt.hakeeper.cnStoreTimeout,
 	}
 }
 
@@ -255,6 +261,11 @@ func (opt Options) WithHKLogStoreTimeout(timeout time.Duration) Options {
 // WithHKDNStoreTimeout sets dn store timeout for hakeeper.
 func (opt Options) WithHKDNStoreTimeout(timeout time.Duration) Options {
 	opt.hakeeper.dnStoreTimeout = timeout
+	return opt
+}
+
+func (opt Options) WithHKCNStoreTimeout(timeout time.Duration) Options {
+	opt.hakeeper.cnStoreTimeout = timeout
 	return opt
 }
 

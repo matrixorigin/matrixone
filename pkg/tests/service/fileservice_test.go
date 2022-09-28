@@ -21,9 +21,12 @@ import (
 )
 
 func TestFileServices(t *testing.T) {
-	fs := newFileServices(t, 3)
-	require.NotNil(t, fs.getLocalFileService(0))
-	require.NotNil(t, fs.getLocalFileService(1))
-	require.NotNil(t, fs.getLocalFileService(2))
-	require.Nil(t, fs.getLocalFileService(3))
+	fs := newFileServices(t, 3, 2)
+	require.NotNil(t, fs.getDNLocalFileService(0))
+	require.NotNil(t, fs.getDNLocalFileService(1))
+	require.NotNil(t, fs.getDNLocalFileService(2))
+	require.Nil(t, fs.getDNLocalFileService(3))
+	require.NotNil(t, fs.getCNLocalFileService(0))
+	require.NotNil(t, fs.getCNLocalFileService(1))
+	require.Nil(t, fs.getCNLocalFileService(2))
 }

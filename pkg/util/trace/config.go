@@ -21,7 +21,7 @@ import (
 	"encoding/json"
 	"io"
 	"sync"
-	"sync/atomic"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/util"
@@ -60,7 +60,7 @@ type tracerProviderConfig struct {
 	// registered.
 	spanProcessors []SpanProcessor
 
-	enable uint32 // see SetEnable
+	enable bool // see SetEnable
 
 	// idGenerator is used to generate all Span and Trace IDs when needed.
 	idGenerator IDGenerator
@@ -80,6 +80,10 @@ type tracerProviderConfig struct {
 	// needInit control table schema create
 	needInit bool // see WithInitAction
 
+	exportInterval time.Duration // see WithExportInterval
+	// longQueryTime unit ns
+	longQueryTime int64 // see WithLongQueryTime
+
 	mux sync.RWMutex
 }
 
@@ -96,17 +100,19 @@ func (cfg *tracerProviderConfig) getNodeResource() *MONodeResource {
 func (cfg *tracerProviderConfig) IsEnable() bool {
 	cfg.mux.RLock()
 	defer cfg.mux.RUnlock()
-	return atomic.LoadUint32(&cfg.enable) == 1
+	return cfg.enable
 }
 
 func (cfg *tracerProviderConfig) SetEnable(enable bool) {
 	cfg.mux.Lock()
 	defer cfg.mux.Unlock()
-	if enable {
-		atomic.StoreUint32(&cfg.enable, 1)
-	} else {
-		atomic.StoreUint32(&cfg.enable, 0)
-	}
+	cfg.enable = enable
+}
+
+func (cfg *tracerProviderConfig) GetSqlExecutor() func() ie.InternalExecutor {
+	cfg.mux.RLock()
+	defer cfg.mux.RUnlock()
+	return cfg.sqlExecutor
 }
 
 // TracerProviderOption configures a TracerProvider.
@@ -148,6 +154,18 @@ func WithFSWriterFactory(f export.FSWriterFactory) tracerProviderOptionFunc {
 	})
 }
 
+func WithExportInterval(secs int) tracerProviderOptionFunc {
+	return tracerProviderOptionFunc(func(cfg *tracerProviderConfig) {
+		cfg.exportInterval = time.Second * time.Duration(secs)
+	})
+}
+
+func WithLongQueryTime(secs float64) tracerProviderOptionFunc {
+	return tracerProviderOptionFunc(func(cfg *tracerProviderConfig) {
+		cfg.longQueryTime = int64(float64(time.Second) * secs)
+	})
+}
+
 func DebugMode(debug bool) tracerProviderOptionFunc {
 	return func(cfg *tracerProviderConfig) {
 		cfg.debugMode = debug
@@ -162,12 +180,16 @@ func WithBatchProcessMode(mode string) tracerProviderOptionFunc {
 
 func WithSQLExecutor(f func() ie.InternalExecutor) tracerProviderOptionFunc {
 	return func(cfg *tracerProviderConfig) {
+		cfg.mux.Lock()
+		defer cfg.mux.Unlock()
 		cfg.sqlExecutor = f
 	}
 }
 
 func WithInitAction(init bool) tracerProviderOptionFunc {
 	return func(cfg *tracerProviderConfig) {
+		cfg.mux.Lock()
+		defer cfg.mux.Unlock()
 		cfg.needInit = init
 	}
 }

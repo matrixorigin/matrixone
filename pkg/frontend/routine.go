@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/util/metric"
 	"github.com/matrixorigin/matrixone/pkg/vm/mempool"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
 )
@@ -88,6 +89,7 @@ func (routine *Routine) Loop(routineCtx context.Context) {
 	var req *Request = nil
 	var err error
 	var resp *Response
+	var counted bool
 	//session for the connection
 	for {
 		quit := false
@@ -95,7 +97,14 @@ func (routine *Routine) Loop(routineCtx context.Context) {
 		case <-routineCtx.Done():
 			logutil.Infof("-----cancel routine")
 			quit = true
+			if counted {
+				metric.ConnectionCounter(routine.GetSession().GetTenantInfo().Tenant).Dec()
+			}
 		case req = <-routine.requestChan:
+			if !counted {
+				counted = true
+				metric.ConnectionCounter(routine.GetSession().GetTenantInfo().Tenant).Inc()
+			}
 		}
 
 		if quit {
