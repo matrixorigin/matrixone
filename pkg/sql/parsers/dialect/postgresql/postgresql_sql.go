@@ -6,8 +6,12 @@ package postgresql
 import (
 	__yyfmt__ "fmt"
 	__yyunsafe__ "unsafe"
+)
 
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree" //line postgresql_sql.y:16
+//line postgresql_sql.y:16
+
+import (
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
 const LEX_ERROR = 57346
