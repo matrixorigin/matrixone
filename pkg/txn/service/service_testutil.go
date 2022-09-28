@@ -37,22 +37,37 @@ import (
 )
 
 // NewTestTxnService create a test TxnService for test
-func NewTestTxnService(t *testing.T, shard uint64, sender rpc.TxnSender, clocker clock.Clock) TxnService {
-	return NewTestTxnServiceWithLog(t, shard, sender, clocker, nil)
+func NewTestTxnService(t *testing.T, shard uint64, sender rpc.TxnSender, clock clock.Clock) TxnService {
+	return NewTestTxnServiceWithLog(t, shard, sender, clock, nil)
 }
 
 // NewTestTxnServiceWithLog is similar to NewTestTxnService, used to recovery tests
 func NewTestTxnServiceWithLog(t *testing.T,
 	shard uint64,
 	sender rpc.TxnSender,
-	clocker clock.Clock,
+	clock clock.Clock,
 	log logservice.Client) TxnService {
+	return NewTestTxnServiceWithLogAndZombie(t,
+		shard,
+		sender,
+		clock,
+		log,
+		time.Minute)
+}
+
+// NewTestTxnServiceWithLogAndZombie is similar to NewTestTxnService, but with more args
+func NewTestTxnServiceWithLogAndZombie(t *testing.T,
+	shard uint64,
+	sender rpc.TxnSender,
+	clock clock.Clock,
+	log logservice.Client,
+	zombie time.Duration) TxnService {
 	return NewTxnService(logutil.GetPanicLoggerWithLevel(zapcore.DebugLevel).With(zap.String("case", t.Name())),
 		NewTestDNShard(shard),
-		NewTestTxnStorage(log, clocker),
+		NewTestTxnStorage(log, clock),
 		sender,
-		clocker,
-		time.Minute).(*service)
+		clock,
+		zombie).(*service)
 }
 
 // NewTestTxnStorage create a TxnStorage used to recovery tests
