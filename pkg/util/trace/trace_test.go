@@ -47,7 +47,7 @@ func Test_initExport(t *testing.T) {
 			name: "disable",
 			args: args{
 				enableTracer: false,
-				config:       &tracerProviderConfig{enable: 0},
+				config:       &tracerProviderConfig{enable: false},
 			},
 			empty: true,
 		},
@@ -56,7 +56,7 @@ func Test_initExport(t *testing.T) {
 			args: args{
 				enableTracer: true,
 				config: &tracerProviderConfig{
-					enable: 1, batchProcessMode: InternalExecutor, sqlExecutor: newDummyExecutorFactory(ch),
+					enable: true, batchProcessMode: InternalExecutor, sqlExecutor: newDummyExecutorFactory(ch),
 				}},
 			empty: false,
 		},
@@ -65,7 +65,7 @@ func Test_initExport(t *testing.T) {
 			args: args{
 				enableTracer: true,
 				config: &tracerProviderConfig{
-					enable: 1, batchProcessMode: FileService, sqlExecutor: newDummyExecutorFactory(ch),
+					enable: true, batchProcessMode: FileService, sqlExecutor: newDummyExecutorFactory(ch),
 				}},
 			empty: false,
 		},

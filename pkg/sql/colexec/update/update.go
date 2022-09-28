@@ -17,6 +17,9 @@ package update
 import (
 	"bytes"
 	"context"
+	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
@@ -71,12 +74,21 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 				}
 			}
 
+			// we need to reorder batch to do null value check
+			batch.Reorder(tmpBat, updateCtx.OrderAttrs)
+			for j := range tmpBat.Vecs {
+				if p.TableDefVec[i].Cols[j].Primary && !p.TableDefVec[i].Cols[j].AutoIncrement {
+					if nulls.Any(tmpBat.Vecs[j].Nsp) {
+						return false, moerr.NewConstraintViolation(fmt.Sprintf("Column '%s' cannot be null", tmpBat.Attrs[j]))
+					}
+				}
+			}
+
 			err := updateCtx.TableSource.Delete(ctx, bat.GetVector(idx), updateCtx.PriKey)
 			if err != nil {
 				return false, err
 			}
 
-			batch.Reorder(tmpBat, updateCtx.OrderAttrs)
 			if err := colexec.UpdateInsertBatch(p.Engine, p.DB[i], ctx, proc, p.TableDefVec[i].Cols, tmpBat, p.TableID[i]); err != nil {
 				return false, err
 			}
@@ -112,6 +124,21 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 			batch.Reorder(tmpBat, updateCtx.OrderAttrs)
 			if err := colexec.UpdateInsertBatch(p.Engine, p.DB[i], ctx, proc, p.TableDefVec[i].Cols, tmpBat, p.TableID[i]); err != nil {
 				return false, err
+			}
+			if updateCtx.CPkeyColDef != nil {
+				err := util.FillCompositePKeyBatch(tmpBat, updateCtx.CPkeyColDef, proc)
+				if err != nil {
+					names := util.SplitCompositePrimaryKeyColumnName(updateCtx.CPkeyColDef.Name)
+					for _, name := range names {
+						for i := range tmpBat.Vecs {
+							if tmpBat.Attrs[i] == name {
+								if nulls.Any(tmpBat.Vecs[i].Nsp) {
+									return false, moerr.NewConstraintViolation(fmt.Sprintf("Column '%s' cannot be null", updateCtx.OrderAttrs[i]))
+								}
+							}
+						}
+					}
+				}
 			}
 			err = updateCtx.TableSource.Write(ctx, tmpBat)
 			if err != nil {

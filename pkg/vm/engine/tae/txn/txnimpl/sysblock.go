@@ -19,6 +19,7 @@ import (
 	"fmt"
 
 	"github.com/RoaringBitmap/roaring"
+	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -149,28 +150,15 @@ func (blk *txnSysBlock) Rows() int {
 	if !blk.isSysTable() {
 		return blk.txnBlock.Rows()
 	}
-	if blk.table.GetID() == catalog.SystemTable_DB_ID {
+	if blk.table.GetID() == pkgcatalog.MO_DATABASE_ID {
 		return blk.dbRows()
-	} else if blk.table.GetID() == catalog.SystemTable_Table_ID {
+	} else if blk.table.GetID() == pkgcatalog.MO_TABLES_ID {
 		return blk.tableRows()
-	} else if blk.table.GetID() == catalog.SystemTable_Columns_ID {
+	} else if blk.table.GetID() == pkgcatalog.MO_COLUMNS_ID {
 		return blk.columnRows()
 	} else {
 		panic("not supported")
 	}
-}
-
-func isPrimaryKey(schema *catalog.Schema, colIdx int) bool {
-	attrName := schema.ColDefs[colIdx].Name
-	switch schema.Name {
-	case catalog.SystemTable_Columns_Name:
-		return attrName == catalog.SystemColAttr_UniqName
-	case catalog.SystemTable_Table_Name:
-		return attrName == catalog.SystemRelAttr_ID
-	case catalog.SystemTable_DB_Name:
-		return attrName == catalog.SystemDBAttr_ID
-	}
-	return schema.IsPartOfPK(colIdx)
 }
 
 func FillColumnRow(table *catalog.TableEntry, attr string, colData containers.Vector) {
@@ -178,52 +166,52 @@ func FillColumnRow(table *catalog.TableEntry, attr string, colData containers.Ve
 	tableID := table.GetID()
 	for i, colDef := range table.GetSchema().ColDefs {
 		switch attr {
-		case catalog.SystemColAttr_UniqName:
+		case pkgcatalog.SystemColAttr_UniqName:
 			colData.Append([]byte(fmt.Sprintf("%d-%s", tableID, colDef.Name)))
-		case catalog.SystemColAttr_AccID:
+		case pkgcatalog.SystemColAttr_AccID:
 			colData.Append(schema.AcInfo.TenantID)
-		case catalog.SystemColAttr_Name:
+		case pkgcatalog.SystemColAttr_Name:
 			colData.Append([]byte(colDef.Name))
-		case catalog.SystemColAttr_Num:
+		case pkgcatalog.SystemColAttr_Num:
 			colData.Append(int32(i + 1))
-		case catalog.SystemColAttr_Type:
+		case pkgcatalog.SystemColAttr_Type:
 			colData.Append(int32(colDef.Type.Oid))
-		case catalog.SystemColAttr_DBID:
+		case pkgcatalog.SystemColAttr_DBID:
 			colData.Append(table.GetDB().GetID())
-		case catalog.SystemColAttr_DBName:
+		case pkgcatalog.SystemColAttr_DBName:
 			colData.Append([]byte(table.GetDB().GetName()))
-		case catalog.SystemColAttr_RelID:
+		case pkgcatalog.SystemColAttr_RelID:
 			colData.Append(tableID)
-		case catalog.SystemColAttr_RelName:
+		case pkgcatalog.SystemColAttr_RelName:
 			colData.Append([]byte(table.GetSchema().Name))
-		case catalog.SystemColAttr_ConstraintType:
-			if isPrimaryKey(table.GetSchema(), i) {
-				colData.Append([]byte(catalog.SystemColPKConstraint))
+		case pkgcatalog.SystemColAttr_ConstraintType:
+			if table.GetSchema().IsPartOfPK(i) {
+				colData.Append([]byte(pkgcatalog.SystemColPKConstraint))
 			} else {
-				colData.Append([]byte(catalog.SystemColNoConstraint))
+				colData.Append([]byte(pkgcatalog.SystemColNoConstraint))
 			}
-		case catalog.SystemColAttr_Length:
+		case pkgcatalog.SystemColAttr_Length:
 			colData.Append(int32(colDef.Type.Width))
-		case catalog.SystemColAttr_NullAbility:
+		case pkgcatalog.SystemColAttr_NullAbility:
 			colData.Append(bool2i8(colDef.NullAbility))
-		case catalog.SystemColAttr_HasExpr:
-			colData.Append(int8(0)) // TODO
-		case catalog.SystemColAttr_DefaultExpr:
-			colData.Append([]byte("")) // TODO
-		case catalog.SystemColAttr_IsDropped:
-			colData.Append(int8(0)) // TODO
-		case catalog.SystemColAttr_IsHidden:
+		case pkgcatalog.SystemColAttr_HasExpr:
+			colData.Append(bool2i8(len(colDef.Default.Expr) > 0))
+		case pkgcatalog.SystemColAttr_DefaultExpr:
+			colData.Append(colDef.Default.Expr)
+		case pkgcatalog.SystemColAttr_IsDropped:
+			colData.Append(int8(0))
+		case pkgcatalog.SystemColAttr_IsHidden:
 			colData.Append(bool2i8(colDef.Hidden))
-		case catalog.SystemColAttr_IsUnsigned:
+		case pkgcatalog.SystemColAttr_IsUnsigned:
 			v := int8(0)
 			switch colDef.Type.Oid {
 			case types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64:
 				v = int8(1)
 			}
 			colData.Append(v)
-		case catalog.SystemColAttr_IsAutoIncrement:
+		case pkgcatalog.SystemColAttr_IsAutoIncrement:
 			colData.Append(bool2i8(colDef.AutoIncrement))
-		case catalog.SystemColAttr_Comment:
+		case pkgcatalog.SystemColAttr_Comment:
 			colData.Append([]byte(colDef.Comment))
 		default:
 			panic("unexpected")
@@ -253,31 +241,31 @@ func (blk *txnSysBlock) getColumnTableData(colIdx int) (view *model.ColumnView, 
 func FillTableRow(table *catalog.TableEntry, attr string, colData containers.Vector) {
 	schema := table.GetSchema()
 	switch attr {
-	case catalog.SystemRelAttr_ID:
+	case pkgcatalog.SystemRelAttr_ID:
 		colData.Append(table.GetID())
-	case catalog.SystemRelAttr_Name:
+	case pkgcatalog.SystemRelAttr_Name:
 		colData.Append([]byte(schema.Name))
-	case catalog.SystemRelAttr_DBName:
+	case pkgcatalog.SystemRelAttr_DBName:
 		colData.Append([]byte(table.GetDB().GetName()))
-	case catalog.SystemRelAttr_DBID:
+	case pkgcatalog.SystemRelAttr_DBID:
 		colData.Append(table.GetDB().GetID())
-	case catalog.SystemRelAttr_Comment:
+	case pkgcatalog.SystemRelAttr_Comment:
 		colData.Append([]byte(table.GetSchema().Comment))
-	case catalog.SystemRelAttr_Partition:
+	case pkgcatalog.SystemRelAttr_Partition:
 		colData.Append([]byte(table.GetSchema().Partition))
-	case catalog.SystemRelAttr_Persistence:
-		colData.Append([]byte(catalog.SystemPersistRel))
-	case catalog.SystemRelAttr_Kind:
+	case pkgcatalog.SystemRelAttr_Persistence:
+		colData.Append([]byte(pkgcatalog.SystemPersistRel))
+	case pkgcatalog.SystemRelAttr_Kind:
 		colData.Append([]byte(table.GetSchema().Relkind))
-	case catalog.SystemRelAttr_CreateSQL:
+	case pkgcatalog.SystemRelAttr_CreateSQL:
 		colData.Append([]byte(table.GetSchema().Createsql))
-	case catalog.SystemRelAttr_Owner:
+	case pkgcatalog.SystemRelAttr_Owner:
 		colData.Append(schema.AcInfo.RoleID)
-	case catalog.SystemRelAttr_Creator:
+	case pkgcatalog.SystemRelAttr_Creator:
 		colData.Append(schema.AcInfo.UserID)
-	case catalog.SystemRelAttr_CreateAt:
+	case pkgcatalog.SystemRelAttr_CreateAt:
 		colData.Append(schema.AcInfo.CreateAt)
-	case catalog.SystemRelAttr_AccID:
+	case pkgcatalog.SystemRelAttr_AccID:
 		colData.Append(schema.AcInfo.TenantID)
 	default:
 		panic("unexpected")
@@ -304,21 +292,21 @@ func (blk *txnSysBlock) getRelTableData(colIdx int) (view *model.ColumnView, err
 
 func FillDBRow(db *catalog.DBEntry, attr string, colData containers.Vector) {
 	switch attr {
-	case catalog.SystemDBAttr_ID:
+	case pkgcatalog.SystemDBAttr_ID:
 		colData.Append(db.GetID())
-	case catalog.SystemDBAttr_Name:
+	case pkgcatalog.SystemDBAttr_Name:
 		colData.Append([]byte(db.GetName()))
-	case catalog.SystemDBAttr_CatalogName:
-		colData.Append([]byte(catalog.SystemCatalogName))
-	case catalog.SystemDBAttr_CreateSQL:
+	case pkgcatalog.SystemDBAttr_CatalogName:
+		colData.Append([]byte(pkgcatalog.SystemCatalogName))
+	case pkgcatalog.SystemDBAttr_CreateSQL:
 		colData.Append([]byte("todosql"))
-	case catalog.SystemDBAttr_Owner:
+	case pkgcatalog.SystemDBAttr_Owner:
 		colData.Append(db.GetRoleID())
-	case catalog.SystemDBAttr_Creator:
+	case pkgcatalog.SystemDBAttr_Creator:
 		colData.Append(db.GetUserID())
-	case catalog.SystemDBAttr_CreateAt:
+	case pkgcatalog.SystemDBAttr_CreateAt:
 		colData.Append(db.GetCreateAt())
-	case catalog.SystemDBAttr_AccID:
+	case pkgcatalog.SystemDBAttr_AccID:
 		colData.Append(db.GetTenantID())
 	default:
 		panic("unexpected")
@@ -344,11 +332,11 @@ func (blk *txnSysBlock) GetColumnDataById(colIdx int, buffer *bytes.Buffer) (vie
 	if !blk.isSysTable() {
 		return blk.txnBlock.GetColumnDataById(colIdx, buffer)
 	}
-	if blk.table.GetID() == catalog.SystemTable_DB_ID {
+	if blk.table.GetID() == pkgcatalog.MO_DATABASE_ID {
 		return blk.getDBTableData(colIdx)
-	} else if blk.table.GetID() == catalog.SystemTable_Table_ID {
+	} else if blk.table.GetID() == pkgcatalog.MO_TABLES_ID {
 		return blk.getRelTableData(colIdx)
-	} else if blk.table.GetID() == catalog.SystemTable_Columns_ID {
+	} else if blk.table.GetID() == pkgcatalog.MO_COLUMNS_ID {
 		return blk.getColumnTableData(colIdx)
 	} else {
 		panic("not supported")

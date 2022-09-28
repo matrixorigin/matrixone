@@ -25,7 +25,8 @@ import (
 )
 
 var (
-	ErrNoSpace = moerr.NewInternalError("buffer: no space left")
+	ErrNoSpace  = moerr.NewInternalError("buffer: no space left")
+	ErrNotFound = moerr.NewInternalError("buffer: node not found")
 )
 
 type MemoryFreeFunc func(IMemoryNode)
@@ -43,7 +44,7 @@ type IMemoryNode interface {
 
 type INodeHandle interface {
 	io.Closer
-	GetID() common.ID
+	Key() any
 	GetNode() INode
 }
 
@@ -53,18 +54,46 @@ type INode interface {
 	common.IRef
 	RLock()
 	RUnlock()
-	GetID() common.ID
+	Key() any
+
+	// unload the data return the size quota back
 	Unload()
+	// whether the node unloadable
 	Unloadable() bool
+	// whether the node is loaded
 	IsLoaded() bool
+	// load data into the node
 	Load()
+
+	// increase the node reference count and get a handle of the node
 	MakeHandle() INodeHandle
+
+	// true if the node can be destoryed and hard evicted from the node manager
+	// false if the node can only be unloaded on evicted
+	HardEvictable() bool
+
+	// destory the node resources
+	// node manager destoryes a node when Close a node
 	Destroy()
+
+	// the size of the node
 	Size() uint64
+
+	// the iteration of the node.
+	// it is increased by 1 when the reference count is 0 during UnPin
 	Iteration() uint64
 	IncIteration() uint64
+
+	// whether a node is closed
 	IsClosed() bool
+	// try to close a node. It cannot be closed when the reference count is not 0
+	// true if closed and false otherwise
+	TryClose() bool
+
+	// the node state
 	GetState() NodeState
+
+	// expand a node size and execute the callback
 	Expand(uint64, func() error) error
 }
 
@@ -78,7 +107,9 @@ type INodeManager interface {
 	RegisterNode(INode)
 	UnregisterNode(INode)
 	Pin(INode) INodeHandle
+	PinByKey(any) (INodeHandle, error)
 	TryPin(INode, time.Duration) (INodeHandle, error)
+	TryPinByKey(any, time.Duration) (INodeHandle, error)
 	Unpin(INode)
 	MakeRoom(uint64) bool
 }
@@ -92,8 +123,10 @@ type ISizeLimiter interface {
 type IEvictHandle interface {
 	sync.Locker
 	IsClosed() bool
+	TryClose() bool
 	Unload()
 	Unloadable() bool
+	HardEvictable() bool
 	Iteration() uint64
 }
 

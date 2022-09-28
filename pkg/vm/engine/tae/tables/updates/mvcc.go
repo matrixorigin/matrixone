@@ -218,7 +218,7 @@ func (n *MVCCHandle) AddAppendNodeLocked(
 	txn txnif.AsyncTxn,
 	startRow uint32,
 	maxRow uint32) (an *AppendNode, created bool) {
-	if n.appends.IsEmpty() || n.appends.IsCommitted() {
+	if n.appends.IsEmpty() || n.appends.SearchNode(NewCommittedAppendNode(txn.GetStartTS(), 0, 0, nil)) == nil {
 		an = NewAppendNode(txn, startRow, maxRow, n)
 		n.appends.InsertNode(an)
 		created = true
@@ -231,7 +231,9 @@ func (n *MVCCHandle) AddAppendNodeLocked(
 	}
 	return
 }
-
+func (n *MVCCHandle) AppendCommitted() bool {
+	return n.appends.IsCommitted()
+}
 func (n *MVCCHandle) DeleteAppendNodeLocked(node *AppendNode) {
 	n.appends.DeleteNode(node)
 }

@@ -27,13 +27,16 @@ type testNodeHandle struct {
 }
 
 func (h *testNodeHandle) load() {
-	h.t.Logf("Load %s", h.id.BlockString())
+	id := h.key.(common.ID)
+	h.t.Logf("Load %s", id.BlockString())
 }
 func (h *testNodeHandle) unload() {
-	h.t.Logf("Unload %s", h.id.BlockString())
+	id := h.key.(common.ID)
+	h.t.Logf("Unload %s", id.BlockString())
 }
 func (h *testNodeHandle) destroy() {
-	h.t.Logf("Destroy %s", h.id.BlockString())
+	id := h.key.(common.ID)
+	h.t.Logf("Destroy %s", id.BlockString())
 }
 
 func newTestNodeHandle(mgr *nodeManager, id common.ID, size uint64, t *testing.T) *testNodeHandle {

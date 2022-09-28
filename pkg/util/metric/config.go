@@ -34,7 +34,7 @@ var (
 )
 
 func initConfigByParamaterUnit(SV *config.ObservabilityParameters) {
-	setExportToProm(!SV.DisableMetricToProm)
+	setExportToProm(SV.EnableMetricToProm)
 }
 
 func envOrDefaultBool(key string, defaultValue int32) int32 {

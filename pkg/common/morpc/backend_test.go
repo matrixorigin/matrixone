@@ -696,12 +696,9 @@ func (tm *testMessage) SetPayloadField(data []byte) {
 	tm.payload = data
 }
 
-func newTestCodec() Codec {
-	return NewMessageCodec(func() Message { return messagePool.Get().(*testMessage) }, 1024)
-}
-
-func newTestCodecWithChecksum() Codec {
-	return NewMessageCodecWithChecksum(func() Message { return messagePool.Get().(*testMessage) }, 1024)
+func newTestCodec(options ...CodecOption) Codec {
+	options = append(options, WithCodecPayloadCopyBufferSize(1024))
+	return NewMessageCodec(func() Message { return messagePool.Get().(*testMessage) }, options...)
 }
 
 var (

@@ -19,6 +19,15 @@ The LOAD DATA statement reads rows from a csv file into a table at a very high s
         [STARTING BY 'string']
         [TERMINATED BY 'string']
     ]
+    [IGNORE number {LINES | ROWS}]
+```
+
+- `TERMINATED BY`, `ENCLOSED BY`, and other separators in meanings are the same as `SELECT INTO`.
+
+- The IGNORE number LINES clause can be used to ignore lines at the start of the file. For example, you can use `IGNORE 1 LINES` to skip an initial header line containing column names:
+
+```
+LOAD DATA INFILE '/tmp/test.txt' INTO TABLE test IGNORE 1 LINES;
 ```
 
 ## **Examples**

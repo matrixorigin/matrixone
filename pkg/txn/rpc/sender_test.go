@@ -48,7 +48,7 @@ func TestSendWithSingleRequest(t *testing.T) {
 		})
 	})
 
-	sd, err := NewSender(nil)
+	sd, err := NewSender(newTestClock(), nil)
 	assert.NoError(t, err)
 	defer func() {
 		assert.NoError(t, sd.Close())
@@ -89,7 +89,7 @@ func TestSendWithMultiDN(t *testing.T) {
 		})
 	}
 
-	sd, err := NewSender(nil)
+	sd, err := NewSender(newTestClock(), nil)
 	assert.NoError(t, err)
 	defer func() {
 		assert.NoError(t, sd.Close())
@@ -148,18 +148,21 @@ func TestSendWithMultiDNAndLocal(t *testing.T) {
 		})
 	}
 
-	sd, err := NewSender(nil, WithSenderLocalDispatch(func(d metadata.DNShard) TxnRequestHandleFunc {
-		if d.Address != testDN1Addr {
-			return nil
-		}
-		sequence := uint64(0)
-		return func(_ context.Context, req *txn.TxnRequest, resp *txn.TxnResponse) error {
-			v := atomic.AddUint64(&sequence, 1)
-			resp.RequestID = req.RequestID
-			resp.CNOpResponse = &txn.CNOpResponse{Payload: []byte(fmt.Sprintf("%s-%d", req.GetTargetDN().Address, v))}
-			return nil
-		}
-	}))
+	sd, err := NewSender(
+		newTestClock(),
+		nil,
+		WithSenderLocalDispatch(func(d metadata.DNShard) TxnRequestHandleFunc {
+			if d.Address != testDN1Addr {
+				return nil
+			}
+			sequence := uint64(0)
+			return func(_ context.Context, req *txn.TxnRequest, resp *txn.TxnResponse) error {
+				v := atomic.AddUint64(&sequence, 1)
+				resp.RequestID = req.RequestID
+				resp.CNOpResponse = &txn.CNOpResponse{Payload: []byte(fmt.Sprintf("%s-%d", req.GetTargetDN().Address, v))}
+				return nil
+			}
+		}))
 	assert.NoError(t, err)
 	defer func() {
 		assert.NoError(t, sd.Close())
@@ -211,12 +214,15 @@ func TestLocalStreamDestroy(t *testing.T) {
 }
 
 func BenchmarkLocalSend(b *testing.B) {
-	sd, err := NewSender(nil, WithSenderLocalDispatch(func(d metadata.DNShard) TxnRequestHandleFunc {
-		return func(_ context.Context, req *txn.TxnRequest, resp *txn.TxnResponse) error {
-			resp.RequestID = req.RequestID
-			return nil
-		}
-	}))
+	sd, err := NewSender(
+		newTestClock(),
+		nil,
+		WithSenderLocalDispatch(func(d metadata.DNShard) TxnRequestHandleFunc {
+			return func(_ context.Context, req *txn.TxnRequest, resp *txn.TxnResponse) error {
+				resp.RequestID = req.RequestID
+				return nil
+			}
+		}))
 	assert.NoError(b, err)
 	defer func() {
 		assert.NoError(b, sd.Close())
@@ -246,7 +252,9 @@ func BenchmarkLocalSend(b *testing.B) {
 }
 
 func TestNewSenderWithOptions(t *testing.T) {
-	s, err := NewSender(nil, WithSenderPayloadBufferSize(100),
+	s, err := NewSender(newTestClock(),
+		nil,
+		WithSenderPayloadBufferSize(100),
 		WithSenderBackendOptions(morpc.WithBackendBusyBufferSize(1)))
 	assert.NoError(t, err)
 	assert.Equal(t, 100, s.(*sender).options.payloadCopyBufferSize)
@@ -256,7 +264,9 @@ func TestNewSenderWithOptions(t *testing.T) {
 
 func newTestTxnServer(t assert.TestingT, addr string) morpc.RPCServer {
 	assert.NoError(t, os.RemoveAll(addr[7:]))
-	codec := morpc.NewMessageCodecWithChecksum(func() morpc.Message { return &txn.TxnRequest{} }, 0)
+	codec := morpc.NewMessageCodec(func() morpc.Message { return &txn.TxnRequest{} },
+		morpc.WithCodecIntegrationHLC(newTestClock()),
+		morpc.WithCodecEnableChecksum())
 	s, err := morpc.NewRPCServer("test-txn-server", addr, codec)
 	assert.NoError(t, err)
 	assert.NoError(t, s.Start())

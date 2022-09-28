@@ -282,6 +282,7 @@ func constructInsert(n *plan.Node, eg engine.Engine, txnOperator TxnOperator) (*
 		Engine:        eg,
 		DB:            db,
 		TableID:       relation.GetTableID(ctx),
+		CPkeyColDef:   n.TableDef.CompositePkey,
 	}, nil
 }
 
@@ -316,6 +317,7 @@ func constructUpdate(n *plan.Node, eg engine.Engine, txnOperator TxnOperator) (*
 			OtherAttrs:  updateCtx.OtherAttrs,
 			OrderAttrs:  updateCtx.OrderAttrs,
 			TableSource: relation,
+			CPkeyColDef: updateCtx.CompositePkey,
 		}
 	}
 	return &update.Argument{

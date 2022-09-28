@@ -249,6 +249,69 @@ var builtins = map[int]Functions{
 			},
 		},
 	},
+	HOUR: {
+		Id: HOUR,
+		Overloads: []Function{
+			{
+				Index:     0,
+				Flag:      plan.Function_STRICT,
+				Layout:    STANDARD_FUNCTION,
+				Args:      []types.T{types.T_timestamp},
+				ReturnTyp: types.T_uint8,
+				Fn:        unary.TimestampToHour,
+			},
+			{
+				Index:     1,
+				Flag:      plan.Function_STRICT,
+				Layout:    STANDARD_FUNCTION,
+				Args:      []types.T{types.T_datetime},
+				ReturnTyp: types.T_uint8,
+				Fn:        unary.DatetimeToHour,
+			},
+		},
+	},
+	MINUTE: {
+		Id: MINUTE,
+		Overloads: []Function{
+			{
+				Index:     0,
+				Flag:      plan.Function_STRICT,
+				Layout:    STANDARD_FUNCTION,
+				Args:      []types.T{types.T_timestamp},
+				ReturnTyp: types.T_uint8,
+				Fn:        unary.TimestampToMinute,
+			},
+			{
+				Index:     1,
+				Flag:      plan.Function_STRICT,
+				Layout:    STANDARD_FUNCTION,
+				Args:      []types.T{types.T_datetime},
+				ReturnTyp: types.T_uint8,
+				Fn:        unary.DatetimeToMinute,
+			},
+		},
+	},
+	SECOND: {
+		Id: SECOND,
+		Overloads: []Function{
+			{
+				Index:     0,
+				Flag:      plan.Function_STRICT,
+				Layout:    STANDARD_FUNCTION,
+				Args:      []types.T{types.T_timestamp},
+				ReturnTyp: types.T_uint8,
+				Fn:        unary.TimestampToSecond,
+			},
+			{
+				Index:     1,
+				Flag:      plan.Function_STRICT,
+				Layout:    STANDARD_FUNCTION,
+				Args:      []types.T{types.T_datetime},
+				ReturnTyp: types.T_uint8,
+				Fn:        unary.DatetimeToSecond,
+			},
+		},
+	},
 	DAY: {
 		Id: DAY,
 		Overloads: []Function{

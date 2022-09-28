@@ -305,6 +305,8 @@ func (node *PrivilegeType) ToString() string {
 		return "connect"
 	case PRIVILEGE_TYPE_STATIC_OWNERSHIP:
 		return "ownership"
+	case PRIVILEGE_TYPE_STATIC_MANAGE_GRANTS:
+		return "manage"
 	default:
 		return "Unknown PrivilegeType"
 	}

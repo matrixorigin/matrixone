@@ -50,12 +50,13 @@ func NewFlushBlkTask(
 
 func (task *flushBlkTask) Scope() *common.ID { return task.meta.AsCommonID() }
 
-func (task *flushBlkTask) Execute() (err error) {
-	if err = BuildBlockIndex(task.file, task.meta, task.data); err != nil {
-		return
+func (task *flushBlkTask) Execute() error {
+	block, err := task.file.WriteBatch(task.data, task.ts)
+	if err != nil {
+		return err
 	}
-	if err = task.file.WriteBatch(task.data, task.ts); err != nil {
-		return
+	if err = BuildBlockIndex(task.file.GetWriter(), block, task.meta, task.data); err != nil {
+		return err
 	}
 	return task.file.Sync()
 }

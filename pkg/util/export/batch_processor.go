@@ -68,7 +68,16 @@ func newBufferHolder(name batchpipe.HasName, impl batchpipe.PipeImpl[batchpipe.H
 	}
 	b.mux.Lock()
 	defer b.mux.Unlock()
+	b.trigger = time.AfterFunc(time.Hour, func() {})
+	return b
+}
+
+// Start separated from newBufferHolder, should call only once, fix trigger started before first Add
+func (b *bufferHolder) Start() {
+	b.mux.Lock()
+	defer b.mux.Unlock()
 	reminder := b.buffer.(batchpipe.Reminder)
+	b.trigger.Stop()
 	b.trigger = time.AfterFunc(reminder.RemindNextAfter(), func() {
 		if b.mux.TryLock() {
 			if b.readonly == READONLY {
@@ -80,7 +89,6 @@ func newBufferHolder(name batchpipe.HasName, impl batchpipe.PipeImpl[batchpipe.H
 		}
 		b.signal(b)
 	})
-	return b
 }
 
 // Add call buffer.Add(), while bufferHolder is NOT readonly
@@ -243,6 +251,7 @@ loop:
 						buf = newBufferHolder(i, impl, awakeBuffer(c))
 						c.buffers[i.GetName()] = buf
 						buf.Add(i)
+						buf.Start()
 					}
 				}
 				c.mux.Unlock()
