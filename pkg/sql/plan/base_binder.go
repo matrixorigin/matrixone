@@ -877,16 +877,6 @@ func bindFuncExprImplByPlanExpr(name string, args []*Expr) (*plan.Expr, error) {
 		if args[1].Typ.Id == int32(types.T_any) {
 			args[1].Typ.Id = int32(types.T_varchar)
 		}
-	// rewrite from_unixtime(a, b) to date_format(from_unixtime(a), b)
-	case "from_unixtime":
-		if len(args) == 2 {
-			newExpr, err := bindFuncExprImplByPlanExpr("from_unixtime", []*plan.Expr{args[0]})
-			if err != nil {
-				return nil, err
-			}
-			name = "date_format"
-			args = []*plan.Expr{newExpr, args[1]}
-		}
 	}
 
 	// get args(exprs) & types

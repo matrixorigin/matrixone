@@ -17,12 +17,12 @@ package compile
 import (
 	"context"
 	"fmt"
-
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
@@ -51,104 +51,180 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/minus"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/offset"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/order"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/output"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/product"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/projection"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/restrict"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/semi"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/single"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/top"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"time"
 )
+
+// messageHandleHelper a structure records some elements to help handle messages.
+type messageHandleHelper struct {
+	storeEngine engine.Engine
+	fileService fileservice.FileService
+	acquirer    func() morpc.Message
+}
+
+// processHelper a structure records information about source process. and to help
+// rebuild the process in the remote node.
+type processHelper struct {
+	id               string
+	lim              process.Limitation
+	unixTime         int64
+	txnOperator      client.TxnOperator
+	txnClient        client.TxnClient
+	sessionInfo      process.SessionInfo
+	analysisNodeList []int32
+}
 
 // CnServerMessageHandler deal the client message that received at cn-server.
 // the message is always *pipeline.Message here. It's a byte array which encoded by method encodeScope.
 // write back Analysis Information and error info if error occurs to client.
-func CnServerMessageHandler(ctx context.Context, message morpc.Message, cs morpc.ClientSession) error {
-	var errCode []byte = nil
-	// decode message and run it, get final analysis information and err info.
-	analysis, err := pipelineMessageHandle(ctx, message, cs)
-	if err != nil {
-		errCode = []byte(err.Error())
+func CnServerMessageHandler(ctx context.Context, message morpc.Message,
+	cs morpc.ClientSession,
+	storeEngine engine.Engine, fileService fileservice.FileService, cli client.TxnClient, messageAcquirer func() morpc.Message) error {
+	var errData []byte
+	// structure to help handle the message.
+	helper := &messageHandleHelper{
+		storeEngine: storeEngine,
+		fileService: fileService,
+		acquirer:    messageAcquirer,
 	}
-	return cs.Write(ctx, &pipeline.Message{Sid: pipeline.MessageEnd, Code: errCode, Analyse: analysis})
+	// decode message and run it, get final analysis information and err info.
+	analysis, err := pipelineMessageHandle(ctx, message, cs, helper, cli)
+	if err != nil {
+		errData = pipeline.EncodedMessageError(err)
+	}
+	backMessage := messageAcquirer().(*pipeline.Message)
+	backMessage.Id = message.GetID()
+	backMessage.Sid = pipeline.MessageEnd
+	backMessage.Err = errData
+	backMessage.Analyse = analysis
+	return cs.Write(ctx, backMessage)
 }
 
-func pipelineMessageHandle(ctx context.Context, message morpc.Message, cs morpc.ClientSession) (anaData []byte, err error) {
+func pipelineMessageHandle(ctx context.Context, message morpc.Message, cs morpc.ClientSession, messageHelper *messageHandleHelper, cli client.TxnClient) (anaData []byte, err error) {
+	var c *Compile
+	var s *Scope
+	var procHelper *processHelper
+
 	m, ok := message.(*pipeline.Message)
 	if !ok {
 		panic("unexpected message type for cn-server")
 	}
-	c := newCompile(ctx)
-	var s *Scope
+
+	// generate Compile-structure to run scope.
+	procHelper, err = generateProcessHelper(m.GetProcInfoData(), cli)
+	if err != nil {
+		return nil, err
+	}
+	c = newCompile(ctx, message, procHelper, messageHelper, cs)
+
+	// decode and run the scope.
 	s, err = decodeScope(m.GetData(), c.proc)
 	if err != nil {
 		return nil, err
 	}
-	// refactor the last operator connect to output
-	refactorScope(ctx, s, cs)
+	refactorScope(c, c.ctx, s)
 
-	err = s.Run(c)
+	err = s.ParallelRun(c)
 	if err != nil {
 		return nil, err
 	}
-	// get analyse related information
-	if query, ok := s.Plan.Plan.(*plan.Plan_Query); ok {
-		nodes := query.Query.GetNodes()
-		anas := &pipeline.AnalysisList{}
-		anas.List = make([]*plan.AnalyzeInfo, len(nodes))
-		for i := range anas.List {
-			anas.List[i] = nodes[i].AnalyzeInfo
-		}
-		anaData, err = anas.Marshal()
-		if err != nil {
-			return nil, err
-		}
-		return anaData, nil
+	// encode analysis info and return.
+	anas := &pipeline.AnalysisList{
+		List: make([]*plan.AnalyzeInfo, len(c.proc.AnalInfos)),
 	}
-	return nil, nil
+	for i := range anas.List {
+		anas.List[i] = convertToPlanAnalyzeInfo(c.proc.AnalInfos[i])
+	}
+	return anas.Marshal()
 }
 
-// remoteRun sends a scope to a remote node for execution, and wait to receive the back message.
-// the back message is always *pipeline.Message but has three cases.
-// 1. ErrMessage
-// 2. End Message with the result of analysis
-// 3. Batch Message
+// remoteRun sends a scope to remote node for execution, and wait to receive the back message.
+// the back message is always *pipeline.Message but contains three cases.
+// 1. Message with error information
+// 2. Message with end flag and the result of analysis
+// 3. Batch Message with batch data
 func (s *Scope) remoteRun(c *Compile) error {
 	// encode the scope
+	// the last instruction of remote-run scope must be `connect`, it doesn't need serialization work.
+	// just ignore this instruction when doing serialization work and recover at the end in order to receive the returned batch.
+	n := len(s.Instructions) - 1
+	con := s.Instructions[n]
+	s.Instructions = s.Instructions[:n]
 	sData, errEncode := encodeScope(s)
 	if errEncode != nil {
 		return errEncode
 	}
+	s.Instructions = append(s.Instructions, con)
+
+	// encode the process related information
+	pData, errEncodeProc := encodeProcessInfo(c.proc)
+	if errEncodeProc != nil {
+		return errEncodeProc
+	}
+
+	// get the stream-sender
+	streamSender, errStream := cnclient.GetStreamSender(s.NodeInfo.Addr)
+	if errStream != nil {
+		return errStream
+	}
+	defer func(streamSender morpc.Stream) {
+		_ = streamSender.Close()
+	}(streamSender)
 
 	// send encoded message
-	message := &pipeline.Message{Data: sData}
-	r, errSend := cnclient.Client.Send(c.ctx, s.NodeInfo.Addr, message)
+	// mo-rpc send message requires that context should have its own timeout.
+	// TODO: get dead time from config file may suitable.
+	if _, ok := c.ctx.Deadline(); !ok {
+		var cancel context.CancelFunc
+		c.ctx, cancel = context.WithTimeout(c.ctx, time.Second*10000)
+		_ = cancel
+	}
+
+	message := cnclient.AcquireMessage()
+	{
+		message.Id = streamSender.ID()
+		message.Data = sData
+		message.ProcInfoData = pData
+	}
+
+	errSend := streamSender.Send(c.ctx, message)
 	if errSend != nil {
 		return errSend
 	}
-	defer r.Close()
 
 	// range to receive.
 	arg := s.Instructions[len(s.Instructions)-1].Arg.(*connector.Argument)
+	messagesReceive, errReceive := streamSender.Receive()
+	if errReceive != nil {
+		return errReceive
+	}
+	var val morpc.Message
 	for {
-		val, errReceive := r.Get()
-		if errReceive != nil {
-			return errReceive
+		select {
+		case <-c.ctx.Done():
+			return moerr.NewRPCTimeout()
+		case val = <-messagesReceive:
 		}
+
 		m := val.(*pipeline.Message)
-
-		errMessage := m.GetCode()
-		if len(errMessage) > 0 {
-			return moerr.NewInternalError(string(errMessage))
+		if err := pipeline.DecodeMessageError(m); err != nil {
+			return err
 		}
 
-		sid := m.GetID()
-		if sid == pipeline.MessageEnd {
-			// get analyse information
+		if m.IsEndMessage() {
 			anaData := m.GetAnalyse()
 			if len(anaData) > 0 {
 				// decode analyse
@@ -159,6 +235,7 @@ func (s *Scope) remoteRun(c *Compile) error {
 				}
 				mergeAnalyseInfo(c.anal, ana)
 			}
+			sendToConnectOperator(arg, nil)
 			break
 		}
 		// decoded message
@@ -171,8 +248,6 @@ func (s *Scope) remoteRun(c *Compile) error {
 
 	return nil
 }
-
-var _ = new(Scope).remoteRun
 
 // encodeScope generate a pipeline.Pipeline from Scope, encode pipeline, and returns.
 func encodeScope(s *Scope) ([]byte, error) {
@@ -204,8 +279,80 @@ func decodeScope(data []byte, proc *process.Process) (*Scope, error) {
 	return s, fillInstructionsForScope(s, ctx, p)
 }
 
-func refactorScope(_ context.Context, _ *Scope, _ morpc.ClientSession) {
-	// refactor the scope
+// encodeProcessInfo get needed information from proc, and do serialization work.
+func encodeProcessInfo(proc *process.Process) ([]byte, error) {
+	procInfo := &pipeline.ProcessInfo{}
+	{
+		procInfo.Id = proc.Id
+		procInfo.Lim = convertToPipelineLimitation(proc.Lim)
+		procInfo.UnixTime = proc.UnixTime
+		snapshot, err := proc.TxnOperator.Snapshot()
+		if err != nil {
+			return nil, err
+		}
+		procInfo.Snapshot = string(snapshot)
+		procInfo.AnalysisNodeList = make([]int32, len(proc.AnalInfos))
+		for i := range procInfo.AnalysisNodeList {
+			procInfo.AnalysisNodeList[i] = proc.AnalInfos[i].NodeId
+		}
+	}
+	{ // session info
+		timeBytes, err := time.Time{}.In(proc.SessionInfo.TimeZone).MarshalBinary()
+		if err != nil {
+			return nil, err
+		}
+
+		procInfo.SessionInfo = &pipeline.SessionInfo{
+			User:         proc.SessionInfo.GetUser(),
+			Host:         proc.SessionInfo.GetHost(),
+			Role:         proc.SessionInfo.GetRole(),
+			ConnectionId: proc.SessionInfo.GetConnectionID(),
+			Database:     proc.SessionInfo.GetDatabase(),
+			Version:      proc.SessionInfo.GetVersion(),
+			TimeZone:     timeBytes,
+		}
+	}
+	return procInfo.Marshal()
+}
+
+// generateProcessHelper generate the processHelper by encoded process info.
+func generateProcessHelper(data []byte, cli client.TxnClient) (*processHelper, error) {
+	procInfo := &pipeline.ProcessInfo{}
+	err := procInfo.Unmarshal(data)
+	if err != nil {
+		return nil, err
+	}
+
+	result := &processHelper{
+		id:               procInfo.Id,
+		lim:              convertToProcessLimitation(procInfo.Lim),
+		unixTime:         procInfo.UnixTime,
+		txnClient:        cli,
+		analysisNodeList: procInfo.GetAnalysisNodeList(),
+	}
+	result.txnOperator, err = cli.NewWithSnapshot([]byte(procInfo.Snapshot))
+	if err != nil {
+		return nil, err
+	}
+	result.sessionInfo, err = convertToProcessSessionInfo(procInfo.SessionInfo)
+	if err != nil {
+		return nil, err
+	}
+
+	return result, nil
+}
+
+func refactorScope(c *Compile, _ context.Context, s *Scope) {
+	// adjust Remote to Parallel
+	s.Magic = Parallel
+	// refactor the scope, set an output instruction at the last of scope.
+	s.Instructions = append(s.Instructions, vm.Instruction{
+		Op:  vm.Output,
+		Idx: -1, // useless
+		Arg: &output.Argument{Data: nil, Func: c.fill},
+	})
+	c.proc = s.Proc
+	c.scope = s
 }
 
 // fillPipeline convert the scope to pipeline.Pipeline structure through 2 iterations.
@@ -220,7 +367,7 @@ func fillPipeline(s *Scope) (*pipeline.Pipeline, error) {
 	if err != nil {
 		return nil, err
 	}
-	if _, err := fillInstructionsForPipeline(s, ctx, p, ctxId); err != nil {
+	if _, err = fillInstructionsForPipeline(s, ctx, p, ctxId); err != nil {
 		return nil, err
 	}
 	return p, nil
@@ -549,7 +696,6 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 			Ibucket: t.IBucket,
 			Nbucket: t.NBucket,
 		}
-	// may useless.
 	case *merge.Argument:
 	case *mergegroup.Argument:
 		in.Agg = &pipeline.Group{
@@ -574,7 +720,7 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 		}
 		in.Connect = &pipeline.Connector{
 			PipelineId:     ctx0.id,
-			ConnectorIndex: idx, // receiver
+			ConnectorIndex: idx,
 		}
 	case *mark.Argument:
 		in.MarkJoin = &pipeline.MarkJoin{
@@ -768,7 +914,6 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext) (vm.In
 		v.Arg = &connector.Argument{
 			Reg: ctx.root.getRegister(t.PipelineId, t.ConnectorIndex),
 		}
-	// may useless
 	case vm.Merge:
 		v.Arg = &merge.Argument{}
 	case vm.MergeGroup:
@@ -798,28 +943,41 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext) (vm.In
 	return v, nil
 }
 
-// newCompile init a new compile for remote run.
-func newCompile(
-	ctx context.Context,
-) *Compile {
-	// not implement now, fill method should send by stream
-	c := &Compile{
-		ctx: ctx,
-		proc: process.New(
-			ctx,
-			mheap.New(guest.New(1<<30, host.New(1<<20))),
-			nil, //TODO must set txn client
-			nil, //TODO must set txn operator
-			nil, //TODO must set file service
-		),
+// newCompile generates a new compile for remote run.
+func newCompile(ctx context.Context, message morpc.Message, pHelper *processHelper, mHelper *messageHandleHelper, cs morpc.ClientSession) *Compile {
+	proc := process.New(
+		ctx,
+		mheap.New(guest.New(1<<30, host.New(1<<30))),
+		pHelper.txnClient,
+		pHelper.txnOperator,
+		mHelper.fileService,
+	)
+	proc.UnixTime = pHelper.unixTime
+	proc.Id = pHelper.id
+	proc.Lim = pHelper.lim
+	proc.SessionInfo = pHelper.sessionInfo
+	proc.AnalInfos = make([]*process.AnalyzeInfo, len(pHelper.analysisNodeList))
+	for i := range proc.AnalInfos {
+		proc.AnalInfos[i].NodeId = pHelper.analysisNodeList[i]
 	}
-	//c.fill = func(a any, b *batch.Batch) error {
-	//	stream, err := CNClient.NewStream("target")
-	//	if err != nil {
-	//		return err
-	//	}
-	//	stream.Send()
-	//}
+
+	c := &Compile{
+		ctx:  ctx,
+		proc: proc,
+		e:    mHelper.storeEngine,
+		anal: &anaylze{},
+	}
+
+	c.fill = func(a any, b *batch.Batch) error {
+		encodeData, errEncode := types.Encode(b)
+		if errEncode != nil {
+			return errEncode
+		}
+		m := mHelper.acquirer().(*pipeline.Message)
+		m.Id = message.GetID()
+		m.Data = encodeData
+		return cs.Write(ctx, m)
+	}
 	return c
 }
 
@@ -950,9 +1108,66 @@ func convertToResultPos(relList, colList []int32) []colexec.ResultPos {
 	return res
 }
 
+// convert process.Limitation to pipeline.ProcessLimitation
+func convertToPipelineLimitation(lim process.Limitation) *pipeline.ProcessLimitation {
+	return &pipeline.ProcessLimitation{
+		Size:          lim.Size,
+		BatchRows:     lim.BatchRows,
+		BatchSize:     lim.BatchSize,
+		PartitionRows: lim.PartitionRows,
+		ReaderSize:    lim.ReaderSize,
+	}
+}
+
+// convert pipeline.ProcessLimitation to process.Limitation
+func convertToProcessLimitation(lim *pipeline.ProcessLimitation) process.Limitation {
+	return process.Limitation{
+		Size:          lim.Size,
+		BatchRows:     lim.BatchRows,
+		BatchSize:     lim.BatchSize,
+		PartitionRows: lim.PartitionRows,
+		ReaderSize:    lim.ReaderSize,
+	}
+}
+
+// convert pipeline.SessionInfo to process.SessionInfo
+func convertToProcessSessionInfo(sei *pipeline.SessionInfo) (process.SessionInfo, error) {
+	sessionInfo := process.SessionInfo{
+		User:         sei.User,
+		Host:         sei.Host,
+		Role:         sei.Role,
+		ConnectionID: sei.ConnectionId,
+		Database:     sei.Database,
+		Version:      sei.Version,
+	}
+	t := time.Time{}
+	err := t.UnmarshalBinary(sei.TimeZone)
+	if err != nil {
+		return sessionInfo, nil
+	}
+	sessionInfo.TimeZone = t.Location()
+	return sessionInfo, nil
+}
+
+func convertToPlanAnalyzeInfo(info *process.AnalyzeInfo) *plan.AnalyzeInfo {
+	return &plan.AnalyzeInfo{
+		InputRows:    info.InputRows,
+		OutputRows:   info.OutputRows,
+		InputSize:    info.InputSize,
+		OutputSize:   info.OutputSize,
+		TimeConsumed: info.TimeConsumed,
+		MemorySize:   info.MemorySize,
+	}
+}
+
 func decodeBatch(_ *process.Process, msg *pipeline.Message) (*batch.Batch, error) {
-	bat := new(batch.Batch) // TODO: allocate the memory from process may suitable.
+	// TODO: allocate the memory from process may suitable.
+	bat := new(batch.Batch)
 	err := types.Decode(msg.GetData(), bat)
+	// set all vectors to be origin, and they can be freed by process then.
+	for i := range bat.Vecs {
+		bat.Vecs[i].SetOriginal(true)
+	}
 	return bat, err
 }
 
