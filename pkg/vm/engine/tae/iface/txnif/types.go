@@ -52,7 +52,6 @@ type TxnReader interface {
 	String() string
 	Repr() string
 	GetLSN() uint64
-	Event() int
 
 	SameTxn(startTs types.TS) bool
 	CommitBefore(startTs types.TS) bool
@@ -75,7 +74,11 @@ type TxnChanger interface {
 	RUnlock()
 	ToCommittedLocked() error
 	ToPreparingLocked(ts types.TS) error
+	ToPrepared() error
+	ToPreparedLocked() error
 	ToRollbackedLocked() error
+
+	ToRollbacking(ts types.TS) error
 	ToRollbackingLocked(ts types.TS) error
 	ToUnknownLocked()
 	Prepare() error
@@ -90,7 +93,7 @@ type TxnWriter interface {
 }
 
 type TxnAsyncer interface {
-	WaitDone(error) error
+	WaitDone(error, bool) error
 	WaitPrepared() error
 }
 
