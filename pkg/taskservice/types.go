@@ -205,7 +205,4 @@ type TaskStorage interface {
 	// This update must be transactional and needs to be done conditionally
 	// using CronTask.TriggerTimes and the task.Metadata.ID field.
 	UpdateCronTask(context.Context, task.CronTask, task.Task) (int, error)
-
-	//drop the table created by the Storage. This is only used in tests.
-	drop(ctx context.Context) error
 }
