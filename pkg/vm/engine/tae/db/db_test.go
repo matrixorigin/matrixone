@@ -311,9 +311,9 @@ func TestCreateBlock(t *testing.T) {
 	schema := catalog.MockSchemaAll(13, 12)
 	rel, err := database.CreateRelation(schema)
 	assert.Nil(t, err)
-	seg, err := rel.CreateSegment()
+	seg, err := rel.CreateSegment(false)
 	assert.Nil(t, err)
-	blk1, err := seg.CreateBlock()
+	blk1, err := seg.CreateBlock(false)
 	assert.Nil(t, err)
 	blk2, err := seg.CreateNonAppendableBlock()
 	assert.Nil(t, err)
@@ -347,7 +347,7 @@ func TestNonAppendableBlock(t *testing.T) {
 		assert.Nil(t, err)
 		rel, err := database.GetRelationByName(schema.Name)
 		assert.Nil(t, err)
-		seg, err := rel.CreateSegment()
+		seg, err := rel.CreateSegment(false)
 		assert.Nil(t, err)
 		blk, err := seg.CreateNonAppendableBlock()
 		assert.Nil(t, err)
@@ -854,7 +854,7 @@ func TestRollback1(t *testing.T) {
 	processor.SegmentFn = onSegFn
 	processor.BlockFn = onBlkFn
 	txn, rel := getDefaultRelation(t, db, schema.Name)
-	_, err := rel.CreateSegment()
+	_, err := rel.CreateSegment(false)
 	assert.Nil(t, err)
 
 	tableMeta := rel.GetMeta().(*catalog.TableEntry)
@@ -869,7 +869,7 @@ func TestRollback1(t *testing.T) {
 	assert.Equal(t, segCnt, 0)
 
 	txn, rel = getDefaultRelation(t, db, schema.Name)
-	seg, err := rel.CreateSegment()
+	seg, err := rel.CreateSegment(false)
 	assert.Nil(t, err)
 	segMeta := seg.GetMeta().(*catalog.SegmentEntry)
 	assert.Nil(t, txn.Commit())
@@ -881,7 +881,7 @@ func TestRollback1(t *testing.T) {
 	txn, rel = getDefaultRelation(t, db, schema.Name)
 	seg, err = rel.GetSegment(segMeta.GetID())
 	assert.Nil(t, err)
-	_, err = seg.CreateBlock()
+	_, err = seg.CreateBlock(false)
 	assert.Nil(t, err)
 	blkCnt = 0
 	err = tableMeta.RecurLoop(processor)
@@ -2912,7 +2912,7 @@ func TestUpdateAttr(t *testing.T) {
 	assert.NoError(t, err)
 	rel, err := db.CreateRelation(schema)
 	assert.NoError(t, err)
-	seg, err := rel.CreateSegment()
+	seg, err := rel.CreateSegment(false)
 	assert.NoError(t, err)
 	seg.GetMeta().(*catalog.SegmentEntry).UpdateMetaLoc(txn, "test_1")
 	assert.NoError(t, txn.Commit())
