@@ -264,6 +264,10 @@ func getBytesFromPrimaryVectorForHash(vec *vector.Vector, i int, typ types.Type)
 		size := vec.Typ.TypeSize()
 		l := vec.Length() * size
 		data := unsafe.Slice((*byte)(vector.GetPtrAt(vec, 0)), l)
+		end := (i + 1) * size
+		if end > len(data) {
+			return nil, moerr.NewInvalidInput("vector size not match")
+		}
 		return data[i*size : (i+1)*size], nil
 	}
 	return vec.GetBytes(int64(i)), nil
