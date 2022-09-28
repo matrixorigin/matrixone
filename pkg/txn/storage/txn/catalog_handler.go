@@ -60,7 +60,8 @@ func NewCatalogHandler(upstream *MemHandler) *CatalogHandler {
 	}
 	tx := memtable.NewTransaction(uuid.NewString(), now, memtable.SnapshotIsolation)
 	defer func() {
-		if err := tx.Commit(); err != nil {
+		now.Statement = math.MaxInt
+		if err := tx.Commit(now); err != nil {
 			panic(err)
 		}
 	}()

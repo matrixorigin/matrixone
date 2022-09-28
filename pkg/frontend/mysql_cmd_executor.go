@@ -367,7 +367,7 @@ func handleShowColumns(ses *Session) error {
 		ses.Mrs.AddRow(row)
 	}
 	if err := ses.GetMysqlProtocol().SendResultSetTextBatchRowSpeedup(ses.Mrs, ses.Mrs.GetRowCount()); err != nil {
-		logutil.Errorf("handleShowCreateTable error %v \n", err)
+		logutil.Errorf("handleShowColumns error %v \n", err)
 		return err
 	}
 	return nil
@@ -1118,6 +1118,44 @@ func (mce *MysqlCmdExecutor) handleSetVar(sv *tree.SetVar) error {
 	return nil
 }
 
+func (mce *MysqlCmdExecutor) handleShowErrors() error {
+	var err error = nil
+	ses := mce.GetSession()
+	proto := mce.GetSession().protocol
+
+	levelCol := new(MysqlColumn)
+	levelCol.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+	levelCol.SetName("Level")
+
+	CodeCol := new(MysqlColumn)
+	CodeCol.SetColumnType(defines.MYSQL_TYPE_SHORT)
+	CodeCol.SetName("Code")
+
+	MsgCol := new(MysqlColumn)
+	MsgCol.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+	MsgCol.SetName("Message")
+
+	ses.Mrs.AddColumn(levelCol)
+	ses.Mrs.AddColumn(CodeCol)
+	ses.Mrs.AddColumn(MsgCol)
+
+	for i := ses.errInfo.length() - 1; i >= 0; i-- {
+		row := make([]interface{}, 3)
+		row[0] = "Error"
+		row[1] = ses.errInfo.codes[i]
+		row[2] = ses.errInfo.msgs[i]
+		ses.Mrs.AddRow(row)
+	}
+
+	mer := NewMysqlExecutionResult(0, 0, 0, 0, ses.Mrs)
+	resp := NewResponse(ResultResponse, 0, int(COM_QUERY), mer)
+
+	if err := proto.SendResponse(resp); err != nil {
+		return moerr.NewInternalError("routine send response failed. error:%v ", err)
+	}
+	return err
+}
+
 /*
 handle show variables
 */
@@ -1185,10 +1223,6 @@ func (mce *MysqlCmdExecutor) handleShowVariables(sv *tree.ShowVariables) error {
 	sort.Slice(rows, func(i, j int) bool {
 		return rows[i][0].(string) < rows[j][0].(string)
 	})
-
-	for _, row := range rows {
-		ses.Mrs.AddRow(row)
-	}
 
 	mer := NewMysqlExecutionResult(0, 0, 0, 0, ses.Mrs)
 	resp := NewResponse(ResultResponse, 0, int(COM_QUERY), mer)
@@ -1990,6 +2024,12 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			if err != nil {
 				goto handleFailed
 			}
+		case *tree.ShowErrors, *tree.ShowWarnings:
+			selfHandle = true
+			err = mce.handleShowErrors()
+			if err != nil {
+				goto handleFailed
+			}
 		case *tree.AnalyzeStmt:
 			selfHandle = true
 			if err = mce.handleAnalyzeStmt(requestCtx, st); err != nil {
@@ -2104,9 +2144,9 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		//produce result set
 		case *tree.Select,
 			*tree.ShowCreateTable, *tree.ShowCreateDatabase, *tree.ShowTables, *tree.ShowDatabases, *tree.ShowColumns,
-			*tree.ShowProcessList, *tree.ShowErrors, *tree.ShowWarnings, *tree.ShowVariables, *tree.ShowStatus,
-			*tree.ShowIndex, *tree.ShowCreateView,
-			*tree.ExplainFor:
+			*tree.ShowProcessList, *tree.ShowStatus, *tree.ShowTableStatus, *tree.ShowGrants,
+			*tree.ShowIndex, *tree.ShowCreateView, *tree.ShowTarget,
+			*tree.ExplainFor, *tree.ExplainStmt:
 			columns, err2 := cw.GetColumns()
 			if err2 != nil {
 				logutil.Errorf("GetColumns from Computation handler failed. error: %v", err2)

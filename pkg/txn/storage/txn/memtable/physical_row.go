@@ -18,7 +18,6 @@ import (
 	"database/sql"
 	"fmt"
 	"io"
-	"sync"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -30,12 +29,9 @@ type PhysicalRow[
 	V any,
 ] struct {
 	Key        K
-	LastUpdate *Atomic[time.Time]
-	Versions   struct {
-		sync.RWMutex
-		List []*Version[V]
-		//TODO version GC
-	}
+	LastUpdate time.Time
+	Versions   []Version[V]
+	//TODO version GC
 }
 
 type Version[T any] struct {
@@ -62,10 +58,8 @@ func (p *PhysicalRow[K, V]) readVersion(now Time, tx *Transaction) (*Version[V],
 		panic("should not call Read")
 	}
 
-	p.Versions.RLock()
-	defer p.Versions.RUnlock()
-	for i := len(p.Versions.List) - 1; i >= 0; i-- {
-		value := p.Versions.List[i]
+	for i := len(p.Versions) - 1; i >= 0; i-- {
+		value := p.Versions[i]
 		if value.Visible(now, tx.ID) {
 			switch tx.IsolationPolicy.Read {
 			case ReadCommitted:
@@ -77,28 +71,10 @@ func (p *PhysicalRow[K, V]) readVersion(now Time, tx *Transaction) (*Version[V],
 			case ReadNoStale:
 				// BornTx must be committed to be visible here
 				if value.BornTx.ID != tx.ID && value.BornTime.After(tx.BeginTime) {
-					return value, moerr.NewTxnReadConflict("%s %s", tx.ID, value.BornTx.ID)
+					return &value, moerr.NewTxnReadConflict("%s %s", tx.ID, value.BornTx.ID)
 				}
 			}
-			return value, nil
-		}
-	}
-
-	return nil, sql.ErrNoRows
-}
-
-// ReadVisible reads a committed value despite the tx's isolation policy
-func (p *PhysicalRow[K, V]) ReadVisible(now Time, tx *Transaction) (*Version[V], error) {
-	if tx.State.Load() != Active {
-		panic("should not call Read")
-	}
-
-	p.Versions.RLock()
-	defer p.Versions.RUnlock()
-	for i := len(p.Versions.List) - 1; i >= 0; i-- {
-		value := p.Versions.List[i]
-		if value.Visible(now, tx.ID) {
-			return value, nil
+			return &value, nil
 		}
 	}
 
@@ -145,123 +121,139 @@ func (v *Version[T]) Visible(now Time, txID string) bool {
 	return false
 }
 
-func (p *PhysicalRow[K, V]) Insert(now Time, tx *Transaction, value V, callbacks ...any) error {
+func (p *PhysicalRow[K, V]) Insert(
+	now Time,
+	tx *Transaction,
+	value V,
+) (
+	newRow *PhysicalRow[K, V],
+	version *Version[V],
+	err error,
+) {
+
 	if tx.State.Load() != Active {
 		panic("should not call Insert")
 	}
 
-	p.Versions.Lock()
-	defer p.Versions.Unlock()
-
-	for i := len(p.Versions.List) - 1; i >= 0; i-- {
-		value := p.Versions.List[i]
+	for i := len(p.Versions) - 1; i >= 0; i-- {
+		value := p.Versions[i]
 		if value.Visible(now, tx.ID) {
 			if value.LockTx != nil && value.LockTx.State.Load() != Aborted {
 				// locked by active or committed tx
-				return moerr.NewTxnWriteConflict("%s %s", tx.ID, value.LockTx.ID)
+				return nil, nil, moerr.NewTxnWriteConflict("%s %s", tx.ID, value.LockTx.ID)
 			}
 			if value.BornTx.ID != tx.ID && value.BornTime.After(tx.BeginTime) {
-				return moerr.NewTxnWriteConflict("%s %s", tx.ID, value.BornTx.ID)
+				return nil, nil, moerr.NewTxnWriteConflict("%s %s", tx.ID, value.BornTx.ID)
 			}
 		}
 	}
 
+	p = p.clone()
+
 	id := txnengine.NewID()
-	p.Versions.List = append(p.Versions.List, &Version[V]{
+	version = &Version[V]{
 		ID:       id,
 		BornTx:   tx,
 		BornTime: now,
 		Value:    value,
-	})
-
-	for _, callback := range callbacks {
-		switch callback := callback.(type) {
-		case func(ID): // version id
-			callback(id)
-		default:
-			panic(fmt.Sprintf("unknown type: %T", callback))
-		}
 	}
+	p.Versions = append(p.Versions, *version)
 
-	return nil
+	return p, version, nil
 }
 
-func (p *PhysicalRow[K, V]) Delete(now Time, tx *Transaction) error {
+func (p *PhysicalRow[K, V]) Delete(
+	now Time,
+	tx *Transaction,
+) (
+	newRow *PhysicalRow[K, V],
+	version *Version[V],
+	err error,
+) {
 	if tx.State.Load() != Active {
 		panic("should not call Delete")
 	}
 
-	p.Versions.Lock()
-	defer p.Versions.Unlock()
-
-	for i := len(p.Versions.List) - 1; i >= 0; i-- {
-		value := p.Versions.List[i]
+	for i := len(p.Versions) - 1; i >= 0; i-- {
+		value := p.Versions[i]
 		if value.Visible(now, tx.ID) {
 			if value.LockTx != nil && value.LockTx.State.Load() != Aborted {
-				return moerr.NewTxnWriteConflict("%s %s", tx.ID, value.LockTx.ID)
+				return nil, nil, moerr.NewTxnWriteConflict("%s %s", tx.ID, value.LockTx.ID)
 			}
 			if value.BornTx.ID != tx.ID && value.BornTime.After(tx.BeginTime) {
-				return moerr.NewTxnWriteConflict("%s %s", tx.ID, value.BornTx.ID)
+				return nil, nil, moerr.NewTxnWriteConflict("%s %s", tx.ID, value.BornTx.ID)
 			}
+
+			p = p.clone()
 			value.LockTx = tx
 			value.LockTime = now
-			return nil
+			p.Versions[i] = value
+
+			return p, &value, nil
 		}
 	}
 
-	return sql.ErrNoRows
+	return nil, nil, sql.ErrNoRows
 }
 
-func (p *PhysicalRow[K, V]) Update(now Time, tx *Transaction, newValue V, callbacks ...any) error {
+func (p *PhysicalRow[K, V]) Update(
+	now Time,
+	tx *Transaction,
+	newValue V,
+) (
+	newRow *PhysicalRow[K, V],
+	version *Version[V],
+	err error,
+) {
+
 	if tx.State.Load() != Active {
 		panic("should not call Update")
 	}
 
-	p.Versions.Lock()
-	defer p.Versions.Unlock()
-
-	for i := len(p.Versions.List) - 1; i >= 0; i-- {
-		value := p.Versions.List[i]
+	for i := len(p.Versions) - 1; i >= 0; i-- {
+		value := p.Versions[i]
 		if value.Visible(now, tx.ID) {
 
 			if value.LockTx != nil && value.LockTx.State.Load() != Aborted {
-				return moerr.NewTxnWriteConflict("%s %s", tx.ID, value.LockTx.ID)
+				return nil, nil, moerr.NewTxnWriteConflict("%s %s", tx.ID, value.LockTx.ID)
 			}
 
 			if value.BornTx.ID != tx.ID && value.BornTime.After(tx.BeginTime) {
-				return moerr.NewTxnWriteConflict("%s %s", tx.ID, value.BornTx.ID)
+				return nil, nil, moerr.NewTxnWriteConflict("%s %s", tx.ID, value.BornTx.ID)
 			}
+
+			p = p.clone()
 
 			value.LockTx = tx
 			value.LockTime = now
+			p.Versions[i] = value
+
 			id := txnengine.NewID()
-			p.Versions.List = append(p.Versions.List, &Version[V]{
+			version = &Version[V]{
 				ID:       id,
 				BornTx:   tx,
 				BornTime: now,
 				Value:    newValue,
-			})
-
-			for _, callback := range callbacks {
-				switch callback := callback.(type) {
-				case func(ID): // version id
-					callback(id)
-				default:
-					panic(fmt.Sprintf("unknown type: %T", callback))
-				}
 			}
+			p.Versions = append(p.Versions, *version)
 
-			return nil
+			return p, version, nil
 		}
 	}
 
-	return sql.ErrNoRows
+	return nil, nil, sql.ErrNoRows
+}
+
+func (p *PhysicalRow[K, V]) clone() *PhysicalRow[K, V] {
+	newRow := *p
+	newRow.LastUpdate = time.Now()
+	newRow.Versions = make([]Version[V], len(p.Versions))
+	copy(newRow.Versions, p.Versions)
+	return &newRow
 }
 
 func (p *PhysicalRow[K, V]) dump(w io.Writer) {
-	p.Versions.RLock()
-	defer p.Versions.RUnlock()
-	for _, value := range p.Versions.List {
+	for _, value := range p.Versions {
 		fmt.Fprintf(w, "born tx %s, born time %s, value %v",
 			value.BornTx.ID,
 			value.BornTime.String(),

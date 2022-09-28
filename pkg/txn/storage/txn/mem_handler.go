@@ -1038,8 +1038,8 @@ func (m *MemHandler) HandleRead(meta txn.TxnMeta, req txnengine.ReadReq, resp *t
 
 	// sort to emulate TAE behavior TODO remove this after BVT fixes
 	sort.Slice(rows, func(i, j int) bool {
-		return rows[i].PhysicalRow.LastUpdate.Load().Before(
-			rows[j].PhysicalRow.LastUpdate.Load(),
+		return rows[i].PhysicalRow.LastUpdate.Before(
+			rows[j].PhysicalRow.LastUpdate,
 		)
 	})
 
@@ -1239,7 +1239,7 @@ func (*MemHandler) HandleClose() error {
 
 func (m *MemHandler) HandleCommit(meta txn.TxnMeta) error {
 	tx := m.getTx(meta)
-	if err := tx.Commit(); err != nil {
+	if err := tx.Commit(memtable.Now(m.clock)); err != nil {
 		return err
 	}
 	return nil

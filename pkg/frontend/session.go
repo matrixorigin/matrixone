@@ -38,6 +38,9 @@ import (
 
 const MaxPrepareNumberInOneSession = 64
 
+// TODO: this variable should be configure by set variable
+const MoDefaultErrorCount = 64
+
 type ShowStatementType int
 
 const (
@@ -114,6 +117,27 @@ type Session struct {
 	timeZone *time.Location
 
 	priv *privilege
+
+	errInfo *errInfo
+}
+
+type errInfo struct {
+	codes  []uint16
+	msgs   []string
+	maxCnt int
+}
+
+func (e *errInfo) push(code uint16, msg string) {
+	if e.maxCnt > 0 && len(e.codes) > e.maxCnt {
+		e.codes = e.codes[1:]
+		e.msgs = e.msgs[1:]
+	}
+	e.codes = append(e.codes, code)
+	e.msgs = append(e.msgs, msg)
+}
+
+func (e *errInfo) length() int {
+	return len(e.codes)
 }
 
 func NewSession(proto Protocol, gm *guest.Mmu, mp *mempool.Mempool, PU *config.ParameterUnit, gSysVars *GlobalSystemVariables) *Session {
@@ -142,6 +166,11 @@ func NewSession(proto Protocol, gm *guest.Mmu, mp *mempool.Mempool, PU *config.P
 		prepareStmts:   make(map[string]*PrepareStmt),
 		outputCallback: getDataFromPipeline,
 		timeZone:       time.Local,
+		errInfo: &errInfo{
+			codes:  make([]uint16, 0, MoDefaultErrorCount),
+			msgs:   make([]string, 0, MoDefaultErrorCount),
+			maxCnt: MoDefaultErrorCount,
+		},
 	}
 	ses.uuid, _ = uuid.NewUUID()
 	ses.SetOptionBits(OPTION_AUTOCOMMIT)

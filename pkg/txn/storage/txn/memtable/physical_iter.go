@@ -20,16 +20,59 @@ type TablePhysicalIter[
 	K Ordered[K],
 	V any,
 ] struct {
-	btree.GenericIter[*PhysicalRow[K, V]]
+	iter btree.GenericIter[*TreeItem[K, V]]
 }
 
 func (t *Table[K, V, R]) NewPhysicalIter() *TablePhysicalIter[K, V] {
-	return &TablePhysicalIter[K, V]{
-		GenericIter: t.rows.Copy().Iter(),
+	ret := &TablePhysicalIter[K, V]{
+		iter: t.tree.Load().Iter(),
 	}
+	ret.seekFirst()
+	return ret
+}
+
+func (t *TablePhysicalIter[K, V]) seekFirst() {
+	var zero K
+	t.iter.Seek(&TreeItem[K, V]{
+		Row: &PhysicalRow[K, V]{
+			Key: zero,
+		},
+	})
 }
 
 func (t *TablePhysicalIter[K, V]) Close() error {
-	t.GenericIter.Release()
+	t.iter.Release()
 	return nil
+}
+
+func (t *TablePhysicalIter[K, V]) Seek(pivot *PhysicalRow[K, V]) bool {
+	t.seekFirst()
+	return t.iter.Seek(&TreeItem[K, V]{
+		Row: pivot,
+	})
+}
+
+func (t *TablePhysicalIter[K, V]) First() bool {
+	if !t.iter.First() {
+		return false
+	}
+	t.seekFirst()
+	item := t.iter.Item()
+	return item.Row != nil
+}
+
+func (t *TablePhysicalIter[K, V]) Next() bool {
+	if !t.iter.Next() {
+		return false
+	}
+	item := t.iter.Item()
+	return item.Row != nil
+}
+
+func (t *TablePhysicalIter[K, V]) Item() *PhysicalRow[K, V] {
+	item := t.iter.Item()
+	if item == nil {
+		panic("impossible")
+	}
+	return item.Row
 }

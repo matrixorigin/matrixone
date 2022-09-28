@@ -606,6 +606,8 @@ message DataDefinition {
 		SHOW_ERRORS			= 18;
 		SHOW_STATUS			= 19;
 		SHOW_PROCESSLIST	= 20;
+		SHOW_TABLE_STATUS = 21;
+		SHOW_TARGET = 22;
 	}
 	//DataDefinition type
 	DdlType ddl_type = 1;
