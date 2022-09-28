@@ -77,6 +77,21 @@ func TestMin(t *testing.T) {
 		},
 		{
 			op:         agg.AggregateMin,
+			isDistinct: true,
+			inputTyp:   decimalTestTyp,
+
+			input:    []int64{9, 8, 7, 6, 5, 4, 3, 2, 1, 0},
+			inputNsp: nil,
+			expected: []int64{0},
+
+			mergeInput:  []int64{0, 1, 2, -3, 4, 5, 6, 7, 8, 9},
+			mergeNsp:    nil,
+			mergeExpect: []int64{-3},
+
+			testMarshal: false,
+		},
+		{
+			op:         agg.AggregateMin,
 			isDistinct: false,
 			inputTyp:   boolTestTyp,
 

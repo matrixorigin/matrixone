@@ -57,13 +57,14 @@ func WalkDeep(err error, visitor func(err error) bool) bool {
 	return false
 }
 
+// ReportError used to handle non-moerr Error
 func ReportError(ctx context.Context, err error) {
 	GetReportErrorFunc()(ctx, err, 1)
 }
 
 type reportErrorFunc func(context.Context, error, int)
 
-// errorReporter should be trace.HandleError
+// errorReporter should be trace.ReportError
 var errorReporter atomic.Value
 
 func noopReportError(context.Context, error, int) {}

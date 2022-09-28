@@ -23,14 +23,14 @@ explain select distinct spID,userID from t1;
 QUERY PLAN
 Project
   ->  Aggregate
-        Group Key:#[0,0], #[0,1]
+        Group Key: #[0,0], #[0,1]
         ->  Project
               ->  Table Scan on explain.t1
 explain select distinct * from t1;
 QUERY PLAN
 Project
   ->  Aggregate
-        Group Key:#[0,0], #[0,1], #[0,2]
+        Group Key: #[0,0], #[0,1], #[0,2]
         ->  Project
               ->  Table Scan on explain.t1
 explain select userID, SUM(score) from t1 group by userID order by userID desc;
@@ -40,7 +40,7 @@ Project
         Sort Key: t1.userid DESC
         ->  Project
               ->  Aggregate
-                    Group Key:t1.userid
+                    Group Key: t1.userid
                     Aggregate Functions: sum(t1.score)
                     ->  Table Scan on explain.t1
 explain select userID as a, MIN(score) as b from t1 group by userID order by userID;
@@ -50,7 +50,7 @@ Project
         Sort Key: t1.userid INTERNAL
         ->  Project
               ->  Aggregate
-                    Group Key:t1.userid
+                    Group Key: t1.userid
                     Aggregate Functions: min(t1.score)
                     ->  Table Scan on explain.t1
 explain select userID as user, MAX(score) as max from t1 group by userID order by max asc;
@@ -60,7 +60,7 @@ Project
         Sort Key: max(t1.score) ASC
         ->  Project
               ->  Aggregate
-                    Group Key:t1.userid
+                    Group Key: t1.userid
                     Aggregate Functions: max(t1.score)
                     ->  Table Scan on explain.t1
 explain select userID,count(score) from t1 where userID>2 group by userID having count(score)>1 order by userID;
@@ -72,7 +72,7 @@ Project
               ->  Filter
                     Filter Cond: (count(t1.score) > 1)
                     ->  Aggregate
-                          Group Key:t1.userid
+                          Group Key: t1.userid
                           Aggregate Functions: count(t1.score)
                           ->  Table Scan on explain.t1
                                 Filter Cond: (CAST(t1.userid AS BIGINT) > 2)
@@ -85,7 +85,7 @@ explain select distinct spID,userID from t1 where score>2;
 QUERY PLAN
 Project
   ->  Aggregate
-        Group Key:#[0,0], #[0,1]
+        Group Key: #[0,0], #[0,1]
         ->  Project
               ->  Table Scan on explain.t1
                     Filter Cond: (CAST(t1.score AS BIGINT) > 2)
@@ -104,7 +104,7 @@ Project
         Sort Key: t1.userid DESC
         ->  Project
               ->  Aggregate
-                    Group Key:t1.userid
+                    Group Key: t1.userid
                     Aggregate Functions: sum(t1.score)
                     ->  Table Scan on explain.t1
                           Filter Cond: (CAST(t1.score AS BIGINT) > 2)
@@ -117,7 +117,7 @@ Project
               ->  Filter
                     Filter Cond: (count(t1.score) > 1)
                     ->  Aggregate
-                          Group Key:t1.userid
+                          Group Key: t1.userid
                           Aggregate Functions: count(t1.score), sum(t1.score)
                           ->  Table Scan on explain.t1
                                 Filter Cond: (CAST(t1.score AS BIGINT) > 2)
@@ -128,7 +128,7 @@ Project
         Sort Key: t1.userid INTERNAL
         ->  Project
               ->  Aggregate
-                    Group Key:t1.userid
+                    Group Key: t1.userid
                     ->  Table Scan on explain.t1
                           Filter Cond: (CAST(t1.userid AS BIGINT) >= 2), (CAST(t1.userid AS BIGINT) <= 3)
 explain select spID,userID,score from t1 limit 2,1;
@@ -151,7 +151,7 @@ Project
               ->  Filter
                     Filter Cond: (count(t1.score) > 1)
                     ->  Aggregate
-                          Group Key:t1.userid
+                          Group Key: t1.userid
                           Aggregate Functions: count(t1.score), sum(t1.score)
                           ->  Table Scan on explain.t1
                                 Filter Cond: (CAST(t1.score AS BIGINT) > 2)
@@ -224,7 +224,7 @@ explain select city,libname1,count(libname1) as a from t3 join t1 on libname1=li
 QUERY PLAN
 Project
   ->  Aggregate
-        Group Key:t1.city, t1.libname1
+        Group Key: t1.city, t1.libname1
         Aggregate Functions: count(t1.libname1)
         ->  Join
               Join Type: INNER
@@ -239,7 +239,7 @@ explain select city,libname1,count(libname1) as a from t3 join t2 on isbn3=isbn2
 QUERY PLAN
 Project
   ->  Aggregate
-        Group Key:t1.city, t1.libname1
+        Group Key: t1.city, t1.libname1
         Aggregate Functions: count(t1.libname1)
         ->  Join
               Join Type: INNER
@@ -254,7 +254,7 @@ explain select city,libname1,count(libname1) as a from t1 join t3 on libname1=li
 QUERY PLAN
 Project
   ->  Aggregate
-        Group Key:t1.city, t1.libname1
+        Group Key: t1.city, t1.libname1
         Aggregate Functions: count(t1.libname1)
         ->  Join
               Join Type: INNER
@@ -309,7 +309,7 @@ explain select id,min(ti) from (select * from t1) sub group by id;
 QUERY PLAN
 Project
   ->  Aggregate
-        Group Key:sub.id
+        Group Key: sub.id
         Aggregate Functions: min(sub.ti)
         ->  Project
               ->  Table Scan on explain.t1
@@ -318,7 +318,7 @@ QUERY PLAN
 Project
   ->  Project
         ->  Aggregate
-              Group Key:t1.id
+              Group Key: t1.id
               Aggregate Functions: min(t1.ti)
               ->  Project
                     ->  Table Scan on explain.t1
@@ -329,7 +329,7 @@ Project
         Sort Key: sub.id DESC
         ->  Project
               ->  Aggregate
-                    Group Key:sub.id
+                    Group Key: sub.id
                     Aggregate Functions: min(sub.ti)
                     ->  Project
                           ->  Table Scan on explain.t1
@@ -337,7 +337,7 @@ explain select id,sum(ti) from (select * from t1) sub group by id;
 QUERY PLAN
 Project
   ->  Aggregate
-        Group Key:sub.id
+        Group Key: sub.id
         Aggregate Functions: sum(sub.ti)
         ->  Project
               ->  Table Scan on explain.t1
@@ -345,7 +345,7 @@ explain select distinct(ti) from (select * from t1) sub;
 QUERY PLAN
 Project
   ->  Aggregate
-        Group Key:#[0,0]
+        Group Key: #[0,0]
         ->  Project
               ->  Project
                     ->  Table Scan on explain.t1
@@ -353,7 +353,7 @@ explain select distinct(ti) from (select * from t1) sub where id <6;
 QUERY PLAN
 Project
   ->  Aggregate
-        Group Key:#[0,0]
+        Group Key: #[0,0]
         ->  Project
               ->  Project
                     ->  Table Scan on explain.t1
@@ -420,7 +420,7 @@ explain select max(case col when 1 then val else null end) as color from t1 grou
 QUERY PLAN
 Project
   ->  Aggregate
-        Group Key:t1.row
+        Group Key: t1.row
         Aggregate Functions: max(CASE WHEN (CAST(t1.col AS BIGINT) = 1) THEN t1.val ELSE (null) END)
         ->  Table Scan on explain.t1
 drop table if exists t1;
@@ -432,7 +432,7 @@ from t1 where b=3 group by b;
 QUERY PLAN
 Project
   ->  Aggregate
-        Group Key:t1.b
+        Group Key: t1.b
         Aggregate Functions: min(t1.a), min(CASE WHEN (1 = 1) THEN t1.a ELSE (null) END), min(CASE WHEN (1 <> 1) THEN (null) ELSE t1.a END)
         ->  Table Scan on explain.t1
               Filter Cond: (CAST(t1.b AS BIGINT) = 3)
@@ -443,7 +443,7 @@ explain SELECT CASE WHEN AVG(a)>=0 THEN 'Positive' ELSE 'Negative' END FROM t1 G
 QUERY PLAN
 Project
   ->  Aggregate
-        Group Key:t1.b
+        Group Key: t1.b
         Aggregate Functions: avg(t1.a)
         ->  Table Scan on explain.t1
 drop table if exists  t1;
@@ -653,7 +653,7 @@ Project
         ->  Table Scan on explain.t1
         ->  Project
               ->  Aggregate
-                    Group Key:t1.a
+                    Group Key: t1.a
                     ->  Table Scan on explain.t1
                           Filter Cond: (CAST(t1.b AS BIGINT) = 2)
 explain SELECT a FROM t1 WHERE a >= ANY (SELECT a FROM t1 WHERE b = 2 group by a);
@@ -665,7 +665,7 @@ Project
         ->  Table Scan on explain.t1
         ->  Project
               ->  Aggregate
-                    Group Key:t1.a
+                    Group Key: t1.a
                     ->  Table Scan on explain.t1
                           Filter Cond: (CAST(t1.b AS BIGINT) = 2)
 explain SELECT a FROM t1 WHERE a <> ANY (SELECT a FROM t1 WHERE b = 2 group by a);
@@ -677,7 +677,7 @@ Project
         ->  Table Scan on explain.t1
         ->  Project
               ->  Aggregate
-                    Group Key:t1.a
+                    Group Key: t1.a
                     ->  Table Scan on explain.t1
                           Filter Cond: (CAST(t1.b AS BIGINT) = 2)
 explain SELECT a FROM t1 WHERE a = ANY (SELECT a FROM t1 group by a HAVING a = 2);
@@ -689,7 +689,7 @@ Project
         ->  Table Scan on explain.t1
         ->  Project
               ->  Aggregate
-                    Group Key:t1.a
+                    Group Key: t1.a
                     ->  Table Scan on explain.t1
                           Filter Cond: (CAST(t1.a AS BIGINT) = 2)
 explain SELECT a FROM t1 WHERE a <= ANY (SELECT a FROM t1 group by a HAVING a = 2);
@@ -701,7 +701,7 @@ Project
         ->  Table Scan on explain.t1
         ->  Project
               ->  Aggregate
-                    Group Key:t1.a
+                    Group Key: t1.a
                     ->  Table Scan on explain.t1
                           Filter Cond: (CAST(t1.a AS BIGINT) = 2)
 explain SELECT a FROM t1 WHERE a <> ANY (SELECT a FROM t1 group by a HAVING a = 2);
@@ -713,7 +713,7 @@ Project
         ->  Table Scan on explain.t1
         ->  Project
               ->  Aggregate
-                    Group Key:t1.a
+                    Group Key: t1.a
                     ->  Table Scan on explain.t1
                           Filter Cond: (CAST(t1.a AS BIGINT) = 2)
 drop table if exists t1;

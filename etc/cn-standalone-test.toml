@@ -12,11 +12,6 @@ service-addresses = [
     "2"
 ]
 
-[clock]
-# Due to the poor performance of ci machines, which can cause timers that detect clock 
-# drift to be delayed in scheduling execution, the configuration is larger.
-max-clock-offset = "1s"
-
 [[fileservice]]
 name = "LOCAL"
 backend = "MEM"
@@ -39,4 +34,3 @@ type = "tae"
 # you can move your vars in system_vars_config.toml to here. empty for default value
 # log vars in system_vars_config.toml was removed. use [log] to set log vars
 [cn.frontend]
-

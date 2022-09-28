@@ -764,7 +764,7 @@ func bindFuncExprImplByPlanExpr(name string, args []*Expr) (*plan.Expr, error) {
 		if len(args) != 2 {
 			return nil, moerr.NewInvalidArg("date_add/date_sub function need two args", len(args))
 		}
-		args, err = resetDateFunctionArgs(args[0], args[1])
+		args, err = resetDateFunction(args[0], args[1])
 		if err != nil {
 			return nil, err
 		}
@@ -772,7 +772,7 @@ func bindFuncExprImplByPlanExpr(name string, args []*Expr) (*plan.Expr, error) {
 		if len(args) != 2 {
 			return nil, moerr.NewInvalidArg("adddate/subdate function need two args", len(args))
 		}
-		args, err = resetDateFunctionArgs2(args[0], args[1])
+		args, err = resetDateFunction(args[0], args[1])
 		if err != nil {
 			return nil, err
 		}
@@ -876,16 +876,6 @@ func bindFuncExprImplByPlanExpr(name string, args []*Expr) (*plan.Expr, error) {
 		}
 		if args[1].Typ.Id == int32(types.T_any) {
 			args[1].Typ.Id = int32(types.T_varchar)
-		}
-	// rewrite from_unixtime(a, b) to date_format(from_unixtime(a), b)
-	case "from_unixtime":
-		if len(args) == 2 {
-			newExpr, err := bindFuncExprImplByPlanExpr("from_unixtime", []*plan.Expr{args[0]})
-			if err != nil {
-				return nil, err
-			}
-			name = "date_format"
-			args = []*plan.Expr{newExpr, args[1]}
 		}
 	}
 
@@ -1227,7 +1217,7 @@ func resetDateFunctionArgs(dateExpr *Expr, intervalExpr *Expr) ([]*Expr, error) 
 	}, nil
 }
 
-func resetDateFunctionArgs2(dateExpr *Expr, intervalExpr *Expr) ([]*Expr, error) {
+func resetDateFunction(dateExpr *Expr, intervalExpr *Expr) ([]*Expr, error) {
 	switch intervalExpr.Expr.(type) {
 	case *plan.Expr_List:
 		return resetDateFunctionArgs(dateExpr, intervalExpr)

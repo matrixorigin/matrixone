@@ -20,7 +20,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 )
 
 var (
@@ -222,7 +221,7 @@ func (builder *QueryBuilder) buildUnnest(tbl *tree.Unnest, ctx *BindContext) (in
 		NodeType: plan.Node_UNNEST,
 		Cost:     &plan.Cost{},
 		TableDef: &plan.TableDef{
-			TableType:          catalog.SystemViewRel, //test if ok
+			TableType:          "func_table", //test if ok
 			Name:               tbl.String(),
 			TableFunctionParam: paramData,
 			Cols:               colDefs,

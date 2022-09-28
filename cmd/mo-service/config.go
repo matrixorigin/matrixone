@@ -82,8 +82,11 @@ type Config struct {
 	Clock struct {
 		// Backend clock backend implementation. [LOCAL|HLC], default LOCAL.
 		Backend string `toml:"source"`
-		// MaxClockOffset max clock offset between two nodes. Default is 500ms
+		// MaxClockOffset max clock offset between two nodes. Default is 500ms.
+		// Only valid when enable-check-clock-offset is true
 		MaxClockOffset tomlutil.Duration `toml:"max-clock-offset"`
+		// EnableCheckMaxClockOffset enable local clock offset checker
+		EnableCheckMaxClockOffset bool `toml:"enable-check-clock-offset"`
 	}
 }
 
@@ -117,6 +120,9 @@ func (c *Config) validate() error {
 	}
 	if _, ok := supportTxnClockBackends[strings.ToUpper(c.Clock.Backend)]; !ok {
 		return moerr.NewInternalError("%s clock backend not support", c.Clock.Backend)
+	}
+	if !c.Clock.EnableCheckMaxClockOffset {
+		c.Clock.MaxClockOffset.Duration = 0
 	}
 	return nil
 }

@@ -30,7 +30,7 @@ func NewTestService(fs vfs.FS) (*Service, ClientConfig, error) {
 	cfg := Config{
 		UUID:                 uuid.New().String(),
 		RTTMillisecond:       10,
-		GossipSeedAddresses:  addr,
+		GossipSeedAddresses:  []string{defaultGossipSeedAddress},
 		DeploymentID:         1,
 		FS:                   fs,
 		ServiceListenAddress: addr[0],

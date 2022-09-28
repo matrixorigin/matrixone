@@ -15,6 +15,7 @@
 package indexwrapper
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/file"
 	"io"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -77,7 +78,7 @@ type Index interface {
 
 	String() string
 
-	ReadFrom(data.Block, *catalog.ColDef, ...IndexMeta) error
+	ReadFrom(data.Block, *catalog.ColDef, file.ColumnBlock) error
 	WriteTo(data.Block) error
 }
 
@@ -128,7 +129,7 @@ func (idx *defaultIndexImpl) String() string {
 	panic("not supported")
 }
 
-func (idx *defaultIndexImpl) ReadFrom(_ data.Block, _ *catalog.ColDef, _ ...IndexMeta) error {
+func (idx *defaultIndexImpl) ReadFrom(_ data.Block, _ *catalog.ColDef, _ file.ColumnBlock) error {
 	panic("not supported")
 }
 

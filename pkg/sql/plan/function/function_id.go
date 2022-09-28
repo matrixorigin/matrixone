@@ -209,7 +209,10 @@ const (
 	SUBSTRING // SUBSTRING
 	WEEK      //WEEK
 	WEEKDAY
-	YEAR // YEAR
+	YEAR   // YEAR
+	HOUR   // HOUR
+	MINUTE // MINUTE
+	SECOND // SECOND
 
 	DATE_ADD              // DATE_ADD
 	DATE_SUB              // DATE_SUB
@@ -244,7 +247,7 @@ const (
 	UUID
 
 	SERIAL
-
+	BIN //BIN
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
 	FUNCTION_END_NUMBER
@@ -349,6 +352,9 @@ var functionIdRegister = map[string]int32{
 	"acos":                    ACOS,
 	"bit_length":              BIT_LENGTH,
 	"date":                    DATE,
+	"hour":                    HOUR,
+	"minute":                  MINUTE,
+	"second":                  SECOND,
 	"day":                     DAY,
 	"dayofyear":               DAYOFYEAR,
 	"exp":                     EXP,
@@ -406,6 +412,7 @@ var functionIdRegister = map[string]int32{
 	"hex":                     HEX,
 	"serial":                  SERIAL,
 	"hash_value":              HASH,
+	"bin":                     BIN,
 }
 
 func GetFunctionIsWinfunByName(name string) bool {

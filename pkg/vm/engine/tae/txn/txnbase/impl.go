@@ -15,8 +15,6 @@
 package txnbase
 
 import (
-	"sync/atomic"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
@@ -36,7 +34,7 @@ func (txn *Txn) rollback1PC() (err error) {
 	if err != nil {
 		_ = txn.PrepareRollback()
 		_ = txn.ApplyRollback()
-		txn.DoneWithErr(err)
+		txn.DoneWithErr(err, true)
 	}
 	txn.Wait()
 	//txn.Status = txnif.TxnStatusRollbacked
@@ -63,7 +61,7 @@ func (txn *Txn) commit1PC() (err error) {
 		txn.Unlock()
 		_ = txn.PrepareRollback()
 		_ = txn.ApplyRollback()
-		txn.DoneWithErr(err)
+		txn.DoneWithErr(err, true)
 	}
 	txn.Wait()
 	//if txn.Err == nil {
@@ -75,11 +73,9 @@ func (txn *Txn) commit1PC() (err error) {
 
 func (txn *Txn) rollback2PC() (err error) {
 	state := txn.GetTxnState(false)
-	if state != txnif.TxnStateActive && state != txnif.TxnStatePrepared {
-		return moerr.NewInternalError("cannot rollback, unexpected txn state : %s", txnif.TxnStrState(state))
-	}
 
-	if state == txnif.TxnStateActive {
+	switch state {
+	case txnif.TxnStateActive:
 		txn.Add(1)
 		err = txn.Mgr.OnOpTxn(&OpTxn{
 			Txn: txn,
@@ -88,50 +84,119 @@ func (txn *Txn) rollback2PC() (err error) {
 		if err != nil {
 			_ = txn.PrepareRollback()
 			_ = txn.ApplyRollback()
-			txn.DoneWithErr(err)
+			_ = txn.ToRollbacking(txn.GetStartTS())
+			txn.DoneWithErr(err, true)
 		}
 		txn.Wait()
-		//txn.Status = txnif.TxnStatusRollbacked
-		//atomic.StoreInt32((*int32)(&txn.State), (int32)(txnif.TxnStateRollbacked))
-		txn.Mgr.DeleteTxn(txn.GetID())
+
+	case txnif.TxnStatePrepared:
+		_ = txn.ApplyRollback()
+		txn.DoneWithErr(nil, true)
+
+	default:
+		logutil.Warnf("unexpected txn state : %s", txnif.TxnStrState(state))
+		return moerr.NewTAERollback("unexpected txn status : %s", txnif.TxnStrState(state))
 	}
-	if state == txnif.TxnStatePrepared {
-		txn.Add(1)
-		txn.Ch <- EventRollback
-		//Wait txn rollbacked
-		txn.Wait()
-		//txn.Status = txnif.TxnStatusRollbacked
-		txn.Mgr.DeleteTxn(txn.GetID())
-	}
+
+	txn.Mgr.DeleteTxn(txn.GetID())
+
 	return txn.GetError()
 }
 
 func (txn *Txn) commit2PC() (err error) {
 	state := txn.GetTxnState(false)
-	if state != txnif.TxnStateCommittingFinished && state != txnif.TxnStatePrepared {
-		return moerr.NewInternalError("cannot commit, unexpected txn state : %s", txnif.TxnStrState(state))
-	}
 
-	if state == txnif.TxnStateCommittingFinished {
+	switch state {
+	case txnif.TxnStateCommittingFinished:
+		if err = txn.ApplyCommit(); err != nil {
+			panic(err)
+		}
 		//TODO:Append committed log entry into log service asynchronously
 		//     for checkpointing the committing log entry
 		//txn.SetError(txn.LogTxnEntry())
-		if txn.Err == nil {
-			//txn.State = txnif.TxnStateCommitted
-			atomic.StoreInt32((*int32)(&txn.State), (int32)(txnif.TxnStateCommitted))
-		}
-		txn.Mgr.DeleteTxn(txn.GetID())
-	}
+		txn.DoneWithErr(nil, false)
+
 	//It's a 2PC transaction running in Participant.
 	//Notice that Commit must be success once the commit message arrives,
 	//since Preparing had already succeeded.
-	if state == txnif.TxnStatePrepared {
-		txn.Add(1)
-		txn.Ch <- EventCommit
-		txn.Wait()
-		//txn.Status = txnif.TxnStatusCommitted
-		atomic.StoreInt32((*int32)(&txn.State), (int32)(txnif.TxnStateCommitted))
-		txn.Mgr.DeleteTxn(txn.GetID())
+	case txnif.TxnStatePrepared:
+		if err = txn.ApplyCommit(); err != nil {
+			panic(err)
+		}
+		// TODO: Append committed log entry
+		txn.DoneWithErr(nil, false)
+
+	default:
+		logutil.Warnf("unexpected txn state : %s", txnif.TxnStrState(state))
+		return moerr.NewTAECommit("invalid txn state %s", txnif.TxnStrState(state))
 	}
+	txn.Mgr.DeleteTxn(txn.GetID())
+
 	return txn.GetError()
+}
+
+func (txn *Txn) done1PCWithErr(err error) {
+	txn.DoneCond.L.Lock()
+	defer txn.DoneCond.L.Unlock()
+
+	if err != nil {
+		txn.ToUnknownLocked()
+		txn.SetError(err)
+	} else {
+		if txn.State == txnif.TxnStatePreparing {
+			if err := txn.ToCommittedLocked(); err != nil {
+				txn.SetError(err)
+			}
+		} else {
+			if err := txn.ToRollbackedLocked(); err != nil {
+				txn.SetError(err)
+			}
+		}
+	}
+	txn.WaitGroup.Done()
+	txn.DoneCond.Broadcast()
+}
+
+func (txn *Txn) done2PCWithErr(err error, isAbort bool) {
+	txn.DoneCond.L.Lock()
+	defer txn.DoneCond.L.Unlock()
+
+	endOfTxn := true
+
+	if err != nil {
+		txn.ToUnknownLocked()
+		txn.SetError(err)
+	} else {
+		switch txn.State {
+		case txnif.TxnStateRollbacking:
+			if err = txn.ToRollbackedLocked(); err != nil {
+				panic(err)
+			}
+		case txnif.TxnStatePreparing:
+			endOfTxn = false
+			if err = txn.ToPreparedLocked(); err != nil {
+				panic(err)
+			}
+		case txnif.TxnStateCommittingFinished:
+			if err = txn.ToCommittedLocked(); err != nil {
+				panic(err)
+			}
+		case txnif.TxnStatePrepared:
+			if isAbort {
+				if err = txn.ToRollbackedLocked(); err != nil {
+					panic(err)
+				}
+			} else {
+				if err = txn.ToCommittedLocked(); err != nil {
+					panic(err)
+				}
+			}
+		}
+	}
+
+	txn.WaitGroup.Done()
+
+	if endOfTxn {
+		txn.DoneCond.Broadcast()
+	}
 }

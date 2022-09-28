@@ -2,7 +2,7 @@
 
 MatrixOne supports Linux and MacOS. You can install a standalone MatrixOne version by 3 methods:
 
-- <p><a href="#code_source">Method 1: Building from source</a>.</p>
+- <p><a href="#code_source">Method 1: Building from source code</a>.</p>
 - <p><a href="#binary_packages">Method 2: Using binary package</a>.</p>
 - <p><a href="#use_docker">Method 3: Using Docker</a>.</p>
 
@@ -10,7 +10,7 @@ Recommended hardware specification: x86 CPU with 4 cores and 32GB memory, with C
 
 For more information on the required operating system versions for deploying MatrixOne, see [Hardware and Operating system requirements](../FAQs/deployment-faqs.md)。
 
-## <h2><a name="code_source">Method 1: Building from source</a></h2>
+## <h2><a name="code_source">Method 1: Building from source code</a></h2>
 
 ### 1. Install Go as necessary dependancy
 
@@ -99,7 +99,7 @@ unzip mo-server-v0.5.1-darwin-x86_64.zip
 ```
 
 !!! info
-    MatrixOne is not fully supported by ARM for now; MacOS M1 chips and above can use source to build MatrixOne as shown above.
+    MatrixOne only supports installation on ARM chipset with source code build; if you are using MacOS M1 and above, please use source code build to install MatrixOne as shown above. Using release binary files from X86 chipset will lead to unknown problems. 
     
 ### 2.Launch MatrixOne server
 

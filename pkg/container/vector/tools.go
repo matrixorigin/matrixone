@@ -268,8 +268,7 @@ func (v *Vector) encodeColToByteSlice() []byte {
 	}
 }
 
-// XXX extend will entend the vector's Data to accormordate rows more entry.
-// XXX we do not fix null map, Huh?
+// XXX extend will extend the vector's Data to accormordate rows more entry.
 func (v *Vector) extend(rows int, m *mheap.Mheap) error {
 	origSz := len(v.data)
 	growSz := rows * v.GetType().TypeSize()
@@ -296,5 +295,7 @@ func (v *Vector) extend(rows int, m *mheap.Mheap) error {
 	}
 	// Setup v.Col
 	v.setupColFromData(0, tgtSz/v.GetType().TypeSize())
+	// extend the null map
+	nulls.TryExpand(v.Nsp, tgtSz)
 	return nil
 }

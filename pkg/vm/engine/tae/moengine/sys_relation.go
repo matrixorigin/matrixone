@@ -17,10 +17,10 @@ package moengine
 import (
 	"context"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 )
 
@@ -38,9 +38,9 @@ func newSysRelation(h handle.Relation) *sysRelation {
 }
 
 func isSysRelation(name string) bool {
-	if name == catalog.SystemTable_DB_Name ||
-		name == catalog.SystemTable_Table_Name ||
-		name == catalog.SystemTable_Columns_Name {
+	if name == catalog.MO_DATABASE ||
+		name == catalog.MO_TABLES ||
+		name == catalog.MO_COLUMNS {
 		return true
 	}
 	return false

@@ -30,7 +30,7 @@ type MOTracerProvider struct {
 func defaultMOTracerProvider() *MOTracerProvider {
 	pTracer := &MOTracerProvider{
 		tracerProviderConfig{
-			enable:           0,
+			enable:           false,
 			resource:         newResource(),
 			idGenerator:      &moIDGenerator{},
 			batchProcessMode: InternalExecutor,

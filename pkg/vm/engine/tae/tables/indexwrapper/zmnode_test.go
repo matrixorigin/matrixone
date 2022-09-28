@@ -15,29 +15,59 @@
 package indexwrapper
 
 import (
-	"testing"
-
+	"fmt"
 	"github.com/RoaringBitmap/roaring"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
+	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
+	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
+	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"path"
+	"testing"
+)
+
+const (
+	ModuleName = "IndexWrapper"
 )
 
 func TestBlockZoneMapIndex(t *testing.T) {
-	bufManager := buffer.NewNodeManager(1024*1024, nil)
-	file := common.MockRWFile()
+	var err error
+	var res bool
+	dir := testutils.InitTestEnv(ModuleName, t)
+	dir = path.Join(dir, "/local")
+	id := 1
+	name := fmt.Sprintf("%d.blk", id)
+	bat := newBatch()
+	c := fileservice.Config{
+		Name:    "LOCAL",
+		Backend: "DISK",
+		DataDir: dir,
+	}
+	service, err := fileservice.NewFileService(c)
+	assert.Nil(t, err)
+
+	objectWriter, err := objectio.NewObjectWriter(name, service)
+	assert.Nil(t, err)
+	fd, err := objectWriter.Write(bat)
+	assert.Nil(t, err)
+	blocks, err := objectWriter.WriteEnd()
+	assert.Nil(t, err)
+	assert.Equal(t, 1, len(blocks))
 	cType := Plain
 	typ := types.Type{Oid: types.T_int32}
 	pkColIdx := uint16(0)
 	interIdx := uint16(0)
-	var err error
-	var res bool
 	var visibility *roaring.Bitmap
 
 	writer := NewZMWriter()
-	err = writer.Init(file, cType, pkColIdx, interIdx)
+	err = writer.Init(objectWriter, blocks[0], cType, pkColIdx, interIdx)
 	require.NoError(t, err)
 
 	keys := containers.MockVector2(typ, 1000, 0)
@@ -47,7 +77,9 @@ func TestBlockZoneMapIndex(t *testing.T) {
 	_, err = writer.Finalize()
 	require.NoError(t, err)
 
-	reader := NewZMReader(bufManager, file, new(common.ID), typ)
+	col, err := fd.GetColumn(0)
+	assert.Nil(t, err)
+	reader := NewZMReader(col, typ)
 	require.NoError(t, err)
 
 	res = reader.Contains(int32(500))
@@ -65,4 +97,21 @@ func TestBlockZoneMapIndex(t *testing.T) {
 	visibility, res = reader.ContainsAny(keys)
 	require.True(t, res)
 	require.Equal(t, uint64(100), visibility.GetCardinality())
+}
+
+func newBatch() *batch.Batch {
+	hm := host.New(1 << 30)
+	gm := guest.New(1<<30, hm)
+	mp := mheap.New(gm)
+	types := []types.Type{
+		{Oid: types.T_int32},
+		{Oid: types.T_int16},
+		{Oid: types.T_int32},
+		{Oid: types.T_int64},
+		{Oid: types.T_uint16},
+		{Oid: types.T_uint32},
+		{Oid: types.T_uint8},
+		{Oid: types.T_uint64},
+	}
+	return testutil.NewBatch(types, false, int(40000*2), mp)
 }

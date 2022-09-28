@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
+	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"go.uber.org/zap"
 )
 
@@ -41,7 +42,7 @@ type server struct {
 }
 
 // NewTxnServer create a txn server. One DNStore corresponds to one TxnServer
-func NewTxnServer(address string, logger *zap.Logger) (TxnServer, error) {
+func NewTxnServer(address string, clock clock.Clock, logger *zap.Logger) (TxnServer, error) {
 	s := &server{
 		logger:   logutil.Adjust(logger),
 		handlers: make(map[txn.TxnMethod]TxnRequestHandleFunc),
@@ -58,7 +59,10 @@ func NewTxnServer(address string, logger *zap.Logger) (TxnServer, error) {
 	}
 
 	rpc, err := morpc.NewRPCServer("txn-server", address,
-		morpc.NewMessageCodecWithChecksum(s.acquireRequest, 16*1024),
+		morpc.NewMessageCodec(s.acquireRequest,
+			morpc.WithCodecIntegrationHLC(clock),
+			morpc.WithCodecEnableChecksum(),
+			morpc.WithCodecPayloadCopyBufferSize(16*1024)),
 		morpc.WithServerLogger(s.logger),
 		morpc.WithServerGoettyOptions(goetty.WithSessionReleaseMsgFunc(func(v interface{}) {
 			m := v.(morpc.RPCMessage)
