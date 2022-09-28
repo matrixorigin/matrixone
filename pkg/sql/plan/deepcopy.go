@@ -199,6 +199,9 @@ func DeepCopyTyp(typ *plan.Type) *plan.Type {
 }
 
 func DeepCopyColDef(col *plan.ColDef) *plan.ColDef {
+	if col == nil {
+		return nil
+	}
 	return &plan.ColDef{
 		Name:          col.Name,
 		Alg:           col.Alg,
