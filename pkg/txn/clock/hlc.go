@@ -209,7 +209,7 @@ func (c *HLCClock) handleClockJump(oldPts int64, newPts int64) {
 	}
 
 	if jump > int64(c.maxClockForwardOffset()+c.clockOffsetMonitoringInterval()) {
-		//log.Fatalf("big clock jump observed, %d microseconds", toMicrosecond(jump))
+		log.Fatalf("big clock jump observed, %d microseconds", toMicrosecond(jump))
 	}
 }
 

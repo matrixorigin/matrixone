@@ -17,7 +17,6 @@ package projection
 import (
 	"bytes"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -53,7 +52,6 @@ func Call(idx int, proc *process.Process, arg any) (bool, error) {
 	ap := arg.(*Argument)
 	rbat := batch.NewWithSize(len(ap.Es))
 	for i, e := range ap.Es {
-		logutil.Infof("projection: %s, bat.Vecs:%v,attrs:%s,zs:%v", e.String(), bat.Vecs, bat.Attrs, bat.Zs)
 		vec, err := colexec.EvalExpr(bat, proc, e)
 		if err != nil || vec.ConstExpand(proc.GetMheap()) == nil {
 			bat.Clean(proc.GetMheap())
