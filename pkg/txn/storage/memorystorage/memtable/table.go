@@ -419,11 +419,16 @@ func (t *Table[K, V, R]) CommitTx(tx *Transaction) error {
 				return err
 			}
 
-			// set born time to commit time
+			// set born time or lock time to commit time
 			physicalRow := entry.Row.clone()
 			for i, version := range physicalRow.Versions {
 				if version.ID == item.WriteEntry.VersionID {
-					version.BornTime = tx.CommitTime
+					if version.BornTx == tx {
+						version.BornTime = tx.CommitTime
+					}
+					if version.LockTx == tx {
+						version.LockTime = tx.CommitTime
+					}
 					physicalRow.Versions[i] = version
 				}
 			}

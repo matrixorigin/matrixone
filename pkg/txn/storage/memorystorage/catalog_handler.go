@@ -407,6 +407,7 @@ func (c *CatalogHandler) HandleRead(meta txn.TxnMeta, req memoryengine.ReadReq, 
 			if err := appendNamedRow(
 				tx,
 				c.upstream,
+				0,
 				b,
 				row,
 			); err != nil {
