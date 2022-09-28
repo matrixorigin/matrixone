@@ -139,7 +139,6 @@ func getZonemapDataFromMeta(columns []int, meta BlockMeta, tableDef *plan.TableD
 		dataTypes[i] = columnMeta.typ
 		typ := types.T(columnMeta.typ).ToType()
 
-		// TODO : use types Encoder/Decoder?
 		czm, _ := columnMeta.zoneMap.(*objectio.ZoneMap)
 		buf := czm.GetData()
 		zm := index.NewZoneMap(typ)
