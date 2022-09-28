@@ -25,10 +25,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
-	txnstorage "github.com/matrixorigin/matrixone/pkg/txn/storage/txn"
+	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/memEngine"
-	txnengine "github.com/matrixorigin/matrixone/pkg/vm/engine/txn"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/memoryengine"
 )
 
 func New(
@@ -46,16 +46,16 @@ func New(
 		}, math.MaxInt)
 	}
 
-	storage, err := txnstorage.NewMemoryStorage(
+	storage, err := memorystorage.NewMemoryStorage(
 		testutil.NewMheap(),
-		txnstorage.SnapshotIsolation,
+		memorystorage.SnapshotIsolation,
 		ck,
 	)
 	if err != nil {
 		panic(err)
 	}
 
-	client = txnstorage.NewStorageTxnClient(
+	client = memorystorage.NewStorageTxnClient(
 		ck,
 		storage,
 	)
@@ -73,9 +73,9 @@ func New(
 		Shards:         shards,
 	}
 
-	e := txnengine.New(
+	e := memoryengine.New(
 		ctx,
-		txnengine.NewDefaultShardPolicy(
+		memoryengine.NewDefaultShardPolicy(
 			testutil.NewMheap(),
 		),
 		func() (logservicepb.ClusterDetails, error) {
