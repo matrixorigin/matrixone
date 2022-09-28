@@ -41,7 +41,7 @@ func TestMetric(t *testing.T) {
 		SV.SetDefaultValues("test")
 		SV.Host = "0.0.0.0"
 		SV.StatusPort = 7001
-		SV.DisableMetricToProm = false
+		SV.EnableMetricToProm = true
 		SV.BatchProcessor = InternalExecutor
 		defer setGatherInterval(setGatherInterval(30 * time.Millisecond))
 		defer setRawHistBufLimit(setRawHistBufLimit(5))
@@ -94,7 +94,7 @@ func TestMetricNoProm(t *testing.T) {
 		SV := &config.ObservabilityParameters{}
 		SV.Host = "0.0.0.0"
 		SV.StatusPort = 7001
-		SV.DisableMetricToProm = true
+		SV.EnableMetricToProm = false
 		SV.BatchProcessor = InternalExecutor
 
 		defer setGatherInterval(setGatherInterval(30 * time.Millisecond))
@@ -110,7 +110,7 @@ func TestMetricNoProm(t *testing.T) {
 		require.Contains(t, err.Error(), "connection refused")
 
 		// make static-check(errcheck) happay
-		SV.DisableMetricToProm = false
+		SV.EnableMetricToProm = true
 	})
 }
 
