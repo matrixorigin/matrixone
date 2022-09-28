@@ -130,6 +130,12 @@ func (entry *SegmentEntry) MakeCommand(id uint32) (cmd txnif.TxnCmd, err error) 
 	return newSegmentCmd(id, cmdType, entry), nil
 }
 
+func (entry *SegmentEntry) Set1PC() {
+	entry.GetNodeLocked().Set1PC()
+}
+func (entry *SegmentEntry) Is1PC() bool {
+	return entry.GetNodeLocked().Is1PC()
+}
 func (entry *SegmentEntry) PPString(level common.PPLevel, depth int, prefix string) string {
 	var w bytes.Buffer
 	_, _ = w.WriteString(fmt.Sprintf("%s%s%s", common.RepeatStr("\t", depth), prefix, entry.StringWithLevel(level)))

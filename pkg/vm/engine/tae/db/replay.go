@@ -374,7 +374,7 @@ func (db *DB) onReplayDelete(cmd *updates.UpdateCmd, idxCtx *wal.Index, observer
 	}
 	deleteNode := cmd.GetDeleteNode()
 	deleteNode.SetLogIndex(idxCtx)
-	if cmdType == txnif.Cmd1PC {
+	if cmdType == txnif.Cmd1PC || deleteNode.Is1PC() {
 		commitTS = deleteNode.GetPrepareTS()
 	}
 	deleteNode.OnReplayCommit(commitTS)
@@ -414,7 +414,7 @@ func (db *DB) onReplayAppend(cmd *updates.UpdateCmd, idxCtx *wal.Index, observer
 	}
 	appendNode := cmd.GetAppendNode()
 	appendNode.SetLogIndex(idxCtx)
-	if cmdType == txnif.Cmd1PC {
+	if cmdType == txnif.Cmd1PC || appendNode.Is1PC() {
 		commitTS = appendNode.GetPrepare()
 	}
 	appendNode.OnReplayCommit(commitTS)

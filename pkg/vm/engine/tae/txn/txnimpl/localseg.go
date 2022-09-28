@@ -141,18 +141,18 @@ func (seg *localSegment) prepareApplyNode(node InsertNode) (err error) {
 	for appended < node.RowsWithoutDeletes() {
 		appender, err := seg.tableHandle.GetAppender()
 		if moerr.IsMoErrCode(err, moerr.ErrAppendableSegmentNotFound) {
-			segH, err := seg.table.CreateSegment()
+			segH, err := seg.table.CreateSegment(true)
 			if err != nil {
 				return err
 			}
-			blk, err := segH.CreateBlock()
+			blk, err := segH.CreateBlock(true)
 			if err != nil {
 				return err
 			}
 			appender = seg.tableHandle.SetAppender(blk.Fingerprint())
 		} else if moerr.IsMoErrCode(err, moerr.ErrAppendableBlockNotFound) {
 			id := appender.GetID()
-			blk, err := seg.table.CreateBlock(id.SegmentID)
+			blk, err := seg.table.CreateBlock(id.SegmentID, true)
 			if err != nil {
 				return err
 			}

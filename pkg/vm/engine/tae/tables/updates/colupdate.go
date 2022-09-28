@@ -111,6 +111,8 @@ func (node *ColumnUpdateNode) MakeCommand(id uint32) (cmd txnif.TxnCmd, err erro
 	return
 }
 
+func (node *ColumnUpdateNode) Set1PC()     {}
+func (node *ColumnUpdateNode) Is1PC() bool { return false }
 func (node *ColumnUpdateNode) AttachTo(chain *ColumnChain) {
 	node.chain = chain
 	node.GenericDLNode = chain.Insert(node)
@@ -329,22 +331,6 @@ func (node *ColumnUpdateNode) StringLocked() string {
 	}
 	s = fmt.Sprintf("%s]%s", s, node.logIndex.String())
 	return s
-}
-
-func (node *ColumnUpdateNode) Prepare2PCPrepare() (err error) {
-	node.chain.Lock()
-	defer node.chain.Unlock()
-	if node.commitTs != txnif.UncommitTS {
-		return
-	}
-	// if node.commitTs != txnif.UncommitTS {
-	// 	panic("logic error")
-	// }
-	node.commitTs = node.txn.GetPrepareTS()
-	node.prepareTs = node.txn.GetPrepareTS()
-	node.chain.UpdateLocked(node)
-	// TODO: merge updates
-	return
 }
 
 func (node *ColumnUpdateNode) PrepareCommit() (err error) {

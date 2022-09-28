@@ -77,6 +77,7 @@ func (e *DBMVCCNode) ApplyCommit(index *wal.Index) (err error) {
 	e.EntryMVCCNode.ApplyCommit(commitTS)
 	return nil
 }
+
 func (e *DBMVCCNode) onReplayCommit(ts types.TS) (err error) {
 	e.EntryMVCCNode.ReplayCommit(ts)
 	e.TxnMVCCNode.OnReplayCommit(ts)

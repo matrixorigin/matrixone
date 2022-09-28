@@ -33,7 +33,6 @@ func (store *NoopTxnStore) Append(dbId, id uint64, data *containers.Batch) error
 func (store *NoopTxnStore) PrepareRollback() error                               { return nil }
 func (store *NoopTxnStore) PrePrepare() error                                    { return nil }
 func (store *NoopTxnStore) PrepareCommit() error                                 { return nil }
-func (store *NoopTxnStore) Prepare2PCPrepare() error                             { return nil }
 func (store *NoopTxnStore) ApplyRollback() error                                 { return nil }
 func (store *NoopTxnStore) PreApplyCommit() error                                { return nil }
 func (store *NoopTxnStore) ApplyCommit() error                                   { return nil }
@@ -58,12 +57,16 @@ func (store *NoopTxnStore) GetSegment(dbId uint64, id *common.ID) (seg handle.Se
 	return
 }
 
-func (store *NoopTxnStore) CreateSegment(dbId, tid uint64) (seg handle.Segment, err error) { return }
+func (store *NoopTxnStore) CreateSegment(dbId, tid uint64, is1PC bool) (seg handle.Segment, err error) {
+	return
+}
 func (store *NoopTxnStore) CreateNonAppendableSegment(dbId, tid uint64) (seg handle.Segment, err error) {
 	return
 }
 func (store *NoopTxnStore) GetBlock(dbId uint64, id *common.ID) (blk handle.Block, err error) { return }
-func (store *NoopTxnStore) CreateBlock(uint64, uint64, uint64) (blk handle.Block, err error)  { return }
+func (store *NoopTxnStore) CreateBlock(uint64, uint64, uint64, bool) (blk handle.Block, err error) {
+	return
+}
 func (store *NoopTxnStore) CreateNonAppendableBlock(dbId uint64, id *common.ID) (blk handle.Block, err error) {
 	return
 }

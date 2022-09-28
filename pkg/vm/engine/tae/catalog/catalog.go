@@ -195,7 +195,7 @@ func (catalog *Catalog) onReplayUpdateDatabase(cmd *EntryCommand, idx *wal.Index
 		un.onReplayCommit(commitTS)
 		return
 	}
-	if cmdType == txnif.Cmd1PC {
+	if cmdType == txnif.Cmd1PC || un.Is1PC() {
 		un.onReplayCommit(prepareTS)
 	}
 	un.SetLogIndex(idx)
@@ -278,7 +278,7 @@ func (catalog *Catalog) onReplayUpdateTable(cmd *EntryCommand, dataFactory DataF
 	if cmdType == txnif.CmdCommit {
 		un.onReplayCommit(commitTS)
 	}
-	if cmdType == txnif.Cmd1PC {
+	if cmdType == txnif.Cmd1PC || un.Is1PC() {
 		un.onReplayCommit(prepareTS)
 	}
 	un.SetLogIndex(idx)
@@ -356,6 +356,9 @@ func (catalog *Catalog) onReplayUpdateSegment(
 	}
 
 	un := cmd.entry.GetNodeLocked().(*MetadataMVCCNode)
+	if un.Is1PC() {
+		cmdType = txnif.Cmd1PC
+	}
 	switch cmdType {
 	case txnif.CmdCommit:
 		un.onReplayCommit(commitTS)
@@ -454,6 +457,9 @@ func (catalog *Catalog) onReplayUpdateBlock(cmd *EntryCommand,
 	}
 	blk, err := seg.GetBlockEntryByID(cmd.Block.ID)
 	un := cmd.entry.GetNodeLocked().(*MetadataMVCCNode)
+	if un.Is1PC() {
+		cmdType = txnif.Cmd1PC
+	}
 	switch cmdType {
 	case txnif.CmdCommit:
 		un.onReplayCommit(commitTS)

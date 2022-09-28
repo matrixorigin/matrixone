@@ -719,7 +719,7 @@ func TestSegment1(t *testing.T) {
 	assert.Nil(t, err)
 	rel, err := db.CreateRelation(schema)
 	assert.Nil(t, err)
-	_, err = rel.CreateSegment()
+	_, err = rel.CreateSegment(false)
 	assert.Nil(t, err)
 	err = txn1.Commit()
 	assert.Nil(t, err)
@@ -739,7 +739,7 @@ func TestSegment1(t *testing.T) {
 	}
 	assert.Equal(t, 1, cnt)
 
-	_, err = rel.CreateSegment()
+	_, err = rel.CreateSegment(false)
 	assert.Nil(t, err)
 
 	segIt = rel.MakeSegmentIt()
@@ -793,7 +793,7 @@ func TestSegment2(t *testing.T) {
 	rel, _ := db.CreateRelation(schema)
 	segCnt := 10
 	for i := 0; i < segCnt; i++ {
-		_, err := rel.CreateSegment()
+		_, err := rel.CreateSegment(false)
 		assert.Nil(t, err)
 	}
 
@@ -822,11 +822,11 @@ func TestBlock1(t *testing.T) {
 	db, _ := txn1.CreateDatabase("db")
 	schema := catalog.MockSchema(1, 0)
 	rel, _ := db.CreateRelation(schema)
-	seg, _ := rel.CreateSegment()
+	seg, _ := rel.CreateSegment(false)
 
 	blkCnt := 100
 	for i := 0; i < blkCnt; i++ {
-		_, err := seg.CreateBlock()
+		_, err := seg.CreateBlock(false)
 		assert.Nil(t, err)
 	}
 

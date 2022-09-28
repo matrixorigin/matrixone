@@ -371,6 +371,12 @@ func (e *DBEntry) MakeCommand(id uint32) (txnif.TxnCmd, error) {
 	return newDBCmd(id, cmdType, e), nil
 }
 
+func (e *DBEntry) Set1PC() {
+	e.GetNodeLocked().Set1PC()
+}
+func (e *DBEntry) Is1PC() bool {
+	return e.GetNodeLocked().Is1PC()
+}
 func (e *DBEntry) GetCatalog() *Catalog { return e.catalog }
 
 func (e *DBEntry) RecurLoop(processor Processor) (err error) {

@@ -51,7 +51,7 @@ type Relation interface {
 	Append(data *containers.Batch) error
 
 	GetMeta() any
-	CreateSegment() (Segment, error)
+	CreateSegment(bool) (Segment, error)
 	CreateNonAppendableSegment() (Segment, error)
 	GetSegment(id uint64) (Segment, error)
 

@@ -41,6 +41,8 @@ type MVCCNode interface {
 	IsCommitting() bool
 	IsCommitted() bool
 	IsAborted() bool
+	Set1PC()
+	Is1PC() bool
 
 	GetEnd() types.TS
 	GetPrepare() types.TS
@@ -58,13 +60,12 @@ type MVCCNode interface {
 	CloneAll() MVCCNode
 }
 
-// TODO prepare ts
 type TxnMVCCNode struct {
 	Start, Prepare, End types.TS
 	Txn                 txnif.TxnReader
 	Aborted             bool
-	//State txnif.TxnState
-	LogIndex *wal.Index
+	is1PC               bool // for subTxn
+	LogIndex            *wal.Index
 }
 
 func NewTxnMVCCNodeWithTxn(txn txnif.TxnReader) *TxnMVCCNode {
@@ -88,6 +89,12 @@ func NewTxnMVCCNodeWithTS(ts types.TS) *TxnMVCCNode {
 }
 func (un *TxnMVCCNode) IsAborted() bool {
 	return un.Aborted
+}
+func (un *TxnMVCCNode) Is1PC() bool {
+	return un.is1PC
+}
+func (un *TxnMVCCNode) Set1PC() {
+	un.is1PC = true
 }
 
 // Check w-w confilct
@@ -294,12 +301,17 @@ func (un *TxnMVCCNode) GetLogIndex() *wal.Index {
 	return un.LogIndex
 }
 func (un *TxnMVCCNode) ApplyCommit(index *wal.Index) (ts types.TS, err error) {
-	un.End = un.Txn.GetCommitTS()
+	if un.Is1PC() {
+		un.End = un.Txn.GetPrepareTS()
+	} else {
+		un.End = un.Txn.GetCommitTS()
+	}
 	un.SetLogIndex(index)
 	un.Txn = nil
 	ts = un.End
 	return
 }
+
 func (un *TxnMVCCNode) OnReplayCommit(ts types.TS) {
 	un.End = ts
 }
@@ -333,6 +345,14 @@ func (un *TxnMVCCNode) WriteTo(w io.Writer) (n int64, err error) {
 		return
 	}
 	n += sn
+	is1PC := uint8(0)
+	if un.is1PC {
+		is1PC = 1
+	}
+	if err = binary.Write(w, binary.BigEndian, is1PC); err != nil {
+		return
+	}
+	n += 1
 	return
 }
 
@@ -357,6 +377,15 @@ func (un *TxnMVCCNode) ReadFrom(r io.Reader) (n int64, err error) {
 		return
 	}
 	n += sn
+
+	is1PC := uint8(0)
+	if err = binary.Read(r, binary.BigEndian, &is1PC); err != nil {
+		return
+	}
+	n += 1
+	if is1PC == 1 {
+		un.is1PC = true
+	}
 	return
 }
 
