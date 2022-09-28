@@ -52,7 +52,6 @@ type TxnReader interface {
 	String() string
 	Repr() string
 	GetLSN() uint64
-	Event() int
 
 	SameTxn(startTs types.TS) bool
 	CommitBefore(startTs types.TS) bool

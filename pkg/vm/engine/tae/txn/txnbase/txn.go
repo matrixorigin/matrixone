@@ -68,26 +68,22 @@ var DefaultTxnFactory = func(mgr *TxnManager, store txnif.TxnStore, id uint64, s
 type Txn struct {
 	sync.WaitGroup
 	*TxnCtx
-	Ch                       chan int
 	Mgr                      *TxnManager
 	Store                    txnif.TxnStore
 	Err                      error
 	LSN                      uint64
 	TenantID, UserID, RoleID uint32
 
-	PrepareCommitFn     func(txnif.AsyncTxn) error
-	Prepare2PCPrepareFn func(txnif.AsyncTxn) error
-	PrepareRollbackFn   func(txnif.AsyncTxn) error
-	ApplyPrepareFn      func(txnif.AsyncTxn) error
-	ApplyCommitFn       func(txnif.AsyncTxn) error
-	ApplyRollbackFn     func(txnif.AsyncTxn) error
+	PrepareCommitFn   func(txnif.AsyncTxn) error
+	PrepareRollbackFn func(txnif.AsyncTxn) error
+	ApplyCommitFn     func(txnif.AsyncTxn) error
+	ApplyRollbackFn   func(txnif.AsyncTxn) error
 }
 
 func NewTxn(mgr *TxnManager, store txnif.TxnStore, txnId uint64, start types.TS, info []byte) *Txn {
 	txn := &Txn{
 		Mgr:   mgr,
 		Store: store,
-		Ch:    make(chan int, 1),
 	}
 	txn.TxnCtx = NewTxnCtx(txnId, start, info)
 	return txn
@@ -216,11 +212,6 @@ func (txn *Txn) GetStore() txnif.TxnStore {
 }
 
 func (txn *Txn) GetLSN() uint64 { return txn.LSN }
-
-func (txn *Txn) Event() (e int) {
-	e = <-txn.Ch
-	return
-}
 
 func (txn *Txn) DoneWithErr(err error, isAbort bool) {
 	if txn.Is2PC() {
