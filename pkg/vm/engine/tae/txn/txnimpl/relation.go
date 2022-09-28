@@ -169,8 +169,8 @@ func (h *txnRelation) GetSegment(id uint64) (seg handle.Segment, err error) {
 	return h.Txn.GetStore().GetSegment(h.table.entry.GetDB().ID, fp)
 }
 
-func (h *txnRelation) CreateSegment() (seg handle.Segment, err error) {
-	return h.Txn.GetStore().CreateSegment(h.table.entry.GetDB().ID, h.table.entry.GetID())
+func (h *txnRelation) CreateSegment(is1PC bool) (seg handle.Segment, err error) {
+	return h.Txn.GetStore().CreateSegment(h.table.entry.GetDB().ID, h.table.entry.GetID(), is1PC)
 }
 
 func (h *txnRelation) CreateNonAppendableSegment() (seg handle.Segment, err error) {
