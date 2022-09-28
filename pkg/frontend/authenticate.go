@@ -2132,22 +2132,7 @@ func doRevokeRole(ctx context.Context, ses *Session, rr *tree.RevokeRole) error 
 	}
 
 	//handle "IF EXISTS"
-	for i, role := range rr.Roles {
-		sql := getSqlForRoleIdOfRole(role.UserName)
-		vr, err = verifyRoleFunc(ctx, bh, sql, role.UserName, roleType)
-		if err != nil {
-			goto handleFailed
-		}
-		verifiedFromRoles[i] = vr
-		if vr == nil {
-			if !rr.IfExists { //when the "IF EXISTS" is set, just skip the check
-				err = moerr.NewInternalError("there is no role %s", role.UserName)
-				goto handleFailed
-			}
-		}
-	}
-
-	//step2 : check Users are real Users or Roles,  exists or not
+	//step1 : check Users are real Users or Roles,  exists or not
 	for i, user := range rr.Users {
 		sql := getSqlForRoleIdOfRole(user.Username)
 		vr, err = verifyRoleFunc(ctx, bh, sql, user.Username, roleType)
@@ -2163,21 +2148,38 @@ func doRevokeRole(ctx context.Context, ses *Session, rr *tree.RevokeRole) error 
 			if err != nil {
 				goto handleFailed
 			}
-			if vr == nil {
-				err = moerr.NewInternalError("there is no role or user %s", user.Username)
-				goto handleFailed
-			}
 			verifiedToRoles[i] = vr
+			if vr == nil {
+				if !rr.IfExists { //when the "IF EXISTS" is set, just skip the check
+					err = moerr.NewInternalError("there is no role or user %s", user.Username)
+					goto handleFailed
+				}
+			}
 		}
+	}
+
+	//handle "IF EXISTS"
+	//step2 : check roles before the FROM clause
+	for i, role := range rr.Roles {
+		sql := getSqlForRoleIdOfRole(role.UserName)
+		vr, err = verifyRoleFunc(ctx, bh, sql, role.UserName, roleType)
+		if err != nil {
+			goto handleFailed
+		}
+		if vr == nil {
+			err = moerr.NewInternalError("there is no role %s", role.UserName)
+			goto handleFailed
+		}
+		verifiedFromRoles[i] = vr
 	}
 
 	//step3 : process Revoke role from role
 	//step4 : process Revoke role from user
 	for _, from := range verifiedFromRoles {
-		if from == nil { //Under "IF EXISTS"
-			continue
-		}
 		for _, to := range verifiedToRoles {
+			if to == nil { //Under "IF EXISTS"
+				continue
+			}
 			sql := ""
 			if to.typ == roleType {
 				//revoke from role

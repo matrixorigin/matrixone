@@ -15,6 +15,7 @@
 package frontend
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"testing"
@@ -5575,6 +5576,47 @@ func Test_Name(t *testing.T) {
 			convey.So(ret == a.want, convey.ShouldBeTrue)
 		}
 	})
+}
+
+func genRevokeCases1(A [][]string, path []string, cur int, exists bool, out *[]string) {
+	if cur == len(A) {
+		bb := bytes.Buffer{}
+		bb.WriteString("revoke ")
+		if exists {
+			bb.WriteString("if exists ")
+		}
+		bb.WriteString(path[0])
+		bb.WriteString(",")
+		bb.WriteString(path[1])
+		bb.WriteString(" ")
+		bb.WriteString("from ")
+		bb.WriteString(path[2])
+		bb.WriteString(",")
+		bb.WriteString(path[3])
+		bb.WriteString(";")
+		*out = append(*out, bb.String())
+	} else {
+		for i := 0; i < len(A[cur]); i++ {
+			path[cur] = A[cur][i]
+			genRevokeCases1(A, path, cur+1, exists, out)
+		}
+	}
+}
+
+func Test_genRevokeCases(t *testing.T) {
+	A := [][]string{
+		{"r1", "role_r1"},
+		{"r2", "role_r2"},
+		{"u1", "role_u1"},
+		{"u2", "role_u2"},
+	}
+	Path := []string{"", "", "", ""}
+	Out := []string{}
+	genRevokeCases1(A, Path, 0, true, &Out)
+	genRevokeCases1(A, Path, 0, false, &Out)
+	for _, s := range Out {
+		fmt.Println(s)
+	}
 }
 
 func newSes(priv *privilege) *Session {
