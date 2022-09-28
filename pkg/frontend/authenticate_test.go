@@ -5471,7 +5471,7 @@ func Test_doDropAccount(t *testing.T) {
 	})
 }
 
-func generateGrantPrivilege(roleNames []string, withGrantOption bool) {
+func generateGrantPrivilege(grant, to string, exists bool, roleNames []string, withGrantOption bool) {
 	names := ""
 	for i, name := range roleNames {
 		if i > 0 {
@@ -5524,13 +5524,26 @@ func generateGrantPrivilege(roleNames []string, withGrantOption bool) {
 			}
 
 			for _, k := range levels[j] {
-				s := fmt.Sprintf("grant %v on %v %v to %v", i, j, k, names)
-				if withGrantOption {
-					s += " with grant option"
+				bb := bytes.Buffer{}
+				bb.WriteString(grant)
+				if exists {
+					bb.WriteString(" ")
+					bb.WriteString("if exists")
 				}
-				s += ";"
+
+				bb.WriteString(" ")
+				s := fmt.Sprintf("%v on %v %v", i, j, k)
+				bb.WriteString(s)
+				bb.WriteString(" ")
+				bb.WriteString(to)
+				bb.WriteString(" ")
+				bb.WriteString(names)
+				if withGrantOption {
+					bb.WriteString(" with grant option")
+				}
+				bb.WriteString(";")
 				convey.So(len(s) != 0, convey.ShouldBeTrue)
-				//fmt.Println(s)
+				//fmt.Println(bb.String())
 			}
 		}
 	}
@@ -5538,7 +5551,14 @@ func generateGrantPrivilege(roleNames []string, withGrantOption bool) {
 
 func Test_generateGrantPrivilege(t *testing.T) {
 	convey.Convey("grant privilege combination", t, func() {
-		generateGrantPrivilege([]string{"role_r1"}, false)
+		generateGrantPrivilege("grant", "to", false, []string{"role_r1"}, false)
+	})
+}
+
+func Test_generateRevokePrivilege(t *testing.T) {
+	convey.Convey("grant privilege combination", t, func() {
+		generateGrantPrivilege("revoke", "from", true, []string{"role_r1", "rx"}, false)
+		generateGrantPrivilege("revoke", "from", false, []string{"role_r1", "rx"}, false)
 	})
 }
 
