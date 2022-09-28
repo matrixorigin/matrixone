@@ -94,7 +94,7 @@ func (n *bfNode) onLoad() {
 	rawSize := stat.GetBloomFilter().OriginSize()
 	buf := make([]byte, rawSize)
 	data := fsData.(*objectio.BloomFilter).GetData()
-	if err = Decompress(data, buf, CompressType(compressTyp)); err != nil {
+	if err = common.Decompress(data, buf, common.CompressType(compressTyp)); err != nil {
 		panic(err)
 	}
 	n.bf, err = index.NewBinaryFuseFilterFromSource(buf)
@@ -163,7 +163,7 @@ func (r *BfReader) MayContainsAnyKeys(keys containers.Vector, visibility *roarin
 func (r *BfReader) Destroy() error { return nil }
 
 type BFWriter struct {
-	cType       CompressType
+	cType       common.CompressType
 	writer      objectio.Writer
 	block       objectio.BlockObject
 	impl        index.StaticFilter
@@ -176,7 +176,7 @@ func NewBFWriter() *BFWriter {
 	return &BFWriter{}
 }
 
-func (writer *BFWriter) Init(wr objectio.Writer, block objectio.BlockObject, cType CompressType, colIdx uint16, internalIdx uint16) error {
+func (writer *BFWriter) Init(wr objectio.Writer, block objectio.BlockObject, cType common.CompressType, colIdx uint16, internalIdx uint16) error {
 	writer.writer = wr
 	writer.block = block
 	writer.cType = cType
@@ -210,7 +210,7 @@ func (writer *BFWriter) Finalize() (*IndexMeta, error) {
 	}
 	bf := objectio.NewBloomFilter(writer.colIdx, uint8(writer.cType), iBuf)
 	rawSize := uint32(len(iBuf))
-	compressed := Compress(iBuf, writer.cType)
+	compressed := common.Compress(iBuf, writer.cType)
 	exactSize := uint32(len(compressed))
 	meta.SetSize(rawSize, exactSize)
 

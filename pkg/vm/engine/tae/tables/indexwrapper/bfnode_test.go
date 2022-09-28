@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/stretchr/testify/assert"
@@ -57,7 +58,7 @@ func TestStaticFilterIndex(t *testing.T) {
 	assert.Nil(t, err)
 	assert.Equal(t, 1, len(blocks))
 
-	cType := Plain
+	cType := common.Plain
 	typ := types.Type{Oid: types.T_int32}
 	colIdx := uint16(0)
 	interIdx := uint16(0)

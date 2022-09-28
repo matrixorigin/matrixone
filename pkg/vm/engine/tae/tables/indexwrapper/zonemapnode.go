@@ -152,7 +152,7 @@ func (r *ZmReader) ContainsAny(keys containers.Vector) (visibility *roaring.Bitm
 func (r *ZmReader) Destroy() error { return nil }
 
 type ZMWriter struct {
-	cType       CompressType
+	cType       common.CompressType
 	writer      objectio.Writer
 	block       objectio.BlockObject
 	zonemap     *index.ZoneMap
@@ -164,7 +164,7 @@ func NewZMWriter() *ZMWriter {
 	return &ZMWriter{}
 }
 
-func (writer *ZMWriter) Init(wr objectio.Writer, block objectio.BlockObject, cType CompressType, colIdx uint16, internalIdx uint16) error {
+func (writer *ZMWriter) Init(wr objectio.Writer, block objectio.BlockObject, cType common.CompressType, colIdx uint16, internalIdx uint16) error {
 	writer.writer = wr
 	writer.block = block
 	writer.cType = cType
@@ -194,7 +194,7 @@ func (writer *ZMWriter) Finalize() (*IndexMeta, error) {
 		return nil, err
 	}
 	rawSize := uint32(len(iBuf))
-	compressed := Compress(iBuf, writer.cType)
+	compressed := common.Compress(iBuf, writer.cType)
 	exactSize := uint32(len(compressed))
 	meta.SetSize(rawSize, exactSize)
 	err = appender.WriteIndex(writer.block, zonemap)
