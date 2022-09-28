@@ -15,12 +15,18 @@
 package multi
 
 import (
+	"context"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
+	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
+	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/smartystreets/goconvey/convey"
 	"github.com/stretchr/testify/require"
 	"testing"
+	"time"
 )
 
 func TestFromUnixTimeInt64(t *testing.T) {
@@ -64,12 +70,12 @@ func TestFromUnixTimeInt64(t *testing.T) {
 
 		int64Vector := testutil.MakeInt64Vector(nums, nil)
 		wantVector := testutil.MakeDateTimeVector(wants, nil)
-		process := testutil.NewProc()
+		process := newTmpProcess()
 		res, err := FromUnixTimeInt64([]*vector.Vector{int64Vector}, process)
 		convey.So(err, convey.ShouldBeNil)
 		cols1 := vector.MustTCols[types.Datetime](wantVector)
 		cols2 := vector.MustTCols[types.Datetime](res)
-		compareDatetime(t, cols1, cols2)
+		require.Equal(t, cols1, cols2)
 	})
 }
 
@@ -114,12 +120,12 @@ func TestFromUnixTimeUint64(t *testing.T) {
 
 		uint64Vector := testutil.MakeUint64Vector(nums, nil)
 		wantVector := testutil.MakeDateTimeVector(wants, nil)
-		process := testutil.NewProc()
+		process := newTmpProcess()
 		res, err := FromUnixTimeUint64([]*vector.Vector{uint64Vector}, process)
 		convey.So(err, convey.ShouldBeNil)
 		cols1 := vector.MustTCols[types.Datetime](wantVector)
 		cols2 := vector.MustTCols[types.Datetime](res)
-		compareDatetime(t, cols1, cols2)
+		require.Equal(t, cols1, cols2)
 	})
 }
 
@@ -164,12 +170,12 @@ func TestFromUnixTimeFloat64(t *testing.T) {
 
 		float64Vector := testutil.MakeFloat64Vector(nums, nil)
 		wantVector := testutil.MakeDateTimeVector(wants, nil)
-		process := testutil.NewProc()
+		process := newTmpProcess()
 		res, err := FromUnixTimeFloat64([]*vector.Vector{float64Vector}, process)
 		convey.So(err, convey.ShouldBeNil)
 		cols1 := vector.MustTCols[types.Datetime](wantVector)
 		cols2 := vector.MustTCols[types.Datetime](res)
-		compareDatetime(t, cols1, cols2)
+		require.Equal(t, cols1, cols2)
 	})
 }
 
@@ -183,32 +189,32 @@ func TestFromUnixTimeInt64Format(t *testing.T) {
 			{
 				num:    0,
 				format: "%b %M %m %c %D %d %e %j %k %h %i %p %r %T %s %f %v %x %Y %y",
-				want:   "Jan January 01 1 1st 01 1 001 8 08 00 AM 08:00:00 AM 08:00:00 00 000000 01 1970 1970 70",
+				want:   "Jan January 01 1 1st 01 1 001 0 12 00 AM 12:00:00 AM 00:00:00 00 000000 01 1970 1970 70",
 			},
 			{
 				num:    1451606400,
 				format: "%b %M %m %c %D %d %e %j %k %h %i %p %r %T %s %f %v %x %Y %y",
-				want:   "Jan January 01 1 1st 01 1 001 8 08 00 AM 08:00:00 AM 08:00:00 00 000000 53 2015 2016 16",
+				want:   "Jan January 01 1 1st 01 1 001 0 12 00 AM 12:00:00 AM 00:00:00 00 000000 53 2015 2016 16",
 			},
 			{
 				num:    2451606400,
 				format: "%b %M %m %c %D %d %e %j %k %h %i %p %r %T %s %f %v %x %Y %y",
-				want:   "Sep September 09 9 9th 09 9 252 9 09 46 AM 09:46:40 AM 09:46:40 40 000000 37 2047 2047 47",
+				want:   "Sep September 09 9 9th 09 9 252 1 01 46 AM 01:46:40 AM 01:46:40 40 000000 37 2047 2047 47",
 			},
 			{
 				num:    1451606267,
 				format: "%b %M %m %c %D %d %e %j %k %h %i %p %r %T %s %f %v %x %Y %y",
-				want:   "Jan January 01 1 1st 01 1 001 7 07 57 AM 07:57:47 AM 07:57:47 47 000000 53 2015 2016 16",
+				want:   "Dec December 12 12 31st 31 31 365 23 11 57 PM 11:57:47 PM 23:57:47 47 000000 53 2015 2015 15",
 			},
 			{
 				num:    32536771199,
 				format: "%b %M %m %c %D %d %e %j %k %h %i %p %r %T %s %f %v %x %Y %y",
-				want:   "Jan January 01 1 19th 19 19 019 7 07 59 AM 07:59:59 AM 07:59:59 59 000000 04 3001 3001 01",
+				want:   "Jan January 01 1 18th 18 18 018 23 11 59 PM 11:59:59 PM 23:59:59 59 000000 03 3001 3001 01",
 			},
 			{
 				num:    2447430881,
 				format: "%b %M %m %c %D %d %e %j %k %h %i %p %r %T %s %f %v %x %Y %y",
-				want:   "Jul July 07 7 23rd 23 23 204 1 01 54 AM 01:54:41 AM 01:54:41 41 000000 30 2047 2047 47",
+				want:   "Jul July 07 7 22nd 22 22 203 17 05 54 PM 05:54:41 PM 17:54:41 41 000000 30 2047 2047 47",
 			},
 		}
 
@@ -225,7 +231,7 @@ func TestFromUnixTimeInt64Format(t *testing.T) {
 		formatVector := testutil.MakeScalarVarchar(formats[0], 5)
 		wantVector := testutil.MakeVarcharVector(wants, nil)
 
-		process := testutil.NewProc()
+		process := newTmpProcess()
 		res, err := FromUnixTimeInt64Format([]*vector.Vector{int64Vector, formatVector}, process)
 		convey.So(err, convey.ShouldBeNil)
 		cols1 := vector.MustStrCols(wantVector)
@@ -244,32 +250,32 @@ func TestFromUnixTimeUint64Format(t *testing.T) {
 			{
 				num:    0,
 				format: "%b %M %m %c %D %d %e %j %k %h %i %p %r %T %s %f %v %x %Y %y",
-				want:   "Jan January 01 1 1st 01 1 001 8 08 00 AM 08:00:00 AM 08:00:00 00 000000 01 1970 1970 70",
+				want:   "Jan January 01 1 1st 01 1 001 0 12 00 AM 12:00:00 AM 00:00:00 00 000000 01 1970 1970 70",
 			},
 			{
 				num:    1451606400,
 				format: "%b %M %m %c %D %d %e %j %k %h %i %p %r %T %s %f %v %x %Y %y",
-				want:   "Jan January 01 1 1st 01 1 001 8 08 00 AM 08:00:00 AM 08:00:00 00 000000 53 2015 2016 16",
+				want:   "Jan January 01 1 1st 01 1 001 0 12 00 AM 12:00:00 AM 00:00:00 00 000000 53 2015 2016 16",
 			},
 			{
 				num:    2451606400,
 				format: "%b %M %m %c %D %d %e %j %k %h %i %p %r %T %s %f %v %x %Y %y",
-				want:   "Sep September 09 9 9th 09 9 252 9 09 46 AM 09:46:40 AM 09:46:40 40 000000 37 2047 2047 47",
+				want:   "Sep September 09 9 9th 09 9 252 1 01 46 AM 01:46:40 AM 01:46:40 40 000000 37 2047 2047 47",
 			},
 			{
 				num:    1451606267,
 				format: "%b %M %m %c %D %d %e %j %k %h %i %p %r %T %s %f %v %x %Y %y",
-				want:   "Jan January 01 1 1st 01 1 001 7 07 57 AM 07:57:47 AM 07:57:47 47 000000 53 2015 2016 16",
+				want:   "Dec December 12 12 31st 31 31 365 23 11 57 PM 11:57:47 PM 23:57:47 47 000000 53 2015 2015 15",
 			},
 			{
 				num:    32536771199,
 				format: "%b %M %m %c %D %d %e %j %k %h %i %p %r %T %s %f %v %x %Y %y",
-				want:   "Jan January 01 1 19th 19 19 019 7 07 59 AM 07:59:59 AM 07:59:59 59 000000 04 3001 3001 01",
+				want:   "Jan January 01 1 18th 18 18 018 23 11 59 PM 11:59:59 PM 23:59:59 59 000000 03 3001 3001 01",
 			},
 			{
 				num:    2447430881,
 				format: "%b %M %m %c %D %d %e %j %k %h %i %p %r %T %s %f %v %x %Y %y",
-				want:   "Jul July 07 7 23rd 23 23 204 1 01 54 AM 01:54:41 AM 01:54:41 41 000000 30 2047 2047 47",
+				want:   "Jul July 07 7 22nd 22 22 203 17 05 54 PM 05:54:41 PM 17:54:41 41 000000 30 2047 2047 47",
 			},
 		}
 
@@ -286,7 +292,7 @@ func TestFromUnixTimeUint64Format(t *testing.T) {
 		formatVector := testutil.MakeScalarVarchar(formats[0], 5)
 		wantVector := testutil.MakeVarcharVector(wants, nil)
 
-		process := testutil.NewProc()
+		process := newTmpProcess()
 		res, err := FromUnixTimeUint64Format([]*vector.Vector{uint64Vector, formatVector}, process)
 		convey.So(err, convey.ShouldBeNil)
 		cols1 := vector.MustStrCols(wantVector)
@@ -305,27 +311,27 @@ func TestFromUnixTimeFloat64Format(t *testing.T) {
 			{
 				num:    1451606400.123456789,
 				format: "%b %M %m %c %D %d %e %j %k %h %i %p %r %T %s %f %v %x %Y %y",
-				want:   "Jan January 01 1 1st 01 1 001 8 08 00 AM 08:00:00 AM 08:00:00 00 123457 53 2015 2016 16",
+				want:   "Jan January 01 1 1st 01 1 001 0 12 00 AM 12:00:00 AM 00:00:00 00 123457 53 2015 2016 16",
 			},
 			{
 				num:    2451606400.999999,
 				format: "%b %M %m %c %D %d %e %j %k %h %i %p %r %T %s %f %v %x %Y %y",
-				want:   "Sep September 09 9 9th 09 9 252 9 09 46 AM 09:46:40 AM 09:46:40 40 999999 37 2047 2047 47",
+				want:   "Sep September 09 9 9th 09 9 252 1 01 46 AM 01:46:40 AM 01:46:40 40 999999 37 2047 2047 47",
 			},
 			{
 				num:    1451606267.99999999,
 				format: "%b %M %m %c %D %d %e %j %k %h %i %p %r %T %s %f %v %x %Y %y",
-				want:   "Jan January 01 1 1st 01 1 001 7 07 57 AM 07:57:48 AM 07:57:48 48 000000 53 2015 2016 16",
+				want:   "Dec December 12 12 31st 31 31 365 23 11 57 PM 11:57:48 PM 23:57:48 48 000000 53 2015 2015 15",
 			},
 			{
 				num:    32536771199.123456,
 				format: "%b %M %m %c %D %d %e %j %k %h %i %p %r %T %s %f %v %x %Y %y",
-				want:   "Jan January 01 1 19th 19 19 019 7 07 59 AM 07:59:59 AM 07:59:59 59 123455 04 3001 3001 01",
+				want:   "Jan January 01 1 18th 18 18 018 23 11 59 PM 11:59:59 PM 23:59:59 59 123455 03 3001 3001 01",
 			},
 			{
 				num:    2447430881.1245,
 				format: "%b %M %m %c %D %d %e %j %k %h %i %p %r %T %s %f %v %x %Y %y",
-				want:   "Jul July 07 7 23rd 23 23 204 1 01 54 AM 01:54:41 AM 01:54:41 41 124500 30 2047 2047 47",
+				want:   "Jul July 07 7 22nd 22 22 203 17 05 54 PM 05:54:41 PM 17:54:41 41 124500 30 2047 2047 47",
 			},
 		}
 
@@ -342,7 +348,7 @@ func TestFromUnixTimeFloat64Format(t *testing.T) {
 		formatVector := testutil.MakeScalarVarchar(formats[0], 5)
 		wantVector := testutil.MakeVarcharVector(wants, nil)
 
-		process := testutil.NewProc()
+		process := newTmpProcess()
 		res, err := FromUnixTimeFloat64Format([]*vector.Vector{float64Vector, formatVector}, process)
 		convey.So(err, convey.ShouldBeNil)
 		cols1 := vector.MustStrCols(wantVector)
@@ -493,12 +499,24 @@ func TestFromUnixTimeFloat64FormatNull(t *testing.T) {
 	})
 }
 
-func compareDatetime(t *testing.T, expect []types.Datetime, actual []types.Datetime) {
-	expectStrs := make([]string, len(expect))
-	actualStrs := make([]string, len(actual))
-	for i, _ := range expect {
-		expectStrs = append(expectStrs, expect[i].String2(6))
-		actualStrs = append(actualStrs, actual[i].String2(6))
-	}
-	require.Equal(t, expectStrs, actualStrs)
+func newTmpProcess() *process.Process {
+	hm := host.New(1 << 30)
+	gm := guest.New(1<<30, hm)
+	return newProcessWithMheap(mheap.New(gm))
+}
+
+func newProcessWithMheap(heap *mheap.Mheap) *process.Process {
+	process := process.New(
+		context.Background(),
+		heap,
+		nil, // no txn client can be set
+		nil, // no txn operator can be set
+		testutil.NewFS(),
+	)
+	process.Lim.Size = 1 << 20
+	process.Lim.BatchRows = 1 << 20
+	process.Lim.BatchSize = 1 << 20
+	process.Lim.ReaderSize = 1 << 20
+	process.SessionInfo.TimeZone = time.FixedZone("UTC0", 0)
+	return process
 }
