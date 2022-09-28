@@ -1,6 +1,6 @@
-# Using client connect to the MatrixOne server
+# Connecting to MatrixOne with Database Client Tool
 
-MatrixOne now supports the following client connections to the MatrixOne server:
+MatrixOne now supports the following Database client tools:
 
 - MySQL Shell
 - Navicat
@@ -38,7 +38,7 @@ Make sure you have already [installed and launched MatrixOne](../../Get-Started/
 
     ```
     Welcome to the MySQL monitor. Commands end with ; or \g. Your MySQL connection id is 1031
-    Server version: 0.5.0 MatrixOne
+    Server version: 0.5.1 MatrixOne
     Copyright (c) 2000, 2022, Oracle and/or its affiliates.
 
     Oracle is a registered trademark of Oracle Corporation and/or its affiliates. Other names may be trademarks of their respective owners.
@@ -81,6 +81,7 @@ For more information on deployment, see [Deployment FAQs](../../FAQs/deployment-
 
 4. Right-click **MatrixOne** in database navigation on the left select **Edit link**, modify the configuration in the **Driver Attribute** area of the **Connection Settings**:
 
+    ```
     - characterSetResults: "utf8"
     - continueBatchOnError: "false"
     - useServerPrepStmts: "true"
@@ -90,5 +91,6 @@ For more information on deployment, see [Deployment FAQs](../../FAQs/deployment-
     - failoverReadOnly: "false"
     - serverTimezone: "Asia/Shanghai"
     - socketTimeout: 30000
+    ```
 
 5. To connect to the MatrixOne server, double-click **MatrixOne** in the database navigation on the left.
