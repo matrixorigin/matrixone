@@ -48,7 +48,7 @@ func (builder *QueryBuilder) remapExpr(expr *Expr, colMap map[[2]int32][2]int32)
 			ne.Col.ColPos = ids[1]
 			ne.Col.Name = builder.nameByColRef[mapId]
 		} else {
-			return moerr.NewParseError("can't find column in context's map %v", colMap)
+			return moerr.NewParseError("can't find column %v in context's map %v", mapId, colMap)
 		}
 
 	case *plan.Expr_F:
@@ -2222,12 +2222,8 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr)
 			break
 		}
 		if child.NodeType == plan.Node_UNNEST {
+			child.FilterList = append(child.FilterList, filters...)
 			uChildId := child.Children[0]
-			uChild := builder.qry.Nodes[uChildId]
-			if uChild.NodeType != plan.Node_PROJECT { //if not subquery,can't push down
-				cantPushdown = filters
-				break
-			}
 			builder.pushdownFilters(uChildId, nil)
 			break
 		}

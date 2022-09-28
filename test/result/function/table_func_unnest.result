@@ -166,3 +166,30 @@ with u_table as (select * from t1,unnest(t1.a,"$.b",true) u where seq>1) select 
 a    index
 {"a": 1, "b": [{"c": 2, "d": 3}, false, 4], "e": {"f": true, "g": [null, true, 1.1]}}	null
 {"add": 1}	null
+with myt as (select a from t1 where t1.b>1) select * from unnest(myt.a) u;
+col	seq	key	path	index	value	this
+a	0	null	$[0]	0	1	[1, true, false, null, "aaa", 1.1, {"t": false}]
+a	0	null	$[1]	1	true	[1, true, false, null, "aaa", 1.1, {"t": false}]
+a	0	null	$[2]	2	false	[1, true, false, null, "aaa", 1.1, {"t": false}]
+a	0	null	$[3]	3	null	[1, true, false, null, "aaa", 1.1, {"t": false}]
+a	0	null	$[4]	4	"aaa"	[1, true, false, null, "aaa", 1.1, {"t": false}]
+a	0	null	$[5]	5	1.1	[1, true, false, null, "aaa", 1.1, {"t": false}]
+a	0	null	$[6]	6	{"t": false}	[1, true, false, null, "aaa", 1.1, {"t": false}]
+with myt as (select a from t1 where t1.b>1) select * from unnest(myt.a) u where `value`='false' or `index`=5;
+col	seq	key	path	index	value	this
+a	0	null	$[2]	2	false	[1, true, false, null, "aaa", 1.1, {"t": false}]
+a	0	null	$[5]	5	1.1	[1, true, false, null, "aaa", 1.1, {"t": false}]
+create view v1 as (select * from unnest(t1.a) u);
+select * from v1;
+col	seq	key	path	index	value	this
+a	0	a	$.a	null	1	{"a": 1, "b": [{"c": 2, "d": 3}, false, 4], "e": {"f": true, "g": [null, true, 1.1]}}
+a	0	b	$.b	null	[{"c": 2, "d": 3}, false, 4]	{"a": 1, "b": [{"c": 2, "d": 3}, false, 4], "e": {"f": true, "g": [null, true, 1.1]}}
+a	0	e	$.e	null	{"f": true, "g": [null, true, 1.1]}	{"a": 1, "b": [{"c": 2, "d": 3}, false, 4], "e": {"f": true, "g": [null, true, 1.1]}}
+a	1	null	$[0]	0	1	[1, true, false, null, "aaa", 1.1, {"t": false}]
+a	1	null	$[1]	1	true	[1, true, false, null, "aaa", 1.1, {"t": false}]
+a	1	null	$[2]	2	false	[1, true, false, null, "aaa", 1.1, {"t": false}]
+a	1	null	$[3]	3	null	[1, true, false, null, "aaa", 1.1, {"t": false}]
+a	1	null	$[4]	4	"aaa"	[1, true, false, null, "aaa", 1.1, {"t": false}]
+a	1	null	$[5]	5	1.1	[1, true, false, null, "aaa", 1.1, {"t": false}]
+a	1	null	$[6]	6	{"t": false}	[1, true, false, null, "aaa", 1.1, {"t": false}]
+a	2	add	$.add	null	1	{"add": 1}
