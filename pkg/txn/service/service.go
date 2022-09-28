@@ -41,7 +41,7 @@ type service struct {
 	shard   metadata.DNShard
 	storage storage.TxnStorage
 	sender  rpc.TxnSender
-	clocker clock.Clock
+	clock   clock.Clock
 	stopper *stopper.Stopper
 
 	// TxnService maintains a sync.Map in memory to record all running transactions. The metadata for each write
@@ -69,7 +69,7 @@ func NewTxnService(logger *zap.Logger,
 	shard metadata.DNShard,
 	storage storage.TxnStorage,
 	sender rpc.TxnSender,
-	clocker clock.Clock,
+	clock clock.Clock,
 	zombieTimeout time.Duration) TxnService {
 	logger = logutil.Adjust(logger).With(util.TxnDNShardField(shard))
 	s := &service{
@@ -77,7 +77,7 @@ func NewTxnService(logger *zap.Logger,
 		shard:   shard,
 		sender:  sender,
 		storage: storage,
-		clocker: clocker,
+		clock:   clock,
 		pool: sync.Pool{
 			New: func() any {
 				return &txnContext{
@@ -133,19 +133,36 @@ func (s *service) gcZombieTxn(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 			return
-		case now := <-timer.C:
+		case <-timer.C:
 			s.transactions.Range(func(_, value any) bool {
 				txnCtx := value.(*txnContext)
+				txnMeta := txnCtx.getTxn()
+				// if a txn is not a distributed txn coordinator, wait coordinator dnshard.
+				if len(txnMeta.DNShards) > 0 && s.shard.ShardID != txnMeta.DNShards[0].ShardID {
+					return true
+				}
+
+				now := time.Now()
 				if now.Sub(txnCtx.createAt) > s.zombieTimeout {
-					cleanTxns = append(cleanTxns, txnCtx.getTxn())
+					cleanTxns = append(cleanTxns, txnMeta)
 				}
 				return true
 			})
-			for _, txn := range cleanTxns {
-				s.removeTxn(txn.ID)
-				if err := s.storage.Rollback(ctx, txn); err != nil {
-					s.logger.Error("start rollback task failed",
-						util.TxnIDFieldWithID(txn.ID),
+			for _, txnMeta := range cleanTxns {
+				req := &txn.TxnRequest{
+					Method:          txn.TxnMethod_Rollback,
+					Txn:             txnMeta,
+					RollbackRequest: &txn.TxnRollbackRequest{},
+				}
+				resp := &txn.TxnResponse{}
+				if err := s.Rollback(ctx, req, resp); err != nil || resp.TxnError != nil {
+					txnError := ""
+					if resp.TxnError != nil {
+						txnError = resp.TxnError.DebugString()
+					}
+					s.logger.Error("rollback zombie txn failed",
+						util.TxnField(txnMeta),
+						zap.String("txn-err", txnError),
 						zap.Error(err))
 				}
 			}

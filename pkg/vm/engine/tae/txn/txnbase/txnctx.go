@@ -157,17 +157,53 @@ func (ctx *TxnCtx) ToPreparingLocked(ts types.TS) error {
 	return nil
 }
 
+func (ctx *TxnCtx) ToPrepared() (err error) {
+	ctx.Lock()
+	defer ctx.Unlock()
+	return ctx.ToPreparedLocked()
+}
+
+func (ctx *TxnCtx) ToPreparedLocked() (err error) {
+	if ctx.State != txnif.TxnStatePreparing {
+		err = moerr.NewTAEPrepare("ToPreparedLocked: state is not preparing")
+		return
+	}
+	ctx.State = txnif.TxnStatePrepared
+	return
+}
+
+func (ctx *TxnCtx) ToCommittingFinished() (err error) {
+	ctx.Lock()
+	defer ctx.Unlock()
+	return ctx.ToCommittingFinishedLocked()
+}
+
+func (ctx *TxnCtx) ToCommittingFinishedLocked() (err error) {
+	if ctx.State != txnif.TxnStatePrepared {
+		err = moerr.NewTAECommit("ToCommittingFinishedLocked: state is not prepared")
+		return
+	}
+	ctx.State = txnif.TxnStateCommittingFinished
+	return
+}
+
 func (ctx *TxnCtx) ToCommittedLocked() error {
 	if ctx.State != txnif.TxnStatePreparing {
-		return moerr.NewTAECommit("ToCommittedLocked: state is not preapring")
+		return moerr.NewTAECommit("ToCommittedLocked: state is not preparing")
 	}
 	ctx.State = txnif.TxnStateCommitted
 	return nil
 }
 
+func (ctx *TxnCtx) ToRollbacking(ts types.TS) error {
+	ctx.Lock()
+	defer ctx.Unlock()
+	return ctx.ToRollbackingLocked(ts)
+}
+
 func (ctx *TxnCtx) ToRollbackingLocked(ts types.TS) error {
-	if ts.LessEq(ctx.StartTS) {
-		panic(fmt.Sprintf("start ts %d should be less than commit ts %d", ctx.StartTS, ts))
+	if ts.Less(ctx.StartTS) {
+		panic(fmt.Sprintf("commit ts %d should not be less than start ts %d", ts, ctx.StartTS))
 	}
 	if (ctx.State != txnif.TxnStateActive) && (ctx.State != txnif.TxnStatePreparing) {
 		return moerr.NewTAERollback("ToRollbackingLocked: state is not active or preparing")
