@@ -58,6 +58,7 @@ func SkipClockUncertainityPeriodOnRestart(ctx context.Context, clock Clock) {
 // Logical Physical Clocks and Consistent Snapshots in Globally Distributed
 // Databases
 type HLCClock struct {
+	nodeID        uint16
 	maxOffset     time.Duration
 	physicalClock func() int64
 
@@ -135,7 +136,7 @@ func (c *HLCClock) MaxOffset() time.Duration {
 // current time in hlc.
 func (c *HLCClock) Now() (timestamp.Timestamp, timestamp.Timestamp) {
 	now := c.now()
-	return now, timestamp.Timestamp{PhysicalTime: now.PhysicalTime + int64(c.maxOffset)}
+	return now, timestamp.Timestamp{PhysicalTime: now.PhysicalTime + int64(c.maxOffset), NodeID: now.NodeID}
 }
 
 // Update is called whenever messages are received from other nodes. HLC
@@ -228,7 +229,7 @@ func (c *HLCClock) now() timestamp.Timestamp {
 	} else {
 		c.mu.ts = timestamp.Timestamp{PhysicalTime: newPts}
 	}
-
+	c.mu.ts.NodeID = uint32(c.nodeID)
 	return c.mu.ts
 }
 
@@ -253,4 +254,8 @@ func (c *HLCClock) update(m timestamp.Timestamp) {
 		c.mu.ts.PhysicalTime = m.PhysicalTime
 		c.mu.ts.LogicalTime = m.LogicalTime
 	}
+}
+
+func (c *HLCClock) SetNodeID(id uint16) {
+	c.nodeID = id
 }

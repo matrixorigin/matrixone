@@ -103,14 +103,7 @@ func DeepCopyNode(node *plan.Node) *plan.Node {
 			OtherAttrs: make([]string, len(updateCtx.OtherAttrs)),
 		}
 		for j, col := range updateCtx.UpdateCols {
-			newNode.UpdateCtxs[i].UpdateCols[j] = &plan.ColDef{
-				Name:    col.Name,
-				Alg:     col.Alg,
-				Typ:     DeepCopyTyp(col.Typ),
-				Default: DeepCopyDefault(col.Default),
-				Primary: col.Primary,
-				Pkidx:   col.Pkidx,
-			}
+			newNode.UpdateCtxs[i].UpdateCols[j] = DeepCopyColDef(col)
 		}
 		copy(newNode.UpdateCtxs[i].OtherAttrs, updateCtx.OtherAttrs)
 		copy(newNode.UpdateCtxs[i].OrderAttrs, updateCtx.OrderAttrs)
@@ -206,13 +199,20 @@ func DeepCopyTyp(typ *plan.Type) *plan.Type {
 }
 
 func DeepCopyColDef(col *plan.ColDef) *plan.ColDef {
+	if col == nil {
+		return nil
+	}
 	return &plan.ColDef{
-		Name:    col.Name,
-		Alg:     col.Alg,
-		Typ:     DeepCopyTyp(col.Typ),
-		Default: DeepCopyDefault(col.Default),
-		Primary: col.Primary,
-		Pkidx:   col.Pkidx,
+		Name:          col.Name,
+		Alg:           col.Alg,
+		Typ:           DeepCopyTyp(col.Typ),
+		Default:       DeepCopyDefault(col.Default),
+		AutoIncrement: col.AutoIncrement,
+		Primary:       col.Primary,
+		Pkidx:         col.Pkidx,
+		Comment:       col.Comment,
+		IsCPkey:       col.IsCPkey,
+		OnUpdate:      DeepCopyExpr(col.OnUpdate),
 	}
 }
 
@@ -230,10 +230,95 @@ func DeepCopyTableDef(table *plan.TableDef) *plan.TableDef {
 	for idx, col := range table.Cols {
 		newTable.Cols[idx] = DeepCopyColDef(col)
 	}
-	// FIX ME: don't support now
-	// for idx, def := range table.Defs {
-	// 	newTable.Cols[idx] = &plan.TableDef_DefType{}
-	// }
+
+	for idx, def := range table.Defs {
+		switch defImpl := def.Def.(type) {
+		case *plan.TableDef_DefType_Pk:
+			pkDef := &plan.PrimaryKeyDef{
+				Names: make([]string, len(defImpl.Pk.Names)),
+			}
+			copy(pkDef.Names, defImpl.Pk.Names)
+			newTable.Defs[idx] = &plan.TableDef_DefType{
+				Def: &plan.TableDef_DefType_Pk{
+					Pk: pkDef,
+				},
+			}
+		case *plan.TableDef_DefType_Idx:
+			idxDef := &plan.IndexDef{
+				Typ:      defImpl.Idx.GetTyp(),
+				Name:     defImpl.Idx.GetName(),
+				ColNames: make([]string, len(defImpl.Idx.ColNames)),
+			}
+			copy(idxDef.ColNames, defImpl.Idx.ColNames)
+			newTable.Defs[idx] = &plan.TableDef_DefType{
+				Def: &plan.TableDef_DefType_Idx{
+					Idx: idxDef,
+				},
+			}
+		case *plan.TableDef_DefType_View:
+			newTable.Defs[idx] = &plan.TableDef_DefType{
+				Def: &plan.TableDef_DefType_View{
+					View: &plan.ViewDef{
+						View: defImpl.View.GetView(),
+					},
+				},
+			}
+		case *plan.TableDef_DefType_Properties:
+			propDef := &plan.PropertiesDef{
+				Properties: make([]*plan.Property, len(defImpl.Properties.Properties)),
+			}
+			for i, p := range defImpl.Properties.Properties {
+				propDef.Properties[i] = &plan.Property{
+					Key:   p.Key,
+					Value: p.Value,
+				}
+			}
+			newTable.Defs[idx] = &plan.TableDef_DefType{
+				Def: &plan.TableDef_DefType_Properties{
+					Properties: propDef,
+				},
+			}
+		case *TableDef_DefType_Partition:
+			partitionDef := &plan.PartitionInfo{
+				Type:                defImpl.Partition.GetType(),
+				Expr:                DeepCopyExpr(defImpl.Partition.Expr),
+				PartitionExpression: defImpl.Partition.GetPartitionExpression(),
+				Columns:             make([]*plan.Expr, len(defImpl.Partition.Columns)),
+				PartitionColumns:    make([]string, len(defImpl.Partition.PartitionColumns)),
+				PartitionNum:        defImpl.Partition.GetPartitionNum(),
+				Partitions:          make([]*plan.PartitionItem, len(defImpl.Partition.Partitions)),
+				Algorithm:           defImpl.Partition.GetAlgorithm(),
+				IsSubPartition:      defImpl.Partition.GetIsSubPartition(),
+				PartitionMsg:        defImpl.Partition.GetPartitionMsg(),
+			}
+			for i, e := range defImpl.Partition.Columns {
+				partitionDef.Columns[i] = DeepCopyExpr(e)
+			}
+			copy(partitionDef.PartitionColumns, defImpl.Partition.PartitionColumns)
+			for i, e := range defImpl.Partition.Partitions {
+				partitionDef.Partitions[i] = &plan.PartitionItem{
+					PartitionName:   e.PartitionName,
+					OrdinalPosition: e.OrdinalPosition,
+					Description:     e.Description,
+					Comment:         e.Comment,
+					LessThan:        make([]*plan.Expr, len(e.LessThan)),
+					InValues:        make([]*plan.Expr, len(e.InValues)),
+				}
+				for j, ee := range e.LessThan {
+					partitionDef.Partitions[i].LessThan[j] = DeepCopyExpr(ee)
+				}
+				for j, ee := range e.InValues {
+					partitionDef.Partitions[i].InValues[j] = DeepCopyExpr(ee)
+				}
+			}
+			newTable.Defs[idx] = &plan.TableDef_DefType{
+				Def: &plan.TableDef_DefType_Partition{
+					Partition: partitionDef,
+				},
+			}
+		}
+	}
+
 	return newTable
 }
 
@@ -277,12 +362,13 @@ func DeepCopyQuery(qry *plan.Query) *plan.Query {
 
 func DeepCopyInsertValues(insert *plan.InsertValues) *plan.InsertValues {
 	newInsert := &plan.InsertValues{
-		DbName:       insert.DbName,
-		TblName:      insert.TblName,
-		ExplicitCols: make([]*plan.ColDef, len(insert.ExplicitCols)),
-		OtherCols:    make([]*plan.ColDef, len(insert.OtherCols)),
-		Columns:      make([]*plan.Column, len(insert.Columns)),
-		OrderAttrs:   make([]string, len(insert.OrderAttrs)),
+		DbName:        insert.DbName,
+		TblName:       insert.TblName,
+		ExplicitCols:  make([]*plan.ColDef, len(insert.ExplicitCols)),
+		OtherCols:     make([]*plan.ColDef, len(insert.OtherCols)),
+		Columns:       make([]*plan.Column, len(insert.Columns)),
+		OrderAttrs:    make([]string, len(insert.OrderAttrs)),
+		CompositePkey: DeepCopyColDef(insert.CompositePkey),
 	}
 
 	for idx, col := range insert.ExplicitCols {
@@ -322,4 +408,155 @@ func DeepCopyPlan(pl *Plan) *Plan {
 		// only support query/insert plan now
 		return nil
 	}
+}
+
+func DeepCopyExpr(expr *Expr) *Expr {
+	if expr == nil {
+		return nil
+	}
+	newExpr := &Expr{
+		Typ: &plan.Type{
+			Id:        expr.Typ.GetId(),
+			Nullable:  expr.Typ.GetNullable(),
+			Width:     expr.Typ.GetWidth(),
+			Precision: expr.Typ.GetPrecision(),
+			Size:      expr.Typ.GetSize(),
+			Scale:     expr.Typ.GetScale(),
+		},
+	}
+
+	switch item := expr.Expr.(type) {
+	case *plan.Expr_C:
+		pc := &plan.Const{
+			Isnull: item.C.GetIsnull(),
+		}
+
+		switch c := item.C.Value.(type) {
+		case *plan.Const_Ival:
+			pc.Value = &plan.Const_Ival{Ival: c.Ival}
+		case *plan.Const_Dval:
+			pc.Value = &plan.Const_Dval{Dval: c.Dval}
+		case *plan.Const_Sval:
+			pc.Value = &plan.Const_Sval{Sval: c.Sval}
+		case *plan.Const_Bval:
+			pc.Value = &plan.Const_Bval{Bval: c.Bval}
+		case *plan.Const_Uval:
+			pc.Value = &plan.Const_Uval{Uval: c.Uval}
+		case *plan.Const_Fval:
+			pc.Value = &plan.Const_Fval{Fval: c.Fval}
+		case *plan.Const_Dateval:
+			pc.Value = &plan.Const_Dateval{Dateval: c.Dateval}
+		case *plan.Const_Datetimeval:
+			pc.Value = &plan.Const_Datetimeval{Datetimeval: c.Datetimeval}
+		case *plan.Const_Decimal64Val:
+			pc.Value = &plan.Const_Decimal64Val{Decimal64Val: &plan.Decimal64{A: c.Decimal64Val.A}}
+		case *plan.Const_Decimal128Val:
+			pc.Value = &plan.Const_Decimal128Val{Decimal128Val: &plan.Decimal128{A: c.Decimal128Val.A, B: c.Decimal128Val.B}}
+		case *plan.Const_Timestampval:
+			pc.Value = &plan.Const_Timestampval{Timestampval: c.Timestampval}
+		case *plan.Const_Jsonval:
+			pc.Value = &plan.Const_Jsonval{Jsonval: c.Jsonval}
+		case *plan.Const_Defaultval:
+			pc.Value = &plan.Const_Defaultval{Defaultval: c.Defaultval}
+		case *plan.Const_UpdateVal:
+			pc.Value = &plan.Const_UpdateVal{UpdateVal: c.UpdateVal}
+		}
+
+		newExpr.Expr = &plan.Expr_C{
+			C: pc,
+		}
+
+	case *plan.Expr_P:
+		newExpr.Expr = &plan.Expr_P{
+			P: &plan.ParamRef{
+				Pos: item.P.GetPos(),
+			},
+		}
+
+	case *plan.Expr_V:
+		newExpr.Expr = &plan.Expr_V{
+			V: &plan.VarRef{
+				Name: item.V.GetName(),
+			},
+		}
+
+	case *plan.Expr_Col:
+		newExpr.Expr = &plan.Expr_Col{
+			Col: &plan.ColRef{
+				RelPos: item.Col.GetRelPos(),
+				ColPos: item.Col.GetColPos(),
+			},
+		}
+
+	case *plan.Expr_F:
+		newArgs := make([]*Expr, len(item.F.Args))
+		for idx, arg := range item.F.Args {
+			newArgs[idx] = DeepCopyExpr(arg)
+		}
+		newExpr.Expr = &plan.Expr_F{
+			F: &plan.Function{
+				Func: &plan.ObjectRef{
+					Server:     item.F.Func.GetServer(),
+					Db:         item.F.Func.GetDb(),
+					Schema:     item.F.Func.GetSchema(),
+					Obj:        item.F.Func.GetObj(),
+					ServerName: item.F.Func.GetServerName(),
+					DbName:     item.F.Func.GetDbName(),
+					SchemaName: item.F.Func.GetSchemaName(),
+					ObjName:    item.F.Func.GetObjName(),
+				},
+				Args: newArgs,
+			},
+		}
+
+	case *plan.Expr_Sub:
+		newExpr.Expr = &plan.Expr_Sub{
+			Sub: &plan.SubqueryRef{
+				NodeId: item.Sub.GetNodeId(),
+			},
+		}
+
+	case *plan.Expr_Corr:
+		newExpr.Expr = &plan.Expr_Corr{
+			Corr: &plan.CorrColRef{
+				ColPos: item.Corr.GetColPos(),
+				RelPos: item.Corr.GetRelPos(),
+				Depth:  item.Corr.GetDepth(),
+			},
+		}
+
+	case *plan.Expr_T:
+		newExpr.Expr = &plan.Expr_T{
+			T: &plan.TargetType{
+				Typ: &plan.Type{
+					Id:        item.T.Typ.GetId(),
+					Nullable:  item.T.Typ.GetNullable(),
+					Width:     item.T.Typ.GetWidth(),
+					Precision: item.T.Typ.GetPrecision(),
+					Size:      item.T.Typ.GetSize(),
+					Scale:     item.T.Typ.GetScale(),
+				},
+			},
+		}
+
+	case *plan.Expr_Max:
+		newExpr.Expr = &plan.Expr_Max{
+			Max: &plan.MaxValue{
+				Value: item.Max.GetValue(),
+			},
+		}
+
+	case *plan.Expr_List:
+		e := &plan.ExprList{
+			List: make([]*plan.Expr, len(item.List.List)),
+		}
+		for i, ie := range item.List.List {
+			e.List[i] = DeepCopyExpr(ie)
+		}
+		newExpr.Expr = &plan.Expr_List{
+			List: e,
+		}
+	}
+
+	return newExpr
 }

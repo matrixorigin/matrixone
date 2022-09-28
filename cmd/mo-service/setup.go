@@ -63,6 +63,7 @@ func setupClock(cfg *Config, stopper *stopper.Stopper) error {
 			err = moerr.NewInternalError("not implment for %s", cfg.Clock.Backend)
 			return
 		}
+		defaultClock.SetNodeID(cfg.hashNodeID())
 		clock.SetupDefaultClock(defaultClock)
 	})
 	return err

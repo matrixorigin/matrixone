@@ -83,6 +83,8 @@ func (d *DatabaseRow) AttrByName(tx *Transaction, name string) (ret Nullable, er
 		ret.Value = types.Timestamp(0)
 	case catalog.SystemDBAttr_AccID:
 		ret.Value = uint32(d.AccountID)
+	case rowIDColumnName:
+		ret.Value = d.ID.ToRowID()
 	default:
 		panic(fmt.Sprintf("fixme: %s", name))
 	}
@@ -167,6 +169,8 @@ func (r *RelationRow) AttrByName(tx *Transaction, name string) (ret Nullable, er
 		ret.Value = types.Timestamp(0) //TODO
 	case catalog.SystemRelAttr_AccID:
 		ret.Value = uint32(0)
+	case rowIDColumnName:
+		ret.Value = r.ID.ToRowID()
 	default:
 		panic(fmt.Sprintf("fixme: %s", name))
 	}
@@ -287,6 +291,8 @@ func (a *AttributeRow) AttrByName(tx *Transaction, name string) (ret Nullable, e
 		ret.Value = boolToInt8(a.IsHidden)
 	case catalog.SystemColAttr_Comment:
 		ret.Value = a.Comment
+	case rowIDColumnName:
+		ret.Value = a.ID.ToRowID()
 	default:
 		panic(fmt.Sprintf("fixme: %s", name))
 	}

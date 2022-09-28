@@ -17,10 +17,12 @@ package memorystorage
 import (
 	"database/sql"
 	"errors"
+	"sort"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	apipb "github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
@@ -74,33 +76,62 @@ func (m *MemHandler) HandleGetLogTail(meta txn.TxnMeta, req apipb.SyncLogTailReq
 	insertNames := make([]string, 0, len(attrs))
 	deleteNames := make([]string, 0, len(attrs))
 	for _, attr := range attrs {
+		if attr.Value.IsRowId {
+			continue // will add row id to the first col of batch
+		}
 		attrsMap[attr.Value.Name] = attr.Value
 		insertNames = append(insertNames, attr.Value.Name)
-		if attr.Value.Primary || attr.Value.IsRowId {
+		if attr.Value.Primary {
 			deleteNames = append(deleteNames, attr.Value.Name)
 		}
 	}
+	sort.Slice(insertNames, func(i, j int) bool {
+		return attrsMap[insertNames[i]].Order < attrsMap[insertNames[j]].Order
+	})
+	sort.Slice(deleteNames, func(i, j int) bool {
+		return attrsMap[deleteNames[i]].Order < attrsMap[deleteNames[j]].Order
+	})
+
+	prependCols := []string{rowIDColumnName, "commit_time"}
+	startOffset := len(prependCols)
 
 	// batches
-	insertBatch := batch.New(false, insertNames)
+	insertBatch := batch.New(false, append(prependCols, insertNames...))
+	insertBatch.Vecs[0] = vector.New(types.T_Rowid.ToType()) // row id
+	insertBatch.Vecs[1] = vector.New(types.T_TS.ToType())    // commit time
 	for i, name := range insertNames {
-		insertBatch.Vecs[i] = vector.New(attrsMap[name].Type)
+		insertBatch.Vecs[startOffset+i] = vector.New(attrsMap[name].Type)
 	}
-	deleteBatch := batch.New(false, deleteNames)
+	deleteBatch := batch.New(false, append(prependCols, deleteNames...))
+	deleteBatch.Vecs[0] = vector.New(types.T_Rowid.ToType()) // row id
+	deleteBatch.Vecs[1] = vector.New(types.T_TS.ToType())    // commit time
 	for i, name := range deleteNames {
-		deleteBatch.Vecs[i] = vector.New(attrsMap[name].Type)
+		deleteBatch.Vecs[startOffset+i] = vector.New(attrsMap[name].Type)
 	}
-	appendInsert := func(row NamedRow) error {
-		if err := appendNamedRow(tx, m, insertBatch, row); err != nil {
+
+	appendRow := func(batch *batch.Batch, row NamedRow, commitTime Time) error {
+		// row id
+		rowID, err := row.AttrByName(tx, rowIDColumnName)
+		if err != nil {
+			return err
+		}
+		if rowID.IsNull {
+			panic("no row id")
+		}
+		vectorAppend(batch.Vecs[0], rowID, m.mheap)
+		// commit time
+		vectorAppend(batch.Vecs[1], Nullable{Value: commitTime.ToTxnTS()}, m.mheap)
+		// attributes
+		if err := appendNamedRow(tx, m, startOffset, batch, row); err != nil {
 			return err
 		}
 		return nil
 	}
-	appendDelete := func(row NamedRow) error {
-		if err := appendNamedRow(tx, m, deleteBatch, row); err != nil {
-			return err
-		}
-		return nil
+	appendInsert := func(row NamedRow, commitTime Time) error {
+		return appendRow(insertBatch, row, commitTime)
+	}
+	appendDelete := func(row NamedRow, commitTime Time) error {
+		return appendRow(deleteBatch, row, commitTime)
 	}
 
 	if tableID == ID(catalog.MO_DATABASE_ID) {
@@ -158,7 +189,7 @@ func (m *MemHandler) HandleGetLogTail(meta txn.TxnMeta, req apipb.SyncLogTailReq
 					if err := appendDelete(&NamedDataRow{
 						Value:    value.Value,
 						AttrsMap: attrsMap,
-					}); err != nil {
+					}, value.LockTime); err != nil {
 						return err
 					}
 					break
@@ -170,7 +201,7 @@ func (m *MemHandler) HandleGetLogTail(meta txn.TxnMeta, req apipb.SyncLogTailReq
 					if err := appendInsert(&NamedDataRow{
 						Value:    value.Value,
 						AttrsMap: attrsMap,
-					}); err != nil {
+					}, value.BornTime); err != nil {
 						return err
 					}
 					break
@@ -234,8 +265,8 @@ func logTailHandleSystemTable[
 	table *memtable.Table[K, V, R],
 	fromTime *Time,
 	toTime *Time,
-	appendInsert func(row NamedRow) error,
-	appendDelete func(row NamedRow) error,
+	appendInsert func(row NamedRow, commitTime Time) error,
+	appendDelete func(row NamedRow, commitTime Time) error,
 ) error {
 
 	handleRow := func(
@@ -249,7 +280,7 @@ func logTailHandleSystemTable[
 				(fromTime == nil || value.LockTime.After(*fromTime)) &&
 				(toTime == nil || value.LockTime.Before(*toTime)) {
 				// committed delete
-				if err := appendDelete(value.Value); err != nil {
+				if err := appendDelete(value.Value, value.LockTime); err != nil {
 					return err
 				}
 				break
@@ -258,7 +289,7 @@ func logTailHandleSystemTable[
 				(fromTime == nil || value.BornTime.After(*fromTime)) &&
 				(toTime == nil || value.BornTime.Before(*toTime)) {
 				// committed insert
-				if err := appendInsert(value.Value); err != nil {
+				if err := appendInsert(value.Value, value.BornTime); err != nil {
 					return err
 				}
 				break
