@@ -34,4 +34,3 @@ type = "tae"
 # you can move your vars in system_vars_config.toml to here. empty for default value
 # log vars in system_vars_config.toml was removed. use [log] to set log vars
 [cn.frontend]
-

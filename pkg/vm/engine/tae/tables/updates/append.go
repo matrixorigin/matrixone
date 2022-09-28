@@ -59,8 +59,9 @@ func NewCommittedAppendNode(
 	mvcc *MVCCHandle) *AppendNode {
 	return &AppendNode{
 		TxnMVCCNode: &txnbase.TxnMVCCNode{
-			Start: ts,
-			End:   ts,
+			Start:   ts,
+			Prepare: ts,
+			End:     ts,
 		},
 		startRow: startRow,
 		maxRow:   maxRow,
@@ -72,13 +73,14 @@ func NewAppendNode(
 	txn txnif.AsyncTxn,
 	startRow, maxRow uint32,
 	mvcc *MVCCHandle) *AppendNode {
-	var ts types.TS
+	var startTs, ts types.TS
 	if txn != nil {
+		startTs = txn.GetStartTS()
 		ts = txn.GetPrepareTS()
 	}
 	n := &AppendNode{
 		TxnMVCCNode: &txnbase.TxnMVCCNode{
-			Start:   ts,
+			Start:   startTs,
 			Prepare: ts,
 			End:     txnif.UncommitTS,
 			Txn:     txn,
@@ -94,6 +96,9 @@ func NewEmptyAppendNode() txnbase.MVCCNode {
 	return &AppendNode{
 		TxnMVCCNode: &txnbase.TxnMVCCNode{},
 	}
+}
+func (node *AppendNode) String() string {
+	return node.GeneralDesc()
 }
 func (node *AppendNode) CloneAll() txnbase.MVCCNode {
 	panic("todo")
@@ -143,8 +148,8 @@ func (node *AppendNode) SetMaxRow(row uint32) {
 }
 
 func (node *AppendNode) PrepareCommit() error {
-	node.Lock()
-	defer node.Unlock()
+	node.mvcc.Lock()
+	defer node.mvcc.Unlock()
 	_, err := node.TxnMVCCNode.PrepareCommit()
 	return err
 }
