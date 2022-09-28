@@ -2907,7 +2907,30 @@ func determinePrivilegesOfUserSatisfyPrivilegeSet(ctx context.Context, ses *Sess
 	return false, nil
 }
 
+// determineUserCanGrantRoleToOtherUsers decides if the user can grant roles to other users
+// TODO: the WGO(with_grant_option) only should be checked when the Grant Role is executing.
+// the same as the grant/revoke privilege, role.
+func determineUserCanGrantRolesToOtherUsers(ctx context.Context, ses *Session, fromRoles []*tree.Role, toUsers []*tree.User) (bool, error) {
+	//step1: normalize the names of roles and users
+
+	var err error
+	err = normalizeNamesOfRoles(fromRoles)
+	if err != nil {
+		return false, err
+	}
+	err = normalizeNamesOfUsers(toUsers)
+	if err != nil {
+		return false, err
+	}
+
+	//step2: decide the current user
+	//step3: check the link: roleX -> roleA -> .... -> roleZ -> the current user. Every link has the with_grant_option.
+	//TODO:
+	return false, nil
+}
+
 // determineRoleHasWithGrantOption decides all roleIds have the with_grant_option = true
+// TODO: it is a wrong implementation
 func determineRoleHasWithGrantOption(ctx context.Context, ses *Session, roles []*tree.Role) (bool, error) {
 	tenant := ses.GetTenantInfo()
 	pu := ses.Pu
