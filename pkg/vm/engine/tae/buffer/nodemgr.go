@@ -87,27 +87,25 @@ func (mgr *nodeManager) Count() int {
 
 func (mgr *nodeManager) Add(node base.INode) (err error) {
 	if !node.IsLoaded() {
-		mgr.RegisterNode(node)
-		return
+		return mgr.RegisterNode(node)
 	}
 	ok := mgr.MakeRoom(node.Size())
 	if !ok {
 		err = base.ErrNoSpace
 		return
 	}
-	mgr.RegisterNode(node)
-	return
+	return mgr.RegisterNode(node)
 }
 
-func (mgr *nodeManager) RegisterNode(node base.INode) {
+func (mgr *nodeManager) RegisterNode(node base.INode) error {
 	key := node.Key()
 	mgr.Lock()
 	defer mgr.Unlock()
-	_, ok := mgr.nodes[key]
-	if ok {
-		panic(fmt.Sprintf("Duplicate node: %v", key))
+	if _, ok := mgr.nodes[key]; ok {
+		return base.ErrDuplicataNode
 	}
 	mgr.nodes[key] = node
+	return nil
 }
 
 func (mgr *nodeManager) UnregisterNode(node base.INode) {

@@ -22,8 +22,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage/mem"
+	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage"
 	taestorage "github.com/matrixorigin/matrixone/pkg/txn/storage/tae"
-	txnstorage "github.com/matrixorigin/matrixone/pkg/txn/storage/txn"
 	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
@@ -104,7 +104,7 @@ func (s *store) newLogServiceClient(shard metadata.DNShard) (logservice.Client, 
 func (s *store) newMemTxnStorage(shard metadata.DNShard, logClient logservice.Client) (storage.TxnStorage, error) {
 	hm := host.New(1 << 30)
 	gm := guest.New(1<<30, hm)
-	return txnstorage.NewMemoryStorage(mheap.New(gm), txnstorage.SnapshotIsolation, s.clock)
+	return memorystorage.NewMemoryStorage(mheap.New(gm), memorystorage.SnapshotIsolation, s.clock)
 }
 
 func (s *store) newMemKVStorage(shard metadata.DNShard, logClient logservice.Client) (storage.TxnStorage, error) {

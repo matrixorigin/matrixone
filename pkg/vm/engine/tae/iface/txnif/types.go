@@ -53,7 +53,6 @@ type TxnReader interface {
 	String() string
 	Repr() string
 	GetLSN() uint64
-	Event() int
 
 	SameTxn(startTs types.TS) bool
 	CommitBefore(startTs types.TS) bool
@@ -77,7 +76,11 @@ type TxnChanger interface {
 	RUnlock()
 	ToCommittedLocked() error
 	ToPreparingLocked(ts types.TS) error
+	ToPrepared() error
+	ToPreparedLocked() error
 	ToRollbackedLocked() error
+
+	ToRollbacking(ts types.TS) error
 	ToRollbackingLocked(ts types.TS) error
 	ToUnknownLocked()
 	Prepare() (types.TS, error)
@@ -92,7 +95,7 @@ type TxnWriter interface {
 }
 
 type TxnAsyncer interface {
-	WaitDone(error) error
+	WaitDone(error, bool) error
 	WaitPrepared() error
 }
 
@@ -212,9 +215,9 @@ type TxnStore interface {
 	DatabaseNames() []string
 
 	GetSegment(dbId uint64, id *common.ID) (handle.Segment, error)
-	CreateSegment(dbId, tid uint64) (handle.Segment, error)
+	CreateSegment(dbId, tid uint64, is1PC bool) (handle.Segment, error)
 	CreateNonAppendableSegment(dbId, tid uint64) (handle.Segment, error)
-	CreateBlock(dbId, tid, sid uint64) (handle.Block, error)
+	CreateBlock(dbId, tid, sid uint64, is1PC bool) (handle.Block, error)
 	GetBlock(dbId uint64, id *common.ID) (handle.Block, error)
 	CreateNonAppendableBlock(dbId uint64, id *common.ID) (handle.Block, error)
 	SoftDeleteSegment(dbId uint64, id *common.ID) error
@@ -248,10 +251,10 @@ type TxnEntry interface {
 	RLock()
 	RUnlock()
 	PrepareCommit() error
-	// TODO: remove all Prepare2PCPrepare
-	// Prepare2PCPrepare() error
 	PrepareRollback() error
 	ApplyCommit(index *wal.Index) error
 	ApplyRollback(index *wal.Index) error
 	MakeCommand(uint32) (TxnCmd, error)
+	Is1PC() bool
+	Set1PC()
 }

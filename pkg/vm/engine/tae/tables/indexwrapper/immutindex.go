@@ -27,8 +27,8 @@ var _ Index = (*immutableIndex)(nil)
 
 type immutableIndex struct {
 	defaultIndexImpl
-	zmReader *ZMReader
-	bfReader *BFReader
+	zmReader *ZmReader
+	bfReader *BfReader
 }
 
 func NewImmutableIndex() *immutableIndex {
@@ -100,16 +100,12 @@ func (index *immutableIndex) Destroy() (err error) {
 func (index *immutableIndex) ReadFrom(blk data.Block, colDef *catalog.ColDef, col file.ColumnBlock) (err error) {
 	entry := blk.GetMeta().(*catalog.BlockEntry)
 	metaLoc := entry.GetMetaLoc()
-	idxFile := col.GetDataObject(metaLoc)
-	if idxFile == nil {
-		// FIXME: Now the block that is gc will also be replayed, here is a work around
-		return
-	}
 	id := entry.AsCommonID()
 	id.Idx = uint16(colDef.Idx)
-	index.zmReader = NewZMReader(idxFile, colDef.Type)
-	if idxFile.GetMeta().GetBloomFilter().End() > 0 {
-		index.bfReader = NewBFReader(idxFile)
+	index.zmReader = newZmReader(blk.GetBufMgr(), colDef.Type, *id, col, metaLoc)
+
+	if colDef.IsPrimary() {
+		index.bfReader = newBfReader(blk.GetBufMgr(), colDef.Type, *id, col, metaLoc)
 	}
 	return
 }

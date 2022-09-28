@@ -158,4 +158,12 @@ validSQL = []struct {
 
 然后跑 TestValid 测试。
 
+如果只是单纯地添加语法，首先在构造执行计划时，需要抛出功能不支持错误。可以调用 moerr 抛出
+
+```
+func NewNotSupported(msg string, args ...any) *Error
+```
+
+然后需要在 test 目录下添加 bvt 测试，这是一个端到端的测试，预期结果是抛出相应的错误，或正确的结果集。最后可以用 mo-tester (使用可以看 readme )作为检验。
+
 到此，为 MO parser 添加一个简单的语法成功，在 MO 最新的代码中，该语法还未被添加，大家可以尝试验证这个语法是否能解析成功，或者添加其他新的语法。
