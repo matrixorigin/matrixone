@@ -115,20 +115,20 @@ func (s *StatementInfo) CsvFields() []string {
 }
 
 func (s *StatementInfo) ExecPlan2Json() string {
-	var json []byte
+	var jsonByte []byte
 	if s.ExecPlan == nil && s.SerializeExecPlan == nil {
 		if f := getDefaultSerializeExecPlan(); f == nil {
 			uuidStr := uuid.UUID(s.StatementID).String()
 			return fmt.Sprintf(`{"code":200,"message":"sql query no record execution plan","steps":null,"success":false,"uuid":"%s"}`, uuidStr)
 		} else {
-			json = f(nil, uuid.UUID(s.StatementID))
+			jsonByte = f(nil, uuid.UUID(s.StatementID))
 		}
 	} else if queryTime := GetTracerProvider().longQueryTime; queryTime > int64(s.Duration) {
-		json = s.SerializeExecPlan(nil, uuid.UUID(s.StatementID))
+		jsonByte = s.SerializeExecPlan(nil, uuid.UUID(s.StatementID))
 	} else {
-		json = s.SerializeExecPlan(s.ExecPlan, uuid.UUID(s.StatementID))
+		jsonByte = s.SerializeExecPlan(s.ExecPlan, uuid.UUID(s.StatementID))
 	}
-	return string(json)
+	return string(jsonByte)
 }
 
 var defaultSerializeExecPlan atomic.Value
