@@ -110,22 +110,9 @@ func _getDefaultColDefs() []*plan.ColDef {
 }
 
 func (builder *QueryBuilder) buildUnnest(tbl *tree.Unnest, ctx *BindContext) (int32, error) {
-	tag := builder.genNewTag()
 	paramData, err := tbl.Param.Marshal()
 	if err != nil {
 		return 0, err
-	}
-	colDefs := _getDefaultColDefs()
-	node := &plan.Node{
-		NodeType: plan.Node_UNNEST,
-		Cost:     &plan.Cost{},
-		TableDef: &plan.TableDef{
-			TableType:          catalog.SystemViewRel, //test if ok
-			Name:               tbl.String(),
-			TableFunctionParam: paramData,
-			Cols:               colDefs,
-		},
-		BindingTags: []int32{tag},
 	}
 	var scanNode *plan.Node
 	var childId int32 = -1
@@ -229,6 +216,18 @@ func (builder *QueryBuilder) buildUnnest(tbl *tree.Unnest, ctx *BindContext) (in
 	}
 	if scanNode != nil {
 		childId = builder.appendNode(scanNode, ctx)
+	}
+	colDefs := _getDefaultColDefs()
+	node := &plan.Node{
+		NodeType: plan.Node_UNNEST,
+		Cost:     &plan.Cost{},
+		TableDef: &plan.TableDef{
+			TableType:          catalog.SystemViewRel, //test if ok
+			Name:               tbl.String(),
+			TableFunctionParam: paramData,
+			Cols:               colDefs,
+		},
+		BindingTags: []int32{builder.genNewTag()},
 	}
 	node.Children = []int32{childId}
 	nodeID := builder.appendNode(node, ctx)

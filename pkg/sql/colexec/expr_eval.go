@@ -16,6 +16,7 @@ package colexec
 
 import (
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -97,6 +98,7 @@ func EvalExpr(bat *batch.Batch, proc *process.Process, expr *plan.Expr) (*vector
 			Precision: t.T.Typ.GetPrecision(),
 		}), nil
 	case *plan.Expr_Col:
+		logutil.Infof("EvalExpr col.name:%v, col.colPos: %v, col.relPos:%v, bat.Vecs:%v,attrs:%s,zs:%v", t.Col.Name, t.Col.ColPos, t.Col.RelPos, bat.Vecs, bat.Attrs, bat.Zs)
 		vec := bat.Vecs[t.Col.ColPos]
 		if vec.IsScalarNull() {
 			vec.Typ = types.T(expr.Typ.GetId()).ToType()
