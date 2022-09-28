@@ -1038,8 +1038,8 @@ func (m *MemHandler) HandleRead(meta txn.TxnMeta, req txnengine.ReadReq, resp *t
 
 	// sort to emulate TAE behavior TODO remove this after BVT fixes
 	sort.Slice(rows, func(i, j int) bool {
-		return rows[i].PhysicalRow.LastUpdate.Load().Before(
-			rows[j].PhysicalRow.LastUpdate.Load(),
+		return rows[i].PhysicalRow.LastUpdate.Before(
+			rows[j].PhysicalRow.LastUpdate,
 		)
 	})
 

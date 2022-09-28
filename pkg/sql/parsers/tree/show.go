@@ -149,18 +149,72 @@ func NewShowDatabases(l *ComparisonExpr, w *Where) *ShowDatabases {
 	}
 }
 
+type ShowType int
+
+const (
+	ShowEngines = iota
+	ShowCharset
+	ShowCollation
+	ShowCreateUser
+	ShowTriggers
+	ShowProcedureStatus
+	ShowConfig
+	ShowEvents
+	ShowPlugins
+	ShowProfile
+	ShowProfiles
+	ShowPrivileges
+)
+
+func (s ShowType) String() string {
+	switch s {
+	case ShowEngines:
+		return "engines"
+	case ShowCharset:
+		return "charset"
+	case ShowCollation:
+		return "collation"
+	case ShowCreateUser:
+		return "create user"
+	case ShowTriggers:
+		return "triggers"
+	case ShowProcedureStatus:
+		return "procedure status"
+	case ShowConfig:
+		return "config"
+	case ShowEvents:
+		return "events"
+	case ShowPlugins:
+		return "plugins"
+	case ShowProfile:
+		return "profile"
+	case ShowProfiles:
+		return "profiles"
+	case ShowPrivileges:
+		return "privileges"
+	default:
+		return "not implemented"
+	}
+}
+
 type ShowTarget struct {
 	showImpl
-	Target string
+	Global bool
+	Type   ShowType
+	DbName string
 	Like   *ComparisonExpr
 	Where  *Where
 }
 
 func (node *ShowTarget) Format(ctx *FmtCtx) {
-	ctx.WriteString("show")
-	if node.Target != "" {
-		ctx.WriteByte(' ')
-		ctx.WriteString(node.Target)
+	ctx.WriteString("show ")
+	if node.Global {
+		ctx.WriteString("global ")
+	}
+	ctx.WriteString(node.Type.String())
+	if node.DbName != "" {
+		ctx.WriteString(" from ")
+		ctx.WriteString(node.DbName)
 	}
 	if node.Like != nil {
 		ctx.WriteByte(' ')
@@ -169,6 +223,56 @@ func (node *ShowTarget) Format(ctx *FmtCtx) {
 	if node.Where != nil {
 		ctx.WriteByte(' ')
 		node.Where.Format(ctx)
+	}
+}
+
+type ShowTableStatus struct {
+	showImpl
+	DbName string
+	Like   *ComparisonExpr
+	Where  *Where
+}
+
+func (node *ShowTableStatus) Format(ctx *FmtCtx) {
+	ctx.WriteString("show table status")
+	if node.DbName != "" {
+		ctx.WriteString(" from ")
+		ctx.WriteString(node.DbName)
+	}
+	if node.Like != nil {
+		ctx.WriteByte(' ')
+		node.Like.Format(ctx)
+	}
+	if node.Where != nil {
+		ctx.WriteByte(' ')
+		node.Where.Format(ctx)
+	}
+}
+
+type ShowGrants struct {
+	showImpl
+	Username string
+	Hostname string
+	Roles    []*Role
+}
+
+func (node *ShowGrants) Format(ctx *FmtCtx) {
+	ctx.WriteString("show grants")
+	if node.Username != "" {
+		ctx.WriteString(" for ")
+		ctx.WriteString(node.Username)
+		if node.Hostname != "" {
+			ctx.WriteString("@")
+			ctx.WriteString(node.Hostname)
+		}
+	}
+	if node.Roles != nil {
+		prefix := ""
+		for _, r := range node.Roles {
+			ctx.WriteString(prefix)
+			r.Format(ctx)
+			prefix = ", "
+		}
 	}
 }
 

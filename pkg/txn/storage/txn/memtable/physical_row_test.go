@@ -51,22 +51,22 @@ func testPhysicalRow(
 
 	// insert
 	n := 1
-	err := m.Insert(now, tx1, n)
+	m, err := m.Insert(now, tx1, n)
 	assert.Nil(t, err)
-	assert.Equal(t, 1, len(m.Versions.List))
-	assert.Equal(t, tx1, m.Versions.List[0].BornTx)
-	assert.Equal(t, now, m.Versions.List[0].BornTime)
-	assert.Nil(t, m.Versions.List[0].LockTx)
-	assert.True(t, m.Versions.List[0].LockTime.IsZero())
+	assert.Equal(t, 1, len(m.Versions))
+	assert.Equal(t, tx1, m.Versions[0].BornTx)
+	assert.Equal(t, now, m.Versions[0].BornTime)
+	assert.Nil(t, m.Versions[0].LockTx)
+	assert.True(t, m.Versions[0].LockTime.IsZero())
 
 	n2 := 2
-	err = m.Insert(now, tx2, n2)
+	m, err = m.Insert(now, tx2, n2)
 	assert.Nil(t, err)
-	assert.Equal(t, 2, len(m.Versions.List))
-	assert.Equal(t, tx2, m.Versions.List[1].BornTx)
-	assert.Equal(t, now, m.Versions.List[1].BornTime)
-	assert.Nil(t, m.Versions.List[1].LockTx)
-	assert.True(t, m.Versions.List[1].LockTime.IsZero())
+	assert.Equal(t, 2, len(m.Versions))
+	assert.Equal(t, tx2, m.Versions[1].BornTx)
+	assert.Equal(t, now, m.Versions[1].BornTime)
+	assert.Nil(t, m.Versions[1].LockTx)
+	assert.True(t, m.Versions[1].LockTime.IsZero())
 
 	// not readable now
 	res, err := m.Read(now, tx1)
@@ -91,11 +91,11 @@ func testPhysicalRow(
 	assert.Equal(t, 2, res)
 
 	// delete
-	err = m.Delete(now, tx1)
+	m, err = m.Delete(now, tx1)
 	assert.Nil(t, err)
-	assert.Equal(t, 2, len(m.Versions.List))
-	assert.Equal(t, tx1, m.Versions.List[0].LockTx)
-	assert.Equal(t, now, m.Versions.List[0].LockTime)
+	assert.Equal(t, 2, len(m.Versions))
+	assert.Equal(t, tx1, m.Versions[0].LockTx)
+	assert.Equal(t, now, m.Versions[0].LockTime)
 
 	// not readable now by current tx
 	res, err = m.Read(now, tx1)
@@ -108,11 +108,11 @@ func testPhysicalRow(
 	assert.NotNil(t, res)
 	assert.Equal(t, 2, res)
 
-	err = m.Delete(now, tx2)
+	m, err = m.Delete(now, tx2)
 	assert.Nil(t, err)
-	assert.Equal(t, 2, len(m.Versions.List))
-	assert.Equal(t, tx2, m.Versions.List[1].LockTx)
-	assert.Equal(t, now, m.Versions.List[1].LockTime)
+	assert.Equal(t, 2, len(m.Versions))
+	assert.Equal(t, tx2, m.Versions[1].LockTx)
+	assert.Equal(t, now, m.Versions[1].LockTime)
 
 	res, err = m.Read(now, tx2)
 	assert.Equal(t, sql.ErrNoRows, err)
@@ -122,36 +122,36 @@ func testPhysicalRow(
 
 	// insert again
 	n3 := 3
-	err = m.Insert(now, tx1, n3)
+	m, err = m.Insert(now, tx1, n3)
 	assert.Nil(t, err)
-	assert.Equal(t, 3, len(m.Versions.List))
-	assert.Equal(t, tx1, m.Versions.List[2].BornTx)
-	assert.Equal(t, now, m.Versions.List[2].BornTime)
-	assert.Nil(t, m.Versions.List[2].LockTx)
-	assert.True(t, m.Versions.List[2].LockTime.IsZero())
+	assert.Equal(t, 3, len(m.Versions))
+	assert.Equal(t, tx1, m.Versions[2].BornTx)
+	assert.Equal(t, now, m.Versions[2].BornTime)
+	assert.Nil(t, m.Versions[2].LockTx)
+	assert.True(t, m.Versions[2].LockTime.IsZero())
 
 	n4 := 4
-	err = m.Insert(now, tx2, n4)
+	m, err = m.Insert(now, tx2, n4)
 	assert.Nil(t, err)
-	assert.Equal(t, 4, len(m.Versions.List))
-	assert.Equal(t, tx2, m.Versions.List[3].BornTx)
-	assert.Equal(t, now, m.Versions.List[3].BornTime)
-	assert.Nil(t, m.Versions.List[3].LockTx)
-	assert.True(t, m.Versions.List[3].LockTime.IsZero())
+	assert.Equal(t, 4, len(m.Versions))
+	assert.Equal(t, tx2, m.Versions[3].BornTx)
+	assert.Equal(t, now, m.Versions[3].BornTime)
+	assert.Nil(t, m.Versions[3].LockTx)
+	assert.True(t, m.Versions[3].LockTime.IsZero())
 
 	tick()
 
 	// update
 	n5 := 5
-	err = m.Update(now, tx1, n5)
+	m, err = m.Update(now, tx1, n5)
 	assert.Nil(t, err)
-	assert.Equal(t, 5, len(m.Versions.List))
-	assert.Equal(t, tx1, m.Versions.List[2].LockTx)
-	assert.Equal(t, now, m.Versions.List[2].LockTime)
-	assert.Equal(t, tx1, m.Versions.List[4].BornTx)
-	assert.Equal(t, now, m.Versions.List[4].BornTime)
-	assert.Nil(t, m.Versions.List[4].LockTx)
-	assert.True(t, m.Versions.List[4].LockTime.IsZero())
+	assert.Equal(t, 5, len(m.Versions))
+	assert.Equal(t, tx1, m.Versions[2].LockTx)
+	assert.Equal(t, now, m.Versions[2].LockTime)
+	assert.Equal(t, tx1, m.Versions[4].BornTx)
+	assert.Equal(t, now, m.Versions[4].BornTime)
+	assert.Nil(t, m.Versions[4].LockTx)
+	assert.True(t, m.Versions[4].LockTime.IsZero())
 
 	// commit tx1
 	err = tx1.Commit()
@@ -181,16 +181,16 @@ func testPhysicalRow(
 
 	// write stale conflict
 	i := 1
-	err = m.Insert(now, tx2, i)
+	_, err = m.Insert(now, tx2, i)
 	assert.NotNil(t, err)
 	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnWriteConflict))
 
-	err = m.Delete(now, tx2)
+	_, err = m.Delete(now, tx2)
 	assert.NotNil(t, err)
 	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnWriteConflict))
 
 	i2 := 1
-	err = m.Update(now, tx2, i2)
+	_, err = m.Update(now, tx2, i2)
 	assert.NotNil(t, err)
 	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnWriteConflict))
 
@@ -199,20 +199,20 @@ func testPhysicalRow(
 	tx4 := NewTransaction("4", now, isolationPolicy)
 
 	// write locked conflict
-	err = m.Delete(now, tx3)
+	m, err = m.Delete(now, tx3)
 	assert.Nil(t, err)
 
-	err = m.Delete(now, tx4)
+	_, err = m.Delete(now, tx4)
 	assert.NotNil(t, err)
 	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnWriteConflict))
 
 	i3 := 1
-	err = m.Insert(now, tx4, i3)
+	_, err = m.Insert(now, tx4, i3)
 	assert.NotNil(t, err)
 	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnWriteConflict))
 
 	i4 := 1
-	err = m.Update(now, tx4, i4)
+	_, err = m.Update(now, tx4, i4)
 	assert.NotNil(t, err)
 	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnWriteConflict))
 }
