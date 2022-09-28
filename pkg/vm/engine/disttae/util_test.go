@@ -181,6 +181,17 @@ func TestNeedRead(t *testing.T) {
 				makeColExprForTest(2, types.T_int64),
 			}),
 		})},
+		// (a > b) and (c > d) => true
+		{true, []string{"a", "b", "c", "d"}, makeFunctionExprForTest("and", []*plan.Expr{
+			makeFunctionExprForTest(">", []*plan.Expr{
+				makeColExprForTest(0, types.T_int64),
+				makeColExprForTest(1, types.T_int64),
+			}),
+			makeFunctionExprForTest(">", []*plan.Expr{
+				makeColExprForTest(2, types.T_int64),
+				makeColExprForTest(3, types.T_int64),
+			}),
+		})},
 	}
 
 	t.Run("test needRead", func(t *testing.T) {

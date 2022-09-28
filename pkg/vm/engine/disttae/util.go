@@ -150,47 +150,6 @@ func getZonemapDataFromMeta(columns []int, meta BlockMeta, tableDef *plan.TableD
 	return datas, dataTypes, nil
 }
 
-// func evalFilterExpr(expr *plan.Expr, bat *batch.Batch, proc *process.Process) (bool, error) {
-// 	if len(bat.Vecs) == 0 { //that's constant expr
-// 		e, err := plan2.ConstantFold(bat, expr)
-// 		if err != nil {
-// 			return false, err
-// 		}
-// 		if cExpr, ok := e.Expr.(*plan.Expr_C); ok {
-// 			if bVal, bOk := cExpr.C.Value.(*plan.Const_Bval); bOk {
-// 				return bVal.Bval, nil
-// 			}
-// 		}
-// 		return false, moerr.NewInternalError("cannot eval filter expr")
-// 	} else {
-// 		switch exprImpl := expr.Expr.(type) {
-// 		case *plan.Expr_F:
-// 			switch exprImpl.F.Func.ObjName {
-// 			case "and":
-// 				if checkExprMaybeTrue(exprImpl.F.Args[0], bat, proc) {
-// 					return true, nil
-// 				}
-// 				return checkExprMaybeTrue(exprImpl.F.Args[1], bat, proc), nil
-// 			case "or":
-// 				if checkExprMaybeTrue(exprImpl.F.Args[0], bat, proc) {
-// 					return true, nil
-// 				}
-// 				return checkExprMaybeTrue(exprImpl.F.Args[1], bat, proc), nil
-// 			case ">", ">=", "<", "<=", "=":
-// 				vec1 := evalBinaryExpr(exprImpl.F.Args[0], bat, proc)
-// 				vec2 := evalBinaryExpr(exprImpl.F.Args[0], bat, proc)
-// 				return checkExprIsIntersect(vec1, vec2), nil
-// 			default:
-// 				//unsupport expr, just return true
-// 				return true, nil
-// 			}
-// 		default:
-// 			//unsupport expr, just return true
-// 			return true, nil
-// 		}
-// 	}
-// }
-
 func evalFilterExpr(expr *plan.Expr, bat *batch.Batch, proc *process.Process) (bool, error) {
 	if len(bat.Vecs) == 0 { //that's constant expr
 		e, err := plan2.ConstantFold(bat, expr)
@@ -205,7 +164,7 @@ func evalFilterExpr(expr *plan.Expr, bat *batch.Batch, proc *process.Process) (b
 		}
 		return false, moerr.NewInternalError("cannot eval filter expr")
 	} else {
-		vec, err := colexec.EvalExpr(bat, proc, expr)
+		vec, err := colexec.EvalExprByZonemapBat(bat, proc, expr)
 		if err != nil {
 			return false, err
 		}
