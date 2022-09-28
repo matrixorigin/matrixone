@@ -223,12 +223,12 @@ func (db *txnDB) GetSegment(id *common.ID) (seg handle.Segment, err error) {
 	return table.GetSegment(id.SegmentID)
 }
 
-func (db *txnDB) CreateSegment(tid uint64) (seg handle.Segment, err error) {
+func (db *txnDB) CreateSegment(tid uint64, is1PC bool) (seg handle.Segment, err error) {
 	var table *txnTable
 	if table, err = db.getOrSetTable(tid); err != nil {
 		return
 	}
-	return table.CreateSegment()
+	return table.CreateSegment(is1PC)
 }
 
 func (db *txnDB) CreateNonAppendableSegment(tid uint64) (seg handle.Segment, err error) {
@@ -281,12 +281,12 @@ func (db *txnDB) GetBlock(id *common.ID) (blk handle.Block, err error) {
 	return table.GetBlock(id)
 }
 
-func (db *txnDB) CreateBlock(tid, sid uint64) (blk handle.Block, err error) {
+func (db *txnDB) CreateBlock(tid, sid uint64, is1PC bool) (blk handle.Block, err error) {
 	var table *txnTable
 	if table, err = db.getOrSetTable(tid); err != nil {
 		return
 	}
-	return table.CreateBlock(sid)
+	return table.CreateBlock(sid, is1PC)
 }
 
 func (db *txnDB) SoftDeleteBlock(id *common.ID) (err error) {
@@ -345,10 +345,27 @@ func (db *txnDB) WaitPrepared() (err error) {
 	}
 	return
 }
-
+func (db *txnDB) Apply1PCCommit() (err error) {
+	if db.createEntry != nil && db.createEntry.Is1PC() {
+		if err = db.createEntry.ApplyCommit(db.store.cmdMgr.MakeLogIndex(db.ddlCSN)); err != nil {
+			return
+		}
+	}
+	for _, table := range db.tables {
+		if err = table.Apply1PCCommit(); err != nil {
+			break
+		}
+	}
+	if db.dropEntry != nil && db.dropEntry.Is1PC() {
+		if err = db.dropEntry.ApplyCommit(db.store.cmdMgr.MakeLogIndex(db.ddlCSN)); err != nil {
+			return
+		}
+	}
+	return
+}
 func (db *txnDB) ApplyCommit() (err error) {
 	now := time.Now()
-	if db.createEntry != nil {
+	if db.createEntry != nil && !db.createEntry.Is1PC() {
 		if err = db.createEntry.ApplyCommit(db.store.cmdMgr.MakeLogIndex(db.ddlCSN)); err != nil {
 			return
 		}
@@ -358,7 +375,7 @@ func (db *txnDB) ApplyCommit() (err error) {
 			break
 		}
 	}
-	if db.dropEntry != nil {
+	if db.dropEntry != nil && !db.dropEntry.Is1PC() {
 		if err = db.dropEntry.ApplyCommit(db.store.cmdMgr.MakeLogIndex(db.ddlCSN)); err != nil {
 			return
 		}
