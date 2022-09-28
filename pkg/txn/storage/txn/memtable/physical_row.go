@@ -81,22 +81,6 @@ func (p *PhysicalRow[K, V]) readVersion(now Time, tx *Transaction) (*Version[V],
 	return nil, sql.ErrNoRows
 }
 
-// ReadVisible reads a committed value despite the tx's isolation policy
-func (p *PhysicalRow[K, V]) ReadVisible(now Time, tx *Transaction) (*Version[V], error) {
-	if tx.State.Load() != Active {
-		panic("should not call Read")
-	}
-
-	for i := len(p.Versions) - 1; i >= 0; i-- {
-		value := p.Versions[i]
-		if value.Visible(now, tx.ID) {
-			return &value, nil
-		}
-	}
-
-	return nil, sql.ErrNoRows
-}
-
 func (v *Version[T]) Visible(now Time, txID string) bool {
 
 	// the following algorithm is from https://momjian.us/main/writings/pgsql/mvcc.pdf
@@ -141,9 +125,9 @@ func (p *PhysicalRow[K, V]) Insert(
 	now Time,
 	tx *Transaction,
 	value V,
-	callbacks ...any,
 ) (
 	newRow *PhysicalRow[K, V],
+	version *Version[V],
 	err error,
 ) {
 
@@ -156,10 +140,10 @@ func (p *PhysicalRow[K, V]) Insert(
 		if value.Visible(now, tx.ID) {
 			if value.LockTx != nil && value.LockTx.State.Load() != Aborted {
 				// locked by active or committed tx
-				return nil, moerr.NewTxnWriteConflict("%s %s", tx.ID, value.LockTx.ID)
+				return nil, nil, moerr.NewTxnWriteConflict("%s %s", tx.ID, value.LockTx.ID)
 			}
 			if value.BornTx.ID != tx.ID && value.BornTime.After(tx.BeginTime) {
-				return nil, moerr.NewTxnWriteConflict("%s %s", tx.ID, value.BornTx.ID)
+				return nil, nil, moerr.NewTxnWriteConflict("%s %s", tx.ID, value.BornTx.ID)
 			}
 		}
 	}
@@ -167,23 +151,15 @@ func (p *PhysicalRow[K, V]) Insert(
 	p = p.clone()
 
 	id := txnengine.NewID()
-	p.Versions = append(p.Versions, Version[V]{
+	version = &Version[V]{
 		ID:       id,
 		BornTx:   tx,
 		BornTime: now,
 		Value:    value,
-	})
-
-	for _, callback := range callbacks {
-		switch callback := callback.(type) {
-		case func(ID): // version id
-			callback(id)
-		default:
-			panic(fmt.Sprintf("unknown type: %T", callback))
-		}
 	}
+	p.Versions = append(p.Versions, *version)
 
-	return p, nil
+	return p, version, nil
 }
 
 func (p *PhysicalRow[K, V]) Delete(
@@ -191,6 +167,7 @@ func (p *PhysicalRow[K, V]) Delete(
 	tx *Transaction,
 ) (
 	newRow *PhysicalRow[K, V],
+	version *Version[V],
 	err error,
 ) {
 	if tx.State.Load() != Active {
@@ -201,10 +178,10 @@ func (p *PhysicalRow[K, V]) Delete(
 		value := p.Versions[i]
 		if value.Visible(now, tx.ID) {
 			if value.LockTx != nil && value.LockTx.State.Load() != Aborted {
-				return nil, moerr.NewTxnWriteConflict("%s %s", tx.ID, value.LockTx.ID)
+				return nil, nil, moerr.NewTxnWriteConflict("%s %s", tx.ID, value.LockTx.ID)
 			}
 			if value.BornTx.ID != tx.ID && value.BornTime.After(tx.BeginTime) {
-				return nil, moerr.NewTxnWriteConflict("%s %s", tx.ID, value.BornTx.ID)
+				return nil, nil, moerr.NewTxnWriteConflict("%s %s", tx.ID, value.BornTx.ID)
 			}
 
 			p = p.clone()
@@ -212,20 +189,20 @@ func (p *PhysicalRow[K, V]) Delete(
 			value.LockTime = now
 			p.Versions[i] = value
 
-			return p, nil
+			return p, &value, nil
 		}
 	}
 
-	return nil, sql.ErrNoRows
+	return nil, nil, sql.ErrNoRows
 }
 
 func (p *PhysicalRow[K, V]) Update(
 	now Time,
 	tx *Transaction,
 	newValue V,
-	callbacks ...any,
 ) (
 	newRow *PhysicalRow[K, V],
+	version *Version[V],
 	err error,
 ) {
 
@@ -238,11 +215,11 @@ func (p *PhysicalRow[K, V]) Update(
 		if value.Visible(now, tx.ID) {
 
 			if value.LockTx != nil && value.LockTx.State.Load() != Aborted {
-				return nil, moerr.NewTxnWriteConflict("%s %s", tx.ID, value.LockTx.ID)
+				return nil, nil, moerr.NewTxnWriteConflict("%s %s", tx.ID, value.LockTx.ID)
 			}
 
 			if value.BornTx.ID != tx.ID && value.BornTime.After(tx.BeginTime) {
-				return nil, moerr.NewTxnWriteConflict("%s %s", tx.ID, value.BornTx.ID)
+				return nil, nil, moerr.NewTxnWriteConflict("%s %s", tx.ID, value.BornTx.ID)
 			}
 
 			p = p.clone()
@@ -252,27 +229,19 @@ func (p *PhysicalRow[K, V]) Update(
 			p.Versions[i] = value
 
 			id := txnengine.NewID()
-			p.Versions = append(p.Versions, Version[V]{
+			version = &Version[V]{
 				ID:       id,
 				BornTx:   tx,
 				BornTime: now,
 				Value:    newValue,
-			})
-
-			for _, callback := range callbacks {
-				switch callback := callback.(type) {
-				case func(ID): // version id
-					callback(id)
-				default:
-					panic(fmt.Sprintf("unknown type: %T", callback))
-				}
 			}
+			p.Versions = append(p.Versions, *version)
 
-			return p, nil
+			return p, version, nil
 		}
 	}
 
-	return nil, sql.ErrNoRows
+	return nil, nil, sql.ErrNoRows
 }
 
 func (p *PhysicalRow[K, V]) clone() *PhysicalRow[K, V] {
