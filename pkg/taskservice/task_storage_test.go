@@ -34,11 +34,17 @@ func createMem(t *testing.T) TaskStorage {
 	return NewMemTaskStorage()
 }
 
+/*
+	func createMysql(t *testing.T) TaskStorage {
+		return NewMysqlTaskStorage("", "")
+	}
+*/
 func TestAddTask(t *testing.T) {
 	for name, factory := range storages {
 		t.Run(name, func(t *testing.T) {
 			s := factory(t)
 			defer func() {
+				assert.NoError(t, s.drop(context.Background()))
 				assert.NoError(t, s.Close())
 			}()
 
@@ -55,6 +61,7 @@ func TestUpdateTask(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			s := factory(t)
 			defer func() {
+				assert.NoError(t, s.drop(context.Background()))
 				assert.NoError(t, s.Close())
 			}()
 
@@ -73,6 +80,7 @@ func TestUpdateTaskWithConditions(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			s := factory(t)
 			defer func() {
+				assert.NoError(t, s.drop(context.Background()))
 				assert.NoError(t, s.Close())
 			}()
 
@@ -82,8 +90,10 @@ func TestUpdateTaskWithConditions(t *testing.T) {
 			mustUpdateTestTask(t, s, 0, tasks, WithTaskRunnerCond(EQ, "t2"))
 			mustUpdateTestTask(t, s, 1, tasks, WithTaskRunnerCond(EQ, "t1"))
 
+			tasks[0].Metadata.Context = []byte{1}
 			mustUpdateTestTask(t, s, 0, tasks, WithTaskIDCond(EQ, tasks[0].ID+1))
 			mustUpdateTestTask(t, s, 1, tasks, WithTaskIDCond(EQ, tasks[0].ID))
+			tasks[0].Metadata.Context = []byte{1, 2}
 			mustUpdateTestTask(t, s, 1, tasks, WithTaskIDCond(GT, 0))
 		})
 	}
@@ -94,6 +104,7 @@ func TestDeleteTaskWithConditions(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			s := factory(t)
 			defer func() {
+				assert.NoError(t, s.drop(context.Background()))
 				assert.NoError(t, s.Close())
 			}()
 
@@ -118,6 +129,7 @@ func TestQueryTaskWithConditions(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			s := factory(t)
 			defer func() {
+				assert.NoError(t, s.drop(context.Background()))
 				assert.NoError(t, s.Close())
 			}()
 
@@ -143,6 +155,7 @@ func TestAddAndQueryCronTask(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			s := factory(t)
 			defer func() {
+				assert.NoError(t, s.drop(context.Background()))
 				assert.NoError(t, s.Close())
 			}()
 
@@ -164,6 +177,7 @@ func TestUpdateCronTask(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			s := factory(t)
 			defer func() {
+				assert.NoError(t, s.drop(context.Background()))
 				assert.NoError(t, s.Close())
 			}()
 

@@ -15,10 +15,10 @@
 package taskservice
 
 import (
-	"github.com/stretchr/testify/assert"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
+	"github.com/stretchr/testify/assert"
 )
 
 func TestBuildWhereClause(t *testing.T) {
@@ -53,7 +53,7 @@ func TestBuildWhereClause(t *testing.T) {
 				taskParentTaskIDOp:  GE,
 				taskParentTaskID:    "ab",
 			},
-			expected: "task_id=1 AND task_runner=abc AND task_status=0 AND task_epoch<=100 AND task_parent_id>=ab",
+			expected: "task_id=1 AND task_runner='abc' AND task_status=0 AND task_epoch<=100 AND task_parent_id>='ab'",
 		},
 		{
 			condition: conditions{
@@ -67,7 +67,7 @@ func TestBuildWhereClause(t *testing.T) {
 				taskParentTaskIDOp:  GE,
 				taskParentTaskID:    "ab",
 			},
-			expected: "task_runner=abc AND task_status=0 AND task_parent_id>=ab",
+			expected: "task_runner='abc' AND task_status=0 AND task_parent_id>='ab'",
 		},
 	}
 

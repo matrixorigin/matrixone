@@ -195,6 +195,10 @@ func (s *memTaskStorage) UpdateCronTask(ctx context.Context, cron task.CronTask,
 	return 2, nil
 }
 
+func (s *memTaskStorage) drop(ctx context.Context) error {
+	return nil
+}
+
 func (s *memTaskStorage) nextIDLocked() uint64 {
 	s.id++
 	return s.id

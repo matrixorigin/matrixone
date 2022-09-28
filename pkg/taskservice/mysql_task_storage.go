@@ -18,18 +18,13 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"sync"
+
+	_ "github.com/go-sql-driver/mysql"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
 )
 
 var (
-	sysWantedTables = map[string]struct{}{
-		"sys_async_task": {},
-		"sys_cron_task":  {},
-	}
-
 	createSqls = []string{
 		`create table if not exists sys_async_task (
 			task_id                     int primary key auto_increment,
@@ -40,16 +35,14 @@ var (
 			task_retry_interval         int,
 			task_delay_duration         int,
 			task_parent_id              varchar(16),
-			task_status                 int not null,
+			task_status                 int,
 			task_runner                 varchar(16),
 			task_epoch                  int,
-			task_execute_after          bigint(20),
 			last_heartbeat              bigint(20),
 			result_code                 int,
 			error_msg                   text,
 			create_at                   bigint(20),
-			end_at                      bigint(20),
-			constraint tsk_prnt_fr foreign key (task_parent_id) references sys_async_task(task_metadata_id))`,
+			end_at                      bigint(20))`,
 		`create table if not exists sys_cron_task (
 			cron_task_id				int primary key auto_increment,
     		task_metadata_id            varchar(16) unique not null,
@@ -59,23 +52,29 @@ var (
 			task_retry_interval         int,
 			task_delay_duration         int,
 			cron_expr					varchar(100) not null,
-			next_time					bigint(20))`,
+			next_time					bigint(20),
+			trigger_times				int,
+			create_at					bigint(20),
+			update_at					bigint(20))`,
 	}
 
-	addAsyncTask = `insert into sys_async_task(
+	insertAsyncTask = `insert into sys_async_task(
                            task_metadata_id,
+                           task_metadata_executor,
                            task_metadata_context,
                            task_max_retry_times,
                            task_retry_interval,
                            task_delay_duration,
                            task_parent_id,
                            task_status,
+                           task_runner,
+                           task_epoch,
+                           last_heartbeat,
                            create_at,
-					) values (?, ?, ?, ?, ?, ?, ?, ?)`
+                           end_at
+					) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 
 	updateAsyncTask = `update sys_async_task set 
-                        	task_id=?,
-							task_metadata_id=?,
 							task_metadata_executor=?,
 							task_metadata_context=?,
 							task_max_retry_times=?,
@@ -85,12 +84,11 @@ var (
 							task_status=?,
 							task_runner=?,
 							task_epoch=?,
-							task_execute_after=?,
 							last_heartbeat=?,
 							result_code=?,
 							error_msg=?,
 							create_at=?,
-							end_at=? where `
+							end_at=? where task_id=?`
 
 	selectAsyncTask = `select 
     						task_id,
@@ -104,7 +102,6 @@ var (
 							task_status,
 							task_runner,
 							task_epoch,
-							task_execute_after,
 							last_heartbeat,
 							result_code,
 							error_msg,
@@ -114,19 +111,48 @@ var (
 
 	insertCronTask = `insert into sys_cron_task (
                            task_metadata_id,
+						   task_metadata_executor,
                            task_metadata_context,
                            task_max_retry_times,
                            task_retry_interval,
                            task_delay_duration,
                            cron_expr,
-                           next_time
-                    ) values (?, ?, ?, ?, ?, ?, ?)`
+                           next_time,
+                           trigger_times,
+                           create_at,
+                           update_at
+                    ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+
+	selectCronTask = `select 
+    						cron_task_id,
+    						task_metadata_id,
+    						task_metadata_executor,
+    						task_metadata_context,
+    						task_max_retry_times,
+    						task_retry_interval,
+    						task_delay_duration,
+    						cron_expr,
+    						next_time,
+    						trigger_times,
+    						create_at,
+    						update_at
+						from sys_cron_task`
+
+	updateCronTask = `update sys_cron_task set 
+							task_metadata_executor=?,
+    						task_metadata_context=?,
+    						task_max_retry_times=?,
+    						task_retry_interval=?,
+    						task_delay_duration=?,
+    						cron_expr=?,
+    						next_time=?,
+    						trigger_times=?,
+    						create_at=?,
+    						update_at=? where cron_task_id=?`
 )
 
 // used for testing
 type mysqlTaskStorage struct {
-	sync.RWMutex
-
 	db *sql.DB
 
 	// Used for testing. Make some changes to the data before updating.
@@ -164,25 +190,26 @@ func (m *mysqlTaskStorage) Close() error {
 }
 
 func (m *mysqlTaskStorage) Add(ctx context.Context, tasks ...task.Task) (int, error) {
-	m.Lock()
-	defer m.Unlock()
-
 	n := 0
 	for _, t := range tasks {
 		if m.taskExists(t.Metadata.ID) {
 			continue
 		}
-
 		exec, err := m.db.Exec(
-			addAsyncTask,
+			insertAsyncTask,
 			t.Metadata.ID,
+			t.Metadata.Executor,
 			t.Metadata.Context,
 			t.Metadata.Options.MaxRetryTimes,
 			t.Metadata.Options.RetryInterval,
 			t.Metadata.Options.DelayDuration,
 			t.ParentTaskID,
 			t.Status,
+			t.TaskRunner,
+			t.Epoch,
+			t.LastHeartbeat,
 			t.CreateAt,
+			t.CompletedAt,
 		)
 		if err != nil {
 			return n, err
@@ -207,19 +234,25 @@ func (m *mysqlTaskStorage) Update(ctx context.Context, tasks []task.Task, condit
 		cond(&c)
 	}
 
-	clause := buildWhereClause(c)
-	if clause == "" {
-		return 0, moerr.NewInternalError("cannot update tasks without conditions")
+	where := buildWhereClause(c)
+	var update string
+	if where != "" {
+		update = updateAsyncTask + " and " + where
+	} else {
+		update = updateAsyncTask
 	}
-	update := updateAsyncTask + clause
-
-	m.Lock()
-	defer m.Unlock()
 	n := 0
 	for _, t := range tasks {
+		execResult := &task.ExecuteResult{
+			Code:  0,
+			Error: "",
+		}
+		if t.ExecuteResult != nil {
+			execResult.Code = t.ExecuteResult.Code
+			execResult.Error = t.ExecuteResult.Error
+		}
+
 		exec, err := m.db.Exec(update,
-			t.ID,
-			t.Metadata.ID,
 			t.Metadata.Executor,
 			t.Metadata.Context,
 			t.Metadata.Options.MaxRetryTimes,
@@ -229,12 +262,12 @@ func (m *mysqlTaskStorage) Update(ctx context.Context, tasks []task.Task, condit
 			t.Status,
 			t.TaskRunner,
 			t.Epoch,
-			nil,
 			t.LastHeartbeat,
-			t.ExecuteResult.Code,
-			t.ExecuteResult.Error,
+			execResult.Code,
+			execResult.Error,
 			t.CreateAt,
 			t.CompletedAt,
+			t.ID,
 		)
 		if err != nil {
 			return 0, err
@@ -253,10 +286,9 @@ func (m *mysqlTaskStorage) Delete(ctx context.Context, condition ...Condition) (
 	for _, cond := range condition {
 		cond(&c)
 	}
-	clause := buildWhereClause(c)
-	m.Lock()
-	defer m.Unlock()
-	exec, err := m.db.Exec("delete from sys_async_task where " + clause)
+	where := buildWhereClause(c)
+
+	exec, err := m.db.Exec("delete from sys_async_task where " + where)
 	if err != nil {
 		return 0, err
 	}
@@ -273,15 +305,20 @@ func (m *mysqlTaskStorage) Query(ctx context.Context, condition ...Condition) ([
 		cond(&c)
 	}
 
-	clause := buildWhereClause(c)
+	where := buildWhereClause(c)
 	var query string
-	if clause != "" {
-		query = selectAsyncTask + " where " + clause
+	if where != "" {
+		query = selectAsyncTask + " where " + where
 	} else {
 		query = selectAsyncTask
 	}
+	query += buildLimitClause(c)
+
 	rows, err := m.db.Query(query)
 	defer func(rows *sql.Rows) {
+		if rows == nil {
+			return
+		}
 		err := rows.Close()
 		if err != nil {
 			return
@@ -295,6 +332,8 @@ func (m *mysqlTaskStorage) Query(ctx context.Context, condition ...Condition) ([
 
 	for rows.Next() {
 		var t task.Task
+		var codeOption sql.NullInt32
+		var msgOption sql.NullString
 		err := rows.Scan(
 			&t.ID,
 			&t.Metadata.ID,
@@ -307,103 +346,188 @@ func (m *mysqlTaskStorage) Query(ctx context.Context, condition ...Condition) ([
 			&t.Status,
 			&t.TaskRunner,
 			&t.Epoch,
-			nil,
-			t.LastHeartbeat,
-			t.ExecuteResult.Code,
-			t.ExecuteResult.Error,
-			t.CreateAt,
-			t.CompletedAt,
+			&t.LastHeartbeat,
+			&codeOption,
+			&msgOption,
+			&t.CreateAt,
+			&t.CompletedAt,
 		)
 		if err != nil {
 			return nil, err
 		}
+		if codeOption.Valid {
+			t.ExecuteResult = &task.ExecuteResult{}
+			code, err := codeOption.Value()
+			if err != nil {
+				return nil, err
+			}
+			t.ExecuteResult.Code = task.ResultCode(code.(int32))
+
+			msg, err := msgOption.Value()
+			if err != nil {
+				return nil, err
+			}
+			t.ExecuteResult.Error = msg.(string)
+		}
+
 		tasks = append(tasks, t)
 	}
 	return tasks, nil
 }
 
 func (m *mysqlTaskStorage) AddCronTask(ctx context.Context, cronTask ...task.CronTask) (int, error) {
-	//TODO implement me
-	panic("implement me")
+	n := 0
+	for _, t := range cronTask {
+		if m.cronTaskExists(t.Metadata.ID) {
+			continue
+		}
+
+		exec, err := m.db.Exec(
+			insertCronTask,
+			t.Metadata.ID,
+			t.Metadata.Executor,
+			t.Metadata.Context,
+			t.Metadata.Options.MaxRetryTimes,
+			t.Metadata.Options.RetryInterval,
+			t.Metadata.Options.DelayDuration,
+			t.CronExpr,
+			t.NextTime,
+			t.TriggerTimes,
+			t.CreateAt,
+			t.UpdateAt,
+		)
+		if err != nil {
+			return n, err
+		}
+		affected, err := exec.RowsAffected()
+		if err != nil {
+			panic(err)
+		}
+		n += int(affected)
+	}
+
+	return n, nil
 }
 
 func (m *mysqlTaskStorage) QueryCronTask(ctx context.Context) ([]task.CronTask, error) {
-	//TODO implement me
-	panic("implement me")
+	rows, err := m.db.Query(selectCronTask)
+	defer func(rows *sql.Rows) {
+		if rows == nil {
+			return
+		}
+		err := rows.Close()
+		if err != nil {
+			return
+		}
+	}(rows)
+	if err != nil {
+		return nil, err
+	}
+
+	tasks := make([]task.CronTask, 0)
+
+	for rows.Next() {
+		var t task.CronTask
+		err := rows.Scan(
+			&t.ID,
+			&t.Metadata.ID,
+			&t.Metadata.Executor,
+			&t.Metadata.Context,
+			&t.Metadata.Options.MaxRetryTimes,
+			&t.Metadata.Options.RetryInterval,
+			&t.Metadata.Options.DelayDuration,
+			&t.CronExpr,
+			&t.NextTime,
+			&t.TriggerTimes,
+			&t.CreateAt,
+			&t.UpdateAt,
+		)
+		if err != nil {
+			return nil, err
+		}
+
+		tasks = append(tasks, t)
+	}
+
+	return tasks, nil
 }
 
 func (m *mysqlTaskStorage) UpdateCronTask(ctx context.Context, cronTask task.CronTask, t task.Task) (int, error) {
-	//TODO implement me
-	panic("implement me")
+	if err := m.preUpdateCron(); err != nil {
+		return 0, err
+	}
+
+	if m.taskExists(t.Metadata.ID) {
+		return 0, nil
+	}
+	triggerTimes, err := m.getTriggerTimes(cronTask.Metadata.ID)
+	if err == sql.ErrNoRows || triggerTimes != cronTask.TriggerTimes-1 {
+		return 0, nil
+	}
+
+	update, err := m.Add(ctx, t)
+	if err != nil {
+		return 0, err
+	}
+	exec, err := m.db.Exec(updateCronTask,
+		cronTask.Metadata.Executor,
+		cronTask.Metadata.Context,
+		cronTask.Metadata.Options.MaxRetryTimes,
+		cronTask.Metadata.Options.RetryInterval,
+		cronTask.Metadata.Options.DelayDuration,
+		cronTask.CronExpr,
+		cronTask.NextTime,
+		cronTask.TriggerTimes,
+		cronTask.CreateAt,
+		cronTask.UpdateAt,
+		cronTask.ID)
+	if err != nil {
+		return 0, err
+	}
+	affected, err := exec.RowsAffected()
+	if err != nil {
+		panic(err)
+	}
+
+	return update + int(affected), nil
 }
 
-func (m *mysqlTaskStorage) filter(c conditions, task task.Task) bool {
-	ok := true
-
-	if c.hasTaskIDCond {
-		switch c.taskIDOp {
-		case EQ:
-			ok = task.ID == c.taskID
-		case GT:
-			ok = task.ID > c.taskID
-		case GE:
-			ok = task.ID >= c.taskID
-		case LE:
-			ok = task.ID <= c.taskID
-		case LT:
-			ok = task.ID < c.taskID
-		}
+func (m *mysqlTaskStorage) drop(ctx context.Context) error {
+	_, err := m.db.Exec("drop table sys_async_task")
+	if err != nil {
+		return err
 	}
-
-	if ok && c.hasTaskRunnerCond {
-		switch c.taskRunnerOp {
-		case EQ:
-			ok = task.TaskRunner == c.taskRunner
-		}
+	_, err = m.db.Exec("drop table sys_cron_task")
+	if err != nil {
+		return err
 	}
-
-	if ok && c.hasTaskStatusCond {
-		switch c.taskStatusOp {
-		case EQ:
-			ok = task.Status == c.taskStatus
-		case GT:
-			ok = task.Status > c.taskStatus
-		case GE:
-			ok = task.Status >= c.taskStatus
-		case LE:
-			ok = task.Status <= c.taskStatus
-		case LT:
-			ok = task.Status < c.taskStatus
-		}
-	}
-
-	if ok && c.hasTaskEpochCond {
-		switch c.taskEpochOp {
-		case EQ:
-			ok = task.Epoch == c.taskEpoch
-		case GT:
-			ok = task.Epoch > c.taskEpoch
-		case GE:
-			ok = task.Epoch >= c.taskEpoch
-		case LE:
-			ok = task.Epoch <= c.taskEpoch
-		case LT:
-			ok = task.Epoch < c.taskEpoch
-		}
-	}
-
-	if ok && c.hasTaskParentIDCond {
-		switch c.taskParentTaskIDOp {
-		case EQ:
-			ok = task.ParentTaskID == c.taskParentTaskID
-		}
-	}
-	return ok
+	return nil
 }
 
 func (m *mysqlTaskStorage) taskExists(taskMetadataID string) bool {
 	var exists bool
 	err := m.db.QueryRow("select exists(select * from sys_async_task where task_metadata_id=?)", taskMetadataID).Scan(&exists)
+	if err != nil {
+		panic(err)
+	}
+	return exists
+}
+
+func (m *mysqlTaskStorage) getTriggerTimes(taskMetadataID string) (uint64, error) {
+	var triggerTimes uint64
+	err := m.db.QueryRow("select trigger_times from sys_cron_task where task_metadata_id=?", taskMetadataID).Scan(&triggerTimes)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return 0, err
+		}
+		panic(err)
+	}
+	return triggerTimes, nil
+}
+
+func (m *mysqlTaskStorage) cronTaskExists(taskMetadataID string) bool {
+	var exists bool
+	err := m.db.QueryRow("select exists(select * from sys_cron_task where task_metadata_id=?)", taskMetadataID).Scan(&exists)
 	if err != nil {
 		panic(err)
 	}
@@ -421,7 +545,7 @@ func buildWhereClause(c conditions) string {
 		if clause != "" {
 			clause += " AND "
 		}
-		clause += fmt.Sprintf("task_runner%s%s", OpName[c.taskRunnerOp], c.taskRunner)
+		clause += fmt.Sprintf("task_runner%s'%s'", OpName[c.taskRunnerOp], c.taskRunner)
 	}
 
 	if c.hasTaskStatusCond {
@@ -442,8 +566,15 @@ func buildWhereClause(c conditions) string {
 		if clause != "" {
 			clause += " AND "
 		}
-		clause += fmt.Sprintf("task_parent_id%s%s", OpName[c.taskParentTaskIDOp], c.taskParentTaskID)
+		clause += fmt.Sprintf("task_parent_id%s'%s'", OpName[c.taskParentTaskIDOp], c.taskParentTaskID)
 	}
 
 	return clause
+}
+
+func buildLimitClause(c conditions) string {
+	if c.limit != 0 {
+		return fmt.Sprintf(" limit %d", c.limit)
+	}
+	return ""
 }
