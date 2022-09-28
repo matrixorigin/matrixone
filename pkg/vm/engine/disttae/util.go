@@ -85,10 +85,17 @@ func getIndexDataFromVec(idx uint16, vec *vector.Vector) (objectio.IndexData, ob
 
 	// get min/max from  vector
 	if vec.Length() > 0 {
+		cvec := containers.MOToVector(vec, true)
+
 		// create zone map
 		zm := index.NewZoneMap(vec.Typ)
-		for _, v := range vector.GetColumn[any](vec) {
-			zm.Update(v)
+		ctx := new(index.KeysCtx)
+		ctx.Keys = cvec
+		ctx.Count = vec.Length()
+		defer ctx.Keys.Close()
+		err := zm.BatchUpdate(ctx)
+		if err != nil {
+			return nil, nil, err
 		}
 		buf, err := zm.Marshal()
 		if err != nil {
@@ -100,7 +107,7 @@ func getIndexDataFromVec(idx uint16, vec *vector.Vector) (objectio.IndexData, ob
 		}
 
 		// create bloomfilter
-		sf, err := index.NewBinaryFuseFilter(containers.MOToVector(vec, true))
+		sf, err := index.NewBinaryFuseFilter(cvec)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -246,10 +253,10 @@ func buildVectorsByData(datas [][2]any, dataTypes []uint8, mp *mheap.Mheap) []*v
 
 // getNameFromMeta  TODO change later
 func getNameFromMeta(blkInfo BlockMeta) string {
-	return fmt.Sprintf("%s:%d_%d_%d", "blk", blkInfo.header.blockId, blkInfo.header.segmentId, blkInfo.header.tableId)
+	return fmt.Sprintf("%s:%d_%d_%d.blk", "local", blkInfo.header.blockId, blkInfo.header.segmentId, blkInfo.header.tableId)
 }
 
 // getExtentFromMeta  TODO change later
 func getExtentFromMeta(blkInfo BlockMeta) objectio.Extent {
-	return objectio.Extent{}
+	return objectio.NewExtent(blkInfo.localExtent.offset, blkInfo.localExtent.length, blkInfo.localExtent.originSize)
 }

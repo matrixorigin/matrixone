@@ -20,8 +20,9 @@ import "github.com/matrixorigin/matrixone/pkg/objectio"
 // does not serve any purpose When tae submits a concrete structure,
 // it will replace this structure with tae's code
 type BlockMeta struct {
-	header  BlockHeader
-	columns []*ColumnMeta
+	header      BlockHeader
+	columns     []*ColumnMeta
+	localExtent Extent
 }
 
 type BlockHeader struct {

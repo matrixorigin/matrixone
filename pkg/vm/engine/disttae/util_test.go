@@ -15,9 +15,11 @@
 package disttae
 
 import (
+	"context"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -202,4 +204,48 @@ func TestNeedRead(t *testing.T) {
 			}
 		}
 	})
+}
+
+func TestWriteAndRead(t *testing.T) {
+	ctx := context.TODO()
+	bm := makeBlockMetaForTest()
+	testFs := testutil.NewFS()
+	inputBat := testutil.NewBatch([]types.Type{
+		types.T_int64.ToType(),
+		types.T_int64.ToType(),
+		types.T_int64.ToType(),
+		types.T_int64.ToType(),
+	}, true, 20, testutil.NewMheap())
+
+	blks, err := blockWrite(ctx, bm, inputBat, testFs)
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	// fmt.Printf("%v", blks)
+
+	extent := blks[0].GetExtent()
+	bm.localExtent.length = extent.Length()
+	bm.localExtent.offset = extent.Offset()
+	bm.localExtent.originSize = extent.OriginSize()
+
+	// bm.header.blockId
+	columns := []string{"a", "b", "c", "d"}
+	outputBat, err := blockRead(ctx, columns, bm, testFs, makeTableDefForTest(columns))
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	// fmt.Printf("%v", outputBat)
+	if len(inputBat.Vecs) != 4 || len(inputBat.Vecs) != len(outputBat.Vecs) {
+		t.Error("input not equal output: length not match")
+	}
+	cols1 := vector.MustTCols[int64](inputBat.Vecs[0])
+	cols2 := vector.MustTCols[int64](outputBat.Vecs[0])
+	if len(cols1) != 20 || len(cols1) != len(cols2) {
+		t.Error("input not equal output: vec[0]'s length not match")
+	}
+	for i := 0; i < len(cols1); i++ {
+		if cols1[i] != cols2[i] {
+			t.Errorf("input not equal output: vec[0][%d]'s value not match", i)
+		}
+	}
 }
