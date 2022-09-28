@@ -23,9 +23,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/testutil/testengine"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/memEngine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
@@ -89,8 +89,8 @@ func TestCompileWithFaults(t *testing.T) {
 
 func newTestCase(sql string, t *testing.T) compileTestCase {
 	proc := testutil.NewProcess()
-	e := memEngine.NewTestEngine()
-	opt := plan2.NewBaseOptimizer(e.(*memEngine.MemEngine))
+	e, _, compilerCtx := testengine.New(context.Background())
+	opt := plan2.NewBaseOptimizer(compilerCtx)
 	stmts, err := mysql.Parse(sql)
 	require.NoError(t, err)
 	qry, err := opt.Optimize(stmts[0])

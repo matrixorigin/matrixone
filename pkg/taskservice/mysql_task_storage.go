@@ -490,7 +490,7 @@ func (m *mysqlTaskStorage) UpdateCronTask(ctx context.Context, cronTask task.Cro
 	if err != nil {
 		return 0, err
 	}
-	update, err := stmt.Exec(append([]any{},
+	update, err := stmt.Exec(
 		t.Metadata.ID,
 		t.Metadata.Executor,
 		t.Metadata.Context,
@@ -501,7 +501,7 @@ func (m *mysqlTaskStorage) UpdateCronTask(ctx context.Context, cronTask task.Cro
 		t.Epoch,
 		t.LastHeartbeat,
 		t.CreateAt,
-		t.CompletedAt)...)
+		t.CompletedAt)
 	if err != nil {
 		return 0, err
 	}

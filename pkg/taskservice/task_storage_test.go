@@ -26,8 +26,7 @@ import (
 
 var (
 	storages = map[string]func(*testing.T) TaskStorage{
-		"mem":   createMem,
-		"mysql": createMysql,
+		"mem": createMem,
 	}
 )
 
@@ -35,11 +34,11 @@ func createMem(t *testing.T) TaskStorage {
 	return NewMemTaskStorage()
 }
 
-func createMysql(t *testing.T) TaskStorage {
-	storage, err := NewMysqlTaskStorage("mysql", "wzr:1234@/task")
-	require.NoError(t, err)
-	return storage
-}
+//func createMysql(t *testing.T) TaskStorage {
+//	storage, err := NewMysqlTaskStorage("mysql", "wzr:1234@/task")
+//	require.NoError(t, err)
+//	return storage
+//}
 
 func dropTable(s TaskStorage) error {
 	if m, ok := s.(*mysqlTaskStorage); ok {
