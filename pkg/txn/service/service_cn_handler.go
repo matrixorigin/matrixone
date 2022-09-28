@@ -224,7 +224,7 @@ func (s *service) Commit(ctx context.Context, request *txn.TxnRequest, response 
 
 	// fast path: write in only one DNShard.
 	if len(newTxn.DNShards) == 1 {
-		newTxn.CommitTS, _ = s.clocker.Now()
+		newTxn.CommitTS, _ = s.clock.Now()
 		txnCtx.updateTxnLocked(newTxn)
 
 		util.LogTxnStart1PCCommit(s.logger, newTxn)
@@ -442,7 +442,7 @@ func (s *service) checkCNRequest(request *txn.TxnRequest) {
 
 func (s *service) waitClockTo(ts timestamp.Timestamp) {
 	for {
-		now, _ := s.clocker.Now()
+		now, _ := s.clock.Now()
 		if now.GreaterEq(ts) {
 			return
 		}
