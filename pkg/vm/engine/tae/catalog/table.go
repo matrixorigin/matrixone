@@ -172,6 +172,12 @@ func (entry *TableEntry) MakeCommand(id uint32) (cmd txnif.TxnCmd, err error) {
 	return newTableCmd(id, cmdType, entry), nil
 }
 
+func (entry *TableEntry) Set1PC() {
+	entry.GetNodeLocked().Set1PC()
+}
+func (entry *TableEntry) Is1PC() bool {
+	return entry.GetNodeLocked().Is1PC()
+}
 func (entry *TableEntry) AddEntryLocked(segment *SegmentEntry) {
 	n := entry.link.Insert(segment)
 	entry.entries[segment.GetID()] = n

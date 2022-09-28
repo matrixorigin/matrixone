@@ -67,7 +67,7 @@ func (rel *TxnRelation) Append(data *containers.Batch) error                    
 func (rel *TxnRelation) GetMeta() any                                                { return nil }
 func (rel *TxnRelation) GetSegment(id uint64) (seg handle.Segment, err error)        { return }
 func (rel *TxnRelation) SoftDeleteSegment(id uint64) (err error)                     { return }
-func (rel *TxnRelation) CreateSegment() (seg handle.Segment, err error)              { return }
+func (rel *TxnRelation) CreateSegment(bool) (seg handle.Segment, err error)          { return }
 func (rel *TxnRelation) CreateNonAppendableSegment() (seg handle.Segment, err error) { return }
 func (rel *TxnRelation) GetValue(*common.ID, uint32, uint16) (v any, err error)      { return }
 func (rel *TxnRelation) GetValueByPhyAddrKey(any, int) (v any, err error)            { return }

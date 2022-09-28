@@ -89,10 +89,8 @@ func (entry *compactBlockEntry) MakeCommand(csn uint32) (cmd txnif.TxnCmd, err e
 	return
 }
 
-func (entry *compactBlockEntry) Prepare2PCPrepare() (err error) {
-	return
-}
-
+func (entry *compactBlockEntry) Set1PC()     {}
+func (entry *compactBlockEntry) Is1PC() bool { return false }
 func (entry *compactBlockEntry) PrepareCommit() (err error) {
 	dataBlock := entry.from.GetMeta().(*catalog.BlockEntry).GetBlockData()
 	view, err := dataBlock.CollectChangesInRange(entry.txn.GetStartTS(), entry.txn.GetCommitTS())

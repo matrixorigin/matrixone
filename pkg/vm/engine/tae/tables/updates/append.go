@@ -238,6 +238,13 @@ func (node *AppendNode) MakeCommand(id uint32) (cmd txnif.TxnCmd, err error) {
 	cmd = NewAppendCmd(id, node)
 	return
 }
+
+func (node *AppendNode) Set1PC() {
+	node.TxnMVCCNode.Set1PC()
+}
+func (node *AppendNode) Is1PC() bool {
+	return node.TxnMVCCNode.Is1PC()
+}
 func (node *AppendNode) GetEnd() types.TS {
 	node.RLock()
 	defer node.RUnlock()
