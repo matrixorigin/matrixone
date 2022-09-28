@@ -49,10 +49,18 @@ func (s *Scope) Delete(c *Compile) (uint64, error) {
 
 func (s *Scope) Insert(c *Compile) (uint64, error) {
 	s.Magic = Merge
-	arg := s.Instructions[len(s.Instructions)-1].Arg.(*insert.Argument)
 	if err := s.MergeRun(c); err != nil {
 		return 0, err
 	}
+	if len(s.DispatchScopes) > 0 {
+		var affected uint64 = 0
+		for _, op := range s.DispatchScopes {
+			arg := op.Instructions[len(op.Instructions)-1].Arg.(*insert.Argument)
+			affected += arg.Affected
+		}
+		return affected, nil
+	}
+	arg := s.Instructions[len(s.Instructions)-1].Arg.(*insert.Argument)
 	return arg.Affected, nil
 }
 

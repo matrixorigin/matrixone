@@ -17,6 +17,7 @@ package compile
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/insert"
 	"runtime"
 	"sync/atomic"
 
@@ -301,9 +302,36 @@ func (c *Compile) compileApQuery(qry *plan.Query, ss []*Scope) (*Scope, error) {
 		if err != nil {
 			return nil, err
 		}
+		insertParallelNumber := 1
+		// If the query plan for Load statement. Try to start more pipelines for insert.
+		for _, node := range qry.Nodes {
+			if node.NodeType == plan.Node_EXTERNAL_SCAN {
+				insertParallelNumber = 2
+				break
+			}
+		}
+		rs.DispatchScopes = make([]*Scope, insertParallelNumber)
+		dispatchRegs := make([]*process.WaitRegister, insertParallelNumber)
+		for i := range rs.DispatchScopes {
+			rs.DispatchScopes[i] = new(Scope)
+			rs.DispatchScopes[i].Proc = process.NewWithAnalyze(rs.Proc, c.ctx, 1, c.anal.Nodes())
+			rs.DispatchScopes[i].Instructions = append(rs.DispatchScopes[i].Instructions,
+				vm.Instruction{Op: vm.Merge, Arg: &merge.Argument{}},
+				vm.Instruction{Op: vm.Insert, Arg: &insert.Argument{
+					Ts:            arg.Ts,
+					TargetTable:   arg.TargetTable,
+					TargetColDefs: arg.TargetColDefs,
+					Affected:      0,
+					Engine:        arg.Engine,
+					DB:            arg.DB,
+					TableID:       arg.TableID,
+					CPkeyColDef:   arg.CPkeyColDef,
+				}})
+			dispatchRegs[i] = rs.DispatchScopes[i].Proc.Reg.MergeReceivers[0]
+		}
 		rs.Instructions = append(rs.Instructions, vm.Instruction{
-			Op:  vm.Insert,
-			Arg: arg,
+			Op:  vm.Dispatch,
+			Arg: constructDispatch(false, dispatchRegs),
 		})
 	case plan.Query_UPDATE:
 		scp, err := constructUpdate(qry.Nodes[qry.Steps[0]], c.e, c.proc.TxnOperator)

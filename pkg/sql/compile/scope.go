@@ -107,12 +107,27 @@ func (s *Scope) MergeRun(c *Compile) error {
 			}(s.PreScopes[i])
 		}
 	}
+	for i := range s.DispatchScopes {
+		go func(cs *Scope) {
+			var err error
+			defer func() {
+				errChan <- err
+			}()
+			err = cs.MergeRun(c)
+		}(s.DispatchScopes[i])
+	}
 	p := pipeline.NewMerge(s.Instructions, s.Reg)
 	if _, err := p.MergeRun(s.Proc); err != nil {
 		return err
 	}
 	// check sub-goroutine's error
 	for i := 0; i < len(s.PreScopes); i++ {
+		if err := <-errChan; err != nil {
+			return err
+		}
+	}
+	// check dispatch pipeline goroutine's error
+	for i := 0; i < len(s.DispatchScopes); i++ {
 		if err := <-errChan; err != nil {
 			return err
 		}

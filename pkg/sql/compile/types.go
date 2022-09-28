@@ -90,6 +90,10 @@ type Scope struct {
 	DataSource *Source
 	// PreScopes contains children of this scope will inherit and execute.
 	PreScopes []*Scope
+	// DispatchScopes stores the scopes should start at the same time as this one.
+	// and will try to destroy together.
+	// they are preparing to receive the batch from this scope once they were start.
+	DispatchScopes []*Scope
 	// NodeInfo contains the information about the remote node.
 	NodeInfo engine.Node
 	// Instructions contains command list of this scope.
