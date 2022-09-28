@@ -360,11 +360,13 @@ func vectorAppend(vec *vector.Vector, value Nullable, heap *mheap.Mheap) {
 func appendNamedRow(
 	tx *Transaction,
 	handler *MemHandler,
+	offset int,
 	bat *batch.Batch,
 	row NamedRow,
 ) error {
 	row.SetHandler(handler)
-	for i, name := range bat.Attrs {
+	for i := offset; i < len(bat.Attrs); i++ {
+		name := bat.Attrs[i]
 		value, err := row.AttrByName(tx, name)
 		if err != nil {
 			return err
