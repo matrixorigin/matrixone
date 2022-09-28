@@ -1126,7 +1126,6 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 	}
 
 	ctx.binder = NewWhereBinder(builder, ctx)
-
 	// unfold stars and generate headings
 	var selectList tree.SelectExprs
 	for _, selectExpr := range clause.Exprs {
@@ -2221,12 +2220,12 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr)
 			cantPushdown = filters
 			break
 		}
-		if child.NodeType == plan.Node_UNNEST {
-			child.FilterList = append(child.FilterList, filters...)
-			uChildId := child.Children[0]
-			builder.pushdownFilters(uChildId, nil)
-			break
-		}
+		//if child.NodeType == plan.Node_UNNEST {
+		//	child.FilterList = append(child.FilterList, filters...)
+		//	uChildId := child.Children[0]
+		//	builder.pushdownFilters(uChildId, nil)
+		//	break
+		//}
 
 		projectTag := node.BindingTags[0]
 
@@ -2246,8 +2245,16 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr)
 
 		node.Children[0] = childID
 
-	case plan.Node_TABLE_SCAN, plan.Node_EXTERNAL_SCAN, plan.Node_UNNEST:
+	case plan.Node_TABLE_SCAN, plan.Node_EXTERNAL_SCAN:
 		node.FilterList = append(node.FilterList, filters...)
+	case plan.Node_UNNEST:
+		node.FilterList = append(node.FilterList, filters...)
+		childId := node.Children[0]
+		childId, err := builder.pushdownFilters(childId, nil)
+		if err != nil {
+			return 0, err
+		}
+		node.Children[0] = childId
 
 	default:
 		if len(node.Children) > 0 {
