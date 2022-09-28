@@ -1239,7 +1239,7 @@ func (*MemHandler) HandleClose() error {
 
 func (m *MemHandler) HandleCommit(meta txn.TxnMeta) error {
 	tx := m.getTx(meta)
-	if err := tx.Commit(); err != nil {
+	if err := tx.Commit(memtable.Now(m.clock)); err != nil {
 		return err
 	}
 	return nil
