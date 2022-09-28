@@ -3323,3 +3323,43 @@ func TestCollectDelete(t *testing.T) {
 		assert.Equal(t, 5, vec.Length())
 	}
 }
+
+func TestAppendnode(t *testing.T) {
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := newTestEngine(t, opts)
+	defer tae.Close()
+	schema := catalog.MockSchemaAll(1, 0)
+	schema.BlockMaxRows = 10000
+	schema.SegmentMaxBlocks = 2
+	tae.bindSchema(schema)
+	appendCnt := 20
+	bat := catalog.MockBatch(schema, appendCnt)
+	bats := bat.Split(appendCnt)
+
+	tae.createRelAndAppend(bats[0], true)
+	tae.checkRowsByScan(1, false)
+
+	var wg sync.WaitGroup
+	pool, _ := ants.NewPool(5)
+	worker := func(i int) func() {
+		return func() {
+			txn, rel := tae.getRelation()
+			row := getColumnRowsByScan(t, rel, 0, true)
+			err := tae.doAppendWithTxn(bats[i], txn, true)
+			assert.NoError(t, err)
+			row2 := getColumnRowsByScan(t, rel, 0, true)
+			assert.Equal(t, row+1, row2)
+			assert.NoError(t, txn.Commit())
+			wg.Done()
+		}
+	}
+	for i := 1; i < appendCnt; i++ {
+		wg.Add(1)
+		pool.Submit(worker(i))
+	}
+	wg.Wait()
+	tae.checkRowsByScan(appendCnt, true)
+
+	tae.restart()
+	tae.checkRowsByScan(appendCnt, true)
+}

@@ -21,7 +21,9 @@ import (
 )
 
 const (
-	DefaultTxnCacheSize   = 256 * common.M
+	// Temp unlimit the txn cache size.
+	// In v0.6, we will limit the cache to a reasonable value
+	DefaultTxnCacheSize   = common.UNLIMIT
 	DefaultIndexCacheSize = 128 * common.M
 	DefaultMTCacheSize    = 4 * common.G
 
