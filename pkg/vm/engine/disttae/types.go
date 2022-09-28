@@ -34,6 +34,13 @@ const (
 	DELETE
 )
 
+const (
+	MO_DATABASE_ID_NAME_IDX      = 1
+	MO_DATABASE_ID_ACCOUNT_IDX   = 2
+	MO_DATABASE_LIST_NAME_IDX    = 0
+	MO_DATABASE_LIST_ACCOUNT_IDX = 1
+)
+
 type DNStore = logservice.DNStore
 
 // tae's block metadata, which is currently just an empty one,
@@ -124,6 +131,7 @@ type Transaction struct {
 	// every statement is an element
 	writes   [][]Entry
 	dnStores []DNStore
+	m        *mheap.Mheap
 }
 
 // Entry represents a delete/insert
@@ -146,7 +154,6 @@ type database struct {
 	databaseId   uint64
 	databaseName string
 	db           *DB
-	m            *mheap.Mheap
 	txn          *Transaction
 }
 

@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	plantool "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -317,13 +318,36 @@ func genDropColumnsTuple(name string) *batch.Batch {
 // genDatabaseIdExpr generate an expression to find database info
 // by database name and accountId
 func genDatabaseIdExpr(accountId uint32, name string) *plan.Expr {
-	return nil
+	var left, right *plan.Expr
+
+	{
+		var args []*plan.Expr
+
+		args = append(args, newColumnExpr(MO_DATABASE_ID_NAME_IDX, types.T_varchar,
+			catalog.MoDatabaseSchema[catalog.MO_DATABASE_DAT_NAME_IDX]))
+		args = append(args, newStringConstVal(name))
+		left = plantool.MakeExpr("eq", args)
+	}
+	{
+		var args []*plan.Expr
+
+		args = append(args, newColumnExpr(MO_DATABASE_ID_ACCOUNT_IDX, types.T_uint32,
+			catalog.MoDatabaseSchema[catalog.MO_DATABASE_ACCOUNT_ID_IDX]))
+		args = append(args, newIntConstVal(types.T_uint32, accountId))
+		right = plantool.MakeExpr("eq", args)
+	}
+	return plantool.MakeExpr("and", []*plan.Expr{left, right})
 }
 
 // genDatabaseIdExpr generate an expression to find database list
 // by accountId
 func genDatabaseListExpr(accountId uint32) *plan.Expr {
-	return nil
+	var args []*plan.Expr
+
+	args = append(args, newColumnExpr(MO_DATABASE_LIST_ACCOUNT_IDX, types.T_uint32,
+		catalog.MoDatabaseSchema[catalog.MO_DATABASE_ACCOUNT_ID_IDX]))
+	args = append(args, newIntConstVal(types.T_uint32, accountId))
+	return plantool.MakeExpr("eq", args)
 }
 
 // genTableIdExpr generate an expression to find table info
@@ -352,6 +376,52 @@ func genInsertExpr(defs []engine.TableDef) *plan.Expr {
 // genDeleteExpr used to generate an expression to partition table data
 func genDeleteExpr(defs []engine.TableDef) *plan.Expr {
 	return nil
+}
+
+func newIntConstVal(oid types.T, v any) *plan.Expr {
+	var val int64
+
+	switch x := v.(type) {
+	case int32:
+		val = int64(x)
+	case int64:
+		val = int64(x)
+	case uint32:
+		val = int64(x)
+	case uint64:
+		val = int64(x)
+	}
+	return &plan.Expr{
+		Typ: types.NewProtoType(types.T_uint32),
+		Expr: &plan.Expr_C{
+			C: &plan.Const{
+				Value: &plan.Const_Ival{Ival: int64(val)},
+			},
+		},
+	}
+}
+
+func newStringConstVal(v string) *plan.Expr {
+	return &plan.Expr{
+		Typ: types.NewProtoType(types.T_varchar),
+		Expr: &plan.Expr_C{
+			C: &plan.Const{
+				Value: &plan.Const_Sval{Sval: v},
+			},
+		},
+	}
+}
+
+func newColumnExpr(pos int, oid types.T, name string) *plan.Expr {
+	return &plan.Expr{
+		Typ: types.NewProtoType(types.T_uint32),
+		Expr: &plan.Expr_Col{
+			Col: &plan.ColRef{
+				Name:   name,
+				ColPos: int32(pos),
+			},
+		},
+	}
 }
 
 func genWriteReqs(writes [][]Entry) ([]txn.TxnRequest, error) {

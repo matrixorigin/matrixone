@@ -79,7 +79,6 @@ func (e *Engine) Database(ctx context.Context, name string,
 		return nil, err
 	}
 	return &database{
-		m:            e.m,
 		txn:          txn,
 		db:           e.db,
 		databaseId:   id,
@@ -128,6 +127,7 @@ func (e *Engine) New(ctx context.Context, op client.TxnOperator) error {
 		return err
 	}
 	txn := &Transaction{
+		m:        e.m,
 		db:       e.db,
 		readOnly: true,
 		meta:     op.Txn(),

@@ -96,12 +96,12 @@ func ParseEntryList(es []*api.Entry) (any, []*api.Entry, error) {
 func genCreateDatabases(rows [][]any) []CreateDatabase {
 	cmds := make([]CreateDatabase, len(rows))
 	for i, row := range rows {
-		cmds[i].Name = string(row[1].([]byte))
-		cmds[i].Owner = row[4].(uint32)
-		cmds[i].Creator = row[5].(uint32)
-		cmds[i].AccountId = row[7].(uint32)
-		cmds[i].CreatedTime = row[6].(types.Timestamp)
-		cmds[i].CreateSql = string(row[3].([]byte))
+		cmds[i].Name = string(row[MO_DATABASE_DAT_NAME_IDX].([]byte))
+		cmds[i].Owner = row[MO_DATABASE_OWNER_IDX].(uint32)
+		cmds[i].Creator = row[MO_DATABASE_CREATOR_IDX].(uint32)
+		cmds[i].AccountId = row[MO_DATABASE_ACCOUNT_ID_IDX].(uint32)
+		cmds[i].CreatedTime = row[MO_DATABASE_CREATED_TIME_IDX].(types.Timestamp)
+		cmds[i].CreateSql = string(row[MO_DATABASE_CREATESQL_IDX].([]byte))
 	}
 	return cmds
 }
@@ -109,8 +109,8 @@ func genCreateDatabases(rows [][]any) []CreateDatabase {
 func genDropDatabases(rows [][]any) []DropDatabase {
 	cmds := make([]DropDatabase, len(rows))
 	for i, row := range rows {
-		cmds[i].Id = row[0].(uint64)
-		cmds[i].Name = string(row[1].([]byte))
+		cmds[i].Id = row[MO_DATABASE_DAT_ID_IDX].(uint64)
+		cmds[i].Name = string(row[MO_DATABASE_DAT_NAME_IDX].([]byte))
 	}
 	return cmds
 }
@@ -118,15 +118,15 @@ func genDropDatabases(rows [][]any) []DropDatabase {
 func genCreateTables(rows [][]any) []CreateTable {
 	cmds := make([]CreateTable, len(rows))
 	for i, row := range rows {
-		cmds[i].Name = string(row[1].([]byte))
-		cmds[i].CreateSql = string(row[7].([]byte))
-		cmds[i].Owner = row[10].(uint32)
-		cmds[i].Creator = row[9].(uint32)
-		cmds[i].AccountId = row[11].(uint32)
-		cmds[i].DatabaseId = row[3].(uint64)
-		cmds[i].DatabaseName = string(row[2].([]byte))
-		cmds[i].Comment = string(row[6].([]byte))
-		cmds[i].Partition = string(row[12].([]byte))
+		cmds[i].Name = string(row[MO_TABLES_REL_NAME_IDX].([]byte))
+		cmds[i].CreateSql = string(row[MO_TABLES_REL_CREATESQL_IDX].([]byte))
+		cmds[i].Owner = row[MO_TABLES_OWNER_IDX].(uint32)
+		cmds[i].Creator = row[MO_TABLES_CREATOR_IDX].(uint32)
+		cmds[i].AccountId = row[MO_TABLES_ACCOUNT_ID_IDX].(uint32)
+		cmds[i].DatabaseId = row[MO_TABLES_RELDATABASE_ID_IDX].(uint64)
+		cmds[i].DatabaseName = string(row[MO_TABLES_RELDATABASE_IDX].([]byte))
+		cmds[i].Comment = string(row[MO_TABLES_REL_COMMENT_IDX].([]byte))
+		cmds[i].Partition = string(row[MO_TABLES_PARTITIONED_IDX].([]byte))
 	}
 	return cmds
 }
@@ -134,23 +134,27 @@ func genCreateTables(rows [][]any) []CreateTable {
 func genDropTables(rows [][]any) []DropTable {
 	cmds := make([]DropTable, len(rows))
 	for i, row := range rows {
-		cmds[i].Id = row[0].(uint64)
-		cmds[i].Name = string(row[1].([]byte))
-		cmds[i].DatabaseId = row[2].(uint64)
-		cmds[i].DatabaseName = string(row[3].([]byte))
+		cmds[i].Id = row[MO_TABLES_REL_ID_IDX].(uint64)
+		cmds[i].Name = string(row[MO_TABLES_REL_NAME_IDX].([]byte))
+		cmds[i].DatabaseId = row[MO_TABLES_RELDATABASE_ID_IDX].(uint64)
+		cmds[i].DatabaseName = string(row[MO_TABLES_RELDATABASE_IDX].([]byte))
 	}
 	return cmds
 }
 
 func fillCreateTable(idx *int, cmd *CreateTable, es []*api.Entry) error {
 	for i, e := range es {
+		// to find tabledef, only need to detect the insertion of mo_columns
+		if e.TableId != MO_COLUMNS_ID || e.EntryType != api.Entry_Insert {
+			continue
+		}
 		bat, err := batch.ProtoBatchToBatch(e.Bat)
 		if err != nil {
 			return err
 		}
 		rows := GenRows(bat)
 		for _, row := range rows {
-			if string(row[5].([]byte)) == cmd.Name {
+			if string(row[MO_COLUMNS_ATT_RELNAME_IDX].([]byte)) == cmd.Name {
 				def, err := genTableDefs(row)
 				if err != nil {
 					return err
@@ -168,21 +172,21 @@ func fillCreateTable(idx *int, cmd *CreateTable, es []*api.Entry) error {
 func genTableDefs(row []any) (engine.TableDef, error) {
 	var attr engine.Attribute
 
-	attr.Name = string(row[6].([]byte))
+	attr.Name = string(row[MO_COLUMNS_ATTNAME_IDX].([]byte))
 	attr.Alg = compress.Lz4
-	if err := types.Decode(row[7].([]byte), &attr.Type); err != nil {
+	if err := types.Decode(row[MO_COLUMNS_ATTTYP_IDX].([]byte), &attr.Type); err != nil {
 		return nil, err
 	}
-	if row[11].(int8) == 1 {
+	if row[MO_COLUMNS_ATTHASDEF_IDX].(int8) == 1 {
 		attr.Default = new(plan.Default)
-		if err := types.Decode(row[12].([]byte), attr.Default); err != nil {
+		if err := types.Decode(row[MO_COLUMNS_ATT_DEFAULT_IDX].([]byte), attr.Default); err != nil {
 			return nil, err
 		}
 	}
-	attr.Comment = string(row[17].([]byte))
-	attr.IsHidden = row[18].(int8) == 1
-	attr.AutoIncrement = row[16].(int8) == 1
-	attr.Primary = string(row[14].([]byte)) == "p"
+	attr.Comment = string(row[MO_COLUMNS_ATT_COMMENT_IDX].([]byte))
+	attr.IsHidden = row[MO_COLUMNS_ATT_IS_HIDDEN_IDX].(int8) == 1
+	attr.AutoIncrement = row[MO_COLUMNS_ATT_IS_AUTO_INCREMENT_IDX].(int8) == 1
+	attr.Primary = string(row[MO_COLUMNS_ATT_CONSTRAINT_TYPE_IDX].([]byte)) == "p"
 	return &engine.AttributeDef{Attr: attr}, nil
 }
 

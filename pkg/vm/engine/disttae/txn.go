@@ -77,7 +77,10 @@ func (txn *Transaction) getTableId(ctx context.Context, databaseId uint64,
 
 func (txn *Transaction) getDatabaseList(ctx context.Context) ([]string, error) {
 	rows, err := txn.getRows(ctx, catalog.MO_CATALOG_ID, catalog.MO_DATABASE_ID,
-		txn.dnStores[:1], []string{catalog.MoDatabaseSchema[catalog.MO_DATABASE_DAT_NAME_IDX]},
+		txn.dnStores[:1], []string{
+			catalog.MoDatabaseSchema[catalog.MO_DATABASE_DAT_NAME_IDX],
+			catalog.MoColumnsSchema[catalog.MO_DATABASE_ACCOUNT_ID_IDX],
+		},
 		genDatabaseListExpr(getAccountId(ctx)))
 	if err != nil {
 		return nil, err
@@ -92,7 +95,10 @@ func (txn *Transaction) getDatabaseList(ctx context.Context) ([]string, error) {
 func (txn *Transaction) getDatabaseId(ctx context.Context, name string) (uint64, error) {
 	accountId := getAccountId(ctx)
 	row, err := txn.getRow(ctx, catalog.MO_CATALOG_ID, catalog.MO_DATABASE_ID, txn.dnStores[:1],
-		[]string{catalog.MoDatabaseSchema[catalog.MO_DATABASE_DAT_ID_IDX]},
+		[]string{catalog.MoDatabaseSchema[catalog.MO_DATABASE_DAT_ID_IDX],
+			catalog.MoColumnsSchema[catalog.MO_DATABASE_DAT_NAME_IDX],
+			catalog.MoColumnsSchema[catalog.MO_DATABASE_ACCOUNT_ID_IDX],
+		},
 		genDatabaseIdExpr(accountId, name))
 	if err != nil {
 		return 0, err
