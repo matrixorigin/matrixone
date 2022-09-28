@@ -17,6 +17,7 @@ package memtable
 import (
 	"fmt"
 
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 )
@@ -67,4 +68,11 @@ func (t Time) String() string {
 
 func (t Time) IsZero() bool {
 	return t.Timestamp.IsEmpty() && t.Statement == 0
+}
+
+func (t Time) ToTxnTS() types.TS {
+	return types.BuildTS(
+		t.Timestamp.PhysicalTime,
+		t.Timestamp.LogicalTime,
+	)
 }
