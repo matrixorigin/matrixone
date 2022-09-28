@@ -69,6 +69,7 @@ type WriteEntry[
 ] struct {
 	Transaction *Transaction
 	Row         *PhysicalRow[K, V]
+	VersionID   ID
 }
 
 func NewTable[
@@ -158,42 +159,51 @@ func (t *Table[K, V, R]) Insert(
 	return t.update(func(tree *btree.BTreeG[*TreeItem[K, V]]) error {
 		physicalRow := getOrSetRowByKey(tree, key)
 
-		existed, err := physicalRow.ReadVisible(tx.Time, tx)
-		if errors.Is(err, sql.ErrNoRows) {
-			err = nil
-		}
-		if err != nil {
+		if err := validate(physicalRow, tx); err != nil {
 			return err
 		}
-		if existed != nil {
-			//return moerr.NewPrimaryKeyDuplicated(key)
-			return moerr.NewDuplicate()
+
+		for i := len(physicalRow.Versions) - 1; i >= 0; i-- {
+			version := physicalRow.Versions[i]
+			if version.Visible(tx.Time, tx.ID) {
+				return moerr.NewDuplicate()
+			}
 		}
 
 		value := row.Value()
-		newRow, err := physicalRow.Insert(
+		physicalRow, version, err := physicalRow.Insert(
 			tx.Time, tx, value,
-			func(versionID ID) {
-				for _, index := range row.Indexes() {
-					tree.Set(&TreeItem[K, V]{
-						IndexEntry: &IndexEntry[K, V]{
-							Index:     index,
-							Key:       key,
-							VersionID: versionID,
-							Value:     value,
-						},
-					})
-				}
-			},
 		)
 		if err != nil {
 			return err
 		}
+
+		// index entry
+		for _, index := range row.Indexes() {
+			tree.Set(&TreeItem[K, V]{
+				IndexEntry: &IndexEntry[K, V]{
+					Index:     index,
+					Key:       key,
+					VersionID: version.ID,
+					Value:     value,
+				},
+			})
+		}
+
+		// write entry
+		tx.committers[t] = struct{}{}
 		tree.Set(&TreeItem[K, V]{
-			Row: newRow,
+			WriteEntry: &WriteEntry[K, V]{
+				Transaction: tx,
+				Row:         physicalRow,
+				VersionID:   version.ID,
+			},
 		})
 
-		setCommitter(tree, t, tx, physicalRow)
+		// row entry
+		tree.Set(&TreeItem[K, V]{
+			Row: physicalRow,
+		})
 
 		tx.Time.Tick()
 		return nil
@@ -211,29 +221,39 @@ func (t *Table[K, V, R]) Update(
 		physicalRow := getOrSetRowByKey(tree, key)
 
 		value := row.Value()
-		newRow, err := physicalRow.Update(
+		physicalRow, version, err := physicalRow.Update(
 			tx.Time, tx, value,
-			func(versionID ID) {
-				for _, index := range row.Indexes() {
-					tree.Set(&TreeItem[K, V]{
-						IndexEntry: &IndexEntry[K, V]{
-							Index:     index,
-							Key:       key,
-							VersionID: versionID,
-							Value:     value,
-						},
-					})
-				}
-			},
 		)
 		if err != nil {
 			return err
 		}
+
+		// index entry
+		for _, index := range row.Indexes() {
+			tree.Set(&TreeItem[K, V]{
+				IndexEntry: &IndexEntry[K, V]{
+					Index:     index,
+					Key:       key,
+					VersionID: version.ID,
+					Value:     value,
+				},
+			})
+		}
+
+		// write entry
+		tx.committers[t] = struct{}{}
 		tree.Set(&TreeItem[K, V]{
-			Row: newRow,
+			WriteEntry: &WriteEntry[K, V]{
+				Transaction: tx,
+				Row:         physicalRow,
+				VersionID:   version.ID,
+			},
 		})
 
-		setCommitter(tree, t, tx, physicalRow)
+		// row entry
+		tree.Set(&TreeItem[K, V]{
+			Row: physicalRow,
+		})
 
 		tx.Time.Tick()
 		return nil
@@ -247,19 +267,29 @@ func (t *Table[K, V, R]) Delete(
 
 	return t.update(func(tree *btree.BTreeG[*TreeItem[K, V]]) error {
 		physicalRow := getRowByKey(tree, key)
-
 		if physicalRow == nil {
 			return nil
 		}
-		newRow, err := physicalRow.Delete(tx.Time, tx)
+
+		physicalRow, version, err := physicalRow.Delete(tx.Time, tx)
 		if err != nil {
 			return err
 		}
+
+		// write entry
+		tx.committers[t] = struct{}{}
 		tree.Set(&TreeItem[K, V]{
-			Row: newRow,
+			WriteEntry: &WriteEntry[K, V]{
+				Transaction: tx,
+				Row:         physicalRow,
+				VersionID:   version.ID,
+			},
 		})
 
-		setCommitter(tree, t, tx, physicalRow)
+		// row entry
+		tree.Set(&TreeItem[K, V]{
+			Row: physicalRow,
+		})
 
 		tx.Time.Tick()
 		return nil
@@ -366,25 +396,6 @@ func (t *Table[K, V, R]) Index(tx *Transaction, index Tuple) (entries []*IndexEn
 	return
 }
 
-func setCommitter[
-	K Ordered[K],
-	V any,
-	R Row[K, V],
-](
-	tree *btree.BTreeG[*TreeItem[K, V]],
-	table *Table[K, V, R],
-	tx *Transaction,
-	row *PhysicalRow[K, V],
-) {
-	tx.committers[table] = struct{}{}
-	tree.Set(&TreeItem[K, V]{
-		WriteEntry: &WriteEntry[K, V]{
-			Transaction: tx,
-			Row:         row,
-		},
-	})
-}
-
 func (t *Table[K, V, R]) CommitTx(tx *Transaction) error {
 	return t.update(func(tree *btree.BTreeG[*TreeItem[K, V]]) error {
 		iter := tree.Copy().Iter()
@@ -404,38 +415,25 @@ func (t *Table[K, V, R]) CommitTx(tx *Transaction) error {
 				break
 			}
 
-			physicalRow := entry.Row
-			// verify the latest committed operation is done by the tx
-			var err error
-			for i := len(physicalRow.Versions) - 1; i >= 0; i-- {
-				version := physicalRow.Versions[i]
-
-				// locked by another committed tx after tx begin
-				if version.LockTx != nil &&
-					version.LockTx.State.Load() == Committed &&
-					version.LockTx.ID != tx.ID &&
-					version.LockTime.After(tx.BeginTime) {
-					//err = moerr.NewPrimaryKeyDuplicated(physicalRow.Key)
-					err = moerr.NewDuplicate()
-					break
-				}
-
-				// born in another committed tx after tx begin
-				if version.BornTx.State.Load() == Committed &&
-					version.BornTx.ID != tx.ID &&
-					version.BornTime.After(tx.BeginTime) {
-					//err = moerr.NewPrimaryKeyDuplicated(physicalRow.Key)
-					err = moerr.NewDuplicate()
-					break
-				}
-
-			}
-
-			if err != nil {
+			if err := validate(entry.Row, tx); err != nil {
 				return err
 			}
 
+			// set born time to commit time
+			physicalRow := entry.Row.clone()
+			for i, version := range physicalRow.Versions {
+				if version.ID == item.WriteEntry.VersionID {
+					version.BornTime = tx.CommitTime
+					physicalRow.Versions[i] = version
+				}
+			}
+			tree.Set(&TreeItem[K, V]{
+				Row: physicalRow,
+			})
+
+			// delete write entry
 			tree.Delete(item)
+
 		}
 		return nil
 	})
@@ -477,5 +475,38 @@ func (t *Table[K, V, R]) update(
 		return err
 	}
 	t.tree.Store(newTree)
+	return nil
+}
+
+func validate[
+	K Ordered[K],
+	V any,
+](
+	physicalRow *PhysicalRow[K, V],
+	tx *Transaction,
+) error {
+
+	for i := len(physicalRow.Versions) - 1; i >= 0; i-- {
+		version := physicalRow.Versions[i]
+
+		// locked by another committed tx after tx begin
+		if version.LockTx != nil &&
+			version.LockTx.State.Load() == Committed &&
+			version.LockTx.ID != tx.ID &&
+			version.LockTime.After(tx.BeginTime) {
+			//err = moerr.NewPrimaryKeyDuplicated(physicalRow.Key)
+			return moerr.NewDuplicate()
+		}
+
+		// born in another committed tx after tx begin
+		if version.BornTx.State.Load() == Committed &&
+			version.BornTx.ID != tx.ID &&
+			version.BornTime.After(tx.BeginTime) {
+			//err = moerr.NewPrimaryKeyDuplicated(physicalRow.Key)
+			return moerr.NewDuplicate()
+		}
+
+	}
+
 	return nil
 }

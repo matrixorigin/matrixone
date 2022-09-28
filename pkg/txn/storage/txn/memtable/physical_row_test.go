@@ -51,7 +51,7 @@ func testPhysicalRow(
 
 	// insert
 	n := 1
-	m, err := m.Insert(now, tx1, n)
+	m, _, err := m.Insert(now, tx1, n)
 	assert.Nil(t, err)
 	assert.Equal(t, 1, len(m.Versions))
 	assert.Equal(t, tx1, m.Versions[0].BornTx)
@@ -60,7 +60,7 @@ func testPhysicalRow(
 	assert.True(t, m.Versions[0].LockTime.IsZero())
 
 	n2 := 2
-	m, err = m.Insert(now, tx2, n2)
+	m, _, err = m.Insert(now, tx2, n2)
 	assert.Nil(t, err)
 	assert.Equal(t, 2, len(m.Versions))
 	assert.Equal(t, tx2, m.Versions[1].BornTx)
@@ -91,7 +91,7 @@ func testPhysicalRow(
 	assert.Equal(t, 2, res)
 
 	// delete
-	m, err = m.Delete(now, tx1)
+	m, _, err = m.Delete(now, tx1)
 	assert.Nil(t, err)
 	assert.Equal(t, 2, len(m.Versions))
 	assert.Equal(t, tx1, m.Versions[0].LockTx)
@@ -108,7 +108,7 @@ func testPhysicalRow(
 	assert.NotNil(t, res)
 	assert.Equal(t, 2, res)
 
-	m, err = m.Delete(now, tx2)
+	m, _, err = m.Delete(now, tx2)
 	assert.Nil(t, err)
 	assert.Equal(t, 2, len(m.Versions))
 	assert.Equal(t, tx2, m.Versions[1].LockTx)
@@ -122,7 +122,7 @@ func testPhysicalRow(
 
 	// insert again
 	n3 := 3
-	m, err = m.Insert(now, tx1, n3)
+	m, _, err = m.Insert(now, tx1, n3)
 	assert.Nil(t, err)
 	assert.Equal(t, 3, len(m.Versions))
 	assert.Equal(t, tx1, m.Versions[2].BornTx)
@@ -131,7 +131,7 @@ func testPhysicalRow(
 	assert.True(t, m.Versions[2].LockTime.IsZero())
 
 	n4 := 4
-	m, err = m.Insert(now, tx2, n4)
+	m, _, err = m.Insert(now, tx2, n4)
 	assert.Nil(t, err)
 	assert.Equal(t, 4, len(m.Versions))
 	assert.Equal(t, tx2, m.Versions[3].BornTx)
@@ -143,7 +143,7 @@ func testPhysicalRow(
 
 	// update
 	n5 := 5
-	m, err = m.Update(now, tx1, n5)
+	m, _, err = m.Update(now, tx1, n5)
 	assert.Nil(t, err)
 	assert.Equal(t, 5, len(m.Versions))
 	assert.Equal(t, tx1, m.Versions[2].LockTx)
@@ -153,8 +153,10 @@ func testPhysicalRow(
 	assert.Nil(t, m.Versions[4].LockTx)
 	assert.True(t, m.Versions[4].LockTime.IsZero())
 
+	tick()
+
 	// commit tx1
-	err = tx1.Commit()
+	err = tx1.Commit(now)
 	assert.Nil(t, err)
 
 	tick()
@@ -181,16 +183,16 @@ func testPhysicalRow(
 
 	// write stale conflict
 	i := 1
-	_, err = m.Insert(now, tx2, i)
+	_, _, err = m.Insert(now, tx2, i)
 	assert.NotNil(t, err)
 	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnWriteConflict))
 
-	_, err = m.Delete(now, tx2)
+	_, _, err = m.Delete(now, tx2)
 	assert.NotNil(t, err)
 	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnWriteConflict))
 
 	i2 := 1
-	_, err = m.Update(now, tx2, i2)
+	_, _, err = m.Update(now, tx2, i2)
 	assert.NotNil(t, err)
 	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnWriteConflict))
 
@@ -199,20 +201,20 @@ func testPhysicalRow(
 	tx4 := NewTransaction("4", now, isolationPolicy)
 
 	// write locked conflict
-	m, err = m.Delete(now, tx3)
+	m, _, err = m.Delete(now, tx3)
 	assert.Nil(t, err)
 
-	_, err = m.Delete(now, tx4)
+	_, _, err = m.Delete(now, tx4)
 	assert.NotNil(t, err)
 	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnWriteConflict))
 
 	i3 := 1
-	_, err = m.Insert(now, tx4, i3)
+	_, _, err = m.Insert(now, tx4, i3)
 	assert.NotNil(t, err)
 	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnWriteConflict))
 
 	i4 := 1
-	_, err = m.Update(now, tx4, i4)
+	_, _, err = m.Update(now, tx4, i4)
 	assert.NotNil(t, err)
 	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnWriteConflict))
 }

@@ -18,6 +18,7 @@ type Transaction struct {
 	ID              string
 	BeginTime       Time
 	Time            Time
+	CommitTime      Time
 	State           *Atomic[TransactionState]
 	IsolationPolicy IsolationPolicy
 	committers      map[TxCommitter]struct{}
@@ -51,7 +52,8 @@ const (
 	Aborted
 )
 
-func (t *Transaction) Commit() error {
+func (t *Transaction) Commit(commitTime Time) error {
+	t.CommitTime = commitTime
 	for committer := range t.committers {
 		if err := committer.CommitTx(t); err != nil {
 			return err
