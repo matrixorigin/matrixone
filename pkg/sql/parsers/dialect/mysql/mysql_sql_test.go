@@ -1426,6 +1426,9 @@ var (
 			input: `create table t2 (a uuid primary key, b varchar(10))`,
 		}, {
 			input: `create table t3 (a int, b uuid, primary key idx (a, b))`,
+		}, {
+			input:  `VALUES ROW(1,-2,3), ROW(5,7,9), ROW(4,6,8)`,
+			output: `values row(1, -2, 3), row(5, 7, 9), row(4, 6, 8)`,
 		},
 	}
 )
