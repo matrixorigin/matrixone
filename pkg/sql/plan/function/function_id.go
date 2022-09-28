@@ -209,7 +209,10 @@ const (
 	SUBSTRING // SUBSTRING
 	WEEK      //WEEK
 	WEEKDAY
-	YEAR // YEAR
+	YEAR   // YEAR
+	HOUR   // HOUR
+	MINUTE // MINUTE
+	SECOND // SECOND
 
 	DATE_ADD              // DATE_ADD
 	DATE_SUB              // DATE_SUB
@@ -349,6 +352,9 @@ var functionIdRegister = map[string]int32{
 	"acos":                    ACOS,
 	"bit_length":              BIT_LENGTH,
 	"date":                    DATE,
+	"hour":                    HOUR,
+	"minute":                  MINUTE,
+	"second":                  SECOND,
 	"day":                     DAY,
 	"dayofyear":               DAYOFYEAR,
 	"exp":                     EXP,

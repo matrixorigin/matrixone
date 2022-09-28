@@ -15,10 +15,9 @@
 package db
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
 	"sync/atomic"
 	"time"
-
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/segmentio"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
@@ -53,13 +52,15 @@ func Open(dirname string, opts *options.Options) (db *DB, err error) {
 	mutBufMgr := buffer.NewNodeManager(opts.CacheCfg.InsertCapacity, nil)
 	txnBufMgr := buffer.NewNodeManager(opts.CacheCfg.TxnCapacity, nil)
 
+	SegmentFactory := blockio.NewObjectFactory(dirname)
+
 	db = &DB{
 		Dir:         dirname,
 		Opts:        opts,
 		IndexBufMgr: indexBufMgr,
 		MTBufMgr:    mutBufMgr,
 		TxnBufMgr:   txnBufMgr,
-		FileFactory: segmentio.SegmentFactory,
+		FileFactory: SegmentFactory,
 		Closed:      new(atomic.Value),
 	}
 

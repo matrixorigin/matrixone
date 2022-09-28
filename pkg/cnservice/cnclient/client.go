@@ -49,17 +49,14 @@ const (
 	dfMaxSenderNumber       = 10
 	dfClientReadBufferSize  = 1 << 10
 	dfClientWriteBufferSize = 1 << 10
-	dfPayLoadCopyBufferSize = 1 << 20
 )
 
 // ClientConfig a config to init a CNClient
 type ClientConfig struct {
 	// MaxSenderNumber is the max number of backends per host for compute node service.
 	MaxSenderNumber int
-	// related buffer size.
-	PayLoadCopyBufferSize int
-	ReadBufferSize        int
-	WriteBufferSize       int
+	ReadBufferSize  int
+	WriteBufferSize int
 }
 
 func NewCNClient(cfg *ClientConfig) error {
@@ -68,7 +65,8 @@ func NewCNClient(cfg *ClientConfig) error {
 	Client = &CNClient{config: cfg}
 	Client.requestPool = &sync.Pool{New: func() any { return &pipeline.Message{} }}
 
-	codec := morpc.NewMessageCodec(Client.acquireMessage, cfg.PayLoadCopyBufferSize)
+	// FIXME: checksum needed? hlc integration needed?
+	codec := morpc.NewMessageCodec(Client.acquireMessage)
 	factory := morpc.NewGoettyBasedBackendFactory(codec,
 		morpc.WithBackendConnectWhenCreate(),
 		morpc.WithBackendGoettyOptions(goetty.WithSessionRWBUfferSize(
@@ -82,14 +80,12 @@ func NewCNClient(cfg *ClientConfig) error {
 }
 
 func (c *CNClient) acquireMessage() morpc.Message {
+	// TODO: pipeline.Message has many []byte fields, maybe can use PayloadMessage to avoid mem copy.
 	return c.requestPool.Get().(*pipeline.Message)
 }
 
 // Fill set some default value for client config.
 func (cfg *ClientConfig) Fill() {
-	if cfg.PayLoadCopyBufferSize < 0 {
-		cfg.PayLoadCopyBufferSize = dfPayLoadCopyBufferSize
-	}
 	if cfg.MaxSenderNumber <= 0 {
 		cfg.MaxSenderNumber = dfMaxSenderNumber
 	}

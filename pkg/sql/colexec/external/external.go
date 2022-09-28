@@ -50,7 +50,7 @@ func String(arg any, buf *bytes.Buffer) {
 func Prepare(proc *process.Process, arg any) error {
 	param := arg.(*Argument).Es
 	param.mu.Lock()
-	if param.Prepare || param.ScanEnd {
+	if param.Prepare || param.End {
 		param.mu.Unlock()
 		return nil
 	}
@@ -58,7 +58,7 @@ func Prepare(proc *process.Process, arg any) error {
 	param.extern = &tree.ExternParam{}
 	err := json.Unmarshal([]byte(param.CreateSql), param.extern)
 	if err != nil {
-		param.ScanEnd = true
+		param.End = true
 		param.mu.Unlock()
 		return err
 	}
@@ -67,15 +67,14 @@ func Prepare(proc *process.Process, arg any) error {
 	param.IgnoreLine = param.IgnoreLineTag
 	fileList, err := ReadDir(param.extern)
 	if err != nil {
-		param.ScanEnd = true
+		param.End = true
 		param.mu.Unlock()
 		return err
 	}
 
 	if len(fileList) == 0 {
-		param.ScanEnd = true
-		param.mu.Unlock()
-		return moerr.NewInternalError("no such file '%s'", param.extern.Filepath)
+		logutil.Warnf("no such file '%s'", param.extern.Filepath)
+		param.End = true
 	}
 	param.FileList = fileList
 	param.FileCnt = len(fileList)
@@ -86,14 +85,14 @@ func Prepare(proc *process.Process, arg any) error {
 
 func Call(_ int, proc *process.Process, arg any) (bool, error) {
 	param := arg.(*Argument).Es
-	if param.ScanEnd {
+	if param.End {
 		proc.SetInputBatch(nil)
 		return true, nil
 	}
 	param.extern.Filepath = param.FileList[param.FileIndex]
 	bat, err := ScanFileData(param, proc)
 	if err != nil {
-		param.ScanEnd = true
+		param.End = true
 		return false, err
 	}
 	proc.SetInputBatch(bat)
@@ -198,6 +197,7 @@ func getUnCompressReader(param *tree.ExternParam, r io.ReadCloser) (io.ReadClose
 
 const NULL_FLAG = "\\N"
 
+// judge the file is whether integer num
 func judgeInterge(field string) bool {
 	for i := 0; i < len(field); i++ {
 		if field[i] == '-' || field[i] == '+' {
@@ -210,9 +210,8 @@ func judgeInterge(field string) bool {
 	return true
 }
 
-func makeBatch(param *ExternalParam, plh *ParseLineHandler) *batch.Batch {
+func makeBatch(param *ExternalParam, batchSize int) *batch.Batch {
 	batchData := batch.New(true, param.Attrs)
-	batchSize := plh.batchSize
 	//alloc space for vector
 	for i := 0; i < len(param.Attrs); i++ {
 		typ := types.New(types.T(param.Cols[i].Typ.Id), param.Cols[i].Typ.Width, param.Cols[i].Typ.Scale, param.Cols[i].Typ.Precision)
@@ -255,7 +254,7 @@ func getNullFlag(param *ExternalParam, attr, field string) bool {
 }
 
 func GetBatchData(param *ExternalParam, plh *ParseLineHandler, proc *process.Process) (*batch.Batch, error) {
-	bat := makeBatch(param, plh)
+	bat := makeBatch(param, plh.batchSize)
 	var Line []string
 	deleteEnclosed(param, plh)
 	for rowIdx := 0; rowIdx < plh.batchSize; rowIdx++ {
@@ -563,7 +562,13 @@ func GetBatchData(param *ExternalParam, plh *ParseLineHandler, proc *process.Pro
 				if isNullOrEmpty {
 					nulls.Add(vec.Nsp, uint64(rowIdx))
 				} else {
-					d, err := types.ParseTimestamp(time.UTC, field, vec.Typ.Precision)
+					var t *time.Location
+					if proc == nil {
+						t = time.Local
+					} else {
+						t = proc.SessionInfo.TimeZone
+					}
+					d, err := types.ParseTimestamp(t, field, vec.Typ.Precision)
 					if err != nil {
 						logutil.Errorf("parse field[%v] err:%v", field, err)
 						return nil, moerr.NewInternalError("the input value '%v' is not Timestamp type for column %d", field, colIdx)
@@ -620,21 +625,38 @@ func GetSimdcsvReader(param *ExternalParam) (*ParseLineHandler, error) {
 
 // read batch data from external file
 func ScanFileData(param *ExternalParam, proc *process.Process) (*batch.Batch, error) {
-	var plh *ParseLineHandler
 	param.mu.Lock()
 	var bat *batch.Batch
+	plh, err := getParseLineHandler(param)
+	if err != nil {
+		param.mu.Unlock()
+		return nil, err
+	}
+
+	bat, err = GetBatchData(param, plh, proc)
+	if err != nil {
+		return nil, err
+	}
+	bat.Cnt = 1
+	param.mu.Unlock()
+	return bat, nil
+}
+
+func getParseLineHandler(param *ExternalParam) (*ParseLineHandler, error) {
 	var err error
-	if param.plh == nil {
+	if param.plh == nil && !param.End {
+		param.extern.Filepath = param.FileList[param.FileIndex]
 		param.plh, err = GetSimdcsvReader(param)
 		if err != nil {
-			param.mu.Unlock()
 			return nil, err
 		}
 	}
-	plh = param.plh
+	plh := param.plh
+	if plh == nil {
+		return &ParseLineHandler{}, nil
+	}
 	plh.simdCsvLineArray, err = plh.simdCsvReader.Read(param.batchSize, param.Ctx)
 	if err != nil {
-		param.mu.Unlock()
 		return nil, err
 	}
 	if len(plh.simdCsvLineArray) < param.batchSize {
@@ -642,23 +664,22 @@ func ScanFileData(param *ExternalParam, proc *process.Process) (*batch.Batch, er
 		if err != nil {
 			logutil.Errorf("close file failed. err:%v", err)
 		}
+		plh.simdCsvReader.Close()
 		param.plh = nil
 		param.FileIndex++
 		param.IgnoreLine = param.IgnoreLineTag
 		if param.FileIndex >= param.FileCnt {
-			param.ScanEnd = true
+			param.End = true
 		}
 	}
 	if param.IgnoreLine != 0 {
-		plh.simdCsvLineArray = plh.simdCsvLineArray[param.IgnoreLine:]
+		if len(plh.simdCsvLineArray) >= param.IgnoreLine {
+			plh.simdCsvLineArray = plh.simdCsvLineArray[param.IgnoreLine:]
+		} else {
+			plh.simdCsvLineArray = nil
+		}
 		param.IgnoreLine = 0
 	}
 	plh.batchSize = len(plh.simdCsvLineArray)
-	param.mu.Unlock()
-	bat, err = GetBatchData(param, plh, proc)
-	if err != nil {
-		return nil, err
-	}
-	bat.Cnt = 1
-	return bat, nil
+	return plh, nil
 }

@@ -169,8 +169,7 @@ func (s *Scope) ParallelRun(c *Compile) error {
 	if s.DataSource == nil {
 		return s.MergeRun(c)
 	}
-	//mcpu := s.NodeInfo.Mcpu
-	mcpu := 10
+	mcpu := s.NodeInfo.Mcpu
 	{
 		var err error
 
@@ -204,7 +203,7 @@ func (s *Scope) ParallelRun(c *Compile) error {
 }
 
 func (s *Scope) ExternalRun(c *Compile) error {
-	mcpu := 2
+	mcpu := c.NumCPU()
 	ss := make([]*Scope, mcpu)
 	for i := 0; i < mcpu; i++ {
 		ss[i] = &Scope{
@@ -215,11 +214,10 @@ func (s *Scope) ExternalRun(c *Compile) error {
 				Attributes:   s.DataSource.Attributes,
 				Bat:          &batch.Batch{},
 			},
-			Instructions: s.Instructions,
 		}
 		ss[i].Proc = process.NewWithAnalyze(s.Proc, c.ctx, 0, c.anal.Nodes())
 	}
-	s.PreScopes = ss
+	s = newParallelScope(c, s, ss)
 	return s.MergeRun(c)
 }
 

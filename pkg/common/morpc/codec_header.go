@@ -20,6 +20,8 @@ import (
 	"time"
 
 	"github.com/fagongzi/goetty/v2/buf"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 )
 
@@ -90,4 +92,26 @@ func (hc *traceCodec) Decode(msg *RPCMessage, data []byte) (int, error) {
 	}
 	msg.Ctx = trace.ContextWithSpanContext(msg.Ctx, *c)
 	return int(1 + data[0]), nil
+}
+
+type hlcCodec struct {
+	clock clock.Clock
+}
+
+func (hc *hlcCodec) Encode(msg *RPCMessage, out *buf.ByteBuf) (int, error) {
+	now, _ := hc.clock.Now()
+	out.WriteInt64(now.PhysicalTime)
+	out.WriteUint32(now.LogicalTime)
+	return 12, nil
+}
+
+func (hc *hlcCodec) Decode(msg *RPCMessage, data []byte) (int, error) {
+	if len(data) < 12 {
+		return 0, io.ErrShortBuffer
+	}
+	ts := timestamp.Timestamp{}
+	ts.PhysicalTime = buf.Byte2Int64(data)
+	ts.LogicalTime = buf.Byte2Uint32(data[8:])
+	hc.clock.Update(ts)
+	return 12, nil
 }

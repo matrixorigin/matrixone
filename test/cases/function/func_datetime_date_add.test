@@ -168,6 +168,8 @@ SELECT
 date_add('1995-01-05', INTERVAL -9223372036854775806 HOUR) as result;
 
 #NULL
+select date_add("2001-01-01 23:59:59",null);
+select date_add(null, null);
 drop table if exists t1;
 create table t1 (a int, b date);
 insert into t1 values(1, "2010-10-30"), (2, NULL);

@@ -17,15 +17,16 @@ package trace
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
-	"github.com/google/uuid"
 	"sync"
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/export"
+
+	"github.com/google/uuid"
 )
 
 var nilTxnID [16]byte
@@ -46,6 +47,8 @@ type StatementInfo struct {
 	StatementTag         string        `json:"statement_tag"`
 	RequestAt            util.TimeNano `json:"request_at"` // see WithRequestAt
 	ExecPlan             any           `json:"exec_plan"`
+	// SerializeExecPlan
+	SerializeExecPlan func(plan any, uuid2 uuid.UUID) []byte // see SetExecPlan, ExecPlan2Json
 
 	// after
 	Status        StatementInfoStatus `json:"status"`
@@ -112,25 +115,32 @@ func (s *StatementInfo) CsvFields() []string {
 }
 
 func (s *StatementInfo) ExecPlan2Json() string {
-	if s.ExecPlan == nil {
-		return "{}"
+	var json []byte
+	if s.SerializeExecPlan == nil {
+		uuidStr := uuid.UUID(s.StatementID).String()
+		logutil.Warnf("statement has no execPlan Serialize function, statement_id: %s", uuidStr)
+		return fmt.Sprintf(`{"code":200,"message":"sql query no record execution plan","steps":null,"success":false,"uuid:"%s"}`, uuidStr)
 	}
-	json, err := json.Marshal(s.ExecPlan)
-	if err != nil {
-		return fmt.Sprintf(`{"err": %q}`, err.Error())
+	if queryTime := GetTracerProvider().longQueryTime; queryTime > int64(s.Duration) {
+		json = s.SerializeExecPlan(nil, uuid.UUID(s.StatementID))
+	} else {
+		json = s.SerializeExecPlan(s.ExecPlan, uuid.UUID(s.StatementID))
 	}
 	return string(json)
 }
 
 // SetExecPlan record execPlan should be TxnComputationWrapper.plan obj, which support 2json.
-func (s *StatementInfo) SetExecPlan(execPlan any) {
+func (s *StatementInfo) SetExecPlan(execPlan any, SerializeFunc func(plan any, uuid uuid.UUID) []byte) {
 	s.ExecPlan = execPlan
+	s.SerializeExecPlan = SerializeFunc
 }
 
-func (s *StatementInfo) SetTxnIDIsZero(id []byte) {
-	if bytes.Equal(s.TransactionID[:], nilTxnID[:]) {
-		copy(s.TransactionID[:], id)
-	}
+func (s *StatementInfo) SetTxnID(id []byte) {
+	copy(s.TransactionID[:], id)
+}
+
+func (s *StatementInfo) IsZeroTxnID() bool {
+	return bytes.Equal(s.TransactionID[:], nilTxnID[:])
 }
 
 func (s *StatementInfo) Report(ctx context.Context) {

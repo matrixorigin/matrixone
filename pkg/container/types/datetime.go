@@ -169,6 +169,9 @@ func ParseDatetime(s string, precision int32) (Datetime, error) {
 			}
 		}
 	}
+	if !validDate(year, month, day) {
+		return -1, moerr.NewInvalidInput("invalid datatime value %s", s)
+	}
 	result := FromClock(year, month, day, hour, minute, second+uint8(carry), msec)
 	y, m, d, _ := result.ToDate().Calendar(true)
 	if !validDate(y, m, d) {

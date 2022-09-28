@@ -147,9 +147,6 @@ func (entry *BlockEntry) InitData(factory DataFactory) {
 }
 func (entry *BlockEntry) GetBlockData() data.Block { return entry.blkData }
 func (entry *BlockEntry) GetSchema() *Schema       { return entry.GetSegment().GetTable().GetSchema() }
-func (entry *BlockEntry) GetFileTs() (types.TS, error) {
-	return entry.GetBlockData().GetBlockFile().ReadTS()
-}
 func (entry *BlockEntry) PrepareRollback() (err error) {
 	var empty bool
 	empty, err = entry.MetaBaseEntry.PrepareRollback()

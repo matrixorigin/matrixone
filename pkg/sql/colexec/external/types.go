@@ -37,7 +37,7 @@ type ExternalParam struct {
 	IgnoreLine    int
 	IgnoreLineTag int
 	// tag indicate the fileScan is finished
-	ScanEnd   bool
+	End       bool
 	Prepare   bool
 	FileCnt   int
 	FileIndex int

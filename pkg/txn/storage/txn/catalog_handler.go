@@ -20,6 +20,7 @@ import (
 	"sync"
 
 	"github.com/google/uuid"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
@@ -28,8 +29,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage/txn/memtable"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/moengine"
 	txnengine "github.com/matrixorigin/matrixone/pkg/vm/engine/txn"
 )
 
@@ -68,9 +67,9 @@ func NewCatalogHandler(upstream *MemHandler) *CatalogHandler {
 
 	// database
 	db := &DatabaseRow{
-		ID:        ID(catalog.SystemDBID),
+		ID:        ID(catalog.MO_CATALOG_ID),
 		AccountID: 0,
-		Name:      catalog.SystemDBName,
+		Name:      catalog.MO_CATALOG,
 	}
 	if err := upstream.databases.Insert(tx, db); err != nil {
 		panic(err)
@@ -79,9 +78,9 @@ func NewCatalogHandler(upstream *MemHandler) *CatalogHandler {
 
 	// relations
 	databasesRelRow := &RelationRow{
-		ID:         ID(catalog.SystemTable_DB_ID),
+		ID:         ID(catalog.MO_DATABASE_ID),
 		DatabaseID: db.ID,
-		Name:       catalog.SystemTable_DB_Name,
+		Name:       catalog.MO_DATABASE,
 		Type:       txnengine.RelationTable,
 	}
 	if err := upstream.relations.Insert(tx, databasesRelRow); err != nil {
@@ -90,9 +89,9 @@ func NewCatalogHandler(upstream *MemHandler) *CatalogHandler {
 	handler.sysRelationIDs[databasesRelRow.ID] = databasesRelRow.Name
 
 	tablesRelRow := &RelationRow{
-		ID:         ID(catalog.SystemTable_Table_ID),
+		ID:         ID(catalog.MO_TABLES_ID),
 		DatabaseID: db.ID,
-		Name:       catalog.SystemTable_Table_Name,
+		Name:       catalog.MO_TABLES,
 		Type:       txnengine.RelationTable,
 	}
 	if err := upstream.relations.Insert(tx, tablesRelRow); err != nil {
@@ -101,9 +100,9 @@ func NewCatalogHandler(upstream *MemHandler) *CatalogHandler {
 	handler.sysRelationIDs[tablesRelRow.ID] = tablesRelRow.Name
 
 	attributesRelRow := &RelationRow{
-		ID:         ID(catalog.SystemTable_Columns_ID),
+		ID:         ID(catalog.MO_COLUMNS_ID),
 		DatabaseID: db.ID,
-		Name:       catalog.SystemTable_Columns_Name,
+		Name:       catalog.MO_COLUMNS,
 		Type:       txnengine.RelationTable,
 	}
 	if err := upstream.relations.Insert(tx, attributesRelRow); err != nil {
@@ -113,11 +112,7 @@ func NewCatalogHandler(upstream *MemHandler) *CatalogHandler {
 
 	// attributes
 	// databases
-	defs, err := moengine.SchemaToDefs(catalog.SystemDBSchema)
-	if err != nil {
-		panic(err)
-	}
-	for i, def := range defs {
+	for i, def := range catalog.MoDatabaseTableDefs {
 		attr, ok := def.(*engine.AttributeDef)
 		if !ok {
 			continue
@@ -134,11 +129,7 @@ func NewCatalogHandler(upstream *MemHandler) *CatalogHandler {
 		}
 	}
 	// relations
-	defs, err = moengine.SchemaToDefs(catalog.SystemTableSchema)
-	if err != nil {
-		panic(err)
-	}
-	for i, def := range defs {
+	for i, def := range catalog.MoTablesTableDefs {
 		attr, ok := def.(*engine.AttributeDef)
 		if !ok {
 			continue
@@ -155,11 +146,7 @@ func NewCatalogHandler(upstream *MemHandler) *CatalogHandler {
 		}
 	}
 	// attributes
-	defs, err = moengine.SchemaToDefs(catalog.SystemColumnSchema)
-	if err != nil {
-		panic(err)
-	}
-	for i, def := range defs {
+	for i, def := range catalog.MoColumnsTableDefs {
 		attr, ok := def.(*engine.AttributeDef)
 		if !ok {
 			continue
@@ -239,7 +226,7 @@ func (c *CatalogHandler) HandleCreateDatabase(meta txn.TxnMeta, req txnengine.Cr
 		return err
 	}
 
-	if req.Name == catalog.SystemDBName {
+	if req.Name == catalog.MO_CATALOG {
 		defer logReq("catalog", req, meta, resp, &err)()
 		return moerr.NewDBAlreadyExists(req.Name)
 	}
@@ -273,7 +260,7 @@ func (c *CatalogHandler) HandleDeleteDatabase(meta txn.TxnMeta, req txnengine.De
 		return err
 	}
 
-	if req.Name == catalog.SystemDBName {
+	if req.Name == catalog.MO_CATALOG {
 		defer logReq("catalog", req, meta, resp, &err)()
 		return moerr.NewBadDB(req.Name)
 	}
@@ -344,21 +331,21 @@ func (c *CatalogHandler) HandleNewTableIter(meta txn.TxnMeta, req txnengine.NewT
 
 		var iter any
 		switch name {
-		case catalog.SystemTable_DB_Name:
+		case catalog.MO_DATABASE:
 			tableIter := c.upstream.databases.NewIter(tx)
 			iter = &DatabaseRowIter{
 				TableIter: tableIter,
 				AttrsMap:  attrsMap,
 				nextFunc:  tableIter.First,
 			}
-		case catalog.SystemTable_Table_Name:
+		case catalog.MO_TABLES:
 			tableIter := c.upstream.relations.NewIter(tx)
 			iter = &RelationRowIter{
 				TableIter: tableIter,
 				AttrsMap:  attrsMap,
 				nextFunc:  tableIter.First,
 			}
-		case catalog.SystemTable_Columns_Name:
+		case catalog.MO_COLUMNS:
 			tableIter := c.upstream.attributes.NewIter(tx)
 			iter = &AttributeRowIter{
 				TableIter: tableIter,

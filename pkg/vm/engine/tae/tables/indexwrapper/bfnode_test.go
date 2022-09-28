@@ -17,21 +17,19 @@ package indexwrapper
 import (
 	"testing"
 
-	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/stretchr/testify/require"
 )
 
 func TestStaticFilterIndex(t *testing.T) {
-	bufManager := buffer.NewNodeManager(1024*1024, nil)
+	//bufManager := buffer.NewNodeManager(1024*1024, nil)
 	file := common.MockRWFile()
 	var err error
-	var res bool
-	var exist bool
-	var ans *roaring.Bitmap
+	//var res bool
+	//var exist bool
+	//var ans *roaring.Bitmap
 	cType := Plain
 	typ := types.Type{Oid: types.T_int32}
 	colIdx := uint16(0)
@@ -48,7 +46,7 @@ func TestStaticFilterIndex(t *testing.T) {
 	_, err = writer.Finalize()
 	require.NoError(t, err)
 
-	reader := NewBFReader(bufManager, file, new(common.ID))
+	/*reader := NewBFReader(bufManager, file, new(common.ID))
 
 	res, err = reader.MayContainsKey(int32(500))
 	require.NoError(t, err)
@@ -62,7 +60,7 @@ func TestStaticFilterIndex(t *testing.T) {
 	exist, ans, err = reader.MayContainsAnyKeys(query, nil)
 	require.NoError(t, err)
 	require.True(t, ans.GetCardinality() < uint64(10))
-	require.True(t, exist)
+	require.True(t, exist)*/
 
 	//t.Log(bufManager.String())
 }

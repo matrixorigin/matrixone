@@ -21,10 +21,10 @@ import (
 	"encoding/gob"
 	"fmt"
 	"io"
-	"runtime/debug"
 	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/util/errutil"
+	"github.com/matrixorigin/matrixone/pkg/util/stack"
 )
 
 const MySQLDefaultSqlState = "HY000"
@@ -407,7 +407,7 @@ func ConvertPanicError(v interface{}) *Error {
 	if e, ok := v.(*Error); ok {
 		return e
 	}
-	return newWithDepth(Context(), ErrInternal, fmt.Sprintf("panic %v: %s", v, debug.Stack()))
+	return newWithDepth(Context(), ErrInternal, fmt.Sprintf("panic %v: %+v", v, stack.Callers(3)))
 }
 
 // ConvertGoError converts a go error into mo error.
