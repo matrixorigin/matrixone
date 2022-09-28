@@ -19,6 +19,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
@@ -119,12 +121,13 @@ func (c *Config) Validate() error {
 }
 
 type service struct {
-	metadata               metadata.CNStore
-	cfg                    *Config
-	responsePool           *sync.Pool
-	logger                 *zap.Logger
-	server                 morpc.RPCServer
-	requestHandler         func(ctx context.Context, message morpc.Message, cs morpc.ClientSession) error
+	metadata       metadata.CNStore
+	cfg            *Config
+	responsePool   *sync.Pool
+	logger         *zap.Logger
+	server         morpc.RPCServer
+	requestHandler func(ctx context.Context, message morpc.Message, cs morpc.ClientSession, engine engine.Engine, fService fileservice.FileService, cli client.TxnClient,
+		messageAcquirer func() morpc.Message) error
 	cancelMoServerFunc     context.CancelFunc
 	mo                     *frontend.MOServer
 	initHakeeperClientOnce sync.Once
@@ -133,6 +136,7 @@ type service struct {
 	_txnSender             rpc.TxnSender
 	initTxnClientOnce      sync.Once
 	_txnClient             client.TxnClient
+	storeEngine            engine.Engine
 	metadataFS             fileservice.ReplaceableFileService
 	fileService            fileservice.FileService
 	stopper                *stopper.Stopper
