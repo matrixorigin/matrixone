@@ -332,17 +332,32 @@ func (v *Vector) CompareAndCheckIntersect(vec *Vector) (bool, error) {
 	case types.T_timestamp:
 		return checkNumberIntersect[types.Timestamp](v, vec)
 	case types.T_decimal64:
+		return checkIntersect(v, vec, func(t1, t2 types.Decimal64) bool {
+			return t1.Ge(t2)
+		}, func(t1, t2 types.Decimal64) bool {
+			return t1.Le(t2)
+		})
 	case types.T_decimal128:
+		return checkIntersect(v, vec, func(t1, t2 types.Decimal128) bool {
+			return t1.Ge(t2)
+		}, func(t1, t2 types.Decimal128) bool {
+			return t1.Le(t2)
+		})
 	case types.T_uuid:
+		return checkIntersect(v, vec, func(t1, t2 types.Uuid) bool {
+			return t1.Ge(t2)
+		}, func(t1, t2 types.Uuid) bool {
+			return t1.Le(t2)
+		})
 	}
 	return false, moerr.NewInternalError("unsupport type to check intersect")
 }
 
 func checkNumberIntersect[T constraints.Integer | constraints.Float | types.Date | types.Datetime | types.Timestamp](v1, v2 *Vector) (bool, error) {
 	return checkIntersect(v1, v2, func(i1, i2 T) bool {
-		return i1 > i2
+		return i1 >= i2
 	}, func(i1, i2 T) bool {
-		return i1 < i2
+		return i1 <= i2
 	})
 }
 
@@ -354,17 +369,18 @@ func checkIntersect[T compT](v1, v2 *Vector, gtFun compFn[T], ltFun compFn[T]) (
 	min := cols1[0]
 	max := cols1[0]
 	for i := 1; i < colLength; i++ {
-		// cols1[i] < min
+		// cols1[i] <= min
 		if ltFun(cols1[i], min) {
 			min = cols1[i]
 		} else if gtFun(cols1[i], max) {
-			// cols1[i] > min
+			// cols1[i] >= max
 			max = cols1[i]
 		}
 	}
-	// check v2 have some item > min and < max
+
+	// check v2 if some item >= min && <= max
 	for i := 0; i < len(cols2); i++ {
-		// cols2[i] > min && cols2[i] < max
+		// cols2[i] >= min && cols2[i] <= max
 		if gtFun(cols1[i], min) && ltFun(cols1[i], max) {
 			return true, nil
 		}
