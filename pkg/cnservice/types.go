@@ -136,11 +136,8 @@ type service struct {
 	_txnSender             rpc.TxnSender
 	initTxnClientOnce      sync.Once
 	_txnClient             client.TxnClient
-	// initFileServiceOnce    sync.Once
-	// _fileService           fileservice.FileService
-	// newFS                  fileservice.NewFileServicesFunc
-	storeEngine engine.Engine
-	metadataFS  fileservice.ReplaceableFileService
-	fileService fileservice.FileService
-	stopper     *stopper.Stopper
+	storeEngine            engine.Engine
+	metadataFS             fileservice.ReplaceableFileService
+	fileService            fileservice.FileService
+	stopper                *stopper.Stopper
 }
