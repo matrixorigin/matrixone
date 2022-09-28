@@ -26,12 +26,9 @@ type BlockMeta struct {
 }
 
 type BlockHeader struct {
-	tableId     uint64
-	segmentId   uint64
-	blockId     uint64
-	columnCount uint16
-	dummy       [34]byte
-	checksum    uint32
+	tableId   uint64
+	segmentId uint64
+	blockId   uint64
 }
 
 type ColumnMeta struct {
@@ -43,12 +40,6 @@ type ColumnMeta struct {
 	bloomFilter objectio.IndexData
 	dummy       [32]byte
 	checksum    uint32
-}
-
-type Header struct {
-	magic   uint64
-	version uint16
-	dummy   [22]byte
 }
 
 type Extent struct {
