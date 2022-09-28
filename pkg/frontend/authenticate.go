@@ -1753,8 +1753,6 @@ func doRevokePrivilege(ctx context.Context, ses *Session, rp *tree.RevokePrivile
 				continue
 			}
 			sql := getSqlForDeleteRolePrivs(role.id, objType.String(), objId, int64(privType), privLevel.String())
-
-			//insert or update
 			bh.ClearExecResultSet()
 			err = bh.Exec(ctx, sql)
 			if err != nil {
@@ -3348,7 +3346,14 @@ func convertAstPrivilegeTypeToPrivilegeType(priv tree.PrivilegeType, ot tree.Obj
 			return 0, moerr.NewInternalError(`the object type "%s" do not support the privilege "%s"`, ot.String(), priv.ToString())
 		}
 	case tree.PRIVILEGE_TYPE_STATIC_OWNERSHIP:
-		return 0, moerr.NewInternalError(`the privilege "ownership" can not be granted`)
+		switch ot {
+		case tree.OBJECT_TYPE_DATABASE:
+			privType = PrivilegeTypeDatabaseOwnership
+		case tree.OBJECT_TYPE_TABLE:
+			privType = PrivilegeTypeTableOwnership
+		default:
+			return 0, moerr.NewInternalError(`the object type "%s" do not support the privilege "%s"`, ot.String(), priv.ToString())
+		}
 	case tree.PRIVILEGE_TYPE_STATIC_SHOW_TABLES:
 		privType = PrivilegeTypeShowTables
 	case tree.PRIVILEGE_TYPE_STATIC_CREATE_TABLE:
