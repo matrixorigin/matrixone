@@ -15,19 +15,12 @@
 package multi
 
 import (
-	"context"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
-	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
-	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"github.com/smartystreets/goconvey/convey"
-	"testing"
-	"time"
-
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/smartystreets/goconvey/convey"
 	"github.com/stretchr/testify/require"
+	"testing"
 )
 
 func TestFromUnixTimeInt64(t *testing.T) {
@@ -71,12 +64,12 @@ func TestFromUnixTimeInt64(t *testing.T) {
 
 		int64Vector := testutil.MakeInt64Vector(nums, nil)
 		wantVector := testutil.MakeDateTimeVector(wants, nil)
-		process := NewTempProcess()
+		process := testutil.NewProc()
 		res, err := FromUnixTimeInt64([]*vector.Vector{int64Vector}, process)
 		convey.So(err, convey.ShouldBeNil)
 		cols1 := vector.MustTCols[types.Datetime](wantVector)
 		cols2 := vector.MustTCols[types.Datetime](res)
-		require.Equal(t, cols1, cols2)
+		compareDatetime(t, cols1, cols2)
 	})
 }
 
@@ -121,12 +114,12 @@ func TestFromUnixTimeUint64(t *testing.T) {
 
 		uint64Vector := testutil.MakeUint64Vector(nums, nil)
 		wantVector := testutil.MakeDateTimeVector(wants, nil)
-		process := NewTempProcess()
+		process := testutil.NewProc()
 		res, err := FromUnixTimeUint64([]*vector.Vector{uint64Vector}, process)
 		convey.So(err, convey.ShouldBeNil)
 		cols1 := vector.MustTCols[types.Datetime](wantVector)
 		cols2 := vector.MustTCols[types.Datetime](res)
-		require.Equal(t, cols1, cols2)
+		compareDatetime(t, cols1, cols2)
 	})
 }
 
@@ -171,12 +164,12 @@ func TestFromUnixTimeFloat64(t *testing.T) {
 
 		float64Vector := testutil.MakeFloat64Vector(nums, nil)
 		wantVector := testutil.MakeDateTimeVector(wants, nil)
-		process := NewTempProcess()
+		process := testutil.NewProc()
 		res, err := FromUnixTimeFloat64([]*vector.Vector{float64Vector}, process)
 		convey.So(err, convey.ShouldBeNil)
 		cols1 := vector.MustTCols[types.Datetime](wantVector)
 		cols2 := vector.MustTCols[types.Datetime](res)
-		require.Equal(t, cols1, cols2)
+		compareDatetime(t, cols1, cols2)
 	})
 }
 
@@ -232,7 +225,7 @@ func TestFromUnixTimeInt64Format(t *testing.T) {
 		formatVector := testutil.MakeScalarVarchar(formats[0], 5)
 		wantVector := testutil.MakeVarcharVector(wants, nil)
 
-		process := NewTempProcess()
+		process := testutil.NewProc()
 		res, err := FromUnixTimeInt64Format([]*vector.Vector{int64Vector, formatVector}, process)
 		convey.So(err, convey.ShouldBeNil)
 		cols1 := vector.MustStrCols(wantVector)
@@ -293,7 +286,7 @@ func TestFromUnixTimeUint64Format(t *testing.T) {
 		formatVector := testutil.MakeScalarVarchar(formats[0], 5)
 		wantVector := testutil.MakeVarcharVector(wants, nil)
 
-		process := NewTempProcess()
+		process := testutil.NewProc()
 		res, err := FromUnixTimeUint64Format([]*vector.Vector{uint64Vector, formatVector}, process)
 		convey.So(err, convey.ShouldBeNil)
 		cols1 := vector.MustStrCols(wantVector)
@@ -349,7 +342,7 @@ func TestFromUnixTimeFloat64Format(t *testing.T) {
 		formatVector := testutil.MakeScalarVarchar(formats[0], 5)
 		wantVector := testutil.MakeVarcharVector(wants, nil)
 
-		process := NewTempProcess()
+		process := testutil.NewProc()
 		res, err := FromUnixTimeFloat64Format([]*vector.Vector{float64Vector, formatVector}, process)
 		convey.So(err, convey.ShouldBeNil)
 		cols1 := vector.MustStrCols(wantVector)
@@ -386,7 +379,7 @@ func TestFromUnixTimeFloat64Null(t *testing.T) {
 		}
 
 		numVector := testutil.MakeFloat64Vector(nums, []uint64{2, 3, 4})
-		process := NewTempProcess()
+		process := testutil.NewProc()
 		res, err := FromUnixTimeFloat64([]*vector.Vector{numVector}, process)
 		convey.So(err, convey.ShouldBeNil)
 		require.Equal(t, []uint64{0, 1, 2, 3, 4}, res.Nsp.Np.ToArray())
@@ -421,7 +414,7 @@ func TestFromUnixTimeInt64Null(t *testing.T) {
 		}
 
 		float64Vector := testutil.MakeInt64Vector(nums, []uint64{2, 3, 4})
-		process := NewTempProcess()
+		process := testutil.NewProc()
 		res, err := FromUnixTimeInt64([]*vector.Vector{float64Vector}, process)
 		convey.So(err, convey.ShouldBeNil)
 		require.Equal(t, []uint64{0, 1, 2, 3, 4}, res.Nsp.Np.ToArray())
@@ -457,7 +450,7 @@ func TestFromUnixTimeInt64FormatNull(t *testing.T) {
 
 		numVector := testutil.MakeInt64Vector(nums, []uint64{2, 3, 4})
 		formatVector := testutil.MakeScalarVarchar("%b %M %m %c %D %d %e %j %k %h %i %p %r %T %s %f %v %x %Y %y", 5)
-		process := NewTempProcess()
+		process := testutil.NewProc()
 		res, err := FromUnixTimeInt64Format([]*vector.Vector{numVector, formatVector}, process)
 		convey.So(err, convey.ShouldBeNil)
 		require.Equal(t, []uint64{0, 1, 2, 3, 4}, res.Nsp.Np.ToArray())
@@ -493,32 +486,19 @@ func TestFromUnixTimeFloat64FormatNull(t *testing.T) {
 
 		numVector := testutil.MakeFloat64Vector(nums, []uint64{2, 3, 4})
 		formatVector := testutil.MakeScalarVarchar("%b %M %m %c %D %d %e %j %k %h %i %p %r %T %s %f %v %x %Y %y", 5)
-		process := NewTempProcess()
+		process := testutil.NewProc()
 		res, err := FromUnixTimeFloat64Format([]*vector.Vector{numVector, formatVector}, process)
 		convey.So(err, convey.ShouldBeNil)
 		require.Equal(t, []uint64{0, 1, 2, 3, 4}, res.Nsp.Np.ToArray())
 	})
 }
 
-func NewTempProcess() *process.Process {
-	var location = time.FixedZone("CST", 8*60*60)
-	hm := host.New(1 << 30)
-	gm := guest.New(1<<30, hm)
-	return NewProcessWithMheap(location, mheap.New(gm))
-}
-
-func NewProcessWithMheap(local *time.Location, heap *mheap.Mheap) *process.Process {
-	process := process.New(
-		context.Background(),
-		heap,
-		nil, // no txn client can be set
-		nil, // no txn operator can be set
-		testutil.NewFS(),
-	)
-	process.Lim.Size = 1 << 20
-	process.Lim.BatchRows = 1 << 20
-	process.Lim.BatchSize = 1 << 20
-	process.Lim.ReaderSize = 1 << 20
-	process.SessionInfo.TimeZone = time.Local
-	return process
+func compareDatetime(t *testing.T, expect []types.Datetime, actual []types.Datetime) {
+	expectStrs := make([]string, len(expect))
+	actualStrs := make([]string, len(actual))
+	for i, _ := range expect {
+		expectStrs = append(expectStrs, expect[i].String2(6))
+		actualStrs = append(actualStrs, actual[i].String2(6))
+	}
+	require.Equal(t, expectStrs, actualStrs)
 }
