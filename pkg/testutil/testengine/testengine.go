@@ -1,4 +1,4 @@
-// Copyright 2021 - 2022 Matrix Origin
+// Copyright 2022 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package cnservice
+package testengine
 
 import (
 	"context"
@@ -20,53 +20,25 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/matrixorigin/matrixone/pkg/config"
 	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/memEngine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/memoryengine"
-	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
-	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
 )
 
-func (s *service) initMemoryEngine(
+func New(
 	ctx context.Context,
-	pu *config.ParameterUnit,
-) error {
+) (
+	eng engine.Engine,
+	client client.TxnClient,
+	compilerContext plan.CompilerContext,
+) {
 
-	// txn client
-	client, err := s.getTxnClient()
-	if err != nil {
-		return err
-	}
-	pu.TxnClient = client
-
-	// hakeeper
-	hakeeper, err := s.getHAKeeperClient()
-	if err != nil {
-		return err
-	}
-
-	// engine
-	guestMMU := guest.New(pu.SV.GuestMmuLimitation, pu.HostMmu)
-	heap := mheap.New(guestMMU)
-	pu.StorageEngine = memoryengine.New(
-		ctx,
-		memoryengine.NewDefaultShardPolicy(heap),
-		memoryengine.GetClusterDetailsFromHAKeeper(
-			ctx,
-			hakeeper,
-		),
-	)
-
-	return nil
-}
-
-func (s *service) initMemoryEngineNonDist(
-	ctx context.Context,
-	pu *config.ParameterUnit,
-) error {
 	ck := clock.DefaultClock()
 	if ck == nil {
 		ck = clock.NewHLCClock(func() int64 {
@@ -80,14 +52,13 @@ func (s *service) initMemoryEngineNonDist(
 		ck,
 	)
 	if err != nil {
-		return err
+		panic(err)
 	}
 
-	txnClient := memorystorage.NewStorageTxnClient(
+	client = memorystorage.NewStorageTxnClient(
 		ck,
 		storage,
 	)
-	pu.TxnClient = txnClient
 
 	shard := logservicepb.DNShardInfo{
 		ShardID:   2,
@@ -101,11 +72,12 @@ func (s *service) initMemoryEngineNonDist(
 		ServiceAddress: "1",
 		Shards:         shards,
 	}
-	guestMMU := guest.New(pu.SV.GuestMmuLimitation, pu.HostMmu)
-	heap := mheap.New(guestMMU)
-	engine := memoryengine.New(
+
+	e := memoryengine.New(
 		ctx,
-		memoryengine.NewDefaultShardPolicy(heap),
+		memoryengine.NewDefaultShardPolicy(
+			testutil.NewMheap(),
+		),
 		func() (logservicepb.ClusterDetails, error) {
 			return logservicepb.ClusterDetails{
 				DNStores: []logservicepb.DNStore{
@@ -114,7 +86,43 @@ func (s *service) initMemoryEngineNonDist(
 			}, nil
 		},
 	)
-	pu.StorageEngine = engine
 
-	return nil
+	txnOp, err := client.New()
+	if err != nil {
+		panic(err)
+	}
+	eng = e.Bind(txnOp)
+
+	err = eng.Create(ctx, "test", txnOp)
+	if err != nil {
+		panic(err)
+	}
+
+	db, err := eng.Database(ctx, "test", txnOp)
+	if err != nil {
+		panic(err)
+	}
+
+	memEngine.CreateR(db)
+	memEngine.CreateS(db)
+	memEngine.CreateT(db)
+	memEngine.CreateT1(db)
+	memEngine.CreatePart(db)
+	memEngine.CreateDate(db)
+	memEngine.CreateSupplier(db)
+	memEngine.CreateCustomer(db)
+	memEngine.CreateLineorder(db)
+
+	if err := txnOp.Commit(ctx); err != nil {
+		panic(err)
+	}
+
+	txnOp, err = client.New()
+	if err != nil {
+		panic(err)
+	}
+	compilerContext = e.NewCompilerContext(ctx, "test", txnOp)
+	eng = e.Bind(txnOp)
+
+	return
 }
