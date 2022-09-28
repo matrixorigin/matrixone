@@ -26,7 +26,7 @@ mysql> \. file_name
 
 Usually `source` is used to execute many SQL statements, you can write your database&table creation, insert data in one SQL file and execute this file with `source` in MySQL Client. Each statement is a separate line, the lines starting with `--` or wrapped with `/*`  are considered as comments and will be ignored. 
 
-If your SQL is from `mysqldump`, please refer to this [tutorial]() about how to modify the SQL file to adapt to MatrixOne format. 
+If your SQL is from `mysqldump`, please refer to this [tutorial](../../Migrate/migrate-from-mysql-to-matrixone.md) about how to modify the SQL file to adapt to MatrixOne format. 
 
 ## Method 2: Using the `Load data` command in MySQL Client
 
@@ -143,5 +143,3 @@ We will walk through the whole process of loading data with MatrixOne 0.5.1 dock
    | 10272594 |
    +----------+
    ```
-
-   
