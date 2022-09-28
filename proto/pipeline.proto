@@ -28,9 +28,11 @@ import "plan.proto";
 message Message {
     uint64  sid = 1;
     uint64  cmd = 2;
-    bytes   code = 3;
+    bytes   err = 3;
     bytes   data = 4;
-    bytes   analyse = 5;
+    bytes   proc_info_data = 5;
+    bytes   analyse = 6;
+    uint64  id = 7;
 }
 
 message Connector {
@@ -184,6 +186,33 @@ message NodeInfo {
     string id = 2;
     string addr = 3;
     repeated string payload = 4;
+}
+
+message ProcessLimitation {
+    int64 size = 1;
+    int64 batch_rows = 2;
+    int64 batch_size = 3;
+    int64 partition_rows = 4;
+    int64 reader_size = 5;
+}
+
+message ProcessInfo {
+    string id = 1;
+    ProcessLimitation lim = 2;
+    int64 unix_time = 3;
+    string snapshot = 4;
+    SessionInfo session_info = 5;
+    repeated int32 analysis_node_list = 6;
+}
+
+message SessionInfo {
+    string user = 1;
+    string host = 2;
+    string role = 3;
+    uint64 connection_id = 4;
+    string database = 5;
+    string version = 6;
+    bytes  time_zone = 7;
 }
 
 message Pipeline {
