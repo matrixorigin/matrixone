@@ -183,7 +183,7 @@ func (m *MemHandler) HandleAddTableDef(meta txn.TxnMeta, req txnengine.AddTableD
 			ID:         txnengine.NewID(),
 			RelationID: req.TableID,
 			Order:      maxAttributeOrder + 1,
-			Nullable:   true, //TODO fix
+			Nullable:   def.Attr.Default != nil && def.Attr.Default.NullAbility,
 			Attribute:  def.Attr,
 		}
 		if err := m.attributes.Insert(tx, attrRow); err != nil {
@@ -401,7 +401,7 @@ func (m *MemHandler) HandleCreateRelation(meta txn.TxnMeta, req txnengine.Create
 			ID:         txnengine.NewID(),
 			RelationID: row.ID,
 			Order:      i + 1,
-			Nullable:   true, //TODO fix
+			Nullable:   attr.Default != nil && attr.Default.NullAbility,
 			Attribute:  attr,
 		}
 		if err := m.attributes.Insert(tx, attrRow); err != nil {
@@ -1038,8 +1038,8 @@ func (m *MemHandler) HandleRead(meta txn.TxnMeta, req txnengine.ReadReq, resp *t
 
 	// sort to emulate TAE behavior TODO remove this after BVT fixes
 	sort.Slice(rows, func(i, j int) bool {
-		return rows[i].PhysicalRow.LastUpdate.Load().Before(
-			rows[j].PhysicalRow.LastUpdate.Load(),
+		return rows[i].PhysicalRow.LastUpdate.Before(
+			rows[j].PhysicalRow.LastUpdate,
 		)
 	})
 

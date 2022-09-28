@@ -250,20 +250,6 @@ func (h *HashShard) Vector(
 
 var _ ShardPolicy = new(HashShard)
 
-func (h *HashShard) Stores(stores []logservicepb.DNStore) (shards []metadata.DNShard, err error) {
-	for _, store := range stores {
-		info := store.Shards[0]
-		shards = append(shards, Shard{
-			DNShardRecord: metadata.DNShardRecord{
-				ShardID: info.ShardID,
-			},
-			ReplicaID: info.ReplicaID,
-			Address:   store.ServiceAddress,
-		})
-	}
-	return
-}
-
 func getBytesFromPrimaryVectorForHash(vec *vector.Vector, i int, typ types.Type) ([]byte, error) {
 	if vec.IsConst() {
 		panic("primary value vector should not be const")
@@ -278,6 +264,10 @@ func getBytesFromPrimaryVectorForHash(vec *vector.Vector, i int, typ types.Type)
 		size := vec.Typ.TypeSize()
 		l := vec.Length() * size
 		data := unsafe.Slice((*byte)(vector.GetPtrAt(vec, 0)), l)
+		end := (i + 1) * size
+		if end > len(data) {
+			return nil, moerr.NewInvalidInput("vector size not match")
+		}
 		return data[i*size : (i+1)*size], nil
 	}
 	return vec.GetBytes(int64(i)), nil

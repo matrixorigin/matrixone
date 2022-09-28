@@ -20,13 +20,12 @@ import (
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/util/errutil"
-	"go.uber.org/zap"
-
 	"github.com/matrixorigin/matrixone/pkg/util"
+	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 	"github.com/matrixorigin/matrixone/pkg/util/export"
 
 	"github.com/cockroachdb/errors/errbase"
+	"go.uber.org/zap"
 )
 
 var _ IBuffer2SqlItem = (*MOErrorHolder)(nil)
@@ -71,22 +70,15 @@ func (h MOErrorHolder) CsvFields() []string {
 func (h *MOErrorHolder) Format(s fmt.State, verb rune) { errbase.FormatError(h.Error, s, verb) }
 
 // ReportError send to BatchProcessor
-func ReportError(ctx context.Context, err error) {
-	if ctx == nil {
-		ctx = DefaultContext()
-	}
-	e := &MOErrorHolder{Error: err, Timestamp: util.NowNS()}
-	export.GetGlobalBatchProcessor().Collect(ctx, e)
-}
-
-// HandleError api for pkg/util/errutil as errorReporter
-func HandleError(ctx context.Context, err error, depth int) {
+func ReportError(ctx context.Context, err error, depth int) {
+	msg := fmt.Sprintf("error: %v", err)
+	logutil.GetGlobalLogger().WithOptions(zap.AddCallerSkip(depth+1)).Info(msg, ContextField(ctx))
 	if !GetTracerProvider().IsEnable() {
 		return
 	}
 	if ctx == nil {
 		ctx = DefaultContext()
 	}
-	ReportError(ctx, err)
-	logutil.GetSkip1Logger().Info("error", ContextField(ctx), zap.Error(err))
+	e := &MOErrorHolder{Error: err, Timestamp: util.NowNS()}
+	export.GetGlobalBatchProcessor().Collect(ctx, e)
 }

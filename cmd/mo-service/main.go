@@ -81,14 +81,6 @@ func main() {
 	waitSignalToStop(stopper)
 }
 
-var setupOnce sync.Once
-
-func setupLogger(cfg *Config) {
-	setupOnce.Do(func() {
-		logutil.SetupMOLogger(&cfg.Log)
-	})
-}
-
 func waitSignalToStop(stopper *stopper.Stopper) {
 	sigchan := make(chan os.Signal, 1)
 	signal.Notify(sigchan, syscall.SIGTERM, syscall.SIGINT)
@@ -104,8 +96,7 @@ func startService(cfg *Config, stopper *stopper.Stopper) error {
 		return err
 	}
 
-	// FIXME: Initialize the logger with the service's own logging configuration
-	setupLogger(cfg)
+	setupGlobalComponents(cfg, stopper)
 
 	fs, err := cfg.createFileService(localFileServiceName)
 	if err != nil {
@@ -256,6 +247,8 @@ func initTraceMetric(ctx context.Context, cfg *Config, stopper *stopper.Stopper,
 				trace.EnableTracer(!SV.DisableTrace),
 				trace.WithBatchProcessMode(SV.BatchProcessor),
 				trace.WithFSWriterFactory(writerFactory),
+				trace.WithExportInterval(SV.TraceExportInterval),
+				trace.WithLongQueryTime(SV.LongQueryTime),
 				trace.DebugMode(SV.EnableTraceDebug),
 				trace.WithSQLExecutor(nil),
 			); err != nil {
