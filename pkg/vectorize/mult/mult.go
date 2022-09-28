@@ -23,11 +23,12 @@ package mult
 import "C"
 
 import (
+	"unsafe"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"golang.org/x/exp/constraints"
-	"unsafe"
 )
 
 const (
@@ -48,7 +49,7 @@ func NumericMultSigned[T constraints.Signed](xs, ys, rs *vector.Vector) error {
 	rc := C.SignedInt_VecMul(unsafe.Pointer(&rt[0]), unsafe.Pointer(&xt[0]), unsafe.Pointer(&yt[0]),
 		C.uint64_t(len(rt)), (*C.uint64_t)(nulls.Ptr(rs.Nsp)), C.int32_t(flag), C.int32_t(rs.Typ.TypeSize()))
 	if rc != 0 {
-		return moerr.NewError(moerr.OUT_OF_RANGE, "int mult overflow")
+		return moerr.NewOutOfRange("int", "int MUL")
 	}
 	return nil
 }
@@ -66,7 +67,7 @@ func NumericMultUnsigned[T constraints.Unsigned](xs, ys, rs *vector.Vector) erro
 	rc := C.UnsignedInt_VecMul(unsafe.Pointer(&rt[0]), unsafe.Pointer(&xt[0]), unsafe.Pointer(&yt[0]),
 		C.uint64_t(len(rt)), (*C.uint64_t)(nulls.Ptr(rs.Nsp)), C.int32_t(flag), C.int32_t(rs.Typ.TypeSize()))
 	if rc != 0 {
-		return moerr.NewError(moerr.OUT_OF_RANGE, "unsigned int mult overflow")
+		return moerr.NewOutOfRange("unsigned", "unsigned int MUL")
 	}
 	return nil
 }
@@ -84,7 +85,7 @@ func NumericMultFloat[T constraints.Float](xs, ys, rs *vector.Vector) error {
 	rc := C.Float_VecMul(unsafe.Pointer(&rt[0]), unsafe.Pointer(&xt[0]), unsafe.Pointer(&yt[0]),
 		C.uint64_t(len(rt)), (*C.uint64_t)(nulls.Ptr(rs.Nsp)), C.int32_t(flag), C.int32_t(rs.Typ.TypeSize()))
 	if rc != 0 {
-		return moerr.NewError(moerr.OUT_OF_RANGE, "float mult overflow")
+		return moerr.NewOutOfRange("float", "float MUL")
 	}
 	return nil
 }

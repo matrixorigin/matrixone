@@ -17,8 +17,8 @@ package model
 import (
 	"bytes"
 	"encoding/binary"
-	"fmt"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 )
@@ -115,7 +115,7 @@ func EncodeTypedVals(w *bytes.Buffer, vals ...any) []byte {
 		case types.Rowid:
 			_, _ = w.Write(types.EncodeFixed(v))
 		default:
-			panic(fmt.Errorf("%T:%v not supported", v, v))
+			panic(moerr.NewInternalError("%T:%v not supported", v, v))
 		}
 	}
 	return w.Bytes()

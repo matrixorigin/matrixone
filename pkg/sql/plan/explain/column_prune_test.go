@@ -18,9 +18,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/matrixorigin/matrixone/pkg/errno"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/errors"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/stretchr/testify/require"
@@ -104,7 +103,7 @@ func TestSingleTableQueryPrune(t *testing.T) {
 			wantTableCol: []Entry[string, []string]{
 				{
 					tableName: "nation",
-					colNames:  []string{"n_nationkey", "n_name"},
+					colNames:  []string{"n_name"},
 				},
 			},
 		},
@@ -574,7 +573,7 @@ type Entry[K any, V any] struct {
 func getPrunedTableColumns(logicPlan *plan.Plan) ([]Entry[string, []string], error) {
 	query := logicPlan.GetQuery()
 	if query.StmtType != plan.Query_SELECT {
-		return nil, errors.New(errno.FeatureNotSupported, "SQL is not a DQL")
+		return nil, moerr.NewNotSupported("SQL is not a DQL")
 	}
 
 	res := make([]Entry[string, []string], 0)

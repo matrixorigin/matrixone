@@ -16,8 +16,9 @@ package group
 
 import (
 	"bytes"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/agg"
 	"testing"
+
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/agg"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"

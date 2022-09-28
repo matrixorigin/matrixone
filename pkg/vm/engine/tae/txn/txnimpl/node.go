@@ -322,8 +322,8 @@ func (n *insertNode) execUnload() (en wal.LogEntry) {
 		panic(err)
 	} else {
 		atomic.StoreUint64(&n.lsn, seq)
-		id := n.GetID()
-		logutil.Debugf("Unloading lsn=%d id=%s", seq, id.SegmentString())
+		id := n.Key()
+		logutil.Debugf("Unloading lsn=%d id=%v", seq, id)
 	}
 	// e.WaitDone()
 	// e.Free()
@@ -361,7 +361,7 @@ func (n *insertNode) Append(data *containers.Batch, offset uint32) (an uint32, e
 		destVec.ExtendWithOffset(data.Vecs[def.Idx], int(offset), int(an))
 	}
 	n.rows = uint32(n.data.Length())
-	err = n.FillPhyAddrColumn(from, uint32(data.Length())-offset)
+	err = n.FillPhyAddrColumn(from, an)
 	return
 }
 

@@ -123,7 +123,7 @@ select max(ti)+10,min(si)-1,avg(fl) from (select * from t1) sub where id < 4 || 
 max(ti)+10	min(si)-1	avg(fl)
 18	1	4815.871616908482
 select substr from (select * from t1) sub where id < 4 || id > 5;
-Column 'substr' does not exist
+invalid input: column substr does not exist
 select ti,-si from (select * from t1) sub order by -si desc;
 ti	-si
 7	-1

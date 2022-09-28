@@ -16,18 +16,18 @@ package txnengine
 
 import (
 	"context"
-	"fmt"
 	"strings"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
 type Database struct {
+	id          ID
+	name        string
 	engine      *Engine
 	txnOperator client.TxnOperator
-
-	id string
 }
 
 var _ engine.Database = new(Database)
@@ -38,13 +38,14 @@ func (d *Database) Create(ctx context.Context, relName string, defs []engine.Tab
 		ctx,
 		d.engine,
 		d.txnOperator.Write,
-		d.engine.allNodesShards,
+		d.engine.allShards,
 		OpCreateRelation,
 		CreateRelationReq{
-			DatabaseID: d.id,
-			Type:       RelationTable,
-			Name:       strings.ToLower(relName),
-			Defs:       defs,
+			DatabaseID:   d.id,
+			DatabaseName: d.name,
+			Type:         RelationTable,
+			Name:         strings.ToLower(relName),
+			Defs:         defs,
 		},
 	)
 	if err != nil {
@@ -60,11 +61,12 @@ func (d *Database) Delete(ctx context.Context, relName string) error {
 		ctx,
 		d.engine,
 		d.txnOperator.Write,
-		d.engine.allNodesShards,
+		d.engine.allShards,
 		OpDeleteRelation,
 		DeleteRelationReq{
-			DatabaseID: d.id,
-			Name:       strings.ToLower(relName),
+			DatabaseID:   d.id,
+			DatabaseName: d.name,
+			Name:         strings.ToLower(relName),
 		},
 	)
 	if err != nil {
@@ -77,18 +79,19 @@ func (d *Database) Delete(ctx context.Context, relName string) error {
 func (d *Database) Relation(ctx context.Context, relName string) (engine.Relation, error) {
 
 	if relName == "" {
-		return nil, fmt.Errorf("empty relation name")
+		return nil, moerr.NewInvalidInput("no table name")
 	}
 
 	resps, err := DoTxnRequest[OpenRelationResp](
 		ctx,
 		d.engine,
 		d.txnOperator.Read,
-		d.engine.firstNodeShard,
+		d.engine.allShards,
 		OpOpenRelation,
 		OpenRelationReq{
-			DatabaseID: d.id,
-			Name:       strings.ToLower(relName),
+			DatabaseID:   d.id,
+			DatabaseName: d.name,
+			Name:         strings.ToLower(relName),
 		},
 	)
 	if err != nil {
@@ -101,14 +104,16 @@ func (d *Database) Relation(ctx context.Context, relName string) (engine.Relatio
 
 	case RelationTable, RelationView:
 		table := &Table{
-			engine:      d.engine,
-			txnOperator: d.txnOperator,
-			id:          resp.ID,
+			engine:       d.engine,
+			txnOperator:  d.txnOperator,
+			id:           resp.ID,
+			databaseName: resp.DatabaseName,
+			tableName:    resp.RelationName,
 		}
 		return table, nil
 
 	default:
-		panic(fmt.Errorf("unknown type: %+v", resp.Type))
+		panic(moerr.NewInternalError("unknown type: %+v", resp.Type))
 	}
 
 }
@@ -119,7 +124,7 @@ func (d *Database) Relations(ctx context.Context) ([]string, error) {
 		ctx,
 		d.engine,
 		d.txnOperator.Read,
-		d.engine.firstNodeShard,
+		d.engine.allShards,
 		OpGetRelations,
 		GetRelationsReq{
 			DatabaseID: d.id,

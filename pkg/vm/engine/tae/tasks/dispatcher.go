@@ -15,15 +15,15 @@
 package tasks
 
 import (
-	"errors"
 	"io"
 	"sync/atomic"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 )
 
 var (
-	ErrDispatchWrongTask = errors.New("tae: wrong task type")
+	ErrDispatchWrongTask = moerr.NewInternalError("tae: wrong task type")
 )
 
 type Dispatcher interface {

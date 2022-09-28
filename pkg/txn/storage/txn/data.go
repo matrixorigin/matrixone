@@ -19,29 +19,41 @@ import (
 	"strings"
 )
 
+type NamedRow interface {
+	SetHandler(handler *MemHandler)
+	AttrByName(tx *Transaction, name string) (Nullable, error)
+}
+
 type DataKey struct {
-	tableID    string
+	tableID    ID
 	primaryKey Tuple
 }
 
 func (d DataKey) Less(than DataKey) bool {
-	if d.tableID < than.tableID {
+	if d.tableID.Less(than.tableID) {
 		return true
 	}
-	if d.tableID > than.tableID {
+	if than.tableID.Less(d.tableID) {
 		return false
 	}
 	return d.primaryKey.Less(than.primaryKey)
 }
 
+// use AttributeRow.Order as index
+type DataValue = []Nullable
+
 type DataRow struct {
-	key        DataKey
-	indexes    []Tuple
-	attributes map[string]Nullable // attribute id -> nullable value
+	key     DataKey
+	value   DataValue
+	indexes []Tuple
 }
 
 func (a DataRow) Key() DataKey {
 	return a.key
+}
+
+func (a DataRow) Value() DataValue {
+	return a.value
 }
 
 func (a DataRow) Indexes() []Tuple {
@@ -52,33 +64,35 @@ func (a *DataRow) String() string {
 	buf := new(strings.Builder)
 	buf.WriteString("DataRow{")
 	buf.WriteString(fmt.Sprintf("key: %+v", a.key))
-	for key, value := range a.attributes {
-		buf.WriteString(fmt.Sprintf(", %s: %+v", key, value))
+	for _, attr := range a.value {
+		buf.WriteString(fmt.Sprintf(", %+v", attr))
 	}
 	buf.WriteString("}")
 	return buf.String()
 }
 
 func NewDataRow(
-	tableID string,
+	tableID ID,
 	indexes []Tuple,
 ) *DataRow {
 	return &DataRow{
 		key: DataKey{
 			tableID: tableID,
 		},
-		attributes: make(map[string]Nullable),
-		indexes:    indexes,
+		indexes: indexes,
 	}
 }
 
 type NamedDataRow struct {
-	Row      *DataRow
+	Value    DataValue
 	AttrsMap map[string]*AttributeRow
 }
 
 var _ NamedRow = new(NamedDataRow)
 
 func (n *NamedDataRow) AttrByName(tx *Transaction, name string) (Nullable, error) {
-	return n.Row.attributes[n.AttrsMap[name].ID], nil
+	return n.Value[n.AttrsMap[name].Order], nil
+}
+
+func (n *NamedDataRow) SetHandler(handler *MemHandler) {
 }

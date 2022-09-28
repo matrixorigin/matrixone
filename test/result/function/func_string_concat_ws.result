@@ -15,13 +15,13 @@ new
 1413006<---->idlfmv
 SELECT any_value(number), any_value(alpha), CONCAT_WS('<->',any_value(number),any_value(alpha)) AS new
 FROM t1 GROUP BY new LIMIT 1;
-Column 'new' does not exist
+invalid input: column new does not exist
 SELECT any_value(number), any_value(alpha), CONCAT_WS('-',any_value(number),any_value(alpha),any_value(alpha),any_value(alpha),any_value(alpha),any_value(alpha),any_value(alpha),any_value(alpha)) AS new
 FROM t1 GROUP BY new LIMIT 1;
-Column 'new' does not exist
+invalid input: column new does not exist
 SELECT any_value(number), any_value(alpha), CONCAT_WS('<------------------>',any_value(number),any_value(alpha))
 FROM t1 GROUP BY CONCAT_WS('<------------------>',any_value(number),any_value(alpha)) LIMIT 1;
-GROUP BY clause cannot contain aggregate functions!
+invalid input: GROUP BY clause cannot contain aggregate functions
 drop table t1;
 select concat_ws(', ','monty','was here','again');
 concat_ws(', ','monty','was here','again')
@@ -115,6 +115,6 @@ create table t2(a INT,  b date);
 insert into t1 values(1, "2012-10-12"),(2, "2004-04-24"),(3, "2008-12-04"),(4, "2012-03-23");
 insert into t2 values(1, "2012-10-12"),(2, "1994-10-04"),(3, "2018-06-04"),(4, "2012-10-12");
 SELECT t1.a,t1.b, t2.a,t2.b FROM t1 JOIN t2 ON (concat_ws(t1.a, t1.b) = concat_ws(t2.a, t2.b)) HAVING substring(concat_ws(t1.a, t1.b),1,1)='2';
-column "t1.a" must appear in the GROUP BY clause or be used in an aggregate function
+SQL syntax error: column "t1.a" must appear in the GROUP BY clause or be used in an aggregate function
 drop table t1;
 drop table t2;

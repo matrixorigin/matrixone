@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/util"
 	"go.uber.org/zap"
@@ -34,7 +35,7 @@ func (s *service) Prepare(ctx context.Context, request *txn.TxnRequest, response
 	txnID := request.Txn.ID
 	txnCtx := s.getTxnContext(txnID)
 	if txnCtx == nil {
-		response.TxnError = newTxnNotFoundError()
+		response.TxnError = newTxnError(moerr.ErrTxnNotFound, "")
 		return nil
 	}
 
@@ -43,7 +44,7 @@ func (s *service) Prepare(ctx context.Context, request *txn.TxnRequest, response
 
 	newTxn := txnCtx.getTxnLocked()
 	if !bytes.Equal(newTxn.ID, txnID) {
-		response.TxnError = newTxnNotFoundError()
+		response.TxnError = newTxnError(moerr.ErrTxnNotFound, "")
 		return nil
 	}
 	response.Txn = &newTxn
@@ -54,14 +55,14 @@ func (s *service) Prepare(ctx context.Context, request *txn.TxnRequest, response
 	case txn.TxnStatus_Prepared:
 		return nil
 	default:
-		response.TxnError = newTxnNotActiveError()
+		response.TxnError = newTxnError(moerr.ErrTxnNotActive, "")
 		return nil
 	}
 
 	newTxn.DNShards = request.Txn.DNShards
 	ts, err := s.storage.Prepare(ctx, newTxn)
 	if err != nil {
-		response.TxnError = newTAEPrepareError(err)
+		response.TxnError = newTxnError(moerr.ErrTAEPrepare, "")
 		if err := s.storage.Rollback(ctx, newTxn); err != nil {
 			s.logger.Error("rollback failed",
 				util.TxnIDFieldWithID(newTxn.ID),
@@ -147,7 +148,7 @@ func (s *service) CommitDNShard(ctx context.Context, request *txn.TxnRequest, re
 
 	newTxn.CommitTS = request.Txn.CommitTS
 	if err := s.storage.Commit(ctx, newTxn); err != nil {
-		response.TxnError = newTAECommitError(err)
+		response.TxnError = newTxnError(moerr.ErrTAECommit, err.Error())
 		return nil
 	}
 	txnCtx.updateTxnLocked(newTxn)
@@ -201,7 +202,7 @@ func (s *service) RollbackDNShard(ctx context.Context, request *txn.TxnRequest, 
 	}
 
 	if err := s.storage.Rollback(ctx, newTxn); err != nil {
-		response.TxnError = newTAERollbackError(err)
+		response.TxnError = newTxnError(moerr.ErrTAERollback, err.Error())
 	}
 
 	newTxn.Status = txn.TxnStatus_Aborted

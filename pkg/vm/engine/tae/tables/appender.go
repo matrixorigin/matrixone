@@ -20,7 +20,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 )
 
 type blockAppender struct {
@@ -75,25 +74,19 @@ func (appender *blockAppender) PrepareAppend(
 }
 func (appender *blockAppender) ReplayAppend(bat *containers.Batch) (err error) {
 	var from int
-	from, err = appender.node.ApplyAppend(bat, nil)
+	if from, err = appender.node.ApplyAppend(bat, nil); err != nil {
+		return
+	}
 	schema := appender.node.block.meta.GetSchema()
-	if schema.HasPK() {
-		keysCtx := new(index.KeysCtx)
-		if schema.IsSinglePK() {
-			keysCtx.Keys = bat.Vecs[appender.node.block.meta.GetSchema().GetSingleSortKeyIdx()]
-		} else {
-			cols := appender.node.block.GetSortColumns(schema, bat)
-			keysCtx.Keys = model.EncodeCompoundColumn(cols...)
-			defer keysCtx.Keys.Close()
+	keysCtx := new(index.KeysCtx)
+	keysCtx.Count = bat.Length()
+	for _, colDef := range schema.ColDefs {
+		if colDef.IsPhyAddr() {
+			continue
 		}
-		keysCtx.Start = 0
-		keysCtx.Count = bat.Length()
-		// logutil.Infof("Append into %d: %s", appender.node.meta.GetID(), pks.String())
-
-		//_, err = appender.node.block.index.BatchUpsert(keysCtx, from, 0)
+		keysCtx.Keys = bat.Vecs[colDef.Idx]
 		var zeroV types.TS
-		_, err = appender.node.block.index.BatchUpsert(keysCtx, from, zeroV)
-		if err != nil {
+		if _, err := appender.node.block.indexes[colDef.Idx].BatchUpsert(keysCtx, from, zeroV); err != nil {
 			panic(err)
 		}
 	}
@@ -109,21 +102,15 @@ func (appender *blockAppender) ApplyAppend(
 	from, err = appender.node.ApplyAppend(bat, txn)
 
 	schema := appender.node.block.meta.GetSchema()
-	if schema.HasPK() {
-		keysCtx := new(index.KeysCtx)
-
-		if schema.IsSinglePK() {
-			keysCtx.Keys = bat.Vecs[appender.node.block.meta.GetSchema().GetSingleSortKeyIdx()]
-		} else {
-			cols := appender.node.block.GetSortColumns(schema, bat)
-			keysCtx.Keys = model.EncodeCompoundColumn(cols...)
-			defer keysCtx.Keys.Close()
+	ts := txn.GetStartTS()
+	keysCtx := new(index.KeysCtx)
+	keysCtx.Count = bat.Length()
+	for _, colDef := range schema.ColDefs {
+		if colDef.IsPhyAddr() {
+			continue
 		}
-		keysCtx.Start = 0
-		keysCtx.Count = bat.Length()
-		// logutil.Infof("Append into %s: %s", appender.node.block.meta.Repr(), keysCtx.Keys.String())
-		_, err = appender.node.block.index.BatchUpsert(keysCtx, from, txn.GetStartTS())
-		if err != nil {
+		keysCtx.Keys = bat.Vecs[colDef.Idx]
+		if _, err := appender.node.block.indexes[colDef.Idx].BatchUpsert(keysCtx, from, ts); err != nil {
 			panic(err)
 		}
 	}

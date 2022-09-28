@@ -96,16 +96,18 @@ func (t *MOTracer) Start(ctx context.Context, name string, opts ...SpanOption) (
 	if span.NewRoot {
 		span.TraceID, span.SpanID = t.provider.idGenerator.NewIDs()
 		span.parent = noopSpan{}
-	} else {
+	} else if span.SpanID.IsZero() {
 		span.TraceID, span.SpanID = parent.SpanContext().TraceID, t.provider.idGenerator.NewSpanID()
+		span.parent = parent
+	} else {
 		span.parent = parent
 	}
 
 	return ContextWithSpan(ctx, span), span
 }
 
-var _ Span = &MOSpan{}
-var _ IBuffer2SqlItem = &MOSpan{}
+var _ Span = (*MOSpan)(nil)
+var _ IBuffer2SqlItem = (*MOSpan)(nil)
 var _ CsvFields = (*MOSpan)(nil)
 
 type MOSpan struct {

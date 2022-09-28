@@ -15,26 +15,23 @@
 package plan
 
 import (
-	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/errno"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/errors"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 )
 
 func buildInsert(stmt *tree.Insert, ctx CompilerContext) (p *Plan, err error) {
 	rows := stmt.Rows
-	switch t := rows.Select.(type) {
+	switch rows.Select.(type) {
 	case *tree.ValuesClause:
 		return buildInsertValues(stmt, ctx)
 	case *tree.SelectClause, *tree.ParenSelect:
 		return buildInsertSelect(stmt, ctx)
 	default:
-		return nil, errors.New(errno.FeatureNotSupported, fmt.Sprintf("unknown select statement: %v", t))
+		return nil, moerr.NewInvalidInput("insert has unknown select statement")
 	}
 }
 
@@ -42,7 +39,7 @@ func buildInsertValues(stmt *tree.Insert, ctx CompilerContext) (p *Plan, err err
 	// get table source
 	tbl, ok := stmt.Table.(*tree.TableName)
 	if !ok {
-		return nil, errors.New("", fmt.Sprintf("Invalid table name: %s", tree.String(stmt.Table, dialect.MYSQL)))
+		return nil, moerr.NewInvalidInput("insert table is invalid '%s'", tree.String(stmt.Table, dialect.MYSQL))
 	}
 	tblName := string(tbl.ObjectName)
 	dbName := string(tbl.SchemaName)
@@ -51,12 +48,12 @@ func buildInsertValues(stmt *tree.Insert, ctx CompilerContext) (p *Plan, err err
 	}
 	_, tblRef := ctx.Resolve(dbName, tblName)
 	if tblRef == nil {
-		return nil, errors.New("", fmt.Sprintf("Invalid table name: %s", tree.String(stmt.Table, dialect.MYSQL)))
+		return nil, moerr.NewInvalidInput("insert table is invalid '%s'", tree.String(stmt.Table, dialect.MYSQL))
 	}
 	if tblRef.TableType == catalog.SystemExternalRel {
-		return nil, fmt.Errorf("the external table '%s' is not support insert operation", tblName)
+		return nil, moerr.NewInvalidInput("cannot insert into external table '%s'", tblName)
 	} else if tblRef.TableType == catalog.SystemViewRel {
-		return nil, fmt.Errorf("view is not support insert operation")
+		return nil, moerr.NewInvalidInput("cannot insert into view '%s'", tblName)
 	}
 
 	// build columns
@@ -81,7 +78,7 @@ func buildInsertValues(stmt *tree.Insert, ctx CompilerContext) (p *Plan, err err
 				}
 			}
 			if !hasAttr {
-				return nil, errors.New("", fmt.Sprintf("Unknown column '%s' in 'field list'", string(attr)))
+				return nil, moerr.NewInvalidInput("insert value into unknown column '%s'", string(attr))
 			}
 		}
 	}
@@ -115,7 +112,7 @@ func buildInsertValues(stmt *tree.Insert, ctx CompilerContext) (p *Plan, err err
 	}
 
 	if isAllDefault && hasExplicitCols {
-		return nil, errors.New("", "Column count doesn't match value count at row 1")
+		return nil, moerr.NewInvalidInput("insert values does not match number of columns")
 	}
 
 	rowCount := len(rows)
@@ -128,13 +125,13 @@ func buildInsertValues(stmt *tree.Insert, ctx CompilerContext) (p *Plan, err err
 
 	if isAllDefault {
 		// hasExplicitCols must be false
-		for i, row := range rows {
+		for _, row := range rows {
 			if row != nil {
-				return nil, errors.New("", fmt.Sprintf("Column count doesn't match value count at row %d", i+1))
+				return nil, moerr.NewInvalidInput("insert values does not match number of columns")
 			}
 			// build column
 			for j, col := range explicitCols {
-				expr, err := getDefaultExpr(col.Default, col.Typ)
+				expr, err := getDefaultExpr(col)
 				if err != nil {
 					return nil, err
 				}
@@ -145,13 +142,13 @@ func buildInsertValues(stmt *tree.Insert, ctx CompilerContext) (p *Plan, err err
 		// hasExplicitCols maybe true or false
 		for i, row := range rows {
 			if row == nil || explicitCount != len(row) {
-				return nil, errors.New("", fmt.Sprintf("Column count doesn't match value count at row %d", i+1))
+				return nil, moerr.NewInvalidInput("insert values does not match the number of columns")
 			}
 
 			idx := 0
 			for j, col := range explicitCols {
 				if _, ok := row[idx].(*tree.DefaultVal); ok {
-					expr, err := getDefaultExpr(col.Default, col.Typ)
+					expr, err := getDefaultExpr(col)
 					if err != nil {
 						return nil, err
 					}
@@ -174,7 +171,7 @@ func buildInsertValues(stmt *tree.Insert, ctx CompilerContext) (p *Plan, err err
 			}
 
 			for _, col := range otherCols {
-				expr, err := getDefaultExpr(col.Default, col.Typ)
+				expr, err := getDefaultExpr(col)
 				if err != nil {
 					return nil, err
 				}
@@ -184,15 +181,23 @@ func buildInsertValues(stmt *tree.Insert, ctx CompilerContext) (p *Plan, err err
 		}
 	}
 
+	pKeyCols := ctx.GetPrimaryKeyDef(dbName, tblName)
+	var cPkey *ColDef = nil
+	if len(pKeyCols) > 0 && pKeyCols[0].IsCPkey {
+		// build composite primary key
+		cPkey = pKeyCols[0]
+	}
+
 	return &Plan{
 		Plan: &plan.Plan_Ins{
 			Ins: &plan.InsertValues{
-				DbName:       dbName,
-				TblName:      tblName,
-				ExplicitCols: explicitCols,
-				OtherCols:    otherCols,
-				OrderAttrs:   orderAttrs,
-				Columns:      columns,
+				DbName:        dbName,
+				TblName:       tblName,
+				ExplicitCols:  explicitCols,
+				OtherCols:     otherCols,
+				OrderAttrs:    orderAttrs,
+				Columns:       columns,
+				CompositePkey: cPkey,
 			},
 		},
 	}, nil
@@ -207,8 +212,7 @@ func MakeInsertError(id types.T, col *ColDef, rows []tree.Exprs, colIdx, rowIdx 
 	} else {
 		str = tree.String(rows[rowIdx][colIdx], dialect.MYSQL)
 	}
-	return moerr.New(moerr.ER_TRUNCATED_WRONG_VALUE_FOR_FIELD, id.String(), str, col.Name, rowIdx+1)
-	// return fmt.Errorf("%s truncation: Incorrect %s value: '%s' for column '%s' at row %d", "Data", id.String(), str, col.Name, rowIdx)
+	return moerr.NewTruncatedValueForField(id.String(), str, col.Name, rowIdx+1)
 }
 
 func buildInsertSelect(stmt *tree.Insert, ctx CompilerContext) (p *Plan, err error) {
@@ -219,7 +223,7 @@ func buildInsertSelect(stmt *tree.Insert, ctx CompilerContext) (p *Plan, err err
 	cols := GetResultColumnsFromPlan(pn)
 	pn.Plan.(*plan.Plan_Query).Query.StmtType = plan.Query_INSERT
 	if len(stmt.Columns) != 0 && len(stmt.Columns) != len(cols) {
-		return nil, errors.New(errno.InvalidColumnReference, "Column count doesn't match value count")
+		return nil, moerr.NewInvalidInput("insert statement column count does not match")
 	}
 
 	objRef, tableDef, err := getInsertTable(stmt.Table, ctx)
@@ -227,9 +231,9 @@ func buildInsertSelect(stmt *tree.Insert, ctx CompilerContext) (p *Plan, err err
 		return nil, err
 	}
 	if tableDef.TableType == catalog.SystemExternalRel {
-		return nil, fmt.Errorf("the external table is not support insert operation")
+		return nil, moerr.NewInvalidInput("cannot insert into external table")
 	} else if tableDef.TableType == catalog.SystemViewRel {
-		return nil, fmt.Errorf("view is not support insert operation")
+		return nil, moerr.NewInvalidInput("cannot insert into view")
 	}
 
 	valueCount := len(stmt.Columns)
@@ -237,7 +241,7 @@ func buildInsertSelect(stmt *tree.Insert, ctx CompilerContext) (p *Plan, err err
 		valueCount = len(tableDef.Cols)
 	}
 	if valueCount != len(cols) {
-		return nil, errors.New(errno.InvalidColumnReference, "Column count doesn't match value count")
+		return nil, moerr.NewInvalidInput("insert statement column count does not match value count")
 	}
 
 	// generate values expr
@@ -295,7 +299,7 @@ func getInsertExprs(stmt *tree.Insert, cols []*ColDef, tableDef *TableDef) ([]*E
 		// check if the column name is legal
 		for k := range targetMap {
 			if _, ok := tableColMap[k]; !ok {
-				return nil, errors.New(errno.InvalidColumnReference, fmt.Sprintf("column '%s' not exist", k))
+				return nil, moerr.NewInvalidInput("insert column '%s' does not exist", k)
 			}
 		}
 		for i := range exprs {
@@ -310,7 +314,7 @@ func getInsertExprs(stmt *tree.Insert, cols []*ColDef, tableDef *TableDef) ([]*E
 				}
 			} else {
 				var err error
-				exprs[i], err = getDefaultExpr(tableDef.Cols[i].Default, tableDef.Cols[i].Typ)
+				exprs[i], err = getDefaultExpr(tableDef.Cols[i])
 				if err != nil {
 					return nil, err
 				}
@@ -327,7 +331,11 @@ func getInsertTable(stmt tree.TableExpr, ctx CompilerContext) (*ObjectRef, *Tabl
 		dbName := string(tbl.SchemaName)
 		objRef, tableDef := ctx.Resolve(dbName, tblName)
 		if tableDef == nil {
-			return nil, nil, errors.New(errno.InvalidSchemaName, fmt.Sprintf("table '%v' is not exist", tblName))
+			return nil, nil, moerr.NewInvalidInput("insert target table '%s' does not exist", tblName)
+		}
+		pkeyColDef := ctx.GetPrimaryKeyDef(dbName, tblName)
+		if len(pkeyColDef) > 0 && pkeyColDef[0].IsCPkey {
+			tableDef.CompositePkey = pkeyColDef[0]
 		}
 		return objRef, tableDef, nil
 	case *tree.ParenTableExpr:
@@ -335,10 +343,10 @@ func getInsertTable(stmt tree.TableExpr, ctx CompilerContext) (*ObjectRef, *Tabl
 	case *tree.AliasedTableExpr:
 		return getInsertTable(tbl.Expr, ctx)
 	case *tree.Select:
-		return nil, nil, errors.New(errno.SQLStatementNotYetComplete, fmt.Sprintf("unsupport table expr: %T", stmt))
+		return nil, nil, moerr.NewNotSupported("insert table expr %v", stmt)
 	case *tree.StatementSource:
-		return nil, nil, errors.New(errno.SQLStatementNotYetComplete, fmt.Sprintf("unsupport table expr: %T", stmt))
+		return nil, nil, moerr.NewNotSupported("insert table expr %v", stmt)
 	default:
-		return nil, nil, errors.New(errno.SQLStatementNotYetComplete, fmt.Sprintf("unsupport table expr: %T", stmt))
+		return nil, nil, moerr.NewNotSupported("insert table expr %v", stmt)
 	}
 }

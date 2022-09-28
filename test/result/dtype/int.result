@@ -164,25 +164,25 @@ id
 SELECT * from t_int WHERE id = 1.1e0;
 id
 SELECT * from t_int WHERE id = '1.1';
-Can't cast '1.1' from VARCHAR type to INT type.
+invalid argument cast to int, bad value 1.1
 SELECT * from t_int WHERE id = '1.1e0';
-Can't cast '1.1e0' from VARCHAR type to INT type.
+invalid argument cast to int, bad value 1.1e0
 SELECT * from t_int WHERE id IN (1.1, 2.2);
 id
 SELECT * from t_int WHERE id IN (1.1e0, 2.2e0);
 id
 SELECT * from t_int WHERE id IN ('1.1', '2.2');
-Can't cast '1.1' from VARCHAR type to INT type.
+invalid argument cast to int, bad value 1.1
 SELECT * from t_int WHERE id IN ('1.1e0', '2.2e0');
-Can't cast '1.1e0' from VARCHAR type to INT type.
+invalid argument cast to int, bad value 1.1e0
 SELECT * from t_int WHERE id BETWEEN 1.1 AND 1.9;
 id
 SELECT * from t_int WHERE id BETWEEN 1.1e0 AND 1.9e0;
 id
 SELECT * from t_int WHERE id BETWEEN '1.1' AND '1.9';
-Can't cast '1.1' from VARCHAR type to INT type.
+invalid argument cast to int, bad value 1.1
 SELECT * from t_int WHERE id BETWEEN '1.1e0' AND '1.9e0';
-Can't cast '1.1e0' from VARCHAR type to INT type.
+invalid argument cast to int, bad value 1.1e0
 drop table t1;
 CREATE TABLE t1 (a INT);
 INSERT INTO t1 VALUES (1);
@@ -449,33 +449,33 @@ a
 -2147483648
 2147483647
 insert into t1 values(-2147483649);
-Incorrect INT value: '-2147483649' for column 'a' at row 1
+truncated type INT value -2147483649 for column a, 1
 insert into t1 values(2147483648);
-Incorrect INT value: '2147483648' for column 'a' at row 1
+truncated type INT value 2147483648 for column a, 1
 create table t2(a int unsigned);
 insert into t2 values(2147483647);
 insert into t1 select * from t2;
 insert into t2 values(2147483648);
 insert into t1 select * from t2;
-Can't cast column from INT UNSIGNED type to INT type because of one or more values in that column. Reason: overflow
+data out of range: data type int32, value '2147483648'
 drop table t2;
 create table t2(a bigint unsigned);
 insert into t2 values(2147483647);
 insert into t1 select * from t2;
 insert into t2 values(2147483648);
 insert into t1 select * from t2;
-Can't cast column from BIGINT UNSIGNED type to INT type because of one or more values in that column. Reason: overflow
+data out of range: data type int32, value '2147483648'
 drop table t2;
 create table t2(a bigint);
 insert into t2 values(-2147483648), (2147483647);
 insert into t1 select * from t2;
 insert into t2 values(-2147483649);
 insert into t1 select * from t2;
-Can't cast column from BIGINT type to INT type because of one or more values in that column. Reason: overflow
+data out of range: data type int32, value '-2147483649'
 delete from t2;
 insert into t2 values(2147483648);
 insert into t1 select * from t2;
-Can't cast column from BIGINT type to INT type because of one or more values in that column. Reason: overflow
+data out of range: data type int32, value '2147483648'
 drop table t2;
 create table t2(a decimal(17, 0));
 insert into t2 values(-2147483648), (2147483647);
@@ -486,11 +486,11 @@ a
 insert into t1 select * from t2;
 insert into t2 values(-2147483649);
 insert into t1 select * from t2;
-Can't cast column from DECIMAL128 type to INT type because of one or more values in that column. Reason: overflow
+data out of range: data type int32, value '-2147483649'
 delete from t2;
 insert into t2 values(2147483648);
 insert into t1 select * from t2;
-Can't cast column from DECIMAL128 type to INT type because of one or more values in that column. Reason: overflow
+data out of range: data type int32, value '2147483648'
 drop table t1;
 drop table t2;
 create table t1(a int unsigned);
@@ -500,31 +500,31 @@ a
 0
 4294967295
 insert into t1 values(-1);
-Incorrect INT UNSIGNED value: '-1' for column 'a' at row 1
+truncated type INT UNSIGNED value -1 for column a, 1
 insert into t1 values(4294967296);
-Incorrect INT UNSIGNED value: '4294967296' for column 'a' at row 1
+truncated type INT UNSIGNED value 4294967296 for column a, 1
 create table t2(a tinyint);
 insert into t2 values(-1);
 insert into t1 select * from t2;
-Can't cast column from TINYINT type to INT UNSIGNED type because of one or more values in that column. Reason: overflow
+data out of range: data type uint, value '-1'
 drop table t2;
 create table t2(a smallint);
 insert into t2 values(-1);
 insert into t1 select * from t2;
-Can't cast column from SMALLINT type to INT UNSIGNED type because of one or more values in that column. Reason: overflow
+data out of range: data type uint, value '-1'
 drop table t2;
 create table t2(a int);
 insert into t2 values(-1);
 insert into t1 select * from t2;
-Can't cast column from INT type to INT UNSIGNED type because of one or more values in that column. Reason: overflow
+data out of range: data type uint, value '-1'
 drop table t2;
 create table t2(a bigint);
 insert into t2 values(-1);
 insert into t1 select * from t2;
-Can't cast column from BIGINT type to INT UNSIGNED type because of one or more values in that column. Reason: overflow
+data out of range: data type uint32, value '-1'
 delete from t2;
 insert into t2 values(4294967296);
 insert into t1 select * from t2;
-Can't cast column from BIGINT type to INT UNSIGNED type because of one or more values in that column. Reason: overflow
+data out of range: data type uint32, value '4294967296'
 drop table t1;
 drop table t2;

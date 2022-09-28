@@ -15,12 +15,7 @@
 package kv
 
 import (
-	"errors"
 	"sync"
-)
-
-var (
-	ErrNotExist = errors.New("not exist")
 )
 
 type KV struct {

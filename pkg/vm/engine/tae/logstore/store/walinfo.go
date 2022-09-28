@@ -17,21 +17,21 @@ package store
 import (
 	"bytes"
 	"encoding/binary"
-	"errors"
 	"io"
 	"math"
 	"sync"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	driverEntry "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/entry"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
 )
 
 var (
-	ErrGroupNotFount = errors.New("group not found")
-	ErrLsnNotFount   = errors.New("lsn not found")
-	ErrTimeOut       = errors.New("retry timeout")
-	ErrLsnTooSmall   = errors.New("lsn is too small")
+	ErrGroupNotFount = moerr.NewInternalError("group not found")
+	ErrLsnNotFount   = moerr.NewInternalError("lsn not found")
+	ErrTimeOut       = moerr.NewInternalError("retry timeout")
+	ErrLsnTooSmall   = moerr.NewInternalError("lsn is too small")
 )
 
 type StoreInfo struct {

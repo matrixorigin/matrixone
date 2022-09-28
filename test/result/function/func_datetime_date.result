@@ -1,9 +1,9 @@
 SELECT DATE(0.0124);
-Operator 'cast' with parameters [DECIMAL128 DATE] is not supported.
+invalid argument operator cast, bad value [DECIMAL128 DATE]
 SELECT DATE("2112123");
-incorrect date format
+data out of range: data type date, '2112123'
 SELECT DATE(1231241.4513);
-Operator 'cast' with parameters [DECIMAL128 DATE] is not supported.
+invalid argument operator cast, bad value [DECIMAL128 DATE]
 SELECT DATE("2017-06-15");
 DATE("2017-06-15")
 2017-06-15
@@ -11,7 +11,7 @@ SELECT DATE("2017-06-15 09:34:21");
 DATE("2017-06-15 09:34:21")
 2017-06-15
 SELECT DATE("The date is 2017-06-15");
-incorrect date format
+data out of range: data type date, 'The date is 2017-06-15'
 SELECT DATE('2008-05-17 11:31:31') as required_DATE;
 required_DATE
 2008-05-17
@@ -25,23 +25,23 @@ CREATE TABLE t1 (d1 datetime);
 INSERT INTO t1(d1) VALUES ('2007-07-19 08:30:00'), (NULL),
 ('2007-07-19 08:34:00'), (NULL), ('2007-07-19 08:36:00');
 SELECT cast(date(d1) as signed) FROM t1;
-Operator 'cast' with parameters [DATE BIGINT] is not supported.
+invalid argument operator cast, bad value [DATE BIGINT]
 drop table t1;
 CREATE TABLE t1 (d1 datetime);
 INSERT INTO t1(d1) VALUES ('2007-07-19 08:30:00'), (NULL),
 ('2007-07-19 08:34:00'), (NULL), ('2007-07-19 08:36:00');
 SELECT sum(date(d1)) FROM t1;
-Aggregate function of 'sum' do not support implicit conversions for param of [DATE]
+invalid argument aggregate function sum, bad value [DATE]
 drop table t1;
 select date("1997-12-31 23:59:59.000001");
 date("1997-12-31 23:59:59.000001")
 1997-12-31
 select date("1997-13-31 23:59:59.000001");
-incorrect date format
+data out of range: data type date, '1997-13-31 23:59:59.000001'
 SELECT DATE(20110512154559.6 + 0e0);
-Operator 'cast' with parameters [DOUBLE DATE] is not supported.
+invalid argument operator cast, bad value [DOUBLE DATE]
 SELECT DATE(concat_ws('a', 0));
-incorrect date format
+data out of range: data type date, '0'
 CREATE TABLE t1 (a timestamp);
 INSERT INTO t1 VALUES ("2020-12-31 12:01:32");
 SELECT DATE(MIN(a)) FROM t1;
@@ -59,7 +59,7 @@ dt	exp
 2013-10-13 00:00:00	false
 DROP TABLE t1;
 SELECT DATE(20110512154559.616), DATE(FLOOR(20110512154559.616));
-Operator 'cast' with parameters [DECIMAL128 DATE] is not supported.
+invalid argument operator cast, bad value [DECIMAL128 DATE]
 DROP TABLE IF EXISTS t3;
 CREATE TABLE t3(c1 DATE NOT NULL);
 INSERT INTO t3 VALUES('2000-01-01');

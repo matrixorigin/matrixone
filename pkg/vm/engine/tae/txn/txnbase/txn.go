@@ -19,6 +19,7 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -123,12 +124,12 @@ func (txn *Txn) Prepare() (err error) {
 	if txn.Mgr.GetTxn(txn.GetID()) == nil {
 		logutil.Warn("tae : txn is not found in TxnManager")
 		//txn.Err = ErrTxnNotFound
-		return ErrTxnNotFound
+		return moerr.NewTxnNotFound()
 	}
 	state := txn.GetTxnState(false)
 	if state != txnif.TxnStateActive {
 		logutil.Warnf("unexpected txn status : %s", txnif.TxnStrState(state))
-		txn.Err = ErrTxnStateNotActive
+		txn.Err = moerr.NewTxnNotActive(txnif.TxnStrState(state))
 		return txn.Err
 	}
 	txn.Add(1)
@@ -182,9 +183,7 @@ func (txn *Txn) Rollback() (err error) {
 func (txn *Txn) Committing() (err error) {
 	state := txn.GetTxnState(false)
 	if state != txnif.TxnStatePrepared {
-		logutil.Warnf("unexpected txn status : %s", txnif.TxnStrState(state))
-		//txn.Err = ErrTxnStatusNotPrepared
-		return ErrTxnStateNotPrepared
+		return moerr.NewInternalError("stat not prepared, unexpected txn status : %s", txnif.TxnStrState(state))
 	}
 	// TODO:
 	// Make committing log entry and flush and wait

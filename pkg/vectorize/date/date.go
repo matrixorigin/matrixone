@@ -15,6 +15,7 @@
 package date
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
@@ -29,7 +30,7 @@ func DateStringToDate(xs []string, rs []types.Date) ([]types.Date, error) {
 	for i, str := range xs {
 		d, e := types.ParseDatetime(str, 6)
 		if e != nil {
-			return rs, types.ErrIncorrectDateValue
+			return rs, moerr.NewOutOfRange("date", "'%s'", str)
 		}
 		rs[i] = d.ToDate()
 	}

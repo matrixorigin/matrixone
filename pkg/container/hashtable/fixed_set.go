@@ -15,8 +15,9 @@
 package hashtable
 
 import (
-	"errors"
 	"math/bits"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
 type FixedSet struct {
@@ -76,7 +77,7 @@ func (it *FixedSetIterator) Next() (key uint32, err error) {
 	}
 
 	if it.bitmapIdx == it.bitmapSize {
-		err = errors.New("out of range")
+		err = moerr.NewInternalError("out of range")
 		return
 	}
 

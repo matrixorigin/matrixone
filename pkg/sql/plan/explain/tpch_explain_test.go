@@ -32,7 +32,7 @@ func Test_TPCH_Plan2(t *testing.T) {
 	mock := plan.NewMockOptimizer()
 	es := &ExplainOptions{
 		Verbose: true,
-		Anzlyze: false,
+		Analyze: false,
 		Format:  EXPLAIN_FORMAT_TEXT,
 	}
 

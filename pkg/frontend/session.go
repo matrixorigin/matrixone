@@ -16,28 +16,30 @@ package frontend
 
 import (
 	"context"
-	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/sql/errors"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/moengine"
 	"github.com/matrixorigin/matrixone/pkg/vm/mempool"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
 )
 
 const MaxPrepareNumberInOneSession = 64
+
+// TODO: this variable should be configure by set variable
+const MoDefaultErrorCount = 64
 
 type ShowStatementType int
 
@@ -115,6 +117,27 @@ type Session struct {
 	timeZone *time.Location
 
 	priv *privilege
+
+	errInfo *errInfo
+}
+
+type errInfo struct {
+	codes  []uint16
+	msgs   []string
+	maxCnt int
+}
+
+func (e *errInfo) push(code uint16, msg string) {
+	if e.maxCnt > 0 && len(e.codes) > e.maxCnt {
+		e.codes = e.codes[1:]
+		e.msgs = e.msgs[1:]
+	}
+	e.codes = append(e.codes, code)
+	e.msgs = append(e.msgs, msg)
+}
+
+func (e *errInfo) length() int {
+	return len(e.codes)
 }
 
 func NewSession(proto Protocol, gm *guest.Mmu, mp *mempool.Mempool, PU *config.ParameterUnit, gSysVars *GlobalSystemVariables) *Session {
@@ -143,6 +166,11 @@ func NewSession(proto Protocol, gm *guest.Mmu, mp *mempool.Mempool, PU *config.P
 		prepareStmts:   make(map[string]*PrepareStmt),
 		outputCallback: getDataFromPipeline,
 		timeZone:       time.Local,
+		errInfo: &errInfo{
+			codes:  make([]uint16, 0, MoDefaultErrorCount),
+			msgs:   make([]string, 0, MoDefaultErrorCount),
+			maxCnt: MoDefaultErrorCount,
+		},
 	}
 	ses.uuid, _ = uuid.NewUUID()
 	ses.SetOptionBits(OPTION_AUTOCOMMIT)
@@ -237,7 +265,7 @@ func (ses *Session) SetTenantInfo(ti *TenantInfo) {
 func (ses *Session) SetPrepareStmt(name string, prepareStmt *PrepareStmt) error {
 	if _, ok := ses.prepareStmts[name]; !ok {
 		if len(ses.prepareStmts) >= MaxPrepareNumberInOneSession {
-			return errors.New("", fmt.Sprintf("more than '%d' prepare statement in one session", MaxPrepareNumberInOneSession))
+			return moerr.NewInvalidState("too many prepared statement, max %d", MaxPrepareNumberInOneSession)
 		}
 	}
 	ses.prepareStmts[name] = prepareStmt
@@ -248,7 +276,7 @@ func (ses *Session) GetPrepareStmt(name string) (*PrepareStmt, error) {
 	if prepareStmt, ok := ses.prepareStmts[name]; ok {
 		return prepareStmt, nil
 	}
-	return nil, errors.New("", fmt.Sprintf("prepare statement '%s' does not exist", name))
+	return nil, moerr.NewInvalidState("prepared statement '%s' does not exist", name)
 }
 
 func (ses *Session) RemovePrepareStmt(name string) {
@@ -610,7 +638,7 @@ func (ses *Session) AuthenticateUser(userInput string) ([]byte, error) {
 		return nil, err
 	}
 	if len(rsset) < 1 || rsset[0].GetRowCount() < 1 {
-		return nil, fmt.Errorf("there is no tenant %s", tenant.GetTenant())
+		return nil, moerr.NewInternalError("there is no tenant %s", tenant.GetTenant())
 	}
 
 	tenantID, err := rsset[0].GetInt64(0, 0)
@@ -631,7 +659,7 @@ func (ses *Session) AuthenticateUser(userInput string) ([]byte, error) {
 		return nil, err
 	}
 	if len(rsset) < 1 || rsset[0].GetRowCount() < 1 {
-		return nil, fmt.Errorf("there is no user %s", tenant.GetUser())
+		return nil, moerr.NewInternalError("there is no user %s", tenant.GetUser())
 	}
 
 	userID, err := rsset[0].GetInt64(0, 0)
@@ -672,7 +700,7 @@ func (ses *Session) AuthenticateUser(userInput string) ([]byte, error) {
 			return nil, err
 		}
 		if len(rsset) < 1 || rsset[0].GetRowCount() < 1 {
-			return nil, fmt.Errorf("there is no role %s of the user %s", tenant.GetDefaultRole(), tenant.GetUser())
+			return nil, moerr.NewInternalError("there is no role %s of the user %s", tenant.GetDefaultRole(), tenant.GetUser())
 		}
 
 		defaultRoleID, err = rsset[0].GetInt64(0, 0)
@@ -717,7 +745,16 @@ func (th *TxnHandler) NewTxn() error {
 	if err != nil {
 		return err
 	}
-	return nil
+	ctx := th.ses.GetRequestContext()
+	if ctx == nil {
+		panic("context should not be nil")
+	}
+	ctx, cancel := context.WithTimeout(
+		ctx,
+		th.storage.Hints().CommitOrRollbackTimeout,
+	)
+	defer cancel()
+	return th.storage.New(ctx, th.txn)
 }
 
 // IsValidTxn checks the transaction is true or not.
@@ -742,6 +779,9 @@ func (th *TxnHandler) CommitTxn() error {
 		th.storage.Hints().CommitOrRollbackTimeout,
 	)
 	defer cancel()
+	if err := th.storage.Commit(ctx, th.txn); err != nil {
+		return err
+	}
 	err := th.txn.Commit(ctx)
 	th.SetInvalid()
 	return err
@@ -760,6 +800,9 @@ func (th *TxnHandler) RollbackTxn() error {
 		th.storage.Hints().CommitOrRollbackTimeout,
 	)
 	defer cancel()
+	if err := th.storage.Rollback(ctx, th.txn); err != nil {
+		return err
+	}
 	err := th.txn.Rollback(ctx)
 	th.SetInvalid()
 	return err
@@ -864,7 +907,7 @@ func (tcc *TxnCompilerContext) ensureDatabaseIsNotEmpty(dbName string) (string, 
 		dbName = tcc.DefaultDatabase()
 	}
 	if len(dbName) == 0 {
-		return "", moerr.New(moerr.ER_NO_DB_ERROR)
+		return "", moerr.NewNoDB()
 	}
 	return dbName, nil
 }
@@ -890,6 +933,10 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string) (*plan2.
 	var TableType, Createsql string
 	for _, def := range engineDefs {
 		if attr, ok := def.(*engine.AttributeDef); ok {
+			isCPkey := util.JudgeIsCompositePrimaryKeyColumn(attr.Attr.Name)
+			if isCPkey {
+				continue
+			}
 			cols = append(cols, &plan2.ColDef{
 				Name: attr.Attr.Name,
 				Typ: &plan2.Type{
@@ -1022,6 +1069,7 @@ func (tcc *TxnCompilerContext) GetPrimaryKeyDef(dbName string, tableName string)
 
 	priDefs := make([]*plan2.ColDef, 0, len(priKeys))
 	for _, key := range priKeys {
+		isCPkey := util.JudgeIsCompositePrimaryKeyColumn(key.Name)
 		priDefs = append(priDefs, &plan2.ColDef{
 			Name: key.Name,
 			Typ: &plan2.Type{
@@ -1032,6 +1080,7 @@ func (tcc *TxnCompilerContext) GetPrimaryKeyDef(dbName string, tableName string)
 				Size:      key.Type.Size,
 			},
 			Primary: key.Primary,
+			IsCPkey: isCPkey,
 		})
 	}
 	return priDefs

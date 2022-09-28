@@ -308,7 +308,7 @@ func (cmd *mergeBlocksCmd) Desc() string {
 	}
 	s = fmt.Sprintf("%s ];To=[", s)
 	for _, blk := range cmd.createdBlks {
-		s = fmt.Sprintf("%s %d }", s, blk.BlockID)
+		s = fmt.Sprintf("%s %d", s, blk.BlockID)
 	}
 	s = fmt.Sprintf("%s ]", s)
 	return s

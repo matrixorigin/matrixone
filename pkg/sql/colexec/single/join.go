@@ -16,9 +16,9 @@ package single
 
 import (
 	"bytes"
-	"errors"
 
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
@@ -183,7 +183,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 					bs := vec.Col.([]bool)
 					if bs[0] {
 						if matched {
-							return errors.New("scalar subquery returns more than 1 row")
+							return moerr.NewInternalError("scalar subquery returns more than 1 row")
 						}
 						matched = true
 						idx = j
@@ -191,7 +191,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 					vec.Free(proc.Mp())
 				}
 			} else if len(sels) > 1 {
-				return errors.New("scalar subquery returns more than 1 row")
+				return moerr.NewInternalError("scalar subquery returns more than 1 row")
 			}
 			if ap.Cond != nil && !matched {
 				for j, rp := range ap.Result {

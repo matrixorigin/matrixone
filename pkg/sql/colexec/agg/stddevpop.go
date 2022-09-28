@@ -21,15 +21,15 @@ import (
 )
 
 type Stddevpop[T1 types.Floats | types.Ints | types.UInts] struct {
-	variance *Variance[T1]
+	Variance *Variance[T1]
 }
 
 type StdD64 struct {
-	variance *VD64
+	Variance *VD64
 }
 
 type StdD128 struct {
-	variance *VD128
+	Variance *VD128
 }
 
 func StdDevPopReturnType(typs []types.Type) types.Type {
@@ -43,15 +43,15 @@ func StdDevPopReturnType(typs []types.Type) types.Type {
 
 // NewStdDevPop is used to create a StdDevPop which supports float,int,uint
 func NewStdDevPop[T1 types.Floats | types.Ints | types.UInts]() *Stddevpop[T1] {
-	return &Stddevpop[T1]{variance: NewVariance[T1]()}
+	return &Stddevpop[T1]{Variance: NewVariance[T1]()}
 }
 
 func (sdp *Stddevpop[T1]) Grows(sizes int) {
-	sdp.variance.Grows(sizes)
+	sdp.Variance.Grows(sizes)
 }
 
 func (sdp *Stddevpop[T1]) Eval(vs []float64) []float64 {
-	sdp.variance.Eval(vs)
+	sdp.Variance.Eval(vs)
 	for i, v := range vs {
 		vs[i] = math.Sqrt(v)
 	}
@@ -60,23 +60,32 @@ func (sdp *Stddevpop[T1]) Eval(vs []float64) []float64 {
 
 func (sdp *Stddevpop[T1]) Merge(groupIndex1, groupIndex2 int64, x, y float64, IsEmpty1 bool, IsEmpty2 bool, agg any) (float64, bool) {
 	Stddevpop := agg.(*Stddevpop[T1])
-	return sdp.variance.Merge(groupIndex1, groupIndex2, x, y, IsEmpty1, IsEmpty2, Stddevpop.variance)
+	return sdp.Variance.Merge(groupIndex1, groupIndex2, x, y, IsEmpty1, IsEmpty2, Stddevpop.Variance)
 }
 
 func (sdp *Stddevpop[T1]) Fill(groupIndex int64, v1 T1, v2 float64, z int64, IsEmpty bool, hasNull bool) (float64, bool) {
-	return sdp.variance.Fill(groupIndex, v1, v2, z, IsEmpty, hasNull)
+	return sdp.Variance.Fill(groupIndex, v1, v2, z, IsEmpty, hasNull)
+}
+
+func (sdp *Stddevpop[T1]) MarshalBinary() ([]byte, error) {
+	return types.Encode(sdp.Variance)
+}
+
+func (sdp *Stddevpop[T1]) UnmarshalBinary(data []byte) error {
+	types.Decode(data, sdp.Variance)
+	return nil
 }
 
 func NewStdD64() *StdD64 {
-	return &StdD64{variance: NewVD64()}
+	return &StdD64{Variance: NewVD64()}
 }
 
 func (s *StdD64) Grows(size int) {
-	s.variance.Grows(size)
+	s.Variance.Grows(size)
 }
 
 func (s *StdD64) Eval(vs []types.Decimal128) []types.Decimal128 {
-	s.variance.Eval(vs)
+	s.Variance.Eval(vs)
 	for i, v := range vs {
 		tmp := math.Sqrt(v.ToFloat64())
 		d, _ := types.Decimal128_FromFloat64(tmp, 34, 10)
@@ -87,23 +96,32 @@ func (s *StdD64) Eval(vs []types.Decimal128) []types.Decimal128 {
 
 func (s *StdD64) Merge(groupIndex1, groupIndex2 int64, x, y types.Decimal128, IsEmpty1 bool, IsEmpty2 bool, agg any) (types.Decimal128, bool) {
 	ss := agg.(*StdD64)
-	return s.variance.Merge(groupIndex1, groupIndex2, x, y, IsEmpty1, IsEmpty2, ss.variance)
+	return s.Variance.Merge(groupIndex1, groupIndex2, x, y, IsEmpty1, IsEmpty2, ss.Variance)
 }
 
 func (s *StdD64) Fill(groupIndex int64, v1 types.Decimal64, v2 types.Decimal128, z int64, IsEmpty bool, hasNull bool) (types.Decimal128, bool) {
-	return s.variance.Fill(groupIndex, v1, v2, z, IsEmpty, hasNull)
+	return s.Variance.Fill(groupIndex, v1, v2, z, IsEmpty, hasNull)
+}
+
+func (s *StdD64) MarshalBinary() ([]byte, error) {
+	return types.Encode(s.Variance)
+}
+
+func (s *StdD64) UnmarshalBinary(data []byte) error {
+	types.Decode(data, s.Variance)
+	return nil
 }
 
 func NewStdD128() *StdD128 {
-	return &StdD128{variance: NewVD128()}
+	return &StdD128{Variance: NewVD128()}
 }
 
 func (s *StdD128) Grows(size int) {
-	s.variance.Grows(size)
+	s.Variance.Grows(size)
 }
 
 func (s *StdD128) Eval(vs []types.Decimal128) []types.Decimal128 {
-	s.variance.Eval(vs)
+	s.Variance.Eval(vs)
 	for i, v := range vs {
 		tmp := math.Sqrt(v.ToFloat64())
 		d, _ := types.Decimal128_FromFloat64(tmp, 34, 10)
@@ -114,9 +132,18 @@ func (s *StdD128) Eval(vs []types.Decimal128) []types.Decimal128 {
 
 func (s *StdD128) Merge(groupIndex1, groupIndex2 int64, x, y types.Decimal128, IsEmpty1 bool, IsEmpty2 bool, agg any) (types.Decimal128, bool) {
 	ss := agg.(*StdD128)
-	return s.variance.Merge(groupIndex1, groupIndex2, x, y, IsEmpty1, IsEmpty2, ss.variance)
+	return s.Variance.Merge(groupIndex1, groupIndex2, x, y, IsEmpty1, IsEmpty2, ss.Variance)
 }
 
 func (s *StdD128) Fill(groupIndex int64, v1 types.Decimal128, v2 types.Decimal128, z int64, IsEmpty bool, hasNull bool) (types.Decimal128, bool) {
-	return s.variance.Fill(groupIndex, v1, v2, z, IsEmpty, hasNull)
+	return s.Variance.Fill(groupIndex, v1, v2, z, IsEmpty, hasNull)
+}
+
+func (s *StdD128) MarshalBinary() ([]byte, error) {
+	return types.Encode(s.Variance)
+}
+
+func (s *StdD128) UnmarshalBinary(data []byte) error {
+	types.Decode(data, s.Variance)
+	return nil
 }

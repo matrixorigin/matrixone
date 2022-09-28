@@ -21,9 +21,10 @@
 package operator
 
 import (
+	"testing"
+
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/stretchr/testify/assert"
-	"testing"
 )
 
 func TestHasStarted(t *testing.T) {

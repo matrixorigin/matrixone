@@ -15,16 +15,13 @@
 package plan
 
 import (
-	"fmt"
-
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/errno"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
-	"github.com/matrixorigin/matrixone/pkg/sql/errors"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
@@ -509,7 +506,7 @@ func getUnionSelects(stmt *tree.UnionClause, selects *[]tree.Statement, unionTyp
 	case *tree.ParenSelect:
 		*selects = append(*selects, leftStmt.Select)
 	default:
-		return errors.New(errno.SQLStatementNotYetComplete, fmt.Sprintf("unexpected statement in union: '%v'", tree.String(leftStmt, dialect.MYSQL)))
+		return moerr.NewParseError("unexpected statement in union: '%v'", tree.String(leftStmt, dialect.MYSQL))
 	}
 
 	// right is not UNION allways
@@ -533,7 +530,7 @@ func getUnionSelects(stmt *tree.UnionClause, selects *[]tree.Statement, unionTyp
 
 		*selects = append(*selects, rightStmt.Select)
 	default:
-		return errors.New(errno.SQLStatementNotYetComplete, fmt.Sprintf("unexpected statement in union2: '%v'", tree.String(rightStmt, dialect.MYSQL)))
+		return moerr.NewParseError("unexpected statement in union2: '%v'", tree.String(rightStmt, dialect.MYSQL))
 	}
 
 	switch stmt.Type {
@@ -551,7 +548,7 @@ func getUnionSelects(stmt *tree.UnionClause, selects *[]tree.Statement, unionTyp
 		}
 	case tree.EXCEPT, tree.UT_MINUS:
 		if stmt.All {
-			return errors.New("", "EXCEPT/MINUS ALL clause will be supported in future version.")
+			return moerr.NewNYI("EXCEPT/MINUS ALL clause")
 		} else {
 			*unionTypes = append(*unionTypes, plan.Node_MINUS)
 		}

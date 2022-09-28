@@ -28,8 +28,9 @@ package round
 */
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"math"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 
 	"github.com/matrixorigin/matrixone/pkg/vectorize/floor"
 )
@@ -142,7 +143,7 @@ func roundUint64(xs []uint64, rs []uint64, digits int64) []uint64 {
 			if step2 >= scale/2 {
 				rs[i] = step1 + scale
 				if rs[i] < step1 {
-					panic(moerr.NewError(moerr.OUT_OF_RANGE, "round operation overflowed"))
+					panic(moerr.NewOutOfRange("uint64", "ROUND"))
 				}
 			} else {
 				rs[i] = step1
@@ -244,7 +245,7 @@ func roundInt64(xs []int64, rs []int64, digits int64) []int64 {
 				if step2 >= scale/2 {
 					rs[i] = step1 + scale
 					if rs[i] < step1 {
-						panic(moerr.NewError(moerr.OUT_OF_RANGE, "round operation overflowed"))
+						panic(moerr.NewOutOfRange("int64", "ROUND"))
 					}
 				} else {
 					rs[i] = step1
@@ -255,7 +256,7 @@ func roundInt64(xs []int64, rs []int64, digits int64) []int64 {
 				if step2 <= scale/2 {
 					rs[i] = step1 - scale
 					if rs[i] > step1 {
-						panic(moerr.NewError(moerr.OUT_OF_RANGE, "round operation overflowed"))
+						panic(moerr.NewOutOfRange("int64", "ROUND"))
 					}
 				} else {
 					rs[i] = step1

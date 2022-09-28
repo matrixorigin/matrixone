@@ -15,11 +15,8 @@
 package plan
 
 import (
-	"fmt"
-
-	"github.com/matrixorigin/matrixone/pkg/errno"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/errors"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
@@ -65,7 +62,7 @@ func (b *HavingBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool) (*p
 				},
 			}, nil
 		} else {
-			return nil, errors.New(errno.GroupingError, "aggregate function calls cannot be nested")
+			return nil, moerr.NewInvalidInput("nestted aggregate function")
 		}
 	}
 
@@ -80,18 +77,18 @@ func (b *HavingBinder) BindColRef(astExpr *tree.UnresolvedName, depth int32, isR
 		}
 
 		if _, ok := expr.Expr.(*plan.Expr_Corr); ok {
-			return nil, errors.New(errno.GroupingError, "correlated columns in aggregate function not yet supported")
+			return nil, moerr.NewNYI("correlated columns in aggregate function")
 		}
 
 		return expr, nil
 	} else {
-		return nil, errors.New(errno.GroupingError, fmt.Sprintf("column %q must appear in the GROUP BY clause or be used in an aggregate function", tree.String(astExpr, dialect.MYSQL)))
+		return nil, moerr.NewSyntaxError("column %q must appear in the GROUP BY clause or be used in an aggregate function", tree.String(astExpr, dialect.MYSQL))
 	}
 }
 
 func (b *HavingBinder) BindAggFunc(funcName string, astExpr *tree.FuncExpr, depth int32, isRoot bool) (*plan.Expr, error) {
 	if b.insideAgg {
-		return nil, errors.New(errno.GroupingError, "aggregate function calls cannot be nested")
+		return nil, moerr.NewSyntaxError("aggregate function %s calls cannot be nested", funcName)
 	}
 
 	b.insideAgg = true
@@ -122,9 +119,9 @@ func (b *HavingBinder) BindAggFunc(funcName string, astExpr *tree.FuncExpr, dept
 
 func (b *HavingBinder) BindWinFunc(funcName string, astExpr *tree.FuncExpr, depth int32, isRoot bool) (*plan.Expr, error) {
 	if b.insideAgg {
-		return nil, errors.New(errno.GroupingError, "aggregate function calls cannot contain window function calls")
+		return nil, moerr.NewSyntaxError("aggregate function calls cannot contain window function calls")
 	} else {
-		return nil, errors.New(errno.WindowingError, "window functions not allowed here")
+		return nil, moerr.NewSyntaxError("window %s functions not allowed in having clause", funcName)
 	}
 }
 

@@ -21,10 +21,11 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
+	"github.com/matrixorigin/matrixone/pkg/txn/storage/txn/memtable"
 	txnengine "github.com/matrixorigin/matrixone/pkg/vm/engine/txn"
 	"github.com/stretchr/testify/assert"
 )
@@ -41,7 +42,7 @@ func TestCatalogHandler(t *testing.T) {
 		NewCatalogHandler(
 			NewMemHandler(
 				testutil.NewMheap(),
-				Serializable,
+				memtable.Serializable,
 				clock,
 			),
 		),
@@ -60,11 +61,11 @@ func TestCatalogHandler(t *testing.T) {
 	}
 
 	// system db
-	var dbID string
+	var dbID ID
 	{
 		var resp txnengine.OpenDatabaseResp
 		err = handler.HandleOpenDatabase(meta, txnengine.OpenDatabaseReq{
-			Name: catalog.SystemDBName,
+			Name: catalog.MO_CATALOG,
 		}, &resp)
 		assert.Nil(t, err)
 		dbID = resp.ID
@@ -82,18 +83,18 @@ func TestCatalogHandler(t *testing.T) {
 	}
 
 	// mo_database
-	var tableID string
+	var tableID ID
 	{
 		var resp txnengine.OpenRelationResp
 		err = handler.HandleOpenRelation(meta, txnengine.OpenRelationReq{
 			DatabaseID: dbID,
-			Name:       catalog.SystemTable_DB_Name,
+			Name:       catalog.MO_DATABASE,
 		}, &resp)
 		assert.Nil(t, err)
 		tableID = resp.ID
 		assert.NotEmpty(t, tableID)
 	}
-	var iterID string
+	var iterID ID
 	{
 		var resp txnengine.NewTableIterResp
 		err = handler.HandleNewTableIter(meta, txnengine.NewTableIterReq{
@@ -129,7 +130,7 @@ func TestCatalogHandler(t *testing.T) {
 		var resp txnengine.OpenRelationResp
 		err = handler.HandleOpenRelation(meta, txnengine.OpenRelationReq{
 			DatabaseID: dbID,
-			Name:       catalog.SystemTable_Table_Name,
+			Name:       catalog.MO_TABLES,
 		}, &resp)
 		assert.Nil(t, err)
 		tableID = resp.ID
@@ -170,7 +171,7 @@ func TestCatalogHandler(t *testing.T) {
 		var resp txnengine.OpenRelationResp
 		err = handler.HandleOpenRelation(meta, txnengine.OpenRelationReq{
 			DatabaseID: dbID,
-			Name:       catalog.SystemTable_Columns_Name,
+			Name:       catalog.MO_COLUMNS,
 		}, &resp)
 		assert.Nil(t, err)
 		tableID = resp.ID
@@ -195,9 +196,9 @@ func TestCatalogHandler(t *testing.T) {
 			},
 		}, &resp)
 		assert.Nil(t, err)
-		totalColumns := len(catalog.SystemDBSchema.ColDefs) +
-			len(catalog.SystemTableSchema.ColDefs) +
-			len(catalog.SystemColumnSchema.ColDefs)
+		totalColumns := len(catalog.MoDatabaseSchema) +
+			len(catalog.MoTablesSchema) +
+			len(catalog.MoColumnsSchema)
 		assert.Equal(t, totalColumns, resp.Batch.Length())
 		assert.Equal(t, 2, len(resp.Batch.Attrs))
 	}

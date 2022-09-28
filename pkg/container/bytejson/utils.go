@@ -17,9 +17,6 @@ package bytejson
 import (
 	"encoding/binary"
 	"encoding/json"
-	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/errno"
-	"github.com/matrixorigin/matrixone/pkg/sql/errors"
 	"math"
 	"reflect"
 	"sort"
@@ -27,11 +24,13 @@ import (
 	"strings"
 	"unicode/utf8"
 	"unsafe"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
 func ParseFromString(s string) (ret ByteJson, err error) {
 	if len(s) == 0 {
-		err = errors.New(errno.EmptyJsonText, "")
+		err = moerr.NewInvalidInput("json text %s", s)
 		return
 	}
 	data := string2Slice(s)
@@ -40,11 +39,11 @@ func ParseFromString(s string) (ret ByteJson, err error) {
 }
 func ParseFromByteSlice(s []byte) (bj ByteJson, err error) {
 	if len(s) == 0 {
-		err = errors.New(errno.EmptyJsonText, "")
+		err = moerr.NewInvalidInput("json text %s", string(s))
 		return
 	}
 	if !json.Valid(s) {
-		err = errors.New(errno.InvalidJsonText, fmt.Sprintf("invalid json text:%s", s))
+		err = moerr.NewInvalidInput("json text %s", string(s))
 		return
 	}
 	err = bj.UnmarshalJSON(s)
@@ -92,7 +91,7 @@ func addElem(buf []byte, in interface{}) (TpCode, []byte, error) {
 		tpCode = TpCodeObject
 		buf, err = addObject(buf, x)
 	default:
-		return tpCode, nil, errors.New(errno.InvalidJsonText, fmt.Sprintf("invalid type:%v", reflect.TypeOf(in)))
+		return tpCode, nil, moerr.NewInvalidInput("json element %v", in)
 	}
 	return tpCode, buf, err
 }
@@ -136,7 +135,7 @@ func addString(buf []byte, in string) []byte {
 func addKeyEntry(buf []byte, start, keyOff int, key string) ([]byte, error) {
 	keyLen := uint32(len(key))
 	if keyLen > math.MaxUint16 {
-		return nil, errors.New(errno.InvalidJsonKeyTooLong, fmt.Sprintf("key: %s", key))
+		return nil, moerr.NewInvalidInput("json key %s", key)
 	}
 	//put key offset
 	endian.PutUint32(buf[start:], uint32(keyOff))
@@ -229,7 +228,7 @@ func addUint32(buf []byte, x uint32) []byte {
 
 func checkFloat64(n float64) error {
 	if math.IsInf(n, 0) || math.IsNaN(n) {
-		return errors.New(errno.InvalidJsonNumber, fmt.Sprintf("the number %v is Inf or NaN", n))
+		return moerr.NewInvalidInput("json float64 %f", n)
 	}
 	return nil
 }
@@ -239,7 +238,7 @@ func addJsonNumber(buf []byte, in json.Number) (TpCode, []byte, error) {
 	if strings.ContainsAny(string(in), "Ee.") {
 		val, err := in.Float64()
 		if err != nil {
-			return TpCodeFloat64, nil, errors.New(errno.InvalidJsonNumber, fmt.Sprintf("error occurs while transforming float,err :%v", err.Error()))
+			return TpCodeFloat64, nil, moerr.NewInvalidInput("json number %v", in)
 		}
 		if err = checkFloat64(val); err != nil {
 			return TpCodeFloat64, nil, err
@@ -259,7 +258,7 @@ func addJsonNumber(buf []byte, in json.Number) (TpCode, []byte, error) {
 		return TpCodeFloat64, addFloat64(buf, val), nil
 	}
 	var tpCode TpCode
-	return tpCode, nil, errors.New(errno.InvalidJsonNumber, "error occurs while transforming number")
+	return tpCode, nil, moerr.NewInvalidInput("json number %v", in)
 }
 func string2Slice(s string) []byte {
 	str := (*reflect.StringHeader)(unsafe.Pointer(&s))
@@ -288,12 +287,12 @@ func isBlank(c rune) bool {
 func ParseJsonPath(path string) (p Path, err error) {
 	flagIdx := strings.Index(path, "$")
 	if flagIdx < 0 {
-		err = errors.New(errno.InvalidJsonPath, "no $ found in path")
+		err = moerr.NewInvalidInput("json path has no '$'")
 		return
 	}
 	for i := 0; i < flagIdx; i++ {
 		if !isBlank(rune(path[i])) {
-			err = errors.New(errno.InvalidJsonPath, "path cannot start with non-blank character")
+			err = moerr.NewInvalidInput("json path cannot start with non-blank character")
 			return
 		}
 	}
@@ -301,7 +300,7 @@ func ParseJsonPath(path string) (p Path, err error) {
 	pathExpr := strings.TrimFunc(path[flagIdx+1:], isBlank)
 	indices := jsonSubPathRe.FindAllStringIndex(pathExpr, -1)
 	if len(indices) == 0 && len(pathExpr) != 0 {
-		err = errors.New(errno.InvalidJsonPath, "path is not a valid JSON-Pointer")
+		err = moerr.NewInvalidInput("json path is not a valid JSON-Pointer")
 		return
 	}
 
@@ -314,7 +313,7 @@ func ParseJsonPath(path string) (p Path, err error) {
 		// Check all characters between two subPath are blank.
 		for i := lastEnd; i < start; i++ {
 			if !isBlank(rune(pathExpr[i])) {
-				err = errors.New(errno.InvalidJsonPath, "path cannot contain non-blank characters between two subPaths")
+				err = moerr.NewInvalidInput("json path cannot contain non-blank characters between two subPaths")
 				return
 			}
 		}
@@ -329,7 +328,7 @@ func ParseJsonPath(path string) (p Path, err error) {
 				idx = subPathIdxALL
 			} else {
 				if idx, err = strconv.Atoi(idxStr); err != nil {
-					err = errors.New(errno.InvalidJsonPath, err.Error())
+					err = moerr.NewInvalidInput("json path error %s", err.Error())
 					return
 				}
 			}
@@ -340,7 +339,7 @@ func ParseJsonPath(path string) (p Path, err error) {
 			if key[0] == '"' {
 				// TODO check here is ok
 				if key, err = strconv.Unquote(key); err != nil {
-					err = errors.New(errno.InvalidJsonPath, err.Error())
+					err = moerr.NewInvalidInput("json path error %s", err.Error())
 					return
 				}
 			}
@@ -353,7 +352,7 @@ func ParseJsonPath(path string) (p Path, err error) {
 	if len(subPaths) > 0 {
 		// The last subPath of a path expression cannot be '**'.
 		if subPaths[len(subPaths)-1].tp == subPathDoubleStar {
-			err = errors.New(errno.InvalidJsonPath, "the last subPath of a path expression cannot be '**'")
+			err = moerr.NewInvalidInput("the last subPath of a json path expression cannot be '**'")
 			return
 		}
 	}

@@ -12,7 +12,7 @@ stringabc 	stringabc
 drop table t1;
 create table t1 (a varchar(16383));
 insert into t1 select space(50000);
-the space count exceeds maxallowedCount 8000
+invalid input: the space count is greater than max allowed value 8000
 select length(a) from t1;
 length(a)
 drop table t1;
@@ -26,33 +26,33 @@ select space(-4294967295);
 space(-4294967295)
 
 select space(4294967295);
-the space count exceeds maxallowedCount 8000
+invalid input: the space count is greater than max allowed value 8000
 select space(-4294967296);
 space(-4294967296)
 
 select space(4294967296);
-the space count exceeds maxallowedCount 8000
+invalid input: the space count is greater than max allowed value 8000
 select space(-4294967297);
 space(-4294967297)
 
 select space(4294967297);
-the space count exceeds maxallowedCount 8000
+invalid input: the space count is greater than max allowed value 8000
 select space(-18446744073709551615);
-Can't cast '-18446744073709551615' from DECIMAL128 type to BIGINT UNSIGNED type. Reason: overflow
+data out of range: data type uint64, value '-18446744073709551615'
 select space(18446744073709551615);
-the space count exceeds maxallowedCount 8000
+invalid input: the space count is greater than max allowed value 8000
 select space(-18446744073709551616);
-Can't cast '-18446744073709551616' from DECIMAL128 type to BIGINT UNSIGNED type. Reason: overflow
+data out of range: data type uint64, value '-18446744073709551616'
 select space(18446744073709551616);
 the space count exceeds maxallowedCount 8000
 select space(-18446744073709551617);
-Can't cast '-18446744073709551617' from DECIMAL128 type to BIGINT UNSIGNED type. Reason: overflow
+data out of range: data type uint64, value '-18446744073709551617'
 select space(18446744073709551617);
 the space count exceeds maxallowedCount 8000
 SELECT space(9223372036854775808);
-the space count exceeds maxallowedCount 8000
+invalid input: the space count is greater than max allowed value 8000
 SELECT length(space(9223372036854775809));
-the space count exceeds maxallowedCount 8000
+invalid input: the space count is greater than max allowed value 8000
 SELECT SPACE(NULL);
 space(null)
 null
@@ -60,21 +60,21 @@ SELECT SPACE(12)+"123";
 space(12) + 123
             123
 SELECT SPACE(12314.14123)+"123";
-the space count exceeds maxallowedCount 8000
+invalid input: the space count is greater than max allowed value 8000
 SELECT SPACE("1231")+"123";
 space(1231) + 123
                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                123
 SELECT SPACE("2012-03-12")+"123";
-Can't cast '2012-03-12' from VARCHAR type to BIGINT type.
+invalid argument cast to int, bad value 2012-03-12
 CREATE TABLE t(i BIGINT UNSIGNED);
 INSERT INTO t values(9223372036854775808);
 SELECT space(i) FROM t;
-the space count exceeds maxallowedCount 8000
+invalid input: the space count is greater than max allowed value 8000
 DROP TABLE t;
 SELECT space(1073741824);
-the space count exceeds maxallowedCount 8000
+invalid input: the space count is greater than max allowed value 8000
 SELECT TO_DATE(SPACE(2),'1');
-invalid inputs for function 'to_date()'   1
+invalid argument date format, bad value 1
 drop table if exists t1;
 create table t1(a INT);
 insert into t1 values(1),(1),(2),(3);
@@ -103,4 +103,4 @@ a	a
 drop table t1;
 drop table t2;
 SELECT space("你好")+"你好";
-Can't cast '你好' from VARCHAR type to BIGINT type.
+invalid argument cast to int, bad value 你好

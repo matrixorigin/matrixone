@@ -17,6 +17,7 @@ package fileservice
 import (
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -39,5 +40,5 @@ func TestFileServicesNameCaseInsensitive(t *testing.T) {
 	fs2, err := NewMemoryFS("FOO")
 	assert.Nil(t, err)
 	_, err = NewFileServices(fs1.Name(), fs1, fs2)
-	assert.ErrorIs(t, err, ErrDuplicatedName)
+	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrDupServiceName))
 }

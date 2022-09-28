@@ -59,6 +59,8 @@ func CompareVectors(expected *vector.Vector, got *vector.Vector) bool {
 					return false
 				}
 			}
+		} else if nulls.Any(got.Nsp) {
+			return false
 		}
 
 		if expected.GetType().IsVarlen() {

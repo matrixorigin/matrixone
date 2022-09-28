@@ -15,10 +15,10 @@
 package dnservice
 
 import (
-	"fmt"
 	"strings"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/matrixorigin/matrixone/pkg/util/toml"
@@ -27,7 +27,6 @@ import (
 var (
 	defaultListenAddress    = "0.0.0.0:22000"
 	defaultServiceAddress   = "127.0.0.1:22000"
-	defaultMaxClockOffset   = time.Millisecond * 500
 	defaultZombieTimeout    = time.Hour
 	defaultDiscoveryTimeout = time.Second * 30
 	defaultHeatbeatDuration = time.Second
@@ -86,20 +85,12 @@ type Config struct {
 			Mem struct {
 			}
 		}
-
-		// Clock txn clock type. [LOCAL|HLC]. Default is LOCAL.
-		Clock struct {
-			// Backend clock backend implementation. [LOCAL|HLC], default LOCAL.
-			Backend string `toml:"source"`
-			// MaxClockOffset max clock offset between two nodes. Default is 500ms
-			MaxClockOffset toml.Duration `toml:"max-clock-offset"`
-		}
 	}
 }
 
 func (c *Config) Validate() error {
 	if c.UUID == "" {
-		return fmt.Errorf("Config.UUID not set")
+		return moerr.NewInternalError("Config.UUID not set")
 	}
 	if c.ListenAddress == "" {
 		c.ListenAddress = defaultListenAddress
@@ -108,20 +99,11 @@ func (c *Config) Validate() error {
 	if c.ServiceAddress == "" {
 		c.ServiceAddress = c.ListenAddress
 	}
-	if c.Txn.Clock.MaxClockOffset.Duration == 0 {
-		c.Txn.Clock.MaxClockOffset.Duration = defaultMaxClockOffset
-	}
-	if c.Txn.Clock.Backend == "" {
-		c.Txn.Clock.Backend = localClockBackend
-	}
-	if _, ok := supportTxnClockBackends[strings.ToUpper(c.Txn.Clock.Backend)]; !ok {
-		return fmt.Errorf("%s clock backend not support", c.Txn.Storage)
-	}
 	if c.Txn.Storage.Backend == "" {
 		c.Txn.Storage.Backend = taeStorageBackend
 	}
 	if _, ok := supportTxnStorageBackends[strings.ToUpper(c.Txn.Storage.Backend)]; !ok {
-		return fmt.Errorf("%s txn storage backend not support", c.Txn.Storage)
+		return moerr.NewInternalError("%s txn storage backend not support", c.Txn.Storage)
 	}
 	if c.Txn.ZombieTimeout.Duration == 0 {
 		c.Txn.ZombieTimeout.Duration = defaultZombieTimeout

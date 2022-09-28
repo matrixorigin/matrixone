@@ -132,6 +132,20 @@ func (mr *MockComputationWrapperMockRecorder) GetColumns() *gomock.Call {
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetColumns", reflect.TypeOf((*MockComputationWrapper)(nil).GetColumns))
 }
 
+// RecordExecPlan mocks base method.
+func (m *MockComputationWrapper) RecordExecPlan(ctx context.Context) error {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "RecordExecPlan", ctx)
+	ret0, _ := ret[0].(error)
+	return ret0
+}
+
+// RecordExecPlan indicates an expected call of RecordExecPlan.
+func (mr *MockComputationWrapperMockRecorder) RecordExecPlan(ctx context.Context) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "RecordExecPlan", reflect.TypeOf((*MockComputationWrapper)(nil).RecordExecPlan), ctx)
+}
+
 // GetUUID mocks base method.
 func (m *MockComputationWrapper) GetUUID() []byte {
 	m.ctrl.T.Helper()

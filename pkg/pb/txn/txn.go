@@ -70,7 +70,7 @@ func (m TxnRequest) DebugString() string {
 
 // DebugString returns debug string
 func (m TxnError) DebugString() string {
-	return fmt.Sprintf("%s-%s", m.Code.String(), m.Message)
+	return fmt.Sprintf("%d-%s", m.Code, m.Message)
 }
 
 // DebugString returns debug string

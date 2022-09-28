@@ -182,7 +182,7 @@ drop table t1;
 CREATE TABLE t1 (a INT, b INT);
 INSERT INTO t1 VALUES (1,1),(1,2),(2,3);
 SELECT (SELECT COUNT(DISTINCT t1.b)) FROM t1 GROUP BY t1.a;
-correlated columns in aggregate function not yet supported
+correlated columns in aggregate function is not yet implemented
 SELECT (SELECT COUNT(DISTINCT 12)) FROM t1 GROUP BY t1.a;
 (SELECT COUNT(DISTINCT 12))
 1
@@ -384,11 +384,11 @@ INSERT INTO t1 SELECT a, b+8192    FROM t1;
 INSERT INTO t1 SELECT a, b+16384   FROM t1;
 INSERT INTO t1 SELECT a, b+32768   FROM t1;
 SELECT a,COUNT(DISTINCT b) AS cnt FROM t1 GROUP BY a HAVING cnt > 50;
-column "cnt" must appear in the GROUP BY clause or be used in an aggregate function
+SQL syntax error: column "cnt" must appear in the GROUP BY clause or be used in an aggregate function
 SELECT a, SUM( b) AS sumation FROM t1 GROUP BY a HAVING sumation > 50;
-column "sumation" must appear in the GROUP BY clause or be used in an aggregate function
+SQL syntax error: column "sumation" must appear in the GROUP BY clause or be used in an aggregate function
 SELECT a, AVG( b) AS average FROM t1 GROUP BY a HAVING average > 50;
-column "average" must appear in the GROUP BY clause or be used in an aggregate function
+SQL syntax error: column "average" must appear in the GROUP BY clause or be used in an aggregate function
 SELECT a,COUNT(DISTINCT b) FROM t1 GROUP BY a HAVING COUNT(DISTINCT b) > 50;
 a	COUNT(DISTINCT b)
 1	65536

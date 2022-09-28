@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
@@ -32,6 +33,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
 
 	"github.com/fagongzi/goetty/v2"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -86,7 +88,7 @@ func NewService(
 	}
 
 	server, err := morpc.NewRPCServer("cn-server", cfg.ListenAddress,
-		morpc.NewMessageCodec(srv.acquireMessage, cfg.PayLoadCopyBufferSize),
+		morpc.NewMessageCodec(srv.acquireMessage),
 		morpc.WithServerGoettyOptions(goetty.WithSessionRWBUfferSize(cfg.ReadBufferSize, cfg.WriteBufferSize)))
 	if err != nil {
 		return nil, err
@@ -119,6 +121,7 @@ func (s *service) Close() error {
 		return err
 	}
 	s.cancelMoServerFunc()
+	s.stopper.Stop()
 	return s.server.Close()
 }
 
@@ -184,7 +187,7 @@ func (s *service) initEngine(
 		}
 
 	default:
-		return fmt.Errorf("unknown engine type: %s", s.cfg.Engine.Type)
+		return moerr.NewInternalError("unknown engine type: %s", s.cfg.Engine.Type)
 
 	}
 
@@ -239,7 +242,7 @@ func (s *service) getHAKeeperClient() (client logservice.CNHAKeeperClient, err e
 
 func (s *service) getTxnSender() (sender rpc.TxnSender, err error) {
 	s.initTxnSenderOnce.Do(func() {
-		sender, err = rpc.NewSenderWithConfig(s.cfg.RPC, s.logger)
+		sender, err = rpc.NewSenderWithConfig(s.cfg.RPC, clock.DefaultClock(), s.logger)
 		if err != nil {
 			return
 		}

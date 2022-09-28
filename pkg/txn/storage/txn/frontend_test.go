@@ -26,12 +26,27 @@ import (
 	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
+	"github.com/matrixorigin/matrixone/pkg/txn/storage/txn/memtable"
+	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	txnengine "github.com/matrixorigin/matrixone/pkg/vm/engine/txn"
 	"github.com/matrixorigin/matrixone/pkg/vm/mempool"
+	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/assert"
+
+	"github.com/prashantv/gostub"
 )
+
+func mockRecordStatement(ctx context.Context) (context.Context, *gostub.Stubs) {
+	stm := &trace.StatementInfo{}
+	ctx = trace.ContextWithStatement(ctx, stm)
+	stubs := gostub.Stub(&frontend.RecordStatement, func(context.Context, *frontend.Session, *process.Process, frontend.ComputationWrapper, time.Time) context.Context {
+		return ctx
+	})
+	return ctx, stubs
+}
 
 func TestFrontend(t *testing.T) {
 	ctx, cancel := context.WithTimeout(
@@ -49,6 +64,11 @@ func TestFrontend(t *testing.T) {
 	}
 	frontendParameters.SetDefaultValues()
 
+	hostMMU := host.New(frontendParameters.HostMmuLimitation)
+	guestMMU := guest.New(frontendParameters.GuestMmuLimitation, hostMMU)
+	heap := mheap.New(guestMMU)
+	memoryPool := mempool.New()
+
 	shard := logservicepb.DNShardInfo{
 		ShardID:   2,
 		ReplicaID: 2,
@@ -63,7 +83,7 @@ func TestFrontend(t *testing.T) {
 	}
 	engine := txnengine.New(
 		ctx,
-		new(txnengine.ShardToSingleStatic),
+		txnengine.NewDefaultShardPolicy(heap),
 		func() (logservicepb.ClusterDetails, error) {
 			return logservicepb.ClusterDetails{
 				DNStores: []logservicepb.DNStore{
@@ -77,8 +97,8 @@ func TestFrontend(t *testing.T) {
 		return time.Now().Unix()
 	}, math.MaxInt)
 	storage, err := NewMemoryStorage(
-		testutil.NewMheap(),
-		SnapshotIsolation,
+		heap,
+		memtable.SnapshotIsolation,
 		clock,
 	)
 	assert.Nil(t, err)
@@ -86,10 +106,6 @@ func TestFrontend(t *testing.T) {
 		clock:   clock,
 		storage: storage,
 	}
-
-	hostMMU := host.New(frontendParameters.HostMmuLimitation)
-	guestMMU := guest.New(frontendParameters.GuestMmuLimitation, hostMMU)
-	memoryPool := mempool.New()
 
 	pu := &config.ParameterUnit{
 		SV:            frontendParameters,
@@ -100,6 +116,9 @@ func TestFrontend(t *testing.T) {
 		FileService:   testutil.NewFS(),
 	}
 	ctx = context.WithValue(ctx, config.ParameterUnitKey, pu)
+
+	ctx, rsStubs := mockRecordStatement(ctx)
+	defer rsStubs.Reset()
 
 	err = frontend.InitSysTenant(ctx)
 	assert.Nil(t, err)

@@ -449,43 +449,43 @@ a
 -32768
 32767
 insert into t1 values(-32769);
-Incorrect SMALLINT value: '-32769' for column 'a' at row 1
+truncated type SMALLINT value -32769 for column a, 1
 insert into t1 values(32768);
-Incorrect SMALLINT value: '32768' for column 'a' at row 1
+truncated type SMALLINT value 32768 for column a, 1
 create table t2(a smallint unsigned);
 insert into t2 values(0), (32767);
 insert into t1 select * from t1;
 insert into t2 values(32768);
 insert into t1 select * from t2;
-Can't cast column from SMALLINT UNSIGNED type to SMALLINT type because of one or more values in that column. Reason: overflow
+data out of range: data type int16, value '32768'
 drop table t2;
 create table t2(a int);
 insert into t2 values(32768);
 insert into t1 select * from t2;
-Can't cast column from INT type to SMALLINT type because of one or more values in that column. Reason: overflow
+data out of range: data type int16, value '32768'
 delete from t2;
 insert into t2 values(-32769);
 insert into t1 select * from t2;
-Can't cast column from INT type to SMALLINT type because of one or more values in that column. Reason: overflow
+data out of range: data type int16, value '-32769'
 drop table t2;
 create table t2(a int unsigned);
 insert into t2 values(32768);
 insert into t1 select * from t2;
-Can't cast column from INT UNSIGNED type to SMALLINT type because of one or more values in that column. Reason: overflow
+data out of range: data type int16, value '32768'
 drop table t2;
 create table t2(a bigint);
 insert into t2 values(32768);
 insert into t1 select * from t2;
-Can't cast column from BIGINT type to SMALLINT type because of one or more values in that column. Reason: overflow
+data out of range: data type int16, value '32768'
 delete from t2;
 insert into t2 values(-32769);
 insert into t1 select * from t2;
-Can't cast column from BIGINT type to SMALLINT type because of one or more values in that column. Reason: overflow
+data out of range: data type int16, value '-32769'
 drop table t2;
 create table t2(a bigint unsigned);
 insert into t2 values(32768);
 insert into t1 select * from t2;
-Can't cast column from BIGINT UNSIGNED type to SMALLINT type because of one or more values in that column. Reason: overflow
+data out of range: data type int16, value '32768'
 drop table t1;
 create table t1(a smallint unsigned);
 insert into t1 values(0), (65535);
@@ -494,36 +494,36 @@ a
 0
 65535
 insert into t1 values(-1);
-Incorrect SMALLINT UNSIGNED value: '-1' for column 'a' at row 1
+truncated type SMALLINT UNSIGNED value -1 for column a, 1
 insert into t1 values(65536);
-Incorrect SMALLINT UNSIGNED value: '65536' for column 'a' at row 1
+truncated type SMALLINT UNSIGNED value 65536 for column a, 1
 drop table t2;
 create table t2(a int);
 insert into t2 values(65536);
 insert into t1 select * from t2;
-Can't cast column from INT type to SMALLINT UNSIGNED type because of one or more values in that column. Reason: overflow
+data out of range: data type uint16, value '65536'
 delete from t2;
 insert into t2 values(-1);
 insert into t1 select * from t2;
-Can't cast column from INT type to SMALLINT UNSIGNED type because of one or more values in that column. Reason: overflow
+data out of range: data type uint16, value '-1'
 drop table t2;
 create table t2(a int unsigned);
 insert into t2 values(65536);
 insert into t1 select * from t2;
-Can't cast column from INT UNSIGNED type to SMALLINT UNSIGNED type because of one or more values in that column. Reason: overflow
+data out of range: data type uint16, value '65536'
 drop table t2;
 create table t2(a bigint);
 insert into t2 values(65536);
 insert into t1 select * from t2;
-Can't cast column from BIGINT type to SMALLINT UNSIGNED type because of one or more values in that column. Reason: overflow
+data out of range: data type uint16, value '65536'
 delete from t2;
 insert into t2 values(-1);
 insert into t1 select * from t2;
-Can't cast column from BIGINT type to SMALLINT UNSIGNED type because of one or more values in that column. Reason: overflow
+data out of range: data type uint16, value '-1'
 drop table t2;
 create table t2(a bigint unsigned);
 insert into t2 values(65536);
 insert into t1 select * from t2;
-Can't cast column from BIGINT UNSIGNED type to SMALLINT UNSIGNED type because of one or more values in that column. Reason: overflow
+data out of range: data type uint16, value '65536'
 drop table t1;
 drop table t2;

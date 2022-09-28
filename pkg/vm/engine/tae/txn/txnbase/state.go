@@ -15,12 +15,13 @@
 package txnbase
 
 import (
-	"errors"
 	"sync/atomic"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
 var (
-	ErrTransferTransactionState = errors.New("tae: transfer transaction state eror")
+	ErrTransferTransactionState = moerr.NewInternalError("tae: transfer transaction state error")
 )
 
 const (

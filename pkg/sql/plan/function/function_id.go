@@ -49,6 +49,12 @@ const (
 	ISNOT                     //ISNOT
 	ISNULL                    //ISNULL
 	ISNOTNULL                 //ISNOTNULL
+	ISUNKNOWN                 //ISUNKNOWN
+	ISNOTUNKNOWN              //ISNOTUNKNOWN
+	ISTRUE                    //ISTRUE
+	ISNOTTRUE                 //ISNOTTRUE
+	ISFALSE                   //ISFALSE
+	ISNOTFALSE                //ISNOTTRUE
 	OP_BIT_AND                // &
 	OP_BIT_OR                 // |
 	OP_BIT_XOR                // ^
@@ -203,7 +209,10 @@ const (
 	SUBSTRING // SUBSTRING
 	WEEK      //WEEK
 	WEEKDAY
-	YEAR // YEAR
+	YEAR   // YEAR
+	HOUR   // HOUR
+	MINUTE // MINUTE
+	SECOND // SECOND
 
 	DATE_ADD              // DATE_ADD
 	DATE_SUB              // DATE_SUB
@@ -238,7 +247,7 @@ const (
 	UUID
 
 	SERIAL
-
+	BIN //BIN
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
 	FUNCTION_END_NUMBER
@@ -247,47 +256,53 @@ const (
 // functionIdRegister is what function we have registered already.
 var functionIdRegister = map[string]int32{
 	// operators
-	"=":           EQUAL,
-	">":           GREAT_THAN,
-	">=":          GREAT_EQUAL,
-	"<":           LESS_THAN,
-	"<=":          LESS_EQUAL,
-	"<>":          NOT_EQUAL,
-	"!=":          NOT_EQUAL,
-	"not":         NOT,
-	"and":         AND,
-	"or":          OR,
-	"xor":         XOR,
-	"like":        LIKE,
-	"between":     BETWEEN,
-	"in":          IN,
-	"exists":      EXISTS,
-	"+":           PLUS,
-	"-":           MINUS,
-	"*":           MULTI,
-	"/":           DIV,
-	"div":         INTEGER_DIV,
-	"%":           MOD,
-	"mod":         MOD,
-	"unary_plus":  UNARY_PLUS,
-	"unary_minus": UNARY_MINUS,
-	"unary_tilde": UNARY_TILDE,
-	"case":        CASE,
-	"coalesce":    COALESCE,
-	"cast":        CAST,
-	"is":          IS,
-	"is_not":      ISNOT,
-	"isnot":       ISNOT,
-	"is_null":     ISNULL,
-	"isnull":      ISNULL,
-	"ifnull":      ISNULL,
-	"is_not_null": ISNOTNULL,
-	"isnotnull":   ISNOTNULL,
-	"&":           OP_BIT_AND,
-	"|":           OP_BIT_OR,
-	"^":           OP_BIT_XOR,
-	"<<":          OP_BIT_SHIFT_LEFT,
-	">>":          OP_BIT_SHIFT_RIGHT,
+	"=":            EQUAL,
+	">":            GREAT_THAN,
+	">=":           GREAT_EQUAL,
+	"<":            LESS_THAN,
+	"<=":           LESS_EQUAL,
+	"<>":           NOT_EQUAL,
+	"!=":           NOT_EQUAL,
+	"not":          NOT,
+	"and":          AND,
+	"or":           OR,
+	"xor":          XOR,
+	"like":         LIKE,
+	"between":      BETWEEN,
+	"in":           IN,
+	"exists":       EXISTS,
+	"+":            PLUS,
+	"-":            MINUS,
+	"*":            MULTI,
+	"/":            DIV,
+	"div":          INTEGER_DIV,
+	"%":            MOD,
+	"mod":          MOD,
+	"unary_plus":   UNARY_PLUS,
+	"unary_minus":  UNARY_MINUS,
+	"unary_tilde":  UNARY_TILDE,
+	"case":         CASE,
+	"coalesce":     COALESCE,
+	"cast":         CAST,
+	"is":           IS,
+	"is_not":       ISNOT,
+	"isnot":        ISNOT,
+	"is_null":      ISNULL,
+	"isnull":       ISNULL,
+	"ifnull":       ISNULL,
+	"is_not_null":  ISNOTNULL,
+	"isnotnull":    ISNOTNULL,
+	"isunknown":    ISUNKNOWN,
+	"isnotunknown": ISNOTUNKNOWN,
+	"istrue":       ISTRUE,
+	"isnottrue":    ISNOTTRUE,
+	"isfalse":      ISFALSE,
+	"isnotfalse":   ISNOTFALSE,
+	"&":            OP_BIT_AND,
+	"|":            OP_BIT_OR,
+	"^":            OP_BIT_XOR,
+	"<<":           OP_BIT_SHIFT_LEFT,
+	">>":           OP_BIT_SHIFT_RIGHT,
 	// aggregate
 	"max":                   MAX,
 	"min":                   MIN,
@@ -337,6 +352,9 @@ var functionIdRegister = map[string]int32{
 	"acos":                    ACOS,
 	"bit_length":              BIT_LENGTH,
 	"date":                    DATE,
+	"hour":                    HOUR,
+	"minute":                  MINUTE,
+	"second":                  SECOND,
 	"day":                     DAY,
 	"dayofyear":               DAYOFYEAR,
 	"exp":                     EXP,
@@ -393,6 +411,8 @@ var functionIdRegister = map[string]int32{
 	"load_file":               LOAD_FILE,
 	"hex":                     HEX,
 	"serial":                  SERIAL,
+	"hash_value":              HASH,
+	"bin":                     BIN,
 }
 
 func GetFunctionIsWinfunByName(name string) bool {

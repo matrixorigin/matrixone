@@ -41,7 +41,7 @@ func TestMetric(t *testing.T) {
 		SV.SetDefaultValues("test")
 		SV.Host = "0.0.0.0"
 		SV.StatusPort = 7001
-		SV.DisableMetricToProm = false
+		SV.EnableMetricToProm = true
 		SV.BatchProcessor = InternalExecutor
 		defer setGatherInterval(setGatherInterval(30 * time.Millisecond))
 		defer setRawHistBufLimit(setRawHistBufLimit(5))
@@ -94,7 +94,7 @@ func TestMetricNoProm(t *testing.T) {
 		SV := &config.ObservabilityParameters{}
 		SV.Host = "0.0.0.0"
 		SV.StatusPort = 7001
-		SV.DisableMetricToProm = true
+		SV.EnableMetricToProm = false
 		SV.BatchProcessor = InternalExecutor
 
 		defer setGatherInterval(setGatherInterval(30 * time.Millisecond))
@@ -110,7 +110,7 @@ func TestMetricNoProm(t *testing.T) {
 		require.Contains(t, err.Error(), "connection refused")
 
 		// make static-check(errcheck) happay
-		SV.DisableMetricToProm = false
+		SV.EnableMetricToProm = true
 	})
 }
 
@@ -125,8 +125,9 @@ func TestDescExtra(t *testing.T) {
 
 type dummyTableOptions struct{}
 
-func (o dummyTableOptions) GetCreateOptions() string { return "" }
-func (o dummyTableOptions) GetTableOptions() string  { return "" }
+func (o dummyTableOptions) FormatDdl(ddl string) string { return ddl }
+func (o dummyTableOptions) GetCreateOptions() string    { return "" }
+func (o dummyTableOptions) GetTableOptions() string     { return "" }
 
 var dummyOptionsFactory = func(db, tbl string) trace.TableOptions {
 	return &dummyTableOptions{}
@@ -137,13 +138,13 @@ func TestCreateTable(t *testing.T) {
 	name := "sql_test_counter"
 	sql := createTableSqlFromMetricFamily(prom.NewDesc(name, "", []string{"zzz", "aaa"}, nil), buf, dummyOptionsFactory)
 	assert.Equal(t, sql, fmt.Sprintf(
-		"create table if not exists %s.%s (`%s` datetime, `%s` double, `%s` varchar(36), `%s` varchar(20), `aaa` varchar(20), `zzz` varchar(20))",
+		"create table if not exists %s.%s (`%s` datetime(6), `%s` double, `%s` varchar(36), `%s` varchar(20), `aaa` varchar(20), `zzz` varchar(20))",
 		MetricDBConst, name, lblTimeConst, lblValueConst, lblNodeConst, lblRoleConst,
 	))
 
 	sql = createTableSqlFromMetricFamily(prom.NewDesc(name, "", nil, nil), buf, dummyOptionsFactory)
 	assert.Equal(t, sql, fmt.Sprintf(
-		"create table if not exists %s.%s (`%s` datetime, `%s` double, `%s` varchar(36), `%s` varchar(20))",
+		"create table if not exists %s.%s (`%s` datetime(6), `%s` double, `%s` varchar(36), `%s` varchar(20))",
 		MetricDBConst, name, lblTimeConst, lblValueConst, lblNodeConst, lblRoleConst,
 	))
 }

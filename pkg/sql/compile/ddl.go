@@ -15,15 +15,11 @@
 package compile
 
 import (
-	"fmt"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/compress"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/errno"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
-	"github.com/matrixorigin/matrixone/pkg/sql/errors"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
@@ -33,7 +29,7 @@ func (s *Scope) CreateDatabase(c *Compile) error {
 		if s.Plan.GetDdl().GetCreateDatabase().GetIfNotExists() {
 			return nil
 		}
-		return errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("database %s already exists", dbName))
+		return moerr.NewDBAlreadyExists(dbName)
 	}
 	err := c.e.Create(c.ctx, dbName, c.proc.TxnOperator)
 	if err != nil {
@@ -73,7 +69,7 @@ func (s *Scope) CreateTable(c *Compile) error {
 	dbSource, err := c.e.Database(c.ctx, dbName, c.proc.TxnOperator)
 	if err != nil {
 		if dbName == "" {
-			return moerr.NewError(moerr.ER_NO_DB_ERROR, "No database selected")
+			return moerr.NewNoDB()
 		}
 		return err
 	}
@@ -82,7 +78,7 @@ func (s *Scope) CreateTable(c *Compile) error {
 		if qry.GetIfNotExists() {
 			return nil
 		}
-		return errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("table '%s' already exists", tblName))
+		return moerr.NewTableAlreadyExists(tblName)
 	}
 	if err := dbSource.Create(c.ctx, tblName, append(exeCols, exeDefs...)); err != nil {
 		return err

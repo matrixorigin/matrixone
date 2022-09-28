@@ -15,22 +15,21 @@
 package multi
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/errno"
-	"github.com/matrixorigin/matrixone/pkg/sql/errors"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 func Serial(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	for _, v := range vectors {
 		if nulls.Any(v.Nsp) {
-			return nil, errors.New(errno.DataException, "serial function don't support null value")
+			return nil, moerr.NewConstraintViolation("serial function don't support null value")
 		}
 
 		if v.IsScalar() {
-			return nil, errors.New(errno.DataException, "serial function don't support constant value")
+			return nil, moerr.NewConstraintViolation("serial function don't support constant value")
 		}
 	}
 

@@ -19,31 +19,25 @@ import (
 	"strings"
 	"time"
 
-	"github.com/cockroachdb/errors"
 	"github.com/google/uuid"
 	"github.com/lni/dragonboat/v4"
 	"github.com/lni/vfs"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper"
-	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/util/toml"
 )
 
 const (
-	defaultDataDir        = "mo-data/logservice"
-	defaultServiceAddress = "0.0.0.0:32000"
-	defaultRaftAddress    = "0.0.0.0:32001"
-	defaultGossipAddress  = "0.0.0.0:32002"
+	defaultDataDir           = "mo-data/logservice"
+	defaultServiceAddress    = "0.0.0.0:32000"
+	defaultRaftAddress       = "0.0.0.0:32001"
+	defaultGossipAddress     = "0.0.0.0:32002"
+	defaultGossipSeedAddress = "127.0.0.1:32002"
 
 	defaultGossipProbeInterval = 50 * time.Millisecond
 	defaultHeartbeatInterval   = time.Second
 	defaultLogDBBufferSize     = 768 * 1024
-)
-
-var (
-	ErrInvalidBootstrapConfig = moerr.NewError(moerr.BAD_CONFIGURATION, "invalid bootstrap configuration")
-	ErrInvalidConfig          = moerr.NewError(moerr.BAD_CONFIGURATION, "invalid log configuration")
 )
 
 // Config defines the Configurations supported by the Log Service.
@@ -60,7 +54,7 @@ type Config struct {
 	// milliseconds.
 	RTTMillisecond uint64 `toml:"rttmillisecond"`
 	// DataDir is the name of the directory for storing all log service data. It
-	// should a locally mount partition with good write and fsync performance.
+	// should a locally mounted partition with good write and fsync performance.
 	DataDir string `toml:"data-dir"`
 	// ServiceAddress is log service's service address that can be reached by
 	// other nodes such as DN nodes.
@@ -98,7 +92,7 @@ type Config struct {
 	HAKeeperCheckInterval toml.Duration `toml:"hakeeper-check-interval"`
 
 	// BootstrapConfig is the configuration specified for the bootstrapping
-	// procedure. It only need to be specified for Log Stores selected to host
+	// procedure. It only needs to be specified for Log Stores selected to host
 	// initial HAKeeper replicas during bootstrapping.
 	BootstrapConfig struct {
 		// BootstrapCluster indicates whether the cluster should be bootstrapped.
@@ -154,8 +148,7 @@ type Config struct {
 
 	// HAKeeperClientConfig is the config for HAKeeperClient
 	HAKeeperClientConfig HAKeeperClientConfig
-	// TaskService is the interface for managing async tasks running on CNs.
-	TaskService taskservice.TaskService
+
 	// DisableWorkers disables the HAKeeper ticker and HAKeeper client in tests.
 	// Never set this field to true in production
 	DisableWorkers bool
@@ -206,22 +199,18 @@ func (c *Config) GetInitHAKeeperMembers() (map[uint64]dragonboat.Target, error) 
 			id := strings.TrimSpace(parts[0])
 			target := strings.TrimSpace(parts[1])
 			if _, err := uuid.Parse(target); err != nil {
-				plog.Errorf("invalid uuid %s", target)
-				return nil, ErrInvalidBootstrapConfig
+				return nil, moerr.NewBadConfig("uuid %s", target)
 			}
 			idn, err := strconv.ParseUint(id, 10, 64)
 			if err != nil {
-				plog.Errorf("invalid replicaID %s", id)
-				return nil, ErrInvalidBootstrapConfig
+				return nil, moerr.NewBadConfig("replicateID '%v'", id)
 			}
 			if idn >= hakeeper.K8SIDRangeEnd || idn < hakeeper.K8SIDRangeStart {
-				plog.Errorf("out of range hakeeper replica id")
-				return nil, ErrInvalidBootstrapConfig
+				return nil, moerr.NewBadConfig("replicateID '%v'", id)
 			}
 			result[idn] = target
 		} else {
-			plog.Errorf("invalid replicaID:target uuid pair, %s", pair)
-			return nil, ErrInvalidBootstrapConfig
+			return nil, moerr.NewBadConfig("replicaID:target %s", pair)
 		}
 	}
 	return result, nil
@@ -230,63 +219,63 @@ func (c *Config) GetInitHAKeeperMembers() (map[uint64]dragonboat.Target, error) 
 // Validate validates the configuration.
 func (c *Config) Validate() error {
 	if len(c.UUID) == 0 {
-		return errors.Wrapf(ErrInvalidConfig, "UUID not set")
+		return moerr.NewBadConfig("uuid not set")
 	}
 	if c.DeploymentID == 0 {
-		return errors.Wrapf(ErrInvalidConfig, "DeploymentID not set")
+		return moerr.NewBadConfig("deploymentID not set")
 	}
 	// when *ListenAddress is not empty and *Address is empty, consider it as an
 	// error
 	if len(c.ServiceAddress) == 0 && len(c.ServiceListenAddress) != 0 {
-		return errors.Wrapf(ErrInvalidConfig, "ServiceAddress not set")
+		return moerr.NewBadConfig("ServiceAddress not set")
 	}
 	if len(c.RaftAddress) == 0 && len(c.RaftListenAddress) != 0 {
-		return errors.Wrapf(ErrInvalidConfig, "RaftAddress not set")
+		return moerr.NewBadConfig("RaftAddress not set")
 	}
 	if c.LogDBBufferSize == 0 {
-		return errors.Wrapf(ErrInvalidConfig, "LogDBBufferSize not set")
+		return moerr.NewBadConfig("LogDBBufferSize not set")
 	}
 	if len(c.GossipAddress) == 0 && len(c.GossipListenAddress) != 0 {
-		return errors.Wrapf(ErrInvalidConfig, "GossipAddress not set")
+		return moerr.NewBadConfig("GossipAddress not set")
 	}
 	if len(c.GossipSeedAddresses) == 0 {
-		return errors.Wrapf(ErrInvalidConfig, "GossipSeedAddresses not set")
+		return moerr.NewBadConfig("GossipSeedAddress not set")
 	}
 	if c.HAKeeperConfig.TickPerSecond == 0 {
-		return errors.Wrapf(ErrInvalidConfig, "TickPerSecond not set")
+		return moerr.NewBadConfig("TickPerSecond not set")
 	}
 	if c.HAKeeperConfig.LogStoreTimeout.Duration == 0 {
-		return errors.Wrapf(ErrInvalidConfig, "LogStoreTimeout not set")
+		return moerr.NewBadConfig("LogStoreTimeout not set")
 	}
 	if c.HAKeeperConfig.DNStoreTimeout.Duration == 0 {
-		return errors.Wrapf(ErrInvalidConfig, "DNStoreTimeout not set")
+		return moerr.NewBadConfig("DNStoreTimeout not set")
 	}
 	if c.GossipProbeInterval.Duration == 0 {
-		return errors.Wrapf(ErrInvalidConfig, "GossipProbeInterval not set")
+		return moerr.NewBadConfig("GossipProbeInterval not set")
 	}
 	// validate BootstrapConfig
 	if c.BootstrapConfig.BootstrapCluster {
 		if c.BootstrapConfig.NumOfLogShards == 0 {
-			return errors.Wrapf(ErrInvalidConfig, "NumOfLogShards not set")
+			return moerr.NewBadConfig("NumOfLogShards not set")
 		}
 		if c.BootstrapConfig.NumOfDNShards == 0 {
-			return errors.Wrapf(ErrInvalidConfig, "NumOfDNShards not set")
+			return moerr.NewBadConfig("NumOfDNShards not set")
 		}
 		if c.BootstrapConfig.NumOfLogShardReplicas == 0 {
-			return errors.Wrapf(ErrInvalidConfig, "NumOfLogShardReplica not set")
+			return moerr.NewBadConfig("NumOfLogShardReplica not set")
 		}
 		if c.BootstrapConfig.NumOfDNShards != c.BootstrapConfig.NumOfLogShards {
-			return errors.Wrapf(ErrInvalidConfig, "NumOfDNShards != NumOfLogShards")
+			return moerr.NewBadConfig("NumOfDNShards does not match NumOfLogShards")
 		}
 		members, err := c.GetInitHAKeeperMembers()
 		if err != nil {
 			return err
 		}
 		if len(members) == 0 {
-			return errors.Wrapf(ErrInvalidConfig, "InitHAKeeperMembers not set")
+			return moerr.NewBadConfig("InitHAKeeperMembers not set")
 		}
 		if uint64(len(members)) != c.BootstrapConfig.NumOfLogShardReplicas {
-			return errors.Wrapf(ErrInvalidConfig, "InitHAKeeperMembers and NumOfLogShardReplicas not match")
+			return moerr.NewBadConfig("InitHAKeeperMembers does not match NumOfLogShardReplicas")
 		}
 	}
 
@@ -296,9 +285,6 @@ func (c *Config) Validate() error {
 func (c *Config) Fill() {
 	if c.FS == nil {
 		c.FS = vfs.Default
-	}
-	if c.TaskService == nil {
-		c.TaskService = taskservice.NewTaskService(taskservice.NewMemTaskStorage())
 	}
 	if c.RTTMillisecond == 0 {
 		c.RTTMillisecond = 200
@@ -336,6 +322,9 @@ func (c *Config) Fill() {
 	if c.HAKeeperConfig.DNStoreTimeout.Duration == 0 {
 		c.HAKeeperConfig.DNStoreTimeout.Duration = hakeeper.DefaultDNStoreTimeout
 	}
+	if c.HAKeeperConfig.CNStoreTimeout.Duration == 0 {
+		c.HAKeeperConfig.CNStoreTimeout.Duration = hakeeper.DefaultCNStoreTimeout
+	}
 	if c.HeartbeatInterval.Duration == 0 {
 		c.HeartbeatInterval.Duration = defaultHeartbeatInterval
 	}
@@ -356,12 +345,18 @@ type HAKeeperClientConfig struct {
 	DiscoveryAddress string `toml:"discovery-address"`
 	// ServiceAddresses is a list of well known Log Services' service addresses.
 	ServiceAddresses []string `toml:"service-addresses"`
+	// AllocateIDBatch how many IDs are assigned from hakeeper each time. Default is
+	// 100.
+	AllocateIDBatch uint64 `toml:"allocate-id-batch"`
 }
 
 // Validate validates the HAKeeperClientConfig.
 func (c *HAKeeperClientConfig) Validate() error {
 	if len(c.DiscoveryAddress) == 0 && len(c.ServiceAddresses) == 0 {
-		return errors.Wrapf(ErrInvalidConfig, "empty HAKeeperClientConfig")
+		return moerr.NewBadConfig("HAKeeperClientConfig not set")
+	}
+	if c.AllocateIDBatch == 0 {
+		c.AllocateIDBatch = 100
 	}
 	return nil
 }
@@ -384,13 +379,13 @@ type ClientConfig struct {
 // Validate validates the ClientConfig.
 func (c *ClientConfig) Validate() error {
 	if c.LogShardID == 0 {
-		return errors.Wrapf(ErrInvalidConfig, "invalid LogShardID")
+		return moerr.NewBadConfig("LogShardID value cannot be 0")
 	}
 	if c.DNReplicaID == 0 {
-		return errors.Wrapf(ErrInvalidConfig, "invalid DNReplicaID")
+		return moerr.NewBadConfig("DNReplicaID value cannot be 0")
 	}
 	if len(c.DiscoveryAddress) == 0 && len(c.ServiceAddresses) == 0 {
-		return errors.Wrapf(ErrInvalidConfig, "log service address info is empty")
+		return moerr.NewBadConfig("ServiceAddresses not set")
 	}
 	return nil
 }

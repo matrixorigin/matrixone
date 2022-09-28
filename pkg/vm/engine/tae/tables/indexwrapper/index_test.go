@@ -31,7 +31,7 @@ func TestRevert(t *testing.T) {
 	defer vec1.Close()
 	defer vec2.Close()
 
-	idx := NewMutableIndex(vec.GetType())
+	idx := NewPkMutableIndex(vec.GetType())
 
 	ctx := new(index.KeysCtx)
 	ctx.Keys = vec1

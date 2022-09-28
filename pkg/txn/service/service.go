@@ -211,7 +211,7 @@ func (s *service) parallelSendWithRetry(
 	ctx context.Context,
 	txnMeta txn.TxnMeta,
 	requests []txn.TxnRequest,
-	ignoreTxnErrorCodes map[txn.ErrorCode]struct{}) *rpc.SendResult {
+	ignoreTxnErrorCodes map[uint16]struct{}) *rpc.SendResult {
 	for {
 		select {
 		case <-ctx.Done():
@@ -227,7 +227,7 @@ func (s *service) parallelSendWithRetry(
 			hasError := false
 			for _, resp := range result.Responses {
 				if resp.TxnError != nil {
-					_, ok := ignoreTxnErrorCodes[resp.TxnError.Code]
+					_, ok := ignoreTxnErrorCodes[uint16(resp.TxnError.Code)]
 					if !ok {
 						hasError = true
 					}
@@ -309,5 +309,12 @@ func (c *txnContext) changeStatusLocked(status txn.TxnStatus) {
 		c.mu.txn.Status = status
 		util.LogTxnUpdated(c.logger, c.mu.txn)
 		c.nt.notify(status)
+	}
+}
+
+func newTxnError(code uint16, msg string) *txn.TxnError {
+	return &txn.TxnError{
+		Code:    int32(code),
+		Message: msg,
 	}
 }

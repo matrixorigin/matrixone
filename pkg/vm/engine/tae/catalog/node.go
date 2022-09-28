@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"sync"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
@@ -150,7 +151,7 @@ func (n *nodeList[T]) TxnGetNodeLocked(
 	}
 	n.ForEachNodes(fn)
 	if dn == nil && err == nil {
-		err = ErrNotFound
+		err = moerr.NewNotFound()
 	}
 	return
 }

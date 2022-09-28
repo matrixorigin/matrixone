@@ -15,11 +15,12 @@
 package tables
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/file"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/jobs"
@@ -38,7 +39,7 @@ func newSegment(meta *catalog.SegmentEntry,
 	factory file.SegmentFactory,
 	bufMgr base.INodeManager,
 	dir string) *dataSegment {
-	segFile := factory.Build(dir, meta.GetID())
+	segFile := factory.Build(dir, meta.GetID(), meta.GetTable().GetID(), factory.(*blockio.ObjectFactory).Fs)
 	seg := &dataSegment{
 		meta:      meta,
 		file:      segFile,
@@ -65,7 +66,7 @@ func (segment *dataSegment) GetID() uint64 { return segment.meta.GetID() }
 
 func (segment *dataSegment) BatchDedup(txn txnif.AsyncTxn, pks containers.Vector) (err error) {
 	// TODO: segment level index
-	return data.ErrPossibleDuplicate
+	return moerr.NewTAEPossibleDuplicate()
 	// blkIt := segment.meta.MakeBlockIt(false)
 	// for blkIt.Valid() {
 	// 	block := blkIt.Get().GetPayload().(*catalog.BlockEntry)

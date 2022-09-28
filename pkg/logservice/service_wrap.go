@@ -18,6 +18,7 @@ import (
 	"github.com/lni/dragonboat/v4"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
+	"github.com/matrixorigin/matrixone/pkg/taskservice"
 )
 
 type WrappedService struct {
@@ -27,9 +28,10 @@ type WrappedService struct {
 func NewWrappedService(
 	c Config,
 	fileService fileservice.FileService,
+	taskService taskservice.TaskService,
 	opts ...Option,
 ) (*WrappedService, error) {
-	svc, err := NewService(c, fileService, opts...)
+	svc, err := NewService(c, fileService, taskService, opts...)
 	if err != nil {
 		return nil, err
 	}

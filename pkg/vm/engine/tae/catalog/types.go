@@ -27,11 +27,11 @@ const (
 func (es EntryState) Repr() string {
 	switch es {
 	case ES_Appendable:
-		return "Appendable"
+		return "A"
 	case ES_NotAppendable:
-		return "NonAppendable"
+		return "NA"
 	case ES_Frozen:
-		return "Frozen"
+		return "F"
 	}
 	panic("not supported")
 }

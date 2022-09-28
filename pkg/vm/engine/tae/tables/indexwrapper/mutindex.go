@@ -16,19 +16,22 @@ package indexwrapper
 
 import (
 	"github.com/RoaringBitmap/roaring"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 )
 
+var _ Index = (*mutableIndex)(nil)
+
 type mutableIndex struct {
+	defaultIndexImpl
 	art     index.SecondaryIndex
 	zonemap *index.ZoneMap
 	deletes *DeletesMap
 }
 
-func NewMutableIndex(keyT types.Type) *mutableIndex {
+func NewPkMutableIndex(keyT types.Type) *mutableIndex {
 	return &mutableIndex{
 		art:     index.NewSimpleARTMap(keyT),
 		zonemap: index.NewZoneMap(keyT),
@@ -119,7 +122,7 @@ func (idx *mutableIndex) GetActiveRow(key any) (row uint32, err error) {
 	exist := idx.zonemap.Contains(key)
 	// 1. key is definitely not existed
 	if !exist {
-		err = data.ErrNotFound
+		err = moerr.NewNotFound()
 		return
 	}
 	// 2. search art tree for key
@@ -145,7 +148,7 @@ func (idx *mutableIndex) BatchDedup(keys containers.Vector,
 	ctx.SelectAll()
 	exist = idx.art.ContainsAny(ctx, rowmask)
 	if exist {
-		err = data.ErrDuplicate
+		err = moerr.NewDuplicate()
 	}
 	return
 }
@@ -160,5 +163,48 @@ func (idx *mutableIndex) Close() error {
 	return nil
 }
 
-func (idx *mutableIndex) ReadFrom(data.Block) error { panic("not supported") }
-func (idx *mutableIndex) WriteTo(data.Block) error  { panic("not supported") }
+var _ Index = (*nonPkMutIndex)(nil)
+
+type nonPkMutIndex struct {
+	defaultIndexImpl
+	zonemap *index.ZoneMap
+}
+
+func NewMutableIndex(keyT types.Type) *nonPkMutIndex {
+	return &nonPkMutIndex{
+		zonemap: index.NewZoneMap(keyT),
+	}
+}
+
+func (idx *nonPkMutIndex) Destroy() error {
+	idx.zonemap = nil
+	return nil
+}
+
+func (idx *nonPkMutIndex) Close() error {
+	idx.zonemap = nil
+	return nil
+}
+
+func (idx *nonPkMutIndex) BatchUpsert(keysCtx *index.KeysCtx, offset int, ts types.TS) (resp *index.BatchResp, err error) {
+	return nil, TranslateError(idx.zonemap.BatchUpdate(keysCtx))
+}
+
+func (idx *nonPkMutIndex) Dedup(key any) (err error) {
+	exist := idx.zonemap.Contains(key)
+	// 1. if not in [min, max], key is definitely not found
+	if !exist {
+		return
+	}
+	return moerr.NewTAEPossibleDuplicate()
+}
+
+func (idx *nonPkMutIndex) BatchDedup(keys containers.Vector, rowmask *roaring.Bitmap) (keyselects *roaring.Bitmap, err error) {
+	keyselects, exist := idx.zonemap.ContainsAny(keys)
+	// 1. all keys are definitely not existed
+	if !exist {
+		return
+	}
+	err = moerr.NewTAEPossibleDuplicate()
+	return
+}

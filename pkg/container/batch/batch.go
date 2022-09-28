@@ -17,12 +17,12 @@ package batch
 import (
 	"bytes"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/agg"
 	"sync/atomic"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/errno"
-	"github.com/matrixorigin/matrixone/pkg/sql/errors"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/shuffle"
 	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
@@ -75,16 +75,54 @@ func NewWithSize(n int) *Batch {
 	}
 }
 
+func (info *aggInfo) MarshalBinary() ([]byte, error) {
+	var buf bytes.Buffer
+	i32 := int32(info.Op)
+	buf.Write(types.EncodeInt32(&i32))
+	buf.Write(types.EncodeBool(&info.Dist))
+	buf.Write(types.EncodeType(&info.inputTypes))
+	data, err := types.Encode(info.Agg)
+	if err != nil {
+		return nil, err
+	}
+	buf.Write(data)
+	return buf.Bytes(), nil
+}
+
+func (info *aggInfo) UnmarshalBinary(data []byte) error {
+	info.Op = int(types.DecodeInt32(data[:4]))
+	data = data[4:]
+	info.Dist = types.DecodeBool(data[:1])
+	data = data[1:]
+	info.inputTypes = types.DecodeType(data[:types.TSize])
+	data = data[types.TSize:]
+	aggregate, err := agg.New(info.Op, info.Dist, info.inputTypes)
+	if err != nil {
+		return err
+	}
+	info.Agg = aggregate
+	return types.Decode(data, info.Agg)
+}
+
 func (bat *Batch) MarshalBinary() ([]byte, error) {
+	aggInfo := make([]aggInfo, len(bat.Aggs))
+	for i := range aggInfo {
+		aggInfo[i].Op = bat.Aggs[i].GetOperatorId()
+		aggInfo[i].inputTypes = bat.Aggs[i].GetInputTypes()[0]
+		aggInfo[i].Dist = bat.Aggs[i].IsDistinct()
+		aggInfo[i].Agg = bat.Aggs[i]
+	}
 	return types.Encode(&EncodeBatch{
-		Zs:    bat.Zs,
-		Vecs:  bat.Vecs,
-		Attrs: bat.Attrs,
+		Zs:       bat.Zs,
+		Vecs:     bat.Vecs,
+		Attrs:    bat.Attrs,
+		AggInfos: aggInfo,
 	})
 }
 
 func (bat *Batch) UnmarshalBinary(data []byte) error {
 	rbat := new(EncodeBatch)
+
 	if err := types.Decode(data, rbat); err != nil {
 		return err
 	}
@@ -92,6 +130,10 @@ func (bat *Batch) UnmarshalBinary(data []byte) error {
 	bat.Zs = rbat.Zs
 	bat.Vecs = rbat.Vecs
 	bat.Attrs = rbat.Attrs
+	bat.Aggs = make([]agg.Agg[any], len(rbat.AggInfos))
+	for i, info := range rbat.AggInfos {
+		bat.Aggs[i] = info.Agg
+	}
 	return nil
 }
 
@@ -155,6 +197,10 @@ func (bat *Batch) Length() int {
 	return len(bat.Zs)
 }
 
+func (bat *Batch) VectorCount() int {
+	return len(bat.Vecs)
+}
+
 func (bat *Batch) Prefetch(poses []int32, vecs []*vector.Vector) {
 	for i, pos := range poses {
 		vecs[i] = bat.GetVector(pos)
@@ -203,7 +249,7 @@ func (bat *Batch) Append(mh *mheap.Mheap, b *Batch) (*Batch, error) {
 		return b, nil
 	}
 	if len(bat.Vecs) != len(b.Vecs) {
-		return nil, errors.New(errno.InternalError, "unexpected error happens in batch append")
+		return nil, moerr.NewInternalError("unexpected error happens in batch append")
 	}
 	if len(bat.Vecs) == 0 {
 		return bat, nil

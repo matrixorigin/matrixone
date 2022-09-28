@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/moengine"
 	"github.com/panjf2000/ants/v2"
@@ -88,8 +89,8 @@ func main() {
 	logutil.Info(tae.Opts.Catalog.SimplePPString(common.PPL1))
 	bat := catalog.MockBatch(schema, int(batchRows))
 	newbat := batch.New(true, bat.Attrs)
-	newbat.Vecs = moengine.CopyToMoVectors(bat.Vecs)
-	bats := moengine.SplitBatch(newbat, int(batchCnt))
+	newbat.Vecs = containers.CopyToMoVectors(bat.Vecs)
+	bats := containers.SplitBatch(newbat, int(batchCnt))
 	var wg sync.WaitGroup
 	doAppend := func(b *batch.Batch) func() {
 		return func() {

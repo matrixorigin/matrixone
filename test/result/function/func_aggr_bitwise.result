@@ -66,11 +66,11 @@ select bit_and(h) from t1;
 bit_and(h)
 12
 select bit_and(i) from t1;
-Aggregate function of 'bit_and' do not support implicit conversions for param of [DATE]
+invalid argument aggregate function bit_and, bad value [DATE]
 select bit_and(k) from t1;
-Aggregate function of 'bit_and' do not support implicit conversions for param of [DATETIME]
+invalid argument aggregate function bit_and, bad value [DATETIME]
 select bit_and(l) from t1;
-Aggregate function of 'bit_and' do not support implicit conversions for param of [TIMESTAMP]
+invalid argument aggregate function bit_and, bad value [TIMESTAMP]
 select bit_and(m) from t1;
 bit_and(m)
 0
@@ -108,11 +108,11 @@ select bit_or(h) from t1;
 bit_or(h)
 127
 select bit_or(i) from t1;
-Aggregate function of 'bit_or' do not support implicit conversions for param of [DATE]
+invalid argument aggregate function bit_or, bad value [DATE]
 select bit_or(k) from t1;
-Aggregate function of 'bit_or' do not support implicit conversions for param of [DATETIME]
+invalid argument aggregate function bit_or, bad value [DATETIME]
 select bit_or(l) from t1;
-Aggregate function of 'bit_or' do not support implicit conversions for param of [TIMESTAMP]
+invalid argument aggregate function bit_or, bad value [TIMESTAMP]
 select bit_or(m) from t1;
 bit_or(m)
 3
@@ -150,11 +150,11 @@ select bit_xor(h) from t1;
 bit_xor(h)
 115
 select bit_xor(i) from t1;
-Aggregate function of 'bit_xor' do not support implicit conversions for param of [DATE]
+invalid argument aggregate function bit_xor, bad value [DATE]
 select bit_xor(k) from t1;
-Aggregate function of 'bit_xor' do not support implicit conversions for param of [DATETIME]
+invalid argument aggregate function bit_xor, bad value [DATETIME]
 select bit_xor(l) from t1;
-Aggregate function of 'bit_xor' do not support implicit conversions for param of [TIMESTAMP]
+invalid argument aggregate function bit_xor, bad value [TIMESTAMP]
 select bit_xor(m) from t1;
 bit_xor(m)
 3
@@ -202,9 +202,9 @@ a	big
 1	92233720368547
 1	18446744073709515
 select distinct BIT_AND(big),BIT_OR(big), BIT_XOR(big),BIT_AND(big)-1, BIT_OR(big)-1, BIT_XOR(big)-1  from t1;
-Can't cast column from BIGINT UNSIGNED type to BIGINT type because of one or more values in that column. Reason: overflow
+data out of range: data type int64, 
 select BIT_AND(big),BIT_OR(big), BIT_XOR(big),BIT_AND(big)-1, BIT_OR(big)-1, BIT_XOR(big)-1 from t1 group by a;
-Can't cast column from BIGINT UNSIGNED type to BIGINT type because of one or more values in that column. Reason: overflow
+data out of range: data type int64, 
 insert into t1 (big) values (184467440737615);
 select * from t1;
 a	big
@@ -214,14 +214,14 @@ a	big
 1	18446744073709515
 1	184467440737615
 select distinct BIT_AND(big),BIT_OR(big), BIT_XOR(big),BIT_AND(big)-1, BIT_OR(big)-1, BIT_XOR(big)-1  from t1;
-Can't cast column from BIGINT UNSIGNED type to BIGINT type because of one or more values in that column. Reason: overflow
+data out of range: data type int64, 
 select BIT_AND(big),BIT_OR(big), BIT_XOR(big),BIT_AND(big)-1, BIT_OR(big)-1, BIT_XOR(big)-1 from t1 group by a;
-Can't cast column from BIGINT UNSIGNED type to BIGINT type because of one or more values in that column. Reason: overflow
+data out of range: data type int64, 
 drop table t1;
 CREATE TABLE t1 (Fld1 int(11) default NULL,Fld2 int(11) default NULL);
 INSERT INTO t1 VALUES (1,10),(1,20),(2,NULL),(2,NULL),(3,50);
 select Fld1, BIT_AND(Fld2),BIT_OR(Fld2), BIT_XOR(Fld2) as q from t1 group by Fld1 having q is not null;
-column "q" must appear in the GROUP BY clause or be used in an aggregate function
+SQL syntax error: column "q" must appear in the GROUP BY clause or be used in an aggregate function
 select Fld1, BIT_AND(Fld2),BIT_OR(Fld2), BIT_XOR(Fld2) from t1 group by Fld1 having BIT_AND(Fld2) is not null;
 fld1	bit_and(fld2)	bit_or(fld2)	bit_xor(fld2)
 1	0	30	30

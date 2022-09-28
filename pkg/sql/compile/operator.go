@@ -17,8 +17,10 @@ package compile
 import (
 	"context"
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/agg"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/intersectall"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/anti"
@@ -41,7 +43,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/errno"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
@@ -64,7 +65,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/semi"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/single"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/top"
-	"github.com/matrixorigin/matrixone/pkg/sql/errors"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -227,7 +227,7 @@ func dupInstruction(in vm.Instruction) vm.Instruction {
 			Es: arg.Es,
 		}
 	default:
-		panic(errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("Unsupport instruction %T\n", in.Arg)))
+		panic(moerr.NewInternalError(fmt.Sprintf("unsupport instruction %T\n", in.Arg)))
 	}
 	return rin
 }
@@ -282,6 +282,7 @@ func constructInsert(n *plan.Node, eg engine.Engine, txnOperator TxnOperator) (*
 		Engine:        eg,
 		DB:            db,
 		TableID:       relation.GetTableID(ctx),
+		CPkeyColDef:   n.TableDef.CompositePkey,
 	}, nil
 }
 
@@ -316,6 +317,7 @@ func constructUpdate(n *plan.Node, eg engine.Engine, txnOperator TxnOperator) (*
 			OtherAttrs:  updateCtx.OtherAttrs,
 			OrderAttrs:  updateCtx.OrderAttrs,
 			TableSource: relation,
+			CPkeyColDef: updateCtx.CompositePkey,
 		}
 	}
 	return &update.Argument{
@@ -386,7 +388,7 @@ func constructSemi(n *plan.Node, typs []types.Type, proc *process.Process) *semi
 	for i, expr := range n.ProjectList {
 		rel, pos := constructJoinResult(expr)
 		if rel != 0 {
-			panic(errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("semi result '%s' not support now", expr)))
+			panic(moerr.NewNYI("semi result '%s'", expr))
 		}
 		result[i] = pos
 	}
@@ -440,7 +442,7 @@ func constructAnti(n *plan.Node, typs []types.Type, proc *process.Process) *anti
 	for i, expr := range n.ProjectList {
 		rel, pos := constructJoinResult(expr)
 		if rel != 0 {
-			panic(errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("anti result '%s' not support now", expr)))
+			panic(moerr.NewNYI("anti result '%s'", expr))
 		}
 		result[i] = pos
 	}
@@ -458,7 +460,7 @@ func constructMark(n *plan.Node, typs []types.Type, proc *process.Process, onLis
 	for i, expr := range n.ProjectList {
 		rel, pos := constructJoinResult(expr)
 		if rel != 0 {
-			panic(errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("mark result '%s' not support now", expr)))
+			panic(moerr.NewNYI("mark result '%s'", expr))
 		}
 		result[i] = pos
 	}
@@ -653,7 +655,7 @@ func constructLoopSemi(n *plan.Node, typs []types.Type, proc *process.Process) *
 	for i, expr := range n.ProjectList {
 		rel, pos := constructJoinResult(expr)
 		if rel != 0 {
-			panic(errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("loop semi result '%s' not support now", expr)))
+			panic(moerr.NewNYI("loop semi result '%s'", expr))
 		}
 		result[i] = pos
 	}
@@ -692,7 +694,7 @@ func constructLoopAnti(n *plan.Node, typs []types.Type, proc *process.Process) *
 	for i, expr := range n.ProjectList {
 		rel, pos := constructJoinResult(expr)
 		if rel != 0 {
-			panic(errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("loop anti result '%s' not support now", expr)))
+			panic(moerr.NewNYI("loop anti result '%s'", expr))
 		}
 		result[i] = pos
 	}
@@ -785,14 +787,14 @@ func constructHashBuild(in vm.Instruction) *hashbuild.Argument {
 		}
 
 	default:
-		panic(errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("unsupport join type '%v'", in.Op)))
+		panic(moerr.NewInternalError("unsupport join type '%v'", in.Op))
 	}
 }
 
 func constructJoinResult(expr *plan.Expr) (int32, int32) {
 	e, ok := expr.Expr.(*plan.Expr_Col)
 	if !ok {
-		panic(errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("join result '%s' not support now", expr)))
+		panic(moerr.NewNYI("join result '%s'", expr))
 	}
 	return e.Col.RelPos, e.Col.ColPos
 }
@@ -811,7 +813,7 @@ func constructJoinCondition(expr *plan.Expr) (*plan.Expr, *plan.Expr) {
 	if e, ok := expr.Expr.(*plan.Expr_C); ok { // constant bool
 		b, ok := e.C.Value.(*plan.Const_Bval)
 		if !ok {
-			panic(errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("join condition '%s' not support now", expr)))
+			panic(moerr.NewNYI("join condition '%s'", expr))
 		}
 		if b.Bval {
 			return expr, expr
@@ -827,7 +829,7 @@ func constructJoinCondition(expr *plan.Expr) (*plan.Expr, *plan.Expr) {
 	}
 	e, ok := expr.Expr.(*plan.Expr_F)
 	if !ok || !supportedJoinCondition(e.F.Func.GetObj()) {
-		panic(errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("join condition '%s' not support now", expr)))
+		panic(moerr.NewNYI("join condition '%s'", expr))
 	}
 	if exprRelPos(e.F.Args[0]) == 1 {
 		return e.F.Args[1], e.F.Args[0]

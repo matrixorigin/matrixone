@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/fagongzi/goetty/v2"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"go.uber.org/zap"
@@ -87,6 +88,14 @@ func WithBackendConnectTimeout(timeout time.Duration) BackendOption {
 	}
 }
 
+// WithBackendHasPayloadResponse has payload response means read a response that hold
+// a slice of data in the read buffer to avoid data copy.
+func WithBackendHasPayloadResponse() BackendOption {
+	return func(rb *remoteBackend) {
+		rb.options.hasPayloadResponse = true
+	}
+}
+
 // WithBackendStreamBufferSize set buffer size for stream receive message chan
 func WithBackendStreamBufferSize(value int) BackendOption {
 	return func(rb *remoteBackend) {
@@ -113,14 +122,15 @@ type remoteBackend struct {
 	closeOnce  sync.Once
 
 	options struct {
-		connect          bool
-		goettyOptions    []goetty.Option
-		connectTimeout   time.Duration
-		bufferSize       int
-		busySize         int
-		batchSendSize    int
-		streamBufferSize int
-		filter           func(msg Message, backendAddr string) bool
+		connect            bool
+		hasPayloadResponse bool
+		goettyOptions      []goetty.Option
+		connectTimeout     time.Duration
+		bufferSize         int
+		busySize           int
+		batchSendSize      int
+		streamBufferSize   int
+		filter             func(msg Message, backendAddr string) bool
 	}
 
 	stateMu struct {
@@ -179,6 +189,10 @@ func NewRemoteBackend(
 	rb.writeC = make(chan backendSendMessage, rb.options.bufferSize)
 	rb.mu.futures = make(map[uint64]*Future, rb.options.bufferSize)
 	rb.mu.activeStreams = make(map[uint64]*stream, rb.options.bufferSize)
+	if rb.options.hasPayloadResponse {
+		rb.options.goettyOptions = append(rb.options.goettyOptions,
+			goetty.WithSessionDisableAutoResetInBuffer())
+	}
 	rb.conn = goetty.NewIOSession(rb.options.goettyOptions...)
 
 	if rb.options.connect {
@@ -248,7 +262,7 @@ func (rb *remoteBackend) NewStream() (Stream, error) {
 	defer rb.stateMu.RUnlock()
 
 	if rb.stateMu.state == stateStopped {
-		return nil, errBackendClosed
+		return nil, moerr.NewBackendClosed()
 	}
 
 	rb.mu.Lock()
@@ -265,7 +279,7 @@ func (rb *remoteBackend) doSend(m backendSendMessage) error {
 		rb.stateMu.RLock()
 		if rb.stateMu.state == stateStopped {
 			rb.stateMu.RUnlock()
-			return errBackendClosed
+			return moerr.NewBackendClosed()
 		}
 
 		// The close method need acquire the write lock, so we cannot block at here.
@@ -463,25 +477,36 @@ func (rb *remoteBackend) readLoop(ctx context.Context) {
 	rb.logger.Info("read loop started")
 	defer rb.logger.Error("read loop stopped")
 
+	wg := &sync.WaitGroup{}
+	var cb func()
+	if rb.options.hasPayloadResponse {
+		cb = wg.Done
+	}
+
 	for {
 		select {
 		case <-ctx.Done():
 			rb.clean()
 			return
 		default:
-			for {
-				msg, err := rb.conn.Read(goetty.ReadOptions{})
-				if err != nil {
-					rb.logger.Error("read from backend failed",
-						zap.Error(err))
-					rb.inactiveReadLoop()
-					rb.cancelActiveStreams()
-					rb.scheduleResetConn()
-					return
-				}
+			msg, err := rb.conn.Read(goetty.ReadOptions{})
+			if err != nil {
+				rb.logger.Error("read from backend failed",
+					zap.Error(err))
+				rb.inactiveReadLoop()
+				rb.cancelActiveStreams()
+				rb.scheduleResetConn()
+				return
+			}
 
-				rb.active()
-				rb.requestDone(msg.(RPCMessage).Message)
+			rb.active()
+
+			if rb.options.hasPayloadResponse {
+				wg.Add(1)
+			}
+			rb.requestDone(msg.(RPCMessage).Message, cb)
+			if rb.options.hasPayloadResponse {
+				wg.Wait()
 			}
 		}
 	}
@@ -530,14 +555,14 @@ func (rb *remoteBackend) stopWriteLoop() {
 	close(rb.writeC)
 }
 
-func (rb *remoteBackend) requestDone(response Message) {
+func (rb *remoteBackend) requestDone(response Message, cb func()) {
 	id := response.GetID()
 
 	rb.mu.Lock()
 	if f, ok := rb.mu.futures[id]; ok {
 		delete(rb.mu.futures, id)
 		rb.mu.Unlock()
-		f.done(response)
+		f.done(response, cb)
 	} else if st, ok := rb.mu.activeStreams[id]; ok {
 		rb.mu.Unlock()
 		st.done(response)
@@ -570,7 +595,7 @@ func (rb *remoteBackend) resetConn() error {
 	sleep := time.Millisecond * 200
 	for {
 		if !rb.runningLocked() {
-			return errBackendClosed
+			return moerr.NewBackendClosed()
 		}
 
 		rb.logger.Info("start connect to remote")
@@ -589,7 +614,7 @@ func (rb *remoteBackend) resetConn() error {
 			time.Sleep(sleep)
 			duration += sleep
 			if time.Since(start) > rb.options.connectTimeout {
-				return errBackendClosed
+				return moerr.NewBackendClosed()
 			}
 			if duration >= wait {
 				break
@@ -747,7 +772,7 @@ func (s *stream) Send(ctx context.Context, request Message) error {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	if s.mu.closed {
-		return errStreamClosed
+		return moerr.NewStreamClosed()
 	}
 
 	return s.sendFunc(backendSendMessage{message: RPCMessage{Ctx: ctx, Message: request}})
@@ -757,7 +782,7 @@ func (s *stream) Receive() (chan Message, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	if s.mu.closed {
-		return nil, errStreamClosed
+		return nil, moerr.NewStreamClosed()
 	}
 	return s.c, nil
 }

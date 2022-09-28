@@ -17,10 +17,13 @@ package service
 import (
 	"context"
 	"fmt"
+	"strconv"
+	"sync"
+
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/cnservice"
+	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
-	"sync"
 )
 
 // CNService describes expected behavior for dn service.
@@ -113,15 +116,26 @@ func newCNService(
 }
 
 func buildCnConfig(index int, opt Options, address serviceAddresses) *cnservice.Config {
+	port, err := getAvailablePort("127.0.0.1")
+	if err != nil {
+		panic(err)
+	}
+	p, err := strconv.Atoi(port)
+	if err != nil {
+		panic(err)
+	}
 	cfg := &cnservice.Config{
 		UUID:          uuid.New().String(),
 		ListenAddress: address.getCnListenAddress(index),
+		Frontend: config.FrontendParameters{
+			Port: int64(p),
+		},
 	}
 
 	cfg.HAKeeper.ClientConfig.ServiceAddresses = address.listHAKeeperListenAddresses()
 	cfg.HAKeeper.HeatbeatDuration.Duration = opt.dn.heartbeatInterval
 
-	cfg.Engine.Type = "memory"
+	cfg.Engine.Type = cnservice.EngineMemory
 
 	// We need the filled version of configuration.
 	// It's necessary when building cnservice.Option.

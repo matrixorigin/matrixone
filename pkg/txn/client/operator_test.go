@@ -20,10 +20,12 @@ import (
 	"time"
 
 	"github.com/fagongzi/util/protoc"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
+	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/stretchr/testify/assert"
 	"go.uber.org/zap"
@@ -197,8 +199,7 @@ func TestWriteOnClosedTxnWillPanic(t *testing.T) {
 	runOperatorTests(t, func(ctx context.Context, tc *txnOperator, _ *testTxnSender) {
 		tc.mu.closed = true
 		_, err := tc.Write(ctx, nil)
-		assert.Error(t, err)
-		assert.Equal(t, errTxnClosed, err)
+		assert.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnClosed))
 	})
 }
 
@@ -206,8 +207,7 @@ func TestReadOnClosedTxnWillPanic(t *testing.T) {
 	runOperatorTests(t, func(ctx context.Context, tc *txnOperator, _ *testTxnSender) {
 		tc.mu.closed = true
 		_, err := tc.Read(ctx, nil)
-		assert.Error(t, err)
-		assert.Equal(t, errTxnClosed, err)
+		assert.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnClosed))
 	})
 }
 
@@ -262,8 +262,7 @@ func TestReadOnAbortedTxn(t *testing.T) {
 			return result, err
 		})
 		responses, err := tc.Read(ctx, []txn.TxnRequest{txn.NewTxnRequest(&txn.CNOpRequest{OpCode: 1})})
-		assert.Error(t, err)
-		assert.Equal(t, errTxnClosed, err)
+		assert.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnClosed))
 		assert.Empty(t, responses)
 	})
 }
@@ -277,8 +276,7 @@ func TestWriteOnAbortedTxn(t *testing.T) {
 			return result, err
 		})
 		result, err := tc.Write(ctx, []txn.TxnRequest{txn.NewTxnRequest(&txn.CNOpRequest{OpCode: 1})})
-		assert.Error(t, err)
-		assert.Equal(t, errTxnClosed, err)
+		assert.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnClosed))
 		assert.Empty(t, result)
 	})
 }
@@ -292,8 +290,7 @@ func TestWriteOnCommittedTxn(t *testing.T) {
 			return result, err
 		})
 		result, err := tc.Write(ctx, []txn.TxnRequest{txn.NewTxnRequest(&txn.CNOpRequest{OpCode: 1})})
-		assert.Error(t, err)
-		assert.Equal(t, errTxnClosed, err)
+		assert.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnClosed))
 		assert.Empty(t, result)
 	})
 }
@@ -307,8 +304,7 @@ func TestWriteOnCommittingTxn(t *testing.T) {
 			return result, err
 		})
 		result, err := tc.Write(ctx, []txn.TxnRequest{txn.NewTxnRequest(&txn.CNOpRequest{OpCode: 1})})
-		assert.Error(t, err)
-		assert.Equal(t, errTxnClosed, err)
+		assert.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnClosed))
 		assert.Empty(t, result)
 	})
 }
@@ -347,7 +343,9 @@ func TestApplySnapshotTxnOperator(t *testing.T) {
 
 func runOperatorTests(t *testing.T, tc func(context.Context, *txnOperator, *testTxnSender), options ...TxnOption) {
 	ts := newTestTxnSender()
-	c := NewTxnClient(ts, WithLogger(logutil.GetPanicLoggerWithLevel(zap.DebugLevel)))
+	c := NewTxnClient(ts,
+		WithLogger(logutil.GetPanicLoggerWithLevel(zap.DebugLevel)),
+		WithClock(clock.NewHLCClock(func() int64 { return time.Now().UTC().UnixNano() }, time.Millisecond*400)))
 	txn, err := c.New(options...)
 	assert.Nil(t, err)
 	ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond)

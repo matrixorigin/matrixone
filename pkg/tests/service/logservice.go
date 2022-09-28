@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	logpb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
+	"github.com/matrixorigin/matrixone/pkg/taskservice"
 )
 
 var (
@@ -138,9 +139,10 @@ type logOptions []logservice.Option
 func newLogService(
 	cfg logservice.Config,
 	fs fileservice.FileService,
+	ts taskservice.TaskService,
 	opts logOptions,
 ) (LogService, error) {
-	svc, err := logservice.NewWrappedService(cfg, fs, opts...)
+	svc, err := logservice.NewWrappedService(cfg, fs, ts, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -169,6 +171,7 @@ func buildLogConfig(
 	cfg.HAKeeperConfig.TickPerSecond = opt.hakeeper.tickPerSecond
 	cfg.HAKeeperConfig.LogStoreTimeout.Duration = opt.hakeeper.logStoreTimeout
 	cfg.HAKeeperConfig.DNStoreTimeout.Duration = opt.hakeeper.dnStoreTimeout
+	cfg.HAKeeperConfig.CNStoreTimeout.Duration = opt.hakeeper.cnStoreTimeout
 
 	// we must invoke Fill in order to set default configuration value.
 	cfg.Fill()

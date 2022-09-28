@@ -22,11 +22,11 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
-	"github.com/matrixorigin/matrixone/pkg/txn/storage"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -34,7 +34,7 @@ func TestWrite(t *testing.T) {
 	l := NewMemLog()
 	s := NewKVTxnStorage(0, l, newTestClock(1))
 
-	wTxn := writeTestData(t, s, 1, nil, 1, 2)
+	wTxn := writeTestData(t, s, 1, moerr.Ok, 1, 2)
 	checkUncommitted(t, s, wTxn, 1, 2)
 	checkLogCount(t, l, 0)
 }
@@ -43,12 +43,12 @@ func TestWriteWithConflict(t *testing.T) {
 	l := NewMemLog()
 	s := NewKVTxnStorage(0, l, newTestClock(1))
 
-	wTxn1 := writeTestData(t, s, 1, nil, 1)
+	wTxn1 := writeTestData(t, s, 1, moerr.Ok, 1)
 	checkUncommitted(t, s, wTxn1, 1)
 
-	writeTestData(t, s, 1, storage.ErrWriteConflict, 1)
+	writeTestData(t, s, 1, moerr.ErrTxnWriteConflict, 1)
 
-	wTxn3 := writeTestData(t, s, 1, nil, 2)
+	wTxn3 := writeTestData(t, s, 1, moerr.Ok, 2)
 	checkUncommitted(t, s, wTxn3, 2)
 }
 
@@ -56,9 +56,9 @@ func TestPrepare(t *testing.T) {
 	l := NewMemLog()
 	s := NewKVTxnStorage(0, l, newTestClock(1))
 
-	wTxn := writeTestData(t, s, 1, nil, 1)
+	wTxn := writeTestData(t, s, 1, moerr.Ok, 1)
 
-	prepareTestTxn(t, s, &wTxn, 2, nil)
+	prepareTestTxn(t, s, &wTxn, 2, moerr.Ok)
 
 	checkUncommitted(t, s, wTxn, 1)
 	checkLogCount(t, l, 1)
@@ -71,16 +71,16 @@ func TestPrepareWithConflict(t *testing.T) {
 
 	writeCommittedData(t, s, 1, 100, 1) // commit at 100
 
-	wTxn := writeTestData(t, s, 1, nil, 1)
-	prepareTestTxn(t, s, &wTxn, 5, storage.ErrWriteConflict) // prepare at 5
+	wTxn := writeTestData(t, s, 1, moerr.Ok, 1)
+	prepareTestTxn(t, s, &wTxn, 5, moerr.ErrTxnWriteConflict) // prepare at 5
 }
 
 func TestCommit(t *testing.T) {
 	l := NewMemLog()
 	s := NewKVTxnStorage(0, l, newTestClock(1))
 
-	wTxn := writeTestData(t, s, 1, nil, 1)
-	commitTestTxn(t, s, &wTxn, 2, nil)
+	wTxn := writeTestData(t, s, 1, moerr.Ok, 1)
+	commitTestTxn(t, s, &wTxn, 2, moerr.Ok)
 
 	checkCommitted(t, s, wTxn, 1)
 	checkLogCount(t, l, 1)
@@ -91,7 +91,7 @@ func TestCommitWithTxnNotExist(t *testing.T) {
 	l := NewMemLog()
 	s := NewKVTxnStorage(0, l, newTestClock(1))
 
-	commitTestTxn(t, s, &txn.TxnMeta{}, 2, nil)
+	commitTestTxn(t, s, &txn.TxnMeta{}, 2, moerr.Ok)
 }
 
 func TestCommitWithConflict(t *testing.T) {
@@ -100,17 +100,17 @@ func TestCommitWithConflict(t *testing.T) {
 
 	writeCommittedData(t, s, 1, 2, 1)
 
-	wTxn := writeTestData(t, s, 1, nil, 1)
-	commitTestTxn(t, s, &wTxn, 5, storage.ErrWriteConflict)
+	wTxn := writeTestData(t, s, 1, moerr.Ok, 1)
+	commitTestTxn(t, s, &wTxn, 5, moerr.ErrTxnWriteConflict)
 }
 
 func TestCommitAfterPrepared(t *testing.T) {
 	l := NewMemLog()
 	s := NewKVTxnStorage(0, l, newTestClock(1))
 
-	wTxn := writeTestData(t, s, 1, nil, 1)
-	prepareTestTxn(t, s, &wTxn, 2, nil)
-	commitTestTxn(t, s, &wTxn, 3, nil)
+	wTxn := writeTestData(t, s, 1, moerr.Ok, 1)
+	prepareTestTxn(t, s, &wTxn, 2, moerr.Ok)
+	commitTestTxn(t, s, &wTxn, 3, moerr.Ok)
 
 	checkCommitted(t, s, wTxn, 1)
 	checkLogCount(t, l, 2)
@@ -121,7 +121,7 @@ func TestRollback(t *testing.T) {
 	l := NewMemLog()
 	s := NewKVTxnStorage(0, l, newTestClock(1))
 
-	wTxn := writeTestData(t, s, 1, nil, 1)
+	wTxn := writeTestData(t, s, 1, moerr.Ok, 1)
 	checkUncommitted(t, s, wTxn, 1)
 
 	assert.NoError(t, s.Rollback(context.TODO(), wTxn))
@@ -150,7 +150,7 @@ func TestReadSelfUncommitted(t *testing.T) {
 	l := NewMemLog()
 	s := NewKVTxnStorage(0, l, newTestClock(1))
 
-	wTxn := writeTestData(t, s, 1, nil, 1)
+	wTxn := writeTestData(t, s, 1, moerr.Ok, 1)
 	rs := readTestDataWithTxn(t, s, &wTxn, nil, 1)
 	checkReadResult(t, 1, rs, 1)
 }
@@ -171,8 +171,8 @@ func TestWaitReadByPreparedTxn(t *testing.T) {
 
 	writeCommittedData(t, s, 0, 1, 1)
 
-	wTxn := writeTestData(t, s, 2, nil, 1)
-	prepareTestTxn(t, s, &wTxn, 5, nil)
+	wTxn := writeTestData(t, s, 2, moerr.Ok, 1)
+	prepareTestTxn(t, s, &wTxn, 5, moerr.Ok)
 
 	readTestData(t, s, 6, [][]byte{wTxn.ID}, 1)
 }
@@ -183,8 +183,8 @@ func TestReadByGTPreparedTxnCanNotWait(t *testing.T) {
 
 	writeCommittedData(t, s, 0, 1, 1)
 
-	wTxn := writeTestData(t, s, 2, nil, 1)
-	prepareTestTxn(t, s, &wTxn, 5, nil)
+	wTxn := writeTestData(t, s, 2, moerr.Ok, 1)
+	prepareTestTxn(t, s, &wTxn, 5, moerr.Ok)
 
 	readTestData(t, s, 2, nil, 1)
 }
@@ -195,8 +195,8 @@ func TestWaitReadByCommittingTxn(t *testing.T) {
 
 	writeCommittedData(t, s, 0, 1, 1)
 
-	wTxn := writeTestData(t, s, 2, nil, 1)
-	prepareTestTxn(t, s, &wTxn, 5, nil)
+	wTxn := writeTestData(t, s, 2, moerr.Ok, 1)
+	prepareTestTxn(t, s, &wTxn, 5, moerr.Ok)
 	committingTestTxn(t, s, &wTxn, 6)
 
 	readTestData(t, s, 7, [][]byte{wTxn.ID}, 1)
@@ -208,8 +208,8 @@ func TestReadByGTCommittingTxnCanNotWait(t *testing.T) {
 
 	writeCommittedData(t, s, 0, 1, 1)
 
-	wTxn := writeTestData(t, s, 2, nil, 1)
-	prepareTestTxn(t, s, &wTxn, 3, nil)
+	wTxn := writeTestData(t, s, 2, moerr.Ok, 1)
+	prepareTestTxn(t, s, &wTxn, 3, moerr.Ok)
 	committingTestTxn(t, s, &wTxn, 4)
 
 	readTestData(t, s, 3, nil, 1)
@@ -219,21 +219,21 @@ func TestReadAfterWaitTxnResloved(t *testing.T) {
 	l := NewMemLog()
 	s := NewKVTxnStorage(0, l, newTestClock(1))
 
-	wTxn1 := writeTestData(t, s, 1, nil, 1)
-	prepareTestTxn(t, s, &wTxn1, 2, nil)
+	wTxn1 := writeTestData(t, s, 1, moerr.Ok, 1)
+	prepareTestTxn(t, s, &wTxn1, 2, moerr.Ok)
 
-	wTxn2 := writeTestData(t, s, 1, nil, 2)
-	prepareTestTxn(t, s, &wTxn2, 2, nil)
+	wTxn2 := writeTestData(t, s, 1, moerr.Ok, 2)
+	prepareTestTxn(t, s, &wTxn2, 2, moerr.Ok)
 
 	_, rs := readTestData(t, s, 5, [][]byte{wTxn1.ID, wTxn2.ID}, 1, 2)
 	_, err := rs.Read()
-	assert.Equal(t, storage.ErrUnreslovedConflict, err)
+	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrMissingTxn))
 
-	commitTestTxn(t, s, &wTxn2, 6, nil)
+	commitTestTxn(t, s, &wTxn2, 6, moerr.Ok)
 	_, err = rs.Read()
-	assert.Equal(t, storage.ErrUnreslovedConflict, err)
+	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrMissingTxn))
 
-	commitTestTxn(t, s, &wTxn1, 4, nil)
+	commitTestTxn(t, s, &wTxn1, 4, moerr.Ok)
 
 	checkReadResult(t, 1, rs, 1, 0)
 }
@@ -242,22 +242,22 @@ func TestRecovery(t *testing.T) {
 	l := NewMemLog()
 	s := NewKVTxnStorage(0, l, newTestClock(1))
 
-	prepareTxn := writeTestData(t, s, 1, nil, 1)
-	prepareTestTxn(t, s, &prepareTxn, 2, nil)
+	prepareTxn := writeTestData(t, s, 1, moerr.Ok, 1)
+	prepareTestTxn(t, s, &prepareTxn, 2, moerr.Ok)
 	checkLog(t, l, 1, prepareTxn, 1)
 
-	committedTxn := writeTestData(t, s, 1, nil, 2)
-	commitTestTxn(t, s, &committedTxn, 3, nil)
+	committedTxn := writeTestData(t, s, 1, moerr.Ok, 2)
+	commitTestTxn(t, s, &committedTxn, 3, moerr.Ok)
 	checkLog(t, l, 2, committedTxn, 2)
 
-	committedAndPreparedTxn := writeTestData(t, s, 1, nil, 3)
-	prepareTestTxn(t, s, &committedAndPreparedTxn, 2, nil)
+	committedAndPreparedTxn := writeTestData(t, s, 1, moerr.Ok, 3)
+	prepareTestTxn(t, s, &committedAndPreparedTxn, 2, moerr.Ok)
 	checkLog(t, l, 3, committedAndPreparedTxn, 3)
-	commitTestTxn(t, s, &committedAndPreparedTxn, 3, nil)
+	commitTestTxn(t, s, &committedAndPreparedTxn, 3, moerr.Ok)
 	checkLog(t, l, 4, committedAndPreparedTxn)
 
-	committingTxn := writeTestData(t, s, 1, nil, 4)
-	prepareTestTxn(t, s, &committingTxn, 2, nil)
+	committingTxn := writeTestData(t, s, 1, moerr.Ok, 4)
+	prepareTestTxn(t, s, &committingTxn, 2, moerr.Ok)
 	checkLog(t, l, 5, committingTxn, 4)
 	committingTestTxn(t, s, &committingTxn, 3)
 	checkLog(t, l, 6, committingTxn)
@@ -284,8 +284,8 @@ func TestEvent(t *testing.T) {
 	l := NewMemLog()
 	s := NewKVTxnStorage(0, l, newTestClock(1))
 
-	wTxn := writeTestData(t, s, 1, nil, 1)
-	prepareTestTxn(t, s, &wTxn, 2, nil)
+	wTxn := writeTestData(t, s, 1, moerr.Ok, 1)
+	prepareTestTxn(t, s, &wTxn, 2, moerr.Ok)
 	e := <-s.GetEventC()
 	assert.Equal(t, e, Event{Type: PrepareType, Txn: wTxn})
 
@@ -293,21 +293,21 @@ func TestEvent(t *testing.T) {
 	e = <-s.GetEventC()
 	assert.Equal(t, e, Event{Type: CommittingType, Txn: wTxn})
 
-	commitTestTxn(t, s, &wTxn, 3, nil)
+	commitTestTxn(t, s, &wTxn, 3, moerr.Ok)
 	e = <-s.GetEventC()
 	assert.Equal(t, e, Event{Type: CommitType, Txn: wTxn})
 
-	wTxn = writeTestData(t, s, 1, nil, 2)
+	wTxn = writeTestData(t, s, 1, moerr.Ok, 2)
 	assert.NoError(t, s.Rollback(context.TODO(), wTxn))
 	checkRollback(t, s, wTxn, 2)
 	e = <-s.GetEventC()
 	assert.Equal(t, e, Event{Type: RollbackType, Txn: wTxn})
 }
 
-func prepareTestTxn(t *testing.T, s *KVTxnStorage, wTxn *txn.TxnMeta, ts int64, err error) {
+func prepareTestTxn(t *testing.T, s *KVTxnStorage, wTxn *txn.TxnMeta, ts int64, errCode uint16) {
 	wTxn.PreparedTS = newTimestamp(ts)
 	pts, perr := s.Prepare(context.TODO(), *wTxn)
-	assert.Equal(t, err, perr)
+	assert.True(t, moerr.IsMoErrCode(perr, errCode))
 	wTxn.Status = txn.TxnStatus_Prepared
 	wTxn.PreparedTS = pts
 }
@@ -318,9 +318,10 @@ func committingTestTxn(t *testing.T, s *KVTxnStorage, wTxn *txn.TxnMeta, ts int6
 	wTxn.Status = txn.TxnStatus_Committing
 }
 
-func commitTestTxn(t *testing.T, s *KVTxnStorage, wTxn *txn.TxnMeta, ts int64, err error) {
+func commitTestTxn(t *testing.T, s *KVTxnStorage, wTxn *txn.TxnMeta, ts int64, errCode uint16) {
 	wTxn.CommitTS = newTimestamp(ts)
-	assert.Equal(t, err, s.Commit(context.TODO(), *wTxn))
+	e := s.Commit(context.TODO(), *wTxn)
+	assert.True(t, moerr.IsMoErrCode(e, errCode))
 	wTxn.Status = txn.TxnStatus_Committed
 }
 
@@ -406,7 +407,7 @@ func checkRollback(t *testing.T, s *KVTxnStorage, wTxn txn.TxnMeta, keys ...byte
 	assert.Nil(t, uTxn)
 }
 
-func writeTestData(t *testing.T, s *KVTxnStorage, ts int64, expectError error, keys ...byte) txn.TxnMeta {
+func writeTestData(t *testing.T, s *KVTxnStorage, ts int64, expectError uint16, keys ...byte) txn.TxnMeta {
 	req := &message{}
 	for _, v := range keys {
 		req.Keys = append(req.Keys, []byte{v})
@@ -414,7 +415,7 @@ func writeTestData(t *testing.T, s *KVTxnStorage, ts int64, expectError error, k
 	}
 	wTxn := newTxnMeta(ts)
 	_, err := s.Write(context.TODO(), wTxn, setOpCode, req.mustMarshal())
-	assert.Equal(t, expectError, err)
+	assert.True(t, moerr.IsMoErrCode(err, expectError))
 	return wTxn
 }
 

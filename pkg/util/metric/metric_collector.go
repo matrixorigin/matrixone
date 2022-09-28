@@ -346,7 +346,7 @@ func (s *mfsetCSV) GetBatch(buf *bytes.Buffer) *trace.CSVRequest {
 					writeValues(time, sample.GetValue(), lbls...)
 				}
 			default:
-				panic(moerr.NewPanicError(fmt.Sprintf("unsupported metric type %v", mf.GetType())))
+				panic(moerr.NewInternalError("unsupported metric type %v", mf.GetType()))
 			}
 		}
 	}

@@ -16,10 +16,11 @@ package frontend
 
 import (
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"math"
 	"net"
 	"sync"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 
 	"github.com/fagongzi/goetty/v2"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -208,8 +209,15 @@ func (cpi *ProtocolImpl) ConnectionID() uint32 {
 	return cpi.connectionID
 }
 
+// Quit kill tcpConn still connected.
+// before calling NewMysqlClientProtocol, tcpConn.Connected() must be true
+// please check goetty/application.go::doStart() and goetty/application.go::NewIOSession(...) for details
 func (cpi *ProtocolImpl) Quit() {
 	if cpi.tcpConn != nil {
+		if !cpi.tcpConn.Connected() {
+			logutil.Warn("close tcp meet conn not Connected")
+			return
+		}
 		err := cpi.tcpConn.Close()
 		if err != nil {
 			logutil.Errorf("close tcp conn failed. error:%v", err)
@@ -264,7 +272,7 @@ func (mp *MysqlProtocolImpl) SendResponse(resp *Response) error {
 		}
 		switch myerr := err.(type) {
 		case *moerr.Error:
-			return mp.sendErrPacket(myerr.Code, myerr.SqlState, myerr.Error())
+			return mp.sendErrPacket(myerr.ErrorCode(), myerr.SqlState(), myerr.Error())
 		}
 		return mp.sendErrPacket(moerr.ER_UNKNOWN_ERROR, DefaultMySQLState, fmt.Sprintf("%v", err))
 	case ResultResponse:
@@ -277,7 +285,7 @@ func (mp *MysqlProtocolImpl) SendResponse(resp *Response) error {
 		}
 		return mp.sendResultSet(mer.Mrs(), resp.cmd, mer.Warnings(), uint16(resp.status))
 	default:
-		return fmt.Errorf("unsupported response:%d ", resp.category)
+		return moerr.NewInternalError("unsupported response:%d ", resp.category)
 	}
 }
 

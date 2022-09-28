@@ -15,17 +15,15 @@
 package tasks
 
 import (
-	"errors"
-	"fmt"
-
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks/ops/base"
 )
 
 var (
-	ErrBadTaskRequestPara    = errors.New("tae scheduler: bad task request parameters")
-	ErrScheduleScopeConflict = errors.New("tae scheduler: scope conflict")
+	ErrBadTaskRequestPara    = moerr.NewInternalError("tae scheduler: bad task request parameters")
+	ErrScheduleScopeConflict = moerr.NewInternalError("tae scheduler: scope conflict")
 )
 
 type FuncT = func() error
@@ -57,7 +55,7 @@ var taskNames = map[TaskType]string{
 func RegisterType(t TaskType, name string) {
 	_, ok := taskNames[t]
 	if ok {
-		panic(fmt.Errorf("duplicate task type: %d, %s", t, name))
+		panic(moerr.NewInternalError("duplicate task type: %d, %s", t, name))
 	}
 	taskNames[t] = name
 }

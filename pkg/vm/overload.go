@@ -16,6 +16,7 @@ package vm
 
 import (
 	"bytes"
+
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/intersectall"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/anti"

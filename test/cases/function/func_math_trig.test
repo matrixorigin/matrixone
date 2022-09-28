@@ -13,9 +13,7 @@ SELECT ACOS(1.0001);
 SELECT ACOS(0);
 SELECT ATAN(2);
 SELECT ATAN(-2);
--- @bvt:issue#3613
 SELECT ATAN(-2,2);
--- @bvt:issue
 #SELECT ATAN2(PI(),0);
 
 

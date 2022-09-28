@@ -17,13 +17,12 @@ package colexec
 import (
 	"fmt"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/errno"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/errors"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -85,7 +84,7 @@ func EvalExpr(bat *batch.Batch, proc *process.Process, expr *plan.Expr) (*vector
 				sval := t.C.GetSval()
 				vec = vector.NewConstString(constSType, length, sval)
 			default:
-				return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("unimplemented const expression %v", t.C.GetValue()))
+				return nil, moerr.NewNYI(fmt.Sprintf("const expression %v", t.C.GetValue()))
 			}
 		}
 		return vec, nil
@@ -150,7 +149,7 @@ func EvalExpr(bat *batch.Batch, proc *process.Process, expr *plan.Expr) (*vector
 		return vec, nil
 	default:
 		// *plan.Expr_Corr, *plan.Expr_List, *plan.Expr_P, *plan.Expr_V, *plan.Expr_Sub
-		return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("unsupported eval expr '%v'", t))
+		return nil, moerr.NewNYI(fmt.Sprintf("unsupported eval expr '%v'", t))
 	}
 }
 
@@ -177,7 +176,7 @@ func JoinFilterEvalExpr(r, s *batch.Batch, rRow int, proc *process.Process, expr
 				sval := t.C.GetSval()
 				vec = vector.NewConstString(constSType, 1, sval)
 			default:
-				return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("unimplemented const expression %v", t.C.GetValue()))
+				return nil, moerr.NewNYI(fmt.Sprintf("const expression %v", t.C.GetValue()))
 			}
 		}
 		return vec, nil
@@ -237,7 +236,7 @@ func JoinFilterEvalExpr(r, s *batch.Batch, rRow int, proc *process.Process, expr
 		return vec, nil
 	default:
 		// *plan.Expr_Corr, *plan.Expr_List, *plan.Expr_P, *plan.Expr_V, *plan.Expr_Sub
-		return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("unsupported eval expr '%v'", t))
+		return nil, moerr.NewNYI(fmt.Sprintf("eval expr '%v'", t))
 	}
 }
 
@@ -264,7 +263,7 @@ func JoinFilterEvalExprInBucket(r, s *batch.Batch, rRow, sRow int, proc *process
 				sval := t.C.GetSval()
 				vec = vector.NewConstString(constSType, 1, sval)
 			default:
-				return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("unimplemented const expression %v", t.C.GetValue()))
+				return nil, moerr.NewNYI(fmt.Sprintf("const expression %v", t.C.GetValue()))
 			}
 		}
 		return vec, nil
@@ -325,7 +324,7 @@ func JoinFilterEvalExprInBucket(r, s *batch.Batch, rRow, sRow int, proc *process
 		return vec, nil
 	default:
 		// *plan.Expr_Corr, *plan.Expr_List, *plan.Expr_P, *plan.Expr_V, *plan.Expr_Sub
-		return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("unsupported eval expr '%v'", t))
+		return nil, moerr.NewNYI(fmt.Sprintf("eval expr '%v'", t))
 	}
 }
 

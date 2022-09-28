@@ -82,9 +82,9 @@ select STDDEV_POP(l) from t1;
 STDDEV_POP(l)
 1.1076438961767E11
 select STDDEV_POP(m) from t1;
-Aggregate function of 'stddev_pop' do not support implicit conversions for param of [CHAR]
+invalid argument aggregate function stddev_pop, bad value [CHAR]
 select STDDEV_POP(n) from t1;
-Aggregate function of 'stddev_pop' do not support implicit conversions for param of [VARCHAR]
+invalid argument aggregate function stddev_pop, bad value [VARCHAR]
 drop table t1;
 select STDDEV_POP(99999999999999999.99999);
 STDDEV_POP(99999999999999999.99999)
@@ -149,7 +149,7 @@ drop table t1;
 CREATE TABLE t1 (Fld1 int(11) default NULL,Fld2 int(11) default NULL);
 INSERT INTO t1 VALUES (1,10),(1,20),(2,NULL),(2,NULL),(3,50);
 select Fld1, STDDEV_POP(Fld2) as q from t1 group by Fld1 having q is not null;
-column "q" must appear in the GROUP BY clause or be used in an aggregate function
+SQL syntax error: column "q" must appear in the GROUP BY clause or be used in an aggregate function
 select Fld1, STDDEV_POP(Fld2) from t1 group by Fld1 having STDDEV_POP(Fld2) is not null;
 Fld1	STDDEV_POP(Fld2)
 1	5.0

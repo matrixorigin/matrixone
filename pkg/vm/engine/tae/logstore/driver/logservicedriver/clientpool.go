@@ -16,16 +16,16 @@ package logservicedriver
 
 import (
 	"context"
-	"errors"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 )
 
-var ErrNoClientAvailable = errors.New("no client available")
-var ErrClientPoolClosed = errors.New("client pool closed")
+var ErrNoClientAvailable = moerr.NewInternalError("no client available")
+var ErrClientPoolClosed = moerr.NewInternalError("client pool closed")
 
 type clientConfig struct {
 	cancelDuration         time.Duration

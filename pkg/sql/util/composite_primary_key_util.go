@@ -15,13 +15,14 @@
 package util
 
 import (
+	"strconv"
+
 	"github.com/fagongzi/util/format"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/builtin/multi"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"strconv"
 )
 
 var prefixPriColName string = "__mo_cpkey_"
@@ -35,6 +36,13 @@ func ExtractCompositePrimaryKeyColumnFromColDefs(colDefs []*plan.ColDef) ([]*pla
 		}
 	}
 	return colDefs, nil
+}
+
+func JudgeIsCompositePrimaryKeyColumn(s string) bool {
+	if len(s) < len(prefixPriColName) {
+		return false
+	}
+	return s[0:len(prefixPriColName)] == prefixPriColName
 }
 
 func BuildCompositePrimaryKeyColumnName(s []string) string {

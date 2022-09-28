@@ -14,8 +14,10 @@
 
 package uuids
 
-import "github.com/matrixorigin/matrixone/pkg/container/types"
-import "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
+import (
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
+)
 
 func Sort(col containers.Vector, idx []uint32) (ret containers.Vector) {
 	n := len(idx)

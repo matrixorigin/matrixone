@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/fagongzi/goetty/v2"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"go.uber.org/zap"
@@ -360,7 +361,7 @@ func (cs *clientSession) Write(ctx context.Context, message Message) error {
 	defer cs.mu.RUnlock()
 
 	if cs.mu.closed {
-		return errClientClosed
+		return moerr.NewClientClosed()
 	}
 
 	cs.c <- RPCMessage{Ctx: ctx, Message: message}

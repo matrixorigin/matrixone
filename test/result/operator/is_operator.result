@@ -58,7 +58,7 @@ col1
 drop table if exists tbl_datetime;
 drop table if exists tbl_decimal;
 CREATE TABLE tbl_decimal (col1 DECIMAL(65, 30));
-You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. For decimal(M), M must between 0 and 38. at line 1 column 46 near "));";
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. For decimal(M), M must between 0 and 38. at line 1 column 46 near "));";
 drop table if exists tbl_decimal;
 drop table if exists t1;
 create table t1 (id int not null, str char(10));
@@ -245,7 +245,7 @@ drop table if exists t2;
 drop table if exists t3;
 CREATE TABLE t1 (a DATE NOT NULL, b INT);
 INSERT INTO t1 VALUES ('1999-05-100',1), ('1999-05-10',2);
-Incorrect DATE value: '1999-05-100' for column 'a' at row 1
+truncated type DATE value 1999-05-100 for column a, 1
 CREATE TABLE t2 (a DATETIME NOT NULL, b INT);
 INSERT INTO t2 VALUES ('1999-05-10 00:01:01',1), ('1999-05-10 00:00:00',2);
 SELECT * FROM t1 WHERE a IS NULL;
@@ -357,3 +357,54 @@ b	CASE  WHEN b is not NULL then 'found' ELSE 'not found' END
 2016-12-15	found
 null	not found
 null	not found
+select (null) is unknown;
+(null)
+true
+select null is unknown;
+null
+true
+select true is unknown;
+true
+false
+select false is unknown;
+false
+false
+drop table if exists t1;
+CREATE TABLE t1 (a bool);
+insert into t1 values (false), (null), (true), (null);
+select a is unknown from t1 order by a;
+a
+true
+true
+false
+false
+select null is false;
+null
+false
+select null is true;
+null
+false
+select null is not false;
+null
+true
+select null is not true;
+null
+true
+select 1 is true;
+1
+true
+select 1 is false;
+1
+false
+select 1 is not true;
+1
+false
+select 1 is not false;
+1
+true
+select a is true from t1 order by a;
+a
+false
+false
+false
+true

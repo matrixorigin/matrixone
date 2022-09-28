@@ -20,6 +20,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
@@ -56,7 +57,7 @@ func TestCompoundPKSchema(t *testing.T) {
 	err = schema.AppendPKCol("pk0", types.T_int32.ToType(), 0)
 	assert.NoError(t, err)
 	err = schema.Finalize(false)
-	assert.ErrorIs(t, err, ErrSchemaValidation)
+	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrConstraintViolation))
 }
 
 func TestCreateDB1(t *testing.T) {
@@ -85,12 +86,12 @@ func TestCreateDB1(t *testing.T) {
 	assert.Equal(t, 2, cnt)
 
 	_, err = txn1.CreateDatabase(name)
-	assert.Equal(t, ErrDuplicate, err)
+	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrDuplicate))
 
 	txn2, _ := txnMgr.StartTxn(nil)
 
 	_, err = txn2.CreateDatabase(name)
-	assert.Equal(t, txnif.ErrTxnWWConflict, err)
+	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict))
 
 	_, err = txn1.GetDatabase(name)
 	assert.Nil(t, err)
@@ -105,7 +106,7 @@ func TestCreateDB1(t *testing.T) {
 	assert.NotNil(t, err)
 
 	_, err = txn2.DropDatabase(name)
-	assert.Equal(t, ErrNotFound, err)
+	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrNotFound))
 
 	txn3, _ := txnMgr.StartTxn(nil)
 	_, err = txn3.DropDatabase(name)
@@ -172,23 +173,23 @@ func TestTableEntry1(t *testing.T) {
 	assert.Nil(t, err)
 
 	_, err = db1.CreateRelation(schema)
-	assert.Equal(t, ErrDuplicate, err)
+	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrDuplicate))
 
 	txn2, _ := txnMgr.StartTxn(nil)
 	_, err = txn2.GetDatabase(schema.Name)
-	assert.Equal(t, err, ErrNotFound)
+	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrNotFound))
 
 	_, err = txn2.CreateDatabase(name)
-	assert.Equal(t, err, txnif.ErrTxnWWConflict)
+	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict))
 
 	_, err = txn2.DropDatabase(name)
-	assert.Equal(t, err, ErrNotFound)
+	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrNotFound))
 
 	err = txn1.Commit()
 	assert.Nil(t, err)
 
 	_, err = txn2.DropDatabase(name)
-	assert.Equal(t, err, ErrNotFound)
+	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrNotFound))
 
 	txn3, _ := txnMgr.StartTxn(nil)
 	db, err := txn3.GetDatabase(name)
@@ -199,7 +200,7 @@ func TestTableEntry1(t *testing.T) {
 	t.Log(tb1.String())
 
 	_, err = db.GetRelationByName(schema.Name)
-	assert.Equal(t, ErrNotFound, err)
+	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrNotFound))
 
 	txn4, _ := txnMgr.StartTxn(nil)
 	db, err = txn4.GetDatabase(name)
@@ -208,7 +209,7 @@ func TestTableEntry1(t *testing.T) {
 	assert.Nil(t, err)
 
 	_, err = db.DropRelationByName(schema.Name)
-	assert.Equal(t, txnif.ErrTxnWWConflict, err)
+	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict))
 
 	err = txn3.Commit()
 	assert.Nil(t, err)
@@ -219,7 +220,7 @@ func TestTableEntry1(t *testing.T) {
 	db, err = txn5.GetDatabase(name)
 	assert.Nil(t, err)
 	_, err = db.GetRelationByName(schema.Name)
-	assert.Equal(t, ErrNotFound, err)
+	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrNotFound))
 }
 
 func TestTableEntry2(t *testing.T) {
@@ -300,7 +301,7 @@ func TestDB1(t *testing.T) {
 		defer wg.Done()
 		txn, _ := txnMgr.StartTxn(nil)
 		_, err := txn.GetDatabase(name)
-		if err == ErrNotFound {
+		if moerr.IsMoErrCode(err, moerr.ErrNotFound) {
 			_, err = txn.CreateDatabase(name)
 			if err != nil {
 				return
@@ -339,7 +340,7 @@ func TestTable1(t *testing.T) {
 		db, err := txn.GetDatabase(name)
 		assert.Nil(t, err)
 		_, err = db.GetRelationByName(tbName)
-		if err == ErrNotFound {
+		if moerr.IsMoErrCode(err, moerr.ErrNotFound) {
 			schema := MockSchema(1, 0)
 			schema.Name = tbName
 			if _, err = db.CreateRelation(schema); err != nil {

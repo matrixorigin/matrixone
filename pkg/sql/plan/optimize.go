@@ -15,8 +15,8 @@
 package plan
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/errors"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
 )
@@ -48,7 +48,7 @@ func (opt *BaseOptimizer) Optimize(stmt tree.Statement) (*Query, error) {
 	}
 	qry, ok := pn.Plan.(*plan.Plan_Query)
 	if !ok {
-		panic(errors.New("", pn.String()))
+		panic(moerr.NewInternalError(pn.String()))
 	}
 	opt.qry = qry.Query
 	return opt.optimize()

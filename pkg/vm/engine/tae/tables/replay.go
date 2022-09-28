@@ -21,7 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/indexwrapper"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/updates"
 )
 
@@ -31,22 +31,6 @@ func (blk *dataBlock) ReplayDelta() (err error) {
 	}
 	an := updates.NewCommittedAppendNode(blk.ckpTs.Load().(types.TS), 0, blk.node.rows, blk.mvcc)
 	blk.mvcc.OnReplayAppendNode(an)
-	masks, vals := blk.file.LoadUpdates()
-	for colIdx, mask := range masks {
-		logutil.Info("[Start]",
-			common.TimestampField(blk.ckpTs.Load().(types.TS)),
-			common.OperationField("install-update"),
-			common.OperandNameSpace(),
-			common.AnyField("rows", blk.node.rows),
-			common.AnyField("col", colIdx),
-			common.CountField(int(mask.GetCardinality())))
-		un := updates.NewCommittedColumnUpdateNode(blk.ckpTs.Load().(types.TS), blk.ckpTs.Load().(types.TS), blk.meta.AsCommonID(), nil)
-		un.SetMask(mask)
-		un.SetValues(vals[colIdx])
-		if err = blk.OnReplayUpdate(uint16(colIdx), un); err != nil {
-			return
-		}
-	}
 	deletes, err := blk.file.LoadDeletes()
 	if err != nil || deletes == nil {
 		return
@@ -64,47 +48,51 @@ func (blk *dataBlock) ReplayDelta() (err error) {
 
 func (blk *dataBlock) ReplayIndex() (err error) {
 	if blk.meta.IsAppendable() {
-		if !blk.meta.GetSchema().HasPK() {
-			return
+		return blk.replayMutIndex()
+	}
+	return blk.replayImmutIndex()
+}
+
+// replayMutIndex load column data to memory to construct index
+func (blk *dataBlock) replayMutIndex() error {
+	schema := blk.meta.GetSchema()
+	for _, colDef := range schema.ColDefs {
+		if colDef.IsPhyAddr() {
+			continue
 		}
 		keysCtx := new(index.KeysCtx)
-		var vec containers.Vector
-		if blk.meta.GetSchema().IsSinglePK() {
-			// TODO: use mempool
-			vec, err = blk.node.GetColumnDataCopy(blk.node.rows, blk.meta.GetSchema().GetSingleSortKeyIdx(), nil)
-			if err != nil {
-				return
-			}
-			// TODO: apply deletes
-			keysCtx.Keys = vec
-		} else {
-			sortKeys := blk.meta.GetSchema().SortKey
-			vs := make([]containers.Vector, sortKeys.Size())
-			for i := range vs {
-				vec, err = blk.node.GetColumnDataCopy(blk.node.rows, sortKeys.Defs[i].Idx, nil)
-				if err != nil {
-					return
-				}
-				// TODO: apply deletes
-				vs[i] = vec
-				defer vs[i].Close()
-			}
-			keysCtx.Keys = model.EncodeCompoundColumn(vs...)
-		}
+		vec, err := blk.node.GetColumnDataCopy(0, blk.node.rows, colDef.Idx, nil)
 		if err != nil {
-			return
+			return err
 		}
-		keysCtx.Start = 0
-		keysCtx.Count = keysCtx.Keys.Length()
+		// TODO: apply deletes
+		keysCtx.Keys = vec
+		keysCtx.Count = vec.Length()
 		defer keysCtx.Keys.Close()
 		var zeroV types.TS
-		_, err = blk.index.BatchUpsert(keysCtx, 0, zeroV)
-		return
+		blk.indexes[colDef.Idx].BatchUpsert(keysCtx, 0, zeroV)
 	}
-	if blk.meta.GetSchema().HasSortKey() {
-		err = blk.index.ReadFrom(blk)
+	return nil
+}
+
+// replayImmutIndex load index meta to construct managed node
+func (blk *dataBlock) replayImmutIndex() error {
+	schema := blk.meta.GetSchema()
+	pkIdx := -1024
+	if schema.HasPK() {
+		pkIdx = schema.GetSingleSortKeyIdx()
 	}
-	return
+	for i, column := range blk.colObjects {
+		index := indexwrapper.NewImmutableIndex()
+		if err := index.ReadFrom(blk, schema.ColDefs[i], column); err != nil {
+			return err
+		}
+		blk.indexes[i] = index
+		if i == pkIdx {
+			blk.pkIndex = index
+		}
+	}
+	return nil
 }
 
 func (blk *dataBlock) OnReplayDelete(node txnif.DeleteNode) (err error) {

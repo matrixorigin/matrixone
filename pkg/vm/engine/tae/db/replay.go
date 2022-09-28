@@ -17,8 +17,10 @@ package db
 import (
 	"bytes"
 	//"fmt"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"os"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 
 	"path"
 	"sync"
@@ -66,17 +68,17 @@ func (replayer *Replayer) PreReplayWal() {
 	}
 	processor.SegmentFn = func(entry *catalog.SegmentEntry) (err error) {
 		if entry.GetTable().IsVirtual() {
-			return catalog.ErrStopCurrRecur
+			return moerr.GetOkStopCurrRecur()
 		}
 		dropCommit := entry.TreeMaxDropCommitEntry()
 		if dropCommit != nil && dropCommit.GetLogIndex().LSN <= replayer.db.Wal.GetCheckpointed() {
-			return catalog.ErrStopCurrRecur
+			return moerr.GetOkStopCurrRecur()
 		}
 		entry.InitData(replayer.DataFactory)
 		return
 	}
 	if err := replayer.db.Catalog.RecurLoop(processor); err != nil {
-		if err != catalog.ErrStopCurrRecur {
+		if !moerr.IsMoErrCode(err, moerr.OkStopCurrRecur) {
 			panic(err)
 		}
 	}
@@ -125,7 +127,7 @@ func (replayer *Replayer) PostReplayWal() {
 		if err = entry.GetCatalog().RemoveEntry(entry); err != nil {
 			panic(err)
 		}
-		err = catalog.ErrStopCurrRecur
+		err = moerr.GetOkStopCurrRecur()
 		return
 	}
 	processor.TableFn = func(entry *catalog.TableEntry) (err error) {
@@ -138,7 +140,7 @@ func (replayer *Replayer) PostReplayWal() {
 		if err = entry.GetDB().RemoveEntry(entry); err != nil {
 			panic(err)
 		}
-		err = catalog.ErrStopCurrRecur
+		err = moerr.GetOkStopCurrRecur()
 		return
 	}
 	processor.SegmentFn = func(entry *catalog.SegmentEntry) (err error) {
@@ -157,7 +159,7 @@ func (replayer *Replayer) PostReplayWal() {
 		if err = entry.GetTable().RemoveEntry(entry); err != nil {
 			panic(err)
 		}
-		err = catalog.ErrStopCurrRecur
+		err = moerr.GetOkStopCurrRecur()
 		return
 	}
 	processor.BlockFn = func(entry *catalog.BlockEntry) (err error) {
@@ -178,7 +180,7 @@ func (replayer *Replayer) PostReplayWal() {
 	for id := range activeSegs {
 		_, ok := files[id]
 		if !ok {
-			//panic(fmt.Errorf("cannot find segment file for: %d", id))
+			//panic(moerr.NewInternalError("cannot find segment file for: %d", id))
 			continue
 		}
 		delete(files, id)
@@ -186,9 +188,9 @@ func (replayer *Replayer) PostReplayWal() {
 	for _, file := range files {
 		logutil.Info("[Replay]", common.OperationField("clean-segment"),
 			common.OperandField(file))
-		if err := os.Remove(file); err != nil {
+		/*if err := os.Remove(file); err != nil {
 			panic(err)
-		}
+		}*/
 	}
 
 	logutil.Info(replayer.db.Catalog.SimplePPString(common.PPL1))

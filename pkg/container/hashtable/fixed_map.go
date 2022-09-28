@@ -15,7 +15,7 @@
 package hashtable
 
 import (
-	"errors"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
 type FixedMap struct {
@@ -63,7 +63,7 @@ func (it *FixedMapIterator) Next() (key uint32, value uint64, err error) {
 	}
 
 	if it.idx == it.table.cellCnt {
-		err = errors.New("out of range")
+		err = moerr.NewInternalError("out of range")
 		return
 	}
 

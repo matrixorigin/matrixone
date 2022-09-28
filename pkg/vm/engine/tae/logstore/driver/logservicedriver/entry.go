@@ -17,12 +17,12 @@ package logservicedriver
 import (
 	"bytes"
 	"encoding/binary"
-	"fmt"
 	"io"
 	"math"
 	"sync"
 	"sync/atomic"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver"
@@ -201,7 +201,7 @@ func (r *recordEntry) ReadFrom(reader io.Reader) (n int64, err error) {
 		return 0, err
 	}
 	if n2 != int(r.meta.payloadSize) {
-		panic(fmt.Errorf("logic err: err is %v, expect %d, get %d", err, r.meta.payloadSize, n2))
+		panic(moerr.NewInternalError("logic err: err is %v, expect %d, get %d", err, r.meta.payloadSize, n2))
 	}
 	r.payload = payload
 	return

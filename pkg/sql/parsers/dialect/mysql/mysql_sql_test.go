@@ -26,8 +26,7 @@ var (
 		input  string
 		output string
 	}{
-		input:  `grant show databases on account * to r1`,
-		output: "grant show databases on account * to r1",
+		input: "show profiles",
 	}
 )
 
@@ -52,6 +51,37 @@ var (
 		input  string
 		output string
 	}{{
+		input: "select time from t1 as value",
+	}, {
+		input: "show profiles",
+	}, {
+		input: "show privileges",
+	}, {
+		input: "show events from db1",
+	}, {
+		input: "show plugins",
+	}, {
+		input: "show procedure status",
+	}, {
+		input: "show triggers from db1 where 1",
+	}, {
+		input: "show engines",
+	}, {
+		input: "show config",
+	}, {
+		input: "show grants",
+	}, {
+		input:  "show grants for 'test'@'localhost'",
+		output: "show grants for test@localhost",
+	}, {
+		input: "show table status from t1",
+	}, {
+		input: "show table status from t1",
+	}, {
+		input: "grant connect on account * to role_r1",
+	}, {
+		input: "select password from t1",
+	}, {
 		input:  "create table t1 (a datetime on update CURRENT_TIMESTAMP(1))",
 		output: "create table t1 (a datetime(26) on update current_timestamp(1))",
 	}, {
@@ -246,7 +276,25 @@ var (
 		output: "select ltrim(a), rtrim(a), trim(both, , a), trim(both,  , a)",
 	}, {
 		input:  "SELECT (rpad(1.0, 2048,1)) IS NOT FALSE;",
-		output: "select (rpad(1.0, 2048, 1)) != false",
+		output: "select (rpad(1.0, 2048, 1)) is not false",
+	}, {
+		input:  "SELECT 1 is unknown;",
+		output: "select 1 is unknown",
+	}, {
+		input:  "SELECT false is not unknown;",
+		output: "select false is not unknown",
+	}, {
+		input:  "SELECT 1 is true;",
+		output: "select 1 is true",
+	}, {
+		input:  "SELECT false is not true;",
+		output: "select false is not true",
+	}, {
+		input:  "SELECT 1 is false;",
+		output: "select 1 is false",
+	}, {
+		input:  "SELECT false is not false;",
+		output: "select false is not false",
 	}, {
 		input:  "SELECT FROM_UNIXTIME(99999999999999999999999999999999999999999999999999999999999999999);",
 		output: "select from_unixtime(99999999999999999999999999999999999999999999999999999999999999999)",
@@ -264,7 +312,7 @@ var (
 		output: "select 2007-01-01 + interval(a, day) from t1",
 	}, {
 		input:  "SELECT CAST(COALESCE(t0.c0, -1) AS UNSIGNED) IS TRUE FROM t0;",
-		output: "select cast(coalesce(t0.c0, -1) as unsigned) = true from t0",
+		output: "select cast(coalesce(t0.c0, -1) as unsigned) is true from t0",
 	}, {
 		input:  "select Fld1, variance(Fld2) as q from t1 group by Fld1 having q is not null;",
 		output: "select fld1, variance(fld2) as q from t1 group by fld1 having q is not null",
@@ -548,6 +596,9 @@ var (
 	}, {
 		input:  "load data infile {'filepath'='data.txt', 'compression'='LZ4'} into table db.a",
 		output: "load data infile {'filepath':'data.txt', 'compression':'lz4'} into table db.a",
+	}, {
+		input:  "import data infile '/root/lineorder_flat_10.tbl' into table lineorder_flat FIELDS TERMINATED BY '' OPTIONALLY ENCLOSED BY '' LINES TERMINATED BY '';",
+		output: "import data infile /root/lineorder_flat_10.tbl into table lineorder_flat fields terminated by \t optionally enclosed by \u0000 lines",
 	}, {
 		input:  "show tables from test01 where tables_in_test01 like '%t2%'",
 		output: "show tables from test01 where tables_in_test01 like %t2%",
@@ -866,15 +917,15 @@ var (
 			output: "grant super(a, b, c) on procedure db.func to h3",
 		},
 		{
-			input:  "revoke all, all(a, b), create(a, b), select(a, b), super(a, b, c) on table db.A from u1, 'u2'@'h2', ''@'h3'",
-			output: "revoke all, all(a, b), create(a, b), select(a, b), super(a, b, c) on table db.a from u1, u2@h2, @h3",
+			input:  "revoke all, all(a, b), create(a, b), select(a, b), super(a, b, c) on table db.A from u1, u2",
+			output: "revoke all, all(a, b), create(a, b), select(a, b), super(a, b, c) on table db.a from u1, u2",
 		}, {
 			input: "revoke r1, r2, r3 from u1, u2, u3",
 		}, {
 			input: "revoke super(a, b, c) on procedure db.func from h3",
 		}, {
-			input:  "revoke all on table db.A from u1, 'u2'@'h2', ''@'h3'",
-			output: "revoke all on table db.a from u1, u2@h2, @h3",
+			input:  "revoke all on table db.A from u1, u2",
+			output: "revoke all on table db.a from u1, u2",
 		}, {
 			input: "revoke all on table db.a from u1",
 		}, {
@@ -1344,15 +1395,15 @@ var (
 		}, {
 			input: "grant r1, r2 to u1@h1, u2@h2, r3",
 		}, {
-			input:  "revoke if exists all, all(a, b), create(a, b), select(a, b), super(a, b, c) on table db.A from u1, 'u2'@'h2', ''@'h3'",
-			output: "revoke if exists all, all(a, b), create(a, b), select(a, b), super(a, b, c) on table db.a from u1, u2@h2, @h3",
+			input:  "revoke if exists all, all(a, b), create(a, b), select(a, b), super(a, b, c) on table db.A from u1, u2",
+			output: "revoke if exists all, all(a, b), create(a, b), select(a, b), super(a, b, c) on table db.a from u1, u2",
 		}, {
 			input: "revoke if exists r1, r2, r3 from u1, u2, u3",
 		}, {
 			input: "revoke if exists super(a, b, c) on procedure db.func from h3",
 		}, {
-			input:  "revoke if exists all on table db.A from u1, 'u2'@'h2', ''@'h3'",
-			output: "revoke if exists all on table db.a from u1, u2@h2, @h3",
+			input:  "revoke if exists all on table db.A from u1, u2",
+			output: "revoke if exists all on table db.a from u1, u2",
 		}, {
 			input: "revoke if exists all on table db.a from u1",
 		}, {

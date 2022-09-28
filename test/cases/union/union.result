@@ -29,19 +29,19 @@ a
 2
 1
 (select a from t1 order by a) order by a;
-multiple ORDER BY clauses not allowed
+SQL syntax error: multiple ORDER BY clauses not allowed
 (((select a from t1 order by a))) order by a;
-multiple ORDER BY clauses not allowed
+SQL syntax error: multiple ORDER BY clauses not allowed
 (((select a from t1) order by a)) order by a;
-multiple ORDER BY clauses not allowed
+SQL syntax error: multiple ORDER BY clauses not allowed
 (select a from t1 limit 1) limit 1;
-multiple LIMIT clauses not allowed
+SQL syntax error: multiple LIMIT clauses not allowed
 (((select a from t1 limit 1))) limit 1;
-multiple LIMIT clauses not allowed
+SQL syntax error: multiple LIMIT clauses not allowed
 (((select a from t1) limit 1)) limit 1;
-multiple LIMIT clauses not allowed
+SQL syntax error: multiple LIMIT clauses not allowed
 (select a from t1 union select aa from t2) order by aa;
-Column 'aa' does not exist
+invalid input: column aa does not exist
 select a from t1 union select a from t1;
 a
 1

@@ -34,3 +34,17 @@ type Clock interface {
 	// Update updates the clock based on the received timestamp.
 	Update(ts timestamp.Timestamp)
 }
+
+var (
+	defaultClock Clock
+)
+
+// SetupDefaultClock setup global default clock
+func SetupDefaultClock(clock Clock) {
+	defaultClock = clock
+}
+
+// DefaultClock return default clock
+func DefaultClock() Clock {
+	return defaultClock
+}

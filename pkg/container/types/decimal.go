@@ -133,7 +133,7 @@ func Decimal64_FromInt64(i int64, width, scale int32) (Decimal64, error) {
 	var d Decimal64
 	rc := C.Decimal64_FromInt64(dec64PtrToC(&d), C.int64_t(i), C.int32_t(width-scale))
 	if rc != 0 {
-		return d, moerr.NewError(moerr.INVALID_ARGUMENT, "invalid input for decimal64")
+		return d, moerr.NewInvalidArg("decimal64", i)
 	}
 	return d, nil
 }
@@ -144,7 +144,7 @@ func Decimal64_FromUint64(i uint64, width, scale int32) (Decimal64, error) {
 	var d Decimal64
 	rc := C.Decimal64_FromUint64(dec64PtrToC(&d), C.uint64_t(i), C.int32_t(width-scale))
 	if rc != 0 {
-		return d, moerr.NewError(moerr.INVALID_ARGUMENT, "invalid input for decimal64")
+		return d, moerr.NewInvalidArg("decimal64", i)
 	}
 	return d, nil
 }
@@ -153,7 +153,7 @@ func Decimal64_FromFloat64(f float64, width int32, scale int32) (Decimal64, erro
 	var d Decimal64
 	rc := C.Decimal64_FromFloat64(dec64PtrToC(&d), C.double(f), C.int32_t(width), C.int32_t(scale))
 	if rc != 0 {
-		return d, moerr.NewError(moerr.INVALID_ARGUMENT, "invalid input for decimal64")
+		return d, moerr.NewInvalidArg("decimal64", f)
 	}
 	return d, nil
 }
@@ -162,10 +162,10 @@ func Decimal64_FromString(s string) (Decimal64, error) {
 	var d Decimal64
 	buf := zstr(s)
 	rc := uint16(C.Decimal64_FromString(dec64PtrToC(&d), bytesPtrToC(buf)))
-	if rc == moerr.DATA_TRUNCATED {
-		return d, moerr.New(moerr.DATA_TRUNCATED, "decimal64")
+	if rc == moerr.ErrDataTruncated {
+		return d, moerr.NewDataTruncated("DECIMAL64", "%v", s)
 	} else if rc != 0 {
-		return d, moerr.NewError(moerr.INVALID_ARGUMENT, "invalid input for decimal64")
+		return d, moerr.NewInvalidArg("DECIMAL64", s)
 	}
 	return d, nil
 }
@@ -174,7 +174,7 @@ func Decimal64_FromStringWithScale(s string, width, scale int32) (Decimal64, err
 	buf := zstr(s)
 	rc := uint16(C.Decimal64_FromStringWithScale(dec64PtrToC(&d), bytesPtrToC(buf), C.int32_t(width), C.int32_t(scale)))
 	if rc != 0 {
-		return d, moerr.NewError(moerr.INVALID_ARGUMENT, "invalid input for decimal64")
+		return d, moerr.NewInvalidArg("DECIMAL64", s)
 	}
 	return d, nil
 }
@@ -198,7 +198,7 @@ func Decimal128_FromInt64(i int64, width, scale int32) (Decimal128, error) {
 	var d Decimal128
 	rc := C.Decimal128_FromInt64(dec128PtrToC(&d), C.int64_t(i), C.int32_t(width-scale))
 	if rc != 0 {
-		return d, moerr.NewError(moerr.INVALID_ARGUMENT, "invalid input for decimal128")
+		return d, moerr.NewInvalidArg("decimal128", i)
 	}
 	return d, nil
 }
@@ -209,7 +209,7 @@ func Decimal128_FromUint64(i uint64, width, scale int32) (Decimal128, error) {
 	var d Decimal128
 	rc := C.Decimal128_FromUint64(dec128PtrToC(&d), C.uint64_t(i), C.int32_t(width-scale))
 	if rc != 0 {
-		return d, moerr.NewError(moerr.INVALID_ARGUMENT, "invalid input for decimal64")
+		return d, moerr.NewInvalidArg("decimal128", i)
 	}
 	return d, nil
 }
@@ -218,7 +218,7 @@ func Decimal128_FromFloat64(f float64, width, scale int32) (Decimal128, error) {
 	var d Decimal128
 	rc := C.Decimal128_FromFloat64(dec128PtrToC(&d), C.double(f), C.int32_t(width), C.int32_t(scale))
 	if rc != 0 {
-		return d, moerr.NewError(moerr.INVALID_ARGUMENT, "invalid input for decimal128")
+		return d, moerr.NewInvalidArg("decimal128", f)
 	}
 	return d, nil
 }
@@ -226,10 +226,10 @@ func Decimal128_FromString(s string) (Decimal128, error) {
 	var d Decimal128
 	buf := zstr(s)
 	rc := uint16(C.Decimal128_FromString(dec128PtrToC(&d), bytesPtrToC(buf)))
-	if rc == moerr.DATA_TRUNCATED {
-		return d, moerr.NewError(moerr.DATA_TRUNCATED, "decimal128 data truncated")
+	if rc == moerr.ErrDataTruncated {
+		return d, moerr.NewDataTruncated("DECIMAL64", "%v", s)
 	} else if rc != 0 {
-		return d, moerr.NewError(moerr.INVALID_ARGUMENT, "invalid input for decimal128")
+		return d, moerr.NewInvalidArg("decimal128", s)
 	}
 	return d, nil
 }
@@ -238,7 +238,7 @@ func Decimal128_FromStringWithScale(s string, width, scale int32) (Decimal128, e
 	buf := zstr(s)
 	rc := C.Decimal128_FromStringWithScale(dec128PtrToC(&d), bytesPtrToC(buf), C.int32_t(width), C.int32_t(scale))
 	if rc != 0 {
-		return d, moerr.NewError(moerr.INVALID_ARGUMENT, "invalid input for decimal128")
+		return d, moerr.NewInvalidArg("decimal128", s)
 	}
 	return d, nil
 }
@@ -250,7 +250,7 @@ func (d Decimal64) ToFloat64() float64 {
 	if rc == 0 {
 		return float64(ret)
 	}
-	panic(moerr.NewError(uint16(rc), "error when converting decimal128 to float64"))
+	panic(moerr.NewInvalidArg("deciaml64 to float64", d))
 }
 func (d Decimal64) ToInt64() int64 {
 	var ret C.int64_t
@@ -258,7 +258,7 @@ func (d Decimal64) ToInt64() int64 {
 	if rc == 0 {
 		return int64(ret)
 	}
-	panic(moerr.NewError(uint16(rc), "error when converting decimal128 to float64"))
+	panic(moerr.NewInvalidArg("deciaml64 to int64", d))
 }
 
 func (d Decimal64) String() string {
@@ -281,7 +281,7 @@ func (d Decimal128) ToFloat64() float64 {
 	if int32(rc) == 0 {
 		return float64(ret)
 	}
-	panic(moerr.NewError(uint16(rc), "error when converting decimal128 to float64"))
+	panic(moerr.NewInvalidArg("deciaml128 to float64", d))
 }
 func (d Decimal128) ToInt64() int64 {
 	var ret C.int64_t
@@ -289,7 +289,7 @@ func (d Decimal128) ToInt64() int64 {
 	if rc == 0 {
 		return int64(ret)
 	}
-	panic(moerr.NewError(uint16(rc), "error when converting decimal128 to int64"))
+	panic(moerr.NewInvalidArg("deciaml128 to int64", d))
 }
 
 func (d Decimal128) String() string {
@@ -316,7 +316,7 @@ func Decimal128_FromDecimal64WithScale(d64 Decimal64, width, scale int32) (Decim
 	var d Decimal128
 	rc := C.Decimal64_ToDecimal128WithScale(dec128PtrToC(&d), dec64PtrToC(&d64), C.int32_t(width), C.int32_t(scale))
 	if rc != 0 {
-		return d, moerr.NewError(moerr.OUT_OF_RANGE, "converting decimal128 to decimal64 out of range")
+		return d, moerr.NewOutOfRange("decimal128", "%v", d64)
 	}
 	return d, nil
 }
@@ -325,7 +325,7 @@ func (d Decimal128) ToDecimal64(width, scale int32) (Decimal64, error) {
 	var d64 Decimal64
 	rc := C.Decimal128_ToDecimal64WithScale(dec64PtrToC(&d64), dec128PtrToC(&d), C.int32_t(width), C.int32_t(scale))
 	if rc != 0 {
-		return d64, moerr.NewError(moerr.OUT_OF_RANGE, "converting decimal64 to decimal64 out of range")
+		return d64, moerr.NewOutOfRange("decimal64", "%v", d)
 	}
 	return d64, nil
 }
@@ -335,7 +335,7 @@ func CompareDecimal64(a, b Decimal64) int {
 	var rc, ret C.int32_t
 	rc = C.Decimal64_Compare(&ret, dec64PtrToC(&a), dec64PtrToC(&b))
 	if rc != 0 {
-		panic(moerr.NewError(moerr.INVALID_ARGUMENT, "invalid decimal64 argument"))
+		panic(moerr.NewInvalidArg("decimal64 compare", ""))
 	}
 	return int(ret)
 }
@@ -344,7 +344,7 @@ func CompareDecimal128(a, b Decimal128) int {
 	var rc, ret C.int32_t
 	rc = C.Decimal128_Compare(&ret, dec128PtrToC(&a), dec128PtrToC(&b))
 	if rc != 0 {
-		panic(moerr.NewError(moerr.INVALID_ARGUMENT, "invalid decimal128 argument"))
+		panic(moerr.NewInvalidArg("decimal128 compare", ""))
 	}
 	return int(ret)
 }
@@ -398,7 +398,7 @@ func (d Decimal64) Add(x Decimal64) Decimal64 {
 	var ret Decimal64
 	rc := C.Decimal64_Add(dec64PtrToC(&ret), dec64PtrToC(&d), dec64PtrToC(&x))
 	if rc != 0 {
-		panic(moerr.NewError(moerr.OUT_OF_RANGE, "decimal64 addition overflow"))
+		panic(moerr.NewOutOfRange("decimal64", "decimal add overflow"))
 	}
 	return ret
 }
@@ -406,7 +406,7 @@ func (d Decimal128) Add(x Decimal128) Decimal128 {
 	var ret Decimal128
 	rc := C.Decimal128_Add(dec128PtrToC(&ret), dec128PtrToC(&d), dec128PtrToC(&x))
 	if rc != 0 {
-		panic(moerr.NewError(moerr.OUT_OF_RANGE, "decimal128 addition overflow"))
+		panic(moerr.NewOutOfRange("decimal128", "decimal add overflow"))
 	}
 	return ret
 }
@@ -415,7 +415,7 @@ func (d Decimal64) AddInt64(i int64) Decimal64 {
 	var ret Decimal64
 	rc := C.Decimal64_AddInt64(dec64PtrToC(&ret), dec64PtrToC(&d), C.int64_t(i))
 	if rc != 0 {
-		panic(moerr.NewError(moerr.OUT_OF_RANGE, "decimal64 addition overflow"))
+		panic(moerr.NewOutOfRange("decimal64", "decimal add overflow"))
 	}
 	return ret
 }
@@ -423,7 +423,7 @@ func (d Decimal128) AddInt64(i int64) Decimal128 {
 	var ret Decimal128
 	rc := C.Decimal128_AddInt64(dec128PtrToC(&ret), dec128PtrToC(&d), C.int64_t(i))
 	if rc != 0 {
-		panic(moerr.NewError(moerr.OUT_OF_RANGE, "decimal64 addition overflow"))
+		panic(moerr.NewOutOfRange("decimal128", "decimal add overflow"))
 	}
 	return ret
 }
@@ -431,7 +431,7 @@ func (d Decimal128) AddDecimal64(d64 Decimal64) Decimal128 {
 	var ret Decimal128
 	rc := C.Decimal128_AddDecimal64(dec128PtrToC(&ret), dec128PtrToC(&d), dec64PtrToC(&d64))
 	if rc != 0 {
-		panic(moerr.NewError(moerr.OUT_OF_RANGE, "decimal64 addition overflow"))
+		panic(moerr.NewOutOfRange("decimal128", "decimal add overflow"))
 	}
 	return ret
 }
@@ -440,7 +440,7 @@ func (d Decimal64) Sub(x Decimal64) Decimal64 {
 	var ret Decimal64
 	rc := C.Decimal64_Sub(dec64PtrToC(&ret), dec64PtrToC(&d), dec64PtrToC(&x))
 	if rc != 0 {
-		panic(moerr.NewError(moerr.OUT_OF_RANGE, "decimal64 subtraction overflow"))
+		panic(moerr.NewOutOfRange("decimal64", "decimal sub overflow"))
 	}
 	return ret
 }
@@ -448,7 +448,7 @@ func (d Decimal128) Sub(x Decimal128) Decimal128 {
 	var ret Decimal128
 	rc := C.Decimal128_Sub(dec128PtrToC(&ret), dec128PtrToC(&d), dec128PtrToC(&x))
 	if rc != 0 {
-		panic(moerr.NewError(moerr.OUT_OF_RANGE, "decimal128 subtraction overflow"))
+		panic(moerr.NewOutOfRange("decimal128", "decimal sub overflow"))
 	}
 	return ret
 }
@@ -457,7 +457,7 @@ func (d Decimal64) SubInt64(i int64) Decimal64 {
 	var ret Decimal64
 	rc := C.Decimal64_SubInt64(dec64PtrToC(&ret), dec64PtrToC(&d), C.int64_t(i))
 	if rc != 0 {
-		panic(moerr.NewError(moerr.OUT_OF_RANGE, "decimal64 addition overflow"))
+		panic(moerr.NewOutOfRange("decimal64", "decimal sub overflow"))
 	}
 	return ret
 }
@@ -465,7 +465,7 @@ func (d Decimal128) SubInt64(i int64) Decimal128 {
 	var ret Decimal128
 	rc := C.Decimal128_SubInt64(dec128PtrToC(&ret), dec128PtrToC(&d), C.int64_t(i))
 	if rc != 0 {
-		panic(moerr.NewError(moerr.OUT_OF_RANGE, "decimal64 addition overflow"))
+		panic(moerr.NewOutOfRange("decimal128", "decimal sub overflow"))
 	}
 	return ret
 }
@@ -474,7 +474,7 @@ func (d Decimal64) Mul(x Decimal64) Decimal64 {
 	var ret Decimal64
 	rc := C.Decimal64_Mul(dec64PtrToC(&ret), dec64PtrToC(&d), dec64PtrToC(&x))
 	if rc != 0 {
-		panic(moerr.NewError(moerr.OUT_OF_RANGE, "decimal64 multiplication overflow"))
+		panic(moerr.NewOutOfRange("decimal64", "decimal mul overflow"))
 	}
 	return ret
 }
@@ -482,7 +482,7 @@ func (d Decimal64) MulWiden(x Decimal64) Decimal128 {
 	var ret Decimal128
 	rc := C.Decimal64_MulWiden(dec128PtrToC(&ret), dec64PtrToC(&d), dec64PtrToC(&x))
 	if rc != 0 {
-		panic(moerr.NewError(moerr.OUT_OF_RANGE, "decimal64 multiplication overflow"))
+		panic(moerr.NewOutOfRange("decimal64", "decimal mul overflow"))
 	}
 	return ret
 }
@@ -490,7 +490,7 @@ func (d Decimal128) Mul(x Decimal128) Decimal128 {
 	var ret Decimal128
 	rc := C.Decimal128_Mul(dec128PtrToC(&ret), dec128PtrToC(&d), dec128PtrToC(&x))
 	if rc != 0 {
-		panic(moerr.NewError(moerr.OUT_OF_RANGE, "decimal128 multiplication overflow"))
+		panic(moerr.NewOutOfRange("decimal128", "decimal mul overflow"))
 	}
 	return ret
 }
@@ -499,7 +499,7 @@ func (d Decimal64) MulInt64(x int64) Decimal64 {
 	var ret Decimal64
 	rc := C.Decimal64_MulInt64(dec64PtrToC(&ret), dec64PtrToC(&d), C.int64_t(x))
 	if rc != 0 {
-		panic(moerr.NewError(moerr.OUT_OF_RANGE, "decimal64 multiplication overflow"))
+		panic(moerr.NewOutOfRange("decimal64", "decimal mul overflow"))
 	}
 	return ret
 }
@@ -507,7 +507,7 @@ func (d Decimal128) MulInt64(x int64) Decimal128 {
 	var ret Decimal128
 	rc := C.Decimal128_MulInt64(dec128PtrToC(&ret), dec128PtrToC(&d), C.int64_t(x))
 	if rc != 0 {
-		panic(moerr.NewError(moerr.OUT_OF_RANGE, "decimal64 multiplication overflow"))
+		panic(moerr.NewOutOfRange("decimal128", "decimal mul overflow"))
 	}
 	return ret
 }
@@ -516,7 +516,7 @@ func (d Decimal64) Div(x Decimal64) Decimal64 {
 	var ret Decimal64
 	rc := C.Decimal64_Div(dec64PtrToC(&ret), dec64PtrToC(&d), dec64PtrToC(&x))
 	if rc != 0 {
-		panic(moerr.NewError(moerr.OUT_OF_RANGE, "decimal64 division error"))
+		panic(moerr.NewOutOfRange("decimal64", "decimal div overflow"))
 	}
 	return ret
 }
@@ -524,7 +524,7 @@ func (d Decimal64) DivWiden(x Decimal64) Decimal128 {
 	var ret Decimal128
 	rc := C.Decimal64_DivWiden(dec128PtrToC(&ret), dec64PtrToC(&d), dec64PtrToC(&x))
 	if rc != 0 {
-		panic(moerr.NewError(moerr.OUT_OF_RANGE, "decimal64 division error"))
+		panic(moerr.NewOutOfRange("decimal64", "decimal div overflow"))
 	}
 	return ret
 }
@@ -532,7 +532,7 @@ func (d Decimal128) Div(x Decimal128) Decimal128 {
 	var ret Decimal128
 	rc := C.Decimal128_Div(dec128PtrToC(&ret), dec128PtrToC(&d), dec128PtrToC(&x))
 	if rc != 0 {
-		panic(moerr.NewError(moerr.OUT_OF_RANGE, "decimal128 division error"))
+		panic(moerr.NewOutOfRange("decimal128", "decimal div overflow"))
 	}
 	return ret
 }
@@ -541,7 +541,7 @@ func (d Decimal64) DivInt64(x int64) Decimal64 {
 	var ret Decimal64
 	rc := C.Decimal64_DivInt64(dec64PtrToC(&ret), dec64PtrToC(&d), C.int64_t(x))
 	if rc != 0 {
-		panic(moerr.NewError(moerr.OUT_OF_RANGE, "decimal64 division error"))
+		panic(moerr.NewOutOfRange("decimal64", "decimal div overflow"))
 	}
 	return ret
 }
@@ -549,7 +549,7 @@ func (d Decimal128) DivInt64(x int64) Decimal128 {
 	var ret Decimal128
 	rc := C.Decimal128_DivInt64(dec128PtrToC(&ret), dec128PtrToC(&d), C.int64_t(x))
 	if rc != 0 {
-		panic(moerr.NewError(moerr.OUT_OF_RANGE, "decimal128 division error"))
+		panic(moerr.NewOutOfRange("decimal128", "decimal div overflow"))
 	}
 	return ret
 }

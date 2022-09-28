@@ -15,11 +15,9 @@
 package function
 
 import (
-	"fmt"
 	"sync"
 
-	"github.com/matrixorigin/matrixone/pkg/errno"
-	"github.com/matrixorigin/matrixone/pkg/sql/errors"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
 // init function fills the functionRegister with
@@ -52,7 +50,7 @@ func appendFunction(fid int, newFunctions Functions) error {
 	for _, newFunction := range newFunctions.Overloads {
 		requiredIndex := len(functionRegister[fid].Overloads)
 		if int(newFunction.Index) != requiredIndex {
-			return errors.New(errno.InvalidFunctionDefinition, fmt.Sprintf("function (fid = %d, index = %d)'s index should be %d", fid, newFunction.Index, requiredIndex))
+			return moerr.NewInternalError("function (fid = %d, index = %d)'s index should be %d", fid, newFunction.Index, requiredIndex)
 		}
 		functionRegister[fid].Overloads = append(functionRegister[fid].Overloads, newFunction)
 	}

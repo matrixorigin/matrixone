@@ -18,7 +18,6 @@ import (
 	"context"
 	"encoding/csv"
 	"errors"
-	"fmt"
 	"math"
 	"os"
 	"runtime"
@@ -78,7 +77,7 @@ type DebugTime struct {
 
 type SharePart struct {
 	//load reference
-	load *tree.Load
+	load *tree.Import
 	//how to handle errors during converting field
 	ignoreFieldError bool
 
@@ -338,14 +337,14 @@ func initParseLineHandler(requestCtx context.Context, handler *ParseLineHandler)
 			case *tree.UnresolvedName:
 				tid, ok := tableName2ColumnId[realCol.Parts[0]]
 				if !ok {
-					return fmt.Errorf("no such column %s", realCol.Parts[0])
+					return moerr.NewInternalError("no such column %s", realCol.Parts[0])
 				}
 				dataColumnId2TableColumnId[i] = tid
 			case *tree.VarExpr:
 				//NOTE:variable like '@abc' will be passed by.
 				dataColumnId2TableColumnId[i] = -1
 			default:
-				return fmt.Errorf("unsupported column type %v", realCol)
+				return moerr.NewInternalError("unsupported column type %v", realCol)
 			}
 		}
 	}
@@ -456,11 +455,7 @@ func collectWriteBatchResult(handler *ParseLineHandler, wh *WriteBatchHandler, e
 }
 
 func makeParsedFailedError(tp, field, column string, line uint64, offset int) *moerr.Error {
-	return moerr.New(moerr.ER_TRUNCATED_WRONG_VALUE_FOR_FIELD,
-		tp,
-		field,
-		column,
-		line+uint64(offset))
+	return moerr.NewDataTruncated(tp, "value '%s' for column '%s' at row '%d'", field, column, line+uint64(offset))
 }
 
 func errorCanBeIgnored(err error) bool {
@@ -568,13 +563,19 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool, 
 					continue
 				}
 
-				field := strings.TrimSpace(lineStr)
-
-				isNullOrEmpty := len(field) == 0 || field == NULL_FLAG
-
 				//put it into batch
 				vec := batchData.Vecs[colIdx]
 				vecAttr := batchData.Attrs[colIdx]
+				field := strings.TrimSpace(lineStr)
+
+				id := types.T(vec.Typ.Oid)
+				if id != types.T_char && id != types.T_varchar {
+					field = strings.TrimSpace(field)
+				}
+				isNullOrEmpty := field == NULL_FLAG
+				if id != types.T_char && id != types.T_varchar && id != types.T_json && id != types.T_blob {
+					isNullOrEmpty = isNullOrEmpty || len(field) == 0
+				}
 
 				//record colIdx
 				columnFLags[colIdx] = 1
@@ -592,7 +593,7 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool, 
 						} else if field == "false" || field == "0" {
 							cols[rowIdx] = false
 						} else {
-							return fmt.Errorf("the input value '%s' is not bool type", field)
+							return moerr.NewInternalError("the input value '%s' is not bool type", field)
 						}
 					}
 				case types.T_int8:
@@ -864,7 +865,7 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool, 
 						}
 						cols[rowIdx] = d
 					}
-				case types.T_char, types.T_varchar:
+				case types.T_char, types.T_varchar, types.T_blob:
 					if isNullOrEmpty {
 						nulls.Add(vec.Nsp, uint64(rowIdx))
 					} else {
@@ -930,7 +931,7 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool, 
 						d, err := types.Decimal64_FromString(field)
 						if err != nil {
 							// we tolerate loss of digits.
-							if !moerr.IsMoErrCode(err, moerr.DATA_TRUNCATED) {
+							if !moerr.IsMoErrCode(err, moerr.ErrDataTruncated) {
 								logutil.Errorf("parse field[%v] err:%v", field, err)
 								if !ignoreFieldError {
 									return makeParsedFailedError(vec.Typ.String(), field, vecAttr, base, offset)
@@ -949,9 +950,11 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool, 
 						d, err := types.Decimal128_FromString(field)
 						if err != nil {
 							// we tolerate loss of digits.
-							if !moerr.IsMoErrCode(err, moerr.DATA_TRUNCATED) {
+							if !moerr.IsMoErrCode(err, moerr.ErrDataTruncated) {
 								logutil.Errorf("parse field[%v] err:%v", field, err)
 								if !ignoreFieldError {
+									// XXX recreate another moerr, this may have side effect of
+									// another error log.
 									return makeParsedFailedError(vec.Typ.String(), field, vecAttr, base, offset)
 								}
 								result.Warnings++
@@ -1052,7 +1055,7 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool, 
 						} else if field == "false" || field == "0" {
 							cols[i] = false
 						} else {
-							return fmt.Errorf("the input value '%s' is not bool type", field)
+							return moerr.NewInternalError("the input value '%s' is not bool type", field)
 						}
 					}
 				}
@@ -1588,7 +1591,7 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool, 
 	//
 	//	if minLen != maxLen{
 	//		logutil.Errorf("vector length mis equal %d %d",minLen,maxLen)
-	//		return fmt.Errorf("vector length mis equal %d %d",minLen,maxLen)
+	//		return moerr.NewInternalError("vector length mis equal %d %d",minLen,maxLen)
 	//	}
 	//}
 
@@ -1617,7 +1620,7 @@ func rowToColumnAndSaveToStorage(handler *WriteBatchHandler, forceConvert bool, 
 	}
 
 	if allFetchCnt != countOfLineArray {
-		return fmt.Errorf("allFetchCnt %d != countOfLineArray %d ", allFetchCnt, countOfLineArray)
+		return moerr.NewInternalError("allFetchCnt %d != countOfLineArray %d ", allFetchCnt, countOfLineArray)
 	}
 	return nil
 }
@@ -1758,7 +1761,7 @@ func writeBatchToStorage(handler *WriteBatchHandler, force bool) error {
 					case types.T_float64:
 						cols := vector.MustTCols[float64](vec)
 						vec.Col = cols[:needLen]
-					case types.T_char, types.T_varchar, types.T_json: //bytes is different
+					case types.T_char, types.T_varchar, types.T_json, types.T_blob: //bytes is different
 						cols := vector.MustTCols[types.Varlena](vec)
 						vec.Col = cols[:needLen]
 					case types.T_date:
@@ -1912,7 +1915,7 @@ func PrintThreadInfo(handler *ParseLineHandler, close *CloseFlag, a time.Duratio
 /*
 LoadLoop reads data from stream, extracts the fields, and saves into the table
 */
-func (mce *MysqlCmdExecutor) LoadLoop(requestCtx context.Context, load *tree.Load, dbHandler engine.Database, tableHandler engine.Relation, dbName string) (*LoadResult, error) {
+func (mce *MysqlCmdExecutor) LoadLoop(requestCtx context.Context, load *tree.Import, dbHandler engine.Database, tableHandler engine.Relation, dbName string) (*LoadResult, error) {
 	ses := mce.GetSession()
 
 	//begin:=  time.Now()
@@ -1992,7 +1995,7 @@ func (mce *MysqlCmdExecutor) LoadLoop(requestCtx context.Context, load *tree.Loa
 		rune(load.Param.Tail.Fields.Terminated[0]),
 		'#',
 		true,
-		false)
+		true)
 
 	/*
 		error channel
@@ -2053,7 +2056,7 @@ func (mce *MysqlCmdExecutor) LoadLoop(requestCtx context.Context, load *tree.Loa
 			select {
 			case <-requestCtx.Done():
 				logutil.Info("cancel the load")
-				retErr = moerr.New(moerr.ER_QUERY_INTERRUPTED)
+				retErr = moerr.NewQueryInterrupted()
 				quit = true
 			case ne = <-handler.simdCsvNotiyEventChan:
 				switch ne.neType {

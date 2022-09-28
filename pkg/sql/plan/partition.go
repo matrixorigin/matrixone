@@ -15,15 +15,15 @@
 package plan
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/errno"
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/errors"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"strconv"
 	"strings"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
 const (
@@ -34,7 +34,7 @@ const (
 // buildHashPartition handle Hash Partitioning
 func buildHashPartition(partitionBinder *PartitionBinder, partitionOp *tree.PartitionOption, tableDef *TableDef) error {
 	if partitionOp.SubPartBy != nil {
-		return moerr.New(moerr.OBSOLETE_ER_PARTITION_SUBPARTITION_ERROR)
+		return moerr.NewInvalidInput("no subpartition")
 	}
 	partitionsNum := partitionOp.PartBy.Num
 	// If you do not include a PARTITIONS clause, the number of partitions defaults to 1.
@@ -85,7 +85,7 @@ func buildHashPartition(partitionBinder *PartitionBinder, partitionOp *tree.Part
 // buildKeyPartition handle KEY Partitioning
 func buildKeyPartition(partitionBinder *PartitionBinder, partitionOp *tree.PartitionOption, tableDef *TableDef) error {
 	if partitionOp.SubPartBy != nil {
-		return moerr.New(moerr.OBSOLETE_ER_PARTITION_SUBPARTITION_ERROR)
+		return moerr.NewInvalidInput("no subpartition")
 	}
 
 	// if you do not include a PARTITIONS clause, the number of partitions defaults to 1.
@@ -101,7 +101,7 @@ func buildKeyPartition(partitionBinder *PartitionBinder, partitionOp *tree.Parti
 	partitionType := partitionOp.PartBy.PType.(*tree.KeyType)
 	// check the algorithm option
 	if partitionType.Algorithm != 1 && partitionType.Algorithm != 2 {
-		return errors.New(errno.InvalidOptionValue, "the 'ALGORITHM' option only supports 1 or 2 values")
+		return moerr.NewInvalidInput("the 'ALGORITHM' option has too many values")
 	}
 
 	partitionInfo := &plan.PartitionInfo{
@@ -145,7 +145,7 @@ func buildRangePartition(partitionBinder *PartitionBinder, partitionOp *tree.Par
 
 	partitionNum := len(partitionOp.Partitions)
 	if partitionOp.PartBy.Num != 0 && uint64(partitionNum) != partitionOp.PartBy.Num {
-		return moerr.New(moerr.ER_PARSE_ERROR)
+		return moerr.NewParseError("build range partition")
 	}
 
 	partitionInfo := &plan.PartitionInfo{
@@ -195,7 +195,7 @@ func buildListPartitiion(partitionBinder *PartitionBinder, partitionOp *tree.Par
 
 	partitionNum := len(partitionOp.Partitions)
 	if partitionOp.PartBy.Num != 0 && uint64(partitionNum) != partitionOp.PartBy.Num {
-		return moerr.New(moerr.ER_PARSE_ERROR)
+		return moerr.NewParseError("build list partition")
 	}
 
 	partitionInfo := &plan.PartitionInfo{
@@ -246,7 +246,7 @@ func buildPartitionColumns(partitionBinder *PartitionBinder, partitionInfo *plan
 	for i, column := range columnList {
 		colExpr, err := partitionBinder.BindColRef(column, 0, true)
 		if err != nil {
-			return moerr.New(moerr.ER_SUBPARTITION_ERROR)
+			return moerr.NewParseError("build partition columns")
 		}
 		columnsExpr[i] = colExpr
 		partitionColumns[i] = tree.String(column, dialect.MYSQL)
@@ -398,7 +398,7 @@ func checkColumnsPartitionType(partitionBinder *PartitionBinder, partitionInfo *
 	for i, planexpr := range columnPlanExprs {
 		t := types.T(planexpr.Typ.Id)
 		if !types.IsInteger(t) && !types.IsString(t) && !types.IsDateRelate(t) {
-			return moerr.New(moerr.ER_FIELD_TYPE_NOT_ALLOWED_AS_PARTITION_FIELD, columnNames[i])
+			return moerr.NewSyntaxError("type %s of column %s not allowd in partition clause", t.String(), columnNames[i])
 		}
 	}
 	return nil
@@ -425,12 +425,14 @@ func checkPartitionFuncType(partitionBinder *PartitionBinder, tableDef *TableDef
 	} else {
 		expr := partitionInfo.Expr
 		// expr must return a nonconstant, nonrandom integer value (in other words, it should be varying but deterministic)
+		// XXX Why?   I may want to use a const to force partition into one dn.
 		if isConstant(expr) {
-			return moerr.New(moerr.ER_WRONG_EXPR_IN_PARTITION_FUNC_ERROR)
+			return moerr.NewInvalidInput("partition functin is not const")
 		}
 
-		if !types.IsInteger(types.T(expr.Typ.Id)) {
-			return moerr.New(moerr.ER_FIELD_TYPE_NOT_ALLOWED_AS_PARTITION_FIELD, partitionInfo.PartitionExpression)
+		t := types.T(expr.Typ.Id)
+		if !types.IsInteger(t) {
+			return moerr.NewSyntaxError("type %s not allowed in partition clause", t.String())
 		}
 	}
 	return nil
@@ -451,12 +453,12 @@ func checkPartitionKeysConstraints(partitionBinder *PartitionBinder, tableDef *T
 	if hasPrimaryKey {
 		if partitionInfo.PartitionColumns != nil {
 			if !checkUniqueKeyIncludePartKey(partitionInfo.PartitionColumns, pkNames) {
-				return moerr.New(moerr.ER_UNIQUE_KEY_NEED_ALL_FIELDS_IN_PF, "PRIMARY KEY")
+				return moerr.NewInvalidInput("partition key is not part of primary key")
 			}
 		} else {
 			extractCols := extractColFromExpr(partitionBinder, partitionInfo.Expr)
 			if !checkUniqueKeyIncludePartKey(extractCols, pkNames) {
-				return moerr.New(moerr.ER_UNIQUE_KEY_NEED_ALL_FIELDS_IN_PF, "PRIMARY KEY")
+				return moerr.NewInvalidInput("partition key is not part of primary key")
 			}
 		}
 	}
@@ -465,6 +467,9 @@ func checkPartitionKeysConstraints(partitionBinder *PartitionBinder, tableDef *T
 
 // checkUniqueKeyIncludePartKey checks the partitioning key is included in the constraint.
 func checkUniqueKeyIncludePartKey(partCols []string, pkcols []string) bool {
+	if len(pkcols) > 0 && util.JudgeIsCompositePrimaryKeyColumn(pkcols[0]) {
+		pkcols = util.SplitCompositePrimaryKeyColumnName(pkcols[0])
+	}
 	for i := 0; i < len(partCols); i++ {
 		partCol := partCols[i]
 		if !findColumnInIndexCols(partCol, pkcols) {
@@ -498,9 +503,9 @@ func checkPartitionDefinitionConstraints(partitionBinder *PartitionBinder, parti
 
 	if len(partitionInfo.Partitions) == 0 {
 		if partitionInfo.Type == plan.PartitionType_RANGE || partitionInfo.Type == plan.PartitionType_RANGE_COLUMNS {
-			return moerr.New(moerr.ER_PARTITIONS_MUST_BE_DEFINED_ERROR, "RANGE")
+			return moerr.NewInvalidInput("range partition cannot be empty")
 		} else if partitionInfo.Type == plan.PartitionType_LIST || partitionInfo.Type == plan.PartitionType_LIST_COLUMNS {
-			return moerr.New(moerr.ER_PARTITIONS_MUST_BE_DEFINED_ERROR, "LIST")
+			return moerr.NewInvalidInput("list partition cannot be empty")
 		}
 	}
 	return err
@@ -514,7 +519,7 @@ func checkPartitionColumnsUnique(partitionInfo *plan.PartitionInfo) error {
 	var columnsMap = make(map[string]byte)
 	for _, column := range partitionInfo.PartitionColumns {
 		if _, ok := columnsMap[column]; ok {
-			return moerr.New(moerr.ER_SAME_NAME_PARTITION_FIELD, column)
+			return moerr.NewSyntaxError("duplicate partition column %s", column)
 		}
 		columnsMap[column] = 1
 	}
@@ -524,7 +529,7 @@ func checkPartitionColumnsUnique(partitionInfo *plan.PartitionInfo) error {
 // checkPartitionsNumber: check whether check partition number exceeds the limit
 func checkPartitionsNumber(partNum uint64) error {
 	if partNum > uint64(PartitionNumberLimit) {
-		return moerr.New(moerr.ER_TOO_MANY_PARTITIONS_ERROR)
+		return moerr.NewInvalidInput("too many (%d) partitions", partNum)
 	}
 	return nil
 }
@@ -536,7 +541,7 @@ func checkPartitionNameUnique(pd *plan.PartitionInfo) error {
 	partNames := make(map[string]byte, len(partitions))
 	for _, par := range partitions {
 		if _, ok := partNames[par.PartitionName]; ok {
-			return moerr.New(moerr.ER_SAME_NAME_PARTITION, par.PartitionName)
+			return moerr.NewSyntaxError("duplicate partition name %s", par.PartitionName)
 		}
 		partNames[par.PartitionName] = 1
 	}

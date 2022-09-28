@@ -15,9 +15,9 @@
 package bootstrap
 
 import (
-	"errors"
 	"sort"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper/checkers/util"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
@@ -75,14 +75,14 @@ func (bm *Manager) bootstrapLogService(alloc util.IDAllocator,
 		}
 
 		if shardRecord.NumberOfReplicas > uint64(len(logStores)) {
-			return nil, errors.New("not enough log stores")
+			return nil, moerr.NewInternalError("not enough log stores")
 		}
 
 		initialMembers := make(map[uint64]string)
 		for i := uint64(0); i < shardRecord.NumberOfReplicas; i++ {
 			replicaID, ok := alloc.Next()
 			if !ok {
-				return nil, errors.New("id allocator error")
+				return nil, moerr.NewInternalError("id allocator error")
 			}
 
 			initialMembers[replicaID] = logStores[i]

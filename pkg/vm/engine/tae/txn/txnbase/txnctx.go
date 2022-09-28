@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"sync"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
@@ -148,7 +149,7 @@ func (ctx *TxnCtx) ToPreparingLocked(ts types.TS) error {
 		panic(fmt.Sprintf("start ts %d should be less than commit ts %d", ctx.StartTS, ts))
 	}
 	if !ctx.CommitTS.Equal(txnif.UncommitTS) {
-		return ErrTxnNotActive
+		return moerr.NewTxnNotActive("")
 	}
 	ctx.PrepareTS = ts
 	ctx.CommitTS = ts
@@ -164,7 +165,7 @@ func (ctx *TxnCtx) ToPrepared() (err error) {
 
 func (ctx *TxnCtx) ToPreparedLocked() (err error) {
 	if ctx.State != txnif.TxnStatePreparing {
-		err = ErrTxnNotPreparing
+		err = moerr.NewTAEPrepare("ToPreparedLocked: state is not preparing")
 		return
 	}
 	ctx.State = txnif.TxnStatePrepared
@@ -179,7 +180,7 @@ func (ctx *TxnCtx) ToCommittingFinished() (err error) {
 
 func (ctx *TxnCtx) ToCommittingFinishedLocked() (err error) {
 	if ctx.State != txnif.TxnStatePrepared {
-		err = ErrTxnStateNotPrepared
+		err = moerr.NewTAECommit("ToCommittingFinishedLocked: state is not prepared")
 		return
 	}
 	ctx.State = txnif.TxnStateCommittingFinished
@@ -188,7 +189,7 @@ func (ctx *TxnCtx) ToCommittingFinishedLocked() (err error) {
 
 func (ctx *TxnCtx) ToCommittedLocked() error {
 	if ctx.State != txnif.TxnStatePreparing {
-		return ErrTxnNotPreparing
+		return moerr.NewTAECommit("ToCommittedLocked: state is not preparing")
 	}
 	ctx.State = txnif.TxnStateCommitted
 	return nil
@@ -205,7 +206,7 @@ func (ctx *TxnCtx) ToRollbackingLocked(ts types.TS) error {
 		panic(fmt.Sprintf("commit ts %d should not be less than start ts %d", ts, ctx.StartTS))
 	}
 	if (ctx.State != txnif.TxnStateActive) && (ctx.State != txnif.TxnStatePreparing) {
-		return ErrTxnCannotRollback
+		return moerr.NewTAERollback("ToRollbackingLocked: state is not active or preparing")
 	}
 	ctx.CommitTS = ts
 	ctx.PrepareTS = ts
@@ -215,7 +216,7 @@ func (ctx *TxnCtx) ToRollbackingLocked(ts types.TS) error {
 
 func (ctx *TxnCtx) ToRollbackedLocked() error {
 	if ctx.State != txnif.TxnStateRollbacking {
-		return ErrTxnNotRollbacking
+		return moerr.NewTAERollback("state %s", txnif.TxnStrState(ctx.State))
 	}
 	ctx.State = txnif.TxnStateRollbacked
 	return nil

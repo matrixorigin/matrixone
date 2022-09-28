@@ -15,7 +15,6 @@
 package binary
 
 import (
-	"fmt"
 	"math"
 	"strconv"
 	"strings"
@@ -172,7 +171,7 @@ var (
 )
 
 func NumericToNumeric[T1, T2 constraints.Integer | constraints.Float](xs []T1, rs []T2) ([]T2, error) {
-	if err := NumericToNumericOverflow[T1, T2](xs, rs); err != nil {
+	if err := NumericToNumericOverflow(xs, rs); err != nil {
 		return nil, err
 	}
 	for i, x := range xs {
@@ -192,7 +191,7 @@ func NumericToNumericOverflow[T1, T2 constraints.Integer | constraints.Float](xs
 		case *uint8, *uint16, *uint32, *uint64:
 			for _, x := range xs {
 				if x < 0 {
-					return moerr.NewError(moerr.OUT_OF_RANGE, "")
+					return moerr.NewOutOfRange("uint", "value '%v'", x)
 				}
 			}
 		}
@@ -201,19 +200,19 @@ func NumericToNumericOverflow[T1, T2 constraints.Integer | constraints.Float](xs
 		case *int8:
 			for _, x := range xs {
 				if int16(x) < math.MinInt8 || x > math.MaxInt8 {
-					return moerr.NewError(moerr.OUT_OF_RANGE, "")
+					return moerr.NewOutOfRange("int8", "value '%v'", x)
 				}
 			}
 		case *uint8:
 			for _, x := range xs {
 				if x < 0 || int64(x) > math.MaxUint8 {
-					return moerr.NewError(moerr.OUT_OF_RANGE, "")
+					return moerr.NewOutOfRange("uint8", "value '%v'", x)
 				}
 			}
 		case *uint16, *uint32, *uint64:
 			for _, x := range xs {
 				if x < 0 {
-					return moerr.NewError(moerr.OUT_OF_RANGE, "")
+					return moerr.NewOutOfRange("uint", "value '%v'", x)
 				}
 			}
 		}
@@ -222,31 +221,31 @@ func NumericToNumericOverflow[T1, T2 constraints.Integer | constraints.Float](xs
 		case *int8:
 			for _, x := range xs {
 				if int32(x) < math.MinInt8 || x > math.MaxInt8 {
-					return moerr.NewError(moerr.OUT_OF_RANGE, "")
+					return moerr.NewOutOfRange("int8", "value '%v'", x)
 				}
 			}
 		case *int16:
 			for _, x := range xs {
 				if int32(x) < math.MinInt16 || int32(x) > math.MaxInt16 {
-					return moerr.NewError(moerr.OUT_OF_RANGE, "")
+					return moerr.NewOutOfRange("int16", "value '%v'", x)
 				}
 			}
 		case *uint8:
 			for _, x := range xs {
 				if x < 0 || int64(x) > math.MaxUint8 {
-					return moerr.NewError(moerr.OUT_OF_RANGE, "")
+					return moerr.NewOutOfRange("uint8", "value '%v'", x)
 				}
 			}
 		case *uint16:
 			for _, x := range xs {
 				if x < 0 || int64(x) > math.MaxUint16 {
-					return moerr.NewError(moerr.OUT_OF_RANGE, "")
+					return moerr.NewOutOfRange("uint16", "value '%v'", x)
 				}
 			}
 		case *uint32, *uint64:
 			for _, x := range xs {
 				if x < 0 {
-					return moerr.NewError(moerr.OUT_OF_RANGE, "")
+					return moerr.NewOutOfRange("uint", "value '%v'", x)
 				}
 			}
 		}
@@ -255,43 +254,43 @@ func NumericToNumericOverflow[T1, T2 constraints.Integer | constraints.Float](xs
 		case *int8:
 			for _, x := range xs {
 				if int64(x) < math.MinInt8 || x > math.MaxInt8 {
-					return moerr.NewError(moerr.OUT_OF_RANGE, "")
+					return moerr.NewOutOfRange("int8", "value '%v'", x)
 				}
 			}
 		case *int16:
 			for _, x := range xs {
 				if int64(x) < math.MinInt16 || int64(x) > math.MaxInt16 {
-					return moerr.NewError(moerr.OUT_OF_RANGE, "")
+					return moerr.NewOutOfRange("int16", "value '%v'", x)
 				}
 			}
 		case *int32:
 			for _, x := range xs {
 				if int64(x) < math.MinInt32 || int64(x) > math.MaxInt32 {
-					return moerr.NewError(moerr.OUT_OF_RANGE, "")
+					return moerr.NewOutOfRange("int32", "value '%v'", x)
 				}
 			}
 		case *uint8:
 			for _, x := range xs {
 				if x < 0 || int64(x) > math.MaxUint8 {
-					return moerr.NewError(moerr.OUT_OF_RANGE, "")
+					return moerr.NewOutOfRange("uint8", "value '%v'", x)
 				}
 			}
 		case *uint16:
 			for _, x := range xs {
 				if x < 0 || int64(x) > math.MaxUint16 {
-					return moerr.NewError(moerr.OUT_OF_RANGE, "")
+					return moerr.NewOutOfRange("uint16", "value '%v'", x)
 				}
 			}
 		case *uint32:
 			for _, x := range xs {
 				if x < 0 || int64(x) > math.MaxUint32 {
-					return moerr.NewError(moerr.OUT_OF_RANGE, "")
+					return moerr.NewOutOfRange("uint32", "value '%v'", x)
 				}
 			}
 		case *uint64:
 			for _, x := range xs {
 				if x < 0 {
-					return moerr.NewError(moerr.OUT_OF_RANGE, "")
+					return moerr.NewOutOfRange("uint64", "value '%v'", x)
 				}
 			}
 		}
@@ -300,7 +299,7 @@ func NumericToNumericOverflow[T1, T2 constraints.Integer | constraints.Float](xs
 		case *int8:
 			for _, x := range xs {
 				if x > math.MaxInt8 {
-					return moerr.NewError(moerr.OUT_OF_RANGE, "")
+					return moerr.NewOutOfRange("int8", "value '%v'", x)
 				}
 			}
 		}
@@ -309,19 +308,19 @@ func NumericToNumericOverflow[T1, T2 constraints.Integer | constraints.Float](xs
 		case *int8:
 			for _, x := range xs {
 				if x > math.MaxInt8 {
-					return moerr.NewError(moerr.OUT_OF_RANGE, "")
+					return moerr.NewOutOfRange("int8", "value '%v'", x)
 				}
 			}
 		case *int16:
 			for _, x := range xs {
 				if uint16(x) > math.MaxInt16 {
-					return moerr.NewError(moerr.OUT_OF_RANGE, "")
+					return moerr.NewOutOfRange("int16", "value '%v'", x)
 				}
 			}
 		case *uint8:
 			for _, x := range xs {
 				if uint16(x) > math.MaxUint8 {
-					return moerr.NewError(moerr.OUT_OF_RANGE, "")
+					return moerr.NewOutOfRange("uint8", "value '%v'", x)
 				}
 			}
 		}
@@ -330,31 +329,31 @@ func NumericToNumericOverflow[T1, T2 constraints.Integer | constraints.Float](xs
 		case *int8:
 			for _, x := range xs {
 				if x > math.MaxInt8 {
-					return moerr.NewError(moerr.OUT_OF_RANGE, "")
+					return moerr.NewOutOfRange("int8", "value '%v'", x)
 				}
 			}
 		case *int16:
 			for _, x := range xs {
 				if uint32(x) > math.MaxInt16 {
-					return moerr.NewError(moerr.OUT_OF_RANGE, "")
+					return moerr.NewOutOfRange("int16", "value '%v'", x)
 				}
 			}
 		case *int32:
 			for _, x := range xs {
 				if uint32(x) > math.MaxInt32 {
-					return moerr.NewError(moerr.OUT_OF_RANGE, "")
+					return moerr.NewOutOfRange("int32", "value '%v'", x)
 				}
 			}
 		case *uint8:
 			for _, x := range xs {
 				if uint32(x) > math.MaxUint8 {
-					return moerr.NewError(moerr.OUT_OF_RANGE, "")
+					return moerr.NewOutOfRange("uint8", "value '%v'", x)
 				}
 			}
 		case *uint16:
 			for _, x := range xs {
 				if uint32(x) > math.MaxUint16 {
-					return moerr.NewError(moerr.OUT_OF_RANGE, "")
+					return moerr.NewOutOfRange("uint16", "value '%v'", x)
 				}
 			}
 		}
@@ -363,43 +362,43 @@ func NumericToNumericOverflow[T1, T2 constraints.Integer | constraints.Float](xs
 		case *int8:
 			for _, x := range xs {
 				if x > math.MaxInt8 {
-					return moerr.NewError(moerr.OUT_OF_RANGE, "")
+					return moerr.NewOutOfRange("int8", "value '%v'", x)
 				}
 			}
 		case *int16:
 			for _, x := range xs {
 				if uint64(x) > math.MaxInt16 {
-					return moerr.NewError(moerr.OUT_OF_RANGE, "")
+					return moerr.NewOutOfRange("int16", "value '%v'", x)
 				}
 			}
 		case *int32:
 			for _, x := range xs {
 				if uint64(x) > math.MaxInt32 {
-					return moerr.NewError(moerr.OUT_OF_RANGE, "")
+					return moerr.NewOutOfRange("int32", "value '%v'", x)
 				}
 			}
 		case *int64:
 			for _, x := range xs {
 				if uint64(x) > math.MaxInt64 {
-					return moerr.NewError(moerr.OUT_OF_RANGE, "")
+					return moerr.NewOutOfRange("int64", "value '%v'", x)
 				}
 			}
 		case *uint8:
 			for _, x := range xs {
 				if uint64(x) > math.MaxUint8 {
-					return moerr.NewError(moerr.OUT_OF_RANGE, "")
+					return moerr.NewOutOfRange("uint8", "value '%v'", x)
 				}
 			}
 		case *uint16:
 			for _, x := range xs {
 				if uint64(x) > math.MaxUint16 {
-					return moerr.NewError(moerr.OUT_OF_RANGE, "")
+					return moerr.NewOutOfRange("uint16", "value '%v'", x)
 				}
 			}
 		case *uint32:
 			for _, x := range xs {
 				if uint64(x) > math.MaxUint32 {
-					return moerr.NewError(moerr.OUT_OF_RANGE, "")
+					return moerr.NewOutOfRange("uint16", "value '%v'", x)
 				}
 			}
 		}
@@ -408,49 +407,49 @@ func NumericToNumericOverflow[T1, T2 constraints.Integer | constraints.Float](xs
 		case *int8:
 			for _, x := range xs {
 				if math.Round(float64(x)) > math.MaxInt8 {
-					return moerr.NewError(moerr.OUT_OF_RANGE, "")
+					return moerr.NewOutOfRange("int8", "value '%v'", x)
 				}
 			}
 		case *int16:
 			for _, x := range xs {
 				if math.Round(float64(x)) > math.MaxInt16 {
-					return moerr.NewError(moerr.OUT_OF_RANGE, "")
+					return moerr.NewOutOfRange("int16", "value '%v'", x)
 				}
 			}
 		case *int32:
 			for _, x := range xs {
 				if math.Round(float64(x)) > math.MaxInt32 {
-					return moerr.NewError(moerr.OUT_OF_RANGE, "")
+					return moerr.NewOutOfRange("int32", "value '%v'", x)
 				}
 			}
 		case *int64:
 			for _, x := range xs {
 				if math.Round(float64(x)) > math.MaxInt64 {
-					return moerr.NewError(moerr.OUT_OF_RANGE, "")
+					return moerr.NewOutOfRange("int64", "value '%v'", x)
 				}
 			}
 		case *uint8:
 			for _, x := range xs {
 				if math.Round(float64(x)) > math.MaxUint8 {
-					return moerr.NewError(moerr.OUT_OF_RANGE, "")
+					return moerr.NewOutOfRange("uint8", "value '%v'", x)
 				}
 			}
 		case *uint16:
 			for _, x := range xs {
 				if math.Round(float64(x)) > math.MaxUint16 {
-					return moerr.NewError(moerr.OUT_OF_RANGE, "")
+					return moerr.NewOutOfRange("uint16", "value '%v'", x)
 				}
 			}
 		case *uint32:
 			for _, x := range xs {
 				if math.Round(float64(x)) > math.MaxUint32 {
-					return moerr.NewError(moerr.OUT_OF_RANGE, "")
+					return moerr.NewOutOfRange("uint32", "value '%v'", x)
 				}
 			}
 		case *uint64:
 			for _, x := range xs {
 				if math.Round(float64(x)) > math.MaxUint64 {
-					return moerr.NewError(moerr.OUT_OF_RANGE, "")
+					return moerr.NewOutOfRange("uint64", "value '%v'", x)
 				}
 			}
 		}
@@ -459,55 +458,55 @@ func NumericToNumericOverflow[T1, T2 constraints.Integer | constraints.Float](xs
 		case *int8:
 			for _, x := range xs {
 				if math.Round(float64(x)) > math.MaxInt8 {
-					return moerr.NewError(moerr.OUT_OF_RANGE, "")
+					return moerr.NewOutOfRange("int8", "value '%v'", x)
 				}
 			}
 		case *int16:
 			for _, x := range xs {
 				if math.Round(float64(x)) > math.MaxInt16 {
-					return moerr.NewError(moerr.OUT_OF_RANGE, "")
+					return moerr.NewOutOfRange("int16", "value '%v'", x)
 				}
 			}
 		case *int32:
 			for _, x := range xs {
 				if math.Round(float64(x)) > math.MaxInt32 {
-					return moerr.NewError(moerr.OUT_OF_RANGE, "")
+					return moerr.NewOutOfRange("int32", "value '%v'", x)
 				}
 			}
 		case *int64:
 			for _, x := range xs {
-				if math.Round(float64(x)) > math.MaxInt64 {
-					return moerr.NewError(moerr.OUT_OF_RANGE, "")
+				if math.Round(float64(x)) > math.MaxInt64 || math.Round(float64(x)) < math.MinInt64 {
+					return moerr.NewOutOfRange("int64", "value '%v'", x)
 				}
 			}
 		case *uint8:
 			for _, x := range xs {
 				if math.Round(float64(x)) > math.MaxUint8 {
-					return moerr.NewError(moerr.OUT_OF_RANGE, "")
+					return moerr.NewOutOfRange("uint8", "value '%v'", x)
 				}
 			}
 		case *uint16:
 			for _, x := range xs {
 				if math.Round(float64(x)) > math.MaxUint16 {
-					return moerr.NewError(moerr.OUT_OF_RANGE, "")
+					return moerr.NewOutOfRange("uint16", "value '%v'", x)
 				}
 			}
 		case *uint32:
 			for _, x := range xs {
 				if math.Round(float64(x)) > math.MaxUint32 {
-					return moerr.NewError(moerr.OUT_OF_RANGE, "")
+					return moerr.NewOutOfRange("uint32", "value '%v'", x)
 				}
 			}
 		case *uint64:
 			for _, x := range xs {
 				if math.Round(float64(x)) > math.MaxUint64 {
-					return moerr.NewError(moerr.OUT_OF_RANGE, "")
+					return moerr.NewOutOfRange("uint64", "value '%v'", x)
 				}
 			}
 		case *float32:
 			for _, x := range xs {
 				if float64(x) > math.MaxFloat32 {
-					return moerr.NewError(moerr.OUT_OF_RANGE, "")
+					return moerr.NewOutOfRange("float32", "value '%v'", x)
 				}
 			}
 		}
@@ -516,7 +515,7 @@ func NumericToNumericOverflow[T1, T2 constraints.Integer | constraints.Float](xs
 }
 
 func FloatToIntWithoutError[T1 constraints.Float, T2 constraints.Integer](xs []T1, rs []T2) ([]T2, error) {
-	if err := NumericToNumericOverflow[T1, T2](xs, rs); err != nil {
+	if err := NumericToNumericOverflow(xs, rs); err != nil {
 		return nil, err
 	}
 	for i, x := range xs {
@@ -532,7 +531,7 @@ func float64ToInt64(xs []float64, rs []int64, isEmptyStringOrNull ...[]int) ([]i
 			if usedEmptyStringOrNull {
 				isEmptyStringOrNull[0][i] = 1
 			} else {
-				return nil, moerr.New(moerr.OUT_OF_RANGE, "double", "bigint")
+				return nil, moerr.NewOutOfRange("int64", "value '%v'", x)
 			}
 		}
 		rs[i] = int64(math.Round((x)))
@@ -547,7 +546,7 @@ func uint64ToInt64(xs []uint64, rs []int64) ([]int64, error) {
 		overflowFlag |= x >> 63
 	}
 	if overflowFlag != 0 {
-		return nil, moerr.NewError(moerr.OUT_OF_RANGE, "overflow from bigint unsigned to bigint")
+		return nil, moerr.NewOutOfRange("int64", "")
 	}
 	return rs, nil
 }
@@ -559,7 +558,7 @@ func int64ToUint64(xs []int64, rs []uint64) ([]uint64, error) {
 		overflowFlag |= x >> 63
 	}
 	if overflowFlag != 0 {
-		return nil, moerr.NewError(moerr.OUT_OF_RANGE, "overflow from bigint to bigint unsigned")
+		return nil, moerr.NewOutOfRange("uint64", "")
 	}
 	return rs, nil
 }
@@ -570,9 +569,9 @@ func BytesToInt[T constraints.Signed](xs []string, rs []T) ([]T, error) {
 		val, err := strconv.ParseInt(strings.TrimSpace(s), 10, bitSize)
 		if err != nil {
 			if strings.Contains(err.Error(), "value out of range") {
-				return nil, fmt.Errorf("overflow when cast '%s' as type of integer", s)
+				return nil, moerr.NewOutOfRange("int", "value '%v'", s)
 			}
-			return nil, fmt.Errorf("can't cast '%s' as type of integer", s)
+			return nil, moerr.NewInvalidArg("cast to int", s)
 		}
 		rs[i] = T(val)
 	}
@@ -586,9 +585,9 @@ func BytesToUint[T constraints.Unsigned](xs []string, rs []T) ([]T, error) {
 		val, err := strconv.ParseUint(strings.TrimSpace(s), 10, bitSize)
 		if err != nil {
 			if strings.Contains(err.Error(), "value out of range") {
-				return nil, fmt.Errorf("overflow when cast '%s' as type of unsigned integer", s)
+				return nil, moerr.NewOutOfRange("uint", "value '%v'", s)
 			}
-			return nil, fmt.Errorf("can't cast '%s' as type of unsigned integer", s)
+			return nil, moerr.NewInvalidArg("cast to uint", s)
 		}
 		rs[i] = T(val)
 	}
@@ -774,7 +773,7 @@ func Decimal64ToFloat32(xs []types.Decimal64, scale int32, rs []float32) ([]floa
 		xStr := string(x.ToStringWithScale(scale))
 		result, err := strconv.ParseFloat(xStr, 32)
 		if err != nil {
-			return []float32{}, moerr.NewError(moerr.OUT_OF_RANGE, "cannot convert decimal to float correctly")
+			return []float32{}, moerr.NewOutOfRange("float32", "value '%v'", xStr)
 		}
 		rs[i] = float32(result)
 	}
@@ -786,7 +785,7 @@ func Decimal128ToFloat32(xs []types.Decimal128, scale int32, rs []float32) ([]fl
 		xStr := x.ToStringWithScale(scale)
 		result, err := strconv.ParseFloat(xStr, 64)
 		if err != nil {
-			return []float32{}, moerr.NewError(moerr.OUT_OF_RANGE, "cannot convert decimal to float correctly")
+			return []float32{}, moerr.NewOutOfRange("float32", "value '%v'", xStr)
 		}
 		rs[i] = float32(result)
 	}
@@ -798,7 +797,7 @@ func Decimal64ToFloat64(xs []types.Decimal64, scale int32, rs []float64) ([]floa
 		xStr := x.ToStringWithScale(scale)
 		result, err := strconv.ParseFloat(xStr, 64)
 		if err != nil {
-			return []float64{}, moerr.NewError(moerr.OUT_OF_RANGE, "cannot convert decimal to float correctly")
+			return []float64{}, moerr.NewOutOfRange("float64", "value '%v'", xStr)
 		}
 		rs[i] = result
 	}
@@ -810,7 +809,7 @@ func Decimal128ToFloat64(xs []types.Decimal128, scale int32, rs []float64) ([]fl
 		xStr := x.ToStringWithScale(scale)
 		result, err := strconv.ParseFloat(xStr, 64)
 		if err != nil {
-			return []float64{}, moerr.NewError(moerr.OUT_OF_RANGE, "cannot convert decimal to float correctly")
+			return []float64{}, moerr.NewOutOfRange("float64", "value '%v'", xStr)
 		}
 		rs[i] = result
 	}
@@ -822,11 +821,11 @@ func Decimal64ToInt64(xs []types.Decimal64, scale int32, rs []int64) ([]int64, e
 		xStr := x.ToStringWithScale(scale)
 		floatRepresentation, err := strconv.ParseFloat(xStr, 64)
 		if err != nil {
-			return []int64{}, moerr.NewError(moerr.OUT_OF_RANGE, "cannot convert decimal to BIGINT correctly")
+			return []int64{}, moerr.NewOutOfRange("int64", "value '%v'", xStr)
 		}
 
 		if floatRepresentation > math.MaxInt64 || floatRepresentation < math.MinInt64 {
-			return []int64{}, moerr.NewError(moerr.OUT_OF_RANGE, "cannot convert decimal to BIGINT correctly")
+			return []int64{}, moerr.NewOutOfRange("int64", "value '%v'", xStr)
 		}
 
 		result := int64(math.Round(floatRepresentation))
@@ -841,7 +840,7 @@ func Decimal128ToInt64(xs []types.Decimal128, scale int32, rs []int64) ([]int64,
 		xStr := x.ToStringWithScale(0)
 		rs[i], err = strconv.ParseInt(xStr, 10, 64)
 		if err != nil {
-			return []int64{}, moerr.NewError(moerr.OUT_OF_RANGE, "cannot convert decimal to BIGINT correctly")
+			return []int64{}, moerr.NewOutOfRange("int64", "value '%v'", xStr)
 		}
 	}
 	return rs, nil
@@ -852,7 +851,7 @@ func Decimal128ToInt32(xs []types.Decimal128, scale int32, rs []int32) ([]int32,
 		xStr := x.ToStringWithScale(0)
 		ret, err := strconv.ParseInt(xStr, 10, 32)
 		if err != nil {
-			return []int32{}, moerr.NewError(moerr.OUT_OF_RANGE, "cannot convert decimal to INT correctly")
+			return []int32{}, moerr.NewOutOfRange("int32", "value '%v'", xStr)
 		}
 		rs[i] = int32(ret)
 	}
@@ -865,7 +864,7 @@ func Decimal64ToUint64(xs []types.Decimal64, scale int32, rs []uint64) ([]uint64
 		xStr = strings.Split(xStr, ".")[0]
 		xVal, err := strconv.ParseUint(xStr, 10, 64)
 		if err != nil {
-			return []uint64{}, moerr.NewError(moerr.OUT_OF_RANGE, "cannot convert decimal to BIGINT UNSIGNED correctly")
+			return []uint64{}, moerr.NewOutOfRange("uint64", "value '%v'", xStr)
 		}
 		rs[i] = xVal
 	}
@@ -878,7 +877,7 @@ func Decimal128ToUint64(xs []types.Decimal128, scale int32, rs []uint64) ([]uint
 		xStr = strings.Split(xStr, ".")[0]
 		xVal, err := strconv.ParseUint(xStr, 10, 64)
 		if err != nil {
-			return []uint64{}, moerr.NewError(moerr.OUT_OF_RANGE, "cannot convert decimal to BIGINT UNSIGNED correctly")
+			return []uint64{}, moerr.NewOutOfRange("uint64", "value '%v'", xStr)
 		}
 		rs[i] = xVal
 	}
@@ -892,7 +891,7 @@ func Decimal128ToDecimal64(xs []types.Decimal128, width, scale int32, rs []types
 	for i, x := range xs {
 		rs[i], err = x.ToDecimal64(width, scale)
 		if err != nil {
-			return []types.Decimal64{}, moerr.NewError(moerr.OUT_OF_RANGE, fmt.Sprintf("cannot convert to Decimal(%d, %d) correctly", width, scale))
+			return []types.Decimal64{}, moerr.NewOutOfRange("dec64", "value '%v'", x)
 		}
 	}
 	return rs, nil
@@ -904,7 +903,7 @@ func Decimal128ToDecimal128(xs []types.Decimal128, width, scale int32, rs []type
 		xStr := x.ToStringWithScale(scale)
 		rs[i], err = types.Decimal128_FromString(xStr)
 		if err != nil {
-			return []types.Decimal128{}, moerr.NewError(moerr.OUT_OF_RANGE, fmt.Sprintf("cannot convert to Decimal(%d, %d) correctly", width, scale))
+			return []types.Decimal128{}, moerr.NewOutOfRange("dec128", "value '%v'", x)
 		}
 	}
 	return rs, nil
@@ -914,10 +913,8 @@ func NumericToBool[T constraints.Integer | constraints.Float](xs []T, rs []bool)
 	for i, x := range xs {
 		if x == 0 {
 			rs[i] = false
-		} else if x == 1 {
-			rs[i] = true
 		} else {
-			return nil, moerr.NewError(moerr.INVALID_ARGUMENT, fmt.Sprintf("Can't cast '%v' as boolean type.", x))
+			rs[i] = true
 		}
 	}
 	return rs, nil

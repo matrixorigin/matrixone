@@ -16,16 +16,15 @@ package plan
 
 import (
 	"encoding/json"
-	"fmt"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/errno"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/errors"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/operator"
+	"github.com/matrixorigin/matrixone/pkg/sql/util"
 )
 
 func buildCreateView(stmt *tree.CreateView, ctx CompilerContext) (*Plan, error) {
@@ -59,7 +58,7 @@ func buildCreateView(stmt *tree.CreateView, ctx CompilerContext) (*Plan, error) 
 			Alg:  plan.CompressType_Lz4,
 			Typ:  expr.Typ,
 			Default: &plan.Default{
-				NullAbility:  false,
+				NullAbility:  true,
 				Expr:         nil,
 				OriginString: "",
 			},
@@ -150,8 +149,7 @@ func buildCreateTable(stmt *tree.CreateTable, ctx CompilerContext) (*Plan, error
 		// todo confirm: option data store like this?
 		case *tree.TableOptionComment:
 			if getNumOfCharacters(opt.Comment) > maxLengthOfTableComment {
-				errmsg := fmt.Sprintf("Comment for table '%s' is too long (max = %d)", createTable.TableDef.Name, maxLengthOfTableComment)
-				return nil, errors.New(errno.InvalidOptionValue, errmsg)
+				return nil, moerr.NewInvalidInput("comment for field '%s' is too long", createTable.TableDef.Name)
 			}
 
 			properties := []*plan.Property{
@@ -177,9 +175,9 @@ func buildCreateTable(stmt *tree.CreateTable, ctx CompilerContext) (*Plan, error
 		// 	*tree.TableOptionPackKeys, *tree.TableOptionTablespace, *tree.TableOptionDataDirectory,
 		// 	*tree.TableOptionIndexDirectory, *tree.TableOptionStorageMedia, *tree.TableOptionStatsSamplePages,
 		// 	*tree.TableOptionUnion, *tree.TableOptionEncryption:
-		// 	return nil, errors.New(errno.SQLStatementNotYetComplete, fmt.Sprintf("unexpected statement: '%v'", tree.String(stmt, dialect.MYSQL)))
+		// 	return nil, moerr.NewNotSupported("statement: '%v'", tree.String(stmt, dialect.MYSQL))
 		default:
-			return nil, errors.New(errno.SQLStatementNotYetComplete, fmt.Sprintf("unexpected options; statement: '%v'", tree.String(stmt, dialect.MYSQL)))
+			return nil, moerr.NewNotSupported("statement: '%v'", tree.String(stmt, dialect.MYSQL))
 		}
 	}
 
@@ -273,7 +271,7 @@ func buildTableDefs(defs tree.TableDefs, ctx CompilerContext, tableDef *TableDef
 			}
 			if colType.Id == int32(types.T_char) || colType.Id == int32(types.T_varchar) {
 				if colType.GetWidth() > types.MaxStringSize {
-					return errors.New(errno.DataException, "width out of 1GB is unexpected for char/varchar type")
+					return moerr.NewInvalidInput("string width (%d) is too long", colType.GetWidth())
 				}
 			}
 
@@ -283,7 +281,7 @@ func buildTableDefs(defs tree.TableDefs, ctx CompilerContext, tableDef *TableDef
 			for _, attr := range def.Attributes {
 				if _, ok := attr.(*tree.AttributePrimaryKey); ok {
 					if colType.GetId() == int32(types.T_blob) {
-						return errors.New(errno.InvalidColumnDefinition, "Type text don't support primary key")
+						return moerr.NewNotSupported("text type in primary key")
 					}
 					pks = append(pks, def.Name.Parts[0])
 				}
@@ -291,21 +289,20 @@ func buildTableDefs(defs tree.TableDefs, ctx CompilerContext, tableDef *TableDef
 				if attrComment, ok := attr.(*tree.AttributeComment); ok {
 					comment = attrComment.CMT.String()
 					if getNumOfCharacters(comment) > maxLengthOfColumnComment {
-						errmsg := fmt.Sprintf("Comment for field '%s' is too long (max = %d)", def.Name.Parts[0], maxLengthOfColumnComment)
-						return errors.New(errno.InvalidOptionValue, errmsg)
+						return moerr.NewInvalidInput("comment for column '%s' is too long", def.Name.Parts[0])
 					}
 				}
 
 				if _, ok := attr.(*tree.AttributeAutoIncrement); ok {
 					auto_incr = true
-					if colType.GetId() != int32(types.T_int32) && colType.GetId() != int32(types.T_int64) {
-						return errors.New(errno.InvalidColumnDefinition, "the auto_incr column is only support int32 and int64 type now")
+					if !operator.IsInteger(types.T(colType.GetId())) {
+						return moerr.NewNotSupported("the auto_incr column is only support integer type now")
 					}
 				}
 			}
 			if len(pks) > 0 {
 				if len(primaryKeys) > 0 {
-					return errors.New(errno.SyntaxErrororAccessRuleViolation, "Multiple primary key defined")
+					return moerr.NewInvalidInput("more than one primary key defined")
 				}
 				primaryKeys = pks
 			}
@@ -315,7 +312,7 @@ func buildTableDefs(defs tree.TableDefs, ctx CompilerContext, tableDef *TableDef
 				return err
 			}
 			if auto_incr && defaultValue.Expr != nil {
-				return moerr.NewError(moerr.ER_INVALID_DEFAULT, fmt.Sprintf("invalid default value for '%s'", def.Name.Parts[0]))
+				return moerr.NewInvalidInput("invalid default value for '%s'", def.Name.Parts[0])
 			}
 
 			onUpdateExpr, err := buildOnUpdate(def, colType)
@@ -336,13 +333,13 @@ func buildTableDefs(defs tree.TableDefs, ctx CompilerContext, tableDef *TableDef
 			tableDef.Cols = append(tableDef.Cols, col)
 		case *tree.PrimaryKeyIndex:
 			if len(primaryKeys) > 0 {
-				return errors.New(errno.SyntaxErrororAccessRuleViolation, "Multiple primary key defined")
+				return moerr.NewInvalidInput("more than one primary key defined")
 			}
 			pksMap := map[string]bool{}
 			for _, key := range def.KeyParts {
 				name := key.ColName.Parts[0] // name of primary key column
 				if _, ok := pksMap[name]; ok {
-					return errors.New(errno.InvalidTableDefinition, fmt.Sprintf("Duplicate column name '%s'", name))
+					return moerr.NewInvalidInput("duplicate column name '%s' in primary key", name)
 				}
 				primaryKeys = append(primaryKeys, name)
 				pksMap[name] = true
@@ -357,7 +354,6 @@ func buildTableDefs(defs tree.TableDefs, ctx CompilerContext, tableDef *TableDef
 				idxType = plan.IndexDef_ZONEMAP
 			default:
 				idxType = plan.IndexDef_ZONEMAP //default
-				// return errors.New(errno.InvalidTableDefinition, fmt.Sprintf("Invaild index type '%s'", def.KeyType.ToString()))
 			}
 
 			idxDef := &plan.IndexDef{
@@ -370,7 +366,7 @@ func buildTableDefs(defs tree.TableDefs, ctx CompilerContext, tableDef *TableDef
 			for i, key := range def.KeyParts {
 				name := key.ColName.Parts[0] // name of index column
 				if _, ok := nameMap[name]; ok {
-					return errors.New(errno.InvalidTableDefinition, fmt.Sprintf("Duplicate column name '%s'", key.ColName.Parts[0]))
+					return moerr.NewInvalidInput("duplicate column name '%s' in primary key", name)
 				}
 				idxDef.ColNames[i] = name
 				nameMap[name] = true
@@ -384,27 +380,51 @@ func buildTableDefs(defs tree.TableDefs, ctx CompilerContext, tableDef *TableDef
 			})
 		case *tree.UniqueIndex, *tree.CheckIndex, *tree.ForeignKey, *tree.FullTextIndex:
 			// unsupport in plan. will support in next version.
-			return errors.New(errno.SQLStatementNotYetComplete, fmt.Sprintf("unsupport table def: '%v'", def))
+			return moerr.NewNYI("table def: '%v'", def)
 		default:
-			return errors.New(errno.SQLStatementNotYetComplete, fmt.Sprintf("unsupport table def: '%v'", def))
+			return moerr.NewNYI("table def: '%v'", def)
 		}
 	}
 
 	if len(primaryKeys) > 0 {
-		tableDef.Defs = append(tableDef.Defs, &plan.TableDef_DefType{
-			Def: &plan.TableDef_DefType_Pk{
-				Pk: &plan.PrimaryKeyDef{
-					Names: primaryKeys,
+		if len(primaryKeys) == 1 {
+			tableDef.Defs = append(tableDef.Defs, &plan.TableDef_DefType{
+				Def: &plan.TableDef_DefType_Pk{
+					Pk: &plan.PrimaryKeyDef{
+						Names: primaryKeys,
+					},
 				},
-			},
-		})
+			})
+		} else {
+			cPkeyName := util.BuildCompositePrimaryKeyColumnName(primaryKeys)
+			tableDef.Cols = append(tableDef.Cols, &ColDef{
+				Name: cPkeyName,
+				Alg:  plan.CompressType_Lz4,
+				Typ: &Type{
+					Id:   int32(types.T_varchar),
+					Size: types.VarlenaSize,
+				},
+				Default: &plan.Default{
+					NullAbility:  false,
+					Expr:         nil,
+					OriginString: "",
+				},
+			})
+			tableDef.Defs = append(tableDef.Defs, &plan.TableDef_DefType{
+				Def: &plan.TableDef_DefType_Pk{
+					Pk: &plan.PrimaryKeyDef{
+						Names: []string{cPkeyName},
+					},
+				},
+			})
+		}
 	}
 
 	// check index invalid on the type
 	// for example, the text type don't support index
 	for _, str := range indexs {
 		if colNameMap[str] == int32(types.T_blob) {
-			return errors.New(errno.InvalidColumnDefinition, "Type text don't support index")
+			return moerr.NewNotSupported("text type in index")
 		}
 	}
 	return nil
@@ -415,7 +435,7 @@ func buildDropTable(stmt *tree.DropTable, ctx CompilerContext) (*Plan, error) {
 		IfExists: stmt.IfExists,
 	}
 	if len(stmt.Names) != 1 {
-		return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, "support drop one table now")
+		return nil, moerr.NewNotSupported("drop multiple (%d) tables in one statement", len(stmt.Names))
 	}
 	dropTable.Database = string(stmt.Names[0].SchemaName)
 	if dropTable.Database == "" {
@@ -426,7 +446,7 @@ func buildDropTable(stmt *tree.DropTable, ctx CompilerContext) (*Plan, error) {
 	_, tableDef := ctx.Resolve(dropTable.Database, dropTable.Table)
 	if tableDef == nil {
 		if !dropTable.IfExists {
-			return nil, errors.New("", fmt.Sprintf("table %s is not exists", dropTable.Table))
+			return nil, moerr.NewNoSuchTable(dropTable.Database, dropTable.Table)
 		}
 	} else {
 		isView := false
@@ -438,7 +458,7 @@ func buildDropTable(stmt *tree.DropTable, ctx CompilerContext) (*Plan, error) {
 		}
 		if isView && !dropTable.IfExists {
 			// drop table v0, v0 is view
-			return nil, errors.New("", fmt.Sprintf("table %s is not exists", dropTable.Table))
+			return nil, moerr.NewNoSuchTable(dropTable.Database, dropTable.Table)
 		} else if isView {
 			// drop table if exists v0, v0 is view
 			dropTable.Table = ""
@@ -462,7 +482,7 @@ func buildDropView(stmt *tree.DropView, ctx CompilerContext) (*Plan, error) {
 		IfExists: stmt.IfExists,
 	}
 	if len(stmt.Names) != 1 {
-		return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, "support drop one view now")
+		return nil, moerr.NewNotSupported("drop multiple (%d) view", len(stmt.Names))
 	}
 	dropTable.Database = string(stmt.Names[0].SchemaName)
 	if dropTable.Database == "" {
@@ -473,7 +493,7 @@ func buildDropView(stmt *tree.DropView, ctx CompilerContext) (*Plan, error) {
 	_, tableDef := ctx.Resolve(dropTable.Database, dropTable.Table)
 	if tableDef == nil {
 		if !dropTable.IfExists {
-			return nil, errors.New("", fmt.Sprintf("view %s is not exists", dropTable.Table))
+			return nil, moerr.NewBadView(dropTable.Database, dropTable.Table)
 		}
 	} else {
 		isView := false
@@ -484,7 +504,7 @@ func buildDropView(stmt *tree.DropView, ctx CompilerContext) (*Plan, error) {
 			}
 		}
 		if !isView {
-			return nil, errors.New("", fmt.Sprintf("%s is not a view", dropTable.Table))
+			return nil, moerr.NewBadView(dropTable.Database, dropTable.Table)
 		}
 	}
 
@@ -537,7 +557,7 @@ func buildDropDatabase(stmt *tree.DropDatabase, ctx CompilerContext) (*Plan, err
 }
 
 func buildCreateIndex(stmt *tree.CreateIndex, ctx CompilerContext) (*Plan, error) {
-	return nil, errors.New(errno.SQLStatementNotYetComplete, fmt.Sprintf("unexpected statement: '%v'", tree.String(stmt, dialect.MYSQL)))
+	return nil, moerr.NewNotSupported("statement: '%v'", tree.String(stmt, dialect.MYSQL))
 	// todo unsupport now
 	// createIndex := &plan.CreateIndex{}
 	// return &Plan{
@@ -553,7 +573,7 @@ func buildCreateIndex(stmt *tree.CreateIndex, ctx CompilerContext) (*Plan, error
 }
 
 func buildDropIndex(stmt *tree.DropIndex, ctx CompilerContext) (*Plan, error) {
-	return nil, errors.New(errno.SQLStatementNotYetComplete, fmt.Sprintf("unexpected statement: '%v'", tree.String(stmt, dialect.MYSQL)))
+	return nil, moerr.NewNotSupported("statement: '%v'", tree.String(stmt, dialect.MYSQL))
 	// todo unsupport now
 	// dropIndex := &plan.DropIndex{
 	// 	IfExists: stmt.IfExists,

@@ -129,7 +129,7 @@ sum(a)
 60
 150
 select sum(a) from t3 group by b having by sum(a) > 20;
-You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 42 near " by sum(a) > 20;";
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 42 near " by sum(a) > 20;";
 select * from t3 order by b;
 a    b
 30    117a0bd5-2d0d-11ed-940f-000c29847904

@@ -16,7 +16,8 @@ package compile
 
 import (
 	"context"
-	"errors"
+	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
@@ -142,7 +143,7 @@ func (s *Scope) remoteRun(c *Compile) error {
 
 		errMessage := m.GetCode()
 		if len(errMessage) > 0 {
-			return errors.New(string(errMessage))
+			return moerr.NewInternalError(string(errMessage))
 		}
 
 		sid := m.GetID()
@@ -591,7 +592,7 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 			MarkMeaning:  t.MarkMeaning,
 		}
 	default:
-		return -1, nil, moerr.New(moerr.INTERNAL_ERROR, "unexpected operator: %v", opr.Op)
+		return -1, nil, moerr.NewInternalError(fmt.Sprintf("unexpected operator: %v", opr.Op))
 	}
 	return ctxId, in, nil
 }
@@ -792,7 +793,7 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext) (vm.In
 			Fs: convertToColExecField(opr.OrderBy),
 		}
 	default:
-		return v, moerr.New(moerr.INTERNAL_ERROR, "unexpected operator: %v", opr.Op)
+		return v, moerr.NewInternalError(fmt.Sprintf("unexpected operator: %v", opr.Op))
 	}
 	return v, nil
 }

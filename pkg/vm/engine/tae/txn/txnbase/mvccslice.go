@@ -102,32 +102,32 @@ func (be *MVCCSlice) DeleteNode(node MVCCNode) {
 // It returns the UpdateNode in the same txn as the read txn
 // or returns the latest UpdateNode with commitTS less than the timestamp.
 // todo getend or getcommitts
-func (be *MVCCSlice) GetNodeToRead(ts types.TS) (offset int, node MVCCNode) {
+func (be *MVCCSlice) GetNodeToReadByPrepareTS(ts types.TS) (offset int, node MVCCNode) {
 	if len(be.MVCC) == 0 {
 		return 0, nil
 	}
 	lastAppend := be.MVCC[len(be.MVCC)-1]
 
 	// 1. Last append node is in the window and it was already committed
-	if ts.Greater(lastAppend.GetEnd()) {
+	if ts.Greater(lastAppend.GetPrepare()) {
 		return len(be.MVCC) - 1, lastAppend
 	}
 	start, end := 0, len(be.MVCC)-1
 	var mid int
 	for start <= end {
 		mid = (start + end) / 2
-		if be.MVCC[mid].GetEnd().Less(ts) {
+		if be.MVCC[mid].GetPrepare().Less(ts) {
 			start = mid + 1
-		} else if be.MVCC[mid].GetEnd().Greater(ts) {
+		} else if be.MVCC[mid].GetPrepare().Greater(ts) {
 			end = mid - 1
 		} else {
 			break
 		}
 	}
-	if mid == 0 && be.MVCC[mid].GetEnd().Greater(ts) {
+	if mid == 0 && be.MVCC[mid].GetPrepare().Greater(ts) {
 		// 2. The first node is found and it was committed after ts
 		return 0, nil
-	} else if mid != 0 && be.MVCC[mid].GetEnd().Greater(ts) {
+	} else if mid != 0 && be.MVCC[mid].GetPrepare().Greater(ts) {
 		// 3. A node (not first) is found and it was committed after ts. Use the prev node
 		mid = mid - 1
 	}
@@ -168,11 +168,11 @@ func (be *MVCCSlice) CloneIndexInRange(start, end types.TS, mu *sync.RWMutex) (i
 		txn.GetTxnState(true)
 		mu.RLock()
 	}
-	startOffset, node := be.GetNodeToRead(start)
+	startOffset, node := be.GetNodeToReadByPrepareTS(start)
 	if node != nil && node.GetEnd().Less(start) {
 		startOffset++
 	}
-	endOffset, node := be.GetNodeToRead(end)
+	endOffset, node := be.GetNodeToReadByPrepareTS(end)
 	if node == nil {
 		return nil
 	}
@@ -180,4 +180,33 @@ func (be *MVCCSlice) CloneIndexInRange(start, end types.TS, mu *sync.RWMutex) (i
 		indexes = append(indexes, be.MVCC[i].GetLogIndex())
 	}
 	return
+}
+
+func (be *MVCCSlice) LoopInRange(start, end types.TS, fn func(MVCCNode) bool) (indexes []*wal.Index) {
+	startOffset, node := be.GetNodeToReadByPrepareTS(start)
+	if node != nil && node.GetPrepare().Less(start) {
+		startOffset++
+	}
+	endOffset, node := be.GetNodeToReadByPrepareTS(end)
+	if node == nil {
+		return nil
+	}
+	for i := endOffset; i >= startOffset; i-- {
+		if !fn(be.MVCC[i]) {
+			break
+		}
+	}
+	return
+}
+
+func (be *MVCCSlice) LoopOffsetRange(start, end int, fn func(MVCCNode) bool) {
+	for i := start; i <= end; i++ {
+		if !fn(be.MVCC[i]) {
+			break
+		}
+	}
+}
+
+func (be *MVCCSlice) GetNodeByOffset(offset int) MVCCNode {
+	return be.MVCC[offset]
 }

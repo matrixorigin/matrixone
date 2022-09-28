@@ -21,6 +21,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
+	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 )
 
@@ -29,7 +30,7 @@ func NewTestService(fs vfs.FS) (*Service, ClientConfig, error) {
 	cfg := Config{
 		UUID:                 uuid.New().String(),
 		RTTMillisecond:       10,
-		GossipSeedAddresses:  addr,
+		GossipSeedAddresses:  []string{defaultGossipSeedAddress},
 		DeploymentID:         1,
 		FS:                   fs,
 		ServiceListenAddress: addr[0],
@@ -39,6 +40,7 @@ func NewTestService(fs vfs.FS) (*Service, ClientConfig, error) {
 	cfg.Fill()
 	service, err := NewService(cfg,
 		testutil.NewFS(),
+		taskservice.NewTaskService(taskservice.NewMemTaskStorage(), nil),
 		WithBackendFilter(func(msg morpc.Message, backendAddr string) bool {
 			return true
 		}),

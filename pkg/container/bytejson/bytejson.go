@@ -18,11 +18,11 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/errno"
-	"github.com/matrixorigin/matrixone/pkg/sql/errors"
 	"math"
 	"sort"
 	"strconv"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
 func (bj ByteJson) String() string {
@@ -109,7 +109,7 @@ func (bj ByteJson) to(buf []byte) ([]byte, error) {
 	case TpCodeString:
 		buf = bj.toString(buf)
 	default:
-		err = errors.New(errno.UnSupportedJsonType, fmt.Sprintf("invalid type:%d", bj.Type))
+		err = moerr.NewInvalidInput("invalid json type '%v'", bj.Type)
 	}
 	return buf, err
 }

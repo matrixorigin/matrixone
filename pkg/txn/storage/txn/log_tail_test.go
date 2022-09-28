@@ -16,23 +16,34 @@ package txnstorage
 
 import (
 	"context"
+	"math"
 	"testing"
+	"time"
 
+	apipb "github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	txnengine "github.com/matrixorigin/matrixone/pkg/vm/engine/txn"
 	"github.com/stretchr/testify/assert"
 )
 
-func testLogTail(
-	t *testing.T,
-	newStorage func() (*Storage, error),
-) {
+func TestLogTail(t *testing.T) {
 
-	// new
-	s, err := newStorage()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Hour)
+	defer cancel()
+
+	clock := clock.NewHLCClock(func() int64 {
+		return time.Now().Unix()
+	}, math.MaxInt)
+	storage, err := NewMemoryStorage(
+		testutil.NewMheap(),
+		SnapshotIsolation,
+		clock,
+	)
 	assert.Nil(t, err)
-	defer s.Close(context.TODO())
+	defer storage.Close(ctx)
 
 	// txn
 	txnMeta := txn.TxnMeta{
@@ -46,14 +57,23 @@ func testLogTail(
 
 	// test get log tail
 	{
-		resp := testRead[txnengine.GetLogTailResp](
-			t, s, txnMeta,
-			txnengine.OpGetLogTail,
-			txnengine.GetLogTailReq{
-				//TODO args
-			},
-		)
-		//TODO asserts
-		_ = resp
+		for _, tableID := range []uint64{1, 2, 3} {
+			resp, err := testRead[apipb.SyncLogTailResp](
+				ctx, t, storage, txnMeta,
+				txnengine.OpGetLogTail,
+				apipb.SyncLogTailReq{
+					Table: &apipb.TableID{
+						TbId: tableID,
+					},
+				},
+			)
+			assert.Nil(t, err)
+			assert.Equal(t, 1, len(resp.Commands))
+			cmd := resp.Commands[0]
+			assert.Equal(t, apipb.Entry_Insert, cmd.EntryType)
+			assert.Equal(t, tableID, cmd.TableId)
+			assert.True(t, len(cmd.Bat.Attrs) > 0)
+			assert.True(t, len(cmd.Bat.Vecs) > 0)
+		}
 	}
 }

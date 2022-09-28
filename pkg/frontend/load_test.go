@@ -452,9 +452,9 @@ func Test_readTextFile(t *testing.T) {
 			func(a, b interface{}) error {
 				cnt++
 				if cnt == 1 {
-					return fmt.Errorf("fake error")
+					return moerr.NewInternalError("fake error")
 				} else if cnt == 2 {
-					return fmt.Errorf("exec timeout")
+					return moerr.NewInternalError("exec timeout")
 				}
 
 				return nil

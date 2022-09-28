@@ -200,8 +200,13 @@ func (vec *StdVector[T]) AppendMany(vals ...T) {
 		}
 		vec.tryExpand(newCap)
 	}
-	vec.slice = append(vec.slice, vals...)
-	vec.buf = unsafe.Slice((*byte)(unsafe.Pointer(&vec.slice[0])), stl.SizeOfMany[T](predictSize))
+
+	// vec.buf is the pre-allocted memory buffer. Here copy vals into the vec.buf
+	vec.buf = append(vec.buf, unsafe.Slice(
+		(*byte)(unsafe.Pointer(&vals[0])),
+		int(stl.SizeOfMany[T](len(vals))))...)
+	// vec.slice shares the buffer with vec.buf. Here change the slice length
+	vec.slice = unsafe.Slice((*T)(unsafe.Pointer(&vec.buf[0])), predictSize)
 }
 
 func (vec *StdVector[T]) Clone(offset, length int, allocator ...stl.MemAllocator) stl.Vector[T] {

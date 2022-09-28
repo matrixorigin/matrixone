@@ -15,14 +15,15 @@
 package txnstorage
 
 import (
+	crand "crypto/rand"
 	"database/sql"
+	"encoding/binary"
 	"errors"
 	"fmt"
-	"math/rand"
 	"sort"
 	"sync"
 
-	"github.com/google/uuid"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -31,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
+	"github.com/matrixorigin/matrixone/pkg/txn/storage/txn/memtable"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	txnengine "github.com/matrixorigin/matrixone/pkg/vm/engine/txn"
 	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
@@ -39,13 +41,13 @@ import (
 type MemHandler struct {
 
 	// catalog
-	databases  *Table[Text, DatabaseRow]
-	relations  *Table[Text, RelationRow]
-	attributes *Table[Text, AttributeRow]
-	indexes    *Table[Text, IndexRow]
+	databases  *memtable.Table[ID, *DatabaseRow, *DatabaseRow]
+	relations  *memtable.Table[ID, *RelationRow, *RelationRow]
+	attributes *memtable.Table[ID, *AttributeRow, *AttributeRow]
+	indexes    *memtable.Table[ID, *IndexRow, *IndexRow]
 
 	// data
-	data *Table[DataKey, DataRow]
+	data *memtable.Table[DataKey, DataValue, DataRow]
 
 	// transactions
 	transactions struct {
@@ -58,7 +60,7 @@ type MemHandler struct {
 	iterators struct {
 		sync.Mutex
 		// iterator id -> iterator
-		Map map[string]*Iter[DataKey, DataRow]
+		Map map[ID]*Iter[DataKey, DataValue]
 	}
 
 	// misc
@@ -68,14 +70,16 @@ type MemHandler struct {
 }
 
 type Iter[
-	K Ordered[K],
-	R Row[K],
+	K memtable.Ordered[K],
+	V any,
 ] struct {
-	TableIter *TableIter[K, R]
-	TableID   string
+	TableIter *memtable.TableIter[K, V]
+	TableID   ID
 	AttrsMap  map[string]*AttributeRow
 	Expr      *plan.Expr
 	nextFunc  func() bool
+	ReadTime  Time
+	Tx        *Transaction
 }
 
 func NewMemHandler(
@@ -84,17 +88,17 @@ func NewMemHandler(
 	clock clock.Clock,
 ) *MemHandler {
 	h := &MemHandler{
-		databases:              NewTable[Text, DatabaseRow](),
-		relations:              NewTable[Text, RelationRow](),
-		attributes:             NewTable[Text, AttributeRow](),
-		data:                   NewTable[DataKey, DataRow](),
-		indexes:                NewTable[Text, IndexRow](),
+		databases:              memtable.NewTable[ID, *DatabaseRow, *DatabaseRow](),
+		relations:              memtable.NewTable[ID, *RelationRow, *RelationRow](),
+		attributes:             memtable.NewTable[ID, *AttributeRow, *AttributeRow](),
+		indexes:                memtable.NewTable[ID, *IndexRow, *IndexRow](),
+		data:                   memtable.NewTable[DataKey, DataValue, DataRow](),
 		mheap:                  mheap,
 		defaultIsolationPolicy: defaultIsolationPolicy,
 		clock:                  clock,
 	}
 	h.transactions.Map = make(map[string]*Transaction)
-	h.iterators.Map = make(map[string]*Iter[DataKey, DataRow])
+	h.iterators.Map = make(map[ID]*Iter[DataKey, DataValue])
 	return h
 }
 
@@ -106,7 +110,7 @@ func (m *MemHandler) HandleAddTableDef(meta txn.TxnMeta, req txnengine.AddTableD
 	maxAttributeOrder := 0
 	if err := m.iterRelationAttributes(
 		tx, req.TableID,
-		func(_ Text, row *AttributeRow) error {
+		func(_ ID, row *AttributeRow) error {
 			if row.Order > maxAttributeOrder {
 				maxAttributeOrder = row.Order
 			}
@@ -120,70 +124,66 @@ func (m *MemHandler) HandleAddTableDef(meta txn.TxnMeta, req txnengine.AddTableD
 
 	case *engine.CommentDef:
 		// update comments
-		row, err := m.relations.Get(tx, Text(req.TableID))
+		row, err := m.relations.Get(tx, req.TableID)
 		if errors.Is(err, sql.ErrNoRows) {
-			resp.ErrTableNotFound.ID = req.TableID
-			return nil
+			return moerr.NewNoSuchTable(req.DatabaseName, req.TableName)
 		}
 		if err != nil {
 			return err
 		}
 		row.Comments = def.Comment
-		if err := m.relations.Update(tx, *row); err != nil {
+		if err := m.relations.Update(tx, row); err != nil {
 			return err
 		}
 
 	case *engine.PartitionDef:
 		// update
-		row, err := m.relations.Get(tx, Text(req.TableID))
+		row, err := m.relations.Get(tx, req.TableID)
 		if errors.Is(err, sql.ErrNoRows) {
-			resp.ErrTableNotFound.ID = req.TableID
-			return nil
+			return moerr.NewNoSuchTable(req.DatabaseName, req.TableName)
 		}
 		if err != nil {
 			return err
 		}
 		row.PartitionDef = def.Partition
-		if err := m.relations.Update(tx, *row); err != nil {
+		if err := m.relations.Update(tx, row); err != nil {
 			return err
 		}
 
 	case *engine.ViewDef:
 		// update
-		row, err := m.relations.Get(tx, Text(req.TableID))
+		row, err := m.relations.Get(tx, req.TableID)
 		if errors.Is(err, sql.ErrNoRows) {
-			resp.ErrTableNotFound.ID = req.TableID
-			return nil
+			return moerr.NewNoSuchTable(req.DatabaseName, req.TableName)
 		}
 		if err != nil {
 			return err
 		}
 		row.ViewDef = def.View
-		if err := m.relations.Update(tx, *row); err != nil {
+		if err := m.relations.Update(tx, row); err != nil {
 			return err
 		}
 
 	case *engine.AttributeDef:
 		// add attribute
 		// check existence
-		keys, err := m.attributes.Index(tx, Tuple{
+		entries, err := m.attributes.Index(tx, Tuple{
 			index_RelationID_Name,
-			Text(req.TableID),
+			req.TableID,
 			Text(def.Attr.Name),
 		})
 		if err != nil {
 			return err
 		}
-		if len(keys) > 0 {
-			resp.ErrExisted = true
-			return nil
+		if len(entries) > 0 {
+			return moerr.NewDuplicate()
 		}
 		// insert
-		attrRow := AttributeRow{
-			ID:         uuid.NewString(),
+		attrRow := &AttributeRow{
+			ID:         txnengine.NewID(),
 			RelationID: req.TableID,
 			Order:      maxAttributeOrder + 1,
-			Nullable:   true, //TODO fix
+			Nullable:   def.Attr.Default != nil && def.Attr.Default.NullAbility,
 			Attribute:  def.Attr,
 		}
 		if err := m.attributes.Insert(tx, attrRow); err != nil {
@@ -193,21 +193,20 @@ func (m *MemHandler) HandleAddTableDef(meta txn.TxnMeta, req txnengine.AddTableD
 	case *engine.IndexTableDef:
 		// add index
 		// check existence
-		keys, err := m.indexes.Index(tx, Tuple{
+		entries, err := m.indexes.Index(tx, Tuple{
 			index_RelationID_Name,
-			Text(req.TableID),
+			req.TableID,
 			Text(def.Name),
 		})
 		if err != nil {
 			return err
 		}
-		if len(keys) > 0 {
-			resp.ErrExisted = true
-			return nil
+		if len(entries) > 0 {
+			return moerr.NewDuplicate()
 		}
 		// insert
-		idxRow := IndexRow{
-			ID:            uuid.NewString(),
+		idxRow := &IndexRow{
+			ID:            txnengine.NewID(),
 			RelationID:    req.TableID,
 			IndexTableDef: *def,
 		}
@@ -217,15 +216,14 @@ func (m *MemHandler) HandleAddTableDef(meta txn.TxnMeta, req txnengine.AddTableD
 
 	case *engine.PropertiesDef:
 		// update properties
-		row, err := m.relations.Get(tx, Text(req.TableID))
+		row, err := m.relations.Get(tx, req.TableID)
 		if errors.Is(err, sql.ErrNoRows) {
-			resp.ErrTableNotFound.ID = req.TableID
-			return nil
+			return moerr.NewNoSuchTable(req.DatabaseName, req.TableName)
 		}
 		for _, prop := range def.Properties {
 			row.Properties[prop.Key] = prop.Value
 		}
-		if err := m.relations.Update(tx, *row); err != nil {
+		if err := m.relations.Update(tx, row); err != nil {
 			return err
 		}
 
@@ -233,7 +231,7 @@ func (m *MemHandler) HandleAddTableDef(meta txn.TxnMeta, req txnengine.AddTableD
 		// set primary index
 		if err := m.iterRelationAttributes(
 			tx, req.TableID,
-			func(_ Text, row *AttributeRow) error {
+			func(_ ID, row *AttributeRow) error {
 				isPrimary := false
 				for _, name := range def.Names {
 					if name == row.Name {
@@ -245,7 +243,7 @@ func (m *MemHandler) HandleAddTableDef(meta txn.TxnMeta, req txnengine.AddTableD
 					return nil
 				}
 				row.Primary = isPrimary
-				if err := m.attributes.Update(tx, *row); err != nil {
+				if err := m.attributes.Update(tx, row); err != nil {
 					return err
 				}
 				return nil
@@ -255,7 +253,7 @@ func (m *MemHandler) HandleAddTableDef(meta txn.TxnMeta, req txnengine.AddTableD
 		}
 
 	default:
-		return fmt.Errorf("unknown table def: %T", req.Def)
+		panic(fmt.Sprintf("unknown table def: %T", req.Def))
 
 	}
 
@@ -267,8 +265,7 @@ func (m *MemHandler) HandleCloseTableIter(meta txn.TxnMeta, req txnengine.CloseT
 	defer m.iterators.Unlock()
 	iter, ok := m.iterators.Map[req.IterID]
 	if !ok {
-		resp.ErrIterNotFound.ID = req.IterID
-		return nil
+		return moerr.NewInternalError("no such iter: %v", req.IterID)
 	}
 	delete(m.iterators.Map, req.IterID)
 	if err := iter.TableIter.Close(); err != nil {
@@ -280,7 +277,7 @@ func (m *MemHandler) HandleCloseTableIter(meta txn.TxnMeta, req txnengine.CloseT
 func (m *MemHandler) HandleCreateDatabase(meta txn.TxnMeta, req txnengine.CreateDatabaseReq, resp *txnengine.CreateDatabaseResp) error {
 	tx := m.getTx(meta)
 
-	keys, err := m.databases.Index(tx, Tuple{
+	entries, err := m.databases.Index(tx, Tuple{
 		index_AccountID_Name,
 		Uint(req.AccessInfo.AccountID),
 		Text(req.Name),
@@ -288,15 +285,13 @@ func (m *MemHandler) HandleCreateDatabase(meta txn.TxnMeta, req txnengine.Create
 	if err != nil {
 		return err
 	}
-	if len(keys) > 0 {
-		resp.ErrExisted = true
-		return nil
+	if len(entries) > 0 {
+		return moerr.NewDBAlreadyExists(req.Name)
 	}
 
-	id := uuid.NewString()
-	err = m.databases.Insert(tx, DatabaseRow{
+	id := txnengine.NewID()
+	err = m.databases.Insert(tx, &DatabaseRow{
 		ID:        id,
-		NumberID:  rand.Uint64(),
 		AccountID: req.AccessInfo.AccountID,
 		Name:      req.Name,
 	})
@@ -312,11 +307,10 @@ func (m *MemHandler) HandleCreateRelation(meta txn.TxnMeta, req txnengine.Create
 	tx := m.getTx(meta)
 
 	// validate database id
-	if req.DatabaseID != "" {
-		_, err := m.databases.Get(tx, Text(req.DatabaseID))
+	if !req.DatabaseID.IsEmpty() {
+		_, err := m.databases.Get(tx, req.DatabaseID)
 		if errors.Is(err, sql.ErrNoRows) {
-			resp.ErrDatabaseNotFound.ID = req.DatabaseID
-			return nil
+			return moerr.NewNoDB()
 		}
 		if err != nil {
 			return err
@@ -324,23 +318,21 @@ func (m *MemHandler) HandleCreateRelation(meta txn.TxnMeta, req txnengine.Create
 	}
 
 	// check existence
-	keys, err := m.relations.Index(tx, Tuple{
+	entries, err := m.relations.Index(tx, Tuple{
 		index_DatabaseID_Name,
-		Text(req.DatabaseID),
+		req.DatabaseID,
 		Text(req.Name),
 	})
 	if err != nil {
 		return err
 	}
-	if len(keys) > 0 {
-		resp.ErrExisted = true
-		return nil
+	if len(entries) > 0 {
+		return moerr.NewTableAlreadyExists(req.Name)
 	}
 
 	// row
-	row := RelationRow{
-		ID:         uuid.NewString(),
-		NumberID:   rand.Uint64(),
+	row := &RelationRow{
+		ID:         txnengine.NewID(),
 		DatabaseID: req.DatabaseID,
 		Name:       req.Name,
 		Type:       req.Type,
@@ -378,7 +370,7 @@ func (m *MemHandler) HandleCreateRelation(meta txn.TxnMeta, req txnengine.Create
 			primaryColumnNames = def.Names
 
 		default:
-			panic(fmt.Errorf("unknown table def: %T", def))
+			panic(fmt.Sprintf("unknown table def: %T", def))
 		}
 	}
 
@@ -405,11 +397,11 @@ func (m *MemHandler) HandleCreateRelation(meta txn.TxnMeta, req txnengine.Create
 			}
 			attr.Primary = isPrimary
 		}
-		attrRow := AttributeRow{
-			ID:         uuid.NewString(),
+		attrRow := &AttributeRow{
+			ID:         txnengine.NewID(),
 			RelationID: row.ID,
 			Order:      i + 1,
-			Nullable:   true, //TODO fix
+			Nullable:   attr.Default != nil && attr.Default.NullAbility,
 			Attribute:  attr,
 		}
 		if err := m.attributes.Insert(tx, attrRow); err != nil {
@@ -419,8 +411,8 @@ func (m *MemHandler) HandleCreateRelation(meta txn.TxnMeta, req txnengine.Create
 
 	// insert relation indexes
 	for _, idx := range relIndexes {
-		idxRow := IndexRow{
-			ID:            uuid.NewString(),
+		idxRow := &IndexRow{
+			ID:            txnengine.NewID(),
 			RelationID:    row.ID,
 			IndexTableDef: idx,
 		}
@@ -446,62 +438,61 @@ func (m *MemHandler) HandleDelTableDef(meta txn.TxnMeta, req txnengine.DelTableD
 
 	case *engine.CommentDef:
 		// del comments
-		row, err := m.relations.Get(tx, Text(req.TableID))
+		row, err := m.relations.Get(tx, req.TableID)
 		if errors.Is(err, sql.ErrNoRows) {
-			resp.ErrTableNotFound.ID = req.TableID
-			return nil
+			return moerr.NewNoSuchTable(req.DatabaseName, req.TableName)
 		}
 		if err != nil {
 			return err
 		}
 		row.Comments = ""
-		if err := m.relations.Update(tx, *row); err != nil {
+		if err := m.relations.Update(tx, row); err != nil {
 			return err
 		}
 
 	case *engine.AttributeDef:
 		// delete attribute
-		keys, err := m.attributes.Index(tx, Tuple{
+		entries, err := m.attributes.Index(tx, Tuple{
 			index_RelationID_Name,
-			Text(req.TableID),
+			req.TableID,
 			Text(def.Attr.Name),
 		})
 		if err != nil {
 			return err
 		}
-		for _, key := range keys {
-			if err := m.attributes.Delete(tx, key); err != nil {
+		for _, entry := range entries {
+			if err := m.attributes.Delete(tx, entry.Key); err != nil {
 				return err
 			}
+			//TODO update DataValue
 		}
 
 	case *engine.IndexTableDef:
 		// delete index
-		keys, err := m.indexes.Index(tx, Tuple{
+		entries, err := m.indexes.Index(tx, Tuple{
 			index_RelationID_Name,
-			Text(req.TableID),
+			req.TableID,
 			Text(def.Name),
 		})
 		if err != nil {
 			return err
 		}
-		for _, key := range keys {
-			if err := m.indexes.Delete(tx, key); err != nil {
+		for _, entry := range entries {
+			if err := m.indexes.Delete(tx, entry.Key); err != nil {
 				return err
 			}
 		}
 
 	case *engine.PropertiesDef:
 		// delete properties
-		row, err := m.relations.Get(tx, Text(req.TableID))
+		row, err := m.relations.Get(tx, req.TableID)
 		if errors.Is(err, sql.ErrNoRows) {
-			resp.ErrTableNotFound.ID = req.TableID
-			return nil
+			return moerr.NewNoSuchTable(req.DatabaseName, req.TableName)
 		}
 		for _, prop := range def.Properties {
 			delete(row.Properties, prop.Key)
 		}
-		if err := m.relations.Update(tx, *row); err != nil {
+		if err := m.relations.Update(tx, row); err != nil {
 			return err
 		}
 
@@ -509,12 +500,12 @@ func (m *MemHandler) HandleDelTableDef(meta txn.TxnMeta, req txnengine.DelTableD
 		// delete primary index
 		if err := m.iterRelationAttributes(
 			tx, req.TableID,
-			func(key Text, row *AttributeRow) error {
+			func(key ID, row *AttributeRow) error {
 				if !row.Primary {
 					return nil
 				}
 				row.Primary = false
-				if err := m.attributes.Update(tx, *row); err != nil {
+				if err := m.attributes.Update(tx, row); err != nil {
 					return err
 				}
 				return nil
@@ -524,7 +515,7 @@ func (m *MemHandler) HandleDelTableDef(meta txn.TxnMeta, req txnengine.DelTableD
 		}
 
 	default:
-		return fmt.Errorf("unknown table def: %T", req.Def)
+		panic(fmt.Sprintf("unknown table def: %T", req.Def))
 
 	}
 
@@ -540,19 +531,19 @@ func (m *MemHandler) HandleDelete(meta txn.TxnMeta, req txnengine.DeleteReq, res
 		for i := 0; i < reqVecLen; i++ {
 			value := vectorAt(req.Vector, i)
 			rowID := value.Value.(types.Rowid)
-			keys, err := m.data.Index(tx, Tuple{
-				index_RowID, typeConv(rowID),
+			entries, err := m.data.Index(tx, Tuple{
+				index_RowID, memtable.ToOrdered(rowID),
 			})
 			if err != nil {
 				return err
 			}
-			if len(keys) == 0 {
+			if len(entries) == 0 {
 				continue
 			}
-			if len(keys) != 1 {
+			if len(entries) != 1 {
 				panic("impossible")
 			}
-			if err := m.data.Delete(tx, keys[0]); err != nil {
+			if err := m.data.Delete(tx, entries[0].Key); err != nil {
 				return err
 			}
 		}
@@ -560,21 +551,21 @@ func (m *MemHandler) HandleDelete(meta txn.TxnMeta, req txnengine.DeleteReq, res
 	}
 
 	// by primary keys
-	rows, err := m.attributes.IndexRows(tx, Tuple{
+	entries, err := m.attributes.Index(tx, Tuple{
 		index_RelationID_IsPrimary,
-		Text(req.TableID),
+		req.TableID,
 		Bool(true),
 	})
 	if err != nil {
 		return err
 	}
-	if len(rows) == 1 && rows[0].Name == req.ColumnName {
+	if len(entries) == 1 && entries[0].Value.Name == req.ColumnName {
 		// by primary key
 		for i := 0; i < reqVecLen; i++ {
 			value := vectorAt(req.Vector, i)
 			key := DataKey{
 				tableID:    req.TableID,
-				primaryKey: Tuple{typeConv(value.Value)},
+				primaryKey: Tuple{memtable.ToOrdered(value.Value)},
 			}
 			if err := m.data.Delete(tx, key); err != nil {
 				return err
@@ -584,26 +575,25 @@ func (m *MemHandler) HandleDelete(meta txn.TxnMeta, req txnengine.DeleteReq, res
 	}
 
 	// by non-primary key, slow but works
-	rows, err = m.attributes.IndexRows(tx, Tuple{
+	entries, err = m.attributes.Index(tx, Tuple{
 		index_RelationID_Name,
-		Text(req.TableID),
+		req.TableID,
 		Text(req.ColumnName),
 	})
 	if err != nil {
 		return err
 	}
-	if len(rows) != 1 {
-		resp.ErrColumnNotFound.Name = req.ColumnName
-		return nil
+	if len(entries) != 1 {
+		return moerr.NewInternalError("wrong column name: %s", req.ColumnName)
 	}
-	attrID := rows[0].ID
+	attrIndex := entries[0].Value.Order
 	iter := m.data.NewIter(tx)
 	defer iter.Close()
 	tableKey := DataKey{
 		tableID: req.TableID,
 	}
 	for ok := iter.Seek(tableKey); ok; ok = iter.Next() {
-		key, row, err := iter.Read()
+		key, dataValue, err := iter.Read()
 		if err != nil {
 			return err
 		}
@@ -612,11 +602,11 @@ func (m *MemHandler) HandleDelete(meta txn.TxnMeta, req txnengine.DeleteReq, res
 		}
 		for i := 0; i < reqVecLen; i++ {
 			value := vectorAt(req.Vector, i)
-			attrInRow, ok := (*row).attributes[attrID]
-			if !ok {
+			if attrIndex >= len(dataValue) {
 				// attr not in row
 				continue
 			}
+			attrInRow := dataValue[attrIndex]
 			if value.Equal(attrInRow) {
 				if err := m.data.Delete(tx, key); err != nil {
 					return err
@@ -631,7 +621,7 @@ func (m *MemHandler) HandleDelete(meta txn.TxnMeta, req txnengine.DeleteReq, res
 func (m *MemHandler) HandleDeleteDatabase(meta txn.TxnMeta, req txnengine.DeleteDatabaseReq, resp *txnengine.DeleteDatabaseResp) error {
 	tx := m.getTx(meta)
 
-	rows, err := m.databases.IndexRows(tx, Tuple{
+	entries, err := m.databases.Index(tx, Tuple{
 		index_AccountID_Name,
 		Uint(req.AccessInfo.AccountID),
 		Text(req.Name),
@@ -639,53 +629,76 @@ func (m *MemHandler) HandleDeleteDatabase(meta txn.TxnMeta, req txnengine.Delete
 	if err != nil {
 		return err
 	}
-	if len(rows) == 0 {
-		resp.ErrNotFound.Name = req.Name
-		return nil
+	if len(entries) == 0 {
+		return moerr.NewNoDB()
 	}
 
-	for _, row := range rows {
-		if err := m.databases.Delete(tx, row.Key()); err != nil {
+	for _, entry := range entries {
+		if err := m.databases.Delete(tx, entry.Key); err != nil {
 			return err
 		}
-		if err := m.deleteRelationsByDBID(tx, row.ID); err != nil {
+		if err := m.deleteRelationsByDBID(tx, entry.Value.ID); err != nil {
 			return err
 		}
-		resp.ID = row.ID
+		resp.ID = entry.Value.ID
 	}
 
 	return nil
 }
 
-func (m *MemHandler) deleteRelationsByDBID(tx *Transaction, dbID string) error {
-	rows, err := m.relations.IndexRows(tx, Tuple{
+func (m *MemHandler) deleteRelationsByDBID(tx *Transaction, dbID ID) error {
+	entries, err := m.relations.Index(tx, Tuple{
 		index_DatabaseID,
-		Text(dbID),
+		dbID,
 	})
 	if err != nil {
 		return err
 	}
-	for _, row := range rows {
-		if err := m.relations.Delete(tx, row.Key()); err != nil {
+	for _, entry := range entries {
+		if err := m.relations.Delete(tx, entry.Key); err != nil {
 			return err
 		}
-		if err := m.deleteAttributesByRelationID(tx, row.ID); err != nil {
+		if err := m.deleteAttributesByRelationID(tx, entry.Value.ID); err != nil {
+			return err
+		}
+		if err := m.deleteRelationData(tx, entry.Value.ID); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func (m *MemHandler) deleteAttributesByRelationID(tx *Transaction, relationID string) error {
-	keys, err := m.attributes.Index(tx, Tuple{
+func (m *MemHandler) deleteAttributesByRelationID(tx *Transaction, relationID ID) error {
+	entries, err := m.attributes.Index(tx, Tuple{
 		index_RelationID,
-		Text(relationID),
+		relationID,
 	})
 	if err != nil {
 		return err
 	}
-	for _, key := range keys {
-		if err := m.attributes.Delete(tx, key); err != nil {
+	for _, entry := range entries {
+		if err := m.attributes.Delete(tx, entry.Key); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (m *MemHandler) deleteRelationData(tx *Transaction, relationID ID) error {
+	iter := m.data.NewIter(tx)
+	defer iter.Close()
+	tableKey := DataKey{
+		tableID: relationID,
+	}
+	for ok := iter.Seek(tableKey); ok; ok = iter.Next() {
+		key, _, err := iter.Read()
+		if err != nil {
+			return err
+		}
+		if key.tableID != relationID {
+			break
+		}
+		if err := m.data.Delete(tx, key); err != nil {
 			return err
 		}
 	}
@@ -694,37 +707,37 @@ func (m *MemHandler) deleteAttributesByRelationID(tx *Transaction, relationID st
 
 func (m *MemHandler) HandleDeleteRelation(meta txn.TxnMeta, req txnengine.DeleteRelationReq, resp *txnengine.DeleteRelationResp) error {
 	tx := m.getTx(meta)
-	rows, err := m.relations.IndexRows(tx, Tuple{
+	entries, err := m.relations.Index(tx, Tuple{
 		index_DatabaseID_Name,
-		Text(req.DatabaseID),
+		req.DatabaseID,
 		Text(req.Name),
 	})
 	if err != nil {
 		return err
 	}
-	if len(rows) == 0 {
+	if len(entries) == 0 {
 		// the caller expects no error if table not exist
 		//resp.ErrNotFound.Name = req.Name
 		return nil
 	}
-	if len(rows) != 1 {
+	if len(entries) != 1 {
 		panic("impossible")
 	}
-	row := rows[0]
-	if err := m.relations.Delete(tx, row.Key()); err != nil {
+	entry := entries[0]
+	if err := m.relations.Delete(tx, entry.Key); err != nil {
 		return err
 	}
-	if err := m.deleteAttributesByRelationID(tx, row.ID); err != nil {
+	if err := m.deleteAttributesByRelationID(tx, entry.Value.ID); err != nil {
 		return err
 	}
-	resp.ID = row.ID
+	resp.ID = entry.Value.ID
 	return nil
 }
 
 func (m *MemHandler) HandleGetDatabases(meta txn.TxnMeta, req txnengine.GetDatabasesReq, resp *txnengine.GetDatabasesResp) error {
 	tx := m.getTx(meta)
 
-	rows, err := m.databases.IndexRows(tx, Tuple{
+	entries, err := m.databases.Index(tx, Tuple{
 		index_AccountID,
 		Uint(req.AccessInfo.AccountID),
 	})
@@ -732,8 +745,8 @@ func (m *MemHandler) HandleGetDatabases(meta txn.TxnMeta, req txnengine.GetDatab
 		return err
 	}
 
-	for _, row := range rows {
-		resp.Names = append(resp.Names, row.Name)
+	for _, entry := range entries {
+		resp.Names = append(resp.Names, entry.Value.Name)
 	}
 
 	return nil
@@ -741,31 +754,31 @@ func (m *MemHandler) HandleGetDatabases(meta txn.TxnMeta, req txnengine.GetDatab
 
 func (m *MemHandler) HandleGetPrimaryKeys(meta txn.TxnMeta, req txnengine.GetPrimaryKeysReq, resp *txnengine.GetPrimaryKeysResp) error {
 	tx := m.getTx(meta)
-	rows, err := m.attributes.IndexRows(tx, Tuple{
+	entries, err := m.attributes.Index(tx, Tuple{
 		index_RelationID_IsPrimary,
-		Text(req.TableID),
+		req.TableID,
 		Bool(true),
 	})
 	if err != nil {
 		return err
 	}
-	for _, row := range rows {
-		resp.Attrs = append(resp.Attrs, &row.Attribute)
+	for _, entry := range entries {
+		resp.Attrs = append(resp.Attrs, &entry.Value.Attribute)
 	}
 	return nil
 }
 
 func (m *MemHandler) HandleGetRelations(meta txn.TxnMeta, req txnengine.GetRelationsReq, resp *txnengine.GetRelationsResp) error {
 	tx := m.getTx(meta)
-	rows, err := m.relations.IndexRows(tx, Tuple{
+	entries, err := m.relations.Index(tx, Tuple{
 		index_DatabaseID,
-		Text(req.DatabaseID),
+		req.DatabaseID,
 	})
 	if err != nil {
 		return err
 	}
-	for _, row := range rows {
-		resp.Names = append(resp.Names, row.Name)
+	for _, entry := range entries {
+		resp.Names = append(resp.Names, entry.Value.Name)
 	}
 	return nil
 }
@@ -773,7 +786,7 @@ func (m *MemHandler) HandleGetRelations(meta txn.TxnMeta, req txnengine.GetRelat
 func (m *MemHandler) HandleGetTableDefs(meta txn.TxnMeta, req txnengine.GetTableDefsReq, resp *txnengine.GetTableDefsResp) error {
 	tx := m.getTx(meta)
 
-	relRow, err := m.relations.Get(tx, Text(req.TableID))
+	relRow, err := m.relations.Get(tx, req.TableID)
 	if errors.Is(err, sql.ErrNoRows) {
 		// the caller expects no error if table not exist
 		//resp.ErrTableNotFound.ID = req.TableID
@@ -810,7 +823,7 @@ func (m *MemHandler) HandleGetTableDefs(meta txn.TxnMeta, req txnengine.GetTable
 		var attrRows []*AttributeRow
 		if err := m.iterRelationAttributes(
 			tx, req.TableID,
-			func(key Text, row *AttributeRow) error {
+			func(key ID, row *AttributeRow) error {
 				if row.IsHidden {
 					return nil
 				}
@@ -842,14 +855,14 @@ func (m *MemHandler) HandleGetTableDefs(meta txn.TxnMeta, req txnengine.GetTable
 
 	// indexes
 	{
-		rows, err := m.indexes.IndexRows(tx, Tuple{
-			index_RelationID, Text(req.TableID),
+		entries, err := m.indexes.Index(tx, Tuple{
+			index_RelationID, req.TableID,
 		})
 		if err != nil {
 			return err
 		}
-		for _, row := range rows {
-			resp.Defs = append(resp.Defs, &row.IndexTableDef)
+		for _, entry := range entries {
+			resp.Defs = append(resp.Defs, &entry.Value.IndexTableDef)
 		}
 	}
 
@@ -870,16 +883,16 @@ func (m *MemHandler) HandleGetTableDefs(meta txn.TxnMeta, req txnengine.GetTable
 
 func (m *MemHandler) HandleGetHiddenKeys(meta txn.TxnMeta, req txnengine.GetHiddenKeysReq, resp *txnengine.GetHiddenKeysResp) error {
 	tx := m.getTx(meta)
-	rows, err := m.attributes.IndexRows(tx, Tuple{
+	entries, err := m.attributes.Index(tx, Tuple{
 		index_RelationID_IsHidden,
-		Text(req.TableID),
+		req.TableID,
 		Bool(true),
 	})
 	if err != nil {
 		return err
 	}
-	for _, row := range rows {
-		resp.Attrs = append(resp.Attrs, &row.Attribute)
+	for _, entry := range entries {
+		resp.Attrs = append(resp.Attrs, &entry.Value.Attribute)
 	}
 	return nil
 }
@@ -891,7 +904,7 @@ func (m *MemHandler) HandleNewTableIter(meta txn.TxnMeta, req txnengine.NewTable
 	attrsMap := make(map[string]*AttributeRow)
 	if err := m.iterRelationAttributes(
 		tx, req.TableID,
-		func(_ Text, row *AttributeRow) error {
+		func(_ ID, row *AttributeRow) error {
 			attrsMap[row.Name] = row
 			return nil
 		},
@@ -899,7 +912,7 @@ func (m *MemHandler) HandleNewTableIter(meta txn.TxnMeta, req txnengine.NewTable
 		return err
 	}
 
-	iter := &Iter[DataKey, DataRow]{
+	iter := &Iter[DataKey, DataValue]{
 		TableIter: tableIter,
 		TableID:   req.TableID,
 		AttrsMap:  attrsMap,
@@ -910,11 +923,13 @@ func (m *MemHandler) HandleNewTableIter(meta txn.TxnMeta, req txnengine.NewTable
 			}
 			return tableIter.Seek(tableKey)
 		},
+		ReadTime: tx.Time,
+		Tx:       tx,
 	}
 
 	m.iterators.Lock()
 	defer m.iterators.Unlock()
-	id := uuid.NewString()
+	id := txnengine.NewID()
 	resp.IterID = id
 	m.iterators.Map[id] = iter
 
@@ -924,7 +939,7 @@ func (m *MemHandler) HandleNewTableIter(meta txn.TxnMeta, req txnengine.NewTable
 func (m *MemHandler) HandleOpenDatabase(meta txn.TxnMeta, req txnengine.OpenDatabaseReq, resp *txnengine.OpenDatabaseResp) error {
 	tx := m.getTx(meta)
 
-	rows, err := m.databases.IndexRows(tx, Tuple{
+	entries, err := m.databases.Index(tx, Tuple{
 		index_AccountID_Name,
 		Uint(req.AccessInfo.AccountID),
 		Text(req.Name),
@@ -933,31 +948,37 @@ func (m *MemHandler) HandleOpenDatabase(meta txn.TxnMeta, req txnengine.OpenData
 		return err
 	}
 
-	for _, row := range rows {
-		resp.ID = row.ID
+	for _, entry := range entries {
+		resp.ID = entry.Value.ID
+		resp.Name = entry.Value.Name
 		return nil
 	}
 
-	resp.ErrNotFound.Name = req.Name
-	return nil
+	return moerr.NewNoDB()
 }
 
 func (m *MemHandler) HandleOpenRelation(meta txn.TxnMeta, req txnengine.OpenRelationReq, resp *txnengine.OpenRelationResp) error {
 	tx := m.getTx(meta)
-	rows, err := m.relations.IndexRows(tx, Tuple{
+	entries, err := m.relations.Index(tx, Tuple{
 		index_DatabaseID_Name,
-		Text(req.DatabaseID),
+		req.DatabaseID,
 		Text(req.Name),
 	})
 	if err != nil {
 		return err
 	}
-	for _, row := range rows {
-		resp.ID = row.ID
-		resp.Type = row.Type
-		return nil
+	if len(entries) == 0 {
+		return moerr.NewNoSuchTable(req.DatabaseName, req.Name)
 	}
-	resp.ErrNotFound.Name = req.Name
+	entry := entries[0]
+	resp.ID = entry.Value.ID
+	resp.Type = entry.Value.Type
+	resp.RelationName = entry.Value.Name
+	db, err := m.databases.Get(tx, entry.Value.DatabaseID)
+	if err != nil {
+		return err
+	}
+	resp.DatabaseName = db.Name
 	return nil
 }
 
@@ -968,8 +989,7 @@ func (m *MemHandler) HandleRead(meta txn.TxnMeta, req txnengine.ReadReq, resp *t
 	iter, ok := m.iterators.Map[req.IterID]
 	if !ok {
 		m.iterators.Unlock()
-		resp.ErrIterNotFound.ID = req.IterID
-		return nil
+		return moerr.NewInternalError("no such iter: %v", req.IterID)
 	}
 	m.iterators.Unlock()
 
@@ -987,18 +1007,18 @@ func (m *MemHandler) HandleRead(meta txn.TxnMeta, req txnengine.ReadReq, resp *t
 
 	maxRows := 4096
 	type Row struct {
-		Value       *DataRow
-		PhysicalRow *PhysicalRow[DataKey, DataRow]
+		Value       DataValue
+		PhysicalRow *memtable.PhysicalRow[DataKey, DataValue]
 	}
 	var rows []Row
 
 	for ok := fn(); ok; ok = iter.TableIter.Next() {
 		item := iter.TableIter.Item()
-		row, err := item.Values.Read(iter.TableIter.readTime, iter.TableIter.tx)
+		value, err := item.Read(iter.ReadTime, iter.Tx)
 		if err != nil {
 			return err
 		}
-		if row.key.tableID != iter.TableID {
+		if item.Key.tableID != iter.TableID {
 			break
 		}
 
@@ -1008,7 +1028,7 @@ func (m *MemHandler) HandleRead(meta txn.TxnMeta, req txnengine.ReadReq, resp *t
 		}
 
 		rows = append(rows, Row{
-			Value:       row,
+			Value:       value,
 			PhysicalRow: item,
 		})
 		if len(rows) >= maxRows {
@@ -1018,18 +1038,18 @@ func (m *MemHandler) HandleRead(meta txn.TxnMeta, req txnengine.ReadReq, resp *t
 
 	// sort to emulate TAE behavior TODO remove this after BVT fixes
 	sort.Slice(rows, func(i, j int) bool {
-		return rows[i].PhysicalRow.LastUpdate.Load().Before(
-			rows[j].PhysicalRow.LastUpdate.Load(),
+		return rows[i].PhysicalRow.LastUpdate.Before(
+			rows[j].PhysicalRow.LastUpdate,
 		)
 	})
 
 	tx := m.getTx(meta)
 	for _, row := range rows {
 		namedRow := &NamedDataRow{
-			Row:      row.Value,
+			Value:    row.Value,
 			AttrsMap: iter.AttrsMap,
 		}
-		if err := appendNamedRow(tx, m.mheap, b, namedRow); err != nil {
+		if err := appendNamedRow(tx, m, b, namedRow); err != nil {
 			return err
 		}
 	}
@@ -1047,29 +1067,11 @@ func (m *MemHandler) HandleRead(meta txn.TxnMeta, req txnengine.ReadReq, resp *t
 
 func (m *MemHandler) HandleTruncate(meta txn.TxnMeta, req txnengine.TruncateReq, resp *txnengine.TruncateResp) error {
 	tx := m.getTx(meta)
-	_, err := m.relations.Get(tx, Text(req.TableID))
+	_, err := m.relations.Get(tx, req.TableID)
 	if errors.Is(err, sql.ErrNoRows) {
-		resp.ErrTableNotFound.ID = req.TableID
-		return nil
+		return moerr.NewNoSuchTable(req.DatabaseName, req.TableName)
 	}
-	iter := m.data.NewIter(tx)
-	defer iter.Close()
-	tableKey := DataKey{
-		tableID: req.TableID,
-	}
-	for ok := iter.Seek(tableKey); ok; ok = iter.Next() {
-		key, _, err := iter.Read()
-		if err != nil {
-			return err
-		}
-		if key.tableID != req.TableID {
-			break
-		}
-		if err := m.data.Delete(tx, key); err != nil {
-			return err
-		}
-	}
-	return nil
+	return m.deleteRelationData(tx, req.TableID)
 }
 
 func (m *MemHandler) HandleUpdate(meta txn.TxnMeta, req txnengine.UpdateReq, resp *txnengine.UpdateResp) error {
@@ -1078,8 +1080,9 @@ func (m *MemHandler) HandleUpdate(meta txn.TxnMeta, req txnengine.UpdateReq, res
 	if err := m.rangeBatchPhysicalRows(
 		tx,
 		req.TableID,
+		req.DatabaseName,
+		req.TableName,
 		req.Batch,
-		&resp.ErrTableNotFound,
 		func(
 			row *DataRow,
 			rowID types.Rowid,
@@ -1102,8 +1105,9 @@ func (m *MemHandler) HandleWrite(meta txn.TxnMeta, req txnengine.WriteReq, resp 
 	if err := m.rangeBatchPhysicalRows(
 		tx,
 		req.TableID,
+		req.DatabaseName,
+		req.TableName,
 		req.Batch,
-		&resp.ErrTableNotFound,
 		func(
 			row *DataRow,
 			rowID types.Rowid,
@@ -1122,9 +1126,10 @@ func (m *MemHandler) HandleWrite(meta txn.TxnMeta, req txnengine.WriteReq, resp 
 
 func (m *MemHandler) rangeBatchPhysicalRows(
 	tx *Transaction,
-	tableID string,
+	tableID ID,
+	dbName string,
+	tableName string,
 	b *batch.Batch,
-	errTableNotFound *txnengine.ErrRelationNotFound,
 	fn func(
 		*DataRow,
 		types.Rowid,
@@ -1135,7 +1140,7 @@ func (m *MemHandler) rangeBatchPhysicalRows(
 	nameToAttrs := make(map[string]*AttributeRow)
 	if err := m.iterRelationAttributes(
 		tx, tableID,
-		func(_ Text, row *AttributeRow) error {
+		func(_ ID, row *AttributeRow) error {
 			nameToAttrs[row.Name] = row
 			return nil
 		},
@@ -1144,8 +1149,7 @@ func (m *MemHandler) rangeBatchPhysicalRows(
 	}
 
 	if len(nameToAttrs) == 0 {
-		errTableNotFound.ID = tableID
-		return nil
+		return moerr.NewNoSuchTable(dbName, tableName)
 	}
 
 	// iter
@@ -1160,10 +1164,15 @@ func (m *MemHandler) rangeBatchPhysicalRows(
 		physicalRow := NewDataRow(
 			tableID,
 			[]Tuple{
-				{index_RowID, typeConv(rowID)},
+				{index_RowID, memtable.ToOrdered(rowID)},
 			},
 		)
-		physicalRow.attributes[nameToAttrs[rowIDColumnName].ID] = Nullable{
+		physicalRow.value = make(DataValue, 0, len(nameToAttrs))
+		idx := nameToAttrs[rowIDColumnName].Order
+		for idx >= len(physicalRow.value) {
+			physicalRow.value = append(physicalRow.value, Nullable{})
+		}
+		physicalRow.value[idx] = Nullable{
 			Value: rowID,
 		}
 
@@ -1172,19 +1181,29 @@ func (m *MemHandler) rangeBatchPhysicalRows(
 
 			attr, ok := nameToAttrs[name]
 			if !ok {
-				return fmt.Errorf("unknown attr: %s", name)
+				panic(fmt.Sprintf("unknown attr: %s", name))
 			}
 
 			if attr.Primary {
-				physicalRow.key.primaryKey = append(physicalRow.key.primaryKey, typeConv(col.Value))
+				physicalRow.key.primaryKey = append(
+					physicalRow.key.primaryKey,
+					memtable.ToOrdered(col.Value),
+				)
 			}
 
-			physicalRow.attributes[attr.ID] = col
+			idx := attr.Order
+			for idx >= len(physicalRow.value) {
+				physicalRow.value = append(physicalRow.value, Nullable{})
+			}
+			physicalRow.value[idx] = col
 		}
 
 		// use row id as primary key if no primary key is provided
 		if len(physicalRow.key.primaryKey) == 0 {
-			physicalRow.key.primaryKey = append(physicalRow.key.primaryKey, typeConv(rowID))
+			physicalRow.key.primaryKey = append(
+				physicalRow.key.primaryKey,
+				memtable.ToOrdered(rowID),
+			)
 		}
 
 		if err := fn(physicalRow, rowID); err != nil {
@@ -1202,7 +1221,7 @@ func (m *MemHandler) getTx(meta txn.TxnMeta) *Transaction {
 	defer m.transactions.Unlock()
 	tx, ok := m.transactions.Map[id]
 	if !ok {
-		tx = NewTransaction(
+		tx = memtable.NewTransaction(
 			id,
 			Time{
 				Timestamp: meta.SnapshotTS,
@@ -1253,18 +1272,18 @@ func (m *MemHandler) HandleStartRecovery(ch chan txn.TxnMeta) {
 
 func (m *MemHandler) iterRelationAttributes(
 	tx *Transaction,
-	relationID string,
-	fn func(key Text, row *AttributeRow) error,
+	relationID ID,
+	fn func(key ID, row *AttributeRow) error,
 ) error {
-	rows, err := m.attributes.IndexRows(tx, Tuple{
+	entries, err := m.attributes.Index(tx, Tuple{
 		index_RelationID,
-		Text(relationID),
+		relationID,
 	})
 	if err != nil {
 		return err
 	}
-	for _, row := range rows {
-		if err := fn(row.Key(), row); err != nil {
+	for _, entry := range entries {
+		if err := fn(entry.Key, entry.Value); err != nil {
 			return err
 		}
 	}
@@ -1294,4 +1313,13 @@ func (m *MemHandler) HandleTableStats(meta txn.TxnMeta, req txnengine.TableStats
 	resp.Rows = n
 
 	return nil
+}
+
+func newRowID() types.Rowid {
+	var rowid types.Rowid
+	err := binary.Read(crand.Reader, binary.LittleEndian, &rowid)
+	if err != nil {
+		panic(err)
+	}
+	return rowid
 }

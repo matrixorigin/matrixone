@@ -151,7 +151,7 @@ CREATE TABLE t1(a varchar(255), b INT, c INT UNSIGNED, d DECIMAL(12,2), e REAL);
 INSERT INTO t1 VALUES('iynfj', 1, 1, 1, 1);
 INSERT INTO t1 VALUES('innfj', 2, 2, 2, 2);
 SELECT DISTINCT SUM(  a ) FROM t1 GROUP BY a HAVING a IN ( AVG( 1 ), 1 + a);
-Aggregate function of 'sum' do not support implicit conversions for param of [VARCHAR]
+invalid argument aggregate function sum, bad value [VARCHAR]
 SELECT DISTINCT SUM(  b ) FROM t1 GROUP BY b HAVING b IN ( AVG( 1 ), 1 + b);
 SUM(  b )
 1
@@ -184,7 +184,7 @@ SELECT a, AVG(t1.b),
 (SELECT t11.c FROM t1 t11 WHERE t11.a = t1.a AND t11.b = AVG(t1.b)) AS t11c,
 (SELECT t12.c FROM t1 t12 WHERE t12.a = t1.a AND t12.b = AVG(t1.b)) AS t12c
 FROM t1 GROUP BY a;
-aggregate functions not allowed here
+SQL syntax error: aggregate function avg not allowed in WHERE clause
 DROP TABLE t1;
 CREATE TABLE t1 (id int(11),value1 float(10,2));
 INSERT INTO t1 VALUES (1,0.00),(1,1.00), (1,2.00), (2,10.00), (2,11.00), (2,12.00);
@@ -247,7 +247,7 @@ drop table t1;
 CREATE TABLE t1 (a INT, b INT);
 INSERT INTO t1 VALUES (1,1),(1,2),(2,3);
 SELECT (SELECT COUNT(DISTINCT t1.b)) FROM t1 GROUP BY t1.a;
-correlated columns in aggregate function not yet supported
+correlated columns in aggregate function is not yet implemented
 SELECT (SELECT COUNT(DISTINCT 12)) FROM t1 GROUP BY t1.a;
 (SELECT COUNT(DISTINCT 12))
 1
@@ -282,11 +282,11 @@ INSERT INTO t1 SELECT a, b+8192    FROM t1;
 INSERT INTO t1 SELECT a, b+16384   FROM t1;
 INSERT INTO t1 SELECT a, b+32768   FROM t1;
 SELECT a,COUNT(DISTINCT b) AS cnt FROM t1 GROUP BY a HAVING cnt > 50;
-column "cnt" must appear in the GROUP BY clause or be used in an aggregate function
+SQL syntax error: column "cnt" must appear in the GROUP BY clause or be used in an aggregate function
 SELECT DISTINCT a, SUM( b) AS sumation FROM t1 GROUP BY a HAVING sumation > 50;
-column "sumation" must appear in the GROUP BY clause or be used in an aggregate function
+SQL syntax error: column "sumation" must appear in the GROUP BY clause or be used in an aggregate function
 SELECT DISTINCT a, AVG( b) AS average FROM t1 GROUP BY a HAVING average > 50;
-column "average" must appear in the GROUP BY clause or be used in an aggregate function
+SQL syntax error: column "average" must appear in the GROUP BY clause or be used in an aggregate function
 SELECT a,COUNT(DISTINCT b) FROM t1 GROUP BY a HAVING COUNT(DISTINCT b) > 50;
 a	COUNT(DISTINCT b)
 1	65536
@@ -319,7 +319,7 @@ grp	sum(a)	count(a)	avg(a)	std(a)	variance(a)	bit_or(a)	bit_and(a)	min(a)	max(a)
 2	5	2	2.5000	0.5	0.25	3	2	2	3	b	c
 3	15	3	5.0000	0.816496580927726	0.6666666666666666	7	4	4	6	C	E
 select grp, sum(a)+count(a)+avg(a)+std(a)+variance(a)+bit_or(a)+bit_and(a)+min(a)+max(a)+min(c)+max(c) as sum from t1 group by grp;
-Can't cast column from CHAR type to DOUBLE type because of one or more values in that column.
+strconv.ParseFloat: parsing "a": invalid syntax
 create table t2 (grp int, a bigint unsigned, c char(10));
 insert into t2 select grp,max(a)+max(grp),max(c) from t1 group by grp;
 select * from t2;
@@ -332,17 +332,16 @@ drop table t2;
 CREATE TABLE t1(a DOUBLE);
 INSERT INTO t1 VALUES (10), (20);
 SELECT AVG(min(a)) FROM t1 group by a;
-aggregate function calls cannot be nested
+SQL syntax error: aggregate function min calls cannot be nested
 DROP TABLE t1;
 CREATE TABLE t1 (id int(11),value1 float(10,2));
 INSERT INTO t1 VALUES (1,0.00),(1,1.00), (1,2.00), (2,10.00), (2,11.00), (2,12.00);
 CREATE TABLE t2 (id int(11),name char(20));
 INSERT INTO t2 VALUES (1,'Set One'),(2,'Set Two');
 select name, avg(value1), std(value1), variance(value1) from t1, t2 where t1.id = t2.id group by t1.id;
-column "t2.name" must appear in the GROUP BY clause or be used in an aggregate function
+SQL syntax error: column "t2.name" must appear in the GROUP BY clause or be used in an aggregate function
 drop table t1;
 drop table t2;
-
 create table t1 (grp int, a bigint unsigned, c char(10) not null);
 insert into t1 values (1,1,"a");
 insert into t1 values (2,2,"b");

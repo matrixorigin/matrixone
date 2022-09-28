@@ -23,10 +23,11 @@ package logical
 import "C"
 
 import (
+	"unsafe"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"unsafe"
 )
 
 const (
@@ -47,7 +48,7 @@ func And(xs, ys, rs *vector.Vector) error {
 	rc := C.Logic_VecAnd(unsafe.Pointer(&rt[0]), unsafe.Pointer(&xt[0]), unsafe.Pointer(&yt[0]), C.uint64_t(len(rt)),
 		(*C.uint64_t)(nulls.Ptr(xs.Nsp)), (*C.uint64_t)(nulls.Ptr(ys.Nsp)), (*C.uint64_t)(nulls.Ptr(rs.Nsp)), C.int32_t(flag))
 	if rc != 0 {
-		return moerr.NewError(moerr.INTERNAL_ERROR, "logic and internal error")
+		return moerr.NewInternalError("logical AND")
 	}
 	return nil
 }
@@ -64,7 +65,7 @@ func Or(xs, ys, rs *vector.Vector) error {
 	rc := C.Logic_VecOr(unsafe.Pointer(&rt[0]), unsafe.Pointer(&xt[0]), unsafe.Pointer(&yt[0]), C.uint64_t(len(rt)),
 		(*C.uint64_t)(nulls.Ptr(xs.Nsp)), (*C.uint64_t)(nulls.Ptr(ys.Nsp)), (*C.uint64_t)(nulls.Ptr(rs.Nsp)), C.int32_t(flag))
 	if rc != 0 {
-		return moerr.NewError(moerr.INTERNAL_ERROR, "logic or internal error")
+		return moerr.NewInternalError("logic OR")
 	}
 	return nil
 }
@@ -82,7 +83,7 @@ func Xor(xs, ys, rs *vector.Vector) error {
 	rc := C.Logic_VecXor(unsafe.Pointer(&rt[0]), unsafe.Pointer(&xt[0]), unsafe.Pointer(&yt[0]),
 		C.uint64_t(len(rt)), (*C.uint64_t)(nulls.Ptr(rs.Nsp)), C.int32_t(flag))
 	if rc != 0 {
-		return moerr.NewError(moerr.INTERNAL_ERROR, "logic xor internal error")
+		return moerr.NewInternalError("logic XOR")
 	}
 	return nil
 }
@@ -96,7 +97,7 @@ func Not(xs, rs *vector.Vector) error {
 	rc := C.Logic_VecNot(unsafe.Pointer(&rt[0]), unsafe.Pointer(&xt[0]),
 		C.uint64_t(len(rt)), (*C.uint64_t)(nulls.Ptr(rs.Nsp)), C.int32_t(flag))
 	if rc != 0 {
-		return moerr.NewError(moerr.INTERNAL_ERROR, "logic not internal error")
+		return moerr.NewInternalError("logic NOT")
 	}
 	return nil
 }

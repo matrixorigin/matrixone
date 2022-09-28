@@ -16,6 +16,7 @@ package jobs
 
 import (
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
 	"unsafe"
 
 	"github.com/RoaringBitmap/roaring"
@@ -167,38 +168,23 @@ func (task *mergeBlocksTask) Execute() (err error) {
 	ids := make([]*common.ID, 0, len(task.compacted))
 	task.deletes = make([]*roaring.Bitmap, len(task.compacted))
 
-	// 1. Prepare sort key resources
+	// Prepare sort key resources
 	// If there's no sort key, use physical address key
+	var sortColDef *catalog.ColDef
+	if schema.HasSortKey() {
+		sortColDef = schema.GetSingleSortKey()
+	} else {
+		sortColDef = schema.PhyAddrKey
+	}
+
 	for i, block := range task.compacted {
-		var vec containers.Vector
-		if !schema.HasSortKey() {
-			if view, err = block.GetColumnDataById(schema.PhyAddrKey.Idx, nil); err != nil {
-				return
-			}
-			task.deletes[i] = view.DeleteMask
-			view.ApplyDeletes()
-			vec = view.Orphan()
-		} else if schema.SortKey.Size() == 1 {
-			if view, err = block.GetColumnDataById(schema.SortKey.Defs[0].Idx, nil); err != nil {
-				return
-			}
-			task.deletes[i] = view.DeleteMask
-			view.ApplyDeletes()
-			vec = view.Orphan()
-		} else {
-			cols := make([]containers.Vector, schema.SortKey.Size())
-			for idx := range cols {
-				if view, err = block.GetColumnDataById(schema.SortKey.Defs[idx].Idx, nil); err != nil {
-					return
-				}
-				task.deletes[i] = view.DeleteMask
-				view.ApplyDeletes()
-				cols[idx] = view.Orphan()
-				defer cols[idx].Close()
-			}
-			vec = model.EncodeCompoundColumn(cols...)
+		if view, err = block.GetColumnDataById(sortColDef.Idx, nil); err != nil {
+			return
 		}
 		defer view.Close()
+		task.deletes[i] = view.DeleteMask
+		view.ApplyDeletes()
+		vec := view.Orphan()
 		defer vec.Close()
 		vecs = append(vecs, vec)
 		rows[i] = uint32(vec.Length())
@@ -206,6 +192,7 @@ func (task *mergeBlocksTask) Execute() (err error) {
 		length += vec.Length()
 		ids = append(ids, block.Fingerprint())
 	}
+
 	to := make([]uint32, 0)
 	maxrow := schema.BlockMaxRows
 	totalRows := length
@@ -230,15 +217,15 @@ func (task *mergeBlocksTask) Execute() (err error) {
 	}
 	// logutil.Infof("mapping is %v", mapping)
 	// logutil.Infof("sortedIdx is %v", sortedIdx)
-
-	ts := task.txn.GetStartTS()
-	var flushTask tasks.Task
 	length = 0
 	var blk handle.Block
 	toAddr := make([]uint32, 0, len(vecs))
+	// index meta for every created block
 	// Prepare new block placeholder
 	// Build and flush block index if sort key is defined
 	// Flush sort key it correlates to only one column
+	batchs := make([]*containers.Batch, 0)
+	blockHandles := make([]handle.Block, 0)
 	for _, vec := range vecs {
 		toAddr = append(toAddr, uint32(length))
 		length += vec.Length()
@@ -247,60 +234,33 @@ func (task *mergeBlocksTask) Execute() (err error) {
 			return err
 		}
 		task.createdBlks = append(task.createdBlks, blk.GetMeta().(*catalog.BlockEntry))
-		meta := blk.GetMeta().(*catalog.BlockEntry)
-
-		if !schema.HasSortKey() {
-			continue
-		}
-
-		def := schema.SortKey.Defs[0]
-
-		// logutil.Infof("Flushing %s %v", meta.AsCommonID().String(), def)
-		// Flush sort key correlated column
-		if schema.SortKey.Size() == 1 {
-			closure := meta.GetBlockData().FlushColumnDataClosure(ts, def.Idx, vec, false)
-			flushTask, err = task.scheduler.ScheduleScopedFn(tasks.WaitableCtx, tasks.IOTask, meta.AsCommonID(), closure)
-			if err != nil {
-				return
-			}
-			if err = flushTask.WaitDone(); err != nil {
-				return
-			}
-		}
-		// Flush index
-		if err = BuildAndFlushIndex(meta.GetBlockData().GetBlockFile(), meta, vec); err != nil {
-			return
-		}
-		// Replay index
-		if err = meta.GetBlockData().ReplayIndex(); err != nil {
-			return
-		}
+		blockHandles = append(blockHandles, blk)
+		batch := containers.NewBatch()
+		batchs = append(batchs, batch)
 	}
-
-	// Flush phyAddr column
+	phyAddrVecs := make([]containers.Vector, 0)
 	phyAddr := schema.PhyAddrKey
 	for i, blk := range task.createdBlks {
 		vec, err := model.PreparePhyAddrData(phyAddr.Type, blk.MakeKey(), 0, uint32(vecs[i].Length()))
 		if err != nil {
 			return err
 		}
-		defer vec.Close()
-		closure := blk.GetBlockData().FlushColumnDataClosure(ts, phyAddr.Idx, vec, false)
-		flushTask, err = task.scheduler.ScheduleScopedFn(tasks.WaitableCtx, tasks.IOTask, blk.AsCommonID(), closure)
-		if err != nil {
-			return err
-		}
-		if err = flushTask.WaitDone(); err != nil {
-			return err
-		}
+		phyAddrVecs = append(phyAddrVecs, vec)
+		//batchs[i].AddVector(phyAddr.Name, vec)
 	}
+	// Build and flush block index if sort key is defined
+	// Flush sort key it correlates to only one column
+
 	for _, def := range schema.ColDefs {
+		if def.IsPhyAddr() {
+			for i := range task.createdBlks {
+				batchs[i].AddVector(phyAddr.Name, phyAddrVecs[i])
+			}
+			continue
+		}
 		// Skip
 		// PhyAddr column was processed before
 		// If only one single sort key, it was processed before
-		if def.IsPhyAddr() || (schema.IsSingleSortKey() && def.IsSortKey()) {
-			continue
-		}
 		vecs = vecs[:0]
 		for _, block := range task.compacted {
 			if view, err = block.GetColumnDataById(def.Idx, nil); err != nil {
@@ -316,41 +276,55 @@ func (task *mergeBlocksTask) Execute() (err error) {
 		for i := range vecs {
 			defer vecs[i].Close()
 		}
-		for i := range vecs {
-			blk := task.createdBlks[i]
-			closure := blk.GetBlockData().FlushColumnDataClosure(ts, def.Idx, vecs[i], false)
-			flushTask, err = task.scheduler.ScheduleScopedFn(
-				tasks.WaitableCtx,
-				tasks.IOTask,
-				blk.AsCommonID(),
-				closure)
-			if err != nil {
-				return
-			}
-			if err = flushTask.WaitDone(); err != nil {
-				return
-			}
+		for i, vec := range vecs {
+			batchs[i].AddVector(def.Name, vec)
 		}
 	}
-	for i, blk := range task.createdBlks {
-		closure := blk.GetBlockData().SyncBlockDataClosure(ts, rows[i])
-		flushTask, err = task.scheduler.ScheduleScopedFn(tasks.WaitableCtx, tasks.IOTask, blk.AsCommonID(), closure)
+
+	id := &common.ID{
+		TableID:   task.toSegEntry.GetTable().GetID(),
+		SegmentID: task.toSegEntry.GetID(),
+	}
+	name := blockio.EncodeSegName(id)
+	writer := blockio.NewWriter(task.toSegEntry.GetSegmentData().GetSegmentFile().GetFs(), name)
+	for _, bat := range batchs {
+		block, err := writer.WriteBlock(bat)
 		if err != nil {
-			return
+			return err
 		}
-		if err = flushTask.WaitDone(); err != nil {
-			return
+		for idx, vec := range bat.Vecs {
+			if phyAddr.Idx == idx {
+				continue
+			}
+			_, err = BuildColumnIndex(writer.GetWriter(), block, schema.ColDefs[idx], vec, false, false)
+			if err != nil {
+				return err
+			}
 		}
 	}
+	blocks, err := writer.Sync()
+	if err != nil {
+		return err
+	}
+	for i, block := range blocks {
+		metaLoc := blockio.EncodeSegMetaLoc(id, block.GetExtent(), uint32(batchs[i].Length()))
+		err = blockHandles[i].UpdateMetaLoc(metaLoc)
+	}
+	for _, blk := range task.createdBlks {
+		if err = blk.GetBlockData().ReplayIndex(); err != nil {
+			return err
+		}
+	}
+
 	for _, compacted := range task.compacted {
 		seg := compacted.GetSegment()
 		if err = seg.SoftDeleteBlock(compacted.Fingerprint().BlockID); err != nil {
-			return
+			return err
 		}
 	}
 	for _, entry := range task.mergedSegs {
 		if err = task.rel.SoftDeleteSegment(entry.GetID()); err != nil {
-			return
+			return err
 		}
 	}
 
@@ -368,7 +342,7 @@ func (task *mergeBlocksTask) Execute() (err error) {
 		task.scheduler,
 		task.deletes)
 	if err = task.txn.LogTxnEntry(table.GetDB().ID, table.ID, txnEntry, ids); err != nil {
-		return
+		return err
 	}
-	return
+	return err
 }

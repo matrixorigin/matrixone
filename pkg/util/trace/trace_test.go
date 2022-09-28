@@ -47,7 +47,7 @@ func Test_initExport(t *testing.T) {
 			name: "disable",
 			args: args{
 				enableTracer: false,
-				config:       &tracerProviderConfig{enableTracer: 0},
+				config:       &tracerProviderConfig{enable: false},
 			},
 			empty: true,
 		},
@@ -56,7 +56,7 @@ func Test_initExport(t *testing.T) {
 			args: args{
 				enableTracer: true,
 				config: &tracerProviderConfig{
-					enableTracer: 1, batchProcessMode: InternalExecutor, sqlExecutor: newDummyExecutorFactory(ch),
+					enable: true, batchProcessMode: InternalExecutor, sqlExecutor: newDummyExecutorFactory(ch),
 				}},
 			empty: false,
 		},
@@ -65,7 +65,7 @@ func Test_initExport(t *testing.T) {
 			args: args{
 				enableTracer: true,
 				config: &tracerProviderConfig{
-					enableTracer: 1, batchProcessMode: FileService, sqlExecutor: newDummyExecutorFactory(ch),
+					enable: true, batchProcessMode: FileService, sqlExecutor: newDummyExecutorFactory(ch),
 				}},
 			empty: false,
 		},
@@ -73,7 +73,7 @@ func Test_initExport(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			export.ResetGlobalBatchProcessor()
-			initExport(context.TODO(), tt.args.config)
+			initExporter(context.TODO(), tt.args.config)
 			if tt.empty {
 				require.Equal(t, "*export.noopBatchProcessor", fmt.Sprintf("%v", reflect.ValueOf(export.GetGlobalBatchProcessor()).Type()))
 			} else {
@@ -85,13 +85,15 @@ func Test_initExport(t *testing.T) {
 }
 
 func TestDefaultContext(t *testing.T) {
+	var spanId SpanID
+	spanId.SetByUUID(GetNodeResource().NodeUuid)
 	tests := []struct {
 		name string
 		want context.Context
 	}{
 		{
 			name: "normal",
-			want: ContextWithSpanContext(context.Background(), SpanContextWithIDs(nilTraceID, nilSpanID)),
+			want: ContextWithSpanContext(context.Background(), SpanContextWithIDs(nilTraceID, spanId)),
 		},
 	}
 	for _, tt := range tests {
@@ -102,7 +104,9 @@ func TestDefaultContext(t *testing.T) {
 }
 
 func TestDefaultSpanContext(t *testing.T) {
-	sc := SpanContextWithIDs(nilTraceID, nilSpanID)
+	var spanId SpanID
+	spanId.SetByUUID(GetNodeResource().NodeUuid)
+	sc := SpanContextWithIDs(nilTraceID, spanId)
 	tests := []struct {
 		name string
 		want *SpanContext

@@ -10,9 +10,9 @@ SELECT * FROM (SELECT 1 as id) b WHERE id IN (SELECT * FROM (SELECT 1 as id) c O
 id
 1
 SELECT * FROM (SELECT 1) a  WHERE 1 IN (SELECT 1,1);
-subquery should return 1 column
+invalid input: subquery returns more than 1 column
 SELECT * FROM (SELECT 1) b WHERE 1 IN (SELECT *);
-No tables used
+SQL parser error: No tables used
 SELECT ((0,1) NOT IN (SELECT NULL,1)) IS NULL;
 ((0,1) NOT IN (SELECT NULL,1)) IS NULL
 1
@@ -37,9 +37,9 @@ SELECT 0 IN (SELECT 1 FROM t1 a);
 0 IN (SELECT 1 FROM t1 a)
 0
 select * from t3 where a in (select a,b from t2);
-subquery should return 1 column
+invalid input: subquery returns more than 1 column
 select * from t3 where a in (select * from t2);
-subquery should return 1 column
+invalid input: subquery returns more than 1 column
 drop table if exists t1;
 drop table if exists t2;
 drop table if exists t3;
@@ -218,7 +218,7 @@ a
 1
 2
 select a from t2 having a in (select a from t1);
-column "t2.a" must appear in the GROUP BY clause or be used in an aggregate function
+SQL syntax error: column "t2.a" must appear in the GROUP BY clause or be used in an aggregate function
 drop table if exists t1;
 drop table if exists t2;
 create table t1 (oref int, grp int, ie int) ;
@@ -776,7 +776,7 @@ t3.a in (select t1.b from t1
 where t1.a+1=t1.a+1 and
 t1.a < (select t4.a+10
 from t4, t5 limit 2));
-scalar subquery returns more than 1 row
+internal error: scalar subquery returns more than 1 row
 DROP TABLE IF EXISTS t1;
 drop table if exists t2;
 drop table if exists t3;
@@ -956,22 +956,21 @@ INSERT INTO t2 VALUES
 (2,10), (2,20), (4,10), (5,10), (3,20), (2,40);
 INSERT INTO t3 VALUES (10), (30), (10), (20) ;
 SELECT a FROM t1 GROUP BY a HAVING a IN (SELECT c FROM t2 WHERE MAX(b)>20);
-aggregate functions not allowed here
+SQL syntax error: aggregate function max not allowed in WHERE clause
 SELECT a FROM t1 GROUP BY a  HAVING a IN (SELECT c FROM t2 WHERE MAX(b)<d);
-aggregate functions not allowed here
+SQL syntax error: aggregate function max not allowed in WHERE clause
 SELECT a FROM t1 GROUP BY a  HAVING a IN (SELECT c FROM t2 WHERE MAX(b)>d);
-aggregate functions not allowed here
+SQL syntax error: aggregate function max not allowed in WHERE clause
 SELECT a FROM t1 GROUP BY a  HAVING a IN (SELECT c FROM t2  WHERE d >= SOME(SELECT e FROM t3 WHERE MAX(b)=e));
-aggregate functions not allowed here
+SQL syntax error: aggregate function max not allowed in WHERE clause
 SELECT a FROM t1 GROUP BY a  HAVING a IN (SELECT c FROM t2  WHERE  EXISTS(SELECT e FROM t3 WHERE MAX(b)=e AND e <= d));
-aggregate functions not allowed here
+SQL syntax error: aggregate function max not allowed in WHERE clause
 SELECT a FROM t1 GROUP BY a  HAVING a IN (SELECT c FROM t2  WHERE d > SOME(SELECT e FROM t3 WHERE MAX(b)=e));
-aggregate functions not allowed here
+SQL syntax error: aggregate function max not allowed in WHERE clause
 SELECT a FROM t1 GROUP BY a  HAVING a IN (SELECT c FROM t2  WHERE  EXISTS(SELECT e FROM t3 WHERE MAX(b)=e AND e < d));
-aggregate functions not allowed here
+SQL syntax error: aggregate function max not allowed in WHERE clause
 SELECT a FROM t1 GROUP BY a  HAVING a IN (SELECT c FROM t2  WHERE MIN(b) < d AND EXISTS(SELECT e FROM t3 WHERE MAX(b)=e AND e <= d));
-aggregate functions not allowed here
-
+SQL syntax error: aggregate function min not allowed in WHERE clause
 DROP TABLE IF EXISTS t1;
 drop table if exists t2;
 drop table if exists t3;
@@ -1010,7 +1009,7 @@ insert into t1 (oref, grp) values(1, 1),(1, 1);
 create table t2 (oref int, a int);
 insert into t2 values(1, NULL),(2, NULL);
 select a, oref, a in (select count(*) from t1 group by grp having grp=t2.oref) Z from t2;
-column "t2.oref" must appear in the GROUP BY clause or be used in an aggregate function
+SQL syntax error: column "t2.oref" must appear in the GROUP BY clause or be used in an aggregate function
 DROP TABLE IF EXISTS t1;
 drop table if exists t2;
 create table t1 (a int, b int, primary key (a));
@@ -1274,7 +1273,7 @@ FROM
 t1s LEFT OUTER JOIN t2s ON t2s.i = t1s.i
 HAVING t2s.i = 999
 );
-column "t2s.i" must appear in the GROUP BY clause or be used in an aggregate function
+SQL syntax error: column "t2s.i" must appear in the GROUP BY clause or be used in an aggregate function
 SELECT * FROM t1
 WHERE t1.I IN
 (
@@ -1283,7 +1282,7 @@ FROM
 t1s LEFT OUTER JOIN t2s ON t2s.i = t1s.i
 HAVING t2s.i = 999
 );
-column "t2s.i" must appear in the GROUP BY clause or be used in an aggregate function
+SQL syntax error: column "t2s.i" must appear in the GROUP BY clause or be used in an aggregate function
 SELECT * FROM t1
 WHERE NOT t1.I = ANY
 (
@@ -1292,7 +1291,7 @@ FROM
 t1s LEFT OUTER JOIN t2s ON t2s.i = t1s.i
 HAVING t2s.i = 999
 );
-column "t2s.i" must appear in the GROUP BY clause or be used in an aggregate function
+SQL syntax error: column "t2s.i" must appear in the GROUP BY clause or be used in an aggregate function
 SELECT * FROM t1
 WHERE t1.i = ANY (
 SELECT t2s.i
@@ -1300,7 +1299,7 @@ FROM
 t1s LEFT OUTER JOIN t2s ON t2s.i = t1s.i
 HAVING t2s.i = 999
 );
-column "t2s.i" must appear in the GROUP BY clause or be used in an aggregate function
+SQL syntax error: column "t2s.i" must appear in the GROUP BY clause or be used in an aggregate function
 DROP TABLE IF EXISTS t1;
 drop table if exists t2;
 drop table if exists t3;
@@ -1500,13 +1499,13 @@ null
 SELECT (NULL OR 1) IN (SELECT 1 FROM t1);
 Operator '=' with parameters [BOOL BIGINT] will be implemented in future version.
 SELECT (NULL IS NULL) IN  (SELECT 1 FROM t1);
-non-scalar subquery in SELECT clause will be supported in future version.
+non-scalar subquery in SELECT clause is not yet implemented
 DELETE FROM t1;
 SELECT NULL IN (SELECT 1 FROM t1);
 NULL IN (SELECT 1 FROM t1)
 0
 SELECT (NULL AND 1) IN (SELECT 1 FROM t1);
-non-scalar subquery in SELECT clause will be supported in future version.
+non-scalar subquery in SELECT clause is not yet implemented
 SELECT (NULL, 1) IN (SELECT 1,1 FROM t1);
 (NULL, 1) IN (SELECT 1,1 FROM t1)
 0
@@ -1514,9 +1513,9 @@ SELECT (NULL, NULL) IN (SELECT 1,1 FROM t1);
 (NULL, NULL) IN (SELECT 1,1 FROM t1)
 0
 SELECT (NULL OR 1) IN (SELECT 1 FROM t1);
-non-scalar subquery in SELECT clause will be supported in future version.
+non-scalar subquery in SELECT clause is not yet implemented
 SELECT (NULL IS NULL) IN  (SELECT 1 FROM t1);
-non-scalar subquery in SELECT clause will be supported in future version.
+non-scalar subquery in SELECT clause is not yet implemented
 DROP TABLE IF EXISTS t1;
 CREATE TABLE t1 (a INTEGER);
 INSERT INTO t1 VALUES (1), (2), (3);

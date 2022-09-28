@@ -38,7 +38,7 @@ FROM (SELECT ADDDATE(DATE'2000-01-01', INTERVAL 1 DAY) AS ts) AS dt;
 is_tomorrow	DATE(ts)
 2021-01-02 00:00:00	2000-01-02
 SELECT ADDDATE(TIME'00:00:00', INTERVAL 1 HOUR);
-Function or operator 'time' will be implemented in future version.
+not supported: function or operator 'time'
 SELECT ADDDATE('2021-01-01', INTERVAL 1 DAY);
 ADDDATE('2021-01-01', INTERVAL 1 DAY)
 2021-01-02 00:00:00
@@ -52,9 +52,9 @@ SELECT ADDDATE('2021-01-01 00:00:00', INTERVAL 1 HOUR);
 ADDDATE('2021-01-01 00:00:00', INTERVAL 1 HOUR)
 2021-01-01 01:00:00
 SELECT ADDDATE('00:00:00', INTERVAL 1 DAY);
-Incorrect datetime format
+invalid input: invalid datatime value 00:00:00
 SELECT ADDDATE('00:00:00', INTERVAL 1 HOUR);
-Incorrect datetime format
+invalid input: invalid datatime value 00:00:00
 select date_add("1997-12-31 23:59:59",INTERVAL 1 SECOND);
 date_add("1997-12-31 23:59:59",INTERVAL 1 SECOND)
 1998-01-01 00:00:00
@@ -107,9 +107,9 @@ select date_add("1997-12-31 23:59:59",INTERVAL -100000 DAY);
 date_add("1997-12-31 23:59:59",INTERVAL -100000 DAY)
 1724-03-17 23:59:59
 select date_add("1997-12-31 23:59:59",INTERVAL 100000 MONTH);
-Beyond the range of datetime
+data out of range: data type datetime, 
 select date_add("1997-12-31 23:59:59",INTERVAL -100000 YEAR);
-Beyond the range of datetime
+data out of range: data type datetime, 
 select date_add("1997-12-31 23:59:59",INTERVAL "10000:1" MINUTE_SECOND);
 date_add("1997-12-31 23:59:59",INTERVAL "10000:1" MINUTE_SECOND)
 1998-01-07 22:40:00
@@ -147,7 +147,7 @@ select date_add("1997-12-31 23:59:59",INTERVAL NULL MINUTE_SECOND);
 date_add("1997-12-31 23:59:59",INTERVAL NULL MINUTE_SECOND)
 null
 select date_add("9999-12-31 23:59:59",INTERVAL 1 SECOND);
-Beyond the range of datetime
+data out of range: data type datetime, 
 select date_add('1998-01-30',Interval 1 month);
 date_add('1998-01-30',Interval 1 month)
 1998-02-28 00:00:00
@@ -238,7 +238,7 @@ select date_add('1000-01-01 00:00:00', interval '1.03:02:01.05' day_microsecond)
 date_add('1000-01-01 00:00:00', interval '1.03:02:01.05' day_microsecond)
 1000-01-02 03:02:01.050000000
 select date_add('1000-01-01 00:00:00', interval '1.02' day_microsecond);
-Invalid interval format
+internal error: conv intervaltype has jagged array input
 select date_add("0199-12-31 23:59:59",INTERVAL 2 SECOND);
 date_add("0199-12-31 23:59:59",INTERVAL 2 SECOND)
 0200-01-01 00:00:01
@@ -247,40 +247,46 @@ date_add("2001-01-01 23:59:59",INTERVAL -2000 YEAR)
 0001-01-01 23:59:59
 SELECT
 date_add('1995-01-05', INTERVAL '9223372036854775807-02' YEAR_MONTH) as result;
-Interval num overflow
+invalid input: interval type, bad value '-10'
 SELECT
 date_add('1995-01-05', INTERVAL '9223372036854775808-02' YEAR_MONTH) as result;
-Interval num overflow
+invalid input: invalid time interval value '9223372036854775808-02'
 SELECT
 date_add('1995-01-05', INTERVAL '9223372036854775808-02' DAY) as result;
-Interval num overflow
+invalid input: invalid time interval value '9223372036854775808-02'
 SELECT
 date_add('1995-01-05', INTERVAL '9223372036854775808-02' WEEK) as result;
-Interval num overflow
+invalid input: invalid time interval value '9223372036854775808-02'
 SELECT
 date_add('1995-01-05', INTERVAL '9223372036854775808-02' SECOND) as result;
-Interval num overflow
+invalid input: invalid time interval value '9223372036854775808-02'
 SELECT
 date_add('1995-01-05', INTERVAL '9223372036854775700-02' YEAR_MONTH) as result;
-Interval num overflow
+invalid input: interval type, bad value '-1294'
 SELECT
 date_add('1995-01-05', INTERVAL 9223372036854775806 SECOND) as result;
-Interval num overflow
+invalid argument interval, bad value 9223372036854775806
 SELECT
 date_add('1995-01-05', INTERVAL 9223372036854775806 MINUTE) as result;
-Interval num overflow
+invalid argument interval, bad value 9223372036854775806
 SELECT
 date_add('1995-01-05', INTERVAL 9223372036854775806 HOUR) as result;
-Interval num overflow
+invalid argument interval, bad value 9223372036854775806
 SELECT
 date_add('1995-01-05', INTERVAL -9223372036854775806 SECOND) as result;
-Interval num overflow
+invalid argument interval, bad value -9223372036854775806
 SELECT
 date_add('1995-01-05', INTERVAL -9223372036854775806 MINUTE) as result;
-Interval num overflow
+invalid argument interval, bad value -9223372036854775806
 SELECT
 date_add('1995-01-05', INTERVAL -9223372036854775806 HOUR) as result;
-Interval num overflow
+invalid argument interval, bad value -9223372036854775806
+select date_add("2001-01-01 23:59:59",null);
+date_add(2001-01-01 23:59:59, null)
+NULL
+select date_add(null, null);
+date_add(null, null)
+NULL
 drop table if exists t1;
 create table t1 (a int, b date);
 insert into t1 values(1, "2010-10-30"), (2, NULL);
@@ -340,7 +346,7 @@ OCT(DATE_SUB('2007-08-03', INTERVAL 1 MINUTE)) AS field_str1,
 OCT(DATE_SUB('2007-08-03 17:33:00', INTERVAL 1 MINUTE)) AS field1_str2,
 OCT(DATE_SUB(DATE('2007-08-03'), INTERVAL 1 DAY)) AS field_date,
 OCT(DATE_SUB(CAST('2007-08-03 17:33:00' AS DATETIME), INTERVAL 1 MINUTE)) AS field_datetime;
-Function 'oct' with parameters [DATETIME] is not supported.
+invalid argument function oct, bad value [DATETIME]
 select date_sub("1998-01-01 00:00:00.000001",INTERVAL "1 1:1:1.000002" DAY_MICROSECOND);
 date_sub("1998-01-01 00:00:00.000001",INTERVAL "1 1:1:1.000002" DAY_MICROSECOND)
 1997-12-30 22:58:58.999999000

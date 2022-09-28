@@ -18,6 +18,7 @@ import (
 	"sort"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
@@ -219,7 +220,7 @@ func TestGetDeleteUpdateByHiddenKey(t *testing.T) {
 			err = rel.UpdateByPhyAddrKey(v, 3, int64(9999))
 			assert.NoError(t, err)
 			err2 := rel.UpdateByPhyAddrKey(v, schema.PhyAddrKey.Idx, v)
-			assert.ErrorIs(t, err2, data.ErrUpdatePhyAddrKey)
+			assert.True(t, moerr.IsMoErrCode(err2, moerr.ErrTAEError))
 		}
 		return
 	}, nil)

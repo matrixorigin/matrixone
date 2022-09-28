@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
@@ -139,7 +140,7 @@ func (seg *localSegment) prepareApplyNode(node InsertNode) (err error) {
 	appended := uint32(0)
 	for appended < node.RowsWithoutDeletes() {
 		appender, err := seg.tableHandle.GetAppender()
-		if err == data.ErrAppendableSegmentNotFound {
+		if moerr.IsMoErrCode(err, moerr.ErrAppendableSegmentNotFound) {
 			segH, err := seg.table.CreateSegment()
 			if err != nil {
 				return err
@@ -149,7 +150,7 @@ func (seg *localSegment) prepareApplyNode(node InsertNode) (err error) {
 				return err
 			}
 			appender = seg.tableHandle.SetAppender(blk.Fingerprint())
-		} else if err == data.ErrAppendableBlockNotFound {
+		} else if moerr.IsMoErrCode(err, moerr.ErrAppendableBlockNotFound) {
 			id := appender.GetID()
 			blk, err := seg.table.CreateBlock(id.SegmentID)
 			if err != nil {
@@ -363,7 +364,7 @@ func (seg *localSegment) IsDeleted(row uint32) bool {
 
 func (seg *localSegment) Update(row uint32, col uint16, value any) error {
 	if seg.table.entry.GetSchema().PhyAddrKey.Idx == int(col) {
-		return data.ErrUpdatePhyAddrKey
+		return moerr.NewTAEError("update physical addr key")
 	}
 	npos, noffset := seg.GetLocalPhysicalAxis(row)
 	n := seg.nodes[npos]

@@ -15,12 +15,10 @@
 package plan
 
 import (
-	"fmt"
 	"go/constant"
 
-	"github.com/matrixorigin/matrixone/pkg/errno"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/errors"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
@@ -54,7 +52,7 @@ func (b *OrderBinder) BindExpr(astExpr tree.Expr) (*plan.Expr, error) {
 				colPos = -colPos
 			}
 			if colPos < 1 || int(colPos) > len(b.ctx.projects) {
-				return nil, errors.New(errno.SyntaxError, fmt.Sprintf("ORDER BY position %v is not in select list", colPos))
+				return nil, moerr.NewSyntaxError("ORDER BY position %v is not in select list", colPos)
 			}
 
 			colPos = colPos - 1
@@ -69,7 +67,7 @@ func (b *OrderBinder) BindExpr(astExpr tree.Expr) (*plan.Expr, error) {
 			}, nil
 
 		default:
-			return nil, errors.New(errno.SyntaxError, "non-integer constant in ORDER BY")
+			return nil, moerr.NewSyntaxError("non-integer constant in ORDER BY")
 		}
 	}
 
@@ -89,7 +87,7 @@ func (b *OrderBinder) BindExpr(astExpr tree.Expr) (*plan.Expr, error) {
 	exprStr := expr.String()
 	if colPos, ok = b.ctx.projectByExpr[exprStr]; !ok {
 		if b.ctx.isDistinct {
-			return nil, errors.New("", "for SELECT DISTINCT, ORDER BY expressions must appear in select list")
+			return nil, moerr.NewSyntaxError("for SELECT DISTINCT, ORDER BY expressions must appear in select list")
 		}
 
 		colPos = int32(len(b.ctx.projects))

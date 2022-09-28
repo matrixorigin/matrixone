@@ -15,62 +15,33 @@
 package file
 
 import (
+	"bytes"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"io"
 
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 )
 
 type Block interface {
 	Base
 	Sync() error
-	// IsAppendable() bool
-	WriteTS(ts types.TS) error
-	ReadTS() (types.TS, error)
-	WriteRows(rows uint32) error
-	ReadRows() uint32
-
-	// OpenDeletesFile() common.IRWFile
+	ReadRows(meta string) uint32
 	WriteDeletes(buf []byte) error
 	ReadDeletes(buf []byte) error
-	GetDeletesFileStat() common.FileInfo
 	LoadDeletes() (*roaring.Bitmap, error)
-
-	LoadUpdates() (map[uint16]*roaring.Bitmap, map[uint16]map[uint32]any)
-
-	LoadIndexMeta() (any, error)
-	WriteIndexMeta(buf []byte) (err error)
-
 	OpenColumn(colIdx int) (ColumnBlock, error)
-	// WriteColumn(colIdx int, ts uint64, data []byte, updates []byte) (common.IVFile, error)
-
-	// TODO: Remove later
-	WriteSnapshot(bat *containers.Batch, ts types.TS, masks map[uint16]*roaring.Bitmap,
-		vals map[uint16]map[uint32]any, deletes *roaring.Bitmap) error
-	WriteBatch(bat *containers.Batch, ts types.TS) error
+	WriteBatch(bat *containers.Batch, ts types.TS) (objectio.BlockObject, error)
+	GetWriter() objectio.Writer
 	LoadBatch([]types.Type, []string, []bool, *containers.Options) (bat *containers.Batch, err error)
-	WriteColumnVec(ts types.TS, colIdx int, vec containers.Vector) error
-
+	GetMeta() objectio.BlockObject
+	GetMetaFormKey(location string) objectio.BlockObject
 	Destroy() error
 }
 
 type ColumnBlock interface {
 	io.Closer
-	WriteTS(ts types.TS) error
-	WriteData(buf []byte) error
-	WriteIndex(idx int, buf []byte) error
-	WriteUpdates(buf []byte) error
-
-	ReadTS() types.TS
-	ReadData(buf []byte) error
-	ReadIndex(idx int, buf []byte) error
-	ReadUpdates(buf []byte) error
-
-	GetDataFileStat() common.FileInfo
-
-	OpenUpdateFile() (common.IRWFile, error)
-	OpenIndexFile(idx int) (common.IRWFile, error)
-	OpenDataFile() (common.IRWFile, error)
+	GetDataObject(location string) objectio.ColumnObject
+	GetData(metaLoc string, NullAbility bool, typ types.Type, _ *bytes.Buffer) (vec containers.Vector, err error)
 }

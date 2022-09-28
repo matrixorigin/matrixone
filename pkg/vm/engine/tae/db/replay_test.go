@@ -20,10 +20,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils/config"
@@ -845,7 +845,7 @@ func TestReplay5(t *testing.T) {
 	txn, rel = getDefaultRelation(t, tae, schema.Name)
 	checkAllColRowsByScan(t, rel, bats[0].Length(), false)
 	err = rel.Append(bats[0])
-	assert.ErrorIs(t, err, data.ErrDuplicate)
+	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrDuplicate))
 	err = rel.Append(bats[1])
 	assert.NoError(t, err)
 	checkAllColRowsByScan(t, rel, lenOfBats(bats[0:2]), false)
@@ -859,9 +859,9 @@ func TestReplay5(t *testing.T) {
 	txn, rel = getDefaultRelation(t, tae, schema.Name)
 	checkAllColRowsByScan(t, rel, lenOfBats(bats[0:2]), false)
 	err = rel.Append(bats[0])
-	assert.ErrorIs(t, err, data.ErrDuplicate)
+	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrDuplicate))
 	err = rel.Append(bats[1])
-	assert.ErrorIs(t, err, data.ErrDuplicate)
+	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrDuplicate))
 	err = rel.Append(bats[2])
 	assert.NoError(t, err)
 	err = rel.Append(bats[3])
@@ -882,7 +882,7 @@ func TestReplay5(t *testing.T) {
 	txn, rel = getDefaultRelation(t, tae, schema.Name)
 	checkAllColRowsByScan(t, rel, lenOfBats(bats[:4]), false)
 	err = rel.Append(bats[3])
-	assert.ErrorIs(t, err, data.ErrDuplicate)
+	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrDuplicate))
 	for _, b := range bats[4:8] {
 		err = rel.Append(b)
 		assert.NoError(t, err)
@@ -901,7 +901,7 @@ func TestReplay5(t *testing.T) {
 	txn, rel = getDefaultRelation(t, tae, schema.Name)
 	checkAllColRowsByScan(t, rel, lenOfBats(bats[:8]), false)
 	err = rel.Append(bats[0])
-	assert.ErrorIs(t, err, data.ErrDuplicate)
+	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrDuplicate))
 	assert.NoError(t, txn.Commit())
 	testutils.WaitExpect(3000, func() bool {
 		return tae.Wal.GetCheckpointed() == tae.Wal.GetCurrSeqNum()/2
@@ -917,7 +917,7 @@ func TestReplay5(t *testing.T) {
 	txn, rel = getDefaultRelation(t, tae, schema.Name)
 	checkAllColRowsByScan(t, rel, lenOfBats(bats[:8]), false)
 	err = rel.Append(bats[0])
-	assert.ErrorIs(t, err, data.ErrDuplicate)
+	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrDuplicate))
 	assert.NoError(t, txn.Commit())
 
 	err = tae.Catalog.Checkpoint(tae.TxnMgr.StatMaxCommitTS())
@@ -950,7 +950,7 @@ func TestReplay6(t *testing.T) {
 	txn, rel := getDefaultRelation(t, tae, schema.Name)
 	checkAllColRowsByScan(t, rel, lenOfBats(bats[0:1]), false)
 	err = rel.Append(bats[0])
-	assert.ErrorIs(t, err, data.ErrDuplicate)
+	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrDuplicate))
 	err = rel.Append(bats[1])
 	assert.NoError(t, err)
 	assert.NoError(t, txn.Commit())
@@ -964,7 +964,7 @@ func TestReplay6(t *testing.T) {
 	txn, rel = getDefaultRelation(t, tae, schema.Name)
 	checkAllColRowsByScan(t, rel, lenOfBats(bats[0:2]), false)
 	err = rel.Append(bats[0])
-	assert.ErrorIs(t, err, data.ErrDuplicate)
+	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrDuplicate))
 	err = rel.Append(bats[2])
 	assert.NoError(t, err)
 	err = rel.Append(bats[3])
@@ -1047,7 +1047,7 @@ func TestReplay8(t *testing.T) {
 	txn, rel = tae.getRelation()
 	checkAllColRowsByScan(t, rel, bats[0].Length()-1, true)
 	err = rel.Append(bats[0])
-	assert.ErrorIs(t, err, data.ErrDuplicate)
+	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrDuplicate))
 	assert.NoError(t, txn.Commit())
 
 	// Try to append the delete row and then rollback
@@ -1076,7 +1076,7 @@ func TestReplay8(t *testing.T) {
 	assert.NoError(t, err)
 	tuple3 := bat.Window(3, 1)
 	err = rel.Append(tuple3)
-	assert.ErrorIs(t, err, data.ErrDuplicate)
+	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrDuplicate))
 	assert.NoError(t, txn.Commit())
 
 	txn, rel = getDefaultRelation(t, tae.DB, schema.Name)
@@ -1088,7 +1088,7 @@ func TestReplay8(t *testing.T) {
 	txn, rel = getDefaultRelation(t, tae.DB, schema.Name)
 	checkAllColRowsByScan(t, rel, bats[0].Length(), true)
 	err = rel.Append(window)
-	assert.ErrorIs(t, err, data.ErrDuplicate)
+	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrDuplicate))
 	err = rel.Append(bats[1])
 	assert.NoError(t, err)
 	err = rel.Append(bats[2])
@@ -1103,7 +1103,7 @@ func TestReplay8(t *testing.T) {
 	txn, rel = tae.getRelation()
 	checkAllColRowsByScan(t, rel, bat.Length(), true)
 	err = rel.Append(window)
-	assert.ErrorIs(t, err, data.ErrDuplicate)
+	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrDuplicate))
 
 	v0_5 := getSingleSortKeyValue(bats[0], schema, 5)
 	filter = handle.NewEQFilter(v0_5)

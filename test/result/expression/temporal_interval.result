@@ -71,11 +71,11 @@ select date_add("1997-12-31 23:59:59",INTERVAL -100000 DAY);
 date_add("1997-12-31 23:59:59",INTERVAL -100000 DAY)
 1724-03-17 23:59:59
 select date_add("1997-12-31 23:59:59",INTERVAL 100000 MONTH);
-Beyond the range of datetime
+data out of range: data type datetime, 
 select date_add("1997-12-31 23:59:59",INTERVAL 100000 QUARTER);
-Beyond the range of datetime
+data out of range: data type datetime, 
 select date_add("1997-12-31 23:59:59",INTERVAL -100000 YEAR);
-Beyond the range of datetime
+data out of range: data type datetime, 
 select date_add("1997-12-31 23:59:59",INTERVAL "10000:1" MINUTE_SECOND);
 date_add("1997-12-31 23:59:59",INTERVAL "10000:1" MINUTE_SECOND)
 1998-01-07 22:40:00
@@ -113,9 +113,9 @@ select date_add("1997-12-31 23:59:59",INTERVAL NULL MINUTE_SECOND);
 date_add("1997-12-31 23:59:59",INTERVAL NULL MINUTE_SECOND)
 null
 select date_add("9999-12-31 23:59:59",INTERVAL 1 SECOND);
-Beyond the range of datetime
+data out of range: data type datetime, 
 select date_sub("0000-00-00 00:00:00",INTERVAL 1 SECOND);
-Incorrect datetime format
+invalid input: invalid datatime value 0000-00-00 00:00:00
 select date_add('1998-01-30',Interval 1 month);
 date_add('1998-01-30',Interval 1 month)
 1998-02-28 00:00:00
@@ -126,7 +126,7 @@ select date_add('1996-02-29',Interval '1' year);
 date_add('1996-02-29',Interval '1' year)
 1997-02-28 00:00:00
 select date_add('1996-02-29',Interval q year);
-Column 'q' does not exist
+invalid input: column q does not exist
 select date_add("1997-12-31 23:59:59",INTERVAL 1.5 SECOND);
 date_add("1997-12-31 23:59:59",INTERVAL 1.5 SECOND)
 1998-01-01 00:00:01
@@ -140,7 +140,7 @@ select date_add("1997-12-31 23:59:59",INTERVAL 1.5 DAY);
 date_add("1997-12-31 23:59:59",INTERVAL 1.5 DAY)
 1998-01-02 23:59:59
 select date_add("1997-12-31 23:59:59",INTERVAL 1.5 ABC);
-You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 54 near " ABC);";
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 54 near " ABC);";
 select date_sub("1998-01-01 00:00:00",INTERVAL 1 SECOND);
 date_sub("1998-01-01 00:00:00",INTERVAL 1 SECOND)
 1997-12-31 23:59:59
@@ -178,11 +178,11 @@ select date_sub("1998-01-01 00:00:00",INTERVAL -100000 DAY);
 date_sub("1998-01-01 00:00:00",INTERVAL -100000 DAY)
 2271-10-17 00:00:00
 select date_sub("1998-01-01 00:00:00",INTERVAL 100000 MONTH);
-Beyond the range of datetime
+data out of range: data type datetime, 
 select date_sub("1998-01-01 00:00:00",INTERVAL 100000 QUARTER);
-Beyond the range of datetime
+data out of range: data type datetime, 
 select date_sub("1998-01-01 00:00:00",INTERVAL -100000 YEAR);
-Beyond the range of datetime
+data out of range: data type datetime, 
 select date_sub("1998-01-01 00:00:00",INTERVAL "1:1" MINUTE_SECOND);
 date_sub("1998-01-01 00:00:00",INTERVAL "1:1" MINUTE_SECOND)
 1997-12-31 23:58:59
@@ -259,7 +259,7 @@ select date_sub("1998-01-01 00:00:00",INTERVAL 1 SECOND);
 date_sub("1998-01-01 00:00:00",INTERVAL 1 SECOND)
 1997-12-31 23:59:59
 select date_sub("0000-00-00 00:00:00",INTERVAL 1 SECOND);
-Incorrect datetime format
+invalid input: invalid datatime value 0000-00-00 00:00:00
 select date_add('1998-01-30',Interval 1 month);
 date_add('1998-01-30',Interval 1 month)
 1998-02-28 00:00:00
@@ -270,7 +270,7 @@ select date_sub('1996-02-29',Interval '1' year);
 date_sub('1996-02-29',Interval '1' year)
 1995-02-28 00:00:00
 select date_add('1996-02-29',Interval a year);
-Column 'a' does not exist
+invalid input: column a does not exist
 select date_sub("1998-01-01 00:00:00",INTERVAL 1.5 SECOND);
 date_sub("1998-01-01 00:00:00",INTERVAL 1.5 SECOND)
 1997-12-31 23:59:58
@@ -290,7 +290,7 @@ select date_sub("1998-01-01 00:00:00",INTERVAL 1.5 QUARTER);
 date_sub("1998-01-01 00:00:00",INTERVAL 1.5 QUARTER)
 1997-07-01 00:00:00
 select date_sub("1998-01-01 00:00:00",INTERVAL 1 ABC);
-You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 52 near " ABC);";
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 52 near " ABC);";
 select date_sub(NULL,INTERVAL 100000 SECOND);
 date_sub(NULL,INTERVAL 100000 SECOND)
 null
@@ -334,7 +334,7 @@ SELECT "1900-01-01 00:00:00" + INTERVAL 1<<30 HOUR;
 "1900-01-01 00:00:00" + INTERVAL 1<<30 HOUR
 null
 SELECT "1900-01-01 00:00:00" + INTERVAL "1000000000:214748364700" MINUTE_SECOND;
-Beyond the range of datetime
+data out of range: data type datetime, 
 SELECT "1997-12-31 23:59:59" + INTERVAL 1 SECOND;
 "1997-12-31 23:59:59" + INTERVAL 1 SECOND
 1998-01-01 00:00:00
@@ -348,9 +348,9 @@ date_add(a,INTERVAL 1 SECOND)	date_add(b,INTERVAL 1 MINUTE)	date_add(c,INTERVAL 
 1998-01-01 00:00:01	1998-01-01 00:01:00	1998-01-01 01:00:00	1998-02-01 00:00:00	1998-03-31 23:59:59.000002000
 null	null	null	null	null
 select date_add(a,INTERVAL 1 YEAR), date_add(b,"1:1" MINUTE_SECOND), date_add(c,INTERVAL "1:1" HOUR_MINUTE), date_add(d,INTERVAL "1:1" DAY_HOUR), date_add(e,INTERVAL "1 1" YEAR_MONTH) from t1;
-You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 66 near " MINUTE_SECOND), date_add(c,INTERVAL "1:1" HOUR_MINUTE), date_add(d,INTERVAL "1:1" DAY_HOUR), date_add(e,INTERVAL "1 1" YEAR_MONTH) from t1;";
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 66 near " MINUTE_SECOND), date_add(c,INTERVAL "1:1" HOUR_MINUTE), date_add(d,INTERVAL "1:1" DAY_HOUR), date_add(e,INTERVAL "1 1" YEAR_MONTH) from t1;";
 select date_add(a,"1:1:1" HOUR_SECOND), date_add(b,"1:1:1" HOUR_SECOND), date_add(c,INTERVAL "1 1:1" DAY_MINUTE), date_add(d,INTERVAL "1 1:1:1" DAY_SECOND), date_add(e,INTERVAL "1 1" YEAR_MONTH) from t1;
-You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 37 near " HOUR_SECOND), date_add(b,"1:1:1" HOUR_SECOND), date_add(c,INTERVAL "1 1:1" DAY_MINUTE), date_add(d,INTERVAL "1 1:1:1" DAY_SECOND), date_add(e,INTERVAL "1 1" YEAR_MONTH) from t1;";
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 37 near " HOUR_SECOND), date_add(b,"1:1:1" HOUR_SECOND), date_add(c,INTERVAL "1 1:1" DAY_MINUTE), date_add(d,INTERVAL "1 1:1:1" DAY_SECOND), date_add(e,INTERVAL "1 1" YEAR_MONTH) from t1;";
 select date_sub(a,INTERVAL 1 SECOND), date_sub(b,INTERVAL 1 MINUTE), date_sub(c,INTERVAL 1 HOUR), date_sub(d,INTERVAL 1 MONTH), date_sub(e,INTERVAL 1 QUARTER) from t1;
 date_sub(a,INTERVAL 1 SECOND)	date_sub(b,INTERVAL 1 MINUTE)	date_sub(c,INTERVAL 1 HOUR)	date_sub(d,INTERVAL 1 MONTH)	date_sub(e,INTERVAL 1 QUARTER)
 1997-12-30 23:59:59	1997-12-30 23:59:00	1997-12-31 22:59:59	1997-11-30 23:59:59	1997-09-30 23:59:59.000002000
@@ -377,7 +377,7 @@ a - INTERVAL 1 SECOND	b - INTERVAL 1 MINUTE	c - INTERVAL 1 HOUR
 1997-12-31 23:59:59	1997-12-31 23:59:00	1997-12-31 23:00:00
 null	null	null
 select i + INTERVAL 1 SECOND from t1;
-Operator '+' with parameters [INT unexpected type: 54] is not supported.
+invalid argument operator +, bad value [INT unexpected type: 54]
 select month(date_sub("1998-01-01 00:00:00",INTERVAL 1 SECOND));
 month(date_sub("1998-01-01 00:00:00",INTERVAL 1 SECOND))
 12
@@ -406,9 +406,9 @@ select date("1997-12-31 23:59:59" + INTERVAL 1 SECOND) + INTERVAL "1:1:1" HOUR_S
 date("1997-12-31 23:59:59" + INTERVAL 1 SECOND) + INTERVAL "1:1:1" HOUR_SECOND
 1998-01-01 01:01:01
 SELECT CAST(CAST('2006-08-10 10:11:12' AS DATETIME) AS DECIMAL(20,6));
-Operator 'cast' with parameters [DATETIME DECIMAL128] is not supported.
+invalid argument operator cast, bad value [DATETIME DECIMAL128]
 SELECT CAST(CAST('2006-08-10 10:11:12' AS DATETIME) + INTERVAL 14 MICROSECOND AS DECIMAL(20,6));
-Operator 'cast' with parameters [DATETIME DECIMAL128] is not supported.
+invalid argument operator cast, bad value [DATETIME DECIMAL128]
 drop table if exists t1;
 drop table if exists t2;
 create table t1(i int,a datetime,b datetime,c datetime,d char(20),e varchar(50));
@@ -482,7 +482,7 @@ a
 1998-12-30
 1997-12-30
 select count(a),c + INTERVAL 1 DAY as c1 from t1 group by (c + INTERVAL 1 DAY) having c1 > "1998-01-01 00:59:59";
-column "c1" must appear in the GROUP BY clause or be used in an aggregate function
+SQL syntax error: column "c1" must appear in the GROUP BY clause or be used in an aggregate function
 select i,c + INTERVAL 1 MINUTE from t1 where a - INTERVAL 1 SECOND  > "1997-01-01 00:00:00.000001" order by c + INTERVAL 1 MINUTE DESC;
 i	c + INTERVAL 1 MINUTE
 3	1998-01-02 01:02:00
@@ -572,15 +572,15 @@ CAST('2006-09-26' AS DATE) + INTERVAL 1 WEEK
 drop table if exists t1;
 create table t1 (d date);
 insert into t1 (d) select date_sub('2000-01-01', INTERVAL 2001 YEAR);
-Beyond the range of datetime
+data out of range: data type datetime, 
 insert into t1 (d) select date_add('2000-01-01',interval 8000 year);
-Beyond the range of datetime
+data out of range: data type datetime, 
 insert into t1 select date_add(NULL, INTERVAL 1 DAY);
 insert into t1 select date_add('2000-01-04', INTERVAL NULL DAY);
 insert into t1 (d) select date_sub('2000-01-01', INTERVAL 2001 YEAR);
-Beyond the range of datetime
+data out of range: data type datetime, 
 insert into t1 (d) select date_add('2000-01-01',interval 8000 year);
-Beyond the range of datetime
+data out of range: data type datetime, 
 insert into t1 select date_add(NULL, INTERVAL 1 DAY);
 insert into t1 select date_add('2000-01-04', INTERVAL NULL DAY);
 select * from t1;

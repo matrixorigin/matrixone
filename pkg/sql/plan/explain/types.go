@@ -22,7 +22,6 @@ import (
 
 type ExplainQuery interface {
 	ExplainPlan(buffer *ExplainDataBuffer, options *ExplainOptions) error
-	ExplainAnalyze(buffer *ExplainDataBuffer, options *ExplainOptions) error
 }
 
 type NodeDescribe interface {
@@ -35,6 +34,7 @@ type NodeDescribe interface {
 	GetOrderByInfo(options *ExplainOptions) (string, error)
 	GetGroupByInfo(options *ExplainOptions) (string, error)
 	GetTableDef(options *ExplainOptions) (string, error)
+	GetActualAnalyzeInfo(options *ExplainOptions) (string, error)
 }
 
 type NodeElemDescribe interface {
@@ -118,14 +118,14 @@ const (
 
 type ExplainOptions struct {
 	Verbose bool
-	Anzlyze bool
+	Analyze bool
 	Format  ExplainFormat
 }
 
 func NewExplainDefaultOptions() *ExplainOptions {
 	return &ExplainOptions{
 		Verbose: false,
-		Anzlyze: false,
+		Analyze: false,
 		Format:  EXPLAIN_FORMAT_TEXT,
 	}
 }

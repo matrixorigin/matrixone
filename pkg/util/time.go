@@ -63,3 +63,8 @@ func Now() time.Time {
 	sec, nesc := nowNS/1e9, nowNS%1e9
 	return time.Unix(int64(sec), int64(nesc))
 }
+
+func Time(ns TimeNano) time.Time {
+	sec, nesc := ns/1e9, ns%1e9
+	return time.Unix(int64(sec), int64(nesc))
+}

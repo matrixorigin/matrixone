@@ -15,8 +15,9 @@
 package plan
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"testing"
+
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 )
 
 func TestSingleDDLPartition(t *testing.T) {

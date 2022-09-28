@@ -215,7 +215,7 @@ select date_format(concat('19980131',131415),'%H|%I|%k|%l|%i|%p|%r|%S|%T| %M|%W|
 date_format(concat('19980131',131415),'%H|%I|%k|%l|%i|%p|%r|%S|%T| %M|%W|%D|%Y|%y|%a|%b|%j|%m|%d|%h|%s|%w')
 13|01|13|1|14|PM|01:14:15 PM|15|13:14:15| January|Saturday|31st|1998|98|Sat|Jan|031|01|31|01|15|6
 select date_format(19980021000000,'%H|%I|%k|%l|%i|%p|%r|%S|%T| %M|%W|%D|%Y|%y|%a|%b|%j|%m|%d|%h|%s|%w');
-Function 'date_format' with parameters [BIGINT VARCHAR] is not supported.
+invalid argument function date_format, bad value [BIGINT VARCHAR]
 select date_format('19980021000000','%H|%I|%k|%l|%i|%p|%r|%S|%T| %M|%W|%D|%Y|%y|%a|%b|%j|%m|%d|%h|%s|%w');
 date_format('19980021000000','%H|%I|%k|%l|%i|%p|%r|%S|%T| %M|%W|%D|%Y|%y|%a|%b|%j|%m|%d|%h|%s|%w')
 null

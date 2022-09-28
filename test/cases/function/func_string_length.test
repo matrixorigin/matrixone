@@ -74,3 +74,14 @@ create table t1(a INT,  b date);
 insert into t1 values(1, "2012-10-12"),(2, "2004-04-24"),(3, "2008-12-04"),(4, "2012-03-23");
 select * from t1 where length(b)-8>0;
 drop table t1;
+
+#BLOB
+DROP table if exists t1;
+CREATE TABLE t1 (s BLOB);
+INSERT INTO t1 VALUES ('test');
+SELECT LENGTH(s) FROM t1;
+CREATE TABLE t2 (s BLOB);
+INSERT INTO t2 VALUES ('1234589002');
+SELECT LENGTH(s) FROM t2;
+drop table t1;
+drop table t2;

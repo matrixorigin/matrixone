@@ -16,6 +16,7 @@ package jobs
 
 import (
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
 	"time"
 
 	"github.com/RoaringBitmap/roaring"
@@ -101,24 +102,9 @@ func (task *compactBlockTask) PrepareData(blkKey []byte) (preparer *model.Prepar
 	}
 	// Sort only if sort key is defined
 	if schema.HasSortKey() {
-		var idx int
-		var vecs []containers.Vector
-		if schema.IsSingleSortKey() {
-			idx = schema.SortKey.Defs[0].Idx
-			preparer.SortKey = preparer.Columns.Vecs[idx]
-			vecs = preparer.Columns.Vecs
-		} else {
-			vecs = preparer.Columns.Vecs
-			cols := make([]containers.Vector, schema.SortKey.Size())
-			for i := range cols {
-				cols[i] = preparer.Columns.Vecs[schema.SortKey.Defs[i].Idx]
-			}
-			preparer.SortKey = model.EncodeCompoundColumn(cols...)
-			idx = len(preparer.Columns.Vecs)
-			vecs = append(vecs, preparer.SortKey)
-			// preparer.Columns.AddVector(catalog.SortKeyNamePrefx, preparer.SortKey)
-		}
-		if task.mapping, err = mergesort.SortBlockColumns(vecs, idx); err != nil {
+		idx := schema.GetSingleSortKeyIdx()
+		preparer.SortKey = preparer.Columns.Vecs[idx]
+		if task.mapping, err = mergesort.SortBlockColumns(preparer.Columns.Vecs, idx); err != nil {
 			return preparer, err
 		}
 	}
@@ -168,15 +154,20 @@ func (task *compactBlockTask) Execute() (err error) {
 		blockFile,
 		task.txn.GetStartTS(),
 		newMeta,
-		preparer.Columns,
-		preparer.SortKey)
+		preparer.Columns)
 	if err = task.scheduler.Schedule(ioTask); err != nil {
 		return
 	}
 	if err = ioTask.WaitDone(); err != nil {
 		return
 	}
-
+	metaLoc := blockio.EncodeBlkMetaLoc(ioTask.file.Fingerprint(),
+		ioTask.file.GetMeta().GetExtent(),
+		uint32(preparer.Columns.Length()))
+	logutil.Infof("node: %v", metaLoc)
+	if err = newBlk.UpdateMetaLoc(metaLoc); err != nil {
+		return err
+	}
 	if err = newBlkData.ReplayIndex(); err != nil {
 		return err
 	}

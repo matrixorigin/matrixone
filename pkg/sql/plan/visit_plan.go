@@ -24,20 +24,22 @@ type VisitPlanRule interface {
 }
 
 type VisitPlan struct {
-	plan  *Plan
-	rules []VisitPlanRule
+	plan         *Plan
+	isUpdatePlan bool
+	rules        []VisitPlanRule
 }
 
 func NewVisitPlan(pl *Plan, rules []VisitPlanRule) *VisitPlan {
 	return &VisitPlan{
-		plan:  pl,
-		rules: rules,
+		plan:         pl,
+		isUpdatePlan: false,
+		rules:        rules,
 	}
 }
 
-func (vq *VisitPlan) visitNode(qry *Query, node *Node) error {
+func (vq *VisitPlan) visitNode(qry *Query, node *Node, idx int32) error {
 	for i := range node.Children {
-		if err := vq.visitNode(qry, qry.Nodes[node.Children[i]]); err != nil {
+		if err := vq.visitNode(qry, qry.Nodes[node.Children[i]], node.Children[i]); err != nil {
 			return err
 		}
 	}
@@ -49,7 +51,7 @@ func (vq *VisitPlan) visitNode(qry *Query, node *Node) error {
 				return err
 			}
 		} else if rule.IsApplyExpr() {
-			err := vq.exploreNode(rule, node)
+			err := vq.exploreNode(rule, node, idx)
 			if err != nil {
 				return err
 			}
@@ -59,7 +61,7 @@ func (vq *VisitPlan) visitNode(qry *Query, node *Node) error {
 	return nil
 }
 
-func (vq *VisitPlan) exploreNode(rule VisitPlanRule, node *Node) error {
+func (vq *VisitPlan) exploreNode(rule VisitPlanRule, node *Node, idx int32) error {
 	var err error
 	if node.Limit != nil {
 		node.Limit, err = rule.ApplyExpr(node.Limit)
@@ -90,7 +92,25 @@ func (vq *VisitPlan) exploreNode(rule VisitPlanRule, node *Node) error {
 	}
 
 	for i := range node.ProjectList {
-		node.ProjectList[i], err = rule.ApplyExpr(node.ProjectList[i])
+		// if prepare statement is:   update set decimal_col = decimal_col + ? ;
+		// and then: 'set @a=12.22; execute stmt1 using @a;'  decimal_col + ? will be float64
+		if vq.isUpdatePlan {
+			pl, _ := vq.plan.Plan.(*Plan_Query)
+			num := len(pl.Query.Nodes) - int(idx)
+			// last project Node
+			if num == 2 {
+				oldType := DeepCopyTyp(node.ProjectList[i].Typ)
+				node.ProjectList[i], err = rule.ApplyExpr(node.ProjectList[i])
+				if node.ProjectList[i].Typ.Id != oldType.Id {
+					node.ProjectList[i], err = makePlan2CastExpr(node.ProjectList[i], oldType)
+				}
+			} else {
+				node.ProjectList[i], err = rule.ApplyExpr(node.ProjectList[i])
+			}
+		} else {
+			node.ProjectList[i], err = rule.ApplyExpr(node.ProjectList[i])
+		}
+
 		if err != nil {
 			return err
 		}
@@ -103,12 +123,14 @@ func (vq *VisitPlan) Visit() error {
 	switch pl := vq.plan.Plan.(type) {
 	case *Plan_Query:
 		qry := pl.Query
+		vq.isUpdatePlan = (pl.Query.StmtType == plan.Query_UPDATE)
+
 		if len(qry.Steps) == 0 {
 			return nil
 		}
 
 		for _, step := range qry.Steps {
-			err := vq.visitNode(qry, qry.Nodes[step])
+			err := vq.visitNode(qry, qry.Nodes[step], step)
 			if err != nil {
 				return err
 			}

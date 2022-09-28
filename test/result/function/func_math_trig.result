@@ -56,7 +56,7 @@ SELECT SIN(-0.001);
 SIN(-0.001)
 -9.999998333333417E-4
 SELECT SIN("ABC");
-Can't cast 'ABC' from VARCHAR type to DOUBLE type.
+strconv.ParseFloat: parsing "ABC": invalid syntax
 SELECT COS(13413);
 COS(13413)
 -0.02983007588338295
@@ -79,7 +79,7 @@ SELECT COS(-0.001);
 COS(-0.001)
 0.9999995000000417
 SELECT COS("ABC");
-Can't cast 'ABC' from VARCHAR type to DOUBLE type.
+strconv.ParseFloat: parsing "ABC": invalid syntax
 SELECT TAN(13413);
 TAN(13413)
 33.50829505679211
@@ -102,7 +102,7 @@ SELECT TAN(-0.001);
 TAN(-0.001)
 -0.0010000003333334668
 SELECT TAN("ABC");
-Can't cast 'ABC' from VARCHAR type to DOUBLE type.
+strconv.ParseFloat: parsing "ABC": invalid syntax
 SELECT COT(13413);
 COT(13413)
 0.029843356646619378
@@ -122,7 +122,7 @@ SELECT COT(-0.001);
 COT(-0.001)
 -999.9996666666443
 select cot(0);
-cot(0) value out of range
+invalid argument cot, bad value cot(0)
 SELECT ATAN(13413);
 ATAN(13413)
 1.5707217722583913
@@ -145,7 +145,7 @@ SELECT ATAN(-0.001);
 ATAN(-0.001)
 -9.999996666668668E-4
 SELECT ATAN("ABC");
-Can't cast 'ABC' from VARCHAR type to DOUBLE type.
+strconv.ParseFloat: parsing "ABC": invalid syntax
 SELECT SIN(NULL);
 SIN(NULL)
 null
@@ -218,11 +218,11 @@ sin(h)	cos(h)	tan(h)	cot(h)	acos(h)	atan(h)
 0.9671992895453196	-0.2540187676196956	-3.8075898824663335	-0.2626333273457116	null	1.5014343848467917
 -0.9756589591814997	0.21929340019451712	-4.4491031573046556	-0.22476439962021863	null	1.5627523540210526
 select sin(i), cos(i), tan(i),cot(i),acos(i),atan(i) from t1;
-Function 'sin' with parameters [DATE] is not supported.
+invalid argument function sin, bad value [DATE]
 select sin(k), cos(k), tan(k),cot(k),acos(k),atan(k) from t1;
-Function 'sin' with parameters [DATETIME] is not supported.
+invalid argument function sin, bad value [DATETIME]
 select sin(l), cos(l), tan(l),cot(l),acos(l),atan(l) from t1;
-Function 'sin' with parameters [TIMESTAMP] is not supported.
+invalid argument function sin, bad value [TIMESTAMP]
 drop table t1;
 Create table t1(a float);
 insert into t1 select (sin(1));

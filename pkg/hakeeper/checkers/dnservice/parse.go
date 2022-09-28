@@ -18,10 +18,12 @@ import (
 	"fmt"
 	"sort"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper/checkers/util"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper/operator"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
+	"go.uber.org/zap"
 )
 
 const (
@@ -51,7 +53,7 @@ func (d dnShardToLogShard) getLogShardID(dnShardID uint64) (uint64, error) {
 	if logShardID, ok := d[dnShardID]; ok {
 		return logShardID, nil
 	}
-	return 0, errShardNotRecorded
+	return 0, moerr.NewInvalidState("shard %d not recorded", dnShardID)
 }
 
 // parseDnState parses cluster dn state.
@@ -123,24 +125,35 @@ func checkInitiatingShards(
 	rs *reportedShards, mapper ShardMapper, workingStores []*util.Store, idAlloc util.IDAllocator,
 	cluster pb.ClusterInfo, cfg hakeeper.Config, currTick uint64,
 ) []*operator.Operator {
+	logger.Debug("cluster expected information", zap.Any("dn shards expected", cluster.DNShards))
+
 	// update the registered newly-created shards
 	for _, record := range cluster.DNShards {
 		shardID := record.ShardID
 		_, err := rs.getShard(shardID)
 		if err != nil {
-			if err == errShardNotReported {
+			if moerr.IsMoErrCode(err, moerr.ErrShardNotReported) {
 				// if a shard not reported, register it,
 				// and launch its replica after a while.
+				logger.Debug("dn shard not reported", zap.Uint64("shard ID", shardID))
 				waitingShards.register(shardID, currTick)
 			}
 			continue
 		}
 		// shard reported via heartbeat, no need to wait
+		logger.Debug("dn shard reported, remove from waiting shards", zap.Uint64("shard ID", shardID))
 		waitingShards.remove(shardID)
 	}
 
+	logger.Debug("cluster initiating shards:", zap.Any("shards", waitingShards.shards))
+
 	// list newly-created shards which had been waiting for a while
 	expired := waitingShards.listEligibleShards(func(start uint64) bool {
+		logger.Debug("check initiating shard expired or not",
+			zap.Uint64("recorded tick", start),
+			zap.Uint64("current tick", currTick),
+			zap.Bool("is expired", cfg.DNStoreExpired(start, currTick)),
+		)
 		return cfg.DNStoreExpired(start, currTick)
 	})
 
@@ -245,7 +258,7 @@ func (rs *reportedShards) getShard(shardID uint64) (*dnShard, error) {
 	if shard, ok := rs.shards[shardID]; ok {
 		return shard, nil
 	}
-	return nil, errShardNotReported
+	return nil, moerr.NewShardNotReported("", shardID)
 }
 
 // dnShard records metadata for dn shard.

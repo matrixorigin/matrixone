@@ -28,28 +28,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/errno"
-	"github.com/matrixorigin/matrixone/pkg/sql/errors"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"golang.org/x/exp/constraints"
 )
 
 func Cast(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	vec, err := doCast(vs, proc)
-	if err != nil {
-		extraError := ""
-		if sqlErr, ok := err.(*errors.SqlError); ok {
-			if sqlErr.Code() == errno.SyntaxErrororAccessRuleViolation {
-				return nil, err
-			}
-		}
-		if moErr, ok := err.(*moerr.Error); ok {
-			if moErr.Code == moerr.OUT_OF_RANGE {
-				extraError = " Reason: overflow"
-			}
-		}
-		return nil, formatCastError(vs[0], vs[1].Typ, extraError)
-	}
 	return vec, err
 }
 
@@ -76,14 +60,14 @@ func formatCastError(vec *vector.Vector, typ types.Type, extraInfo string) error
 	} else {
 		errStr = fmt.Sprintf("Can't cast column from %v type to %v type because of one or more values in that column.", vec.Typ, typ)
 	}
-	return errors.New(errno.InternalError, errStr+extraInfo)
+	return moerr.NewInternalError(errStr + extraInfo)
 }
 
 func doCast(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	lv := vs[0]
 	rv := vs[1]
 	if rv.IsScalarNull() {
-		return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, "the target type of cast function cannot be null")
+		return nil, formatCastError(lv, rv.Typ, "the target type of cast function cannot be null")
 	}
 	if lv.IsScalarNull() {
 		return proc.AllocScalarNullVector(rv.Typ), nil
@@ -666,7 +650,7 @@ func doCast(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) 
 		return CastUuidToString(lv, rv, proc)
 	}
 
-	return nil, errors.New(errno.SyntaxErrororAccessRuleViolation, fmt.Sprintf("parameter types [%s, %s] of cast function do not match", lv.Typ.Oid, rv.Typ.Oid))
+	return nil, formatCastError(lv, rv.Typ, "")
 }
 
 func CastTimestampAsDate(lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
@@ -1917,7 +1901,7 @@ func CastDecimal128ToUint64(lv, rv *vector.Vector, proc *process.Process) (*vect
 // this cast function is too slow, and therefore only temporary, rewrite needed
 func CastDecimal128ToDecimal64(lv, rv *vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	if lv.Typ.Scale > 18 {
-		return nil, moerr.NewError(moerr.OUT_OF_RANGE, "cannot convert decimal128 to decimal64 correctly")
+		return nil, formatCastError(lv, rv.Typ, "")
 	}
 	lvs := lv.Col.([]types.Decimal128)
 	if lv.IsScalar() {

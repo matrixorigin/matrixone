@@ -18,13 +18,16 @@ import (
 	"context"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
 func (txn *Transaction) getTableList(ctx context.Context, databaseId uint64) ([]string, error) {
 	rows, err := txn.getRows(ctx, catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID, txn.dnStores[:1],
-		[]string{catalog.MoTablesSchema[catalog.MO_TABLES_REL_NAME_IDX]})
+		[]string{catalog.MoTablesSchema[catalog.MO_TABLES_REL_NAME_IDX]},
+		genTableListExpr(getAccountId(ctx), databaseId))
 	if err != nil {
 		return nil, err
 	}
@@ -35,11 +38,37 @@ func (txn *Transaction) getTableList(ctx context.Context, databaseId uint64) ([]
 	return tableList, nil
 }
 
+func (txn *Transaction) getTableInfo(ctx context.Context, databaseId uint64,
+	name string) (uint64, []engine.TableDef, error) {
+	accountId := getAccountId(ctx)
+	row, err := txn.getRow(ctx, catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID,
+		txn.dnStores[:1], catalog.MoTablesSchema,
+		genTableIdExpr(accountId, databaseId, name))
+	if err != nil {
+		return 0, nil, err
+	}
+	id := row[0].(uint64)
+	rows, err := txn.getRows(ctx, catalog.MO_CATALOG_ID, catalog.MO_COLUMNS_ID,
+		txn.dnStores[:1], catalog.MoColumnsSchema,
+		genColumnInfoExpr(accountId, databaseId, id))
+	if err != nil {
+		return 0, nil, err
+	}
+	cols := getColumnsFromRows(rows)
+	defs := make([]engine.TableDef, 0, len(cols))
+	defs = append(defs, genTableDefOfComment(string(row[6].([]byte))))
+	for _, col := range cols {
+		defs = append(defs, genTableDefOfColumn(col))
+	}
+	return id, defs, nil
+}
+
 func (txn *Transaction) getTableId(ctx context.Context, databaseId uint64,
 	name string) (uint64, error) {
+	accountId := getAccountId(ctx)
 	row, err := txn.getRow(ctx, catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID,
 		txn.dnStores[:1], []string{catalog.MoTablesSchema[catalog.MO_TABLES_REL_ID_IDX]},
-		genTableIdExpr(databaseId, name))
+		genTableIdExpr(accountId, databaseId, name))
 	if err != nil {
 		return 0, err
 	}
@@ -48,7 +77,8 @@ func (txn *Transaction) getTableId(ctx context.Context, databaseId uint64,
 
 func (txn *Transaction) getDatabaseList(ctx context.Context) ([]string, error) {
 	rows, err := txn.getRows(ctx, catalog.MO_CATALOG_ID, catalog.MO_DATABASE_ID,
-		txn.dnStores[:1], []string{catalog.MoDatabaseSchema[catalog.MO_DATABASE_DAT_NAME_IDX]})
+		txn.dnStores[:1], []string{catalog.MoDatabaseSchema[catalog.MO_DATABASE_DAT_NAME_IDX]},
+		genDatabaseListExpr(getAccountId(ctx)))
 	if err != nil {
 		return nil, err
 	}
@@ -60,8 +90,10 @@ func (txn *Transaction) getDatabaseList(ctx context.Context) ([]string, error) {
 }
 
 func (txn *Transaction) getDatabaseId(ctx context.Context, name string) (uint64, error) {
+	accountId := getAccountId(ctx)
 	row, err := txn.getRow(ctx, catalog.MO_CATALOG_ID, catalog.MO_DATABASE_ID, txn.dnStores[:1],
-		[]string{catalog.MoDatabaseSchema[catalog.MO_DATABASE_DAT_ID_IDX]}, genDatabaseIdExpr(name))
+		[]string{catalog.MoDatabaseSchema[catalog.MO_DATABASE_DAT_ID_IDX]},
+		genDatabaseIdExpr(accountId, name))
 	if err != nil {
 		return 0, err
 	}
@@ -122,31 +154,36 @@ func (txn *Transaction) getRow(ctx context.Context, databaseId uint64, tableId u
 	dnList []DNStore, columns []string, expr *plan.Expr) ([]any, error) {
 	bats, err := txn.readTable(ctx, databaseId, tableId, dnList, columns, expr)
 	if err != nil {
-		return nil, nil
+		return nil, err
+	}
+	if len(bats) == 0 {
+		return nil, moerr.NewInvalidInput("empty table: %v.%v", databaseId, tableId)
 	}
 	if len(bats) != 1 {
-		return nil, nil
+		return nil, moerr.NewInvalidInput("table is not unique")
 	}
-	if bats[0].Length() != 1 {
-		return nil, nil
+	rows := genRows(bats[0])
+	if len(rows) != 1 {
+		return nil, moerr.NewInvalidInput("table is not unique")
 	}
-	return nil, nil
+	return rows[0], nil
 }
 
 // getRows used to get rows of table
 func (txn *Transaction) getRows(ctx context.Context, databaseId uint64, tableId uint64,
-	dnList []DNStore, columns []string) ([][]any, error) {
-	bats, err := txn.readTable(ctx, databaseId, tableId, dnList, columns, nil)
+	dnList []DNStore, columns []string, expr *plan.Expr) ([][]any, error) {
+	bats, err := txn.readTable(ctx, databaseId, tableId, dnList, columns, expr)
 	if err != nil {
-		return nil, nil
+		return nil, err
 	}
 	if len(bats) == 0 {
-		return nil, nil
+		return nil, moerr.NewInternalError("empty table: %v.%v", databaseId, tableId)
 	}
-	if bats[0].Length() != 1 {
-		return nil, nil
+	rows := make([][]any, 0, len(bats))
+	for _, bat := range bats {
+		rows = append(rows, genRows(bat)...)
 	}
-	return nil, nil
+	return rows, nil
 }
 
 // readTable used to get tuples of table based on a condition

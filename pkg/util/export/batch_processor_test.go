@@ -22,8 +22,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/util/stack"
+
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/batchpipe"
 	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 
@@ -83,7 +85,7 @@ func (s *dummyBuffer) Add(item batchpipe.HasName) {
 		length := len(s.arr)
 		logutil.Infof("accept: %v, len: %d", *item.(*Num), length)
 		if (val <= 3 && val != length) && (val-3) != length {
-			panic(fmt.Errorf("len not rignt, elem: %d, len: %d", val, length))
+			panic(moerr.NewInternalError("len not rignt, elem: %d, len: %d", val, length))
 		}
 		s.signal()
 	}
@@ -91,7 +93,7 @@ func (s *dummyBuffer) Add(item batchpipe.HasName) {
 func (s *dummyBuffer) Reset() {
 	s.mux.Lock()
 	defer s.mux.Unlock()
-	logutil.Infof("buffer reset, stack: %+v", util.Callers(0))
+	logutil.Infof("buffer reset, stack: %+v", stack.Callers(0))
 	s.arr = s.arr[0:0]
 }
 func (s *dummyBuffer) IsEmpty() bool {
@@ -210,6 +212,7 @@ func Test_newBufferHolder(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			buf := newBufferHolder(tt.args.name, tt.args.impl, tt.args.signal)
+			buf.Start()
 			for _, v := range tt.args.elems {
 				buf.Add(v)
 			}

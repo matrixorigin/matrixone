@@ -15,9 +15,10 @@
 package txnimpl
 
 import (
+	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 )
 
@@ -29,12 +30,12 @@ var sysSharedDBNames map[string]bool
 
 func init() {
 	sysTableNames = make(map[string]bool)
-	sysTableNames[catalog.SystemTable_Columns_Name] = true
-	sysTableNames[catalog.SystemTable_Table_Name] = true
-	sysTableNames[catalog.SystemTable_DB_Name] = true
+	sysTableNames[pkgcatalog.MO_COLUMNS] = true
+	sysTableNames[pkgcatalog.MO_TABLES] = true
+	sysTableNames[pkgcatalog.MO_DATABASE] = true
 
 	sysSharedDBNames = make(map[string]bool)
-	sysSharedDBNames[catalog.SystemDBName] = true
+	sysSharedDBNames[pkgcatalog.MO_CATALOG] = true
 	sysSharedDBNames[metric.MetricDBConst] = true
 	sysSharedDBNames[trace.SystemDBConst] = true
 }
@@ -67,7 +68,7 @@ func newSysDB(db *txnDB) *txnSysDB {
 
 func (db *txnSysDB) DropRelationByName(name string) (rel handle.Relation, err error) {
 	if isSysTable(name) {
-		err = catalog.ErrNotPermitted
+		err = moerr.NewInternalError("drop relation %s is not permitted", name)
 		return
 	}
 	return db.txnDatabase.DropRelationByName(name)
@@ -75,7 +76,7 @@ func (db *txnSysDB) DropRelationByName(name string) (rel handle.Relation, err er
 
 func (db *txnSysDB) TruncateByName(name string) (rel handle.Relation, err error) {
 	if isSysTable(name) {
-		err = catalog.ErrNotPermitted
+		err = moerr.NewInternalError("truncate relation %s is not permitted", name)
 		return
 	}
 	return db.txnDatabase.TruncateByName(name)

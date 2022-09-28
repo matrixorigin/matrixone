@@ -18,11 +18,11 @@ import (
 	"sync"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 )
@@ -104,7 +104,7 @@ func (db *txnDB) BatchDedup(id uint64, pks ...containers.Vector) (err error) {
 		return err
 	}
 	if table.IsDeleted() {
-		return data.ErrNotFound
+		return moerr.NewNotFound()
 	}
 
 	return table.DoBatchDedup(pks...)
@@ -116,7 +116,7 @@ func (db *txnDB) Append(id uint64, bat *containers.Batch) error {
 		return err
 	}
 	if table.IsDeleted() {
-		return data.ErrNotFound
+		return moerr.NewNotFound()
 	}
 	return table.Append(bat)
 }
@@ -127,7 +127,7 @@ func (db *txnDB) RangeDelete(id *common.ID, start, end uint32, dt handle.DeleteT
 		return err
 	}
 	if table.IsDeleted() {
-		return data.ErrNotFound
+		return moerr.NewNotFound()
 	}
 	return table.RangeDelete(id, start, end, dt)
 }
@@ -138,7 +138,7 @@ func (db *txnDB) GetByFilter(tid uint64, filter *handle.Filter) (id *common.ID, 
 		return
 	}
 	if table.IsDeleted() {
-		err = data.ErrNotFound
+		err = moerr.NewNotFound()
 		return
 	}
 	return table.GetByFilter(filter)
@@ -150,7 +150,7 @@ func (db *txnDB) GetValue(id *common.ID, row uint32, colIdx uint16) (v any, err 
 		return
 	}
 	if table.IsDeleted() {
-		err = data.ErrNotFound
+		err = moerr.NewNotFound()
 		return
 	}
 	return table.GetValue(id, row, colIdx)
@@ -162,7 +162,7 @@ func (db *txnDB) Update(id *common.ID, row uint32, colIdx uint16, v any) (err er
 		return err
 	}
 	if table.IsDeleted() {
-		return data.ErrNotFound
+		return moerr.NewNotFound()
 	}
 	return table.Update(id, row, colIdx, v)
 }
@@ -296,7 +296,20 @@ func (db *txnDB) SoftDeleteBlock(id *common.ID) (err error) {
 	}
 	return table.SoftDeleteBlock(id)
 }
-
+func (db *txnDB) UpdateMetaLoc(id *common.ID, metaLoc string) (err error) {
+	var table *txnTable
+	if table, err = db.getOrSetTable(id.TableID); err != nil {
+		return
+	}
+	return table.UpdateMetaLoc(id, metaLoc)
+}
+func (db *txnDB) UpdateDeltaLoc(id *common.ID, deltaLoc string) (err error) {
+	var table *txnTable
+	if table, err = db.getOrSetTable(id.TableID); err != nil {
+		return
+	}
+	return table.UpdateDeltaLoc(id, deltaLoc)
+}
 func (db *txnDB) SoftDeleteSegment(id *common.ID) (err error) {
 	var table *txnTable
 	if table, err = db.getOrSetTable(id.TableID); err != nil {

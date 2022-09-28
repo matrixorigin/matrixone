@@ -29,13 +29,12 @@ use view;
 drop database db2;
 drop table t1;
 select * from v1;
-table "t1" does not exist
+SQL parser error: table "t1" does not exist
 drop table v1;
-table v1 is not exists
+no such table view.v1
 drop view v1;
-
 show create view vvvv;
-view 'vvvv' doesn't exist
+invalid input: show view 'vvvv' is not a valid view
 create view v1 as select "a";
 show create view v1;
 View    Create View
@@ -49,7 +48,6 @@ View    Create View
 v2    create view v2 as select 'a';
 drop view v1;
 drop view v2;
-
 create table tt(a int);
 create view vv as select * from tt;
 drop table if exists tt;

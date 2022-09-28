@@ -15,12 +15,11 @@
 package plan
 
 import (
-	"fmt"
 	"sort"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/errors"
 )
 
 var (
@@ -279,9 +278,9 @@ func (rule *ResetVarRefRule) ApplyExpr(e *plan.Expr) (*plan.Expr, error) {
 		case nil:
 			expr = makePlan2NullConstExprWithType()
 		case types.Decimal64, types.Decimal128:
-			err = errors.New("", "decimal var not support now")
+			err = moerr.NewNYI("decimal var")
 		default:
-			err = errors.New("", fmt.Sprintf("type of var %q is not supported now", exprImpl.V.Name))
+			err = moerr.NewParseError("type of var %q is not supported now", exprImpl.V.Name)
 		}
 		if e.Typ.Id != int32(types.T_any) && expr.Typ.Id != e.Typ.Id {
 			return appendCastBeforeExpr(expr, e.Typ)

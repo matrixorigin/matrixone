@@ -18,6 +18,7 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 
 	"github.com/RoaringBitmap/roaring"
@@ -198,7 +199,7 @@ func (chain *ColumnChain) CollectCommittedInRangeLocked(startTs, endTs types.TS)
 			if state == txnif.TxnStateRollbacked || state == txnif.TxnStateRollbacking {
 				return true
 			} else if state == txnif.TxnStateUnknown {
-				err = txnif.ErrTxnInternal
+				err = moerr.NewTxnInternal()
 				return false
 			}
 			// 3.1.2. Committed

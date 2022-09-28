@@ -33,3 +33,11 @@ func (m Task) GetDelayDuration() time.Duration {
 func (m Task) DebugString() string {
 	return fmt.Sprintf("%s/%d", m.Metadata.ID, m.Metadata.Executor)
 }
+
+// DebugString returns the debug string
+func (m CronTask) DebugString() string {
+	return fmt.Sprintf("%s/%d/%s",
+		m.Metadata.ID,
+		m.TriggerTimes,
+		m.CronExpr)
+}

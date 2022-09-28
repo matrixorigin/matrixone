@@ -127,8 +127,8 @@ func NewEmptyIndicesMeta() *IndicesMeta {
 	}
 }
 
-func (metas *IndicesMeta) AddIndex(meta IndexMeta) {
-	metas.Metas = append(metas.Metas, meta)
+func (metas *IndicesMeta) AddIndex(meta ...IndexMeta) {
+	metas.Metas = append(metas.Metas, meta...)
 }
 
 func (metas *IndicesMeta) Marshal() ([]byte, error) {

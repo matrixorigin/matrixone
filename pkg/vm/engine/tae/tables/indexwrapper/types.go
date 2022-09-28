@@ -15,10 +15,14 @@
 package indexwrapper
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/file"
 	"io"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+
 	"github.com/RoaringBitmap/roaring"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
@@ -29,13 +33,13 @@ func TranslateError(err error) error {
 		return err
 	}
 	if err == index.ErrDuplicate {
-		return data.ErrDuplicate
+		return moerr.NewDuplicate()
 	}
 	if err == index.ErrNotFound {
-		return data.ErrNotFound
+		return moerr.NewNotFound()
 	}
 	if err == index.ErrWrongType {
-		return data.ErrWrongType
+		return moerr.NewInternalError("wrong type")
 	}
 	return err
 }
@@ -70,10 +74,65 @@ type Index interface {
 	HasDeleteFrom(key any, ts types.TS) bool
 	GetMaxDeleteTS() types.TS
 
-	// RevertUpsert(keys containers.Vector, ts uint64) error
+	// RevertUpsert(keys containers.Vector, ts types.TS) error
 
 	String() string
 
-	ReadFrom(data.Block) error
+	ReadFrom(data.Block, *catalog.ColDef, file.ColumnBlock) error
 	WriteTo(data.Block) error
+}
+
+// what is defaultImpl? PANIC!
+type defaultIndexImpl struct{}
+
+func (idx *defaultIndexImpl) Close() error {
+	panic("not supported")
+}
+
+func (idx *defaultIndexImpl) Destroy() error {
+	panic("not supported")
+}
+
+func (idx *defaultIndexImpl) Dedup(key any) error {
+	panic("not supported")
+}
+
+func (idx *defaultIndexImpl) BatchDedup(keys containers.Vector, rowmask *roaring.Bitmap) (keyselects *roaring.Bitmap, err error) {
+	panic("not supported")
+}
+
+func (idx *defaultIndexImpl) BatchUpsert(keysCtx *index.KeysCtx, offset int, ts types.TS) (*index.BatchResp, error) {
+	panic("not supported")
+}
+
+func (idx *defaultIndexImpl) Delete(key any, ts types.TS) error {
+	panic("not supported")
+}
+
+func (idx *defaultIndexImpl) GetActiveRow(key any) (row uint32, err error) {
+	panic("not supported")
+}
+
+func (idx *defaultIndexImpl) IsKeyDeleted(key any, ts types.TS) (deleted bool, existed bool) {
+	panic("not supported")
+}
+
+func (idx *defaultIndexImpl) HasDeleteFrom(key any, fromts types.TS) bool {
+	panic("not supported")
+}
+
+func (idx *defaultIndexImpl) GetMaxDeleteTS() types.TS {
+	panic("not supported")
+}
+
+func (idx *defaultIndexImpl) String() string {
+	panic("not supported")
+}
+
+func (idx *defaultIndexImpl) ReadFrom(_ data.Block, _ *catalog.ColDef, _ file.ColumnBlock) error {
+	panic("not supported")
+}
+
+func (idx *defaultIndexImpl) WriteTo(_ data.Block) error {
+	panic("not supported")
 }

@@ -18,6 +18,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 )
 
@@ -36,7 +37,7 @@ func ReadFile(fs fileservice.ReplaceableFileService, file string) ([]byte, error
 		},
 	}
 	if err := fs.Read(ctx, vec); err != nil {
-		if err == fileservice.ErrFileNotFound {
+		if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
 			return nil, nil
 		}
 		return nil, err

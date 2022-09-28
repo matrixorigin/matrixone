@@ -19,14 +19,13 @@ import (
 	"fmt"
 	"io"
 	"path"
-	"strings"
 	"sync"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/batchpipe"
-	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 )
 
 const etlFileServiceName = "ETL"
@@ -124,12 +123,12 @@ mkdirRetry:
 		},
 	}); err == nil {
 		w.offset += n
-	} else if (err == fileservice.ErrFileExisted || strings.Contains(err.Error(), "file exists")) && !mkdirTried {
-		// like "mkdir xxx/xxx: file exists"
+	} else if moerr.IsMoErrCode(err, moerr.ErrFileAlreadyExists) && !mkdirTried {
 		mkdirTried = true
 		goto mkdirRetry
 	}
-	_ = errutil.WithContext(w.ctx, err)
+	// XXX Why call this?
+	// _ = errors.WithContext(w.ctx, err)
 	return
 }
 

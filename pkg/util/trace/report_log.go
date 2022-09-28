@@ -17,10 +17,12 @@ package trace
 import (
 	"context"
 	"fmt"
-	"go.uber.org/zap/buffer"
 	"sync/atomic"
 	"time"
 	"unsafe"
+
+	"github.com/matrixorigin/matrixone/pkg/util/stack"
+	"go.uber.org/zap/buffer"
 
 	"github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/batchpipe"
@@ -43,7 +45,7 @@ type MOLog struct {
 	SpanID    SpanID        `json:"span_id"`
 	Timestamp util.TimeNano `json:"timestamp"`
 	Level     zapcore.Level `json:"level"`
-	Caller    util.Frame    `json:"caller"` // like "util/trace/trace.go:666"
+	Caller    stack.Frame   `json:"caller"` // like "util/trace/trace.go:666"
 	Name      string        `json:"name"`
 	Message   string        `json:"Message"`
 	Extra     string        `json:"extra"` // like json text
@@ -98,18 +100,16 @@ func ReportLog(ctx context.Context, level zapcore.Level, depth int, formatter st
 	_, newSpan := Start(DefaultContext(), "ReportLog")
 	defer newSpan.End()
 
-	span := SpanFromContext(ctx)
-	sc := span.SpanContext()
+	sc := SpanFromContext(ctx).SpanContext()
 	if sc.IsEmpty() {
-		span = SpanFromContext(DefaultContext())
-		sc = span.SpanContext()
+		sc = *DefaultSpanContext()
 	}
 	log := newMOLog()
 	log.TraceID = sc.TraceID
 	log.SpanID = sc.SpanID
 	log.Timestamp = util.NowNS()
 	log.Level = level
-	log.Caller = util.Caller(depth + 1)
+	log.Caller = stack.Caller(depth + 1)
 	log.Message = fmt.Sprintf(formatter, args...)
 	log.Extra = "{}"
 	export.GetGlobalBatchProcessor().Collect(DefaultContext(), log)

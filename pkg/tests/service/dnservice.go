@@ -21,6 +21,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/dnservice"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -103,7 +104,7 @@ func (ds *dnService) StartDNReplica(shard metadata.DNShard) error {
 	defer ds.Unlock()
 
 	if ds.status != ServiceStarted {
-		return ErrServiceNotStarted
+		return moerr.NewNoService(ds.uuid)
 	}
 
 	return ds.svc.StartDNReplica(shard)
@@ -114,7 +115,7 @@ func (ds *dnService) CloseDNReplica(shard metadata.DNShard) error {
 	defer ds.Unlock()
 
 	if ds.status != ServiceStarted {
-		return ErrServiceNotStarted
+		return moerr.NewNoService(ds.uuid)
 	}
 
 	return ds.svc.CloseDNReplica(shard)

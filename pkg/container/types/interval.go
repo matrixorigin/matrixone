@@ -18,8 +18,7 @@ import (
 	"math"
 	"strings"
 
-	"github.com/matrixorigin/matrixone/pkg/errno"
-	"github.com/matrixorigin/matrixone/pkg/sql/errors"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
 /*
@@ -31,10 +30,6 @@ import (
 type IntervalType int8
 
 const IntervalNumMAX = int64(^uint64(0) >> 21)
-
-var (
-	ErrIntervalNumOverflow = errors.New(errno.DataException, "Interval num overflow")
-)
 
 const (
 	IntervalTypeInvalid IntervalType = iota
@@ -113,7 +108,7 @@ func IntervalTypeOf(s string) (IntervalType, error) {
 			return IntervalType(i), nil
 		}
 	}
-	return IntervalTypeMax, errors.New(errno.DataException, "Invalud Interval Type")
+	return IntervalTypeMax, moerr.NewInvalidInput("invalid interval type '%s'", s)
 }
 
 // parseInts parse integer from string s.   This is used to handle interval values,
@@ -143,7 +138,7 @@ func parseInts(s string, isxxxMicrosecond bool, typeMaxLength int) ([]int64, err
 				ret[cur] = 10*ret[cur] + int64(c-rune('0'))
 				numLength++
 				if ret[cur] < 0 {
-					return nil, ErrIntervalNumOverflow
+					return nil, moerr.NewInvalidInput("invalid time interval value '%s'", s)
 				}
 			}
 		} else {
@@ -176,7 +171,7 @@ func parseInts(s string, isxxxMicrosecond bool, typeMaxLength int) ([]int64, err
 
 func conv(a []int64, mul []int64, rt IntervalType) (int64, IntervalType, error) {
 	if len(a) != len(mul) {
-		return 0, IntervalTypeInvalid, errors.New(errno.DataException, "Invalid interval format")
+		return 0, IntervalTypeInvalid, moerr.NewInternalError("conv intervaltype has jagged array input")
 	}
 
 	var largerThanZero bool
@@ -193,9 +188,9 @@ func conv(a []int64, mul []int64, rt IntervalType) (int64, IntervalType, error) 
 		ret += int64(a[i]) * curMul
 	}
 	if largerThanZero && ret < 0 {
-		return 0, IntervalTypeInvalid, ErrIntervalNumOverflow
+		return 0, IntervalTypeInvalid, moerr.NewInvalidInput("interval type, bad value '%d'", ret)
 	} else if !largerThanZero && ret > 0 {
-		return 0, IntervalTypeInvalid, ErrIntervalNumOverflow
+		return 0, IntervalTypeInvalid, moerr.NewInvalidInput("interval type, bad value '%d'", ret)
 	}
 
 	return ret, rt, nil
@@ -304,9 +299,9 @@ func JudgeIntervalNumOverflow(num int64, it IntervalType) error {
 	if it == MicroSecond {
 		return nil
 	} else if num > int64(IntervalNumMAX) {
-		return ErrIntervalNumOverflow
+		return moerr.NewInvalidArg("interval", num)
 	} else if -num > int64(IntervalNumMAX) {
-		return ErrIntervalNumOverflow
+		return moerr.NewInvalidArg("interval", num)
 	}
 	return nil
 }

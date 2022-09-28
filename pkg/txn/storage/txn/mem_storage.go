@@ -16,7 +16,6 @@ package txnstorage
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
-	"github.com/matrixorigin/matrixone/pkg/txn/storage"
 	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 )
 
@@ -24,7 +23,7 @@ func NewMemoryStorage(
 	mheap *mheap.Mheap,
 	defaultIsolationPolicy IsolationPolicy,
 	clock clock.Clock,
-) (storage.TxnStorage, error) {
+) (*Storage, error) {
 
 	memHandler := NewMemHandler(mheap, defaultIsolationPolicy, clock)
 	catalogHandler := NewCatalogHandler(memHandler)

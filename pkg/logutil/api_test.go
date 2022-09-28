@@ -16,10 +16,11 @@ package logutil
 
 import (
 	"fmt"
-	"github.com/stretchr/testify/require"
-	"go.uber.org/zap"
 	"reflect"
 	"testing"
+
+	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
 )
 
 func TestLog(t *testing.T) {

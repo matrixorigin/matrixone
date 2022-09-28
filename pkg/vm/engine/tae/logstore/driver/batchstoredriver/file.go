@@ -15,7 +15,6 @@ package batchstoredriver
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"os"
 	"path"
@@ -25,6 +24,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/entry"
 )
@@ -38,15 +38,15 @@ func MakeVersionFile(dir, name string, version uint64) string {
 func ParseVersion(name, prefix, suffix string) (int, error) {
 	woPrefix := strings.TrimPrefix(name, prefix+"-")
 	if len(woPrefix) == len(name) {
-		return 0, errors.New("parse version error")
+		return 0, moerr.NewInternalError("parse version error")
 	}
 	strVersion := strings.TrimSuffix(woPrefix, suffix)
 	if len(strVersion) == len(woPrefix) {
-		return 0, errors.New("parse version error")
+		return 0, moerr.NewInternalError("parse version error")
 	}
 	v, err := strconv.Atoi(strVersion)
 	if err != nil {
-		return 0, errors.New("parse version error")
+		return 0, moerr.NewInternalError("parse version error")
 	}
 	return v, nil
 }
@@ -267,7 +267,7 @@ func (rf *rotateFile) makeSpace(size int) (rotated *vFile, curr *vFileState, err
 	}
 	curr = rf.getFileState()
 	// if size > curr.bufSize {
-	// 	return nil, nil, fmt.Errorf("buff size is %v, but entry size is %v", rf.getFileState().file.bufSize, size) //TODO write without buf
+	// 	return nil, nil, moerr.NewInternalError("buff size is %v, but entry size is %v", rf.getFileState().file.bufSize, size) //TODO write without buf
 	// }
 	// if size+curr.bufPos > curr.bufSize {
 	// 	curr.file.Sync()
@@ -336,5 +336,5 @@ func (rf *rotateFile) GetEntryByVersion(version int) (VFile, error) {
 	if vf != nil {
 		return vf, nil
 	}
-	return nil, errors.New("version not existed")
+	return nil, moerr.NewInternalError("version not existed")
 }

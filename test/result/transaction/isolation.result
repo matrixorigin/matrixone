@@ -87,7 +87,7 @@ c	d
 1	1
 2	2
 select * from test_11;
-table "test_11" does not exist
+SQL parser error: table "test_11" does not exist
 commit;
 select * from test_11;
 c	d
@@ -107,9 +107,9 @@ c	d
 1	1
 2	2
 delete from test_11 where c = 1;
-cannot find delete table
+invalid input: delete has no table def
 select * from test_11;
-table "test_11" does not exist
+SQL parser error: table "test_11" does not exist
 Insert into test_11 values(1,1);
 tae data: duplicate
 select * from test_11;
@@ -265,7 +265,7 @@ c	d
 2	2
 50	50
 commit;
-tae txn: w-w conflict error
+w-w conflict
 select * from test_11;
 c	d
 1	1
@@ -323,7 +323,7 @@ c	d
 Insert into test_11 values(100,50);
 tae data: duplicate
 commit;
-tae txn: w-w conflict error
+w-w conflict
 select * from test_11;
 c	d
 1	1
@@ -463,7 +463,7 @@ c	d
 1	1
 2	2
 select * from test_11;
-table "test_11" does not exist
+SQL parser error: table "test_11" does not exist
 commit;
 select * from test_11;
 c	d
@@ -515,13 +515,13 @@ c	d
 1	1
 2	2
 select * from test_11;
-table "test_11" does not exist
+SQL parser error: table "test_11" does not exist
 select * from test_11;
 c	d
 1	1
 2	2
 select * from test_11;
-table "test_11" does not exist
+SQL parser error: table "test_11" does not exist
 commit;
 select * from test_11;
 c	d

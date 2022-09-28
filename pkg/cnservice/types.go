@@ -63,9 +63,8 @@ type Config struct {
 	}
 
 	// parameters for cn-server related buffer.
-	PayLoadCopyBufferSize int
-	ReadBufferSize        int
-	WriteBufferSize       int
+	ReadBufferSize  int
+	WriteBufferSize int
 
 	// Pipeline configuration
 	Pipeline struct {

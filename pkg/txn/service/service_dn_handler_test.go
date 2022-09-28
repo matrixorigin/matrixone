@@ -18,6 +18,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage/mem"
@@ -85,7 +86,7 @@ func TestPrepareWithTxnNotExist(t *testing.T) {
 	sender.AddTxnService(s)
 
 	wTxn := NewTestTxn(1, 1, 1, 2)
-	checkResponses(t, prepareTestTxn(t, sender, wTxn, 1), newTxnNotFoundError())
+	checkResponses(t, prepareTestTxn(t, sender, wTxn, 1), newTxnError(moerr.ErrTxnNotFound, ""))
 }
 
 func TestGetStatus(t *testing.T) {

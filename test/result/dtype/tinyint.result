@@ -164,25 +164,25 @@ id
 SELECT * from t_tinyint WHERE id = 1.1e0;
 id
 SELECT * from t_tinyint WHERE id = '1.1';
-Can't cast '1.1' from VARCHAR type to TINYINT type.
+invalid argument cast to int, bad value 1.1
 SELECT * from t_tinyint WHERE id = '1.1e0';
-Can't cast '1.1e0' from VARCHAR type to TINYINT type.
+invalid argument cast to int, bad value 1.1e0
 SELECT * from t_tinyint WHERE id IN (1.1, 2.2);
 id
 SELECT * from t_tinyint WHERE id IN (1.1e0, 2.2e0);
 id
 SELECT * from t_tinyint WHERE id IN ('1.1', '2.2');
-Can't cast '1.1' from VARCHAR type to TINYINT type.
+invalid argument cast to int, bad value 1.1
 SELECT * from t_tinyint WHERE id IN ('1.1e0', '2.2e0');
-Can't cast '1.1e0' from VARCHAR type to TINYINT type.
+invalid argument cast to int, bad value 1.1e0
 SELECT * from t_tinyint WHERE id BETWEEN 1.1 AND 1.9;
 id
 SELECT * from t_tinyint WHERE id BETWEEN 1.1e0 AND 1.9e0;
 id
 SELECT * from t_tinyint WHERE id BETWEEN '1.1' AND '1.9';
-Can't cast '1.1' from VARCHAR type to TINYINT type.
+invalid argument cast to int, bad value 1.1
 SELECT * from t_tinyint WHERE id BETWEEN '1.1e0' AND '1.9e0';
-Can't cast '1.1e0' from VARCHAR type to TINYINT type.
+invalid argument cast to int, bad value 1.1e0
 CREATE TABLE t1 (a TINYINT);
 INSERT INTO t1 VALUES (1);
 SELECT * FROM t1 WHERE coalesce(a) BETWEEN 0 and 0.9;
@@ -448,62 +448,55 @@ a
 -128
 127
 insert into t1 values(-129);
-Incorrect TINYINT value: '-129' for column 'a' at row 1
+truncated type TINYINT value -129 for column a, 1
 insert into t1 values(128);
-Incorrect TINYINT value: '128' for column 'a' at row 1
+truncated type TINYINT value 128 for column a, 1
 create table t2(a tinyint unsigned);
 insert into t2 values(128);
 insert into t1 select * from t2;
-Can't cast column from TINYINT UNSIGNED type to TINYINT type because of one or more values in that column. Reason: overflow
-
+data out of range: data type int8, value '128'
 drop table t2;
 create table t2(a smallint);
 insert into t2 values(-129);
 insert into t1 select * from t2;
-Can't cast column from SMALLINT type to TINYINT type because of one or more values in that column. Reason: overflow
+data out of range: data type int8, value '-129'
 delete from t2;
 insert into t2 values(128);
 insert into t1 select * from t2;
-Can't cast column from SMALLINT type to TINYINT type because of one or more values in that column. Reason: overflow
-
+data out of range: data type int8, value '128'
 drop table t2;
 create table t2(a smallint unsigned);
 insert into t2 values(128);
 insert into t1 select * from t2;
-Can't cast column from SMALLINT UNSIGNED type to TINYINT type because of one or more values in that column. Reason: overflow
-
+data out of range: data type int8, value '128'
 drop table t2;
 create table t2(a int);
 insert into t2 values(-129);
 insert into t1 select * from t2;
-Can't cast column from INT type to TINYINT type because of one or more values in that column. Reason: overflow
+data out of range: data type int8, value '-129'
 delete from t2;
 insert into t2 values(128);
 insert into t1 select * from t2;
-Can't cast column from INT type to TINYINT type because of one or more values in that column. Reason: overflow
-
+data out of range: data type int8, value '128'
 drop table t2;
 create table t2(a int unsigned);
 insert into t2 values(128);
 insert into t1 select * from t2;
-Can't cast column from INT UNSIGNED type to TINYINT type because of one or more values in that column. Reason: overflow
-
+data out of range: data type int8, value '128'
 drop table t2;
 create table t2(a bigint);
 insert into t2 values(-129);
 insert into t1 select * from t2;
-Can't cast column from BIGINT type to TINYINT type because of one or more values in that column. Reason: overflow
+data out of range: data type int8, value '-129'
 delete from t2;
 insert into t2 values(128);
 insert into t1 select * from t2;
-Can't cast column from BIGINT type to TINYINT type because of one or more values in that column. Reason: overflow
-
+data out of range: data type int8, value '128'
 drop table t2;
 create table t2(a bigint unsigned);
 insert into t2 values(128);
 insert into t1 select * from t2;
-Can't cast column from BIGINT UNSIGNED type to TINYINT type because of one or more values in that column. Reason: overflow
-
+data out of range: data type int8, value '128'
 drop table t1;
 create table t1(a tinyint unsigned);
 insert into t1 values(0), (255);
@@ -512,60 +505,53 @@ a
 0
 255
 insert into t1 values(-1);
-Incorrect TINYINT UNSIGNED value: '-1' for column 'a' at row 1
+truncated type TINYINT UNSIGNED value -1 for column a, 1
 insert into t1 values(256);
-Incorrect TINYINT UNSIGNED value: '256' for column 'a' at row 1
-
+truncated type TINYINT UNSIGNED value 256 for column a, 1
 drop table t2;
 create table t2(a tinyint);
 insert into t2 values(-1);
 insert into t1 select * from t2;
-Can't cast column from TINYINT type to TINYINT UNSIGNED type because of one or more values in that column. Reason: overflow
-
+data out of range: data type uint, value '-1'
 drop table t2;
 create table t2(a smallint);
 insert into t2 values(-1);
 insert into t1 select * from t2;
-Can't cast column from SMALLINT type to TINYINT UNSIGNED type because of one or more values in that column. Reason: overflow
+data out of range: data type uint8, value '-1'
 delete from t2;
 insert into t2 values(256);
 insert into t1 select * from t2;
-Can't cast column from SMALLINT type to TINYINT UNSIGNED type because of one or more values in that column. Reason: overflow
-
+data out of range: data type uint8, value '256'
 drop table t2;
 create table t2(a smallint unsigned);
 insert into t2 values(256);
 insert into t1 select * from t2;
-Can't cast column from SMALLINT UNSIGNED type to TINYINT UNSIGNED type because of one or more values in that column. Reason: overflow
-
+data out of range: data type uint8, value '256'
 drop table t2;
 create table t2(a int);
 insert into t2 values(-1);
 insert into t1 select * from t2;
-Can't cast column from INT type to TINYINT UNSIGNED type because of one or more values in that column. Reason: overflow
+data out of range: data type uint8, value '-1'
 delete from t2;
 insert into t2 values(256);
 insert into t1 select * from t2;
-Can't cast column from INT type to TINYINT UNSIGNED type because of one or more values in that column. Reason: overflow
-
+data out of range: data type uint8, value '256'
 drop table t2;
 create table t2(a int unsigned);
 insert into t2 values(256);
 insert into t1 select * from t2;
-Can't cast column from INT UNSIGNED type to TINYINT UNSIGNED type because of one or more values in that column. Reason: overflow
-
+data out of range: data type uint8, value '256'
 drop table t2;
 create table t2(a bigint);
 insert into t2 values(-1);
 insert into t1 select * from t2;
-Can't cast column from BIGINT type to TINYINT UNSIGNED type because of one or more values in that column. Reason: overflow
+data out of range: data type uint8, value '-1'
 delete from t2;
 insert into t2 values(256);
 insert into t1 select * from t2;
-Can't cast column from BIGINT type to TINYINT UNSIGNED type because of one or more values in that column. Reason: overflow
-
+data out of range: data type uint8, value '256'
 drop table t2;
 create table t2(a bigint unsigned);
 insert into t2 values(256);
 insert into t1 select * from t2;
-Can't cast column from BIGINT UNSIGNED type to TINYINT UNSIGNED type because of one or more values in that column. Reason: overflow
+data out of range: data type uint8, value '256'

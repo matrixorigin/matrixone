@@ -16,11 +16,12 @@ package util
 
 import (
 	"bytes"
+	"net"
+	"testing"
+
 	"github.com/google/uuid"
 	"github.com/prashantv/gostub"
 	"github.com/stretchr/testify/require"
-	"net"
-	"testing"
 )
 
 var dummyRealHardwareAddr = func() (net.HardwareAddr, error) {

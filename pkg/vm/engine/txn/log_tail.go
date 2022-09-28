@@ -18,7 +18,6 @@ import (
 	"context"
 
 	apipb "github.com/matrixorigin/matrixone/pkg/pb/api"
-	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 )
 
@@ -26,26 +25,23 @@ func (t *Table) GetLogTail(
 	ctx context.Context,
 	from *timestamp.Timestamp,
 	to *timestamp.Timestamp,
-	targetStore logservicepb.DNStore,
+	targetShard Shard,
 ) (
 	resp *apipb.SyncLogTailResp,
 	err error,
 ) {
 
-	resps, err := DoTxnRequest[GetLogTailResp](
+	resps, err := DoTxnRequest[apipb.SyncLogTailResp](
 		ctx,
 		t.engine,
 		t.txnOperator.Read,
-		func() ([]Shard, error) {
-			return t.engine.shardPolicy.Stores([]logservicepb.DNStore{targetStore})
-		},
+		thisShard(targetShard),
 		OpGetLogTail,
-		GetLogTailReq{
-			TableID: t.id,
-			Request: apipb.SyncLogTailReq{
-				CnHave: from,
-				CnWant: to,
-				Table:  &apipb.TableID{}, // we dont use this
+		apipb.SyncLogTailReq{
+			CnHave: from,
+			CnWant: to,
+			Table: &apipb.TableID{
+				TbId: uint64(t.id),
 			},
 		},
 	)
@@ -53,5 +49,5 @@ func (t *Table) GetLogTail(
 		return nil, err
 	}
 
-	return &resps[0].Response, nil
+	return &resps[0], nil
 }

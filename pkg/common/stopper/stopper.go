@@ -16,12 +16,12 @@ package stopper
 
 import (
 	"context"
-	"errors"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 
 	"go.uber.org/zap"
@@ -29,7 +29,7 @@ import (
 
 var (
 	// ErrUnavailable stopper is not running
-	ErrUnavailable = errors.New("runner is unavailable")
+	ErrUnavailable = moerr.NewInternalError("runner is unavailable")
 )
 
 var (

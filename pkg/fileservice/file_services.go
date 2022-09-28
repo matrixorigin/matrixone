@@ -16,8 +16,9 @@ package fileservice
 
 import (
 	"context"
-	"fmt"
 	"strings"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
 type FileServices struct {
@@ -33,7 +34,7 @@ func NewFileServices(defaultName string, fss ...FileService) (*FileServices, err
 	for _, fs := range fss {
 		name := strings.ToLower(fs.Name())
 		if _, ok := f.mappings[name]; ok {
-			return nil, fmt.Errorf("%w: %s", ErrDuplicatedName, name)
+			return nil, moerr.NewDupServiceName(name)
 		}
 		f.mappings[name] = fs
 	}

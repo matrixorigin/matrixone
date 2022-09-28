@@ -74,11 +74,11 @@ drop table if exists t1;
 create table t1 (a int);
 insert into t1 values(1),(2),(3),(4);
 select case a when 1 then 2 when 2 then 3 else 0 end as fcase, count(*) from t1 group by fcase;
-Column 'fcase' does not exist
+invalid input: column fcase does not exist
 select case a when 1 then 2 when 2 then 3 else 0 end as fcase, count(*) from t1 group by fcase;
-Column 'fcase' does not exist
+invalid input: column fcase does not exist
 select case a when 1 then "one" when 2 then "two" else "nothing" end as fcase, count(*) from t1 group by fcase;
-Column 'fcase' does not exist
+invalid input: column fcase does not exist
 drop table if exists t1;
 create table t1 (`row` int not null, col int not null, val varchar(255) not null);
 insert into t1 values (1,1,'orange'),(1,2,'large'),(2,1,'yellow'),(2,2,'medium'),(3,1,'green'),(3,2,'small');
@@ -113,10 +113,10 @@ insert into t1 (a, b) values (1,4572794622775114594), (2,18196094287899841997),
 insert into t2 (c) values (1), (2), (3);
 select t1.a, (case t1.a when 0 then 0 else t1.b end) d from t1
 join t2 on t1.a=t2.c order by d;
-Can't cast column from BIGINT UNSIGNED type to BIGINT type because of one or more values in that column. Reason: overflow
+data out of range: data type int64, 
 select t1.a, (case t1.a when 0 then 0 else t1.b end) d from t1
 join t2 on t1.a=t2.c where b=11120436154190595086 order by d;
-Can't cast column from BIGINT UNSIGNED type to BIGINT type because of one or more values in that column. Reason: overflow
+data out of range: data type int64, 
 drop table if exists small;
 drop table if exists big;
 CREATE TABLE small (id int not null,PRIMARY KEY (id));

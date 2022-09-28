@@ -196,7 +196,7 @@ message TxnRequest {
 message TxnRequestOptions {
     // RetryCodes when DN processes TxnRequest and encounters the specified error, it needs to retry
     // on the server side. Only read and write can retry.
-    repeated ErrorCode RetryCodes    = 1;
+    repeated int32 RetryCodes    = 1;
     // RetryInterval retry interval, default is 100ms.
     int64              RetryInterval = 2;    
 }
@@ -309,31 +309,8 @@ message TxnRemoveMetadataResponse {
 // TxnError all explicit errors in transaction operations.
 message TxnError {
     // Code error code
-    ErrorCode Code    = 1;
+    int32 Code    = 1;
     // Message error message
     string    Message = 2;
 }
 
-// ErrorCode error type code
-enum ErrorCode {
-    // TAERead execute tae read error
-    TAERead         = 0;
-    // TAEWrite execute tae write error
-    TAEWrite        = 1;
-    // TAECommit execute tae commit error
-    TAECommit       = 2;
-    // TAERollback execute tae rollback error
-    TAERollback     = 3;
-    // TAEPrepare execute tae prepare error
-    TAEPrepare      = 4;
-    // RPCError rpc error
-    RPCError        = 5;
-    // WaitTxn wait txn error
-    WaitTxn         = 6;
-    // TxnNotFound txn metadata not found
-    TxnNotFound     = 7;
-    // TxnNotActive txn status not in active
-    TxnNotActive    = 9;
-    // DNShardNotFound DNShard not found
-    DNShardNotFound = 10;
-}

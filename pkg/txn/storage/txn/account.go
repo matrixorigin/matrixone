@@ -15,8 +15,7 @@
 package txnstorage
 
 import (
-	"github.com/google/uuid"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	txnengine "github.com/matrixorigin/matrixone/pkg/vm/engine/txn"
 )
 
@@ -31,18 +30,17 @@ func (m *MemHandler) ensureAccount(
 	keys, err := m.databases.Index(tx, Tuple{
 		index_AccountID_Name,
 		Uint(accessInfo.AccountID),
-		Text(catalog.SystemDBName),
+		Text(catalog.MO_CATALOG),
 	})
 	if err != nil {
 		return err
 	}
 	if len(keys) == 0 {
 		// create one
-		db := DatabaseRow{
-			ID:        uuid.NewString(),
-			NumberID:  catalog.SystemDBID,
+		db := &DatabaseRow{
+			ID:        txnengine.NewID(),
 			AccountID: accessInfo.AccountID,
-			Name:      catalog.SystemDBName,
+			Name:      catalog.MO_CATALOG,
 		}
 		err := m.databases.Insert(tx, db)
 		//TODO add a unique constraint on (AccountID, Name)

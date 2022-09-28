@@ -57,7 +57,7 @@ func TestParse(t *testing.T) {
 
 	d64, err = Decimal64_FromString(longstr)
 	require.True(t, err != nil)
-	require.True(t, moerr.IsMoErrCode(err, moerr.DATA_TRUNCATED))
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrDataTruncated))
 	require.True(t, d64.Gt(Decimal64_One))
 	require.True(t, d64.Lt(Decimal64_Ten))
 

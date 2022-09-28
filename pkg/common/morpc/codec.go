@@ -15,7 +15,6 @@
 package morpc
 
 import (
-	"fmt"
 	"io"
 	"sync"
 
@@ -23,6 +22,8 @@ import (
 	"github.com/fagongzi/goetty/v2/buf"
 	"github.com/fagongzi/goetty/v2/codec"
 	"github.com/fagongzi/goetty/v2/codec/length"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 )
 
 var (
@@ -31,32 +32,44 @@ var (
 	flagCustomHeader   byte = 4
 )
 
+// WithCodecEnableChecksum enable checksum
+func WithCodecEnableChecksum() CodecOption {
+	return func(c *messageCodec) {
+		c.bc.enableChecksum = true
+	}
+}
+
+// WithCodecPayloadCopyBufferSize set payload copy buffer size, if is a PayloadMessage
+func WithCodecPayloadCopyBufferSize(value int) CodecOption {
+	return func(c *messageCodec) {
+		c.bc.payloadBufSize = value
+	}
+}
+
+// WithCodecIntegrationHLC intrgration hlc
+func WithCodecIntegrationHLC(clock clock.Clock) CodecOption {
+	return func(c *messageCodec) {
+		c.AddHeaderCodec(&hlcCodec{clock: clock})
+	}
+}
+
 type messageCodec struct {
 	codec codec.Codec
 	bc    *baseCodec
 }
 
-// NewMessageCodec create a message codec. If the message is a PayloadMessage, payloadCopyBufSize
-// determines how much data is copied from the payload to the socket each time.
-func NewMessageCodec(messageFactory func() Message, payloadCopyBufSize int) Codec {
-	return newMessageCodec(messageFactory, payloadCopyBufSize, false)
-}
-
-// NewMessageCodec create a message codec. If the message is a PayloadMessage, payloadCopyBufSize
-// determines how much data is copied from the payload to the socket each time.
-func NewMessageCodecWithChecksum(messageFactory func() Message, payloadCopyBufSize int) Codec {
-	return newMessageCodec(messageFactory, payloadCopyBufSize, true)
-}
-
-func newMessageCodec(messageFactory func() Message, payloadCopyBufSize int, enableChecksum bool) Codec {
+// NewMessageCodec create message codec
+func NewMessageCodec(messageFactory func() Message, options ...CodecOption) Codec {
 	bc := &baseCodec{
 		messageFactory: messageFactory,
-		payloadBufSize: payloadCopyBufSize,
-		enableChecksum: enableChecksum,
 	}
 	c := &messageCodec{codec: length.New(bc), bc: bc}
 	c.AddHeaderCodec(&deadlineContextCodec{})
 	c.AddHeaderCodec(&traceCodec{})
+
+	for _, opt := range options {
+		opt(c)
+	}
 	return c
 }
 
@@ -127,7 +140,7 @@ func (c *baseCodec) Decode(in *buf.ByteBuf) (any, bool, error) {
 		}
 		actulChecksum := checksum.Sum64()
 		if actulChecksum != expectChecksum {
-			return nil, false, fmt.Errorf("checksum mismatch, expect %d, got %d",
+			return nil, false, moerr.NewInternalError("checksum mismatch, expect %d, got %d",
 				expectChecksum,
 				actulChecksum)
 		}
@@ -257,7 +270,7 @@ func (c *baseCodec) Encode(data interface{}, out *buf.ByteBuf, conn io.Writer) e
 		return nil
 	}
 
-	return fmt.Errorf("not support %T %+v", data, data)
+	return moerr.NewInternalError("not support %T %+v", data, data)
 }
 
 var (

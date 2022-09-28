@@ -23,9 +23,9 @@ select oct(-1);
 oct(-1)
 1777777777777777777777
 select oct(10e50);
-the input value is out of integer range
+internal error: the input value is out of integer range
 select oct(-10e50);
-the input value is out of integer range
+internal error: the input value is out of integer range
 select oct(0.00000000000000000000000001);
 oct(0.00000000000000000000000001)
 0
@@ -33,7 +33,7 @@ select oct(-0.00000000000000000000000001);
 oct(-0.00000000000000000000000001)
 0
 select oct("你好");
-Can't cast '你好' from VARCHAR type to BIGINT type.
+invalid argument cast to int, bad value 你好
 create table t1(a int);
 insert into t1 values();
 select oct(a) from t1;
@@ -46,7 +46,7 @@ insert into t1 values(1, 1, 2, 4, 5, 5.5, 31.13, 14.314, "2012-03-12", "2012-03-
 insert into t1 values(1, 1, 2, 4, 5, 5.5, 31.13, 14.314, "2012-03-12", "2012-03-12 10:03:12", "2012-03-12 13:03:12", "abc", "dcf");
 insert into t1 values(1, 1, 2, 4, 5, 5.5, 31.13, 14.314, "2012-03-12", "2012-03-12 10:03:12", "2012-03-12 13:03:12", "abc", "dcf");
 select oct(a),oct(b),oct(c),oct(d),oct(e),oct(f),oct(g),oct(h),oct(i),oct(k),oct(l),oct(m),oct(n) from t1;
-Function 'oct' with parameters [DATE] is not supported.
+invalid argument function oct, bad value [DATE]
 drop table t1;
 CREATE TABLE t1(a char(255), b varchar(255));
 INSERT INTO t1 select oct(56), oct(234);
@@ -60,7 +60,7 @@ CREATE TABLE t1 (a int);
 INSERT INTO t1 VALUES (100), (12);
 SELECT a FROM t1
 HAVING oct(a) <>0;
-column "t1.a" must appear in the GROUP BY clause or be used in an aggregate function
+SQL syntax error: column "t1.a" must appear in the GROUP BY clause or be used in an aggregate function
 DROP TABLE t1;
 drop table if exists t1;
 create table t1(a INT,  b int);

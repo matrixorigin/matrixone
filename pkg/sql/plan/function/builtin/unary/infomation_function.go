@@ -15,15 +15,14 @@
 package unary
 
 import (
-	"errors"
-
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 var (
-	errorParameterIsInvalid = errors.New("the parameter is invalid")
+	errorParameterIsInvalid = moerr.NewInternalError("the parameter is invalid")
 )
 
 /*

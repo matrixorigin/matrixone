@@ -5,9 +5,9 @@ select cast('2000-01-01' as date);
 cast('2000-01-01' as date)
 2000-01-01
 select cast('200-01-1' as date);
-Can't cast '200-01-1' from VARCHAR type to DATE type.
+invalid argument parsedate, bad value 200-01-1
 select cast('2021-02-29' as date);
-Can't cast '2021-02-29' from VARCHAR type to DATE type.
+invalid argument parsedate, bad value 2021-02-29
 select cast('2022-02-01' as date)-cast('2022-01-01' as date);
 cast('2022-02-01' as date)-cast('2022-01-01' as date)
 100
@@ -15,7 +15,7 @@ select cast('2020-02-01' as date)+NULL;
 cast('2020-02-01' as date)+NULL
 NULL
 select cast('0000-00-00' as date);
-Can't cast '0000-00-00' from VARCHAR type to DATE type.
+invalid argument parsedate, bad value 0000-00-00
 select cast(cast(0x13488c5 as signed) as date);
 cast(cast(0x13488c5 as signed) as date)
 2022-01-01
@@ -118,7 +118,7 @@ dvalue	value32	dvalue	value32
 2022-01-02	2	2022-01-02	4
 2022-01-01	1	2022-01-01	5
 select * from t1 join t2 on t1.dvalue=t2.dvalue where t1.dvalue>='2022-01-01' group by t1.dvalue order by t2.dvalue;
-column "t1.value32" must appear in the GROUP BY clause or be used in an aggregate function
+SQL syntax error: column "t1.value32" must appear in the GROUP BY clause or be used in an aggregate function
 drop table if exists t1;
 drop table if exists t2;
 CREATE TABLE t_date(id date);
@@ -128,7 +128,7 @@ id	id >= 20200102
 2020-01-01	false	
 2022-01-02	true	
 SELECT id, 1.1 <= '2020-01-01' FROM t_date;
-Can't cast '2020-01-01' from VARCHAR type to DECIMAL128 type.
+invalid argument decimal128, bad value 2020-01-01
 SELECT id, id = 202020101 FROM t_date;
 id	id = 202020101
 2020-01-01	false	
@@ -155,7 +155,7 @@ id
 SELECT * from t_date WHERE id IN (20220101, 20220103);
 id
 SELECT * from t_date WHERE id IN ('2.0200101e7','2.0200103e7');
-Can't cast '2.0200101e7' from VARCHAR type to DATE type.
+invalid argument parsedate, bad value 2.0200101e7
 SELECT * from t_date WHERE id BETWEEN 20191231 AND 20200101;
 id
 2020-01-01
@@ -165,7 +165,7 @@ id
 SELECT * from t_date WHERE id BETWEEN '2020-01-02' AND '2020-01-03';
 id
 SELECT * from t_date WHERE id BETWEEN '2.0200101e7' and '2.0200103e7';
-Can't cast '2.0200101e7' from VARCHAR type to DATE type.
+invalid argument parsedate, bad value 2.0200101e7
 drop table if exists t1;
 CREATE TABLE t1 (a date);
 insert INTO t1 VALUES ('2022-03-01');
@@ -189,7 +189,7 @@ SELECT CAST(0 AS date) BETWEEN 0 AND -1;
 CAST(0 AS date) BETWEEN 0 AND -1
 NULL
 SELECT CAST(10000101 as date) BETWEEN '1000-01-01' and '1000-01-02';
-Operator 'cast' with parameters [BIGINT DATE] is not supported.
+invalid argument operator cast, bad value [BIGINT DATE]
 drop table if exists t1;
 drop table if exists t2;
 drop table if exists t3;

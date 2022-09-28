@@ -47,13 +47,25 @@ func New(
 
 var _ engine.Engine = new(Engine)
 
+func (e *Engine) New(_ context.Context, _ client.TxnOperator) error {
+	return nil
+}
+
+func (e *Engine) Commit(_ context.Context, _ client.TxnOperator) error {
+	return nil
+}
+
+func (e *Engine) Rollback(_ context.Context, _ client.TxnOperator) error {
+	return nil
+}
+
 func (e *Engine) Create(ctx context.Context, dbName string, txnOperator client.TxnOperator) error {
 
 	_, err := DoTxnRequest[CreateDatabaseResp](
 		ctx,
 		e,
 		txnOperator.Write,
-		e.allNodesShards,
+		e.allShards,
 		OpCreateDatabase,
 		CreateDatabaseReq{
 			AccessInfo: getAccessInfo(ctx),
@@ -73,7 +85,7 @@ func (e *Engine) Database(ctx context.Context, dbName string, txnOperator client
 		ctx,
 		e,
 		txnOperator.Read,
-		e.firstNodeShard,
+		e.anyShard,
 		OpOpenDatabase,
 		OpenDatabaseReq{
 			AccessInfo: getAccessInfo(ctx),
@@ -90,6 +102,7 @@ func (e *Engine) Database(ctx context.Context, dbName string, txnOperator client
 		engine:      e,
 		txnOperator: txnOperator,
 		id:          resp.ID,
+		name:        resp.Name,
 	}
 
 	return db, nil
@@ -101,7 +114,7 @@ func (e *Engine) Databases(ctx context.Context, txnOperator client.TxnOperator) 
 		ctx,
 		e,
 		txnOperator.Read,
-		e.firstNodeShard,
+		e.anyShard,
 		OpGetDatabases,
 		GetDatabasesReq{
 			AccessInfo: getAccessInfo(ctx),
@@ -125,7 +138,7 @@ func (e *Engine) Delete(ctx context.Context, dbName string, txnOperator client.T
 		ctx,
 		e,
 		txnOperator.Write,
-		e.allNodesShards,
+		e.anyShard,
 		OpDeleteDatabase,
 		DeleteDatabaseReq{
 			AccessInfo: getAccessInfo(ctx),

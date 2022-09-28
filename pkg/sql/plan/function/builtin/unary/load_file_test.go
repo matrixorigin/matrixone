@@ -16,9 +16,9 @@ package unary
 
 import (
 	"context"
-	"errors"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -133,7 +133,7 @@ func TestLoadFile(t *testing.T) {
 		{
 			name:     "Error Case",
 			filename: filepath,
-			want:     errors.New("Data too long for blob"),
+			want:     moerr.NewInternalError("Data too long for blob"),
 		},
 	}
 	for _, c := range cases3 {

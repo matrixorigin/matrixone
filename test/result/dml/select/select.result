@@ -262,9 +262,9 @@ a	big
 1	9223372036854775807
 1	18446744073709551615
 select min(big),max(big),max(big)-1 from t1;
-Can't cast column from BIGINT UNSIGNED type to BIGINT type because of one or more values in that column. Reason: overflow
+data out of range: data type int64, 
 select min(big),max(big),max(big)-1 from t1 group by a;
-Can't cast column from BIGINT UNSIGNED type to BIGINT type because of one or more values in that column. Reason: overflow
+data out of range: data type int64, 
 drop table if exists t1;
 create table t1 (
 value64 bigint unsigned not null,
@@ -370,9 +370,9 @@ null
 
 drop table if exists t1;
 create table if not exists t1(a tinyint auto_increment);
-the auto_incr column is only support int32 and int64 type now
+drop table if exists t1;
 create table if not exists t1(a smallint auto_increment);
-the auto_incr column is only support int32 and int64 type now
+drop table if exists t1;
 create table if not exists t1(a int auto_increment);
 select * from t1;
 a

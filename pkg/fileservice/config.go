@@ -15,9 +15,9 @@
 package fileservice
 
 import (
-	"fmt"
 	"strings"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/util/toml"
 )
 
@@ -60,7 +60,7 @@ func NewFileService(cfg Config) (FileService, error) {
 	case s3FileServiceBackend:
 		return newS3FileService(cfg)
 	default:
-		return nil, fmt.Errorf("file service backend %s not implemented", cfg.Backend)
+		return nil, moerr.NewInternalError("file service backend %s not implemented", cfg.Backend)
 	}
 }
 

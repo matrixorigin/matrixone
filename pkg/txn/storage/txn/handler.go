@@ -15,6 +15,7 @@
 package txnstorage
 
 import (
+	apipb "github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	txnengine "github.com/matrixorigin/matrixone/pkg/vm/engine/txn"
@@ -176,7 +177,7 @@ type Handler interface {
 
 	HandleGetLogTail(
 		meta txn.TxnMeta,
-		req txnengine.GetLogTailReq,
-		resp *txnengine.GetLogTailResp,
+		req apipb.SyncLogTailReq,
+		resp *apipb.SyncLogTailResp,
 	) error
 }

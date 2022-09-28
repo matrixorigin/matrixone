@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"io"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -111,10 +112,11 @@ func (entry *SegmentEntry) GetBlockEntryByID(id uint64) (blk *BlockEntry, err er
 	return entry.GetBlockEntryByIDLocked(id)
 }
 
+// XXX API like this, why do we need the error?   Isn't blk is nil enough?
 func (entry *SegmentEntry) GetBlockEntryByIDLocked(id uint64) (blk *BlockEntry, err error) {
 	node := entry.entries[id]
 	if node == nil {
-		err = ErrNotFound
+		err = moerr.NewNotFound()
 		return
 	}
 	blk = node.GetPayload()
@@ -130,7 +132,7 @@ func (entry *SegmentEntry) MakeCommand(id uint32) (cmd txnif.TxnCmd, err error) 
 
 func (entry *SegmentEntry) PPString(level common.PPLevel, depth int, prefix string) string {
 	var w bytes.Buffer
-	_, _ = w.WriteString(fmt.Sprintf("%s%s%s", common.RepeatStr("\t", depth), prefix, entry.String()))
+	_, _ = w.WriteString(fmt.Sprintf("%s%s%s", common.RepeatStr("\t", depth), prefix, entry.StringWithLevel(level)))
 	if level == common.PPL0 {
 		return w.String()
 	}
@@ -147,18 +149,32 @@ func (entry *SegmentEntry) PPString(level common.PPLevel, depth int, prefix stri
 }
 
 func (entry *SegmentEntry) StringLocked() string {
-	return fmt.Sprintf("[%s]SEGMENT%s", entry.state.Repr(), entry.MetaBaseEntry.StringLocked())
+	return entry.StringWithLevelLocked(common.PPL1)
 }
 
 func (entry *SegmentEntry) Repr() string {
 	id := entry.AsCommonID()
-	return fmt.Sprintf("[%s]SEGMENT[%s]", entry.state.Repr(), id.String())
+	return fmt.Sprintf("[%s]SEG[%s]", entry.state.Repr(), id.String())
 }
 
 func (entry *SegmentEntry) String() string {
 	entry.RLock()
 	defer entry.RUnlock()
 	return entry.StringLocked()
+}
+
+func (entry *SegmentEntry) StringWithLevel(level common.PPLevel) string {
+	entry.RLock()
+	defer entry.RUnlock()
+	return entry.StringWithLevelLocked(level)
+}
+
+func (entry *SegmentEntry) StringWithLevelLocked(level common.PPLevel) string {
+	if level <= common.PPL1 {
+		return fmt.Sprintf("[%s]SEG[%d][C@%s,D@%s]",
+			entry.state.Repr(), entry.ID, entry.GetCreatedAt().ToString(), entry.GetDeleteAt().ToString())
+	}
+	return fmt.Sprintf("[%s]SEG%s", entry.state.Repr(), entry.MetaBaseEntry.StringLocked())
 }
 
 func (entry *SegmentEntry) BlockCnt() int {
@@ -184,10 +200,15 @@ func (entry *SegmentEntry) GetAppendableBlockCnt() int {
 	}
 	return cnt
 }
-func (entry *SegmentEntry) GetLastBlock() (blk *BlockEntry) {
+func (entry *SegmentEntry) GetAppendableBlock() (blk *BlockEntry) {
 	it := entry.MakeBlockIt(false)
-	if it.Valid() {
-		blk = it.Get().GetPayload()
+	for it.Valid() {
+		itBlk := it.Get().GetPayload()
+		if itBlk.IsAppendable() {
+			blk = itBlk
+			break
+		}
+		it.Next()
 	}
 	return
 }
@@ -267,7 +288,7 @@ func (entry *SegmentEntry) GetSegmentData() data.Segment { return entry.segData 
 
 func (entry *SegmentEntry) deleteEntryLocked(block *BlockEntry) error {
 	if n, ok := entry.entries[block.GetID()]; !ok {
-		return ErrNotFound
+		return moerr.NewNotFound()
 	} else {
 		entry.link.Delete(n)
 		delete(entry.entries, block.GetID())

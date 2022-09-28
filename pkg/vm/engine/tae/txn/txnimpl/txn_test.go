@@ -16,6 +16,7 @@ package txnimpl
 
 import (
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
 	"math/rand"
 	"strconv"
 	"sync"
@@ -24,13 +25,12 @@ import (
 	"time"
 
 	"github.com/RoaringBitmap/roaring"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/mockio"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/stl"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables"
@@ -557,12 +557,12 @@ func TestTxnManager1(t *testing.T) {
 }
 
 func initTestContext(t *testing.T, dir string) (*catalog.Catalog, *txnbase.TxnManager, wal.Driver) {
-	mockio.ResetFS()
 	c := catalog.MockCatalog(dir, "mock", nil, nil)
 	driver := wal.NewDriver(dir, "store", nil)
 	txnBufMgr := buffer.NewNodeManager(common.G, nil)
 	mutBufMgr := buffer.NewNodeManager(common.G, nil)
-	factory := tables.NewDataFactory(mockio.SegmentFactory, mutBufMgr, nil, dir)
+	SegmentFactory := blockio.NewObjectFactory(dir)
+	factory := tables.NewDataFactory(SegmentFactory, mutBufMgr, nil, dir)
 	mgr := txnbase.NewTxnManager(TxnStoreFactory(c, driver, txnBufMgr, factory),
 		TxnFactory(c), types.NewMockHLCClock(1))
 	mgr.Start()
@@ -656,7 +656,7 @@ func TestTransaction2(t *testing.T) {
 	t.Log(dropped.String())
 
 	_, err = txn2.GetDatabase(name)
-	assert.Equal(t, catalog.ErrNotFound, err)
+	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrNotFound))
 	t.Log(err)
 
 	txn3, _ := mgr.StartTxn(nil)
@@ -887,7 +887,7 @@ func TestDedup1(t *testing.T) {
 		err := rel.Append(bats[0])
 		assert.NoError(t, err)
 		err = rel.Append(bats[0])
-		assert.ErrorIs(t, err, data.ErrDuplicate)
+		assert.True(t, moerr.IsMoErrCode(err, moerr.ErrDuplicate))
 		assert.Nil(t, txn.Rollback())
 	}
 
@@ -904,7 +904,7 @@ func TestDedup1(t *testing.T) {
 		db, _ := txn.GetDatabase("db")
 		rel, _ := db.GetRelationByName(schema.Name)
 		err := rel.Append(bats[0])
-		assert.ErrorIs(t, err, data.ErrDuplicate)
+		assert.True(t, moerr.IsMoErrCode(err, moerr.ErrDuplicate))
 		assert.Nil(t, txn.Rollback())
 	}
 	{

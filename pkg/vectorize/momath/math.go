@@ -52,6 +52,19 @@ func Atan(arg, result *vector.Vector) error {
 	return nil
 }
 
+func AtanWithTwoArg(firstArg, secondArg, result *vector.Vector) error {
+	firstCol := vector.MustTCols[float64](firstArg)
+	secondCol := vector.MustTCols[float64](secondArg)
+	resCol := vector.MustTCols[float64](result)
+	for i, v := range firstCol {
+		if v == 0 {
+			return moerr.NewInvalidArg("Atan first input", 0)
+		}
+		resCol[i] = math.Atan(secondCol[i] / v)
+	}
+	return nil
+}
+
 func Cos(arg, result *vector.Vector) error {
 	argCol := vector.MustTCols[float64](arg)
 	resCol := vector.MustTCols[float64](result)
@@ -71,8 +84,7 @@ func Cot(arg, result *vector.Vector) error {
 	for i, v := range argCol {
 		if !nulls.Contains(arg.Nsp, (uint64)(i)) {
 			if v == 0 {
-				// panic or return error.   need refactor later.
-				panic(moerr.NewError(moerr.OUT_OF_RANGE, "cot(0) value out of range"))
+				panic(moerr.NewInvalidArg("cot", "cot(0)"))
 			} else {
 				resCol[i] = math.Tan(math.Pi/2.0 - v)
 			}
@@ -100,7 +112,7 @@ func Ln(arg, result *vector.Vector) error {
 	for i, v := range argCol {
 		if !nulls.Contains(arg.Nsp, (uint64)(i)) {
 			if v <= 0 {
-				return moerr.New(moerr.INVALID_ARGUMENT, "Natural Logarithm function input cannot be non positive")
+				return moerr.NewInvalidArg("ln", v)
 			} else {
 				resCol[i] = math.Log(v)
 			}

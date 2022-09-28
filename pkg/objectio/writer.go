@@ -18,16 +18,17 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
-	"errors"
+	"sync"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
-	"sync"
 )
 
 type ObjectWriter struct {
 	sync.RWMutex
 	object *Object
-	blocks map[uint32]BlockObject
+	blocks []BlockObject
 	buffer *ObjectBuffer
 	name   string
 	lastId uint32
@@ -39,7 +40,7 @@ func NewObjectWriter(name string, fs fileservice.FileService) (Writer, error) {
 		name:   name,
 		object: object,
 		buffer: NewObjectBuffer(name),
-		blocks: make(map[uint32]BlockObject),
+		blocks: make([]BlockObject, 0),
 		lastId: 0,
 	}
 	err := writer.WriteHeader()
@@ -92,13 +93,13 @@ func (w *ObjectWriter) WriteIndex(fd BlockObject, index IndexData) error {
 
 	block := w.GetBlock(fd.GetID())
 	if block == nil || block.columns[index.GetIdx()] == nil {
-		return errors.New("object io: not found")
+		return moerr.NewInternalError("object io: not found")
 	}
 	err = index.Write(w, block)
 	return err
 }
 
-func (w *ObjectWriter) WriteEnd() (map[uint32]BlockObject, error) {
+func (w *ObjectWriter) WriteEnd() ([]BlockObject, error) {
 	var err error
 	w.RLock()
 	defer w.RUnlock()
@@ -141,6 +142,10 @@ func (w *ObjectWriter) WriteEnd() (map[uint32]BlockObject, error) {
 	if err != nil {
 		return nil, err
 	}
+	err = w.Sync("")
+	if err != nil {
+		return nil, err
+	}
 	return w.blocks, err
 }
 
@@ -157,7 +162,8 @@ func (w *ObjectWriter) AddBlock(block *Block) {
 	w.Lock()
 	defer w.Unlock()
 	block.id = w.lastId
-	w.blocks[block.id] = block
+	w.blocks = append(w.blocks, block)
+	//w.blocks[block.id] = block
 	w.lastId++
 }
 

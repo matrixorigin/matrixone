@@ -15,15 +15,16 @@
 package file
 
 import (
-	"errors"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"io"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 )
 
 var (
-	ErrInvalidParam = errors.New("tae: invalid param")
-	ErrInvalidName  = errors.New("tae: invalid name")
+	ErrInvalidParam = moerr.NewInternalError("tae: invalid param")
+	ErrInvalidName  = moerr.NewInternalError("tae: invalid name")
 )
 
 type Base interface {
@@ -33,7 +34,7 @@ type Base interface {
 }
 
 type SegmentFactory interface {
-	Build(dir string, id uint64) Segment
+	Build(dir string, id, tableId uint64, fs *objectio.ObjectFS) Segment
 	EncodeName(id uint64) string
 	DecodeName(name string) (id uint64, err error)
 }

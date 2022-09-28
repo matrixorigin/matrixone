@@ -26,6 +26,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	txnstorage "github.com/matrixorigin/matrixone/pkg/txn/storage/txn"
 	txnengine "github.com/matrixorigin/matrixone/pkg/vm/engine/txn"
+	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
+	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
 )
 
 func (s *service) initMemoryEngine(
@@ -47,9 +49,11 @@ func (s *service) initMemoryEngine(
 	}
 
 	// engine
+	guestMMU := guest.New(pu.SV.GuestMmuLimitation, pu.HostMmu)
+	heap := mheap.New(guestMMU)
 	pu.StorageEngine = txnengine.New(
 		ctx,
-		new(txnengine.ShardToSingleStatic), //TODO use hashing shard policy
+		txnengine.NewDefaultShardPolicy(heap),
 		txnengine.GetClusterDetailsFromHAKeeper(
 			ctx,
 			hakeeper,
@@ -63,22 +67,24 @@ func (s *service) initMemoryEngineNonDist(
 	ctx context.Context,
 	pu *config.ParameterUnit,
 ) error {
-
-	clock := clock.NewHLCClock(func() int64 {
-		return time.Now().Unix()
-	}, math.MaxInt)
+	ck := clock.DefaultClock()
+	if ck == nil {
+		ck = clock.NewHLCClock(func() int64 {
+			return time.Now().Unix()
+		}, math.MaxInt)
+	}
 
 	storage, err := txnstorage.NewMemoryStorage(
 		testutil.NewMheap(),
 		txnstorage.SnapshotIsolation,
-		clock,
+		ck,
 	)
 	if err != nil {
 		return err
 	}
 
 	txnClient := txnstorage.NewStorageTxnClient(
-		clock,
+		ck,
 		storage,
 	)
 	pu.TxnClient = txnClient
@@ -95,9 +101,11 @@ func (s *service) initMemoryEngineNonDist(
 		ServiceAddress: "1",
 		Shards:         shards,
 	}
+	guestMMU := guest.New(pu.SV.GuestMmuLimitation, pu.HostMmu)
+	heap := mheap.New(guestMMU)
 	engine := txnengine.New(
 		ctx,
-		new(txnengine.ShardToSingleStatic),
+		txnengine.NewDefaultShardPolicy(heap),
 		func() (logservicepb.ClusterDetails, error) {
 			return logservicepb.ClusterDetails{
 				DNStores: []logservicepb.DNStore{

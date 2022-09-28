@@ -1,16 +1,16 @@
 select CAST(1-2 AS UNSIGNED);
-Can't cast '-1' from BIGINT type to BIGINT UNSIGNED type. Reason: overflow
+data out of range: data type uint64, 
 select CAST(CAST(1-2 AS UNSIGNED) AS SIGNED INTEGER);
-Can't cast '-1' from BIGINT type to BIGINT UNSIGNED type. Reason: overflow
+data out of range: data type uint64, 
 select CAST('10 ' as unsigned integer);
 cast(10  as integer unsigned)
 10
 select CAST('10x' as unsigned integer);
-Can't cast '10x' from VARCHAR type to BIGINT UNSIGNED type.
+invalid argument cast to uint, bad value 10x
 select cast(-5 as unsigned) | 1, cast(-5 as unsigned) & -1;
-Can't cast '-5' from BIGINT type to BIGINT UNSIGNED type. Reason: overflow
+data out of range: data type uint64, 
 select cast(-5 as unsigned) -1, cast(-5 as unsigned) + 1;
-Can't cast '-5' from BIGINT type to BIGINT UNSIGNED type. Reason: overflow
+data out of range: data type uint64, 
 select cast(5 as unsigned) -6.0;
 cast(5 as unsigned) -6.0
 -1.0
@@ -36,18 +36,18 @@ select CAST(0xb3 as signed);
 CAST(0xb3 as signed)
 179
 select CAST(0x8fffffffffffffff as signed);
-Can't cast '10376293541461622783' from BIGINT UNSIGNED type to BIGINT type. Reason: overflow
+data out of range: data type int64, 
 select CAST(0xffffffffffffffff as unsigned);
 CAST(0xffffffffffffffff as unsigned)
 18446744073709551615
 select CAST(0xfffffffffffffffe as signed);
-Can't cast '18446744073709551614' from BIGINT UNSIGNED type to BIGINT type. Reason: overflow
+data out of range: data type int64, 
 select cast('-10a' as signed integer);
-Can't cast '-10a' from VARCHAR type to BIGINT type.
+invalid argument cast to int, bad value -10a
 select cast('a10' as unsigned integer);
-Can't cast 'a10' from VARCHAR type to BIGINT UNSIGNED type.
+invalid argument cast to uint, bad value a10
 select 10+'a';
-Can't cast 'a' from VARCHAR type to BIGINT type.
+invalid argument cast to int, bad value a
 select 10.0+cast('a' as decimal);
 10.0+cast('a' as decimal)
 10.0
@@ -55,19 +55,19 @@ select 10E+0+'a';
 10E+0+'a'
 10.0
 select cast('18446744073709551616' as unsigned);
-Can't cast '18446744073709551616' from VARCHAR type to BIGINT UNSIGNED type.
+data out of range: data type uint, value '18446744073709551616'
 select cast('18446744073709551616' as signed);
-Can't cast '18446744073709551616' from VARCHAR type to BIGINT type.
+data out of range: data type int, value '18446744073709551616'
 select cast('9223372036854775809' as signed);
-Can't cast '9223372036854775809' from VARCHAR type to BIGINT type.
+data out of range: data type int, value '9223372036854775809'
 select cast('-1' as unsigned);
-Can't cast '-1' from VARCHAR type to BIGINT UNSIGNED type.
+invalid argument cast to uint, bad value -1
 select cast('abc' as signed);
-Can't cast 'abc' from VARCHAR type to BIGINT type.
+invalid argument cast to int, bad value abc
 select cast('1a' as signed);
-Can't cast '1a' from VARCHAR type to BIGINT type.
+invalid argument cast to int, bad value 1a
 select cast('' as signed);
-Can't cast '' from VARCHAR type to BIGINT type.
+invalid argument cast to int, bad value 
 select cast("2001-1-1" as date) = "2001-01-01";
 cast("2001-1-1" as date) = "2001-01-01"
 true
@@ -84,12 +84,12 @@ select cast(18446744073709551615 as unsigned);
 cast(18446744073709551615 as unsigned)
 18446744073709551615
 select cast(18446744073709551615 as signed);
-Can't cast '18446744073709551615' from BIGINT UNSIGNED type to BIGINT type. Reason: overflow
+data out of range: data type int64, 
 select cast('18446744073709551615' as unsigned);
 cast('18446744073709551615' as unsigned)
 18446744073709551615
 select cast('18446744073709551615' as signed);
-Can't cast '18446744073709551615' from VARCHAR type to BIGINT type.
+data out of range: data type int, value '18446744073709551615'
 select cast('9223372036854775807' as signed);
 cast('9223372036854775807' as signed)
 9223372036854775807
@@ -100,12 +100,12 @@ select cast(concat_ws('184467440','73709551615') as signed);
 cast(concat_ws('184467440','73709551615') as signed)
 73709551615
 select cast(1.0e+300 as signed int);
-Can't cast '1e+300' from DOUBLE type to BIGINT type. Reason: overflow
+data out of range: data type int64, value '1e+300'
 CREATE TABLE t1 (f1 double);
 INSERT INTO t1 SET f1 = -1.0e+30 ;
 INSERT INTO t1 SET f1 = +1.0e+30 ;
 SELECT f1 AS double_val, CAST(f1 AS SIGNED INT) AS cast_val FROM t1;
-Can't cast column from DOUBLE type to BIGINT type because of one or more values in that column. Reason: overflow
+data out of range: data type int64, value '-1e+30'
 DROP TABLE t1;
 SELECT CAST(cast('01-01-01' as date) AS UNSIGNED);
 [42883]unsupported parameter types [DATE BIGINT UNSIGNED] for operator 'cast'
@@ -152,11 +152,11 @@ SELECT CAST(1/3 AS FLOAT) as float_col,CAST(1/3 AS DOUBLE) as double_col, CAST(1
 float_col	double_col	real_col
 0.333333	0.333333333	0.333333333
 SELECT CAST(DATE'2000-01-01' AS FLOAT), CAST(DATE'2000-01-01' AS DOUBLE);
-Operator 'cast' with parameters [DATE FLOAT] is not supported.
+invalid argument operator cast, bad value [DATE FLOAT]
 SELECT CAST(TIMESTAMP'2000-01-01 23:59:59' AS FLOAT), CAST(TIMESTAMP'2000-01-01 23:59:59' AS DOUBLE);
-Operator 'cast' with parameters [TIMESTAMP FLOAT] is not supported.
+invalid argument operator cast, bad value [TIMESTAMP FLOAT]
 SELECT CAST(TIMESTAMP'2000-01-01 23:59:59.123456' AS FLOAT), CAST(TIMESTAMP'2000-01-01 23:59:59.123456' AS DOUBLE);
-Operator 'cast' with parameters [TIMESTAMP FLOAT] is not supported.
+invalid argument operator cast, bad value [TIMESTAMP FLOAT]
 SELECT CAST(NULL AS REAL), CAST(NULL AS FLOAT), CAST(NULL AS DOUBLE);
 CAST(NULL AS REAL)	CAST(NULL AS FLOAT)	CAST(NULL AS DOUBLE)
 null	null	null
@@ -193,7 +193,7 @@ create table t1(f1 date, f2 timestamp, f3 datetime);
 insert into t1 values ("2006-01-01", "2006-01-01 12:01:01", "2006-01-01 12:01:01");
 insert into t1 values ("2006-01-02", "2006-01-02 12:01:02", "2006-01-02 12:01:02");
 select f1 from t1 where f1 between CAST("2006-1-1" as date) and CAST(20060101 as date);
-Operator 'cast' with parameters [BIGINT DATE] is not supported.
+invalid argument operator cast, bad value [BIGINT DATE]
 select f1 from t1 where f1 between cast("2006-1-1" as date) and cast("2006.1.1" as date);
 f1
 2006-01-01
@@ -204,7 +204,7 @@ select f3 from t1 where f3 between cast("2006-1-1 12:1:1" as datetime) and cast(
 f3
 2006-01-01 12:01:01
 select f3 from t1 where timestamp(f3) between cast("2006-1-1 12:1:1" as datetime) and cast("2006-1-1 12:1:2" as datetime);
-Operator '>=' with parameters [TIMESTAMP DATETIME] is not supported.
+invalid argument operator >=, bad value [TIMESTAMP DATETIME]
 select f1 from t1 where cast("2006-1-1" as date) between f1 and f3;
 f1
 2006-01-01
@@ -212,7 +212,7 @@ select f1 from t1 where cast("2006-1-1" as date) between date(f1) and date(f3);
 f1
 2006-01-01
 select f1 from t1 where cast("2006-1-1" as date) between f1 and cast('zzz' as date);
-Can't cast 'zzz' from VARCHAR type to DATE type.
+invalid argument parsedate, bad value zzz
 drop table t1;
 create table t1 (field DATE);
 insert into t1 values ('2006-11-06');
@@ -244,7 +244,7 @@ a - b	a - b < 0
 1	false
 4294967294	false
 select any_value(a)-b as d, (any_value(a)-b >= 0), b from t1 group by b having d >= 0;
-column "d" must appear in the GROUP BY clause or be used in an aggregate function
+SQL syntax error: column "d" must appear in the GROUP BY clause or be used in an aggregate function
 select cast((a - b) as unsigned) from t1 order by 1;
 cast((a - b) as unsigned)
 0
