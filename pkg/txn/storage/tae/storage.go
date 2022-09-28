@@ -16,7 +16,6 @@ package taestorage
 
 import (
 	"context"
-
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
@@ -24,73 +23,67 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/rpchandle"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/rpc"
 )
 
-type Storage struct {
-	shard     metadata.DNShard
-	logClient logservice.Client
-	fs        fileservice.FileService
-	clock     clock.Clock
+type taeStorage struct {
+	taeHandler rpchandle.Handler
 }
 
-func New(
+func NewTAEStorage(
 	shard metadata.DNShard,
 	logClient logservice.Client,
 	fs fileservice.FileService,
 	clock clock.Clock,
-) (*Storage, error) {
+) (*taeStorage, error) {
 
-	return &Storage{
-		shard:     shard,
-		logClient: logClient,
-		fs:        fs,
-		clock:     clock,
-	}, nil
+	opt := &options.Options{
+		Clock: clock,
+		Fs:    fs,
+		Lc:    logClient,
+		Shard: shard,
+	}
+	storage := &taeStorage{
+		taeHandler: rpc.NewTAEHandle(opt),
+	}
+	return storage, nil
 }
 
-var _ storage.TxnStorage = new(Storage)
+var _ storage.TxnStorage = new(taeStorage)
 
-// Close implements storage.TxnStorage
-func (*Storage) Close(ctx context.Context) error {
-	panic("unimplemented")
+// Close implements storage.TxnTAEStorage
+func (s *taeStorage) Close(ctx context.Context) error {
+	return s.taeHandler.HandleClose()
 }
 
-// Commit implements storage.TxnStorage
-func (*Storage) Commit(ctx context.Context, txnMeta txn.TxnMeta) error {
-	panic("unimplemented")
+// Commit implements storage.TxnTAEStorage
+func (s *taeStorage) Commit(ctx context.Context, txnMeta txn.TxnMeta) error {
+	return s.taeHandler.HandleCommit(txnMeta)
 }
 
-// Committing implements storage.TxnStorage
-func (*Storage) Committing(ctx context.Context, txnMeta txn.TxnMeta) error {
-	panic("unimplemented")
+// Committing implements storage.TxnTAEStorage
+func (s *taeStorage) Committing(ctx context.Context, txnMeta txn.TxnMeta) error {
+	return s.taeHandler.HandleCommitting(txnMeta)
 }
 
-// Destroy implements storage.TxnStorage
-func (*Storage) Destroy(ctx context.Context) error {
-	panic("unimplemented")
+// Destroy implements storage.TxnTAEStorage
+func (s *taeStorage) Destroy(ctx context.Context) error {
+	return s.taeHandler.HandleDestroy()
 }
 
-// Prepare implements storage.TxnStorage
-func (*Storage) Prepare(ctx context.Context, txnMeta txn.TxnMeta) (timestamp.Timestamp, error) {
-	panic("unimplemented")
+// Prepare implements storage.TxnTAEStorage
+func (s *taeStorage) Prepare(ctx context.Context, txnMeta txn.TxnMeta) (timestamp.Timestamp, error) {
+	return s.taeHandler.HandlePrepare(txnMeta)
 }
 
-// Read implements storage.TxnStorage
-func (*Storage) Read(ctx context.Context, txnMeta txn.TxnMeta, op uint32, payload []byte) (storage.ReadResult, error) {
-	panic("unimplemented")
+// Rollback implements storage.TxnTAEStorage
+func (s *taeStorage) Rollback(ctx context.Context, txnMeta txn.TxnMeta) error {
+	return s.taeHandler.HandleRollback(txnMeta)
 }
 
-// Rollback implements storage.TxnStorage
-func (*Storage) Rollback(ctx context.Context, txnMeta txn.TxnMeta) error {
-	panic("unimplemented")
-}
-
-// StartRecovery implements storage.TxnStorage
-func (*Storage) StartRecovery(context.Context, chan txn.TxnMeta) {
-	panic("unimplemented")
-}
-
-// Write implements storage.TxnStorage
-func (*Storage) Write(ctx context.Context, txnMeta txn.TxnMeta, op uint32, payload []byte) ([]byte, error) {
-	panic("unimplemented")
+// StartRecovery implements storage.TxnTAEStorage
+func (s *taeStorage) StartRecovery(ctx context.Context, ch chan txn.TxnMeta) {
+	s.taeHandler.HandleStartRecovery(ch)
 }

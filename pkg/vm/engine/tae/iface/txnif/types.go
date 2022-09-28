@@ -15,6 +15,7 @@
 package txnif
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"io"
 	"sync"
 
@@ -66,6 +67,7 @@ type TxnHandle interface {
 	DropDatabase(name string) (handle.Database, error)
 	GetDatabase(name string) (handle.Database, error)
 	DatabaseNames() []string
+	HandleCmd(entry *api.Entry) error
 }
 
 type TxnChanger interface {
@@ -81,7 +83,7 @@ type TxnChanger interface {
 	ToRollbacking(ts types.TS) error
 	ToRollbackingLocked(ts types.TS) error
 	ToUnknownLocked()
-	Prepare() error
+	Prepare() (types.TS, error)
 	Committing() error
 	Commit() error
 	Rollback() error

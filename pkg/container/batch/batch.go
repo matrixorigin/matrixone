@@ -207,6 +207,10 @@ func (bat *Batch) Prefetch(poses []int32, vecs []*vector.Vector) {
 	}
 }
 
+func (bat *Batch) SetVector(pos int32, vec *vector.Vector) {
+	bat.Vecs[pos] = vec
+}
+
 func (bat *Batch) GetVector(pos int32) *vector.Vector {
 	return bat.Vecs[pos]
 }
