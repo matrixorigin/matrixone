@@ -302,8 +302,7 @@ func (v *Vector) extend(rows int, m *mheap.Mheap) error {
 	return nil
 }
 
-// CompareAndCheckIntersect  we use this method for zonemap checker
-// so v and vec will not has any null, and we don't have any logic to deal with null
+// CompareAndCheckIntersect  we use this method for eval expr by zonemap
 func (v *Vector) CompareAndCheckIntersect(vec *Vector) (bool, error) {
 	switch v.Typ.Oid {
 	case types.T_int8:
@@ -373,8 +372,7 @@ func checkIntersect[T compT](v1, v2 *Vector, gtFun compFn[T], ltFun compFn[T]) (
 	return false, nil
 }
 
-// CompareAndCheckAnyResultIsTrue  we use this method for zonemap checker
-// so v and vec will not has any null, and we don't have any logic to deal with null
+// CompareAndCheckAnyResultIsTrue  we use this method for eval expr by zonemap
 // funName must be ">,<,>=,<="
 func (v *Vector) CompareAndCheckAnyResultIsTrue(vec *Vector, funName string) (bool, error) {
 	if v.Typ.Oid != vec.Typ.Oid {
