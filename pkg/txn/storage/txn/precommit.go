@@ -16,6 +16,7 @@ package txnstorage
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	apipb "github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	txnengine "github.com/matrixorigin/matrixone/pkg/vm/engine/txn"
@@ -88,7 +89,35 @@ func (m *MemHandler) HandlePreCommit(meta txn.TxnMeta, req apipb.PrecommitWriteC
 				}
 			}
 		default:
-			// TODO
+			pe := e.(*apipb.Entry)
+			bat, err := batch.ProtoBatchToBatch(pe.GetBat())
+			if err != nil {
+				return err
+			}
+			if pe.EntryType == apipb.Entry_Insert {
+				req := txnengine.WriteReq{
+					TableID:      txnengine.ID(pe.GetTableId()),
+					DatabaseName: pe.GetDatabaseName(),
+					TableName:    pe.GetTableName(),
+					Batch:        bat,
+				}
+				if err = m.HandleWrite(meta, req,
+					new(txnengine.WriteResp)); err != nil {
+					return err
+				}
+			} else {
+				req := txnengine.DeleteReq{
+					TableID:      txnengine.ID(pe.GetTableId()),
+					DatabaseName: pe.GetDatabaseName(),
+					TableName:    pe.GetTableName(),
+					ColumnName:   bat.Attrs[0],
+					Vector:       bat.Vecs[0],
+				}
+				if err = m.HandleDelete(meta, req,
+					new(txnengine.DeleteResp)); err != nil {
+					return err
+				}
+			}
 		}
 	}
 	return nil
