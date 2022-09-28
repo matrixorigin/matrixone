@@ -16,7 +16,6 @@ package disttae
 
 import (
 	"context"
-	"fmt"
 	"math/rand"
 	"testing"
 
@@ -93,7 +92,7 @@ func TestTransaction(t *testing.T) {
 	ctx := context.TODO()
 
 	bm := makeBlockMetaForTest()
-	blks, err := blockWrite(ctx, bm, testutil.NewBatch([]types.Type{
+	_, err = blockWrite(ctx, bm, testutil.NewBatch([]types.Type{
 		types.T_int64.ToType(),
 		types.T_int64.ToType(),
 		types.T_int64.ToType(),
@@ -102,7 +101,7 @@ func TestTransaction(t *testing.T) {
 	if err != nil {
 		t.Fatalf("err: %v", err)
 	}
-	fmt.Printf("%v", blks)
+	// fmt.Printf("%v", blks)
 
 	_, _ = txn.getRow(ctx, 0, 0, nil, nil, makeFunctionExprForTest(">", []*plan.Expr{
 		makeColExprForTest(0, types.T_int64),
