@@ -145,15 +145,15 @@ func (tbl *txnTable) SoftDeleteSegment(id uint64) (err error) {
 	return
 }
 
-func (tbl *txnTable) CreateSegment() (seg handle.Segment, err error) {
-	return tbl.createSegment(catalog.ES_Appendable)
+func (tbl *txnTable) CreateSegment(is1PC bool) (seg handle.Segment, err error) {
+	return tbl.createSegment(catalog.ES_Appendable, is1PC)
 }
 
 func (tbl *txnTable) CreateNonAppendableSegment() (seg handle.Segment, err error) {
-	return tbl.createSegment(catalog.ES_NotAppendable)
+	return tbl.createSegment(catalog.ES_NotAppendable, false)
 }
 
-func (tbl *txnTable) createSegment(state catalog.EntryState) (seg handle.Segment, err error) {
+func (tbl *txnTable) createSegment(state catalog.EntryState, is1PC bool) (seg handle.Segment, err error) {
 	var meta *catalog.SegmentEntry
 	var factory catalog.SegmentDataFactory
 	if tbl.store.dataFactory != nil {
@@ -165,6 +165,9 @@ func (tbl *txnTable) createSegment(state catalog.EntryState) (seg handle.Segment
 	seg = newSegment(tbl, meta)
 	tbl.store.IncreateWriteCnt()
 	tbl.store.dirtyMemo.recordSeg(tbl.entry.ID, meta.ID)
+	if is1PC {
+		meta.Set1PC()
+	}
 	tbl.txnEntries = append(tbl.txnEntries, meta)
 	tbl.store.warChecker.ReadTable(tbl.entry.GetDB().ID, meta.GetTable().AsCommonID())
 	return
@@ -211,14 +214,14 @@ func (tbl *txnTable) GetBlock(id *common.ID) (blk handle.Block, err error) {
 }
 
 func (tbl *txnTable) CreateNonAppendableBlock(sid uint64) (blk handle.Block, err error) {
-	return tbl.createBlock(sid, catalog.ES_NotAppendable)
+	return tbl.createBlock(sid, catalog.ES_NotAppendable, false)
 }
 
-func (tbl *txnTable) CreateBlock(sid uint64) (blk handle.Block, err error) {
-	return tbl.createBlock(sid, catalog.ES_Appendable)
+func (tbl *txnTable) CreateBlock(sid uint64, is1PC bool) (blk handle.Block, err error) {
+	return tbl.createBlock(sid, catalog.ES_Appendable, is1PC)
 }
 
-func (tbl *txnTable) createBlock(sid uint64, state catalog.EntryState) (blk handle.Block, err error) {
+func (tbl *txnTable) createBlock(sid uint64, state catalog.EntryState, is1PC bool) (blk handle.Block, err error) {
 	var seg *catalog.SegmentEntry
 	if seg, err = tbl.entry.GetSegmentByID(sid); err != nil {
 		return
@@ -235,6 +238,9 @@ func (tbl *txnTable) createBlock(sid uint64, state catalog.EntryState) (blk hand
 	meta, err := seg.CreateBlock(tbl.store.txn, state, factory)
 	if err != nil {
 		return
+	}
+	if is1PC {
+		meta.Set1PC()
 	}
 	tbl.store.IncreateWriteCnt()
 	tbl.store.dirtyMemo.recordBlk(*meta.AsCommonID())
@@ -731,6 +737,9 @@ func (tbl *txnTable) PreApplyCommit() (err error) {
 func (tbl *txnTable) ApplyCommit() (err error) {
 	csn := tbl.csnStart
 	for _, node := range tbl.txnEntries {
+		if node.Is1PC() {
+			continue
+		}
 		if err = node.ApplyCommit(tbl.store.cmdMgr.MakeLogIndex(csn)); err != nil {
 			break
 		}
@@ -739,9 +748,24 @@ func (tbl *txnTable) ApplyCommit() (err error) {
 	return
 }
 
+func (tbl *txnTable) Apply1PCCommit() (err error) {
+	for _, node := range tbl.txnEntries {
+		if !node.Is1PC() {
+			continue
+		}
+		if err = node.ApplyCommit(tbl.store.cmdMgr.MakeLogIndex(tbl.csnStart)); err != nil {
+			break
+		}
+		tbl.csnStart++
+	}
+	return
+}
 func (tbl *txnTable) ApplyRollback() (err error) {
 	csn := tbl.csnStart
 	for _, node := range tbl.txnEntries {
+		if node.Is1PC() {
+			continue
+		}
 		if err = node.ApplyRollback(tbl.store.cmdMgr.MakeLogIndex(csn)); err != nil {
 			break
 		}
