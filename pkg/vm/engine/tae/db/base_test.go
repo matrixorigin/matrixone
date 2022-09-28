@@ -88,6 +88,9 @@ func (e *testEngine) checkRowsByScan(exp int, applyDelete bool) {
 func (e *testEngine) getRelation() (txn txnif.AsyncTxn, rel handle.Relation) {
 	return getRelation(e.t, e.tenantID, e.DB, defaultTestDB, e.schema.Name)
 }
+func (e *testEngine) getRelationWithTxn(txn txnif.AsyncTxn) (rel handle.Relation) {
+	return getRelationWithTxn(e.t, txn, defaultTestDB, e.schema.Name)
+}
 
 func (e *testEngine) checkpointCatalog() {
 	err := e.DB.Catalog.Checkpoint(e.DB.TxnMgr.StatMaxCommitTS())
@@ -122,6 +125,15 @@ func (e *testEngine) doAppend(bat *containers.Batch) {
 	assert.NoError(e.t, txn.Commit())
 }
 
+func (e *testEngine) doAppendWithTxn(bat *containers.Batch, txn txnif.AsyncTxn, skipConflict bool) (err error) {
+	rel := e.getRelationWithTxn(txn)
+	err = rel.Append(bat)
+	if !skipConflict {
+		assert.NoError(e.t, err)
+	}
+	return
+}
+
 func (e *testEngine) tryAppend(bat *containers.Batch) {
 	txn, err := e.DB.StartTxn(nil)
 	txn.BindAccessInfo(e.tenantID, 0, 0)
@@ -141,7 +153,6 @@ func (e *testEngine) tryAppend(bat *containers.Batch) {
 	}
 	_ = txn.Commit()
 }
-
 func (e *testEngine) deleteAll(skipConflict bool) error {
 	txn, rel := e.getRelation()
 	it := rel.MakeBlockIt()
@@ -315,6 +326,14 @@ func getRelation(t *testing.T, tenantID uint32, e *DB, dbName, tblName string) (
 	txn, err := e.StartTxn(nil)
 	txn.BindAccessInfo(tenantID, 0, 0)
 	assert.NoError(t, err)
+	db, err := txn.GetDatabase(dbName)
+	assert.NoError(t, err)
+	rel, err = db.GetRelationByName(tblName)
+	assert.NoError(t, err)
+	return
+}
+
+func getRelationWithTxn(t *testing.T, txn txnif.AsyncTxn, dbName, tblName string) (rel handle.Relation) {
 	db, err := txn.GetDatabase(dbName)
 	assert.NoError(t, err)
 	rel, err = db.GetRelationByName(tblName)
