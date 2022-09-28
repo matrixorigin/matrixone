@@ -1,6 +1,9 @@
-# Using Python connect to the MatrixOne server
+# Connecting to MatrixOne with Python
 
-MatrixOne now supports using Python connect to the MatrixOne server.
+MatrixOne supports Python connection.
+
+!!! Note
+    MatrixOne only supports `pymysql` driver in 0.5 release, `sqlalchemy` and `mysql-connector` are not supported yet.
 
 ## Before you start
 
@@ -18,4 +21,4 @@ Make sure you have already [installed and launched MatrixOne](../../Get-Started/
 
 ## Reference
 
-For the example about usingpymysql conn to MatrixOne, see[Build a simple stock analysis Python App with MatrixOne](../../Tutorial/develop-python-application.md).
+For the example about using pymysql conn to MatrixOne, see[Build a simple stock analysis Python App with MatrixOne](../../Tutorial/develop-python-application.md).
