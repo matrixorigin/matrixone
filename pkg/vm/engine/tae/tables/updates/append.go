@@ -148,8 +148,8 @@ func (node *AppendNode) SetMaxRow(row uint32) {
 }
 
 func (node *AppendNode) PrepareCommit() error {
-	node.Lock()
-	defer node.Unlock()
+	node.mvcc.Lock()
+	defer node.mvcc.Unlock()
 	_, err := node.TxnMVCCNode.PrepareCommit()
 	return err
 }
@@ -164,7 +164,6 @@ func (node *AppendNode) ApplyCommit(index *wal.Index) error {
 	if node.mvcc != nil {
 		logutil.Debugf("Set MaxCommitTS=%v, MaxVisibleRow=%d", node.GetEndLocked(), node.GetMaxRow())
 		node.mvcc.SetMaxVisible(node.GetEndLocked())
-		node.mvcc.Maxrow = node.maxRow
 	}
 	// logutil.Infof("Apply1Index %s TS=%d", index.String(), n.commitTs)
 	listener := node.mvcc.GetAppendListener()
