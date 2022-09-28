@@ -33,7 +33,7 @@ type S3Logger struct {
 	*zap.Logger
 }
 
-func (logger *S3Logger) Logf(classification logging.Classification, format string, v ...interface{}) {
+func (logger *S3Logger) Logf(classification logging.Classification, format string, v ...any) {
 	msg := fmt.Sprintf(format, v...)
 	switch classification {
 	case logging.Warn:
@@ -43,5 +43,4 @@ func (logger *S3Logger) Logf(classification logging.Classification, format strin
 	default:
 		logger.Info(msg)
 	}
-
 }
