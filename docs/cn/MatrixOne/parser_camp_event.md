@@ -21,7 +21,7 @@ If your OS is Linux, still download golang package and modify your profile. Here
 
 ```
 $ wget https://go.dev/dl/go1.19.1.linux-amd64.tar.gz
-$ sudo tar -zxvf go1.18.3.linux-amd64.tar.gz -C /usr/local
+$ sudo tar -zxvf go1.19.1.linux-amd64.tar.gz -C /usr/local
 $ cat >> /etc/profile << EOF
 export GOROOT=/usr/local/go  
 export PATH=$GOROOT/bin:$PATH
