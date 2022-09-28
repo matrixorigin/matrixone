@@ -33,7 +33,6 @@ $ rm -rf /usr/bin/go
 $ ln -s /usr/local/go/bin/go /usr/bin/go
 ```
 
-
 After these, your can check your golang version with go version.
 
 ### 3. Build and run your own MatrixOne
