@@ -254,7 +254,7 @@ func needRead(expr *plan.Expr, blkInfo BlockMeta, tableDef *plan.TableDef, proc 
 	// if expr match no columns, just eval expr
 	if len(columns) == 0 {
 		bat := batch.NewWithSize(0)
-		ifNeed, err := evalFilterExpr(expr, bat, proc, true)
+		ifNeed, err := evalFilterExpr(expr, bat, proc)
 		if err != nil {
 			return true
 		}
@@ -270,7 +270,7 @@ func needRead(expr *plan.Expr, blkInfo BlockMeta, tableDef *plan.TableDef, proc 
 	bat.Zs = make([]int64, buildVectors[0].Length())
 	bat.Vecs = buildVectors
 
-	ifNeed, err := evalFilterExpr(expr, bat, proc, false)
+	ifNeed, err := evalFilterExpr(expr, bat, proc)
 	if err != nil {
 		return true
 	}
