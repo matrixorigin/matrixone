@@ -262,7 +262,10 @@ func needRead(expr *plan.Expr, blkInfo BlockMeta, tableDef *plan.TableDef, proc 
 	}
 
 	// get min max data from Meta
-	datas, dataTypes := getZonemapDataFromMeta(columns, blkInfo, tableDef)
+	datas, dataTypes, err := getZonemapDataFromMeta(columns, blkInfo, tableDef)
+	if err != nil {
+		return true
+	}
 
 	// use all min/max data to build []vectors.
 	buildVectors := buildVectorsByData(datas, dataTypes, proc.GetMheap())

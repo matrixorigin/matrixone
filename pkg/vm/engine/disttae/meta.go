@@ -14,6 +14,8 @@
 
 package disttae
 
+import "github.com/matrixorigin/matrixone/pkg/objectio"
+
 // tae's block metadata, which is currently just an empty one,
 // does not serve any purpose When tae submits a concrete structure,
 // it will replace this structure with tae's code
@@ -36,8 +38,8 @@ type ColumnMeta struct {
 	idx         uint16
 	alg         uint8
 	location    Extent
-	zoneMap     *ZoneMap
-	bloomFilter *BloomFilter
+	zoneMap     objectio.IndexData
+	bloomFilter objectio.IndexData
 	dummy       [32]byte
 	checksum    uint32
 }
@@ -55,44 +57,44 @@ type Extent struct {
 	originSize uint32
 }
 
-type ZoneMap struct {
-	idx uint16
-	min []byte
-	max []byte
-}
+// type ZoneMap struct {
+// 	idx uint16
+// 	min []byte
+// 	max []byte
+// }
 
-func NewZoneMap(idx uint16, min, max []byte) (*ZoneMap, error) {
-	zoneMap := &ZoneMap{
-		idx: idx,
-		min: min,
-		max: max,
-	}
-	return zoneMap, nil
-}
+// func NewZoneMap(idx uint16, min, max []byte) (*ZoneMap, error) {
+// 	zoneMap := &ZoneMap{
+// 		idx: idx,
+// 		min: min,
+// 		max: max,
+// 	}
+// 	return zoneMap, nil
+// }
 
-func (z *ZoneMap) GetIdx() uint16 {
-	return z.idx
-}
+// func (z *ZoneMap) GetIdx() uint16 {
+// 	return z.idx
+// }
 
-func (z *ZoneMap) GetMin() []byte {
-	return z.min
-}
+// func (z *ZoneMap) GetMin() []byte {
+// 	return z.min
+// }
 
-func (z *ZoneMap) GetMax() []byte {
-	return z.max
-}
+// func (z *ZoneMap) GetMax() []byte {
+// 	return z.max
+// }
 
-type BloomFilter struct {
-	idx uint16
-	alg uint8
-	buf []byte
-}
+// type BloomFilter struct {
+// 	idx uint16
+// 	alg uint8
+// 	buf []byte
+// }
 
-func NewBloomFilter(idx uint16, alg uint8, buf []byte) *BloomFilter {
-	bloomFilter := &BloomFilter{
-		idx: idx,
-		alg: alg,
-		buf: buf,
-	}
-	return bloomFilter
-}
+// func NewBloomFilter(idx uint16, alg uint8, buf []byte) *BloomFilter {
+// 	bloomFilter := &BloomFilter{
+// 		idx: idx,
+// 		alg: alg,
+// 		buf: buf,
+// 	}
+// 	return bloomFilter
+// }

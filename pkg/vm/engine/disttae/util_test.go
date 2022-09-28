@@ -15,14 +15,15 @@
 package disttae
 
 import (
-	"encoding/binary"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 )
 
 func makeColExprForTest(idx int32, typ types.T) *plan.Expr {
@@ -63,9 +64,14 @@ func makeFunctionExprForTest(name string, args []*plan.Expr) *plan.Expr {
 	}
 }
 
-func makeColumnMetaForTest(typ types.T, min []byte, max []byte) *ColumnMeta {
-	zm, _ := NewZoneMap(0, min, max)
-	bf := NewBloomFilter(0, 0, []byte{})
+func makeColumnMetaForTest(idx uint16, typ types.T, min any, max any) *ColumnMeta {
+	zm := index.NewZoneMap(typ.ToType())
+	_ = zm.Update(min)
+	_ = zm.Update(max)
+	buf, _ := zm.Marshal()
+	czm, _ := objectio.NewZoneMap(idx, buf)
+
+	bf := objectio.NewBloomFilter(0, 0, []byte{})
 	return &ColumnMeta{
 		typ: uint8(typ),
 		idx: 0,
@@ -76,7 +82,7 @@ func makeColumnMetaForTest(typ types.T, min []byte, max []byte) *ColumnMeta {
 			length:     0,
 			originSize: 0,
 		},
-		zoneMap:     zm,
+		zoneMap:     czm,
 		bloomFilter: bf,
 		dummy:       [32]byte{},
 		checksum:    0,
@@ -84,31 +90,13 @@ func makeColumnMetaForTest(typ types.T, min []byte, max []byte) *ColumnMeta {
 }
 
 func makeBlockMetaForTest() BlockMeta {
-	column1Min := make([]byte, 8)
-	column1Max := make([]byte, 8)
-	column2Min := make([]byte, 8)
-	column2Max := make([]byte, 8)
-	column3Min := make([]byte, 8)
-	column3Max := make([]byte, 8)
-	column4Min := make([]byte, 8)
-	column4Max := make([]byte, 8)
-
-	binary.LittleEndian.PutUint64(column1Min, 10)
-	binary.LittleEndian.PutUint64(column1Max, 100)
-	binary.LittleEndian.PutUint64(column2Min, 20)
-	binary.LittleEndian.PutUint64(column2Max, 200)
-	binary.LittleEndian.PutUint64(column3Min, 30)
-	binary.LittleEndian.PutUint64(column3Max, 300)
-	binary.LittleEndian.PutUint64(column4Min, 1)
-	binary.LittleEndian.PutUint64(column4Max, 8)
-
 	return BlockMeta{
 		header: BlockHeader{},
 		columns: []*ColumnMeta{
-			makeColumnMetaForTest(types.T_int64, column1Min, column1Max),
-			makeColumnMetaForTest(types.T_int64, column2Min, column2Max),
-			makeColumnMetaForTest(types.T_int64, column3Min, column3Max),
-			makeColumnMetaForTest(types.T_int64, column4Min, column4Max),
+			makeColumnMetaForTest(0, types.T_int64, int64(10), int64(100)),
+			makeColumnMetaForTest(1, types.T_int64, int64(20), int64(200)),
+			makeColumnMetaForTest(2, types.T_int64, int64(30), int64(300)),
+			makeColumnMetaForTest(3, types.T_int64, int64(1), int64(8)),
 		},
 	}
 }

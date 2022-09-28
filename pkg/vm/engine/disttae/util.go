@@ -27,8 +27,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/moengine"
 	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -82,7 +82,6 @@ func getColumnsByExpr(expr *plan.Expr) []int {
 
 func getIndexDataFromVec(idx uint16, vec *vector.Vector) (objectio.IndexData, objectio.IndexData, error) {
 	var bloomFilter, zoneMap objectio.IndexData
-	var err error
 
 	// get min/max from  vector
 	if vec.Length() > 0 {
@@ -91,15 +90,17 @@ func getIndexDataFromVec(idx uint16, vec *vector.Vector) (objectio.IndexData, ob
 		for _, v := range vector.GetColumn[any](vec) {
 			zm.Update(v)
 		}
-		min := types.EncodeValue(zm.GetMin(), vec.Typ)
-		max := types.EncodeValue(zm.GetMax(), vec.Typ)
-		zoneMap, err = objectio.NewZoneMap(idx, min, max)
+		buf, err := zm.Marshal()
+		if err != nil {
+			return nil, nil, err
+		}
+		zoneMap, err = objectio.NewZoneMap(idx, buf)
 		if err != nil {
 			return nil, nil, err
 		}
 
 		// create bloomfilter
-		sf, err := index.NewBinaryFuseFilter(moengine.MOToVector(vec, true))
+		sf, err := index.NewBinaryFuseFilter(containers.MOToVector(vec, true))
 		if err != nil {
 			return nil, nil, err
 		}
@@ -110,10 +111,11 @@ func getIndexDataFromVec(idx uint16, vec *vector.Vector) (objectio.IndexData, ob
 		alg := uint8(0)
 		bloomFilter = objectio.NewBloomFilter(idx, alg, bf)
 	}
+
 	return bloomFilter, zoneMap, nil
 }
 
-func getZonemapDataFromMeta(columns []int, meta BlockMeta, tableDef *plan.TableDef) ([][2]any, []uint8) {
+func getZonemapDataFromMeta(columns []int, meta BlockMeta, tableDef *plan.TableDef) ([][2]any, []uint8, error) {
 	var columnMeta *ColumnMeta
 
 	getIdx := func(idx int) int {
@@ -131,13 +133,21 @@ func getZonemapDataFromMeta(columns []int, meta BlockMeta, tableDef *plan.TableD
 		typ := types.T(columnMeta.typ).ToType()
 
 		// TODO : use types Encoder/Decoder?
+		czm, _ := columnMeta.zoneMap.(*objectio.ZoneMap)
+		buf := czm.GetData()
+		zm := index.NewZoneMap(typ)
+		err := zm.Unmarshal(buf)
+		if err != nil {
+			return nil, nil, err
+		}
+
 		datas[i] = [2]any{
-			types.DecodeValue(columnMeta.zoneMap.GetMin(), typ),
-			types.DecodeValue(columnMeta.zoneMap.GetMax(), typ),
+			zm.GetMin(),
+			zm.GetMax(),
 		}
 	}
 
-	return datas, dataTypes
+	return datas, dataTypes, nil
 }
 
 // func evalFilterExpr(expr *plan.Expr, bat *batch.Batch, proc *process.Process) (bool, error) {
