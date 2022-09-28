@@ -19,11 +19,19 @@ import (
 	"fmt"
 	"sync"
 
+	"github.com/fagongzi/goetty/v2"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/morpc"
+	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
-	"github.com/matrixorigin/matrixone/pkg/sql/compile"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
@@ -31,14 +39,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
-
-	"github.com/fagongzi/goetty/v2"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/common/morpc"
-	"github.com/matrixorigin/matrixone/pkg/common/stopper"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
-	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 )
 
 type Options func(*service)
@@ -89,14 +89,25 @@ func NewService(
 
 	server, err := morpc.NewRPCServer("cn-server", cfg.ListenAddress,
 		morpc.NewMessageCodec(srv.acquireMessage),
-		morpc.WithServerGoettyOptions(goetty.WithSessionRWBUfferSize(cfg.ReadBufferSize, cfg.WriteBufferSize)))
+		morpc.WithServerGoettyOptions(
+			goetty.WithSessionRWBUfferSize(cfg.ReadBufferSize, cfg.WriteBufferSize),
+			goetty.WithSessionReleaseMsgFunc(func(v any) {
+				m := v.(morpc.RPCMessage)
+				srv.releaseMessage(m.Message.(*pipeline.Message))
+			}),
+		),
+		morpc.WithServerDisableAutoCancelContext())
 	if err != nil {
 		return nil, err
 	}
-	server.RegisterRequestHandler(compile.NewServer().HandleRequest)
+	server.RegisterRequestHandler(srv.handleRequest)
 	srv.server = server
+	srv.storeEngine = pu.StorageEngine
+	srv._txnClient = pu.TxnClient
 
-	srv.requestHandler = defaultRequestHandler
+	srv.requestHandler = func(ctx context.Context, message morpc.Message, cs morpc.ClientSession, engine engine.Engine, fService fileservice.FileService, cli client.TxnClient, messageAcquirer func() morpc.Message) error {
+		return nil
+	}
 	for _, opt := range options {
 		opt(srv)
 	}
@@ -129,13 +140,21 @@ func (s *service) acquireMessage() morpc.Message {
 	return s.responsePool.Get().(*pipeline.Message)
 }
 
-func defaultRequestHandler(ctx context.Context, message morpc.Message, cs morpc.ClientSession) error {
-	return nil
+func (s *service) releaseMessage(m *pipeline.Message) {
+	if s.responsePool != nil {
+		m.Sid = 0
+		m.Err = nil
+		m.Data = nil
+		m.ProcInfoData = nil
+		m.Analyse = nil
+		s.responsePool.Put(m)
+	}
 }
 
-//func (s *service) handleRequest(ctx context.Context, req morpc.Message, _ uint64, cs morpc.ClientSession) error {
-//	return s.requestHandler(ctx, req, cs)
-//}
+func (s *service) handleRequest(ctx context.Context, req morpc.Message, _ uint64, cs morpc.ClientSession) error {
+	go s.requestHandler(ctx, req, cs, s.storeEngine, s.fileService, s._txnClient, s.acquireMessage)
+	return nil
+}
 
 func (s *service) initMOServer(ctx context.Context, pu *config.ParameterUnit) error {
 	var err error
@@ -266,7 +285,8 @@ func (s *service) getTxnClient() (c client.TxnClient, err error) {
 	return
 }
 
-func WithMessageHandle(f func(ctx context.Context, message morpc.Message, cs morpc.ClientSession) error) Options {
+func WithMessageHandle(f func(ctx context.Context, message morpc.Message,
+	cs morpc.ClientSession, engine engine.Engine, fs fileservice.FileService, cli client.TxnClient, mAcquirer func() morpc.Message) error) Options {
 	return func(s *service) {
 		s.requestHandler = f
 	}

@@ -21,11 +21,32 @@ import (
 	"github.com/fagongzi/goetty/v2"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
+	"time"
 )
 
-var Client *CNClient
+// client each node will hold only one client.
+// It is responsible for sending messages to other nodes. and messages were received
+// and handled by cn-server.
+var client *CNClient
+
+func CloseCNClient() error {
+	return client.Close()
+}
+
+func GetStreamSender(backend string) (morpc.Stream, error) {
+	return client.NewStream(backend)
+}
+
+func AcquireMessage() *pipeline.Message {
+	return client.acquireMessage().(*pipeline.Message)
+}
+
+func IsCNClientReady() bool {
+	return client != nil && client.ready
+}
 
 type CNClient struct {
+	ready  bool
 	config *ClientConfig
 	client morpc.RPCClient
 
@@ -42,11 +63,13 @@ func (c *CNClient) NewStream(backend string) (morpc.Stream, error) {
 }
 
 func (c *CNClient) Close() error {
+	c.ready = false
 	return c.client.Close()
 }
 
 const (
-	dfMaxSenderNumber       = 10
+	dfMaxSenderNumber       = 100000
+	dfConnectTimeout        = 5 * time.Second
 	dfClientReadBufferSize  = 1 << 10
 	dfClientWriteBufferSize = 1 << 10
 )
@@ -55,6 +78,9 @@ const (
 type ClientConfig struct {
 	// MaxSenderNumber is the max number of backends per host for compute node service.
 	MaxSenderNumber int
+	// TimeOutForEachConnect is the out time for each tcp connect.
+	TimeOutForEachConnect time.Duration
+	// related buffer size.
 	ReadBufferSize  int
 	WriteBufferSize int
 }
@@ -62,26 +88,43 @@ type ClientConfig struct {
 func NewCNClient(cfg *ClientConfig) error {
 	var err error
 	cfg.Fill()
-	Client = &CNClient{config: cfg}
-	Client.requestPool = &sync.Pool{New: func() any { return &pipeline.Message{} }}
+	client = &CNClient{config: cfg}
+	client.requestPool = &sync.Pool{New: func() any { return &pipeline.Message{} }}
 
-	// FIXME: checksum needed? hlc integration needed?
-	codec := morpc.NewMessageCodec(Client.acquireMessage)
+	codec := morpc.NewMessageCodec(client.acquireMessage)
 	factory := morpc.NewGoettyBasedBackendFactory(codec,
 		morpc.WithBackendConnectWhenCreate(),
-		morpc.WithBackendGoettyOptions(goetty.WithSessionRWBUfferSize(
-			cfg.ReadBufferSize, cfg.WriteBufferSize)),
+		morpc.WithBackendGoettyOptions(
+			goetty.WithSessionRWBUfferSize(cfg.ReadBufferSize, cfg.WriteBufferSize),
+			goetty.WithSessionReleaseMsgFunc(func(v any) {
+				m := v.(morpc.RPCMessage)
+				client.releaseMessage(m.Message.(*pipeline.Message))
+			}),
+		),
+		morpc.WithBackendConnectTimeout(cfg.TimeOutForEachConnect),
 	)
 
-	Client.client, err = morpc.NewClient(factory,
+	client.client, err = morpc.NewClient(factory,
 		morpc.WithClientMaxBackendPerHost(cfg.MaxSenderNumber),
 	)
+	client.ready = true
 	return err
 }
 
 func (c *CNClient) acquireMessage() morpc.Message {
 	// TODO: pipeline.Message has many []byte fields, maybe can use PayloadMessage to avoid mem copy.
 	return c.requestPool.Get().(*pipeline.Message)
+}
+
+func (c *CNClient) releaseMessage(m *pipeline.Message) {
+	if c.requestPool != nil {
+		m.Sid = 0
+		m.Err = nil
+		m.Data = nil
+		m.ProcInfoData = nil
+		m.Analyse = nil
+		c.requestPool.Put(m)
+	}
 }
 
 // Fill set some default value for client config.
@@ -94,5 +137,8 @@ func (cfg *ClientConfig) Fill() {
 	}
 	if cfg.WriteBufferSize < 0 {
 		cfg.WriteBufferSize = dfClientWriteBufferSize
+	}
+	if cfg.TimeOutForEachConnect <= 0 {
+		cfg.TimeOutForEachConnect = dfConnectTimeout
 	}
 }
