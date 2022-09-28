@@ -87,25 +87,32 @@ func TestTable(t *testing.T) {
 
 func TestTableIsolation(t *testing.T) {
 
+	// table
 	table := NewTable[Int, int, TestRow]()
 
-	tx1 := NewTransaction("1", Time{
-		Timestamp: timestamp.Timestamp{
-			PhysicalTime: 1,
-		},
-	}, SnapshotIsolation)
+	// time util
+	ts := func(i int64) Time {
+		return Time{
+			Timestamp: timestamp.Timestamp{
+				PhysicalTime: i,
+			},
+		}
+	}
 
-	tx2 := NewTransaction("2", Time{
-		Timestamp: timestamp.Timestamp{
-			PhysicalTime: 2,
-		},
-	}, SnapshotIsolation)
+	// tx 1
+	tx1 := NewTransaction("1", ts(1), SnapshotIsolation)
+
+	// tx 2
+	tx2 := NewTransaction("2", ts(2), SnapshotIsolation)
 	err := table.Insert(tx2, TestRow{
 		key:   1,
 		value: 2,
 	})
 	assert.Nil(t, err)
-	err = tx2.Commit()
+	v, err := table.Get(tx2, 1)
+	assert.Nil(t, err)
+	assert.Equal(t, 2, v)
+	err = tx2.Commit(ts(3))
 	assert.Nil(t, err)
 
 	// duplicated key

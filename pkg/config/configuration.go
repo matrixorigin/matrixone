@@ -325,10 +325,11 @@ type ObservabilityParameters struct {
 	Host string `toml:"host"`
 
 	// StatusPort defines which port the mo status server (for metric etc.) listens on and clients connect to
+	// Start listen with EnableMetricToProm is true.
 	StatusPort int64 `toml:"statusPort"`
 
-	// DisableMetricToProm default is false. if false, metrics can be scraped through host:status/metrics endpoint
-	DisableMetricToProm bool `toml:"disableMetricToProm"`
+	// EnableMetricToProm default is false. if true, metrics can be scraped through host:status/metrics endpoint
+	EnableMetricToProm bool `toml:"enableMetricToProm"`
 
 	// DisableMetric default is false. if false, enable metric at booting
 	DisableMetric bool `toml:"disableMetric"`
