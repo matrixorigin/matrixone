@@ -26,7 +26,7 @@ var (
 		input  string
 		output string
 	}{
-		input: "revoke all, all(a, b), create(a, b), select(a, b), super(a, b, c) on table db.a from u1, u2",
+		input: "grant manage grants on account * to r1",
 	}
 )
 

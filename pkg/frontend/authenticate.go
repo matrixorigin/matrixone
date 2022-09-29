@@ -718,6 +718,9 @@ var (
 
 	checkUserGrantFormat = `select role_id,user_id,with_grant_option from mo_catalog.mo_user_grant where role_id = %d and user_id = %d;`
 
+	//with_grant_option = true
+	checkUserGrantWGOFormat = `select role_id,user_id from mo_catalog.mo_user_grant where with_grant_option = true and role_id = %d and user_id = %d;`
+
 	updateUserGrantFormat = `update mo_catalog.mo_user_grant set granted_time = "%s", with_grant_option = %v where role_id = %d and user_id = %d;`
 
 	insertUserGrantFormat = `insert into mo_catalog.mo_user_grant(role_id,user_id,granted_time,with_grant_option) values (%d,%d,"%s",%v);`
@@ -726,6 +729,9 @@ var (
 
 	//operations on the mo_role_grant
 	checkRoleGrantFormat = `select granted_id,grantee_id,with_grant_option from mo_catalog.mo_role_grant where granted_id = %d and grantee_id = %d;`
+
+	//with_grant_option = true
+	getRoleGrantWGOFormat = `select grantee_id from mo_catalog.mo_role_grant where with_grant_option = true and granted_id = %d;`
 
 	updateRoleGrantFormat = `update mo_catalog.mo_role_grant set operation_role_id = %d, operation_user_id = %d, granted_time = "%s", with_grant_option = %v where granted_id = %d and grantee_id = %d;`
 
@@ -951,6 +957,10 @@ func getSqlForCheckUserGrant(roleId, userId int64) string {
 	return fmt.Sprintf(checkUserGrantFormat, roleId, userId)
 }
 
+func getSqlForCheckUserGrantWGO(roleId, userId int64) string {
+	return fmt.Sprintf(checkUserGrantWGOFormat, roleId, userId)
+}
+
 func getSqlForUpdateUserGrant(roleId, userId int64, timestamp string, withGrantOption bool) string {
 	return fmt.Sprintf(updateUserGrantFormat, timestamp, withGrantOption, roleId, userId)
 }
@@ -965,6 +975,10 @@ func getSqlForDeleteUserGrant(roleId, userId int64) string {
 
 func getSqlForCheckRoleGrant(grantedId, granteeId int64) string {
 	return fmt.Sprintf(checkRoleGrantFormat, grantedId, granteeId)
+}
+
+func getSqlForCheckRoleGrantWGO(grantedId int64) string {
+	return fmt.Sprintf(getRoleGrantWGOFormat, grantedId)
 }
 
 func getSqlForUpdateRoleGrant(grantedId, granteeId, operationRoleId, operationUserId int64, timestamp string, withGrantOption bool) string {
@@ -2912,7 +2926,6 @@ func determinePrivilegesOfUserSatisfyPrivilegeSet(ctx context.Context, ses *Sess
 // the same as the grant/revoke privilege, role.
 func determineUserCanGrantRolesToOtherUsers(ctx context.Context, ses *Session, fromRoles []*tree.Role, toUsers []*tree.User) (bool, error) {
 	//step1: normalize the names of roles and users
-
 	var err error
 	err = normalizeNamesOfRoles(fromRoles)
 	if err != nil {
@@ -2923,10 +2936,186 @@ func determineUserCanGrantRolesToOtherUsers(ctx context.Context, ses *Session, f
 		return false, err
 	}
 
+	pu := ses.Pu
 	//step2: decide the current user
+	account := ses.GetTenantInfo()
+	guestMMu := guest.New(pu.SV.GuestMmuLimitation, pu.HostMmu)
+	bh := NewBackgroundHandler(ctx, guestMMu, pu.Mempool, pu)
+	defer bh.Close()
+
+	const (
+		success int = iota
+		fail
+		goOn
+	)
+
 	//step3: check the link: roleX -> roleA -> .... -> roleZ -> the current user. Every link has the with_grant_option.
-	//TODO:
+	var vr *verifiedRole
+	var ret bool
+	var granted bool
+	var Rt *btree.Set[int64]
+	RkPlusOne := &btree.Set[int64]{}
+	Rk := &btree.Set[int64]{}
+	RVisited := &btree.Set[int64]{}
+	verifiedFromRoles := make([]*verifiedRole, len(fromRoles))
+
+	//put it into the single transaction
+	err = bh.Exec(ctx, "begin;")
+	if err != nil {
+		goto handleFailed
+	}
+
+	for i, role := range fromRoles {
+		sql := getSqlForRoleIdOfRole(role.UserName)
+		vr, err = verifyRoleFunc(ctx, bh, sql, role.UserName, roleType)
+		if err != nil {
+			goto handleFailed
+		}
+		if vr == nil {
+			err = moerr.NewInternalError("there is no role %s", role.UserName)
+			goto handleFailed
+		}
+		verifiedFromRoles[i] = vr
+	}
+
+	//TODO: add roleI -WGO-> roleJ and roleI -WGO-> User connection cache
+	for _, role := range verifiedFromRoles {
+		Rk.Clear()
+		RVisited.Clear()
+		RkPlusOne.Clear()
+		Rk.Insert(role.id)
+
+		//check the direct relation between role and user
+		granted, err = isRoleGrantedToUserWGO(ctx, bh, role.id, int64(account.GetUserID()))
+		if err != nil {
+			goto handleFailed
+		}
+		if granted {
+			continue
+		}
+
+		rxResult := goOn
+		//It is kind of BFS
+		for Rk.Len() != 0 && rxResult != goOn {
+			RkPlusOne.Clear()
+			rxResult = goOn
+			for _, ri := range Rk.Keys() {
+				Rt, err = getRoleSetThatRoleGrantedToWGO(ctx, bh, ri, RVisited, RkPlusOne)
+				if err != nil {
+					goto handleFailed
+				}
+
+				if Rt.Len() == 0 {
+					rxResult = fail
+					break
+				}
+
+				atLeastOne := false
+				for _, rj := range Rt.Keys() {
+					granted, err = isRoleGrantedToUserWGO(ctx, bh, rj, int64(account.GetUserID()))
+					if err != nil {
+						goto handleFailed
+					}
+					atLeastOne = atLeastOne || granted
+				}
+
+				if atLeastOne {
+					rxResult = success
+					break
+				}
+			}
+
+			if rxResult == fail {
+				ret = false
+				break
+			} else if rxResult == success {
+				ret = true
+				break
+			}
+
+			//swap Rk,R(k+1)
+			Rk, RkPlusOne = RkPlusOne, Rk
+		}
+	}
+
+	err = bh.Exec(ctx, "commit;")
+	if err != nil {
+		goto handleFailed
+	}
+
+	return ret, err
+
+handleFailed:
+	//ROLLBACK the transaction
+	rbErr := bh.Exec(ctx, "rollback;")
+	if rbErr != nil {
+		return false, rbErr
+	}
+	return false, err
+}
+
+// isRoleGrantedToUserWGO verifies the role has been granted to the user with with_grant_option = true.
+// Algorithm 1
+func isRoleGrantedToUserWGO(ctx context.Context, bh BackgroundExec, roleId, UserId int64) (bool, error) {
+	var err error
+	var results []interface{}
+	var rsset []ExecResult
+	sql := getSqlForCheckUserGrantWGO(roleId, UserId)
+	bh.ClearExecResultSet()
+	err = bh.Exec(ctx, sql)
+	if err != nil {
+		return false, err
+	}
+
+	results = bh.GetExecResultSet()
+	rsset, err = convertIntoResultSet(results)
+	if err != nil {
+		return false, err
+	}
+
+	if len(rsset) > 0 && rsset[0].GetRowCount() > 0 {
+		return true, nil
+	}
+
 	return false, nil
+}
+
+// getRoleSetThatRoleGrantedToWGO returns all the roles that the role has been granted to with with_grant_option = true.
+// Algorithm 2
+func getRoleSetThatRoleGrantedToWGO(ctx context.Context, bh BackgroundExec, roleId int64, RVisited, RkPlusOne *btree.Set[int64]) (*btree.Set[int64], error) {
+	var err error
+	var results []interface{}
+	var rsset []ExecResult
+	var id int64
+	rset := &btree.Set[int64]{}
+	sql := getSqlForCheckRoleGrantWGO(roleId)
+	bh.ClearExecResultSet()
+	err = bh.Exec(ctx, sql)
+	if err != nil {
+		return nil, err
+	}
+
+	results = bh.GetExecResultSet()
+	rsset, err = convertIntoResultSet(results)
+	if err != nil {
+		return nil, err
+	}
+
+	if len(rsset) > 0 && rsset[0].GetRowCount() > 0 {
+		for i := uint64(0); i < rsset[0].GetRowCount(); i++ {
+			id, err = rsset[0].GetInt64(i, 0)
+			if err != nil {
+				return nil, err
+			}
+			if !RVisited.Contains(id) {
+				RVisited.Insert(id)
+				RkPlusOne.Insert(id)
+				rset.Insert(id)
+			}
+		}
+	}
+
+	return rset, err
 }
 
 // determineRoleHasWithGrantOption decides all roleIds have the with_grant_option = true
@@ -3082,7 +3271,7 @@ func authenticatePrivilegeOfStatementWithObjectTypeAccountAndDatabase(ctx contex
 	//for GrantRole statement, check with_grant_option
 	if !ok && priv.kind == privilegeKindInherit {
 		grantRole := stmt.(*tree.GrantRole)
-		yes, err := determineRoleHasWithGrantOption(ctx, ses, grantRole.Roles)
+		yes, err := determineUserCanGrantRolesToOtherUsers(ctx, ses, grantRole.Roles, grantRole.Users)
 		if err != nil {
 			return false, err
 		}

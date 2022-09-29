@@ -498,5 +498,7 @@ func init() {
 		"connect":                  CONNECT,
 		"ownership":                OWNERSHIP,
 		"reference":                REFERENCE,
+		"manage":                   MANAGE,
+		"grants":                   GRANTS,
 	}
 }
