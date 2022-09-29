@@ -321,6 +321,9 @@ import (
 //JSON function
 %token <str> JSON_EXTRACT
 
+// JSON table function
+%token <str> UNNEST
+
 // Insert
 %token <str> ROW OUTFILE HEADER MAX_FILE_SIZE FORCE_QUOTE
 
@@ -354,7 +357,7 @@ import (
 %type <selectExprs> select_expression_list
 %type <selectExpr> select_expression
 %type <tableExprs> table_references table_name_wild_list
-%type <tableExpr> table_reference table_factor join_table into_table_name escaped_table_reference
+%type <tableExpr> table_reference table_factor join_table into_table_name escaped_table_reference table_function
 %type <direction> asc_desc_opt
 %type <order> order
 %type <orderBy> order_list order_by_clause order_by_opt
@@ -3408,6 +3411,19 @@ table_factor:
             },
         }
     }
+|   table_function as_opt_id
+    {
+    	if $2 != "" {
+    		$$ = &tree.AliasedTableExpr{
+    			Expr: $1,
+    			As: tree.AliasClause{
+    				Alias: tree.Identifier($2),
+    			},
+    		}
+    	} else {
+    		$$ = $1
+    	}
+    }
 // |   '(' table_references ')'
 
 derived_table:
@@ -3415,6 +3431,132 @@ derived_table:
     {
         $$ = &tree.ParenTableExpr{Expr: $2}
     }
+
+table_function:
+    UNNEST '(' STRING ')'
+    {
+        a1 := $3
+        a2 := "$"
+        a3 := false
+        $$ = &tree.Unnest{
+        	Param: &tree.UnnestParam{
+			Origin: a1,
+			Path: a2,
+			Outer: a3,
+		},
+       	}
+    }
+|   UNNEST '(' STRING ',' STRING ')'
+    {
+	a1 := $3
+	a2 := "$"
+	if len($5) > 0 {
+       	    a2 = $5
+        }
+        a3 := false
+	$$ = &tree.Unnest{
+                Param: &tree.UnnestParam{
+        		Origin: a1,
+        		Path: a2,
+        		Outer: a3,
+        	},
+        }
+    }
+|   UNNEST '(' STRING ',' STRING ',' TRUE ')'
+    {
+    	a1 := $3
+    	a2 := "$"
+        if len($5) > 0 {
+            a2 = $5
+        }
+	a3 := true
+	$$ = &tree.Unnest{
+                Param: &tree.UnnestParam{
+        		Origin: a1,
+        		Path: a2,
+        		Outer: a3,
+        	},
+        }
+    }
+|   UNNEST '(' STRING ',' STRING ',' FALSE ')'
+    {
+    	a1 := $3
+    	a2 := "$"
+    	if len($5) > 0 {
+            a2 = $5
+        }
+    	a3 := false
+    	$$ = &tree.Unnest{
+		Param: &tree.UnnestParam{
+			Origin: a1,
+			Path: a2,
+			Outer: a3,
+		},
+	}
+    }
+|   UNNEST '(' column_name ')'
+    {
+    	a1 := $3
+    	a2 := "$"
+    	a3 := false
+    	$$ = &tree.Unnest{
+		Param: &tree.UnnestParam{
+			Origin: a1,
+			Path: a2,
+			Outer: a3,
+		},
+	}
+    }
+|   UNNEST '(' column_name ',' STRING ')'
+    {
+    	a1 := $3
+    	a2 := "$"
+    	if len($5) > 0 {
+    	    a2 = $5
+    	}
+    	a3 := false
+    	$$ = &tree.Unnest{
+    		Param: &tree.UnnestParam{
+    			Origin: a1,
+    			Path: a2,
+   			Outer: a3,
+    		},
+    	}
+    }
+|   UNNEST '(' column_name ',' STRING ',' TRUE ')'
+    {
+    	a1 := $3
+    	a2 := "$"
+    	if len($5) > 0 {
+    	    a2 = $5
+    	}
+    	a3 := true
+    	$$ = &tree.Unnest{
+    		Param: &tree.UnnestParam{
+    			Origin: a1,
+    			Path: a2,
+    			Outer: a3,
+    		},
+    	}
+    }
+|   UNNEST '(' column_name ',' STRING ',' FALSE ')'
+    {
+    	a1 := $3
+    	a2 := "$"
+    	if len($5) > 0 {
+    	    a2 = $5
+    	}
+    	a3 := false
+    	$$ = &tree.Unnest{
+    		Param: &tree.UnnestParam{
+    			Origin: a1,
+    			Path: a2,
+    			Outer: a3,
+    		},
+    	}
+    }
+
+
 
 as_opt:
     {}
@@ -7363,6 +7505,7 @@ func_not_keyword:
 |   SUBDATE
 |   SYSTEM_USER
 |   TRANSLATE
+|   UNNEST
 
 not_keyword:
     ADDDATE

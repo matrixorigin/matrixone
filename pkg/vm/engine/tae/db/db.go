@@ -15,6 +15,7 @@
 package db
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"io"
 	"runtime"
 	"sync/atomic"
@@ -83,6 +84,15 @@ func (db *DB) GetTxnByCtx(txnOperator client.TxnOperator) (txn txnif.AsyncTxn, e
 	return
 }
 
+func (db *DB) GetOrCreateTxnWithMeta(info []byte, meta txn.TxnMeta) (txn txnif.AsyncTxn, err error) {
+	panic(moerr.NewNYI("GetTxnWithMeta is not implemented yet "))
+}
+
+func (db *DB) GetTxnByMeta(meta txn.TxnMeta) (txn txnif.AsyncTxn, err error) {
+	panic(moerr.NewNYI("GetTxnByMeta is not implemented yet "))
+}
+
+// TODO:: change type of id to be []byte.
 func (db *DB) GetTxn(id uint64) (txn txnif.AsyncTxn, err error) {
 	txn = db.TxnMgr.GetTxn(id)
 	if txn == nil {
