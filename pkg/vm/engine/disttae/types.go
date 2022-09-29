@@ -166,9 +166,9 @@ type table struct {
 	tableName  string
 	db         *database
 	parts      Partitions
-	defs       []engine.TableDef
 	insertExpr *plan.Expr
 	deleteExpr *plan.Expr
+	defs       []engine.TableDef
 }
 
 type column struct {
