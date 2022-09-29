@@ -88,8 +88,8 @@ func (t *Table) NewReader(
 
 	resps, err := DoTxnRequest[NewTableIterResp](
 		ctx,
-		t.engine,
-		t.txnOperator.Read,
+		t.txnOperator,
+		true,
 		theseShards(shards),
 		OpNewTableIter,
 		NewTableIterReq{
@@ -145,8 +145,8 @@ func (t *TableReader) Read(colNames []string, plan *plan.Expr, mh *mheap.Mheap) 
 
 		resps, err := DoTxnRequest[ReadResp](
 			t.ctx,
-			t.engine,
-			t.txnOperator.Read,
+			t.txnOperator,
+			true,
 			thisShard(t.iterInfos[0].Shard),
 			OpRead,
 			ReadReq{
@@ -178,8 +178,8 @@ func (t *TableReader) Close() error {
 	for _, info := range t.iterInfos {
 		_, err := DoTxnRequest[CloseTableIterResp](
 			t.ctx,
-			t.engine,
-			t.txnOperator.Read,
+			t.txnOperator,
+			true,
 			thisShard(info.Shard),
 			OpCloseTableIter,
 			CloseTableIterReq{
