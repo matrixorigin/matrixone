@@ -20,6 +20,21 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 )
 
+func makePlan2DecimalExprWithType(v string) (*plan.Expr, error) {
+	_, scale, err := types.ParseStringToDecimal128WithoutTable(v)
+	if err != nil {
+		return nil, err
+	}
+	typ := &plan.Type{
+		Id:        int32(types.T_decimal128),
+		Width:     34,
+		Scale:     scale,
+		Precision: 34,
+		Nullable:  false,
+	}
+	return appendCastBeforeExpr(makePlan2StringConstExprWithType(v), typ)
+}
+
 func makePlan2NullConstExprWithType() *plan.Expr {
 	return &plan.Expr{
 		Expr: &plan.Expr_C{
