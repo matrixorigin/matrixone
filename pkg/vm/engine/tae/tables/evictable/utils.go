@@ -15,15 +15,17 @@
 package evictable
 
 import (
+	"bytes"
 	"fmt"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 )
 
 const (
-	ConstPinDuration = 16 * time.Second
+	ConstPinDuration = 5 * time.Second
 )
 
 func EncodeColMetaKey(id *common.ID) string {
@@ -54,4 +56,12 @@ func PinEvictableNode(mgr base.INodeManager, key string, factory EvictableNodeFa
 		h, err = mgr.TryPinByKey(key, ConstPinDuration)
 	}
 	return h, err
+}
+
+func copyVector(data containers.Vector, buf *bytes.Buffer) containers.Vector {
+	if buf != nil {
+		return containers.CloneWithBuffer(data, buf, containers.DefaultAllocator)
+	} else {
+		return data.CloneWindow(0, data.Length(), containers.DefaultAllocator)
+	}
 }
