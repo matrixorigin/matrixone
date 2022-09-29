@@ -119,7 +119,7 @@ func (s *StatementInfo) ExecPlan2Json() string {
 		// use defaultSerializeExecPlan
 		if f := getDefaultSerializeExecPlan(); f == nil {
 			uuidStr := uuid.UUID(s.StatementID).String()
-			return fmt.Sprintf(`{"code":200,"message":"sql query no record execution plan","steps":null,"success":false,"uuid":"%s"}`, uuidStr)
+			return fmt.Sprintf(`{"code":200,"message":"NO ExecPlan Serialize function","steps":null,"success":false,"uuid":%q}`, uuidStr)
 		} else {
 			jsonByte = f(s.ExecPlan, uuid.UUID(s.StatementID))
 		}

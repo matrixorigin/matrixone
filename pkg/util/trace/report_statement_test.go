@@ -151,7 +151,7 @@ func TestStatementInfo_Report_EndStatement(t *testing.T) {
 	}
 }
 
-var realNoExecPlanJsonResult = `{"code":200,"message":"sql query no record execution plan","steps":null,"success":false,"uuid":"00000000-0000-0000-0000-000000000000"}`
+var realNoExecPlanJsonResult = `{"code":200,"message":"NO ExecPlan Serialize function","steps":null,"success":false,"uuid":"00000000-0000-0000-0000-000000000000"}`
 var dummyNoExecPlanJsonResult = `{"code":200,"message":"no exec plan"}`
 var dummyNoExecPlanJsonResult2 = `{"func":"dummy2","code":200,"message":"no exec plan"}`
 
