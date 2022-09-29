@@ -15,6 +15,8 @@
 package disttae
 
 import (
+	"bytes"
+	"container/heap"
 	"context"
 	"time"
 
@@ -41,6 +43,7 @@ func New(
 	return &Engine{
 		m:                 m,
 		cli:               cli,
+		txnHeap:           &transactionHeap{},
 		getClusterDetails: getClusterDetails,
 		db:                newDB(cli, cluster.DNStores),
 		txns:              make(map[string]*Transaction),
@@ -74,16 +77,22 @@ func (e *Engine) Database(ctx context.Context, name string,
 	if txn == nil {
 		return nil, moerr.NewTxnClosed()
 	}
+	key := genDatabaseKey(ctx, name)
+	if db, ok := txn.databaseMap[key]; ok {
+		return db, nil
+	}
 	id, err := txn.getDatabaseId(ctx, name)
 	if err != nil {
 		return nil, err
 	}
-	return &database{
+	db := &database{
 		txn:          txn,
 		db:           e.db,
 		databaseId:   id,
 		databaseName: name,
-	}, nil
+	}
+	txn.databaseMap[key] = db
+	return db, nil
 }
 
 func (e *Engine) Databases(ctx context.Context, op client.TxnOperator) ([]string, error) {
@@ -99,6 +108,8 @@ func (e *Engine) Delete(ctx context.Context, name string, op client.TxnOperator)
 	if txn == nil {
 		return moerr.NewTxnClosed()
 	}
+	key := genDatabaseKey(ctx, name)
+	delete(txn.databaseMap, key)
 	id, err := txn.getDatabaseId(ctx, name)
 	if err != nil {
 		return err
@@ -127,29 +138,29 @@ func (e *Engine) New(ctx context.Context, op client.TxnOperator) error {
 		return err
 	}
 	txn := &Transaction{
-		m:        e.m,
-		db:       e.db,
-		readOnly: true,
-		meta:     op.Txn(),
-		dnStores: cluster.DNStores,
-		fileMap:  make(map[string]uint64),
+		m:           e.m,
+		db:          e.db,
+		readOnly:    true,
+		meta:        op.Txn(),
+		dnStores:    cluster.DNStores,
+		fileMap:     make(map[string]uint64),
+		tableMap:    make(map[tableKey]*table),
+		databaseMap: make(map[databaseKey]*database),
 	}
 	txn.writes = append(txn.writes, make([]Entry, 0, 1))
 	e.newTransaction(op, txn)
-	if len(txn.dnStores) > 0 {
-		// update catalog's cache
-		if err := e.db.Update(ctx, txn.dnStores[:1], catalog.MO_CATALOG_ID,
-			catalog.MO_DATABASE_ID, txn.meta.SnapshotTS); err != nil {
-			return err
-		}
-		if err := e.db.Update(ctx, txn.dnStores[:1], catalog.MO_CATALOG_ID,
-			catalog.MO_TABLES_ID, txn.meta.SnapshotTS); err != nil {
-			return err
-		}
-		if err := e.db.Update(ctx, txn.dnStores[:1], catalog.MO_CATALOG_ID,
-			catalog.MO_COLUMNS_ID, txn.meta.SnapshotTS); err != nil {
-			return err
-		}
+	// update catalog's cache
+	if err := e.db.Update(ctx, txn.dnStores[:1], catalog.MO_CATALOG_ID,
+		catalog.MO_DATABASE_ID, txn.meta.SnapshotTS); err != nil {
+		return err
+	}
+	if err := e.db.Update(ctx, txn.dnStores[:1], catalog.MO_CATALOG_ID,
+		catalog.MO_TABLES_ID, txn.meta.SnapshotTS); err != nil {
+		return err
+	}
+	if err := e.db.Update(ctx, txn.dnStores[:1], catalog.MO_CATALOG_ID,
+		catalog.MO_COLUMNS_ID, txn.meta.SnapshotTS); err != nil {
+		return err
 	}
 	return nil
 }
@@ -192,7 +203,7 @@ func (e *Engine) Nodes() (engine.Nodes, error) {
 	var nodes engine.Nodes
 	for _, store := range clusterDetails.CNStores {
 		nodes = append(nodes, engine.Node{
-			Mcpu: 1,
+			Mcpu: 10, // TODO
 			Id:   store.UUID,
 			Addr: store.ServiceAddress,
 		})
@@ -209,6 +220,7 @@ func (e *Engine) Hints() (h engine.Hints) {
 func (e *Engine) newTransaction(op client.TxnOperator, txn *Transaction) {
 	e.Lock()
 	defer e.Unlock()
+	heap.Push(e.txnHeap, txn)
 	e.txns[string(op.Txn().ID)] = txn
 }
 
@@ -226,5 +238,19 @@ func (e *Engine) delTransaction(txn *Transaction) {
 	}
 	e.Lock()
 	defer e.Unlock()
+	for i, tmp := range *e.txnHeap {
+		if bytes.Equal(txn.meta.ID, tmp.meta.ID) {
+			heap.Remove(e.txnHeap, i)
+			break
+		}
+	}
 	delete(e.txns, string(txn.meta.ID))
 }
+
+/*
+func (e *Engine) minActiveTimestamp() timestamp.Timestamp {
+	e.RLock()
+	defer e.RUnlock()
+	return (*e.txnHeap)[0].meta.SnapshotTS
+}
+*/
