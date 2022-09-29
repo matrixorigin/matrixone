@@ -26,7 +26,7 @@ var (
 		input  string
 		output string
 	}{
-		input: "revoke all, all(a, b), create(a, b), select(a, b), super(a, b, c) on table db.a from u1, u2",
+		input: "show profiles",
 	}
 )
 
@@ -51,6 +51,35 @@ var (
 		input  string
 		output string
 	}{{
+		input: "select time from t1 as value",
+	}, {
+		input: "show profiles",
+	}, {
+		input: "show privileges",
+	}, {
+		input: "show events from db1",
+	}, {
+		input: "show plugins",
+	}, {
+		input: "show procedure status",
+	}, {
+		input: "show triggers from db1 where 1",
+	}, {
+		input: "show engines",
+	}, {
+		input: "show config",
+	}, {
+		input: "show grants",
+	}, {
+		input:  "show grants for 'test'@'localhost'",
+		output: "show grants for test@localhost",
+	}, {
+		input: "show table status from t1",
+	}, {
+		input: "show table status from t1",
+	}, {
+		input: "grant connect on account * to role_r1",
+	}, {
 		input: "select password from t1",
 	}, {
 		input:  "create table t1 (a datetime on update CURRENT_TIMESTAMP(1))",
@@ -1397,6 +1426,54 @@ var (
 			input: `create table t2 (a uuid primary key, b varchar(10))`,
 		}, {
 			input: `create table t3 (a int, b uuid, primary key idx (a, b))`,
+		},
+		{
+			input:  `select * from unnest("a") as f`,
+			output: `select * from unnest(a, $, false) as f`,
+		},
+		{
+			input:  `select * from unnest("a", "b") as f`,
+			output: `select * from unnest(a, b, false) as f`,
+		},
+		{
+			input:  `select * from unnest("a", "b", true) as f`,
+			output: `select * from unnest(a, b, true) as f`,
+		},
+		{
+			input:  `select * from unnest("a")`,
+			output: `select * from unnest(a, $, false)`,
+		},
+		{
+			input:  `select * from unnest("a", "b")`,
+			output: `select * from unnest(a, b, false)`,
+		},
+		{
+			input:  `select * from unnest("a", "b", true)`,
+			output: `select * from unnest(a, b, true)`,
+		},
+		{
+			input:  `select * from unnest(t.a)`,
+			output: `select * from unnest(t.a, $, false)`,
+		},
+		{
+			input:  `select * from unnest(t.a, "$.b")`,
+			output: `select * from unnest(t.a, $.b, false)`,
+		},
+		{
+			input:  `select * from unnest(t.a, "$.b", true)`,
+			output: `select * from unnest(t.a, $.b, true)`,
+		},
+		{
+			input:  `select * from unnest(t.a) as f`,
+			output: `select * from unnest(t.a, $, false) as f`,
+		},
+		{
+			input:  `select * from unnest(t.a, "$.b") as f`,
+			output: `select * from unnest(t.a, $.b, false) as f`,
+		},
+		{
+			input:  `select * from unnest(t.a, "$.b", true) as f`,
+			output: `select * from unnest(t.a, $.b, true) as f`,
 		},
 	}
 )

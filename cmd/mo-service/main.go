@@ -151,6 +151,9 @@ func startCNService(
 		if err := s.Close(); err != nil {
 			panic(err)
 		}
+		if err := cnclient.CloseCNClient(); err != nil {
+			panic(err)
+		}
 	})
 }
 
@@ -247,6 +250,8 @@ func initTraceMetric(ctx context.Context, cfg *Config, stopper *stopper.Stopper,
 				trace.EnableTracer(!SV.DisableTrace),
 				trace.WithBatchProcessMode(SV.BatchProcessor),
 				trace.WithFSWriterFactory(writerFactory),
+				trace.WithExportInterval(SV.TraceExportInterval),
+				trace.WithLongQueryTime(SV.LongQueryTime),
 				trace.DebugMode(SV.EnableTraceDebug),
 				trace.WithSQLExecutor(nil),
 			); err != nil {

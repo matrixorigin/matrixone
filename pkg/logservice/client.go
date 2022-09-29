@@ -517,7 +517,9 @@ func getRPCClient(ctx context.Context, target string, pool *sync.Pool) (morpc.RP
 	// we set connection timeout to a constant value so if ctx's deadline is much
 	// larger, then we can ensure that all specified potential nodes have a chance
 	// to be attempted
-	codec := morpc.NewMessageCodecWithChecksum(mf, defaultWriteSocketSize)
+	codec := morpc.NewMessageCodec(mf,
+		morpc.WithCodecPayloadCopyBufferSize(defaultWriteSocketSize),
+		morpc.WithCodecEnableChecksum())
 	bf := morpc.NewGoettyBasedBackendFactory(codec, backendOpts...)
 	return morpc.NewClient(bf, clientOpts...)
 }

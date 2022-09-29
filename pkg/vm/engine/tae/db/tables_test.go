@@ -24,7 +24,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/mockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables"
@@ -46,15 +45,14 @@ func TestTables1(t *testing.T) {
 	schema.SegmentMaxBlocks = 2
 	rel, _ := database.CreateRelation(schema)
 	tableMeta := rel.GetMeta().(*catalog.TableEntry)
-
-	dataFactory := tables.NewDataFactory(mockio.SegmentFactory, db.MTBufMgr, db.Scheduler, db.Dir)
+	dataFactory := tables.NewDataFactory(db.FileFactory, db.MTBufMgr, db.Scheduler, db.Dir)
 	tableFactory := dataFactory.MakeTableFactory()
 	table := tableFactory(tableMeta)
 	handle := table.GetHandle()
 	_, err := handle.GetAppender()
 	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrAppendableSegmentNotFound))
-	seg, _ := rel.CreateSegment()
-	blk, _ := seg.CreateBlock()
+	seg, _ := rel.CreateSegment(false)
+	blk, _ := seg.CreateBlock(false)
 	id := blk.GetMeta().(*catalog.BlockEntry).AsCommonID()
 	appender := handle.SetAppender(id)
 	assert.NotNil(t, appender)
@@ -73,7 +71,7 @@ func TestTables1(t *testing.T) {
 	_, err = handle.GetAppender()
 	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrAppendableBlockNotFound))
 
-	blk, _ = seg.CreateBlock()
+	blk, _ = seg.CreateBlock(false)
 	id = blk.GetMeta().(*catalog.BlockEntry).AsCommonID()
 	appender = handle.SetAppender(id)
 
@@ -84,8 +82,8 @@ func TestTables1(t *testing.T) {
 	_, err = handle.GetAppender()
 	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrAppendableSegmentNotFound))
 
-	seg, _ = rel.CreateSegment()
-	blk, _ = seg.CreateBlock()
+	seg, _ = rel.CreateSegment(false)
+	blk, _ = seg.CreateBlock(false)
 
 	id = blk.GetMeta().(*catalog.BlockEntry).AsCommonID()
 	appender = handle.SetAppender(id)
@@ -155,9 +153,9 @@ func TestTxn1(t *testing.T) {
 		txn, _ := db.StartTxn(nil)
 		database, _ := txn.GetDatabase("db")
 		rel, _ := database.GetRelationByName(schema.Name)
-		seg, err := rel.CreateSegment()
+		seg, err := rel.CreateSegment(false)
 		assert.Nil(t, err)
-		_, err = seg.CreateBlock()
+		_, err = seg.CreateBlock(false)
 		assert.Nil(t, err)
 	}
 	{

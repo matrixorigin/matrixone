@@ -60,6 +60,7 @@ INSERT INTO date_test(d2,d3) VALUES('2015-11-07', '2013-09-14 13:45:13');
 INSERT INTO date_test(d2,d3) VALUES('2013-08-07', '2006-05-23 13:23:13');
 INSERT INTO date_test(d2,d3) VALUES('2011-08-07', '2018-07-08 23:59:59');
 INSERT INTO date_test(d5) SELECT UNIX_TIMESTAMP("2021-02-29");
+INSERT INTO date_test(d3) VALUES(DATE_ADD('2008-13-26 23:59:59', NULL));
 SELECT * FROM date_test;
 DELETE FROM date_test;
 
@@ -67,9 +68,8 @@ DELETE FROM date_test;
 --INSERT INTO date_test(d5) SELECT UNIX_TIMESTAMP("2021-02-29");
 -- @bvt:issue
 
--- @bvt:issue#4987
---INSERT INTO date_test(d3) VALUES(DATE_ADD('2008-13-26 23:59:59', NULL));
--- @bvt:issue
+
+
 
 -- 数字类型
 CREATE TABLE math_test(

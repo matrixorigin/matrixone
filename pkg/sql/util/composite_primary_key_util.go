@@ -38,6 +38,13 @@ func ExtractCompositePrimaryKeyColumnFromColDefs(colDefs []*plan.ColDef) ([]*pla
 	return colDefs, nil
 }
 
+func JudgeIsCompositePrimaryKeyColumn(s string) bool {
+	if len(s) < len(prefixPriColName) {
+		return false
+	}
+	return s[0:len(prefixPriColName)] == prefixPriColName
+}
+
 func BuildCompositePrimaryKeyColumnName(s []string) string {
 	var name string
 	name = prefixPriColName

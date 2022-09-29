@@ -16,6 +16,7 @@ package types
 
 import (
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 	"time"
@@ -28,7 +29,9 @@ const (
 	secsPerHour     = 60 * secsPerMinute
 	secsPerDay      = 24 * secsPerHour
 	secsPerWeek     = 7 * secsPerDay
-	microSecsPerSec = 1000000
+	NanoSecsPerSec  = 1000000000 // 10^9
+	microSecsPerSec = 1000000    // 10^6
+	MillisecsPerSec = 1000       // 10^3
 	MaxDatetimeYear = 9999
 	MinDatetimeYear = 1
 
@@ -169,6 +172,9 @@ func ParseDatetime(s string, precision int32) (Datetime, error) {
 			}
 		}
 	}
+	if !validDate(year, month, day) {
+		return -1, moerr.NewInvalidInput("invalid datatime value %s", s)
+	}
 	result := FromClock(year, month, day, hour, minute, second+uint8(carry), msec)
 	y, m, d, _ := result.ToDate().Calendar(true)
 	if !validDate(y, m, d) {
@@ -199,6 +205,13 @@ func FromUnix(loc *time.Location, ts int64) Datetime {
 	t := time.Unix(ts, 0).In(loc)
 	_, offset := t.Zone()
 	return Datetime((ts+int64(offset))*microSecsPerSec + unixEpoch)
+}
+
+func FromUnixWithNsec(loc *time.Location, sec int64, nsec int64) Datetime {
+	t := time.Unix(sec, nsec).In(loc)
+	_, offset := t.Zone()
+	msec := math.Round(float64(nsec) / 1000)
+	return Datetime((sec+int64(offset))*microSecsPerSec + int64(msec) + unixEpoch)
 }
 
 func Now(loc *time.Location) Datetime {

@@ -24,8 +24,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/testutil/testengine"
 	"github.com/matrixorigin/matrixone/pkg/vm"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/memEngine"
 	"github.com/stretchr/testify/require"
 )
 
@@ -70,8 +70,8 @@ func generateScopeCases(t *testing.T, testCases []string) []*Scope {
 	// getScope method generate and return the scope of a SQL string.
 	getScope := func(t1 *testing.T, sql string) *Scope {
 		proc := testutil.NewProcess()
-		e := memEngine.NewTestEngine()
-		opt := plan2.NewBaseOptimizer(e.(*memEngine.MemEngine))
+		e, _, compilerCtx := testengine.New(context.Background())
+		opt := plan2.NewBaseOptimizer(compilerCtx)
 		stmts, err := mysql.Parse(sql)
 		require.NoError(t1, err)
 		qry, err := opt.Optimize(stmts[0])
