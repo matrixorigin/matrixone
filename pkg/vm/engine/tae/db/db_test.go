@@ -36,6 +36,7 @@ import (
 	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
@@ -731,7 +732,7 @@ func TestAutoCompactABlk2(t *testing.T) {
 	testutils.EnsureNoLeak(t)
 	opts := new(options.Options)
 	opts.CacheCfg = new(options.CacheCfg)
-	opts.CacheCfg.InsertCapacity = common.K * 5
+	opts.CacheCfg.InsertCapacity = common.M * 5
 	opts.CacheCfg.TxnCapacity = common.M
 	opts = config.WithQuickScanAndCKPOpts(opts)
 	db := initDB(t, opts)
