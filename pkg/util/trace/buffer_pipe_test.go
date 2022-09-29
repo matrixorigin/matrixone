@@ -66,6 +66,8 @@ func init() {
 		WithSQLExecutor(func() internalExecutor.InternalExecutor {
 			return nil
 		}),
+		WithExportInterval(15),
+		WithLongQueryTime(0),
 		DebugMode(true),
 	); err != nil {
 		panic(err)
