@@ -5084,6 +5084,10 @@ simple_expr:
     {
         $$ = $1
     }
+|	timediff_expr
+    {
+ 	    $$ = $1
+    }   
 |   subquery
     {
         $$ = $1
@@ -5857,7 +5861,16 @@ interval_expr:
             Exprs: tree.Exprs{$2, arg2},
         }
     }
-
+timediff_expr:
+    time_stamp_unit
+    {
+ 		name := tree.SetUnresolvedName("time_stamp_unit")
+		arg2 := tree.NewNumValWithType(constant.MakeString($1), $1, false, tree.P_char)
+        $$ = &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(name),
+            Exprs: tree.Exprs{$2, arg2},
+        }
+    }
 func_type_opt:
     {
         $$ = tree.FUNC_TYPE_DEFAULT
