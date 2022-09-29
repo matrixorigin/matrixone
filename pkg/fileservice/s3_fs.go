@@ -256,14 +256,17 @@ func (s *S3FS) Write(ctx context.Context, vector IOVector) error {
 			Key:    ptrTo(key),
 		},
 	)
-	err = s.mapError(err)
-	if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
-		// key not exists
-		err = nil
-	}
 	if err != nil {
-		// other error
-		return err
+		var httpError *http.ResponseError
+		if errors.As(err, &httpError) {
+			if httpError.Response.StatusCode == 404 {
+				// key not exists, ok
+				err = nil
+			}
+		}
+		if err != nil {
+			return err
+		}
 	}
 	if output != nil {
 		// key existed
@@ -360,42 +363,44 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector) error {
 
 	if readToEnd {
 		rang := fmt.Sprintf("bytes=%d-", min)
+		key := s.pathToKey(path.File)
 		output, err := s.client.GetObject(
 			ctx,
 			&s3.GetObjectInput{
 				Bucket: ptrTo(s.bucket),
-				Key:    ptrTo(s.pathToKey(path.File)),
+				Key:    ptrTo(key),
 				Range:  ptrTo(rang),
 			},
 		)
-		err = s.mapError(err)
+		err = s.mapError(err, key)
 		if err != nil {
 			return err
 		}
 		defer output.Body.Close()
 		content, err = io.ReadAll(output.Body)
-		err = s.mapError(err)
+		err = s.mapError(err, key)
 		if err != nil {
 			return err
 		}
 
 	} else {
 		rang := fmt.Sprintf("bytes=%d-%d", min, max)
+		key := s.pathToKey(path.File)
 		output, err := s.client.GetObject(
 			ctx,
 			&s3.GetObjectInput{
 				Bucket: ptrTo(s.bucket),
-				Key:    ptrTo(s.pathToKey(path.File)),
+				Key:    ptrTo(key),
 				Range:  ptrTo(rang),
 			},
 		)
-		err = s.mapError(err)
+		err = s.mapError(err, key)
 		if err != nil {
 			return err
 		}
 		defer output.Body.Close()
 		content, err = io.ReadAll(io.LimitReader(output.Body, int64(max-min)))
-		err = s.mapError(err)
+		err = s.mapError(err, key)
 		if err != nil {
 			return err
 		}
@@ -489,14 +494,14 @@ func (s *S3FS) keyToPath(key string) string {
 	return path
 }
 
-func (s *S3FS) mapError(err error) error {
+func (s *S3FS) mapError(err error, path string) error {
 	if err == nil {
 		return nil
 	}
 	var httpError *http.ResponseError
 	if errors.As(err, &httpError) {
 		if httpError.Response.StatusCode == 404 {
-			return moerr.NewFileNotFound("")
+			return moerr.NewFileNotFound(path)
 		}
 	}
 	return err
