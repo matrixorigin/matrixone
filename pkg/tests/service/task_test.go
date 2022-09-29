@@ -76,10 +76,8 @@ func TestTaskSchedulerCanAllocateTask(t *testing.T) {
 	taskStorage := taskservice.NewMemTaskStorage()
 	taskService := taskservice.NewTaskService(taskStorage, nil)
 
-	dnSvcNum := 1
 	cnSvcNum := 1
 	opt := DefaultOptions().
-		WithDNServiceNum(dnSvcNum).
 		WithCNServiceNum(cnSvcNum).
 		WithTaskStorage(taskStorage)
 
@@ -101,9 +99,8 @@ func TestTaskSchedulerCanAllocateTask(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	waitTaskScheduled(t, ctx, taskService)
-	if err = c.Close(); err != nil {
-		assert.FailNow(t, "testCluster close failed")
-	}
+	err = c.Close()
+	require.NoError(t, err)
 }
 
 func TestTaskSchedulerCanReallocateTask(t *testing.T) {
@@ -141,7 +138,59 @@ func TestTaskSchedulerCanReallocateTask(t *testing.T) {
 	defer cancel1()
 	waitTaskRescheduled(t, ctx1, taskService, uuid1)
 
-	if err = c.Close(); err != nil {
-		assert.FailNow(t, "testCluster close failed")
+	err = c.Close()
+	require.NoError(t, err)
+}
+
+func TestTaskRunner(t *testing.T) {
+	taskStorage := taskservice.NewMemTaskStorage()
+	taskService := taskservice.NewTaskService(taskStorage, nil)
+
+	ch := make(chan int)
+	taskExecutor := func(ctx context.Context, task task.Task) error {
+		t.Logf("task %d is running", task.ID)
+		ch <- int(task.ID)
+		return nil
 	}
+
+	cnSvcNum := 1
+	opt := DefaultOptions().
+		WithCNServiceNum(cnSvcNum).
+		WithTaskStorage(taskStorage)
+
+	// initialize cluster
+	c, err := NewCluster(t, opt)
+	require.NoError(t, err)
+
+	// start the cluster
+	err = c.Start()
+	require.NoError(t, err)
+
+	indexed, err := c.GetCNServiceIndexed(0)
+	require.NoError(t, err)
+
+	taskRunner := indexed.GetTaskRunner()
+	taskRunner.RegisterExecutor(1, taskExecutor)
+
+	err = taskService.Create(context.TODO(), task.TaskMetadata{ID: "a", Executor: 1})
+	require.NoError(t, err)
+	tasks, err := taskService.QueryTask(context.TODO(),
+		taskservice.WithTaskStatusCond(taskservice.EQ, task.TaskStatus_Created))
+	require.NoError(t, err)
+	require.Equal(t, 1, len(tasks))
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	waitTaskScheduled(t, ctx, taskService)
+
+	ctx1, cancel1 := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel1()
+	select {
+	case <-ctx1.Done():
+		assert.FailNow(t, "task not running")
+	case i := <-ch:
+		t.Logf("task %d is completed", i)
+	}
+	err = c.Close()
+	require.NoError(t, err)
 }

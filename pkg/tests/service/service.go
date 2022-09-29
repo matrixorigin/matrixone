@@ -1243,7 +1243,7 @@ func (c *testCluster) initCNServices(fileservices *fileServices) []CNService {
 			panic(err)
 		}
 
-		cs, err := newCNService(cfg, context.TODO(), fs, opt)
+		cs, err := newCNService(cfg, context.TODO(), fs, c.opt.task.taskStorage, opt)
 		if err != nil {
 			panic(err)
 		}

@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/matrixorigin/matrixone/pkg/util/toml"
@@ -38,6 +39,8 @@ import (
 type Service interface {
 	Start() error
 	Close() error
+
+	GetTaskRunner() taskservice.TaskRunner
 }
 
 type EngineType string
@@ -97,6 +100,17 @@ type Config struct {
 		ClientConfig logservice.HAKeeperClientConfig
 	}
 
+	// TaskRunner configuration
+	TaskRunner struct {
+		QueryLimit        int
+		Parallelism       int
+		MaxWaitTasks      int
+		FetchInterval     toml.Duration
+		FetchTimeout      toml.Duration
+		RetryInterval     toml.Duration
+		HeartbeatInterval toml.Duration
+	}
+
 	// RPC rpc config used to build txn sender
 	RPC rpc.Config `toml:"rpc"`
 }
@@ -140,4 +154,7 @@ type service struct {
 	metadataFS             fileservice.ReplaceableFileService
 	fileService            fileservice.FileService
 	stopper                *stopper.Stopper
+
+	taskService taskservice.TaskService
+	taskRunner  taskservice.TaskRunner
 }

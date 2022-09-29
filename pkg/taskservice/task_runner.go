@@ -219,7 +219,7 @@ func (r *taskRunner) Parallelism() int {
 	return r.options.parallelism
 }
 
-func (r *taskRunner) RegisterExectuor(code int, executor TaskExecutor) {
+func (r *taskRunner) RegisterExecutor(code int, executor TaskExecutor) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
