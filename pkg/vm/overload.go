@@ -18,6 +18,7 @@ import (
 	"bytes"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/intersectall"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/unnest"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/anti"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/external"
@@ -104,6 +105,8 @@ var stringFunc = [...]func(any, *bytes.Buffer){
 	IntersectAll: intersectall.String,
 
 	HashBuild: hashbuild.String,
+
+	Unnest: unnest.String,
 }
 
 var prepareFunc = [...]func(*process.Process, any) error{
@@ -148,6 +151,8 @@ var prepareFunc = [...]func(*process.Process, any) error{
 	IntersectAll: intersectall.Prepare,
 
 	HashBuild: hashbuild.Prepare,
+
+	Unnest: unnest.Prepare,
 }
 
 var execFunc = [...]func(int, *process.Process, any) (bool, error){
@@ -191,4 +196,6 @@ var execFunc = [...]func(int, *process.Process, any) (bool, error){
 	IntersectAll: intersectall.Call,
 
 	HashBuild: hashbuild.Call,
+
+	Unnest: unnest.Call,
 }

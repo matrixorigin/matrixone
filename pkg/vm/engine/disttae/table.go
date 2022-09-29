@@ -27,7 +27,12 @@ import (
 var _ engine.Relation = new(table)
 
 func (tbl *table) Rows(ctx context.Context) (int64, error) {
-	return 0, nil
+	var rows int64
+
+	for _, part := range tbl.parts {
+		rows += part.data.RowsCount(ctx, tbl.db.txn.meta.SnapshotTS)
+	}
+	return rows, nil
 }
 
 func (tbl *table) Size(ctx context.Context, name string) (int64, error) {
@@ -67,8 +72,20 @@ func (tbl *table) GetHideKeys(ctx context.Context) ([]*engine.Attribute, error) 
 }
 
 func (tbl *table) Write(ctx context.Context, bat *batch.Batch) error {
-	return tbl.db.txn.WriteBatch(INSERT, tbl.db.databaseId, tbl.tableId,
-		tbl.db.databaseName, tbl.tableName, bat)
+	bats, err := partitionBatch(bat, tbl.insertExpr, tbl.db.txn.m, len(tbl.parts))
+	if err != nil {
+		return err
+	}
+	for i := range bats {
+		if bats[i].GetVector(0).Length() == 0 {
+			continue
+		}
+		if err := tbl.db.txn.WriteBatch(INSERT, tbl.db.databaseId, tbl.tableId,
+			tbl.db.databaseName, tbl.tableName, bats[i], tbl.db.txn.dnStores[i]); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (tbl *table) Update(ctx context.Context, bat *batch.Batch) error {
@@ -78,8 +95,20 @@ func (tbl *table) Update(ctx context.Context, bat *batch.Batch) error {
 func (tbl *table) Delete(ctx context.Context, vec *vector.Vector, name string) error {
 	bat := batch.NewWithSize(1)
 	bat.Vecs[0] = vec
-	return tbl.db.txn.WriteBatch(INSERT, tbl.db.databaseId, tbl.tableId,
-		tbl.db.databaseName, tbl.tableName, bat)
+	bats, err := partitionBatch(bat, tbl.insertExpr, tbl.db.txn.m, len(tbl.parts))
+	if err != nil {
+		return err
+	}
+	for i := range bats {
+		if bats[i].GetVector(0).Length() == 0 {
+			continue
+		}
+		if err := tbl.db.txn.WriteBatch(INSERT, tbl.db.databaseId, tbl.tableId,
+			tbl.db.databaseName, tbl.tableName, bats[i], tbl.db.txn.dnStores[i]); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (tbl *table) Truncate(ctx context.Context) (uint64, error) {

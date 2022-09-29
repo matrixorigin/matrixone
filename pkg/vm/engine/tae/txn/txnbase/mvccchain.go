@@ -283,6 +283,12 @@ func (be *MVCCChain) ApplyCommit(index *wal.Index) error {
 	return be.GetNodeLocked().ApplyCommit(index)
 }
 
+func (be *MVCCChain) Apply1PCCommit(index *wal.Index) error {
+	be.Lock()
+	defer be.Unlock()
+	return be.GetNodeLocked().ApplyCommit(index)
+}
+
 func (be *MVCCChain) GetLogIndex() *wal.Index {
 	node := be.GetNodeLocked()
 	if node == nil {

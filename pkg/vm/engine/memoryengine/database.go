@@ -34,10 +34,10 @@ var _ engine.Database = new(Database)
 
 func (d *Database) Create(ctx context.Context, relName string, defs []engine.TableDef) error {
 
-	_, err := DoTxnRequest[CreateDatabaseResp](
+	_, err := DoTxnRequest[CreateRelationResp](
 		ctx,
-		d.engine,
-		d.txnOperator.Write,
+		d.txnOperator,
+		false,
 		d.engine.allShards,
 		OpCreateRelation,
 		CreateRelationReq{
@@ -59,8 +59,8 @@ func (d *Database) Delete(ctx context.Context, relName string) error {
 
 	_, err := DoTxnRequest[DeleteRelationResp](
 		ctx,
-		d.engine,
-		d.txnOperator.Write,
+		d.txnOperator,
+		false,
 		d.engine.allShards,
 		OpDeleteRelation,
 		DeleteRelationReq{
@@ -84,8 +84,8 @@ func (d *Database) Relation(ctx context.Context, relName string) (engine.Relatio
 
 	resps, err := DoTxnRequest[OpenRelationResp](
 		ctx,
-		d.engine,
-		d.txnOperator.Read,
+		d.txnOperator,
+		true,
 		d.engine.allShards,
 		OpOpenRelation,
 		OpenRelationReq{
@@ -122,8 +122,8 @@ func (d *Database) Relations(ctx context.Context) ([]string, error) {
 
 	resps, err := DoTxnRequest[GetRelationsResp](
 		ctx,
-		d.engine,
-		d.txnOperator.Read,
+		d.txnOperator,
+		true,
 		d.engine.allShards,
 		OpGetRelations,
 		GetRelationsReq{

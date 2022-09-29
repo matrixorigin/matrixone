@@ -19,6 +19,8 @@ import (
 	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/agg"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/unnest"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/intersectall"
@@ -226,6 +228,14 @@ func dupInstruction(in vm.Instruction) vm.Instruction {
 		rin.Arg = &external.Argument{
 			Es: arg.Es,
 		}
+	case *unnest.Argument:
+		rin.Arg = &unnest.Argument{
+			Es: &unnest.Param{
+				Attrs:  arg.Es.Attrs,
+				Cols:   arg.Es.Cols,
+				Extern: arg.Es.Extern,
+			},
+		}
 	default:
 		panic(moerr.NewInternalError(fmt.Sprintf("unsupport instruction %T\n", in.Arg)))
 	}
@@ -350,7 +360,19 @@ func constructExternal(n *plan.Node, ctx context.Context) *external.Argument {
 		},
 	}
 }
-
+func constructUnnest(n *plan.Node, ctx context.Context, param *tree.UnnestParam) *unnest.Argument {
+	attrs := make([]string, len(n.TableDef.Cols))
+	for j, col := range n.TableDef.Cols {
+		attrs[j] = col.Name
+	}
+	return &unnest.Argument{
+		Es: &unnest.Param{
+			Attrs:  attrs,
+			Cols:   n.TableDef.Cols,
+			Extern: param,
+		},
+	}
+}
 func constructTop(n *plan.Node, proc *process.Process) *top.Argument {
 	vec, err := colexec.EvalExpr(constBat, proc, n.Limit)
 	if err != nil {
