@@ -17,8 +17,9 @@ package batch
 import (
 	"bytes"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/agg"
 	"sync/atomic"
+
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/agg"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -213,10 +214,6 @@ func (bat *Batch) SetVector(pos int32, vec *vector.Vector) {
 
 func (bat *Batch) GetVector(pos int32) *vector.Vector {
 	return bat.Vecs[pos]
-}
-
-func (bat *Batch) SetVector(pos int32, vec *vector.Vector) {
-	bat.Vecs[pos] = vec
 }
 
 func (bat *Batch) Clean(m *mheap.Mheap) {
