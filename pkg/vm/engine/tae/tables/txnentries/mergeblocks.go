@@ -116,6 +116,8 @@ func (entry *mergeBlocksEntry) MakeCommand(csn uint32) (cmd txnif.TxnCmd, err er
 	return
 }
 
+func (entry *mergeBlocksEntry) Set1PC()     {}
+func (entry *mergeBlocksEntry) Is1PC() bool { return false }
 func (entry *mergeBlocksEntry) resolveAddr(fromPos int, fromOffset uint32) (toPos int, toOffset uint32) {
 	totalFromOffset := entry.fromAddr[fromPos] + fromOffset
 	totalToOffset := entry.mapping[totalFromOffset]
@@ -141,10 +143,6 @@ func (entry *mergeBlocksEntry) resolveAddr(fromPos int, fromOffset uint32) (toPo
 	// logutil.Infof("fromAddr=%v", entry.fromAddr)
 	// logutil.Infof("toAddr=%v", entry.toAddr)
 	// logutil.Infof("toPos=%d, toOffset=%d", toPos, toOffset)
-	return
-}
-
-func (entry *mergeBlocksEntry) Prepare2PCPrepare() (err error) {
 	return
 }
 
