@@ -164,6 +164,8 @@ const (
 	REGEXP         // REGEXP
 	REGEXP_REPLACE // REGEXP_REPLACE
 	REGEXP_SUBSTR  // REGEXP_SUBSTR
+	REG_MATCH      // REG_MATHCH
+	NOT_REG_MATCH  // NOT_REG_MATCH
 	REPEAT         // REPEAT
 	REPLACE        // REPLACE
 	REVERSE
@@ -413,6 +415,8 @@ var functionIdRegister = map[string]int32{
 	"serial":                  SERIAL,
 	"hash_value":              HASH,
 	"bin":                     BIN,
+	"reg_match":               REG_MATCH,
+	"not_reg_match":           NOT_REG_MATCH,
 }
 
 func GetFunctionIsWinfunByName(name string) bool {
