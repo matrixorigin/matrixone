@@ -17,9 +17,7 @@ package trace
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
-	"github.com/google/uuid"
 	"io"
 	"os"
 	"reflect"
@@ -1045,17 +1043,6 @@ func Test_genCsvData(t *testing.T) {
 			t.Logf("%s", tt.want)
 		})
 	}
-}
-
-var dummySerializeExecPlan = func(plan any, _ uuid.UUID) []byte {
-	if plan == nil {
-		return []byte(`{"code":200,"message":"no exec plan"}`)
-	}
-	json, err := json.Marshal(plan)
-	if err != nil {
-		return []byte(fmt.Sprintf(`{"err": %q}`, err.Error()))
-	}
-	return json
 }
 
 func Test_genCsvData_LongQueryTIme(t *testing.T) {

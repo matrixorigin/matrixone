@@ -51,11 +51,10 @@ type StatementInfo struct {
 	SerializeExecPlan func(plan any, uuid2 uuid.UUID) []byte // see SetExecPlan, ExecPlan2Json
 
 	// after
-	Status        StatementInfoStatus `json:"status"`
-	Error         error               `json:"error"`
-	ResponseAt    util.TimeNano       `json:"response_at"`
-	Duration      uint64              `json:"duration"` // unit: ns
-	ExecPlanStats any                 `json:"exec_plan_stats"`
+	Status     StatementInfoStatus `json:"status"`
+	Error      error               `json:"error"`
+	ResponseAt util.TimeNano       `json:"response_at"`
+	Duration   uint64              `json:"duration"` // unit: ns
 
 	// flow ctrl
 	end bool
@@ -116,17 +115,21 @@ func (s *StatementInfo) CsvFields() []string {
 
 func (s *StatementInfo) ExecPlan2Json() string {
 	var jsonByte []byte
-	if s.ExecPlan == nil && s.SerializeExecPlan == nil {
+	if s.SerializeExecPlan == nil {
+		// use defaultSerializeExecPlan
 		if f := getDefaultSerializeExecPlan(); f == nil {
 			uuidStr := uuid.UUID(s.StatementID).String()
 			return fmt.Sprintf(`{"code":200,"message":"sql query no record execution plan","steps":null,"success":false,"uuid":"%s"}`, uuidStr)
 		} else {
-			jsonByte = f(nil, uuid.UUID(s.StatementID))
+			jsonByte = f(s.ExecPlan, uuid.UUID(s.StatementID))
 		}
-	} else if queryTime := GetTracerProvider().longQueryTime; queryTime > int64(s.Duration) {
-		jsonByte = s.SerializeExecPlan(nil, uuid.UUID(s.StatementID))
 	} else {
-		jsonByte = s.SerializeExecPlan(s.ExecPlan, uuid.UUID(s.StatementID))
+		// use s.SerializeExecPlan
+		if queryTime := GetTracerProvider().longQueryTime; queryTime > int64(s.Duration) {
+			jsonByte = s.SerializeExecPlan(nil, uuid.UUID(s.StatementID))
+		} else {
+			jsonByte = s.SerializeExecPlan(s.ExecPlan, uuid.UUID(s.StatementID))
+		}
 	}
 	return string(jsonByte)
 }
