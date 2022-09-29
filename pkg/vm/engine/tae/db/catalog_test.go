@@ -39,8 +39,8 @@ func TestCatalog1(t *testing.T) {
 	schema := catalog.MockSchema(1, 0)
 	txn, _, rel := createRelationNoCommit(t, db, defaultTestDB, schema, true)
 	// relMeta := rel.GetMeta().(*catalog.TableEntry)
-	seg, _ := rel.CreateSegment()
-	blk, err := seg.CreateBlock()
+	seg, _ := rel.CreateSegment(false)
+	blk, err := seg.CreateBlock(false)
 	assert.Nil(t, err)
 	assert.Nil(t, txn.Commit())
 	t.Log(db.Opts.Catalog.SimplePPString(common.PPL1))
@@ -53,7 +53,7 @@ func TestCatalog1(t *testing.T) {
 	assert.Nil(t, err)
 
 	t.Log(db.Opts.Catalog.SimplePPString(common.PPL1))
-	blk2, err := sseg.CreateBlock()
+	blk2, err := sseg.CreateBlock(false)
 	assert.Nil(t, err)
 	assert.NotNil(t, blk2)
 	assert.Nil(t, txn.Commit())
@@ -149,8 +149,8 @@ func TestLogBlock(t *testing.T) {
 	txn, _ := tae.StartTxn(nil)
 	db, _ := txn.CreateDatabase("db")
 	rel, _ := db.CreateRelation(schema)
-	seg, _ := rel.CreateSegment()
-	blk, _ := seg.CreateBlock()
+	seg, _ := rel.CreateSegment(false)
+	blk, _ := seg.CreateBlock(false)
 	meta := blk.GetMeta().(*catalog.BlockEntry)
 	err := txn.Commit()
 	assert.Nil(t, err)
@@ -183,7 +183,7 @@ func TestLogSegment(t *testing.T) {
 	txn, _ := tae.StartTxn(nil)
 	db, _ := txn.CreateDatabase("db")
 	rel, _ := db.CreateRelation(schema)
-	seg, _ := rel.CreateSegment()
+	seg, _ := rel.CreateSegment(false)
 	meta := seg.GetMeta().(*catalog.SegmentEntry)
 	err := txn.Commit()
 	assert.Nil(t, err)
@@ -296,11 +296,11 @@ func TestCheckpointCatalog2(t *testing.T) {
 		txn, _ := tae.StartTxn(nil)
 		db, _ := txn.GetDatabase("db")
 		rel, _ := db.GetRelationByName(schema.Name)
-		seg, err := rel.CreateSegment()
+		seg, err := rel.CreateSegment(false)
 		assert.Nil(t, err)
 		var id *common.ID
 		for i := 0; i < 30; i++ {
-			blk, err := seg.CreateBlock()
+			blk, err := seg.CreateBlock(false)
 			if i == 2 {
 				id = blk.Fingerprint()
 			}
@@ -361,11 +361,11 @@ func TestCheckpointCatalog(t *testing.T) {
 		txn, _ := tae.StartTxn(nil)
 		db, _ := txn.GetDatabase("db")
 		rel, _ := db.GetRelationByName(schema.Name)
-		seg, err := rel.CreateSegment()
+		seg, err := rel.CreateSegment(false)
 		assert.Nil(t, err)
 		var id *common.ID
 		for i := 0; i < 4; i++ {
-			blk, err := seg.CreateBlock()
+			blk, err := seg.CreateBlock(false)
 			if i == 2 {
 				id = blk.Fingerprint()
 			}

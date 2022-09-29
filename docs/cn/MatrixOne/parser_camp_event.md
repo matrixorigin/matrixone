@@ -21,7 +21,7 @@ If your OS is Linux, still download golang package and modify your profile. Here
 
 ```
 $ wget https://go.dev/dl/go1.19.1.linux-amd64.tar.gz
-$ sudo tar -zxvf go1.18.3.linux-amd64.tar.gz -C /usr/local
+$ sudo tar -zxvf go1.19.1.linux-amd64.tar.gz -C /usr/local
 $ cat >> /etc/profile << EOF
 export GOROOT=/usr/local/go  
 export PATH=$GOROOT/bin:$PATH
@@ -112,6 +112,13 @@ INSERT INTO t1 (a,b,c) VALUES (1,2,3)
   ON DUPLICATE KEY UPDATE c=3;
 INSERT INTO t1 (a,b,c) VALUES (4,5,6)
   ON DUPLICATE KEY UPDATE c=9;
+```
+
+If the result of `INSERT ... ON DUPLICATE KEY UPDATE` is incorrect such as the following example, there should be notified error messages to users and this statement failed.
+
+```
+INSERT INTO t1 (a,b,c) VALUES (1,2,3)
+  ON DUPLICATE KEY UPDATE c='a';
 ```
 
 ### 2. REPLACE Statement

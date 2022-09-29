@@ -51,8 +51,8 @@ func TestTables1(t *testing.T) {
 	handle := table.GetHandle()
 	_, err := handle.GetAppender()
 	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrAppendableSegmentNotFound))
-	seg, _ := rel.CreateSegment()
-	blk, _ := seg.CreateBlock()
+	seg, _ := rel.CreateSegment(false)
+	blk, _ := seg.CreateBlock(false)
 	id := blk.GetMeta().(*catalog.BlockEntry).AsCommonID()
 	appender := handle.SetAppender(id)
 	assert.NotNil(t, appender)
@@ -71,7 +71,7 @@ func TestTables1(t *testing.T) {
 	_, err = handle.GetAppender()
 	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrAppendableBlockNotFound))
 
-	blk, _ = seg.CreateBlock()
+	blk, _ = seg.CreateBlock(false)
 	id = blk.GetMeta().(*catalog.BlockEntry).AsCommonID()
 	appender = handle.SetAppender(id)
 
@@ -82,8 +82,8 @@ func TestTables1(t *testing.T) {
 	_, err = handle.GetAppender()
 	assert.True(t, moerr.IsMoErrCode(err, moerr.ErrAppendableSegmentNotFound))
 
-	seg, _ = rel.CreateSegment()
-	blk, _ = seg.CreateBlock()
+	seg, _ = rel.CreateSegment(false)
+	blk, _ = seg.CreateBlock(false)
 
 	id = blk.GetMeta().(*catalog.BlockEntry).AsCommonID()
 	appender = handle.SetAppender(id)
@@ -153,9 +153,9 @@ func TestTxn1(t *testing.T) {
 		txn, _ := db.StartTxn(nil)
 		database, _ := txn.GetDatabase("db")
 		rel, _ := database.GetRelationByName(schema.Name)
-		seg, err := rel.CreateSegment()
+		seg, err := rel.CreateSegment(false)
 		assert.Nil(t, err)
-		_, err = seg.CreateBlock()
+		_, err = seg.CreateBlock(false)
 		assert.Nil(t, err)
 	}
 	{

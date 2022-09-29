@@ -15,13 +15,18 @@
 package options
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/logservice"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 )
 
 const (
-	DefaultTxnCacheSize   = 256 * common.M
+	// Temp unlimit the txn cache size.
+	// In v0.6, we will limit the cache to a reasonable value
+	DefaultTxnCacheSize   = common.UNLIMIT
 	DefaultIndexCacheSize = 128 * common.M
 	DefaultMTCacheSize    = 4 * common.G
 
@@ -46,7 +51,11 @@ type Options struct {
 	StorageCfg    *StorageCfg    `toml:"storage-cfg"`
 	CheckpointCfg *CheckpointCfg `toml:"checkpoint-cfg"`
 	SchedulerCfg  *SchedulerCfg  `toml:"scheduler-cfg"`
-	Catalog       *catalog.Catalog
-	Clock         clock.Clock
 	LogtailCfg    *LogtailCfg
+	Catalog       *catalog.Catalog
+
+	Clock clock.Clock
+	Fs    fileservice.FileService
+	Lc    logservice.Client
+	Shard metadata.DNShard
 }
