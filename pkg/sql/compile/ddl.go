@@ -15,9 +15,12 @@
 package compile
 
 import (
+	"context"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/compress"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -31,7 +34,8 @@ func (s *Scope) CreateDatabase(c *Compile) error {
 		}
 		return moerr.NewDBAlreadyExists(dbName)
 	}
-	err := c.e.Create(c.ctx, dbName, c.proc.TxnOperator)
+	err := c.e.Create(context.WithValue(c.ctx, defines.SqlKey{}, c.sql),
+		dbName, c.proc.TxnOperator)
 	if err != nil {
 		return err
 	}
@@ -80,7 +84,7 @@ func (s *Scope) CreateTable(c *Compile) error {
 		}
 		return moerr.NewTableAlreadyExists(tblName)
 	}
-	if err := dbSource.Create(c.ctx, tblName, append(exeCols, exeDefs...)); err != nil {
+	if err := dbSource.Create(context.WithValue(c.ctx, defines.SqlKey{}, c.sql), tblName, append(exeCols, exeDefs...)); err != nil {
 		return err
 	}
 	return colexec.CreateAutoIncrCol(dbSource, c.ctx, c.proc, planCols, tblName)
