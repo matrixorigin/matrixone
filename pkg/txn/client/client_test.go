@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
@@ -28,6 +29,9 @@ import (
 )
 
 func TestAdjustClient(t *testing.T) {
+	clock.SetupDefaultClock(clock.NewHLCClock(func() int64 { return 0 }, time.Millisecond))
+	defer clock.SetupDefaultClock(nil)
+
 	c := &txnClient{}
 	c.adjust()
 	assert.NotNil(t, c.generator)

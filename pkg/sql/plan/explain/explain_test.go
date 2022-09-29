@@ -55,6 +55,7 @@ func TestSingleSql(t *testing.T) {
 
 func TestBasicSqlExplain(t *testing.T) {
 	sqls := []string{
+		"explain verbose SELECT N_NAME, N_REGIONKEY a FROM NATION WHERE N_REGIONKEY > 0 ORDER BY a DESC",
 		"explain verbose SELECT N_NAME,N_REGIONKEY, 23 as a FROM NATION",
 		"explain verbose SELECT N_NAME, N_REGIONKEY, 23 as a FROM NATION",
 		"explain SELECT N_NAME, N_REGIONKEY a FROM NATION WHERE N_NATIONKEY > 0 OR N_NATIONKEY < 10",
@@ -223,12 +224,12 @@ func TestDMLInsert(t *testing.T) {
 
 func TestDMLUpdate(t *testing.T) {
 	sqls := []string{
-		//"explain UPDATE NATION SET N_NAME ='U1', N_REGIONKEY=2",
-		//"explain verbose UPDATE NATION SET N_NAME ='U1', N_REGIONKEY=2",
-		//"explain UPDATE NATION SET N_NAME ='U1', N_REGIONKEY=2 WHERE N_NATIONKEY > 10 LIMIT 20",
-		//"explain verbose UPDATE NATION SET N_NAME ='U1', N_REGIONKEY=2 WHERE N_NATIONKEY > 10 LIMIT 20",
-		//"explain UPDATE NATION SET N_NAME ='U1', N_REGIONKEY=N_REGIONKEY+2 WHERE N_NATIONKEY > 10 LIMIT 20",
-		//"explain verbose UPDATE NATION SET N_NAME ='U1', N_REGIONKEY=N_REGIONKEY+2 WHERE N_NATIONKEY > 10 LIMIT 20",
+		"explain UPDATE NATION SET N_NAME ='U1', N_REGIONKEY=2",
+		"explain verbose UPDATE NATION SET N_NAME ='U1', N_REGIONKEY=2",
+		"explain UPDATE NATION SET N_NAME ='U1', N_REGIONKEY=2 WHERE N_NATIONKEY > 10 LIMIT 20",
+		"explain verbose UPDATE NATION SET N_NAME ='U1', N_REGIONKEY=2 WHERE N_NATIONKEY > 10 LIMIT 20",
+		"explain UPDATE NATION SET N_NAME ='U1', N_REGIONKEY=N_REGIONKEY+2 WHERE N_NATIONKEY > 10 LIMIT 20",
+		"explain verbose UPDATE NATION SET N_NAME ='U1', N_REGIONKEY=N_REGIONKEY+2 WHERE N_NATIONKEY > 10 LIMIT 20",
 	}
 	mockOptimizer := plan.NewMockOptimizer()
 	runTestShouldPass(mockOptimizer, t, sqls)
@@ -236,12 +237,16 @@ func TestDMLUpdate(t *testing.T) {
 
 func TestDMLDelete(t *testing.T) {
 	sqls := []string{
-		//"explain DELETE FROM NATION",
-		//"explain verbose DELETE FROM NATION",
-		//"explain DELETE FROM NATION WHERE N_NATIONKEY > 10",
-		//"explain verbose DELETE FROM NATION WHERE N_NATIONKEY > 10",
-		//"explain DELETE FROM NATION WHERE N_NATIONKEY > 10 LIMIT 20",
-		//"explain verbose DELETE FROM NATION WHERE N_NATIONKEY > 10 LIMIT 20",
+		"explain DELETE FROM NATION",
+		"explain verbose DELETE FROM NATION",
+		"explain DELETE FROM NATION WHERE N_NATIONKEY > 10",
+		"explain verbose DELETE FROM NATION WHERE N_NATIONKEY > 10",
+		"explain DELETE FROM NATION WHERE N_NATIONKEY > 10 LIMIT 20",
+		"explain verbose DELETE FROM NATION WHERE N_NATIONKEY > 10 LIMIT 20",
+		"explain verbose DELETE FROM a1, a2 USING NATION AS a1 INNER JOIN NATION2 AS a2 WHERE a1.N_NATIONKEY=a2.N_NATIONKEY",
+		"explain verbose UPDATE NATION,REGION set NATION.N_REGIONKEY = REGION.R_REGIONKEY WHERE REGION.R_NAME = 'AAA'",
+		"explain verbose UPDATE NATION SET N_NAME ='U1', N_REGIONKEY=N_REGIONKEY+2 WHERE N_NATIONKEY > 10 LIMIT 20",
+		"explain verbose UPDATE NATION,NATION2 SET NATION.N_NAME ='U1',NATION2.N_NATIONKEY=15 WHERE NATION.N_NATIONKEY = NATION2.N_NATIONKEY",
 	}
 	mockOptimizer := plan.NewMockOptimizer()
 	runTestShouldPass(mockOptimizer, t, sqls)

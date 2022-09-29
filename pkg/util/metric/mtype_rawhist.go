@@ -16,7 +16,6 @@ package metric
 
 import (
 	"context"
-	"fmt"
 	"sync"
 	"time"
 
@@ -56,7 +55,8 @@ func (r *rawHist) record(t int64, v float64) {
 
 func (r *rawHist) assembleAndSend(buf []*pb.Sample) {
 	if r.exporter == nil || *r.exporter == nil {
-		panic(fmt.Sprintf("rawHist %s has no exporter yet, check metric initialization", r.opts.Name))
+		// rawHist has no exporter yet, ignore collection
+		return
 	}
 	o := r.opts
 	name := prom.BuildFQName(o.Namespace, o.Subsystem, o.Name)

@@ -74,7 +74,6 @@ func (rm *RoutineManager) Created(rs goetty.IOSession) {
 
 	rm.rwlock.Lock()
 	defer rm.rwlock.Unlock()
-	rs.Ref()
 	rm.clients[rs] = routine
 }
 

@@ -188,9 +188,9 @@ func (replayer *Replayer) PostReplayWal() {
 	for _, file := range files {
 		logutil.Info("[Replay]", common.OperationField("clean-segment"),
 			common.OperandField(file))
-		if err := os.Remove(file); err != nil {
+		/*if err := os.Remove(file); err != nil {
 			panic(err)
-		}
+		}*/
 	}
 
 	logutil.Info(replayer.db.Catalog.SimplePPString(common.PPL1))

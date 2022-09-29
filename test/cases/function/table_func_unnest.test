@@ -41,3 +41,9 @@ select count(seq),seq from t1, unnest(t1.a, "$") u where u.`index` is null group
 select count(`index`),`index`,sum(`index`) from t1, unnest(t1.a, "$") u where u.`index` is not null group by `index` order by sum(`index`) desc;
 select * from t1,unnest(t1.a,"$.b",true) u where seq>1;
 with u_table as (select * from t1,unnest(t1.a,"$.b",true) u where seq>1) select a,`index` from u_table where b=1;
+with myt as (select a from t1 where t1.b>1) select * from unnest(myt.a) u;
+with myt as (select a from t1 where t1.b>1) select * from unnest(myt.a) u where `value`='false' or `index`=5;
+create view v1 as (select * from unnest(t1.a) u);
+select * from v1;
+select * from v1 where `index` is null;
+select count(seq),seq from v1 where `index` is null or `value`='false' group by seq;

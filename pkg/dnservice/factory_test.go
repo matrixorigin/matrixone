@@ -24,21 +24,6 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func TestCreateClock(t *testing.T) {
-	s := &store{cfg: &Config{}, stopper: stopper.NewStopper("")}
-
-	s.cfg.Txn.Clock.Backend = localClockBackend
-	s.cfg.Txn.Clock.MaxClockOffset.Duration = defaultMaxClockOffset
-	v, err := s.createClock()
-	assert.NoError(t, err)
-	assert.NotNil(t, v)
-
-	s.cfg.Txn.Clock.Backend = "error"
-	v, err = s.createClock()
-	assert.Error(t, err)
-	assert.Nil(t, v)
-}
-
 func TestCreateLogServiceClient(t *testing.T) {
 	s := &store{cfg: &Config{}, stopper: stopper.NewStopper("")}
 	s.options.logServiceClientFactory = func(d metadata.DNShard) (logservice.Client, error) {

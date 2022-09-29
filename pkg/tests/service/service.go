@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/cnservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
+	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/dnservice"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper"
@@ -37,6 +38,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 )
 
 var (
@@ -211,9 +213,11 @@ type ClusterWaitState interface {
 
 // testCluster simulates a cluster with dn and log service.
 type testCluster struct {
-	t      *testing.T
-	opt    Options
-	logger *zap.Logger
+	t       *testing.T
+	opt     Options
+	logger  *zap.Logger
+	stopper *stopper.Stopper
+	clock   clock.Clock
 
 	dn struct {
 		sync.Mutex
@@ -229,8 +233,6 @@ type testCluster struct {
 		cfgs []logservice.Config
 		opts []logOptions
 		svcs []LogService
-
-		taskService taskservice.TaskService
 	}
 
 	cn struct {
@@ -260,12 +262,18 @@ func NewCluster(t *testing.T, opt Options) (Cluster, error) {
 	opt.validate()
 
 	c := &testCluster{
-		t:   t,
-		opt: opt,
+		t:       t,
+		opt:     opt,
+		stopper: stopper.NewStopper("test-cluster"),
 	}
 	c.logger = logutil.Adjust(c.logger).With(
 		zap.String("tests", "service"),
 	)
+
+	if c.clock == nil {
+		c.clock = clock.NewUnixNanoHLCClockWithStopper(c.stopper, time.Millisecond*500)
+	}
+	clock.SetupDefaultClock(c.clock)
 
 	// build addresses for all services
 	c.network.addresses = c.buildServiceAddresses()
@@ -275,7 +283,6 @@ func NewCluster(t *testing.T, opt Options) (Cluster, error) {
 
 	// build log service configurations
 	c.log.cfgs, c.log.opts = c.buildLogConfigs(c.network.addresses)
-	c.log.taskService = taskservice.NewTaskService(opt.task.taskStorage, nil)
 
 	// build dn service configurations
 	c.dn.cfgs, c.dn.opts = c.buildDnConfigs(c.network.addresses)
@@ -304,7 +311,9 @@ func (c *testCluster) Start() error {
 	}
 
 	if c.opt.initial.cnServiceNum != 0 {
-		time.Sleep(10 * time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+		defer cancel()
+		c.WaitDNShardsReported(ctx)
 		if err := c.startCNServices(); err != nil {
 			return err
 		}
@@ -337,6 +346,7 @@ func (c *testCluster) Close() error {
 	}
 
 	c.mu.running = false
+	c.stopper.Stop()
 	return nil
 }
 
@@ -1097,7 +1107,7 @@ func (c *testCluster) buildServiceAddresses() serviceAddresses {
 
 // buildFileServices builds all file services.
 func (c *testCluster) buildFileServices() *fileServices {
-	return newFileServices(c.t, c.opt.initial.dnServiceNum)
+	return newFileServices(c.t, c.opt.initial.dnServiceNum, c.opt.initial.cnServiceNum)
 }
 
 // buildDnConfigs builds configurations for all dn services.
@@ -1141,7 +1151,7 @@ func (c *testCluster) buildLogConfigs(
 func (c *testCluster) buildCNConfigs(
 	address serviceAddresses,
 ) ([]*cnservice.Config, []cnOptions) {
-	batch := c.opt.initial.dnServiceNum
+	batch := c.opt.initial.cnServiceNum
 
 	cfgs := make([]*cnservice.Config, 0, batch)
 	opts := make([]cnOptions, 0, batch)
@@ -1169,7 +1179,7 @@ func (c *testCluster) initDNServices(fileservices *fileServices) []DNService {
 		opt := c.dn.opts[i]
 		fs, err := fileservice.NewFileServices(
 			"LOCAL",
-			fileservices.getLocalFileService(i),
+			fileservices.getDNLocalFileService(i),
 			fileservices.getS3FileService(),
 		)
 		if err != nil {
@@ -1201,7 +1211,7 @@ func (c *testCluster) initLogServices() []LogService {
 	for i := 0; i < batch; i++ {
 		cfg := c.log.cfgs[i]
 		opt := c.log.opts[i]
-		ls, err := newLogService(cfg, testutil.NewFS(), c.log.taskService, opt)
+		ls, err := newLogService(cfg, testutil.NewFS(), taskservice.NewTaskService(c.opt.task.taskStorage, nil), opt)
 		require.NoError(c.t, err)
 
 		c.logger.Info(
@@ -1226,7 +1236,7 @@ func (c *testCluster) initCNServices(fileservices *fileServices) []CNService {
 		opt := c.cn.opts[i]
 		fs, err := fileservice.NewFileServices(
 			"LOCAL",
-			fileservices.getLocalFileService(i),
+			fileservices.getCNLocalFileService(i),
 			fileservices.getS3FileService(),
 		)
 		if err != nil {

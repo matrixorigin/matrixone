@@ -15,22 +15,17 @@
 package jobs
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/file"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/indexwrapper"
 )
 
-func BuildColumnIndex(file file.ColumnBlock, colDef *catalog.ColDef, columnData containers.Vector, isPk, isSorted bool) (metas []indexwrapper.IndexMeta, err error) {
+func BuildColumnIndex(writer objectio.Writer, block objectio.BlockObject, colDef *catalog.ColDef, columnData containers.Vector, isPk, isSorted bool) (metas []indexwrapper.IndexMeta, err error) {
 	zmPos := 0
-	zmFile, err := file.OpenIndexFile(zmPos)
-	if err != nil {
-		return
-	}
-	defer zmFile.Unref()
 
 	zoneMapWriter := indexwrapper.NewZMWriter()
-	if err = zoneMapWriter.Init(zmFile, indexwrapper.Plain, uint16(colDef.Idx), uint16(zmPos)); err != nil {
+	if err = zoneMapWriter.Init(writer, block, indexwrapper.Plain, uint16(colDef.Idx), uint16(zmPos)); err != nil {
 		return
 	}
 	if isSorted && columnData.Length() > 2 {
@@ -54,7 +49,7 @@ func BuildColumnIndex(file file.ColumnBlock, colDef *catalog.ColDef, columnData 
 		return
 	}
 
-	bfPos := 1
+	/*bfPos := 1
 	bfWriter := indexwrapper.NewBFWriter()
 	bfFile, err := file.OpenIndexFile(bfPos)
 	if err != nil {
@@ -71,11 +66,11 @@ func BuildColumnIndex(file file.ColumnBlock, colDef *catalog.ColDef, columnData 
 	if err != nil {
 		return
 	}
-	metas = append(metas, *bfMeta)
+	metas = append(metas, *bfMeta)*/
 	return
 }
 
-func BuildBlockIndex(file file.Block, meta *catalog.BlockEntry, columnsData *containers.Batch) (err error) {
+func BuildBlockIndex(writer objectio.Writer, block objectio.BlockObject, meta *catalog.BlockEntry, columnsData *containers.Batch) (err error) {
 	schema := meta.GetSchema()
 	blkMetas := indexwrapper.NewEmptyIndicesMeta()
 	// ATTENTION: COMPOUNDPK
@@ -88,23 +83,14 @@ func BuildBlockIndex(file file.Block, meta *catalog.BlockEntry, columnsData *con
 		if colDef.IsPhyAddr() {
 			continue
 		}
-		colBlock, err := file.OpenColumn(colDef.Idx)
-		if err != nil {
-			return err
-		}
-		defer colBlock.Close()
 		data := columnsData.GetVectorByName(colDef.GetName())
 		isPk := colDef.Idx == pkIdx
 		// FIXME: there are several sorted column if compound pk exists?
-		colMetas, err := BuildColumnIndex(colBlock, colDef, data, isPk, isPk)
+		colMetas, err := BuildColumnIndex(writer, block, colDef, data, isPk, isPk)
 		if err != nil {
 			return err
 		}
 		blkMetas.AddIndex(colMetas...)
 	}
-	metaBuf, err := blkMetas.Marshal()
-	if err != nil {
-		return err
-	}
-	return file.WriteIndexMeta(metaBuf)
+	return nil
 }

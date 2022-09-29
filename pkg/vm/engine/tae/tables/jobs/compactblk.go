@@ -16,6 +16,7 @@ package jobs
 
 import (
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
 	"time"
 
 	"github.com/RoaringBitmap/roaring"
@@ -160,7 +161,13 @@ func (task *compactBlockTask) Execute() (err error) {
 	if err = ioTask.WaitDone(); err != nil {
 		return
 	}
-
+	metaLoc := blockio.EncodeBlkMetaLoc(ioTask.file.Fingerprint(),
+		ioTask.file.GetMeta().GetExtent(),
+		uint32(preparer.Columns.Length()))
+	logutil.Infof("node: %v", metaLoc)
+	if err = newBlk.UpdateMetaLoc(metaLoc); err != nil {
+		return err
+	}
 	if err = newBlkData.ReplayIndex(); err != nil {
 		return err
 	}

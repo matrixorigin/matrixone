@@ -20,6 +20,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/file"
 )
 
 var _ Index = (*immutableIndex)(nil)
@@ -96,42 +97,19 @@ func (index *immutableIndex) Destroy() (err error) {
 	return
 }
 
-func (index *immutableIndex) ReadFrom(blk data.Block, colDef *catalog.ColDef, metas ...IndexMeta) (err error) {
+func (index *immutableIndex) ReadFrom(blk data.Block, colDef *catalog.ColDef, col file.ColumnBlock) (err error) {
 	entry := blk.GetMeta().(*catalog.BlockEntry)
-	file := blk.GetBlockFile()
-	colFile, err := file.OpenColumn(colDef.Idx)
-	if err != nil {
+	metaLoc := entry.GetMetaLoc()
+	idxFile := col.GetDataObject(metaLoc)
+	if idxFile == nil {
+		// FIXME: Now the block that is gc will also be replayed, here is a work around
 		return
 	}
-	defer colFile.Close()
-	for _, meta := range metas {
-		idxFile, err := colFile.OpenIndexFile(int(meta.InternalIdx))
-		if err != nil {
-			return err
-		}
-		id := entry.AsCommonID()
-		id.PartID = uint32(meta.InternalIdx) + 1000
-		id.Idx = meta.ColIdx
-		switch meta.IdxType {
-		case BlockZoneMapIndex:
-			size := idxFile.Stat().Size()
-			buf := make([]byte, size)
-			if _, err = idxFile.Read(buf); err != nil {
-				idxFile.Unref()
-				return err
-			}
-			index.zmReader = NewZMReader(blk.GetBufMgr(), idxFile, id, colDef.Type)
-		case StaticFilterIndex:
-			size := idxFile.Stat().Size()
-			buf := make([]byte, size)
-			if _, err = idxFile.Read(buf); err != nil {
-				idxFile.Unref()
-				return err
-			}
-			index.bfReader = NewBFReader(blk.GetBufMgr(), idxFile, id)
-		default:
-			panic("unsupported index type")
-		}
+	id := entry.AsCommonID()
+	id.Idx = uint16(colDef.Idx)
+	index.zmReader = NewZMReader(idxFile, colDef.Type)
+	if idxFile.GetMeta().GetBloomFilter().End() > 0 {
+		index.bfReader = NewBFReader(idxFile)
 	}
 	return
 }

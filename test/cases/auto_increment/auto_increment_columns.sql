@@ -405,6 +405,55 @@ create table t1(a bigint default(-1) auto_increment);
 create table t1(a bigint primary key default(-1) auto_increment);
 create table t1(a int, b int default(10), c int auto_increment);
 show create table t1;
+drop table t1;
+
+create table t1(a tinyint auto_increment);
+insert into t1 values(null), (3), (null), (6), (null), (127);
+select * from t1;
+insert into t1 values();
+
+drop table t1;
+create table t1(a smallint auto_increment);
+insert into t1 values(null), (3), (null), (6), (null), (32767);
+select * from t1;
+insert into t1 values();
+
+drop table t1;
+create table t1(a int auto_increment);
+insert into t1 values(null), (3), (null), (6), (null), (2147483647);
+select * from t1;
+insert into t1 values();
+
+drop table t1;
+create table t1(a bigint auto_increment);
+insert into t1 values(null), (3), (null), (6), (null), (9223372036854775807);
+select * from t1;
+insert into t1 values();
+
+drop table t1;
+create table t1(a tinyint unsigned auto_increment);
+insert into t1 values(null), (3), (null), (6), (null), (255);
+select * from t1;
+insert into t1 values();
+
+drop table t1;
+create table t1(a smallint unsigned auto_increment);
+insert into t1 values(null), (3), (null), (6), (null), (65535);
+select * from t1;
+insert into t1 values();
+
+drop table t1;
+create table t1(a int unsigned auto_increment);
+insert into t1 values(null), (3), (null), (6), (null), (4294967295);
+select * from t1;
+insert into t1 values();
+
+drop table t1;
+create table t1(a bigint unsigned auto_increment);
+insert into t1 values(null), (3), (null), (6), (null), (18446744073709551615);
+select * from t1;
+insert into t1 values();
+drop table t1;
 drop table if exists t1;
 create table t1 (a int not null auto_increment, b int);
 insert into t1(b) values (1);

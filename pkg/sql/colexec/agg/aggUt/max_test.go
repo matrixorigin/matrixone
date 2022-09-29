@@ -22,7 +22,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
-// TODO: add distinc decimal128 test
 func TestMax(t *testing.T) {
 	int8TestTyp := types.New(types.T_int8, 0, 0, 0)
 	decimalTestTyp := types.New(types.T_decimal128, 0, 0, 0)
@@ -31,6 +30,7 @@ func TestMax(t *testing.T) {
 	uuidTestTyp := types.New(types.T_uuid, 0, 0, 0)
 
 	testCases := []testCase{
+		// uint8 max test
 		{
 			op:         agg.AggregateMax,
 			isDistinct: false,
@@ -46,6 +46,7 @@ func TestMax(t *testing.T) {
 
 			testMarshal: true,
 		},
+		// uint8 distinct max test
 		{
 			op:         agg.AggregateMax,
 			isDistinct: true,
@@ -61,6 +62,7 @@ func TestMax(t *testing.T) {
 
 			testMarshal: false,
 		},
+		// decimal128 max test
 		{
 			op:         agg.AggregateMax,
 			isDistinct: false,
@@ -76,6 +78,23 @@ func TestMax(t *testing.T) {
 
 			testMarshal: true,
 		},
+		// decimal128 distinct max test
+		{
+			op:         agg.AggregateMax,
+			isDistinct: true,
+			inputTyp:   decimalTestTyp,
+
+			input:    []int64{9, 8, 7, 6, 5, 4, 3, 2, 1, 0},
+			inputNsp: nil,
+			expected: []int64{9},
+
+			mergeInput:  []int64{0, 1, 2, 3, 4, 5, 6, 7, 8, 9},
+			mergeNsp:    nil,
+			mergeExpect: []int64{9},
+
+			testMarshal: false,
+		},
+		// bool max test
 		{
 			op:         agg.AggregateMax,
 			isDistinct: false,
@@ -91,6 +110,7 @@ func TestMax(t *testing.T) {
 
 			testMarshal: true,
 		},
+		// varchar max test
 		{
 			op:         agg.AggregateMax,
 			isDistinct: false,
@@ -106,6 +126,7 @@ func TestMax(t *testing.T) {
 
 			testMarshal: true,
 		},
+		// uuid max test
 		{
 			op:         agg.AggregateMax,
 			isDistinct: false,
@@ -143,6 +164,7 @@ func TestMax(t *testing.T) {
 
 			testMarshal: true,
 		},
+		// uuid distinct max test
 		{
 			op:         agg.AggregateMax,
 			isDistinct: true,

@@ -17,6 +17,7 @@ package plan
 import (
 	"encoding/json"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -24,7 +25,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 )
 
 func NewQueryBuilder(queryType plan.Query_StatementType, ctx CompilerContext) *QueryBuilder {
@@ -48,7 +48,7 @@ func (builder *QueryBuilder) remapExpr(expr *Expr, colMap map[[2]int32][2]int32)
 			ne.Col.ColPos = ids[1]
 			ne.Col.Name = builder.nameByColRef[mapId]
 		} else {
-			return moerr.NewParseError("can't find column in context's map %v", colMap)
+			return moerr.NewParseError("can't find column %v in context's map %v", mapId, colMap)
 		}
 
 	case *plan.Expr_F:
@@ -80,7 +80,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 	}
 
 	switch node.NodeType {
-	case plan.Node_TABLE_SCAN, plan.Node_MATERIAL_SCAN, plan.Node_EXTERNAL_SCAN, plan.Node_TABLE_FUNCTION:
+	case plan.Node_TABLE_SCAN, plan.Node_MATERIAL_SCAN, plan.Node_EXTERNAL_SCAN:
 		for _, expr := range node.FilterList {
 			increaseRefCnt(expr, colRefCnt)
 		}
@@ -157,6 +157,93 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 					},
 				},
 			})
+		}
+	case plan.Node_TABLE_FUNCTION:
+		for _, expr := range node.FilterList {
+			increaseRefCnt(expr, colRefCnt)
+		}
+
+		internalRemapping := &ColRefRemapping{
+			globalToLocal: make(map[[2]int32][2]int32),
+		}
+
+		tag := node.BindingTags[0]
+		newTableDef := &plan.TableDef{
+			Name:          node.TableDef.Name,
+			Defs:          node.TableDef.Defs,
+			Name2ColIndex: node.TableDef.Name2ColIndex,
+			Createsql:     node.TableDef.Createsql,
+			TblFunc:       node.TableDef.TblFunc,
+		}
+
+		for i, col := range node.TableDef.Cols {
+			globalRef := [2]int32{tag, int32(i)}
+			if colRefCnt[globalRef] == 0 {
+				continue
+			}
+
+			internalRemapping.addColRef(globalRef)
+
+			newTableDef.Cols = append(newTableDef.Cols, col)
+		}
+
+		if len(newTableDef.Cols) == 0 {
+			internalRemapping.addColRef([2]int32{tag, 0})
+			newTableDef.Cols = append(newTableDef.Cols, node.TableDef.Cols[0])
+		}
+
+		node.TableDef = newTableDef
+
+		for _, expr := range node.FilterList {
+			decreaseRefCnt(expr, colRefCnt)
+			err := builder.remapExpr(expr, internalRemapping.globalToLocal)
+			if err != nil {
+				return nil, err
+			}
+		}
+
+		for i, col := range node.TableDef.Cols {
+			if colRefCnt[internalRemapping.localToGlobal[i]] == 0 {
+				continue
+			}
+
+			remapping.addColRef(internalRemapping.localToGlobal[i])
+
+			node.ProjectList = append(node.ProjectList, &plan.Expr{
+				Typ: col.Typ,
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						RelPos: 0,
+						ColPos: int32(i),
+						Name:   builder.nameByColRef[internalRemapping.localToGlobal[i]],
+					},
+				},
+			})
+		}
+
+		if len(node.ProjectList) == 0 {
+			globalRef := [2]int32{tag, 0}
+			remapping.addColRef(globalRef)
+
+			node.ProjectList = append(node.ProjectList, &plan.Expr{
+				Typ: node.TableDef.Cols[0].Typ,
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						RelPos: 0,
+						ColPos: 0,
+						Name:   builder.nameByColRef[globalRef],
+					},
+				},
+			})
+		}
+		childId := node.Children[0]
+		childNode := builder.qry.Nodes[childId]
+		if childNode.NodeType != plan.Node_PROJECT {
+			break
+		}
+		_, err := builder.remapAllColRefs(childId, colRefCnt)
+		if err != nil {
+			return nil, err
 		}
 
 	case plan.Node_INTERSECT, plan.Node_INTERSECT_ALL,
@@ -1039,7 +1126,6 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 	}
 
 	ctx.binder = NewWhereBinder(builder, ctx)
-
 	// unfold stars and generate headings
 	var selectList tree.SelectExprs
 	for _, selectExpr := range clause.Exprs {
@@ -2130,7 +2216,7 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr)
 
 	case plan.Node_PROJECT:
 		child := builder.qry.Nodes[node.Children[0]]
-		if (child.NodeType == plan.Node_VALUE_SCAN || child.NodeType == plan.Node_EXTERNAL_SCAN || child.NodeType == plan.Node_TABLE_FUNCTION) && child.RowsetData == nil {
+		if (child.NodeType == plan.Node_VALUE_SCAN || child.NodeType == plan.Node_EXTERNAL_SCAN) && child.RowsetData == nil {
 			cantPushdown = filters
 			break
 		}
@@ -2153,8 +2239,16 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr)
 
 		node.Children[0] = childID
 
-	case plan.Node_TABLE_SCAN, plan.Node_EXTERNAL_SCAN, plan.Node_TABLE_FUNCTION:
+	case plan.Node_TABLE_SCAN, plan.Node_EXTERNAL_SCAN:
 		node.FilterList = append(node.FilterList, filters...)
+	case plan.Node_TABLE_FUNCTION:
+		node.FilterList = append(node.FilterList, filters...)
+		childId := node.Children[0]
+		childId, err := builder.pushdownFilters(childId, nil)
+		if err != nil {
+			return 0, err
+		}
+		node.Children[0] = childId
 
 	default:
 		if len(node.Children) > 0 {

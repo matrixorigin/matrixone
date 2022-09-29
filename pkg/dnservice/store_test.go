@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/txn/service"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage/mem"
 	"github.com/stretchr/testify/assert"
@@ -234,7 +235,8 @@ func newTestStore(
 		UUID:          uuid,
 		ListenAddress: testDNStoreAddr,
 	}
-	c.Txn.Clock.MaxClockOffset.Duration = time.Duration(math.MaxInt64)
+	options = append(options, WithClock(clock.NewHLCClock(func() int64 { return time.Now().UTC().UnixNano() },
+		time.Duration(math.MaxInt64))))
 	fs, err := fsFactory(localFileServiceName)
 	assert.Nil(t, err)
 	s, err := NewService(c, fs, options...)

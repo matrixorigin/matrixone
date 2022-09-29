@@ -39,7 +39,8 @@ func newNode(mgr base.INodeManager, block *dataBlock, file file.Block) *appendab
 	impl := new(appendableNode)
 	impl.exception = new(atomic.Value)
 	impl.block = block
-	impl.rows = file.ReadRows()
+	//impl.rows = file.ReadRows(block.meta.GetMetaLoc())
+	impl.rows = 0
 	var err error
 	schema := block.meta.GetSchema()
 	opts := new(containers.Options)

@@ -281,7 +281,8 @@ message TableDef {
 	string table_type 		= 4;
 	string createsql 		= 5;
 	map<string, int32> name2col_index = 6;
-  TableFunction tbl_func = 7;
+	ColDef composite_pkey = 7;
+	TableFunction tbl_func = 8;
 }
 
 message TableFunction{
@@ -346,6 +347,7 @@ message UpdateCtx {
 	repeated ColDef update_cols = 7;
 	repeated string other_attrs = 8;
 	repeated string order_attrs = 9;
+	ColDef composite_pkey = 10;
 }
 
 message AnalyzeInfo {
@@ -614,6 +616,8 @@ message DataDefinition {
 		SHOW_ERRORS			= 18;
 		SHOW_STATUS			= 19;
 		SHOW_PROCESSLIST	= 20;
+		SHOW_TABLE_STATUS = 21;
+		SHOW_TARGET = 22;
 	}
 	//DataDefinition type
 	DdlType ddl_type = 1;

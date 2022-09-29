@@ -19,6 +19,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -43,6 +44,13 @@ var (
 func WithLogger(logger *zap.Logger) Option {
 	return func(s *store) {
 		s.logger = logger
+	}
+}
+
+// WithClock set clock
+func WithClock(clock clock.Clock) Option {
+	return func(s *store) {
+		s.clock = clock
 	}
 }
 
@@ -336,7 +344,9 @@ func (s *store) getReplica(id uint64) *replica {
 }
 
 func (s *store) initTxnSender() error {
-	sender, err := rpc.NewSenderWithConfig(s.cfg.RPC, s.logger,
+	sender, err := rpc.NewSenderWithConfig(s.cfg.RPC,
+		s.clock,
+		s.logger,
 		rpc.WithSenderBackendOptions(morpc.WithBackendFilter(func(m morpc.Message, backendAddr string) bool {
 			return s.options.backendFilter == nil || s.options.backendFilter(m.(*txn.TxnRequest), backendAddr)
 		})),
@@ -349,7 +359,7 @@ func (s *store) initTxnSender() error {
 }
 
 func (s *store) initTxnServer() error {
-	server, err := rpc.NewTxnServer(s.cfg.ListenAddress, s.logger)
+	server, err := rpc.NewTxnServer(s.cfg.ListenAddress, s.clock, s.logger)
 	if err != nil {
 		return err
 	}
@@ -359,11 +369,13 @@ func (s *store) initTxnServer() error {
 }
 
 func (s *store) initClocker() error {
-	v, err := s.createClock()
-	if err != nil {
-		return err
+	if s.clock == nil {
+		s.clock = clock.DefaultClock()
 	}
-	s.clock = v
+
+	if s.clock == nil {
+		return moerr.NewBadConfig("missing txn clock")
+	}
 	return nil
 }
 

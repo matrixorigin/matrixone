@@ -475,7 +475,7 @@ func NumericToNumericOverflow[T1, T2 constraints.Integer | constraints.Float](xs
 			}
 		case *int64:
 			for _, x := range xs {
-				if math.Round(float64(x)) > math.MaxInt64 {
+				if math.Round(float64(x)) > math.MaxInt64 || math.Round(float64(x)) < math.MinInt64 {
 					return moerr.NewOutOfRange("int64", "value '%v'", x)
 				}
 			}

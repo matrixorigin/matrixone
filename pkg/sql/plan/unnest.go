@@ -20,8 +20,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/unnest"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 )
 
 var (
@@ -111,11 +111,12 @@ func _getDefaultColDefs() []*plan.ColDef {
 }
 
 func (builder *QueryBuilder) buildUnnest(tbl *tree.TableFunction, ctx *BindContext) (int32, error) {
-	tag := builder.genNewTag()
 	var (
 		err             error
 		externParamData []byte
 		externParam     *unnest.ExternalParam
+		scanNode        *plan.Node
+		childId         int32 = -1
 	)
 	if externParam, err = genTblParam(tbl); err != nil {
 		return 0, err
@@ -123,26 +124,56 @@ func (builder *QueryBuilder) buildUnnest(tbl *tree.TableFunction, ctx *BindConte
 	if externParamData, err = json.Marshal(externParam); err != nil {
 		return 0, err
 	}
-
-	colDefs := _getDefaultColDefs()
-	node := &plan.Node{
-		NodeType: plan.Node_TABLE_FUNCTION,
-		Cost:     &plan.Cost{},
-		TableDef: &plan.TableDef{
-			TableType: catalog.SystemViewRel, //test if ok
-			//Name:               tbl.String(),
-			Cols: colDefs,
-			TblFunc: &plan.TableFunction{
-				Name:  "unnest",
-				Param: externParamData,
-			},
-		},
-		BindingTags: []int32{tag},
-	}
-	var scanNode *plan.Node
 	switch o := tbl.Func.Exprs[0].(type) {
 	case *tree.UnresolvedName:
 		schemaName, tableName, colName := o.GetNames()
+		if len(schemaName) == 0 {
+			cteRef := ctx.findCTE(tableName)
+			if cteRef != nil {
+				subCtx := NewBindContext(builder, ctx)
+				subCtx.maskedCTEs = cteRef.maskedCTEs
+				subCtx.cteName = tableName
+				//reset defaultDatabase
+				if len(cteRef.defaultDatabase) > 0 {
+					subCtx.defaultDatabase = cteRef.defaultDatabase
+				}
+
+				switch stmt := cteRef.ast.Stmt.(type) {
+				case *tree.Select:
+					childId, err = builder.buildSelect(stmt, subCtx, false)
+
+				case *tree.ParenSelect:
+					childId, err = builder.buildSelect(stmt.Select, subCtx, false)
+
+				default:
+					err = moerr.NewParseError("unexpected statement: '%v'", tree.String(stmt, dialect.MYSQL))
+				}
+
+				if err != nil {
+					return 0, err
+				}
+
+				if subCtx.isCorrelated {
+					return 0, moerr.NewNYI("correlated column in CTE")
+				}
+
+				if subCtx.hasSingleRow {
+					ctx.hasSingleRow = true
+				}
+
+				cols := cteRef.ast.Name.Cols
+
+				if len(cols) > len(subCtx.headings) {
+					return 0, moerr.NewSyntaxError("table %q has %d columns available but %d columns specified", tableName, len(subCtx.headings), len(cols))
+				}
+
+				for i, col := range cols {
+					subCtx.headings[i] = string(col)
+				}
+				break
+			}
+			schemaName = ctx.defaultDatabase
+		}
 		objRef, tableDef := builder.compCtx.Resolve(schemaName, tableName)
 		if objRef == nil {
 			return 0, moerr.NewSyntaxError("schema %s not found", schemaName)
@@ -190,7 +221,24 @@ func (builder *QueryBuilder) buildUnnest(tbl *tree.TableFunction, ctx *BindConte
 	default:
 		return 0, moerr.NewInvalidInput("unsupported unnest param type: %T", o)
 	}
-	childId := builder.appendNode(scanNode, ctx)
+	if scanNode != nil {
+		childId = builder.appendNode(scanNode, ctx)
+	}
+	colDefs := _getDefaultColDefs()
+	node := &plan.Node{
+		NodeType: plan.Node_TABLE_FUNCTION,
+		Cost:     &plan.Cost{},
+		TableDef: &plan.TableDef{
+			TableType: "func_table", //test if ok
+			//Name:               tbl.String(),
+			TblFunc: &plan.TableFunction{
+				Name:  "unnest",
+				Param: externParamData,
+			},
+			Cols: colDefs,
+		},
+		BindingTags: []int32{builder.genNewTag()},
+	}
 	node.Children = []int32{childId}
 	nodeID := builder.appendNode(node, ctx)
 	return nodeID, nil
