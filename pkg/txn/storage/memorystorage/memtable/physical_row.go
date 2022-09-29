@@ -149,6 +149,7 @@ func (p *PhysicalRow[K, V]) Insert(
 	}
 
 	p = p.clone()
+	p.LastUpdate = time.Now()
 
 	id := memoryengine.NewID()
 	version = &Version[V]{
@@ -185,6 +186,7 @@ func (p *PhysicalRow[K, V]) Delete(
 			}
 
 			p = p.clone()
+			p.LastUpdate = time.Now()
 			value.LockTx = tx
 			value.LockTime = now
 			p.Versions[i] = value
@@ -223,6 +225,7 @@ func (p *PhysicalRow[K, V]) Update(
 			}
 
 			p = p.clone()
+			p.LastUpdate = time.Now()
 
 			value.LockTx = tx
 			value.LockTime = now
@@ -246,7 +249,6 @@ func (p *PhysicalRow[K, V]) Update(
 
 func (p *PhysicalRow[K, V]) clone() *PhysicalRow[K, V] {
 	newRow := *p
-	newRow.LastUpdate = time.Now()
 	newRow.Versions = make([]Version[V], len(p.Versions))
 	copy(newRow.Versions, p.Versions)
 	return &newRow
