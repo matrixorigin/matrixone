@@ -2837,3 +2837,7 @@ var SerializeExecPlan = func(plan any, uuid uuid.UUID) []byte {
 		return serializePlanToJson(queryPlan, uuid)
 	}
 }
+
+func init() {
+	trace.SetDefaultSerializeExecPlan(SerializeExecPlan)
+}
