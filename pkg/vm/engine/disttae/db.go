@@ -17,10 +17,8 @@ package disttae
 import (
 	"context"
 
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
 func newDB(cli client.TxnClient, dnList []DNStore) *DB {
@@ -37,6 +35,7 @@ func newDB(cli client.TxnClient, dnList []DNStore) *DB {
 }
 
 func (db *DB) getPartitions(databaseId, tableId uint64) Partitions {
+	db.Lock()
 	parts, ok := db.tables[[2]uint64{databaseId, tableId}]
 	if !ok { // create a new table
 		parts = make(Partitions, len(db.dnMap))
@@ -45,6 +44,7 @@ func (db *DB) getPartitions(databaseId, tableId uint64) Partitions {
 		}
 		db.tables[[2]uint64{databaseId, tableId}] = parts
 	}
+	db.Unlock()
 	return parts
 }
 
@@ -78,16 +78,4 @@ func (db *DB) Update(ctx context.Context, dnList []DNStore,
 		part.Unlock()
 	}
 	return nil
-}
-
-func (db *DB) BlockList(ctx context.Context, dnList []DNStore,
-	databaseId, tableId uint64, ts timestamp.Timestamp,
-	entries [][]Entry) []BlockMeta {
-	return nil
-}
-
-func (db *DB) NewReader(ctx context.Context, readNumber int, expr *plan.Expr,
-	dnList []DNStore, databaseId, tableId uint64, ts timestamp.Timestamp,
-	entires [][]Entry) ([]engine.Reader, error) {
-	return nil, nil
 }

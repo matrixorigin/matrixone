@@ -29,18 +29,49 @@ var _ engine.Relation = new(table)
 func (tbl *table) Rows(ctx context.Context) (int64, error) {
 	var rows int64
 
-	for _, part := range tbl.parts {
-		rows += part.data.RowsCount(ctx, tbl.db.txn.meta.SnapshotTS)
+	for _, blks := range tbl.meta.blocks {
+		for _, blk := range blks {
+			rows += blockRows(blk)
+		}
 	}
 	return rows, nil
 }
 
 func (tbl *table) Size(ctx context.Context, name string) (int64, error) {
+	// TODO
 	return 0, nil
 }
 
-func (tbl *table) Ranges(ctx context.Context) ([][]byte, error) {
-	return nil, nil
+// return all unmodified blocks
+func (tbl *table) Ranges(ctx context.Context, expr *plan.Expr) ([][]byte, error) {
+	var writes [][]Entry
+
+	// consider halloween problem
+	if int64(tbl.db.txn.statementId)-1 > 0 {
+		writes = tbl.db.txn.writes[:tbl.db.txn.statementId-1]
+	}
+	ranges := make([][]byte, 0, len(tbl.meta.blocks))
+	dnList := needSyncDnStores(expr, tbl.defs, tbl.db.txn.dnStores)
+	dnStores := make([]DNStore, len(dnList))
+	for _, i := range dnList {
+		dnStores = append(dnStores, tbl.db.txn.dnStores[i])
+	}
+	if err := tbl.db.txn.db.Update(ctx, dnStores, tbl.db.databaseId,
+		tbl.tableId, tbl.db.txn.meta.SnapshotTS); err != nil {
+		return nil, err
+	}
+	tbl.meta.modifedBlocks = make([][]BlockMeta, len(tbl.meta.blocks))
+	for _, i := range dnList {
+		blks := tbl.parts[i].data.BlockList(ctx, tbl.db.txn.meta.SnapshotTS,
+			tbl.meta.blocks[i], writes)
+		for _, blk := range blks {
+			if needRead(expr, blk) {
+				ranges = append(ranges, blockMarshal(blk))
+			}
+		}
+		tbl.meta.modifedBlocks[i] = genModifedBlocks(tbl.meta.blocks[i], blks, expr)
+	}
+	return ranges, nil
 }
 
 func (tbl *table) TableDefs(ctx context.Context) ([]engine.TableDef, error) {
