@@ -19,6 +19,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"strings"
 
 	"github.com/go-sql-driver/mysql"
@@ -38,11 +39,11 @@ var (
 			task_status                 int,
 			task_runner                 varchar(16),
 			task_epoch                  int,
-			last_heartbeat              bigint(20),
+			last_heartbeat              bigint,
 			result_code                 int,
 			error_msg                   varchar(1000),
-			create_at                   bigint(20),
-			end_at                      bigint(20))`,
+			create_at                   bigint,
+			end_at                      bigint)`,
 		`create table if not exists sys_cron_task (
 			cron_task_id				int primary key auto_increment,
     		task_metadata_id            varchar(16) unique not null,
@@ -50,10 +51,10 @@ var (
 			task_metadata_context       blob,
 			task_metadata_option 		varchar(1000),
 			cron_expr					varchar(100) not null,
-			next_time					bigint(20),
+			next_time					bigint,
 			trigger_times				int,
-			create_at					bigint(20),
-			update_at					bigint(20))`,
+			create_at					bigint,
+			update_at					bigint)`,
 	}
 
 	insertAsyncTask = `insert into sys_async_task(
@@ -604,7 +605,7 @@ func removeDuplicateTasks(err error, tasks []task.Task) ([]task.Task, error) {
 	if !ok {
 		return nil, err
 	}
-	if me.Number != 1062 {
+	if me.Number != moerr.ER_DUP_ENTRY {
 		return nil, err
 	}
 	key := strings.Split(me.Message, "'")[1]
@@ -624,7 +625,7 @@ func removeDuplicateCronTasks(err error, tasks []task.CronTask) ([]task.CronTask
 	if !ok {
 		return nil, err
 	}
-	if me.Number != 1062 {
+	if me.Number != moerr.ER_DUP_ENTRY {
 		return nil, err
 	}
 	key := strings.Split(me.Message, "'")[1]
