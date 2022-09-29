@@ -25,3 +25,9 @@ func TestTestEngine(t *testing.T) {
 	_ = client
 	_ = compilerCtx
 }
+
+func BenchmarkNew(b *testing.B) {
+	for i := 0; i < b.N; i++ {
+		New(context.Background())
+	}
+}
