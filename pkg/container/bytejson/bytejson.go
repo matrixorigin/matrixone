@@ -242,12 +242,12 @@ func (bj ByteJson) queryValByKey(key []byte) ByteJson {
 	return bj.getObjectVal(idx)
 }
 
-func (bj ByteJson) query(cur []ByteJson, path Path) []ByteJson {
+func (bj ByteJson) query(cur []ByteJson, path *Path) []ByteJson {
 	if path.empty() {
 		cur = append(cur, bj)
 		return cur
 	}
-	sub, nPath := path.remove()
+	sub, nPath := path.step()
 	if sub.tp == subPathIdx && bj.Type == TpCodeArray {
 		cnt := bj.GetElemCnt()
 		if sub.idx < subPathIdxALL || sub.idx >= cnt { // idx is out of range
@@ -257,25 +257,25 @@ func (bj ByteJson) query(cur []ByteJson, path Path) []ByteJson {
 		}
 		if sub.idx == subPathIdxALL {
 			for i := 0; i < cnt; i++ {
-				cur = bj.getArrayElem(i).query(cur, nPath)
+				cur = bj.getArrayElem(i).query(cur, &nPath)
 			}
 		} else {
-			cur = bj.getArrayElem(sub.idx).query(cur, nPath)
+			cur = bj.getArrayElem(sub.idx).query(cur, &nPath)
 		}
 	}
 	if sub.tp == subPathKey && bj.Type == TpCodeObject {
 		cnt := bj.GetElemCnt()
 		if sub.key == "*" {
 			for i := 0; i < cnt; i++ {
-				cur = bj.getObjectVal(i).query(cur, nPath)
+				cur = bj.getObjectVal(i).query(cur, &nPath)
 			}
 		} else {
 			tmp := bj.queryValByKey(string2Slice(sub.key))
-			cur = tmp.query(cur, nPath)
+			cur = tmp.query(cur, &nPath)
 		}
 	}
 	if sub.tp == subPathDoubleStar {
-		cur = bj.query(cur, nPath)
+		cur = bj.query(cur, &nPath)
 		if bj.Type == TpCodeObject {
 			cnt := bj.GetElemCnt()
 			for i := 0; i < cnt; i++ {
@@ -290,14 +290,171 @@ func (bj ByteJson) query(cur []ByteJson, path Path) []ByteJson {
 	}
 	return cur
 }
-func (bj ByteJson) Query(path Path) ByteJson {
+func (bj ByteJson) Query(path *Path) *ByteJson {
 	out := make([]ByteJson, 0, 1)
 	out = bj.query(out, path)
 	if len(out) == 0 {
-		return ByteJson{Type: TpCodeLiteral, Data: []byte{LiteralNull}}
+		return &ByteJson{Type: TpCodeLiteral, Data: []byte{LiteralNull}}
 	}
 	if len(out) == 1 {
-		return out[0]
+		return &out[0]
 	}
 	return mergeToArray(out)
+}
+
+func (bj ByteJson) canUnnest() bool {
+	return bj.Type == TpCodeArray || bj.Type == TpCodeObject
+}
+
+func (bj ByteJson) queryWithSubPath(keys []string, vals []ByteJson, path *Path, pathStr string) ([]string, []ByteJson) {
+	if path.empty() {
+		keys = append(keys, pathStr)
+		vals = append(vals, bj)
+		return keys, vals
+	}
+	sub, nPath := path.step()
+	if sub.tp == subPathIdx && bj.Type == TpCodeArray {
+		cnt := bj.GetElemCnt()
+		if sub.idx < subPathIdxALL || sub.idx >= cnt { // idx is out of range
+			tmp := ByteJson{Type: TpCodeLiteral, Data: []byte{LiteralNull}}
+			newPathStr := fmt.Sprintf("%s[%d]", pathStr, sub.idx)
+			keys = append(keys, newPathStr)
+			vals = append(vals, tmp)
+			return keys, vals
+		}
+		if sub.idx == subPathIdxALL {
+			for i := 0; i < cnt; i++ {
+				newPathStr := fmt.Sprintf("%s[%d]", pathStr, i)
+				keys, vals = bj.getArrayElem(i).queryWithSubPath(keys, vals, &nPath, newPathStr)
+			}
+		} else {
+			newPathStr := fmt.Sprintf("%s[%d]", pathStr, sub.idx)
+			keys, vals = bj.getArrayElem(sub.idx).queryWithSubPath(keys, vals, &nPath, newPathStr)
+		}
+	}
+	if sub.tp == subPathKey && bj.Type == TpCodeObject {
+		cnt := bj.GetElemCnt()
+		if sub.key == "*" {
+			for i := 0; i < cnt; i++ {
+				newPathStr := fmt.Sprintf("%s.%s", pathStr, bj.getObjectKey(i))
+				keys, vals = bj.getObjectVal(i).queryWithSubPath(keys, vals, &nPath, newPathStr)
+			}
+		} else {
+			tmp := bj.queryValByKey(string2Slice(sub.key))
+			newPathStr := fmt.Sprintf("%s.%s", pathStr, sub.key)
+			keys, vals = tmp.queryWithSubPath(keys, vals, &nPath, newPathStr)
+		}
+	}
+	if sub.tp == subPathDoubleStar {
+		keys, vals = bj.queryWithSubPath(keys, vals, &nPath, pathStr)
+		if bj.Type == TpCodeObject {
+			cnt := bj.GetElemCnt()
+			for i := 0; i < cnt; i++ {
+				newPathStr := fmt.Sprintf("%s.%s", pathStr, bj.getObjectKey(i))
+				keys, vals = bj.getObjectVal(i).queryWithSubPath(keys, vals, path, newPathStr) // take care here, the argument is path,not nPath
+			}
+		} else if bj.Type == TpCodeArray {
+			cnt := bj.GetElemCnt()
+			for i := 0; i < cnt; i++ {
+				newPathStr := fmt.Sprintf("%s[%d]", pathStr, i)
+				keys, vals = bj.getArrayElem(i).queryWithSubPath(keys, vals, path, newPathStr) // take care here, the argument is path,not nPath
+			}
+		}
+	}
+	return keys, vals
+}
+
+func (bj ByteJson) unnestWithParams(out []UnnestResult, outer, recursive bool, mode string, pathStr string, this *ByteJson, filters []string) []UnnestResult {
+	if !bj.canUnnest() {
+		index, key := genIndexOrKey(pathStr)
+		tmp := UnnestResult{}
+		maybePut(tmp, "path", pathStr, filters)
+		maybePut(tmp, "value", bj.String(), filters)
+		maybePut(tmp, "index", index, filters)
+		maybePut(tmp, "key", key, filters)
+		maybePut(tmp, "this", this.String(), filters)
+		out = append(out, tmp)
+		return out
+	}
+	if bj.Type == TpCodeObject && mode != "array" {
+		cnt := bj.GetElemCnt()
+		for i := 0; i < cnt; i++ {
+			key := bj.getObjectKey(i)
+			val := bj.getObjectVal(i)
+			newPathStr := fmt.Sprintf("%s.%s", pathStr, key)
+			tmp := UnnestResult{}
+			maybePut(tmp, "path", newPathStr, filters)
+			maybePut(tmp, "value", val.String(), filters)
+			maybePut(tmp, "key", string(key), filters)
+			maybePut(tmp, "this", this.String(), filters)
+			out = append(out, tmp)
+			if val.canUnnest() && recursive {
+				out = val.unnestWithParams(out, outer, recursive, mode, newPathStr, &val, filters)
+			}
+		}
+	}
+	if bj.Type == TpCodeArray && mode != "object" {
+		cnt := bj.GetElemCnt()
+		for i := 0; i < cnt; i++ {
+			val := bj.getArrayElem(i)
+			newPathStr := fmt.Sprintf("%s[%d]", pathStr, i)
+			tmp := UnnestResult{}
+			maybePut(tmp, "path", newPathStr, filters)
+			maybePut(tmp, "value", val.String(), filters)
+			maybePut(tmp, "index", strconv.Itoa(i), filters)
+			maybePut(tmp, "this", this.String(), filters)
+			out = append(out, tmp)
+			if val.canUnnest() && recursive {
+				out = val.unnestWithParams(out, outer, recursive, mode, newPathStr, &val, filters)
+			}
+		}
+	}
+	return out
+}
+
+func (bj ByteJson) unnest(out []UnnestResult, path *Path, outer, recursive bool, mode string, filters []string) ([]UnnestResult, error) {
+
+	keys := make([]string, 0, 1)
+	vals := make([]ByteJson, 0, 1)
+	keys, vals = bj.queryWithSubPath(keys, vals, path, "$")
+	if len(keys) != len(vals) {
+		return nil, moerr.NewInvalidInput("len(key) and len(val) are not equal, len(key)=%d, len(val)=%d", len(keys), len(vals))
+	}
+	for i := 0; i < len(keys); i++ {
+		if vals[i].canUnnest() {
+			out = vals[i].unnestWithParams(out, outer, recursive, mode, keys[i], &vals[i], filters)
+		}
+	}
+	if len(out) == 0 && outer {
+		for i := 0; i < len(keys); i++ {
+			tmp := UnnestResult{}
+			maybePut(tmp, "path", keys[i], filters)
+			maybePut(tmp, "this", vals[i].String(), filters)
+			out = append(out, tmp)
+		}
+	}
+	return out, nil
+}
+
+// Unnest returns a slice of UnnestResult, each UnnestResult contains filtered data, if param filters is nil, return all fields.
+func (bj ByteJson) Unnest(path *Path, outer, recursive bool, mode string, filters []string) ([]UnnestResult, error) {
+	if !checkMode(mode) {
+		return nil, moerr.NewInvalidInput("mode must be one of [object, array, both]")
+	}
+	out := make([]UnnestResult, 0, 1)
+	out, err := bj.unnest(out, path, outer, recursive, mode, filters)
+	return out, err
+}
+
+func maybePut(out UnnestResult, key, value string, filters []string) {
+	if filters == nil {
+		out[key] = value
+		return
+	}
+	for _, filter := range filters {
+		if filter == key {
+			out[key] = value
+			return
+		}
+	}
 }

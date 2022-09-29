@@ -1049,7 +1049,7 @@ func (m *MemHandler) HandleRead(meta txn.TxnMeta, req memoryengine.ReadReq, resp
 			Value:    row.Value,
 			AttrsMap: iter.AttrsMap,
 		}
-		if err := appendNamedRow(tx, m, b, namedRow); err != nil {
+		if err := appendNamedRow(tx, m, 0, b, namedRow); err != nil {
 			return err
 		}
 	}

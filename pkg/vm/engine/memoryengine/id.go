@@ -15,9 +15,12 @@
 package memoryengine
 
 import (
+	"bytes"
 	crand "crypto/rand"
 	"encoding/binary"
 	"math/rand"
+
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
 type ID int64
@@ -45,3 +48,16 @@ func (i ID) IsEmpty() bool {
 var (
 	emptyID ID
 )
+
+func (i ID) ToRowID() types.Rowid {
+	buf := new(bytes.Buffer)
+	if err := binary.Write(buf, binary.LittleEndian, i); err != nil {
+		panic(err)
+	}
+	if buf.Len() > types.RowidSize {
+		panic("id size too large")
+	}
+	var rowID types.Rowid
+	copy(rowID[:], buf.Bytes())
+	return rowID
+}
