@@ -63,8 +63,8 @@ func (e *Engine) Create(ctx context.Context, dbName string, txnOperator client.T
 
 	_, err := DoTxnRequest[CreateDatabaseResp](
 		ctx,
-		e,
-		txnOperator.Write,
+		txnOperator,
+		false,
 		e.allShards,
 		OpCreateDatabase,
 		CreateDatabaseReq{
@@ -83,8 +83,8 @@ func (e *Engine) Database(ctx context.Context, dbName string, txnOperator client
 
 	resps, err := DoTxnRequest[OpenDatabaseResp](
 		ctx,
-		e,
-		txnOperator.Read,
+		txnOperator,
+		true,
 		e.anyShard,
 		OpOpenDatabase,
 		OpenDatabaseReq{
@@ -112,8 +112,8 @@ func (e *Engine) Databases(ctx context.Context, txnOperator client.TxnOperator) 
 
 	resps, err := DoTxnRequest[GetDatabasesResp](
 		ctx,
-		e,
-		txnOperator.Read,
+		txnOperator,
+		true,
 		e.anyShard,
 		OpGetDatabases,
 		GetDatabasesReq{
@@ -136,8 +136,8 @@ func (e *Engine) Delete(ctx context.Context, dbName string, txnOperator client.T
 
 	_, err := DoTxnRequest[DeleteDatabaseResp](
 		ctx,
-		e,
-		txnOperator.Write,
+		txnOperator,
+		false,
 		e.anyShard,
 		OpDeleteDatabase,
 		DeleteDatabaseReq{
