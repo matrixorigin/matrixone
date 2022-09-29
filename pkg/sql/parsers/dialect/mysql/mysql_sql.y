@@ -86,6 +86,7 @@ import (
     selectExpr tree.SelectExpr
 
     insert *tree.Insert
+    replace *tree.Replace
     createOption tree.CreateOption
     createOptions []tree.CreateOption
     indexType tree.IndexType
@@ -345,6 +346,7 @@ import (
 %type <statement> load_data_stmt import_data_stmt
 %type <statement> analyze_stmt
 %type <statement> prepare_stmt prepareable_stmt deallocate_stmt execute_stmt
+%type <statement> replace_stmt
 %type <exportParm> export_data_param_opt
 %type <loadParam> load_param_opt load_param_opt_2
 %type <tailParam> tail_param_opt
@@ -482,6 +484,7 @@ import (
 %type <item> pwd_expire clear_pwd_opt
 %type <str> name_confict distinct_keyword
 %type <insert> insert_data
+%type <replace> replace_data
 %type <rowsExprs> values_list
 %type <str> name_datetime_precision braces_opt name_braces
 %type <str> std_dev_pop extended_opt
@@ -557,6 +560,7 @@ stmt_list:
 stmt:
     create_stmt
 |   insert_stmt
+|   replace_stmt
 |   delete_stmt
 |   drop_stmt
 |   explain_stmt
@@ -1749,6 +1753,7 @@ deallocate_stmt:
 explainable_stmt:
     delete_stmt
 |   insert_stmt
+|   replace_stmt
 |   update_stmt
 |   select_stmt
     {
@@ -2516,6 +2521,70 @@ quick_opt:
 ignore_opt:
 	{}
 |	IGNORE
+
+replace_stmt:
+    REPLACE into_table_name partition_clause_opt replace_data
+    {
+    	rep := $4
+    	rep.Table = $2
+    	rep.PartitionNames = $3
+    	$$ = rep
+    }
+
+replace_data:
+    VALUES values_list
+    {
+        vc := tree.NewValuesClause($2)
+        $$ = &tree.Replace{
+            Rows: tree.NewSelect(vc, nil, nil),
+        }
+    }
+|   select_stmt
+    {
+        $$ = &tree.Replace{
+            Rows: $1,
+        }
+    }
+|   '(' insert_column_list ')' VALUES values_list
+    {
+        vc := tree.NewValuesClause($5)
+        $$ = &tree.Replace{
+            Columns: $2,
+            Rows: tree.NewSelect(vc, nil, nil),
+        }
+    }
+|   '(' ')' VALUES values_list
+    {
+        vc := tree.NewValuesClause($4)
+        $$ = &tree.Replace{
+            Rows: tree.NewSelect(vc, nil, nil),
+        }
+    }
+|   '(' insert_column_list ')' select_stmt
+    {
+        $$ = &tree.Replace{
+            Columns: $2,
+            Rows: $4,
+        }
+    }
+|	SET set_value_list
+	{
+		if $2 == nil {
+			yylex.Error("the set list of replace can not be empty")
+			return 1
+		}
+		var identList tree.IdentifierList
+		var valueList tree.Exprs
+		for _, a := range $2 {
+			identList = append(identList, a.Column)
+			valueList = append(valueList, a.Expr)
+		}
+		vc := tree.NewValuesClause([]tree.Exprs{valueList})
+		$$ = &tree.Replace{
+			Columns: identList,
+			Rows: tree.NewSelect(vc, nil, nil),
+		}
+	}
 
 insert_stmt:
     INSERT into_table_name partition_clause_opt insert_data
