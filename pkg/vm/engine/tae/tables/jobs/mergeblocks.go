@@ -16,8 +16,9 @@ package jobs
 
 import (
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
 	"unsafe"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
 
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -296,7 +297,8 @@ func (task *mergeBlocksTask) Execute() (err error) {
 			if phyAddr.Idx == idx {
 				continue
 			}
-			_, err = BuildColumnIndex(writer.GetWriter(), block, schema.ColDefs[idx], vec, false, false)
+			isPk := idx == sortColDef.Idx
+			_, err = BuildColumnIndex(writer.GetWriter(), block, schema.ColDefs[idx], vec, isPk, isPk)
 			if err != nil {
 				return err
 			}

@@ -525,7 +525,7 @@ func (c *Compile) compileTableFunction(n *plan.Node, ss []*Scope) ([]*Scope, err
 	case "unnest":
 		return c.compileUnnest(n, n.TableDef.TblFunc.Param, ss)
 	default:
-		return nil, moerr.NewNYI(fmt.Sprintf("table function '%s' not supported", n.TableDef.TblFunc.Name))
+		return nil, moerr.NewNotSupported(fmt.Sprintf("table function '%s' not supported", n.TableDef.TblFunc.Name))
 	}
 }
 

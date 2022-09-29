@@ -2277,6 +2277,6 @@ func (builder *QueryBuilder) buildTableFunction(tbl *tree.TableFunction, ctx *Bi
 	case "unnest":
 		return builder.buildUnnest(tbl, ctx)
 	default:
-		return 0, moerr.NewNYI("table function '%s' not supported", id)
+		return 0, moerr.NewNotSupported("table function '%s' not supported", id)
 	}
 }

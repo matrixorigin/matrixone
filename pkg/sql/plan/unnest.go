@@ -252,7 +252,7 @@ func genTblParam(tbl *tree.TableFunction) (*unnest.ExternalParam, error) {
 		_, _, uParam.ColName = o.GetNames()
 	case *tree.NumVal:
 	default:
-		return nil, moerr.NewNYI("unsupported unnest param type: %T", o)
+		return nil, moerr.NewNotSupported("unsupported unnest param type: %T", o)
 	}
 	uParam.Path = tbl.Func.Exprs[1].String()
 	uParam.Outer = tbl.Func.Exprs[2].(*tree.NumVal).String() == "true"
