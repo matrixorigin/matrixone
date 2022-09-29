@@ -15,10 +15,7 @@
 package memoryengine
 
 import (
-	"encoding/gob"
-
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	apipb "github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -52,86 +49,36 @@ const (
 	OpGetLogTail = uint32(apipb.OpCode_OpGetLogTail)
 )
 
-func init() {
-
-	// register TableDef types
-	gob.Register(new(engine.ViewDef))
-	gob.Register(new(engine.CommentDef))
-	gob.Register(new(engine.PartitionDef))
-	gob.Register(new(engine.AttributeDef))
-	gob.Register(new(engine.IndexTableDef))
-	gob.Register(new(engine.PropertiesDef))
-	gob.Register(new(engine.PrimaryIndexDef))
-
-	// register vector column types
-	gob.Register([]bool{})
-	gob.Register([]int8{})
-	gob.Register([]int16{})
-	gob.Register([]int32{})
-	gob.Register([]int64{})
-	gob.Register([]uint8{})
-	gob.Register([]uint16{})
-	gob.Register([]uint32{})
-	gob.Register([]uint64{})
-	gob.Register([]float32{})
-	gob.Register([]float64{})
-	gob.Register([]string{})
-	gob.Register([][]any{})
-	gob.Register([]types.Date{})
-	gob.Register([]types.Datetime{})
-	gob.Register([]types.Timestamp{})
-	gob.Register([]types.Decimal64{})
-	gob.Register([]types.Decimal128{})
-
-	// plan types
-	gob.Register(&plan.Expr_C{})
-	gob.Register(&plan.Expr_P{})
-	gob.Register(&plan.Expr_V{})
-	gob.Register(&plan.Expr_Col{})
-	gob.Register(&plan.Expr_F{})
-	gob.Register(&plan.Expr_Sub{})
-	gob.Register(&plan.Expr_Corr{})
-	gob.Register(&plan.Expr_T{})
-	gob.Register(&plan.Expr_List{})
-	gob.Register(&plan.Const_Ival{})
-	gob.Register(&plan.Const_Dval{})
-	gob.Register(&plan.Const_Sval{})
-	gob.Register(&plan.Const_Bval{})
-	gob.Register(&plan.Const_Uval{})
-	gob.Register(&plan.Const_Fval{})
-	gob.Register(&plan.Const_Dateval{})
-	gob.Register(&plan.Const_Datetimeval{})
-	gob.Register(&plan.Const_Decimal64Val{})
-	gob.Register(&plan.Const_Decimal128Val{})
-	gob.Register(&plan.Const_Timestampval{})
-	gob.Register(&plan.Const_Jsonval{})
-	gob.Register(&plan.Const_Defaultval{})
-
-}
-
-type Request interface {
-	CreateDatabaseReq |
-		OpenDatabaseReq |
+type ReadRequest interface {
+	OpenDatabaseReq |
 		GetDatabasesReq |
-		DeleteDatabaseReq |
-		CreateRelationReq |
-		DeleteRelationReq |
 		OpenRelationReq |
 		GetRelationsReq |
-		AddTableDefReq |
-		DelTableDefReq |
-		DeleteReq |
 		GetPrimaryKeysReq |
 		GetTableDefsReq |
 		GetHiddenKeysReq |
-		TruncateReq |
-		UpdateReq |
-		WriteReq |
 		NewTableIterReq |
 		ReadReq |
 		CloseTableIterReq |
 		TableStatsReq |
 		apipb.SyncLogTailReq
+}
+
+type WriteReqeust interface {
+	CreateDatabaseReq |
+		DeleteDatabaseReq |
+		CreateRelationReq |
+		DeleteRelationReq |
+		AddTableDefReq |
+		DelTableDefReq |
+		DeleteReq |
+		TruncateReq |
+		UpdateReq |
+		WriteReq
+}
+
+type Request interface {
+	ReadRequest | WriteReqeust
 }
 
 type Response interface {
