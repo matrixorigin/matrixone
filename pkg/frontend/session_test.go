@@ -74,6 +74,7 @@ func TestTxnHandler_NewTxn(t *testing.T) {
 	//})
 }
 
+/*
 func TestTxnHandler_CommitTxn(t *testing.T) {
 	convey.Convey("commit txn", t, func() {
 		ctrl := gomock.NewController(t)
@@ -117,6 +118,7 @@ func TestTxnHandler_CommitTxn(t *testing.T) {
 		convey.So(err, convey.ShouldNotBeNil)
 	})
 }
+*/
 
 func TestTxnHandler_RollbackTxn(t *testing.T) {
 	convey.Convey("rollback txn", t, func() {

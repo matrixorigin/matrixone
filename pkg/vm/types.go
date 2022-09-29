@@ -56,6 +56,8 @@ const (
 	IntersectAll
 
 	HashBuild
+
+	Unnest
 )
 
 // Instruction contains relational algebra

@@ -105,6 +105,8 @@ func (ndesc *NodeDescribeImpl) GetNodeBasicInfo(options *ExplainOptions) (string
 		pname = "Minus"
 	case plan.Node_MINUS_ALL:
 		pname = "Minus All"
+	case plan.Node_UNNEST:
+		pname = "Unnest"
 	default:
 		panic("error node type")
 	}
