@@ -134,7 +134,7 @@ func (*PrimaryIndexDef) tableDef() {}
 type Relation interface {
 	Statistics
 
-	Ranges(context.Context) ([][]byte, error)
+	Ranges(context.Context, *plan.Expr) ([][]byte, error)
 
 	TableDefs(context.Context) ([]TableDef, error)
 
