@@ -86,6 +86,7 @@ func (s *Storage) Write(ctx context.Context, txnMeta txn.TxnMeta, op uint32, pay
 			s, txnMeta, payload,
 			s.handler.HandleWrite,
 		)
+
 	case memoryengine.OpPreCommit:
 		return handleWrite(
 			s, txnMeta, payload,
