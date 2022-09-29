@@ -54,15 +54,15 @@ func (e *Engine) Create(ctx context.Context, name string, op client.TxnOperator)
 	if txn == nil {
 		return moerr.NewTxnClosed()
 	}
+	sql := getSql(ctx)
 	accountId, userId, roleId := getAccessInfo(ctx)
-	bat, err := genCreateDatabaseTuple(accountId, userId, roleId, name, e.m)
+	bat, err := genCreateDatabaseTuple(sql, accountId, userId, roleId, name, e.m)
 	if err != nil {
 		return err
 	}
-	defer bat.Clean(e.m)
 	// non-io operations do not need to pass context
 	if err := txn.WriteBatch(INSERT, catalog.MO_CATALOG_ID, catalog.MO_DATABASE_ID,
-		catalog.MO_CATALOG, catalog.MO_DATABASE, bat); err != nil {
+		catalog.MO_CATALOG, catalog.MO_DATABASE, bat, txn.dnStores[0]); err != nil {
 		return err
 	}
 	return nil
@@ -79,7 +79,6 @@ func (e *Engine) Database(ctx context.Context, name string,
 		return nil, err
 	}
 	return &database{
-		m:            e.m,
 		txn:          txn,
 		db:           e.db,
 		databaseId:   id,
@@ -104,14 +103,13 @@ func (e *Engine) Delete(ctx context.Context, name string, op client.TxnOperator)
 	if err != nil {
 		return err
 	}
-	bat, err := genDropDatabaseTuple(id, e.m)
+	bat, err := genDropDatabaseTuple(id, name, e.m)
 	if err != nil {
 		return err
 	}
-	defer bat.Clean(e.m)
 	// non-io operations do not need to pass context
 	if err := txn.WriteBatch(DELETE, catalog.MO_CATALOG_ID, catalog.MO_DATABASE_ID,
-		catalog.MO_CATALOG, catalog.MO_DATABASE, bat); err != nil {
+		catalog.MO_CATALOG, catalog.MO_DATABASE, bat, txn.dnStores[0]); err != nil {
 		return err
 	}
 	return nil
@@ -129,8 +127,9 @@ func (e *Engine) New(ctx context.Context, op client.TxnOperator) error {
 		return err
 	}
 	txn := &Transaction{
+		m:        e.m,
 		db:       e.db,
-		readOnly: false,
+		readOnly: true,
 		meta:     op.Txn(),
 		dnStores: cluster.DNStores,
 		fileMap:  make(map[string]uint64),
@@ -161,8 +160,11 @@ func (e *Engine) Commit(ctx context.Context, op client.TxnOperator) error {
 		return moerr.NewTxnClosed()
 	}
 	defer e.delTransaction(txn)
+	if txn.readOnly {
+		return nil
+	}
 	if e.hasConflict(txn) {
-		return moerr.NewTxnWriteConflict("")
+		return moerr.NewTxnWriteConflict("write conflict")
 	}
 	reqs, err := genWriteReqs(txn.writes)
 	if err != nil {
