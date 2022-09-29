@@ -1429,6 +1429,13 @@ var (
 		}, {
 			input:  `VALUES ROW(1,-2,3), ROW(5,7,9), ROW(4,6,8)`,
 			output: `values row(1, -2, 3), row(5, 7, 9), row(4, 6, 8)`,
+		}, {
+			input:  `VALUES ROW(5,7,9), ROW(1,2,3), ROW(9,10,11) ORDER BY column_1`,
+			output: `values row(5, 7, 9), row(1, 2, 3), row(9, 10, 11) order by column_1`,
+		},
+		{
+			input:  `VALUES ROW(5,7,9), ROW(1,2,3), ROW(9,10,11) ORDER BY column_1 LIMIT 2`,
+			output: `values row(5, 7, 9), row(1, 2, 3), row(9, 10, 11) order by column_1 limit 2`,
 		},
 	}
 )

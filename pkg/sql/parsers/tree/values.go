@@ -65,8 +65,12 @@ func (node *ValuesStatement) Format(ctx *FmtCtx) {
 		ctx.WriteString(")")
 	}
 
-	node.OrderBy.Format(ctx)
+	if len(node.OrderBy) > 0 {
+		ctx.WriteByte(' ')
+		node.OrderBy.Format(ctx)
+	}
 	if node.Limit != nil {
+		ctx.WriteByte(' ')
 		node.Limit.Format(ctx)
 	}
 }
