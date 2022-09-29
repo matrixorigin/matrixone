@@ -52,6 +52,7 @@ func (tbl *table) Ranges(ctx context.Context, expr *plan.Expr) ([][]byte, error)
 	}
 	ranges := make([][]byte, 0, len(tbl.meta.blocks))
 	dnList := needSyncDnStores(expr, tbl.defs, tbl.db.txn.dnStores)
+	tbl.dnList = dnList
 	dnStores := make([]DNStore, len(dnList))
 	for _, i := range dnList {
 		dnStores = append(dnStores, tbl.db.txn.dnStores[i])
@@ -160,5 +161,70 @@ func (tbl *table) GetTableID(ctx context.Context) string {
 
 func (tbl *table) NewReader(ctx context.Context, num int, expr *plan.Expr,
 	ranges [][]byte) ([]engine.Reader, error) {
-	return nil, nil
+	rds := make([]engine.Reader, num)
+	if len(ranges) == 0 {
+		return tbl.newMergeReader(ctx, num, expr)
+	}
+	blks := make([]BlockMeta, len(ranges))
+	for i := range ranges {
+		blks[i] = blockUnmarshal(ranges[i])
+	}
+	if len(ranges) < num {
+		for i := range ranges {
+			rds[i] = &blockReader{
+				ctx:  ctx,
+				blks: []BlockMeta{blks[i]},
+			}
+		}
+		for j := len(ranges); j < num; j++ {
+			rds[j] = &blockReader{
+				ctx: ctx,
+			}
+		}
+		return rds, nil
+	}
+	step := len(ranges) / num
+	if step < 1 {
+		step = 1
+	}
+	for i := 0; i < num; i++ {
+		if i == num-1 {
+			rds[i] = &blockReader{
+				ctx:  ctx,
+				blks: blks[i*step:],
+			}
+		} else {
+			rds[i] = &blockReader{
+				ctx:  ctx,
+				blks: blks[i*step : (i+1)*step],
+			}
+		}
+	}
+	return rds, nil
+}
+
+func (tbl *table) newMergeReader(ctx context.Context, num int,
+	expr *plan.Expr) ([]engine.Reader, error) {
+	var writes [][]Entry
+
+	// consider halloween problem
+	if int64(tbl.db.txn.statementId)-1 > 0 {
+		writes = tbl.db.txn.writes[:tbl.db.txn.statementId-1]
+	}
+	rds := make([]engine.Reader, num)
+	mrds := make([]mergeReader, num)
+	for _, i := range tbl.dnList {
+		rds0, err := tbl.parts[i].data.NewReader(ctx, num, expr,
+			tbl.meta.modifedBlocks[i], tbl.db.txn.meta.SnapshotTS, writes)
+		if err != nil {
+			return nil, err
+		}
+		for i := range rds0 {
+			mrds[i].rds = append(mrds[i].rds, rds0[i])
+		}
+	}
+	for i := range rds {
+		rds[i] = &mrds[i]
+	}
+	return rds, nil
 }

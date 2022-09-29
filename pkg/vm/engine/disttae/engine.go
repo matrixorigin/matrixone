@@ -23,7 +23,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/logservice"
-	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
@@ -240,7 +239,7 @@ func (e *Engine) delTransaction(txn *Transaction) {
 	e.Lock()
 	defer e.Unlock()
 	for i, tmp := range *e.txnHeap {
-		if bytes.Compare(txn.meta.ID, tmp.meta.ID) == 0 {
+		if bytes.Equal(txn.meta.ID, tmp.meta.ID) {
 			heap.Remove(e.txnHeap, i)
 			break
 		}
@@ -248,8 +247,10 @@ func (e *Engine) delTransaction(txn *Transaction) {
 	delete(e.txns, string(txn.meta.ID))
 }
 
-func (e *Engine) MinActiveTimestamp() timestamp.Timestamp {
+/*
+func (e *Engine) minActiveTimestamp() timestamp.Timestamp {
 	e.RLock()
 	defer e.RUnlock()
 	return (*e.txnHeap)[0].meta.SnapshotTS
 }
+*/

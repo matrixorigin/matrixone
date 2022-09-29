@@ -267,7 +267,7 @@ func (txn *Transaction) readTable(ctx context.Context, databaseId uint64, tableI
 		if _, ok := accessed[dn.GetUUID()]; !ok {
 			continue
 		}
-		rds, err := parts[i].data.NewReader(ctx, 1, expr, txn.meta.SnapshotTS, writes)
+		rds, err := parts[i].data.NewReader(ctx, 1, expr, nil, txn.meta.SnapshotTS, writes)
 		if err != nil {
 			return nil, err
 		}
@@ -357,16 +357,20 @@ func blockMarshal(blkInfo BlockMeta) []byte {
 	return nil
 }
 
+func blockUnmarshal(data []byte) BlockMeta {
+	return BlockMeta{}
+}
+
 /*
 // write a block to s3
 func blockWrite(ctx context.Context, blkInfo BlockMeta, bat *batch.Batch) error {
 	//TODO
 	return nil
 }
+*/
 
 // read a block from s3
 func blockRead(ctx context.Context, columns []string, blkInfo BlockMeta) (*batch.Batch, error) {
 	//TODO
 	return nil, nil
 }
-*/

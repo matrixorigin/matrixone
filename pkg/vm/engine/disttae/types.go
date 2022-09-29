@@ -74,8 +74,9 @@ type MVCC interface {
 	Delete(ctx context.Context, bat *api.Batch) error
 	BlockList(ctx context.Context, ts timestamp.Timestamp,
 		blocks []BlockMeta, entries [][]Entry) []BlockMeta
+	// If blocks is empty, it means no merge operation with the files on s3 is required.
 	NewReader(ctx context.Context, readerNumber int, expr *plan.Expr,
-		ts timestamp.Timestamp, entries [][]Entry) ([]engine.Reader, error)
+		blocks []BlockMeta, ts timestamp.Timestamp, entries [][]Entry) ([]engine.Reader, error)
 }
 
 type Engine struct {
@@ -183,6 +184,7 @@ type tableMeta struct {
 type table struct {
 	tableId    uint64
 	tableName  string
+	dnList     []int
 	db         *database
 	meta       *tableMeta
 	parts      Partitions
@@ -207,4 +209,13 @@ type column struct {
 	constraintType  string
 	isHidden        int8
 	isAutoIncrement int8
+}
+
+type blockReader struct {
+	blks []BlockMeta
+	ctx  context.Context
+}
+
+type mergeReader struct {
+	rds []engine.Reader
 }
