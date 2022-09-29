@@ -109,25 +109,25 @@ func makePlan2Uint64ConstExprWithType(v uint64) *plan.Expr {
 	}
 }
 
-func makePlan2Float64ConstExpr(v float64) *plan.Expr_C {
-	return &plan.Expr_C{C: &plan.Const{
-		Isnull: false,
-		Value: &plan.Const_Dval{
-			Dval: v,
-		},
-	}}
-}
+// func makePlan2Float64ConstExpr(v float64) *plan.Expr_C {
+// 	return &plan.Expr_C{C: &plan.Const{
+// 		Isnull: false,
+// 		Value: &plan.Const_Dval{
+// 			Dval: v,
+// 		},
+// 	}}
+// }
 
-func makePlan2Float64ConstExprWithType(v float64) *plan.Expr {
-	return &plan.Expr{
-		Expr: makePlan2Float64ConstExpr(v),
-		Typ: &plan.Type{
-			Id:       int32(types.T_float64),
-			Nullable: false,
-			Size:     8,
-		},
-	}
-}
+// func makePlan2Float64ConstExprWithType(v float64) *plan.Expr {
+// 	return &plan.Expr{
+// 		Expr: makePlan2Float64ConstExpr(v),
+// 		Typ: &plan.Type{
+// 			Id:       int32(types.T_float64),
+// 			Nullable: false,
+// 			Size:     8,
+// 		},
+// 	}
+// }
 
 func makePlan2StringConstExpr(v string) *plan.Expr_C {
 	return &plan.Expr_C{C: &plan.Const{
