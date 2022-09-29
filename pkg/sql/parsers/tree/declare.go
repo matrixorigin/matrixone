@@ -18,6 +18,7 @@ package tree
 type Declare struct {
 	statementImpl
 	Variables  []*VarExpr
+	ColumnType T
 	DefaultVal Expr
 }
 

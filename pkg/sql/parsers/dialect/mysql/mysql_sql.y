@@ -460,6 +460,7 @@ import (
 %type <varAssignmentExpr> var_assignment
 %type <varAssignmentExprs> var_assignment_list
 %type <str> var_name equal_or_assignment
+%type <strs> var_name_list
 %type <expr> set_expr
 %type <setRole> set_role_opt
 %type <setDefaultRole> set_default_role_opt
@@ -503,7 +504,7 @@ import (
 %type <str> field_terminator starting_opt lines_terminated_opt
 %type <lines> load_lines export_lines_opt
 %type <int64Val> ignore_lines
-%type <varExpr> user_variable variable system_variable local_variable
+%type <varExpr> user_variable variable system_variable
 %type <varExprs> variable_list
 %type <loadColumn> columns_or_variable
 %type <loadColumns> columns_or_variable_list columns_or_variable_list_opt
@@ -728,10 +729,6 @@ variable:
     {
         $$ = $1
     }
-|   local_variable
-    {
-        $$ = $1
-    }
 
 system_variable:
     AT_AT_ID
@@ -770,16 +767,6 @@ user_variable:
 //        	yylex.Error("variable syntax error")
 //            return 1
 //        }
-        $$ = &tree.VarExpr{
-            Name: $1,
-            System: false,
-            Global: false,
-        }
-    }
-
-local_variable:
-    ID
-    {
         $$ = &tree.VarExpr{
             Name: $1,
             System: false,
@@ -1566,6 +1553,16 @@ var_name:
 |   ident '.' ident
     {
         $$ = $1 + "." + $3
+    }
+
+var_name_list:
+    var_name
+    {
+        $$ = []tree.Identifier{tree.Identifier($1)}
+    }
+|   var_name_list ',' var_name
+    {
+        $$ = append($1, $3)
     }
 
 transaction_stmt:
@@ -6887,18 +6884,20 @@ do_stmt:
     }
 
 declare_stmt:
-    DECLARE variable_list
+    DECLARE var_name_list column_type
     {
         $$ = &tree.Declare {
             Variables: $2,
+            ColumnType: $3,
             DefaultVal: tree.NewNumValWithType(constant.MakeUnknown(), "null", false, tree.P_null),
         }
     }
     |
-    DECLARE variable_list DEFAULT expression
+    DECLARE var_name_list column_type DEFAULT expression
     {
         $$ = &tree.Declare {
             Variables: $2,
+            ColumnType: $3,
             DefaultVal: $4,
         }
     }
