@@ -194,16 +194,6 @@ func WithInitAction(init bool) tracerProviderOptionFunc {
 	}
 }
 
-type Uint64IdGenerator struct{}
-
-func (M Uint64IdGenerator) NewIDs() (uint64, uint64) {
-	return util.Fastrand64(), util.Fastrand64()
-}
-
-func (M Uint64IdGenerator) NewSpanID() uint64 {
-	return util.Fastrand64()
-}
-
 var _ IDGenerator = &moIDGenerator{}
 
 type moIDGenerator struct{}
