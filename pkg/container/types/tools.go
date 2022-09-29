@@ -1,4 +1,4 @@
-// Copyright 2022 Matrix Origin
+// Copyright 2021 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,22 +12,17 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package testengine
+package types
 
-import (
-	"context"
-	"testing"
-)
+import "github.com/matrixorigin/matrixone/pkg/pb/plan"
 
-func TestTestEngine(t *testing.T) {
-	engine, client, compilerCtx := New(context.Background())
-	_ = engine
-	_ = client
-	_ = compilerCtx
-}
-
-func BenchmarkNew(b *testing.B) {
-	for i := 0; i < b.N; i++ {
-		New(context.Background())
+func NewProtoType(oid T) *plan.Type {
+	typ := New(oid, 0, 0, 0)
+	return &plan.Type{
+		Id:        int32(oid),
+		Size:      typ.Size,
+		Width:     typ.Width,
+		Scale:     typ.Scale,
+		Precision: typ.Precision,
 	}
 }

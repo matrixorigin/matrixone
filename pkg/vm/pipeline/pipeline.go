@@ -16,7 +16,6 @@ package pipeline
 
 import (
 	"bytes"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -70,9 +69,6 @@ func (p *Pipeline) Run(r engine.Reader, proc *process.Process) (bool, error) {
 		}
 		if bat != nil {
 			bat.Cnt = 1
-		}
-		if bat != nil {
-			logutil.Infof("read data: bat.Vecs:%v,attrs:%s,zs:%v", bat.Vecs, bat.Attrs, bat.Zs)
 		}
 		// processing the batch according to the instructions
 		proc.Reg.InputBatch = bat
