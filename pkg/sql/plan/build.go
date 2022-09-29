@@ -122,6 +122,8 @@ func BuildPlan(ctx CompilerContext, stmt tree.Statement) (*Plan, error) {
 		return buildLoad(stmt, ctx)
 	case *tree.PrepareStmt, *tree.PrepareString:
 		return buildPrepare(stmt, ctx)
+	case *tree.Do:
+		return nil, moerr.NewNotSupported(tree.String(stmt, dialect.MYSQL))
 	default:
 		return nil, moerr.NewInternalError("statement: '%v'", tree.String(stmt, dialect.MYSQL))
 	}

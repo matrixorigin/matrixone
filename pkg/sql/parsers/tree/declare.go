@@ -17,15 +17,17 @@ package tree
 // Declare statement
 type Declare struct {
 	statementImpl
-	Variables  []*VarExpr
-	ColumnType T
+	Variables  []string
+	ColumnType *T
 	DefaultVal Expr
 }
 
 func (node *Declare) Format(ctx *FmtCtx) {
 	ctx.WriteString("declare ")
 	for _, v := range node.Variables {
-		v.Format(ctx)
+		ctx.WriteString(v + " ")
 	}
+	node.ColumnType.InternalType.Format(ctx)
+	ctx.WriteString(" default ")
 	node.DefaultVal.Format(ctx)
 }

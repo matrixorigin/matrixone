@@ -1430,11 +1430,11 @@ var (
 			input:  `DO SLEEP(5)`,
 			output: `do sleep(5)`,
 		}, {
-			input:  `DECLARE @a, @b`,
-			output: `declare a, b`,
+			input:  `DECLARE a, b INT`,
+			output: `declare a b int default null`,
 		}, {
-			input:  `DECLARE @a, @b DEFAULT 1`,
-			output: `declare a, b = 1`,
+			input:  `DECLARE a, b INT DEFAULT 1`,
+			output: `declare a b int default 1`,
 		},
 		{
 			input:  `select * from unnest("a") as f`,

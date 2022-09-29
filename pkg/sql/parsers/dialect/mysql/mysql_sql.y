@@ -1561,8 +1561,7 @@ var_name:
 var_name_list:
     var_name
     {
-        $$ = []tree.Identifier{tree.Identifier($1)}
-        
+        $$ = []string{$1}
     }
 |   var_name_list ',' var_name
     {
@@ -7041,7 +7040,7 @@ declare_stmt:
         $$ = &tree.Declare {
             Variables: $2,
             ColumnType: $3,
-            DefaultVal: $4,
+            DefaultVal: $5,
         }
     }
 

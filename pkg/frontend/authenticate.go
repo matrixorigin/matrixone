@@ -2429,7 +2429,7 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 	case *tree.Select:
 		objType = objectTypeTable
 		typs = append(typs, PrivilegeTypeSelect, PrivilegeTypeTableAll /*PrivilegeTypeTableOwnership*/)
-	case *tree.Insert, *tree.Load, *tree.Import:
+	case *tree.Insert, *tree.Load, *tree.Import, *tree.Do:
 		objType = objectTypeTable
 		typs = append(typs, PrivilegeTypeInsert, PrivilegeTypeTableAll /*PrivilegeTypeTableOwnership*/)
 	case *tree.Update:
