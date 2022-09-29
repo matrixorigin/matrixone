@@ -16,7 +16,6 @@ package hashbuild
 
 import (
 	"bytes"
-
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -46,6 +45,7 @@ func Prepare(proc *process.Process, arg any) error {
 	for i, typ := range ap.Typs {
 		ap.ctr.bat.Vecs[i] = vector.New(typ)
 	}
+
 	return nil
 }
 
