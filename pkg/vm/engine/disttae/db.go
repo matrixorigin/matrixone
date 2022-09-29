@@ -36,6 +36,18 @@ func newDB(cli client.TxnClient, dnList []DNStore) *DB {
 	return db
 }
 
+func (db *DB) getPartitions(databaseId, tableId uint64) Partitions {
+	parts, ok := db.tables[[2]uint64{databaseId, tableId}]
+	if !ok { // create a new table
+		parts = make(Partitions, len(db.dnMap))
+		for i := range parts {
+			parts[i] = new(Partition)
+		}
+		db.tables[[2]uint64{databaseId, tableId}] = parts
+	}
+	return parts
+}
+
 func (db *DB) Update(ctx context.Context, dnList []DNStore,
 	databaseId, tableId uint64, ts timestamp.Timestamp) error {
 	op, err := db.cli.New()

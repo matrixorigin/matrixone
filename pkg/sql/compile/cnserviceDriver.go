@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
@@ -58,6 +59,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/semi"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/single"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/top"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/unnest"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -737,6 +740,17 @@ func convertToPipelineInstruction(opr *vm.Instruction, ctx *scopeContext, ctxId 
 			OutputAnyway: t.OutputAnyway,
 			MarkMeaning:  t.MarkMeaning,
 		}
+	case *unnest.Argument:
+		dt, err := t.Es.Extern.Marshal()
+		if err != nil {
+			return ctxId, nil, err
+		}
+		logutil.Infof("unnest marshal: %+v", t.Es.Extern)
+		in.Unnest = &pipeline.Unnest{
+			Attrs:  t.Es.Attrs,
+			Cols:   t.Es.Cols,
+			Extern: dt,
+		}
 	default:
 		return -1, nil, moerr.NewInternalError(fmt.Sprintf("unexpected operator: %v", opr.Op))
 	}
@@ -936,6 +950,20 @@ func convertToVmInstruction(opr *pipeline.Instruction, ctx *scopeContext) (vm.In
 	case vm.MergeOrder:
 		v.Arg = &mergeorder.Argument{
 			Fs: convertToColExecField(opr.OrderBy),
+		}
+	case vm.Unnest:
+		param := &tree.UnnestParam{}
+		err := param.Unmarshal(opr.Unnest.Extern)
+		if err != nil {
+			return v, err
+		}
+		logutil.Infof("unnest unmarshal %+v", param)
+		v.Arg = &unnest.Argument{
+			Es: &unnest.Param{
+				Attrs:  opr.Unnest.Attrs,
+				Cols:   opr.Unnest.Cols,
+				Extern: param,
+			},
 		}
 	default:
 		return v, moerr.NewInternalError(fmt.Sprintf("unexpected operator: %v", opr.Op))

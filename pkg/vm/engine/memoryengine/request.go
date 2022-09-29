@@ -22,8 +22,8 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
 func DoTxnRequest[
@@ -31,9 +31,8 @@ func DoTxnRequest[
 	Req Request,
 ](
 	ctx context.Context,
-	e engine.Engine,
-	// TxnOperator.Read or TxnOperator.Write
-	reqFunc func(context.Context, []txn.TxnRequest) (*rpc.SendResult, error),
+	txnOperator client.TxnOperator,
+	isRead bool,
 	shardsFunc shardsFunc,
 	op uint32,
 	req Req,
@@ -50,6 +49,19 @@ func DoTxnRequest[
 	if err != nil {
 		return nil, err
 	}
+
+	if provider, ok := txnOperator.(OperationHandlerProvider); ok {
+		handler, meta := provider.GetOperationHandler()
+		for _, shard := range shards {
+			resp, e := handle(handler, meta, shard, op, req)
+			resps = append(resps, resp.(Resp))
+			if e != nil {
+				err = e
+			}
+		}
+		return
+	}
+
 	requests := make([]txn.TxnRequest, 0, len(shards))
 	for _, shard := range shards {
 		buf := new(bytes.Buffer)
@@ -75,9 +87,17 @@ func DoTxnRequest[
 	ctx, cancel := context.WithTimeout(ctx, time.Minute*10)
 	defer cancel()
 
-	result, err := reqFunc(ctx, requests)
-	if err != nil {
-		return
+	var result *rpc.SendResult
+	if isRead {
+		result, err = txnOperator.Read(ctx, requests)
+		if err != nil {
+			return
+		}
+	} else {
+		result, err = txnOperator.Write(ctx, requests)
+		if err != nil {
+			return
+		}
 	}
 	for _, resp := range result.Responses {
 		if resp.TxnError != nil {

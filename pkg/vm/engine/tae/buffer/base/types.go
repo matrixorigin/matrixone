@@ -25,8 +25,9 @@ import (
 )
 
 var (
-	ErrNoSpace  = moerr.NewInternalError("buffer: no space left")
-	ErrNotFound = moerr.NewInternalError("buffer: node not found")
+	ErrNoSpace       = moerr.NewInternalError("buffer: no space left")
+	ErrNotFound      = moerr.NewInternalError("buffer: node not found")
+	ErrDuplicataNode = moerr.NewInternalError("buffer: duplicate node")
 )
 
 type MemoryFreeFunc func(IMemoryNode)
@@ -104,7 +105,8 @@ type INodeManager interface {
 	RUnlock()
 	String() string
 	Count() int
-	RegisterNode(INode)
+	Add(INode) error
+	RegisterNode(INode) error
 	UnregisterNode(INode)
 	Pin(INode) INodeHandle
 	PinByKey(any) (INodeHandle, error)

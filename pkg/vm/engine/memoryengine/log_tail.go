@@ -33,8 +33,8 @@ func (t *Table) GetLogTail(
 
 	resps, err := DoTxnRequest[apipb.SyncLogTailResp](
 		ctx,
-		t.engine,
-		t.txnOperator.Read,
+		t.txnOperator,
+		true,
 		thisShard(targetShard),
 		OpGetLogTail,
 		apipb.SyncLogTailReq{

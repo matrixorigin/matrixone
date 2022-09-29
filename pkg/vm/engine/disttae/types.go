@@ -34,6 +34,17 @@ const (
 	DELETE
 )
 
+const (
+	MO_DATABASE_ID_NAME_IDX       = 1
+	MO_DATABASE_ID_ACCOUNT_IDX    = 2
+	MO_DATABASE_LIST_ACCOUNT_IDX  = 1
+	MO_TABLE_ID_NAME_IDX          = 1
+	MO_TABLE_ID_DATABASE_ID_IDX   = 2
+	MO_TABLE_ID_ACCOUNT_IDX       = 3
+	MO_TABLE_LIST_DATABASE_ID_IDX = 1
+	MO_TABLE_LIST_ACCOUNT_IDX     = 2
+)
+
 type DNStore = logservice.DNStore
 
 // tae's block metadata, which is currently just an empty one,
@@ -67,7 +78,8 @@ type Cache interface {
 // mvcc is the core data structure of cn and is used to
 // maintain multiple versions of logtail data for a table's partition
 type MVCC interface {
-	CheckPoint(ts timestamp.Timestamp) error
+	RowsCount(ctx context.Context, ts timestamp.Timestamp) int64
+	CheckPoint(ctx context.Context, ts timestamp.Timestamp) error
 	Insert(ctx context.Context, bat *api.Batch) error
 	Delete(ctx context.Context, bat *api.Batch) error
 	BlockList(ctx context.Context, ts timestamp.Timestamp,
@@ -123,6 +135,7 @@ type Transaction struct {
 	// every statement is an element
 	writes   [][]Entry
 	dnStores []DNStore
+	m        *mheap.Mheap
 }
 
 // Entry represents a delete/insert
@@ -145,15 +158,17 @@ type database struct {
 	databaseId   uint64
 	databaseName string
 	db           *DB
-	m            *mheap.Mheap
 	txn          *Transaction
 }
 
 type table struct {
-	tableId   uint64
-	tableName string
-	db        *database
-	defs      []engine.TableDef
+	tableId    uint64
+	tableName  string
+	db         *database
+	parts      Partitions
+	insertExpr *plan.Expr
+	deleteExpr *plan.Expr
+	defs       []engine.TableDef
 }
 
 type column struct {

@@ -16,8 +16,12 @@ package trace
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
+	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/prashantv/gostub"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"testing"
 )
@@ -40,7 +44,6 @@ func TestStatementInfo_Report_EndStatement(t *testing.T) {
 		Error                error
 		ResponseAt           util.TimeNano
 		Duration             uint64
-		ExecPlanStats        any
 
 		doReport bool
 		doExport bool
@@ -128,7 +131,6 @@ func TestStatementInfo_Report_EndStatement(t *testing.T) {
 				Error:                tt.fields.Error,
 				ResponseAt:           tt.fields.ResponseAt,
 				Duration:             tt.fields.Duration,
-				ExecPlanStats:        tt.fields.ExecPlanStats,
 			}
 			if tt.fields.doExport && !tt.fields.doReport {
 				t.Errorf("export(%v) need report(%v) first.", tt.fields.doExport, tt.fields.doReport)
@@ -145,6 +147,144 @@ func TestStatementInfo_Report_EndStatement(t *testing.T) {
 			stmCtx := ContextWithStatement(tt.args.ctx, s)
 			EndStatement(stmCtx, tt.args.err)
 			require.Equal(t, tt.wantReportCnt, gotCnt)
+		})
+	}
+}
+
+var realNoExecPlanJsonResult = `{"code":200,"message":"NO ExecPlan Serialize function","steps":null,"success":false,"uuid":"00000000-0000-0000-0000-000000000000"}`
+var dummyNoExecPlanJsonResult = `{"code":200,"message":"no exec plan"}`
+var dummyNoExecPlanJsonResult2 = `{"func":"dummy2","code":200,"message":"no exec plan"}`
+
+var dummySerializeExecPlan = func(plan any, _ uuid.UUID) []byte {
+	if plan == nil {
+		return []byte(dummyNoExecPlanJsonResult)
+	}
+	json, err := json.Marshal(plan)
+	if err != nil {
+		return []byte(fmt.Sprintf(`{"err": %q}`, err.Error()))
+	}
+	return json
+}
+
+var dummySerializeExecPlan2 = func(plan any, _ uuid.UUID) []byte {
+	if plan == nil {
+		return []byte(dummyNoExecPlanJsonResult2)
+	}
+	json, err := json.Marshal(plan)
+	if err != nil {
+		return []byte(fmt.Sprintf(`{"func":"dymmy2","err": %q}`, err.Error()))
+	}
+	val := fmt.Sprintf(`{"func":"dummy2","result":%s}`, json)
+	return []byte(val)
+}
+
+func TestStatementInfo_ExecPlan2Json(t *testing.T) {
+	type args struct {
+		setDefault        func()
+		ExecPlan          any
+		SerializeExecPlan SerializeExecPlanFunc
+	}
+
+	dummyExecPlan := map[string]any{"key": "val", "int": 1}
+	defaultEPJson := `{"int":1,"key":"val"}`
+	dummyEPJson := `{"func":"dummy2","result":{"int":1,"key":"val"}}`
+
+	var setDefaultNil = func() {
+		SetDefaultSerializeExecPlan(nil)
+	}
+	var setDefaultDummy = func() {
+		SetDefaultSerializeExecPlan(dummySerializeExecPlan)
+	}
+
+	tests := []struct {
+		name string
+		args args
+		want string
+	}{
+		{
+			name: "nil",
+			args: args{
+				setDefault:        setDefaultNil,
+				ExecPlan:          nil,
+				SerializeExecPlan: nil,
+			},
+			want: realNoExecPlanJsonResult,
+		},
+		{
+			name: "nil_ep_nil",
+			args: args{
+				setDefault:        setDefaultNil,
+				ExecPlan:          dummyExecPlan,
+				SerializeExecPlan: nil,
+			},
+			want: realNoExecPlanJsonResult,
+		},
+		{
+			name: "dummyDefault_nil_nil",
+			args: args{
+				setDefault:        setDefaultDummy,
+				ExecPlan:          nil,
+				SerializeExecPlan: nil,
+			},
+			want: dummyNoExecPlanJsonResult,
+		},
+		{
+			name: "dummyDefault_ep_nil",
+			args: args{
+				setDefault:        setDefaultDummy,
+				ExecPlan:          dummyExecPlan,
+				SerializeExecPlan: nil,
+			},
+			want: defaultEPJson,
+		},
+		{
+			name: "dummyDefault_ep_Serialize",
+			args: args{
+				setDefault:        setDefaultDummy,
+				ExecPlan:          dummyExecPlan,
+				SerializeExecPlan: dummySerializeExecPlan2,
+			},
+			want: dummyEPJson,
+		},
+		{
+			name: "nil_ep_Serialize",
+			args: args{
+				setDefault:        setDefaultNil,
+				ExecPlan:          dummyExecPlan,
+				SerializeExecPlan: dummySerializeExecPlan2,
+			},
+			want: dummyEPJson,
+		},
+		{
+			name: "dummyDefault_nil_Serialize",
+			args: args{
+				setDefault:        setDefaultDummy,
+				ExecPlan:          nil,
+				SerializeExecPlan: dummySerializeExecPlan2,
+			},
+			want: dummyNoExecPlanJsonResult2,
+		},
+		{
+			name: "nil_nil_Serialize",
+			args: args{
+				setDefault:        setDefaultNil,
+				ExecPlan:          nil,
+				SerializeExecPlan: dummySerializeExecPlan2,
+			},
+			want: dummyNoExecPlanJsonResult2,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tt.args.setDefault()
+			s := &StatementInfo{}
+			s.SetExecPlan(tt.args.ExecPlan, tt.args.SerializeExecPlan)
+			got := s.ExecPlan2Json()
+			assert.Equalf(t, tt.want, got, "ExecPlan2Json()")
+
+			mapper := new(map[string]any)
+			err := json.Unmarshal([]byte(got), mapper)
+			require.Nil(t, err, "jons.Unmarshal failed")
 		})
 	}
 }
