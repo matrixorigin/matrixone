@@ -614,20 +614,15 @@ func (v *Vector) Free(m *mheap.Mheap) {
 		// XXX: Should we panic, or this is really an Noop?
 		return
 	}
-	if v.IsConst() {
+	if !v.IsConst() {
 		// const vector's data & area allocate with nil mheap
 		// so we can't free it by using mheap.
-		v.data = []byte{}
-		v.colFromData()
-		v.area = nil
-	} else {
 		mheap.Free(m, v.data)
-		v.data = []byte{}
-		v.colFromData()
 		mheap.Free(m, v.area)
-		v.area = nil
 	}
-
+	v.data = []byte{}
+	v.colFromData()
+	v.area = nil
 }
 
 func (v *Vector) FreeOriginal(m *mheap.Mheap) {
