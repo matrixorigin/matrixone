@@ -180,4 +180,10 @@ type Handler interface {
 		req apipb.SyncLogTailReq,
 		resp *apipb.SyncLogTailResp,
 	) error
+
+	HandlePreCommit(
+		meta txn.TxnMeta,
+		req apipb.PrecommitWriteCmd,
+		resp *apipb.SyncLogTailResp,
+	) error
 }
