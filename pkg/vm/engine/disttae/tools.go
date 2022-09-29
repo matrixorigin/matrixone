@@ -16,7 +16,6 @@ package disttae
 
 import (
 	"context"
-	"fmt"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -769,6 +768,8 @@ func partitionBatch(bat *batch.Batch, expr *plan.Expr, m *mheap.Mheap, dnNum int
 	return bats, nil
 }
 
+/*
 func genMetaTableName(id uint64) string {
 	return fmt.Sprintf("_%v_meta", id)
 }
+*/
