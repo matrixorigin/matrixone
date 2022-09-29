@@ -162,6 +162,19 @@ SELECT t1.n2, t2.n2 FROM t1, t2;
 DROP TABLE IF EXISTS t1;
 DROP TABLE IF EXISTS t2;
 
+-- UPDATE Multi Primary Key
+CREATE TABLE nation1(
+    id INT PRIMARY KEY,
+    name VARCHAR(50)
+);
+CREATE TABLE nation2(
+    id INT PRIMARY KEY,
+    area VARCHAR(50)
+);
+INSERT INTO nation1() VALUES(1,'CN'), (2,'US'),(3,'UK');
+INSERT INTO nation2() VALUES(1,'AS'), (2,'NA'),(4,'EU');
+-- UPDATE Multi Primary Key
+--UPDATE nation1,nation2 SET nation1.id = 5,nation2.id=6 WHERE nation1.id = nation2.id;
 
-
-
+DROP TABLE nation1;
+DROP TABLE nation2;
