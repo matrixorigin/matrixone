@@ -62,16 +62,26 @@ func (m *Mheap) HostSize() int64 {
 }
 
 func Free(m *Mheap, data []byte) {
-	m.Gm.Free(int64(cap(data)))
+	// The Grow() may be called with nil *Mheap
+	// So need to check mheap before call Free()
+	if m != nil {
+		m.Gm.Free(int64(cap(data)))
+	}
 }
+
 func (m *Mheap) Free(data []byte) {
 	Free(m, data)
 }
 
 func Alloc(m *Mheap, size int64) ([]byte, error) {
-	data := mempool.Alloc(m.Mp, int(size))
-	if err := m.Gm.Alloc(int64(cap(data))); err != nil {
-		return nil, err
+	var data []byte
+	if m == nil {
+		data = make([]byte, size)
+	} else {
+		data = mempool.Alloc(m.Mp, int(size))
+		if err := m.Gm.Alloc(int64(cap(data))); err != nil {
+			return nil, err
+		}
 	}
 	return data[:size], nil
 }
