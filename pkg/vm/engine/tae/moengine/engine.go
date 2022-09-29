@@ -16,8 +16,9 @@ package moengine
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -140,6 +141,10 @@ func (e *txnEngine) GetDatabase(ctx context.Context, name string, txnHandle Txn)
 	}
 	db := newDatabase(h)
 	return db, nil
+}
+
+func (e *txnEngine) GetTAE(_ context.Context) *db.DB {
+	return e.impl
 }
 
 func (e *txnEngine) Nodes() (engine.Nodes, error) {
