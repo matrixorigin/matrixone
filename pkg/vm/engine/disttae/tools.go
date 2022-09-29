@@ -16,6 +16,7 @@ package disttae
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -474,13 +475,39 @@ func genColumnInfoExpr(accountId uint32, databaseId, tableId uint64) *plan.Expr 
 }
 
 // genInsertExpr used to generate an expression to partition table data
-func genInsertExpr(defs []engine.TableDef) *plan.Expr {
-	return nil
+func genInsertExpr(defs []engine.TableDef, dnNum int) *plan.Expr {
+	var args []*plan.Expr
+
+	for i, def := range defs {
+		if attr, ok := def.(*engine.AttributeDef); ok {
+			if attr.Attr.Primary {
+				args = append(args, newColumnExpr(i, attr.Attr.Type.Oid, attr.Attr.Name))
+			}
+		}
+	}
+	return plantool.MakeExpr("%", []*plan.Expr{
+		plantool.MakeExpr("hash_value", args),
+		newIntConstVal(types.T_int64, int64(dnNum)),
+	})
 }
 
 // genDeleteExpr used to generate an expression to partition table data
-func genDeleteExpr(defs []engine.TableDef) *plan.Expr {
-	return nil
+func genDeleteExpr(defs []engine.TableDef, dnNum int) *plan.Expr {
+	var args []*plan.Expr
+
+	cnt := 1
+	for _, def := range defs {
+		if attr, ok := def.(*engine.AttributeDef); ok {
+			if attr.Attr.Primary {
+				args = append(args, newColumnExpr(cnt, attr.Attr.Type.Oid, attr.Attr.Name))
+				cnt++
+			}
+		}
+	}
+	return plantool.MakeExpr("%", []*plan.Expr{
+		plantool.MakeExpr("hash_value", args),
+		newIntConstVal(types.T_int64, int64(dnNum)),
+	})
 }
 
 func newIntConstVal(oid types.T, v any) *plan.Expr {
@@ -768,8 +795,48 @@ func partitionBatch(bat *batch.Batch, expr *plan.Expr, m *mheap.Mheap, dnNum int
 	return bats, nil
 }
 
-/*
+func genDatabaseKey(ctx context.Context, name string) databaseKey {
+	return databaseKey{
+		name:      name,
+		accountId: getAccountId(ctx),
+	}
+}
+
+func genTableKey(ctx context.Context, name string, databaseId uint64) tableKey {
+	return tableKey{
+		name:       name,
+		databaseId: databaseId,
+		accountId:  getAccountId(ctx),
+	}
+}
+
 func genMetaTableName(id uint64) string {
 	return fmt.Sprintf("_%v_meta", id)
 }
-*/
+
+func genBlockMetas(rows [][]any) []BlockMeta {
+	return []BlockMeta{}
+}
+
+func inBlockList(blk BlockMeta, blks []BlockMeta) bool {
+	/* TODO
+	for i := range blks {
+		if blk.Eq(blks[i]) {
+			return true
+		}
+	}
+	*/
+	return false
+}
+
+func genModifedBlocks(orgs, modfs []BlockMeta, expr *plan.Expr) []BlockMeta {
+	blks := make([]BlockMeta, 0, len(orgs)-len(modfs))
+	for i, blk := range orgs {
+		if !inBlockList(blk, modfs) {
+			if needRead(expr, blk) {
+				blks = append(blks, orgs[i])
+			}
+		}
+	}
+	return blks
+}

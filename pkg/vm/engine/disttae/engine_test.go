@@ -14,22 +14,7 @@
 
 package disttae
 
-import (
-	"context"
-	"math/rand"
-	"testing"
-
-	"github.com/google/uuid"
-	"github.com/matrixorigin/matrixone/pkg/pb/logservice"
-	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
-	"github.com/matrixorigin/matrixone/pkg/pb/txn"
-	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
-	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
-	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
-	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
-	"github.com/stretchr/testify/require"
-)
-
+/*
 type testTxnOperator struct {
 	meta txn.TxnMeta
 }
@@ -38,7 +23,7 @@ func TestCache(t *testing.T) {
 	db := new(DB)
 	ctx := context.Background()
 	ts := newTimestamp(rand.Int63())
-	//	_ = db.Update(ctx, nil, 0, 0, ts)
+	_ = db.Update(ctx, nil, 0, 0, ts)
 	_ = db.BlockList(ctx, nil, 0, 0, ts, nil)
 	_, _ = db.NewReader(ctx, 0, nil, nil, 0, 0, ts, nil)
 }
@@ -53,20 +38,18 @@ func TestEngine(t *testing.T) {
 	e := New(m, ctx, nil, getClusterDetails)
 	err := e.New(ctx, txnOp)
 	require.NoError(t, err)
-	/*
-		err = e.Create(ctx, "test", txnOp)
-		require.NoError(t, err)
-		err = e.Delete(ctx, "test", txnOp)
-		require.NoError(t, err)
-		err = e.Commit(ctx, txnOp)
-		require.NoError(t, err)
-		err = e.Rollback(ctx, txnOp)
-		require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnClosed))
-		_, err = e.Nodes()
-		require.NoError(t, err)
-		hints := e.Hints()
-		require.Equal(t, time.Minute*5, hints.CommitOrRollbackTimeout)
-	*/
+	err = e.Create(ctx, "test", txnOp)
+	require.NoError(t, err)
+	err = e.Delete(ctx, "test", txnOp)
+	require.NoError(t, err)
+	err = e.Commit(ctx, txnOp)
+	require.NoError(t, err)
+	err = e.Rollback(ctx, txnOp)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnClosed))
+	_, err = e.Nodes()
+	require.NoError(t, err)
+	hints := e.Hints()
+	require.Equal(t, time.Minute*5, hints.CommitOrRollbackTimeout)
 }
 
 func TestTransaction(t *testing.T) {
@@ -78,14 +61,12 @@ func TestTransaction(t *testing.T) {
 	txn.writes = append(txn.writes, make([]Entry, 0, 1))
 	ro := txn.ReadOnly()
 	require.Equal(t, false, ro)
-	/*
-		err := txn.WriteBatch(INSERT, 0, 0, "test", "test", new(batch.Batch))
-		require.NoError(t, err)
-		txn.IncStatementId()
-		txn.RegisterFile("test")
-		err = txn.WriteFile(DELETE, 0, 0, "test", "test", "test")
-		require.NoError(t, err)
-	*/
+	err := txn.WriteBatch(INSERT, 0, 0, "test", "test", new(batch.Batch))
+	require.NoError(t, err)
+	txn.IncStatementId()
+	txn.RegisterFile("test")
+	err = txn.WriteFile(DELETE, 0, 0, "test", "test", "test")
+	require.NoError(t, err)
 	ctx := context.TODO()
 	blockWrite(ctx, BlockMeta{}, nil)
 	_, _ = txn.getRow(ctx, 0, 0, nil, nil, nil)
@@ -101,19 +82,16 @@ func TestTable(t *testing.T) {
 	_, _ = tbl.TableDefs(ctx)
 	_, _ = tbl.GetPrimaryKeys(ctx)
 	_, _ = tbl.GetHideKeys(ctx)
-	/*
-		_ = tbl.Write(ctx, nil)
-		_ = tbl.Update(ctx, nil)
-		_ = tbl.Delete(ctx, nil, "test")
-		_, _ = tbl.Truncate(ctx)
-		_ = tbl.AddTableDef(ctx, nil)
-		_ = tbl.DelTableDef(ctx, nil)
-		_ = tbl.GetTableID(ctx)
-		_, _ = tbl.NewReader(ctx, 0, nil, nil)
-	*/
+	_ = tbl.Write(ctx, nil)
+	_ = tbl.Update(ctx, nil)
+	_ = tbl.Delete(ctx, nil, "test")
+	_, _ = tbl.Truncate(ctx)
+	_ = tbl.AddTableDef(ctx, nil)
+	_ = tbl.DelTableDef(ctx, nil)
+	_ = tbl.GetTableID(ctx)
+	_, _ = tbl.NewReader(ctx, 0, nil, nil)
 }
 
-/*
 func TestTools(t *testing.T) {
 	_ = genCreateTableTuple("test")
 	_ = genCreateColumnTuple(nil)
@@ -122,7 +100,6 @@ func TestTools(t *testing.T) {
 	_ = genDatabaseIdExpr("test")
 	_ = genTableIdExpr(0, "test")
 }
-*/
 
 func newTestTxnOperator() *testTxnOperator {
 	return &testTxnOperator{
@@ -174,3 +151,4 @@ func newTxnMeta(snapshotTS int64) txn.TxnMeta {
 		SnapshotTS: newTimestamp(snapshotTS),
 	}
 }
+*/
