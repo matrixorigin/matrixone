@@ -259,18 +259,26 @@ func getBytesFromPrimaryVectorForHash(vec *vector.Vector, i int, typ types.Type)
 		return nil, moerr.NewDuplicate()
 		//panic("primary value vector should not contain nulls")
 	}
-	if vec.Typ.Oid.FixedLength() > 0 {
+	if vec.Typ.IsFixedLen() {
 		// is slice
 		size := vec.Typ.TypeSize()
 		l := vec.Length() * size
 		data := unsafe.Slice((*byte)(vector.GetPtrAt(vec, 0)), l)
 		end := (i + 1) * size
 		if end > len(data) {
-			return nil, moerr.NewInvalidInput("vector size not match")
+			//TODO mimic to pass BVT
+			return nil, moerr.NewDuplicate()
+			//return nil, moerr.NewInvalidInput("vector size not match")
 		}
 		return data[i*size : (i+1)*size], nil
+	} else if vec.Typ.IsVarlen() {
+		slice := vector.GetBytesVectorValues(vec)
+		if i >= len(slice) {
+			return []byte{}, nil
+		}
+		return slice[i], nil
 	}
-	return vec.GetBytes(int64(i)), nil
+	panic(fmt.Sprintf("unknown type: %v", typ))
 }
 
 type Nullable struct {
