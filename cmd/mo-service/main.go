@@ -113,7 +113,7 @@ func startService(cfg *Config, stopper *stopper.Stopper) error {
 
 	switch strings.ToUpper(cfg.ServiceType) {
 	case cnServiceType:
-		return startCNService(cfg, stopper, fs)
+		return startCNService(cfg, stopper, fs, ts)
 	case dnServiceType:
 		return startDNService(cfg, stopper, fs)
 	case logServiceType:
@@ -127,6 +127,7 @@ func startCNService(
 	cfg *Config,
 	stopper *stopper.Stopper,
 	fileService fileservice.FileService,
+	taskService taskservice.TaskService,
 ) error {
 	return stopper.RunNamedTask("cn-service", func(ctx context.Context) {
 		c := cfg.getCNServiceConfig()
@@ -134,6 +135,7 @@ func startCNService(
 			&c,
 			ctx,
 			fileService,
+			taskService,
 			cnservice.WithMessageHandle(compile.CnServerMessageHandler),
 		)
 		if err != nil {
