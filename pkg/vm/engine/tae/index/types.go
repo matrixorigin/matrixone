@@ -55,7 +55,6 @@ type SecondaryIndex interface {
 	Insert(key any, offset uint32, txn txnif.TxnReader) (txnnode *txnbase.TxnMVCCNode, err error)
 	BatchInsert(keys *KeysCtx, startRow uint32, upsert bool, txn txnif.TxnReader) (txnNode *txnbase.TxnMVCCNode, err error)
 	Delete(key any, ts types.TS) (old uint32, txnNode *txnbase.TxnMVCCNode, err error)
-	GetMaxDeleteTS() types.TS
 	Search(key any) (uint32, error)
 	Contains(key any) bool
 	ContainsAny(keysCtx *KeysCtx, rowmask *roaring.Bitmap) bool

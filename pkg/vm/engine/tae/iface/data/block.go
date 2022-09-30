@@ -47,9 +47,9 @@ type BlockAppender interface {
 		node txnif.AppendNode, created bool, n uint32, err error)
 	ApplyAppend(bat *containers.Batch,
 		txn txnif.AsyncTxn,
-	) (*txnbase.TxnMVCCNode, int, error)
+	) ([]*txnbase.TxnMVCCNode, int, error)
 	IsAppendable() bool
-	ReplayAppend(bat *containers.Batch) (*txnbase.TxnMVCCNode, error)
+	ReplayAppend(bat *containers.Batch) ([]*txnbase.TxnMVCCNode, error)
 	Close()
 }
 
@@ -57,7 +57,7 @@ type BlockReplayer interface {
 	OnReplayDelete(node txnif.DeleteNode) (err error)
 	OnReplayUpdate(colIdx uint16, node txnif.UpdateNode) (err error)
 	OnReplayAppend(node txnif.AppendNode) (err error)
-	OnReplayAppendPayload(bat *containers.Batch) (txnNode *txnbase.TxnMVCCNode, err error)
+	OnReplayAppendPayload(bat *containers.Batch) (txnNodes []*txnbase.TxnMVCCNode, err error)
 }
 
 type Block interface {

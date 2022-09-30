@@ -61,8 +61,6 @@ func (idx *mutableIndex) IsKeyDeleted(key any, ts types.TS) (deleted bool, exist
 	return idx.art.IsKeyDeleted(key, ts)
 }
 
-func (idx *mutableIndex) GetMaxDeleteTS() types.TS { return idx.art.GetMaxDeleteTS() }
-
 func (idx *mutableIndex) Delete(key any, ts types.TS) (err error) {
 	defer func() {
 		err = TranslateError(err)

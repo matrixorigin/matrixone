@@ -832,7 +832,10 @@ func (blk *dataBlock) BatchDedup(txn txnif.AsyncTxn, pks containers.Vector, rowm
 		}
 		// Check with deletes map
 		// If txn start ts is bigger than deletes max ts, skip scanning deletes
-		if ts.Greater(blk.pkIndex.GetMaxDeleteTS()) {
+		// if ts.Greater(blk.pkIndex.GetMaxDeleteTS()) {
+		// 	return err
+		// }
+		if keyselects == nil {
 			return err
 		}
 		it := keyselects.Iterator()

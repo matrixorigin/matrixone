@@ -75,9 +75,6 @@ type Index interface {
 	// If existed is false, the specified key was not found in deletes map
 	IsKeyDeleted(key any, ts types.TS) (deleted bool, existed bool)
 	HasDeleteFrom(key any, ts types.TS) bool
-	GetMaxDeleteTS() types.TS
-
-	// RevertUpsert(keys containers.Vector, ts types.TS) error
 
 	String() string
 
@@ -121,10 +118,6 @@ func (idx *defaultIndexImpl) IsKeyDeleted(key any, ts types.TS) (deleted bool, e
 }
 
 func (idx *defaultIndexImpl) HasDeleteFrom(key any, fromts types.TS) bool {
-	panic("not supported")
-}
-
-func (idx *defaultIndexImpl) GetMaxDeleteTS() types.TS {
 	panic("not supported")
 }
 

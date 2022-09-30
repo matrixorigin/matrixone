@@ -113,11 +113,11 @@ func (blk *dataBlock) OnReplayAppend(node txnif.AppendNode) (err error) {
 	return
 }
 
-func (blk *dataBlock) OnReplayAppendPayload(bat *containers.Batch) (txnNode *txnbase.TxnMVCCNode, err error) {
+func (blk *dataBlock) OnReplayAppendPayload(bat *containers.Batch) (txnNodes []*txnbase.TxnMVCCNode, err error) {
 	appender, err := blk.MakeAppender()
 	if err != nil {
 		return
 	}
-	txnNode, err = appender.ReplayAppend(bat)
+	txnNodes, err = appender.ReplayAppend(bat)
 	return
 }

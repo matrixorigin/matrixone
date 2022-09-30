@@ -72,7 +72,7 @@ func (appender *blockAppender) PrepareAppend(
 		appender.placeholder+appender.rows)
 	return
 }
-func (appender *blockAppender) ReplayAppend(bat *containers.Batch) (txnNode *txnbase.TxnMVCCNode, err error) {
+func (appender *blockAppender) ReplayAppend(bat *containers.Batch) (txnNodes []*txnbase.TxnMVCCNode, err error) {
 	var from int
 	if from, err = appender.node.ApplyAppend(bat, nil); err != nil {
 		return
@@ -85,9 +85,12 @@ func (appender *blockAppender) ReplayAppend(bat *containers.Batch) (txnNode *txn
 			continue
 		}
 		keysCtx.Keys = bat.Vecs[colDef.Idx]
-		// TODO replay
+		var txnNode *txnbase.TxnMVCCNode
 		if txnNode, err = appender.node.block.indexes[colDef.Idx].BatchUpsert(keysCtx, from, nil); err != nil {
 			panic(err)
+		}
+		if txnNode != nil {
+			txnNodes = append(txnNodes, txnNode)
 		}
 	}
 	appender.node.block.meta.GetSegment().GetTable().AddRows(uint64(bat.Length()))
@@ -96,7 +99,7 @@ func (appender *blockAppender) ReplayAppend(bat *containers.Batch) (txnNode *txn
 }
 func (appender *blockAppender) ApplyAppend(
 	bat *containers.Batch,
-	txn txnif.AsyncTxn) (txnNode *txnbase.TxnMVCCNode, from int, err error) {
+	txn txnif.AsyncTxn) (txnNodes []*txnbase.TxnMVCCNode, from int, err error) {
 	appender.node.block.mvcc.Lock()
 	defer appender.node.block.mvcc.Unlock()
 	from, err = appender.node.ApplyAppend(bat, txn)
@@ -109,8 +112,12 @@ func (appender *blockAppender) ApplyAppend(
 			continue
 		}
 		keysCtx.Keys = bat.Vecs[colDef.Idx]
+		var txnNode *txnbase.TxnMVCCNode
 		if txnNode, err = appender.node.block.indexes[colDef.Idx].BatchUpsert(keysCtx, from, txn); err != nil {
 			panic(err)
+		}
+		if txnNode != nil {
+			txnNodes = append(txnNodes, txnNode)
 		}
 	}
 	return
