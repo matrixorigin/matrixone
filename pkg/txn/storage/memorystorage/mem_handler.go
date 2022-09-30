@@ -107,6 +107,19 @@ var _ Handler = new(MemHandler)
 func (m *MemHandler) HandleAddTableDef(meta txn.TxnMeta, req memoryengine.AddTableDefReq, resp *memoryengine.AddTableDefResp) error {
 	tx := m.getTx(meta)
 
+	table, err := m.relations.Get(tx, req.TableID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return moerr.NewInternalError(
+			"invalid table id %v, db %v, name %v",
+			req.TableID,
+			req.DatabaseName,
+			req.TableName,
+		)
+	}
+	if err != nil {
+		return err
+	}
+
 	maxAttributeOrder := 0
 	if err := m.iterRelationAttributes(
 		tx, req.TableID,
@@ -124,43 +137,22 @@ func (m *MemHandler) HandleAddTableDef(meta txn.TxnMeta, req memoryengine.AddTab
 
 	case *engine.CommentDef:
 		// update comments
-		row, err := m.relations.Get(tx, req.TableID)
-		if errors.Is(err, sql.ErrNoRows) {
-			return moerr.NewNoSuchTable(req.DatabaseName, req.TableName)
-		}
-		if err != nil {
-			return err
-		}
-		row.Comments = def.Comment
-		if err := m.relations.Update(tx, row); err != nil {
+		table.Comments = def.Comment
+		if err := m.relations.Update(tx, table); err != nil {
 			return err
 		}
 
 	case *engine.PartitionDef:
 		// update
-		row, err := m.relations.Get(tx, req.TableID)
-		if errors.Is(err, sql.ErrNoRows) {
-			return moerr.NewNoSuchTable(req.DatabaseName, req.TableName)
-		}
-		if err != nil {
-			return err
-		}
-		row.PartitionDef = def.Partition
-		if err := m.relations.Update(tx, row); err != nil {
+		table.PartitionDef = def.Partition
+		if err := m.relations.Update(tx, table); err != nil {
 			return err
 		}
 
 	case *engine.ViewDef:
 		// update
-		row, err := m.relations.Get(tx, req.TableID)
-		if errors.Is(err, sql.ErrNoRows) {
-			return moerr.NewNoSuchTable(req.DatabaseName, req.TableName)
-		}
-		if err != nil {
-			return err
-		}
-		row.ViewDef = def.View
-		if err := m.relations.Update(tx, row); err != nil {
+		table.ViewDef = def.View
+		if err := m.relations.Update(tx, table); err != nil {
 			return err
 		}
 
@@ -176,7 +168,7 @@ func (m *MemHandler) HandleAddTableDef(meta txn.TxnMeta, req memoryengine.AddTab
 			return err
 		}
 		if len(entries) > 0 {
-			return moerr.NewDuplicate()
+			return moerr.NewConstraintViolation(`duplicate column "%s"`, def.Attr.Name)
 		}
 		// insert
 		attrRow := &AttributeRow{
@@ -216,14 +208,10 @@ func (m *MemHandler) HandleAddTableDef(meta txn.TxnMeta, req memoryengine.AddTab
 
 	case *engine.PropertiesDef:
 		// update properties
-		row, err := m.relations.Get(tx, req.TableID)
-		if errors.Is(err, sql.ErrNoRows) {
-			return moerr.NewNoSuchTable(req.DatabaseName, req.TableName)
-		}
 		for _, prop := range def.Properties {
-			row.Properties[prop.Key] = prop.Value
+			table.Properties[prop.Key] = prop.Value
 		}
-		if err := m.relations.Update(tx, row); err != nil {
+		if err := m.relations.Update(tx, table); err != nil {
 			return err
 		}
 
@@ -374,6 +362,10 @@ func (m *MemHandler) HandleCreateRelation(meta txn.TxnMeta, req memoryengine.Cre
 		}
 	}
 
+	if len(relAttrs) == 0 && row.ViewDef == "" {
+		return moerr.NewConstraintViolation("no schema")
+	}
+
 	// add row id
 	relAttrs = append(relAttrs, engine.Attribute{
 		IsHidden: true,
@@ -386,7 +378,12 @@ func (m *MemHandler) HandleCreateRelation(meta txn.TxnMeta, req memoryengine.Cre
 	})
 
 	// insert relation attributes
+	nameSet := make(map[string]bool)
 	for i, attr := range relAttrs {
+		if _, ok := nameSet[attr.Name]; ok {
+			return moerr.NewConstraintViolation(`duplicate column "%s"`, attr.Name)
+		}
+		nameSet[attr.Name] = true
 		if len(primaryColumnNames) > 0 {
 			isPrimary := false
 			for _, name := range primaryColumnNames {
@@ -434,19 +431,26 @@ const rowIDColumnName = "__rowid"
 
 func (m *MemHandler) HandleDelTableDef(meta txn.TxnMeta, req memoryengine.DelTableDefReq, resp *memoryengine.DelTableDefResp) error {
 	tx := m.getTx(meta)
+
+	table, err := m.relations.Get(tx, req.TableID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return moerr.NewInternalError(
+			"invalid table id %v, db %v, name %v",
+			req.TableID,
+			req.DatabaseName,
+			req.TableName,
+		)
+	}
+	if err != nil {
+		return err
+	}
+
 	switch def := req.Def.(type) {
 
 	case *engine.CommentDef:
 		// del comments
-		row, err := m.relations.Get(tx, req.TableID)
-		if errors.Is(err, sql.ErrNoRows) {
-			return moerr.NewNoSuchTable(req.DatabaseName, req.TableName)
-		}
-		if err != nil {
-			return err
-		}
-		row.Comments = ""
-		if err := m.relations.Update(tx, row); err != nil {
+		table.Comments = ""
+		if err := m.relations.Update(tx, table); err != nil {
 			return err
 		}
 
@@ -485,37 +489,15 @@ func (m *MemHandler) HandleDelTableDef(meta txn.TxnMeta, req memoryengine.DelTab
 
 	case *engine.PropertiesDef:
 		// delete properties
-		row, err := m.relations.Get(tx, req.TableID)
-		if errors.Is(err, sql.ErrNoRows) {
-			return moerr.NewNoSuchTable(req.DatabaseName, req.TableName)
-		}
 		for _, prop := range def.Properties {
-			delete(row.Properties, prop.Key)
+			delete(table.Properties, prop.Key)
 		}
-		if err := m.relations.Update(tx, row); err != nil {
-			return err
-		}
-
-	case *engine.PrimaryIndexDef:
-		// delete primary index
-		if err := m.iterRelationAttributes(
-			tx, req.TableID,
-			func(key ID, row *AttributeRow) error {
-				if !row.Primary {
-					return nil
-				}
-				row.Primary = false
-				if err := m.attributes.Update(tx, row); err != nil {
-					return err
-				}
-				return nil
-			},
-		); err != nil {
+		if err := m.relations.Update(tx, table); err != nil {
 			return err
 		}
 
 	default:
-		panic(fmt.Sprintf("unknown table def: %T", req.Def))
+		panic(fmt.Sprintf("invalid table def: %T", req.Def))
 
 	}
 
@@ -1149,7 +1131,12 @@ func (m *MemHandler) rangeBatchPhysicalRows(
 	}
 
 	if len(nameToAttrs) == 0 {
-		return moerr.NewNoSuchTable(dbName, tableName)
+		return moerr.NewInternalError(
+			"invalid table id %v, db %v, name %v",
+			tableID,
+			dbName,
+			tableName,
+		)
 	}
 
 	// iter

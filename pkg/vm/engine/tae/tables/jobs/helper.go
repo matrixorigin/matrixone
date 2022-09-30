@@ -17,6 +17,7 @@ package jobs
 import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/indexwrapper"
 )
@@ -25,7 +26,7 @@ func BuildColumnIndex(writer objectio.Writer, block objectio.BlockObject, colDef
 	zmPos := 0
 
 	zoneMapWriter := indexwrapper.NewZMWriter()
-	if err = zoneMapWriter.Init(writer, block, indexwrapper.Plain, uint16(colDef.Idx), uint16(zmPos)); err != nil {
+	if err = zoneMapWriter.Init(writer, block, common.Plain, uint16(colDef.Idx), uint16(zmPos)); err != nil {
 		return
 	}
 	if isSorted && columnData.Length() > 2 {
@@ -51,7 +52,7 @@ func BuildColumnIndex(writer objectio.Writer, block objectio.BlockObject, colDef
 
 	bfPos := 1
 	bfWriter := indexwrapper.NewBFWriter()
-	if err = bfWriter.Init(writer, block, indexwrapper.Plain, uint16(colDef.Idx), uint16(bfPos)); err != nil {
+	if err = bfWriter.Init(writer, block, common.Plain, uint16(colDef.Idx), uint16(bfPos)); err != nil {
 		return
 	}
 	if err = bfWriter.AddValues(columnData); err != nil {

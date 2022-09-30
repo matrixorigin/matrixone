@@ -20,7 +20,7 @@ SELECT BIN(~1);
 bin(~1)
 1111111111111111111111111111111111111111111111111111111111111110
 SELECT 3 & ~8;
-[unknown result because it is related to issue#5328]
+data out of range: data type int64,
 DROP TABLE IF EXISTS t1;
 CREATE TABLE t1(
 tiny TINYINT NOT NULL,
@@ -64,7 +64,9 @@ tiny << int_test | small >> big
 0
 16
 SELECT tiny << LENGTH('abcdefghijklmnopqrst') FROM t1 ORDER BY tiny;
-[unknown result because it is related to issue#5340]
+tiny << length(abcdefghijklmnopqrst)
+0
+1048576
 DROP TABLE IF EXISTS t1;
 CREATE TABLE t1(
 int_test INT UNSIGNED NOT NULL,
@@ -98,9 +100,7 @@ d1 DECIMAL NOT NULL
 INSERT INTO t1() VALUES(1, 0.000001, 1.00000000000000000000000001);
 INSERT INTO t1() VALUES(YEAR('2022-02-02'), SIN(1), LENGTH('abcdefghijk') - MONTH('2022-09-09'));
 SELECT ~float_32 & float_32 FROM t1;
-~float_32 & float_32
-0
-0
+data out of range: data type int64, 
 DROP TABLE IF EXISTS t1;
 CREATE TABLE t1(
 str1 CHAR(10),
@@ -186,15 +186,71 @@ n1 & str1 & n1 & 111 & n1 & 1001
 0
 0
 SELECT 1 << n1 FROM t2;
-[unknown result because it is related to issue#5347]
+1 << n1
+0
+0
+1
+2
 SELECT n1 << n1 >> n1 FROM t2;
-[unknown result because it is related to issue#5347]
+n1 << n1 >> n1
+0
+0
+0
+1
 SELECT n1 ^ str1 | n1 & str1 >> n1 << str1 FROM t1,t2;
-[unknown result because it is related to issue#5347]
+n1 ^ str1 | n1 & str1 >> n1 << str1
+0
+-102
+101
+100
+-102
+0
+-1
+-2
+100
+-2
+1
+0
+101
+-1
+0
+1
 SELECT n1 ^ 1 | n1 & '111' >> n1 << '1001' FROM t1,t2;
-[unknown result because it is related to issue#5347]
+n1 ^ 1 | n1 & 111 >> n1 << 1001
+100
+-2
+1
+0
+100
+-2
+1
+0
+100
+-2
+1
+0
+100
+-2
+1
+0
 SELECT '0150' | str1 | n1 | '000111' | n1 | '101010' FROM t1,t2;
-[unknown result because it is related to issue#5348]
+0150 | str1 | n1 | 000111 | n1 | 101010
+101119
+-1
+101119
+101119
+-1
+-1
+-1
+-1
+101119
+-1
+101119
+101119
+101119
+-1
+101119
+101119
 DROP TABLE IF EXISTS t1;
 DROP TABLE IF EXISTS t2;
 CREATE TABLE t1(
