@@ -256,7 +256,11 @@ func (a *AttributeRow) AttrByName(tx *Transaction, name string) (ret Nullable, e
 		}
 		ret.Value = rel.Name
 	case catalog.SystemColAttr_Type:
-		ret.Value = int32(a.Type.Oid)
+		data, err := types.Encode(a.Type)
+		if err != nil {
+			return ret, err
+		}
+		ret.Value = string(data)
 	case catalog.SystemColAttr_Num:
 		ret.Value = int32(a.Order)
 	case catalog.SystemColAttr_Length:

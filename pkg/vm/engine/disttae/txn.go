@@ -253,15 +253,14 @@ func (txn *Transaction) getRows(ctx context.Context, databaseId uint64, tableId 
 // only used to read data from catalog, for which the execution is currently single-core
 func (txn *Transaction) readTable(ctx context.Context, databaseId uint64, tableId uint64,
 	defs []engine.TableDef, dnList []DNStore, columns []string, expr *plan.Expr) ([]*batch.Batch, error) {
-	var writes [][]Entry
-
 	/*
+		var writes [][]Entry
 		// consider halloween problem
 		if int64(txn.statementId)-1 > 0 {
 			writes = txn.writes[:txn.statementId-1]
 		}
 	*/
-	writes = txn.writes // statementId not work now
+	writes := txn.writes // statementId not work now
 	bats := make([]*batch.Batch, 0, 1)
 	accessed := make(map[string]uint8)
 	for _, dn := range dnList {

@@ -205,15 +205,14 @@ func (tbl *table) NewReader(ctx context.Context, num int, expr *plan.Expr,
 
 func (tbl *table) newMergeReader(ctx context.Context, num int,
 	expr *plan.Expr) ([]engine.Reader, error) {
-	var writes [][]Entry
-
 	/*
+		var writes [][]Entry
 		// consider halloween problem
 		if int64(tbl.db.txn.statementId)-1 > 0 {
 			writes = tbl.db.txn.writes[:tbl.db.txn.statementId-1]
 		}
 	*/
-	writes = tbl.db.txn.writes // statementId not work now
+	writes := tbl.db.txn.writes // statementId not work now
 	rds := make([]engine.Reader, num)
 	mrds := make([]mergeReader, num)
 	for _, i := range tbl.dnList {
