@@ -16,7 +16,6 @@ package jobs
 
 import (
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
 	"time"
 
 	"github.com/RoaringBitmap/roaring"
@@ -24,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort"
@@ -108,16 +108,6 @@ func (task *compactBlockTask) PrepareData(blkKey []byte) (preparer *model.Prepar
 			return preparer, err
 		}
 	}
-	// Prepare PhyAddr column data
-	phyAddrVec, err := model.PreparePhyAddrData(
-		catalog.PhyAddrColumnType,
-		blkKey,
-		0,
-		uint32(preparer.Columns.Length()))
-	if err != nil {
-		return
-	}
-	preparer.Columns.AddVector(catalog.PhyAddrColumnName, phyAddrVec)
 	return
 }
 
