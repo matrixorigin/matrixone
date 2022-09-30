@@ -16,8 +16,9 @@ package jobs
 
 import (
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
 	"unsafe"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
 
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -238,24 +239,13 @@ func (task *mergeBlocksTask) Execute() (err error) {
 		batch := containers.NewBatch()
 		batchs = append(batchs, batch)
 	}
-	phyAddrVecs := make([]containers.Vector, 0)
 	phyAddr := schema.PhyAddrKey
-	for i, blk := range task.createdBlks {
-		vec, err := model.PreparePhyAddrData(phyAddr.Type, blk.MakeKey(), 0, uint32(vecs[i].Length()))
-		if err != nil {
-			return err
-		}
-		phyAddrVecs = append(phyAddrVecs, vec)
-		//batchs[i].AddVector(phyAddr.Name, vec)
-	}
+
 	// Build and flush block index if sort key is defined
 	// Flush sort key it correlates to only one column
 
 	for _, def := range schema.ColDefs {
 		if def.IsPhyAddr() {
-			for i := range task.createdBlks {
-				batchs[i].AddVector(phyAddr.Name, phyAddrVecs[i])
-			}
 			continue
 		}
 		// Skip
@@ -296,7 +286,8 @@ func (task *mergeBlocksTask) Execute() (err error) {
 			if phyAddr.Idx == idx {
 				continue
 			}
-			_, err = BuildColumnIndex(writer.GetWriter(), block, schema.ColDefs[idx], vec, false, false)
+			isPk := idx == sortColDef.Idx
+			_, err = BuildColumnIndex(writer.GetWriter(), block, schema.ColDefs[idx], vec, isPk, isPk)
 			if err != nil {
 				return err
 			}

@@ -40,7 +40,7 @@ func (*baseRelation) CardinalNumber(string) int64 {
 	return 0
 }
 
-func (*baseRelation) Ranges(_ context.Context) ([][]byte, error) {
+func (*baseRelation) Ranges(_ context.Context, _ *plan.Expr) ([][]byte, error) {
 	return nil, nil
 }
 
@@ -122,4 +122,8 @@ func (rel *baseRelation) NewReader(_ context.Context, num int, _ *plan.Expr, _ [
 
 func (rel *baseRelation) GetTableID(_ context.Context) string {
 	return fmt.Sprintf("%d", rel.handle.ID())
+}
+
+func (rel *baseRelation) GetRelationID(_ context.Context) uint64 {
+	return rel.handle.ID()
 }

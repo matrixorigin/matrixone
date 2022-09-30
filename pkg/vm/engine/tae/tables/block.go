@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/evictable"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/indexwrapper"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/jobs"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/updates"
@@ -505,9 +506,9 @@ func (blk *dataBlock) ResolveABlkColumnMVCCData(
 		visible bool
 	)
 	blk.mvcc.RLock()
-	if ts.GreaterEq(blk.GetMaxVisibleTS()) {
-		maxRow = blk.node.rows
+	if ts.GreaterEq(blk.GetMaxVisibleTS()) && blk.mvcc.AppendCommitted() {
 		visible = true
+		maxRow = blk.node.rows
 	} else {
 		maxRow, visible, err = blk.mvcc.GetMaxVisibleRowLocked(ts)
 	}
@@ -651,7 +652,9 @@ func (blk *dataBlock) LoadColumnData(
 	def := blk.meta.GetSchema().ColDefs[colIdx]
 	// FIXME "GetMetaLoc()"
 	metaLoc := blk.meta.GetMetaLoc()
-	return blk.colObjects[colIdx].GetData(metaLoc, def.NullAbility, def.Type, buffer)
+	id := blk.meta.AsCommonID()
+	id.Idx = uint16(colIdx)
+	return evictable.FetchColumnData(buffer, blk.bufMgr, id, blk.colObjects[colIdx], metaLoc, def)
 }
 
 func (blk *dataBlock) ablkGetByFilter(ts types.TS, filter *handle.Filter) (offset uint32, err error) {

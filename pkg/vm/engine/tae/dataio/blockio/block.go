@@ -24,10 +24,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/file"
 	"os"
 	"path"
+	"sync"
 )
 
 type blockFile struct {
 	common.RefHelper
+	sync.RWMutex
 	name    string
 	seg     *segmentFile
 	id      *common.ID
@@ -85,14 +87,27 @@ func (bf *blockFile) ReadRows(metaLoc string) uint32 {
 	return rows
 }
 
+func (bf *blockFile) setMetaKey(extent objectio.Extent) {
+	bf.Lock()
+	defer bf.Unlock()
+	bf.metaKey = extent
+}
+
+func (bf *blockFile) getMetaKey() objectio.Extent {
+	bf.RLock()
+	defer bf.RUnlock()
+	return bf.metaKey
+}
+
 func (bf *blockFile) GetMeta() objectio.BlockObject {
-	if bf.metaKey.End() == 0 {
+	metaKey := bf.getMetaKey()
+	if metaKey.End() == 0 {
 		panic(any("block meta key err"))
 	}
 	if bf.reader == nil {
 		bf.reader = NewReader(bf.seg.fs, bf, bf.name)
 	}
-	block, err := bf.reader.ReadMeta(bf.metaKey)
+	block, err := bf.reader.ReadMeta(metaKey)
 	if err != nil {
 		panic(any(err))
 	}
@@ -112,7 +127,7 @@ func (bf *blockFile) GetMetaFormKey(metaLoc string) objectio.BlockObject {
 		}
 		panic(any(err))
 	}
-	bf.metaKey = block.GetExtent()
+	bf.setMetaKey(block.GetExtent())
 	return block
 }
 
@@ -152,7 +167,7 @@ func (bf *blockFile) Destroy() error {
 
 func (bf *blockFile) Sync() error {
 	blocks, err := bf.writer.Sync()
-	bf.metaKey = blocks[0].GetExtent()
+	bf.setMetaKey(blocks[0].GetExtent())
 	return err
 }
 
@@ -164,10 +179,11 @@ func (bf *blockFile) LoadBatch(
 	if bf.reader == nil {
 		bat = containers.NewBatch()
 
+		metaKey := bf.getMetaKey()
 		for i := range bf.columns {
 			vec := containers.MakeVector(colTypes[i], nullables[i], opts)
 			bat.AddVector(colNames[i], vec)
-			if bf.metaKey.End() == 0 {
+			if metaKey.End() == 0 {
 				continue
 			}
 		}
