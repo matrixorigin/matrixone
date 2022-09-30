@@ -18,10 +18,9 @@ import (
 	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 )
 
-func NewJoinMap(sels [][]int64, expr *plan.Expr, mp *StrHashMap, hasNull bool, idx *index.LowCardinalityIndex) *JoinMap {
+func NewJoinMap(sels [][]int64, expr *plan.Expr, mp *StrHashMap, hasNull bool, idx any) *JoinMap {
 	return &JoinMap{
 		cnt:     1,
 		mp:      mp,
@@ -48,7 +47,7 @@ func (jm *JoinMap) HasNull() bool {
 	return jm.hasNull
 }
 
-func (jm *JoinMap) Index() *index.LowCardinalityIndex {
+func (jm *JoinMap) Index() any {
 	return jm.idx
 }
 

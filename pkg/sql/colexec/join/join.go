@@ -259,7 +259,10 @@ func (ctr *container) freeJoinCondition(proc *process.Process) {
 
 func (ctr *container) dictEncoding(m *mheap.Mheap) (bool, error) {
 	// find out whether hashbuild is built by low cardinality index
-	idx := ctr.mp.Index()
+	if ctr.mp.Index() == nil {
+		return false, nil
+	}
+	idx := ctr.mp.Index().(*index.LowCardinalityIndex)
 	if idx == nil {
 		return false, nil
 	}
@@ -309,7 +312,7 @@ func populateIndex(result, selected *vector.Vector, row int64, m *mheap.Mheap) e
 
 	idx := selected.Index().(*index.LowCardinalityIndex)
 	if result.Index() == nil {
-		result.SetIndex(idx.Dup())
+		result.SetIndex(idx.Dup().(*index.LowCardinalityIndex))
 	}
 
 	dst := result.Index().(*index.LowCardinalityIndex).GetPoses()

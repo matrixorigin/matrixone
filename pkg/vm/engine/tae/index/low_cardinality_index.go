@@ -23,10 +23,6 @@ type LowCardinalityIndex struct {
 	// the max cardinality of LowCardinalityIndex is 65536.
 	// The position of `null` value is 0.
 	poses *vector.Vector
-
-	// TODO: sels will be better?
-	//rows int64
-	//sels [][]int64
 }
 
 func NewLowCardinalityIndex(typ types.Type, m *mheap.Mheap) (*LowCardinalityIndex, error) {
@@ -55,7 +51,7 @@ func (idx *LowCardinalityIndex) GetDict() *dict.Dict {
 	return idx.dict
 }
 
-func (idx *LowCardinalityIndex) Dup() *LowCardinalityIndex {
+func (idx *LowCardinalityIndex) Dup() any {
 	return &LowCardinalityIndex{
 		typ:   idx.typ,
 		m:     idx.m,

@@ -53,7 +53,13 @@ type Vector struct {
 	length  int
 
 	// idx for low cardinality scenario.
-	idx any
+	idx Index
+}
+
+type Index interface {
+	GetPoses() *Vector
+	Dup() any
+	Free()
 }
 
 func (v *Vector) Length() int {
@@ -86,12 +92,12 @@ func (v *Vector) IsLowCardinality() bool {
 	return v.idx != nil
 }
 
-func (v *Vector) Index() any {
+func (v *Vector) Index() Index {
 	return v.idx
 }
 
 func (v *Vector) SetIndex(idx any) {
-	v.idx = idx
+	v.idx = idx.(Index)
 }
 
 func DecodeFixedCol[T types.FixedSizeT](v *Vector, sz int) []T {
@@ -638,6 +644,10 @@ func (v *Vector) Free(m *mheap.Mheap) {
 	v.data = []byte{}
 	v.colFromData()
 	v.area = nil
+
+	if v.IsLowCardinality() {
+		v.idx.Free()
+	}
 }
 
 func (v *Vector) FreeOriginal(m *mheap.Mheap) {

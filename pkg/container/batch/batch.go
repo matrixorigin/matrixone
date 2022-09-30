@@ -26,7 +26,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/shuffle"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 )
 
@@ -224,9 +223,6 @@ func (bat *Batch) Clean(m *mheap.Mheap) {
 	for _, vec := range bat.Vecs {
 		if vec != nil {
 			vec.Free(m)
-			if vec.IsLowCardinality() {
-				vec.Index().(*index.LowCardinalityIndex).Free()
-			}
 		}
 	}
 	for _, agg := range bat.Aggs {
@@ -277,12 +273,12 @@ func (bat *Batch) Append(mh *mheap.Mheap, b *Batch) (*Batch, error) {
 			return bat, err
 		}
 		if b.Vecs[i].IsLowCardinality() {
-			idx := b.Vecs[i].Index().(*index.LowCardinalityIndex)
+			idx := b.Vecs[i].Index()
 			if bat.Vecs[i].Index() == nil {
 				bat.Vecs[i].SetIndex(idx.Dup())
 			}
 
-			dst := bat.Vecs[i].Index().(*index.LowCardinalityIndex).GetPoses()
+			dst := bat.Vecs[i].Index().GetPoses()
 			src := idx.GetPoses()
 			if err := vector.UnionBatch(dst, src, 0, vector.Length(src), flags[:vector.Length(src)], mh); err != nil {
 				return bat, err
