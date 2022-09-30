@@ -40,7 +40,7 @@ func (db *DB) getPartitions(databaseId, tableId uint64) Partitions {
 	if !ok { // create a new table
 		parts = make(Partitions, len(db.dnMap))
 		for i := range parts {
-			parts[i] = new(Partition)
+			parts[i] = NewPartition()
 		}
 		db.tables[[2]uint64{databaseId, tableId}] = parts
 	}
@@ -59,7 +59,7 @@ func (db *DB) Update(ctx context.Context, dnList []DNStore,
 	if !ok { // create a new table
 		parts = make(Partitions, len(db.dnMap))
 		for i := range parts {
-			parts[i] = new(Partition)
+			parts[i] = NewPartition()
 		}
 		db.tables[[2]uint64{databaseId, tableId}] = parts
 	}
@@ -68,7 +68,7 @@ func (db *DB) Update(ctx context.Context, dnList []DNStore,
 		part := parts[db.dnMap[dn.UUID]]
 		part.Lock()
 		if part.ts.Less(ts) {
-			if err := updatePartition(ctx, op, part.data, dn,
+			if err := updatePartition(ctx, op, part, dn,
 				genSyncLogTailReq(part.ts, ts, databaseId, tableId)); err != nil {
 				part.Unlock()
 				return err

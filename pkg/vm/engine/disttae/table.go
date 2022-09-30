@@ -63,7 +63,7 @@ func (tbl *table) Ranges(ctx context.Context, expr *plan.Expr) ([][]byte, error)
 	}
 	tbl.meta.modifedBlocks = make([][]BlockMeta, len(tbl.meta.blocks))
 	for _, i := range dnList {
-		blks := tbl.parts[i].data.BlockList(ctx, tbl.db.txn.meta.SnapshotTS,
+		blks := tbl.parts[i].BlockList(ctx, tbl.db.txn.meta.SnapshotTS,
 			tbl.meta.blocks[i], writes)
 		for _, blk := range blks {
 			if needRead(expr, blk) {
@@ -214,7 +214,7 @@ func (tbl *table) newMergeReader(ctx context.Context, num int,
 	rds := make([]engine.Reader, num)
 	mrds := make([]mergeReader, num)
 	for _, i := range tbl.dnList {
-		rds0, err := tbl.parts[i].data.NewReader(ctx, num, expr,
+		rds0, err := tbl.parts[i].NewReader(ctx, num, expr,
 			tbl.meta.modifedBlocks[i], tbl.db.txn.meta.SnapshotTS, writes)
 		if err != nil {
 			return nil, err

@@ -931,13 +931,11 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string) (*plan2.
 	var defs []*plan2.TableDefType
 	var properties []*plan2.Property
 	var TableType, Createsql string
+	var CompositePkey *plan2.ColDef = nil
 	for _, def := range engineDefs {
 		if attr, ok := def.(*engine.AttributeDef); ok {
 			isCPkey := util.JudgeIsCompositePrimaryKeyColumn(attr.Attr.Name)
-			if isCPkey {
-				continue
-			}
-			cols = append(cols, &plan2.ColDef{
+			col := &plan2.ColDef{
 				Name: attr.Attr.Name,
 				Typ: &plan2.Type{
 					Id:        int32(attr.Attr.Type.Oid),
@@ -950,7 +948,13 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string) (*plan2.
 				OnUpdate:      attr.Attr.OnUpdate,
 				Comment:       attr.Attr.Comment,
 				AutoIncrement: attr.Attr.AutoIncrement,
-			})
+			}
+			if isCPkey {
+				col.IsCPkey = isCPkey
+				CompositePkey = col
+				continue
+			}
+			cols = append(cols, col)
 		} else if pro, ok := def.(*engine.PropertiesDef); ok {
 			for _, p := range pro.Properties {
 				switch p.Key {
@@ -1026,11 +1030,12 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string) (*plan2.
 	}
 
 	tableDef := &plan2.TableDef{
-		Name:      tableName,
-		Cols:      cols,
-		Defs:      defs,
-		TableType: TableType,
-		Createsql: Createsql,
+		Name:          tableName,
+		Cols:          cols,
+		Defs:          defs,
+		TableType:     TableType,
+		Createsql:     Createsql,
+		CompositePkey: CompositePkey,
 	}
 	return obj, tableDef
 }

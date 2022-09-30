@@ -155,7 +155,7 @@ func (vf *vFile) Sync() error {
 	buf := vf.buf.Bytes()
 	n, err := vf.File.WriteAt(buf[:targetpos], int64(vf.syncpos))
 	if n != targetpos {
-		panic("logic err")
+		panic(fmt.Sprintf("logic err, expect %d, write %d err is %v", targetpos, n, err))
 	}
 	if err != nil {
 		return err
