@@ -79,12 +79,14 @@ func main() {
 	}
 
 	waitSignalToStop(stopper)
+	logutil.GetGlobalLogger().Info("Shutdown complete")
 }
 
 func waitSignalToStop(stopper *stopper.Stopper) {
 	sigchan := make(chan os.Signal, 1)
 	signal.Notify(sigchan, syscall.SIGTERM, syscall.SIGINT)
-	<-sigchan
+	sig := <-sigchan
+	logutil.GetGlobalLogger().Info("Starting shutdown...", zap.String("signal", sig.String()))
 	stopper.Stop()
 }
 
