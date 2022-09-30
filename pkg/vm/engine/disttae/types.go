@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage/memtable"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -106,7 +107,7 @@ type Partitions []*Partition
 type Partition struct {
 	sync.RWMutex
 	// multi-version data of logtail, implemented with reusee's memengine
-	data MVCC
+	data *memtable.Table[RowID, DataValue, *DataRow]
 	// last updated timestamp
 	ts timestamp.Timestamp
 }
