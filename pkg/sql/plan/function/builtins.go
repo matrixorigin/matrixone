@@ -2363,4 +2363,41 @@ var builtins = map[int]Functions{
 			},
 		},
 	},
+	REGEXP_INSTR: {
+		Id: REGEXP_INSTR,
+		Overloads: []Function{
+			{
+				Index:     0,
+				Flag:      plan.Function_STRICT,
+				Layout:    STANDARD_FUNCTION,
+				Args:      []types.T{types.T_varchar, types.T_varchar},
+				ReturnTyp: types.T_int64,
+				Fn:        multi.RegularInstrOnly,
+			},
+			{
+				Index:     1,
+				Flag:      plan.Function_STRICT,
+				Layout:    STANDARD_FUNCTION,
+				Args:      []types.T{types.T_varchar, types.T_varchar, types.T_int64},
+				ReturnTyp: types.T_int64,
+				Fn:        multi.RegularInstrWithPos,
+			},
+			{
+				Index:     2,
+				Flag:      plan.Function_STRICT,
+				Layout:    STANDARD_FUNCTION,
+				Args:      []types.T{types.T_varchar, types.T_varchar, types.T_int64, types.T_int64},
+				ReturnTyp: types.T_int64,
+				Fn:        multi.RegularInstrWithPosAndOcc,
+			},
+			{
+				Index:     3,
+				Flag:      plan.Function_STRICT,
+				Layout:    STANDARD_FUNCTION,
+				Args:      []types.T{types.T_varchar, types.T_varchar, types.T_int64, types.T_int64, types.T_uint8},
+				ReturnTyp: types.T_int64,
+				Fn:        multi.RegularInstrWithPosOccAndOpt,
+			},
+		},
+	},
 }
