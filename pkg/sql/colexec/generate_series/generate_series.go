@@ -20,16 +20,16 @@ import (
 )
 
 func judgeNumber[T Number](start, end, step T) ([]T, error) {
+	if step == 0 {
+		return nil, moerr.NewInvalidInput("step size cannot equal zero")
+	}
 	if start == end {
 		return []T{start}, nil
-	}
-	if step == 0 {
-		return nil, moerr.NewInvalidInput("step cannot be zero")
 	}
 	s1 := step > 0
 	s2 := end > start
 	if s1 != s2 {
-		return nil, moerr.NewInvalidInput("step and start/end are not compatible")
+		return []T{}, nil
 	}
 	return nil, nil
 }

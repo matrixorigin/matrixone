@@ -46,7 +46,7 @@ func TestDoGenerateInt32(t *testing.T) {
 			start: 1,
 			end:   10,
 			step:  -1,
-			err:   true,
+			res:   []int32{},
 		},
 		{
 			start: 10,
@@ -64,7 +64,7 @@ func TestDoGenerateInt32(t *testing.T) {
 			start: 10,
 			end:   1,
 			step:  1,
-			err:   true,
+			res:   []int32{},
 		},
 		{
 			start: 1,
@@ -76,13 +76,13 @@ func TestDoGenerateInt32(t *testing.T) {
 			start: 1,
 			end:   10,
 			step:  -1,
-			err:   true,
+			res:   []int32{},
 		},
 		{
 			start: 1,
 			end:   1,
 			step:  0,
-			res:   []int32{1},
+			err:   true,
 		},
 		{
 			start: 1,
@@ -144,7 +144,7 @@ func TestDoGenerateInt64(t *testing.T) {
 			start: 1,
 			end:   10,
 			step:  -1,
-			err:   true,
+			res:   []int64{},
 		},
 		{
 			start: 10,
@@ -162,7 +162,7 @@ func TestDoGenerateInt64(t *testing.T) {
 			start: 10,
 			end:   1,
 			step:  1,
-			err:   true,
+			res:   []int64{},
 		},
 		{
 			start: 1,
@@ -174,13 +174,13 @@ func TestDoGenerateInt64(t *testing.T) {
 			start: 1,
 			end:   10,
 			step:  -1,
-			err:   true,
+			res:   []int64{},
 		},
 		{
 			start: 1,
 			end:   1,
 			step:  0,
-			res:   []int64{1},
+			err:   true,
 		},
 		{
 			start: 1,
@@ -250,16 +250,16 @@ func TestDoGenerateInt64(t *testing.T) {
 			res:   []int64{math.MaxInt64, math.MaxInt64 - 1},
 		},
 		{
-			start:math.MaxInt64-100,
-			end:math.MaxInt64,
-			step:19,
-			res:[]int64{math.MaxInt64-100,math.MaxInt64-81,math.MaxInt64-62,math.MaxInt64-43,math.MaxInt64-24,math.MaxInt64-5},
+			start: math.MaxInt64 - 100,
+			end:   math.MaxInt64,
+			step:  19,
+			res:   []int64{math.MaxInt64 - 100, math.MaxInt64 - 81, math.MaxInt64 - 62, math.MaxInt64 - 43, math.MaxInt64 - 24, math.MaxInt64 - 5},
 		},
 		{
-			start:math.MaxInt64,
-			end:math.MaxInt64-100,
-			step:-19,
-			res:[]int64{math.MaxInt64,math.MaxInt64-19,math.MaxInt64-38,math.MaxInt64-57,math.MaxInt64-76,math.MaxInt64-95},
+			start: math.MaxInt64,
+			end:   math.MaxInt64 - 100,
+			step:  -19,
+			res:   []int64{math.MaxInt64, math.MaxInt64 - 19, math.MaxInt64 - 38, math.MaxInt64 - 57, math.MaxInt64 - 76, math.MaxInt64 - 95},
 		},
 		{
 			start: math.MinInt64,
