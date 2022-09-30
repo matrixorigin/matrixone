@@ -103,6 +103,32 @@ func makeBlockMetaForTest() BlockMeta {
 	}
 }
 
+func getTableDefBySchemaAndType(name string, columns []string, schema []string, types []types.Type) *plan.TableDef {
+	columnsMap := make(map[string]struct{})
+	for _, col := range columns {
+		columnsMap[col] = struct{}{}
+	}
+
+	var cols []*plan.ColDef
+	nameToIndex := make(map[string]int32)
+
+	for i, col := range schema {
+		if _, ok := columnsMap[col]; ok {
+			cols = append(cols, &plan.ColDef{
+				Name: col,
+				Typ:  plan2.MakePlan2Type(&types[i]),
+			})
+		}
+		nameToIndex[col] = int32(i)
+	}
+
+	return &plan.TableDef{
+		Name:          name,
+		Cols:          cols,
+		Name2ColIndex: nameToIndex,
+	}
+}
+
 func makeTableDefForTest(columns []string) *plan.TableDef {
 	schema := []string{"a", "b", "c", "d"}
 	types := []types.Type{
@@ -111,7 +137,7 @@ func makeTableDefForTest(columns []string) *plan.TableDef {
 		types.T_int64.ToType(),
 		types.T_int64.ToType(),
 	}
-	return _getTableDefBySchemaAndType("t1", columns, schema, types)
+	return getTableDefBySchemaAndType("t1", columns, schema, types)
 }
 
 func TestCheckExprIsMonotonical(t *testing.T) {

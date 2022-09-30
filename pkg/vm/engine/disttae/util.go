@@ -17,7 +17,6 @@ import (
 	"fmt"
 	"sort"
 
-	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -184,44 +183,6 @@ func evalFilterExpr(expr *plan.Expr, bat *batch.Batch, proc *process.Process) (b
 			}
 		}
 		return false, nil
-	}
-}
-
-func getMoDatabaseTableDef(columns []string) *plan.TableDef {
-	return _getTableDefBySchemaAndType(catalog.MO_DATABASE, columns, catalog.MoDatabaseSchema, catalog.MoDatabaseTypes)
-}
-
-func getMoTableTableDef(columns []string) *plan.TableDef {
-	return _getTableDefBySchemaAndType(catalog.MO_TABLES, columns, catalog.MoTablesSchema, catalog.MoTablesTypes)
-}
-
-func getMoColumnTableDef(columns []string) *plan.TableDef {
-	return _getTableDefBySchemaAndType(catalog.MO_COLUMNS, columns, catalog.MoColumnsSchema, catalog.MoColumnsTypes)
-}
-
-func _getTableDefBySchemaAndType(name string, columns []string, schema []string, types []types.Type) *plan.TableDef {
-	columnsMap := make(map[string]struct{})
-	for _, col := range columns {
-		columnsMap[col] = struct{}{}
-	}
-
-	var cols []*plan.ColDef
-	nameToIndex := make(map[string]int32)
-
-	for i, col := range schema {
-		if _, ok := columnsMap[col]; ok {
-			cols = append(cols, &plan.ColDef{
-				Name: col,
-				Typ:  plan2.MakePlan2Type(&types[i]),
-			})
-		}
-		nameToIndex[col] = int32(i)
-	}
-
-	return &plan.TableDef{
-		Name:          name,
-		Cols:          cols,
-		Name2ColIndex: nameToIndex,
 	}
 }
 

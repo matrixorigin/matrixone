@@ -16,6 +16,7 @@ package disttae
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -31,14 +32,12 @@ import (
 )
 
 func (txn *Transaction) getTableList(ctx context.Context, databaseId uint64) ([]string, error) {
-	columns := []string{catalog.MoTablesSchema[catalog.MO_TABLES_REL_NAME_IDX]}
-	expr := genTableListExpr(getAccountId(ctx), databaseId)
-	rows, err := txn.getRows(ctx, catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID, txn.dnStores[:1],
-		[]string{
-			catalog.MoTablesSchema[catalog.MO_TABLES_REL_NAME_IDX],
-			catalog.MoTablesSchema[catalog.MO_TABLES_RELDATABASE_ID_IDX],
-			catalog.MoTablesSchema[catalog.MO_TABLES_ACCOUNT_ID_IDX],
-		},
+	columns := []string{
+		catalog.MoTablesSchema[catalog.MO_TABLES_REL_NAME_IDX],
+		catalog.MoTablesSchema[catalog.MO_TABLES_RELDATABASE_ID_IDX],
+		catalog.MoTablesSchema[catalog.MO_TABLES_ACCOUNT_ID_IDX],
+	}
+	rows, err := txn.getRows(ctx, catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID, txn.dnStores[:1], columns,
 		genTableListExpr(getAccountId(ctx), databaseId))
 	if err != nil {
 		return nil, err
@@ -55,7 +54,7 @@ func (txn *Transaction) getTableInfo(ctx context.Context, databaseId uint64,
 	accountId := getAccountId(ctx)
 	columns := catalog.MoTablesSchema
 	row, err := txn.getRow(ctx, catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID,
-		txn.dnStores[:1], catalog.MoTablesSchema,
+		txn.dnStores[:1], columns,
 		genTableInfoExpr(accountId, databaseId, name))
 	if err != nil {
 		return 0, nil, err
@@ -63,7 +62,7 @@ func (txn *Transaction) getTableInfo(ctx context.Context, databaseId uint64,
 	id := row[0].(uint64)
 	rows, err := txn.getRows(ctx, catalog.MO_CATALOG_ID, catalog.MO_COLUMNS_ID,
 		txn.dnStores[:1], catalog.MoColumnsSchema,
-		genColumnInfoExpr(accountId, databaseId, id), getMoColumnTableDef(catalog.MoColumnsSchema))
+		genColumnInfoExpr(accountId, databaseId, id))
 	if err != nil {
 		return 0, nil, err
 	}
@@ -79,15 +78,15 @@ func (txn *Transaction) getTableInfo(ctx context.Context, databaseId uint64,
 func (txn *Transaction) getTableId(ctx context.Context, databaseId uint64,
 	name string) (uint64, error) {
 	accountId := getAccountId(ctx)
-	columns := []string{catalog.MoTablesSchema[catalog.MO_TABLES_REL_ID_IDX]}
+	columns := []string{
+		catalog.MoTablesSchema[catalog.MO_TABLES_REL_ID_IDX],
+		catalog.MoTablesSchema[catalog.MO_TABLES_REL_NAME_IDX],
+		catalog.MoTablesSchema[catalog.MO_TABLES_RELDATABASE_ID_IDX],
+		catalog.MoTablesSchema[catalog.MO_TABLES_ACCOUNT_ID_IDX],
+	}
 
 	row, err := txn.getRow(ctx, catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID,
-		txn.dnStores[:1], []string{
-			catalog.MoTablesSchema[catalog.MO_TABLES_REL_ID_IDX],
-			catalog.MoTablesSchema[catalog.MO_TABLES_REL_NAME_IDX],
-			catalog.MoTablesSchema[catalog.MO_TABLES_RELDATABASE_ID_IDX],
-			catalog.MoTablesSchema[catalog.MO_TABLES_ACCOUNT_ID_IDX],
-		},
+		txn.dnStores[:1], columns,
 		genTableIdExpr(accountId, databaseId, name))
 	if err != nil {
 		return 0, err
@@ -96,13 +95,13 @@ func (txn *Transaction) getTableId(ctx context.Context, databaseId uint64,
 }
 
 func (txn *Transaction) getDatabaseList(ctx context.Context) ([]string, error) {
-	columns := []string{catalog.MoDatabaseSchema[catalog.MO_DATABASE_DAT_NAME_IDX]}
+	columns := []string{
+		catalog.MoDatabaseSchema[catalog.MO_DATABASE_DAT_NAME_IDX],
+		catalog.MoColumnsSchema[catalog.MO_DATABASE_ACCOUNT_ID_IDX],
+	}
 
 	rows, err := txn.getRows(ctx, catalog.MO_CATALOG_ID, catalog.MO_DATABASE_ID,
-		txn.dnStores[:1], []string{
-			catalog.MoDatabaseSchema[catalog.MO_DATABASE_DAT_NAME_IDX],
-			catalog.MoColumnsSchema[catalog.MO_DATABASE_ACCOUNT_ID_IDX],
-		},
+		txn.dnStores[:1], columns,
 		genDatabaseListExpr(getAccountId(ctx)))
 	if err != nil {
 		return nil, err
@@ -116,13 +115,12 @@ func (txn *Transaction) getDatabaseList(ctx context.Context) ([]string, error) {
 
 func (txn *Transaction) getDatabaseId(ctx context.Context, name string) (uint64, error) {
 	accountId := getAccountId(ctx)
-	columns := []string{catalog.MoDatabaseSchema[catalog.MO_DATABASE_DAT_ID_IDX]}
+	columns := []string{catalog.MoDatabaseSchema[catalog.MO_DATABASE_DAT_ID_IDX],
+		catalog.MoColumnsSchema[catalog.MO_DATABASE_DAT_NAME_IDX],
+		catalog.MoColumnsSchema[catalog.MO_DATABASE_ACCOUNT_ID_IDX],
+	}
 	row, err := txn.getRow(ctx, catalog.MO_CATALOG_ID, catalog.MO_DATABASE_ID, txn.dnStores[:1],
-		[]string{catalog.MoDatabaseSchema[catalog.MO_DATABASE_DAT_ID_IDX],
-			catalog.MoColumnsSchema[catalog.MO_DATABASE_DAT_NAME_IDX],
-			catalog.MoColumnsSchema[catalog.MO_DATABASE_ACCOUNT_ID_IDX],
-		},
-		genDatabaseIdExpr(accountId, name))
+		columns, genDatabaseIdExpr(accountId, name))
 	if err != nil {
 		return 0, err
 	}
@@ -216,8 +214,8 @@ func (txn *Transaction) WriteFile(typ int, databaseId, tableId uint64,
 
 // getRow used to get a row of table based on a condition
 func (txn *Transaction) getRow(ctx context.Context, databaseId uint64, tableId uint64,
-	dnList []DNStore, columns []string, expr *plan.Expr, tableDef *plan.TableDef) ([]any, error) {
-	bats, err := txn.readTable(ctx, databaseId, tableId, dnList, columns, expr, tableDef)
+	dnList []DNStore, columns []string, expr *plan.Expr) ([]any, error) {
+	bats, err := txn.readTable(ctx, databaseId, tableId, dnList, columns, expr)
 	if err != nil {
 		return nil, err
 	}
@@ -241,8 +239,8 @@ func (txn *Transaction) getRow(ctx context.Context, databaseId uint64, tableId u
 
 // getRows used to get rows of table
 func (txn *Transaction) getRows(ctx context.Context, databaseId uint64, tableId uint64,
-	dnList []DNStore, columns []string, expr *plan.Expr, tableDef *plan.TableDef) ([][]any, error) {
-	bats, err := txn.readTable(ctx, databaseId, tableId, dnList, columns, expr, tableDef)
+	dnList []DNStore, columns []string, expr *plan.Expr) ([][]any, error) {
+	bats, err := txn.readTable(ctx, databaseId, tableId, dnList, columns, expr)
 	if err != nil {
 		return nil, err
 	}
@@ -261,7 +259,7 @@ func (txn *Transaction) getRows(ctx context.Context, databaseId uint64, tableId 
 // readTable used to get tuples of table based on a condition
 // only used to read data from catalog, for which the execution is currently single-core
 func (txn *Transaction) readTable(ctx context.Context, databaseId uint64, tableId uint64,
-	dnList []DNStore, columns []string, expr *plan.Expr, tableDef *plan.TableDef) ([]*batch.Batch, error) {
+	dnList []DNStore, columns []string, expr *plan.Expr) ([]*batch.Batch, error) {
 	var writes [][]Entry
 
 	// consider halloween problem
@@ -290,9 +288,9 @@ func (txn *Transaction) readTable(ctx context.Context, databaseId uint64, tableI
 			bats = append(bats, bat)
 		}
 	}
-	proc := process.New(context.Background(), txn.m, nil, nil, nil)
+
 	for i, bat := range bats {
-		vec, err := colexec.EvalExpr(bat, proc, expr)
+		vec, err := colexec.EvalExpr(bat, txn.proc, expr)
 		if err != nil {
 			return nil, err
 		}
@@ -302,16 +300,16 @@ func (txn *Transaction) readTable(ctx context.Context, databaseId uint64, tableI
 				bat.Shrink(nil)
 			}
 		} else {
-			sels := txn.m.GetSels()
+			sels := txn.proc.GetMheap().GetSels()
 			for i, b := range bs {
 				if b {
 					sels = append(sels, int64(i))
 				}
 			}
 			bat.Shrink(sels)
-			txn.m.PutSels(sels)
+			txn.proc.GetMheap().PutSels(sels)
 		}
-		vec.Free(txn.m)
+		vec.Free(txn.proc.GetMheap())
 		bats[i] = bat
 	}
 	return bats, nil
@@ -402,7 +400,6 @@ func blockUnmarshal(data []byte) BlockMeta {
 	return BlockMeta{}
 }
 
-/*
 // write a block to s3
 func blockWrite(ctx context.Context, blkInfo BlockMeta, bat *batch.Batch, fs fileservice.FileService) ([]objectio.BlockObject, error) {
 	// 1. check columns length, check types
@@ -449,7 +446,6 @@ func blockWrite(ctx context.Context, blkInfo BlockMeta, bat *batch.Batch, fs fil
 	// 4. get return
 	return writer.WriteEnd()
 }
-*/
 
 // read a block from s3
 func blockRead(ctx context.Context, columns []string, blkInfo BlockMeta, fs fileservice.FileService, tableDef *plan.TableDef) (*batch.Batch, error) {

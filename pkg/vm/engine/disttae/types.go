@@ -27,7 +27,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -85,7 +84,7 @@ type MVCC interface {
 type Engine struct {
 	sync.RWMutex
 	db                *DB
-	m                 *mheap.Mheap
+	proc              *process.Process
 	cli               client.TxnClient
 	getClusterDetails GetClusterDetailsFunc
 	txns              map[string]*Transaction
@@ -132,8 +131,6 @@ type Transaction struct {
 	writes   [][]Entry
 	dnStores []DNStore
 	proc     *process.Process
-	fs       fileservice.FileService
-	m        *mheap.Mheap
 
 	// use to cache table
 	tableMap map[tableKey]*table
@@ -196,6 +193,8 @@ type table struct {
 	insertExpr *plan.Expr
 	deleteExpr *plan.Expr
 	defs       []engine.TableDef
+	tableDef   *plan.TableDef
+	proc       *process.Process
 }
 
 type column struct {
@@ -217,8 +216,10 @@ type column struct {
 }
 
 type blockReader struct {
-	blks []BlockMeta
-	ctx  context.Context
+	blks     []BlockMeta
+	ctx      context.Context
+	fs       fileservice.FileService
+	tableDef *plan.TableDef
 }
 
 type mergeReader struct {

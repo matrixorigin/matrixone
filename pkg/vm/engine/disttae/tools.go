@@ -829,11 +829,11 @@ func inBlockList(blk BlockMeta, blks []BlockMeta) bool {
 	return false
 }
 
-func genModifedBlocks(orgs, modfs []BlockMeta, expr *plan.Expr) []BlockMeta {
+func genModifedBlocks(orgs, modfs []BlockMeta, expr *plan.Expr, tableDef *plan.TableDef, proc *process.Process) []BlockMeta {
 	blks := make([]BlockMeta, 0, len(orgs)-len(modfs))
 	for i, blk := range orgs {
 		if !inBlockList(blk, modfs) {
-			if needRead(expr, blk) {
+			if needRead(expr, blk, tableDef, proc) {
 				blks = append(blks, orgs[i])
 			}
 		}
