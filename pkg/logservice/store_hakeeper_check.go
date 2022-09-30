@@ -170,16 +170,16 @@ func (l *store) healthCheck(term uint64, state *pb.CheckerState) {
 		logger.Error("failed to get check schedule commands", zap.Error(err))
 		return
 	}
-	logger.Info(fmt.Sprintf("cluster health check generated %d schedule commands", len(cmds)))
+	logger.Debug(fmt.Sprintf("cluster health check generated %d schedule commands", len(cmds)))
 	if len(cmds) > 0 {
 		ctx, cancel := context.WithTimeout(context.Background(), hakeeperDefaultTimeout)
 		defer cancel()
 		for _, cmd := range cmds {
-			logger.Info("adding schedule command to hakeeper", zap.String("command", cmd.LogString()))
+			logger.Debug("adding schedule command to hakeeper", zap.String("command", cmd.LogString()))
 		}
 		if err := l.addScheduleCommands(ctx, term, cmds); err != nil {
 			// TODO: check whether this is temp error
-			logger.Info("failed to add schedule commands", zap.Error(err))
+			logger.Debug("failed to add schedule commands", zap.Error(err))
 			return
 		}
 	}
@@ -200,13 +200,13 @@ func (l *store) bootstrap(term uint64, state *pb.CheckerState) {
 	}
 	if len(cmds) > 0 {
 		for _, c := range cmds {
-			logger.Info("bootstrap cmd", zap.String("cmd", c.LogString()))
+			logger.Debug("bootstrap cmd", zap.String("cmd", c.LogString()))
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), hakeeperDefaultTimeout)
 		defer cancel()
 		if err := l.addScheduleCommands(ctx, term, cmds); err != nil {
 			// TODO: check whether this is temp error
-			logger.Info("failed to add schedule commands", zap.Error(err))
+			logger.Debug("failed to add schedule commands", zap.Error(err))
 			return
 		}
 		l.bootstrapCheckCycles = checkBootstrapCycles
