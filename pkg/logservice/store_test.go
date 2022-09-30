@@ -16,6 +16,7 @@ package logservice
 
 import (
 	"context"
+	"go.uber.org/zap"
 	"math"
 	"sync/atomic"
 	"testing"
@@ -429,7 +430,7 @@ func getTestStores() (*store, *store, error) {
 		GossipSeedAddresses: []string{"127.0.0.1:9011", "127.0.0.1:9012"},
 	}
 	cfg1.Fill()
-	store1, err := newLogStore(cfg1, nil, nil)
+	store1, err := newLogStore(cfg1, nil, logger.With(zap.String("store", cfg1.DataDir)))
 	if err != nil {
 		return nil, nil, err
 	}
@@ -444,7 +445,7 @@ func getTestStores() (*store, *store, error) {
 		GossipSeedAddresses: []string{"127.0.0.1:9011", "127.0.0.1:9012"},
 	}
 	cfg2.Fill()
-	store2, err := newLogStore(cfg2, nil, nil)
+	store2, err := newLogStore(cfg2, nil, logger.With(zap.String("store", cfg2.DataDir)))
 	if err != nil {
 		return nil, nil, err
 	}

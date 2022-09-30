@@ -117,7 +117,7 @@ func TestCheckShard(t *testing.T) {
 
 		// register an expired replica => should add a new replica
 		shard.register(newReplica(11, shardID, "store11"), true)
-		steps := checkShard(shard, mapper, workingStores, idAlloc, nil)
+		steps := checkShard(shard, mapper, workingStores, idAlloc, logger)
 		require.Equal(t, 1, len(steps))
 		add, ok := (steps[0]).(operator.AddDnReplica)
 		require.True(t, ok)
@@ -127,12 +127,12 @@ func TestCheckShard(t *testing.T) {
 
 		// register a working replica => no more step
 		shard.register(newReplica(12, shardID, "store12"), false)
-		steps = checkShard(shard, mapper, workingStores, idAlloc, nil)
+		steps = checkShard(shard, mapper, workingStores, idAlloc, logger)
 		require.Equal(t, 0, len(steps))
 
 		// register another working replica => should remove extra replicas
 		shard.register(newReplica(13, shardID, "store13"), false)
-		steps = checkShard(shard, mapper, workingStores, idAlloc, nil)
+		steps = checkShard(shard, mapper, workingStores, idAlloc, logger)
 		require.Equal(t, 1, len(steps))
 		remove, ok := (steps[0]).(operator.RemoveDnReplica)
 		require.True(t, ok)
@@ -156,7 +156,7 @@ func TestCheckShard(t *testing.T) {
 		anotherShard := uint64(100)
 		// register another expired replica, should add a new replica
 		shard := mockDnShard(anotherShard, nil, []uint64{101})
-		steps := checkShard(shard, mapper, workingStores, idAlloc, nil)
+		steps := checkShard(shard, mapper, workingStores, idAlloc, logger)
 		require.Equal(t, 0, len(steps))
 	}
 }

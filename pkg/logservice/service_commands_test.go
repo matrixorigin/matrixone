@@ -180,6 +180,8 @@ func TestHandleAddReplica(t *testing.T) {
 
 	service1 := Service{
 		store: store1,
+
+		logger: logger,
 	}
 	cmd := pb.ScheduleCommand{
 		ConfigChange: &pb.ConfigChange{
