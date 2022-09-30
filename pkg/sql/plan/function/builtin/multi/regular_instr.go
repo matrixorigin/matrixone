@@ -15,14 +15,13 @@
 package multi
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/regular"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func RegularInstr(vectors []*vector.Vector, proc *process.Process, funcName string) (*vector.Vector, error){
+func RegularInstr(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	firstVector := vectors[0]
 	secondVector := vectors[1]
 	firstValues := vector.MustStrCols(firstVector)
@@ -35,49 +34,40 @@ func RegularInstr(vectors []*vector.Vector, proc *process.Process, funcName stri
 		maxLen = len(firstValues)
 	} else {
 		maxLen = len(secondValues)
-	}	
-    //option parameters
+	}
+	//option parameters
 	pos := make([]int64, maxLen)
 	occ := make([]int64, maxLen)
 	opt := make([]uint8, maxLen)
 	match_type := make([]string, maxLen)
 
-	switch funcName{
-	case "RegularInstrOnly":
-		for i := range pos{
+	switch len(vectors) {
+	case 2:
+		for i := range pos {
 			pos[i] = 1
 			occ[i] = 1
 			opt[i] = 0
 			match_type[i] = ""
-		}	
-	case "RegularInstrWithPos":
-		if len(vectors) < 3{
-			return nil, moerr.NewInvalidArg("regexp_instr function have invalid parameter length", len(vectors))
 		}
+	case 3:
 		pos = vector.MustTCols[int64](vectors[2])
-		for i := range pos{
+		for i := range pos {
 			occ[i] = 1
 			opt[i] = 0
 			match_type[i] = ""
 		}
-	case "RegularInstrWithPosAndOcc":
-		if len(vectors) < 4{
-			return nil, moerr.NewInvalidArg("regexp_instr function have invalid parameter length", len(vectors))
-		}
+	case 4:
 		pos = vector.MustTCols[int64](vectors[2])
 		occ = vector.MustTCols[int64](vectors[3])
-		for i := range pos{
+		for i := range pos {
 			opt[i] = 0
 			match_type[i] = ""
 		}
-	case "RegularInstrWithPosOccAndOpt":
-	    if len(vectors) < 5{
-			return nil, moerr.NewInvalidArg("regexp_instr function have invalid parameter length", len(vectors))
-	    }
+	case 5:
 		pos = vector.MustTCols[int64](vectors[2])
 		occ = vector.MustTCols[int64](vectors[3])
 		opt = vector.MustTCols[uint8](vectors[4])
-		for i := range pos{
+		for i := range pos {
 			match_type[i] = ""
 		}
 	}
@@ -100,21 +90,4 @@ func RegularInstr(vectors []*vector.Vector, proc *process.Process, funcName stri
 		_, err = regular.RegularInstrWithArrays(firstValues, secondValues, pos, occ, opt, match_type, firstVector.Nsp, secondVector.Nsp, resultVector.Nsp, resultValues)
 		return resultVector, err
 	}
-}
-
-
-func RegularInstrOnly(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error){
-	return RegularInstr(vectors, proc, "RegularInstrOnly")
-}
-
-func RegularInstrWithPos(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error){
-	return RegularInstr(vectors, proc, "RegularInstrWithPos")
-}
-
-func RegularInstrWithPosAndOcc(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error){
-	return RegularInstr(vectors, proc, "RegularInstrWithPosAndOcc")
-}
-
-func RegularInstrWithPosOccAndOpt(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error){
-	return RegularInstr(vectors, proc, "RegularInstrWithPosOccAndOpt")
 }

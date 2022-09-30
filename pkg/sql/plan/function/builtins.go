@@ -2399,7 +2399,7 @@ var builtins = map[int]Functions{
 				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_varchar, types.T_varchar},
 				ReturnTyp: types.T_int64,
-				Fn:        multi.RegularInstrOnly,
+				Fn:        multi.RegularInstr,
 			},
 			{
 				Index:     1,
@@ -2407,7 +2407,7 @@ var builtins = map[int]Functions{
 				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_varchar, types.T_varchar, types.T_int64},
 				ReturnTyp: types.T_int64,
-				Fn:        multi.RegularInstrWithPos,
+				Fn:        multi.RegularInstr,
 			},
 			{
 				Index:     2,
@@ -2415,7 +2415,7 @@ var builtins = map[int]Functions{
 				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_varchar, types.T_varchar, types.T_int64, types.T_int64},
 				ReturnTyp: types.T_int64,
-				Fn:        multi.RegularInstrWithPosAndOcc,
+				Fn:        multi.RegularInstr,
 			},
 			{
 				Index:     3,
@@ -2423,7 +2423,20 @@ var builtins = map[int]Functions{
 				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_varchar, types.T_varchar, types.T_int64, types.T_int64, types.T_uint8},
 				ReturnTyp: types.T_int64,
-				Fn:        multi.RegularInstrWithPosOccAndOpt,
+				Fn:        multi.RegularInstr,
+			},
+		},
+	},
+	REGEXP_LIKE: {
+		Id: REGEXP_LIKE,
+		Overloads: []Function{
+			{
+				Index:     0,
+				Flag:      plan.Function_STRICT,
+				Layout:    STANDARD_FUNCTION,
+				Args:      []types.T{types.T_varchar, types.T_varchar},
+				ReturnTyp: types.T_uint8,
+				Fn:        multi.RegularLike,
 			},
 		},
 	},
