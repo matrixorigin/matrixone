@@ -37,12 +37,19 @@ type Bytes struct {
 	// Specify fixed type size if IsFixedType is true
 	FixedTypeSize int
 
+	// Specify whether it retains a window
+	AsWindow bool
+	// Window offset and length
+	WinOffset int
+	WinLength int
+
 	// Used only when IsFixedType is false
 	// Header store data if the size is less than VarlenaSize
 	Header []types.Varlena
 
 	// When IsFixedType is true, here is the data storage
 	// When IsFixedType is false, here is the data storage for big data
+	// When AsWindow is true, here stores all big data
 	Storage []byte
 }
 

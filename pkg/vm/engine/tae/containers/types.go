@@ -36,6 +36,10 @@ var DefaultAllocator = stl.DefaultAllocator
 
 var NewBytes = stl.NewBytes
 
+func NewFixedTypeBytes[T any]() *Bytes {
+	return stl.NewFixedTypeBytes[T]()
+}
+
 type ItOp = func(v any, row int) error
 
 type VectorView interface {
@@ -50,7 +54,6 @@ type VectorView interface {
 	Slice() any
 	DataWindow(offset, length int) []byte
 	Get(i int) any
-	GetCopy(i int) any
 
 	Length() int
 	Capacity() int

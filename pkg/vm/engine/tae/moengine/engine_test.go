@@ -255,7 +255,7 @@ func TestEngineAllType(t *testing.T) {
 		assert.Nil(t, err)
 		if bat != nil {
 			assert.Equal(t, 80, vector.Length(bat.Vecs[0]))
-			vec := containers.MOToVector(bat.Vecs[12], false)
+			vec := containers.MOToVectorTmp(bat.Vecs[12], false)
 			assert.Equal(t, vec.Get(0), basebat.Vecs[12].Get(20))
 		}
 	}
@@ -525,7 +525,7 @@ func TestCopy1(t *testing.T) {
 		assert.Equal(t, v2.Get(i), containers.GetValue(mv2, uint32(i)))
 	}
 
-	v3 := containers.MOToVector(mv2, true)
+	v3 := containers.MOToVectorTmp(mv2, true)
 	t.Log(v3.String())
 	for i := 0; i < v3.Length(); i++ {
 		assert.Equal(t, v2.Get(i), v3.Get(i))

@@ -74,34 +74,41 @@ func (vec *StrVector[T]) Bytes() *stl.Bytes {
 	bs := &stl.Bytes{}
 	bs.Header = vec.vdata.Slice()
 	bs.Storage = vec.area.Slice()
+
 	return bs
 }
 func (vec *StrVector[T]) Slice() []T               { panic("not support") }
 func (vec *StrVector[T]) SliceWindow(_, _ int) []T { panic("not support") }
 func (vec *StrVector[T]) WindowAsBytes(offset, length int) *stl.Bytes {
+	bs := vec.Bytes()
 	if offset == 0 && length == vec.vdata.Length() {
-		return vec.Bytes()
-	}
-	end := offset + length
-	bs := &stl.Bytes{}
-	bs.Header = vec.vdata.Slice()[offset:end]
-
-	// If vec has no data stored in area, skip to prepare area data
-	if vec.area.Length() == 0 {
 		return bs
 	}
-
-	// Get area data range in between [offset, offset+length)
-	min, max := vec.getAreaRange(offset, length)
-
-	// If min == max, no area data is stored in between [offset, offset+length)
-	if min == max {
-		return bs
-	}
-
-	// Window the area data in [min, max)
-	bs.Storage = vec.area.SliceWindow(min, max-min)
+	bs.ToWindow(offset, length)
 	return bs
+	// if offset == 0 && length == vec.vdata.Length() {
+	// 	return vec.Bytes()
+	// }
+	// end := offset + length
+	// bs := &stl.Bytes{}
+	// bs.Header = vec.vdata.Slice()[offset:end]
+
+	// // If vec has no data stored in area, skip to prepare area data
+	// if vec.area.Length() == 0 {
+	// 	return bs
+	// }
+
+	// // Get area data range in between [offset, offset+length)
+	// min, max := vec.getAreaRange(offset, length)
+
+	// // If min == max, no area data is stored in between [offset, offset+length)
+	// if min == max {
+	// 	return bs
+	// }
+
+	// // Window the area data in [min, max)
+	// bs.Storage = vec.area.SliceWindow(min, max-min)
+	// return bs
 }
 func (vec *StrVector[T]) Desc() string {
 	s := fmt.Sprintf("StrVector:Len=%d[Rows];Cap=%d[Rows];Allocted:%d[Bytes]",
@@ -154,7 +161,7 @@ func (vec *StrVector[T]) Get(i int) T {
 		return any(v.ByteSlice()).(T)
 	}
 	vOff, vLen := v.OffsetLen()
-	return any(vec.area.SliceWindow(int(vOff), int(vLen))).(T)
+	return any(vec.area.Slice()[vOff : vOff+vLen]).(T)
 }
 
 func (vec *StrVector[T]) Update(i int, v T) {
@@ -292,9 +299,7 @@ func (vec *StrVector[T]) RangeDelete(offset, length int) {
 		vec.rangeDeleteNoArea(offset, length)
 		return
 	}
-	// logutil.Infof("xxxxx %d,%d, %s, %s", min, max, vec.area.SliceWindow(min, max-min), vec.area.Slice())
 	vec.area.RangeDelete(min, max-min)
-	// logutil.Infof("xxxxx %d,%d, %s", min, max, vec.area.Slice())
 	vec.rangeDeleteNoArea(offset, length)
 	vec.adjustOffsetLen(offset, -(max - min))
 }
@@ -316,13 +321,19 @@ func (vec *StrVector[T]) Clone(offset, length int, allocator ...stl.MemAllocator
 	}
 	cloned := NewStrVector2[T](opts)
 
-	cloned.vdata.AppendMany(vec.vdata.SliceWindow(offset, length)...)
-	min, max := vec.getAreaRange(offset, length)
-	if min == max {
-		return cloned
-	}
+	if offset == 0 {
+		cloned.vdata.AppendMany(vec.vdata.SliceWindow(offset, length)...)
+		min, max := vec.getAreaRange(offset, length)
+		if min == max {
+			return cloned
+		}
 
-	cloned.area.AppendMany(vec.area.SliceWindow(min, max-min)...)
+		cloned.area.AppendMany(vec.area.SliceWindow(min, max-min)...)
+	} else {
+		for i := offset; i < offset+length; i++ {
+			cloned.Append(vec.Get(i))
+		}
+	}
 
 	return cloned
 }

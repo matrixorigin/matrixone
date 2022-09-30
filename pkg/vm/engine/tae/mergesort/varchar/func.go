@@ -19,7 +19,6 @@ import (
 )
 
 func Sort(col containers.Vector, idx []uint32) (ret containers.Vector) {
-	data := col.Bytes()
 	n := len(idx)
 	dataWithIdx := make(sortSlice, n)
 
@@ -29,20 +28,10 @@ func Sort(col containers.Vector, idx []uint32) (ret containers.Vector) {
 
 	sortUnstable(dataWithIdx)
 
-	newData := make([]byte, len(data.Data))
-
-	var offset uint32
-
 	for i, v := range dataWithIdx {
-		copy(newData[offset:], v.data)
-		data.Offset[i] = offset
-		l := uint32(len(v.data))
-		data.Length[i] = l
-		offset += l
 		idx[i] = v.idx
+		col.Update(i, v.data)
 	}
-
-	copy(data.Data, newData)
 	return
 }
 
