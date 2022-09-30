@@ -216,6 +216,19 @@ func (bat *Batch) GetVector(pos int32) *vector.Vector {
 	return bat.Vecs[pos]
 }
 
+func (bat *Batch) GetSubBatch(cols []string) *Batch {
+	rbat := NewWithSize(len(cols))
+	i := 0
+	for j, attr := range bat.Attrs {
+		if attr == cols[i] {
+			rbat.Vecs[i] = bat.Vecs[j]
+			i++
+		}
+	}
+	rbat.Zs = bat.Zs
+	return rbat
+}
+
 func (bat *Batch) Clean(m *mheap.Mheap) {
 	if atomic.AddInt64(&bat.Cnt, -1) != 0 {
 		return

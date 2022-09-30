@@ -68,14 +68,14 @@ func ParseEntryList(es []*api.Entry) (any, []*api.Entry, error) {
 		if e.EntryType == api.Entry_Insert {
 			return genCreateDatabases(GenRows(bat)), es[1:], nil
 		}
-		return genDropDatabases(GenRows(bat)), es[:1], nil
+		return genDropDatabases(GenRows(bat)), es[1:], nil
 	case MO_TABLES_ID:
 		bat, err := batch.ProtoBatchToBatch(e.Bat)
 		if err != nil {
 			return nil, nil, err
 		}
 		if e.EntryType == api.Entry_Delete {
-			return genDropTables(GenRows(bat)), es[:1], nil
+			return genDropTables(GenRows(bat)), es[1:], nil
 		}
 		cmds := genCreateTables(GenRows(bat))
 		idx := 0
@@ -87,7 +87,7 @@ func ParseEntryList(es []*api.Entry) (any, []*api.Entry, error) {
 				return nil, nil, err
 			}
 		}
-		return cmds, es[:idx], nil
+		return cmds, es[idx+1:], nil
 	default:
 		return e, es[1:], nil
 	}

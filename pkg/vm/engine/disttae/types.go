@@ -69,14 +69,13 @@ type Cache interface {
 // mvcc is the core data structure of cn and is used to
 // maintain multiple versions of logtail data for a table's partition
 type MVCC interface {
-	RowsCount(ctx context.Context, ts timestamp.Timestamp) int64
 	CheckPoint(ctx context.Context, ts timestamp.Timestamp) error
 	Insert(ctx context.Context, bat *api.Batch) error
 	Delete(ctx context.Context, bat *api.Batch) error
 	BlockList(ctx context.Context, ts timestamp.Timestamp,
 		blocks []BlockMeta, entries [][]Entry) []BlockMeta
 	// If blocks is empty, it means no merge operation with the files on s3 is required.
-	NewReader(ctx context.Context, readerNumber int, expr *plan.Expr,
+	NewReader(ctx context.Context, readerNumber int, expr *plan.Expr, defs []engine.TableDef,
 		blocks []BlockMeta, ts timestamp.Timestamp, entries [][]Entry) ([]engine.Reader, error)
 }
 

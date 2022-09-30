@@ -15,6 +15,8 @@
 package memorystorage
 
 import (
+	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	apipb "github.com/matrixorigin/matrixone/pkg/pb/api"
@@ -31,6 +33,9 @@ func (m *MemHandler) HandlePreCommit(meta txn.TxnMeta, req apipb.PrecommitWriteC
 		e, es, err = catalog.ParseEntryList(es)
 		if err != nil {
 			return err
+		}
+		{
+			fmt.Printf("%T, len(es) = %v\n", e, len(es))
 		}
 		switch cmds := e.(type) {
 		case []catalog.CreateDatabase:

@@ -63,7 +63,7 @@ func (d *DataRow) Indexes() []memtable.Tuple {
 var _ MVCC = new(Partition)
 
 func (*Partition) BlockList(ctx context.Context, ts timestamp.Timestamp, blocks []BlockMeta, entries [][]Entry) []BlockMeta {
-	panic("unimplemented")
+	return nil
 }
 
 func (*Partition) CheckPoint(ctx context.Context, ts timestamp.Timestamp) error {
@@ -87,22 +87,18 @@ func (p *Partition) Delete(ctx context.Context, b *api.Batch) error {
 
 		rowID := RowID(tuple[0].Value.(types.Rowid))
 		ts := tuple[1].Value.(types.TS)
-		t := memtable.Time{
+		tx := memtable.NewTransaction(txID, memtable.Time{
 			Timestamp: timestamp.Timestamp{
 				PhysicalTime: ts.Physical(),
 				LogicalTime:  ts.Logical(),
 			},
-		}
-		tx := memtable.NewTransaction(txID, t, memtable.SnapshotIsolation)
+		}, memtable.SnapshotIsolation)
 
 		err := p.data.Delete(tx, rowID)
 		if err != nil {
 			return err
 		}
 
-		if err := tx.Commit(t); err != nil {
-			return err
-		}
 	}
 
 	return nil
@@ -125,13 +121,12 @@ func (p *Partition) Insert(ctx context.Context, b *api.Batch) error {
 
 		rowID := RowID(tuple[0].Value.(types.Rowid))
 		ts := tuple[1].Value.(types.TS)
-		t := memtable.Time{
+		tx := memtable.NewTransaction(txID, memtable.Time{
 			Timestamp: timestamp.Timestamp{
 				PhysicalTime: ts.Physical(),
 				LogicalTime:  ts.Logical(),
 			},
-		}
-		tx := memtable.NewTransaction(txID, t, memtable.SnapshotIsolation)
+		}, memtable.SnapshotIsolation)
 
 		dataValue := make(DataValue)
 		for i := 2; i < len(tuple); i++ {
@@ -146,9 +141,6 @@ func (p *Partition) Insert(ctx context.Context, b *api.Batch) error {
 			return err
 		}
 
-		if err := tx.Commit(t); err != nil {
-			return err
-		}
 	}
 
 	return nil
@@ -158,6 +150,7 @@ func (p *Partition) NewReader(
 	ctx context.Context,
 	readerNumber int,
 	expr *plan.Expr,
+	defs []engine.TableDef,
 	blocks []BlockMeta,
 	ts timestamp.Timestamp,
 	entries [][]Entry,
@@ -172,18 +165,37 @@ func (p *Partition) NewReader(
 		memtable.SnapshotIsolation,
 	)
 
+	inserts := make([]*batch.Batch, 0, len(entries))
+	deletes := make([]*batch.Batch, 0, len(entries))
+	for i := range entries {
+		for _, entry := range entries[i] {
+			if entry.typ == INSERT {
+				inserts = append(inserts, entry.bat)
+			} else {
+				deletes = append(deletes, entry.bat)
+			}
+		}
+	}
+
 	readers := make([]engine.Reader, readerNumber)
 
+	mp := make(map[string]types.Type)
+	for _, def := range defs {
+		attr, ok := def.(*engine.AttributeDef)
+		if !ok {
+			continue
+		}
+		mp[attr.Attr.Name] = attr.Attr.Type
+	}
 	readers[0] = &PartitionReader{
+		typsMap:  mp,
 		iter:     p.data.NewIter(tx),
 		readTime: t,
 		tx:       tx,
 		expr:     expr,
+		inserts:  inserts,
+		deletes:  deletes,
 	}
 
 	return readers, nil
-}
-
-func (*Partition) RowsCount(ctx context.Context, ts timestamp.Timestamp) int64 {
-	panic("unimplemented")
 }

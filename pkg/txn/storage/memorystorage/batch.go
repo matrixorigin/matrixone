@@ -310,6 +310,21 @@ func vectorAt(vec *vector.Vector, i int) (value Nullable) {
 		}
 		return
 
+	case types.T_TS:
+		if vec.IsScalarNull() {
+			var zero types.Rowid
+			value = Nullable{
+				IsNull: true,
+				Value:  zero,
+			}
+			return
+		}
+		value = Nullable{
+			IsNull: vec.GetNulls().Contains(uint64(i)),
+			Value:  vec.Col.([]types.TS)[i],
+		}
+		return
+
 	case types.T_Rowid:
 		if vec.IsScalarNull() {
 			var zero types.Rowid

@@ -207,14 +207,17 @@ func (tbl *table) newMergeReader(ctx context.Context, num int,
 	expr *plan.Expr) ([]engine.Reader, error) {
 	var writes [][]Entry
 
-	// consider halloween problem
-	if int64(tbl.db.txn.statementId)-1 > 0 {
-		writes = tbl.db.txn.writes[:tbl.db.txn.statementId-1]
-	}
+	/*
+		// consider halloween problem
+		if int64(tbl.db.txn.statementId)-1 > 0 {
+			writes = tbl.db.txn.writes[:tbl.db.txn.statementId-1]
+		}
+	*/
+	writes = tbl.db.txn.writes // statementId not work now
 	rds := make([]engine.Reader, num)
 	mrds := make([]mergeReader, num)
 	for _, i := range tbl.dnList {
-		rds0, err := tbl.parts[i].NewReader(ctx, num, expr,
+		rds0, err := tbl.parts[i].NewReader(ctx, num, expr, tbl.defs,
 			tbl.meta.modifedBlocks[i], tbl.db.txn.meta.SnapshotTS, writes)
 		if err != nil {
 			return nil, err
