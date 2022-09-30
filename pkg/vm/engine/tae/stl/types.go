@@ -54,12 +54,12 @@ type Vector[T any] interface {
 	// Clone deep copy data from offset to offset+length and create a new vector
 	Clone(offset, length int, allocator ...MemAllocator) Vector[T]
 
-	// ReadData reads a serialized buffer and initializes the vector using the buf
+	// ReadBytes reads a serialized buffer and initializes the vector using the buf
 	// as its initial contents.
 
 	// If share is true, vector release allocated memory and use the buf and its data storage
 	// If share is false, vector will copy the data from buf to its own data storage
-	ReadData(data *Bytes, share bool)
+	ReadBytes(data *Bytes, share bool)
 
 	// Reset resets the buffer to be empty
 	// but it retains the underlying storage for use by future writes

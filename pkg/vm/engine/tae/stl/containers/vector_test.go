@@ -344,7 +344,7 @@ func TestVector10(t *testing.T) {
 	data := vec.Bytes()
 
 	vec2 := NewVector[[]byte](opts)
-	vec2.ReadData(data, true)
+	vec2.ReadBytes(data, true)
 	t.Log(vec2.String())
 	assert.Equal(t, vec.Length(), vec2.Length())
 	assert.Equal(t, vec.Capacity(), vec2.Capacity())
@@ -355,7 +355,7 @@ func TestVector10(t *testing.T) {
 	assert.Zero(t, vec2.Allocated())
 
 	vec3 := NewVector[[]byte](opts)
-	vec3.ReadData(data, false)
+	vec3.ReadBytes(data, false)
 	t.Log(vec3.String())
 	assert.Equal(t, vec.Allocated(), vec3.Allocated())
 	assert.Equal(t, vec.Length(), vec3.Length())
@@ -506,14 +506,14 @@ func TestStrVector2(t *testing.T) {
 	data := vec.Bytes()
 
 	vec3 := NewStrVector2[[]byte](opts)
-	vec3.ReadData(data, true)
+	vec3.ReadBytes(data, true)
 	assert.Zero(t, vec3.Allocated())
 	for i := 0; i < vec.Length(); i++ {
 		assert.Equal(t, vec.Get(i), vec3.Get(i))
 	}
 
 	vec4 := NewStrVector2[[]byte](opts)
-	vec4.ReadData(data, false)
+	vec4.ReadBytes(data, false)
 	assert.NotZero(t, vec4.Allocated())
 	for i := 0; i < vec.Length(); i++ {
 		assert.Equal(t, vec.Get(i), vec4.Get(i))

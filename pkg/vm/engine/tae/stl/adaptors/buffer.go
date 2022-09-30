@@ -26,7 +26,7 @@ func NewBuffer(buf []byte) *Buffer {
 	if len(buf) > 0 {
 		bs := stl.NewFixedTypeBytes[byte]()
 		bs.Storage = buf
-		b.storage.ReadData(bs, true)
+		b.storage.ReadBytes(bs, true)
 	}
 	return b
 }

@@ -334,17 +334,17 @@ func (vec *StrVector[T]) Reset() {
 	}
 }
 
-func (vec *StrVector[T]) ReadData(data *stl.Bytes, share bool) {
+func (vec *StrVector[T]) ReadBytes(data *stl.Bytes, share bool) {
 	if data == nil {
 		return
 	}
 	d1 := stl.NewFixedTypeBytes[types.Varlena]()
 	d1.Storage = data.HeaderBuf()
-	vec.vdata.ReadData(d1, share)
+	vec.vdata.ReadBytes(d1, share)
 
 	d2 := stl.NewFixedTypeBytes[byte]()
 	d2.Storage = data.StorageBuf()
-	vec.area.ReadData(d2, share)
+	vec.area.ReadBytes(d2, share)
 }
 
 func (vec *StrVector[T]) InitFromSharedBuf(buf []byte) (n int64, err error) {

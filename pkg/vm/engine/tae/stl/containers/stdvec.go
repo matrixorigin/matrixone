@@ -246,7 +246,7 @@ func (vec *StdVector[T]) Bytes() *stl.Bytes {
 	return bs
 }
 
-func (vec *StdVector[T]) ReadData(data *stl.Bytes, share bool) {
+func (vec *StdVector[T]) ReadBytes(data *stl.Bytes, share bool) {
 	if data == nil {
 		return
 	}
@@ -297,7 +297,7 @@ func (vec *StdVector[T]) InitFromSharedBuf(buf []byte) (n int64, err error) {
 	buf = buf[stl.Sizeof[uint32]():]
 	bs := stl.NewFixedTypeBytes[T]()
 	bs.Storage = buf[:size]
-	vec.ReadData(bs, true)
+	vec.ReadBytes(bs, true)
 	n += int64(size)
 	return
 }
