@@ -169,9 +169,7 @@ func TestTaskRunner(t *testing.T) {
 	indexed, err := c.GetCNServiceIndexed(0)
 	require.NoError(t, err)
 
-	taskRunner := indexed.GetTaskRunner()
-	taskRunner.RegisterExecutor(1, taskExecutor)
-
+	indexed.GetTaskRunner().RegisterExecutor(1, taskExecutor)
 	err = taskService.Create(context.TODO(), task.TaskMetadata{ID: "a", Executor: 1})
 	require.NoError(t, err)
 	tasks, err := taskService.QueryTask(context.TODO(),

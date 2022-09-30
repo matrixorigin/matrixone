@@ -1370,7 +1370,6 @@ func (c *testCluster) getClusterState() *logpb.CheckerState {
 			return false
 		}
 		state = s
-		c.logger.Info("current cluster state", zap.Any("state", s))
 		return true
 	}
 	c.rangeHAKeeperService(fn)
