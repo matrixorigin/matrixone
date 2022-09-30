@@ -94,7 +94,3 @@ func TestDragonboat_panic(t *testing.T) {
 		})
 	}
 }
-
-func init() {
-	logger.SetLoggerFactory(DragonboatFactory)
-}
