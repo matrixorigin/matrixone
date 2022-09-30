@@ -421,6 +421,7 @@ var functionIdRegister = map[string]int32{
 	"not_reg_match":           NOT_REG_MATCH,
 	"regexp_instr":            REGEXP_INSTR,
 	"regexp_like":             REGEXP_LIKE,
+	"regexp_substr":           REGEXP_SUBSTR,
 }
 
 func GetFunctionIsWinfunByName(name string) bool {

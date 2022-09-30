@@ -237,14 +237,15 @@ func TestRegularSubstrTest1(t *testing.T) {
 	//Test values
 	expr := []string{"abc def ghi", "abc def ghi"}
 	pat := []string{"[a-z]+", "[a-z]+"}
-	pos := []int{1, 1}
-	occ := []int{1, 3}
+	pos := []int64{1, 1}
+	occ := []int64{1, 3}
 
 	//Predefined Correct Values
 	expected := []string{"abc", "ghi"}
 	result := make([]string, len(expr))
 	for i := range expr {
-		result[i], _ = RegularSubstr(expr[i], pat[i], pos[i], occ[i], "")
+		temp, _ := RegularSubstr(expr[i], pat[i], pos[i], occ[i], "")
+		result[i] = temp[occ[i]-1]
 	}
 	require.Equal(t, expected, result)
 }
@@ -253,14 +254,15 @@ func TestRegularSubstrTest2(t *testing.T) {
 	//Test values
 	expr := []string{"java t point", "my sql function"}
 	pat := []string{"[a-z]+", "[a-z]+"}
-	pos := []int{2, 1}
-	occ := []int{3, 3}
+	pos := []int64{2, 1}
+	occ := []int64{3, 3}
 
 	//Predefined Correct Values
 	expected := []string{"point", "function"}
 	result := make([]string, len(expr))
 	for i := range expr {
-		result[i], _ = RegularSubstr(expr[i], pat[i], pos[i], occ[i], "")
+		temp, _ := RegularSubstr(expr[i], pat[i], pos[i], occ[i], "")
+		result[i] = temp[occ[i]-1]
 	}
 	require.Equal(t, expected, result)
 }

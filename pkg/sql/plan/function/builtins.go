@@ -2440,4 +2440,33 @@ var builtins = map[int]Functions{
 			},
 		},
 	},
+	REGEXP_SUBSTR: {
+		Id: REGEXP_SUBSTR,
+		Overloads: []Function{
+			{
+				Index:     0,
+				Flag:      plan.Function_STRICT,
+				Layout:    STANDARD_FUNCTION,
+				Args:      []types.T{types.T_varchar, types.T_varchar},
+				ReturnTyp: types.T_varchar,
+				Fn:        multi.RegularSubstr,
+			},
+			{
+				Index:     1,
+				Flag:      plan.Function_STRICT,
+				Layout:    STANDARD_FUNCTION,
+				Args:      []types.T{types.T_varchar, types.T_varchar, types.T_int64},
+				ReturnTyp: types.T_varchar,
+				Fn:        multi.RegularSubstr,
+			},
+			{
+				Index:     2,
+				Flag:      plan.Function_STRICT,
+				Layout:    STANDARD_FUNCTION,
+				Args:      []types.T{types.T_varchar, types.T_varchar, types.T_int64, types.T_int64},
+				ReturnTyp: types.T_varchar,
+				Fn:        multi.RegularSubstr,
+			},
+		},
+	},
 }
