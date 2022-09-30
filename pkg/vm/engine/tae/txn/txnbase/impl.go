@@ -38,7 +38,9 @@ func (txn *Txn) rollback1PC() (err error) {
 	}
 	txn.Wait()
 	//txn.Status = txnif.TxnStatusRollbacked
-	txn.Mgr.DeleteTxn(txn.GetID())
+	if err = txn.Mgr.DeleteTxn(txn.GetID()); err != nil {
+		return
+	}
 	return txn.Err
 }
 
@@ -67,7 +69,9 @@ func (txn *Txn) commit1PC() (err error) {
 	//if txn.Err == nil {
 	//txn.Status = txnif.TxnStatusCommitted
 	//}
-	txn.Mgr.DeleteTxn(txn.GetID())
+	if err = txn.Mgr.DeleteTxn(txn.GetID()); err != nil {
+		return
+	}
 	return txn.GetError()
 }
 

@@ -1427,6 +1427,54 @@ var (
 		}, {
 			input: `create table t3 (a int, b uuid, primary key idx (a, b))`,
 		},
+		{
+			input:  `select * from unnest("a") as f`,
+			output: `select * from unnest(a, $, false) as f`,
+		},
+		{
+			input:  `select * from unnest("a", "b") as f`,
+			output: `select * from unnest(a, b, false) as f`,
+		},
+		{
+			input:  `select * from unnest("a", "b", true) as f`,
+			output: `select * from unnest(a, b, true) as f`,
+		},
+		{
+			input:  `select * from unnest("a")`,
+			output: `select * from unnest(a, $, false)`,
+		},
+		{
+			input:  `select * from unnest("a", "b")`,
+			output: `select * from unnest(a, b, false)`,
+		},
+		{
+			input:  `select * from unnest("a", "b", true)`,
+			output: `select * from unnest(a, b, true)`,
+		},
+		{
+			input:  `select * from unnest(t.a)`,
+			output: `select * from unnest(t.a, $, false)`,
+		},
+		{
+			input:  `select * from unnest(t.a, "$.b")`,
+			output: `select * from unnest(t.a, $.b, false)`,
+		},
+		{
+			input:  `select * from unnest(t.a, "$.b", true)`,
+			output: `select * from unnest(t.a, $.b, true)`,
+		},
+		{
+			input:  `select * from unnest(t.a) as f`,
+			output: `select * from unnest(t.a, $, false) as f`,
+		},
+		{
+			input:  `select * from unnest(t.a, "$.b") as f`,
+			output: `select * from unnest(t.a, $.b, false) as f`,
+		},
+		{
+			input:  `select * from unnest(t.a, "$.b", true) as f`,
+			output: `select * from unnest(t.a, $.b, true) as f`,
+		},
 	}
 )
 

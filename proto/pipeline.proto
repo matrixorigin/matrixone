@@ -15,7 +15,7 @@
  */
 
 syntax = "proto3";
-package pipeline; 
+package pipeline;
 
 import "github.com/gogo/protobuf/gogoproto/gogo.proto";
 
@@ -145,6 +145,12 @@ message Product {
     repeated plan.Type  types = 3;
 }
 
+message Unnest{
+    repeated string attrs = 1;
+    repeated plan.ColDef cols = 2;
+    bytes extern = 3;
+}
+
 message Instruction{
     // Op specified the operator code of an instruction.
     int32 op = 1;
@@ -161,11 +167,12 @@ message Instruction{
     MarkJoin    mark_join = 11;
     Join    join = 12;
     Product    product = 13;
-	  repeated plan.OrderBySpec order_by = 14;
-    repeated plan.Expr    project_list = 15;
-    plan.Expr    filter = 16;
-    uint64    limit = 17;
-    uint64    offset = 18;
+    Unnest     unnest = 14;
+	  repeated plan.OrderBySpec order_by = 15;
+    repeated plan.Expr    project_list = 16;
+    plan.Expr    filter = 17;
+    uint64    limit = 18;
+    uint64    offset = 19;
 }
 
 message AnalysisList {

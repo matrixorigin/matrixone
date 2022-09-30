@@ -19,6 +19,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/tidwall/btree"
@@ -158,12 +159,18 @@ func (mgr *TxnManager) StartTxn(info []byte) (txn txnif.AsyncTxn, err error) {
 	return
 }
 
-func (mgr *TxnManager) DeleteTxn(id uint64) {
+func (mgr *TxnManager) DeleteTxn(id uint64) (err error) {
 	mgr.Lock()
 	defer mgr.Unlock()
 	txn := mgr.IDMap[id]
+	if txn == nil {
+		err = moerr.NewTxnNotFound()
+		logutil.Warnf("Txn %d not found", id)
+		return
+	}
 	delete(mgr.IDMap, id)
 	mgr.Active.Delete(txn.GetStartTS())
+	return
 }
 
 func (mgr *TxnManager) GetTxnByCtx(ctx []byte) txnif.AsyncTxn {
@@ -329,6 +336,12 @@ func (mgr *TxnManager) dequeuePreparing(items ...any) {
 	now := time.Now()
 	for _, item := range items {
 		op := item.(*OpTxn)
+
+		// Idempotent check
+		if state := op.Txn.GetTxnState(false); state != txnif.TxnStateActive {
+			op.Txn.WaitDone(moerr.NewTxnNotActive(txnif.TxnStrState(state)), false)
+			continue
+		}
 
 		// Mainly do conflict check for 1PC Commit or 2PC Prepare
 		mgr.onPrePrepare(op)

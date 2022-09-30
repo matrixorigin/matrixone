@@ -22,17 +22,17 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
-	"github.com/matrixorigin/matrixone/pkg/txn/storage"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/memoryengine"
 )
 
 type StorageTxnClient struct {
 	clock   clock.Clock
-	storage storage.TxnStorage
+	storage *Storage
 }
 
 func NewStorageTxnClient(
 	clock clock.Clock,
-	storage storage.TxnStorage,
+	storage *Storage,
 ) *StorageTxnClient {
 	return &StorageTxnClient{
 		clock:   clock,
@@ -59,7 +59,7 @@ func (*StorageTxnClient) NewWithSnapshot(snapshot []byte) (client.TxnOperator, e
 }
 
 type StorageTxnOperator struct {
-	storage storage.TxnStorage
+	storage *Storage
 	meta    txn.TxnMeta
 }
 
@@ -173,4 +173,10 @@ func (s *StorageTxnOperator) WriteAndCommit(ctx context.Context, ops []txn.TxnRe
 		return nil, err
 	}
 	return result, nil
+}
+
+var _ memoryengine.OperationHandlerProvider = new(StorageTxnOperator)
+
+func (s *StorageTxnOperator) GetOperationHandler() (memoryengine.OperationHandler, txn.TxnMeta) {
+	return s.storage.handler, s.meta
 }

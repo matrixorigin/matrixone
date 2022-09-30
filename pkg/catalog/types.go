@@ -94,11 +94,86 @@ const (
 
 // column's index in catalog table
 const (
-	MO_DATABASE_DAT_ID_IDX   = 0
-	MO_DATABASE_DAT_NAME_IDX = 1
-	MO_TABLES_REL_ID_IDX     = 0
-	MO_TABLES_REL_NAME_IDX   = 1
+	MO_DATABASE_DAT_ID_IDX           = 0
+	MO_DATABASE_DAT_NAME_IDX         = 1
+	MO_DATABASE_DAT_CATALOG_NAME_IDX = 2
+	MO_DATABASE_CREATESQL_IDX        = 3
+	MO_DATABASE_OWNER_IDX            = 4
+	MO_DATABASE_CREATOR_IDX          = 5
+	MO_DATABASE_CREATED_TIME_IDX     = 6
+	MO_DATABASE_ACCOUNT_ID_IDX       = 7
+
+	MO_TABLES_REL_ID_IDX         = 0
+	MO_TABLES_REL_NAME_IDX       = 1
+	MO_TABLES_RELDATABASE_IDX    = 2
+	MO_TABLES_RELDATABASE_ID_IDX = 3
+	MO_TABLES_RELPERSISTENCE_IDX = 4
+	MO_TABLES_RELKIND_IDX        = 5
+	MO_TABLES_REL_COMMENT_IDX    = 6
+	MO_TABLES_REL_CREATESQL_IDX  = 7
+	MO_TABLES_CREATED_TIME_IDX   = 8
+	MO_TABLES_CREATOR_IDX        = 9
+	MO_TABLES_OWNER_IDX          = 10
+	MO_TABLES_ACCOUNT_ID_IDX     = 11
+	MO_TABLES_PARTITIONED_IDX    = 12
+
+	MO_COLUMNS_ATT_UNIQ_NAME_IDX         = 0
+	MO_COLUMNS_ACCOUNT_ID_IDX            = 1
+	MO_COLUMNS_ATT_DATABASE_ID_IDX       = 2
+	MO_COLUMNS_ATT_DATABASE_IDX          = 3
+	MO_COLUMNS_ATT_RELNAME_ID_IDX        = 4
+	MO_COLUMNS_ATT_RELNAME_IDX           = 5
+	MO_COLUMNS_ATTNAME_IDX               = 6
+	MO_COLUMNS_ATTTYP_IDX                = 7
+	MO_COLUMNS_ATTNUM_IDX                = 8
+	MO_COLUMNS_ATT_LENGTH_IDX            = 9
+	MO_COLUMNS_ATTNOTNULL_IDX            = 10
+	MO_COLUMNS_ATTHASDEF_IDX             = 11
+	MO_COLUMNS_ATT_DEFAULT_IDX           = 12
+	MO_COLUMNS_ATTISDROPPED_IDX          = 13
+	MO_COLUMNS_ATT_CONSTRAINT_TYPE_IDX   = 14
+	MO_COLUMNS_ATT_IS_UNSIGNED_IDX       = 15
+	MO_COLUMNS_ATT_IS_AUTO_INCREMENT_IDX = 16
+	MO_COLUMNS_ATT_COMMENT_IDX           = 17
+	MO_COLUMNS_ATT_IS_HIDDEN_IDX         = 18
 )
+
+// used for memengine and tae
+// tae and memengine do not make the catalog into a table
+// for its convenience, a conversion interface is provided to ensure easy use.
+type CreateDatabase struct {
+	Name        string
+	CreateSql   string
+	Owner       uint32
+	Creator     uint32
+	AccountId   uint32
+	CreatedTime types.Timestamp
+}
+
+type DropDatabase struct {
+	Id   uint64
+	Name string
+}
+
+type CreateTable struct {
+	Name         string
+	CreateSql    string
+	Owner        uint32
+	Creator      uint32
+	AccountId    uint32
+	DatabaseId   uint64
+	DatabaseName string
+	Comment      string
+	Partition    string
+	Defs         []engine.TableDef
+}
+
+type DropTable struct {
+	Id           uint64
+	Name         string
+	DatabaseId   uint64
+	DatabaseName string
+}
 
 var (
 	MoDatabaseSchema = []string{
