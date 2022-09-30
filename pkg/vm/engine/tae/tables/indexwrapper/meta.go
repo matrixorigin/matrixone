@@ -18,6 +18,7 @@ import (
 	"bytes"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 )
 
 type IndexType uint8
@@ -30,25 +31,9 @@ const (
 	ARTIndex
 )
 
-type CompressType uint8
-
-const (
-	Plain CompressType = iota
-	Lz4
-)
-
-func Compress(raw []byte, ctyp CompressType) []byte {
-	return raw
-}
-
-func Decompress(src []byte, dst []byte, ctyp CompressType) error {
-	copy(dst, src)
-	return nil
-}
-
 type IndexMeta struct {
 	IdxType     IndexType
-	CompType    CompressType
+	CompType    common.CompressType
 	ColIdx      uint16
 	InternalIdx uint16
 	Size        uint32
@@ -58,7 +43,7 @@ type IndexMeta struct {
 func NewEmptyIndexMeta() *IndexMeta {
 	return &IndexMeta{
 		IdxType:  InvalidIndexType,
-		CompType: Plain,
+		CompType: common.Plain,
 	}
 }
 
@@ -66,7 +51,7 @@ func (meta *IndexMeta) SetIndexType(typ IndexType) {
 	meta.IdxType = typ
 }
 
-func (meta *IndexMeta) SetCompressType(typ CompressType) {
+func (meta *IndexMeta) SetCompressType(typ common.CompressType) {
 	meta.CompType = typ
 }
 
@@ -105,7 +90,7 @@ func (meta *IndexMeta) Marshal() ([]byte, error) {
 func (meta *IndexMeta) Unmarshal(buf []byte) error {
 	meta.IdxType = IndexType(types.DecodeFixed[uint8](buf[:1]))
 	buf = buf[1:]
-	meta.CompType = CompressType(types.DecodeFixed[uint8](buf[1:]))
+	meta.CompType = common.CompressType(types.DecodeFixed[uint8](buf[1:]))
 	buf = buf[1:]
 	meta.ColIdx = types.DecodeFixed[uint16](buf[:2])
 	buf = buf[2:]

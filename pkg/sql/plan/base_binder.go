@@ -930,44 +930,11 @@ func bindFuncExprImplByPlanExpr(name string, args []*Expr) (*plan.Expr, error) {
 
 func (b *baseBinder) bindNumVal(astExpr *tree.NumVal, typ *Type) (*Expr, error) {
 	// over_int64_err := moerr.NewInternalError("", "Constants over int64 will support in future version.")
-
-	getStringExpr := func(val string) *Expr {
-		return &Expr{
-			Expr: &plan.Expr_C{
-				C: &Const{
-					Isnull: false,
-					Value: &plan.Const_Sval{
-						Sval: val,
-					},
-				},
-			},
-			Typ: &plan.Type{
-				Id:       int32(types.T_varchar),
-				Nullable: false,
-				Size:     4,
-				Width:    int32(len(val)),
-			},
-		}
-	}
-
 	returnDecimalExpr := func(val string) (*Expr, error) {
 		if typ != nil {
-			return appendCastBeforeExpr(getStringExpr(val), typ)
+			return appendCastBeforeExpr(makePlan2StringConstExprWithType(val), typ)
 		}
-		_, scale, err := types.ParseStringToDecimal128WithoutTable(val)
-		if err != nil {
-			return nil, err
-		}
-		typ := &plan.Type{
-			Id: int32(types.T_decimal128),
-			// Width: int32(len(val)),
-			// Scale: 0,
-			Width:     34,
-			Scale:     scale,
-			Precision: 34,
-			Nullable:  false,
-		}
-		return appendCastBeforeExpr(getStringExpr(val), typ)
+		return makePlan2DecimalExprWithType(val)
 	}
 
 	switch astExpr.ValType {
@@ -1077,7 +1044,7 @@ func (b *baseBinder) bindNumVal(astExpr *tree.NumVal, typ *Type) (*Expr, error) 
 	case tree.P_bit:
 		return returnDecimalExpr(astExpr.String())
 	case tree.P_char:
-		expr := getStringExpr(astExpr.String())
+		expr := makePlan2StringConstExprWithType(astExpr.String())
 		return expr, nil
 	default:
 		return nil, moerr.NewInvalidInput("unsupport value '%s'", astExpr.String())

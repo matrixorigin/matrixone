@@ -28,23 +28,36 @@ func (db *database) Relations(ctx context.Context) ([]string, error) {
 }
 
 func (db *database) Relation(ctx context.Context, name string) (engine.Relation, error) {
+	key := genTableKey(ctx, name, db.databaseId)
+	if tbl, ok := db.txn.tableMap[key]; ok {
+		return tbl, nil
+	}
 	id, defs, err := db.txn.getTableInfo(ctx, db.databaseId, name)
 	if err != nil {
 		return nil, err
 	}
+	meta, err := db.txn.getTableMeta(ctx, db.databaseId, genMetaTableName(id))
+	if err != nil {
+		return nil, err
+	}
 	parts := db.txn.db.getPartitions(db.databaseId, id)
-	return &table{
+	tbl := &table{
 		db:         db,
 		tableId:    id,
-		parts:      parts,
 		tableName:  name,
 		defs:       defs,
-		insertExpr: genInsertExpr(defs),
-		deleteExpr: genDeleteExpr(defs),
-	}, nil
+		meta:       meta,
+		parts:      parts,
+		insertExpr: genInsertExpr(defs, len(parts)),
+		deleteExpr: genDeleteExpr(defs, len(parts)),
+	}
+	db.txn.tableMap[key] = tbl
+	return tbl, nil
 }
 
 func (db *database) Delete(ctx context.Context, name string) error {
+	key := genTableKey(ctx, name, db.databaseId)
+	delete(db.txn.tableMap, key)
 	id, err := db.txn.getTableId(ctx, db.databaseId, name)
 	if err != nil {
 		return err
