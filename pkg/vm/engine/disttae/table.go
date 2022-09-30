@@ -140,7 +140,7 @@ func (tbl *table) GetHideKeys(ctx context.Context) ([]*engine.Attribute, error) 
 }
 
 func (tbl *table) Write(ctx context.Context, bat *batch.Batch) error {
-	bats, err := partitionBatch(bat, tbl.insertExpr, tbl.db.txn.proc.GetMheap(), len(tbl.parts))
+	bats, err := partitionBatch(bat, tbl.insertExpr, tbl.db.txn.proc, len(tbl.parts))
 	if err != nil {
 		return err
 	}
@@ -163,7 +163,7 @@ func (tbl *table) Update(ctx context.Context, bat *batch.Batch) error {
 func (tbl *table) Delete(ctx context.Context, vec *vector.Vector, name string) error {
 	bat := batch.NewWithSize(1)
 	bat.Vecs[0] = vec
-	bats, err := partitionBatch(bat, tbl.insertExpr, tbl.db.txn.proc.GetMheap(), len(tbl.parts))
+	bats, err := partitionBatch(bat, tbl.insertExpr, tbl.db.txn.proc, len(tbl.parts))
 	if err != nil {
 		return err
 	}

@@ -766,13 +766,12 @@ func getAccessInfo(ctx context.Context) (uint32, uint32, uint32) {
 	return accountId, userId, roleId
 }
 
-func partitionBatch(bat *batch.Batch, expr *plan.Expr, m *mheap.Mheap, dnNum int) ([]*batch.Batch, error) {
-	proc := process.New(context.TODO(), m, nil, nil, nil)
+func partitionBatch(bat *batch.Batch, expr *plan.Expr, proc *process.Process, dnNum int) ([]*batch.Batch, error) {
 	pvec, err := colexec.EvalExpr(bat, proc, expr)
 	if err != nil {
 		return nil, err
 	}
-	defer pvec.Free(m)
+	defer pvec.Free(proc.GetMheap())
 	bats := make([]*batch.Batch, dnNum)
 	for i := range bats {
 		bats[i] = batch.New(true, bat.Attrs)
@@ -784,9 +783,9 @@ func partitionBatch(bat *batch.Batch, expr *plan.Expr, m *mheap.Mheap, dnNum int
 	for i := range bat.Vecs {
 		vec := bat.GetVector(int32(i))
 		for j, v := range vs {
-			if err := vector.UnionOne(bats[v].GetVector(int32(i)), vec, int64(j), m); err != nil {
+			if err := vector.UnionOne(bats[v].GetVector(int32(i)), vec, int64(j), proc.GetMheap()); err != nil {
 				for _, bat := range bats {
-					bat.Clean(m)
+					bat.Clean(proc.GetMheap())
 				}
 				return nil, err
 			}
