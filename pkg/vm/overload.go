@@ -16,6 +16,7 @@ package vm
 
 import (
 	"bytes"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/generate_series"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/intersectall"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/unnest"
@@ -106,7 +107,8 @@ var stringFunc = [...]func(any, *bytes.Buffer){
 
 	HashBuild: hashbuild.String,
 
-	Unnest: unnest.String,
+	Unnest:         unnest.String,
+	GenerateSeries: generate_series.String,
 }
 
 var prepareFunc = [...]func(*process.Process, any) error{
@@ -153,6 +155,8 @@ var prepareFunc = [...]func(*process.Process, any) error{
 	HashBuild: hashbuild.Prepare,
 
 	Unnest: unnest.Prepare,
+
+	GenerateSeries: generate_series.Prepare,
 }
 
 var execFunc = [...]func(int, *process.Process, any) (bool, error){
@@ -197,5 +201,6 @@ var execFunc = [...]func(int, *process.Process, any) (bool, error){
 
 	HashBuild: hashbuild.Call,
 
-	Unnest: unnest.Call,
+	Unnest:         unnest.Call,
+	GenerateSeries: generate_series.Call,
 }

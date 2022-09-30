@@ -15,12 +15,123 @@
 package generate_series
 
 import (
+	"bytes"
+	"encoding/json"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"math"
 	"strconv"
 	"strings"
 )
+
+func String(arg any, buf *bytes.Buffer) {
+	buf.WriteString("generate_series")
+}
+
+func Prepare(_ *process.Process, arg any) error {
+	return nil
+}
+
+func Call(_ int, proc *process.Process, arg any) (bool, error) {
+	param := arg.(*Argument).Es
+	bat := proc.InputBatch()
+	if bat == nil {
+		return true, nil
+	}
+	dt := bat.GetVector(0).GetBytes(0)
+	var exArgs []string
+	err := json.Unmarshal(dt, &exArgs)
+	if err != nil {
+		return false, err
+	}
+	if len(exArgs) != 3 {
+		return false, moerr.NewInvalidInput("invalid arguments")
+	}
+	rbat := batch.New(false, param.Attrs)
+	for i := range param.Cols {
+		rbat.Vecs[i] = vector.New(dupType(param.Cols[i].Typ))
+	}
+	param.start, param.end, param.step = exArgs[0], exArgs[1], exArgs[2]
+	switch param.Cols[0].Typ.Id {
+	case int32(types.T_int32):
+		var start, end, step int64
+		start, err = strconv.ParseInt(param.start, 10, 32)
+		if err != nil {
+			return false, err
+		}
+		end, err = strconv.ParseInt(param.end, 10, 32)
+		if err != nil {
+			return false, err
+		}
+		step, err = strconv.ParseInt(param.step, 10, 32)
+		if err != nil {
+			return false, err
+		}
+		res, err := generateInt32(int32(start), int32(end), int32(step))
+		if err != nil {
+			return false, err
+		}
+		for i := range res {
+			err = rbat.Vecs[0].Append(res[i], false, proc.Mp())
+			if err != nil {
+				return false, err
+			}
+		}
+		rbat.InitZsOne(len(res))
+	case int32(types.T_int64):
+		var start, end, step int64
+		start, err = strconv.ParseInt(param.start, 10, 64)
+		if err != nil {
+			return false, err
+		}
+		end, err = strconv.ParseInt(param.end, 10, 64)
+		if err != nil {
+			return false, err
+		}
+		step, err = strconv.ParseInt(param.step, 10, 64)
+		if err != nil {
+			return false, err
+		}
+		res, err := generateInt64(start, end, step)
+		if err != nil {
+			return false, err
+		}
+		for i := range res {
+			err = rbat.Vecs[0].Append(res[i], false, proc.Mp())
+			if err != nil {
+				return false, err
+			}
+		}
+		rbat.InitZsOne(len(res))
+	case int32(types.T_datetime):
+		res, err := generateDatetime(param.start, param.end, param.step, param.Cols[0].Typ.Precision)
+		if err != nil {
+			return false, err
+		}
+		for i := range res {
+			err = rbat.Vecs[0].Append(res[i], false, proc.Mp())
+			if err != nil {
+				return false, err
+			}
+		}
+		rbat.InitZsOne(len(res))
+	}
+	proc.SetInputBatch(rbat)
+	return false, nil
+}
+
+func dupType(typ *plan.Type) types.Type {
+	return types.Type{
+		Oid:       types.T(typ.Id),
+		Width:     typ.Width,
+		Size:      typ.Size,
+		Precision: typ.Precision,
+	}
+}
 
 func judgeArgs[T Number](start, end, step T) ([]T, error) {
 	if step == 0 {
