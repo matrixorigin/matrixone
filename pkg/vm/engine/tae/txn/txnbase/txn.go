@@ -163,7 +163,7 @@ func (txn *Txn) Prepare() (pts types.TS, err error) {
 func (txn *Txn) Rollback() (err error) {
 	//TODO:idempotent for rollback should be guaranteed by TxnStoage?
 	if txn.Mgr.GetTxn(txn.GetID()) == nil {
-		logutil.Warnf("tae : txn %d is not found in TxnManager", txn.GetID())
+		logutil.Warnf("tae : txn %s is not found in TxnManager", txn.GetID())
 		err = moerr.NewTxnNotFound()
 		return
 	}

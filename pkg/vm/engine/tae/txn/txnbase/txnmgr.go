@@ -186,7 +186,7 @@ func (mgr *TxnManager) DeleteTxn(id string) (err error) {
 	txn := mgr.IDMap[id]
 	if txn == nil {
 		err = moerr.NewTxnNotFound()
-		logutil.Warnf("Txn %d not found", id)
+		logutil.Warnf("Txn %s not found", id)
 		return
 	}
 	delete(mgr.IDMap, id)
