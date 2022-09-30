@@ -57,6 +57,9 @@ const (
 	// default heartbeat configuration
 	defaultLogHeartbeatInterval = 1 * time.Second
 	defaultDNHeartbeatInterval  = 1 * time.Second
+
+	// default task configuration
+	defaultFetchInterval = 1 * time.Second
 )
 
 // Options are params for creating test cluster.
@@ -93,7 +96,8 @@ type Options struct {
 	}
 
 	task struct {
-		taskStorage taskservice.TaskStorage
+		taskStorage   taskservice.TaskStorage
+		FetchInterval time.Duration
 	}
 }
 
@@ -167,6 +171,9 @@ func (opt *Options) validate() {
 	// task configuration
 	if opt.task.taskStorage == nil {
 		opt.task.taskStorage = taskservice.NewMemTaskStorage()
+	}
+	if opt.task.FetchInterval == 0 {
+		opt.task.FetchInterval = defaultFetchInterval
 	}
 }
 
