@@ -179,10 +179,11 @@ func (bf *blockFile) LoadBatch(
 	if bf.reader == nil {
 		bat = containers.NewBatch()
 
+		metaKey := bf.getMetaKey()
 		for i := range bf.columns {
 			vec := containers.MakeVector(colTypes[i], nullables[i], opts)
 			bat.AddVector(colNames[i], vec)
-			if bf.getMetaKey().End() == 0 {
+			if metaKey.End() == 0 {
 				continue
 			}
 		}
