@@ -15,7 +15,7 @@
 package logutil
 
 import (
-	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"testing"
 )
 
@@ -39,7 +39,7 @@ func TestCronLogger_Error(t *testing.T) {
 				logInfo: false,
 			},
 			args: args{
-				err:           fmt.Errorf("test"),
+				err:           moerr.NewInternalError("test"),
 				msg:           "hello world",
 				keysAndValues: []any{"int", 1, "key", "val"},
 			},
