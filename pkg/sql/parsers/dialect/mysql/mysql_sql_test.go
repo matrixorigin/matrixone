@@ -377,7 +377,7 @@ var (
 		output: "create table t1 (a varchar)",
 	}, {
 		input:  "SELECT (CAST(0x7FFFFFFFFFFFFFFF AS char));",
-		output: "select (cast(0x7fffffffffffffff as char))",
+		output: "select (cast(0x7FFFFFFFFFFFFFFF as char))",
 	}, {
 		input:  "select cast(-19999999999999999999 as signed);",
 		output: "select cast(-19999999999999999999 as signed)",
@@ -486,7 +486,7 @@ var (
 		output: "insert into t1 (f1) values (-1)",
 	}, {
 		input:  "insert into t1 values (18446744073709551615), (0xFFFFFFFFFFFFFFFE), (18446744073709551613), (18446744073709551612)",
-		output: "insert into t1 values (18446744073709551615), (0xfffffffffffffffe), (18446744073709551613), (18446744073709551612)",
+		output: "insert into t1 values (18446744073709551615), (0xFFFFFFFFFFFFFFFE), (18446744073709551613), (18446744073709551612)",
 	}, {
 		input:  "create table t (a int) properties(\"host\" = \"127.0.0.1\", \"port\" = \"8239\", \"user\" = \"mysql_user\", \"password\" = \"mysql_passwd\")",
 		output: "create table t (a int) properties(host = 127.0.0.1, port = 8239, user = mysql_user, password = mysql_passwd)",

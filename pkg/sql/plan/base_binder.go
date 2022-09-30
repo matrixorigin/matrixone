@@ -935,7 +935,7 @@ func (b *baseBinder) bindNumVal(astExpr *tree.NumVal, typ *Type) (*Expr, error) 
 	// over_int64_err := moerr.NewInternalError("", "Constants over int64 will support in future version.")
 	returnDecimalExpr := func(val string) (*Expr, error) {
 		if typ != nil {
-			return appendCastBeforeExpr(makePlan2StringConstExprWithType(val), typ)
+			return appendCastBeforeExpr(makePlan2StringConstExprWithType(val, plan.Type_NORMAL), typ)
 		}
 		return makePlan2DecimalExprWithType(val)
 	}
@@ -1043,11 +1043,13 @@ func (b *baseBinder) bindNumVal(astExpr *tree.NumVal, typ *Type) (*Expr, error) 
 			},
 		}, nil
 	case tree.P_hexnum:
-		return returnDecimalExpr(astExpr.String())
+		expr := makePlan2StringConstExprWithType(astExpr.String(), plan.Type_HEX)
+		return expr, nil
 	case tree.P_bit:
-		return returnDecimalExpr(astExpr.String())
+		expr := makePlan2StringConstExprWithType(astExpr.String(), plan.Type_BIT)
+		return expr, nil
 	case tree.P_char:
-		expr := makePlan2StringConstExprWithType(astExpr.String())
+		expr := makePlan2StringConstExprWithType(astExpr.String(), plan.Type_NORMAL)
 		return expr, nil
 	default:
 		return nil, moerr.NewInvalidInput("unsupport value '%s'", astExpr.String())

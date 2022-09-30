@@ -563,10 +563,18 @@ func int64ToUint64(xs []int64, rs []uint64) ([]uint64, error) {
 	return rs, nil
 }
 
-func BytesToInt[T constraints.Signed](xs []string, rs []T) ([]T, error) {
+func BytesToInt[T constraints.Signed](xs []string, rs []T, typ types.Type) ([]T, error) {
 	var bitSize = int(unsafe.Sizeof(T(0))) * 8
 	for i, s := range xs {
-		val, err := strconv.ParseInt(strings.TrimSpace(s), 10, bitSize)
+		var err error
+		var val int64
+		if typ.BitOrHex == types.CharNormal {
+			val, err = strconv.ParseInt(strings.TrimSpace(s), 10, bitSize)
+		} else if typ.BitOrHex == types.CharBit {
+			val, err = strconv.ParseInt(strings.TrimSpace(s)[2:], 2, bitSize)
+		} else {
+			val, err = strconv.ParseInt(strings.TrimSpace(s)[2:], 16, bitSize)
+		}
 		if err != nil {
 			if strings.Contains(err.Error(), "value out of range") {
 				return nil, moerr.NewOutOfRange("int", "value '%v'", s)
@@ -578,11 +586,19 @@ func BytesToInt[T constraints.Signed](xs []string, rs []T) ([]T, error) {
 	return rs, nil
 }
 
-func BytesToUint[T constraints.Unsigned](xs []string, rs []T) ([]T, error) {
+func BytesToUint[T constraints.Unsigned](xs []string, rs []T, typ types.Type) ([]T, error) {
 	var bitSize = int(unsafe.Sizeof(T(0))) * 8
 
 	for i, s := range xs {
-		val, err := strconv.ParseUint(strings.TrimSpace(s), 10, bitSize)
+		var err error
+		var val uint64
+		if typ.BitOrHex == types.CharNormal {
+			val, err = strconv.ParseUint(strings.TrimSpace(s), 10, bitSize)
+		} else if typ.BitOrHex == types.CharBit {
+			val, err = strconv.ParseUint(strings.TrimSpace(s)[2:], 2, bitSize)
+		} else if typ.BitOrHex == types.CharHex {
+			val, err = strconv.ParseUint(strings.TrimSpace(s)[2:], 16, bitSize)
+		}
 		if err != nil {
 			if strings.Contains(err.Error(), "value out of range") {
 				return nil, moerr.NewOutOfRange("uint", "value '%v'", s)

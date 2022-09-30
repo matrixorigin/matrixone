@@ -81,6 +81,12 @@ const (
 	RowidSize = 16
 )
 
+const (
+	CharNormal int32 = 0
+	CharBit    int32 = 1
+	CharHex    int32 = 2
+)
+
 type Type struct {
 	Oid T
 	// XXX Dummies.  T is uint8, make it 4 bytes aligned, otherwise, it may contain
@@ -96,6 +102,8 @@ type Type struct {
 	Width     int32
 	Scale     int32
 	Precision int32
+	// 1 is bit, 2 is hex, 0 is char/varchar
+	BitOrHex int32
 }
 
 type Date int32

@@ -251,7 +251,7 @@ func (rule *ResetVarRefRule) ApplyExpr(e *plan.Expr) (*plan.Expr, error) {
 
 		switch val := getVal.(type) {
 		case string:
-			expr = makePlan2StringConstExprWithType(val)
+			expr = makePlan2StringConstExprWithType(val, plan.Type_NORMAL)
 		case int:
 			expr = makePlan2Int64ConstExprWithType(int64(val))
 		case uint8:

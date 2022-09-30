@@ -195,7 +195,8 @@ import (
 %left <str> ')'
 %nonassoc LOWER_THAN_STRING
 %nonassoc <str> ID AT_ID AT_AT_ID STRING VALUE_ARG LIST_ARG COMMENT COMMENT_KEYWORD
-%token <item> INTEGRAL HEX BIT_LITERAL FLOAT HEXNUM
+%token <item> INTEGRAL FLOAT
+%token <str>  HEX BIT_LITERAL HEXNUM
 %token <str> NULL TRUE FALSE
 %nonassoc LOWER_THAN_CHARSET
 %nonassoc <str> CHARSET
@@ -6417,37 +6418,17 @@ literal:
         $$ = tree.NewNumValWithType(constant.MakeUnknown(), "null", false, tree.P_null)
     }
 |   HEXNUM
-    {
-        switch v := $1.(type) {
-        case uint64:
-            $$ = tree.NewNumValWithType(constant.MakeUint64(v), yylex.(*Lexer).scanner.LastToken, false, tree.P_uint64)
-        case int64:
-            $$ = tree.NewNumValWithType(constant.MakeInt64(v), yylex.(*Lexer).scanner.LastToken, false, tree.P_int64)
-        case string:
-            $$ = tree.NewNumValWithType(constant.MakeString(v), v, false, tree.P_hexnum)
-        default:
-            yylex.Error("parse integral fail")
-            return 1
-        }
-    }
+	{
+		$$ = tree.NewNumValWithType(constant.MakeString($1), $1, false, tree.P_hexnum)
+	}
 |   DECIMAL_VALUE
     {
         $$ = tree.NewNumValWithType(constant.MakeString($1), $1, false, tree.P_decimal)
     }
 |   BIT_LITERAL
-    {
-        switch v := $1.(type) {
-        case uint64:
-            $$ = tree.NewNumValWithType(constant.MakeUint64(v), yylex.(*Lexer).scanner.LastToken, false, tree.P_uint64)
-        case int64:
-            $$ = tree.NewNumValWithType(constant.MakeInt64(v), yylex.(*Lexer).scanner.LastToken, false, tree.P_int64)
-        case string:
-            $$ = tree.NewNumValWithType(constant.MakeString(v), v, false, tree.P_bit)
-        default:
-            yylex.Error("parse integral fail")
-            return 1
-        }
-    }
+	{
+		$$ = tree.NewNumValWithType(constant.MakeString($1), $1, false, tree.P_bit)
+	}
 |   VALUE_ARG
     {
         $$ = tree.NewParamExpr(yylex.(*Lexer).GetParamIndex())

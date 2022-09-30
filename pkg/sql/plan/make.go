@@ -32,7 +32,7 @@ func makePlan2DecimalExprWithType(v string) (*plan.Expr, error) {
 		Precision: 34,
 		Nullable:  false,
 	}
-	return appendCastBeforeExpr(makePlan2StringConstExprWithType(v), typ)
+	return appendCastBeforeExpr(makePlan2StringConstExprWithType(v, plan.Type_NORMAL), typ)
 }
 
 func makePlan2NullConstExprWithType() *plan.Expr {
@@ -142,9 +142,7 @@ func makePlan2StringConstExpr(v string) *plan.Expr_C {
 	}}
 }
 
-var MakePlan2StringConstExprWithType = makePlan2StringConstExprWithType
-
-func makePlan2StringConstExprWithType(v string) *plan.Expr {
+func makePlan2StringConstExprWithType(v string, t plan.Type_CharType) *plan.Expr {
 	return &plan.Expr{
 		Expr: makePlan2StringConstExpr(v),
 		Typ: &plan.Type{
@@ -152,6 +150,7 @@ func makePlan2StringConstExprWithType(v string) *plan.Expr {
 			Nullable: false,
 			Size:     4,
 			Width:    int32(len(v)),
+			BitOrHex: t,
 		},
 	}
 }

@@ -24,12 +24,18 @@ option (gogoproto.sizer_all) = false;
 option (gogoproto.protosizer_all) = true;
 
 message Type {
+	enum CharType {
+		NORMAL = 0;
+		BIT = 1;
+		HEX = 2;
+	}
 	int32 id           = 1;
 	bool nullable		= 2;
 	int32 width			= 3;
 	int32 precision		= 4;
 	int32 size 			= 5;
 	int32 scale 		= 6;
+	CharType bit_or_hex = 7;
 };
 
 // Const: if a const value can be reprensented by int64 or

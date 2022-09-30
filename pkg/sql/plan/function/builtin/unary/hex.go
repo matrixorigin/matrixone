@@ -17,6 +17,7 @@ package unary
 import (
 	"encoding/hex"
 	"fmt"
+	"strconv"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -32,11 +33,15 @@ func HexString(vectors []*vector.Vector, proc *process.Process) (*vector.Vector,
 			return proc.AllocScalarNullVector(resultType), nil
 		}
 		resultValues := make([]string, 1)
-		HexEncodeString(inputValues, resultValues)
+		if _, err := HexEncodeString(inputValues, resultValues, inputVector.Typ); err != nil {
+			return nil, err
+		}
 		return vector.NewConstString(resultType, inputVector.Length(), resultValues[0]), nil
 	} else {
 		resultValues := make([]string, len(inputValues))
-		HexEncodeString(inputValues, resultValues)
+		if _, err := HexEncodeString(inputValues, resultValues, inputVector.Typ); err != nil {
+			return nil, err
+		}
 		return vector.NewWithStrings(resultType, resultValues, inputVector.Nsp, proc.Mp()), nil
 	}
 }
@@ -59,12 +64,22 @@ func HexInt64(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, 
 	}
 }
 
-func HexEncodeString(xs []string, rs []string) []string {
+func HexEncodeString(xs []string, rs []string, typ types.Type) ([]string, error) {
 	for i, str := range xs {
-		dst := hex.EncodeToString([]byte(str))
-		rs[i] = dst
+		if typ.BitOrHex == types.CharHex {
+			rs[i] = str
+		} else if typ.BitOrHex == types.CharBit {
+			b, err := strconv.ParseUint(str[2:], 2, 64)
+			if err != nil {
+				return nil, err
+			}
+			rs[i] = fmt.Sprintf("%X", b)
+		} else {
+			dst := hex.EncodeToString([]byte(str))
+			rs[i] = dst
+		}
 	}
-	return rs
+	return rs, nil
 }
 
 func HexEncodeInt64(xs []int64, rs []string) []string {

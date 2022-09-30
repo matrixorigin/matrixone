@@ -915,7 +915,7 @@ func CastSpecials1Int[T constraints.Signed](lv, rv *vector.Vector, proc *process
 		return proc.AllocConstNullVector(rv.Typ, lv.Length()), nil
 	} else if lv.IsScalar() {
 		rs := make([]T, 1)
-		if _, err = binary.BytesToInt(col, rs); err != nil {
+		if _, err = binary.BytesToInt(col, rs, lv.Typ); err != nil {
 			return nil, err
 		}
 		return vector.NewConstFixed(rv.Typ, lv.Length(), rs[0]), nil
@@ -925,7 +925,7 @@ func CastSpecials1Int[T constraints.Signed](lv, rv *vector.Vector, proc *process
 			return nil, err
 		}
 		rs := vector.MustTCols[T](vec)
-		if _, err = binary.BytesToInt(col, rs); err != nil {
+		if _, err = binary.BytesToInt(col, rs, lv.Typ); err != nil {
 			return nil, err
 		}
 		return vector.NewWithFixed(rv.Typ, rs, lv.Nsp, proc.Mp()), nil
@@ -939,7 +939,7 @@ func CastSpecials1Uint[T constraints.Unsigned](lv, rv *vector.Vector, proc *proc
 		return proc.AllocConstNullVector(rv.Typ, lv.Length()), nil
 	} else if lv.IsScalar() {
 		rs := make([]T, 1)
-		if _, err = binary.BytesToUint(col, rs); err != nil {
+		if _, err = binary.BytesToUint(col, rs, lv.Typ); err != nil {
 			return nil, err
 		}
 		return vector.NewConstFixed(rv.Typ, lv.Length(), rs[0]), nil
@@ -949,7 +949,7 @@ func CastSpecials1Uint[T constraints.Unsigned](lv, rv *vector.Vector, proc *proc
 			return nil, err
 		}
 		rs := vector.MustTCols[T](vec)
-		if _, err = binary.BytesToUint(col, rs); err != nil {
+		if _, err = binary.BytesToUint(col, rs, lv.Typ); err != nil {
 			return nil, err
 		}
 		return vector.NewWithFixed(rv.Typ, rs, lv.Nsp, proc.Mp()), nil

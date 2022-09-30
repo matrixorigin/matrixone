@@ -82,6 +82,7 @@ func EvalExpr(bat *batch.Batch, proc *process.Process, expr *plan.Expr) (*vector
 				vec = vector.NewConstFixed(constTimestampType, length, t.C.GetTimestampval())
 			case *plan.Const_Sval:
 				sval := t.C.GetSval()
+				constSType.BitOrHex = int32(expr.Typ.BitOrHex)
 				vec = vector.NewConstString(constSType, length, sval)
 			default:
 				return nil, moerr.NewNYI(fmt.Sprintf("const expression %v", t.C.GetValue()))
@@ -95,6 +96,7 @@ func EvalExpr(bat *batch.Batch, proc *process.Process, expr *plan.Expr) (*vector
 			Width:     t.T.Typ.GetWidth(),
 			Scale:     t.T.Typ.GetScale(),
 			Precision: t.T.Typ.GetPrecision(),
+			BitOrHex:  int32(t.T.Typ.GetBitOrHex()),
 		}), nil
 	case *plan.Expr_Col:
 		vec := bat.Vecs[t.Col.ColPos]

@@ -551,7 +551,9 @@ exit:
 		token = ID
 		s.scanIdentifier(false)
 	}
-
+	if token == BIT_LITERAL || token == HEXNUM {
+		return token, s.buf[start:s.Pos]
+	}
 	return token, strings.ToLower(s.buf[start:s.Pos])
 }
 
