@@ -15,6 +15,7 @@
 package logservicedriver
 
 import (
+	"fmt"
 	"math"
 	"sync"
 	"time"
@@ -173,7 +174,7 @@ func (info *driverInfo) logAppend(appender *driverAppender) {
 	info.addr[appender.logserviceLsn] = interval
 	info.addrMu.Unlock()
 	if interval.GetMin() != info.syncing+1 {
-		panic("logic err")
+		panic(fmt.Sprintf("logic err, expect %d, min is %d", info.syncing+1, interval.GetMin()))
 	}
 	if len(interval.Intervals) != 1 {
 		logutil.Infof("interval is %v", interval)

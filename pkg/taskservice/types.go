@@ -35,7 +35,7 @@ var (
 	GE = Op(3)
 	// LT record < condition
 	LT = Op(4)
-	// LT record <= condition
+	// LE record <= condition
 	LE = Op(5)
 
 	OpName = map[Op]string{
@@ -163,7 +163,7 @@ type TaskService interface {
 // represent the completion of the task execution. In the process of task execution task may be interrupted
 // at any time, so the implementation needs to frequently check the state of the Context, in the
 // Context.Done(), as soon as possible to exit. Epoch is 1 means the task is executed for the first time,
-// otherwise it means that the task is rescheduled, the task may completed or not.
+// otherwise it means that the task is rescheduled, the task may be completed or not.
 type TaskExecutor func(ctx context.Context, task task.Task) error
 
 // TaskRunner each runner can execute multiple task concurrently
@@ -177,8 +177,8 @@ type TaskRunner interface {
 	Stop() error
 	// Parallelism maximum number of concurrently executing Tasks
 	Parallelism() int
-	// RegisterExectuor register the task executor
-	RegisterExectuor(code int, executor TaskExecutor)
+	// RegisterExecutor register the task executor
+	RegisterExecutor(code int, executor TaskExecutor)
 }
 
 // TaskStorage task storage
