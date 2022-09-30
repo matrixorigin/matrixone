@@ -87,18 +87,22 @@ func (p *Partition) Delete(ctx context.Context, b *api.Batch) error {
 
 		rowID := RowID(tuple[0].Value.(types.Rowid))
 		ts := tuple[1].Value.(types.TS)
-		tx := memtable.NewTransaction(txID, memtable.Time{
+		t := memtable.Time{
 			Timestamp: timestamp.Timestamp{
 				PhysicalTime: ts.Physical(),
 				LogicalTime:  ts.Logical(),
 			},
-		}, memtable.SnapshotIsolation)
+		}
+		tx := memtable.NewTransaction(txID, t, memtable.SnapshotIsolation)
 
 		err := p.data.Delete(tx, rowID)
 		if err != nil {
 			return err
 		}
 
+		if err := tx.Commit(t); err != nil {
+			return err
+		}
 	}
 
 	return nil
@@ -121,12 +125,13 @@ func (p *Partition) Insert(ctx context.Context, b *api.Batch) error {
 
 		rowID := RowID(tuple[0].Value.(types.Rowid))
 		ts := tuple[1].Value.(types.TS)
-		tx := memtable.NewTransaction(txID, memtable.Time{
+		t := memtable.Time{
 			Timestamp: timestamp.Timestamp{
 				PhysicalTime: ts.Physical(),
 				LogicalTime:  ts.Logical(),
 			},
-		}, memtable.SnapshotIsolation)
+		}
+		tx := memtable.NewTransaction(txID, t, memtable.SnapshotIsolation)
 
 		dataValue := make(DataValue)
 		for i := 2; i < len(tuple); i++ {
@@ -141,6 +146,9 @@ func (p *Partition) Insert(ctx context.Context, b *api.Batch) error {
 			return err
 		}
 
+		if err := tx.Commit(t); err != nil {
+			return err
+		}
 	}
 
 	return nil
