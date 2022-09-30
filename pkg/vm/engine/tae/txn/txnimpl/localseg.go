@@ -112,7 +112,9 @@ func (seg *localSegment) ApplyAppend() (err error) {
 		if seg.table.appendTxnNode == nil {
 			seg.table.appendTxnNode = make([]*txnbase.TxnMVCCNode, 0)
 		}
-		seg.table.appendTxnNode = append(seg.table.appendTxnNode, txnNode)
+		if txnNode != nil {
+			seg.table.appendTxnNode = append(seg.table.appendTxnNode, txnNode)
+		}
 		id := ctx.driver.GetID()
 		ctx.node.AddApplyInfo(ctx.start, ctx.count, uint32(destOff), ctx.count, seg.table.entry.GetDB().ID, id)
 	}

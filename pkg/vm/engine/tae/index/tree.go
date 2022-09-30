@@ -138,8 +138,9 @@ func (chain *IndexMVCCChain) Insert(n *IndexMVCCNode) {
 }
 
 type simpleARTMap struct {
-	typ  types.Type
-	tree art.Tree //pk-row
+	typ         types.Type
+	tree        art.Tree //pk-row
+	maxDeleteTS types.TS
 }
 
 func NewSimpleARTMap(typ types.Type) *simpleARTMap {
@@ -195,6 +196,7 @@ func (art *simpleARTMap) BatchInsert(keys *KeysCtx, startRow uint32, upsert bool
 				return ErrDuplicate
 			}
 			deleteNode := NewDeleteIndexMVCCNodeWithTxnNode(oldChain.GetRow(), txnNode)
+			art.OnDeleteTS(txn.GetStartTS())
 			oldChain.Insert(deleteNode)
 			oldChain.Merge(chain)
 			art.tree.Insert(encoded, old)
@@ -205,6 +207,10 @@ func (art *simpleARTMap) BatchInsert(keys *KeysCtx, startRow uint32, upsert bool
 
 	err = keys.Keys.ForeachWindow(keys.Start, keys.Count, op, nil)
 	return
+}
+
+func (art *simpleARTMap) GetMaxDeleteTS() types.TS {
+	return art.maxDeleteTS
 }
 
 func (art *simpleARTMap) IsKeyDeleted(key any, ts types.TS) (deleted bool, existed bool) {
@@ -283,8 +289,15 @@ func (art *simpleARTMap) Delete(key any, ts types.TS) (old uint32, txnNode *txnb
 		var deleteNode *IndexMVCCNode
 		deleteNode, txnNode = NewDeleteIndexMVCCNode(old, ts)
 		oldChain.Insert(deleteNode)
+		art.OnDeleteTS(ts)
 	}
 	return
+}
+
+func (art *simpleARTMap) OnDeleteTS(ts types.TS) {
+	if ts.Greater(art.maxDeleteTS) {
+		art.maxDeleteTS = ts
+	}
 }
 
 func (art *simpleARTMap) Search(key any) (uint32, error) {

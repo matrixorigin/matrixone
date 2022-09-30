@@ -61,7 +61,7 @@ func (idx *mutableIndex) IsKeyDeleted(key any, ts types.TS) (deleted bool, exist
 	return idx.art.IsKeyDeleted(key, ts)
 }
 
-// func (idx *mutableIndex) GetMaxDeleteTS() types.TS { return idx.deletes.GetMaxTS() }
+func (idx *mutableIndex) GetMaxDeleteTS() types.TS { return idx.art.GetMaxDeleteTS() }
 
 // func (idx *mutableIndex) RevertUpsert(keys containers.Vector, updatePositions,
 // 	updateRows *roaring.Bitmap, txn txnif.TxnReader) (err error) {

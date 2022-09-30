@@ -57,6 +57,7 @@ type SecondaryIndex interface {
 	// Update(key any, row uint32) error
 	// BatchUpdate(keys containers.Vector, offsets []uint32, start uint32) error
 	Delete(key any, ts types.TS) (old uint32, txnNode *txnbase.TxnMVCCNode, err error)
+	GetMaxDeleteTS() types.TS
 	Search(key any) (uint32, error)
 	Contains(key any) bool
 	ContainsAny(keysCtx *KeysCtx, rowmask *roaring.Bitmap) bool
