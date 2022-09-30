@@ -12,4 +12,22 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package operator
+package regular
+
+import (
+	"regexp"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+)
+
+func RegularLike(expr, pat, match_type string) (uint8, error) {
+	matchRes, err := regexp.MatchString(pat, expr)
+	if err != nil {
+		return 0, moerr.NewInvalidInput("regexp_like have invalid input")
+	}
+	if matchRes {
+		return 1, nil
+	} else {
+		return 0, nil
+	}
+}

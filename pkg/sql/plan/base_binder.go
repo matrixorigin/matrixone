@@ -583,10 +583,7 @@ func (b *baseBinder) bindComparisonExpr(astExpr *tree.ComparisonExpr, depth int3
 				return bindFuncExprImplByPlanExpr("not", []*plan.Expr{expr})
 			}
 		}
-	case tree.REG_MATCH:
-		op = "reg_match"
-	case tree.NOT_REG_MATCH:
-		op = "not_reg_match"
+
 	default:
 		return nil, moerr.NewNYI("'%v'", astExpr)
 	}
@@ -740,6 +737,8 @@ func bindFuncExprImplByPlanExpr(name string, args []*Expr) (*plan.Expr, error) {
 				},
 			},
 		}, nil
+	case "time_stamp_unit":
+
 	case "and", "or", "not", "xor":
 		// why not append cast function?
 		// for i := 0; i < len(args); i++ {
@@ -767,7 +766,7 @@ func bindFuncExprImplByPlanExpr(name string, args []*Expr) (*plan.Expr, error) {
 		if len(args) != 2 {
 			return nil, moerr.NewInvalidArg("date_add/date_sub function need two args", len(args))
 		}
-		args, err = resetDateFunction(args[0], args[1])
+		args, err = resetDateFunctionArgs(args[0], args[1])
 		if err != nil {
 			return nil, err
 		}
@@ -775,7 +774,7 @@ func bindFuncExprImplByPlanExpr(name string, args []*Expr) (*plan.Expr, error) {
 		if len(args) != 2 {
 			return nil, moerr.NewInvalidArg("adddate/subdate function need two args", len(args))
 		}
-		args, err = resetDateFunction(args[0], args[1])
+		args, err = resetDateFunctionArgs2(args[0], args[1])
 		if err != nil {
 			return nil, err
 		}
@@ -1230,7 +1229,7 @@ func resetDateFunctionArgs(dateExpr *Expr, intervalExpr *Expr) ([]*Expr, error) 
 	}, nil
 }
 
-func resetDateFunction(dateExpr *Expr, intervalExpr *Expr) ([]*Expr, error) {
+func resetDateFunctionArgs2(dateExpr *Expr, intervalExpr *Expr) ([]*Expr, error) {
 	switch intervalExpr.Expr.(type) {
 	case *plan.Expr_List:
 		return resetDateFunctionArgs(dateExpr, intervalExpr)
