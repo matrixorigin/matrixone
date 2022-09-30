@@ -108,7 +108,17 @@ func NewService(
 	srv.storeEngine = pu.StorageEngine
 	srv._txnClient = pu.TxnClient
 
-	runner, err := taskservice.NewTaskRunner(cfg.UUID, taskService)
+	runner, err := taskservice.NewTaskRunner(cfg.UUID, taskService,
+		taskservice.WithOptions(
+			cfg.TaskRunner.QueryLimit,
+			cfg.TaskRunner.Parallelism,
+			cfg.TaskRunner.MaxWaitTasks,
+			cfg.TaskRunner.FetchInterval.Duration,
+			cfg.TaskRunner.FetchTimeout.Duration,
+			cfg.TaskRunner.RetryInterval.Duration,
+			cfg.TaskRunner.HeartbeatInterval.Duration,
+		),
+	)
 	if err != nil {
 		return nil, err
 	}

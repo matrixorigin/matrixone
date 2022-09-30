@@ -16,6 +16,7 @@ package cnservice
 
 import (
 	"context"
+	"runtime"
 	"sync"
 	"time"
 
@@ -102,13 +103,13 @@ type Config struct {
 
 	// TaskRunner configuration
 	TaskRunner struct {
-		QueryLimit        int
-		Parallelism       int
-		MaxWaitTasks      int
-		FetchInterval     toml.Duration
-		FetchTimeout      toml.Duration
-		RetryInterval     toml.Duration
-		HeartbeatInterval toml.Duration
+		QueryLimit        int           `toml:"task-query-limit"`
+		Parallelism       int           `toml:"task-parallelism"`
+		MaxWaitTasks      int           `toml:"task-max-wait-tasks"`
+		FetchInterval     toml.Duration `toml:"task-fetch-interval"`
+		FetchTimeout      toml.Duration `toml:"task-fetch-timeout"`
+		RetryInterval     toml.Duration `toml:"task-retry-interval"`
+		HeartbeatInterval toml.Duration `toml:"task-heartbeat-interval"`
 	}
 
 	// RPC rpc config used to build txn sender
@@ -130,6 +131,30 @@ func (c *Config) Validate() error {
 	}
 	if c.HAKeeper.HeatbeatTimeout.Duration == 0 {
 		c.HAKeeper.HeatbeatTimeout.Duration = time.Millisecond * 500
+	}
+	if c.TaskRunner.Parallelism == 0 {
+		c.TaskRunner.Parallelism = runtime.NumCPU() / 16
+		if c.TaskRunner.Parallelism == 0 {
+			c.TaskRunner.Parallelism = 1
+		}
+	}
+	if c.TaskRunner.FetchInterval.Duration == 0 {
+		c.TaskRunner.FetchInterval.Duration = time.Second * 10
+	}
+	if c.TaskRunner.FetchTimeout.Duration == 0 {
+		c.TaskRunner.FetchTimeout.Duration = time.Second * 5
+	}
+	if c.TaskRunner.HeartbeatInterval.Duration == 0 {
+		c.TaskRunner.HeartbeatInterval.Duration = time.Second * 5
+	}
+	if c.TaskRunner.MaxWaitTasks == 0 {
+		c.TaskRunner.MaxWaitTasks = 256
+	}
+	if c.TaskRunner.QueryLimit == 0 {
+		c.TaskRunner.QueryLimit = c.TaskRunner.Parallelism
+	}
+	if c.TaskRunner.RetryInterval.Duration == 0 {
+		c.TaskRunner.RetryInterval.Duration = time.Second
 	}
 	return nil
 }

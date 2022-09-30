@@ -81,6 +81,27 @@ func WithRunnerHeartbeatInterval(interval time.Duration) RunnerOption {
 	}
 }
 
+// WithOptions set all options needed by taskRunner
+func WithOptions(
+	queryLimit int,
+	parallelism int,
+	maxWaitTasks int,
+	fetchInterval time.Duration,
+	fetchTimeout time.Duration,
+	retryInterval time.Duration,
+	heartbeatInterval time.Duration,
+) RunnerOption {
+	return func(r *taskRunner) {
+		r.options.queryLimit = queryLimit
+		r.options.parallelism = parallelism
+		r.options.maxWaitTasks = maxWaitTasks
+		r.options.fetchInterval = fetchInterval
+		r.options.fetchTimeout = fetchTimeout
+		r.options.retryInterval = retryInterval
+		r.options.heartbeatInterval = heartbeatInterval
+	}
+}
+
 // WithRunnerRetryInterval set retry interval duration for operation
 func WithRunnerRetryInterval(interval time.Duration) RunnerOption {
 	return func(r *taskRunner) {
