@@ -1,4 +1,4 @@
-# 通用方式导出数据
+# 导出数据
 
 本篇文档将指导你使用 MatrixOne 如何完成数据导出。
 
@@ -7,16 +7,20 @@ MatrixOne 支持导出数据保存为 *.txt* 及 *.csv* 类型。
 ## 开始前准备
 
 - 已通过[源代码](https://docs.matrixorigin.io/cn/0.5.0/MatrixOne/Get-Started/install-standalone-matrixone/#1)或[二进制包](https://docs.matrixorigin.io/cn/0.5.0/MatrixOne/Get-Started/install-standalone-matrixone/#2)完成安装 MatrixOne
-- 已完成[连接 MatrixOne 服务](../Get-Started/connect-to-matrixone-server.md)
+- 已完成[连接 MatrixOne 服务](../../Get-Started/connect-to-matrixone-server.md)
+
+如果你使用 Docker 安装启动 MatrixOne，确保你已将数据文件目录挂载到容器目录下，示例如下：
+
+```
+docker run -d -p 6001:6001 -v ~/tmp/docker_export_demo/store:/store:rw --name matrixone matrixorigin/matrixone:0.5.1
+```
 
 !!! note
     MatrixOne 暂时不支持整库 dump 导出，仅支持使用 `SELECT...INTO OUTFILE` 语句导出表数据。
 
-- **场景描述**：在 MatrixOne 里新建一个表，把表数据导出到你指定的文件夹目录下，例如 *~/tmp/export_demo/export_datatable.txt*。
-
 ### 步骤
 
-1. 准备数据：
+1. 在 MatrixOne 中新建一个数据表：
 
     ```sql
     create database aaa;
@@ -33,15 +37,21 @@ MatrixOne 支持导出数据保存为 *.txt* 及 *.csv* 类型。
     +------+-----------+------+
     ```
 
-2. 导出表数据到 *~/tmp/export_demo/export_datatable.txt*
+2. 导出表数据：
 
-    ```
-    select * from user into outfile '~/tmp/export_demo/export_datatable.txt'
-    ```
+    - 如果你是通过源码或二进制包安装 MatrixOne，导出数据到 *~/tmp/export_demo/export_datatable.txt*
 
-3. 到你本地 *~/tmp/export_demo/export_datatable.txt* 下查看导出情况。
+       ```
+       select * from user into outfile '~/tmp/export_demo/export_datatable.txt'
+       ```
 
-    导出成功，打开本地目录 *~/tmp/export_demo/*，可见新建了一个 *export_datatable.txt* 文件，打开文件，展示结果如下：
+    - 如果你是通过 Docker 安装启动 MatrixOne，导出数据到 *~/tmp/docker_export_demo/store/export_datatable.txt*
+
+       ```
+       select * from user into outfile 'store/export_datatable.txt';
+       ```
+
+3. 到你本地 *export_datatable.txt* 文件下查看导出情况：
 
     ```
     id,user_name,sex
