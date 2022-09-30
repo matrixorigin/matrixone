@@ -17,6 +17,7 @@ package moengine
 import (
 	"bytes"
 	"context"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -79,6 +80,9 @@ type Engine interface {
 
 	// Database creates a handle for a database
 	GetDatabase(ctx context.Context, databaseName string, txn Txn) (Database, error)
+
+	// GetDB returns tae db struct
+	GetTAE(ctx context.Context) *db.DB
 }
 
 type TxnEngine interface {

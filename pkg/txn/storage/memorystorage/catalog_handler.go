@@ -170,7 +170,11 @@ func NewCatalogHandler(upstream *MemHandler) *CatalogHandler {
 func (c *CatalogHandler) HandleAddTableDef(meta txn.TxnMeta, req memoryengine.AddTableDefReq, resp *memoryengine.AddTableDefResp) (err error) {
 	if _, ok := c.sysRelationIDs[req.TableID]; ok {
 		defer logReq("catalog", req, meta, resp, &err)()
-		return moerr.NewNoSuchTable(req.DatabaseName, req.TableName)
+		return moerr.NewInternalError(
+			"read only, db %v, table %v",
+			req.DatabaseName,
+			req.TableName,
+		)
 	}
 	return c.upstream.HandleAddTableDef(meta, req, resp)
 }
@@ -241,7 +245,11 @@ func (c *CatalogHandler) HandleCreateRelation(meta txn.TxnMeta, req memoryengine
 func (c *CatalogHandler) HandleDelTableDef(meta txn.TxnMeta, req memoryengine.DelTableDefReq, resp *memoryengine.DelTableDefResp) (err error) {
 	if _, ok := c.sysRelationIDs[req.TableID]; ok {
 		defer logReq("catalog", req, meta, resp, &err)()
-		return moerr.NewNoSuchTable(req.DatabaseName, req.TableName)
+		return moerr.NewInternalError(
+			"read only, db %v, table %v",
+			req.DatabaseName,
+			req.TableName,
+		)
 	}
 	return c.upstream.HandleDelTableDef(meta, req, resp)
 }
@@ -249,7 +257,11 @@ func (c *CatalogHandler) HandleDelTableDef(meta txn.TxnMeta, req memoryengine.De
 func (c *CatalogHandler) HandleDelete(meta txn.TxnMeta, req memoryengine.DeleteReq, resp *memoryengine.DeleteResp) (err error) {
 	if _, ok := c.sysRelationIDs[req.TableID]; ok {
 		defer logReq("catalog", req, meta, resp, &err)()
-		return moerr.NewNoSuchTable(req.DatabaseName, req.TableName)
+		return moerr.NewInternalError(
+			"read only, db %v, table %v",
+			req.DatabaseName,
+			req.TableName,
+		)
 	}
 	return c.upstream.HandleDelete(meta, req, resp)
 }
@@ -273,7 +285,11 @@ func (c *CatalogHandler) HandleDeleteRelation(meta txn.TxnMeta, req memoryengine
 		for _, name := range c.sysRelationIDs {
 			if req.Name == name {
 				defer logReq("catalog", req, meta, resp, &err)()
-				return moerr.NewNoSuchTable(req.DatabaseName, req.Name)
+				return moerr.NewInternalError(
+					"read only, db %v, table %v",
+					req.DatabaseName,
+					req.Name,
+				)
 			}
 		}
 	}
@@ -520,7 +536,11 @@ func (c *CatalogHandler) HandleStartRecovery(ch chan txn.TxnMeta) {
 func (c *CatalogHandler) HandleTruncate(meta txn.TxnMeta, req memoryengine.TruncateReq, resp *memoryengine.TruncateResp) (err error) {
 	if _, ok := c.sysRelationIDs[req.TableID]; ok {
 		defer logReq("catalog", req, meta, resp, &err)()
-		return moerr.NewNoSuchTable(req.DatabaseName, req.TableName)
+		return moerr.NewInternalError(
+			"read only, db %v, table %v",
+			req.DatabaseName,
+			req.TableName,
+		)
 	}
 	return c.upstream.HandleTruncate(meta, req, resp)
 }
@@ -528,7 +548,11 @@ func (c *CatalogHandler) HandleTruncate(meta txn.TxnMeta, req memoryengine.Trunc
 func (c *CatalogHandler) HandleUpdate(meta txn.TxnMeta, req memoryengine.UpdateReq, resp *memoryengine.UpdateResp) (err error) {
 	if _, ok := c.sysRelationIDs[req.TableID]; ok {
 		defer logReq("catalog", req, meta, resp, &err)()
-		return moerr.NewNoSuchTable(req.DatabaseName, req.TableName)
+		return moerr.NewInternalError(
+			"read only, db %v, table %v",
+			req.DatabaseName,
+			req.TableName,
+		)
 	}
 	return c.upstream.HandleUpdate(meta, req, resp)
 }
@@ -536,7 +560,11 @@ func (c *CatalogHandler) HandleUpdate(meta txn.TxnMeta, req memoryengine.UpdateR
 func (c *CatalogHandler) HandleWrite(meta txn.TxnMeta, req memoryengine.WriteReq, resp *memoryengine.WriteResp) (err error) {
 	if _, ok := c.sysRelationIDs[req.TableID]; ok {
 		defer logReq("catalog", req, meta, resp, &err)()
-		return moerr.NewNoSuchTable(req.DatabaseName, req.TableName)
+		return moerr.NewInternalError(
+			"read only, db %v, table %v",
+			req.DatabaseName,
+			req.TableName,
+		)
 	}
 	err = c.upstream.HandleWrite(meta, req, resp)
 	return

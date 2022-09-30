@@ -16,6 +16,7 @@ package plan
 
 import (
 	"sort"
+	"strconv"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -270,9 +271,15 @@ func (rule *ResetVarRefRule) ApplyExpr(e *plan.Expr) (*plan.Expr, error) {
 		case uint64:
 			expr = makePlan2Uint64ConstExprWithType(val)
 		case float32:
-			expr = makePlan2Float64ConstExprWithType(float64(val))
+			// when we build plan with constant in float, we cast them to decimal.
+			// so we cast @float_var to decimal too.
+			strVal := strconv.FormatFloat(float64(val), 'f', -1, 64)
+			expr, err = makePlan2DecimalExprWithType(strVal)
 		case float64:
-			expr = makePlan2Float64ConstExprWithType(val)
+			// when we build plan with constant in float, we cast them to decimal.
+			// so we cast @float_var to decimal too.
+			strVal := strconv.FormatFloat(val, 'f', -1, 64)
+			expr, err = makePlan2DecimalExprWithType(strVal)
 		case bool:
 			expr = makePlan2BoolConstExprWithType(val)
 		case nil:
