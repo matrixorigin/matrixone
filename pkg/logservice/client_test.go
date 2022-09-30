@@ -17,6 +17,7 @@ package logservice
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"math"
 	"math/rand"
 	"testing"
@@ -35,6 +36,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 )
+
+var logger = logutil.GetGlobalLogger().Named("logservice-test")
 
 func runClientTest(t *testing.T,
 	readOnly bool, fn func(*testing.T, *Service, ClientConfig, Client)) {
