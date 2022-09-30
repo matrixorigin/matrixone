@@ -44,7 +44,11 @@ func (s *service) initDistributedTAE(
 	}
 
 	m := mheap.New(guest.New(pu.SV.GuestMmuLimitation, pu.HostMmu))
-	proc := process.New(ctx, m, pu.TxnClient, nil, pu.FileService)
+	txnOperator, err := pu.TxnClient.New()
+	if err != nil {
+		return err
+	}
+	proc := process.New(ctx, m, pu.TxnClient, txnOperator, pu.FileService)
 
 	// engine
 	pu.StorageEngine = disttae.New(
