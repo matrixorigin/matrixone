@@ -16,28 +16,40 @@ package generate_series
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 )
 
 type Number interface {
-	int32 | int64
-}
-type Time interface {
-	types.Datetime | types.Timestamp
-}
-
-type Step interface {
-	types.IntervalType | int
+	int32 | int64 | types.Datetime
 }
 
 type Param struct {
 	Attrs []string
 	Cols  []*plan.ColDef
-	Start interface{}
-	End   interface{}
-	Step  interface{}
+	start string
+	end   string
+	step  string
 }
 
 type Argument struct {
 	Es *Param
 }
+
+var (
+
+//	timeStampCol = &plan.ColDef{
+//		Name: "generate_series",
+//		Typ: &plan.Type{
+//			Id:       int32(types.T_timestamp),
+//			Nullable: false,
+//		},
+//	}
+//
+//	intCol = &plan.ColDef{
+//		Name: "generate_series",
+//		Typ: &plan.Type{
+//			Id:       int32(types.T_int64),
+//			Nullable: false,
+//		},
+//	}
+)

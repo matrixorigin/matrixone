@@ -15,8 +15,11 @@
 package generate_series
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/stretchr/testify/require"
 	"math"
+	"strings"
 	"testing"
 )
 
@@ -283,4 +286,124 @@ func TestDoGenerateInt64(t *testing.T) {
 		require.Nil(t, err)
 		require.Equal(t, kase.res, res)
 	}
+}
+
+func TestGenerateTimestamp(t *testing.T) {
+	kases := []struct {
+		start string
+		end   string
+		step  string
+		res   []types.Datetime
+		err   bool
+	}{
+		{
+			start: "2019-01-01 00:00:00",
+			end:   "2019-01-01 00:01:00",
+			step:  "30 second",
+			res: []types.Datetime{
+				transStr2Datetime("2019-01-01 00:00:00"),
+				transStr2Datetime("2019-01-01 00:00:30"),
+				transStr2Datetime("2019-01-01 00:01:00"),
+			},
+		},
+		{
+			start: "2019-01-01 00:01:00",
+			end:   "2019-01-01 00:00:00",
+			step:  "-30 second",
+			res: []types.Datetime{
+				transStr2Datetime("2019-01-01 00:01:00"),
+				transStr2Datetime("2019-01-01 00:00:30"),
+				transStr2Datetime("2019-01-01 00:00:00"),
+			},
+		},
+		{
+			start: "2019-01-01 00:00:00",
+			end:   "2019-01-01 00:01:00",
+			step:  "30 minute",
+			res: []types.Datetime{
+				transStr2Datetime("2019-01-01 00:00:00"),
+			},
+		},
+		{
+			start: "2020-02-29 00:01:00",
+			end:   "2021-03-01 00:00:00",
+			step:  "1 year",
+			res: []types.Datetime{
+				transStr2Datetime("2020-02-29 00:01:00"),
+				transStr2Datetime("2021-02-28 00:01:00"),
+			},
+		},
+		{
+			start: "2020-02-29 00:01:00",
+			end:   "2021-03-01 00:00:00",
+			step:  "1 month",
+			res: []types.Datetime{
+				transStr2Datetime("2020-02-29 00:01:00"),
+				transStr2Datetime("2020-03-29 00:01:00"),
+				transStr2Datetime("2020-04-29 00:01:00"),
+				transStr2Datetime("2020-05-29 00:01:00"),
+				transStr2Datetime("2020-06-29 00:01:00"),
+				transStr2Datetime("2020-07-29 00:01:00"),
+				transStr2Datetime("2020-08-29 00:01:00"),
+				transStr2Datetime("2020-09-29 00:01:00"),
+				transStr2Datetime("2020-10-29 00:01:00"),
+				transStr2Datetime("2020-11-29 00:01:00"),
+				transStr2Datetime("2020-12-29 00:01:00"),
+				transStr2Datetime("2021-01-29 00:01:00"),
+				transStr2Datetime("2021-02-28 00:01:00"),
+			},
+		},
+		{
+			start: "2020-02-29 00:01:00",
+			end:   "2021-03-01 00:00:00",
+			step:  "1 year",
+			res: []types.Datetime{
+				transStr2Datetime("2020-02-29 00:01:00"),
+				transStr2Datetime("2021-02-28 00:01:00"),
+			},
+		},
+		{
+			start: "2020-02-28 00:01:00",
+			end:   "2021-03-01 00:00:00",
+			step:  "1 year",
+			res: []types.Datetime{
+				transStr2Datetime("2020-02-28 00:01:00"),
+				transStr2Datetime("2021-02-28 00:01:00"),
+			},
+		},
+	}
+	for _, kase := range kases {
+		var precision int32
+		p1, p2 := getPrecision(kase.start), getPrecision(kase.end)
+		if p1 > p2 {
+			precision = p1
+		} else {
+			precision = p2
+		}
+		res, err := generateDatetime(kase.start, kase.end, kase.step, precision)
+		if kase.err {
+			require.NotNil(t, err)
+			continue
+		}
+		require.Nil(t, err)
+		require.Equal(t, kase.res, res)
+	}
+}
+
+func transStr2Datetime(s string) types.Datetime {
+	precision := getPrecision(s)
+	t, err := types.ParseDatetime(s, precision)
+	if err != nil {
+		logutil.Errorf("parse timestamp '%s' failed", s)
+	}
+	return t
+}
+
+func getPrecision(s string) int32 {
+	var precision int32
+	ss := strings.Split(s, ".")
+	if len(ss) > 1 {
+		precision = int32(len(ss[1]))
+	}
+	return precision
 }

@@ -16,10 +16,13 @@ package generate_series
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"math"
+	"strconv"
+	"strings"
 )
 
-func judgeNumber[T Number](start, end, step T) ([]T, error) {
+func judgeArgs[T Number](start, end, step T) ([]T, error) {
 	if step == 0 {
 		return nil, moerr.NewInvalidInput("step size cannot equal zero")
 	}
@@ -34,8 +37,31 @@ func judgeNumber[T Number](start, end, step T) ([]T, error) {
 	return nil, nil
 }
 
+func trimStep(step string) string {
+	step = strings.TrimSpace(step)
+	step = strings.TrimSuffix(step, "s")
+	step = strings.TrimSuffix(step, "(s)")
+	return step
+}
+
+func genStep(step string) (num int64, tp types.IntervalType, err error) {
+	step = trimStep(step)
+	s := strings.Split(step, " ")
+	if len(s) != 2 {
+		err = moerr.NewInvalidInput("invalid step '%s'", step)
+		return
+	}
+	num, err = strconv.ParseInt(s[0], 10, 64)
+	if err != nil {
+		err = moerr.NewInvalidInput("invalid step '%s'", step)
+		return
+	}
+	tp, err = types.IntervalTypeOf(s[1])
+	return
+}
+
 func generateInt32(start, end, step int32) ([]int32, error) {
-	res, err := judgeNumber(start, end, step)
+	res, err := judgeArgs(start, end, step)
 	if err != nil {
 		return nil, err
 	}
@@ -61,7 +87,7 @@ func generateInt32(start, end, step int32) ([]int32, error) {
 }
 
 func generateInt64(start, end, step int64) ([]int64, error) {
-	res, err := judgeNumber(start, end, step)
+	res, err := judgeArgs(start, end, step)
 	if err != nil {
 		return nil, err
 	}
@@ -80,6 +106,49 @@ func generateInt64(start, end, step int64) ([]int64, error) {
 			res = append(res, i)
 			if i < 0 && math.MinInt64-i > step {
 				break
+			}
+		}
+	}
+	return res, nil
+}
+
+func generateDatetime(startStr, endStr, stepStr string, precision int32) ([]types.Datetime, error) {
+	start, err := types.ParseDatetime(startStr, precision)
+	if err != nil {
+		return nil, err
+	}
+	end, err := types.ParseDatetime(endStr, precision)
+	if err != nil {
+		return nil, err
+	}
+	step, tp, err := genStep(stepStr)
+	if err != nil {
+		return nil, err
+	}
+	var res []types.Datetime
+	res, err = judgeArgs(start, end, types.Datetime(step)) // here, transfer step to types.Datetime may change the inner behavior of datetime, but we just care the sign of step.
+	if err != nil {
+		return nil, err
+	}
+	if res != nil {
+		return res, nil
+	}
+	if step > 0 {
+		for i := start; i <= end; {
+			res = append(res, i)
+			var ok bool
+			i, ok = i.AddInterval(step, tp, types.DateTimeType)
+			if !ok {
+				return nil, moerr.NewInvalidInput("invalid step '%s'", stepStr)
+			}
+		}
+	} else {
+		for i := start; i >= end; {
+			res = append(res, i)
+			var ok bool
+			i, ok = i.AddInterval(step, tp, types.DateTimeType)
+			if !ok {
+				return nil, moerr.NewInvalidInput("invalid step '%s'", stepStr)
 			}
 		}
 	}
