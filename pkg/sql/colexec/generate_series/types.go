@@ -19,21 +19,25 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
 
-type Type interface {
-	types.Datetime | types.Timestamp | int
+type Number interface {
+	int32 | int64
+}
+type Time interface {
+	types.Datetime | types.Timestamp
 }
 
 type Step interface {
 	types.IntervalType | int
 }
 
-type Param[T1 Type, T2 Step] struct {
+type Param struct {
 	Attrs []string
 	Cols  []*plan.ColDef
-	Start T1
-	Stop  T2
+	Start interface{}
+	End   interface{}
+	Step  interface{}
 }
 
-type Argument[T1 Type, T2 Step] struct {
-	Es *Param[T1, T2]
+type Argument struct {
+	Es *Param
 }
