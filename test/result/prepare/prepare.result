@@ -78,3 +78,12 @@ execute stmt1 using @a;
 select a, b from t1;
 a	b
 12.3333	1
+drop table if exists t1;
+create table t1 (a decimal(12,2));
+insert into t1 values (30000);
+prepare stmt1 from 'update t1 set a = a + ?';
+set @a=4418.59;
+execute stmt1 using @a;
+select a from t1;
+a
+34418.59
