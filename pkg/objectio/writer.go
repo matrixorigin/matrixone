@@ -146,6 +146,11 @@ func (w *ObjectWriter) WriteEnd() ([]BlockObject, error) {
 	if err != nil {
 		return nil, err
 	}
+
+	// The buffer needs to be released at the end of WriteEnd
+	// Because the outside may hold this writer
+	// After WriteEnd is called, no more data can be written
+	w.buffer = nil
 	return w.blocks, err
 }
 
