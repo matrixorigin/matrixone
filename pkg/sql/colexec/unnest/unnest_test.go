@@ -105,23 +105,22 @@ func init() {
 	hm := host.New(1 << 30)
 	gm := guest.New(1<<30, hm)
 	utc = []unnestTestCase{
-		newTestCase(mheap.New(gm), defaultAttrs, defaultColDefs, `{"a":1}`, "$", false, false, nil, 0),
+		newTestCase(mheap.New(gm), defaultAttrs, defaultColDefs, `t1`, "$", false, false, []string{`{"a":1}`}, 0),
 		newTestCase(mheap.New(gm), defaultAttrs, defaultColDefs, tree.SetUnresolvedName("t1", "a"), "$", false, true, []string{`{"a":1}`}, 3),
 	}
 }
 
 func newTestCase(m *mheap.Mheap, attrs []string, colDefs []*plan.ColDef, origin interface{}, path string, outer, isCol bool, jsons []string, inputTimes int) unnestTestCase {
 	proc := testutil.NewProcessWithMheap(m)
-	return unnestTestCase{
+	ret := unnestTestCase{
 		proc: proc,
 		arg: &Argument{
 			Es: &Param{
 				Attrs: attrs,
 				Cols:  colDefs,
-				Extern: &tree.UnnestParam{
-					Origin: origin,
-					Path:   path,
-					Outer:  outer,
+				Extern: &ExternalParam{
+					Path:  path,
+					Outer: outer,
 				},
 			},
 		},
@@ -129,6 +128,13 @@ func newTestCase(m *mheap.Mheap, attrs []string, colDefs []*plan.ColDef, origin 
 		jsons:      jsons,
 		inputTimes: inputTimes,
 	}
+	switch o := origin.(type) {
+	case string:
+		break
+	case *tree.UnresolvedName:
+		_, _, ret.arg.Es.Extern.ColName = o.GetNames()
+	}
+	return ret
 }
 
 func TestString(t *testing.T) {
@@ -144,7 +150,7 @@ func TestUnnest(t *testing.T) {
 			err := Prepare(ut.proc, ut.arg)
 			require.Nil(t, err)
 			if !ut.isCol {
-				ut.proc.Reg.InputBatch, err = makeTestBatch1(ut.arg.Es.Extern.Origin.(string), ut.proc)
+				ut.proc.Reg.InputBatch, err = makeTestBatch1(ut.jsons[0], ut.proc)
 				require.Nil(t, err)
 				end, err := Call(0, ut.proc, ut.arg)
 				require.Nil(t, err)

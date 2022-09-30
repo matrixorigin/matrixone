@@ -91,11 +91,11 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 
 		tag := node.BindingTags[0]
 		newTableDef := &plan.TableDef{
-			Name:               node.TableDef.Name,
-			Defs:               node.TableDef.Defs,
-			Name2ColIndex:      node.TableDef.Name2ColIndex,
-			Createsql:          node.TableDef.Createsql,
-			TableFunctionParam: node.TableDef.TableFunctionParam,
+			Name:          node.TableDef.Name,
+			Defs:          node.TableDef.Defs,
+			Name2ColIndex: node.TableDef.Name2ColIndex,
+			Createsql:     node.TableDef.Createsql,
+			TblFunc:       node.TableDef.TblFunc,
 		}
 
 		for i, col := range node.TableDef.Cols {
@@ -158,7 +158,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 				},
 			})
 		}
-	case plan.Node_UNNEST:
+	case plan.Node_TABLE_FUNCTION:
 		for _, expr := range node.FilterList {
 			increaseRefCnt(expr, colRefCnt)
 		}
@@ -169,11 +169,11 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 
 		tag := node.BindingTags[0]
 		newTableDef := &plan.TableDef{
-			Name:               node.TableDef.Name,
-			Defs:               node.TableDef.Defs,
-			Name2ColIndex:      node.TableDef.Name2ColIndex,
-			Createsql:          node.TableDef.Createsql,
-			TableFunctionParam: node.TableDef.TableFunctionParam,
+			Name:          node.TableDef.Name,
+			Defs:          node.TableDef.Defs,
+			Name2ColIndex: node.TableDef.Name2ColIndex,
+			Createsql:     node.TableDef.Createsql,
+			TblFunc:       node.TableDef.TblFunc,
 		}
 
 		for i, col := range node.TableDef.Cols {
@@ -700,7 +700,7 @@ func (builder *QueryBuilder) remapAllColRefs(nodeID int32, colRefCnt map[[2]int3
 
 	case plan.Node_VALUE_SCAN:
 		// VALUE_SCAN always have one column now
-		if !IsUnnestValueScan(node) {
+		if !IsTableFunctionValueScan(node) {
 			node.ProjectList = append(node.ProjectList, &plan.Expr{
 				Typ:  &plan.Type{Id: int32(types.T_int64)},
 				Expr: &plan.Expr_C{C: &plan.Const{Value: &plan.Const_Ival{Ival: 0}}},
@@ -1779,8 +1779,8 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext) (
 
 	case *tree.JoinTableExpr:
 		return builder.buildJoinTable(tbl, ctx)
-	case *tree.Unnest:
-		return builder.buildUnnest(tbl, ctx)
+	case *tree.TableFunction:
+		return builder.buildTableFunction(tbl, ctx)
 
 	case *tree.ParenTableExpr:
 		return builder.buildTable(tbl.Expr, ctx)
@@ -1828,7 +1828,7 @@ func (builder *QueryBuilder) addBinding(nodeID int32, alias tree.AliasClause, ct
 	var types []*plan.Type
 	var binding *Binding
 
-	if node.NodeType == plan.Node_TABLE_SCAN || node.NodeType == plan.Node_MATERIAL_SCAN || node.NodeType == plan.Node_EXTERNAL_SCAN || node.NodeType == plan.Node_UNNEST {
+	if node.NodeType == plan.Node_TABLE_SCAN || node.NodeType == plan.Node_MATERIAL_SCAN || node.NodeType == plan.Node_EXTERNAL_SCAN || node.NodeType == plan.Node_TABLE_FUNCTION {
 		if len(alias.Cols) > len(node.TableDef.Cols) {
 			return moerr.NewSyntaxError("table %q has %d columns available but %d columns specified", alias.Alias, len(node.TableDef.Cols), len(alias.Cols))
 		}
@@ -1837,7 +1837,7 @@ func (builder *QueryBuilder) addBinding(nodeID int32, alias tree.AliasClause, ct
 		if alias.Alias != "" {
 			table = string(alias.Alias)
 		} else {
-			if node.NodeType == plan.Node_UNNEST {
+			if node.NodeType == plan.Node_TABLE_FUNCTION {
 				return moerr.NewSyntaxError("Every table function must have an alias")
 			}
 
@@ -2220,12 +2220,6 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr)
 			cantPushdown = filters
 			break
 		}
-		//if child.NodeType == plan.Node_UNNEST {
-		//	child.FilterList = append(child.FilterList, filters...)
-		//	uChildId := child.Children[0]
-		//	builder.pushdownFilters(uChildId, nil)
-		//	break
-		//}
 
 		projectTag := node.BindingTags[0]
 
@@ -2247,7 +2241,7 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr)
 
 	case plan.Node_TABLE_SCAN, plan.Node_EXTERNAL_SCAN:
 		node.FilterList = append(node.FilterList, filters...)
-	case plan.Node_UNNEST:
+	case plan.Node_TABLE_FUNCTION:
 		node.FilterList = append(node.FilterList, filters...)
 		childId := node.Children[0]
 		childId, err := builder.pushdownFilters(childId, nil)
@@ -2275,4 +2269,14 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr)
 	}
 
 	return nodeID, cantPushdown
+}
+
+func (builder *QueryBuilder) buildTableFunction(tbl *tree.TableFunction, ctx *BindContext) (int32, error) {
+	id := tbl.Id()
+	switch id {
+	case "unnest":
+		return builder.buildUnnest(tbl, ctx)
+	default:
+		return 0, moerr.NewNotSupported("table function '%s' not supported", id)
+	}
 }
