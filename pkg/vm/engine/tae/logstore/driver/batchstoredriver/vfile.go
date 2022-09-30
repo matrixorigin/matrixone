@@ -139,7 +139,7 @@ func (vf *vFile) Commit() {
 	vf.commitCond.Broadcast()
 	vf.commitCond.L.Unlock()
 	vf.vInfo.close()
-	// fmt.Printf("sync-%s\n", vf.String())
+	// logutil.Infof("sync-%s\n", vf.String())
 	// vf.FreeMeta()
 }
 
@@ -160,18 +160,18 @@ func (vf *vFile) Sync() error {
 	if err != nil {
 		return err
 	}
-	// fmt.Printf("%p|sync [%v,%v](total%v|n=%d)\n", vf, vf.syncpos, vf.syncpos+vf.bufpos, vf.bufpos, n)
+	// logutil.Infof("%p|sync [%v,%v](total%v|n=%d)\n", vf, vf.syncpos, vf.syncpos+vf.bufpos, vf.bufpos, n)
 	// buf := make([]byte, 10)
 	// _, err = vf.ReadAt(buf, int64(vf.syncpos))
-	// fmt.Printf("%p|read at %v, buf is %v, n=%d, err is %v\n", vf, vf.syncpos, buf, n, err)
+	// logutil.Infof("%p|read at %v, buf is %v, n=%d, err is %v\n", vf, vf.syncpos, buf, n, err)
 	vf.syncpos += targetpos
-	// fmt.Printf("syncpos is %v\n", vf.syncpos)
+	// logutil.Infof("syncpos is %v\n", vf.syncpos)
 	if vf.syncpos != targetSize {
 		panic(fmt.Sprintf("%p|logic error, sync %v, size %v", vf, vf.syncpos, targetSize))
 	}
 	vf.bufpos = 0
 	vf.buf.Reset()
-	// fmt.Printf("199bufpos is %v\n",vf.bufpos)
+	// logutil.Infof("199bufpos is %v\n",vf.bufpos)
 	err = vf.File.Sync()
 	if err != nil {
 		return err

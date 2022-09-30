@@ -16,8 +16,6 @@ package cnservice
 
 import (
 	"context"
-	"fmt"
-
 	"os"
 	"syscall"
 
@@ -51,7 +49,7 @@ func initTAE(
 	eng := moengine.NewEngine(tae)
 	pu.StorageEngine = eng
 	pu.TxnClient = moengine.EngineToTxnClient(eng)
-	fmt.Println("Initialize the engine Done")
+	logutil.Info("Initialize the engine Done")
 
 	return nil
 }

@@ -1198,7 +1198,7 @@ func executeSQLInBackgroundSession(ctx context.Context, gm *guest.Mmu, mp *mempo
 	//		if err != nil {
 	//			return err
 	//		}
-	//		fmt.Println(row)
+	//		logutil.Info(row)
 	//	}
 	//}
 
