@@ -2740,7 +2740,7 @@ func determineRoleSetSatisfyPrivilegeSet(ctx context.Context, bh BackgroundExec,
 	var err error
 	//there is no privilege needs, just approve
 	if len(priv.entries) == 0 {
-		return true, nil
+		return false, nil
 	}
 	for _, roleId := range roleIds {
 		for _, entry := range priv.entries {
@@ -2944,14 +2944,13 @@ func determineUserCanGrantRolesToOtherUsers(ctx context.Context, ses *Session, f
 	defer bh.Close()
 
 	const (
-		success int = iota
-		fail
-		goOn
+		goOn    int = iota
+		success     //ri has indirect relation with the Uc
 	)
 
 	//step3: check the link: roleX -> roleA -> .... -> roleZ -> the current user. Every link has the with_grant_option.
 	var vr *verifiedRole
-	var ret bool
+	var ret = true
 	var granted bool
 	var Rt *btree.Set[int64]
 	RkPlusOne := &btree.Set[int64]{}
@@ -2994,20 +2993,21 @@ func determineUserCanGrantRolesToOtherUsers(ctx context.Context, ses *Session, f
 			continue
 		}
 
-		rxResult := goOn
-		//It is kind of BFS
-		for Rk.Len() != 0 && rxResult != goOn {
+		riResult := goOn
+		//It is kind of level traversal
+		for Rk.Len() != 0 && riResult == goOn {
 			RkPlusOne.Clear()
-			rxResult = goOn
+			/*
+				for ri in Rk: (check ri has indirect relation with the Uc)
+					ri -> Rt (mo_role_grant)
+					for rj in Rt:
+						check (rj,Uc) in mo_user_grant
+
+			*/
 			for _, ri := range Rk.Keys() {
 				Rt, err = getRoleSetThatRoleGrantedToWGO(ctx, bh, ri, RVisited, RkPlusOne)
 				if err != nil {
 					goto handleFailed
-				}
-
-				if Rt.Len() == 0 {
-					rxResult = fail
-					break
 				}
 
 				atLeastOne := false
@@ -3020,21 +3020,19 @@ func determineUserCanGrantRolesToOtherUsers(ctx context.Context, ses *Session, f
 				}
 
 				if atLeastOne {
-					rxResult = success
+					riResult = success
 					break
 				}
 			}
 
-			if rxResult == fail {
-				ret = false
-				break
-			} else if rxResult == success {
-				ret = true
-				break
-			}
-
 			//swap Rk,R(k+1)
 			Rk, RkPlusOne = RkPlusOne, Rk
+		}
+
+		if riResult != success {
+			//fail
+			ret = false
+			break
 		}
 	}
 
@@ -3270,7 +3268,8 @@ func authenticatePrivilegeOfStatementWithObjectTypeAccountAndDatabase(ctx contex
 
 	//for GrantRole statement, check with_grant_option
 	if !ok && priv.kind == privilegeKindInherit {
-		grantRole := stmt.(*tree.GrantRole)
+		grant := stmt.(*tree.Grant)
+		grantRole := grant.GrantRole
 		yes, err := determineUserCanGrantRolesToOtherUsers(ctx, ses, grantRole.Roles, grantRole.Users)
 		if err != nil {
 			return false, err
