@@ -16,6 +16,7 @@ package colexec
 
 import (
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
@@ -341,7 +342,9 @@ func EvalExprByZonemapBat(bat *batch.Batch, proc *process.Process, expr *plan.Ex
 
 		compareAndReturn := func(isTrue bool, err error) (*vector.Vector, error) {
 			if err != nil {
-				return nil, err
+				// if cann't compare, just return true.
+				// that means we don't known this filter expr's return, so you must readBlock
+				return vector.NewConstFixed(types.T_bool.ToType(), 1, true), nil
 			}
 			return vector.NewConstFixed(types.T_bool.ToType(), 1, isTrue), nil
 		}

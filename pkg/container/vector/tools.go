@@ -15,6 +15,8 @@
 package vector
 
 import (
+	"strings"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -349,6 +351,12 @@ func (v *Vector) CompareAndCheckIntersect(vec *Vector) (bool, error) {
 		}, func(t1, t2 types.Uuid) bool {
 			return t1.Le(t2)
 		})
+	case types.T_varchar, types.T_char:
+		return checkIntersect(v, vec, func(t1, t2 string) bool {
+			return strings.Compare(t1, t2) >= 0
+		}, func(t1, t2 string) bool {
+			return strings.Compare(t1, t2) <= 0
+		})
 	}
 	return false, moerr.NewInternalError("unsupport type to check intersect")
 }
@@ -491,6 +499,25 @@ func (v *Vector) CompareAndCheckAnyResultIsTrue(vec *Vector, funName string) (bo
 				return t1.Le(t2)
 			}), nil
 		}
+	case types.T_varchar, types.T_char:
+		switch funName {
+		case ">":
+			return runCompareCheckAnyResultIsTrue(v, vec, func(t1, t2 string) bool {
+				return strings.Compare(t1, t2) == 1
+			}), nil
+		case "<":
+			return runCompareCheckAnyResultIsTrue(v, vec, func(t1, t2 string) bool {
+				return strings.Compare(t1, t2) == -1
+			}), nil
+		case ">=":
+			return runCompareCheckAnyResultIsTrue(v, vec, func(t1, t2 string) bool {
+				return strings.Compare(t1, t2) >= 0
+			}), nil
+		case "<=":
+			return runCompareCheckAnyResultIsTrue(v, vec, func(t1, t2 string) bool {
+				return strings.Compare(t1, t2) <= 0
+			}), nil
+		}
 	default:
 		return false, moerr.NewInternalError("unsupport compare type")
 	}
@@ -500,7 +527,7 @@ func (v *Vector) CompareAndCheckAnyResultIsTrue(vec *Vector, funName string) (bo
 
 type compT interface {
 	constraints.Integer | constraints.Float | types.Decimal64 | types.Decimal128 |
-		types.Date | types.Datetime | types.Timestamp | types.Uuid
+		types.Date | types.Datetime | types.Timestamp | types.Uuid | string
 }
 
 type compFn[T compT] func(T, T) bool
@@ -531,6 +558,15 @@ func compareNumber[T constraints.Integer | constraints.Float | types.Date | type
 func runCompareCheckAnyResultIsTrue[T compT](vec1, vec2 *Vector, fn compFn[T]) bool {
 	cols1 := MustTCols[T](vec1)
 	cols2 := MustTCols[T](vec2)
+
+	// column_a operator column_b  -> return true
+	// that means we don't known the return, just readBlock
+	if vec1.IsScalarNull() || vec2.IsScalarNull() {
+		return true
+	}
+	if nulls.Any(vec1.Nsp) || nulls.Any(vec2.Nsp) {
+		return true
+	}
 
 	for i := 0; i < len(cols1); i++ {
 		for j := 0; j < len(cols2); j++ {
