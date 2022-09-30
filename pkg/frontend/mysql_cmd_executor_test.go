@@ -755,7 +755,7 @@ func Test_handleShowVariables(t *testing.T) {
 		mce.PrepareSessionBeforeExecRequest(ses)
 
 		sv := &tree.ShowVariables{Global: true}
-		convey.So(mce.handleShowVariables(sv), convey.ShouldBeNil)
+		convey.So(mce.handleShowVariables(sv, nil), convey.ShouldBeNil)
 	})
 }
 
