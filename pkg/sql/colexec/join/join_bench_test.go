@@ -32,7 +32,9 @@ import (
 const (
 	benchFlag        = true
 	benchCardinality = 1024
-	benchTargetRows  = 70_000
+
+	benchBuildTargetRows = 2_500
+	benchProbeTargetRows = 1_000_000
 )
 
 var (
@@ -63,25 +65,23 @@ func initBenchData() {
 	}
 
 	// init benchBuildData
-	for len(benchBuildData) < benchTargetRows {
+	for {
 		for i := range dataset {
 			n := rand.Intn(10) + 1
 			for j := 0; j < n; j++ {
 				benchBuildData = append(benchBuildData, string(append([]byte{}, dataset[i]...)))
 			}
 		}
+		if len(benchBuildData) >= benchBuildTargetRows {
+			break
+		}
 	}
 
 	// init benchProbeData
-	for len(benchProbeData) < benchTargetRows {
-		// there is 1/3 probability picking a random string
+	for len(benchProbeData) < benchProbeTargetRows {
+		// there is 1/3 probability picking a not existed string
 		if rand.Intn(3) == 0 {
-			randLen := rand.Intn(charsLen) + 1
-			str := make([]byte, randLen)
-			for i := range str {
-				str[i] = chars[rand.Intn(charsLen)]
-			}
-			benchProbeData = append(benchProbeData, string(str))
+			benchProbeData = append(benchProbeData, "hello_world") // '_' is not existed
 		} else {
 			src := dataset[rand.Intn(len(dataset))]
 			benchProbeData = append(benchProbeData, string(append([]byte{}, src...)))
