@@ -40,8 +40,6 @@ func TestRevert(t *testing.T) {
 	ctx.Keys = vec1
 	ctx.SelectAll()
 
-	//ts1 := uint64(99)
-	//insert vec1 0-9
 	var txnNode *txnbase.TxnMVCCNode
 	txnNode, err := idx.BatchUpsert(ctx, 0, nil)
 	assert.NoError(t, err)
@@ -50,7 +48,6 @@ func TestRevert(t *testing.T) {
 	ts0 := types.BuildTS(1, 0)
 	txnNode.OnReplayCommit(ts0)
 
-	//ts2 := uint64(109)
 	ts1 := types.BuildTS(2, 0)
 	ts2 := ts1.Prev()
 	ctx.Keys = vec2

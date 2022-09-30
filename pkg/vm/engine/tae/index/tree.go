@@ -28,9 +28,9 @@ import (
 var _ SecondaryIndex = new(simpleARTMap)
 
 type IndexMVCCNode struct {
-	Row                  uint32
-	Deleted              bool
-	*txnbase.TxnMVCCNode //ts and abort
+	Row     uint32
+	Deleted bool
+	*txnbase.TxnMVCCNode
 }
 
 func NewAppendIndexMVCCNode(row uint32, txn txnif.TxnReader) (idxNode *IndexMVCCNode, txnNode *txnbase.TxnMVCCNode) {
@@ -196,7 +196,6 @@ func (art *simpleARTMap) BatchInsert(keys *KeysCtx, startRow uint32, upsert bool
 				return ErrDuplicate
 			}
 			deleteNode := NewDeleteIndexMVCCNodeWithTxnNode(oldChain.GetRow(), txnNode)
-			art.OnDeleteTS(txn.GetStartTS())
 			oldChain.Insert(deleteNode)
 			oldChain.Merge(chain)
 			art.tree.Insert(encoded, old)
@@ -250,34 +249,6 @@ func (art *simpleARTMap) HasDeleteFrom(key any, fromTs types.TS) bool {
 	return deleted
 }
 
-// func (art *simpleARTMap) Update(key any, offset uint32) (err error) {
-// 	ikey := types.EncodeValue(key, art.typ)
-// 	old, _ := art.tree.Insert(ikey, offset)
-// 	if old == nil {
-// 		art.tree.Delete(ikey)
-// 		err = ErrDuplicate
-// 	}
-// 	return
-// }
-
-// func (art *simpleARTMap) BatchUpdate(keys containers.Vector, offsets []uint32, start uint32) (err error) {
-// 	idx := 0
-
-// 	op := func(v any, _ int) error {
-// 		encoded := types.EncodeValue(v, art.typ)
-// 		old, _ := art.tree.Insert(encoded, offsets[idx])
-// 		if old == nil {
-// 			art.tree.Delete(encoded)
-// 			return ErrDuplicate
-// 		}
-// 		idx++
-// 		return nil
-// 	}
-
-// 	err = keys.Foreach(op, nil)
-// 	return
-// }
-
 func (art *simpleARTMap) Delete(key any, ts types.TS) (old uint32, txnNode *txnbase.TxnMVCCNode, err error) {
 	ikey := types.EncodeValue(key, art.typ)
 	v, found := art.tree.Search(ikey)
@@ -324,7 +295,6 @@ func (art *simpleARTMap) Contains(key any) bool {
 }
 
 // ContainsAny returns whether at least one of the specified keys exists.
-//
 // If the keysCtx.Selects is not nil, only the keys indicated by the keyselects bitmap will
 // participate in the calculation.
 // When deduplication occurs, the corresponding row number will be taken out. If the row
