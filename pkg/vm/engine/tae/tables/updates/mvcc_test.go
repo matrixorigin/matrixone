@@ -41,6 +41,7 @@ func TestMutationControllerAppend(t *testing.T) {
 	for i := 0; i < nodeCnt; i++ {
 		txn := mockTxn()
 		txn.CommitTS = ts
+		txn.PrepareTS = ts
 		node, _ := mc.AddAppendNodeLocked(txn, rowsPerNode*uint32(i), rowsPerNode*(uint32(i)+1))
 		err := node.ApplyCommit(nil)
 		assert.Nil(t, err)

@@ -5,9 +5,6 @@ select user_name,authentication_string from mo_catalog.mo_user;
 user_name    authentication_string
 root    111
 dump    111
-role_u1    111
-role_u2    111
-role_u3    111
 u_a    a111
 u_b    b111
 u_c    a111

@@ -7,7 +7,7 @@ select log(exp(10)),log(-1),log(NULL),log(1,1),log(3,9),log(-1,2),log(NULL,2);
 #SELECT
 SELECT LOG(2);
 SELECT LOG(-2);
--- @bvt:issue#3608
+
 SELECT LOG(2,65536);
 SELECT LOG(10,100);
 SELECT LOG(1,100);
@@ -17,12 +17,12 @@ SELECT LOG(1,100);
 
 select log(2,-1);
 select log(-2,1);
--- @bvt:issue
+
 
 select log(0.00000000000000001);
 select log(10e100);
 
--- @bvt:issue#3608
+
 select log(0.141241241241313, 124314124124.12412341);
 select log(-0.141241241241313, -124314124124.12412341);
 
@@ -30,30 +30,28 @@ select log(-0.141241241241313, -124314124124.12412341);
 
 #NULL
 
--- @bvt:issue#3608
+
 select log(null,2);
 select log(2, null);
 select log(null,null);
--- @bvt:issue
+
 
 #INSERT
--- @bvt:issue#3608
+
 CREATE TABLE t1(a DOUBLE);
 INSERT INTO t1 select (log(56));
 INSERT INTO t1 select (log(10,100));
 INSERT INTO t1 select (log(2,4));
 SELECT * FROM t1 ORDER BY a;
 drop table t1;
--- @bvt:issue
+
 
 #DATATYPE
 
 create table t1(a tinyint, b SMALLINT, c bigint, d INT, e BIGINT, f FLOAT, g DOUBLE, h decimal(38,19), i DATE, k datetime, l TIMESTAMP, m char(255), n varchar(255));
 insert into t1 values(1, 1, 2, 4, 5, 5.5, 31.13, 14.314, "2012-03-12", "2012-03-12 10:03:12", "2012-03-12 13:03:12", "abc", "dcf");
 select log(a),log(b),log(c),log(d),log(e),log(f),log(g),log(h),log(i),log(k),log(l),log(m),log(n) from t1;
--- @bvt:issue#3608
 select log(a,b), log(b,c),log(c,d),log(d,e),log(e,f),log(f,g),log(g,h), log(h,i), log(i,k),log(k,l),log(l,m),log(m,n) from t1;
--- @bvt:issue
 drop table t1;
 
 
@@ -66,23 +64,19 @@ drop table t1;
 #算术操作
 
 select log(123.54-123.03);
--- @bvt:issue#3608
 select log(123.54*0.34, 1203-1200);
--- @bvt:issue
 select log(134)-log(194);
 
 
 #WHERE,distinct
--- @bvt:issue#3608
 drop table if exists t1;
 create table t1(a float,  b float);
 insert into t1 values(10, 100), (100, 1000);
 select distinct * from t1 where log(a, b)=2;
 drop table t1;
--- @bvt:issue
+
 
 #ON CONDITION
--- @bvt:issue#3608
 create table t1(a INT, b int);
 create table t2(a INT, b int);
 insert into t1 values(2,4), (100,23);
@@ -90,7 +84,7 @@ insert into t2 values(10,100), (4,41);
 SELECT t1.a, t2.a FROM t1 JOIN t2 ON (log(t1.a, t1.b) = log(t2.a, t2.b));
 drop table t1;
 drop table t2;
--- @bvt:issue
+
 
 
 #HAVING，比较操作

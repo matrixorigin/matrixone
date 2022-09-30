@@ -17,16 +17,16 @@ package trace
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
-	"github.com/google/uuid"
 	"sync"
-	"time"
+	"sync/atomic"
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/export"
+
+	"github.com/google/uuid"
 )
 
 var nilTxnID [16]byte
@@ -47,13 +47,14 @@ type StatementInfo struct {
 	StatementTag         string        `json:"statement_tag"`
 	RequestAt            util.TimeNano `json:"request_at"` // see WithRequestAt
 	ExecPlan             any           `json:"exec_plan"`
+	// SerializeExecPlan
+	SerializeExecPlan func(plan any, uuid2 uuid.UUID) []byte // see SetExecPlan, ExecPlan2Json
 
 	// after
-	Status        StatementInfoStatus `json:"status"`
-	Error         error               `json:"error"`
-	ResponseAt    util.TimeNano       `json:"response_at"`
-	Duration      uint64              `json:"duration"` // unit: ns
-	ExecPlanStats any                 `json:"exec_plan_stats"`
+	Status     StatementInfoStatus `json:"status"`
+	Error      error               `json:"error"`
+	ResponseAt util.TimeNano       `json:"response_at"`
+	Duration   uint64              `json:"duration"` // unit: ns
 
 	// flow ctrl
 	end bool
@@ -113,25 +114,54 @@ func (s *StatementInfo) CsvFields() []string {
 }
 
 func (s *StatementInfo) ExecPlan2Json() string {
-	if s.ExecPlan == nil {
-		return "{}"
+	var jsonByte []byte
+	if s.SerializeExecPlan == nil {
+		// use defaultSerializeExecPlan
+		if f := getDefaultSerializeExecPlan(); f == nil {
+			uuidStr := uuid.UUID(s.StatementID).String()
+			return fmt.Sprintf(`{"code":200,"message":"NO ExecPlan Serialize function","steps":null,"success":false,"uuid":%q}`, uuidStr)
+		} else {
+			jsonByte = f(s.ExecPlan, uuid.UUID(s.StatementID))
+		}
+	} else {
+		// use s.SerializeExecPlan
+		if queryTime := GetTracerProvider().longQueryTime; queryTime > int64(s.Duration) {
+			jsonByte = s.SerializeExecPlan(nil, uuid.UUID(s.StatementID))
+		} else {
+			jsonByte = s.SerializeExecPlan(s.ExecPlan, uuid.UUID(s.StatementID))
+		}
 	}
-	json, err := json.Marshal(s.ExecPlan)
-	if err != nil {
-		return fmt.Sprintf(`{"err": %q}`, err.Error())
+	return string(jsonByte)
+}
+
+var defaultSerializeExecPlan atomic.Value
+
+type SerializeExecPlanFunc func(plan any, uuid2 uuid.UUID) []byte
+
+func SetDefaultSerializeExecPlan(f SerializeExecPlanFunc) {
+	defaultSerializeExecPlan.Store(f)
+}
+
+func getDefaultSerializeExecPlan() SerializeExecPlanFunc {
+	if defaultSerializeExecPlan.Load() == nil {
+		return nil
+	} else {
+		return defaultSerializeExecPlan.Load().(SerializeExecPlanFunc)
 	}
-	return string(json)
 }
 
 // SetExecPlan record execPlan should be TxnComputationWrapper.plan obj, which support 2json.
-func (s *StatementInfo) SetExecPlan(execPlan any) {
+func (s *StatementInfo) SetExecPlan(execPlan any, SerializeFunc func(plan any, uuid uuid.UUID) []byte) {
 	s.ExecPlan = execPlan
+	s.SerializeExecPlan = SerializeFunc
 }
 
-func (s *StatementInfo) SetTxnIDIsZero(id []byte) {
-	if bytes.Equal(s.TransactionID[:], nilTxnID[:]) {
-		copy(s.TransactionID[:], id)
-	}
+func (s *StatementInfo) SetTxnID(id []byte) {
+	copy(s.TransactionID[:], id)
+}
+
+func (s *StatementInfo) IsZeroTxnID() bool {
+	return bytes.Equal(s.TransactionID[:], nilTxnID[:])
 }
 
 func (s *StatementInfo) Report(ctx context.Context) {
@@ -139,7 +169,10 @@ func (s *StatementInfo) Report(ctx context.Context) {
 	ReportStatement(ctx, s)
 }
 
-var EndStatement = func(ctx context.Context, err error) time.Time {
+var EndStatement = func(ctx context.Context, err error) {
+	if !GetTracerProvider().IsEnable() {
+		return
+	}
 	s := StatementFromContext(ctx)
 	if s == nil {
 		panic(moerr.NewInternalError("no statement info in context"))
@@ -161,7 +194,6 @@ var EndStatement = func(ctx context.Context, err error) time.Time {
 			s.Report(ctx)
 		}
 	}
-	return util.Time(endTime)
 }
 
 type StatementInfoStatus int

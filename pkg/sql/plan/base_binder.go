@@ -259,7 +259,7 @@ func (b *baseBinder) baseBindColRef(astExpr *tree.UnresolvedName, depth int32, i
 				typ = binding.types[colPos]
 				table = binding.table
 			} else {
-				return nil, moerr.NewInvalidInput("ambiguouse column reference '%v'", name)
+				return nil, moerr.NewInvalidInput("ambiguous column reference '%v'", name)
 			}
 		} else {
 			err = moerr.NewInvalidInput("column %s does not exist", name)
@@ -695,12 +695,7 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 					// rewrite count(*) to starcount(col_name)
 					name = "starcount"
 
-					var newCountCol *tree.UnresolvedName
-					newCountCol, err := tree.NewUnresolvedName(b.ctx.bindings[0].cols[0])
-					if err != nil {
-						return nil, err
-					}
-					astArgs[0] = newCountCol
+					astArgs[0] = tree.NewNumValWithType(constant.MakeInt64(1), "1", false, tree.P_int64)
 				}
 			}
 		}
@@ -769,7 +764,7 @@ func bindFuncExprImplByPlanExpr(name string, args []*Expr) (*plan.Expr, error) {
 		if len(args) != 2 {
 			return nil, moerr.NewInvalidArg("date_add/date_sub function need two args", len(args))
 		}
-		args, err = resetDateFunctionArgs(args[0], args[1])
+		args, err = resetDateFunction(args[0], args[1])
 		if err != nil {
 			return nil, err
 		}
@@ -777,7 +772,7 @@ func bindFuncExprImplByPlanExpr(name string, args []*Expr) (*plan.Expr, error) {
 		if len(args) != 2 {
 			return nil, moerr.NewInvalidArg("adddate/subdate function need two args", len(args))
 		}
-		args, err = resetDateFunctionArgs2(args[0], args[1])
+		args, err = resetDateFunction(args[0], args[1])
 		if err != nil {
 			return nil, err
 		}
@@ -882,16 +877,6 @@ func bindFuncExprImplByPlanExpr(name string, args []*Expr) (*plan.Expr, error) {
 		if args[1].Typ.Id == int32(types.T_any) {
 			args[1].Typ.Id = int32(types.T_varchar)
 		}
-	// rewrite from_unixtime(a, b) to date_format(from_unixtime(a), b)
-	case "from_unixtime":
-		if len(args) == 2 {
-			newExpr, err := bindFuncExprImplByPlanExpr("from_unixtime", []*plan.Expr{args[0]})
-			if err != nil {
-				return nil, err
-			}
-			name = "date_format"
-			args = []*plan.Expr{newExpr, args[1]}
-		}
 	}
 
 	// get args(exprs) & types
@@ -945,44 +930,11 @@ func bindFuncExprImplByPlanExpr(name string, args []*Expr) (*plan.Expr, error) {
 
 func (b *baseBinder) bindNumVal(astExpr *tree.NumVal, typ *Type) (*Expr, error) {
 	// over_int64_err := moerr.NewInternalError("", "Constants over int64 will support in future version.")
-
-	getStringExpr := func(val string) *Expr {
-		return &Expr{
-			Expr: &plan.Expr_C{
-				C: &Const{
-					Isnull: false,
-					Value: &plan.Const_Sval{
-						Sval: val,
-					},
-				},
-			},
-			Typ: &plan.Type{
-				Id:       int32(types.T_varchar),
-				Nullable: false,
-				Size:     4,
-				Width:    int32(len(val)),
-			},
-		}
-	}
-
 	returnDecimalExpr := func(val string) (*Expr, error) {
 		if typ != nil {
-			return appendCastBeforeExpr(getStringExpr(val), typ)
+			return appendCastBeforeExpr(makePlan2StringConstExprWithType(val), typ)
 		}
-		_, scale, err := types.ParseStringToDecimal128WithoutTable(val)
-		if err != nil {
-			return nil, err
-		}
-		typ := &plan.Type{
-			Id: int32(types.T_decimal128),
-			// Width: int32(len(val)),
-			// Scale: 0,
-			Width:     34,
-			Scale:     scale,
-			Precision: 34,
-			Nullable:  false,
-		}
-		return appendCastBeforeExpr(getStringExpr(val), typ)
+		return makePlan2DecimalExprWithType(val)
 	}
 
 	switch astExpr.ValType {
@@ -1092,7 +1044,7 @@ func (b *baseBinder) bindNumVal(astExpr *tree.NumVal, typ *Type) (*Expr, error) 
 	case tree.P_bit:
 		return returnDecimalExpr(astExpr.String())
 	case tree.P_char:
-		expr := getStringExpr(astExpr.String())
+		expr := makePlan2StringConstExprWithType(astExpr.String())
 		return expr, nil
 	default:
 		return nil, moerr.NewInvalidInput("unsupport value '%s'", astExpr.String())
@@ -1232,7 +1184,7 @@ func resetDateFunctionArgs(dateExpr *Expr, intervalExpr *Expr) ([]*Expr, error) 
 	}, nil
 }
 
-func resetDateFunctionArgs2(dateExpr *Expr, intervalExpr *Expr) ([]*Expr, error) {
+func resetDateFunction(dateExpr *Expr, intervalExpr *Expr) ([]*Expr, error) {
 	switch intervalExpr.Expr.(type) {
 	case *plan.Expr_List:
 		return resetDateFunctionArgs(dateExpr, intervalExpr)

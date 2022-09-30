@@ -102,11 +102,11 @@ func Log(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	}
 	v1, err := math1([]*vector.Vector{vs[0]}, proc, momath.Ln)
 	if err != nil {
-		return nil, err
+		return nil, moerr.NewInvalidArg("log input", "<= 0")
 	}
 	v2, err := math1([]*vector.Vector{vs[1]}, proc, momath.Ln)
 	if err != nil {
-		return nil, err
+		return nil, moerr.NewInvalidArg("log input", "<= 0")
 	}
 	return operator.DivFloat[float64]([]*vector.Vector{v2, v1}, proc)
 }

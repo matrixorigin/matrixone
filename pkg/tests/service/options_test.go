@@ -47,7 +47,7 @@ func TestWithLogShardNum(t *testing.T) {
 
 func TestWithDnShardNum(t *testing.T) {
 	num := uint64(5)
-	opt := Options{}.WithDnShardNum(num)
+	opt := Options{}.WithDNShardNum(num)
 	require.Equal(t, num, opt.initial.dnShardNum)
 }
 
@@ -108,6 +108,15 @@ func TestWithHKDNStoreTimeout(t *testing.T) {
 	require.Equal(t, timeout, opt.hakeeper.dnStoreTimeout)
 }
 
+func TestWithHKCNStoreTimeout(t *testing.T) {
+	opt := DefaultOptions()
+	require.Equal(t, defaultCNStoreTimeout, opt.hakeeper.cnStoreTimeout)
+
+	timeout := 20 * time.Second
+	opt = opt.WithHKCNStoreTimeout(timeout)
+	require.Equal(t, timeout, opt.hakeeper.cnStoreTimeout)
+}
+
 func TestWithDNHeartbeatInterval(t *testing.T) {
 	opt := DefaultOptions()
 	require.Equal(t, defaultDNHeartbeatInterval, opt.dn.heartbeatInterval)
@@ -155,4 +164,9 @@ func TestBuildHAKeeperConfig(t *testing.T) {
 	require.Equal(t, opt.hakeeper.tickPerSecond, cfg.TickPerSecond)
 	require.Equal(t, opt.hakeeper.logStoreTimeout, cfg.LogStoreTimeout)
 	require.Equal(t, opt.hakeeper.dnStoreTimeout, cfg.DNStoreTimeout)
+}
+
+func TestTaskStorage(t *testing.T) {
+	opt := DefaultOptions()
+	require.NotNil(t, opt.task.taskStorage)
 }

@@ -16,7 +16,6 @@ package pipeline
 
 import (
 	"bytes"
-
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"

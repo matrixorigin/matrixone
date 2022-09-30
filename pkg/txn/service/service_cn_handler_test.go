@@ -784,9 +784,11 @@ func checkData(t *testing.T, wTxn txn.TxnMeta, s *service, commitTS int64, k byt
 		kv.RUnlock()
 	}
 
+	kv.RLock()
 	v, ok := kv.GetUncommittedKV().Get(GetTestKey(k))
 	assert.False(t, ok)
 	assert.Empty(t, v)
+	kv.RUnlock()
 
 	assert.Nil(t, kv.GetUncommittedTxn(wTxn.ID))
 }

@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/sql/util"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
@@ -35,6 +36,7 @@ type Argument struct {
 	Engine        engine.Engine
 	DB            engine.Database
 	TableID       string
+	CPkeyColDef   *plan.ColDef
 }
 
 func String(_ any, buf *bytes.Buffer) {
@@ -55,14 +57,10 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 		return false, nil
 	}
 	defer bat.Clean(proc.Mp())
-	ctx := context.TODO()
-	if err := colexec.UpdateInsertBatch(n.Engine, n.DB, ctx, proc, n.TargetColDefs, bat, n.TableID); err != nil {
-		return false, err
-	}
 	{
 		// do null value check
 		for i := range bat.Vecs {
-			if n.TargetColDefs[i].Primary {
+			if n.TargetColDefs[i].Primary && !n.TargetColDefs[i].AutoIncrement {
 				if nulls.Any(bat.Vecs[i].Nsp) {
 					return false, moerr.NewConstraintViolation(fmt.Sprintf("Column '%s' cannot be null", n.TargetColDefs[i].GetName()))
 				}
@@ -76,6 +74,26 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 		for i := range bat.Vecs {
 			bat.Attrs[i] = n.TargetColDefs[i].GetName()
 			bat.Vecs[i] = bat.Vecs[i].ConstExpand(proc.Mp())
+		}
+	}
+	ctx := context.TODO()
+	if err := colexec.UpdateInsertBatch(n.Engine, n.DB, ctx, proc, n.TargetColDefs, bat, n.TableID); err != nil {
+		return false, err
+	}
+	if n.CPkeyColDef != nil {
+		err := util.FillCompositePKeyBatch(bat, n.CPkeyColDef, proc)
+		if err != nil {
+			names := util.SplitCompositePrimaryKeyColumnName(n.CPkeyColDef.Name)
+			for _, name := range names {
+				for i := range bat.Vecs {
+					if n.TargetColDefs[i].Name == name {
+						if nulls.Any(bat.Vecs[i].Nsp) {
+							return false, moerr.NewConstraintViolation(fmt.Sprintf("Column '%s' cannot be null", n.TargetColDefs[i].GetName()))
+						}
+					}
+				}
+			}
+
 		}
 	}
 	err := n.TargetTable.Write(ctx, bat)

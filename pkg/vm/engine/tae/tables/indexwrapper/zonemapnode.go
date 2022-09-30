@@ -18,111 +18,59 @@ import (
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/file"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/evictable"
 )
 
-type zonemapNode struct {
-	*buffer.Node
-	mgr     base.INodeManager
-	file    common.IVFile
-	zonemap *index.ZoneMap
-	dataTyp types.Type
+type ZmReader struct {
+	metaKey        string
+	mgr            base.INodeManager
+	colMetaFactory evictable.EvictableNodeFactory
 }
 
-func newZonemapNode(mgr base.INodeManager, file common.IVFile, id *common.ID, typ types.Type) *zonemapNode {
-	impl := new(zonemapNode)
-	impl.Node = buffer.NewNode(impl, mgr, *id, uint64(file.Stat().Size()))
-	impl.LoadFunc = impl.OnLoad
-	impl.UnloadFunc = impl.OnUnload
-	impl.DestroyFunc = impl.OnDestroy
-	impl.file = file
-	impl.mgr = mgr
-	impl.dataTyp = typ
-	mgr.RegisterNode(impl)
-	return impl
+func newZmReader(mgr base.INodeManager, typ types.Type, id common.ID, col file.ColumnBlock, metaloc string) *ZmReader {
+	metaKey := evictable.EncodeColMetaKey(&id)
+	return &ZmReader{
+		metaKey: metaKey,
+		mgr:     mgr,
+		colMetaFactory: func() (base.INode, error) {
+			return evictable.NewColumnMetaNode(mgr, metaKey, col, metaloc, typ), nil
+		},
+	}
 }
 
-func (n *zonemapNode) OnLoad() {
-	if n.zonemap != nil {
-		// no-op
-		return
-	}
-	var err error
-	stat := n.file.Stat()
-	size := stat.Size()
-	compressTyp := stat.CompressAlgo()
-	data := make([]byte, size)
-	if _, err := n.file.Read(data); err != nil {
-		panic(err)
-	}
-	rawSize := stat.OriginSize()
-	buf := make([]byte, rawSize)
-	if err = Decompress(data, buf, CompressType(compressTyp)); err != nil {
-		panic(err)
-	}
-	n.zonemap = index.NewZoneMap(n.dataTyp)
-	err = n.zonemap.Unmarshal(buf)
+func (r *ZmReader) Contains(key any) bool {
+	h, err := evictable.PinEvictableNode(r.mgr, r.metaKey, r.colMetaFactory)
 	if err != nil {
-		panic(err)
+		// TODOa: Error Handling?
+		return false
 	}
+	defer h.Close()
+	node := h.GetNode().(*evictable.ColumnMetaNode)
+	return node.Zonemap.Contains(key)
 }
 
-func (n *zonemapNode) OnUnload() {
-	if n.zonemap == nil {
-		// no-op
+func (r *ZmReader) ContainsAny(keys containers.Vector) (visibility *roaring.Bitmap, ok bool) {
+	h, err := evictable.PinEvictableNode(r.mgr, r.metaKey, r.colMetaFactory)
+	if err != nil {
 		return
 	}
-	n.zonemap = nil
+	defer h.Close()
+	node := h.GetNode().(*evictable.ColumnMetaNode)
+	return node.Zonemap.ContainsAny(keys)
 }
 
-func (n *zonemapNode) OnDestroy() {
-	n.file.Unref()
-}
-
-func (n *zonemapNode) Close() (err error) {
-	if err = n.Node.Close(); err != nil {
-		return err
-	}
-	n.zonemap = nil
-	return nil
-}
-
-type ZMReader struct {
-	node *zonemapNode
-}
-
-func NewZMReader(mgr base.INodeManager, file common.IVFile, id *common.ID, typ types.Type) *ZMReader {
-	return &ZMReader{
-		node: newZonemapNode(mgr, file, id, typ),
-	}
-}
-
-func (reader *ZMReader) Destroy() (err error) {
-	if err = reader.node.Close(); err != nil {
-		return err
-	}
-	return nil
-}
-
-func (reader *ZMReader) ContainsAny(keys containers.Vector) (visibility *roaring.Bitmap, ok bool) {
-	handle := reader.node.mgr.Pin(reader.node)
-	defer handle.Close()
-	return reader.node.zonemap.ContainsAny(keys)
-}
-
-func (reader *ZMReader) Contains(key any) bool {
-	handle := reader.node.mgr.Pin(reader.node)
-	defer handle.Close()
-	return reader.node.zonemap.Contains(key)
-}
+func (r *ZmReader) Destroy() error { return nil }
 
 type ZMWriter struct {
-	cType       CompressType
-	file        common.IRWFile
+	cType       common.CompressType
+	writer      objectio.Writer
+	block       objectio.BlockObject
 	zonemap     *index.ZoneMap
 	colIdx      uint16
 	internalIdx uint16
@@ -132,8 +80,9 @@ func NewZMWriter() *ZMWriter {
 	return &ZMWriter{}
 }
 
-func (writer *ZMWriter) Init(file common.IRWFile, cType CompressType, colIdx uint16, internalIdx uint16) error {
-	writer.file = file
+func (writer *ZMWriter) Init(wr objectio.Writer, block objectio.BlockObject, cType common.CompressType, colIdx uint16, internalIdx uint16) error {
+	writer.writer = wr
+	writer.block = block
 	writer.cType = cType
 	writer.colIdx = colIdx
 	writer.internalIdx = internalIdx
@@ -144,7 +93,7 @@ func (writer *ZMWriter) Finalize() (*IndexMeta, error) {
 	if writer.zonemap == nil {
 		panic("unexpected error")
 	}
-	appender := writer.file
+	appender := writer.writer
 	meta := NewEmptyIndexMeta()
 	meta.SetIndexType(BlockZoneMapIndex)
 	meta.SetCompressType(writer.cType)
@@ -156,11 +105,15 @@ func (writer *ZMWriter) Finalize() (*IndexMeta, error) {
 	if err != nil {
 		return nil, err
 	}
+	zonemap, err := objectio.NewZoneMap(writer.colIdx, iBuf)
+	if err != nil {
+		return nil, err
+	}
 	rawSize := uint32(len(iBuf))
-	compressed := Compress(iBuf, writer.cType)
+	compressed := common.Compress(iBuf, writer.cType)
 	exactSize := uint32(len(compressed))
 	meta.SetSize(rawSize, exactSize)
-	_, err = appender.Write(compressed)
+	err = appender.WriteIndex(writer.block, zonemap)
 	if err != nil {
 		return nil, err
 	}

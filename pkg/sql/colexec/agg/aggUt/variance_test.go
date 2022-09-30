@@ -77,6 +77,21 @@ func TestVariance(t *testing.T) {
 
 			testMarshal: true,
 		},
+		{
+			op:         agg.AggregateVariance,
+			isDistinct: true,
+			inputTyp:   decimal64Typ,
+
+			input:    []int64{9, 8, 7, 6, 5, 4, 3, 2, 1, 0},
+			inputNsp: nil,
+			expected: []float64{8.25},
+
+			mergeInput:  []int64{0, 1, 2, 3, 4, 5, 6, 7, 8, 9},
+			mergeNsp:    nil,
+			mergeExpect: []float64{8.25},
+
+			testMarshal: false,
+		},
 		// decimal128 variance test
 		{
 			op:         agg.AggregateVariance,
@@ -92,6 +107,21 @@ func TestVariance(t *testing.T) {
 			mergeExpect: []float64{8.25},
 
 			testMarshal: true,
+		},
+		{
+			op:         agg.AggregateVariance,
+			isDistinct: true,
+			inputTyp:   decimal128Typ,
+
+			input:    []int64{9, 8, 7, 6, 5, 4, 3, 2, 1, 0},
+			inputNsp: nil,
+			expected: []float64{8.25},
+
+			mergeInput:  []int64{0, 1, 2, 3, 4, 5, 6, 7, 8, 9},
+			mergeNsp:    nil,
+			mergeExpect: []float64{8.25},
+
+			testMarshal: false,
 		},
 	}
 	RunTest(t, testCases)

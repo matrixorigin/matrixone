@@ -60,53 +60,10 @@ func newDummyExecutorFactory(sqlch chan string) func() ie.InternalExecutor {
 
 func TestInitSchemaByInnerExecutor(t *testing.T) {
 	type args struct {
-		ieFactory func() ie.InternalExecutor
+		ctx  context.Context
+		ch   chan string
+		mode string
 	}
-	c := make(chan string, 10)
-	tests := []struct {
-		name string
-		args args
-	}{
-		{
-			name: "fake",
-			args: args{newDummyExecutorFactory(c)},
-		},
-	}
-	wg := sync.WaitGroup{}
-	startedC := make(chan struct{}, 1)
-	wg.Add(1)
-	go func() {
-		startedC <- struct{}{}
-	loop:
-		for {
-			sql, ok := <-c
-			if ok {
-				t.Logf("exec sql: %s", sql)
-			} else {
-				t.Log("exec sql Done.")
-				break loop
-			}
-		}
-		wg.Done()
-	}()
-	<-startedC
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			err := InitSchemaByInnerExecutor(context.TODO(), tt.args.ieFactory, InternalExecutor)
-			require.Equal(t, nil, err)
-		})
-	}
-	close(c)
-	wg.Wait()
-}
-
-func TestInitExternalTblSchema(t *testing.T) {
-	type args struct {
-		ctx       context.Context
-		ieFactory func() ie.InternalExecutor
-		mode      string
-	}
-	c := make(chan string, 10)
 	tests := []struct {
 		name string
 		args args
@@ -114,57 +71,52 @@ func TestInitExternalTblSchema(t *testing.T) {
 		{
 			name: "dummy",
 			args: args{
-				ctx:       context.Background(),
-				ieFactory: newDummyExecutorFactory(c),
-				mode:      FileService,
+				ctx:  context.Background(),
+				ch:   make(chan string, 10),
+				mode: FileService,
 			},
 		},
 		{
 			name: "dummyS3",
 			args: args{
-				ctx:       context.Background(),
-				ieFactory: newDummyExecutorFactory(c),
-				mode:      FileService,
+				ctx:  context.Background(),
+				ch:   make(chan string, 10),
+				mode: FileService,
 			},
 		},
 	}
 
-	wg := sync.WaitGroup{}
-	// 1: want goroutine started
-	wg.Add(1)
-	go func() {
-		wg.Done() // started
-	loop:
-		for {
-			sql, ok := <-c
-			wg.Done()
-			if ok {
-				t.Logf("exec sql: %s", sql)
-				if sql == "create database if not exists system" {
-					continue
-				}
-				idx := strings.Index(sql, "CREATE EXTERNAL TABLE")
-				require.Equal(t, 0, idx)
-			} else {
-				t.Log("exec sql Done.")
-				break loop
-			}
-		}
-	}()
-	wg.Wait()
-
 	// (1 + 4) * n + 1
 	// 1: create database ...
 	// 4: create EXTERNAL table
-	// 1: close
-	wg.Add(1)
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			var wg sync.WaitGroup
 			wg.Add(1 + len(initDDLs))
-			err := InitSchemaByInnerExecutor(tt.args.ctx, tt.args.ieFactory, tt.args.mode)
+			err := InitSchemaByInnerExecutor(tt.args.ctx, newDummyExecutorFactory(tt.args.ch), tt.args.mode)
 			require.Equal(t, nil, err)
+			go func() {
+			loop:
+				for {
+					sql, ok := <-tt.args.ch
+					wg.Done()
+					if ok {
+						t.Logf("exec sql: %s", sql)
+						if sql == "create database if not exists system" {
+							continue
+						}
+						idx := strings.Index(sql, "CREATE EXTERNAL TABLE")
+						require.Equal(t, 0, idx)
+					} else {
+						t.Log("exec sql Done.")
+						break loop
+					}
+				}
+			}()
+			wg.Wait()
+			wg.Add(1)
+			close(tt.args.ch)
+			wg.Wait()
 		})
 	}
-	close(c)
-	wg.Wait()
 }

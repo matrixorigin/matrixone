@@ -24,10 +24,12 @@ package trace
 import (
 	"context"
 	"sync/atomic"
+	"time"
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/util/batchpipe"
 	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 	"github.com/matrixorigin/matrixone/pkg/util/export"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
@@ -39,6 +41,7 @@ var gTraceContext atomic.Value
 var gSpanContext atomic.Value
 
 func init() {
+	SetDefaultSpanContext(&SpanContext{})
 	SetDefaultContext(context.Background())
 	SetTracerProvider(newMOTracerProvider(EnableTracer(false)))
 }
@@ -50,12 +53,6 @@ func Init(ctx context.Context, opts ...TracerProviderOption) (context.Context, e
 	if !atomic.CompareAndSwapUint32(&inited, 0, 1) {
 		return ContextWithSpanContext(ctx, *DefaultSpanContext()), nil
 	}
-
-	// init tool dependence
-	logutil.SetLogReporter(&logutil.TraceReporter{ReportLog: ReportLog, ReportZap: ReportZap, LevelSignal: SetLogLevel, ContextField: ContextField})
-	logutil.SpanFieldKey.Store(SpanFieldKey)
-	errutil.SetErrorReporter(HandleError)
-	export.SetDefaultContextFunc(DefaultContext)
 
 	// init TraceProvider
 	SetTracerProvider(newMOTracerProvider(opts...))
@@ -78,6 +75,14 @@ func Init(ctx context.Context, opts ...TracerProviderOption) (context.Context, e
 		return nil, err
 	}
 
+	// init tool dependence
+	logutil.SetLogReporter(&logutil.TraceReporter{ReportLog: ReportLog, ReportZap: ReportZap, LevelSignal: SetLogLevel, ContextField: ContextField})
+	logutil.SpanFieldKey.Store(SpanFieldKey)
+	errutil.SetErrorReporter(ReportError)
+	export.SetDefaultContextFunc(DefaultContext)
+
+	logutil.Infof("trace with LongQueryTime: %v", time.Duration(GetTracerProvider().longQueryTime))
+
 	return DefaultContext(), nil
 }
 
@@ -90,22 +95,24 @@ func initExporter(ctx context.Context, config *tracerProviderConfig) error {
 			return err
 		}
 	}
+	defaultReminder := batchpipe.NewConstantClock(config.exportInterval)
+	defaultOptions := []bufferOption{bufferWithReminder(defaultReminder)}
 	var p export.BatchProcessor
 	// init BatchProcess for trace/log/error
 	switch {
 	case config.batchProcessMode == InternalExecutor:
 		// register buffer pipe implements
-		export.Register(&MOSpan{}, NewBufferPipe2SqlWorker())
-		export.Register(&MOLog{}, NewBufferPipe2SqlWorker())
-		export.Register(&MOZapLog{}, NewBufferPipe2SqlWorker())
-		export.Register(&StatementInfo{}, NewBufferPipe2SqlWorker())
-		export.Register(&MOErrorHolder{}, NewBufferPipe2SqlWorker())
+		export.Register(&MOSpan{}, NewBufferPipe2SqlWorker(defaultOptions...))
+		export.Register(&MOLog{}, NewBufferPipe2SqlWorker(defaultOptions...))
+		export.Register(&MOZapLog{}, NewBufferPipe2SqlWorker(defaultOptions...))
+		export.Register(&StatementInfo{}, NewBufferPipe2SqlWorker(defaultOptions...))
+		export.Register(&MOErrorHolder{}, NewBufferPipe2SqlWorker(defaultOptions...))
 	case config.batchProcessMode == FileService:
-		export.Register(&MOSpan{}, NewBufferPipe2CSVWorker())
-		export.Register(&MOLog{}, NewBufferPipe2CSVWorker())
-		export.Register(&MOZapLog{}, NewBufferPipe2CSVWorker())
-		export.Register(&StatementInfo{}, NewBufferPipe2CSVWorker())
-		export.Register(&MOErrorHolder{}, NewBufferPipe2CSVWorker())
+		export.Register(&MOSpan{}, NewBufferPipe2CSVWorker(defaultOptions...))
+		export.Register(&MOLog{}, NewBufferPipe2CSVWorker(defaultOptions...))
+		export.Register(&MOZapLog{}, NewBufferPipe2CSVWorker(defaultOptions...))
+		export.Register(&StatementInfo{}, NewBufferPipe2CSVWorker(defaultOptions...))
+		export.Register(&MOErrorHolder{}, NewBufferPipe2CSVWorker(defaultOptions...))
 	default:
 		return moerr.NewInternalError("unknown batchProcessMode: %s", config.batchProcessMode)
 	}

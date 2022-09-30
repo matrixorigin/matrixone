@@ -79,7 +79,7 @@ dayofyear("2015-09-10")!=dayofyear("2016-04-24")
 true
 CREATE TABLE Product(Product_id INT,  Product_name VARCHAR(100) NOT NULL,Buying_price DECIMAL(13, 2) NOT NULL,Selling_price DECIMAL(13, 2) NOT NULL,Selling_Date Date NOT NULL,PRIMARY KEY(Product_id));
 INSERT INTO  Product(Product_name, Buying_price, Selling_price, Selling_Date) VALUES ('Audi Q8', 10000000.00, 15000000.00, '2018-01-26' ),('Volvo XC40', 2000000.00, 3000000.00, '2018-04-20' ),('Audi A6', 4000000.00, 5000000.00, '2018-07-25' ),('BMW X5', 5000500.00, 7006500.00, '2018-10-18'  ),('Jaguar XF', 5000000, 7507000.00, '2019-01-27'  ),('Mercedes-Benz C-Class', 4000000.00, 6000000.00, '2019-04-01'  ),('Jaguar F-PACE', 5000000.00, 7000000.00, '2019-12-26'  ),('Porsche Macan', 6500000.00, 8000000.00, '2020-04-16' ) ;
-tae data: duplicate
+constraint vialation: Column 'product_id' cannot be null
 SELECT  dayofyear (Selling_Date) dayofyear,  COUNT(Product_id) Product_Sold FROM Product GROUP BY dayofyear (Selling_Date) ORDER BY dayofyear (Selling_Date);
 dayofyear	Product_Sold
 DROP TABLE Product;

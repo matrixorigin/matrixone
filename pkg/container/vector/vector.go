@@ -75,6 +75,10 @@ func (v *Vector) IsOriginal() bool {
 	return v.original
 }
 
+func (v *Vector) SetOriginal(status bool) {
+	v.original = status
+}
+
 func DecodeFixedCol[T types.FixedSizeT](v *Vector, sz int) []T {
 	return types.DecodeFixedSlice[T](v.data, sz)
 }
@@ -504,8 +508,8 @@ func NewConstNull(typ types.Type, length int) *Vector {
 
 func NewConstFixed[T types.FixedSizeT](typ types.Type, length int, val T) *Vector {
 	v := NewConst(typ, length)
-	vc := MustTCols[T](v)
-	vc[0] = val
+	// TODO: memory accounting
+	v.Append(val, false, nil)
 	return v
 }
 
@@ -610,10 +614,14 @@ func (v *Vector) Free(m *mheap.Mheap) {
 		// XXX: Should we panic, or this is really an Noop?
 		return
 	}
-	mheap.Free(m, v.data)
+	if !v.IsConst() {
+		// const vector's data & area allocate with nil mheap
+		// so we can't free it by using mheap.
+		mheap.Free(m, v.data)
+		mheap.Free(m, v.area)
+	}
 	v.data = []byte{}
 	v.colFromData()
-	mheap.Free(m, v.area)
 	v.area = nil
 }
 

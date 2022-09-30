@@ -22,7 +22,6 @@ import (
 
 type ExplainQuery interface {
 	ExplainPlan(buffer *ExplainDataBuffer, options *ExplainOptions) error
-	ExplainAnalyze(buffer *ExplainDataBuffer, options *ExplainOptions) error
 }
 
 type NodeDescribe interface {

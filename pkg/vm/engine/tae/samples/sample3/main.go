@@ -90,7 +90,7 @@ func main() {
 	bat := catalog.MockBatch(schema, int(batchRows))
 	newbat := batch.New(true, bat.Attrs)
 	newbat.Vecs = containers.CopyToMoVectors(bat.Vecs)
-	bats := moengine.SplitBatch(newbat, int(batchCnt))
+	bats := containers.SplitBatch(newbat, int(batchCnt))
 	var wg sync.WaitGroup
 	doAppend := func(b *batch.Batch) func() {
 		return func() {

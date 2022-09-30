@@ -15,6 +15,7 @@
 package service
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"time"
 
 	"go.uber.org/zap/zapcore"
@@ -25,10 +26,12 @@ import (
 const (
 	// default cluster initial information
 	defaultDNServiceNum  = 1
-	defaultDnShardNum    = 1
+	defaultDNShardNum    = 1
 	defaultLogServiceNum = 3
 	defaultLogShardNum   = 1
 	defaultLogReplicaNum = 3
+	defaultCNServiceNum  = 0
+	defaultCNShardNum    = 0
 
 	// default configuration for services
 	defaultHostAddr    = "127.0.0.1"
@@ -48,11 +51,15 @@ const (
 	defaultTickPerSecond   = 10
 	defaultLogStoreTimeout = 4 * time.Second
 	defaultDNStoreTimeout  = 3 * time.Second
+	defaultCNStoreTimeout  = 3 * time.Second
 	defaultCheckInterval   = 1 * time.Second
 
 	// default heartbeat configuration
 	defaultLogHeartbeatInterval = 1 * time.Second
 	defaultDNHeartbeatInterval  = 1 * time.Second
+
+	// default task configuration
+	defaultFetchInterval = 1 * time.Second
 )
 
 // Options are params for creating test cluster.
@@ -85,6 +92,12 @@ type Options struct {
 		checkInterval   time.Duration
 		logStoreTimeout time.Duration
 		dnStoreTimeout  time.Duration
+		cnStoreTimeout  time.Duration
+	}
+
+	task struct {
+		taskStorage   taskservice.TaskStorage
+		FetchInterval time.Duration
 	}
 }
 
@@ -109,11 +122,17 @@ func (opt *Options) validate() {
 	if opt.initial.logServiceNum <= 0 {
 		opt.initial.logServiceNum = defaultLogServiceNum
 	}
+	if opt.initial.cnServiceNum <= 0 {
+		opt.initial.cnServiceNum = defaultCNServiceNum
+	}
 	if opt.initial.dnShardNum <= 0 {
-		opt.initial.dnShardNum = defaultDnShardNum
+		opt.initial.dnShardNum = defaultDNShardNum
 	}
 	if opt.initial.logShardNum <= 0 {
 		opt.initial.logShardNum = defaultLogShardNum
+	}
+	if opt.initial.cnShardNum <= 0 {
+		opt.initial.cnShardNum = defaultCNShardNum
 	}
 	if opt.initial.logReplicaNum <= 0 {
 		opt.initial.logReplicaNum = defaultLogReplicaNum
@@ -134,6 +153,9 @@ func (opt *Options) validate() {
 	if opt.hakeeper.dnStoreTimeout == 0 {
 		opt.hakeeper.dnStoreTimeout = defaultDNStoreTimeout
 	}
+	if opt.hakeeper.cnStoreTimeout == 0 {
+		opt.hakeeper.cnStoreTimeout = defaultCNStoreTimeout
+	}
 	if opt.hakeeper.checkInterval == 0 {
 		opt.hakeeper.checkInterval = defaultCheckInterval
 	}
@@ -145,6 +167,14 @@ func (opt *Options) validate() {
 	if opt.dn.heartbeatInterval == 0 {
 		opt.dn.heartbeatInterval = defaultDNHeartbeatInterval
 	}
+
+	// task configuration
+	if opt.task.taskStorage == nil {
+		opt.task.taskStorage = taskservice.NewMemTaskStorage()
+	}
+	if opt.task.FetchInterval == 0 {
+		opt.task.FetchInterval = defaultFetchInterval
+	}
 }
 
 // BuildHAKeeperConfig returns hakeeper.Config
@@ -155,6 +185,7 @@ func (opt Options) BuildHAKeeperConfig() hakeeper.Config {
 		TickPerSecond:   opt.hakeeper.tickPerSecond,
 		LogStoreTimeout: opt.hakeeper.logStoreTimeout,
 		DNStoreTimeout:  opt.hakeeper.dnStoreTimeout,
+		CNStoreTimeout:  opt.hakeeper.cnStoreTimeout,
 	}
 }
 
@@ -170,15 +201,25 @@ func (opt Options) WithLogServiceNum(num int) Options {
 	return opt
 }
 
+func (opt Options) WithCNServiceNum(num int) Options {
+	opt.initial.cnServiceNum = num
+	return opt
+}
+
 // WithLogShardNum sets log shard number in the cluster.
 func (opt Options) WithLogShardNum(num uint64) Options {
 	opt.initial.logShardNum = num
 	return opt
 }
 
-// WithDnShardNum sets dn shard number in the cluster.
-func (opt Options) WithDnShardNum(num uint64) Options {
+// WithDNShardNum sets dn shard number in the cluster.
+func (opt Options) WithDNShardNum(num uint64) Options {
 	opt.initial.dnShardNum = num
+	return opt
+}
+
+func (opt Options) WithCNShardNum(num uint64) Options {
+	opt.initial.cnShardNum = num
 	return opt
 }
 
@@ -230,6 +271,11 @@ func (opt Options) WithHKDNStoreTimeout(timeout time.Duration) Options {
 	return opt
 }
 
+func (opt Options) WithHKCNStoreTimeout(timeout time.Duration) Options {
+	opt.hakeeper.cnStoreTimeout = timeout
+	return opt
+}
+
 // WithHKCheckInterval sets check interval for hakeeper.
 func (opt Options) WithHKCheckInterval(interval time.Duration) Options {
 	opt.hakeeper.checkInterval = interval
@@ -245,6 +291,11 @@ func (opt Options) WithDNHeartbeatInterval(interval time.Duration) Options {
 // WithLogHeartbeatInterval sets heartbeat interval fo log service.
 func (opt Options) WithLogHeartbeatInterval(interval time.Duration) Options {
 	opt.log.heartbeatInterval = interval
+	return opt
+}
+
+func (opt Options) WithTaskStorage(storage taskservice.TaskStorage) Options {
+	opt.task.taskStorage = storage
 	return opt
 }
 

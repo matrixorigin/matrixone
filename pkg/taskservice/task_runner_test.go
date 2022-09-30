@@ -32,7 +32,7 @@ import (
 func TestRunTask(t *testing.T) {
 	runTaskRunnerTest(t, func(r *taskRunner, s TaskService, store TaskStorage) {
 		c := make(chan struct{})
-		r.RegisterExectuor(0, func(ctx context.Context, task task.Task) error {
+		r.RegisterExecutor(0, func(ctx context.Context, task task.Task) error {
 			defer close(c)
 			return nil
 		})
@@ -47,7 +47,7 @@ func TestRunTasksInParallel(t *testing.T) {
 	runTaskRunnerTest(t, func(r *taskRunner, s TaskService, store TaskStorage) {
 		wg := &sync.WaitGroup{}
 		wg.Add(2)
-		r.RegisterExectuor(0, func(ctx context.Context, task task.Task) error {
+		r.RegisterExecutor(0, func(ctx context.Context, task task.Task) error {
 			defer wg.Done()
 			time.Sleep(time.Millisecond * 200)
 			return nil
@@ -66,7 +66,7 @@ func TestTooMuchTasksWillBlockAndEventuallyCanBeExecuted(t *testing.T) {
 		continueC := make(chan struct{})
 		v := uint32(0)
 		wait := time.Millisecond * 200
-		r.RegisterExectuor(0, func(ctx context.Context, task task.Task) error {
+		r.RegisterExecutor(0, func(ctx context.Context, task task.Task) error {
 			n := atomic.AddUint32(&v, 1)
 			if n == 2 {
 				defer close(c) // second task close the chan
@@ -99,7 +99,7 @@ func TestHeartbeatWithRunningTask(t *testing.T) {
 		c := make(chan struct{})
 		completeC := make(chan struct{})
 		n := uint32(0)
-		r.RegisterExectuor(0, func(ctx context.Context, task task.Task) error {
+		r.RegisterExecutor(0, func(ctx context.Context, task task.Task) error {
 			if atomic.AddUint32(&n, 1) == 2 {
 				close(c)
 			}
@@ -121,7 +121,7 @@ func TestRunTaskWithRetry(t *testing.T) {
 	runTaskRunnerTest(t, func(r *taskRunner, s TaskService, store TaskStorage) {
 		c := make(chan struct{})
 		n := uint32(0)
-		r.RegisterExectuor(0, func(ctx context.Context, task task.Task) error {
+		r.RegisterExecutor(0, func(ctx context.Context, task task.Task) error {
 			if atomic.AddUint32(&n, 1) == 1 {
 				return moerr.NewInternalError("error")
 			}
@@ -143,7 +143,7 @@ func TestRunTaskWithDisableRetry(t *testing.T) {
 	runTaskRunnerTest(t, func(r *taskRunner, s TaskService, store TaskStorage) {
 		c := make(chan struct{})
 		n := uint32(0)
-		r.RegisterExectuor(0, func(ctx context.Context, task task.Task) error {
+		r.RegisterExecutor(0, func(ctx context.Context, task task.Task) error {
 			close(c)
 			if atomic.AddUint32(&n, 1) == 1 {
 				return moerr.NewInternalError("error")
@@ -167,7 +167,7 @@ func TestCancelRunningTask(t *testing.T) {
 	runTaskRunnerTest(t, func(r *taskRunner, s TaskService, store TaskStorage) {
 		c := make(chan struct{})
 		cancelC := make(chan struct{})
-		r.RegisterExectuor(0, func(ctx context.Context, task task.Task) error {
+		r.RegisterExecutor(0, func(ctx context.Context, task task.Task) error {
 			close(c)
 			<-ctx.Done()
 			close(cancelC)

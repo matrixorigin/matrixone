@@ -89,7 +89,6 @@ func NewDeleteNode(txn txnif.AsyncTxn, dt handle.DeleteType) *DeleteNode {
 	return n
 }
 
-// todo
 func (node *DeleteNode) CloneAll() txnbase.MVCCNode  { panic("todo") }
 func (node *DeleteNode) CloneData() txnbase.MVCCNode { panic("todo") }
 func (node *DeleteNode) Update(txnbase.MVCCNode)     { panic("todo") }
@@ -290,6 +289,8 @@ func (node *DeleteNode) MakeCommand(id uint32) (cmd txnif.TxnCmd, err error) {
 	return
 }
 
+func (node *DeleteNode) Set1PC()     { node.TxnMVCCNode.Set1PC() }
+func (node *DeleteNode) Is1PC() bool { return node.TxnMVCCNode.Is1PC() }
 func (node *DeleteNode) PrepareRollback() (err error) {
 	node.chain.mvcc.Lock()
 	defer node.chain.mvcc.Unlock()

@@ -96,6 +96,12 @@ func (entry *BlockEntry) MakeCommand(id uint32) (cmd txnif.TxnCmd, err error) {
 	return newBlockCmd(id, cmdType, entry), nil
 }
 
+func (entry *BlockEntry) Set1PC() {
+	entry.GetNodeLocked().Set1PC()
+}
+func (entry *BlockEntry) Is1PC() bool {
+	return entry.GetNodeLocked().Is1PC()
+}
 func (entry *BlockEntry) PPString(level common.PPLevel, depth int, prefix string) string {
 	s := fmt.Sprintf("%s%s%s", common.RepeatStr("\t", depth), prefix, entry.StringWithLevelLocked(level))
 	return s
@@ -147,9 +153,6 @@ func (entry *BlockEntry) InitData(factory DataFactory) {
 }
 func (entry *BlockEntry) GetBlockData() data.Block { return entry.blkData }
 func (entry *BlockEntry) GetSchema() *Schema       { return entry.GetSegment().GetTable().GetSchema() }
-func (entry *BlockEntry) GetFileTs() (types.TS, error) {
-	return entry.GetBlockData().GetBlockFile().ReadTS()
-}
 func (entry *BlockEntry) PrepareRollback() (err error) {
 	var empty bool
 	empty, err = entry.MetaBaseEntry.PrepareRollback()

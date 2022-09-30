@@ -20,6 +20,8 @@ import (
 	"sync"
 	"time"
 
+	"go.uber.org/zap"
+
 	"github.com/cockroachdb/errors"
 	"github.com/lni/dragonboat/v4"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -220,7 +222,7 @@ func (c *managedClient) resetClient() {
 		cc := c.client
 		c.client = nil
 		if err := cc.close(); err != nil {
-			plog.Errorf("failed to close client %v", err)
+			logger.Error("failed to close client", zap.Error(err))
 		}
 	}
 }
@@ -318,7 +320,7 @@ func connectToLogService(ctx context.Context,
 				return c, nil
 			} else {
 				if err := c.close(); err != nil {
-					plog.Errorf("failed to close the client %v", err)
+					logger.Error("failed to close the client", zap.Error(err))
 				}
 				e = err
 			}
@@ -329,7 +331,7 @@ func connectToLogService(ctx context.Context,
 				return c, nil
 			} else {
 				if err := c.close(); err != nil {
-					plog.Errorf("failed to close the client %v", err)
+					logger.Error("failed to close the client", zap.Error(err))
 				}
 				e = err
 			}
@@ -501,6 +503,7 @@ func getRPCClient(ctx context.Context, target string, pool *sync.Pool) (morpc.RP
 	backendOpts := []morpc.BackendOption{
 		morpc.WithBackendConnectWhenCreate(),
 		morpc.WithBackendConnectTimeout(time.Second),
+		morpc.WithBackendHasPayloadResponse(),
 	}
 	backendOpts = append(backendOpts, GetBackendOptions(ctx)...)
 
@@ -514,7 +517,9 @@ func getRPCClient(ctx context.Context, target string, pool *sync.Pool) (morpc.RP
 	// we set connection timeout to a constant value so if ctx's deadline is much
 	// larger, then we can ensure that all specified potential nodes have a chance
 	// to be attempted
-	codec := morpc.NewMessageCodecWithChecksum(mf, defaultWriteSocketSize)
+	codec := morpc.NewMessageCodec(mf,
+		morpc.WithCodecPayloadCopyBufferSize(defaultWriteSocketSize),
+		morpc.WithCodecEnableChecksum())
 	bf := morpc.NewGoettyBasedBackendFactory(codec, backendOpts...)
 	return morpc.NewClient(bf, clientOpts...)
 }

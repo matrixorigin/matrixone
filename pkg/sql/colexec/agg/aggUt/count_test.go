@@ -22,13 +22,15 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
-// TODO: add uuid and decimal128 count distinct count test
 func TestCount(t *testing.T) {
 	int8TestTyp := types.New(types.T_int8, 0, 0, 0)
 	boolTestTyp := types.New(types.T_bool, 0, 0, 0)
 	varcharTestTyp := types.New(types.T_varchar, 0, 0, 0)
+	decimalTestTyp := types.New(types.T_decimal128, 0, 0, 0)
+	uuidTestTyp := types.New(types.T_uuid, 0, 0, 0)
 
 	testCases := []testCase{
+		// int8 count test
 		{
 			op:         agg.AggregateCount,
 			isDistinct: false,
@@ -74,6 +76,7 @@ func TestCount(t *testing.T) {
 
 			testMarshal: false,
 		},
+		// bool count test
 		{
 			op:         agg.AggregateCount,
 			isDistinct: false,
@@ -104,6 +107,7 @@ func TestCount(t *testing.T) {
 
 			testMarshal: true,
 		},
+		// varchar count test
 		{
 			op:         agg.AggregateCount,
 			isDistinct: true,
@@ -117,6 +121,85 @@ func TestCount(t *testing.T) {
 			mergeNsp:    nil,
 			mergeExpect: []int64{3},
 
+			testMarshal: false,
+		},
+		// decimal128 count test
+		{
+			op:         agg.AggregateCount,
+			isDistinct: false,
+			inputTyp:   decimalTestTyp,
+
+			input:    []int64{9, 8, 7, 6, 5, 4, 3, 2, 1, 0},
+			inputNsp: nil,
+			expected: []int64{10},
+
+			mergeInput:  []int64{0, 1, 2, 3, 4, 5, 6, 7, 8, 9},
+			mergeNsp:    nil,
+			mergeExpect: []int64{20},
+
+			testMarshal: true,
+		},
+		{
+			op:         agg.AggregateCount,
+			isDistinct: true,
+			inputTyp:   decimalTestTyp,
+
+			input:    []int64{9, 8, 7, 6, 5, 4, 3, 2, 1, 0},
+			inputNsp: nil,
+			expected: []int64{10},
+
+			mergeInput:  []int64{0, 1, 2, 3, 4, 5, 6, 7, 8, 9},
+			mergeNsp:    nil,
+			mergeExpect: []int64{10},
+
+			testMarshal: false,
+		},
+		{
+			op:         agg.AggregateCount,
+			isDistinct: false,
+			inputTyp:   uuidTestTyp,
+			input: []string{
+				"f6355110-2d0c-11ed-940f-000c29847904",
+				"1ef96142-2d0d-11ed-940f-000c29847904",
+				"117a0bd5-2d0d-11ed-940f-000c29847904",
+				"18b21c70-2d0d-11ed-940f-000c29847904",
+				"1b50c129-2dba-11ed-940f-000c29847904",
+			},
+			inputNsp: nil,
+			expected: []int64{5},
+			mergeInput: []string{
+				"f6355110-2d0c-11ed-940f-000c29847904",
+				"1ef96142-2d0d-11ed-940f-000c29847904",
+				"117a0bd5-2d0d-11ed-940f-000c29847904",
+				"18b21c70-2d0d-11ed-940f-000c29847904",
+				"1b50c129-2dba-11ed-940f-000c29847904",
+			},
+			mergeNsp:    nil,
+			mergeExpect: []int64{10},
+			testMarshal: true,
+		},
+		{
+			op:         agg.AggregateCount,
+			isDistinct: true,
+			inputTyp:   uuidTestTyp,
+			input: []string{
+				"f6355110-2d0c-11ed-940f-000c29847904",
+				"1ef96142-2d0d-11ed-940f-000c29847904",
+				"117a0bd5-2d0d-11ed-940f-000c29847904",
+				"18b21c70-2d0d-11ed-940f-000c29847904",
+				"1b50c129-2dba-11ed-940f-000c29847904",
+			},
+			inputNsp: nil,
+			expected: []int64{5},
+			mergeInput: []string{
+				"f6355110-2d0c-11ed-940f-000c29847904",
+				"1ef96142-2d0d-11ed-940f-000c29847904",
+				"117a0bd5-2d0d-11ed-940f-000c29847904",
+				"18b21c70-2d0d-11ed-940f-000c29847904",
+				"1b50c129-2dba-11ed-940f-000c29847904",
+			},
+			mergeNsp:    nil,
+			mergeExpect: []int64{5},
 			testMarshal: false,
 		},
 	}

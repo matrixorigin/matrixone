@@ -467,10 +467,7 @@ func (mp *MysqlProtocolImpl) ParseExecuteData(stmt *PrepareStmt, data []byte, po
 	pos += 4
 
 	if numParams > 0 {
-		var (
-			nullBitmaps []byte
-			paramValues []byte
-		)
+		var nullBitmaps []byte
 		nullBitmapLen := (numParams + 7) >> 3
 		nullBitmaps, pos, ok = mp.readCountOfBytes(data, pos, nullBitmapLen)
 		if !ok {
@@ -613,7 +610,6 @@ func (mp *MysqlProtocolImpl) ParseExecuteData(stmt *PrepareStmt, data []byte, po
 				vars[i] = []byte(val)
 
 			case defines.MYSQL_TYPE_DATE, defines.MYSQL_TYPE_DATETIME, defines.MYSQL_TYPE_TIMESTAMP:
-				// Not tested
 				// See https://dev.mysql.com/doc/internals/en/binary-protocol-value.html
 				// for more details.
 				length, newPos, ok := mp.io.ReadUint8(data, pos)
@@ -626,11 +622,11 @@ func (mp *MysqlProtocolImpl) ParseExecuteData(stmt *PrepareStmt, data []byte, po
 				case 0:
 					vars[i] = "0000-00-00 00:00:00"
 				case 4:
-					pos, vars[i] = mp.readDate(paramValues, pos)
+					pos, vars[i] = mp.readDate(data, pos)
 				case 7:
-					pos, vars[i] = mp.readDateTime(paramValues, pos)
+					pos, vars[i] = mp.readDateTime(data, pos)
 				case 11:
-					pos, vars[i] = mp.readTimestamp(paramValues, pos)
+					pos, vars[i] = mp.readTimestamp(data, pos)
 				default:
 					err = moerr.NewInvalidInput("mysql protocol error, malformed packet")
 					return
@@ -1498,6 +1494,9 @@ Error information includes several elements: an error code, SQLSTATE value, and 
 	Message string: This string provides a textual description of the error.
 */
 func (mp *MysqlProtocolImpl) sendErrPacket(errorCode uint16, sqlState, errorMessage string) error {
+	if mp.ses != nil {
+		mp.ses.errInfo.push(errorCode, errorMessage)
+	}
 	errPkt := mp.makeErrPayload(errorCode, sqlState, errorMessage)
 	return mp.writePackets(errPkt)
 }

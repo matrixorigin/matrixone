@@ -88,9 +88,12 @@ func (s *Scheduler) allocateTasks(tasks []task.Task, orderedCN *cnMap) {
 		err := s.Allocate(s.ctx, t, runner)
 		if err != nil {
 			s.logger.Error("allocating task error",
-				zap.Uint64("task-id", t.ID), zap.String("task-runner", t.TaskRunner))
+				zap.Uint64("task-id", t.ID), zap.String("task-runner", runner))
 			return
 		}
+		s.logger.Info("task allocated",
+			zap.Uint64("task-id", t.ID),
+			zap.String("task-runner", runner))
 		orderedCN.inc(t.TaskRunner)
 	}
 }

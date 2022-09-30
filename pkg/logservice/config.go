@@ -29,10 +29,11 @@ import (
 )
 
 const (
-	defaultDataDir        = "mo-data/logservice"
-	defaultServiceAddress = "0.0.0.0:32000"
-	defaultRaftAddress    = "0.0.0.0:32001"
-	defaultGossipAddress  = "0.0.0.0:32002"
+	defaultDataDir           = "mo-data/logservice"
+	defaultServiceAddress    = "0.0.0.0:32000"
+	defaultRaftAddress       = "0.0.0.0:32001"
+	defaultGossipAddress     = "0.0.0.0:32002"
+	defaultGossipSeedAddress = "127.0.0.1:32002"
 
 	defaultGossipProbeInterval = 50 * time.Millisecond
 	defaultHeartbeatInterval   = time.Second
@@ -91,7 +92,7 @@ type Config struct {
 	HAKeeperCheckInterval toml.Duration `toml:"hakeeper-check-interval"`
 
 	// BootstrapConfig is the configuration specified for the bootstrapping
-	// procedure. It only need to be specified for Log Stores selected to host
+	// procedure. It only needs to be specified for Log Stores selected to host
 	// initial HAKeeper replicas during bootstrapping.
 	BootstrapConfig struct {
 		// BootstrapCluster indicates whether the cluster should be bootstrapped.

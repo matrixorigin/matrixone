@@ -49,4 +49,11 @@ type BootstrapManager interface {
 
 type TaskScheduler interface {
 	Schedule(cnState pb.CNState, currentTick uint64)
+
+	// StartScheduleCronTask start schedule cron tasks. A timer will be started to pull the latest CronTask
+	// from the TaskStore at regular intervals, and a timer will be maintained in memory for all Cron's to be
+	// triggered at regular intervals.
+	StartScheduleCronTask()
+	// StopScheduleCronTask stop schedule cron tasks.
+	StopScheduleCronTask()
 }

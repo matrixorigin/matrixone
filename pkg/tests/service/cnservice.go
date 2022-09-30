@@ -17,11 +17,14 @@ package service
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"sync"
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/cnservice"
+	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/taskservice"
 )
 
 // CNService describes expected behavior for dn service.
@@ -35,6 +38,9 @@ type CNService interface {
 
 	// ID returns uuid of store
 	ID() string
+
+	//GetTaskRunner returns the taskRunner.
+	GetTaskRunner() taskservice.TaskRunner
 }
 
 // cnService wraps cnservice.Service.
@@ -91,6 +97,10 @@ func (c *cnService) ID() string {
 	return c.uuid
 }
 
+func (c *cnService) GetTaskRunner() taskservice.TaskRunner {
+	return c.svc.GetTaskRunner()
+}
+
 // cnOptions is options for a cn service.
 type cnOptions []cnservice.Options
 
@@ -99,9 +109,10 @@ func newCNService(
 	cfg *cnservice.Config,
 	ctx context.Context,
 	fileService fileservice.FileService,
+	taskStorage taskservice.TaskStorage,
 	options cnOptions,
 ) (CNService, error) {
-	srv, err := cnservice.NewService(cfg, ctx, fileService, options...)
+	srv, err := cnservice.NewService(cfg, ctx, fileService, taskservice.NewTaskService(taskStorage, nil), options...)
 	if err != nil {
 		return nil, err
 	}
@@ -114,15 +125,28 @@ func newCNService(
 }
 
 func buildCnConfig(index int, opt Options, address serviceAddresses) *cnservice.Config {
+	port, err := getAvailablePort("127.0.0.1")
+	if err != nil {
+		panic(err)
+	}
+	p, err := strconv.Atoi(port)
+	if err != nil {
+		panic(err)
+	}
 	cfg := &cnservice.Config{
 		UUID:          uuid.New().String(),
 		ListenAddress: address.getCnListenAddress(index),
+		Frontend: config.FrontendParameters{
+			Port: int64(p),
+		},
 	}
 
 	cfg.HAKeeper.ClientConfig.ServiceAddresses = address.listHAKeeperListenAddresses()
 	cfg.HAKeeper.HeatbeatDuration.Duration = opt.dn.heartbeatInterval
 
-	cfg.Engine.Type = "memory"
+	cfg.TaskRunner.FetchInterval.Duration = opt.task.FetchInterval
+
+	cfg.Engine.Type = cnservice.EngineMemory
 
 	// We need the filled version of configuration.
 	// It's necessary when building cnservice.Option.

@@ -20,6 +20,21 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 )
 
+func makePlan2DecimalExprWithType(v string) (*plan.Expr, error) {
+	_, scale, err := types.ParseStringToDecimal128WithoutTable(v)
+	if err != nil {
+		return nil, err
+	}
+	typ := &plan.Type{
+		Id:        int32(types.T_decimal128),
+		Width:     34,
+		Scale:     scale,
+		Precision: 34,
+		Nullable:  false,
+	}
+	return appendCastBeforeExpr(makePlan2StringConstExprWithType(v), typ)
+}
+
 func makePlan2NullConstExprWithType() *plan.Expr {
 	return &plan.Expr{
 		Expr: &plan.Expr_C{
@@ -94,25 +109,25 @@ func makePlan2Uint64ConstExprWithType(v uint64) *plan.Expr {
 	}
 }
 
-func makePlan2Float64ConstExpr(v float64) *plan.Expr_C {
-	return &plan.Expr_C{C: &plan.Const{
-		Isnull: false,
-		Value: &plan.Const_Dval{
-			Dval: v,
-		},
-	}}
-}
+// func makePlan2Float64ConstExpr(v float64) *plan.Expr_C {
+// 	return &plan.Expr_C{C: &plan.Const{
+// 		Isnull: false,
+// 		Value: &plan.Const_Dval{
+// 			Dval: v,
+// 		},
+// 	}}
+// }
 
-func makePlan2Float64ConstExprWithType(v float64) *plan.Expr {
-	return &plan.Expr{
-		Expr: makePlan2Float64ConstExpr(v),
-		Typ: &plan.Type{
-			Id:       int32(types.T_float64),
-			Nullable: false,
-			Size:     8,
-		},
-	}
-}
+// func makePlan2Float64ConstExprWithType(v float64) *plan.Expr {
+// 	return &plan.Expr{
+// 		Expr: makePlan2Float64ConstExpr(v),
+// 		Typ: &plan.Type{
+// 			Id:       int32(types.T_float64),
+// 			Nullable: false,
+// 			Size:     8,
+// 		},
+// 	}
+// }
 
 func makePlan2StringConstExpr(v string) *plan.Expr_C {
 	return &plan.Expr_C{C: &plan.Const{

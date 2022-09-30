@@ -143,8 +143,72 @@ type Load struct {
 	Param *ExternParam
 }
 
+type Import struct {
+	statementImpl
+	Local             bool
+	DuplicateHandling DuplicateKey
+	Table             *TableName
+	//Partition
+	Param *ExternParam
+}
+
 func (node *Load) Format(ctx *FmtCtx) {
 	ctx.WriteString("load data")
+	if node.Local {
+		ctx.WriteString(" local")
+	}
+
+	if node.Param.CompressType == AUTO || node.Param.CompressType == NOCOMPRESS {
+		ctx.WriteString(" infile ")
+		ctx.WriteString(node.Param.Filepath)
+	} else {
+		ctx.WriteString(" infile ")
+		ctx.WriteString("{'filepath':'" + node.Param.Filepath + "', 'compression':'" + strings.ToLower(node.Param.CompressType) + "'}")
+	}
+
+	switch node.DuplicateHandling.(type) {
+	case *DuplicateKeyError:
+		break
+	case *DuplicateKeyIgnore:
+		ctx.WriteString(" ignore")
+	case *DuplicateKeyReplace:
+		ctx.WriteString(" replace")
+	}
+	ctx.WriteString(" into table ")
+	node.Table.Format(ctx)
+
+	if node.Param.Tail.Fields != nil {
+		ctx.WriteByte(' ')
+		node.Param.Tail.Fields.Format(ctx)
+	}
+
+	if node.Param.Tail.Lines != nil {
+		ctx.WriteByte(' ')
+		node.Param.Tail.Lines.Format(ctx)
+	}
+
+	if node.Param.Tail.IgnoredLines != 0 {
+		ctx.WriteString(" ignore ")
+		ctx.WriteString(strconv.FormatUint(node.Param.Tail.IgnoredLines, 10))
+		ctx.WriteString(" lines")
+	}
+	if node.Param.Tail.ColumnList != nil {
+		prefix := " ("
+		for _, c := range node.Param.Tail.ColumnList {
+			ctx.WriteString(prefix)
+			c.Format(ctx)
+			prefix = ", "
+		}
+		ctx.WriteByte(')')
+	}
+	if node.Param.Tail.Assignments != nil {
+		ctx.WriteString(" set ")
+		node.Param.Tail.Assignments.Format(ctx)
+	}
+}
+
+func (node *Import) Format(ctx *FmtCtx) {
+	ctx.WriteString("import data")
 	if node.Local {
 		ctx.WriteString(" local")
 	}

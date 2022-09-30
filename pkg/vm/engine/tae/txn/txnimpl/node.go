@@ -322,8 +322,8 @@ func (n *insertNode) execUnload() (en wal.LogEntry) {
 		panic(err)
 	} else {
 		atomic.StoreUint64(&n.lsn, seq)
-		id := n.GetID()
-		logutil.Debugf("Unloading lsn=%d id=%s", seq, id.SegmentString())
+		id := n.Key()
+		logutil.Debugf("Unloading lsn=%d id=%v", seq, id)
 	}
 	// e.WaitDone()
 	// e.Free()
