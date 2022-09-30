@@ -395,10 +395,10 @@ func CompareTxnMVCCNode(e, o *TxnMVCCNode) int {
 
 func (un *TxnMVCCNode) Update(o *TxnMVCCNode) {
 	if !un.Start.Equal(o.Start) {
-		panic("logic err")
+		panic(fmt.Sprintf("logic err, expect %s, start at %s", un.Start.ToString(), o.Start.ToString()))
 	}
-	if !un.End.Equal(o.End) {
-		panic("logic err")
+	if !un.Prepare.Equal(o.Prepare) {
+		panic(fmt.Sprintf("logic err expect %s, prepare at %s", un.Prepare.ToString(), o.Prepare.ToString()))
 	}
 	un.LogIndex = o.LogIndex
 }
