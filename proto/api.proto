@@ -62,101 +62,38 @@ message SyncLogTailReq {
 };
 
 message SyncLogTailResp {
-    // location of catalog or metadata checkpoint for a table.
-    //TODO:: how to get checkpoint on S3 by the ckp_location ,pls ref to ...
-    string     ckp_location = 1;
-    // log tail for a table
-    repeated Entry commands = 2;
+  // location of catalog or metadata checkpoint for a table.
+  //TODO:: how to get checkpoint on S3 by the ckp_location ,pls ref to ...
+  string     ckp_location = 1;
+  // log tail for a table
+  repeated Entry commands = 2;
+
+  //// Append batch of data into table : 
+  //      Entry {
+  //          entry_type = Insert
+  //          table_id =  tid
+  //          database_id = dbId
+  //          table_name =  xxx
+  //          database_name = xxx
+  //          file_name = "" 
+  //          block_id = 0
+  //          bat.attrs = {"rowid", "commit timestamp", "primary column value",  "column1 value", ...}
+  //      }
+
+  //// delete a batch of data from a block : 
+  //      Entry {
+  //          entry_type = Delte
+  //          table_id =  tid
+  //          database_id = dbId
+  //          table_name =  xxx
+  //          database_name = xxx
+  //          file_name = "" 
+  //         // transient block id when bulk loading.
+  //          block_id = 0
+  //          bat.attrs = {"rowid", "commit timestamp"}
+  //      }
+
 };
-
-//log tail entries returned to CN.
-//DN-->CN: DML
-//Append batch of data which comes from localsegment of table into multiple blocks.
-
-//// Append batch of data into table : 
-//      Entry {
-//          entry_type = Insert
-//          table_id =  tid
-//          database_id = dbId
-//          table_name =  xxx
-//          database_name = xxx
-//          file_name = "" 
-//          block_id = 0
-//          bat.attrs = {"rowid", "commit timestamp", "primary column value",  "column1 value", ...}
-//      }
-
-//// delete a batch of data from a block : 
-//      Entry {
-//          entry_type = Delte
-//          table_id =  tid
-//          database_id = dbId
-//          table_name =  xxx
-//          database_name = xxx
-//          file_name = "" 
-//         // transient block id when bulk loading.
-//          block_id = 0
-//          bat.attrs = {"rowid", "commit timestamp"}
-//      }
-// DDL:
-// create block : 
-//      Entry {
-//          entry_type = Insert
-//          table_id = tid
-//          database_id = dbId
-//          table_name =  xxx
-//          database_name = xxx
-//          file_name = "" 
-//          block_id = 0
-//          //"Start" is the latest txn's start timestamp, "End" is the latest txn's commit timestamp
-//          bat.attrs = {"BlockId", "EntryState", "CreatedAt", 
-//                            "Start", "End", "MetaLoc", "DeltaLoc"}
-//      }
-
-// delete block : 
-//      Entry {
-//          entry_type = Delete
-//          table_id = tid
-//          database_id = dbId
-//          table_name =  xxx
-//          database_name = xxx
-//          file_name = "" 
-//          block_id = 0
-//          bat.attrs = {"BlockId", "EntryState", "DeletedAt",
-//                         "Start", "End", "MetaLoc", "DeltaLoc"}
-//      }
-
-// create segment: pls refer to "create block"
-
-// delete segment: pls refer to "delete block"
-
-
-// create a user table: 
-//   insert entry into mo_tables and ...
-//      Entry {
-//          entry_type = Insert
-//          table_id = 1
-//          database_id =  0
-//          table_name =  mo_tables
-//          database_name = mo_catalog
-//          file_name = "" 
-//          block_id = 0
-//          bat.attrs = {"relid", "relname", ..., "CreatedAt", "Start", "End"} 
-//                        
-//      }
-
-// drop table: 
-//  drop entries from mo_tables and ...
-//      Entry {
-//          entry_type = delete
-//          table_id = 1
-//          database_id = 0
-//          table_name =  mo_tables
-//          database_name = mo_catalog
-//          file_name = "" 
-//          block_id = 0
-//          bat.attrs = {"relid", "relname", ... , "DeletedAt", "Start", "End"}
-//      }
-
 
 message PrecommitWriteCmd {
     uint32 user_id = 1;
