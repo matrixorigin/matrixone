@@ -23,6 +23,10 @@ type LowCardinalityIndex struct {
 	// the max cardinality of LowCardinalityIndex is 65536.
 	// The position of `null` value is 0.
 	poses *vector.Vector
+
+	// TODO: sels will be better?
+	//rows int64
+	//sels [][]int64
 }
 
 func NewLowCardinalityIndex(typ types.Type, m *mheap.Mheap) (*LowCardinalityIndex, error) {
@@ -58,6 +62,20 @@ func (idx *LowCardinalityIndex) Dup() *LowCardinalityIndex {
 		dict:  idx.dict.Dup(),
 		poses: vector.New(types.T_uint16.ToType()),
 	}
+}
+
+func (idx *LowCardinalityIndex) InsertBatch(data *vector.Vector) error {
+	// TODO: null value
+	ips, err := idx.dict.InsertBatch(data)
+	if err != nil {
+		return err
+	}
+
+	us := make([]uint16, len(ips))
+	for i, ip := range ips {
+		us[i] = uint16(ip)
+	}
+	return vector.AppendFixed(idx.poses, us, idx.m)
 }
 
 // Encode uses the dictionary of the current index to encode the original data.

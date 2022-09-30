@@ -153,13 +153,9 @@ func (ctr *container) indexBuild() error {
 	poses := ctr.idx.GetPoses().Col.([]uint16)
 	for k, v := range poses {
 		bucket := int(v) - 1
-		// TODO: prealloc memory for ctr.sels
-		// In my opinion, bucket will be highly similar at low cardinality scenario.
-		// So maybe it can prealloc memory for the ctr.sels[i].
-		// e.g.
-		// if len(ctr.sels[bucket]) == 0 {
-		//     ctr.sels[bucket] = make(ctr.sels[bucket], 0, 64)
-		// }
+		if len(ctr.sels[bucket]) == 0 {
+			ctr.sels[bucket] = make([]int64, 0, 64)
+		}
 		ctr.sels[bucket] = append(ctr.sels[bucket], int64(k))
 	}
 	return nil

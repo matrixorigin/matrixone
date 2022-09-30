@@ -104,7 +104,7 @@ func TestJoin(t *testing.T) {
 	}
 }
 
-func TestLowCardinalityIndexJoin(t *testing.T) {
+func TestLowCardinalityJoin(t *testing.T) {
 	tc := newTestCase(testutil.NewMheap(), []bool{false}, []types.Type{types.T_varchar.ToType()}, []colexec.ResultPos{colexec.NewResultPos(1, 0)},
 		[][]*plan.Expr{
 			{
@@ -116,44 +116,31 @@ func TestLowCardinalityIndexJoin(t *testing.T) {
 		})
 	tc.arg.Cond = nil // only numeric type can be compared
 
-	err := hashbuild.Prepare(tc.proc, tc.barg)
-	require.NoError(t, err)
-
 	values0 := []string{"a", "b", "a", "c", "b", "c", "a", "a"}
-	v0 := testutil.NewVector(8, types.T_varchar.ToType(), tc.proc.Mp(), false, values0)
-	constructIndex(t, v0, v0.Typ, tc.proc.Mp())
+	v0 := testutil.NewVector(len(values0), types.T_varchar.ToType(), tc.proc.Mp(), false, values0)
+	constructIndex(t, v0, tc.proc.Mp())
 
-	tc.proc.Reg.MergeReceivers[0].Ch <- testutil.NewBatchWithVectors([]*vector.Vector{v0}, nil)
-	tc.proc.Reg.MergeReceivers[0].Ch <- nil
-	ok, err := hashbuild.Call(0, tc.proc, tc.barg)
-	require.NoError(t, err)
-	require.Equal(t, true, ok)
-
-	bat := tc.proc.Reg.InputBatch
-	err = Prepare(tc.proc, tc.arg)
-	require.NoError(t, err)
+	// hashbuild
+	bat := hashBuildWithBatch(t, tc, testutil.NewBatchWithVectors([]*vector.Vector{v0}, nil))
 
 	values1 := []string{"c", "d", "c", "c", "b", "a", "b", "d", "a", "b"}
-	v1 := testutil.NewVector(10, types.T_varchar.ToType(), tc.proc.Mp(), false, values1)
+	v1 := testutil.NewVector(len(values1), types.T_varchar.ToType(), tc.proc.Mp(), false, values1)
 
+	// probe
 	// only the join column of right table is indexed
-	tc.proc.Reg.MergeReceivers[0].Ch <- testutil.NewBatchWithVectors([]*vector.Vector{v1}, nil)
-	tc.proc.Reg.MergeReceivers[1].Ch <- bat
-	ok, err = Call(0, tc.proc, tc.arg)
-	require.NoError(t, err)
-	require.Equal(t, false, ok)
+	rbat := probeWithBatches(t, tc, testutil.NewBatchWithVectors([]*vector.Vector{v1}, nil), bat)
 
-	result := tc.proc.Reg.InputBatch.Vecs[0]
+	result := rbat.Vecs[0]
 	t.Log(vector.GetStrVectorValues(result))
 
 	require.NotNil(t, result.Index())
-	idx := result.Index().(*index.LowCardinalityIndex)
+	resultIdx := result.Index().(*index.LowCardinalityIndex)
 	require.Equal(
 		t,
 		[]uint16{3, 3, 3, 3, 3, 3, 2, 2, 1, 1, 1, 1, 2, 2, 1, 1, 1, 1, 2, 2},
-		idx.GetPoses().Col.([]uint16),
+		resultIdx.GetPoses().Col.([]uint16),
 	)
-	t.Log(idx.GetPoses().Col.([]uint16))
+	t.Log(resultIdx.GetPoses().Col.([]uint16))
 }
 
 func TestLowCardinalityIndexesJoin(t *testing.T) {
@@ -168,45 +155,32 @@ func TestLowCardinalityIndexesJoin(t *testing.T) {
 		})
 	tc.arg.Cond = nil // only numeric type can be compared
 
-	err := hashbuild.Prepare(tc.proc, tc.barg)
-	require.NoError(t, err)
-
 	values0 := []string{"a", "b", "a", "c", "b", "c", "a", "a"}
-	v0 := testutil.NewVector(8, types.T_varchar.ToType(), tc.proc.Mp(), false, values0)
-	constructIndex(t, v0, v0.Typ, tc.proc.Mp())
+	v0 := testutil.NewVector(len(values0), types.T_varchar.ToType(), tc.proc.Mp(), false, values0)
+	constructIndex(t, v0, tc.proc.Mp())
 
-	tc.proc.Reg.MergeReceivers[0].Ch <- testutil.NewBatchWithVectors([]*vector.Vector{v0}, nil)
-	tc.proc.Reg.MergeReceivers[0].Ch <- nil
-	ok, err := hashbuild.Call(0, tc.proc, tc.barg)
-	require.NoError(t, err)
-	require.Equal(t, true, ok)
-
-	bat := tc.proc.Reg.InputBatch
-	err = Prepare(tc.proc, tc.arg)
-	require.NoError(t, err)
+	// hashbuild
+	bat := hashBuildWithBatch(t, tc, testutil.NewBatchWithVectors([]*vector.Vector{v0}, nil))
 
 	values1 := []string{"c", "d", "c", "c", "b", "a", "b", "d", "a", "b"}
-	v1 := testutil.NewVector(10, types.T_varchar.ToType(), tc.proc.Mp(), false, values1)
-	constructIndex(t, v1, v1.Typ, tc.proc.Mp())
+	v1 := testutil.NewVector(len(values1), types.T_varchar.ToType(), tc.proc.Mp(), false, values1)
+	constructIndex(t, v1, tc.proc.Mp())
 
+	// probe
 	// the join columns of both left table and right table are indexed
-	tc.proc.Reg.MergeReceivers[0].Ch <- testutil.NewBatchWithVectors([]*vector.Vector{v1}, nil)
-	tc.proc.Reg.MergeReceivers[1].Ch <- bat
-	ok, err = Call(0, tc.proc, tc.arg)
-	require.NoError(t, err)
-	require.Equal(t, false, ok)
+	rbat := probeWithBatches(t, tc, testutil.NewBatchWithVectors([]*vector.Vector{v1}, nil), bat)
 
-	result := tc.proc.Reg.InputBatch.Vecs[0]
+	result := rbat.Vecs[0]
 	t.Log(vector.GetStrVectorValues(result))
 
 	require.NotNil(t, result.Index())
-	idx := result.Index().(*index.LowCardinalityIndex)
+	resultIdx := result.Index().(*index.LowCardinalityIndex)
 	require.Equal(
 		t,
 		[]uint16{1, 1, 1, 1, 1, 1, 3, 3, 4, 4, 4, 4, 3, 3, 4, 4, 4, 4, 3, 3},
-		idx.GetPoses().Col.([]uint16),
+		resultIdx.GetPoses().Col.([]uint16),
 	)
-	t.Log(idx.GetPoses().Col.([]uint16))
+	t.Log(resultIdx.GetPoses().Col.([]uint16))
 }
 
 func BenchmarkJoin(b *testing.B) {
@@ -339,13 +313,28 @@ func newTestCase(m *mheap.Mheap, flgs []bool, ts []types.Type, rp []colexec.Resu
 }
 
 func hashBuild(t *testing.T, tc joinTestCase) *batch.Batch {
+	return hashBuildWithBatch(t, tc, newBatch(t, tc.flgs, tc.types, tc.proc, Rows))
+}
+
+func hashBuildWithBatch(t *testing.T, tc joinTestCase, bat *batch.Batch) *batch.Batch {
 	err := hashbuild.Prepare(tc.proc, tc.barg)
 	require.NoError(t, err)
-	tc.proc.Reg.MergeReceivers[0].Ch <- newBatch(t, tc.flgs, tc.types, tc.proc, Rows)
+	tc.proc.Reg.MergeReceivers[0].Ch <- bat
 	tc.proc.Reg.MergeReceivers[0].Ch <- nil
 	ok, err := hashbuild.Call(0, tc.proc, tc.barg)
 	require.NoError(t, err)
 	require.Equal(t, true, ok)
+	return tc.proc.Reg.InputBatch
+}
+
+func probeWithBatches(t *testing.T, tc joinTestCase, l, r *batch.Batch) *batch.Batch {
+	err := Prepare(tc.proc, tc.arg)
+	require.NoError(t, err)
+	tc.proc.Reg.MergeReceivers[0].Ch <- l
+	tc.proc.Reg.MergeReceivers[1].Ch <- r
+	ok, err := Call(0, tc.proc, tc.arg)
+	require.NoError(t, err)
+	require.Equal(t, false, ok)
 	return tc.proc.Reg.InputBatch
 }
 
@@ -354,20 +343,11 @@ func newBatch(t *testing.T, flgs []bool, ts []types.Type, proc *process.Process,
 	return testutil.NewBatch(ts, false, int(rows), proc.Mp())
 }
 
-func constructIndex(t *testing.T, v *vector.Vector, typ types.Type, m *mheap.Mheap) {
-	idx, err := index.NewLowCardinalityIndex(typ, m)
+func constructIndex(t *testing.T, v *vector.Vector, m *mheap.Mheap) {
+	idx, err := index.NewLowCardinalityIndex(v.Typ, m)
 	require.NoError(t, err)
 
-	dict := idx.GetDict()
-	ips, err := dict.InsertBatch(v)
-	require.NoError(t, err)
-
-	us := make([]uint16, len(ips))
-	for i, ip := range ips {
-		us[i] = uint16(ip)
-	}
-	poses := idx.GetPoses()
-	err = vector.AppendFixed(poses, us, m)
+	err = idx.InsertBatch(v)
 	require.NoError(t, err)
 
 	v.SetIndex(idx)

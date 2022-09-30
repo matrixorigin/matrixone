@@ -99,8 +99,8 @@ func TestLowCardinalityBuild(t *testing.T) {
 	require.NoError(t, err)
 
 	values := []string{"a", "b", "a", "c", "b", "c", "a", "a"}
-	v := testutil.NewVector(8, types.T_varchar.ToType(), tc.proc.Mp(), false, values)
-	constructIndex(t, v, v.Typ, tc.proc.Mp())
+	v := testutil.NewVector(len(values), types.T_varchar.ToType(), tc.proc.Mp(), false, values)
+	constructIndex(t, v, tc.proc.Mp())
 
 	tc.proc.Reg.MergeReceivers[0].Ch <- testutil.NewBatchWithVectors([]*vector.Vector{v}, nil)
 	tc.proc.Reg.MergeReceivers[0].Ch <- nil
@@ -190,20 +190,11 @@ func newBatch(t *testing.T, flgs []bool, ts []types.Type, proc *process.Process,
 	return testutil.NewBatch(ts, false, int(rows), proc.Mp())
 }
 
-func constructIndex(t *testing.T, v *vector.Vector, typ types.Type, m *mheap.Mheap) {
-	idx, err := index.NewLowCardinalityIndex(typ, m)
+func constructIndex(t *testing.T, v *vector.Vector, m *mheap.Mheap) {
+	idx, err := index.NewLowCardinalityIndex(v.Typ, m)
 	require.NoError(t, err)
 
-	dict := idx.GetDict()
-	ips, err := dict.InsertBatch(v)
-	require.NoError(t, err)
-
-	us := make([]uint16, len(ips))
-	for i, ip := range ips {
-		us[i] = uint16(ip)
-	}
-	poses := idx.GetPoses()
-	err = vector.AppendFixed(poses, us, m)
+	err = idx.InsertBatch(v)
 	require.NoError(t, err)
 
 	v.SetIndex(idx)

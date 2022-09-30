@@ -25,7 +25,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestDict_Cardinality(t *testing.T) {
+func TestCardinality(t *testing.T) {
 	dict, err := newTestDict(types.Type{Oid: types.T_int64})
 	require.NoError(t, err)
 	defer dict.Free()
@@ -34,7 +34,7 @@ func TestDict_Cardinality(t *testing.T) {
 	require.Equal(t, uint64(4), dict.Cardinality())
 }
 
-func TestDict_InsertBatchFixedLen(t *testing.T) {
+func TestInsertBatchFixedLen(t *testing.T) {
 	dict, err := newTestDict(types.Type{Oid: types.T_int64})
 	require.NoError(t, err)
 	defer dict.Free()
@@ -62,12 +62,12 @@ func TestDict_InsertBatchFixedLen(t *testing.T) {
 	require.Equal(t, uint64(1), ips[3])
 }
 
-func TestDict_FindBatchFixedLen(t *testing.T) {
+func TestFindBatchFixedLen(t *testing.T) {
 	dict, err := newTestDict(types.Type{Oid: types.T_int32})
 	require.NoError(t, err)
 	defer dict.Free()
 
-	v0 := vector.New(types.Type{Oid: types.T_int16})
+	v0 := vector.New(types.Type{Oid: types.T_int32})
 	v0.Col = []int32{5, 2, 3, 7, 1, 4}
 
 	ips, err := dict.InsertBatch(v0)
@@ -79,7 +79,7 @@ func TestDict_FindBatchFixedLen(t *testing.T) {
 	require.Equal(t, uint64(5), ips[4])
 	require.Equal(t, uint64(6), ips[5])
 
-	v1 := vector.New(types.Type{Oid: types.T_int16})
+	v1 := vector.New(types.Type{Oid: types.T_int32})
 	v1.Col = []int32{7, 3, 8, 4, 6, 3}
 
 	poses := dict.FindBatch(v1)
@@ -91,7 +91,7 @@ func TestDict_FindBatchFixedLen(t *testing.T) {
 	require.Equal(t, uint64(3), poses[5])
 }
 
-func TestDict_FindDataFixedLen(t *testing.T) {
+func TestFindDataFixedLen(t *testing.T) {
 	dict, err := newTestDict(types.Type{Oid: types.T_int32})
 	require.NoError(t, err)
 	defer dict.Free()
@@ -121,7 +121,35 @@ func TestDict_FindDataFixedLen(t *testing.T) {
 	require.Equal(t, int32(7), data.Col.([]int32)[0])
 }
 
-func TestDict_InsertBatchVarLen(t *testing.T) {
+func TestInsertLargeDataFixedLen(t *testing.T) {
+	dict, err := newTestDict(types.Type{Oid: types.T_int32})
+	require.NoError(t, err)
+	defer dict.Free()
+
+	v0 := vector.New(types.Type{Oid: types.T_int32})
+	v0.Col = make([]int32, 100000)
+
+	i := 0
+	for j := 1; j <= 10000; j++ {
+		for cnt := 0; cnt < 10; cnt++ {
+			v0.Col.([]int32)[i] = int32(j)
+			i++
+		}
+	}
+
+	ips, err := dict.InsertBatch(v0)
+	require.NoError(t, err)
+
+	i = 0
+	for j := 1; j <= 10000; j++ {
+		for cnt := 0; cnt < 10; cnt++ {
+			require.Equal(t, uint64(j), ips[i])
+			i++
+		}
+	}
+}
+
+func TestInsertBatchVarLen(t *testing.T) {
 	dict, err := newTestDict(types.Type{Oid: types.T_varchar})
 	require.NoError(t, err)
 	defer dict.Free()
@@ -159,7 +187,7 @@ func TestDict_InsertBatchVarLen(t *testing.T) {
 	require.Equal(t, uint64(6), ips[3])
 }
 
-func TestDict_FindBatchVarLen(t *testing.T) {
+func TestFindBatchVarLen(t *testing.T) {
 	dict, err := newTestDict(types.Type{Oid: types.T_varchar})
 	require.NoError(t, err)
 	defer dict.Free()
@@ -198,7 +226,7 @@ func TestDict_FindBatchVarLen(t *testing.T) {
 	require.Equal(t, uint64(3), poses[4])
 }
 
-func TestDict_FindDataVarLen(t *testing.T) {
+func TestFindDataVarLen(t *testing.T) {
 	dict, err := newTestDict(types.Type{Oid: types.T_varchar})
 	require.NoError(t, err)
 	defer dict.Free()

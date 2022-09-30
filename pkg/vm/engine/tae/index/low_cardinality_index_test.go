@@ -11,7 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestLowCardinalityIndex_Encode(t *testing.T) {
+func TestEncode(t *testing.T) {
 	idx, err := newTestIndex(types.T_varchar.ToType())
 	require.NoError(t, err)
 
@@ -24,7 +24,7 @@ func TestLowCardinalityIndex_Encode(t *testing.T) {
 		[]byte("Tom"),
 	}, nil))
 
-	_, err = idx.dict.InsertBatch(v0)
+	err = idx.InsertBatch(v0)
 	require.NoError(t, err)
 
 	v1 := vector.New(types.T_varchar.ToType())

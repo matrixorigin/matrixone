@@ -25,6 +25,14 @@ const (
 	unitLimit = 256
 )
 
+var (
+	zeroUint64 []uint64
+)
+
+func init() {
+	zeroUint64 = make([]uint64, unitLimit)
+}
+
 type reverseIndex interface {
 	insert(keys any) ([]uint64, error)
 	find(keys any) []uint64
@@ -50,21 +58,35 @@ func newFixedReverseIndex(m *mheap.Mheap) (*fixedReverseIndex, error) {
 
 func (idx *fixedReverseIndex) insert(keys any) ([]uint64, error) {
 	ks := keys.([]uint64)
-	n := len(ks)
-	hashes := make([]uint64, n)
-	values := make([]uint64, n)
-	if err := idx.ht.InsertBatch(n, hashes, unsafe.Pointer(&ks[0]), values, idx.m); err != nil {
-		return nil, err
+	count := len(ks)
+	hashes := make([]uint64, unitLimit)
+	values := make([]uint64, count)
+	for i := 0; i < count; i += unitLimit {
+		n := count - i
+		if n > unitLimit {
+			n = unitLimit
+		}
+		copy(hashes[:n], zeroUint64[:n])
+		if err := idx.ht.InsertBatch(n, hashes[:n], unsafe.Pointer(&ks[i]), values[i:i+n], idx.m); err != nil {
+			return nil, err
+		}
 	}
 	return values, nil
 }
 
 func (idx *fixedReverseIndex) find(keys any) []uint64 {
 	ks := keys.([]uint64)
-	n := len(ks)
-	hashes := make([]uint64, n)
-	values := make([]uint64, n)
-	idx.ht.FindBatch(n, hashes, unsafe.Pointer(&ks[0]), values)
+	count := len(ks)
+	hashes := make([]uint64, unitLimit)
+	values := make([]uint64, count)
+	for i := 0; i < count; i += unitLimit {
+		n := count - i
+		if n > unitLimit {
+			n = unitLimit
+		}
+		copy(hashes[:n], zeroUint64[:n])
+		idx.ht.FindBatch(n, hashes[:n], unsafe.Pointer(&ks[i]), values[i:i+n])
+	}
 	return values
 }
 
@@ -93,17 +115,31 @@ func newVarReverseIndex(m *mheap.Mheap) (*varReverseIndex, error) {
 
 func (idx *varReverseIndex) insert(keys any) ([]uint64, error) {
 	ks := checkPadding(keys.([][]byte))
-	values := make([]uint64, len(ks))
-	if err := idx.ht.InsertStringBatch(idx.hashStates, ks, values, idx.m); err != nil {
-		return nil, err
+	count := len(ks)
+	values := make([]uint64, count)
+	for i := 0; i < count; i += unitLimit {
+		n := count - i
+		if n > unitLimit {
+			n = unitLimit
+		}
+		if err := idx.ht.InsertStringBatch(idx.hashStates, ks[i:i+n], values[i:i+n], idx.m); err != nil {
+			return nil, err
+		}
 	}
 	return values, nil
 }
 
 func (idx *varReverseIndex) find(keys any) []uint64 {
 	ks := checkPadding(keys.([][]byte))
-	values := make([]uint64, len(ks))
-	idx.ht.FindStringBatch(idx.hashStates, ks, values)
+	count := len(ks)
+	values := make([]uint64, count)
+	for i := 0; i < count; i += unitLimit {
+		n := count - i
+		if n > unitLimit {
+			n = unitLimit
+		}
+		idx.ht.FindStringBatch(idx.hashStates, ks[i:i+n], values[i:i+n])
+	}
 	return values
 }
 
@@ -115,7 +151,7 @@ func (idx *varReverseIndex) free() {
 func checkPadding(keys [][]byte) [][]byte {
 	ks := make([][]byte, len(keys))
 	for i := range ks {
-		if len(keys) < 16 {
+		if len(keys[i]) < 16 {
 			dst := make([]byte, 16)
 			copy(dst, keys[i])
 			ks[i] = dst
