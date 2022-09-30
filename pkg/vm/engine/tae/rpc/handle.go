@@ -16,6 +16,7 @@ package rpc
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -23,7 +24,6 @@ import (
 	apipb "github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/moengine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
@@ -49,7 +49,7 @@ func NewTAEHandle(opt *options.Options) *Handle {
 	return h
 }
 func (h *Handle) HandleCommit(meta txn.TxnMeta) (err error) {
-	txn, err := h.eng.GetTxnByMeta(meta)
+	txn, err := h.eng.GetTxnByID(meta.GetID())
 	if err != nil {
 		return err
 	}
@@ -58,7 +58,7 @@ func (h *Handle) HandleCommit(meta txn.TxnMeta) (err error) {
 }
 
 func (h *Handle) HandleRollback(meta txn.TxnMeta) (err error) {
-	txn, err := h.eng.GetTxnByMeta(meta)
+	txn, err := h.eng.GetTxnByID(meta.GetID())
 	if err != nil {
 		return err
 	}
@@ -67,7 +67,7 @@ func (h *Handle) HandleRollback(meta txn.TxnMeta) (err error) {
 }
 
 func (h *Handle) HandleCommitting(meta txn.TxnMeta) (err error) {
-	txn, err := h.eng.GetTxnByMeta(meta)
+	txn, err := h.eng.GetTxnByID(meta.GetID())
 	if err != nil {
 		return err
 	}
@@ -76,15 +76,12 @@ func (h *Handle) HandleCommitting(meta txn.TxnMeta) (err error) {
 }
 
 func (h *Handle) HandlePrepare(meta txn.TxnMeta) (pts timestamp.Timestamp, err error) {
-	txn, err := h.eng.GetTxnByMeta(meta)
+	txn, err := h.eng.GetTxnByID(meta.GetID())
 	if err != nil {
 		return timestamp.Timestamp{}, err
 	}
 	ts, err := txn.Prepare()
-	//TODO:: use a transfer function in txnts.go
-	pts = timestamp.Timestamp{
-		PhysicalTime: types.DecodeInt64(ts[4:12]),
-		LogicalTime:  types.DecodeUint32(ts[:4])}
+	pts = ts.ToTimestamp()
 	return
 }
 
@@ -117,13 +114,11 @@ func (h *Handle) HandlePreCommit(
 
 	es := req.EntryList
 	for len(es) > 0 {
-		//TODO::use pkg/catalog.ParseEntryList
 		e, es, err = catalog.ParseEntryList(es)
 		if err != nil {
 			return err
 		}
 		switch cmds := e.(type) {
-		//TODO:: use pkg/catalog.CreateDatabase
 		case []catalog.CreateDatabase:
 			for _, cmd := range cmds {
 				req := db.CreateDatabaseReq{
@@ -211,11 +206,11 @@ func (h *Handle) HandleCreateDatabase(
 	req db.CreateDatabaseReq,
 	resp *db.CreateDatabaseResp) (err error) {
 
-	txn, err := h.eng.GetOrCreateTxnWithMeta(nil, meta)
+	txn, err := h.eng.GetOrCreateTxnWithMeta(nil, meta.GetID(),
+		types.TimestampToTS(meta.GetSnapshotTS()))
 	if err != nil {
 		return err
 	}
-	//txnop := moengine.TxnToTxnOperator(txn)
 	err = h.eng.CreateDatabase(context.TODO(), req.Name, txn)
 	if err != nil {
 		return
@@ -233,11 +228,11 @@ func (h *Handle) HandleDeleteDatabase(
 	req db.DeleteDatabaseReq,
 	resp *db.DeleteDatabaseResp) (err error) {
 
-	txn, err := h.eng.GetOrCreateTxnWithMeta(nil, meta)
+	txn, err := h.eng.GetOrCreateTxnWithMeta(nil, meta.GetID(),
+		types.TimestampToTS(meta.GetSnapshotTS()))
 	if err != nil {
 		return err
 	}
-	//txnop := moengine.TxnToTxnOperator(txn)
 	err = h.eng.DropDatabase(context.TODO(), req.Name, txn)
 	if err != nil {
 		return
@@ -256,11 +251,11 @@ func (h *Handle) HandleCreateRelation(
 	req db.CreateRelationReq,
 	resp *db.CreateRelationResp) (err error) {
 
-	txn, err := h.eng.GetOrCreateTxnWithMeta(nil, meta)
+	txn, err := h.eng.GetOrCreateTxnWithMeta(nil, meta.GetID(),
+		types.TimestampToTS(meta.GetSnapshotTS()))
 	if err != nil {
 		return
 	}
-	//txnop := moengine.TxnToTxnOperator(txn)
 	db, err := h.eng.GetDatabase(context.TODO(), req.DatabaseName, txn)
 	if err != nil {
 		return
@@ -283,11 +278,11 @@ func (h *Handle) HandleDeleteRelation(
 	req db.DeleteRelationReq,
 	resp *db.DeleteRelationResp) (err error) {
 
-	txn, err := h.eng.GetOrCreateTxnWithMeta(nil, meta)
+	txn, err := h.eng.GetOrCreateTxnWithMeta(nil, meta.GetID(),
+		types.TimestampToTS(meta.GetSnapshotTS()))
 	if err != nil {
 		return
 	}
-	//txnop := moengine.TxnToTxnOperator(txn)
 	db, err := h.eng.GetDatabase(context.TODO(), req.DatabaseName, txn)
 	if err != nil {
 		return
@@ -312,12 +307,12 @@ func (h *Handle) HandleWrite(
 	req db.WriteReq,
 	resp *db.WriteResp) (err error) {
 
-	txn, err := h.eng.GetOrCreateTxnWithMeta(nil, meta)
+	txn, err := h.eng.GetOrCreateTxnWithMeta(nil, meta.GetID(),
+		types.TimestampToTS(meta.GetSnapshotTS()))
 	if err != nil {
 		return err
 	}
 
-	//txnop := moengine.TxnToTxnOperator(txn)
 	dbase, err := h.eng.GetDatabase(context.TODO(), req.DatabaseName, txn)
 	if err != nil {
 		return

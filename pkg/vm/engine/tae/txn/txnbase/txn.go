@@ -56,13 +56,13 @@ func (txn *OpTxn) IsTryCommitting() bool {
 
 func (txn *OpTxn) Repr() string {
 	if txn.Op == OpCommit {
-		return fmt.Sprintf("[Commit][Txn-%d]", txn.Txn.GetID())
+		return fmt.Sprintf("[Commit][Txn-%s]", txn.Txn.GetID())
 	} else {
-		return fmt.Sprintf("[Rollback][Txn-%d]", txn.Txn.GetID())
+		return fmt.Sprintf("[Rollback][Txn-%s]", txn.Txn.GetID())
 	}
 }
 
-var DefaultTxnFactory = func(mgr *TxnManager, store txnif.TxnStore, id uint64, startTS types.TS, info []byte) txnif.AsyncTxn {
+var DefaultTxnFactory = func(mgr *TxnManager, store txnif.TxnStore, id []byte, startTS types.TS, info []byte) txnif.AsyncTxn {
 	return NewTxn(mgr, store, id, startTS, info)
 }
 
@@ -81,7 +81,7 @@ type Txn struct {
 	ApplyRollbackFn   func(txnif.AsyncTxn) error
 }
 
-func NewTxn(mgr *TxnManager, store txnif.TxnStore, txnId uint64, start types.TS, info []byte) *Txn {
+func NewTxn(mgr *TxnManager, store txnif.TxnStore, txnId []byte, start types.TS, info []byte) *Txn {
 	txn := &Txn{
 		Mgr:   mgr,
 		Store: store,
@@ -227,7 +227,7 @@ func (txn *Txn) DoneWithErr(err error, isAbort bool) {
 }
 
 func (txn *Txn) PrepareCommit() (err error) {
-	logutil.Debugf("Prepare Commite %d", txn.ID)
+	logutil.Debugf("Prepare Commite %s", txn.ID)
 	if txn.PrepareCommitFn != nil {
 		if err = txn.PrepareCommitFn(txn); err != nil {
 			return
@@ -284,7 +284,7 @@ func (txn *Txn) PrePrepare() error {
 }
 
 func (txn *Txn) PrepareRollback() (err error) {
-	logutil.Debugf("Prepare Rollbacking %d", txn.ID)
+	logutil.Debugf("Prepare Rollbacking %s", txn.ID)
 	if txn.PrepareRollbackFn != nil {
 		if err = txn.PrepareRollbackFn(txn); err != nil {
 			return

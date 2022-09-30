@@ -31,25 +31,26 @@ func IDToIDCtx(id uint64) []byte {
 	return ctx
 }
 
-func IDCtxToID(buf []byte) uint64 {
-	return binary.BigEndian.Uint64(buf)
+func IDCtxToID(buf []byte) string {
+	return string(buf)
 }
 
 type TxnCtx struct {
 	sync.RWMutex
 	DoneCond                     sync.Cond
-	ID                           uint64
+	ID                           string
 	IDCtx                        []byte
 	StartTS, CommitTS, PrepareTS types.TS
 	Info                         []byte
 	State                        txnif.TxnState
-	Kind2PC                      bool
+	//FIXME::true if txn receives prepare message?
+	Kind2PC bool
 }
 
-func NewTxnCtx(id uint64, start types.TS, info []byte) *TxnCtx {
+func NewTxnCtx(id []byte, start types.TS, info []byte) *TxnCtx {
 	ctx := &TxnCtx{
-		ID:        id,
-		IDCtx:     IDToIDCtx(id),
+		ID:        string(id),
+		IDCtx:     id,
 		StartTS:   start,
 		PrepareTS: txnif.UncommitTS,
 		CommitTS:  txnif.UncommitTS,
@@ -68,7 +69,7 @@ func (ctx *TxnCtx) GetCtx() []byte {
 func (ctx *TxnCtx) Repr() string {
 	ctx.RLock()
 	defer ctx.RUnlock()
-	repr := fmt.Sprintf("ctx[%d][%d->%d][%s]", ctx.ID, ctx.StartTS, ctx.CommitTS, txnif.TxnStrState(ctx.State))
+	repr := fmt.Sprintf("ctx[%s][%d->%d][%s]", ctx.ID, ctx.StartTS, ctx.CommitTS, txnif.TxnStrState(ctx.State))
 	return repr
 }
 
@@ -81,7 +82,7 @@ func (ctx *TxnCtx) CommitAfter(startTs types.TS) bool {
 }
 
 func (ctx *TxnCtx) String() string       { return ctx.Repr() }
-func (ctx *TxnCtx) GetID() uint64        { return ctx.ID }
+func (ctx *TxnCtx) GetID() string        { return ctx.ID }
 func (ctx *TxnCtx) GetInfo() []byte      { return ctx.Info }
 func (ctx *TxnCtx) GetStartTS() types.TS { return ctx.StartTS }
 func (ctx *TxnCtx) GetCommitTS() types.TS {
@@ -187,6 +188,7 @@ func (ctx *TxnCtx) ToCommittingFinishedLocked() (err error) {
 	return
 }
 
+// TODO::need to take 2PC account into.
 func (ctx *TxnCtx) ToCommittedLocked() error {
 	if ctx.State != txnif.TxnStatePreparing {
 		return moerr.NewTAECommit("ToCommittedLocked: state is not preparing")
@@ -214,6 +216,7 @@ func (ctx *TxnCtx) ToRollbackingLocked(ts types.TS) error {
 	return nil
 }
 
+// TODO::need to take 2PC account into.
 func (ctx *TxnCtx) ToRollbackedLocked() error {
 	if ctx.State != txnif.TxnStateRollbacking {
 		return moerr.NewTAERollback("state %s", txnif.TxnStrState(ctx.State))

@@ -19,7 +19,6 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"io"
 	"math/rand"
 	"sort"
@@ -31,50 +30,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 )
-
-// ParseEntryList consume a set of entries and return a command and the remaining entries
-// TODO:: it 'll be removed, instead use pkg/catalog.ParseEntryList
-func ParseEntryList(es []*api.Entry) (any, []*api.Entry, error) {
-	panic(moerr.NewNYI("ParseEntryList is not implemented yet"))
-}
-
-// TODO:: it 'll be removed, instead use pkg/catalog.CreateDatabase
-type CreateDatabase struct {
-	Name        string
-	CreateSql   string
-	Owner       uint32
-	Creator     uint32
-	AccountId   uint32
-	CreatedTime types.Timestamp
-}
-
-// TODO:: it 'll be removed, instead use pkg/catalog.DropDatabase
-type DropDatabase struct {
-	Id   uint64
-	Name string
-}
-
-// TODO:: it 'll be removed, instead use pkg/catalog.CreateTable
-type CreateTable struct {
-	Name         string
-	CreateSql    string
-	Owner        uint32
-	Creator      uint32
-	AccountId    uint32
-	DatabaseId   uint64
-	DatabaseName string
-	Comment      string
-	Partition    string
-	Defs         []engine.TableDef
-}
-
-// TODO:: it 'll be removed, instead use pkg/catalog.DropTable
-type DropTable struct {
-	Id           uint64
-	Name         string
-	DatabaseId   uint64
-	DatabaseName string
-}
 
 type IndexT uint16
 

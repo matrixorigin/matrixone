@@ -15,7 +15,7 @@
 package db
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/pb/txn"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"io"
 	"runtime"
 	"sync/atomic"
@@ -84,16 +84,14 @@ func (db *DB) GetTxnByCtx(txnOperator client.TxnOperator) (txn txnif.AsyncTxn, e
 	return
 }
 
-func (db *DB) GetOrCreateTxnWithMeta(info []byte, meta txn.TxnMeta) (txn txnif.AsyncTxn, err error) {
-	panic(moerr.NewNYI("GetTxnWithMeta is not implemented yet "))
+func (db *DB) GetOrCreateTxnWithMeta(
+	info []byte,
+	id []byte,
+	ts types.TS) (txn txnif.AsyncTxn, err error) {
+	return db.TxnMgr.GetOrCreateTxnWithMeta(info, id, ts)
 }
 
-func (db *DB) GetTxnByMeta(meta txn.TxnMeta) (txn txnif.AsyncTxn, err error) {
-	panic(moerr.NewNYI("GetTxnByMeta is not implemented yet "))
-}
-
-// TODO:: change type of id to be []byte.
-func (db *DB) GetTxn(id uint64) (txn txnif.AsyncTxn, err error) {
+func (db *DB) GetTxn(id string) (txn txnif.AsyncTxn, err error) {
 	txn = db.TxnMgr.GetTxn(id)
 	if txn == nil {
 		err = moerr.NewNotFound()
@@ -111,8 +109,7 @@ func (db *DB) Replay(dataFactory *tables.DataFactory) {
 	replayer.OnTimeStamp(maxTs)
 	replayer.Replay()
 
-	// TODO: init txn id
-	err := db.TxnMgr.Init(0, replayer.GetMaxTS())
+	err := db.TxnMgr.Init(replayer.GetMaxTS())
 	if err != nil {
 		panic(err)
 	}

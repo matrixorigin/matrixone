@@ -380,7 +380,7 @@ func (db *txnDB) ApplyCommit() (err error) {
 			return
 		}
 	}
-	logutil.Debugf("Txn-%d ApplyCommit Takes %s", db.store.txn.GetID(), time.Since(now))
+	logutil.Debugf("Txn-%s ApplyCommit Takes %s", db.store.txn.GetID(), time.Since(now))
 	return
 }
 
@@ -424,7 +424,7 @@ func (db *txnDB) PrepareCommit() (err error) {
 		}
 	}
 
-	logutil.Debugf("Txn-%d PrepareCommit Takes %s", db.store.txn.GetID(), time.Since(now))
+	logutil.Debugf("Txn-%s PrepareCommit Takes %s", db.store.txn.GetID(), time.Since(now))
 
 	return
 }

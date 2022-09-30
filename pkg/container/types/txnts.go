@@ -78,6 +78,17 @@ func (ts TS) GreaterEq(rhs TS) bool {
 	return ts.Compare(rhs) >= 0
 }
 
+// TODO::need to take "NodeID" account into
+func TimestampToTS(ts timestamp.Timestamp) TS {
+	return BuildTS(ts.PhysicalTime, ts.LogicalTime)
+}
+
+func (ts TS) ToTimestamp() timestamp.Timestamp {
+	return timestamp.Timestamp{
+		PhysicalTime: DecodeInt64(ts[4:12]),
+		LogicalTime:  DecodeUint32(ts[:4])}
+}
+
 func BuildTS(p int64, l uint32) (ret TS) {
 	copy(ret[4:12], EncodeInt64(&p))
 	copy(ret[:4], EncodeUint32(&l))
