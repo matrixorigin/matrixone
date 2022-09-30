@@ -998,7 +998,7 @@ func (builder *QueryBuilder) buildUnion(stmt *tree.UnionClause, astOrderBy tree.
 	if astLimit != nil {
 		node := builder.qry.Nodes[lastNodeId]
 
-		limitBinder := NewLimitBinder()
+		limitBinder := NewLimitBinder(builder, ctx)
 		if astLimit.Offset != nil {
 			node.Offset, err = limitBinder.BindExpr(astLimit.Offset, 0, true)
 			if err != nil {
@@ -1321,7 +1321,7 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 	var limitExpr *Expr
 	var offsetExpr *Expr
 	if astLimit != nil {
-		limitBinder := NewLimitBinder()
+		limitBinder := NewLimitBinder(builder, ctx)
 		if astLimit.Offset != nil {
 			offsetExpr, err = limitBinder.BindExpr(astLimit.Offset, 0, true)
 			if err != nil {

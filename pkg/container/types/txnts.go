@@ -32,15 +32,15 @@ import (
 // Transaction ts contains a physical ts in higher 8 bytes
 // and a logical in lower 4 bytes.  higher lower in little
 // ending sense.
-func (ts TS) physical() int64 {
+func (ts TS) Physical() int64 {
 	return DecodeInt64(ts[4:12])
 }
-func (ts TS) logical() uint32 {
+func (ts TS) Logical() uint32 {
 	return DecodeUint32(ts[:4])
 }
 
 func (ts TS) IsEmpty() bool {
-	return ts.physical() == 0 && ts.logical() == 0
+	return ts.Physical() == 0 && ts.Logical() == 0
 }
 func (ts TS) Equal(rhs TS) bool {
 	return ts == rhs
@@ -48,14 +48,14 @@ func (ts TS) Equal(rhs TS) bool {
 
 // Compare physical first then logical.
 func (ts TS) Compare(rhs TS) int {
-	p1, p2 := ts.physical(), rhs.physical()
+	p1, p2 := ts.Physical(), rhs.Physical()
 	if p1 < p2 {
 		return -1
 	}
 	if p1 > p2 {
 		return 1
 	}
-	l1, l2 := ts.logical(), rhs.logical()
+	l1, l2 := ts.Logical(), rhs.Logical()
 	if l1 < l2 {
 		return -1
 	}
@@ -90,14 +90,14 @@ func MaxTs() TS {
 
 // Who use this function?
 func (ts TS) Prev() TS {
-	p, l := ts.physical(), ts.logical()
+	p, l := ts.Physical(), ts.Logical()
 	if l == 0 {
 		return BuildTS(p-1, math.MaxUint32)
 	}
 	return BuildTS(p, l-1)
 }
 func (ts TS) Next() TS {
-	p, l := ts.physical(), ts.logical()
+	p, l := ts.Physical(), ts.Logical()
 	if l == math.MaxUint32 {
 		return BuildTS(p+1, 0)
 	}
@@ -105,7 +105,7 @@ func (ts TS) Next() TS {
 }
 
 func (ts TS) ToString() string {
-	return fmt.Sprintf("%d-%d", ts.physical(), ts.logical())
+	return fmt.Sprintf("%d-%d", ts.Physical(), ts.Logical())
 }
 
 func StringToTS(s string) (ts TS) {
