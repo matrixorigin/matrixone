@@ -19,12 +19,14 @@ import (
 	"io"
 	"unsafe"
 
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/stl"
 )
 
 func NewStrVector[T any](opts ...*Options) *StrVector[T] {
 	var capacity int
-	var alloc stl.MemAllocator
+	var alloc *mpool.MPool
 	lenOpt := new(Options)
 	offOpt := new(Options)
 	dataOpt := new(Options)
@@ -47,7 +49,7 @@ func NewStrVector[T any](opts ...*Options) *StrVector[T] {
 		}
 	}
 	if alloc == nil {
-		alloc = stl.DefaultAllocator
+		alloc = common.TAEDefaultAllocator
 	}
 	if capacity == 0 {
 		capacity = 4
@@ -81,7 +83,7 @@ func (vec *StrVector[T]) Close() {
 	}
 }
 
-func (vec *StrVector[T]) GetAllocator() stl.MemAllocator {
+func (vec *StrVector[T]) GetAllocator() *mpool.MPool {
 	return vec.offsets.GetAllocator()
 }
 
@@ -197,7 +199,7 @@ func (vec *StrVector[T]) AppendMany(vals ...T) {
 	}
 }
 
-func (vec *StrVector[T]) Clone(offset, length int, allocator ...stl.MemAllocator) stl.Vector[T] {
+func (vec *StrVector[T]) Clone(offset, length int, allocator ...*mpool.MPool) stl.Vector[T] {
 	opts := &Options{
 		Capacity: length,
 	}

@@ -20,9 +20,9 @@ import (
 	"time"
 
 	"github.com/RoaringBitmap/roaring"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/compress"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/stl"
 	"github.com/pierrec/lz4/v4"
 	"github.com/stretchr/testify/assert"
 )
@@ -31,7 +31,7 @@ func withAllocator(opt *Options) *Options {
 	if opt == nil {
 		opt = new(Options)
 	}
-	opt.Allocator = stl.NewSimpleAllocator()
+	opt.Allocator = mpool.MustNewZero()
 	return opt
 }
 
@@ -70,10 +70,11 @@ func TestVector1(t *testing.T) {
 	assert.Equal(t, int32(32), vec2.Get(1).(int32))
 	assert.Equal(t, int32(1), vec2.Get(2).(int32))
 	assert.Equal(t, int32(100), vec2.Get(3).(int32))
-	alloc := vec.GetAllocator()
 	vec.Close()
 	vec2.Close()
-	assert.Equal(t, 0, alloc.Usage())
+	// XXX MPOOL
+	// alloc := vec.GetAllocator()
+	// assert.Equal(t, 0, alloc.CurrNB())
 }
 
 func TestVector2(t *testing.T) {
@@ -115,7 +116,7 @@ func TestVector2(t *testing.T) {
 	t.Log(vec.String())
 
 	vec.Close()
-	assert.Zero(t, opt.Allocator.Usage())
+	assert.Zero(t, opt.Allocator.CurrNB())
 
 	// vec2 := compute.MockVec(vec.GetType(), 0, 0)
 	// now = time.Now()
@@ -155,7 +156,7 @@ func TestVector3(t *testing.T) {
 	// t.Log(vec2.String())
 	vec1.Close()
 	vec2.Close()
-	assert.Zero(t, opts.Allocator.Usage())
+	assert.Zero(t, opts.Allocator.CurrNB())
 }
 
 func TestVector4(t *testing.T) {
@@ -416,7 +417,7 @@ func TestVector9(t *testing.T) {
 	assert.Equal(t, vec.Get(3), cloned.Get(1))
 	cloned.Close()
 	vec.Close()
-	assert.Zero(t, opts.Allocator.Usage())
+	assert.Zero(t, opts.Allocator.CurrNB())
 }
 
 func TestCloneWithBuffer(t *testing.T) {

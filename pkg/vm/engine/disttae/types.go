@@ -18,6 +18,7 @@ import (
 	"context"
 	"sync"
 
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/logservice"
@@ -27,7 +28,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage/memtable"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 )
 
 const (
@@ -83,7 +83,7 @@ type MVCC interface {
 type Engine struct {
 	sync.RWMutex
 	db                *DB
-	m                 *mheap.Mheap
+	m                 *mpool.MPool
 	cli               client.TxnClient
 	getClusterDetails GetClusterDetailsFunc
 	txns              map[string]*Transaction
@@ -129,7 +129,7 @@ type Transaction struct {
 	// every statement is an element
 	writes   [][]Entry
 	dnStores []DNStore
-	m        *mheap.Mheap
+	m        *mpool.MPool
 
 	// use to cache table
 	tableMap map[tableKey]*table

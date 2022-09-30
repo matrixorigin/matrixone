@@ -17,19 +17,19 @@ package memEngine
 import (
 	"bytes"
 
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/compress"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 )
 
 func (r *reader) Close() error {
 	return nil
 }
 
-func (r *reader) Read(attrs []string, _ *plan.Expr, m *mheap.Mheap) (*batch.Batch, error) {
+func (r *reader) Read(attrs []string, _ *plan.Expr, m *mpool.MPool) (*batch.Batch, error) {
 	if len(r.segs) == 0 {
 		return nil, nil
 	}

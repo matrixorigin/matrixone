@@ -22,22 +22,22 @@ import (
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 )
 
 type HashShard struct {
-	heap *mheap.Mheap
+	mp *mpool.MPool
 }
 
-func NewHashShard(heap *mheap.Mheap) *HashShard {
+func NewHashShard(mp *mpool.MPool) *HashShard {
 	return &HashShard{
-		heap: heap,
+		mp: mp,
 	}
 }
 
@@ -232,7 +232,7 @@ func (h *HashShard) Vector(
 			m[shard] = shardVec
 		}
 		v := getNullableValueFromVector(vec, i)
-		appendNullableValueToVector(shardVec, v, h.heap)
+		appendNullableValueToVector(shardVec, v, h.mp)
 	}
 
 	for shard, vec := range m {
@@ -584,12 +584,12 @@ func getNullableValueFromVector(vec *vector.Vector, i int) (value Nullable) {
 	panic(fmt.Sprintf("unknown column type: %v", vec.Typ))
 }
 
-func appendNullableValueToVector(vec *vector.Vector, value Nullable, heap *mheap.Mheap) {
+func appendNullableValueToVector(vec *vector.Vector, value Nullable, mp *mpool.MPool) {
 	str, ok := value.Value.(string)
 	if ok {
 		value.Value = []byte(str)
 	}
-	vec.Append(value.Value, false, heap)
+	vec.Append(value.Value, false, mp)
 	if value.IsNull {
 		vec.GetNulls().Set(uint64(vec.Length() - 1))
 	}

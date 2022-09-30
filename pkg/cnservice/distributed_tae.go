@@ -17,11 +17,10 @@ package cnservice
 import (
 	"context"
 
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/memoryengine"
-	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
-	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
 )
 
 func (s *service) initDistributedTAE(
@@ -42,10 +41,14 @@ func (s *service) initDistributedTAE(
 		return err
 	}
 
-	m := mheap.New(guest.New(pu.SV.GuestMmuLimitation, pu.HostMmu))
+	mp, err := mpool.NewMPool("cnservice_distributed_tae", 0, mpool.Mid)
+	if err != nil {
+		return err
+	}
+
 	// engine
 	pu.StorageEngine = disttae.New(
-		m,
+		mp,
 		ctx,
 		client,
 		memoryengine.GetClusterDetailsFromHAKeeper(

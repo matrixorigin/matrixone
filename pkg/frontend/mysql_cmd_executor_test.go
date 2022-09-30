@@ -17,11 +17,12 @@ package frontend
 import (
 	"context"
 	"fmt"
+	"testing"
+	"time"
+
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
-	"testing"
-	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 
@@ -38,7 +39,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/prashantv/gostub"
 	"github.com/smartystreets/goconvey/convey"
@@ -216,12 +216,10 @@ func Test_mce(t *testing.T) {
 
 		proto := NewMysqlClientProtocol(0, ioses, 1024, pu.SV)
 
-		guestMmu := guest.New(pu.SV.GuestMmuLimitation, pu.HostMmu)
-
 		var gSys GlobalSystemVariables
 		InitGlobalSystemVariables(&gSys)
 
-		ses := NewSession(proto, guestMmu, pu.Mempool, pu, &gSys)
+		ses := NewSession(proto, nil, pu, &gSys)
 		ses.SetRequestContext(ctx)
 
 		mce := NewMysqlCmdExecutor()
@@ -326,11 +324,9 @@ func Test_mce_selfhandle(t *testing.T) {
 
 		proto := NewMysqlClientProtocol(0, ioses, 1024, pu.SV)
 
-		guestMmu := guest.New(pu.SV.GuestMmuLimitation, pu.HostMmu)
-
 		var gSys GlobalSystemVariables
 		InitGlobalSystemVariables(&gSys)
-		ses := NewSession(proto, guestMmu, pu.Mempool, pu, &gSys)
+		ses := NewSession(proto, nil, pu, &gSys)
 		ses.SetRequestContext(ctx)
 
 		mce := NewMysqlCmdExecutor()
@@ -368,12 +364,10 @@ func Test_mce_selfhandle(t *testing.T) {
 
 		proto := NewMysqlClientProtocol(0, ioses, 1024, pu.SV)
 
-		guestMmu := guest.New(pu.SV.GuestMmuLimitation, pu.HostMmu)
-
 		var gSys GlobalSystemVariables
 		InitGlobalSystemVariables(&gSys)
 
-		ses := NewSession(proto, guestMmu, pu.Mempool, pu, &gSys)
+		ses := NewSession(proto, nil, pu, &gSys)
 		ses.SetRequestContext(ctx)
 		ses.Mrs = &MysqlResultSet{}
 
@@ -474,12 +468,10 @@ func Test_getDataFromPipeline(t *testing.T) {
 
 		proto := NewMysqlClientProtocol(0, ioses, 1024, pu.SV)
 
-		guestMmu := guest.New(pu.SV.GuestMmuLimitation, pu.HostMmu)
-
 		var gSys GlobalSystemVariables
 		InitGlobalSystemVariables(&gSys)
 
-		ses := NewSession(proto, guestMmu, pu.Mempool, pu, &gSys)
+		ses := NewSession(proto, nil, pu, &gSys)
 		ses.SetRequestContext(ctx)
 		ses.Mrs = &MysqlResultSet{}
 		proto.ses = ses
@@ -551,11 +543,10 @@ func Test_getDataFromPipeline(t *testing.T) {
 			t.Error(err)
 		}
 		proto := NewMysqlClientProtocol(0, ioses, 1024, pu.SV)
-		guestMmu := guest.New(pu.SV.GuestMmuLimitation, pu.HostMmu)
 		var gSys GlobalSystemVariables
 		InitGlobalSystemVariables(&gSys)
 
-		ses := NewSession(proto, guestMmu, pu.Mempool, pu, &gSys)
+		ses := NewSession(proto, nil, pu, &gSys)
 		ses.SetRequestContext(ctx)
 		ses.Mrs = &MysqlResultSet{}
 		proto.ses = ses
@@ -713,7 +704,7 @@ func Test_handleSelectVariables(t *testing.T) {
 		proto := NewMysqlClientProtocol(0, ioses, 1024, pu.SV)
 		var gSys GlobalSystemVariables
 		InitGlobalSystemVariables(&gSys)
-		ses := NewSession(proto, nil, nil, pu, &gSys)
+		ses := NewSession(proto, nil, pu, &gSys)
 		ses.SetRequestContext(ctx)
 		ses.Mrs = &MysqlResultSet{}
 		mce := &MysqlCmdExecutor{}
@@ -756,7 +747,7 @@ func Test_handleShowVariables(t *testing.T) {
 		proto := NewMysqlClientProtocol(0, ioses, 1024, pu.SV)
 		var gSys GlobalSystemVariables
 		InitGlobalSystemVariables(&gSys)
-		ses := NewSession(proto, nil, nil, pu, &gSys)
+		ses := NewSession(proto, nil, pu, &gSys)
 		ses.SetRequestContext(ctx)
 		ses.Mrs = &MysqlResultSet{}
 		mce := &MysqlCmdExecutor{}
@@ -807,10 +798,9 @@ func Test_handleShowColumns(t *testing.T) {
 			t.Error(err)
 		}
 		proto := NewMysqlClientProtocol(0, ioses, 1024, pu.SV)
-		guestMmu := guest.New(pu.SV.GuestMmuLimitation, pu.HostMmu)
 		var gSys GlobalSystemVariables
 		InitGlobalSystemVariables(&gSys)
-		ses := NewSession(proto, guestMmu, pu.Mempool, pu, &gSys)
+		ses := NewSession(proto, nil, pu, &gSys)
 		ses.SetRequestContext(ctx)
 		ses.Data = make([][]interface{}, 1)
 		ses.Data[0] = make([]interface{}, primaryKeyPos+1)
@@ -852,7 +842,7 @@ func runTestHandle(funName string, t *testing.T, handleFun func(*MysqlCmdExecuto
 		proto := NewMysqlClientProtocol(0, ioses, 1024, pu.SV)
 		var gSys GlobalSystemVariables
 		InitGlobalSystemVariables(&gSys)
-		ses := NewSession(proto, nil, nil, pu, &gSys)
+		ses := NewSession(proto, nil, pu, &gSys)
 		ses.SetRequestContext(ctx)
 		ses.Mrs = &MysqlResultSet{}
 		mce := &MysqlCmdExecutor{}
@@ -946,7 +936,7 @@ func Test_CMD_FIELD_LIST(t *testing.T) {
 		proto := NewMysqlClientProtocol(0, ioses, 1024, pu.SV)
 		var gSys GlobalSystemVariables
 		InitGlobalSystemVariables(&gSys)
-		ses := NewSession(proto, nil, nil, pu, &gSys)
+		ses := NewSession(proto, nil, pu, &gSys)
 		ses.SetRequestContext(ctx)
 		ses.Mrs = &MysqlResultSet{}
 		ses.SetDatabaseName("t")

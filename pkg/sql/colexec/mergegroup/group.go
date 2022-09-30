@@ -54,11 +54,11 @@ func Call(idx int, proc *process.Process, arg interface{}) (bool, error) {
 			if ctr.bat != nil {
 				if ap.NeedEval {
 					for i, agg := range ctr.bat.Aggs {
-						vec, err := agg.Eval(proc.GetMheap())
+						vec, err := agg.Eval(proc.Mp())
 						if err != nil {
 							ctr.state = End
 							ctr.clean()
-							ctr.bat.Clean(proc.GetMheap())
+							ctr.bat.Clean(proc.Mp())
 							return false, err
 						}
 						ctr.bat.Aggs[i] = nil
@@ -141,12 +141,12 @@ func (ctr *container) process(bat *batch.Batch, proc *process.Process) error {
 			ctr.typ = H0
 		case size <= 8:
 			ctr.typ = H8
-			if ctr.intHashMap, err = hashmap.NewIntHashMap(true, 0, 0, proc.GetMheap()); err != nil {
+			if ctr.intHashMap, err = hashmap.NewIntHashMap(true, 0, 0, proc.Mp()); err != nil {
 				return err
 			}
 		default:
 			ctr.typ = HStr
-			if ctr.strHashMap, err = hashmap.NewStrMap(true, 0, 0, proc.GetMheap()); err != nil {
+			if ctr.strHashMap, err = hashmap.NewStrMap(true, 0, 0, proc.Mp()); err != nil {
 				return err
 			}
 		}
@@ -255,7 +255,7 @@ func (ctr *container) batchFill(i int, n int, bat *batch.Batch, vals []uint64, h
 	}
 	if cnt > 0 {
 		for j, vec := range ctr.bat.Vecs {
-			if err := vector.UnionBatch(vec, bat.Vecs[j], int64(i), cnt, ctr.inserted[:n], proc.GetMheap()); err != nil {
+			if err := vector.UnionBatch(vec, bat.Vecs[j], int64(i), cnt, ctr.inserted[:n], proc.Mp()); err != nil {
 				return err
 			}
 		}
@@ -286,7 +286,7 @@ func (ctr *container) clean() {
 
 func (ctr *container) cleanBatch(proc *process.Process) {
 	if ctr.bat != nil {
-		ctr.bat.Clean(proc.GetMheap())
+		ctr.bat.Clean(proc.Mp())
 		ctr.bat = nil
 	}
 }

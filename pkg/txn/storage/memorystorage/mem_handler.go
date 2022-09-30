@@ -24,6 +24,7 @@ import (
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -35,7 +36,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage/memtable"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/memoryengine"
-	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 )
 
 type MemHandler struct {
@@ -64,7 +64,7 @@ type MemHandler struct {
 	}
 
 	// misc
-	mheap                  *mheap.Mheap
+	mp                     *mpool.MPool
 	defaultIsolationPolicy IsolationPolicy
 	clock                  clock.Clock
 }
@@ -83,7 +83,7 @@ type Iter[
 }
 
 func NewMemHandler(
-	mheap *mheap.Mheap,
+	mp *mpool.MPool,
 	defaultIsolationPolicy IsolationPolicy,
 	clock clock.Clock,
 ) *MemHandler {
@@ -93,7 +93,7 @@ func NewMemHandler(
 		attributes:             memtable.NewTable[ID, *AttributeRow, *AttributeRow](),
 		indexes:                memtable.NewTable[ID, *IndexRow, *IndexRow](),
 		data:                   memtable.NewTable[DataKey, DataValue, DataRow](),
-		mheap:                  mheap,
+		mp:                     mp,
 		defaultIsolationPolicy: defaultIsolationPolicy,
 		clock:                  clock,
 	}
@@ -965,7 +965,7 @@ func (m *MemHandler) HandleOpenRelation(meta txn.TxnMeta, req memoryengine.OpenR
 }
 
 func (m *MemHandler) HandleRead(meta txn.TxnMeta, req memoryengine.ReadReq, resp *memoryengine.ReadResp) error {
-	resp.SetHeap(m.mheap)
+	resp.SetHeap(m.mp)
 
 	m.iterators.Lock()
 	iter, ok := m.iterators.Map[req.IterID]
@@ -1237,7 +1237,7 @@ func (m *MemHandler) HandleCommitting(meta txn.TxnMeta) error {
 }
 
 func (m *MemHandler) HandleDestroy() error {
-	*m = *NewMemHandler(m.mheap, m.defaultIsolationPolicy, m.clock)
+	*m = *NewMemHandler(m.mp, m.defaultIsolationPolicy, m.clock)
 	return nil
 }
 

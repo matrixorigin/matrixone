@@ -43,7 +43,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -1814,7 +1813,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 
 	proc := process.New(
 		requestCtx,
-		mheap.New(ses.GuestMmu),
+		ses.Mp,
 		ses.Pu.TxnClient,
 		ses.GetTxnHandler().txn,
 		ses.Pu.FileService,

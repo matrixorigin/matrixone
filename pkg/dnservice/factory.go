@@ -18,15 +18,13 @@ import (
 	"context"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage/mem"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage"
 	taestorage "github.com/matrixorigin/matrixone/pkg/txn/storage/tae"
-	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
-	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
-	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
 	"go.uber.org/zap"
 )
 
@@ -102,9 +100,7 @@ func (s *store) newLogServiceClient(shard metadata.DNShard) (logservice.Client, 
 }
 
 func (s *store) newMemTxnStorage(shard metadata.DNShard, logClient logservice.Client) (storage.TxnStorage, error) {
-	hm := host.New(1 << 30)
-	gm := guest.New(1<<30, hm)
-	return memorystorage.NewMemoryStorage(mheap.New(gm), memorystorage.SnapshotIsolation, s.clock)
+	return memorystorage.NewMemoryStorage(mpool.MustNewZero(), memorystorage.SnapshotIsolation, s.clock)
 }
 
 func (s *store) newMemKVStorage(shard metadata.DNShard, logClient logservice.Client) (storage.TxnStorage, error) {

@@ -26,7 +26,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
-	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
 	"github.com/tidwall/btree"
 
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -1400,8 +1399,7 @@ func nameIsInvalid(name string) bool {
 // doDropAccount accomplishes the DropAccount statement
 func doDropAccount(ctx context.Context, ses *Session, da *tree.DropAccount) error {
 	pu := ses.Pu
-	guestMMu := guest.New(pu.SV.GuestMmuLimitation, pu.HostMmu)
-	bh := NewBackgroundHandler(ctx, guestMMu, pu.Mempool, pu)
+	bh := NewBackgroundHandler(ctx, ses.Mp, pu)
 	defer bh.Close()
 	var err error
 	var sql string
@@ -1485,8 +1483,7 @@ handleFailed:
 // doDropUser accomplishes the DropUser statement
 func doDropUser(ctx context.Context, ses *Session, du *tree.DropUser) error {
 	pu := ses.Pu
-	guestMMu := guest.New(pu.SV.GuestMmuLimitation, pu.HostMmu)
-	bh := NewBackgroundHandler(ctx, guestMMu, pu.Mempool, pu)
+	bh := NewBackgroundHandler(ctx, ses.Mp, pu)
 	defer bh.Close()
 	var err error
 	var vr *verifiedRole
@@ -1550,8 +1547,7 @@ handleFailed:
 // doDropRole accomplishes the DropRole statement
 func doDropRole(ctx context.Context, ses *Session, dr *tree.DropRole) error {
 	pu := ses.Pu
-	guestMMu := guest.New(pu.SV.GuestMmuLimitation, pu.HostMmu)
-	bh := NewBackgroundHandler(ctx, guestMMu, pu.Mempool, pu)
+	bh := NewBackgroundHandler(ctx, ses.Mp, pu)
 	defer bh.Close()
 	var err error
 	var vr *verifiedRole
@@ -1617,8 +1613,7 @@ handleFailed:
 // doRevokePrivilege accomplishes the RevokePrivilege statement
 func doRevokePrivilege(ctx context.Context, ses *Session, rp *tree.RevokePrivilege) error {
 	pu := ses.Pu
-	guestMMu := guest.New(pu.SV.GuestMmuLimitation, pu.HostMmu)
-	bh := NewBackgroundHandler(ctx, guestMMu, pu.Mempool, pu)
+	bh := NewBackgroundHandler(ctx, ses.Mp, pu)
 	defer bh.Close()
 	var err error
 	var vr *verifiedRole
@@ -1881,8 +1876,7 @@ func matchPrivilegeTypeWithObjectType(privType PrivilegeType, objType objectType
 func doGrantPrivilege(ctx context.Context, ses *Session, gp *tree.GrantPrivilege) error {
 	pu := ses.Pu
 	account := ses.GetTenantInfo()
-	guestMMu := guest.New(pu.SV.GuestMmuLimitation, pu.HostMmu)
-	bh := NewBackgroundHandler(ctx, guestMMu, pu.Mempool, pu)
+	bh := NewBackgroundHandler(ctx, ses.Mp, pu)
 	defer bh.Close()
 	var err error
 	var rsset []ExecResult
@@ -2033,8 +2027,7 @@ handleFailed:
 // doRevokeRole accomplishes the RevokeRole statement
 func doRevokeRole(ctx context.Context, ses *Session, rr *tree.RevokeRole) error {
 	pu := ses.Pu
-	guestMMu := guest.New(pu.SV.GuestMmuLimitation, pu.HostMmu)
-	bh := NewBackgroundHandler(ctx, guestMMu, pu.Mempool, pu)
+	bh := NewBackgroundHandler(ctx, ses.Mp, pu)
 	defer bh.Close()
 	var err error
 
@@ -2134,8 +2127,7 @@ handleFailed:
 func doGrantRole(ctx context.Context, ses *Session, gr *tree.GrantRole) error {
 	pu := ses.Pu
 	account := ses.GetTenantInfo()
-	guestMMu := guest.New(pu.SV.GuestMmuLimitation, pu.HostMmu)
-	bh := NewBackgroundHandler(ctx, guestMMu, pu.Mempool, pu)
+	bh := NewBackgroundHandler(ctx, ses.Mp, pu)
 	defer bh.Close()
 	var rsset []ExecResult
 	var err error
@@ -2698,8 +2690,7 @@ func determinePrivilegesOfUserSatisfyPrivilegeSet(ctx context.Context, ses *Sess
 	setR.Insert((int64)(tenant.GetDefaultRoleID()))
 	//TODO: call the algorithm 2.
 	//step 2: The Set R2 {the roleid granted to the userid}
-	guestMMu := guest.New(pu.SV.GuestMmuLimitation, pu.HostMmu)
-	bh := NewBackgroundHandler(ctx, guestMMu, pu.Mempool, pu)
+	bh := NewBackgroundHandler(ctx, ses.Mp, pu)
 	defer bh.Close()
 	var rsset []ExecResult
 
@@ -2826,9 +2817,7 @@ func determinePrivilegesOfUserSatisfyPrivilegeSet(ctx context.Context, ses *Sess
 func determineRoleHasWithGrantOption(ctx context.Context, ses *Session, roles []*tree.Role) (bool, error) {
 	tenant := ses.GetTenantInfo()
 	pu := ses.Pu
-
-	guestMMu := guest.New(pu.SV.GuestMmuLimitation, pu.HostMmu)
-	bh := NewBackgroundHandler(ctx, guestMMu, pu.Mempool, pu)
+	bh := NewBackgroundHandler(ctx, ses.Mp, pu)
 	defer bh.Close()
 	var rsset []ExecResult
 
@@ -3056,8 +3045,7 @@ func formSqlFromGrantPrivilege(ctx context.Context, ses *Session, gp *tree.Grant
 // determinePrivilegeHasWithGrantOption decides all privileges have the with_grant_option = true
 func determinePrivilegeHasWithGrantOption(ctx context.Context, ses *Session, gp *tree.GrantPrivilege) (bool, error) {
 	pu := ses.Pu
-	guestMMu := guest.New(pu.SV.GuestMmuLimitation, pu.HostMmu)
-	bh := NewBackgroundHandler(ctx, guestMMu, pu.Mempool, pu)
+	bh := NewBackgroundHandler(ctx, ses.Mp, pu)
 	defer bh.Close()
 	var rsset []ExecResult
 
@@ -3354,8 +3342,7 @@ func authenticatePrivilegeOfStatementWithObjectTypeNone(ctx context.Context, ses
 
 // checkSysExistsOrNot checks the SYS tenant exists or not.
 func checkSysExistsOrNot(ctx context.Context, pu *config.ParameterUnit) (bool, error) {
-	guestMMu := guest.New(pu.SV.GuestMmuLimitation, pu.HostMmu)
-	bh := NewBackgroundHandler(ctx, guestMMu, pu.Mempool, pu)
+	bh := NewBackgroundHandler(ctx, nil, pu)
 	defer bh.Close()
 	var rsset []ExecResult
 
@@ -3542,8 +3529,7 @@ func createTablesInMoCatalog(ctx context.Context, tenant *TenantInfo, pu *config
 	addSqlIntoSet("commit;")
 
 	//fill the mo_account, mo_role, mo_user, mo_role_privs, mo_user_grant
-	guestMMu := guest.New(pu.SV.GuestMmuLimitation, pu.HostMmu)
-	bh := NewBackgroundHandler(ctx, guestMMu, pu.Mempool, pu)
+	bh := NewBackgroundHandler(ctx, nil, pu)
 	defer bh.Close()
 	for _, sql := range initDataSqls {
 		err = bh.Exec(ctx, sql)
@@ -3565,8 +3551,7 @@ handleFailed:
 
 // createTablesInInformationSchema creates the database information_schema and the views or tables.
 func createTablesInInformationSchema(ctx context.Context, tenant *TenantInfo, pu *config.ParameterUnit) error {
-	guestMMu := guest.New(pu.SV.GuestMmuLimitation, pu.HostMmu)
-	bh := NewBackgroundHandler(ctx, guestMMu, pu.Mempool, pu)
+	bh := NewBackgroundHandler(ctx, nil, pu)
 	defer bh.Close()
 	err := bh.Exec(ctx, "create database information_schema;")
 	if err != nil {
@@ -3576,10 +3561,8 @@ func createTablesInInformationSchema(ctx context.Context, tenant *TenantInfo, pu
 }
 
 func checkTenantExistsOrNot(ctx context.Context, pu *config.ParameterUnit, userName string) (bool, error) {
-	guestMMu := guest.New(pu.SV.GuestMmuLimitation, pu.HostMmu)
-
 	sqlForCheckTenant := getSqlForCheckTenant(userName)
-	rsset, err := executeSQLInBackgroundSession(ctx, guestMMu, pu.Mempool, pu, sqlForCheckTenant)
+	rsset, err := executeSQLInBackgroundSession(ctx, nil, pu, sqlForCheckTenant)
 	if err != nil {
 		return false, err
 	}
@@ -3633,8 +3616,7 @@ func InitGeneralTenant(ctx context.Context, tenant *TenantInfo, ca *tree.CreateA
 
 // createTablesInMoCatalogOfGeneralTenant creates catalog tables in the database mo_catalog.
 func createTablesInMoCatalogOfGeneralTenant(ctx context.Context, tenant *TenantInfo, pu *config.ParameterUnit, ca *tree.CreateAccount) (*TenantInfo, error) {
-	guestMMu := guest.New(pu.SV.GuestMmuLimitation, pu.HostMmu)
-	bh := NewBackgroundHandler(ctx, guestMMu, pu.Mempool, pu)
+	bh := NewBackgroundHandler(ctx, nil, pu)
 	defer bh.Close()
 	var err error
 	var initMoAccount string
@@ -3825,13 +3807,12 @@ handleFailed:
 
 // createTablesInInformationSchemaOfGeneralTenant creates the database information_schema and the views or tables.
 func createTablesInInformationSchemaOfGeneralTenant(ctx context.Context, tenant *TenantInfo, pu *config.ParameterUnit, newTenant *TenantInfo) error {
-	guestMMu := guest.New(pu.SV.GuestMmuLimitation, pu.HostMmu)
 	//with new tenant
 	//TODO: when we have the auto_increment column, we need new strategy.
 	ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(newTenant.GetTenantID()))
 	ctx = context.WithValue(ctx, defines.UserIDKey{}, uint32(newTenant.GetUserID()))
 	ctx = context.WithValue(ctx, defines.RoleIDKey{}, uint32(newTenant.GetDefaultRoleID()))
-	bh := NewBackgroundHandler(ctx, guestMMu, pu.Mempool, pu)
+	bh := NewBackgroundHandler(ctx, nil, pu)
 	defer bh.Close()
 	err := bh.Exec(ctx, "create database information_schema;")
 	if err != nil {
@@ -3841,10 +3822,8 @@ func createTablesInInformationSchemaOfGeneralTenant(ctx context.Context, tenant 
 }
 
 func checkUserExistsOrNot(ctx context.Context, pu *config.ParameterUnit, tenantName string) (bool, error) {
-	guestMMu := guest.New(pu.SV.GuestMmuLimitation, pu.HostMmu)
-
 	sqlForCheckUser := getSqlForPasswordOfUser(tenantName)
-	rsset, err := executeSQLInBackgroundSession(ctx, guestMMu, pu.Mempool, pu, sqlForCheckUser)
+	rsset, err := executeSQLInBackgroundSession(ctx, nil, pu, sqlForCheckUser)
 	if err != nil {
 		return false, err
 	}
@@ -3866,8 +3845,7 @@ func InitUser(ctx context.Context, tenant *TenantInfo, cu *tree.CreateUser) erro
 	var values []interface{}
 	pu := config.GetParameterUnit(ctx)
 
-	guestMMu := guest.New(pu.SV.GuestMmuLimitation, pu.HostMmu)
-	bh := NewBackgroundHandler(ctx, guestMMu, pu.Mempool, pu)
+	bh := NewBackgroundHandler(ctx, nil, pu)
 	defer bh.Close()
 
 	//TODO: get role and the id of role
@@ -4056,8 +4034,7 @@ func InitRole(ctx context.Context, tenant *TenantInfo, cr *tree.CreateRole) erro
 	var rsset []ExecResult
 	pu := config.GetParameterUnit(ctx)
 
-	guestMMu := guest.New(pu.SV.GuestMmuLimitation, pu.HostMmu)
-	bh := NewBackgroundHandler(ctx, guestMMu, pu.Mempool, pu)
+	bh := NewBackgroundHandler(ctx, nil, pu)
 	defer bh.Close()
 
 	err = bh.Exec(ctx, "begin;")

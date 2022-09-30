@@ -15,10 +15,11 @@
 package db
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"io"
 	"runtime"
 	"sync/atomic"
+
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -132,7 +133,8 @@ func (db *DB) Close() error {
 	if err := db.Closed.Load(); err != nil {
 		panic(err)
 	}
-	defer db.PrintStats()
+	// XXX PRINT
+	// defer db.PrintStats()
 	db.Closed.Store(ErrClosed)
 	db.TimedScanner.Stop()
 	db.CKPDriver.Stop()

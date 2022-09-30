@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/file"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
@@ -45,7 +46,9 @@ func newNode(mgr base.INodeManager, block *dataBlock, file file.Block) *appendab
 	schema := block.meta.GetSchema()
 	opts := new(containers.Options)
 	opts.Capacity = int(schema.BlockMaxRows)
-	opts.Allocator = ImmutMemAllocator
+	// XXX What is the rule of using these Allocators?   It all seems
+	// very random.
+	opts.Allocator = common.TAEImmutableAllocator
 	if impl.data, err = file.LoadBatch(
 		schema.AllTypes(),
 		schema.AllNames(),
@@ -78,7 +81,7 @@ func (node *appendableNode) GetDataCopy(minRow, maxRow uint32) (columns *contain
 		return
 	}
 	node.block.RLock()
-	columns = node.data.CloneWindow(int(minRow), int(maxRow-minRow), containers.DefaultAllocator)
+	columns = node.data.CloneWindow(int(minRow), int(maxRow-minRow), common.TAEDefaultAllocator)
 	node.block.RUnlock()
 	return
 }
@@ -98,9 +101,9 @@ func (node *appendableNode) GetColumnDataCopy(
 		if maxRow < uint32(node.data.Vecs[colIdx].Length()) {
 			win = win.Window(int(minRow), int(maxRow))
 		}
-		vec = containers.CloneWithBuffer(win, buffer, containers.DefaultAllocator)
+		vec = containers.CloneWithBuffer(win, buffer, common.TAEDefaultAllocator)
 	} else {
-		vec = node.data.Vecs[colIdx].CloneWindow(int(minRow), int(maxRow-minRow), containers.DefaultAllocator)
+		vec = node.data.Vecs[colIdx].CloneWindow(int(minRow), int(maxRow-minRow), common.TAEDefaultAllocator)
 	}
 	node.block.RUnlock()
 	return

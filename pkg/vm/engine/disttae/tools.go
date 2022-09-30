@@ -21,6 +21,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/compress"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -33,12 +34,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	plantool "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 func genCreateDatabaseTuple(sql string, accountId, userId, roleId uint32, name string,
-	m *mheap.Mheap) (*batch.Batch, error) {
+	m *mpool.MPool) (*batch.Batch, error) {
 	bat := batch.NewWithSize(len(catalog.MoDatabaseSchema))
 	bat.Attrs = append(bat.Attrs, catalog.MoDatabaseSchema...)
 	{
@@ -86,7 +86,7 @@ func genCreateDatabaseTuple(sql string, accountId, userId, roleId uint32, name s
 	return bat, nil
 }
 
-func genDropDatabaseTuple(id uint64, name string, m *mheap.Mheap) (*batch.Batch, error) {
+func genDropDatabaseTuple(id uint64, name string, m *mpool.MPool) (*batch.Batch, error) {
 	bat := batch.NewWithSize(2)
 	bat.Attrs = append(bat.Attrs, catalog.MoDatabaseSchema[:2]...)
 	{
@@ -105,7 +105,7 @@ func genDropDatabaseTuple(id uint64, name string, m *mheap.Mheap) (*batch.Batch,
 }
 
 func genCreateTableTuple(sql string, accountId, userId, roleId uint32, name string,
-	databaseId uint64, databaseName string, comment string, m *mheap.Mheap) (*batch.Batch, error) {
+	databaseId uint64, databaseName string, comment string, m *mpool.MPool) (*batch.Batch, error) {
 	bat := batch.NewWithSize(len(catalog.MoTablesSchema))
 	bat.Attrs = append(bat.Attrs, catalog.MoTablesSchema...)
 	{
@@ -178,7 +178,7 @@ func genCreateTableTuple(sql string, accountId, userId, roleId uint32, name stri
 	return bat, nil
 }
 
-func genCreateColumnTuple(col column, m *mheap.Mheap) (*batch.Batch, error) {
+func genCreateColumnTuple(col column, m *mpool.MPool) (*batch.Batch, error) {
 	bat := batch.NewWithSize(len(catalog.MoColumnsSchema))
 	bat.Attrs = append(bat.Attrs, catalog.MoColumnsSchema...)
 	{
@@ -282,7 +282,7 @@ func genCreateColumnTuple(col column, m *mheap.Mheap) (*batch.Batch, error) {
 }
 
 func genDropTableTuple(id, databaseId uint64, name, databaseName string,
-	m *mheap.Mheap) (*batch.Batch, error) {
+	m *mpool.MPool) (*batch.Batch, error) {
 	bat := batch.NewWithSize(4)
 	bat.Attrs = append(bat.Attrs, catalog.MoTablesSchema[:4]...)
 	{
@@ -766,7 +766,7 @@ func getAccessInfo(ctx context.Context) (uint32, uint32, uint32) {
 	return accountId, userId, roleId
 }
 
-func partitionBatch(bat *batch.Batch, expr *plan.Expr, m *mheap.Mheap, dnNum int) ([]*batch.Batch, error) {
+func partitionBatch(bat *batch.Batch, expr *plan.Expr, m *mpool.MPool, dnNum int) ([]*batch.Batch, error) {
 	proc := process.New(context.TODO(), m, nil, nil, nil)
 	pvec, err := colexec.EvalExpr(bat, proc, expr)
 	if err != nil {

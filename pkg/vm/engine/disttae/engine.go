@@ -22,16 +22,16 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 )
 
 type GetClusterDetailsFunc = func() (logservice.ClusterDetails, error)
 
 func New(
-	m *mheap.Mheap,
+	m *mpool.MPool,
 	ctx context.Context,
 	cli client.TxnClient,
 	getClusterDetails GetClusterDetailsFunc,

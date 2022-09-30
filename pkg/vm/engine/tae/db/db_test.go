@@ -1065,7 +1065,6 @@ func TestUnload1(t *testing.T) {
 		}
 		_ = txn.Commit()
 	}
-	t.Log(common.GPool.String())
 }
 
 func TestUnload2(t *testing.T) {

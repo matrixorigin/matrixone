@@ -118,9 +118,10 @@ func (m *MemHandler) HandleGetLogTail(meta txn.TxnMeta, req apipb.SyncLogTailReq
 		if rowID.IsNull {
 			panic("no row id")
 		}
-		rowID.AppendVector(batch.Vecs[0], m.mheap)
+
+		rowID.AppendVector(batch.Vecs[0], m.mp)
 		// commit time
-		Nullable{Value: commitTime.ToTxnTS()}.AppendVector(batch.Vecs[1], m.mheap)
+		Nullable{Value: commitTime.ToTxnTS()}.AppendVector(batch.Vecs[1], m.mp)
 		// attributes
 		if err := appendNamedRow(tx, m, startOffset, batch, row); err != nil {
 			return err

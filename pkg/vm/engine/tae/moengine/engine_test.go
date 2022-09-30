@@ -19,15 +19,13 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 
 	mobat "github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
-	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
-	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
-	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
 
 	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -143,7 +141,7 @@ func TestEngine(t *testing.T) {
 	rel, err = dbase.Relation(ctx, schema.Name)
 	assert.Nil(t, err)
 	readers, _ := rel.NewReader(ctx, 10, nil, nil)
-	m := mheap.New(guest.New(1<<20, host.New(1<<20)))
+	m := mpool.MustNewZero()
 	for _, reader := range readers {
 		bat, err := reader.Read([]string{schema.ColDefs[1].Name}, nil, m)
 		assert.Nil(t, err)
@@ -249,7 +247,7 @@ func TestEngineAllType(t *testing.T) {
 	rows, err := rel.Rows(ctx)
 	assert.Nil(t, err)
 	readers, _ := rel.NewReader(ctx, 10, nil, nil)
-	m := mheap.New(guest.New(1<<20, host.New(1<<20)))
+	m := mpool.MustNewZero()
 	for _, reader := range readers {
 		bat, err := reader.Read(schema.Attrs(), nil, m)
 		assert.Nil(t, err)
@@ -321,7 +319,7 @@ func TestTxnRelation_GetHideKey(t *testing.T) {
 	assert.Nil(t, txn.Commit())
 	readers, _ := rel.NewReader(ctx, 10, nil, nil)
 	delete := mobat.New(true, bat.Attrs)
-	m := mheap.New(guest.New(1<<20, host.New(1<<20)))
+	m := mpool.MustNewZero()
 	for _, reader := range readers {
 		bat, err := reader.Read([]string{schema.ColDefs[13].Name}, nil, m)
 		assert.Nil(t, err)
@@ -353,7 +351,7 @@ func TestTxnRelation_GetHideKey(t *testing.T) {
 	assert.Nil(t, err)
 	assert.Nil(t, txn.Commit())
 	readers, _ = rel.NewReader(ctx, 1, nil, nil)
-	m = mheap.New(guest.New(1<<20, host.New(1<<20)))
+	m = mpool.MustNewZero()
 	for _, reader := range readers {
 		bat, err := reader.Read([]string{schema.ColDefs[13].Name}, nil, m)
 		assert.Nil(t, err)
@@ -407,7 +405,7 @@ func TestTxnRelation_Update(t *testing.T) {
 	assert.Nil(t, txn.Commit())
 	readers, _ := rel.NewReader(ctx, 10, nil, nil)
 	update := newbat
-	m := mheap.New(guest.New(1<<20, host.New(1<<20)))
+	m := mpool.MustNewZero()
 	for _, reader := range readers {
 		bat1, err := reader.Read([]string{schema.ColDefs[13].Name, schema.ColDefs[0].Name, schema.ColDefs[1].Name}, nil, m)
 		assert.Nil(t, err)
@@ -445,7 +443,7 @@ func TestTxnRelation_Update(t *testing.T) {
 	assert.Nil(t, err)
 	assert.Nil(t, txn.Commit())
 	readers, _ = rel.NewReader(ctx, 10, nil, nil)
-	m = mheap.New(guest.New(1<<20, host.New(1<<20)))
+	m = mpool.MustNewZero()
 	for _, reader := range readers {
 		bat, err := reader.Read([]string{schema.ColDefs[0].Name, schema.ColDefs[1].Name}, nil, m)
 		assert.Nil(t, err)
@@ -475,7 +473,7 @@ func TestTxnRelation_Update(t *testing.T) {
 	assert.Nil(t, txn.Commit())
 	readers, _ = rel.NewReader(ctx, 10, nil, nil)
 	updatePK := newbat
-	m = mheap.New(guest.New(1<<20, host.New(1<<20)))
+	m = mpool.MustNewZero()
 	for _, reader := range readers {
 		bat, err := reader.Read([]string{schema.ColDefs[0].Name,
 			schema.ColDefs[1].Name, schema.ColDefs[2].Name,

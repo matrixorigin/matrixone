@@ -16,6 +16,7 @@ package colexec
 
 import (
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
@@ -56,32 +57,32 @@ func EvalExpr(bat *batch.Batch, proc *process.Process, expr *plan.Expr) (*vector
 		} else {
 			switch t.C.GetValue().(type) {
 			case *plan.Const_Bval:
-				vec = vector.NewConstFixed(constBType, length, t.C.GetBval())
+				vec = vector.NewConstFixed(constBType, length, t.C.GetBval(), proc.Mp())
 			case *plan.Const_Ival:
-				vec = vector.NewConstFixed(constIType, length, t.C.GetIval())
+				vec = vector.NewConstFixed(constIType, length, t.C.GetIval(), proc.Mp())
 			case *plan.Const_Fval:
-				vec = vector.NewConstFixed(constFType, length, t.C.GetFval())
+				vec = vector.NewConstFixed(constFType, length, t.C.GetFval(), proc.Mp())
 			case *plan.Const_Uval:
-				vec = vector.NewConstFixed(constUType, length, t.C.GetUval())
+				vec = vector.NewConstFixed(constUType, length, t.C.GetUval(), proc.Mp())
 			case *plan.Const_Dval:
-				vec = vector.NewConstFixed(constDType, length, t.C.GetDval())
+				vec = vector.NewConstFixed(constDType, length, t.C.GetDval(), proc.Mp())
 			case *plan.Const_Dateval:
-				vec = vector.NewConstFixed(constDateType, length, t.C.GetDateval())
+				vec = vector.NewConstFixed(constDateType, length, t.C.GetDateval(), proc.Mp())
 			case *plan.Const_Datetimeval:
-				vec = vector.NewConstFixed(constDatetimeType, length, t.C.GetDatetimeval())
+				vec = vector.NewConstFixed(constDatetimeType, length, t.C.GetDatetimeval(), proc.Mp())
 			case *plan.Const_Decimal64Val:
 				cd64 := t.C.GetDecimal64Val()
 				d64 := types.Decimal64FromInt64Raw(cd64.A)
-				vec = vector.NewConstFixed(constDecimal64Type, length, d64)
+				vec = vector.NewConstFixed(constDecimal64Type, length, d64, proc.Mp())
 			case *plan.Const_Decimal128Val:
 				cd128 := t.C.GetDecimal128Val()
 				d128 := types.Decimal64FromInt64Raw(cd128.A)
-				vec = vector.NewConstFixed(constDecimal128Type, length, d128)
+				vec = vector.NewConstFixed(constDecimal128Type, length, d128, proc.Mp())
 			case *plan.Const_Timestampval:
-				vec = vector.NewConstFixed(constTimestampType, length, t.C.GetTimestampval())
+				vec = vector.NewConstFixed(constTimestampType, length, t.C.GetTimestampval(), proc.Mp())
 			case *plan.Const_Sval:
 				sval := t.C.GetSval()
-				vec = vector.NewConstString(constSType, length, sval)
+				vec = vector.NewConstString(constSType, length, sval, proc.Mp())
 			default:
 				return nil, moerr.NewNYI(fmt.Sprintf("const expression %v", t.C.GetValue()))
 			}
@@ -173,7 +174,7 @@ func JoinFilterEvalExpr(r, s *batch.Batch, rRow int, proc *process.Process, expr
 				vec.Col = []float64{t.C.GetDval()}
 			case *plan.Const_Sval:
 				sval := t.C.GetSval()
-				vec = vector.NewConstString(constSType, 1, sval)
+				vec = vector.NewConstString(constSType, 1, sval, proc.Mp())
 			default:
 				return nil, moerr.NewNYI(fmt.Sprintf("const expression %v", t.C.GetValue()))
 			}
@@ -189,7 +190,7 @@ func JoinFilterEvalExpr(r, s *batch.Batch, rRow int, proc *process.Process, expr
 		}), nil
 	case *plan.Expr_Col:
 		if t.Col.RelPos == 0 {
-			return r.Vecs[t.Col.ColPos].ToConst(rRow), nil
+			return r.Vecs[t.Col.ColPos].ToConst(rRow, proc.Mp()), nil
 		}
 		return s.Vecs[t.Col.ColPos], nil
 	case *plan.Expr_F:
@@ -260,7 +261,7 @@ func JoinFilterEvalExprInBucket(r, s *batch.Batch, rRow, sRow int, proc *process
 				vec.Col = []float64{t.C.GetDval()}
 			case *plan.Const_Sval:
 				sval := t.C.GetSval()
-				vec = vector.NewConstString(constSType, 1, sval)
+				vec = vector.NewConstString(constSType, 1, sval, proc.Mp())
 			default:
 				return nil, moerr.NewNYI(fmt.Sprintf("const expression %v", t.C.GetValue()))
 			}
@@ -276,9 +277,9 @@ func JoinFilterEvalExprInBucket(r, s *batch.Batch, rRow, sRow int, proc *process
 		}), nil
 	case *plan.Expr_Col:
 		if t.Col.RelPos == 0 {
-			return r.Vecs[t.Col.ColPos].ToConst(rRow), nil
+			return r.Vecs[t.Col.ColPos].ToConst(rRow, proc.Mp()), nil
 		}
-		return s.Vecs[t.Col.ColPos].ToConst(sRow), nil
+		return s.Vecs[t.Col.ColPos].ToConst(sRow, proc.Mp()), nil
 	case *plan.Expr_F:
 		overloadId := t.F.Func.GetObj()
 		f, err := function.GetFunctionByID(overloadId)

@@ -15,17 +15,17 @@
 package memorystorage
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
-	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 )
 
 func NewMemoryStorage(
-	mheap *mheap.Mheap,
+	mp *mpool.MPool,
 	defaultIsolationPolicy IsolationPolicy,
 	clock clock.Clock,
 ) (*Storage, error) {
 
-	memHandler := NewMemHandler(mheap, defaultIsolationPolicy, clock)
+	memHandler := NewMemHandler(mp, defaultIsolationPolicy, clock)
 	catalogHandler := NewCatalogHandler(memHandler)
 	storage, err := New(catalogHandler)
 	if err != nil {
