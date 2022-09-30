@@ -68,10 +68,11 @@ func (r *Reader) LoadBlkColumns(
 	opts *containers.Options) (bat *containers.Batch, err error) {
 	bat = containers.NewBatch()
 
+	metaKey := r.block.getMetaKey()
 	for i := range r.block.columns {
 		vec := containers.MakeVector(colTypes[i], nullables[i], opts)
 		bat.AddVector(colNames[i], vec)
-		if r.block.metaKey.End() == 0 {
+		if metaKey.End() == 0 {
 			continue
 		}
 		col, err := r.block.GetMeta().GetColumn(uint16(i))
