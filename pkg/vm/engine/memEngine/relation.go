@@ -37,7 +37,7 @@ func (*relation) Size(context.Context, string) (int64, error) {
 	return 0, nil
 }
 
-func (r *relation) Ranges(_ context.Context) ([][]byte, error) {
+func (r *relation) Ranges(_ context.Context, _ *plan.Expr) ([][]byte, error) {
 	return nil, nil
 }
 

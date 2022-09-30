@@ -142,6 +142,10 @@ func (e *txnEngine) GetDatabase(ctx context.Context, name string, txnHandle Txn)
 	return db, nil
 }
 
+func (e *txnEngine) GetTAE(_ context.Context) *db.DB {
+	return e.impl
+}
+
 func (e *txnEngine) Nodes() (engine.Nodes, error) {
 	return nil, nil
 }

@@ -319,7 +319,10 @@ func (bat *Batch) Split(cnt int) []*Batch {
 // extend vector with same name, consume src batch
 func (bat *Batch) Extend(src *Batch) {
 	for i, vec := range bat.Vecs {
-		vec.Extend(src.GetVectorByName(bat.Attrs[i]))
+		attr := bat.Attrs[i]
+		if idx, ok := src.nameidx[attr]; ok {
+			vec.Extend(src.Vecs[idx])
+		}
 	}
 	src.Close()
 }

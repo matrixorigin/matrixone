@@ -271,7 +271,7 @@ func (rf *rotateFile) makeSpace(size int) (rotated *vFile, curr *vFileState, err
 	// }
 	// if size+curr.bufPos > curr.bufSize {
 	// 	curr.file.Sync()
-	// 	fmt.Printf("rf.250\n")
+	// 	logutil.Info("rf.250\n")
 	// 	curr.bufPos = 0
 	// }
 	curr.file.PrepareWrite(size)

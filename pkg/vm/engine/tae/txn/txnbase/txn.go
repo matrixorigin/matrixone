@@ -16,9 +16,10 @@ package txnbase
 
 import (
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"sync"
 	"sync/atomic"
+
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -162,12 +163,13 @@ func (txn *Txn) Prepare() (pts types.TS, err error) {
 func (txn *Txn) Rollback() (err error) {
 	//TODO:idempotent for rollback should be guaranteed by TxnStoage?
 	if txn.Mgr.GetTxn(txn.GetID()) == nil {
-		logutil.Warn("tae : txn is not found in TxnManager")
+		logutil.Warnf("tae : txn %d is not found in TxnManager", txn.GetID())
+		err = moerr.NewTxnNotFound()
 		return
 	}
 
 	if txn.Store.IsReadonly() {
-		txn.Mgr.DeleteTxn(txn.GetID())
+		err = txn.Mgr.DeleteTxn(txn.GetID())
 		return
 	}
 
@@ -199,6 +201,11 @@ func (txn *Txn) Committing() (err error) {
 // Notice that the Commit of a 2PC transaction must be success once the commit message arrives,
 // since Preparing had already succeeded.
 func (txn *Txn) Commit() (err error) {
+	if txn.Mgr.GetTxn(txn.GetID()) == nil {
+		err = moerr.NewTxnNotFound()
+		return
+	}
+
 	// Skip readonly txn
 	if txn.Store.IsReadonly() {
 		txn.Mgr.DeleteTxn(txn.GetID())
@@ -219,6 +226,12 @@ func (txn *Txn) GetStore() txnif.TxnStore {
 func (txn *Txn) GetLSN() uint64 { return txn.LSN }
 
 func (txn *Txn) DoneWithErr(err error, isAbort bool) {
+	// Idempotent check
+	if moerr.IsMoErrCode(err, moerr.ErrTxnNotActive) {
+		txn.WaitGroup.Done()
+		return
+	}
+
 	if txn.Is2PC() {
 		txn.done2PCWithErr(err, isAbort)
 		return

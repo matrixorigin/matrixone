@@ -47,7 +47,7 @@ func newColumnBlock(block *blockFile, col int) *columnBlock {
 }
 
 func (cb *columnBlock) GetDataObject(metaLoc string) objectio.ColumnObject {
-	if cb.block.metaKey.End() > 0 {
+	if cb.block.getMetaKey().End() > 0 {
 		object, err := cb.block.GetMeta().GetColumn(cb.id.Idx)
 		if err != nil {
 			panic(any(err))

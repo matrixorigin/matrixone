@@ -16,6 +16,9 @@ package rpc
 
 import (
 	"context"
+	"os"
+	"syscall"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -27,8 +30,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/moengine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
-	"os"
-	"syscall"
 )
 
 type Handle struct {
@@ -101,8 +102,13 @@ func (h *Handle) HandleGetLogTail(
 	meta txn.TxnMeta,
 	req apipb.SyncLogTailReq,
 	resp *apipb.SyncLogTailResp) (err error) {
-	//TODO:: Hanfeng will implement it in next PR.
-	panic(moerr.NewNYI("HandleDestroy is not implemented yet"))
+	tae := h.eng.GetTAE(context.Background())
+	res, err := db.LogtailHandler(tae, req)
+	if err != nil {
+		return err
+	}
+	*resp = res
+	return nil
 }
 
 // TODO:: need to handle resp.

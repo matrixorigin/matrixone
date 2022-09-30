@@ -336,3 +336,15 @@ NULL
 select ~a, ~b from t1;
 ~a	~b
 4	18446744073709551610
+select 2 << -2;
+2<<-2
+0
+select 2 >> -2;
+2>>-2
+0
+drop table if exists t1;
+create table t1 (a tinyint);
+insert into t1 values (2);
+select a << 20 from t1;
+a<<20
+2097152
