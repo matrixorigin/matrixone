@@ -40,10 +40,16 @@ func opBitAnd[T opBitT](v1, v2 T) T {
 }
 
 func opBitRightShift[T opBitT](v1, v2 T) T {
+	if v2 < 0 {
+		return 0
+	}
 	return v1 >> v2
 }
 
 func opBitLeftShift[T opBitT](v1, v2 T) T {
+	if v2 < 0 {
+		return 0
+	}
 	return v1 << v2
 }
 

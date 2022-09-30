@@ -11,9 +11,7 @@ SELECT 1 << 2;
 SELECT 4 >> 2;
 SELECT 100 << ABS(-3);
 SELECT BIN(~1);
--- @bvt:issue#5328
 SELECT 3 & ~8;
--- @bvt:issue
 
 DROP TABLE IF EXISTS t1;
 CREATE TABLE t1(
@@ -40,9 +38,7 @@ INSERT INTO t1() VALUES(1, 927, LENGTH('abcd'), 90);
 SELECT big >> COS(0) FROM t1;
 SELECT tiny & int_test | small ^ big FROM t1;
 SELECT tiny << int_test | small >> big FROM t1;
--- @bvt:issue#5340
 SELECT tiny << LENGTH('abcdefghijklmnopqrst') FROM t1 ORDER BY tiny;
--- @bvt:issue
 
 DROP TABLE IF EXISTS t1;
 CREATE TABLE t1(
@@ -104,16 +100,12 @@ SELECT str1 & n1 FROM t1,t2 LIMIT 4;
 SELECT str1 & ABS(-SIN(7)) FROM t1;
 SELECT n1 & str1 & n1 & '111' & n1 & '1001' FROM t1,t2;
 
--- @bvt:issue#5347
 SELECT 1 << n1 FROM t2;
 SELECT n1 << n1 >> n1 FROM t2;
 SELECT n1 ^ str1 | n1 & str1 >> n1 << str1 FROM t1,t2;
 SELECT n1 ^ 1 | n1 & '111' >> n1 << '1001' FROM t1,t2;
--- @bvt:issue
 
--- @bvt:issue#5348
 SELECT '0150' | str1 | n1 | '000111' | n1 | '101010' FROM t1,t2;
--- @bvt:issue
 
 -- multi table insert or update with bit operator
 DROP TABLE IF EXISTS t1;
