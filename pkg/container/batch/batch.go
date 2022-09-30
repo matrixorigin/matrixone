@@ -19,6 +19,8 @@ import (
 	"fmt"
 	"sync/atomic"
 
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/agg"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -75,16 +77,54 @@ func NewWithSize(n int) *Batch {
 	}
 }
 
+func (info *aggInfo) MarshalBinary() ([]byte, error) {
+	var buf bytes.Buffer
+	i32 := int32(info.Op)
+	buf.Write(types.EncodeInt32(&i32))
+	buf.Write(types.EncodeBool(&info.Dist))
+	buf.Write(types.EncodeType(&info.inputTypes))
+	data, err := types.Encode(info.Agg)
+	if err != nil {
+		return nil, err
+	}
+	buf.Write(data)
+	return buf.Bytes(), nil
+}
+
+func (info *aggInfo) UnmarshalBinary(data []byte) error {
+	info.Op = int(types.DecodeInt32(data[:4]))
+	data = data[4:]
+	info.Dist = types.DecodeBool(data[:1])
+	data = data[1:]
+	info.inputTypes = types.DecodeType(data[:types.TSize])
+	data = data[types.TSize:]
+	aggregate, err := agg.New(info.Op, info.Dist, info.inputTypes)
+	if err != nil {
+		return err
+	}
+	info.Agg = aggregate
+	return types.Decode(data, info.Agg)
+}
+
 func (bat *Batch) MarshalBinary() ([]byte, error) {
+	aggInfo := make([]aggInfo, len(bat.Aggs))
+	for i := range aggInfo {
+		aggInfo[i].Op = bat.Aggs[i].GetOperatorId()
+		aggInfo[i].inputTypes = bat.Aggs[i].GetInputTypes()[0]
+		aggInfo[i].Dist = bat.Aggs[i].IsDistinct()
+		aggInfo[i].Agg = bat.Aggs[i]
+	}
 	return types.Encode(&EncodeBatch{
-		Zs:    bat.Zs,
-		Vecs:  bat.Vecs,
-		Attrs: bat.Attrs,
+		Zs:       bat.Zs,
+		Vecs:     bat.Vecs,
+		Attrs:    bat.Attrs,
+		AggInfos: aggInfo,
 	})
 }
 
 func (bat *Batch) UnmarshalBinary(data []byte) error {
 	rbat := new(EncodeBatch)
+
 	if err := types.Decode(data, rbat); err != nil {
 		return err
 	}
@@ -92,6 +132,10 @@ func (bat *Batch) UnmarshalBinary(data []byte) error {
 	bat.Zs = rbat.Zs
 	bat.Vecs = rbat.Vecs
 	bat.Attrs = rbat.Attrs
+	bat.Aggs = make([]agg.Agg[any], len(rbat.AggInfos))
+	for i, info := range rbat.AggInfos {
+		bat.Aggs[i] = info.Agg
+	}
 	return nil
 }
 
@@ -163,6 +207,10 @@ func (bat *Batch) Prefetch(poses []int32, vecs []*vector.Vector) {
 	for i, pos := range poses {
 		vecs[i] = bat.GetVector(pos)
 	}
+}
+
+func (bat *Batch) SetVector(pos int32, vec *vector.Vector) {
+	bat.Vecs[pos] = vec
 }
 
 func (bat *Batch) GetVector(pos int32) *vector.Vector {

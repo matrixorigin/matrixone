@@ -15,69 +15,93 @@
 package aggut
 
 import (
-	agg2 "github.com/matrixorigin/matrixone/pkg/sql/colexec/agg"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/testutil"
-	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
-	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
-	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
-	"github.com/stretchr/testify/require"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/agg"
 )
 
 func TestApproxcdCount(t *testing.T) {
-	testTyp := types.New(types.T_int8, 0, 0, 0)
-	retTyp := types.New(types.T_uint64, 0, 0, 0)
-	m := mheap.New(guest.New(1<<30, host.New(1<<30)))
-	vs := []int8{1, 1, 2, 2, 3, 3, 4, 4, 5, 5}
-	vs2 := []int8{5, 5, 6, 6, 7, 7, 8, 8, 9, 9, 10, 10}
-	vec := testutil.NewVector(Rows, testTyp, m, false, vs)
-	vec2 := testutil.NewVector(Rows, testTyp, m, false, vs2)
-	{
-		a := agg2.NewApproxc[int8]()
-		agg := agg2.NewUnaryAgg(a, true, testTyp, retTyp, a.Grows, a.Eval, a.Merge, a.Fill, nil)
-		err := agg.Grows(1, m)
-		require.NoError(t, err)
-		for i := 0; i < Rows; i++ {
-			agg.Fill(0, int64(i), 1, []*vector.Vector{vec})
-		}
-		v, err := agg.Eval(m)
-		require.NoError(t, err)
-		require.Equal(t, []uint64{5}, vector.GetColumn[uint64](v))
-		v.Free(m)
-	}
-	{
-		a1 := agg2.NewApproxc[int8]()
-		a2 := agg2.NewApproxc[int8]()
-		agg0 := agg2.NewUnaryAgg(a1, true, testTyp, retTyp, a1.Grows, a1.Eval, a1.Merge, a1.Fill, nil)
-		err := agg0.Grows(1, m)
-		require.NoError(t, err)
-		for i := 0; i < Rows; i++ {
-			agg0.Fill(0, int64(i), 1, []*vector.Vector{vec})
-		}
-		agg1 := agg2.NewUnaryAgg(a2, true, testTyp, retTyp, a2.Grows, a2.Eval, a2.Merge, a2.Fill, nil)
-		err = agg1.Grows(1, m)
-		require.NoError(t, err)
-		for i := 0; i < Rows; i++ {
-			agg1.Fill(0, int64(i), 1, []*vector.Vector{vec2})
-		}
-		agg0.Merge(agg1, 0, 0)
+	int8TestTyp := types.New(types.T_int8, 0, 0, 0)
+	decimal64Typ := types.New(types.T_decimal64, 0, 0, 0)
+	decimal128Typ := types.New(types.T_decimal128, 0, 0, 0)
+	testCases := []testCase{
 		{
-			v, err := agg0.Eval(m)
-			require.NoError(t, err)
-			require.Equal(t, []uint64{9}, vector.GetColumn[uint64](v))
-			v.Free(m)
-		}
+			op:         agg.AggregateApproxCountDistinct,
+			isDistinct: false,
+			inputTyp:   int8TestTyp,
+
+			input:    []int8{1, 1, 2, 2, 3, 3, 4, 4, 5, 5},
+			inputNsp: nil,
+			expected: []uint64{5},
+
+			mergeInput:  []int8{6, 6, 7, 7, 8, 8, 9, 9, 10, 10},
+			mergeNsp:    nil,
+			mergeExpect: []uint64{10},
+
+			testMarshal: true,
+		},
 		{
-			v, err := agg1.Eval(m)
-			require.NoError(t, err)
-			require.Equal(t, []uint64{5}, vector.GetColumn[uint64](v))
-			v.Free(m)
-		}
+			op:         agg.AggregateApproxCountDistinct,
+			isDistinct: false,
+			inputTyp:   decimal64Typ,
+
+			input:    []int64{9, 8, 7, 6, 5, 4, 3, 2, 1, 0},
+			inputNsp: nil,
+			expected: []uint64{10},
+
+			mergeInput:  []int64{0, 1, 2, 3, 4, 5, 6, 7, 8, 9},
+			mergeNsp:    nil,
+			mergeExpect: []uint64{10},
+
+			testMarshal: true,
+		},
+		{
+			op:         agg.AggregateApproxCountDistinct,
+			isDistinct: true,
+			inputTyp:   decimal64Typ,
+
+			input:    []int64{9, 8, 7, 6, 5, 4, 3, 2, 1, 0},
+			inputNsp: nil,
+			expected: []uint64{10},
+
+			mergeInput:  []int64{0, 1, 2, 3, 4, 5, 6, 7, 8, 9},
+			mergeNsp:    nil,
+			mergeExpect: []uint64{10},
+
+			testMarshal: false,
+		},
+		{
+			op:         agg.AggregateApproxCountDistinct,
+			isDistinct: false,
+			inputTyp:   decimal128Typ,
+
+			input:    []int64{9, 8, 7, 6, 5, 4, 3, 2, 1, 0},
+			inputNsp: nil,
+			expected: []uint64{10},
+
+			mergeInput:  []int64{0, 1, 2, 3, 4, 5, 6, 7, 8, 9},
+			mergeNsp:    nil,
+			mergeExpect: []uint64{10},
+
+			testMarshal: true,
+		},
+		{
+			op:         agg.AggregateApproxCountDistinct,
+			isDistinct: true,
+			inputTyp:   decimal128Typ,
+
+			input:    []int64{9, 8, 7, 6, 5, 4, 3, 2, 1, 0},
+			inputNsp: nil,
+			expected: []uint64{10},
+
+			mergeInput:  []int64{0, 1, 2, 3, 4, 5, 6, 7, 8, 9},
+			mergeNsp:    nil,
+			mergeExpect: []uint64{10},
+
+			testMarshal: false,
+		},
 	}
-	vec.Free(m)
-	vec2.Free(m)
-	require.Equal(t, int64(0), m.Size())
+
+	RunTest(t, testCases)
 }

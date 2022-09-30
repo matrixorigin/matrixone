@@ -15,11 +15,12 @@
 package momath
 
 import (
+	"math"
+	"testing"
+
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
-	"math"
-	"testing"
 )
 
 func TestLn(t *testing.T) {
@@ -140,4 +141,20 @@ func TestAtan(t *testing.T) {
 	}
 	cols := vector.MustTCols[float64](cv)
 	require.Equal(t, []float64{0}, cols)
+}
+
+func TestAtanWithTwoArg(t *testing.T) {
+	firstCol := []float64{-1, 1, 1, 1, 1.0, 1.0}
+	secondCol := []float64{1, 0, -1, 1, -1.0, 1.0}
+	resultCol := make([]float64, 6)
+	firstVec := testutil.MakeFloat64Vector(firstCol, nil)
+	secondVec := testutil.MakeFloat64Vector(secondCol, nil)
+	resultVector := testutil.MakeFloat64Vector(resultCol, nil)
+	err := AtanWithTwoArg(firstVec, secondVec, resultVector)
+	if err != nil {
+		panic(err)
+	}
+	cols := vector.MustTCols[float64](resultVector)
+	require.Equal(t, []float64{-0.7853981633974483, 0, -0.7853981633974483, 0.7853981633974483, -0.7853981633974483, 0.7853981633974483}, cols)
+
 }

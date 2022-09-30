@@ -39,6 +39,7 @@ type Future struct {
 		sync.Mutex
 		closed bool
 		ref    int
+		cb     func()
 	}
 }
 
@@ -73,6 +74,9 @@ func (f *Future) Close() {
 	defer f.mu.Unlock()
 
 	f.mu.closed = true
+	if f.mu.cb != nil {
+		f.mu.cb()
+	}
 	f.maybeReleaseLocked()
 }
 
@@ -82,7 +86,7 @@ func (f *Future) maybeReleaseLocked() {
 	}
 }
 
-func (f *Future) done(response Message) {
+func (f *Future) done(response Message, cb func()) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
@@ -90,7 +94,7 @@ func (f *Future) done(response Message) {
 		if response.GetID() != f.id {
 			return
 		}
-
+		f.mu.cb = cb
 		f.c <- response
 	}
 }
@@ -120,6 +124,7 @@ func (f *Future) reset() {
 	case <-f.c:
 	default:
 	}
+	f.mu.cb = nil
 }
 
 func (f *Future) timeout() bool {

@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/cnservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
+	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/dnservice"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper"
@@ -35,7 +36,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	logpb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 )
 
 var (
@@ -77,15 +80,15 @@ type ClusterOperation interface {
 	// StartLogServiceIndexed starts log service by its index.
 	StartLogServiceIndexed(index int) error
 
-	// CloseCnService closes log service by uuid.
-	CloseCnService(uuid string) error
-	// StartCnService starts log service by uuid.
-	StartCnService(uuid string) error
+	// CloseCNService closes cn service by uuid.
+	CloseCNService(uuid string) error
+	// StartCNService starts cn service by uuid.
+	StartCNService(uuid string) error
 
-	// CloseCnServiceIndexed closes log service by its index.
-	CloseCnServiceIndexed(index int) error
-	// StartCnServiceIndexed starts log service by its index.
-	StartCnServiceIndexed(index int) error
+	// CloseCNServiceIndexed closes cn service by its index.
+	CloseCNServiceIndexed(index int) error
+	// StartCNServiceIndexed starts cn service by its index.
+	StartCNServiceIndexed(index int) error
 
 	// NewNetworkPartition constructs network partition from service index.
 	NewNetworkPartition(dnIndexes, logIndexes, cnIndexes []uint32) NetworkPartition
@@ -210,9 +213,11 @@ type ClusterWaitState interface {
 
 // testCluster simulates a cluster with dn and log service.
 type testCluster struct {
-	t      *testing.T
-	opt    Options
-	logger *zap.Logger
+	t       *testing.T
+	opt     Options
+	logger  *zap.Logger
+	stopper *stopper.Stopper
+	clock   clock.Clock
 
 	dn struct {
 		sync.Mutex
@@ -257,12 +262,18 @@ func NewCluster(t *testing.T, opt Options) (Cluster, error) {
 	opt.validate()
 
 	c := &testCluster{
-		t:   t,
-		opt: opt,
+		t:       t,
+		opt:     opt,
+		stopper: stopper.NewStopper("test-cluster"),
 	}
 	c.logger = logutil.Adjust(c.logger).With(
 		zap.String("tests", "service"),
 	)
+
+	if c.clock == nil {
+		c.clock = clock.NewUnixNanoHLCClockWithStopper(c.stopper, time.Millisecond*500)
+	}
+	clock.SetupDefaultClock(c.clock)
 
 	// build addresses for all services
 	c.network.addresses = c.buildServiceAddresses()
@@ -299,8 +310,13 @@ func (c *testCluster) Start() error {
 		return err
 	}
 
-	if err := c.startCNServices(); err != nil {
-		return err
+	if c.opt.initial.cnServiceNum != 0 {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+		defer cancel()
+		c.WaitDNShardsReported(ctx)
+		if err := c.startCNServices(); err != nil {
+			return err
+		}
 	}
 
 	c.mu.running = true
@@ -330,6 +346,7 @@ func (c *testCluster) Close() error {
 	}
 
 	c.mu.running = false
+	c.stopper.Stop()
 	return nil
 }
 
@@ -1015,7 +1032,7 @@ func (c *testCluster) StartLogServiceIndexed(index int) error {
 	return ls.Start()
 }
 
-func (c *testCluster) CloseCnService(uuid string) error {
+func (c *testCluster) CloseCNService(uuid string) error {
 	cs, err := c.GetCNService(uuid)
 	if err != nil {
 		return err
@@ -1023,7 +1040,7 @@ func (c *testCluster) CloseCnService(uuid string) error {
 	return cs.Close()
 }
 
-func (c *testCluster) StartCnService(uuid string) error {
+func (c *testCluster) StartCNService(uuid string) error {
 	cs, err := c.GetCNService(uuid)
 	if err != nil {
 		return err
@@ -1031,7 +1048,7 @@ func (c *testCluster) StartCnService(uuid string) error {
 	return cs.Start()
 }
 
-func (c *testCluster) CloseCnServiceIndexed(index int) error {
+func (c *testCluster) CloseCNServiceIndexed(index int) error {
 	cs, err := c.GetCNServiceIndexed(index)
 	if err != nil {
 		return err
@@ -1039,7 +1056,7 @@ func (c *testCluster) CloseCnServiceIndexed(index int) error {
 	return cs.Close()
 }
 
-func (c *testCluster) StartCnServiceIndexed(index int) error {
+func (c *testCluster) StartCNServiceIndexed(index int) error {
 	cs, err := c.GetCNServiceIndexed(index)
 	if err != nil {
 		return err
@@ -1090,7 +1107,7 @@ func (c *testCluster) buildServiceAddresses() serviceAddresses {
 
 // buildFileServices builds all file services.
 func (c *testCluster) buildFileServices() *fileServices {
-	return newFileServices(c.t, c.opt.initial.dnServiceNum)
+	return newFileServices(c.t, c.opt.initial.dnServiceNum, c.opt.initial.cnServiceNum)
 }
 
 // buildDnConfigs builds configurations for all dn services.
@@ -1134,7 +1151,7 @@ func (c *testCluster) buildLogConfigs(
 func (c *testCluster) buildCNConfigs(
 	address serviceAddresses,
 ) ([]*cnservice.Config, []cnOptions) {
-	batch := c.opt.initial.dnServiceNum
+	batch := c.opt.initial.cnServiceNum
 
 	cfgs := make([]*cnservice.Config, 0, batch)
 	opts := make([]cnOptions, 0, batch)
@@ -1162,7 +1179,7 @@ func (c *testCluster) initDNServices(fileservices *fileServices) []DNService {
 		opt := c.dn.opts[i]
 		fs, err := fileservice.NewFileServices(
 			"LOCAL",
-			fileservices.getLocalFileService(i),
+			fileservices.getDNLocalFileService(i),
 			fileservices.getS3FileService(),
 		)
 		if err != nil {
@@ -1194,7 +1211,7 @@ func (c *testCluster) initLogServices() []LogService {
 	for i := 0; i < batch; i++ {
 		cfg := c.log.cfgs[i]
 		opt := c.log.opts[i]
-		ls, err := newLogService(cfg, testutil.NewFS(), testutil.NewTaskService(), opt)
+		ls, err := newLogService(cfg, testutil.NewFS(), taskservice.NewTaskService(c.opt.task.taskStorage, nil), opt)
 		require.NoError(c.t, err)
 
 		c.logger.Info(
@@ -1219,7 +1236,7 @@ func (c *testCluster) initCNServices(fileservices *fileServices) []CNService {
 		opt := c.cn.opts[i]
 		fs, err := fileservice.NewFileServices(
 			"LOCAL",
-			fileservices.getLocalFileService(i),
+			fileservices.getCNLocalFileService(i),
 			fileservices.getS3FileService(),
 		)
 		if err != nil {

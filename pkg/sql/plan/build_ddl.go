@@ -17,12 +17,14 @@ package plan
 import (
 	"encoding/json"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/operator"
+	"github.com/matrixorigin/matrixone/pkg/sql/util"
 )
 
 func buildCreateView(stmt *tree.CreateView, ctx CompilerContext) (*Plan, error) {
@@ -56,7 +58,7 @@ func buildCreateView(stmt *tree.CreateView, ctx CompilerContext) (*Plan, error) 
 			Alg:  plan.CompressType_Lz4,
 			Typ:  expr.Typ,
 			Default: &plan.Default{
-				NullAbility:  false,
+				NullAbility:  true,
 				Expr:         nil,
 				OriginString: "",
 			},
@@ -293,8 +295,8 @@ func buildTableDefs(defs tree.TableDefs, ctx CompilerContext, tableDef *TableDef
 
 				if _, ok := attr.(*tree.AttributeAutoIncrement); ok {
 					auto_incr = true
-					if colType.GetId() != int32(types.T_int32) && colType.GetId() != int32(types.T_int64) {
-						return moerr.NewNotSupported("auto_incr column type is not int32/int64")
+					if !operator.IsInteger(types.T(colType.GetId())) {
+						return moerr.NewNotSupported("the auto_incr column is only support integer type now")
 					}
 				}
 			}
@@ -385,13 +387,37 @@ func buildTableDefs(defs tree.TableDefs, ctx CompilerContext, tableDef *TableDef
 	}
 
 	if len(primaryKeys) > 0 {
-		tableDef.Defs = append(tableDef.Defs, &plan.TableDef_DefType{
-			Def: &plan.TableDef_DefType_Pk{
-				Pk: &plan.PrimaryKeyDef{
-					Names: primaryKeys,
+		if len(primaryKeys) == 1 {
+			tableDef.Defs = append(tableDef.Defs, &plan.TableDef_DefType{
+				Def: &plan.TableDef_DefType_Pk{
+					Pk: &plan.PrimaryKeyDef{
+						Names: primaryKeys,
+					},
 				},
-			},
-		})
+			})
+		} else {
+			cPkeyName := util.BuildCompositePrimaryKeyColumnName(primaryKeys)
+			tableDef.Cols = append(tableDef.Cols, &ColDef{
+				Name: cPkeyName,
+				Alg:  plan.CompressType_Lz4,
+				Typ: &Type{
+					Id:   int32(types.T_varchar),
+					Size: types.VarlenaSize,
+				},
+				Default: &plan.Default{
+					NullAbility:  false,
+					Expr:         nil,
+					OriginString: "",
+				},
+			})
+			tableDef.Defs = append(tableDef.Defs, &plan.TableDef_DefType{
+				Def: &plan.TableDef_DefType_Pk{
+					Pk: &plan.PrimaryKeyDef{
+						Names: []string{cPkeyName},
+					},
+				},
+			})
+		}
 	}
 
 	// check index invalid on the type

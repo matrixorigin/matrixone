@@ -16,9 +16,10 @@ package types
 
 import (
 	"fmt"
+	"testing"
+
 	"github.com/smartystreets/goconvey/convey"
 	"github.com/stretchr/testify/require"
-	"testing"
 )
 
 func TestParseUuid(t *testing.T) {

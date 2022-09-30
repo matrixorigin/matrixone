@@ -1,4 +1,4 @@
-// Copyright 2021 Matrix Origin
+// Copyright 2022 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -16,9 +16,10 @@ package logutil
 
 import (
 	"fmt"
+	"testing"
+
 	"github.com/lni/dragonboat/v4/logger"
 	"github.com/stretchr/testify/require"
-	"testing"
 )
 
 func init() {

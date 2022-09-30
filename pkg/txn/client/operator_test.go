@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
+	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/stretchr/testify/assert"
 	"go.uber.org/zap"
@@ -342,7 +343,9 @@ func TestApplySnapshotTxnOperator(t *testing.T) {
 
 func runOperatorTests(t *testing.T, tc func(context.Context, *txnOperator, *testTxnSender), options ...TxnOption) {
 	ts := newTestTxnSender()
-	c := NewTxnClient(ts, WithLogger(logutil.GetPanicLoggerWithLevel(zap.DebugLevel)))
+	c := NewTxnClient(ts,
+		WithLogger(logutil.GetPanicLoggerWithLevel(zap.DebugLevel)),
+		WithClock(clock.NewHLCClock(func() int64 { return time.Now().UTC().UnixNano() }, time.Millisecond*400)))
 	txn, err := c.New(options...)
 	assert.Nil(t, err)
 	ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond)

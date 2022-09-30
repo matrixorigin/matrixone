@@ -262,6 +262,17 @@ func TestOpRightShiftGeneral(t *testing.T) {
 		},
 
 		{
+			info: "2 >> -2", proc: testutil.NewProc(),
+			vs: []*vector.Vector{
+				testutil.MakeScalarInt64(2, 1),
+				testutil.MakeScalarInt64(-2, 1),
+			},
+			match:  true,
+			err:    false,
+			expect: testutil.MakeScalarInt64(0, 1),
+		},
+
+		{
 			info: "null >> 2", proc: testutil.NewProc(),
 			vs: []*vector.Vector{
 				testutil.MakeScalarNull(types.T_any, 1),
@@ -330,6 +341,17 @@ func TestOpLeftShiftGeneral(t *testing.T) {
 			match:  true,
 			err:    false,
 			expect: testutil.MakeScalarInt64(-4, 1),
+		},
+
+		{
+			info: "2 << -2", proc: testutil.NewProc(),
+			vs: []*vector.Vector{
+				testutil.MakeScalarInt64(2, 1),
+				testutil.MakeScalarInt64(-2, 1),
+			},
+			match:  true,
+			err:    false,
+			expect: testutil.MakeScalarInt64(0, 1),
 		},
 
 		{

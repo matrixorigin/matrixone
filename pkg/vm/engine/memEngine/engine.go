@@ -16,9 +16,9 @@ package memEngine
 
 import (
 	"context"
-	"fmt"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -58,7 +58,7 @@ func (e *MemEngine) Databases(_ context.Context, _ client.TxnOperator) ([]string
 
 func (e *MemEngine) Database(_ context.Context, name string, _ client.TxnOperator) (engine.Database, error) {
 	if name != "test" {
-		return nil, fmt.Errorf("database '%s' not exist", name)
+		return nil, moerr.NewInternalError("database '%s' not exist", name)
 	}
 	return &database{db: e.db, n: e.n}, nil
 }

@@ -15,11 +15,11 @@
 package hashmap
 
 import (
-	"fmt"
 	"math/rand"
 	"strconv"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -263,7 +263,7 @@ func newVector(n int, typ types.Type, m *mheap.Mheap, random bool, Values interf
 		}
 		return newStringVector(n, typ, m, random, nil)
 	default:
-		panic(fmt.Errorf("unsupport vector's type '%v", typ))
+		panic(moerr.NewInternalError("unsupport vector's type '%v", typ))
 	}
 }
 

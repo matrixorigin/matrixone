@@ -59,8 +59,9 @@ func NewCommittedAppendNode(
 	mvcc *MVCCHandle) *AppendNode {
 	return &AppendNode{
 		TxnMVCCNode: &txnbase.TxnMVCCNode{
-			Start: ts,
-			End:   ts,
+			Start:   ts,
+			Prepare: ts,
+			End:     ts,
 		},
 		startRow: startRow,
 		maxRow:   maxRow,
@@ -72,15 +73,17 @@ func NewAppendNode(
 	txn txnif.AsyncTxn,
 	startRow, maxRow uint32,
 	mvcc *MVCCHandle) *AppendNode {
-	var ts types.TS
+	var startTs, ts types.TS
 	if txn != nil {
-		ts = txn.GetCommitTS()
+		startTs = txn.GetStartTS()
+		ts = txn.GetPrepareTS()
 	}
 	n := &AppendNode{
 		TxnMVCCNode: &txnbase.TxnMVCCNode{
-			Start: ts,
-			End:   ts,
-			Txn:   txn,
+			Start:   startTs,
+			Prepare: ts,
+			End:     txnif.UncommitTS,
+			Txn:     txn,
 		},
 		startRow: startRow,
 		maxRow:   maxRow,
@@ -93,6 +96,9 @@ func NewEmptyAppendNode() txnbase.MVCCNode {
 	return &AppendNode{
 		TxnMVCCNode: &txnbase.TxnMVCCNode{},
 	}
+}
+func (node *AppendNode) String() string {
+	return node.GeneralDesc()
 }
 func (node *AppendNode) CloneAll() txnbase.MVCCNode {
 	panic("todo")
@@ -142,8 +148,8 @@ func (node *AppendNode) SetMaxRow(row uint32) {
 }
 
 func (node *AppendNode) PrepareCommit() error {
-	node.Lock()
-	defer node.Unlock()
+	node.mvcc.Lock()
+	defer node.mvcc.Unlock()
 	_, err := node.TxnMVCCNode.PrepareCommit()
 	return err
 }
@@ -231,6 +237,13 @@ func (node *AppendNode) PrepareRollback() (err error) {
 func (node *AppendNode) MakeCommand(id uint32) (cmd txnif.TxnCmd, err error) {
 	cmd = NewAppendCmd(id, node)
 	return
+}
+
+func (node *AppendNode) Set1PC() {
+	node.TxnMVCCNode.Set1PC()
+}
+func (node *AppendNode) Is1PC() bool {
+	return node.TxnMVCCNode.Is1PC()
 }
 func (node *AppendNode) GetEnd() types.TS {
 	node.RLock()

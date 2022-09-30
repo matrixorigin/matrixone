@@ -239,10 +239,8 @@ func convertValueIntoBool(name string, args []*Expr, isLogic bool) error {
 			case *plan.Const_Ival:
 				if value.Ival == 0 {
 					ex.C.Value = &plan.Const_Bval{Bval: false}
-				} else if value.Ival == 1 {
-					ex.C.Value = &plan.Const_Bval{Bval: true}
 				} else {
-					return moerr.NewInvalidInput("cannot cast %v to boolean", value.Ival)
+					ex.C.Value = &plan.Const_Bval{Bval: true}
 				}
 				arg.Typ.Id = int32(types.T_bool)
 			}
@@ -258,11 +256,11 @@ func getFunctionObjRef(funcID int64, name string) *ObjectRef {
 	}
 }
 
-func getDefaultExpr(d *plan.Default, typ *plan.Type) (*Expr, error) {
-	if !d.NullAbility && d.Expr == nil {
+func getDefaultExpr(d *plan.ColDef) (*Expr, error) {
+	if !d.Default.NullAbility && d.Default.Expr == nil && !d.AutoIncrement {
 		return nil, moerr.NewInvalidInput("invalid default value")
 	}
-	if d.Expr == nil {
+	if d.Default.Expr == nil {
 		return &Expr{
 			Expr: &plan.Expr_C{
 				C: &Const{
@@ -270,10 +268,10 @@ func getDefaultExpr(d *plan.Default, typ *plan.Type) (*Expr, error) {
 				},
 			},
 			Typ: &plan.Type{
-				Id:       typ.Id,
+				Id:       d.Typ.Id,
 				Nullable: true,
 			},
 		}, nil
 	}
-	return d.Expr, nil
+	return d.Default.Expr, nil
 }

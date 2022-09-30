@@ -15,7 +15,7 @@
 package txnimpl
 
 import (
-	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
@@ -115,14 +115,14 @@ func (db *txnDatabase) DropRelationByName(name string) (rel handle.Relation, err
 func (db *txnDatabase) TruncateByName(name string) (rel handle.Relation, err error) {
 	old, err := db.DropRelationByName(name)
 	if err != nil {
-		err = fmt.Errorf("%w: truncate %s error", err, name)
+		err = moerr.NewInternalError("%v: truncate %s error", err, name)
 		return
 	}
 	meta := old.GetMeta().(*catalog.TableEntry)
 	schema := meta.GetSchema().Clone()
 	rel, err = db.CreateRelation(schema)
 	if err != nil {
-		err = fmt.Errorf("%w: truncate %s error", err, name)
+		err = moerr.NewInternalError("%v: truncate %s error", err, name)
 	}
 	return
 }

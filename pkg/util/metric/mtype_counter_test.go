@@ -76,7 +76,7 @@ func TestRateCounterVec(t *testing.T) {
 	factory := newRateCounterVec(CounterOpts{
 		Subsystem: "test",
 		Name:      "rate_counter",
-	}, []string{"zzz", "aaa"})
+	}, []string{"zzz", "aaa"}, true)
 
 	require.Panics(t, func() { factory.WithLabelValues("12") })
 

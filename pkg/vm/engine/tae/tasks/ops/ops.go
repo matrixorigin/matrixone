@@ -15,9 +15,9 @@
 package ops
 
 import (
-	"errors"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	iops "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks/ops/base"
 	iworker "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks/worker/base"
 )
@@ -34,7 +34,7 @@ func NewOp(impl iops.IOpInternal, w iworker.IOpWorker) *Op {
 func (op *Op) Push() error {
 	r := op.Worker.SendOp(op)
 	if !r {
-		return errors.New("send op error")
+		return moerr.NewInternalError("send op error")
 	}
 	return nil
 }

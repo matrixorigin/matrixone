@@ -15,8 +15,7 @@
 package parsers
 
 import (
-	"errors"
-
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/postgresql"
@@ -30,7 +29,7 @@ func Parse(dialectType dialect.DialectType, sql string) ([]tree.Statement, error
 	case dialect.POSTGRESQL:
 		return postgresql.Parse(sql)
 	default:
-		return nil, errors.New("type of dialect error")
+		return nil, moerr.NewInternalError("type of dialect error")
 	}
 }
 
@@ -41,6 +40,6 @@ func ParseOne(dialectType dialect.DialectType, sql string) (tree.Statement, erro
 	case dialect.POSTGRESQL:
 		return postgresql.ParseOne(sql)
 	default:
-		return nil, errors.New("type of dialect error")
+		return nil, moerr.NewInternalError("type of dialect error")
 	}
 }

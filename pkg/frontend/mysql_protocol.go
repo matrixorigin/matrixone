@@ -22,6 +22,7 @@ import (
 	"math"
 	"math/rand"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 	"unicode"
@@ -378,7 +379,7 @@ func (mp *MysqlProtocolImpl) SendPrepareResponse(stmt *PrepareStmt) error {
 	}
 	paramTypes := dcPrepare.Prepare.ParamTypes
 	numParams := len(paramTypes)
-	columns := plan2.GetResultColumnsFromPlan(stmt.PreparePlan)
+	columns := plan2.GetResultColumnsFromPlan(dcPrepare.Prepare.Plan)
 	numColumns := len(columns)
 
 	var data []byte
@@ -466,10 +467,7 @@ func (mp *MysqlProtocolImpl) ParseExecuteData(stmt *PrepareStmt, data []byte, po
 	pos += 4
 
 	if numParams > 0 {
-		var (
-			nullBitmaps []byte
-			paramValues []byte
-		)
+		var nullBitmaps []byte
 		nullBitmapLen := (numParams + 7) >> 3
 		nullBitmaps, pos, ok = mp.readCountOfBytes(data, pos, nullBitmapLen)
 		if !ok {
@@ -612,7 +610,6 @@ func (mp *MysqlProtocolImpl) ParseExecuteData(stmt *PrepareStmt, data []byte, po
 				vars[i] = []byte(val)
 
 			case defines.MYSQL_TYPE_DATE, defines.MYSQL_TYPE_DATETIME, defines.MYSQL_TYPE_TIMESTAMP:
-				// Not tested
 				// See https://dev.mysql.com/doc/internals/en/binary-protocol-value.html
 				// for more details.
 				length, newPos, ok := mp.io.ReadUint8(data, pos)
@@ -625,11 +622,11 @@ func (mp *MysqlProtocolImpl) ParseExecuteData(stmt *PrepareStmt, data []byte, po
 				case 0:
 					vars[i] = "0000-00-00 00:00:00"
 				case 4:
-					pos, vars[i] = mp.readDate(paramValues, pos)
+					pos, vars[i] = mp.readDate(data, pos)
 				case 7:
-					pos, vars[i] = mp.readDateTime(paramValues, pos)
+					pos, vars[i] = mp.readDateTime(data, pos)
 				case 11:
-					pos, vars[i] = mp.readTimestamp(paramValues, pos)
+					pos, vars[i] = mp.readTimestamp(data, pos)
 				default:
 					err = moerr.NewInvalidInput("mysql protocol error, malformed packet")
 					return
@@ -991,7 +988,7 @@ func (mp *MysqlProtocolImpl) authenticateUser(authResponse []byte) error {
 		if mp.checkPassword(psw, mp.salt, authResponse) {
 			logutil.Infof("check password succeeded\n")
 		} else {
-			return fmt.Errorf("check password failed")
+			return moerr.NewInternalError("check password failed")
 		}
 	} else {
 		//Get tenant info
@@ -1007,7 +1004,7 @@ func (mp *MysqlProtocolImpl) authenticateUser(authResponse []byte) error {
 			if len(psw) == 0 || mp.checkPassword(psw, mp.salt, authResponse) {
 				logutil.Infof("check password succeeded\n")
 			} else {
-				return fmt.Errorf("check password failed")
+				return moerr.NewInternalError("check password failed")
 			}
 		}
 	}
@@ -1021,12 +1018,12 @@ func (mp *MysqlProtocolImpl) setSequenceID(value uint8) {
 
 func (mp *MysqlProtocolImpl) handleHandshake(payload []byte) (bool, error) {
 	if len(payload) < 2 {
-		return false, fmt.Errorf("received a broken response packet")
+		return false, moerr.NewInternalError("received a broken response packet")
 	}
 
 	var authResponse []byte
 	if capabilities, _, ok := mp.io.ReadUint16(payload, 0); !ok {
-		return false, fmt.Errorf("read capabilities from response packet failed")
+		return false, moerr.NewInternalError("read capabilities from response packet failed")
 	} else if uint32(capabilities)&CLIENT_PROTOCOL_41 != 0 {
 		var resp41 response41
 		var ok bool
@@ -1044,7 +1041,7 @@ func (mp *MysqlProtocolImpl) handleHandshake(payload []byte) (bool, error) {
 		mp.capability = mp.capability & resp41.capabilities
 
 		if nameAndCharset, ok := collationID2CharsetAndName[int(resp41.collationID)]; !ok {
-			return false, fmt.Errorf("get collationName and charset failed")
+			return false, moerr.NewInternalError("get collationName and charset failed")
 		} else {
 			mp.collationID = int(resp41.collationID)
 			mp.collationName = nameAndCharset.collationName
@@ -1160,29 +1157,29 @@ func (mp *MysqlProtocolImpl) analyseHandshakeResponse41(data []byte) (bool, resp
 	//int<4>             capabilities flags of the client, CLIENT_PROTOCOL_41 always set
 	info.capabilities, pos, ok = mp.io.ReadUint32(data, pos)
 	if !ok {
-		return false, info, fmt.Errorf("get capabilities failed")
+		return false, info, moerr.NewInternalError("get capabilities failed")
 	}
 
 	if (info.capabilities & CLIENT_PROTOCOL_41) == 0 {
-		return false, info, fmt.Errorf("capabilities does not have protocol 41")
+		return false, info, moerr.NewInternalError("capabilities does not have protocol 41")
 	}
 
 	//int<4>             max-packet size
 	//max size of a command packet that the client wants to send to the server
 	info.maxPacketSize, pos, ok = mp.io.ReadUint32(data, pos)
 	if !ok {
-		return false, info, fmt.Errorf("get max packet size failed")
+		return false, info, moerr.NewInternalError("get max packet size failed")
 	}
 
 	//int<1>             character set
 	//connection's default character set
 	info.collationID, pos, ok = mp.io.ReadUint8(data, pos)
 	if !ok {
-		return false, info, fmt.Errorf("get character set failed")
+		return false, info, moerr.NewInternalError("get character set failed")
 	}
 
 	if pos+22 >= len(data) {
-		return false, info, fmt.Errorf("skip reserved failed")
+		return false, info, moerr.NewInternalError("skip reserved failed")
 	}
 	//string[23]         reserved (all [0])
 	//just skip it
@@ -1197,7 +1194,7 @@ func (mp *MysqlProtocolImpl) analyseHandshakeResponse41(data []byte) (bool, resp
 	//string[NUL]        username
 	info.username, pos, ok = mp.readStringNUL(data, pos)
 	if !ok {
-		return false, info, fmt.Errorf("get username failed")
+		return false, info, moerr.NewInternalError("get username failed")
 	}
 
 	/*
@@ -1215,27 +1212,27 @@ func (mp *MysqlProtocolImpl) analyseHandshakeResponse41(data []byte) (bool, resp
 		var l uint64
 		l, pos, ok = mp.readIntLenEnc(data, pos)
 		if !ok {
-			return false, info, fmt.Errorf("get length of auth-response failed")
+			return false, info, moerr.NewInternalError("get length of auth-response failed")
 		}
 		info.authResponse, pos, ok = mp.readCountOfBytes(data, pos, int(l))
 		if !ok {
-			return false, info, fmt.Errorf("get auth-response failed")
+			return false, info, moerr.NewInternalError("get auth-response failed")
 		}
 	} else if (info.capabilities & CLIENT_SECURE_CONNECTION) != 0 {
 		var l uint8
 		l, pos, ok = mp.io.ReadUint8(data, pos)
 		if !ok {
-			return false, info, fmt.Errorf("get length of auth-response failed")
+			return false, info, moerr.NewInternalError("get length of auth-response failed")
 		}
 		info.authResponse, pos, ok = mp.readCountOfBytes(data, pos, int(l))
 		if !ok {
-			return false, info, fmt.Errorf("get auth-response failed")
+			return false, info, moerr.NewInternalError("get auth-response failed")
 		}
 	} else {
 		var auth string
 		auth, pos, ok = mp.readStringNUL(data, pos)
 		if !ok {
-			return false, info, fmt.Errorf("get auth-response failed")
+			return false, info, moerr.NewInternalError("get auth-response failed")
 		}
 		info.authResponse = []byte(auth)
 	}
@@ -1243,21 +1240,21 @@ func (mp *MysqlProtocolImpl) analyseHandshakeResponse41(data []byte) (bool, resp
 	if (info.capabilities & CLIENT_CONNECT_WITH_DB) != 0 {
 		info.database, pos, ok = mp.readStringNUL(data, pos)
 		if !ok {
-			return false, info, fmt.Errorf("get database failed")
+			return false, info, moerr.NewInternalError("get database failed")
 		}
 	}
 
 	if (info.capabilities & CLIENT_PLUGIN_AUTH) != 0 {
 		info.clientPluginName, _, ok = mp.readStringNUL(data, pos)
 		if !ok {
-			return false, info, fmt.Errorf("get auth plugin name failed")
+			return false, info, moerr.NewInternalError("get auth plugin name failed")
 		}
 
 		//to switch authenticate method
 		if info.clientPluginName != AuthNativePassword {
 			var err error
 			if info.authResponse, err = mp.negotiateAuthenticationMethod(); err != nil {
-				return false, info, fmt.Errorf("negotiate authentication method failed. error:%v", err)
+				return false, info, moerr.NewInternalError("negotiate authentication method failed. error:%v", err)
 			}
 			info.clientPluginName = AuthNativePassword
 		}
@@ -1283,7 +1280,7 @@ func (mp *MysqlProtocolImpl) handleClientResponse41(resp41 response41) error {
 
 	//character set
 	if nameAndCharset, ok := collationID2CharsetAndName[int(resp41.collationID)]; !ok {
-		return fmt.Errorf("get collationName and charset failed")
+		return moerr.NewInternalError("get collationName and charset failed")
 	} else {
 		mp.collationID = int(resp41.collationID)
 		mp.collationName = nameAndCharset.collationName
@@ -1312,12 +1309,12 @@ func (mp *MysqlProtocolImpl) analyseHandshakeResponse320(data []byte) (bool, res
 	//int<2>             capabilities flags, CLIENT_PROTOCOL_41 never set
 	capa, pos, ok = mp.io.ReadUint16(data, pos)
 	if !ok {
-		return false, info, fmt.Errorf("get capabilities failed")
+		return false, info, moerr.NewInternalError("get capabilities failed")
 	}
 	info.capabilities = uint32(capa)
 
 	if pos+2 >= len(data) {
-		return false, info, fmt.Errorf("get max-packet-size failed")
+		return false, info, moerr.NewInternalError("get max-packet-size failed")
 	}
 
 	//int<3>             max-packet size
@@ -1334,25 +1331,25 @@ func (mp *MysqlProtocolImpl) analyseHandshakeResponse320(data []byte) (bool, res
 	//string[NUL]        username
 	info.username, pos, ok = mp.readStringNUL(data, pos)
 	if !ok {
-		return false, info, fmt.Errorf("get username failed")
+		return false, info, moerr.NewInternalError("get username failed")
 	}
 
 	if (info.capabilities & CLIENT_CONNECT_WITH_DB) != 0 {
 		var auth string
 		auth, pos, ok = mp.readStringNUL(data, pos)
 		if !ok {
-			return false, info, fmt.Errorf("get auth-response failed")
+			return false, info, moerr.NewInternalError("get auth-response failed")
 		}
 		info.authResponse = []byte(auth)
 
 		info.database, _, ok = mp.readStringNUL(data, pos)
 		if !ok {
-			return false, info, fmt.Errorf("get database failed")
+			return false, info, moerr.NewInternalError("get database failed")
 		}
 	} else {
 		info.authResponse, _, ok = mp.readCountOfBytes(data, pos, len(data)-pos)
 		if !ok {
-			return false, info, fmt.Errorf("get auth-response failed")
+			return false, info, moerr.NewInternalError("get auth-response failed")
 		}
 	}
 
@@ -1418,16 +1415,16 @@ func (mp *MysqlProtocolImpl) negotiateAuthenticationMethod() ([]byte, error) {
 	}
 
 	if read == nil {
-		return nil, fmt.Errorf("read nil from tcp conn")
+		return nil, moerr.NewInternalError("read nil from tcp conn")
 	}
 
 	pack, ok := read.(*Packet)
 	if !ok {
-		return nil, fmt.Errorf("it is not the Packet")
+		return nil, moerr.NewInternalError("it is not the Packet")
 	}
 
 	if pack == nil {
-		return nil, fmt.Errorf("packet is null")
+		return nil, moerr.NewInternalError("packet is null")
 	}
 
 	data := pack.Payload
@@ -1497,6 +1494,9 @@ Error information includes several elements: an error code, SQLSTATE value, and 
 	Message string: This string provides a textual description of the error.
 */
 func (mp *MysqlProtocolImpl) sendErrPacket(errorCode uint16, sqlState, errorMessage string) error {
+	if mp.ses != nil {
+		mp.ses.errInfo.push(errorCode, errorMessage)
+	}
 	errPkt := mp.makeErrPayload(errorCode, sqlState, errorMessage)
 	return mp.writePackets(errPkt)
 }
@@ -1603,7 +1603,7 @@ func (mp *MysqlProtocolImpl) makeColumnDefinition41Payload(column *MysqlColumn, 
 func (mp *MysqlProtocolImpl) SendColumnDefinitionPacket(column Column, cmd int) error {
 	mysqlColumn, ok := column.(*MysqlColumn)
 	if !ok {
-		return fmt.Errorf("sendColumn need MysqlColumn")
+		return moerr.NewInternalError("sendColumn need MysqlColumn")
 	}
 
 	var data []byte
@@ -1685,7 +1685,7 @@ func (mp *MysqlProtocolImpl) makeResultSetBinaryRow(data []byte, mrs *MysqlResul
 		}
 		mysqlColumn, ok := column.(*MysqlColumn)
 		if !ok {
-			return nil, fmt.Errorf("sendColumn need MysqlColumn")
+			return nil, moerr.NewInternalError("sendColumn need MysqlColumn")
 		}
 
 		switch mysqlColumn.ColumnType() {
@@ -1745,23 +1745,35 @@ func (mp *MysqlProtocolImpl) makeResultSetBinaryRow(data []byte, mrs *MysqlResul
 				data = mp.appendStringLenEnc(data, value)
 			}
 		case defines.MYSQL_TYPE_DATE:
+			if value, err := mrs.GetValue(rowIdx, i); err != nil {
+				return nil, err
+			} else {
+				data = mp.appendDate(data, value.(types.Date))
+			}
+		case defines.MYSQL_TYPE_DATETIME, defines.MYSQL_TYPE_TIMESTAMP:
 			if value, err := mrs.GetString(rowIdx, i); err != nil {
 				return nil, err
 			} else {
-				data = mp.appendStringLenEnc(data, value)
+				var dt types.Datetime
+				var err error
+				idx := strings.Index(value, ".")
+				if idx == -1 {
+					dt, err = types.ParseDatetime(value, 0)
+				} else {
+					dt, err = types.ParseDatetime(value, int32(len(value)-idx-1))
+				}
+				if err != nil {
+					data = mp.appendStringLenEnc(data, value)
+				} else {
+					data = mp.appendDatetime(data, dt)
+				}
 			}
-		case defines.MYSQL_TYPE_DATETIME:
-			if value, err := mrs.GetString(rowIdx, i); err != nil {
-				return nil, err
-			} else {
-				data = mp.appendStringLenEnc(data, value)
-			}
-		case defines.MYSQL_TYPE_TIMESTAMP:
-			if value, err := mrs.GetString(rowIdx, i); err != nil {
-				return nil, err
-			} else {
-				data = mp.appendStringLenEnc(data, value)
-			}
+		// case defines.MYSQL_TYPE_TIMESTAMP:
+		// 	if value, err := mrs.GetString(rowIdx, i); err != nil {
+		// 		return nil, err
+		// 	} else {
+		// 		data = mp.appendStringLenEnc(data, value)
+		// 	}
 		default:
 			return nil, moerr.NewInternalError("type is not supported in binary text result row")
 		}
@@ -1779,7 +1791,7 @@ func (mp *MysqlProtocolImpl) makeResultSetTextRow(data []byte, mrs *MysqlResultS
 		}
 		mysqlColumn, ok := column.(*MysqlColumn)
 		if !ok {
-			return nil, fmt.Errorf("sendColumn need MysqlColumn")
+			return nil, moerr.NewInternalError("sendColumn need MysqlColumn")
 		}
 
 		if isNil, err1 := mrs.ColumnIsNull(r, i); err1 != nil {
@@ -1880,10 +1892,10 @@ func (mp *MysqlProtocolImpl) makeResultSetTextRow(data []byte, mrs *MysqlResultS
 				data = mp.appendStringLenEnc(data, value)
 			}
 		case defines.MYSQL_TYPE_TIME:
-			return nil, fmt.Errorf("unsupported MYSQL_TYPE_TIME")
+			return nil, moerr.NewInternalError("unsupported MYSQL_TYPE_TIME")
 
 		default:
-			return nil, fmt.Errorf("unsupported column type %d ", mysqlColumn.ColumnType())
+			return nil, moerr.NewInternalError("unsupported column type %d ", mysqlColumn.ColumnType())
 		}
 	}
 	return data, nil
@@ -2046,7 +2058,7 @@ func (mp *MysqlProtocolImpl) fillPacket(elems ...byte) error {
 		curLen = int(MaxPayloadSize) - hasDataLen
 		curLen = Min(curLen, n-i)
 		if curLen < 0 {
-			return fmt.Errorf("needLen %d < 0. hasDataLen %d n - i %d", curLen, hasDataLen, n-i)
+			return moerr.NewInternalError("needLen %d < 0. hasDataLen %d n - i %d", curLen, hasDataLen, n-i)
 		}
 		outbuf.Grow(curLen)
 		buf = outbuf.RawBuf()
@@ -2091,7 +2103,7 @@ func (mp *MysqlProtocolImpl) closePacket(appendZeroPacket bool) error {
 		logutil.Infof("closePacket curWriteIdx %d\n", outbuf.GetWriteIndex())
 	}
 	if payLoadLen < 0 || payLoadLen > int(MaxPayloadSize) {
-		return fmt.Errorf("invalid payload len :%d curWriteIdx %d beginWriteIdx %d ",
+		return moerr.NewInternalError("invalid payload len :%d curWriteIdx %d beginWriteIdx %d ",
 			payLoadLen, outbuf.GetWriteIndex(), mp.beginWriteIndex)
 	}
 
@@ -2129,6 +2141,35 @@ func (mp *MysqlProtocolImpl) append(_ []byte, elems ...byte) []byte {
 	return mp.tcpConn.OutBuf().RawBuf()
 }
 
+func (mp *MysqlProtocolImpl) appendDatetime(data []byte, dt types.Datetime) []byte {
+	if dt.MicroSec() != 0 {
+		data = mp.append(data, 11)
+		data = mp.appendUint16(data, uint16(dt.Year()))
+		data = mp.append(data, dt.Month(), dt.Day(), byte(dt.Hour()), byte(dt.Minute()), byte(dt.Sec()))
+		data = mp.appendUint32(data, uint32(dt.MicroSec()))
+	} else if dt.Hour() != 0 || dt.Minute() != 0 || dt.Sec() != 0 {
+		data = mp.append(data, 7)
+		data = mp.appendUint16(data, uint16(dt.Year()))
+		data = mp.append(data, dt.Month(), dt.Day(), byte(dt.Hour()), byte(dt.Minute()), byte(dt.Sec()))
+	} else {
+		data = mp.append(data, 4)
+		data = mp.appendUint16(data, uint16(dt.Year()))
+		data = mp.append(data, dt.Month(), dt.Day())
+	}
+	return data
+}
+
+func (mp *MysqlProtocolImpl) appendDate(data []byte, value types.Date) []byte {
+	if int32(value) == 0 {
+		data = mp.append(data, 0)
+	} else {
+		data = mp.append(data, 4)
+		data = mp.appendUint16(data, value.Year())
+		data = mp.append(data, value.Month(), value.Day())
+	}
+	return data
+}
+
 // the server send every row of the result set as an independent packet
 // thread safe
 func (mp *MysqlProtocolImpl) SendResultSetTextRow(mrs *MysqlResultSet, r uint64) error {
@@ -2162,7 +2203,7 @@ func (mp *MysqlProtocolImpl) sendResultSetTextRow(mrs *MysqlResultSet, r uint64)
 	//begin2 := time.Now()
 	//err = mp.writePackets(data)
 	//if err != nil {
-	//	return fmt.Errorf("send result set text row failed. error: %v", err)
+	//	return moerr.NewInternalError("send result set text row failed. error: %v", err)
 	//}
 	//mp.sendTime += time.Since(begin2)
 
@@ -2174,7 +2215,7 @@ func (mp *MysqlProtocolImpl) sendResultSetTextRow(mrs *MysqlResultSet, r uint64)
 func (mp *MysqlProtocolImpl) sendResultSet(set ResultSet, cmd int, warnings, status uint16) error {
 	mysqlRS, ok := set.(*MysqlResultSet)
 	if !ok {
-		return fmt.Errorf("sendResultSet need MysqlResultSet")
+		return moerr.NewInternalError("sendResultSet need MysqlResultSet")
 	}
 
 	//A packet containing a Protocol::LengthEncodedInteger column_count
@@ -2270,9 +2311,9 @@ func (mp *MysqlProtocolImpl) recvPartOfPayload() ([]byte, error) {
 	//var header []byte
 	//var err error
 	//if header, err = mp.io.ReadPacket(4); err != nil {
-	//	return nil, fmt.Errorf("read header failed.error:%v", err)
+	//	return nil, moerr.NewInternalError("read header failed.error:%v", err)
 	//} else if header[3] != mp.sequenceId {
-	//	return nil, fmt.Errorf("client sequence id %d != server sequence id %d", header[3], mp.sequenceId)
+	//	return nil, moerr.NewInternalError("client sequence id %d != server sequence id %d", header[3], mp.sequenceId)
 	//}
 
 	mp.sequenceId++
@@ -2280,7 +2321,7 @@ func (mp *MysqlProtocolImpl) recvPartOfPayload() ([]byte, error) {
 
 	var payload []byte
 	//if payload, err = mp.io.ReadPacket(length); err != nil {
-	//	return nil, fmt.Errorf("read payload failed.error:%v", err)
+	//	return nil, moerr.NewInternalError("read payload failed.error:%v", err)
 	//}
 	return payload, nil
 }

@@ -55,6 +55,7 @@ func TestSingleSql(t *testing.T) {
 
 func TestBasicSqlExplain(t *testing.T) {
 	sqls := []string{
+		"explain verbose SELECT N_NAME, N_REGIONKEY a FROM NATION WHERE N_REGIONKEY > 0 ORDER BY a DESC",
 		"explain verbose SELECT N_NAME,N_REGIONKEY, 23 as a FROM NATION",
 		"explain verbose SELECT N_NAME, N_REGIONKEY, 23 as a FROM NATION",
 		"explain SELECT N_NAME, N_REGIONKEY a FROM NATION WHERE N_NATIONKEY > 0 OR N_NATIONKEY < 10",
@@ -187,7 +188,25 @@ func TestDerivedTableQuery(t *testing.T) {
 
 // Collection query
 func TestCollectionQuery(t *testing.T) {
-
+	sqls := []string{
+		"explain verbose select 2 intersect select 2 union all select 22222",
+		"explain verbose select 1 union select 2",
+		"explain verbose select 1 union (select 2 union select 3)",
+		"explain verbose (select 1 union select 2) union select 3 intersect select 4 order by 1",
+		"explain verbose select 1 union select null",
+		"explain verbose select n_name from nation intersect select n_name from nation2",
+		"explain verbose select n_name from nation minus select n_name from nation2",
+		"explain verbose select 1 union select 2 intersect select 2 union all select 1.1 minus select 22222",
+		"explain verbose select 1 as a union select 2 order by a limit 1",
+		"explain verbose select n_name from nation union select n_comment from nation order by n_name",
+		"explain verbose with qn (foo, bar) as (select 1 as col, 2 as coll union select 4, 5) select qn1.bar from qn qn1",
+		"explain verbose select n_name, n_comment from nation union all select n_name, n_comment from nation2",
+		"explain verbose select n_name from nation intersect all select n_name from nation2",
+		"explain verbose SELECT distinct(l.L_ORDERKEY) FROM LINEITEM AS l WHERE l.L_SHIPINSTRUCT='DELIVER IN PERSON' UNION SELECT distinct(l.L_ORDERKEY) FROM LINEITEM AS l WHERE l.L_SHIPMODE='AIR' OR  l.L_SHIPMODE='AIR REG'",
+		"explain verbose SELECT distinct(l.L_ORDERKEY) FROM LINEITEM AS l WHERE l.L_SHIPMODE IN ('AIR','AIR REG') EXCEPT SELECT distinct(l.L_ORDERKEY) FROM LINEITEM AS l WHERE l.L_SHIPINSTRUCT='DELIVER IN PERSON'",
+	}
+	mockOptimizer := plan.NewMockOptimizer()
+	runTestShouldPass(mockOptimizer, t, sqls)
 }
 
 func TestDMLInsert(t *testing.T) {
@@ -205,12 +224,12 @@ func TestDMLInsert(t *testing.T) {
 
 func TestDMLUpdate(t *testing.T) {
 	sqls := []string{
-		//"explain UPDATE NATION SET N_NAME ='U1', N_REGIONKEY=2",
-		//"explain verbose UPDATE NATION SET N_NAME ='U1', N_REGIONKEY=2",
-		//"explain UPDATE NATION SET N_NAME ='U1', N_REGIONKEY=2 WHERE N_NATIONKEY > 10 LIMIT 20",
-		//"explain verbose UPDATE NATION SET N_NAME ='U1', N_REGIONKEY=2 WHERE N_NATIONKEY > 10 LIMIT 20",
-		//"explain UPDATE NATION SET N_NAME ='U1', N_REGIONKEY=N_REGIONKEY+2 WHERE N_NATIONKEY > 10 LIMIT 20",
-		//"explain verbose UPDATE NATION SET N_NAME ='U1', N_REGIONKEY=N_REGIONKEY+2 WHERE N_NATIONKEY > 10 LIMIT 20",
+		"explain UPDATE NATION SET N_NAME ='U1', N_REGIONKEY=2",
+		"explain verbose UPDATE NATION SET N_NAME ='U1', N_REGIONKEY=2",
+		"explain UPDATE NATION SET N_NAME ='U1', N_REGIONKEY=2 WHERE N_NATIONKEY > 10 LIMIT 20",
+		"explain verbose UPDATE NATION SET N_NAME ='U1', N_REGIONKEY=2 WHERE N_NATIONKEY > 10 LIMIT 20",
+		"explain UPDATE NATION SET N_NAME ='U1', N_REGIONKEY=N_REGIONKEY+2 WHERE N_NATIONKEY > 10 LIMIT 20",
+		"explain verbose UPDATE NATION SET N_NAME ='U1', N_REGIONKEY=N_REGIONKEY+2 WHERE N_NATIONKEY > 10 LIMIT 20",
 	}
 	mockOptimizer := plan.NewMockOptimizer()
 	runTestShouldPass(mockOptimizer, t, sqls)
@@ -218,12 +237,16 @@ func TestDMLUpdate(t *testing.T) {
 
 func TestDMLDelete(t *testing.T) {
 	sqls := []string{
-		//"explain DELETE FROM NATION",
-		//"explain verbose DELETE FROM NATION",
-		//"explain DELETE FROM NATION WHERE N_NATIONKEY > 10",
-		//"explain verbose DELETE FROM NATION WHERE N_NATIONKEY > 10",
-		//"explain DELETE FROM NATION WHERE N_NATIONKEY > 10 LIMIT 20",
-		//"explain verbose DELETE FROM NATION WHERE N_NATIONKEY > 10 LIMIT 20",
+		"explain DELETE FROM NATION",
+		"explain verbose DELETE FROM NATION",
+		"explain DELETE FROM NATION WHERE N_NATIONKEY > 10",
+		"explain verbose DELETE FROM NATION WHERE N_NATIONKEY > 10",
+		"explain DELETE FROM NATION WHERE N_NATIONKEY > 10 LIMIT 20",
+		"explain verbose DELETE FROM NATION WHERE N_NATIONKEY > 10 LIMIT 20",
+		"explain verbose DELETE FROM a1, a2 USING NATION AS a1 INNER JOIN NATION2 AS a2 WHERE a1.N_NATIONKEY=a2.N_NATIONKEY",
+		"explain verbose UPDATE NATION,REGION set NATION.N_REGIONKEY = REGION.R_REGIONKEY WHERE REGION.R_NAME = 'AAA'",
+		"explain verbose UPDATE NATION SET N_NAME ='U1', N_REGIONKEY=N_REGIONKEY+2 WHERE N_NATIONKEY > 10 LIMIT 20",
+		"explain verbose UPDATE NATION,NATION2 SET NATION.N_NAME ='U1',NATION2.N_NATIONKEY=15 WHERE NATION.N_NATIONKEY = NATION2.N_NATIONKEY",
 	}
 	mockOptimizer := plan.NewMockOptimizer()
 	runTestShouldPass(mockOptimizer, t, sqls)
@@ -258,9 +281,9 @@ func runOneStmt(opt plan.Optimizer, t *testing.T, sql string) error {
 				}
 			} else if strings.EqualFold(v.Name, "ANALYZE") {
 				if strings.EqualFold(v.Value, "TRUE") || v.Value == "NULL" {
-					es.Anzlyze = true
+					es.Analyze = true
 				} else if strings.EqualFold(v.Value, "FALSE") {
-					es.Anzlyze = false
+					es.Analyze = false
 				} else {
 					return moerr.NewInvalidInput("boolean value %v", v.Value)
 				}

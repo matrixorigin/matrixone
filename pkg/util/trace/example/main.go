@@ -17,14 +17,17 @@ package main
 import (
 	"context"
 	goErrors "errors"
+	"fmt"
+	"io"
+	"time"
+
 	"github.com/lni/dragonboat/v4/logger"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/logutil/logutil2"
+	"github.com/matrixorigin/matrixone/pkg/util/batchpipe"
 	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"go.uber.org/zap"
-	"time"
 )
 
 var _ ie.InternalExecutor = &logOutputExecutor{}
@@ -41,6 +44,16 @@ func (l logOutputExecutor) Query(ctx context.Context, s string, _ ie.SessionOver
 }
 func (l logOutputExecutor) ApplySessionOverride(ie.SessionOverrideOptions) {}
 
+type dummyStringWriter struct{}
+
+func (w *dummyStringWriter) WriteString(s string) (n int, err error) {
+	return fmt.Printf("dummyStringWriter: %s\n", s)
+}
+
+var dummyFSWriterFactory = func(context.Context, string, batchpipe.HasName) io.StringWriter {
+	return &dummyStringWriter{}
+}
+
 func bootstrap(ctx context.Context) (context.Context, error) {
 	logutil.SetupMOLogger(&logutil.LogConfig{Format: "console", DisableStore: false})
 	// init trace/log/error framework & BatchProcessor
@@ -53,6 +66,8 @@ func bootstrap(ctx context.Context) (context.Context, error) {
 		// config[traceBatchProcessor], distributed node should use "FileService" in system_vars_config.toml
 		// "FileService" is not implement yet
 		trace.WithBatchProcessMode("InternalExecutor"),
+		// WithFSWriterFactory for config[traceBatchProcessor] = "FileService"
+		trace.WithFSWriterFactory(dummyFSWriterFactory),
 		// WithSQLExecutor for config[traceBatchProcessor] = "InternalExecutor"
 		trace.WithSQLExecutor(func() ie.InternalExecutor {
 			return &logOutputExecutor{}
@@ -106,8 +121,7 @@ func logUsage(ctx context.Context) {
 
 	// case 3: use logutil2.Info/Infof/..., with contex.Context
 	// it will store log into db, related to span, which save in ctx
-	logutil2.Info(ctx, "use with ctx as 1st arg")
-	logutil2.Infof(ctx, "use with ctx as 1st arg, hello %s", "jack")
+	// (removed)
 
 	// case4: 3rd lib like dragonboat, could use logutil.DragonboatFactory, like
 	logger.SetLoggerFactory(logutil.DragonboatFactory)
@@ -161,7 +175,7 @@ func rpcUsage(ctx context.Context) {
 	req := &FunctionRequest{
 		SpanContext: trace.SpanFromContext(ctx).SpanContext(),
 	}
-	logutil2.Info(ctx, "client call Function")
+	logutil.Info("client call Function", trace.ContextField(ctx))
 
 	// serialize
 	rpcReq := &rpcRequest{message: make([]byte, 24)}
@@ -169,7 +183,7 @@ func rpcUsage(ctx context.Context) {
 		logutil.Errorf("callFunction: %v", err)
 		panic(err)
 	}
-	logutil2.Infof(ctx, "message: %x", rpcReq.message)
+	logutil.Infof("message: %x", rpcReq.message)
 
 	// deserialize
 	var sc trace.SpanContext
@@ -177,11 +191,11 @@ func rpcUsage(ctx context.Context) {
 		panic(err)
 	}
 	svrRootCtx := trace.ContextWithSpanContext(ctx, sc)
-	logutil2.Info(svrRootCtx, "server accept request")
+	logutil.Info("server accept request", trace.ContextField(svrRootCtx))
 	newCtx2, span2 := trace.Start(svrRootCtx, "Function")
 	defer span2.End()
 
-	logutil2.Info(newCtx2, "server do Function, have same TraceId from client.")
+	logutil.Info("server do Function, have same TraceId from client.", trace.ContextField(newCtx2))
 }
 
 func mixUsage(ctx context.Context) {
@@ -191,7 +205,7 @@ func mixUsage(ctx context.Context) {
 	logutil.Info("message", trace.ContextField(newCtx))
 
 	err := childFunc(newCtx)
-	trace.ReportError(newCtx, errutil.Wrapf(err, "extra %s", "message"))
+	trace.ReportError(newCtx, errutil.Wrapf(err, "extra %s", "message"), 0)
 
 }
 
@@ -201,7 +215,7 @@ func childFunc(ctx context.Context) error {
 }
 
 func shutdown(ctx context.Context) {
-	logutil2.Warn(ctx, "shutdown")
+	logutil.Warn("shutdown", trace.ContextField(ctx))
 	trace.Shutdown(ctx)
 }
 
@@ -227,7 +241,7 @@ func main() {
 
 	mixUsage(rootCtx)
 
-	logutil2.Warn(rootCtx, "wait 5s to see insert sql")
+	logutil.Warn("wait 5s to see insert sql", trace.ContextField(rootCtx))
 
 	shutdown(rootCtx)
 }

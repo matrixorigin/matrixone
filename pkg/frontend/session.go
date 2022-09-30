@@ -16,11 +16,12 @@ package frontend
 
 import (
 	"context"
-	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -30,13 +31,15 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/moengine"
 	"github.com/matrixorigin/matrixone/pkg/vm/mempool"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
 )
 
 const MaxPrepareNumberInOneSession = 64
+
+// TODO: this variable should be configure by set variable
+const MoDefaultErrorCount = 64
 
 type ShowStatementType int
 
@@ -114,6 +117,27 @@ type Session struct {
 	timeZone *time.Location
 
 	priv *privilege
+
+	errInfo *errInfo
+}
+
+type errInfo struct {
+	codes  []uint16
+	msgs   []string
+	maxCnt int
+}
+
+func (e *errInfo) push(code uint16, msg string) {
+	if e.maxCnt > 0 && len(e.codes) > e.maxCnt {
+		e.codes = e.codes[1:]
+		e.msgs = e.msgs[1:]
+	}
+	e.codes = append(e.codes, code)
+	e.msgs = append(e.msgs, msg)
+}
+
+func (e *errInfo) length() int {
+	return len(e.codes)
 }
 
 func NewSession(proto Protocol, gm *guest.Mmu, mp *mempool.Mempool, PU *config.ParameterUnit, gSysVars *GlobalSystemVariables) *Session {
@@ -142,6 +166,11 @@ func NewSession(proto Protocol, gm *guest.Mmu, mp *mempool.Mempool, PU *config.P
 		prepareStmts:   make(map[string]*PrepareStmt),
 		outputCallback: getDataFromPipeline,
 		timeZone:       time.Local,
+		errInfo: &errInfo{
+			codes:  make([]uint16, 0, MoDefaultErrorCount),
+			msgs:   make([]string, 0, MoDefaultErrorCount),
+			maxCnt: MoDefaultErrorCount,
+		},
 	}
 	ses.uuid, _ = uuid.NewUUID()
 	ses.SetOptionBits(OPTION_AUTOCOMMIT)
@@ -609,7 +638,7 @@ func (ses *Session) AuthenticateUser(userInput string) ([]byte, error) {
 		return nil, err
 	}
 	if len(rsset) < 1 || rsset[0].GetRowCount() < 1 {
-		return nil, fmt.Errorf("there is no tenant %s", tenant.GetTenant())
+		return nil, moerr.NewInternalError("there is no tenant %s", tenant.GetTenant())
 	}
 
 	tenantID, err := rsset[0].GetInt64(0, 0)
@@ -630,7 +659,7 @@ func (ses *Session) AuthenticateUser(userInput string) ([]byte, error) {
 		return nil, err
 	}
 	if len(rsset) < 1 || rsset[0].GetRowCount() < 1 {
-		return nil, fmt.Errorf("there is no user %s", tenant.GetUser())
+		return nil, moerr.NewInternalError("there is no user %s", tenant.GetUser())
 	}
 
 	userID, err := rsset[0].GetInt64(0, 0)
@@ -671,7 +700,7 @@ func (ses *Session) AuthenticateUser(userInput string) ([]byte, error) {
 			return nil, err
 		}
 		if len(rsset) < 1 || rsset[0].GetRowCount() < 1 {
-			return nil, fmt.Errorf("there is no role %s of the user %s", tenant.GetDefaultRole(), tenant.GetUser())
+			return nil, moerr.NewInternalError("there is no role %s of the user %s", tenant.GetDefaultRole(), tenant.GetUser())
 		}
 
 		defaultRoleID, err = rsset[0].GetInt64(0, 0)
@@ -904,6 +933,10 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string) (*plan2.
 	var TableType, Createsql string
 	for _, def := range engineDefs {
 		if attr, ok := def.(*engine.AttributeDef); ok {
+			isCPkey := util.JudgeIsCompositePrimaryKeyColumn(attr.Attr.Name)
+			if isCPkey {
+				continue
+			}
 			cols = append(cols, &plan2.ColDef{
 				Name: attr.Attr.Name,
 				Typ: &plan2.Type{
@@ -1036,6 +1069,7 @@ func (tcc *TxnCompilerContext) GetPrimaryKeyDef(dbName string, tableName string)
 
 	priDefs := make([]*plan2.ColDef, 0, len(priKeys))
 	for _, key := range priKeys {
+		isCPkey := util.JudgeIsCompositePrimaryKeyColumn(key.Name)
 		priDefs = append(priDefs, &plan2.ColDef{
 			Name: key.Name,
 			Typ: &plan2.Type{
@@ -1046,6 +1080,7 @@ func (tcc *TxnCompilerContext) GetPrimaryKeyDef(dbName string, tableName string)
 				Size:      key.Type.Size,
 			},
 			Primary: key.Primary,
+			IsCPkey: isCPkey,
 		})
 	}
 	return priDefs

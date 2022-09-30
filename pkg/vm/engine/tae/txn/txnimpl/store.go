@@ -195,6 +195,28 @@ func (store *txnStore) RangeDelete(dbId uint64, id *common.ID, start, end uint32
 	return db.RangeDelete(id, start, end, dt)
 }
 
+func (store *txnStore) UpdateMetaLoc(dbId uint64, id *common.ID, metaLoc string) (err error) {
+	db, err := store.getOrSetDB(dbId)
+	if err != nil {
+		return err
+	}
+	// if table.IsDeleted() {
+	// 	return txnbase.ErrNotFound
+	// }
+	return db.UpdateMetaLoc(id, metaLoc)
+}
+
+func (store *txnStore) UpdateDeltaLoc(dbId uint64, id *common.ID, deltaLoc string) (err error) {
+	db, err := store.getOrSetDB(dbId)
+	if err != nil {
+		return err
+	}
+	// if table.IsDeleted() {
+	// 	return txnbase.ErrNotFound
+	// }
+	return db.UpdateDeltaLoc(id, deltaLoc)
+}
+
 func (store *txnStore) GetByFilter(dbId, tid uint64, filter *handle.Filter) (id *common.ID, offset uint32, err error) {
 	db, err := store.getOrSetDB(dbId)
 	if err != nil {
@@ -322,12 +344,12 @@ func (store *txnStore) GetSegment(dbId uint64, id *common.ID) (seg handle.Segmen
 	return db.GetSegment(id)
 }
 
-func (store *txnStore) CreateSegment(dbId, tid uint64) (seg handle.Segment, err error) {
+func (store *txnStore) CreateSegment(dbId, tid uint64, is1PC bool) (seg handle.Segment, err error) {
 	var db *txnDB
 	if db, err = store.getOrSetDB(dbId); err != nil {
 		return
 	}
-	return db.CreateSegment(tid)
+	return db.CreateSegment(tid, is1PC)
 }
 
 func (store *txnStore) CreateNonAppendableSegment(dbId, tid uint64) (seg handle.Segment, err error) {
@@ -377,12 +399,12 @@ func (store *txnStore) GetBlock(dbId uint64, id *common.ID) (blk handle.Block, e
 	return db.GetBlock(id)
 }
 
-func (store *txnStore) CreateBlock(dbId, tid, sid uint64) (blk handle.Block, err error) {
+func (store *txnStore) CreateBlock(dbId, tid, sid uint64, is1PC bool) (blk handle.Block, err error) {
 	var db *txnDB
 	if db, err = store.getOrSetDB(dbId); err != nil {
 		return
 	}
-	return db.CreateBlock(tid, sid)
+	return db.CreateBlock(tid, sid, is1PC)
 }
 
 func (store *txnStore) SoftDeleteBlock(dbId uint64, id *common.ID) (err error) {
@@ -489,6 +511,11 @@ func (store *txnStore) PreApplyCommit() (err error) {
 	}
 	if logEntry != nil {
 		store.logs = append(store.logs, logEntry)
+	}
+	for _, db := range store.dbs {
+		if err = db.Apply1PCCommit(); err != nil {
+			return
+		}
 	}
 	logutil.Debugf("Txn-%d PrepareCommit Takes %s", store.txn.GetID(), time.Since(now))
 	return

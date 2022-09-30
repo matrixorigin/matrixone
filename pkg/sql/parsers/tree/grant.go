@@ -69,7 +69,7 @@ func (node *GrantPrivilege) Format(ctx *FmtCtx) {
 	ctx.WriteString(" on")
 	if node.ObjType != OBJECT_TYPE_NONE {
 		ctx.WriteByte(' ')
-		ctx.WriteString(node.ObjType.ToString())
+		ctx.WriteString(node.ObjType.String())
 	}
 	if node.Level != nil {
 		ctx.WriteByte(' ')

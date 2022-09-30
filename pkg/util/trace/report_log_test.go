@@ -16,12 +16,13 @@ package trace
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/util"
+	"testing"
+	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/util/stack"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
-	"testing"
-	"time"
 )
 
 func TestReportLog(t *testing.T) {
@@ -61,7 +62,7 @@ func TestReportLog(t *testing.T) {
 		},
 	}
 	for _, tt := range tests {
-		GetTracerProvider().EnableTracer(tt.enableTracer)
+		GetTracerProvider().SetEnable(tt.enableTracer)
 		t.Run(tt.name, func(t *testing.T) {
 			ReportLog(tt.args.ctx, tt.args.level, tt.args.depth, tt.args.formatter, tt.args.args...)
 		})
@@ -96,7 +97,7 @@ func TestReportZap(t *testing.T) {
 					Time:       time.Unix(0, 0),
 					LoggerName: "test",
 					Message:    "info message",
-					Caller:     zapcore.NewEntryCaller(uintptr(util.Caller(3)), "file", 123, true),
+					Caller:     zapcore.NewEntryCaller(uintptr(stack.Caller(3)), "file", 123, true),
 				},
 				fields: []zapcore.Field{zap.Int("key", 1)},
 			},

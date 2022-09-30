@@ -150,9 +150,6 @@ jobs:
       - name: Start BVT Test
         id: bvt_on_pr_version
         run: |
-          timedatectl status
-          sudo timedatectl set-timezone "Asia/Shanghai"
-          timedatectl status
           sleep 60s
           cd $GITHUB_WORKSPACE/mo-tester
           ./run.sh -n -g -p $GITHUB_WORKSPACE/head/test/cases 2>&1
@@ -180,7 +177,7 @@ jobs:
           retention-days: 7
           
   bvt-linux-arm:
-    runs-on: ubuntu-latest
+    runs-on: arm64-runner
     name: BVT Test on Linux/Arm
     timeout-minutes: 30
 
@@ -213,19 +210,18 @@ jobs:
           path: ./mo-tester
           ref: main
 
-      - name: Set up JDK 8 for x64
+      - name: Set up JDK 8 for arm64
         uses: actions/setup-java@v3
         with:
           java-version: '8'
-          distribution: 'adopt'
-          architecture: x64
+          distribution: 'zulu'
+          architecture: arm64
 
       - name: Start BVT Test
         id: bvt_on_pr_version
         run: |
-          timedatectl status
-          sudo timedatectl set-timezone "Asia/Shanghai"
-          timedatectl status
+          export LC_ALL="C.UTF-8"
+          locale
           sleep 60s
           cd $GITHUB_WORKSPACE/mo-tester
           ./run.sh -n -g -p $GITHUB_WORKSPACE/head/test/cases 2>&1
@@ -296,7 +292,6 @@ jobs:
       - name: Start BVT Test
         id: bvt_on_pr_version
         run: |
-          sudo systemsetup -settimezone "Asia/Shanghai"
           sleep 60
           cd $GITHUB_WORKSPACE/mo-tester
           ./run.sh -n -g -p $GITHUB_WORKSPACE/head/test/cases 2>&1

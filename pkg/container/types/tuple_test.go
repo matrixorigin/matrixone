@@ -15,10 +15,11 @@
 package types
 
 import (
-	"github.com/stretchr/testify/require"
 	"math"
 	"math/rand"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
 func TestSimpleTupleAllTypes(t *testing.T) {

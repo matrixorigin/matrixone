@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 )
 
@@ -33,10 +34,7 @@ func TestScheduleCronTask(t *testing.T) {
 		s.StartScheduleCronTask()
 		defer s.StopScheduleCronTask()
 
-		time.Sleep(time.Second + fetchInterval*2)
-		tasks, err := store.Query(ctx, WithTaskParentTaskIDCond(EQ, "t1"))
-		assert.NoError(t, err)
-		assert.NotEmpty(t, tasks)
+		waitHasTasks(t, store, time.Second*20, WithTaskParentTaskIDCond(EQ, "t1"))
 	}, time.Millisecond, time.Millisecond)
 
 }
@@ -57,10 +55,7 @@ func TestRetryScheduleCronTask(t *testing.T) {
 		s.StartScheduleCronTask()
 		defer s.StopScheduleCronTask()
 
-		time.Sleep(time.Second + fetchInterval*5)
-		tasks, err := store.Query(ctx, WithTaskParentTaskIDCond(EQ, "t1"))
-		assert.NoError(t, err)
-		assert.NotEmpty(t, tasks)
+		waitHasTasks(t, store, time.Second*20, WithTaskParentTaskIDCond(EQ, "t1"))
 	}, time.Millisecond, time.Millisecond)
 }
 
@@ -77,10 +72,7 @@ func TestScheduleCronTaskImmediately(t *testing.T) {
 		s.StartScheduleCronTask()
 		defer s.StopScheduleCronTask()
 
-		time.Sleep(fetchInterval * 2)
-		tasks, err := store.Query(ctx, WithTaskParentTaskIDCond(EQ, "t1"))
-		assert.NoError(t, err)
-		assert.NotEmpty(t, tasks)
+		waitHasTasks(t, store, time.Second*20, WithTaskParentTaskIDCond(EQ, "t1"))
 	}, time.Millisecond, time.Millisecond)
 }
 
@@ -91,20 +83,14 @@ func TestRemovedCronTask(t *testing.T) {
 		s.StartScheduleCronTask()
 		defer s.StopScheduleCronTask()
 
-		time.Sleep(fetchInterval * 2)
-		s.crons.Lock()
-		assert.Equal(t, 1, len(s.crons.jobs))
-		s.crons.Unlock()
+		waitJobsCount(t, 1, s, time.Second*10)
 
 		store.Lock()
 		store.cronTaskIndexes = make(map[string]uint64)
 		store.cronTasks = make(map[uint64]task.CronTask)
 		store.Unlock()
 
-		time.Sleep(fetchInterval * 2)
-		s.crons.Lock()
-		assert.Equal(t, 0, len(s.crons.jobs))
-		s.crons.Unlock()
+		waitJobsCount(t, 0, s, time.Second*10)
 	}, time.Millisecond, time.Millisecond)
 
 }
@@ -124,4 +110,46 @@ func runScheduleCronTaskTest(t *testing.T,
 	ctx, cancel := context.WithTimeout(context.TODO(), time.Second*10)
 	defer cancel()
 	testFunc(store, s, ctx)
+}
+
+func waitJobsCount(t *testing.T, n int, s *taskService, timeout time.Duration) {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	for {
+		select {
+		case <-ctx.Done():
+			require.Fail(t, "wait jobs count failed")
+			return
+		default:
+			s.crons.Lock()
+			v := len(s.crons.jobs)
+			s.crons.Unlock()
+
+			if v == n {
+				return
+			}
+		}
+		time.Sleep(time.Millisecond * 10)
+	}
+}
+
+func waitHasTasks(t *testing.T, store *memTaskStorage, timeout time.Duration, conds ...Condition) {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	for {
+		select {
+		case <-ctx.Done():
+			require.Fail(t, "wait any tasks failed")
+			return
+		default:
+			tasks, err := store.Query(ctx, conds...)
+			require.NoError(t, err)
+			if len(tasks) > 0 {
+				return
+			}
+		}
+		time.Sleep(time.Millisecond * 10)
+	}
 }

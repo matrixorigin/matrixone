@@ -14,7 +14,9 @@
 
 package objectio
 
-import "errors"
+import (
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+)
 
 type IndexDataType uint8
 
@@ -33,18 +35,16 @@ type IndexData interface {
 
 type ZoneMap struct {
 	idx uint16
-	min []byte
-	max []byte
+	buf []byte
 }
 
-func NewZoneMap(idx uint16, min, max []byte) (IndexData, error) {
-	if len(min) != ZoneMapMinSize || len(max) != ZoneMapMaxSize {
-		return nil, errors.New("object io: New ZoneMap failed")
+func NewZoneMap(idx uint16, buf []byte) (IndexData, error) {
+	if len(buf) != ZoneMapMinSize+ZoneMapMaxSize {
+		return nil, moerr.NewInternalError("object io: New ZoneMap failed")
 	}
 	zoneMap := &ZoneMap{
 		idx: idx,
-		min: min,
-		max: max,
+		buf: buf,
 	}
 	return zoneMap, nil
 }
@@ -57,6 +57,10 @@ func (z *ZoneMap) Write(_ *ObjectWriter, block *Block) error {
 	var err error
 	block.columns[z.idx].(*ColumnBlock).meta.zoneMap = *z
 	return err
+}
+
+func (z *ZoneMap) GetData() []byte {
+	return z.buf
 }
 
 type BloomFilter struct {
@@ -76,6 +80,10 @@ func NewBloomFilter(idx uint16, alg uint8, buf []byte) IndexData {
 
 func (b *BloomFilter) GetIdx() uint16 {
 	return b.idx
+}
+
+func (b *BloomFilter) GetData() []byte {
+	return b.buf
 }
 
 func (b *BloomFilter) Write(writer *ObjectWriter, block *Block) error {

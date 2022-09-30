@@ -146,8 +146,8 @@ func (s *stateMachine) handleTruncateLsn(cmd []byte) sm.Result {
 }
 
 // handleUserUpdate returns an empty sm.Result on success or it returns a
-// sm.Result value with the Value field set to the current lease holder ID
-// to indicate rejection by mismatched lease holder ID.
+// sm.Result value with the Value field set to the current leaseholder ID
+// to indicate rejection by mismatched leaseholder ID.
 func (s *stateMachine) handleUserUpdate(cmd []byte) sm.Result {
 	if s.state.LeaseHolderID != parseLeaseHolderID(cmd) {
 		data := make([]byte, 8)

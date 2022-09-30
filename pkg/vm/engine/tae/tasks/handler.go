@@ -15,14 +15,13 @@
 package tasks
 
 import (
-	"errors"
-
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	ops "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks/worker"
 )
 
 var (
-	ErrTaskHandleEnqueue = errors.New("tae: task handle enqueue")
+	ErrTaskHandleEnqueue = moerr.NewInternalError("tae: task handle enqueue")
 )
 
 type BaseTaskHandler struct {

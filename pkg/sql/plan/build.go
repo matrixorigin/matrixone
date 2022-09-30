@@ -41,12 +41,23 @@ func runBuildSelectByBinder(stmtType plan.Query_StatementType, ctx CompilerConte
 	}, err
 }
 
+func buildExplainAnalyze(ctx CompilerContext, stmt *tree.ExplainAnalyze) (*Plan, error) {
+	//get query optimizer and execute Optimize
+	plan, err := BuildPlan(ctx, stmt.Statement)
+	if err != nil {
+		return nil, err
+	}
+	return plan, nil
+}
+
 func BuildPlan(ctx CompilerContext, stmt tree.Statement) (*Plan, error) {
 	switch stmt := stmt.(type) {
 	case *tree.Select:
 		return runBuildSelectByBinder(plan.Query_SELECT, ctx, stmt)
 	case *tree.ParenSelect:
 		return runBuildSelectByBinder(plan.Query_SELECT, ctx, stmt.Select)
+	case *tree.ExplainAnalyze:
+		return buildExplainAnalyze(ctx, stmt)
 	case *tree.Insert:
 		return buildInsert(stmt, ctx)
 	case *tree.Update:
@@ -87,14 +98,16 @@ func BuildPlan(ctx CompilerContext, stmt tree.Statement) (*Plan, error) {
 		return buildShowTables(stmt, ctx)
 	case *tree.ShowColumns:
 		return buildShowColumns(stmt, ctx)
+	case *tree.ShowTableStatus:
+		return buildShowTableStatus(stmt, ctx)
+	case *tree.ShowTarget:
+		return buildShowTarget(stmt, ctx)
 	case *tree.ShowIndex:
 		return buildShowIndex(stmt, ctx)
+	case *tree.ShowGrants:
+		return buildShowGrants(stmt, ctx)
 	case *tree.ShowVariables:
 		return buildShowVariables(stmt, ctx)
-	case *tree.ShowWarnings:
-		return buildShowWarnings(stmt, ctx)
-	case *tree.ShowErrors:
-		return buildShowErrors(stmt, ctx)
 	case *tree.ShowStatus:
 		return buildShowStatus(stmt, ctx)
 	case *tree.ShowProcessList:

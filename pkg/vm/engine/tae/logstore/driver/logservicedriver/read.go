@@ -16,17 +16,17 @@ package logservicedriver
 
 import (
 	"context"
-	"errors"
 	"sync"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/entry"
 )
 
-var ErrRecordNotFound = errors.New("driver read cache: lsn not found")
-var ErrAllRecordsRead = errors.New("driver read cache: all records are read")
+var ErrRecordNotFound = moerr.NewInternalError("driver read cache: lsn not found")
+var ErrAllRecordsRead = moerr.NewInternalError("driver read cache: all records are read")
 
 type readCache struct {
 	lsns    []uint64

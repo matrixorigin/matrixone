@@ -21,10 +21,12 @@
 package operator
 
 import (
-	"errors"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"sort"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+
+	"github.com/matrixorigin/matrixone/pkg/pb/logservice"
 )
 
 // Builder is used to create operators. Usage:
@@ -67,7 +69,7 @@ func NewBuilder(desc string, shardInfo logservice.LogShardInfo) *Builder {
 
 	for replicaID, uuid := range shardInfo.Replicas {
 		if uuid == "" {
-			err = errors.New("cannot build operator for shard with nil peer")
+			err = moerr.NewInternalError("cannot build operator for shard with nil peer")
 			break
 		}
 		originPeers.Set(uuid, replicaID)
@@ -85,16 +87,16 @@ func (b *Builder) AddPeer(uuid string, peer uint64) *Builder {
 		return b
 	}
 	if uuid == "" {
-		b.err = fmt.Errorf("cannot add peer to nil store")
+		b.err = moerr.NewInternalError("cannot add peer to nil store")
 		return b
 	}
 	if old, ok := b.targetPeers[uuid]; ok {
-		b.err = fmt.Errorf("cannot add peer %+v to %s: already have peer %+v on %s", peer, uuid, old, uuid)
+		b.err = moerr.NewInternalError("cannot add peer %+v to %s: already have peer %+v on %s", peer, uuid, old, uuid)
 		return b
 	}
 	for oldUuid, old := range b.targetPeers {
 		if old == peer {
-			b.err = fmt.Errorf("cannot add peer %+v to %s: already have peer %+v on %s", peer, uuid, old, oldUuid)
+			b.err = moerr.NewInternalError("cannot add peer %+v to %s: already have peer %+v on %s", peer, uuid, old, oldUuid)
 			return b
 		}
 	}
@@ -109,7 +111,7 @@ func (b *Builder) RemovePeer(uuid string) *Builder {
 		return b
 	}
 	if _, ok := b.targetPeers[uuid]; !ok {
-		b.err = fmt.Errorf("cannot remove peer from %s: not found", uuid)
+		b.err = moerr.NewInternalError("cannot remove peer from %s: not found", uuid)
 	} else {
 		delete(b.targetPeers, uuid)
 	}
@@ -190,7 +192,7 @@ func (b *Builder) buildSteps() error {
 	}
 
 	if len(b.steps) == 0 {
-		return errors.New("no operator step is built")
+		return moerr.NewInternalError("no operator step is built")
 	}
 	return nil
 }

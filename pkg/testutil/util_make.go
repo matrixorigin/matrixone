@@ -87,49 +87,21 @@ var (
 	}
 
 	MakeDecimal64Vector = func(values []int64, nsp []uint64, _ types.Type) *vector.Vector {
-		vec := vector.New(decimal64Type)
 		cols := make([]types.Decimal64, len(values))
-		if nsp == nil {
-			for i, v := range values {
-				cols[i], _ = types.Decimal64_FromInt64(v, 64, 0)
-			}
-		} else {
-			for _, n := range nsp {
-				nulls.Add(vec.Nsp, n)
-			}
-			for i, v := range values {
-				if nulls.Contains(vec.Nsp, uint64(i)) {
-					continue
-				}
-				cols[i], _ = types.Decimal64_FromInt64(v, 64, 0)
-			}
+		for i, v := range values {
+			d, _ := types.InitDecimal64(v, 64, 0)
+			cols[i] = d
 		}
-		vec.Col = cols
-		return vec
+		return makeVector(cols, nsp, decimal64Type)
 	}
 
 	MakeDecimal128Vector = func(values []int64, nsp []uint64, _ types.Type) *vector.Vector {
-		vec := vector.New(decimal128Type)
 		cols := make([]types.Decimal128, len(values))
-		if nsp == nil {
-			for i, v := range values {
-				d, _ := types.InitDecimal128(v, 64, 0)
-				cols[i] = d
-			}
-		} else {
-			for _, n := range nsp {
-				nulls.Add(vec.Nsp, n)
-			}
-			for i, v := range values {
-				if nulls.Contains(vec.Nsp, uint64(i)) {
-					continue
-				}
-				d, _ := types.InitDecimal128(v, 64, 0)
-				cols[i] = d
-			}
+		for i, v := range values {
+			d, _ := types.InitDecimal128(v, 64, 0)
+			cols[i] = d
 		}
-		vec.Col = cols
-		return vec
+		return makeVector(cols, nsp, decimal128Type)
 	}
 
 	MakeDateVector = func(values []string, nsp []uint64) *vector.Vector {
@@ -332,6 +304,26 @@ func makeScalar[T types.FixedSizeT](value T, length int, typ types.Type) *vector
 
 func makeScalarString(value string, length int, typ types.Type) *vector.Vector {
 	return vector.NewConstString(typ, length, value)
+}
+
+func MakeDecimal64ArrByInt64Arr(input []int64) []types.Decimal64 {
+	ret := make([]types.Decimal64, len(input))
+	for i, v := range input {
+		d, _ := types.InitDecimal64(v, 64, 0)
+		ret[i] = d
+	}
+
+	return ret
+}
+
+func MakeDecimal64ArrByFloat64Arr(input []float64) []types.Decimal64 {
+	ret := make([]types.Decimal64, len(input))
+	for i, v := range input {
+		d, _ := types.Decimal64FromFloat64(v, 64, 10)
+		ret[i] = d
+	}
+
+	return ret
 }
 
 func MakeDecimal128ArrByInt64Arr(input []int64) []types.Decimal128 {

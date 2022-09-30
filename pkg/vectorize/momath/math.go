@@ -52,6 +52,19 @@ func Atan(arg, result *vector.Vector) error {
 	return nil
 }
 
+func AtanWithTwoArg(firstArg, secondArg, result *vector.Vector) error {
+	firstCol := vector.MustTCols[float64](firstArg)
+	secondCol := vector.MustTCols[float64](secondArg)
+	resCol := vector.MustTCols[float64](result)
+	for i, v := range firstCol {
+		if v == 0 {
+			return moerr.NewInvalidArg("Atan first input", 0)
+		}
+		resCol[i] = math.Atan(secondCol[i] / v)
+	}
+	return nil
+}
+
 func Cos(arg, result *vector.Vector) error {
 	argCol := vector.MustTCols[float64](arg)
 	resCol := vector.MustTCols[float64](result)

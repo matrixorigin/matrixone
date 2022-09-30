@@ -17,15 +17,11 @@ package util
 import (
 	"bytes"
 	"encoding/binary"
-	"errors"
-	"github.com/google/uuid"
 	"hash/fnv"
 	"net"
-)
 
-var (
-	ErrNoHardwareAddr     = errors.New("uuid: no Hardware address found")
-	ErrUUIDNodeIDTooShort = errors.New("uuid: nodeID too short")
+	"github.com/google/uuid"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
 // getDefaultHardwareAddr returns hardware address(like mac addr), like the first valid val.
@@ -39,7 +35,7 @@ var getDefaultHardwareAddr = func() (net.HardwareAddr, error) {
 			return iface.HardwareAddr, nil
 		}
 	}
-	return []byte{}, ErrNoHardwareAddr
+	return []byte{}, moerr.NewInternalError("uuid: no Hardware address found")
 }
 
 // docker mac addr range: [02:42:ac:11:00:00, 02:42:ac:11:ff:ff]
@@ -72,7 +68,7 @@ func SetUUIDNodeID(nodeUuid []byte) error {
 	var hash = make([]byte, 0, 16)
 	hash = hasher.Sum(hash[:])
 	if !uuid.SetNodeID(hash[:]) {
-		return ErrUUIDNodeIDTooShort
+		return moerr.NewInternalError("uuid: nodeID too short")
 	}
 	return nil
 }

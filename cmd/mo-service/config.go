@@ -15,7 +15,8 @@
 package main
 
 import (
-	"fmt"
+	"hash/fnv"
+	"math"
 	"net"
 	"os"
 	"strings"
@@ -28,13 +29,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	tomlutil "github.com/matrixorigin/matrixone/pkg/util/toml"
 )
 
 const (
-	cnServiceType         = "CN"
-	dnServiceType         = "DN"
-	logServiceType        = "LOG"
-	standaloneServiceType = "STANDALONE"
+	cnServiceType  = "CN"
+	dnServiceType  = "DN"
+	logServiceType = "LOG"
 
 	s3FileServiceName    = "S3"
 	localFileServiceName = "LOCAL"
@@ -43,12 +44,21 @@ const (
 
 var (
 	supportServiceTypes = map[string]any{
-		cnServiceType:         cnServiceType,
-		dnServiceType:         dnServiceType,
-		logServiceType:        logServiceType,
-		standaloneServiceType: standaloneServiceType,
+		cnServiceType:  cnServiceType,
+		dnServiceType:  dnServiceType,
+		logServiceType: logServiceType,
 	}
 )
+
+// LaunchConfig Start a MO cluster with launch
+type LaunchConfig struct {
+	// LogServiceConfigFiles log service config files
+	LogServiceConfigFiles []string `toml:"logservices"`
+	// DNServiceConfigsFiles log service config files
+	DNServiceConfigsFiles []string `toml:"dnservices"`
+	// CNServiceConfigsFiles log service config files
+	CNServiceConfigsFiles []string `toml:"cnservices"`
+}
 
 // Config mo-service configuration
 type Config struct {
@@ -69,36 +79,52 @@ type Config struct {
 	CN cnservice.Config `toml:"cn"`
 	// Observability parameters for the metric/trace
 	Observability config.ObservabilityParameters `toml:"observability"`
+
+	// Clock txn clock type. [LOCAL|HLC]. Default is LOCAL.
+	Clock struct {
+		// Backend clock backend implementation. [LOCAL|HLC], default LOCAL.
+		Backend string `toml:"source"`
+		// MaxClockOffset max clock offset between two nodes. Default is 500ms.
+		// Only valid when enable-check-clock-offset is true
+		MaxClockOffset tomlutil.Duration `toml:"max-clock-offset"`
+		// EnableCheckMaxClockOffset enable local clock offset checker
+		EnableCheckMaxClockOffset bool `toml:"enable-check-clock-offset"`
+	}
 }
 
-func parseConfigFromFile(file string) (*Config, error) {
+func parseConfigFromFile(file string, cfg any) error {
 	if file == "" {
-		return nil, fmt.Errorf("toml config file not set")
+		return moerr.NewInternalError("toml config file not set")
 	}
 	data, err := os.ReadFile(file)
 	if err != nil {
-		return nil, err
+		return err
 	}
-	return parseFromString(string(data))
+	return parseFromString(string(data), cfg)
 }
 
-func parseFromString(data string) (*Config, error) {
-	cfg := &Config{}
+func parseFromString(data string, cfg any) error {
 	if _, err := toml.Decode(data, cfg); err != nil {
-		return nil, err
+		return err
 	}
-	if err := cfg.validate(); err != nil {
-		return nil, err
-	}
-	if err := cfg.resolveGossipSeedAddresses(); err != nil {
-		return nil, err
-	}
-	return cfg, nil
+	return nil
 }
 
 func (c *Config) validate() error {
 	if _, ok := supportServiceTypes[strings.ToUpper(c.ServiceType)]; !ok {
-		return fmt.Errorf("service type %s not support", c.ServiceType)
+		return moerr.NewInternalError("service type %s not support", c.ServiceType)
+	}
+	if c.Clock.MaxClockOffset.Duration == 0 {
+		c.Clock.MaxClockOffset.Duration = defaultMaxClockOffset
+	}
+	if c.Clock.Backend == "" {
+		c.Clock.Backend = localClockBackend
+	}
+	if _, ok := supportTxnClockBackends[strings.ToUpper(c.Clock.Backend)]; !ok {
+		return moerr.NewInternalError("%s clock backend not support", c.Clock.Backend)
+	}
+	if !c.Clock.EnableCheckMaxClockOffset {
+		c.Clock.MaxClockOffset.Duration = 0
 	}
 	return nil
 }
@@ -207,4 +233,26 @@ func (c *Config) resolveGossipSeedAddresses() error {
 	}
 	c.LogService.GossipSeedAddresses = result
 	return nil
+}
+
+func (c *Config) hashNodeID() uint16 {
+	uuid := ""
+	switch c.ServiceType {
+	case cnServiceType:
+		uuid = c.CN.UUID
+	case dnServiceType:
+		uuid = c.DN.UUID
+	case logServiceType:
+		uuid = c.LogService.UUID
+	}
+	if uuid == "" {
+		return 0
+	}
+
+	h := fnv.New32()
+	if _, err := h.Write([]byte(uuid)); err != nil {
+		panic(err)
+	}
+	v := h.Sum32()
+	return uint16(v % math.MaxUint16)
 }

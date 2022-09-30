@@ -49,7 +49,7 @@ type SegmentWriter interface {
 	PushDeleteOp(filter Filter) error
 	PushUpdateOp(filter Filter, attr string, val any) error
 
-	CreateBlock() (Block, error)
+	CreateBlock(bool) (Block, error)
 	CreateNonAppendableBlock() (Block, error)
 
 	SoftDeleteBlock(id uint64) (err error)

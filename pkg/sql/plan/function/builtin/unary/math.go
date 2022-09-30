@@ -62,7 +62,13 @@ func Acos(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 }
 
 func Atan(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	return math1(vs, proc, momath.Atan)
+	//If the vs's lenght is 1, just use the  function with one parameter
+	if len(vs) == 1 {
+		return math1(vs, proc, momath.Atan)
+	} else {
+		return operator.Arith[float64, float64](vs, proc, vs[0].GetType(), momath.AtanWithTwoArg)
+	}
+
 }
 
 func Cos(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
@@ -96,11 +102,11 @@ func Log(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	}
 	v1, err := math1([]*vector.Vector{vs[0]}, proc, momath.Ln)
 	if err != nil {
-		return nil, err
+		return nil, moerr.NewInvalidArg("log input", "<= 0")
 	}
 	v2, err := math1([]*vector.Vector{vs[1]}, proc, momath.Ln)
 	if err != nil {
-		return nil, err
+		return nil, moerr.NewInvalidArg("log input", "<= 0")
 	}
 	return operator.DivFloat[float64]([]*vector.Vector{v2, v1}, proc)
 }

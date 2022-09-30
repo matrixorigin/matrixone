@@ -15,8 +15,7 @@
 package unary
 
 import (
-	"fmt"
-
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/oct"
@@ -66,7 +65,7 @@ func OctFloat[T constraints.Float](vectors []*vector.Vector, proc *process.Proce
 		resultValues := make([]types.Decimal128, 1)
 		col, err := oct.OctFloat(inputValues, resultValues)
 		if err != nil {
-			return nil, fmt.Errorf("the input value is out of integer range")
+			return nil, moerr.NewInternalError("the input value is out of integer range")
 		}
 		vector.SetCol(resultVector, col)
 		return resultVector, nil
@@ -78,7 +77,7 @@ func OctFloat[T constraints.Float](vectors []*vector.Vector, proc *process.Proce
 		resultValues := vector.MustTCols[types.Decimal128](resultVector)
 		_, err = oct.OctFloat(inputValues, resultValues)
 		if err != nil {
-			return nil, fmt.Errorf("the input value is out of integer range")
+			return nil, moerr.NewInternalError("the input value is out of integer range")
 		}
 		return resultVector, nil
 	}

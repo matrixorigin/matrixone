@@ -3,19 +3,11 @@
 [MatrixOne Playground](https://playground.matrixorigin.io/?tutorial=SSB-test-with-matrixone&step=1)提供了一个交互式工作台，可以让您直接通过浏览器来运行 MatrixOne 的 SQL 语句等功能，快速体验 MatrixOne 的最新能力。
 
 * 你可以参考[SQL参考指南](../Reference/SQL-Reference/Data-Definition-Statements/create-database.md)来熟悉相关 SQL 语句。
-* 你可以查看[实践教程](Tutorial/SSB-test-with-matrixone.md)来学习如何使用 MatrixOne 来进行 SSB、TPCH测试等最佳实践。
+* 你可以查看[实践教程](../Tutorial/SSB-test-with-matrixone.md)来学习如何使用 MatrixOne 来进行 SSB、TPCH测试等最佳实践。
 
 ## **限制**
 
-MatixOrigin Playground 只能在**只读**模式下进行操作，因此相关 DDL 命令和部分改变数据的 DML 命令不可用，具体限制如下：
-
-* **DDL** 命令不可用有：`truncate` ，`set`
-
-* **DML** 命令不可用有：`replace`
-
-* `call` 不可用
-
-* 结果最大展示行**max_result_rows**=2000  
+MatixOrigin Playground 只能使用**实践教程**中已有的 SQL 进行操作。
 
 ## **示例**
 

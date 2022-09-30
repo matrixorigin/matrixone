@@ -16,11 +16,12 @@ package logutil
 
 import (
 	"context"
+	"io"
+	"sync/atomic"
+
 	"go.uber.org/zap"
 	"go.uber.org/zap/buffer"
 	"go.uber.org/zap/zapcore"
-	"io"
-	"sync/atomic"
 )
 
 var gLogConfigs atomic.Value

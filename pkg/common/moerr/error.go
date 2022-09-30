@@ -15,13 +15,16 @@
 package moerr
 
 import (
+	"bytes"
 	"context"
+	"encoding"
+	"encoding/gob"
 	"fmt"
 	"io"
-	"runtime/debug"
 	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/util/errutil"
+	"github.com/matrixorigin/matrixone/pkg/util/stack"
 )
 
 const MySQLDefaultSqlState = "HY000"
@@ -304,7 +307,7 @@ func newWithDepth(ctx context.Context, code uint16, args ...any) *Error {
 	} else {
 		item, has := errorMsgRefer[code]
 		if !has {
-			panic(fmt.Errorf("not exist MOErrorCode: %d", code))
+			panic(NewInternalError("not exist MOErrorCode: %d", code))
 		}
 		if len(args) == 0 {
 			err = &Error{
@@ -349,6 +352,43 @@ func (e *Error) SqlState() string {
 	return e.sqlState
 }
 
+type encodingErr struct {
+	Code      uint16
+	MysqlCode uint16
+	Message   string
+	SqlState  string
+}
+
+var _ encoding.BinaryMarshaler = new(Error)
+
+func (e *Error) MarshalBinary() ([]byte, error) {
+	ee := encodingErr{
+		Code:      e.code,
+		MysqlCode: e.mysqlCode,
+		Message:   e.message,
+		SqlState:  e.sqlState,
+	}
+	buf := new(bytes.Buffer)
+	if err := gob.NewEncoder(buf).Encode(ee); err != nil {
+		return nil, ConvertGoError(err)
+	}
+	return buf.Bytes(), nil
+}
+
+var _ encoding.BinaryUnmarshaler = new(Error)
+
+func (e *Error) UnmarshalBinary(data []byte) error {
+	var ee encodingErr
+	if err := gob.NewDecoder(bytes.NewReader(data)).Decode(&ee); err != nil {
+		return ConvertGoError(err)
+	}
+	e.code = ee.Code
+	e.mysqlCode = ee.MysqlCode
+	e.message = ee.Message
+	e.sqlState = ee.SqlState
+	return nil
+}
+
 func IsMoErrCode(e error, rc uint16) bool {
 	if e == nil {
 		return rc == Ok
@@ -367,7 +407,7 @@ func ConvertPanicError(v interface{}) *Error {
 	if e, ok := v.(*Error); ok {
 		return e
 	}
-	return newWithDepth(Context(), ErrInternal, fmt.Sprintf("panic %v: %s", v, debug.Stack()))
+	return newWithDepth(Context(), ErrInternal, fmt.Sprintf("panic %v: %+v", v, stack.Callers(3)))
 }
 
 // ConvertGoError converts a go error into mo error.

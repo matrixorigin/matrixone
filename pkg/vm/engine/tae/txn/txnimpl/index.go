@@ -15,7 +15,6 @@
 package txnimpl
 
 import (
-	"fmt"
 	"io"
 	"sync"
 
@@ -210,7 +209,7 @@ func (idx *simpleTableIndex) BatchInsert(col containers.Vector, start, count int
 			row++
 		}
 	default:
-		panic(fmt.Errorf("%s not supported", col.GetType().String()))
+		panic(moerr.NewInternalError("%s not supported", col.GetType().String()))
 	}
 	return nil
 }
@@ -267,7 +266,7 @@ func (idx *simpleTableIndex) BatchDedup(col containers.Vector) error {
 			}
 		}
 	default:
-		panic(fmt.Errorf("%s not supported", col.GetType().String()))
+		panic(moerr.NewInternalError("%s not supported", col.GetType().String()))
 	}
 	return nil
 }

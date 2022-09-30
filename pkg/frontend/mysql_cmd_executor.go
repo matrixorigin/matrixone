@@ -15,12 +15,15 @@
 package frontend
 
 import (
+	"bytes"
 	"context"
 	"encoding/binary"
+	"encoding/json"
 	goErrors "errors"
 	"fmt"
 	"math"
 	"os"
+	"reflect"
 	"runtime/pprof"
 	"sort"
 	"strconv"
@@ -36,7 +39,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/logutil/logutil2"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
@@ -146,8 +148,15 @@ func (mce *MysqlCmdExecutor) GetRoutineManager() *RoutineManager {
 	return mce.routineMgr
 }
 
-func (mce *MysqlCmdExecutor) RecordStatement(ctx context.Context, ses *Session, proc *process.Process, cw ComputationWrapper, beginIns time.Time) context.Context {
+var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Process, cw ComputationWrapper, beginIns time.Time) context.Context {
+	if !trace.GetTracerProvider().IsEnable() {
+		return ctx
+	}
 	sessInfo := proc.SessionInfo
+	tenant := ses.GetTenantInfo()
+	if tenant == nil {
+		tenant, _ = GetTenantInfo("internal")
+	}
 	var stmID uuid.UUID
 	copy(stmID[:], cw.GetUUID())
 	var txnID uuid.UUID
@@ -158,23 +167,30 @@ func (mce *MysqlCmdExecutor) RecordStatement(ctx context.Context, ses *Session, 
 	copy(sesID[:], ses.GetUUID())
 	fmtCtx := tree.NewFmtCtx(dialect.MYSQL, tree.WithQuoteString(true))
 	cw.GetAst().Format(fmtCtx)
-	trace.ReportStatement(
-		ctx,
-		&trace.StatementInfo{
-			StatementID:          stmID,
-			TransactionID:        txnID,
-			SessionID:            sesID,
-			Account:              "account", //fixme: sessInfo.GetAccount()
-			User:                 sessInfo.GetUser(),
-			Host:                 sessInfo.GetHost(),
-			Database:             sessInfo.GetDatabase(),
-			Statement:            fmtCtx.String(),
-			StatementFingerprint: "", // fixme
-			StatementTag:         "", // fixme
-			RequestAt:            util.NowNS(),
-		},
-	)
-	return trace.ContextWithSpanContext(ctx, trace.SpanContextWithID(trace.TraceID(stmID)))
+	stm := &trace.StatementInfo{
+		StatementID:          stmID,
+		TransactionID:        txnID,
+		SessionID:            sesID,
+		Account:              tenant.GetTenant(),
+		User:                 tenant.GetUser(),
+		Host:                 sessInfo.GetHost(),
+		Database:             sessInfo.GetDatabase(),
+		Statement:            fmtCtx.String(),
+		StatementFingerprint: "", // fixme: (Reserved)
+		StatementTag:         "", // fixme: (Reserved)
+		RequestAt:            util.NowNS(),
+	}
+	sc := trace.SpanContextWithID(trace.TraceID(stmID))
+	return trace.ContextWithStatement(trace.ContextWithSpanContext(ctx, sc), stm)
+}
+
+// RecordStatementTxnID record txnID after TxnBegin or Compile(autocommit=1)
+var RecordStatementTxnID = func(ctx context.Context, ses *Session) {
+	if stm := trace.StatementFromContext(ctx); ses != nil && stm != nil && !stm.IsZeroTxnID() {
+		if handler := ses.GetTxnHandler(); handler.IsValidTxn() {
+			stm.SetTxnID(handler.GetTxn().Txn().ID)
+		}
+	}
 }
 
 // outputPool outputs the data
@@ -351,7 +367,7 @@ func handleShowColumns(ses *Session) error {
 		ses.Mrs.AddRow(row)
 	}
 	if err := ses.GetMysqlProtocol().SendResultSetTextBatchRowSpeedup(ses.Mrs, ses.Mrs.GetRowCount()); err != nil {
-		logutil.Errorf("handleShowCreateTable error %v \n", err)
+		logutil.Errorf("handleShowColumns error %v \n", err)
 		return err
 	}
 	return nil
@@ -367,7 +383,6 @@ Warning: The pipeline is the multi-thread environment. The getDataFromPipeline w
 */
 func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 	ses := obj.(*Session)
-
 	if bat == nil {
 		return nil
 	}
@@ -763,7 +778,7 @@ func extractRowFromVector(ses *Session, vec *vector.Vector, i int, row []interfa
 		}
 	default:
 		logutil.Errorf("extractRowFromVector : unsupported type %d \n", vec.Typ.Oid)
-		return fmt.Errorf("extractRowFromVector : unsupported type %d", vec.Typ.Oid)
+		return moerr.NewInternalError("extractRowFromVector : unsupported type %d", vec.Typ.Oid)
 	}
 	return nil
 }
@@ -827,7 +842,7 @@ func (mce *MysqlCmdExecutor) handleSelectVariables(ve *tree.VarExpr) error {
 	resp := NewResponse(ResultResponse, 0, int(COM_QUERY), mer)
 
 	if err := proto.SendResponse(resp); err != nil {
-		return fmt.Errorf("routine send response failed. error:%v ", err)
+		return moerr.NewInternalError("routine send response failed. error:%v ", err)
 	}
 	return err
 }
@@ -835,7 +850,7 @@ func (mce *MysqlCmdExecutor) handleSelectVariables(ve *tree.VarExpr) error {
 /*
 handle Load DataSource statement
 */
-func (mce *MysqlCmdExecutor) handleLoadData(requestCtx context.Context, load *tree.Load) error {
+func (mce *MysqlCmdExecutor) handleLoadData(requestCtx context.Context, load *tree.Import) error {
 	var err error
 	ses := mce.GetSession()
 	proto := ses.protocol
@@ -845,14 +860,14 @@ func (mce *MysqlCmdExecutor) handleLoadData(requestCtx context.Context, load *tr
 		TODO:support LOCAL
 	*/
 	if load.Local {
-		return fmt.Errorf("LOCAL is unsupported now")
+		return moerr.NewInternalError("LOCAL is unsupported now")
 	}
 	if load.Param.Tail.Fields == nil || len(load.Param.Tail.Fields.Terminated) == 0 {
-		return fmt.Errorf("load need FIELDS TERMINATED BY ")
+		load.Param.Tail.Fields = &tree.Fields{Terminated: ","}
 	}
 
 	if load.Param.Tail.Fields != nil && load.Param.Tail.Fields.EscapedBy != 0 {
-		return fmt.Errorf("EscapedBy field is unsupported now")
+		return moerr.NewInternalError("EscapedBy field is unsupported now")
 	}
 
 	/*
@@ -860,11 +875,11 @@ func (mce *MysqlCmdExecutor) handleLoadData(requestCtx context.Context, load *tr
 	*/
 	exist, isfile, err := PathExists(load.Param.Filepath)
 	if err != nil || !exist {
-		return fmt.Errorf("file %s does exist. err:%v", load.Param.Filepath, err)
+		return moerr.NewInternalError("file %s does exist. err:%v", load.Param.Filepath, err)
 	}
 
 	if !isfile {
-		return fmt.Errorf("file %s is a directory", load.Param.Filepath)
+		return moerr.NewInternalError("file %s is a directory", load.Param.Filepath)
 	}
 
 	/*
@@ -874,7 +889,7 @@ func (mce *MysqlCmdExecutor) handleLoadData(requestCtx context.Context, load *tr
 	loadTable := string(load.Table.Name())
 	if loadDb == "" {
 		if proto.GetDatabaseName() == "" {
-			return fmt.Errorf("load data need database")
+			return moerr.NewInternalError("load data need database")
 		}
 
 		//then, it uses the database name in the session
@@ -883,7 +898,7 @@ func (mce *MysqlCmdExecutor) handleLoadData(requestCtx context.Context, load *tr
 
 	txnHandler := ses.GetTxnHandler()
 	if ses.InMultiStmtTransactionMode() {
-		return fmt.Errorf("do not support the Load in a transaction started by BEGIN/START TRANSACTION statement")
+		return moerr.NewInternalError("do not support the Load in a transaction started by BEGIN/START TRANSACTION statement")
 	}
 	dbHandler, err := ses.GetStorage().Database(requestCtx, loadDb, txnHandler.GetTxn())
 	if err != nil {
@@ -921,7 +936,7 @@ func (mce *MysqlCmdExecutor) handleLoadData(requestCtx context.Context, load *tr
 	info := moerr.NewLoadInfo(result.Records, result.Deleted, result.Skipped, result.Warnings, result.WriteTimeout).Error()
 	resp := NewOkResponse(result.Records, 0, uint16(result.Warnings), 0, int(COM_QUERY), info)
 	if err = proto.SendResponse(resp); err != nil {
-		return fmt.Errorf("routine send response failed. error:%v ", err)
+		return moerr.NewInternalError("routine send response failed. error:%v ", err)
 	}
 	return nil
 }
@@ -1097,9 +1112,47 @@ func (mce *MysqlCmdExecutor) handleSetVar(sv *tree.SetVar) error {
 
 	resp := NewOkResponse(0, 0, 0, 0, int(COM_QUERY), "")
 	if err = proto.SendResponse(resp); err != nil {
-		return fmt.Errorf("routine send response failed. error:%v ", err)
+		return moerr.NewInternalError("routine send response failed. error:%v ", err)
 	}
 	return nil
+}
+
+func (mce *MysqlCmdExecutor) handleShowErrors() error {
+	var err error = nil
+	ses := mce.GetSession()
+	proto := mce.GetSession().protocol
+
+	levelCol := new(MysqlColumn)
+	levelCol.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+	levelCol.SetName("Level")
+
+	CodeCol := new(MysqlColumn)
+	CodeCol.SetColumnType(defines.MYSQL_TYPE_SHORT)
+	CodeCol.SetName("Code")
+
+	MsgCol := new(MysqlColumn)
+	MsgCol.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+	MsgCol.SetName("Message")
+
+	ses.Mrs.AddColumn(levelCol)
+	ses.Mrs.AddColumn(CodeCol)
+	ses.Mrs.AddColumn(MsgCol)
+
+	for i := ses.errInfo.length() - 1; i >= 0; i-- {
+		row := make([]interface{}, 3)
+		row[0] = "Error"
+		row[1] = ses.errInfo.codes[i]
+		row[2] = ses.errInfo.msgs[i]
+		ses.Mrs.AddRow(row)
+	}
+
+	mer := NewMysqlExecutionResult(0, 0, 0, 0, ses.Mrs)
+	resp := NewResponse(ResultResponse, 0, int(COM_QUERY), mer)
+
+	if err := proto.SendResponse(resp); err != nil {
+		return moerr.NewInternalError("routine send response failed. error:%v ", err)
+	}
+	return err
 }
 
 /*
@@ -1170,15 +1223,11 @@ func (mce *MysqlCmdExecutor) handleShowVariables(sv *tree.ShowVariables) error {
 		return rows[i][0].(string) < rows[j][0].(string)
 	})
 
-	for _, row := range rows {
-		ses.Mrs.AddRow(row)
-	}
-
 	mer := NewMysqlExecutionResult(0, 0, 0, 0, ses.Mrs)
 	resp := NewResponse(ResultResponse, 0, int(COM_QUERY), mer)
 
 	if err := proto.SendResponse(resp); err != nil {
-		return fmt.Errorf("routine send response failed. error:%v ", err)
+		return moerr.NewInternalError("routine send response failed. error:%v ", err)
 	}
 	return err
 }
@@ -1205,41 +1254,11 @@ func (mce *MysqlCmdExecutor) handleAnalyzeStmt(requestCtx context.Context, stmt 
 }
 
 // Note: for pass the compile quickly. We will remove the comments in the future.
+// Note: for pass the compile quickly. We will remove the comments in the future.
 func (mce *MysqlCmdExecutor) handleExplainStmt(stmt *tree.ExplainStmt) error {
-	es := explain.NewExplainDefaultOptions()
-
-	for _, v := range stmt.Options {
-		if strings.EqualFold(v.Name, "VERBOSE") {
-			if strings.EqualFold(v.Value, "TRUE") || v.Value == "NULL" {
-				es.Verbose = true
-			} else if strings.EqualFold(v.Value, "FALSE") {
-				es.Verbose = false
-			} else {
-				return moerr.NewInvalidInput("invalid explain option '%s', valud '%s'", v.Name, v.Value)
-			}
-		} else if strings.EqualFold(v.Name, "ANALYZE") {
-			if strings.EqualFold(v.Value, "TRUE") || v.Value == "NULL" {
-				es.Anzlyze = true
-			} else if strings.EqualFold(v.Value, "FALSE") {
-				es.Anzlyze = false
-			} else {
-				return moerr.NewInvalidInput("invalid explain option '%s', valud '%s'", v.Name, v.Value)
-			}
-		} else if strings.EqualFold(v.Name, "FORMAT") {
-			if v.Name == "NULL" {
-				return moerr.NewInvalidInput("invalid explain option '%s', valud '%s'", v.Name, v.Value)
-			} else if strings.EqualFold(v.Value, "TEXT") {
-				es.Format = explain.EXPLAIN_FORMAT_TEXT
-			} else if strings.EqualFold(v.Value, "JSON") {
-				es.Format = explain.EXPLAIN_FORMAT_JSON
-			} else if strings.EqualFold(v.Value, "DOT") {
-				es.Format = explain.EXPLAIN_FORMAT_DOT
-			} else {
-				return moerr.NewInvalidInput("invalid explain option '%s', valud '%s'", v.Name, v.Value)
-			}
-		} else {
-			return moerr.NewInvalidInput("invalid explain option '%s', valud '%s'", v.Name, v.Value)
-		}
+	es, err := getExplainOption(stmt.Options)
+	if err != nil {
+		return err
 	}
 
 	switch stmt.Statement.(type) {
@@ -1256,7 +1275,6 @@ func (mce *MysqlCmdExecutor) handleExplainStmt(stmt *tree.ExplainStmt) error {
 	if err != nil {
 		return err
 	}
-
 	if plan.GetQuery() == nil {
 		return moerr.NewNotSupported("the sql query plan does not support explain.")
 	}
@@ -1389,6 +1407,11 @@ func (mce *MysqlCmdExecutor) handleCreateAccount(ctx context.Context, ca *tree.C
 	return InitGeneralTenant(ctx, tenant, ca)
 }
 
+// handleDropAccount drops a new user-level tenant
+func (mce *MysqlCmdExecutor) handleDropAccount(ctx context.Context, da *tree.DropAccount) error {
+	return doDropAccount(ctx, mce.GetSession(), da)
+}
+
 // handleCreateUser creates the user for the tenant
 func (mce *MysqlCmdExecutor) handleCreateUser(ctx context.Context, cu *tree.CreateUser) error {
 	ses := mce.GetSession()
@@ -1396,6 +1419,11 @@ func (mce *MysqlCmdExecutor) handleCreateUser(ctx context.Context, cu *tree.Crea
 
 	//step1 : create the user
 	return InitUser(ctx, tenant, cu)
+}
+
+// handleDropUser drops the user for the tenant
+func (mce *MysqlCmdExecutor) handleDropUser(ctx context.Context, du *tree.DropUser) error {
+	return doDropUser(ctx, mce.GetSession(), du)
 }
 
 // handleCreateRole creates the new role
@@ -1407,12 +1435,17 @@ func (mce *MysqlCmdExecutor) handleCreateRole(ctx context.Context, cr *tree.Crea
 	return InitRole(ctx, tenant, cr)
 }
 
+// handleDropRole drops the role
+func (mce *MysqlCmdExecutor) handleDropRole(ctx context.Context, dr *tree.DropRole) error {
+	return doDropRole(ctx, mce.GetSession(), dr)
+}
+
 // handleGrantRole grants the role
 func (mce *MysqlCmdExecutor) handleGrantRole(ctx context.Context, gr *tree.GrantRole) error {
 	return doGrantRole(ctx, mce.GetSession(), gr)
 }
 
-// handleRevoke revokes the role
+// handleRevokeRole revokes the role
 func (mce *MysqlCmdExecutor) handleRevokeRole(ctx context.Context, rr *tree.RevokeRole) error {
 	return doRevokeRole(ctx, mce.GetSession(), rr)
 }
@@ -1420,6 +1453,11 @@ func (mce *MysqlCmdExecutor) handleRevokeRole(ctx context.Context, rr *tree.Revo
 // handleGrantRole grants the privilege to the role
 func (mce *MysqlCmdExecutor) handleGrantPrivilege(ctx context.Context, gp *tree.GrantPrivilege) error {
 	return doGrantPrivilege(ctx, mce.GetSession(), gp)
+}
+
+// handleRevokePrivilege revokes the privilege from the user or role
+func (mce *MysqlCmdExecutor) handleRevokePrivilege(ctx context.Context, rp *tree.RevokePrivilege) error {
+	return doRevokePrivilege(ctx, mce.GetSession(), rp)
 }
 
 func GetExplainColumns(explainColName string) ([]interface{}, error) {
@@ -1438,6 +1476,46 @@ func GetExplainColumns(explainColName string) ([]interface{}, error) {
 		columns[i] = c
 	}
 	return columns, err
+}
+
+func getExplainOption(options []tree.OptionElem) (*explain.ExplainOptions, error) {
+	es := explain.NewExplainDefaultOptions()
+	if options == nil {
+		return es, nil
+	} else {
+		for _, v := range options {
+			if strings.EqualFold(v.Name, "VERBOSE") {
+				if strings.EqualFold(v.Value, "TRUE") || v.Value == "NULL" {
+					es.Verbose = true
+				} else if strings.EqualFold(v.Value, "FALSE") {
+					es.Verbose = false
+				} else {
+					return nil, moerr.NewInvalidInput("invalid explain option '%s', valud '%s'", v.Name, v.Value)
+				}
+			} else if strings.EqualFold(v.Name, "ANALYZE") {
+				if strings.EqualFold(v.Value, "TRUE") || v.Value == "NULL" {
+					es.Analyze = true
+				} else if strings.EqualFold(v.Value, "FALSE") {
+					es.Analyze = false
+				} else {
+					return nil, moerr.NewInvalidInput("invalid explain option '%s', valud '%s'", v.Name, v.Value)
+				}
+			} else if strings.EqualFold(v.Name, "FORMAT") {
+				if strings.EqualFold(v.Value, "TEXT") {
+					es.Format = explain.EXPLAIN_FORMAT_TEXT
+				} else if strings.EqualFold(v.Value, "JSON") {
+					return nil, moerr.NewNotSupported("Unsupport explain format '%s'", v.Value)
+				} else if strings.EqualFold(v.Value, "DOT") {
+					return nil, moerr.NewNotSupported("Unsupport explain format '%s'", v.Value)
+				} else {
+					return nil, moerr.NewInvalidInput("invalid explain option '%s', valud '%s'", v.Name, v.Value)
+				}
+			} else {
+				return nil, moerr.NewInvalidInput("invalid explain option '%s', valud '%s'", v.Name, v.Value)
+			}
+		}
+		return es, nil
+	}
 }
 
 func buildMoExplainQuery(explainColName string, buffer *explain.ExplainDataBuffer, session *Session, fill func(interface{}, *batch.Batch) error) error {
@@ -1543,7 +1621,7 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 		// for _, obj := range preparePlan.GetSchemas() {
 		// 	newObj, _ := cwft.ses.txnCompileCtx.Resolve(obj.SchemaName, obj.ObjName)
 		// 	if newObj == nil || newObj.Obj != obj.Obj {
-		// 		return nil, errors.New("", fmt.Sprintf("table '%s' has been changed, please reset prepare statement '%s'", obj.ObjName, stmtName))
+		// 		return nil, moerr.NewInternalError("", fmt.Sprintf("table '%s' has been changed, please reset prepare statement '%s'", obj.ObjName, stmtName))
 		// 	}
 		// }
 
@@ -1576,11 +1654,23 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 	cwft.proc.TxnOperator = txnHandler.GetTxn()
 	cwft.proc.FileService = cwft.ses.Pu.FileService
 	cwft.compile = compile.New(cwft.ses.GetDatabaseName(), cwft.ses.GetSql(), cwft.ses.GetUserName(), requestCtx, cwft.ses.GetStorage(), cwft.proc, cwft.stmt)
+
+	if _, ok := cwft.stmt.(*tree.ExplainAnalyze); ok {
+		fill = func(obj interface{}, bat *batch.Batch) error { return nil }
+	}
 	err = cwft.compile.Compile(cwft.plan, cwft.ses, fill)
 	if err != nil {
 		return nil, err
 	}
+	RecordStatementTxnID(requestCtx, cwft.ses)
 	return cwft.compile, err
+}
+
+func (cwft *TxnComputationWrapper) RecordExecPlan(ctx context.Context) error {
+	if stm := trace.StatementFromContext(ctx); stm != nil {
+		stm.SetExecPlan(cwft.plan, SerializeExecPlan)
+	}
+	return nil
 }
 
 func (cwft *TxnComputationWrapper) GetUUID() []byte {
@@ -1618,7 +1708,8 @@ func buildPlan(requestCtx context.Context, ses *Session, ctx plan2.CompilerConte
 	case *tree.Select, *tree.ParenSelect,
 		*tree.Update, *tree.Delete, *tree.Insert,
 		*tree.ShowDatabases, *tree.ShowTables, *tree.ShowColumns,
-		*tree.ShowCreateDatabase, *tree.ShowCreateTable:
+		*tree.ShowCreateDatabase, *tree.ShowCreateTable,
+		*tree.ExplainStmt, *tree.ExplainAnalyze:
 		opt := plan2.NewBaseOptimizer(ctx)
 		optimized, err := opt.Optimize(stmt)
 		if err != nil {
@@ -1688,6 +1779,25 @@ func incStatementCounter(tenant string, stmt tree.Statement) {
 	}
 }
 
+func incTransactionErrorsCounter(tenant string, t metric.SQLType) {
+	metric.TransactionErrorsCounter(tenant, t).Inc()
+}
+
+func incStatementErrorsCounter(tenant string, stmt tree.Statement) {
+	switch stmt.(type) {
+	case *tree.Select:
+		metric.StatementErrorsCounter(tenant, metric.SQLTypeSelect).Inc()
+	case *tree.Insert:
+		metric.StatementErrorsCounter(tenant, metric.SQLTypeInsert).Inc()
+	case *tree.Delete:
+		metric.StatementErrorsCounter(tenant, metric.SQLTypeDelete).Inc()
+	case *tree.Update:
+		metric.StatementErrorsCounter(tenant, metric.SQLTypeUpdate).Inc()
+	default:
+		metric.StatementErrorsCounter(tenant, metric.SQLTypeOther).Inc()
+	}
+}
+
 func (mce *MysqlCmdExecutor) beforeRun(stmt tree.Statement) {
 	// incStatementCounter(sess.GetTenantInfo().Tenant, stmt, sess.IsInternal)
 	incStatementCounter("0", stmt)
@@ -1753,31 +1863,32 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 	for _, cw := range cws {
 		ses.SetMysqlResultSet(&MysqlResultSet{})
 		stmt := cw.GetAst()
-		ctx := mce.RecordStatement(requestCtx, ses, proc, cw, beginInstant)
-
+		requestCtx = RecordStatement(requestCtx, ses, proc, cw, beginInstant)
+		tenant := sysAccountName
 		if ses.GetTenantInfo() != nil {
+			tenant = ses.GetTenantInfo().GetTenant()
 			ses.SetPrivilege(determinePrivilegeSetOfStatement(stmt))
 			havePrivilege, err2 = authenticatePrivilegeOfStatementWithObjectTypeAccountAndDatabase(requestCtx, ses, stmt)
 			if err2 != nil {
-				logStatementStatus(ctx, ses, stmt, fail, err2)
+				logStatementStatus(requestCtx, ses, stmt, fail, err2)
 				return err2
 			}
 
 			if !havePrivilege {
 				retErr = moerr.NewInternalError("do not have privilege to execute the statement")
-				logStatementStatus(ctx, ses, stmt, fail, retErr)
+				logStatementStatus(requestCtx, ses, stmt, fail, retErr)
 				return retErr
 			}
 
 			havePrivilege, err2 = authenticatePrivilegeOfStatementWithObjectTypeNone(requestCtx, ses, stmt)
 			if err2 != nil {
-				logStatementStatus(ctx, ses, stmt, fail, err2)
+				logStatementStatus(requestCtx, ses, stmt, fail, err2)
 				return err2
 			}
 
 			if !havePrivilege {
 				retErr = moerr.NewInternalError("do not have privilege to execute the statement")
-				logStatementStatus(ctx, ses, stmt, fail, retErr)
+				logStatementStatus(requestCtx, ses, stmt, fail, retErr)
 				return retErr
 			}
 		}
@@ -1801,19 +1912,19 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 				//is ddl statement
 				if IsDDL(stmt) {
 					retErr = errorOnlyCreateStatement
-					logStatementStatus(ctx, ses, stmt, fail, retErr)
+					logStatementStatus(requestCtx, ses, stmt, fail, retErr)
 					return retErr
 				} else if IsAdministrativeStatement(stmt) {
 					retErr = errorAdministrativeStatement
-					logStatementStatus(ctx, ses, stmt, fail, retErr)
+					logStatementStatus(requestCtx, ses, stmt, fail, retErr)
 					return retErr
 				} else if IsParameterModificationStatement(stmt) {
 					retErr = errorParameterModificationInTxn
-					logStatementStatus(ctx, ses, stmt, fail, retErr)
+					logStatementStatus(requestCtx, ses, stmt, fail, retErr)
 					return retErr
 				} else {
 					retErr = errorUnclassifiedStatement
-					logStatementStatus(ctx, ses, stmt, fail, retErr)
+					logStatementStatus(requestCtx, ses, stmt, fail, retErr)
 					return retErr
 				}
 			}
@@ -1826,14 +1937,17 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			if err != nil {
 				goto handleFailed
 			}
+			RecordStatementTxnID(requestCtx, ses)
 		case *tree.CommitTransaction:
 			err = ses.TxnCommit()
 			if err != nil {
+				incTransactionErrorsCounter(tenant, metric.SQLTypeCommit)
 				goto handleFailed
 			}
 		case *tree.RollbackTransaction:
 			err = ses.TxnRollback()
 			if err != nil {
+				incTransactionErrorsCounter(tenant, metric.SQLTypeRollback)
 				goto handleFailed
 			}
 		}
@@ -1870,13 +1984,13 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			if string(st.Name) == ses.GetDatabaseName() {
 				ses.SetUserName("")
 			}
-		/*case *tree.Load:
-		fromLoadData = true
-		selfHandle = true
-		err = mce.handleLoadData(requestCtx, st)
-		if err != nil {
-			goto handleFailed
-		}*/
+		case *tree.Import:
+			fromLoadData = true
+			selfHandle = true
+			err = mce.handleLoadData(requestCtx, st)
+			if err != nil {
+				goto handleFailed
+			}
 		case *tree.PrepareStmt:
 			selfHandle = true
 			prepareStmt, err = mce.handlePrepareStmt(st)
@@ -1909,6 +2023,12 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			if err != nil {
 				goto handleFailed
 			}
+		case *tree.ShowErrors, *tree.ShowWarnings:
+			selfHandle = true
+			err = mce.handleShowErrors()
+			if err != nil {
+				goto handleFailed
+			}
 		case *tree.AnalyzeStmt:
 			selfHandle = true
 			if err = mce.handleAnalyzeStmt(requestCtx, st); err != nil {
@@ -1920,8 +2040,15 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 				goto handleFailed
 			}
 		case *tree.ExplainAnalyze:
-			err = moerr.NewNYI("explain analyze")
-			goto handleFailed
+			ses.Data = nil
+			switch st.Statement.(type) {
+			case *tree.Delete:
+				mce.ses.GetTxnCompileCtx().SetQueryType(TXN_DELETE)
+			case *tree.Update:
+				mce.ses.GetTxnCompileCtx().SetQueryType(TXN_UPDATE)
+			default:
+				mce.ses.GetTxnCompileCtx().SetQueryType(TXN_DEFAULT)
+			}
 		case *tree.ShowColumns:
 			ses.showStmtType = ShowColumns
 			ses.Data = nil
@@ -1939,21 +2066,33 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			if err = mce.handleCreateAccount(requestCtx, st); err != nil {
 				goto handleFailed
 			}
-		case *tree.DropAccount: //TODO
+		case *tree.DropAccount:
+			selfHandle = true
+			if err = mce.handleDropAccount(requestCtx, st); err != nil {
+				goto handleFailed
+			}
 		case *tree.AlterAccount: //TODO
 		case *tree.CreateUser:
 			selfHandle = true
 			if err = mce.handleCreateUser(requestCtx, st); err != nil {
 				goto handleFailed
 			}
-		case *tree.DropUser: //TODO
+		case *tree.DropUser:
+			selfHandle = true
+			if err = mce.handleDropUser(requestCtx, st); err != nil {
+				goto handleFailed
+			}
 		case *tree.AlterUser: //TODO
 		case *tree.CreateRole:
 			selfHandle = true
 			if err = mce.handleCreateRole(requestCtx, st); err != nil {
 				goto handleFailed
 			}
-		case *tree.DropRole: //TODO
+		case *tree.DropRole:
+			selfHandle = true
+			if err = mce.handleDropRole(requestCtx, st); err != nil {
+				goto handleFailed
+			}
 		case *tree.Grant:
 			selfHandle = true
 			switch st.Typ {
@@ -1974,6 +2113,9 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 					goto handleFailed
 				}
 			case tree.RevokeTypePrivilege:
+				if err = mce.handleRevokePrivilege(requestCtx, &st.RevokePrivilege); err != nil {
+					goto handleFailed
+				}
 			}
 		}
 
@@ -1993,17 +2135,17 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 
 		runner = ret.(ComputationRunner)
 		if !ses.Pu.SV.DisableRecordTimeElapsedOfSqlRequest {
-			logutil2.Infof(ctx, "time of Exec.Build : %s", time.Since(cmpBegin).String())
+			logutil.Infof("time of Exec.Build : %s", time.Since(cmpBegin).String())
 		}
 
 		// cw.Compile might rewrite sql, here we fetch the latest version
-		switch cw.GetAst().(type) {
+		switch statement := cw.GetAst().(type) {
 		//produce result set
 		case *tree.Select,
 			*tree.ShowCreateTable, *tree.ShowCreateDatabase, *tree.ShowTables, *tree.ShowDatabases, *tree.ShowColumns,
-			*tree.ShowProcessList, *tree.ShowErrors, *tree.ShowWarnings, *tree.ShowVariables, *tree.ShowStatus,
-			*tree.ShowIndex, *tree.ShowCreateView,
-			*tree.ExplainFor, *tree.ExplainAnalyze, *tree.ExplainStmt:
+			*tree.ShowProcessList, *tree.ShowStatus, *tree.ShowTableStatus, *tree.ShowGrants,
+			*tree.ShowIndex, *tree.ShowCreateView, *tree.ShowTarget,
+			*tree.ExplainFor, *tree.ExplainStmt:
 			columns, err2 := cw.GetColumns()
 			if err2 != nil {
 				logutil.Errorf("GetColumns from Computation handler failed. error: %v", err2)
@@ -2087,6 +2229,13 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			if err != nil {
 				goto handleFailed
 			}
+
+			/*
+				Step 4: Serialize the execution plan by json
+			*/
+			if cwft, ok := cw.(*TxnComputationWrapper); ok {
+				cwft.RecordExecPlan(requestCtx)
+			}
 		//just status, no result set
 		case *tree.CreateTable, *tree.DropTable, *tree.CreateDatabase, *tree.DropDatabase,
 			*tree.CreateIndex, *tree.DropIndex,
@@ -2101,7 +2250,6 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			*tree.SetDefaultRole, *tree.SetRole, *tree.SetPassword,
 			*tree.Delete:
 			runBegin := time.Now()
-
 			/*
 				Step 1: Start
 			*/
@@ -2118,13 +2266,108 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			if !ses.Pu.SV.DisableRecordTimeElapsedOfSqlRequest {
 				logutil.Infof("time of SendResponse %s", time.Since(echoTime).String())
 			}
+
+			/*
+				Step 4: Serialize the execution plan by json
+			*/
+			if cwft, ok := cw.(*TxnComputationWrapper); ok {
+				cwft.RecordExecPlan(requestCtx)
+			}
+		case *tree.ExplainAnalyze:
+			explainColName := "QUERY PLAN"
+			var columns []interface{}
+			columns, err = GetExplainColumns(explainColName)
+			if err != nil {
+				logutil.Errorf("GetColumns from ExplainColumns handler failed, error: %v", err)
+				return err
+			}
+			/*
+				Step 1 : send column count and column definition.
+			*/
+			//send column count
+			colCnt := uint64(len(columns))
+			err = proto.SendColumnCountPacket(colCnt)
+			if err != nil {
+				goto handleFailed
+			}
+			//send columns
+			//column_count * Protocol::ColumnDefinition packets
+			cmd := ses.Cmd
+			for _, c := range columns {
+				mysqlc := c.(Column)
+				ses.Mrs.AddColumn(mysqlc)
+				/*
+					mysql COM_QUERY response: send the column definition per column
+				*/
+				err = proto.SendColumnDefinitionPacket(mysqlc, cmd)
+				if err != nil {
+					goto handleFailed
+				}
+			}
+			/*
+				mysql COM_QUERY response: End after the column has been sent.
+				send EOF packet
+			*/
+			err = proto.SendEOFPacketIf(0, 0)
+			if err != nil {
+				goto handleFailed
+			}
+
+			runBegin := time.Now()
+			/*
+				Step 1: Start
+			*/
+			if err = runner.Run(0); err != nil {
+				goto handleFailed
+			}
+
+			if !ses.Pu.SV.DisableRecordTimeElapsedOfSqlRequest {
+				logutil.Infof("time of Exec.Run : %s", time.Since(runBegin).String())
+			}
+
+			if cwft, ok := cw.(*TxnComputationWrapper); ok {
+				queryPlan := cwft.plan
+				// generator query explain
+				explainQuery := explain.NewExplainQueryImpl(queryPlan.GetQuery())
+
+				// build explain data buffer
+				buffer := explain.NewExplainDataBuffer()
+				var option *explain.ExplainOptions
+				option, err = getExplainOption(statement.Options)
+				if err != nil {
+					return err
+				}
+
+				err = explainQuery.ExplainPlan(buffer, option)
+				if err != nil {
+					return err
+				}
+
+				err = buildMoExplainQuery(explainColName, buffer, ses, getDataFromPipeline)
+				if err != nil {
+					return err
+				}
+
+				/*
+					Step 3: Say goodbye
+					mysql COM_QUERY response: End after the data row has been sent.
+					After all row data has been sent, it sends the EOF or OK packet.
+				*/
+				err = proto.sendEOFOrOkPacket(0, 0)
+				if err != nil {
+					goto handleFailed
+				}
+			}
+			return nil
 		}
 	handleSucceeded:
 		//load data handle txn failure internally
 		if !fromLoadData {
 			txnErr = ses.TxnCommitSingleStatement(stmt)
 			if txnErr != nil {
-				logStatementStatus(ctx, ses, stmt, fail, txnErr)
+				incTransactionErrorsCounter(tenant, metric.SQLTypeCommit)
+				trace.EndStatement(requestCtx, txnErr)
+				logStatementStatus(requestCtx, ses, stmt, fail, txnErr)
 				return txnErr
 			}
 			switch stmt.(type) {
@@ -2138,40 +2381,47 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 				*tree.Deallocate:
 				resp := NewOkResponse(rspLen, 0, 0, 0, int(COM_QUERY), "")
 				if err := mce.GetSession().protocol.SendResponse(resp); err != nil {
-					retErr = fmt.Errorf("routine send response failed. error:%v ", err)
-					logStatementStatus(ctx, ses, stmt, fail, retErr)
+					trace.EndStatement(requestCtx, err)
+					retErr = moerr.NewInternalError("routine send response failed. error:%v ", err)
+					logStatementStatus(requestCtx, ses, stmt, fail, retErr)
 					return retErr
 				}
 
 			case *tree.PrepareStmt, *tree.PrepareString:
 				if mce.ses.Cmd == int(COM_STMT_PREPARE) {
 					if err := mce.ses.protocol.SendPrepareResponse(prepareStmt); err != nil {
-						retErr = fmt.Errorf("routine send response failed. error:%v ", err)
-						logStatementStatus(ctx, ses, stmt, fail, retErr)
+						trace.EndStatement(requestCtx, err)
+						retErr = moerr.NewInternalError("routine send response failed. error:%v ", err)
+						logStatementStatus(requestCtx, ses, stmt, fail, retErr)
 						return retErr
 					}
 				} else {
 					resp := NewOkResponse(rspLen, 0, 0, 0, int(COM_QUERY), "")
 					if err := mce.GetSession().protocol.SendResponse(resp); err != nil {
-						retErr = fmt.Errorf("routine send response failed. error:%v ", err)
-						logStatementStatus(ctx, ses, stmt, fail, retErr)
+						trace.EndStatement(requestCtx, err)
+						retErr = moerr.NewInternalError("routine send response failed. error:%v ", err)
+						logStatementStatus(requestCtx, ses, stmt, fail, retErr)
 						return retErr
 					}
 				}
 			}
 		}
-		logStatementStatus(ctx, ses, stmt, success, nil)
+		trace.EndStatement(requestCtx, nil)
+		logStatementStatus(requestCtx, ses, stmt, success, nil)
 		goto handleNext
 	handleFailed:
+		incStatementErrorsCounter(tenant, stmt)
+		trace.EndStatement(requestCtx, err)
 		logutil.Error(err.Error())
 		if !fromLoadData {
 			txnErr = ses.TxnRollbackSingleStatement(stmt)
 			if txnErr != nil {
-				logStatementStatus(ctx, ses, stmt, fail, txnErr)
+				incTransactionErrorsCounter(tenant, metric.SQLTypeRollback)
+				logStatementStatus(requestCtx, ses, stmt, fail, txnErr)
 				return txnErr
 			}
 		}
-		logStatementStatus(ctx, ses, stmt, fail, err)
+		logStatementStatus(requestCtx, ses, stmt, fail, err)
 		return err
 	handleNext:
 	} // end of for
@@ -2211,7 +2461,7 @@ func (mce *MysqlCmdExecutor) ExecRequest(requestCtx context.Context, req *Reques
 		logutil.Infof("connection id %d query:%s", ses.GetConnectionID(), SubStringFromBegin(query, int(ses.Pu.SV.LengthOfQueryPrinted)))
 		seps := strings.Split(query, " ")
 		if len(seps) <= 0 {
-			resp = NewGeneralErrorResponse(COM_QUERY, fmt.Errorf("invalid query"))
+			resp = NewGeneralErrorResponse(COM_QUERY, moerr.NewInternalError("invalid query"))
 			return resp, nil
 		}
 
@@ -2314,7 +2564,7 @@ func (mce *MysqlCmdExecutor) ExecRequest(requestCtx context.Context, req *Reques
 		return resp, nil
 
 	default:
-		err := fmt.Errorf("unsupported command. 0x%x", req.GetCmd())
+		err := moerr.NewInternalError("unsupported command. 0x%x", req.GetCmd())
 		resp = NewGeneralErrorResponse(uint8(req.GetCmd()), err)
 	}
 	return resp, nil
@@ -2384,7 +2634,7 @@ func StatementCanBeExecutedInUncommittedTransaction(stmt tree.Statement) bool {
 	case *tree.CreateTable, *tree.CreateDatabase, *tree.CreateIndex, *tree.CreateView:
 		return true
 		//dml statement
-	case *tree.Insert, *tree.Update, *tree.Delete, *tree.Select, *tree.Load:
+	case *tree.Insert, *tree.Update, *tree.Delete, *tree.Select, *tree.Load, *tree.Unnest:
 		return true
 		//transaction
 	case *tree.BeginTransaction, *tree.CommitTransaction, *tree.RollbackTransaction:
@@ -2528,7 +2778,66 @@ func convertEngineTypeToMysqlType(engineType types.T, col *MysqlColumn) error {
 	case types.T_uuid:
 		col.SetColumnType(defines.MYSQL_TYPE_UUID)
 	default:
-		return fmt.Errorf("RunWhileSend : unsupported type %d", engineType)
+		return moerr.NewInternalError("RunWhileSend : unsupported type %d", engineType)
 	}
 	return nil
+}
+
+// build plan json when marhal plan error
+func buildErrorJsonPlan(uuid uuid.UUID, errcode uint16, msg string) []byte {
+	explainData := explain.ExplainData{
+		Code:    errcode,
+		Message: msg,
+		Success: false,
+		Uuid:    uuid.String(),
+	}
+	buffer := &bytes.Buffer{}
+	encoder := json.NewEncoder(buffer)
+	encoder.SetEscapeHTML(false)
+	encoder.Encode(explainData)
+	return buffer.Bytes()
+}
+
+func serializePlanToJson(queryPlan *plan2.Plan, uuid uuid.UUID) []byte {
+	var jsonBytes []byte
+	if queryPlan != nil && queryPlan.GetQuery() != nil {
+		explainQuery := explain.NewExplainQueryImpl(queryPlan.GetQuery())
+		options := &explain.ExplainOptions{
+			Verbose: true,
+			Analyze: true,
+			Format:  explain.EXPLAIN_FORMAT_TEXT,
+		}
+		marshalPlan := explainQuery.BuildJsonPlan(uuid, options)
+		// data transform to json datastruct
+		buffer := &bytes.Buffer{}
+		encoder := json.NewEncoder(buffer)
+		encoder.SetEscapeHTML(false)
+		err := encoder.Encode(marshalPlan)
+		if err != nil {
+			moError := moerr.NewInternalError("serialize plan to json error: %s", err.Error())
+			jsonBytes = buildErrorJsonPlan(uuid, moError.ErrorCode(), moError.Error())
+		} else {
+			jsonBytes = buffer.Bytes()
+		}
+	} else {
+		jsonBytes = buildErrorJsonPlan(uuid, moerr.ErrWarn, "sql query no record execution plan")
+	}
+	return jsonBytes
+}
+
+// SerializeExecPlan Serialize the execution plan by json
+var SerializeExecPlan = func(plan any, uuid uuid.UUID) []byte {
+	if plan == nil {
+		return serializePlanToJson(nil, uuid)
+	} else if queryPlan, ok := plan.(*plan2.Plan); !ok {
+		moError := moerr.NewInternalError("execPlan not type of plan2.Plan: %s", reflect.ValueOf(plan).Type().Name())
+		return buildErrorJsonPlan(uuid, moError.ErrorCode(), moError.Error())
+	} else {
+		// data transform to json dataStruct
+		return serializePlanToJson(queryPlan, uuid)
+	}
+}
+
+func init() {
+	trace.SetDefaultSerializeExecPlan(SerializeExecPlan)
 }

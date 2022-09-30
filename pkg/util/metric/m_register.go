@@ -22,8 +22,15 @@ const constTenantKey = "account"
 var sysTenantID = prom.Labels{constTenantKey: "sys"}
 
 var initCollectors = []Collector{
+	// sql metric
 	StatementCounterFactory,
+	TransactionErrorsFactory,
+	StatementErrorsFactory,
+	// server metric
+	ConnFactory,
+	// process metric
 	processCollector,
+	// sys metric
 	hardwareStatsCollector,
 }
 

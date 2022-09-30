@@ -15,7 +15,7 @@
 package operator
 
 import (
-	"errors"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -29,7 +29,7 @@ func Is(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error)
 
 	lefts := vector.MustTCols[bool](lv)
 	if !rv.IsScalar() || rv.IsScalarNull() {
-		return nil, errors.New("second parameter of IS must be TRUE or FALSE")
+		return nil, moerr.NewInternalError("second parameter of IS must be TRUE or FALSE")
 	}
 	right := vector.MustTCols[bool](rv)[0]
 

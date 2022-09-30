@@ -15,7 +15,7 @@
 package tasks
 
 import (
-	"errors"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -26,8 +26,8 @@ import (
 )
 
 var (
-	ErrDispatcherNotFound = errors.New("tae sched: dispatcher not found")
-	ErrSchedule           = errors.New("tae sched: cannot schedule")
+	ErrDispatcherNotFound = moerr.NewInternalError("tae sched: dispatcher not found")
+	ErrSchedule           = moerr.NewInternalError("tae sched: cannot schedule")
 )
 
 type Scheduler interface {

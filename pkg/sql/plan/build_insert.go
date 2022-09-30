@@ -15,12 +15,12 @@
 package plan
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 )
 
 func buildInsert(stmt *tree.Insert, ctx CompilerContext) (p *Plan, err error) {
@@ -131,7 +131,7 @@ func buildInsertValues(stmt *tree.Insert, ctx CompilerContext) (p *Plan, err err
 			}
 			// build column
 			for j, col := range explicitCols {
-				expr, err := getDefaultExpr(col.Default, col.Typ)
+				expr, err := getDefaultExpr(col)
 				if err != nil {
 					return nil, err
 				}
@@ -148,7 +148,7 @@ func buildInsertValues(stmt *tree.Insert, ctx CompilerContext) (p *Plan, err err
 			idx := 0
 			for j, col := range explicitCols {
 				if _, ok := row[idx].(*tree.DefaultVal); ok {
-					expr, err := getDefaultExpr(col.Default, col.Typ)
+					expr, err := getDefaultExpr(col)
 					if err != nil {
 						return nil, err
 					}
@@ -171,7 +171,7 @@ func buildInsertValues(stmt *tree.Insert, ctx CompilerContext) (p *Plan, err err
 			}
 
 			for _, col := range otherCols {
-				expr, err := getDefaultExpr(col.Default, col.Typ)
+				expr, err := getDefaultExpr(col)
 				if err != nil {
 					return nil, err
 				}
@@ -181,15 +181,23 @@ func buildInsertValues(stmt *tree.Insert, ctx CompilerContext) (p *Plan, err err
 		}
 	}
 
+	pKeyCols := ctx.GetPrimaryKeyDef(dbName, tblName)
+	var cPkey *ColDef = nil
+	if len(pKeyCols) > 0 && pKeyCols[0].IsCPkey {
+		// build composite primary key
+		cPkey = pKeyCols[0]
+	}
+
 	return &Plan{
 		Plan: &plan.Plan_Ins{
 			Ins: &plan.InsertValues{
-				DbName:       dbName,
-				TblName:      tblName,
-				ExplicitCols: explicitCols,
-				OtherCols:    otherCols,
-				OrderAttrs:   orderAttrs,
-				Columns:      columns,
+				DbName:        dbName,
+				TblName:       tblName,
+				ExplicitCols:  explicitCols,
+				OtherCols:     otherCols,
+				OrderAttrs:    orderAttrs,
+				Columns:       columns,
+				CompositePkey: cPkey,
 			},
 		},
 	}, nil
@@ -306,7 +314,7 @@ func getInsertExprs(stmt *tree.Insert, cols []*ColDef, tableDef *TableDef) ([]*E
 				}
 			} else {
 				var err error
-				exprs[i], err = getDefaultExpr(tableDef.Cols[i].Default, tableDef.Cols[i].Typ)
+				exprs[i], err = getDefaultExpr(tableDef.Cols[i])
 				if err != nil {
 					return nil, err
 				}
@@ -324,6 +332,10 @@ func getInsertTable(stmt tree.TableExpr, ctx CompilerContext) (*ObjectRef, *Tabl
 		objRef, tableDef := ctx.Resolve(dbName, tblName)
 		if tableDef == nil {
 			return nil, nil, moerr.NewInvalidInput("insert target table '%s' does not exist", tblName)
+		}
+		pkeyColDef := ctx.GetPrimaryKeyDef(dbName, tblName)
+		if len(pkeyColDef) > 0 && pkeyColDef[0].IsCPkey {
+			tableDef.CompositePkey = pkeyColDef[0]
 		}
 		return objRef, tableDef, nil
 	case *tree.ParenTableExpr:

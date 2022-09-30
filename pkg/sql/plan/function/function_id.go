@@ -51,6 +51,10 @@ const (
 	ISNOTNULL                 //ISNOTNULL
 	ISUNKNOWN                 //ISUNKNOWN
 	ISNOTUNKNOWN              //ISNOTUNKNOWN
+	ISTRUE                    //ISTRUE
+	ISNOTTRUE                 //ISNOTTRUE
+	ISFALSE                   //ISFALSE
+	ISNOTFALSE                //ISNOTTRUE
 	OP_BIT_AND                // &
 	OP_BIT_OR                 // |
 	OP_BIT_XOR                // ^
@@ -205,7 +209,10 @@ const (
 	SUBSTRING // SUBSTRING
 	WEEK      //WEEK
 	WEEKDAY
-	YEAR // YEAR
+	YEAR   // YEAR
+	HOUR   // HOUR
+	MINUTE // MINUTE
+	SECOND // SECOND
 
 	DATE_ADD              // DATE_ADD
 	DATE_SUB              // DATE_SUB
@@ -240,7 +247,7 @@ const (
 	UUID
 
 	SERIAL
-
+	BIN //BIN
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
 	FUNCTION_END_NUMBER
@@ -287,6 +294,10 @@ var functionIdRegister = map[string]int32{
 	"isnotnull":    ISNOTNULL,
 	"isunknown":    ISUNKNOWN,
 	"isnotunknown": ISNOTUNKNOWN,
+	"istrue":       ISTRUE,
+	"isnottrue":    ISNOTTRUE,
+	"isfalse":      ISFALSE,
+	"isnotfalse":   ISNOTFALSE,
 	"&":            OP_BIT_AND,
 	"|":            OP_BIT_OR,
 	"^":            OP_BIT_XOR,
@@ -341,6 +352,9 @@ var functionIdRegister = map[string]int32{
 	"acos":                    ACOS,
 	"bit_length":              BIT_LENGTH,
 	"date":                    DATE,
+	"hour":                    HOUR,
+	"minute":                  MINUTE,
+	"second":                  SECOND,
 	"day":                     DAY,
 	"dayofyear":               DAYOFYEAR,
 	"exp":                     EXP,
@@ -397,6 +411,8 @@ var functionIdRegister = map[string]int32{
 	"load_file":               LOAD_FILE,
 	"hex":                     HEX,
 	"serial":                  SERIAL,
+	"hash_value":              HASH,
+	"bin":                     BIN,
 }
 
 func GetFunctionIsWinfunByName(name string) bool {

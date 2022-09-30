@@ -18,7 +18,6 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
-	"errors"
 	"os"
 	"sync"
 	"time"
@@ -75,7 +74,6 @@ func (rm *RoutineManager) Created(rs goetty.IOSession) {
 
 	rm.rwlock.Lock()
 	defer rm.rwlock.Unlock()
-	rs.Ref()
 	rm.clients[rs] = routine
 }
 
@@ -121,7 +119,7 @@ func (rm *RoutineManager) Handler(rs goetty.IOSession, msg interface{}, received
 	routine, ok := rm.clients[rs]
 	rm.rwlock.RUnlock()
 	if !ok {
-		return errors.New("routine does not exist")
+		return moerr.NewInternalError("routine does not exist")
 	}
 
 	protocol := routine.protocol.(*MysqlProtocolImpl)
@@ -133,7 +131,7 @@ func (rm *RoutineManager) Handler(rs goetty.IOSession, msg interface{}, received
 	var seq = protocol.sequenceId
 	protocol.m.Unlock()
 	if !ok {
-		return errors.New("message is not Packet")
+		return moerr.NewInternalError("message is not Packet")
 	}
 
 	length := packet.Length
@@ -142,12 +140,12 @@ func (rm *RoutineManager) Handler(rs goetty.IOSession, msg interface{}, received
 		var err error
 		msg, err = protocol.tcpConn.Read(goetty.ReadOptions{})
 		if err != nil {
-			return errors.New("read msg error")
+			return moerr.NewInternalError("read msg error")
 		}
 
 		packet, ok = msg.(*Packet)
 		if !ok {
-			return errors.New("message is not Packet")
+			return moerr.NewInternalError("message is not Packet")
 		}
 
 		protocol.sequenceId = uint8(packet.SequenceID + 1)

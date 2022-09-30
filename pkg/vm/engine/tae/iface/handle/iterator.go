@@ -15,13 +15,14 @@
 package handle
 
 import (
-	"errors"
 	"io"
 	"sync"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
 var (
-	ErrIteratorEnd = errors.New("end of interator")
+	ErrIteratorEnd = moerr.NewInternalError("end of interator")
 )
 
 // Iterator TODO: this is not thread-safe

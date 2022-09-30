@@ -157,11 +157,26 @@ Database (%aa%)
 drop database likedb;
 drop database dblike;
 SELECT * FROM t1 where t1.userID<6 OR NOT t1.userID;
-invalid argument cast to bool, bad value 2
+spid    userid    score
+1    1    1
+2    2    2
+2    1    4
+3    3    3
+1    1    5
 SELECT * FROM t1 where NOT t1.userID OR t1.userID<6;
-invalid argument cast to bool, bad value 2
+spid    userid    score
+1    1    1
+2    2    2
+2    1    4
+3    3    3
+1    1    5
 SELECT * FROM t1 where NOT t1.userID || t1.userID<6;
-invalid argument cast to bool, bad value 2
+spid    userid    score
+1    1    1
+2    2    2
+2    1    4
+3    3    3
+1    1    5
 drop table if exists t1;
 create table t1 (a int);
 insert into t1 values (0),(1),(NULL);
@@ -321,3 +336,15 @@ NULL
 select ~a, ~b from t1;
 ~a	~b
 4	18446744073709551610
+select 2 << -2;
+2<<-2
+0
+select 2 >> -2;
+2>>-2
+0
+drop table if exists t1;
+create table t1 (a tinyint);
+insert into t1 values (2);
+select a << 20 from t1;
+a<<20
+2097152

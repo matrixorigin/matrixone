@@ -61,3 +61,11 @@ func (ba *BitAnd[T1]) Fill(groupIndex int64, v1 T1, v2 uint64, z int64, isEmpty 
 	}
 	return uint64(v1) & v2, false
 }
+
+func (ba *BitAnd[T1]) MarshalBinary() ([]byte, error) {
+	return nil, nil
+}
+
+func (ba *BitAnd[T1]) UnmarshalBinary(data []byte) error {
+	return nil
+}

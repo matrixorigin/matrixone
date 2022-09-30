@@ -281,6 +281,8 @@ message TableDef {
 	string table_type 		= 4;
 	string createsql 		= 5;
 	map<string, int32> name2col_index = 6;
+	ColDef composite_pkey = 7;
+	bytes table_function_param = 8;
 }
 
 message Cost {
@@ -339,6 +341,7 @@ message UpdateCtx {
 	repeated ColDef update_cols = 7;
 	repeated string other_attrs = 8;
 	repeated string order_attrs = 9;
+	ColDef composite_pkey = 10;
 }
 
 message AnalyzeInfo {
@@ -403,6 +406,9 @@ message Node {
 		INTERSECT_ALL = 55;
 		MINUS = 56;
 		MINUS_ALL = 57;
+
+		//
+		UNNEST = 58;
 	}
 
 	enum JoinFlag {
@@ -604,6 +610,8 @@ message DataDefinition {
 		SHOW_ERRORS			= 18;
 		SHOW_STATUS			= 19;
 		SHOW_PROCESSLIST	= 20;
+		SHOW_TABLE_STATUS = 21;
+		SHOW_TARGET = 22;
 	}
 	//DataDefinition type
 	DdlType ddl_type = 1;

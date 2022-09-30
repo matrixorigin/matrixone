@@ -16,6 +16,7 @@ package data
 
 import (
 	"bytes"
+
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 
 	"github.com/RoaringBitmap/roaring"
@@ -92,9 +93,9 @@ type Block interface {
 	GetMaxVisibleTS() types.TS
 
 	CheckpointWALClosure(endTs types.TS) tasks.FuncT
-	SyncBlockDataClosure(ts types.TS, rows uint32) tasks.FuncT
-	FlushColumnDataClosure(ts types.TS, colIdx int, colData containers.Vector, sync bool) tasks.FuncT
 	Destroy() error
 	ReplayIndex() error
 	Close()
+	CollectAppendInRange(start, end types.TS) (*containers.Batch, error)
+	CollectDeleteInRange(start, end types.TS) (*containers.Batch, error)
 }

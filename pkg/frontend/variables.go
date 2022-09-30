@@ -15,7 +15,6 @@
 package frontend
 
 import (
-	"errors"
 	"fmt"
 	"math"
 	bits2 "math/bits"
@@ -24,24 +23,25 @@ import (
 	"sync"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 )
 
 var (
-	errorConvertToBoolFailed        = errors.New("convert to the system variable bool type failed")
-	errorConvertToIntFailed         = errors.New("convert to the system variable int type failed")
-	errorConvertToUintFailed        = errors.New("convert to the system variable uint type failed")
-	errorConvertToDoubleFailed      = errors.New("convert to the system variable double type failed")
-	errorConvertToEnumFailed        = errors.New("convert to the system variable enum type failed")
-	errorConvertToSetFailed         = errors.New("convert to the system variable set type failed")
-	errorConvertToStringFailed      = errors.New("convert to the system variable string type failed")
-	errorConvertToNullFailed        = errors.New("convert to the system variable null type failed")
-	errorSystemVariableDoesNotExist = errors.New("the system variable does not exist")
-	errorSystemVariableIsSession    = errors.New("the system variable is session")
-	errorSystemVariableSessionEmpty = errors.New("the value of the system variable with scope session is empty")
-	errorSystemVariableIsGlobal     = errors.New("the system variable is global")
-	errorSystemVariableIsReadOnly   = errors.New("the system variable is read only")
+	errorConvertToBoolFailed        = moerr.NewInternalError("convert to the system variable bool type failed")
+	errorConvertToIntFailed         = moerr.NewInternalError("convert to the system variable int type failed")
+	errorConvertToUintFailed        = moerr.NewInternalError("convert to the system variable uint type failed")
+	errorConvertToDoubleFailed      = moerr.NewInternalError("convert to the system variable double type failed")
+	errorConvertToEnumFailed        = moerr.NewInternalError("convert to the system variable enum type failed")
+	errorConvertToSetFailed         = moerr.NewInternalError("convert to the system variable set type failed")
+	errorConvertToStringFailed      = moerr.NewInternalError("convert to the system variable string type failed")
+	errorConvertToNullFailed        = moerr.NewInternalError("convert to the system variable null type failed")
+	errorSystemVariableDoesNotExist = moerr.NewInternalError("the system variable does not exist")
+	errorSystemVariableIsSession    = moerr.NewInternalError("the system variable is session")
+	errorSystemVariableSessionEmpty = moerr.NewInternalError("the value of the system variable with scope session is empty")
+	errorSystemVariableIsGlobal     = moerr.NewInternalError("the system variable is global")
+	errorSystemVariableIsReadOnly   = moerr.NewInternalError("the system variable is read only")
 )
 
 type Scope int
@@ -437,7 +437,7 @@ func (svdt SystemVariableDoubleType) Zero() interface{} {
 }
 
 var (
-	errorEnumHasMoreThan65535Values = errors.New("the enum has more than 65535 values")
+	errorEnumHasMoreThan65535Values = moerr.NewInternalError("the enum has more than 65535 values")
 )
 
 type SystemVariableEnumType struct {
@@ -535,12 +535,12 @@ const (
 )
 
 var (
-	errorValuesOfSetIsEmpty       = errors.New("the count of values for set is empty")
-	errorValuesOfSetGreaterThan64 = errors.New("the count of value is greater than 64")
-	errorValueHasComma            = errors.New("the value has the comma")
-	errorValueIsDuplicate         = errors.New("the value is duplicate")
-	errorValuesAreNotEnough       = errors.New("values are not enough")
-	errorValueIsInvalid           = errors.New("the value is invalid")
+	errorValuesOfSetIsEmpty       = moerr.NewInternalError("the count of values for set is empty")
+	errorValuesOfSetGreaterThan64 = moerr.NewInternalError("the count of value is greater than 64")
+	errorValueHasComma            = moerr.NewInternalError("the value has the comma")
+	errorValueIsDuplicate         = moerr.NewInternalError("the value is duplicate")
+	errorValuesAreNotEnough       = moerr.NewInternalError("values are not enough")
+	errorValueIsInvalid           = moerr.NewInternalError("the value is invalid")
 )
 
 type SystemVariableSetType struct {
@@ -1080,68 +1080,68 @@ func updateTimeZone(sess *Session, vars map[string]interface{}, name string, val
 		sess.SetTimeZone(time.Local)
 	} else if tzStr[0] == '-' {
 		if len(tzStr) != 6 {
-			return errors.New("incorrect timezone " + tzStr)
+			return moerr.NewInternalError("incorrect timezone " + tzStr)
 		}
 
 		if tzStr[1] < '0' || tzStr[1] > '9' {
-			return errors.New("incorrect timezone " + tzStr)
+			return moerr.NewInternalError("incorrect timezone " + tzStr)
 		}
 		hour := int(tzStr[1]-'0') * 10
 		if tzStr[2] < '0' || tzStr[2] > '9' {
-			return errors.New("incorrect timezone " + tzStr)
+			return moerr.NewInternalError("incorrect timezone " + tzStr)
 		}
 		hour += int(tzStr[2] - '0')
 
 		if tzStr[3] != ':' {
-			return errors.New("incorrect timezone " + tzStr)
+			return moerr.NewInternalError("incorrect timezone " + tzStr)
 		}
 
 		if tzStr[4] < '0' || tzStr[4] > '9' {
-			return errors.New("incorrect timezone " + tzStr)
+			return moerr.NewInternalError("incorrect timezone " + tzStr)
 		}
 		minute := int(tzStr[4]-'0') * 10
 		if tzStr[5] < '0' || tzStr[5] > '9' {
-			return errors.New("incorrect timezone " + tzStr)
+			return moerr.NewInternalError("incorrect timezone " + tzStr)
 		}
 		minute += int(tzStr[5] - '0')
 
 		minute += hour * 60
 		if minute >= 14*60 {
-			return errors.New("incorrect timezone " + tzStr)
+			return moerr.NewInternalError("incorrect timezone " + tzStr)
 		}
 
 		vars[name] = tzStr
 		sess.SetTimeZone(time.FixedZone("FixedZone", -minute*60))
 	} else if tzStr[0] == '+' {
 		if len(tzStr) != 6 {
-			return errors.New("incorrect timezone " + tzStr)
+			return moerr.NewInternalError("incorrect timezone " + tzStr)
 		}
 
 		if tzStr[1] < '0' || tzStr[1] > '9' {
-			return errors.New("incorrect timezone " + tzStr)
+			return moerr.NewInternalError("incorrect timezone " + tzStr)
 		}
 		hour := int(tzStr[1]-'0') * 10
 		if tzStr[2] < '0' || tzStr[2] > '9' {
-			return errors.New("incorrect timezone " + tzStr)
+			return moerr.NewInternalError("incorrect timezone " + tzStr)
 		}
 		hour += int(tzStr[2] - '0')
 
 		if tzStr[3] != ':' {
-			return errors.New("incorrect timezone " + tzStr)
+			return moerr.NewInternalError("incorrect timezone " + tzStr)
 		}
 
 		if tzStr[4] < '0' || tzStr[4] > '9' {
-			return errors.New("incorrect timezone " + tzStr)
+			return moerr.NewInternalError("incorrect timezone " + tzStr)
 		}
 		minute := int(tzStr[4]-'0') * 10
 		if tzStr[5] < '0' || tzStr[5] > '9' {
-			return errors.New("incorrect timezone " + tzStr)
+			return moerr.NewInternalError("incorrect timezone " + tzStr)
 		}
 		minute += int(tzStr[5] - '0')
 
 		minute += hour * 60
 		if minute > 14*60 {
-			return errors.New("incorrect timezone " + tzStr)
+			return moerr.NewInternalError("incorrect timezone " + tzStr)
 		}
 
 		vars[name] = tzStr

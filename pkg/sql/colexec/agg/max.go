@@ -16,6 +16,7 @@ package agg
 
 import (
 	"bytes"
+
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
@@ -70,6 +71,14 @@ func (m *Max[T]) Merge(_ int64, _ int64, x T, y T, xEmpty bool, yEmpty bool, _ a
 	return x, xEmpty
 }
 
+func (m *Max[T]) MarshalBinary() ([]byte, error) {
+	return nil, nil
+}
+
+func (m *Max[T]) UnmarshalBinary(data []byte) error {
+	return nil
+}
+
 func NewD64Max() *Decimal64Max {
 	return &Decimal64Max{}
 }
@@ -100,6 +109,14 @@ func (m *Decimal64Max) Merge(_ int64, _ int64, x types.Decimal64, y types.Decima
 	return x, xEmpty
 }
 
+func (m *Decimal64Max) MarshalBinary() ([]byte, error) {
+	return nil, nil
+}
+
+func (m *Decimal64Max) UnmarshalBinary(data []byte) error {
+	return nil
+}
+
 func NewD128Max() *Decimal128Max {
 	return &Decimal128Max{}
 }
@@ -128,6 +145,14 @@ func (m *Decimal128Max) Merge(_ int64, _ int64, x types.Decimal128, y types.Deci
 		return y, false
 	}
 	return x, xEmpty
+}
+
+func (m *Decimal128Max) MarshalBinary() ([]byte, error) {
+	return nil, nil
+}
+
+func (m *Decimal128Max) UnmarshalBinary(data []byte) error {
+	return nil
 }
 
 func NewBoolMax() *BoolMax {
@@ -161,6 +186,14 @@ func (m *BoolMax) Merge(_ int64, _ int64, x bool, y bool, xEmpty bool, yEmpty bo
 	return x, xEmpty
 }
 
+func (m *BoolMax) MarshalBinary() ([]byte, error) {
+	return nil, nil
+}
+
+func (m *BoolMax) UnmarshalBinary(data []byte) error {
+	return nil
+}
+
 func NewStrMax() *StrMax {
 	return &StrMax{}
 }
@@ -191,6 +224,14 @@ func (m *StrMax) Merge(_ int64, _ int64, x []byte, y []byte, xEmpty bool, yEmpty
 	return x, xEmpty
 }
 
+func (m *StrMax) MarshalBinary() ([]byte, error) {
+	return nil, nil
+}
+
+func (m *StrMax) UnmarshalBinary(data []byte) error {
+	return nil
+}
+
 func NewUuidMax() *UuidMax {
 	return &UuidMax{}
 }
@@ -219,4 +260,12 @@ func (m *UuidMax) Merge(_ int64, _ int64, x types.Uuid, y types.Uuid, xEmpty boo
 		return y, false
 	}
 	return x, xEmpty
+}
+
+func (m *UuidMax) MarshalBinary() ([]byte, error) {
+	return nil, nil
+}
+
+func (m *UuidMax) UnmarshalBinary(data []byte) error {
+	return nil
 }

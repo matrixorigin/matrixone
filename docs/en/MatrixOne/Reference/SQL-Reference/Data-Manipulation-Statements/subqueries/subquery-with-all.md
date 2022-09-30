@@ -85,6 +85,9 @@ In general, tables containing `NULL` values and empty tables are â€œedge cases.â
 |    3 |
 +------+
 3 rows in set (0.00 sec)
+
+> select a,b from t6 where a > all ( select a ,b from t4 where a>3);
+ERROR 1105 (HY000): subquery should return 1 column
 ```
 
 ## **Constraints**

@@ -24,6 +24,7 @@ import (
 	"io"
 	"unsafe"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 )
 
@@ -649,7 +650,7 @@ func WriteValues(w io.Writer, vals ...any) (n int64, err error) {
 			}
 			n += int64(nr)
 		default:
-			panic(fmt.Errorf("%T:%v not supported", v, v))
+			panic(moerr.NewInternalError("%T:%v not supported", v, v))
 		}
 	}
 	return

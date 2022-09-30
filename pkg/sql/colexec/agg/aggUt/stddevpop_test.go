@@ -15,168 +15,114 @@
 package aggut
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec/agg"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/agg"
+
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/testutil"
-	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
-	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
-	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
-	"github.com/stretchr/testify/require"
 )
 
 func TestStddevpop(t *testing.T) {
-	inputType := types.New(types.T_int8, 0, 0, 0)
-	sdp1 := agg.NewStdDevPop[int8]()
-	sdp2 := agg.NewStdDevPop[int8]()
-	sdp3 := agg.NewStdDevPop[int8]()
-	m := mheap.New(guest.New(1<<30, host.New(1<<30)))
-	vec := testutil.NewVector(Rows, inputType, m, false, nil)
-	{
-		agg := agg.NewUnaryAgg(sdp1, true, inputType, types.New(types.T_float64, 0, 0, 0), sdp1.Grows, sdp1.Eval, sdp1.Merge, sdp1.Fill, nil)
-		err := agg.Grows(1, m)
-		require.NoError(t, err)
-		for i := 0; i < Rows; i++ {
-			agg.Fill(0, int64(i), 1, []*vector.Vector{vec})
-		}
-		v, err := agg.Eval(m)
-		require.NoError(t, err)
-		require.Equal(t, []float64{2.8722813232690143}, vector.GetColumn[float64](v))
-		v.Free(m)
-	}
-	{
-		agg0 := agg.NewUnaryAgg(sdp2, true, inputType, types.New(types.T_float64, 0, 0, 0), sdp2.Grows, sdp2.Eval, sdp2.Merge, sdp2.Fill, nil)
-		err := agg0.Grows(1, m)
-		require.NoError(t, err)
-		for i := 0; i < Rows; i++ {
-			agg0.Fill(0, int64(i), 1, []*vector.Vector{vec})
-		}
-		agg1 := agg.NewUnaryAgg(sdp3, true, inputType, types.New(types.T_float64, 0, 0, 0), sdp3.Grows, sdp3.Eval, sdp3.Merge, sdp3.Fill, nil)
-		err = agg1.Grows(1, m)
-		require.NoError(t, err)
-		for i := 0; i < Rows; i++ {
-			agg1.Fill(0, int64(i), 1, []*vector.Vector{vec})
-		}
-		agg0.Merge(agg1, 0, 0)
-		{
-			v, err := agg0.Eval(m)
-			require.NoError(t, err)
-			require.Equal(t, []float64{2.8722813232690143}, vector.GetColumn[float64](v))
-			v.Free(m)
-		}
-		{
-			v, err := agg1.Eval(m)
-			require.NoError(t, err)
-			require.Equal(t, []float64{2.8722813232690143}, vector.GetColumn[float64](v))
-			v.Free(m)
-		}
-	}
-	vec.Free(m)
-	require.Equal(t, int64(0), m.Size())
-}
+	int8Typ := types.New(types.T_int8, 0, 0, 0)
+	decimal64Typ := types.New(types.T_decimal64, 0, 0, 0)
+	decimal128Typ := types.New(types.T_decimal128, 0, 0, 0)
 
-func TestStdDevPopDist(t *testing.T) {
-	inputType := types.New(types.T_int8, 0, 0, 0)
-	sdp1 := agg.NewStdDevPop[int8]()
-	sdp2 := agg.NewStdDevPop[int8]()
-	sdp3 := agg.NewStdDevPop[int8]()
-	m := mheap.New(guest.New(1<<30, host.New(1<<30)))
-	vec := testutil.NewVector(Rows, inputType, m, false, nil)
-	{
-		agg := agg.NewUnaryDistAgg(true, inputType, types.New(types.T_float64, 0, 0, 0), sdp1.Grows, sdp1.Eval, sdp1.Merge, sdp1.Fill)
-		err := agg.Grows(1, m)
-		require.NoError(t, err)
-		for i := 0; i < Rows; i++ {
-			agg.Fill(0, int64(i), 1, []*vector.Vector{vec})
-		}
-		v, err := agg.Eval(m)
-		require.NoError(t, err)
-		require.Equal(t, []float64{2.8722813232690143}, vector.GetColumn[float64](v))
-		v.Free(m)
-	}
-	{
-		agg0 := agg.NewUnaryDistAgg(true, inputType, types.New(types.T_float64, 0, 0, 0), sdp2.Grows, sdp2.Eval, sdp2.Merge, sdp2.Fill)
-		err := agg0.Grows(1, m)
-		require.NoError(t, err)
-		for i := 0; i < Rows; i++ {
-			agg0.Fill(0, int64(i), 1, []*vector.Vector{vec})
-		}
-		agg1 := agg.NewUnaryDistAgg(true, inputType, types.New(types.T_float64, 0, 0, 0), sdp3.Grows, sdp3.Eval, sdp3.Merge, sdp3.Fill)
-		err = agg1.Grows(1, m)
-		require.NoError(t, err)
-		for i := 0; i < Rows; i++ {
-			agg1.Fill(0, int64(i), 1, []*vector.Vector{vec})
-		}
-		agg0.Merge(agg1, 0, 0)
+	testCases := []testCase{
+		// int8 StdDevPop test
 		{
-			v, err := agg0.Eval(m)
-			require.NoError(t, err)
-			require.Equal(t, []float64{2.8722813232690143}, vector.GetColumn[float64](v))
-			v.Free(m)
-		}
-		{
-			v, err := agg1.Eval(m)
-			require.NoError(t, err)
-			require.Equal(t, []float64{2.8722813232690143}, vector.GetColumn[float64](v))
-			v.Free(m)
-		}
-	}
-	vec.Free(m)
-	require.Equal(t, int64(0), m.Size())
-}
+			op:         agg.AggregateStdDevPop,
+			isDistinct: false,
+			inputTyp:   int8Typ,
 
-func TestStdDevPopDecimalDist(t *testing.T) {
-	inputType := types.New(types.T_decimal64, 0, 0, 0)
-	outputType := types.New(types.T_decimal128, 0, 0, 0)
-	sdp1 := agg.NewStdD64()
-	sdp2 := agg.NewStdD64()
-	sdp3 := agg.NewStdD64()
-	m := mheap.New(guest.New(1<<30, host.New(1<<30)))
-	vec := testutil.NewVector(Rows, inputType, m, false, nil)
-	{
-		agg := agg.NewUnaryDistAgg(true, inputType, outputType, sdp1.Grows, sdp1.Eval, sdp1.Merge, sdp1.Fill)
-		err := agg.Grows(1, m)
-		require.NoError(t, err)
-		for i := 0; i < Rows; i++ {
-			agg.Fill(0, int64(i), 1, []*vector.Vector{vec})
-		}
-		v, err := agg.Eval(m)
-		require.NoError(t, err)
-		d, _ := types.Decimal128_FromFloat64(2.8722813232690143, 64, 16)
-		require.Equal(t, []types.Decimal128{d}, vector.GetColumn[types.Decimal128](v))
-		v.Free(m)
-	}
-	{
-		agg0 := agg.NewUnaryDistAgg(true, inputType, outputType, sdp2.Grows, sdp2.Eval, sdp2.Merge, sdp2.Fill)
-		err := agg0.Grows(1, m)
-		require.NoError(t, err)
-		for i := 0; i < Rows; i++ {
-			agg0.Fill(0, int64(i), 1, []*vector.Vector{vec})
-		}
-		agg1 := agg.NewUnaryDistAgg(true, inputType, outputType, sdp3.Grows, sdp3.Eval, sdp3.Merge, sdp3.Fill)
-		err = agg1.Grows(1, m)
-		require.NoError(t, err)
-		for i := 0; i < Rows; i++ {
-			agg1.Fill(0, int64(i), 1, []*vector.Vector{vec})
-		}
-		agg0.Merge(agg1, 0, 0)
+			input:    []int8{0, 1, 2, 3, 4, 5, 6, 7, 8, 9},
+			inputNsp: nil,
+			expected: []float64{2.8722813232690143},
+
+			mergeInput:  []int8{10, 11, 12, 13, 14, 15, 16, 17, 18, 19},
+			mergeNsp:    nil,
+			mergeExpect: []float64{5.766281297335398},
+
+			testMarshal: true,
+		},
+		// int8 StdDevPop test
 		{
-			v, err := agg0.Eval(m)
-			require.NoError(t, err)
-			d, _ := types.Decimal128_FromFloat64(2.8722813232690143, 64, 16)
-			require.Equal(t, []types.Decimal128{d}, vector.GetColumn[types.Decimal128](v))
-			v.Free(m)
-		}
+			op:         agg.AggregateStdDevPop,
+			isDistinct: true,
+			inputTyp:   int8Typ,
+
+			input:    []int8{1, 1, 2, 2, 3, 3, 4, 4, 5, 5},
+			inputNsp: nil,
+			expected: []float64{1.4142135623730951},
+
+			mergeInput:  []int8{6, 6, 7, 7, 8, 8, 9, 9, 10, 10},
+			mergeNsp:    nil,
+			mergeExpect: []float64{2.8722813232690143},
+
+			testMarshal: false,
+		},
+		// decimal64 StdDevPop test
 		{
-			v, err := agg1.Eval(m)
-			require.NoError(t, err)
-			d, _ := types.Decimal128_FromFloat64(2.8722813232690143, 64, 16)
-			require.Equal(t, []types.Decimal128{d}, vector.GetColumn[types.Decimal128](v))
-			v.Free(m)
-		}
+			op:         agg.AggregateStdDevPop,
+			isDistinct: false,
+			inputTyp:   decimal64Typ,
+
+			input:    []int64{9, 8, 7, 6, 5, 4, 3, 2, 1, 0},
+			inputNsp: nil,
+			expected: []float64{2.8722813232690143},
+
+			mergeInput:  []int64{0, 1, 2, 3, 4, 5, 6, 7, 8, 9},
+			mergeNsp:    nil,
+			mergeExpect: []float64{2.8722813232690143},
+
+			testMarshal: true,
+		},
+		{
+			op:         agg.AggregateStdDevPop,
+			isDistinct: true,
+			inputTyp:   decimal64Typ,
+
+			input:    []int64{9, 8, 7, 6, 5, 4, 3, 2, 1, 0},
+			inputNsp: nil,
+			expected: []float64{2.8722813232690143},
+
+			mergeInput:  []int64{0, 1, 2, 3, 4, 5, 6, 7, 8, 9},
+			mergeNsp:    nil,
+			mergeExpect: []float64{2.8722813232690143},
+
+			testMarshal: false,
+		},
+		// decimal128 StdDevPop test
+		{
+			op:         agg.AggregateStdDevPop,
+			isDistinct: false,
+			inputTyp:   decimal128Typ,
+
+			input:    []int64{9, 8, 7, 6, 5, 4, 3, 2, 1, 0},
+			inputNsp: nil,
+			expected: []float64{2.8722813232690143},
+
+			mergeInput:  []int64{0, 1, 2, 3, 4, 5, 6, 7, 8, 9},
+			mergeNsp:    nil,
+			mergeExpect: []float64{2.8722813232690143},
+
+			testMarshal: true,
+		},
+		{
+			op:         agg.AggregateStdDevPop,
+			isDistinct: true,
+			inputTyp:   decimal128Typ,
+
+			input:    []int64{9, 8, 7, 6, 5, 4, 3, 2, 1, 0},
+			inputNsp: nil,
+			expected: []float64{2.8722813232690143},
+
+			mergeInput:  []int64{0, 1, 2, 3, 4, 5, 6, 7, 8, 9},
+			mergeNsp:    nil,
+			mergeExpect: []float64{2.8722813232690143},
+
+			testMarshal: false,
+		},
 	}
-	vec.Free(m)
-	require.Equal(t, int64(0), m.Size())
+
+	RunTest(t, testCases)
 }

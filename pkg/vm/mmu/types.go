@@ -15,9 +15,9 @@
 package mmu
 
 import (
-	"errors"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
 var (
-	ErrOutOfMemory = errors.New("out of memory")
+	ErrOutOfMemory = moerr.NewInternalError("out of memory")
 )

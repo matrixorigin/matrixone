@@ -15,6 +15,7 @@
 package catalog
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"sync"
 
@@ -184,6 +185,10 @@ func (txn *mockTxn) CreateDatabase(name string) (handle.Database, error) {
 	return h, nil
 }
 
+func (txn *mockTxn) CreateDatabaseByDef(def any) (handle.Database, error) {
+	panic(moerr.NewNYI("CreateDatabaseByID is not implemented yet"))
+}
+
 func (txn *mockTxn) GetDatabase(name string) (handle.Database, error) {
 	entry, err := txn.catalog.GetDBEntry(name, txn)
 	if err != nil {
@@ -199,6 +204,10 @@ func (txn *mockTxn) DropDatabase(name string) (handle.Database, error) {
 	}
 	txn.Store.AddTxnEntry(0, entry)
 	return newMockDBHandle(txn.catalog, txn, entry), nil
+}
+
+func (txn *mockTxn) DropDatabaseByID(id uint64) (handle.Database, error) {
+	panic(moerr.NewNYI("DropDatabaseById is not implemented"))
 }
 
 func MockBatch(schema *Schema, rows int) *containers.Batch {

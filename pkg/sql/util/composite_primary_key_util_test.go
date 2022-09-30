@@ -15,6 +15,11 @@
 package util
 
 import (
+	"math"
+	"math/rand"
+	"strconv"
+	"testing"
+
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -22,10 +27,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 	"github.com/stretchr/testify/require"
-	"math"
-	"math/rand"
-	"strconv"
-	"testing"
 )
 
 func TestSimpleCompositePrimaryKey(t *testing.T) {

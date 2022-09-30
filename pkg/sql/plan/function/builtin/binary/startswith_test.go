@@ -15,10 +15,10 @@
 package binary
 
 import (
-	"errors"
 	"log"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/smartystreets/goconvey/convey"
@@ -52,7 +52,7 @@ func Test_StartsWith(t *testing.T) {
 		}
 		data, ok := vec.Col.([]uint8)
 		if !ok {
-			log.Fatal(errors.New("the Startswith function return value type is not []uint8"))
+			log.Fatal(moerr.NewInternalError("the Startswith function return value type is not []uint8"))
 		}
 		compVec := []uint8{1, 0, 0, 1, 0, 0, 1, 1, 0, 1, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1}
 		compNsp := []int64{3, 7, 11, 15, 16, 17, 18, 19}

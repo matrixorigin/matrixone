@@ -170,3 +170,6 @@ type ServerOption func(*server)
 
 // BackendOption options for create remote backend
 type BackendOption func(*remoteBackend)
+
+// CodecOption codec options
+type CodecOption func(*messageCodec)

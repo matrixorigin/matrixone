@@ -19,6 +19,8 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -68,29 +70,29 @@ var DefaultTxnFactory = func(mgr *TxnManager, store txnif.TxnStore, id uint64, s
 type Txn struct {
 	sync.WaitGroup
 	*TxnCtx
-	Ch                       chan int
 	Mgr                      *TxnManager
 	Store                    txnif.TxnStore
 	Err                      error
 	LSN                      uint64
 	TenantID, UserID, RoleID uint32
 
-	PrepareCommitFn     func(txnif.AsyncTxn) error
-	Prepare2PCPrepareFn func(txnif.AsyncTxn) error
-	PrepareRollbackFn   func(txnif.AsyncTxn) error
-	ApplyPrepareFn      func(txnif.AsyncTxn) error
-	ApplyCommitFn       func(txnif.AsyncTxn) error
-	ApplyRollbackFn     func(txnif.AsyncTxn) error
+	PrepareCommitFn   func(txnif.AsyncTxn) error
+	PrepareRollbackFn func(txnif.AsyncTxn) error
+	ApplyCommitFn     func(txnif.AsyncTxn) error
+	ApplyRollbackFn   func(txnif.AsyncTxn) error
 }
 
 func NewTxn(mgr *TxnManager, store txnif.TxnStore, txnId uint64, start types.TS, info []byte) *Txn {
 	txn := &Txn{
 		Mgr:   mgr,
 		Store: store,
-		Ch:    make(chan int, 1),
 	}
 	txn.TxnCtx = NewTxnCtx(txnId, start, info)
 	return txn
+}
+
+func (txn *Txn) HandleCmd(entry *api.Entry) (err error) {
+	return
 }
 
 func (txn *Txn) MockIncWriteCnt() int { return txn.Store.IncreateWriteCnt() }
@@ -119,18 +121,18 @@ func (txn *Txn) SetApplyRollbackFn(fn func(txnif.AsyncTxn) error)   { txn.ApplyR
 // TODO: 1. How to handle the case in which log service timed out?
 //  2. For a 2pc transaction, Rollback message may arrive before Prepare message,
 //     should handle this case by TxnStorage?
-func (txn *Txn) Prepare() (err error) {
+func (txn *Txn) Prepare() (pts types.TS, err error) {
 	//TODO::should handle this by TxnStorage?
 	if txn.Mgr.GetTxn(txn.GetID()) == nil {
 		logutil.Warn("tae : txn is not found in TxnManager")
 		//txn.Err = ErrTxnNotFound
-		return moerr.NewTxnNotFound()
+		return types.TS{}, moerr.NewTxnNotFound()
 	}
 	state := txn.GetTxnState(false)
 	if state != txnif.TxnStateActive {
 		logutil.Warnf("unexpected txn status : %s", txnif.TxnStrState(state))
 		txn.Err = moerr.NewTxnNotActive(txnif.TxnStrState(state))
-		return txn.Err
+		return types.TS{}, txn.Err
 	}
 	txn.Add(1)
 	err = txn.Mgr.OnOpTxn(&OpTxn{
@@ -140,22 +142,17 @@ func (txn *Txn) Prepare() (err error) {
 	// TxnManager is closed
 	if err != nil {
 		txn.SetError(err)
-		txn.Lock()
-		_ = txn.ToRollbackingLocked(txn.GetStartTS().Next())
-		txn.Unlock()
+		txn.ToRollbacking(txn.GetStartTS())
 		_ = txn.PrepareRollback()
 		_ = txn.ApplyRollback()
-		txn.DoneWithErr(err)
+		txn.DoneWithErr(err, true)
 	}
 	txn.Wait()
-	if txn.Err == nil {
-		//txn.State = txnif.TxnStatePrepared
-		atomic.StoreInt32((*int32)(&txn.State), (int32)(txnif.TxnStatePrepared))
-	} else {
-		//txn.Status = txnif.TxnStatusRollbacked
+
+	if txn.Err != nil {
 		txn.Mgr.DeleteTxn(txn.GetID())
 	}
-	return txn.GetError()
+	return txn.GetPrepareTS(), txn.GetError()
 }
 
 // Rollback is used to roll back a 1PC or 2PC transaction.
@@ -166,12 +163,13 @@ func (txn *Txn) Prepare() (err error) {
 func (txn *Txn) Rollback() (err error) {
 	//TODO:idempotent for rollback should be guaranteed by TxnStoage?
 	if txn.Mgr.GetTxn(txn.GetID()) == nil {
-		logutil.Warn("tae : txn is not found in TxnManager")
+		logutil.Warnf("tae : txn %d is not found in TxnManager", txn.GetID())
+		err = moerr.NewTxnNotFound()
 		return
 	}
 
 	if txn.Store.IsReadonly() {
-		txn.Mgr.DeleteTxn(txn.GetID())
+		err = txn.Mgr.DeleteTxn(txn.GetID())
 		return
 	}
 
@@ -190,19 +188,24 @@ func (txn *Txn) Committing() (err error) {
 	if state != txnif.TxnStatePrepared {
 		return moerr.NewInternalError("stat not prepared, unexpected txn status : %s", txnif.TxnStrState(state))
 	}
-	txn.Add(1)
-	txn.Ch <- EventCommitting
-	txn.Wait()
-	// XXX How can you set this and comment out?  This is vital, critical stuff.
-	//txn.Status = txnif.TxnStatusCommittingFinished
-	atomic.StoreInt32((*int32)(&txn.State), (int32)(txnif.TxnStateCommittingFinished))
-	return txn.Err
+	// TODO:
+	// Make committing log entry and flush and wait
+	if err = txn.ToCommittingFinished(); err != nil {
+		panic(err)
+	}
+	err = txn.Err
+	return
 }
 
 // Commit is used to commit a 1PC or 2PC transaction running in Coordinator or running in Participant.
 // Notice that the Commit of a 2PC transaction must be success once the commit message arrives,
 // since Preparing had already succeeded.
 func (txn *Txn) Commit() (err error) {
+	if txn.Mgr.GetTxn(txn.GetID()) == nil {
+		err = moerr.NewTxnNotFound()
+		return
+	}
+
 	// Skip readonly txn
 	if txn.Store.IsReadonly() {
 		txn.Mgr.DeleteTxn(txn.GetID())
@@ -222,31 +225,18 @@ func (txn *Txn) GetStore() txnif.TxnStore {
 
 func (txn *Txn) GetLSN() uint64 { return txn.LSN }
 
-func (txn *Txn) Event() (e int) {
-	e = <-txn.Ch
-	return
-}
-
-// TODO::need to take 2PC txn account into.
-func (txn *Txn) DoneWithErr(err error) {
-	txn.DoneCond.L.Lock()
-	if err != nil {
-		txn.ToUnknownLocked()
-		txn.SetError(err)
-	} else {
-		if txn.State == txnif.TxnStatePreparing {
-			if err := txn.ToCommittedLocked(); err != nil {
-				txn.SetError(err)
-			}
-		} else {
-			if err := txn.ToRollbackedLocked(); err != nil {
-				txn.SetError(err)
-			}
-		}
+func (txn *Txn) DoneWithErr(err error, isAbort bool) {
+	// Idempotent check
+	if moerr.IsMoErrCode(err, moerr.ErrTxnNotActive) {
+		txn.WaitGroup.Done()
+		return
 	}
-	txn.WaitGroup.Done()
-	txn.DoneCond.Broadcast()
-	txn.DoneCond.L.Unlock()
+
+	if txn.Is2PC() {
+		txn.done2PCWithErr(err, isAbort)
+		return
+	}
+	txn.done1PCWithErr(err)
 }
 
 func (txn *Txn) PrepareCommit() (err error) {
@@ -326,9 +316,9 @@ func (txn *Txn) WaitPrepared() error {
 	return txn.Store.WaitPrepared()
 }
 
-func (txn *Txn) WaitDone(err error) error {
+func (txn *Txn) WaitDone(err error, isAbort bool) error {
 	// logutil.Infof("Wait %s Done", txn.String())
-	txn.DoneWithErr(err)
+	txn.DoneWithErr(err, isAbort)
 	return txn.Err
 }
 

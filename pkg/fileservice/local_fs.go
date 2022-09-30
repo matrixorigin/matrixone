@@ -18,7 +18,6 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -82,7 +81,7 @@ func NewLocalFS(
 			// not empty, check sentinel file
 			_, err := os.Stat(filepath.Join(rootPath, sentinelFileName))
 			if os.IsNotExist(err) {
-				return nil, fmt.Errorf("%s is not a file service dir", rootPath)
+				return nil, moerr.NewInternalError("%s is not a file service dir", rootPath)
 			} else if err != nil {
 				return nil, err
 			}

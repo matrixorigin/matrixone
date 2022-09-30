@@ -16,13 +16,13 @@ package frontend
 
 import (
 	"bufio"
-	"errors"
 	"fmt"
 	"io"
 	"os"
 	"strconv"
 	"sync"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -31,6 +31,7 @@ import (
 )
 
 var OpenFile = os.OpenFile
+var escape byte = '"'
 
 type CloseExportData struct {
 	stopExportData chan interface{}
@@ -93,7 +94,7 @@ var openNewFile = func(ep *tree.ExportParam, mrs *MysqlResultSet) error {
 		}
 		header += mrs.Columns[n-1].Name() + ep.Lines.TerminatedBy
 		if ep.MaxFileSize != 0 && uint64(len(header)) >= ep.MaxFileSize {
-			return errors.New("the header line size is over the maxFileSize")
+			return moerr.NewInternalError("the header line size is over the maxFileSize")
 		}
 		if err := writeDataToCSVFile(ep, []byte(header)); err != nil {
 			return err
@@ -166,7 +167,7 @@ var Write = func(ep *tree.ExportParam, output []byte) (int, error) {
 func writeToCSVFile(oq *outputQueue, output []byte) error {
 	if oq.ep.MaxFileSize != 0 && oq.ep.CurFileSize+uint64(len(output)) > oq.ep.MaxFileSize {
 		if oq.ep.Rows == 0 {
-			return errors.New("the OneLine size is over the maxFileSize")
+			return moerr.NewInternalError("the OneLine size is over the maxFileSize")
 		}
 		oq.ep.FileCnt++
 		if err := Flush(oq.ep); err != nil {
@@ -214,6 +215,27 @@ var writeDataToCSVFile = func(ep *tree.ExportParam, output []byte) error {
 	return nil
 }
 
+func addEscapeToString(s []byte) []byte {
+	pos := make([]int, 0)
+	for i := 0; i < len(s); i++ {
+		if s[i] == escape {
+			pos = append(pos, i)
+		}
+	}
+	if len(pos) == 0 {
+		return s
+	}
+	ret := make([]byte, 0)
+	cur := 0
+	for i := 0; i < len(pos); i++ {
+		ret = append(ret, s[cur:pos[i]]...)
+		ret = append(ret, escape)
+		cur = pos[i]
+	}
+	ret = append(ret, s[cur:]...)
+	return ret
+}
+
 func exportDataToCSVFile(oq *outputQueue) error {
 	oq.ep.LineSize = 0
 
@@ -227,7 +249,7 @@ func exportDataToCSVFile(oq *outputQueue) error {
 		}
 		mysqlColumn, ok := column.(*MysqlColumn)
 		if !ok {
-			return fmt.Errorf("sendColumn need MysqlColumn")
+			return moerr.NewInternalError("sendColumn need MysqlColumn")
 		}
 		if isNil, err := oq.mrs.ColumnIsNull(0, i); err != nil {
 			return err
@@ -316,6 +338,7 @@ func exportDataToCSVFile(oq *outputQueue) error {
 			if err != nil {
 				return err
 			}
+			value = addEscapeToString(value.([]byte))
 			if err = formatOutputString(oq, value.([]byte), symbol[i], closeby, true); err != nil {
 				return err
 			}
@@ -353,9 +376,9 @@ func exportDataToCSVFile(oq *outputQueue) error {
 				return err
 			}
 		case defines.MYSQL_TYPE_TIME:
-			return fmt.Errorf("unsupported DATE/DATETIME/TIMESTAMP/MYSQL_TYPE_TIME")
+			return moerr.NewInternalError("unsupported DATE/DATETIME/TIMESTAMP/MYSQL_TYPE_TIME")
 		default:
-			return fmt.Errorf("unsupported column type %d ", mysqlColumn.ColumnType())
+			return moerr.NewInternalError("unsupported column type %d ", mysqlColumn.ColumnType())
 		}
 	}
 	oq.ep.Rows++

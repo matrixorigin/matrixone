@@ -16,6 +16,7 @@ package logservice
 
 import (
 	"context"
+	"go.uber.org/zap"
 	"time"
 
 	"github.com/lni/dragonboat/v4"
@@ -31,11 +32,11 @@ func (s *Service) BootstrapHAKeeper(ctx context.Context, cfg Config) error {
 		return err
 	}
 	if err := s.store.startHAKeeperReplica(replicaID, members, false); err != nil {
-		// let's be a little bit less strict, when HAKeeper replica is already
+		// let's be a little less strict, when HAKeeper replica is already
 		// running as a result of store.startReplicas(), we just ignore the
 		// dragonboat.ErrShardAlreadyExist error below.
 		if err != dragonboat.ErrShardAlreadyExist {
-			plog.Errorf("failed to start hakeeper replica, %v", err)
+			logger.Error("failed to start hakeeper replica", zap.Error(err))
 			return err
 		}
 	}
@@ -50,14 +51,14 @@ func (s *Service) BootstrapHAKeeper(ctx context.Context, cfg Config) error {
 		}
 		if err := s.store.setInitialClusterInfo(numOfLogShards,
 			numOfDNShards, numOfLogReplicas); err != nil {
-			plog.Errorf("failed to set initial cluster info, %v", err)
+			logger.Error("failed to set initial cluster info", zap.Error(err))
 			if err == dragonboat.ErrShardNotFound {
 				return nil
 			}
 			time.Sleep(time.Second)
 			continue
 		}
-		plog.Infof("initial cluster info set")
+		logger.Info("initial cluster info set")
 		break
 	}
 	return nil

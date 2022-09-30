@@ -44,3 +44,23 @@ func SpanFromContext(ctx context.Context) Span {
 	}
 	return noopSpan{}
 }
+
+type stmContextKeyType int
+
+const currentStmKey stmContextKeyType = iota
+
+func ContextWithStatement(parent context.Context, s *StatementInfo) context.Context {
+	return context.WithValue(parent, currentStmKey, s)
+}
+
+func StatementFromContext(ctx context.Context) *StatementInfo {
+	if ctx == nil {
+		return nil
+	} else if val := ctx.Value(currentStmKey); val == nil {
+		return nil
+	} else if stm, ok := val.(*StatementInfo); !ok {
+		return nil
+	} else {
+		return stm
+	}
+}

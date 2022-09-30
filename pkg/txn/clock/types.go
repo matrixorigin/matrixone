@@ -33,4 +33,22 @@ type Clock interface {
 	Now() (timestamp.Timestamp, timestamp.Timestamp)
 	// Update updates the clock based on the received timestamp.
 	Update(ts timestamp.Timestamp)
+
+	// SetNodeID set node id. Just used to compatible with TAE some constraint to guaranteed
+	// unique timestamp.
+	SetNodeID(id uint16)
+}
+
+var (
+	defaultClock Clock
+)
+
+// SetupDefaultClock setup global default clock
+func SetupDefaultClock(clock Clock) {
+	defaultClock = clock
+}
+
+// DefaultClock return default clock
+func DefaultClock() Clock {
+	return defaultClock
 }

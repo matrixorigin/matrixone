@@ -15,11 +15,11 @@
 package mysql
 
 import (
-	"errors"
 	"fmt"
 	"math"
 	"strconv"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
@@ -38,7 +38,7 @@ func ParseOne(sql string) (tree.Statement, error) {
 		return nil, lexer.scanner.LastError
 	}
 	if len(lexer.stmts) != 1 {
-		return nil, errors.New("syntax error, or too many sql to parse")
+		return nil, moerr.NewInternalError("syntax error, or too many sql to parse")
 	}
 	return lexer.stmts[0], nil
 }

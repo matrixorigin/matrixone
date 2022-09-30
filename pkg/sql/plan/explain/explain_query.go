@@ -15,6 +15,7 @@
 package explain
 
 import (
+	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -50,17 +51,36 @@ func (e *ExplainQueryImpl) ExplainPlan(buffer *ExplainDataBuffer, options *Expla
 	return nil
 }
 
-func (e *ExplainQueryImpl) ExplainAnalyze(buffer *ExplainDataBuffer, options *ExplainOptions) error {
-	// TODO implement me
-	panic("implement me")
+func (e *ExplainQueryImpl) BuildJsonPlan(uuid uuid.UUID, options *ExplainOptions) *ExplainData {
+	nodes := e.QueryPlan.Nodes
+	expdata := NewExplainData(uuid)
+	for index, rootNodeId := range e.QueryPlan.Steps {
+		graphData := NewGraphData()
+		err := PreOrderPlan(nodes[rootNodeId], nodes, graphData, options)
+		if err != nil {
+			var errdata *ExplainData
+			if moErr, ok := err.(*moerr.Error); ok {
+				errdata = NewExplainDataFail(uuid, moErr.MySQLCode(), moErr.Error())
+			} else {
+				newError := moerr.NewInternalError("An error occurred when plan is serialized to json")
+				errdata = NewExplainDataFail(uuid, newError.MySQLCode(), newError.Error())
+			}
+			return errdata
+		}
+		step := NewStep(index)
+		step.GraphData = *graphData
+
+		expdata.Steps = append(expdata.Steps, *step)
+	}
+	return expdata
 }
 
 func explainStep(step *plan.Node, settings *FormatSettings, options *ExplainOptions) error {
 	nodedescImpl := NewNodeDescriptionImpl(step)
 
 	if options.Format == EXPLAIN_FORMAT_TEXT {
-		basicNodeInfo, err := nodedescImpl.GetNodeBasicInfo(options)
-		if err != nil {
+		basicNodeInfo, err1 := nodedescImpl.GetNodeBasicInfo(options)
+		if err1 != nil {
 			return nil
 		}
 		settings.buffer.PushNewLine(basicNodeInfo, true, settings.level)
@@ -97,6 +117,30 @@ func explainStep(step *plan.Node, settings *FormatSettings, options *ExplainOpti
 					settings.buffer.PushNewLine(rowsetInfo, false, settings.level)
 				}
 			}
+
+			if nodedescImpl.Node.NodeType == plan.Node_UPDATE {
+				if nodedescImpl.Node.UpdateCtxs != nil {
+					updateCtxsDescImpl := &UpdateCtxsDescribeImpl{
+						UpdateCtxs: nodedescImpl.Node.UpdateCtxs,
+					}
+					updateCols, err := updateCtxsDescImpl.GetDescription(options)
+					if err != nil {
+						return err
+					}
+					settings.buffer.PushNewLine(updateCols, false, settings.level)
+				}
+			}
+		}
+
+		// print out the actual operation information
+		if options.Analyze {
+			if nodedescImpl.Node.AnalyzeInfo != nil {
+				analyze, err := nodedescImpl.GetActualAnalyzeInfo(options)
+				if err != nil {
+					return err
+				}
+				settings.buffer.PushNewLine(analyze, false, settings.level)
+			}
 		}
 
 		// Get other node descriptions, such as "Filter:", "Group Key:", "Sort Key:"
@@ -119,9 +163,9 @@ func traversalPlan(node *plan.Node, Nodes []*plan.Node, settings *FormatSettings
 	if node == nil {
 		return nil
 	}
-	err := explainStep(node, settings, options)
-	if err != nil {
-		return err
+	err1 := explainStep(node, settings, options)
+	if err1 != nil {
+		return err1
 	}
 	settings.level++
 	// Recursive traversal Query Plan
@@ -149,4 +193,31 @@ func serachNodeIndex(nodeID int32, Nodes []*plan.Node) (int32, error) {
 		}
 	}
 	return -1, moerr.NewInvalidInput("invliad plan nodeID %d", nodeID)
+}
+
+func PreOrderPlan(node *plan.Node, Nodes []*plan.Node, graphData *GraphData, options *ExplainOptions) error {
+	if node != nil {
+		newNode, err := ConvertNode(node, options)
+		if err != nil {
+			return err
+		}
+		graphData.Nodes = append(graphData.Nodes, *newNode)
+		if len(node.Children) > 0 {
+			for _, childNodeID := range node.Children {
+				index, err2 := serachNodeIndex(childNodeID, Nodes)
+				if err2 != nil {
+					return err2
+				}
+
+				edge := buildEdge(node, Nodes[index], index)
+				graphData.Edges = append(graphData.Edges, *edge)
+
+				err = PreOrderPlan(Nodes[index], Nodes, graphData, options)
+				if err != nil {
+					return err
+				}
+			}
+		}
+	}
+	return nil
 }

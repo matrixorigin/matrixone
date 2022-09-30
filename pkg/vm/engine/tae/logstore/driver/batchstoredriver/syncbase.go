@@ -15,21 +15,21 @@
 package batchstoredriver
 
 import (
-	"errors"
 	"math"
 	"sync"
 	"sync/atomic"
 
 	// "github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/entry"
 )
 
 var (
-	ErrGroupNotExist       = errors.New("group not existed")
-	ErrLsnNotExist         = errors.New("lsn not existed")
-	ErrVFileVersionTimeOut = errors.New("get vfile version timeout")
-	ErrLsnCheckpointed     = errors.New("lsn has been checkpointed")
+	ErrGroupNotExist       = moerr.NewInternalError("group not existed")
+	ErrLsnNotExist         = moerr.NewInternalError("lsn not existed")
+	ErrVFileVersionTimeOut = moerr.NewInternalError("get vfile version timeout")
+	ErrLsnCheckpointed     = moerr.NewInternalError("lsn has been checkpointed")
 )
 
 type syncBase struct {

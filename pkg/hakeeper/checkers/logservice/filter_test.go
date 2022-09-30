@@ -15,9 +15,10 @@
 package logservice
 
 import (
+	"testing"
+
 	"github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/stretchr/testify/assert"
-	"testing"
 )
 
 func TestSelector(t *testing.T) {

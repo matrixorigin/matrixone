@@ -8,6 +8,8 @@
 
 推荐硬件规格：x86 CPU；4核；32GB 内存，支持 CentOS 7+ 操作系统。
 
+更多关于硬件规格推荐，参见[硬件与操作系统要求](../FAQs/deployment-faqs.md)。
+
 ## <h2><a name="code_source">方法 1：使用源代码搭建</a></h2>
 
 ### 1. 安装部署 Go 语言环境
@@ -96,6 +98,9 @@ wget https://github.com/matrixorigin/matrixone/releases/download/v0.5.1/mo-serve
 unzip mo-server-v0.5.1-darwin-x86_64.zip
 ```
 
+!!! info
+    MatrixOne 二进制包安装方式暂时对 ARM 处理器不能完全支持。MacOS系统 M1 芯片及以上可以使用源码方式安装 MatrixOne。
+
 ### 2. 启动 MatrixOne 服务
 
 ```
@@ -143,11 +148,20 @@ docker run -d -p 6001:6001 --name matrixone matrixorigin/matrixone:nightly-commi
 
 ### 3. 挂载数据（选做）
 
-如果你需要自定义配置文件或者数据目录，可以直接挂载存放在本地磁盘的自定义配置文件：
+如果你需要自定义*配置文件*或者*数据目录*，可以直接挂载存放在本地磁盘的自定义*配置文件*以及*数据目录*：
 
 ```
 docker run -d -p 6001:6001 -v ${path_name}/system_vars_config.toml:/system_vars_config.toml:ro -v ${path_name}/store:/store:rw --name matrixone matrixorigin/matrixone:0.5.1
 ```
+
+|参数|描述|
+|---|---|
+|${path_name}/system_vars_config.toml|挂载配置文件 *system_vars_config.toml* 的本地磁盘目录|
+|/system_vars_config.toml|容器内配置文件|
+|${path_name}/store|备份 */store* 的本地磁盘目录|
+|/store|容器内 */store* 目录|
+
+更多关于 *Docker run* 的指令释义，运行命令 `docker run --help` 进行查看。
 
 ### 4. 连接 MatrixOne 服务
 

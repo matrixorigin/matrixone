@@ -475,7 +475,7 @@ func NumericToNumericOverflow[T1, T2 constraints.Integer | constraints.Float](xs
 			}
 		case *int64:
 			for _, x := range xs {
-				if math.Round(float64(x)) > math.MaxInt64 {
+				if math.Round(float64(x)) > math.MaxInt64 || math.Round(float64(x)) < math.MinInt64 {
 					return moerr.NewOutOfRange("int64", "value '%v'", x)
 				}
 			}
@@ -913,10 +913,8 @@ func NumericToBool[T constraints.Integer | constraints.Float](xs []T, rs []bool)
 	for i, x := range xs {
 		if x == 0 {
 			rs[i] = false
-		} else if x == 1 {
-			rs[i] = true
 		} else {
-			return nil, moerr.NewInvalidArg("cast to bool", x)
+			rs[i] = true
 		}
 	}
 	return rs, nil

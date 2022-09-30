@@ -41,9 +41,11 @@ func NewMVCCChain(comparefn func(MVCCNode, MVCCNode) int, newnodefn func() MVCCN
 		newnodefn: newnodefn,
 	}
 }
+func (be *MVCCChain) Depth() int {
+	return be.MVCC.Depth()
+}
 func (be *MVCCChain) StringLocked() string {
 	var w bytes.Buffer
-
 	it := common.NewGenericSortedDListIt(nil, be.MVCC, false)
 	for it.Valid() {
 		version := it.Get().GetPayload()
@@ -71,9 +73,10 @@ func (be *MVCCChain) GetIndexes() []*wal.Index {
 	return ret
 }
 
-func (be *MVCCChain) Insert(vun MVCCNode) {
+func (be *MVCCChain) Insert(vun MVCCNode) (node *common.GenericDLNode[MVCCNode]) {
 	un := vun
-	be.MVCC.Insert(un)
+	node = be.MVCC.Insert(un)
+	return
 }
 
 // [start, end]
@@ -174,6 +177,13 @@ func (be *MVCCChain) SearchNode(o MVCCNode) (node MVCCNode) {
 	return
 }
 
+func (be *MVCCChain) LoopChain(fn func(MVCCNode) bool) {
+	be.MVCC.Loop(func(n *common.GenericDLNode[MVCCNode]) bool {
+		un := n.GetPayload()
+		return fn(un)
+	}, false)
+}
+
 func (be *MVCCChain) NeedWaitCommitting(ts types.TS) (bool, txnif.TxnReader) {
 	un := be.GetNodeLocked()
 	if un == nil {
@@ -268,6 +278,12 @@ func (be *MVCCChain) ApplyRollback(index *wal.Index) error {
 }
 
 func (be *MVCCChain) ApplyCommit(index *wal.Index) error {
+	be.Lock()
+	defer be.Unlock()
+	return be.GetNodeLocked().ApplyCommit(index)
+}
+
+func (be *MVCCChain) Apply1PCCommit(index *wal.Index) error {
 	be.Lock()
 	defer be.Unlock()
 	return be.GetNodeLocked().ApplyCommit(index)

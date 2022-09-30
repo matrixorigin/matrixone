@@ -78,9 +78,9 @@ type Checkpoint struct {
 
 func (ckp *Checkpoint) String() string {
 	if ckp == nil {
-		return "CommitId=0,MaxTS=0,LSN=0"
+		return "CommitId=0,MaxTS=0-0,LSN=0"
 	}
-	return fmt.Sprintf("CommitId=%d,MaxTS=%d,LSN=%d", ckp.CommitId, ckp.MaxTS, ckp.LSN)
+	return fmt.Sprintf("CommitId=%d,MaxTS=%s,LSN=%d", ckp.CommitId, ckp.MaxTS.ToString(), ckp.LSN)
 }
 
 type CheckpointEntry struct {

@@ -68,10 +68,12 @@
 /pkg/tests/service @zhangxu19830126 @cnutshell
 /pkg/testutil @nnsgmsone
 /pkg/txn @zhangxu19830126
+/pkg/txn/storage/memorystorage @reusee
 /pkg/vectorize @aunjgr
 /pkg/util/internalExecutor @aptend
 /pkg/util/metric @aptend
 /pkg/util/toml @zhangxu19830126
+/pkg/util/trace @xzxiong
 
 # /proto contains pb definitions, owners will be responsible
 # for compatibility issues required for rolling upgrade.
@@ -98,7 +100,7 @@
 /pkg/vm/engine @nnsgmsone
 /pkg/vm/engine/memEngine @nnsgmsone
 /pkg/vm/engine/tae @XuPeng-SH 
-/pkg/vm/engine/txn @reusee
+/pkg/vm/engine/memoryengine @reusee
 
 # from the initial CODEOWNERS file
 /test @aressu1985

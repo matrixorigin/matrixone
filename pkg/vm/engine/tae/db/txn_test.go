@@ -16,7 +16,6 @@ package db
 
 import (
 	"bytes"
-	"errors"
 	"fmt"
 	"math/rand"
 	"sync"
@@ -24,6 +23,7 @@ import (
 	"testing"
 	"time"
 
+	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -51,7 +51,7 @@ var deal *catalog.Schema
 var repertory *catalog.Schema
 var app1Conf *APP1Conf
 
-var errNotEnoughRepertory = errors.New("not enough repertory")
+var errNotEnoughRepertory = moerr.NewInternalError("not enough repertory")
 
 type APP1Conf struct {
 	Users         int
@@ -270,7 +270,7 @@ func (c *APP1Client) GetGoodRepetory(goodId uint64) (id *common.ID, offset uint3
 			found = true
 			offset = uint32(row)
 			count = cntv.(uint64)
-			return fmt.Errorf("stop iteration")
+			return moerr.NewInternalError("stop iteration")
 		}, nil)
 		if found {
 			return
@@ -626,14 +626,14 @@ func TestTxn8(t *testing.T) {
 	bats := bat.Split(2)
 
 	txn, _ := tae.StartTxn(nil)
-	db, _ := txn.GetDatabase(catalog.SystemDBName)
+	db, _ := txn.GetDatabase(pkgcatalog.MO_CATALOG)
 	rel, _ := db.CreateRelation(schema)
 	err := rel.Append(bats[0])
 	assert.NoError(t, err)
 	assert.NoError(t, txn.Commit())
 
 	txn, _ = tae.StartTxn(nil)
-	db, _ = txn.GetDatabase(catalog.SystemDBName)
+	db, _ = txn.GetDatabase(pkgcatalog.MO_CATALOG)
 	rel, _ = db.GetRelationByName(schema.Name)
 	err = rel.Append(bats[1])
 	assert.NoError(t, err)

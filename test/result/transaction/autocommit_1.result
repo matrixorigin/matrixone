@@ -36,7 +36,7 @@ SELECT @@session.autocommit;
 1
 commit;
 SET @@session.autocommit=foo;
-convert to the system variable bool type failed
+internal error: convert to the system variable bool type failed
 SELECT @@session.autocommit;
 @@autocommit
 1
@@ -114,7 +114,7 @@ select * from view_tab1;
 a	b
 100000	3000
 update view_tab1 set a=100000 where b=3000;
-view is not support update operation
+internal error: view is not support update operation
 select * from view_tab1;
 a	b
 100000	3000
@@ -123,7 +123,7 @@ select * from view_tab1;
 a	b
 100000	3000
 update view_tab1 set a=100000 where b=3000;
-view is not support update operation
+internal error: view is not support update operation
 commit;
 select * from view_tab1;
 a	b
@@ -446,13 +446,13 @@ start transaction;
 SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 2 column 6 near "
 start transaction;";
 set @@a=0;
-the system variable does not exist
+internal error: the system variable does not exist
 rollback;
 set @@b=0;
-the system variable does not exist
+internal error: the system variable does not exist
 commit;
 select @@b;
-the system variable does not exist
+internal error: the system variable does not exist
 drop database if exists db;
 create database db;
 show databases like 'db';

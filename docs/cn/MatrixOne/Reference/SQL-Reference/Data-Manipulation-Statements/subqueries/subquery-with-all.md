@@ -80,6 +80,9 @@ Empty set (0.00 sec)
 |    3 |
 +------+
 3 rows in set (0.00 sec)
+
+> select a,b from t6 where a > all ( select a ,b from t4 where a>3);
+ERROR 1105 (HY000): subquery should return 1 column
 ```
 
 ## **限制**

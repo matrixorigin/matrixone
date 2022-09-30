@@ -15,15 +15,11 @@
 package common
 
 import (
-	"errors"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"sync/atomic"
-)
 
-var (
-	ErrIntervalNotContinous = errors.New("interval not continuous")
-	ErrIntervalInvalid      = errors.New("invalid interval")
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 )
 
 type ClosedInterval struct {
@@ -42,7 +38,7 @@ func (i *ClosedInterval) Append(id uint64) error {
 	}
 	if id != i.End+1 {
 		logutil.Infof("invalid interval %v %v", i, id)
-		return ErrIntervalInvalid
+		return moerr.NewInternalError("invalid interval")
 	}
 	i.End = id
 	return nil

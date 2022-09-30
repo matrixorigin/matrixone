@@ -22,6 +22,27 @@ var (
 			Help:      "Counter of executed sql statement",
 		},
 		[]string{constTenantKey, "type"},
+		true,
+	)
+
+	TransactionErrorsFactory = NewCounterVec(
+		CounterOpts{
+			Subsystem: "sql",
+			Name:      "transaction_errors",
+			Help:      "Counter of errors on execute commit/rollback statement",
+		},
+		[]string{constTenantKey, "type"},
+		false,
+	)
+
+	StatementErrorsFactory = NewCounterVec(
+		CounterOpts{
+			Subsystem: "sql",
+			Name:      "statement_errors",
+			Help:      "Counter of executed sql statement failed.",
+		},
+		[]string{constTenantKey, "type"},
+		false,
 	)
 )
 
@@ -33,8 +54,19 @@ var (
 	SQLTypeUpdate SQLType = "delete"
 	SQLTypeDelete SQLType = "update"
 	SQLTypeOther  SQLType = "other"
+
+	SQLTypeCommit   SQLType = "commit"
+	SQLTypeRollback SQLType = "rollback"
 )
 
 func StatementCounter(tenant string, t SQLType) Counter {
 	return StatementCounterFactory.WithLabelValues(tenant, string(t))
+}
+
+func TransactionErrorsCounter(account string, t SQLType) Counter {
+	return TransactionErrorsFactory.WithLabelValues(account, string(t))
+}
+
+func StatementErrorsCounter(account string, t SQLType) Counter {
+	return StatementErrorsFactory.WithLabelValues(account, string(t))
 }
