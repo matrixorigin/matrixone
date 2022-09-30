@@ -89,7 +89,15 @@ func TestTaskSchedulerCanAllocateTask(t *testing.T) {
 	err = c.Start()
 	require.NoError(t, err)
 
-	err = taskService.Create(context.TODO(), task.TaskMetadata{ID: "a"})
+	indexed, err := c.GetCNServiceIndexed(0)
+	require.NoError(t, err)
+	indexed.GetTaskRunner().RegisterExecutor(0,
+		func(ctx context.Context, task task.Task) error {
+			return nil
+		},
+	)
+
+	err = taskService.Create(context.TODO(), task.TaskMetadata{ID: "a", Executor: 0})
 	require.NoError(t, err)
 	tasks, err := taskService.QueryTask(context.TODO(),
 		taskservice.WithTaskStatusCond(taskservice.EQ, task.TaskStatus_Created))
@@ -120,7 +128,23 @@ func TestTaskSchedulerCanReallocateTask(t *testing.T) {
 	err = c.Start()
 	require.NoError(t, err)
 
-	err = taskService.Create(context.TODO(), task.TaskMetadata{ID: "a"})
+	cn1, err := c.GetCNServiceIndexed(0)
+	require.NoError(t, err)
+	cn1.GetTaskRunner().RegisterExecutor(0,
+		func(ctx context.Context, task task.Task) error {
+			return nil
+		},
+	)
+
+	cn2, err := c.GetCNServiceIndexed(1)
+	require.NoError(t, err)
+	cn2.GetTaskRunner().RegisterExecutor(0,
+		func(ctx context.Context, task task.Task) error {
+			return nil
+		},
+	)
+
+	err = taskService.Create(context.TODO(), task.TaskMetadata{ID: "a", Executor: 0})
 	require.NoError(t, err)
 	tasks, err := taskService.QueryTask(context.TODO(),
 		taskservice.WithTaskStatusCond(taskservice.EQ, task.TaskStatus_Created))
