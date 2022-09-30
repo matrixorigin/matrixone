@@ -144,9 +144,9 @@ func (l *GenericSortedDList[T]) Delete(n *GenericDLNode[T]) {
 // Loop the list and apply fn on each node
 func (l *GenericSortedDList[T]) Loop(fn func(n *GenericDLNode[T]) bool, reverse bool) {
 	if reverse {
-		LoopGenericSortedDList[T](l.tail, fn, reverse)
+		LoopGenericSortedDList(l.tail, fn, reverse)
 	} else {
-		LoopGenericSortedDList[T](l.head, fn, reverse)
+		LoopGenericSortedDList(l.head, fn, reverse)
 	}
 }
 
