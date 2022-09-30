@@ -191,7 +191,7 @@ func (t *TableReader) Close() error {
 	return nil
 }
 
-func (t *Table) Ranges(ctx context.Context) ([][]byte, error) {
+func (t *Table) Ranges(ctx context.Context, _ *plan.Expr) ([][]byte, error) {
 	// return encoded shard ids
 	clusterDetails, err := t.engine.getClusterDetails()
 	if err != nil {

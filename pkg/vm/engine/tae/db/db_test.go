@@ -16,12 +16,13 @@ package db
 
 import (
 	"bytes"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
 	"reflect"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -730,7 +731,7 @@ func TestAutoCompactABlk2(t *testing.T) {
 	testutils.EnsureNoLeak(t)
 	opts := new(options.Options)
 	opts.CacheCfg = new(options.CacheCfg)
-	opts.CacheCfg.InsertCapacity = common.K * 5
+	opts.CacheCfg.InsertCapacity = common.M * 5
 	opts.CacheCfg.TxnCapacity = common.M
 	opts = config.WithQuickScanAndCKPOpts(opts)
 	db := initDB(t, opts)
@@ -3362,4 +3363,33 @@ func TestAppendnode(t *testing.T) {
 
 	tae.restart()
 	tae.checkRowsByScan(appendCnt, true)
+}
+
+func TestTxnIdempotent(t *testing.T) {
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := newTestEngine(t, opts)
+	defer tae.Close()
+
+	schema := catalog.MockSchemaAll(1, 0)
+	schema.BlockMaxRows = 10000
+	schema.SegmentMaxBlocks = 2
+	tae.bindSchema(schema)
+	appendCnt := 20
+	bat := catalog.MockBatch(schema, appendCnt)
+	bats := bat.Split(appendCnt)
+
+	var wg sync.WaitGroup
+
+	tae.createRelAndAppend(bats[0], true)
+	for i := 0; i < 10; i++ {
+		txn, _ := tae.getRelation()
+		wg.Add(1)
+		assert.NoError(t, txn.Rollback())
+		go func() {
+			defer wg.Done()
+			assert.True(t, moerr.IsMoErrCode(txn.Commit(), moerr.ErrTxnNotFound))
+			// txn.Commit()
+		}()
+		wg.Wait()
+	}
 }

@@ -118,6 +118,41 @@ func (txn *Transaction) getDatabaseId(ctx context.Context, name string) (uint64,
 	return row[0].(uint64), nil
 }
 
+func (txn *Transaction) getTableMeta(ctx context.Context, databaseId uint64,
+	name string) (*tableMeta, error) {
+	id, defs, err := txn.getTableInfo(ctx, databaseId, name)
+	if err != nil {
+		return nil, err
+	}
+	if err := txn.db.Update(ctx, txn.dnStores, databaseId,
+		id, txn.meta.SnapshotTS); err != nil {
+		return nil, err
+	}
+	cols := make([]string, 0, len(defs))
+	{
+		for _, def := range defs {
+			if attr, ok := def.(*engine.AttributeDef); ok {
+				cols = append(cols, attr.Attr.Name)
+			}
+		}
+	}
+	blocks := make([][]BlockMeta, len(txn.dnStores))
+	for i, dnStore := range txn.dnStores {
+		rows, err := txn.getRows(ctx, databaseId, id,
+			[]DNStore{dnStore}, cols, nil)
+		if err != nil {
+			return nil, err
+		}
+		blocks[i] = genBlockMetas(rows)
+	}
+	return &tableMeta{
+		tableId:   id,
+		defs:      defs,
+		tableName: name,
+		blocks:    blocks,
+	}, nil
+}
+
 // detecting whether a transaction is a read-only transaction
 func (txn *Transaction) ReadOnly() bool {
 	return txn.readOnly
@@ -222,29 +257,27 @@ func (txn *Transaction) readTable(ctx context.Context, databaseId uint64, tableI
 	if int64(txn.statementId)-1 > 0 {
 		writes = txn.writes[:txn.statementId-1]
 	}
-	blkInfos := txn.db.BlockList(ctx, dnList, databaseId, tableId, txn.meta.SnapshotTS, writes)
-	bats := make([]*batch.Batch, 0, len(blkInfos))
-	for _, blkInfo := range blkInfos {
-		if !needRead(expr, blkInfo) {
+	bats := make([]*batch.Batch, 0, 1)
+	accessed := make(map[string]uint8)
+	for _, dn := range dnList {
+		accessed[dn.GetUUID()] = 0
+	}
+	parts := txn.db.getPartitions(databaseId, tableId)
+	for i, dn := range txn.dnStores {
+		if _, ok := accessed[dn.GetUUID()]; !ok {
 			continue
 		}
-		bat, err := blockRead(ctx, columns, blkInfo)
+		rds, err := parts[i].data.NewReader(ctx, 1, expr, nil, txn.meta.SnapshotTS, writes)
 		if err != nil {
 			return nil, err
 		}
-		bats = append(bats, bat)
-	}
-	rds, err := txn.db.NewReader(ctx, 1, expr, dnList, databaseId,
-		tableId, txn.meta.SnapshotTS, writes)
-	if err != nil {
-		return nil, err
-	}
-	for _, rd := range rds {
-		bat, err := rd.Read(columns, expr, nil)
-		if err != nil {
-			return nil, err
+		for _, rd := range rds {
+			bat, err := rd.Read(columns, expr, nil)
+			if err != nil {
+				return nil, err
+			}
+			bats = append(bats, bat)
 		}
-		bats = append(bats, bat)
 	}
 	proc := process.New(context.Background(), txn.m, nil, nil, nil)
 	for i, bat := range bats {
@@ -273,17 +306,68 @@ func (txn *Transaction) readTable(ctx context.Context, databaseId uint64, tableI
 	return bats, nil
 }
 
+func (h transactionHeap) Len() int {
+	return len(h)
+}
+
+func (h transactionHeap) Less(i, j int) bool {
+	return h[i].meta.SnapshotTS.Less(h[j].meta.SnapshotTS)
+}
+
+func (h transactionHeap) Swap(i, j int) {
+	h[i], h[j] = h[j], h[i]
+}
+
+func (h *transactionHeap) Push(x any) {
+	*h = append(*h, x.(*Transaction))
+}
+
+func (h *transactionHeap) Pop() any {
+	old := *h
+	n := len(old)
+	x := old[n-1]
+	*h = old[0 : n-1]
+	return x
+}
+
 // needRead determine if a block needs to be read
 func needRead(expr *plan.Expr, blkInfo BlockMeta) bool {
 	//TODO
 	return false
 }
 
+// needSyncDnStores determine the dn store need to sync
+func needSyncDnStores(expr *plan.Expr, defs []engine.TableDef, dnStores []DNStore) []int {
+	//TODO
+	dnList := make([]int, len(dnStores))
+	for i := range dnStores {
+		dnList[i] = i
+	}
+	return dnList
+}
+
+// get row count of block
+func blockRows(blkInfo BlockMeta) int64 {
+	// TODO
+	return 0
+}
+
+func blockMarshal(blkInfo BlockMeta) []byte {
+	// TODO
+	return nil
+}
+
+func blockUnmarshal(data []byte) BlockMeta {
+	return BlockMeta{}
+}
+
+/*
 // write a block to s3
 func blockWrite(ctx context.Context, blkInfo BlockMeta, bat *batch.Batch) error {
 	//TODO
 	return nil
 }
+*/
 
 // read a block from s3
 func blockRead(ctx context.Context, columns []string, blkInfo BlockMeta) (*batch.Batch, error) {
