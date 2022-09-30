@@ -15,8 +15,11 @@
 package indexwrapper
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/file"
 	"io"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/file"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -59,13 +62,13 @@ type Index interface {
 	// BatchUpsert batch insert the specific keys
 	// If any deduplication, it will fetch the old value first, fill the active map with new value, insert the old value into delete map
 	// If any other unknown error hanppens, return error
-	BatchUpsert(keysCtx *index.KeysCtx, offset int, ts types.TS) (*index.BatchResp, error)
+	BatchUpsert(keysCtx *index.KeysCtx, offset int, txn txnif.TxnReader) (txnNode *txnbase.TxnMVCCNode, err error)
 
 	// Delete delete the specific key
 	// If the specified key not found in active map, return ErrNotFound
 	// If any other error happens, return error
 	// Delete the specific key from active map and then insert it into delete map
-	Delete(key any, ts types.TS) error
+	Delete(key any, ts types.TS) (err error)
 	GetActiveRow(key any) (row uint32, err error)
 	// Check deletes map for specified key @ts
 	// If deleted is true, the specified key was deleted @ts
@@ -101,11 +104,11 @@ func (idx *defaultIndexImpl) BatchDedup(keys containers.Vector, rowmask *roaring
 	panic("not supported")
 }
 
-func (idx *defaultIndexImpl) BatchUpsert(keysCtx *index.KeysCtx, offset int, ts types.TS) (*index.BatchResp, error) {
+func (idx *defaultIndexImpl) BatchUpsert(keysCtx *index.KeysCtx, offset int, txn txnif.TxnReader) (txnNode *txnbase.TxnMVCCNode, err error) {
 	panic("not supported")
 }
 
-func (idx *defaultIndexImpl) Delete(key any, ts types.TS) error {
+func (idx *defaultIndexImpl) Delete(key any, ts types.TS) (err error) {
 	panic("not supported")
 }
 

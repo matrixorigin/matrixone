@@ -19,7 +19,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 )
 
 var _ Index = (*mutableIndex)(nil)
@@ -28,19 +30,17 @@ type mutableIndex struct {
 	defaultIndexImpl
 	art     index.SecondaryIndex
 	zonemap *index.ZoneMap
-	deletes *DeletesMap
 }
 
 func NewPkMutableIndex(keyT types.Type) *mutableIndex {
 	return &mutableIndex{
 		art:     index.NewSimpleARTMap(keyT),
 		zonemap: index.NewZoneMap(keyT),
-		deletes: NewDeletesMap(keyT),
 	}
 }
 
 func (idx *mutableIndex) BatchUpsert(keysCtx *index.KeysCtx,
-	offset int, ts types.TS) (resp *index.BatchResp, err error) {
+	offset int, txn txnif.TxnReader) (txnNode *txnbase.TxnMVCCNode, err error) {
 	defer func() {
 		err = TranslateError(err)
 	}()
@@ -49,68 +49,55 @@ func (idx *mutableIndex) BatchUpsert(keysCtx *index.KeysCtx,
 	}
 	// logutil.Infof("Pre: %s", idx.art.String())
 	// logutil.Infof("Post: %s", idx.art.String())
-	resp, err = idx.art.BatchInsert(keysCtx, uint32(offset), true)
-	if resp != nil {
-		posArr := resp.UpdatedKeys.ToArray()
-		rowArr := resp.UpdatedRows.ToArray()
-		for i := 0; i < len(posArr); i++ {
-			key := keysCtx.Keys.Get(int(posArr[i]))
-			if err = idx.deletes.LogDeletedKey(key, rowArr[i], ts); err != nil {
-				return
-			}
-		}
-	}
+	txnNode, err = idx.art.BatchInsert(keysCtx, uint32(offset), true, txn)
 	return
 }
 
 func (idx *mutableIndex) HasDeleteFrom(key any, fromTs types.TS) bool {
-	return idx.deletes.HasDeleteFrom(key, fromTs)
+	return idx.art.HasDeleteFrom(key, fromTs)
 }
 
 func (idx *mutableIndex) IsKeyDeleted(key any, ts types.TS) (deleted bool, existed bool) {
-	return idx.deletes.IsKeyDeleted(key, ts)
+	return idx.art.IsKeyDeleted(key, ts)
 }
 
-func (idx *mutableIndex) GetMaxDeleteTS() types.TS { return idx.deletes.GetMaxTS() }
+// func (idx *mutableIndex) GetMaxDeleteTS() types.TS { return idx.deletes.GetMaxTS() }
 
-func (idx *mutableIndex) RevertUpsert(keys containers.Vector, updatePositions,
-	updateRows *roaring.Bitmap, ts types.TS) (err error) {
-	defer func() {
-		err = TranslateError(err)
-	}()
+// func (idx *mutableIndex) RevertUpsert(keys containers.Vector, updatePositions,
+// 	updateRows *roaring.Bitmap, txn txnif.TxnReader) (err error) {
+// 	defer func() {
+// 		err = TranslateError(err)
+// 	}()
 
-	delOp := func(key any, _ int) error {
-		_, err := idx.art.Delete(key)
-		return err
-	}
-	if err = keys.Foreach(delOp, nil); err != nil {
-		return
-	}
-	if updatePositions != nil {
-		posArr := updatePositions.ToArray()
-		rowArr := updateRows.ToArray()
-		for i := 0; i < len(posArr); i++ {
-			key := keys.Get(int(posArr[i]))
-			idx.deletes.RemoveOne(key, rowArr[i])
-			if err = idx.art.Insert(key, rowArr[i]); err != nil {
-				return
-			}
-		}
-		idx.deletes.RemoveTs(ts)
-	}
-
-	return
-}
+// 	delOp := func(key any, _ int) error {
+// 		_, err := idx.art.Delete(key)
+// 		return err
+// 	}
+// 	if err = keys.Foreach(delOp, nil); err != nil {
+// 		return
+// 	}
+// 	if updatePositions != nil {
+// 		posArr := updatePositions.ToArray()
+// 		rowArr := updateRows.ToArray()
+// 		for i := 0; i < len(posArr); i++ {
+// 			key := keys.Get(int(posArr[i]))
+// 			idx.deletes.RemoveOne(key, rowArr[i])
+// 			if err = idx.art.Insert(key, rowArr[i]); err != nil {
+// 				return
+// 			}
+// 		}
+// 		idx.deletes.RemoveTs(ts)
+// 	}
+// 	return
+// }
 
 func (idx *mutableIndex) Delete(key any, ts types.TS) (err error) {
 	defer func() {
 		err = TranslateError(err)
 	}()
-	var old uint32
-	if old, err = idx.art.Delete(key); err != nil {
+	if _, _, err = idx.art.Delete(key, ts); err != nil {
 		return
 	}
-	err = idx.deletes.LogDeletedKey(key, old, ts)
 	return
 }
 
@@ -186,7 +173,7 @@ func (idx *nonPkMutIndex) Close() error {
 	return nil
 }
 
-func (idx *nonPkMutIndex) BatchUpsert(keysCtx *index.KeysCtx, offset int, ts types.TS) (resp *index.BatchResp, err error) {
+func (idx *nonPkMutIndex) BatchUpsert(keysCtx *index.KeysCtx, offset int, txn txnif.TxnReader) (txnNode *txnbase.TxnMVCCNode, err error) {
 	return nil, TranslateError(idx.zonemap.BatchUpdate(keysCtx))
 }
 

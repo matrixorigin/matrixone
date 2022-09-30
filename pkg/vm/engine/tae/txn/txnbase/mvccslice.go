@@ -25,7 +25,6 @@ import (
 
 type MVCCSlice struct {
 	MVCC      []MVCCNode
-	newnodefn func() MVCCNode
 	comparefn func(MVCCNode, MVCCNode) int
 }
 
@@ -33,7 +32,6 @@ func NewMVCCSlice(newnodefn func() MVCCNode,
 	comparefn func(MVCCNode, MVCCNode) int) *MVCCSlice {
 	return &MVCCSlice{
 		MVCC:      make([]MVCCNode, 0),
-		newnodefn: newnodefn,
 		comparefn: comparefn,
 	}
 }
@@ -105,6 +103,47 @@ func (be *MVCCSlice) SearchNode(o MVCCNode) (node MVCCNode) {
 		}
 	}
 	return
+}
+
+func (be *MVCCSlice) GetVisibleNode(ts types.TS) (node MVCCNode) {
+	length := len(be.MVCC)
+	for i := length - 1; i >= 0; i-- {
+		un := be.MVCC[i]
+		var visible bool
+		if visible = un.IsVisible(ts); visible {
+			node = un
+			break
+		}
+	}
+	return
+}
+
+func (be *MVCCSlice) GetLastNonAbortedNode() (node MVCCNode) {
+	length := len(be.MVCC)
+	for i := length - 1; i >= 0; i-- {
+		un := be.MVCC[i]
+		if !un.IsAborted() {
+			node = un
+			break
+		}
+	}
+	return
+}
+
+func (be *MVCCSlice) SearchNodeByTS(ts types.TS) (node MVCCNode) {
+	for _, n := range be.MVCC {
+		if n.GetStart().Equal(ts) {
+			node = n
+			break
+		}
+	}
+	return
+}
+
+func (be *MVCCSlice) ForEach(fn func(un MVCCNode)) {
+	for _, n := range be.MVCC {
+		fn(n)
+	}
 }
 
 // GetNodeToRead gets UpdateNode according to the timestamp.

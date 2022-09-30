@@ -20,13 +20,16 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"github.com/stretchr/testify/assert"
 )
 
 func TestRevert(t *testing.T) {
 	vec := containers.MockVector2(types.T_int64.ToType(), 20, 0)
 	vec1 := vec.CloneWindow(0, 10)
+	t.Log(vec1)
 	vec2 := vec.CloneWindow(8, 10)
+	t.Log(vec2)
 	defer vec.Close()
 	defer vec1.Close()
 	defer vec2.Close()
@@ -38,39 +41,39 @@ func TestRevert(t *testing.T) {
 	ctx.SelectAll()
 
 	//ts1 := uint64(99)
-	ts1 := types.NextGlobalTsForTest().Next()
-	resp, err := idx.BatchUpsert(ctx, 0, ts1)
+	//insert vec1 0-9
+	var txnNode *txnbase.TxnMVCCNode
+	txnNode, err := idx.BatchUpsert(ctx, 0, nil)
 	assert.NoError(t, err)
-	assert.Nil(t, resp)
 	_, err = idx.BatchDedup(vec1, nil)
 	assert.Error(t, err)
+	ts0 := types.BuildTS(1, 0)
+	txnNode.OnReplayCommit(ts0)
 
 	//ts2 := uint64(109)
-	ts2 := ts1.Next()
+	ts1 := types.BuildTS(2, 0)
+	ts2 := ts1.Prev()
 	ctx.Keys = vec2
 	ctx.SelectAll()
-	resp, err = idx.BatchUpsert(ctx, vec1.Length(), ts2)
+	txnNode, err = idx.BatchUpsert(ctx, vec1.Length(), nil)
+	txnNode.OnReplayCommit(ts1)
 	assert.NoError(t, err)
 
 	assert.Equal(t, 18, idx.art.Size())
-	assert.Equal(t, ts2, idx.deletes.GetMaxTS())
 
 	assert.False(t, idx.HasDeleteFrom(vec1.Get(7), ts2))
 	assert.True(t, idx.HasDeleteFrom(vec1.Get(8), ts2))
 	assert.True(t, idx.HasDeleteFrom(vec1.Get(9), ts2))
-	deleted, existed := idx.IsKeyDeleted(vec1.Get(8), ts2)
+	deleted, existed := idx.IsKeyDeleted(vec1.Get(8), ts1)
 	assert.True(t, deleted)
 	assert.True(t, existed)
-	deleted, existed = idx.IsKeyDeleted(vec1.Get(7), ts2)
+	deleted, existed = idx.IsKeyDeleted(vec1.Get(7), ts1)
 	assert.False(t, deleted)
 	assert.False(t, existed)
 
-	err = idx.RevertUpsert(vec2, resp.UpdatedKeys, resp.UpdatedRows, ts2)
-	assert.NoError(t, err)
+	txnNode.OnReplayRollback(ts1)
 
-	assert.Equal(t, 10, idx.art.Size())
-	var zeroV types.TS
-	assert.Equal(t, zeroV, idx.deletes.GetMaxTS())
+	// assert.Equal(t, 10, idx.art.Size())
 	assert.False(t, idx.HasDeleteFrom(vec1.Get(7), ts2))
 	assert.False(t, idx.HasDeleteFrom(vec1.Get(8), ts2))
 	assert.False(t, idx.HasDeleteFrom(vec1.Get(9), ts2))

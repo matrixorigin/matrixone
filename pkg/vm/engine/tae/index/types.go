@@ -17,7 +17,10 @@ package index
 import (
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 )
 
 var (
@@ -49,14 +52,16 @@ type BatchResp struct {
 }
 
 type SecondaryIndex interface {
-	Insert(key any, row uint32) error
-	BatchInsert(keys *KeysCtx, startRow uint32, upsert bool) (resp *BatchResp, err error)
-	Update(key any, row uint32) error
-	BatchUpdate(keys containers.Vector, offsets []uint32, start uint32) error
-	Delete(key any) (old uint32, err error)
+	Insert(key any, offset uint32, txn txnif.TxnReader) (txnnode *txnbase.TxnMVCCNode, err error)
+	BatchInsert(keys *KeysCtx, startRow uint32, upsert bool, txn txnif.TxnReader) (txnNode *txnbase.TxnMVCCNode, err error)
+	// Update(key any, row uint32) error
+	// BatchUpdate(keys containers.Vector, offsets []uint32, start uint32) error
+	Delete(key any, ts types.TS) (old uint32, txnNode *txnbase.TxnMVCCNode, err error)
 	Search(key any) (uint32, error)
 	Contains(key any) bool
 	ContainsAny(keysCtx *KeysCtx, rowmask *roaring.Bitmap) bool
+	HasDeleteFrom(key any, fromTs types.TS) bool
+	IsKeyDeleted(key any, ts types.TS) (deleted bool, existed bool)
 	String() string
 	Size() int
 }

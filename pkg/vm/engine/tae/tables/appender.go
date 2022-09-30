@@ -15,11 +15,11 @@
 package tables
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 )
 
 type blockAppender struct {
@@ -72,7 +72,7 @@ func (appender *blockAppender) PrepareAppend(
 		appender.placeholder+appender.rows)
 	return
 }
-func (appender *blockAppender) ReplayAppend(bat *containers.Batch) (err error) {
+func (appender *blockAppender) ReplayAppend(bat *containers.Batch) (txnNode *txnbase.TxnMVCCNode, err error) {
 	var from int
 	if from, err = appender.node.ApplyAppend(bat, nil); err != nil {
 		return
@@ -85,8 +85,8 @@ func (appender *blockAppender) ReplayAppend(bat *containers.Batch) (err error) {
 			continue
 		}
 		keysCtx.Keys = bat.Vecs[colDef.Idx]
-		var zeroV types.TS
-		if _, err := appender.node.block.indexes[colDef.Idx].BatchUpsert(keysCtx, from, zeroV); err != nil {
+		// TODO replay
+		if txnNode, err = appender.node.block.indexes[colDef.Idx].BatchUpsert(keysCtx, from, nil); err != nil {
 			panic(err)
 		}
 	}
@@ -96,13 +96,12 @@ func (appender *blockAppender) ReplayAppend(bat *containers.Batch) (err error) {
 }
 func (appender *blockAppender) ApplyAppend(
 	bat *containers.Batch,
-	txn txnif.AsyncTxn) (from int, err error) {
+	txn txnif.AsyncTxn) (txnNode *txnbase.TxnMVCCNode, from int, err error) {
 	appender.node.block.mvcc.Lock()
 	defer appender.node.block.mvcc.Unlock()
 	from, err = appender.node.ApplyAppend(bat, txn)
 
 	schema := appender.node.block.meta.GetSchema()
-	ts := txn.GetStartTS()
 	keysCtx := new(index.KeysCtx)
 	keysCtx.Count = bat.Length()
 	for _, colDef := range schema.ColDefs {
@@ -110,7 +109,7 @@ func (appender *blockAppender) ApplyAppend(
 			continue
 		}
 		keysCtx.Keys = bat.Vecs[colDef.Idx]
-		if _, err := appender.node.block.indexes[colDef.Idx].BatchUpsert(keysCtx, from, ts); err != nil {
+		if txnNode, err = appender.node.block.indexes[colDef.Idx].BatchUpsert(keysCtx, from, txn); err != nil {
 			panic(err)
 		}
 	}

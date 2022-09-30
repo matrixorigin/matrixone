@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/indexwrapper"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/updates"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 )
 
 func (blk *dataBlock) ReplayDelta() (err error) {
@@ -69,8 +70,7 @@ func (blk *dataBlock) replayMutIndex() error {
 		keysCtx.Keys = vec
 		keysCtx.Count = vec.Length()
 		defer keysCtx.Keys.Close()
-		var zeroV types.TS
-		blk.indexes[colDef.Idx].BatchUpsert(keysCtx, 0, zeroV)
+		blk.indexes[colDef.Idx].BatchUpsert(keysCtx, 0, nil)
 	}
 	return nil
 }
@@ -113,11 +113,11 @@ func (blk *dataBlock) OnReplayAppend(node txnif.AppendNode) (err error) {
 	return
 }
 
-func (blk *dataBlock) OnReplayAppendPayload(bat *containers.Batch) (err error) {
+func (blk *dataBlock) OnReplayAppendPayload(bat *containers.Batch) (txnNode *txnbase.TxnMVCCNode, err error) {
 	appender, err := blk.MakeAppender()
 	if err != nil {
 		return
 	}
-	err = appender.ReplayAppend(bat)
+	txnNode, err = appender.ReplayAppend(bat)
 	return
 }
