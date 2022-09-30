@@ -103,7 +103,10 @@ func (ti *TenantInfo) IsMoAdminRole() bool {
 }
 
 func (ti *TenantInfo) IsAdminRole() bool {
-	return ti.GetDefaultRoleID() == moAdminRoleID || ti.GetDefaultRoleID() == accountAdminRoleID
+	if ti.IsSysTenant() {
+		return ti.GetDefaultRoleID() == moAdminRoleID
+	}
+	return ti.GetDefaultRoleID() == accountAdminRoleID
 }
 
 func GetDefaultTenant() string {
@@ -745,6 +748,9 @@ var (
 
 	checkRoleHasPrivilegeFormat = `select role_id,with_grant_option from mo_catalog.mo_role_privs where role_id = %d and obj_type = "%s" and obj_id = %d and privilege_id = %d;`
 
+	//with_grant_option = true
+	checkRoleHasPrivilegeWGOFormat = `select role_id from mo_catalog.mo_role_privs where with_grant_option = true and privilege_id = %d;`
+
 	updateRolePrivsFormat = `update mo_catalog.mo_role_privs set operation_user_id = %d, granted_time = "%s", with_grant_option = %v where role_id = %d and obj_type = "%s" and obj_id = %d and privilege_id = %d;`
 
 	insertRolePrivsFormat = `insert into mo_catalog.mo_role_privs(role_id,role_name,obj_type,obj_id,privilege_id,privilege_name,privilege_level,operation_user_id,granted_time,with_grant_option) 
@@ -1003,6 +1009,10 @@ func getSqlForInheritedRoleIdOfRoleId(roleId int64) string {
 
 func getSqlForCheckRoleHasPrivilege(roleId int64, objType objectType, objId, privilegeId int64) string {
 	return fmt.Sprintf(checkRoleHasPrivilegeFormat, roleId, objType, objId, privilegeId)
+}
+
+func getSqlForCheckRoleHasPrivilegeWGO(privilegeId int64) string {
+	return fmt.Sprintf(checkRoleHasPrivilegeWGOFormat, privilegeId)
 }
 
 func getSqlForUpdateRolePrivs(userId int64, timestamp string, withGrantOption bool, roleId int64, objType objectType, objId, privilegeId int64) string {
@@ -2921,17 +2931,17 @@ func determinePrivilegesOfUserSatisfyPrivilegeSet(ctx context.Context, ses *Sess
 	return false, nil
 }
 
-// determineUserCanGrantRoleToOtherUsers decides if the user can grant roles to other users
-// TODO: the WGO(with_grant_option) only should be checked when the Grant Role is executing.
+const (
+	goOn        int = iota
+	successDone     //ri has indirect relation with the Uc
+)
+
+// determineUserCanGrantRoleToOtherUsers decides if the user can grant roles to other users or roles
 // the same as the grant/revoke privilege, role.
-func determineUserCanGrantRolesToOtherUsers(ctx context.Context, ses *Session, fromRoles []*tree.Role, toUsers []*tree.User) (bool, error) {
+func determineUserCanGrantRolesToOthers(ctx context.Context, ses *Session, fromRoles []*tree.Role) (bool, error) {
 	//step1: normalize the names of roles and users
 	var err error
 	err = normalizeNamesOfRoles(fromRoles)
-	if err != nil {
-		return false, err
-	}
-	err = normalizeNamesOfUsers(toUsers)
 	if err != nil {
 		return false, err
 	}
@@ -2942,11 +2952,6 @@ func determineUserCanGrantRolesToOtherUsers(ctx context.Context, ses *Session, f
 	guestMMu := guest.New(pu.SV.GuestMmuLimitation, pu.HostMmu)
 	bh := NewBackgroundHandler(ctx, guestMMu, pu.Mempool, pu)
 	defer bh.Close()
-
-	const (
-		goOn    int = iota
-		success     //ri has indirect relation with the Uc
-	)
 
 	//step3: check the link: roleX -> roleA -> .... -> roleZ -> the current user. Every link has the with_grant_option.
 	var vr *verifiedRole
@@ -3020,7 +3025,7 @@ func determineUserCanGrantRolesToOtherUsers(ctx context.Context, ses *Session, f
 				}
 
 				if atLeastOne {
-					riResult = success
+					riResult = successDone
 					break
 				}
 			}
@@ -3029,7 +3034,7 @@ func determineUserCanGrantRolesToOtherUsers(ctx context.Context, ses *Session, f
 			Rk, RkPlusOne = RkPlusOne, Rk
 		}
 
-		if riResult != success {
+		if riResult != successDone {
 			//fail
 			ret = false
 			break
@@ -3270,7 +3275,7 @@ func authenticatePrivilegeOfStatementWithObjectTypeAccountAndDatabase(ctx contex
 	if !ok && priv.kind == privilegeKindInherit {
 		grant := stmt.(*tree.Grant)
 		grantRole := grant.GrantRole
-		yes, err := determineUserCanGrantRolesToOtherUsers(ctx, ses, grantRole.Roles, grantRole.Users)
+		yes, err := determineUserCanGrantRolesToOthers(ctx, ses, grantRole.Roles)
 		if err != nil {
 			return false, err
 		}
@@ -3349,7 +3354,151 @@ func formSqlFromGrantPrivilege(ctx context.Context, ses *Session, gp *tree.Grant
 	return sql, nil
 }
 
+// getRoleSetThatPrivilegeGrantedToWGO gets all roles that the privilege granted to with with_grant_option = true
+// The algorithm 3
+func getRoleSetThatPrivilegeGrantedToWGO(ctx context.Context, bh BackgroundExec, privType PrivilegeType) (*btree.Set[int64], error) {
+	var err error
+	var results []interface{}
+	var rsset []ExecResult
+	var id int64
+	rset := &btree.Set[int64]{}
+	sql := getSqlForCheckRoleHasPrivilegeWGO(int64(privType))
+	bh.ClearExecResultSet()
+	err = bh.Exec(ctx, sql)
+	if err != nil {
+		return nil, err
+	}
+	results = bh.GetExecResultSet()
+	rsset, err = convertIntoResultSet(results)
+	if err != nil {
+		return nil, err
+	}
+
+	if len(rsset) > 0 && rsset[0].GetRowCount() > 0 {
+		for i := uint64(0); i < rsset[0].GetRowCount(); i++ {
+			id, err = rsset[0].GetInt64(i, 0)
+			if err != nil {
+				return nil, err
+			}
+			rset.Insert(id)
+		}
+	}
+
+	return rset, err
+}
+
+// determineUserCanGrantPrivilegesToOthers decides the privileges can be granted to others.
+func determineUserCanGrantPrivilegesToOthers(ctx context.Context, ses *Session, gp *tree.GrantPrivilege) (bool, error) {
+	//step1: normalize the names of roles and users
+	var err error
+	pu := ses.Pu
+	//step2: decide the current user
+	account := ses.GetTenantInfo()
+	guestMMu := guest.New(pu.SV.GuestMmuLimitation, pu.HostMmu)
+	bh := NewBackgroundHandler(ctx, guestMMu, pu.Mempool, pu)
+	defer bh.Close()
+
+	//step3: check the link: roleX -> roleA -> .... -> roleZ -> the current user. Every link has the with_grant_option.
+	var ret = true
+	var privType PrivilegeType
+	var Rt *btree.Set[int64]
+	var Rp *btree.Set[int64]
+	RkPlusOne := &btree.Set[int64]{}
+	Rk := &btree.Set[int64]{}
+	RVisited := &btree.Set[int64]{}
+	// the roles that the user using
+	Rc := &btree.Set[int64]{}
+	//TODO: add secondary role
+	Rc.Insert(int64(account.GetDefaultRoleID()))
+
+	setIsInterseted := func(A, B *btree.Set[int64]) bool {
+		if A.Len() > B.Len() {
+			A, B = B, A
+		}
+		iter := A.Iter()
+		for x := iter.First(); x; x = iter.Next() {
+			if B.Contains(iter.Key()) {
+				return true
+			}
+		}
+		return false
+	}
+
+	//put it into the single transaction
+	err = bh.Exec(ctx, "begin;")
+	if err != nil {
+		goto handleFailed
+	}
+
+	for _, priv := range gp.Privileges {
+		privType, err = convertAstPrivilegeTypeToPrivilegeType(priv.Type, gp.ObjType)
+		if err != nil {
+			goto handleFailed
+		}
+
+		//call the algorithm 3.
+		Rp, err = getRoleSetThatPrivilegeGrantedToWGO(ctx, bh, privType)
+		if err != nil {
+			goto handleFailed
+		}
+
+		if setIsInterseted(Rp, Rc) {
+			continue
+		}
+
+		riResult := goOn
+		for _, rx := range Rp.Keys() {
+			Rk.Clear()
+			RVisited.Clear()
+			Rk.Insert(rx)
+
+			//It is kind of level traversal
+			for Rk.Len() != 0 && riResult == goOn {
+				RkPlusOne.Clear()
+				for _, ri := range Rk.Keys() {
+					Rt, err = getRoleSetThatRoleGrantedToWGO(ctx, bh, ri, RVisited, RkPlusOne)
+					if err != nil {
+						goto handleFailed
+					}
+
+					if setIsInterseted(Rt, Rc) {
+						riResult = successDone
+						break
+					}
+				}
+
+				//swap Rk,R(k+1)
+				Rk, RkPlusOne = RkPlusOne, Rk
+			}
+
+			if riResult == successDone {
+				break
+			}
+		}
+		if riResult != successDone {
+			ret = false
+			break
+		}
+	}
+
+	err = bh.Exec(ctx, "commit;")
+	if err != nil {
+		goto handleFailed
+	}
+
+	return ret, err
+
+handleFailed:
+	//ROLLBACK the transaction
+	rbErr := bh.Exec(ctx, "rollback;")
+	if rbErr != nil {
+		return false, rbErr
+	}
+	return false, err
+}
+
 // determinePrivilegeHasWithGrantOption decides all privileges have the with_grant_option = true
+// It is a wrong implementation
 func determinePrivilegeHasWithGrantOption(ctx context.Context, ses *Session, gp *tree.GrantPrivilege) (bool, error) {
 	pu := ses.Pu
 	guestMMu := guest.New(pu.SV.GuestMmuLimitation, pu.HostMmu)
@@ -3614,7 +3763,7 @@ func authenticatePrivilegeOfStatementWithObjectTypeNone(ctx context.Context, ses
 			if tenant.IsAdminRole() {
 				return true, nil
 			}
-			return determinePrivilegeHasWithGrantOption(ctx, ses, g)
+			return determineUserCanGrantPrivilegesToOthers(ctx, ses, g)
 		}
 
 		checkRevokePrivilege := func() (bool, error) {
