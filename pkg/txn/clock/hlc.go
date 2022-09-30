@@ -16,11 +16,11 @@ package clock
 
 import (
 	"context"
-	"log"
 	"sync"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 )
 
@@ -208,13 +208,13 @@ func (c *HLCClock) handleClockJump(oldPts int64, newPts int64) {
 	jump := int64(0)
 	if oldPts > newPts {
 		jump = oldPts - newPts
-		log.Printf("clock backward jump observed, %d microseconds", toMicrosecond(jump))
+		logutil.Infof("clock backward jump observed, %d microseconds", toMicrosecond(jump))
 	} else {
 		jump = newPts - oldPts
 	}
 
 	if jump > int64(c.maxClockForwardOffset()+c.clockOffsetMonitoringInterval()) {
-		log.Fatalf("big clock jump observed, %d microseconds", toMicrosecond(jump))
+		logutil.Fatalf("big clock jump observed, %d microseconds", toMicrosecond(jump))
 	}
 }
 
