@@ -333,10 +333,6 @@ func getInsertTable(stmt tree.TableExpr, ctx CompilerContext) (*ObjectRef, *Tabl
 		if tableDef == nil {
 			return nil, nil, moerr.NewInvalidInput("insert target table '%s' does not exist", tblName)
 		}
-		pkeyColDef := ctx.GetPrimaryKeyDef(dbName, tblName)
-		if len(pkeyColDef) > 0 && pkeyColDef[0].IsCPkey {
-			tableDef.CompositePkey = pkeyColDef[0]
-		}
 		return objRef, tableDef, nil
 	case *tree.ParenTableExpr:
 		return getInsertTable(tbl.Expr, ctx)

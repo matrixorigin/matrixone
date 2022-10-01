@@ -302,9 +302,14 @@ func (c *SpanContext) IsEmpty() bool {
 	return c.TraceID.IsZero() && c.SpanID.IsZero()
 }
 
+// MarshalLogObject implement zapcore.ObjectMarshaler
 func (c *SpanContext) MarshalLogObject(enc zapcore.ObjectEncoder) error {
-	enc.AddString("TraceId", c.TraceID.String())
-	enc.AddString("SpanId", c.SpanID.String())
+	if !c.TraceID.IsZero() {
+		enc.AddString("statement_id", c.TraceID.String())
+	}
+	if !c.SpanID.IsZero() {
+		enc.AddString("span_id", c.SpanID.String())
+	}
 	return nil
 }
 

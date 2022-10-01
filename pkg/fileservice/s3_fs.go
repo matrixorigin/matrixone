@@ -27,6 +27,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/logutil"
+
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/aws/transport/http"
 	"github.com/aws/aws-sdk-go-v2/config"
@@ -150,6 +152,7 @@ func newS3FS(
 
 	cfg, err := config.LoadDefaultConfig(ctx,
 		config.WithSharedConfigProfile(sharedConfigProfile),
+		config.WithLogger(logutil.GetS3Logger()),
 	)
 	if err != nil {
 		return nil, err

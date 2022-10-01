@@ -14,6 +14,9 @@
 package db
 
 import (
+	"encoding/binary"
+	"fmt"
+	"hash/fnv"
 	"sync"
 	"sync/atomic"
 
@@ -365,6 +368,7 @@ const (
 var (
 	// for blk meta response
 	blkMetaSchema *catalog.Schema
+	delSchema     *catalog.Schema
 )
 
 func init() {
@@ -376,6 +380,9 @@ func init() {
 	blkMetaSchema.AppendCol(blkMetaAttrMetaLoc, types.T_varchar.ToType())
 	blkMetaSchema.AppendCol(blkMetaAttrDeltaLoc, types.T_varchar.ToType())
 	blkMetaSchema.Finalize(true) // no phyaddr column
+
+	// empty schema, no finalize, makeRespBatchFromSchema will add necessary colunms
+	delSchema = catalog.NewEmptySchema("del")
 }
 
 type RespBuilder interface {
@@ -404,7 +411,6 @@ type CatalogLogtailRespBuilder struct {
 	mode       CollectMode
 	start, end types.TS
 	checkpoint string
-	schema     *catalog.Schema
 	insBatch   *containers.Batch
 	delBatch   *containers.Batch
 }
@@ -418,15 +424,14 @@ func NewCatalogLogtailRespBuilder(mode CollectMode, ckp string, start, end types
 	}
 	switch mode {
 	case CollectModeDB:
-		b.schema = catalog.SystemDBSchema
+		b.insBatch = makeRespBatchFromSchema(catalog.SystemDBSchema)
 	case CollectModeTbl:
-		b.schema = catalog.SystemTableSchema
+		b.insBatch = makeRespBatchFromSchema(catalog.SystemTableSchema)
 	case CollectModeCol:
-		b.schema = catalog.SystemColumnSchema
+		b.insBatch = makeRespBatchFromSchema(catalog.SystemColumnSchema)
 	}
+	b.delBatch = makeRespBatchFromSchema(delSchema)
 
-	b.insBatch = makeRespBatchFromSchema(b.schema)
-	b.delBatch = makeRespBatchFromSchema(b.schema)
 	return b
 }
 
@@ -434,15 +439,14 @@ func (b *CatalogLogtailRespBuilder) VisitDB(entry *catalog.DBEntry) error {
 	entry.RLock()
 	mvccNodes := entry.ClonePreparedInRange(b.start, b.end)
 	entry.RUnlock()
-	var dstBatch *containers.Batch
 	for _, node := range mvccNodes {
 		dbNode := node.(*catalog.DBMVCCNode)
 		if dbNode.HasDropped() {
-			dstBatch = b.delBatch
+			// delScehma is empty, it will just fill rowid / commit ts / abort
+			catalogEntry2Batch(b.delBatch, entry, delSchema, txnimpl.FillDBRow, u64ToRowID(entry.GetID()), dbNode.GetEnd(), dbNode.IsAborted())
 		} else {
-			dstBatch = b.insBatch
+			catalogEntry2Batch(b.insBatch, entry, catalog.SystemDBSchema, txnimpl.FillDBRow, u64ToRowID(entry.GetID()), dbNode.GetEnd(), dbNode.IsAborted())
 		}
-		catalogEntry2Batch(dstBatch, entry, b.schema, txnimpl.FillDBRow, dbNode.GetEnd(), dbNode.IsAborted())
 	}
 	return nil
 }
@@ -451,18 +455,37 @@ func (b *CatalogLogtailRespBuilder) VisitTbl(entry *catalog.TableEntry) error {
 	entry.RLock()
 	defer entry.RUnlock()
 	mvccNodes := entry.ClonePreparedInRange(b.start, b.end)
-	var dstBatch *containers.Batch
 	for _, node := range mvccNodes {
 		tblNode := node.(*catalog.TableMVCCNode)
-		if tblNode.HasDropped() {
-			dstBatch = b.delBatch
-		} else {
-			dstBatch = b.insBatch
-		}
 		if b.mode == CollectModeCol {
-			catalogEntry2Batch(dstBatch, entry, b.schema, txnimpl.FillColumnRow, tblNode.GetEnd(), tblNode.IsAborted())
+			var dstBatch *containers.Batch
+			if !tblNode.HasDropped() {
+				dstBatch = b.insBatch
+				// fill unique syscol fields if inserting
+				for _, syscol := range catalog.SystemColumnSchema.ColDefs {
+					txnimpl.FillColumnRow(entry, syscol.Name, b.insBatch.GetVectorByName(syscol.Name))
+				}
+			} else {
+				dstBatch = b.delBatch
+			}
+
+			// fill common syscol fields for every user column
+			rowidVec := dstBatch.GetVectorByName(catalog.AttrRowID)
+			commitVec := dstBatch.GetVectorByName(catalog.AttrCommitTs)
+			abortVec := dstBatch.GetVectorByName(catalog.AttrAborted)
+			tableID := entry.GetID()
+			commitTs, aborted := tblNode.GetEnd(), tblNode.IsAborted()
+			for _, usercol := range entry.GetSchema().ColDefs {
+				rowidVec.Append(bytesToRowID([]byte(fmt.Sprintf("%d-%s", tableID, usercol.Name))))
+				commitVec.Append(commitTs)
+				abortVec.Append(aborted)
+			}
 		} else {
-			catalogEntry2Batch(dstBatch, entry, b.schema, txnimpl.FillTableRow, tblNode.GetEnd(), tblNode.IsAborted())
+			if tblNode.HasDropped() {
+				catalogEntry2Batch(b.delBatch, entry, delSchema, txnimpl.FillTableRow, u64ToRowID(entry.GetID()), tblNode.GetEnd(), tblNode.IsAborted())
+			} else {
+				catalogEntry2Batch(b.insBatch, entry, catalog.SystemTableSchema, txnimpl.FillTableRow, u64ToRowID(entry.GetID()), tblNode.GetEnd(), tblNode.IsAborted())
+			}
 		}
 	}
 	return nil
@@ -520,32 +543,58 @@ func (b *CatalogLogtailRespBuilder) BuildResp() (api.SyncLogTailResp, error) {
 	}, nil
 }
 
+// this is used to collect ONE ROW of db or table change
 func catalogEntry2Batch[T *catalog.DBEntry | *catalog.TableEntry](
 	dstBatch *containers.Batch,
 	e T,
 	schema *catalog.Schema,
 	fillDataRow func(e T, attr string, col containers.Vector),
+	rowid types.Rowid,
 	commitTs types.TS,
 	aborted bool,
 ) {
 	for _, col := range schema.ColDefs {
 		fillDataRow(e, col.Name, dstBatch.GetVectorByName(col.Name))
 	}
+	dstBatch.GetVectorByName(catalog.AttrRowID).Append(rowid)
 	dstBatch.GetVectorByName(catalog.AttrCommitTs).Append(commitTs)
 	dstBatch.GetVectorByName(catalog.AttrAborted).Append(aborted)
+}
+
+func u64ToRowID(v uint64) types.Rowid {
+	var rowid types.Rowid
+	binary.BigEndian.PutUint64(rowid[:8], v)
+	return rowid
+}
+
+func bytesToRowID(bs []byte) types.Rowid {
+	var rowid types.Rowid
+	if size := len(bs); size <= types.RowidSize {
+		copy(rowid[:size], bs[:size])
+	} else {
+		hasher := fnv.New128()
+		hasher.Write(bs)
+		hasher.Sum(rowid[:0])
+	}
+	return rowid
 }
 
 // make batch, append necessary field like commit ts
 func makeRespBatchFromSchema(schema *catalog.Schema) *containers.Batch {
 	batch := containers.NewBatch()
 
+	batch.AddVector(catalog.AttrRowID, containers.MakeVector(types.T_Rowid.ToType(), false))
+	batch.AddVector(catalog.AttrCommitTs, containers.MakeVector(types.T_TS.ToType(), false))
+	// Types() is not used, then empty schema can also be handled here
 	typs := schema.AllTypes()
 	attrs := schema.AllNames()
 	nullables := schema.AllNullables()
 	for i, attr := range attrs {
+		if attr == catalog.PhyAddrColumnName {
+			continue
+		}
 		batch.AddVector(attr, containers.MakeVector(typs[i], nullables[i]))
 	}
-	batch.AddVector(catalog.AttrCommitTs, containers.MakeVector(types.T_TS.ToType(), false))
 	batch.AddVector(catalog.AttrAborted, containers.MakeVector(types.T_bool.ToType(), false))
 	return batch
 }
@@ -570,15 +619,14 @@ func containersBatchToProtoBatch(batch *containers.Batch) (*api.Batch, error) {
 
 type TableLogtailRespBuilder struct {
 	noopEntryVisitor
-	start, end    types.TS
-	did, tid      uint64
-	dname, tname  string
-	checkpoint    string
-	blkMetaBatch  *containers.Batch
-	dataInsSchema *catalog.Schema
-	dataDelSchema *catalog.Schema
-	dataInsBatch  *containers.Batch
-	dataDelBatch  *containers.Batch
+	start, end      types.TS
+	did, tid        uint64
+	dname, tname    string
+	checkpoint      string
+	blkMetaInsBatch *containers.Batch
+	blkMetaDelBatch *containers.Batch
+	dataInsBatch    *containers.Batch
+	dataDelBatch    *containers.Batch
 }
 
 func NewTableLogtailRespBuilder(ckp string, start, end types.TS, tbl *catalog.TableEntry) *TableLogtailRespBuilder {
@@ -587,26 +635,17 @@ func NewTableLogtailRespBuilder(ckp string, start, end types.TS, tbl *catalog.Ta
 		end:        end,
 		checkpoint: ckp,
 	}
-
 	schema := tbl.GetSchema()
-
-	b.dataInsSchema = schema
-	b.dataInsBatch = makeRespBatchFromSchema(b.dataInsSchema)
 
 	b.did = tbl.GetDB().GetID()
 	b.tid = tbl.ID
 	b.dname = tbl.GetDB().GetName()
-	b.tname = b.dataInsSchema.Name
+	b.tname = schema.Name
 
-	// dataDelBatch, return rowid anyway
-	dataDelSchema := catalog.NewEmptySchema("dataDel")
-
-	dataDelSchema.Finalize(false) // with PADDR column
-	b.dataDelSchema = dataDelSchema
-	b.dataDelBatch = makeRespBatchFromSchema(dataDelSchema)
-
-	b.blkMetaBatch = makeRespBatchFromSchema(blkMetaSchema)
-
+	b.dataInsBatch = makeRespBatchFromSchema(schema)
+	b.dataDelBatch = makeRespBatchFromSchema(delSchema)
+	b.blkMetaInsBatch = makeRespBatchFromSchema(blkMetaSchema)
+	b.blkMetaDelBatch = makeRespBatchFromSchema(delSchema)
 	return b
 }
 
@@ -616,14 +655,22 @@ func (b *TableLogtailRespBuilder) visitBlkMeta(e *catalog.BlockEntry) {
 	e.RUnlock()
 	for _, node := range mvccNodes {
 		metaNode := node.(*catalog.MetadataMVCCNode)
-		b.blkMetaBatch.GetVectorByName(blkMetaAttrBlockID).Append(e.ID)
-		b.blkMetaBatch.GetVectorByName(blkMetaAttrEntryState).Append(e.IsAppendable())
-		b.blkMetaBatch.GetVectorByName(blkMetaAttrCreateAt).Append(metaNode.CreatedAt)
-		b.blkMetaBatch.GetVectorByName(blkMetaAttrDeleteAt).Append(metaNode.DeletedAt)
-		b.blkMetaBatch.GetVectorByName(blkMetaAttrMetaLoc).Append([]byte(metaNode.MetaLoc))
-		b.blkMetaBatch.GetVectorByName(blkMetaAttrDeltaLoc).Append([]byte(metaNode.DeltaLoc))
-		b.blkMetaBatch.GetVectorByName(catalog.AttrCommitTs).Append(metaNode.GetEnd())
-		b.blkMetaBatch.GetVectorByName(catalog.AttrAborted).Append(metaNode.IsAborted())
+		var dstBatch *containers.Batch
+		if !metaNode.HasDropped() {
+			dstBatch = b.blkMetaInsBatch
+			dstBatch.GetVectorByName(blkMetaAttrBlockID).Append(e.ID)
+			dstBatch.GetVectorByName(blkMetaAttrEntryState).Append(e.IsAppendable())
+			dstBatch.GetVectorByName(blkMetaAttrCreateAt).Append(metaNode.CreatedAt)
+			dstBatch.GetVectorByName(blkMetaAttrDeleteAt).Append(metaNode.DeletedAt)
+			dstBatch.GetVectorByName(blkMetaAttrMetaLoc).Append([]byte(metaNode.MetaLoc))
+			dstBatch.GetVectorByName(blkMetaAttrDeltaLoc).Append([]byte(metaNode.DeltaLoc))
+		} else {
+			dstBatch = b.blkMetaDelBatch
+		}
+
+		dstBatch.GetVectorByName(catalog.AttrRowID).Append(u64ToRowID(e.ID))
+		dstBatch.GetVectorByName(catalog.AttrCommitTs).Append(metaNode.GetEnd())
+		dstBatch.GetVectorByName(catalog.AttrAborted).Append(metaNode.IsAborted())
 	}
 }
 
@@ -634,14 +681,18 @@ func (b *TableLogtailRespBuilder) visitBlkData(e *catalog.BlockEntry) (err error
 		return
 	}
 	if insBatch != nil && insBatch.Length() > 0 {
+		b.dataInsBatch.GetVectorByName(catalog.AttrRowID).Extend(insBatch.GetVectorByName(catalog.PhyAddrColumnName))
 		b.dataInsBatch.Extend(insBatch)
+		// insBatch is freed, don't use anymore
 	}
 	delBatch, err := block.CollectDeleteInRange(b.start, b.end)
 	if err != nil {
 		return
 	}
 	if delBatch != nil && delBatch.Length() > 0 {
+		b.dataDelBatch.GetVectorByName(catalog.AttrRowID).Extend(delBatch.GetVectorByName(catalog.PhyAddrColumnName))
 		b.dataDelBatch.Extend(delBatch)
+		// delBatch is freed, don't use anymore
 	}
 	return nil
 }
@@ -663,13 +714,15 @@ func (b *TableLogtailRespBuilder) BuildResp() (api.SyncLogTailResp, error) {
 		}
 
 		blockID := uint64(0)
+		tableName := b.tname
 		if metaChange {
 			blockID = 1 // make metadata change stand out, just a flag
+			tableName = fmt.Sprintf("_%d_%s", b.tid, b.tname)
 		}
 		entry := &api.Entry{
 			EntryType:    typ,
 			TableId:      b.tid,
-			TableName:    b.tname,
+			TableName:    tableName,
 			DatabaseId:   b.did,
 			DatabaseName: b.dname,
 			BlockId:      blockID,
@@ -680,7 +733,10 @@ func (b *TableLogtailRespBuilder) BuildResp() (api.SyncLogTailResp, error) {
 	}
 
 	empty := api.SyncLogTailResp{}
-	if err := tryAppendEntry(api.Entry_Insert, true, b.blkMetaBatch); err != nil {
+	if err := tryAppendEntry(api.Entry_Insert, true, b.blkMetaInsBatch); err != nil {
+		return empty, err
+	}
+	if err := tryAppendEntry(api.Entry_Delete, true, b.blkMetaDelBatch); err != nil {
 		return empty, err
 	}
 	if err := tryAppendEntry(api.Entry_Insert, false, b.dataInsBatch); err != nil {

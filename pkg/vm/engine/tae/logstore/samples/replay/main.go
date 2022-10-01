@@ -41,7 +41,7 @@ func main() {
 	buf := bs.Bytes()
 
 	for i := 0; i < 5000; i++ {
-		tid := uint64(i)
+		tid := string(common.NewTxnIDAllocator().Alloc())
 		e1 := entry.GetBase()
 		uncommitInfo := &entry.Info{
 			Group:     10,
