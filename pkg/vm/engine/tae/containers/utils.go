@@ -75,10 +75,6 @@ func CloneWithBuffer(src Vector, buffer *bytes.Buffer, allocator ...MemAllocator
 	return
 }
 
-func CopyToMoVector(vec Vector) *movec.Vector {
-	return VectorsToMO(vec)
-}
-
 func UnmarshalToMoVec(vec Vector) (mov *movec.Vector) {
 	bs := vec.Bytes()
 
@@ -96,12 +92,7 @@ func UnmarshalToMoVec(vec Vector) (mov *movec.Vector) {
 	return
 }
 
-// XXX VectorsToMo and CopyToMoVector.   The old impl. will move
-// vec.Data to movec.Data and keeps on sharing.   This is way too
-// fragile and error prone.
-//
-// Not just copy it.   Until profiler says I need to work harder.
-func VectorsToMO(vec Vector) (mov *movec.Vector) {
+func CopyToMoVec(vec Vector) (mov *movec.Vector) {
 	bs := vec.Bytes()
 	typ := vec.GetType()
 
@@ -135,6 +126,7 @@ func VectorsToMO(vec Vector) (mov *movec.Vector) {
 	return mov
 }
 
+// No copy
 func UnmarshalToMoVecs(vecs []Vector) []*movec.Vector {
 	movecs := make([]*movec.Vector, len(vecs))
 	for i := range movecs {
@@ -143,10 +135,11 @@ func UnmarshalToMoVecs(vecs []Vector) []*movec.Vector {
 	return movecs
 }
 
-func CopyToMoVectors(vecs []Vector) []*movec.Vector {
+// Deep copy
+func CopyToMoVecs(vecs []Vector) []*movec.Vector {
 	movecs := make([]*movec.Vector, len(vecs))
 	for i := range movecs {
-		movecs[i] = CopyToMoVector(vecs[i])
+		movecs[i] = CopyToMoVec(vecs[i])
 	}
 	return movecs
 }
