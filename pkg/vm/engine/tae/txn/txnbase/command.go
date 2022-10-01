@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"io"
 
 	"github.com/RoaringBitmap/roaring"
@@ -156,10 +157,10 @@ func (c *TxnCmd) WriteTo(w io.Writer) (n int64, err error) {
 		return
 	}
 	n += sn
-	if err = binary.Write(w, binary.BigEndian, c.Txn.GetID()); err != nil {
+	if sn, err = common.WriteString(c.Txn.GetID(), w); err != nil {
 		return
 	}
-	n += 8
+	n += sn
 	is2PC := uint8(0)
 	if c.Txn.Is2PC() {
 		is2PC = 1
@@ -179,10 +180,10 @@ func (c *TxnCmd) ReadFrom(r io.Reader) (n int64, err error) {
 	}
 	c.ComposedCmd = cmd.(*ComposedCmd)
 	n += sn
-	if err = binary.Read(r, binary.BigEndian, &c.ID); err != nil {
+	if c.ID, sn, err = common.ReadString(r); err != nil {
 		return
 	}
-	n += 8
+	n += sn
 	is2PC := uint8(0)
 	if err = binary.Read(r, binary.BigEndian, &is2PC); err != nil {
 		return
@@ -208,13 +209,13 @@ func (c *TxnCmd) Unmarshal(buf []byte) (err error) {
 }
 func (c *TxnCmd) GetType() int16 { return CmdTxn }
 func (c *TxnCmd) Desc() string {
-	return fmt.Sprintf("Tid=%d,Is2PC=%v,%s", c.ID, c.Is2PC(), c.ComposedCmd.Desc())
+	return fmt.Sprintf("Tid=%s,Is2PC=%v,%s", c.ID, c.Is2PC(), c.ComposedCmd.Desc())
 }
 func (c *TxnCmd) String() string {
-	return fmt.Sprintf("Tid=%d,Is2PC=%v,%s", c.ID, c.Is2PC(), c.ComposedCmd.String())
+	return fmt.Sprintf("Tid=%s,Is2PC=%v,%s", c.ID, c.Is2PC(), c.ComposedCmd.String())
 }
 func (c *TxnCmd) VerboseString() string {
-	return fmt.Sprintf("Tid=%d,Is2PC=%v,%s", c.ID, c.Is2PC(), c.ComposedCmd.VerboseString())
+	return fmt.Sprintf("Tid=%s,Is2PC=%v,%s", c.ID, c.Is2PC(), c.ComposedCmd.VerboseString())
 }
 func (c *TxnCmd) Close() {
 	c.ComposedCmd.Close()
