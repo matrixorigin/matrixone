@@ -22,10 +22,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func init() {
-	logger.SetLoggerFactory(DragonboatFactory)
-}
-
 func TestDragonboatFactory(t *testing.T) {
 	type args struct {
 		name string
