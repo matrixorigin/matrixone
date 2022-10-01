@@ -15,8 +15,15 @@
 package generate_series
 
 import (
+	"bytes"
+	"encoding/json"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 	"math"
 	"strings"
@@ -406,4 +413,83 @@ func getPrecision(s string) int32 {
 		precision = int32(len(ss[1]))
 	}
 	return precision
+}
+
+func TestString(t *testing.T) {
+	String(nil, new(bytes.Buffer))
+}
+
+func TestPrepare(t *testing.T) {
+	err := Prepare(nil, new(bytes.Buffer))
+	require.Nil(t, err)
+}
+func TestGenStep(t *testing.T) {
+	kase := "10 hour"
+	num, tp, err := genStep(kase)
+	require.Nil(t, err)
+	require.Equal(t, int64(10), num)
+	require.Equal(t, types.Hour, tp)
+	kase = "10 houx"
+	num, tp, err = genStep(kase)
+	require.NotNil(t, err)
+	kase = "hour"
+	num, tp, err = genStep(kase)
+	require.NotNil(t, err)
+	kase = "989829829129131939147193 hour"
+	num, tp, err = genStep(kase)
+	require.NotNil(t, err)
+}
+
+func TestCall(t *testing.T) {
+	proc := testutil.NewProc()
+	arg := &Argument{
+		Es: &Param{
+			Attrs: []string{"result"},
+			Cols: []*plan.ColDef{
+				{
+					Name: "result",
+					Typ:  &plan.Type{},
+				},
+			},
+		},
+	}
+	param := arg.Es
+	proc.SetInputBatch(nil)
+	end, err := Call(0, proc, arg)
+	require.Nil(t, err)
+	require.Equal(t, true, end)
+
+	param.Cols[0].Typ.Id = int32(types.T_int32)
+	proc.SetInputBatch(makeBatch([]string{"1", "10"}, proc))
+	end, err = Call(0, proc, arg)
+	require.Nil(t, err)
+	require.Equal(t, false, end)
+	require.Equal(t, 10, proc.InputBatch().GetVector(0).Length())
+
+	param.Cols[0].Typ.Id = int32(types.T_int64)
+	proc.SetInputBatch(makeBatch([]string{"654345676543", "654345676549"}, proc))
+	end, err = Call(0, proc, arg)
+	require.Nil(t, err)
+	require.Equal(t, false, end)
+	require.Equal(t, 7, proc.InputBatch().GetVector(0).Length())
+
+	param.Cols[0].Typ.Id = int32(types.T_datetime)
+	param.Cols[0].Typ.Precision = 0
+	proc.SetInputBatch(makeBatch([]string{"2020-01-01 00:00:00", "2020-01-01 00:00:59","1 second"}, proc))
+	end, err = Call(0, proc, arg)
+	require.Nil(t, err)
+	require.Equal(t, false, end)
+	require.Equal(t, 60, proc.InputBatch().GetVector(0).Length())
+}
+
+func makeBatch(arg []string, proc *process.Process) *batch.Batch {
+	dt, _ := json.Marshal(arg)
+	b := batch.New(true, []string{"result"})
+	b.InitZsOne(1)
+	b.Vecs[0] = vector.New(types.Type{Oid: types.T_varchar})
+	err := b.Vecs[0].Append(dt, false, proc.Mp())
+	if err != nil {
+		logutil.Errorf("set bytes at failed, err: %v", err)
+	}
+	return b
 }

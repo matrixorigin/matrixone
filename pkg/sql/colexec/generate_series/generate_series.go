@@ -48,14 +48,15 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	if len(exArgs) != 3 {
-		return false, moerr.NewInvalidInput("invalid arguments")
-	}
 	rbat := batch.New(false, param.Attrs)
 	for i := range param.Cols {
 		rbat.Vecs[i] = vector.New(dupType(param.Cols[i].Typ))
 	}
-	param.start, param.end, param.step = exArgs[0], exArgs[1], exArgs[2]
+	if len(exArgs) == 2 {
+		param.start, param.end = exArgs[0], exArgs[1]
+	} else {
+		param.start, param.end, param.step = exArgs[0], exArgs[1], exArgs[2]
+	}
 	switch param.Cols[0].Typ.Id {
 	case int32(types.T_int32):
 		var start, end, step int64
@@ -67,9 +68,16 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 		if err != nil {
 			return false, err
 		}
-		step, err = strconv.ParseInt(param.step, 10, 32)
-		if err != nil {
-			return false, err
+		if len(param.step) == 0 {
+			step = 1
+			if start > end {
+				step = -1
+			}
+		} else {
+			step, err = strconv.ParseInt(param.step, 10, 32)
+			if err != nil {
+				return false, err
+			}
 		}
 		res, err := generateInt32(int32(start), int32(end), int32(step))
 		if err != nil {
@@ -92,9 +100,16 @@ func Call(_ int, proc *process.Process, arg any) (bool, error) {
 		if err != nil {
 			return false, err
 		}
-		step, err = strconv.ParseInt(param.step, 10, 64)
-		if err != nil {
-			return false, err
+		if len(param.step) == 0 {
+			step = 1
+			if start > end {
+				step = -1
+			}
+		} else {
+			step, err = strconv.ParseInt(param.step, 10, 64)
+			if err != nil {
+				return false, err
+			}
 		}
 		res, err := generateInt64(start, end, step)
 		if err != nil {

@@ -53,7 +53,7 @@ func (builder *QueryBuilder) buildGenerateSeries(tbl *tree.TableFunction, ctx *B
 		err             error
 		externParamData []byte
 		scanNode        *plan.Node
-		childId         int32 = -1
+		childId         int32
 		precision       int32
 		colDefs         []*plan.ColDef
 	)
@@ -99,36 +99,32 @@ func (builder *QueryBuilder) buildGenerateSeries(tbl *tree.TableFunction, ctx *B
 
 func genParam(tbl *tree.TableFunction) ([]byte, int32, error) {
 	var (
-		err        error
-		e1, e2, e3 *tree.NumVal
-		ok         bool
-		args       []string
-		ret        []byte
+		err  error
+		args []string
+		ret  []byte
 	)
 
 	exprs := tbl.Func.Exprs
+	if len(exprs) < 2 || len(exprs) > 3 {
+		return nil, 0, moerr.NewInvalidInput("generate_series: invalid number of arguments, expected 2 or 3, got %d", len(exprs))
+	}
+	if ret, err = genInt32Args(exprs); err == nil {
+		return ret, -1, nil
+	}
+	if ret, err = genInt64Args(exprs); err == nil {
+		return ret, -2, nil
+	}
+	if len(exprs) == 2 {
+		return nil, 0, moerr.NewInvalidInput("generate_series: invalid arguments, must specify step for datetime")
+	}
 
-	if e1, ok = exprs[0].(*tree.NumVal); !ok {
-		return nil, 0, moerr.NewInvalidInput("generate_series args is invalid")
-	}
-	if e2, ok = exprs[1].(*tree.NumVal); !ok {
-		return nil, 0, moerr.NewInvalidInput("generate_series args is invalid")
-	}
-	if e3, ok = exprs[2].(*tree.NumVal); !ok {
-		return nil, 0, moerr.NewInvalidInput("generate_series args is invalid")
-	}
-	args = []string{e1.String(), e2.String(), e3.String()}
+	args = []string{exprs[0].String(), exprs[1].String(), exprs[2].String()}
 	ret, err = json.Marshal(args)
 	if err != nil {
 		return nil, 0, err
 	}
-	if _, err := strconv.ParseInt(e1.String(), 10, 32); err == nil {
-		return ret, -1, nil
-	}
-	if _, err := strconv.ParseFloat(e1.String(), 64); err == nil {
-		return ret, -2, nil
-	}
-	precision := findMaxPrecision(e1.String(), e2.String())
+
+	precision := findMaxPrecision(exprs[0].String(), exprs[1].String())
 	return ret, precision, nil
 }
 
@@ -149,4 +145,32 @@ func findMaxPrecision(s1, s2 string) int32 {
 		precision = 6
 	}
 	return precision
+}
+
+func genInt32Args(exprs tree.Exprs) (ret []byte, err error) {
+	for _, expr := range exprs {
+		if _, err = strconv.ParseInt(expr.String(), 10, 32); err != nil {
+			return
+		}
+	}
+	args := make([]string, len(exprs))
+	for i, expr := range exprs {
+		args[i] = expr.String()
+	}
+	ret, err = json.Marshal(args)
+	return
+}
+
+func genInt64Args(exprs tree.Exprs) (ret []byte, err error) {
+	for _, expr := range exprs {
+		if _, err = strconv.ParseInt(expr.String(), 10, 64); err != nil {
+			return
+		}
+	}
+	args := make([]string, len(exprs))
+	for i, expr := range exprs {
+		args[i] = expr.String()
+	}
+	ret, err = json.Marshal(args)
+	return
 }

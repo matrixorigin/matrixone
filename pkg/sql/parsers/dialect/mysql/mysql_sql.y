@@ -3596,92 +3596,15 @@ table_function:
             },
 	}
     }
-|   GENERATE_SERIES '(' STRING ',' STRING ',' STRING ')'
+|   GENERATE_SERIES '(' expression_list ')'
     {
-	a1 := $3
-    	a2 := $5
-    	a3 := $7
-    	e1 := tree.NewNumValWithType(constant.MakeString(a1), a1,false, tree.P_char)
-	e2 := tree.NewNumValWithType(constant.MakeString(a2), a2,false, tree.P_char)
-	e3 := tree.NewNumValWithType(constant.MakeString(a3), a3,false, tree.P_char)
-	exprs := tree.Exprs{e1, e2, e3}
-       	name := tree.SetUnresolvedName(strings.ToLower($1))
-	$$ = &tree.TableFunction{
-	    Func: &tree.FuncExpr{
-		Func: tree.FuncName2ResolvableFunctionReference(name),
-		Exprs: exprs,
-		Type: tree.FUNC_TYPE_TABLE,
-	    },
-	}
-    }
-|   GENERATE_SERIES '(' INTEGRAL ',' INTEGRAL ')'
-    {
-    	i1, eStr1 := util.GetInt64($3)
-        if eStr1 != "" {
-            yylex.Error(eStr1)
-            return 1
-        }
-        s1 := fmt.Sprintf("%v", $3)
-        a1 := tree.NewNumValWithType(constant.MakeInt64(i1), s1, false, tree.P_int64)
-
-    	i2, eStr2 := util.GetInt64($5)
-        if eStr2 != "" {
-            yylex.Error(eStr2)
-            return 1
-        }
-        s2 := fmt.Sprintf("%v", $5)
-        a2 := tree.NewNumValWithType(constant.MakeInt64(i2), s2, false, tree.P_int64)
-        i3 := int64(1)
-        if i1 > i2 {
-	    i3 = -1
-	}
-	s3 := fmt.Sprintf("%v", i3)
-        a3 := tree.NewNumValWithType(constant.MakeInt64(i3), s3, false, tree.P_int64)
-        exprs := tree.Exprs{a1, a2, a3}
-       	name := tree.SetUnresolvedName(strings.ToLower($1))
-	$$ = &tree.TableFunction{
-	    Func: &tree.FuncExpr{
-		Func: tree.FuncName2ResolvableFunctionReference(name),
-		Exprs: exprs,
-		Type: tree.FUNC_TYPE_TABLE,
-	    },
-	}
-    }
-|   GENERATE_SERIES '(' INTEGRAL ',' INTEGRAL ',' INTEGRAL ')'
-    {
-    	i1, eStr1 := util.GetInt64($3)
-        if eStr1 != "" {
-            yylex.Error(eStr1)
-            return 1
-        }
-        s1 := fmt.Sprintf("%v", $3)
-        a1 := tree.NewNumValWithType(constant.MakeInt64(i1), s1, false, tree.P_int64)
-
-    	i2, eStr2 := util.GetInt64($5)
-        if eStr2 != "" {
-            yylex.Error(eStr2)
-            return 1
-        }
-        s2 := fmt.Sprintf("%v", $5)
-        a2 := tree.NewNumValWithType(constant.MakeInt64(i2), s2, false, tree.P_int64)
-
-    	i3, eStr3 := util.GetInt64($7)
-	if eStr3 != "" {
-	    yylex.Error(eStr3)
-	    return 1
-	}
-	s3 := fmt.Sprintf("%v", $7)
-	a3 := tree.NewNumValWithType(constant.MakeInt64(i3), s3, false, tree.P_int64)
-
-        exprs := tree.Exprs{a1, a2, a3}
-       	name := tree.SetUnresolvedName(strings.ToLower($1))
-	$$ = &tree.TableFunction{
-	    Func: &tree.FuncExpr{
-		Func: tree.FuncName2ResolvableFunctionReference(name),
-		Exprs: exprs,
-		Type: tree.FUNC_TYPE_TABLE,
-	    },
-	}
+    	$$ = &tree.TableFunction{
+    	    Func: &tree.FuncExpr{
+    		Func: tree.FuncName2ResolvableFunctionReference(tree.SetUnresolvedName(strings.ToLower($1))),
+    		Exprs: $3,
+    		Type: tree.FUNC_TYPE_TABLE,
+    	    },
+    	}
     }
 
 as_opt:
