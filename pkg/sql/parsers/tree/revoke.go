@@ -16,6 +16,7 @@ package tree
 
 import (
 	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 )
 
@@ -346,6 +347,7 @@ const (
 	PRIVILEGE_TYPE_STATIC_REFERENCES //Enable foreign key creation. Levels: Global, database, table, column.
 	PRIVILEGE_TYPE_STATIC_INDEX      //Enable indexes to be created or dropped. Levels: Global, database, table.
 	PRIVILEGE_TYPE_STATIC_EXECUTE    //Enable the user to execute stored routines. Levels: Global, database, routine.
+	PRIVILEGE_TYPE_STATIC_VALUES     //Enable use of VALUES. Levels: Global, database, table.
 
 	PRIVILEGE_TYPE_STATIC_ALTER
 	PRIVILEGE_TYPE_STATIC_CREATE
