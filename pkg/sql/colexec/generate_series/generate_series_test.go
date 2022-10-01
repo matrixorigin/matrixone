@@ -430,13 +430,13 @@ func TestGenStep(t *testing.T) {
 	require.Equal(t, int64(10), num)
 	require.Equal(t, types.Hour, tp)
 	kase = "10 houx"
-	num, tp, err = genStep(kase)
+	_, _, err = genStep(kase)
 	require.NotNil(t, err)
 	kase = "hour"
-	num, tp, err = genStep(kase)
+	_, _, err = genStep(kase)
 	require.NotNil(t, err)
 	kase = "989829829129131939147193 hour"
-	num, tp, err = genStep(kase)
+	_, _, err = genStep(kase)
 	require.NotNil(t, err)
 }
 
@@ -475,7 +475,7 @@ func TestCall(t *testing.T) {
 
 	param.Cols[0].Typ.Id = int32(types.T_datetime)
 	param.Cols[0].Typ.Precision = 0
-	proc.SetInputBatch(makeBatch([]string{"2020-01-01 00:00:00", "2020-01-01 00:00:59","1 second"}, proc))
+	proc.SetInputBatch(makeBatch([]string{"2020-01-01 00:00:00", "2020-01-01 00:00:59", "1 second"}, proc))
 	end, err = Call(0, proc, arg)
 	require.Nil(t, err)
 	require.Equal(t, false, end)
