@@ -31,6 +31,13 @@ func NewFixedTypeBytes[T any]() *Bytes {
 	}
 }
 
+func NewFixedSizeBytes(sz int) *Bytes {
+	return &Bytes{
+		IsFixedType:   true,
+		FixedTypeSize: sz,
+	}
+}
+
 func (bs *Bytes) IsWindow() bool { return bs.AsWindow }
 
 func (bs *Bytes) ToWindow(offset, length int) {

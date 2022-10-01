@@ -126,182 +126,61 @@ func CopyToMoVectors(vecs []Vector) []*movec.Vector {
 	return movecs
 }
 
+func movecToBytes[T types.FixedSizeT](v *movec.Vector) *Bytes {
+	bs := NewFixedTypeBytes[T]()
+	if v.Col == nil || len(movec.MustTCols[T](v)) == 0 {
+		bs.Storage = make([]byte, v.Length()*v.GetType().TypeSize())
+		logutil.Warn("[Moengine]", common.OperationField("movecToBytes"),
+			common.OperandField("Col length is 0"))
+	} else {
+		bs.Storage = types.EncodeFixedSlice(movec.MustTCols[T](v), v.GetType().TypeSize())
+	}
+	return bs
+}
+
 func NewVectorWithSharedMemory(v *movec.Vector, nullable bool) Vector {
 	vec := MakeVector(v.Typ, nullable)
 	var bs *Bytes
 
 	switch v.Typ.Oid {
 	case types.T_bool:
-		bs = NewFixedTypeBytes[bool]()
-		if v.Col == nil || len(v.Col.([]bool)) == 0 {
-			bs.Storage = make([]byte, v.Length())
-			logutil.Warn("[Moengine]", common.OperationField("MOToVector"),
-				common.OperandField("Col length is 0"))
-		} else {
-			bs.Storage = types.EncodeFixedSlice(v.Col.([]bool), 1)
-		}
+		bs = movecToBytes[bool](v)
 	case types.T_int8:
-		bs = NewFixedTypeBytes[int8]()
-		if v.Col == nil || len(v.Col.([]int8)) == 0 {
-			bs.Storage = make([]byte, v.Length())
-			logutil.Warn("[Moengine]", common.OperationField("MOToVector"),
-				common.OperandField("Col length is 0"))
-		} else {
-			bs.Storage = types.EncodeFixedSlice(v.Col.([]int8), 1)
-		}
+		bs = movecToBytes[int8](v)
 	case types.T_int16:
-		bs = NewFixedTypeBytes[int16]()
-		if v.Col == nil || len(v.Col.([]int16)) == 0 {
-			bs.Storage = make([]byte, v.Length()*2)
-			logutil.Warn("[Moengine]", common.OperationField("MOToVector"),
-				common.OperandField("Col length is 0"))
-		} else {
-			bs.Storage = types.EncodeFixedSlice(v.Col.([]int16), 2)
-		}
+		bs = movecToBytes[int16](v)
 	case types.T_int32:
-		bs = NewFixedTypeBytes[int32]()
-		if v.Col == nil || len(v.Col.([]int32)) == 0 {
-			bs.Storage = make([]byte, v.Length()*4)
-			logutil.Warn("[Moengine]", common.OperationField("MOToVector"),
-				common.OperandField("Col length is 0"))
-		} else {
-			bs.Storage = types.EncodeFixedSlice(v.Col.([]int32), 4)
-		}
+		bs = movecToBytes[int32](v)
 	case types.T_int64:
-		bs = NewFixedTypeBytes[int64]()
-		if v.Col == nil || len(v.Col.([]int64)) == 0 {
-			bs.Storage = make([]byte, v.Length()*8)
-			logutil.Warn("[Moengine]", common.OperationField("MOToVector"),
-				common.OperandField("Col length is 0"))
-		} else {
-			bs.Storage = types.EncodeFixedSlice(v.Col.([]int64), 8)
-		}
+		bs = movecToBytes[int64](v)
 	case types.T_uint8:
-		bs = NewFixedTypeBytes[uint8]()
-		if v.Col == nil || len(v.Col.([]uint8)) == 0 {
-			bs.Storage = make([]byte, v.Length())
-			logutil.Warn("[Moengine]", common.OperationField("MOToVector"),
-				common.OperandField("Col length is 0"))
-		} else {
-			bs.Storage = types.EncodeFixedSlice(v.Col.([]uint8), 1)
-		}
+		bs = movecToBytes[uint8](v)
 	case types.T_uint16:
-		bs = NewFixedTypeBytes[uint16]()
-		if v.Col == nil || len(v.Col.([]uint16)) == 0 {
-			bs.Storage = make([]byte, v.Length()*2)
-			logutil.Warn("[Moengine]", common.OperationField("MOToVector"),
-				common.OperandField("Col length is 0"))
-		} else {
-			bs.Storage = types.EncodeFixedSlice(v.Col.([]uint16), 2)
-		}
+		bs = movecToBytes[uint16](v)
 	case types.T_uint32:
-		bs = NewFixedTypeBytes[uint32]()
-		if v.Col == nil || len(v.Col.([]uint32)) == 0 {
-			bs.Storage = make([]byte, v.Length()*4)
-			logutil.Warn("[Moengine]", common.OperationField("MOToVector"),
-				common.OperandField("Col length is 0"))
-		} else {
-			bs.Storage = types.EncodeFixedSlice(v.Col.([]uint32), 4)
-		}
+		bs = movecToBytes[uint32](v)
 	case types.T_uint64:
-		bs = NewFixedTypeBytes[uint64]()
-		if v.Col == nil || len(v.Col.([]uint64)) == 0 {
-			bs.Storage = make([]byte, v.Length()*8)
-			logutil.Warn("[Moengine]", common.OperationField("MOToVector"),
-				common.OperandField("Col length is 0"))
-		} else {
-			bs.Storage = types.EncodeFixedSlice(v.Col.([]uint64), 8)
-		}
+		bs = movecToBytes[uint64](v)
 	case types.T_float32:
-		bs = NewFixedTypeBytes[float32]()
-		if v.Col == nil || len(v.Col.([]float32)) == 0 {
-			bs.Storage = make([]byte, v.Length()*4)
-			logutil.Warn("[Moengine]", common.OperationField("MOToVector"),
-				common.OperandField("Col length is 0"))
-		} else {
-			bs.Storage = types.EncodeFixedSlice(v.Col.([]float32), 4)
-		}
+		bs = movecToBytes[float32](v)
 	case types.T_float64:
-		bs = NewFixedTypeBytes[float64]()
-		if v.Col == nil || len(v.Col.([]float64)) == 0 {
-			bs.Storage = make([]byte, v.Length()*8)
-			logutil.Warn("[Moengine]", common.OperationField("MOToVector"),
-				common.OperandField("Col length is 0"))
-		} else {
-			bs.Storage = types.EncodeFixedSlice(v.Col.([]float64), 8)
-		}
+		bs = movecToBytes[float64](v)
 	case types.T_date:
-		bs = NewFixedTypeBytes[types.Date]()
-		if v.Col == nil || len(v.Col.([]types.Date)) == 0 {
-			bs.Storage = make([]byte, v.Length()*4)
-			logutil.Warn("[Moengine]", common.OperationField("MOToVector"),
-				common.OperandField("Col length is 0"))
-		} else {
-			bs.Storage = types.EncodeFixedSlice(v.Col.([]types.Date), 4)
-		}
+		bs = movecToBytes[types.Date](v)
 	case types.T_datetime:
-		bs = NewFixedTypeBytes[types.Datetime]()
-		if v.Col == nil || len(v.Col.([]types.Datetime)) == 0 {
-			bs.Storage = make([]byte, v.Length()*8)
-			logutil.Warn("[Moengine]", common.OperationField("MOToVector"),
-				common.OperandField("Col length is 0"))
-		} else {
-			bs.Storage = types.EncodeFixedSlice(v.Col.([]types.Datetime), 8)
-		}
+		bs = movecToBytes[types.Datetime](v)
 	case types.T_timestamp:
-		bs = NewFixedTypeBytes[types.Timestamp]()
-		if v.Col == nil || len(v.Col.([]types.Timestamp)) == 0 {
-			bs.Storage = make([]byte, v.Length()*8)
-			logutil.Warn("[Moengine]", common.OperationField("MOToVector"),
-				common.OperandField("Col length is 0"))
-		} else {
-			bs.Storage = types.EncodeFixedSlice(v.Col.([]types.Timestamp), 8)
-		}
+		bs = movecToBytes[types.Timestamp](v)
 	case types.T_decimal64:
-		bs = NewFixedTypeBytes[types.Decimal64]()
-		if v.Col == nil || len(v.Col.([]types.Decimal64)) == 0 {
-			bs.Storage = make([]byte, v.Length()*8)
-			logutil.Warn("[Moengine]", common.OperationField("MOToVector"),
-				common.OperandField("Col length is 0"))
-		} else {
-			bs.Storage = types.EncodeFixedSlice(v.Col.([]types.Decimal64), 8)
-		}
+		bs = movecToBytes[types.Decimal64](v)
 	case types.T_decimal128:
-		bs = NewFixedTypeBytes[types.Decimal128]()
-		if v.Col == nil || len(v.Col.([]types.Decimal128)) == 0 {
-			bs.Storage = make([]byte, v.Length()*16)
-			logutil.Warn("[Moengine]", common.OperationField("MOToVector"),
-				common.OperandField("Col length is 0"))
-		} else {
-			bs.Storage = types.EncodeFixedSlice(v.Col.([]types.Decimal128), 16)
-		}
+		bs = movecToBytes[types.Decimal128](v)
 	case types.T_uuid:
-		bs = NewFixedTypeBytes[types.Uuid]()
-		if v.Col == nil || len(v.Col.([]types.Uuid)) == 0 {
-			bs.Storage = make([]byte, v.Length()*16)
-			logutil.Warn("[Moengine]", common.OperationField("MOToVector"),
-				common.OperandField("Col length is 0"))
-		} else {
-			bs.Storage = types.EncodeFixedSlice(v.Col.([]types.Uuid), 16)
-		}
+		bs = movecToBytes[types.Uuid](v)
 	case types.T_TS:
-		bs = NewFixedTypeBytes[types.TS]()
-		if v.Col == nil || len(v.Col.([]types.TS)) == 0 {
-			bs.Storage = make([]byte, v.Length()*types.TxnTsSize)
-			logutil.Warn("[Moengine]", common.OperationField("MOToVector"),
-				common.OperandField("Col length is 0"))
-		} else {
-			bs.Storage = types.EncodeFixedSlice(v.Col.([]types.TS), types.TxnTsSize)
-		}
+		bs = movecToBytes[types.TS](v)
 	case types.T_Rowid:
-		bs = NewFixedTypeBytes[types.Rowid]()
-		if v.Col == nil || len(v.Col.([]types.Rowid)) == 0 {
-			bs.Storage = make([]byte, v.Length()*types.RowidSize)
-			logutil.Warn("[Moengine]", common.OperationField("MOToVector"),
-				common.OperandField("Col length is 0"))
-		} else {
-			bs.Storage = types.EncodeFixedSlice(v.Col.([]types.Rowid), types.RowidSize)
-		}
+		bs = movecToBytes[types.Rowid](v)
 	case types.T_char, types.T_varchar, types.T_json, types.T_blob:
 		bs = NewBytes()
 		if v.Col != nil {
