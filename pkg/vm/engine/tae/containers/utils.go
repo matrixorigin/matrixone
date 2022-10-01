@@ -193,8 +193,6 @@ func NewVectorWithSharedMemory(v *movec.Vector, nullable bool) Vector {
 		np := &roaring64.Bitmap{}
 		np.AddMany(v.Nsp.Np.ToArray())
 		logutil.Infof("sie : %d", np.GetCardinality())
-		vec.ResetWithData(bs, np)
-		return vec
 	}
 	vec.ResetWithData(bs, nil)
 	return vec
