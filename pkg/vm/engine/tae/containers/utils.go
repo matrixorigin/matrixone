@@ -81,7 +81,7 @@ func UnmarshalToMoVec(vec Vector) (mov *movec.Vector) {
 	if vec.GetType().IsVarlen() {
 		mov, _ = movec.BuildVarlenaVector(vec.GetType(), bs.Header, bs.Storage)
 	} else {
-		mov = movec.NewWithData(vec.GetType(), bs.StorageBuf(), nil, nil)
+		mov = movec.NewWithData(vec.GetType(), bs.StorageBuf(), nil, &nulls.Nulls{})
 	}
 	if vec.HasNull() {
 		mov.Nsp.Np = bitmap.New(vec.Length())

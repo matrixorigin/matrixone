@@ -47,7 +47,7 @@ func (blk *txnBlock) Read(attrs []string, compressed []*bytes.Buffer, deCompress
 		if view.GetData().Allocated() > 0 {
 			bat.Vecs[i] = containers.CopyToMoVec(view.GetData())
 		} else {
-			bat.Vecs[i] = containers.CopyToMoVec(view.GetData())
+			bat.Vecs[i] = containers.UnmarshalToMoVec(view.GetData())
 		}
 		view.Close()
 	}
