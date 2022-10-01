@@ -189,12 +189,13 @@ func NewVectorWithSharedMemory(v *movec.Vector, nullable bool) Vector {
 	default:
 		panic(any(moerr.NewInternalError("%s not supported", v.Typ.String())))
 	}
+	var np *roaring64.Bitmap
 	if v.Nsp.Np != nil {
-		np := &roaring64.Bitmap{}
+		np = roaring64.New()
 		np.AddMany(v.Nsp.Np.ToArray())
 		logutil.Infof("sie : %d", np.GetCardinality())
 	}
-	vec.ResetWithData(bs, nil)
+	vec.ResetWithData(bs, np)
 	return vec
 }
 
