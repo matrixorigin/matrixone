@@ -126,7 +126,7 @@ func CopyToMoVectors(vecs []Vector) []*movec.Vector {
 	return movecs
 }
 
-func MOToVectorTmp(v *movec.Vector, nullable bool) Vector {
+func NewVectorWithSharedMemory(v *movec.Vector, nullable bool) Vector {
 	vec := MakeVector(v.Typ, nullable)
 	var bs *Bytes
 
