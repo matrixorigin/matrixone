@@ -79,6 +79,23 @@ func CopyToMoVector(vec Vector) *movec.Vector {
 	return VectorsToMO(vec)
 }
 
+func UnmarshalToMoVec(vec Vector) (mov *movec.Vector) {
+	bs := vec.Bytes()
+
+	if vec.GetType().IsVarlen() {
+		mov, _ = movec.BuildVarlenaVector(vec.GetType(), bs.Header, bs.Storage)
+	} else {
+		mov = movec.NewWithData(vec.GetType(), bs.StorageBuf(), nil, nil)
+	}
+	if vec.HasNull() {
+		mov.Nsp.Np = bitmap.New(vec.Length())
+		mov.Nsp.Np.AddMany(vec.NullMask().ToArray())
+	}
+	mov.SetOriginal(true)
+
+	return
+}
+
 // XXX VectorsToMo and CopyToMoVector.   The old impl. will move
 // vec.Data to movec.Data and keeps on sharing.   This is way too
 // fragile and error prone.
@@ -116,6 +133,14 @@ func VectorsToMO(vec Vector) (mov *movec.Vector) {
 	}
 
 	return mov
+}
+
+func UnmarshalToMoVecs(vecs []Vector) []*movec.Vector {
+	movecs := make([]*movec.Vector, len(vecs))
+	for i := range movecs {
+		movecs[i] = UnmarshalToMoVec(vecs[i])
+	}
+	return movecs
 }
 
 func CopyToMoVectors(vecs []Vector) []*movec.Vector {
