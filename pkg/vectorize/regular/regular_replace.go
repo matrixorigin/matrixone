@@ -18,9 +18,12 @@ import (
 	"regexp"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func RegularReplace(expr, pat, repl string, pos, occurrence int, match_type string) (string, error) {
+func RegularReplace(expr, pat, repl string, pos, occurrence int64, match_type string) (string, error) {
 	if pos < 1 || occurrence < 1 {
 		return expr, moerr.NewInvalidInput("regexp_replace have invalid input")
 	}
@@ -32,11 +35,11 @@ func RegularReplace(expr, pat, repl string, pos, occurrence int, match_type stri
 		return expr, nil
 	} //find the match position
 	index := 0
-	for matchRes[index][0] < pos-1 {
+	for int64(matchRes[index][0]) < pos-1 {
 		index++
 	}
 	matchRes = matchRes[index:]
-	if len(matchRes) < occurrence {
+	if int64(len(matchRes)) < occurrence {
 		return expr, nil
 	}
 
@@ -45,4 +48,147 @@ func RegularReplace(expr, pat, repl string, pos, occurrence int, match_type stri
 	// the string will be replaced
 	replace := expr[matchRes[occurrence-1][0]:]
 	return notRepl + reg.ReplaceAllLiteralString(replace, repl), nil
+}
+
+func RegularReplaceWithReg(expr string, pat *regexp.Regexp, repl string, pos, occurrence int64, match_type string) (string, error) {
+	if pos < 1 || occurrence < 1 {
+		return expr, moerr.NewInvalidInput("regexp_replace have invalid input")
+	}
+	//match result indexs
+	matchRes := pat.FindAllStringIndex(expr, -1)
+	if matchRes == nil {
+		return expr, nil
+	} //find the match position
+	index := 0
+	for int64(matchRes[index][0]) < pos-1 {
+		index++
+	}
+	matchRes = matchRes[index:]
+	if int64(len(matchRes)) < occurrence {
+		return expr, nil
+	}
+
+	// the string won't be replaced
+	notRepl := expr[:matchRes[occurrence-1][0]]
+	// the string will be replaced
+	replace := expr[matchRes[occurrence-1][0]:]
+	return notRepl + pat.ReplaceAllLiteralString(replace, repl), nil
+}
+
+func determineNulls(expr, pat, rpls []string, exprN, patN, rplN *nulls.Nulls, i int) bool {
+	var exprIndex int
+	var patIndex int
+	var rplIndex int
+
+	if len(expr) == 1 {
+		exprIndex = 0
+	} else {
+		exprIndex = i
+	}
+
+	if len(pat) == 1 {
+		patIndex = 0
+	} else {
+		patIndex = i
+	}
+
+	if len(rpls) == 1 {
+		rplIndex = 0
+	} else {
+		rplIndex = 1
+	}
+	return nulls.Contains(exprN, uint64(exprIndex)) || nulls.Contains(patN, uint64(patIndex)) || nulls.Contains(rplN, uint64(rplIndex))
+}
+
+func RegularReplaceWithArrays(expr, pat, rpls []string, pos, occ []int64, match_type []string, exprN, patN, rplN *nulls.Nulls, resultVector *vector.Vector, proc *process.Process, maxLen int) error {
+	rs := make([]string, maxLen)
+	var rpl string
+	var posValue int64
+	var occValue int64
+	if len(expr) == 1 && len(pat) == 1 {
+		reg := regexp.MustCompile(pat[0])
+		for i := 0; i < maxLen; i++ {
+			if determineNulls(expr, pat, rpls, exprN, patN, rplN, i) {
+				nulls.Add(resultVector.Nsp, uint64(i))
+				continue
+			}
+			rpl, posValue, occValue = determineValuesWithThree(rpls, pos, occ, i)
+			res, err := RegularReplaceWithReg(expr[0], reg, rpl, posValue, occValue, match_type[0])
+			if err != nil {
+				return err
+			}
+			rs[i] = res
+		}
+		vector.AppendString(resultVector, rs, proc.Mp())
+	} else if len(expr) == 1 {
+		for i := 0; i < maxLen; i++ {
+			if determineNulls(expr, pat, rpls, exprN, patN, rplN, i) {
+				nulls.Add(resultVector.Nsp, uint64(i))
+				continue
+			}
+			rpl, posValue, occValue = determineValuesWithThree(rpls, pos, occ, i)
+			res, err := RegularReplace(expr[0], pat[i], rpl, posValue, occValue, match_type[0])
+			if err != nil {
+				return err
+			}
+			rs[i] = res
+		}
+		vector.AppendString(resultVector, rs, proc.Mp())
+	} else if len(pat) == 1 {
+		reg := regexp.MustCompile(pat[0])
+		for i := 0; i < maxLen; i++ {
+			if determineNulls(expr, pat, rpls, exprN, patN, rplN, i) {
+				nulls.Add(resultVector.Nsp, uint64(i))
+				continue
+			}
+			rpl, posValue, occValue = determineValuesWithThree(rpls, pos, occ, i)
+			res, err := RegularReplaceWithReg(expr[i], reg, rpl, posValue, occValue, match_type[0])
+			if err != nil {
+				return err
+			}
+			rs[i] = res
+		}
+		vector.AppendString(resultVector, rs, proc.Mp())
+	} else {
+		for i := 0; i < maxLen; i++ {
+			if determineNulls(expr, pat, rpls, exprN, patN, rplN, i) {
+				nulls.Add(resultVector.Nsp, uint64(i))
+				continue
+			}
+			rpl, posValue, occValue = determineValuesWithThree(rpls, pos, occ, i)
+			res, err := RegularReplace(expr[i], pat[i], rpl, posValue, occValue, match_type[0])
+			if err != nil {
+				return err
+			}
+			rs[i] = res
+		}
+		vector.AppendString(resultVector, rs, proc.Mp())
+	}
+	return nil
+}
+
+func determineValuesWithThree(rpls []string, pos, occ []int64, i int) (string, int64, int64) {
+	var rpl string
+	var posValue int64
+	var occValue int64
+
+	if len(rpl) == 1 {
+		rpl = rpls[0]
+	} else {
+		rpl = rpls[i]
+	}
+
+	if len(pos) == 1 {
+		posValue = pos[0]
+	} else {
+		posValue = pos[i]
+	}
+
+	if len(occ) == 1 {
+		occValue = occ[0]
+	} else {
+		occValue = occ[i]
+	}
+
+	return rpl, posValue, occValue
 }

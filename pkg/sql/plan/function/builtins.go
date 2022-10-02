@@ -2427,6 +2427,35 @@ var builtins = map[int]Functions{
 			},
 		},
 	},
+	REGEXP_REPLACE: {
+		Id: REGEXP_REPLACE,
+		Overloads: []Function{
+			{
+				Index:     0,
+				Flag:      plan.Function_STRICT,
+				Layout:    STANDARD_FUNCTION,
+				Args:      []types.T{types.T_varchar, types.T_varchar, types.T_varchar},
+				ReturnTyp: types.T_int64,
+				Fn:        multi.RegularReplace,
+			},
+			{
+				Index:     1,
+				Flag:      plan.Function_STRICT,
+				Layout:    STANDARD_FUNCTION,
+				Args:      []types.T{types.T_varchar, types.T_varchar, types.T_varchar, types.T_int64},
+				ReturnTyp: types.T_int64,
+				Fn:        multi.RegularReplace,
+			},
+			{
+				Index:     2,
+				Flag:      plan.Function_STRICT,
+				Layout:    STANDARD_FUNCTION,
+				Args:      []types.T{types.T_varchar, types.T_varchar, types.T_varchar, types.T_int64, types.T_int64},
+				ReturnTyp: types.T_int64,
+				Fn:        multi.RegularReplace,
+			},
+		},
+	},
 	REGEXP_LIKE: {
 		Id: REGEXP_LIKE,
 		Overloads: []Function{
