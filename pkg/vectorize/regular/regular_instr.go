@@ -75,44 +75,72 @@ func RegularInstrWithReg(expr string, pat *regexp.Regexp, pos, occurrence int64,
 	}
 }
 
-func RegularInstrWithArrays(expr, pat []string, pos, occurrence []int64, return_option []uint8, match_type []string, exprN, patN, rns *nulls.Nulls, rs []int64) ([]int64, error) {
-	if len(expr) == len(pat) {
-		for i := range expr {
-			if nulls.Contains(exprN, uint64(i)) || nulls.Contains(patN, uint64(i)) {
-				nulls.Add(rns, uint64(i))
-				continue
-			}
-			res, err := RegularInstr(expr[i], pat[i], pos[i], occurrence[i], return_option[i], match_type[i])
+func RegularInstrWithArrays(expr, pat []string, pos, occ []int64, return_option []uint8, match_type []string, exprN, patN, rns *nulls.Nulls, rs []int64, maxLen int) ([]int64, error) {
+	var posValue int64
+	var occValue int64
+	var optValue uint8
+	if len(expr) == 1 && len(pat) == 1 {
+		reg := regexp.MustCompile(pat[0])
+		for i := 0; i < maxLen; i++ {
+			posValue, occValue, optValue = determineValues(pos, occ, return_option)
+			res, err := RegularInstrWithReg(expr[0], reg, posValue, occValue, optValue, match_type[0])
 			if err != nil {
 				return nil, err
 			}
 			rs[i] = res
 		}
 	} else if len(expr) == 1 {
-		for i := range pat {
-			if nulls.Contains(exprN, uint64(0)) || nulls.Contains(patN, uint64(i)) {
-				nulls.Add(rns, uint64(i))
-				continue
-			}
-			res, err := RegularInstr(expr[0], pat[i], pos[i], occurrence[i], return_option[i], match_type[i])
+		for i := 0; i < maxLen; i++ {
+			posValue, occValue, optValue = determineValues(pos, occ, return_option)
+			res, err := RegularInstr(expr[0], pat[i], posValue, occValue, optValue, match_type[0])
 			if err != nil {
 				return nil, err
 			}
 			rs[i] = res
 		}
 	} else if len(pat) == 1 {
-		for i := range expr {
-			if nulls.Contains(exprN, uint64(i)) || nulls.Contains(patN, uint64(0)) {
-				nulls.Add(rns, uint64(i))
-				continue
-			}
-			reg := regexp.MustCompile(pat[0])
-			res, err := RegularInstrWithReg(expr[i], reg, pos[i], occurrence[i], return_option[i], match_type[i])
+		reg := regexp.MustCompile(pat[0])
+		for i := 0; i < maxLen; i++ {
+			posValue, occValue, optValue = determineValues(pos, occ, return_option)
+			res, err := RegularInstrWithReg(expr[i], reg, posValue, occValue, optValue, match_type[0])
 			if err != nil {
 				return nil, err
 			}
 			rs[i] = res
 		}
 	}
+	for i := 0; i < maxLen; i++ {
+		posValue, occValue, optValue = determineValues(pos, occ, return_option)
+		res, err := RegularInstr(expr[i], pat[i], posValue, occValue, optValue, match_type[0])
+		if err != nil {
+			return nil, err
+		}
+		rs[i] = res
+	}
 	return rs, nil
+}
+
+func determineValues(pos, occ []int64, return_option []uint8) (int64, int64, uint8) {
+	var posValue int64
+	var occValue int64
+	var optValue uint8
+	if len(pos) == 1 {
+		posValue = pos[0]
+	} else {
+		posValue = pos[1]
+	}
+
+	if len(occ) == 1 {
+		occValue = occ[0]
+	} else {
+		occValue = occ[1]
+	}
+
+	if len(return_option) == 1 {
+		optValue = return_option[0]
+	} else {
+		optValue = return_option[1]
+	}
+
+	return posValue, occValue, optValue
 }
