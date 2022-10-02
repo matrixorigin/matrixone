@@ -465,9 +465,9 @@ func (blk *dataBlock) GetColumnDataById(
 	txn txnif.AsyncTxn,
 	colIdx int,
 	buffer *bytes.Buffer) (view *model.ColumnView, err error) {
-	if blk.meta.IsAppendable() {
+	/*if blk.meta.IsAppendable() {
 		return blk.ResolveABlkColumnMVCCData(txn.GetStartTS(), colIdx, buffer, false)
-	}
+	}*/
 	view, err = blk.ResolveColumnMVCCData(txn.GetStartTS(), colIdx, buffer)
 	return
 }

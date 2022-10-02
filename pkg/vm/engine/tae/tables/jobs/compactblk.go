@@ -81,6 +81,28 @@ func NewCompactBlockTask(ctx *tasks.Context, txn txnif.AsyncTxn, meta *catalog.B
 
 func (task *compactBlockTask) Scopes() []common.ID { return task.scopes }
 
+func (task *compactBlockTask) PrepareABlkData(blkKey []byte) (preparer *model.PreparedCompactedBlockData, err error) {
+	preparer = model.NewPreparedCompactedBlockData()
+	preparer.Columns = containers.NewBatch()
+
+	schema := task.meta.GetSchema()
+	var view *model.ColumnView
+	for _, def := range schema.ColDefs {
+		if def.IsPhyAddr() {
+			continue
+		}
+		view, err = task.compacted.GetColumnDataById(def.Idx, nil)
+		if err != nil {
+			return
+		}
+		task.deletes = view.DeleteMask
+		view.ApplyDeletes()
+		vec := view.Orphan()
+		preparer.Columns.AddVector(def.Name, vec)
+	}
+	return
+}
+
 func (task *compactBlockTask) PrepareData(blkKey []byte) (preparer *model.PreparedCompactedBlockData, err error) {
 	preparer = model.NewPreparedCompactedBlockData()
 	preparer.Columns = containers.NewBatch()
@@ -127,17 +149,25 @@ func (task *compactBlockTask) Execute() (err error) {
 		return err
 	}
 	newMeta := newBlk.GetMeta().(*catalog.BlockEntry)
+	aBlkMeta := task.compacted.GetMeta().(*catalog.BlockEntry)
 	// data, sortCol, closer, err := task.PrepareData(newMeta.MakeKey())
 	preparer, err := task.PrepareData(newMeta.MakeKey())
 	if err != nil {
 		return
 	}
 	defer preparer.Close()
+	preparerABlk, err := task.PrepareData(aBlkMeta.MakeKey())
+	if err != nil {
+		return
+	}
+	defer preparerABlk.Close()
 	if err = seg.SoftDeleteBlock(task.compacted.Fingerprint().BlockID); err != nil {
 		return err
 	}
 	newBlkData := newMeta.GetBlockData()
+	aBlkData := aBlkMeta.GetBlockData()
 	blockFile := newBlkData.GetBlockFile()
+	aBlockFile := aBlkData.GetBlockFile()
 
 	ioTask := NewFlushBlkTask(
 		tasks.WaitableCtx,
@@ -148,17 +178,41 @@ func (task *compactBlockTask) Execute() (err error) {
 	if err = task.scheduler.Schedule(ioTask); err != nil {
 		return
 	}
+	ioAblkTask := NewFlushBlkTask(
+		tasks.WaitableCtx,
+		aBlockFile,
+		task.txn.GetStartTS(),
+		aBlkMeta,
+		preparerABlk.Columns,
+	)
+	if err = task.scheduler.Schedule(ioAblkTask); err != nil {
+		return
+	}
 	if err = ioTask.WaitDone(); err != nil {
+		return
+	}
+	if err = ioAblkTask.WaitDone(); err != nil {
 		return
 	}
 	metaLoc := blockio.EncodeBlkMetaLoc(ioTask.file.Fingerprint(),
 		ioTask.file.GetMeta().GetExtent(),
 		uint32(preparer.Columns.Length()))
-	logutil.Infof("node: %v", metaLoc)
 	if err = newBlk.UpdateMetaLoc(metaLoc); err != nil {
 		return err
 	}
 	if err = newBlkData.ReplayIndex(); err != nil {
+		return err
+	}
+	metaLocABlk := blockio.EncodeBlkMetaLoc(ioAblkTask.file.Fingerprint(),
+		ioAblkTask.file.GetMeta().GetExtent(),
+		uint32(preparerABlk.Columns.Length()))
+	if err = newBlk.UpdateMetaLoc(metaLoc); err != nil {
+		return err
+	}
+	if err = task.compacted.UpdateMetaLoc(metaLocABlk); err != nil {
+		return err
+	}
+	if err = aBlkData.ReplayIndex(); err != nil {
 		return err
 	}
 	task.created = newBlk
@@ -167,6 +221,7 @@ func (task *compactBlockTask) Execute() (err error) {
 	if err = task.txn.LogTxnEntry(table.GetDB().ID, table.ID, txnEntry, []*common.ID{task.compacted.Fingerprint()}); err != nil {
 		return
 	}
+	aBlkData.Close()
 	logutil.Info("[Done]",
 		common.OperationField(task.Name()),
 		common.AnyField("created", task.created.Fingerprint().BlockString()),

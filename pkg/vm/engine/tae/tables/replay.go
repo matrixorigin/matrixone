@@ -47,9 +47,9 @@ func (blk *dataBlock) ReplayDelta() (err error) {
 }
 
 func (blk *dataBlock) ReplayIndex() (err error) {
-	if blk.meta.IsAppendable() {
+	/*if blk.meta.IsAppendable() {
 		return blk.replayMutIndex()
-	}
+	}*/
 	return blk.replayImmutIndex()
 }
 

@@ -693,6 +693,45 @@ func TestCompactBlock2(t *testing.T) {
 	}
 }
 
+func TestCompactBlock3(t *testing.T) {
+	testutils.EnsureNoLeak(t)
+	opts := config.WithLongScanAndCKPOpts(nil)
+	db := initDB(t, opts)
+	defer db.Close()
+	schema := catalog.MockSchemaAll(13, 2)
+	schema.BlockMaxRows = 10
+	schema.SegmentMaxBlocks = 4
+	bat := catalog.MockBatch(schema, int(schema.BlockMaxRows))
+	defer bat.Close()
+	createRelationAndAppend(t, 0, db, "db", schema, bat, true)
+	t.Log(db.Opts.Catalog.SimplePPString(common.PPL1))
+
+	v := bat.Vecs[schema.GetSingleSortKeyIdx()].Get(2)
+	filter := handle.NewEQFilter(v)
+	// 1. No updates and deletes
+	{
+		txn, rel := getDefaultRelation(t, db, schema.Name)
+		blkMeta := getOneBlockMeta(rel)
+		task, err := jobs.NewCompactBlockTask(tasks.WaitableCtx, txn, blkMeta, db.Scheduler)
+		assert.Nil(t, err)
+		task.Execute()
+		preparer, err := task.PrepareData(blkMeta.MakeKey())
+		assert.Nil(t, err)
+		assert.NotNil(t, preparer.Columns)
+		defer preparer.Close()
+		for col := 0; col < len(bat.Vecs); col++ {
+			for row := 0; row < bat.Vecs[0].Length(); row++ {
+				exp := bat.Vecs[col].Get(row)
+				act := preparer.Columns.Vecs[col].Get(row)
+				assert.Equal(t, exp, act)
+			}
+		}
+		err = rel.DeleteByFilter(filter)
+		assert.NoError(t, err)
+		assert.NoError(t, txn.Commit())
+	}
+}
+
 func TestAutoCompactABlk1(t *testing.T) {
 	testutils.EnsureNoLeak(t)
 	opts := config.WithQuickScanAndCKPOpts(nil)
