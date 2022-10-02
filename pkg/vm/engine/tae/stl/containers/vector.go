@@ -23,6 +23,6 @@ func NewVector[T any](opts ...*Options) *Vector[T] {
 		}
 	}
 	return &Vector[T]{
-		Vector: NewStrVector2[T](opts...),
+		Vector: NewStrVector[T](opts...),
 	}
 }

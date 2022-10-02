@@ -8,7 +8,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/stl"
 )
 
-func NewStrVector2[T any](opts ...*Options) *StrVector[T] {
+func NewStrVector[T any](opts ...*Options) *StrVector[T] {
 	var capacity int
 	var alloc stl.MemAllocator
 	vdataOpt := new(Options)
@@ -319,7 +319,7 @@ func (vec *StrVector[T]) Clone(offset, length int, allocator ...stl.MemAllocator
 	} else {
 		opts.Allocator = allocator[0]
 	}
-	cloned := NewStrVector2[T](opts)
+	cloned := NewStrVector[T](opts)
 
 	if offset == 0 {
 		cloned.vdata.AppendMany(vec.vdata.SliceWindow(offset, length)...)

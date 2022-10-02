@@ -431,7 +431,7 @@ func TestVector12(t *testing.T) {
 
 func TestStrVector1(t *testing.T) {
 	opts := withAllocator(nil)
-	vec := NewStrVector2[[]byte](opts)
+	vec := NewStrVector[[]byte](opts)
 	h1 := "h1"
 	h2 := "hh2"
 	h3 := "hhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhh3"
@@ -476,7 +476,7 @@ func TestStrVector1(t *testing.T) {
 	_, err := vec.WriteTo(w)
 	assert.NoError(t, err)
 	buf := w.Bytes()
-	vec2 := NewStrVector2[[]byte](opts)
+	vec2 := NewStrVector[[]byte](opts)
 	n, err := vec2.InitFromSharedBuf(buf)
 	assert.Equal(t, int(n), len(buf))
 	assert.NoError(t, err)
@@ -493,7 +493,7 @@ func TestStrVector1(t *testing.T) {
 
 func TestStrVector2(t *testing.T) {
 	opts := withAllocator(nil)
-	vec := NewStrVector2[[]byte](opts)
+	vec := NewStrVector[[]byte](opts)
 	h1 := "h1"
 	h2 := "hh2"
 	h3 := "hhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhh3"
@@ -505,14 +505,14 @@ func TestStrVector2(t *testing.T) {
 
 	data := vec.Bytes()
 
-	vec3 := NewStrVector2[[]byte](opts)
+	vec3 := NewStrVector[[]byte](opts)
 	vec3.ReadBytes(data, true)
 	assert.Zero(t, vec3.Allocated())
 	for i := 0; i < vec.Length(); i++ {
 		assert.Equal(t, vec.Get(i), vec3.Get(i))
 	}
 
-	vec4 := NewStrVector2[[]byte](opts)
+	vec4 := NewStrVector[[]byte](opts)
 	vec4.ReadBytes(data, false)
 	assert.NotZero(t, vec4.Allocated())
 	for i := 0; i < vec.Length(); i++ {
@@ -528,7 +528,7 @@ func TestStrVector2(t *testing.T) {
 
 func TestStrVector3(t *testing.T) {
 	opts := withAllocator(nil)
-	vec := NewStrVector2[[]byte](opts)
+	vec := NewStrVector[[]byte](opts)
 	h1 := "h1"
 	h2 := "hh2"
 	h3 := "hhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhh3"
@@ -604,7 +604,7 @@ func getBytes(i int) []byte {
 
 func TestStrVector4(t *testing.T) {
 	opts := withAllocator(nil)
-	vec := NewStrVector2[[]byte](opts)
+	vec := NewStrVector[[]byte](opts)
 	for i := 0; i < 10000; i++ {
 		vec.Append(getBytes(i))
 	}
