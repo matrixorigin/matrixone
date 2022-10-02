@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/stl"
 
 	"github.com/RoaringBitmap/roaring"
 	"github.com/RoaringBitmap/roaring/roaring64"
@@ -45,9 +46,7 @@ func FillBufferWithBytes(bs *Bytes, buffer *bytes.Buffer) *Bytes {
 	if buffer.Cap() < size {
 		buffer.Grow(size)
 	}
-	nbs := NewBytes()
-	nbs.FixedTypeSize = bs.FixedTypeSize
-	nbs.IsFixedType = bs.IsFixedType
+	nbs := stl.NewBytesWithTypeSize(bs.TypeSize)
 	buf := buffer.Bytes()[:size]
 	copy(buf, bs.StorageBuf())
 	copy(buf[bs.StorageSize():], bs.HeaderBuf())
@@ -145,7 +144,7 @@ func CopyToMoVecs(vecs []Vector) []*movec.Vector {
 }
 
 func movecToBytes[T types.FixedSizeT](v *movec.Vector) *Bytes {
-	bs := NewFixedTypeBytes[T]()
+	bs := stl.NewFixedTypeBytes[T]()
 	if v.Col == nil || len(movec.MustTCols[T](v)) == 0 {
 		bs.Storage = make([]byte, v.Length()*v.GetType().TypeSize())
 		logutil.Warn("[Moengine]", common.OperationField("movecToBytes"),
@@ -200,7 +199,7 @@ func NewVectorWithSharedMemory(v *movec.Vector, nullable bool) Vector {
 	case types.T_Rowid:
 		bs = movecToBytes[types.Rowid](v)
 	case types.T_char, types.T_varchar, types.T_json, types.T_blob:
-		bs = NewBytes()
+		bs = stl.NewBytesWithTypeSize(-types.VarlenaSize)
 		if v.Col != nil {
 			bs.Header, bs.Storage = movec.MustVarlenaRawData(v)
 		}

@@ -32,10 +32,10 @@ func SizeOfMany[T any](cnt int) int {
 }
 
 type Bytes struct {
-	IsFixedType bool
-
-	// Specify fixed type size if IsFixedType is true
-	FixedTypeSize int
+	// Specify type size
+	// Positive if it is fixed type
+	// Negtive if it is varlen type
+	TypeSize int
 
 	// Specify whether it retains a window
 	AsWindow bool

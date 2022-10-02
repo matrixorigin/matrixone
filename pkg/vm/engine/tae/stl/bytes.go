@@ -20,25 +20,18 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
-func NewBytes() *Bytes {
-	return new(Bytes)
-}
-
 func NewFixedTypeBytes[T any]() *Bytes {
+	return NewBytesWithTypeSize(Sizeof[T]())
+}
+
+func NewBytesWithTypeSize(sz int) *Bytes {
 	return &Bytes{
-		IsFixedType:   true,
-		FixedTypeSize: Sizeof[T](),
+		TypeSize: sz,
 	}
 }
 
-func NewFixedSizeBytes(sz int) *Bytes {
-	return &Bytes{
-		IsFixedType:   true,
-		FixedTypeSize: sz,
-	}
-}
-
-func (bs *Bytes) IsWindow() bool { return bs.AsWindow }
+func (bs *Bytes) IsFixedType() bool { return bs.TypeSize > 0 }
+func (bs *Bytes) IsWindow() bool    { return bs.AsWindow }
 
 func (bs *Bytes) ToWindow(offset, length int) {
 	bs.AsWindow = true
@@ -51,8 +44,8 @@ func (bs *Bytes) Size() int {
 }
 
 func (bs *Bytes) Length() int {
-	if bs.IsFixedType {
-		return len(bs.Storage) / bs.FixedTypeSize
+	if bs.IsFixedType() {
+		return len(bs.Storage) / bs.TypeSize
 	}
 	return len(bs.Header)
 }
@@ -105,16 +98,13 @@ func (bs *Bytes) GetVarValueAt(i int) []byte {
 }
 
 func (bs *Bytes) Window(offset, length int) *Bytes {
-	nbs := NewBytes()
-	nbs.IsFixedType = bs.IsFixedType
-	nbs.FixedTypeSize = bs.FixedTypeSize
+	if bs.IsFixedType() {
+		return bs.fixSizeWindow(offset, length)
+	}
+	nbs := NewBytesWithTypeSize(bs.TypeSize)
 	nbs.AsWindow = true
 	nbs.Storage = bs.Storage
 	nbs.Header = bs.Header
-	// if bs.IsFixedType {
-	// 	nbs.Storage = bs.Storage[offset*bs.FixedTypeSize : (offset+length)*bs.FixedTypeSize]
-	// 	return nbs
-	// }
 	if bs.IsWindow() {
 		nbs.WinOffset += offset
 		nbs.WinLength = length
@@ -126,46 +116,8 @@ func (bs *Bytes) Window(offset, length int) *Bytes {
 	return nbs
 }
 
-func (bs *Bytes) FixSizeWindow(offset, length int) *Bytes {
-	nbs := NewBytes()
-	nbs.IsFixedType = bs.IsFixedType
-	nbs.FixedTypeSize = bs.FixedTypeSize
-	nbs.Storage = bs.Storage[offset*bs.FixedTypeSize : (offset+length)*bs.FixedTypeSize]
+func (bs *Bytes) fixSizeWindow(offset, length int) *Bytes {
+	nbs := NewBytesWithTypeSize(bs.TypeSize)
+	nbs.Storage = bs.Storage[offset*bs.TypeSize : (offset+length)*bs.TypeSize]
 	return nbs
 }
-
-// func (bs *Bytes) cloneFixedSize() *Bytes {
-// 	nbs := NewBytes()
-// 	nbs.IsFixedType = bs.IsFixedType
-// 	nbs.FixedTypeSize = bs.FixedTypeSize
-// 	if !bs.AsWindow {
-// 	}
-// }
-
-// func (bs *Bytes) cloneVarlena() *Bytes {
-// }
-
-// func (bs *Bytes) Clone() *Bytes {
-// 	if bs.IsFixedType {
-// 		return bs.cloneFixedSize()
-// 	}
-// 	return bs.cloneVarlena()
-// }
-
-// func (bs *Bytes) cloneFixedSize() *Bytes {
-// 	nbs := NewBytes()
-// 	nbs.IsFixedType = bs.IsFixedType
-// 	nbs.FixedTypeSize = bs.FixedTypeSize
-// 	if !bs.AsWindow {
-// 	}
-// }
-
-// func (bs *Bytes) cloneVarlena() *Bytes {
-// }
-
-// func (bs *Bytes) Clone() *Bytes {
-// 	if bs.IsFixedType {
-// 		return bs.cloneFixedSize()
-// 	}
-// 	return bs.cloneVarlena()
-// }

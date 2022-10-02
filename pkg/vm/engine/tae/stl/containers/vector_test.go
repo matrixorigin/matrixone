@@ -201,12 +201,10 @@ func TestVector6(t *testing.T) {
 	}
 	buf := w.Bytes()
 	t.Logf("cap:%d,size:%d", cap(buf), len(buf))
+	bs := stl.NewBytesWithTypeSize(stl.Sizeof[int64]())
+	bs.SetStorageBuf(buf)
 	opts := &Options{
-		Data: &stl.Bytes{
-			Storage:       buf,
-			IsFixedType:   true,
-			FixedTypeSize: stl.Sizeof[int64](),
-		},
+		Data: bs,
 	}
 	vec := NewVector[int64](opts)
 	t.Log(vec.String())

@@ -34,13 +34,6 @@ var DefaultAllocator = stl.DefaultAllocator
 
 // var DefaultAllocator = alloc.NewAllocator(int(common.G) * 100)
 
-var NewBytes = stl.NewBytes
-var NewFixedSizeBytes = stl.NewFixedSizeBytes
-
-func NewFixedTypeBytes[T any]() *Bytes {
-	return stl.NewFixedTypeBytes[T]()
-}
-
 type ItOp = func(v any, row int) error
 
 type VectorView interface {

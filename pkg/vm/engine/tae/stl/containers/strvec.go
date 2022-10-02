@@ -19,12 +19,12 @@ func NewStrVector[T any](opts ...*Options) *StrVector[T] {
 		alloc = opt.Allocator
 		if opt.HasData() {
 			if opt.Data.HeaderSize() > 0 {
-				vdataOpt.Data = new(stl.Bytes)
+				vdataOpt.Data = stl.NewFixedTypeBytes[types.Varlena]()
 				vdataOpt.Data.Storage = opt.Data.HeaderBuf()
 				vdataOpt.Capacity = opt.Data.Length()
 			}
 			if opt.Data.StorageSize() > 0 {
-				areaOpt.Data = new(stl.Bytes)
+				vdataOpt.Data = stl.NewFixedTypeBytes[byte]()
 				areaOpt.Data.Storage = opt.Data.StorageBuf()
 				areaOpt.Capacity = opt.Data.StorageSize()
 			}
@@ -71,7 +71,7 @@ func (vec *StrVector[T]) IsView() bool                         { return false }
 func (vec *StrVector[T]) Data() []byte                         { panic("not support") }
 func (vec *StrVector[T]) DataWindow(offset, length int) []byte { panic("not support") }
 func (vec *StrVector[T]) Bytes() *stl.Bytes {
-	bs := &stl.Bytes{}
+	bs := stl.NewBytesWithTypeSize(-types.VarlenaSize)
 	bs.Header = vec.vdata.Slice()
 	bs.Storage = vec.area.Slice()
 

@@ -167,14 +167,8 @@ func (win *vectorWindow[T]) Slice() any {
 	}
 }
 func (win *vectorWindow[T]) Bytes() *Bytes {
-	var bs *Bytes
-	if win.ref.typ.IsVarlen() {
-		bs = win.ref.Slice().(*Bytes)
-		bs = bs.Window(win.offset, win.length)
-	} else {
-		bs = win.ref.Bytes()
-		bs = bs.FixSizeWindow(win.offset, win.length)
-	}
+	bs := win.ref.Bytes()
+	bs = bs.Window(win.offset, win.length)
 	return bs
 }
 func (win *vectorWindow[T]) Foreach(op ItOp, sels *roaring.Bitmap) (err error) {
