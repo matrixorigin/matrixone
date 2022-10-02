@@ -95,7 +95,7 @@ func RegularInstr(vectors []*vector.Vector, proc *process.Process) (*vector.Vect
 		return nil, err
 	}
 	resultValues := vector.MustTCols[int64](resultVector)
-	_, err = regular.RegularInstrWithArrays(firstValues, secondValues, pos, occ, opt, match_type, firstVector.Nsp, secondVector.Nsp, resultVector.Nsp, resultValues, maxLen)
+	err = regular.RegularInstrWithArrays(firstValues, secondValues, pos, occ, opt, match_type, firstVector.Nsp, secondVector.Nsp, resultVector.Nsp, resultValues, maxLen)
 	if err != nil {
 		return nil, err
 	}

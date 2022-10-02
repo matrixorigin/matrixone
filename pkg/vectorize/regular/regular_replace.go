@@ -75,31 +75,6 @@ func RegularReplaceWithReg(expr string, pat *regexp.Regexp, repl string, pos, oc
 	return notRepl + pat.ReplaceAllLiteralString(replace, repl), nil
 }
 
-func determineNulls(expr, pat, rpls []string, exprN, patN, rplN *nulls.Nulls, i int) bool {
-	var exprIndex int
-	var patIndex int
-	var rplIndex int
-
-	if len(expr) == 1 {
-		exprIndex = 0
-	} else {
-		exprIndex = i
-	}
-
-	if len(pat) == 1 {
-		patIndex = 0
-	} else {
-		patIndex = i
-	}
-
-	if len(rpls) == 1 {
-		rplIndex = 0
-	} else {
-		rplIndex = 1
-	}
-	return nulls.Contains(exprN, uint64(exprIndex)) || nulls.Contains(patN, uint64(patIndex)) || nulls.Contains(rplN, uint64(rplIndex))
-}
-
 func RegularReplaceWithArrays(expr, pat, rpls []string, pos, occ []int64, match_type []string, exprN, patN, rplN *nulls.Nulls, resultVector *vector.Vector, proc *process.Process, maxLen int) error {
 	rs := make([]string, maxLen)
 	var rpl string
@@ -165,6 +140,31 @@ func RegularReplaceWithArrays(expr, pat, rpls []string, pos, occ []int64, match_
 		vector.AppendString(resultVector, rs, proc.Mp())
 	}
 	return nil
+}
+
+func determineNulls(expr, pat, rpls []string, exprN, patN, rplN *nulls.Nulls, i int) bool {
+	var exprIndex int
+	var patIndex int
+	var rplIndex int
+
+	if len(expr) == 1 {
+		exprIndex = 0
+	} else {
+		exprIndex = i
+	}
+
+	if len(pat) == 1 {
+		patIndex = 0
+	} else {
+		patIndex = i
+	}
+
+	if len(rpls) == 1 {
+		rplIndex = 0
+	} else {
+		rplIndex = 1
+	}
+	return nulls.Contains(exprN, uint64(exprIndex)) || nulls.Contains(patN, uint64(patIndex)) || nulls.Contains(rplN, uint64(rplIndex))
 }
 
 func determineValuesWithThree(rpls []string, pos, occ []int64, i int) (string, int64, int64) {

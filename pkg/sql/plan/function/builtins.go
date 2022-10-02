@@ -2435,7 +2435,7 @@ var builtins = map[int]Functions{
 				Flag:      plan.Function_STRICT,
 				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_varchar, types.T_varchar, types.T_varchar},
-				ReturnTyp: types.T_int64,
+				ReturnTyp: types.T_varchar,
 				Fn:        multi.RegularReplace,
 			},
 			{
@@ -2443,7 +2443,7 @@ var builtins = map[int]Functions{
 				Flag:      plan.Function_STRICT,
 				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_varchar, types.T_varchar, types.T_varchar, types.T_int64},
-				ReturnTyp: types.T_int64,
+				ReturnTyp: types.T_varchar,
 				Fn:        multi.RegularReplace,
 			},
 			{
@@ -2451,7 +2451,7 @@ var builtins = map[int]Functions{
 				Flag:      plan.Function_STRICT,
 				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_varchar, types.T_varchar, types.T_varchar, types.T_int64, types.T_int64},
-				ReturnTyp: types.T_int64,
+				ReturnTyp: types.T_varchar,
 				Fn:        multi.RegularReplace,
 			},
 		},

@@ -75,7 +75,7 @@ func RegularInstrWithReg(expr string, pat *regexp.Regexp, pos, occurrence int64,
 	}
 }
 
-func RegularInstrWithArrays(expr, pat []string, pos, occ []int64, return_option []uint8, match_type []string, exprN, patN, rns *nulls.Nulls, rs []int64, maxLen int) ([]int64, error) {
+func RegularInstrWithArrays(expr, pat []string, pos, occ []int64, return_option []uint8, match_type []string, exprN, patN, rns *nulls.Nulls, rs []int64, maxLen int) error {
 	var posValue int64
 	var occValue int64
 	var optValue uint8
@@ -89,7 +89,7 @@ func RegularInstrWithArrays(expr, pat []string, pos, occ []int64, return_option 
 			posValue, occValue, optValue = determineValues(pos, occ, return_option, i)
 			res, err := RegularInstrWithReg(expr[0], reg, posValue, occValue, optValue, match_type[0])
 			if err != nil {
-				return nil, err
+				return err
 			}
 			rs[i] = res
 		}
@@ -102,7 +102,7 @@ func RegularInstrWithArrays(expr, pat []string, pos, occ []int64, return_option 
 			posValue, occValue, optValue = determineValues(pos, occ, return_option, i)
 			res, err := RegularInstr(expr[0], pat[i], posValue, occValue, optValue, match_type[0])
 			if err != nil {
-				return nil, err
+				return err
 			}
 			rs[i] = res
 		}
@@ -116,7 +116,7 @@ func RegularInstrWithArrays(expr, pat []string, pos, occ []int64, return_option 
 			posValue, occValue, optValue = determineValues(pos, occ, return_option, i)
 			res, err := RegularInstrWithReg(expr[i], reg, posValue, occValue, optValue, match_type[0])
 			if err != nil {
-				return nil, err
+				return err
 			}
 			rs[i] = res
 		}
@@ -129,12 +129,12 @@ func RegularInstrWithArrays(expr, pat []string, pos, occ []int64, return_option 
 			posValue, occValue, optValue = determineValues(pos, occ, return_option, i)
 			res, err := RegularInstr(expr[i], pat[i], posValue, occValue, optValue, match_type[0])
 			if err != nil {
-				return nil, err
+				return err
 			}
 			rs[i] = res
 		}
 	}
-	return rs, nil
+	return nil
 }
 
 func determineValues(pos, occ []int64, return_option []uint8, i int) (int64, int64, uint8) {

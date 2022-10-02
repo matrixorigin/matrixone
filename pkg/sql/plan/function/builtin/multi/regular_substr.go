@@ -29,59 +29,59 @@ func RegularSubstr(vectors []*vector.Vector, proc *process.Process) (*vector.Vec
 	resultType := types.T_varchar.ToType()
 
 	//maxLen
-	var maxLen int
-	if len(firstValues) > len(secondValues) {
-		maxLen = len(firstValues)
-	} else {
-		maxLen = len(secondValues)
-	}
-	//option parameters
-	pos := make([]int64, maxLen)
-	occ := make([]int64, maxLen)
-	match_type := make([]string, maxLen)
+	maxLen := vector.Length(vectors[0])
 
+	//optional arguments
+	var pos []int64
+	var occ []int64
+	var match_type []string
+
+	//different parameter length conditions
 	switch len(vectors) {
 	case 2:
-		for i := range pos {
-			pos[i] = 1
-			occ[i] = 1
-			match_type[i] = ""
+		for i := range vectors {
+			val := vector.Length(vectors[i])
+			if val > maxLen {
+				maxLen = val
+			}
 		}
+		pos = []int64{1}
+		occ = []int64{1}
+		match_type = []string{"c"}
+
 	case 3:
-		pos = vector.MustTCols[int64](vectors[2])
-		for i := range pos {
-			occ[i] = 1
-			match_type[i] = ""
+		for i := range vectors {
+			val := vector.Length(vectors[i])
+			if val > maxLen {
+				maxLen = val
+			}
 		}
+		pos = vector.MustTCols[int64](vectors[2])
+		occ = []int64{1}
+		match_type = []string{"c"}
 	case 4:
+		for i := range vectors {
+			val := vector.Length(vectors[i])
+			if val > maxLen {
+				maxLen = val
+			}
+		}
 		pos = vector.MustTCols[int64](vectors[2])
 		occ = vector.MustTCols[int64](vectors[3])
-		for i := range pos {
-			match_type[i] = ""
-		}
+		match_type = []string{"c"}
 	}
 
-	if firstVector.IsScalar() && secondVector.IsScalar() {
-		if firstVector.IsScalarNull() || secondVector.IsScalarNull() {
-			return proc.AllocScalarNullVector(resultType), nil
-		}
-		resultVector := proc.AllocScalarVector(resultType)
-		resultValues := make([]types.Varlena, 0, 1)
-		vector.SetCol(resultVector, resultValues)
-		err := regular.RegularSubstrWithArrays(firstValues, secondValues, pos, occ, match_type, firstVector.Nsp, secondVector.Nsp, resultVector, proc)
-		if err != nil {
-			return nil, err
-		}
-		return resultVector, nil
-	} else {
-		resultVector, err := proc.AllocVectorOfRows(resultType, 0, nil)
-		if err != nil {
-			return nil, err
-		}
-		err = regular.RegularSubstrWithArrays(firstValues, secondValues, pos, occ, match_type, firstVector.Nsp, secondVector.Nsp, resultVector, proc)
-		if err != nil {
-			return nil, err
-		}
-		return resultVector, nil
+	if firstVector.IsScalarNull() || secondVector.IsScalarNull() {
+		return proc.AllocScalarNullVector(resultType), nil
 	}
+
+	resultVector, err := proc.AllocVectorOfRows(resultType, 0, nil)
+	if err != nil {
+		return nil, err
+	}
+	err = regular.RegularSubstrWithArrays(firstValues, secondValues, pos, occ, match_type, firstVector.Nsp, secondVector.Nsp, resultVector, proc, maxLen)
+	if err != nil {
+		return nil, err
+	}
+	return resultVector, nil
 }

@@ -224,7 +224,7 @@ func TestRegularReplaceTest4(t *testing.T) {
 
 	//Predefined Correct Values
 	expected := []string{"abcdefgABC", "abcDEfgABC", "abcDEfgABC", "abcDefg12ABC"}
-	pos := []int{4, 4, 7, 10}
+	pos := []int64{4, 4, 7, 10}
 	result := make([]string, len(expr))
 	for i := range expr {
 		result[i], _ = RegularReplace(expr[i], pat[i], repl[i], pos[i], 1, "")

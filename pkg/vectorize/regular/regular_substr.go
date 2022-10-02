@@ -49,15 +49,19 @@ func RegularSubstrWithReg(expr string, pat *regexp.Regexp, pos, occurrence int64
 	return matchRes, nil
 }
 
-func RegularSubstrWithArrays(expr, pat []string, pos, occurrence []int64, match_type []string, exprN, patN *nulls.Nulls, resultVector *vector.Vector, proc *process.Process) error {
-	rs := make([]string, len(pos))
-	if len(expr) == len(pat) {
-		for i := range expr {
-			if nulls.Contains(exprN, uint64(i)) || nulls.Contains(patN, uint64(i)) {
+func RegularSubstrWithArrays(expr, pat []string, pos, occ []int64, return_option []uint8, match_type []string, exprN, patN *nulls.Nulls, resultVector *vector.Vector, proc *process.Process, maxLen int) error {
+	rs := make([]string, maxLen)
+	var posValue int64
+	var occValue int64
+	if len(expr) == 1 && len(pat) == 1 {
+		reg := regexp.MustCompile(pat[0])
+		for i := 0; i < maxLen; i++ {
+			if nulls.Contains(exprN, uint64(0)) || nulls.Contains(patN, uint64(0)) {
 				nulls.Add(resultVector.Nsp, uint64(i))
 				continue
 			}
-			res, err := RegularSubstr(expr[i], pat[i], pos[i], occurrence[i], match_type[i])
+			posValue, occValue = determineValuesWithTwo(pos, occ, i)
+			res, err := RegularSubstrWithReg(expr[0], reg, posValue, occValue, match_type[i])
 			if err != nil {
 				return err
 			}
@@ -65,16 +69,17 @@ func RegularSubstrWithArrays(expr, pat []string, pos, occurrence []int64, match_
 				nulls.Add(resultVector.Nsp, uint64(i))
 				continue
 			}
-			rs[i] = res[occurrence[i]-1]
+			rs[i] = res[occValue-1]
 		}
 		vector.AppendString(resultVector, rs, proc.Mp())
 	} else if len(expr) == 1 {
-		for i := range pat {
+		for i := 0; i < maxLen; i++ {
 			if nulls.Contains(exprN, uint64(0)) || nulls.Contains(patN, uint64(i)) {
 				nulls.Add(resultVector.Nsp, uint64(i))
 				continue
 			}
-			res, err := RegularSubstr(expr[0], pat[i], pos[i], occurrence[i], match_type[i])
+			posValue, occValue = determineValuesWithTwo(pos, occ, i)
+			res, err := RegularSubstr(expr[0], pat[i], posValue, occValue, match_type[i])
 			if err != nil {
 				return err
 			}
@@ -82,17 +87,17 @@ func RegularSubstrWithArrays(expr, pat []string, pos, occurrence []int64, match_
 				nulls.Add(resultVector.Nsp, uint64(i))
 				continue
 			}
-			rs[i] = res[occurrence[i]-1]
+			rs[i] = res[occValue-1]
 		}
 		vector.AppendString(resultVector, rs, proc.Mp())
 	} else if len(pat) == 1 {
-		for i := range expr {
+		reg := regexp.MustCompile(pat[0])
+		for i := 0; i < maxLen; i++ {
 			if nulls.Contains(exprN, uint64(i)) || nulls.Contains(patN, uint64(0)) {
 				nulls.Add(resultVector.Nsp, uint64(i))
 				continue
 			}
-			reg := regexp.MustCompile(pat[0])
-			res, err := RegularSubstrWithReg(expr[i], reg, pos[i], occurrence[i], match_type[i])
+			res, err := RegularSubstrWithReg(expr[i], reg, posValue, occValue, match_type[i])
 			if err != nil {
 				return err
 			}
@@ -100,9 +105,46 @@ func RegularSubstrWithArrays(expr, pat []string, pos, occurrence []int64, match_
 				nulls.Add(resultVector.Nsp, uint64(i))
 				continue
 			}
-			rs[i] = res[occurrence[i]-1]
+			rs[i] = res[occValue-1]
+		}
+		vector.AppendString(resultVector, rs, proc.Mp())
+	} else {
+		for i := 0; i < maxLen; i++ {
+			if nulls.Contains(exprN, uint64(i)) || nulls.Contains(patN, uint64(i)) {
+				nulls.Add(resultVector.Nsp, uint64(i))
+				continue
+			}
+			posValue, occValue = determineValuesWithTwo(pos, occ, i)
+			res, err := RegularSubstr(expr[0], pat[i], posValue, occValue, match_type[i])
+			if err != nil {
+				return err
+			}
+			if res == nil {
+				nulls.Add(resultVector.Nsp, uint64(i))
+				continue
+			}
+			rs[i] = res[occValue-1]
 		}
 		vector.AppendString(resultVector, rs, proc.Mp())
 	}
 	return nil
+}
+
+func determineValuesWithTwo(pos, occ []int64, i int) (int64, int64) {
+	var posValue int64
+	var occValue int64
+
+	if len(pos) == 1 {
+		posValue = pos[0]
+	} else {
+		posValue = pos[i]
+	}
+
+	if len(occ) == 1 {
+		occValue = occ[0]
+	} else {
+		occValue = occ[i]
+	}
+
+	return posValue, occValue
 }
