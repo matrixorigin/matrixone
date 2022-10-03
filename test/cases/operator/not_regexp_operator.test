@@ -1,0 +1,90 @@
+#NOT REGEXP
+SELECT 
+'Corn' NOT REGEXP 'Corn' AS 'Corn',
+'Acorn' NOT REGEXP 'Corn' AS 'Acorn',
+'Corner' NOT REGEXP 'Corn' AS 'Corner',
+'Cheese' NOT REGEXP 'Corn' AS 'Cheese';
+SELECT 
+'Corn' NOT REGEXP '^Co' AS 'Corn',
+'Acorn' NOT REGEXP '^Co' AS 'Acorn',
+'Cheese' NOT REGEXP '^Co' AS 'Cheese';
+SELECT 
+'Corn' NOT REGEXP 'rn$' AS 'Corn',
+'Acorn' NOT REGEXP 'rn$' AS 'Acorn',
+'Cheese' NOT REGEXP 'rn$' AS 'Cheese'; 
+SELECT 
+'Corn' NOT REGEXP '.' AS 'Corn',
+'Cheese' NOT REGEXP '.' AS 'Cheese';
+SELECT 
+'Corn' NOT REGEXP '^C.rn$' AS 'Corn', 
+'Crn' NOT REGEXP '^C.rn$' AS 'Crn';
+SELECT 
+'Tweet' NOT REGEXP '^Tw..t$' AS 'Tweet', 
+'Tweat' NOT REGEXP '^Tw..t$' AS 'Tweat', 
+'Tweet' NOT REGEXP '^Tw.t$' AS 'Tweet', 
+'Twit' NOT REGEXP '^Tw..t$' AS 'Twit';
+SELECT 
+'Tweet' NOT REGEXP '^Tw.{2}t$' AS 'Tweet', 
+'Tweat' NOT REGEXP '^Tw.{2}t$' AS 'Tweat', 
+'Tweet' NOT REGEXP '^Tw.{1}t$' AS 'Tweet', 
+'Twit' NOT REGEXP '^Tw.{2}t$' AS 'Twit';
+SELECT 
+'Twet' NOT REGEXP '^Twe*t$' AS 'Twet',
+'Tweet' NOT REGEXP '^Twe*t$' AS 'Tweet',
+'Tweeet' NOT REGEXP'^Twe*t$' AS 'Tweeet',
+'Twt' NOT REGEXP '^Twe*t$' AS 'Twt',
+'Twit' NOT REGEXP '^Twe*t$' AS 'Twit',
+'Twiet' NOT REGEXP '^Twe*t$' AS 'Twiet',
+'Tweit' NOT REGEXP '^Twe*t$' AS 'Tweit';
+SELECT 
+'Twet' NOT REGEXP '^Twe+t$' AS 'Twet',
+'Tweet' NOT REGEXP '^Twe+t$' AS 'Tweet',
+'Tweeet' NOT REGEXP '^Twe+t$' AS 'Tweeet',
+'Twt' NOT REGEXP '^Twe+t$' AS 'Twt',
+'Twit' NOT REGEXP '^Twe+t$' AS 'Twit',
+'Twiet' NOT REGEXP '^Twe+t$' AS 'Twiet',
+'Tweit' NOT REGEXP '^Twe+t$' AS 'Tweit';
+SELECT 
+'Twet' NOT REGEXP '^Twe?t$' AS 'Twet',
+'Tweet' NOT REGEXP '^Twe?t$' AS 'Tweet',
+'Tweeet' NOT REGEXP '^Twe?t$' AS 'Tweeet',
+'Twt' NOT REGEXP '^Twe?t$' AS 'Twt',
+'Twit' NOT REGEXP '^Twe?t$' AS 'Twit',
+'Twiet' NOT REGEXP '^Twe?t$' AS 'Twiet',
+'Tweit' NOT REGEXP '^Twe?t$' AS 'Tweit';
+SELECT 
+'Tweet' NOT REGEXP 'Tw|et' AS 'Tweet',
+'For Let' NOT REGEXP 'Tw|et' AS 'For Let',
+'Banana' NOT REGEXP 'Tw|et' AS 'Banana';
+SELECT 
+'Cat' NOT REGEXP 'Cat|Dog' AS 'Cat',
+'Dog' NOT REGEXP 'Cat|Dog' AS 'Dog',
+'Doggone' NOT REGEXP 'Cat|Dog' AS 'Doggone',
+'Banana' NOT REGEXP 'Cat|Dog' AS 'Banana';
+SELECT 
+'Banana' NOT REGEXP '(an)*' AS 'Banana',
+'Land' NOT REGEXP '(an)*' AS 'Land',
+'Cheese' NOT REGEXP '(an)*' AS 'Cheese';
+SELECT 
+'Banana' NOT REGEXP '^B(an)*d$' AS 'Banana',
+'Band' NOT REGEXP '^B(an)*d$' AS 'Band',
+'Bald' NOT REGEXP '^B(an)*d$' AS 'Bald',
+'Bad' NOT REGEXP '^B(an)*d$' AS 'Bad';
+SELECT 
+'Tweeet' NOT REGEXP 'e{3}' AS 'Tweeet',
+'Tweet' NOT REGEXP 'e{3}' AS 'Tweet';
+SELECT 
+'Tweet 123' NOT REGEXP '[0-9]' AS 'Tweet123',
+'Tweet ABC' NOT REGEXP '[0-9]' AS 'TweetABC';
+SELECT 
+'Tweet 123' NOT REGEXP '[A-Z]' AS 'Tweet123',
+'ABC' NOT REGEXP '[A-Z]' AS 'ABC',
+'123' NOT REGEXP '[A-Z]' AS '123';
+SELECT 
+'123' NOT REGEXP '[1-3]' AS '123',
+'012' NOT REGEXP '[1-3]' AS '012',
+'045' NOT REGEXP '[1-3]' AS '045';
+SELECT 
+'123' NOT REGEXP '[^1-3]' AS '123',
+'012' NOT REGEXP '[^1-3]' AS '012',
+'045' NOT REGEXP '[^1-3]' AS '045';

@@ -32,6 +32,12 @@ func RegularReplace(vectors []*vector.Vector, proc *process.Process) (*vector.Ve
 
 	//maxLen
 	maxLen := vector.Length(vectors[0])
+	for i := range vectors {
+		val := vector.Length(vectors[i])
+		if val > maxLen {
+			maxLen = val
+		}
+	}
 
 	//optional arguments
 	var pos []int64
@@ -41,35 +47,17 @@ func RegularReplace(vectors []*vector.Vector, proc *process.Process) (*vector.Ve
 	//different parameter length conditions
 	switch len(vectors) {
 	case 3:
-		for i := range vectors {
-			val := vector.Length(vectors[i])
-			if val > maxLen {
-				maxLen = val
-			}
-		}
 		pos = []int64{1}
 		occ = []int64{1}
 		match_type = []string{"c"}
 
 	case 4:
-		for i := range vectors {
-			val := vector.Length(vectors[i])
-			if val > maxLen {
-				maxLen = val
-			}
-		}
-		pos = vector.MustTCols[int64](vectors[2])
+		pos = vector.MustTCols[int64](vectors[3])
 		occ = []int64{1}
 		match_type = []string{"c"}
 	case 5:
-		for i := range vectors {
-			val := vector.Length(vectors[i])
-			if val > maxLen {
-				maxLen = val
-			}
-		}
-		pos = vector.MustTCols[int64](vectors[2])
-		occ = vector.MustTCols[int64](vectors[3])
+		pos = vector.MustTCols[int64](vectors[3])
+		occ = vector.MustTCols[int64](vectors[4])
 		match_type = []string{"c"}
 	}
 

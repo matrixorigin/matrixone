@@ -30,6 +30,12 @@ func RegularInstr(vectors []*vector.Vector, proc *process.Process) (*vector.Vect
 
 	//maxLen
 	maxLen := vector.Length(vectors[0])
+	for i := range vectors {
+		val := vector.Length(vectors[i])
+		if val > maxLen {
+			maxLen = val
+		}
+	}
 
 	//optional arguments
 	var pos []int64
@@ -40,46 +46,22 @@ func RegularInstr(vectors []*vector.Vector, proc *process.Process) (*vector.Vect
 	//different parameter length conditions
 	switch len(vectors) {
 	case 2:
-		for i := range vectors {
-			val := vector.Length(vectors[i])
-			if val > maxLen {
-				maxLen = val
-			}
-		}
 		pos = []int64{1}
 		occ = []int64{1}
 		opt = []uint8{0}
 		match_type = []string{"c"}
 
 	case 3:
-		for i := range vectors {
-			val := vector.Length(vectors[i])
-			if val > maxLen {
-				maxLen = val
-			}
-		}
 		pos = vector.MustTCols[int64](vectors[2])
 		occ = []int64{1}
 		opt = []uint8{0}
 		match_type = []string{"c"}
 	case 4:
-		for i := range vectors {
-			val := vector.Length(vectors[i])
-			if val > maxLen {
-				maxLen = val
-			}
-		}
 		pos = vector.MustTCols[int64](vectors[2])
 		occ = vector.MustTCols[int64](vectors[3])
 		opt = []uint8{0}
 		match_type = []string{"c"}
 	case 5:
-		for i := range vectors {
-			val := vector.Length(vectors[i])
-			if val > maxLen {
-				maxLen = val
-			}
-		}
 		pos = vector.MustTCols[int64](vectors[2])
 		occ = vector.MustTCols[int64](vectors[3])
 		opt = vector.MustTCols[uint8](vectors[4])

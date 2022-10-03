@@ -583,7 +583,10 @@ func (b *baseBinder) bindComparisonExpr(astExpr *tree.ComparisonExpr, depth int3
 				return bindFuncExprImplByPlanExpr("not", []*plan.Expr{expr})
 			}
 		}
-
+	case tree.REG_MATCH:
+		op = "reg_match"
+	case tree.NOT_REG_MATCH:
+		op = "not_reg_match"
 	default:
 		return nil, moerr.NewNYI("'%v'", astExpr)
 	}

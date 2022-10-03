@@ -1,0 +1,42 @@
+#regexp_replace
+SET @str = 'It was good';
+SELECT 
+@str 'Original String',
+REGEXP_REPLACE(@str, 'good', 'great!') 'Result';
+Original String  Result
+It was good      It was great!
+SET @str = 'Cat Dog Cat Dog Cat';
+SELECT 
+@str 'Original String',
+REGEXP_REPLACE(@str, 'Cat', 'Tiger') 'Result';
+Original String        Result
+Cat Dog Cat Dog Cat    Tiger Dog Tiger Dog Tiger
+SET @str = 'Cat Dog Cat Dog Cat';
+SELECT 
+@str 'Original String',
+REGEXP_REPLACE(@str, 'Cow', 'Tiger') 'Result';
+Original String        Result
+Cat Dog Cat Dog Cat    Cat Dog Cat Dog Cat
+SET @str = 'Cat Dog Cat Dog Cat';
+SELECT 
+@str 'Original String',
+REGEXP_REPLACE(@str, 'Cat', 'Tiger', 2) 'Result';
+Original String      Result                  
+Cat Dog Cat Dog Cat  Cat Dog Tiger Dog Tiger 
+SET @str = 'Cat Dog Cat Dog Cat';
+SELECT 
+@str 'Original String',
+REGEXP_REPLACE(@str, 'Cat', 'Tiger', 1, 2) 'Result';
+Original String     Result                
+Cat Dog Cat Dog Cat Cat Dog Tiger Dog Cat 
+SET @str = 'Cat Dog Cat Dog Cat';
+SELECT 
+@str 'Original String',
+REGEXP_REPLACE(@str, 'Cat', 'Tiger', 2, 2) 'Result';
+Original String      Result                
+Cat Dog Cat Dog Cat  Cat Dog Cat Dog Tiger 
+SET @str = 'Cat Dog Cat Dog Cat';
+SELECT 
+@str 'Original String',
+REGEXP_REPLACE(@str, 'Cat', 'Tiger', 1, 0) 'Result';
+invalid input: regexp_replace have invalid input

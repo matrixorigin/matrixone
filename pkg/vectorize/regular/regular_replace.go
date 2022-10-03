@@ -43,11 +43,20 @@ func RegularReplace(expr, pat, repl string, pos, occurrence int64, match_type st
 		return expr, nil
 	}
 
-	// the string won't be replaced
-	notRepl := expr[:matchRes[occurrence-1][0]]
-	// the string will be replaced
-	replace := expr[matchRes[occurrence-1][0]:]
-	return notRepl + reg.ReplaceAllLiteralString(replace, repl), nil
+	if occurrence == 1 {
+		// the string won't be replaced
+		notRepl := expr[:matchRes[occurrence-1][0]]
+		// the string will be replaced
+		replace := expr[matchRes[occurrence-1][0]:]
+		return notRepl + reg.ReplaceAllLiteralString(replace, repl), nil
+	} else {
+		// the string won't be replaced
+		notRepl := expr[:matchRes[occurrence-1][0]]
+		// the string will be replaced
+		replace := expr[matchRes[occurrence-1][0]:matchRes[occurrence][0]]
+		left := expr[matchRes[occurrence][0]:]
+		return notRepl + reg.ReplaceAllLiteralString(replace, repl) + left, nil
+	}
 }
 
 func RegularReplaceWithReg(expr string, pat *regexp.Regexp, repl string, pos, occurrence int64, match_type string) (string, error) {
@@ -68,11 +77,20 @@ func RegularReplaceWithReg(expr string, pat *regexp.Regexp, repl string, pos, oc
 		return expr, nil
 	}
 
-	// the string won't be replaced
-	notRepl := expr[:matchRes[occurrence-1][0]]
-	// the string will be replaced
-	replace := expr[matchRes[occurrence-1][0]:]
-	return notRepl + pat.ReplaceAllLiteralString(replace, repl), nil
+	if occurrence == 1 {
+		// the string won't be replaced
+		notRepl := expr[:matchRes[occurrence-1][0]]
+		// the string will be replaced
+		replace := expr[matchRes[occurrence-1][0]:]
+		return notRepl + pat.ReplaceAllLiteralString(replace, repl), nil
+	} else {
+		// the string won't be replaced
+		notRepl := expr[:matchRes[occurrence-1][0]]
+		// the string will be replaced
+		replace := expr[matchRes[occurrence-1][0]:matchRes[occurrence][0]]
+		left := expr[matchRes[occurrence][0]:]
+		return notRepl + pat.ReplaceAllLiteralString(replace, repl) + left, nil
+	}
 }
 
 func RegularReplaceWithArrays(expr, pat, rpls []string, pos, occ []int64, match_type []string, exprN, patN, rplN *nulls.Nulls, resultVector *vector.Vector, proc *process.Process, maxLen int) error {

@@ -1,0 +1,13 @@
+#regexp_substr
+SELECT REGEXP_SUBSTR('Thailand or Cambodia', 'l.nd') Result;
+SELECT REGEXP_SUBSTR('Lend for land', 'l.nd') Result;
+SELECT REGEXP_SUBSTR('Lend for land', '^C') Result;
+SELECT REGEXP_SUBSTR('Cat Cut Cot', 'C.t', 2) Result;
+SELECT 
+REGEXP_SUBSTR('Cat Cut Cot', 'C.t', 1, 1) 'Occurrence1',
+REGEXP_SUBSTR('Cat Cut Cot', 'C.t', 1, 2) 'Occurrence2',
+REGEXP_SUBSTR('Cat Cut Cot', 'C.t', 1, 3) 'Occurrence3'; 
+SELECT 
+REGEXP_SUBSTR('Cat Cut Cot', 'C.t', 2, 1) 'Occurrence1',
+REGEXP_SUBSTR('Cat Cut Cot', 'C.t', 2, 2) 'Occurrence2',
+REGEXP_SUBSTR('Cat Cut Cot', 'C.t', 2, 3) 'Occurrence3';
