@@ -81,28 +81,6 @@ func NewCompactBlockTask(ctx *tasks.Context, txn txnif.AsyncTxn, meta *catalog.B
 
 func (task *compactBlockTask) Scopes() []common.ID { return task.scopes }
 
-func (task *compactBlockTask) PrepareABlkData(blkKey []byte) (preparer *model.PreparedCompactedBlockData, err error) {
-	preparer = model.NewPreparedCompactedBlockData()
-	preparer.Columns = containers.NewBatch()
-
-	schema := task.meta.GetSchema()
-	var view *model.ColumnView
-	for _, def := range schema.ColDefs {
-		if def.IsPhyAddr() {
-			continue
-		}
-		view, err = task.compacted.GetColumnDataById(def.Idx, nil)
-		if err != nil {
-			return
-		}
-		task.deletes = view.DeleteMask
-		view.ApplyDeletes()
-		vec := view.Orphan()
-		preparer.Columns.AddVector(def.Name, vec)
-	}
-	return
-}
-
 func (task *compactBlockTask) PrepareData(blkKey []byte) (preparer *model.PreparedCompactedBlockData, err error) {
 	preparer = model.NewPreparedCompactedBlockData()
 	preparer.Columns = containers.NewBatch()
@@ -178,22 +156,11 @@ func (task *compactBlockTask) Execute() (err error) {
 	if err = task.scheduler.Schedule(ioTask); err != nil {
 		return
 	}
-	ioAblkTask := NewFlushBlkTask(
-		tasks.WaitableCtx,
-		aBlockFile,
-		task.txn.GetStartTS(),
-		aBlkMeta,
-		preparerABlk.Columns,
-	)
-	if err = task.scheduler.Schedule(ioAblkTask); err != nil {
-		return
-	}
+
 	if err = ioTask.WaitDone(); err != nil {
 		return
 	}
-	if err = ioAblkTask.WaitDone(); err != nil {
-		return
-	}
+
 	metaLoc := blockio.EncodeBlkMetaLoc(ioTask.file.Fingerprint(),
 		ioTask.file.GetMeta().GetExtent(),
 		uint32(preparer.Columns.Length()))
@@ -203,14 +170,53 @@ func (task *compactBlockTask) Execute() (err error) {
 	if err = newBlkData.ReplayIndex(); err != nil {
 		return err
 	}
-	metaLocABlk := blockio.EncodeBlkMetaLoc(ioAblkTask.file.Fingerprint(),
-		ioAblkTask.file.GetMeta().GetExtent(),
-		uint32(preparerABlk.Columns.Length()))
-	if err = newBlk.UpdateMetaLoc(metaLoc); err != nil {
-		return err
+
+	/*id := &common.ID{
+		TableID:   aBlkMeta.GetSegment().GetTable().GetID(),
+		SegmentID: aBlkMeta.GetSegment().GetID(),
+		BlockID:   aBlkMeta.GetID(),
 	}
+	name := blockio.EncodeSegName(id)
+	writer := blockio.NewWriter(aBlkMeta.GetSegment().GetSegmentData().GetSegmentFile().GetFs(), name)
+	_, err = writer.WriteBlock(data)
+	if err != nil {
+		return err
+	}*/
+	// write ablock
+	data, err := aBlkData.CollectAppendInRange(aBlkMeta.GetCreatedAt(), task.txn.GetStartTS())
+	if err != nil {
+		return
+	}
+	deletes, err := aBlkData.CollectDeleteInRange(aBlkMeta.GetCreatedAt(), task.txn.GetStartTS())
+	if err != nil {
+		return
+	}
+	ablockTask := NewFlushABlkTask(
+		tasks.WaitableCtx,
+		aBlockFile,
+		task.txn.GetStartTS(),
+		aBlkMeta,
+		data,
+		deletes,
+	)
+	if err = task.scheduler.Schedule(ablockTask); err != nil {
+		return
+	}
+	if err = ablockTask.WaitDone(); err != nil {
+		return
+	}
+	metaLocABlk := blockio.EncodeBlkMetaLoc(aBlockFile.Fingerprint(),
+		ablockTask.file.GetMeta().GetExtent(),
+		uint32(data.Length()))
 	if err = task.compacted.UpdateMetaLoc(metaLocABlk); err != nil {
 		return err
+	}
+	if deletes != nil {
+		deltaLocABlk := blockio.EncodeBlkDeltaLoc(aBlockFile.Fingerprint(),
+			ablockTask.file.GetDelta().GetExtent())
+		if err = task.compacted.UpdateDeltaLoc(deltaLocABlk); err != nil {
+			return err
+		}
 	}
 	if err = aBlkData.ReplayIndex(); err != nil {
 		return err

@@ -94,6 +94,16 @@ func EncodeBlkMetaLoc(id *common.ID, extent objectio.Extent, rows uint32) string
 	return metaLoc
 }
 
+func EncodeBlkDeltaLoc(id *common.ID, extent objectio.Extent) string {
+	deltaLoc := fmt.Sprintf("%s:%d_%d_%d",
+		EncodeBlkName(id),
+		extent.Offset(),
+		extent.Length(),
+		extent.OriginSize(),
+	)
+	return deltaLoc
+}
+
 func EncodeSegMetaLoc(id *common.ID, extent objectio.Extent, rows uint32) string {
 	metaLoc := fmt.Sprintf("%s:%d_%d_%d:%d",
 		EncodeSegName(id),
