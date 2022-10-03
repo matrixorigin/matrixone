@@ -29,67 +29,67 @@ func (s *Storage) Write(ctx context.Context, txnMeta txn.TxnMeta, op uint32, pay
 
 	case memoryengine.OpCreateDatabase:
 		return handleWrite(
-			s, txnMeta, payload,
+			txnMeta, payload,
 			s.handler.HandleCreateDatabase,
 		)
 
 	case memoryengine.OpDeleteDatabase:
 		return handleWrite(
-			s, txnMeta, payload,
+			txnMeta, payload,
 			s.handler.HandleDeleteDatabase,
 		)
 
 	case memoryengine.OpCreateRelation:
 		return handleWrite(
-			s, txnMeta, payload,
+			txnMeta, payload,
 			s.handler.HandleCreateRelation,
 		)
 
 	case memoryengine.OpDeleteRelation:
 		return handleWrite(
-			s, txnMeta, payload,
+			txnMeta, payload,
 			s.handler.HandleDeleteRelation,
 		)
 
 	case memoryengine.OpAddTableDef:
 		return handleWrite(
-			s, txnMeta, payload,
+			txnMeta, payload,
 			s.handler.HandleAddTableDef,
 		)
 
 	case memoryengine.OpDelTableDef:
 		return handleWrite(
-			s, txnMeta, payload,
+			txnMeta, payload,
 			s.handler.HandleDelTableDef,
 		)
 
 	case memoryengine.OpDelete:
 		return handleWrite(
-			s, txnMeta, payload,
+			txnMeta, payload,
 			s.handler.HandleDelete,
 		)
 
 	case memoryengine.OpTruncate:
 		return handleWrite(
-			s, txnMeta, payload,
+			txnMeta, payload,
 			s.handler.HandleTruncate,
 		)
 
 	case memoryengine.OpUpdate:
 		return handleWrite(
-			s, txnMeta, payload,
+			txnMeta, payload,
 			s.handler.HandleUpdate,
 		)
 
 	case memoryengine.OpWrite:
 		return handleWrite(
-			s, txnMeta, payload,
+			txnMeta, payload,
 			s.handler.HandleWrite,
 		)
 
 	case memoryengine.OpPreCommit:
 		return handleWrite(
-			s, txnMeta, payload,
+			txnMeta, payload,
 			s.handler.HandlePreCommit,
 		)
 	}
@@ -101,7 +101,6 @@ func handleWrite[
 	Req any,
 	Resp any,
 ](
-	s *Storage,
 	meta txn.TxnMeta,
 	payload []byte,
 	fn func(
