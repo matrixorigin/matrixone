@@ -40,7 +40,7 @@ type TxnReader interface {
 	RLock()
 	RUnlock()
 	Is2PC() bool
-	GetID() uint64
+	GetID() string
 	GetCtx() []byte
 	GetStartTS() types.TS
 	GetCommitTS() types.TS

@@ -3049,6 +3049,16 @@ func TestLogtailBasic(t *testing.T) {
 		return &timestamp.Timestamp{PhysicalTime: types.DecodeInt64(ts[4:12]), LogicalTime: types.DecodeUint32(ts[:4])}
 	}
 
+	fixedColCnt := 3 // __rowid + commit_time + aborted, the columns for a delBatch
+	// check Bat rows count consistency
+	check_same_rows := func(bat *api.Batch, expect int) {
+		for _, vec := range bat.Vecs {
+			col, err := vector.ProtoVectorToVector(vec)
+			assert.NoError(t, err)
+			assert.Equal(t, expect, col.Length())
+		}
+	}
+
 	// get db catalog change
 	resp, err := LogtailHandler(tae.DB, api.SyncLogTailReq{
 		CnHave: tots(minTs),
@@ -3057,18 +3067,18 @@ func TestLogtailBasic(t *testing.T) {
 	})
 	assert.NoError(t, err)
 	assert.Equal(t, 2, len(resp.Commands)) // insert and delete
+
 	assert.Equal(t, api.Entry_Insert, resp.Commands[0].EntryType)
-	assert.Equal(t, len(catalog.SystemDBSchema.ColDefs)+2, len(resp.Commands[0].Bat.Vecs))
-	datname, err := vector.ProtoVectorToVector(resp.Commands[0].Bat.Vecs[1]) // datname column
+	assert.Equal(t, len(catalog.SystemDBSchema.ColDefs)+fixedColCnt, len(resp.Commands[0].Bat.Vecs))
+	check_same_rows(resp.Commands[0].Bat, 2)                                 // 2 db
+	datname, err := vector.ProtoVectorToVector(resp.Commands[0].Bat.Vecs[3]) // datname column
 	assert.NoError(t, err)
-	assert.Equal(t, 2, datname.Length()) // 2 db
 	assert.Equal(t, "todrop", datname.GetString(0))
 	assert.Equal(t, "db", datname.GetString(1))
+
 	assert.Equal(t, api.Entry_Delete, resp.Commands[1].EntryType)
-	datnameDrop, err := vector.ProtoVectorToVector(resp.Commands[1].Bat.Vecs[1]) // datname column
-	assert.NoError(t, err)
-	assert.Equal(t, 1, datnameDrop.Length())
-	assert.Equal(t, "todrop", datname.GetString(0))
+	assert.Equal(t, fixedColCnt, len(resp.Commands[1].Bat.Vecs))
+	check_same_rows(resp.Commands[1].Bat, 1) // 1 drop db
 
 	// get table catalog change
 	resp, err = LogtailHandler(tae.DB, api.SyncLogTailReq{
@@ -3079,10 +3089,10 @@ func TestLogtailBasic(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, 1, len(resp.Commands)) // insert
 	assert.Equal(t, api.Entry_Insert, resp.Commands[0].EntryType)
-	assert.Equal(t, len(catalog.SystemTableSchema.ColDefs)+2, len(resp.Commands[0].Bat.Vecs))
-	relname, err := vector.ProtoVectorToVector(resp.Commands[0].Bat.Vecs[1]) // relname column
+	assert.Equal(t, len(catalog.SystemTableSchema.ColDefs)+fixedColCnt, len(resp.Commands[0].Bat.Vecs))
+	check_same_rows(resp.Commands[0].Bat, 2)                                 // 2 tables
+	relname, err := vector.ProtoVectorToVector(resp.Commands[0].Bat.Vecs[3]) // relname column
 	assert.NoError(t, err)
-	assert.Equal(t, 2, relname.Length()) // 2 tables
 	assert.Equal(t, schema.Name, relname.GetString(0))
 	assert.Equal(t, schema.Name, relname.GetString(1))
 
@@ -3095,12 +3105,8 @@ func TestLogtailBasic(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, 1, len(resp.Commands)) // insert
 	assert.Equal(t, api.Entry_Insert, resp.Commands[0].EntryType)
-	assert.Equal(t, len(catalog.SystemColumnSchema.ColDefs)+2, len(resp.Commands[0].Bat.Vecs))
-	attrUniqName, err := vector.ProtoVectorToVector(resp.Commands[0].Bat.Vecs[0]) // attr uniq name column
-	assert.NoError(t, err)
-	assert.Equal(t, len(schema.ColDefs)*2, attrUniqName.Length()) // 2 tables
-	assert.Equal(t, schema.Name, relname.GetString(0))
-	assert.Equal(t, schema.Name, relname.GetString(1))
+	assert.Equal(t, len(catalog.SystemColumnSchema.ColDefs)+fixedColCnt, len(resp.Commands[0].Bat.Vecs))
+	check_same_rows(resp.Commands[0].Bat, len(schema.ColDefs)*2) // column count of 2 tables
 
 	// get user table change
 	resp, err = LogtailHandler(tae.DB, api.SyncLogTailReq{
@@ -3114,31 +3120,29 @@ func TestLogtailBasic(t *testing.T) {
 	// blk meta change
 	blkMetaEntry := resp.Commands[0]
 	assert.Equal(t, api.Entry_Insert, blkMetaEntry.EntryType)
-	blockids, err := vector.ProtoVectorToVector(blkMetaEntry.Bat.Vecs[0])
-	assert.NoError(t, err)
-	assert.Equal(t, 9, blockids.Length()) // 9 blocks, because the first write is excluded.
+	assert.Equal(t, len(blkMetaSchema.ColDefs)+fixedColCnt, len(blkMetaEntry.Bat.Vecs))
+	check_same_rows(blkMetaEntry.Bat, 9) // 9 blocks, because the first write is excluded.
 
 	// check data change
 	insDataEntry := resp.Commands[1]
 	assert.Equal(t, api.Entry_Insert, insDataEntry.EntryType)
-	assert.Equal(t, len(schema.ColDefs)+2, len(insDataEntry.Bat.Vecs)) // 5 columns, 2 visibile + 1 rowid + commit_ts + aborted
-	rowids, err := vector.ProtoVectorToVector(insDataEntry.Bat.Vecs[2])
-	assert.NoError(t, err)
-	assert.Equal(t, 99, rowids.Length()) // 99 rows, because the first write is excluded.
-	// test first col, this is probably fragile, it depends on the details of MockSchema
+	assert.Equal(t, len(schema.ColDefs)+2, len(insDataEntry.Bat.Vecs)) // 5 columns, rowid + commit ts + 2 visibile + aborted
+	check_same_rows(insDataEntry.Bat, 99)                              // 99 rows, because the first write is excluded.
+	// test first user col, this is probably fragile, it depends on the details of MockSchema
 	// if something changes, delete this is okay.
-	firstCol, err := vector.ProtoVectorToVector(insDataEntry.Bat.Vecs[0]) // int8
+	firstCol, err := vector.ProtoVectorToVector(insDataEntry.Bat.Vecs[2]) // mock_0 column, int8 type
 	assert.Equal(t, types.T_int8, firstCol.GetType().Oid)
 	assert.NoError(t, err)
 
 	delDataEntry := resp.Commands[2]
 	assert.Equal(t, api.Entry_Delete, delDataEntry.EntryType)
-	assert.Equal(t, 3, len(delDataEntry.Bat.Vecs)) // 3 columns, 1 rowid + commit_ts + aborted
+	assert.Equal(t, fixedColCnt, len(delDataEntry.Bat.Vecs)) // 3 columns, rowid + commit_ts + aborted
+	check_same_rows(delDataEntry.Bat, 10)
+
 	// check delete rowids are exactly what we want
-	rowids, err = vector.ProtoVectorToVector(delDataEntry.Bat.Vecs[0])
+	rowids, err := vector.ProtoVectorToVector(delDataEntry.Bat.Vecs[0])
 	assert.NoError(t, err)
 	assert.Equal(t, types.T_Rowid, rowids.GetType().Oid)
-	assert.Equal(t, 10, rowids.Length())
 	rowidMap := make(map[types.Rowid]int)
 	for _, id := range deleteRowIDs {
 		rowidMap[id] = 1

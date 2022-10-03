@@ -36,7 +36,7 @@ func txnBindAccessInfoFromCtx(txn txnif.AsyncTxn, ctx context.Context) {
 	tid, okt := ctx.Value(defines.TenantIDKey{}).(uint32)
 	uid, oku := ctx.Value(defines.UserIDKey{}).(uint32)
 	rid, okr := ctx.Value(defines.RoleIDKey{}).(uint32)
-	logutil.Debugf("try set %d txn access info to t%d(%v) u%d(%v) r%d(%v), ", txn.GetID(), tid, okt, uid, oku, rid, okr)
+	logutil.Debugf("try set %s txn access info to t%d(%v) u%d(%v) r%d(%v), ", txn.GetID(), tid, okt, uid, oku, rid, okr)
 	if okt { // TODO: tenantID is required, or all need to be ok?
 		txn.BindAccessInfo(tid, uid, rid)
 	}
