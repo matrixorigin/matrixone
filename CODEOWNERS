@@ -98,7 +98,7 @@
 # engines and engine related stuff
 /pkg/vm @nnsgmsone
 /pkg/vm/engine @nnsgmsone
-/pkg/vm/engine/memEngine @nnsgmsone
+/pkg/vm/engine/disttae @nnsgmsone
 /pkg/vm/engine/tae @XuPeng-SH 
 /pkg/vm/engine/memoryengine @reusee
 
