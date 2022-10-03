@@ -75,6 +75,21 @@ func (p *PhysicalRow[K, V]) readVersion(now Time, tx *Transaction) (*Version[V],
 				}
 			}
 			return &value, nil
+		} else if value.BornTx.State.Load() == Committed && value.BornTime.Before(tx.BeginTime) {
+			// this a way to solve #5388, maybe this is not a good way,
+			// I'm doing a research on postgresql to sovle it, but before
+			// I find out it, I think we need to fix this bug first, don't expose
+			// it to our user although this way is not good
+			if value.LockTx == nil {
+				continue
+			}
+			// if value is insert before tx and it's committed, and it's deleted after tx
+			// for Snapshot Isolation it's also visible
+			if value.LockTx.ID != tx.ID && value.LockTx.State.Load() == Committed && value.LockTime.After(tx.BeginTime) {
+				if tx.IsolationPolicy.Read == ReadSnapshot {
+					return &value, nil
+				}
+			}
 		}
 	}
 
