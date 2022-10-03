@@ -2897,9 +2897,22 @@ func determineRoleSetSatisfyPrivilegeSet(ctx context.Context, bh BackgroundExec,
 // determinePrivilegesOfUserSatisfyPrivilegeSet decides the privileges of user can satisfy the requirement of the privilege set
 // The algorithm 1.
 func determinePrivilegesOfUserSatisfyPrivilegeSet(ctx context.Context, ses *Session, priv *privilege, stmt tree.Statement) (bool, error) {
+	var rsset []ExecResult
+	var yes bool
+	var err error
+	var results []interface{}
+	var roleId, roleB int64
+	var setVisited *btree.Set[int64]
+	var setRList []int64
+	var sql string
+	var ret bool
+
 	setR := &btree.Set[int64]{}
 	tenant := ses.GetTenantInfo()
 	pu := ses.Pu
+	guestMMu := guest.New(pu.SV.GuestMmuLimitation, pu.HostMmu)
+	bh := NewBackgroundHandler(ctx, guestMMu, pu.Mempool, pu)
+	defer bh.Close()
 
 	//step 1: The Set R1 {default role id}
 	//The primary role (in use)
@@ -2907,35 +2920,36 @@ func determinePrivilegesOfUserSatisfyPrivilegeSet(ctx context.Context, ses *Sess
 	//TODO: call the algorithm 2.
 	//step 2: The Set R2 {the roleid granted to the userid}
 	//The secondary role (not in use)
-	guestMMu := guest.New(pu.SV.GuestMmuLimitation, pu.HostMmu)
-	bh := NewBackgroundHandler(ctx, guestMMu, pu.Mempool, pu)
-	defer bh.Close()
-	var rsset []ExecResult
 
-	sqlForRoleIdOfUserId := getSqlForRoleIdOfUserId(int(tenant.GetUserID()))
-	err := bh.Exec(ctx, sqlForRoleIdOfUserId)
+	err = bh.Exec(ctx, "begin;")
 	if err != nil {
-		return false, err
+		goto handleFailed
 	}
 
-	results := bh.GetExecResultSet()
+	sql = getSqlForRoleIdOfUserId(int(tenant.GetUserID()))
+	err = bh.Exec(ctx, sql)
+	if err != nil {
+		goto handleFailed
+	}
+
+	results = bh.GetExecResultSet()
 	rsset, err = convertIntoResultSet(results)
 	if err != nil {
-		return false, err
+		goto handleFailed
 	}
 
 	if len(rsset) != 0 && rsset[0].GetRowCount() != 0 {
 		for i := uint64(0); i < rsset[0].GetRowCount(); i++ {
-			roleId, err := rsset[0].GetInt64(i, 0)
+			roleId, err = rsset[0].GetInt64(i, 0)
 			if err != nil {
-				return false, err
+				goto handleFailed
 			}
 			setR.Insert(roleId)
 		}
 	}
 
-	setVisited := &btree.Set[int64]{}
-	setRList := make([]int64, 0, setR.Len())
+	setVisited = &btree.Set[int64]{}
+	setRList = make([]int64, 0, setR.Len())
 	//init setVisited = setR
 	setR.Scan(func(roleId int64) bool {
 		setVisited.Insert(roleId)
@@ -2944,12 +2958,13 @@ func determinePrivilegesOfUserSatisfyPrivilegeSet(ctx context.Context, ses *Sess
 	})
 	//TODO: call the algorithm 2.
 	//If the result of the algorithm 2 is true, Then return true;
-	yes, err := determineRoleSetHasPrivilegeSet(ctx, bh, tenant, setRList, priv)
+	yes, err = determineRoleSetHasPrivilegeSet(ctx, bh, tenant, setRList, priv)
 	if err != nil {
-		return false, err
+		goto handleFailed
 	}
 	if yes {
-		return true, nil
+		ret = true
+		goto handleSuccess
 	}
 	/*
 		step 3: !!!NOTE all roleid in setR has been processed by the algorithm 2.
@@ -2987,20 +3002,21 @@ func determinePrivilegesOfUserSatisfyPrivilegeSet(ctx context.Context, ses *Sess
 			bh.ClearExecResultSet()
 			err = bh.Exec(ctx, sqlForInheritedRoleIdOfRoleId)
 			if err != nil {
-				return false, moerr.NewInternalError("get inherited role id of the role id. error:%v", err)
+				err = moerr.NewInternalError("get inherited role id of the role id. error:%v", err)
+				goto handleFailed
 			}
 
 			results = bh.GetExecResultSet()
 			rsset, err = convertIntoResultSet(results)
 			if err != nil {
-				return false, err
+				goto handleFailed
 			}
 
 			if len(rsset) != 0 && rsset[0].GetRowCount() != 0 {
 				for i := uint64(0); i < rsset[0].GetRowCount(); i++ {
-					roleB, err := rsset[0].GetInt64(i, 0)
+					roleB, err = rsset[0].GetInt64(i, 0)
 					if err != nil {
-						return false, err
+						goto handleFailed
 					}
 
 					if !setVisited.Contains(roleB) {
@@ -3013,22 +3029,39 @@ func determinePrivilegesOfUserSatisfyPrivilegeSet(ctx context.Context, ses *Sess
 
 		//no more roleB, it is done
 		if len(setRPlus) == 0 {
-			return false, nil
+			ret = false
+			goto handleSuccess
 		}
 
 		//TODO: call the algorithm 2.
 		//If the result of the algorithm 2 is true, Then return true;
-		yes, err := determineRoleSetHasPrivilegeSet(ctx, bh, tenant, setRPlus, priv)
+		yes, err = determineRoleSetHasPrivilegeSet(ctx, bh, tenant, setRPlus, priv)
 		if err != nil {
-			return false, err
+			goto handleFailed
 		}
+
 		if yes {
-			return true, nil
+			ret = true
+			goto handleSuccess
 		}
 		setRList = setRPlus
 	}
 
-	return false, nil
+handleSuccess:
+	err = bh.Exec(ctx, "commit;")
+	if err != nil {
+		goto handleFailed
+	}
+
+	return ret, err
+
+handleFailed:
+	//ROLLBACK the transaction
+	rbErr := bh.Exec(ctx, "rollback;")
+	if rbErr != nil {
+		return false, rbErr
+	}
+	return false, err
 }
 
 const (
