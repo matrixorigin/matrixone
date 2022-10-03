@@ -40,6 +40,10 @@ type TenantInfo struct {
 	TenantID      uint32
 	UserID        uint32
 	DefaultRoleID uint32
+
+	// true: use secondary role all
+	// false: use secondary role none
+	useAllSecondaryRole bool
 }
 
 func (ti *TenantInfo) String() string {
@@ -107,6 +111,14 @@ func (ti *TenantInfo) IsAdminRole() bool {
 		return ti.GetDefaultRoleID() == moAdminRoleID
 	}
 	return ti.GetDefaultRoleID() == accountAdminRoleID
+}
+
+func (ti *TenantInfo) SetUseSecondaryRole(v bool) {
+	ti.useAllSecondaryRole = v
+}
+
+func (ti *TenantInfo) GetUseSecondaryRole() bool {
+	return ti.useAllSecondaryRole
 }
 
 func GetDefaultTenant() string {
@@ -1469,6 +1481,103 @@ func normalizeNamesOfUsers(users []*tree.User) error {
 		}
 	}
 	return nil
+}
+
+// doSwitchRole accomplishes the Use Role and Use Secondary Role statement
+func doSwitchRole(ctx context.Context, ses *Session, u *tree.Use) error {
+	var err error
+	account := ses.GetTenantInfo()
+
+	if u.SecondaryRole {
+		//use secondary role all or none
+		switch u.SecondaryRoleType {
+		case tree.SecondaryRoleTypeAll:
+			account.SetUseSecondaryRole(true)
+		case tree.SecondaryRoleTypeNone:
+			account.SetUseSecondaryRole(false)
+		}
+	} else if u.Role != nil {
+		err = normalizeNameOfRole(u.Role)
+		if err != nil {
+			return err
+		}
+
+		//step1 : check the role exists or not;
+		pu := ses.Pu
+		guestMMu := guest.New(pu.SV.GuestMmuLimitation, pu.HostMmu)
+		bh := NewBackgroundHandler(ctx, guestMMu, pu.Mempool, pu)
+		defer bh.Close()
+		var sql string
+		var rsset []ExecResult
+		var results []interface{}
+		var roleId int64
+
+		err = bh.Exec(ctx, "begin;")
+		if err != nil {
+			goto handleFailed
+		}
+
+		sql = getSqlForRoleIdOfRole(u.Role.UserName)
+		bh.ClearExecResultSet()
+		err = bh.Exec(ctx, sql)
+		if err != nil {
+			goto handleFailed
+		}
+
+		results = bh.GetExecResultSet()
+		rsset, err = convertIntoResultSet(results)
+		if err != nil {
+			goto handleFailed
+		}
+		if len(rsset) != 0 && rsset[0].GetRowCount() != 0 {
+			roleId, err = rsset[0].GetInt64(0, 0)
+			if err != nil {
+				goto handleFailed
+			}
+		} else {
+			err = moerr.NewInternalError("there is no role %s", u.Role.UserName)
+			goto handleFailed
+		}
+
+		//step2 : check the role has been granted to the user or not
+		sql = getSqlForCheckUserGrant(roleId, int64(account.GetDefaultRoleID()))
+		bh.ClearExecResultSet()
+		err = bh.Exec(ctx, sql)
+		if err != nil {
+			goto handleFailed
+		}
+
+		results = bh.GetExecResultSet()
+		rsset, err = convertIntoResultSet(results)
+		if err != nil {
+			goto handleFailed
+		}
+		if len(rsset) == 0 || rsset[0].GetRowCount() == 0 {
+			err = moerr.NewInternalError("the role %s has not be granted to the user %s", u.Role.UserName, account.GetUser())
+			goto handleFailed
+		}
+
+		//step3 : switch the default role and role id;
+		account.SetDefaultRoleID(uint32(roleId))
+		account.SetDefaultRole(u.Role.UserName)
+
+		err = bh.Exec(ctx, "commit;")
+		if err != nil {
+			goto handleFailed
+		}
+
+		return err
+
+	handleFailed:
+		//ROLLBACK the transaction
+		rbErr := bh.Exec(ctx, "rollback;")
+		if rbErr != nil {
+			return rbErr
+		}
+		return err
+	}
+
+	return err
 }
 
 // doDropAccount accomplishes the DropAccount statement
