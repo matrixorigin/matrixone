@@ -3026,34 +3026,35 @@ func determinePrivilegesOfUserSatisfyPrivilegeSet(ctx context.Context, ses *Sess
 	//step 1: The Set R1 {default role id}
 	//The primary role (in use)
 	setR.Insert((int64)(tenant.GetDefaultRoleID()))
-	//TODO: call the algorithm 2.
-	//step 2: The Set R2 {the roleid granted to the userid}
-	//The secondary role (not in use)
 
 	err = bh.Exec(ctx, "begin;")
 	if err != nil {
 		goto handleFailed
 	}
 
-	sql = getSqlForRoleIdOfUserId(int(tenant.GetUserID()))
-	err = bh.Exec(ctx, sql)
-	if err != nil {
-		goto handleFailed
-	}
+	//step 2: The Set R2 {the roleid granted to the userid}
+	//If the user uses the all secondary roles, the secondary roles needed to be loaded
+	if tenant.GetUseSecondaryRole() {
+		sql = getSqlForRoleIdOfUserId(int(tenant.GetUserID()))
+		err = bh.Exec(ctx, sql)
+		if err != nil {
+			goto handleFailed
+		}
 
-	results = bh.GetExecResultSet()
-	rsset, err = convertIntoResultSet(results)
-	if err != nil {
-		goto handleFailed
-	}
+		results = bh.GetExecResultSet()
+		rsset, err = convertIntoResultSet(results)
+		if err != nil {
+			goto handleFailed
+		}
 
-	if len(rsset) != 0 && rsset[0].GetRowCount() != 0 {
-		for i := uint64(0); i < rsset[0].GetRowCount(); i++ {
-			roleId, err = rsset[0].GetInt64(i, 0)
-			if err != nil {
-				goto handleFailed
+		if len(rsset) != 0 && rsset[0].GetRowCount() != 0 {
+			for i := uint64(0); i < rsset[0].GetRowCount(); i++ {
+				roleId, err = rsset[0].GetInt64(i, 0)
+				if err != nil {
+					goto handleFailed
+				}
+				setR.Insert(roleId)
 			}
-			setR.Insert(roleId)
 		}
 	}
 
@@ -3065,7 +3066,8 @@ func determinePrivilegesOfUserSatisfyPrivilegeSet(ctx context.Context, ses *Sess
 		setRList = append(setRList, roleId)
 		return true
 	})
-	//TODO: call the algorithm 2.
+
+	//Call the algorithm 2.
 	//If the result of the algorithm 2 is true, Then return true;
 	yes, err = determineRoleSetHasPrivilegeSet(ctx, bh, tenant, setRList, priv)
 	if err != nil {
@@ -3087,7 +3089,7 @@ func determinePrivilegesOfUserSatisfyPrivilegeSet(ctx context.Context, ses *Sess
 			}
 
 			If setR' is empty, Then return false;
-			//TODO: call the algorithm 2.
+			//Call the algorithm 2.
 			If the result of the algorithm 2 is true, Then return true;
 			setR = setR';
 			setR' = {};
@@ -3142,7 +3144,7 @@ func determinePrivilegesOfUserSatisfyPrivilegeSet(ctx context.Context, ses *Sess
 			goto handleSuccess
 		}
 
-		//TODO: call the algorithm 2.
+		//Call the algorithm 2.
 		//If the result of the algorithm 2 is true, Then return true;
 		yes, err = determineRoleSetHasPrivilegeSet(ctx, bh, tenant, setRPlus, priv)
 		if err != nil {
