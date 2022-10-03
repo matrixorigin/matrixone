@@ -3010,10 +3010,9 @@ func determinePrivilegesOfUserSatisfyPrivilegeSet(ctx context.Context, ses *Sess
 	var yes bool
 	var err error
 	var results []interface{}
-	var roleId, roleB int64
+	var roleB int64
 	var setVisited *btree.Set[int64]
 	var setRList []int64
-	var sql string
 	var ret bool
 
 	setR := &btree.Set[int64]{}
@@ -3034,28 +3033,9 @@ func determinePrivilegesOfUserSatisfyPrivilegeSet(ctx context.Context, ses *Sess
 
 	//step 2: The Set R2 {the roleid granted to the userid}
 	//If the user uses the all secondary roles, the secondary roles needed to be loaded
-	if tenant.GetUseSecondaryRole() {
-		sql = getSqlForRoleIdOfUserId(int(tenant.GetUserID()))
-		err = bh.Exec(ctx, sql)
-		if err != nil {
-			goto handleFailed
-		}
-
-		results = bh.GetExecResultSet()
-		rsset, err = convertIntoResultSet(results)
-		if err != nil {
-			goto handleFailed
-		}
-
-		if len(rsset) != 0 && rsset[0].GetRowCount() != 0 {
-			for i := uint64(0); i < rsset[0].GetRowCount(); i++ {
-				roleId, err = rsset[0].GetInt64(i, 0)
-				if err != nil {
-					goto handleFailed
-				}
-				setR.Insert(roleId)
-			}
-		}
+	err = loadAllSecondaryRoles(ctx, bh, tenant, setR)
+	if err != nil {
+		goto handleFailed
 	}
 
 	setVisited = &btree.Set[int64]{}
@@ -3180,6 +3160,40 @@ const (
 	successDone     //ri has indirect relation with the Uc
 )
 
+// loadAllSecondaryRoles loads all secondary roles
+func loadAllSecondaryRoles(ctx context.Context, bh BackgroundExec, account *TenantInfo, Rc *btree.Set[int64]) error {
+	var err error
+	var sql string
+	var results []interface{}
+	var rsset []ExecResult
+	var roleId int64
+
+	if account.GetUseSecondaryRole() {
+		sql = getSqlForRoleIdOfUserId(int(account.GetUserID()))
+		err = bh.Exec(ctx, sql)
+		if err != nil {
+			return err
+		}
+
+		results = bh.GetExecResultSet()
+		rsset, err = convertIntoResultSet(results)
+		if err != nil {
+			return err
+		}
+
+		if len(rsset) != 0 && rsset[0].GetRowCount() != 0 {
+			for i := uint64(0); i < rsset[0].GetRowCount(); i++ {
+				roleId, err = rsset[0].GetInt64(i, 0)
+				if err != nil {
+					return err
+				}
+				Rc.Insert(roleId)
+			}
+		}
+	}
+	return err
+}
+
 // determineUserCanGrantRoleToOtherUsers decides if the user can grant roles to other users or roles
 // the same as the grant/revoke privilege, role.
 func determineUserCanGrantRolesToOthers(ctx context.Context, ses *Session, fromRoles []*tree.Role) (bool, error) {
@@ -3202,10 +3216,15 @@ func determineUserCanGrantRolesToOthers(ctx context.Context, ses *Session, fromR
 	var ret = true
 	var granted bool
 	var Rt *btree.Set[int64]
+	var sql string
 	RkPlusOne := &btree.Set[int64]{}
 	Rk := &btree.Set[int64]{}
+	Rc := &btree.Set[int64]{}
 	RVisited := &btree.Set[int64]{}
 	verifiedFromRoles := make([]*verifiedRole, len(fromRoles))
+
+	//step 1 : add the primary role
+	Rc.Insert(int64(account.GetDefaultRoleID()))
 
 	//put it into the single transaction
 	err = bh.Exec(ctx, "begin;")
@@ -3214,7 +3233,7 @@ func determineUserCanGrantRolesToOthers(ctx context.Context, ses *Session, fromR
 	}
 
 	for i, role := range fromRoles {
-		sql := getSqlForRoleIdOfRole(role.UserName)
+		sql = getSqlForRoleIdOfRole(role.UserName)
 		vr, err = verifyRoleFunc(ctx, bh, sql, role.UserName, roleType)
 		if err != nil {
 			goto handleFailed
@@ -3226,49 +3245,41 @@ func determineUserCanGrantRolesToOthers(ctx context.Context, ses *Session, fromR
 		verifiedFromRoles[i] = vr
 	}
 
-	//TODO: add roleI -WGO-> roleJ and roleI -WGO-> User connection cache
+	//step 2: The Set R2 {the roleid granted to the userid}
+	//If the user uses the all secondary roles, the secondary roles needed to be loaded
+	err = loadAllSecondaryRoles(ctx, bh, account, Rc)
+	if err != nil {
+		goto handleFailed
+	}
+
 	for _, role := range verifiedFromRoles {
+		//if it is the role in use, do the check
+		if Rc.Contains(role.id) {
+			//check the direct relation between role and user
+			granted, err = isRoleGrantedToUserWGO(ctx, bh, role.id, int64(account.GetUserID()))
+			if err != nil {
+				goto handleFailed
+			}
+			if granted {
+				continue
+			}
+		}
+
 		Rk.Clear()
 		RVisited.Clear()
-		RkPlusOne.Clear()
 		Rk.Insert(role.id)
-
-		//check the direct relation between role and user
-		granted, err = isRoleGrantedToUserWGO(ctx, bh, role.id, int64(account.GetUserID()))
-		if err != nil {
-			goto handleFailed
-		}
-		if granted {
-			continue
-		}
 
 		riResult := goOn
 		//It is kind of level traversal
 		for Rk.Len() != 0 && riResult == goOn {
 			RkPlusOne.Clear()
-			/*
-				for ri in Rk: (check ri has indirect relation with the Uc)
-					ri -> Rt (mo_role_grant)
-					for rj in Rt:
-						check (rj,Uc) in mo_user_grant
-
-			*/
 			for _, ri := range Rk.Keys() {
 				Rt, err = getRoleSetThatRoleGrantedToWGO(ctx, bh, ri, RVisited, RkPlusOne)
 				if err != nil {
 					goto handleFailed
 				}
 
-				atLeastOne := false
-				for _, rj := range Rt.Keys() {
-					granted, err = isRoleGrantedToUserWGO(ctx, bh, rj, int64(account.GetUserID()))
-					if err != nil {
-						goto handleFailed
-					}
-					atLeastOne = atLeastOne || granted
-				}
-
-				if atLeastOne {
+				if setIsIntersected(Rt, Rc) {
 					riResult = successDone
 					break
 				}
@@ -3634,6 +3645,20 @@ func getRoleSetThatPrivilegeGrantedToWGO(ctx context.Context, bh BackgroundExec,
 	return rset, err
 }
 
+// setIsIntersected decides the A is intersecting the B.
+func setIsIntersected(A, B *btree.Set[int64]) bool {
+	if A.Len() > B.Len() {
+		A, B = B, A
+	}
+	iter := A.Iter()
+	for x := iter.First(); x; x = iter.Next() {
+		if B.Contains(iter.Key()) {
+			return true
+		}
+	}
+	return false
+}
+
 // determineUserCanGrantPrivilegesToOthers decides the privileges can be granted to others.
 func determineUserCanGrantPrivilegesToOthers(ctx context.Context, ses *Session, gp *tree.GrantPrivilege) (bool, error) {
 	//step1: normalize the names of roles and users
@@ -3655,24 +3680,18 @@ func determineUserCanGrantPrivilegesToOthers(ctx context.Context, ses *Session, 
 	RVisited := &btree.Set[int64]{}
 	// the roles that the user using
 	Rc := &btree.Set[int64]{}
-	//TODO: add secondary role
-	Rc.Insert(int64(account.GetDefaultRoleID()))
 
-	setIsIntersected := func(A, B *btree.Set[int64]) bool {
-		if A.Len() > B.Len() {
-			A, B = B, A
-		}
-		iter := A.Iter()
-		for x := iter.First(); x; x = iter.Next() {
-			if B.Contains(iter.Key()) {
-				return true
-			}
-		}
-		return false
-	}
+	Rc.Insert(int64(account.GetDefaultRoleID()))
 
 	//put it into the single transaction
 	err = bh.Exec(ctx, "begin;")
+	if err != nil {
+		goto handleFailed
+	}
+
+	//step 2: The Set R2 {the roleid granted to the userid}
+	//If the user uses the all secondary roles, the secondary roles needed to be loaded
+	err = loadAllSecondaryRoles(ctx, bh, account, Rc)
 	if err != nil {
 		goto handleFailed
 	}
