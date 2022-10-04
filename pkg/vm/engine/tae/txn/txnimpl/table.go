@@ -338,12 +338,8 @@ func (tbl *txnTable) GetSortColumns(data *containers.Batch) []containers.Vector 
 // func (tbl *txnTable)
 
 func (tbl *txnTable) Append(data *containers.Batch) (err error) {
-	if tbl.schema.IsSinglePK() {
+	if tbl.schema.HasPK() {
 		if err = tbl.DoBatchDedup(data.Vecs[tbl.schema.GetSingleSortKeyIdx()]); err != nil {
-			return
-		}
-	} else if tbl.schema.IsCompoundPK() {
-		if err = tbl.DoBatchDedup(tbl.GetSortColumns(data)...); err != nil {
 			return
 		}
 	}
@@ -686,15 +682,10 @@ func (tbl *txnTable) DoBatchDedup(keys ...containers.Vector) (err error) {
 }
 
 func (tbl *txnTable) BatchDedupLocal(bat *containers.Batch) (err error) {
-	if tbl.localSegment == nil {
+	if tbl.localSegment == nil || !tbl.schema.HasPK() {
 		return
 	}
-	if tbl.schema.IsSinglePK() {
-		err = tbl.localSegment.BatchDedup(bat.Vecs[tbl.schema.GetSingleSortKeyIdx()])
-	} else {
-		key := model.EncodeCompoundColumn(tbl.GetSortColumns(bat)...)
-		err = tbl.localSegment.BatchDedup(key)
-	}
+	err = tbl.localSegment.BatchDedup(bat.Vecs[tbl.schema.GetSingleSortKeyIdx()])
 	return
 }
 

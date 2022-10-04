@@ -115,7 +115,6 @@ func (cpk *SortKey) AddDef(def *ColDef) (ok bool) {
 	return true
 }
 
-func (cpk *SortKey) IsSinglePK() bool               { return cpk.isPrimary && cpk.Size() == 1 }
 func (cpk *SortKey) IsPrimary() bool                { return cpk.isPrimary }
 func (cpk *SortKey) Size() int                      { return len(cpk.Defs) }
 func (cpk *SortKey) GetDef(pos int) *ColDef         { return cpk.Defs[pos] }
@@ -160,14 +159,8 @@ func (s *Schema) Clone() *Schema {
 	return ns
 }
 func (s *Schema) GetSortKeyType() types.Type {
-	if s.IsSinglePK() {
-		return s.GetSingleSortKey().Type
-	}
-	t := types.CompoundKeyType
-	// TODO: set correct width
-	return t
+	return s.GetSingleSortKey().Type
 }
-func (s *Schema) IsSinglePK() bool        { return s.SortKey != nil && s.SortKey.IsSinglePK() }
 func (s *Schema) IsSingleSortKey() bool   { return s.SortKey != nil && s.SortKey.Size() == 1 }
 func (s *Schema) IsCompoundPK() bool      { return s.IsCompoundSortKey() && s.SortKey.IsPrimary() }
 func (s *Schema) IsCompoundSortKey() bool { return s.SortKey != nil && s.SortKey.Size() > 1 }
