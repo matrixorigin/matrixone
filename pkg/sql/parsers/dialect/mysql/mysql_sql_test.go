@@ -26,7 +26,7 @@ var (
 		input  string
 		output string
 	}{
-		input: "grant manage grants on account * to r1",
+		input: "grant reference on table *.* to r1",
 	}
 )
 
@@ -1389,6 +1389,10 @@ var (
 			input: `create table t2 (a uuid primary key, b varchar(10))`,
 		}, {
 			input: `create table t3 (a int, b uuid, primary key idx (a, b))`,
+		}, {
+			input: "grant truncate on table *.* to r1",
+		}, {
+			input: "grant reference on table *.* to r1",
 		},
 	}
 )

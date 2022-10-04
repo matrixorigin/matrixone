@@ -4004,6 +4004,10 @@ func convertAstPrivilegeTypeToPrivilegeType(priv tree.PrivilegeType, ot tree.Obj
 		privType = PrivilegeTypeIndex
 	case tree.PRIVILEGE_TYPE_STATIC_EXECUTE:
 		privType = PrivilegeTypeExecute
+	case tree.PRIVILEGE_TYPE_STATIC_TRUNCATE:
+		privType = PrivilegeTypeTruncate
+	case tree.PRIVILEGE_TYPE_STATIC_REFERENCE:
+		privType = PrivilegeTypeReference
 	default:
 		return 0, moerr.NewInternalError("unsupported privilege type %s", priv.ToString())
 	}
