@@ -15,11 +15,48 @@
 package multi
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/operator"
+	"github.com/matrixorigin/matrixone/pkg/vectorize/regular"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 func RegularLike(vectors []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
-	return operator.RegMatch(vectors, proc)
+	firstVector := vectors[0]
+	secondVector := vectors[1]
+	firstValues := vector.MustStrCols(firstVector)
+	secondValues := vector.MustStrCols(secondVector)
+	resultType := types.T_uint8.ToType()
+
+	//maxLen
+	maxLen := vector.Length(vectors[0])
+	for i := range vectors {
+		val := vector.Length(vectors[i])
+		if val > maxLen {
+			maxLen = val
+		}
+	}
+
+	//optional arguments
+	var match_type []string
+
+	//different parameter length conditions
+	switch len(vectors) {
+	case 2:
+		match_type = []string{"c"}
+	}
+	if firstVector.IsScalarNull() || secondVector.IsScalarNull() {
+		return proc.AllocScalarNullVector(resultType), nil
+	}
+
+	resultVector, err := proc.AllocVectorOfRows(resultType, int64(maxLen), nil)
+	if err != nil {
+		return nil, err
+	}
+	resultValues := vector.MustTCols[uint8](resultVector)
+	err = regular.RegularLikeWithArrays(firstValues, secondValues, match_type, firstVector.Nsp, secondVector.Nsp, resultVector.Nsp, resultValues, maxLen)
+	if err != nil {
+		return nil, err
+	}
+	return resultVector, nil
 }

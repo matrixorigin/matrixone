@@ -1,9 +1,5 @@
 #REGEXP
-SELECT 
-'Corn' REGEXP 'Corn' AS 'Corn',
-'Acorn' REGEXP 'Corn' AS 'Acorn',
-'Corner' REGEXP 'Corn' AS 'Corner',
-'Cheese' REGEXP 'Corn' AS 'Cheese';
+SELECT  'Corn' REGEXP 'Corn' AS 'Corn','Acorn' REGEXP 'Corn' AS 'Acorn','Corner' REGEXP 'Corn' AS 'Corner','Cheese' REGEXP 'Corn' AS 'Cheese';
 SELECT 
 'Corn' REGEXP '^Co' AS 'Corn',
 'Acorn' REGEXP '^Co' AS 'Acorn',

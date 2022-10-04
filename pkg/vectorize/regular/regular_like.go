@@ -18,6 +18,7 @@ import (
 	"regexp"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 )
 
 func RegularLike(expr, pat, match_type string) (uint8, error) {
@@ -30,4 +31,57 @@ func RegularLike(expr, pat, match_type string) (uint8, error) {
 	} else {
 		return 0, nil
 	}
+}
+
+func RegularLikeWithArrays(expr, pat []string, match_type []string, exprN, patN, rns *nulls.Nulls, rs []uint8, maxLen int) error {
+	if len(expr) == 1 && len(pat) == 1 {
+		for i := 0; i < maxLen; i++ {
+			if nulls.Contains(exprN, uint64(0)) || nulls.Contains(patN, uint64(0)) {
+				nulls.Add(rns, uint64(i))
+				continue
+			}
+			res, err := RegularLike(expr[0], pat[0], match_type[0])
+			if err != nil {
+				return err
+			}
+			rs[i] = res
+		}
+	} else if len(expr) == 1 {
+		for i := 0; i < maxLen; i++ {
+			if nulls.Contains(exprN, uint64(0)) || nulls.Contains(patN, uint64(i)) {
+				nulls.Add(rns, uint64(i))
+				continue
+			}
+			res, err := RegularLike(expr[0], pat[i], match_type[0])
+			if err != nil {
+				return err
+			}
+			rs[i] = res
+		}
+	} else if len(pat) == 1 {
+		for i := 0; i < maxLen; i++ {
+			if nulls.Contains(exprN, uint64(i)) || nulls.Contains(patN, uint64(0)) {
+				nulls.Add(rns, uint64(i))
+				continue
+			}
+			res, err := RegularLike(expr[i], pat[0], match_type[0])
+			if err != nil {
+				return err
+			}
+			rs[i] = res
+		}
+	} else {
+		for i := 0; i < maxLen; i++ {
+			if nulls.Contains(exprN, uint64(i)) || nulls.Contains(patN, uint64(i)) {
+				nulls.Add(rns, uint64(i))
+				continue
+			}
+			res, err := RegularLike(expr[0], pat[0], match_type[0])
+			if err != nil {
+				return err
+			}
+			rs[i] = res
+		}
+	}
+	return nil
 }
