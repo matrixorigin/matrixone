@@ -872,13 +872,6 @@ func (blk *dataBlock) CollectChangesInRange(startTs, endTs types.TS) (view *mode
 	blk.mvcc.RUnlock()
 	return
 }
-func (blk *dataBlock) GetSortColumns(schema *catalog.Schema, data *containers.Batch) []containers.Vector {
-	vs := make([]containers.Vector, schema.GetSortKeyCnt())
-	for i := range vs {
-		vs[i] = data.Vecs[schema.SortKey.Defs[i].Idx]
-	}
-	return vs
-}
 
 func (blk *dataBlock) CollectAppendInRange(start, end types.TS) (*containers.Batch, error) {
 	if blk.meta.IsAppendable() {

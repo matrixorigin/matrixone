@@ -327,16 +327,6 @@ func (tbl *txnTable) AddUpdateNode(node txnif.UpdateNode) error {
 	return nil
 }
 
-func (tbl *txnTable) GetSortColumns(data *containers.Batch) []containers.Vector {
-	vs := make([]containers.Vector, tbl.schema.GetSortKeyCnt())
-	for i := range vs {
-		vs[i] = data.Vecs[tbl.schema.SortKey.Defs[i].Idx]
-	}
-	return vs
-}
-
-// func (tbl *txnTable)
-
 func (tbl *txnTable) Append(data *containers.Batch) (err error) {
 	if tbl.schema.HasPK() {
 		if err = tbl.DoBatchDedup(data.Vecs[tbl.schema.GetSingleSortKeyIdx()]); err != nil {

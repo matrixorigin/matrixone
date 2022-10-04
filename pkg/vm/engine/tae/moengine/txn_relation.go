@@ -16,6 +16,7 @@ package moengine
 
 import (
 	"context"
+
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -106,7 +107,7 @@ func (rel *txnRelation) Delete(_ context.Context, data *vector.Vector, col strin
 	if schema.PhyAddrKey.Name == col {
 		return rel.handle.DeleteByPhyAddrKeys(vec)
 	}
-	if !schema.HasPK() || schema.IsCompoundSortKey() {
+	if !schema.HasPK() {
 		panic(any("No valid primary key found"))
 	}
 	if schema.SortKey.Defs[0].Name == col {

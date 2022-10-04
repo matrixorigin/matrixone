@@ -161,22 +161,12 @@ func (s *Schema) Clone() *Schema {
 func (s *Schema) GetSortKeyType() types.Type {
 	return s.GetSingleSortKey().Type
 }
-func (s *Schema) IsSingleSortKey() bool   { return s.SortKey != nil && s.SortKey.Size() == 1 }
-func (s *Schema) IsCompoundPK() bool      { return s.IsCompoundSortKey() && s.SortKey.IsPrimary() }
-func (s *Schema) IsCompoundSortKey() bool { return s.SortKey != nil && s.SortKey.Size() > 1 }
-func (s *Schema) HasPK() bool             { return s.SortKey != nil && s.SortKey.IsPrimary() }
-func (s *Schema) HasSortKey() bool        { return s.SortKey != nil }
+func (s *Schema) HasPK() bool      { return s.SortKey != nil && s.SortKey.IsPrimary() }
+func (s *Schema) HasSortKey() bool { return s.SortKey != nil }
 
 // GetSingleSortKey should be call only if IsSinglePK is checked
 func (s *Schema) GetSingleSortKey() *ColDef { return s.SortKey.Defs[0] }
 func (s *Schema) GetSingleSortKeyIdx() int  { return s.SortKey.Defs[0].Idx }
-
-func (s *Schema) GetSortKeyCnt() int {
-	if s.SortKey == nil {
-		return 0
-	}
-	return s.SortKey.Size()
-}
 
 func MarshalOnUpdate(w *bytes.Buffer, data []byte) (err error) {
 	if data == nil {
@@ -733,31 +723,6 @@ func (s *Schema) GetColIdx(attr string) int {
 		return -1
 	}
 	return idx
-}
-
-func MockCompoundSchema(colCnt int, pkIdx ...int) *Schema {
-	rand.Seed(time.Now().UnixNano())
-	schema := NewEmptySchema(fmt.Sprintf("%d", rand.Intn(1000000)))
-	prefix := "mock_"
-	m := make(map[int]int)
-	for i, idx := range pkIdx {
-		m[idx] = i
-	}
-	for i := 0; i < colCnt; i++ {
-		if pos, ok := m[i]; ok {
-			if err := schema.AppendPKCol(fmt.Sprintf("%s%d", prefix, i), types.Type{Oid: types.T_int32, Size: 4, Width: 32}, pos); err != nil {
-				panic(err)
-			}
-		} else {
-			if err := schema.AppendCol(fmt.Sprintf("%s%d", prefix, i), types.Type{Oid: types.T_int32, Size: 4, Width: 32}); err != nil {
-				panic(err)
-			}
-		}
-	}
-	if err := schema.Finalize(false); err != nil {
-		panic(err)
-	}
-	return schema
 }
 
 func MockSchema(colCnt int, pkIdx int) *Schema {
