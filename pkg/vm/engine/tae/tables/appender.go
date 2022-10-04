@@ -19,7 +19,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 )
 
 type blockAppender struct {
@@ -72,7 +71,7 @@ func (appender *blockAppender) PrepareAppend(
 		appender.placeholder+appender.rows)
 	return
 }
-func (appender *blockAppender) ReplayAppend(bat *containers.Batch) (txnNodes []*txnbase.TxnMVCCNode, err error) {
+func (appender *blockAppender) ReplayAppend(bat *containers.Batch) (err error) {
 	var from int
 	if from, err = appender.node.ApplyAppend(bat, nil); err != nil {
 		return
@@ -85,12 +84,8 @@ func (appender *blockAppender) ReplayAppend(bat *containers.Batch) (txnNodes []*
 			continue
 		}
 		keysCtx.Keys = bat.Vecs[colDef.Idx]
-		var txnNode *txnbase.TxnMVCCNode
-		if txnNode, err = appender.node.block.indexes[colDef.Idx].BatchUpsert(keysCtx, from, nil); err != nil {
+		if err = appender.node.block.indexes[colDef.Idx].BatchUpsert(keysCtx, from); err != nil {
 			panic(err)
-		}
-		if txnNode != nil {
-			txnNodes = append(txnNodes, txnNode)
 		}
 	}
 	appender.node.block.meta.GetSegment().GetTable().AddRows(uint64(bat.Length()))
@@ -99,7 +94,7 @@ func (appender *blockAppender) ReplayAppend(bat *containers.Batch) (txnNodes []*
 }
 func (appender *blockAppender) ApplyAppend(
 	bat *containers.Batch,
-	txn txnif.AsyncTxn) (txnNodes []*txnbase.TxnMVCCNode, from int, err error) {
+	txn txnif.AsyncTxn) (from int, err error) {
 	appender.node.block.mvcc.Lock()
 	defer appender.node.block.mvcc.Unlock()
 	from, err = appender.node.ApplyAppend(bat, txn)
@@ -112,12 +107,8 @@ func (appender *blockAppender) ApplyAppend(
 			continue
 		}
 		keysCtx.Keys = bat.Vecs[colDef.Idx]
-		var txnNode *txnbase.TxnMVCCNode
-		if txnNode, err = appender.node.block.indexes[colDef.Idx].BatchUpsert(keysCtx, from, txn); err != nil {
+		if err = appender.node.block.indexes[colDef.Idx].BatchUpsert(keysCtx, from); err != nil {
 			panic(err)
-		}
-		if txnNode != nil {
-			txnNodes = append(txnNodes, txnNode)
 		}
 	}
 	return

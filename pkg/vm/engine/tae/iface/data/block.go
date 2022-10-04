@@ -28,7 +28,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 )
 
@@ -47,9 +46,9 @@ type BlockAppender interface {
 		node txnif.AppendNode, created bool, n uint32, err error)
 	ApplyAppend(bat *containers.Batch,
 		txn txnif.AsyncTxn,
-	) ([]*txnbase.TxnMVCCNode, int, error)
+	) (int, error)
 	IsAppendable() bool
-	ReplayAppend(bat *containers.Batch) ([]*txnbase.TxnMVCCNode, error)
+	ReplayAppend(bat *containers.Batch) error
 	Close()
 }
 
@@ -57,7 +56,7 @@ type BlockReplayer interface {
 	OnReplayDelete(node txnif.DeleteNode) (err error)
 	OnReplayUpdate(colIdx uint16, node txnif.UpdateNode) (err error)
 	OnReplayAppend(node txnif.AppendNode) (err error)
-	OnReplayAppendPayload(bat *containers.Batch) (txnNodes []*txnbase.TxnMVCCNode, err error)
+	OnReplayAppendPayload(bat *containers.Batch) (err error)
 }
 
 type Block interface {

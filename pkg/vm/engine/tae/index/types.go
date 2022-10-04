@@ -19,8 +19,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 )
 
 var (
@@ -52,9 +50,9 @@ type BatchResp struct {
 }
 
 type SecondaryIndex interface {
-	Insert(key any, offset uint32, txn txnif.TxnReader) (txnnode *txnbase.TxnMVCCNode, err error)
-	BatchInsert(keys *KeysCtx, startRow uint32, upsert bool, txn txnif.TxnReader) (txnNode *txnbase.TxnMVCCNode, err error)
-	Delete(key any, ts types.TS) (old uint32, txnNode *txnbase.TxnMVCCNode, err error)
+	Insert(key any, offset uint32) (err error)
+	BatchInsert(keys *KeysCtx, startRow uint32, upsert bool) (err error)
+	Delete(key any) (old uint32, err error)
 	Search(key any) (uint32, error)
 	Contains(key any) bool
 	ContainsAny(keysCtx *KeysCtx, rowmask *roaring.Bitmap) bool

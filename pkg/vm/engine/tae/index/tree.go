@@ -237,7 +237,7 @@ func NewSimpleARTMap(typ types.Type, blk data.Block) *simpleARTMap {
 
 func (art *simpleARTMap) Size() int { return art.tree.Size() }
 
-func (art *simpleARTMap) Insert(key any, offset uint32, txn txnif.TxnReader) (txnnode *txnbase.TxnMVCCNode, err error) {
+func (art *simpleARTMap) Insert(key any, offset uint32) (err error) {
 	appendnode := NewAppendIndexMVCCNode(offset, art.blkdata)
 	chain := NewIndexMVCCChain()
 	chain.Insert(appendnode)
@@ -256,9 +256,8 @@ func (art *simpleARTMap) Insert(key any, offset uint32, txn txnif.TxnReader) (tx
 	return
 }
 
-func (art *simpleARTMap) BatchInsert(keys *KeysCtx, startRow uint32, upsert bool, txn txnif.TxnReader) (txnNode *txnbase.TxnMVCCNode, err error) {
+func (art *simpleARTMap) BatchInsert(keys *KeysCtx, startRow uint32, upsert bool) (err error) {
 	existence := make(map[any]bool)
-	txnNode = txnbase.NewTxnMVCCNodeWithTxn(txn)
 
 	op := func(v any, i int) error {
 		var appendnode *IndexMVCCNode
@@ -276,7 +275,6 @@ func (art *simpleARTMap) BatchInsert(keys *KeysCtx, startRow uint32, upsert bool
 		if old != nil {
 			oldChain := old.(*IndexMVCCChain)
 			if !upsert {
-				txnNode.Aborted = true
 				return ErrDuplicate
 			}
 			deleteNode := NewDeleteIndexMVCCNodeInUpsert(oldChain.GetRow(), art.blkdata)
@@ -331,7 +329,7 @@ func (art *simpleARTMap) HasDeleteFrom(key any, fromTs types.TS) bool {
 	return deleted
 }
 
-func (art *simpleARTMap) Delete(key any, ts types.TS) (old uint32, txnNode *txnbase.TxnMVCCNode, err error) {
+func (art *simpleARTMap) Delete(key any) (old uint32, err error) {
 	ikey := types.EncodeValue(key, art.typ)
 	v, found := art.tree.Search(ikey)
 	if !found {

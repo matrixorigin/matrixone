@@ -46,15 +46,7 @@ type Replayer struct {
 	maxTs        types.TS
 	cache        *bytes.Buffer
 	staleIndexes []*wal.Index
-	txnNode      map[uint64][]*txnbase.TxnMVCCNode
 	once         sync.Once
-}
-
-type Observer interface {
-	wal.ReplayObserver
-	OnTxnNode(tid uint64, txnNode []*txnbase.TxnMVCCNode)
-	OnRollbackTxnNode(tid uint64, ts types.TS)
-	OnCommitTxnNode(tid uint64, ts types.TS)
 }
 
 func newReplayer(dataFactory *tables.DataFactory, db *DB) *Replayer {
@@ -63,24 +55,6 @@ func newReplayer(dataFactory *tables.DataFactory, db *DB) *Replayer {
 		db:           db,
 		cache:        bytes.NewBuffer(make([]byte, DefaultReplayCacheSize)),
 		staleIndexes: make([]*wal.Index, 0),
-		txnNode:      make(map[uint64][]*txnbase.TxnMVCCNode),
-	}
-}
-func (replayer *Replayer) OnTxnNode(tid uint64, txnNodes []*txnbase.TxnMVCCNode) {
-	replayer.txnNode[tid] = txnNodes
-}
-
-func (replayer *Replayer) OnRollbackTxnNode(tid uint64, ts types.TS) {
-	txnNode := replayer.txnNode[tid]
-	for _, n := range txnNode {
-		n.OnReplayRollback(ts)
-	}
-}
-
-func (replayer *Replayer) OnCommitTxnNode(tid uint64, ts types.TS) {
-	txnNode := replayer.txnNode[tid]
-	for _, n := range txnNode {
-		n.OnReplayCommit(ts)
 	}
 }
 
@@ -291,13 +265,8 @@ func (replayer *Replayer) OnReplayCmd(txncmd txnif.TxnCmd, idxCtx *wal.Index, cm
 	}
 }
 
-func (db *DB) onReplayAppendCmd(cmd *txnimpl.AppendCmd, observer Observer, cmdType txnif.CmdType, commitTS types.TS) {
+func (db *DB) onReplayAppendCmd(cmd *txnimpl.AppendCmd, observer wal.ReplayObserver, cmdType txnif.CmdType, commitTS types.TS) {
 	if cmdType == txnif.CmdCommit {
-		observer.OnCommitTxnNode(cmd.Tid, commitTS)
-		return
-	}
-	if cmdType == txnif.CmdRollback {
-		observer.OnRollbackTxnNode(cmd.Tid, commitTS)
 		return
 	}
 	hasActive := false
@@ -374,15 +343,13 @@ func (db *DB) onReplayAppendCmd(cmd *txnimpl.AppendCmd, observer Observer, cmdTy
 		bat := data.CloneWindow(int(start), int(info.GetSrcLen()))
 		bat.Compact()
 		defer bat.Close()
-		var txnNode []*txnbase.TxnMVCCNode
-		if txnNode, err = blk.GetBlockData().OnReplayAppendPayload(bat); err != nil {
+		if err = blk.GetBlockData().OnReplayAppendPayload(bat); err != nil {
 			panic(err)
 		}
-		observer.OnTxnNode(cmd.Tid, txnNode)
 	}
 }
 
-func (db *DB) onReplayUpdateCmd(cmd *updates.UpdateCmd, idxCtx *wal.Index, observer Observer, cmdType txnif.CmdType, commitTS types.TS) (err error) {
+func (db *DB) onReplayUpdateCmd(cmd *updates.UpdateCmd, idxCtx *wal.Index, observer wal.ReplayObserver, cmdType txnif.CmdType, commitTS types.TS) (err error) {
 	switch cmd.GetType() {
 	case txnbase.CmdAppend:
 		db.onReplayAppend(cmd, idxCtx, observer, cmdType, commitTS)
@@ -394,7 +361,7 @@ func (db *DB) onReplayUpdateCmd(cmd *updates.UpdateCmd, idxCtx *wal.Index, obser
 	return
 }
 
-func (db *DB) onReplayDelete(cmd *updates.UpdateCmd, idxCtx *wal.Index, observer Observer, cmdType txnif.CmdType, commitTS types.TS) {
+func (db *DB) onReplayDelete(cmd *updates.UpdateCmd, idxCtx *wal.Index, observer wal.ReplayObserver, cmdType txnif.CmdType, commitTS types.TS) {
 	switch cmdType {
 	case txnif.CmdInvalid:
 		panic("invalid type")
@@ -434,7 +401,7 @@ func (db *DB) onReplayDelete(cmd *updates.UpdateCmd, idxCtx *wal.Index, observer
 	}
 }
 
-func (db *DB) onReplayAppend(cmd *updates.UpdateCmd, idxCtx *wal.Index, observer Observer, cmdType txnif.CmdType, commitTS types.TS) {
+func (db *DB) onReplayAppend(cmd *updates.UpdateCmd, idxCtx *wal.Index, observer wal.ReplayObserver, cmdType txnif.CmdType, commitTS types.TS) {
 	switch cmdType {
 	case txnif.CmdInvalid:
 		panic("invalid type")
@@ -472,7 +439,7 @@ func (db *DB) onReplayAppend(cmd *updates.UpdateCmd, idxCtx *wal.Index, observer
 	}
 }
 
-func (db *DB) onReplayUpdate(cmd *updates.UpdateCmd, idxCtx *wal.Index, observer Observer) {
+func (db *DB) onReplayUpdate(cmd *updates.UpdateCmd, idxCtx *wal.Index, observer wal.ReplayObserver) {
 	database, err := db.Catalog.GetDatabaseByID(cmd.GetDBID())
 	if err != nil {
 		panic(err)

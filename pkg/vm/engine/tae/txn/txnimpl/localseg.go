@@ -104,7 +104,7 @@ func (seg *localSegment) ApplyAppend() (err error) {
 		bat, _ := ctx.node.Window(ctx.start, ctx.start+ctx.count)
 		defer bat.Close()
 		var txnNodes []*txnbase.TxnMVCCNode
-		if txnNodes, destOff, err = ctx.driver.ApplyAppend(
+		if destOff, err = ctx.driver.ApplyAppend(
 			bat,
 			seg.table.store.txn); err != nil {
 			return

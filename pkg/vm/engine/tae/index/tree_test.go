@@ -45,13 +45,13 @@ func TestARTIndexNumeric(t *testing.T) {
 	_, err = idx.Search(int32(55))
 	require.ErrorIs(t, err, ErrNotFound)
 
-	_, _, err = idx.Delete(int32(55), types.TS{})
+	_, err = idx.Delete(int32(55))
 	require.ErrorIs(t, err, ErrNotFound)
 
 	ctx := new(KeysCtx)
 	ctx.Count = 100
 	ctx.Keys = vecs[0]
-	_, err = idx.BatchInsert(ctx, uint32(0), false, nil)
+	err = idx.BatchInsert(ctx, uint32(0), false)
 	require.NoError(t, err)
 
 	row, err = idx.Search(int32(55))
@@ -61,7 +61,7 @@ func TestARTIndexNumeric(t *testing.T) {
 	_, err = idx.Search(int32(100))
 	require.ErrorIs(t, err, ErrNotFound)
 
-	_, _, err = idx.Delete(int32(55), types.TS{})
+	_, err = idx.Delete(int32(55))
 	require.NoError(t, err)
 
 	_, err = idx.Search(int32(55))
@@ -70,11 +70,11 @@ func TestARTIndexNumeric(t *testing.T) {
 	ctx = new(KeysCtx)
 	ctx.Count = 100
 	ctx.Keys = vecs[0]
-	_, err = idx.BatchInsert(ctx, uint32(100), false, nil)
+	err = idx.BatchInsert(ctx, uint32(100), false)
 	require.ErrorIs(t, err, ErrDuplicate)
 
 	ctx.Keys = vecs[1]
-	_, err = idx.BatchInsert(ctx, uint32(100), false, nil)
+	err = idx.BatchInsert(ctx, uint32(100), false)
 	require.NoError(t, err)
 
 	row, err = idx.Search(int32(123))
@@ -84,7 +84,7 @@ func TestARTIndexNumeric(t *testing.T) {
 	_, err = idx.Search(int32(233))
 	require.ErrorIs(t, err, ErrNotFound)
 
-	_, err = idx.Insert(int32(55), uint32(55), nil)
+	err = idx.Insert(int32(55), uint32(55))
 	require.NoError(t, err)
 
 	row, err = idx.Search(int32(55))
@@ -114,13 +114,13 @@ func TestArtIndexString(t *testing.T) {
 	_, err = idx.Search([]byte(strconv.Itoa(55)))
 	require.ErrorIs(t, err, ErrNotFound)
 
-	_, _, err = idx.Delete([]byte(strconv.Itoa(55)), types.TS{})
+	_, err = idx.Delete([]byte(strconv.Itoa(55)))
 	require.ErrorIs(t, err, ErrNotFound)
 
 	ctx := new(KeysCtx)
 	ctx.Keys = vecs[0]
 	ctx.Count = 100
-	_, err = idx.BatchInsert(ctx, uint32(0), false, nil)
+	err = idx.BatchInsert(ctx, uint32(0), false)
 	require.NoError(t, err)
 	t.Log(idx.String())
 
@@ -131,17 +131,17 @@ func TestArtIndexString(t *testing.T) {
 	_, err = idx.Search([]byte(strconv.Itoa(100)))
 	require.ErrorIs(t, err, ErrNotFound)
 
-	_, _, err = idx.Delete([]byte(strconv.Itoa(55)), types.TS{})
+	_, err = idx.Delete([]byte(strconv.Itoa(55)))
 	require.NoError(t, err)
 
 	_, err = idx.Search([]byte(strconv.Itoa(55)))
 	require.ErrorIs(t, err, ErrNotFound)
 
-	_, err = idx.BatchInsert(ctx, uint32(100), false, nil)
+	err = idx.BatchInsert(ctx, uint32(100), false)
 	require.ErrorIs(t, err, ErrDuplicate)
 
 	ctx.Keys = vecs[1]
-	_, err = idx.BatchInsert(ctx, uint32(100), false, nil)
+	err = idx.BatchInsert(ctx, uint32(100), false)
 	require.NoError(t, err)
 
 	row, err = idx.Search([]byte(strconv.Itoa(123)))

@@ -779,7 +779,7 @@ func (blk *dataBlock) ABlkApplyDelete(deleted uint64, gen common.RowGen, ts type
 			v := vecview.Get(int(row))
 			currRow, err = blk.pkIndex.GetActiveRow(v)
 			if err != nil || currRow == row {
-				if err = blk.pkIndex.Delete(v, ts); err != nil {
+				if err = blk.pkIndex.Delete(v); err != nil {
 					return
 				}
 			}
@@ -812,7 +812,7 @@ func (blk *dataBlock) ABlkApplyDelete(deleted uint64, gen common.RowGen, ts type
 			v := model.EncodeTypedVals(&w, vals...)
 			currRow, err = blk.pkIndex.GetActiveRow(v)
 			if err != nil || currRow == row {
-				if err = blk.pkIndex.Delete(v, ts); err != nil {
+				if err = blk.pkIndex.Delete(v); err != nil {
 					return
 				}
 			}

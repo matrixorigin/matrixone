@@ -20,9 +20,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 )
 
 var _ Index = (*mutableIndex)(nil)
@@ -41,7 +39,7 @@ func NewPkMutableIndex(keyT types.Type, blk data.Block) *mutableIndex {
 }
 
 func (idx *mutableIndex) BatchUpsert(keysCtx *index.KeysCtx,
-	offset int, txn txnif.TxnReader) (txnNode *txnbase.TxnMVCCNode, err error) {
+	offset int) (err error) {
 	defer func() {
 		err = TranslateError(err)
 	}()
@@ -50,7 +48,7 @@ func (idx *mutableIndex) BatchUpsert(keysCtx *index.KeysCtx,
 	}
 	// logutil.Infof("Pre: %s", idx.art.String())
 	// logutil.Infof("Post: %s", idx.art.String())
-	txnNode, err = idx.art.BatchInsert(keysCtx, uint32(offset), true, txn)
+	err = idx.art.BatchInsert(keysCtx, uint32(offset), true)
 	return
 }
 
@@ -62,11 +60,11 @@ func (idx *mutableIndex) IsKeyDeleted(key any, ts types.TS) (deleted bool, exist
 	return idx.art.IsKeyDeleted(key, ts)
 }
 
-func (idx *mutableIndex) Delete(key any, ts types.TS) (err error) {
+func (idx *mutableIndex) Delete(key any) (err error) {
 	defer func() {
 		err = TranslateError(err)
 	}()
-	if _, _, err = idx.art.Delete(key, ts); err != nil {
+	if _, err = idx.art.Delete(key); err != nil {
 		return
 	}
 	return
@@ -144,8 +142,8 @@ func (idx *nonPkMutIndex) Close() error {
 	return nil
 }
 
-func (idx *nonPkMutIndex) BatchUpsert(keysCtx *index.KeysCtx, offset int, txn txnif.TxnReader) (txnNode *txnbase.TxnMVCCNode, err error) {
-	return nil, TranslateError(idx.zonemap.BatchUpdate(keysCtx))
+func (idx *nonPkMutIndex) BatchUpsert(keysCtx *index.KeysCtx, offset int) (err error) {
+	return TranslateError(idx.zonemap.BatchUpdate(keysCtx))
 }
 
 func (idx *nonPkMutIndex) Dedup(key any) (err error) {
