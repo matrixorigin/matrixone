@@ -23,6 +23,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 
@@ -660,7 +661,7 @@ func allocTestBatch(attrName []string, tt []types.Type, batchSize int) *batch.Ba
 
 	//alloc space for vector
 	for i := 0; i < len(attrName); i++ {
-		vec := vector.PreAllocType(tt[i], batchSize, batchSize, nil)
+		vec := vector.PreAllocType(tt[i], batchSize, batchSize, testutil.TestUtilMp)
 		batchData.Vecs[i] = vec
 	}
 
