@@ -426,13 +426,13 @@ func (pt PrivilegeType) String() string {
 	case PrivilegeTypeManageGrants:
 		return "manage grants"
 	case PrivilegeTypeAccountAll:
-		return "all"
+		return "account all"
 	case PrivilegeTypeAccountOwnership:
-		return "ownership"
+		return "account ownership"
 	case PrivilegeTypeUserOwnership:
-		return "ownership"
+		return "user ownership"
 	case PrivilegeTypeRoleOwnership:
-		return "ownership"
+		return "role ownership"
 	case PrivilegeTypeShowTables:
 		return "show tables"
 	case PrivilegeTypeCreateObject:
@@ -454,9 +454,9 @@ func (pt PrivilegeType) String() string {
 	case PrivilegeTypeAlterView:
 		return "alter view"
 	case PrivilegeTypeDatabaseAll:
-		return "all"
+		return "database all"
 	case PrivilegeTypeDatabaseOwnership:
-		return "ownership"
+		return "database ownership"
 	case PrivilegeTypeSelect:
 		return "select"
 	case PrivilegeTypeInsert:
@@ -472,9 +472,9 @@ func (pt PrivilegeType) String() string {
 	case PrivilegeTypeIndex:
 		return "index"
 	case PrivilegeTypeTableAll:
-		return "all"
+		return "table all"
 	case PrivilegeTypeTableOwnership:
-		return "ownership"
+		return "table ownership"
 	case PrivilegeTypeExecute:
 		return "execute"
 	}
@@ -2643,31 +2643,31 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		typs = append(typs, PrivilegeTypeConnect, PrivilegeTypeAccountAll /*, PrivilegeTypeAccountOwnership*/)
 	case *tree.ShowTables, *tree.ShowCreateTable, *tree.ShowColumns, *tree.ShowCreateView, *tree.ShowCreateDatabase:
 		objType = objectTypeDatabase
-		typs = append(typs, PrivilegeTypeShowTables, PrivilegeTypeDatabaseAll /*PrivilegeTypeDatabaseOwnership*/)
+		typs = append(typs, PrivilegeTypeShowTables, PrivilegeTypeDatabaseAll, PrivilegeTypeDatabaseOwnership)
 	case *tree.CreateTable:
 		objType = objectTypeDatabase
-		typs = append(typs, PrivilegeTypeCreateTable, PrivilegeTypeCreateObject, PrivilegeTypeDatabaseAll /* PrivilegeTypeDatabaseOwnership*/)
+		typs = append(typs, PrivilegeTypeCreateTable, PrivilegeTypeCreateObject, PrivilegeTypeDatabaseAll, PrivilegeTypeDatabaseOwnership)
 	case *tree.CreateView:
 		objType = objectTypeDatabase
-		typs = append(typs, PrivilegeTypeCreateView, PrivilegeTypeCreateObject, PrivilegeTypeDatabaseAll /* PrivilegeTypeDatabaseOwnership*/)
+		typs = append(typs, PrivilegeTypeCreateView, PrivilegeTypeCreateObject, PrivilegeTypeDatabaseAll, PrivilegeTypeDatabaseOwnership)
 	case *tree.DropTable:
 		objType = objectTypeDatabase
-		typs = append(typs, PrivilegeTypeDropTable, PrivilegeTypeDropObject, PrivilegeTypeDatabaseAll /*PrivilegeTypeDatabaseOwnership*/)
+		typs = append(typs, PrivilegeTypeDropTable, PrivilegeTypeDropObject, PrivilegeTypeDatabaseAll, PrivilegeTypeDatabaseOwnership)
 	case *tree.DropView:
 		objType = objectTypeDatabase
-		typs = append(typs, PrivilegeTypeDropView, PrivilegeTypeDropObject, PrivilegeTypeDatabaseAll /*PrivilegeTypeDatabaseOwnership*/)
+		typs = append(typs, PrivilegeTypeDropView, PrivilegeTypeDropObject, PrivilegeTypeDatabaseAll, PrivilegeTypeDatabaseOwnership)
 	case *tree.Select:
 		objType = objectTypeTable
-		typs = append(typs, PrivilegeTypeSelect, PrivilegeTypeTableAll /*PrivilegeTypeTableOwnership*/)
+		typs = append(typs, PrivilegeTypeSelect, PrivilegeTypeTableAll, PrivilegeTypeTableOwnership)
 	case *tree.Insert, *tree.Load, *tree.Import:
 		objType = objectTypeTable
-		typs = append(typs, PrivilegeTypeInsert, PrivilegeTypeTableAll /*PrivilegeTypeTableOwnership*/)
+		typs = append(typs, PrivilegeTypeInsert, PrivilegeTypeTableAll, PrivilegeTypeTableOwnership)
 	case *tree.Update:
 		objType = objectTypeTable
-		typs = append(typs, PrivilegeTypeUpdate, PrivilegeTypeTableAll /*PrivilegeTypeTableOwnership*/)
+		typs = append(typs, PrivilegeTypeUpdate, PrivilegeTypeTableAll, PrivilegeTypeTableOwnership)
 	case *tree.Delete:
 		objType = objectTypeTable
-		typs = append(typs, PrivilegeTypeDelete, PrivilegeTypeTableAll /*PrivilegeTypeTableOwnership*/)
+		typs = append(typs, PrivilegeTypeDelete, PrivilegeTypeTableAll, PrivilegeTypeTableOwnership)
 	case *tree.CreateIndex, *tree.DropIndex, *tree.ShowIndex:
 		objType = objectTypeTable
 		typs = append(typs, PrivilegeTypeIndex)
@@ -2803,7 +2803,7 @@ func convertPrivilegeTipsToPrivilege(priv *privilege, arr privilegeTipsArray) {
 	}
 
 	//predefined privilege : tableAll, ownership
-	predefined := []PrivilegeType{PrivilegeTypeTableAll /*,PrivilegeTypeTableOwnership*/}
+	predefined := []PrivilegeType{PrivilegeTypeTableAll, PrivilegeTypeTableOwnership}
 	for _, p := range predefined {
 		for par := range dedup {
 			e := privilegeEntriesMap[p]
