@@ -92,31 +92,83 @@ func (node *IndexMVCCNode) ApplyRollback(index *wal.Index) (err error) { panic("
 func (node *IndexMVCCNode) CheckConflict(ts types.TS) error            { panic("not supported") }
 func (node *IndexMVCCNode) WriteTo(w io.Writer) (n int64, err error)   { panic("not supported") }
 func (node *IndexMVCCNode) ReadFrom(r io.Reader) (n int64, err error)  { panic("not supported") }
-func (node *IndexMVCCNode) GetEnd() types.TS                           { return node.getTxnNode().GetEnd() }
-func (node *IndexMVCCNode) GetStart() types.TS                         { return node.getTxnNode().GetStart() }
-func (node *IndexMVCCNode) GetPrepare() types.TS                       { return node.getTxnNode().GetPrepare() }
-func (node *IndexMVCCNode) GetTxn() txnif.TxnReader                    { panic("not supported") }
-func (node *IndexMVCCNode) SetLogIndex(idx *wal.Index)                 { panic("not supported") }
-func (node *IndexMVCCNode) GetLogIndex() *wal.Index                    { panic("not supported") }
+func (node *IndexMVCCNode) GetEnd() types.TS {
+	if node.blkdata == nil {
+		return types.TS{}
+	}
+	return node.getTxnNode().GetEnd()
+}
+func (node *IndexMVCCNode) GetStart() types.TS {
+	if node.blkdata == nil {
+		return types.TS{}
+	}
+	return node.getTxnNode().GetStart()
+}
+func (node *IndexMVCCNode) GetPrepare() types.TS {
+	if node.blkdata == nil {
+		return types.TS{}
+	}
+	return node.getTxnNode().GetPrepare()
+}
+func (node *IndexMVCCNode) GetTxn() txnif.TxnReader    { panic("not supported") }
+func (node *IndexMVCCNode) SetLogIndex(idx *wal.Index) { panic("not supported") }
+func (node *IndexMVCCNode) GetLogIndex() *wal.Index    { panic("not supported") }
 func (node *IndexMVCCNode) IsVisible(ts types.TS) (visible bool) {
+	if node.blkdata == nil {
+		return true
+	}
 	return node.getTxnNode().IsVisible(ts)
 }
 func (node *IndexMVCCNode) PreparedIn(minTS, maxTS types.TS) (in, before bool) {
+	if node.blkdata == nil {
+		return true, false
+	}
 	return node.getTxnNode().PreparedIn(minTS, maxTS)
 }
 func (node *IndexMVCCNode) CommittedIn(minTS, maxTS types.TS) (in, before bool) {
+	if node.blkdata == nil {
+		return true, false
+	}
 	return node.getTxnNode().CommittedIn(minTS, maxTS)
 }
 func (node *IndexMVCCNode) NeedWaitCommitting(ts types.TS) (bool, txnif.TxnReader) {
+	if node.blkdata == nil {
+		return false, nil
+	}
 	return node.getTxnNode().NeedWaitCommitting(ts)
 }
-func (node *IndexMVCCNode) IsSameTxn(ts types.TS) bool { return node.getTxnNode().IsSameTxn(ts) }
-func (node *IndexMVCCNode) IsActive() bool             { return node.getTxnNode().IsActive() }
-func (node *IndexMVCCNode) IsCommitting() bool         { return node.getTxnNode().IsCommitted() }
-func (node *IndexMVCCNode) IsCommitted() bool          { return node.getTxnNode().IsCommitting() }
-func (node *IndexMVCCNode) IsAborted() bool            { return node.getTxnNode().IsAborted() }
-func (node *IndexMVCCNode) Set1PC()                    { panic("not supported") }
-func (node *IndexMVCCNode) Is1PC() bool                { panic("not supported") }
+func (node *IndexMVCCNode) IsSameTxn(ts types.TS) bool {
+	if node.blkdata == nil {
+		return false
+	}
+	return node.getTxnNode().IsSameTxn(ts)
+}
+func (node *IndexMVCCNode) IsActive() bool {
+	if node.blkdata == nil {
+		return false
+	}
+	return node.getTxnNode().IsActive()
+}
+func (node *IndexMVCCNode) IsCommitting() bool {
+	if node.blkdata == nil {
+		return false
+	}
+	return node.getTxnNode().IsCommitted()
+}
+func (node *IndexMVCCNode) IsCommitted() bool {
+	if node.blkdata == nil {
+		return true
+	}
+	return node.getTxnNode().IsCommitting()
+}
+func (node *IndexMVCCNode) IsAborted() bool {
+	if node.blkdata == nil {
+		return false
+	}
+	return node.getTxnNode().IsAborted()
+}
+func (node *IndexMVCCNode) Set1PC()     { panic("not supported") }
+func (node *IndexMVCCNode) Is1PC() bool { panic("not supported") }
 func CompareIndexMVCCNode(va, vb txnif.MVCCNode) int {
 	if va.GetPrepare().Less(vb.GetPrepare()) {
 		return -1
@@ -186,8 +238,7 @@ func NewSimpleARTMap(typ types.Type, blk data.Block) *simpleARTMap {
 func (art *simpleARTMap) Size() int { return art.tree.Size() }
 
 func (art *simpleARTMap) Insert(key any, offset uint32, txn txnif.TxnReader) (txnnode *txnbase.TxnMVCCNode, err error) {
-	var appendnode *IndexMVCCNode
-	appendnode = NewAppendIndexMVCCNode(offset, art.blkdata)
+	appendnode := NewAppendIndexMVCCNode(offset, art.blkdata)
 	chain := NewIndexMVCCChain()
 	chain.Insert(appendnode)
 	ikey := types.EncodeValue(key, art.typ)
@@ -288,8 +339,7 @@ func (art *simpleARTMap) Delete(key any, ts types.TS) (old uint32, txnNode *txnb
 	} else {
 		oldChain := v.(*IndexMVCCChain)
 		old = oldChain.GetRow()
-		var deleteNode *IndexMVCCNode
-		deleteNode = NewDeleteIndexMVCCNode(old, art.blkdata)
+		deleteNode := NewDeleteIndexMVCCNode(old, art.blkdata)
 		oldChain.Insert(deleteNode)
 	}
 	return
