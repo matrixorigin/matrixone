@@ -27,7 +27,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/updates"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 )
@@ -648,15 +647,8 @@ func (tbl *txnTable) DoDedup(pks containers.Vector, preCommit bool) (err error) 
 	return
 }
 
-func (tbl *txnTable) DoBatchDedup(keys ...containers.Vector) (err error) {
+func (tbl *txnTable) DoBatchDedup(key containers.Vector) (err error) {
 	index := NewSimpleTableIndex()
-	var key containers.Vector
-	if len(keys) == 1 {
-		key = keys[0]
-	} else {
-		key = model.EncodeCompoundColumn(keys...)
-		defer key.Close()
-	}
 	if err = index.BatchInsert(key, 0, key.Length(), 0, true); err != nil {
 		return
 	}

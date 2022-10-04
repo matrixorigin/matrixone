@@ -75,7 +75,7 @@ func (store *NoopTxnStore) UpdateMetaLoc(dbId uint64, id *common.ID, un string) 
 func (store *NoopTxnStore) UpdateDeltaLoc(dbId uint64, id *common.ID, un string) (err error) { return }
 func (store *NoopTxnStore) SoftDeleteBlock(dbId uint64, id *common.ID) (err error)           { return }
 func (store *NoopTxnStore) SoftDeleteSegment(dbId uint64, id *common.ID) (err error)         { return }
-func (store *NoopTxnStore) BatchDedup(uint64, uint64, ...containers.Vector) (err error)      { return }
+func (store *NoopTxnStore) BatchDedup(uint64, uint64, containers.Vector) (err error)         { return }
 func (store *NoopTxnStore) Update(uint64, *common.ID, uint32, uint16, any) (err error) {
 	return
 }
