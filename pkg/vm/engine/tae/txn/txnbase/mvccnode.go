@@ -26,41 +26,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 )
 
-type MVCCNode interface {
-	String() string
-
-	IsVisible(ts types.TS) (visible bool)
-	CheckConflict(ts types.TS) error
-	Update(o MVCCNode)
-
-	PreparedIn(minTS, maxTS types.TS) (in, before bool)
-	CommittedIn(minTS, maxTS types.TS) (in, before bool)
-	NeedWaitCommitting(ts types.TS) (bool, txnif.TxnReader)
-	IsSameTxn(ts types.TS) bool
-	IsActive() bool
-	IsCommitting() bool
-	IsCommitted() bool
-	IsAborted() bool
-	Set1PC()
-	Is1PC() bool
-
-	GetEnd() types.TS
-	GetStart() types.TS
-	GetPrepare() types.TS
-	GetTxn() txnif.TxnReader
-	SetLogIndex(idx *wal.Index)
-	GetLogIndex() *wal.Index
-
-	ApplyCommit(index *wal.Index) (err error)
-	ApplyRollback(index *wal.Index) (err error)
-	PrepareCommit() (err error)
-
-	WriteTo(w io.Writer) (n int64, err error)
-	ReadFrom(r io.Reader) (n int64, err error)
-	CloneData() MVCCNode
-	CloneAll() MVCCNode
-}
-
 type TxnMVCCNode struct {
 	Start, Prepare, End types.TS
 	Txn                 txnif.TxnReader

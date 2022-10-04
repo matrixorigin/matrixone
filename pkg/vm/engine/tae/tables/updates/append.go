@@ -38,7 +38,7 @@ type AppendNode struct {
 	id       *common.ID
 }
 
-func CompareAppendNode(e, o txnbase.MVCCNode) int {
+func CompareAppendNode(e, o txnif.MVCCNode) int {
 	return e.(*AppendNode).Compare(o.(*AppendNode).TxnMVCCNode)
 }
 
@@ -92,7 +92,7 @@ func NewAppendNode(
 	return n
 }
 
-func NewEmptyAppendNode() txnbase.MVCCNode {
+func NewEmptyAppendNode() txnif.MVCCNode {
 	return &AppendNode{
 		TxnMVCCNode: &txnbase.TxnMVCCNode{},
 	}
@@ -100,13 +100,13 @@ func NewEmptyAppendNode() txnbase.MVCCNode {
 func (node *AppendNode) String() string {
 	return node.GeneralDesc()
 }
-func (node *AppendNode) CloneAll() txnbase.MVCCNode {
+func (node *AppendNode) CloneAll() txnif.MVCCNode {
 	panic("todo")
 }
-func (node *AppendNode) CloneData() txnbase.MVCCNode {
+func (node *AppendNode) CloneData() txnif.MVCCNode {
 	panic("todo")
 }
-func (node *AppendNode) Update(txnbase.MVCCNode) {
+func (node *AppendNode) Update(txnif.MVCCNode) {
 	panic("todo")
 }
 func (node *AppendNode) GeneralDesc() string {

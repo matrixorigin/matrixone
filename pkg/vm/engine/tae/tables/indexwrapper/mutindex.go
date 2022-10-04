@@ -19,6 +19,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
@@ -32,9 +33,9 @@ type mutableIndex struct {
 	zonemap *index.ZoneMap
 }
 
-func NewPkMutableIndex(keyT types.Type) *mutableIndex {
+func NewPkMutableIndex(keyT types.Type, blk data.Block) *mutableIndex {
 	return &mutableIndex{
-		art:     index.NewSimpleARTMap(keyT),
+		art:     index.NewSimpleARTMap(keyT, blk),
 		zonemap: index.NewZoneMap(keyT),
 	}
 }

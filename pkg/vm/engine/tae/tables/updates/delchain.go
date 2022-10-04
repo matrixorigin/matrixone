@@ -59,7 +59,7 @@ func (chain *DeleteChain) GetDeleteCnt() uint32 {
 func (chain *DeleteChain) StringLocked() string {
 	msg := "DeleteChain:"
 	line := 1
-	chain.LoopChain(func(vn txnbase.MVCCNode) bool {
+	chain.LoopChain(func(vn txnif.MVCCNode) bool {
 		n := vn.(*DeleteNode)
 		n.RLock()
 		msg = fmt.Sprintf("%s\n%d. %s", msg, line, n.StringLocked())
@@ -74,7 +74,7 @@ func (chain *DeleteChain) GetController() *MVCCHandle { return chain.mvcc }
 
 func (chain *DeleteChain) IsDeleted(row uint32, ts types.TS, rwlocker *sync.RWMutex) (deleted bool, err error) {
 	chain.LoopChain(
-		func(vn txnbase.MVCCNode) (goNext bool) {
+		func(vn txnif.MVCCNode) (goNext bool) {
 			n := vn.(*DeleteNode)
 			if n.GetStartTS().Greater(ts) {
 				return true
@@ -104,7 +104,7 @@ func (chain *DeleteChain) IsDeleted(row uint32, ts types.TS, rwlocker *sync.RWMu
 
 func (chain *DeleteChain) PrepareRangeDelete(start, end uint32, ts types.TS) (err error) {
 	chain.LoopChain(
-		func(vn txnbase.MVCCNode) bool {
+		func(vn txnif.MVCCNode) bool {
 			n := vn.(*DeleteNode)
 			n.RLock()
 			defer n.RUnlock()
@@ -146,7 +146,7 @@ func (chain *DeleteChain) AddMergeNode() txnif.DeleteNode {
 	var merged *DeleteNode
 	chain.mvcc.RLock()
 	// chain.RLock()
-	chain.LoopChain(func(vn txnbase.MVCCNode) bool {
+	chain.LoopChain(func(vn txnif.MVCCNode) bool {
 		n := vn.(*DeleteNode)
 		// Already have a latest merged node
 		if n.IsMerged() && merged == nil {
@@ -211,7 +211,7 @@ func (chain *DeleteChain) CollectDeletesLocked(
 	rwlocker *sync.RWMutex) (txnif.DeleteNode, error) {
 	var merged *DeleteNode
 	var err error
-	chain.LoopChain(func(vn txnbase.MVCCNode) bool {
+	chain.LoopChain(func(vn txnif.MVCCNode) bool {
 		n := vn.(*DeleteNode)
 		// Merged node is a loop breaker
 		if n.IsMerged() {
@@ -243,4 +243,15 @@ func (chain *DeleteChain) CollectDeletesLocked(
 		return true
 	})
 	return merged, err
+}
+
+func (chain *DeleteChain) GetDeleteNodeByRow(row uint32) (n *DeleteNode) {
+	chain.LoopChain(func(un txnif.MVCCNode) bool {
+		if un.(*DeleteNode).mask.Contains(row) {
+			n = un.(*DeleteNode)
+			return false
+		}
+		return true
+	})
+	return
 }

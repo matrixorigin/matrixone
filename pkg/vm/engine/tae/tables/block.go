@@ -140,7 +140,7 @@ func newBlock(meta *catalog.BlockEntry, segFile file.Segment, bufMgr base.INodeM
 				continue
 			}
 			if colDef.Idx == pkIdx {
-				block.indexes[colDef.Idx] = indexwrapper.NewPkMutableIndex(colDef.Type)
+				block.indexes[colDef.Idx] = indexwrapper.NewPkMutableIndex(colDef.Type, block)
 				block.pkIndex = block.indexes[colDef.Idx]
 			} else {
 				block.indexes[colDef.Idx] = indexwrapper.NewMutableIndex(colDef.Type)
@@ -946,4 +946,11 @@ func (blk *dataBlock) CollectDeleteInRange(start, end types.TS) (*containers.Bat
 	batch.AddVector(catalog.AttrCommitTs, ts)
 	batch.AddVector(catalog.AttrAborted, abort)
 	return batch, nil
+}
+
+func (blk *dataBlock) GetAppendNodeByRow(row uint32) (an txnif.AppendNode) {
+	return blk.mvcc.GetAppendNodeByRow(row)
+}
+func (blk *dataBlock) GetDeleteNodeByRow(row uint32) (an txnif.DeleteNode) {
+	return blk.mvcc.GetDeleteNodeByRow(row)
 }

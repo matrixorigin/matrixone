@@ -16,9 +16,11 @@ package index
 
 import (
 	"fmt"
+	"io"
 
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
@@ -28,73 +30,101 @@ import (
 var _ SecondaryIndex = new(simpleARTMap)
 
 type IndexMVCCNode struct {
-	Row     uint32
-	Deleted bool
-	*txnbase.TxnMVCCNode
+	Row             uint32
+	Deleted         bool
+	DeletedByUpsert bool
+	blkdata         data.Block
 }
 
-func NewAppendIndexMVCCNode(row uint32, txn txnif.TxnReader) (idxNode *IndexMVCCNode, txnNode *txnbase.TxnMVCCNode) {
-	txnNode = txnbase.NewTxnMVCCNodeWithTxn(txn)
+func NewAppendIndexMVCCNode(row uint32, blk data.Block) (idxNode *IndexMVCCNode) {
 	idxNode = &IndexMVCCNode{
-		Row:         row,
-		TxnMVCCNode: txnNode,
+		Row:     row,
+		blkdata: blk,
 	}
 	return
 }
 
-func NewAppendIndexMVCCNodeWithTxnMVCCNode(row uint32, txnNode *txnbase.TxnMVCCNode) (idxNode *IndexMVCCNode) {
+func NewDeleteIndexMVCCNode(row uint32, blk data.Block) (idxNode *IndexMVCCNode) {
 	idxNode = &IndexMVCCNode{
-		Row:         row,
-		TxnMVCCNode: txnNode,
+		Row:     row,
+		Deleted: true,
+		blkdata: blk,
 	}
 	return
 }
-func NewDeleteIndexMVCCNode(row uint32, ts types.TS) (idxNode *IndexMVCCNode, txnNode *txnbase.TxnMVCCNode) {
-	txnNode = txnbase.NewTxnMVCCNodeWithTS(ts)
+func NewDeleteIndexMVCCNodeInUpsert(row uint32, blk data.Block) (idxNode *IndexMVCCNode) {
 	idxNode = &IndexMVCCNode{
-		Row:         row,
-		Deleted:     true,
-		TxnMVCCNode: txnNode,
+		Row:             row,
+		Deleted:         true,
+		DeletedByUpsert: true,
+		blkdata:         blk,
 	}
 	return
 }
-func NewDeleteIndexMVCCNodeWithTxnNode(row uint32, txnNode *txnbase.TxnMVCCNode) (idxNode *IndexMVCCNode) {
-	idxNode = &IndexMVCCNode{
-		Row:         row,
-		Deleted:     true,
-		TxnMVCCNode: txnNode,
+func (node *IndexMVCCNode) getTxnNode() txnif.MVCCNode {
+	if node.Deleted && !node.DeletedByUpsert {
+		return node.blkdata.GetDeleteNodeByRow(node.Row)
+	} else {
+		return node.blkdata.GetAppendNodeByRow(node.Row)
 	}
-	return
 }
 func (node *IndexMVCCNode) String() string {
-	return fmt.Sprintf("End=%s,Aborted=%v,Row=%d,Delete=%v", node.GetEnd().ToString(), node.Aborted, node.Row, node.Deleted)
+	return fmt.Sprintf("Row=%d,Delete=%v", node.Row, node.Deleted)
 }
 func (node *IndexMVCCNode) ApplyCommit(*wal.Index) error {
-	node.TxnMVCCNode.ApplyCommit(nil)
-	return nil
+	panic("not supported")
 }
 
 func (node *IndexMVCCNode) PrepareCommit() error {
-	node.TxnMVCCNode.PrepareCommit()
-	return nil
-}
-
-func (node *IndexMVCCNode) CloneAll() txnbase.MVCCNode {
 	panic("not supported")
 }
 
-func (node *IndexMVCCNode) CloneData() txnbase.MVCCNode {
+func (node *IndexMVCCNode) CloneAll() txnif.MVCCNode {
 	panic("not supported")
 }
 
-func (node *IndexMVCCNode) Update(txnbase.MVCCNode) {
+func (node *IndexMVCCNode) CloneData() txnif.MVCCNode {
 	panic("not supported")
 }
 
-func CompareIndexMVCCNode(va, vb txnbase.MVCCNode) int {
-	a := va.(*IndexMVCCNode)
-	b := vb.(*IndexMVCCNode)
-	return a.Compare(b.TxnMVCCNode)
+func (node *IndexMVCCNode) Update(txnif.MVCCNode)                      { panic("not supported") }
+func (node *IndexMVCCNode) ApplyRollback(index *wal.Index) (err error) { panic("not supported") }
+func (node *IndexMVCCNode) CheckConflict(ts types.TS) error            { panic("not supported") }
+func (node *IndexMVCCNode) WriteTo(w io.Writer) (n int64, err error)   { panic("not supported") }
+func (node *IndexMVCCNode) ReadFrom(r io.Reader) (n int64, err error)  { panic("not supported") }
+func (node *IndexMVCCNode) GetEnd() types.TS                           { return node.getTxnNode().GetEnd() }
+func (node *IndexMVCCNode) GetStart() types.TS                         { return node.getTxnNode().GetStart() }
+func (node *IndexMVCCNode) GetPrepare() types.TS                       { return node.getTxnNode().GetPrepare() }
+func (node *IndexMVCCNode) GetTxn() txnif.TxnReader                    { panic("not supported") }
+func (node *IndexMVCCNode) SetLogIndex(idx *wal.Index)                 { panic("not supported") }
+func (node *IndexMVCCNode) GetLogIndex() *wal.Index                    { panic("not supported") }
+func (node *IndexMVCCNode) IsVisible(ts types.TS) (visible bool) {
+	return node.getTxnNode().IsVisible(ts)
+}
+func (node *IndexMVCCNode) PreparedIn(minTS, maxTS types.TS) (in, before bool) {
+	return node.getTxnNode().PreparedIn(minTS, maxTS)
+}
+func (node *IndexMVCCNode) CommittedIn(minTS, maxTS types.TS) (in, before bool) {
+	return node.getTxnNode().CommittedIn(minTS, maxTS)
+}
+func (node *IndexMVCCNode) NeedWaitCommitting(ts types.TS) (bool, txnif.TxnReader) {
+	return node.getTxnNode().NeedWaitCommitting(ts)
+}
+func (node *IndexMVCCNode) IsSameTxn(ts types.TS) bool { return node.getTxnNode().IsSameTxn(ts) }
+func (node *IndexMVCCNode) IsActive() bool             { return node.getTxnNode().IsActive() }
+func (node *IndexMVCCNode) IsCommitting() bool         { return node.getTxnNode().IsCommitted() }
+func (node *IndexMVCCNode) IsCommitted() bool          { return node.getTxnNode().IsCommitting() }
+func (node *IndexMVCCNode) IsAborted() bool            { return node.getTxnNode().IsAborted() }
+func (node *IndexMVCCNode) Set1PC()                    { panic("not supported") }
+func (node *IndexMVCCNode) Is1PC() bool                { panic("not supported") }
+func CompareIndexMVCCNode(va, vb txnif.MVCCNode) int {
+	if va.GetPrepare().Less(vb.GetPrepare()) {
+		return -1
+	}
+	if va.GetPrepare().Greater(vb.GetPrepare()) {
+		return 1
+	}
+	return 0
 }
 
 type IndexMVCCChain struct {
@@ -107,6 +137,7 @@ func NewIndexMVCCChain() *IndexMVCCChain {
 	}
 }
 
+// row -> appendnode/deletenode -> ts,
 func (chain *IndexMVCCChain) Existed() bool {
 	un := chain.MVCC.GetLastNonAbortedNode().(*IndexMVCCNode)
 	if un == nil {
@@ -129,8 +160,9 @@ func (chain *IndexMVCCChain) GetRow() uint32 {
 }
 
 func (chain *IndexMVCCChain) Merge(o *IndexMVCCChain) {
-	o.MVCC.ForEach(func(un txnbase.MVCCNode) {
+	o.MVCC.ForEach(func(un txnif.MVCCNode) bool {
 		chain.MVCC.InsertNode(un)
+		return true
 	})
 }
 func (chain *IndexMVCCChain) Insert(n *IndexMVCCNode) {
@@ -138,14 +170,16 @@ func (chain *IndexMVCCChain) Insert(n *IndexMVCCNode) {
 }
 
 type simpleARTMap struct {
-	typ  types.Type
-	tree art.Tree
+	blkdata data.Block
+	typ     types.Type
+	tree    art.Tree
 }
 
-func NewSimpleARTMap(typ types.Type) *simpleARTMap {
+func NewSimpleARTMap(typ types.Type, blk data.Block) *simpleARTMap {
 	return &simpleARTMap{
-		typ:  typ,
-		tree: art.New(),
+		blkdata: blk,
+		typ:     typ,
+		tree:    art.New(),
 	}
 }
 
@@ -153,7 +187,7 @@ func (art *simpleARTMap) Size() int { return art.tree.Size() }
 
 func (art *simpleARTMap) Insert(key any, offset uint32, txn txnif.TxnReader) (txnnode *txnbase.TxnMVCCNode, err error) {
 	var appendnode *IndexMVCCNode
-	appendnode, txnnode = NewAppendIndexMVCCNode(offset, txn)
+	appendnode = NewAppendIndexMVCCNode(offset, art.blkdata)
 	chain := NewIndexMVCCChain()
 	chain.Insert(appendnode)
 	ikey := types.EncodeValue(key, art.typ)
@@ -178,7 +212,7 @@ func (art *simpleARTMap) BatchInsert(keys *KeysCtx, startRow uint32, upsert bool
 	op := func(v any, i int) error {
 		var appendnode *IndexMVCCNode
 		encoded := types.EncodeValue(v, art.typ)
-		appendnode = NewAppendIndexMVCCNodeWithTxnMVCCNode(startRow, txnNode)
+		appendnode = NewAppendIndexMVCCNode(startRow, art.blkdata)
 		chain := NewIndexMVCCChain()
 		chain.Insert(appendnode)
 		if keys.NeedVerify {
@@ -194,7 +228,7 @@ func (art *simpleARTMap) BatchInsert(keys *KeysCtx, startRow uint32, upsert bool
 				txnNode.Aborted = true
 				return ErrDuplicate
 			}
-			deleteNode := NewDeleteIndexMVCCNodeWithTxnNode(oldChain.GetRow(), txnNode)
+			deleteNode := NewDeleteIndexMVCCNodeInUpsert(oldChain.GetRow(), art.blkdata)
 			oldChain.Insert(deleteNode)
 			oldChain.Merge(chain)
 			art.tree.Insert(encoded, old)
@@ -215,14 +249,15 @@ func (art *simpleARTMap) IsKeyDeleted(key any, ts types.TS) (deleted bool, exist
 	}
 	existed = false
 	chain := v.(*IndexMVCCChain)
-	chain.MVCC.ForEach(func(un txnbase.MVCCNode) {
+	chain.MVCC.ForEach(func(un txnif.MVCCNode) bool {
 		node := un.(*IndexMVCCNode)
-		if node.Deleted && !node.Aborted {
+		if node.Deleted && !node.IsAborted() {
 			existed = true
 			if node.GetEnd().LessEq(ts) {
 				deleted = true
 			}
 		}
+		return true
 	})
 	return
 }
@@ -235,11 +270,12 @@ func (art *simpleARTMap) HasDeleteFrom(key any, fromTs types.TS) bool {
 	}
 	chain := v.(*IndexMVCCChain)
 	var deleted bool
-	chain.MVCC.ForEach(func(un txnbase.MVCCNode) {
+	chain.MVCC.ForEach(func(un txnif.MVCCNode) bool {
 		node := un.(*IndexMVCCNode)
-		if node.GetEnd().Greater(fromTs) && node.Deleted && !node.Aborted {
+		if node.GetEnd().Greater(fromTs) && node.Deleted && !node.IsAborted() {
 			deleted = true
 		}
+		return true
 	})
 	return deleted
 }
@@ -253,7 +289,7 @@ func (art *simpleARTMap) Delete(key any, ts types.TS) (old uint32, txnNode *txnb
 		oldChain := v.(*IndexMVCCChain)
 		old = oldChain.GetRow()
 		var deleteNode *IndexMVCCNode
-		deleteNode, txnNode = NewDeleteIndexMVCCNode(old, ts)
+		deleteNode = NewDeleteIndexMVCCNode(old, art.blkdata)
 		oldChain.Insert(deleteNode)
 	}
 	return

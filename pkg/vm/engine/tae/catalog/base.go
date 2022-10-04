@@ -21,7 +21,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 )
 
@@ -43,7 +42,7 @@ type BaseEntry interface {
 	GetCurrOp() OpT
 	GetLogIndex() *wal.Index
 
-	GetNodeLocked() txnbase.MVCCNode
+	GetNodeLocked() txnif.MVCCNode
 	IsVisible(ts types.TS, mu *sync.RWMutex) (ok bool, err error)
 
 	HasCommittedNodeInRange(minTs, MaxTs types.TS) bool

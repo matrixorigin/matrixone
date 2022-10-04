@@ -320,7 +320,7 @@ func (n *MVCCHandle) CollectAppend(start, end types.TS) (minRow, maxRow uint32, 
 	n.appends.LoopOffsetRange(
 		startOffset,
 		endOffset,
-		func(m txnbase.MVCCNode) bool {
+		func(m txnif.MVCCNode) bool {
 			node := m.(*AppendNode)
 			node.RLock()
 			txn := node.GetTxn()
@@ -355,7 +355,7 @@ func (n *MVCCHandle) CollectDelete(start, end types.TS) (rowIDVec, commitTSVec, 
 	n.RLock()
 	defer n.RUnlock()
 	n.deletes.LoopChain(
-		func(m txnbase.MVCCNode) bool {
+		func(m txnif.MVCCNode) bool {
 			node := m.(*DeleteNode)
 			node.RLock()
 			needWait, txn := node.NeedWaitCommitting(end.Next())
@@ -386,7 +386,7 @@ func (n *MVCCHandle) ExistDeleteInRange(start, end types.TS) (exist bool) {
 	n.RLock()
 	defer n.RUnlock()
 	n.deletes.LoopChain(
-		func(m txnbase.MVCCNode) bool {
+		func(m txnif.MVCCNode) bool {
 			node := m.(*DeleteNode)
 			node.RLock()
 			needWait, txn := node.NeedWaitCommitting(end.Next())
@@ -404,4 +404,18 @@ func (n *MVCCHandle) ExistDeleteInRange(start, end types.TS) (exist bool) {
 			return !before
 		})
 	return
+}
+
+func (n *MVCCHandle) GetAppendNodeByRow(row uint32) (an *AppendNode) {
+	n.appends.ForEach(func(un txnif.MVCCNode) bool {
+		if un.(*AppendNode).maxRow > row && un.(*AppendNode).startRow <= row {
+			an = un.(*AppendNode)
+			return false
+		}
+		return true
+	})
+	return
+}
+func (n *MVCCHandle) GetDeleteNodeByRow(row uint32) (an *DeleteNode) {
+	return n.deletes.GetDeleteNodeByRow(row)
 }
