@@ -906,14 +906,6 @@ var (
 		}, {
 			input: "set default role none to u1, u2, u3",
 		}, {
-			input: "set role all",
-		}, {
-			input: "set role none",
-		}, {
-			input: "set role r1, r2, r3",
-		}, {
-			input: "set role all except r1, r2, r3",
-		}, {
 			input:  "set password = password('ppp')",
 			output: "set password = ppp",
 		}, {
@@ -1380,11 +1372,11 @@ var (
 		}, {
 			input: "use db1",
 		}, {
-			input: "use role r1",
+			input: "set role r1",
 		}, {
-			input: "use secondary role all",
+			input: "set secondary role all",
 		}, {
-			input: "use secondary role none",
+			input: "set secondary role none",
 		}, {
 			input:  `select json_extract('{"a":1,"b":2}', '$.b')`,
 			output: `select json_extract({"a":1,"b":2}, $.b)`,

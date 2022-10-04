@@ -1456,8 +1456,8 @@ func (mce *MysqlCmdExecutor) handleRevokePrivilege(ctx context.Context, rp *tree
 }
 
 // handleSwitchRole switches the role to another role
-func (mce *MysqlCmdExecutor) handleSwitchRole(ctx context.Context, u *tree.Use) error {
-	return doSwitchRole(ctx, mce.GetSession(), u)
+func (mce *MysqlCmdExecutor) handleSwitchRole(ctx context.Context, sr *tree.SetRole) error {
+	return doSwitchRole(ctx, mce.GetSession(), sr)
 }
 
 func GetExplainColumns(explainColName string) ([]interface{}, error) {
@@ -1969,20 +1969,19 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		switch st := stmt.(type) {
 		case *tree.BeginTransaction, *tree.CommitTransaction, *tree.RollbackTransaction:
 			selfHandle = true
+		case *tree.SetRole:
+			selfHandle = true
+			//switch role
+			err = mce.handleSwitchRole(requestCtx, st)
+			if err != nil {
+				goto handleFailed
+			}
 		case *tree.Use:
 			selfHandle = true
-			if st.IsUseRole() {
-				//switch role
-				err = mce.handleSwitchRole(requestCtx, st)
-				if err != nil {
-					goto handleFailed
-				}
-			} else {
-				//use database
-				err = mce.handleChangeDB(requestCtx, st.Name)
-				if err != nil {
-					goto handleFailed
-				}
+			//use database
+			err = mce.handleChangeDB(requestCtx, st.Name)
+			if err != nil {
+				goto handleFailed
 			}
 		case *tree.DropDatabase:
 			// if the droped database is the same as the one in use, database must be reseted to empty.

@@ -1484,20 +1484,20 @@ func normalizeNamesOfUsers(users []*tree.User) error {
 }
 
 // doSwitchRole accomplishes the Use Role and Use Secondary Role statement
-func doSwitchRole(ctx context.Context, ses *Session, u *tree.Use) error {
+func doSwitchRole(ctx context.Context, ses *Session, sr *tree.SetRole) error {
 	var err error
 	account := ses.GetTenantInfo()
 
-	if u.SecondaryRole {
+	if sr.SecondaryRole {
 		//use secondary role all or none
-		switch u.SecondaryRoleType {
+		switch sr.SecondaryRoleType {
 		case tree.SecondaryRoleTypeAll:
 			account.SetUseSecondaryRole(true)
 		case tree.SecondaryRoleTypeNone:
 			account.SetUseSecondaryRole(false)
 		}
-	} else if u.Role != nil {
-		err = normalizeNameOfRole(u.Role)
+	} else if sr.Role != nil {
+		err = normalizeNameOfRole(sr.Role)
 		if err != nil {
 			return err
 		}
@@ -1517,7 +1517,7 @@ func doSwitchRole(ctx context.Context, ses *Session, u *tree.Use) error {
 			goto handleFailed
 		}
 
-		sql = getSqlForRoleIdOfRole(u.Role.UserName)
+		sql = getSqlForRoleIdOfRole(sr.Role.UserName)
 		bh.ClearExecResultSet()
 		err = bh.Exec(ctx, sql)
 		if err != nil {
@@ -1535,12 +1535,12 @@ func doSwitchRole(ctx context.Context, ses *Session, u *tree.Use) error {
 				goto handleFailed
 			}
 		} else {
-			err = moerr.NewInternalError("there is no role %s", u.Role.UserName)
+			err = moerr.NewInternalError("there is no role %s", sr.Role.UserName)
 			goto handleFailed
 		}
 
 		//step2 : check the role has been granted to the user or not
-		sql = getSqlForCheckUserGrant(roleId, int64(account.GetDefaultRoleID()))
+		sql = getSqlForCheckUserGrant(roleId, int64(account.GetUserID()))
 		bh.ClearExecResultSet()
 		err = bh.Exec(ctx, sql)
 		if err != nil {
@@ -1553,18 +1553,20 @@ func doSwitchRole(ctx context.Context, ses *Session, u *tree.Use) error {
 			goto handleFailed
 		}
 		if len(rsset) == 0 || rsset[0].GetRowCount() == 0 {
-			err = moerr.NewInternalError("the role %s has not be granted to the user %s", u.Role.UserName, account.GetUser())
+			err = moerr.NewInternalError("the role %s has not be granted to the user %s", sr.Role.UserName, account.GetUser())
 			goto handleFailed
 		}
-
-		//step3 : switch the default role and role id;
-		account.SetDefaultRoleID(uint32(roleId))
-		account.SetDefaultRole(u.Role.UserName)
 
 		err = bh.Exec(ctx, "commit;")
 		if err != nil {
 			goto handleFailed
 		}
+
+		//step3 : switch the default role and role id;
+		account.SetDefaultRoleID(uint32(roleId))
+		account.SetDefaultRole(sr.Role.UserName)
+		//then, reset secondary role to none
+		account.SetUseSecondaryRole(false)
 
 		return err
 
@@ -2638,12 +2640,7 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 	case *tree.ShowDatabases:
 		typs = append(typs, PrivilegeTypeShowDatabases, PrivilegeTypeAccountAll /*, PrivilegeTypeAccountOwnership*/)
 	case *tree.Use:
-		if st.IsUseRole() {
-			objType = objectTypeNone
-			kind = privilegeKindNone
-		} else {
-			typs = append(typs, PrivilegeTypeConnect, PrivilegeTypeAccountAll /*, PrivilegeTypeAccountOwnership*/)
-		}
+		typs = append(typs, PrivilegeTypeConnect, PrivilegeTypeAccountAll /*, PrivilegeTypeAccountOwnership*/)
 	case *tree.ShowTables, *tree.ShowCreateTable, *tree.ShowColumns, *tree.ShowCreateView, *tree.ShowCreateDatabase:
 		objType = objectTypeDatabase
 		typs = append(typs, PrivilegeTypeShowTables, PrivilegeTypeDatabaseAll /*PrivilegeTypeDatabaseOwnership*/)
@@ -3170,6 +3167,7 @@ func loadAllSecondaryRoles(ctx context.Context, bh BackgroundExec, account *Tena
 
 	if account.GetUseSecondaryRole() {
 		sql = getSqlForRoleIdOfUserId(int(account.GetUserID()))
+		bh.ClearExecResultSet()
 		err = bh.Exec(ctx, sql)
 		if err != nil {
 			return err
