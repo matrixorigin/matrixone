@@ -27,7 +27,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/updates"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 )
@@ -327,23 +326,9 @@ func (tbl *txnTable) AddUpdateNode(node txnif.UpdateNode) error {
 	return nil
 }
 
-func (tbl *txnTable) GetSortColumns(data *containers.Batch) []containers.Vector {
-	vs := make([]containers.Vector, tbl.schema.GetSortKeyCnt())
-	for i := range vs {
-		vs[i] = data.Vecs[tbl.schema.SortKey.Defs[i].Idx]
-	}
-	return vs
-}
-
-// func (tbl *txnTable)
-
 func (tbl *txnTable) Append(data *containers.Batch) (err error) {
-	if tbl.schema.IsSinglePK() {
+	if tbl.schema.HasPK() {
 		if err = tbl.DoBatchDedup(data.Vecs[tbl.schema.GetSingleSortKeyIdx()]); err != nil {
-			return
-		}
-	} else if tbl.schema.IsCompoundPK() {
-		if err = tbl.DoBatchDedup(tbl.GetSortColumns(data)...); err != nil {
 			return
 		}
 	}
@@ -662,15 +647,8 @@ func (tbl *txnTable) DoDedup(pks containers.Vector, preCommit bool) (err error) 
 	return
 }
 
-func (tbl *txnTable) DoBatchDedup(keys ...containers.Vector) (err error) {
+func (tbl *txnTable) DoBatchDedup(key containers.Vector) (err error) {
 	index := NewSimpleTableIndex()
-	var key containers.Vector
-	if len(keys) == 1 {
-		key = keys[0]
-	} else {
-		key = model.EncodeCompoundColumn(keys...)
-		defer key.Close()
-	}
 	if err = index.BatchInsert(key, 0, key.Length(), 0, true); err != nil {
 		return
 	}
@@ -686,15 +664,10 @@ func (tbl *txnTable) DoBatchDedup(keys ...containers.Vector) (err error) {
 }
 
 func (tbl *txnTable) BatchDedupLocal(bat *containers.Batch) (err error) {
-	if tbl.localSegment == nil {
+	if tbl.localSegment == nil || !tbl.schema.HasPK() {
 		return
 	}
-	if tbl.schema.IsSinglePK() {
-		err = tbl.localSegment.BatchDedup(bat.Vecs[tbl.schema.GetSingleSortKeyIdx()])
-	} else {
-		key := model.EncodeCompoundColumn(tbl.GetSortColumns(bat)...)
-		err = tbl.localSegment.BatchDedup(key)
-	}
+	err = tbl.localSegment.BatchDedup(bat.Vecs[tbl.schema.GetSingleSortKeyIdx()])
 	return
 }
 
