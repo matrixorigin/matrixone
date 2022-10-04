@@ -116,6 +116,10 @@ func (v *Version[T]) Visible(now Time, txID string) bool {
 		if v.LockTx.ID != txID && v.LockTx.State.Load() != Committed {
 			return true
 		}
+		// deleted by another committed tx after the read time
+		if v.LockTx.ID != txID && v.LockTx.State.Load() == Committed && v.LockTime.After(now) {
+			return true
+		}
 	}
 
 	return false
