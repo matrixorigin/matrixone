@@ -547,30 +547,6 @@ func (blk *dataBlock) Update(txn txnif.AsyncTxn, row uint32, colIdx uint16, v an
 	return blk.updateWithFineLock(txn, row, colIdx, v)
 }
 
-// updateWithCoarseLock is unused
-// func (blk *dataBlock) updateWithCoarseLock(
-// 	txn txnif.AsyncTxn,
-// 	row uint32,
-// 	colIdx uint16,
-// 	v any) (node txnif.UpdateNode, err error) {
-// 	blk.mvcc.Lock()
-// 	defer blk.mvcc.Unlock()
-// 	err = blk.mvcc.CheckNotDeleted(row, row, txn.GetStartTS())
-// 	if err == nil {
-// 		if err = blk.mvcc.CheckNotUpdated(row, row, txn.GetStartTS()); err != nil {
-// 			return
-// 		}
-// 		chain := blk.mvcc.GetColumnChain(colIdx)
-// 		chain.Lock()
-// 		node = chain.AddNodeLocked(txn)
-// 		if err = chain.TryUpdateNodeLocked(row, v, node); err != nil {
-// 			chain.DeleteNodeLocked(node.GetDLNode())
-// 		}
-// 		chain.Unlock()
-// 	}
-// 	return
-// }
-
 func (blk *dataBlock) updateWithFineLock(
 	txn txnif.AsyncTxn,
 	row uint32,
@@ -833,11 +809,6 @@ func (blk *dataBlock) BatchDedup(txn txnif.AsyncTxn, pks containers.Vector, rowm
 		if err != nil {
 			return err
 		}
-		// Check with deletes map
-		// If txn start ts is bigger than deletes max ts, skip scanning deletes
-		// if ts.Greater(blk.pkIndex.GetMaxDeleteTS()) {
-		// 	return err
-		// }
 		if keyselects == nil {
 			return err
 		}
