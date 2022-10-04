@@ -95,7 +95,7 @@ func (ti *TenantInfo) SetDefaultRoleID(id uint32) {
 }
 
 func (ti *TenantInfo) IsSysTenant() bool {
-	return ti.GetTenant() == GetDefaultTenant()
+	return strings.ToLower(ti.GetTenant()) == GetDefaultTenant()
 }
 
 func (ti *TenantInfo) IsDefaultRole() bool {
@@ -103,14 +103,24 @@ func (ti *TenantInfo) IsDefaultRole() bool {
 }
 
 func (ti *TenantInfo) IsMoAdminRole() bool {
-	return ti.GetDefaultRole() == moAdminRoleName
+	return ti.IsSysTenant() && strings.ToLower(ti.GetDefaultRole()) == moAdminRoleName
+}
+
+func (ti *TenantInfo) IsAccountAdminRole() bool {
+	return !ti.IsSysTenant() && strings.ToLower(ti.GetDefaultRole()) == accountAdminRoleName
 }
 
 func (ti *TenantInfo) IsAdminRole() bool {
+	return ti.IsMoAdminRole() || ti.IsAccountAdminRole()
+}
+
+func (ti *TenantInfo) IsNameOfAdminRoles(name string) bool {
+	n := strings.ToLower(name)
 	if ti.IsSysTenant() {
-		return ti.GetDefaultRoleID() == moAdminRoleID
+		return n == moAdminRoleName
+	} else {
+		return n == accountAdminRoleName
 	}
-	return ti.GetDefaultRoleID() == accountAdminRoleID
 }
 
 func (ti *TenantInfo) SetUseSecondaryRole(v bool) {
@@ -974,7 +984,7 @@ func getSqlForRoleIdOfRole(roleName string) string {
 	return fmt.Sprintf(roleIdOfRoleFormat, roleName)
 }
 
-func getSqlForRoleOfUser(userID int, roleName string) string {
+func getSqlForRoleOfUser(userID int64, roleName string) string {
 	return fmt.Sprintf(getRoleOfUserFormat, userID, roleName)
 }
 
@@ -1145,6 +1155,7 @@ const (
 	privilegeKindGeneral privilegeKind = iota //as same as definition in the privilegeEntriesMap
 	privilegeKindInherit                      //General + with_grant_option
 	privilegeKindSpecial                      //no obj_type,obj_id,privilege_level. only needs (MOADMIN / ACCOUNTADMIN, with_grant_option, owner of object)
+	privilegeKindMulti                        //need multi privileges at the same time + with_grant_option
 	privilegeKindNone                         //does not need any privilege
 )
 
@@ -1309,9 +1320,10 @@ const (
 )
 
 type verifiedRole struct {
-	typ  verifiedRoleType
-	name string
-	id   int64
+	typ         verifiedRoleType
+	name        string
+	id          int64
+	userIsAdmin bool
 }
 
 // verifyRoleFunc gets result set from mo_role_grant or mo_user_grant
@@ -1336,9 +1348,38 @@ func verifyRoleFunc(ctx context.Context, bh BackgroundExec, sql, name string, ty
 		if err != nil {
 			return nil, err
 		}
-		return &verifiedRole{typ, name, roleId}, nil
+		return &verifiedRole{typ, name, roleId, false}, nil
 	}
 	return nil, nil
+}
+
+// userIsAdministrator checks the user is the administrator
+func userIsAdministrator(ctx context.Context, bh BackgroundExec, userId int64, account *TenantInfo) (bool, error) {
+	var err error
+	var rsset []ExecResult
+	var sql string
+	if account.IsSysTenant() {
+		sql = getSqlForRoleOfUser(userId, moAdminRoleName)
+	} else {
+		sql = getSqlForRoleOfUser(userId, accountAdminRoleName)
+	}
+
+	bh.ClearExecResultSet()
+	err = bh.Exec(ctx, sql)
+	if err != nil {
+		return false, err
+	}
+
+	results := bh.GetExecResultSet()
+	rsset, err = convertIntoResultSet(results)
+	if err != nil {
+		return false, err
+	}
+
+	if len(rsset) != 0 && rsset[0].GetRowCount() != 0 {
+		return true, nil
+	}
+	return false, nil
 }
 
 type visitTag int
@@ -2372,6 +2413,7 @@ func doGrantRole(ctx context.Context, ses *Session, gr *tree.GrantRole) error {
 	var vr *verifiedRole
 	var needLoadMoRoleGrant bool
 	var grantedId, granteeId int64
+	var useIsAdmin bool
 
 	verifiedFromRoles := make([]*verifiedRole, len(gr.Roles))
 	verifiedToRoles := make([]*verifiedRole, len(gr.Users))
@@ -2408,7 +2450,7 @@ func doGrantRole(ctx context.Context, ses *Session, gr *tree.GrantRole) error {
 		if vr != nil {
 			verifiedToRoles[i] = vr
 		} else {
-			//check user
+			//check user exists or not
 			sql = getSqlForPasswordOfUser(user.Username)
 			vr, err = verifyRoleFunc(ctx, bh, sql, user.Username, userType)
 			if err != nil {
@@ -2419,6 +2461,13 @@ func doGrantRole(ctx context.Context, ses *Session, gr *tree.GrantRole) error {
 				goto handleFailed
 			}
 			verifiedToRoles[i] = vr
+
+			//the user is the administrator or not
+			useIsAdmin, err = userIsAdministrator(ctx, bh, vr.id, account)
+			if err != nil {
+				goto handleFailed
+			}
+			verifiedToRoles[i].userIsAdmin = useIsAdmin
 		}
 	}
 
@@ -2470,6 +2519,33 @@ func doGrantRole(ctx context.Context, ses *Session, gr *tree.GrantRole) error {
 
 	for _, from := range verifiedFromRoles {
 		for _, to := range verifiedToRoles {
+			if account.IsNameOfAdminRoles(from.name) {
+				if to.typ == userType {
+					//check Grant moadmin to root,dump
+					//check Grant accountadmin to admin_name
+					//check Grant moadmin to userX
+					//check Grant accountadmin to userX
+					if !to.userIsAdmin {
+						err = moerr.NewInternalError("the role %s can not be granted to non administration user %s", from.name, to.name)
+						goto handleFailed
+					}
+				} else {
+					//check Grant moadmin(accountadmin) to roleX
+					if !account.IsNameOfAdminRoles(to.name) {
+						err = moerr.NewInternalError("the role %s can not be granted to the other role %s", from.name, to.name)
+						goto handleFailed
+					}
+				}
+			}
+
+			//check Grant roleX to moadmin(accountadmin)
+			if to.typ == roleType {
+				if account.IsNameOfAdminRoles(to.name) {
+					err = moerr.NewInternalError("the role %s can not be granted to the role %s", from.name, to.name)
+					goto handleFailed
+				}
+			}
+
 			sql := ""
 			if to.typ == roleType {
 				if from.id == to.id { //direct loop
@@ -2595,6 +2671,11 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		typs = append(typs, PrivilegeTypeAlterAccount)
 	case *tree.CreateUser:
 		typs = append(typs, PrivilegeTypeCreateUser, PrivilegeTypeAccountAll /*, PrivilegeTypeAccountOwnership*/)
+		if st.Role != nil {
+			//the role can be granted the user ?
+			//kind = privilegeKindMulti
+			//typs = append(typs, PrivilegeTypeManageGrants)
+		}
 	case *tree.DropUser:
 		typs = append(typs, PrivilegeTypeDropUser, PrivilegeTypeAccountAll /*, PrivilegeTypeAccountOwnership, PrivilegeTypeUserOwnership*/)
 	case *tree.AlterUser:
@@ -3536,6 +3617,9 @@ func authenticatePrivilegeOfStatementWithObjectTypeAccountAndDatabase(ctx contex
 			return true, nil
 		}
 	}
+	//for Create User statement with default role.
+	//TODO:
+
 	return ok, nil
 }
 
@@ -4523,7 +4607,7 @@ func createTablesInMoCatalogOfGeneralTenant(ctx context.Context, bh BackgroundEx
 	//the first user id in the general tenant
 	initMoUser1 = fmt.Sprintf(initMoUserFormat, newUserId, rootHost, name, password, status,
 		types.CurrentTimestamp().String2(time.UTC, 0), rootExpiredTime, rootLoginType,
-		tenant.GetUserID(), tenant.GetDefaultRoleID(), publicRoleID)
+		tenant.GetUserID(), tenant.GetDefaultRoleID(), accountAdminRoleID)
 	addSqlIntoSet(initMoUser1)
 
 	//step4: add new entries to the mo_role_privs
@@ -4638,10 +4722,6 @@ func InitUser(ctx context.Context, tenant *TenantInfo, cu *tree.CreateUser) erro
 	//TODO: get role and the id of role
 	newRoleId = publicRoleID
 	if cu.Role != nil {
-		if nameIsInvalid(cu.Role.UserName) {
-			err = moerr.NewInternalError("the role name is invalid")
-			goto handleFailed
-		}
 		if strings.ToLower(cu.Role.UserName) != publicRoleName {
 			sqlForRoleIdOfRole := getSqlForRoleIdOfRole(cu.Role.UserName)
 			bh.ClearExecResultSet()
@@ -4674,11 +4754,6 @@ func InitUser(ctx context.Context, tenant *TenantInfo, cu *tree.CreateUser) erro
 	}
 
 	for _, user := range cu.Users {
-		if nameIsInvalid(user.Username) {
-			err = moerr.NewInternalError("the user name is invalid")
-			goto handleFailed
-		}
-
 		//dedup with user
 		sql := getSqlForPasswordOfUser(user.Username)
 		bh.ClearExecResultSet()
@@ -4831,12 +4906,9 @@ func InitRole(ctx context.Context, tenant *TenantInfo, cr *tree.CreateRole) erro
 	}
 
 	for _, r := range cr.Roles {
-		if nameIsInvalid(r.UserName) {
-			err = moerr.NewInternalError("the role name is invalid")
-			goto handleFailed
-		}
-		if strings.ToLower(r.UserName) == publicRoleName {
-			exists = 1
+		n := strings.ToLower(r.UserName)
+		if n == publicRoleName || n == accountAdminRoleName || n == moAdminRoleName {
+			exists = 3
 		} else {
 			//dedup with role
 			sqlForRoleIdOfRole := getSqlForRoleIdOfRole(r.UserName)
@@ -4880,7 +4952,9 @@ func InitRole(ctx context.Context, tenant *TenantInfo, cr *tree.CreateRole) erro
 			if exists == 1 {
 				err = moerr.NewInternalError("the role %s exists", r.UserName)
 			} else if exists == 2 {
-				err = moerr.NewInternalError("there is a user with the same name as the role")
+				err = moerr.NewInternalError("there is a user with the same name as the role %s", r.UserName)
+			} else if exists == 3 {
+				err = moerr.NewInternalError("can not use the name %s. it is the name of the predefined role", r.UserName)
 			}
 
 			goto handleFailed

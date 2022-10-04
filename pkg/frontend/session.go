@@ -684,7 +684,7 @@ func (ses *Session) AuthenticateUser(userInput string) ([]byte, error) {
 		}
 
 		//step4.2 : check the role has been granted to the user or not
-		sqlForRoleOfUser := getSqlForRoleOfUser(int(userID), tenant.GetDefaultRole())
+		sqlForRoleOfUser := getSqlForRoleOfUser(userID, tenant.GetDefaultRole())
 		rsset, err = executeSQLInBackgroundSession(tenantCtx, ses.GuestMmu, ses.Mempool, ses.Pu, sqlForRoleOfUser)
 		if err != nil {
 			return nil, err
