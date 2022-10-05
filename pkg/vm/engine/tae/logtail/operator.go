@@ -96,7 +96,7 @@ func (c *BoundTableOperator) processTableData() (err error) {
 		if err = c.visitor.OnSegment(seg); err != nil {
 			return err
 		}
-		for id, _ := range dirtySeg.Blks {
+		for id := range dirtySeg.Blks {
 			if blk, err = seg.GetBlockEntryByID(id); err != nil {
 				return err
 			}

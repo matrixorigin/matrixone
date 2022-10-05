@@ -125,7 +125,7 @@ func (stree *SegmentTree) Merge(ot *SegmentTree) {
 	if ot.ID != stree.ID {
 		panic(fmt.Sprintf("Cannot merge 2 different seg tree: %d, %d", stree.ID, ot.ID))
 	}
-	for id, _ := range ot.Blks {
+	for id := range ot.Blks {
 		stree.AddBlock(id)
 	}
 }
