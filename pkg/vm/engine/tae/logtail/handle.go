@@ -36,22 +36,9 @@ func HandleSyncLogTailReq(mgr *LogtailMgr, c *catalog.Catalog, req api.SyncLogTa
 	// TODO
 	// verifiedCheckpoint, start, end = db.CheckpointMgr.check(start, end)
 
-	// get a collector with a read only reader for txns
-	collector := mgr.GetLogtailCollector(start, end, did, tid)
+	scope := mgr.DecideScope(tid)
 
-	var scope Scope
-	switch tid {
-	case pkgcatalog.MO_DATABASE_ID:
-		scope = ScopeDatabases
-	case pkgcatalog.MO_TABLES_ID:
-		scope = ScopeTables
-	case pkgcatalog.MO_COLUMNS_ID:
-		scope = ScopeColumns
-	default:
-		scope = ScopeUserTables
-	}
-
-	var respBuilder RespBuilder
+	var visitor RespBuilder
 
 	if scope == ScopeUserTables {
 		var tableEntry *catalog.TableEntry
@@ -61,17 +48,17 @@ func HandleSyncLogTailReq(mgr *LogtailMgr, c *catalog.Catalog, req api.SyncLogTa
 		} else if tableEntry, err = db.GetTableEntryByID(tid); err != nil {
 			return api.SyncLogTailResp{}, err
 		}
-		respBuilder = NewTableLogtailRespBuilder(verifiedCheckpoint, start, end, tableEntry)
+		visitor = NewTableLogtailRespBuilder(verifiedCheckpoint, start, end, tableEntry)
 	} else {
-		respBuilder = NewCatalogLogtailRespBuilder(scope, verifiedCheckpoint, start, end)
+		visitor = NewCatalogLogtailRespBuilder(scope, verifiedCheckpoint, start, end)
 	}
-	defer respBuilder.Close()
+	defer visitor.Close()
 
-	collector.BindCollectEnv(scope, c, respBuilder)
-	if err := collector.Collect(); err != nil {
+	operator := mgr.GetTableOperator(start, end, c, did, tid, scope, visitor)
+	if err := operator.Run(); err != nil {
 		return api.SyncLogTailResp{}, err
 	}
-	return respBuilder.BuildResp()
+	return visitor.BuildResp()
 }
 
 type RespBuilder interface {

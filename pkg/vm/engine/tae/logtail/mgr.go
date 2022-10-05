@@ -18,8 +18,10 @@ import (
 	"sync"
 	"sync/atomic"
 
+	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"github.com/tidwall/btree"
@@ -109,12 +111,27 @@ func (l *LogtailMgr) GetReader(start, end types.TS) *LogtailReader {
 	}
 }
 
-// GetLogtailCollector try to fix a read reader, use LogtailCollector.BindCollectEnv to set other collect args
-func (l *LogtailMgr) GetLogtailCollector(start, end types.TS, did, tid uint64) *LogtailCollector {
-	reader := l.GetReader(start, end)
-	return &LogtailCollector{
-		did:    did,
-		tid:    tid,
-		reader: reader,
+func (l *LogtailMgr) DecideScope(tableID uint64) Scope {
+	var scope Scope
+	switch tableID {
+	case pkgcatalog.MO_DATABASE_ID:
+		scope = ScopeDatabases
+	case pkgcatalog.MO_TABLES_ID:
+		scope = ScopeTables
+	case pkgcatalog.MO_COLUMNS_ID:
+		scope = ScopeColumns
+	default:
+		scope = ScopeUserTables
 	}
+	return scope
+}
+
+func (l *LogtailMgr) GetTableOperator(start, end types.TS,
+	catalog *catalog.Catalog,
+	dbID, tableID uint64,
+	scope Scope,
+	visitor catalog.Processor) *BoundTableOperator {
+
+	reader := l.GetReader(start, end)
+	return NewBoundTableOperator(catalog, reader, scope, dbID, tableID, visitor)
 }

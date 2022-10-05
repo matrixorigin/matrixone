@@ -18,49 +18,71 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 )
 
-// LogtailCollector holds a read only reader, knows how to iter entry.
+// BoundTableOperator holds a read only reader, knows how to iter entry.
 // Drive a entry visitor, which acts as an api resp builder
-type LogtailCollector struct {
-	scope   Scope
-	did     uint64
-	tid     uint64
+type BaseOperator struct {
 	catalog *catalog.Catalog
 	reader  *LogtailReader
+}
+
+type BoundOperator struct {
+	BaseOperator
 	visitor catalog.Processor
 }
 
-// BindInfo set collect env args and these args don't affect dirty seg/blk ids
-func (c *LogtailCollector) BindCollectEnv(scope Scope, catalog *catalog.Catalog, visitor catalog.Processor) {
-	c.scope, c.catalog, c.visitor = scope, catalog, visitor
+type BoundTableOperator struct {
+	BoundOperator
+	dbID    uint64
+	tableID uint64
+	scope   Scope
 }
 
-func (c *LogtailCollector) Collect() error {
+func NewBoundTableOperator(catalog *catalog.Catalog,
+	reader *LogtailReader,
+	scope Scope,
+	dbID, tableID uint64,
+	visitor catalog.Processor) *BoundTableOperator {
+	return &BoundTableOperator{
+		BoundOperator: BoundOperator{
+			BaseOperator: BaseOperator{
+				catalog: catalog,
+				reader:  reader,
+			},
+			visitor: visitor,
+		},
+		tableID: tableID,
+		dbID:    dbID,
+		scope:   scope,
+	}
+}
+
+func (c *BoundTableOperator) Run() error {
 	switch c.scope {
 	case ScopeDatabases:
-		return c.collectCatalogDB()
+		return c.processDatabases()
 	case ScopeTables, ScopeColumns:
-		return c.collectCatalogTbl()
+		return c.processTables()
 	case ScopeUserTables:
-		return c.collectUserTbl()
+		return c.processTableData()
 	default:
 		panic("unknown logtail collect scope")
 	}
 }
 
-func (c *LogtailCollector) collectUserTbl() (err error) {
+func (c *BoundTableOperator) processTableData() (err error) {
 	var (
 		db  *catalog.DBEntry
 		tbl *catalog.TableEntry
 		seg *catalog.SegmentEntry
 		blk *catalog.BlockEntry
 	)
-	if db, err = c.catalog.GetDatabaseByID(c.did); err != nil {
+	if db, err = c.catalog.GetDatabaseByID(c.dbID); err != nil {
 		return
 	}
-	if tbl, err = db.GetTableEntryByID(c.tid); err != nil {
+	if tbl, err = db.GetTableEntryByID(c.tableID); err != nil {
 		return
 	}
-	dirty := c.reader.GetDirtyByTable(c.tid)
+	dirty := c.reader.GetDirtyByTable(c.tableID)
 	for _, dirtySeg := range dirty.Segs {
 		if seg, err = tbl.GetSegmentByID(dirtySeg.Sig); err != nil {
 			return err
@@ -80,7 +102,7 @@ func (c *LogtailCollector) collectUserTbl() (err error) {
 	return nil
 }
 
-func (c *LogtailCollector) collectCatalogDB() error {
+func (c *BoundTableOperator) processDatabases() error {
 	if !c.reader.HasCatalogChanges() {
 		return nil
 	}
@@ -97,7 +119,7 @@ func (c *LogtailCollector) collectCatalogDB() error {
 	return nil
 }
 
-func (c *LogtailCollector) collectCatalogTbl() error {
+func (c *BoundTableOperator) processTables() error {
 	if !c.reader.HasCatalogChanges() {
 		return nil
 	}
