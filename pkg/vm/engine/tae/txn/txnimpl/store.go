@@ -551,6 +551,10 @@ func (store *txnStore) PrepareRollback() error {
 
 func (store *txnStore) GetLSN() uint64 { return store.cmdMgr.lsn }
 
+func (store *txnStore) HasAnyTableDataChanges() bool {
+	return len(store.dirtyMemo.tableChanges) > 0
+}
+
 func (store *txnStore) HasTableDataChanges(tableID uint64) bool {
 	_, changed := store.dirtyMemo.tableChanges[tableID]
 	return changed

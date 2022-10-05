@@ -44,9 +44,8 @@ func (v *LogtailReader) GetDirty() DirtySegs {
 	var blkSet map[uint64]struct{}
 	var exist bool
 	f := func(txn txnif.AsyncTxn) (moveOn bool) {
-		store := txn.GetStore()
-		if store.HasTableDataChanges(v.tid) {
-			pointSet := store.GetTableDirtyPoints(v.tid)
+		if txn.GetStore().HasTableDataChanges(v.tid) {
+			pointSet := txn.GetStore().GetTableDirtyPoints(v.tid)
 			for dirty := range pointSet {
 				if dirty.BlkID == 0 {
 					// a segment operation
