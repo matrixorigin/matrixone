@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package db
+package logtail
 
 import (
 	"encoding/binary"
@@ -26,19 +26,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnimpl"
-)
-
-type CollectMode = int
-
-const (
-	// changes for mo_databases
-	CollectModeDB CollectMode = iota + 1
-	// changes for mo_tables
-	CollectModeTbl
-	// changes for mo_columns
-	CollectModeCol
-	// changes for user tables
-	CollectModeSegAndBlk
 )
 
 // LogtailCollector holds a read only reader, knows how to iter entry.
@@ -140,35 +127,6 @@ func (c *LogtailCollector) collectCatalogTbl() error {
 	return nil
 }
 
-const (
-	blkMetaAttrBlockID    = "block_id"
-	blkMetaAttrEntryState = "entry_state"
-	blkMetaAttrCreateAt   = "create_at"
-	blkMetaAttrDeleteAt   = "delete_at"
-	blkMetaAttrMetaLoc    = "meta_loc"
-	blkMetaAttrDeltaLoc   = "delta_loc"
-)
-
-var (
-	// for blk meta response
-	blkMetaSchema *catalog.Schema
-	delSchema     *catalog.Schema
-)
-
-func init() {
-	blkMetaSchema = catalog.NewEmptySchema("blkMeta")
-	blkMetaSchema.AppendCol(blkMetaAttrBlockID, types.T_uint64.ToType())
-	blkMetaSchema.AppendCol(blkMetaAttrEntryState, types.T_bool.ToType()) // 0: Nonappendable 1: appendable
-	blkMetaSchema.AppendCol(blkMetaAttrCreateAt, types.T_TS.ToType())
-	blkMetaSchema.AppendCol(blkMetaAttrDeleteAt, types.T_TS.ToType())
-	blkMetaSchema.AppendCol(blkMetaAttrMetaLoc, types.T_varchar.ToType())
-	blkMetaSchema.AppendCol(blkMetaAttrDeltaLoc, types.T_varchar.ToType())
-	blkMetaSchema.Finalize(true) // no phyaddr column
-
-	// empty schema, no finalize, makeRespBatchFromSchema will add necessary colunms
-	delSchema = catalog.NewEmptySchema("del")
-}
-
 type RespBuilder interface {
 	EntryVisitor
 	BuildResp() (api.SyncLogTailResp, error)
@@ -214,7 +172,7 @@ func NewCatalogLogtailRespBuilder(mode CollectMode, ckp string, start, end types
 	case CollectModeCol:
 		b.insBatch = makeRespBatchFromSchema(catalog.SystemColumnSchema)
 	}
-	b.delBatch = makeRespBatchFromSchema(delSchema)
+	b.delBatch = makeRespBatchFromSchema(DelSchema)
 
 	return b
 }
@@ -227,7 +185,7 @@ func (b *CatalogLogtailRespBuilder) VisitDB(entry *catalog.DBEntry) error {
 		dbNode := node.(*catalog.DBMVCCNode)
 		if dbNode.HasDropped() {
 			// delScehma is empty, it will just fill rowid / commit ts / abort
-			catalogEntry2Batch(b.delBatch, entry, delSchema, txnimpl.FillDBRow, u64ToRowID(entry.GetID()), dbNode.GetEnd(), dbNode.IsAborted())
+			catalogEntry2Batch(b.delBatch, entry, DelSchema, txnimpl.FillDBRow, u64ToRowID(entry.GetID()), dbNode.GetEnd(), dbNode.IsAborted())
 		} else {
 			catalogEntry2Batch(b.insBatch, entry, catalog.SystemDBSchema, txnimpl.FillDBRow, u64ToRowID(entry.GetID()), dbNode.GetEnd(), dbNode.IsAborted())
 		}
@@ -266,7 +224,7 @@ func (b *CatalogLogtailRespBuilder) VisitTbl(entry *catalog.TableEntry) error {
 			}
 		} else {
 			if tblNode.HasDropped() {
-				catalogEntry2Batch(b.delBatch, entry, delSchema, txnimpl.FillTableRow, u64ToRowID(entry.GetID()), tblNode.GetEnd(), tblNode.IsAborted())
+				catalogEntry2Batch(b.delBatch, entry, DelSchema, txnimpl.FillTableRow, u64ToRowID(entry.GetID()), tblNode.GetEnd(), tblNode.IsAborted())
 			} else {
 				catalogEntry2Batch(b.insBatch, entry, catalog.SystemTableSchema, txnimpl.FillTableRow, u64ToRowID(entry.GetID()), tblNode.GetEnd(), tblNode.IsAborted())
 			}
@@ -427,9 +385,9 @@ func NewTableLogtailRespBuilder(ckp string, start, end types.TS, tbl *catalog.Ta
 	b.tname = schema.Name
 
 	b.dataInsBatch = makeRespBatchFromSchema(schema)
-	b.dataDelBatch = makeRespBatchFromSchema(delSchema)
-	b.blkMetaInsBatch = makeRespBatchFromSchema(blkMetaSchema)
-	b.blkMetaDelBatch = makeRespBatchFromSchema(delSchema)
+	b.dataDelBatch = makeRespBatchFromSchema(DelSchema)
+	b.blkMetaInsBatch = makeRespBatchFromSchema(BlkMetaSchema)
+	b.blkMetaDelBatch = makeRespBatchFromSchema(DelSchema)
 	return b
 }
 
@@ -534,49 +492,4 @@ func (b *TableLogtailRespBuilder) BuildResp() (api.SyncLogTailResp, error) {
 		CkpLocation: b.checkpoint,
 		Commands:    entries,
 	}, nil
-}
-
-func LogtailHandler(db *DB, req api.SyncLogTailReq) (api.SyncLogTailResp, error) {
-	start := types.BuildTS(req.CnHave.PhysicalTime, req.CnHave.LogicalTime)
-	end := types.BuildTS(req.CnWant.PhysicalTime, req.CnWant.LogicalTime)
-	did, tid := req.Table.DbId, req.Table.TbId
-	verifiedCheckpoint := ""
-	// TODO
-	// verifiedCheckpoint, start, end = db.CheckpointMgr.check(start, end)
-
-	// get a collector with a read only reader for txns
-	collector := db.LogtailMgr.GetLogtailCollector(start, end, did, tid)
-
-	var mode CollectMode
-	switch tid {
-	case pkgcatalog.MO_DATABASE_ID:
-		mode = CollectModeDB
-	case pkgcatalog.MO_TABLES_ID:
-		mode = CollectModeTbl
-	case pkgcatalog.MO_COLUMNS_ID:
-		mode = CollectModeCol
-	default:
-		mode = CollectModeSegAndBlk
-	}
-
-	var respBuilder RespBuilder
-
-	if mode == CollectModeSegAndBlk {
-		var tableEntry *catalog.TableEntry
-		// table logtail needs information about this table, so give it the table entry.
-		if db, err := db.Catalog.GetDatabaseByID(did); err != nil {
-			return api.SyncLogTailResp{}, err
-		} else if tableEntry, err = db.GetTableEntryByID(tid); err != nil {
-			return api.SyncLogTailResp{}, err
-		}
-		respBuilder = NewTableLogtailRespBuilder(verifiedCheckpoint, start, end, tableEntry)
-	} else {
-		respBuilder = NewCatalogLogtailRespBuilder(mode, verifiedCheckpoint, start, end)
-	}
-
-	collector.BindCollectEnv(mode, db.Catalog, respBuilder)
-	if err := collector.Collect(); err != nil {
-		return api.SyncLogTailResp{}, err
-	}
-	return respBuilder.BuildResp()
 }
