@@ -14,6 +14,8 @@
 
 package common
 
+import "fmt"
+
 type Tree struct {
 	Tables map[uint64]*TableTree
 }
@@ -50,9 +52,17 @@ func NewSegmentTree(id uint64) *SegmentTree {
 	}
 }
 
+func (tree *Tree) TableCount() int               { return len(tree.Tables) }
+func (tree *Tree) GetTable(id uint64) *TableTree { return tree.Tables[id] }
+func (tree *Tree) HasTable(id uint64) bool {
+	_, found := tree.Tables[id]
+	return found
+}
+
 func (tree *Tree) AddSegment(dbID, tableID, id uint64) {
 	var table *TableTree
-	if table, exist := tree.Tables[tableID]; !exist {
+	var exist bool
+	if table, exist = tree.Tables[tableID]; !exist {
 		table = NewTableTree(dbID, tableID)
 		tree.Tables[tableID] = table
 	}
@@ -62,6 +72,20 @@ func (tree *Tree) AddSegment(dbID, tableID, id uint64) {
 func (tree *Tree) AddBlock(dbID, tableID, segID, id uint64) {
 	tree.AddSegment(dbID, tableID, segID)
 	tree.Tables[tableID].AddBlock(segID, id)
+}
+
+func (tree *Tree) Merge(ot *Tree) {
+	if ot == nil {
+		return
+	}
+	for _, ott := range ot.Tables {
+		t, found := tree.Tables[ott.ID]
+		if !found {
+			t = NewTableTree(ott.DbID, ott.ID)
+			tree.Tables[ott.ID] = t
+		}
+		t.Merge(ott)
+	}
 }
 
 func (ttree *TableTree) AddSegment(id uint64) {
@@ -75,8 +99,33 @@ func (ttree *TableTree) AddBlock(segID, id uint64) {
 	ttree.Segs[segID].AddBlock(id)
 }
 
+func (ttree *TableTree) Merge(ot *TableTree) {
+	if ot == nil {
+		return
+	}
+	if ot.ID != ttree.ID {
+		panic(fmt.Sprintf("Cannot merge 2 different table tree: %d, %d", ttree.ID, ot.ID))
+	}
+	for _, seg := range ot.Segs {
+		ttree.AddSegment(seg.ID)
+		ttree.Segs[seg.ID].Merge(seg)
+	}
+}
+
 func (stree *SegmentTree) AddBlock(id uint64) {
 	if _, exist := stree.Blks[id]; !exist {
 		stree.Blks[id] = true
+	}
+}
+
+func (stree *SegmentTree) Merge(ot *SegmentTree) {
+	if ot == nil {
+		return
+	}
+	if ot.ID != stree.ID {
+		panic(fmt.Sprintf("Cannot merge 2 different seg tree: %d, %d", stree.ID, ot.ID))
+	}
+	for id, _ := range ot.Blks {
+		stree.AddBlock(id)
 	}
 }

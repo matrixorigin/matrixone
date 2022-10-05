@@ -49,16 +49,8 @@ func (v *LogtailReader) GetDirtyByTable(dbID, id uint64) (tree *common.TableTree
 			moveOn = true
 			return
 		}
-		set := txn.GetStore().GetTableDirtyPoints(id)
-		for point := range set {
-			// a segment operation
-			if point.BlkID == 0 {
-				tree.AddSegment(point.SegID)
-			} else {
-				// merge the dirty block
-				tree.AddBlock(point.SegID, point.BlkID)
-			}
-		}
+		txnTree := txn.GetStore().GetDirtyTableByID(id)
+		tree.Merge(txnTree)
 		moveOn = true
 		return
 	}
