@@ -67,7 +67,7 @@
 
 typedef struct modec_ctxt_t { 
     int32_t ec;         /* error code */
-};
+} modec_ctxt_t;
 
 /* Decimal execution context info */
 #define DECL_INIT_CTXT          \
@@ -75,9 +75,13 @@ typedef struct modec_ctxt_t {
     decCtxt.ec = 0;             \
     (void)0
 
+#define DEC64_NDIGITS 17
+#define DEC128_NDIGITS 36
 
-typedef modec64_t uint64_t;
-typedef modec128_t __uint128_t; 
+typedef uint64_t modec64_t;
+typedef struct modec128_t {
+    uint64_t u64[2];
+} modec128_t; 
 
 /* 
  * string read/write buf.  
@@ -91,7 +95,7 @@ typedef modec128_t __uint128_t;
 
 typedef struct modec64_upacked_t {
     int8_t sign;        // sign, +/- 1
-    int8_t ndigits;     // number of decimal digits, 0-17
+    uint8_t ndigits;     // number of decimal digits, 0-17
     uint32_t intp[2];   // after unpack, each base 1B digits can be
                         // stored in 30 bits, we use 32.
     uint32_t frac[2];   // base 1b of frac part.
@@ -103,7 +107,7 @@ typedef struct modec64_upacked_t {
 
 typedef struct modec128_upacked_t {
     int8_t sign;        // sign, +/- 1
-    int8_t ndigits;     // number of decimal digits 0-36
+    uint8_t ndigits;     // number of decimal digits 0-36
     uint32_t intp[4];   // after unpack, each base 1B digits can be
                         // stored in 30 bits, we use 32.
     uint32_t frac[4];   // base 1b of frac part.
