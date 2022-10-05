@@ -17,7 +17,7 @@ package index
 import (
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
+	// "github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 )
 
@@ -51,13 +51,9 @@ type BatchResp struct {
 
 type SecondaryIndex interface {
 	Insert(key any, offset uint32) (err error)
-	BatchInsert(keys *KeysCtx, startRow uint32, upsert bool) (err error)
+	BatchInsert(keys *KeysCtx, startRow uint32) (err error)
 	Delete(key any) (old uint32, err error)
-	Search(key any) (uint32, error)
-	Contains(key any) bool
-	ContainsAny(keysCtx *KeysCtx, rowmask *roaring.Bitmap) bool
-	HasDeleteFrom(key any, fromTs types.TS) bool
-	IsKeyDeleted(key any, ts types.TS) (deleted bool, existed bool)
+	Search(key any) ([]uint32, error)
 	String() string
 	Size() int
 }

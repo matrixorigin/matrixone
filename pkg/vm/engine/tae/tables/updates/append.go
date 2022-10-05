@@ -155,8 +155,8 @@ func (node *AppendNode) PrepareCommit() error {
 }
 
 func (node *AppendNode) ApplyCommit(index *wal.Index) error {
-	node.Lock()
-	defer node.Unlock()
+	node.mvcc.Lock()
+	defer node.mvcc.Unlock()
 	if node.IsCommittedLocked() {
 		panic("AppendNode | ApplyCommit | LogicErr")
 	}

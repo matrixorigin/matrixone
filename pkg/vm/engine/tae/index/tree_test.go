@@ -27,13 +27,12 @@ import (
 func TestARTIndexNumeric(t *testing.T) {
 	testutils.EnsureNoLeak(t)
 	typ := types.Type{Oid: types.T_int32}
-	idx := NewSimpleARTMap(typ, nil)
+	idx := NewSimpleARTMap(typ)
 
-	var res bool
 	var err error
-	var row uint32
-	res = idx.Contains(int32(0))
-	require.False(t, res)
+	var rows []uint32
+	_, err = idx.Search(int32(0))
+	require.Error(t, err)
 
 	var vecs []containers.Vector
 	for i := 0; i < 10; i++ {
@@ -43,43 +42,34 @@ func TestARTIndexNumeric(t *testing.T) {
 	}
 
 	_, err = idx.Search(int32(55))
-	require.ErrorIs(t, err, ErrNotFound)
-
-	_, err = idx.Delete(int32(55))
-	require.ErrorIs(t, err, ErrNotFound)
+	require.Error(t, err)
 
 	ctx := new(KeysCtx)
 	ctx.Count = 100
 	ctx.Keys = vecs[0]
-	err = idx.BatchInsert(ctx, uint32(0), false)
+	err = idx.BatchInsert(ctx, uint32(0))
 	require.NoError(t, err)
 
-	row, err = idx.Search(int32(55))
+	rows, err = idx.Search(int32(55))
 	require.NoError(t, err)
-	require.Equal(t, uint32(55), row)
+	require.Equal(t, uint32(55), rows[0])
 
 	_, err = idx.Search(int32(100))
-	require.ErrorIs(t, err, ErrNotFound)
-
-	_, err = idx.Delete(int32(55))
-	require.NoError(t, err)
-
-	_, err = idx.Search(int32(55))
 	require.ErrorIs(t, err, ErrNotFound)
 
 	ctx = new(KeysCtx)
 	ctx.Count = 100
 	ctx.Keys = vecs[0]
-	err = idx.BatchInsert(ctx, uint32(100), false)
-	require.ErrorIs(t, err, ErrDuplicate)
+	err = idx.BatchInsert(ctx, uint32(100))
+	require.NoError(t, err)
 
 	ctx.Keys = vecs[1]
-	err = idx.BatchInsert(ctx, uint32(100), false)
+	err = idx.BatchInsert(ctx, uint32(100))
 	require.NoError(t, err)
 
-	row, err = idx.Search(int32(123))
+	rows, err = idx.Search(int32(123))
 	require.NoError(t, err)
-	require.Equal(t, uint32(123), row)
+	require.Equal(t, uint32(123), rows[0])
 
 	_, err = idx.Search(int32(233))
 	require.ErrorIs(t, err, ErrNotFound)
@@ -87,22 +77,21 @@ func TestARTIndexNumeric(t *testing.T) {
 	err = idx.Insert(int32(55), uint32(55))
 	require.NoError(t, err)
 
-	row, err = idx.Search(int32(55))
+	rows, err = idx.Search(int32(55))
 	require.NoError(t, err)
-	require.Equal(t, uint32(55), row)
+	require.Equal(t, uint32(55), rows[0])
 
 }
 
 func TestArtIndexString(t *testing.T) {
 	testutils.EnsureNoLeak(t)
 	typ := types.Type{Oid: types.T_varchar}
-	idx := NewSimpleARTMap(typ, nil)
+	idx := NewSimpleARTMap(typ)
 
-	var res bool
 	var err error
-	var row uint32
-	res = idx.Contains([]byte(strconv.Itoa(0)))
-	require.False(t, res)
+	var rows []uint32
+	_, err = idx.Search([]byte(strconv.Itoa(0)))
+	require.Error(t, err)
 
 	var vecs []containers.Vector
 	for i := 0; i < 10; i++ {
@@ -114,39 +103,30 @@ func TestArtIndexString(t *testing.T) {
 	_, err = idx.Search([]byte(strconv.Itoa(55)))
 	require.ErrorIs(t, err, ErrNotFound)
 
-	_, err = idx.Delete([]byte(strconv.Itoa(55)))
-	require.ErrorIs(t, err, ErrNotFound)
-
 	ctx := new(KeysCtx)
 	ctx.Keys = vecs[0]
 	ctx.Count = 100
-	err = idx.BatchInsert(ctx, uint32(0), false)
+	err = idx.BatchInsert(ctx, uint32(0))
 	require.NoError(t, err)
 	t.Log(idx.String())
 
-	row, err = idx.Search([]byte(strconv.Itoa(55)))
+	rows, err = idx.Search([]byte(strconv.Itoa(55)))
 	require.NoError(t, err)
-	require.Equal(t, uint32(55), row)
+	require.Equal(t, uint32(55), rows[0])
 
 	_, err = idx.Search([]byte(strconv.Itoa(100)))
 	require.ErrorIs(t, err, ErrNotFound)
 
-	_, err = idx.Delete([]byte(strconv.Itoa(55)))
+	err = idx.BatchInsert(ctx, uint32(100))
 	require.NoError(t, err)
-
-	_, err = idx.Search([]byte(strconv.Itoa(55)))
-	require.ErrorIs(t, err, ErrNotFound)
-
-	err = idx.BatchInsert(ctx, uint32(100), false)
-	require.ErrorIs(t, err, ErrDuplicate)
 
 	ctx.Keys = vecs[1]
-	err = idx.BatchInsert(ctx, uint32(100), false)
+	err = idx.BatchInsert(ctx, uint32(100))
 	require.NoError(t, err)
 
-	row, err = idx.Search([]byte(strconv.Itoa(123)))
+	rows, err = idx.Search([]byte(strconv.Itoa(123)))
 	require.NoError(t, err)
-	require.Equal(t, uint32(123), row)
+	require.Equal(t, uint32(123), rows[0])
 
 	_, err = idx.Search([]byte(strconv.Itoa(233)))
 	require.ErrorIs(t, err, ErrNotFound)

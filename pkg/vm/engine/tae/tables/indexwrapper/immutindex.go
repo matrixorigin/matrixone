@@ -58,7 +58,7 @@ func (index *immutableIndex) Dedup(key any) (err error) {
 	return
 }
 
-func (index *immutableIndex) BatchDedup(keys containers.Vector, rowmask *roaring.Bitmap) (keyselects *roaring.Bitmap, err error) {
+func (index *immutableIndex) BatchDedup(keys containers.Vector, skipfn func(row uint32) (err error)) (keyselects *roaring.Bitmap, err error) {
 	keyselects, exist := index.zmReader.ContainsAny(keys)
 	// 1. all keys are not in [min, max]. definitely not
 	if !exist {

@@ -55,7 +55,7 @@ type Index interface {
 	// If key is not found, return nil
 	Dedup(key any) error
 
-	BatchDedup(keys containers.Vector, rowmask *roaring.Bitmap) (keyselects *roaring.Bitmap, err error)
+	BatchDedup(keys containers.Vector, skipfn func(row uint32) (err error)) (keyselects *roaring.Bitmap, err error)
 
 	// BatchUpsert batch insert the specific keys
 	// If any deduplication, it will fetch the old value first, fill the active map with new value, insert the old value into delete map
@@ -67,7 +67,7 @@ type Index interface {
 	// If any other error happens, return error
 	// Delete the specific key from active map and then insert it into delete map
 	Delete(key any) (err error)
-	GetActiveRow(key any) (row uint32, err error)
+	GetActiveRow(key any) (row []uint32, err error)
 	// Check deletes map for specified key @ts
 	// If deleted is true, the specified key was deleted @ts
 	// If existed is false, the specified key was not found in deletes map
@@ -95,7 +95,7 @@ func (idx *defaultIndexImpl) Dedup(key any) error {
 	panic("not supported")
 }
 
-func (idx *defaultIndexImpl) BatchDedup(keys containers.Vector, rowmask *roaring.Bitmap) (keyselects *roaring.Bitmap, err error) {
+func (idx *defaultIndexImpl) BatchDedup(keys containers.Vector, skipfn func(row uint32) (err error)) (keyselects *roaring.Bitmap, err error) {
 	panic("not supported")
 }
 
@@ -107,7 +107,7 @@ func (idx *defaultIndexImpl) Delete(key any) (err error) {
 	panic("not supported")
 }
 
-func (idx *defaultIndexImpl) GetActiveRow(key any) (row uint32, err error) {
+func (idx *defaultIndexImpl) GetActiveRow(key any) (row []uint32, err error) {
 	panic("not supported")
 }
 
