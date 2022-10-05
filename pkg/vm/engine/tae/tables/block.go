@@ -766,59 +766,24 @@ func (blk *dataBlock) ABlkApplyDelete(deleted uint64, gen common.RowGen, ts type
 		return
 	}
 	// If any pk defined, update index
-	if blk.meta.GetSchema().IsSinglePK() {
-		var row uint32
-		blk.mvcc.RLock()
-		vecview := blk.node.data.Vecs[blk.meta.GetSchema().GetSingleSortKeyIdx()].GetView()
-		blk.mvcc.RUnlock()
-		blk.mvcc.Lock()
-		defer blk.mvcc.Unlock()
-		var currRow uint32
-		for gen.HasNext() {
-			row = gen.Next()
-			v := vecview.Get(int(row))
-			currRow, err = blk.pkIndex.GetActiveRow(v)
-			if err != nil || currRow == row {
-				if err = blk.pkIndex.Delete(v, ts); err != nil {
-					return
-				}
+	var row uint32
+	blk.mvcc.RLock()
+	vecview := blk.node.data.Vecs[blk.meta.GetSchema().GetSingleSortKeyIdx()].GetView()
+	blk.mvcc.RUnlock()
+	blk.mvcc.Lock()
+	defer blk.mvcc.Unlock()
+	var currRow uint32
+	for gen.HasNext() {
+		row = gen.Next()
+		v := vecview.Get(int(row))
+		currRow, err = blk.pkIndex.GetActiveRow(v)
+		if err != nil || currRow == row {
+			if err = blk.pkIndex.Delete(v, ts); err != nil {
+				return
 			}
 		}
-		blk.meta.GetSegment().GetTable().RemoveRows(deleted)
-	} else {
-		var row uint32
-		var w bytes.Buffer
-		sortKeys := blk.meta.GetSchema().SortKey
-		vals := make([]any, sortKeys.Size())
-		vecs := make([]containers.VectorView, sortKeys.Size())
-		blk.mvcc.RLock()
-		for i := range vecs {
-			vec := blk.node.data.Vecs[sortKeys.Defs[i].Idx].GetView()
-			if err != nil {
-				blk.mvcc.RUnlock()
-				return err
-			}
-			vecs[i] = vec
-		}
-		blk.mvcc.RUnlock()
-		blk.mvcc.Lock()
-		defer blk.mvcc.Unlock()
-		var currRow uint32
-		for gen.HasNext() {
-			row = gen.Next()
-			for i := range vals {
-				vals[i] = vecs[i].Get(int(row))
-			}
-			v := model.EncodeTypedVals(&w, vals...)
-			currRow, err = blk.pkIndex.GetActiveRow(v)
-			if err != nil || currRow == row {
-				if err = blk.pkIndex.Delete(v, ts); err != nil {
-					return
-				}
-			}
-		}
-		blk.meta.GetSegment().GetTable().RemoveRows(deleted)
 	}
+	blk.meta.GetSegment().GetTable().RemoveRows(deleted)
 	return
 }
 
@@ -906,13 +871,6 @@ func (blk *dataBlock) CollectChangesInRange(startTs, endTs types.TS) (view *mode
 	view.DeleteMask, view.DeleteLogIndexes, err = deleteChain.CollectDeletesInRange(startTs, endTs, blk.mvcc.RWMutex)
 	blk.mvcc.RUnlock()
 	return
-}
-func (blk *dataBlock) GetSortColumns(schema *catalog.Schema, data *containers.Batch) []containers.Vector {
-	vs := make([]containers.Vector, schema.GetSortKeyCnt())
-	for i := range vs {
-		vs[i] = data.Vecs[schema.SortKey.Defs[i].Idx]
-	}
-	return vs
 }
 
 func (blk *dataBlock) CollectAppendInRange(start, end types.TS) (*containers.Batch, error) {

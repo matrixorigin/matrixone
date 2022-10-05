@@ -15,9 +15,10 @@
 package txnif
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"io"
 	"sync"
+
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
 
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -194,7 +195,7 @@ type TxnStore interface {
 	BindTxn(AsyncTxn)
 	GetLSN() uint64
 
-	BatchDedup(dbId, id uint64, pks ...containers.Vector) error
+	BatchDedup(dbId, id uint64, pk containers.Vector) error
 	LogSegmentID(dbId, tid, sid uint64)
 	LogBlockID(dbId, tid, bid uint64)
 
