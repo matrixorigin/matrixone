@@ -605,7 +605,7 @@ func containersBatchToProtoBatch(batch *containers.Batch) (*api.Batch, error) {
 		Attrs: batch.Attrs,
 		Vecs:  make([]*api.Vector, len(batch.Attrs)),
 	}
-	vecs := containers.CopyToMoVectors(batch.Vecs)
+	vecs := containers.CopyToMoVecs(batch.Vecs)
 	for i, vec := range vecs {
 		apivec, err := vector.VectorToProtoVector(vec)
 		if err != nil {

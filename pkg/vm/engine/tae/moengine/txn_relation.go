@@ -47,7 +47,7 @@ func (rel *txnRelation) Write(_ context.Context, bat *batch.Batch) error {
 	taeBatch := containers.NewEmptyBatch()
 	defer taeBatch.Close()
 	for i, vec := range bat.Vecs {
-		v := containers.MOToVectorTmp(vec, allNullables[i])
+		v := containers.NewVectorWithSharedMemory(vec, allNullables[i])
 		//v := MOToVector(vec, allNullables[i])
 		taeBatch.AddVector(bat.Attrs[i], v)
 	}
@@ -66,7 +66,7 @@ func (rel *txnRelation) Update(_ context.Context, data *batch.Batch) error {
 			logutil.Warn("[Moengine]", common.OperationField("Update"),
 				common.OperandField("Col type is any"))
 		}
-		v := containers.MOToVectorTmp(vec, allNullables[idx])
+		v := containers.NewVectorWithSharedMemory(vec, allNullables[idx])
 		bat.AddVector(data.Attrs[i], v)
 	}
 	phyAddrIdx := catalog.GetAttrIdx(data.Attrs, schema.PhyAddrKey.Name)
@@ -87,7 +87,7 @@ func (rel *txnRelation) Update(_ context.Context, data *batch.Batch) error {
 }
 
 func (rel *txnRelation) DeleteByPhyAddrKeys(_ context.Context, keys *vector.Vector) error {
-	tvec := containers.MOToVectorTmp(keys, false)
+	tvec := containers.NewVectorWithSharedMemory(keys, false)
 	defer tvec.Close()
 	return rel.handle.DeleteByPhyAddrKey(tvec)
 }
@@ -102,7 +102,7 @@ func (rel *txnRelation) Delete(_ context.Context, data *vector.Vector, col strin
 		logutil.Warn("[Moengine]", common.OperationField("Delete"),
 			common.OperandField("Col type is any"))
 	}
-	vec := containers.MOToVectorTmp(data, allNullables[idx])
+	vec := containers.NewVectorWithSharedMemory(data, allNullables[idx])
 	defer vec.Close()
 	if schema.PhyAddrKey.Name == col {
 		return rel.handle.DeleteByPhyAddrKeys(vec)

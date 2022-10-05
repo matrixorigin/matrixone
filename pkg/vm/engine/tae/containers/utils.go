@@ -16,12 +16,14 @@ package containers
 
 import (
 	"bytes"
+	"strconv"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"strconv"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/stl"
 
 	"github.com/RoaringBitmap/roaring"
 	"github.com/RoaringBitmap/roaring/roaring64"
@@ -40,24 +42,17 @@ func ApplyUpdates(vec Vector, mask *roaring.Bitmap, vals map[uint32]any) {
 
 func FillBufferWithBytes(bs *Bytes, buffer *bytes.Buffer) *Bytes {
 	buffer.Reset()
-	offBuf := bs.OffsetBuf()
-	lenBuf := bs.LengthBuf()
-	dataBuf := bs.Data
-	size := len(offBuf) + len(lenBuf) + len(dataBuf)
+	size := bs.Size()
 	if buffer.Cap() < size {
 		buffer.Grow(size)
 	}
-	nbs := NewBytes()
+	nbs := stl.NewBytesWithTypeSize(bs.TypeSize)
 	buf := buffer.Bytes()[:size]
-	copy(buf, dataBuf)
-	nbs.Data = buf[:len(dataBuf)]
-	if len(offBuf) == 0 {
-		return nbs
-	}
-	copy(buf[len(dataBuf):], offBuf)
-	copy(buf[len(dataBuf)+len(offBuf):], lenBuf)
-	nbs.SetOffsetBuf(buf[len(dataBuf) : len(dataBuf)+len(offBuf)])
-	nbs.SetLengthBuf(buf[len(dataBuf)+len(offBuf) : size])
+	copy(buf, bs.StorageBuf())
+	copy(buf[bs.StorageSize():], bs.HeaderBuf())
+
+	nbs.SetStorageBuf(buf[:bs.StorageSize()])
+	nbs.SetHeaderBuf(buf[bs.StorageSize():bs.Size()])
 	return nbs
 }
 
@@ -79,296 +74,145 @@ func CloneWithBuffer(src Vector, buffer *bytes.Buffer, allocator ...MemAllocator
 	return
 }
 
-func CopyToMoVector(vec Vector) *movec.Vector {
-	return VectorsToMO(vec)
+func UnmarshalToMoVec(vec Vector) (mov *movec.Vector) {
+	bs := vec.Bytes()
+
+	if vec.GetType().IsVarlen() {
+		mov, _ = movec.BuildVarlenaVector(vec.GetType(), bs.Header, bs.Storage)
+	} else {
+		mov = movec.NewWithData(vec.GetType(), bs.StorageBuf(), nil, &nulls.Nulls{})
+	}
+	if vec.HasNull() {
+		mov.Nsp.Np = bitmap.New(vec.Length())
+		mov.Nsp.Np.AddMany(vec.NullMask().ToArray())
+	}
+	mov.SetOriginal(true)
+
+	return
 }
 
-// XXX VectorsToMo and CopyToMoVector.   The old impl. will move
-// vec.Data to movec.Data and keeps on sharing.   This is way too
-// fragile and error prone.
-//
-// Not just copy it.   Until profiler says I need to work harder.
-func VectorsToMO(vec Vector) *movec.Vector {
-	mov := movec.NewOriginal(vec.GetType())
-	data := vec.Data()
+func CopyToMoVec(vec Vector) (mov *movec.Vector) {
+	bs := vec.Bytes()
 	typ := vec.GetType()
-	mov.Typ = typ
+
+	if vec.GetType().IsVarlen() {
+		header := make([]types.Varlena, len(bs.Header))
+		copy(header, bs.Header)
+		storage := make([]byte, len(bs.Storage))
+		if len(storage) > 0 {
+			copy(storage, bs.Storage)
+		}
+		mov, _ = movec.BuildVarlenaVector(typ, header, storage)
+	} else if vec.GetType().IsTuple() {
+		mov = movec.NewOriginal(vec.GetType())
+		cnt := types.DecodeInt32(bs.Storage)
+		if cnt != 0 {
+			if err := types.Decode(bs.Storage, &mov.Col); err != nil {
+				panic(any(err))
+			}
+		}
+	} else {
+		mov = movec.NewOriginal(vec.GetType())
+		movec.AppendFixedRaw(mov, bs.Storage)
+	}
+
 	if vec.HasNull() {
 		mov.Nsp.Np = bitmap.New(vec.Length())
 		mov.Nsp.Np.AddMany(vec.NullMask().ToArray())
 		//mov.Nsp.Np = vec.NullMask()
 	}
 
-	if vec.GetType().IsVarlen() {
-		bs := vec.Bytes()
-		nbs := len(bs.Offset)
-		bsv := make([][]byte, nbs)
-		for i := 0; i < nbs; i++ {
-			bsv[i] = bs.Data[bs.Offset[i] : bs.Offset[i]+bs.Length[i]]
-		}
-		movec.AppendBytes(mov, bsv, nil)
-	} else if vec.GetType().IsTuple() {
-		cnt := types.DecodeInt32(data)
-		if cnt != 0 {
-			if err := types.Decode(data, &mov.Col); err != nil {
-				panic(any(err))
-			}
-		}
-	} else {
-		movec.AppendFixedRaw(mov, data)
-	}
-
 	return mov
 }
 
-func CopyToMoVectors(vecs []Vector) []*movec.Vector {
+// No copy
+func UnmarshalToMoVecs(vecs []Vector) []*movec.Vector {
 	movecs := make([]*movec.Vector, len(vecs))
 	for i := range movecs {
-		movecs[i] = CopyToMoVector(vecs[i])
+		movecs[i] = UnmarshalToMoVec(vecs[i])
 	}
 	return movecs
 }
 
-func MOToVector(v *movec.Vector, nullable bool) Vector {
-	vec := MakeVector(v.Typ, nullable)
-	bs := NewBytes()
-	if v.Typ.IsVarlen() {
-		vbs := movec.GetBytesVectorValues(v)
-		for _, v := range vbs {
-			bs.Append(v)
-		}
-	} else {
-		switch v.Typ.Oid {
-		case types.T_bool:
-			bs.Data = types.EncodeFixedSlice(v.Col.([]bool), 1)
-		case types.T_int8:
-			bs.Data = types.EncodeFixedSlice(v.Col.([]int8), 1)
-		case types.T_int16:
-			bs.Data = types.EncodeFixedSlice(v.Col.([]int16), 2)
-		case types.T_int32:
-			bs.Data = types.EncodeFixedSlice(v.Col.([]int32), 4)
-		case types.T_int64:
-			bs.Data = types.EncodeFixedSlice(v.Col.([]int64), 8)
-		case types.T_uint8:
-			bs.Data = types.EncodeFixedSlice(v.Col.([]uint8), 1)
-		case types.T_uint16:
-			bs.Data = types.EncodeFixedSlice(v.Col.([]uint16), 2)
-		case types.T_uint32:
-			bs.Data = types.EncodeFixedSlice(v.Col.([]uint32), 4)
-		case types.T_uint64:
-			bs.Data = types.EncodeFixedSlice(v.Col.([]uint64), 8)
-		case types.T_float32:
-			bs.Data = types.EncodeFixedSlice(v.Col.([]float32), 4)
-		case types.T_float64:
-			bs.Data = types.EncodeFixedSlice(v.Col.([]float64), 8)
-		case types.T_date:
-			bs.Data = types.EncodeFixedSlice(v.Col.([]types.Date), 4)
-		case types.T_datetime:
-			bs.Data = types.EncodeFixedSlice(v.Col.([]types.Datetime), 8)
-		case types.T_timestamp:
-			bs.Data = types.EncodeFixedSlice(v.Col.([]types.Timestamp), 8)
-		case types.T_decimal64:
-			bs.Data = types.EncodeFixedSlice(v.Col.([]types.Decimal64), 8)
-		case types.T_decimal128:
-			bs.Data = types.EncodeFixedSlice(v.Col.([]types.Decimal128), 16)
-		case types.T_uuid:
-			bs.Data = types.EncodeFixedSlice(v.Col.([]types.Uuid), 16)
-		case types.T_TS:
-			bs.Data = types.EncodeFixedSlice(v.Col.([]types.TS), types.TxnTsSize)
-		case types.T_Rowid:
-			bs.Data = types.EncodeFixedSlice(v.Col.([]types.Rowid), types.RowidSize)
-
-		default:
-			panic(any(moerr.NewInternalError("%s not supported", v.Typ.String())))
-		}
+// Deep copy
+func CopyToMoVecs(vecs []Vector) []*movec.Vector {
+	movecs := make([]*movec.Vector, len(vecs))
+	for i := range movecs {
+		movecs[i] = CopyToMoVec(vecs[i])
 	}
-	if v.Nsp.Np != nil {
-		np := &roaring64.Bitmap{}
-		np.AddMany(v.Nsp.Np.ToArray())
-		logutil.Infof("sie : %d", np.GetCardinality())
-		vec.ResetWithData(bs, np)
-		return vec
-	}
-	vec.ResetWithData(bs, nil)
-	return vec
+	return movecs
 }
 
-func MOToVectorTmp(v *movec.Vector, nullable bool) Vector {
+func movecToBytes[T types.FixedSizeT](v *movec.Vector) *Bytes {
+	bs := stl.NewFixedTypeBytes[T]()
+	if v.Col == nil || len(movec.MustTCols[T](v)) == 0 {
+		bs.Storage = make([]byte, v.Length()*v.GetType().TypeSize())
+		logutil.Warn("[Moengine]", common.OperationField("movecToBytes"),
+			common.OperandField("Col length is 0"))
+	} else {
+		bs.Storage = types.EncodeFixedSlice(movec.MustTCols[T](v), v.GetType().TypeSize())
+	}
+	return bs
+}
+
+func NewVectorWithSharedMemory(v *movec.Vector, nullable bool) Vector {
 	vec := MakeVector(v.Typ, nullable)
-	bs := NewBytes()
+	var bs *Bytes
+
 	switch v.Typ.Oid {
 	case types.T_bool:
-		if v.Col == nil || len(v.Col.([]bool)) == 0 {
-			bs.Data = make([]byte, v.Length())
-			logutil.Warn("[Moengine]", common.OperationField("MOToVector"),
-				common.OperandField("Col length is 0"))
-		} else {
-			bs.Data = types.EncodeFixedSlice(v.Col.([]bool), 1)
-		}
+		bs = movecToBytes[bool](v)
 	case types.T_int8:
-		if v.Col == nil || len(v.Col.([]int8)) == 0 {
-			bs.Data = make([]byte, v.Length())
-			logutil.Warn("[Moengine]", common.OperationField("MOToVector"),
-				common.OperandField("Col length is 0"))
-		} else {
-			bs.Data = types.EncodeFixedSlice(v.Col.([]int8), 1)
-		}
+		bs = movecToBytes[int8](v)
 	case types.T_int16:
-		if v.Col == nil || len(v.Col.([]int16)) == 0 {
-			bs.Data = make([]byte, v.Length()*2)
-			logutil.Warn("[Moengine]", common.OperationField("MOToVector"),
-				common.OperandField("Col length is 0"))
-		} else {
-			bs.Data = types.EncodeFixedSlice(v.Col.([]int16), 2)
-		}
+		bs = movecToBytes[int16](v)
 	case types.T_int32:
-		if v.Col == nil || len(v.Col.([]int32)) == 0 {
-			bs.Data = make([]byte, v.Length()*4)
-			logutil.Warn("[Moengine]", common.OperationField("MOToVector"),
-				common.OperandField("Col length is 0"))
-		} else {
-			bs.Data = types.EncodeFixedSlice(v.Col.([]int32), 4)
-		}
+		bs = movecToBytes[int32](v)
 	case types.T_int64:
-		if v.Col == nil || len(v.Col.([]int64)) == 0 {
-			bs.Data = make([]byte, v.Length()*8)
-			logutil.Warn("[Moengine]", common.OperationField("MOToVector"),
-				common.OperandField("Col length is 0"))
-		} else {
-			bs.Data = types.EncodeFixedSlice(v.Col.([]int64), 8)
-		}
+		bs = movecToBytes[int64](v)
 	case types.T_uint8:
-		if v.Col == nil || len(v.Col.([]uint8)) == 0 {
-			bs.Data = make([]byte, v.Length())
-			logutil.Warn("[Moengine]", common.OperationField("MOToVector"),
-				common.OperandField("Col length is 0"))
-		} else {
-			bs.Data = types.EncodeFixedSlice(v.Col.([]uint8), 1)
-		}
+		bs = movecToBytes[uint8](v)
 	case types.T_uint16:
-		if v.Col == nil || len(v.Col.([]uint16)) == 0 {
-			bs.Data = make([]byte, v.Length()*2)
-			logutil.Warn("[Moengine]", common.OperationField("MOToVector"),
-				common.OperandField("Col length is 0"))
-		} else {
-			bs.Data = types.EncodeFixedSlice(v.Col.([]uint16), 2)
-		}
+		bs = movecToBytes[uint16](v)
 	case types.T_uint32:
-		if v.Col == nil || len(v.Col.([]uint32)) == 0 {
-			bs.Data = make([]byte, v.Length()*4)
-			logutil.Warn("[Moengine]", common.OperationField("MOToVector"),
-				common.OperandField("Col length is 0"))
-		} else {
-			bs.Data = types.EncodeFixedSlice(v.Col.([]uint32), 4)
-		}
+		bs = movecToBytes[uint32](v)
 	case types.T_uint64:
-		if v.Col == nil || len(v.Col.([]uint64)) == 0 {
-			bs.Data = make([]byte, v.Length()*8)
-			logutil.Warn("[Moengine]", common.OperationField("MOToVector"),
-				common.OperandField("Col length is 0"))
-		} else {
-			bs.Data = types.EncodeFixedSlice(v.Col.([]uint64), 8)
-		}
+		bs = movecToBytes[uint64](v)
 	case types.T_float32:
-		if v.Col == nil || len(v.Col.([]float32)) == 0 {
-			bs.Data = make([]byte, v.Length()*4)
-			logutil.Warn("[Moengine]", common.OperationField("MOToVector"),
-				common.OperandField("Col length is 0"))
-		} else {
-			bs.Data = types.EncodeFixedSlice(v.Col.([]float32), 4)
-		}
+		bs = movecToBytes[float32](v)
 	case types.T_float64:
-		if v.Col == nil || len(v.Col.([]float64)) == 0 {
-			bs.Data = make([]byte, v.Length()*8)
-			logutil.Warn("[Moengine]", common.OperationField("MOToVector"),
-				common.OperandField("Col length is 0"))
-		} else {
-			bs.Data = types.EncodeFixedSlice(v.Col.([]float64), 8)
-		}
+		bs = movecToBytes[float64](v)
 	case types.T_date:
-		if v.Col == nil || len(v.Col.([]types.Date)) == 0 {
-			bs.Data = make([]byte, v.Length()*4)
-			logutil.Warn("[Moengine]", common.OperationField("MOToVector"),
-				common.OperandField("Col length is 0"))
-		} else {
-			bs.Data = types.EncodeFixedSlice(v.Col.([]types.Date), 4)
-		}
+		bs = movecToBytes[types.Date](v)
 	case types.T_datetime:
-		if v.Col == nil || len(v.Col.([]types.Datetime)) == 0 {
-			bs.Data = make([]byte, v.Length()*8)
-			logutil.Warn("[Moengine]", common.OperationField("MOToVector"),
-				common.OperandField("Col length is 0"))
-		} else {
-			bs.Data = types.EncodeFixedSlice(v.Col.([]types.Datetime), 8)
-		}
+		bs = movecToBytes[types.Datetime](v)
 	case types.T_timestamp:
-		if v.Col == nil || len(v.Col.([]types.Timestamp)) == 0 {
-			bs.Data = make([]byte, v.Length()*8)
-			logutil.Warn("[Moengine]", common.OperationField("MOToVector"),
-				common.OperandField("Col length is 0"))
-		} else {
-			bs.Data = types.EncodeFixedSlice(v.Col.([]types.Timestamp), 8)
-		}
+		bs = movecToBytes[types.Timestamp](v)
 	case types.T_decimal64:
-		if v.Col == nil || len(v.Col.([]types.Decimal64)) == 0 {
-			bs.Data = make([]byte, v.Length()*8)
-			logutil.Warn("[Moengine]", common.OperationField("MOToVector"),
-				common.OperandField("Col length is 0"))
-		} else {
-			bs.Data = types.EncodeFixedSlice(v.Col.([]types.Decimal64), 8)
-		}
+		bs = movecToBytes[types.Decimal64](v)
 	case types.T_decimal128:
-		if v.Col == nil || len(v.Col.([]types.Decimal128)) == 0 {
-			bs.Data = make([]byte, v.Length()*16)
-			logutil.Warn("[Moengine]", common.OperationField("MOToVector"),
-				common.OperandField("Col length is 0"))
-		} else {
-			bs.Data = types.EncodeFixedSlice(v.Col.([]types.Decimal128), 16)
-		}
+		bs = movecToBytes[types.Decimal128](v)
 	case types.T_uuid:
-		if v.Col == nil || len(v.Col.([]types.Uuid)) == 0 {
-			bs.Data = make([]byte, v.Length()*16)
-			logutil.Warn("[Moengine]", common.OperationField("MOToVector"),
-				common.OperandField("Col length is 0"))
-		} else {
-			bs.Data = types.EncodeFixedSlice(v.Col.([]types.Uuid), 16)
-		}
+		bs = movecToBytes[types.Uuid](v)
 	case types.T_TS:
-		if v.Col == nil || len(v.Col.([]types.TS)) == 0 {
-			bs.Data = make([]byte, v.Length()*types.TxnTsSize)
-			logutil.Warn("[Moengine]", common.OperationField("MOToVector"),
-				common.OperandField("Col length is 0"))
-		} else {
-			bs.Data = types.EncodeFixedSlice(v.Col.([]types.TS), types.TxnTsSize)
-		}
+		bs = movecToBytes[types.TS](v)
 	case types.T_Rowid:
-		if v.Col == nil || len(v.Col.([]types.Rowid)) == 0 {
-			bs.Data = make([]byte, v.Length()*types.RowidSize)
-			logutil.Warn("[Moengine]", common.OperationField("MOToVector"),
-				common.OperandField("Col length is 0"))
-		} else {
-			bs.Data = types.EncodeFixedSlice(v.Col.([]types.Rowid), types.RowidSize)
-		}
+		bs = movecToBytes[types.Rowid](v)
 	case types.T_char, types.T_varchar, types.T_json, types.T_blob:
-		if v.Col == nil {
-			bs.Data = make([]byte, 0)
-		} else {
-			vbs := movec.GetBytesVectorValues(v)
-			for _, v := range vbs {
-				bs.Append(v)
-			}
+		bs = stl.NewBytesWithTypeSize(-types.VarlenaSize)
+		if v.Col != nil {
+			bs.Header, bs.Storage = movec.MustVarlenaRawData(v)
 		}
 	default:
 		panic(any(moerr.NewInternalError("%s not supported", v.Typ.String())))
 	}
+	var np *roaring64.Bitmap
 	if v.Nsp.Np != nil {
-		np := &roaring64.Bitmap{}
+		np = roaring64.New()
 		np.AddMany(v.Nsp.Np.ToArray())
 		logutil.Infof("sie : %d", np.GetCardinality())
-		vec.ResetWithData(bs, np)
-		return vec
 	}
-	vec.ResetWithData(bs, nil)
+	vec.ResetWithData(bs, np)
 	return vec
 }
 
