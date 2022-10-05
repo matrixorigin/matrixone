@@ -16,6 +16,7 @@ package logtail
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/tidwall/btree"
 )
@@ -41,8 +42,8 @@ type LogtailReader struct {
 // 	return
 // }
 
-func (v *LogtailReader) GetDirtyByTable(dbID, id uint64) (tree *TableTree) {
-	tree = newTableTree(dbID, id)
+func (v *LogtailReader) GetDirtyByTable(dbID, id uint64) (tree *common.TableTree) {
+	tree = common.NewTableTree(dbID, id)
 	readOp := func(txn txnif.AsyncTxn) (moveOn bool) {
 		if !txn.GetStore().HasTableDataChanges(id) {
 			moveOn = true
