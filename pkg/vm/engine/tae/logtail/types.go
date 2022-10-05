@@ -61,6 +61,10 @@ func init() {
 	DelSchema = catalog.NewEmptySchema("del")
 }
 
+type Tree struct {
+	Tables map[uint64]*TableTree
+}
+
 type TableTree struct {
 	DbID uint64
 	ID   uint64
@@ -70,6 +74,12 @@ type TableTree struct {
 type SegmentTree struct {
 	ID   uint64
 	Blks map[uint64]bool
+}
+
+func newTree() *Tree {
+	return &Tree{
+		Tables: make(map[uint64]*TableTree),
+	}
 }
 
 func newTableTree(dbID, id uint64) *TableTree {
@@ -85,6 +95,20 @@ func newSegmentTree(id uint64) *SegmentTree {
 		ID:   id,
 		Blks: make(map[uint64]bool),
 	}
+}
+
+func (tree *Tree) AddSegment(dbID, tableID, id uint64) {
+	var table *TableTree
+	if table, exist := tree.Tables[tableID]; !exist {
+		table = newTableTree(dbID, tableID)
+		tree.Tables[tableID] = table
+	}
+	table.AddSegment(id)
+}
+
+func (tree *Tree) AddBlock(dbID, tableID, segID, id uint64) {
+	tree.AddSegment(dbID, tableID, segID)
+	tree.Tables[tableID].AddBlock(segID, id)
 }
 
 func (ttree *TableTree) AddSegment(id uint64) {

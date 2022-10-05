@@ -26,12 +26,24 @@ type BaseOperator struct {
 }
 
 type BoundOperator struct {
-	BaseOperator
+	*BaseOperator
 	visitor catalog.Processor
 }
 
+func NewBoundOperator(catalog *catalog.Catalog,
+	reader *LogtailReader,
+	visitor catalog.Processor) *BoundOperator {
+	return &BoundOperator{
+		BaseOperator: &BaseOperator{
+			catalog: catalog,
+			reader:  reader,
+		},
+		visitor: visitor,
+	}
+}
+
 type BoundTableOperator struct {
-	BoundOperator
+	*BoundOperator
 	dbID    uint64
 	tableID uint64
 	scope   Scope
@@ -43,16 +55,10 @@ func NewBoundTableOperator(catalog *catalog.Catalog,
 	dbID, tableID uint64,
 	visitor catalog.Processor) *BoundTableOperator {
 	return &BoundTableOperator{
-		BoundOperator: BoundOperator{
-			BaseOperator: BaseOperator{
-				catalog: catalog,
-				reader:  reader,
-			},
-			visitor: visitor,
-		},
-		tableID: tableID,
-		dbID:    dbID,
-		scope:   scope,
+		BoundOperator: NewBoundOperator(catalog, reader, visitor),
+		tableID:       tableID,
+		dbID:          dbID,
+		scope:         scope,
 	}
 }
 

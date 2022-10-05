@@ -27,6 +27,20 @@ type LogtailReader struct {
 	activeView []txnif.AsyncTxn         // read only active page
 }
 
+// func (v *LogtailReader) GetDirty() (tree *DBTree) {
+// 	tree = newTree()
+
+// 	readOp := func(txn txnif.AsyncTxn) (moveOn bool) {
+// 		if !txn.GetStore().HasAnyTableDataChanges() {
+// 			moveOn = true
+// 			return
+// 		}
+// 		return
+// 	}
+// 	v.readTxnInBetween(v.start, v.end, readOp)
+// 	return
+// }
+
 func (v *LogtailReader) GetDirtyByTable(dbID, id uint64) (tree *TableTree) {
 	tree = newTableTree(dbID, id)
 	readOp := func(txn txnif.AsyncTxn) (moveOn bool) {
@@ -49,7 +63,7 @@ func (v *LogtailReader) GetDirtyByTable(dbID, id uint64) (tree *TableTree) {
 	}
 	v.readTxnInBetween(v.start, v.end, readOp)
 
-	return tree
+	return
 }
 
 func (v *LogtailReader) HasCatalogChanges() bool {
