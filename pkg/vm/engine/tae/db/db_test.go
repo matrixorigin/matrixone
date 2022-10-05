@@ -2520,6 +2520,7 @@ func TestCompactBlk(t *testing.T) {
 		assert.NoError(t, err)
 		err = task.OnExec()
 		assert.NoError(t, err)
+		assert.Nil(t, txn.Commit())
 
 		{
 			v := getSingleSortKeyValue(bat, schema, 2)
@@ -2551,9 +2552,6 @@ func TestCompactBlk(t *testing.T) {
 			_ = rel.UpdateByFilter(filter, 0, int8(111))
 			assert.Nil(t, txn2.Commit())
 		}
-
-		err = txn.Commit()
-		assert.NoError(t, err)
 	}
 
 	_, rel = tae.getRelation()
@@ -2562,6 +2560,118 @@ func TestCompactBlk(t *testing.T) {
 
 	v := getSingleSortKeyValue(bat, schema, 3)
 	filter := handle.NewEQFilter(v)
+	val, err := rel.GetValueByFilter(filter, 0)
+	assert.Nil(t, err)
+	assert.Equal(t, int8(111), val)
+
+	v = getSingleSortKeyValue(bat, schema, 2)
+	filter = handle.NewEQFilter(v)
+	_, _, err = rel.GetByFilter(filter)
+	assert.NotNil(t, err)
+
+	v = getSingleSortKeyValue(bat, schema, 4)
+	filter = handle.NewEQFilter(v)
+	_, _, err = rel.GetByFilter(filter)
+	assert.NotNil(t, err)
+
+	tae.restart()
+	assert.Equal(t, int64(2), rel.Rows())
+}
+
+func TestCompactBlk2(t *testing.T) {
+	testutils.EnsureNoLeak(t)
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := newTestEngine(t, opts)
+	defer tae.Close()
+	schema := catalog.MockSchemaAll(3, 1)
+	schema.BlockMaxRows = 5
+	schema.SegmentMaxBlocks = 2
+	tae.bindSchema(schema)
+	bat := catalog.MockBatch(schema, 5)
+	bats := bat.Split(5)
+	defer bat.Close()
+
+	tae.createRelAndAppend(bats[2], true)
+
+	txn, rel := tae.getRelation()
+	_ = rel.Append(bats[1])
+	assert.Nil(t, txn.Commit())
+
+	txn, rel = tae.getRelation()
+	_ = rel.Append(bats[3])
+	assert.Nil(t, txn.Commit())
+
+	txn, rel = tae.getRelation()
+	_ = rel.Append(bats[4])
+	assert.Nil(t, txn.Commit())
+
+	txn, rel = tae.getRelation()
+	_ = rel.Append(bats[0])
+	assert.Nil(t, txn.Commit())
+	v := getSingleSortKeyValue(bat, schema, 1)
+	t.Logf("v is %v**********", v)
+	filter := handle.NewEQFilter(v)
+	txn2, rel1 := tae.getRelation()
+	t.Log("********before delete******************")
+	checkAllColRowsByScan(t, rel1, 5, true)
+	_ = rel1.DeleteByFilter(filter)
+	assert.Nil(t, txn2.Commit())
+
+	_, rel = tae.getRelation()
+	checkAllColRowsByScan(t, rel, 4, true)
+	checkAllColRowsByScan(t, rel1, 5, true)
+
+	{
+		t.Log("************compact************")
+		txn, rel0 := tae.getRelation()
+		it := rel0.MakeBlockIt()
+		blk := it.GetBlock()
+		meta := blk.GetMeta().(*catalog.BlockEntry)
+		task, err := jobs.NewCompactBlockTask(nil, txn, meta, tae.DB.Scheduler)
+		assert.NoError(t, err)
+		err = task.OnExec()
+		assert.NoError(t, err)
+		assert.Nil(t, txn.Commit())
+
+		{
+			v := getSingleSortKeyValue(bat, schema, 2)
+			t.Logf("v is %v**********", v)
+			filter := handle.NewEQFilter(v)
+			txn2, rel := tae.getRelation()
+			t.Log("********before delete******************")
+			checkAllColRowsByScan(t, rel, 4, true)
+			_ = rel.DeleteByFilter(filter)
+			assert.Nil(t, txn2.Commit())
+		}
+		{
+			v := getSingleSortKeyValue(bat, schema, 4)
+			t.Logf("v is %v**********", v)
+			filter := handle.NewEQFilter(v)
+			txn2, rel := tae.getRelation()
+			t.Log("********before delete******************")
+			checkAllColRowsByScan(t, rel, 3, true)
+			_ = rel.DeleteByFilter(filter)
+			assert.Nil(t, txn2.Commit())
+		}
+		{
+			v := getSingleSortKeyValue(bat, schema, 3)
+			t.Logf("v is %v**********", v)
+			filter := handle.NewEQFilter(v)
+			txn2, rel := tae.getRelation()
+			t.Log("********before delete******************")
+			checkAllColRowsByScan(t, rel, 2, true)
+			_ = rel.UpdateByFilter(filter, 0, int8(111))
+			assert.Nil(t, txn2.Commit())
+		}
+		checkAllColRowsByScan(t, rel1, 5, true)
+	}
+
+	_, rel = tae.getRelation()
+	checkAllColRowsByScan(t, rel, 2, true)
+	assert.Equal(t, int64(2), rel.Rows())
+
+	v = getSingleSortKeyValue(bat, schema, 3)
+	filter = handle.NewEQFilter(v)
 	val, err := rel.GetValueByFilter(filter, 0)
 	assert.Nil(t, err)
 	assert.Equal(t, int8(111), val)

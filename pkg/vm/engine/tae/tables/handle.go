@@ -32,7 +32,7 @@ func newHandle(table *dataTable, block *dataBlock) *tableHandle {
 		table: table,
 		block: block,
 	}
-	if block != nil {
+	if block != nil && !block.IsFlushed() {
 		h.appender, _ = block.MakeAppender()
 	}
 	return h
@@ -74,8 +74,8 @@ func (h *tableHandle) GetAppender() (appender data.BlockAppender, err error) {
 		}
 		blkEntry := segEntry.LastAppendableBlock()
 		if blkEntry == nil {
-			blk := segEntry.GetAppendableBlock()
-			h.SetAppender(blk.AsCommonID())
+			//blk := segEntry.GetAppendableBlock()
+			//h.SetAppender(blk.AsCommonID())
 			err = moerr.NewAppendableSegmentNotFound()
 			return
 		}
@@ -88,7 +88,7 @@ func (h *tableHandle) GetAppender() (appender data.BlockAppender, err error) {
 	h.block.meta.RLock()
 	dropped := h.block.meta.HasDropped()
 	h.block.meta.RUnlock()
-	if !h.appender.IsAppendable() || !h.block.IsAppendable() || dropped {
+	if !h.appender.IsAppendable() || !h.block.IsAppendable() || dropped || h.block.IsFlushed() {
 		return h.ThrowAppenderAndErr()
 	}
 	h.block.Ref()

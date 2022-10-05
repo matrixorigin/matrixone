@@ -162,6 +162,8 @@ func (n *MVCCHandle) CheckNotDeleted(start, end uint32, ts types.TS) error {
 }
 
 func (n *MVCCHandle) CreateDeleteNode(txn txnif.AsyncTxn, deleteType handle.DeleteType) txnif.DeleteNode {
+	n.deletes.Lock()
+	defer n.deletes.Unlock()
 	return n.deletes.AddNodeLocked(txn, deleteType)
 }
 

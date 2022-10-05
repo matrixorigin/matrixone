@@ -435,8 +435,6 @@ func (tbl *txnTable) GetByFilter(filter *handle.Filter) (id *common.ID, offset u
 			continue
 		}
 		offset, err = h.GetByFilter(filter)
-		// block := h.GetMeta().(*catalog.BlockEntry).GetBlockData()
-		// offset, err = block.GetByFilter(tbl.store.txn, filter)
 		if err == nil {
 			id = h.Fingerprint()
 			break

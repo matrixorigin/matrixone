@@ -194,6 +194,8 @@ func (blk *dataBlock) GetMaxVisibleTS() types.TS {
 }
 
 func (blk *dataBlock) Close() {
+	blk.Lock()
+	defer blk.Unlock()
 	if blk.node != nil {
 		_ = blk.node.Close()
 		blk.node = nil
@@ -372,7 +374,7 @@ func (blk *dataBlock) GetTotalChanges() int {
 }
 
 func (blk *dataBlock) Rows(txn txnif.AsyncTxn, coarse bool) int {
-	if blk.meta.IsAppendable() {
+	if blk.meta.IsAppendable() && !blk.IsFlushed() {
 		rows := int(blk.node.Rows(txn, coarse))
 		return rows
 	}
@@ -465,7 +467,7 @@ func (blk *dataBlock) GetColumnDataById(
 	txn txnif.AsyncTxn,
 	colIdx int,
 	buffer *bytes.Buffer) (view *model.ColumnView, err error) {
-	if blk.meta.IsAppendable() && blk.meta.GetMetaLoc() == "" {
+	if blk.meta.IsAppendable() {
 		return blk.ResolveABlkColumnMVCCData(txn.GetStartTS(), colIdx, buffer, false)
 	}
 	view, err = blk.ResolveColumnMVCCData(txn.GetStartTS(), colIdx, buffer)
@@ -505,21 +507,24 @@ func (blk *dataBlock) ResolveABlkColumnMVCCData(
 		maxRow  uint32
 		visible bool
 	)
-	blk.mvcc.RLock()
-	if ts.GreaterEq(blk.GetMaxVisibleTS()) && blk.mvcc.AppendCommitted() {
-		visible = true
-		maxRow = blk.node.rows
-	} else {
-		maxRow, visible, err = blk.mvcc.GetMaxVisibleRowLocked(ts)
-	}
-	blk.mvcc.RUnlock()
-	if !visible || err != nil {
-		return
-	}
-
 	view = model.NewColumnView(ts, colIdx)
 	var data containers.Vector
-	data, err = blk.node.GetColumnDataCopy(0, maxRow, colIdx, buffer)
+	if !blk.IsFlushed() {
+		blk.mvcc.RLock()
+		if ts.GreaterEq(blk.GetMaxVisibleTS()) && blk.mvcc.AppendCommitted() {
+			visible = true
+			maxRow = blk.node.rows
+		} else {
+			maxRow, visible, err = blk.mvcc.GetMaxVisibleRowLocked(ts)
+		}
+		blk.mvcc.RUnlock()
+		if !visible || err != nil {
+			return
+		}
+		data, err = blk.node.GetColumnDataCopy(0, maxRow, colIdx, buffer)
+	} else {
+		data, err = blk.LoadColumnData(colIdx, buffer)
+	}
 	if err != nil {
 		return
 	}
@@ -537,6 +542,13 @@ func (blk *dataBlock) ResolveABlkColumnMVCCData(
 	err = view.Eval(true)
 
 	return
+}
+
+func (blk *dataBlock) IsFlushed() bool {
+	if blk.meta.GetMetaLoc() == "" {
+		return false
+	}
+	return true
 }
 
 func (blk *dataBlock) Update(txn txnif.AsyncTxn, row uint32, colIdx uint16, v any) (node txnif.UpdateNode, err error) {
@@ -743,7 +755,7 @@ func (blk *dataBlock) GetByFilter(txn txnif.AsyncTxn, filter *handle.Filter) (of
 		return
 	}
 	ts := txn.GetStartTS()
-	if blk.meta.IsAppendable() {
+	if blk.meta.IsAppendable() && !blk.IsFlushed() {
 		return blk.ablkGetByFilter(ts, filter)
 	}
 	return blk.blkGetByFilter(ts, filter)
@@ -823,7 +835,7 @@ func (blk *dataBlock) ABlkApplyDelete(deleted uint64, gen common.RowGen, ts type
 }
 
 func (blk *dataBlock) BatchDedup(txn txnif.AsyncTxn, pks containers.Vector, rowmask *roaring.Bitmap) (err error) {
-	if blk.meta.IsAppendable() {
+	if blk.meta.IsAppendable() && !blk.IsFlushed() {
 		ts := txn.GetStartTS()
 		blk.mvcc.RLock()
 		defer blk.mvcc.RUnlock()

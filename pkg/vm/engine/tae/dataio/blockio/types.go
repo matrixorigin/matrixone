@@ -131,9 +131,12 @@ func DecodeMetaLoc(metaLoc string) (string, objectio.Extent, uint32) {
 	if err != nil {
 		panic(any(err))
 	}
-	rows, err := strconv.ParseUint(info[2], 10, 32)
-	if err != nil {
-		panic(any(err))
+	rows := uint64(0)
+	if len(info) > 2 {
+		rows, err = strconv.ParseUint(info[2], 10, 32)
+		if err != nil {
+			panic(any(err))
+		}
 	}
 	extent := objectio.NewExtent(uint32(offset), uint32(size), uint32(osize))
 	return name, extent, uint32(rows)

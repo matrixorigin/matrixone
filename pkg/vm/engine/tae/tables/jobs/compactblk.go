@@ -16,6 +16,7 @@ package jobs
 
 import (
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"time"
 
 	"github.com/RoaringBitmap/roaring"
@@ -134,11 +135,6 @@ func (task *compactBlockTask) Execute() (err error) {
 		return
 	}
 	defer preparer.Close()
-	preparerABlk, err := task.PrepareData(aBlkMeta.MakeKey())
-	if err != nil {
-		return
-	}
-	defer preparerABlk.Close()
 	if err = seg.SoftDeleteBlock(task.compacted.Fingerprint().BlockID); err != nil {
 		return err
 	}
@@ -171,55 +167,48 @@ func (task *compactBlockTask) Execute() (err error) {
 		return err
 	}
 
-	/*id := &common.ID{
-		TableID:   aBlkMeta.GetSegment().GetTable().GetID(),
-		SegmentID: aBlkMeta.GetSegment().GetID(),
-		BlockID:   aBlkMeta.GetID(),
-	}
-	name := blockio.EncodeSegName(id)
-	writer := blockio.NewWriter(aBlkMeta.GetSegment().GetSegmentData().GetSegmentFile().GetFs(), name)
-	_, err = writer.WriteBlock(data)
-	if err != nil {
-		return err
-	}*/
 	// write ablock
-	data, err := aBlkData.CollectAppendInRange(aBlkMeta.GetCreatedAt(), task.txn.GetStartTS())
-	if err != nil {
-		return
-	}
-	deletes, err := aBlkData.CollectDeleteInRange(aBlkMeta.GetCreatedAt(), task.txn.GetStartTS())
-	if err != nil {
-		return
-	}
-	ablockTask := NewFlushABlkTask(
-		tasks.WaitableCtx,
-		aBlockFile,
-		task.txn.GetStartTS(),
-		aBlkMeta,
-		data,
-		deletes,
-	)
-	if err = task.scheduler.Schedule(ablockTask); err != nil {
-		return
-	}
-	if err = ablockTask.WaitDone(); err != nil {
-		return
-	}
-	metaLocABlk := blockio.EncodeBlkMetaLoc(aBlockFile.Fingerprint(),
-		ablockTask.file.GetMeta().GetExtent(),
-		uint32(data.Length()))
-	if err = task.compacted.UpdateMetaLoc(metaLocABlk); err != nil {
-		return err
-	}
-	if deletes != nil {
-		deltaLocABlk := blockio.EncodeBlkDeltaLoc(aBlockFile.Fingerprint(),
-			ablockTask.file.GetDelta().GetExtent())
-		if err = task.compacted.UpdateDeltaLoc(deltaLocABlk); err != nil {
+	if aBlkMeta.IsAppendable() {
+		var data *containers.Batch
+		var deletes *containers.Batch
+		data, err = aBlkData.CollectAppendInRange(types.TS{}, task.txn.GetStartTS())
+		if err != nil {
+			return
+		}
+		deletes, err = aBlkData.CollectDeleteInRange(aBlkMeta.GetCreatedAt(), task.txn.GetStartTS())
+		if err != nil {
+			return
+		}
+		ablockTask := NewFlushABlkTask(
+			tasks.WaitableCtx,
+			aBlockFile,
+			task.txn.GetStartTS(),
+			aBlkMeta,
+			data,
+			deletes,
+		)
+		if err = task.scheduler.Schedule(ablockTask); err != nil {
+			return
+		}
+		if err = ablockTask.WaitDone(); err != nil {
+			return
+		}
+		metaLocABlk := blockio.EncodeBlkMetaLoc(aBlockFile.Fingerprint(),
+			ablockTask.file.GetMeta().GetExtent(),
+			uint32(data.Length()))
+		if err = task.compacted.UpdateMetaLoc(metaLocABlk); err != nil {
 			return err
 		}
-	}
-	if err = aBlkData.ReplayIndex(); err != nil {
-		return err
+		if deletes != nil {
+			deltaLocABlk := blockio.EncodeBlkDeltaLoc(aBlockFile.Fingerprint(),
+				ablockTask.file.GetDelta().GetExtent())
+			if err = task.compacted.UpdateDeltaLoc(deltaLocABlk); err != nil {
+				return err
+			}
+		}
+		if err = aBlkData.ReplayIndex(); err != nil {
+			return err
+		}
 	}
 	task.created = newBlk
 	table := task.meta.GetSegment().GetTable()
@@ -227,7 +216,9 @@ func (task *compactBlockTask) Execute() (err error) {
 	if err = task.txn.LogTxnEntry(table.GetDB().ID, table.ID, txnEntry, []*common.ID{task.compacted.Fingerprint()}); err != nil {
 		return
 	}
-	aBlkData.Close()
+	if aBlkMeta.IsAppendable() {
+		aBlkData.Close()
+	}
 	logutil.Info("[Done]",
 		common.OperationField(task.Name()),
 		common.AnyField("created", task.created.Fingerprint().BlockString()),

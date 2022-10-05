@@ -183,7 +183,7 @@ func TestGCTable(t *testing.T) {
 	assert.Equal(t, 1, len(names))
 	blocksnames = getBlockFileNames(tae)
 	t.Log(names)
-	assert.Equal(t, 1, len(blocksnames))
+	assert.Equal(t, 2, len(blocksnames))
 	printCheckpointStats(t, tae)
 
 	compactBlocks(t, 0, tae, "db", schema, true)

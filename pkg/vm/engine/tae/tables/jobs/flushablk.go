@@ -58,7 +58,7 @@ func (task *flushABlkTask) Execute() error {
 	if err != nil {
 		return err
 	}
-	if err = BuildBlockIndex(task.file.GetWriter(), block, task.meta, task.data); err != nil {
+	if err = BuildBlockIndex(task.file.GetWriter(), block, task.meta, task.data, false); err != nil {
 		return err
 	}
 
