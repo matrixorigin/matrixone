@@ -60,7 +60,7 @@ func (p *PhysicalRow[K, V]) readVersion(now Time, tx *Transaction) (*Version[V],
 
 	for i := len(p.Versions) - 1; i >= 0; i-- {
 		value := p.Versions[i]
-		if value.Visible(now, tx.ID) {
+		if value.Visible(now, tx.ID, tx.IsolationPolicy) {
 			switch tx.IsolationPolicy.Read {
 			case ReadCommitted:
 			case ReadSnapshot:
@@ -75,28 +75,13 @@ func (p *PhysicalRow[K, V]) readVersion(now Time, tx *Transaction) (*Version[V],
 				}
 			}
 			return &value, nil
-		} else if value.BornTx.State.Load() == Committed && value.BornTime.Before(tx.BeginTime) {
-			// this a way to solve #5388, maybe this is not a good way,
-			// I'm doing a research on postgresql to sovle it, but before
-			// I find out it, I think we need to fix this bug first, don't expose
-			// it to our user although this way is not good
-			if value.LockTx == nil {
-				continue
-			}
-			// if value is insert before tx and it's committed, and it's deleted after tx
-			// for Snapshot Isolation it's also visible
-			if value.LockTx.ID != tx.ID && value.LockTx.State.Load() == Committed && value.LockTime.After(tx.BeginTime) {
-				if tx.IsolationPolicy.Read == ReadSnapshot {
-					return &value, nil
-				}
-			}
 		}
 	}
 
 	return nil, sql.ErrNoRows
 }
 
-func (v *Version[T]) Visible(now Time, txID string) bool {
+func (v *Version[T]) Visible(now Time, txID string, policy IsolationPolicy) bool {
 
 	// the following algorithm is from https://momjian.us/main/writings/pgsql/mvcc.pdf
 	// "[Mike Olson] says 17 march 1993: the tests in this routine are correct; if you think they’re not, you’re wrongand you should think about it again. i know, it happened to me."
@@ -131,6 +116,12 @@ func (v *Version[T]) Visible(now Time, txID string) bool {
 		if v.LockTx.ID != txID && v.LockTx.State.Load() != Committed {
 			return true
 		}
+		// deleted by another committed tx after the read time
+		if v.LockTx.ID != txID && v.LockTx.State.Load() == Committed && v.LockTime.After(now) {
+			if policy == SnapshotIsolation {
+				return true
+			}
+		}
 	}
 
 	return false
@@ -152,7 +143,7 @@ func (p *PhysicalRow[K, V]) Insert(
 
 	for i := len(p.Versions) - 1; i >= 0; i-- {
 		value := p.Versions[i]
-		if value.Visible(now, tx.ID) {
+		if value.Visible(now, tx.ID, tx.IsolationPolicy) {
 			if value.LockTx != nil && value.LockTx.State.Load() != Aborted {
 				// locked by active or committed tx
 				return nil, nil, moerr.NewTxnWriteConflict("%s %s", tx.ID, value.LockTx.ID)
@@ -192,7 +183,7 @@ func (p *PhysicalRow[K, V]) Delete(
 
 	for i := len(p.Versions) - 1; i >= 0; i-- {
 		value := p.Versions[i]
-		if value.Visible(now, tx.ID) {
+		if value.Visible(now, tx.ID, tx.IsolationPolicy) {
 			if value.LockTx != nil && value.LockTx.State.Load() != Aborted {
 				return nil, nil, moerr.NewTxnWriteConflict("%s %s", tx.ID, value.LockTx.ID)
 			}
@@ -229,7 +220,7 @@ func (p *PhysicalRow[K, V]) Update(
 
 	for i := len(p.Versions) - 1; i >= 0; i-- {
 		value := p.Versions[i]
-		if value.Visible(now, tx.ID) {
+		if value.Visible(now, tx.ID, tx.IsolationPolicy) {
 
 			if value.LockTx != nil && value.LockTx.State.Load() != Aborted {
 				return nil, nil, moerr.NewTxnWriteConflict("%s %s", tx.ID, value.LockTx.ID)
