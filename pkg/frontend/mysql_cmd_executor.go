@@ -2010,6 +2010,9 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		case *tree.Deallocate:
 			selfHandle = true
 			err = mce.handleDeallocate(st)
+			if err != nil {
+				goto handleFailed
+			}
 			deallocatePlan, err = buildPlan(requestCtx, ses, mce.ses.txnCompileCtx, st)
 			if err != nil {
 				goto handleFailed
