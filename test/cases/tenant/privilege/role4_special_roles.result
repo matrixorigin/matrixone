@@ -1,0 +1,19 @@
+drop role if exists rolex;
+create role rolex;
+drop user if exists userx;
+create user userx identified by '111';
+grant moadmin to root,dump;
+grant moadmin to userx;
+internal error: the role moadmin can not be granted to non administration user userx
+grant moadmin to rolex;
+internal error: the role moadmin can not be granted to the other role rolex
+grant rolex to moadmin;
+internal error: the role rolex can not be granted to the role moadmin
+grant public to root,dump;
+grant public to userx;
+grant public to rolex;
+internal error: the role public can not be granted to the other role rolex
+grant rolex to public;
+internal error: the role rolex can not be granted to the role public
+drop role rolex;
+drop user userx;

@@ -2536,11 +2536,18 @@ func doGrantRole(ctx context.Context, ses *Session, gr *tree.GrantRole) error {
 						goto handleFailed
 					}
 				}
+			} else if strings.ToLower(from.name) == publicRoleName && to.typ == roleType {
+				err = moerr.NewInternalError("the role %s can not be granted to the other role %s", from.name, to.name)
+				goto handleFailed
 			}
 
-			//check Grant roleX to moadmin(accountadmin)
 			if to.typ == roleType {
+				//check Grant roleX to moadmin(accountadmin)
 				if account.IsNameOfAdminRoles(to.name) {
+					err = moerr.NewInternalError("the role %s can not be granted to the role %s", from.name, to.name)
+					goto handleFailed
+				} else if strings.ToLower(to.name) == publicRoleName {
+					//check Grant roleX to public
 					err = moerr.NewInternalError("the role %s can not be granted to the role %s", from.name, to.name)
 					goto handleFailed
 				}
