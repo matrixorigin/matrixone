@@ -757,10 +757,10 @@ func (blk *dataBlock) onCheckConflictAndDedup(rowmask *roaring.Bitmap, ts types.
 			txn.GetTxnState(true)
 			blk.mvcc.RLock()
 		}
-		if err = appendnode.CheckConflict(ts); err != nil {
-			return
-		}
 		if appendnode.IsAborted() || !appendnode.IsVisible(ts) {
+			if err = appendnode.CheckConflict(ts); err != nil {
+				return
+			}
 			return nil
 		}
 		deleteNode := blk.GetDeleteNodeByRow(row).(*updates.DeleteNode)
@@ -773,11 +773,14 @@ func (blk *dataBlock) onCheckConflictAndDedup(rowmask *roaring.Bitmap, ts types.
 			txn.GetTxnState(true)
 			blk.mvcc.RLock()
 		}
-		if err = deleteNode.CheckConflict(ts); err != nil {
-			return
-		}
 		if deleteNode.IsAborted() || !deleteNode.IsVisible(ts) {
 			return moerr.NewDuplicate()
+		}
+		if err = appendnode.CheckConflict(ts); err != nil {
+			return
+		}
+		if err = deleteNode.CheckConflict(ts); err != nil {
+			return
 		}
 		return nil
 	}
