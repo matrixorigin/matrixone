@@ -28,7 +28,6 @@ import (
 	"github.com/RoaringBitmap/roaring"
 	"github.com/RoaringBitmap/roaring/roaring64"
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
-	mobat "github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	movec "github.com/matrixorigin/matrixone/pkg/container/vector"
 )
@@ -144,8 +143,8 @@ func CopyToMoVecs(vecs []Vector) []*movec.Vector {
 	return movecs
 }
 
-func CopyToMoBatch(bat *Batch) *mobat.Batch {
-	ret := mobat.New(false, bat.Attrs)
+func CopyToMoBatch(bat *Batch) *batch.Batch {
+	ret := batch.New(false, bat.Attrs)
 	for i := range bat.Vecs {
 		ret.Vecs[i] = CopyToMoVec(bat.Vecs[i])
 	}
