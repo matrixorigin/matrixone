@@ -2292,6 +2292,7 @@ func doRevokeRole(ctx context.Context, ses *Session, rr *tree.RevokeRole) error 
 		return err
 	}
 	pu := ses.Pu
+	account := ses.GetTenantInfo()
 	guestMMu := guest.New(pu.SV.GuestMmuLimitation, pu.HostMmu)
 	bh := NewBackgroundHandler(ctx, guestMMu, pu.Mempool, pu)
 	defer bh.Close()
@@ -2357,6 +2358,30 @@ func doRevokeRole(ctx context.Context, ses *Session, rr *tree.RevokeRole) error 
 			if to == nil { //Under "IF EXISTS"
 				continue
 			}
+			if account.IsNameOfAdminRoles(from.name) {
+				//check Revoke moadmin from root,dump,userX
+				//check Revoke accountadmin from root,dump,userX
+				//check Revoke moadmin(accountadmin) from roleX
+				err = moerr.NewInternalError("the role %s can not be revoked", from.name)
+				goto handleFailed
+			} else if strings.ToLower(from.name) == publicRoleName {
+				//
+				err = moerr.NewInternalError("the role %s can not be revoked", from.name)
+				goto handleFailed
+			}
+
+			if to.typ == roleType {
+				//check Revoke roleX from moadmin(accountadmin)
+				if account.IsNameOfAdminRoles(to.name) {
+					err = moerr.NewInternalError("the role %s can not be revoked from the role %s", from.name, to.name)
+					goto handleFailed
+				} else if strings.ToLower(to.name) == publicRoleName {
+					//check Revoke roleX from public
+					err = moerr.NewInternalError("the role %s can not be revoked from the role %s", from.name, to.name)
+					goto handleFailed
+				}
+			}
+
 			sql := ""
 			if to.typ == roleType {
 				//revoke from role
