@@ -35,5 +35,12 @@ revoke public from rolex;
 internal error: the role public can not be revoked
 revoke rolex from public;
 internal error: the role rolex can not be revoked from the role public
+grant show databases,create database on account * to moadmin;
+internal error: the privilege can not be granted to the role moadmin
+revoke show databases,create database on account * from moadmin;
+internal error: the privilege can not be revoked from the role moadmin
+revoke connect on account * from public;
+internal error: the privilege connect can not be revoked from the role public
+revoke show databases on account * from public;
 drop role rolex;
 drop user userx;

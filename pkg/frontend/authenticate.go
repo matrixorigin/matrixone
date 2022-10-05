@@ -1869,6 +1869,7 @@ func doRevokePrivilege(ctx context.Context, ses *Session, rp *tree.RevokePrivile
 	}
 
 	pu := ses.Pu
+	account := ses.GetTenantInfo()
 	guestMMu := guest.New(pu.SV.GuestMmuLimitation, pu.HostMmu)
 	bh := NewBackgroundHandler(ctx, guestMMu, pu.Mempool, pu)
 	defer bh.Close()
@@ -1885,6 +1886,11 @@ func doRevokePrivilege(ctx context.Context, ses *Session, rp *tree.RevokePrivile
 	//handle "IF EXISTS"
 	//step 1: check roles. exists or not.
 	for i, user := range rp.Roles {
+		//check Revoke privilege on xxx yyy from moadmin(accountadmin)
+		if account.IsNameOfAdminRoles(user.UserName) {
+			err = moerr.NewInternalError("the privilege can not be revoked from the role %s", user.UserName)
+			goto handleFailed
+		}
 		sql := getSqlForRoleIdOfRole(user.UserName)
 		vr, err = verifyRoleFunc(ctx, bh, sql, user.UserName, roleType)
 		if err != nil {
@@ -1930,6 +1936,10 @@ func doRevokePrivilege(ctx context.Context, ses *Session, rp *tree.RevokePrivile
 		for _, role := range verifiedRoles {
 			if role == nil {
 				continue
+			}
+			if privType == PrivilegeTypeConnect && strings.ToLower(role.name) == publicRoleName {
+				err = moerr.NewInternalError("the privilege %s can not be revoked from the role %s", privType, role.name)
+				goto handleFailed
 			}
 			sql := getSqlForDeleteRolePrivs(role.id, objType.String(), objId, int64(privType), privLevel.String())
 			bh.ClearExecResultSet()
@@ -2154,6 +2164,11 @@ func doGrantPrivilege(ctx context.Context, ses *Session, gp *tree.GrantPrivilege
 	}
 
 	for i, role := range gp.Roles {
+		//check Grant privilege on xxx yyy to moadmin(accountadmin)
+		if account.IsNameOfAdminRoles(role.UserName) {
+			err = moerr.NewInternalError("the privilege can not be granted to the role %s", role.UserName)
+			goto handleFailed
+		}
 		sql := getSqlForRoleIdOfRole(role.UserName)
 		bh.ClearExecResultSet()
 		err = bh.Exec(ctx, sql)

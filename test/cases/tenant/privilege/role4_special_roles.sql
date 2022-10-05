@@ -22,5 +22,9 @@ revoke public from userx;
 revoke public from rolex;
 revoke rolex from public;
 
+grant show databases,create database on account * to moadmin;
+revoke show databases,create database on account * from moadmin;
+revoke connect on account * from public;
+revoke show databases on account * from public;
 drop role rolex;
 drop user userx;
