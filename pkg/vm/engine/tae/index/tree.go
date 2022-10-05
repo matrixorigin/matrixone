@@ -38,12 +38,7 @@ func (chain *IndexMVCCChain) Insert(node uint32) {
 }
 
 func (chain *IndexMVCCChain) GetRows() []uint32 {
-	if len(chain.MVCC) == 0 {
-		return nil
-	}
-	rows := make([]uint32, len(chain.MVCC))
-	copy(rows, chain.MVCC)
-	return rows
+	return chain.MVCC
 }
 
 type simpleARTMap struct {
