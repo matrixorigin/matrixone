@@ -36,11 +36,11 @@ type LogtailCollector struct {
 	tid     uint64
 	catalog *catalog.Catalog
 	reader  *LogtailReader
-	visitor EntryVisitor
+	visitor catalog.Processor
 }
 
 // BindInfo set collect env args and these args don't affect dirty seg/blk ids
-func (c *LogtailCollector) BindCollectEnv(scope Scope, catalog *catalog.Catalog, visitor EntryVisitor) {
+func (c *LogtailCollector) BindCollectEnv(scope Scope, catalog *catalog.Catalog, visitor catalog.Processor) {
 	c.scope, c.catalog, c.visitor = scope, catalog, visitor
 }
 
@@ -75,14 +75,14 @@ func (c *LogtailCollector) collectUserTbl() (err error) {
 		if seg, err = tbl.GetSegmentByID(dirtySeg.Sig); err != nil {
 			return err
 		}
-		if err = c.visitor.VisitSeg(seg); err != nil {
+		if err = c.visitor.OnSegment(seg); err != nil {
 			return err
 		}
 		for _, blkid := range dirtySeg.Blks {
 			if blk, err = seg.GetBlockEntryByID(blkid); err != nil {
 				return err
 			}
-			if err = c.visitor.VisitBlk(blk); err != nil {
+			if err = c.visitor.OnBlock(blk); err != nil {
 				return err
 			}
 		}
@@ -100,7 +100,7 @@ func (c *LogtailCollector) collectCatalogDB() error {
 		if dbentry.IsSystemDB() {
 			continue
 		}
-		if err := c.visitor.VisitDB(dbentry); err != nil {
+		if err := c.visitor.OnDatabase(dbentry); err != nil {
 			return err
 		}
 	}
@@ -119,7 +119,7 @@ func (c *LogtailCollector) collectCatalogTbl() error {
 		}
 		tblIt := db.MakeTableIt(true)
 		for ; tblIt.Valid(); tblIt.Next() {
-			if err := c.visitor.VisitTbl(tblIt.Get().GetPayload()); err != nil {
+			if err := c.visitor.OnTable(tblIt.Get().GetPayload()); err != nil {
 				return err
 			}
 		}
@@ -128,28 +128,14 @@ func (c *LogtailCollector) collectCatalogTbl() error {
 }
 
 type RespBuilder interface {
-	EntryVisitor
+	catalog.Processor
 	BuildResp() (api.SyncLogTailResp, error)
 }
 
-type EntryVisitor interface {
-	VisitDB(entry *catalog.DBEntry) error
-	VisitTbl(entry *catalog.TableEntry) error
-	VisitSeg(entry *catalog.SegmentEntry) error
-	VisitBlk(entry *catalog.BlockEntry) error
-}
-
-type noopEntryVisitor struct{}
-
-func (v *noopEntryVisitor) VisitDB(entry *catalog.DBEntry) error       { return nil }
-func (v *noopEntryVisitor) VisitTbl(entry *catalog.TableEntry) error   { return nil }
-func (v *noopEntryVisitor) VisitSeg(entry *catalog.SegmentEntry) error { return nil }
-func (v *noopEntryVisitor) VisitBlk(entry *catalog.BlockEntry) error   { return nil }
-
 // CatalogLogtailRespBuilder knows how to make api-entry from catalog entry
-// impl EntryVisitor interface, driven by LogtailCollector
+// impl catalog.Processor interface, driven by LogtailCollector
 type CatalogLogtailRespBuilder struct {
-	noopEntryVisitor
+	*catalog.LoopProcessor
 	scope      Scope
 	start, end types.TS
 	checkpoint string
@@ -159,10 +145,11 @@ type CatalogLogtailRespBuilder struct {
 
 func NewCatalogLogtailRespBuilder(scope Scope, ckp string, start, end types.TS) *CatalogLogtailRespBuilder {
 	b := &CatalogLogtailRespBuilder{
-		scope:      scope,
-		start:      start,
-		end:        end,
-		checkpoint: ckp,
+		LoopProcessor: new(catalog.LoopProcessor),
+		scope:         scope,
+		start:         start,
+		end:           end,
+		checkpoint:    ckp,
 	}
 	switch scope {
 	case ScopeDatabases:
@@ -173,6 +160,8 @@ func NewCatalogLogtailRespBuilder(scope Scope, ckp string, start, end types.TS) 
 		b.insBatch = makeRespBatchFromSchema(catalog.SystemColumnSchema)
 	}
 	b.delBatch = makeRespBatchFromSchema(DelSchema)
+	b.DatabaseFn = b.VisitDB
+	b.TableFn = b.VisitTbl
 
 	return b
 }
@@ -195,8 +184,8 @@ func (b *CatalogLogtailRespBuilder) VisitDB(entry *catalog.DBEntry) error {
 
 func (b *CatalogLogtailRespBuilder) VisitTbl(entry *catalog.TableEntry) error {
 	entry.RLock()
-	defer entry.RUnlock()
 	mvccNodes := entry.ClonePreparedInRange(b.start, b.end)
+	entry.RUnlock()
 	for _, node := range mvccNodes {
 		tblNode := node.(*catalog.TableMVCCNode)
 		if b.scope == ScopeColumns {
@@ -360,7 +349,7 @@ func containersBatchToProtoBatch(batch *containers.Batch) (*api.Batch, error) {
 }
 
 type TableLogtailRespBuilder struct {
-	noopEntryVisitor
+	*catalog.LoopProcessor
 	start, end      types.TS
 	did, tid        uint64
 	dname, tname    string
@@ -373,10 +362,13 @@ type TableLogtailRespBuilder struct {
 
 func NewTableLogtailRespBuilder(ckp string, start, end types.TS, tbl *catalog.TableEntry) *TableLogtailRespBuilder {
 	b := &TableLogtailRespBuilder{
-		start:      start,
-		end:        end,
-		checkpoint: ckp,
+		LoopProcessor: new(catalog.LoopProcessor),
+		start:         start,
+		end:           end,
+		checkpoint:    ckp,
 	}
+	b.BlockFn = b.VisitBlk
+
 	schema := tbl.GetSchema()
 
 	b.did = tbl.GetDB().GetID()
