@@ -17,8 +17,6 @@ package objectio
 import (
 	"bytes"
 	"encoding/binary"
-
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
 )
 
 // Block is the organizational structure of a batch in objectio
@@ -33,9 +31,6 @@ type Block struct {
 	// columns is the vector in the batch
 	columns []ColumnObject
 
-	// data is the batch to be written
-	data *batch.Batch
-
 	// object is a container that can store multiple blocks,
 	// using a fileservice file storage
 	object *Object
@@ -44,15 +39,14 @@ type Block struct {
 	extent Extent
 }
 
-func NewBlock(batch *batch.Batch, object *Object) BlockObject {
+func NewBlock(colCnt uint16, object *Object) BlockObject {
 	header := BlockHeader{
-		columnCount: uint16(len(batch.Vecs)),
+		columnCount: colCnt,
 	}
 	block := &Block{
 		header:  header,
-		data:    batch,
 		object:  object,
-		columns: make([]ColumnObject, len(batch.Vecs)),
+		columns: make([]ColumnObject, colCnt),
 	}
 	for i := range block.columns {
 		block.columns[i] = NewColumnBlock(uint16(i), block.object)

@@ -38,7 +38,7 @@ const (
 
 func mockTxn() *txnbase.Txn {
 	txn := new(txnbase.Txn)
-	txn.TxnCtx = txnbase.NewTxnCtx(common.NextGlobalSeqNum(), types.NextGlobalTsForTest(), nil)
+	txn.TxnCtx = txnbase.NewTxnCtx(common.NewTxnIDAllocator().Alloc(), types.NextGlobalTsForTest(), nil)
 	return txn
 }
 
@@ -67,7 +67,7 @@ func TestColumnChain1(t *testing.T) {
 	cnt4 := 5
 	for i := 0; i < cnt1+cnt2+cnt3+cnt4; i++ {
 		txn := new(txnbase.Txn)
-		txn.TxnCtx = txnbase.NewTxnCtx(common.NextGlobalSeqNum(),
+		txn.TxnCtx = txnbase.NewTxnCtx(common.NewTxnIDAllocator().Alloc(),
 			types.NextGlobalTsForTest(), nil)
 		n := chain.AddNode(txn)
 		if (i >= cnt1 && i < cnt1+cnt2) || (i >= cnt1+cnt2+cnt3) {
@@ -96,7 +96,7 @@ func TestColumnChain2(t *testing.T) {
 	controller := NewMVCCHandle(blk)
 	chain := NewColumnChain(nil, 0, controller)
 	txn1 := new(txnbase.Txn)
-	txn1.TxnCtx = txnbase.NewTxnCtx(common.NextGlobalSeqNum(), types.NextGlobalTsForTest(), nil)
+	txn1.TxnCtx = txnbase.NewTxnCtx(common.NewTxnIDAllocator().Alloc(), types.NextGlobalTsForTest(), nil)
 	n1 := chain.AddNode(txn1)
 
 	err := chain.TryUpdateNodeLocked(1, int32(11), n1)
@@ -110,7 +110,7 @@ func TestColumnChain2(t *testing.T) {
 	assert.Equal(t, 3, chain.view.RowCnt())
 
 	txn2 := new(txnbase.Txn)
-	txn2.TxnCtx = txnbase.NewTxnCtx(common.NextGlobalSeqNum(),
+	txn2.TxnCtx = txnbase.NewTxnCtx(common.NewTxnIDAllocator().Alloc(),
 		types.NextGlobalTsForTest(), nil)
 	n2 := chain.AddNode(txn2)
 	err = chain.TryUpdateNodeLocked(2, int32(222), n2)
@@ -132,7 +132,7 @@ func TestColumnChain2(t *testing.T) {
 	assert.Equal(t, 1, chain.view.links[4].Depth())
 
 	txn3 := new(txnbase.Txn)
-	txn3.TxnCtx = txnbase.NewTxnCtx(common.NextGlobalSeqNum(),
+	txn3.TxnCtx = txnbase.NewTxnCtx(common.NewTxnIDAllocator().Alloc(),
 		types.NextGlobalTsForTest(), nil)
 	n3 := chain.AddNode(txn3)
 	err = chain.TryUpdateNodeLocked(2, int32(2222), n3)
@@ -144,7 +144,7 @@ func TestColumnChain2(t *testing.T) {
 		return func() {
 			defer wg.Done()
 			txn := new(txnbase.Txn)
-			txn.TxnCtx = txnbase.NewTxnCtx(common.NextGlobalSeqNum(),
+			txn.TxnCtx = txnbase.NewTxnCtx(common.NewTxnIDAllocator().Alloc(),
 				types.NextGlobalTsForTest(), nil)
 			n := chain.AddNode(txn)
 			for j := 0; j < 4; j++ {
@@ -377,7 +377,7 @@ func TestDeleteChain1(t *testing.T) {
 	controller := NewMVCCHandle(blk)
 	chain := NewDeleteChain(nil, controller)
 	txn1 := new(txnbase.Txn)
-	txn1.TxnCtx = txnbase.NewTxnCtx(common.NextGlobalSeqNum(), types.NextGlobalTsForTest(), nil)
+	txn1.TxnCtx = txnbase.NewTxnCtx(common.NewTxnIDAllocator().Alloc(), types.NextGlobalTsForTest(), nil)
 	n1 := chain.AddNodeLocked(txn1, handle.DeleteType(handle.DT_Normal)).(*DeleteNode)
 	assert.Equal(t, 1, chain.Depth())
 

@@ -41,7 +41,7 @@ type TxnReader interface {
 	RLock()
 	RUnlock()
 	Is2PC() bool
-	GetID() uint64
+	GetID() string
 	GetCtx() []byte
 	GetStartTS() types.TS
 	GetCommitTS() types.TS
@@ -230,7 +230,7 @@ type TxnStore interface {
 	BindTxn(AsyncTxn)
 	GetLSN() uint64
 
-	BatchDedup(dbId, id uint64, pks ...containers.Vector) error
+	BatchDedup(dbId, id uint64, pk containers.Vector) error
 	LogSegmentID(dbId, tid, sid uint64)
 	LogBlockID(dbId, tid, bid uint64)
 

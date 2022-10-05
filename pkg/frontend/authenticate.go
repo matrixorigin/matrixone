@@ -325,6 +325,7 @@ const (
 	PrivilegeTypeTableAll
 	PrivilegeTypeTableOwnership
 	PrivilegeTypeExecute
+	PrivilegeTypeValues
 )
 
 type PrivilegeScope uint8
@@ -456,6 +457,8 @@ func (pt PrivilegeType) String() string {
 		return "ownership"
 	case PrivilegeTypeExecute:
 		return "execute"
+	case PrivilegeTypeValues:
+		return "values"
 	}
 	panic(fmt.Sprintf("no such privilege type %d", pt))
 }
@@ -529,6 +532,8 @@ func (pt PrivilegeType) Scope() PrivilegeScope {
 	case PrivilegeTypeTableOwnership:
 		return PrivilegeScopeTable
 	case PrivilegeTypeExecute:
+		return PrivilegeScopeTable
+	case PrivilegeTypeValues:
 		return PrivilegeScopeTable
 	}
 	panic(fmt.Sprintf("no such privilege type %d", pt))
@@ -1161,6 +1166,7 @@ var (
 		PrivilegeTypeTableAll:          {PrivilegeTypeTableAll, privilegeLevelStar, objectTypeAccount, objectIDAll, true, "", ""},
 		PrivilegeTypeTableOwnership:    {PrivilegeTypeTableOwnership, privilegeLevelStar, objectTypeAccount, objectIDAll, true, "", ""},
 		PrivilegeTypeExecute:           {PrivilegeTypeExecute, privilegeLevelRoutine, objectTypeFunction, objectIDAll, true, "", ""},
+		PrivilegeTypeValues:            {PrivilegeTypeValues, privilegeLevelTable, objectTypeTable, objectIDAll, true, "", ""},
 	}
 
 	//the initial entries of mo_role_privs for the role 'moadmin'
@@ -1203,6 +1209,7 @@ var (
 		PrivilegeTypeTableAll,
 		PrivilegeTypeTableOwnership,
 		PrivilegeTypeExecute,
+		PrivilegeTypeValues,
 	}
 
 	//the initial entries of mo_role_privs for the role 'accountadmin'
@@ -1242,6 +1249,7 @@ var (
 		PrivilegeTypeTableAll,
 		PrivilegeTypeTableOwnership,
 		PrivilegeTypeExecute,
+		PrivilegeTypeValues,
 	}
 
 	//the initial entries of mo_role_privs for the role 'public'
@@ -2460,6 +2468,9 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 	case *tree.Execute:
 		objType = objectTypeNone
 		kind = privilegeKindNone
+	case *tree.ValuesStatement:
+		objType = objectTypeTable
+		typs = append(typs, PrivilegeTypeValues, PrivilegeTypeTableAll /*PrivilegeTypeTableOwnership*/)
 	default:
 		panic(fmt.Sprintf("does not have the privilege definition of the statement %s", stmt))
 	}
@@ -3277,6 +3288,8 @@ func convertAstPrivilegeTypeToPrivilegeType(priv tree.PrivilegeType, ot tree.Obj
 		privType = PrivilegeTypeIndex
 	case tree.PRIVILEGE_TYPE_STATIC_EXECUTE:
 		privType = PrivilegeTypeExecute
+	case tree.PRIVILEGE_TYPE_STATIC_VALUES:
+		privType = PrivilegeTypeValues
 	default:
 		return 0, moerr.NewInternalError("unsupported privilege type %s", priv.ToString())
 	}

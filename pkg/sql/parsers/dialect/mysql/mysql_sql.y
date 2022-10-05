@@ -348,6 +348,9 @@ import (
 %type <statement> load_data_stmt import_data_stmt
 %type <statement> analyze_stmt
 %type <statement> prepare_stmt prepareable_stmt deallocate_stmt execute_stmt
+%type <statement> values_stmt
+%type <rowsExprs> row_constructor_list
+%type <exprs>  row_constructor
 %type <exportParm> export_data_param_opt
 %type <loadParam> load_param_opt load_param_opt_2
 %type <tailParam> tail_param_opt
@@ -577,6 +580,7 @@ stmt:
 |   grant_stmt
 |   load_data_stmt
 |   import_data_stmt
+|   values_stmt
 |   select_stmt
     {
         $$ = $1
@@ -3334,6 +3338,32 @@ outer_join:
 |   RIGHT OUTER JOIN
     {
         $$ = tree.JOIN_TYPE_RIGHT
+    }
+
+values_stmt:
+    VALUES row_constructor_list order_by_opt limit_opt
+    {
+        $$ = &tree.ValuesStatement{
+            Rows: $2,
+            OrderBy: $3,
+            Limit: $4,
+        }
+    }
+
+row_constructor_list:
+    row_constructor
+    {
+        $$ = []tree.Exprs{$1}
+    }
+|   row_constructor_list ',' row_constructor
+    {
+        $$ = append($1, $3)
+    }
+
+row_constructor:
+    ROW '(' data_values ')'
+    {
+        $$ = $3
     }
 
 on_expression_opt:

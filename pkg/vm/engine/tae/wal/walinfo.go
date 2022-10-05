@@ -21,17 +21,17 @@ import (
 )
 
 type walInfo struct {
-	ucLsnTidMap map[uint64]uint64
+	ucLsnTidMap map[uint64]string
 	ucmu        sync.RWMutex
-	cTidLsnMap  map[uint64]uint64
+	cTidLsnMap  map[string]uint64
 	cmu         sync.RWMutex
 }
 
 func newWalInfo() *walInfo {
 	return &walInfo{
-		ucLsnTidMap: make(map[uint64]uint64),
+		ucLsnTidMap: make(map[uint64]string),
 		ucmu:        sync.RWMutex{},
-		cTidLsnMap:  make(map[uint64]uint64),
+		cTidLsnMap:  make(map[string]uint64),
 		cmu:         sync.RWMutex{},
 	}
 }
