@@ -33,19 +33,18 @@ type dirtySeg struct {
 // a read only view of txns
 type LogtailReader struct {
 	start, end types.TS                 // included
-	tid        uint64                   // table id
 	btreeView  *btree.Generic[*txnPage] // read only btree
 	activeView []txnif.AsyncTxn         // read only active page
 }
 
-func (v *LogtailReader) GetDirty() DirtySegs {
+func (v *LogtailReader) GetDirtyByTable(tableID uint64) DirtySegs {
 	// if tree[segID] is nil, it means that is just a seg operation
 	tree := make(map[uint64]map[uint64]struct{}, 0)
 	var blkSet map[uint64]struct{}
 	var exist bool
-	f := func(txn txnif.AsyncTxn) (moveOn bool) {
-		if txn.GetStore().HasTableDataChanges(v.tid) {
-			pointSet := txn.GetStore().GetTableDirtyPoints(v.tid)
+	readOp := func(txn txnif.AsyncTxn) (moveOn bool) {
+		if txn.GetStore().HasTableDataChanges(tableID) {
+			pointSet := txn.GetStore().GetTableDirtyPoints(tableID)
 			for dirty := range pointSet {
 				if dirty.BlkID == 0 {
 					// a segment operation
@@ -65,7 +64,7 @@ func (v *LogtailReader) GetDirty() DirtySegs {
 		}
 		return true
 	}
-	v.scanTxnBetween(v.start, v.end, f)
+	v.readTxnInBetween(v.start, v.end, readOp)
 
 	segs := make([]dirtySeg, 0, len(tree))
 	for sig, blkSet := range tree {
@@ -80,18 +79,19 @@ func (v *LogtailReader) GetDirty() DirtySegs {
 
 func (v *LogtailReader) HasCatalogChanges() bool {
 	changed := false
-	f := func(txn txnif.AsyncTxn) (moveOn bool) {
+	readOp := func(txn txnif.AsyncTxn) (moveOn bool) {
 		if txn.GetStore().HasCatalogChanges() {
 			changed = true
 			return false
 		}
 		return true
 	}
-	v.scanTxnBetween(v.start, v.end, f)
+	v.readTxnInBetween(v.start, v.end, readOp)
 	return changed
 }
 
-func (v *LogtailReader) scanTxnBetween(start, end types.TS, f func(txn txnif.AsyncTxn) (moveOn bool)) {
+// [start, end]
+func (v *LogtailReader) readTxnInBetween(start, end types.TS, readOp func(txn txnif.AsyncTxn) (moveOn bool)) {
 	var pivot types.TS
 	v.btreeView.Descend(&txnPage{minTs: start}, func(item *txnPage) bool { pivot = item.minTs; return false })
 	stopInOldPages := false
@@ -107,7 +107,7 @@ func (v *LogtailReader) scanTxnBetween(start, end types.TS, f func(txn txnif.Asy
 			if ts.Less(start) {
 				continue
 			}
-			if !f(txn) {
+			if !readOp(txn) {
 				stopInOldPages = true
 				return false
 			}
@@ -128,7 +128,7 @@ func (v *LogtailReader) scanTxnBetween(start, end types.TS, f func(txn txnif.Asy
 		if ts.Less(start) {
 			continue
 		}
-		if !f(txn) {
+		if !readOp(txn) {
 			return
 		}
 	}

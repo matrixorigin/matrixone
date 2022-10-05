@@ -95,7 +95,7 @@ func (l *LogtailMgr) AddTxn(txn txnif.AsyncTxn) {
 
 // GetReader returns a read only reader of txns at call time.
 // this is cheap operation, the returned reader can be accessed without any locks
-func (l *LogtailMgr) GetReader(start, end types.TS, tid uint64) *LogtailReader {
+func (l *LogtailMgr) GetReader(start, end types.TS) *LogtailReader {
 	l.Lock()
 	size := atomic.LoadInt32(l.activeSize)
 	activeView := l.activePage[:size]
@@ -104,7 +104,6 @@ func (l *LogtailMgr) GetReader(start, end types.TS, tid uint64) *LogtailReader {
 	return &LogtailReader{
 		start:      start,
 		end:        end,
-		tid:        tid,
 		btreeView:  btreeView,
 		activeView: activeView,
 	}
@@ -112,7 +111,7 @@ func (l *LogtailMgr) GetReader(start, end types.TS, tid uint64) *LogtailReader {
 
 // GetLogtailCollector try to fix a read reader, use LogtailCollector.BindCollectEnv to set other collect args
 func (l *LogtailMgr) GetLogtailCollector(start, end types.TS, did, tid uint64) *LogtailCollector {
-	reader := l.GetReader(start, end, tid)
+	reader := l.GetReader(start, end)
 	return &LogtailCollector{
 		did:    did,
 		tid:    tid,

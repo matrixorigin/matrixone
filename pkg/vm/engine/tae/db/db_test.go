@@ -2947,9 +2947,9 @@ func TestLogtailBasic(t *testing.T) {
 
 	// at first, we can see nothing
 	minTs, maxTs := types.BuildTS(0, 0), types.BuildTS(1000, 1000)
-	reader := logMgr.GetReader(minTs, maxTs, 1000)
+	reader := logMgr.GetReader(minTs, maxTs)
 	assert.False(t, reader.HasCatalogChanges())
-	assert.Equal(t, 0, len(reader.GetDirty().Segs))
+	assert.Equal(t, 0, len(reader.GetDirtyByTable(1000).Segs))
 
 	schema := catalog.MockSchemaAll(2, -1)
 	schema.Name = "test"
@@ -3021,9 +3021,9 @@ func TestLogtailBasic(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			for i := 0; i < 10; i++ {
-				reader := logMgr.GetReader(minTs, maxTs, tableID)
+				reader := logMgr.GetReader(minTs, maxTs)
 				assert.True(t, reader.HasCatalogChanges())
-				_ = reader.GetDirty()
+				_ = reader.GetDirtyByTable(tableID)
 			}
 			wg.Done()
 		}()
@@ -3033,15 +3033,15 @@ func TestLogtailBasic(t *testing.T) {
 
 	firstWriteTs, lastWriteTs := writeTs[0], writeTs[len(writeTs)-1]
 
-	reader = logMgr.GetReader(firstWriteTs, lastWriteTs.Next(), tableID)
+	reader = logMgr.GetReader(firstWriteTs, lastWriteTs.Next())
 	assert.False(t, reader.HasCatalogChanges())
-	reader = logMgr.GetReader(minTs, catalogWriteTs, tableID)
-	assert.Equal(t, 0, len(reader.GetDirty().Segs))
-	reader = logMgr.GetReader(firstWriteTs, lastWriteTs, tableID-1)
-	assert.Equal(t, 0, len(reader.GetDirty().Segs))
+	reader = logMgr.GetReader(minTs, catalogWriteTs)
+	assert.Equal(t, 0, len(reader.GetDirtyByTable(tableID).Segs))
+	reader = logMgr.GetReader(firstWriteTs, lastWriteTs)
+	assert.Equal(t, 0, len(reader.GetDirtyByTable(tableID-1).Segs))
 	// 5 segments, every segment has 2 blocks
-	reader = logMgr.GetReader(firstWriteTs, lastWriteTs, tableID)
-	dirties := reader.GetDirty()
+	reader = logMgr.GetReader(firstWriteTs, lastWriteTs)
+	dirties := reader.GetDirtyByTable(tableID)
 	assert.Equal(t, 5, len(dirties.Segs))
 	for _, seg := range dirties.Segs {
 		assert.Equal(t, 2, len(seg.Blks))

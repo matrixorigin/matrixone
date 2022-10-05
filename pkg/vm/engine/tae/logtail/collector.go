@@ -70,7 +70,7 @@ func (c *LogtailCollector) collectUserTbl() (err error) {
 	if tbl, err = db.GetTableEntryByID(c.tid); err != nil {
 		return
 	}
-	dirty := c.reader.GetDirty()
+	dirty := c.reader.GetDirtyByTable(c.tid)
 	for _, dirtySeg := range dirty.Segs {
 		if seg, err = tbl.GetSegmentByID(dirtySeg.Sig); err != nil {
 			return err
