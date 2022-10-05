@@ -21,7 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 )
 
-func LogtailHandler(mgr *LogtailMgr, c *catalog.Catalog, req api.SyncLogTailReq) (api.SyncLogTailResp, error) {
+func HandleSyncLogTailReq(mgr *LogtailMgr, c *catalog.Catalog, req api.SyncLogTailReq) (api.SyncLogTailResp, error) {
 	start := types.BuildTS(req.CnHave.PhysicalTime, req.CnHave.LogicalTime)
 	end := types.BuildTS(req.CnWant.PhysicalTime, req.CnWant.LogicalTime)
 	did, tid := req.Table.DbId, req.Table.TbId
@@ -32,21 +32,21 @@ func LogtailHandler(mgr *LogtailMgr, c *catalog.Catalog, req api.SyncLogTailReq)
 	// get a collector with a read only reader for txns
 	collector := mgr.GetLogtailCollector(start, end, did, tid)
 
-	var mode CollectMode
+	var scope Scope
 	switch tid {
 	case pkgcatalog.MO_DATABASE_ID:
-		mode = CollectModeDB
+		scope = ScopeDatabases
 	case pkgcatalog.MO_TABLES_ID:
-		mode = CollectModeTbl
+		scope = ScopeTables
 	case pkgcatalog.MO_COLUMNS_ID:
-		mode = CollectModeCol
+		scope = ScopeColumns
 	default:
-		mode = CollectModeSegAndBlk
+		scope = ScopeUserTables
 	}
 
 	var respBuilder RespBuilder
 
-	if mode == CollectModeSegAndBlk {
+	if scope == ScopeUserTables {
 		var tableEntry *catalog.TableEntry
 		// table logtail needs information about this table, so give it the table entry.
 		if db, err := c.GetDatabaseByID(did); err != nil {
@@ -56,10 +56,10 @@ func LogtailHandler(mgr *LogtailMgr, c *catalog.Catalog, req api.SyncLogTailReq)
 		}
 		respBuilder = NewTableLogtailRespBuilder(verifiedCheckpoint, start, end, tableEntry)
 	} else {
-		respBuilder = NewCatalogLogtailRespBuilder(mode, verifiedCheckpoint, start, end)
+		respBuilder = NewCatalogLogtailRespBuilder(scope, verifiedCheckpoint, start, end)
 	}
 
-	collector.BindCollectEnv(mode, c, respBuilder)
+	collector.BindCollectEnv(scope, c, respBuilder)
 	if err := collector.Collect(); err != nil {
 		return api.SyncLogTailResp{}, err
 	}

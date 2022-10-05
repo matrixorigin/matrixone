@@ -104,7 +104,7 @@ func (h *Handle) HandleGetLogTail(
 	req apipb.SyncLogTailReq,
 	resp *apipb.SyncLogTailResp) (err error) {
 	tae := h.eng.GetTAE(context.Background())
-	res, err := logtail.LogtailHandler(tae.LogtailMgr, tae.Catalog, req)
+	res, err := logtail.HandleSyncLogTailReq(tae.LogtailMgr, tae.Catalog, req)
 	if err != nil {
 		return err
 	}

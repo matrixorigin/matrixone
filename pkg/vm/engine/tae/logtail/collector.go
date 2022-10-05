@@ -31,7 +31,7 @@ import (
 // LogtailCollector holds a read only reader, knows how to iter entry.
 // Drive a entry visitor, which acts as an api resp builder
 type LogtailCollector struct {
-	mode    CollectMode
+	scope   Scope
 	did     uint64
 	tid     uint64
 	catalog *catalog.Catalog
@@ -40,20 +40,20 @@ type LogtailCollector struct {
 }
 
 // BindInfo set collect env args and these args don't affect dirty seg/blk ids
-func (c *LogtailCollector) BindCollectEnv(mode CollectMode, catalog *catalog.Catalog, visitor EntryVisitor) {
-	c.mode, c.catalog, c.visitor = mode, catalog, visitor
+func (c *LogtailCollector) BindCollectEnv(scope Scope, catalog *catalog.Catalog, visitor EntryVisitor) {
+	c.scope, c.catalog, c.visitor = scope, catalog, visitor
 }
 
 func (c *LogtailCollector) Collect() error {
-	switch c.mode {
-	case CollectModeDB:
+	switch c.scope {
+	case ScopeDatabases:
 		return c.collectCatalogDB()
-	case CollectModeTbl, CollectModeCol:
+	case ScopeTables, ScopeColumns:
 		return c.collectCatalogTbl()
-	case CollectModeSegAndBlk:
+	case ScopeUserTables:
 		return c.collectUserTbl()
 	default:
-		panic("unknown logtail collect mode")
+		panic("unknown logtail collect scope")
 	}
 }
 
@@ -150,26 +150,26 @@ func (v *noopEntryVisitor) VisitBlk(entry *catalog.BlockEntry) error   { return 
 // impl EntryVisitor interface, driven by LogtailCollector
 type CatalogLogtailRespBuilder struct {
 	noopEntryVisitor
-	mode       CollectMode
+	scope      Scope
 	start, end types.TS
 	checkpoint string
 	insBatch   *containers.Batch
 	delBatch   *containers.Batch
 }
 
-func NewCatalogLogtailRespBuilder(mode CollectMode, ckp string, start, end types.TS) *CatalogLogtailRespBuilder {
+func NewCatalogLogtailRespBuilder(scope Scope, ckp string, start, end types.TS) *CatalogLogtailRespBuilder {
 	b := &CatalogLogtailRespBuilder{
-		mode:       mode,
+		scope:      scope,
 		start:      start,
 		end:        end,
 		checkpoint: ckp,
 	}
-	switch mode {
-	case CollectModeDB:
+	switch scope {
+	case ScopeDatabases:
 		b.insBatch = makeRespBatchFromSchema(catalog.SystemDBSchema)
-	case CollectModeTbl:
+	case ScopeTables:
 		b.insBatch = makeRespBatchFromSchema(catalog.SystemTableSchema)
-	case CollectModeCol:
+	case ScopeColumns:
 		b.insBatch = makeRespBatchFromSchema(catalog.SystemColumnSchema)
 	}
 	b.delBatch = makeRespBatchFromSchema(DelSchema)
@@ -199,7 +199,7 @@ func (b *CatalogLogtailRespBuilder) VisitTbl(entry *catalog.TableEntry) error {
 	mvccNodes := entry.ClonePreparedInRange(b.start, b.end)
 	for _, node := range mvccNodes {
 		tblNode := node.(*catalog.TableMVCCNode)
-		if b.mode == CollectModeCol {
+		if b.scope == ScopeColumns {
 			var dstBatch *containers.Batch
 			if !tblNode.HasDropped() {
 				dstBatch = b.insBatch
@@ -237,14 +237,14 @@ func (b *CatalogLogtailRespBuilder) BuildResp() (api.SyncLogTailResp, error) {
 	entries := make([]*api.Entry, 0)
 	var tblID uint64
 	var tblName string
-	switch b.mode {
-	case CollectModeDB:
+	switch b.scope {
+	case ScopeDatabases:
 		tblID = pkgcatalog.MO_DATABASE_ID
 		tblName = pkgcatalog.MO_DATABASE
-	case CollectModeTbl:
+	case ScopeTables:
 		tblID = pkgcatalog.MO_TABLES_ID
 		tblName = pkgcatalog.MO_TABLES
-	case CollectModeCol:
+	case ScopeColumns:
 		tblID = pkgcatalog.MO_COLUMNS_ID
 		tblName = pkgcatalog.MO_COLUMNS
 	}

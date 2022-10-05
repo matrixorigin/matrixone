@@ -19,17 +19,17 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 )
 
-type CollectMode = int
+type Scope = int
 
 const (
 	// changes for mo_databases
-	CollectModeDB CollectMode = iota + 1
+	ScopeDatabases Scope = iota + 1
 	// changes for mo_tables
-	CollectModeTbl
+	ScopeTables
 	// changes for mo_columns
-	CollectModeCol
+	ScopeColumns
 	// changes for user tables
-	CollectModeSegAndBlk
+	ScopeUserTables
 )
 
 const (
