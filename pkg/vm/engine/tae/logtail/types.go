@@ -60,3 +60,46 @@ func init() {
 	// empty schema, no finalize, makeRespBatchFromSchema will add necessary colunms
 	DelSchema = catalog.NewEmptySchema("del")
 }
+
+type TableTree struct {
+	DbID uint64
+	ID   uint64
+	Segs map[uint64]*SegmentTree
+}
+
+type SegmentTree struct {
+	ID   uint64
+	Blks map[uint64]bool
+}
+
+func newTableTree(dbID, id uint64) *TableTree {
+	return &TableTree{
+		DbID: dbID,
+		ID:   id,
+		Segs: make(map[uint64]*SegmentTree),
+	}
+}
+
+func newSegmentTree(id uint64) *SegmentTree {
+	return &SegmentTree{
+		ID:   id,
+		Blks: make(map[uint64]bool),
+	}
+}
+
+func (ttree *TableTree) AddSegment(id uint64) {
+	if _, exist := ttree.Segs[id]; !exist {
+		ttree.Segs[id] = newSegmentTree(id)
+	}
+}
+
+func (ttree *TableTree) AddBlock(segID, id uint64) {
+	ttree.AddSegment(segID)
+	ttree.Segs[segID].AddBlock(id)
+}
+
+func (stree *SegmentTree) AddBlock(id uint64) {
+	if _, exist := stree.Blks[id]; !exist {
+		stree.Blks[id] = true
+	}
+}

@@ -82,16 +82,16 @@ func (c *BoundTableOperator) processTableData() (err error) {
 	if tbl, err = db.GetTableEntryByID(c.tableID); err != nil {
 		return
 	}
-	dirty := c.reader.GetDirtyByTable(c.tableID)
+	dirty := c.reader.GetDirtyByTable(c.dbID, c.tableID)
 	for _, dirtySeg := range dirty.Segs {
-		if seg, err = tbl.GetSegmentByID(dirtySeg.Sig); err != nil {
+		if seg, err = tbl.GetSegmentByID(dirtySeg.ID); err != nil {
 			return err
 		}
 		if err = c.visitor.OnSegment(seg); err != nil {
 			return err
 		}
-		for _, blkid := range dirtySeg.Blks {
-			if blk, err = seg.GetBlockEntryByID(blkid); err != nil {
+		for id, _ := range dirtySeg.Blks {
+			if blk, err = seg.GetBlockEntryByID(id); err != nil {
 				return err
 			}
 			if err = c.visitor.OnBlock(blk); err != nil {
