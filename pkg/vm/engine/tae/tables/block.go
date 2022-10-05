@@ -293,6 +293,9 @@ func (blk *dataBlock) MutationInfo() string {
 }
 
 func (blk *dataBlock) EstimateScore(interval int64) int {
+	if blk.IsFlushed() {
+		return 0
+	}
 	if blk.meta.IsAppendable() && blk.Rows(nil, true) == int(blk.meta.GetSchema().BlockMaxRows) {
 		blk.meta.RLock()
 		if blk.meta.HasDropped() {
