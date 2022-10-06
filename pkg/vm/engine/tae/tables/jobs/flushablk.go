@@ -23,40 +23,50 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 )
 
-type flushBlkTask struct {
+type flushABlkTask struct {
 	*tasks.BaseTask
-	data *containers.Batch
-	meta *catalog.BlockEntry
-	file file.Block
-	ts   types.TS
+	data  *containers.Batch
+	delta *containers.Batch
+	meta  *catalog.BlockEntry
+	file  file.Block
+	ts    types.TS
 }
 
-func NewFlushBlkTask(
+func NewFlushABlkTask(
 	ctx *tasks.Context,
 	bf file.Block,
 	ts types.TS,
 	meta *catalog.BlockEntry,
 	data *containers.Batch,
-) *flushBlkTask {
-	task := &flushBlkTask{
-		ts:   ts,
-		data: data,
-		meta: meta,
-		file: bf,
+	delta *containers.Batch,
+) *flushABlkTask {
+	task := &flushABlkTask{
+		ts:    ts,
+		data:  data,
+		meta:  meta,
+		file:  bf,
+		delta: delta,
 	}
 	task.BaseTask = tasks.NewBaseTask(task, tasks.IOTask, ctx)
 	return task
 }
 
-func (task *flushBlkTask) Scope() *common.ID { return task.meta.AsCommonID() }
+func (task *flushABlkTask) Scope() *common.ID { return task.meta.AsCommonID() }
 
-func (task *flushBlkTask) Execute() error {
+func (task *flushABlkTask) Execute() error {
 	block, err := task.file.WriteBatch(task.data, task.ts)
 	if err != nil {
 		return err
 	}
-	if err = BuildBlockIndex(task.file.GetWriter(), block, task.meta, task.data, true); err != nil {
+	if err = BuildBlockIndex(task.file.GetWriter(), block, task.meta, task.data, false); err != nil {
 		return err
+	}
+
+	if task.delta != nil {
+		_, err := task.file.WriteBatch(task.delta, task.ts)
+		if err != nil {
+			return err
+		}
 	}
 	return task.file.Sync()
 }

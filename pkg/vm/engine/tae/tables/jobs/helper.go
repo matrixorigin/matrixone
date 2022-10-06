@@ -66,7 +66,7 @@ func BuildColumnIndex(writer objectio.Writer, block objectio.BlockObject, colDef
 	return
 }
 
-func BuildBlockIndex(writer objectio.Writer, block objectio.BlockObject, meta *catalog.BlockEntry, columnsData *containers.Batch) (err error) {
+func BuildBlockIndex(writer objectio.Writer, block objectio.BlockObject, meta *catalog.BlockEntry, columnsData *containers.Batch, isSorted bool) (err error) {
 	schema := meta.GetSchema()
 	blkMetas := indexwrapper.NewEmptyIndicesMeta()
 	pkIdx := -10086
@@ -80,7 +80,7 @@ func BuildBlockIndex(writer objectio.Writer, block objectio.BlockObject, meta *c
 		}
 		data := columnsData.GetVectorByName(colDef.GetName())
 		isPk := colDef.Idx == pkIdx
-		colMetas, err := BuildColumnIndex(writer, block, colDef, data, isPk, isPk)
+		colMetas, err := BuildColumnIndex(writer, block, colDef, data, isPk, isSorted)
 		if err != nil {
 			return err
 		}
