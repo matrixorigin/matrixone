@@ -478,6 +478,17 @@ func NewOriginal(typ types.Type) *Vector {
 	}
 }
 
+func NewOriginalWithData(typ types.Type, data []byte, nsp *nulls.Nulls) *Vector {
+	v := &Vector{
+		Nsp:  nsp,
+		Typ:  typ,
+		data: data,
+	}
+	v.SetOriginal(true)
+	v.colFromData()
+	return v
+}
+
 func NewWithNspSize(typ types.Type, n int64) *Vector {
 	return &Vector{
 		Nsp:      nulls.NewWithSize(int(n)),
