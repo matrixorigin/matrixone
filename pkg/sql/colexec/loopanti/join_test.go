@@ -88,8 +88,7 @@ func TestJoin(t *testing.T) {
 			}
 			tc.proc.Reg.InputBatch.Clean(tc.proc.Mp())
 		}
-		// XXX MPOOL
-		// require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
+		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
 	}
 	for _, tc := range tcs {
 		err := Prepare(tc.proc, tc.arg)
@@ -107,8 +106,7 @@ func TestJoin(t *testing.T) {
 			}
 			tc.proc.Reg.InputBatch.Clean(tc.proc.Mp())
 		}
-		// XXX MPOOL
-		// require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
+		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
 	}
 
 }

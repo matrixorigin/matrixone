@@ -100,11 +100,10 @@ func TestJoin(t *testing.T) {
 			tc.proc.Reg.InputBatch.Clean(tc.proc.Mp())
 		}
 		nb1 := tc.proc.Mp().CurrNB()
-		// XXX MPOOL
-		require.Equal(t, nb0+80, nb1)
+		require.Equal(t, nb0, nb1)
 	}
 	for _, tc := range tcs {
-		// nb0 := tc.proc.Mp().CurrNB()
+		nb0 := tc.proc.Mp().CurrNB()
 		err := Prepare(tc.proc, tc.arg)
 		require.NoError(t, err)
 		tc.proc.Reg.MergeReceivers[0].Ch <- newBatch(t, tc.flgs, tc.types, tc.proc, Rows)
@@ -120,11 +119,9 @@ func TestJoin(t *testing.T) {
 			}
 			tc.proc.Reg.InputBatch.Clean(tc.proc.Mp())
 		}
-		// nb1 := tc.proc.Mp().CurrNB()
-		// XXX MPOOL
-		// require.True(t, nb0, nb1)
+		nb1 := tc.proc.Mp().CurrNB()
+		require.Equal(t, nb0, nb1)
 	}
-
 }
 
 func BenchmarkJoin(b *testing.B) {
