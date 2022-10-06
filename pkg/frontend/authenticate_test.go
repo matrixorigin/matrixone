@@ -1925,9 +1925,8 @@ func Test_determineGrantPrivilege(t *testing.T) {
 				privType, err = convertAstPrivilegeTypeToPrivilegeType(p.Type, stmt.ObjType)
 				convey.So(err, convey.ShouldBeNil)
 				sql = getSqlForCheckRoleHasPrivilegeWGO(int64(privType))
-				var rows [][]interface{}
 
-				rows = [][]interface{}{
+				rows := [][]interface{}{
 					{ses.tenant.GetDefaultRoleID()},
 				}
 
@@ -2119,9 +2118,8 @@ func Test_determineGrantPrivilege(t *testing.T) {
 				privType, err = convertAstPrivilegeTypeToPrivilegeType(p.Type, stmt.ObjType)
 				convey.So(err, convey.ShouldBeNil)
 				sql = getSqlForCheckRoleHasPrivilegeWGO(int64(privType))
-				var rows [][]interface{}
 
-				rows = [][]interface{}{
+				rows := [][]interface{}{
 					{ses.tenant.GetDefaultRoleID()},
 				}
 
@@ -2274,9 +2272,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 				privType, err = convertAstPrivilegeTypeToPrivilegeType(p.Type, stmt.ObjType)
 				convey.So(err, convey.ShouldBeNil)
 				sql = getSqlForCheckRoleHasPrivilegeWGO(int64(privType))
-				var rows [][]interface{}
-
-				rows = [][]interface{}{
+				rows := [][]interface{}{
 					{ses.tenant.GetDefaultRoleID()},
 				}
 
