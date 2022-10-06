@@ -16,6 +16,7 @@ package blockio
 
 import (
 	"bytes"
+
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -82,7 +83,7 @@ func (cb *columnBlock) GetData(
 	srcBuf := fsVector.Entries[0].Data
 	vector := vector.New(typ)
 	vector.Read(srcBuf)
-	vec = containers.MOToVectorTmp(vector, NullAbility)
+	vec = containers.NewVectorWithSharedMemory(vector, NullAbility)
 	return
 }
 

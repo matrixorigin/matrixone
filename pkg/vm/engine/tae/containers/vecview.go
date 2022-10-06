@@ -67,11 +67,10 @@ func (vec *vecView) Data() []byte                { return vec.impl.Data() }
 func (vec *vecView) DataWindow(offset, length int) []byte {
 	return vec.impl.DataWindow(offset, length)
 }
-func (vec *vecView) Get(i int) (v any)     { return vec.impl.Get(i) }
-func (vec *vecView) GetCopy(i int) (v any) { return vec.impl.GetCopy(i) }
-func (vec *vecView) Length() int           { return vec.impl.Length() }
-func (vec *vecView) Capacity() int         { return vec.impl.Capacity() }
-func (vec *vecView) Allocated() int        { return vec.impl.Allocated() }
+func (vec *vecView) Get(i int) (v any) { return vec.impl.Get(i) }
+func (vec *vecView) Length() int       { return vec.impl.Length() }
+func (vec *vecView) Capacity() int     { return vec.impl.Capacity() }
+func (vec *vecView) Allocated() int    { return vec.impl.Allocated() }
 
 func (vec *vecView) GetAllocator() MemAllocator { return vec.impl.GetAllocator() }
 func (vec *vecView) GetType() types.Type        { return vec.impl.GetType() }

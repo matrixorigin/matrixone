@@ -15,9 +15,10 @@
 package txnif
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"io"
 	"sync"
+
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
 
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -40,7 +41,7 @@ type TxnReader interface {
 	RLock()
 	RUnlock()
 	Is2PC() bool
-	GetID() uint64
+	GetID() string
 	GetCtx() []byte
 	GetStartTS() types.TS
 	GetCommitTS() types.TS
@@ -194,7 +195,7 @@ type TxnStore interface {
 	BindTxn(AsyncTxn)
 	GetLSN() uint64
 
-	BatchDedup(dbId, id uint64, pks ...containers.Vector) error
+	BatchDedup(dbId, id uint64, pk containers.Vector) error
 	LogSegmentID(dbId, tid, sid uint64)
 	LogBlockID(dbId, tid, bid uint64)
 
@@ -232,16 +233,10 @@ type TxnStore interface {
 	IsReadonly() bool
 	IncreateWriteCnt() int
 
-	HasTableDataChanges(tableID uint64) bool
+	HasAnyTableDataChanges() bool
+	HasTableDataChanges(id uint64) bool
 	HasCatalogChanges() bool
-	GetTableDirtyPoints(tableID uint64) DirtySet
-}
-
-type DirtySet = map[DirtyPoint]struct{}
-
-// not use common id to save space, less hash cost
-type DirtyPoint struct {
-	SegID, BlkID uint64
+	GetDirtyTableByID(id uint64) *common.TableTree
 }
 
 type TxnEntryType int16

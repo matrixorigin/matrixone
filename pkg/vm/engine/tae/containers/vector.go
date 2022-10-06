@@ -160,15 +160,13 @@ func (vec *vector[T]) CloneWindow(offset, length int, allocator ...MemAllocator)
 	return cloned
 }
 func (vec *vector[T]) Slice() any {
-	var v T
-	if _, ok := any(v).([]byte); ok {
+	if vec.typ.IsVarlen() {
 		return vec.stlvec.Bytes()
 	}
 	return vec.stlvec.Slice()
 }
 
 func (vec *vector[T]) Get(i int) (v any)                   { return vec.impl.Get(i) }
-func (vec *vector[T]) GetCopy(i int) (v any)               { return vec.impl.GetCopy(i) }
 func (vec *vector[T]) Update(i int, v any)                 { vec.impl.Update(i, v) }
 func (vec *vector[T]) Delete(i int)                        { vec.impl.Delete(i) }
 func (vec *vector[T]) DeleteBatch(deletes *roaring.Bitmap) { vec.impl.DeleteBatch(deletes) }
