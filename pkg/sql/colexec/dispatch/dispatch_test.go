@@ -92,7 +92,7 @@ func TestDispatch(t *testing.T) {
 			}
 			bat.Clean(tc.proc.Mp())
 		}
-		require.Equal(t, tc.proc.Mp().CurrNB(), int64(0))
+		require.Equal(t, int64(0), tc.proc.Mp().CurrNB())
 	}
 }
 
