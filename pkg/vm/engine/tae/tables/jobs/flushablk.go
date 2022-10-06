@@ -16,7 +16,6 @@ package jobs
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -57,24 +56,17 @@ func (task *flushABlkTask) Scope() *common.ID { return task.meta.AsCommonID() }
 func (task *flushABlkTask) Execute() error {
 	block, err := task.file.WriteBatch(task.data, task.ts)
 	if err != nil {
-		logutil.Infof("WriteBatch is err111 %v", err.Error())
 		return err
 	}
 	if err = BuildBlockIndex(task.file.GetWriter(), block, task.meta, task.data, false); err != nil {
-		logutil.Infof("WriteBatch is err22 %v", err.Error())
 		return err
 	}
 
 	if task.delta != nil {
 		_, err := task.file.WriteBatch(task.delta, task.ts)
 		if err != nil {
-			logutil.Infof("WriteBatch is err33 %v", err.Error())
 			return err
 		}
 	}
-	err = task.file.Sync()
-	if err != nil {
-		logutil.Infof("WriteBatch is err44 %v", err.Error())
-	}
-	return err
+	return task.file.Sync()
 }

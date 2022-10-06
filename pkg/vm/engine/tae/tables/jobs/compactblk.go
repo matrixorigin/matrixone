@@ -128,8 +128,6 @@ func (task *compactBlockTask) Execute() (err error) {
 		return err
 	}
 	newMeta := newBlk.GetMeta().(*catalog.BlockEntry)
-	aBlkMeta := task.compacted.GetMeta().(*catalog.BlockEntry)
-	// data, sortCol, closer, err := task.PrepareData(newMeta.MakeKey())
 	preparer, err := task.PrepareData(newMeta.MakeKey())
 	if err != nil {
 		return
@@ -139,9 +137,7 @@ func (task *compactBlockTask) Execute() (err error) {
 		return err
 	}
 	newBlkData := newMeta.GetBlockData()
-	aBlkData := aBlkMeta.GetBlockData()
 	blockFile := newBlkData.GetBlockFile()
-	aBlockFile := aBlkData.GetBlockFile()
 
 	ioTask := NewFlushBlkTask(
 		tasks.WaitableCtx,
@@ -167,10 +163,15 @@ func (task *compactBlockTask) Execute() (err error) {
 		return err
 	}
 
+	task.created = newBlk
+	table := task.meta.GetSegment().GetTable()
 	// write ablock
+	aBlkMeta := task.compacted.GetMeta().(*catalog.BlockEntry)
 	if aBlkMeta.IsAppendable() {
 		var data *containers.Batch
 		var deletes *containers.Batch
+		aBlkData := aBlkMeta.GetBlockData()
+		aBlockFile := aBlkData.GetBlockFile()
 		data, err = aBlkData.CollectAppendInRange(types.TS{}, task.txn.GetStartTS())
 		if err != nil {
 			return
@@ -209,15 +210,11 @@ func (task *compactBlockTask) Execute() (err error) {
 		if err = aBlkData.ReplayIndex(); err != nil {
 			return err
 		}
+		aBlkData.Close()
 	}
-	task.created = newBlk
-	table := task.meta.GetSegment().GetTable()
 	txnEntry := txnentries.NewCompactBlockEntry(task.txn, task.compacted, task.created, task.scheduler, task.mapping, task.deletes)
 	if err = task.txn.LogTxnEntry(table.GetDB().ID, table.ID, txnEntry, []*common.ID{task.compacted.Fingerprint()}); err != nil {
 		return
-	}
-	if aBlkMeta.IsAppendable() {
-		aBlkData.Close()
 	}
 	logutil.Info("[Done]",
 		common.OperationField(task.Name()),
