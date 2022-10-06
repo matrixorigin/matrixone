@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/updates"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 )
 
@@ -47,6 +48,8 @@ type txnTable struct {
 	logs         []wal.LogEntry
 	maxSegId     uint64
 	maxBlkId     uint64
+
+	appendTxnNode []*txnbase.TxnMVCCNode
 
 	txnEntries []txnif.TxnEntry
 	csnStart   uint32
@@ -718,6 +721,11 @@ func (tbl *txnTable) ApplyCommit() (err error) {
 		}
 		csn++
 	}
+	for _, txnNode := range tbl.appendTxnNode {
+		if _, err = txnNode.ApplyCommit(nil); err != nil {
+			return
+		}
+	}
 	return
 }
 
@@ -743,6 +751,11 @@ func (tbl *txnTable) ApplyRollback() (err error) {
 			break
 		}
 		csn++
+	}
+	for _, txnNode := range tbl.appendTxnNode {
+		if err = txnNode.ApplyRollback(nil); err != nil {
+			return
+		}
 	}
 	return
 }

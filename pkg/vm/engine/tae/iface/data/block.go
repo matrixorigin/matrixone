@@ -98,4 +98,6 @@ type Block interface {
 	Close()
 	CollectAppendInRange(start, end types.TS) (*containers.Batch, error)
 	CollectDeleteInRange(start, end types.TS) (*containers.Batch, error)
+	GetAppendNodeByRow(row uint32) (an txnif.AppendNode)
+	GetDeleteNodeByRow(row uint32) (an txnif.DeleteNode)
 }
