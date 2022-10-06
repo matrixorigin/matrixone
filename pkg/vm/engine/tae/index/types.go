@@ -57,14 +57,3 @@ type SecondaryIndex interface {
 	String() string
 	Size() int
 }
-
-type MutipleRowsIndex interface {
-	Insert(key any, row uint32) error
-	DeleteOne(key any, row uint32) error
-	DeleteAll(key any) error
-	GetRowsNode(key any) (*RowsNode, bool)
-	Contains(key any) bool
-	ContainsRow(key any, row uint32) bool
-	Size() int
-	RowCount(key any) int
-}
