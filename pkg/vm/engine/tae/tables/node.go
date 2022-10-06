@@ -72,32 +72,48 @@ func (node *appendableNode) CheckUnloadable() bool {
 	return !node.block.mvcc.HasActiveAppendNode()
 }
 
-func (node *appendableNode) GetDataCopy(minRow, maxRow uint32) (columns *containers.Batch, err error) {
+func (node *appendableNode) getMemoryDataLocked(minRow, maxRow uint32) (bat *containers.Batch, err error) {
+	bat = node.data.CloneWindow(int(minRow),
+		int(maxRow-minRow),
+		containers.DefaultAllocator)
+	return
+}
+
+func (node *appendableNode) getPersistedData(minRow, maxRow uint32) (bat *containers.Batch, err error) {
+	var data *containers.Batch
+	schema := node.block.meta.GetSchema()
+	opts := new(containers.Options)
+	opts.Capacity = int(schema.BlockMaxRows)
+	data, err = node.block.file.LoadBatch(
+		schema.AllTypes(),
+		schema.AllNames(),
+		schema.AllNullables(),
+		opts)
+	if err != nil {
+		return
+	}
+	if maxRow-minRow == uint32(data.Length()) {
+		bat = data
+	} else {
+		bat = data.CloneWindow(int(minRow), int(maxRow-minRow), containers.DefaultAllocator)
+		data.Close()
+	}
+	return
+}
+
+func (node *appendableNode) GetData(minRow, maxRow uint32) (bat *containers.Batch, err error) {
 	if exception := node.exception.Load(); exception != nil {
 		err = exception.(error)
 		return
 	}
 	node.block.RLock()
-	var data *containers.Batch
-	if node.data == nil {
+	if node.data != nil {
+		bat, err = node.getMemoryDataLocked(minRow, maxRow)
 		node.block.RUnlock()
-		schema := node.block.meta.GetSchema()
-		opts := new(containers.Options)
-		opts.Capacity = int(schema.BlockMaxRows)
-		opts.Allocator = ImmutMemAllocator
-		if data, err = node.block.file.LoadBatch(
-			schema.AllTypes(),
-			schema.AllNames(),
-			schema.AllNullables(),
-			opts); err != nil {
-			return
-		}
-		node.block.RLock()
-	} else {
-		data = node.data
+		return
 	}
-	columns = data.CloneWindow(int(minRow), int(maxRow-minRow), containers.DefaultAllocator)
 	node.block.RUnlock()
+	bat, err = node.getPersistedData(minRow, maxRow)
 	return
 }
 
@@ -118,9 +134,9 @@ func (node *appendableNode) GetColumnDataCopy(
 		if err != nil {
 			return
 		}
-		node.block.RLock()
 	} else {
 		win = node.data.Vecs[colIdx]
+		node.block.RUnlock()
 	}
 	if buffer != nil {
 		if maxRow < uint32(win.Length()) {
@@ -130,7 +146,6 @@ func (node *appendableNode) GetColumnDataCopy(
 	} else {
 		vec = win.CloneWindow(int(minRow), int(maxRow-minRow), containers.DefaultAllocator)
 	}
-	node.block.RUnlock()
 	return
 }
 
@@ -175,12 +190,11 @@ func (node *appendableNode) FillPhyAddrColumn(startRow, length uint32) (err erro
 		if err != nil {
 			return
 		}
-		node.block.Lock()
 	} else {
 		vec = node.data.Vecs[node.block.meta.GetSchema().PhyAddrKey.Idx]
+		node.block.Unlock()
 	}
 	vec.Extend(col)
-	node.block.Unlock()
 	return
 }
 
