@@ -1808,6 +1808,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 			convey.So(w, convey.ShouldEqual, a.want)
 		}
 	})
+
 	convey.Convey("grant privilege [ObjectType: Table] AdminRole succ", t, func() {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
@@ -1835,6 +1836,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 			convey.So(ok, convey.ShouldBeTrue)
 		}
 	})
+
 	convey.Convey("grant privilege [ObjectType: Table] succ", t, func() {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
@@ -1918,6 +1920,18 @@ func Test_determineGrantPrivilege(t *testing.T) {
 				makeRowsOfWithGrantOptionPrivilege(bh.sql2result, sql, [][]interface{}{
 					{1, true},
 				})
+
+				var privType PrivilegeType
+				privType, err = convertAstPrivilegeTypeToPrivilegeType(p.Type, stmt.ObjType)
+				convey.So(err, convey.ShouldBeNil)
+				sql = getSqlForCheckRoleHasPrivilegeWGO(int64(privType))
+				var rows [][]interface{}
+
+				rows = [][]interface{}{
+					{ses.tenant.GetDefaultRoleID()},
+				}
+
+				bh.sql2result[sql] = newMrsForPrivilegeWGO(rows)
 			}
 
 			ok, err := authenticatePrivilegeOfStatementWithObjectTypeNone(ses.GetRequestContext(), ses, stmt)
@@ -1925,6 +1939,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 			convey.So(ok, convey.ShouldBeTrue)
 		}
 	})
+
 	convey.Convey("grant privilege [ObjectType: Table] fail", t, func() {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
@@ -2002,6 +2017,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 			ses.SetDatabaseName("db")
 			//TODO: make sql2result
 			bh.init()
+			var privType PrivilegeType
 			for i, p := range stmt.Privileges {
 				sql, err := formSqlFromGrantPrivilege(context.TODO(), ses, stmt, p)
 				convey.So(err, convey.ShouldBeNil)
@@ -2014,6 +2030,19 @@ func Test_determineGrantPrivilege(t *testing.T) {
 					}
 				}
 				makeRowsOfWithGrantOptionPrivilege(bh.sql2result, sql, rows)
+
+				privType, err = convertAstPrivilegeTypeToPrivilegeType(p.Type, stmt.ObjType)
+				convey.So(err, convey.ShouldBeNil)
+				sql = getSqlForCheckRoleHasPrivilegeWGO(int64(privType))
+				if i == 0 {
+					rows = [][]interface{}{}
+				} else {
+					rows = [][]interface{}{
+						{ses.tenant.GetDefaultRoleID()},
+					}
+				}
+
+				bh.sql2result[sql] = newMrsForPrivilegeWGO(rows)
 			}
 
 			ok, err := authenticatePrivilegeOfStatementWithObjectTypeNone(ses.GetRequestContext(), ses, stmt)
@@ -2021,6 +2050,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 			convey.So(ok, convey.ShouldBeFalse)
 		}
 	})
+
 	convey.Convey("grant privilege [ObjectType: Database] succ", t, func() {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
@@ -2064,6 +2094,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 			},
 		}
 
+		var privType PrivilegeType
 		for _, stmt := range stmts {
 			priv := determinePrivilegeSetOfStatement(stmt)
 			ses := newSes(priv)
@@ -2084,6 +2115,17 @@ func Test_determineGrantPrivilege(t *testing.T) {
 				makeRowsOfWithGrantOptionPrivilege(bh.sql2result, sql, [][]interface{}{
 					{1, true},
 				})
+
+				privType, err = convertAstPrivilegeTypeToPrivilegeType(p.Type, stmt.ObjType)
+				convey.So(err, convey.ShouldBeNil)
+				sql = getSqlForCheckRoleHasPrivilegeWGO(int64(privType))
+				var rows [][]interface{}
+
+				rows = [][]interface{}{
+					{ses.tenant.GetDefaultRoleID()},
+				}
+
+				bh.sql2result[sql] = newMrsForPrivilegeWGO(rows)
 			}
 
 			ok, err := authenticatePrivilegeOfStatementWithObjectTypeNone(ses.GetRequestContext(), ses, stmt)
@@ -2091,6 +2133,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 			convey.So(ok, convey.ShouldBeTrue)
 		}
 	})
+
 	convey.Convey("grant privilege [ObjectType: Database] fail", t, func() {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
@@ -2160,6 +2203,21 @@ func Test_determineGrantPrivilege(t *testing.T) {
 					}
 				}
 				makeRowsOfWithGrantOptionPrivilege(bh.sql2result, sql, rows)
+
+				var privType PrivilegeType
+				privType, err = convertAstPrivilegeTypeToPrivilegeType(p.Type, stmt.ObjType)
+				convey.So(err, convey.ShouldBeNil)
+				sql = getSqlForCheckRoleHasPrivilegeWGO(int64(privType))
+
+				if i == 0 {
+					rows = [][]interface{}{}
+				} else {
+					rows = [][]interface{}{
+						{ses.tenant.GetDefaultRoleID()},
+					}
+				}
+
+				bh.sql2result[sql] = newMrsForPrivilegeWGO(rows)
 			}
 
 			ok, err := authenticatePrivilegeOfStatementWithObjectTypeNone(ses.GetRequestContext(), ses, stmt)
@@ -2167,6 +2225,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 			convey.So(ok, convey.ShouldBeFalse)
 		}
 	})
+
 	convey.Convey("grant privilege [ObjectType: Account] succ", t, func() {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
@@ -2210,6 +2269,18 @@ func Test_determineGrantPrivilege(t *testing.T) {
 				makeRowsOfWithGrantOptionPrivilege(bh.sql2result, sql, [][]interface{}{
 					{1, true},
 				})
+
+				var privType PrivilegeType
+				privType, err = convertAstPrivilegeTypeToPrivilegeType(p.Type, stmt.ObjType)
+				convey.So(err, convey.ShouldBeNil)
+				sql = getSqlForCheckRoleHasPrivilegeWGO(int64(privType))
+				var rows [][]interface{}
+
+				rows = [][]interface{}{
+					{ses.tenant.GetDefaultRoleID()},
+				}
+
+				bh.sql2result[sql] = newMrsForPrivilegeWGO(rows)
 			}
 
 			ok, err := authenticatePrivilegeOfStatementWithObjectTypeNone(ses.GetRequestContext(), ses, stmt)
@@ -2217,6 +2288,7 @@ func Test_determineGrantPrivilege(t *testing.T) {
 			convey.So(ok, convey.ShouldBeTrue)
 		}
 	})
+
 	convey.Convey("grant privilege [ObjectType: Account] fail", t, func() {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
@@ -2266,6 +2338,21 @@ func Test_determineGrantPrivilege(t *testing.T) {
 					}
 				}
 				makeRowsOfWithGrantOptionPrivilege(bh.sql2result, sql, rows)
+
+				var privType PrivilegeType
+				privType, err = convertAstPrivilegeTypeToPrivilegeType(p.Type, stmt.ObjType)
+				convey.So(err, convey.ShouldBeNil)
+				sql = getSqlForCheckRoleHasPrivilegeWGO(int64(privType))
+
+				if i == 0 {
+					rows = [][]interface{}{}
+				} else {
+					rows = [][]interface{}{
+						{ses.tenant.GetDefaultRoleID()},
+					}
+				}
+
+				bh.sql2result[sql] = newMrsForPrivilegeWGO(rows)
 			}
 
 			ok, err := authenticatePrivilegeOfStatementWithObjectTypeNone(ses.GetRequestContext(), ses, stmt)
@@ -2883,6 +2970,30 @@ func Test_determineCreateTable(t *testing.T) {
 
 		sql2result := makeSql2ExecResult2(0, rowsOfMoUserGrant, roleIdsInMoRolePrivs, priv.entries, rowsOfMoRolePrivs, nil, nil, nil, nil)
 
+		var rows [][]interface{}
+		roles := []int{0}
+		for _, entry := range priv.entries {
+			pls, err := getPrivilegeLevelsOfObjectType(entry.objType)
+			convey.So(err, convey.ShouldBeNil)
+			for _, pl := range pls {
+				for _, roleId := range roles {
+					sql, err := getSqlForPrivilege(int64(roleId), entry, pl)
+					convey.So(err, convey.ShouldBeNil)
+					if entry.privilegeId == PrivilegeTypeCreateTable {
+						rows = [][]interface{}{
+							{0, true},
+						}
+					} else {
+						rows = [][]interface{}{}
+					}
+					sql2result[sql] = newMrsForWithGrantOptionPrivilege(rows)
+				}
+			}
+		}
+
+		sql := getSqlForInheritedRoleIdOfRoleId(0)
+		sql2result[sql] = newMrsForInheritedRoleIdOfRoleId([][]interface{}{})
+
 		bh := newBh(ctrl, sql2result)
 
 		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
@@ -2892,6 +3003,7 @@ func Test_determineCreateTable(t *testing.T) {
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(ok, convey.ShouldBeTrue)
 	})
+
 	convey.Convey("create table succ 2", t, func() {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
@@ -2928,6 +3040,34 @@ func Test_determineCreateTable(t *testing.T) {
 
 		sql2result := makeSql2ExecResult2(0, rowsOfMoUserGrant, roleIdsInMoRolePrivs, priv.entries, rowsOfMoRolePrivs, roleIdsInMoRoleGrant, rowsOfMoRoleGrant, nil, nil)
 
+		var rows [][]interface{}
+		roles := []int{0, 1}
+		for _, entry := range priv.entries {
+			pls, err := getPrivilegeLevelsOfObjectType(entry.objType)
+			convey.So(err, convey.ShouldBeNil)
+			for _, pl := range pls {
+				for _, roleId := range roles {
+					sql, err := getSqlForPrivilege(int64(roleId), entry, pl)
+					convey.So(err, convey.ShouldBeNil)
+					if roleId == 1 && entry.privilegeId == PrivilegeTypeCreateTable {
+						rows = [][]interface{}{
+							{1, true},
+						}
+					} else {
+						rows = [][]interface{}{}
+					}
+					sql2result[sql] = newMrsForWithGrantOptionPrivilege(rows)
+				}
+			}
+		}
+
+		sql := getSqlForInheritedRoleIdOfRoleId(0)
+		sql2result[sql] = newMrsForInheritedRoleIdOfRoleId([][]interface{}{
+			{1, true},
+		})
+		sql = getSqlForInheritedRoleIdOfRoleId(1)
+		sql2result[sql] = newMrsForInheritedRoleIdOfRoleId([][]interface{}{})
+
 		bh := newBh(ctrl, sql2result)
 
 		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
@@ -2937,6 +3077,7 @@ func Test_determineCreateTable(t *testing.T) {
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(ok, convey.ShouldBeTrue)
 	})
+
 	convey.Convey("create table fail", t, func() {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
@@ -2980,6 +3121,32 @@ func Test_determineCreateTable(t *testing.T) {
 
 		sql2result := makeSql2ExecResult2(0, rowsOfMoUserGrant, roleIdsInMoRolePrivs, priv.entries, rowsOfMoRolePrivs, roleIdsInMoRoleGrant, rowsOfMoRoleGrant, nil, nil)
 
+		var rows [][]interface{}
+		roles := []int{0, 1, 2}
+		for _, entry := range priv.entries {
+			pls, err := getPrivilegeLevelsOfObjectType(entry.objType)
+			convey.So(err, convey.ShouldBeNil)
+			for _, pl := range pls {
+				for _, roleId := range roles {
+					sql, err := getSqlForPrivilege(int64(roleId), entry, pl)
+					convey.So(err, convey.ShouldBeNil)
+					rows = [][]interface{}{}
+					sql2result[sql] = newMrsForWithGrantOptionPrivilege(rows)
+				}
+			}
+		}
+
+		sql := getSqlForInheritedRoleIdOfRoleId(0)
+		sql2result[sql] = newMrsForInheritedRoleIdOfRoleId([][]interface{}{
+			{1, true},
+		})
+		sql = getSqlForInheritedRoleIdOfRoleId(1)
+		sql2result[sql] = newMrsForInheritedRoleIdOfRoleId([][]interface{}{
+			{2, true},
+		})
+		sql = getSqlForInheritedRoleIdOfRoleId(2)
+		sql2result[sql] = newMrsForInheritedRoleIdOfRoleId([][]interface{}{})
+
 		bh := newBh(ctrl, sql2result)
 
 		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
@@ -3018,6 +3185,30 @@ func Test_determineDropTable(t *testing.T) {
 
 		sql2result := makeSql2ExecResult2(0, rowsOfMoUserGrant, roleIdsInMoRolePrivs, priv.entries, rowsOfMoRolePrivs, nil, nil, nil, nil)
 
+		var rows [][]interface{}
+		roles := []int{0}
+		for _, entry := range priv.entries {
+			pls, err := getPrivilegeLevelsOfObjectType(entry.objType)
+			convey.So(err, convey.ShouldBeNil)
+			for _, pl := range pls {
+				for _, roleId := range roles {
+					sql, err := getSqlForPrivilege(int64(roleId), entry, pl)
+					convey.So(err, convey.ShouldBeNil)
+					if entry.privilegeId == PrivilegeTypeDropTable {
+						rows = [][]interface{}{
+							{0, true},
+						}
+					} else {
+						rows = [][]interface{}{}
+					}
+					sql2result[sql] = newMrsForWithGrantOptionPrivilege(rows)
+				}
+			}
+		}
+
+		sql := getSqlForInheritedRoleIdOfRoleId(0)
+		sql2result[sql] = newMrsForInheritedRoleIdOfRoleId([][]interface{}{})
+
 		bh := newBh(ctrl, sql2result)
 		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
 		defer bhStub.Reset()
@@ -3026,6 +3217,7 @@ func Test_determineDropTable(t *testing.T) {
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(ok, convey.ShouldBeTrue)
 	})
+
 	convey.Convey("drop/alter table succ 2", t, func() {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
@@ -3061,6 +3253,35 @@ func Test_determineDropTable(t *testing.T) {
 		}
 
 		sql2result := makeSql2ExecResult2(0, rowsOfMoUserGrant, roleIdsInMoRolePrivs, priv.entries, rowsOfMoRolePrivs, roleIdsInMoRoleGrant, rowsOfMoRoleGrant, nil, nil)
+
+		var rows [][]interface{}
+		roles := []int{0, 1}
+		for _, entry := range priv.entries {
+			pls, err := getPrivilegeLevelsOfObjectType(entry.objType)
+			convey.So(err, convey.ShouldBeNil)
+			for _, pl := range pls {
+				for _, roleId := range roles {
+					sql, err := getSqlForPrivilege(int64(roleId), entry, pl)
+					convey.So(err, convey.ShouldBeNil)
+					if roleId == 1 && entry.privilegeId == PrivilegeTypeDropTable {
+						rows = [][]interface{}{
+							{1, true},
+						}
+					} else {
+						rows = [][]interface{}{}
+					}
+					sql2result[sql] = newMrsForWithGrantOptionPrivilege(rows)
+				}
+			}
+		}
+
+		sql := getSqlForInheritedRoleIdOfRoleId(0)
+		sql2result[sql] = newMrsForInheritedRoleIdOfRoleId([][]interface{}{
+			{1, true},
+		})
+		sql = getSqlForInheritedRoleIdOfRoleId(1)
+		sql2result[sql] = newMrsForInheritedRoleIdOfRoleId([][]interface{}{})
+
 		bh := newBh(ctrl, sql2result)
 
 		bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
@@ -3070,6 +3291,7 @@ func Test_determineDropTable(t *testing.T) {
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(ok, convey.ShouldBeTrue)
 	})
+
 	convey.Convey("drop/alter table fail", t, func() {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
@@ -3112,6 +3334,32 @@ func Test_determineDropTable(t *testing.T) {
 		rowsOfMoRoleGrant[2] = [][]interface{}{}
 
 		sql2result := makeSql2ExecResult2(0, rowsOfMoUserGrant, roleIdsInMoRolePrivs, priv.entries, rowsOfMoRolePrivs, roleIdsInMoRoleGrant, rowsOfMoRoleGrant, nil, nil)
+
+		var rows [][]interface{}
+		roles := []int{0, 1, 2}
+		for _, entry := range priv.entries {
+			pls, err := getPrivilegeLevelsOfObjectType(entry.objType)
+			convey.So(err, convey.ShouldBeNil)
+			for _, pl := range pls {
+				for _, roleId := range roles {
+					sql, err := getSqlForPrivilege(int64(roleId), entry, pl)
+					convey.So(err, convey.ShouldBeNil)
+					rows = [][]interface{}{}
+					sql2result[sql] = newMrsForWithGrantOptionPrivilege(rows)
+				}
+			}
+		}
+
+		sql := getSqlForInheritedRoleIdOfRoleId(0)
+		sql2result[sql] = newMrsForInheritedRoleIdOfRoleId([][]interface{}{
+			{1, true},
+		})
+		sql = getSqlForInheritedRoleIdOfRoleId(1)
+		sql2result[sql] = newMrsForInheritedRoleIdOfRoleId([][]interface{}{
+			{2, true},
+		})
+		sql = getSqlForInheritedRoleIdOfRoleId(2)
+		sql2result[sql] = newMrsForInheritedRoleIdOfRoleId([][]interface{}{})
 
 		bh := newBh(ctrl, sql2result)
 
@@ -3229,6 +3477,29 @@ func Test_determineDML(t *testing.T) {
 				}
 			}
 
+			var rows [][]interface{}
+			for _, entry := range priv.entries {
+				pls, err := getPrivilegeLevelsOfObjectType(entry.objType)
+				convey.So(err, convey.ShouldBeNil)
+				for i, pl := range pls {
+					for _, roleId := range roleIds {
+						sql, err := getSqlForPrivilege(int64(roleId), entry, pl)
+						convey.So(err, convey.ShouldBeNil)
+						if i == 0 {
+							rows = [][]interface{}{
+								{0, true},
+							}
+						} else {
+							rows = [][]interface{}{}
+						}
+						sql2result[sql] = newMrsForWithGrantOptionPrivilege(rows)
+					}
+				}
+			}
+
+			sql := getSqlForInheritedRoleIdOfRoleId(0)
+			sql2result[sql] = newMrsForInheritedRoleIdOfRoleId([][]interface{}{})
+
 			bh := newBh(ctrl, sql2result)
 			bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
 			defer bhStub.Reset()
@@ -3283,6 +3554,34 @@ func Test_determineDML(t *testing.T) {
 				}
 			}
 
+			var rows [][]interface{}
+			roles := []int{0, 1}
+			for _, entry := range priv.entries {
+				pls, err := getPrivilegeLevelsOfObjectType(entry.objType)
+				convey.So(err, convey.ShouldBeNil)
+				for _, pl := range pls {
+					for _, roleId := range roles {
+						sql, err := getSqlForPrivilege(int64(roleId), entry, pl)
+						convey.So(err, convey.ShouldBeNil)
+						if roleId == 1 {
+							rows = [][]interface{}{
+								{1, true},
+							}
+						} else {
+							rows = [][]interface{}{}
+						}
+						sql2result[sql] = newMrsForWithGrantOptionPrivilege(rows)
+					}
+				}
+			}
+
+			sql := getSqlForInheritedRoleIdOfRoleId(0)
+			sql2result[sql] = newMrsForInheritedRoleIdOfRoleId([][]interface{}{
+				{1, true},
+			})
+			sql = getSqlForInheritedRoleIdOfRoleId(1)
+			sql2result[sql] = newMrsForInheritedRoleIdOfRoleId([][]interface{}{})
+
 			bh := newBh(ctrl, sql2result)
 
 			bhStub := gostub.StubFunc(&NewBackgroundHandler, bh)
@@ -3331,6 +3630,32 @@ func Test_determineDML(t *testing.T) {
 					sql2result[sql] = newMrsForWithGrantOptionPrivilege(rows)
 				}
 			}
+
+			var rows [][]interface{}
+			roles := []int{0, 1, 2}
+			for _, entry := range priv.entries {
+				pls, err := getPrivilegeLevelsOfObjectType(entry.objType)
+				convey.So(err, convey.ShouldBeNil)
+				for _, pl := range pls {
+					for _, roleId := range roles {
+						sql, err := getSqlForPrivilege(int64(roleId), entry, pl)
+						convey.So(err, convey.ShouldBeNil)
+						rows = [][]interface{}{}
+						sql2result[sql] = newMrsForWithGrantOptionPrivilege(rows)
+					}
+				}
+			}
+
+			sql := getSqlForInheritedRoleIdOfRoleId(0)
+			sql2result[sql] = newMrsForInheritedRoleIdOfRoleId([][]interface{}{
+				{1, true},
+			})
+			sql = getSqlForInheritedRoleIdOfRoleId(1)
+			sql2result[sql] = newMrsForInheritedRoleIdOfRoleId([][]interface{}{
+				{2, true},
+			})
+			sql = getSqlForInheritedRoleIdOfRoleId(2)
+			sql2result[sql] = newMrsForInheritedRoleIdOfRoleId([][]interface{}{})
 
 			bh := newBh(ctrl, sql2result)
 
@@ -3413,6 +3738,7 @@ func Test_doGrantRole(t *testing.T) {
 		err := doGrantRole(ses.GetRequestContext(), ses, stmt)
 		convey.So(err, convey.ShouldBeNil)
 	})
+
 	convey.Convey("grant role to user succ", t, func() {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
@@ -3465,6 +3791,9 @@ func Test_doGrantRole(t *testing.T) {
 				{i, "111", i},
 			})
 			bh.sql2result[sql] = mrs
+
+			sql = getSqlForRoleOfUser(int64(i), moAdminRoleName)
+			bh.sql2result[sql] = newMrsForRoleOfUser([][]interface{}{})
 		}
 
 		//has "ro roles", need init mo_role_grant (assume empty)
@@ -3489,6 +3818,7 @@ func Test_doGrantRole(t *testing.T) {
 		err := doGrantRole(ses.GetRequestContext(), ses, stmt)
 		convey.So(err, convey.ShouldBeNil)
 	})
+
 	convey.Convey("grant role to role+user succ", t, func() {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
@@ -3553,6 +3883,9 @@ func Test_doGrantRole(t *testing.T) {
 					{i, "111", i},
 				})
 				bh.sql2result[sql] = mrs
+
+				sql = getSqlForRoleOfUser(int64(i), moAdminRoleName)
+				bh.sql2result[sql] = newMrsForRoleOfUser([][]interface{}{})
 			}
 
 		}
@@ -3591,6 +3924,7 @@ func Test_doGrantRole(t *testing.T) {
 		err := doGrantRole(ses.GetRequestContext(), ses, stmt)
 		convey.So(err, convey.ShouldBeNil)
 	})
+
 	convey.Convey("grant role to role+user 2 (insert) succ", t, func() {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
@@ -3655,6 +3989,9 @@ func Test_doGrantRole(t *testing.T) {
 					{i, "111", i},
 				})
 				bh.sql2result[sql] = mrs
+
+				sql = getSqlForRoleOfUser(int64(i), moAdminRoleName)
+				bh.sql2result[sql] = newMrsForRoleOfUser([][]interface{}{})
 			}
 
 		}
@@ -3696,6 +4033,7 @@ func Test_doGrantRole(t *testing.T) {
 		err := doGrantRole(ses.GetRequestContext(), ses, stmt)
 		convey.So(err, convey.ShouldBeNil)
 	})
+
 	convey.Convey("grant role to role+user 3 (update) succ", t, func() {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
@@ -3761,6 +4099,9 @@ func Test_doGrantRole(t *testing.T) {
 					{i, "111", i},
 				})
 				bh.sql2result[sql] = mrs
+
+				sql = getSqlForRoleOfUser(int64(i), moAdminRoleName)
+				bh.sql2result[sql] = newMrsForRoleOfUser([][]interface{}{})
 			}
 
 		}
@@ -3807,6 +4148,7 @@ func Test_doGrantRole(t *testing.T) {
 		err := doGrantRole(ses.GetRequestContext(), ses, stmt)
 		convey.So(err, convey.ShouldBeNil)
 	})
+
 	convey.Convey("grant role to role fail direct loop", t, func() {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
@@ -3871,6 +4213,7 @@ func Test_doGrantRole(t *testing.T) {
 		err := doGrantRole(ses.GetRequestContext(), ses, stmt)
 		convey.So(err, convey.ShouldBeError)
 	})
+
 	convey.Convey("grant role to role+user fail indirect loop", t, func() {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
@@ -3936,6 +4279,9 @@ func Test_doGrantRole(t *testing.T) {
 					{i, "111", i},
 				})
 				bh.sql2result[sql] = mrs
+
+				sql = getSqlForRoleOfUser(int64(i), moAdminRoleName)
+				bh.sql2result[sql] = newMrsForRoleOfUser([][]interface{}{})
 			}
 
 		}
@@ -3983,6 +4329,7 @@ func Test_doGrantRole(t *testing.T) {
 		err := doGrantRole(ses.GetRequestContext(), ses, stmt)
 		convey.So(err, convey.ShouldBeError)
 	})
+
 	convey.Convey("grant role to role fail no role", t, func() {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
@@ -4049,6 +4396,7 @@ func Test_doGrantRole(t *testing.T) {
 		err := doGrantRole(ses.GetRequestContext(), ses, stmt)
 		convey.So(err, convey.ShouldBeError)
 	})
+
 	convey.Convey("grant role to user fail no user", t, func() {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
@@ -4187,6 +4535,7 @@ func Test_doRevokeRole(t *testing.T) {
 		err := doRevokeRole(ses.GetRequestContext(), ses, stmt)
 		convey.So(err, convey.ShouldBeNil)
 	})
+
 	convey.Convey("revoke role from role succ (if exists = true, miss role before FROM)", t, func() {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
@@ -4222,13 +4571,9 @@ func Test_doRevokeRole(t *testing.T) {
 		var mrs *MysqlResultSet
 		for i, role := range stmt.Roles {
 			sql := getSqlForRoleIdOfRole(role.UserName)
-			if i == 0 {
-				mrs = newMrsForRoleIdOfRole([][]interface{}{})
-			} else {
-				mrs = newMrsForRoleIdOfRole([][]interface{}{
-					{i},
-				})
-			}
+			mrs = newMrsForRoleIdOfRole([][]interface{}{
+				{i},
+			})
 			bh.sql2result[sql] = mrs
 		}
 
@@ -4254,6 +4599,7 @@ func Test_doRevokeRole(t *testing.T) {
 		err := doRevokeRole(ses.GetRequestContext(), ses, stmt)
 		convey.So(err, convey.ShouldBeNil)
 	})
+
 	convey.Convey("revoke role from role fail (if exists = false,miss role before FROM)", t, func() {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
@@ -4321,6 +4667,7 @@ func Test_doRevokeRole(t *testing.T) {
 		err := doRevokeRole(ses.GetRequestContext(), ses, stmt)
 		convey.So(err, convey.ShouldBeError)
 	})
+
 	convey.Convey("revoke role from user fail (if exists = false,miss role after FROM)", t, func() {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
@@ -4392,6 +4739,7 @@ func Test_doRevokeRole(t *testing.T) {
 		err := doRevokeRole(ses.GetRequestContext(), ses, stmt)
 		convey.So(err, convey.ShouldBeError)
 	})
+
 	convey.Convey("revoke role from user succ", t, func() {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
@@ -5890,6 +6238,22 @@ func newMrsForCheckUserGrant(rows [][]interface{}) *MysqlResultSet {
 	return mrs
 }
 
+func newMrsForRoleOfUser(rows [][]interface{}) *MysqlResultSet {
+	mrs := &MysqlResultSet{}
+
+	col1 := &MysqlColumn{}
+	col1.SetName("role_id")
+	col1.SetColumnType(defines.MYSQL_TYPE_LONGLONG)
+
+	mrs.AddColumn(col1)
+
+	for _, row := range rows {
+		mrs.AddRow(row)
+	}
+
+	return mrs
+}
+
 func newMrsForCheckDatabase(rows [][]interface{}) *MysqlResultSet {
 	mrs := &MysqlResultSet{}
 
@@ -5994,6 +6358,22 @@ func newMrsForRoleWGO(rows [][]interface{}) *MysqlResultSet {
 
 	col1 := &MysqlColumn{}
 	col1.SetName("grantee_id")
+	col1.SetColumnType(defines.MYSQL_TYPE_LONGLONG)
+
+	mrs.AddColumn(col1)
+
+	for _, row := range rows {
+		mrs.AddRow(row)
+	}
+
+	return mrs
+}
+
+func newMrsForPrivilegeWGO(rows [][]interface{}) *MysqlResultSet {
+	mrs := &MysqlResultSet{}
+
+	col1 := &MysqlColumn{}
+	col1.SetName("role_id")
 	col1.SetColumnType(defines.MYSQL_TYPE_LONGLONG)
 
 	mrs.AddColumn(col1)
