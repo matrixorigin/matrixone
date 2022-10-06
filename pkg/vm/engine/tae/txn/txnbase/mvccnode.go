@@ -26,40 +26,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 )
 
-type MVCCNode interface {
-	String() string
-
-	IsVisible(ts types.TS) (visible bool)
-	CheckConflict(ts types.TS) error
-	Update(o MVCCNode)
-
-	PreparedIn(minTS, maxTS types.TS) (in, before bool)
-	CommittedIn(minTS, maxTS types.TS) (in, before bool)
-	NeedWaitCommitting(ts types.TS) (bool, txnif.TxnReader)
-	IsSameTxn(ts types.TS) bool
-	IsActive() bool
-	IsCommitting() bool
-	IsCommitted() bool
-	IsAborted() bool
-	Set1PC()
-	Is1PC() bool
-
-	GetEnd() types.TS
-	GetPrepare() types.TS
-	GetTxn() txnif.TxnReader
-	SetLogIndex(idx *wal.Index)
-	GetLogIndex() *wal.Index
-
-	ApplyCommit(index *wal.Index) (err error)
-	ApplyRollback(index *wal.Index) (err error)
-	PrepareCommit() (err error)
-
-	WriteTo(w io.Writer) (n int64, err error)
-	ReadFrom(r io.Reader) (n int64, err error)
-	CloneData() MVCCNode
-	CloneAll() MVCCNode
-}
-
 type TxnMVCCNode struct {
 	Start, Prepare, End types.TS
 	Txn                 txnif.TxnReader
@@ -131,7 +97,7 @@ func (un *TxnMVCCNode) IsVisible(ts types.TS) (visible bool) {
 	}
 
 	// Node is visible if the commit ts is le ts
-	if un.End.LessEq(ts) {
+	if un.End.LessEq(ts) && !un.Aborted {
 		return true
 	}
 
@@ -318,10 +284,14 @@ func (un *TxnMVCCNode) OnReplayCommit(ts types.TS) {
 func (un *TxnMVCCNode) ApplyRollback(index *wal.Index) (err error) {
 	un.End = un.Txn.GetCommitTS()
 	un.Txn = nil
+	un.Aborted = true
 	un.SetLogIndex(index)
 	return
 }
-
+func (un *TxnMVCCNode) OnReplayRollback(ts types.TS) {
+	un.End = ts
+	un.Aborted = true
+}
 func (un *TxnMVCCNode) WriteTo(w io.Writer) (n int64, err error) {
 	if err = binary.Write(w, binary.BigEndian, un.Start); err != nil {
 		return

@@ -50,9 +50,8 @@ func (base *vecBase[T]) Data() []byte                                   { return
 func (base *vecBase[T]) DataWindow(offset, length int) []byte {
 	return base.derived.stlvec.DataWindow(offset, length)
 }
-func (base *vecBase[T]) Bytes() *Bytes         { return base.derived.stlvec.Bytes() }
-func (base *vecBase[T]) Get(i int) (v any)     { return base.derived.stlvec.Get(i) }
-func (base *vecBase[T]) GetCopy(i int) (v any) { return base.derived.stlvec.GetCopy(i) }
+func (base *vecBase[T]) Bytes() *Bytes     { return base.derived.stlvec.Bytes() }
+func (base *vecBase[T]) Get(i int) (v any) { return base.derived.stlvec.Get(i) }
 
 func (base *vecBase[T]) tryCOW() {
 	if base.derived.roStorage != nil {
@@ -92,11 +91,10 @@ func (base *vecBase[T]) Extend(o Vector) {
 }
 
 func (base *vecBase[T]) extendData(src Vector, srcOff, srcLen int) {
-	var v T
-	if _, ok := any(v).([]byte); ok {
+	if base.derived.typ.IsVarlen() {
 		bs := src.Bytes()
 		for i := srcOff; i < srcOff+srcLen; i++ {
-			base.derived.stlvec.Append(any(bs.Data[bs.Offset[i] : bs.Offset[i]+bs.Length[i]]).(T))
+			base.derived.stlvec.Append(any(bs.GetVarValueAt(i)).(T))
 		}
 		return
 	}

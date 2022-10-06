@@ -106,7 +106,7 @@ func (*HashShard) Batch(
 		}
 	}
 	sort.Slice(shards, func(i, j int) bool {
-		return shards[i].DNShardRecord.ShardID < shards[j].DNShardRecord.ShardID
+		return shards[i].ShardID < shards[j].ShardID
 	})
 	m := make(map[*Shard]*batch.Batch)
 	for _, shard := range shards {
@@ -209,7 +209,7 @@ func (h *HashShard) Vector(
 		}
 	}
 	sort.Slice(shards, func(i, j int) bool {
-		return shards[i].DNShardRecord.ShardID < shards[j].DNShardRecord.ShardID
+		return shards[i].ShardID < shards[j].ShardID
 	})
 	m := make(map[*Shard]*vector.Vector)
 

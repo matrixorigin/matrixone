@@ -36,6 +36,7 @@ func New(
 	shardPolicy ShardPolicy,
 	getClusterDetails GetClusterDetailsFunc,
 ) *Engine {
+	_ = ctx
 
 	engine := &Engine{
 		shardPolicy:       shardPolicy,
