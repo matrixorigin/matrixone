@@ -92,12 +92,11 @@ func (node *appendableNode) GetDataCopy(minRow, maxRow uint32) (columns *contain
 			opts); err != nil {
 			return
 		}
-		node.block.RLock()
 	} else {
 		data = node.data
+		node.block.RUnlock()
 	}
 	columns = data.CloneWindow(int(minRow), int(maxRow-minRow), containers.DefaultAllocator)
-	node.block.RUnlock()
 	return
 }
 
@@ -118,9 +117,9 @@ func (node *appendableNode) GetColumnDataCopy(
 		if err != nil {
 			return
 		}
-		node.block.RLock()
 	} else {
 		win = node.data.Vecs[colIdx]
+		node.block.RUnlock()
 	}
 	if buffer != nil {
 		if maxRow < uint32(win.Length()) {
@@ -130,7 +129,6 @@ func (node *appendableNode) GetColumnDataCopy(
 	} else {
 		vec = win.CloneWindow(int(minRow), int(maxRow-minRow), containers.DefaultAllocator)
 	}
-	node.block.RUnlock()
 	return
 }
 
@@ -175,12 +173,11 @@ func (node *appendableNode) FillPhyAddrColumn(startRow, length uint32) (err erro
 		if err != nil {
 			return
 		}
-		node.block.Lock()
 	} else {
 		vec = node.data.Vecs[node.block.meta.GetSchema().PhyAddrKey.Idx]
+		node.block.Unlock()
 	}
 	vec.Extend(col)
-	node.block.Unlock()
 	return
 }
 
