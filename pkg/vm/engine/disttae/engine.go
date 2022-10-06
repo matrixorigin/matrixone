@@ -38,14 +38,18 @@ func New(
 ) *Engine {
 	cluster, err := getClusterDetails()
 	if err != nil {
-		return nil
+		panic(err)
+	}
+	db := newDB(cli, cluster.DNStores)
+	if err := db.init(ctx, m); err != nil {
+		panic(err)
 	}
 	return &Engine{
 		m:                 m,
+		db:                db,
 		cli:               cli,
 		txnHeap:           &transactionHeap{},
 		getClusterDetails: getClusterDetails,
-		db:                newDB(cli, cluster.DNStores),
 		txns:              make(map[string]*Transaction),
 	}
 }
@@ -79,6 +83,16 @@ func (e *Engine) Database(ctx context.Context, name string,
 	}
 	key := genDatabaseKey(ctx, name)
 	if db, ok := txn.databaseMap[key]; ok {
+		return db, nil
+	}
+	if name == catalog.MO_CATALOG {
+		db := &database{
+			txn:          txn,
+			db:           e.db,
+			databaseId:   catalog.MO_CATALOG_ID,
+			databaseName: name,
+		}
+		txn.databaseMap[key] = db
 		return db, nil
 	}
 	id, err := txn.getDatabaseId(ctx, name)

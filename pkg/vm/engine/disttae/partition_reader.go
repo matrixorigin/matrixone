@@ -105,7 +105,6 @@ func (p *PartitionReader) Read(colNames []string, expr *plan.Expr, heap *mheap.M
 			nulls.TryExpand(vec.GetNulls(), rows)
 		}
 	}
-
 	if rows == 0 {
 		return nil, nil
 	}

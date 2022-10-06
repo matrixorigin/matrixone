@@ -29,7 +29,7 @@ import (
 
 func (txn *Transaction) getTableList(ctx context.Context, databaseId uint64) ([]string, error) {
 	rows, err := txn.getRows(ctx, catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID, txn.dnStores[:1],
-		catalog.MoDatabaseTableDefs, []string{
+		catalog.MoTablesTableDefs, []string{
 			catalog.MoTablesSchema[catalog.MO_TABLES_REL_NAME_IDX],
 			catalog.MoTablesSchema[catalog.MO_TABLES_RELDATABASE_ID_IDX],
 			catalog.MoTablesSchema[catalog.MO_TABLES_ACCOUNT_ID_IDX],
@@ -124,6 +124,9 @@ func (txn *Transaction) getDatabaseId(ctx context.Context, name string) (uint64,
 func (txn *Transaction) getTableMeta(ctx context.Context, databaseId uint64,
 	name string) (*tableMeta, error) {
 	id, defs, err := txn.getTableInfo(ctx, databaseId, name)
+	if err.Error() == "info: empty table" {
+		return nil, nil
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -214,14 +217,17 @@ func (txn *Transaction) getRow(ctx context.Context, databaseId uint64, tableId u
 		return nil, err
 	}
 	if len(bats) == 0 {
-		return nil, moerr.NewInvalidInput("empty table: %v.%v", databaseId, tableId)
+		return nil, moerr.NewInfo("empty table")
 	}
 	rows := make([][]any, 0, len(bats))
 	for _, bat := range bats {
 		if bat.Length() > 0 {
-			bat.Clean(txn.m)
 			rows = append(rows, catalog.GenRows(bat)...)
 		}
+		bat.Clean(txn.m)
+	}
+	if len(rows) == 0 {
+		return nil, moerr.NewInfo("empty table")
 	}
 	if len(rows) != 1 {
 		return nil, moerr.NewInvalidInput("table is not unique")
@@ -242,9 +248,9 @@ func (txn *Transaction) getRows(ctx context.Context, databaseId uint64, tableId 
 	rows := make([][]any, 0, len(bats))
 	for _, bat := range bats {
 		if bat.Length() > 0 {
-			bat.Clean(txn.m)
 			rows = append(rows, catalog.GenRows(bat)...)
 		}
+		bat.Clean(txn.m)
 	}
 	return rows, nil
 }
@@ -260,7 +266,15 @@ func (txn *Transaction) readTable(ctx context.Context, databaseId uint64, tableI
 			writes = txn.writes[:txn.statementId-1]
 		}
 	*/
-	writes := txn.writes // statementId not work now
+	writes := make([]Entry, 0, len(txn.writes))
+	for i := range txn.writes {
+		for _, entry := range txn.writes[i] {
+			if entry.databaseId == databaseId &&
+				entry.tableId == tableId {
+				writes = append(writes, entry)
+			}
+		}
+	}
 	bats := make([]*batch.Batch, 0, 1)
 	accessed := make(map[string]uint8)
 	for _, dn := range dnList {

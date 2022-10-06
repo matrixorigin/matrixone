@@ -3359,6 +3359,9 @@ func checkSysExistsOrNot(ctx context.Context, pu *config.ParameterUnit) (bool, e
 	defer bh.Close()
 	var rsset []ExecResult
 
+	{
+		fmt.Printf("+++++++++++begin++++++++\n")
+	}
 	dbSql := "show databases;"
 	bh.ClearExecResultSet()
 	err := bh.Exec(ctx, dbSql)
@@ -3367,6 +3370,7 @@ func checkSysExistsOrNot(ctx context.Context, pu *config.ParameterUnit) (bool, e
 	}
 
 	results := bh.GetExecResultSet()
+
 	if len(results) != 1 {
 		panic("it must have result set")
 	}
@@ -3374,6 +3378,15 @@ func checkSysExistsOrNot(ctx context.Context, pu *config.ParameterUnit) (bool, e
 	rsset, err = convertIntoResultSet(results)
 	if err != nil {
 		return false, err
+	}
+	{
+		for i := uint64(0); i < rsset[0].GetRowCount(); i++ {
+			name, err := rsset[0].GetString(i, 0)
+			if err != nil {
+				return false, err
+			}
+			fmt.Printf("database: %v\n", name)
+		}
 	}
 
 	for i := uint64(0); i < rsset[0].GetRowCount(); i++ {

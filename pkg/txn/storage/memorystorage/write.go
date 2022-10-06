@@ -116,6 +116,7 @@ func handleWrite[
 ) {
 
 	var req Req
+
 	if err := gob.NewDecoder(bytes.NewReader(payload)).Decode(&req); err != nil {
 		return nil, err
 	}

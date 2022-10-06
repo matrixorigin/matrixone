@@ -175,7 +175,9 @@ func FillColumnRow(table *catalog.TableEntry, attr string, colData containers.Ve
 		case pkgcatalog.SystemColAttr_Num:
 			colData.Append(int32(i + 1))
 		case pkgcatalog.SystemColAttr_Type:
-			colData.Append(int32(colDef.Type.Oid))
+			//colData.Append(int32(colDef.Type.Oid))
+			data, _ := types.Encode(colDef.Type)
+			colData.Append(data)
 		case pkgcatalog.SystemColAttr_DBID:
 			colData.Append(table.GetDB().GetID())
 		case pkgcatalog.SystemColAttr_DBName:

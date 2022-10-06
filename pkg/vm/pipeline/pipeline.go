@@ -16,9 +16,12 @@ package pipeline
 
 import (
 	"bytes"
+	"fmt"
+
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -69,6 +72,17 @@ func (p *Pipeline) Run(r engine.Reader, proc *process.Process) (bool, error) {
 		}
 		if bat != nil {
 			bat.Cnt = 1
+			{
+				fmt.Printf("+++read+++\n")
+				for i, vec := range bat.Vecs {
+					if vec.Typ.IsVarlen() {
+						vs := vector.MustStrCols(vec)
+						fmt.Printf("\t[%v] = %v\n", i, vs)
+					} else {
+						fmt.Printf("\t[%v] = %v\n", i, vec)
+					}
+				}
+			}
 		}
 		// processing the batch according to the instructions
 		proc.Reg.InputBatch = bat

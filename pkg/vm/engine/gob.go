@@ -46,6 +46,7 @@ func init() {
 	gob.Register([]float64{})
 	gob.Register([]string{})
 	gob.Register([][]any{})
+	gob.Register([]types.Type{})
 	gob.Register([]types.Date{})
 	gob.Register([]types.Datetime{})
 	gob.Register([]types.Timestamp{})

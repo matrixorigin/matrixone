@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/compress"
@@ -698,7 +699,7 @@ func genColumns(tableName, databaseName string, databaseId uint64,
 		if !ok {
 			continue
 		}
-		typ, err := types.Encode(attrDef.Attr.Type)
+		typ, err := types.Encode(&attrDef.Attr.Type)
 		if err != nil {
 			return nil, err
 		}
@@ -714,7 +715,7 @@ func genColumns(tableName, databaseName string, databaseId uint64,
 		}
 		col.hasDef = 0
 		if attrDef.Attr.Default != nil {
-			defaultExpr, err := attrDef.Attr.Default.Marshal()
+			defaultExpr, err := types.Encode(attrDef.Attr.Default)
 			if err != nil {
 				return nil, err
 			}
@@ -842,4 +843,36 @@ func genModifedBlocks(orgs, modfs []BlockMeta, expr *plan.Expr) []BlockMeta {
 		}
 	}
 	return blks
+}
+
+func genInsertBatch(bat *batch.Batch, m *mheap.Mheap) (*api.Batch, error) {
+	var attrs []string
+	var vecs []*vector.Vector
+
+	{
+		vec := vector.New(types.New(types.T_Rowid, 0, 0, 0))
+		for i := 0; i < bat.Length(); i++ {
+			val := types.Rowid(uuid.New())
+			if err := vec.Append(val, false, m); err != nil {
+				return nil, err
+			}
+		}
+		vecs = append(vecs, vec)
+		attrs = append(attrs, "rowid")
+	}
+	{
+		var val types.TS
+
+		vec := vector.New(types.New(types.T_TS, 0, 0, 0))
+		for i := 0; i < bat.Length(); i++ {
+			if err := vec.Append(val, false, m); err != nil {
+				return nil, err
+			}
+		}
+		vecs = append(vecs, vec)
+		attrs = append(attrs, "timestamp")
+	}
+	bat.Vecs = append(vecs, bat.Vecs...)
+	bat.Attrs = append(attrs, bat.Attrs...)
+	return batch.BatchToProtoBatch(bat)
 }

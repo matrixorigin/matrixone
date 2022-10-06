@@ -62,7 +62,7 @@ func (d *DataRow) Indexes() []memtable.Tuple {
 
 var _ MVCC = new(Partition)
 
-func (*Partition) BlockList(ctx context.Context, ts timestamp.Timestamp, blocks []BlockMeta, entries [][]Entry) []BlockMeta {
+func (*Partition) BlockList(ctx context.Context, ts timestamp.Timestamp, blocks []BlockMeta, entries []Entry) []BlockMeta {
 	return nil
 }
 
@@ -161,7 +161,7 @@ func (p *Partition) NewReader(
 	defs []engine.TableDef,
 	blocks []BlockMeta,
 	ts timestamp.Timestamp,
-	entries [][]Entry,
+	entries []Entry,
 ) ([]engine.Reader, error) {
 
 	t := memtable.Time{
@@ -175,13 +175,11 @@ func (p *Partition) NewReader(
 
 	inserts := make([]*batch.Batch, 0, len(entries))
 	deletes := make([]*batch.Batch, 0, len(entries))
-	for i := range entries {
-		for _, entry := range entries[i] {
-			if entry.typ == INSERT {
-				inserts = append(inserts, entry.bat)
-			} else {
-				deletes = append(deletes, entry.bat)
-			}
+	for _, entry := range entries {
+		if entry.typ == INSERT {
+			inserts = append(inserts, entry.bat)
+		} else {
+			deletes = append(deletes, entry.bat)
 		}
 	}
 
@@ -203,6 +201,9 @@ func (p *Partition) NewReader(
 		expr:     expr,
 		inserts:  inserts,
 		deletes:  deletes,
+	}
+	for i := 1; i < readerNumber; i++ {
+		readers[i] = &emptyReader{}
 	}
 
 	return readers, nil

@@ -24,13 +24,34 @@ import (
 var _ engine.Database = new(database)
 
 func (db *database) Relations(ctx context.Context) ([]string, error) {
-	return db.txn.getTableList(ctx, db.databaseId)
+	tables, err := db.txn.getTableList(ctx, db.databaseId)
+	if err != nil {
+		return nil, err
+	}
+	return tables, nil
 }
 
 func (db *database) Relation(ctx context.Context, name string) (engine.Relation, error) {
 	key := genTableKey(ctx, name, db.databaseId)
 	if tbl, ok := db.txn.tableMap[key]; ok {
 		return tbl, nil
+	}
+	// for acceleration, and can work without these codes.
+	if name == catalog.MO_DATABASE {
+		id := uint64(catalog.MO_DATABASE_ID)
+		defs := catalog.MoDatabaseTableDefs
+		return db.openSysTable(key, id, name, defs), nil
+	}
+	if name == catalog.MO_TABLES {
+		id := uint64(catalog.MO_TABLES_ID)
+		defs := catalog.MoTablesTableDefs
+		return db.openSysTable(key, id, name, defs), nil
+	}
+	if name == catalog.MO_COLUMNS {
+		id := uint64(catalog.MO_COLUMNS_ID)
+		defs := catalog.MoColumnsTableDefs
+		return db.openSysTable(key, id, name, defs), nil
+
 	}
 	id, defs, err := db.txn.getTableInfo(ctx, db.databaseId, name)
 	if err != nil {
@@ -103,4 +124,18 @@ func (db *database) Create(ctx context.Context, name string, defs []engine.Table
 		}
 	}
 	return nil
+}
+
+func (db *database) openSysTable(key tableKey, id uint64, name string,
+	defs []engine.TableDef) engine.Relation {
+	parts := db.txn.db.getPartitions(db.databaseId, id)
+	tbl := &table{
+		db:        db,
+		tableId:   id,
+		tableName: name,
+		defs:      defs,
+		parts:     parts,
+	}
+	db.txn.tableMap[key] = tbl
+	return tbl
 }
