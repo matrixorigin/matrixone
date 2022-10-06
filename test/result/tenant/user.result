@@ -9,3 +9,4 @@ u_a    a111
 u_b    b111
 u_c    a111
 u_d    b111
+drop user if exists u_a,u_b,u_c,u_d;
