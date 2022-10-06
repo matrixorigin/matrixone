@@ -527,7 +527,7 @@ func (blk *dataBlock) ResolveABlkColumnMVCCData(
 
 	view = model.NewColumnView(ts, colIdx)
 	var data containers.Vector
-	data, err = blk.node.GetColumnDataCopy(0, maxRow, colIdx, buffer)
+	data, err = blk.node.GetColumnData(0, maxRow, colIdx, buffer)
 	if err != nil {
 		return
 	}

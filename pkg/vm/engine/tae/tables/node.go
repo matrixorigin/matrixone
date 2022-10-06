@@ -101,6 +101,47 @@ func (node *appendableNode) getPersistedData(minRow, maxRow uint32) (bat *contai
 	return
 }
 
+func (node *appendableNode) getPersistedColumnData(
+	minRow,
+	maxRow uint32,
+	colIdx int,
+	buffer *bytes.Buffer,
+) (vec containers.Vector, err error) {
+	data, err := node.block.LoadColumnData(colIdx, buffer)
+	if err != nil {
+		return
+	}
+	return node.getColumnDataWithVector(minRow, maxRow, colIdx, buffer, data)
+}
+
+func (node *appendableNode) getMemoryColumnDataLocked(
+	minRow,
+	maxRow uint32,
+	colIdx int,
+	buffer *bytes.Buffer,
+) (vec containers.Vector, err error) {
+	return node.getColumnDataWithVector(minRow, maxRow, colIdx, buffer, node.data.Vecs[colIdx])
+}
+
+func (node *appendableNode) getColumnDataWithVector(
+	minRow,
+	maxRow uint32,
+	colIdx int,
+	buffer *bytes.Buffer,
+	data containers.Vector,
+) (vec containers.Vector, err error) {
+	if buffer != nil {
+		win := data
+		if maxRow < uint32(data.Length()) {
+			win = win.Window(int(minRow), int(maxRow))
+		}
+		vec = containers.CloneWithBuffer(win, buffer, containers.DefaultAllocator)
+	} else {
+		vec = data.CloneWindow(int(minRow), int(maxRow-minRow), containers.DefaultAllocator)
+	}
+	return
+}
+
 func (node *appendableNode) GetData(minRow, maxRow uint32) (bat *containers.Batch, err error) {
 	if exception := node.exception.Load(); exception != nil {
 		err = exception.(error)
@@ -117,7 +158,7 @@ func (node *appendableNode) GetData(minRow, maxRow uint32) (bat *containers.Batc
 	return
 }
 
-func (node *appendableNode) GetColumnDataCopy(
+func (node *appendableNode) GetColumnData(
 	minRow uint32,
 	maxRow uint32,
 	colIdx int,
@@ -127,26 +168,13 @@ func (node *appendableNode) GetColumnDataCopy(
 		return
 	}
 	node.block.RLock()
-	var win containers.Vector
-	if node.data == nil {
+	if node.data != nil {
+		vec, err = node.getMemoryColumnDataLocked(minRow, maxRow, colIdx, buffer)
 		node.block.RUnlock()
-		win, err = node.block.LoadColumnData(colIdx, buffer)
-		if err != nil {
-			return
-		}
-	} else {
-		win = node.data.Vecs[colIdx]
-		node.block.RUnlock()
+		return
 	}
-	if buffer != nil {
-		if maxRow < uint32(win.Length()) {
-			win = win.Window(int(minRow), int(maxRow))
-		}
-		vec = containers.CloneWithBuffer(win, buffer, containers.DefaultAllocator)
-	} else {
-		vec = win.CloneWindow(int(minRow), int(maxRow-minRow), containers.DefaultAllocator)
-	}
-	return
+	node.block.RUnlock()
+	return node.getPersistedColumnData(minRow, maxRow, colIdx, buffer)
 }
 
 func (node *appendableNode) Close() (err error) {
