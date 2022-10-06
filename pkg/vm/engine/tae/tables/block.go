@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/evictable"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/indexwrapper"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/jobs"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/updates"
@@ -68,19 +69,19 @@ type dataBlock struct {
 	common.RefHelper
 	*sync.RWMutex
 	common.ClosedState
-	meta      *catalog.BlockEntry
-	node      *appendableNode
-	file      file.Block
-	colFiles  map[int]common.IRWFile
-	bufMgr    base.INodeManager
-	scheduler tasks.TaskScheduler
-	indexes   map[int]indexwrapper.Index
-	pkIndex   indexwrapper.Index // a shortcut, nil if no pk column
-	mvcc      *updates.MVCCHandle
-	score     *statBlock
-	ckpTs     atomic.Value
-	prefix    []byte
-	state     BlockState
+	meta       *catalog.BlockEntry
+	node       *appendableNode
+	file       file.Block
+	colObjects map[int]file.ColumnBlock
+	bufMgr     base.INodeManager
+	scheduler  tasks.TaskScheduler
+	indexes    map[int]indexwrapper.Index
+	pkIndex    indexwrapper.Index // a shortcut, nil if no pk column
+	mvcc       *updates.MVCCHandle
+	score      *statBlock
+	ckpTs      atomic.Value
+	prefix     []byte
+	state      BlockState
 }
 
 func newBlock(meta *catalog.BlockEntry, segFile file.Segment, bufMgr base.INodeManager, scheduler tasks.TaskScheduler) *dataBlock {
@@ -101,40 +102,37 @@ func newBlock(meta *catalog.BlockEntry, segFile file.Segment, bufMgr base.INodeM
 		pkIdx = schema.GetSingleSortKeyIdx()
 		indexCnt[pkIdx] += 1
 	}
-	file, err := segFile.OpenBlock(meta.GetID(), colCnt, indexCnt)
+	blockFile, err := segFile.OpenBlock(meta.GetID(), colCnt)
 	if err != nil {
 		panic(err)
 	}
-	colFiles := make(map[int]common.IRWFile)
+	colObjects := make(map[int]file.ColumnBlock)
 	for i := 0; i < colCnt; i++ {
-		if colBlk, err := file.OpenColumn(i); err != nil {
+		if colBlk, err := blockFile.OpenColumn(i); err != nil {
 			panic(err)
 		} else {
-			colFiles[i], err = colBlk.OpenDataFile()
-			if err != nil {
-				panic(err)
-			}
+			colObjects[i] = colBlk
 			colBlk.Close()
 		}
 	}
 	var node *appendableNode
 	//var zeroV types.TS
 	block := &dataBlock{
-		RWMutex:   new(sync.RWMutex),
-		meta:      meta,
-		file:      file,
-		colFiles:  colFiles,
-		mvcc:      updates.NewMVCCHandle(meta),
-		scheduler: scheduler,
-		indexes:   make(map[int]indexwrapper.Index),
-		bufMgr:    bufMgr,
-		prefix:    meta.MakeKey(),
+		RWMutex:    new(sync.RWMutex),
+		meta:       meta,
+		file:       blockFile,
+		colObjects: colObjects,
+		mvcc:       updates.NewMVCCHandle(meta),
+		scheduler:  scheduler,
+		indexes:    make(map[int]indexwrapper.Index),
+		bufMgr:     bufMgr,
+		prefix:     meta.MakeKey(),
 	}
-	ts, _ := block.file.ReadTS()
+	ts := block.ReadTS()
 	block.mvcc.SetAppendListener(block.OnApplyAppend)
 	if meta.IsAppendable() {
 		block.mvcc.SetDeletesListener(block.ABlkApplyDelete)
-		node = newNode(bufMgr, block, file)
+		node = newNode(bufMgr, block, blockFile)
 		block.node = node
 		// if this block is created to receive data, create mutable index first
 		for _, colDef := range schema.ColDefs {
@@ -156,7 +154,7 @@ func newBlock(meta *catalog.BlockEntry, segFile file.Segment, bufMgr base.INodeM
 	}
 	block.mvcc.SetMaxVisible(ts)
 	block.ckpTs.Store(ts)
-	if !ts.IsEmpty() {
+	if meta.GetMetaLoc() != "" {
 		if err := block.ReplayIndex(); err != nil {
 			panic(err)
 		}
@@ -167,6 +165,7 @@ func newBlock(meta *catalog.BlockEntry, segFile file.Segment, bufMgr base.INodeM
 	return block
 }
 
+func (blk *dataBlock) ReadTS() (ts types.TS)        { return }
 func (blk *dataBlock) GetMeta() any                 { return blk.meta }
 func (blk *dataBlock) GetBufMgr() base.INodeManager { return blk.bufMgr }
 func (blk *dataBlock) SetNotAppendable() {
@@ -214,10 +213,10 @@ func (blk *dataBlock) Destroy() (err error) {
 			return
 		}
 	}
-	for _, file := range blk.colFiles {
-		file.Unref()
+	for _, file := range blk.colObjects {
+		file.Close()
 	}
-	blk.colFiles = make(map[int]common.IRWFile)
+	blk.colObjects = make(map[int]file.ColumnBlock)
 	for _, index := range blk.indexes {
 		if err = index.Destroy(); err != nil {
 			return
@@ -377,13 +376,21 @@ func (blk *dataBlock) Rows(txn txnif.AsyncTxn, coarse bool) int {
 		rows := int(blk.node.Rows(txn, coarse))
 		return rows
 	}
-	return int(blk.file.ReadRows())
+	metaLoc := blk.meta.GetMetaLoc()
+	if metaLoc == "" {
+		return 0
+	}
+	return int(blk.file.ReadRows(metaLoc))
 }
 
 // for replay
 func (blk *dataBlock) GetRowsOnReplay() uint64 {
 	rows := uint64(blk.mvcc.GetTotalRow())
-	fileRows := uint64(blk.file.ReadRows())
+	metaLoc := blk.meta.GetMetaLoc()
+	if metaLoc == "" {
+		return rows
+	}
+	fileRows := uint64(blk.file.ReadRows(metaLoc))
 	if rows > fileRows {
 		return rows
 	}
@@ -499,9 +506,9 @@ func (blk *dataBlock) ResolveABlkColumnMVCCData(
 		visible bool
 	)
 	blk.mvcc.RLock()
-	if ts.GreaterEq(blk.GetMaxVisibleTS()) {
-		maxRow = blk.node.rows
+	if ts.GreaterEq(blk.GetMaxVisibleTS()) && blk.mvcc.AppendCommitted() {
 		visible = true
+		maxRow = blk.node.rows
 	} else {
 		maxRow, visible, err = blk.mvcc.GetMaxVisibleRowLocked(ts)
 	}
@@ -643,9 +650,11 @@ func (blk *dataBlock) LoadColumnData(
 	colIdx int,
 	buffer *bytes.Buffer) (vec containers.Vector, err error) {
 	def := blk.meta.GetSchema().ColDefs[colIdx]
-	vec = containers.MakeVector(def.Type, def.Nullable())
-	err = vec.ReadFromFile(blk.colFiles[colIdx], buffer)
-	return
+	// FIXME "GetMetaLoc()"
+	metaLoc := blk.meta.GetMetaLoc()
+	id := blk.meta.AsCommonID()
+	id.Idx = uint16(colIdx)
+	return evictable.FetchColumnData(buffer, blk.bufMgr, id, blk.colObjects[colIdx], metaLoc, def)
 }
 
 func (blk *dataBlock) ablkGetByFilter(ts types.TS, filter *handle.Filter) (offset uint32, err error) {
@@ -757,59 +766,24 @@ func (blk *dataBlock) ABlkApplyDelete(deleted uint64, gen common.RowGen, ts type
 		return
 	}
 	// If any pk defined, update index
-	if blk.meta.GetSchema().IsSinglePK() {
-		var row uint32
-		blk.mvcc.RLock()
-		vecview := blk.node.data.Vecs[blk.meta.GetSchema().GetSingleSortKeyIdx()].GetView()
-		blk.mvcc.RUnlock()
-		blk.mvcc.Lock()
-		defer blk.mvcc.Unlock()
-		var currRow uint32
-		for gen.HasNext() {
-			row = gen.Next()
-			v := vecview.Get(int(row))
-			currRow, err = blk.pkIndex.GetActiveRow(v)
-			if err != nil || currRow == row {
-				if err = blk.pkIndex.Delete(v, ts); err != nil {
-					return
-				}
+	var row uint32
+	blk.mvcc.RLock()
+	vecview := blk.node.data.Vecs[blk.meta.GetSchema().GetSingleSortKeyIdx()].GetView()
+	blk.mvcc.RUnlock()
+	blk.mvcc.Lock()
+	defer blk.mvcc.Unlock()
+	var currRow uint32
+	for gen.HasNext() {
+		row = gen.Next()
+		v := vecview.Get(int(row))
+		currRow, err = blk.pkIndex.GetActiveRow(v)
+		if err != nil || currRow == row {
+			if err = blk.pkIndex.Delete(v, ts); err != nil {
+				return
 			}
 		}
-		blk.meta.GetSegment().GetTable().RemoveRows(deleted)
-	} else {
-		var row uint32
-		var w bytes.Buffer
-		sortKeys := blk.meta.GetSchema().SortKey
-		vals := make([]any, sortKeys.Size())
-		vecs := make([]containers.VectorView, sortKeys.Size())
-		blk.mvcc.RLock()
-		for i := range vecs {
-			vec := blk.node.data.Vecs[sortKeys.Defs[i].Idx].GetView()
-			if err != nil {
-				blk.mvcc.RUnlock()
-				return err
-			}
-			vecs[i] = vec
-		}
-		blk.mvcc.RUnlock()
-		blk.mvcc.Lock()
-		defer blk.mvcc.Unlock()
-		var currRow uint32
-		for gen.HasNext() {
-			row = gen.Next()
-			for i := range vals {
-				vals[i] = vecs[i].Get(int(row))
-			}
-			v := model.EncodeTypedVals(&w, vals...)
-			currRow, err = blk.pkIndex.GetActiveRow(v)
-			if err != nil || currRow == row {
-				if err = blk.pkIndex.Delete(v, ts); err != nil {
-					return
-				}
-			}
-		}
-		blk.meta.GetSegment().GetTable().RemoveRows(deleted)
 	}
+	blk.meta.GetSegment().GetTable().RemoveRows(deleted)
 	return
 }
 
@@ -897,13 +871,6 @@ func (blk *dataBlock) CollectChangesInRange(startTs, endTs types.TS) (view *mode
 	view.DeleteMask, view.DeleteLogIndexes, err = deleteChain.CollectDeletesInRange(startTs, endTs, blk.mvcc.RWMutex)
 	blk.mvcc.RUnlock()
 	return
-}
-func (blk *dataBlock) GetSortColumns(schema *catalog.Schema, data *containers.Batch) []containers.Vector {
-	vs := make([]containers.Vector, schema.GetSortKeyCnt())
-	for i := range vs {
-		vs[i] = data.Vecs[schema.SortKey.Defs[i].Idx]
-	}
-	return vs
 }
 
 func (blk *dataBlock) CollectAppendInRange(start, end types.TS) (*containers.Batch, error) {

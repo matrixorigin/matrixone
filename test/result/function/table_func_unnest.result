@@ -1,0 +1,206 @@
+select * from unnest('{"a":1}') as f;
+col	seq	key	path	index	value	this
+UNNEST_DEFAULT	0	a	$.a	null	1	{"a": 1}
+select * from unnest('{"a":1}', '$.a') as f;
+col	seq	key	path	index	value	this
+select * from unnest('{"a":1}', '$.a', true) as f;
+col	seq	key	path	index	value	this
+UNNEST_DEFAULT	0	null	$.a	null	null	1
+select * from unnest('{"a":1}');
+SQL parser error: No tables used
+select * from unnest('{"a":1}', '$.a');
+SQL parser error: No tables used
+select * from unnest('{"a":1}', '$.a', true);
+SQL parser error: No tables used
+drop table if exists t1;
+create table t1 (a json,b int);
+insert into t1 values ('{"a":1,"b":[{"c":2,"d":3},false,4],"e":{"f":true,"g":[null,true,1.1]}}',1);
+insert into t1 values ('[1,true,false,null,"aaa",1.1,{"t":false}]',2);
+select * from t1;
+a	b
+{"a": 1, "b": [{"c": 2, "d": 3}, false, 4], "e": {"f": true, "g": [null, true, 1.1]}}	1
+[1, true, false, null, "aaa", 1.1, {"t": false}]	2
+select * from unnest(t1.a) as f;
+col	seq	key	path	index	value	this
+a	0	a	$.a	null	1	{"a": 1, "b": [{"c": 2, "d": 3}, false, 4], "e": {"f": true, "g": [null, true, 1.1]}}
+a	0	b	$.b	null	[{"c": 2, "d": 3}, false, 4]	{"a": 1, "b": [{"c": 2, "d": 3}, false, 4], "e": {"f": true, "g": [null, true, 1.1]}}
+a	0	e	$.e	null	{"f": true, "g": [null, true, 1.1]}	{"a": 1, "b": [{"c": 2, "d": 3}, false, 4], "e": {"f": true, "g": [null, true, 1.1]}}
+a	1	null	$[0]	0	1	[1, true, false, null, "aaa", 1.1, {"t": false}]
+a	1	null	$[1]	1	true	[1, true, false, null, "aaa", 1.1, {"t": false}]
+a	1	null	$[2]	2	false	[1, true, false, null, "aaa", 1.1, {"t": false}]
+a	1	null	$[3]	3	null	[1, true, false, null, "aaa", 1.1, {"t": false}]
+a	1	null	$[4]	4	"aaa"	[1, true, false, null, "aaa", 1.1, {"t": false}]
+a	1	null	$[5]	5	1.1	[1, true, false, null, "aaa", 1.1, {"t": false}]
+a	1	null	$[6]	6	{"t": false}	[1, true, false, null, "aaa", 1.1, {"t": false}]
+select * from unnest(t1.a, "$.b") as f;
+col	seq	key	path	index	value	this
+a	0	null	$.b[0]	0	{"c": 2, "d": 3}	[{"c": 2, "d": 3}, false, 4]
+a	0	null	$.b[1]	1	false	[{"c": 2, "d": 3}, false, 4]
+a	0	null	$.b[2]	2	4	[{"c": 2, "d": 3}, false, 4]
+select * from unnest(t1.a, "$.a") as f;
+col	seq	key	path	index	value	this
+select * from unnest(t1.a, "$.a", true) as f;
+col	seq	key	path	index	value	this
+a	0	null	$.a	null	null	1
+select * from unnest(t1.a);
+SQL parser error: No tables used
+select * from unnest(t1.a, "$.b");
+SQL parser error: No tables used
+select * from unnest(t1.a, "$.a");
+SQL parser error: No tables used
+select * from unnest(t1.a, "$.a", true) as f;
+col	seq	key	path	index	value	this
+a	0	null	$.a	null	null	1
+select col from unnest(t1.a, "$.b") as f;
+col
+a
+a
+a
+select f.col from unnest(t1.a, "$.b") as f;
+col
+a
+a
+a
+select f.seq, f.col from unnest(t1.a, "$.b") as f;
+seq	col
+0	a
+0	a
+0	a
+select distinct(f.seq) from unnest(t1.a, "$") as f;
+f.seq
+0
+1
+select `index`,path from unnest(t1.a, "$") u;
+index	path
+null	$.a
+null	$.b
+null	$.e
+0	$[0]
+1	$[1]
+2	$[2]
+3	$[3]
+4	$[4]
+5	$[5]
+6	$[6]
+select `index`,path from unnest(t1.a, "$") u where u.`index` = 1;
+index	path
+1	$[1]
+select `index`,path from unnest(t1.a, "$") u where u.`index` is null or u.path='$.b';
+index	path
+null	$.a
+null	$.b
+null	$.e
+select `index`,path from unnest(t1.a, "$") u where u.`index` is null and u.path='$.b';
+index	path
+null	$.b
+select * from t1,unnest(t1.a, "$") u;
+a	b	col	seq	key	path	index	value	this
+{"a": 1, "b": [{"c": 2, "d": 3}, false, 4], "e": {"f": true, "g": [null, true, 1.1]}}	1	a	0	a	$.a	null	1	{"a": 1, "b": [{"c": 2, "d": 3}, false, 4], "e": {"f": true, "g": [null, true, 1.1]}}
+{"a": 1, "b": [{"c": 2, "d": 3}, false, 4], "e": {"f": true, "g": [null, true, 1.1]}}	1	a	0	b	$.b	null	[{"c": 2, "d": 3}, false, 4]	{"a": 1, "b": [{"c": 2, "d": 3}, false, 4], "e": {"f": true, "g": [null, true, 1.1]}}
+{"a": 1, "b": [{"c": 2, "d": 3}, false, 4], "e": {"f": true, "g": [null, true, 1.1]}}	1	a	0	e	$.e	null	{"f": true, "g": [null, true, 1.1]}	{"a": 1, "b": [{"c": 2, "d": 3}, false, 4], "e": {"f": true, "g": [null, true, 1.1]}}
+{"a": 1, "b": [{"c": 2, "d": 3}, false, 4], "e": {"f": true, "g": [null, true, 1.1]}}	1	a	1	null	$[0]	0	1	[1, true, false, null, "aaa", 1.1, {"t": false}]
+{"a": 1, "b": [{"c": 2, "d": 3}, false, 4], "e": {"f": true, "g": [null, true, 1.1]}}	1	a	1	null	$[1]	1	true	[1, true, false, null, "aaa", 1.1, {"t": false}]
+{"a": 1, "b": [{"c": 2, "d": 3}, false, 4], "e": {"f": true, "g": [null, true, 1.1]}}	1	a	1	null	$[2]	2	false	[1, true, false, null, "aaa", 1.1, {"t": false}]
+{"a": 1, "b": [{"c": 2, "d": 3}, false, 4], "e": {"f": true, "g": [null, true, 1.1]}}	1	a	1	null	$[3]	3	null	[1, true, false, null, "aaa", 1.1, {"t": false}]
+{"a": 1, "b": [{"c": 2, "d": 3}, false, 4], "e": {"f": true, "g": [null, true, 1.1]}}	1	a	1	null	$[4]	4	"aaa"	[1, true, false, null, "aaa", 1.1, {"t": false}]
+{"a": 1, "b": [{"c": 2, "d": 3}, false, 4], "e": {"f": true, "g": [null, true, 1.1]}}	1	a	1	null	$[5]	5	1.1	[1, true, false, null, "aaa", 1.1, {"t": false}]
+{"a": 1, "b": [{"c": 2, "d": 3}, false, 4], "e": {"f": true, "g": [null, true, 1.1]}}	1	a	1	null	$[6]	6	{"t": false}	[1, true, false, null, "aaa", 1.1, {"t": false}]
+[1, true, false, null, "aaa", 1.1, {"t": false}]	2	a	0	a	$.a	null	1	{"a": 1, "b": [{"c": 2, "d": 3}, false, 4], "e": {"f": true, "g": [null, true, 1.1]}}
+[1, true, false, null, "aaa", 1.1, {"t": false}]	2	a	0	b	$.b	null	[{"c": 2, "d": 3}, false, 4]	{"a": 1, "b": [{"c": 2, "d": 3}, false, 4], "e": {"f": true, "g": [null, true, 1.1]}}
+[1, true, false, null, "aaa", 1.1, {"t": false}]	2	a	0	e	$.e	null	{"f": true, "g": [null, true, 1.1]}	{"a": 1, "b": [{"c": 2, "d": 3}, false, 4], "e": {"f": true, "g": [null, true, 1.1]}}
+[1, true, false, null, "aaa", 1.1, {"t": false}]	2	a	1	null	$[0]	0	1	[1, true, false, null, "aaa", 1.1, {"t": false}]
+[1, true, false, null, "aaa", 1.1, {"t": false}]	2	a	1	null	$[1]	1	true	[1, true, false, null, "aaa", 1.1, {"t": false}]
+[1, true, false, null, "aaa", 1.1, {"t": false}]	2	a	1	null	$[2]	2	false	[1, true, false, null, "aaa", 1.1, {"t": false}]
+[1, true, false, null, "aaa", 1.1, {"t": false}]	2	a	1	null	$[3]	3	null	[1, true, false, null, "aaa", 1.1, {"t": false}]
+[1, true, false, null, "aaa", 1.1, {"t": false}]	2	a	1	null	$[4]	4	"aaa"	[1, true, false, null, "aaa", 1.1, {"t": false}]
+[1, true, false, null, "aaa", 1.1, {"t": false}]	2	a	1	null	$[5]	5	1.1	[1, true, false, null, "aaa", 1.1, {"t": false}]
+[1, true, false, null, "aaa", 1.1, {"t": false}]	2	a	1	null	$[6]	6	{"t": false}	[1, true, false, null, "aaa", 1.1, {"t": false}]
+select * from t1,unnest(t1.a, "$") u where u.`index` = 1;
+a	b	col	seq	key	path	index	value	this
+{"a": 1, "b": [{"c": 2, "d": 3}, false, 4], "e": {"f": true, "g": [null, true, 1.1]}}	1	a	1	null	$[1]	1	true	[1, true, false, null, "aaa", 1.1, {"t": false}]
+[1, true, false, null, "aaa", 1.1, {"t": false}]	2	a	1	null	$[1]	1	true	[1, true, false, null, "aaa", 1.1, {"t": false}]
+select `key`,path,value from t1, unnest(t1.a, "$") u where u.`index` is null or u.path='$.b';
+key	path	value
+a	$.a	1
+b	$.b	[{"c": 2, "d": 3}, false, 4]
+e	$.e	{"f": true, "g": [null, true, 1.1]}
+a	$.a	1
+b	$.b	[{"c": 2, "d": 3}, false, 4]
+e	$.e	{"f": true, "g": [null, true, 1.1]}
+select seq,col,b from t1, unnest(t1.a, "$") u where u.`index` is null;
+seq	col	b
+0	a	1
+0	a	1
+0	a	1
+0	a	2
+0	a	2
+0	a	2
+select count(b),b from t1, unnest(t1.a, "$") u where u.`index` is null group by b;
+count(b)	b
+3	1
+3	2
+insert into t1 values ('{"add":1}',1);
+select count(seq),seq from t1, unnest(t1.a, "$") u where u.`index` is null group by seq;
+count(seq)	seq
+9	0
+3	2
+select count(seq),seq from t1, unnest(t1.a, "$") u where u.`index` is null group by seq order by seq desc;
+count(seq)	seq
+3	2
+9	0
+select count(`index`),`index`,sum(`index`) from t1, unnest(t1.a, "$") u where u.`index` is not null group by `index` order by sum(`index`) desc;
+count(index)	index	sum(index)
+3	6	18
+3	5	15
+3	4	12
+3	3	9
+3	2	6
+3	1	3
+3	0	0
+select * from t1,unnest(t1.a,"$.b",true) u where seq>1;
+a	b	col	seq	key	path	index	value	this
+{"a": 1, "b": [{"c": 2, "d": 3}, false, 4], "e": {"f": true, "g": [null, true, 1.1]}}	1	a	2	null	$.b	null	null	null
+[1, true, false, null, "aaa", 1.1, {"t": false}]	2	a	2	null	$.b	null	null	null
+{"add": 1}	1	a	2	null	$.b	null	null	null
+with u_table as (select * from t1,unnest(t1.a,"$.b",true) u where seq>1) select a,`index` from u_table where b=1;
+a    index
+{"a": 1, "b": [{"c": 2, "d": 3}, false, 4], "e": {"f": true, "g": [null, true, 1.1]}}	null
+{"add": 1}	null
+with myt as (select a from t1 where t1.b>1) select * from unnest(myt.a) u;
+col	seq	key	path	index	value	this
+a	0	null	$[0]	0	1	[1, true, false, null, "aaa", 1.1, {"t": false}]
+a	0	null	$[1]	1	true	[1, true, false, null, "aaa", 1.1, {"t": false}]
+a	0	null	$[2]	2	false	[1, true, false, null, "aaa", 1.1, {"t": false}]
+a	0	null	$[3]	3	null	[1, true, false, null, "aaa", 1.1, {"t": false}]
+a	0	null	$[4]	4	"aaa"	[1, true, false, null, "aaa", 1.1, {"t": false}]
+a	0	null	$[5]	5	1.1	[1, true, false, null, "aaa", 1.1, {"t": false}]
+a	0	null	$[6]	6	{"t": false}	[1, true, false, null, "aaa", 1.1, {"t": false}]
+with myt as (select a from t1 where t1.b>1) select * from unnest(myt.a) u where `value`='false' or `index`=5;
+col	seq	key	path	index	value	this
+a	0	null	$[2]	2	false	[1, true, false, null, "aaa", 1.1, {"t": false}]
+a	0	null	$[5]	5	1.1	[1, true, false, null, "aaa", 1.1, {"t": false}]
+create view v1 as (select * from unnest(t1.a) u);
+select * from v1;
+col	seq	key	path	index	value	this
+a	0	a	$.a	null	1	{"a": 1, "b": [{"c": 2, "d": 3}, false, 4], "e": {"f": true, "g": [null, true, 1.1]}}
+a	0	b	$.b	null	[{"c": 2, "d": 3}, false, 4]	{"a": 1, "b": [{"c": 2, "d": 3}, false, 4], "e": {"f": true, "g": [null, true, 1.1]}}
+a	0	e	$.e	null	{"f": true, "g": [null, true, 1.1]}	{"a": 1, "b": [{"c": 2, "d": 3}, false, 4], "e": {"f": true, "g": [null, true, 1.1]}}
+a	1	null	$[0]	0	1	[1, true, false, null, "aaa", 1.1, {"t": false}]
+a	1	null	$[1]	1	true	[1, true, false, null, "aaa", 1.1, {"t": false}]
+a	1	null	$[2]	2	false	[1, true, false, null, "aaa", 1.1, {"t": false}]
+a	1	null	$[3]	3	null	[1, true, false, null, "aaa", 1.1, {"t": false}]
+a	1	null	$[4]	4	"aaa"	[1, true, false, null, "aaa", 1.1, {"t": false}]
+a	1	null	$[5]	5	1.1	[1, true, false, null, "aaa", 1.1, {"t": false}]
+a	1	null	$[6]	6	{"t": false}	[1, true, false, null, "aaa", 1.1, {"t": false}]
+a	2	add	$.add	null	1	{"add": 1}
+select * from v1 where `index` is null;
+col	seq	key	path	index	value	this
+a	0	a	$.a	null	1	{"a": 1, "b": [{"c": 2, "d": 3}, false, 4], "e": {"f": true, "g": [null, true, 1.1]}}
+a	0	b	$.b	null	[{"c": 2, "d": 3}, false, 4]	{"a": 1, "b": [{"c": 2, "d": 3}, false, 4], "e": {"f": true, "g": [null, true, 1.1]}}
+a	0	e	$.e	null	{"f": true, "g": [null, true, 1.1]}	{"a": 1, "b": [{"c": 2, "d": 3}, false, 4], "e": {"f": true, "g": [null, true, 1.1]}}
+a	2	add	$.add	null	1	{"add": 1}
+select count(seq),seq from v1 where `index` is null or `value`='false' group by seq;
+count(seq)	seq
+3	0
+1	1
+1	2

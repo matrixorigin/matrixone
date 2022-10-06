@@ -119,7 +119,6 @@ func (l *store) hakeeperCheck() {
 		l.taskScheduler.StopScheduleCronTask()
 		return
 	}
-
 	l.taskScheduler.StartScheduleCronTask()
 	state, err := l.getCheckerState()
 	if err != nil {

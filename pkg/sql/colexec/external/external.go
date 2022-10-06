@@ -66,8 +66,8 @@ func Prepare(proc *process.Process, arg any) error {
 	}
 
 	if len(fileList) == 0 {
+		logutil.Warnf("no such file '%s'", param.extern.Filepath)
 		param.End = true
-		return moerr.NewInternalError("no such file '%s'", param.extern.Filepath)
 	}
 	param.FileList = fileList
 	param.FileCnt = len(fileList)
@@ -188,6 +188,7 @@ func getUnCompressReader(param *tree.ExternParam, r io.ReadCloser) (io.ReadClose
 
 const NULL_FLAG = "\\N"
 
+// judge the file is whether integer num
 func judgeInterge(field string) bool {
 	for i := 0; i < len(field); i++ {
 		if field[i] == '-' || field[i] == '+' {
@@ -553,7 +554,13 @@ func GetBatchData(param *ExternalParam, plh *ParseLineHandler, proc *process.Pro
 				if isNullOrEmpty {
 					nulls.Add(vec.Nsp, uint64(rowIdx))
 				} else {
-					d, err := types.ParseTimestamp(time.UTC, field, vec.Typ.Precision)
+					var t *time.Location
+					if proc == nil {
+						t = time.Local
+					} else {
+						t = proc.SessionInfo.TimeZone
+					}
+					d, err := types.ParseTimestamp(t, field, vec.Typ.Precision)
 					if err != nil {
 						logutil.Errorf("parse field[%v] err:%v", field, err)
 						return nil, moerr.NewInternalError("the input value '%v' is not Timestamp type for column %d", field, colIdx)
@@ -613,6 +620,7 @@ func ScanFileData(param *ExternalParam, proc *process.Process) (*batch.Batch, er
 	var bat *batch.Batch
 	var err error
 	if param.plh == nil {
+		param.IgnoreLine = param.IgnoreLineTag
 		param.plh, err = GetSimdcsvReader(param)
 		if err != nil {
 			return nil, err
@@ -628,15 +636,19 @@ func ScanFileData(param *ExternalParam, proc *process.Process) (*batch.Batch, er
 		if err != nil {
 			logutil.Errorf("close file failed. err:%v", err)
 		}
+		plh.simdCsvReader.Close()
 		param.plh = nil
 		param.FileIndex++
-		param.IgnoreLine = param.IgnoreLineTag
 		if param.FileIndex >= param.FileCnt {
 			param.End = true
 		}
 	}
 	if param.IgnoreLine != 0 {
-		plh.simdCsvLineArray = plh.simdCsvLineArray[param.IgnoreLine:]
+		if len(plh.simdCsvLineArray) >= param.IgnoreLine {
+			plh.simdCsvLineArray = plh.simdCsvLineArray[param.IgnoreLine:]
+		} else {
+			plh.simdCsvLineArray = nil
+		}
 		param.IgnoreLine = 0
 	}
 	plh.batchSize = len(plh.simdCsvLineArray)

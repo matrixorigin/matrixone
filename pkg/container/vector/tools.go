@@ -53,6 +53,20 @@ func MustStrCols(v *Vector) []string {
 	return ret
 }
 
+func MustVarlenaRawData(v *Vector) (data []types.Varlena, area []byte) {
+	data = MustTCols[types.Varlena](v)
+	area = v.area
+	return
+}
+
+func BuildVarlenaVector(typ types.Type, data []types.Varlena, area []byte) (vec *Vector, err error) {
+	vec = NewOriginal(typ)
+	vec.data = types.EncodeVarlenaSlice(data)
+	vec.area = area
+	vec.colFromData()
+	return
+}
+
 func VectorToProtoVector(vec *Vector) (*api.Vector, error) {
 	nsp, err := vec.Nsp.Show()
 	if err != nil {
@@ -268,8 +282,7 @@ func (v *Vector) encodeColToByteSlice() []byte {
 	}
 }
 
-// XXX extend will entend the vector's Data to accormordate rows more entry.
-// XXX we do not fix null map, Huh?
+// XXX extend will extend the vector's Data to accormordate rows more entry.
 func (v *Vector) extend(rows int, m *mheap.Mheap) error {
 	origSz := len(v.data)
 	growSz := rows * v.GetType().TypeSize()
@@ -296,5 +309,7 @@ func (v *Vector) extend(rows int, m *mheap.Mheap) error {
 	}
 	// Setup v.Col
 	v.setupColFromData(0, tgtSz/v.GetType().TypeSize())
+	// extend the null map
+	nulls.TryExpand(v.Nsp, tgtSz)
 	return nil
 }

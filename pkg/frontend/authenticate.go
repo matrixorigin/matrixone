@@ -357,6 +357,7 @@ const (
 	PrivilegeTypeTableOwnership
 	PrivilegeTypeExecute
 	PrivilegeTypeRoleWGO
+	PrivilegeTypeValues
 )
 
 type PrivilegeScope uint8
@@ -488,6 +489,8 @@ func (pt PrivilegeType) String() string {
 		return "table ownership"
 	case PrivilegeTypeExecute:
 		return "execute"
+	case PrivilegeTypeValues:
+		return "values"
 	}
 	panic(fmt.Sprintf("no such privilege type %d", pt))
 }
@@ -562,6 +565,8 @@ func (pt PrivilegeType) Scope() PrivilegeScope {
 		return PrivilegeScopeTable
 	case PrivilegeTypeExecute:
 		return PrivilegeScopeTable
+	case PrivilegeTypeValues:
+		return PrivilegeScopeTable
 	}
 	panic(fmt.Sprintf("no such privilege type %d", pt))
 }
@@ -585,7 +590,7 @@ var (
 	//the sqls creating many tables for the tenant.
 	//Wrap them in a transaction
 	createSqls = []string{
-		"create table `%!%mo_increment_columns`(name varchar(770) primary key, offset bigint, step bigint);",
+		"create table `%!%mo_increment_columns`(name varchar(770) primary key, offset bigint unsigned, step bigint unsigned);",
 		`create table mo_user(
 				user_id int signed auto_increment,
 				user_host varchar(100),
@@ -1256,6 +1261,7 @@ var (
 		PrivilegeTypeTableAll:          {PrivilegeTypeTableAll, privilegeLevelStarStar, objectTypeTable, objectIDAll, true, "", "", privilegeEntryTypeGeneral, nil},
 		PrivilegeTypeTableOwnership:    {PrivilegeTypeTableOwnership, privilegeLevelStarStar, objectTypeTable, objectIDAll, true, "", "", privilegeEntryTypeGeneral, nil},
 		PrivilegeTypeExecute:           {PrivilegeTypeExecute, privilegeLevelRoutine, objectTypeFunction, objectIDAll, true, "", "", privilegeEntryTypeGeneral, nil},
+		PrivilegeTypeValues:            {PrivilegeTypeValues, privilegeLevelTable, objectTypeTable, objectIDAll, true, "", "", privilegeEntryTypeGeneral, nil},
 	}
 
 	//the initial entries of mo_role_privs for the role 'moadmin'
@@ -1292,6 +1298,7 @@ var (
 		PrivilegeTypeIndex,
 		PrivilegeTypeTableAll,
 		PrivilegeTypeTableOwnership,
+		PrivilegeTypeValues,
 	}
 
 	//the initial entries of mo_role_privs for the role 'accountadmin'
@@ -1325,6 +1332,7 @@ var (
 		PrivilegeTypeIndex,
 		PrivilegeTypeTableAll,
 		PrivilegeTypeTableOwnership,
+		PrivilegeTypeValues,
 	}
 
 	//the initial entries of mo_role_privs for the role 'public'
@@ -2846,7 +2854,8 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 	case *tree.CreateIndex, *tree.DropIndex, *tree.ShowIndex:
 		objType = objectTypeTable
 		typs = append(typs, PrivilegeTypeIndex)
-	case *tree.ShowProcessList, *tree.ShowErrors, *tree.ShowWarnings, *tree.ShowVariables, *tree.ShowStatus, *tree.ShowTarget:
+	case *tree.ShowProcessList, *tree.ShowErrors, *tree.ShowWarnings, *tree.ShowVariables,
+		*tree.ShowStatus, *tree.ShowTarget, *tree.ShowTableStatus, *tree.ShowGrants:
 		objType = objectTypeNone
 		kind = privilegeKindNone
 	case *tree.ExplainFor, *tree.ExplainAnalyze, *tree.ExplainStmt:
@@ -2867,6 +2876,9 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 	case *InternalCmdFieldList:
 		objType = objectTypeNone
 		kind = privilegeKindNone
+	case *tree.ValuesStatement:
+		objType = objectTypeTable
+		typs = append(typs, PrivilegeTypeValues, PrivilegeTypeTableAll /*PrivilegeTypeTableOwnership*/)
 	default:
 		panic(fmt.Sprintf("does not have the privilege definition of the statement %s", stmt))
 	}
@@ -3898,6 +3910,8 @@ func convertAstPrivilegeTypeToPrivilegeType(priv tree.PrivilegeType, ot tree.Obj
 		privType = PrivilegeTypeTruncate
 	case tree.PRIVILEGE_TYPE_STATIC_REFERENCE:
 		privType = PrivilegeTypeReference
+	case tree.PRIVILEGE_TYPE_STATIC_VALUES:
+		privType = PrivilegeTypeValues
 	default:
 		return 0, moerr.NewInternalError("unsupported privilege type %s", priv.ToString())
 	}

@@ -173,6 +173,7 @@ import (
     accountCommentOrAttribute tree.AccountCommentOrAttribute
     userIdentified *tree.AccountIdentified
     accountRole *tree.Role
+    showType tree.ShowType
 }
 
 %token LEX_ERROR
@@ -257,7 +258,7 @@ import (
 %token <str> ZONEMAP LEADING BOTH TRAILING UNKNOWN
 
 // Alter
-%token <str> EXPIRE ACCOUNT UNLOCK DAY NEVER
+%token <str> EXPIRE ACCOUNT UNLOCK DAY NEVER PUMP
 
 // Time
 %token <str> SECOND ASCII COALESCE COLLATION HOUR MICROSECOND MINUTE MONTH QUARTER REPEAT
@@ -268,7 +269,7 @@ import (
 %token <str> SLAVE CLIENT USAGE RELOAD FILE TEMPORARY ROUTINE EVENT SHUTDOWN
 
 // Type Modifiers
-%token <str> NULLX AUTO_INCREMENT APPROXNUM SIGNED UNSIGNED ZEROFILL
+%token <str> NULLX AUTO_INCREMENT APPROXNUM SIGNED UNSIGNED ZEROFILL ENGINES
 
 // Account
 %token <str> ADMIN_NAME RANDOM SUSPEND ATTRIBUTE HISTORY REUSE CURRENT OPTIONAL FAILED_LOGIN_ATTEMPTS PASSWORD_LOCK_TIME UNBOUNDED SECONDARY
@@ -278,7 +279,7 @@ import (
 %token <str> MAX_QUERIES_PER_HOUR MAX_UPDATES_PER_HOUR MAX_CONNECTIONS_PER_HOUR MAX_USER_CONNECTIONS
 
 // Explain
-%token <str> FORMAT VERBOSE CONNECTION
+%token <str> FORMAT VERBOSE CONNECTION TRIGGERS PROFILES
 
 // Load
 %token <str> LOAD INFILE TERMINATED OPTIONALLY ENCLOSED ESCAPED STARTING LINES ROWS IMPORT
@@ -288,7 +289,7 @@ import (
 
 // SET tokens
 %token <str> NAMES GLOBAL SESSION ISOLATION LEVEL READ WRITE ONLY REPEATABLE COMMITTED UNCOMMITTED SERIALIZABLE
-%token <str> LOCAL
+%token <str> LOCAL EVENTS PLUGINS
 
 // Functions
 %token <str> CURRENT_TIMESTAMP DATABASE
@@ -305,7 +306,7 @@ import (
 %token <str> SQL_TSI_SECOND SQL_TSI_MINUTE
 
 // With
-%token <str> RECURSIVE CONFIG
+%token <str> RECURSIVE CONFIG DRAINER
 
 // Match
 %token <str> MATCH AGAINST BOOLEAN LANGUAGE WITH QUERY EXPANSION
@@ -320,10 +321,13 @@ import (
 //JSON function
 %token <str> JSON_EXTRACT
 
+// JSON table function
+%token <str> UNNEST
+
 // Insert
 %token <str> ROW OUTFILE HEADER MAX_FILE_SIZE FORCE_QUOTE
 
-%token <str> UNUSED
+%token <str> UNUSED BINDINGS
 
 %type <statement> stmt
 %type <statements> stmt_list
@@ -333,8 +337,8 @@ import (
 %type <statement> drop_account_stmt drop_role_stmt drop_user_stmt
 %type <statement> create_account_stmt create_user_stmt create_role_stmt
 %type <statement> create_ddl_stmt create_table_stmt create_database_stmt create_index_stmt create_view_stmt
-%type <statement> show_stmt show_create_stmt show_columns_stmt show_databases_stmt show_target_filter_stmt
-%type <statement> show_tables_stmt show_process_stmt show_errors_stmt show_warnings_stmt
+%type <statement> show_stmt show_create_stmt show_columns_stmt show_databases_stmt show_target_filter_stmt show_table_status_stmt show_grants_stmt
+%type <statement> show_tables_stmt show_process_stmt show_errors_stmt show_warnings_stmt show_target
 %type <statement> show_variables_stmt show_status_stmt show_index_stmt
 %type <statement> alter_account_stmt alter_user_stmt update_stmt use_stmt update_no_with_stmt
 %type <statement> transaction_stmt begin_stmt commit_stmt rollback_stmt
@@ -344,6 +348,9 @@ import (
 %type <statement> load_data_stmt import_data_stmt
 %type <statement> analyze_stmt
 %type <statement> prepare_stmt prepareable_stmt deallocate_stmt execute_stmt
+%type <statement> values_stmt
+%type <rowsExprs> row_constructor_list
+%type <exprs>  row_constructor
 %type <exportParm> export_data_param_opt
 %type <loadParam> load_param_opt load_param_opt_2
 %type <tailParam> tail_param_opt
@@ -353,7 +360,7 @@ import (
 %type <selectExprs> select_expression_list
 %type <selectExpr> select_expression
 %type <tableExprs> table_references table_name_wild_list
-%type <tableExpr> table_reference table_factor join_table into_table_name escaped_table_reference
+%type <tableExpr> table_reference table_factor join_table into_table_name escaped_table_reference table_function
 %type <direction> asc_desc_opt
 %type <order> order
 %type <orderBy> order_list order_by_clause order_by_opt
@@ -398,7 +405,7 @@ import (
 
 %type <unresolvedName> column_name column_name_unresolved
 %type <strs> enum_values force_quote_opt force_quote_list
-%type <str> sql_id charset_keyword db_name
+%type <str> sql_id charset_keyword db_name db_name_opt
 %type <str> not_keyword func_not_keyword
 %type <str> reserved_keyword non_reserved_keyword
 %type <str> equal_opt reserved_sql_id reserved_table_id
@@ -432,7 +439,7 @@ import (
 %type <keyParts> index_column_list index_column_list_opt
 %type <keyPart> index_column
 %type <indexOption> index_option_list index_option
-%type <roles> role_spec_list
+%type <roles> role_spec_list using_roles_opt
 %type <role> role_spec
 %type <str> role_name
 %type <usernameRecord> user_name
@@ -483,7 +490,7 @@ import (
 %type <insert> insert_data
 %type <rowsExprs> values_list
 %type <str> name_datetime_precision braces_opt name_braces
-%type <str> std_dev_pop
+%type <str> std_dev_pop extended_opt
 %type <expr> expr_or_default
 %type <exprs> data_values data_opt row_value
 
@@ -573,6 +580,7 @@ stmt:
 |   grant_stmt
 |   load_data_stmt
 |   import_data_stmt
+|   values_stmt
 |   select_stmt
     {
         $$ = $1
@@ -2055,25 +2063,102 @@ show_stmt:
 |   show_status_stmt
 |   show_index_stmt
 |	show_target_filter_stmt
+|	show_table_status_stmt
+|	show_grants_stmt
+
+show_grants_stmt:
+	SHOW GRANTS
+	{
+		$$ = &tree.ShowGrants{}
+	}
+|	SHOW GRANTS	FOR user_name using_roles_opt
+	{
+		$$ = &tree.ShowGrants{Username: $4.Username, Hostname: $4.Hostname, Roles: $5}
+	}
+
+using_roles_opt:
+	{
+		$$ = nil
+	}
+|	USING role_spec_list
+	{
+		$$ = $2
+	}
+
+show_table_status_stmt:
+	SHOW TABLE STATUS from_or_in_opt db_name_opt like_opt where_expression_opt
+	{
+		$$ = &tree.ShowTableStatus{DbName: $5, Like: $6, Where: $7}
+	}
+
+from_or_in_opt:
+	{}
+|	from_or_in
+
+db_name_opt:
+	{}
+|	db_name
 
 show_target_filter_stmt:
-	SHOW CONFIG like_opt where_expression_opt
+	SHOW show_target like_opt where_expression_opt
     {
-        $$ = &tree.ShowTarget{Target: $2, Like: $3, Where: $4}
+    	s := $2.(*tree.ShowTarget)
+        s.Like = $3
+        s.Where = $4
+        $$ = s
     }
-|	SHOW charset_keyword like_opt where_expression_opt
+
+show_target:
+	CONFIG
 	{
-		$$ = &tree.ShowTarget{Target: "charset", Like: $3, Where: $4}
+		$$ = &tree.ShowTarget{Type: tree.ShowConfig}
+	}
+|	charset_keyword
+	{
+		$$ = &tree.ShowTarget{Type: tree.ShowCharset}
+	}
+|	ENGINES
+	{
+		$$ = &tree.ShowTarget{Type: tree.ShowEngines}
+	}
+|	TRIGGERS from_or_in_opt db_name_opt
+	{
+		$$ = &tree.ShowTarget{DbName: $3, Type: tree.ShowTriggers}
+	}
+|	PROCEDURE STATUS
+	{
+		$$ = &tree.ShowTarget{Type: tree.ShowProcedureStatus}
+	}
+|	EVENTS from_or_in_opt db_name_opt
+	{
+		$$ = &tree.ShowTarget{DbName: $3, Type: tree.ShowEvents}
+	}
+|	PLUGINS
+	{
+		$$ = &tree.ShowTarget{Type: tree.ShowPlugins}
+	}
+|	PRIVILEGES
+	{
+		$$ = &tree.ShowTarget{Type: tree.ShowPrivileges}
+	}
+|	PROFILES
+	{
+		$$ = &tree.ShowTarget{Type: tree.ShowProfiles}
 	}
 
 show_index_stmt:
-    SHOW index_kwd from_or_in table_name where_expression_opt
+    SHOW extended_opt index_kwd from_or_in table_name where_expression_opt
     {
         $$ = &tree.ShowIndex{
-            TableName: *$4,
-            Where: $5,
+            TableName: *$5,
+            Where: $6,
         }
     }
+
+extended_opt:
+	{}
+|	EXTENDED
+	{}
 
 index_kwd:
     INDEX
@@ -2114,13 +2199,13 @@ global_scope:
     }
 
 show_warnings_stmt:
-    SHOW WARNINGS
+    SHOW WARNINGS limit_opt
     {
         $$ = &tree.ShowWarnings{}
     }
 
 show_errors_stmt:
-    SHOW ERRORS
+    SHOW ERRORS limit_opt
     {
         $$ = &tree.ShowErrors{}
     }
@@ -3280,6 +3365,32 @@ outer_join:
         $$ = tree.JOIN_TYPE_RIGHT
     }
 
+values_stmt:
+    VALUES row_constructor_list order_by_opt limit_opt
+    {
+        $$ = &tree.ValuesStatement{
+            Rows: $2,
+            OrderBy: $3,
+            Limit: $4,
+        }
+    }
+
+row_constructor_list:
+    row_constructor
+    {
+        $$ = []tree.Exprs{$1}
+    }
+|   row_constructor_list ',' row_constructor
+    {
+        $$ = append($1, $3)
+    }
+
+row_constructor:
+    ROW '(' data_values ')'
+    {
+        $$ = $3
+    }
+
 on_expression_opt:
     %prec JOIN
     {
@@ -3355,6 +3466,19 @@ table_factor:
             },
         }
     }
+|   table_function as_opt_id
+    {
+    	if $2 != "" {
+    		$$ = &tree.AliasedTableExpr{
+    			Expr: $1,
+    			As: tree.AliasClause{
+    				Alias: tree.Identifier($2),
+    			},
+    		}
+    	} else {
+    		$$ = $1
+    	}
+    }
 // |   '(' table_references ')'
 
 derived_table:
@@ -3362,6 +3486,132 @@ derived_table:
     {
         $$ = &tree.ParenTableExpr{Expr: $2}
     }
+
+table_function:
+    UNNEST '(' STRING ')'
+    {
+        a1 := $3
+        a2 := "$"
+        a3 := false
+        $$ = &tree.Unnest{
+        	Param: &tree.UnnestParam{
+			Origin: a1,
+			Path: a2,
+			Outer: a3,
+		},
+       	}
+    }
+|   UNNEST '(' STRING ',' STRING ')'
+    {
+	a1 := $3
+	a2 := "$"
+	if len($5) > 0 {
+       	    a2 = $5
+        }
+        a3 := false
+	$$ = &tree.Unnest{
+                Param: &tree.UnnestParam{
+        		Origin: a1,
+        		Path: a2,
+        		Outer: a3,
+        	},
+        }
+    }
+|   UNNEST '(' STRING ',' STRING ',' TRUE ')'
+    {
+    	a1 := $3
+    	a2 := "$"
+        if len($5) > 0 {
+            a2 = $5
+        }
+	a3 := true
+	$$ = &tree.Unnest{
+                Param: &tree.UnnestParam{
+        		Origin: a1,
+        		Path: a2,
+        		Outer: a3,
+        	},
+        }
+    }
+|   UNNEST '(' STRING ',' STRING ',' FALSE ')'
+    {
+    	a1 := $3
+    	a2 := "$"
+    	if len($5) > 0 {
+            a2 = $5
+        }
+    	a3 := false
+    	$$ = &tree.Unnest{
+		Param: &tree.UnnestParam{
+			Origin: a1,
+			Path: a2,
+			Outer: a3,
+		},
+	}
+    }
+|   UNNEST '(' column_name ')'
+    {
+    	a1 := $3
+    	a2 := "$"
+    	a3 := false
+    	$$ = &tree.Unnest{
+		Param: &tree.UnnestParam{
+			Origin: a1,
+			Path: a2,
+			Outer: a3,
+		},
+	}
+    }
+|   UNNEST '(' column_name ',' STRING ')'
+    {
+    	a1 := $3
+    	a2 := "$"
+    	if len($5) > 0 {
+    	    a2 = $5
+    	}
+    	a3 := false
+    	$$ = &tree.Unnest{
+    		Param: &tree.UnnestParam{
+    			Origin: a1,
+    			Path: a2,
+   			Outer: a3,
+    		},
+    	}
+    }
+|   UNNEST '(' column_name ',' STRING ',' TRUE ')'
+    {
+    	a1 := $3
+    	a2 := "$"
+    	if len($5) > 0 {
+    	    a2 = $5
+    	}
+    	a3 := true
+    	$$ = &tree.Unnest{
+    		Param: &tree.UnnestParam{
+    			Origin: a1,
+    			Path: a2,
+    			Outer: a3,
+    		},
+    	}
+    }
+|   UNNEST '(' column_name ',' STRING ',' FALSE ')'
+    {
+    	a1 := $3
+    	a2 := "$"
+    	if len($5) > 0 {
+    	    a2 = $5
+    	}
+    	a3 := false
+    	$$ = &tree.Unnest{
+    		Param: &tree.UnnestParam{
+    			Origin: a1,
+    			Path: a2,
+    			Outer: a3,
+    		},
+    	}
+    }
+
+
 
 as_opt:
     {}
@@ -5159,7 +5409,7 @@ simple_expr:
     {
         $$ = $1
     }
-| function_call_json
+| 	function_call_json
     {
         $$ = $1
     }
@@ -5995,6 +6245,7 @@ boolean_primary:
     }
 |   boolean_primary comparison_operator and_or_some subquery %prec '='
     {
+        $$ = tree.NewSubqueryComparisonExpr($2, $3, $1, $4)
         $$ = tree.NewSubqueryComparisonExpr($2, $3, $1, $4)
     }
 |   predicate
@@ -7070,7 +7321,6 @@ reserved_keyword:
 |   TO
 |   TRUE
 |   TRUNCATE
-|   TIME
 |   UNION
 |   UNIQUE
 |   UPDATE
@@ -7227,6 +7477,7 @@ non_reserved_keyword:
 |   PROCEDURE
 |   PROXY
 |   QUERY
+|	PROFILES
 |   ROLE
 |   RANGE
 |   READ
@@ -7260,6 +7511,7 @@ non_reserved_keyword:
 |   TEXT
 |   THAN
 |   TINYBLOB
+|   TIME %prec LOWER_THAN_STRING
 |   TINYINT
 |   TINYTEXT
 |   TRANSACTION
@@ -7293,6 +7545,9 @@ non_reserved_keyword:
 |   EXTERNAL
 |   URL
 |   PASSWORD %prec LOWER_THAN_EQ
+|	HASH
+|	ENGINES
+|	TRIGGERS
 
 func_not_keyword:
 	DATE_ADD
@@ -7305,6 +7560,7 @@ func_not_keyword:
 |   SUBDATE
 |   SYSTEM_USER
 |   TRANSLATE
+|   UNNEST
 
 not_keyword:
     ADDDATE

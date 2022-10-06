@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"sync"
 
+	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -140,11 +141,11 @@ func (h *txnRelation) GetSchema() any { return h.table.entry.GetSchema() }
 
 func (h *txnRelation) Rows() int64 {
 	if h.table.entry.GetDB().IsSystemDB() && h.table.entry.IsVirtual() {
-		if h.table.entry.GetSchema().Name == catalog.SystemTable_DB_Name {
+		if h.table.entry.GetSchema().Name == pkgcatalog.MO_DATABASE {
 			return int64(h.table.entry.GetCatalog().CoarseDBCnt())
-		} else if h.table.entry.GetSchema().Name == catalog.SystemTable_Table_Name {
+		} else if h.table.entry.GetSchema().Name == pkgcatalog.MO_TABLES {
 			return int64(h.table.entry.GetCatalog().CoarseTableCnt())
-		} else if h.table.entry.GetSchema().Name == catalog.SystemTable_Columns_Name {
+		} else if h.table.entry.GetSchema().Name == pkgcatalog.MO_COLUMNS {
 			return int64(h.table.entry.GetCatalog().CoarseColumnCnt())
 		}
 		panic("logic error")
@@ -154,8 +155,8 @@ func (h *txnRelation) Rows() int64 {
 func (h *txnRelation) Size(attr string) int64           { return 0 }
 func (h *txnRelation) GetCardinality(attr string) int64 { return 0 }
 
-func (h *txnRelation) BatchDedup(cols ...containers.Vector) error {
-	return h.Txn.GetStore().BatchDedup(h.table.entry.GetDB().ID, h.table.entry.GetID(), cols...)
+func (h *txnRelation) BatchDedup(col containers.Vector) error {
+	return h.Txn.GetStore().BatchDedup(h.table.entry.GetDB().ID, h.table.entry.GetID(), col)
 }
 
 func (h *txnRelation) Append(data *containers.Batch) error {
@@ -168,8 +169,8 @@ func (h *txnRelation) GetSegment(id uint64) (seg handle.Segment, err error) {
 	return h.Txn.GetStore().GetSegment(h.table.entry.GetDB().ID, fp)
 }
 
-func (h *txnRelation) CreateSegment() (seg handle.Segment, err error) {
-	return h.Txn.GetStore().CreateSegment(h.table.entry.GetDB().ID, h.table.entry.GetID())
+func (h *txnRelation) CreateSegment(is1PC bool) (seg handle.Segment, err error) {
+	return h.Txn.GetStore().CreateSegment(h.table.entry.GetDB().ID, h.table.entry.GetID(), is1PC)
 }
 
 func (h *txnRelation) CreateNonAppendableSegment() (seg handle.Segment, err error) {

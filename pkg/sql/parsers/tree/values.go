@@ -37,3 +37,40 @@ func NewValuesClause(r []Exprs) *ValuesClause {
 		Rows: r,
 	}
 }
+
+// ValuesStatement the VALUES Statement
+type ValuesStatement struct {
+	statementImpl
+	NodeFormatter
+	Rows    []Exprs
+	OrderBy OrderBy
+	Limit   *Limit
+}
+
+func (node *ValuesStatement) Format(ctx *FmtCtx) {
+	ctx.WriteString("values ")
+
+	if len(node.Rows) > 0 {
+		prefix := ""
+		for _, row := range node.Rows {
+			ctx.WriteString(prefix + "row(")
+			comma := ""
+			for i := range row {
+				ctx.WriteString(comma)
+				row[i].Format(ctx)
+				comma = ", "
+			}
+			prefix = "), "
+		}
+		ctx.WriteString(")")
+	}
+
+	if len(node.OrderBy) > 0 {
+		ctx.WriteByte(' ')
+		node.OrderBy.Format(ctx)
+	}
+	if node.Limit != nil {
+		ctx.WriteByte(' ')
+		node.Limit.Format(ctx)
+	}
+}

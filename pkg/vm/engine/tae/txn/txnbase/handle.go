@@ -62,12 +62,12 @@ func (rel *TxnRelation) GetCardinality(attr string) int64                       
 func (rel *TxnRelation) Schema() any                                                 { return nil }
 func (rel *TxnRelation) MakeSegmentIt() handle.SegmentIt                             { return nil }
 func (rel *TxnRelation) MakeBlockIt() handle.BlockIt                                 { return nil }
-func (rel *TxnRelation) BatchDedup(cols ...containers.Vector) error                  { return nil }
+func (rel *TxnRelation) BatchDedup(col containers.Vector) error                      { return nil }
 func (rel *TxnRelation) Append(data *containers.Batch) error                         { return nil }
 func (rel *TxnRelation) GetMeta() any                                                { return nil }
 func (rel *TxnRelation) GetSegment(id uint64) (seg handle.Segment, err error)        { return }
 func (rel *TxnRelation) SoftDeleteSegment(id uint64) (err error)                     { return }
-func (rel *TxnRelation) CreateSegment() (seg handle.Segment, err error)              { return }
+func (rel *TxnRelation) CreateSegment(bool) (seg handle.Segment, err error)          { return }
 func (rel *TxnRelation) CreateNonAppendableSegment() (seg handle.Segment, err error) { return }
 func (rel *TxnRelation) GetValue(*common.ID, uint32, uint16) (v any, err error)      { return }
 func (rel *TxnRelation) GetValueByPhyAddrKey(any, int) (v any, err error)            { return }

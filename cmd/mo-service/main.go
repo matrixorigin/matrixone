@@ -79,12 +79,14 @@ func main() {
 	}
 
 	waitSignalToStop(stopper)
+	logutil.GetGlobalLogger().Info("Shutdown complete")
 }
 
 func waitSignalToStop(stopper *stopper.Stopper) {
 	sigchan := make(chan os.Signal, 1)
 	signal.Notify(sigchan, syscall.SIGTERM, syscall.SIGINT)
-	<-sigchan
+	sig := <-sigchan
+	logutil.GetGlobalLogger().Info("Starting shutdown...", zap.String("signal", sig.String()))
 	stopper.Stop()
 }
 
@@ -113,7 +115,7 @@ func startService(cfg *Config, stopper *stopper.Stopper) error {
 
 	switch strings.ToUpper(cfg.ServiceType) {
 	case cnServiceType:
-		return startCNService(cfg, stopper, fs)
+		return startCNService(cfg, stopper, fs, ts)
 	case dnServiceType:
 		return startDNService(cfg, stopper, fs)
 	case logServiceType:
@@ -127,6 +129,7 @@ func startCNService(
 	cfg *Config,
 	stopper *stopper.Stopper,
 	fileService fileservice.FileService,
+	taskService taskservice.TaskService,
 ) error {
 	return stopper.RunNamedTask("cn-service", func(ctx context.Context) {
 		c := cfg.getCNServiceConfig()
@@ -134,6 +137,7 @@ func startCNService(
 			&c,
 			ctx,
 			fileService,
+			taskService,
 			cnservice.WithMessageHandle(compile.CnServerMessageHandler),
 		)
 		if err != nil {
@@ -149,6 +153,9 @@ func startCNService(
 
 		<-ctx.Done()
 		if err := s.Close(); err != nil {
+			panic(err)
+		}
+		if err := cnclient.CloseCNClient(); err != nil {
 			panic(err)
 		}
 	})
@@ -247,6 +254,8 @@ func initTraceMetric(ctx context.Context, cfg *Config, stopper *stopper.Stopper,
 				trace.EnableTracer(!SV.DisableTrace),
 				trace.WithBatchProcessMode(SV.BatchProcessor),
 				trace.WithFSWriterFactory(writerFactory),
+				trace.WithExportInterval(SV.TraceExportInterval),
+				trace.WithLongQueryTime(SV.LongQueryTime),
 				trace.DebugMode(SV.EnableTraceDebug),
 				trace.WithSQLExecutor(nil),
 			); err != nil {

@@ -29,10 +29,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
 
+	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/mockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
@@ -44,7 +44,6 @@ const (
 )
 
 func initDB(t *testing.T, opts *options.Options) *db.DB {
-	mockio.ResetFS()
 	dir := testutils.InitTestEnv(ModuleName, t)
 	db, _ := db.Open(dir, opts)
 	return db
@@ -115,7 +114,7 @@ func TestEngine(t *testing.T) {
 	defer bat.Close()
 
 	newbat := mobat.New(true, bat.Attrs)
-	newbat.Vecs = containers.CopyToMoVectors(bat.Vecs)
+	newbat.Vecs = containers.CopyToMoVecs(bat.Vecs)
 	err = rel.Write(ctx, newbat)
 	assert.Nil(t, err)
 	assert.Nil(t, txn.Commit())
@@ -131,7 +130,7 @@ func TestEngine(t *testing.T) {
 	bat = catalog.MockBatch(schema, 20)
 	defer bat.Close()
 	newbat = mobat.New(true, bat.Attrs)
-	newbat.Vecs = containers.CopyToMoVectors(bat.Vecs)
+	newbat.Vecs = containers.CopyToMoVecs(bat.Vecs)
 	err = rel.Delete(ctx, newbat.Vecs[12], key.Name)
 	assert.Nil(t, err)
 	assert.Nil(t, txn.Commit())
@@ -219,7 +218,7 @@ func TestEngineAllType(t *testing.T) {
 	defer basebat.Close()
 
 	newbat := mobat.New(true, basebat.Attrs)
-	newbat.Vecs = containers.CopyToMoVectors(basebat.Vecs)
+	newbat.Vecs = containers.CopyToMoVecs(basebat.Vecs)
 	err = rel.Write(ctx, newbat)
 	assert.Nil(t, err)
 	assert.Nil(t, txn.Commit())
@@ -235,7 +234,7 @@ func TestEngineAllType(t *testing.T) {
 	bat := catalog.MockBatch(schema, 20)
 	defer bat.Close()
 	newbat1 := mobat.New(true, bat.Attrs)
-	newbat1.Vecs = containers.CopyToMoVectors(bat.Vecs)
+	newbat1.Vecs = containers.CopyToMoVecs(bat.Vecs)
 	err = rel.Delete(ctx, newbat1.Vecs[12], key.Name)
 	assert.Nil(t, err)
 	assert.Nil(t, txn.Commit())
@@ -256,7 +255,7 @@ func TestEngineAllType(t *testing.T) {
 		assert.Nil(t, err)
 		if bat != nil {
 			assert.Equal(t, 80, vector.Length(bat.Vecs[0]))
-			vec := MOToVector(bat.Vecs[12], false)
+			vec := containers.NewVectorWithSharedMemory(bat.Vecs[12], false)
 			assert.Equal(t, vec.Get(0), basebat.Vecs[12].Get(20))
 		}
 	}
@@ -308,7 +307,7 @@ func TestTxnRelation_GetHideKey(t *testing.T) {
 	defer bat.Close()
 
 	newbat := mobat.New(true, bat.Attrs)
-	newbat.Vecs = containers.CopyToMoVectors(bat.Vecs)
+	newbat.Vecs = containers.CopyToMoVecs(bat.Vecs)
 	err = rel.Write(ctx, newbat)
 	assert.Nil(t, err)
 	assert.Nil(t, txn.Commit())
@@ -394,7 +393,7 @@ func TestTxnRelation_Update(t *testing.T) {
 	defer bat.Close()
 
 	newbat := mobat.New(true, bat.Attrs)
-	newbat.Vecs = containers.CopyToMoVectors(bat.Vecs)
+	newbat.Vecs = containers.CopyToMoVecs(bat.Vecs)
 	err = rel.Write(ctx, newbat)
 	assert.Nil(t, err)
 	assert.Nil(t, txn.Commit())
@@ -512,21 +511,21 @@ func TestCopy1(t *testing.T) {
 	v1 := containers.MockVector(t1, 10, false, true, nil)
 	defer v1.Close()
 	v1.Update(5, types.Null{})
-	mv1 := containers.CopyToMoVector(v1)
+	mv1 := containers.CopyToMoVec(v1)
 	for i := 0; i < v1.Length(); i++ {
-		assert.Equal(t, v1.Get(i), GetValue(mv1, uint32(i)))
+		assert.Equal(t, v1.Get(i), containers.GetValue(mv1, uint32(i)))
 	}
 
 	t2 := types.T_date.ToType()
 	v2 := containers.MockVector(t2, 20, false, true, nil)
 	defer v2.Close()
 	v2.Update(6, types.Null{})
-	mv2 := containers.CopyToMoVector(v2)
+	mv2 := containers.CopyToMoVec(v2)
 	for i := 0; i < v2.Length(); i++ {
-		assert.Equal(t, v2.Get(i), GetValue(mv2, uint32(i)))
+		assert.Equal(t, v2.Get(i), containers.GetValue(mv2, uint32(i)))
 	}
 
-	v3 := MOToVector(mv2, true)
+	v3 := containers.NewVectorWithSharedMemory(mv2, true)
 	t.Log(v3.String())
 	for i := 0; i < v3.Length(); i++ {
 		assert.Equal(t, v2.Get(i), v3.Get(i))
@@ -585,7 +584,7 @@ func checkSysTable(t *testing.T, name string, dbase engine.Database, txn Txn, re
 	defer bat.Close()
 
 	newbat := mobat.New(true, bat.Attrs)
-	newbat.Vecs = containers.CopyToMoVectors(bat.Vecs)
+	newbat.Vecs = containers.CopyToMoVecs(bat.Vecs)
 	err = rel.Write(ctx, newbat)
 	assert.Equal(t, ErrReadOnly, err)
 	attrs, _ := rel.GetPrimaryKeys(ctx)
@@ -605,17 +604,17 @@ func TestSysRelation(t *testing.T) {
 	txn, err := e.StartTxn(nil)
 	assert.Nil(t, err)
 	txnOperator := TxnToTxnOperator(txn)
-	err = e.Create(ctx, catalog.SystemTable_DB_Name, txnOperator)
+	err = e.Create(ctx, pkgcatalog.MO_DATABASE, txnOperator)
 	assert.Nil(t, err)
 	names, _ := e.Databases(ctx, txnOperator)
 	assert.Equal(t, 2, len(names))
-	dbase, err := e.Database(ctx, catalog.SystemTable_DB_Name, txnOperator)
+	dbase, err := e.Database(ctx, pkgcatalog.MO_DATABASE, txnOperator)
 	assert.Nil(t, err)
 	schema := catalog.MockSchema(13, 12)
-	checkSysTable(t, catalog.SystemTable_DB_Name, dbase, txn, 1, schema)
+	checkSysTable(t, pkgcatalog.MO_DATABASE, dbase, txn, 1, schema)
 	schema = catalog.MockSchema(14, 13)
-	checkSysTable(t, catalog.SystemTable_Table_Name, dbase, txn, 2, schema)
+	checkSysTable(t, pkgcatalog.MO_TABLES, dbase, txn, 2, schema)
 	schema = catalog.MockSchema(15, 14)
-	checkSysTable(t, catalog.SystemTable_Columns_Name, dbase, txn, 3, schema)
+	checkSysTable(t, pkgcatalog.MO_COLUMNS, dbase, txn, 3, schema)
 	assert.Nil(t, txn.Commit())
 }

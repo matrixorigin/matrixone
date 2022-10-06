@@ -18,6 +18,8 @@ import (
 	"io"
 	"sync"
 
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
+
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -39,7 +41,7 @@ type TxnReader interface {
 	RLock()
 	RUnlock()
 	Is2PC() bool
-	GetID() uint64
+	GetID() string
 	GetCtx() []byte
 	GetStartTS() types.TS
 	GetCommitTS() types.TS
@@ -52,7 +54,6 @@ type TxnReader interface {
 	String() string
 	Repr() string
 	GetLSN() uint64
-	Event() int
 
 	SameTxn(startTs types.TS) bool
 	CommitBefore(startTs types.TS) bool
@@ -67,6 +68,7 @@ type TxnHandle interface {
 	DropDatabase(name string) (handle.Database, error)
 	GetDatabase(name string) (handle.Database, error)
 	DatabaseNames() []string
+	HandleCmd(entry *api.Entry) error
 }
 
 type TxnChanger interface {
@@ -75,10 +77,14 @@ type TxnChanger interface {
 	RUnlock()
 	ToCommittedLocked() error
 	ToPreparingLocked(ts types.TS) error
+	ToPrepared() error
+	ToPreparedLocked() error
 	ToRollbackedLocked() error
+
+	ToRollbacking(ts types.TS) error
 	ToRollbackingLocked(ts types.TS) error
 	ToUnknownLocked()
-	Prepare() error
+	Prepare() (types.TS, error)
 	Committing() error
 	Commit() error
 	Rollback() error
@@ -90,7 +96,7 @@ type TxnWriter interface {
 }
 
 type TxnAsyncer interface {
-	WaitDone(error) error
+	WaitDone(error, bool) error
 	WaitPrepared() error
 }
 
@@ -189,7 +195,7 @@ type TxnStore interface {
 	BindTxn(AsyncTxn)
 	GetLSN() uint64
 
-	BatchDedup(dbId, id uint64, pks ...containers.Vector) error
+	BatchDedup(dbId, id uint64, pk containers.Vector) error
 	LogSegmentID(dbId, tid, sid uint64)
 	LogBlockID(dbId, tid, bid uint64)
 
@@ -210,13 +216,15 @@ type TxnStore interface {
 	DatabaseNames() []string
 
 	GetSegment(dbId uint64, id *common.ID) (handle.Segment, error)
-	CreateSegment(dbId, tid uint64) (handle.Segment, error)
+	CreateSegment(dbId, tid uint64, is1PC bool) (handle.Segment, error)
 	CreateNonAppendableSegment(dbId, tid uint64) (handle.Segment, error)
-	CreateBlock(dbId, tid, sid uint64) (handle.Block, error)
+	CreateBlock(dbId, tid, sid uint64, is1PC bool) (handle.Block, error)
 	GetBlock(dbId uint64, id *common.ID) (handle.Block, error)
 	CreateNonAppendableBlock(dbId uint64, id *common.ID) (handle.Block, error)
 	SoftDeleteSegment(dbId uint64, id *common.ID) error
 	SoftDeleteBlock(dbId uint64, id *common.ID) error
+	UpdateMetaLoc(dbId uint64, id *common.ID, metaLoc string) (err error)
+	UpdateDeltaLoc(dbId uint64, id *common.ID, deltaLoc string) (err error)
 
 	AddTxnEntry(TxnEntryType, TxnEntry)
 
@@ -225,16 +233,10 @@ type TxnStore interface {
 	IsReadonly() bool
 	IncreateWriteCnt() int
 
-	HasTableDataChanges(tableID uint64) bool
+	HasAnyTableDataChanges() bool
+	HasTableDataChanges(id uint64) bool
 	HasCatalogChanges() bool
-	GetTableDirtyPoints(tableID uint64) DirtySet
-}
-
-type DirtySet = map[DirtyPoint]struct{}
-
-// not use common id to save space, less hash cost
-type DirtyPoint struct {
-	SegID, BlkID uint64
+	GetDirtyTableByID(id uint64) *common.TableTree
 }
 
 type TxnEntryType int16
@@ -244,10 +246,10 @@ type TxnEntry interface {
 	RLock()
 	RUnlock()
 	PrepareCommit() error
-	// TODO: remove all Prepare2PCPrepare
-	// Prepare2PCPrepare() error
 	PrepareRollback() error
 	ApplyCommit(index *wal.Index) error
 	ApplyRollback(index *wal.Index) error
 	MakeCommand(uint32) (TxnCmd, error)
+	Is1PC() bool
+	Set1PC()
 }

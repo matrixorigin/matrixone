@@ -1,6 +1,6 @@
 module github.com/matrixorigin/matrixone
 
-go 1.18
+go 1.19
 
 require (
 	github.com/BurntSushi/toml v1.0.0
@@ -9,10 +9,11 @@ require (
 	github.com/aws/aws-sdk-go-v2 v1.16.5
 	github.com/aws/aws-sdk-go-v2/config v1.15.11
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.26.11
+	github.com/aws/smithy-go v1.11.3
 	github.com/axiomhq/hyperloglog v0.0.0-20220105174342-98591331716a
 	github.com/cespare/xxhash/v2 v2.1.2
 	github.com/docker/go-units v0.4.0
-	github.com/fagongzi/goetty/v2 v2.0.3-0.20220812142536-dfcb3d33cfdc
+	github.com/fagongzi/goetty/v2 v2.0.3-0.20220926012906-f97d6dabbb6f
 	github.com/fagongzi/util v0.0.0-20210923134909-bccc37b5040d
 	github.com/go-sql-driver/mysql v1.6.0
 	github.com/gogo/protobuf v1.3.2
@@ -23,7 +24,7 @@ require (
 	github.com/google/uuid v1.3.0
 	github.com/lni/dragonboat/v4 v4.0.0-20220815145555-6f622e8bcbef
 	github.com/lni/goutils v1.3.1-0.20220604063047-388d67b4dbc4
-	github.com/matrixorigin/simdcsv v0.0.0-20220818064631-f234f494f0f4
+	github.com/matrixorigin/simdcsv v0.0.0-20220922082226-3db0f17ac30d
 	github.com/mohae/deepcopy v0.0.0-20170929034955-c48cc78d4826
 	github.com/panjf2000/ants/v2 v2.4.6
 	github.com/pierrec/lz4 v2.6.1+incompatible
@@ -56,7 +57,6 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/internal/s3shared v1.13.6 // indirect
 	github.com/aws/aws-sdk-go-v2/service/sso v1.11.9 // indirect
 	github.com/aws/aws-sdk-go-v2/service/sts v1.16.7 // indirect
-	github.com/aws/smithy-go v1.11.3 // indirect
 	github.com/cockroachdb/pebble v0.0.0-20220407171941-2120d145e292 // indirect
 	github.com/frankban/quicktest v1.14.3 // indirect
 	github.com/getsentry/sentry-go v0.12.0 // indirect

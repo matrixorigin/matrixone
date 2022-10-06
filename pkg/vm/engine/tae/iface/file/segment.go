@@ -14,14 +14,14 @@
 
 package file
 
-import "github.com/matrixorigin/matrixone/pkg/container/types"
+import (
+	"github.com/matrixorigin/matrixone/pkg/objectio"
+)
 
 type Segment interface {
 	Base
 	Name() string
-	OpenBlock(id uint64, colCnt int, indexCnt map[int]int) (Block, error)
-	WriteTS(ts types.TS) error
-	ReadTS() types.TS
+	OpenBlock(id uint64, colCnt int) (Block, error)
 	String() string
-	RemoveBlock(id uint64)
+	GetFs() *objectio.ObjectFS
 }

@@ -17,110 +17,61 @@ package indexwrapper
 import (
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer/base"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/file"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/evictable"
 )
 
-type bloomFilterNode struct {
-	*buffer.Node
-	mgr  base.INodeManager
-	file common.IVFile
-	impl index.StaticFilter
+type BfReader struct {
+	bfKey     string
+	mgr       base.INodeManager
+	bfFacotry evictable.EvictableNodeFactory
 }
 
-func newBloomFilterNode(mgr base.INodeManager, file common.IVFile, id *common.ID) *bloomFilterNode {
-	impl := new(bloomFilterNode)
-	impl.Node = buffer.NewNode(impl, mgr, *id, uint64(file.Stat().Size()))
-	impl.LoadFunc = impl.OnLoad
-	impl.UnloadFunc = impl.OnUnload
-	impl.DestroyFunc = impl.OnDestroy
-	impl.file = file
-	//impl.meta = meta
-	impl.mgr = mgr
-	mgr.RegisterNode(impl)
-	return impl
+func newBfReader(mgr base.INodeManager, typ types.Type, id common.ID, col file.ColumnBlock, metaloc string) *BfReader {
+	metaKey := evictable.EncodeColMetaKey(&id)
+	bfKey := evictable.EncodeColBfKey(&id)
+
+	return &BfReader{
+		mgr:       mgr,
+		bfKey:     bfKey,
+		bfFacotry: func() (base.INode, error) { return evictable.NewBfNode(mgr, bfKey, metaKey, col, metaloc, typ) },
+	}
 }
 
-func (n *bloomFilterNode) OnLoad() {
-	if n.impl != nil {
-		// no-op
-		return
-	}
-	var err error
-	//startOffset := n.meta.StartOffset
-	stat := n.file.Stat()
-	size := stat.Size()
-	compressTyp := stat.CompressAlgo()
-	data := make([]byte, size)
-	if _, err := n.file.Read(data); err != nil {
-		panic(err)
-	}
-	rawSize := stat.OriginSize()
-	buf := make([]byte, rawSize)
-	if err = Decompress(data, buf, CompressType(compressTyp)); err != nil {
-		panic(err)
-	}
-	n.impl, err = index.NewBinaryFuseFilterFromSource(buf)
+func (r *BfReader) MayContainsKey(key any) (b bool, err error) {
+	h, err := evictable.PinEvictableNode(r.mgr, r.bfKey, r.bfFacotry)
 	if err != nil {
-		panic(err)
-	}
-}
-
-func (n *bloomFilterNode) OnUnload() {
-	if n.impl == nil {
-		// no-op
+		// TODOa: Error Handling?
 		return
 	}
-	n.impl = nil
+	defer h.Close()
+	bfNode := h.GetNode().(*evictable.BfNode)
+	return bfNode.Bf.MayContainsKey(key)
 }
 
-func (n *bloomFilterNode) OnDestroy() {
-	n.file.Unref()
-}
-
-func (n *bloomFilterNode) Close() (err error) {
-	if err = n.Node.Close(); err != nil {
-		return err
+func (r *BfReader) MayContainsAnyKeys(keys containers.Vector, visibility *roaring.Bitmap) (b bool, m *roaring.Bitmap, err error) {
+	h, err := evictable.PinEvictableNode(r.mgr, r.bfKey, r.bfFacotry)
+	if err != nil {
+		// TODOa: Error Handling?
+		return
 	}
-	n.impl = nil
-	return nil
+	defer h.Close()
+	bfNode := h.GetNode().(*evictable.BfNode)
+	return bfNode.Bf.MayContainsAnyKeys(keys, visibility)
 }
 
-type BFReader struct {
-	node *bloomFilterNode
-}
-
-func NewBFReader(mgr base.INodeManager, file common.IVFile, id *common.ID) *BFReader {
-	return &BFReader{
-		node: newBloomFilterNode(mgr, file, id),
-	}
-}
-
-func (reader *BFReader) Destroy() (err error) {
-	if err = reader.node.Close(); err != nil {
-		return err
-	}
-	return nil
-}
-
-func (reader *BFReader) MayContainsKey(key any) (bool, error) {
-	handle := reader.node.mgr.Pin(reader.node)
-	defer handle.Close()
-	return reader.node.impl.MayContainsKey(key)
-}
-
-func (reader *BFReader) MayContainsAnyKeys(keys containers.Vector, visibility *roaring.Bitmap) (bool, *roaring.Bitmap, error) {
-	handle := reader.node.mgr.Pin(reader.node)
-	defer handle.Close()
-	return reader.node.impl.MayContainsAnyKeys(keys, visibility)
-}
+func (r *BfReader) Destroy() error { return nil }
 
 type BFWriter struct {
-	cType       CompressType
-	file        common.IRWFile
+	cType       common.CompressType
+	writer      objectio.Writer
+	block       objectio.BlockObject
 	impl        index.StaticFilter
 	data        containers.Vector
 	colIdx      uint16
@@ -131,8 +82,9 @@ func NewBFWriter() *BFWriter {
 	return &BFWriter{}
 }
 
-func (writer *BFWriter) Init(file common.IRWFile, cType CompressType, colIdx uint16, internalIdx uint16) error {
-	writer.file = file
+func (writer *BFWriter) Init(wr objectio.Writer, block objectio.BlockObject, cType common.CompressType, colIdx uint16, internalIdx uint16) error {
+	writer.writer = wr
+	writer.block = block
 	writer.cType = cType
 	writer.colIdx = colIdx
 	writer.internalIdx = internalIdx
@@ -150,7 +102,7 @@ func (writer *BFWriter) Finalize() (*IndexMeta, error) {
 	writer.impl = sf
 	writer.data = nil
 
-	appender := writer.file
+	appender := writer.writer
 	meta := NewEmptyIndexMeta()
 	meta.SetIndexType(StaticFilterIndex)
 	meta.SetCompressType(writer.cType)
@@ -162,11 +114,13 @@ func (writer *BFWriter) Finalize() (*IndexMeta, error) {
 	if err != nil {
 		return nil, err
 	}
+	bf := objectio.NewBloomFilter(writer.colIdx, uint8(writer.cType), iBuf)
 	rawSize := uint32(len(iBuf))
-	compressed := Compress(iBuf, writer.cType)
+	compressed := common.Compress(iBuf, writer.cType)
 	exactSize := uint32(len(compressed))
 	meta.SetSize(rawSize, exactSize)
-	_, err = appender.Write(compressed)
+
+	err = appender.WriteIndex(writer.block, bf)
 	if err != nil {
 		return nil, err
 	}

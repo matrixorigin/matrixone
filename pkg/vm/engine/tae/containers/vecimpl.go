@@ -57,13 +57,6 @@ func (impl *nullableVecImpl[T]) Get(i int) (v any) {
 	return impl.derived.stlvec.Get(i)
 }
 
-func (impl *nullableVecImpl[T]) GetCopy(i int) (v any) {
-	if impl.IsNull(i) {
-		return types.Null{}
-	}
-	return impl.derived.stlvec.GetCopy(i)
-}
-
 // Modification
 func (impl *nullableVecImpl[T]) Update(i int, v any) {
 	impl.tryCOW()

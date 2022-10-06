@@ -15,6 +15,7 @@
 package frontend
 
 import (
+	"bytes"
 	"context"
 	"encoding/binary"
 	"encoding/json"
@@ -23,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"math"
 	"os"
+	"reflect"
 	"runtime/pprof"
 	"sort"
 	"strconv"
@@ -183,11 +185,12 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 	return trace.ContextWithStatement(trace.ContextWithSpanContext(ctx, sc), stm)
 }
 
-func (mce *MysqlCmdExecutor) RecordStatementTxnID(ctx context.Context, ses *Session) {
-	if stm := trace.StatementFromContext(ctx); stm == nil {
-		return
-	} else if handler := ses.GetTxnHandler(); handler.IsValidTxn() {
-		stm.SetTxnIDIsZero(handler.GetTxn().Txn().ID)
+// RecordStatementTxnID record txnID after TxnBegin or Compile(autocommit=1)
+var RecordStatementTxnID = func(ctx context.Context, ses *Session) {
+	if stm := trace.StatementFromContext(ctx); ses != nil && stm != nil && !stm.IsZeroTxnID() {
+		if handler := ses.GetTxnHandler(); handler.IsValidTxn() {
+			stm.SetTxnID(handler.GetTxn().Txn().ID)
+		}
 	}
 }
 
@@ -365,7 +368,7 @@ func handleShowColumns(ses *Session) error {
 		ses.Mrs.AddRow(row)
 	}
 	if err := ses.GetMysqlProtocol().SendResultSetTextBatchRowSpeedup(ses.Mrs, ses.Mrs.GetRowCount()); err != nil {
-		logutil.Errorf("handleShowCreateTable error %v \n", err)
+		logutil.Errorf("handleShowColumns error %v \n", err)
 		return err
 	}
 	return nil
@@ -381,7 +384,6 @@ Warning: The pipeline is the multi-thread environment. The getDataFromPipeline w
 */
 func getDataFromPipeline(obj interface{}, bat *batch.Batch) error {
 	ses := obj.(*Session)
-
 	if bat == nil {
 		return nil
 	}
@@ -1116,6 +1118,44 @@ func (mce *MysqlCmdExecutor) handleSetVar(sv *tree.SetVar) error {
 	return nil
 }
 
+func (mce *MysqlCmdExecutor) handleShowErrors() error {
+	var err error = nil
+	ses := mce.GetSession()
+	proto := mce.GetSession().protocol
+
+	levelCol := new(MysqlColumn)
+	levelCol.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+	levelCol.SetName("Level")
+
+	CodeCol := new(MysqlColumn)
+	CodeCol.SetColumnType(defines.MYSQL_TYPE_SHORT)
+	CodeCol.SetName("Code")
+
+	MsgCol := new(MysqlColumn)
+	MsgCol.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
+	MsgCol.SetName("Message")
+
+	ses.Mrs.AddColumn(levelCol)
+	ses.Mrs.AddColumn(CodeCol)
+	ses.Mrs.AddColumn(MsgCol)
+
+	for i := ses.errInfo.length() - 1; i >= 0; i-- {
+		row := make([]interface{}, 3)
+		row[0] = "Error"
+		row[1] = ses.errInfo.codes[i]
+		row[2] = ses.errInfo.msgs[i]
+		ses.Mrs.AddRow(row)
+	}
+
+	mer := NewMysqlExecutionResult(0, 0, 0, 0, ses.Mrs)
+	resp := NewResponse(ResultResponse, 0, int(COM_QUERY), mer)
+
+	if err := proto.SendResponse(resp); err != nil {
+		return moerr.NewInternalError("routine send response failed. error:%v ", err)
+	}
+	return err
+}
+
 /*
 handle show variables
 */
@@ -1184,10 +1224,6 @@ func (mce *MysqlCmdExecutor) handleShowVariables(sv *tree.ShowVariables) error {
 		return rows[i][0].(string) < rows[j][0].(string)
 	})
 
-	for _, row := range rows {
-		ses.Mrs.AddRow(row)
-	}
-
 	mer := NewMysqlExecutionResult(0, 0, 0, 0, ses.Mrs)
 	resp := NewResponse(ResultResponse, 0, int(COM_QUERY), mer)
 
@@ -1219,41 +1255,11 @@ func (mce *MysqlCmdExecutor) handleAnalyzeStmt(requestCtx context.Context, stmt 
 }
 
 // Note: for pass the compile quickly. We will remove the comments in the future.
+// Note: for pass the compile quickly. We will remove the comments in the future.
 func (mce *MysqlCmdExecutor) handleExplainStmt(stmt *tree.ExplainStmt) error {
-	es := explain.NewExplainDefaultOptions()
-
-	for _, v := range stmt.Options {
-		if strings.EqualFold(v.Name, "VERBOSE") {
-			if strings.EqualFold(v.Value, "TRUE") || v.Value == "NULL" {
-				es.Verbose = true
-			} else if strings.EqualFold(v.Value, "FALSE") {
-				es.Verbose = false
-			} else {
-				return moerr.NewInvalidInput("invalid explain option '%s', valud '%s'", v.Name, v.Value)
-			}
-		} else if strings.EqualFold(v.Name, "ANALYZE") {
-			if strings.EqualFold(v.Value, "TRUE") || v.Value == "NULL" {
-				es.Analyze = true
-			} else if strings.EqualFold(v.Value, "FALSE") {
-				es.Analyze = false
-			} else {
-				return moerr.NewInvalidInput("invalid explain option '%s', valud '%s'", v.Name, v.Value)
-			}
-		} else if strings.EqualFold(v.Name, "FORMAT") {
-			if v.Name == "NULL" {
-				return moerr.NewInvalidInput("invalid explain option '%s', valud '%s'", v.Name, v.Value)
-			} else if strings.EqualFold(v.Value, "TEXT") {
-				es.Format = explain.EXPLAIN_FORMAT_TEXT
-			} else if strings.EqualFold(v.Value, "JSON") {
-				es.Format = explain.EXPLAIN_FORMAT_JSON
-			} else if strings.EqualFold(v.Value, "DOT") {
-				es.Format = explain.EXPLAIN_FORMAT_DOT
-			} else {
-				return moerr.NewInvalidInput("invalid explain option '%s', valud '%s'", v.Name, v.Value)
-			}
-		} else {
-			return moerr.NewInvalidInput("invalid explain option '%s', valud '%s'", v.Name, v.Value)
-		}
+	es, err := getExplainOption(stmt.Options)
+	if err != nil {
+		return err
 	}
 
 	switch stmt.Statement.(type) {
@@ -1478,43 +1484,44 @@ func GetExplainColumns(explainColName string) ([]interface{}, error) {
 	return columns, err
 }
 
-func getExplainOption(stmt *tree.ExplainAnalyze) (*explain.ExplainOptions, error) {
+func getExplainOption(options []tree.OptionElem) (*explain.ExplainOptions, error) {
 	es := explain.NewExplainDefaultOptions()
-
-	for _, v := range stmt.Options {
-		if strings.EqualFold(v.Name, "VERBOSE") {
-			if strings.EqualFold(v.Value, "TRUE") || v.Value == "NULL" {
-				es.Verbose = true
-			} else if strings.EqualFold(v.Value, "FALSE") {
-				es.Verbose = false
+	if options == nil {
+		return es, nil
+	} else {
+		for _, v := range options {
+			if strings.EqualFold(v.Name, "VERBOSE") {
+				if strings.EqualFold(v.Value, "TRUE") || v.Value == "NULL" {
+					es.Verbose = true
+				} else if strings.EqualFold(v.Value, "FALSE") {
+					es.Verbose = false
+				} else {
+					return nil, moerr.NewInvalidInput("invalid explain option '%s', valud '%s'", v.Name, v.Value)
+				}
+			} else if strings.EqualFold(v.Name, "ANALYZE") {
+				if strings.EqualFold(v.Value, "TRUE") || v.Value == "NULL" {
+					es.Analyze = true
+				} else if strings.EqualFold(v.Value, "FALSE") {
+					es.Analyze = false
+				} else {
+					return nil, moerr.NewInvalidInput("invalid explain option '%s', valud '%s'", v.Name, v.Value)
+				}
+			} else if strings.EqualFold(v.Name, "FORMAT") {
+				if strings.EqualFold(v.Value, "TEXT") {
+					es.Format = explain.EXPLAIN_FORMAT_TEXT
+				} else if strings.EqualFold(v.Value, "JSON") {
+					return nil, moerr.NewNotSupported("Unsupport explain format '%s'", v.Value)
+				} else if strings.EqualFold(v.Value, "DOT") {
+					return nil, moerr.NewNotSupported("Unsupport explain format '%s'", v.Value)
+				} else {
+					return nil, moerr.NewInvalidInput("invalid explain option '%s', valud '%s'", v.Name, v.Value)
+				}
 			} else {
-				return nil, moerr.NewInvalidInput("%s requires a Boolean value", v.Name)
+				return nil, moerr.NewInvalidInput("invalid explain option '%s', valud '%s'", v.Name, v.Value)
 			}
-		} else if strings.EqualFold(v.Name, "ANALYZE") {
-			if strings.EqualFold(v.Value, "TRUE") || v.Value == "NULL" {
-				es.Analyze = true
-			} else if strings.EqualFold(v.Value, "FALSE") {
-				es.Analyze = false
-			} else {
-				return nil, moerr.NewInvalidInput("%s requires a Boolean value", v.Name)
-			}
-		} else if strings.EqualFold(v.Name, "FORMAT") {
-			if v.Name == "NULL" {
-				return nil, moerr.NewInvalidInput("%s requires a parameter", v.Name)
-			} else if strings.EqualFold(v.Value, "TEXT") {
-				es.Format = explain.EXPLAIN_FORMAT_TEXT
-			} else if strings.EqualFold(v.Value, "JSON") {
-				es.Format = explain.EXPLAIN_FORMAT_JSON
-			} else if strings.EqualFold(v.Value, "DOT") {
-				es.Format = explain.EXPLAIN_FORMAT_DOT
-			} else {
-				return nil, moerr.NewInvalidInput("unrecognized value for EXPLAIN option \"%s\": \"%s\"", v.Name, v.Value)
-			}
-		} else {
-			return nil, moerr.NewInvalidInput("unrecognized EXPLAIN option \"%s\"", v.Name)
 		}
+		return es, nil
 	}
-	return es, nil
 }
 
 func buildMoExplainQuery(explainColName string, buffer *explain.ExplainDataBuffer, session *Session, fill func(interface{}, *batch.Batch) error) error {
@@ -1661,16 +1668,13 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 	if err != nil {
 		return nil, err
 	}
+	RecordStatementTxnID(requestCtx, cwft.ses)
 	return cwft.compile, err
 }
 
 func (cwft *TxnComputationWrapper) RecordExecPlan(ctx context.Context) error {
 	if stm := trace.StatementFromContext(ctx); stm != nil {
-		if handler := cwft.ses.GetTxnHandler(); handler.IsValidTxn() {
-			stm.SetTxnIDIsZero(handler.GetTxn().Txn().ID)
-		}
-		stm.SetExecPlan(cwft.plan)
-		stm.Report(ctx)
+		stm.SetExecPlan(cwft.plan, SerializeExecPlan)
 	}
 	return nil
 }
@@ -1868,7 +1872,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		ses.SetMysqlResultSet(&MysqlResultSet{})
 		stmt := cw.GetAst()
 		requestCtx = RecordStatement(requestCtx, ses, proc, cw, beginInstant)
-		tenant := "0"
+		tenant := sysAccountName
 		if ses.GetTenantInfo() != nil {
 			tenant = ses.GetTenantInfo().GetTenant()
 			ses.SetPrivilege(determinePrivilegeSetOfStatement(stmt))
@@ -1941,7 +1945,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			if err != nil {
 				goto handleFailed
 			}
-			mce.RecordStatementTxnID(requestCtx, ses)
+			RecordStatementTxnID(requestCtx, ses)
 		case *tree.CommitTransaction:
 			err = ses.TxnCommit()
 			if err != nil {
@@ -2027,6 +2031,12 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		case *tree.ShowVariables:
 			selfHandle = true
 			err = mce.handleShowVariables(st)
+			if err != nil {
+				goto handleFailed
+			}
+		case *tree.ShowErrors, *tree.ShowWarnings:
+			selfHandle = true
+			err = mce.handleShowErrors()
 			if err != nil {
 				goto handleFailed
 			}
@@ -2133,7 +2143,6 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			goto handleFailed
 		}
 		stmt = cw.GetAst()
-		_ = cw.RecordExecPlan(requestCtx)
 
 		runner = ret.(ComputationRunner)
 		if !ses.Pu.SV.DisableRecordTimeElapsedOfSqlRequest {
@@ -2141,13 +2150,13 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		}
 
 		// cw.Compile might rewrite sql, here we fetch the latest version
-		switch cw.GetAst().(type) {
+		switch statement := cw.GetAst().(type) {
 		//produce result set
 		case *tree.Select,
 			*tree.ShowCreateTable, *tree.ShowCreateDatabase, *tree.ShowTables, *tree.ShowDatabases, *tree.ShowColumns,
-			*tree.ShowProcessList, *tree.ShowErrors, *tree.ShowWarnings, *tree.ShowVariables, *tree.ShowStatus,
-			*tree.ShowIndex, *tree.ShowCreateView,
-			*tree.ExplainFor:
+			*tree.ShowProcessList, *tree.ShowStatus, *tree.ShowTableStatus, *tree.ShowGrants,
+			*tree.ShowIndex, *tree.ShowCreateView, *tree.ShowTarget,
+			*tree.ExplainFor, *tree.ExplainStmt:
 			columns, err2 = cw.GetColumns()
 			if err2 != nil {
 				logutil.Errorf("GetColumns from Computation handler failed. error: %v", err2)
@@ -2231,32 +2240,12 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			if err != nil {
 				goto handleFailed
 			}
+
 			/*
 				Step 4: Serialize the execution plan by json
 			*/
 			if cwft, ok := cw.(*TxnComputationWrapper); ok {
-				queryPlan := cwft.plan
-				// generator query explain
-				if queryPlan == nil && queryPlan.GetQuery() != nil {
-					explainQuery := explain.NewExplainQueryImpl(queryPlan.GetQuery())
-					options := &explain.ExplainOptions{
-						Verbose: true,
-						Analyze: true,
-						Format:  explain.EXPLAIN_FORMAT_TEXT,
-					}
-					marshalPlan := explainQuery.BuildJsonPlan(cwft.uuid, options)
-					// data transform to json datastruct
-					marshal, err3 := json.Marshal(marshalPlan)
-					if err3 != nil {
-						moError := moerr.NewInternalError("An error occurred when plan is serialized to json")
-						marshal = BuildErrorJsonPlan(cwft.uuid, moError.MySQLCode(), moError.Error())
-					}
-					logutil.Infof("json of sql plan is : %s", string(marshal))
-				} else {
-					moError := moerr.NewInternalError("sql has no corresponding query execution plan")
-					marshal := BuildErrorJsonPlan(cwft.uuid, moError.MySQLCode(), moError.Error())
-					logutil.Infof("json of sql plan is : %s", string(marshal))
-				}
+				cwft.RecordExecPlan(requestCtx)
 			}
 		//just status, no result set
 		case *tree.CreateTable, *tree.DropTable, *tree.CreateDatabase, *tree.DropDatabase,
@@ -2293,28 +2282,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 				Step 4: Serialize the execution plan by json
 			*/
 			if cwft, ok := cw.(*TxnComputationWrapper); ok {
-				queryPlan := cwft.plan
-				// generator query explain
-				if queryPlan == nil && queryPlan.GetQuery() != nil {
-					explainQuery := explain.NewExplainQueryImpl(queryPlan.GetQuery())
-					options := &explain.ExplainOptions{
-						Verbose: true,
-						Analyze: true,
-						Format:  explain.EXPLAIN_FORMAT_TEXT,
-					}
-					marshalPlan := explainQuery.BuildJsonPlan(cwft.uuid, options)
-					// data transform to json datastruct
-					marshal, err3 := json.Marshal(marshalPlan)
-					if err3 != nil {
-						moError := moerr.NewInternalError("An error occurred when plan is serialized to json")
-						marshal = BuildErrorJsonPlan(cwft.uuid, moError.MySQLCode(), moError.Error())
-					}
-					logutil.Infof("json of sql plan is : %s", string(marshal))
-				} else {
-					moError := moerr.NewInternalError("sql has no corresponding query execution plan")
-					marshal := BuildErrorJsonPlan(cwft.uuid, moError.MySQLCode(), moError.Error())
-					logutil.Infof("json of sql plan is : %s", string(marshal))
-				}
+				cwft.RecordExecPlan(requestCtx)
 			}
 		case *tree.ExplainAnalyze:
 			explainColName := "QUERY PLAN"
@@ -2376,7 +2344,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 				// build explain data buffer
 				buffer := explain.NewExplainDataBuffer()
 				var option *explain.ExplainOptions
-				option, err = getExplainOption(cw.GetAst().(*tree.ExplainAnalyze))
+				option, err = getExplainOption(statement.Options)
 				if err != nil {
 					return err
 				}
@@ -2678,7 +2646,7 @@ func StatementCanBeExecutedInUncommittedTransaction(stmt tree.Statement) bool {
 	case *tree.CreateTable, *tree.CreateDatabase, *tree.CreateIndex, *tree.CreateView:
 		return true
 		//dml statement
-	case *tree.Insert, *tree.Update, *tree.Delete, *tree.Select, *tree.Load:
+	case *tree.Insert, *tree.Update, *tree.Delete, *tree.Select, *tree.Load, *tree.Unnest:
 		return true
 		//transaction
 	case *tree.BeginTransaction, *tree.CommitTransaction, *tree.RollbackTransaction:
@@ -2828,13 +2796,60 @@ func convertEngineTypeToMysqlType(engineType types.T, col *MysqlColumn) error {
 }
 
 // build plan json when marhal plan error
-func BuildErrorJsonPlan(uuid uuid.UUID, errcode uint16, msg string) []byte {
+func buildErrorJsonPlan(uuid uuid.UUID, errcode uint16, msg string) []byte {
 	explainData := explain.ExplainData{
 		Code:    errcode,
 		Message: msg,
 		Success: false,
 		Uuid:    uuid.String(),
 	}
-	marshal, _ := json.Marshal(explainData)
-	return marshal
+	buffer := &bytes.Buffer{}
+	encoder := json.NewEncoder(buffer)
+	encoder.SetEscapeHTML(false)
+	encoder.Encode(explainData)
+	return buffer.Bytes()
+}
+
+func serializePlanToJson(queryPlan *plan2.Plan, uuid uuid.UUID) []byte {
+	var jsonBytes []byte
+	if queryPlan != nil && queryPlan.GetQuery() != nil {
+		explainQuery := explain.NewExplainQueryImpl(queryPlan.GetQuery())
+		options := &explain.ExplainOptions{
+			Verbose: true,
+			Analyze: true,
+			Format:  explain.EXPLAIN_FORMAT_TEXT,
+		}
+		marshalPlan := explainQuery.BuildJsonPlan(uuid, options)
+		// data transform to json datastruct
+		buffer := &bytes.Buffer{}
+		encoder := json.NewEncoder(buffer)
+		encoder.SetEscapeHTML(false)
+		err := encoder.Encode(marshalPlan)
+		if err != nil {
+			moError := moerr.NewInternalError("serialize plan to json error: %s", err.Error())
+			jsonBytes = buildErrorJsonPlan(uuid, moError.ErrorCode(), moError.Error())
+		} else {
+			jsonBytes = buffer.Bytes()
+		}
+	} else {
+		jsonBytes = buildErrorJsonPlan(uuid, moerr.ErrWarn, "sql query no record execution plan")
+	}
+	return jsonBytes
+}
+
+// SerializeExecPlan Serialize the execution plan by json
+var SerializeExecPlan = func(plan any, uuid uuid.UUID) []byte {
+	if plan == nil {
+		return serializePlanToJson(nil, uuid)
+	} else if queryPlan, ok := plan.(*plan2.Plan); !ok {
+		moError := moerr.NewInternalError("execPlan not type of plan2.Plan: %s", reflect.ValueOf(plan).Type().Name())
+		return buildErrorJsonPlan(uuid, moError.ErrorCode(), moError.Error())
+	} else {
+		// data transform to json dataStruct
+		return serializePlanToJson(queryPlan, uuid)
+	}
+}
+
+func init() {
+	trace.SetDefaultSerializeExecPlan(SerializeExecPlan)
 }

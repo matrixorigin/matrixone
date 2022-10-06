@@ -454,6 +454,7 @@ func TestSingleTableSQLBuilder(t *testing.T) {
 		"delete nation, nation2 from nation join nation2 on nation.n_name = nation2.n_name",
 		"select true is unknown",
 		"select null is not unknown",
+		"select 1 as c limit abs(-2)",
 	}
 	runTestShouldPass(mock, t, sqls, false, false)
 
@@ -794,12 +795,6 @@ func TestShow(t *testing.T) {
 		"show columns from nation_ddddd",                       //table not exist
 		"show columns from nation_ddddd from tpch",             //table not exist
 		"show columns from nation where `Field22` like '%ff'",  //column not exist
-
-		"show index from nation", //unsupport now
-		"show warnings",          //unsupport now
-		"show errors",            //unsupport now
-		"show status",            //unsupport now
-		"show processlist",       //unsupport now
 	}
 	runTestShouldError(mock, t, sqls)
 }
@@ -878,6 +873,28 @@ func TestResultColumns(t *testing.T) {
 			}
 		}
 	}
+}
+
+func TestBuildUnnest(t *testing.T) {
+	mock := NewMockOptimizer()
+	sqls := []string{
+		`select * from unnest('{"a":1}') as f`,
+		`select * from unnest('{"a":1}', '') as f`,
+		`select * from unnest('{"a":1}', '$', true) as f`,
+	}
+	runTestShouldPass(mock, t, sqls, false, false)
+	errSqls := []string{
+		`select * from unnest(t.t1.a)`,
+		`select * from unnest(t.a, "$.b")`,
+		`select * from unnest(t.a, "$.b", true)`,
+		`select * from unnest(t.a) as f`,
+		`select * from unnest(t.a, "$.b") as f`,
+		`select * from unnest(t.a, "$.b", true) as f`,
+		`select * from unnest('{"a":1}')`,
+		`select * from unnest('{"a":1}', "$")`,
+		`select * from unnest('{"a":1}', "", true)`,
+	}
+	runTestShouldError(mock, t, errSqls)
 }
 
 func getJSON(v any, t *testing.T) []byte {

@@ -16,6 +16,7 @@ package txnimpl
 
 import (
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
 	"math/rand"
 	"strconv"
 	"sync"
@@ -30,7 +31,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/mockio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/stl"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables"
@@ -75,7 +75,7 @@ func makeTable(t *testing.T, dir string, colCnt int, pkIdx int, bufSize uint64) 
 	id := common.NextGlobalSeqNum()
 	schema := catalog.MockSchemaAll(colCnt, pkIdx)
 	rel := mockTestRelation(id, schema)
-	txn := txnbase.NewTxn(nil, nil, common.NextGlobalSeqNum(), types.NextGlobalTsForTest(), nil)
+	txn := txnbase.NewTxn(nil, nil, common.NewTxnIDAllocator().Alloc(), types.NextGlobalTsForTest(), nil)
 	store := newStore(nil, driver, mgr, nil)
 	store.BindTxn(txn)
 	return newTxnTable(store, rel.GetMeta().(*catalog.TableEntry))
@@ -557,12 +557,12 @@ func TestTxnManager1(t *testing.T) {
 }
 
 func initTestContext(t *testing.T, dir string) (*catalog.Catalog, *txnbase.TxnManager, wal.Driver) {
-	mockio.ResetFS()
 	c := catalog.MockCatalog(dir, "mock", nil, nil)
 	driver := wal.NewDriver(dir, "store", nil)
 	txnBufMgr := buffer.NewNodeManager(common.G, nil)
 	mutBufMgr := buffer.NewNodeManager(common.G, nil)
-	factory := tables.NewDataFactory(mockio.SegmentFactory, mutBufMgr, nil, dir)
+	SegmentFactory := blockio.NewObjectFactory(dir)
+	factory := tables.NewDataFactory(SegmentFactory, mutBufMgr, nil, dir)
 	mgr := txnbase.NewTxnManager(TxnStoreFactory(c, driver, txnBufMgr, factory),
 		TxnFactory(c), types.NewMockHLCClock(1))
 	mgr.Start()
@@ -719,7 +719,7 @@ func TestSegment1(t *testing.T) {
 	assert.Nil(t, err)
 	rel, err := db.CreateRelation(schema)
 	assert.Nil(t, err)
-	_, err = rel.CreateSegment()
+	_, err = rel.CreateSegment(false)
 	assert.Nil(t, err)
 	err = txn1.Commit()
 	assert.Nil(t, err)
@@ -739,7 +739,7 @@ func TestSegment1(t *testing.T) {
 	}
 	assert.Equal(t, 1, cnt)
 
-	_, err = rel.CreateSegment()
+	_, err = rel.CreateSegment(false)
 	assert.Nil(t, err)
 
 	segIt = rel.MakeSegmentIt()
@@ -793,7 +793,7 @@ func TestSegment2(t *testing.T) {
 	rel, _ := db.CreateRelation(schema)
 	segCnt := 10
 	for i := 0; i < segCnt; i++ {
-		_, err := rel.CreateSegment()
+		_, err := rel.CreateSegment(false)
 		assert.Nil(t, err)
 	}
 
@@ -822,11 +822,11 @@ func TestBlock1(t *testing.T) {
 	db, _ := txn1.CreateDatabase("db")
 	schema := catalog.MockSchema(1, 0)
 	rel, _ := db.CreateRelation(schema)
-	seg, _ := rel.CreateSegment()
+	seg, _ := rel.CreateSegment(false)
 
 	blkCnt := 100
 	for i := 0; i < blkCnt; i++ {
-		_, err := seg.CreateBlock()
+		_, err := seg.CreateBlock(false)
 		assert.Nil(t, err)
 	}
 

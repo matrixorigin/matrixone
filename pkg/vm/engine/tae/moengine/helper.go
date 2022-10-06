@@ -18,11 +18,11 @@ import (
 	"context"
 	"strings"
 
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 
+	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
@@ -35,7 +35,7 @@ func txnBindAccessInfoFromCtx(txn txnif.AsyncTxn, ctx context.Context) {
 	tid, okt := ctx.Value(defines.TenantIDKey{}).(uint32)
 	uid, oku := ctx.Value(defines.UserIDKey{}).(uint32)
 	rid, okr := ctx.Value(defines.RoleIDKey{}).(uint32)
-	logutil.Debugf("try set %d txn access info to t%d(%v) u%d(%v) r%d(%v), ", txn.GetID(), tid, okt, uid, oku, rid, okr)
+	logutil.Debugf("try set %s txn access info to t%d(%v) u%d(%v) r%d(%v), ", txn.GetID(), tid, okt, uid, oku, rid, okr)
 	if okt { // TODO: tenantID is required, or all need to be ok?
 		txn.BindAccessInfo(tid, uid, rid)
 	}
@@ -108,12 +108,12 @@ func SchemaToDefs(schema *catalog.Schema) (defs []engine.TableDef, err error) {
 	}
 	pro := new(engine.PropertiesDef)
 	pro.Properties = append(pro.Properties, engine.Property{
-		Key:   catalog.SystemRelAttr_Kind,
+		Key:   pkgcatalog.SystemRelAttr_Kind,
 		Value: string(schema.Relkind),
 	})
 	if schema.Createsql != "" {
 		pro.Properties = append(pro.Properties, engine.Property{
-			Key:   catalog.SystemRelAttr_CreateSQL,
+			Key:   pkgcatalog.SystemRelAttr_CreateSQL,
 			Value: schema.Createsql,
 		})
 	}
@@ -149,11 +149,11 @@ func DefsToSchema(name string, defs []engine.TableDef) (schema *catalog.Schema, 
 		case *engine.PropertiesDef:
 			for _, property := range defVal.Properties {
 				switch strings.ToLower(property.Key) {
-				case catalog.SystemRelAttr_Comment:
+				case pkgcatalog.SystemRelAttr_Comment:
 					schema.Comment = property.Value
-				case catalog.SystemRelAttr_Kind:
+				case pkgcatalog.SystemRelAttr_Kind:
 					schema.Relkind = property.Value
-				case catalog.SystemRelAttr_CreateSQL:
+				case pkgcatalog.SystemRelAttr_CreateSQL:
 					schema.Createsql = property.Value
 				default:
 				}
@@ -171,9 +171,6 @@ func DefsToSchema(name string, defs []engine.TableDef) (schema *catalog.Schema, 
 	}
 	if err = schema.Finalize(false); err != nil {
 		return
-	}
-	if schema.IsCompoundSortKey() {
-		err = moerr.NewNYI("compound idx")
 	}
 	return
 }

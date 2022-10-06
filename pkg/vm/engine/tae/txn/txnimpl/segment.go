@@ -183,8 +183,8 @@ func (seg *txnSegment) GetBlock(id uint64) (blk handle.Block, err error) {
 	return seg.Txn.GetStore().GetBlock(seg.getDBID(), fp)
 }
 
-func (seg *txnSegment) CreateBlock() (blk handle.Block, err error) {
-	return seg.Txn.GetStore().CreateBlock(seg.getDBID(), seg.entry.GetTable().GetID(), seg.entry.GetID())
+func (seg *txnSegment) CreateBlock(is1PC bool) (blk handle.Block, err error) {
+	return seg.Txn.GetStore().CreateBlock(seg.getDBID(), seg.entry.GetTable().GetID(), seg.entry.GetID(), is1PC)
 }
 
 func (seg *txnSegment) BatchDedup(pks containers.Vector) (err error) {

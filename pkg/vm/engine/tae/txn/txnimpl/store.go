@@ -32,48 +32,29 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 )
 
-type dirtyPoint = txnif.DirtyPoint
-type dirtySet = txnif.DirtySet
-
 // dirtyMemo intercepts txn to record changed segments and blocks, or catalog
 //
 // no locks to protect dirtyMemo because it is expected to be quried by other goroutines
 // until the txn enqueued, and after that, no one will change it
 type dirtyMemo struct {
 	// tableChanges records modified segments and blocks in current txn
-	tableChanges map[uint64]dirtySet
+	tableChanges *common.Tree
 	// catalogChanged indicates whether create/drop db/table
 	catalogChanged bool
 }
 
 func newDirtyMemo() *dirtyMemo {
 	return &dirtyMemo{
-		tableChanges: make(map[uint64]dirtySet, 0),
+		tableChanges: common.NewTree(),
 	}
 }
 
-func (m *dirtyMemo) recordBlk(id common.ID) {
-	point := dirtyPoint{
-		SegID: id.SegmentID,
-		BlkID: id.BlockID,
-	}
-	m.recordDirty(id.TableID, point)
+func (m *dirtyMemo) recordBlk(dbID uint64, id *common.ID) {
+	m.tableChanges.AddBlock(dbID, id.TableID, id.SegmentID, id.BlockID)
 }
 
-func (m *dirtyMemo) recordSeg(tid, sid uint64) {
-	point := dirtyPoint{
-		SegID: sid,
-	}
-	m.recordDirty(tid, point)
-}
-
-func (m *dirtyMemo) recordDirty(tid uint64, point dirtyPoint) {
-	dirties, exist := m.tableChanges[tid]
-	if !exist {
-		dirties = make(map[dirtyPoint]struct{}, 0)
-		m.tableChanges[tid] = dirties
-	}
-	dirties[point] = struct{}{}
+func (m *dirtyMemo) recordSeg(dbID, tableID, segID uint64) {
+	m.tableChanges.AddSegment(dbID, tableID, segID)
 }
 
 func (m *dirtyMemo) recordCatalogChange() {
@@ -160,7 +141,7 @@ func (store *txnStore) BindTxn(txn txnif.AsyncTxn) {
 	store.txn = txn
 }
 
-func (store *txnStore) BatchDedup(dbId, id uint64, pks ...containers.Vector) (err error) {
+func (store *txnStore) BatchDedup(dbId, id uint64, pk containers.Vector) (err error) {
 	db, err := store.getOrSetDB(dbId)
 	if err != nil {
 		return err
@@ -169,7 +150,7 @@ func (store *txnStore) BatchDedup(dbId, id uint64, pks ...containers.Vector) (er
 	// 	return txnbase.ErrNotFound
 	// }
 
-	return db.BatchDedup(id, pks...)
+	return db.BatchDedup(id, pk)
 }
 
 func (store *txnStore) Append(dbId, id uint64, data *containers.Batch) error {
@@ -193,6 +174,28 @@ func (store *txnStore) RangeDelete(dbId uint64, id *common.ID, start, end uint32
 	// 	return txnbase.ErrNotFound
 	// }
 	return db.RangeDelete(id, start, end, dt)
+}
+
+func (store *txnStore) UpdateMetaLoc(dbId uint64, id *common.ID, metaLoc string) (err error) {
+	db, err := store.getOrSetDB(dbId)
+	if err != nil {
+		return err
+	}
+	// if table.IsDeleted() {
+	// 	return txnbase.ErrNotFound
+	// }
+	return db.UpdateMetaLoc(id, metaLoc)
+}
+
+func (store *txnStore) UpdateDeltaLoc(dbId uint64, id *common.ID, deltaLoc string) (err error) {
+	db, err := store.getOrSetDB(dbId)
+	if err != nil {
+		return err
+	}
+	// if table.IsDeleted() {
+	// 	return txnbase.ErrNotFound
+	// }
+	return db.UpdateDeltaLoc(id, deltaLoc)
 }
 
 func (store *txnStore) GetByFilter(dbId, tid uint64, filter *handle.Filter) (id *common.ID, offset uint32, err error) {
@@ -322,12 +325,12 @@ func (store *txnStore) GetSegment(dbId uint64, id *common.ID) (seg handle.Segmen
 	return db.GetSegment(id)
 }
 
-func (store *txnStore) CreateSegment(dbId, tid uint64) (seg handle.Segment, err error) {
+func (store *txnStore) CreateSegment(dbId, tid uint64, is1PC bool) (seg handle.Segment, err error) {
 	var db *txnDB
 	if db, err = store.getOrSetDB(dbId); err != nil {
 		return
 	}
-	return db.CreateSegment(tid)
+	return db.CreateSegment(tid, is1PC)
 }
 
 func (store *txnStore) CreateNonAppendableSegment(dbId, tid uint64) (seg handle.Segment, err error) {
@@ -377,12 +380,12 @@ func (store *txnStore) GetBlock(dbId uint64, id *common.ID) (blk handle.Block, e
 	return db.GetBlock(id)
 }
 
-func (store *txnStore) CreateBlock(dbId, tid, sid uint64) (blk handle.Block, err error) {
+func (store *txnStore) CreateBlock(dbId, tid, sid uint64, is1PC bool) (blk handle.Block, err error) {
 	var db *txnDB
 	if db, err = store.getOrSetDB(dbId); err != nil {
 		return
 	}
-	return db.CreateBlock(tid, sid)
+	return db.CreateBlock(tid, sid, is1PC)
 }
 
 func (store *txnStore) SoftDeleteBlock(dbId uint64, id *common.ID) (err error) {
@@ -490,7 +493,12 @@ func (store *txnStore) PreApplyCommit() (err error) {
 	if logEntry != nil {
 		store.logs = append(store.logs, logEntry)
 	}
-	logutil.Debugf("Txn-%d PrepareCommit Takes %s", store.txn.GetID(), time.Since(now))
+	for _, db := range store.dbs {
+		if err = db.Apply1PCCommit(); err != nil {
+			return
+		}
+	}
+	logutil.Debugf("Txn-%s PrepareCommit Takes %s", store.txn.GetID(), time.Since(now))
 	return
 }
 
@@ -524,15 +532,17 @@ func (store *txnStore) PrepareRollback() error {
 
 func (store *txnStore) GetLSN() uint64 { return store.cmdMgr.lsn }
 
-func (store *txnStore) HasTableDataChanges(tableID uint64) bool {
-	_, changed := store.dirtyMemo.tableChanges[tableID]
-	return changed
+func (store *txnStore) HasAnyTableDataChanges() bool {
+	return store.dirtyMemo.tableChanges.TableCount() > 0
 }
 
-// GetTableDirtyPoints returns touched segments and blocks in the txn.
-func (store *txnStore) GetTableDirtyPoints(tableID uint64) dirtySet {
-	dirtiesMap := store.dirtyMemo.tableChanges[tableID]
-	return dirtiesMap
+func (store *txnStore) HasTableDataChanges(id uint64) bool {
+	return store.dirtyMemo.tableChanges.HasTable(id)
+}
+
+// GetDirtyTable returns touched segments and blocks in the txn.
+func (store *txnStore) GetDirtyTableByID(id uint64) *common.TableTree {
+	return store.dirtyMemo.tableChanges.GetTable(id)
 }
 
 func (store *txnStore) HasCatalogChanges() bool {

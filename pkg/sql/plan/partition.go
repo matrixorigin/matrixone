@@ -15,6 +15,7 @@
 package plan
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"strconv"
 	"strings"
 
@@ -466,6 +467,9 @@ func checkPartitionKeysConstraints(partitionBinder *PartitionBinder, tableDef *T
 
 // checkUniqueKeyIncludePartKey checks the partitioning key is included in the constraint.
 func checkUniqueKeyIncludePartKey(partCols []string, pkcols []string) bool {
+	if len(pkcols) > 0 && util.JudgeIsCompositePrimaryKeyColumn(pkcols[0]) {
+		pkcols = util.SplitCompositePrimaryKeyColumnName(pkcols[0])
+	}
 	for i := 0; i < len(partCols); i++ {
 		partCol := partCols[i]
 		if !findColumnInIndexCols(partCol, pkcols) {
