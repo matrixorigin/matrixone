@@ -69,8 +69,7 @@ func (blk *dataBlock) replayMutIndex() error {
 		keysCtx.Keys = vec
 		keysCtx.Count = vec.Length()
 		defer keysCtx.Keys.Close()
-		var zeroV types.TS
-		blk.indexes[colDef.Idx].BatchUpsert(keysCtx, 0, zeroV)
+		blk.indexes[colDef.Idx].BatchUpsert(keysCtx, 0)
 	}
 	return nil
 }

@@ -547,30 +547,6 @@ func (blk *dataBlock) Update(txn txnif.AsyncTxn, row uint32, colIdx uint16, v an
 	return blk.updateWithFineLock(txn, row, colIdx, v)
 }
 
-// updateWithCoarseLock is unused
-// func (blk *dataBlock) updateWithCoarseLock(
-// 	txn txnif.AsyncTxn,
-// 	row uint32,
-// 	colIdx uint16,
-// 	v any) (node txnif.UpdateNode, err error) {
-// 	blk.mvcc.Lock()
-// 	defer blk.mvcc.Unlock()
-// 	err = blk.mvcc.CheckNotDeleted(row, row, txn.GetStartTS())
-// 	if err == nil {
-// 		if err = blk.mvcc.CheckNotUpdated(row, row, txn.GetStartTS()); err != nil {
-// 			return
-// 		}
-// 		chain := blk.mvcc.GetColumnChain(colIdx)
-// 		chain.Lock()
-// 		node = chain.AddNodeLocked(txn)
-// 		if err = chain.TryUpdateNodeLocked(row, v, node); err != nil {
-// 			chain.DeleteNodeLocked(node.GetDLNode())
-// 		}
-// 		chain.Unlock()
-// 	}
-// 	return
-// }
-
 func (blk *dataBlock) updateWithFineLock(
 	txn txnif.AsyncTxn,
 	row uint32,
@@ -660,43 +636,7 @@ func (blk *dataBlock) LoadColumnData(
 func (blk *dataBlock) ablkGetByFilter(ts types.TS, filter *handle.Filter) (offset uint32, err error) {
 	blk.mvcc.RLock()
 	defer blk.mvcc.RUnlock()
-	offset, err = blk.pkIndex.GetActiveRow(filter.Val)
-	// Unknow err. return fast
-	if err != nil && !moerr.IsMoErrCode(err, moerr.ErrNotFound) {
-		return
-	}
-
-	// If found in active map, check visibility first
-	if err == nil {
-		var visible bool
-		visible, err = blk.mvcc.IsVisibleLocked(offset, ts)
-		// Unknow err. return fast
-		if err != nil {
-			return
-		}
-		// logutil.Infof("ts=%d, maxVisible=%d,visible=%v", ts, blk.mvcc.LoadMaxVisible(), visible)
-		// If row is visible to txn
-		if visible {
-			var deleted bool
-			// Check if it was detetd
-			deleted, err = blk.mvcc.IsDeletedLocked(offset, ts, blk.mvcc.RWMutex)
-			if err != nil {
-				return
-			}
-			if deleted {
-				err = moerr.NewNotFound()
-			}
-			return
-		}
-	}
-	err = nil
-
-	// Check delete map
-	deleted, existed := blk.pkIndex.IsKeyDeleted(filter.Val, ts)
-	if !existed || deleted {
-		err = moerr.NewNotFound()
-		// panic(fmt.Sprintf("%v:%v %v:%s", existed, deleted, filter.Val, blk.index.String()))
-	}
+	offset, err = blk.GetActiveRow(filter.Val, ts)
 	return
 }
 
@@ -766,25 +706,85 @@ func (blk *dataBlock) ABlkApplyDelete(deleted uint64, gen common.RowGen, ts type
 		return
 	}
 	// If any pk defined, update index
-	var row uint32
-	blk.mvcc.RLock()
-	vecview := blk.node.data.Vecs[blk.meta.GetSchema().GetSingleSortKeyIdx()].GetView()
-	blk.mvcc.RUnlock()
 	blk.mvcc.Lock()
 	defer blk.mvcc.Unlock()
-	var currRow uint32
-	for gen.HasNext() {
-		row = gen.Next()
-		v := vecview.Get(int(row))
-		currRow, err = blk.pkIndex.GetActiveRow(v)
-		if err != nil || currRow == row {
-			if err = blk.pkIndex.Delete(v, ts); err != nil {
-				return
-			}
-		}
-	}
 	blk.meta.GetSegment().GetTable().RemoveRows(deleted)
 	return
+}
+
+func (blk *dataBlock) GetActiveRow(key any, ts types.TS) (row uint32, err error) {
+	rows, err := blk.pkIndex.GetActiveRow(key)
+	if err != nil {
+		return
+	}
+	for i := len(rows) - 1; i >= 0; i-- {
+		row := rows[i]
+		appendnode := blk.GetAppendNodeByRow(row)
+		needWait, txn := appendnode.NeedWaitCommitting(ts)
+		if needWait {
+			blk.mvcc.RUnlock()
+			txn.GetTxnState(true)
+			blk.mvcc.RLock()
+		}
+		if appendnode.IsAborted() || !appendnode.IsVisible(ts) {
+			continue
+		}
+		deleteNode := blk.GetDeleteNodeByRow(row).(*updates.DeleteNode)
+		if deleteNode == nil {
+			return row, nil
+		}
+		needWait, txn = deleteNode.NeedWaitCommitting(ts)
+		if needWait {
+			blk.mvcc.RUnlock()
+			txn.GetTxnState(true)
+			blk.mvcc.RLock()
+		}
+		if deleteNode.IsAborted() || !deleteNode.IsVisible(ts) {
+			return row, nil
+		}
+	}
+	return 0, moerr.NewNotFound()
+}
+
+func (blk *dataBlock) onCheckConflictAndDedup(rowmask *roaring.Bitmap, ts types.TS) func(row uint32) (err error) {
+	return func(row uint32) (err error) {
+		if rowmask != nil && rowmask.Contains(row) {
+			return nil
+		}
+		appendnode := blk.GetAppendNodeByRow(row)
+		needWait, txn := appendnode.NeedWaitCommitting(ts)
+		if needWait {
+			blk.mvcc.RUnlock()
+			txn.GetTxnState(true)
+			blk.mvcc.RLock()
+		}
+		if appendnode.IsAborted() || !appendnode.IsVisible(ts) {
+			if err = appendnode.CheckConflict(ts); err != nil {
+				return
+			}
+			return nil
+		}
+		deleteNode := blk.GetDeleteNodeByRow(row).(*updates.DeleteNode)
+		if deleteNode == nil {
+			return moerr.NewDuplicate()
+		}
+		needWait, txn = deleteNode.NeedWaitCommitting(ts)
+		if needWait {
+			blk.mvcc.RUnlock()
+			txn.GetTxnState(true)
+			blk.mvcc.RLock()
+		}
+		if deleteNode.IsAborted() || !deleteNode.IsVisible(ts) {
+			return moerr.NewDuplicate()
+		}
+		if err = appendnode.CheckConflict(ts); err != nil {
+			return
+		}
+		if err = deleteNode.CheckConflict(ts); err != nil {
+			return
+		}
+		return nil
+	}
 }
 
 func (blk *dataBlock) BatchDedup(txn txnif.AsyncTxn, pks containers.Vector, rowmask *roaring.Bitmap) (err error) {
@@ -792,25 +792,9 @@ func (blk *dataBlock) BatchDedup(txn txnif.AsyncTxn, pks containers.Vector, rowm
 		ts := txn.GetStartTS()
 		blk.mvcc.RLock()
 		defer blk.mvcc.RUnlock()
-		keyselects, err := blk.pkIndex.BatchDedup(pks, rowmask)
-		// If duplicated with active rows
-		// TODO: index should store ts to identify w-w
+		_, err := blk.pkIndex.BatchDedup(pks, blk.onCheckConflictAndDedup(rowmask, ts))
 		if err != nil {
 			return err
-		}
-		// Check with deletes map
-		// If txn start ts is bigger than deletes max ts, skip scanning deletes
-		if ts.Greater(blk.pkIndex.GetMaxDeleteTS()) {
-			return err
-		}
-		it := keyselects.Iterator()
-		for it.HasNext() {
-			row := it.Next()
-			key := pks.Get(int(row))
-			if blk.pkIndex.HasDeleteFrom(key, ts) {
-				err = moerr.NewTxnWWConflict()
-				break
-			}
 		}
 
 		return err
@@ -818,7 +802,7 @@ func (blk *dataBlock) BatchDedup(txn txnif.AsyncTxn, pks containers.Vector, rowm
 	if blk.indexes == nil {
 		panic("index not found")
 	}
-	keyselects, err := blk.pkIndex.BatchDedup(pks, rowmask)
+	keyselects, err := blk.pkIndex.BatchDedup(pks, blk.onCheckConflictAndDedup(rowmask, txn.GetStartTS()))
 	if err == nil {
 		return
 	}
@@ -901,4 +885,11 @@ func (blk *dataBlock) CollectDeleteInRange(start, end types.TS) (*containers.Bat
 	batch.AddVector(catalog.AttrCommitTs, ts)
 	batch.AddVector(catalog.AttrAborted, abort)
 	return batch, nil
+}
+
+func (blk *dataBlock) GetAppendNodeByRow(row uint32) txnif.AppendNode {
+	return blk.mvcc.GetAppendNodeByRow(row)
+}
+func (blk *dataBlock) GetDeleteNodeByRow(row uint32) txnif.DeleteNode {
+	return blk.mvcc.GetDeleteNodeByRow(row)
 }
