@@ -307,7 +307,11 @@ func (node *PrivilegeType) ToString() string {
 	case PRIVILEGE_TYPE_STATIC_OWNERSHIP:
 		return "ownership"
 	case PRIVILEGE_TYPE_STATIC_MANAGE_GRANTS:
-		return "manage"
+		return "manage grants"
+	case PRIVILEGE_TYPE_STATIC_TRUNCATE:
+		return "truncate"
+	case PRIVILEGE_TYPE_STATIC_REFERENCE:
+		return "reference"
 	default:
 		return "Unknown PrivilegeType"
 	}
@@ -340,14 +344,16 @@ const (
 	PRIVILEGE_TYPE_STATIC_DROP_VIEW
 	PRIVILEGE_TYPE_STATIC_ALTER_TABLE
 	PRIVILEGE_TYPE_STATIC_ALTER_VIEW
-	PRIVILEGE_TYPE_STATIC_SELECT     //Enable use of SELECT. Levels: Global, database, table, column.
-	PRIVILEGE_TYPE_STATIC_INSERT     //Enable use of INSERT. Levels: Global, database, table, column.
-	PRIVILEGE_TYPE_STATIC_UPDATE     //Enable use of UPDATE. Levels: Global, database, table, column.
+	PRIVILEGE_TYPE_STATIC_SELECT //Enable use of SELECT. Levels: Global, database, table, column.
+	PRIVILEGE_TYPE_STATIC_INSERT //Enable use of INSERT. Levels: Global, database, table, column.
+	PRIVILEGE_TYPE_STATIC_UPDATE //Enable use of UPDATE. Levels: Global, database, table, column.
+	PRIVILEGE_TYPE_STATIC_TRUNCATE
 	PRIVILEGE_TYPE_STATIC_DELETE     //Enable use of DELETE. Level: Global, database, table.
 	PRIVILEGE_TYPE_STATIC_REFERENCES //Enable foreign key creation. Levels: Global, database, table, column.
-	PRIVILEGE_TYPE_STATIC_INDEX      //Enable indexes to be created or dropped. Levels: Global, database, table.
-	PRIVILEGE_TYPE_STATIC_EXECUTE    //Enable the user to execute stored routines. Levels: Global, database, routine.
-	PRIVILEGE_TYPE_STATIC_VALUES     //Enable use of VALUES. Levels: Global, database, table.
+	PRIVILEGE_TYPE_STATIC_REFERENCE
+	PRIVILEGE_TYPE_STATIC_INDEX   //Enable indexes to be created or dropped. Levels: Global, database, table.
+	PRIVILEGE_TYPE_STATIC_EXECUTE //Enable the user to execute stored routines. Levels: Global, database, routine.
+	PRIVILEGE_TYPE_STATIC_VALUES  //Enable use of VALUES. Levels: Global, database, table.
 
 	PRIVILEGE_TYPE_STATIC_ALTER
 	PRIVILEGE_TYPE_STATIC_CREATE

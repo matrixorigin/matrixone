@@ -17,6 +17,7 @@ package memorystorage
 import (
 	"database/sql"
 	"errors"
+	"fmt"
 	"sort"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -110,8 +111,18 @@ func (m *MemHandler) HandleGetLogTail(meta txn.TxnMeta, req apipb.SyncLogTailReq
 	}
 
 	appendRow := func(batch *batch.Batch, row NamedRow, commitTime Time) error {
+		// check type
+		for name, attr := range attrsMap {
+			value, err := row.AttrByName(m, tx, name)
+			if err != nil {
+				return err
+			}
+			if !memtable.TypeMatch(value.Value, attr.Type.Oid) {
+				panic(fmt.Sprintf("%v should be %v, but got %T", name, attr.Type, value.Value))
+			}
+		}
 		// row id
-		rowID, err := row.AttrByName(tx, rowIDColumnName)
+		rowID, err := row.AttrByName(m, tx, rowIDColumnName)
 		if err != nil {
 			return err
 		}

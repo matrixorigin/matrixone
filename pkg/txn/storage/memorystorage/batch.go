@@ -352,10 +352,9 @@ func appendNamedRow(
 	bat *batch.Batch,
 	row NamedRow,
 ) error {
-	row.SetHandler(handler)
 	for i := offset; i < len(bat.Attrs); i++ {
 		name := bat.Attrs[i]
-		value, err := row.AttrByName(tx, name)
+		value, err := row.AttrByName(handler, tx, name)
 		if err != nil {
 			return err
 		}

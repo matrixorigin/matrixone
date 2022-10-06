@@ -224,7 +224,7 @@ c	d
 commit;
 set autocommit=1;
 commit;
-tae data: duplicate
+w-w conflict
 set autocommit=1;
 select * from test_11;
 c	d
@@ -346,7 +346,7 @@ Insert into test_11 values(100,50);
 commit;
 set autocommit=1;
 commit;
-tae data: duplicate
+w-w conflict
 set autocommit=1;
 select * from test_11;
 c	d
@@ -475,7 +475,7 @@ update test_11 set c = 100 where d = 50;
 commit;
 set autocommit=1;
 commit;
-tae data: duplicate
+w-w conflict
 set autocommit=1;
 select * from test_11;
 c	d

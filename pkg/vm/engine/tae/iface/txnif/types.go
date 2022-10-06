@@ -158,14 +158,49 @@ type DeleteChain interface {
 	DepthLocked() int
 	CollectDeletesLocked(ts types.TS, collectIndex bool, rwlocker *sync.RWMutex) (DeleteNode, error)
 }
+type MVCCNode interface {
+	String() string
 
+	IsVisible(ts types.TS) (visible bool)
+	CheckConflict(ts types.TS) error
+	Update(o MVCCNode)
+
+	PreparedIn(minTS, maxTS types.TS) (in, before bool)
+	CommittedIn(minTS, maxTS types.TS) (in, before bool)
+	NeedWaitCommitting(ts types.TS) (bool, TxnReader)
+	IsSameTxn(ts types.TS) bool
+	IsActive() bool
+	IsCommitting() bool
+	IsCommitted() bool
+	IsAborted() bool
+	Set1PC()
+	Is1PC() bool
+
+	GetEnd() types.TS
+	GetStart() types.TS
+	GetPrepare() types.TS
+	GetTxn() TxnReader
+	SetLogIndex(idx *wal.Index)
+	GetLogIndex() *wal.Index
+
+	ApplyCommit(index *wal.Index) (err error)
+	ApplyRollback(index *wal.Index) (err error)
+	PrepareCommit() (err error)
+
+	WriteTo(w io.Writer) (n int64, err error)
+	ReadFrom(r io.Reader) (n int64, err error)
+	CloneData() MVCCNode
+	CloneAll() MVCCNode
+}
 type AppendNode interface {
+	MVCCNode
 	TxnEntry
 	GetStartRow() uint32
 	GetMaxRow() uint32
 }
 
 type DeleteNode interface {
+	MVCCNode
 	TxnEntry
 	StringLocked() string
 	GetChain() DeleteChain
@@ -242,9 +277,9 @@ type TxnStore interface {
 type TxnEntryType int16
 
 type TxnEntry interface {
-	sync.Locker
-	RLock()
-	RUnlock()
+	// sync.Locker
+	// RLock()
+	// RUnlock()
 	PrepareCommit() error
 	PrepareRollback() error
 	ApplyCommit(index *wal.Index) error
