@@ -4600,6 +4600,7 @@ func InitUser(ctx context.Context, tenant *TenantInfo, cu *tree.CreateUser) erro
 		if err != nil {
 			goto handleFailed
 		}
+		exists = 0
 		if len(rsset) >= 1 && rsset[0].GetRowCount() >= 1 {
 			exists = 1
 		}
