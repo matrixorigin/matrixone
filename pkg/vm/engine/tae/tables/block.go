@@ -717,7 +717,8 @@ func (blk *dataBlock) GetActiveRow(key any, ts types.TS) (row uint32, err error)
 	if err != nil {
 		return
 	}
-	for _, row := range rows {
+	for i := len(rows) - 1; i >= 0; i-- {
+		row := rows[i]
 		appendnode := blk.GetAppendNodeByRow(row)
 		needWait, txn := appendnode.NeedWaitCommitting(ts)
 		if needWait {

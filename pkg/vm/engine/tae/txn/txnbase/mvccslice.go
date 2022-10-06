@@ -184,6 +184,35 @@ func (be *MVCCSlice) GetNodeToReadByPrepareTS(ts types.TS) (offset int, node txn
 	}
 	return mid, be.MVCC[mid]
 }
+
+func (be *MVCCSlice) SearchNodeByCompareFn(fn func(a txnif.MVCCNode) int) (offset int, node txnif.MVCCNode) {
+	if len(be.MVCC) == 0 {
+		return 0, nil
+	}
+	lastAppend := be.MVCC[len(be.MVCC)-1]
+
+	// 1. Last append node is in the window and it was already committed
+	if fn(lastAppend) < 0 {
+		return 0, nil
+	}
+	start, end := 0, len(be.MVCC)-1
+	var mid int
+	for start <= end {
+		mid = (start + end) / 2
+		if fn(be.MVCC[mid]) < 0 {
+			start = mid + 1
+		} else if fn(be.MVCC[mid]) > 0 {
+			end = mid - 1
+		} else {
+			break
+		}
+	}
+	if fn(be.MVCC[mid]) != 0 {
+		return 0, nil
+	}
+	return mid, be.MVCC[mid]
+}
+
 func (be *MVCCSlice) NeedWaitCommitting(startTS types.TS) (bool, txnif.TxnReader) {
 	un := be.GetUpdateNodeLocked()
 	if un == nil {

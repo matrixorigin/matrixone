@@ -407,14 +407,20 @@ func (n *MVCCHandle) ExistDeleteInRange(start, end types.TS) (exist bool) {
 }
 
 func (n *MVCCHandle) GetAppendNodeByRow(row uint32) (an *AppendNode) {
-	n.appends.ForEach(func(un txnif.MVCCNode) bool {
-		if un.(*AppendNode).maxRow > row && un.(*AppendNode).startRow <= row {
-			an = un.(*AppendNode)
-			return false
+	_, van := n.appends.SearchNodeByCompareFn(func(a txnif.MVCCNode) int {
+		node := a.(*AppendNode)
+		if node.maxRow <= row {
+			return -1
 		}
-		return true
+		if node.startRow > row {
+			return 1
+		}
+		return 0
 	})
-	return
+	if van == nil {
+		return nil
+	}
+	return van.(*AppendNode)
 }
 func (n *MVCCHandle) GetDeleteNodeByRow(row uint32) (an *DeleteNode) {
 	return n.deletes.GetDeleteNodeByRow(row)
