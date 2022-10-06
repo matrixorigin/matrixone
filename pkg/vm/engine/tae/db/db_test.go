@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/dataio/blockio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -3095,9 +3096,9 @@ func TestLogtailBasic(t *testing.T) {
 
 	// at first, we can see nothing
 	minTs, maxTs := types.BuildTS(0, 0), types.BuildTS(1000, 1000)
-	view := logMgr.GetLogtailView(minTs, maxTs, 1000)
-	assert.False(t, view.HasCatalogChanges())
-	assert.Equal(t, 0, len(view.GetDirty().Segs))
+	reader := logMgr.GetReader(minTs, maxTs)
+	assert.False(t, reader.HasCatalogChanges())
+	assert.Equal(t, 0, len(reader.GetDirtyByTable(1000, 1000).Segs))
 
 	schema := catalog.MockSchemaAll(2, -1)
 	schema.Name = "test"
@@ -3169,9 +3170,9 @@ func TestLogtailBasic(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			for i := 0; i < 10; i++ {
-				view := logMgr.GetLogtailView(minTs, maxTs, tableID)
-				assert.True(t, view.HasCatalogChanges())
-				_ = view.GetDirty()
+				reader := logMgr.GetReader(minTs, maxTs)
+				assert.True(t, reader.HasCatalogChanges())
+				_ = reader.GetDirtyByTable(dbID, tableID)
 			}
 			wg.Done()
 		}()
@@ -3181,15 +3182,15 @@ func TestLogtailBasic(t *testing.T) {
 
 	firstWriteTs, lastWriteTs := writeTs[0], writeTs[len(writeTs)-1]
 
-	view = logMgr.GetLogtailView(firstWriteTs, lastWriteTs.Next(), tableID)
-	assert.False(t, view.HasCatalogChanges())
-	view = logMgr.GetLogtailView(minTs, catalogWriteTs, tableID)
-	assert.Equal(t, 0, len(view.GetDirty().Segs))
-	view = logMgr.GetLogtailView(firstWriteTs, lastWriteTs, tableID-1)
-	assert.Equal(t, 0, len(view.GetDirty().Segs))
+	reader = logMgr.GetReader(firstWriteTs, lastWriteTs.Next())
+	assert.False(t, reader.HasCatalogChanges())
+	reader = logMgr.GetReader(minTs, catalogWriteTs)
+	assert.Equal(t, 0, len(reader.GetDirtyByTable(dbID, tableID).Segs))
+	reader = logMgr.GetReader(firstWriteTs, lastWriteTs)
+	assert.Equal(t, 0, len(reader.GetDirtyByTable(dbID, tableID-1).Segs))
 	// 5 segments, every segment has 2 blocks
-	view = logMgr.GetLogtailView(firstWriteTs, lastWriteTs, tableID)
-	dirties := view.GetDirty()
+	reader = logMgr.GetReader(firstWriteTs, lastWriteTs)
+	dirties := reader.GetDirtyByTable(dbID, tableID)
 	assert.Equal(t, 5, len(dirties.Segs))
 	for _, seg := range dirties.Segs {
 		assert.Equal(t, 2, len(seg.Blks))
@@ -3209,7 +3210,7 @@ func TestLogtailBasic(t *testing.T) {
 	}
 
 	// get db catalog change
-	resp, err := LogtailHandler(tae.DB, api.SyncLogTailReq{
+	resp, err := logtail.HandleSyncLogTailReq(tae.LogtailMgr, tae.Catalog, api.SyncLogTailReq{
 		CnHave: tots(minTs),
 		CnWant: tots(catalogDropTs),
 		Table:  &api.TableID{DbId: pkgcatalog.MO_CATALOG_ID, TbId: pkgcatalog.MO_DATABASE_ID},
@@ -3230,7 +3231,7 @@ func TestLogtailBasic(t *testing.T) {
 	check_same_rows(resp.Commands[1].Bat, 1) // 1 drop db
 
 	// get table catalog change
-	resp, err = LogtailHandler(tae.DB, api.SyncLogTailReq{
+	resp, err = logtail.HandleSyncLogTailReq(tae.LogtailMgr, tae.Catalog, api.SyncLogTailReq{
 		CnHave: tots(minTs),
 		CnWant: tots(catalogDropTs),
 		Table:  &api.TableID{DbId: pkgcatalog.MO_CATALOG_ID, TbId: pkgcatalog.MO_TABLES_ID},
@@ -3246,7 +3247,7 @@ func TestLogtailBasic(t *testing.T) {
 	assert.Equal(t, schema.Name, relname.GetString(1))
 
 	// get columns catalog change
-	resp, err = LogtailHandler(tae.DB, api.SyncLogTailReq{
+	resp, err = logtail.HandleSyncLogTailReq(tae.LogtailMgr, tae.Catalog, api.SyncLogTailReq{
 		CnHave: tots(minTs),
 		CnWant: tots(catalogDropTs),
 		Table:  &api.TableID{DbId: pkgcatalog.MO_CATALOG_ID, TbId: pkgcatalog.MO_COLUMNS_ID},
@@ -3258,7 +3259,7 @@ func TestLogtailBasic(t *testing.T) {
 	check_same_rows(resp.Commands[0].Bat, len(schema.ColDefs)*2) // column count of 2 tables
 
 	// get user table change
-	resp, err = LogtailHandler(tae.DB, api.SyncLogTailReq{
+	resp, err = logtail.HandleSyncLogTailReq(tae.LogtailMgr, tae.Catalog, api.SyncLogTailReq{
 		CnHave: tots(firstWriteTs.Next()), // skip the first write deliberately,
 		CnWant: tots(lastWriteTs),
 		Table:  &api.TableID{DbId: dbID, TbId: tableID},
@@ -3269,7 +3270,7 @@ func TestLogtailBasic(t *testing.T) {
 	// blk meta change
 	blkMetaEntry := resp.Commands[0]
 	assert.Equal(t, api.Entry_Insert, blkMetaEntry.EntryType)
-	assert.Equal(t, len(blkMetaSchema.ColDefs)+fixedColCnt, len(blkMetaEntry.Bat.Vecs))
+	assert.Equal(t, len(logtail.BlkMetaSchema.ColDefs)+fixedColCnt, len(blkMetaEntry.Bat.Vecs))
 	check_same_rows(blkMetaEntry.Bat, 9) // 9 blocks, because the first write is excluded.
 
 	// check data change

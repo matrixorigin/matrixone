@@ -15,10 +15,11 @@
 package db
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"io"
 	"runtime"
 	"sync/atomic"
+
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -28,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/file"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
@@ -51,7 +53,7 @@ type DB struct {
 	TxnBufMgr   base.INodeManager
 
 	TxnMgr     *txnbase.TxnManager
-	LogtailMgr *LogtailMgr
+	LogtailMgr *logtail.LogtailMgr
 	Wal        wal.Driver
 
 	CKPDriver checkpoint.Driver

@@ -53,6 +53,20 @@ func MustStrCols(v *Vector) []string {
 	return ret
 }
 
+func MustVarlenaRawData(v *Vector) (data []types.Varlena, area []byte) {
+	data = MustTCols[types.Varlena](v)
+	area = v.area
+	return
+}
+
+func BuildVarlenaVector(typ types.Type, data []types.Varlena, area []byte) (vec *Vector, err error) {
+	vec = NewOriginal(typ)
+	vec.data = types.EncodeVarlenaSlice(data)
+	vec.area = area
+	vec.colFromData()
+	return
+}
+
 func VectorToProtoVector(vec *Vector) (*api.Vector, error) {
 	nsp, err := vec.Nsp.Show()
 	if err != nil {

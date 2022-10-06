@@ -27,7 +27,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/model"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/updates"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 )
@@ -140,7 +139,7 @@ func (tbl *txnTable) SoftDeleteSegment(id uint64) (err error) {
 	if txnEntry != nil {
 		tbl.txnEntries = append(tbl.txnEntries, txnEntry)
 	}
-	tbl.store.dirtyMemo.recordSeg(tbl.entry.ID, id)
+	tbl.store.dirtyMemo.recordSeg(tbl.entry.GetDB().GetID(), tbl.entry.ID, id)
 	tbl.store.warChecker.ReadTable(tbl.entry.GetDB().ID, tbl.entry.AsCommonID())
 	return
 }
@@ -164,7 +163,7 @@ func (tbl *txnTable) createSegment(state catalog.EntryState, is1PC bool) (seg ha
 	}
 	seg = newSegment(tbl, meta)
 	tbl.store.IncreateWriteCnt()
-	tbl.store.dirtyMemo.recordSeg(tbl.entry.ID, meta.ID)
+	tbl.store.dirtyMemo.recordSeg(tbl.entry.GetDB().ID, tbl.entry.ID, meta.ID)
 	if is1PC {
 		meta.Set1PC()
 	}
@@ -183,7 +182,7 @@ func (tbl *txnTable) SoftDeleteBlock(id *common.ID) (err error) {
 		return
 	}
 	tbl.store.IncreateWriteCnt()
-	tbl.store.dirtyMemo.recordBlk(*id)
+	tbl.store.dirtyMemo.recordBlk(tbl.entry.GetDB().ID, id)
 	if meta != nil {
 		tbl.txnEntries = append(tbl.txnEntries, meta)
 	}
@@ -243,7 +242,7 @@ func (tbl *txnTable) createBlock(sid uint64, state catalog.EntryState, is1PC boo
 		meta.Set1PC()
 	}
 	tbl.store.IncreateWriteCnt()
-	tbl.store.dirtyMemo.recordBlk(*meta.AsCommonID())
+	tbl.store.dirtyMemo.recordBlk(tbl.entry.GetDB().ID, meta.AsCommonID())
 	tbl.txnEntries = append(tbl.txnEntries, meta)
 	tbl.store.warChecker.ReadSegment(tbl.entry.GetDB().ID, seg.AsCommonID())
 	return buildBlock(tbl, meta), err
@@ -310,7 +309,7 @@ func (tbl *txnTable) AddDeleteNode(id *common.ID, node txnif.DeleteNode) error {
 	}
 	tbl.deleteNodes[nid] = node
 	tbl.store.IncreateWriteCnt()
-	tbl.store.dirtyMemo.recordBlk(*id)
+	tbl.store.dirtyMemo.recordBlk(tbl.entry.GetDB().ID, id)
 	tbl.txnEntries = append(tbl.txnEntries, node)
 	return nil
 }
@@ -327,23 +326,9 @@ func (tbl *txnTable) AddUpdateNode(node txnif.UpdateNode) error {
 	return nil
 }
 
-func (tbl *txnTable) GetSortColumns(data *containers.Batch) []containers.Vector {
-	vs := make([]containers.Vector, tbl.schema.GetSortKeyCnt())
-	for i := range vs {
-		vs[i] = data.Vecs[tbl.schema.SortKey.Defs[i].Idx]
-	}
-	return vs
-}
-
-// func (tbl *txnTable)
-
 func (tbl *txnTable) Append(data *containers.Batch) (err error) {
-	if tbl.schema.IsSinglePK() {
+	if tbl.schema.HasPK() {
 		if err = tbl.DoBatchDedup(data.Vecs[tbl.schema.GetSingleSortKeyIdx()]); err != nil {
-			return
-		}
-	} else if tbl.schema.IsCompoundPK() {
-		if err = tbl.DoBatchDedup(tbl.GetSortColumns(data)...); err != nil {
 			return
 		}
 	}
@@ -660,15 +645,8 @@ func (tbl *txnTable) DoDedup(pks containers.Vector, preCommit bool) (err error) 
 	return
 }
 
-func (tbl *txnTable) DoBatchDedup(keys ...containers.Vector) (err error) {
+func (tbl *txnTable) DoBatchDedup(key containers.Vector) (err error) {
 	index := NewSimpleTableIndex()
-	var key containers.Vector
-	if len(keys) == 1 {
-		key = keys[0]
-	} else {
-		key = model.EncodeCompoundColumn(keys...)
-		defer key.Close()
-	}
 	if err = index.BatchInsert(key, 0, key.Length(), 0, true); err != nil {
 		return
 	}
@@ -684,15 +662,10 @@ func (tbl *txnTable) DoBatchDedup(keys ...containers.Vector) (err error) {
 }
 
 func (tbl *txnTable) BatchDedupLocal(bat *containers.Batch) (err error) {
-	if tbl.localSegment == nil {
+	if tbl.localSegment == nil || !tbl.schema.HasPK() {
 		return
 	}
-	if tbl.schema.IsSinglePK() {
-		err = tbl.localSegment.BatchDedup(bat.Vecs[tbl.schema.GetSingleSortKeyIdx()])
-	} else {
-		key := model.EncodeCompoundColumn(tbl.GetSortColumns(bat)...)
-		err = tbl.localSegment.BatchDedup(key)
-	}
+	err = tbl.localSegment.BatchDedup(bat.Vecs[tbl.schema.GetSingleSortKeyIdx()])
 	return
 }
 

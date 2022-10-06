@@ -15,9 +15,10 @@
 package catalog
 
 import (
+	"sync"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
@@ -211,11 +212,9 @@ func (txn *mockTxn) DropDatabaseByID(id uint64) (handle.Database, error) {
 }
 
 func MockBatch(schema *Schema, rows int) *containers.Batch {
-	if schema.IsSingleSortKey() {
+	if schema.HasSortKey() {
 		sortKey := schema.GetSingleSortKey()
 		return containers.MockBatchWithAttrs(schema.Types(), schema.Attrs(), schema.Nullables(), rows, sortKey.Idx, nil)
-	} else if schema.IsCompoundSortKey() {
-		return containers.MockBatchWithAttrs(schema.Types(), schema.Attrs(), schema.Nullables(), rows, schema.PhyAddrKey.Idx, nil)
 	} else {
 		return containers.MockBatchWithAttrs(schema.Types(), schema.Attrs(), schema.Nullables(), rows, schema.PhyAddrKey.Idx, nil)
 	}

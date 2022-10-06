@@ -18,7 +18,6 @@ import (
 	"context"
 	"strings"
 
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -172,9 +171,6 @@ func DefsToSchema(name string, defs []engine.TableDef) (schema *catalog.Schema, 
 	}
 	if err = schema.Finalize(false); err != nil {
 		return
-	}
-	if schema.IsCompoundSortKey() {
-		err = moerr.NewNYI("compound idx")
 	}
 	return
 }
