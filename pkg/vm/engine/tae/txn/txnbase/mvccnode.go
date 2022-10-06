@@ -242,7 +242,7 @@ func (un *TxnMVCCNode) NeedWaitCommitting(ts types.TS) (bool, txnif.TxnReader) {
 
 	// --------+----------------+------------------------>
 	//     PrepareTs            Ts                   Time
-	// If ts is before the prepare ts. not to wait
+	// If ts is after the prepare ts. need to wait
 	return true, un.Txn
 }
 

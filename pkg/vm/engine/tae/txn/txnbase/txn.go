@@ -16,6 +16,7 @@ package txnbase
 
 import (
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
 	"sync"
 	"sync/atomic"
 
@@ -107,13 +108,15 @@ func (txn *Txn) SetApplyRollbackFn(fn func(txnif.AsyncTxn) error)   { txn.ApplyR
 
 //The state transition of transaction is as follows:
 // 1PC: TxnStateActive--->TxnStatePreparing--->TxnStateCommitted/TxnStateRollbacked
-//         TxnStateActive--->TxnStateRollbacking--->TxnStateRollbacked
+//		TxnStateActive--->TxnStatePreparing--->TxnStateRollbacking--->TxnStateRollbacked
+//      TxnStateActive--->TxnStateRollbacking--->TxnStateRollbacked
 // 2PC running on Coordinator: TxnStateActive--->TxnStatePreparing-->TxnStatePrepared
 //								-->TxnStateCommittingFinished--->TxnStateCommitted or
 //								TxnStateActive--->TxnStatePreparing-->TxnStatePrepared-->TxnStateRollbacked or
 //                             TxnStateActive--->TxnStateRollbacking--->TxnStateRollbacked.
-// 2PC running on Participant: TxnStateActive--->TxnStatePrepared-->TxnStateCommitted or
-//                             TxnStateActive--->TxnStatePrepared-->TxnStateRollbacked or
+// 2PC running on Participant: TxnStateActive--->TxnStatePreparing-->TxnStatePrepared-->TxnStateCommitted or
+//                             TxnStateActive--->TxnStatePreparing-->TxnStatePrepared-->
+//                             TxnStateRollbacking-->TxnStateRollbacked or
 //                             TxnStateActive--->TxnStateRollbacking-->TxnStateRollbacked.
 
 // Prepare is used to pre-commit a 2PC distributed transaction.
@@ -122,12 +125,6 @@ func (txn *Txn) SetApplyRollbackFn(fn func(txnif.AsyncTxn) error)   { txn.ApplyR
 //  2. For a 2pc transaction, Rollback message may arrive before Prepare message,
 //     should handle this case by TxnStorage?
 func (txn *Txn) Prepare() (pts types.TS, err error) {
-	//TODO::should handle this by TxnStorage?
-	if txn.Mgr.GetTxn(txn.GetID()) == nil {
-		logutil.Warn("tae : txn is not found in TxnManager")
-		//txn.Err = ErrTxnNotFound
-		return types.TS{}, moerr.NewTxnNotFound()
-	}
 	state := txn.GetTxnState(false)
 	if state != txnif.TxnStateActive {
 		logutil.Warnf("unexpected txn status : %s", txnif.TxnStrState(state))
@@ -180,25 +177,32 @@ func (txn *Txn) Rollback() (err error) {
 	return txn.rollback1PC()
 }
 
-// Committing is used to record a log for 2PC distributed transaction running in Coordinator.
-// Notice that transaction must be committed once committing message arrives, since Preparing
+// Committing is used to record a "committing" status for coordinator.
+// Notice that txn must commit successfully once committing message arrives, since Preparing
 // had already succeeded.
 func (txn *Txn) Committing() (err error) {
 	state := txn.GetTxnState(false)
 	if state != txnif.TxnStatePrepared {
-		return moerr.NewInternalError("stat not prepared, unexpected txn status : %s", txnif.TxnStrState(state))
+		return moerr.NewInternalError(
+			"stat not prepared, unexpected txn status : %s",
+			txnif.TxnStrState(state),
+		)
 	}
-	// TODO:
-	// Make committing log entry and flush and wait
 	if err = txn.ToCommittingFinished(); err != nil {
+		panic(err)
+	}
+	//Make a log entry, flush and wait it synced.
+	//A log entry's payload contains txn id , commit timestamp and txn's state.
+	_, err = txn.LogTxnState(true)
+	if err != nil {
 		panic(err)
 	}
 	err = txn.Err
 	return
 }
 
-// Commit is used to commit a 1PC or 2PC transaction running in Coordinator or running in Participant.
-// Notice that the Commit of a 2PC transaction must be success once the commit message arrives,
+// Commit is used to commit a 1PC or 2PC transaction running on Coordinator or running on Participant.
+// Notice that the Commit of a 2PC transaction must be success once the Commit message arrives,
 // since Preparing had already succeeded.
 func (txn *Txn) Commit() (err error) {
 	if txn.Mgr.GetTxn(txn.GetID()) == nil {
@@ -274,6 +278,7 @@ func (txn *Txn) ApplyCommit() (err error) {
 	return
 }
 
+// TODO::set the state of mvcc node to Aborted,no matter what txn is 1PC or 2PC
 func (txn *Txn) ApplyRollback() (err error) {
 	defer func() {
 		txn.LSN = txn.Store.GetLSN()
@@ -361,5 +366,9 @@ func (txn *Txn) DatabaseNames() (names []string) {
 }
 
 func (txn *Txn) LogTxnEntry(dbId, tableId uint64, entry txnif.TxnEntry, readed []*common.ID) (err error) {
+	return
+}
+
+func (txn *Txn) LogTxnState(sync bool) (logEntry entry.Entry, err error) {
 	return
 }

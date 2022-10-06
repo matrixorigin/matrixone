@@ -54,6 +54,9 @@ func (h *Handle) HandleCommit(meta txn.TxnMeta) (err error) {
 	if err != nil {
 		return err
 	}
+	if txn.Is2PC() {
+		txn.SetCommitTS(types.TimestampToTS(meta.GetCommitTS()))
+	}
 	err = txn.Commit()
 	return
 }
@@ -72,6 +75,7 @@ func (h *Handle) HandleCommitting(meta txn.TxnMeta) (err error) {
 	if err != nil {
 		return err
 	}
+	txn.SetCommitTS(types.TimestampToTS(meta.GetCommitTS()))
 	err = txn.Committing()
 	return
 }
@@ -81,6 +85,11 @@ func (h *Handle) HandlePrepare(meta txn.TxnMeta) (pts timestamp.Timestamp, err e
 	if err != nil {
 		return timestamp.Timestamp{}, err
 	}
+	participants := make([]uint64, len(meta.GetDNShards()))
+	for _, shard := range meta.GetDNShards() {
+		participants = append(participants, shard.GetShardID())
+	}
+	txn.SetParticipants(participants)
 	ts, err := txn.Prepare()
 	pts = ts.ToTimestamp()
 	return

@@ -19,6 +19,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
 )
 
 var NoopStoreFactory = func() txnif.TxnStore { return new(NoopTxnStore) }
@@ -92,6 +93,9 @@ func (store *NoopTxnStore) GetValue(uint64, *common.ID, uint32, uint16) (v any, 
 func (store *NoopTxnStore) LogSegmentID(dbId, tid, sid uint64) {}
 func (store *NoopTxnStore) LogBlockID(dbId, tid, bid uint64)   {}
 func (store *NoopTxnStore) LogTxnEntry(dbId, tableId uint64, entry txnif.TxnEntry, readed []*common.ID) (err error) {
+	return
+}
+func (store *NoopTxnStore) LogTxnState(sync bool) (logEntry entry.Entry, err error) {
 	return
 }
 
