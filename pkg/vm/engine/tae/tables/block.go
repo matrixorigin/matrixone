@@ -242,6 +242,9 @@ func (blk *dataBlock) GetBlockFile() file.Block {
 func (blk *dataBlock) GetID() *common.ID { return blk.meta.AsCommonID() }
 
 func (blk *dataBlock) RunCalibration() int {
+	if blk.IsFlushed() {
+		return 100
+	}
 	if blk.meta.IsAppendable() && blk.Rows(nil, true) == int(blk.meta.GetSchema().BlockMaxRows) {
 		blk.meta.RLock()
 		if blk.meta.HasDropped() {
@@ -294,7 +297,7 @@ func (blk *dataBlock) MutationInfo() string {
 
 func (blk *dataBlock) EstimateScore(interval int64) int {
 	if blk.IsFlushed() {
-		return 0
+		return 100
 	}
 	if blk.meta.IsAppendable() && blk.Rows(nil, true) == int(blk.meta.GetSchema().BlockMaxRows) {
 		blk.meta.RLock()
@@ -510,24 +513,21 @@ func (blk *dataBlock) ResolveABlkColumnMVCCData(
 		maxRow  uint32
 		visible bool
 	)
+	blk.mvcc.RLock()
+	if ts.GreaterEq(blk.GetMaxVisibleTS()) && blk.mvcc.AppendCommitted() {
+		visible = true
+		maxRow = blk.node.rows
+	} else {
+		maxRow, visible, err = blk.mvcc.GetMaxVisibleRowLocked(ts)
+	}
+	blk.mvcc.RUnlock()
+	if !visible || err != nil {
+		return
+	}
 	view = model.NewColumnView(ts, colIdx)
 	var data containers.Vector
-	if !blk.IsFlushed() {
-		blk.mvcc.RLock()
-		if ts.GreaterEq(blk.GetMaxVisibleTS()) && blk.mvcc.AppendCommitted() {
-			visible = true
-			maxRow = blk.node.rows
-		} else {
-			maxRow, visible, err = blk.mvcc.GetMaxVisibleRowLocked(ts)
-		}
-		blk.mvcc.RUnlock()
-		if !visible || err != nil {
-			return
-		}
-		data, err = blk.node.GetColumnDataCopy(0, maxRow, colIdx, buffer)
-	} else {
-		data, err = blk.LoadColumnData(colIdx, buffer)
-	}
+	data, err = blk.node.GetColumnDataCopy(0, maxRow, colIdx, buffer)
+
 	if err != nil {
 		return
 	}
