@@ -143,6 +143,14 @@ func CopyToMoVecs(vecs []Vector) []*movec.Vector {
 	return movecs
 }
 
+func CopyToMoBatch(bat *Batch) *batch.Batch {
+	ret := batch.New(false, bat.Attrs)
+	for i := range bat.Vecs {
+		ret.Vecs[i] = CopyToMoVec(bat.Vecs[i])
+	}
+	return ret
+}
+
 func movecToBytes[T types.FixedSizeT](v *movec.Vector) *Bytes {
 	bs := stl.NewFixedTypeBytes[T]()
 	if v.Col == nil || len(movec.MustTCols[T](v)) == 0 {

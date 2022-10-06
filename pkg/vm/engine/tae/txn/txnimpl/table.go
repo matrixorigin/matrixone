@@ -142,7 +142,7 @@ func (tbl *txnTable) SoftDeleteSegment(id uint64) (err error) {
 	if txnEntry != nil {
 		tbl.txnEntries = append(tbl.txnEntries, txnEntry)
 	}
-	tbl.store.dirtyMemo.recordSeg(tbl.entry.ID, id)
+	tbl.store.dirtyMemo.recordSeg(tbl.entry.GetDB().GetID(), tbl.entry.ID, id)
 	tbl.store.warChecker.ReadTable(tbl.entry.GetDB().ID, tbl.entry.AsCommonID())
 	return
 }
@@ -166,7 +166,7 @@ func (tbl *txnTable) createSegment(state catalog.EntryState, is1PC bool) (seg ha
 	}
 	seg = newSegment(tbl, meta)
 	tbl.store.IncreateWriteCnt()
-	tbl.store.dirtyMemo.recordSeg(tbl.entry.ID, meta.ID)
+	tbl.store.dirtyMemo.recordSeg(tbl.entry.GetDB().ID, tbl.entry.ID, meta.ID)
 	if is1PC {
 		meta.Set1PC()
 	}
@@ -185,7 +185,7 @@ func (tbl *txnTable) SoftDeleteBlock(id *common.ID) (err error) {
 		return
 	}
 	tbl.store.IncreateWriteCnt()
-	tbl.store.dirtyMemo.recordBlk(*id)
+	tbl.store.dirtyMemo.recordBlk(tbl.entry.GetDB().ID, id)
 	if meta != nil {
 		tbl.txnEntries = append(tbl.txnEntries, meta)
 	}
@@ -245,7 +245,7 @@ func (tbl *txnTable) createBlock(sid uint64, state catalog.EntryState, is1PC boo
 		meta.Set1PC()
 	}
 	tbl.store.IncreateWriteCnt()
-	tbl.store.dirtyMemo.recordBlk(*meta.AsCommonID())
+	tbl.store.dirtyMemo.recordBlk(tbl.entry.GetDB().ID, meta.AsCommonID())
 	tbl.txnEntries = append(tbl.txnEntries, meta)
 	tbl.store.warChecker.ReadSegment(tbl.entry.GetDB().ID, seg.AsCommonID())
 	return buildBlock(tbl, meta), err
@@ -312,7 +312,7 @@ func (tbl *txnTable) AddDeleteNode(id *common.ID, node txnif.DeleteNode) error {
 	}
 	tbl.deleteNodes[nid] = node
 	tbl.store.IncreateWriteCnt()
-	tbl.store.dirtyMemo.recordBlk(*id)
+	tbl.store.dirtyMemo.recordBlk(tbl.entry.GetDB().ID, id)
 	tbl.txnEntries = append(tbl.txnEntries, node)
 	return nil
 }
