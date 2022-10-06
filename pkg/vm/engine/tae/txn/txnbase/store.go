@@ -99,6 +99,7 @@ func (store *NoopTxnStore) IsReadonly() bool      { return false }
 func (store *NoopTxnStore) IncreateWriteCnt() int { return 0 }
 
 func (store *NoopTxnStore) HasAnyTableDataChanges() bool                  { return false }
+func (store *NoopTxnStore) GetDirty() *common.Tree                        { return nil }
 func (store *NoopTxnStore) HasTableDataChanges(id uint64) bool            { return false }
 func (store *NoopTxnStore) GetDirtyTableByID(id uint64) *common.TableTree { return nil }
 func (store *NoopTxnStore) HasCatalogChanges() bool                       { return false }

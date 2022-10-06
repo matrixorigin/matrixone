@@ -42,6 +42,41 @@ func NewBoundOperator(catalog *catalog.Catalog,
 	}
 }
 
+func (op *BoundOperator) Run() (err error) {
+	var (
+		db  *catalog.DBEntry
+		tbl *catalog.TableEntry
+		seg *catalog.SegmentEntry
+		blk *catalog.BlockEntry
+	)
+	dirty := op.reader.GetDirty()
+	for _, tblDirty := range dirty.Tables {
+		if db, err = op.catalog.GetDatabaseByID(tblDirty.DbID); err != nil {
+			return
+		}
+		if tbl, err = db.GetTableEntryByID(tblDirty.ID); err != nil {
+			return
+		}
+		for _, dirtySeg := range tblDirty.Segs {
+			if seg, err = tbl.GetSegmentByID(dirtySeg.ID); err != nil {
+				return err
+			}
+			if err = op.visitor.OnSegment(seg); err != nil {
+				return err
+			}
+			for id := range dirtySeg.Blks {
+				if blk, err = seg.GetBlockEntryByID(id); err != nil {
+					return err
+				}
+				if err = op.visitor.OnBlock(blk); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	return
+}
+
 type BoundTableOperator struct {
 	*BoundOperator
 	dbID    uint64
