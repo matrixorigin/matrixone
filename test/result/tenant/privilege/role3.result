@@ -1,8 +1,9 @@
+drop role if exists role_r1;
 create role role_r1;
 drop database if exists d;
 create database d;
-create table t;
-SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 15 near ";";
+use d;
+create table t(a int);
 revoke if exists create account on account * from role_r1,rx;
 revoke if exists drop account on account * from role_r1,rx;
 revoke if exists alter account on account * from role_r1,rx;
@@ -17,7 +18,6 @@ revoke if exists drop database on account * from role_r1,rx;
 revoke if exists show databases on account * from role_r1,rx;
 revoke if exists connect on account * from role_r1,rx;
 revoke if exists manage grants on account * from role_r1,rx;
-SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 30 near " grants on account * from role_r1,rx;";
 revoke if exists all on account * from role_r1,rx;
 revoke if exists ownership on account * from role_r1,rx;
 internal error: the object type "account" do not support the privilege "ownership"
@@ -56,78 +56,52 @@ revoke if exists select on table * from role_r1,rx;
 revoke if exists select on table *.* from role_r1,rx;
 revoke if exists select on table d.* from role_r1,rx;
 revoke if exists select on table d.t from role_r1,rx;
-internal error: there is no table "t" in database "d"
 revoke if exists select on table t from role_r1,rx;
-internal error: there is no table "t" in database "role3"
 revoke if exists insert on table * from role_r1,rx;
 revoke if exists insert on table *.* from role_r1,rx;
 revoke if exists insert on table d.* from role_r1,rx;
 revoke if exists insert on table d.t from role_r1,rx;
-internal error: there is no table "t" in database "d"
 revoke if exists insert on table t from role_r1,rx;
-internal error: there is no table "t" in database "role3"
 revoke if exists update on table * from role_r1,rx;
 revoke if exists update on table *.* from role_r1,rx;
 revoke if exists update on table d.* from role_r1,rx;
 revoke if exists update on table d.t from role_r1,rx;
-internal error: there is no table "t" in database "d"
 revoke if exists update on table t from role_r1,rx;
-internal error: there is no table "t" in database "role3"
 revoke if exists truncate on table * from role_r1,rx;
-SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 25 near " truncate on table * from role_r1,rx;";
 revoke if exists truncate on table *.* from role_r1,rx;
-SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 25 near " truncate on table *.* from role_r1,rx;";
 revoke if exists truncate on table d.* from role_r1,rx;
-SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 25 near " truncate on table d.* from role_r1,rx;";
 revoke if exists truncate on table d.t from role_r1,rx;
-SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 25 near " truncate on table d.t from role_r1,rx;";
 revoke if exists truncate on table t from role_r1,rx;
-SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 25 near " truncate on table t from role_r1,rx;";
 revoke if exists delete on table * from role_r1,rx;
 revoke if exists delete on table *.* from role_r1,rx;
 revoke if exists delete on table d.* from role_r1,rx;
 revoke if exists delete on table d.t from role_r1,rx;
-internal error: there is no table "t" in database "d"
 revoke if exists delete on table t from role_r1,rx;
-internal error: there is no table "t" in database "role3"
 revoke if exists reference on table * from role_r1,rx;
-SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 26 near " reference on table * from role_r1,rx;";
 revoke if exists reference on table *.* from role_r1,rx;
-SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 26 near " reference on table *.* from role_r1,rx;";
 revoke if exists reference on table d.* from role_r1,rx;
-SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 26 near " reference on table d.* from role_r1,rx;";
 revoke if exists reference on table d.t from role_r1,rx;
-SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 26 near " reference on table d.t from role_r1,rx;";
 revoke if exists reference on table t from role_r1,rx;
-SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 26 near " reference on table t from role_r1,rx;";
 revoke if exists index on table * from role_r1,rx;
 revoke if exists index on table *.* from role_r1,rx;
 revoke if exists index on table d.* from role_r1,rx;
 revoke if exists index on table d.t from role_r1,rx;
-internal error: there is no table "t" in database "d"
 revoke if exists index on table t from role_r1,rx;
-internal error: there is no table "t" in database "role3"
 revoke if exists all on table * from role_r1,rx;
 revoke if exists all on table *.* from role_r1,rx;
 revoke if exists all on table d.* from role_r1,rx;
 revoke if exists all on table d.t from role_r1,rx;
-internal error: there is no table "t" in database "d"
 revoke if exists all on table t from role_r1,rx;
-internal error: there is no table "t" in database "role3"
 revoke if exists ownership on table * from role_r1,rx;
 revoke if exists ownership on table *.* from role_r1,rx;
 revoke if exists ownership on table d.* from role_r1,rx;
 revoke if exists ownership on table d.t from role_r1,rx;
-internal error: there is no table "t" in database "d"
 revoke if exists ownership on table t from role_r1,rx;
-internal error: there is no table "t" in database "role3"
 revoke if exists execute on table * from role_r1,rx;
 revoke if exists execute on table *.* from role_r1,rx;
 revoke if exists execute on table d.* from role_r1,rx;
 revoke if exists execute on table d.t from role_r1,rx;
-internal error: there is no table "t" in database "d"
 revoke if exists execute on table t from role_r1,rx;
-internal error: there is no table "t" in database "role3"
 revoke create account on account * from role_r1,rx;
 internal error: there is no role rx
 revoke drop account on account * from role_r1,rx;
@@ -155,7 +129,7 @@ internal error: there is no role rx
 revoke connect on account * from role_r1,rx;
 internal error: there is no role rx
 revoke manage grants on account * from role_r1,rx;
-SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 20 near " grants on account * from role_r1,rx;";
+internal error: there is no role rx
 revoke all on account * from role_r1,rx;
 internal error: there is no role rx
 revoke ownership on account * from role_r1,rx;
@@ -249,15 +223,15 @@ internal error: there is no role rx
 revoke update on table t from role_r1,rx;
 internal error: there is no role rx
 revoke truncate on table * from role_r1,rx;
-SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 15 near " truncate on table * from role_r1,rx;";
+internal error: there is no role rx
 revoke truncate on table *.* from role_r1,rx;
-SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 15 near " truncate on table *.* from role_r1,rx;";
+internal error: there is no role rx
 revoke truncate on table d.* from role_r1,rx;
-SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 15 near " truncate on table d.* from role_r1,rx;";
+internal error: there is no role rx
 revoke truncate on table d.t from role_r1,rx;
-SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 15 near " truncate on table d.t from role_r1,rx;";
+internal error: there is no role rx
 revoke truncate on table t from role_r1,rx;
-SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 15 near " truncate on table t from role_r1,rx;";
+internal error: there is no role rx
 revoke delete on table * from role_r1,rx;
 internal error: there is no role rx
 revoke delete on table *.* from role_r1,rx;
@@ -269,15 +243,15 @@ internal error: there is no role rx
 revoke delete on table t from role_r1,rx;
 internal error: there is no role rx
 revoke reference on table * from role_r1,rx;
-SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 16 near " reference on table * from role_r1,rx;";
+internal error: there is no role rx
 revoke reference on table *.* from role_r1,rx;
-SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 16 near " reference on table *.* from role_r1,rx;";
+internal error: there is no role rx
 revoke reference on table d.* from role_r1,rx;
-SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 16 near " reference on table d.* from role_r1,rx;";
+internal error: there is no role rx
 revoke reference on table d.t from role_r1,rx;
-SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 16 near " reference on table d.t from role_r1,rx;";
+internal error: there is no role rx
 revoke reference on table t from role_r1,rx;
-SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 16 near " reference on table t from role_r1,rx;";
+internal error: there is no role rx
 revoke index on table * from role_r1,rx;
 internal error: there is no role rx
 revoke index on table *.* from role_r1,rx;

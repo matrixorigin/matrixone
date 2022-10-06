@@ -1,7 +1,9 @@
+drop role if exists role_r1;
 create role role_r1;
 drop database if exists d;
 create database d;
-create table t;
+use d;
+create table t(a int);
 revoke if exists create account on account * from role_r1,rx;
 revoke if exists drop account on account * from role_r1,rx;
 revoke if exists alter account on account * from role_r1,rx;

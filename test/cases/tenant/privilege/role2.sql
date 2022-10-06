@@ -1,4 +1,4 @@
-create role role_r1,role_r2,role_r3,role_r4;
+create role role_r1,role_r2,role_r3,role_r4,r1,r2;
 create user role_u1 identified by '111', role_u2 identified by '111';
 
 revoke if exists r1,r2 from u1,u2;
@@ -34,5 +34,5 @@ revoke role_r1,role_r2 from u1,role_u2;
 revoke role_r1,role_r2 from role_u1,u2;
 revoke role_r1,role_r2 from role_u1,role_u2;
 
-drop role role_r1,role_r2,role_r3,role_r4;
+drop role role_r1,role_r2,role_r3,role_r4,r1,r2;
 drop user role_u1,role_u2;
