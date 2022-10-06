@@ -214,6 +214,9 @@ func (bf *blockFile) Destroy() error {
 
 func (bf *blockFile) Sync() error {
 	blocks, err := bf.writer.Sync()
+	if err != nil {
+		return err
+	}
 	bf.setMetaKey(blocks[0].GetExtent())
 	if len(blocks) > 1 {
 		bf.setDeltaKey(blocks[1].GetExtent())
