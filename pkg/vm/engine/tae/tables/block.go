@@ -874,7 +874,7 @@ func (blk *dataBlock) CollectAppendInRange(start, end types.TS) (*containers.Bat
 
 func (blk *dataBlock) collectAblkAppendInRange(start, end types.TS) (*containers.Batch, error) {
 	minRow, maxRow, commitTSVec, abortVec := blk.mvcc.CollectAppend(start, end)
-	batch, err := blk.node.GetDataCopy(minRow, maxRow)
+	batch, err := blk.node.GetData(minRow, maxRow)
 	if err != nil {
 		return nil, err
 	}
