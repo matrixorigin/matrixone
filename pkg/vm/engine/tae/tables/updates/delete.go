@@ -18,7 +18,6 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
-	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 
@@ -40,15 +39,10 @@ const (
 func compareDeleteNode(va, vb txnif.MVCCNode) int {
 	a := va.(*DeleteNode)
 	b := vb.(*DeleteNode)
-	a.RLock()
-	defer a.RUnlock()
-	b.RLock()
-	defer b.RUnlock()
 	return a.TxnMVCCNode.Compare(b.TxnMVCCNode)
 }
 
 type DeleteNode struct {
-	*sync.RWMutex
 	*common.GenericDLNode[txnif.MVCCNode]
 	*txnbase.TxnMVCCNode
 	chain      *DeleteChain
@@ -61,7 +55,6 @@ type DeleteNode struct {
 
 func NewMergedNode(commitTs types.TS) *DeleteNode {
 	n := &DeleteNode{
-		RWMutex:     new(sync.RWMutex),
 		TxnMVCCNode: txnbase.NewTxnMVCCNodeWithTS(commitTs),
 		mask:        roaring.New(),
 		nt:          NT_Merge,
@@ -71,7 +64,6 @@ func NewMergedNode(commitTs types.TS) *DeleteNode {
 }
 func NewEmptyDeleteNode() txnif.MVCCNode {
 	n := &DeleteNode{
-		RWMutex:     new(sync.RWMutex),
 		TxnMVCCNode: txnbase.NewTxnMVCCNodeWithTxn(nil),
 		mask:        roaring.New(),
 		nt:          NT_Normal,
@@ -80,7 +72,6 @@ func NewEmptyDeleteNode() txnif.MVCCNode {
 }
 func NewDeleteNode(txn txnif.AsyncTxn, dt handle.DeleteType) *DeleteNode {
 	n := &DeleteNode{
-		RWMutex:     new(sync.RWMutex),
 		TxnMVCCNode: txnbase.NewTxnMVCCNodeWithTxn(txn),
 		mask:        roaring.New(),
 		nt:          NT_Normal,
@@ -175,7 +166,7 @@ func (node *DeleteNode) PrepareCommit() (err error) {
 }
 
 func (node *DeleteNode) ApplyCommit(index *wal.Index) (err error) {
-	node.Lock()
+	node.chain.mvcc.Lock()
 	var ts types.TS
 	ts, err = node.TxnMVCCNode.ApplyCommit(index)
 	if err != nil {
@@ -186,13 +177,13 @@ func (node *DeleteNode) ApplyCommit(index *wal.Index) (err error) {
 	}
 	node.chain.AddDeleteCnt(uint32(node.mask.GetCardinality()))
 	node.chain.mvcc.IncChangeNodeCnt()
-	node.Unlock()
+	node.chain.mvcc.Unlock()
 	return node.OnApply()
 }
 
 func (node *DeleteNode) ApplyRollback(index *wal.Index) (err error) {
-	node.Lock()
-	defer node.Unlock()
+	node.chain.mvcc.Lock()
+	defer node.chain.mvcc.Unlock()
 	err = node.TxnMVCCNode.ApplyRollback(index)
 	return
 }

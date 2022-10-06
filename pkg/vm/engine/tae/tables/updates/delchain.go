@@ -61,9 +61,9 @@ func (chain *DeleteChain) StringLocked() string {
 	line := 1
 	chain.LoopChain(func(vn txnif.MVCCNode) bool {
 		n := vn.(*DeleteNode)
-		n.RLock()
+		n.chain.mvcc.RLock()
 		msg = fmt.Sprintf("%s\n%d. %s", msg, line, n.StringLocked())
-		n.RUnlock()
+		n.chain.mvcc.RUnlock()
 		line++
 		return true
 	})
@@ -79,16 +79,12 @@ func (chain *DeleteChain) IsDeleted(row uint32, ts types.TS, rwlocker *sync.RWMu
 			if n.GetStartTS().Greater(ts) {
 				return true
 			}
-			n.RLock()
-			defer n.RUnlock()
 			if n.HasOverlapLocked(row, row) {
 				needWait, txnToWait := n.NeedWaitCommitting(ts)
 				if needWait {
-					n.RUnlock()
 					rwlocker.RUnlock()
 					txnToWait.GetTxnState(true)
 					rwlocker.RLock()
-					n.RLock()
 				}
 				if n.IsVisible(ts) {
 					deleted = true
@@ -106,8 +102,6 @@ func (chain *DeleteChain) PrepareRangeDelete(start, end uint32, ts types.TS) (er
 	chain.LoopChain(
 		func(vn txnif.MVCCNode) bool {
 			n := vn.(*DeleteNode)
-			n.RLock()
-			defer n.RUnlock()
 			overlap := n.HasOverlapLocked(start, end)
 			if overlap {
 				err = n.CheckConflict(ts)
@@ -155,9 +149,7 @@ func (chain *DeleteChain) AddMergeNode() txnif.DeleteNode {
 			merged.MergeLocked(n, true)
 			return false
 		}
-		n.RLock()
 		txn := n.GetTxn()
-		n.RUnlock()
 		if txn != nil {
 			return true
 		}
@@ -224,14 +216,11 @@ func (chain *DeleteChain) CollectDeletesLocked(
 			merged.MergeLocked(n, collectIndex)
 			return false
 		}
-		n.RLock()
 		needWait, txnToWait := n.NeedWaitCommitting(ts)
 		if needWait {
-			n.RUnlock()
 			rwlocker.RUnlock()
 			txnToWait.GetTxnState(true)
 			rwlocker.RLock()
-			n.RLock()
 		}
 		if n.IsVisible(ts) {
 			if merged == nil {
@@ -239,7 +228,6 @@ func (chain *DeleteChain) CollectDeletesLocked(
 			}
 			merged.MergeLocked(n, collectIndex)
 		}
-		n.RUnlock()
 		return true
 	})
 	return merged, err

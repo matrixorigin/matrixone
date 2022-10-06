@@ -277,9 +277,9 @@ type TxnStore interface {
 type TxnEntryType int16
 
 type TxnEntry interface {
-	sync.Locker
-	RLock()
-	RUnlock()
+	// sync.Locker
+	// RLock()
+	// RUnlock()
 	PrepareCommit() error
 	PrepareRollback() error
 	ApplyCommit(index *wal.Index) error

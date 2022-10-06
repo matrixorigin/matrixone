@@ -18,7 +18,6 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
-	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 
@@ -31,7 +30,6 @@ import (
 
 type AppendNode struct {
 	*txnbase.TxnMVCCNode
-	sync.RWMutex
 	startRow uint32
 	maxRow   uint32
 	mvcc     *MVCCHandle
@@ -131,14 +129,6 @@ func (node *AppendNode) OnReplayCommit(ts types.TS) {
 func (node *AppendNode) GetCommitTS() types.TS {
 	return node.GetEnd()
 }
-func (node *AppendNode) IsCommitted() bool {
-	node.RLock()
-	defer node.RUnlock()
-	return node.IsCommittedLocked()
-}
-func (node *AppendNode) IsCommittedLocked() bool {
-	return node.TxnMVCCNode.IsCommitted()
-}
 func (node *AppendNode) GetStartRow() uint32 { return node.startRow }
 func (node *AppendNode) GetMaxRow() uint32 {
 	return node.maxRow
@@ -157,13 +147,13 @@ func (node *AppendNode) PrepareCommit() error {
 func (node *AppendNode) ApplyCommit(index *wal.Index) error {
 	node.mvcc.Lock()
 	defer node.mvcc.Unlock()
-	if node.IsCommittedLocked() {
+	if node.IsCommitted() {
 		panic("AppendNode | ApplyCommit | LogicErr")
 	}
 	node.TxnMVCCNode.ApplyCommit(index)
 	if node.mvcc != nil {
-		logutil.Debugf("Set MaxCommitTS=%v, MaxVisibleRow=%d", node.GetEndLocked(), node.GetMaxRow())
-		node.mvcc.SetMaxVisible(node.GetEndLocked())
+		logutil.Debugf("Set MaxCommitTS=%v, MaxVisibleRow=%d", node.GetEnd(), node.GetMaxRow())
+		node.mvcc.SetMaxVisible(node.GetEnd())
 	}
 	// logutil.Infof("Apply1Index %s TS=%d", index.String(), n.commitTs)
 	listener := node.mvcc.GetAppendListener()
@@ -174,8 +164,8 @@ func (node *AppendNode) ApplyCommit(index *wal.Index) error {
 }
 
 func (node *AppendNode) ApplyRollback(index *wal.Index) (err error) {
-	node.Lock()
-	defer node.Unlock()
+	node.mvcc.Lock()
+	defer node.mvcc.Unlock()
 	node.TxnMVCCNode.ApplyRollback(index)
 	return
 }
@@ -244,18 +234,4 @@ func (node *AppendNode) Set1PC() {
 }
 func (node *AppendNode) Is1PC() bool {
 	return node.TxnMVCCNode.Is1PC()
-}
-func (node *AppendNode) GetEnd() types.TS {
-	node.RLock()
-	defer node.RUnlock()
-	return node.GetEndLocked()
-}
-func (node *AppendNode) GetEndLocked() types.TS {
-	return node.TxnMVCCNode.GetEnd()
-}
-
-func (node *AppendNode) NeedWaitCommitting(startTS types.TS) (bool, txnif.TxnReader) {
-	node.RLock()
-	defer node.RUnlock()
-	return node.TxnMVCCNode.NeedWaitCommitting(startTS)
 }

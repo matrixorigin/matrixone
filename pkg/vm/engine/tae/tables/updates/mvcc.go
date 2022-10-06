@@ -225,8 +225,6 @@ func (n *MVCCHandle) AddAppendNodeLocked(
 	} else {
 		an = n.appends.GetUpdateNodeLocked().(*AppendNode)
 		created = false
-		an.Lock()
-		defer an.Unlock()
 		an.SetMaxRow(maxRow)
 	}
 	return
@@ -296,8 +294,6 @@ func (n *MVCCHandle) getMaxVisibleRowLocked(ts types.TS) (int, uint32, bool, err
 		return 0, 0, false, nil
 	}
 	node := vnode.(*AppendNode)
-	node.RLock()
-	defer node.RUnlock()
 	return offset, node.GetMaxRow(), true, nil
 }
 
@@ -322,9 +318,7 @@ func (n *MVCCHandle) CollectAppend(start, end types.TS) (minRow, maxRow uint32, 
 		endOffset,
 		func(m txnif.MVCCNode) bool {
 			node := m.(*AppendNode)
-			node.RLock()
 			txn := node.GetTxn()
-			node.RUnlock()
 			if txn != nil {
 				n.RUnlock()
 				txn.GetTxnState(true)
@@ -357,17 +351,13 @@ func (n *MVCCHandle) CollectDelete(start, end types.TS) (rowIDVec, commitTSVec, 
 	n.deletes.LoopChain(
 		func(m txnif.MVCCNode) bool {
 			node := m.(*DeleteNode)
-			node.RLock()
 			needWait, txn := node.NeedWaitCommitting(end.Next())
 			if needWait {
-				node.RLock()
 				n.RUnlock()
 				txn.GetTxnState(true)
 				n.RLock()
-				node.RUnlock()
 			}
 			in, before := node.PreparedIn(start, end)
-			node.RUnlock()
 			if in {
 				it := node.mask.Iterator()
 				for it.HasNext() {
@@ -388,7 +378,6 @@ func (n *MVCCHandle) ExistDeleteInRange(start, end types.TS) (exist bool) {
 	n.deletes.LoopChain(
 		func(m txnif.MVCCNode) bool {
 			node := m.(*DeleteNode)
-			node.RLock()
 			needWait, txn := node.NeedWaitCommitting(end.Next())
 			if needWait {
 				n.RUnlock()
@@ -396,7 +385,6 @@ func (n *MVCCHandle) ExistDeleteInRange(start, end types.TS) (exist bool) {
 				n.RLock()
 			}
 			in, before := node.PreparedIn(start, end)
-			node.RUnlock()
 			if in {
 				exist = true
 				return false
