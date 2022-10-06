@@ -25,17 +25,11 @@ import (
 
 const (
 	BlockExt   = "blk"
-	ABlockExt  = "ablk"
 	SegmentExt = "seg"
 )
 
 func EncodeBlkName(id *common.ID) (name string) {
 	basename := fmt.Sprintf("%d-%d-%d.%s", id.TableID, id.SegmentID, id.BlockID, BlockExt)
-	return basename
-}
-
-func EncodeABlkName(id *common.ID) (name string) {
-	basename := fmt.Sprintf("%d-%d-%d.%s", id.TableID, id.SegmentID, id.BlockID, ABlockExt)
 	return basename
 }
 
@@ -99,16 +93,6 @@ func EncodeBlkMetaLoc(id *common.ID, extent objectio.Extent, rows uint32) string
 	)
 	return metaLoc
 }
-func EncodeABlkMetaLoc(id *common.ID, extent objectio.Extent, rows uint32) string {
-	metaLoc := fmt.Sprintf("%s:%d_%d_%d:%d",
-		EncodeABlkName(id),
-		extent.Offset(),
-		extent.Length(),
-		extent.OriginSize(),
-		rows,
-	)
-	return metaLoc
-}
 
 func EncodeSegMetaLoc(id *common.ID, extent objectio.Extent, rows uint32) string {
 	metaLoc := fmt.Sprintf("%s:%d_%d_%d:%d",
@@ -121,9 +105,9 @@ func EncodeSegMetaLoc(id *common.ID, extent objectio.Extent, rows uint32) string
 	return metaLoc
 }
 
-func EncodeABlkDeltaLoc(id *common.ID, extent objectio.Extent) string {
+func EncodeBlkDeltaLoc(id *common.ID, extent objectio.Extent) string {
 	deltaLoc := fmt.Sprintf("%s:%d_%d_%d",
-		EncodeABlkName(id),
+		EncodeBlkName(id),
 		extent.Offset(),
 		extent.Length(),
 		extent.OriginSize(),

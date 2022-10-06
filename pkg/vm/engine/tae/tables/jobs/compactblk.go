@@ -193,14 +193,14 @@ func (task *compactBlockTask) Execute() (err error) {
 		if err = ablockTask.WaitDone(); err != nil {
 			return
 		}
-		metaLocABlk := blockio.EncodeABlkMetaLoc(aBlockFile.Fingerprint(),
+		metaLocABlk := blockio.EncodeBlkMetaLoc(aBlockFile.Fingerprint(),
 			ablockTask.file.GetMeta().GetExtent(),
 			uint32(data.Length()))
 		if err = task.compacted.UpdateMetaLoc(metaLocABlk); err != nil {
 			return err
 		}
 		if deletes != nil {
-			deltaLocABlk := blockio.EncodeABlkDeltaLoc(aBlockFile.Fingerprint(),
+			deltaLocABlk := blockio.EncodeBlkDeltaLoc(aBlockFile.Fingerprint(),
 				ablockTask.file.GetDelta().GetExtent())
 			if err = task.compacted.UpdateDeltaLoc(deltaLocABlk); err != nil {
 				return err
