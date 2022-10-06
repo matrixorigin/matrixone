@@ -29,7 +29,7 @@ func BuildColumnIndex(writer objectio.Writer, block objectio.BlockObject, colDef
 	if err = zoneMapWriter.Init(writer, block, common.Plain, uint16(colDef.Idx), uint16(zmPos)); err != nil {
 		return
 	}
-	if isSorted && columnData.Length() > 2 {
+	if isSorted && isPk && columnData.Length() > 2 {
 		slimForZmVec := containers.MakeVector(columnData.GetType(), columnData.Nullable())
 		slimForZmVec.Append(columnData.Get(0))
 		slimForZmVec.Append(columnData.Get(columnData.Length() - 1))
