@@ -17,15 +17,10 @@ package indexwrapper
 import (
 	"io"
 
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/file"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 
 	"github.com/RoaringBitmap/roaring"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 )
 
@@ -62,71 +57,7 @@ type Index interface {
 	// If any other unknown error hanppens, return error
 	BatchUpsert(keysCtx *index.KeysCtx, offset int) (err error)
 
-	// Delete delete the specific key
-	// If the specified key not found in active map, return ErrNotFound
-	// If any other error happens, return error
-	// Delete the specific key from active map and then insert it into delete map
-	Delete(key any) (err error)
 	GetActiveRow(key any) (row []uint32, err error)
-	// Check deletes map for specified key @ts
-	// If deleted is true, the specified key was deleted @ts
-	// If existed is false, the specified key was not found in deletes map
-	IsKeyDeleted(key any, ts types.TS) (deleted bool, existed bool)
-	HasDeleteFrom(key any, ts types.TS) bool
 
 	String() string
-
-	ReadFrom(data.Block, *catalog.ColDef, file.ColumnBlock) error
-	WriteTo(data.Block) error
-}
-
-// what is defaultImpl? PANIC!
-type defaultIndexImpl struct{}
-
-func (idx *defaultIndexImpl) Close() error {
-	panic("not supported")
-}
-
-func (idx *defaultIndexImpl) Destroy() error {
-	panic("not supported")
-}
-
-func (idx *defaultIndexImpl) Dedup(key any) error {
-	panic("not supported")
-}
-
-func (idx *defaultIndexImpl) BatchDedup(keys containers.Vector, skipfn func(row uint32) (err error)) (keyselects *roaring.Bitmap, err error) {
-	panic("not supported")
-}
-
-func (idx *defaultIndexImpl) BatchUpsert(keysCtx *index.KeysCtx, offset int) (err error) {
-	panic("not supported")
-}
-
-func (idx *defaultIndexImpl) Delete(key any) (err error) {
-	panic("not supported")
-}
-
-func (idx *defaultIndexImpl) GetActiveRow(key any) (row []uint32, err error) {
-	panic("not supported")
-}
-
-func (idx *defaultIndexImpl) IsKeyDeleted(key any, ts types.TS) (deleted bool, existed bool) {
-	panic("not supported")
-}
-
-func (idx *defaultIndexImpl) HasDeleteFrom(key any, fromts types.TS) bool {
-	panic("not supported")
-}
-
-func (idx *defaultIndexImpl) String() string {
-	panic("not supported")
-}
-
-func (idx *defaultIndexImpl) ReadFrom(_ data.Block, _ *catalog.ColDef, _ file.ColumnBlock) error {
-	panic("not supported")
-}
-
-func (idx *defaultIndexImpl) WriteTo(_ data.Block) error {
-	panic("not supported")
 }

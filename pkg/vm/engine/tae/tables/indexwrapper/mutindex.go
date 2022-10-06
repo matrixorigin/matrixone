@@ -25,7 +25,6 @@ import (
 var _ Index = (*mutableIndex)(nil)
 
 type mutableIndex struct {
-	defaultIndexImpl
 	art     index.SecondaryIndex
 	zonemap *index.ZoneMap
 }
@@ -128,7 +127,6 @@ func (idx *mutableIndex) Close() error {
 var _ Index = (*nonPkMutIndex)(nil)
 
 type nonPkMutIndex struct {
-	defaultIndexImpl
 	zonemap *index.ZoneMap
 }
 
@@ -147,7 +145,8 @@ func (idx *nonPkMutIndex) Close() error {
 	idx.zonemap = nil
 	return nil
 }
-
+func (idx *nonPkMutIndex) GetActiveRow(any) ([]uint32, error) { panic("not support") }
+func (idx *nonPkMutIndex) String() string                     { panic("not support") }
 func (idx *nonPkMutIndex) BatchUpsert(keysCtx *index.KeysCtx, offset int) (err error) {
 	return TranslateError(idx.zonemap.BatchUpdate(keysCtx))
 }

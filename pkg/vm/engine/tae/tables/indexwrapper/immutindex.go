@@ -21,12 +21,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/file"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 )
 
 var _ Index = (*immutableIndex)(nil)
 
 type immutableIndex struct {
-	defaultIndexImpl
 	zmReader *ZmReader
 	bfReader *BfReader
 }
@@ -34,7 +34,11 @@ type immutableIndex struct {
 func NewImmutableIndex() *immutableIndex {
 	return new(immutableIndex)
 }
-
+func (idx *immutableIndex) BatchUpsert(keysCtx *index.KeysCtx, offset int) (err error) {
+	panic("not support")
+}
+func (idx *immutableIndex) GetActiveRow(key any) ([]uint32, error) { panic("not support") }
+func (idx *immutableIndex) String() string                         { panic("not support") }
 func (index *immutableIndex) Dedup(key any) (err error) {
 	exist := index.zmReader.Contains(key)
 	// 1. if not in [min, max], key is definitely not found
