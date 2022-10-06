@@ -103,11 +103,16 @@ func (seg *localSegment) ApplyAppend() (err error) {
 	for _, ctx := range seg.appends {
 		bat, _ := ctx.node.Window(ctx.start, ctx.start+ctx.count)
 		defer bat.Close()
+		var txnNodes []*txnbase.TxnMVCCNode
 		if destOff, err = ctx.driver.ApplyAppend(
 			bat,
 			seg.table.store.txn); err != nil {
 			return
 		}
+		if seg.table.appendTxnNode == nil {
+			seg.table.appendTxnNode = make([]*txnbase.TxnMVCCNode, 0)
+		}
+		seg.table.appendTxnNode = append(seg.table.appendTxnNode, txnNodes...)
 		id := ctx.driver.GetID()
 		ctx.node.AddApplyInfo(ctx.start, ctx.count, uint32(destOff), ctx.count, seg.table.entry.GetDB().ID, id)
 	}

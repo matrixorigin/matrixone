@@ -21,6 +21,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 )
@@ -32,18 +33,18 @@ type MetadataMVCCNode struct {
 	DeltaLoc string
 }
 
-func NewEmptyMetadataMVCCNode() txnbase.MVCCNode {
+func NewEmptyMetadataMVCCNode() txnif.MVCCNode {
 	return &MetadataMVCCNode{
 		EntryMVCCNode: &EntryMVCCNode{},
 		TxnMVCCNode:   &txnbase.TxnMVCCNode{},
 	}
 }
 
-func CompareMetaBaseNode(e, o txnbase.MVCCNode) int {
+func CompareMetaBaseNode(e, o txnif.MVCCNode) int {
 	return e.(*MetadataMVCCNode).Compare(o.(*MetadataMVCCNode).TxnMVCCNode)
 }
 
-func (e *MetadataMVCCNode) CloneAll() txnbase.MVCCNode {
+func (e *MetadataMVCCNode) CloneAll() txnif.MVCCNode {
 	node := &MetadataMVCCNode{
 		EntryMVCCNode: e.EntryMVCCNode.Clone(),
 		TxnMVCCNode:   e.TxnMVCCNode.CloneAll(),
@@ -53,7 +54,7 @@ func (e *MetadataMVCCNode) CloneAll() txnbase.MVCCNode {
 	return node
 }
 
-func (e *MetadataMVCCNode) CloneData() txnbase.MVCCNode {
+func (e *MetadataMVCCNode) CloneData() txnif.MVCCNode {
 	return &MetadataMVCCNode{
 		EntryMVCCNode: e.EntryMVCCNode.CloneData(),
 		TxnMVCCNode:   &txnbase.TxnMVCCNode{},
@@ -78,7 +79,7 @@ func (e *MetadataMVCCNode) UpdateDeltaLoc(deltaLoc string) {
 }
 
 // for create drop in one txn
-func (e *MetadataMVCCNode) Update(vun txnbase.MVCCNode) {
+func (e *MetadataMVCCNode) Update(vun txnif.MVCCNode) {
 	un := vun.(*MetadataMVCCNode)
 	e.CreatedAt = un.CreatedAt
 	e.DeletedAt = un.DeletedAt
