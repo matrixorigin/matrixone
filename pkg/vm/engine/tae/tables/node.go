@@ -78,7 +78,25 @@ func (node *appendableNode) GetDataCopy(minRow, maxRow uint32) (columns *contain
 		return
 	}
 	node.block.RLock()
-	columns = node.data.CloneWindow(int(minRow), int(maxRow-minRow), containers.DefaultAllocator)
+	var data *containers.Batch
+	if node.data == nil {
+		node.block.RUnlock()
+		schema := node.block.meta.GetSchema()
+		opts := new(containers.Options)
+		opts.Capacity = int(schema.BlockMaxRows)
+		opts.Allocator = ImmutMemAllocator
+		if data, err = node.block.file.LoadBatch(
+			schema.AllTypes(),
+			schema.AllNames(),
+			schema.AllNullables(),
+			opts); err != nil {
+			return
+		}
+		node.block.RLock()
+	} else {
+		data = node.data
+	}
+	columns = data.CloneWindow(int(minRow), int(maxRow-minRow), containers.DefaultAllocator)
 	node.block.RUnlock()
 	return
 }
@@ -93,14 +111,24 @@ func (node *appendableNode) GetColumnDataCopy(
 		return
 	}
 	node.block.RLock()
+	var win containers.Vector
+	if node.data == nil {
+		node.block.RUnlock()
+		win, err = node.block.LoadColumnData(colIdx, buffer)
+		if err != nil {
+			return
+		}
+		node.block.RLock()
+	} else {
+		win = node.data.Vecs[colIdx]
+	}
 	if buffer != nil {
-		win := node.data.Vecs[colIdx]
-		if maxRow < uint32(node.data.Vecs[colIdx].Length()) {
+		if maxRow < uint32(win.Length()) {
 			win = win.Window(int(minRow), int(maxRow))
 		}
 		vec = containers.CloneWithBuffer(win, buffer, containers.DefaultAllocator)
 	} else {
-		vec = node.data.Vecs[colIdx].CloneWindow(int(minRow), int(maxRow-minRow), containers.DefaultAllocator)
+		vec = win.CloneWindow(int(minRow), int(maxRow-minRow), containers.DefaultAllocator)
 	}
 	node.block.RUnlock()
 	return
@@ -139,8 +167,18 @@ func (node *appendableNode) FillPhyAddrColumn(startRow, length uint32) (err erro
 		return
 	}
 	defer col.Close()
-	vec := node.data.Vecs[node.block.meta.GetSchema().PhyAddrKey.Idx]
+	var vec containers.Vector
 	node.block.Lock()
+	if node.data == nil {
+		node.block.Unlock()
+		vec, err = node.block.LoadColumnData(node.block.meta.GetSchema().PhyAddrKey.Idx, nil)
+		if err != nil {
+			return
+		}
+		node.block.Lock()
+	} else {
+		vec = node.data.Vecs[node.block.meta.GetSchema().PhyAddrKey.Idx]
+	}
 	vec.Extend(col)
 	node.block.Unlock()
 	return

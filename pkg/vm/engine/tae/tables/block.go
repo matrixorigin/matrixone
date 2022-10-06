@@ -193,6 +193,14 @@ func (blk *dataBlock) GetMaxVisibleTS() types.TS {
 	return blk.mvcc.LoadMaxVisible()
 }
 
+func (blk *dataBlock) FreeData() {
+	blk.Lock()
+	defer blk.Unlock()
+	if blk.node != nil {
+		_ = blk.node.Close()
+	}
+}
+
 func (blk *dataBlock) Close() {
 	if blk.node != nil {
 		_ = blk.node.Close()
