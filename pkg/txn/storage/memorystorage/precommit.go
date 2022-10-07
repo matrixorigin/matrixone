@@ -36,6 +36,7 @@ func (m *MemHandler) HandlePreCommit(meta txn.TxnMeta, req apipb.PrecommitWriteC
 		case []catalog.CreateDatabase:
 			for _, cmd := range cmds {
 				req := txnengine.CreateDatabaseReq{
+					ID:   ID(cmd.DatabaseId),
 					Name: cmd.Name,
 					AccessInfo: txnengine.AccessInfo{
 						UserID:    cmd.Owner,
@@ -51,6 +52,7 @@ func (m *MemHandler) HandlePreCommit(meta txn.TxnMeta, req apipb.PrecommitWriteC
 		case []catalog.CreateTable:
 			for _, cmd := range cmds {
 				req := txnengine.CreateRelationReq{
+					ID:           ID(cmd.TableId),
 					Name:         cmd.Name,
 					DatabaseName: cmd.DatabaseName,
 					DatabaseID:   txnengine.ID(cmd.DatabaseId),
