@@ -15,7 +15,6 @@
 package tables
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
@@ -85,8 +84,7 @@ func (appender *blockAppender) ReplayAppend(bat *containers.Batch) (err error) {
 			continue
 		}
 		keysCtx.Keys = bat.Vecs[colDef.Idx]
-		var zeroV types.TS
-		if _, err := appender.node.block.indexes[colDef.Idx].BatchUpsert(keysCtx, from, zeroV); err != nil {
+		if err = appender.node.block.indexes[colDef.Idx].BatchUpsert(keysCtx, from); err != nil {
 			panic(err)
 		}
 	}
@@ -102,7 +100,6 @@ func (appender *blockAppender) ApplyAppend(
 	from, err = appender.node.ApplyAppend(bat, txn)
 
 	schema := appender.node.block.meta.GetSchema()
-	ts := txn.GetStartTS()
 	keysCtx := new(index.KeysCtx)
 	keysCtx.Count = bat.Length()
 	for _, colDef := range schema.ColDefs {
@@ -110,7 +107,7 @@ func (appender *blockAppender) ApplyAppend(
 			continue
 		}
 		keysCtx.Keys = bat.Vecs[colDef.Idx]
-		if _, err := appender.node.block.indexes[colDef.Idx].BatchUpsert(keysCtx, from, ts); err != nil {
+		if err = appender.node.block.indexes[colDef.Idx].BatchUpsert(keysCtx, from); err != nil {
 			panic(err)
 		}
 	}
