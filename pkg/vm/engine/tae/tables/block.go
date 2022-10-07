@@ -473,19 +473,26 @@ func (blk *dataBlock) GetColumnDataById(
 	txn txnif.AsyncTxn,
 	colIdx int,
 	buffer *bytes.Buffer) (view *model.ColumnView, err error) {
-	if blk.meta.IsAppendable() {
-		return blk.ResolveABlkColumnMVCCData(txn.GetStartTS(), colIdx, buffer, false)
+	metaLoc := blk.meta.GetVisibleMetaLoc(txn.GetStartTS())
+	if metaLoc == "" {
+		return blk.ResolveColumnFromANode(txn.GetStartTS(), colIdx, buffer, false)
 	}
-	view, err = blk.ResolveColumnMVCCData(txn.GetStartTS(), colIdx, buffer)
+	view, err = blk.ResolveColumnFromMeta(metaLoc, txn.GetStartTS(), colIdx, buffer)
 	return
 }
 
-func (blk *dataBlock) ResolveColumnMVCCData(
+func (blk *dataBlock) ResolveColumnFromMeta(
+	metaLoc string,
 	ts types.TS,
 	idx int,
 	buffer *bytes.Buffer) (view *model.ColumnView, err error) {
 	view = model.NewColumnView(ts, idx)
-	raw, err := blk.LoadColumnData(idx, buffer)
+	raw, err := blk.LoadColumnDataByMetaLoc(metaLoc, idx, buffer)
+	if err != nil {
+		return
+	}
+	view.SetData(raw)
+	err = blk.FillDeltaDeletes(view, ts)
 	if err != nil {
 		return
 	}
@@ -504,7 +511,7 @@ func (blk *dataBlock) ResolveColumnMVCCData(
 	return
 }
 
-func (blk *dataBlock) ResolveABlkColumnMVCCData(
+func (blk *dataBlock) ResolveColumnFromANode(
 	ts types.TS,
 	colIdx int,
 	buffer *bytes.Buffer,
@@ -619,8 +626,9 @@ func (blk *dataBlock) GetValue(txn txnif.AsyncTxn, row, col int) (v any, err err
 		return
 	}
 	view := model.NewColumnView(txn.GetStartTS(), int(col))
-	if blk.meta.IsAppendable() {
-		view, _ = blk.ResolveABlkColumnMVCCData(txn.GetStartTS(), int(col), nil, true)
+	metaLoc := blk.meta.GetVisibleMetaLoc(txn.GetStartTS())
+	if metaLoc == "" {
+		view, _ = blk.ResolveColumnFromANode(txn.GetStartTS(), int(col), nil, true)
 	} else {
 		vec, _ := blk.LoadColumnData(int(col), nil)
 		view.SetData(vec)
@@ -639,6 +647,70 @@ func (blk *dataBlock) LoadColumnData(
 	id := blk.meta.AsCommonID()
 	id.Idx = uint16(colIdx)
 	return evictable.FetchColumnData(buffer, blk.bufMgr, id, blk.colObjects[colIdx], metaLoc, def)
+}
+func (blk *dataBlock) LoadColumnDataByMetaLoc(
+	metaLoc string,
+	colIdx int,
+	buffer *bytes.Buffer) (vec containers.Vector, err error) {
+	def := blk.meta.GetSchema().ColDefs[colIdx]
+	id := blk.meta.AsCommonID()
+	id.Idx = uint16(colIdx)
+	return evictable.FetchColumnData(buffer, blk.bufMgr, id, blk.colObjects[colIdx], metaLoc, def)
+}
+
+func (blk *dataBlock) ResolveDelta(ts types.TS) (bat *containers.Batch, err error) {
+	detaLoc := blk.meta.GetVisibleDeltaLoc(ts)
+	if detaLoc == "" {
+		return nil, base.ErrNotFound
+	}
+	bat = containers.NewBatch()
+	colNames := []string{catalog.PhyAddrColumnName, catalog.AttrCommitTs, catalog.AttrAborted}
+	colTypes := []types.Type{types.T_Rowid.ToType(), types.T_TS.ToType(), types.T_bool.ToType()}
+	delta := blk.file.GetDeltaFormKey(detaLoc)
+	for i := 0; i < 3; i++ {
+		vec := containers.MakeVector(colTypes[i], false)
+		bat.AddVector(colNames[i], vec)
+		col, err := delta.GetColumn(0)
+		if err != nil {
+			return bat, err
+		}
+		data, err := col.GetData()
+		if err != nil {
+			return bat, err
+		}
+		r := bytes.NewBuffer(data.Entries[0].Data)
+		if _, err = vec.ReadFrom(r); err != nil {
+			return bat, err
+		}
+		bat.Vecs[i] = vec
+	}
+	return
+}
+
+func (blk *dataBlock) FillDeltaDeletes(
+	view *model.ColumnView,
+	ts types.TS) (err error) {
+	deletes, err := blk.ResolveDelta(ts)
+	if err == base.ErrNotFound {
+		return nil
+	}
+	if err != nil {
+		return
+	}
+	for i := 0; i < deletes.Length(); i++ {
+		abort := deletes.Vecs[2].Get(i).(bool)
+		if abort {
+			continue
+		}
+		commitTS := deletes.Vecs[1].Get(i).(types.TS)
+		if commitTS.Greater(ts) {
+			continue
+		}
+		rowid := deletes.Vecs[0].Get(i).(types.Rowid)
+		_, _, row := model.DecodePhyAddrKey(rowid)
+		view.DeleteMask.Add(row)
+	}
+	return nil
 }
 
 func (blk *dataBlock) ablkGetByFilter(ts types.TS, filter *handle.Filter) (offset uint32, err error) {
@@ -817,7 +889,9 @@ func (blk *dataBlock) BatchDedup(txn txnif.AsyncTxn, pks containers.Vector, rowm
 	if keyselects == nil {
 		panic("unexpected error")
 	}
-	sortKey, err := blk.ResolveColumnMVCCData(
+	metaLoc := blk.meta.GetVisibleMetaLoc(txn.GetStartTS())
+	sortKey, err := blk.ResolveColumnFromMeta(
+		metaLoc,
 		txn.GetStartTS(),
 		blk.meta.GetSchema().GetSingleSortKeyIdx(),
 		nil)
