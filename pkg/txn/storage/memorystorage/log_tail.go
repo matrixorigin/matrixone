@@ -249,9 +249,9 @@ func (m *MemHandler) HandleGetLogTail(meta txn.TxnMeta, req apipb.SyncLogTailReq
 			EntryType:    apipb.Entry_Insert,
 			Bat:          toPBBatch(insertBatch),
 			TableId:      uint64(tableRow.ID),
-			TableName:    tableRow.Name,
+			TableName:    string(tableRow.Name),
 			DatabaseId:   uint64(dbRow.ID),
-			DatabaseName: dbRow.Name,
+			DatabaseName: string(dbRow.Name),
 		})
 	}
 	if deleteBatch.Length() > 0 {
@@ -259,9 +259,9 @@ func (m *MemHandler) HandleGetLogTail(meta txn.TxnMeta, req apipb.SyncLogTailReq
 			EntryType:    apipb.Entry_Delete,
 			Bat:          toPBBatch(deleteBatch),
 			TableId:      uint64(tableRow.ID),
-			TableName:    tableRow.Name,
+			TableName:    string(tableRow.Name),
 			DatabaseId:   uint64(dbRow.ID),
-			DatabaseName: dbRow.Name,
+			DatabaseName: string(dbRow.Name),
 		})
 	}
 
