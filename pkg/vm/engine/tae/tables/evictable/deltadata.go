@@ -113,7 +113,7 @@ func (n *DeltaDataNode) fetchData() (containers.Vector, error) {
 }
 
 func (n *DeltaDataNode) GetData(buf *bytes.Buffer) (containers.Vector, error) {
-	// after load, for s3, its data is n.Data
+	// after loading, for s3, its data is n.Data
 	switch StorageBackend {
 	case Disk:
 		// for disk, read directly
