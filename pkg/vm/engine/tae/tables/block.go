@@ -663,7 +663,7 @@ func (blk *dataBlock) LoadColumnDataByMetaLoc(
 func (blk *dataBlock) ResolveDelta(ts types.TS) (bat *containers.Batch, err error) {
 	detaLoc := blk.meta.GetVisibleDeltaLoc(ts)
 	if detaLoc == "" {
-		return nil, base.ErrNotFound
+		return nil, nil
 	}
 	bat = containers.NewBatch()
 	colNames := []string{catalog.PhyAddrColumnName, catalog.AttrCommitTs, catalog.AttrAborted}
@@ -693,7 +693,7 @@ func (blk *dataBlock) FillDeltaDeletes(
 	view *model.ColumnView,
 	ts types.TS) (err error) {
 	deletes, err := blk.ResolveDelta(ts)
-	if err == base.ErrNotFound {
+	if deletes == nil {
 		return nil
 	}
 	if err != nil {
