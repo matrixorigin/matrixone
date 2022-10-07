@@ -701,6 +701,9 @@ func (blk *dataBlock) FillDeltaDeletes(
 		}
 		rowid := deletes.Vecs[0].Get(i).(types.Rowid)
 		_, _, row := model.DecodePhyAddrKey(rowid)
+		if view.DeleteMask == nil {
+			view.DeleteMask = roaring.NewBitmap()
+		}
 		view.DeleteMask.Add(row)
 	}
 	return nil

@@ -138,3 +138,23 @@ func DecodeMetaLoc(metaLoc string) (string, objectio.Extent, uint32) {
 	extent := objectio.NewExtent(uint32(offset), uint32(size), uint32(osize))
 	return name, extent, uint32(rows)
 }
+
+func DecodeDeltaLoc(metaLoc string) (string, objectio.Extent) {
+	info := strings.Split(metaLoc, ":")
+	name := info[0]
+	location := strings.Split(info[1], "_")
+	offset, err := strconv.ParseUint(location[0], 10, 32)
+	if err != nil {
+		panic(any(err))
+	}
+	size, err := strconv.ParseUint(location[1], 10, 32)
+	if err != nil {
+		panic(any(err))
+	}
+	osize, err := strconv.ParseUint(location[2], 10, 32)
+	if err != nil {
+		panic(any(err))
+	}
+	extent := objectio.NewExtent(uint32(offset), uint32(size), uint32(osize))
+	return name, extent
+}
