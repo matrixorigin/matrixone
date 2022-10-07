@@ -31,73 +31,73 @@ func (s *Storage) Read(ctx context.Context, txnMeta txn.TxnMeta, op uint32, payl
 
 	case memoryengine.OpOpenDatabase:
 		return handleRead(
-			s, txnMeta, payload,
+			txnMeta, payload,
 			s.handler.HandleOpenDatabase,
 		)
 
 	case memoryengine.OpGetDatabases:
 		return handleRead(
-			s, txnMeta, payload,
+			txnMeta, payload,
 			s.handler.HandleGetDatabases,
 		)
 
 	case memoryengine.OpOpenRelation:
 		return handleRead(
-			s, txnMeta, payload,
+			txnMeta, payload,
 			s.handler.HandleOpenRelation,
 		)
 
 	case memoryengine.OpGetRelations:
 		return handleRead(
-			s, txnMeta, payload,
+			txnMeta, payload,
 			s.handler.HandleGetRelations,
 		)
 
 	case memoryengine.OpGetPrimaryKeys:
 		return handleRead(
-			s, txnMeta, payload,
+			txnMeta, payload,
 			s.handler.HandleGetPrimaryKeys,
 		)
 
 	case memoryengine.OpGetTableDefs:
 		return handleRead(
-			s, txnMeta, payload,
+			txnMeta, payload,
 			s.handler.HandleGetTableDefs,
 		)
 
 	case memoryengine.OpGetHiddenKeys:
 		return handleRead(
-			s, txnMeta, payload,
+			txnMeta, payload,
 			s.handler.HandleGetHiddenKeys,
 		)
 
 	case memoryengine.OpNewTableIter:
 		return handleRead(
-			s, txnMeta, payload,
+			txnMeta, payload,
 			s.handler.HandleNewTableIter,
 		)
 
 	case memoryengine.OpRead:
 		return handleRead(
-			s, txnMeta, payload,
+			txnMeta, payload,
 			s.handler.HandleRead,
 		)
 
 	case memoryengine.OpCloseTableIter:
 		return handleRead(
-			s, txnMeta, payload,
+			txnMeta, payload,
 			s.handler.HandleCloseTableIter,
 		)
 
 	case memoryengine.OpTableStats:
 		return handleRead(
-			s, txnMeta, payload,
+			txnMeta, payload,
 			s.handler.HandleTableStats,
 		)
 
 	case memoryengine.OpGetLogTail:
 		return handleRead(
-			s, txnMeta, payload,
+			txnMeta, payload,
 			s.handler.HandleGetLogTail,
 		)
 
@@ -107,7 +107,6 @@ func (s *Storage) Read(ctx context.Context, txnMeta txn.TxnMeta, op uint32, payl
 }
 
 func handleRead[Req any, Resp any](
-	s *Storage,
 	txnMeta txn.TxnMeta,
 	payload []byte,
 	fn func(

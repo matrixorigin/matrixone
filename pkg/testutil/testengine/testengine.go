@@ -27,7 +27,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/memEngine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/memoryengine"
 )
 
@@ -103,17 +102,17 @@ func New(
 		panic(err)
 	}
 
-	memEngine.CreateR(db)
-	memEngine.CreateS(db)
-	memEngine.CreateT(db)
-	memEngine.CreateT1(db)
-	memEngine.CreatePart(db)
-	memEngine.CreateDate(db)
-	memEngine.CreateSupplier(db)
-	memEngine.CreateCustomer(db)
-	memEngine.CreateLineorder(db)
+	CreateR(db)
+	CreateS(db)
+	CreateT(db)
+	CreateT1(db)
+	CreatePart(db)
+	CreateDate(db)
+	CreateSupplier(db)
+	CreateCustomer(db)
+	CreateLineorder(db)
 
-	if err := txnOp.Commit(ctx); err != nil {
+	if err = txnOp.Commit(ctx); err != nil {
 		panic(err)
 	}
 
