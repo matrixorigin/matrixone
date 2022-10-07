@@ -199,15 +199,16 @@ func (h *Handle) HandlePreCommit(
 			}
 		case *apipb.Entry:
 			//Handle DML
-			moBat, err := batch.ProtoBatchToBatch(e.(*apipb.Entry).Bat)
+			pe := e.(*apipb.Entry)
+			moBat, err := batch.ProtoBatchToBatch(pe.GetBat())
 			if err != nil {
 				panic(err)
 			}
 			req := db.WriteReq{
-				Type:         db.EntryType(e.(*apipb.Entry).EntryType),
-				TableID:      e.(*apipb.Entry).TableId,
-				DatabaseName: e.(*apipb.Entry).DatabaseName,
-				TableName:    e.(*apipb.Entry).TableName,
+				Type:         db.EntryType(pe.EntryType),
+				TableID:      pe.GetTableId(),
+				DatabaseName: pe.GetDatabaseName(),
+				TableName:    pe.GetTableName(),
 				Batch:        moBat,
 			}
 			if err = h.HandleWrite(meta, req,
