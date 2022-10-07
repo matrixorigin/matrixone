@@ -91,7 +91,7 @@ func (h *Handle) HandlePrepare(meta txn.TxnMeta) (pts timestamp.Timestamp, err e
 	if err != nil {
 		return timestamp.Timestamp{}, err
 	}
-	participants := make([]uint64, len(meta.GetDNShards()))
+	participants := make([]uint64, 0, len(meta.GetDNShards()))
 	for _, shard := range meta.GetDNShards() {
 		participants = append(participants, shard.GetShardID())
 	}
