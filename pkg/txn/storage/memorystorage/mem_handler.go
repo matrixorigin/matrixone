@@ -15,6 +15,7 @@
 package memorystorage
 
 import (
+	"context"
 	crand "crypto/rand"
 	"database/sql"
 	"encoding/binary"
@@ -104,7 +105,7 @@ func NewMemHandler(
 
 var _ Handler = new(MemHandler)
 
-func (m *MemHandler) HandleAddTableDef(meta txn.TxnMeta, req memoryengine.AddTableDefReq, resp *memoryengine.AddTableDefResp) error {
+func (m *MemHandler) HandleAddTableDef(ctx context.Context, meta txn.TxnMeta, req memoryengine.AddTableDefReq, resp *memoryengine.AddTableDefResp) error {
 	tx := m.getTx(meta)
 
 	table, err := m.relations.Get(tx, req.TableID)
@@ -248,7 +249,7 @@ func (m *MemHandler) HandleAddTableDef(meta txn.TxnMeta, req memoryengine.AddTab
 	return nil
 }
 
-func (m *MemHandler) HandleCloseTableIter(meta txn.TxnMeta, req memoryengine.CloseTableIterReq, resp *memoryengine.CloseTableIterResp) error {
+func (m *MemHandler) HandleCloseTableIter(ctx context.Context, meta txn.TxnMeta, req memoryengine.CloseTableIterReq, resp *memoryengine.CloseTableIterResp) error {
 	m.iterators.Lock()
 	defer m.iterators.Unlock()
 	iter, ok := m.iterators.Map[req.IterID]
@@ -262,7 +263,7 @@ func (m *MemHandler) HandleCloseTableIter(meta txn.TxnMeta, req memoryengine.Clo
 	return nil
 }
 
-func (m *MemHandler) HandleCreateDatabase(meta txn.TxnMeta, req memoryengine.CreateDatabaseReq, resp *memoryengine.CreateDatabaseResp) error {
+func (m *MemHandler) HandleCreateDatabase(ctx context.Context, meta txn.TxnMeta, req memoryengine.CreateDatabaseReq, resp *memoryengine.CreateDatabaseResp) error {
 	tx := m.getTx(meta)
 
 	entries, err := m.databases.Index(tx, Tuple{
@@ -291,7 +292,7 @@ func (m *MemHandler) HandleCreateDatabase(meta txn.TxnMeta, req memoryengine.Cre
 	return nil
 }
 
-func (m *MemHandler) HandleCreateRelation(meta txn.TxnMeta, req memoryengine.CreateRelationReq, resp *memoryengine.CreateRelationResp) error {
+func (m *MemHandler) HandleCreateRelation(ctx context.Context, meta txn.TxnMeta, req memoryengine.CreateRelationReq, resp *memoryengine.CreateRelationResp) error {
 	tx := m.getTx(meta)
 
 	// validate database id
@@ -429,7 +430,7 @@ func (m *MemHandler) HandleCreateRelation(meta txn.TxnMeta, req memoryengine.Cre
 
 const rowIDColumnName = "__rowid"
 
-func (m *MemHandler) HandleDelTableDef(meta txn.TxnMeta, req memoryengine.DelTableDefReq, resp *memoryengine.DelTableDefResp) error {
+func (m *MemHandler) HandleDelTableDef(ctx context.Context, meta txn.TxnMeta, req memoryengine.DelTableDefReq, resp *memoryengine.DelTableDefResp) error {
 	tx := m.getTx(meta)
 
 	table, err := m.relations.Get(tx, req.TableID)
@@ -504,7 +505,7 @@ func (m *MemHandler) HandleDelTableDef(meta txn.TxnMeta, req memoryengine.DelTab
 	return nil
 }
 
-func (m *MemHandler) HandleDelete(meta txn.TxnMeta, req memoryengine.DeleteReq, resp *memoryengine.DeleteResp) error {
+func (m *MemHandler) HandleDelete(ctx context.Context, meta txn.TxnMeta, req memoryengine.DeleteReq, resp *memoryengine.DeleteResp) error {
 	tx := m.getTx(meta)
 	reqVecLen := req.Vector.Length()
 
@@ -600,7 +601,7 @@ func (m *MemHandler) HandleDelete(meta txn.TxnMeta, req memoryengine.DeleteReq, 
 	return nil
 }
 
-func (m *MemHandler) HandleDeleteDatabase(meta txn.TxnMeta, req memoryengine.DeleteDatabaseReq, resp *memoryengine.DeleteDatabaseResp) error {
+func (m *MemHandler) HandleDeleteDatabase(ctx context.Context, meta txn.TxnMeta, req memoryengine.DeleteDatabaseReq, resp *memoryengine.DeleteDatabaseResp) error {
 	tx := m.getTx(meta)
 
 	entries, err := m.databases.Index(tx, Tuple{
@@ -687,7 +688,7 @@ func (m *MemHandler) deleteRelationData(tx *Transaction, relationID ID) error {
 	return nil
 }
 
-func (m *MemHandler) HandleDeleteRelation(meta txn.TxnMeta, req memoryengine.DeleteRelationReq, resp *memoryengine.DeleteRelationResp) error {
+func (m *MemHandler) HandleDeleteRelation(ctx context.Context, meta txn.TxnMeta, req memoryengine.DeleteRelationReq, resp *memoryengine.DeleteRelationResp) error {
 	tx := m.getTx(meta)
 	entries, err := m.relations.Index(tx, Tuple{
 		index_DatabaseID_Name,
@@ -716,7 +717,7 @@ func (m *MemHandler) HandleDeleteRelation(meta txn.TxnMeta, req memoryengine.Del
 	return nil
 }
 
-func (m *MemHandler) HandleGetDatabases(meta txn.TxnMeta, req memoryengine.GetDatabasesReq, resp *memoryengine.GetDatabasesResp) error {
+func (m *MemHandler) HandleGetDatabases(ctx context.Context, meta txn.TxnMeta, req memoryengine.GetDatabasesReq, resp *memoryengine.GetDatabasesResp) error {
 	tx := m.getTx(meta)
 
 	entries, err := m.databases.Index(tx, Tuple{
@@ -734,7 +735,7 @@ func (m *MemHandler) HandleGetDatabases(meta txn.TxnMeta, req memoryengine.GetDa
 	return nil
 }
 
-func (m *MemHandler) HandleGetPrimaryKeys(meta txn.TxnMeta, req memoryengine.GetPrimaryKeysReq, resp *memoryengine.GetPrimaryKeysResp) error {
+func (m *MemHandler) HandleGetPrimaryKeys(ctx context.Context, meta txn.TxnMeta, req memoryengine.GetPrimaryKeysReq, resp *memoryengine.GetPrimaryKeysResp) error {
 	tx := m.getTx(meta)
 	entries, err := m.attributes.Index(tx, Tuple{
 		index_RelationID_IsPrimary,
@@ -750,7 +751,7 @@ func (m *MemHandler) HandleGetPrimaryKeys(meta txn.TxnMeta, req memoryengine.Get
 	return nil
 }
 
-func (m *MemHandler) HandleGetRelations(meta txn.TxnMeta, req memoryengine.GetRelationsReq, resp *memoryengine.GetRelationsResp) error {
+func (m *MemHandler) HandleGetRelations(ctx context.Context, meta txn.TxnMeta, req memoryengine.GetRelationsReq, resp *memoryengine.GetRelationsResp) error {
 	tx := m.getTx(meta)
 	entries, err := m.relations.Index(tx, Tuple{
 		index_DatabaseID,
@@ -765,7 +766,7 @@ func (m *MemHandler) HandleGetRelations(meta txn.TxnMeta, req memoryengine.GetRe
 	return nil
 }
 
-func (m *MemHandler) HandleGetTableDefs(meta txn.TxnMeta, req memoryengine.GetTableDefsReq, resp *memoryengine.GetTableDefsResp) error {
+func (m *MemHandler) HandleGetTableDefs(ctx context.Context, meta txn.TxnMeta, req memoryengine.GetTableDefsReq, resp *memoryengine.GetTableDefsResp) error {
 	tx := m.getTx(meta)
 
 	relRow, err := m.relations.Get(tx, req.TableID)
@@ -863,7 +864,7 @@ func (m *MemHandler) HandleGetTableDefs(meta txn.TxnMeta, req memoryengine.GetTa
 	return nil
 }
 
-func (m *MemHandler) HandleGetHiddenKeys(meta txn.TxnMeta, req memoryengine.GetHiddenKeysReq, resp *memoryengine.GetHiddenKeysResp) error {
+func (m *MemHandler) HandleGetHiddenKeys(ctx context.Context, meta txn.TxnMeta, req memoryengine.GetHiddenKeysReq, resp *memoryengine.GetHiddenKeysResp) error {
 	tx := m.getTx(meta)
 	entries, err := m.attributes.Index(tx, Tuple{
 		index_RelationID_IsHidden,
@@ -879,7 +880,7 @@ func (m *MemHandler) HandleGetHiddenKeys(meta txn.TxnMeta, req memoryengine.GetH
 	return nil
 }
 
-func (m *MemHandler) HandleNewTableIter(meta txn.TxnMeta, req memoryengine.NewTableIterReq, resp *memoryengine.NewTableIterResp) error {
+func (m *MemHandler) HandleNewTableIter(ctx context.Context, meta txn.TxnMeta, req memoryengine.NewTableIterReq, resp *memoryengine.NewTableIterResp) error {
 	tx := m.getTx(meta)
 
 	tableIter := m.data.NewIter(tx)
@@ -918,7 +919,7 @@ func (m *MemHandler) HandleNewTableIter(meta txn.TxnMeta, req memoryengine.NewTa
 	return nil
 }
 
-func (m *MemHandler) HandleOpenDatabase(meta txn.TxnMeta, req memoryengine.OpenDatabaseReq, resp *memoryengine.OpenDatabaseResp) error {
+func (m *MemHandler) HandleOpenDatabase(ctx context.Context, meta txn.TxnMeta, req memoryengine.OpenDatabaseReq, resp *memoryengine.OpenDatabaseResp) error {
 	tx := m.getTx(meta)
 
 	entries, err := m.databases.Index(tx, Tuple{
@@ -939,7 +940,7 @@ func (m *MemHandler) HandleOpenDatabase(meta txn.TxnMeta, req memoryengine.OpenD
 	return moerr.NewNoDB()
 }
 
-func (m *MemHandler) HandleOpenRelation(meta txn.TxnMeta, req memoryengine.OpenRelationReq, resp *memoryengine.OpenRelationResp) error {
+func (m *MemHandler) HandleOpenRelation(ctx context.Context, meta txn.TxnMeta, req memoryengine.OpenRelationReq, resp *memoryengine.OpenRelationResp) error {
 	tx := m.getTx(meta)
 	entries, err := m.relations.Index(tx, Tuple{
 		index_DatabaseID_Name,
@@ -964,7 +965,7 @@ func (m *MemHandler) HandleOpenRelation(meta txn.TxnMeta, req memoryengine.OpenR
 	return nil
 }
 
-func (m *MemHandler) HandleRead(meta txn.TxnMeta, req memoryengine.ReadReq, resp *memoryengine.ReadResp) error {
+func (m *MemHandler) HandleRead(ctx context.Context, meta txn.TxnMeta, req memoryengine.ReadReq, resp *memoryengine.ReadResp) error {
 	resp.SetHeap(m.mheap)
 
 	m.iterators.Lock()
@@ -1047,7 +1048,7 @@ func (m *MemHandler) HandleRead(meta txn.TxnMeta, req memoryengine.ReadReq, resp
 	return nil
 }
 
-func (m *MemHandler) HandleTruncate(meta txn.TxnMeta, req memoryengine.TruncateReq, resp *memoryengine.TruncateResp) error {
+func (m *MemHandler) HandleTruncate(ctx context.Context, meta txn.TxnMeta, req memoryengine.TruncateReq, resp *memoryengine.TruncateResp) error {
 	tx := m.getTx(meta)
 	_, err := m.relations.Get(tx, req.TableID)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -1056,7 +1057,7 @@ func (m *MemHandler) HandleTruncate(meta txn.TxnMeta, req memoryengine.TruncateR
 	return m.deleteRelationData(tx, req.TableID)
 }
 
-func (m *MemHandler) HandleUpdate(meta txn.TxnMeta, req memoryengine.UpdateReq, resp *memoryengine.UpdateResp) error {
+func (m *MemHandler) HandleUpdate(ctx context.Context, meta txn.TxnMeta, req memoryengine.UpdateReq, resp *memoryengine.UpdateResp) error {
 	tx := m.getTx(meta)
 
 	if err := m.rangeBatchPhysicalRows(
@@ -1081,7 +1082,7 @@ func (m *MemHandler) HandleUpdate(meta txn.TxnMeta, req memoryengine.UpdateReq, 
 	return nil
 }
 
-func (m *MemHandler) HandleWrite(meta txn.TxnMeta, req memoryengine.WriteReq, resp *memoryengine.WriteResp) error {
+func (m *MemHandler) HandleWrite(ctx context.Context, meta txn.TxnMeta, req memoryengine.WriteReq, resp *memoryengine.WriteResp) error {
 	tx := m.getTx(meta)
 
 	if err := m.rangeBatchPhysicalRows(
@@ -1220,11 +1221,11 @@ func (m *MemHandler) getTx(meta txn.TxnMeta) *Transaction {
 	return tx
 }
 
-func (*MemHandler) HandleClose() error {
+func (*MemHandler) HandleClose(ctx context.Context) error {
 	return nil
 }
 
-func (m *MemHandler) HandleCommit(meta txn.TxnMeta) error {
+func (m *MemHandler) HandleCommit(ctx context.Context, meta txn.TxnMeta) error {
 	tx := m.getTx(meta)
 	if err := tx.Commit(memtable.Now(m.clock)); err != nil {
 		return err
@@ -1232,27 +1233,27 @@ func (m *MemHandler) HandleCommit(meta txn.TxnMeta) error {
 	return nil
 }
 
-func (m *MemHandler) HandleCommitting(meta txn.TxnMeta) error {
+func (m *MemHandler) HandleCommitting(ctx context.Context, meta txn.TxnMeta) error {
 	return nil
 }
 
-func (m *MemHandler) HandleDestroy() error {
+func (m *MemHandler) HandleDestroy(ctx context.Context) error {
 	*m = *NewMemHandler(m.mheap, m.defaultIsolationPolicy, m.clock)
 	return nil
 }
 
-func (m *MemHandler) HandlePrepare(meta txn.TxnMeta) (timestamp.Timestamp, error) {
+func (m *MemHandler) HandlePrepare(ctx context.Context, meta txn.TxnMeta) (timestamp.Timestamp, error) {
 	now, _ := m.clock.Now()
 	return now, nil
 }
 
-func (m *MemHandler) HandleRollback(meta txn.TxnMeta) error {
+func (m *MemHandler) HandleRollback(ctx context.Context, meta txn.TxnMeta) error {
 	tx := m.getTx(meta)
 	tx.Abort()
 	return nil
 }
 
-func (m *MemHandler) HandleStartRecovery(ch chan txn.TxnMeta) {
+func (m *MemHandler) HandleStartRecovery(ctx context.Context, ch chan txn.TxnMeta) {
 	// no recovery
 	close(ch)
 }
@@ -1277,7 +1278,7 @@ func (m *MemHandler) iterRelationAttributes(
 	return nil
 }
 
-func (m *MemHandler) HandleTableStats(meta txn.TxnMeta, req memoryengine.TableStatsReq, resp *memoryengine.TableStatsResp) (err error) {
+func (m *MemHandler) HandleTableStats(ctx context.Context, meta txn.TxnMeta, req memoryengine.TableStatsReq, resp *memoryengine.TableStatsResp) (err error) {
 	tx := m.getTx(meta)
 
 	// maybe an estimation is enough
