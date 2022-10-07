@@ -96,7 +96,7 @@ func (db *DB) GetOrCreateTxnWithMeta(
 func (db *DB) GetTxn(id string) (txn txnif.AsyncTxn, err error) {
 	txn = db.TxnMgr.GetTxn(id)
 	if txn == nil {
-		err = moerr.NewNotFound()
+		err = moerr.NewTxnNotFound()
 	}
 	return
 }

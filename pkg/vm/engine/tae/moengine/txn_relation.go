@@ -89,7 +89,7 @@ func (rel *txnRelation) Update(_ context.Context, data *batch.Batch) error {
 func (rel *txnRelation) DeleteByPhyAddrKeys(_ context.Context, keys *vector.Vector) error {
 	tvec := containers.NewVectorWithSharedMemory(keys, false)
 	defer tvec.Close()
-	return rel.handle.DeleteByPhyAddrKey(tvec)
+	return rel.handle.DeleteByPhyAddrKeys(tvec)
 }
 
 func (rel *txnRelation) Delete(_ context.Context, data *vector.Vector, col string) error {

@@ -267,6 +267,7 @@ func (mgr *TxnManager) onBindPrepareTimeStamp(op *OpTxn) (ts types.TS) {
 }
 
 func (mgr *TxnManager) onPrepare(op *OpTxn, ts types.TS) {
+	//assign txn's prepare timestamp to TxnMvccNode.
 	mgr.onPreparCommit(op.Txn)
 	if op.Txn.GetError() != nil {
 		op.Op = OpRollback
@@ -321,9 +322,8 @@ func (mgr *TxnManager) on1PCPrepared(op *OpTxn) {
 			logutil.Warn("[ApplyRollback]", TxnField(op.Txn), common.ErrorField(err))
 		}
 	}
-
-	// Here only notify the user txn have been done with err.
-	// The err returned can be access via op.Txn.GetError()
+	// Here to change the txn state and
+	// broadcast the rollback or commit event to all waiting threads
 	_ = op.Txn.WaitDone(err, isAbort)
 }
 
@@ -364,10 +364,14 @@ func (mgr *TxnManager) dequeuePreparing(items ...any) {
 			continue
 		}
 
-		// Mainly do conflict check for 1PC Commit or 2PC Prepare
+		// Mainly do : 1. conflict check for 1PC Commit or 2PC Prepare;
+		//   		   2. push the AppendNode into the MVCCHandle of block
 		mgr.onPrePrepare(op)
 
 		//Before this moment, all mvcc nodes of a txn has been pushed into the MVCCHandle.
+		//1. Allocate a timestamp , set it to txn's prepare timestamp and commit timestamp,
+		//   which would be changed in the future if txn is 2PC.
+		//2. Set transaction's state to Preparing or Rollbacking if op.Op is OpRollback.
 		ts := mgr.onBindPrepareTimeStamp(op)
 
 		if op.Txn.Is2PC() {
@@ -392,7 +396,7 @@ func (mgr *TxnManager) dequeuePrepared(items ...any) {
 	now := time.Now()
 	for _, item := range items {
 		op := item.(*OpTxn)
-
+		//Notice that WaitPrepared do nothing when op is OpRollback
 		if err = op.Txn.WaitPrepared(); err != nil {
 			// v0.6 TODO: Error handling
 			panic(err)
