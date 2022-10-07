@@ -2346,17 +2346,17 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 				var option *explain.ExplainOptions
 				option, err = getExplainOption(statement.Options)
 				if err != nil {
-					return err
+					goto handleFailed
 				}
 
 				err = explainQuery.ExplainPlan(buffer, option)
 				if err != nil {
-					return err
+					goto handleFailed
 				}
 
 				err = buildMoExplainQuery(explainColName, buffer, ses, getDataFromPipeline)
 				if err != nil {
-					return err
+					goto handleFailed
 				}
 
 				/*
@@ -2369,7 +2369,6 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 					goto handleFailed
 				}
 			}
-			return nil
 		}
 	handleSucceeded:
 		//load data handle txn failure internally

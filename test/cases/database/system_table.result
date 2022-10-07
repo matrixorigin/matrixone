@@ -1,0 +1,20 @@
+use mysql;
+show tables;
+tables_in_mysql
+user
+db
+procs_priv
+columns_priv
+tables_priv
+use information_schema;
+show tables;
+tables_in_information_schema
+KEY_COLUMN_USAGE
+COLUMNS
+PROFILING
+PROCESSLIST
+USER_PRIVILEGES
+SCHEMATA
+CHARACTER_SETS
+TRIGGERS
+TABLES
