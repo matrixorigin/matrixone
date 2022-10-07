@@ -70,7 +70,7 @@ func NewCatalogHandler(upstream *MemHandler) *CatalogHandler {
 	db := &DatabaseRow{
 		ID:        ID(catalog.MO_CATALOG_ID),
 		AccountID: 0,
-		Name:      catalog.MO_CATALOG,
+		Name:      []byte(catalog.MO_CATALOG),
 	}
 	if err := upstream.databases.Insert(tx, db); err != nil {
 		panic(err)
@@ -81,35 +81,35 @@ func NewCatalogHandler(upstream *MemHandler) *CatalogHandler {
 	databasesRelRow := &RelationRow{
 		ID:         ID(catalog.MO_DATABASE_ID),
 		DatabaseID: db.ID,
-		Name:       catalog.MO_DATABASE,
+		Name:       []byte(catalog.MO_DATABASE),
 		Type:       memoryengine.RelationTable,
 	}
 	if err := upstream.relations.Insert(tx, databasesRelRow); err != nil {
 		panic(err)
 	}
-	handler.sysRelationIDs[databasesRelRow.ID] = databasesRelRow.Name
+	handler.sysRelationIDs[databasesRelRow.ID] = string(databasesRelRow.Name)
 
 	tablesRelRow := &RelationRow{
 		ID:         ID(catalog.MO_TABLES_ID),
 		DatabaseID: db.ID,
-		Name:       catalog.MO_TABLES,
+		Name:       []byte(catalog.MO_TABLES),
 		Type:       memoryengine.RelationTable,
 	}
 	if err := upstream.relations.Insert(tx, tablesRelRow); err != nil {
 		panic(err)
 	}
-	handler.sysRelationIDs[tablesRelRow.ID] = tablesRelRow.Name
+	handler.sysRelationIDs[tablesRelRow.ID] = string(tablesRelRow.Name)
 
 	attributesRelRow := &RelationRow{
 		ID:         ID(catalog.MO_COLUMNS_ID),
 		DatabaseID: db.ID,
-		Name:       catalog.MO_COLUMNS,
+		Name:       []byte(catalog.MO_COLUMNS),
 		Type:       memoryengine.RelationTable,
 	}
 	if err := upstream.relations.Insert(tx, attributesRelRow); err != nil {
 		panic(err)
 	}
-	handler.sysRelationIDs[attributesRelRow.ID] = attributesRelRow.Name
+	handler.sysRelationIDs[attributesRelRow.ID] = string(attributesRelRow.Name)
 
 	// attributes
 	// databases
