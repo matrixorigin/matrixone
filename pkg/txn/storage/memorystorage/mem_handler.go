@@ -137,21 +137,21 @@ func (m *MemHandler) HandleAddTableDef(meta txn.TxnMeta, req memoryengine.AddTab
 
 	case *engine.CommentDef:
 		// update comments
-		table.Comments = def.Comment
+		table.Comments = []byte(def.Comment)
 		if err := m.relations.Update(tx, table); err != nil {
 			return err
 		}
 
 	case *engine.PartitionDef:
 		// update
-		table.PartitionDef = def.Partition
+		table.PartitionDef = []byte(def.Partition)
 		if err := m.relations.Update(tx, table); err != nil {
 			return err
 		}
 
 	case *engine.ViewDef:
 		// update
-		table.ViewDef = def.View
+		table.ViewDef = []byte(def.View)
 		if err := m.relations.Update(tx, table); err != nil {
 			return err
 		}
@@ -281,7 +281,7 @@ func (m *MemHandler) HandleCreateDatabase(meta txn.TxnMeta, req memoryengine.Cre
 	err = m.databases.Insert(tx, &DatabaseRow{
 		ID:        id,
 		AccountID: req.AccessInfo.AccountID,
-		Name:      req.Name,
+		Name:      []byte(req.Name),
 	})
 	if err != nil {
 		return err
@@ -322,7 +322,7 @@ func (m *MemHandler) HandleCreateRelation(meta txn.TxnMeta, req memoryengine.Cre
 	row := &RelationRow{
 		ID:         memoryengine.NewID(),
 		DatabaseID: req.DatabaseID,
-		Name:       req.Name,
+		Name:       []byte(req.Name),
 		Type:       req.Type,
 		Properties: make(map[string]string),
 	}
@@ -335,13 +335,13 @@ func (m *MemHandler) HandleCreateRelation(meta txn.TxnMeta, req memoryengine.Cre
 		switch def := def.(type) {
 
 		case *engine.CommentDef:
-			row.Comments = def.Comment
+			row.Comments = []byte(def.Comment)
 
 		case *engine.PartitionDef:
-			row.PartitionDef = def.Partition
+			row.PartitionDef = []byte(def.Partition)
 
 		case *engine.ViewDef:
-			row.ViewDef = def.View
+			row.ViewDef = []byte(def.View)
 
 		case *engine.AttributeDef:
 			relAttrs = append(relAttrs, def.Attr)
@@ -362,7 +362,7 @@ func (m *MemHandler) HandleCreateRelation(meta txn.TxnMeta, req memoryengine.Cre
 		}
 	}
 
-	if len(relAttrs) == 0 && row.ViewDef == "" {
+	if len(relAttrs) == 0 && len(row.ViewDef) == 0 {
 		return moerr.NewConstraintViolation("no schema")
 	}
 
@@ -449,7 +449,7 @@ func (m *MemHandler) HandleDelTableDef(meta txn.TxnMeta, req memoryengine.DelTab
 
 	case *engine.CommentDef:
 		// del comments
-		table.Comments = ""
+		table.Comments = nil
 		if err := m.relations.Update(tx, table); err != nil {
 			return err
 		}
@@ -728,7 +728,7 @@ func (m *MemHandler) HandleGetDatabases(meta txn.TxnMeta, req memoryengine.GetDa
 	}
 
 	for _, entry := range entries {
-		resp.Names = append(resp.Names, entry.Value.Name)
+		resp.Names = append(resp.Names, string(entry.Value.Name))
 	}
 
 	return nil
@@ -760,7 +760,7 @@ func (m *MemHandler) HandleGetRelations(meta txn.TxnMeta, req memoryengine.GetRe
 		return err
 	}
 	for _, entry := range entries {
-		resp.Names = append(resp.Names, entry.Value.Name)
+		resp.Names = append(resp.Names, string(entry.Value.Name))
 	}
 	return nil
 }
@@ -779,23 +779,23 @@ func (m *MemHandler) HandleGetTableDefs(meta txn.TxnMeta, req memoryengine.GetTa
 	}
 
 	// comments
-	if relRow.Comments != "" {
+	if len(relRow.Comments) != 0 {
 		resp.Defs = append(resp.Defs, &engine.CommentDef{
-			Comment: relRow.Comments,
+			Comment: string(relRow.Comments),
 		})
 	}
 
 	// partiton
-	if relRow.PartitionDef != "" {
+	if len(relRow.PartitionDef) != 0 {
 		resp.Defs = append(resp.Defs, &engine.PartitionDef{
-			Partition: relRow.PartitionDef,
+			Partition: string(relRow.PartitionDef),
 		})
 	}
 
 	// view
-	if relRow.ViewDef != "" {
+	if len(relRow.ViewDef) != 0 {
 		resp.Defs = append(resp.Defs, &engine.ViewDef{
-			View: relRow.ViewDef,
+			View: string(relRow.ViewDef),
 		})
 	}
 
@@ -932,7 +932,7 @@ func (m *MemHandler) HandleOpenDatabase(meta txn.TxnMeta, req memoryengine.OpenD
 
 	for _, entry := range entries {
 		resp.ID = entry.Value.ID
-		resp.Name = entry.Value.Name
+		resp.Name = string(entry.Value.Name)
 		return nil
 	}
 
@@ -955,12 +955,12 @@ func (m *MemHandler) HandleOpenRelation(meta txn.TxnMeta, req memoryengine.OpenR
 	entry := entries[0]
 	resp.ID = entry.Value.ID
 	resp.Type = entry.Value.Type
-	resp.RelationName = entry.Value.Name
+	resp.RelationName = string(entry.Value.Name)
 	db, err := m.databases.Get(tx, entry.Value.DatabaseID)
 	if err != nil {
 		return err
 	}
-	resp.DatabaseName = db.Name
+	resp.DatabaseName = string(db.Name)
 	return nil
 }
 
