@@ -338,6 +338,8 @@ func (n *MVCCHandle) CollectAppend(start, end types.TS) (minRow, maxRow uint32, 
 }
 
 func (n *MVCCHandle) CollectDelete(start, end types.TS) (rowIDVec, commitTSVec, abortVec containers.Vector) {
+	n.RLock()
+	defer n.RUnlock()
 	if n.deletes.IsEmpty() {
 		return
 	}
@@ -350,8 +352,6 @@ func (n *MVCCHandle) CollectDelete(start, end types.TS) (rowIDVec, commitTSVec, 
 	abortVec = containers.MakeVector(types.T_bool.ToType(), false)
 	prefix := n.meta.MakeKey()
 
-	n.RLock()
-	defer n.RUnlock()
 	n.deletes.LoopChain(
 		func(m txnif.MVCCNode) bool {
 			node := m.(*DeleteNode)
@@ -377,8 +377,6 @@ func (n *MVCCHandle) CollectDelete(start, end types.TS) (rowIDVec, commitTSVec, 
 }
 
 func (n *MVCCHandle) ExistDeleteInRange(start, end types.TS) (exist bool) {
-	n.RLock()
-	defer n.RUnlock()
 	n.deletes.LoopChain(
 		func(m txnif.MVCCNode) bool {
 			node := m.(*DeleteNode)
