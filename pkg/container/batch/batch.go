@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/agg"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/index"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
@@ -239,6 +240,9 @@ func (bat *Batch) Clean(m *mheap.Mheap) {
 	for _, vec := range bat.Vecs {
 		if vec != nil {
 			vec.Free(m)
+			if vec.IsLowCardinality() {
+				vec.Index().(*index.LowCardinalityIndex).Free()
+			}
 		}
 	}
 	for _, agg := range bat.Aggs {
@@ -289,12 +293,12 @@ func (bat *Batch) Append(mh *mheap.Mheap, b *Batch) (*Batch, error) {
 			return bat, err
 		}
 		if b.Vecs[i].IsLowCardinality() {
-			idx := b.Vecs[i].Index()
+			idx := b.Vecs[i].Index().(*index.LowCardinalityIndex)
 			if bat.Vecs[i].Index() == nil {
 				bat.Vecs[i].SetIndex(idx.Dup())
 			}
 
-			dst := bat.Vecs[i].Index().GetPoses()
+			dst := bat.Vecs[i].Index().(*index.LowCardinalityIndex).GetPoses()
 			src := idx.GetPoses()
 			if err := vector.UnionBatch(dst, src, 0, vector.Length(src), flags[:vector.Length(src)], mh); err != nil {
 				return bat, err

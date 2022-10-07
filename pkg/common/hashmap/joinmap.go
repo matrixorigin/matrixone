@@ -17,10 +17,11 @@ package hashmap
 import (
 	"sync/atomic"
 
+	"github.com/matrixorigin/matrixone/pkg/container/index"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
 
-func NewJoinMap(sels [][]int64, expr *plan.Expr, mp *StrHashMap, hasNull bool, idx any) *JoinMap {
+func NewJoinMap(sels [][]int64, expr *plan.Expr, mp *StrHashMap, hasNull bool, idx *index.LowCardinalityIndex) *JoinMap {
 	return &JoinMap{
 		cnt:     1,
 		mp:      mp,
@@ -47,7 +48,7 @@ func (jm *JoinMap) HasNull() bool {
 	return jm.hasNull
 }
 
-func (jm *JoinMap) Index() any {
+func (jm *JoinMap) Index() *index.LowCardinalityIndex {
 	return jm.idx
 }
 

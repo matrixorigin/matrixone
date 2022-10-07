@@ -69,7 +69,7 @@ func (d *Dict) Dup() *Dict {
 	return d
 }
 
-func (d *Dict) InsertBatch(data *vector.Vector) ([]uint64, error) {
+func (d *Dict) InsertBatch(data *vector.Vector) ([]uint16, error) {
 	var ks any
 	if d.fixed() {
 		ks = d.encodeFixedData(data)
@@ -77,12 +77,13 @@ func (d *Dict) InsertBatch(data *vector.Vector) ([]uint64, error) {
 		ks = d.encodeVarData(data)
 	}
 
-	ips /*insertion points*/, err := d.idx.insert(ks)
+	values, err := d.idx.insert(ks)
 	if err != nil {
 		return nil, err
 	}
-	for i := range ips {
-		if int(ips[i]) > d.unique.Length() {
+	ips /* insertion points */ := make([]uint16, len(values))
+	for i, v := range values {
+		if int(v) > d.unique.Length() {
 			if d.fixed() {
 				err = d.unique.Append(ks.([]uint64)[i], false, d.m)
 			} else {
@@ -92,25 +93,32 @@ func (d *Dict) InsertBatch(data *vector.Vector) ([]uint64, error) {
 				return nil, err
 			}
 		}
+		ips[i] = uint16(v)
 	}
 	return ips, nil
 }
 
-func (d *Dict) FindBatch(data *vector.Vector) []uint64 {
+func (d *Dict) FindBatch(data *vector.Vector) []uint16 {
 	var ks any
 	if d.fixed() {
 		ks = d.encodeFixedData(data)
 	} else {
 		ks = d.encodeVarData(data)
 	}
-	return d.idx.find(ks)
+	values := d.idx.find(ks)
+
+	poses := make([]uint16, len(values))
+	for i, v := range values {
+		poses[i] = uint16(v)
+	}
+	return poses
 }
 
-func (d *Dict) FindData(pos uint64) *vector.Vector {
+func (d *Dict) FindData(pos uint16) *vector.Vector {
 	if d.fixed() {
-		return d.findFixedData(pos)
+		return d.findFixedData(int(pos))
 	} else {
-		return d.findVarData(pos)
+		return d.findVarData(int(pos))
 	}
 }
 
@@ -137,76 +145,56 @@ func (d *Dict) encodeFixedData(data *vector.Vector) []uint64 {
 	us := make([]uint64, data.Length())
 	switch d.typ.Oid {
 	case types.T_bool:
-		col := data.Col.([]bool)
+		col := vector.MustTCols[bool](data)
 		for i, v := range col {
 			if v {
 				us[i] = 1
 			}
 		}
-	//case types.T_int8:
-	//	col := data.Col.([]int8)
-	//	for i, v := range col {
-	//		us[i] = uint64(v)
-	//	}
-	//case types.T_int16:
-	//	col := data.Col.([]int16)
-	//	for i, v := range col {
-	//		us[i] = uint64(v)
-	//	}
 	case types.T_int32:
-		col := data.Col.([]int32)
+		col := vector.MustTCols[int32](data)
 		for i, v := range col {
 			us[i] = uint64(v)
 		}
 	case types.T_int64:
-		col := data.Col.([]int64)
+		col := vector.MustTCols[int64](data)
 		for i, v := range col {
 			us[i] = uint64(v)
 		}
-	//case types.T_uint8:
-	//	col := data.Col.([]uint8)
-	//	for i, v := range col {
-	//		us[i] = uint64(v)
-	//	}
-	//case types.T_uint16:
-	//	col := data.Col.([]uint16)
-	//	for i, v := range col {
-	//		us[i] = uint64(v)
-	//	}
 	case types.T_uint32:
-		col := data.Col.([]uint32)
+		col := vector.MustTCols[uint32](data)
 		for i, v := range col {
 			us[i] = uint64(v)
 		}
 	case types.T_uint64:
-		copy(us, data.Col.([]uint64))
+		copy(us, vector.MustTCols[uint64](data))
 	case types.T_float32:
-		col := data.Col.([]float32)
+		col := vector.MustTCols[float32](data)
 		for i, v := range col {
 			us[i] = uint64(v)
 		}
 	case types.T_float64:
-		col := data.Col.([]float64)
+		col := vector.MustTCols[float64](data)
 		for i, v := range col {
 			us[i] = uint64(v)
 		}
 	case types.T_decimal64:
-		col := data.Col.([]types.Decimal64)
+		col := vector.MustTCols[types.Decimal64](data)
 		for i, v := range col {
 			us[i] = types.DecodeUint64(types.EncodeDecimal64(&v))
 		}
 	case types.T_date:
-		col := data.Col.([]types.Date)
+		col := vector.MustTCols[types.Date](data)
 		for i, v := range col {
 			us[i] = uint64(v)
 		}
 	case types.T_datetime:
-		col := data.Col.([]types.Datetime)
+		col := vector.MustTCols[types.Datetime](data)
 		for i, v := range col {
 			us[i] = uint64(v)
 		}
 	case types.T_timestamp:
-		col := data.Col.([]types.Timestamp)
+		col := vector.MustTCols[types.Timestamp](data)
 		for i, v := range col {
 			us[i] = uint64(v)
 		}
@@ -218,7 +206,7 @@ func (d *Dict) encodeVarData(data *vector.Vector) [][]byte {
 	return vector.GetBytesVectorValues(data)
 }
 
-func (d *Dict) findFixedData(pos uint64) *vector.Vector {
+func (d *Dict) findFixedData(pos int) *vector.Vector {
 	v := vector.NewConst(d.typ, 1)
 	data := d.getFixedData(pos)
 	switch d.typ.Oid {
@@ -227,48 +215,40 @@ func (d *Dict) findFixedData(pos uint64) *vector.Vector {
 		if data == 1 {
 			val = true
 		}
-		v.Col.([]bool)[0] = val
-	//case types.T_int8:
-	//	v.Col.([]int8)[0] = int8(data)
-	//case types.T_int16:
-	//	v.Col.([]int16)[0] = int16(data)
+		vector.MustTCols[bool](v)[0] = val
 	case types.T_int32:
-		v.Col.([]int32)[0] = int32(data)
+		vector.MustTCols[int32](v)[0] = int32(data)
 	case types.T_int64:
-		v.Col.([]int64)[0] = int64(data)
-	//case types.T_uint8:
-	//	v.Col.([]uint8)[0] = uint8(data)
-	//case types.T_uint16:
-	//	v.Col.([]uint16)[0] = uint16(data)
+		vector.MustTCols[int64](v)[0] = int64(data)
 	case types.T_uint32:
-		v.Col.([]uint32)[0] = uint32(data)
+		vector.MustTCols[uint32](v)[0] = uint32(data)
 	case types.T_uint64:
-		v.Col.([]uint64)[0] = uint64(data)
+		vector.MustTCols[uint64](v)[0] = uint64(data)
 	case types.T_float32:
-		v.Col.([]float32)[0] = float32(data)
+		vector.MustTCols[float32](v)[0] = float32(data)
 	case types.T_float64:
-		v.Col.([]float64)[0] = float64(data)
+		vector.MustTCols[float64](v)[0] = float64(data)
 	case types.T_decimal64:
 		val := types.DecodeDecimal64(types.EncodeUint64(&data))
-		v.Col.([]types.Decimal64)[0] = val
+		vector.MustTCols[types.Decimal64](v)[0] = val
 	case types.T_date:
-		v.Col.([]types.Date)[0] = types.Date(data)
+		vector.MustTCols[types.Date](v)[0] = types.Date(data)
 	case types.T_datetime:
-		v.Col.([]types.Datetime)[0] = types.Datetime(data)
+		vector.MustTCols[types.Datetime](v)[0] = types.Datetime(data)
 	case types.T_timestamp:
-		v.Col.([]types.Timestamp)[0] = types.Timestamp(data)
+		vector.MustTCols[types.Timestamp](v)[0] = types.Timestamp(data)
 	}
 	return v
 }
 
-func (d *Dict) findVarData(pos uint64) *vector.Vector {
+func (d *Dict) findVarData(pos int) *vector.Vector {
 	return vector.NewConstBytes(d.typ, 1, d.getVarData(pos))
 }
 
-func (d *Dict) getFixedData(n uint64) uint64 {
-	return d.unique.Col.([]uint64)[n-1]
+func (d *Dict) getFixedData(n int) uint64 {
+	return vector.MustTCols[uint64](d.unique)[n-1]
 }
 
-func (d *Dict) getVarData(n uint64) []byte {
+func (d *Dict) getVarData(n int) []byte {
 	return d.unique.GetBytes(int64(n - 1))
 }

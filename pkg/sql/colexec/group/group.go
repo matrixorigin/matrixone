@@ -17,9 +17,11 @@ package group
 import (
 	"bytes"
 	"fmt"
+	"math"
 
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/index"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/agg"
@@ -210,6 +212,12 @@ func (ctr *container) processWithGroup(ap *Argument, proc *process.Process, anal
 			}
 		}
 	}()
+
+	if len(ctr.groupVecs) == 1 && !ctr.groupVecs[0].needFree {
+		if ctr.groupVecs[0].vec.IsLowCardinality() {
+			ctr.idx = ctr.groupVecs[0].vec.Index().(*index.LowCardinalityIndex)
+		}
+	}
 	if ctr.bat == nil {
 		size := 0
 		ctr.bat = batch.NewWithSize(len(ap.Exprs))
@@ -240,6 +248,8 @@ func (ctr *container) processWithGroup(ap *Argument, proc *process.Process, anal
 			}
 		}
 		switch {
+		case ctr.idx != nil:
+			ctr.typ = HIndex
 		case size <= 8:
 			ctr.typ = H8
 			if ctr.intHashMap, err = hashmap.NewIntHashMap(true, ap.Ibucket, ap.Nbucket, proc.GetMheap()); err != nil {
@@ -257,8 +267,10 @@ func (ctr *container) processWithGroup(ap *Argument, proc *process.Process, anal
 	switch ctr.typ {
 	case H8:
 		err = ctr.processH8(bat, proc)
-	default:
+	case HStr:
 		err = ctr.processHStr(bat, proc)
+	default:
+		err = ctr.processHIndex(bat, proc)
 	}
 	if err != nil {
 		ctr.clean()
@@ -313,6 +325,51 @@ func (ctr *container) processHStr(bat *batch.Batch, proc *process.Process) error
 		}
 		if err := ctr.batchFill(i, n, bat, vals, rows, proc); err != nil {
 			return err
+		}
+	}
+	return nil
+}
+
+func (ctr *container) processHIndex(bat *batch.Batch, proc *process.Process) error {
+	nulls := make([]int64, 0)
+	sels := make([][]int64, math.MaxUint16+1)
+	poses := vector.MustTCols[uint16](ctr.idx.GetPoses())
+	for k, v := range poses {
+		if v == 0 {
+			nulls = append(nulls, int64(k))
+			continue
+		}
+		bucket := int(v) - 1
+		if len(sels[bucket]) == 0 {
+			sels[bucket] = make([]int64, 0, 64)
+			ctr.bat.Zs = append(ctr.bat.Zs, 0)
+		}
+		sels[bucket] = append(sels[bucket], int64(k))
+		ctr.bat.Zs[bucket] += bat.Zs[k]
+	}
+
+	// TODO: null group?
+	for _, sel := range sels {
+		if len(sel) > 0 {
+			if err := vector.UnionOne(ctr.bat.Vecs[0], ctr.vecs[0], sel[0], proc.GetMheap()); err != nil {
+				return err
+			}
+			for _, ag := range ctr.bat.Aggs {
+				if err := ag.Grows(1, proc.Mp()); err != nil {
+					return err
+				}
+			}
+		}
+	}
+
+	for i, ag := range ctr.bat.Aggs {
+		aggVecs := []*vector.Vector{ctr.aggVecs[i].vec}
+		for j, sel := range sels {
+			for _, ri := range sel {
+				if err := ag.Fill(int64(j), ri, 1, aggVecs); err != nil {
+					return err
+				}
+			}
 		}
 	}
 	return nil

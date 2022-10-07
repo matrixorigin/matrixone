@@ -20,12 +20,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/container/index"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/stretchr/testify/require"
 )
 
@@ -34,7 +34,7 @@ const (
 	benchCardinality = 1024
 
 	benchBuildTargetRows = 2_500
-	benchProbeTargetRows = 1_000_000
+	benchProbeTargetRows = 100_000
 )
 
 var (
@@ -45,12 +45,6 @@ var (
 )
 
 func init() {
-	if benchFlag {
-		initBenchData()
-	}
-}
-
-func initBenchData() {
 	chars := "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*()"
 	charsLen := len(chars)
 
@@ -104,7 +98,7 @@ func initBenchIndex(values []string) (*index.LowCardinalityIndex, error) {
 	var err error
 	m := testutil.NewMheap()
 	v := testutil.NewVector(len(values), types.T_varchar.ToType(), m, false, values)
-	idx, err := index.NewLowCardinalityIndex(v.Typ, m)
+	idx, err := index.New(v.Typ, m)
 	if err != nil {
 		return nil, err
 	}
@@ -115,6 +109,11 @@ func initBenchIndex(values []string) (*index.LowCardinalityIndex, error) {
 }
 
 func TestJoinPerf(t *testing.T) {
+	if !benchFlag {
+		t.Log("benchmark flag is turned off...")
+		return
+	}
+
 	const testCnt = 10
 
 	metricMp := map[string][]int64{

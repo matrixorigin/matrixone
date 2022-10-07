@@ -3,7 +3,7 @@ package index
 import (
 	"errors"
 
-	"github.com/matrixorigin/matrixone/pkg/container/dict"
+	"github.com/matrixorigin/matrixone/pkg/container/index/dict"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
@@ -25,7 +25,7 @@ type LowCardinalityIndex struct {
 	poses *vector.Vector
 }
 
-func NewLowCardinalityIndex(typ types.Type, m *mheap.Mheap) (*LowCardinalityIndex, error) {
+func New(typ types.Type, m *mheap.Mheap) (*LowCardinalityIndex, error) {
 	// TODO: int8, int16, uint8, uint16
 	if typ.Oid == types.T_decimal128 || typ.Oid == types.T_json {
 		return nil, ErrNotSupported
@@ -51,7 +51,7 @@ func (idx *LowCardinalityIndex) GetDict() *dict.Dict {
 	return idx.dict
 }
 
-func (idx *LowCardinalityIndex) Dup() any {
+func (idx *LowCardinalityIndex) Dup() *LowCardinalityIndex {
 	return &LowCardinalityIndex{
 		typ:   idx.typ,
 		m:     idx.m,
@@ -60,28 +60,38 @@ func (idx *LowCardinalityIndex) Dup() any {
 	}
 }
 
+func (idx *LowCardinalityIndex) DupAll() (*LowCardinalityIndex, error) {
+	vec, err := vector.Dup(idx.poses, idx.m)
+	if err != nil {
+		return nil, err
+	}
+	return &LowCardinalityIndex{
+		typ:   idx.typ,
+		m:     idx.m,
+		dict:  idx.dict.Dup(),
+		poses: vec,
+	}, nil
+}
+
 func (idx *LowCardinalityIndex) InsertBatch(data *vector.Vector) error {
-	// TODO: null value
 	ips, err := idx.dict.InsertBatch(data)
 	if err != nil {
 		return err
 	}
-
-	us := make([]uint16, len(ips))
-	for i, ip := range ips {
-		us[i] = uint16(ip)
-	}
-	return vector.AppendFixed(idx.poses, us, idx.m)
+	//if nulls.Any(data.Nsp) {
+	//	for i := 0; i < data.Nsp.Np.Len(); i++ {
+	//		if nulls.Contains(data.Nsp, uint64(i)) {
+	//			// TODO: how to deal with null values?
+	//		}
+	//	}
+	//}
+	return vector.AppendFixed(idx.poses, ips, idx.m)
 }
 
 // Encode uses the dictionary of the current index to encode the original data.
 func (idx *LowCardinalityIndex) Encode(dst, src *vector.Vector) error {
 	poses := idx.dict.FindBatch(src)
-	col := make([]uint16, len(poses))
-	for i, pos := range poses {
-		col[i] = uint16(pos)
-	}
-	return vector.AppendFixed(dst, col, idx.m)
+	return vector.AppendFixed(dst, poses, idx.m)
 }
 
 func (idx *LowCardinalityIndex) Free() {

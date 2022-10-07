@@ -21,11 +21,11 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/index"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
@@ -191,7 +191,7 @@ func newBatch(t *testing.T, flgs []bool, ts []types.Type, proc *process.Process,
 }
 
 func constructIndex(t *testing.T, v *vector.Vector, m *mheap.Mheap) {
-	idx, err := index.NewLowCardinalityIndex(v.Typ, m)
+	idx, err := index.New(v.Typ, m)
 	require.NoError(t, err)
 
 	err = idx.InsertBatch(v)

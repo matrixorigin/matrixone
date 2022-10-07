@@ -20,10 +20,10 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/index"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -151,7 +151,7 @@ func (ctr *container) indexBuild() error {
 	//
 	// sels = [[0, 2, 6, 7], [1, 4], [3, 5]]
 	ctr.sels = make([][]int64, math.MaxUint16+1)
-	poses := ctr.idx.GetPoses().Col.([]uint16)
+	poses := vector.MustTCols[uint16](ctr.idx.GetPoses())
 	for k, v := range poses {
 		bucket := int(v) - 1
 		if len(ctr.sels[bucket]) == 0 {

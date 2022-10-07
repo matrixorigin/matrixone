@@ -40,7 +40,7 @@ func TestEncode(t *testing.T) {
 	enc := vector.New(types.T_uint16.ToType())
 	err = idx.Encode(enc, v1)
 	require.NoError(t, err)
-	col := enc.Col.([]uint16)
+	col := vector.MustTCols[uint16](enc)
 	require.Equal(t, uint16(0), col[0])
 	require.Equal(t, uint16(4), col[1])
 	require.Equal(t, uint16(2), col[2])
@@ -53,5 +53,5 @@ func newTestIndex(typ types.Type) (*LowCardinalityIndex, error) {
 	hm := host.New(1 << 30)
 	gm := guest.New(1<<30, hm)
 	m := mheap.New(gm)
-	return NewLowCardinalityIndex(typ, m)
+	return New(typ, m)
 }

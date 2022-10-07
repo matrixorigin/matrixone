@@ -19,11 +19,11 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/index"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -175,7 +175,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *Argument, proc *process.Proces
 }
 
 func (ctr *container) indexProbe(ap *Argument, bat, rbat *batch.Batch, mSels [][]int64, proc *process.Process) error {
-	col := ctr.vecs[0].Col.([]uint16)
+	col := vector.MustTCols[uint16](ctr.vecs[0])
 	for i, v := range col {
 		if v == 0 {
 			continue
@@ -187,7 +187,7 @@ func (ctr *container) indexProbe(ap *Argument, bat, rbat *batch.Batch, mSels [][
 				if err != nil {
 					return err
 				}
-				bs := vec.Col.([]bool)
+				bs := vector.MustTCols[bool](vec)
 				if !bs[0] {
 					vec.Free(proc.Mp())
 					continue
@@ -259,10 +259,7 @@ func (ctr *container) freeJoinCondition(proc *process.Process) {
 
 func (ctr *container) dictEncoding(m *mheap.Mheap) (bool, error) {
 	// find out whether hashbuild is built by low cardinality index
-	if ctr.mp.Index() == nil {
-		return false, nil
-	}
-	idx := ctr.mp.Index().(*index.LowCardinalityIndex)
+	idx := ctr.mp.Index()
 	if idx == nil {
 		return false, nil
 	}
@@ -278,10 +275,10 @@ func (ctr *container) dictEncoding(m *mheap.Mheap) (bool, error) {
 		// leftIdx.dict = ["c"->1, "d"->2, "b"->3, "a"->4]
 		// => fixed map = [3, 0, 2, 1]
 		fixedMap := idx.GetDict().FindBatch(leftIdx.GetDict().GetUnique())
-		poses := leftIdx.GetPoses().Col.([]uint16)
+		poses := vector.MustTCols[uint16](leftIdx.GetPoses())
 		col := make([]uint16, len(poses))
 		for i, pos := range poses {
-			col[i] = uint16(fixedMap[pos-1])
+			col[i] = fixedMap[pos-1]
 		}
 		if err := vector.AppendFixed(encoded, col, m); err != nil {
 			encoded.Free(m)
@@ -312,7 +309,7 @@ func populateIndex(result, selected *vector.Vector, row int64, m *mheap.Mheap) e
 
 	idx := selected.Index().(*index.LowCardinalityIndex)
 	if result.Index() == nil {
-		result.SetIndex(idx.Dup().(*index.LowCardinalityIndex))
+		result.SetIndex(idx.Dup())
 	}
 
 	dst := result.Index().(*index.LowCardinalityIndex).GetPoses()

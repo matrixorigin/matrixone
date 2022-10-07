@@ -20,6 +20,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/index"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -27,7 +28,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/index"
 	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
@@ -131,16 +131,13 @@ func TestLowCardinalityJoin(t *testing.T) {
 	rbat := probeWithBatches(t, tc, testutil.NewBatchWithVectors([]*vector.Vector{v1}, nil), bat)
 
 	result := rbat.Vecs[0]
-	t.Log(vector.GetStrVectorValues(result))
-
 	require.NotNil(t, result.Index())
 	resultIdx := result.Index().(*index.LowCardinalityIndex)
 	require.Equal(
 		t,
 		[]uint16{3, 3, 3, 3, 3, 3, 2, 2, 1, 1, 1, 1, 2, 2, 1, 1, 1, 1, 2, 2},
-		resultIdx.GetPoses().Col.([]uint16),
+		vector.MustTCols[uint16](resultIdx.GetPoses()),
 	)
-	t.Log(resultIdx.GetPoses().Col.([]uint16))
 }
 
 func TestLowCardinalityIndexesJoin(t *testing.T) {
@@ -171,16 +168,13 @@ func TestLowCardinalityIndexesJoin(t *testing.T) {
 	rbat := probeWithBatches(t, tc, testutil.NewBatchWithVectors([]*vector.Vector{v1}, nil), bat)
 
 	result := rbat.Vecs[0]
-	t.Log(vector.GetStrVectorValues(result))
-
 	require.NotNil(t, result.Index())
 	resultIdx := result.Index().(*index.LowCardinalityIndex)
 	require.Equal(
 		t,
 		[]uint16{1, 1, 1, 1, 1, 1, 3, 3, 4, 4, 4, 4, 3, 3, 4, 4, 4, 4, 3, 3},
-		resultIdx.GetPoses().Col.([]uint16),
+		vector.MustTCols[uint16](resultIdx.GetPoses()),
 	)
-	t.Log(resultIdx.GetPoses().Col.([]uint16))
 }
 
 func BenchmarkJoin(b *testing.B) {
@@ -344,7 +338,7 @@ func newBatch(t *testing.T, flgs []bool, ts []types.Type, proc *process.Process,
 }
 
 func constructIndex(t *testing.T, v *vector.Vector, m *mheap.Mheap) {
-	idx, err := index.NewLowCardinalityIndex(v.Typ, m)
+	idx, err := index.New(v.Typ, m)
 	require.NoError(t, err)
 
 	err = idx.InsertBatch(v)
