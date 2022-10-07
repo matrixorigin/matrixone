@@ -51,7 +51,8 @@ func NewTAEHandle(opt *options.Options) *Handle {
 	return h
 }
 func (h *Handle) HandleCommit(meta txn.TxnMeta) (err error) {
-	txn, err := h.eng.GetTxnByID(meta.GetID())
+	var txn moengine.Txn
+	txn, err = h.eng.GetTxnByID(meta.GetID())
 	if err != nil {
 		return err
 	}
@@ -63,7 +64,8 @@ func (h *Handle) HandleCommit(meta txn.TxnMeta) (err error) {
 }
 
 func (h *Handle) HandleRollback(meta txn.TxnMeta) (err error) {
-	txn, err := h.eng.GetTxnByID(meta.GetID())
+	var txn moengine.Txn
+	txn, err = h.eng.GetTxnByID(meta.GetID())
 	if err != nil {
 		return err
 	}
@@ -72,7 +74,8 @@ func (h *Handle) HandleRollback(meta txn.TxnMeta) (err error) {
 }
 
 func (h *Handle) HandleCommitting(meta txn.TxnMeta) (err error) {
-	txn, err := h.eng.GetTxnByID(meta.GetID())
+	var txn moengine.Txn
+	txn, err = h.eng.GetTxnByID(meta.GetID())
 	if err != nil {
 		return err
 	}
@@ -82,7 +85,8 @@ func (h *Handle) HandleCommitting(meta txn.TxnMeta) (err error) {
 }
 
 func (h *Handle) HandlePrepare(meta txn.TxnMeta) (pts timestamp.Timestamp, err error) {
-	txn, err := h.eng.GetTxnByID(meta.GetID())
+	var txn moengine.Txn
+	txn, err = h.eng.GetTxnByID(meta.GetID())
 	if err != nil {
 		return timestamp.Timestamp{}, err
 	}
@@ -91,21 +95,24 @@ func (h *Handle) HandlePrepare(meta txn.TxnMeta) (pts timestamp.Timestamp, err e
 		participants = append(participants, shard.GetShardID())
 	}
 	txn.SetParticipants(participants)
-	ts, err := txn.Prepare()
+	var ts types.TS
+	ts, err = txn.Prepare()
 	pts = ts.ToTimestamp()
 	return
 }
 
 func (h *Handle) HandleStartRecovery(ch chan txn.TxnMeta) {
-	panic(moerr.NewNYI("HandleStartRecovery is not implemented yet"))
+	//panic(moerr.NewNYI("HandleStartRecovery is not implemented yet"))
+	//TODO:: TAE replay
+	close(ch)
 }
 
 func (h *Handle) HandleClose() (err error) {
-	panic(moerr.NewNYI("HandleClose is not implemented yet"))
+	return h.eng.Close()
 }
 
 func (h *Handle) HandleDestroy() (err error) {
-	panic(moerr.NewNYI("HandleDestroy is not implemented yet"))
+	return h.eng.Destroy()
 }
 
 func (h *Handle) HandleGetLogTail(

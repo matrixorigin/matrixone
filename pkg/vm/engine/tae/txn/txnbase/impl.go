@@ -120,7 +120,7 @@ func (txn *Txn) commit2PC() (err error) {
 			panic(err)
 		}
 		txn.DoneWithErr(nil, false)
-		//Append committed log entry into log service asynchronously
+		//Append a committed log entry into log service asynchronously
 		//     for checkpointing the committing log entry
 		_, err = txn.LogTxnState(false)
 		if err != nil {
@@ -184,7 +184,6 @@ func (txn *Txn) done2PCWithErr(err error, isAbort bool) {
 	} else {
 		switch txn.State {
 		case txnif.TxnStateRollbacking:
-			// TODO::need to take 2PC account into.
 			if err = txn.ToRollbackedLocked(); err != nil {
 				panic(err)
 			}

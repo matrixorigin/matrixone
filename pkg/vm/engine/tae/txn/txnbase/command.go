@@ -158,6 +158,7 @@ func NewTxnStateCmd(id string, state txnif.TxnState, cts types.TS) *TxnStateCmd 
 func NewTxnCmd() *TxnCmd {
 	return &TxnCmd{
 		ComposedCmd: NewComposedCmd(),
+		TxnCtx:      &TxnCtx{},
 	}
 }
 
@@ -232,6 +233,9 @@ func (c *TxnStateCmd) Close() {
 
 func (c *TxnCmd) SetTxn(txn txnif.AsyncTxn) {
 	c.Txn = txn
+	c.ID = txn.GetID()
+	c.PrepareTS = txn.GetPrepareTS()
+	c.Participants = txn.GetParticipants()
 }
 func (c *TxnCmd) WriteTo(w io.Writer) (n int64, err error) {
 	if err = binary.Write(w, binary.BigEndian, c.GetType()); err != nil {
@@ -244,7 +248,7 @@ func (c *TxnCmd) WriteTo(w io.Writer) (n int64, err error) {
 		return
 	}
 	n += sn
-	if sn, err = common.WriteString(c.Txn.GetID(), w); err != nil {
+	if sn, err = common.WriteString(c.ID, w); err != nil {
 		return
 	}
 	n += sn

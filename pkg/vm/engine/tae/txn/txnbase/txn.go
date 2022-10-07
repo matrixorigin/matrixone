@@ -125,6 +125,11 @@ func (txn *Txn) SetApplyRollbackFn(fn func(txnif.AsyncTxn) error)   { txn.ApplyR
 //  2. For a 2pc transaction, Rollback message may arrive before Prepare message,
 //     should handle this case by TxnStorage?
 func (txn *Txn) Prepare() (pts types.TS, err error) {
+	if txn.Mgr.GetTxn(txn.GetID()) == nil {
+		logutil.Warn("tae : txn is not found in TxnManager")
+		//txn.Err = ErrTxnNotFound
+		return types.TS{}, moerr.NewTxnNotFound()
+	}
 	state := txn.GetTxnState(false)
 	if state != txnif.TxnStateActive {
 		logutil.Warnf("unexpected txn status : %s", txnif.TxnStrState(state))
@@ -153,18 +158,15 @@ func (txn *Txn) Prepare() (pts types.TS, err error) {
 }
 
 // Rollback is used to roll back a 1PC or 2PC transaction.
-// rollback's idempotent is handled here, Although Prepare/Commit/Committing message's idempotent
-// is handled by the transaction framework.
-// Notice that there may be a such scenario in which a 2PC distributed transaction in ACTIVE will be rollbacked,
-// since Rollback message may arrive before the Prepare message. Should handle this case by TxnStorage?
+// Notice that there may be a such scenario in which a 2PC distributed transaction in ACTIVE
+// will be rollbacked, since Rollback message may arrive before the Prepare message.
 func (txn *Txn) Rollback() (err error) {
-	//TODO:idempotent for rollback should be guaranteed by TxnStoage?
+	//idempotent check
 	if txn.Mgr.GetTxn(txn.GetID()) == nil {
 		logutil.Warnf("tae : txn %s is not found in TxnManager", txn.GetID())
 		err = moerr.NewTxnNotFound()
 		return
 	}
-
 	if txn.Store.IsReadonly() {
 		err = txn.Mgr.DeleteTxn(txn.GetID())
 		return
@@ -181,6 +183,10 @@ func (txn *Txn) Rollback() (err error) {
 // Notice that txn must commit successfully once committing message arrives, since Preparing
 // had already succeeded.
 func (txn *Txn) Committing() (err error) {
+	if txn.Mgr.GetTxn(txn.GetID()) == nil {
+		err = moerr.NewTxnNotFound()
+		return
+	}
 	state := txn.GetTxnState(false)
 	if state != txnif.TxnStatePrepared {
 		return moerr.NewInternalError(
@@ -191,7 +197,7 @@ func (txn *Txn) Committing() (err error) {
 	if err = txn.ToCommittingFinished(); err != nil {
 		panic(err)
 	}
-	//Make a log entry, flush and wait it synced.
+	//Make a committing log entry, flush and wait it synced.
 	//A log entry's payload contains txn id , commit timestamp and txn's state.
 	_, err = txn.LogTxnState(true)
 	if err != nil {
@@ -209,7 +215,6 @@ func (txn *Txn) Commit() (err error) {
 		err = moerr.NewTxnNotFound()
 		return
 	}
-
 	// Skip readonly txn
 	if txn.Store.IsReadonly() {
 		txn.Mgr.DeleteTxn(txn.GetID())
@@ -278,7 +283,6 @@ func (txn *Txn) ApplyCommit() (err error) {
 	return
 }
 
-// TODO::set the state of mvcc node to Aborted,no matter what txn is 1PC or 2PC
 func (txn *Txn) ApplyRollback() (err error) {
 	defer func() {
 		txn.LSN = txn.Store.GetLSN()

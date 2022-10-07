@@ -370,7 +370,7 @@ func (mgr *TxnManager) dequeuePreparing(items ...any) {
 
 		//Before this moment, all mvcc nodes of a txn has been pushed into the MVCCHandle.
 		//1. Allocate a timestamp , set it to txn's prepare timestamp and commit timestamp,
-		//   which would be changed if txn is 2PC.
+		//   which would be changed in the future if txn is 2PC.
 		//2. Set transaction's state to Preparing or Rollbacking if op.Op is OpRollback.
 		ts := mgr.onBindPrepareTimeStamp(op)
 
@@ -396,7 +396,7 @@ func (mgr *TxnManager) dequeuePrepared(items ...any) {
 	now := time.Now()
 	for _, item := range items {
 		op := item.(*OpTxn)
-
+		//Notice that WaitPrepared do nothing when op is OpRollback
 		if err = op.Txn.WaitPrepared(); err != nil {
 			// v0.6 TODO: Error handling
 			panic(err)

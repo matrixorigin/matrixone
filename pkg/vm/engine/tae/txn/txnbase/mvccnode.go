@@ -296,15 +296,15 @@ func (un *TxnMVCCNode) WriteTo(w io.Writer) (n int64, err error) {
 	if err = binary.Write(w, binary.BigEndian, un.Start); err != nil {
 		return
 	}
-	n += 12
+	n += types.TxnTsSize
 	if err = binary.Write(w, binary.BigEndian, un.Prepare); err != nil {
 		return
 	}
-	n += 12
+	n += types.TxnTsSize
 	if err = binary.Write(w, binary.BigEndian, un.End); err != nil {
 		return
 	}
-	n += 12
+	n += types.TxnTsSize
 	var sn int64
 	logIndex := un.LogIndex
 	if logIndex == nil {
@@ -330,15 +330,15 @@ func (un *TxnMVCCNode) ReadFrom(r io.Reader) (n int64, err error) {
 	if err = binary.Read(r, binary.BigEndian, &un.Start); err != nil {
 		return
 	}
-	n += 12
+	n += types.TxnTsSize
 	if err = binary.Read(r, binary.BigEndian, &un.Prepare); err != nil {
 		return
 	}
-	n += 12
+	n += types.TxnTsSize
 	if err = binary.Read(r, binary.BigEndian, &un.End); err != nil {
 		return
 	}
-	n += 12
+	n += types.TxnTsSize
 
 	var sn int64
 	un.LogIndex = &store.Index{}

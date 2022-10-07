@@ -46,6 +46,7 @@ type TxnReader interface {
 	GetStartTS() types.TS
 	GetCommitTS() types.TS
 	GetPrepareTS() types.TS
+	GetParticipants() []uint64
 	GetInfo() []byte
 	IsVisible(o TxnReader) bool
 	GetTxnState(waitIfcommitting bool) TxnState

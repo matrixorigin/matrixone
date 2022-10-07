@@ -97,6 +97,12 @@ func (ctx *TxnCtx) SetCommitTS(cts types.TS) (err error) {
 	return
 }
 
+func (ctx *TxnCtx) GetParticipants() []uint64 {
+	ctx.RLock()
+	defer ctx.RUnlock()
+	return ctx.Participants
+}
+
 func (ctx *TxnCtx) SetParticipants(ids []uint64) (err error) {
 	ctx.RLock()
 	defer ctx.RUnlock()
@@ -238,7 +244,6 @@ func (ctx *TxnCtx) ToRollbackingLocked(ts types.TS) error {
 	return nil
 }
 
-// TODO::need to take 2PC account into.
 func (ctx *TxnCtx) ToRollbackedLocked() error {
 	if ctx.Is2PC() {
 		if ctx.State != txnif.TxnStatePrepared &&
