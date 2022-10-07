@@ -111,7 +111,13 @@ func (node *appendableNode) getPersistedColumnData(
 	if err != nil {
 		return
 	}
-	return node.getColumnDataWithVector(minRow, maxRow, colIdx, buffer, data)
+	if maxRow-minRow == uint32(data.Length()) {
+		vec = data
+	} else {
+		vec = data.CloneWindow(int(minRow), int(maxRow-minRow), containers.DefaultAllocator)
+		data.Close()
+	}
+	return
 }
 
 func (node *appendableNode) getMemoryColumnDataLocked(
@@ -120,22 +126,10 @@ func (node *appendableNode) getMemoryColumnDataLocked(
 	colIdx int,
 	buffer *bytes.Buffer,
 ) (vec containers.Vector, err error) {
-	return node.getColumnDataWithVector(minRow, maxRow, colIdx, buffer, node.data.Vecs[colIdx])
-}
-
-func (node *appendableNode) getColumnDataWithVector(
-	minRow,
-	maxRow uint32,
-	colIdx int,
-	buffer *bytes.Buffer,
-	data containers.Vector,
-) (vec containers.Vector, err error) {
+	data := node.data.Vecs[colIdx]
 	if buffer != nil {
-		win := data
-		if maxRow < uint32(data.Length()) {
-			win = win.Window(int(minRow), int(maxRow))
-		}
-		vec = containers.CloneWithBuffer(win, buffer, containers.DefaultAllocator)
+		data = data.Window(int(minRow), int(maxRow))
+		vec = containers.CloneWithBuffer(data, buffer, containers.DefaultAllocator)
 	} else {
 		vec = data.CloneWindow(int(minRow), int(maxRow-minRow), containers.DefaultAllocator)
 	}
