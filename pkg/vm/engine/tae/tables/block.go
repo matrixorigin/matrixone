@@ -521,12 +521,7 @@ func (blk *dataBlock) ResolveColumnFromANode(
 		visible bool
 	)
 	blk.mvcc.RLock()
-	if ts.GreaterEq(blk.GetMaxVisibleTS()) && blk.mvcc.AppendCommitted() {
-		visible = true
-		maxRow = blk.node.rows
-	} else {
-		maxRow, visible, err = blk.mvcc.GetMaxVisibleRowLocked(ts)
-	}
+	maxRow, visible, holes, err := blk.mvcc.GetVisibleRowLocked(ts)
 	blk.mvcc.RUnlock()
 	if !visible || err != nil {
 		return
@@ -547,6 +542,13 @@ func (blk *dataBlock) ResolveColumnFromANode(
 	blk.mvcc.RUnlock()
 	if err != nil {
 		return
+	}
+	if holes != nil {
+		if view.DeleteMask != nil {
+			view.DeleteMask.Or(holes)
+		} else {
+			view.DeleteMask = holes
+		}
 	}
 
 	err = view.Eval(true)

@@ -241,12 +241,8 @@ func (n *MVCCHandle) DeleteAppendNodeLocked(node *AppendNode) {
 }
 
 func (n *MVCCHandle) IsVisibleLocked(row uint32, ts types.TS) (bool, error) {
-	maxRow, visible, err := n.GetMaxVisibleRowLocked(ts)
-	if !visible || err != nil {
-		return visible, err
-	}
-	visible = maxRow >= row
-	return visible, err
+	an := n.GetAppendNodeByRow(row)
+	return an.IsVisible(ts), nil
 }
 
 func (n *MVCCHandle) IsDeletedLocked(row uint32, ts types.TS, rwlocker *sync.RWMutex) (bool, error) {
@@ -275,6 +271,24 @@ func (n *MVCCHandle) GetMaxVisibleRowLocked(ts types.TS) (row uint32, visible bo
 		}
 	}
 	_, row, visible, err = n.getMaxVisibleRowLocked(ts)
+	return
+}
+
+func (n *MVCCHandle) GetVisibleRowLocked(ts types.TS) (maxrow uint32, visible bool, holes *roaring.Bitmap, err error) {
+	maxrow, visible, err = n.GetMaxVisibleRowLocked(ts)
+	if err != nil || !visible {
+		return
+	}
+	n.appends.ForEach(func(un txnif.MVCCNode) bool {
+		an := un.(*AppendNode)
+		if !an.IsVisible(ts) {
+			if holes == nil {
+				holes = roaring.NewBitmap()
+			}
+			holes.AddRange(uint64(an.startRow), uint64(an.maxRow))
+		}
+		return an.maxRow < maxrow
+	})
 	return
 }
 
