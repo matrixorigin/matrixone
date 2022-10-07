@@ -1192,9 +1192,11 @@ const (
 
 // multiItem is the item for the multi entry
 type multiItem struct {
-	pt    PrivilegeType
-	role  *tree.Role
-	users []*tree.User
+	pt        PrivilegeType
+	role      *tree.Role
+	users     []*tree.User
+	dbName    string
+	tableName string
 }
 
 // multiEntry is the entry for the privilege entry type multi
@@ -2757,14 +2759,14 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 			typs = append(typs, PrivilegeTypeAccountAll /*, PrivilegeTypeAccountOwnership*/)
 			me1 := &multiEntry{
 				privs: []multiItem{
-					{PrivilegeTypeCreateUser, nil, nil},
-					{PrivilegeTypeManageGrants, nil, nil},
+					{PrivilegeTypeCreateUser, nil, nil, "", ""},
+					{PrivilegeTypeManageGrants, nil, nil, "", ""},
 				},
 			}
 			me2 := &multiEntry{
 				privs: []multiItem{
-					{PrivilegeTypeCreateUser, nil, nil},
-					{PrivilegeTypeRoleWGO, st.Role, st.Users},
+					{PrivilegeTypeCreateUser, nil, nil, "", ""},
+					{PrivilegeTypeRoleWGO, st.Role, st.Users, "", ""},
 				},
 			}
 
@@ -2980,17 +2982,23 @@ func convertPrivilegeTipsToPrivilege(priv *privilege, arr privilegeTipsArray) {
 
 	dedup := make(map[pair]int8)
 
+	//multi privileges take effect together
 	entries := make([]privilegeEntry, 0, len(arr))
+	multiPrivs := make([]multiItem, 0, len(arr))
 	for _, tips := range arr {
-		e := privilegeEntriesMap[tips.typ]
-		e.databaseName = tips.databaseName
-		e.tableName = tips.tableName
-		entries = append(entries, e)
+		multiPrivs = append(multiPrivs, multiItem{
+			pt:        tips.typ,
+			dbName:    tips.databaseName,
+			tableName: tips.tableName,
+		})
 
 		dedup[pair{tips.databaseName, tips.tableName}] = 1
 	}
 
-	//predefined privilege : tableAll, ownership
+	me := &multiEntry{multiPrivs}
+	entries = append(entries, privilegeEntry{peTyp: privilegeEntryTypeMulti, mEntry: me})
+
+	//optional predefined privilege : tableAll, ownership
 	predefined := []PrivilegeType{PrivilegeTypeTableAll, PrivilegeTypeTableOwnership}
 	for _, p := range predefined {
 		for par := range dedup {
@@ -3172,8 +3180,8 @@ func determineRoleSetHasPrivilegeSet(ctx context.Context, bh BackgroundExec, ses
 							}
 						} else {
 							tempEntry := privilegeEntriesMap[mi.pt]
-							tempEntry.databaseName = entry.databaseName
-							tempEntry.tableName = entry.tableName
+							tempEntry.databaseName = mi.dbName
+							tempEntry.tableName = mi.tableName
 							tempEntry.peTyp = privilegeEntryTypeGeneral
 							tempEntry.mEntry = nil
 							pls, err = getPrivilegeLevelsOfObjectType(tempEntry.objType)

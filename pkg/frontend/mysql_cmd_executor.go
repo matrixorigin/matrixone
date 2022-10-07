@@ -1633,11 +1633,6 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 
 		newPlan := plan2.DeepCopyPlan(prepareStmt.PreparePlan.GetDcl().GetPrepare().Plan)
 
-		//check privilege
-		err = authenticatePrivilegeOfPrepareOrExecute(requestCtx, cwft.ses, prepareStmt.PrepareStmt, prepareStmt.PreparePlan.GetDcl().GetPrepare().GetPlan())
-		if err != nil {
-			return nil, err
-		}
 		// replace ? and @var with their values
 		resetParamRule := plan2.NewResetParamRefRule(executePlan.Args)
 		resetVarRule := plan2.NewResetVarRefRule(cwft.ses.GetTxnCompilerContext())
@@ -1650,6 +1645,12 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 		// reset plan & stmt
 		cwft.stmt = prepareStmt.PrepareStmt
 		cwft.plan = newPlan
+
+		//check privilege
+		err = authenticatePrivilegeOfPrepareOrExecute(requestCtx, cwft.ses, prepareStmt.PrepareStmt, newPlan)
+		if err != nil {
+			return nil, err
+		}
 	} else {
 		// replace @var with their values
 		resetVarRule := plan2.NewResetVarRefRule(cwft.ses.GetTxnCompilerContext())
