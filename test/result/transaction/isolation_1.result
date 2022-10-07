@@ -215,7 +215,7 @@ c	d
 50	50
 commit;
 commit;
-tae data: duplicate
+w-w conflict
 select * from test_11;
 c	d
 1	1
@@ -333,7 +333,7 @@ c	d
 Insert into test_11 values(100,50);
 commit;
 commit;
-tae data: duplicate
+w-w conflict
 select * from test_11;
 c	d
 1	1
@@ -458,7 +458,7 @@ c	d
 update test_11 set c = 100 where d = 50;
 commit;
 commit;
-tae data: duplicate
+w-w conflict
 select * from test_11;
 c	d
 1	1

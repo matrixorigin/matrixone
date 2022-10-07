@@ -38,7 +38,8 @@ const (
 	PhyAddrColumnComment = "Physical address"
 	SortKeyNamePrefx     = "_SORT_"
 
-	AttrCommitTs = "commit_ts"
+	AttrRowID    = "__rowid"
+	AttrCommitTs = "commit_time"
 	AttrAborted  = "aborted"
 
 	TenantSysID              = uint32(0)

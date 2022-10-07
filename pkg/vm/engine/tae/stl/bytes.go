@@ -16,72 +16,108 @@ package stl
 
 import (
 	"unsafe"
+
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
-func NewBytes() *Bytes {
+func NewFixedTypeBytes[T any]() *Bytes {
+	return NewBytesWithTypeSize(Sizeof[T]())
+}
+
+func NewBytesWithTypeSize(sz int) *Bytes {
 	return &Bytes{
-		Data:   make([]byte, 0),
-		Length: make([]uint32, 0),
-		Offset: make([]uint32, 0),
+		TypeSize: sz,
 	}
 }
 
-func (bs *Bytes) Get(i int) []byte {
-	if len(bs.Length) == 0 {
-		return []byte{}
-	}
-	return bs.Data[bs.Offset[i] : bs.Offset[i]+bs.Length[i]]
+func (bs *Bytes) IsFixedType() bool { return bs.TypeSize > 0 }
+func (bs *Bytes) IsWindow() bool    { return bs.AsWindow }
+
+func (bs *Bytes) ToWindow(offset, length int) {
+	bs.AsWindow = true
+	bs.WinOffset = offset
+	bs.WinLength = length
 }
 
-func (bs *Bytes) Append(v []byte) {
-	off := len(bs.Data)
-	bs.Data = append(bs.Data, v...)
-	bs.Length = append(bs.Length, uint32(len(v)))
-	bs.Offset = append(bs.Offset, uint32(off))
+func (bs *Bytes) Size() int {
+	return bs.StorageSize() + bs.HeaderSize()
+}
+
+func (bs *Bytes) Length() int {
+	if bs.IsFixedType() {
+		return len(bs.Storage) / bs.TypeSize
+	}
+	return len(bs.Header)
+}
+
+func (bs *Bytes) StorageSize() int {
+	return len(bs.Storage)
+}
+
+func (bs *Bytes) StorageBuf() []byte {
+	return bs.Storage
+}
+
+func (bs *Bytes) HeaderSize() int {
+	return len(bs.Header) * types.VarlenaSize
+}
+
+func (bs *Bytes) getStart(offset int) int {
+	if !bs.IsWindow() {
+		return offset
+	}
+	return offset + bs.WinOffset
+}
+func (bs *Bytes) HeaderBuf() (buf []byte) {
+	if len(bs.Header) == 0 {
+		return
+	}
+	buf = unsafe.Slice((*byte)(unsafe.Pointer(&bs.Header[0])), bs.HeaderSize())
+	return
+}
+
+func (bs *Bytes) SetHeaderBuf(buf []byte) {
+	if len(buf) == 0 {
+		return
+	}
+	bs.Header = unsafe.Slice((*types.Varlena)(unsafe.Pointer(&buf[0])), len(buf)/Sizeof[types.Varlena]())
+}
+
+func (bs *Bytes) SetStorageBuf(buf []byte) {
+	bs.Storage = buf
+}
+
+func (bs *Bytes) GetVarValueAt(i int) []byte {
+	pos := bs.getStart(i)
+	val := bs.Header[pos]
+	if val.IsSmall() {
+		return val.ByteSlice()
+	}
+	offset, length := val.OffsetLen()
+	return bs.Storage[offset : offset+length]
 }
 
 func (bs *Bytes) Window(offset, length int) *Bytes {
-	win := NewBytes()
-	if len(bs.Length) == 0 || length == 0 {
-		return win
+	if bs.IsFixedType() {
+		return bs.fixSizeWindow(offset, length)
 	}
-	win.Offset = bs.Offset[offset : offset+length]
-	win.Length = bs.Length[offset : offset+length]
-	win.Data = bs.Data
-	return win
+	nbs := NewBytesWithTypeSize(bs.TypeSize)
+	nbs.AsWindow = true
+	nbs.Storage = bs.Storage
+	nbs.Header = bs.Header
+	if bs.IsWindow() {
+		nbs.WinOffset += offset
+		nbs.WinLength = length
+	} else {
+		nbs.WinOffset = offset
+		nbs.WinLength = length
+	}
+
+	return nbs
 }
 
-func (bs *Bytes) DataSize() int   { return len(bs.Data) }
-func (bs *Bytes) LengthSize() int { return len(bs.Length) }
-func (bs *Bytes) OffSetSize() int { return len(bs.Offset) }
-
-func (bs *Bytes) DataBuf() (buf []byte) { return bs.Data }
-func (bs *Bytes) LengthBuf() (buf []byte) {
-	if len(bs.Length) == 0 {
-		return
-	}
-	buf = unsafe.Slice((*byte)(unsafe.Pointer(&bs.Length[0])), len(bs.Length)*Sizeof[uint32]())
-	return
-}
-
-func (bs *Bytes) OffsetBuf() (buf []byte) {
-	if len(bs.Offset) == 0 {
-		return
-	}
-	buf = unsafe.Slice((*byte)(unsafe.Pointer(&bs.Offset[0])), len(bs.Offset)*Sizeof[uint32]())
-	return
-}
-
-func (bs *Bytes) SetLengthBuf(buf []byte) {
-	if len(buf) == 0 {
-		return
-	}
-	bs.Length = unsafe.Slice((*uint32)(unsafe.Pointer(&buf[0])), len(buf)/Sizeof[uint32]())
-}
-
-func (bs *Bytes) SetOffsetBuf(buf []byte) {
-	if len(buf) == 0 {
-		return
-	}
-	bs.Offset = unsafe.Slice((*uint32)(unsafe.Pointer(&buf[0])), len(buf)/Sizeof[uint32]())
+func (bs *Bytes) fixSizeWindow(offset, length int) *Bytes {
+	nbs := NewBytesWithTypeSize(bs.TypeSize)
+	nbs.Storage = bs.Storage[offset*bs.TypeSize : (offset+length)*bs.TypeSize]
+	return nbs
 }

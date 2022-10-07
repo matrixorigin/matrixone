@@ -23,7 +23,6 @@ import (
 	"github.com/RoaringBitmap/roaring/roaring64"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/stl"
 )
 
 type windowBase struct {
@@ -140,9 +139,6 @@ func (win *vectorWindow[T]) Data() []byte {
 func (win *vectorWindow[T]) Get(i int) (v any) {
 	return win.ref.Get(i + win.offset)
 }
-func (win *vectorWindow[T]) GetCopy(i int) (v any) {
-	return win.ref.GetCopy(i + win.offset)
-}
 
 func (win *vectorWindow[T]) Nullable() bool { return win.ref.Nullable() }
 func (win *vectorWindow[T]) HasNull() bool  { return win.ref.HasNull() }
@@ -163,8 +159,7 @@ func (win *vectorWindow[T]) String() string {
 	return s
 }
 func (win *vectorWindow[T]) Slice() any {
-	var v T
-	if _, ok := any(v).([]byte); ok {
+	if win.ref.typ.IsVarlen() {
 		base := win.ref.Slice().(*Bytes)
 		return base.Window(win.offset, win.length)
 	} else {
@@ -172,15 +167,9 @@ func (win *vectorWindow[T]) Slice() any {
 	}
 }
 func (win *vectorWindow[T]) Bytes() *Bytes {
-	var v T
-	if _, ok := any(v).([]byte); ok {
-		base := win.ref.Slice().(*Bytes)
-		return base.Window(win.offset, win.length)
-	} else {
-		bs := win.ref.Bytes()
-		bs.Data = bs.Data[win.offset*stl.Sizeof[T]() : (win.offset+win.length)*stl.Sizeof[T]()]
-		return bs
-	}
+	bs := win.ref.Bytes()
+	bs = bs.Window(win.offset, win.length)
+	return bs
 }
 func (win *vectorWindow[T]) Foreach(op ItOp, sels *roaring.Bitmap) (err error) {
 	return win.ref.impl.forEachWindowWithBias(0, win.length, op, sels, win.offset)

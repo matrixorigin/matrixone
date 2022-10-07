@@ -61,7 +61,7 @@ func (blk *dataBlock) replayMutIndex() error {
 			continue
 		}
 		keysCtx := new(index.KeysCtx)
-		vec, err := blk.node.GetColumnDataCopy(0, blk.node.rows, colDef.Idx, nil)
+		vec, err := blk.node.GetColumnData(0, blk.node.rows, colDef.Idx, nil)
 		if err != nil {
 			return err
 		}
@@ -69,8 +69,7 @@ func (blk *dataBlock) replayMutIndex() error {
 		keysCtx.Keys = vec
 		keysCtx.Count = vec.Length()
 		defer keysCtx.Keys.Close()
-		var zeroV types.TS
-		blk.indexes[colDef.Idx].BatchUpsert(keysCtx, 0, zeroV)
+		blk.indexes[colDef.Idx].BatchUpsert(keysCtx, 0)
 	}
 	return nil
 }
