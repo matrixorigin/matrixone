@@ -283,12 +283,13 @@ func (n *MVCCHandle) GetVisibleRowLocked(ts types.TS) (maxrow uint32, visible bo
 			return true
 		}
 		if an.IsVisible(ts) {
+			visible = true
+			maxrow = an.maxRow
+		} else {
 			if holes == nil {
 				holes = roaring.NewBitmap()
 			}
 			holes.AddRange(uint64(an.startRow), uint64(an.maxRow))
-			visible = true
-			maxrow = an.maxRow
 		}
 		return !an.Prepare.Greater(ts)
 	}, true)
@@ -300,17 +301,20 @@ func (n *MVCCHandle) GetVisibleRowLocked(ts types.TS) (maxrow uint32, visible bo
 			n.RLock()
 		}
 		if an.IsVisible(ts) {
-			if holes == nil {
-				holes = roaring.NewBitmap()
-			}
-			holes.AddRange(uint64(an.startRow), uint64(an.maxRow))
 			visible = true
 			if maxrow < an.maxRow {
 				maxrow = an.maxRow
 			}
+		} else {
+			if holes == nil {
+				holes = roaring.NewBitmap()
+			}
+			holes.AddRange(uint64(an.startRow), uint64(an.maxRow))
 		}
 	}
-	holes.Flip(0, uint64(maxrow))
+	if holes != nil {
+		holes.RemoveRange(uint64(maxrow), uint64(holes.Maximum())+1)
+	}
 	return
 }
 
