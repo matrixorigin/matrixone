@@ -47,7 +47,7 @@ type Relation interface {
 	UpdateByFilter(filter *Filter, col uint16, v any) error
 	DeleteByFilter(filter *Filter) error
 
-	BatchDedup(cols ...containers.Vector) error
+	BatchDedup(col containers.Vector) error
 	Append(data *containers.Batch) error
 
 	GetMeta() any

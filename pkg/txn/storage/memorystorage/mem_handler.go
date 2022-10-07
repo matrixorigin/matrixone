@@ -805,7 +805,7 @@ func (m *MemHandler) HandleGetTableDefs(meta txn.TxnMeta, req memoryengine.GetTa
 		var attrRows []*AttributeRow
 		if err := m.iterRelationAttributes(
 			tx, req.TableID,
-			func(key ID, row *AttributeRow) error {
+			func(_ ID, row *AttributeRow) error {
 				if row.IsHidden {
 					return nil
 				}
@@ -1067,7 +1067,7 @@ func (m *MemHandler) HandleUpdate(meta txn.TxnMeta, req memoryengine.UpdateReq, 
 		req.Batch,
 		func(
 			row *DataRow,
-			rowID types.Rowid,
+			_ types.Rowid,
 		) error {
 			if err := m.data.Update(tx, *row); err != nil {
 				return err
@@ -1092,7 +1092,7 @@ func (m *MemHandler) HandleWrite(meta txn.TxnMeta, req memoryengine.WriteReq, re
 		req.Batch,
 		func(
 			row *DataRow,
-			rowID types.Rowid,
+			_ types.Rowid,
 		) error {
 			if err := m.data.Insert(tx, *row); err != nil {
 				return err

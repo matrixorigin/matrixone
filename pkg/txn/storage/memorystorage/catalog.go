@@ -65,7 +65,12 @@ func (d *DatabaseRow) Indexes() []Tuple {
 
 var _ NamedRow = new(DatabaseRow)
 
-func (d *DatabaseRow) AttrByName(tx *Transaction, name string) (ret Nullable, err error) {
+func (d *DatabaseRow) AttrByName(handler *MemHandler, tx *Transaction, name string) (ret Nullable, err error) {
+	defer func() {
+		if ret.Value != nil {
+			verifyAttr(catalog.MoDatabaseSchema, catalog.MoDatabaseTypes, name, ret.Value)
+		}
+	}()
 	switch name {
 	case catalog.SystemDBAttr_ID:
 		ret.Value = uint64(d.ID)
@@ -88,11 +93,7 @@ func (d *DatabaseRow) AttrByName(tx *Transaction, name string) (ret Nullable, er
 	default:
 		panic(fmt.Sprintf("fixme: %s", name))
 	}
-	verifyAttr(catalog.MoDatabaseSchema, catalog.MoDatabaseTypes, name, ret.Value)
 	return
-}
-
-func (d *DatabaseRow) SetHandler(handler *MemHandler) {
 }
 
 type RelationRow struct {
@@ -104,8 +105,6 @@ type RelationRow struct {
 	Properties   map[string]string
 	PartitionDef string
 	ViewDef      string
-
-	handler *MemHandler
 }
 
 func (r *RelationRow) Key() ID {
@@ -125,7 +124,12 @@ func (r *RelationRow) Indexes() []Tuple {
 
 var _ NamedRow = new(RelationRow)
 
-func (r *RelationRow) AttrByName(tx *Transaction, name string) (ret Nullable, err error) {
+func (r *RelationRow) AttrByName(handler *MemHandler, tx *Transaction, name string) (ret Nullable, err error) {
+	defer func() {
+		if ret.Value != nil {
+			verifyAttr(catalog.MoDatabaseSchema, catalog.MoDatabaseTypes, name, ret.Value)
+		}
+	}()
 	switch name {
 	case catalog.SystemRelAttr_ID:
 		ret.Value = uint64(r.ID)
@@ -133,10 +137,10 @@ func (r *RelationRow) AttrByName(tx *Transaction, name string) (ret Nullable, er
 		ret.Value = r.Name
 	case catalog.SystemRelAttr_DBID:
 		if r.DatabaseID.IsEmpty() {
-			ret.Value = ""
+			ret.Value = uint64(0)
 			return
 		}
-		db, err := r.handler.databases.Get(tx, r.DatabaseID)
+		db, err := handler.databases.Get(tx, r.DatabaseID)
 		if err != nil {
 			return ret, err
 		}
@@ -146,7 +150,7 @@ func (r *RelationRow) AttrByName(tx *Transaction, name string) (ret Nullable, er
 			ret.Value = ""
 			return
 		}
-		db, err := r.handler.databases.Get(tx, r.DatabaseID)
+		db, err := handler.databases.Get(tx, r.DatabaseID)
 		if err != nil {
 			return ret, err
 		}
@@ -174,12 +178,7 @@ func (r *RelationRow) AttrByName(tx *Transaction, name string) (ret Nullable, er
 	default:
 		panic(fmt.Sprintf("fixme: %s", name))
 	}
-	verifyAttr(catalog.MoTablesSchema, catalog.MoTablesTypes, name, ret.Value)
 	return
-}
-
-func (r *RelationRow) SetHandler(handler *MemHandler) {
-	r.handler = handler
 }
 
 type AttributeRow struct {
@@ -188,8 +187,6 @@ type AttributeRow struct {
 	Order      int
 	Nullable   bool
 	engine.Attribute
-
-	handler *MemHandler
 }
 
 func (a *AttributeRow) Key() ID {
@@ -211,7 +208,12 @@ func (a *AttributeRow) Indexes() []Tuple {
 
 var _ NamedRow = new(AttributeRow)
 
-func (a *AttributeRow) AttrByName(tx *Transaction, name string) (ret Nullable, err error) {
+func (a *AttributeRow) AttrByName(handler *MemHandler, tx *Transaction, name string) (ret Nullable, err error) {
+	defer func() {
+		if ret.Value != nil {
+			verifyAttr(catalog.MoDatabaseSchema, catalog.MoDatabaseTypes, name, ret.Value)
+		}
+	}()
 	switch name {
 	case catalog.SystemColAttr_UniqName:
 		ret.Value = a.Name
@@ -220,21 +222,21 @@ func (a *AttributeRow) AttrByName(tx *Transaction, name string) (ret Nullable, e
 	case catalog.SystemColAttr_Name:
 		ret.Value = a.Name
 	case catalog.SystemColAttr_DBID:
-		rel, err := a.handler.relations.Get(tx, a.RelationID)
+		rel, err := handler.relations.Get(tx, a.RelationID)
 		if err != nil {
 			return ret, err
 		}
 		if rel.DatabaseID.IsEmpty() {
-			ret.Value = ""
+			ret.Value = uint64(0)
 			return ret, nil
 		}
-		db, err := a.handler.databases.Get(tx, rel.DatabaseID)
+		db, err := handler.databases.Get(tx, rel.DatabaseID)
 		if err != nil {
 			return ret, err
 		}
 		ret.Value = uint64(db.ID)
 	case catalog.SystemColAttr_DBName:
-		rel, err := a.handler.relations.Get(tx, a.RelationID)
+		rel, err := handler.relations.Get(tx, a.RelationID)
 		if err != nil {
 			return ret, err
 		}
@@ -242,7 +244,7 @@ func (a *AttributeRow) AttrByName(tx *Transaction, name string) (ret Nullable, e
 			ret.Value = ""
 			return ret, nil
 		}
-		db, err := a.handler.databases.Get(tx, rel.DatabaseID)
+		db, err := handler.databases.Get(tx, rel.DatabaseID)
 		if err != nil {
 			return ret, err
 		}
@@ -250,7 +252,7 @@ func (a *AttributeRow) AttrByName(tx *Transaction, name string) (ret Nullable, e
 	case catalog.SystemColAttr_RelID:
 		ret.Value = uint64(a.RelationID)
 	case catalog.SystemColAttr_RelName:
-		rel, err := a.handler.relations.Get(tx, a.RelationID)
+		rel, err := handler.relations.Get(tx, a.RelationID)
 		if err != nil {
 			return ret, err
 		}
@@ -296,12 +298,7 @@ func (a *AttributeRow) AttrByName(tx *Transaction, name string) (ret Nullable, e
 	default:
 		panic(fmt.Sprintf("fixme: %s", name))
 	}
-	verifyAttr(catalog.MoColumnsSchema, catalog.MoColumnsTypes, name, ret.Value)
 	return
-}
-
-func (a *AttributeRow) SetHandler(handler *MemHandler) {
-	a.handler = handler
 }
 
 type IndexRow struct {

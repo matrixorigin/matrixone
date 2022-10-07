@@ -67,18 +67,18 @@ func (bl *batchTxnCommitListener) OnEndPrePrepare(op *OpTxn) {
 }
 
 type TxnStoreFactory = func() txnif.TxnStore
-type TxnFactory = func(*TxnManager, txnif.TxnStore, uint64, types.TS, []byte) txnif.AsyncTxn
+type TxnFactory = func(*TxnManager, txnif.TxnStore, []byte, types.TS, []byte) txnif.AsyncTxn
 
 type TxnManager struct {
 	sync.RWMutex
 	common.ClosedState
 	PreparingSM     sm.StateMachine
-	IDMap           map[uint64]txnif.AsyncTxn
-	IdAlloc         *common.IdAlloctor
+	IDMap           map[string]txnif.AsyncTxn
+	IdAlloc         *common.TxnIDAllocator
 	TsAlloc         *types.TsAlloctor
 	TxnStoreFactory TxnStoreFactory
 	TxnFactory      TxnFactory
-	Active          *btree.Generic[types.TS]
+	Active          *btree.BTreeG[types.TS]
 	Exception       *atomic.Value
 	CommitListener  *batchTxnCommitListener
 }
@@ -88,12 +88,12 @@ func NewTxnManager(txnStoreFactory TxnStoreFactory, txnFactory TxnFactory, clock
 		txnFactory = DefaultTxnFactory
 	}
 	mgr := &TxnManager{
-		IDMap:           make(map[uint64]txnif.AsyncTxn),
-		IdAlloc:         common.NewIdAlloctor(1),
+		IDMap:           make(map[string]txnif.AsyncTxn),
+		IdAlloc:         common.NewTxnIDAllocator(),
 		TsAlloc:         types.NewTsAlloctor(clock),
 		TxnStoreFactory: txnStoreFactory,
 		TxnFactory:      txnFactory,
-		Active: btree.NewGeneric(func(a, b types.TS) bool {
+		Active: btree.NewBTreeG(func(a, b types.TS) bool {
 			return a.Less(b)
 		}),
 		Exception:      new(atomic.Value),
@@ -106,8 +106,7 @@ func NewTxnManager(txnStoreFactory TxnStoreFactory, txnFactory TxnFactory, clock
 	return mgr
 }
 
-func (mgr *TxnManager) Init(prevTxnId uint64, prevTs types.TS) error {
-	mgr.IdAlloc.SetStart(prevTxnId)
+func (mgr *TxnManager) Init(prevTs types.TS) error {
 	mgr.TsAlloc.SetStart(prevTs)
 	logutil.Info("[INIT]", TxnMgrField(mgr))
 	return nil
@@ -125,7 +124,6 @@ func (mgr *TxnManager) StatSafeTS() (ts types.TS) {
 		ts, _ = mgr.Active.Min()
 		ts = ts.Prev()
 	} else {
-		//ts = mgr.TsAlloc.Get()
 		ts = mgr.TsAlloc.Alloc()
 	}
 	mgr.RUnlock()
@@ -139,6 +137,7 @@ func (mgr *TxnManager) StatMaxCommitTS() (ts types.TS) {
 	return
 }
 
+// StartTxn starts a local transaction initiated by DN
 func (mgr *TxnManager) StartTxn(info []byte) (txn txnif.AsyncTxn, err error) {
 	if exp := mgr.Exception.Load(); exp != nil {
 		err = exp.(error)
@@ -153,19 +152,41 @@ func (mgr *TxnManager) StartTxn(info []byte) (txn txnif.AsyncTxn, err error) {
 	store := mgr.TxnStoreFactory()
 	txn = mgr.TxnFactory(mgr, store, txnId, startTs, info)
 	store.BindTxn(txn)
-	mgr.IDMap[txnId] = txn
-	//mgr.ActiveMask.Add(startTs)
+	mgr.IDMap[string(txnId)] = txn
 	mgr.Active.Set(startTs)
 	return
 }
 
-func (mgr *TxnManager) DeleteTxn(id uint64) (err error) {
+// GetOrCreateTxnWithMeta Get or create a txn initiated by CN
+func (mgr *TxnManager) GetOrCreateTxnWithMeta(
+	info []byte,
+	id []byte,
+	ts types.TS) (txn txnif.AsyncTxn, err error) {
+	if exp := mgr.Exception.Load(); exp != nil {
+		err = exp.(error)
+		logutil.Warnf("StartTxn: %v", err)
+		return
+	}
+	mgr.Lock()
+	defer mgr.Unlock()
+	txn, ok := mgr.IDMap[string(id)]
+	if !ok {
+		store := mgr.TxnStoreFactory()
+		txn = mgr.TxnFactory(mgr, store, id, ts, info)
+		store.BindTxn(txn)
+		mgr.IDMap[string(id)] = txn
+		mgr.Active.Set(ts)
+	}
+	return
+}
+
+func (mgr *TxnManager) DeleteTxn(id string) (err error) {
 	mgr.Lock()
 	defer mgr.Unlock()
 	txn := mgr.IDMap[id]
 	if txn == nil {
 		err = moerr.NewTxnNotFound()
-		logutil.Warnf("Txn %d not found", id)
+		logutil.Warnf("Txn %s not found", id)
 		return
 	}
 	delete(mgr.IDMap, id)
@@ -177,7 +198,7 @@ func (mgr *TxnManager) GetTxnByCtx(ctx []byte) txnif.AsyncTxn {
 	return mgr.GetTxn(IDCtxToID(ctx))
 }
 
-func (mgr *TxnManager) GetTxn(id uint64) txnif.AsyncTxn {
+func (mgr *TxnManager) GetTxn(id string) txnif.AsyncTxn {
 	mgr.RLock()
 	defer mgr.RUnlock()
 	return mgr.IDMap[id]

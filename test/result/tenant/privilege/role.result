@@ -38,7 +38,7 @@ grant show databases on account * to role_r1;
 grant connect on account * to role_r1;
 grant all on account * to role_r1;
 grant ownership on account * to role_r1;
-internal error: the privilege "ownership" can not be granted
+internal error: the object type "account" do not support the privilege "ownership"
 grant show tables on database * to role_r1;
 grant show tables on database *.* to role_r1;
 grant show tables on database d to role_r1;
@@ -64,7 +64,6 @@ grant all on database * to role_r1;
 grant all on database *.* to role_r1;
 grant all on database d to role_r1;
 grant ownership on database * to role_r1;
-internal error: the privilege "ownership" can not be granted
 grant select on table * to role_r1;
 grant select on table *.* to role_r1;
 grant select on table d.* to role_r1;
@@ -96,7 +95,6 @@ grant all on table d.* to role_r1;
 grant all on table d.t to role_r1;
 grant all on table t to role_r1;
 grant ownership on table * to role_r1;
-internal error: the privilege "ownership" can not be granted
 grant execute on table * to role_r1;
 grant execute on table *.* to role_r1;
 grant execute on table d.* to role_r1;

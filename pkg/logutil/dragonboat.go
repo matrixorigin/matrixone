@@ -83,3 +83,7 @@ func DragonboatFactory(name string) logger.ILogger {
 		pkgName: name,
 	}
 }
+
+func init() {
+	logger.SetLoggerFactory(DragonboatFactory)
+}

@@ -17,11 +17,11 @@ package moengine
 import (
 	"bytes"
 	"context"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
@@ -32,7 +32,7 @@ var ErrReadOnly = moerr.NewInternalError("tae moengine: read only")
 
 type Txn interface {
 	GetCtx() []byte
-	GetID() uint64
+	GetID() string
 	Prepare() (types.TS, error)
 	Committing() error
 	Commit() error
@@ -79,14 +79,17 @@ type Engine interface {
 
 	// Database creates a handle for a database
 	GetDatabase(ctx context.Context, databaseName string, txn Txn) (Database, error)
+
+	// GetDB returns tae db struct
+	GetTAE(ctx context.Context) *db.DB
 }
 
 type TxnEngine interface {
 	engine.Engine
 	Engine
 	StartTxn(info []byte) (txn Txn, err error)
-	GetOrCreateTxnWithMeta(info []byte, meta txn.TxnMeta) (txn Txn, err error)
-	GetTxnByMeta(meta txn.TxnMeta) (txn Txn, err error)
+	GetOrCreateTxnWithMeta(info []byte, id []byte, ts types.TS) (txn Txn, err error)
+	GetTxnByID(id []byte) (txn Txn, err error)
 }
 
 var _ TxnEngine = &txnEngine{}

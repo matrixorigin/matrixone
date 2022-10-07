@@ -103,11 +103,16 @@ func (seg *localSegment) ApplyAppend() (err error) {
 	for _, ctx := range seg.appends {
 		bat, _ := ctx.node.Window(ctx.start, ctx.start+ctx.count)
 		defer bat.Close()
+		var txnNodes []*txnbase.TxnMVCCNode
 		if destOff, err = ctx.driver.ApplyAppend(
 			bat,
 			seg.table.store.txn); err != nil {
 			return
 		}
+		if seg.table.appendTxnNode == nil {
+			seg.table.appendTxnNode = make([]*txnbase.TxnMVCCNode, 0)
+		}
+		seg.table.appendTxnNode = append(seg.table.appendTxnNode, txnNodes...)
 		id := ctx.driver.GetID()
 		ctx.node.AddApplyInfo(ctx.start, ctx.count, uint32(destOff), ctx.count, seg.table.entry.GetDB().ID, id)
 	}
@@ -178,7 +183,7 @@ func (seg *localSegment) prepareApplyNode(node InsertNode) (err error) {
 		}
 		id := appender.GetID()
 		seg.table.store.warChecker.ReadBlock(seg.table.entry.GetDB().ID, id)
-		seg.table.store.dirtyMemo.recordBlk(*id)
+		seg.table.store.dirtyMemo.recordBlk(seg.table.entry.GetDB().ID, id)
 		seg.appends = append(seg.appends, ctx)
 		logutil.Debugf("%s: toAppend %d, appended %d, blks=%d", id.String(), toAppend, appended, len(seg.appends))
 		appended += toAppend
@@ -218,20 +223,13 @@ func (seg *localSegment) Append(data *containers.Batch) (err error) {
 		}
 		space := n.GetSpace()
 		logutil.Debugf("Appended: %d, Space:%d", appended, space)
-		if seg.table.schema.IsSinglePK() {
+		if seg.table.schema.HasPK() {
 			if err = seg.index.BatchInsert(
 				data.Vecs[seg.table.schema.GetSingleSortKeyIdx()],
 				int(offset),
 				int(appended),
 				seg.rows,
 				false); err != nil {
-				break
-			}
-		} else if seg.table.schema.IsCompoundPK() {
-			cols := seg.table.GetSortColumns(data)
-			key := model.EncodeCompoundColumn(cols...)
-			defer key.Close()
-			if err = seg.index.BatchInsert(key, int(offset), int(appended), seg.rows, false); err != nil {
 				break
 			}
 		}
@@ -247,7 +245,7 @@ func (seg *localSegment) Append(data *containers.Batch) (err error) {
 	return err
 }
 
-func (seg *localSegment) DeleteSingleIndex(from, to uint32, node InsertNode) (err error) {
+func (seg *localSegment) DeleteFromIndex(from, to uint32, node InsertNode) (err error) {
 	for i := from; i <= to; i++ {
 		v := node.GetValue(seg.table.schema.GetSingleSortKeyIdx(), i)
 		if err = seg.index.Delete(v); err != nil {
@@ -255,30 +253,6 @@ func (seg *localSegment) DeleteSingleIndex(from, to uint32, node InsertNode) (er
 		}
 	}
 	return
-}
-
-func (seg *localSegment) DeleteCompoundIndex(from, to uint32, node InsertNode) (err error) {
-	var buf bytes.Buffer
-	vs := make([]any, seg.table.schema.GetSortKeyCnt())
-	for i := from; i <= to; i++ {
-		buf.Reset()
-		for j := range vs {
-			v := node.GetValue(seg.table.schema.SortKey.Defs[j].Idx, i)
-			vs[j] = v
-		}
-		key := model.EncodeTypedVals(&buf, vs...)
-		if err = seg.index.Delete(key); err != nil {
-			break
-		}
-	}
-	return
-}
-
-func (seg *localSegment) DeleteFromIndex(from, to uint32, node InsertNode) (err error) {
-	if seg.table.schema.IsSinglePK() {
-		return seg.DeleteSingleIndex(from, to, node)
-	}
-	return seg.DeleteCompoundIndex(from, to, node)
 }
 
 func (seg *localSegment) RangeDelete(start, end uint32) error {
@@ -405,14 +379,10 @@ func (seg *localSegment) GetByFilter(filter *handle.Filter) (id *common.ID, offs
 		_, _, offset = model.DecodePhyAddrKeyFromValue(filter.Val)
 		return
 	}
-	if seg.table.schema.IsSinglePK() {
-		if v, ok := filter.Val.([]byte); ok {
-			offset, err = seg.index.Search(string(v))
-		} else {
-			offset, err = seg.index.Search(filter.Val)
-		}
-	} else if seg.table.schema.IsCompoundPK() {
-		offset, err = seg.index.Search(string(filter.Val.([]byte)))
+	if v, ok := filter.Val.([]byte); ok {
+		offset, err = seg.index.Search(string(v))
+	} else {
+		offset, err = seg.index.Search(filter.Val)
 	}
 	return
 }

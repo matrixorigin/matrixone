@@ -18,7 +18,6 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
-	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 
@@ -37,19 +36,14 @@ const (
 	NT_Merge
 )
 
-func compareDeleteNode(va, vb txnbase.MVCCNode) int {
+func compareDeleteNode(va, vb txnif.MVCCNode) int {
 	a := va.(*DeleteNode)
 	b := vb.(*DeleteNode)
-	a.RLock()
-	defer a.RUnlock()
-	b.RLock()
-	defer b.RUnlock()
 	return a.TxnMVCCNode.Compare(b.TxnMVCCNode)
 }
 
 type DeleteNode struct {
-	*sync.RWMutex
-	*common.GenericDLNode[txnbase.MVCCNode]
+	*common.GenericDLNode[txnif.MVCCNode]
 	*txnbase.TxnMVCCNode
 	chain      *DeleteChain
 	logIndexes []*wal.Index
@@ -61,7 +55,6 @@ type DeleteNode struct {
 
 func NewMergedNode(commitTs types.TS) *DeleteNode {
 	n := &DeleteNode{
-		RWMutex:     new(sync.RWMutex),
 		TxnMVCCNode: txnbase.NewTxnMVCCNodeWithTS(commitTs),
 		mask:        roaring.New(),
 		nt:          NT_Merge,
@@ -69,9 +62,8 @@ func NewMergedNode(commitTs types.TS) *DeleteNode {
 	}
 	return n
 }
-func NewEmptyDeleteNode() txnbase.MVCCNode {
+func NewEmptyDeleteNode() txnif.MVCCNode {
 	n := &DeleteNode{
-		RWMutex:     new(sync.RWMutex),
 		TxnMVCCNode: txnbase.NewTxnMVCCNodeWithTxn(nil),
 		mask:        roaring.New(),
 		nt:          NT_Normal,
@@ -80,7 +72,6 @@ func NewEmptyDeleteNode() txnbase.MVCCNode {
 }
 func NewDeleteNode(txn txnif.AsyncTxn, dt handle.DeleteType) *DeleteNode {
 	n := &DeleteNode{
-		RWMutex:     new(sync.RWMutex),
 		TxnMVCCNode: txnbase.NewTxnMVCCNodeWithTxn(txn),
 		mask:        roaring.New(),
 		nt:          NT_Normal,
@@ -89,9 +80,9 @@ func NewDeleteNode(txn txnif.AsyncTxn, dt handle.DeleteType) *DeleteNode {
 	return n
 }
 
-func (node *DeleteNode) CloneAll() txnbase.MVCCNode  { panic("todo") }
-func (node *DeleteNode) CloneData() txnbase.MVCCNode { panic("todo") }
-func (node *DeleteNode) Update(txnbase.MVCCNode)     { panic("todo") }
+func (node *DeleteNode) CloneAll() txnif.MVCCNode  { panic("todo") }
+func (node *DeleteNode) CloneData() txnif.MVCCNode { panic("todo") }
+func (node *DeleteNode) Update(txnif.MVCCNode)     { panic("todo") }
 func (node *DeleteNode) GetPrepareTS() types.TS {
 	return node.TxnMVCCNode.GetPrepare()
 }
@@ -175,7 +166,7 @@ func (node *DeleteNode) PrepareCommit() (err error) {
 }
 
 func (node *DeleteNode) ApplyCommit(index *wal.Index) (err error) {
-	node.Lock()
+	node.chain.mvcc.Lock()
 	var ts types.TS
 	ts, err = node.TxnMVCCNode.ApplyCommit(index)
 	if err != nil {
@@ -186,13 +177,13 @@ func (node *DeleteNode) ApplyCommit(index *wal.Index) (err error) {
 	}
 	node.chain.AddDeleteCnt(uint32(node.mask.GetCardinality()))
 	node.chain.mvcc.IncChangeNodeCnt()
-	node.Unlock()
+	node.chain.mvcc.Unlock()
 	return node.OnApply()
 }
 
 func (node *DeleteNode) ApplyRollback(index *wal.Index) (err error) {
-	node.Lock()
-	defer node.Unlock()
+	node.chain.mvcc.Lock()
+	defer node.chain.mvcc.Unlock()
 	err = node.TxnMVCCNode.ApplyRollback(index)
 	return
 }

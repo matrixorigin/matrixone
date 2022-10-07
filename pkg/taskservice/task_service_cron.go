@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	"github.com/robfig/cron/v3"
 	"go.uber.org/zap"
@@ -44,7 +45,7 @@ func (s *taskService) StartScheduleCronTask() {
 	s.crons.jobs = make(map[uint64]*cronJob)
 	s.crons.entryIDs = make(map[uint64]cron.EntryID)
 	s.crons.retryC = make(chan task.CronTask, 256)
-	s.crons.cron = cron.New(cron.WithParser(s.cronParser))
+	s.crons.cron = cron.New(cron.WithParser(s.cronParser), cron.WithLogger(logutil.GetCronLogger(false)))
 	s.crons.cron.Start()
 	if err := s.crons.stopper.RunTask(s.fetchCronTasks); err != nil {
 		panic(err)
