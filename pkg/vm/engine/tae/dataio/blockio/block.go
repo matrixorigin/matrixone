@@ -30,13 +30,14 @@ import (
 type blockFile struct {
 	common.RefHelper
 	sync.RWMutex
-	name    string
-	seg     *segmentFile
-	id      *common.ID
-	metaKey objectio.Extent
-	columns []*columnBlock
-	writer  *Writer
-	reader  *Reader
+	name     string
+	seg      *segmentFile
+	id       *common.ID
+	metaKey  objectio.Extent
+	deltaKey objectio.Extent
+	columns  []*columnBlock
+	writer   *Writer
+	reader   *Reader
 }
 
 func newBlock(id uint64, seg *segmentFile, colCnt int) *blockFile {
@@ -61,7 +62,9 @@ func newBlock(id uint64, seg *segmentFile, colCnt int) *blockFile {
 }
 
 func (bf *blockFile) WriteBatch(bat *containers.Batch, ts types.TS) (blk objectio.BlockObject, err error) {
-	bf.writer = NewWriter(bf.seg.fs, bf.name)
+	if bf.writer == nil {
+		bf.writer = NewWriter(bf.seg.fs, bf.name)
+	}
 	block, err := bf.writer.WriteBlock(bat)
 	return block, err
 }
@@ -93,10 +96,22 @@ func (bf *blockFile) setMetaKey(extent objectio.Extent) {
 	bf.metaKey = extent
 }
 
+func (bf *blockFile) setDeltaKey(extent objectio.Extent) {
+	bf.Lock()
+	defer bf.Unlock()
+	bf.deltaKey = extent
+}
+
 func (bf *blockFile) getMetaKey() objectio.Extent {
 	bf.RLock()
 	defer bf.RUnlock()
 	return bf.metaKey
+}
+
+func (bf *blockFile) getDeltaKey() objectio.Extent {
+	bf.RLock()
+	defer bf.RUnlock()
+	return bf.deltaKey
 }
 
 func (bf *blockFile) GetMeta() objectio.BlockObject {
@@ -128,6 +143,38 @@ func (bf *blockFile) GetMetaFormKey(metaLoc string) objectio.BlockObject {
 		panic(any(err))
 	}
 	bf.setMetaKey(block.GetExtent())
+	return block
+}
+
+func (bf *blockFile) GetDelta() objectio.BlockObject {
+	metaKey := bf.getDeltaKey()
+	if metaKey.End() == 0 {
+		panic(any("block meta key err"))
+	}
+	if bf.reader == nil {
+		bf.reader = NewReader(bf.seg.fs, bf, bf.name)
+	}
+	block, err := bf.reader.ReadMeta(metaKey)
+	if err != nil {
+		panic(any(err))
+	}
+	return block
+}
+
+func (bf *blockFile) GetDeltaFormKey(metaLoc string) objectio.BlockObject {
+	name, extent, _ := DecodeMetaLoc(metaLoc)
+	if bf.reader == nil {
+		bf.reader = NewReader(bf.seg.fs, bf, name)
+	}
+	block, err := bf.reader.ReadMeta(extent)
+	if err != nil {
+		// FIXME: Now the block that is gc will also be replayed, here is a work around
+		if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
+			return nil
+		}
+		panic(any(err))
+	}
+	bf.setDeltaKey(block.GetExtent())
 	return block
 }
 
@@ -167,7 +214,13 @@ func (bf *blockFile) Destroy() error {
 
 func (bf *blockFile) Sync() error {
 	blocks, err := bf.writer.Sync()
+	if err != nil {
+		return err
+	}
 	bf.setMetaKey(blocks[0].GetExtent())
+	if len(blocks) > 1 {
+		bf.setDeltaKey(blocks[1].GetExtent())
+	}
 	return err
 }
 

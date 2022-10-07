@@ -536,11 +536,14 @@ func (store *txnStore) HasAnyTableDataChanges() bool {
 	return store.dirtyMemo.tableChanges.TableCount() > 0
 }
 
+// GetDirty returns all touched segments and blocks in the txn, group by table
+func (store *txnStore) GetDirty() *common.Tree { return store.dirtyMemo.tableChanges }
+
 func (store *txnStore) HasTableDataChanges(id uint64) bool {
 	return store.dirtyMemo.tableChanges.HasTable(id)
 }
 
-// GetDirtyTable returns touched segments and blocks in the txn.
+// GetDirtyTableByID returns touched segments and blocks of a table in the txn, group by segment
 func (store *txnStore) GetDirtyTableByID(id uint64) *common.TableTree {
 	return store.dirtyMemo.tableChanges.GetTable(id)
 }

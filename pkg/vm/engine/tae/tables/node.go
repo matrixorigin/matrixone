@@ -72,18 +72,87 @@ func (node *appendableNode) CheckUnloadable() bool {
 	return !node.block.mvcc.HasActiveAppendNode()
 }
 
-func (node *appendableNode) GetDataCopy(minRow, maxRow uint32) (columns *containers.Batch, err error) {
+func (node *appendableNode) getMemoryDataLocked(minRow, maxRow uint32) (bat *containers.Batch, err error) {
+	bat = node.data.CloneWindow(int(minRow),
+		int(maxRow-minRow),
+		containers.DefaultAllocator)
+	return
+}
+
+func (node *appendableNode) getPersistedData(minRow, maxRow uint32) (bat *containers.Batch, err error) {
+	var data *containers.Batch
+	schema := node.block.meta.GetSchema()
+	opts := new(containers.Options)
+	opts.Capacity = int(schema.BlockMaxRows)
+	data, err = node.block.file.LoadBatch(
+		schema.AllTypes(),
+		schema.AllNames(),
+		schema.AllNullables(),
+		opts)
+	if err != nil {
+		return
+	}
+	if maxRow-minRow == uint32(data.Length()) {
+		bat = data
+	} else {
+		bat = data.CloneWindow(int(minRow), int(maxRow-minRow), containers.DefaultAllocator)
+		data.Close()
+	}
+	return
+}
+
+func (node *appendableNode) getPersistedColumnData(
+	minRow,
+	maxRow uint32,
+	colIdx int,
+	buffer *bytes.Buffer,
+) (vec containers.Vector, err error) {
+	data, err := node.block.LoadColumnData(colIdx, buffer)
+	if err != nil {
+		return
+	}
+	if maxRow-minRow == uint32(data.Length()) {
+		vec = data
+	} else {
+		vec = data.CloneWindow(int(minRow), int(maxRow-minRow), containers.DefaultAllocator)
+		data.Close()
+	}
+	return
+}
+
+func (node *appendableNode) getMemoryColumnDataLocked(
+	minRow,
+	maxRow uint32,
+	colIdx int,
+	buffer *bytes.Buffer,
+) (vec containers.Vector, err error) {
+	data := node.data.Vecs[colIdx]
+	if buffer != nil {
+		data = data.Window(int(minRow), int(maxRow))
+		vec = containers.CloneWithBuffer(data, buffer, containers.DefaultAllocator)
+	} else {
+		vec = data.CloneWindow(int(minRow), int(maxRow-minRow), containers.DefaultAllocator)
+	}
+	return
+}
+
+func (node *appendableNode) GetData(minRow, maxRow uint32) (bat *containers.Batch, err error) {
 	if exception := node.exception.Load(); exception != nil {
 		err = exception.(error)
 		return
 	}
 	node.block.RLock()
-	columns = node.data.CloneWindow(int(minRow), int(maxRow-minRow), containers.DefaultAllocator)
+	if node.data != nil {
+		bat, err = node.getMemoryDataLocked(minRow, maxRow)
+		node.block.RUnlock()
+		return
+	}
 	node.block.RUnlock()
+	bat, err = node.getPersistedData(minRow, maxRow)
 	return
 }
 
-func (node *appendableNode) GetColumnDataCopy(
+func (node *appendableNode) GetColumnData(
 	minRow uint32,
 	maxRow uint32,
 	colIdx int,
@@ -93,17 +162,13 @@ func (node *appendableNode) GetColumnDataCopy(
 		return
 	}
 	node.block.RLock()
-	if buffer != nil {
-		win := node.data.Vecs[colIdx]
-		if maxRow < uint32(node.data.Vecs[colIdx].Length()) {
-			win = win.Window(int(minRow), int(maxRow))
-		}
-		vec = containers.CloneWithBuffer(win, buffer, containers.DefaultAllocator)
-	} else {
-		vec = node.data.Vecs[colIdx].CloneWindow(int(minRow), int(maxRow-minRow), containers.DefaultAllocator)
+	if node.data != nil {
+		vec, err = node.getMemoryColumnDataLocked(minRow, maxRow, colIdx, buffer)
+		node.block.RUnlock()
+		return
 	}
 	node.block.RUnlock()
-	return
+	return node.getPersistedColumnData(minRow, maxRow, colIdx, buffer)
 }
 
 func (node *appendableNode) Close() (err error) {
@@ -139,10 +204,19 @@ func (node *appendableNode) FillPhyAddrColumn(startRow, length uint32) (err erro
 		return
 	}
 	defer col.Close()
-	vec := node.data.Vecs[node.block.meta.GetSchema().PhyAddrKey.Idx]
+	var vec containers.Vector
 	node.block.Lock()
+	if node.data == nil {
+		node.block.Unlock()
+		vec, err = node.block.LoadColumnData(node.block.meta.GetSchema().PhyAddrKey.Idx, nil)
+		if err != nil {
+			return
+		}
+	} else {
+		vec = node.data.Vecs[node.block.meta.GetSchema().PhyAddrKey.Idx]
+		node.block.Unlock()
+	}
 	vec.Extend(col)
-	node.block.Unlock()
 	return
 }
 

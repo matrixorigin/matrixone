@@ -28,12 +28,12 @@ import (
 
 type MVCCChain struct {
 	*sync.RWMutex
-	MVCC      *common.GenericSortedDList[MVCCNode]
-	comparefn func(MVCCNode, MVCCNode) int
-	newnodefn func() MVCCNode
+	MVCC      *common.GenericSortedDList[txnif.MVCCNode]
+	comparefn func(txnif.MVCCNode, txnif.MVCCNode) int
+	newnodefn func() txnif.MVCCNode
 }
 
-func NewMVCCChain(comparefn func(MVCCNode, MVCCNode) int, newnodefn func() MVCCNode) *MVCCChain {
+func NewMVCCChain(comparefn func(txnif.MVCCNode, txnif.MVCCNode) int, newnodefn func() txnif.MVCCNode) *MVCCChain {
 	return &MVCCChain{
 		MVCC:      common.NewGenericSortedDList(comparefn),
 		RWMutex:   &sync.RWMutex{},
@@ -65,7 +65,7 @@ func (be *MVCCChain) GetTxn() txnif.TxnReader { return be.GetNodeLocked().GetTxn
 
 func (be *MVCCChain) GetIndexes() []*wal.Index {
 	ret := make([]*wal.Index, 0)
-	be.MVCC.Loop(func(n *common.GenericDLNode[MVCCNode]) bool {
+	be.MVCC.Loop(func(n *common.GenericDLNode[txnif.MVCCNode]) bool {
 		un := n.GetPayload()
 		ret = append(ret, un.GetLogIndex())
 		return true
@@ -73,7 +73,7 @@ func (be *MVCCChain) GetIndexes() []*wal.Index {
 	return ret
 }
 
-func (be *MVCCChain) Insert(vun MVCCNode) (node *common.GenericDLNode[MVCCNode]) {
+func (be *MVCCChain) Insert(vun txnif.MVCCNode) (node *common.GenericDLNode[txnif.MVCCNode]) {
 	un := vun
 	node = be.MVCC.Insert(un)
 	return
@@ -88,7 +88,7 @@ func (be *MVCCChain) Insert(vun MVCCNode) (node *common.GenericDLNode[MVCCNode])
 //	commitTs <----- commitTs <--------- commitTs|uncommitted  <=  MVCCChain Header
 //	   (1)            (2)                 (3)
 func (be *MVCCChain) HasCommittedNodeInRange(start, end types.TS) (ok bool) {
-	be.MVCC.Loop(func(n *common.GenericDLNode[MVCCNode]) bool {
+	be.MVCC.Loop(func(n *common.GenericDLNode[txnif.MVCCNode]) bool {
 		un := n.GetPayload()
 		in, before := un.CommittedIn(start, end)
 
@@ -119,7 +119,7 @@ func (be *MVCCChain) HasCommittedNodeInRange(start, end types.TS) (ok bool) {
 // GetNodeLocked gets the latest mvcc node.
 // It is useful in making command, apply state(e.g. ApplyCommit),
 // check confilct.
-func (be *MVCCChain) GetNodeLocked() MVCCNode {
+func (be *MVCCChain) GetNodeLocked() txnif.MVCCNode {
 	head := be.MVCC.GetHead()
 	if head == nil {
 		return nil
@@ -134,8 +134,8 @@ func (be *MVCCChain) GetNodeLocked() MVCCNode {
 
 // GetCommittedNode gets the latest committed mvcc node.
 // It's useful when check whether the catalog/metadata entry is deleted.
-func (be *MVCCChain) GetCommittedNode() (node MVCCNode) {
-	be.MVCC.Loop(func(n *common.GenericDLNode[MVCCNode]) bool {
+func (be *MVCCChain) GetCommittedNode() (node txnif.MVCCNode) {
+	be.MVCC.Loop(func(n *common.GenericDLNode[txnif.MVCCNode]) bool {
 		un := n.GetPayload()
 		if !un.IsActive() && !un.IsCommitting() {
 			node = un
@@ -149,8 +149,8 @@ func (be *MVCCChain) GetCommittedNode() (node MVCCNode) {
 // GetVisibleNode gets mvcc node according to the timestamp.
 // It returns the mvcc node in the same txn as the read txn
 // or returns the latest mvcc node with commitTS less than the timestamp.
-func (be *MVCCChain) GetVisibleNode(ts types.TS) (node MVCCNode) {
-	be.MVCC.Loop(func(n *common.GenericDLNode[MVCCNode]) (goNext bool) {
+func (be *MVCCChain) GetVisibleNode(ts types.TS) (node txnif.MVCCNode) {
+	be.MVCC.Loop(func(n *common.GenericDLNode[txnif.MVCCNode]) (goNext bool) {
 		un := n.GetPayload()
 		var visible bool
 		if visible = un.IsVisible(ts); visible {
@@ -163,8 +163,8 @@ func (be *MVCCChain) GetVisibleNode(ts types.TS) (node MVCCNode) {
 }
 
 // It's only used in replay
-func (be *MVCCChain) SearchNode(o MVCCNode) (node MVCCNode) {
-	be.MVCC.Loop(func(n *common.GenericDLNode[MVCCNode]) bool {
+func (be *MVCCChain) SearchNode(o txnif.MVCCNode) (node txnif.MVCCNode) {
+	be.MVCC.Loop(func(n *common.GenericDLNode[txnif.MVCCNode]) bool {
 		un := n.GetPayload()
 		compare := be.comparefn(un, o)
 		if compare == 0 {
@@ -177,8 +177,8 @@ func (be *MVCCChain) SearchNode(o MVCCNode) (node MVCCNode) {
 	return
 }
 
-func (be *MVCCChain) LoopChain(fn func(MVCCNode) bool) {
-	be.MVCC.Loop(func(n *common.GenericDLNode[MVCCNode]) bool {
+func (be *MVCCChain) LoopChain(fn func(txnif.MVCCNode) bool) {
+	be.MVCC.Loop(func(n *common.GenericDLNode[txnif.MVCCNode]) bool {
 		un := n.GetPayload()
 		return fn(un)
 	}, false)
@@ -222,7 +222,7 @@ func (be *MVCCChain) WriteAllTo(w io.Writer) (n int64, err error) {
 		return
 	}
 	n += 8
-	be.MVCC.Loop(func(node *common.GenericDLNode[MVCCNode]) bool {
+	be.MVCC.Loop(func(node *common.GenericDLNode[txnif.MVCCNode]) bool {
 		var n2 int64
 		n2, err = node.GetPayload().WriteTo(w)
 		if err != nil {
@@ -297,7 +297,7 @@ func (be *MVCCChain) GetLogIndex() *wal.Index {
 	return node.GetLogIndex()
 }
 
-func (be *MVCCChain) CloneLatestNode() (*MVCCChain, MVCCNode) {
+func (be *MVCCChain) CloneLatestNode() (*MVCCChain, txnif.MVCCNode) {
 	cloned := &MVCCChain{
 		MVCC:    common.NewGenericSortedDList(be.comparefn),
 		RWMutex: &sync.RWMutex{},
@@ -350,7 +350,7 @@ func (be *MVCCChain) CloneCommittedInRange(start, end types.TS) (ret *MVCCChain)
 		txn.GetTxnState(true)
 		be.RLock()
 	}
-	be.MVCC.Loop(func(n *common.GenericDLNode[MVCCNode]) bool {
+	be.MVCC.Loop(func(n *common.GenericDLNode[txnif.MVCCNode]) bool {
 		un := n.GetPayload()
 		in, before := un.CommittedIn(start, end)
 		if in {
@@ -366,19 +366,19 @@ func (be *MVCCChain) CloneCommittedInRange(start, end types.TS) (ret *MVCCChain)
 	return
 }
 
-func (be *MVCCChain) ClonePreparedInRange(start, end types.TS) (ret []MVCCNode) {
+func (be *MVCCChain) ClonePreparedInRange(start, end types.TS) (ret []txnif.MVCCNode) {
 	needWait, txn := be.NeedWaitCommitting(end.Next())
 	if needWait {
 		be.RUnlock()
 		txn.GetTxnState(true)
 		be.RLock()
 	}
-	be.MVCC.Loop(func(n *common.GenericDLNode[MVCCNode]) bool {
+	be.MVCC.Loop(func(n *common.GenericDLNode[txnif.MVCCNode]) bool {
 		un := n.GetPayload()
 		in, before := un.PreparedIn(start, end)
 		if in {
 			if ret == nil {
-				ret = make([]MVCCNode, 0)
+				ret = make([]txnif.MVCCNode, 0)
 			}
 			ret = append(ret, un.CloneAll())
 		} else if !before {
