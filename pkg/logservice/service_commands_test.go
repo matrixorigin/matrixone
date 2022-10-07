@@ -181,7 +181,7 @@ func TestHandleAddReplica(t *testing.T) {
 	service1 := Service{
 		store: store1,
 
-		logger: logger,
+		logger: testLogger,
 	}
 	cmd := pb.ScheduleCommand{
 		ConfigChange: &pb.ConfigChange{
@@ -209,7 +209,8 @@ func TestHandleRemoveReplica(t *testing.T) {
 	}()
 
 	service1 := Service{
-		store: store1,
+		store:  store1,
+		logger: testLogger,
 	}
 	cmd := pb.ScheduleCommand{
 		ConfigChange: &pb.ConfigChange{
