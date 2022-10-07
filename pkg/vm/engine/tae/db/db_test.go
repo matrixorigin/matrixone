@@ -2542,6 +2542,100 @@ func TestCompactBlk(t *testing.T) {
 	assert.Equal(t, int64(2), rel.Rows())
 }
 
+func TestCompactBlk2(t *testing.T) {
+	testutils.EnsureNoLeak(t)
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := newTestEngine(t, opts)
+	defer tae.Close()
+	schema := catalog.MockSchemaAll(3, 1)
+	schema.BlockMaxRows = 5
+	schema.SegmentMaxBlocks = 2
+	tae.bindSchema(schema)
+	bat := catalog.MockBatch(schema, 5)
+	bats := bat.Split(5)
+	defer bat.Close()
+
+	tae.createRelAndAppend(bats[2], true)
+
+	txn, rel := tae.getRelation()
+	_ = rel.Append(bats[1])
+	assert.Nil(t, txn.Commit())
+
+	txn, rel = tae.getRelation()
+	_ = rel.Append(bats[3])
+	assert.Nil(t, txn.Commit())
+
+	txn, rel = tae.getRelation()
+	_ = rel.Append(bats[4])
+	assert.Nil(t, txn.Commit())
+
+	txn, rel = tae.getRelation()
+	_ = rel.Append(bats[0])
+	assert.Nil(t, txn.Commit())
+
+	v := getSingleSortKeyValue(bat, schema, 1)
+	t.Logf("v is %v**********", v)
+	filter := handle.NewEQFilter(v)
+	txn2, rel1 := tae.getRelation()
+	t.Log("********before delete******************")
+	checkAllColRowsByScan(t, rel1, 5, true)
+	_ = rel1.DeleteByFilter(filter)
+	assert.Nil(t, txn2.Commit())
+
+	_, rel2 := tae.getRelation()
+	checkAllColRowsByScan(t, rel2, 4, true)
+
+	t.Log("************compact************")
+	txn, rel = tae.getRelation()
+	it := rel.MakeBlockIt()
+	blk := it.GetBlock()
+	meta := blk.GetMeta().(*catalog.BlockEntry)
+	task, err := jobs.NewCompactBlockTask(nil, txn, meta, tae.DB.Scheduler)
+	assert.NoError(t, err)
+	err = task.OnExec()
+	assert.NoError(t, err)
+	err = txn.Commit()
+	assert.NoError(t, err)
+
+	v = getSingleSortKeyValue(bat, schema, 2)
+	t.Logf("v is %v**********", v)
+	filter = handle.NewEQFilter(v)
+	txn2, rel3 := tae.getRelation()
+	t.Log("********before delete******************")
+	checkAllColRowsByScan(t, rel3, 4, true)
+	_ = rel3.DeleteByFilter(filter)
+	assert.Nil(t, txn2.Commit())
+
+	v = getSingleSortKeyValue(bat, schema, 4)
+	t.Logf("v is %v**********", v)
+	filter = handle.NewEQFilter(v)
+	txn2, rel4 := tae.getRelation()
+	t.Log("********before delete******************")
+	checkAllColRowsByScan(t, rel4, 3, true)
+	_ = rel4.DeleteByFilter(filter)
+	assert.Nil(t, txn2.Commit())
+
+	checkAllColRowsByScan(t, rel1, 5, true)
+	checkAllColRowsByScan(t, rel2, 4, true)
+
+	_, rel = tae.getRelation()
+	checkAllColRowsByScan(t, rel, 2, true)
+	assert.Equal(t, int64(2), rel.Rows())
+
+	v = getSingleSortKeyValue(bat, schema, 2)
+	filter = handle.NewEQFilter(v)
+	_, _, err = rel.GetByFilter(filter)
+	assert.NotNil(t, err)
+
+	v = getSingleSortKeyValue(bat, schema, 4)
+	filter = handle.NewEQFilter(v)
+	_, _, err = rel.GetByFilter(filter)
+	assert.NotNil(t, err)
+
+	tae.restart()
+	assert.Equal(t, int64(2), rel.Rows())
+}
+
 func TestDelete3(t *testing.T) {
 	opts := config.WithQuickScanAndCKPOpts(nil)
 	tae := newTestEngine(t, opts)

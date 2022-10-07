@@ -28,7 +28,7 @@ func DatetimeToHour(vectors []*vector.Vector, proc *process.Process) (*vector.Ve
 		if inputVector.IsScalarNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
-		resultVector := vector.NewConstFixed[uint8](resultType, 1, uint8(inputValues[0].Hour()))
+		resultVector := vector.NewConstFixed(resultType, 1, uint8(inputValues[0].Hour()))
 		return resultVector, nil
 	} else {
 		resultVector := vector.New(resultType)
@@ -60,7 +60,7 @@ func TimestampToHour(vectors []*vector.Vector, proc *process.Process) (*vector.V
 		if inputVector.IsScalarNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
-		resultVector := vector.NewConstFixed[uint8](resultType, 1, uint8(convertedInputValues[0].Hour()))
+		resultVector := vector.NewConstFixed(resultType, 1, uint8(convertedInputValues[0].Hour()))
 		return resultVector, nil
 	} else {
 		resultVector := vector.New(resultType)
@@ -89,7 +89,7 @@ func DatetimeToMinute(vectors []*vector.Vector, proc *process.Process) (*vector.
 		if inputVector.IsScalarNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
-		resultVector := vector.NewConstFixed[uint8](resultType, 1, uint8(inputValues[0].Minute()))
+		resultVector := vector.NewConstFixed(resultType, 1, uint8(inputValues[0].Minute()))
 		return resultVector, nil
 	} else {
 		resultVector := vector.New(resultType)
@@ -121,7 +121,7 @@ func TimestampToMinute(vectors []*vector.Vector, proc *process.Process) (*vector
 		if inputVector.IsScalarNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
-		resultVector := vector.NewConstFixed[uint8](resultType, 1, uint8(convertedInputValues[0].Minute()))
+		resultVector := vector.NewConstFixed(resultType, 1, uint8(convertedInputValues[0].Minute()))
 		return resultVector, nil
 	} else {
 		resultVector := vector.New(resultType)
@@ -149,7 +149,7 @@ func DatetimeToSecond(vectors []*vector.Vector, proc *process.Process) (*vector.
 		if inputVector.IsScalarNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
-		resultVector := vector.NewConstFixed[uint8](resultType, 1, uint8(inputValues[0].Sec()))
+		resultVector := vector.NewConstFixed(resultType, 1, uint8(inputValues[0].Sec()))
 		return resultVector, nil
 	} else {
 		resultVector := vector.New(resultType)
@@ -181,7 +181,7 @@ func TimestampToSecond(vectors []*vector.Vector, proc *process.Process) (*vector
 		if inputVector.IsScalarNull() {
 			return proc.AllocScalarNullVector(resultType), nil
 		}
-		resultVector := vector.NewConstFixed[uint8](resultType, 1, uint8(convertedInputValues[0].Sec()))
+		resultVector := vector.NewConstFixed(resultType, 1, uint8(convertedInputValues[0].Sec()))
 		return resultVector, nil
 	} else {
 		resultVector := vector.New(resultType)
