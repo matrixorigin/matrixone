@@ -272,6 +272,7 @@ type TxnStore interface {
 	HasTableDataChanges(id uint64) bool
 	HasCatalogChanges() bool
 	GetDirtyTableByID(id uint64) *common.TableTree
+	GetDirty() *common.Tree
 }
 
 type TxnEntryType int16
