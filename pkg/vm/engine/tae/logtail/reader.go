@@ -28,34 +28,28 @@ type LogtailReader struct {
 	activeView []txnif.AsyncTxn         // read only active page
 }
 
-// func (v *LogtailReader) GetDirty() (tree *DBTree) {
-// 	tree = newTree()
+func (v *LogtailReader) GetDirty() (tree *common.Tree) {
+	tree = common.NewTree()
 
-// 	readOp := func(txn txnif.AsyncTxn) (moveOn bool) {
-// 		if !txn.GetStore().HasAnyTableDataChanges() {
-// 			moveOn = true
-// 			return
-// 		}
-// 		return
-// 	}
-// 	v.readTxnInBetween(v.start, v.end, readOp)
-// 	return
-// }
+	readOp := func(txn txnif.AsyncTxn) (moveOn bool) {
+		if store := txn.GetStore(); store.HasAnyTableDataChanges() {
+			tree.Merge(store.GetDirty())
+		}
+		return true
+	}
+	v.readTxnInBetween(v.start, v.end, readOp)
+	return
+}
 
 func (v *LogtailReader) GetDirtyByTable(dbID, id uint64) (tree *common.TableTree) {
 	tree = common.NewTableTree(dbID, id)
 	readOp := func(txn txnif.AsyncTxn) (moveOn bool) {
-		if !txn.GetStore().HasTableDataChanges(id) {
-			moveOn = true
-			return
+		if store := txn.GetStore(); store.HasTableDataChanges(id) {
+			tree.Merge(store.GetDirtyTableByID(id))
 		}
-		txnTree := txn.GetStore().GetDirtyTableByID(id)
-		tree.Merge(txnTree)
-		moveOn = true
-		return
+		return true
 	}
 	v.readTxnInBetween(v.start, v.end, readOp)
-
 	return
 }
 

@@ -193,6 +193,14 @@ func (blk *dataBlock) GetMaxVisibleTS() types.TS {
 	return blk.mvcc.LoadMaxVisible()
 }
 
+func (blk *dataBlock) FreeData() {
+	blk.Lock()
+	defer blk.Unlock()
+	if blk.node != nil {
+		_ = blk.node.Close()
+	}
+}
+
 func (blk *dataBlock) Close() {
 	if blk.node != nil {
 		_ = blk.node.Close()
@@ -519,7 +527,7 @@ func (blk *dataBlock) ResolveABlkColumnMVCCData(
 
 	view = model.NewColumnView(ts, colIdx)
 	var data containers.Vector
-	data, err = blk.node.GetColumnDataCopy(0, maxRow, colIdx, buffer)
+	data, err = blk.node.GetColumnData(0, maxRow, colIdx, buffer)
 	if err != nil {
 		return
 	}
@@ -866,7 +874,7 @@ func (blk *dataBlock) CollectAppendInRange(start, end types.TS) (*containers.Bat
 
 func (blk *dataBlock) collectAblkAppendInRange(start, end types.TS) (*containers.Batch, error) {
 	minRow, maxRow, commitTSVec, abortVec := blk.mvcc.CollectAppend(start, end)
-	batch, err := blk.node.GetDataCopy(minRow, maxRow)
+	batch, err := blk.node.GetData(minRow, maxRow)
 	if err != nil {
 		return nil, err
 	}

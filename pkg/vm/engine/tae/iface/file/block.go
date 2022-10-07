@@ -37,6 +37,8 @@ type Block interface {
 	LoadBatch([]types.Type, []string, []bool, *containers.Options) (bat *containers.Batch, err error)
 	GetMeta() objectio.BlockObject
 	GetMetaFormKey(location string) objectio.BlockObject
+	GetDelta() objectio.BlockObject
+	GetDeltaFormKey(location string) objectio.BlockObject
 	Destroy() error
 }
 
