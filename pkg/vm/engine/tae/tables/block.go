@@ -521,7 +521,7 @@ func (blk *dataBlock) ResolveColumnFromANode(
 		visible bool
 	)
 	blk.mvcc.RLock()
-	maxRow, visible, holes, err := blk.mvcc.GetVisibleRowLocked(ts)
+	maxRow, visible, deSels, err := blk.mvcc.GetVisibleRowLocked(ts)
 	blk.mvcc.RUnlock()
 	if !visible || err != nil {
 		return
@@ -543,11 +543,11 @@ func (blk *dataBlock) ResolveColumnFromANode(
 	if err != nil {
 		return
 	}
-	if holes != nil && holes.GetCardinality() != 0 {
+	if deSels != nil && !deSels.IsEmpty() {
 		if view.DeleteMask != nil {
-			view.DeleteMask.Or(holes)
+			view.DeleteMask.Or(deSels)
 		} else {
-			view.DeleteMask = holes
+			view.DeleteMask = deSels
 		}
 	}
 

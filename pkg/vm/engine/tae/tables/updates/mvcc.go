@@ -275,11 +275,13 @@ func (n *MVCCHandle) CollectAppendLogIndexesLocked(startTs, endTs types.TS) (ind
 
 func (n *MVCCHandle) GetVisibleRowLocked(ts types.TS) (maxrow uint32, visible bool, holes *roaring.Bitmap, err error) {
 	anToWait := make([]*AppendNode, 0)
+	txnToWait := make([]txnif.TxnReader, 0)
 	n.appends.ForEach(func(un txnif.MVCCNode) bool {
 		an := un.(*AppendNode)
-		needWait, _ := an.NeedWaitCommitting(ts)
+		needWait, txn := an.NeedWaitCommitting(ts)
 		if needWait {
 			anToWait = append(anToWait, an)
+			txnToWait = append(txnToWait, txn)
 			return true
 		}
 		if an.IsVisible(ts) {
@@ -294,11 +296,8 @@ func (n *MVCCHandle) GetVisibleRowLocked(ts types.TS) (maxrow uint32, visible bo
 		return !an.Prepare.Greater(ts)
 	}, true)
 	n.RUnlock()
-	for _, an := range anToWait {
-		needWait, txn := an.NeedWaitCommitting(ts)
-		if needWait {
-			txn.GetTxnState(true)
-		}
+	for _, txn := range txnToWait {
+		txn.GetTxnState(true)
 	}
 	n.RLock()
 	for _, an := range anToWait {
