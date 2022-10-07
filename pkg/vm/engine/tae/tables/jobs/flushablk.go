@@ -54,6 +54,7 @@ func NewFlushABlkTask(
 func (task *flushABlkTask) Scope() *common.ID { return task.meta.AsCommonID() }
 
 func (task *flushABlkTask) Execute() error {
+	defer task.file.FreeWriter()
 	block, err := task.file.WriteBatch(task.data, task.ts)
 	if err != nil {
 		return err
