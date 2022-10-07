@@ -293,13 +293,15 @@ func (n *MVCCHandle) GetVisibleRowLocked(ts types.TS) (maxrow uint32, visible bo
 		}
 		return !an.Prepare.Greater(ts)
 	}, true)
+	n.RUnlock()
 	for _, an := range anToWait {
 		needWait, txn := an.NeedWaitCommitting(ts)
 		if needWait {
-			n.RUnlock()
 			txn.GetTxnState(true)
-			n.RLock()
 		}
+	}
+	n.RLock()
+	for _, an := range anToWait {
 		if an.IsVisible(ts) {
 			visible = true
 			if maxrow < an.maxRow {
