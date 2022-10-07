@@ -34,6 +34,7 @@ func New(
 	m *mheap.Mheap,
 	ctx context.Context,
 	cli client.TxnClient,
+	idGen IDGenerator,
 	getClusterDetails GetClusterDetailsFunc,
 ) *Engine {
 	cluster, err := getClusterDetails()
@@ -48,6 +49,7 @@ func New(
 		m:                 m,
 		db:                db,
 		cli:               cli,
+		idGen:             idGen,
 		txnHeap:           &transactionHeap{},
 		getClusterDetails: getClusterDetails,
 		txns:              make(map[string]*Transaction),
@@ -63,7 +65,14 @@ func (e *Engine) Create(ctx context.Context, name string, op client.TxnOperator)
 	}
 	sql := getSql(ctx)
 	accountId, userId, roleId := getAccessInfo(ctx)
-	bat, err := genCreateDatabaseTuple(sql, accountId, userId, roleId, name, e.m)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute) // TODO
+	defer cancel()
+	databaseId, err := txn.idGen.AllocateID(ctx)
+	if err != nil {
+		return err
+	}
+	bat, err := genCreateDatabaseTuple(sql, accountId, userId, roleId,
+		name, databaseId, e.m)
 	if err != nil {
 		return err
 	}
@@ -156,6 +165,7 @@ func (e *Engine) New(ctx context.Context, op client.TxnOperator) error {
 		db:          e.db,
 		readOnly:    true,
 		meta:        op.Txn(),
+		idGen:       e.idGen,
 		dnStores:    cluster.DNStores,
 		fileMap:     make(map[string]uint64),
 		tableMap:    make(map[tableKey]*table),

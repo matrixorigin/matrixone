@@ -72,6 +72,7 @@ func UpdateInsertValueBatch(e engine.Engine, ctx context.Context, proc *process.
 	if err != nil {
 		return err
 	}
+	rel.Ranges(ctx, nil) // TODO
 	return UpdateInsertBatch(e, db, ctx, proc, ColDefs, bat, rel.GetTableID(ctx))
 }
 
@@ -87,6 +88,7 @@ func getRangeFromAutoIncrTable(param *AutoIncrParam, bat *batch.Batch, tableID s
 		if err != nil {
 			return nil, nil, err
 		}
+		param.rel.Ranges(param.ctx, nil) // TODO
 		if d, s, err = getOneColRangeFromAutoIncrTable(param, bat, tableID+"_"+col.Name, i); err != nil {
 			return nil, nil, err
 		}
@@ -282,6 +284,7 @@ func getCurrentIndex(param *AutoIncrParam, colName string) (uint64, uint64, erro
 }
 
 func updateAutoIncrTable(param *AutoIncrParam, curNum uint64, name string) error {
+	/* XXX debug, delete is not ok
 	bat := makeAutoIncrBatch(name, curNum, 1)
 	err := param.rel.Delete(param.ctx, bat.GetVector(0), AUTO_INCR_TABLE_COLNAME[0])
 	if err != nil {
@@ -291,6 +294,7 @@ func updateAutoIncrTable(param *AutoIncrParam, curNum uint64, name string) error
 	if err = param.rel.Write(param.ctx, bat); err != nil {
 		return err
 	}
+	*/
 	return nil
 }
 

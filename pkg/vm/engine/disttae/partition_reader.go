@@ -51,7 +51,7 @@ func (p *PartitionReader) Read(colNames []string, expr *plan.Expr, heap *mheap.M
 	}
 	if len(p.inserts) > 0 {
 		bat := p.inserts[0].GetSubBatch(colNames)
-		p.inserts = p.inserts[:1]
+		p.inserts = p.inserts[1:]
 		b := batch.New(false, colNames)
 		for i, name := range colNames {
 			b.Vecs[i] = vector.New(p.typsMap[name])
@@ -59,6 +59,7 @@ func (p *PartitionReader) Read(colNames []string, expr *plan.Expr, heap *mheap.M
 		if _, err := b.Append(heap, bat); err != nil {
 			return nil, err
 		}
+
 		b.InitZsOne(b.GetVector(0).Length())
 		return b, nil
 	}

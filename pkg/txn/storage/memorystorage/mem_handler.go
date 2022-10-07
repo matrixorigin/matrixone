@@ -277,9 +277,11 @@ func (m *MemHandler) HandleCreateDatabase(meta txn.TxnMeta, req memoryengine.Cre
 		return moerr.NewDBAlreadyExists(req.Name)
 	}
 
-	id := memoryengine.NewID()
+	if req.ID.IsEmpty() {
+		req.ID = memoryengine.NewID()
+	}
 	err = m.databases.Insert(tx, &DatabaseRow{
-		ID:        id,
+		ID:        req.ID,
 		AccountID: req.AccessInfo.AccountID,
 		Name:      req.Name,
 	})
@@ -287,7 +289,7 @@ func (m *MemHandler) HandleCreateDatabase(meta txn.TxnMeta, req memoryengine.Cre
 		return err
 	}
 
-	resp.ID = id
+	resp.ID = req.ID
 	return nil
 }
 
@@ -319,8 +321,11 @@ func (m *MemHandler) HandleCreateRelation(meta txn.TxnMeta, req memoryengine.Cre
 	}
 
 	// row
+	if req.ID.IsEmpty() {
+		req.ID = memoryengine.NewID()
+	}
 	row := &RelationRow{
-		ID:         memoryengine.NewID(),
+		ID:         req.ID,
 		DatabaseID: req.DatabaseID,
 		Name:       req.Name,
 		Type:       req.Type,

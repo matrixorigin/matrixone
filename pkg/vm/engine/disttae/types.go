@@ -66,6 +66,10 @@ type Cache interface {
 		tableId uint64, ts timestamp.Timestamp) error
 }
 
+type IDGenerator interface {
+	AllocateID(ctx context.Context) (uint64, error)
+}
+
 // mvcc is the core data structure of cn and is used to
 // maintain multiple versions of logtail data for a table's partition
 type MVCC interface {
@@ -84,6 +88,7 @@ type Engine struct {
 	db                *DB
 	m                 *mheap.Mheap
 	cli               client.TxnClient
+	idGen             IDGenerator
 	getClusterDetails GetClusterDetailsFunc
 	txns              map[string]*Transaction
 	// minimum heap of currently active transactions
@@ -129,6 +134,8 @@ type Transaction struct {
 	writes   [][]Entry
 	dnStores []DNStore
 	m        *mheap.Mheap
+
+	idGen IDGenerator
 
 	// use to cache table
 	tableMap map[tableKey]*table
@@ -194,6 +201,8 @@ type table struct {
 }
 
 type column struct {
+	accountId  uint32
+	tableId    uint64
 	databaseId uint64
 	// column name
 	name            string

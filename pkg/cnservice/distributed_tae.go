@@ -48,6 +48,7 @@ func (s *service) initDistributedTAE(
 		m,
 		ctx,
 		client,
+		hakeeper,
 		memoryengine.GetClusterDetailsFromHAKeeper(
 			ctx,
 			hakeeper,

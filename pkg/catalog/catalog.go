@@ -96,6 +96,7 @@ func ParseEntryList(es []*api.Entry) (any, []*api.Entry, error) {
 func genCreateDatabases(rows [][]any) []CreateDatabase {
 	cmds := make([]CreateDatabase, len(rows))
 	for i, row := range rows {
+		cmds[i].DatabaseId = row[MO_DATABASE_DAT_ID_IDX].(uint64)
 		cmds[i].Name = string(row[MO_DATABASE_DAT_NAME_IDX].([]byte))
 		cmds[i].Owner = row[MO_DATABASE_OWNER_IDX].(uint32)
 		cmds[i].Creator = row[MO_DATABASE_CREATOR_IDX].(uint32)
@@ -118,6 +119,7 @@ func genDropDatabases(rows [][]any) []DropDatabase {
 func genCreateTables(rows [][]any) []CreateTable {
 	cmds := make([]CreateTable, len(rows))
 	for i, row := range rows {
+		cmds[i].TableId = row[MO_TABLES_REL_ID_IDX].(uint64)
 		cmds[i].Name = string(row[MO_TABLES_REL_NAME_IDX].([]byte))
 		cmds[i].CreateSql = string(row[MO_TABLES_REL_CREATESQL_IDX].([]byte))
 		cmds[i].Owner = row[MO_TABLES_OWNER_IDX].(uint32)

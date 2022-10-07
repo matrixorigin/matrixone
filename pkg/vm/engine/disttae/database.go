@@ -16,6 +16,7 @@ package disttae
 
 import (
 	"context"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -96,15 +97,21 @@ func (db *database) Delete(ctx context.Context, name string) error {
 
 func (db *database) Create(ctx context.Context, name string, defs []engine.TableDef) error {
 	comment := getTableComment(defs)
-	cols, err := genColumns(name, db.databaseName, db.databaseId, defs)
+	accountId, userId, roleId := getAccessInfo(ctx)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute) // TODO
+	defer cancel()
+	tableId, err := db.txn.idGen.AllocateID(ctx)
+	if err != nil {
+		return err
+	}
+	cols, err := genColumns(accountId, name, db.databaseName, tableId, db.databaseId, defs)
 	if err != nil {
 		return err
 	}
 	{
 		sql := getSql(ctx)
-		accountId, userId, roleId := getAccessInfo(ctx)
 		bat, err := genCreateTableTuple(sql, accountId, userId, roleId, name,
-			db.databaseId, db.databaseName, comment, db.txn.m)
+			tableId, db.databaseId, db.databaseName, comment, db.txn.m)
 		if err != nil {
 			return err
 		}

@@ -27,7 +27,6 @@ func (m *MemHandler) HandlePreCommit(meta txn.TxnMeta, req apipb.PrecommitWriteC
 	var e any
 
 	es := req.EntryList
-	databaseMap := make(map[string]txnengine.ID) // database name -> database ID
 	for len(es) > 0 {
 		e, es, err = catalog.ParseEntryList(es)
 		if err != nil {
@@ -38,6 +37,7 @@ func (m *MemHandler) HandlePreCommit(meta txn.TxnMeta, req apipb.PrecommitWriteC
 			for _, cmd := range cmds {
 				req := txnengine.CreateDatabaseReq{
 					Name: cmd.Name,
+					ID:   ID(cmd.DatabaseId),
 					AccessInfo: txnengine.AccessInfo{
 						UserID:    cmd.Owner,
 						RoleID:    cmd.Creator,
@@ -49,15 +49,12 @@ func (m *MemHandler) HandlePreCommit(meta txn.TxnMeta, req apipb.PrecommitWriteC
 					resp); err != nil {
 					return err
 				}
-				databaseMap[cmd.Name] = resp.ID
 			}
 		case []catalog.CreateTable:
 			for _, cmd := range cmds {
 				databaseID := txnengine.ID(cmd.DatabaseId)
-				if databaseID == 0 && cmd.Name != catalog.MO_CATALOG {
-					databaseID = databaseMap[cmd.DatabaseName]
-				}
 				req := txnengine.CreateRelationReq{
+					ID:           ID(cmd.TableId),
 					Name:         cmd.Name,
 					DatabaseName: cmd.DatabaseName,
 					DatabaseID:   databaseID,
@@ -85,10 +82,11 @@ func (m *MemHandler) HandlePreCommit(meta txn.TxnMeta, req apipb.PrecommitWriteC
 			}
 		case []catalog.DropTable:
 			for _, cmd := range cmds {
+				databaseID := txnengine.ID(cmd.DatabaseId)
 				req := txnengine.DeleteRelationReq{
 					Name:         cmd.Name,
 					DatabaseName: cmd.DatabaseName,
-					DatabaseID:   txnengine.ID(cmd.DatabaseId),
+					DatabaseID:   databaseID,
 				}
 				if err = m.HandleDeleteRelation(meta, req,
 					new(txnengine.DeleteRelationResp)); err != nil {

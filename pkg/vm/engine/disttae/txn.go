@@ -40,7 +40,7 @@ func (txn *Transaction) getTableList(ctx context.Context, databaseId uint64) ([]
 	}
 	tableList := make([]string, len(rows))
 	for i := range rows {
-		tableList[i] = rows[i][0].(string)
+		tableList[i] = string(rows[i][0].([]byte))
 	}
 	return tableList, nil
 }
@@ -101,7 +101,7 @@ func (txn *Transaction) getDatabaseList(ctx context.Context) ([]string, error) {
 	}
 	databaseList := make([]string, len(rows))
 	for i := range rows {
-		databaseList[i] = rows[i][0].(string)
+		databaseList[i] = string(rows[i][0].([]byte))
 	}
 	return databaseList, nil
 }
@@ -290,12 +290,16 @@ func (txn *Transaction) readTable(ctx context.Context, databaseId uint64, tableI
 			return nil, err
 		}
 		for _, rd := range rds {
-			bat, err := rd.Read(columns, expr, nil)
-			if err != nil {
-				return nil, err
-			}
-			if bat != nil {
-				bats = append(bats, bat)
+			for {
+				bat, err := rd.Read(columns, expr, nil)
+				if err != nil {
+					return nil, err
+				}
+				if bat != nil {
+					bats = append(bats, bat)
+				} else {
+					break
+				}
 			}
 		}
 	}

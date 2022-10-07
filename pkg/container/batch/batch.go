@@ -223,6 +223,9 @@ func (bat *Batch) GetSubBatch(cols []string) *Batch {
 		if attr == cols[i] {
 			rbat.Vecs[i] = bat.Vecs[j]
 			i++
+			if i == len(cols) {
+				break
+			}
 		}
 	}
 	rbat.Zs = bat.Zs

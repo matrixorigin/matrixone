@@ -17,9 +17,10 @@ package logservice
 import (
 	"context"
 	"fmt"
-	"go.uber.org/zap"
 	"math/rand"
 	"sync"
+
+	"go.uber.org/zap"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"

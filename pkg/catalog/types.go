@@ -142,6 +142,7 @@ const (
 // tae and memengine do not make the catalog into a table
 // for its convenience, a conversion interface is provided to ensure easy use.
 type CreateDatabase struct {
+	DatabaseId  uint64
 	Name        string
 	CreateSql   string
 	Owner       uint32
@@ -156,6 +157,7 @@ type DropDatabase struct {
 }
 
 type CreateTable struct {
+	TableId      uint64
 	Name         string
 	CreateSql    string
 	Owner        uint32
