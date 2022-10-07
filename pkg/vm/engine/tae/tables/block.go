@@ -652,30 +652,19 @@ func (blk *dataBlock) LoadColumnData(
 }
 
 func (blk *dataBlock) ResolveDelta(ts types.TS) (bat *containers.Batch, err error) {
-	detaLoc := blk.meta.GetDeltaLoc()
-	if detaLoc == "" {
+	deltaloc := blk.meta.GetDeltaLoc()
+	if deltaloc == "" {
 		return nil, nil
 	}
 	bat = containers.NewBatch()
 	colNames := []string{catalog.PhyAddrColumnName, catalog.AttrCommitTs, catalog.AttrAborted}
 	colTypes := []types.Type{types.T_Rowid.ToType(), types.T_TS.ToType(), types.T_bool.ToType()}
-	delta := blk.file.GetDeltaFormKey(detaLoc)
 	for i := 0; i < 3; i++ {
-		vec := containers.MakeVector(colTypes[i], false)
+		vec, err := evictable.FetchDeltaData(nil, blk.bufMgr, blk.file, deltaloc, uint16(i), colTypes[i])
+		if err != nil {
+			return bat, err
+		}
 		bat.AddVector(colNames[i], vec)
-		col, err := delta.GetColumn(uint16(i))
-		if err != nil {
-			return bat, err
-		}
-		data, err := col.GetData()
-		if err != nil {
-			return bat, err
-		}
-		r := bytes.NewBuffer(data.Entries[0].Data)
-		if _, err = vec.ReadFrom(r); err != nil {
-			return bat, err
-		}
-		bat.Vecs[i] = vec
 	}
 	return
 }
