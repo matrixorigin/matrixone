@@ -487,7 +487,7 @@ func (blk *dataBlock) ResolveColumnFromMeta(
 	idx int,
 	buffer *bytes.Buffer) (view *model.ColumnView, err error) {
 	view = model.NewColumnView(ts, idx)
-	raw, err := blk.LoadColumnDataByMetaLoc(metaLoc, idx, buffer)
+	raw, err := blk.LoadColumnData(idx, buffer)
 	if err != nil {
 		return
 	}
@@ -650,18 +650,9 @@ func (blk *dataBlock) LoadColumnData(
 	id.Idx = uint16(colIdx)
 	return evictable.FetchColumnData(buffer, blk.bufMgr, id, blk.colObjects[colIdx], metaLoc, def)
 }
-func (blk *dataBlock) LoadColumnDataByMetaLoc(
-	metaLoc string,
-	colIdx int,
-	buffer *bytes.Buffer) (vec containers.Vector, err error) {
-	def := blk.meta.GetSchema().ColDefs[colIdx]
-	id := blk.meta.AsCommonID()
-	id.Idx = uint16(colIdx)
-	return evictable.FetchColumnData(buffer, blk.bufMgr, id, blk.colObjects[colIdx], metaLoc, def)
-}
 
 func (blk *dataBlock) ResolveDelta(ts types.TS) (bat *containers.Batch, err error) {
-	detaLoc := blk.meta.GetVisibleDeltaLoc(ts)
+	detaLoc := blk.meta.GetDeltaLoc()
 	if detaLoc == "" {
 		return nil, nil
 	}
@@ -672,7 +663,7 @@ func (blk *dataBlock) ResolveDelta(ts types.TS) (bat *containers.Batch, err erro
 	for i := 0; i < 3; i++ {
 		vec := containers.MakeVector(colTypes[i], false)
 		bat.AddVector(colNames[i], vec)
-		col, err := delta.GetColumn(0)
+		col, err := delta.GetColumn(uint16(i))
 		if err != nil {
 			return bat, err
 		}
