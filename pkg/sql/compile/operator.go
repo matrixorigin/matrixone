@@ -291,7 +291,7 @@ func constructInsert(n *plan.Node, eg engine.Engine, txnOperator TxnOperator) (*
 		TargetColDefs: n.TableDef.Cols,
 		Engine:        eg,
 		DB:            db,
-		TableID:       relation.GetTableID(ctx),
+		TblName:       n.TableDef.Name,
 		CPkeyColDef:   n.TableDef.CompositePkey,
 	}, nil
 }
@@ -299,7 +299,7 @@ func constructInsert(n *plan.Node, eg engine.Engine, txnOperator TxnOperator) (*
 func constructUpdate(n *plan.Node, eg engine.Engine, txnOperator TxnOperator) (*update.Argument, error) {
 	ctx := context.TODO()
 	us := make([]*update.UpdateCtx, len(n.UpdateCtxs))
-	tableID := make([]string, len(n.UpdateCtxs))
+	tblName := make([]string, len(n.UpdateCtxs))
 	db := make([]engine.Database, len(n.UpdateCtxs))
 	for i, updateCtx := range n.UpdateCtxs {
 		dbSource, err := eg.Database(ctx, updateCtx.DbName, txnOperator)
@@ -312,7 +312,7 @@ func constructUpdate(n *plan.Node, eg engine.Engine, txnOperator TxnOperator) (*
 			return nil, err
 		}
 
-		tableID[i] = relation.GetTableID(ctx)
+		tblName[i] = updateCtx.TblName
 		colNames := make([]string, 0, len(updateCtx.UpdateCols))
 		for _, col := range updateCtx.UpdateCols {
 			colNames = append(colNames, col.Name)
@@ -334,7 +334,7 @@ func constructUpdate(n *plan.Node, eg engine.Engine, txnOperator TxnOperator) (*
 		UpdateCtxs:  us,
 		Engine:      eg,
 		DB:          db,
-		TableID:     tableID,
+		TblName:     tblName,
 		TableDefVec: n.TableDefVec,
 	}, nil
 }

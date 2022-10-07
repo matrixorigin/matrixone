@@ -112,7 +112,7 @@ func (s *Scope) DropTable(c *Compile) error {
 	if err := dbSource.Delete(c.ctx, tblName); err != nil {
 		return err
 	}
-	return colexec.DeleteAutoIncrCol(rel, dbSource, c.ctx, c.proc, rel.GetTableID(c.ctx))
+	return colexec.DeleteAutoIncrCol(rel, dbSource, c.ctx, c.proc, tblName)
 }
 
 func planDefsToExeDefs(planDefs []*plan.TableDef_DefType) ([]engine.TableDef, error) {

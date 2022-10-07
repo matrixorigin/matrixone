@@ -26,7 +26,7 @@ type Argument struct {
 	TableDefVec  []*plan.TableDef
 	Engine       engine.Engine
 	DB           []engine.Database
-	TableID      []string
+	TblName      []string
 }
 
 type UpdateCtx struct {
