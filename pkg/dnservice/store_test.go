@@ -287,3 +287,9 @@ func (thc *testHAKeeperClient) SendDNHeartbeat(ctx context.Context, hb logservic
 	defer thc.mu.RUnlock()
 	return thc.mu.commandBatch, nil
 }
+
+var nextID uint64
+
+func (thc *testHAKeeperClient) AllocateID(ctx context.Context) (uint64, error) {
+	return atomic.AddUint64(&nextID, 1), nil
+}

@@ -16,26 +16,18 @@ package memoryengine
 
 import (
 	"bytes"
+	"context"
 	crand "crypto/rand"
 	"encoding/binary"
+	"math/bits"
 	"math/rand"
+	"sync/atomic"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
-type ID int64
-
-func init() {
-	var seed int64
-	binary.Read(crand.Reader, binary.LittleEndian, &seed)
-	rand.Seed(seed)
-}
-
-func NewID() (id ID) {
-	//TODO will use an id generate service
-	id = ID(rand.Int63())
-	return
-}
+type ID uint64
 
 func (i ID) Less(than ID) bool {
 	return i < than
@@ -60,4 +52,55 @@ func (i ID) ToRowID() types.Rowid {
 	var rowID types.Rowid
 	copy(rowID[:], buf.Bytes())
 	return rowID
+}
+
+type IDGenerator interface {
+	NewID(context.Context) (ID, error)
+}
+
+type randomIDGenerator struct{}
+
+var _ IDGenerator = new(randomIDGenerator)
+
+func init() {
+	var seed int64
+	binary.Read(crand.Reader, binary.LittleEndian, &seed)
+	rand.Seed(seed)
+}
+
+var idCounter int64
+
+func (r *randomIDGenerator) NewID(_ context.Context) (ID, error) {
+	ts := time.Now().Unix()
+	n := bits.LeadingZeros(uint(ts))
+	return ID(ts<<n + atomic.AddInt64(&idCounter, 1)%(1<<n)), nil
+}
+
+var RandomIDGenerator = new(randomIDGenerator)
+
+type hakeeperIDGenerator interface {
+	// both CNHAKeeperClient and DNHAKeeperClient has this method
+	AllocateID(ctx context.Context) (uint64, error)
+}
+
+type HakeeperIDGenerator struct {
+	generator hakeeperIDGenerator
+}
+
+func NewHakeeperIDGenerator(
+	generator hakeeperIDGenerator,
+) *HakeeperIDGenerator {
+	return &HakeeperIDGenerator{
+		generator: generator,
+	}
+}
+
+var _ IDGenerator = new(HakeeperIDGenerator)
+
+func (h *HakeeperIDGenerator) NewID(ctx context.Context) (ID, error) {
+	id, err := h.generator.AllocateID(ctx)
+	if err != nil {
+		return 0, err
+	}
+	return ID(id), nil
 }

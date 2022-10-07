@@ -18,10 +18,10 @@ import (
 	"database/sql"
 	"fmt"
 	"io"
+	"sync/atomic"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/memoryengine"
 )
 
 type PhysicalRow[
@@ -35,13 +35,15 @@ type PhysicalRow[
 }
 
 type Version[T any] struct {
-	ID       ID
+	ID       int64
 	BornTx   *Transaction
 	BornTime Time
 	LockTx   *Transaction
 	LockTime Time
 	Value    T
 }
+
+var nextVersionID int64
 
 // Read reads the visible value from Values
 // readTime's logical time should be monotonically increasing in one transaction to reflect commands order
@@ -157,9 +159,8 @@ func (p *PhysicalRow[K, V]) Insert(
 	p = p.clone()
 	p.LastUpdate = time.Now()
 
-	id := memoryengine.NewID()
 	version = &Version[V]{
-		ID:       id,
+		ID:       atomic.AddInt64(&nextVersionID, 1),
 		BornTx:   tx,
 		BornTime: now,
 		Value:    value,
@@ -237,9 +238,8 @@ func (p *PhysicalRow[K, V]) Update(
 			value.LockTime = now
 			p.Versions[i] = value
 
-			id := memoryengine.NewID()
 			version = &Version[V]{
-				ID:       id,
+				ID:       atomic.AddInt64(&nextVersionID, 1),
 				BornTx:   tx,
 				BornTime: now,
 				Value:    newValue,
