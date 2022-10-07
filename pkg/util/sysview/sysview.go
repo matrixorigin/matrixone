@@ -28,7 +28,6 @@ const (
 	InformationDBConst = "information_schema"
 	sqlCreateDBConst   = "create database if not exists "
 	sqlUseDbConst      = "use "
-	sqlDropDBConst     = "drop database if exists "
 )
 
 var (
