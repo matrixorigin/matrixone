@@ -1633,6 +1633,11 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 
 		newPlan := plan2.DeepCopyPlan(prepareStmt.PreparePlan.GetDcl().GetPrepare().Plan)
 
+		//check privilege
+		err = authenticatePrivilegeOfPrepareOrExecute(requestCtx, cwft.ses, prepareStmt.PrepareStmt, prepareStmt.PreparePlan.GetDcl().GetPrepare().GetPlan())
+		if err != nil {
+			return nil, err
+		}
 		// replace ? and @var with their values
 		resetParamRule := plan2.NewResetParamRefRule(executePlan.Args)
 		resetVarRule := plan2.NewResetVarRefRule(cwft.ses.GetTxnCompilerContext())
@@ -1844,6 +1849,19 @@ func authenticatePrivilegeOfStatementAndPlan(requestCtx context.Context, ses *Se
 	return nil
 }
 
+// authenticatePrivilegeOfPrepareAndExecute checks the user can execute the Prepare or Execute statement
+func authenticatePrivilegeOfPrepareOrExecute(requestCtx context.Context, ses *Session, stmt tree.Statement, p *plan.Plan) error {
+	err := authenticatePrivilegeOfStatement(requestCtx, ses, stmt)
+	if err != nil {
+		return err
+	}
+	err = authenticatePrivilegeOfStatementAndPlan(requestCtx, ses, stmt, p)
+	if err != nil {
+		return err
+	}
+	return err
+}
+
 // canExecuteStatementInUncommittedTxn checks the user can execute the statement in an uncommitted transaction
 func (mce *MysqlCmdExecutor) canExecuteStatementInUncommittedTransaction(stmt tree.Statement) error {
 	can := StatementCanBeExecutedInUncommittedTransaction(stmt)
@@ -2020,11 +2038,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			if err != nil {
 				goto handleFailed
 			}
-			err = authenticatePrivilegeOfStatement(requestCtx, ses, prepareStmt.PrepareStmt)
-			if err != nil {
-				goto handleFailed
-			}
-			err = authenticatePrivilegeOfStatementAndPlan(requestCtx, ses, prepareStmt.PrepareStmt, prepareStmt.PreparePlan.GetDcl().GetPrepare().GetPlan())
+			err = authenticatePrivilegeOfPrepareOrExecute(requestCtx, ses, prepareStmt.PrepareStmt, prepareStmt.PreparePlan.GetDcl().GetPrepare().GetPlan())
 			if err != nil {
 				goto handleFailed
 			}
@@ -2034,11 +2048,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			if err != nil {
 				goto handleFailed
 			}
-			err = authenticatePrivilegeOfStatement(requestCtx, ses, prepareStmt.PrepareStmt)
-			if err != nil {
-				goto handleFailed
-			}
-			err = authenticatePrivilegeOfStatementAndPlan(requestCtx, ses, prepareStmt.PrepareStmt, prepareStmt.PreparePlan.GetDcl().GetPrepare().GetPlan())
+			err = authenticatePrivilegeOfPrepareOrExecute(requestCtx, ses, prepareStmt.PrepareStmt, prepareStmt.PreparePlan.GetDcl().GetPrepare().GetPlan())
 			if err != nil {
 				goto handleFailed
 			}
