@@ -543,7 +543,7 @@ func (blk *dataBlock) ResolveColumnFromANode(
 	if err != nil {
 		return
 	}
-	if holes != nil {
+	if holes != nil && holes.GetCardinality() != 0 {
 		if view.DeleteMask != nil {
 			view.DeleteMask.Or(holes)
 		} else {
