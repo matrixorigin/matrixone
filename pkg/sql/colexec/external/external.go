@@ -620,6 +620,7 @@ func GetSimdcsvReader(param *ExternalParam) (*ParseLineHandler, error) {
 func ScanFileData(param *ExternalParam, proc *process.Process) (*batch.Batch, error) {
 	var bat *batch.Batch
 	var err error
+	var cnt int
 	if param.plh == nil {
 		param.IgnoreLine = param.IgnoreLineTag
 		param.plh, err = GetSimdcsvReader(param)
@@ -628,11 +629,12 @@ func ScanFileData(param *ExternalParam, proc *process.Process) (*batch.Batch, er
 		}
 	}
 	plh := param.plh
-	plh.simdCsvLineArray, _, err = plh.simdCsvReader.Read(param.batchSize, param.Ctx, param.records)
+	plh.simdCsvLineArray, cnt, err = plh.simdCsvReader.Read(param.batchSize, param.Ctx, param.records)
 	if err != nil {
 		return nil, err
 	}
-	if len(plh.simdCsvLineArray) < param.batchSize {
+	if cnt < param.batchSize {
+		plh.simdCsvLineArray = plh.simdCsvLineArray[:cnt]
 		err := param.reader.Close()
 		if err != nil {
 			logutil.Errorf("close file failed. err:%v", err)
