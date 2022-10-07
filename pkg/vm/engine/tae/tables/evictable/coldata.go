@@ -157,9 +157,9 @@ func (n *ColDataNode) onUnload() {
 }
 
 func FetchColumnData(buf *bytes.Buffer, mgr base.INodeManager, id *common.ID, col file.ColumnBlock, metaloc string, colDef *catalog.ColDef) (res containers.Vector, err error) {
-	colDataKey := EncodeColDataKey(id)
+	colDataKey := EncodeColDataKey(id.Idx, metaloc)
 	factory := func() (base.INode, error) {
-		return NewColDataNode(mgr, colDataKey, EncodeColMetaKey(id), col, metaloc, colDef, id.SegmentID, id.BlockID)
+		return NewColDataNode(mgr, colDataKey, EncodeColMetaKey(id.Idx, metaloc), col, metaloc, colDef, id.SegmentID, id.BlockID)
 	}
 	h, err := PinEvictableNode(mgr, colDataKey, factory)
 	if err != nil {
