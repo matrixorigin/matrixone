@@ -182,7 +182,7 @@ func TestRegularReplaceTest1(t *testing.T) {
 	repl := "#"
 
 	//Predefined Correct Values
-	expected := "#abc#"
+	expected := "#abc2"
 	result, _ := RegularReplace(expr, pat, repl, 1, 1, "")
 
 	require.Equal(t, expected, result)
@@ -208,7 +208,7 @@ func TestRegularReplaceTest3(t *testing.T) {
 	repl := []string{"#", "#"}
 
 	//Predefined Correct Values
-	expected := []string{"#####abcde#####", "#1234abcde5678#"}
+	expected := []string{"#1234abcde56789", "#1234abcde56789"}
 	result := make([]string, len(expr))
 	for i := range expr {
 		result[i], _ = RegularReplace(expr[i], pat[i], repl[i], 1, 1, "")
@@ -223,11 +223,11 @@ func TestRegularReplaceTest4(t *testing.T) {
 	repl := []string{"", "", "", ""}
 
 	//Predefined Correct Values
-	expected := []string{"abcdefgABC", "abcDEfgABC", "abcDEfgABC", "abcDefg12ABC"}
+	expected := []string{"abcdefgABC", "abcDEfgABC", "abcDEfgABC", "abcDefgABC"}
 	pos := []int64{4, 4, 7, 10}
 	result := make([]string, len(expr))
 	for i := range expr {
-		result[i], _ = RegularReplace(expr[i], pat[i], repl[i], pos[i], 1, "")
+		result[i], _ = RegularReplace(expr[i], pat[i], repl[i], pos[i], 0, "")
 	}
 	require.Equal(t, expected, result)
 }

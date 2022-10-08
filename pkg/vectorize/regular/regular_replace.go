@@ -44,7 +44,7 @@ func RegularReplace(expr, pat, repl string, pos, occurrence int64, match_type st
 	}
 	if occurrence == 0 {
 		return reg.ReplaceAllLiteralString(expr, repl), nil
-	}else if occurrence == int64(len(matchRes)){
+	} else if occurrence == int64(len(matchRes)) {
 		// the string won't be replaced
 		notRepl := expr[:matchRes[occurrence-1][0]]
 		// the string will be replaced
@@ -54,7 +54,7 @@ func RegularReplace(expr, pat, repl string, pos, occurrence int64, match_type st
 		// the string won't be replaced
 		notRepl := expr[:matchRes[occurrence-1][0]]
 		// the string will be replaced
-		replace := expr[matchRes[occurrence-1][0]: matchRes[occurrence][0]]
+		replace := expr[matchRes[occurrence-1][0]:matchRes[occurrence][0]]
 		left := expr[matchRes[occurrence][0]:]
 		return notRepl + reg.ReplaceAllLiteralString(replace, repl) + left, nil
 	}
@@ -80,7 +80,7 @@ func RegularReplaceWithReg(expr string, pat *regexp.Regexp, repl string, pos, oc
 
 	if occurrence == 0 {
 		return pat.ReplaceAllLiteralString(expr, repl), nil
-	}else if occurrence == int64(len(matchRes)){
+	} else if occurrence == int64(len(matchRes)) {
 		// the string won't be replaced
 		notRepl := expr[:matchRes[occurrence-1][0]]
 		// the string will be replaced
@@ -90,7 +90,7 @@ func RegularReplaceWithReg(expr string, pat *regexp.Regexp, repl string, pos, oc
 		// the string won't be replaced
 		notRepl := expr[:matchRes[occurrence-1][0]]
 		// the string will be replaced
-		replace := expr[matchRes[occurrence-1][0]: matchRes[occurrence][0]]
+		replace := expr[matchRes[occurrence-1][0]:matchRes[occurrence][0]]
 		left := expr[matchRes[occurrence][0]:]
 		return notRepl + pat.ReplaceAllLiteralString(replace, repl) + left, nil
 	}
