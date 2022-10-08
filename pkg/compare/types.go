@@ -28,14 +28,40 @@ type Compare interface {
 }
 
 type compare[T any] struct {
-	xs  [][]T
-	cmp func(T, T) int
-	ns  []*nulls.Nulls
-	vs  []*vector.Vector
-	cpy func([]T, []T, int64, int64)
+	xs        [][]T
+	cmp       func(T, T) int
+	ns        []*nulls.Nulls
+	vs        []*vector.Vector
+	cpy       func([]T, []T, int64, int64)
+	nullsLast bool
 }
 
 type strCompare struct {
-	desc bool
-	vs   []*vector.Vector
+	desc      bool
+	nullsLast bool
+	vs        []*vector.Vector
+}
+
+func nullsCompare(n1, n2 *nulls.Nulls, i1, i2 int64, nullsLast bool) int {
+	if nulls.Contains(n1, uint64(i1)) {
+		if nulls.Contains(n2, uint64(i2)) {
+			return 0
+		} else {
+			if nullsLast {
+				return 1
+			} else {
+				return -1
+			}
+		}
+	} else {
+		if nulls.Contains(n2, uint64(i2)) {
+			if nullsLast {
+				return -1
+			} else {
+				return 1
+			}
+		} else {
+			return 0
+		}
+	}
 }
