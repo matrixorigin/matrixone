@@ -2214,6 +2214,13 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr)
 
 		node.Children[1] = childID
 
+	case plan.Node_UNION, plan.Node_UNION_ALL, plan.Node_MINUS, plan.Node_MINUS_ALL, plan.Node_INTERSECT, plan.Node_INTERSECT_ALL:
+		childID, _ := builder.pushdownFilters(node.Children[0], nil)
+		node.Children[0] = childID
+
+		childID, _ = builder.pushdownFilters(node.Children[1], nil)
+		node.Children[1] = childID
+
 	case plan.Node_PROJECT:
 		child := builder.qry.Nodes[node.Children[0]]
 		if (child.NodeType == plan.Node_VALUE_SCAN || child.NodeType == plan.Node_EXTERNAL_SCAN) && child.RowsetData == nil {
@@ -2247,6 +2254,7 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr)
 
 	case plan.Node_TABLE_SCAN, plan.Node_EXTERNAL_SCAN:
 		node.FilterList = append(node.FilterList, filters...)
+
 	case plan.Node_UNNEST:
 		node.FilterList = append(node.FilterList, filters...)
 		childId := node.Children[0]
