@@ -107,6 +107,7 @@ type Response interface {
 }
 
 type CreateDatabaseReq struct {
+	ID         ID
 	AccessInfo AccessInfo
 	Name       string
 }
@@ -143,6 +144,7 @@ type DeleteDatabaseResp struct {
 }
 
 type CreateRelationReq struct {
+	ID           ID
 	DatabaseID   ID
 	DatabaseName string
 	Name         string

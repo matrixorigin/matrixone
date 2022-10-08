@@ -59,7 +59,7 @@ type IndexEntry[
 ] struct {
 	Index     Tuple
 	Key       K
-	VersionID ID
+	VersionID int64
 	Value     V
 }
 
@@ -69,7 +69,7 @@ type WriteEntry[
 ] struct {
 	Transaction *Transaction
 	Row         *PhysicalRow[K, V]
-	VersionID   ID
+	VersionID   int64
 }
 
 func NewTable[
@@ -126,7 +126,7 @@ func compareIndexEntry[
 	if b.Key.Less(a.Key) {
 		return false
 	}
-	return a.VersionID.Less(b.VersionID)
+	return a.VersionID < b.VersionID
 }
 
 func compareWriteEntry[
@@ -165,7 +165,7 @@ func (t *Table[K, V, R]) Insert(
 
 		for i := len(physicalRow.Versions) - 1; i >= 0; i-- {
 			version := physicalRow.Versions[i]
-			if version.Visible(tx.Time, tx.ID) {
+			if version.Visible(tx.Time, tx.ID, tx.IsolationPolicy) {
 				return moerr.NewDuplicate()
 			}
 		}

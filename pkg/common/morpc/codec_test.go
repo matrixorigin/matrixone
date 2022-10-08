@@ -27,7 +27,7 @@ import (
 
 func TestEncodeAndDecode(t *testing.T) {
 	codec := newTestCodec()
-	buf := buf.NewByteBuf(32)
+	buf := buf.NewByteBuf(1)
 
 	ctx, cancel := context.WithTimeout(context.TODO(), time.Hour*10)
 	defer cancel()

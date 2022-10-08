@@ -45,7 +45,7 @@ type (
 type DatabaseRow struct {
 	ID        ID
 	AccountID uint32 // 0 is the sys account
-	Name      string
+	Name      []byte
 }
 
 func (d *DatabaseRow) Key() ID {
@@ -65,16 +65,21 @@ func (d *DatabaseRow) Indexes() []Tuple {
 
 var _ NamedRow = new(DatabaseRow)
 
-func (d *DatabaseRow) AttrByName(tx *Transaction, name string) (ret Nullable, err error) {
+func (d *DatabaseRow) AttrByName(handler *MemHandler, tx *Transaction, name string) (ret Nullable, err error) {
+	defer func() {
+		if ret.Value != nil {
+			verifyAttr(catalog.MoDatabaseSchema, catalog.MoDatabaseTypes, name, ret.Value)
+		}
+	}()
 	switch name {
 	case catalog.SystemDBAttr_ID:
 		ret.Value = uint64(d.ID)
 	case catalog.SystemDBAttr_Name:
 		ret.Value = d.Name
 	case catalog.SystemDBAttr_CatalogName:
-		ret.Value = ""
+		ret.Value = []byte("")
 	case catalog.SystemDBAttr_CreateSQL:
-		ret.Value = ""
+		ret.Value = []byte("")
 	case catalog.SystemDBAttr_Owner:
 		ret.Value = uint32(d.AccountID)
 	case catalog.SystemDBAttr_Creator:
@@ -88,24 +93,18 @@ func (d *DatabaseRow) AttrByName(tx *Transaction, name string) (ret Nullable, er
 	default:
 		panic(fmt.Sprintf("fixme: %s", name))
 	}
-	verifyAttr(catalog.MoDatabaseSchema, catalog.MoDatabaseTypes, name, ret.Value)
 	return
-}
-
-func (d *DatabaseRow) SetHandler(handler *MemHandler) {
 }
 
 type RelationRow struct {
 	ID           ID
 	DatabaseID   ID
-	Name         string
+	Name         []byte
 	Type         memoryengine.RelationType
-	Comments     string
+	Comments     []byte
 	Properties   map[string]string
-	PartitionDef string
-	ViewDef      string
-
-	handler *MemHandler
+	PartitionDef []byte
+	ViewDef      []byte
 }
 
 func (r *RelationRow) Key() ID {
@@ -125,7 +124,12 @@ func (r *RelationRow) Indexes() []Tuple {
 
 var _ NamedRow = new(RelationRow)
 
-func (r *RelationRow) AttrByName(tx *Transaction, name string) (ret Nullable, err error) {
+func (r *RelationRow) AttrByName(handler *MemHandler, tx *Transaction, name string) (ret Nullable, err error) {
+	defer func() {
+		if ret.Value != nil {
+			verifyAttr(catalog.MoDatabaseSchema, catalog.MoDatabaseTypes, name, ret.Value)
+		}
+	}()
 	switch name {
 	case catalog.SystemRelAttr_ID:
 		ret.Value = uint64(r.ID)
@@ -133,34 +137,34 @@ func (r *RelationRow) AttrByName(tx *Transaction, name string) (ret Nullable, er
 		ret.Value = r.Name
 	case catalog.SystemRelAttr_DBID:
 		if r.DatabaseID.IsEmpty() {
-			ret.Value = ""
+			ret.Value = uint64(0)
 			return
 		}
-		db, err := r.handler.databases.Get(tx, r.DatabaseID)
+		db, err := handler.databases.Get(tx, r.DatabaseID)
 		if err != nil {
 			return ret, err
 		}
 		ret.Value = uint64(db.ID)
 	case catalog.SystemRelAttr_DBName:
 		if r.DatabaseID.IsEmpty() {
-			ret.Value = ""
+			ret.Value = []byte("")
 			return
 		}
-		db, err := r.handler.databases.Get(tx, r.DatabaseID)
+		db, err := handler.databases.Get(tx, r.DatabaseID)
 		if err != nil {
 			return ret, err
 		}
 		ret.Value = db.Name
 	case catalog.SystemRelAttr_Persistence:
-		ret.Value = ""
+		ret.Value = []byte("")
 	case catalog.SystemRelAttr_Kind:
-		ret.Value = "r"
+		ret.Value = []byte("r")
 	case catalog.SystemRelAttr_Comment:
 		ret.Value = r.Comments
 	case catalog.SystemRelAttr_Partition:
 		ret.Value = r.PartitionDef
 	case catalog.SystemRelAttr_CreateSQL:
-		ret.Value = ""
+		ret.Value = []byte("")
 	case catalog.SystemRelAttr_Owner:
 		ret.Value = uint32(0) //TODO
 	case catalog.SystemRelAttr_Creator:
@@ -174,12 +178,7 @@ func (r *RelationRow) AttrByName(tx *Transaction, name string) (ret Nullable, er
 	default:
 		panic(fmt.Sprintf("fixme: %s", name))
 	}
-	verifyAttr(catalog.MoTablesSchema, catalog.MoTablesTypes, name, ret.Value)
 	return
-}
-
-func (r *RelationRow) SetHandler(handler *MemHandler) {
-	r.handler = handler
 }
 
 type AttributeRow struct {
@@ -188,8 +187,6 @@ type AttributeRow struct {
 	Order      int
 	Nullable   bool
 	engine.Attribute
-
-	handler *MemHandler
 }
 
 func (a *AttributeRow) Key() ID {
@@ -211,38 +208,43 @@ func (a *AttributeRow) Indexes() []Tuple {
 
 var _ NamedRow = new(AttributeRow)
 
-func (a *AttributeRow) AttrByName(tx *Transaction, name string) (ret Nullable, err error) {
+func (a *AttributeRow) AttrByName(handler *MemHandler, tx *Transaction, name string) (ret Nullable, err error) {
+	defer func() {
+		if ret.Value != nil {
+			verifyAttr(catalog.MoDatabaseSchema, catalog.MoDatabaseTypes, name, ret.Value)
+		}
+	}()
 	switch name {
 	case catalog.SystemColAttr_UniqName:
-		ret.Value = a.Name
+		ret.Value = []byte(a.Name)
 	case catalog.SystemColAttr_AccID:
 		ret.Value = uint32(0)
 	case catalog.SystemColAttr_Name:
-		ret.Value = a.Name
+		ret.Value = []byte(a.Name)
 	case catalog.SystemColAttr_DBID:
-		rel, err := a.handler.relations.Get(tx, a.RelationID)
+		rel, err := handler.relations.Get(tx, a.RelationID)
 		if err != nil {
 			return ret, err
 		}
 		if rel.DatabaseID.IsEmpty() {
-			ret.Value = ""
+			ret.Value = uint64(0)
 			return ret, nil
 		}
-		db, err := a.handler.databases.Get(tx, rel.DatabaseID)
+		db, err := handler.databases.Get(tx, rel.DatabaseID)
 		if err != nil {
 			return ret, err
 		}
 		ret.Value = uint64(db.ID)
 	case catalog.SystemColAttr_DBName:
-		rel, err := a.handler.relations.Get(tx, a.RelationID)
+		rel, err := handler.relations.Get(tx, a.RelationID)
 		if err != nil {
 			return ret, err
 		}
 		if rel.DatabaseID.IsEmpty() {
-			ret.Value = ""
+			ret.Value = []byte("")
 			return ret, nil
 		}
-		db, err := a.handler.databases.Get(tx, rel.DatabaseID)
+		db, err := handler.databases.Get(tx, rel.DatabaseID)
 		if err != nil {
 			return ret, err
 		}
@@ -250,7 +252,7 @@ func (a *AttributeRow) AttrByName(tx *Transaction, name string) (ret Nullable, e
 	case catalog.SystemColAttr_RelID:
 		ret.Value = uint64(a.RelationID)
 	case catalog.SystemColAttr_RelName:
-		rel, err := a.handler.relations.Get(tx, a.RelationID)
+		rel, err := handler.relations.Get(tx, a.RelationID)
 		if err != nil {
 			return ret, err
 		}
@@ -267,17 +269,17 @@ func (a *AttributeRow) AttrByName(tx *Transaction, name string) (ret Nullable, e
 		ret.Value = boolToInt8(a.Default != nil && a.Default.Expr != nil)
 	case catalog.SystemColAttr_DefaultExpr:
 		if a.Default != nil && a.Default.Expr != nil {
-			ret.Value = a.Default.Expr.String()
+			ret.Value = []byte(a.Default.Expr.String())
 		} else {
-			ret.Value = ""
+			ret.Value = []byte("")
 		}
 	case catalog.SystemColAttr_IsDropped:
 		ret.Value = boolToInt8(false)
 	case catalog.SystemColAttr_ConstraintType:
 		if a.Primary {
-			ret.Value = "p"
+			ret.Value = []byte("p")
 		} else {
-			ret.Value = "n"
+			ret.Value = []byte("n")
 		}
 	case catalog.SystemColAttr_IsUnsigned:
 		ret.Value = boolToInt8(a.Type.Oid == types.T_uint8 ||
@@ -290,18 +292,13 @@ func (a *AttributeRow) AttrByName(tx *Transaction, name string) (ret Nullable, e
 	case catalog.SystemColAttr_IsHidden:
 		ret.Value = boolToInt8(a.IsHidden)
 	case catalog.SystemColAttr_Comment:
-		ret.Value = a.Comment
+		ret.Value = []byte(a.Comment)
 	case rowIDColumnName:
 		ret.Value = a.ID.ToRowID()
 	default:
 		panic(fmt.Sprintf("fixme: %s", name))
 	}
-	verifyAttr(catalog.MoColumnsSchema, catalog.MoColumnsTypes, name, ret.Value)
 	return
-}
-
-func (a *AttributeRow) SetHandler(handler *MemHandler) {
-	a.handler = handler
 }
 
 type IndexRow struct {

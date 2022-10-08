@@ -32,48 +32,29 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 )
 
-type dirtyPoint = txnif.DirtyPoint
-type dirtySet = txnif.DirtySet
-
 // dirtyMemo intercepts txn to record changed segments and blocks, or catalog
 //
 // no locks to protect dirtyMemo because it is expected to be quried by other goroutines
 // until the txn enqueued, and after that, no one will change it
 type dirtyMemo struct {
 	// tableChanges records modified segments and blocks in current txn
-	tableChanges map[uint64]dirtySet
+	tableChanges *common.Tree
 	// catalogChanged indicates whether create/drop db/table
 	catalogChanged bool
 }
 
 func newDirtyMemo() *dirtyMemo {
 	return &dirtyMemo{
-		tableChanges: make(map[uint64]dirtySet, 0),
+		tableChanges: common.NewTree(),
 	}
 }
 
-func (m *dirtyMemo) recordBlk(id common.ID) {
-	point := dirtyPoint{
-		SegID: id.SegmentID,
-		BlkID: id.BlockID,
-	}
-	m.recordDirty(id.TableID, point)
+func (m *dirtyMemo) recordBlk(dbID uint64, id *common.ID) {
+	m.tableChanges.AddBlock(dbID, id.TableID, id.SegmentID, id.BlockID)
 }
 
-func (m *dirtyMemo) recordSeg(tid, sid uint64) {
-	point := dirtyPoint{
-		SegID: sid,
-	}
-	m.recordDirty(tid, point)
-}
-
-func (m *dirtyMemo) recordDirty(tid uint64, point dirtyPoint) {
-	dirties, exist := m.tableChanges[tid]
-	if !exist {
-		dirties = make(map[dirtyPoint]struct{}, 0)
-		m.tableChanges[tid] = dirties
-	}
-	dirties[point] = struct{}{}
+func (m *dirtyMemo) recordSeg(dbID, tableID, segID uint64) {
+	m.tableChanges.AddSegment(dbID, tableID, segID)
 }
 
 func (m *dirtyMemo) recordCatalogChange() {
@@ -82,14 +63,16 @@ func (m *dirtyMemo) recordCatalogChange() {
 
 type txnStore struct {
 	txnbase.NoopTxnStore
-	dbs         map[uint64]*txnDB
-	mu          sync.RWMutex
-	driver      wal.Driver
-	nodesMgr    base.INodeManager
-	txn         txnif.AsyncTxn
-	catalog     *catalog.Catalog
-	cmdMgr      *commandManager
-	logs        []entry.Entry
+	dbs      map[uint64]*txnDB
+	mu       sync.RWMutex
+	driver   wal.Driver
+	nodesMgr base.INodeManager
+	txn      txnif.AsyncTxn
+	catalog  *catalog.Catalog
+	cmdMgr   *commandManager
+	logs     []entry.Entry
+	//warChecker records all the db/table/segment/blocks visited/changed by the txn for
+	//           DML-DDL(DML encounters DDL) conflict detection when preparing commit.
 	warChecker  *warChecker
 	dataFactory *tables.DataFactory
 	writeOps    uint32
@@ -132,6 +115,38 @@ func (store *txnStore) LogTxnEntry(dbId uint64, tableId uint64, entry txnif.TxnE
 	return db.LogTxnEntry(tableId, entry, readed)
 }
 
+func (store *txnStore) LogTxnState(sync bool) (logEntry entry.Entry, err error) {
+	cmd := txnbase.NewTxnStateCmd(
+		store.txn.GetID(),
+		store.txn.GetTxnState(false),
+		store.txn.GetCommitTS(),
+	)
+	var buf []byte
+	if buf, err = cmd.Marshal(); err != nil {
+		return
+	}
+	logEntry = entry.GetBase()
+	logEntry.SetType(ETTxnState)
+	if err = logEntry.SetPayload(buf); err != nil {
+		return
+	}
+	info := &entry.Info{
+		Group: wal.GroupC,
+		TxnId: store.txn.GetID(),
+	}
+	logEntry.SetInfo(info)
+	var lsn uint64
+	lsn, err = store.driver.AppendEntry(wal.GroupC, logEntry)
+	if err != nil {
+		return
+	}
+	if sync {
+		err = logEntry.WaitDone()
+	}
+	logutil.Debugf("LogTxnState LSN=%d, Size=%d", lsn, len(buf))
+	return
+}
+
 func (store *txnStore) LogSegmentID(dbId, tid, sid uint64) {
 	db, _ := store.getOrSetDB(dbId)
 	db.LogSegmentID(tid, sid)
@@ -160,7 +175,7 @@ func (store *txnStore) BindTxn(txn txnif.AsyncTxn) {
 	store.txn = txn
 }
 
-func (store *txnStore) BatchDedup(dbId, id uint64, pks ...containers.Vector) (err error) {
+func (store *txnStore) BatchDedup(dbId, id uint64, pk containers.Vector) (err error) {
 	db, err := store.getOrSetDB(dbId)
 	if err != nil {
 		return err
@@ -169,7 +184,7 @@ func (store *txnStore) BatchDedup(dbId, id uint64, pks ...containers.Vector) (er
 	// 	return txnbase.ErrNotFound
 	// }
 
-	return db.BatchDedup(id, pks...)
+	return db.BatchDedup(id, pk)
 }
 
 func (store *txnStore) Append(dbId, id uint64, data *containers.Batch) error {
@@ -504,7 +519,6 @@ func (store *txnStore) PreApplyCommit() (err error) {
 		return
 	}
 
-	//TODO:How to distinguish prepare log of 2PC entry from commit log entry of 1PC?
 	logEntry, err := store.cmdMgr.ApplyTxnRecord(store.txn.GetID(), store.txn)
 	if err != nil {
 		return
@@ -551,15 +565,20 @@ func (store *txnStore) PrepareRollback() error {
 
 func (store *txnStore) GetLSN() uint64 { return store.cmdMgr.lsn }
 
-func (store *txnStore) HasTableDataChanges(tableID uint64) bool {
-	_, changed := store.dirtyMemo.tableChanges[tableID]
-	return changed
+func (store *txnStore) HasAnyTableDataChanges() bool {
+	return store.dirtyMemo.tableChanges.TableCount() > 0
 }
 
-// GetTableDirtyPoints returns touched segments and blocks in the txn.
-func (store *txnStore) GetTableDirtyPoints(tableID uint64) dirtySet {
-	dirtiesMap := store.dirtyMemo.tableChanges[tableID]
-	return dirtiesMap
+// GetDirty returns all touched segments and blocks in the txn, group by table
+func (store *txnStore) GetDirty() *common.Tree { return store.dirtyMemo.tableChanges }
+
+func (store *txnStore) HasTableDataChanges(id uint64) bool {
+	return store.dirtyMemo.tableChanges.HasTable(id)
+}
+
+// GetDirtyTableByID returns touched segments and blocks of a table in the txn, group by segment
+func (store *txnStore) GetDirtyTableByID(id uint64) *common.TableTree {
+	return store.dirtyMemo.tableChanges.GetTable(id)
 }
 
 func (store *txnStore) HasCatalogChanges() bool {

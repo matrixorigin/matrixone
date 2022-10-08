@@ -26,13 +26,13 @@ type TxnState int32
 
 const (
 	TxnStateActive TxnState = iota
-	//TxnStateCommitting only for 1PC
 	TxnStatePreparing
 	//TxnStatePrepared only for 2PC
 	TxnStatePrepared
-	//TxnStateCommittingFinished only for 2PC
+	//TxnStateCommittingFinished only for 2PC txn runs on coordinator
 	TxnStateCommittingFinished
 	TxnStateRollbacking
+	//TxnStateCommitted , TxnStateRollbacked, and TxnStateUnknown are final states.
 	TxnStateCommitted
 	TxnStateRollbacked
 	TxnStateUnknown

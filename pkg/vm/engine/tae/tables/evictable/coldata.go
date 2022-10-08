@@ -134,7 +134,7 @@ func (n *ColDataNode) fetchData() (containers.Vector, error) {
 	srcBuf := fsVector.Entries[0].Data
 	v := vector.New(n.colDef.Type)
 	v.Read(srcBuf)
-	return containers.MOToVectorTmp(v, n.colDef.NullAbility), nil
+	return containers.NewVectorWithSharedMemory(v, n.colDef.NullAbility), nil
 }
 
 func (n *ColDataNode) GetData(buf *bytes.Buffer) (containers.Vector, error) {
@@ -157,9 +157,9 @@ func (n *ColDataNode) onUnload() {
 }
 
 func FetchColumnData(buf *bytes.Buffer, mgr base.INodeManager, id *common.ID, col file.ColumnBlock, metaloc string, colDef *catalog.ColDef) (res containers.Vector, err error) {
-	colDataKey := EncodeColDataKey(id)
+	colDataKey := EncodeColDataKey(id.Idx, metaloc)
 	factory := func() (base.INode, error) {
-		return NewColDataNode(mgr, colDataKey, EncodeColMetaKey(id), col, metaloc, colDef, id.SegmentID, id.BlockID)
+		return NewColDataNode(mgr, colDataKey, EncodeColMetaKey(id.Idx, metaloc), col, metaloc, colDef, id.SegmentID, id.BlockID)
 	}
 	h, err := PinEvictableNode(mgr, colDataKey, factory)
 	if err != nil {

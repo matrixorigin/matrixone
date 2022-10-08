@@ -16,6 +16,7 @@ package containers
 
 import (
 	"fmt"
+
 	"github.com/RoaringBitmap/roaring"
 	"github.com/RoaringBitmap/roaring/roaring64"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -54,13 +55,6 @@ func (impl *nullableVecImpl[T]) Get(i int) (v any) {
 		return types.Null{}
 	}
 	return impl.derived.stlvec.Get(i)
-}
-
-func (impl *nullableVecImpl[T]) GetCopy(i int) (v any) {
-	if impl.IsNull(i) {
-		return types.Null{}
-	}
-	return impl.derived.stlvec.GetCopy(i)
 }
 
 // Modification
