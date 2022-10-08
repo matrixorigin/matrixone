@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"math"
 	"sync"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -46,7 +47,10 @@ type CatalogHandler struct {
 
 var _ Handler = new(CatalogHandler)
 
-func NewCatalogHandler(upstream *MemHandler) *CatalogHandler {
+func NewCatalogHandler(upstream *MemHandler) (*CatalogHandler, error) {
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Hour)
+	defer cancel()
 
 	handler := &CatalogHandler{
 		upstream:       upstream,
@@ -119,8 +123,12 @@ func NewCatalogHandler(upstream *MemHandler) *CatalogHandler {
 		if !ok {
 			continue
 		}
+		id, err := upstream.idGenerator.NewID(ctx)
+		if err != nil {
+			return nil, err
+		}
 		row := &AttributeRow{
-			ID:         memoryengine.NewID(),
+			ID:         id,
 			RelationID: databasesRelRow.ID,
 			Order:      i,
 			Nullable:   true,
@@ -136,8 +144,12 @@ func NewCatalogHandler(upstream *MemHandler) *CatalogHandler {
 		if !ok {
 			continue
 		}
+		id, err := upstream.idGenerator.NewID(ctx)
+		if err != nil {
+			return nil, err
+		}
 		row := &AttributeRow{
-			ID:         memoryengine.NewID(),
+			ID:         id,
 			RelationID: tablesRelRow.ID,
 			Order:      i,
 			Nullable:   true,
@@ -153,8 +165,12 @@ func NewCatalogHandler(upstream *MemHandler) *CatalogHandler {
 		if !ok {
 			continue
 		}
+		id, err := upstream.idGenerator.NewID(ctx)
+		if err != nil {
+			return nil, err
+		}
 		row := &AttributeRow{
-			ID:         memoryengine.NewID(),
+			ID:         id,
 			RelationID: attributesRelRow.ID,
 			Order:      i,
 			Nullable:   true,
@@ -165,7 +181,7 @@ func NewCatalogHandler(upstream *MemHandler) *CatalogHandler {
 		}
 	}
 
-	return handler
+	return handler, nil
 }
 
 func (c *CatalogHandler) HandleAddTableDef(ctx context.Context, meta txn.TxnMeta, req memoryengine.AddTableDefReq, resp *memoryengine.AddTableDefResp) (err error) {
@@ -228,7 +244,7 @@ func (c *CatalogHandler) HandleCommitting(ctx context.Context, meta txn.TxnMeta)
 func (c *CatalogHandler) HandleCreateDatabase(ctx context.Context, meta txn.TxnMeta, req memoryengine.CreateDatabaseReq, resp *memoryengine.CreateDatabaseResp) (err error) {
 
 	tx := c.upstream.getTx(meta)
-	if err := c.upstream.ensureAccount(tx, req.AccessInfo); err != nil {
+	if err := c.upstream.ensureAccount(ctx, tx, req.AccessInfo); err != nil {
 		return err
 	}
 
@@ -270,7 +286,7 @@ func (c *CatalogHandler) HandleDelete(ctx context.Context, meta txn.TxnMeta, req
 func (c *CatalogHandler) HandleDeleteDatabase(ctx context.Context, meta txn.TxnMeta, req memoryengine.DeleteDatabaseReq, resp *memoryengine.DeleteDatabaseResp) (err error) {
 
 	tx := c.upstream.getTx(meta)
-	if err := c.upstream.ensureAccount(tx, req.AccessInfo); err != nil {
+	if err := c.upstream.ensureAccount(ctx, tx, req.AccessInfo); err != nil {
 		return err
 	}
 
@@ -304,7 +320,7 @@ func (c *CatalogHandler) HandleDestroy(ctx context.Context) error {
 func (c *CatalogHandler) HandleGetDatabases(ctx context.Context, meta txn.TxnMeta, req memoryengine.GetDatabasesReq, resp *memoryengine.GetDatabasesResp) error {
 
 	tx := c.upstream.getTx(meta)
-	if err := c.upstream.ensureAccount(tx, req.AccessInfo); err != nil {
+	if err := c.upstream.ensureAccount(ctx, tx, req.AccessInfo); err != nil {
 		return err
 	}
 
@@ -374,7 +390,10 @@ func (c *CatalogHandler) HandleNewTableIter(ctx context.Context, meta txn.TxnMet
 			panic(fmt.Sprintf("fixme: %s", name))
 		}
 
-		id := memoryengine.NewID()
+		id, err := c.upstream.idGenerator.NewID(ctx)
+		if err != nil {
+			return err
+		}
 		resp.IterID = id
 		c.iterators.Lock()
 		c.iterators.Map[id] = iter
@@ -389,7 +408,7 @@ func (c *CatalogHandler) HandleNewTableIter(ctx context.Context, meta txn.TxnMet
 func (c *CatalogHandler) HandleOpenDatabase(ctx context.Context, meta txn.TxnMeta, req memoryengine.OpenDatabaseReq, resp *memoryengine.OpenDatabaseResp) (err error) {
 
 	tx := c.upstream.getTx(meta)
-	if err := c.upstream.ensureAccount(tx, req.AccessInfo); err != nil {
+	if err := c.upstream.ensureAccount(ctx, tx, req.AccessInfo); err != nil {
 		return err
 	}
 

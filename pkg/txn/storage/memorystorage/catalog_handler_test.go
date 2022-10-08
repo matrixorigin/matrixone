@@ -38,15 +38,16 @@ func TestCatalogHandler(t *testing.T) {
 	clock := clock.NewHLCClock(func() int64 {
 		return time.Now().UnixNano()
 	}, math.MaxInt64)
-	storage, err := New(
-		NewCatalogHandler(
-			NewMemHandler(
-				testutil.NewMheap(),
-				memtable.Serializable,
-				clock,
-			),
+	catalogHandler, err := NewCatalogHandler(
+		NewMemHandler(
+			testutil.NewMheap(),
+			memtable.Serializable,
+			clock,
+			memoryengine.RandomIDGenerator,
 		),
 	)
+	assert.Nil(t, err)
+	storage, err := New(catalogHandler)
 	assert.Nil(t, err)
 
 	// close

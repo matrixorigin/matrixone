@@ -41,6 +41,7 @@ func TestLogTail(t *testing.T) {
 		testutil.NewMheap(),
 		SnapshotIsolation,
 		clock,
+		memoryengine.RandomIDGenerator,
 	)
 	assert.Nil(t, err)
 	defer storage.Close(ctx)
