@@ -223,7 +223,10 @@ func (s *Scope) remoteRun(c *Compile) error {
 		case val = <-messagesReceive:
 		}
 
-		m := val.(*pipeline.Message)
+		m, ok := val.(*pipeline.Message)
+		if !ok {
+			return moerr.NewInternalError("unexpected mo-rpc address %s", s.NodeInfo.Addr)
+		}
 		if err := pipeline.DecodeMessageError(m); err != nil {
 			return err
 		}
