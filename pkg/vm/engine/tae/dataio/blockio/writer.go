@@ -38,7 +38,7 @@ func NewWriter(fs *objectio.ObjectFS, name string) *Writer {
 
 func (w *Writer) WriteBlock(columns *containers.Batch) (block objectio.BlockObject, err error) {
 	bat := batch.New(true, columns.Attrs)
-	bat.Vecs = containers.CopyToMoVectors(columns.Vecs)
+	bat.Vecs = containers.UnmarshalToMoVecs(columns.Vecs)
 	block, err = w.writer.Write(bat)
 	if err != nil {
 		return

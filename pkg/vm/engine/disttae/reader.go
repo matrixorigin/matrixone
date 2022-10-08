@@ -29,7 +29,7 @@ func (r *blockReader) Read(cols []string, expr *plan.Expr, m *mheap.Mheap) (*bat
 		return nil, nil
 	}
 	defer func() { r.blks = r.blks[1:] }()
-	return blockRead(r.ctx, cols, r.blks[0])
+	return blockRead(r.ctx, cols, r.blks[0], r.fs, r.tableDef)
 }
 
 func (r *mergeReader) Close() error {

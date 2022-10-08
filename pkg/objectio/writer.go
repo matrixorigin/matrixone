@@ -67,7 +67,7 @@ func (w *ObjectWriter) WriteHeader() error {
 }
 
 func (w *ObjectWriter) Write(batch *batch.Batch) (BlockObject, error) {
-	block := NewBlock(batch, w.object)
+	block := NewBlock(uint16(len(batch.Vecs)), w.object)
 	w.AddBlock(block.(*Block))
 	for i, vec := range batch.Vecs {
 		buf, err := vec.Show()
@@ -146,6 +146,11 @@ func (w *ObjectWriter) WriteEnd() ([]BlockObject, error) {
 	if err != nil {
 		return nil, err
 	}
+
+	// The buffer needs to be released at the end of WriteEnd
+	// Because the outside may hold this writer
+	// After WriteEnd is called, no more data can be written
+	w.buffer = nil
 	return w.blocks, err
 }
 

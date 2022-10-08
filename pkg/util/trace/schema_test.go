@@ -96,27 +96,27 @@ func TestInitSchemaByInnerExecutor(t *testing.T) {
 			err := InitSchemaByInnerExecutor(tt.args.ctx, newDummyExecutorFactory(tt.args.ch), tt.args.mode)
 			require.Equal(t, nil, err)
 			go func() {
-			loop:
-				for {
-					sql, ok := <-tt.args.ch
-					wg.Done()
-					if ok {
-						t.Logf("exec sql: %s", sql)
-						if sql == "create database if not exists system" {
-							continue
-						}
-						idx := strings.Index(sql, "CREATE EXTERNAL TABLE")
-						require.Equal(t, 0, idx)
-					} else {
-						t.Log("exec sql Done.")
-						break loop
-					}
-				}
+				wg.Wait()
+				wg.Add(1)
+				close(tt.args.ch)
 			}()
-			wg.Wait()
-			wg.Add(1)
-			close(tt.args.ch)
-			wg.Wait()
+		loop:
+			for {
+				sql, ok := <-tt.args.ch
+				wg.Done()
+				if ok {
+					t.Logf("exec sql: %s", sql)
+					if sql == "create database if not exists system" {
+						continue
+					}
+					idx := strings.Index(sql, "CREATE EXTERNAL TABLE")
+					require.Equal(t, 0, idx)
+				} else {
+					t.Log("exec sql Done.")
+					wg.Wait()
+					break loop
+				}
+			}
 		})
 	}
 }

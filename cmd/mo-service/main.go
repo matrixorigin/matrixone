@@ -79,12 +79,14 @@ func main() {
 	}
 
 	waitSignalToStop(stopper)
+	logutil.GetGlobalLogger().Info("Shutdown complete")
 }
 
 func waitSignalToStop(stopper *stopper.Stopper) {
 	sigchan := make(chan os.Signal, 1)
 	signal.Notify(sigchan, syscall.SIGTERM, syscall.SIGINT)
-	<-sigchan
+	sig := <-sigchan
+	logutil.GetGlobalLogger().Info("Starting shutdown...", zap.String("signal", sig.String()))
 	stopper.Stop()
 }
 
@@ -169,7 +171,7 @@ func startDNService(
 		s, err := dnservice.NewService(
 			&c,
 			fileService,
-			dnservice.WithLogger(logutil.GetGlobalLogger().Named("dn-service")))
+			dnservice.WithLogger(logutil.GetGlobalLogger().Named("dn-service").With(zap.String("uuid", cfg.DN.UUID))))
 		if err != nil {
 			panic(err)
 		}

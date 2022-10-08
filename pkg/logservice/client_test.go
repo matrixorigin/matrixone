@@ -31,10 +31,13 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 )
+
+var testLogger = logutil.GetGlobalLogger().Named("logservice-test")
 
 func runClientTest(t *testing.T,
 	readOnly bool, fn func(*testing.T, *Service, ClientConfig, Client)) {
@@ -233,7 +236,7 @@ func TestClientAppendAlloc(t *testing.T) {
 			_, err := c.Append(ctx, rec)
 			require.NoError(t, err)
 		})
-		logger.Info(fmt.Sprintf("ac: %f", ac))
+		testLogger.Info(fmt.Sprintf("ac: %f", ac))
 	}
 	runClientTest(t, false, fn)
 }

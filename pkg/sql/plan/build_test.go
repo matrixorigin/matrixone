@@ -454,6 +454,7 @@ func TestSingleTableSQLBuilder(t *testing.T) {
 		"delete nation, nation2 from nation join nation2 on nation.n_name = nation2.n_name",
 		"select true is unknown",
 		"select null is not unknown",
+		"select 1 as c limit abs(-2)",
 	}
 	runTestShouldPass(mock, t, sqls, false, false)
 

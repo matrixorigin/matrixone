@@ -1,0 +1,6 @@
+-- @suite
+
+-- @case
+-- @desc:test for values statement
+-- @label:bvt
+VALUES ROW(5,7,9), ROW(1,2,3), ROW(9,10,11) ORDER BY column_1;
