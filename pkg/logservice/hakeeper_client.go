@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 )
 
@@ -243,7 +244,7 @@ func (c *managedHAKeeperClient) resetClient() {
 		cc := c.client
 		c.client = nil
 		if err := cc.close(); err != nil {
-			logger.Error("failed to close client", zap.Error(err))
+			logutil.Error("failed to close client", zap.Error(err))
 		}
 	}
 }
@@ -343,14 +344,14 @@ func connectToHAKeeper(ctx context.Context,
 		c.addr = addr
 		c.client = cc
 		isHAKeeper, err := c.checkIsHAKeeper(ctx)
-		logger.Info(fmt.Sprintf("isHAKeeper: %t, err: %v", isHAKeeper, err))
+		logutil.Info(fmt.Sprintf("isHAKeeper: %t, err: %v", isHAKeeper, err))
 		if err == nil && isHAKeeper {
 			return c, nil
 		} else if err != nil {
 			e = err
 		}
 		if err := cc.Close(); err != nil {
-			logger.Error("failed to close the client", zap.Error(err))
+			logutil.Error("failed to close the client", zap.Error(err))
 		}
 	}
 	if e == nil {
@@ -423,7 +424,7 @@ func (c *hakeeperClient) sendLogHeartbeat(ctx context.Context,
 		return pb.CommandBatch{}, err
 	}
 	for _, cmd := range cb.Commands {
-		logger.Info("hakeeper client received cmd", zap.String("cmd", cmd.LogString()))
+		logutil.Info("hakeeper client received cmd", zap.String("cmd", cmd.LogString()))
 	}
 	return cb, nil
 }

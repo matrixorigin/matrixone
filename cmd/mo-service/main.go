@@ -171,7 +171,7 @@ func startDNService(
 		s, err := dnservice.NewService(
 			&c,
 			fileService,
-			dnservice.WithLogger(logutil.GetGlobalLogger().Named("dn-service")))
+			dnservice.WithLogger(logutil.GetGlobalLogger().Named("dn-service").With(zap.String("uuid", cfg.DN.UUID))))
 		if err != nil {
 			panic(err)
 		}

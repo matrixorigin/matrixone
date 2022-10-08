@@ -62,7 +62,7 @@ func (db *database) Delete(ctx context.Context, name string) error {
 	if err != nil {
 		return err
 	}
-	bat, err := genDropTableTuple(id, db.databaseId, name, db.databaseName, db.txn.m)
+	bat, err := genDropTableTuple(id, db.databaseId, name, db.databaseName, db.txn.proc.GetMheap())
 	if err != nil {
 		return err
 	}
@@ -83,7 +83,7 @@ func (db *database) Create(ctx context.Context, name string, defs []engine.Table
 		sql := getSql(ctx)
 		accountId, userId, roleId := getAccessInfo(ctx)
 		bat, err := genCreateTableTuple(sql, accountId, userId, roleId, name,
-			db.databaseId, db.databaseName, comment, db.txn.m)
+			db.databaseId, db.databaseName, comment, db.txn.proc.GetMheap())
 		if err != nil {
 			return err
 		}
@@ -93,7 +93,7 @@ func (db *database) Create(ctx context.Context, name string, defs []engine.Table
 		}
 	}
 	for _, col := range cols {
-		bat, err := genCreateColumnTuple(col, db.txn.m)
+		bat, err := genCreateColumnTuple(col, db.txn.proc.GetMheap())
 		if err != nil {
 			return err
 		}
