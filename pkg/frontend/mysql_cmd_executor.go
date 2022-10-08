@@ -21,7 +21,6 @@ import (
 	"encoding/json"
 	goErrors "errors"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"math"
 	"os"
 	"reflect"
@@ -30,6 +29,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
@@ -44,6 +45,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/metric"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -351,7 +353,7 @@ func handleShowColumns(ses *Session) error {
 	for _, d := range ses.Data {
 		row := make([]interface{}, 6)
 		colName := string(d[0].([]byte))
-		if colName == "PADDR" {
+		if colName == catalog.PhyAddrColumnName {
 			continue
 		}
 		row[0] = colName

@@ -34,7 +34,7 @@ var (
 )
 
 const (
-	PhyAddrColumnName    = "PADDR"
+	PhyAddrColumnName    = "__mo_PADDR"
 	PhyAddrColumnComment = "Physical address"
 	SortKeyNamePrefx     = "_SORT_"
 
