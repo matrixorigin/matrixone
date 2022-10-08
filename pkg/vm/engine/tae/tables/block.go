@@ -243,37 +243,45 @@ func (blk *dataBlock) GetBlockFile() file.Block {
 
 func (blk *dataBlock) GetID() *common.ID { return blk.meta.AsCommonID() }
 
-func (blk *dataBlock) RunCalibration() int {
-	return blk.estimateRawScore()
+func (blk *dataBlock) RunCalibration() (score int) {
+	score, _ = blk.estimateRawScore()
+	return
 }
 
-func (blk *dataBlock) estimateABlkRawScore() int {
+func (blk *dataBlock) estimateABlkRawScore() (score int) {
 	// Max row appended
-	if blk.Rows(nil, true) == int(blk.meta.GetSchema().BlockMaxRows) {
+	rows := blk.Rows(nil, true)
+	if rows == int(blk.meta.GetSchema().BlockMaxRows) {
 		return 100
 	}
-	// No deletes found
-	if blk.mvcc.GetChangeNodeCnt() == 0 {
-		return 0
+
+	if blk.mvcc.GetChangeNodeCnt() == 0 && rows == 0 {
+		// No deletes or append found
+		score = 0
+	} else {
+		// Any deletes or append
+		score = 1
 	}
-	return 1
+	return
 }
 
-func (blk *dataBlock) estimateRawScore() int {
+func (blk *dataBlock) estimateRawScore() (score int, dropped bool) {
 	if blk.meta.HasDropped() {
-		return 0
+		dropped = true
+		return
 	}
-	if blk.Rows(nil, true) == int(blk.meta.GetSchema().BlockMaxRows) && blk.meta.IsAppendable() {
-		return 100
+	if blk.meta.IsAppendable() {
+		score = blk.estimateABlkRawScore()
+		return
 	}
-
-	if blk.mvcc.GetChangeNodeCnt() == 0 && !blk.meta.IsAppendable() {
-		return 0
-	} else if blk.mvcc.GetChangeNodeCnt() == 0 && blk.meta.IsAppendable() &&
-		blk.mvcc.LoadMaxVisible().LessEq(blk.GetMaxCheckpointTS()) {
-		return 0
+	if blk.mvcc.GetChangeNodeCnt() == 0 {
+		// No deletes found
+		score = 0
+	} else {
+		// Any delete
+		score = 1
 	}
-	return 1
+	return
 }
 
 func (blk *dataBlock) MutationInfo() string {
@@ -301,14 +309,10 @@ func (blk *dataBlock) MutationInfo() string {
 }
 
 func (blk *dataBlock) EstimateScore(interval int64) int {
-	if blk.meta.IsAppendable() && blk.Rows(nil, true) == int(blk.meta.GetSchema().BlockMaxRows) {
-		if blk.meta.HasDropped() {
-			return 0
-		}
-		return 100
+	score, dropped := blk.estimateRawScore()
+	if dropped {
+		return 0
 	}
-
-	score := blk.estimateRawScore()
 	if score > 1 {
 		return score
 	}
