@@ -980,7 +980,6 @@ func Test_statement_type(t *testing.T) {
 			{&tree.Insert{}},
 			{&tree.BeginTransaction{}},
 			{&tree.ShowTables{}},
-			{&tree.Execute{}},
 			{&tree.Use{}},
 		}
 
