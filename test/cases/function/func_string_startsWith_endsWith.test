@@ -45,4 +45,10 @@ insert into t1 values(null, 'b');
 select endsWith(a,b) from t1;
 drop table t1;
 
+select endsWith('a', 'a') from dual;
+select endsWith('a', 'b') from dual;
+select endsWith('aaaa', 'a') from dual;
+select endsWith('xsdfsdf', 'fsdf') from dual;
+select endsWith('xsdfsdf', 'fsdfx') from dual;
+
 

@@ -15,11 +15,15 @@
 package vector
 
 import (
+	"strings"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
+	"golang.org/x/exp/constraints"
 )
 
 func MustTCols[T types.FixedSizeT](v *Vector) []T {
@@ -312,4 +316,279 @@ func (v *Vector) extend(rows int, m *mheap.Mheap) error {
 	// extend the null map
 	nulls.TryExpand(v.Nsp, tgtSz)
 	return nil
+}
+
+// CompareAndCheckIntersect  we use this method for eval expr by zonemap
+func (v *Vector) CompareAndCheckIntersect(vec *Vector) (bool, error) {
+	switch v.Typ.Oid {
+	case types.T_int8:
+		return checkNumberIntersect[int8](v, vec)
+	case types.T_int16:
+		return checkNumberIntersect[int16](v, vec)
+	case types.T_int32:
+		return checkNumberIntersect[int32](v, vec)
+	case types.T_int64:
+		return checkNumberIntersect[int64](v, vec)
+	case types.T_uint8:
+		return checkNumberIntersect[uint8](v, vec)
+	case types.T_uint16:
+		return checkNumberIntersect[uint16](v, vec)
+	case types.T_uint32:
+		return checkNumberIntersect[uint32](v, vec)
+	case types.T_uint64:
+		return checkNumberIntersect[uint64](v, vec)
+	case types.T_float32:
+		return checkNumberIntersect[float32](v, vec)
+	case types.T_float64:
+		return checkNumberIntersect[float64](v, vec)
+	case types.T_date:
+		return checkNumberIntersect[types.Date](v, vec)
+	case types.T_datetime:
+		return checkNumberIntersect[types.Datetime](v, vec)
+	case types.T_timestamp:
+		return checkNumberIntersect[types.Timestamp](v, vec)
+	case types.T_decimal64:
+		return checkIntersect(v, vec, func(t1, t2 types.Decimal64) bool {
+			return t1.Ge(t2)
+		}, func(t1, t2 types.Decimal64) bool {
+			return t1.Le(t2)
+		})
+	case types.T_decimal128:
+		return checkIntersect(v, vec, func(t1, t2 types.Decimal128) bool {
+			return t1.Ge(t2)
+		}, func(t1, t2 types.Decimal128) bool {
+			return t1.Le(t2)
+		})
+	case types.T_uuid:
+		return checkIntersect(v, vec, func(t1, t2 types.Uuid) bool {
+			return t1.Ge(t2)
+		}, func(t1, t2 types.Uuid) bool {
+			return t1.Le(t2)
+		})
+	case types.T_varchar, types.T_char:
+		return checkIntersect(v, vec, func(t1, t2 string) bool {
+			return strings.Compare(t1, t2) >= 0
+		}, func(t1, t2 string) bool {
+			return strings.Compare(t1, t2) <= 0
+		})
+	}
+	return false, moerr.NewInternalError("unsupport type to check intersect")
+}
+
+func checkNumberIntersect[T constraints.Integer | constraints.Float | types.Date | types.Datetime | types.Timestamp](v1, v2 *Vector) (bool, error) {
+	return checkIntersect(v1, v2, func(i1, i2 T) bool {
+		return i1 >= i2
+	}, func(i1, i2 T) bool {
+		return i1 <= i2
+	})
+}
+
+func checkIntersect[T compT](v1, v2 *Vector, gtFun compFn[T], ltFun compFn[T]) (bool, error) {
+	// get v1's min/max
+	cols1 := MustTCols[T](v1)
+	cols2 := MustTCols[T](v2)
+	colLength := len(cols1)
+	min := cols1[0]
+	max := cols1[0]
+	for i := 1; i < colLength; i++ {
+		// cols1[i] <= min
+		if ltFun(cols1[i], min) {
+			min = cols1[i]
+		} else if gtFun(cols1[i], max) {
+			// cols1[i] >= max
+			max = cols1[i]
+		}
+	}
+
+	// check v2 if some item >= min && <= max
+	for i := 0; i < len(cols2); i++ {
+		// cols2[i] >= min && cols2[i] <= max
+		if gtFun(cols1[i], min) && ltFun(cols1[i], max) {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// CompareAndCheckAnyResultIsTrue  we use this method for eval expr by zonemap
+// funName must be ">,<,>=,<="
+func (v *Vector) CompareAndCheckAnyResultIsTrue(vec *Vector, funName string) (bool, error) {
+	if v.Typ.Oid != vec.Typ.Oid {
+		return false, moerr.NewInternalError("can not compare two vector because their type is not match")
+	}
+	if v.Length() != vec.Length() {
+		return false, moerr.NewInternalError("can not compare two vector because their length is not match")
+	}
+	if v.Length() == 0 {
+		return false, moerr.NewInternalError("can not compare two vector because their length is zero")
+	}
+
+	switch funName {
+	case ">", "<", ">=", "<=":
+	default:
+		return false, moerr.NewInternalError("unsupport compare function")
+	}
+
+	switch v.Typ.Oid {
+	case types.T_int8:
+		return compareNumber[int8](v, vec, funName)
+	case types.T_int16:
+		return compareNumber[int16](v, vec, funName)
+	case types.T_int32:
+		return compareNumber[int32](v, vec, funName)
+	case types.T_int64:
+		return compareNumber[int64](v, vec, funName)
+	case types.T_uint8:
+		return compareNumber[uint8](v, vec, funName)
+	case types.T_uint16:
+		return compareNumber[uint16](v, vec, funName)
+	case types.T_uint32:
+		return compareNumber[uint32](v, vec, funName)
+	case types.T_uint64:
+		return compareNumber[uint64](v, vec, funName)
+	case types.T_float32:
+		return compareNumber[float32](v, vec, funName)
+	case types.T_float64:
+		return compareNumber[float64](v, vec, funName)
+	case types.T_date:
+		return compareNumber[types.Date](v, vec, funName)
+	case types.T_datetime:
+		return compareNumber[types.Datetime](v, vec, funName)
+	case types.T_timestamp:
+		return compareNumber[types.Timestamp](v, vec, funName)
+	case types.T_decimal64:
+		switch funName {
+		case ">":
+			return runCompareCheckAnyResultIsTrue(v, vec, func(t1, t2 types.Decimal64) bool {
+				return t1.Gt(t2)
+			}), nil
+		case "<":
+			return runCompareCheckAnyResultIsTrue(v, vec, func(t1, t2 types.Decimal64) bool {
+				return t1.Lt(t2)
+			}), nil
+		case ">=":
+			return runCompareCheckAnyResultIsTrue(v, vec, func(t1, t2 types.Decimal64) bool {
+				return t1.Ge(t2)
+			}), nil
+		case "<=":
+			return runCompareCheckAnyResultIsTrue(v, vec, func(t1, t2 types.Decimal64) bool {
+				return t1.Le(t2)
+			}), nil
+		}
+	case types.T_decimal128:
+		switch funName {
+		case ">":
+			return runCompareCheckAnyResultIsTrue(v, vec, func(t1, t2 types.Decimal128) bool {
+				return t1.Gt(t2)
+			}), nil
+		case "<":
+			return runCompareCheckAnyResultIsTrue(v, vec, func(t1, t2 types.Decimal128) bool {
+				return t1.Lt(t2)
+			}), nil
+		case ">=":
+			return runCompareCheckAnyResultIsTrue(v, vec, func(t1, t2 types.Decimal128) bool {
+				return t1.Ge(t2)
+			}), nil
+		case "<=":
+			return runCompareCheckAnyResultIsTrue(v, vec, func(t1, t2 types.Decimal128) bool {
+				return t1.Le(t2)
+			}), nil
+		}
+	case types.T_uuid:
+		switch funName {
+		case ">":
+			return runCompareCheckAnyResultIsTrue(v, vec, func(t1, t2 types.Uuid) bool {
+				return t1.Gt(t2)
+			}), nil
+		case "<":
+			return runCompareCheckAnyResultIsTrue(v, vec, func(t1, t2 types.Uuid) bool {
+				return t1.Lt(t2)
+			}), nil
+		case ">=":
+			return runCompareCheckAnyResultIsTrue(v, vec, func(t1, t2 types.Uuid) bool {
+				return t1.Ge(t2)
+			}), nil
+		case "<=":
+			return runCompareCheckAnyResultIsTrue(v, vec, func(t1, t2 types.Uuid) bool {
+				return t1.Le(t2)
+			}), nil
+		}
+	case types.T_varchar, types.T_char:
+		switch funName {
+		case ">":
+			return runCompareCheckAnyResultIsTrue(v, vec, func(t1, t2 string) bool {
+				return strings.Compare(t1, t2) == 1
+			}), nil
+		case "<":
+			return runCompareCheckAnyResultIsTrue(v, vec, func(t1, t2 string) bool {
+				return strings.Compare(t1, t2) == -1
+			}), nil
+		case ">=":
+			return runCompareCheckAnyResultIsTrue(v, vec, func(t1, t2 string) bool {
+				return strings.Compare(t1, t2) >= 0
+			}), nil
+		case "<=":
+			return runCompareCheckAnyResultIsTrue(v, vec, func(t1, t2 string) bool {
+				return strings.Compare(t1, t2) <= 0
+			}), nil
+		}
+	default:
+		return false, moerr.NewInternalError("unsupport compare type")
+	}
+
+	return false, moerr.NewInternalError("unsupport compare function")
+}
+
+type compT interface {
+	constraints.Integer | constraints.Float | types.Decimal64 | types.Decimal128 |
+		types.Date | types.Datetime | types.Timestamp | types.Uuid | string
+}
+
+type compFn[T compT] func(T, T) bool
+
+func compareNumber[T constraints.Integer | constraints.Float | types.Date | types.Datetime | types.Timestamp](v1, v2 *Vector, fnName string) (bool, error) {
+	switch fnName {
+	case ">":
+		return runCompareCheckAnyResultIsTrue(v1, v2, func(t1, t2 T) bool {
+			return t1 > t2
+		}), nil
+	case "<":
+		return runCompareCheckAnyResultIsTrue(v1, v2, func(t1, t2 T) bool {
+			return t1 < t2
+		}), nil
+	case ">=":
+		return runCompareCheckAnyResultIsTrue(v1, v2, func(t1, t2 T) bool {
+			return t1 >= t2
+		}), nil
+	case "<=":
+		return runCompareCheckAnyResultIsTrue(v1, v2, func(t1, t2 T) bool {
+			return t1 >= t2
+		}), nil
+	default:
+		return false, moerr.NewInternalError("unsupport compare function")
+	}
+}
+
+func runCompareCheckAnyResultIsTrue[T compT](vec1, vec2 *Vector, fn compFn[T]) bool {
+	cols1 := MustTCols[T](vec1)
+	cols2 := MustTCols[T](vec2)
+
+	// column_a operator column_b  -> return true
+	// that means we don't known the return, just readBlock
+	if vec1.IsScalarNull() || vec2.IsScalarNull() {
+		return true
+	}
+	if nulls.Any(vec1.Nsp) || nulls.Any(vec2.Nsp) {
+		return true
+	}
+
+	for i := 0; i < len(cols1); i++ {
+		for j := 0; j < len(cols2); j++ {
+			if fn(cols1[i], cols2[j]) {
+				return true
+			}
+		}
+	}
+
+	return false
 }
