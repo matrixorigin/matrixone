@@ -72,3 +72,9 @@ endswith(a, b)
 select endsWith('aaaa', 'a') from dual;
 endswith(aaaa, a)
 1
+select endsWith('xsdfsdf', 'fsdf') from dual;
+endswith(xsdfsdf, fsdf)
+1
+select endsWith('xsdfsdf', 'fsdfx') from dual;
+endswith(xsdfsdf, fsdfx)
+0
