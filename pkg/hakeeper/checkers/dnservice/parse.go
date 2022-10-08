@@ -88,7 +88,7 @@ func parseDnState(cfg hakeeper.Config,
 // checkReportedState generates Operators for reported state.
 // NB: the order of list is deterministic.
 func checkReportedState(
-	rs *reportedShards, mapper ShardMapper, workingStores []*util.Store, idAlloc util.IDAllocator,
+	rs *reportedShards, mapper ShardMapper, workingStores []*util.Store, idAlloc util.IDAllocator, logger *zap.Logger,
 ) []*operator.Operator {
 	var ops []*operator.Operator
 
@@ -105,7 +105,7 @@ func checkReportedState(
 			panic(fmt.Sprintf("shard `%d` not register", shardID))
 		}
 
-		steps := checkShard(shard, mapper, workingStores, idAlloc)
+		steps := checkShard(shard, mapper, workingStores, idAlloc, logger)
 		// avoid Operator with nil steps
 		if len(steps) > 0 {
 			ops = append(ops,
@@ -123,10 +123,8 @@ func checkReportedState(
 // NB: the order of list is deterministic.
 func checkInitiatingShards(
 	rs *reportedShards, mapper ShardMapper, workingStores []*util.Store, idAlloc util.IDAllocator,
-	cluster pb.ClusterInfo, cfg hakeeper.Config, currTick uint64,
+	cluster pb.ClusterInfo, cfg hakeeper.Config, currTick uint64, logger *zap.Logger,
 ) []*operator.Operator {
-	logger.Debug("cluster expected information", zap.Any("dn shards expected", cluster.DNShards))
-
 	// update the registered newly-created shards
 	for _, record := range cluster.DNShards {
 		shardID := record.ShardID
@@ -135,31 +133,22 @@ func checkInitiatingShards(
 			if moerr.IsMoErrCode(err, moerr.ErrShardNotReported) {
 				// if a shard not reported, register it,
 				// and launch its replica after a while.
-				logger.Debug("dn shard not reported", zap.Uint64("shard ID", shardID))
 				waitingShards.register(shardID, currTick)
 			}
 			continue
 		}
 		// shard reported via heartbeat, no need to wait
-		logger.Debug("dn shard reported, remove from waiting shards", zap.Uint64("shard ID", shardID))
 		waitingShards.remove(shardID)
 	}
 
-	logger.Debug("cluster initiating shards:", zap.Any("shards", waitingShards.shards))
-
 	// list newly-created shards which had been waiting for a while
 	expired := waitingShards.listEligibleShards(func(start uint64) bool {
-		logger.Debug("check initiating shard expired or not",
-			zap.Uint64("recorded tick", start),
-			zap.Uint64("current tick", currTick),
-			zap.Bool("is expired", cfg.DNStoreExpired(start, currTick)),
-		)
 		return cfg.DNStoreExpired(start, currTick)
 	})
 
 	var ops []*operator.Operator
 	for _, id := range expired {
-		steps := checkShard(newDnShard(id), mapper, workingStores, idAlloc)
+		steps := checkShard(newDnShard(id), mapper, workingStores, idAlloc, logger)
 		if len(steps) > 0 { // avoid Operator with nil steps
 			ops = append(ops,
 				operator.NewOperator("dnservice", id, operator.NoopEpoch, steps...),
