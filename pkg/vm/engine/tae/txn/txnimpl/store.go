@@ -63,14 +63,16 @@ func (m *dirtyMemo) recordCatalogChange() {
 
 type txnStore struct {
 	txnbase.NoopTxnStore
-	dbs         map[uint64]*txnDB
-	mu          sync.RWMutex
-	driver      wal.Driver
-	nodesMgr    base.INodeManager
-	txn         txnif.AsyncTxn
-	catalog     *catalog.Catalog
-	cmdMgr      *commandManager
-	logs        []entry.Entry
+	dbs      map[uint64]*txnDB
+	mu       sync.RWMutex
+	driver   wal.Driver
+	nodesMgr base.INodeManager
+	txn      txnif.AsyncTxn
+	catalog  *catalog.Catalog
+	cmdMgr   *commandManager
+	logs     []entry.Entry
+	//warChecker records all the db/table/segment/blocks visited/changed by the txn for
+	//           DML-DDL(DML encounters DDL) conflict detection when preparing commit.
 	warChecker  *warChecker
 	dataFactory *tables.DataFactory
 	writeOps    uint32
@@ -111,6 +113,38 @@ func (store *txnStore) LogTxnEntry(dbId uint64, tableId uint64, entry txnif.TxnE
 		return
 	}
 	return db.LogTxnEntry(tableId, entry, readed)
+}
+
+func (store *txnStore) LogTxnState(sync bool) (logEntry entry.Entry, err error) {
+	cmd := txnbase.NewTxnStateCmd(
+		store.txn.GetID(),
+		store.txn.GetTxnState(false),
+		store.txn.GetCommitTS(),
+	)
+	var buf []byte
+	if buf, err = cmd.Marshal(); err != nil {
+		return
+	}
+	logEntry = entry.GetBase()
+	logEntry.SetType(ETTxnState)
+	if err = logEntry.SetPayload(buf); err != nil {
+		return
+	}
+	info := &entry.Info{
+		Group: wal.GroupC,
+		TxnId: store.txn.GetID(),
+	}
+	logEntry.SetInfo(info)
+	var lsn uint64
+	lsn, err = store.driver.AppendEntry(wal.GroupC, logEntry)
+	if err != nil {
+		return
+	}
+	if sync {
+		err = logEntry.WaitDone()
+	}
+	logutil.Debugf("LogTxnState LSN=%d, Size=%d", lsn, len(buf))
+	return
 }
 
 func (store *txnStore) LogSegmentID(dbId, tid, sid uint64) {
@@ -485,7 +519,6 @@ func (store *txnStore) PreApplyCommit() (err error) {
 		return
 	}
 
-	//TODO:How to distinguish prepare log of 2PC entry from commit log entry of 1PC?
 	logEntry, err := store.cmdMgr.ApplyTxnRecord(store.txn.GetID(), store.txn)
 	if err != nil {
 		return

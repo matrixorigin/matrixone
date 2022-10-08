@@ -29,67 +29,67 @@ func (s *Storage) Write(ctx context.Context, txnMeta txn.TxnMeta, op uint32, pay
 
 	case memoryengine.OpCreateDatabase:
 		return handleWrite(
-			txnMeta, payload,
+			ctx, txnMeta, payload,
 			s.handler.HandleCreateDatabase,
 		)
 
 	case memoryengine.OpDeleteDatabase:
 		return handleWrite(
-			txnMeta, payload,
+			ctx, txnMeta, payload,
 			s.handler.HandleDeleteDatabase,
 		)
 
 	case memoryengine.OpCreateRelation:
 		return handleWrite(
-			txnMeta, payload,
+			ctx, txnMeta, payload,
 			s.handler.HandleCreateRelation,
 		)
 
 	case memoryengine.OpDeleteRelation:
 		return handleWrite(
-			txnMeta, payload,
+			ctx, txnMeta, payload,
 			s.handler.HandleDeleteRelation,
 		)
 
 	case memoryengine.OpAddTableDef:
 		return handleWrite(
-			txnMeta, payload,
+			ctx, txnMeta, payload,
 			s.handler.HandleAddTableDef,
 		)
 
 	case memoryengine.OpDelTableDef:
 		return handleWrite(
-			txnMeta, payload,
+			ctx, txnMeta, payload,
 			s.handler.HandleDelTableDef,
 		)
 
 	case memoryengine.OpDelete:
 		return handleWrite(
-			txnMeta, payload,
+			ctx, txnMeta, payload,
 			s.handler.HandleDelete,
 		)
 
 	case memoryengine.OpTruncate:
 		return handleWrite(
-			txnMeta, payload,
+			ctx, txnMeta, payload,
 			s.handler.HandleTruncate,
 		)
 
 	case memoryengine.OpUpdate:
 		return handleWrite(
-			txnMeta, payload,
+			ctx, txnMeta, payload,
 			s.handler.HandleUpdate,
 		)
 
 	case memoryengine.OpWrite:
 		return handleWrite(
-			txnMeta, payload,
+			ctx, txnMeta, payload,
 			s.handler.HandleWrite,
 		)
 
 	case memoryengine.OpPreCommit:
 		return handleWrite(
-			txnMeta, payload,
+			ctx, txnMeta, payload,
 			s.handler.HandlePreCommit,
 		)
 	}
@@ -101,9 +101,11 @@ func handleWrite[
 	Req any,
 	Resp any,
 ](
+	ctx context.Context,
 	meta txn.TxnMeta,
 	payload []byte,
 	fn func(
+		ctx context.Context,
 		meta txn.TxnMeta,
 		req Req,
 		resp *Resp,
@@ -123,7 +125,7 @@ func handleWrite[
 	var resp Resp
 	defer logReq("write", req, meta, &resp, &err)()
 
-	err = fn(meta, req, &resp)
+	err = fn(ctx, meta, req, &resp)
 	if err != nil {
 		return nil, err
 	}
