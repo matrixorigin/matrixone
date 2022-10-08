@@ -116,7 +116,7 @@ func New(typ types.Type, desc bool) Compare {
 		}
 		return newCompare(rowidCompare, rowidCopy)
 
-	case types.T_char, types.T_varchar, types.T_blob:
+	case types.T_char, types.T_varchar, types.T_blob, types.T_json:
 		return &strCompare{
 			desc: desc,
 			vs:   make([]*vector.Vector, 2),
