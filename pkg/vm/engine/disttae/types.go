@@ -68,18 +68,21 @@ type Cache interface {
 		tableId uint64, ts timestamp.Timestamp) error
 }
 
+type IDGenerator interface {
+	AllocateID(ctx context.Context) (uint64, error)
+}
+
 // mvcc is the core data structure of cn and is used to
 // maintain multiple versions of logtail data for a table's partition
 type MVCC interface {
-	RowsCount(ctx context.Context, ts timestamp.Timestamp) int64
 	CheckPoint(ctx context.Context, ts timestamp.Timestamp) error
 	Insert(ctx context.Context, bat *api.Batch) error
 	Delete(ctx context.Context, bat *api.Batch) error
 	BlockList(ctx context.Context, ts timestamp.Timestamp,
-		blocks []BlockMeta, entries [][]Entry) []BlockMeta
+		blocks []BlockMeta, entries []Entry) []BlockMeta
 	// If blocks is empty, it means no merge operation with the files on s3 is required.
-	NewReader(ctx context.Context, readerNumber int, expr *plan.Expr,
-		blocks []BlockMeta, ts timestamp.Timestamp, entries [][]Entry) ([]engine.Reader, error)
+	NewReader(ctx context.Context, readerNumber int, expr *plan.Expr, defs []engine.TableDef,
+		blocks []BlockMeta, ts timestamp.Timestamp, entries []Entry) ([]engine.Reader, error)
 }
 
 type Engine struct {
@@ -87,6 +90,7 @@ type Engine struct {
 	db                *DB
 	proc              *process.Process
 	cli               client.TxnClient
+	idGen             IDGenerator
 	getClusterDetails GetClusterDetailsFunc
 	txns              map[string]*Transaction
 	// minimum heap of currently active transactions
@@ -132,6 +136,8 @@ type Transaction struct {
 	writes   [][]Entry
 	dnStores []DNStore
 	proc     *process.Process
+
+	idGen IDGenerator
 
 	// use to cache table
 	tableMap map[tableKey]*table
@@ -199,6 +205,8 @@ type table struct {
 }
 
 type column struct {
+	accountId  uint32
+	tableId    uint64
 	databaseId uint64
 	// column name
 	name            string
@@ -225,4 +233,7 @@ type blockReader struct {
 
 type mergeReader struct {
 	rds []engine.Reader
+}
+
+type emptyReader struct {
 }
