@@ -153,7 +153,7 @@ func exist(name string, fs vfs.FS) (bool, error) {
 }
 
 func createMetadataFile(dir string,
-	filename string, obj Marshaler, fs vfs.FS) (err error) {
+	filename string, obj Marshaller, fs vfs.FS) (err error) {
 	de, err := dirExist(dir, fs)
 	if err != nil {
 		return err
@@ -252,7 +252,7 @@ func (l *store) loadMetadata() error {
 		return err
 	}
 	if expectedUUID != l.mu.metadata.UUID {
-		logger.Panic("unexpected UUID",
+		l.logger.Panic("unexpected UUID",
 			zap.String("on disk UUID", l.mu.metadata.UUID),
 			zap.String("expect", expectedUUID))
 	}
@@ -263,7 +263,7 @@ func (l *store) mustSaveMetadata() {
 	fs := l.cfg.FS
 	dir := l.cfg.DataDir
 	if err := createMetadataFile(dir, logMetadataFilename, &l.mu.metadata, fs); err != nil {
-		logger.Panic("failed to save metadata file", zap.Error(err))
+		l.logger.Panic("failed to save metadata file", zap.Error(err))
 	}
 }
 
@@ -276,7 +276,7 @@ func (l *store) addMetadata(shardID uint64, replicaID uint64) {
 
 	for _, rec := range l.mu.metadata.Shards {
 		if rec.ShardID == shardID && rec.ReplicaID == replicaID {
-			logger.Info(fmt.Sprintf("addMetadata for shardID %d skipped, dupl shard", shardID))
+			l.logger.Info(fmt.Sprintf("addMetadata for shardID %d skipped, dupl shard", shardID))
 			return
 		}
 	}

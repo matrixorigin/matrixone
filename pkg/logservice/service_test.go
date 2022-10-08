@@ -583,7 +583,7 @@ func TestShardInfoCanBeQueried(t *testing.T) {
 	for i := 0; i < 6000; i++ {
 		si1, ok := service1.getShardInfo(1)
 		if !ok || si1.LeaderID != 1 {
-			logger.Error("shard 1 info missing on service 1")
+			testLogger.Error("shard 1 info missing on service 1")
 			time.Sleep(time.Millisecond)
 			continue
 		}
@@ -596,7 +596,7 @@ func TestShardInfoCanBeQueried(t *testing.T) {
 
 		si2, ok := service1.getShardInfo(2)
 		if !ok || si2.LeaderID != 1 {
-			logger.Error("shard 2 info missing on service 1")
+			testLogger.Error("shard 2 info missing on service 1")
 			time.Sleep(time.Millisecond)
 			continue
 		}
@@ -609,7 +609,7 @@ func TestShardInfoCanBeQueried(t *testing.T) {
 
 		si1, ok = service2.getShardInfo(1)
 		if !ok || si1.LeaderID != 1 {
-			logger.Error("shard 1 info missing on service 2")
+			testLogger.Error("shard 1 info missing on service 2")
 			time.Sleep(time.Millisecond)
 			continue
 		}
@@ -622,7 +622,7 @@ func TestShardInfoCanBeQueried(t *testing.T) {
 
 		si2, ok = service2.getShardInfo(2)
 		if !ok || si2.LeaderID != 1 {
-			logger.Error("shard 2 info missing on service 2")
+			testLogger.Error("shard 2 info missing on service 2")
 			time.Sleep(time.Millisecond)
 			continue
 		}
@@ -687,7 +687,7 @@ func TestGossipInSimulatedCluster(t *testing.T) {
 		services = append(services, service)
 	}
 	defer func() {
-		logger.Info("going to close all services")
+		testLogger.Info("going to close all services")
 		var wg sync.WaitGroup
 		for _, s := range services {
 			if s != nil {
@@ -696,7 +696,7 @@ func TestGossipInSimulatedCluster(t *testing.T) {
 				go func() {
 					require.NoError(t, selected.Close())
 					wg.Done()
-					logger.Info("closed a service")
+					testLogger.Info("closed a service")
 				}()
 			}
 		}
