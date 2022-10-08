@@ -78,6 +78,7 @@ func (s *service) initMemoryEngineNonDist(
 		testutil.NewMheap(),
 		memorystorage.SnapshotIsolation,
 		ck,
+		memoryengine.RandomIDGenerator,
 	)
 	if err != nil {
 		return err

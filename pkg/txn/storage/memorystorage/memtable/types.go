@@ -168,6 +168,10 @@ func TypeMatch(v any, typ types.T) bool {
 		_, ok = v.([]byte)
 	case types.T_uuid:
 		_, ok = v.([]byte)
+	case types.T_TS:
+		_, ok = v.(types.TS)
+	case types.T_Rowid:
+		_, ok = v.(types.Rowid)
 	default:
 		panic(fmt.Sprintf("fixme: %v", typ))
 	}
