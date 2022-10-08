@@ -162,8 +162,12 @@ const (
 	RANDOM         // RANDOM
 	RANK           // RANK
 	REGEXP         // REGEXP
+	REGEXP_INSTR   // REGEXP_INSTR
+	REGEXP_LIKE    // REGEXP_LIKE
 	REGEXP_REPLACE // REGEXP_REPLACE
 	REGEXP_SUBSTR  // REGEXP_SUBSTR
+	REG_MATCH      // REG_MATHCH
+	NOT_REG_MATCH  // NOT_REG_MATCH
 	REPEAT         // REPEAT
 	REPLACE        // REPLACE
 	REVERSE
@@ -414,6 +418,12 @@ var functionIdRegister = map[string]int32{
 	"serial":                  SERIAL,
 	"hash_value":              HASH,
 	"bin":                     BIN,
+	"reg_match":               REG_MATCH,
+	"not_reg_match":           NOT_REG_MATCH,
+	"regexp_instr":            REGEXP_INSTR,
+	"regexp_like":             REGEXP_LIKE,
+	"regexp_replace":          REGEXP_REPLACE,
+	"regexp_substr":           REGEXP_SUBSTR,
 }
 
 func GetFunctionIsWinfunByName(name string) bool {
