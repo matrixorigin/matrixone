@@ -244,19 +244,25 @@ func (blk *dataBlock) GetBlockFile() file.Block {
 func (blk *dataBlock) GetID() *common.ID { return blk.meta.AsCommonID() }
 
 func (blk *dataBlock) RunCalibration() int {
-	if blk.meta.IsAppendable() && blk.Rows(nil, true) == int(blk.meta.GetSchema().BlockMaxRows) {
-		blk.meta.RLock()
-		if blk.meta.HasDropped() {
-			blk.meta.RUnlock()
-			return 0
-		}
-		blk.meta.RUnlock()
-		return 100
-	}
 	return blk.estimateRawScore()
 }
 
+func (blk *dataBlock) estimateABlkRawScore() int {
+	// Max row appended
+	if blk.Rows(nil, true) == int(blk.meta.GetSchema().BlockMaxRows) {
+		return 100
+	}
+	// No deletes found
+	if blk.mvcc.GetChangeNodeCnt() == 0 {
+		return 0
+	}
+	return 1
+}
+
 func (blk *dataBlock) estimateRawScore() int {
+	if blk.meta.HasDropped() {
+		return 0
+	}
 	if blk.Rows(nil, true) == int(blk.meta.GetSchema().BlockMaxRows) && blk.meta.IsAppendable() {
 		return 100
 	}
@@ -296,12 +302,9 @@ func (blk *dataBlock) MutationInfo() string {
 
 func (blk *dataBlock) EstimateScore(interval int64) int {
 	if blk.meta.IsAppendable() && blk.Rows(nil, true) == int(blk.meta.GetSchema().BlockMaxRows) {
-		blk.meta.RLock()
 		if blk.meta.HasDropped() {
-			blk.meta.RUnlock()
 			return 0
 		}
-		blk.meta.RUnlock()
 		return 100
 	}
 
