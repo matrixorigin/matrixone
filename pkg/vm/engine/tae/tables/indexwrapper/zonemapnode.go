@@ -34,7 +34,7 @@ type ZmReader struct {
 }
 
 func newZmReader(mgr base.INodeManager, typ types.Type, id common.ID, col file.ColumnBlock, metaloc string) *ZmReader {
-	metaKey := evictable.EncodeColMetaKey(&id)
+	metaKey := evictable.EncodeColMetaKey(id.Idx, metaloc)
 	return &ZmReader{
 		metaKey: metaKey,
 		mgr:     mgr,
@@ -45,6 +45,7 @@ func newZmReader(mgr base.INodeManager, typ types.Type, id common.ID, col file.C
 }
 
 func (r *ZmReader) Contains(key any) bool {
+	// TODOa: new zmreader if metaloc changed, replayIndex is not right?
 	h, err := evictable.PinEvictableNode(r.mgr, r.metaKey, r.colMetaFactory)
 	if err != nil {
 		// TODOa: Error Handling?
