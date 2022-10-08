@@ -189,9 +189,8 @@ func (idx *simpleTableIndex) BatchInsert(col containers.Vector, start, count int
 		vs := col.Slice().(*containers.Bytes)
 		if dedupInput {
 			set := make(map[string]bool)
-			for i, s := range vs.Offset[start : start+count] {
-				e := s + vs.Length[i+start]
-				v := string(vs.Data[s:e])
+			for i := start; i < start+count; i++ {
+				v := string(vs.GetVarValueAt(i))
 				if _, ok := set[v]; ok {
 					return moerr.NewDuplicate()
 				}
@@ -199,9 +198,8 @@ func (idx *simpleTableIndex) BatchInsert(col containers.Vector, start, count int
 			}
 			break
 		}
-		for i, s := range vs.Offset[start : start+count] {
-			e := s + vs.Length[i+start]
-			v := string(vs.Data[s:e])
+		for i := start; i < start+count; i++ {
+			v := string(vs.GetVarValueAt(i))
 			if _, ok := idx.tree[v]; ok {
 				return moerr.NewDuplicate()
 			}
@@ -257,10 +255,9 @@ func (idx *simpleTableIndex) BatchDedup(col containers.Vector) error {
 	case types.T_Rowid:
 		return DedupOp[types.Rowid](vals, idx.tree)
 	case types.T_char, types.T_varchar, types.T_json, types.T_blob:
-		vals := vals.(*containers.Bytes)
-		for i, s := range vals.Offset {
-			e := s + vals.Length[i]
-			v := string(vals.Data[s:e])
+		bs := vals.(*containers.Bytes)
+		for i := 0; i < col.Length(); i++ {
+			v := string(bs.GetVarValueAt(i))
 			if _, ok := idx.tree[v]; ok {
 				return moerr.NewDuplicate()
 			}

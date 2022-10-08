@@ -40,7 +40,7 @@ func (*baseRelation) CardinalNumber(string) int64 {
 	return 0
 }
 
-func (*baseRelation) Ranges(_ context.Context) ([][]byte, error) {
+func (*baseRelation) Ranges(_ context.Context, _ *plan.Expr) ([][]byte, error) {
 	return nil, nil
 }
 

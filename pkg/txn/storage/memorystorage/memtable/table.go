@@ -165,7 +165,7 @@ func (t *Table[K, V, R]) Insert(
 
 		for i := len(physicalRow.Versions) - 1; i >= 0; i-- {
 			version := physicalRow.Versions[i]
-			if version.Visible(tx.Time, tx.ID) {
+			if version.Visible(tx.Time, tx.ID, tx.IsolationPolicy) {
 				return moerr.NewDuplicate()
 			}
 		}

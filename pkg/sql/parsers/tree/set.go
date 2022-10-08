@@ -132,41 +132,26 @@ const (
 
 type SetRole struct {
 	statementImpl
-	Type  SetRoleType
-	Roles []*Role
+	SecondaryRole     bool
+	SecondaryRoleType SecondaryRoleType
+	Role              *Role
 }
 
 func (node *SetRole) Format(ctx *FmtCtx) {
-	ctx.WriteString("set role")
-	switch node.Type {
-	case SET_ROLE_TYPE_NORMAL:
-		prefix := " "
-		for _, r := range node.Roles {
-			ctx.WriteString(prefix)
-			r.Format(ctx)
-			prefix = ", "
+	ctx.WriteString("set")
+	if !node.SecondaryRole {
+		if node.Role != nil {
+			ctx.WriteString(" role ")
+			node.Role.Format(ctx)
 		}
-	case SET_ROLE_TYPE_ALL_EXCEPT:
-		ctx.WriteString(" all except")
-		prefix := " "
-		for _, r := range node.Roles {
-			ctx.WriteString(prefix)
-			r.Format(ctx)
-			prefix = ", "
+	} else {
+		ctx.WriteString(" secondary role ")
+		switch node.SecondaryRoleType {
+		case SecondaryRoleTypeAll:
+			ctx.WriteString("all")
+		case SecondaryRoleTypeNone:
+			ctx.WriteString("none")
 		}
-	case SET_ROLE_TYPE_DEFAULT:
-		ctx.WriteString(" default")
-	case SET_ROLE_TYPE_NONE:
-		ctx.WriteString(" none")
-	case SET_ROLE_TYPE_ALL:
-		ctx.WriteString(" all")
-	}
-}
-
-func NewSetRole(t SetRoleType, r []*Role) *SetRole {
-	return &SetRole{
-		Type:  t,
-		Roles: r,
 	}
 }
 

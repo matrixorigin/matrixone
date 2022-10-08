@@ -19,6 +19,7 @@ import (
 	"io"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/wal"
 )
@@ -28,18 +29,18 @@ type DBMVCCNode struct {
 	*txnbase.TxnMVCCNode
 }
 
-func NewEmptyDBMVCCNode() txnbase.MVCCNode {
+func NewEmptyDBMVCCNode() txnif.MVCCNode {
 	return &DBMVCCNode{
 		EntryMVCCNode: &EntryMVCCNode{},
 		TxnMVCCNode:   &txnbase.TxnMVCCNode{},
 	}
 }
 
-func CompareDBBaseNode(e, o txnbase.MVCCNode) int {
+func CompareDBBaseNode(e, o txnif.MVCCNode) int {
 	return e.(*DBMVCCNode).Compare(o.(*DBMVCCNode).TxnMVCCNode)
 }
 
-func (e *DBMVCCNode) CloneAll() txnbase.MVCCNode {
+func (e *DBMVCCNode) CloneAll() txnif.MVCCNode {
 	node := &DBMVCCNode{
 		EntryMVCCNode: e.EntryMVCCNode.Clone(),
 		TxnMVCCNode:   e.TxnMVCCNode.CloneAll(),
@@ -47,7 +48,7 @@ func (e *DBMVCCNode) CloneAll() txnbase.MVCCNode {
 	return node
 }
 
-func (e *DBMVCCNode) CloneData() txnbase.MVCCNode {
+func (e *DBMVCCNode) CloneData() txnif.MVCCNode {
 	return &DBMVCCNode{
 		EntryMVCCNode: e.EntryMVCCNode.CloneData(),
 		TxnMVCCNode:   &txnbase.TxnMVCCNode{},
@@ -62,7 +63,7 @@ func (e *DBMVCCNode) String() string {
 }
 
 // for create drop in one txn
-func (e *DBMVCCNode) Update(vun txnbase.MVCCNode) {
+func (e *DBMVCCNode) Update(vun txnif.MVCCNode) {
 	un := vun.(*DBMVCCNode)
 	e.CreatedAt = un.CreatedAt
 	e.DeletedAt = un.DeletedAt

@@ -20,6 +20,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 )
 
@@ -29,14 +30,14 @@ type txnImpl struct {
 }
 
 var TxnFactory = func(catalog *catalog.Catalog) txnbase.TxnFactory {
-	return func(mgr *txnbase.TxnManager, store txnif.TxnStore, txnId uint64,
+	return func(mgr *txnbase.TxnManager, store txnif.TxnStore, txnId []byte,
 		start types.TS, info []byte) txnif.AsyncTxn {
 		return newTxnImpl(catalog, mgr, store, txnId, start, info)
 	}
 }
 
 func newTxnImpl(catalog *catalog.Catalog, mgr *txnbase.TxnManager, store txnif.TxnStore,
-	txnId uint64, start types.TS, info []byte) *txnImpl {
+	txnId []byte, start types.TS, info []byte) *txnImpl {
 	impl := &txnImpl{
 		Txn:     txnbase.NewTxn(mgr, store, txnId, start, info),
 		catalog: catalog,
@@ -62,4 +63,8 @@ func (txn *txnImpl) DatabaseNames() (names []string) {
 
 func (txn *txnImpl) LogTxnEntry(dbId, tableId uint64, entry txnif.TxnEntry, readed []*common.ID) (err error) {
 	return txn.Store.LogTxnEntry(dbId, tableId, entry, readed)
+}
+
+func (txn *txnImpl) LogTxnState(sync bool) (logEntry entry.Entry, err error) {
+	return txn.Store.LogTxnState(sync)
 }

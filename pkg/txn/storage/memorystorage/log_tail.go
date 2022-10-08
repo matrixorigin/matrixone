@@ -17,6 +17,7 @@ package memorystorage
 import (
 	"database/sql"
 	"errors"
+	"fmt"
 	"sort"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -110,17 +111,27 @@ func (m *MemHandler) HandleGetLogTail(meta txn.TxnMeta, req apipb.SyncLogTailReq
 	}
 
 	appendRow := func(batch *batch.Batch, row NamedRow, commitTime Time) error {
+		// check type
+		for name, attr := range attrsMap {
+			value, err := row.AttrByName(m, tx, name)
+			if err != nil {
+				return err
+			}
+			if !memtable.TypeMatch(value.Value, attr.Type.Oid) {
+				panic(fmt.Sprintf("%v should be %v, but got %T", name, attr.Type, value.Value))
+			}
+		}
 		// row id
-		rowID, err := row.AttrByName(tx, rowIDColumnName)
+		rowID, err := row.AttrByName(m, tx, rowIDColumnName)
 		if err != nil {
 			return err
 		}
 		if rowID.IsNull {
 			panic("no row id")
 		}
-		vectorAppend(batch.Vecs[0], rowID, m.mheap)
+		rowID.AppendVector(batch.Vecs[0], m.mheap)
 		// commit time
-		vectorAppend(batch.Vecs[1], Nullable{Value: commitTime.ToTxnTS()}, m.mheap)
+		Nullable{Value: commitTime.ToTxnTS()}.AppendVector(batch.Vecs[1], m.mheap)
 		// attributes
 		if err := appendNamedRow(tx, m, startOffset, batch, row); err != nil {
 			return err
@@ -238,9 +249,9 @@ func (m *MemHandler) HandleGetLogTail(meta txn.TxnMeta, req apipb.SyncLogTailReq
 			EntryType:    apipb.Entry_Insert,
 			Bat:          toPBBatch(insertBatch),
 			TableId:      uint64(tableRow.ID),
-			TableName:    tableRow.Name,
+			TableName:    string(tableRow.Name),
 			DatabaseId:   uint64(dbRow.ID),
-			DatabaseName: dbRow.Name,
+			DatabaseName: string(dbRow.Name),
 		})
 	}
 	if deleteBatch.Length() > 0 {
@@ -248,9 +259,9 @@ func (m *MemHandler) HandleGetLogTail(meta txn.TxnMeta, req apipb.SyncLogTailReq
 			EntryType:    apipb.Entry_Delete,
 			Bat:          toPBBatch(deleteBatch),
 			TableId:      uint64(tableRow.ID),
-			TableName:    tableRow.Name,
+			TableName:    string(tableRow.Name),
 			DatabaseId:   uint64(dbRow.ID),
-			DatabaseName: dbRow.Name,
+			DatabaseName: string(dbRow.Name),
 		})
 	}
 
