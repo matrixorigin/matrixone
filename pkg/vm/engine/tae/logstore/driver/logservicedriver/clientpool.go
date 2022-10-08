@@ -58,6 +58,12 @@ func (c *clientWithRecord) Close() {
 	c.c.Close()
 }
 
+func (c *clientWithRecord) TryResize(size int) {
+	if c.record.Size() < size {
+		c.record = c.c.GetLogRecord(size)
+	}
+}
+
 type clientpool struct {
 	maxCount   int
 	count      int
