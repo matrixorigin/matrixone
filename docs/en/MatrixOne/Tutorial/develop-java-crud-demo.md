@@ -14,7 +14,7 @@ mysql> CREATE DATABASE TEST;
 
 * [lntelIiJ IDEA(2022.2.1 or later version)](https://www.jetbrains.com/idea/download/).
 * [JDK 8+ version](https://www.oracle.com/sg/java/technologies/javase/javase8-archive-downloads.html): Choose the version according to your OS.
-* [MySQL JDBC connector 8.0+ version](https://dev.mysql.com/downloads/connector/j/): It's recommanded to download the platform independent version, and unzip the downloaded file. 
+* [MySQL JDBC connector 8.0+ version](https://dev.mysql.com/downloads/connector/j/): It's recommanded to download the platform independent version, and unzip the downloaded file.
 
 !Note：We take IDEA as an IDE example to demonstrate the process, you are free to choose Eclipse or other IDE tools for the same purpose.
 
@@ -26,7 +26,7 @@ Launch IDEA, and create a new Java project as below:
 
 ![image-20220927104740221](https://github.com/matrixorigin/artwork/blob/main/docs/reference/jdbc_create_project.png?raw=true)
 
-In your `Project Structure`,import the `mysql-connector-java-8.0.xx.jar` file. 
+In your **Project Setting > Libraries**, import the *mysql-connector-java-8.0.xx.jar* file. 
 
 ![image-20220927104904770](https://github.com/matrixorigin/artwork/blob/main/docs/reference/jdbc_import_library.png?raw=true)
 
