@@ -85,30 +85,8 @@ func (n *MVCCHandle) HasActiveAppendNode() bool {
 	return !n.appends.IsCommitted()
 }
 
-func (n *MVCCHandle) AddHoles(start, end int) {
-	if n.holes != nil {
-		n.holes = roaring.New()
-	}
-	n.holes.AddRange(uint64(start), uint64(end))
-}
-
-func (n *MVCCHandle) HasHole() bool {
-	return n.holes != nil && !n.holes.IsEmpty()
-}
-
-func (n *MVCCHandle) HoleCnt() int {
-	if !n.HasHole() {
-		return 0
-	}
-	return int(n.holes.GetCardinality())
-}
-
 func (n *MVCCHandle) IncChangeNodeCnt() {
 	atomic.AddUint32(&n.changes, uint32(1))
-}
-
-func (n *MVCCHandle) ResetChangeNodeCnt() {
-	atomic.StoreUint32(&n.changes, uint32(0))
 }
 
 func (n *MVCCHandle) GetChangeNodeCnt() uint32 {
