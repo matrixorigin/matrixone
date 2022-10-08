@@ -224,7 +224,7 @@ func (s *Scope) remoteRun(c *Compile) error {
 
 		m, ok := val.(*pipeline.Message)
 		if !ok {
-			panic(fmt.Sprintf("get unexpected message from morpc. maybe remote node information %v is wrong.", s.NodeInfo))
+			return moerr.NewInternalError("unexpected mo-rpc address %s", s.NodeInfo.Addr)
 		}
 		if err := pipeline.DecodeMessageError(m); err != nil {
 			return err
