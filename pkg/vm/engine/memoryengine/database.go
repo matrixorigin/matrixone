@@ -124,7 +124,7 @@ func (d *Database) Relations(ctx context.Context) ([]string, error) {
 		ctx,
 		d.txnOperator,
 		true,
-		d.engine.allShards,
+		d.engine.anyShard,
 		OpGetRelations,
 		GetRelationsReq{
 			DatabaseID: d.id,

@@ -203,7 +203,7 @@ func splitDecimalToIntAndFrac(floats []float64) ([]int64, []int64) {
 func FromUnixTimeUint64(lv []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	uint64ToInt64 := func(from []uint64) []int64 {
 		to := make([]int64, len(from))
-		for i, _ := range from {
+		for i := range from {
 			to[i] = int64(from[i])
 		}
 		return to
@@ -241,7 +241,7 @@ func FromUnixTimeUint64(lv []*vector.Vector, proc *process.Process) (*vector.Vec
 func FromUnixTimeUint64Format(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	uint64ToInt64 := func(from []uint64) []int64 {
 		to := make([]int64, len(from))
-		for i, _ := range from {
+		for i := range from {
 			to[i] = int64(from[i])
 		}
 		return to
