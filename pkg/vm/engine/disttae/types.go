@@ -19,6 +19,7 @@ import (
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -27,7 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage/memtable"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 const (
@@ -51,8 +52,9 @@ type DNStore = logservice.DNStore
 // tae's block metadata, which is currently just an empty one,
 // does not serve any purpose When tae submits a concrete structure,
 // it will replace this structure with tae's code
-type BlockMeta struct {
-}
+// type BlockMeta struct {
+
+// }
 
 // Cache is a multi-version cache for maintaining some table data.
 // The cache is concurrently secure,  with multiple transactions accessing
@@ -86,7 +88,7 @@ type MVCC interface {
 type Engine struct {
 	sync.RWMutex
 	db                *DB
-	m                 *mheap.Mheap
+	proc              *process.Process
 	cli               client.TxnClient
 	idGen             IDGenerator
 	getClusterDetails GetClusterDetailsFunc
@@ -133,7 +135,7 @@ type Transaction struct {
 	// every statement is an element
 	writes   [][]Entry
 	dnStores []DNStore
-	m        *mheap.Mheap
+	proc     *process.Process
 
 	idGen IDGenerator
 
@@ -198,6 +200,8 @@ type table struct {
 	insertExpr *plan.Expr
 	deleteExpr *plan.Expr
 	defs       []engine.TableDef
+	tableDef   *plan.TableDef
+	proc       *process.Process
 }
 
 type column struct {
@@ -221,8 +225,10 @@ type column struct {
 }
 
 type blockReader struct {
-	blks []BlockMeta
-	ctx  context.Context
+	blks     []BlockMeta
+	ctx      context.Context
+	fs       fileservice.FileService
+	tableDef *plan.TableDef
 }
 
 type mergeReader struct {

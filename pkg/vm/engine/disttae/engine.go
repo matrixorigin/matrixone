@@ -25,13 +25,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 type GetClusterDetailsFunc = func() (logservice.ClusterDetails, error)
 
 func New(
-	m *mheap.Mheap,
+	proc *process.Process,
 	ctx context.Context,
 	cli client.TxnClient,
 	idGen IDGenerator,
@@ -42,12 +42,12 @@ func New(
 		panic(err)
 	}
 	db := newDB(cli, cluster.DNStores)
-	if err := db.init(ctx, m); err != nil {
+	if err := db.init(ctx, proc.Mp()); err != nil {
 		panic(err)
 	}
 	return &Engine{
-		m:                 m,
 		db:                db,
+		proc:              proc,
 		cli:               cli,
 		idGen:             idGen,
 		txnHeap:           &transactionHeap{},
@@ -72,7 +72,7 @@ func (e *Engine) Create(ctx context.Context, name string, op client.TxnOperator)
 		return err
 	}
 	bat, err := genCreateDatabaseTuple(sql, accountId, userId, roleId,
-		name, databaseId, e.m)
+		name, databaseId, e.proc.Mp())
 	if err != nil {
 		return err
 	}
@@ -137,7 +137,7 @@ func (e *Engine) Delete(ctx context.Context, name string, op client.TxnOperator)
 	if err != nil {
 		return err
 	}
-	bat, err := genDropDatabaseTuple(id, name, e.m)
+	bat, err := genDropDatabaseTuple(id, name, e.proc.GetMheap())
 	if err != nil {
 		return err
 	}
@@ -161,7 +161,7 @@ func (e *Engine) New(ctx context.Context, op client.TxnOperator) error {
 		return err
 	}
 	txn := &Transaction{
-		m:           e.m,
+		proc:        e.proc,
 		db:          e.db,
 		readOnly:    true,
 		meta:        op.Txn(),
@@ -257,7 +257,7 @@ func (e *Engine) getTransaction(op client.TxnOperator) *Transaction {
 func (e *Engine) delTransaction(txn *Transaction) {
 	for i := range txn.writes {
 		for j := range txn.writes[i] {
-			txn.writes[i][j].bat.Clean(e.m)
+			txn.writes[i][j].bat.Clean(e.proc.GetMheap())
 		}
 	}
 	e.Lock()
