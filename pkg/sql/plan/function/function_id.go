@@ -349,6 +349,7 @@ var functionIdRegister = map[string]int32{
 	// unary functions
 	// whoever edit this, please follow the lexical order, or come up with a better ordering method
 	"abs":                     ABS,
+	"asin":                    ASIN,
 	"acos":                    ACOS,
 	"bit_length":              BIT_LENGTH,
 	"date":                    DATE,

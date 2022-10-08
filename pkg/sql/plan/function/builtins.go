@@ -72,6 +72,19 @@ var builtins = map[int]Functions{
 			},
 		},
 	},
+	ASIN: {
+		Id: ASIN,
+		Overloads: []Function{
+			{
+				Index:     0,
+				Flag:      plan.Function_STRICT,
+				Layout:    STANDARD_FUNCTION,
+				Args:      []types.T{types.T_float64},
+				ReturnTyp: types.T_float64,
+				Fn:        unary.Asin,
+			},
+		},
+	},
 	ACOS: {
 		Id: ACOS,
 		Overloads: []Function{

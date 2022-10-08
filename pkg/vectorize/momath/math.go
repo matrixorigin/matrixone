@@ -22,6 +22,22 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 )
 
+func Asin(arg, result *vector.Vector) error {
+	argCol := vector.MustTCols[float64](arg)
+	resCol := vector.MustTCols[float64](result)
+	nulls.Set(result.Nsp, arg.Nsp)
+	for i, v := range argCol {
+		if !nulls.Contains(arg.Nsp, (uint64)(i)) {
+			if v < -1 || v > 1 {
+				nulls.Add(result.Nsp, uint64(i))
+			} else {
+				resCol[i] = math.Asin(v)
+			}
+		}
+	}
+	return nil
+}
+
 func Acos(arg, result *vector.Vector) error {
 	argCol := vector.MustTCols[float64](arg)
 	resCol := vector.MustTCols[float64](result)

@@ -57,6 +57,10 @@ func math1(vs []*vector.Vector, proc *process.Process, fn mathFn) (*vector.Vecto
 	}
 }
 
+func Asin(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
+	return math1(vs, proc, momath.Asin)
+}
+
 func Acos(vs []*vector.Vector, proc *process.Process) (*vector.Vector, error) {
 	return math1(vs, proc, momath.Acos)
 }

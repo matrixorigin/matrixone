@@ -113,6 +113,21 @@ func TestSinh(t *testing.T) {
 	require.Equal(t, []float64{0}, cols)
 }
 
+func TestAsin(t *testing.T) {
+	as := []float64{0}
+	cs := make([]float64, 1)
+
+	av := testutil.MakeFloat64Vector(as, nil)
+	cv := testutil.MakeFloat64Vector(cs, nil)
+
+	err := Asin(av, cv)
+	if err != nil {
+		panic(err)
+	}
+	cols := vector.MustTCols[float64](cv)
+	require.Equal(t, []float64{0}, cols)
+}
+
 func TestAcos(t *testing.T) {
 	as := []float64{1}
 	cs := make([]float64, 1)
