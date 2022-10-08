@@ -1,4 +1,4 @@
-// Copyright 2021 Matrix Origin
+// Copyright 2022 Matrix Origin
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -12,14 +12,29 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package txnimpl
+package memoryengine
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
+	"context"
+	"testing"
+	"time"
 )
 
-const (
-	ETInsertNode = entry.ETCustomizedStart + 1 + iota
-	ETTxnRecord
-	ETTxnState
-)
+func TestIDGenerator(t *testing.T) {
+	ctx := context.Background()
+	var last ID
+	t0 := time.Now()
+	for time.Since(t0) < time.Second*2 {
+		for i := 0; i < 100_0000; i++ {
+			id, err := RandomIDGenerator.NewID(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			// monotonic
+			if id <= last {
+				t.Fatal()
+			}
+			last = id
+		}
+	}
+}

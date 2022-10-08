@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"io"
 
@@ -35,6 +36,7 @@ const (
 	CmdDelete
 	CmdComposed
 	CmdTxn
+	CmdTxnState
 	CmdCustomized
 )
 
@@ -53,6 +55,9 @@ func init() {
 	})
 	txnif.RegisterCmdFactory(CmdTxn, func(int16) txnif.TxnCmd {
 		return NewEmptyTxnCmd()
+	})
+	txnif.RegisterCmdFactory(CmdTxnState, func(int16) txnif.TxnCmd {
+		return NewEmptyTxnStateCmd()
 	})
 }
 
@@ -84,6 +89,12 @@ type TxnCmd struct {
 	*ComposedCmd
 	*TxnCtx
 	Txn txnif.AsyncTxn
+}
+
+type TxnStateCmd struct {
+	ID    string
+	State txnif.TxnState
+	Cts   types.TS
 }
 
 type BatchCmd struct {
@@ -132,19 +143,99 @@ func (c *BaseCustomizedCmd) GetID() uint32 {
 	return c.ID
 }
 
+func NewEmptyTxnStateCmd() *TxnStateCmd {
+	return &TxnStateCmd{}
+}
+
+func NewTxnStateCmd(id string, state txnif.TxnState, cts types.TS) *TxnStateCmd {
+	return &TxnStateCmd{
+		ID:    id,
+		State: state,
+		Cts:   cts,
+	}
+}
+
 func NewTxnCmd() *TxnCmd {
 	return &TxnCmd{
 		ComposedCmd: NewComposedCmd(),
+		TxnCtx:      &TxnCtx{},
 	}
 }
+
 func NewEmptyTxnCmd() *TxnCmd {
 	return &TxnCmd{
 		ComposedCmd: NewComposedCmd(),
 		TxnCtx:      &TxnCtx{},
 	}
 }
+
+func (c *TxnStateCmd) WriteTo(w io.Writer) (n int64, err error) {
+	if err = binary.Write(w, binary.BigEndian, c.GetType()); err != nil {
+		return
+	}
+	n += 2
+	var sn int64
+	if sn, err = common.WriteString(c.ID, w); err != nil {
+		return
+	}
+	n += sn
+	if err = binary.Write(w, binary.BigEndian, c.State); err != nil {
+		return
+	}
+	n += 4
+	if err = binary.Write(w, binary.BigEndian, c.Cts); err != nil {
+		return
+	}
+	n += types.TxnTsSize
+	return
+}
+func (c *TxnStateCmd) ReadFrom(r io.Reader) (n int64, err error) {
+	var sn int64
+	if c.ID, sn, err = common.ReadString(r); err != nil {
+		return
+	}
+	n += sn
+	if err = binary.Read(r, binary.BigEndian, &c.State); err != nil {
+		return
+	}
+	n += 4
+	if err = binary.Read(r, binary.BigEndian, &c.Cts); err != nil {
+		return
+	}
+	n += types.TxnTsSize
+	return
+}
+func (c *TxnStateCmd) Marshal() (buf []byte, err error) {
+	var bbuf bytes.Buffer
+	if _, err = c.WriteTo(&bbuf); err != nil {
+		return
+	}
+	buf = bbuf.Bytes()
+	return
+}
+func (c *TxnStateCmd) Unmarshal(buf []byte) (err error) {
+	bbuf := bytes.NewBuffer(buf)
+	_, err = c.ReadFrom(bbuf)
+	return err
+}
+func (c *TxnStateCmd) GetType() int16 { return CmdTxnState }
+func (c *TxnStateCmd) Desc() string {
+	return fmt.Sprintf("Tid=%s,State=%s,Cts=%s", c.ID, txnif.TxnStrState(c.State), c.Cts.ToString())
+}
+func (c *TxnStateCmd) String() string {
+	return fmt.Sprintf("Tid=%s,State=%v,Cts=%s", c.ID, txnif.TxnStrState(c.State), c.Cts.ToString())
+}
+func (c *TxnStateCmd) VerboseString() string {
+	return fmt.Sprintf("Tid=%s,State=%v,Cts=%s", c.ID, txnif.TxnStrState(c.State), c.Cts.ToString())
+}
+func (c *TxnStateCmd) Close() {
+}
+
 func (c *TxnCmd) SetTxn(txn txnif.AsyncTxn) {
 	c.Txn = txn
+	c.ID = txn.GetID()
+	c.PrepareTS = txn.GetPrepareTS()
+	c.Participants = txn.GetParticipants()
 }
 func (c *TxnCmd) WriteTo(w io.Writer) (n int64, err error) {
 	if err = binary.Write(w, binary.BigEndian, c.GetType()); err != nil {
@@ -157,18 +248,26 @@ func (c *TxnCmd) WriteTo(w io.Writer) (n int64, err error) {
 		return
 	}
 	n += sn
-	if sn, err = common.WriteString(c.Txn.GetID(), w); err != nil {
+	if sn, err = common.WriteString(c.ID, w); err != nil {
 		return
 	}
 	n += sn
-	is2PC := uint8(0)
-	if c.Txn.Is2PC() {
-		is2PC = 1
-	}
-	if err = binary.Write(w, binary.BigEndian, is2PC); err != nil {
+	//prepare ts
+	if err = binary.Write(w, binary.BigEndian, c.PrepareTS); err != nil {
 		return
 	}
-	n += 1
+	n += types.TxnTsSize
+	//participants
+	if err = binary.Write(w, binary.BigEndian, uint32(len(c.Participants))); err != nil {
+		return
+	}
+	n += 4
+	for _, p := range c.Participants {
+		if err = binary.Write(w, binary.BigEndian, p); err != nil {
+			break
+		}
+		n += 8
+	}
 	return
 }
 func (c *TxnCmd) ReadFrom(r io.Reader) (n int64, err error) {
@@ -184,15 +283,29 @@ func (c *TxnCmd) ReadFrom(r io.Reader) (n int64, err error) {
 		return
 	}
 	n += sn
-	is2PC := uint8(0)
-	if err = binary.Read(r, binary.BigEndian, &is2PC); err != nil {
+	//prepare timestamp
+	if err = binary.Read(r, binary.BigEndian, &c.PrepareTS); err != nil {
 		return
 	}
-	n += 1
-	if is2PC == 1 {
-		c.Kind2PC = true
+	n += types.TxnTsSize
+	//participants
+	num := uint32(0)
+	if err = binary.Read(r, binary.BigEndian, &num); err != nil {
+		return
+	}
+	n += 4
+	c.Participants = make([]uint64, num)
+	for i := 0; i < int(num); i++ {
+		id := uint64(0)
+		if err = binary.Read(r, binary.BigEndian, &id); err != nil {
+			break
+		} else {
+			c.Participants = append(c.Participants, id)
+			n += 8
+		}
 	}
 	return
+
 }
 func (c *TxnCmd) Marshal() (buf []byte, err error) {
 	var bbuf bytes.Buffer

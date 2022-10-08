@@ -36,7 +36,7 @@ func (s *Service) BootstrapHAKeeper(ctx context.Context, cfg Config) error {
 		// running as a result of store.startReplicas(), we just ignore the
 		// dragonboat.ErrShardAlreadyExist error below.
 		if err != dragonboat.ErrShardAlreadyExist {
-			logger.Error("failed to start hakeeper replica", zap.Error(err))
+			s.logger.Error("failed to start hakeeper replica", zap.Error(err))
 			return err
 		}
 	}
@@ -51,14 +51,14 @@ func (s *Service) BootstrapHAKeeper(ctx context.Context, cfg Config) error {
 		}
 		if err := s.store.setInitialClusterInfo(numOfLogShards,
 			numOfDNShards, numOfLogReplicas); err != nil {
-			logger.Error("failed to set initial cluster info", zap.Error(err))
+			s.logger.Error("failed to set initial cluster info", zap.Error(err))
 			if err == dragonboat.ErrShardNotFound {
 				return nil
 			}
 			time.Sleep(time.Second)
 			continue
 		}
-		logger.Info("initial cluster info set")
+		s.logger.Info("initial cluster info set")
 		break
 	}
 	return nil

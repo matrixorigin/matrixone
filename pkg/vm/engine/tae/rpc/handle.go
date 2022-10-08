@@ -16,6 +16,7 @@ package rpc
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"os"
 	"syscall"
 
@@ -51,16 +52,21 @@ func NewTAEHandle(opt *options.Options) *Handle {
 	return h
 }
 func (h *Handle) HandleCommit(meta txn.TxnMeta) (err error) {
-	txn, err := h.eng.GetTxnByID(meta.GetID())
+	var txn moengine.Txn
+	txn, err = h.eng.GetTxnByID(meta.GetID())
 	if err != nil {
 		return err
+	}
+	if txn.Is2PC() {
+		txn.SetCommitTS(types.TimestampToTS(meta.GetCommitTS()))
 	}
 	err = txn.Commit()
 	return
 }
 
 func (h *Handle) HandleRollback(meta txn.TxnMeta) (err error) {
-	txn, err := h.eng.GetTxnByID(meta.GetID())
+	var txn moengine.Txn
+	txn, err = h.eng.GetTxnByID(meta.GetID())
 	if err != nil {
 		return err
 	}
@@ -69,34 +75,45 @@ func (h *Handle) HandleRollback(meta txn.TxnMeta) (err error) {
 }
 
 func (h *Handle) HandleCommitting(meta txn.TxnMeta) (err error) {
-	txn, err := h.eng.GetTxnByID(meta.GetID())
+	var txn moengine.Txn
+	txn, err = h.eng.GetTxnByID(meta.GetID())
 	if err != nil {
 		return err
 	}
+	txn.SetCommitTS(types.TimestampToTS(meta.GetCommitTS()))
 	err = txn.Committing()
 	return
 }
 
 func (h *Handle) HandlePrepare(meta txn.TxnMeta) (pts timestamp.Timestamp, err error) {
-	txn, err := h.eng.GetTxnByID(meta.GetID())
+	var txn moengine.Txn
+	txn, err = h.eng.GetTxnByID(meta.GetID())
 	if err != nil {
 		return timestamp.Timestamp{}, err
 	}
-	ts, err := txn.Prepare()
+	participants := make([]uint64, 0, len(meta.GetDNShards()))
+	for _, shard := range meta.GetDNShards() {
+		participants = append(participants, shard.GetShardID())
+	}
+	txn.SetParticipants(participants)
+	var ts types.TS
+	ts, err = txn.Prepare()
 	pts = ts.ToTimestamp()
 	return
 }
 
 func (h *Handle) HandleStartRecovery(ch chan txn.TxnMeta) {
-	panic(moerr.NewNYI("HandleStartRecovery is not implemented yet"))
+	//panic(moerr.NewNYI("HandleStartRecovery is not implemented yet"))
+	//TODO:: TAE replay
+	close(ch)
 }
 
 func (h *Handle) HandleClose() (err error) {
-	panic(moerr.NewNYI("HandleClose is not implemented yet"))
+	return h.eng.Close()
 }
 
 func (h *Handle) HandleDestroy() (err error) {
-	panic(moerr.NewNYI("HandleDestroy is not implemented yet"))
+	return h.eng.Destroy()
 }
 
 func (h *Handle) HandleGetLogTail(
@@ -144,6 +161,11 @@ func (h *Handle) HandlePreCommit(
 		case []catalog.CreateTable:
 			for _, cmd := range cmds {
 				req := db.CreateRelationReq{
+					AccessInfo: db.AccessInfo{
+						UserID:    req.UserId,
+						RoleID:    req.RoleId,
+						AccountID: req.AccountId,
+					},
 					Name:         cmd.Name,
 					DatabaseName: cmd.DatabaseName,
 					DatabaseID:   cmd.DatabaseId,
@@ -156,42 +178,55 @@ func (h *Handle) HandlePreCommit(
 			}
 		case []catalog.DropDatabase:
 			for _, cmd := range cmds {
-				req := db.DeleteDatabaseReq{
+				req := db.DropDatabaseReq{
 					Name: cmd.Name,
+					ID:   cmd.Id,
 					AccessInfo: db.AccessInfo{
 						UserID:    req.UserId,
 						RoleID:    req.RoleId,
 						AccountID: req.AccountId,
 					},
 				}
-				if err = h.HandleDeleteDatabase(meta, req,
-					new(db.DeleteDatabaseResp)); err != nil {
+				if err = h.HandleDropDatabase(meta, req,
+					new(db.DropDatabaseResp)); err != nil {
 					return err
 				}
 			}
 		case []catalog.DropTable:
 			for _, cmd := range cmds {
-				req := db.DeleteRelationReq{
+				req := db.DropRelationReq{
+					AccessInfo: db.AccessInfo{
+						UserID:    req.UserId,
+						RoleID:    req.RoleId,
+						AccountID: req.AccountId,
+					},
 					Name:         cmd.Name,
+					ID:           cmd.Id,
 					DatabaseName: cmd.DatabaseName,
 					DatabaseID:   cmd.DatabaseId,
 				}
-				if err = h.HandleDeleteRelation(meta, req,
-					new(db.DeleteRelationResp)); err != nil {
+				if err = h.HandleDropRelation(meta, req,
+					new(db.DropRelationResp)); err != nil {
 					return err
 				}
 			}
 		case *apipb.Entry:
 			//Handle DML
-			moBat, err := batch.ProtoBatchToBatch(e.(*apipb.Entry).Bat)
+			pe := e.(*apipb.Entry)
+			moBat, err := batch.ProtoBatchToBatch(pe.GetBat())
 			if err != nil {
 				panic(err)
 			}
 			req := db.WriteReq{
-				Type:         db.EntryType(e.(*apipb.Entry).EntryType),
-				TableID:      e.(*apipb.Entry).TableId,
-				DatabaseName: e.(*apipb.Entry).DatabaseName,
-				TableName:    e.(*apipb.Entry).TableName,
+				AccessInfo: db.AccessInfo{
+					UserID:    req.UserId,
+					RoleID:    req.RoleId,
+					AccountID: req.AccountId,
+				},
+				Type:         db.EntryType(pe.EntryType),
+				TableID:      pe.GetTableId(),
+				DatabaseName: pe.GetDatabaseName(),
+				TableName:    pe.GetTableName(),
 				Batch:        moBat,
 			}
 			if err = h.HandleWrite(meta, req,
@@ -218,38 +253,46 @@ func (h *Handle) HandleCreateDatabase(
 	if err != nil {
 		return err
 	}
-	err = h.eng.CreateDatabase(context.TODO(), req.Name, txn)
+	ctx := context.Background()
+	ctx = context.WithValue(ctx, defines.TenantIDKey{}, req.AccessInfo.AccountID)
+	ctx = context.WithValue(ctx, defines.UserIDKey{}, req.AccessInfo.UserID)
+	ctx = context.WithValue(ctx, defines.RoleIDKey{}, req.AccessInfo.RoleID)
+	err = h.eng.CreateDatabase(ctx, req.Name, txn)
 	if err != nil {
 		return
 	}
-	db, err := h.eng.GetDatabase(context.TODO(), req.Name, txn)
+	db, err := h.eng.GetDatabase(ctx, req.Name, txn)
 	if err != nil {
 		return
 	}
-	resp.ID = db.GetDatabaseID(context.TODO())
+	resp.ID = db.GetDatabaseID(ctx)
 	return
 }
 
-func (h *Handle) HandleDeleteDatabase(
+func (h *Handle) HandleDropDatabase(
 	meta txn.TxnMeta,
-	req db.DeleteDatabaseReq,
-	resp *db.DeleteDatabaseResp) (err error) {
+	req db.DropDatabaseReq,
+	resp *db.DropDatabaseResp) (err error) {
 
 	txn, err := h.eng.GetOrCreateTxnWithMeta(nil, meta.GetID(),
 		types.TimestampToTS(meta.GetSnapshotTS()))
 	if err != nil {
 		return err
 	}
-	err = h.eng.DropDatabase(context.TODO(), req.Name, txn)
+	ctx := context.Background()
+	ctx = context.WithValue(ctx, defines.TenantIDKey{}, req.AccessInfo.AccountID)
+	ctx = context.WithValue(ctx, defines.UserIDKey{}, req.AccessInfo.UserID)
+	ctx = context.WithValue(ctx, defines.RoleIDKey{}, req.AccessInfo.RoleID)
+	err = h.eng.DropDatabase(ctx, req.Name, txn)
 	if err != nil {
 		return
 	}
 
-	db, err := h.eng.GetDatabase(context.TODO(), req.Name, txn)
+	db, err := h.eng.GetDatabase(ctx, req.Name, txn)
 	if err != nil {
 		return
 	}
-	resp.ID = db.GetDatabaseID(context.TODO())
+	resp.ID = db.GetDatabaseID(ctx)
 	return
 }
 
@@ -263,7 +306,11 @@ func (h *Handle) HandleCreateRelation(
 	if err != nil {
 		return
 	}
-	db, err := h.eng.GetDatabase(context.TODO(), req.DatabaseName, txn)
+	ctx := context.Background()
+	ctx = context.WithValue(ctx, defines.TenantIDKey{}, req.AccessInfo.AccountID)
+	ctx = context.WithValue(ctx, defines.UserIDKey{}, req.AccessInfo.UserID)
+	ctx = context.WithValue(ctx, defines.RoleIDKey{}, req.AccessInfo.RoleID)
+	db, err := h.eng.GetDatabase(ctx, req.DatabaseName, txn)
 	if err != nil {
 		return
 	}
@@ -280,17 +327,21 @@ func (h *Handle) HandleCreateRelation(
 	return
 }
 
-func (h *Handle) HandleDeleteRelation(
+func (h *Handle) HandleDropRelation(
 	meta txn.TxnMeta,
-	req db.DeleteRelationReq,
-	resp *db.DeleteRelationResp) (err error) {
+	req db.DropRelationReq,
+	resp *db.DropRelationResp) (err error) {
 
 	txn, err := h.eng.GetOrCreateTxnWithMeta(nil, meta.GetID(),
 		types.TimestampToTS(meta.GetSnapshotTS()))
 	if err != nil {
 		return
 	}
-	db, err := h.eng.GetDatabase(context.TODO(), req.DatabaseName, txn)
+	ctx := context.Background()
+	ctx = context.WithValue(ctx, defines.TenantIDKey{}, req.AccessInfo.AccountID)
+	ctx = context.WithValue(ctx, defines.UserIDKey{}, req.AccessInfo.UserID)
+	ctx = context.WithValue(ctx, defines.RoleIDKey{}, req.AccessInfo.RoleID)
+	db, err := h.eng.GetDatabase(ctx, req.DatabaseName, txn)
 	if err != nil {
 		return
 	}
@@ -320,7 +371,11 @@ func (h *Handle) HandleWrite(
 		return err
 	}
 
-	dbase, err := h.eng.GetDatabase(context.TODO(), req.DatabaseName, txn)
+	ctx := context.Background()
+	ctx = context.WithValue(ctx, defines.TenantIDKey{}, req.AccessInfo.AccountID)
+	ctx = context.WithValue(ctx, defines.UserIDKey{}, req.AccessInfo.UserID)
+	ctx = context.WithValue(ctx, defines.RoleIDKey{}, req.AccessInfo.RoleID)
+	dbase, err := h.eng.GetDatabase(ctx, req.DatabaseName, txn)
 	if err != nil {
 		return
 	}
