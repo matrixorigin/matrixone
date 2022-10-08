@@ -15,6 +15,7 @@
 package memorystorage
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -32,7 +33,7 @@ import (
 
 type LogTailEntry = apipb.Entry
 
-func (m *MemHandler) HandleGetLogTail(meta txn.TxnMeta, req apipb.SyncLogTailReq, resp *apipb.SyncLogTailResp) (err error) {
+func (m *MemHandler) HandleGetLogTail(ctx context.Context, meta txn.TxnMeta, req apipb.SyncLogTailReq, resp *apipb.SyncLogTailResp) (err error) {
 	tableID := ID(req.Table.TbId)
 
 	// tx
@@ -322,8 +323,8 @@ func logTailHandleSystemTable[
 	return nil
 }
 
-func (c *CatalogHandler) HandleGetLogTail(meta txn.TxnMeta, req apipb.SyncLogTailReq, resp *apipb.SyncLogTailResp) (err error) {
-	return c.upstream.HandleGetLogTail(meta, req, resp)
+func (c *CatalogHandler) HandleGetLogTail(ctx context.Context, meta txn.TxnMeta, req apipb.SyncLogTailReq, resp *apipb.SyncLogTailResp) (err error) {
+	return c.upstream.HandleGetLogTail(ctx, meta, req, resp)
 }
 
 func toPBBatch(bat *batch.Batch) (ret *apipb.Batch) {
