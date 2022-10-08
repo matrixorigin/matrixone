@@ -1,6 +1,6 @@
-# 客户端连接 MatrixOne 服务
+# 数据库客户端工具连接 MatrixOne 服务
 
-MatrixOne 现在支持通过以下几种客户端的方式连接 MatrixOne 服务：
+MatrixOne 现在支持通过以下几种数据库客户端工具的方式连接 MatrixOne 服务：
 
 - MySQL Client
 - Navicat
@@ -36,7 +36,7 @@ MatrixOne 现在支持通过以下几种客户端的方式连接 MatrixOne 服�
 
     ```
     Welcome to the MySQL monitor. Commands end with ; or \g. Your MySQL connection id is 1031
-    Server version: 0.5.0 MatrixOne
+    Server version: 0.5.1 MatrixOne
     Copyright (c) 2000, 2022, Oracle and/or its affiliates.
 
     Oracle is a registered trademark of Oracle Corporation and/or its affiliates. Other names may be trademarks of their respective owners.
@@ -79,6 +79,7 @@ MatrixOne 现在支持通过以下几种客户端的方式连接 MatrixOne 服�
 
 4. 鼠标右左侧数据库导航目录中的 **MatrixOne**，选择 **编辑连接**，在**连接设置**窗口的**驱动属性**区中修改如下参数，修改完成后点击**完成**，保存参数：
 
+    ```
     - characterSetResults: "utf8"
     - continueBatchOnError: "false"
     - useServerPrepStmts: "true"
@@ -88,5 +89,6 @@ MatrixOne 现在支持通过以下几种客户端的方式连接 MatrixOne 服�
     - failoverReadOnly: "false"
     - serverTimezone: "Asia/Shanghai"
     - socketTimeout: 30000
-
+    ```
+    
 5. 鼠标右左侧数据库导航目录中的 **MatrixOne**，选择**连接**，图标点亮，连接成功。
