@@ -15,6 +15,8 @@
 package memorystorage
 
 import (
+	"context"
+
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/memoryengine"
@@ -24,18 +26,22 @@ type Handler interface {
 	memoryengine.OperationHandler
 
 	HandleCommit(
+		ctx context.Context,
 		meta txn.TxnMeta,
 	) error
 
 	HandleRollback(
+		ctx context.Context,
 		meta txn.TxnMeta,
 	) error
 
 	HandleCommitting(
+		ctx context.Context,
 		meta txn.TxnMeta,
 	) error
 
 	HandlePrepare(
+		ctx context.Context,
 		meta txn.TxnMeta,
 	) (
 		timestamp.Timestamp,
@@ -43,10 +49,11 @@ type Handler interface {
 	)
 
 	HandleStartRecovery(
+		ctx context.Context,
 		ch chan txn.TxnMeta,
 	)
 
-	HandleClose() error
+	HandleClose(ctx context.Context) error
 
-	HandleDestroy() error
+	HandleDestroy(ctx context.Context) error
 }

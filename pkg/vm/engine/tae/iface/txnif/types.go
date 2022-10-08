@@ -15,10 +15,10 @@
 package txnif
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
 	"io"
 	"sync"
-
-	"github.com/matrixorigin/matrixone/pkg/pb/api"
 
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -46,6 +46,7 @@ type TxnReader interface {
 	GetStartTS() types.TS
 	GetCommitTS() types.TS
 	GetPrepareTS() types.TS
+	GetParticipants() []uint64
 	GetInfo() []byte
 	IsVisible(o TxnReader) bool
 	GetTxnState(waitIfcommitting bool) TxnState
@@ -88,11 +89,14 @@ type TxnChanger interface {
 	Committing() error
 	Commit() error
 	Rollback() error
+	SetCommitTS(cts types.TS) error
+	SetParticipants(ids []uint64) error
 	SetError(error)
 }
 
 type TxnWriter interface {
 	LogTxnEntry(dbId, tableId uint64, entry TxnEntry, readed []*common.ID) error
+	LogTxnState(sync bool) (entry.Entry, error)
 }
 
 type TxnAsyncer interface {
@@ -264,6 +268,7 @@ type TxnStore interface {
 	AddTxnEntry(TxnEntryType, TxnEntry)
 
 	LogTxnEntry(dbId, tableId uint64, entry TxnEntry, readed []*common.ID) error
+	LogTxnState(sync bool) (entry.Entry, error)
 
 	IsReadonly() bool
 	IncreateWriteCnt() int

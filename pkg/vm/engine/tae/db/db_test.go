@@ -2636,6 +2636,58 @@ func TestCompactBlk2(t *testing.T) {
 	assert.Equal(t, int64(2), rel.Rows())
 }
 
+func TestCompactblk3(t *testing.T) {
+	testutils.EnsureNoLeak(t)
+	opts := config.WithLongScanAndCKPOpts(nil)
+	tae := newTestEngine(t, opts)
+	defer tae.Close()
+	schema := catalog.MockSchemaAll(3, 1)
+	schema.BlockMaxRows = 5
+	schema.SegmentMaxBlocks = 2
+	tae.bindSchema(schema)
+	bat := catalog.MockBatch(schema, 3)
+	defer bat.Close()
+
+	tae.createRelAndAppend(bat, true)
+
+	v := getSingleSortKeyValue(bat, schema, 1)
+	filter := handle.NewEQFilter(v)
+	txn2, rel1 := tae.getRelation()
+	checkAllColRowsByScan(t, rel1, 3, true)
+	_ = rel1.DeleteByFilter(filter)
+	assert.Nil(t, txn2.Commit())
+
+	_, rel2 := tae.getRelation()
+	checkAllColRowsByScan(t, rel2, 2, true)
+
+	txn, rel := tae.getRelation()
+	it := rel.MakeBlockIt()
+	blk := it.GetBlock()
+	meta := blk.GetMeta().(*catalog.BlockEntry)
+	task, err := jobs.NewCompactBlockTask(nil, txn, meta, tae.DB.Scheduler)
+	assert.NoError(t, err)
+	err = task.OnExec()
+	assert.NoError(t, err)
+	err = txn.Commit()
+	assert.NoError(t, err)
+
+	txn, err = tae.StartTxn(nil)
+	assert.NoError(t, err)
+	processor := &catalog.LoopProcessor{}
+	processor.BlockFn = func(be *catalog.BlockEntry) error {
+		if be.GetSegment().GetTable().GetDB().IsSystemDB() {
+			return nil
+		}
+		view, err := be.GetBlockData().GetColumnDataById(txn, 0, nil)
+		assert.NoError(t, err)
+		view.ApplyDeletes()
+		assert.Equal(t, 2, view.Length())
+		return nil
+	}
+	err = tae.Catalog.RecurLoop(processor)
+	assert.NoError(t, err)
+}
+
 func TestDelete3(t *testing.T) {
 	opts := config.WithQuickScanAndCKPOpts(nil)
 	tae := newTestEngine(t, opts)

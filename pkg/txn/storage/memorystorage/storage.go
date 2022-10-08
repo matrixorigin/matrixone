@@ -38,29 +38,29 @@ func New(
 var _ storage.TxnStorage = new(Storage)
 
 func (s *Storage) Commit(ctx context.Context, txnMeta txn.TxnMeta) error {
-	return s.handler.HandleCommit(txnMeta)
+	return s.handler.HandleCommit(ctx, txnMeta)
 }
 
 func (s *Storage) Committing(ctx context.Context, txnMeta txn.TxnMeta) error {
-	return s.handler.HandleCommitting(txnMeta)
+	return s.handler.HandleCommitting(ctx, txnMeta)
 }
 
 func (s *Storage) Prepare(ctx context.Context, txnMeta txn.TxnMeta) (timestamp.Timestamp, error) {
-	return s.handler.HandlePrepare(txnMeta)
+	return s.handler.HandlePrepare(ctx, txnMeta)
 }
 
 func (s *Storage) Rollback(ctx context.Context, txnMeta txn.TxnMeta) error {
-	return s.handler.HandleRollback(txnMeta)
+	return s.handler.HandleRollback(ctx, txnMeta)
 }
 
 func (s *Storage) StartRecovery(ctx context.Context, ch chan txn.TxnMeta) {
-	s.handler.HandleStartRecovery(ch)
+	s.handler.HandleStartRecovery(ctx, ch)
 }
 
 func (s *Storage) Close(ctx context.Context) error {
-	return s.handler.HandleClose()
+	return s.handler.HandleClose(ctx)
 }
 
 func (s *Storage) Destroy(ctx context.Context) error {
-	return s.handler.HandleDestroy()
+	return s.handler.HandleDestroy(ctx)
 }

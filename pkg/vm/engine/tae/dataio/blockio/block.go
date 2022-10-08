@@ -165,7 +165,7 @@ func (bf *blockFile) GetDelta() objectio.BlockObject {
 }
 
 func (bf *blockFile) GetDeltaFormKey(metaLoc string) objectio.BlockObject {
-	name, extent, _ := DecodeMetaLoc(metaLoc)
+	name, extent := DecodeDeltaLoc(metaLoc)
 	if bf.reader == nil {
 		bf.reader = NewReader(bf.seg.fs, bf, name)
 	}
