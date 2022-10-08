@@ -21,7 +21,6 @@ import (
 	"encoding/json"
 	goErrors "errors"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"math"
 	"os"
 	"reflect"
@@ -30,6 +29,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
