@@ -15,12 +15,9 @@
 package plan
 
 import (
-	"strings"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
@@ -259,23 +256,18 @@ func buildUseProjection(stmt *tree.Delete, ps tree.SelectExprs, objRef *ObjectRe
 		psNames[key.Name] = struct{}{}
 		e := tree.SetUnresolvedName(tblName, key.Name)
 		ps = append(ps, tree.SelectExpr{Expr: e})
+		useKey = key
 
-		if key.IsCPkey {
-			break
-		}
-		if isContainNameInFilter(stmt, key.Name) {
-			useKey = key
-			break
-		}
-	}
-
-	// if we have no primary key, we return all of the columns
-	// we need this data to hash and choice the DN
-	if len(priKeys) == 0 {
-		for _, col := range tableDef.Cols {
-			e := tree.SetUnresolvedName(tblName, col.Name)
-			ps = append(ps, tree.SelectExpr{Expr: e})
-		}
+		// if key.IsCPkey {
+		// 	break
+		// }
+		// if isContainNameInFilter(stmt, key.Name) {
+		// 	psNames[key.Name] = struct{}{}
+		// 	e := tree.SetUnresolvedName(tblName, key.Name)
+		// 	ps = append(ps, tree.SelectExpr{Expr: e})
+		// 	useKey = key
+		// 	break
+		// }
 	}
 
 	if useKey == nil {
@@ -288,30 +280,41 @@ func buildUseProjection(stmt *tree.Delete, ps tree.SelectExprs, objRef *ObjectRe
 		ps = append(ps, tree.SelectExpr{Expr: e})
 		isHideKey = true
 	}
+
+	// if we have no primary key, we return all of the columns
+	// we need columns to hash then choice the DN
+	if len(priKeys) == 0 {
+		for _, col := range tableDef.Cols {
+			if _, ok := psNames[col.Name]; !ok {
+				e := tree.SetUnresolvedName(tblName, col.Name)
+				ps = append(ps, tree.SelectExpr{Expr: e})
+			}
+		}
+	}
 	return ps, useKey, isHideKey, nil
 }
 
 // isContainNameInFilter is to find out if contain primary key in expr.
 // it works any way. Chose other way to delete when it is not accurate judgment
-func isContainNameInFilter(stmt *tree.Delete, name string) bool {
-	if stmt.TableRefs != nil {
-		for _, e := range stmt.TableRefs {
-			if strings.Contains(tree.String(e, dialect.MYSQL), name) {
-				return true
-			}
-		}
-	}
-	if stmt.OrderBy != nil {
-		for _, e := range stmt.OrderBy {
-			if strings.Contains(tree.String(e.Expr, dialect.MYSQL), name) {
-				return true
-			}
-		}
-	}
-	if stmt.Where != nil {
-		if strings.Contains(tree.String(stmt.Where, dialect.MYSQL), name) {
-			return true
-		}
-	}
-	return false
-}
+// func isContainNameInFilter(stmt *tree.Delete, name string) bool {
+// 	if stmt.TableRefs != nil {
+// 		for _, e := range stmt.TableRefs {
+// 			if strings.Contains(tree.String(e, dialect.MYSQL), name) {
+// 				return true
+// 			}
+// 		}
+// 	}
+// 	if stmt.OrderBy != nil {
+// 		for _, e := range stmt.OrderBy {
+// 			if strings.Contains(tree.String(e.Expr, dialect.MYSQL), name) {
+// 				return true
+// 			}
+// 		}
+// 	}
+// 	if stmt.Where != nil {
+// 		if strings.Contains(tree.String(stmt.Where, dialect.MYSQL), name) {
+// 			return true
+// 		}
+// 	}
+// 	return false
+// }
