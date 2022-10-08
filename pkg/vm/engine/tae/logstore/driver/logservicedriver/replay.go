@@ -41,7 +41,7 @@ type replayer struct {
 
 func newReplayer(h driver.ApplyHandle, readmaxsize int, d *LogServiceDriver) *replayer {
 	truncated := d.getLogserviceTruncate()
-	logutil.Infof("lalala truncated %d", truncated)
+	logutil.Infof("truncated %d", truncated)
 	return &replayer{
 		minDriverLsn:              math.MaxUint64,
 		driverLsnLogserviceLsnMap: make(map[uint64]uint64),
@@ -102,7 +102,6 @@ func (r *replayer) replayLogserviceEntry(lsn uint64) error {
 		if len(r.driverLsnLogserviceLsnMap) == 0 {
 			return ErrAllRecordsRead
 		}
-		logutil.Infof("try read %d in map %v", lsn, r.driverLsnLogserviceLsnMap)
 		panic("logic error")
 	}
 	record, err := r.d.readFromCache(logserviceLsn)

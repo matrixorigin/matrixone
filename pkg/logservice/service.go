@@ -35,10 +35,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 )
 
-var (
-	logger = logutil.GetGlobalLogger().Named("LogService")
-)
-
 const (
 	LogServiceRPCName = "logservice-rpc"
 )
@@ -74,6 +70,8 @@ type Service struct {
 		// morpc client would filter remote backend via this
 		backendFilter func(msg morpc.Message, backendAddr string) bool
 	}
+
+	logger *zap.Logger
 }
 
 func NewService(
@@ -86,7 +84,8 @@ func NewService(
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
-	store, err := newLogStore(cfg, taskService)
+	logger := logutil.GetGlobalLogger().Named("LogService").With(zap.String("uuid", cfg.UUID))
+	store, err := newLogStore(cfg, taskService, logger)
 	if err != nil {
 		logger.Error("failed to create log store", zap.Error(err))
 		return nil, err
@@ -115,7 +114,9 @@ func NewService(
 	server, err := morpc.NewRPCServer(LogServiceRPCName, cfg.ServiceListenAddress, codec,
 		morpc.WithServerGoettyOptions(goetty.WithSessionReleaseMsgFunc(func(i interface{}) {
 			respPool.Put(i.(morpc.RPCMessage).Message)
-		})))
+		})),
+		morpc.WithServerLogger(logger),
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -127,6 +128,8 @@ func NewService(
 		respPool:    respPool,
 		stopper:     stopper.NewStopper("log-service"),
 		fileService: fileService,
+
+		logger: logger,
 	}
 	for _, opt := range opts {
 		opt(service)

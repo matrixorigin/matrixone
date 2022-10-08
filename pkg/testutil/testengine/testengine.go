@@ -49,6 +49,7 @@ func New(
 		testutil.NewMheap(),
 		memorystorage.SnapshotIsolation,
 		ck,
+		memoryengine.RandomIDGenerator,
 	)
 	if err != nil {
 		panic(err)

@@ -34,8 +34,8 @@ func (d *LogServiceDriver) Append(e *entry.Entry) error {
 	return nil
 }
 
-func (d *LogServiceDriver) getAppender(size int) *driverAppender {
-	if int(d.appendable.entry.payloadSize)+size > d.config.RecordSize {
+func (d *LogServiceDriver) getAppender() *driverAppender {
+	if int(d.appendable.entry.payloadSize) > d.config.RecordSize {
 		d.appendAppender()
 	}
 	return d.appendable
@@ -51,7 +51,7 @@ func (d *LogServiceDriver) appendAppender() {
 func (d *LogServiceDriver) onPreAppend(items ...any) {
 	for _, item := range items {
 		e := item.(*entry.Entry)
-		appender := d.getAppender(e.GetSize())
+		appender := d.getAppender()
 		appender.appendEntry(e)
 	}
 	d.appendAppender()
@@ -62,7 +62,7 @@ func (d *LogServiceDriver) onAppendQueue(appender *driverAppender) {
 	appender.entry.SetAppended(d.getSynced())
 	appender.contextDuration = d.config.NewClientDuration
 	appender.wg.Add(1)
-	go appender.append()
+	go appender.append(d.config.RetryTimeout)
 }
 
 func (d *LogServiceDriver) getClient() (client *clientWithRecord, lsn uint64) {

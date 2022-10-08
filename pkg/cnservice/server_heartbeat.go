@@ -16,7 +16,6 @@ package cnservice
 
 import (
 	"context"
-	"fmt"
 	"time"
 
 	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
@@ -36,11 +35,6 @@ func (s *service) heartbeatTask(ctx context.Context) {
 	defer ticker.Stop()
 
 	s.logger.Info("CNStore heartbeat started")
-	serviceAddr := ""
-	if s.cfg.Frontend.Host != "" && s.cfg.Frontend.Port != 0 {
-		serviceAddr = fmt.Sprintf("%s:%d", s.cfg.Frontend.Host,
-			s.cfg.Frontend.Port)
-	}
 
 	for {
 		select {
@@ -51,7 +45,7 @@ func (s *service) heartbeatTask(ctx context.Context) {
 			ctx, cancel := context.WithTimeout(context.Background(), s.cfg.HAKeeper.HeatbeatTimeout.Duration)
 			err := s._hakeeperClient.SendCNHeartbeat(ctx, logservicepb.CNStoreHeartbeat{
 				UUID:           s.cfg.UUID,
-				ServiceAddress: serviceAddr,
+				ServiceAddress: s.cfg.ListenAddress,
 				Role:           s.metadata.Role,
 			})
 			cancel()
