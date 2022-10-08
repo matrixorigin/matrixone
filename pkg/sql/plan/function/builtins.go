@@ -2300,7 +2300,7 @@ var builtins = map[int]Functions{
 				Flag:      plan.Function_STRICT,
 				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{},
-				ReturnTyp: types.T_uint64,
+				ReturnTyp: types.T_int64,
 				Fn:        multi.Hash,
 			},
 		},

@@ -17,11 +17,12 @@ package frontend
 import (
 	"context"
 	"fmt"
+	"testing"
+	"time"
+
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
-	"testing"
-	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 
@@ -815,7 +816,9 @@ func Test_handleShowColumns(t *testing.T) {
 		ses.Data = make([][]interface{}, 1)
 		ses.Data[0] = make([]interface{}, primaryKeyPos+1)
 		ses.Data[0][0] = []byte("col1")
-		ses.Data[0][1] = int32(1)
+		typ, err := types.Encode(types.New(types.T_int8, 0, 0, 0))
+		convey.So(err, convey.ShouldBeNil)
+		ses.Data[0][1] = typ
 		ses.Data[0][2] = int8(2)
 		ses.Data[0][primaryKeyPos] = []byte("p")
 		proto.ses = ses

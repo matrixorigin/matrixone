@@ -12,26 +12,25 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package memoryengine
+package engine
 
 import (
 	"encoding/gob"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
 func init() {
 
 	// register TableDef types
-	gob.Register(new(engine.ViewDef))
-	gob.Register(new(engine.CommentDef))
-	gob.Register(new(engine.PartitionDef))
-	gob.Register(new(engine.AttributeDef))
-	gob.Register(new(engine.IndexTableDef))
-	gob.Register(new(engine.PropertiesDef))
-	gob.Register(new(engine.PrimaryIndexDef))
+	gob.Register(new(ViewDef))
+	gob.Register(new(CommentDef))
+	gob.Register(new(PartitionDef))
+	gob.Register(new(AttributeDef))
+	gob.Register(new(IndexTableDef))
+	gob.Register(new(PropertiesDef))
+	gob.Register(new(PrimaryIndexDef))
 
 	// register vector column types
 	gob.Register([]bool{})
@@ -47,6 +46,7 @@ func init() {
 	gob.Register([]float64{})
 	gob.Register([]string{})
 	gob.Register([][]any{})
+	gob.Register([]types.Type{})
 	gob.Register([]types.Date{})
 	gob.Register([]types.Datetime{})
 	gob.Register([]types.Timestamp{})
@@ -76,5 +76,5 @@ func init() {
 	gob.Register(&plan.Const_Timestampval{})
 	gob.Register(&plan.Const_Jsonval{})
 	gob.Register(&plan.Const_Defaultval{})
-
+	gob.Register(&plan.Default{})
 }

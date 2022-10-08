@@ -20,6 +20,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 )
 
+func (r *emptyReader) Close() error {
+	return nil
+}
+
+func (r *emptyReader) Read(cols []string, expr *plan.Expr, m *mheap.Mheap) (*batch.Batch, error) {
+	return nil, nil
+}
+
 func (r *blockReader) Close() error {
 	return nil
 }
