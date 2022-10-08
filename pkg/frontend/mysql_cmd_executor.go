@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	goErrors "errors"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"math"
 	"os"
 	"reflect"
@@ -1460,6 +1461,11 @@ func (mce *MysqlCmdExecutor) handleRevokePrivilege(ctx context.Context, rp *tree
 	return doRevokePrivilege(ctx, mce.GetSession(), rp)
 }
 
+// handleSwitchRole switches the role to another role
+func (mce *MysqlCmdExecutor) handleSwitchRole(ctx context.Context, sr *tree.SetRole) error {
+	return doSwitchRole(ctx, mce.GetSession(), sr)
+}
+
 func GetExplainColumns(explainColName string) ([]interface{}, error) {
 	cols := []*plan2.ColDef{
 		{Typ: &plan2.Type{Id: int32(types.T_varchar)}, Name: explainColName},
@@ -1857,9 +1863,11 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 	var prepareStmt *PrepareStmt
 	var havePrivilege bool
 	var err2 error
+	var columns []interface{}
+	var deallocatePlan *plan.Plan
 
-	stmt := cws[0].GetAst()
-	mce.beforeRun(stmt)
+	stmt0 := cws[0].GetAst()
+	mce.beforeRun(stmt0)
 	for _, cw := range cws {
 		ses.SetMysqlResultSet(&MysqlResultSet{})
 		stmt := cw.GetAst()
@@ -1965,17 +1973,17 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		switch st := stmt.(type) {
 		case *tree.BeginTransaction, *tree.CommitTransaction, *tree.RollbackTransaction:
 			selfHandle = true
-			err = proto.sendOKPacket(0, 0, 0, 0, "")
+		case *tree.SetRole:
+			selfHandle = true
+			//switch role
+			err = mce.handleSwitchRole(requestCtx, st)
 			if err != nil {
 				goto handleFailed
 			}
 		case *tree.Use:
 			selfHandle = true
+			//use database
 			err = mce.handleChangeDB(requestCtx, st.Name)
-			if err != nil {
-				goto handleFailed
-			}
-			err = proto.sendOKPacket(0, 0, 0, 0, "")
 			if err != nil {
 				goto handleFailed
 			}
@@ -2006,7 +2014,10 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 		case *tree.Deallocate:
 			selfHandle = true
 			err = mce.handleDeallocate(st)
-			deallocatePlan, err := buildPlan(requestCtx, ses, mce.ses.txnCompileCtx, st)
+			if err != nil {
+				goto handleFailed
+			}
+			deallocatePlan, err = buildPlan(requestCtx, ses, mce.ses.txnCompileCtx, st)
 			if err != nil {
 				goto handleFailed
 			}
@@ -2146,7 +2157,7 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			*tree.ShowProcessList, *tree.ShowStatus, *tree.ShowTableStatus, *tree.ShowGrants,
 			*tree.ShowIndex, *tree.ShowCreateView, *tree.ShowTarget,
 			*tree.ExplainFor, *tree.ExplainStmt:
-			columns, err2 := cw.GetColumns()
+			columns, err2 = cw.GetColumns()
 			if err2 != nil {
 				logutil.Errorf("GetColumns from Computation handler failed. error: %v", err2)
 				err = err2
@@ -2378,28 +2389,29 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 				*tree.CreateUser, *tree.DropUser, *tree.AlterUser,
 				*tree.CreateRole, *tree.DropRole, *tree.Revoke, *tree.Grant,
 				*tree.SetDefaultRole, *tree.SetRole, *tree.SetPassword, *tree.Delete,
-				*tree.Deallocate:
+				*tree.Deallocate, *tree.Use,
+				*tree.BeginTransaction, *tree.CommitTransaction, *tree.RollbackTransaction:
 				resp := NewOkResponse(rspLen, 0, 0, 0, int(COM_QUERY), "")
-				if err := mce.GetSession().protocol.SendResponse(resp); err != nil {
-					trace.EndStatement(requestCtx, err)
-					retErr = moerr.NewInternalError("routine send response failed. error:%v ", err)
+				if err2 = mce.GetSession().protocol.SendResponse(resp); err2 != nil {
+					trace.EndStatement(requestCtx, err2)
+					retErr = moerr.NewInternalError("routine send response failed. error:%v ", err2)
 					logStatementStatus(requestCtx, ses, stmt, fail, retErr)
 					return retErr
 				}
 
 			case *tree.PrepareStmt, *tree.PrepareString:
 				if mce.ses.Cmd == int(COM_STMT_PREPARE) {
-					if err := mce.ses.protocol.SendPrepareResponse(prepareStmt); err != nil {
-						trace.EndStatement(requestCtx, err)
-						retErr = moerr.NewInternalError("routine send response failed. error:%v ", err)
+					if err2 = mce.ses.protocol.SendPrepareResponse(prepareStmt); err2 != nil {
+						trace.EndStatement(requestCtx, err2)
+						retErr = moerr.NewInternalError("routine send response failed. error:%v ", err2)
 						logStatementStatus(requestCtx, ses, stmt, fail, retErr)
 						return retErr
 					}
 				} else {
 					resp := NewOkResponse(rspLen, 0, 0, 0, int(COM_QUERY), "")
-					if err := mce.GetSession().protocol.SendResponse(resp); err != nil {
-						trace.EndStatement(requestCtx, err)
-						retErr = moerr.NewInternalError("routine send response failed. error:%v ", err)
+					if err2 = mce.GetSession().protocol.SendResponse(resp); err2 != nil {
+						trace.EndStatement(requestCtx, err2)
+						retErr = moerr.NewInternalError("routine send response failed. error:%v ", err2)
 						logStatementStatus(requestCtx, ses, stmt, fail, retErr)
 						return retErr
 					}

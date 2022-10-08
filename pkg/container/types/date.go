@@ -301,9 +301,7 @@ func (d Date) YearMonth() uint32 {
 	year, month, _, _ := d.Calendar(true)
 	yearStr := fmt.Sprintf("%04d", year)
 	monthStr := fmt.Sprintf("%02d", month)
-	// fmt.Println(yearStr, monthStr, "--------")
 	result, _ := strconv.ParseUint(yearStr+monthStr, 10, 32)
-	// fmt.Println(result)
 	return uint32(result)
 }
 

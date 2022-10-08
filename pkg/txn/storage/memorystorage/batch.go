@@ -20,7 +20,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 )
 
 type BatchIter func() (tuple []Nullable)
@@ -346,17 +345,6 @@ func vectorAt(vec *vector.Vector, i int) (value Nullable) {
 	panic(fmt.Sprintf("unknown column type: %v", vec.Typ))
 }
 
-func vectorAppend(vec *vector.Vector, value Nullable, heap *mheap.Mheap) {
-	str, ok := value.Value.(string)
-	if ok {
-		value.Value = []byte(str)
-	}
-	vec.Append(value.Value, false, heap)
-	if value.IsNull {
-		vec.GetNulls().Set(uint64(vec.Length() - 1))
-	}
-}
-
 func appendNamedRow(
 	tx *Transaction,
 	handler *MemHandler,
@@ -364,14 +352,13 @@ func appendNamedRow(
 	bat *batch.Batch,
 	row NamedRow,
 ) error {
-	row.SetHandler(handler)
 	for i := offset; i < len(bat.Attrs); i++ {
 		name := bat.Attrs[i]
-		value, err := row.AttrByName(tx, name)
+		value, err := row.AttrByName(handler, tx, name)
 		if err != nil {
 			return err
 		}
-		vectorAppend(bat.Vecs[i], value, handler.mheap)
+		value.AppendVector(bat.Vecs[i], handler.mheap)
 	}
 	return nil
 }
