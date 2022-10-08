@@ -91,7 +91,7 @@ type stateMachine struct {
 	state     pb.RSMState
 }
 
-var _ (sm.IStateMachine) = (*stateMachine)(nil)
+var _ sm.IStateMachine = (*stateMachine)(nil)
 
 func newStateMachine(shardID uint64, replicaID uint64) sm.IStateMachine {
 	state := pb.RSMState{

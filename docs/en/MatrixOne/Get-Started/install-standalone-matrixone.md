@@ -16,7 +16,11 @@ For more information on the required operating system versions for deploying Mat
 
 Go version 1.19 is required.
 
-### 2. Get the MatrixOne code to build MatrixOne
+### 2. Install MySQL Client
+
+MySQL version [8.0.30](https://dev.mysql.com/downloads/installer/) is required.
+
+### 3. Get the MatrixOne code to build MatrixOne
 
 Depending on your needs, choose whether you want to keep your code up to date, or if you want to get the latest stable version of the code.
 
@@ -72,7 +76,7 @@ The **main** branch is the default branch, the code on the main branch is always
     ./mo-server system_vars_config.toml
     ```
 
-### 3. Connect to MatrixOne Server
+### 4. Connect to MatrixOne Server
 
 When you finish installing MatrixOne, you can refer to the section below to connect to the MatrixOne server.
 
@@ -82,7 +86,11 @@ See [Connect to MatrixOne server](connect-to-matrixone-server.md).
 
 For each release, you can download binary packages directly to run MatrixOne in the X86_64 Linux or Mac X86_64 environment.
 
-### 1. Download binary packages and decompress
+### 1. Install MySQL Client
+
+MySQL version [8.0.30](https://dev.mysql.com/downloads/installer/) is required.
+
+### 2. Download binary packages and decompress
 
 Linux Environment
 
@@ -99,15 +107,15 @@ unzip mo-server-v0.5.1-darwin-x86_64.zip
 ```
 
 !!! info
-    MatrixOne only supports installation on ARM chipset with source code build; if you are using MacOS M1 and above, please use source code build to install MatrixOne as shown above. Using release binary files from X86 chipset will lead to unknown problems. 
-    
-### 2.Launch MatrixOne server
+    MatrixOne only supports installation on ARM chipset with source code build; if you are using MacOS M1 and above, for more information on using source code build to install MatrixOne, see <a href="#code_source">Method 1: Building from source code</a>. Using release binary files from X86 chipset will lead to unknown problems.
+
+### 3.Launch MatrixOne server
 
 ```
 ./mo-server system_vars_config.toml
 ```
 
-### 3. Connect to MatrixOne Server
+### 4. Connect to MatrixOne Server
 
 When you finish installing MatrixOne, you can refer to the section below to connect to the MatrixOne server.
 
@@ -171,5 +179,5 @@ See [Connect to MatrixOne server](connect-to-matrixone-server.md).
 
 ## Reference
 
-- For more information on update, see [Update Standalone MatrixOne](update-standalone-matrixone.md).
+- For more information on update, see [Upgrade Standalone MatrixOne](../Maintain/upgrade-standalone-matrixone.md).
 - For more information on deployment，see [Deployment FAQs](../FAQs/deployment-faqs.md).

@@ -18,6 +18,7 @@ import (
 	"context"
 	"strconv"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -29,6 +30,9 @@ var _ engine.Relation = new(table)
 func (tbl *table) Rows(ctx context.Context) (int64, error) {
 	var rows int64
 
+	if tbl.meta == nil {
+		return 0, nil
+	}
 	for _, blks := range tbl.meta.blocks {
 		for _, blk := range blks {
 			rows += blockRows(blk)
@@ -44,23 +48,40 @@ func (tbl *table) Size(ctx context.Context, name string) (int64, error) {
 
 // return all unmodified blocks
 func (tbl *table) Ranges(ctx context.Context, expr *plan.Expr) ([][]byte, error) {
-	var writes [][]Entry
-
-	// consider halloween problem
-	if int64(tbl.db.txn.statementId)-1 > 0 {
-		writes = tbl.db.txn.writes[:tbl.db.txn.statementId-1]
+	/*
+		// consider halloween problem
+		if int64(tbl.db.txn.statementId)-1 > 0 {
+			writes = tbl.db.txn.writes[:tbl.db.txn.statementId-1]
+		}
+	*/
+	writes := make([]Entry, 0, len(tbl.db.txn.writes))
+	for i := range tbl.db.txn.writes {
+		for _, entry := range tbl.db.txn.writes[i] {
+			if entry.databaseId == tbl.db.databaseId &&
+				entry.tableId == tbl.tableId {
+				writes = append(writes, entry)
+			}
+		}
 	}
-	ranges := make([][]byte, 0, len(tbl.meta.blocks))
+
 	dnList := needSyncDnStores(expr, tbl.defs, tbl.db.txn.dnStores)
 	tbl.dnList = dnList
-	dnStores := make([]DNStore, len(dnList))
+	if tbl.db.databaseId == catalog.MO_CATALOG_ID {
+		tbl.dnList = []int{0}
+	}
+	dnStores := make([]DNStore, 0, len(dnList))
 	for _, i := range dnList {
 		dnStores = append(dnStores, tbl.db.txn.dnStores[i])
 	}
+
 	if err := tbl.db.txn.db.Update(ctx, dnStores, tbl.db.databaseId,
 		tbl.tableId, tbl.db.txn.meta.SnapshotTS); err != nil {
 		return nil, err
 	}
+	if tbl.meta == nil {
+		return nil, nil
+	}
+	ranges := make([][]byte, 0, len(tbl.meta.blocks))
 	tbl.meta.modifedBlocks = make([][]BlockMeta, len(tbl.meta.blocks))
 	for _, i := range dnList {
 		blks := tbl.parts[i].BlockList(ctx, tbl.db.txn.meta.SnapshotTS,
@@ -240,18 +261,33 @@ func (tbl *table) NewReader(ctx context.Context, num int, expr *plan.Expr, range
 	return rds, nil
 }
 
-func (tbl *table) newMergeReader(ctx context.Context, num int, expr *plan.Expr) ([]engine.Reader, error) {
-	var writes [][]Entry
-
-	// consider halloween problem
-	if int64(tbl.db.txn.statementId)-1 > 0 {
-		writes = tbl.db.txn.writes[:tbl.db.txn.statementId-1]
+func (tbl *table) newMergeReader(ctx context.Context, num int,
+	expr *plan.Expr) ([]engine.Reader, error) {
+	/*
+		// consider halloween problem
+		if int64(tbl.db.txn.statementId)-1 > 0 {
+			writes = tbl.db.txn.writes[:tbl.db.txn.statementId-1]
+		}
+	*/
+	writes := make([]Entry, 0, len(tbl.db.txn.writes))
+	for i := range tbl.db.txn.writes {
+		for _, entry := range tbl.db.txn.writes[i] {
+			if entry.databaseId == tbl.db.databaseId &&
+				entry.tableId == tbl.tableId {
+				writes = append(writes, entry)
+			}
+		}
 	}
 	rds := make([]engine.Reader, num)
 	mrds := make([]mergeReader, num)
 	for _, i := range tbl.dnList {
-		rds0, err := tbl.parts[i].NewReader(ctx, num, expr,
-			tbl.meta.modifedBlocks[i], tbl.db.txn.meta.SnapshotTS, writes)
+		var blks []BlockMeta
+
+		if tbl.meta != nil {
+			blks = tbl.meta.modifedBlocks[i]
+		}
+		rds0, err := tbl.parts[i].NewReader(ctx, num, expr, tbl.defs,
+			blks, tbl.db.txn.meta.SnapshotTS, writes)
 		if err != nil {
 			return nil, err
 		}
