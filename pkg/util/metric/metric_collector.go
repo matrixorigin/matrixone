@@ -369,6 +369,7 @@ func (s *mfsetCSV) getBatchSingleTable(buf *bytes.Buffer) *trace.CSVRequest {
 		for _, metric := range mf.Metric {
 
 			// reserved labels
+			row.SetVal(metricNameColumn.Name, mf.GetName())
 			row.SetVal(nodeColumn.Name, mf.GetNode())
 			row.SetVal(roleColumn.Name, mf.GetRole())
 			// custom labels
