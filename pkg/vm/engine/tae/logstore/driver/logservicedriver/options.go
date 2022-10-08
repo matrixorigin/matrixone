@@ -37,6 +37,7 @@ type Config struct {
 	ClientAppendDuration time.Duration
 	TruncateDuration     time.Duration
 	// AppendFrequency      time.Duration
+	RetryTimeout        time.Duration
 	GetTruncateDuration time.Duration
 	ReadDuration        time.Duration
 
@@ -56,6 +57,7 @@ func NewDefaultConfig(cfg *logservice.ClientConfig) *Config {
 		NewRecordSize:     int(common.K * 20),
 		NewClientDuration: time.Second,
 		// AppendFrequency:      time.Millisecond * 5,
+		RetryTimeout:         time.Minute,
 		ClientAppendDuration: time.Second,
 		TruncateDuration:     time.Second,
 		GetTruncateDuration:  time.Second,
@@ -76,6 +78,7 @@ func NewTestConfig(cfg *logservice.ClientConfig) *Config {
 		AppenderMaxCount: 10,
 		NewRecordSize:    int(common.K * 20),
 		// AppendFrequency:      time.Millisecond /1000,
+		RetryTimeout:         time.Minute,
 		NewClientDuration:    time.Second,
 		ClientAppendDuration: time.Second,
 		TruncateDuration:     time.Second,
