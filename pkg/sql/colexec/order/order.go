@@ -18,8 +18,10 @@ import (
 	"bytes"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/partition"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sort"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -41,10 +43,18 @@ func Prepare(_ *process.Process, arg any) error {
 	ap := arg.(*Argument)
 	ap.ctr = new(Container)
 	{
-		ap.ctr.ds = make([]bool, len(ap.Fs))
+		ap.ctr.desc = make([]bool, len(ap.Fs))
+		ap.ctr.nullsLast = make([]bool, len(ap.Fs))
 		ap.ctr.vecs = make([]evalVector, len(ap.Fs))
 		for i, f := range ap.Fs {
-			ap.ctr.ds[i] = f.Type == colexec.Descending
+			ap.ctr.desc[i] = f.Flag&plan.OrderBySpec_DESC != 0
+			if f.Flag&plan.OrderBySpec_NULLS_FIRST != 0 {
+				ap.ctr.nullsLast[i] = false
+			} else if f.Flag&plan.OrderBySpec_NULLS_LAST != 0 {
+				ap.ctr.nullsLast[i] = true
+			} else {
+				ap.ctr.nullsLast[i] = ap.ctr.desc[i]
+			}
 		}
 	}
 	return nil
@@ -67,7 +77,7 @@ func Call(idx int, proc *process.Process, arg any) (bool, error) {
 
 func (ctr *Container) process(ap *Argument, bat *batch.Batch, proc *process.Process) (bool, error) {
 	for i, f := range ap.Fs {
-		vec, err := colexec.EvalExpr(bat, proc, f.E)
+		vec, err := colexec.EvalExpr(bat, proc, f.Expr)
 		if err != nil {
 			for j := 0; j < i; j++ {
 				if ctr.vecs[j].needFree {
@@ -93,12 +103,22 @@ func (ctr *Container) process(ap *Argument, bat *batch.Batch, proc *process.Proc
 		}
 	}()
 	ovec := ctr.vecs[0].vec
+	var strCol []string
 	n := len(bat.Zs)
 	sels := make([]int64, n)
 	for i := range sels {
 		sels[i] = int64(i)
 	}
-	sort.Sort(ctr.ds[0], sels, ovec)
+	nullCnt := nulls.Length(ovec.Nsp)
+	// skip sort for all nulls
+	if nullCnt < ovec.Length() {
+		if ovec.Typ.IsString() {
+			strCol = vector.GetStrVectorValues(ovec)
+		} else {
+			strCol = nil
+		}
+		sort.Sort(ctr.desc[0], ctr.nullsLast[0], nullCnt > 0, sels, ovec, strCol)
+	}
 	if len(ctr.vecs) == 1 {
 		if err := bat.Shuffle(sels, proc.Mp()); err != nil {
 			panic(err)
@@ -108,14 +128,24 @@ func (ctr *Container) process(ap *Argument, bat *batch.Batch, proc *process.Proc
 	ps := make([]int64, 0, 16)
 	ds := make([]bool, len(sels))
 	for i, j := 1, len(ctr.vecs); i < j; i++ {
-		desc := ctr.ds[i]
+		desc := ctr.desc[i]
+		nullsLast := ctr.nullsLast[i]
 		ps = partition.Partition(sels, ds, ps, ovec)
 		vec := ctr.vecs[i].vec
-		for i, j := 0, len(ps); i < j; i++ {
-			if i == j-1 {
-				sort.Sort(desc, sels[ps[i]:], vec)
+		nullCnt = nulls.Length(vec.Nsp)
+		// skip sort for all nulls
+		if nullCnt < vec.Length() {
+			if vec.Typ.IsString() {
+				strCol = vector.GetStrVectorValues(vec)
 			} else {
-				sort.Sort(desc, sels[ps[i]:ps[i+1]], vec)
+				strCol = nil
+			}
+			for i, j := 0, len(ps); i < j; i++ {
+				if i == j-1 {
+					sort.Sort(desc, nullsLast, nullCnt > 0, sels[ps[i]:], vec, strCol)
+				} else {
+					sort.Sort(desc, nullsLast, nullCnt > 0, sels[ps[i]:ps[i+1]], vec, strCol)
+				}
 			}
 		}
 		ovec = vec
