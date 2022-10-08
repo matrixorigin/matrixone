@@ -2221,6 +2221,8 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr)
 		childID, _ = builder.pushdownFilters(node.Children[1], nil)
 		node.Children[1] = childID
 
+		cantPushdown = filters
+
 	case plan.Node_PROJECT:
 		child := builder.qry.Nodes[node.Children[0]]
 		if (child.NodeType == plan.Node_VALUE_SCAN || child.NodeType == plan.Node_EXTERNAL_SCAN) && child.RowsetData == nil {
