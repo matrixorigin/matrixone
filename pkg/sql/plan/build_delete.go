@@ -251,24 +251,40 @@ func buildUseProjection(stmt *tree.Delete, ps tree.SelectExprs, objRef *ObjectRe
 	var useKey *ColDef = nil
 	isHideKey := false
 	priKeys := ctx.GetPrimaryKeyDef(objRef.SchemaName, tableDef.Name)
+	tblName := tf.baseNameMap[tableDef.Name]
+
+	psNames := make(map[string]struct{})
 	for _, key := range priKeys {
+		// we will allways append pk to select item
+		psNames[key.Name] = struct{}{}
+		e := tree.SetUnresolvedName(tblName, key.Name)
+		ps = append(ps, tree.SelectExpr{Expr: e})
+
 		if key.IsCPkey {
 			break
 		}
-		e := tree.SetUnresolvedName(tf.baseNameMap[tableDef.Name], key.Name)
 		if isContainNameInFilter(stmt, key.Name) {
-			ps = append(ps, tree.SelectExpr{Expr: e})
 			useKey = key
 			break
 		}
 	}
+
+	// if we have no primary key, we return all of the columns
+	// we need this data to hash and choice the DN
+	if len(priKeys) == 0 {
+		for _, col := range tableDef.Cols {
+			e := tree.SetUnresolvedName(tblName, col.Name)
+			ps = append(ps, tree.SelectExpr{Expr: e})
+		}
+	}
+
 	if useKey == nil {
 		hideKey := ctx.GetHideKeyDef(objRef.SchemaName, tableDef.Name)
 		if hideKey == nil {
 			return nil, nil, false, moerr.NewInvalidState("cannot find hide key")
 		}
 		useKey = hideKey
-		e := tree.SetUnresolvedName(tf.baseNameMap[tableDef.Name], hideKey.Name)
+		e := tree.SetUnresolvedName(tblName, hideKey.Name)
 		ps = append(ps, tree.SelectExpr{Expr: e})
 		isHideKey = true
 	}
