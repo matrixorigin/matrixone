@@ -69,7 +69,7 @@ make build
 
 当你完成升级 MatrixOne，你可以参考下面的章节，连接到 MatrixOne 服务器。
 
-参见[连接 MatrixOne 服务](connect-to-matrixone-server.md)。
+参见[连接 MatrixOne 服务](../Get-Started/connect-to-matrixone-server.md)。
 
 ## <h2><a name="binary_packages_update">方法 2：使用二进制包进行升级</a></h2>
 
@@ -134,7 +134,7 @@ cp -r ${path_name} store
 
 当你完成升级 MatrixOne，你可以参考下面的章节，连接到 MatrixOne 服务器。
 
-参见[连接 MatrixOne 服务](connect-to-matrixone-server.md)。
+参见[连接 MatrixOne 服务](../Get-Started/connect-to-matrixone-server.md)。
 
 ## <h2><a name="use_docker_update">方法 3：使用 Docker 进行升级</a></h2>
 
@@ -205,7 +205,7 @@ docker run -d -p 6001:6001 -v ${path_name}/system_vars_config.toml:/system_vars_
 
 当你完成安装 MatrixOne，你可以参考下面的章节，连接到 MatrixOne 服务器。
 
-参见[连接 MatrixOne 服务](connect-to-matrixone-server.md)。
+参见[连接 MatrixOne 服务](../Get-Started/connect-to-matrixone-server.md)。
 
 ## 参考文档
 
