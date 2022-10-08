@@ -19,6 +19,7 @@ import (
 	"context"
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/util/batchpipe"
 	"net/http"
 	"strings"
 	"sync"
@@ -216,7 +217,7 @@ func createTableSqlFromMetricFamily(desc *prom.Desc, _ *bytes.Buffer, _ optionsF
 	for _, lbl := range extra.labels {
 		labelNames = append(labelNames, lbl.GetName())
 	}
-	view := NewMetricViewWithLabels(extra.fqName, labelNames)
+	view := GetMetricViewWithLabels(extra.fqName, labelNames)
 	return view.ToCreateSql(true)
 }
 
@@ -292,6 +293,8 @@ var (
 	typeColumn        = MetricColumn{`type`, `VARCHAR(32)`, ``, `sql type, like: insert, select, ...`}
 )
 
+var _ (batchpipe.HasName) = (*MetricTable)(nil)
+
 type MetricTable struct {
 	Database         string
 	Table            string
@@ -302,6 +305,10 @@ type MetricTable struct {
 	CSVOptions       *trace.CsvOptions
 
 	BatchMode string
+}
+
+func (tbl *MetricTable) GetName() string {
+	return tbl.Table
 }
 
 var singleMetricTable = &MetricTable{
@@ -429,4 +436,57 @@ func (tbl *MetricView) ToCreateSql(ifNotExists bool) string {
 	sb.WriteString(tbl.Where())
 
 	return sb.String()
+}
+
+type MetricRow struct {
+	Table          *MetricTable
+	Columns        []string
+	Name2ColumnIdx map[string]int
+}
+
+func (tbl *MetricTable) GetRow() *MetricRow {
+	row := &MetricRow{
+		Table:          tbl,
+		Columns:        make([]string, len(tbl.Columns)),
+		Name2ColumnIdx: make(map[string]int),
+	}
+	for idx, col := range tbl.Columns {
+		row.Name2ColumnIdx[col.Name] = idx
+	}
+	return row
+}
+
+func (r *MetricRow) SetVal(col string, val string) {
+	if idx, exist := r.Name2ColumnIdx[col]; !exist {
+		logutil.Fatalf("column(%s) not exist in table(%s)", col, r.Table.Table)
+	} else {
+		r.Columns[idx] = val
+	}
+}
+
+func (r *MetricRow) SetFloat64(col string, val float64) {
+	r.SetVal(col, fmt.Sprintf("%f", val))
+}
+
+func (r *MetricRow) ToStrings() []string {
+	return r.Columns
+}
+
+var gMetricView struct {
+	content map[string]*MetricView
+	mu      sync.Mutex
+}
+
+func GetMetricViewWithLabels(tbl string, lbls []string) *MetricView {
+	gMetricView.mu.Lock()
+	defer gMetricView.mu.Unlock()
+	if len(gMetricView.content) == 0 {
+		gMetricView.content = make(map[string]*MetricView)
+	}
+	view, exist := gMetricView.content[tbl]
+	if !exist {
+		view = NewMetricViewWithLabels(tbl, lbls)
+		gMetricView.content[tbl] = view
+	}
+	return view
 }

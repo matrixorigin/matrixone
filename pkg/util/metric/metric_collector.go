@@ -307,6 +307,10 @@ func (s *mfsetCSV) writeCsvOneLine(buf *bytes.Buffer, fields []string) {
 }
 
 func (s *mfsetCSV) GetBatch(buf *bytes.Buffer) *trace.CSVRequest {
+	return s.getBatchSingleTable(buf)
+}
+
+func (s *mfsetCSV) getBatchMultiTable(buf *bytes.Buffer) *trace.CSVRequest {
 
 	buf.Reset()
 
@@ -344,6 +348,51 @@ func (s *mfsetCSV) GetBatch(buf *bytes.Buffer) *trace.CSVRequest {
 				for _, sample := range metric.RawHist.Samples {
 					time := localTimeStr(sample.GetDatetime())
 					writeValues(time, sample.GetValue(), lbls...)
+				}
+			default:
+				panic(moerr.NewInternalError("unsupported metric type %v", mf.GetType()))
+			}
+		}
+	}
+	return trace.NewCSVRequest(writer, buf.String())
+}
+
+func (s *mfsetCSV) getBatchSingleTable(buf *bytes.Buffer) *trace.CSVRequest {
+	buf.Reset()
+	writer := s.writerFactory(trace.DefaultContext(), singleMetricTable.Database, singleMetricTable)
+	writeValues := func(row *MetricRow) {
+		s.writeCsvOneLine(buf, row.ToStrings())
+	}
+
+	row := singleMetricTable.GetRow()
+	for _, mf := range s.mfs {
+		for _, metric := range mf.Metric {
+
+			// reserved labels
+			row.SetVal(nodeColumn.Name, mf.GetNode())
+			row.SetVal(roleColumn.Name, mf.GetRole())
+			// custom labels
+			for _, lbl := range metric.Label {
+				row.SetVal(lbl.GetName(), lbl.GetValue())
+			}
+
+			switch mf.GetType() {
+			case pb.MetricType_COUNTER:
+				time := localTimeStr(metric.GetCollecttime())
+				row.SetVal(collectTimeColumn.Name, time)
+				row.SetFloat64(valueColumn.Name, metric.Counter.GetValue())
+				writeValues(row)
+			case pb.MetricType_GAUGE:
+				time := localTimeStr(metric.GetCollecttime())
+				row.SetVal(collectTimeColumn.Name, time)
+				row.SetFloat64(valueColumn.Name, metric.Gauge.GetValue())
+				writeValues(row)
+			case pb.MetricType_RAWHIST:
+				for _, sample := range metric.RawHist.Samples {
+					time := localTimeStr(sample.GetDatetime())
+					row.SetVal(collectTimeColumn.Name, time)
+					row.SetFloat64(valueColumn.Name, sample.GetValue())
+					writeValues(row)
 				}
 			default:
 				panic(moerr.NewInternalError("unsupported metric type %v", mf.GetType()))
