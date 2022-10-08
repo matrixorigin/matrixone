@@ -494,11 +494,9 @@ func genInsertExpr(defs []engine.TableDef, dnNum int) *plan.Expr {
 		}
 	}
 	if len(args) == 0 {
-		i := 0
 		for _, def := range defs {
 			if attr, ok := def.(*engine.AttributeDef); ok {
-				args = append(args, newColumnExpr(i, attr.Attr.Type.Oid, attr.Attr.Name))
-				i++
+				args = append(args, newColumnExpr(0, attr.Attr.Type.Oid, attr.Attr.Name))
 				break
 			}
 		}

@@ -122,9 +122,6 @@ func (s *Scope) MergeRun(c *Compile) error {
 // RemoteRun send the scope to a remote node for execution.
 // if no target node information, just execute it at local.
 func (s *Scope) RemoteRun(c *Compile) error {
-	{
-		return s.ParallelRun(c)
-	}
 	// if send to itself, just run it parallel at local.
 	if len(s.NodeInfo.Addr) == 0 || !cnclient.IsCNClientReady() {
 		return s.ParallelRun(c)

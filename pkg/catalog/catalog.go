@@ -156,7 +156,7 @@ func fillCreateTable(idx *int, cmd *CreateTable, es []*api.Entry) error {
 		}
 		rows := GenRows(bat)
 		for _, row := range rows {
-			if string(row[MO_COLUMNS_ATT_RELNAME_IDX].([]byte)) == cmd.Name {
+			if row[MO_COLUMNS_ATT_RELNAME_ID_IDX].(uint64) == cmd.TableId {
 				def, err := genTableDefs(row)
 				if err != nil {
 					return err
