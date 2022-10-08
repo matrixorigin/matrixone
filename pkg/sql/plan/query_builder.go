@@ -2236,8 +2236,7 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr)
 			case JoinSideNone:
 				cantPushdown = append(cantPushdown, filter)
 			case JoinSideBoth:
-				leftPushdown = append(leftPushdown, DeepCopyExpr(filter))
-				rightPushdown = append(rightPushdown, filter)
+				cantPushdown = append(cantPushdown, filter)
 			case JoinSideLeft:
 				leftPushdown = append(leftPushdown, filter)
 			case JoinSideRight:
