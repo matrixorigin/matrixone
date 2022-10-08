@@ -32,3 +32,29 @@ SELECT a, b
 FROM t1
 WHERE REGEXP_LIKE(b, '^Power');
 drop table t1;
+
+create table t1(a int, b varchar(20));
+insert into t1 values(1 , "PowerSlave");
+insert into t1 values(2 , "Powerage");
+insert into t1 values( 3 , "Singing Down the Lane" );
+insert into t1 values(4 , "Ziltoid the Omniscient");
+insert into t1 values(5 , "Casualties of Cool");
+insert into t1 values( 6 , "Epicloud");
+insert into t1 values(7 , "Somewhere in Time");
+insert into t1 values(8 , "Piece of Mind");
+insert into t1 values( 9 , "Killers");
+SELECT a, REGEXP_LIKE(b, '^P') from t1;
+drop table t1;
+
+create table t1(a int, b varchar(20));
+insert into t1 values(1 , "PowerSlave");
+insert into t1 values(2 , "Powerage");
+insert into t1 values( 3 , "Singing Down the Lane" );
+insert into t1 values(4 , NULL);
+insert into t1 values(5 , "Casualties of Cool");
+insert into t1 values( 6 , "Epicloud");
+insert into t1 values(7 , "Somewhere in Time");
+insert into t1 values(8 , NULL);
+insert into t1 values( 9 , "Killers");
+SELECT a, REGEXP_LIKE(b, '^P') from t1;
+drop table t1;

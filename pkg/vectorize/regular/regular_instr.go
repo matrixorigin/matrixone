@@ -22,7 +22,7 @@ import (
 )
 
 func RegularInstr(expr, pat string, pos, occurrence int64, return_option uint8, match_type string) (int64, error) {
-	if pos < 1 || occurrence < 1 || (return_option != 0 && return_option != 1) {
+	if pos < 1 || occurrence < 1 || (return_option != 0 && return_option != 1) || pos >= int64(len(expr)) {
 		return 0, moerr.NewInvalidInput("regexp_instr have invalid input")
 	}
 	//regular expression pattern
@@ -36,7 +36,11 @@ func RegularInstr(expr, pat string, pos, occurrence int64, return_option uint8, 
 	index := 0
 	for int64(matchRes[index][0]) < pos-1 {
 		index++
+		if index == len(matchRes) {
+			return 0, nil
+		}
 	}
+
 	matchRes = matchRes[index:]
 	if int64(len(matchRes)) < occurrence {
 		return 0, nil
@@ -50,7 +54,7 @@ func RegularInstr(expr, pat string, pos, occurrence int64, return_option uint8, 
 }
 
 func RegularInstrWithReg(expr string, pat *regexp.Regexp, pos, occurrence int64, return_option uint8, match_type string) (int64, error) {
-	if pos < 1 || occurrence < 1 || (return_option != 0 && return_option != 1) {
+	if pos < 1 || occurrence < 1 || (return_option != 0 && return_option != 1) || pos >= int64(len(expr)) {
 		return 0, moerr.NewInvalidInput("regexp_instr have invalid input")
 	}
 	//match result indexs
@@ -62,6 +66,9 @@ func RegularInstrWithReg(expr string, pat *regexp.Regexp, pos, occurrence int64,
 	index := 0
 	for int64(matchRes[index][0]) < pos-1 {
 		index++
+		if index == len(matchRes) {
+			return 0, nil
+		}
 	}
 	matchRes = matchRes[index:]
 	if int64(len(matchRes)) < occurrence {

@@ -24,7 +24,7 @@ import (
 )
 
 func RegularReplace(expr, pat, repl string, pos, occurrence int64, match_type string) (string, error) {
-	if pos < 1 || occurrence < 0 {
+	if pos < 1 || occurrence < 0 || pos >= int64(len(expr)) {
 		return expr, moerr.NewInvalidInput("regexp_replace have invalid input")
 	}
 	//regular expression pattern
@@ -37,6 +37,9 @@ func RegularReplace(expr, pat, repl string, pos, occurrence int64, match_type st
 	index := 0
 	for int64(matchRes[index][0]) < pos-1 {
 		index++
+		if index == len(matchRes) {
+			return expr, nil
+		}
 	}
 	matchRes = matchRes[index:]
 	if int64(len(matchRes)) < occurrence {
@@ -61,7 +64,7 @@ func RegularReplace(expr, pat, repl string, pos, occurrence int64, match_type st
 }
 
 func RegularReplaceWithReg(expr string, pat *regexp.Regexp, repl string, pos, occurrence int64, match_type string) (string, error) {
-	if pos < 1 || occurrence < 0 {
+	if pos < 1 || occurrence < 0 || pos >= int64(len(expr)) {
 		return expr, moerr.NewInvalidInput("regexp_replace have invalid input")
 	}
 	//match result indexs
@@ -72,6 +75,9 @@ func RegularReplaceWithReg(expr string, pat *regexp.Regexp, repl string, pos, oc
 	index := 0
 	for int64(matchRes[index][0]) < pos-1 {
 		index++
+		if index == len(matchRes) {
+			return expr, nil
+		}
 	}
 	matchRes = matchRes[index:]
 	if int64(len(matchRes)) < occurrence {
@@ -193,7 +199,7 @@ func determineValuesWithThree(rpls []string, pos, occ []int64, i int) (string, i
 	var posValue int64
 	var occValue int64
 
-	if len(rpl) == 1 {
+	if len(rpls) == 1 {
 		rpl = rpls[0]
 	} else {
 		rpl = rpls[i]

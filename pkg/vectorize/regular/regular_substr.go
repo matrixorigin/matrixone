@@ -24,7 +24,7 @@ import (
 )
 
 func RegularSubstr(expr, pat string, pos, occurrence int64, match_type string) ([]string, error) {
-	if pos < 1 || occurrence < 1 {
+	if pos < 1 || occurrence < 1 || pos >= int64(len(expr)) {
 		return nil, moerr.NewInvalidInput("regexp_substr have invalid input")
 	}
 	//regular expression pattern
@@ -38,7 +38,7 @@ func RegularSubstr(expr, pat string, pos, occurrence int64, match_type string) (
 }
 
 func RegularSubstrWithReg(expr string, pat *regexp.Regexp, pos, occurrence int64, match_type string) ([]string, error) {
-	if pos < 1 || occurrence < 1 {
+	if pos < 1 || occurrence < 1 || pos >= int64(len(expr)) {
 		return nil, moerr.NewInvalidInput("regexp_substr have invalid input")
 	}
 	//match result strings
@@ -61,7 +61,7 @@ func RegularSubstrWithArrays(expr, pat []string, pos, occ []int64, match_type []
 				continue
 			}
 			posValue, occValue = determineValuesWithTwo(pos, occ, i)
-			res, err := RegularSubstrWithReg(expr[0], reg, posValue, occValue, match_type[i])
+			res, err := RegularSubstrWithReg(expr[0], reg, posValue, occValue, match_type[0])
 			if err != nil {
 				return err
 			}
@@ -79,7 +79,7 @@ func RegularSubstrWithArrays(expr, pat []string, pos, occ []int64, match_type []
 				continue
 			}
 			posValue, occValue = determineValuesWithTwo(pos, occ, i)
-			res, err := RegularSubstr(expr[0], pat[i], posValue, occValue, match_type[i])
+			res, err := RegularSubstr(expr[0], pat[i], posValue, occValue, match_type[0])
 			if err != nil {
 				return err
 			}
@@ -93,11 +93,12 @@ func RegularSubstrWithArrays(expr, pat []string, pos, occ []int64, match_type []
 	} else if len(pat) == 1 {
 		reg := regexp.MustCompile(pat[0])
 		for i := 0; i < maxLen; i++ {
-			if nulls.Contains(exprN, uint64(i)) || nulls.Contains(patN, uint64(0)) || pat[i] == "" {
+			if nulls.Contains(exprN, uint64(i)) || nulls.Contains(patN, uint64(0)) || pat[0] == "" {
 				nulls.Add(resultVector.Nsp, uint64(i))
 				continue
 			}
-			res, err := RegularSubstrWithReg(expr[i], reg, posValue, occValue, match_type[i])
+			posValue, occValue = determineValuesWithTwo(pos, occ, i)
+			res, err := RegularSubstrWithReg(expr[i], reg, posValue, occValue, match_type[0])
 			if err != nil {
 				return err
 			}
@@ -115,7 +116,7 @@ func RegularSubstrWithArrays(expr, pat []string, pos, occ []int64, match_type []
 				continue
 			}
 			posValue, occValue = determineValuesWithTwo(pos, occ, i)
-			res, err := RegularSubstr(expr[0], pat[i], posValue, occValue, match_type[i])
+			res, err := RegularSubstr(expr[0], pat[i], posValue, occValue, match_type[0])
 			if err != nil {
 				return err
 			}

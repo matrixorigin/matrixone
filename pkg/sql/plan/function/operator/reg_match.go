@@ -133,7 +133,6 @@ func RegMatchWithALL(lv, rv []string, rs []bool, isReg bool) error {
 	return nil
 }
 
-
-func BoolResult(isMatch bool, isReg bool) bool{
-	return (isMatch && isReg) || !(isMatch || isReg) 
+func BoolResult(isMatch bool, isReg bool) bool {
+	return (isMatch && isReg) || !(isMatch || isReg)
 }
