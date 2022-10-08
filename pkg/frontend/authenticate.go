@@ -965,23 +965,12 @@ var (
 			privilegeLevelDatabaseTable, privilegeLevelTable},
 	}
 
-	bannedPrivilegesOnCatalogDatabase = map[PrivilegeType]int{
-		PrivilegeTypeDropDatabase: 0,
-		PrivilegeTypeCreateObject: 0,
-		PrivilegeTypeCreateTable:  0,
-		PrivilegeTypeCreateView:   0,
-		PrivilegeTypeDropObject:   0,
-		PrivilegeTypeDropTable:    0,
-		PrivilegeTypeDropView:     0,
-		PrivilegeTypeAlterObject:  0,
-		PrivilegeTypeAlterTable:   0,
-		PrivilegeTypeAlterView:    0,
-		PrivilegeTypeInsert:       0,
-		PrivilegeTypeUpdate:       0,
-		PrivilegeTypeTruncate:     0,
-		PrivilegeTypeDelete:       0,
-		PrivilegeTypeReference:    0,
-		PrivilegeTypeIndex:        0,
+	bannedCatalogDatabases = map[string]int8{
+		"mo_catalog":         0,
+		"information_schema": 0,
+		"system":             0,
+		"system_metrics":     0,
+		"mysql":              0,
 	}
 )
 
@@ -1192,6 +1181,8 @@ type privilege struct {
 	objType objectType
 	entries []privilegeEntry
 	special specialTag
+	//the statement writes the database or table directly like drop database and table
+	writeDBTableDirect bool
 }
 
 func (p *privilege) objectType() objectType {
@@ -2764,6 +2755,8 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 	special := specialTagNone
 	objType := objectTypeAccount
 	var extraEntries []privilegeEntry
+	writeDBTableDirect := false
+	dbName := ""
 	switch st := stmt.(type) {
 	case *tree.CreateAccount:
 		typs = append(typs, PrivilegeTypeCreateAccount)
@@ -2841,6 +2834,8 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		typs = append(typs, PrivilegeTypeCreateDatabase, PrivilegeTypeAccountAll /*, PrivilegeTypeAccountOwnership*/)
 	case *tree.DropDatabase:
 		typs = append(typs, PrivilegeTypeDropDatabase, PrivilegeTypeAccountAll /*, PrivilegeTypeAccountOwnership*/)
+		writeDBTableDirect = true
+		dbName = string(st.Name)
 	case *tree.ShowDatabases:
 		typs = append(typs, PrivilegeTypeShowDatabases, PrivilegeTypeAccountAll /*, PrivilegeTypeAccountOwnership*/)
 	case *tree.Use:
@@ -2851,30 +2846,38 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 	case *tree.CreateTable:
 		objType = objectTypeDatabase
 		typs = append(typs, PrivilegeTypeCreateTable, PrivilegeTypeDatabaseAll, PrivilegeTypeDatabaseOwnership)
+		writeDBTableDirect = true
 	case *tree.CreateView:
 		objType = objectTypeDatabase
 		typs = append(typs, PrivilegeTypeCreateView, PrivilegeTypeDatabaseAll, PrivilegeTypeDatabaseOwnership)
+		writeDBTableDirect = true
 	case *tree.DropTable:
 		objType = objectTypeDatabase
 		typs = append(typs, PrivilegeTypeDropTable, PrivilegeTypeDropObject, PrivilegeTypeDatabaseAll, PrivilegeTypeDatabaseOwnership)
+		writeDBTableDirect = true
 	case *tree.DropView:
 		objType = objectTypeDatabase
 		typs = append(typs, PrivilegeTypeDropView, PrivilegeTypeDropObject, PrivilegeTypeDatabaseAll, PrivilegeTypeDatabaseOwnership)
+		writeDBTableDirect = true
 	case *tree.Select:
 		objType = objectTypeTable
 		typs = append(typs, PrivilegeTypeSelect, PrivilegeTypeTableAll, PrivilegeTypeTableOwnership)
 	case *tree.Insert, *tree.Load, *tree.Import:
 		objType = objectTypeTable
 		typs = append(typs, PrivilegeTypeInsert, PrivilegeTypeTableAll, PrivilegeTypeTableOwnership)
+		writeDBTableDirect = true
 	case *tree.Update:
 		objType = objectTypeTable
 		typs = append(typs, PrivilegeTypeUpdate, PrivilegeTypeTableAll, PrivilegeTypeTableOwnership)
+		writeDBTableDirect = true
 	case *tree.Delete:
 		objType = objectTypeTable
 		typs = append(typs, PrivilegeTypeDelete, PrivilegeTypeTableAll, PrivilegeTypeTableOwnership)
+		writeDBTableDirect = true
 	case *tree.CreateIndex, *tree.DropIndex, *tree.ShowIndex:
 		objType = objectTypeTable
 		typs = append(typs, PrivilegeTypeIndex)
+		writeDBTableDirect = true
 	case *tree.ShowProcessList, *tree.ShowErrors, *tree.ShowWarnings, *tree.ShowVariables,
 		*tree.ShowStatus, *tree.ShowTarget, *tree.ShowTableStatus, *tree.ShowGrants:
 		objType = objectTypeNone
@@ -2907,9 +2910,10 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 	entries := make([]privilegeEntry, len(typs))
 	for i, typ := range typs {
 		entries[i] = privilegeEntriesMap[typ]
+		entries[i].databaseName = dbName
 	}
 	entries = append(entries, extraEntries...)
-	return &privilege{kind, objType, entries, special}
+	return &privilege{kind, objType, entries, special, writeDBTableDirect}
 }
 
 // privilege will be done on the table
@@ -3125,6 +3129,7 @@ func determineRoleSetHasPrivilegeSet(ctx context.Context, bh BackgroundExec, ses
 	var pls []privilegeLevelType
 	var results []interface{}
 	var yes bool
+	var operateCatalog bool
 	//there is no privilege needs, just approve
 	if len(priv.entries) == 0 {
 		return false, nil
@@ -3155,6 +3160,18 @@ func determineRoleSetHasPrivilegeSet(ctx context.Context, bh BackgroundExec, ses
 		return false, nil
 	}
 
+	verifyRealUserOperatesCatalog := func(ses *Session, dbName string, writeDBTableDirect bool) bool {
+		if ses.GetFromRealUser() && writeDBTableDirect {
+			if len(dbName) == 0 {
+				dbName = ses.GetDatabaseName()
+			}
+			if _, ok2 := bannedCatalogDatabases[dbName]; ok2 {
+				return ok2
+			}
+		}
+		return false
+	}
+
 	for _, roleId := range roleIds {
 		for _, entry := range priv.entries {
 			if entry.peTyp == privilegeEntryTypeGeneral {
@@ -3165,6 +3182,10 @@ func determineRoleSetHasPrivilegeSet(ctx context.Context, bh BackgroundExec, ses
 				yes, err = verifyPrivilegeEntryInMultiPrivilegeLevels(roleId, entry, pls)
 				if err != nil {
 					return false, err
+				}
+				operateCatalog = verifyRealUserOperatesCatalog(ses, entry.databaseName, priv.writeDBTableDirect)
+				if operateCatalog {
+					yes = false
 				}
 				if yes {
 					return true, nil
@@ -3211,6 +3232,10 @@ func determineRoleSetHasPrivilegeSet(ctx context.Context, bh BackgroundExec, ses
 							yes, err = verifyPrivilegeEntryInMultiPrivilegeLevels(roleId, tempEntry, pls)
 							if err != nil {
 								return false, err
+							}
+							operateCatalog = verifyRealUserOperatesCatalog(ses, tempEntry.databaseName, priv.writeDBTableDirect)
+							if operateCatalog {
+								yes = false
 							}
 						}
 						if !yes {
