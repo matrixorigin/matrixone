@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"net/http"
 	"strings"
 	"sync"
@@ -196,6 +197,7 @@ func initTables(ctx context.Context, ieFactory func() ie.InternalExecutor, batch
 	}()
 
 	optFactory := trace.GetOptionFactory(batchProcessMode)
+	singleMetricTable.ToCreateSql(true, optFactory)
 	buf := new(bytes.Buffer)
 	for desc := range descChan {
 		sql := createTableSqlFromMetricFamily(desc, buf, optFactory)
@@ -208,24 +210,14 @@ func initTables(ctx context.Context, ieFactory func() ie.InternalExecutor, batch
 type optionsFactory func(db, tbl string) trace.TableOptions
 
 // instead MetricFamily, Desc is used to create tables because we don't want collect errors come into the picture.
-func createTableSqlFromMetricFamily(desc *prom.Desc, buf *bytes.Buffer, optionsFactory optionsFactory) string {
-	buf.Reset()
+func createTableSqlFromMetricFamily(desc *prom.Desc, _ *bytes.Buffer, _ optionsFactory) string {
+	var labelNames []string
 	extra := newDescExtra(desc)
-	opts := optionsFactory(MetricDBConst, extra.fqName)
-	buf.WriteString("create ")
-	buf.WriteString(opts.GetCreateOptions())
-	buf.WriteString(fmt.Sprintf(
-		"table if not exists %s.%s (`%s` datetime(6), `%s` double, `%s` varchar(36), `%s` varchar(20)",
-		MetricDBConst, extra.fqName, lblTimeConst, lblValueConst, lblNodeConst, lblRoleConst,
-	))
 	for _, lbl := range extra.labels {
-		buf.WriteString(", `")
-		buf.WriteString(lbl.GetName())
-		buf.WriteString("` varchar(20)")
+		labelNames = append(labelNames, lbl.GetName())
 	}
-	buf.WriteRune(')')
-	buf.WriteString(opts.GetTableOptions())
-	return buf.String()
+	view := NewMetricViewWithLabels(extra.fqName, labelNames)
+	return view.ToCreateSql(true)
 }
 
 type descExtra struct {
@@ -281,4 +273,160 @@ func WithInitAction(init bool) InitOption {
 	return InitOption(func(options *InitOptions) {
 		options.needInitTable = init
 	})
+}
+
+type MetricColumn struct {
+	Name    string
+	Type    string
+	Default string
+	Comment string
+}
+
+var (
+	metricNameColumn  = MetricColumn{`metric_name`, `VARCHAR(128)`, `unknown`, `metric name, like: sql_statement_total, server_connections, process_cpu_percent, sys_memory_used, ...`}
+	collectTimeColumn = MetricColumn{`collecttime`, `DATETIME(6)`, `now()`, `metric data collect time`}
+	valueColumn       = MetricColumn{`value`, `DOUBLE`, `0.0`, `metric value`}
+	nodeColumn        = MetricColumn{`node`, `VARCHAR(36)`, `monolithic`, `mo node uuid`}
+	roleColumn        = MetricColumn{`role`, `VARCHAR(32)`, `monolithic`, `mo node role, like: CN, DN, LOG`}
+	accountColumn     = MetricColumn{`account`, `VARCHAR(128)`, `sys`, `account name`}
+	typeColumn        = MetricColumn{`type`, `VARCHAR(32)`, ``, `sql type, like: insert, select, ...`}
+)
+
+type MetricTable struct {
+	Database         string
+	Table            string
+	Columns          []MetricColumn
+	PrimaryKeyColumn []MetricColumn
+	Engine           string
+	Comment          string
+	CSVOptions       *trace.CsvOptions
+
+	BatchMode string
+}
+
+var singleMetricTable = &MetricTable{
+	Database:         `system`,
+	Table:            `metric`,
+	Columns:          []MetricColumn{metricNameColumn, collectTimeColumn, valueColumn, nodeColumn, roleColumn, accountColumn, typeColumn},
+	PrimaryKeyColumn: []MetricColumn{},
+	Engine:           "EXTERNAL",
+	Comment:          `metric data`,
+	CSVOptions:       trace.CommonCsvOptions,
+	BatchMode:        trace.FileService,
+}
+
+func (tbl *MetricTable) ToCreateSql(ifNotExists bool, factory optionsFactory) string {
+	//factory := trace.GetOptionFactory(tbl.BatchMode)
+	TableOptions := factory(tbl.Database, tbl.Table)
+
+	const newLineCharacter = ",\n"
+	sb := strings.Builder{}
+	// create table
+	sb.WriteString("CREATE ")
+	switch strings.ToUpper(tbl.Engine) {
+	case "EXTERNAL":
+		sb.WriteString(TableOptions.GetCreateOptions())
+	default:
+		panic(moerr.NewInternalError("NOT support engine: %s", tbl.Engine))
+	}
+	sb.WriteString("TABLE ")
+	if ifNotExists {
+		sb.WriteString("IF NOT EXISTS ")
+	}
+	// table name
+	sb.WriteString(fmt.Sprintf("`%s`.`%s`(", tbl.Database, tbl.Table))
+	// columns
+	for idx, col := range tbl.Columns {
+		if idx > 0 {
+			sb.WriteString(newLineCharacter)
+		}
+		sb.WriteString(fmt.Sprintf("`%s` %s DEFAULT %q COMMENT %q", col.Name, col.Type, col.Default, col.Comment))
+	}
+	// primary key
+	if len(tbl.PrimaryKeyColumn) > 0 {
+		sb.WriteString(newLineCharacter)
+		sb.WriteString("PRIMARY KEY (`")
+		for idx, col := range tbl.PrimaryKeyColumn {
+			if idx > 0 {
+				sb.WriteString(`, `)
+			}
+			sb.WriteString(fmt.Sprintf("`%s`", col.Name))
+		}
+		sb.WriteString(`)`)
+	}
+	sb.WriteString("\n)")
+	sb.WriteString(TableOptions.GetTableOptions())
+
+	return sb.String()
+}
+
+type ViewOption func(view *MetricView)
+
+func (opt ViewOption) apply(view *MetricView) {
+	opt(view)
+}
+
+type MetricView struct {
+	Database    string
+	Table       string
+	OriginTable *MetricTable
+	Columns     []MetricColumn
+}
+
+func WithColumn(c MetricColumn) ViewOption {
+	return ViewOption(func(v *MetricView) {
+		v.Columns = append(v.Columns, c)
+	})
+}
+
+func NewMetricView(tbl string, opts ...ViewOption) *MetricView {
+	view := &MetricView{
+		Database:    MetricDBConst,
+		Table:       tbl,
+		OriginTable: singleMetricTable,
+		Columns:     []MetricColumn{collectTimeColumn, valueColumn, nodeColumn, roleColumn},
+	}
+	for _, opt := range opts {
+		opt.apply(view)
+	}
+	return view
+}
+
+func NewMetricViewWithLabels(tbl string, lbls []string) *MetricView {
+	var options []ViewOption
+	for _, label := range lbls {
+		for _, col := range singleMetricTable.Columns {
+			if strings.ToUpper(label) == strings.ToUpper(col.Name) {
+				options = append(options, WithColumn(col))
+			}
+		}
+	}
+	return NewMetricView(tbl, options...)
+}
+
+func (tbl *MetricView) Where() string {
+	return fmt.Sprintf("`%s` = %q", metricNameColumn.Name, tbl.Table)
+}
+
+func (tbl *MetricView) ToCreateSql(ifNotExists bool) string {
+	sb := strings.Builder{}
+	// create table
+	sb.WriteString("CREATE VIEW ")
+	if ifNotExists {
+		sb.WriteString("IF NOT EXISTS ")
+	}
+	// table name
+	sb.WriteString(fmt.Sprintf("`%s`.`%s` as ", tbl.Database, tbl.Table))
+	sb.WriteString("select ")
+	// columns
+	for idx, col := range tbl.Columns {
+		if idx > 0 {
+			sb.WriteString(", ")
+		}
+		sb.WriteString(fmt.Sprintf("`%s`", col.Name))
+	}
+	sb.WriteString(" from `%s`.`%s` where ")
+	sb.WriteString(tbl.Where())
+
+	return sb.String()
 }

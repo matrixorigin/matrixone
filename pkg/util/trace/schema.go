@@ -166,7 +166,10 @@ func (o *CsvTableOptions) GetCreateOptions() string {
 }
 
 func (o *CsvTableOptions) GetTableOptions() string {
-	return fmt.Sprintf(o.formatter, o.dbName, o.tblName)
+	if len(o.formatter) > 0 {
+		return fmt.Sprintf(o.formatter, o.dbName, o.tblName)
+	}
+	return ""
 }
 
 var _ TableOptions = (*noopTableOptions)(nil)
