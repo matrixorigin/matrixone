@@ -6,7 +6,7 @@
 
 ## 开始前准备
 
-- 已通过[源代码](https://docs.matrixorigin.io/cn/0.5.0/MatrixOne/Get-Started/install-standalone-matrixone/#1)或[二进制包](https://docs.matrixorigin.io/cn/0.5.0/MatrixOne/Get-Started/install-standalone-matrixone/#2)完成安装 MatrixOne
+- 已通过[源代码](../../Get-Started/install-standalone-matrixone/#1)或[二进制包](../../Get-Started/install-standalone-matrixone/#2)完成安装 MatrixOne
 - 已完成[连接 MatrixOne 服务](../../Get-Started/connect-to-matrixone-server.md)
 
 如果你使用 Docker 安装启动 MatrixOne，确保你已将数据文件目录挂载到容器目录下，示例如下：
