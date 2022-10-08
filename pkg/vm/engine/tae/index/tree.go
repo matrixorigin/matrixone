@@ -17,13 +17,29 @@ package index
 import (
 	"fmt"
 
-	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	art "github.com/plar/go-adaptive-radix-tree"
 )
 
 var _ SecondaryIndex = new(simpleARTMap)
+
+type IndexMVCCChain struct {
+	MVCC []uint32
+}
+
+func NewIndexMVCCChain() *IndexMVCCChain {
+	return &IndexMVCCChain{
+		MVCC: make([]uint32, 0),
+	}
+}
+
+func (chain *IndexMVCCChain) Insert(node uint32) {
+	chain.MVCC = append(chain.MVCC, node)
+}
+
+func (chain *IndexMVCCChain) GetRows() []uint32 {
+	return chain.MVCC
+}
 
 type simpleARTMap struct {
 	typ  types.Type
@@ -40,18 +56,20 @@ func NewSimpleARTMap(typ types.Type) *simpleARTMap {
 func (art *simpleARTMap) Size() int { return art.tree.Size() }
 
 func (art *simpleARTMap) Insert(key any, offset uint32) (err error) {
+	chain := NewIndexMVCCChain()
+	chain.Insert(offset)
 	ikey := types.EncodeValue(key, art.typ)
-	old, _ := art.tree.Insert(ikey, offset)
+	old, _ := art.tree.Insert(ikey, chain)
 	if old != nil {
+		oldChain := old.(*IndexMVCCChain)
+		oldChain.Insert(offset)
 		art.tree.Insert(ikey, old)
-		err = ErrDuplicate
 	}
 	return
 }
 
-func (art *simpleARTMap) BatchInsert(keys *KeysCtx, startRow uint32, upsert bool) (resp *BatchResp, err error) {
+func (art *simpleARTMap) BatchInsert(keys *KeysCtx, startRow uint32) (err error) {
 	existence := make(map[any]bool)
-
 	op := func(v any, i int) error {
 		encoded := types.EncodeValue(v, art.typ)
 		if keys.NeedVerify {
@@ -60,19 +78,13 @@ func (art *simpleARTMap) BatchInsert(keys *KeysCtx, startRow uint32, upsert bool
 			}
 			existence[string(encoded)] = true
 		}
-		old, _ := art.tree.Insert(encoded, startRow)
+		chain := NewIndexMVCCChain()
+		chain.Insert(startRow)
+		old, _ := art.tree.Insert(encoded, chain)
 		if old != nil {
-			// TODO: rollback previous insertion if duplication comes up
-			if !upsert {
-				return ErrDuplicate
-			}
-			if resp == nil {
-				resp = new(BatchResp)
-				resp.UpdatedKeys = roaring.New()
-				resp.UpdatedRows = roaring.New()
-			}
-			resp.UpdatedRows.Add(old.(uint32))
-			resp.UpdatedKeys.Add(uint32(i))
+			oldChain := old.(*IndexMVCCChain)
+			oldChain.Insert(startRow)
+			art.tree.Insert(encoded, old)
 		}
 		startRow++
 		return nil
@@ -82,92 +94,18 @@ func (art *simpleARTMap) BatchInsert(keys *KeysCtx, startRow uint32, upsert bool
 	return
 }
 
-func (art *simpleARTMap) Update(key any, offset uint32) (err error) {
-	ikey := types.EncodeValue(key, art.typ)
-	old, _ := art.tree.Insert(ikey, offset)
-	if old == nil {
-		art.tree.Delete(ikey)
-		err = ErrDuplicate
-	}
-	return
-}
-
-func (art *simpleARTMap) BatchUpdate(keys containers.Vector, offsets []uint32, start uint32) (err error) {
-	idx := 0
-
-	op := func(v any, _ int) error {
-		encoded := types.EncodeValue(v, art.typ)
-		old, _ := art.tree.Insert(encoded, offsets[idx])
-		if old == nil {
-			art.tree.Delete(encoded)
-			return ErrDuplicate
-		}
-		idx++
-		return nil
-	}
-
-	err = keys.Foreach(op, nil)
-	return
-}
-
 func (art *simpleARTMap) Delete(key any) (old uint32, err error) {
-	ikey := types.EncodeValue(key, art.typ)
-	v, found := art.tree.Delete(ikey)
-	if !found {
-		err = ErrNotFound
-	} else {
-		old = v.(uint32)
-	}
 	return
 }
 
-func (art *simpleARTMap) Search(key any) (uint32, error) {
+func (art *simpleARTMap) Search(key any) ([]uint32, error) {
 	ikey := types.EncodeValue(key, art.typ)
-	offset, found := art.tree.Search(ikey)
+	v, found := art.tree.Search(ikey)
 	if !found {
-		return 0, ErrNotFound
+		return nil, ErrNotFound
 	}
-	return offset.(uint32), nil
-}
-
-func (art *simpleARTMap) Contains(key any) bool {
-	ikey := types.EncodeValue(key, art.typ)
-	_, exists := art.tree.Search(ikey)
-	return exists
-}
-
-// ContainsAny returns whether at least one of the specified keys exists.
-//
-// If the keysCtx.Selects is not nil, only the keys indicated by the keyselects bitmap will
-// participate in the calculation.
-// When deduplication occurs, the corresponding row number will be taken out. If the row
-// number is included in the rowmask, the error will be ignored
-func (art *simpleARTMap) ContainsAny(keysCtx *KeysCtx, rowmask *roaring.Bitmap) bool {
-	op := func(v any, _ int) error {
-		encoded := types.EncodeValue(v, art.typ)
-		// 1. If duplication found
-		if v, found := art.tree.Search(encoded); found {
-			// 1.1 If no rowmask, quick return with duplication error
-			if rowmask == nil {
-				return ErrDuplicate
-			}
-			// 1.2 If duplicated row is marked, ignore this duplication error
-			if rowmask.Contains(v.(uint32)) {
-				return nil
-			}
-			// 1.3 If duplicated row is not marked, return with duplication error
-			return ErrDuplicate
-		}
-		return nil
-	}
-	if err := keysCtx.Keys.ForeachWindow(int(keysCtx.Start), int(keysCtx.Count), op, keysCtx.Selects); err != nil {
-		if err == ErrDuplicate {
-			return true
-		} else {
-			panic(err)
-		}
-	}
-	return false
+	chain := v.(*IndexMVCCChain)
+	return chain.GetRows(), nil
 }
 
 func (art *simpleARTMap) String() string {
@@ -178,7 +116,7 @@ func (art *simpleARTMap) String() string {
 		if err != nil {
 			break
 		}
-		s = fmt.Sprintf("%sNode: %v:%v\n", s, n.Key(), n.Value())
+		s = fmt.Sprintf("%sNode: %v:%v\n", s, n.Key(), n.Value().(*IndexMVCCChain).GetRows())
 	}
 	s = fmt.Sprintf("%s)", s)
 	return s

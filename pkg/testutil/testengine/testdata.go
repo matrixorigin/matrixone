@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package memEngine
+package testengine
 
 import (
 	"context"
@@ -24,26 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/memEngine/kv"
 )
-
-func NewTestEngine() engine.Engine {
-	e := New(kv.New(), engine.Node{Id: "0", Addr: "127.0.0.1"})
-	ctx := context.TODO()
-	db, _ := e.Database(ctx, "test", nil)
-	CreateR(db)
-	CreateS(db)
-	CreateT(db)
-	CreateT1(db)
-	{ // star schema benchmark
-		CreatePart(db)
-		CreateDate(db)
-		CreateSupplier(db)
-		CreateCustomer(db)
-		CreateLineorder(db)
-	}
-	return e
-}
 
 func CreateR(db engine.Database) {
 	ctx := context.TODO()

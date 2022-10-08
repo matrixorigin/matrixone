@@ -17,6 +17,7 @@ package cnservice
 import (
 	"context"
 	"fmt"
+	"go.uber.org/zap"
 	"sync"
 
 	"github.com/fagongzi/goetty/v2"
@@ -32,6 +33,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
+	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
@@ -47,6 +49,7 @@ func NewService(
 	cfg *Config,
 	ctx context.Context,
 	fileService fileservice.FileService,
+	taskService taskservice.TaskService,
 	options ...Options,
 ) (Service, error) {
 	if err := cfg.Validate(); err != nil {
@@ -60,7 +63,7 @@ func NewService(
 	}
 
 	srv := &service{
-		logger: logutil.GetGlobalLogger().Named("cnservice"),
+		logger: logutil.GetGlobalLogger().Named("cnservice").With(zap.String("uuid", cfg.UUID)),
 		metadata: metadata.CNStore{
 			UUID: cfg.UUID,
 			Role: metadata.MustParseCNRole(cfg.Role),
@@ -68,6 +71,7 @@ func NewService(
 		cfg:         cfg,
 		metadataFS:  fs,
 		fileService: fileService,
+		taskService: taskService,
 	}
 	srv.stopper = stopper.NewStopper("cn-service", stopper.WithLogger(srv.logger))
 
@@ -105,6 +109,22 @@ func NewService(
 	srv.storeEngine = pu.StorageEngine
 	srv._txnClient = pu.TxnClient
 
+	runner, err := taskservice.NewTaskRunner(cfg.UUID, taskService,
+		taskservice.WithOptions(
+			cfg.TaskRunner.QueryLimit,
+			cfg.TaskRunner.Parallelism,
+			cfg.TaskRunner.MaxWaitTasks,
+			cfg.TaskRunner.FetchInterval.Duration,
+			cfg.TaskRunner.FetchTimeout.Duration,
+			cfg.TaskRunner.RetryInterval.Duration,
+			cfg.TaskRunner.HeartbeatInterval.Duration,
+		),
+	)
+	if err != nil {
+		return nil, err
+	}
+	srv.taskRunner = runner
+
 	srv.requestHandler = func(ctx context.Context, message morpc.Message, cs morpc.ClientSession, engine engine.Engine, fService fileservice.FileService, cli client.TxnClient, messageAcquirer func() morpc.Message) error {
 		return nil
 	}
@@ -123,6 +143,9 @@ func (s *service) Start() error {
 	if err := s.startCNStoreHeartbeat(); err != nil {
 		return err
 	}
+	if err := s.taskRunner.Start(); err != nil {
+		return err
+	}
 	return s.server.Start()
 }
 
@@ -132,8 +155,15 @@ func (s *service) Close() error {
 		return err
 	}
 	s.cancelMoServerFunc()
+	if err := s.taskRunner.Stop(); err != nil {
+		return err
+	}
 	s.stopper.Stop()
 	return s.server.Close()
+}
+
+func (s *service) GetTaskRunner() taskservice.TaskRunner {
+	return s.taskRunner
 }
 
 func (s *service) acquireMessage() morpc.Message {

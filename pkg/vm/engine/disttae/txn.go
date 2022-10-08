@@ -16,17 +16,28 @@ package disttae
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 func (txn *Transaction) getTableList(ctx context.Context, databaseId uint64) ([]string, error) {
-	rows, err := txn.getRows(ctx, catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID, txn.dnStores[:1],
-		[]string{catalog.MoTablesSchema[catalog.MO_TABLES_REL_NAME_IDX]},
+	columns := []string{
+		catalog.MoTablesSchema[catalog.MO_TABLES_REL_NAME_IDX],
+		catalog.MoTablesSchema[catalog.MO_TABLES_RELDATABASE_ID_IDX],
+		catalog.MoTablesSchema[catalog.MO_TABLES_ACCOUNT_ID_IDX],
+	}
+	rows, err := txn.getRows(ctx, catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID, txn.dnStores[:1], columns,
 		genTableListExpr(getAccountId(ctx), databaseId))
 	if err != nil {
 		return nil, err
@@ -41,9 +52,10 @@ func (txn *Transaction) getTableList(ctx context.Context, databaseId uint64) ([]
 func (txn *Transaction) getTableInfo(ctx context.Context, databaseId uint64,
 	name string) (uint64, []engine.TableDef, error) {
 	accountId := getAccountId(ctx)
+	columns := catalog.MoTablesSchema
 	row, err := txn.getRow(ctx, catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID,
-		txn.dnStores[:1], catalog.MoTablesSchema,
-		genTableIdExpr(accountId, databaseId, name))
+		txn.dnStores[:1], columns,
+		genTableInfoExpr(accountId, databaseId, name))
 	if err != nil {
 		return 0, nil, err
 	}
@@ -66,8 +78,15 @@ func (txn *Transaction) getTableInfo(ctx context.Context, databaseId uint64,
 func (txn *Transaction) getTableId(ctx context.Context, databaseId uint64,
 	name string) (uint64, error) {
 	accountId := getAccountId(ctx)
+	columns := []string{
+		catalog.MoTablesSchema[catalog.MO_TABLES_REL_ID_IDX],
+		catalog.MoTablesSchema[catalog.MO_TABLES_REL_NAME_IDX],
+		catalog.MoTablesSchema[catalog.MO_TABLES_RELDATABASE_ID_IDX],
+		catalog.MoTablesSchema[catalog.MO_TABLES_ACCOUNT_ID_IDX],
+	}
+
 	row, err := txn.getRow(ctx, catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID,
-		txn.dnStores[:1], []string{catalog.MoTablesSchema[catalog.MO_TABLES_REL_ID_IDX]},
+		txn.dnStores[:1], columns,
 		genTableIdExpr(accountId, databaseId, name))
 	if err != nil {
 		return 0, err
@@ -76,8 +95,13 @@ func (txn *Transaction) getTableId(ctx context.Context, databaseId uint64,
 }
 
 func (txn *Transaction) getDatabaseList(ctx context.Context) ([]string, error) {
+	columns := []string{
+		catalog.MoDatabaseSchema[catalog.MO_DATABASE_DAT_NAME_IDX],
+		catalog.MoColumnsSchema[catalog.MO_DATABASE_ACCOUNT_ID_IDX],
+	}
+
 	rows, err := txn.getRows(ctx, catalog.MO_CATALOG_ID, catalog.MO_DATABASE_ID,
-		txn.dnStores[:1], []string{catalog.MoDatabaseSchema[catalog.MO_DATABASE_DAT_NAME_IDX]},
+		txn.dnStores[:1], columns,
 		genDatabaseListExpr(getAccountId(ctx)))
 	if err != nil {
 		return nil, err
@@ -91,13 +115,51 @@ func (txn *Transaction) getDatabaseList(ctx context.Context) ([]string, error) {
 
 func (txn *Transaction) getDatabaseId(ctx context.Context, name string) (uint64, error) {
 	accountId := getAccountId(ctx)
+	columns := []string{catalog.MoDatabaseSchema[catalog.MO_DATABASE_DAT_ID_IDX],
+		catalog.MoColumnsSchema[catalog.MO_DATABASE_DAT_NAME_IDX],
+		catalog.MoColumnsSchema[catalog.MO_DATABASE_ACCOUNT_ID_IDX],
+	}
 	row, err := txn.getRow(ctx, catalog.MO_CATALOG_ID, catalog.MO_DATABASE_ID, txn.dnStores[:1],
-		[]string{catalog.MoDatabaseSchema[catalog.MO_DATABASE_DAT_ID_IDX]},
-		genDatabaseIdExpr(accountId, name))
+		columns, genDatabaseIdExpr(accountId, name))
 	if err != nil {
 		return 0, err
 	}
 	return row[0].(uint64), nil
+}
+
+func (txn *Transaction) getTableMeta(ctx context.Context, databaseId uint64,
+	name string) (*tableMeta, error) {
+	id, defs, err := txn.getTableInfo(ctx, databaseId, name)
+	if err != nil {
+		return nil, err
+	}
+	if err := txn.db.Update(ctx, txn.dnStores, databaseId,
+		id, txn.meta.SnapshotTS); err != nil {
+		return nil, err
+	}
+	cols := make([]string, 0, len(defs))
+	{
+		for _, def := range defs {
+			if attr, ok := def.(*engine.AttributeDef); ok {
+				cols = append(cols, attr.Attr.Name)
+			}
+		}
+	}
+	blocks := make([][]BlockMeta, len(txn.dnStores))
+	for i, dnStore := range txn.dnStores {
+		rows, err := txn.getRows(ctx, databaseId, id,
+			[]DNStore{dnStore}, cols, nil)
+		if err != nil {
+			return nil, err
+		}
+		blocks[i] = genBlockMetas(rows)
+	}
+	return &tableMeta{
+		tableId:   id,
+		defs:      defs,
+		tableName: name,
+		blocks:    blocks,
+	}, nil
 }
 
 // detecting whether a transaction is a read-only transaction
@@ -114,8 +176,8 @@ func (txn *Transaction) IncStatementId() {
 // Write used to write data to the transaction buffer
 // insert/delete/update all use this api
 func (txn *Transaction) WriteBatch(typ int, databaseId, tableId uint64,
-	databaseName, tableName string, bat *batch.Batch) error {
-	txn.readOnly = true
+	databaseName, tableName string, bat *batch.Batch, dnStore DNStore) error {
+	txn.readOnly = false
 	txn.writes[txn.statementId] = append(txn.writes[txn.statementId], Entry{
 		typ:          typ,
 		bat:          bat,
@@ -123,6 +185,7 @@ func (txn *Transaction) WriteBatch(typ int, databaseId, tableId uint64,
 		databaseId:   databaseId,
 		tableName:    tableName,
 		databaseName: databaseName,
+		dnStore:      dnStore,
 	})
 	return nil
 }
@@ -136,7 +199,7 @@ func (txn *Transaction) RegisterFile(fileName string) {
 // insert/delete/update all use this api
 func (txn *Transaction) WriteFile(typ int, databaseId, tableId uint64,
 	databaseName, tableName string, fileName string) error {
-	txn.readOnly = true
+	txn.readOnly = false
 	txn.writes[txn.statementId] = append(txn.writes[txn.statementId], Entry{
 		typ:          typ,
 		tableId:      tableId,
@@ -162,7 +225,12 @@ func (txn *Transaction) getRow(ctx context.Context, databaseId uint64, tableId u
 	if len(bats) != 1 {
 		return nil, moerr.NewInvalidInput("table is not unique")
 	}
-	rows := genRows(bats[0])
+	rows := make([][]any, 0, len(bats))
+	for _, bat := range bats {
+		if bat.Length() > 0 {
+			rows = append(rows, catalog.GenRows(bat)...)
+		}
+	}
 	if len(rows) != 1 {
 		return nil, moerr.NewInvalidInput("table is not unique")
 	}
@@ -181,7 +249,9 @@ func (txn *Transaction) getRows(ctx context.Context, databaseId uint64, tableId 
 	}
 	rows := make([][]any, 0, len(bats))
 	for _, bat := range bats {
-		rows = append(rows, genRows(bat)...)
+		if bat.Length() > 0 {
+			rows = append(rows, catalog.GenRows(bat)...)
+		}
 	}
 	return rows, nil
 }
@@ -196,47 +266,224 @@ func (txn *Transaction) readTable(ctx context.Context, databaseId uint64, tableI
 	if int64(txn.statementId)-1 > 0 {
 		writes = txn.writes[:txn.statementId-1]
 	}
-	blkInfos := txn.db.BlockList(ctx, dnList, databaseId, tableId, txn.meta.SnapshotTS, writes)
-	bats := make([]*batch.Batch, 0, len(blkInfos))
-	for _, blkInfo := range blkInfos {
-		if !needRead(expr, blkInfo) {
+	bats := make([]*batch.Batch, 0, 1)
+	accessed := make(map[string]uint8)
+	for _, dn := range dnList {
+		accessed[dn.GetUUID()] = 0
+	}
+	parts := txn.db.getPartitions(databaseId, tableId)
+	for i, dn := range txn.dnStores {
+		if _, ok := accessed[dn.GetUUID()]; !ok {
 			continue
 		}
-		bat, err := blockRead(ctx, columns, blkInfo)
+		rds, err := parts[i].NewReader(ctx, 1, expr, nil, txn.meta.SnapshotTS, writes)
 		if err != nil {
 			return nil, err
 		}
-		bats = append(bats, bat)
+		for _, rd := range rds {
+			bat, err := rd.Read(columns, expr, nil)
+			if err != nil {
+				return nil, err
+			}
+			bats = append(bats, bat)
+		}
 	}
-	rds, err := txn.db.NewReader(ctx, 1, expr, dnList, databaseId,
-		tableId, txn.meta.SnapshotTS, writes)
-	if err != nil {
-		return nil, err
-	}
-	for _, rd := range rds {
-		bat, err := rd.Read(columns, expr, nil)
+
+	for i, bat := range bats {
+		vec, err := colexec.EvalExpr(bat, txn.proc, expr)
 		if err != nil {
 			return nil, err
 		}
-		bats = append(bats, bat)
+		bs := vector.GetColumn[bool](vec)
+		if vec.IsScalar() {
+			if !bs[0] {
+				bat.Shrink(nil)
+			}
+		} else {
+			sels := txn.proc.GetMheap().GetSels()
+			for i, b := range bs {
+				if b {
+					sels = append(sels, int64(i))
+				}
+			}
+			bat.Shrink(sels)
+			txn.proc.GetMheap().PutSels(sels)
+		}
+		vec.Free(txn.proc.GetMheap())
+		bats[i] = bat
 	}
 	return bats, nil
 }
 
-// needRead determine if a block needs to be read
-func needRead(expr *plan.Expr, blkInfo BlockMeta) bool {
-	//TODO
-	return false
+func (h transactionHeap) Len() int {
+	return len(h)
 }
 
-// write a block to s3
-func blockWrite(ctx context.Context, blkInfo BlockMeta, bat *batch.Batch) error {
+func (h transactionHeap) Less(i, j int) bool {
+	return h[i].meta.SnapshotTS.Less(h[j].meta.SnapshotTS)
+}
+
+func (h transactionHeap) Swap(i, j int) {
+	h[i], h[j] = h[j], h[i]
+}
+
+func (h *transactionHeap) Push(x any) {
+	*h = append(*h, x.(*Transaction))
+}
+
+func (h *transactionHeap) Pop() any {
+	old := *h
+	n := len(old)
+	x := old[n-1]
+	*h = old[0 : n-1]
+	return x
+}
+
+// needRead determine if a block needs to be read
+func needRead(expr *plan.Expr, blkInfo BlockMeta, tableDef *plan.TableDef, proc *process.Process) bool {
+	var err error
+	columns := getColumnsByExpr(expr)
+
+	// if expr match no columns, just eval expr
+	if len(columns) == 0 {
+		bat := batch.NewWithSize(0)
+		ifNeed, err := evalFilterExpr(expr, bat, proc)
+		if err != nil {
+			return true
+		}
+		return ifNeed
+	}
+
+	// get min max data from Meta
+	datas, dataTypes, err := getZonemapDataFromMeta(columns, blkInfo, tableDef)
+	if err != nil {
+		return true
+	}
+
+	// use all min/max data to build []vectors.
+	buildVectors := buildVectorsByData(datas, dataTypes, proc.GetMheap())
+	bat := batch.NewWithSize(len(columns))
+	bat.Zs = make([]int64, buildVectors[0].Length())
+	bat.Vecs = buildVectors
+
+	ifNeed, err := evalFilterExpr(expr, bat, proc)
+	if err != nil {
+		return true
+	}
+
+	return ifNeed
+
+}
+
+// needSyncDnStores determine the dn store need to sync
+func needSyncDnStores(expr *plan.Expr, defs []engine.TableDef, dnStores []DNStore) []int {
 	//TODO
+	dnList := make([]int, len(dnStores))
+	for i := range dnStores {
+		dnList[i] = i
+	}
+	return dnList
+}
+
+// get row count of block
+func blockRows(blkInfo BlockMeta) int64 {
+	// TODO
+	return 0
+}
+
+func blockMarshal(blkInfo BlockMeta) []byte {
+	// TODO
 	return nil
 }
 
+func blockUnmarshal(data []byte) BlockMeta {
+	return BlockMeta{}
+}
+
+// write a block to s3
+func blockWrite(ctx context.Context, blkInfo BlockMeta, bat *batch.Batch, fs fileservice.FileService) ([]objectio.BlockObject, error) {
+	// 1. check columns length, check types
+	if len(blkInfo.columns) != len(bat.Vecs) {
+		return nil, moerr.NewInternalError(fmt.Sprintf("write block error: need %v columns, get %v columns", len(blkInfo.columns), len(bat.Vecs)))
+	}
+	for i, vec := range bat.Vecs {
+		if blkInfo.columns[i].typ != uint8(vec.Typ.Oid) {
+			return nil, moerr.NewInternalError(fmt.Sprintf("write block error: column[%v]'s type is not match", i))
+		}
+	}
+
+	// 2. write bat
+	s3FileName := getNameFromMeta(blkInfo)
+	writer, err := objectio.NewObjectWriter(s3FileName, fs)
+	if err != nil {
+		return nil, err
+	}
+	fd, err := writer.Write(bat)
+	if err != nil {
+		return nil, err
+	}
+
+	// 3. write index (index and zonemap)
+	for i, vec := range bat.Vecs {
+		bloomFilter, zoneMap, err := getIndexDataFromVec(uint16(i), vec)
+		if err != nil {
+			return nil, err
+		}
+		if bloomFilter != nil {
+			err = writer.WriteIndex(fd, bloomFilter)
+			if err != nil {
+				return nil, err
+			}
+		}
+		if zoneMap != nil {
+			err = writer.WriteIndex(fd, zoneMap)
+			if err != nil {
+				return nil, err
+			}
+		}
+	}
+
+	// 4. get return
+	return writer.WriteEnd()
+}
+
 // read a block from s3
-func blockRead(ctx context.Context, columns []string, blkInfo BlockMeta) (*batch.Batch, error) {
-	//TODO
-	return nil, nil
+func blockRead(ctx context.Context, columns []string, blkInfo BlockMeta, fs fileservice.FileService, tableDef *plan.TableDef) (*batch.Batch, error) {
+	// 1. get extent from meta
+	extent := getExtentFromMeta(blkInfo)
+
+	// 2. get idxs
+	columnLength := len(columns)
+	idxs := make([]uint16, columnLength)
+	columnTypes := make([]types.Type, columnLength)
+	for i, column := range columns {
+		idxs[i] = uint16(tableDef.Name2ColIndex[column])
+		columnTypes[i] = types.T(blkInfo.columns[idxs[i]].typ).ToType()
+	}
+
+	// 2. read data
+	s3FileName := getNameFromMeta(blkInfo)
+	reader, err := objectio.NewObjectReader(s3FileName, fs)
+	if err != nil {
+		return nil, err
+	}
+	ioVec, err := reader.Read(extent, idxs)
+	if err != nil {
+		return nil, err
+	}
+
+	// 3. fill Batch
+	bat := batch.NewWithSize(columnLength)
+	bat.Attrs = columns
+	for i, entry := range ioVec.Entries {
+		vec := vector.New(columnTypes[i])
+		err := vec.Read(entry.Data)
+		if err != nil {
+			return nil, err
+		}
+		bat.Vecs[i] = vec
+	}
+	bat.Zs = make([]int64, int64(bat.Vecs[0].Length()))
+
+	return bat, nil
 }

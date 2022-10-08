@@ -15,6 +15,7 @@
 package containers
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/stl"
 )
 
@@ -29,7 +30,7 @@ func (opts *Options) DataSize() int {
 	if opts.Data == nil {
 		return 0
 	}
-	return len(opts.Data.Data)
+	return opts.Data.StorageSize()
 }
 
 type StdVector[T any] struct {
@@ -41,9 +42,8 @@ type StdVector[T any] struct {
 }
 
 type StrVector[T any] struct {
-	offsets *StdVector[uint32]
-	lengths *StdVector[uint32]
-	data    *StdVector[byte]
+	vdata *StdVector[types.Varlena]
+	area  *StdVector[byte]
 }
 
 type Vector[T any] struct {

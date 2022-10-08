@@ -12,38 +12,20 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package memEngine
+package common
 
-import (
-	"bytes"
+type CompressType uint8
 
-	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/memEngine/kv"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/memEngine/meta"
+const (
+	Plain CompressType = iota
+	Lz4
 )
 
-// MemEngine standalone memory engine
-type MemEngine struct {
-	db *kv.KV
-	n  engine.Node
+func Compress(raw []byte, ctyp CompressType) []byte {
+	return raw
 }
 
-type database struct {
-	db *kv.KV
-	n  engine.Node
-}
-
-type relation struct {
-	id string
-	db *kv.KV
-	n  engine.Node
-	md meta.Metadata
-}
-
-type reader struct {
-	db    *kv.KV
-	segs  []string
-	cds   []*bytes.Buffer
-	dds   []*bytes.Buffer
-	attrs map[string]engine.Attribute
+func Decompress(src []byte, dst []byte, ctyp CompressType) error {
+	copy(dst, src)
+	return nil
 }

@@ -28,29 +28,46 @@ func (db *database) Relations(ctx context.Context) ([]string, error) {
 }
 
 func (db *database) Relation(ctx context.Context, name string) (engine.Relation, error) {
+	key := genTableKey(ctx, name, db.databaseId)
+	if tbl, ok := db.txn.tableMap[key]; ok {
+		return tbl, nil
+	}
 	id, defs, err := db.txn.getTableInfo(ctx, db.databaseId, name)
 	if err != nil {
 		return nil, err
 	}
-	return &table{
-		db:        db,
-		tableId:   id,
-		tableName: name,
-		defs:      defs,
-	}, nil
+	meta, err := db.txn.getTableMeta(ctx, db.databaseId, genMetaTableName(id))
+	if err != nil {
+		return nil, err
+	}
+	parts := db.txn.db.getPartitions(db.databaseId, id)
+	tbl := &table{
+		db:         db,
+		tableId:    id,
+		tableName:  name,
+		defs:       defs,
+		meta:       meta,
+		parts:      parts,
+		insertExpr: genInsertExpr(defs, len(parts)),
+		deleteExpr: genDeleteExpr(defs, len(parts)),
+	}
+	db.txn.tableMap[key] = tbl
+	return tbl, nil
 }
 
 func (db *database) Delete(ctx context.Context, name string) error {
+	key := genTableKey(ctx, name, db.databaseId)
+	delete(db.txn.tableMap, key)
 	id, err := db.txn.getTableId(ctx, db.databaseId, name)
 	if err != nil {
 		return err
 	}
-	bat, err := genDropTableTuple(id, db.m)
+	bat, err := genDropTableTuple(id, db.databaseId, name, db.databaseName, db.txn.proc.GetMheap())
 	if err != nil {
 		return err
 	}
 	if err := db.txn.WriteBatch(DELETE, catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID,
-		catalog.MO_CATALOG, catalog.MO_TABLES, bat); err != nil {
+		catalog.MO_CATALOG, catalog.MO_TABLES, bat, db.txn.dnStores[0]); err != nil {
 		return err
 	}
 	return nil
@@ -63,24 +80,25 @@ func (db *database) Create(ctx context.Context, name string, defs []engine.Table
 		return err
 	}
 	{
+		sql := getSql(ctx)
 		accountId, userId, roleId := getAccessInfo(ctx)
-		bat, err := genCreateTableTuple(accountId, userId, roleId, name,
-			db.databaseId, db.databaseName, comment, db.m)
+		bat, err := genCreateTableTuple(sql, accountId, userId, roleId, name,
+			db.databaseId, db.databaseName, comment, db.txn.proc.GetMheap())
 		if err != nil {
 			return err
 		}
 		if err := db.txn.WriteBatch(INSERT, catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID,
-			catalog.MO_CATALOG, catalog.MO_TABLES, bat); err != nil {
+			catalog.MO_CATALOG, catalog.MO_TABLES, bat, db.txn.dnStores[0]); err != nil {
 			return err
 		}
 	}
 	for _, col := range cols {
-		bat, err := genCreateColumnTuple(col, db.m)
+		bat, err := genCreateColumnTuple(col, db.txn.proc.GetMheap())
 		if err != nil {
 			return err
 		}
 		if err := db.txn.WriteBatch(INSERT, catalog.MO_CATALOG_ID, catalog.MO_COLUMNS_ID,
-			catalog.MO_CATALOG, catalog.MO_COLUMNS, bat); err != nil {
+			catalog.MO_CATALOG, catalog.MO_COLUMNS, bat, db.txn.dnStores[0]); err != nil {
 			return err
 		}
 	}

@@ -51,11 +51,12 @@ func NewFlushBlkTask(
 func (task *flushBlkTask) Scope() *common.ID { return task.meta.AsCommonID() }
 
 func (task *flushBlkTask) Execute() error {
+	defer task.file.FreeWriter()
 	block, err := task.file.WriteBatch(task.data, task.ts)
 	if err != nil {
 		return err
 	}
-	if err = BuildBlockIndex(task.file.GetWriter(), block, task.meta, task.data); err != nil {
+	if err = BuildBlockIndex(task.file.GetWriter(), block, task.meta, task.data, true); err != nil {
 		return err
 	}
 	return task.file.Sync()

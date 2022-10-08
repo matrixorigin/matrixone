@@ -15,6 +15,8 @@
 package blockio
 
 import (
+	"testing"
+
 	mobat "github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
@@ -23,7 +25,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/file"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/stretchr/testify/assert"
-	"testing"
 )
 
 const (
@@ -41,7 +42,7 @@ func TestBlock1(t *testing.T) {
 	}
 	data := catalog.MockBatch(schema, int(schema.BlockMaxRows*2))
 	newbat := mobat.New(true, data.Attrs)
-	newbat.Vecs = containers.CopyToMoVectors(data.Vecs)
+	newbat.Vecs = containers.CopyToMoVecs(data.Vecs)
 	var block file.Block
 	id := common.NextGlobalSeqNum()
 	SegmentFactory := NewObjectFactory(dir)

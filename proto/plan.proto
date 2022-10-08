@@ -148,6 +148,9 @@ message Function {
 		// Window and Agg
 		AGG        = 128;
 		WIN        = 256;
+
+		// Monotonical function can filter by zonemap
+		MONOTONICAL = 512;
 	}
 
 	ObjectRef func		= 1;

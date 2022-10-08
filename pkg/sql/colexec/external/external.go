@@ -50,6 +50,7 @@ func String(arg any, buf *bytes.Buffer) {
 func Prepare(proc *process.Process, arg any) error {
 	param := arg.(*Argument).Es
 	param.batchSize = 40000
+	param.records = make([][]string, param.batchSize)
 	param.extern = &tree.ExternParam{}
 	err := json.Unmarshal([]byte(param.CreateSql), param.extern)
 	if err != nil {
@@ -619,18 +620,21 @@ func GetSimdcsvReader(param *ExternalParam) (*ParseLineHandler, error) {
 func ScanFileData(param *ExternalParam, proc *process.Process) (*batch.Batch, error) {
 	var bat *batch.Batch
 	var err error
+	var cnt int
 	if param.plh == nil {
+		param.IgnoreLine = param.IgnoreLineTag
 		param.plh, err = GetSimdcsvReader(param)
 		if err != nil {
 			return nil, err
 		}
 	}
 	plh := param.plh
-	plh.simdCsvLineArray, err = plh.simdCsvReader.Read(param.batchSize, param.Ctx)
+	plh.simdCsvLineArray, cnt, err = plh.simdCsvReader.Read(param.batchSize, param.Ctx, param.records)
 	if err != nil {
 		return nil, err
 	}
-	if len(plh.simdCsvLineArray) < param.batchSize {
+	if cnt < param.batchSize {
+		plh.simdCsvLineArray = plh.simdCsvLineArray[:cnt]
 		err := param.reader.Close()
 		if err != nil {
 			logutil.Errorf("close file failed. err:%v", err)
@@ -638,7 +642,6 @@ func ScanFileData(param *ExternalParam, proc *process.Process) (*batch.Batch, er
 		plh.simdCsvReader.Close()
 		param.plh = nil
 		param.FileIndex++
-		param.IgnoreLine = param.IgnoreLineTag
 		if param.FileIndex >= param.FileCnt {
 			param.End = true
 		}
