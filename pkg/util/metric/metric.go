@@ -408,7 +408,7 @@ func NewMetricViewWithLabels(tbl string, lbls []string) *MetricView {
 	var options []ViewOption
 	for _, label := range lbls {
 		for _, col := range singleMetricTable.Columns {
-			if strings.ToUpper(label) == strings.ToUpper(col.Name) {
+			if strings.EqualFold(label, col.Name) {
 				options = append(options, WithColumn(col))
 			}
 		}
@@ -475,6 +475,17 @@ func (r *MetricRow) SetFloat64(col string, val float64) {
 
 func (r *MetricRow) ToStrings() []string {
 	return r.Columns
+}
+
+func (r *MetricRow) ToValueString(buf *bytes.Buffer) {
+	buf.WriteRune('(')
+	for idx, val := range r.Columns {
+		if idx > 0 {
+			buf.WriteRune(',')
+		}
+		buf.WriteString(fmt.Sprintf(`%q`, val))
+	}
+	buf.WriteRune(')')
 }
 
 var gMetricView struct {

@@ -186,45 +186,50 @@ func (s *mfset) IsEmpty() bool {
 	return len(s.mfs) == 0
 }
 
+// GetBatch
 // getSql extracts a insert sql from a set of MetricFamily. the bytes.Buffer is
 // used to mitigate memory allocation
 func (s *mfset) GetBatch(buf *bytes.Buffer) string {
 	buf.Reset()
-	buf.WriteString(fmt.Sprintf("insert into %s.%s values ", MetricDBConst, s.mfs[0].GetName()))
-	lblsBuf := new(bytes.Buffer)
-	writeValues := func(t string, v float64, lbls string) {
-		buf.WriteString("(")
-		buf.WriteString(fmt.Sprintf("%q, %f", t, v))
-		buf.WriteString(lbls)
-		buf.WriteString("),")
+	buf.WriteString(fmt.Sprintf("insert into %s.%s values ", singleMetricTable.Database, singleMetricTable.GetName()))
+	writeValues := func(row *MetricRow) {
+		row.ToValueString(buf)
+		buf.WriteRune(',')
 	}
+
+	row := singleMetricTable.GetRow()
 	for _, mf := range s.mfs {
 		for _, metric := range mf.Metric {
+
 			// reserved labels
-			lblsBuf.WriteString(fmt.Sprintf(",%q,%q", mf.GetNode(), mf.GetRole()))
+			row.SetVal(metricNameColumn.Name, mf.GetName())
+			row.SetVal(nodeColumn.Name, mf.GetNode())
+			row.SetVal(roleColumn.Name, mf.GetRole())
 			// custom labels
 			for _, lbl := range metric.Label {
-				lblsBuf.WriteString(",\"")
-				lblsBuf.WriteString(lbl.GetValue())
-				lblsBuf.WriteRune('"')
+				row.SetVal(lbl.GetName(), lbl.GetValue())
 			}
-			lbls := lblsBuf.String()
-			lblsBuf.Reset()
 
 			switch mf.GetType() {
 			case pb.MetricType_COUNTER:
 				time := localTimeStr(metric.GetCollecttime())
-				writeValues(time, metric.Counter.GetValue(), lbls)
+				row.SetVal(collectTimeColumn.Name, time)
+				row.SetFloat64(valueColumn.Name, metric.Counter.GetValue())
+				writeValues(row)
 			case pb.MetricType_GAUGE:
 				time := localTimeStr(metric.GetCollecttime())
-				writeValues(time, metric.Gauge.GetValue(), lbls)
+				row.SetVal(collectTimeColumn.Name, time)
+				row.SetFloat64(valueColumn.Name, metric.Gauge.GetValue())
+				writeValues(row)
 			case pb.MetricType_RAWHIST:
 				for _, sample := range metric.RawHist.Samples {
 					time := localTimeStr(sample.GetDatetime())
-					writeValues(time, sample.GetValue(), lbls)
+					row.SetVal(collectTimeColumn.Name, time)
+					row.SetFloat64(valueColumn.Name, sample.GetValue())
+					writeValues(row)
 				}
 			default:
-				panic(fmt.Sprintf("unsupported metric type %v", mf.GetType()))
+				panic(moerr.NewInternalError("unsupported metric type %v", mf.GetType()))
 			}
 		}
 	}
@@ -307,57 +312,6 @@ func (s *mfsetCSV) writeCsvOneLine(buf *bytes.Buffer, fields []string) {
 }
 
 func (s *mfsetCSV) GetBatch(buf *bytes.Buffer) *trace.CSVRequest {
-	return s.getBatchSingleTable(buf)
-}
-
-func (s *mfsetCSV) getBatchMultiTable(buf *bytes.Buffer) *trace.CSVRequest {
-
-	buf.Reset()
-
-	writer := s.writerFactory(trace.DefaultContext(), MetricDBConst, s.mfs[0])
-
-	//buf.WriteString(fmt.Sprintf("insert into %s.%s values ", MetricDBConst, s.mfs[0].GetName()))
-	writeValues := func(t string, v float64, lbls ...string) {
-		var fields []string
-		fields = append(fields, t)
-		fields = append(fields, fmt.Sprintf("%f", v))
-		fields = append(fields, lbls...)
-		s.writeCsvOneLine(buf, fields)
-	}
-
-	for _, mf := range s.mfs {
-		for _, metric := range mf.Metric {
-
-			var lbls []string
-			// reserved labels
-			lbls = append(lbls, mf.GetNode())
-			lbls = append(lbls, mf.GetRole())
-			// custom labels
-			for _, lbl := range metric.Label {
-				lbls = append(lbls, lbl.GetValue())
-			}
-
-			switch mf.GetType() {
-			case pb.MetricType_COUNTER:
-				time := localTimeStr(metric.GetCollecttime())
-				writeValues(time, metric.Counter.GetValue(), lbls...)
-			case pb.MetricType_GAUGE:
-				time := localTimeStr(metric.GetCollecttime())
-				writeValues(time, metric.Gauge.GetValue(), lbls...)
-			case pb.MetricType_RAWHIST:
-				for _, sample := range metric.RawHist.Samples {
-					time := localTimeStr(sample.GetDatetime())
-					writeValues(time, sample.GetValue(), lbls...)
-				}
-			default:
-				panic(moerr.NewInternalError("unsupported metric type %v", mf.GetType()))
-			}
-		}
-	}
-	return trace.NewCSVRequest(writer, buf.String())
-}
-
-func (s *mfsetCSV) getBatchSingleTable(buf *bytes.Buffer) *trace.CSVRequest {
 	buf.Reset()
 	writer := s.writerFactory(trace.DefaultContext(), singleMetricTable.Database, singleMetricTable)
 	writeValues := func(row *MetricRow) {
