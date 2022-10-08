@@ -30,8 +30,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -1636,7 +1634,11 @@ func (cwft *TxnComputationWrapper) Compile(requestCtx context.Context, u interfa
 		// 	}
 		// }
 
-		newPlan := plan2.DeepCopyPlan(prepareStmt.PreparePlan.GetDcl().GetPrepare().Plan)
+		preparePlan := prepareStmt.PreparePlan.GetDcl().GetPrepare()
+		if len(executePlan.Args) != len(preparePlan.ParamTypes) {
+			return nil, moerr.NewInvalidInput("Incorrect arguments to EXECUTE")
+		}
+		newPlan := plan2.DeepCopyPlan(preparePlan.Plan)
 
 		// replace ? and @var with their values
 		resetParamRule := plan2.NewResetParamRefRule(executePlan.Args)
@@ -1869,7 +1871,6 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 	var havePrivilege bool
 	var err2 error
 	var columns []interface{}
-	var deallocatePlan *plan.Plan
 
 	stmt0 := cws[0].GetAst()
 	mce.beforeRun(stmt0)
@@ -2022,11 +2023,6 @@ func (mce *MysqlCmdExecutor) doComQuery(requestCtx context.Context, sql string) 
 			if err != nil {
 				goto handleFailed
 			}
-			deallocatePlan, err = buildPlan(requestCtx, ses, mce.ses.txnCompileCtx, st)
-			if err != nil {
-				goto handleFailed
-			}
-			mce.ses.RemovePrepareStmt(deallocatePlan.GetDcl().GetDeallocate().GetName())
 		case *tree.SetVar:
 			selfHandle = true
 			err = mce.handleSetVar(st)
@@ -2662,8 +2658,7 @@ func StatementCanBeExecutedInUncommittedTransaction(stmt tree.Statement) bool {
 		*tree.ShowStatus, *tree.ShowTarget, *tree.ShowWarnings:
 		return true
 		//others
-	case *tree.PrepareStmt, *tree.Execute, *tree.Deallocate,
-		*tree.ExplainStmt, *tree.ExplainAnalyze, *tree.ExplainFor, *InternalCmdFieldList:
+	case *tree.ExplainStmt, *tree.ExplainAnalyze, *tree.ExplainFor, *InternalCmdFieldList:
 		return true
 	case *tree.Use:
 		/*
