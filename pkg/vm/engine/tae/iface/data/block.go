@@ -90,7 +90,6 @@ type Block interface {
 
 	SetMaxCheckpointTS(ts types.TS)
 	GetMaxCheckpointTS() types.TS
-	GetMaxVisibleTS() types.TS
 
 	CheckpointWALClosure(endTs types.TS) tasks.FuncT
 	Destroy() error

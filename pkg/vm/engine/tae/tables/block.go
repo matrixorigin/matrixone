@@ -189,10 +189,6 @@ func (blk *dataBlock) GetMaxCheckpointTS() types.TS {
 	return ts
 }
 
-func (blk *dataBlock) GetMaxVisibleTS() types.TS {
-	return blk.mvcc.LoadMaxVisible()
-}
-
 func (blk *dataBlock) FreeData() {
 	blk.Lock()
 	defer blk.Unlock()
