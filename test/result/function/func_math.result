@@ -23,6 +23,7 @@ null	null
 null	null
 1.5707963267948966	1.5707963267948966
 select asin(d),asin(fl)from t1;
+asin(d)	asin(fl)
 1.5707963267948966	null
 null	null
 null	null
