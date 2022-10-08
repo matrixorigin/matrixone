@@ -728,7 +728,7 @@ var (
 			) values(%d,%d,"%s",%v);`
 )
 
-var (
+const (
 	//privilege verification
 	checkTenantFormat = `select account_id,account_name from mo_catalog.mo_account where account_name = "%s";`
 
@@ -963,6 +963,25 @@ var (
 		objectTypeTable: {privilegeLevelStarStar,
 			privilegeLevelDatabaseStar, privilegeLevelStar,
 			privilegeLevelDatabaseTable, privilegeLevelTable},
+	}
+
+	bannedPrivilegesOnCatalogDatabase = map[PrivilegeType]int{
+		PrivilegeTypeDropDatabase: 0,
+		PrivilegeTypeCreateObject: 0,
+		PrivilegeTypeCreateTable:  0,
+		PrivilegeTypeCreateView:   0,
+		PrivilegeTypeDropObject:   0,
+		PrivilegeTypeDropTable:    0,
+		PrivilegeTypeDropView:     0,
+		PrivilegeTypeAlterObject:  0,
+		PrivilegeTypeAlterTable:   0,
+		PrivilegeTypeAlterView:    0,
+		PrivilegeTypeInsert:       0,
+		PrivilegeTypeUpdate:       0,
+		PrivilegeTypeTruncate:     0,
+		PrivilegeTypeDelete:       0,
+		PrivilegeTypeReference:    0,
+		PrivilegeTypeIndex:        0,
 	}
 )
 
