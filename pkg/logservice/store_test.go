@@ -85,7 +85,7 @@ func TestStoreCanBeCreatedAndClosed(t *testing.T) {
 }
 
 func getTestStore(cfg Config, startLogReplica bool, taskService taskservice.TaskService) (*store, error) {
-	store, err := newLogStore(cfg, taskService, nil)
+	store, err := newLogStore(cfg, taskService, testLogger)
 	if err != nil {
 		return nil, err
 	}
