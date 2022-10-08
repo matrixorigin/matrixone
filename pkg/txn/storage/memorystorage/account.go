@@ -15,11 +15,14 @@
 package memorystorage
 
 import (
+	"context"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/memoryengine"
 )
 
 func (m *MemHandler) ensureAccount(
+	ctx context.Context,
 	tx *Transaction,
 	accessInfo memoryengine.AccessInfo,
 ) (
@@ -37,12 +40,16 @@ func (m *MemHandler) ensureAccount(
 	}
 	if len(keys) == 0 {
 		// create one
+		id, err := m.idGenerator.NewID(ctx)
+		if err != nil {
+			return err
+		}
 		db := &DatabaseRow{
-			ID:        memoryengine.NewID(),
+			ID:        id,
 			AccountID: accessInfo.AccountID,
 			Name:      []byte(catalog.MO_CATALOG),
 		}
-		err := m.databases.Insert(tx, db)
+		err = m.databases.Insert(tx, db)
 		//TODO add a unique constraint on (AccountID, Name)
 		if err != nil {
 			return err
