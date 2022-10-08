@@ -120,7 +120,7 @@ func newBlock(meta *catalog.BlockEntry, segFile file.Segment, bufMgr base.INodeM
 		bufMgr:     bufMgr,
 		prefix:     meta.MakeKey(),
 	}
-	ts := block.ReadTS()
+	block.SetMaxCheckpointTS(types.TS{})
 	block.mvcc.SetAppendListener(block.OnApplyAppend)
 	if meta.IsAppendable() {
 		block.mvcc.SetDeletesListener(block.ABlkApplyDelete)
@@ -143,7 +143,6 @@ func newBlock(meta *catalog.BlockEntry, segFile file.Segment, bufMgr base.INodeM
 		// if this block is created to do compact or merge, no need to new index
 		// if this block is loaded from storage, ReplayIndex will create index
 	}
-	block.ckpTs.Store(ts)
 	if meta.GetMetaLoc() != "" {
 		if err := block.ReplayIndex(); err != nil {
 			panic(err)
@@ -155,7 +154,6 @@ func newBlock(meta *catalog.BlockEntry, segFile file.Segment, bufMgr base.INodeM
 	return block
 }
 
-func (blk *dataBlock) ReadTS() (ts types.TS)        { return }
 func (blk *dataBlock) GetMeta() any                 { return blk.meta }
 func (blk *dataBlock) GetBufMgr() base.INodeManager { return blk.bufMgr }
 func (blk *dataBlock) FreezeAppend() {
