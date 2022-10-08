@@ -16,7 +16,7 @@ package order
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
 
 type evalVector struct {
@@ -25,11 +25,12 @@ type evalVector struct {
 }
 
 type Container struct {
-	ds   []bool       // ds[i] == true: the attrs[i] are in descending order
-	vecs []evalVector // sorted list of attributes
+	desc      []bool // ds[i] == true: the attrs[i] are in descending order
+	nullsLast []bool
+	vecs      []evalVector // sorted list of attributes
 }
 
 type Argument struct {
 	ctr *Container
-	Fs  []colexec.Field
+	Fs  []*plan.OrderBySpec
 }

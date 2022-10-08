@@ -23,109 +23,110 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func New(typ types.Type, desc bool) Compare {
+func New(typ types.Type, desc, nullsLast bool) Compare {
 	switch typ.Oid {
 	case types.T_bool:
 		if desc {
-			return newCompare(boolDescCompare[bool], boolCopy[bool])
+			return newCompare(boolDescCompare, boolCopy[bool], nullsLast)
 		}
-		return newCompare(boolCompare[bool], boolCopy[bool])
+		return newCompare(boolAscCompare, boolCopy[bool], nullsLast)
 	case types.T_int8:
 		if desc {
-			return newCompare(genericDescCompare[int8], genericCopy[int8])
+			return newCompare(genericDescCompare[int8], genericCopy[int8], nullsLast)
 		}
-		return newCompare(genericCompare[int8], genericCopy[int8])
+		return newCompare(genericAscCompare[int8], genericCopy[int8], nullsLast)
 	case types.T_int16:
 		if desc {
-			return newCompare(genericDescCompare[int16], genericCopy[int16])
+			return newCompare(genericDescCompare[int16], genericCopy[int16], nullsLast)
 		}
-		return newCompare(genericCompare[int16], genericCopy[int16])
+		return newCompare(genericAscCompare[int16], genericCopy[int16], nullsLast)
 	case types.T_int32:
 		if desc {
-			return newCompare(genericDescCompare[int32], genericCopy[int32])
+			return newCompare(genericDescCompare[int32], genericCopy[int32], nullsLast)
 		}
-		return newCompare(genericCompare[int32], genericCopy[int32])
+		return newCompare(genericAscCompare[int32], genericCopy[int32], nullsLast)
 	case types.T_int64:
 		if desc {
-			return newCompare(genericDescCompare[int64], genericCopy[int64])
+			return newCompare(genericDescCompare[int64], genericCopy[int64], nullsLast)
 		}
-		return newCompare(genericCompare[int64], genericCopy[int64])
+		return newCompare(genericAscCompare[int64], genericCopy[int64], nullsLast)
 	case types.T_uint8:
 		if desc {
-			return newCompare(genericDescCompare[uint8], genericCopy[uint8])
+			return newCompare(genericDescCompare[uint8], genericCopy[uint8], nullsLast)
 		}
-		return newCompare(genericCompare[uint8], genericCopy[uint8])
+		return newCompare(genericAscCompare[uint8], genericCopy[uint8], nullsLast)
 	case types.T_uint16:
 		if desc {
-			return newCompare(genericDescCompare[uint16], genericCopy[uint16])
+			return newCompare(genericDescCompare[uint16], genericCopy[uint16], nullsLast)
 		}
-		return newCompare(genericCompare[uint16], genericCopy[uint16])
+		return newCompare(genericAscCompare[uint16], genericCopy[uint16], nullsLast)
 	case types.T_uint32:
 		if desc {
-			return newCompare(genericDescCompare[uint32], genericCopy[uint32])
+			return newCompare(genericDescCompare[uint32], genericCopy[uint32], nullsLast)
 		}
-		return newCompare(genericCompare[uint32], genericCopy[uint32])
+		return newCompare(genericAscCompare[uint32], genericCopy[uint32], nullsLast)
 	case types.T_uint64:
 		if desc {
-			return newCompare(genericDescCompare[uint64], genericCopy[uint64])
+			return newCompare(genericDescCompare[uint64], genericCopy[uint64], nullsLast)
 		}
-		return newCompare(genericCompare[uint64], genericCopy[uint64])
+		return newCompare(genericAscCompare[uint64], genericCopy[uint64], nullsLast)
 	case types.T_float32:
 		if desc {
-			return newCompare(genericDescCompare[float32], genericCopy[float32])
+			return newCompare(genericDescCompare[float32], genericCopy[float32], nullsLast)
 		}
-		return newCompare(genericCompare[float32], genericCopy[float32])
+		return newCompare(genericAscCompare[float32], genericCopy[float32], nullsLast)
 	case types.T_float64:
 		if desc {
-			return newCompare(genericDescCompare[float64], genericCopy[float64])
+			return newCompare(genericDescCompare[float64], genericCopy[float64], nullsLast)
 		}
-		return newCompare(genericCompare[float64], genericCopy[float64])
+		return newCompare(genericAscCompare[float64], genericCopy[float64], nullsLast)
 	case types.T_date:
 		if desc {
-			return newCompare(genericDescCompare[types.Date], genericCopy[types.Date])
+			return newCompare(genericDescCompare[types.Date], genericCopy[types.Date], nullsLast)
 		}
-		return newCompare(genericCompare[types.Date], genericCopy[types.Date])
+		return newCompare(genericAscCompare[types.Date], genericCopy[types.Date], nullsLast)
 	case types.T_datetime:
 		if desc {
-			return newCompare(genericDescCompare[types.Datetime], genericCopy[types.Datetime])
+			return newCompare(genericDescCompare[types.Datetime], genericCopy[types.Datetime], nullsLast)
 		}
-		return newCompare(genericCompare[types.Datetime], genericCopy[types.Datetime])
+		return newCompare(genericAscCompare[types.Datetime], genericCopy[types.Datetime], nullsLast)
 	case types.T_timestamp:
 		if desc {
-			return newCompare(genericDescCompare[types.Timestamp], genericCopy[types.Timestamp])
+			return newCompare(genericDescCompare[types.Timestamp], genericCopy[types.Timestamp], nullsLast)
 		}
-		return newCompare(genericCompare[types.Timestamp], genericCopy[types.Timestamp])
+		return newCompare(genericAscCompare[types.Timestamp], genericCopy[types.Timestamp], nullsLast)
 	case types.T_decimal64:
 		if desc {
-			return newCompare(decimal64DescCompare, decimal64Copy)
+			return newCompare(decimal64DescCompare, decimal64Copy, nullsLast)
 		}
-		return newCompare(decimal64Compare, decimal64Copy)
+		return newCompare(decimal64AscCompare, decimal64Copy, nullsLast)
 	case types.T_decimal128:
 		if desc {
-			return newCompare(decimal128DescCompare, decimal128Copy)
+			return newCompare(decimal128DescCompare, decimal128Copy, nullsLast)
 		}
-		return newCompare(decimal128Compare, decimal128Copy)
+		return newCompare(decimal128AscCompare, decimal128Copy, nullsLast)
 	case types.T_TS:
 		if desc {
-			return newCompare(txntsDescCompare, txntsCopy)
+			return newCompare(txntsDescCompare, txntsCopy, nullsLast)
 		}
-		return newCompare(txntsCompare, txntsCopy)
+		return newCompare(txntsAscCompare, txntsCopy, nullsLast)
 	case types.T_Rowid:
 		if desc {
-			return newCompare(rowidDescCompare, rowidCopy)
+			return newCompare(rowidDescCompare, rowidCopy, nullsLast)
 		}
-		return newCompare(rowidCompare, rowidCopy)
+		return newCompare(rowidAscCompare, rowidCopy, nullsLast)
 
 	case types.T_char, types.T_varchar, types.T_blob:
 		return &strCompare{
-			desc: desc,
-			vs:   make([]*vector.Vector, 2),
+			desc:      desc,
+			nullsLast: nullsLast,
+			vs:        make([]*vector.Vector, 2),
 		}
 	}
 	return nil
 }
 
-func boolCompare[T bool](x, y T) int {
+func boolAscCompare(x, y bool) int {
 	if x == y {
 		return 0
 	}
@@ -135,20 +136,20 @@ func boolCompare[T bool](x, y T) int {
 	return 1
 }
 
-func decimal64Compare(x, y types.Decimal64) int {
+func decimal64AscCompare(x, y types.Decimal64) int {
 	return x.Compare(y)
 }
-func decimal128Compare(x, y types.Decimal128) int {
+func decimal128AscCompare(x, y types.Decimal128) int {
 	return x.Compare(y)
 }
-func txntsCompare(x, y types.TS) int {
+func txntsAscCompare(x, y types.TS) int {
 	return bytes.Compare(x[:], y[:])
 }
-func rowidCompare(x, y types.Rowid) int {
+func rowidAscCompare(x, y types.Rowid) int {
 	return bytes.Compare(x[:], x[:])
 }
 
-func genericCompare[T types.OrderedT](x, y T) int {
+func genericAscCompare[T types.OrderedT](x, y T) int {
 	if x == y {
 		return 0
 	}
@@ -158,7 +159,7 @@ func genericCompare[T types.OrderedT](x, y T) int {
 	return 1
 }
 
-func boolDescCompare[T bool](x, y T) int {
+func boolDescCompare(x, y bool) int {
 	if x == y {
 		return 0
 	}
@@ -215,13 +216,14 @@ func genericCopy[T types.OrderedT](vecDst, vecSrc []T, dst, src int64) {
 	vecDst[dst] = vecSrc[src]
 }
 
-func newCompare[T any](cmp func(T, T) int, cpy func([]T, []T, int64, int64)) *compare[T] {
+func newCompare[T any](cmp func(T, T) int, cpy func([]T, []T, int64, int64), nullsLast bool) *compare[T] {
 	return &compare[T]{
-		cmp: cmp,
-		cpy: cpy,
-		xs:  make([][]T, 2),
-		ns:  make([]*nulls.Nulls, 2),
-		vs:  make([]*vector.Vector, 2),
+		cmp:       cmp,
+		cpy:       cpy,
+		xs:        make([][]T, 2),
+		ns:        make([]*nulls.Nulls, 2),
+		vs:        make([]*vector.Vector, 2),
+		nullsLast: nullsLast,
 	}
 }
 
@@ -236,6 +238,10 @@ func (c *compare[T]) Set(idx int, vec *vector.Vector) {
 }
 
 func (c *compare[T]) Compare(veci, vecj int, vi, vj int64) int {
+	cmp := nullsCompare(c.ns[veci], c.ns[vecj], vi, vj, c.nullsLast)
+	if cmp != 0 {
+		return cmp
+	}
 	return c.cmp(c.xs[veci][vi], c.xs[vecj][vj])
 }
 
