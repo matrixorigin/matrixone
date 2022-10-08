@@ -22,6 +22,11 @@ acos(d)	acos(fl)
 null	null
 null	null
 1.5707963267948966	1.5707963267948966
+select asin(d),asin(fl)from t1;
+1.5707963267948966	null
+null	null
+null	null
+0.0	0.0
 select cot(d),cot(fl) from t1;
 invalid argument cot, bad value cot(0)
 select cot(d),cot(fl) from t1 where d <> 0;

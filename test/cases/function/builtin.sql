@@ -45,6 +45,17 @@ select a from t1 where reverse(a) like 'daf%';
 -- @separator:table
 select reverse(a) reversea,reverse(reverse(a)) normala from t1;
 
+-- @suite
+-- @setup
+drop table if exists t1;
+create table t1(a int,b float);
+insert into t1 values(0,0),(-15,-20),(-22,-12.5);
+insert into t1 values(0,360),(30,390),(90,450),(180,270),(180,180);
+-- @case
+-- @desc:test for func asin() select
+select asin(a*pi()/180) as asina,asin(b*pi()/180) asinb from t1;
+select asin(a*pi()/180)*asin(b*pi()/180) as asinab,asin(asin(a*pi()/180)) as c from t1;
+select b from t1 where asin(a*pi()/180)<=asin(b*pi()/180)  order by a;
 
 -- @suite
 -- @setup

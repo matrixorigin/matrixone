@@ -55,6 +55,34 @@ drop table if exists t1;
 create table t1(a int,b float);
 insert into t1 values(0,0),(-15,-20),(-22,-12.5);
 insert into t1 values(0,360),(30,390),(90,450),(180,270),(180,180);
+select asin(a*pi()/180) as asina,asin(b*pi()/180) asinb from t1;
+asina    asinb
+0.0   0.0
+-0.2648861470242359    -0.3565740648516705
+-0.3940946924127281    -0.21993496640432902
+0.0    null
+0.5510695830994463    null
+null    null
+null    null
+null    null
+select asin(a*pi()/180)*asin(b*pi()/180) as asinab,asin(asin(a*pi()/180)) as c from t1;
+asinab    c
+0.0    0.0
+0.09445153016732902    -0.2680858499149679
+0.08667520293591774    -0.40508261689553404
+null    0.0
+null    0.5836454640438544
+null    null
+null    null
+null    null
+select b from t1 where asin(a*pi()/180)<=asin(b*pi()/180)  order by a;
+b
+-12.5
+0.0
+drop table if exists t1;
+create table t1(a int,b float);
+insert into t1 values(0,0),(-15,-20),(-22,-12.5);
+insert into t1 values(0,360),(30,390),(90,450),(180,270),(180,180);
 select acos(a*pi()/180) as acosa,acos(b*pi()/180) acosb from t1;
 acosa    acosb
 1.5707963267948966    1.5707963267948966

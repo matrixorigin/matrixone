@@ -8,11 +8,12 @@ insert into t1 values(3,null,null,null);
 insert into t1 values(4,0,0,0);
 
 -- @case
--- @desc:test for sinh,atan,acos,cot,tan,sin
+-- @desc:test for sinh,atan,acos,asin,cot,tan,sin
 -- @label:bvt
 select sinh(d),sinh(fl)from t1;
 select atan(d),atan(fl)from t1;
 select acos(d),acos(fl)from t1;
+select asin(d),asin(fl)from t1;
 
 select cot(d),cot(fl) from t1;
 select cot(d),cot(fl) from t1 where d <> 0;
