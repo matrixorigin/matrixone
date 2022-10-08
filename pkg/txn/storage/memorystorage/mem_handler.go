@@ -68,6 +68,7 @@ type MemHandler struct {
 	mheap                  *mheap.Mheap
 	defaultIsolationPolicy IsolationPolicy
 	clock                  clock.Clock
+	idGenerator            memoryengine.IDGenerator
 }
 
 type Iter[
@@ -87,6 +88,7 @@ func NewMemHandler(
 	mheap *mheap.Mheap,
 	defaultIsolationPolicy IsolationPolicy,
 	clock clock.Clock,
+	idGenerator memoryengine.IDGenerator,
 ) *MemHandler {
 	h := &MemHandler{
 		databases:              memtable.NewTable[ID, *DatabaseRow, *DatabaseRow](),
@@ -97,6 +99,7 @@ func NewMemHandler(
 		mheap:                  mheap,
 		defaultIsolationPolicy: defaultIsolationPolicy,
 		clock:                  clock,
+		idGenerator:            idGenerator,
 	}
 	h.transactions.Map = make(map[string]*Transaction)
 	h.iterators.Map = make(map[ID]*Iter[DataKey, DataValue])
@@ -172,8 +175,12 @@ func (m *MemHandler) HandleAddTableDef(ctx context.Context, meta txn.TxnMeta, re
 			return moerr.NewConstraintViolation(`duplicate column "%s"`, def.Attr.Name)
 		}
 		// insert
+		id, err := m.idGenerator.NewID(ctx)
+		if err != nil {
+			return err
+		}
 		attrRow := &AttributeRow{
-			ID:         memoryengine.NewID(),
+			ID:         id,
 			RelationID: req.TableID,
 			Order:      maxAttributeOrder + 1,
 			Nullable:   def.Attr.Default != nil && def.Attr.Default.NullAbility,
@@ -198,8 +205,12 @@ func (m *MemHandler) HandleAddTableDef(ctx context.Context, meta txn.TxnMeta, re
 			return moerr.NewDuplicate()
 		}
 		// insert
+		id, err := m.idGenerator.NewID(ctx)
+		if err != nil {
+			return err
+		}
 		idxRow := &IndexRow{
-			ID:            memoryengine.NewID(),
+			ID:            id,
 			RelationID:    req.TableID,
 			IndexTableDef: *def,
 		}
@@ -278,9 +289,14 @@ func (m *MemHandler) HandleCreateDatabase(ctx context.Context, meta txn.TxnMeta,
 		return moerr.NewDBAlreadyExists(req.Name)
 	}
 
-	id := memoryengine.NewID()
+	if req.ID.IsEmpty() {
+		req.ID, err = m.idGenerator.NewID(ctx)
+		if err != nil {
+			return err
+		}
+	}
 	err = m.databases.Insert(tx, &DatabaseRow{
-		ID:        id,
+		ID:        req.ID,
 		AccountID: req.AccessInfo.AccountID,
 		Name:      []byte(req.Name),
 	})
@@ -288,7 +304,7 @@ func (m *MemHandler) HandleCreateDatabase(ctx context.Context, meta txn.TxnMeta,
 		return err
 	}
 
-	resp.ID = id
+	resp.ID = req.ID
 	return nil
 }
 
@@ -320,8 +336,14 @@ func (m *MemHandler) HandleCreateRelation(ctx context.Context, meta txn.TxnMeta,
 	}
 
 	// row
+	if req.ID.IsEmpty() {
+		req.ID, err = m.idGenerator.NewID(ctx)
+		if err != nil {
+			return err
+		}
+	}
 	row := &RelationRow{
-		ID:         memoryengine.NewID(),
+		ID:         req.ID,
 		DatabaseID: req.DatabaseID,
 		Name:       []byte(req.Name),
 		Type:       req.Type,
@@ -395,8 +417,12 @@ func (m *MemHandler) HandleCreateRelation(ctx context.Context, meta txn.TxnMeta,
 			}
 			attr.Primary = isPrimary
 		}
+		id, err := m.idGenerator.NewID(ctx)
+		if err != nil {
+			return err
+		}
 		attrRow := &AttributeRow{
-			ID:         memoryengine.NewID(),
+			ID:         id,
 			RelationID: row.ID,
 			Order:      i + 1,
 			Nullable:   attr.Default != nil && attr.Default.NullAbility,
@@ -409,8 +435,12 @@ func (m *MemHandler) HandleCreateRelation(ctx context.Context, meta txn.TxnMeta,
 
 	// insert relation indexes
 	for _, idx := range relIndexes {
+		id, err := m.idGenerator.NewID(ctx)
+		if err != nil {
+			return err
+		}
 		idxRow := &IndexRow{
-			ID:            memoryengine.NewID(),
+			ID:            id,
 			RelationID:    row.ID,
 			IndexTableDef: idx,
 		}
@@ -912,7 +942,10 @@ func (m *MemHandler) HandleNewTableIter(ctx context.Context, meta txn.TxnMeta, r
 
 	m.iterators.Lock()
 	defer m.iterators.Unlock()
-	id := memoryengine.NewID()
+	id, err := m.idGenerator.NewID(ctx)
+	if err != nil {
+		return err
+	}
 	resp.IterID = id
 	m.iterators.Map[id] = iter
 
@@ -1238,7 +1271,7 @@ func (m *MemHandler) HandleCommitting(ctx context.Context, meta txn.TxnMeta) err
 }
 
 func (m *MemHandler) HandleDestroy(ctx context.Context) error {
-	*m = *NewMemHandler(m.mheap, m.defaultIsolationPolicy, m.clock)
+	*m = *NewMemHandler(m.mheap, m.defaultIsolationPolicy, m.clock, m.idGenerator)
 	return nil
 }
 

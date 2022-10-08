@@ -74,6 +74,7 @@
 /pkg/util/metric @aptend
 /pkg/util/toml @zhangxu19830126
 /pkg/util/trace @xzxiong
+/pkg/catalog @nnsgmsone
 
 # /proto contains pb definitions, owners will be responsible
 # for compatibility issues required for rolling upgrade.

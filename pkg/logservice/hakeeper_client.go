@@ -48,6 +48,8 @@ type DNHAKeeperClient interface {
 	// returned CommandBatch contains Schedule Commands to be executed by the local
 	// DN store.
 	SendDNHeartbeat(ctx context.Context, hb pb.DNStoreHeartbeat) (pb.CommandBatch, error)
+	// AllocateID allocate a globally unique ID
+	AllocateID(ctx context.Context) (uint64, error)
 }
 
 // LogHAKeeperClient is the HAKeeper client used by a Log store.
