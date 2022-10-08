@@ -94,6 +94,9 @@ func (txn *Txn) rollback2PC() (err error) {
 		txn.Wait()
 
 	case txnif.TxnStatePrepared:
+		//Notice that at this moment, txn had already appended data into state machine, so
+		// we can not just delete the AppendNode from the MVCCHandle, instead ,we should
+		// set the state of the AppendNode to Abort to make reader perceive it .
 		_ = txn.ApplyRollback()
 		txn.DoneWithErr(nil, true)
 
@@ -111,24 +114,32 @@ func (txn *Txn) commit2PC() (err error) {
 	state := txn.GetTxnState(false)
 
 	switch state {
+	//It's a 2PC transaction running on Coordinator
 	case txnif.TxnStateCommittingFinished:
 		if err = txn.ApplyCommit(); err != nil {
 			panic(err)
 		}
-		//TODO:Append committed log entry into log service asynchronously
-		//     for checkpointing the committing log entry
-		//txn.SetError(txn.LogTxnEntry())
 		txn.DoneWithErr(nil, false)
+		//Append a committed log entry into log service asynchronously
+		//     for checkpointing the committing log entry
+		_, err = txn.LogTxnState(false)
+		if err != nil {
+			panic(err)
+		}
 
-	//It's a 2PC transaction running in Participant.
-	//Notice that Commit must be success once the commit message arrives,
-	//since Preparing had already succeeded.
+	//It's a 2PC transaction running on Participant.
+	//Notice that Commit must be successful once the commit message arrives,
+	//since Committing had succeed.
 	case txnif.TxnStatePrepared:
 		if err = txn.ApplyCommit(); err != nil {
 			panic(err)
 		}
-		// TODO: Append committed log entry
 		txn.DoneWithErr(nil, false)
+		//Append committed log entry ,and wait it synced.
+		_, err = txn.LogTxnState(true)
+		if err != nil {
+			panic(err)
+		}
 
 	default:
 		logutil.Warnf("unexpected txn state : %s", txnif.TxnStrState(state))

@@ -34,8 +34,8 @@ type BfReader struct {
 }
 
 func newBfReader(mgr base.INodeManager, typ types.Type, id common.ID, col file.ColumnBlock, metaloc string) *BfReader {
-	metaKey := evictable.EncodeColMetaKey(&id)
-	bfKey := evictable.EncodeColBfKey(&id)
+	metaKey := evictable.EncodeColMetaKey(id.Idx, metaloc)
+	bfKey := evictable.EncodeColBfKey(id.Idx, metaloc)
 
 	return &BfReader{
 		mgr:       mgr,

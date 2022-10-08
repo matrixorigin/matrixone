@@ -72,6 +72,9 @@ func (bf *blockFile) WriteBatch(bat *containers.Batch, ts types.TS) (blk objecti
 func (bf *blockFile) GetWriter() objectio.Writer {
 	return bf.writer.writer
 }
+func (bf *blockFile) FreeWriter() {
+	bf.writer = nil
+}
 
 func (bf *blockFile) Fingerprint() *common.ID {
 	return bf.id
@@ -162,7 +165,7 @@ func (bf *blockFile) GetDelta() objectio.BlockObject {
 }
 
 func (bf *blockFile) GetDeltaFormKey(metaLoc string) objectio.BlockObject {
-	name, extent, _ := DecodeMetaLoc(metaLoc)
+	name, extent := DecodeDeltaLoc(metaLoc)
 	if bf.reader == nil {
 		bf.reader = NewReader(bf.seg.fs, bf, name)
 	}
