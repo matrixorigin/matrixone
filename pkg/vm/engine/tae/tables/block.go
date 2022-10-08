@@ -51,14 +51,6 @@ func init() {
 	ImmutMemAllocator = stl.NewSimpleAllocator()
 }
 
-type BlockState int8
-
-// BlockState is the state of the data block, which is different from the state of the mate
-const (
-	BS_Appendable BlockState = iota
-	BS_NotAppendable
-)
-
 // The initial state of the block when scoring
 type statBlock struct {
 	rows      uint32
@@ -69,19 +61,19 @@ type dataBlock struct {
 	common.RefHelper
 	*sync.RWMutex
 	common.ClosedState
-	meta       *catalog.BlockEntry
-	node       *appendableNode
-	file       file.Block
-	colObjects map[int]file.ColumnBlock
-	bufMgr     base.INodeManager
-	scheduler  tasks.TaskScheduler
-	indexes    map[int]indexwrapper.Index
-	pkIndex    indexwrapper.Index // a shortcut, nil if no pk column
-	mvcc       *updates.MVCCHandle
-	score      *statBlock
-	ckpTs      atomic.Value
-	prefix     []byte
-	state      BlockState
+	meta         *catalog.BlockEntry
+	node         *appendableNode
+	file         file.Block
+	colObjects   map[int]file.ColumnBlock
+	bufMgr       base.INodeManager
+	scheduler    tasks.TaskScheduler
+	indexes      map[int]indexwrapper.Index
+	pkIndex      indexwrapper.Index // a shortcut, nil if no pk column
+	mvcc         *updates.MVCCHandle
+	score        *statBlock
+	ckpTs        atomic.Value
+	prefix       []byte
+	appendFrozen bool
 }
 
 func newBlock(meta *catalog.BlockEntry, segFile file.Segment, bufMgr base.INodeManager, scheduler tasks.TaskScheduler) *dataBlock {
@@ -146,7 +138,6 @@ func newBlock(meta *catalog.BlockEntry, segFile file.Segment, bufMgr base.INodeM
 				block.indexes[colDef.Idx] = indexwrapper.NewMutableIndex(colDef.Type)
 			}
 		}
-		block.state = BS_Appendable
 	} else {
 		block.mvcc.SetDeletesListener(block.BlkApplyDelete)
 		// if this block is created to do compact or merge, no need to new index
@@ -167,16 +158,16 @@ func newBlock(meta *catalog.BlockEntry, segFile file.Segment, bufMgr base.INodeM
 func (blk *dataBlock) ReadTS() (ts types.TS)        { return }
 func (blk *dataBlock) GetMeta() any                 { return blk.meta }
 func (blk *dataBlock) GetBufMgr() base.INodeManager { return blk.bufMgr }
-func (blk *dataBlock) SetNotAppendable() {
+func (blk *dataBlock) FreezeAppend() {
 	blk.Lock()
 	defer blk.Unlock()
-	blk.state = BS_NotAppendable
+	blk.appendFrozen = true
 }
 
-func (blk *dataBlock) GetBlockState() BlockState {
+func (blk *dataBlock) IsAppendFrozen() bool {
 	blk.RLock()
 	defer blk.RUnlock()
-	return blk.state
+	return blk.appendFrozen
 }
 
 func (blk *dataBlock) SetMaxCheckpointTS(ts types.TS) {
@@ -342,7 +333,7 @@ func (blk *dataBlock) BuildCompactionTaskFactory() (
 	scopes []common.ID,
 	err error) {
 	// If the conditions are met, immediately modify the data block status to NotAppendable
-	blk.SetNotAppendable()
+	blk.FreezeAppend()
 	blk.meta.RLock()
 	dropped := blk.meta.IsDroppedCommitted()
 	inTxn := blk.meta.IsCreating()
@@ -367,7 +358,7 @@ func (blk *dataBlock) IsAppendable() bool {
 		return false
 	}
 
-	if blk.GetBlockState() == BS_NotAppendable {
+	if blk.IsAppendFrozen() {
 		return false
 	}
 
