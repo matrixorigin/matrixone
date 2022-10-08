@@ -213,8 +213,8 @@ type optionsFactory func(db, tbl string) trace.TableOptions
 
 // instead MetricFamily, Desc is used to create tables because we don't want collect errors come into the picture.
 func createTableSqlFromMetricFamily(desc *prom.Desc, _ *bytes.Buffer, _ optionsFactory) string {
-	var labelNames []string
 	extra := newDescExtra(desc)
+	var labelNames = make([]string, 0, len(extra.labels))
 	for _, lbl := range extra.labels {
 		labelNames = append(labelNames, lbl.GetName())
 	}
