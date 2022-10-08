@@ -66,13 +66,49 @@ func (tbl *table) Ranges(ctx context.Context, expr *plan.Expr) ([][]byte, error)
 		blks := tbl.parts[i].BlockList(ctx, tbl.db.txn.meta.SnapshotTS,
 			tbl.meta.blocks[i], writes)
 		for _, blk := range blks {
-			if needRead(expr, blk) {
+			if needRead(expr, blk, tbl.getTableDef(), tbl.proc) {
 				ranges = append(ranges, blockMarshal(blk))
 			}
 		}
-		tbl.meta.modifedBlocks[i] = genModifedBlocks(tbl.meta.blocks[i], blks, expr)
+		tbl.meta.modifedBlocks[i] = genModifedBlocks(tbl.meta.blocks[i], blks, expr, tbl.getTableDef(), tbl.proc)
 	}
 	return ranges, nil
+}
+
+// getTableDef only return all cols and their index.
+func (tbl *table) getTableDef() *plan.TableDef {
+	if tbl.tableDef == nil {
+		var cols []*plan.ColDef
+		i := int32(0)
+		name2index := make(map[string]int32)
+		for _, def := range tbl.defs {
+			if attr, ok := def.(*engine.AttributeDef); ok {
+				name2index[attr.Attr.Name] = i
+				cols = append(cols, &plan.ColDef{
+					Name: attr.Attr.Name,
+					Typ: &plan.Type{
+						Id:        int32(attr.Attr.Type.Oid),
+						Width:     attr.Attr.Type.Width,
+						Size:      attr.Attr.Type.Size,
+						Precision: attr.Attr.Type.Precision,
+						Scale:     attr.Attr.Type.Scale,
+					},
+					Primary:       attr.Attr.Primary,
+					Default:       attr.Attr.Default,
+					OnUpdate:      attr.Attr.OnUpdate,
+					Comment:       attr.Attr.Comment,
+					AutoIncrement: attr.Attr.AutoIncrement,
+				})
+				i++
+			}
+		}
+		tbl.tableDef = &plan.TableDef{
+			Name:          tbl.tableName,
+			Cols:          cols,
+			Name2ColIndex: name2index,
+		}
+	}
+	return tbl.tableDef
 }
 
 func (tbl *table) TableDefs(ctx context.Context) ([]engine.TableDef, error) {
@@ -104,7 +140,7 @@ func (tbl *table) GetHideKeys(ctx context.Context) ([]*engine.Attribute, error) 
 }
 
 func (tbl *table) Write(ctx context.Context, bat *batch.Batch) error {
-	bats, err := partitionBatch(bat, tbl.insertExpr, tbl.db.txn.m, len(tbl.parts))
+	bats, err := partitionBatch(bat, tbl.insertExpr, tbl.db.txn.proc, len(tbl.parts))
 	if err != nil {
 		return err
 	}
@@ -127,7 +163,7 @@ func (tbl *table) Update(ctx context.Context, bat *batch.Batch) error {
 func (tbl *table) Delete(ctx context.Context, vec *vector.Vector, name string) error {
 	bat := batch.NewWithSize(1)
 	bat.Vecs[0] = vec
-	bats, err := partitionBatch(bat, tbl.insertExpr, tbl.db.txn.m, len(tbl.parts))
+	bats, err := partitionBatch(bat, tbl.insertExpr, tbl.db.txn.proc, len(tbl.parts))
 	if err != nil {
 		return err
 	}
@@ -159,8 +195,7 @@ func (tbl *table) GetTableID(ctx context.Context) string {
 	return strconv.FormatUint(tbl.tableId, 10)
 }
 
-func (tbl *table) NewReader(ctx context.Context, num int, expr *plan.Expr,
-	ranges [][]byte) ([]engine.Reader, error) {
+func (tbl *table) NewReader(ctx context.Context, num int, expr *plan.Expr, ranges [][]byte) ([]engine.Reader, error) {
 	rds := make([]engine.Reader, num)
 	if len(ranges) == 0 {
 		return tbl.newMergeReader(ctx, num, expr)
@@ -172,8 +207,10 @@ func (tbl *table) NewReader(ctx context.Context, num int, expr *plan.Expr,
 	if len(ranges) < num {
 		for i := range ranges {
 			rds[i] = &blockReader{
-				ctx:  ctx,
-				blks: []BlockMeta{blks[i]},
+				fs:       tbl.proc.FileService,
+				tableDef: tbl.getTableDef(),
+				ctx:      ctx,
+				blks:     []BlockMeta{blks[i]},
 			}
 		}
 		for j := len(ranges); j < num; j++ {
@@ -203,8 +240,7 @@ func (tbl *table) NewReader(ctx context.Context, num int, expr *plan.Expr,
 	return rds, nil
 }
 
-func (tbl *table) newMergeReader(ctx context.Context, num int,
-	expr *plan.Expr) ([]engine.Reader, error) {
+func (tbl *table) newMergeReader(ctx context.Context, num int, expr *plan.Expr) ([]engine.Reader, error) {
 	var writes [][]Entry
 
 	// consider halloween problem
