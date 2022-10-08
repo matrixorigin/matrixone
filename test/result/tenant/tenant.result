@@ -1,6 +1,8 @@
+drop account if exists tenant_test;
 create account tenant_test admin_name = 'root' identified by '111' open comment 'tenant_test';
 create account tenant_test admin_name = 'root' identified by '111' open comment 'tenant_test';
 internal error: the tenant tenant_test exists
 create account if not exists tenant_test admin_name = 'root' identified by '111' open comment 'tenant_test';
 create account tenant_test admin_name = 'root' open comment 'tenant_test';
 SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 51 near " open comment 'tenant_test';";
+drop account if exists tenant_test;

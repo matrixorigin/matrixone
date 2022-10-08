@@ -21,4 +21,5 @@ import (
 const (
 	ETInsertNode = entry.ETCustomizedStart + 1 + iota
 	ETTxnRecord
+	ETTxnState
 )

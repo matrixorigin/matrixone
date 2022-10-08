@@ -15,6 +15,8 @@
 package memorystorage
 
 import (
+	"context"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	apipb "github.com/matrixorigin/matrixone/pkg/pb/api"
@@ -22,7 +24,7 @@ import (
 	txnengine "github.com/matrixorigin/matrixone/pkg/vm/engine/memoryengine"
 )
 
-func (m *MemHandler) HandlePreCommit(meta txn.TxnMeta, req apipb.PrecommitWriteCmd,
+func (m *MemHandler) HandlePreCommit(ctx context.Context, meta txn.TxnMeta, req apipb.PrecommitWriteCmd,
 	resp *apipb.SyncLogTailResp) (err error) {
 	var e any
 
@@ -36,31 +38,29 @@ func (m *MemHandler) HandlePreCommit(meta txn.TxnMeta, req apipb.PrecommitWriteC
 		case []catalog.CreateDatabase:
 			for _, cmd := range cmds {
 				req := txnengine.CreateDatabaseReq{
-					Name: cmd.Name,
 					ID:   ID(cmd.DatabaseId),
+					Name: cmd.Name,
 					AccessInfo: txnengine.AccessInfo{
 						UserID:    cmd.Owner,
 						RoleID:    cmd.Creator,
 						AccountID: cmd.AccountId,
 					},
 				}
-				resp := new(txnengine.CreateDatabaseResp)
-				if err = m.HandleCreateDatabase(meta, req,
-					resp); err != nil {
+				if err = m.HandleCreateDatabase(ctx, meta, req,
+					new(txnengine.CreateDatabaseResp)); err != nil {
 					return err
 				}
 			}
 		case []catalog.CreateTable:
 			for _, cmd := range cmds {
-				databaseID := txnengine.ID(cmd.DatabaseId)
 				req := txnengine.CreateRelationReq{
 					ID:           ID(cmd.TableId),
 					Name:         cmd.Name,
 					DatabaseName: cmd.DatabaseName,
-					DatabaseID:   databaseID,
+					DatabaseID:   txnengine.ID(cmd.DatabaseId),
 					Defs:         cmd.Defs,
 				}
-				if err = m.HandleCreateRelation(meta, req,
+				if err = m.HandleCreateRelation(ctx, meta, req,
 					new(txnengine.CreateRelationResp)); err != nil {
 					return err
 				}
@@ -75,20 +75,19 @@ func (m *MemHandler) HandlePreCommit(meta txn.TxnMeta, req apipb.PrecommitWriteC
 						AccountID: req.AccountId,
 					},
 				}
-				if err = m.HandleDeleteDatabase(meta, req,
+				if err = m.HandleDeleteDatabase(ctx, meta, req,
 					new(txnengine.DeleteDatabaseResp)); err != nil {
 					return err
 				}
 			}
 		case []catalog.DropTable:
 			for _, cmd := range cmds {
-				databaseID := txnengine.ID(cmd.DatabaseId)
 				req := txnengine.DeleteRelationReq{
 					Name:         cmd.Name,
 					DatabaseName: cmd.DatabaseName,
-					DatabaseID:   databaseID,
+					DatabaseID:   txnengine.ID(cmd.DatabaseId),
 				}
-				if err = m.HandleDeleteRelation(meta, req,
+				if err = m.HandleDeleteRelation(ctx, meta, req,
 					new(txnengine.DeleteRelationResp)); err != nil {
 					return err
 				}
@@ -106,7 +105,7 @@ func (m *MemHandler) HandlePreCommit(meta txn.TxnMeta, req apipb.PrecommitWriteC
 					TableName:    pe.GetTableName(),
 					Batch:        bat,
 				}
-				if err = m.HandleWrite(meta, req,
+				if err = m.HandleWrite(ctx, meta, req,
 					new(txnengine.WriteResp)); err != nil {
 					return err
 				}
@@ -118,7 +117,7 @@ func (m *MemHandler) HandlePreCommit(meta txn.TxnMeta, req apipb.PrecommitWriteC
 					ColumnName:   bat.Attrs[0],
 					Vector:       bat.Vecs[0],
 				}
-				if err = m.HandleDelete(meta, req,
+				if err = m.HandleDelete(ctx, meta, req,
 					new(txnengine.DeleteResp)); err != nil {
 					return err
 				}
@@ -128,6 +127,6 @@ func (m *MemHandler) HandlePreCommit(meta txn.TxnMeta, req apipb.PrecommitWriteC
 	return nil
 }
 
-func (c *CatalogHandler) HandlePreCommit(meta txn.TxnMeta, req apipb.PrecommitWriteCmd, resp *apipb.SyncLogTailResp) (err error) {
-	return c.upstream.HandlePreCommit(meta, req, resp)
+func (c *CatalogHandler) HandlePreCommit(ctx context.Context, meta txn.TxnMeta, req apipb.PrecommitWriteCmd, resp *apipb.SyncLogTailResp) (err error) {
+	return c.upstream.HandlePreCommit(ctx, meta, req, resp)
 }

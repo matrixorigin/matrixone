@@ -15,10 +15,10 @@
 package txnif
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
 	"io"
 	"sync"
-
-	"github.com/matrixorigin/matrixone/pkg/pb/api"
 
 	"github.com/RoaringBitmap/roaring"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -46,6 +46,7 @@ type TxnReader interface {
 	GetStartTS() types.TS
 	GetCommitTS() types.TS
 	GetPrepareTS() types.TS
+	GetParticipants() []uint64
 	GetInfo() []byte
 	IsVisible(o TxnReader) bool
 	GetTxnState(waitIfcommitting bool) TxnState
@@ -88,11 +89,14 @@ type TxnChanger interface {
 	Committing() error
 	Commit() error
 	Rollback() error
+	SetCommitTS(cts types.TS) error
+	SetParticipants(ids []uint64) error
 	SetError(error)
 }
 
 type TxnWriter interface {
 	LogTxnEntry(dbId, tableId uint64, entry TxnEntry, readed []*common.ID) error
+	LogTxnState(sync bool) (entry.Entry, error)
 }
 
 type TxnAsyncer interface {
@@ -158,14 +162,49 @@ type DeleteChain interface {
 	DepthLocked() int
 	CollectDeletesLocked(ts types.TS, collectIndex bool, rwlocker *sync.RWMutex) (DeleteNode, error)
 }
+type MVCCNode interface {
+	String() string
 
+	IsVisible(ts types.TS) (visible bool)
+	CheckConflict(ts types.TS) error
+	Update(o MVCCNode)
+
+	PreparedIn(minTS, maxTS types.TS) (in, before bool)
+	CommittedIn(minTS, maxTS types.TS) (in, before bool)
+	NeedWaitCommitting(ts types.TS) (bool, TxnReader)
+	IsSameTxn(ts types.TS) bool
+	IsActive() bool
+	IsCommitting() bool
+	IsCommitted() bool
+	IsAborted() bool
+	Set1PC()
+	Is1PC() bool
+
+	GetEnd() types.TS
+	GetStart() types.TS
+	GetPrepare() types.TS
+	GetTxn() TxnReader
+	SetLogIndex(idx *wal.Index)
+	GetLogIndex() *wal.Index
+
+	ApplyCommit(index *wal.Index) (err error)
+	ApplyRollback(index *wal.Index) (err error)
+	PrepareCommit() (err error)
+
+	WriteTo(w io.Writer) (n int64, err error)
+	ReadFrom(r io.Reader) (n int64, err error)
+	CloneData() MVCCNode
+	CloneAll() MVCCNode
+}
 type AppendNode interface {
+	MVCCNode
 	TxnEntry
 	GetStartRow() uint32
 	GetMaxRow() uint32
 }
 
 type DeleteNode interface {
+	MVCCNode
 	TxnEntry
 	StringLocked() string
 	GetChain() DeleteChain
@@ -229,6 +268,7 @@ type TxnStore interface {
 	AddTxnEntry(TxnEntryType, TxnEntry)
 
 	LogTxnEntry(dbId, tableId uint64, entry TxnEntry, readed []*common.ID) error
+	LogTxnState(sync bool) (entry.Entry, error)
 
 	IsReadonly() bool
 	IncreateWriteCnt() int
@@ -237,14 +277,15 @@ type TxnStore interface {
 	HasTableDataChanges(id uint64) bool
 	HasCatalogChanges() bool
 	GetDirtyTableByID(id uint64) *common.TableTree
+	GetDirty() *common.Tree
 }
 
 type TxnEntryType int16
 
 type TxnEntry interface {
-	sync.Locker
-	RLock()
-	RUnlock()
+	// sync.Locker
+	// RLock()
+	// RUnlock()
 	PrepareCommit() error
 	PrepareRollback() error
 	ApplyCommit(index *wal.Index) error

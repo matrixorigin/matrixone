@@ -314,8 +314,8 @@ github.com/lni/vfs v0.2.1-0.20220616104132-8852fd867376/go.mod h1:LOatfyR8Xeej1j
 github.com/lufia/plan9stats v0.0.0-20211012122336-39d0f177ccd0 h1:6E+4a0GO5zZEnZ81pIr0yLvtUWk2if982qA3F3QD6H4=
 github.com/lufia/plan9stats v0.0.0-20211012122336-39d0f177ccd0/go.mod h1:zJYVVT2jmtg6P3p1VtQj7WsuWi/y4VnjVBn7F8KPB3I=
 github.com/magiconair/properties v1.8.0/go.mod h1:PppfXfuXeibc/6YijjN8zIbojt8czPbwD3XqdrwzmxQ=
-github.com/matrixorigin/simdcsv v0.0.0-20220922082226-3db0f17ac30d h1:mQpZX4eXNa3Rmtx0sAMX7uIMacUzd5xah4qxdTmoejA=
-github.com/matrixorigin/simdcsv v0.0.0-20220922082226-3db0f17ac30d/go.mod h1:79jCHry8mER+PwqF5EMG3ZE4b0lflH1IE/zF3Zs6lR8=
+github.com/matrixorigin/simdcsv v0.0.0-20221007051957-5df242a514a8 h1:yr5ZAK1xhBs9i6YUNNjCXrMp2i2pA3gLH0ubNKOyxQU=
+github.com/matrixorigin/simdcsv v0.0.0-20221007051957-5df242a514a8/go.mod h1:79jCHry8mER+PwqF5EMG3ZE4b0lflH1IE/zF3Zs6lR8=
 github.com/mattn/go-colorable v0.1.2/go.mod h1:U0ppj6V5qS13XJ6of8GYAs25YV2eR4EVcfRqFIhoBtE=
 github.com/mattn/go-colorable v0.1.8/go.mod h1:u6P/XSegPjTcexA+o6vUJrdnUu04hMope9wVRipJSqc=
 github.com/mattn/go-colorable v0.1.11/go.mod h1:u5H1YNBxpqRaxsYJYSkiCWKzEfiAb1Gb520KVy5xxl4=

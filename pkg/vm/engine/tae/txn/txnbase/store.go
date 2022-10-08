@@ -19,6 +19,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/entry"
 )
 
 var NoopStoreFactory = func() txnif.TxnStore { return new(NoopTxnStore) }
@@ -94,11 +95,15 @@ func (store *NoopTxnStore) LogBlockID(dbId, tid, bid uint64)   {}
 func (store *NoopTxnStore) LogTxnEntry(dbId, tableId uint64, entry txnif.TxnEntry, readed []*common.ID) (err error) {
 	return
 }
+func (store *NoopTxnStore) LogTxnState(sync bool) (logEntry entry.Entry, err error) {
+	return
+}
 
 func (store *NoopTxnStore) IsReadonly() bool      { return false }
 func (store *NoopTxnStore) IncreateWriteCnt() int { return 0 }
 
 func (store *NoopTxnStore) HasAnyTableDataChanges() bool                  { return false }
+func (store *NoopTxnStore) GetDirty() *common.Tree                        { return nil }
 func (store *NoopTxnStore) HasTableDataChanges(id uint64) bool            { return false }
 func (store *NoopTxnStore) GetDirtyTableByID(id uint64) *common.TableTree { return nil }
 func (store *NoopTxnStore) HasCatalogChanges() bool                       { return false }

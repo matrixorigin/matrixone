@@ -15,6 +15,7 @@
 package memtable
 
 import (
+	"context"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -167,9 +168,15 @@ func (i Issue5388Row) Indexes() []Tuple {
 func TestIssue5388(t *testing.T) {
 	table := NewTable[memoryengine.ID, Issue5388Row, Issue5388Row]()
 
+	newID := func() ID {
+		id, err := memoryengine.RandomIDGenerator.NewID(context.Background())
+		assert.Nil(t, err)
+		return id
+	}
+
 	// insert 10, 10
 	tx1 := NewTransaction("1", ts(1), SnapshotIsolation)
-	id1 := memoryengine.NewID()
+	id1 := newID()
 	assert.Nil(t, table.Insert(tx1, Issue5388Row{
 		RowID: id1,
 		A:     10,
@@ -180,7 +187,7 @@ func TestIssue5388(t *testing.T) {
 	tx2 := NewTransaction("2", ts(2), SnapshotIsolation)
 	// set a = a - 1
 	assert.Nil(t, table.Delete(tx2, id1))
-	id2 := memoryengine.NewID()
+	id2 := newID()
 	assert.Nil(t, table.Insert(tx2, Issue5388Row{
 		RowID: id2,
 		A:     9,
@@ -188,7 +195,7 @@ func TestIssue5388(t *testing.T) {
 	}))
 	// set b = b + 1
 	assert.Nil(t, table.Delete(tx2, id2))
-	id3 := memoryengine.NewID()
+	id3 := newID()
 	assert.Nil(t, table.Insert(tx2, Issue5388Row{
 		RowID: id3,
 		A:     9,

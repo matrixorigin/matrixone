@@ -33,6 +33,9 @@ var ErrReadOnly = moerr.NewInternalError("tae moengine: read only")
 type Txn interface {
 	GetCtx() []byte
 	GetID() string
+	Is2PC() bool
+	SetCommitTS(cts types.TS) error
+	SetParticipants(ids []uint64) error
 	Prepare() (types.TS, error)
 	Committing() error
 	Commit() error
@@ -90,6 +93,8 @@ type TxnEngine interface {
 	StartTxn(info []byte) (txn Txn, err error)
 	GetOrCreateTxnWithMeta(info []byte, id []byte, ts types.TS) (txn Txn, err error)
 	GetTxnByID(id []byte) (txn Txn, err error)
+	Close() error
+	Destroy() error
 }
 
 var _ TxnEngine = &txnEngine{}
