@@ -2215,13 +2215,55 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr)
 		node.Children[1] = childID
 
 	case plan.Node_UNION, plan.Node_UNION_ALL, plan.Node_MINUS, plan.Node_MINUS_ALL, plan.Node_INTERSECT, plan.Node_INTERSECT_ALL:
-		childID, _ := builder.pushdownFilters(node.Children[0], nil)
+
+		leftTags := make(map[int32]*Binding)
+		for _, tag := range builder.enumerateTags(node.Children[0]) {
+			leftTags[tag] = nil
+		}
+
+		rightTags := make(map[int32]*Binding)
+		for _, tag := range builder.enumerateTags(node.Children[1]) {
+			rightTags[tag] = nil
+		}
+		var leftPushdown, rightPushdown []*plan.Expr
+		joinSides := make([]int8, len(filters))
+
+		for i, filter := range filters {
+			joinSides[i] = getJoinSide(filter, leftTags, rightTags)
+		}
+		for i, filter := range filters {
+			switch joinSides[i] {
+			case JoinSideNone:
+				cantPushdown = append(cantPushdown, filter)
+			case JoinSideBoth:
+				leftPushdown = append(leftPushdown, DeepCopyExpr(filter))
+				rightPushdown = append(rightPushdown, filter)
+			case JoinSideLeft:
+				leftPushdown = append(leftPushdown, filter)
+			case JoinSideRight:
+				rightPushdown = append(rightPushdown, filter)
+			}
+		}
+
+		childID, cantPushdownChild := builder.pushdownFilters(node.Children[0], leftPushdown)
+		if len(cantPushdownChild) > 0 {
+			childID = builder.appendNode(&plan.Node{
+				NodeType:   plan.Node_FILTER,
+				Children:   []int32{node.Children[0]},
+				FilterList: cantPushdownChild,
+			}, nil)
+		}
 		node.Children[0] = childID
 
-		childID, _ = builder.pushdownFilters(node.Children[1], nil)
+		childID, cantPushdownChild = builder.pushdownFilters(node.Children[1], rightPushdown)
+		if len(cantPushdownChild) > 0 {
+			childID = builder.appendNode(&plan.Node{
+				NodeType:   plan.Node_FILTER,
+				Children:   []int32{node.Children[1]},
+				FilterList: cantPushdownChild,
+			}, nil)
+		}
 		node.Children[1] = childID
-
-		cantPushdown = filters
 
 	case plan.Node_PROJECT:
 		child := builder.qry.Nodes[node.Children[0]]
