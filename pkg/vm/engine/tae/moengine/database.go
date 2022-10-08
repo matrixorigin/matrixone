@@ -16,8 +16,6 @@ package moengine
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
@@ -121,5 +119,5 @@ func (db *txnDatabase) DropRelation(_ context.Context, name string) error {
 }
 
 func (db *txnDatabase) GetDatabaseID(_ context.Context) uint64 {
-	panic(moerr.NewNYI("Pls implement me !"))
+	return db.handle.GetID()
 }

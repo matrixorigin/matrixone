@@ -149,10 +149,10 @@ func TestGCTable(t *testing.T) {
 
 	testutils.WaitExpect(2000, func() bool {
 		blocksnames := getBlockFileNames(tae)
-		return len(blocksnames) == 1
+		return len(blocksnames) == 2
 	})
 	blocksnames := getBlockFileNames(tae)
-	assert.Equal(t, 1, len(blocksnames))
+	assert.Equal(t, 2, len(blocksnames))
 
 	// 4. Drop the table
 	dropRelation(t, tae, "db", schema.Name)
@@ -173,10 +173,6 @@ func TestGCTable(t *testing.T) {
 	testutils.WaitExpect(2000, func() bool {
 		names = getSegmentFileNames(tae)
 		return len(names) == 1
-	})
-	testutils.WaitExpect(2000, func() bool {
-		blocksnames = getBlockFileNames(tae)
-		return len(blocksnames) == 1
 	})
 	names = getSegmentFileNames(tae)
 	t.Log(names)

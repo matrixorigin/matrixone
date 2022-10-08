@@ -15,6 +15,8 @@
 package memorystorage
 
 import (
+	"context"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	apipb "github.com/matrixorigin/matrixone/pkg/pb/api"
@@ -22,7 +24,7 @@ import (
 	txnengine "github.com/matrixorigin/matrixone/pkg/vm/engine/memoryengine"
 )
 
-func (m *MemHandler) HandlePreCommit(meta txn.TxnMeta, req apipb.PrecommitWriteCmd,
+func (m *MemHandler) HandlePreCommit(ctx context.Context, meta txn.TxnMeta, req apipb.PrecommitWriteCmd,
 	resp *apipb.SyncLogTailResp) (err error) {
 	var e any
 
@@ -43,7 +45,7 @@ func (m *MemHandler) HandlePreCommit(meta txn.TxnMeta, req apipb.PrecommitWriteC
 						AccountID: cmd.AccountId,
 					},
 				}
-				if err = m.HandleCreateDatabase(meta, req,
+				if err = m.HandleCreateDatabase(ctx, meta, req,
 					new(txnengine.CreateDatabaseResp)); err != nil {
 					return err
 				}
@@ -56,7 +58,7 @@ func (m *MemHandler) HandlePreCommit(meta txn.TxnMeta, req apipb.PrecommitWriteC
 					DatabaseID:   txnengine.ID(cmd.DatabaseId),
 					Defs:         cmd.Defs,
 				}
-				if err = m.HandleCreateRelation(meta, req,
+				if err = m.HandleCreateRelation(ctx, meta, req,
 					new(txnengine.CreateRelationResp)); err != nil {
 					return err
 				}
@@ -71,7 +73,7 @@ func (m *MemHandler) HandlePreCommit(meta txn.TxnMeta, req apipb.PrecommitWriteC
 						AccountID: req.AccountId,
 					},
 				}
-				if err = m.HandleDeleteDatabase(meta, req,
+				if err = m.HandleDeleteDatabase(ctx, meta, req,
 					new(txnengine.DeleteDatabaseResp)); err != nil {
 					return err
 				}
@@ -83,7 +85,7 @@ func (m *MemHandler) HandlePreCommit(meta txn.TxnMeta, req apipb.PrecommitWriteC
 					DatabaseName: cmd.DatabaseName,
 					DatabaseID:   txnengine.ID(cmd.DatabaseId),
 				}
-				if err = m.HandleDeleteRelation(meta, req,
+				if err = m.HandleDeleteRelation(ctx, meta, req,
 					new(txnengine.DeleteRelationResp)); err != nil {
 					return err
 				}
@@ -101,7 +103,7 @@ func (m *MemHandler) HandlePreCommit(meta txn.TxnMeta, req apipb.PrecommitWriteC
 					TableName:    pe.GetTableName(),
 					Batch:        bat,
 				}
-				if err = m.HandleWrite(meta, req,
+				if err = m.HandleWrite(ctx, meta, req,
 					new(txnengine.WriteResp)); err != nil {
 					return err
 				}
@@ -113,7 +115,7 @@ func (m *MemHandler) HandlePreCommit(meta txn.TxnMeta, req apipb.PrecommitWriteC
 					ColumnName:   bat.Attrs[0],
 					Vector:       bat.Vecs[0],
 				}
-				if err = m.HandleDelete(meta, req,
+				if err = m.HandleDelete(ctx, meta, req,
 					new(txnengine.DeleteResp)); err != nil {
 					return err
 				}
@@ -123,6 +125,6 @@ func (m *MemHandler) HandlePreCommit(meta txn.TxnMeta, req apipb.PrecommitWriteC
 	return nil
 }
 
-func (c *CatalogHandler) HandlePreCommit(meta txn.TxnMeta, req apipb.PrecommitWriteCmd, resp *apipb.SyncLogTailResp) (err error) {
-	return c.upstream.HandlePreCommit(meta, req, resp)
+func (c *CatalogHandler) HandlePreCommit(ctx context.Context, meta txn.TxnMeta, req apipb.PrecommitWriteCmd, resp *apipb.SyncLogTailResp) (err error) {
+	return c.upstream.HandlePreCommit(ctx, meta, req, resp)
 }
