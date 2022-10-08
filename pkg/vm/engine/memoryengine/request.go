@@ -53,7 +53,7 @@ func DoTxnRequest[
 	if provider, ok := txnOperator.(OperationHandlerProvider); ok {
 		handler, meta := provider.GetOperationHandler()
 		for _, shard := range shards {
-			resp, e := handle(handler, meta, shard, op, req)
+			resp, e := handle(ctx, handler, meta, shard, op, req)
 			resps = append(resps, resp.(Resp))
 			if e != nil {
 				err = e

@@ -973,15 +973,21 @@ func (builder *QueryBuilder) buildUnion(stmt *tree.UnionClause, astOrderBy tree.
 
 			orderBy := &plan.OrderBySpec{
 				Expr: expr,
+				Flag: plan.OrderBySpec_INTERNAL,
 			}
 
 			switch order.Direction {
-			case tree.DefaultDirection:
-				orderBy.Flag = plan.OrderBySpec_INTERNAL
 			case tree.Ascending:
-				orderBy.Flag = plan.OrderBySpec_ASC
+				orderBy.Flag |= plan.OrderBySpec_ASC
 			case tree.Descending:
-				orderBy.Flag = plan.OrderBySpec_DESC
+				orderBy.Flag |= plan.OrderBySpec_DESC
+			}
+
+			switch order.NullsPosition {
+			case tree.NullsFirst:
+				orderBy.Flag |= plan.OrderBySpec_NULLS_FIRST
+			case tree.NullsLast:
+				orderBy.Flag |= plan.OrderBySpec_NULLS_LAST
 			}
 
 			orderBys = append(orderBys, orderBy)
@@ -998,7 +1004,7 @@ func (builder *QueryBuilder) buildUnion(stmt *tree.UnionClause, astOrderBy tree.
 	if astLimit != nil {
 		node := builder.qry.Nodes[lastNodeId]
 
-		limitBinder := NewLimitBinder()
+		limitBinder := NewLimitBinder(builder, ctx)
 		if astLimit.Offset != nil {
 			node.Offset, err = limitBinder.BindExpr(astLimit.Offset, 0, true)
 			if err != nil {
@@ -1302,15 +1308,21 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 
 			orderBy := &plan.OrderBySpec{
 				Expr: expr,
+				Flag: plan.OrderBySpec_INTERNAL,
 			}
 
 			switch order.Direction {
-			case tree.DefaultDirection:
-				orderBy.Flag = plan.OrderBySpec_INTERNAL
 			case tree.Ascending:
-				orderBy.Flag = plan.OrderBySpec_ASC
+				orderBy.Flag |= plan.OrderBySpec_ASC
 			case tree.Descending:
-				orderBy.Flag = plan.OrderBySpec_DESC
+				orderBy.Flag |= plan.OrderBySpec_DESC
+			}
+
+			switch order.NullsPosition {
+			case tree.NullsFirst:
+				orderBy.Flag |= plan.OrderBySpec_NULLS_FIRST
+			case tree.NullsLast:
+				orderBy.Flag |= plan.OrderBySpec_NULLS_LAST
 			}
 
 			orderBys = append(orderBys, orderBy)
@@ -1321,7 +1333,7 @@ func (builder *QueryBuilder) buildSelect(stmt *tree.Select, ctx *BindContext, is
 	var limitExpr *Expr
 	var offsetExpr *Expr
 	if astLimit != nil {
-		limitBinder := NewLimitBinder()
+		limitBinder := NewLimitBinder(builder, ctx)
 		if astLimit.Offset != nil {
 			offsetExpr, err = limitBinder.BindExpr(astLimit.Offset, 0, true)
 			if err != nil {

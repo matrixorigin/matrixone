@@ -208,6 +208,7 @@ func (c *baseCodec) Encode(data interface{}, out *buf.ByteBuf, conn io.Writer) e
 
 		// 4 bytes total length
 		sizeIdx := out.GetWriteIndex()
+		out.Grow(4)
 		out.SetWriteIndex(sizeIdx + 4)
 		// 1 byte flag
 		out.MustWriteByte(flag)

@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/stretchr/testify/assert"
@@ -51,19 +52,16 @@ func TestStaticFilterIndex(t *testing.T) {
 
 	objectWriter, err := objectio.NewObjectWriter(name, service)
 	assert.Nil(t, err)
-	/*fd*/ _, err = objectWriter.Write(bat)
+	/*fd*/ block, err := objectWriter.Write(bat)
 	assert.Nil(t, err)
-	blocks, err := objectWriter.WriteEnd()
-	assert.Nil(t, err)
-	assert.Equal(t, 1, len(blocks))
 
-	cType := Plain
+	cType := common.Plain
 	typ := types.Type{Oid: types.T_int32}
 	colIdx := uint16(0)
 	interIdx := uint16(0)
 
 	writer := NewBFWriter()
-	err = writer.Init(objectWriter, blocks[0], cType, colIdx, interIdx)
+	err = writer.Init(objectWriter, block, cType, colIdx, interIdx)
 	require.NoError(t, err)
 
 	keys := containers.MockVector2(typ, 1000, 0)
@@ -72,6 +70,9 @@ func TestStaticFilterIndex(t *testing.T) {
 
 	_, err = writer.Finalize()
 	require.NoError(t, err)
+	blocks, err := objectWriter.WriteEnd()
+	assert.Nil(t, err)
+	assert.Equal(t, 1, len(blocks))
 
 	/*reader := NewBFReader(bufManager, file, new(common.ID))
 
