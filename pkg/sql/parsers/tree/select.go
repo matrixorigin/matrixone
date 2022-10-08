@@ -75,8 +75,9 @@ func (node *OrderBy) Format(ctx *FmtCtx) {
 
 // the ordering expression.
 type Order struct {
-	Expr      Expr
-	Direction Direction
+	Expr          Expr
+	Direction     Direction
+	NullsPosition NullsPosition
 	//without order
 	NullOrder bool
 }
@@ -87,13 +88,18 @@ func (node *Order) Format(ctx *FmtCtx) {
 		ctx.WriteByte(' ')
 		ctx.WriteString(node.Direction.String())
 	}
+	if node.NullsPosition != DefaultNullsPosition {
+		ctx.WriteByte(' ')
+		ctx.WriteString(node.NullsPosition.String())
+	}
 }
 
-func NewOrder(e Expr, d Direction, o bool) *Order {
+func NewOrder(e Expr, d Direction, np NullsPosition, o bool) *Order {
 	return &Order{
-		Expr:      e,
-		Direction: d,
-		NullOrder: o,
+		Expr:          e,
+		Direction:     d,
+		NullsPosition: np,
+		NullOrder:     o,
 	}
 }
 
@@ -118,6 +124,27 @@ func (d Direction) String() string {
 		return fmt.Sprintf("Direction(%d)", d)
 	}
 	return directionName[d]
+}
+
+type NullsPosition int8
+
+const (
+	DefaultNullsPosition NullsPosition = iota
+	NullsFirst
+	NullsLast
+)
+
+var nullsPositionName = [...]string{
+	DefaultNullsPosition: "",
+	NullsFirst:           "nulls first",
+	NullsLast:            "nulls last",
+}
+
+func (np NullsPosition) String() string {
+	if np < 0 || np >= NullsPosition(len(nullsPositionName)) {
+		return fmt.Sprintf("NullsPosition(%d)", np)
+	}
+	return nullsPositionName[np]
 }
 
 // the LIMIT clause.

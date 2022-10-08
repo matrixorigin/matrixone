@@ -16,7 +16,11 @@
 
 Go 语言需要升级到 1.19 版本。
 
-### 2. 获取 MatrixOne 源码完成搭建
+### 2. 安装部署 MySQL 客户端
+
+MySQL 客户端请使用 [8.0.30](https://dev.mysql.com/downloads/installer/) 版本。
+
+### 3. 获取 MatrixOne 源码完成搭建
 
 根据您的需要，选择您所获取的代码永远保持最新，还是获得稳定版本的代码。
 
@@ -72,7 +76,7 @@ Go 语言需要升级到 1.19 版本。
     ./mo-server system_vars_config.toml
     ```
 
-### 3. 连接 MatrixOne 服务
+### 4. 连接 MatrixOne 服务
 
 当你完成安装 MatrixOne，你可以参考下面的章节，连接到 MatrixOne 服务器。
 
@@ -99,15 +103,19 @@ unzip mo-server-v0.5.1-darwin-x86_64.zip
 ```
 
 !!! info
-    MatrixOne 二进制包安装方式暂时对 ARM 处理器不能完全支持。MacOS系统 M1 芯片及以上可以使用源码方式安装 MatrixOne。
+    ARM 芯片硬件配置下，MatrixOne 仅支持通过源代码方式进行安装部署；如果你使用的是 MacOS 系统 M1 及以上版本，请使用<a href="#code_source">源代码</a>构建的方式安装部署 MatrixOne。若果在 X86 硬件配置下使用二进制方式安装部署 MatrixOne 会导致未知问题。
 
-### 2. 启动 MatrixOne 服务
+### 2. 安装部署 MySQL 客户端
+
+MySQL 客户端请使用 [8.0.30](https://dev.mysql.com/downloads/installer/) 版本。
+
+### 3. 启动 MatrixOne 服务
 
 ```
 ./mo-server system_vars_config.toml
 ```
 
-### 3. 连接 MatrixOne 服务
+### 4. 连接 MatrixOne 服务
 
 当你完成安装 MatrixOne，你可以参考下面的章节，连接到 MatrixOne 服务器。
 
@@ -171,5 +179,5 @@ docker run -d -p 6001:6001 -v ${path_name}/system_vars_config.toml:/system_vars_
 
 ## 参考文档
 
-升级版本，参见[升级单机版 MatrixOne](update-standalone-matrixone.md)。
+升级版本，参见[升级单机版 MatrixOne](../Maintain/upgrade-standalone-matrixone.md)。
 常见的安装和部署问题，参见[安装和部署常见问题](../FAQs/deployment-faqs.md)。

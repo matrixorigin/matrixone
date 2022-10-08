@@ -621,6 +621,27 @@ var builtins = map[int]Functions{
 			},
 		},
 	},
+	LEFT: {
+		Id: LEFT,
+		Overloads: []Function{
+			{
+				Index:     0,
+				Flag:      plan.Function_STRICT,
+				Layout:    STANDARD_FUNCTION,
+				Args:      []types.T{types.T_varchar, types.T_int64},
+				ReturnTyp: types.T_varchar,
+				Fn:        binary.Left,
+			},
+			{
+				Index:     1,
+				Flag:      plan.Function_STRICT,
+				Layout:    STANDARD_FUNCTION,
+				Args:      []types.T{types.T_char, types.T_int64},
+				ReturnTyp: types.T_char,
+				Fn:        binary.Left,
+			},
+		},
+	},
 	SIN: {
 		Id: SIN,
 		Overloads: []Function{
@@ -2300,7 +2321,7 @@ var builtins = map[int]Functions{
 				Flag:      plan.Function_STRICT,
 				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{},
-				ReturnTyp: types.T_uint64,
+				ReturnTyp: types.T_int64,
 				Fn:        multi.Hash,
 			},
 		},

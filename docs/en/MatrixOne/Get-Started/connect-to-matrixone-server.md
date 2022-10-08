@@ -33,4 +33,4 @@ Enter password:
 Currently, MatrixOne only supports the TCP listener.
 
 For more information on connecting to MatriOne, see
-[Using client connect to the MatrixOne server](../Develop/connect-mo/client-connect-to-matrixone.md) and [Using programming connect to the MatrixOne server](../Develop/connect-mo/programming-connect-to-matrixone.md).
+[Using client connect to the MatrixOne server](../Develop/connect-mo/client-connect-to-matrixone.md),[Connecting to MatrixOne with JDBC](../Develop/connect-mo/java-connect-to-matrixone.md), and [Connecting to MatrixOne with Python](../Develop/connect-mo/python-connect-to-matrixone.md).

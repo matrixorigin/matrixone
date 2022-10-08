@@ -28,11 +28,14 @@ import (
 )
 
 type PartitionReader struct {
+	typsMap     map[string]types.Type
 	iter        *memtable.TableIter[RowID, DataValue]
 	firstCalled bool
 	readTime    memtable.Time
 	tx          *memtable.Transaction
 	expr        *plan.Expr
+	inserts     []*batch.Batch
+	deletes     []*batch.Batch
 }
 
 var _ engine.Reader = new(PartitionReader)
@@ -46,6 +49,20 @@ func (p *PartitionReader) Read(colNames []string, expr *plan.Expr, heap *mheap.M
 	if p == nil {
 		return nil, nil
 	}
+	if len(p.inserts) > 0 {
+		bat := p.inserts[0].GetSubBatch(colNames)
+		p.inserts = p.inserts[1:]
+		b := batch.New(false, colNames)
+		for i, name := range colNames {
+			b.Vecs[i] = vector.New(p.typsMap[name])
+		}
+		if _, err := b.Append(heap, bat); err != nil {
+			return nil, err
+		}
+
+		b.InitZsOne(b.GetVector(0).Length())
+		return b, nil
+	}
 
 	fn := p.iter.Next
 	if !p.firstCalled {
@@ -55,8 +72,7 @@ func (p *PartitionReader) Read(colNames []string, expr *plan.Expr, heap *mheap.M
 
 	b := batch.New(false, colNames)
 	for i, name := range colNames {
-		_ = name
-		b.Vecs[i] = vector.New(types.T_any.ToType()) //TODO get type
+		b.Vecs[i] = vector.New(p.typsMap[name])
 	}
 
 	maxRows := 4096
@@ -89,6 +105,9 @@ func (p *PartitionReader) Read(colNames []string, expr *plan.Expr, heap *mheap.M
 		for _, vec := range b.Vecs {
 			nulls.TryExpand(vec.GetNulls(), rows)
 		}
+	}
+	if rows == 0 {
+		return nil, nil
 	}
 
 	return b, nil

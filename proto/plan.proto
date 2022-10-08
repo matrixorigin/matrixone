@@ -314,12 +314,12 @@ message RowsetData {
 
 message OrderBySpec {
 	enum OrderByFlag {
-		ASC  = 0;
-		DESC = 1;
-		NULLS_FIRST = 2;
-		NULLS_LAST  = 4;
-		UNIQUE      = 8;
-		INTERNAL    = 16;
+		INTERNAL    = 0;
+		ASC  		= 1;
+		DESC 		= 2;
+		NULLS_FIRST = 4;
+		NULLS_LAST  = 8;
+		UNIQUE      = 16;
 	}
 
 	Expr expr = 1;
