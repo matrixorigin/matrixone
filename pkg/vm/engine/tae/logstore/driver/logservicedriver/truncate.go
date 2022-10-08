@@ -65,8 +65,6 @@ func (d *LogServiceDriver) doTruncate() {
 }
 
 func (d *LogServiceDriver) truncateLogservice(lsn uint64) {
-	ctx, cancel := context.WithTimeout(context.Background(), d.config.ReadDuration)
-	defer cancel()
 	client, err := d.clientPool.Get()
 	if err == ErrClientPoolClosed {
 		return
@@ -75,15 +73,21 @@ func (d *LogServiceDriver) truncateLogservice(lsn uint64) {
 		panic(err)
 	}
 	defer d.clientPool.Put(client)
+	ctx, cancel := context.WithTimeout(context.Background(), d.config.ReadDuration)
 	err = client.c.Truncate(ctx, lsn)
+	cancel()
 	if err != nil {
+		err = RetryWithTimeout(d.config.RetryTimeout, func() (shouldReturn bool) {
+			ctx, cancel := context.WithTimeout(context.Background(), d.config.ReadDuration)
+			err = client.c.Truncate(ctx, lsn)
+			cancel()
+			return err == nil
+		})
 		panic(err)
 	}
 	logutil.Infof("Logservice Driver: Truncate %d", lsn)
 }
 func (d *LogServiceDriver) getLogserviceTruncate() (lsn uint64) {
-	ctx, cancel := context.WithTimeout(context.Background(), d.config.ReadDuration)
-	defer cancel()
 	client, err := d.clientPool.Get()
 	if err == ErrClientPoolClosed {
 		return
@@ -92,8 +96,16 @@ func (d *LogServiceDriver) getLogserviceTruncate() (lsn uint64) {
 		panic(err)
 	}
 	defer d.clientPool.Put(client)
+	ctx, cancel := context.WithTimeout(context.Background(), d.config.ReadDuration)
 	lsn, err = client.c.GetTruncatedLsn(ctx)
+	cancel()
 	if err != nil {
+		err = RetryWithTimeout(d.config.RetryTimeout, func() (shouldReturn bool) {
+			ctx, cancel := context.WithTimeout(context.Background(), d.config.ReadDuration)
+			lsn, err = client.c.GetTruncatedLsn(ctx)
+			cancel()
+			return err == nil
+		})
 		panic(err)
 	}
 	logutil.Infof("Logservice Driver: Get Truncate %d", lsn)
