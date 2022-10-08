@@ -166,8 +166,8 @@ func TestRegularLikerTest2(t *testing.T) {
 	pat := []string{".*", "b+", "^Ca", "^Da"}
 
 	//Predefined Correct Values
-	expected := []uint8{1, 0, 1, 0}
-	result := make([]uint8, len(expr))
+	expected := []bool{true, false, true, false}
+	result := make([]bool, len(expr))
 	for i := range expr {
 		result[i], _ = RegularLike(expr[i], pat[i], "")
 	}

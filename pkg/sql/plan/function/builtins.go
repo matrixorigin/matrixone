@@ -2464,7 +2464,7 @@ var builtins = map[int]Functions{
 				Flag:      plan.Function_STRICT,
 				Layout:    STANDARD_FUNCTION,
 				Args:      []types.T{types.T_varchar, types.T_varchar},
-				ReturnTyp: types.T_uint8,
+				ReturnTyp: types.T_bool,
 				Fn:        multi.RegularLike,
 			},
 		},

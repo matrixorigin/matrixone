@@ -34,7 +34,7 @@ func NotRegMatch(vectors []*vector.Vector, proc *process.Process) (*vector.Vecto
 
 func generalRegMatch(vectors []*vector.Vector, proc *process.Process, isReg bool) (*vector.Vector, error) {
 	left, right := vectors[0], vectors[1]
-	resultType := types.T_uint8.ToType()
+	resultType := types.T_bool.ToType()
 	leftValues, rightValues := vector.MustStrCols(left), vector.MustStrCols(right)
 	switch {
 	case left.IsScalar() && right.IsScalar():
@@ -42,7 +42,7 @@ func generalRegMatch(vectors []*vector.Vector, proc *process.Process, isReg bool
 			return proc.AllocScalarNullVector(resultType), nil
 		}
 		resultVector := vector.NewConst(resultType, 1)
-		resultValues := vector.MustTCols[uint8](resultVector)
+		resultValues := vector.MustTCols[bool](resultVector)
 		err := RegMatchWithAllConst(leftValues, rightValues, resultValues, isReg)
 		if err != nil {
 			return nil, moerr.NewInvalidInput("The Regular Expression have invalid parameter")
@@ -56,7 +56,7 @@ func generalRegMatch(vectors []*vector.Vector, proc *process.Process, isReg bool
 		if err != nil {
 			return nil, err
 		}
-		resultValues := vector.MustTCols[uint8](resultVector)
+		resultValues := vector.MustTCols[bool](resultVector)
 		err = RegMatchWithLeftConst(leftValues, rightValues, resultValues, isReg)
 		if err != nil {
 			return nil, moerr.NewInvalidInput("The Regular Expression have invalid parameter")
@@ -70,7 +70,7 @@ func generalRegMatch(vectors []*vector.Vector, proc *process.Process, isReg bool
 		if err != nil {
 			return nil, err
 		}
-		resultValues := vector.MustTCols[uint8](resultVector)
+		resultValues := vector.MustTCols[bool](resultVector)
 		err = RegMatchWithRightConst(leftValues, rightValues, resultValues, isReg)
 		if err != nil {
 			return nil, moerr.NewInvalidInput("The Regular Expression have invalid parameter")
@@ -81,61 +81,59 @@ func generalRegMatch(vectors []*vector.Vector, proc *process.Process, isReg bool
 	if err != nil {
 		return nil, err
 	}
-	resultValues := vector.MustTCols[uint8](resultVector)
+	resultValues := vector.MustTCols[bool](resultVector)
 	nulls.Or(left.Nsp, right.Nsp, resultVector.Nsp)
-	err = RegMatchWith(leftValues, rightValues, resultValues, isReg)
+	err = RegMatchWithALL(leftValues, rightValues, resultValues, isReg)
 	if err != nil {
 		return nil, moerr.NewInvalidInput("The Regular Expression have invalid parameter")
 	}
 	return resultVector, nil
 }
-func RegMatchWithAllConst(lv, rv []string, rs []uint8, isReg bool) error {
+
+func RegMatchWithAllConst(lv, rv []string, rs []bool, isReg bool) error {
 	res, err := regexp.MatchString(rv[0], lv[0])
 	if err != nil {
-		return nil
+		return err
 	}
 
-	rs[0] = BoolToUint(res, isReg)
+	rs[0] = BoolResult(res, isReg)
 	return nil
 }
 
-func RegMatchWithLeftConst(lv, rv []string, rs []uint8, isReg bool) error {
+func RegMatchWithLeftConst(lv, rv []string, rs []bool, isReg bool) error {
 	for i := range rv {
 		res, err := regexp.MatchString(rv[i], lv[0])
 		if err != nil {
-			return nil
+			return err
 		}
-		rs[i] = BoolToUint(res, isReg)
+		rs[i] = BoolResult(res, isReg)
 	}
 	return nil
 }
 
-func RegMatchWithRightConst(lv, rv []string, rs []uint8, isReg bool) error {
+func RegMatchWithRightConst(lv, rv []string, rs []bool, isReg bool) error {
 	for i := range lv {
 		res, err := regexp.MatchString(rv[0], lv[i])
 		if err != nil {
-			return nil
+			return err
 		}
-		rs[i] = BoolToUint(res, isReg)
+		rs[i] = BoolResult(res, isReg)
 	}
 	return nil
 }
 
-func RegMatchWith(lv, rv []string, rs []uint8, isReg bool) error {
+func RegMatchWithALL(lv, rv []string, rs []bool, isReg bool) error {
 	for i := range lv {
 		res, err := regexp.MatchString(rv[i], lv[i])
 		if err != nil {
-			return nil
+			return err
 		}
-		rs[i] = BoolToUint(res, isReg)
+		rs[i] = BoolResult(res, isReg)
 	}
 	return nil
 }
 
-func BoolToUint(isMatch bool, isReg bool) uint8 {
-	if (isMatch && isReg) || !(isMatch || isReg) {
-		return 1
-	} else {
-		return 0
-	}
+
+func BoolResult(isMatch bool, isReg bool) bool{
+	return (isMatch && isReg) || !(isMatch || isReg) 
 }

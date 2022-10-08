@@ -1,15 +1,15 @@
 SELECT REGEXP_LIKE('Cat', '.*') Result;
 result
-1
+true
 SELECT REGEXP_LIKE('Cat', 'b+') Result;
 result
-0
+false
 SELECT REGEXP_LIKE('Cat', '^Ca') Result;
 result
-1
+true
 SELECT REGEXP_LIKE('Cat', '^Da') Result;
 result
-0
+false
 SELECT REGEXP_LIKE(NULL, '.*');
 regexp_like(null, .*)
 NULL
