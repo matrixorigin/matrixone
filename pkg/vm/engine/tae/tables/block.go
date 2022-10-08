@@ -152,7 +152,6 @@ func newBlock(meta *catalog.BlockEntry, segFile file.Segment, bufMgr base.INodeM
 		// if this block is created to do compact or merge, no need to new index
 		// if this block is loaded from storage, ReplayIndex will create index
 	}
-	block.mvcc.SetMaxVisible(ts)
 	block.ckpTs.Store(ts)
 	if meta.GetMetaLoc() != "" {
 		if err := block.ReplayIndex(); err != nil {

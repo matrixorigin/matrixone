@@ -36,9 +36,7 @@ type MVCCHandle struct {
 	*sync.RWMutex
 	columns         map[uint16]*ColumnChain
 	deletes         *DeleteChain
-	holes           *roaring.Bitmap
 	meta            *catalog.BlockEntry
-	maxVisible      atomic.Value
 	appends         *txnbase.MVCCSlice
 	changes         uint32
 	deletesListener func(uint64, common.RowGen, types.TS) error
@@ -101,15 +99,6 @@ func (n *MVCCHandle) GetDeleteCnt() uint32 {
 	return n.deletes.GetDeleteCnt()
 }
 
-func (n *MVCCHandle) SetMaxVisible(ts types.TS) {
-	n.maxVisible.Store(ts)
-}
-
-func (n *MVCCHandle) LoadMaxVisible() types.TS {
-	ts := n.maxVisible.Load().(types.TS)
-	return ts
-}
-
 func (n *MVCCHandle) GetID() *common.ID { return n.meta.AsCommonID() }
 
 func (n *MVCCHandle) StringLocked() string {
@@ -144,7 +133,6 @@ func (n *MVCCHandle) CreateDeleteNode(txn txnif.AsyncTxn, deleteType handle.Dele
 
 func (n *MVCCHandle) OnReplayDeleteNode(deleteNode txnif.DeleteNode) {
 	n.deletes.OnReplayNode(deleteNode.(*DeleteNode))
-	n.TrySetMaxVisible(deleteNode.(*DeleteNode).GetCommitTSLocked())
 }
 
 func (n *MVCCHandle) CreateUpdateNode(colIdx uint16, txn txnif.AsyncTxn) txnif.UpdateNode {
@@ -184,12 +172,6 @@ func (n *MVCCHandle) GetDeleteChain() *DeleteChain {
 func (n *MVCCHandle) OnReplayAppendNode(an *AppendNode) {
 	an.mvcc = n
 	n.appends.InsertNode(an)
-	n.TrySetMaxVisible(an.GetCommitTS())
-}
-func (n *MVCCHandle) TrySetMaxVisible(ts types.TS) {
-	if ts.Greater(n.maxVisible.Load().(types.TS)) {
-		n.maxVisible.Store(ts)
-	}
 }
 func (n *MVCCHandle) AddAppendNodeLocked(
 	txn txnif.AsyncTxn,
