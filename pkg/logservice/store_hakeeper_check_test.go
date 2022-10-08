@@ -416,7 +416,7 @@ func TestHAKeeperCanBootstrapAndRepairShards(t *testing.T) {
 		// wait for HAKeeper to repair the Log & HAKeeper shards
 		dnRepaired := false
 		for i := 0; i < 5000; i++ {
-			logger.Info(fmt.Sprintf("iteration %d", i))
+			testLogger.Info(fmt.Sprintf("iteration %d", i))
 			tn := func() (bool, error) {
 				ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 				defer cancel()
@@ -470,11 +470,11 @@ func TestHAKeeperCanBootstrapAndRepairShards(t *testing.T) {
 						break
 					}
 				}
-				logger.Info(fmt.Sprintf("dnRepaired %t, logRepaired %t", dnRepaired, logRepaired))
+				testLogger.Info(fmt.Sprintf("dnRepaired %t, logRepaired %t", dnRepaired, logRepaired))
 				if !logRepaired || !dnRepaired {
 					return false, nil
 				} else {
-					logger.Info(fmt.Sprintf("repair completed, i: %d", i))
+					testLogger.Info(fmt.Sprintf("repair completed, i: %d", i))
 					return true, nil
 				}
 			}
@@ -784,7 +784,7 @@ func TestTaskSchedulerCanReScheduleExpiredTasks(t *testing.T) {
 
 		cnUUID2 := uuid.New().String()
 		for i := 0; i < 1000; i++ {
-			logger.Info(fmt.Sprintf("iteration %d", i))
+			testLogger.Info(fmt.Sprintf("iteration %d", i))
 			tn := func() bool {
 				ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 				defer cancel()
@@ -797,7 +797,7 @@ func TestTaskSchedulerCanReScheduleExpiredTasks(t *testing.T) {
 				tasks, err = taskService.QueryTask(ctx, taskservice.WithTaskRunnerCond(taskservice.EQ, cnUUID2))
 				assert.NoError(t, err)
 				if len(tasks) == 0 {
-					logger.Info("no task found")
+					testLogger.Info("no task found")
 					time.Sleep(50 * time.Millisecond)
 				} else {
 					tasks, err = taskService.QueryTask(ctx, taskservice.WithTaskRunnerCond(taskservice.EQ, cnUUID1))
