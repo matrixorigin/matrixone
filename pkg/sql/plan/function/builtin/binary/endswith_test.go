@@ -75,3 +75,17 @@ func Test_EndsWith(t *testing.T) {
 		}
 	})
 }
+
+func TestEndswith(t *testing.T) {
+	convey.Convey("EndsWith scalar", t, func() {
+		firVec := testutil.MakeScalarVarchar("abc", 5)
+		secVec := testutil.MakeScalarVarchar("bc", 5)
+		wantvec := testutil.MakeScalarUint8(1, 5)
+
+		proc := testutil.NewProc()
+		ovec, err := Endswith([]*vector.Vector{firVec, secVec}, proc)
+		convey.So(err, convey.ShouldBeNil)
+		ret := testutil.CompareVectors(wantvec, ovec)
+		convey.So(ret, convey.ShouldBeTrue)
+	})
+}
