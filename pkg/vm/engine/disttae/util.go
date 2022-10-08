@@ -84,7 +84,7 @@ func getIndexDataFromVec(idx uint16, vec *vector.Vector) (objectio.IndexData, ob
 
 	// get min/max from  vector
 	if vec.Length() > 0 {
-		cvec := containers.MOToVector(vec, true)
+		cvec := containers.NewVectorWithSharedMemory(vec, true)
 
 		// create zone map
 		zm := index.NewZoneMap(vec.Typ)
