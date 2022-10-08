@@ -34,18 +34,24 @@ func New(
 	proc *process.Process,
 	ctx context.Context,
 	cli client.TxnClient,
+	idGen IDGenerator,
 	getClusterDetails GetClusterDetailsFunc,
 ) *Engine {
 	cluster, err := getClusterDetails()
 	if err != nil {
-		return nil
+		panic(err)
+	}
+	db := newDB(cli, cluster.DNStores)
+	if err := db.init(ctx, proc.Mp()); err != nil {
+		panic(err)
 	}
 	return &Engine{
+		db:                db,
 		proc:              proc,
 		cli:               cli,
+		idGen:             idGen,
 		txnHeap:           &transactionHeap{},
 		getClusterDetails: getClusterDetails,
-		db:                newDB(cli, cluster.DNStores),
 		txns:              make(map[string]*Transaction),
 	}
 }
@@ -59,7 +65,14 @@ func (e *Engine) Create(ctx context.Context, name string, op client.TxnOperator)
 	}
 	sql := getSql(ctx)
 	accountId, userId, roleId := getAccessInfo(ctx)
-	bat, err := genCreateDatabaseTuple(sql, accountId, userId, roleId, name, e.proc.GetMheap())
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute) // TODO
+	defer cancel()
+	databaseId, err := txn.idGen.AllocateID(ctx)
+	if err != nil {
+		return err
+	}
+	bat, err := genCreateDatabaseTuple(sql, accountId, userId, roleId,
+		name, databaseId, e.proc.Mp())
 	if err != nil {
 		return err
 	}
@@ -79,6 +92,16 @@ func (e *Engine) Database(ctx context.Context, name string,
 	}
 	key := genDatabaseKey(ctx, name)
 	if db, ok := txn.databaseMap[key]; ok {
+		return db, nil
+	}
+	if name == catalog.MO_CATALOG {
+		db := &database{
+			txn:          txn,
+			db:           e.db,
+			databaseId:   catalog.MO_CATALOG_ID,
+			databaseName: name,
+		}
+		txn.databaseMap[key] = db
 		return db, nil
 	}
 	id, err := txn.getDatabaseId(ctx, name)
@@ -142,6 +165,7 @@ func (e *Engine) New(ctx context.Context, op client.TxnOperator) error {
 		db:          e.db,
 		readOnly:    true,
 		meta:        op.Txn(),
+		idGen:       e.idGen,
 		dnStores:    cluster.DNStores,
 		fileMap:     make(map[string]uint64),
 		tableMap:    make(map[tableKey]*table),

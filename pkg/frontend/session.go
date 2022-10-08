@@ -16,9 +16,10 @@ package frontend
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"strings"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/sql/util"
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -936,6 +937,7 @@ func (tcc *TxnCompilerContext) getRelation(dbName string, tableName string) (eng
 		logutil.Errorf("get table %v error %v", tableName, err)
 		return nil, err
 	}
+	table.Ranges(ctx, nil) // TODO
 	return table, nil
 }
 
