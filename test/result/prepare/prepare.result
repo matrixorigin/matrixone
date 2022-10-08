@@ -83,6 +83,8 @@ create table t1 (a decimal(12,2));
 insert into t1 values (30000);
 prepare stmt1 from 'update t1 set a = a + ?';
 set @a=4418.59;
+execute stmt1;
+invalid input: Incorrect arguments to EXECUTE
 execute stmt1 using @a;
 select a from t1;
 a
