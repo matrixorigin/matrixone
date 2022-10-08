@@ -28,11 +28,15 @@ backend = "DISK-ETL"
 data-dir = "store"
 
 [cn]
-uuid = "dd1dccb4-4d3c-41f8-b482-5251dc7a41bf"
+uuid = "dd1dccb4-4d3c-41f8-b483-5351dc7a41bf"
+listen-address = "127.0.0.1:6002"
 role = "TP"
 
 [cn.Engine]
 type = "memory"
 
+[cn.frontend]
+port = 6002
+
 [observability]
-statusPort = 9001
+statusPort = 9002
