@@ -22,6 +22,7 @@ import (
 	"github.com/lni/dragonboat/v4"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 )
 
@@ -57,7 +58,7 @@ func toErrorCode(err error) (uint32, string) {
 	}
 	for _, rec := range errorToCodeMappings {
 		if errors.Is(err, rec.err) {
-			logger.Error(fmt.Sprintf("error: %v, converted to code %d", err, rec.code))
+			logutil.Error(fmt.Sprintf("error: %v, converted to code %d", err, rec.code))
 			return uint32(rec.code), ""
 		}
 	}
