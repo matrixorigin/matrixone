@@ -49,7 +49,7 @@
 
 | Name | Description|
 |---|-----|
-| [CASE](operators/flow-control-functions/case.md) | Case operator |
+| [CASE](operators/flow-control-functions/case-when.md) | Case operator |
 | [IF()](operators/flow-control-functions/function_if.md) | If/else construct |
 
 ## [**Logical Operators**](operators/logical-operators/logical-operators-overview.md)
