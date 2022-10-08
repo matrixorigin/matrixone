@@ -17,8 +17,10 @@ package disttae
 import (
 	"context"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 )
 
 func newDB(cli client.TxnClient, dnList []DNStore) *DB {
@@ -32,6 +34,169 @@ func newDB(cli client.TxnClient, dnList []DNStore) *DB {
 		tables: make(map[[2]uint64]Partitions),
 	}
 	return db
+}
+
+// init is used to insert some data that will not be synchronized by logtail.
+func (db *DB) init(ctx context.Context, m *mheap.Mheap) error {
+	{
+		parts := make(Partitions, len(db.dnMap))
+		for i := range parts {
+			parts[i] = NewPartition()
+		}
+		db.tables[[2]uint64{catalog.MO_CATALOG_ID, catalog.MO_DATABASE_ID}] = parts
+	}
+	{
+		parts := make(Partitions, len(db.dnMap))
+		for i := range parts {
+			parts[i] = NewPartition()
+		}
+		db.tables[[2]uint64{catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID}] = parts
+	}
+	{
+		parts := make(Partitions, len(db.dnMap))
+		for i := range parts {
+			parts[i] = NewPartition()
+		}
+		db.tables[[2]uint64{catalog.MO_CATALOG_ID, catalog.MO_COLUMNS_ID}] = parts
+	}
+	{ // mo_catalog
+		part := db.tables[[2]uint64{catalog.MO_CATALOG_ID, catalog.MO_DATABASE_ID}][0]
+		bat, err := genCreateDatabaseTuple("", 0, 0, 0, catalog.MO_CATALOG, catalog.MO_CATALOG_ID, m)
+		if err != nil {
+			return err
+		}
+		ibat, err := genInsertBatch(bat, m)
+		if err != nil {
+			bat.Clean(m)
+			return err
+		}
+		if err := part.Insert(ctx, ibat); err != nil {
+			bat.Clean(m)
+			return err
+		}
+		bat.Clean(m)
+	}
+	{ // mo_database
+		part := db.tables[[2]uint64{catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID}][0]
+		cols, err := genColumns(0, catalog.MO_DATABASE, catalog.MO_CATALOG, catalog.MO_DATABASE_ID,
+			catalog.MO_CATALOG_ID, catalog.MoDatabaseTableDefs)
+		if err != nil {
+			return err
+		}
+		bat, err := genCreateTableTuple("", 0, 0, 0, catalog.MO_DATABASE, catalog.MO_DATABASE_ID,
+			catalog.MO_CATALOG_ID, catalog.MO_CATALOG, "", m)
+		if err != nil {
+			return err
+		}
+		ibat, err := genInsertBatch(bat, m)
+		if err != nil {
+			bat.Clean(m)
+			return err
+		}
+		if err := part.Insert(ctx, ibat); err != nil {
+			bat.Clean(m)
+			return err
+		}
+		bat.Clean(m)
+		part = db.tables[[2]uint64{catalog.MO_CATALOG_ID, catalog.MO_COLUMNS_ID}][0]
+		for _, col := range cols {
+			bat, err := genCreateColumnTuple(col, m)
+			if err != nil {
+				return err
+			}
+			ibat, err := genInsertBatch(bat, m)
+			if err != nil {
+				bat.Clean(m)
+				return err
+			}
+			if err := part.Insert(ctx, ibat); err != nil {
+				bat.Clean(m)
+				return err
+			}
+			bat.Clean(m)
+		}
+	}
+	{ // mo_tables
+		part := db.tables[[2]uint64{catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID}][0]
+		cols, err := genColumns(0, catalog.MO_TABLES, catalog.MO_CATALOG, catalog.MO_TABLES_ID,
+			catalog.MO_CATALOG_ID, catalog.MoTablesTableDefs)
+		if err != nil {
+			return err
+		}
+		bat, err := genCreateTableTuple("", 0, 0, 0, catalog.MO_TABLES, catalog.MO_TABLES_ID,
+			catalog.MO_CATALOG_ID, catalog.MO_CATALOG, "", m)
+		if err != nil {
+			return err
+		}
+		ibat, err := genInsertBatch(bat, m)
+		if err != nil {
+			bat.Clean(m)
+			return err
+		}
+		if err := part.Insert(ctx, ibat); err != nil {
+			bat.Clean(m)
+			return err
+		}
+		bat.Clean(m)
+		part = db.tables[[2]uint64{catalog.MO_CATALOG_ID, catalog.MO_COLUMNS_ID}][0]
+		for _, col := range cols {
+			bat, err := genCreateColumnTuple(col, m)
+			if err != nil {
+				return err
+			}
+			ibat, err := genInsertBatch(bat, m)
+			if err != nil {
+				bat.Clean(m)
+				return err
+			}
+			if err := part.Insert(ctx, ibat); err != nil {
+				bat.Clean(m)
+				return err
+			}
+			bat.Clean(m)
+		}
+	}
+	{ // mo_columns
+		part := db.tables[[2]uint64{catalog.MO_CATALOG_ID, catalog.MO_TABLES_ID}][0]
+		cols, err := genColumns(0, catalog.MO_COLUMNS, catalog.MO_CATALOG, catalog.MO_COLUMNS_ID,
+			catalog.MO_CATALOG_ID, catalog.MoColumnsTableDefs)
+		if err != nil {
+			return err
+		}
+		bat, err := genCreateTableTuple("", 0, 0, 0, catalog.MO_COLUMNS, catalog.MO_COLUMNS_ID,
+			catalog.MO_CATALOG_ID, catalog.MO_CATALOG, "", m)
+		if err != nil {
+			return err
+		}
+		ibat, err := genInsertBatch(bat, m)
+		if err != nil {
+			bat.Clean(m)
+			return err
+		}
+		if err := part.Insert(ctx, ibat); err != nil {
+			bat.Clean(m)
+			return err
+		}
+		bat.Clean(m)
+		part = db.tables[[2]uint64{catalog.MO_CATALOG_ID, catalog.MO_COLUMNS_ID}][0]
+		for _, col := range cols {
+			bat, err := genCreateColumnTuple(col, m)
+			if err != nil {
+				return err
+			}
+			ibat, err := genInsertBatch(bat, m)
+			if err != nil {
+				bat.Clean(m)
+				return err
+			}
+			if err := part.Insert(ctx, ibat); err != nil {
+				bat.Clean(m)
+				return err
+			}
+			bat.Clean(m)
+		}
+	}
+	return nil
 }
 
 func (db *DB) getPartitions(databaseId, tableId uint64) Partitions {
