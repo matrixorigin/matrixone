@@ -1,8 +1,4 @@
-#regexp_substr
 SELECT REGEXP_SUBSTR('Thailand or Cambodia', 'l.nd') Result;
-result
-land
-SELECT REGEXP_SUBSTR('Lend for land', 'l.nd') Result;
 result
 land
 SELECT REGEXP_SUBSTR('Lend for land', '^C') Result;
@@ -11,15 +7,33 @@ NULL
 SELECT REGEXP_SUBSTR('Cat Cut Cot', 'C.t', 2) Result;
 result
 Cut
-SELECT 
-REGEXP_SUBSTR('Cat Cut Cot', 'C.t', 1, 1) 'Occurrence1',
-REGEXP_SUBSTR('Cat Cut Cot', 'C.t', 1, 2) 'Occurrence2',
-REGEXP_SUBSTR('Cat Cut Cot', 'C.t', 1, 3) 'Occurrence3';
-Occurrence1 Occurrence2 Occurrence3 
-Cat         Cut         Cot     
-SELECT 
-REGEXP_SUBSTR('Cat Cut Cot', 'C.t', 2, 1) 'Occurrence1',
-REGEXP_SUBSTR('Cat Cut Cot', 'C.t', 2, 2) 'Occurrence2',
-REGEXP_SUBSTR('Cat Cut Cot', 'C.t', 2, 3) 'Occurrence3';
-Occurrence1 Occurrence2 Occurrence3 |
-Cut         Cot         NULL
+SELECT REGEXP_SUBSTR('Cat Cut Cot', 'C.t', 1, 1) 'Occurrence1';
+Occurrence1
+Cat
+SELECT REGEXP_SUBSTR('Cat Cut Cot', 'C.t', 1, 2) 'Occurrence2';
+Occurrence2
+Cut
+SELECT REGEXP_SUBSTR('Cat Cut Cot', 'C.t', 1, 3) 'Occurrence3';
+Occurrence3
+Cot
+SELECT REGEXP_SUBSTR('Cat Cut Cot', 'C.t', 2, 1) 'Occurrence1';
+Occurrence1
+Cut
+SELECT REGEXP_SUBSTR('Cat Cut Cot', 'C.t', 2, 2) 'Occurrence2';
+Occurrence2
+Cot
+SELECT REGEXP_SUBSTR('Cat Cut Cot', 'C.t', 2, 3) 'Occurrence3';
+Occurrence3
+NULL
+SELECT REGEXP_SUBSTR(NULL, 'C.t', 2, 1);
+regexp_substr(null, C.t, 2, 1)
+NULL
+SELECT REGEXP_SUBSTR('Cat Cut Cot', NULL, 2, 1);
+regexp_substr(Cat Cut Cot, null, 2, 1)
+NULL
+SELECT REGEXP_SUBSTR(NULL, NULL, 2, 1);
+regexp_substr(null, null, 2, 1)
+NULL
+SELECT REGEXP_SUBSTR('Cat Cut Cot', "", 2, 1);
+regexp_substr(Cat Cut Cot, , 2, 1)
+NULL

@@ -1,124 +1,189 @@
-#REGEXP
-SELECT 'Corn' REGEXP 'Corn' AS 'Corn','Acorn' REGEXP 'Corn' AS 'Acorn','Corner' REGEXP 'Corn' AS 'Corner','Cheese' REGEXP 'Corn' AS 'Cheese';
-Corn   Acorn  Corner  Cheese 
-1     0       1      0 
-SELECT 
-'Corn' REGEXP '^Co' AS 'Corn',
-'Acorn' REGEXP '^Co' AS 'Acorn',
-'Cheese' REGEXP '^Co' AS 'Cheese';
-Corn Acorn Cheese 
-1     0      0 
-SELECT 
-'Corn' REGEXP 'rn$' AS 'Corn',
-'Acorn' REGEXP 'rn$' AS 'Acorn',
-'Cheese' REGEXP 'rn$' AS 'Cheese'; 
-Corn Acorn Cheese 
-1     1      0 
-SELECT 
-'Corn' REGEXP '.' AS 'Corn',
-'Cheese' REGEXP '.' AS 'Cheese';
-Corn Cheese 
-1      1 
-SELECT 
-'Corn' REGEXP '^C.rn$' AS 'Corn', 
-'Crn' REGEXP '^C.rn$' AS 'Crn';
-Corn  Crn  
-1    0 
-SELECT 
-'Tweet' REGEXP '^Tw..t$' AS 'Tweet', 
-'Tweat' REGEXP '^Tw..t$' AS 'Tweat', 
-'Tweet' REGEXP '^Tw.t$' AS 'Tweet', 
-'Twit' REGEXP '^Tw..t$' AS 'Twit';
-Tweet  Tweat  Tweet  Twit 
-1      1     0    0 
-SELECT 
-'Tweet' REGEXP '^Tw.{2}t$' AS 'Tweet', 
-'Tweat' REGEXP '^Tw.{2}t$' AS 'Tweat', 
-'Tweet' REGEXP '^Tw.{1}t$' AS 'Tweet', 
-'Twit' REGEXP '^Tw.{2}t$' AS 'Twit';
-Tweet Tweat  Tweet  Twit 
-1     1     0    0 
-SELECT 
-'Twet' REGEXP '^Twe*t$' AS 'Twet',
-'Tweet' REGEXP '^Twe*t$' AS 'Tweet',
-'Tweeet' REGEXP '^Twe*t$' AS 'Tweeet',
-'Twt' REGEXP '^Twe*t$' AS 'Twt',
-'Twit' REGEXP '^Twe*t$' AS 'Twit',
-'Twiet' REGEXP '^Twe*t$' AS 'Twiet',
-'Tweit' REGEXP '^Twe*t$' AS 'Tweit';
-Twet  Tweet  Tweeet  Twt   Twit  Twiet  Tweit 
-1      1       1     1     0      0      0 
-SELECT 
-'Twet' REGEXP '^Twe+t$' AS 'Twet',
-'Tweet' REGEXP '^Twe+t$' AS 'Tweet',
-'Tweeet' REGEXP '^Twe+t$' AS 'Tweeet',
-'Twt' REGEXP '^Twe+t$' AS 'Twt',
-'Twit' REGEXP '^Twe+t$' AS 'Twit',
-'Twiet' REGEXP '^Twe+t$' AS 'Twiet',
-'Tweit' REGEXP '^Twe+t$' AS 'Tweit';
-Twet  Tweet  Tweeet  Twt   Twit  Twiet  Tweit 
-1     1      1       0     0     0     0 
-SELECT 
-'Twet' REGEXP '^Twe?t$' AS 'Twet',
-'Tweet' REGEXP '^Twe?t$' AS 'Tweet',
-'Tweeet' REGEXP '^Twe?t$' AS 'Tweeet',
-'Twt' REGEXP '^Twe?t$' AS 'Twt',
-'Twit' REGEXP '^Twe?t$' AS 'Twit',
-'Twiet' REGEXP '^Twe?t$' AS 'Twiet',
-'Tweit' REGEXP '^Twe?t$' AS 'Tweit';
-Twet  Tweet  Tweeet  Twt   Twit  Twiet  Tweit 
-1      0       0    1     0      0      0 
-SELECT 
-'Tweet' REGEXP 'Tw|et' AS 'Tweet',
-'For Let' REGEXP 'Tw|et' AS 'For Let',
-'Banana' REGEXP 'Tw|et' AS 'Banana';
-Tweet  For Let  Banana 
-1        1       0 
-SELECT 
-'Cat' REGEXP 'Cat|Dog' AS 'Cat',
-'Dog' REGEXP 'Cat|Dog' AS 'Dog',
-'Doggone' REGEXP 'Cat|Dog' AS 'Doggone',
-'Banana' REGEXP 'Cat|Dog' AS 'Banana';
-Cat   Dog   Doggone  Banana 
-1     1       1       0
-SELECT 
-'Banana' REGEXP '(an)*' AS 'Banana',
-'Land' REGEXP '(an)*' AS 'Land',
-'Cheese' REGEXP '(an)*' AS 'Cheese';
-Banana  Land  Cheese 
-1     1       1 
-SELECT 
-'Banana' REGEXP '^B(an)*d$' AS 'Banana',
-'Band' REGEXP '^B(an)*d$' AS 'Band',
-'Bald' REGEXP '^B(an)*d$' AS 'Bald',
-'Bad' REGEXP '^B(an)*d$' AS 'Bad';
-Banana  Band  Bald  Bad  
-0       1      0     0 
-SELECT 
-'Tweeet' REGEXP 'e{3}' AS 'Tweeet',
-'Tweet' REGEXP 'e{3}' AS 'Tweet';
-Tweeet  Tweet 
-1      0 
-SELECT 
-'Tweet 123' REGEXP '[0-9]' AS 'Tweet123',
-'Tweet ABC' REGEXP '[0-9]' AS 'TweetABC';
-Tweet123  TweetABC 
-1         0 
-SELECT 
-'Tweet 123' REGEXP '[A-Z]' AS 'Tweet123',
-'ABC' REGEXP '[A-Z]' AS 'ABC',
-'123' REGEXP '[A-Z]' AS '123';
-Tweet123  ABC   123  
-1         1     0
-SELECT 
-'123' REGEXP '[1-3]' AS '123',
-'012' REGEXP '[1-3]' AS '012',
-'045' REGEXP '[1-3]' AS '045';
-123  012  045  
-1     1     0
-SELECT 
-'123' REGEXP '[^1-3]' AS '123',
-'012' REGEXP '[^1-3]' AS '012',
-'045' REGEXP '[^1-3]' AS '045';
-123   012   045  
-0     1     1 
+SELECT 'Corn' REGEXP 'Corn' AS 'Corn';
+Corn
+1
+SELECT 'Acorn' REGEXP 'Corn' AS 'Acorn';
+Acorn
+0
+SELECT 'Corner' REGEXP 'Corn' AS 'Corner';
+Corner
+1
+SELECT 'Cheese' REGEXP 'Corn' AS 'Cheese';
+Cheese
+0
+SELECT 'Corn' REGEXP '^Co' AS 'Corn';
+Corn
+1
+SELECT 'Acorn' REGEXP '^Co' AS 'Acorn';
+Acorn
+0
+SELECT 'Cheese' REGEXP '^Co' AS 'Cheese';
+Cheese
+0
+SELECT 'Corn' REGEXP 'rn$' AS 'Corn';
+Corn
+1
+SELECT 'Acorn' REGEXP 'rn$' AS 'Acorn';
+Acorn
+1
+SELECT 'Cheese' REGEXP 'rn$' AS 'Cheese';
+Cheese
+0
+SELECT 'Corn' REGEXP '.' AS 'Corn';
+Corn
+1
+SELECT 'Cheese' REGEXP '.' AS 'Cheese';
+Cheese
+1
+SELECT 'Corn' REGEXP '^C.rn$' AS 'Corn';
+Corn
+1
+SELECT 'Crn' REGEXP '^C.rn$' AS 'Crn';
+Crn
+0
+SELECT 'Tweet' REGEXP '^Tw..t$' AS 'Tweet';
+Tweet
+1
+SELECT 'Tweat' REGEXP '^Tw..t$' AS 'Tweat';
+Tweat
+1
+SELECT 'Tweet' REGEXP '^Tw.t$' AS 'Tweet';
+Tweet
+0
+SELECT 'Twit' REGEXP '^Tw..t$' AS 'Twit';
+Twit
+0
+SELECT 'Tweet' REGEXP '^Tw.{2}t$' AS 'Tweet';
+Tweet
+1
+SELECT 'Tweat' REGEXP '^Tw.{2}t$' AS 'Tweat';
+Tweat
+1
+SELECT 'Tweet' REGEXP '^Tw.{1}t$' AS 'Tweet';
+Tweet
+0
+SELECT 'Twit' REGEXP '^Tw.{2}t$' AS 'Twit';
+Twit
+0
+SELECT 'Twet' REGEXP '^Twe*t$' AS 'Twet';
+Twet
+1
+SELECT 'Tweet' REGEXP '^Twe*t$' AS 'Tweet';
+Tweet
+1
+SELECT 'Tweeet' REGEXP '^Twe*t$' AS 'Tweeet';
+Tweet
+1
+SELECT 'Twt' REGEXP '^Twe*t$' AS 'Twt';
+Twt
+1
+SELECT 'Twit' REGEXP '^Twe*t$' AS 'Twit';
+Twit
+0
+SELECT 'Twiet' REGEXP '^Twe*t$' AS 'Twiet';
+Twiet
+0
+SELECT 'Tweit' REGEXP '^Twe*t$' AS 'Tweit';
+Tweit
+0
+SELECT 'Twet' REGEXP '^Twe+t$' AS 'Twet';
+Twet
+1
+SELECT 'Tweet' REGEXP '^Twe+t$' AS 'Tweet';
+Tweet
+1
+SELECT 'Tweeet' REGEXP '^Twe+t$' AS 'Tweeet';
+Tweeet
+1
+SELECT 'Twt' REGEXP '^Twe+t$' AS 'Twt';
+Twt
+0
+SELECT 'Twit' REGEXP '^Twe+t$' AS 'Twit';
+Twit
+0
+SELECT 'Twiet' REGEXP '^Twe+t$' AS 'Twiet';
+Twiet
+0
+SELECT 'Tweit' REGEXP '^Twe+t$' AS 'Tweit';
+Tweit
+0
+SELECT 'Tweet' REGEXP 'Tw|et' AS 'Tweet';
+Tweet
+1
+SELECT 'For Let' REGEXP 'Tw|et' AS 'For Let';
+For Let
+1
+SELECT 'Banana' REGEXP 'Tw|et' AS 'Banana';
+Banana
+0
+SELECT 'Cat' REGEXP 'Cat|Dog' AS 'Cat';
+Cat
+1
+SELECT 'Dog' REGEXP 'Cat|Dog' AS 'Dog';
+Dog
+1
+SELECT 'Doggone' REGEXP 'Cat|Dog' AS 'Doggone';
+Doggone
+1
+SELECT 'Banana' REGEXP 'Cat|Dog' AS 'Banana';
+Banana
+0
+SELECT 'Banana' REGEXP '(an)*' AS 'Banana';
+Banana
+1
+SELECT 'Land' REGEXP '(an)*' AS 'Land';
+Land
+1
+SELECT 'Cheese' REGEXP '(an)*' AS 'Cheese';
+Cheese
+1
+SELECT 'Banana' REGEXP '^B(an)*d$' AS 'Banana';
+Banana
+0
+SELECT 'Band' REGEXP '^B(an)*d$' AS 'Band';
+Band
+1
+SELECT 'Bald' REGEXP '^B(an)*d$' AS 'Bald';
+Bald
+0
+SELECT 'Bad' REGEXP '^B(an)*d$' AS 'Bad';
+Bad
+0
+SELECT 'Tweeet' REGEXP 'e{3}' AS 'Tweeet';
+Tweeet
+1
+SELECT 'Tweet' REGEXP 'e{3}' AS 'Tweet';
+Tweet
+0
+SELECT 'Tweet 123' REGEXP '[0-9]' AS 'Tweet123';
+Tweet123
+1
+SELECT 'Tweet ABC' REGEXP '[0-9]' AS 'TweetABC';
+TweetABC
+0
+SELECT 'Tweet 123' REGEXP '[A-Z]' AS 'Tweet123';
+Tweet123
+1
+SELECT 'ABC' REGEXP '[A-Z]' AS 'ABC';
+ABC
+1
+SELECT '123' REGEXP '[A-Z]' AS '123';
+123
+0
+SELECT '123' REGEXP '[1-3]' AS '123';
+123
+1
+SELECT '012' REGEXP '[1-3]' AS '012';
+012
+1
+SELECT '045' REGEXP '[1-3]' AS '045';
+045
+0
+SELECT '123' REGEXP '[^1-3]' AS '123';
+123
+0
+SELECT '012' REGEXP '[^1-3]' AS '012';
+012
+1
+SELECT '045' REGEXP '[^1-3]' AS '045';
+045
+1

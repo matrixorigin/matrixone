@@ -56,7 +56,7 @@ func RegularSubstrWithArrays(expr, pat []string, pos, occ []int64, match_type []
 	if len(expr) == 1 && len(pat) == 1 {
 		reg := regexp.MustCompile(pat[0])
 		for i := 0; i < maxLen; i++ {
-			if nulls.Contains(exprN, uint64(0)) || nulls.Contains(patN, uint64(0)) {
+			if nulls.Contains(exprN, uint64(0)) || nulls.Contains(patN, uint64(0)) || pat[0] == "" {
 				nulls.Add(resultVector.Nsp, uint64(i))
 				continue
 			}
@@ -74,7 +74,7 @@ func RegularSubstrWithArrays(expr, pat []string, pos, occ []int64, match_type []
 		vector.AppendString(resultVector, rs, proc.Mp())
 	} else if len(expr) == 1 {
 		for i := 0; i < maxLen; i++ {
-			if nulls.Contains(exprN, uint64(0)) || nulls.Contains(patN, uint64(i)) {
+			if nulls.Contains(exprN, uint64(0)) || nulls.Contains(patN, uint64(i)) || pat[i] == "" {
 				nulls.Add(resultVector.Nsp, uint64(i))
 				continue
 			}
@@ -93,7 +93,7 @@ func RegularSubstrWithArrays(expr, pat []string, pos, occ []int64, match_type []
 	} else if len(pat) == 1 {
 		reg := regexp.MustCompile(pat[0])
 		for i := 0; i < maxLen; i++ {
-			if nulls.Contains(exprN, uint64(i)) || nulls.Contains(patN, uint64(0)) {
+			if nulls.Contains(exprN, uint64(i)) || nulls.Contains(patN, uint64(0)) || pat[i] == "" {
 				nulls.Add(resultVector.Nsp, uint64(i))
 				continue
 			}
@@ -110,7 +110,7 @@ func RegularSubstrWithArrays(expr, pat []string, pos, occ []int64, match_type []
 		vector.AppendString(resultVector, rs, proc.Mp())
 	} else {
 		for i := 0; i < maxLen; i++ {
-			if nulls.Contains(exprN, uint64(i)) || nulls.Contains(patN, uint64(i)) {
+			if nulls.Contains(exprN, uint64(i)) || nulls.Contains(patN, uint64(i)) || pat[i] == "" {
 				nulls.Add(resultVector.Nsp, uint64(i))
 				continue
 			}

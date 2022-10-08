@@ -1,42 +1,27 @@
-#regexp_replace
-SET @str = 'It was good';
-SELECT 
-@str 'Original String',
-REGEXP_REPLACE(@str, 'good', 'great!') 'Result';
-Original String  Result
-It was good      It was great!
-SET @str = 'Cat Dog Cat Dog Cat';
-SELECT 
-@str 'Original String',
-REGEXP_REPLACE(@str, 'Cat', 'Tiger') 'Result';
-Original String        Result
-Cat Dog Cat Dog Cat    Tiger Dog Tiger Dog Tiger
-SET @str = 'Cat Dog Cat Dog Cat';
-SELECT 
-@str 'Original String',
-REGEXP_REPLACE(@str, 'Cow', 'Tiger') 'Result';
-Original String        Result
-Cat Dog Cat Dog Cat    Cat Dog Cat Dog Cat
-SET @str = 'Cat Dog Cat Dog Cat';
-SELECT 
-@str 'Original String',
-REGEXP_REPLACE(@str, 'Cat', 'Tiger', 2) 'Result';
-Original String      Result                  
-Cat Dog Cat Dog Cat  Cat Dog Tiger Dog Tiger 
-SET @str = 'Cat Dog Cat Dog Cat';
-SELECT 
-@str 'Original String',
-REGEXP_REPLACE(@str, 'Cat', 'Tiger', 1, 2) 'Result';
-Original String     Result                
-Cat Dog Cat Dog Cat Cat Dog Tiger Dog Cat 
-SET @str = 'Cat Dog Cat Dog Cat';
-SELECT 
-@str 'Original String',
-REGEXP_REPLACE(@str, 'Cat', 'Tiger', 2, 2) 'Result';
-Original String      Result                
-Cat Dog Cat Dog Cat  Cat Dog Cat Dog Tiger 
-SET @str = 'Cat Dog Cat Dog Cat';
-SELECT 
-@str 'Original String',
-REGEXP_REPLACE(@str, 'Cat', 'Tiger', 1, 0) 'Result';
-invalid input: regexp_replace have invalid input
+SELECT REGEXP_REPLACE('Cat Dog Cat Dog Cat','Cat', 'Tiger') 'Result';
+Result 
+Tiger Dog Tiger Dog Tiger
+SELECT REGEXP_REPLACE('Cat Dog Cat Dog Cat', 'Cow', 'Tiger') 'Result';
+Result
+Cat Dog Cat Dog Cat
+SELECT REGEXP_REPLACE('Cat Dog Cat Dog Cat', 'Cat', 'Tiger', 1, 2) 'Result';
+Result
+Cat Dog Tiger Dog Cat
+SELECT REGEXP_REPLACE('Cat Dog Cat Dog Cat', 'Cat', 'Tiger', 2, 1) 'Result';
+Result 
+Cat Dog Tiger Dog Cat
+SELECT REGEXP_REPLACE('Cat Dog Cat Dog Cat', 'Cat', 'Tiger', 2, 2) 'Result';
+Result
+Cat Dog Cat Dog Tiger
+SELECT REGEXP_REPLACE('Cat Dog Cat Dog Cat', 'Cat', 'Tiger', 1, 0) 'Result';
+Result
+Tiger Dog Tiger Dog Tiger
+SELECT REGEXP_REPLACE(NULL, 'Cow', 'Tiger');
+regexp_replace(null, Cow, Tiger)
+NULL
+SELECT REGEXP_REPLACE('Cat Dog Cat Dog Cat', NULL, 'Tiger');
+regexp_replace(Cat Dog Cat Dog Cat, null, Tiger)
+NULL
+SELECT REGEXP_REPLACE('Cat Dog Cat Dog Cat', 'Cow', NULL);
+regexp_replace(Cat Dog Cat Dog Cat, Cow, null) 
+NULL

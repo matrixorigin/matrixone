@@ -1,128 +1,189 @@
-#RLIKE
-SELECT 
-'Corn' RLIKE 'Corn' AS 'Corn',
-'Acorn' RLIKE 'Corn' AS 'Acorn',
-'Corner' RLIKE 'Corn' AS 'Corner',
-'Cheese' RLIKE 'Corn' AS 'Cheese';
-Corn   Acorn  Corner  Cheese 
-1     0       1      0 
-SELECT 
-'Corn' RLIKE '^Co' AS 'Corn',
-'Acorn' RLIKE '^Co' AS 'Acorn',
-'Cheese' RLIKE '^Co' AS 'Cheese';
-Corn Acorn Cheese 
-1     0      0 
-SELECT 
-'Corn' RLIKE 'rn$' AS 'Corn',
-'Acorn' RLIKE 'rn$' AS 'Acorn',
-'Cheese' RLIKE 'rn$' AS 'Cheese'; 
-Corn Acorn Cheese 
-1     1      0 
-SELECT 
-'Corn' RLIKE '.' AS 'Corn',
-'Cheese' RLIKE '.' AS 'Cheese';
-Corn Cheese 
-1      1 
-SELECT 
-'Corn' RLIKE '^C.rn$' AS 'Corn', 
-'Crn' RLIKE '^C.rn$' AS 'Crn';
-Corn  Crn  
-1    0 
-SELECT 
-'Tweet' RLIKE '^Tw..t$' AS 'Tweet', 
-'Tweat' RLIKE '^Tw..t$' AS 'Tweat', 
-'Tweet' RLIKE '^Tw.t$' AS 'Tweet', 
-'Twit' RLIKE '^Tw..t$' AS 'Twit';
-Tweet  Tweat  Tweet  Twit 
-1      1     0    0 
-SELECT 
-'Tweet' RLIKE '^Tw.{2}t$' AS 'Tweet', 
-'Tweat' RLIKE '^Tw.{2}t$' AS 'Tweat', 
-'Tweet' RLIKE '^Tw.{1}t$' AS 'Tweet', 
-'Twit' RLIKE '^Tw.{2}t$' AS 'Twit';
-Tweet Tweat  Tweet  Twit 
-1     1     0    0 
-SELECT 
-'Twet' RLIKE '^Twe*t$' AS 'Twet',
-'Tweet' RLIKE '^Twe*t$' AS 'Tweet',
-'Tweeet' RLIKE'^Twe*t$' AS 'Tweeet',
-'Twt' RLIKE '^Twe*t$' AS 'Twt',
-'Twit' RLIKE '^Twe*t$' AS 'Twit',
-'Twiet' RLIKE '^Twe*t$' AS 'Twiet',
-'Tweit' RLIKE '^Twe*t$' AS 'Tweit';
-Twet  Tweet  Tweeet  Twt   Twit  Twiet  Tweit 
-1      1       1     1     0      0      0 
-SELECT 
-'Twet' RLIKE '^Twe+t$' AS 'Twet',
-'Tweet' RLIKE '^Twe+t$' AS 'Tweet',
-'Tweeet' RLIKE '^Twe+t$' AS 'Tweeet',
-'Twt' RLIKE '^Twe+t$' AS 'Twt',
-'Twit' RLIKE '^Twe+t$' AS 'Twit',
-'Twiet' RLIKE '^Twe+t$' AS 'Twiet',
-'Tweit' RLIKE '^Twe+t$' AS 'Tweit';
-Twet  Tweet  Tweeet  Twt   Twit  Twiet  Tweit 
-1     1      1       0     0     0     0 
-SELECT 
-'Twet' RLIKE '^Twe?t$' AS 'Twet',
-'Tweet' RLIKE '^Twe?t$' AS 'Tweet',
-'Tweeet' RLIKE '^Twe?t$' AS 'Tweeet',
-'Twt' RLIKE '^Twe?t$' AS 'Twt',
-'Twit' RLIKE '^Twe?t$' AS 'Twit',
-'Twiet' RLIKE '^Twe?t$' AS 'Twiet',
-'Tweit' RLIKE '^Twe?t$' AS 'Tweit';
-Twet  Tweet  Tweeet  Twt   Twit  Twiet  Tweit 
-1      0       0    1     0      0      0 
-SELECT 
-'Tweet' RLIKE 'Tw|et' AS 'Tweet',
-'For Let' RLIKE 'Tw|et' AS 'For Let',
-'Banana' RLIKE 'Tw|et' AS 'Banana';
-Tweet  For Let  Banana 
-1        1       0 
-SELECT 
-'Cat' RLIKE 'Cat|Dog' AS 'Cat',
-'Dog' RLIKE 'Cat|Dog' AS 'Dog',
-'Doggone' RLIKE 'Cat|Dog' AS 'Doggone',
-'Banana' RLIKE 'Cat|Dog' AS 'Banana';
-Cat   Dog   Doggone  Banana 
-1     1       1       0
-SELECT 
-'Banana' RLIKE '(an)*' AS 'Banana',
-'Land' RLIKE '(an)*' AS 'Land',
-'Cheese' RLIKE '(an)*' AS 'Cheese';
-Banana  Land  Cheese 
-1     1       1 
-SELECT 
-'Banana' RLIKE '^B(an)*d$' AS 'Banana',
-'Band' RLIKE '^B(an)*d$' AS 'Band',
-'Bald' RLIKE '^B(an)*d$' AS 'Bald',
-'Bad' RLIKE '^B(an)*d$' AS 'Bad';
-Banana  Band  Bald  Bad  
-0       1      0     0 
-SELECT 
-'Tweeet' RLIKE 'e{3}' AS 'Tweeet',
-'Tweet' RLIKE 'e{3}' AS 'Tweet';
-Tweeet  Tweet 
-1      0 
-SELECT 
-'Tweet 123' RLIKE '[0-9]' AS 'Tweet123',
-'Tweet ABC' RLIKE '[0-9]' AS 'TweetABC';
-Tweet123  TweetABC 
-1         0 
-SELECT 
-'Tweet 123' RLIKE '[A-Z]' AS 'Tweet123',
-'ABC' RLIKE '[A-Z]' AS 'ABC',
-'123' RLIKE '[A-Z]' AS '123';
-Tweet123  ABC   123  
-1         1     0
-SELECT 
-'123' RLIKE '[1-3]' AS '123',
-'012' RLIKE '[1-3]' AS '012',
-'045' RLIKE '[1-3]' AS '045';
-123  012  045  
-1     1     0
-SELECT 
-'123' RLIKE '[^1-3]' AS '123',
-'012' RLIKE '[^1-3]' AS '012',
-'045' RLIKE '[^1-3]' AS '045';
-123   012   045  
-0     1     1
+SELECT 'Corn' RLIKE 'Corn' AS 'Corn';
+Corn
+1
+SELECT 'Acorn' RLIKE 'Corn' AS 'Acorn';
+Acorn
+0
+SELECT 'Corner' RLIKE 'Corn' AS 'Corner';
+Corner
+1
+SELECT 'Cheese' RLIKE 'Corn' AS 'Cheese';
+Cheese
+0
+SELECT 'Corn' RLIKE '^Co' AS 'Corn';
+Corn
+1
+SELECT 'Acorn' RLIKE '^Co' AS 'Acorn';
+Acorn
+0
+SELECT 'Cheese' RLIKE '^Co' AS 'Cheese';
+Cheese
+0
+SELECT 'Corn' RLIKE 'rn$' AS 'Corn';
+Corn
+1
+SELECT 'Acorn' RLIKE 'rn$' AS 'Acorn';
+Acorn
+1
+SELECT 'Cheese' RLIKE 'rn$' AS 'Cheese';
+Cheese
+0
+SELECT 'Corn' RLIKE '.' AS 'Corn';
+Corn
+1
+SELECT 'Cheese' RLIKE '.' AS 'Cheese';
+Cheese
+1
+SELECT 'Corn' RLIKE '^C.rn$' AS 'Corn';
+Corn
+1
+SELECT 'Crn' RLIKE '^C.rn$' AS 'Crn';
+Crn
+0
+SELECT 'Tweet' RLIKE '^Tw..t$' AS 'Tweet';
+Tweet
+1
+SELECT 'Tweat' RLIKE '^Tw..t$' AS 'Tweat';
+Tweat
+1
+SELECT 'Tweet' RLIKE '^Tw.t$' AS 'Tweet';
+Tweet
+0
+SELECT 'Twit' RLIKE '^Tw..t$' AS 'Twit';
+Twit
+0
+SELECT 'Tweet' RLIKE '^Tw.{2}t$' AS 'Tweet';
+Tweet
+1
+SELECT 'Tweat' RLIKE '^Tw.{2}t$' AS 'Tweat';
+Tweat
+1
+SELECT 'Tweet' RLIKE '^Tw.{1}t$' AS 'Tweet';
+Tweet
+0
+SELECT 'Twit' RLIKE '^Tw.{2}t$' AS 'Twit';
+Twit
+0
+SELECT 'Twet' RLIKE '^Twe*t$' AS 'Twet';
+Twet
+1
+SELECT 'Tweet' RLIKE '^Twe*t$' AS 'Tweet';
+Tweet
+1
+SELECT 'Tweeet' RLIKE '^Twe*t$' AS 'Tweeet';
+Tweet
+1
+SELECT 'Twt' RLIKE '^Twe*t$' AS 'Twt';
+Twt
+1
+SELECT 'Twit' RLIKE '^Twe*t$' AS 'Twit';
+Twit
+0
+SELECT 'Twiet' RLIKE '^Twe*t$' AS 'Twiet';
+Twiet
+0
+SELECT 'Tweit' RLIKE '^Twe*t$' AS 'Tweit';
+Tweit
+0
+SELECT 'Twet' RLIKE '^Twe+t$' AS 'Twet';
+Twet
+1
+SELECT 'Tweet' RLIKE '^Twe+t$' AS 'Tweet';
+Tweet
+1
+SELECT 'Tweeet' RLIKE '^Twe+t$' AS 'Tweeet';
+Tweeet
+1
+SELECT 'Twt' RLIKE '^Twe+t$' AS 'Twt';
+Twt
+0
+SELECT 'Twit' RLIKE '^Twe+t$' AS 'Twit';
+Twit
+0
+SELECT 'Twiet' RLIKE '^Twe+t$' AS 'Twiet';
+Twiet
+0
+SELECT 'Tweit' RLIKE '^Twe+t$' AS 'Tweit';
+Tweit
+0
+SELECT 'Tweet' RLIKE 'Tw|et' AS 'Tweet';
+Tweet
+1
+SELECT 'For Let' RLIKE 'Tw|et' AS 'For Let';
+For Let
+1
+SELECT 'Banana' RLIKE 'Tw|et' AS 'Banana';
+Banana
+0
+SELECT 'Cat' RLIKE 'Cat|Dog' AS 'Cat';
+Cat
+1
+SELECT 'Dog' RLIKE 'Cat|Dog' AS 'Dog';
+Dog
+1
+SELECT 'Doggone' RLIKE 'Cat|Dog' AS 'Doggone';
+Doggone
+1
+SELECT 'Banana' RLIKE 'Cat|Dog' AS 'Banana';
+Banana
+0
+SELECT 'Banana' RLIKE '(an)*' AS 'Banana';
+Banana
+1
+SELECT 'Land' RLIKE '(an)*' AS 'Land';
+Land
+1
+SELECT 'Cheese' RLIKE '(an)*' AS 'Cheese';
+Cheese
+1
+SELECT 'Banana' RLIKE '^B(an)*d$' AS 'Banana';
+Banana
+0
+SELECT 'Band' RLIKE '^B(an)*d$' AS 'Band';
+Band
+1
+SELECT 'Bald' RLIKE '^B(an)*d$' AS 'Bald';
+Bald
+0
+SELECT 'Bad' RLIKE '^B(an)*d$' AS 'Bad';
+Bad
+0
+SELECT 'Tweeet' RLIKE 'e{3}' AS 'Tweeet';
+Tweeet
+1
+SELECT 'Tweet' RLIKE 'e{3}' AS 'Tweet';
+Tweet
+0
+SELECT 'Tweet 123' RLIKE '[0-9]' AS 'Tweet123';
+Tweet123
+1
+SELECT 'Tweet ABC' RLIKE '[0-9]' AS 'TweetABC';
+TweetABC
+0
+SELECT 'Tweet 123' RLIKE '[A-Z]' AS 'Tweet123';
+Tweet123
+1
+SELECT 'ABC' RLIKE '[A-Z]' AS 'ABC';
+ABC
+1
+SELECT '123' RLIKE '[A-Z]' AS '123';
+123
+0
+SELECT '123' RLIKE '[1-3]' AS '123';
+123
+1
+SELECT '012' RLIKE '[1-3]' AS '012';
+012
+1
+SELECT '045' RLIKE '[1-3]' AS '045';
+045
+0
+SELECT '123' RLIKE '[^1-3]' AS '123';
+123
+0
+SELECT '012' RLIKE '[^1-3]' AS '012';
+012
+1
+SELECT '045' RLIKE '[^1-3]' AS '045';
+045
+1

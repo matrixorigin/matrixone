@@ -48,12 +48,12 @@ func RegularReplace(vectors []*vector.Vector, proc *process.Process) (*vector.Ve
 	switch len(vectors) {
 	case 3:
 		pos = []int64{1}
-		occ = []int64{1}
+		occ = []int64{0}
 		match_type = []string{"c"}
 
 	case 4:
 		pos = vector.MustTCols[int64](vectors[3])
-		occ = []int64{1}
+		occ = []int64{0}
 		match_type = []string{"c"}
 	case 5:
 		pos = vector.MustTCols[int64](vectors[3])

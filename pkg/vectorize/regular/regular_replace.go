@@ -24,7 +24,7 @@ import (
 )
 
 func RegularReplace(expr, pat, repl string, pos, occurrence int64, match_type string) (string, error) {
-	if pos < 1 || occurrence < 1 {
+	if pos < 1 || occurrence < 0 {
 		return expr, moerr.NewInvalidInput("regexp_replace have invalid input")
 	}
 	//regular expression pattern
@@ -42,8 +42,9 @@ func RegularReplace(expr, pat, repl string, pos, occurrence int64, match_type st
 	if int64(len(matchRes)) < occurrence {
 		return expr, nil
 	}
-
-	if occurrence == 1 {
+	if occurrence == 0 {
+		return reg.ReplaceAllLiteralString(expr, repl), nil
+	}else if occurrence == int64(len(matchRes)){
 		// the string won't be replaced
 		notRepl := expr[:matchRes[occurrence-1][0]]
 		// the string will be replaced
@@ -53,14 +54,14 @@ func RegularReplace(expr, pat, repl string, pos, occurrence int64, match_type st
 		// the string won't be replaced
 		notRepl := expr[:matchRes[occurrence-1][0]]
 		// the string will be replaced
-		replace := expr[matchRes[occurrence-1][0]:matchRes[occurrence][0]]
+		replace := expr[matchRes[occurrence-1][0]: matchRes[occurrence][0]]
 		left := expr[matchRes[occurrence][0]:]
 		return notRepl + reg.ReplaceAllLiteralString(replace, repl) + left, nil
 	}
 }
 
 func RegularReplaceWithReg(expr string, pat *regexp.Regexp, repl string, pos, occurrence int64, match_type string) (string, error) {
-	if pos < 1 || occurrence < 1 {
+	if pos < 1 || occurrence < 0 {
 		return expr, moerr.NewInvalidInput("regexp_replace have invalid input")
 	}
 	//match result indexs
@@ -77,7 +78,9 @@ func RegularReplaceWithReg(expr string, pat *regexp.Regexp, repl string, pos, oc
 		return expr, nil
 	}
 
-	if occurrence == 1 {
+	if occurrence == 0 {
+		return pat.ReplaceAllLiteralString(expr, repl), nil
+	}else if occurrence == int64(len(matchRes)){
 		// the string won't be replaced
 		notRepl := expr[:matchRes[occurrence-1][0]]
 		// the string will be replaced
@@ -87,7 +90,7 @@ func RegularReplaceWithReg(expr string, pat *regexp.Regexp, repl string, pos, oc
 		// the string won't be replaced
 		notRepl := expr[:matchRes[occurrence-1][0]]
 		// the string will be replaced
-		replace := expr[matchRes[occurrence-1][0]:matchRes[occurrence][0]]
+		replace := expr[matchRes[occurrence-1][0]: matchRes[occurrence][0]]
 		left := expr[matchRes[occurrence][0]:]
 		return notRepl + pat.ReplaceAllLiteralString(replace, repl) + left, nil
 	}
