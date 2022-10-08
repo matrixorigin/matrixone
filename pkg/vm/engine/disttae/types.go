@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage/memtable"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 )
@@ -32,6 +33,17 @@ import (
 const (
 	INSERT = iota
 	DELETE
+)
+
+const (
+	MO_DATABASE_ID_NAME_IDX       = 1
+	MO_DATABASE_ID_ACCOUNT_IDX    = 2
+	MO_DATABASE_LIST_ACCOUNT_IDX  = 1
+	MO_TABLE_ID_NAME_IDX          = 1
+	MO_TABLE_ID_DATABASE_ID_IDX   = 2
+	MO_TABLE_ID_ACCOUNT_IDX       = 3
+	MO_TABLE_LIST_DATABASE_ID_IDX = 1
+	MO_TABLE_LIST_ACCOUNT_IDX     = 2
 )
 
 type DNStore = logservice.DNStore
@@ -52,28 +64,20 @@ type Cache interface {
 	// update table's cache to the specified timestamp
 	Update(ctx context.Context, dnList []DNStore, databaseId uint64,
 		tableId uint64, ts timestamp.Timestamp) error
-	// BlockList return a list of unmodified blocks that do not require
-	// a merge read and can be very simply distributed to other nodes
-	// to perform queries
-	BlockList(ctx context.Context, dnList []DNStore, databaseId uint64,
-		tableId uint64, ts timestamp.Timestamp, entries [][]Entry) []BlockMeta
-	// NewReader create some readers to read the data of the modified blocks,
-	// including workspace data
-	NewReader(ctx context.Context, readerNumber int, expr *plan.Expr,
-		dnList []DNStore, databaseId uint64, tableId uint64,
-		ts timestamp.Timestamp, entries [][]Entry) ([]engine.Reader, error)
 }
 
 // mvcc is the core data structure of cn and is used to
 // maintain multiple versions of logtail data for a table's partition
 type MVCC interface {
-	CheckPoint(ts timestamp.Timestamp) error
+	RowsCount(ctx context.Context, ts timestamp.Timestamp) int64
+	CheckPoint(ctx context.Context, ts timestamp.Timestamp) error
 	Insert(ctx context.Context, bat *api.Batch) error
 	Delete(ctx context.Context, bat *api.Batch) error
 	BlockList(ctx context.Context, ts timestamp.Timestamp,
-		entries [][]Entry) []BlockMeta
+		blocks []BlockMeta, entries [][]Entry) []BlockMeta
+	// If blocks is empty, it means no merge operation with the files on s3 is required.
 	NewReader(ctx context.Context, readerNumber int, expr *plan.Expr,
-		ts timestamp.Timestamp, entries [][]Entry) ([]engine.Reader, error)
+		blocks []BlockMeta, ts timestamp.Timestamp, entries [][]Entry) ([]engine.Reader, error)
 }
 
 type Engine struct {
@@ -83,6 +87,8 @@ type Engine struct {
 	cli               client.TxnClient
 	getClusterDetails GetClusterDetailsFunc
 	txns              map[string]*Transaction
+	// minimum heap of currently active transactions
+	txnHeap *transactionHeap
 }
 
 // DB is implementataion of cache
@@ -99,7 +105,7 @@ type Partitions []*Partition
 type Partition struct {
 	sync.RWMutex
 	// multi-version data of logtail, implemented with reusee's memengine
-	data MVCC
+	data *memtable.Table[RowID, DataValue, *DataRow]
 	// last updated timestamp
 	ts timestamp.Timestamp
 }
@@ -123,6 +129,12 @@ type Transaction struct {
 	// every statement is an element
 	writes   [][]Entry
 	dnStores []DNStore
+	m        *mheap.Mheap
+
+	// use to cache table
+	tableMap map[tableKey]*table
+	// use to cache database
+	databaseMap map[databaseKey]*database
 }
 
 // Entry represents a delete/insert
@@ -141,19 +153,45 @@ type Entry struct {
 	dnStore DNStore
 }
 
+type transactionHeap []*Transaction
+
 type database struct {
 	databaseId   uint64
 	databaseName string
 	db           *DB
-	m            *mheap.Mheap
 	txn          *Transaction
 }
 
+type tableKey struct {
+	accountId  uint32
+	databaseId uint64
+	name       string
+}
+
+type databaseKey struct {
+	accountId uint32
+	name      string
+}
+
+// block list information of table
+type tableMeta struct {
+	tableId       uint64
+	tableName     string
+	blocks        [][]BlockMeta
+	modifedBlocks [][]BlockMeta
+	defs          []engine.TableDef
+}
+
 type table struct {
-	tableId   uint64
-	tableName string
-	db        *database
-	defs      []engine.TableDef
+	tableId    uint64
+	tableName  string
+	dnList     []int
+	db         *database
+	meta       *tableMeta
+	parts      Partitions
+	insertExpr *plan.Expr
+	deleteExpr *plan.Expr
+	defs       []engine.TableDef
 }
 
 type column struct {
@@ -172,4 +210,13 @@ type column struct {
 	constraintType  string
 	isHidden        int8
 	isAutoIncrement int8
+}
+
+type blockReader struct {
+	blks []BlockMeta
+	ctx  context.Context
+}
+
+type mergeReader struct {
+	rds []engine.Reader
 }

@@ -34,8 +34,8 @@ func NewStdVector[T any](opts ...*Options) *StdVector[T] {
 		opt := opts[0]
 		capacity = opt.Capacity
 		vec.alloc = opt.Allocator
-		if opt.DataSize() > 0 {
-			buf = opt.Data.Data
+		if opt.HasData() {
+			buf = opt.Data.StorageBuf()
 			capacity = len(buf) / stl.Sizeof[T]()
 		}
 	}
@@ -160,11 +160,6 @@ func (vec *StdVector[T]) Get(i int) (v T) {
 	return
 }
 
-func (vec *StdVector[T]) GetCopy(i int) (v T) {
-	v = vec.slice[i]
-	return
-}
-
 func (vec *StdVector[T]) Update(i int, v T) {
 	vec.slice[i] = v
 }
@@ -232,48 +227,56 @@ func (vec *StdVector[T]) Reset() {
 	vec.buf = vec.buf[:0]
 }
 
-func (vec *StdVector[T]) Bytes() *stl.Bytes {
-	bs := new(stl.Bytes)
-	bs.Data = vec.buf
+func (vec *StdVector[T]) WindowAsBytes(offset, length int) *stl.Bytes {
+	bs := stl.NewFixedTypeBytes[T]()
+	start := offset * stl.Sizeof[T]()
+	end := start + length*stl.Sizeof[T]()
+	bs.Storage = vec.buf[start:end]
 	return bs
 }
 
-func (vec *StdVector[T]) ReadBytes(bs *stl.Bytes, share bool) {
-	if bs == nil {
+func (vec *StdVector[T]) Bytes() *stl.Bytes {
+	bs := stl.NewFixedTypeBytes[T]()
+	bs.Storage = vec.buf
+	return bs
+}
+
+func (vec *StdVector[T]) ReadBytes(data *stl.Bytes, share bool) {
+	if data == nil {
 		return
 	}
 	if share {
-		vec.readBytesShared(bs)
+		vec.readBytesShared(data.StorageBuf())
 		return
 	}
-	vec.readBytesNotShared(bs)
+	vec.readBytesNotShared(data.StorageBuf())
 }
 
-func (vec *StdVector[T]) readBytesNotShared(bs *stl.Bytes) {
+func (vec *StdVector[T]) readBytesNotShared(bs []byte) {
 	vec.Reset()
-	newSize := bs.DataSize()
+	newSize := len(bs)
 	if newSize == 0 {
 		return
 	}
 	capacity := newSize / stl.Sizeof[T]()
 	vec.tryExpand(capacity)
 	vec.buf = vec.node.GetBuf()[:newSize]
-	copy(vec.buf[0:], bs.Data)
+	copy(vec.buf[0:], bs)
 	vec.slice = unsafe.Slice((*T)(unsafe.Pointer(&vec.buf[0])), vec.capacity)
 }
 
-func (vec *StdVector[T]) readBytesShared(bs *stl.Bytes) {
+func (vec *StdVector[T]) readBytesShared(bs []byte) {
 	if vec.node != nil {
 		vec.alloc.Free(vec.node)
 		vec.node = nil
 	}
 	vec.capacity = 0
-	if bs.DataSize() == 0 {
+	if len(bs) == 0 {
 		vec.buf = vec.buf[:0]
 		vec.slice = vec.slice[:0]
 		return
 	}
-	vec.buf = bs.Data
+	vec.buf = bs
 	vec.capacity = len(vec.buf) / stl.Sizeof[T]()
 	vec.slice = unsafe.Slice((*T)(unsafe.Pointer(&vec.buf[0])), vec.capacity)
 }
@@ -287,8 +290,8 @@ func (vec *StdVector[T]) InitFromSharedBuf(buf []byte) (n int64, err error) {
 		return
 	}
 	buf = buf[stl.Sizeof[uint32]():]
-	bs := stl.NewBytes()
-	bs.Data = buf[:size]
+	bs := stl.NewFixedTypeBytes[T]()
+	bs.Storage = buf[:size]
 	vec.ReadBytes(bs, true)
 	n += int64(size)
 	return

@@ -17,6 +17,7 @@ package jobs
 import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/indexwrapper"
 )
@@ -25,10 +26,10 @@ func BuildColumnIndex(writer objectio.Writer, block objectio.BlockObject, colDef
 	zmPos := 0
 
 	zoneMapWriter := indexwrapper.NewZMWriter()
-	if err = zoneMapWriter.Init(writer, block, indexwrapper.Plain, uint16(colDef.Idx), uint16(zmPos)); err != nil {
+	if err = zoneMapWriter.Init(writer, block, common.Plain, uint16(colDef.Idx), uint16(zmPos)); err != nil {
 		return
 	}
-	if isSorted && columnData.Length() > 2 {
+	if isSorted && isPk && columnData.Length() > 2 {
 		slimForZmVec := containers.MakeVector(columnData.GetType(), columnData.Nullable())
 		slimForZmVec.Append(columnData.Get(0))
 		slimForZmVec.Append(columnData.Get(columnData.Length() - 1))
@@ -51,7 +52,7 @@ func BuildColumnIndex(writer objectio.Writer, block objectio.BlockObject, colDef
 
 	bfPos := 1
 	bfWriter := indexwrapper.NewBFWriter()
-	if err = bfWriter.Init(writer, block, indexwrapper.Plain, uint16(colDef.Idx), uint16(bfPos)); err != nil {
+	if err = bfWriter.Init(writer, block, common.Plain, uint16(colDef.Idx), uint16(bfPos)); err != nil {
 		return
 	}
 	if err = bfWriter.AddValues(columnData); err != nil {
@@ -65,7 +66,7 @@ func BuildColumnIndex(writer objectio.Writer, block objectio.BlockObject, colDef
 	return
 }
 
-func BuildBlockIndex(writer objectio.Writer, block objectio.BlockObject, meta *catalog.BlockEntry, columnsData *containers.Batch) (err error) {
+func BuildBlockIndex(writer objectio.Writer, block objectio.BlockObject, meta *catalog.BlockEntry, columnsData *containers.Batch, isSorted bool) (err error) {
 	schema := meta.GetSchema()
 	blkMetas := indexwrapper.NewEmptyIndicesMeta()
 	pkIdx := -10086
@@ -79,7 +80,7 @@ func BuildBlockIndex(writer objectio.Writer, block objectio.BlockObject, meta *c
 		}
 		data := columnsData.GetVectorByName(colDef.GetName())
 		isPk := colDef.Idx == pkIdx
-		colMetas, err := BuildColumnIndex(writer, block, colDef, data, isPk, isPk)
+		colMetas, err := BuildColumnIndex(writer, block, colDef, data, isPk, isSorted)
 		if err != nil {
 			return err
 		}

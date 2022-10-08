@@ -129,7 +129,6 @@ func (info *vInfo) Log(v any) error {
 	}
 	info.flushWg.Add(1)
 	info.logQueue <- v.(*VFileAddress)
-	// fmt.Printf("%p|addrs are %v\n", info, info.Addrs)
 	return nil
 }
 

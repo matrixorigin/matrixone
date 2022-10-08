@@ -96,6 +96,9 @@ type Block interface {
 	Destroy() error
 	ReplayIndex() error
 	Close()
+	FreeData()
 	CollectAppendInRange(start, end types.TS) (*containers.Batch, error)
 	CollectDeleteInRange(start, end types.TS) (*containers.Batch, error)
+	GetAppendNodeByRow(row uint32) (an txnif.AppendNode)
+	GetDeleteNodeByRow(row uint32) (an txnif.DeleteNode)
 }

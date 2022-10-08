@@ -55,9 +55,9 @@ type CommandInfo struct {
 }
 type Info struct {
 	Group       uint32
-	TxnId       uint64
+	TxnId       string
 	Checkpoints []*CkpRanges
-	Uncommits   uint64
+	Uncommits   string
 	// PrepareEntryLsn uint64
 
 	GroupLSN uint64
@@ -78,14 +78,15 @@ func (info *Info) WriteTo(w io.Writer) (n int64, err error) {
 		return
 	}
 	n += 8
-	if err = binary.Write(w, binary.BigEndian, info.TxnId); err != nil {
+	var sn int64
+	if sn, err = common.WriteString(info.TxnId, w); err != nil {
 		return
 	}
-	n += 8
-	if err = binary.Write(w, binary.BigEndian, info.Uncommits); err != nil {
+	n += sn
+	if sn, err = common.WriteString(info.Uncommits, w); err != nil {
 		return
 	}
-	n += 8
+	n += sn
 	if err = binary.Write(w, binary.BigEndian, info.TargetLsn); err != nil {
 		return
 	}
@@ -152,14 +153,15 @@ func (info *Info) ReadFrom(r io.Reader) (n int64, err error) {
 		return
 	}
 	n += 8
-	if err = binary.Read(r, binary.BigEndian, &info.TxnId); err != nil {
+	var sn int64
+	if info.TxnId, sn, err = common.ReadString(r); err != nil {
 		return
 	}
-	n += 8
-	if err = binary.Read(r, binary.BigEndian, &info.Uncommits); err != nil {
+	n += sn
+	if info.Uncommits, sn, err = common.ReadString(r); err != nil {
 		return
 	}
-	n += 8
+	n += sn
 	if err = binary.Read(r, binary.BigEndian, &info.TargetLsn); err != nil {
 		return
 	}
@@ -234,7 +236,7 @@ func (info *Info) ToString() string {
 		s = fmt.Sprintf("%s\n", s)
 		return s
 	default:
-		s := fmt.Sprintf("customized entry G%d<%d>{T%d}", info.Group, info.GroupLSN, info.TxnId)
+		s := fmt.Sprintf("customized entry G%d<%d>{T%s}", info.Group, info.GroupLSN, info.TxnId)
 		s = fmt.Sprintf("%s\n", s)
 		return s
 	}

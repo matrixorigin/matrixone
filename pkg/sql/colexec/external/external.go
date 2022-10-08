@@ -361,6 +361,7 @@ func ScanFileData(param *ExternalParam, proc *process.Process) (*batch.Batch, er
 	var bat *batch.Batch
 	var err error
 	if param.plh == nil {
+		param.IgnoreLine = param.IgnoreLineTag
 		param.plh, err = GetSimdcsvReader(param)
 		if err != nil {
 			return nil, err
@@ -379,7 +380,6 @@ func ScanFileData(param *ExternalParam, proc *process.Process) (*batch.Batch, er
 		plh.simdCsvReader.Close()
 		param.plh = nil
 		param.FileIndex++
-		param.IgnoreLine = param.IgnoreLineTag
 		if param.FileIndex >= param.FileCnt {
 			param.End = true
 		}

@@ -60,7 +60,7 @@ func restart(t *testing.T, driver Driver, dir string) Driver {
 	return driver
 }
 
-func appendGroupC(t *testing.T, driver Driver, tid uint64) entry.Entry {
+func appendGroupC(t *testing.T, driver Driver, tid string) entry.Entry {
 	e := entry.GetBase()
 	info := &entry.Info{
 		TxnId: tid,
@@ -73,7 +73,7 @@ func appendGroupC(t *testing.T, driver Driver, tid uint64) entry.Entry {
 	return e
 }
 
-func appendGroupUC(t *testing.T, driver Driver, tid uint64) entry.Entry {
+func appendGroupUC(t *testing.T, driver Driver, tid string) entry.Entry {
 	e := entry.GetBase()
 	info := &entry.Info{
 		Uncommits: tid,
@@ -126,7 +126,7 @@ func getLsn(e entry.Entry) (group uint32, lsn uint64) {
 
 // append C, append UC
 // ckp C
-// check UC is checkpointed
+// check whether UC is checkpointed
 func TestCheckpointUC(t *testing.T) {
 	driver, dir := initWal(t)
 
@@ -142,10 +142,10 @@ func TestCheckpointUC(t *testing.T) {
 			wg.Done()
 		}
 	}
-	appendfn := func(i int) func() {
+	appendfn := func(tid string) func() {
 		return func() {
-			uncommitEntry := appendGroupUC(t, driver, uint64(i))
-			commitEntry := appendGroupC(t, driver, uint64(i))
+			uncommitEntry := appendGroupUC(t, driver, tid)
+			commitEntry := appendGroupC(t, driver, tid)
 			_, commitLsn := getLsn(commitEntry)
 			assert.NoError(t, uncommitEntry.WaitDone())
 			assert.NoError(t, commitEntry.WaitDone())
@@ -159,7 +159,8 @@ func TestCheckpointUC(t *testing.T) {
 
 	for i := 0; i < 100; i++ {
 		wg.Add(1)
-		_ = appendworker.Submit(appendfn(i))
+		tid := common.NewTxnIDAllocator().Alloc()
+		_ = appendworker.Submit(appendfn(string(tid)))
 	}
 	wg.Wait()
 

@@ -19,7 +19,6 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"io"
 	"math/rand"
 	"sort"
@@ -31,50 +30,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 )
-
-// ParseEntryList consume a set of entries and return a command and the remaining entries
-// TODO:: it 'll be removed, instead use pkg/catalog.ParseEntryList
-func ParseEntryList(es []*api.Entry) (any, []*api.Entry, error) {
-	panic(moerr.NewNYI("ParseEntryList is not implemented yet"))
-}
-
-// TODO:: it 'll be removed, instead use pkg/catalog.CreateDatabase
-type CreateDatabase struct {
-	Name        string
-	CreateSql   string
-	Owner       uint32
-	Creator     uint32
-	AccountId   uint32
-	CreatedTime types.Timestamp
-}
-
-// TODO:: it 'll be removed, instead use pkg/catalog.DropDatabase
-type DropDatabase struct {
-	Id   uint64
-	Name string
-}
-
-// TODO:: it 'll be removed, instead use pkg/catalog.CreateTable
-type CreateTable struct {
-	Name         string
-	CreateSql    string
-	Owner        uint32
-	Creator      uint32
-	AccountId    uint32
-	DatabaseId   uint64
-	DatabaseName string
-	Comment      string
-	Partition    string
-	Defs         []engine.TableDef
-}
-
-// TODO:: it 'll be removed, instead use pkg/catalog.DropTable
-type DropTable struct {
-	Id           uint64
-	Name         string
-	DatabaseId   uint64
-	DatabaseName string
-}
 
 type IndexT uint16
 
@@ -160,7 +115,6 @@ func (cpk *SortKey) AddDef(def *ColDef) (ok bool) {
 	return true
 }
 
-func (cpk *SortKey) IsSinglePK() bool               { return cpk.isPrimary && cpk.Size() == 1 }
 func (cpk *SortKey) IsPrimary() bool                { return cpk.isPrimary }
 func (cpk *SortKey) Size() int                      { return len(cpk.Defs) }
 func (cpk *SortKey) GetDef(pos int) *ColDef         { return cpk.Defs[pos] }
@@ -205,30 +159,14 @@ func (s *Schema) Clone() *Schema {
 	return ns
 }
 func (s *Schema) GetSortKeyType() types.Type {
-	if s.IsSinglePK() {
-		return s.GetSingleSortKey().Type
-	}
-	t := types.CompoundKeyType
-	// TODO: set correct width
-	return t
+	return s.GetSingleSortKey().Type
 }
-func (s *Schema) IsSinglePK() bool        { return s.SortKey != nil && s.SortKey.IsSinglePK() }
-func (s *Schema) IsSingleSortKey() bool   { return s.SortKey != nil && s.SortKey.Size() == 1 }
-func (s *Schema) IsCompoundPK() bool      { return s.IsCompoundSortKey() && s.SortKey.IsPrimary() }
-func (s *Schema) IsCompoundSortKey() bool { return s.SortKey != nil && s.SortKey.Size() > 1 }
-func (s *Schema) HasPK() bool             { return s.SortKey != nil && s.SortKey.IsPrimary() }
-func (s *Schema) HasSortKey() bool        { return s.SortKey != nil }
+func (s *Schema) HasPK() bool      { return s.SortKey != nil && s.SortKey.IsPrimary() }
+func (s *Schema) HasSortKey() bool { return s.SortKey != nil }
 
 // GetSingleSortKey should be call only if IsSinglePK is checked
 func (s *Schema) GetSingleSortKey() *ColDef { return s.SortKey.Defs[0] }
 func (s *Schema) GetSingleSortKeyIdx() int  { return s.SortKey.Defs[0].Idx }
-
-func (s *Schema) GetSortKeyCnt() int {
-	if s.SortKey == nil {
-		return 0
-	}
-	return s.SortKey.Size()
-}
 
 func MarshalOnUpdate(w *bytes.Buffer, data []byte) (err error) {
 	if data == nil {
@@ -785,31 +723,6 @@ func (s *Schema) GetColIdx(attr string) int {
 		return -1
 	}
 	return idx
-}
-
-func MockCompoundSchema(colCnt int, pkIdx ...int) *Schema {
-	rand.Seed(time.Now().UnixNano())
-	schema := NewEmptySchema(fmt.Sprintf("%d", rand.Intn(1000000)))
-	prefix := "mock_"
-	m := make(map[int]int)
-	for i, idx := range pkIdx {
-		m[idx] = i
-	}
-	for i := 0; i < colCnt; i++ {
-		if pos, ok := m[i]; ok {
-			if err := schema.AppendPKCol(fmt.Sprintf("%s%d", prefix, i), types.Type{Oid: types.T_int32, Size: 4, Width: 32}, pos); err != nil {
-				panic(err)
-			}
-		} else {
-			if err := schema.AppendCol(fmt.Sprintf("%s%d", prefix, i), types.Type{Oid: types.T_int32, Size: 4, Width: 32}); err != nil {
-				panic(err)
-			}
-		}
-	}
-	if err := schema.Finalize(false); err != nil {
-		panic(err)
-	}
-	return schema
 }
 
 func MockSchema(colCnt int, pkIdx int) *Schema {

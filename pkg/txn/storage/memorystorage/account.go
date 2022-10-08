@@ -40,7 +40,7 @@ func (m *MemHandler) ensureAccount(
 		db := &DatabaseRow{
 			ID:        memoryengine.NewID(),
 			AccountID: accessInfo.AccountID,
-			Name:      catalog.MO_CATALOG,
+			Name:      []byte(catalog.MO_CATALOG),
 		}
 		err := m.databases.Insert(tx, db)
 		//TODO add a unique constraint on (AccountID, Name)

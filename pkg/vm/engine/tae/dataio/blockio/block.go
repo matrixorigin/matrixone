@@ -24,17 +24,20 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/file"
 	"os"
 	"path"
+	"sync"
 )
 
 type blockFile struct {
 	common.RefHelper
-	name    string
-	seg     *segmentFile
-	id      *common.ID
-	metaKey objectio.Extent
-	columns []*columnBlock
-	writer  *Writer
-	reader  *Reader
+	sync.RWMutex
+	name     string
+	seg      *segmentFile
+	id       *common.ID
+	metaKey  objectio.Extent
+	deltaKey objectio.Extent
+	columns  []*columnBlock
+	writer   *Writer
+	reader   *Reader
 }
 
 func newBlock(id uint64, seg *segmentFile, colCnt int) *blockFile {
@@ -59,13 +62,18 @@ func newBlock(id uint64, seg *segmentFile, colCnt int) *blockFile {
 }
 
 func (bf *blockFile) WriteBatch(bat *containers.Batch, ts types.TS) (blk objectio.BlockObject, err error) {
-	bf.writer = NewWriter(bf.seg.fs, bf.name)
+	if bf.writer == nil {
+		bf.writer = NewWriter(bf.seg.fs, bf.name)
+	}
 	block, err := bf.writer.WriteBlock(bat)
 	return block, err
 }
 
 func (bf *blockFile) GetWriter() objectio.Writer {
 	return bf.writer.writer
+}
+func (bf *blockFile) FreeWriter() {
+	bf.writer = nil
 }
 
 func (bf *blockFile) Fingerprint() *common.ID {
@@ -85,14 +93,39 @@ func (bf *blockFile) ReadRows(metaLoc string) uint32 {
 	return rows
 }
 
+func (bf *blockFile) setMetaKey(extent objectio.Extent) {
+	bf.Lock()
+	defer bf.Unlock()
+	bf.metaKey = extent
+}
+
+func (bf *blockFile) setDeltaKey(extent objectio.Extent) {
+	bf.Lock()
+	defer bf.Unlock()
+	bf.deltaKey = extent
+}
+
+func (bf *blockFile) getMetaKey() objectio.Extent {
+	bf.RLock()
+	defer bf.RUnlock()
+	return bf.metaKey
+}
+
+func (bf *blockFile) getDeltaKey() objectio.Extent {
+	bf.RLock()
+	defer bf.RUnlock()
+	return bf.deltaKey
+}
+
 func (bf *blockFile) GetMeta() objectio.BlockObject {
-	if bf.metaKey.End() == 0 {
+	metaKey := bf.getMetaKey()
+	if metaKey.End() == 0 {
 		panic(any("block meta key err"))
 	}
 	if bf.reader == nil {
 		bf.reader = NewReader(bf.seg.fs, bf, bf.name)
 	}
-	block, err := bf.reader.ReadMeta(bf.metaKey)
+	block, err := bf.reader.ReadMeta(metaKey)
 	if err != nil {
 		panic(any(err))
 	}
@@ -112,7 +145,39 @@ func (bf *blockFile) GetMetaFormKey(metaLoc string) objectio.BlockObject {
 		}
 		panic(any(err))
 	}
-	bf.metaKey = block.GetExtent()
+	bf.setMetaKey(block.GetExtent())
+	return block
+}
+
+func (bf *blockFile) GetDelta() objectio.BlockObject {
+	metaKey := bf.getDeltaKey()
+	if metaKey.End() == 0 {
+		panic(any("block meta key err"))
+	}
+	if bf.reader == nil {
+		bf.reader = NewReader(bf.seg.fs, bf, bf.name)
+	}
+	block, err := bf.reader.ReadMeta(metaKey)
+	if err != nil {
+		panic(any(err))
+	}
+	return block
+}
+
+func (bf *blockFile) GetDeltaFormKey(metaLoc string) objectio.BlockObject {
+	name, extent := DecodeDeltaLoc(metaLoc)
+	if bf.reader == nil {
+		bf.reader = NewReader(bf.seg.fs, bf, name)
+	}
+	block, err := bf.reader.ReadMeta(extent)
+	if err != nil {
+		// FIXME: Now the block that is gc will also be replayed, here is a work around
+		if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
+			return nil
+		}
+		panic(any(err))
+	}
+	bf.setDeltaKey(block.GetExtent())
 	return block
 }
 
@@ -152,7 +217,13 @@ func (bf *blockFile) Destroy() error {
 
 func (bf *blockFile) Sync() error {
 	blocks, err := bf.writer.Sync()
-	bf.metaKey = blocks[0].GetExtent()
+	if err != nil {
+		return err
+	}
+	bf.setMetaKey(blocks[0].GetExtent())
+	if len(blocks) > 1 {
+		bf.setDeltaKey(blocks[1].GetExtent())
+	}
 	return err
 }
 
@@ -164,10 +235,11 @@ func (bf *blockFile) LoadBatch(
 	if bf.reader == nil {
 		bat = containers.NewBatch()
 
+		metaKey := bf.getMetaKey()
 		for i := range bf.columns {
 			vec := containers.MakeVector(colTypes[i], nullables[i], opts)
 			bat.AddVector(colNames[i], vec)
-			if bf.metaKey.End() == 0 {
+			if metaKey.End() == 0 {
 				continue
 			}
 		}

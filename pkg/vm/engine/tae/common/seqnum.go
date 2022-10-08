@@ -15,6 +15,7 @@
 package common
 
 import (
+	"github.com/google/uuid"
 	"sync/atomic"
 )
 
@@ -54,4 +55,16 @@ func (alloc *IdAlloctor) Get() uint64 {
 
 func (alloc *IdAlloctor) SetStart(start uint64) {
 	alloc.id = start
+}
+
+type TxnIDAllocator struct {
+}
+
+func NewTxnIDAllocator() *TxnIDAllocator {
+	return &TxnIDAllocator{}
+}
+
+func (alloc *TxnIDAllocator) Alloc() []byte {
+	ts := uuid.New()
+	return ts[:]
 }

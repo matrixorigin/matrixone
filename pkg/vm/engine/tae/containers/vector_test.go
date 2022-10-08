@@ -435,12 +435,9 @@ func TestCloneWithBuffer(t *testing.T) {
 
 	bs := vec.Bytes()
 	buf := buffer.Bytes()
-	res := bytes.Compare(bs.Data, buf[:len(bs.Data)])
+	res := bytes.Compare(bs.Storage, buf[:len(bs.Storage)])
 	assert.Zero(t, res)
-	res = bytes.Compare(bs.OffsetBuf(), buf[len(bs.Data):len(bs.Data)+len(bs.OffsetBuf())])
-	assert.Zero(t, res)
-	res = bytes.Compare(bs.LengthBuf(),
-		buf[len(bs.Data)+len(bs.OffsetBuf()):len(bs.Data)+len(bs.OffsetBuf())+len(bs.LengthBuf())])
+	res = bytes.Compare(bs.HeaderBuf(), buf[len(bs.Storage):len(bs.HeaderBuf())+len(bs.Storage)])
 	assert.Zero(t, res)
 }
 

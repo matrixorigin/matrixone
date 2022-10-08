@@ -29,8 +29,8 @@ func TxnMgrField(mgr *TxnManager) zap.Field {
 }
 
 func (mgr *TxnManager) MarshalLogObject(enc zapcore.ObjectEncoder) (err error) {
-	enc.AddUint64("currId", mgr.IdAlloc.Get())
-	enc.AddString("currTs", mgr.TsAlloc.Get().ToString())
+	//enc.AddUint64("currId", mgr.IdAlloc.Get())
+	//enc.AddString("currTs", mgr.TsAlloc.Get().ToString())
 	enc.AddString("currTs", mgr.StatSafeTS().ToString())
 	return
 }
@@ -38,7 +38,7 @@ func (mgr *TxnManager) MarshalLogObject(enc zapcore.ObjectEncoder) (err error) {
 func (txn *Txn) MarshalLogObject(enc zapcore.ObjectEncoder) (err error) {
 	txn.RLock()
 	defer txn.RUnlock()
-	enc.AddUint64("id", txn.ID)
+	enc.AddString("id", txn.ID)
 	enc.AddString("startTs", txn.StartTS.ToString())
 	enc.AddString("state", txnif.TxnStrState(txn.State))
 	if !txn.IsActiveLocked() {

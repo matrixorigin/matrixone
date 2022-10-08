@@ -159,15 +159,15 @@ func TypeMatch(v any, typ types.T) bool {
 	case types.T_interval:
 		_, ok = v.(types.IntervalType)
 	case types.T_char:
-		_, ok = v.(string)
+		_, ok = v.([]byte)
 	case types.T_varchar:
-		_, ok = v.(string)
+		_, ok = v.([]byte)
 	case types.T_json:
-		_, ok = v.(string)
+		_, ok = v.([]byte)
 	case types.T_blob:
-		_, ok = v.(string)
+		_, ok = v.([]byte)
 	case types.T_uuid:
-		_, ok = v.(string)
+		_, ok = v.([]byte)
 	default:
 		panic(fmt.Sprintf("fixme: %v", typ))
 	}
