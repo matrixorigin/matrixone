@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/storage/mem"
 	"github.com/matrixorigin/matrixone/pkg/txn/storage/memorystorage"
 	taestorage "github.com/matrixorigin/matrixone/pkg/txn/storage/tae"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/memoryengine"
 	"github.com/matrixorigin/matrixone/pkg/vm/mheap"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/guest"
 	"github.com/matrixorigin/matrixone/pkg/vm/mmu/host"
@@ -61,7 +62,7 @@ func (s *store) createTxnStorage(shard metadata.DNShard) (storage.TxnStorage, er
 
 	switch s.cfg.Txn.Storage.Backend {
 	case memStorageBackend:
-		ts, err := s.newMemTxnStorage(shard, logClient)
+		ts, err := s.newMemTxnStorage(shard, logClient, s.hakeeperClient)
 		if err != nil {
 			closeLogClient()
 			return nil, err
@@ -101,10 +102,19 @@ func (s *store) newLogServiceClient(shard metadata.DNShard) (logservice.Client, 
 	})
 }
 
-func (s *store) newMemTxnStorage(shard metadata.DNShard, logClient logservice.Client) (storage.TxnStorage, error) {
+func (s *store) newMemTxnStorage(
+	shard metadata.DNShard,
+	logClient logservice.Client,
+	hakeeper logservice.DNHAKeeperClient,
+) (storage.TxnStorage, error) {
 	hm := host.New(1 << 30)
 	gm := guest.New(1<<30, hm)
-	return memorystorage.NewMemoryStorage(mheap.New(gm), memorystorage.SnapshotIsolation, s.clock)
+	return memorystorage.NewMemoryStorage(
+		mheap.New(gm),
+		memorystorage.SnapshotIsolation,
+		s.clock,
+		memoryengine.NewHakeeperIDGenerator(hakeeper),
+	)
 }
 
 func (s *store) newMemKVStorage(shard metadata.DNShard, logClient logservice.Client) (storage.TxnStorage, error) {
