@@ -68,9 +68,29 @@ func TestTransaction(t *testing.T) {
 	err = txn.WriteFile(DELETE, 0, 0, "test", "test", "test")
 	require.NoError(t, err)
 	ctx := context.TODO()
-	blockWrite(ctx, BlockMeta{}, nil)
-	_, _ = txn.getRow(ctx, 0, 0, nil, nil, nil)
-	_, _ = txn.getRows(ctx, 0, 0, nil, nil, nil)
+
+	bm := makeBlockMetaForTest()
+	_, err = blockWrite(ctx, bm, testutil.NewBatch([]types.Type{
+		types.T_int64.ToType(),
+		types.T_int64.ToType(),
+		types.T_int64.ToType(),
+		types.T_int64.ToType(),
+	}, true, 20, testutil.NewMheap()), testutil.NewFS())
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	// fmt.Printf("%v", blks)
+
+	_, _ = txn.getRow(ctx, 0, 0, nil, nil, makeFunctionExprForTest(">", []*plan.Expr{
+		makeColExprForTest(0, types.T_int64),
+		plan2.MakePlan2Int64ConstExprWithType(20),
+	}), nil)
+
+	_, _ = txn.getRows(ctx, 0, 0, nil, nil, makeFunctionExprForTest(">", []*plan.Expr{
+		makeColExprForTest(0, types.T_int64),
+		plan2.MakePlan2Int64ConstExprWithType(20),
+	}), nil)
+
 }
 
 func TestTable(t *testing.T) {
