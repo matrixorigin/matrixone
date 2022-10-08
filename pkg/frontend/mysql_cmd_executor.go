@@ -21,7 +21,6 @@ import (
 	"encoding/json"
 	goErrors "errors"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"math"
 	"os"
 	"reflect"
@@ -30,6 +29,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
@@ -355,7 +356,11 @@ func handleShowColumns(ses *Session) error {
 			continue
 		}
 		row[0] = colName
-		typ := types.Type{Oid: types.T(d[1].(int32))}
+		typ := &types.Type{}
+		data := d[1].([]uint8)
+		if err := types.Decode(data, typ); err != nil {
+			return err
+		}
 		row[1] = typ.String()
 		if d[2].(int8) == 0 {
 			row[2] = "NO"
