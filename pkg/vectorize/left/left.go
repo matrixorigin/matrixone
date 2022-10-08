@@ -20,21 +20,21 @@ func LeftAllConst(src []string, length []int64, rs []string) []string {
 }
 
 func Left(src []string, length []int64, rs []string) []string {
-	for i, _ := range src {
+	for i := range src {
 		rs[i] = evalLeft(src[i], length[i])
 	}
 	return rs
 }
 
 func LeftRightConst(src []string, length []int64, rs []string) []string {
-	for i, _ := range src {
+	for i := range src {
 		rs[i] = evalLeft(src[i], length[0])
 	}
 	return rs
 }
 
 func LeftLeftConst(src []string, length []int64, rs []string) []string {
-	for i, _ := range length {
+	for i := range length {
 		rs[i] = evalLeft(src[0], length[i])
 	}
 	return rs
