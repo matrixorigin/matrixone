@@ -16,6 +16,7 @@ package logservice
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"go.uber.org/zap"
 	"reflect"
 	"sync"
@@ -48,7 +49,7 @@ func GetShardInfo(address string, shardID uint64) (ShardInfo, bool, error) {
 	}
 	defer func() {
 		if err := cc.Close(); err != nil {
-			logger.Error("failed to close client", zap.Error(err))
+			logutil.Error("failed to close client", zap.Error(err))
 		}
 	}()
 	req := pb.Request{
