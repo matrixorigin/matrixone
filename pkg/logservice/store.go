@@ -145,6 +145,7 @@ func newLogStore(cfg Config, taskService taskservice.TaskService, logger *zap.Lo
 		return nil, err
 	}
 	hakeeperConfig := cfg.GetHAKeeperConfig()
+	logger = logutil.Adjust(logger)
 	logger.Info("HAKeeper Timeout Configs",
 		zap.Int64("LogStoreTimeout", int64(hakeeperConfig.LogStoreTimeout)),
 		zap.Int64("DNStoreTimeout", int64(hakeeperConfig.DNStoreTimeout)),

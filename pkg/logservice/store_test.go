@@ -75,7 +75,7 @@ func TestStoreCanBeCreatedAndClosed(t *testing.T) {
 	defer leaktest.AfterTest(t)()
 	cfg := getStoreTestConfig()
 	defer vfs.ReportLeakedFD(cfg.FS, t)
-	store, err := newLogStore(cfg, nil, nil)
+	store, err := newLogStore(cfg, nil, testLogger)
 	assert.NoError(t, err)
 	testLogger.Info("1")
 	defer func() {
