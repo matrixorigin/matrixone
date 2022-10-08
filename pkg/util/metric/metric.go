@@ -198,7 +198,8 @@ func initTables(ctx context.Context, ieFactory func() ie.InternalExecutor, batch
 	}()
 
 	optFactory := trace.GetOptionFactory(batchProcessMode)
-	singleMetricTable.ToCreateSql(true, optFactory)
+	mustExec(singleMetricTable.ToCreateSql(true, optFactory))
+
 	buf := new(bytes.Buffer)
 	for desc := range descChan {
 		sql := createTableSqlFromMetricFamily(desc, buf, optFactory)
@@ -285,7 +286,7 @@ type MetricColumn struct {
 
 var (
 	metricNameColumn  = MetricColumn{`metric_name`, `VARCHAR(128)`, `unknown`, `metric name, like: sql_statement_total, server_connections, process_cpu_percent, sys_memory_used, ...`}
-	collectTimeColumn = MetricColumn{`collecttime`, `DATETIME(6)`, `now()`, `metric data collect time`}
+	collectTimeColumn = MetricColumn{`collecttime`, `DATETIME(6)`, ``, `metric data collect time`}
 	valueColumn       = MetricColumn{`value`, `DOUBLE`, `0.0`, `metric value`}
 	nodeColumn        = MetricColumn{`node`, `VARCHAR(36)`, `monolithic`, `mo node uuid`}
 	roleColumn        = MetricColumn{`role`, `VARCHAR(32)`, `monolithic`, `mo node role, like: CN, DN, LOG`}
@@ -312,7 +313,7 @@ func (tbl *MetricTable) GetName() string {
 }
 
 var singleMetricTable = &MetricTable{
-	Database:         `system`,
+	Database:         trace.StatsDatabase,
 	Table:            `metric`,
 	Columns:          []MetricColumn{metricNameColumn, collectTimeColumn, valueColumn, nodeColumn, roleColumn, accountColumn, typeColumn},
 	PrimaryKeyColumn: []MetricColumn{},
@@ -347,7 +348,11 @@ func (tbl *MetricTable) ToCreateSql(ifNotExists bool, factory optionsFactory) st
 		if idx > 0 {
 			sb.WriteString(newLineCharacter)
 		}
-		sb.WriteString(fmt.Sprintf("`%s` %s DEFAULT %q COMMENT %q", col.Name, col.Type, col.Default, col.Comment))
+		sb.WriteString(fmt.Sprintf("`%s` %s ", col.Name, col.Type))
+		if len(col.Default) > 0 {
+			sb.WriteString(fmt.Sprintf("DEFAULT %q ", col.Default))
+		}
+		sb.WriteString(fmt.Sprintf("COMMENT %q", col.Comment))
 	}
 	// primary key
 	if len(tbl.PrimaryKeyColumn) > 0 {
@@ -432,7 +437,7 @@ func (tbl *MetricView) ToCreateSql(ifNotExists bool) string {
 		}
 		sb.WriteString(fmt.Sprintf("`%s`", col.Name))
 	}
-	sb.WriteString(" from `%s`.`%s` where ")
+	sb.WriteString(fmt.Sprintf(" from `%s`.`%s` where ", tbl.OriginTable.Database, tbl.OriginTable.Table))
 	sb.WriteString(tbl.Where())
 
 	return sb.String()
