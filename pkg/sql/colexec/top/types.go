@@ -17,7 +17,7 @@ package top
 import (
 	"github.com/matrixorigin/matrixone/pkg/compare"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
 
 const (
@@ -39,7 +39,7 @@ type Container struct {
 type Argument struct {
 	Limit int64
 	ctr   *Container
-	Fs    []colexec.Field
+	Fs    []*plan.OrderBySpec
 }
 
 func (ctr *Container) compare(vi, vj int, i, j int64) int {
