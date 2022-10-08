@@ -94,6 +94,7 @@ func TestNewObjectWriter(t *testing.T) {
 	blocks, err := objectWriter.WriteEnd()
 	assert.Nil(t, err)
 	assert.Equal(t, 2, len(blocks))
+	assert.Nil(t, objectWriter.(*ObjectWriter).buffer)
 
 	objectReader, _ := NewObjectReader(name, service)
 	extents := make([]Extent, 2)

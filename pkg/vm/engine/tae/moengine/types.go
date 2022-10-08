@@ -22,7 +22,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
@@ -33,7 +32,10 @@ var ErrReadOnly = moerr.NewInternalError("tae moengine: read only")
 
 type Txn interface {
 	GetCtx() []byte
-	GetID() uint64
+	GetID() string
+	Is2PC() bool
+	SetCommitTS(cts types.TS) error
+	SetParticipants(ids []uint64) error
 	Prepare() (types.TS, error)
 	Committing() error
 	Commit() error
@@ -89,8 +91,10 @@ type TxnEngine interface {
 	engine.Engine
 	Engine
 	StartTxn(info []byte) (txn Txn, err error)
-	GetOrCreateTxnWithMeta(info []byte, meta txn.TxnMeta) (txn Txn, err error)
-	GetTxnByMeta(meta txn.TxnMeta) (txn Txn, err error)
+	GetOrCreateTxnWithMeta(info []byte, id []byte, ts types.TS) (txn Txn, err error)
+	GetTxnByID(id []byte) (txn Txn, err error)
+	Close() error
+	Destroy() error
 }
 
 var _ TxnEngine = &txnEngine{}

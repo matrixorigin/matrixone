@@ -100,6 +100,7 @@ func TestFrontend(t *testing.T) {
 		heap,
 		memtable.SnapshotIsolation,
 		clock,
+		memoryengine.RandomIDGenerator,
 	)
 	assert.Nil(t, err)
 	txnClient := &StorageTxnClient{

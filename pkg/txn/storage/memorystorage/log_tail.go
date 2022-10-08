@@ -15,8 +15,10 @@
 package memorystorage
 
 import (
+	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"sort"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -31,7 +33,7 @@ import (
 
 type LogTailEntry = apipb.Entry
 
-func (m *MemHandler) HandleGetLogTail(meta txn.TxnMeta, req apipb.SyncLogTailReq, resp *apipb.SyncLogTailResp) (err error) {
+func (m *MemHandler) HandleGetLogTail(ctx context.Context, meta txn.TxnMeta, req apipb.SyncLogTailReq, resp *apipb.SyncLogTailResp) (err error) {
 	tableID := ID(req.Table.TbId)
 
 	// tx
@@ -76,13 +78,12 @@ func (m *MemHandler) HandleGetLogTail(meta txn.TxnMeta, req apipb.SyncLogTailReq
 	insertNames := make([]string, 0, len(attrs))
 	deleteNames := make([]string, 0, len(attrs))
 	for _, attr := range attrs {
-		if attr.Value.IsRowId {
-			continue // will add row id to the first col of batch
-		}
 		attrsMap[attr.Value.Name] = attr.Value
-		insertNames = append(insertNames, attr.Value.Name)
-		if attr.Value.Primary {
-			deleteNames = append(deleteNames, attr.Value.Name)
+		if !attr.Value.IsRowId {
+			insertNames = append(insertNames, attr.Value.Name)
+			if attr.Value.Primary {
+				deleteNames = append(deleteNames, attr.Value.Name)
+			}
 		}
 	}
 	sort.Slice(insertNames, func(i, j int) bool {
@@ -110,8 +111,18 @@ func (m *MemHandler) HandleGetLogTail(meta txn.TxnMeta, req apipb.SyncLogTailReq
 	}
 
 	appendRow := func(batch *batch.Batch, row NamedRow, commitTime Time) error {
+		// check type
+		for name, attr := range attrsMap {
+			value, err := row.AttrByName(m, tx, name)
+			if err != nil {
+				return err
+			}
+			if !memtable.TypeMatch(value.Value, attr.Type.Oid) {
+				panic(fmt.Sprintf("%v should be %v, but got %T", name, attr.Type, value.Value))
+			}
+		}
 		// row id
-		rowID, err := row.AttrByName(tx, rowIDColumnName)
+		rowID, err := row.AttrByName(m, tx, rowIDColumnName)
 		if err != nil {
 			return err
 		}
@@ -238,9 +249,9 @@ func (m *MemHandler) HandleGetLogTail(meta txn.TxnMeta, req apipb.SyncLogTailReq
 			EntryType:    apipb.Entry_Insert,
 			Bat:          toPBBatch(insertBatch),
 			TableId:      uint64(tableRow.ID),
-			TableName:    tableRow.Name,
+			TableName:    string(tableRow.Name),
 			DatabaseId:   uint64(dbRow.ID),
-			DatabaseName: dbRow.Name,
+			DatabaseName: string(dbRow.Name),
 		})
 	}
 	if deleteBatch.Length() > 0 {
@@ -248,9 +259,9 @@ func (m *MemHandler) HandleGetLogTail(meta txn.TxnMeta, req apipb.SyncLogTailReq
 			EntryType:    apipb.Entry_Delete,
 			Bat:          toPBBatch(deleteBatch),
 			TableId:      uint64(tableRow.ID),
-			TableName:    tableRow.Name,
+			TableName:    string(tableRow.Name),
 			DatabaseId:   uint64(dbRow.ID),
-			DatabaseName: dbRow.Name,
+			DatabaseName: string(dbRow.Name),
 		})
 	}
 
@@ -311,8 +322,8 @@ func logTailHandleSystemTable[
 	return nil
 }
 
-func (c *CatalogHandler) HandleGetLogTail(meta txn.TxnMeta, req apipb.SyncLogTailReq, resp *apipb.SyncLogTailResp) (err error) {
-	return c.upstream.HandleGetLogTail(meta, req, resp)
+func (c *CatalogHandler) HandleGetLogTail(ctx context.Context, meta txn.TxnMeta, req apipb.SyncLogTailReq, resp *apipb.SyncLogTailResp) (err error) {
+	return c.upstream.HandleGetLogTail(ctx, meta, req, resp)
 }
 
 func toPBBatch(bat *batch.Batch) (ret *apipb.Batch) {

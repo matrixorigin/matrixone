@@ -89,7 +89,7 @@ func main() {
 	logutil.Info(tae.Opts.Catalog.SimplePPString(common.PPL1))
 	bat := catalog.MockBatch(schema, int(batchRows))
 	newbat := batch.New(true, bat.Attrs)
-	newbat.Vecs = containers.CopyToMoVectors(bat.Vecs)
+	newbat.Vecs = containers.CopyToMoVecs(bat.Vecs)
 	bats := containers.SplitBatch(newbat, int(batchCnt))
 	var wg sync.WaitGroup
 	doAppend := func(b *batch.Batch) func() {
