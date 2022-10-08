@@ -222,7 +222,10 @@ func (s *Scope) remoteRun(c *Compile) error {
 		case val = <-messagesReceive:
 		}
 
-		m := val.(*pipeline.Message)
+		m, ok := val.(*pipeline.Message)
+		if !ok {
+			panic(fmt.Sprintf("get unexpected message from morpc. maybe remote node information %v is wrong.", s.NodeInfo))
+		}
 		if err := pipeline.DecodeMessageError(m); err != nil {
 			return err
 		}
