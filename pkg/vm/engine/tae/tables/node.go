@@ -132,7 +132,7 @@ func (node *appendableNode) getMemoryColumnDataLocked(
 	data := node.data.Vecs[colIdx]
 	if buffer != nil {
 		data = data.Window(int(minRow), int(maxRow))
-		vec = containers.CloneWithBuffer(data, buffer, common.TAEDef)
+		vec = containers.CloneWithBuffer(data, buffer, common.TAEDefaultAllocator)
 	} else {
 		vec = data.CloneWindow(int(minRow), int(maxRow-minRow), common.TAEDefaultAllocator)
 	}
