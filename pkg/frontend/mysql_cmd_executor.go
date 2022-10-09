@@ -2541,7 +2541,7 @@ func (mce *MysqlCmdExecutor) ExecRequest(requestCtx context.Context, req *Reques
 		newLastStmtID := mce.ses.GenNewStmtId()
 		newStmtName := getPrepareStmtName(newLastStmtID)
 		sql = fmt.Sprintf("prepare %s from %s", newStmtName, sql)
-		logutil.Infof("connection id %d add prepare:%s", ses.GetConnectionID(), sql)
+		logutil.Infof("connection id %d query:%s", ses.GetConnectionID(), sql)
 
 		err := mce.doComQuery(requestCtx, sql)
 		if err != nil {
@@ -2569,6 +2569,7 @@ func (mce *MysqlCmdExecutor) ExecRequest(requestCtx context.Context, req *Reques
 		stmtID := binary.LittleEndian.Uint32(data[0:4])
 		stmtName := getPrepareStmtName(stmtID)
 		sql := fmt.Sprintf("deallocate prepare %s", stmtName)
+		logutil.Infof("connection id %d query:%s", ses.GetConnectionID(), sql)
 
 		err := mce.doComQuery(requestCtx, sql)
 		if err != nil {
@@ -2613,7 +2614,7 @@ func (mce *MysqlCmdExecutor) parseStmtExecute(data []byte) (string, error) {
 			}
 		}
 	}
-	logutil.Infof("connection id:%d execute statement:[%s]; with vars:[%s]", mce.ses.GetConnectionID(), sql, strings.Join(varStrings, " , "))
+	logutil.Infof("connection id %d query:%s with vars:[%s]", mce.ses.GetConnectionID(), sql, strings.Join(varStrings, " , "))
 	return sql, nil
 }
 
