@@ -68,14 +68,14 @@ func ParseEntryList(es []*api.Entry) (any, []*api.Entry, error) {
 		if e.EntryType == api.Entry_Insert {
 			return genCreateDatabases(GenRows(bat)), es[1:], nil
 		}
-		return genDropDatabases(GenRows(bat)), es[:1], nil
+		return genDropDatabases(GenRows(bat)), es[1:], nil
 	case MO_TABLES_ID:
 		bat, err := batch.ProtoBatchToBatch(e.Bat)
 		if err != nil {
 			return nil, nil, err
 		}
 		if e.EntryType == api.Entry_Delete {
-			return genDropTables(GenRows(bat)), es[:1], nil
+			return genDropTables(GenRows(bat)), es[1:], nil
 		}
 		cmds := genCreateTables(GenRows(bat))
 		idx := 0
@@ -87,7 +87,7 @@ func ParseEntryList(es []*api.Entry) (any, []*api.Entry, error) {
 				return nil, nil, err
 			}
 		}
-		return cmds, es[:idx], nil
+		return cmds, es[idx+1:], nil
 	default:
 		return e, es[1:], nil
 	}
@@ -96,6 +96,7 @@ func ParseEntryList(es []*api.Entry) (any, []*api.Entry, error) {
 func genCreateDatabases(rows [][]any) []CreateDatabase {
 	cmds := make([]CreateDatabase, len(rows))
 	for i, row := range rows {
+		cmds[i].DatabaseId = row[MO_DATABASE_DAT_ID_IDX].(uint64)
 		cmds[i].Name = string(row[MO_DATABASE_DAT_NAME_IDX].([]byte))
 		cmds[i].Owner = row[MO_DATABASE_OWNER_IDX].(uint32)
 		cmds[i].Creator = row[MO_DATABASE_CREATOR_IDX].(uint32)
@@ -118,6 +119,7 @@ func genDropDatabases(rows [][]any) []DropDatabase {
 func genCreateTables(rows [][]any) []CreateTable {
 	cmds := make([]CreateTable, len(rows))
 	for i, row := range rows {
+		cmds[i].TableId = row[MO_TABLES_REL_ID_IDX].(uint64)
 		cmds[i].Name = string(row[MO_TABLES_REL_NAME_IDX].([]byte))
 		cmds[i].CreateSql = string(row[MO_TABLES_REL_CREATESQL_IDX].([]byte))
 		cmds[i].Owner = row[MO_TABLES_OWNER_IDX].(uint32)
@@ -154,7 +156,7 @@ func fillCreateTable(idx *int, cmd *CreateTable, es []*api.Entry) error {
 		}
 		rows := GenRows(bat)
 		for _, row := range rows {
-			if string(row[MO_COLUMNS_ATT_RELNAME_IDX].([]byte)) == cmd.Name {
+			if row[MO_COLUMNS_ATT_RELNAME_ID_IDX].(uint64) == cmd.TableId {
 				def, err := genTableDefs(row)
 				if err != nil {
 					return err

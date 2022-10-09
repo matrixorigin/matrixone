@@ -20,7 +20,6 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/buffer/base"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 )
 
@@ -28,16 +27,24 @@ const (
 	ConstPinDuration = 5 * time.Second
 )
 
-func EncodeColMetaKey(id *common.ID) string {
-	return fmt.Sprintf("colMeta-%d-%d", id.BlockID, id.Idx)
+func EncodeColMetaKey(idx uint16, metaloc string) string {
+	return fmt.Sprintf("colMeta-%d-%s", idx, metaloc)
 }
 
-func EncodeColBfKey(id *common.ID) string {
-	return fmt.Sprintf("colBf-%d-%d", id.BlockID, id.Idx)
+func EncodeColBfKey(idx uint16, metaloc string) string {
+	return fmt.Sprintf("colBf-%d-%s", idx, metaloc)
 }
 
-func EncodeColDataKey(id *common.ID) string {
-	return fmt.Sprintf("colData-%d-%d", id.BlockID, id.Idx)
+func EncodeColDataKey(idx uint16, metaloc string) string {
+	return fmt.Sprintf("colData-%d-%s", idx, metaloc)
+}
+
+func EncodeDeltaDataKey(idx uint16, deltaloc string) string {
+	return fmt.Sprintf("deltaData-%d-%s", idx, deltaloc)
+}
+
+func EncodeDeltaMetaKey(deltaloc string) string {
+	return fmt.Sprintf("deltaMeta-%s", deltaloc)
 }
 
 type EvictableNodeFactory = func() (base.INode, error)

@@ -21,10 +21,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/hakeeper"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper/checkers/util"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper/operator"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/stretchr/testify/require"
 )
+
+var logger = logutil.GetGlobalLogger().Named("hakeeper-test")
 
 func TestExpiredReplicas(t *testing.T) {
 	replicaIDs := []uint64{11, 13, 12, 14, 15}
@@ -114,7 +117,7 @@ func TestCheckShard(t *testing.T) {
 
 		// register an expired replica => should add a new replica
 		shard.register(newReplica(11, shardID, "store11"), true)
-		steps := checkShard(shard, mapper, workingStores, idAlloc)
+		steps := checkShard(shard, mapper, workingStores, idAlloc, logger)
 		require.Equal(t, 1, len(steps))
 		add, ok := (steps[0]).(operator.AddDnReplica)
 		require.True(t, ok)
@@ -124,12 +127,12 @@ func TestCheckShard(t *testing.T) {
 
 		// register a working replica => no more step
 		shard.register(newReplica(12, shardID, "store12"), false)
-		steps = checkShard(shard, mapper, workingStores, idAlloc)
+		steps = checkShard(shard, mapper, workingStores, idAlloc, logger)
 		require.Equal(t, 0, len(steps))
 
 		// register another working replica => should remove extra replicas
 		shard.register(newReplica(13, shardID, "store13"), false)
-		steps = checkShard(shard, mapper, workingStores, idAlloc)
+		steps = checkShard(shard, mapper, workingStores, idAlloc, logger)
 		require.Equal(t, 1, len(steps))
 		remove, ok := (steps[0]).(operator.RemoveDnReplica)
 		require.True(t, ok)
@@ -153,7 +156,7 @@ func TestCheckShard(t *testing.T) {
 		anotherShard := uint64(100)
 		// register another expired replica, should add a new replica
 		shard := mockDnShard(anotherShard, nil, []uint64{101})
-		steps := checkShard(shard, mapper, workingStores, idAlloc)
+		steps := checkShard(shard, mapper, workingStores, idAlloc, logger)
 		require.Equal(t, 0, len(steps))
 	}
 }
@@ -221,7 +224,7 @@ func TestCheck(t *testing.T) {
 
 		clusterInfo := mockClusterInfo(10, 11)
 
-		steps := Check(idAlloc, config, clusterInfo, dnState, currTick)
+		steps := Check(idAlloc, config, clusterInfo, dnState, currTick, logger)
 		require.Equal(t, len(steps), 0)
 	}
 
@@ -265,7 +268,7 @@ func TestCheck(t *testing.T) {
 		//  10 - add replica
 		//  12 - remove two extra replica (16, 13)
 		//  14 - no command
-		operators := Check(idAlloc, config, clusterInfo, dnState, currTick)
+		operators := Check(idAlloc, config, clusterInfo, dnState, currTick, logger)
 		require.Equal(t, 2, len(operators))
 
 		// shard 10 - single operator step
@@ -319,13 +322,13 @@ func TestCheck(t *testing.T) {
 		// at the tick of `staleTick`, shard 14, 20:
 		//  14 - no command
 		//  20 - add replica after a while
-		operators := Check(idAlloc, config, cluster, dnState, staleTick)
+		operators := Check(idAlloc, config, cluster, dnState, staleTick, logger)
 		require.Equal(t, 0, len(operators))
 
 		// at the tick of `currTick`, shard 14, 20:
 		//  14 - add replica
 		//  20 - add replica
-		operators = Check(idAlloc, config, cluster, dnState, currTick)
+		operators = Check(idAlloc, config, cluster, dnState, currTick, logger)
 		require.Equal(t, 2, len(operators))
 
 		// shard 14 - single operator step

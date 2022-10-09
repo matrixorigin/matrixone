@@ -23,7 +23,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
@@ -49,11 +48,11 @@ var (
 
 func init() {
 	tcs = []topTestCase{
-		newTestCase([]bool{false}, []types.Type{{Oid: types.T_int8}}, 3, []colexec.Field{{E: newExpression(0), Type: 0}}),
-		newTestCase([]bool{true}, []types.Type{{Oid: types.T_int8}}, 3, []colexec.Field{{E: newExpression(0), Type: 2}}),
-		newTestCase([]bool{false, false}, []types.Type{{Oid: types.T_int8}, {Oid: types.T_int64}}, 3, []colexec.Field{{E: newExpression(0), Type: 0}}),
-		newTestCase([]bool{true, false}, []types.Type{{Oid: types.T_int8}, {Oid: types.T_int64}}, 3, []colexec.Field{{E: newExpression(0), Type: 2}}),
-		newTestCase([]bool{true, false}, []types.Type{{Oid: types.T_int8}, {Oid: types.T_int64}}, 3, []colexec.Field{{E: newExpression(0), Type: 2}, {E: newExpression(1), Type: 0}}),
+		newTestCase([]bool{false}, []types.Type{{Oid: types.T_int8}}, 3, []*plan.OrderBySpec{{Expr: newExpression(0), Flag: 0}}),
+		newTestCase([]bool{true}, []types.Type{{Oid: types.T_int8}}, 3, []*plan.OrderBySpec{{Expr: newExpression(0), Flag: 2}}),
+		newTestCase([]bool{false, false}, []types.Type{{Oid: types.T_int8}, {Oid: types.T_int64}}, 3, []*plan.OrderBySpec{{Expr: newExpression(0), Flag: 0}}),
+		newTestCase([]bool{true, false}, []types.Type{{Oid: types.T_int8}, {Oid: types.T_int64}}, 3, []*plan.OrderBySpec{{Expr: newExpression(0), Flag: 2}}),
+		newTestCase([]bool{true, false}, []types.Type{{Oid: types.T_int8}, {Oid: types.T_int64}}, 3, []*plan.OrderBySpec{{Expr: newExpression(0), Flag: 2}, {Expr: newExpression(1), Flag: 0}}),
 	}
 
 }
@@ -105,8 +104,8 @@ func TestTop(t *testing.T) {
 func BenchmarkTop(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		tcs = []topTestCase{
-			newTestCase([]bool{false}, []types.Type{{Oid: types.T_int8}}, 3, []colexec.Field{{E: newExpression(0), Type: 0}}),
-			newTestCase([]bool{true}, []types.Type{{Oid: types.T_int8}}, 3, []colexec.Field{{E: newExpression(0), Type: 2}}),
+			newTestCase([]bool{false}, []types.Type{{Oid: types.T_int8}}, 3, []*plan.OrderBySpec{{Expr: newExpression(0), Flag: 0}}),
+			newTestCase([]bool{true}, []types.Type{{Oid: types.T_int8}}, 3, []*plan.OrderBySpec{{Expr: newExpression(0), Flag: 2}}),
 		}
 		t := new(testing.T)
 		for _, tc := range tcs {
@@ -138,7 +137,7 @@ func BenchmarkTop(b *testing.B) {
 	}
 }
 
-func newTestCase(ds []bool, ts []types.Type, limit int64, fs []colexec.Field) topTestCase {
+func newTestCase(ds []bool, ts []types.Type, limit int64, fs []*plan.OrderBySpec) topTestCase {
 	proc := testutil.NewProcessWithMPool(mpool.MustNewZero())
 	proc.Reg.MergeReceivers = make([]*process.WaitRegister, 2)
 	ctx, cancel := context.WithCancel(context.Background())

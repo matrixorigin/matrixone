@@ -17,6 +17,7 @@ package cnservice
 import (
 	"context"
 	"fmt"
+	"go.uber.org/zap"
 	"sync"
 
 	"github.com/fagongzi/goetty/v2"
@@ -62,7 +63,7 @@ func NewService(
 	}
 
 	srv := &service{
-		logger: logutil.GetGlobalLogger().Named("cnservice"),
+		logger: logutil.GetGlobalLogger().Named("cnservice").With(zap.String("uuid", cfg.UUID)),
 		metadata: metadata.CNStore{
 			UUID: cfg.UUID,
 			Role: metadata.MustParseCNRole(cfg.Role),

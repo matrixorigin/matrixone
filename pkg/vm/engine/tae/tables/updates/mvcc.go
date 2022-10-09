@@ -19,7 +19,6 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 
 	"github.com/RoaringBitmap/roaring"
@@ -37,9 +36,7 @@ type MVCCHandle struct {
 	*sync.RWMutex
 	columns         map[uint16]*ColumnChain
 	deletes         *DeleteChain
-	holes           *roaring.Bitmap
 	meta            *catalog.BlockEntry
-	maxVisible      atomic.Value
 	appends         *txnbase.MVCCSlice
 	changes         uint32
 	deletesListener func(uint64, common.RowGen, types.TS) error
@@ -86,30 +83,8 @@ func (n *MVCCHandle) HasActiveAppendNode() bool {
 	return !n.appends.IsCommitted()
 }
 
-func (n *MVCCHandle) AddHoles(start, end int) {
-	if n.holes != nil {
-		n.holes = roaring.New()
-	}
-	n.holes.AddRange(uint64(start), uint64(end))
-}
-
-func (n *MVCCHandle) HasHole() bool {
-	return n.holes != nil && !n.holes.IsEmpty()
-}
-
-func (n *MVCCHandle) HoleCnt() int {
-	if !n.HasHole() {
-		return 0
-	}
-	return int(n.holes.GetCardinality())
-}
-
 func (n *MVCCHandle) IncChangeNodeCnt() {
 	atomic.AddUint32(&n.changes, uint32(1))
-}
-
-func (n *MVCCHandle) ResetChangeNodeCnt() {
-	atomic.StoreUint32(&n.changes, uint32(0))
 }
 
 func (n *MVCCHandle) GetChangeNodeCnt() uint32 {
@@ -122,15 +97,6 @@ func (n *MVCCHandle) GetColumnUpdateCnt(colIdx uint16) uint32 {
 
 func (n *MVCCHandle) GetDeleteCnt() uint32 {
 	return n.deletes.GetDeleteCnt()
-}
-
-func (n *MVCCHandle) SetMaxVisible(ts types.TS) {
-	n.maxVisible.Store(ts)
-}
-
-func (n *MVCCHandle) LoadMaxVisible() types.TS {
-	ts := n.maxVisible.Load().(types.TS)
-	return ts
 }
 
 func (n *MVCCHandle) GetID() *common.ID { return n.meta.AsCommonID() }
@@ -167,7 +133,6 @@ func (n *MVCCHandle) CreateDeleteNode(txn txnif.AsyncTxn, deleteType handle.Dele
 
 func (n *MVCCHandle) OnReplayDeleteNode(deleteNode txnif.DeleteNode) {
 	n.deletes.OnReplayNode(deleteNode.(*DeleteNode))
-	n.TrySetMaxVisible(deleteNode.(*DeleteNode).GetCommitTSLocked())
 }
 
 func (n *MVCCHandle) CreateUpdateNode(colIdx uint16, txn txnif.AsyncTxn) txnif.UpdateNode {
@@ -207,12 +172,6 @@ func (n *MVCCHandle) GetDeleteChain() *DeleteChain {
 func (n *MVCCHandle) OnReplayAppendNode(an *AppendNode) {
 	an.mvcc = n
 	n.appends.InsertNode(an)
-	n.TrySetMaxVisible(an.GetCommitTS())
-}
-func (n *MVCCHandle) TrySetMaxVisible(ts types.TS) {
-	if ts.Greater(n.maxVisible.Load().(types.TS)) {
-		n.maxVisible.Store(ts)
-	}
 }
 func (n *MVCCHandle) AddAppendNodeLocked(
 	txn txnif.AsyncTxn,
@@ -241,12 +200,8 @@ func (n *MVCCHandle) DeleteAppendNodeLocked(node *AppendNode) {
 }
 
 func (n *MVCCHandle) IsVisibleLocked(row uint32, ts types.TS) (bool, error) {
-	maxRow, visible, err := n.GetMaxVisibleRowLocked(ts)
-	if !visible || err != nil {
-		return visible, err
-	}
-	visible = maxRow >= row
-	return visible, err
+	an := n.GetAppendNodeByRow(row)
+	return an.IsVisible(ts), nil
 }
 
 func (n *MVCCHandle) IsDeletedLocked(row uint32, ts types.TS, rwlocker *sync.RWMutex) (bool, error) {
@@ -257,24 +212,72 @@ func (n *MVCCHandle) CollectAppendLogIndexesLocked(startTs, endTs types.TS) (ind
 	if n.appends.IsEmpty() {
 		return
 	}
-	indexes = n.appends.CloneIndexInRange(startTs, endTs, n.RWMutex)
+	indexes = make([]*wal.Index, 0)
+	n.appends.ForEach(func(un txnif.MVCCNode) bool {
+		an := un.(*AppendNode)
+		needWait, txn := an.NeedWaitCommitting(endTs.Next())
+		if needWait {
+			n.RUnlock()
+			txn.GetTxnState(true)
+			n.RLock()
+		}
+		if an.Prepare.Less(startTs) {
+			return true
+		}
+		if an.Prepare.Greater(endTs) {
+			return false
+		}
+		indexes = append(indexes, an.GetLogIndex())
+		return true
+	}, true)
 	return
 }
 
-func (n *MVCCHandle) GetMaxVisibleRowLocked(ts types.TS) (row uint32, visible bool, err error) {
-	needWait, txn := n.appends.NeedWaitCommitting(ts)
-	if needWait {
+func (n *MVCCHandle) GetVisibleRowLocked(ts types.TS) (maxrow uint32, visible bool, holes *roaring.Bitmap, err error) {
+	anToWait := make([]*AppendNode, 0)
+	txnToWait := make([]txnif.TxnReader, 0)
+	n.appends.ForEach(func(un txnif.MVCCNode) bool {
+		an := un.(*AppendNode)
+		needWait, txn := an.NeedWaitCommitting(ts)
+		if needWait {
+			anToWait = append(anToWait, an)
+			txnToWait = append(txnToWait, txn)
+			return true
+		}
+		if an.IsVisible(ts) {
+			visible = true
+			maxrow = an.maxRow
+		} else {
+			if holes == nil {
+				holes = roaring.NewBitmap()
+			}
+			holes.AddRange(uint64(an.startRow), uint64(an.maxRow))
+		}
+		return !an.Prepare.Greater(ts)
+	}, true)
+	if len(anToWait) != 0 {
 		n.RUnlock()
-		state := txn.GetTxnState(true)
+		for _, txn := range txnToWait {
+			txn.GetTxnState(true)
+		}
 		n.RLock()
-		if state == txnif.TxnStateUnknown {
-			err = moerr.NewTxnInternal()
-			return
-		} else if state == txnif.TxnStateRollbacked || state == txnif.TxnStatePreparing {
-			panic("append node shoul not be rollbacked")
+	}
+	for _, an := range anToWait {
+		if an.IsVisible(ts) {
+			visible = true
+			if maxrow < an.maxRow {
+				maxrow = an.maxRow
+			}
+		} else {
+			if holes == nil {
+				holes = roaring.NewBitmap()
+			}
+			holes.AddRange(uint64(an.startRow), uint64(an.maxRow))
 		}
 	}
-	_, row, visible, err = n.getMaxVisibleRowLocked(ts)
+	if holes != nil {
+		holes.RemoveRange(uint64(maxrow), uint64(holes.Maximum())+1)
+	}
 	return
 }
 
@@ -287,18 +290,6 @@ func (n *MVCCHandle) GetTotalRow() uint32 {
 	an := van.(*AppendNode)
 	delets := n.deletes.cnt
 	return an.maxRow - delets
-}
-
-// TODO::it will be rewritten in V0.6,since maxVisible of MVCC handel
-//
-//	would not be increased monotonically.
-func (n *MVCCHandle) getMaxVisibleRowLocked(ts types.TS) (int, uint32, bool, error) {
-	offset, vnode := n.appends.GetNodeToReadByPrepareTS(ts)
-	if vnode == nil {
-		return 0, 0, false, nil
-	}
-	node := vnode.(*AppendNode)
-	return offset, node.GetMaxRow(), true, nil
 }
 
 func (n *MVCCHandle) CollectAppend(start, end types.TS) (minRow, maxRow uint32, commitTSVec, abortVec containers.Vector) {
@@ -338,6 +329,8 @@ func (n *MVCCHandle) CollectAppend(start, end types.TS) (minRow, maxRow uint32, 
 }
 
 func (n *MVCCHandle) CollectDelete(start, end types.TS) (rowIDVec, commitTSVec, abortVec containers.Vector) {
+	n.RLock()
+	defer n.RUnlock()
 	if n.deletes.IsEmpty() {
 		return
 	}
@@ -350,8 +343,6 @@ func (n *MVCCHandle) CollectDelete(start, end types.TS) (rowIDVec, commitTSVec, 
 	abortVec = containers.MakeVector(types.T_bool.ToType(), false)
 	prefix := n.meta.MakeKey()
 
-	n.RLock()
-	defer n.RUnlock()
 	n.deletes.LoopChain(
 		func(m txnif.MVCCNode) bool {
 			node := m.(*DeleteNode)
@@ -377,8 +368,6 @@ func (n *MVCCHandle) CollectDelete(start, end types.TS) (rowIDVec, commitTSVec, 
 }
 
 func (n *MVCCHandle) ExistDeleteInRange(start, end types.TS) (exist bool) {
-	n.RLock()
-	defer n.RUnlock()
 	n.deletes.LoopChain(
 		func(m txnif.MVCCNode) bool {
 			node := m.(*DeleteNode)

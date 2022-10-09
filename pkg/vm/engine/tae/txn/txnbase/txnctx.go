@@ -43,8 +43,7 @@ type TxnCtx struct {
 	StartTS, CommitTS, PrepareTS types.TS
 	Info                         []byte
 	State                        txnif.TxnState
-	//FIXME::true if txn receives prepare message?
-	Kind2PC bool
+	Participants                 []uint64
 }
 
 func NewTxnCtx(id []byte, start types.TS, info []byte) *TxnCtx {
@@ -60,7 +59,7 @@ func NewTxnCtx(id []byte, start types.TS, info []byte) *TxnCtx {
 	return ctx
 }
 
-func (ctx *TxnCtx) Is2PC() bool { return ctx.Kind2PC }
+func (ctx *TxnCtx) Is2PC() bool { return len(ctx.Participants) > 1 }
 
 func (ctx *TxnCtx) GetCtx() []byte {
 	return ctx.IDCtx
@@ -90,6 +89,27 @@ func (ctx *TxnCtx) GetCommitTS() types.TS {
 	defer ctx.RUnlock()
 	return ctx.CommitTS
 }
+
+func (ctx *TxnCtx) SetCommitTS(cts types.TS) (err error) {
+	ctx.RLock()
+	defer ctx.RUnlock()
+	ctx.CommitTS = cts
+	return
+}
+
+func (ctx *TxnCtx) GetParticipants() []uint64 {
+	ctx.RLock()
+	defer ctx.RUnlock()
+	return ctx.Participants
+}
+
+func (ctx *TxnCtx) SetParticipants(ids []uint64) (err error) {
+	ctx.RLock()
+	defer ctx.RUnlock()
+	ctx.Participants = ids
+	return
+}
+
 func (ctx *TxnCtx) GetPrepareTS() types.TS {
 	ctx.RLock()
 	defer ctx.RUnlock()
@@ -188,10 +208,18 @@ func (ctx *TxnCtx) ToCommittingFinishedLocked() (err error) {
 	return
 }
 
-// TODO::need to take 2PC account into.
 func (ctx *TxnCtx) ToCommittedLocked() error {
+	if ctx.Is2PC() {
+		if ctx.State != txnif.TxnStateCommittingFinished &&
+			ctx.State != txnif.TxnStatePrepared {
+			return moerr.NewTAECommit("ToCommittedLocked: 2PC txn's state " +
+				"is not Prepared or CommittingFinished")
+		}
+		ctx.State = txnif.TxnStateCommitted
+		return nil
+	}
 	if ctx.State != txnif.TxnStatePreparing {
-		return moerr.NewTAECommit("ToCommittedLocked: state is not preparing")
+		return moerr.NewTAECommit("ToCommittedLocked: 1PC txn's state is not preparing")
 	}
 	ctx.State = txnif.TxnStateCommitted
 	return nil
@@ -216,8 +244,15 @@ func (ctx *TxnCtx) ToRollbackingLocked(ts types.TS) error {
 	return nil
 }
 
-// TODO::need to take 2PC account into.
 func (ctx *TxnCtx) ToRollbackedLocked() error {
+	if ctx.Is2PC() {
+		if ctx.State != txnif.TxnStatePrepared &&
+			ctx.State != txnif.TxnStateRollbacking {
+			return moerr.NewTAERollback("state %s", txnif.TxnStrState(ctx.State))
+		}
+		ctx.State = txnif.TxnStateRollbacked
+		return nil
+	}
 	if ctx.State != txnif.TxnStateRollbacking {
 		return moerr.NewTAERollback("state %s", txnif.TxnStrState(ctx.State))
 	}

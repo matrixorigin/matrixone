@@ -78,6 +78,8 @@ func makePlan2Int64ConstExpr(v int64) *plan.Expr_C {
 	}}
 }
 
+var MakePlan2Int64ConstExprWithType = makePlan2Int64ConstExprWithType
+
 func makePlan2Int64ConstExprWithType(v int64) *plan.Expr {
 	return &plan.Expr{
 		Expr: makePlan2Int64ConstExpr(v),
@@ -109,25 +111,27 @@ func makePlan2Uint64ConstExprWithType(v uint64) *plan.Expr {
 	}
 }
 
-// func makePlan2Float64ConstExpr(v float64) *plan.Expr_C {
-// 	return &plan.Expr_C{C: &plan.Const{
-// 		Isnull: false,
-// 		Value: &plan.Const_Dval{
-// 			Dval: v,
-// 		},
-// 	}}
-// }
+func makePlan2Float64ConstExpr(v float64) *plan.Expr_C {
+	return &plan.Expr_C{C: &plan.Const{
+		Isnull: false,
+		Value: &plan.Const_Dval{
+			Dval: v,
+		},
+	}}
+}
 
-// func makePlan2Float64ConstExprWithType(v float64) *plan.Expr {
-// 	return &plan.Expr{
-// 		Expr: makePlan2Float64ConstExpr(v),
-// 		Typ: &plan.Type{
-// 			Id:       int32(types.T_float64),
-// 			Nullable: false,
-// 			Size:     8,
-// 		},
-// 	}
-// }
+var MakePlan2Float64ConstExprWithType = makePlan2Float64ConstExprWithType
+
+func makePlan2Float64ConstExprWithType(v float64) *plan.Expr {
+	return &plan.Expr{
+		Expr: makePlan2Float64ConstExpr(v),
+		Typ: &plan.Type{
+			Id:       int32(types.T_float64),
+			Nullable: false,
+			Size:     8,
+		},
+	}
+}
 
 func makePlan2StringConstExpr(v string) *plan.Expr_C {
 	return &plan.Expr_C{C: &plan.Const{
@@ -137,6 +141,8 @@ func makePlan2StringConstExpr(v string) *plan.Expr_C {
 		},
 	}}
 }
+
+var MakePlan2StringConstExprWithType = makePlan2StringConstExprWithType
 
 func makePlan2StringConstExprWithType(v string) *plan.Expr {
 	return &plan.Expr{
@@ -204,6 +210,8 @@ func rewriteDecimalTypeIfNecessary(typ *plan.Type) *plan.Type {
 	return typ
 }
 
+var MakePlan2Type = makePlan2Type
+
 func makePlan2Type(typ *types.Type) *plan.Type {
 	return &plan.Type{
 		Id:        int32(typ.Oid),
@@ -223,6 +231,8 @@ func makeTypeByPlan2Type(typ *plan.Type) types.Type {
 		Precision: typ.Precision,
 	}
 }
+
+var MakeTypeByPlan2Expr = makeTypeByPlan2Expr
 
 func makeTypeByPlan2Expr(expr *plan.Expr) types.Type {
 	var size int32 = 0
