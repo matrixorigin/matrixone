@@ -293,6 +293,14 @@ func (bat *Batch) Append(mh *mpool.MPool, b *Batch) (*Batch, error) {
 	return bat, nil
 }
 
+// XXX I will slowly remove all code that uses InitZsone.
+func (bat *Batch) SetZs(len int, m *mpool.MPool) {
+	bat.Zs = m.GetSels()
+	for i := 0; i < len; i++ {
+		bat.Zs = append(bat.Zs, 1)
+	}
+}
+
 // InitZsOne init Batch.Zs and values are all 1
 func (bat *Batch) InitZsOne(len int) {
 	bat.Zs = make([]int64, len)
